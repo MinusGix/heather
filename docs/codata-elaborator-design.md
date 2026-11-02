@@ -145,7 +145,7 @@ s). X + ⟦D⟧` over a context where the varying parameters are bound, and then
 
 While a corecursive body is open, every checking-mode elaboration passes
 through `Elaborator::corec_check`, which recognises the step type's two
-positions:
+positions (with nesting, at each layer of the carrier):
 
 - **at the step type** (a node): a constructor of the declaration becomes
   the step pair, its children checked at `X + ⟦D⟧`; any other tree `e`
@@ -160,15 +160,15 @@ positions:
   existing function of trees `k`, which becomes `λy. inr(k y)` (added
   2026-10-22: before, a bare `k` reached the kernel unconverted and was
   refused there; `docs/coitree-design.md`'s `bind_cong` met it).
+- **with a constructor nested above a self-call** (§5.4), the carrier has
+  layers and the child type is `C_j + ⟦D⟧` at the child's layer: such a
+  constructor is a pending node, the child `inl(inr(node))`, the node built
+  at the layer below.
 
 Every other self-call is refused as unguarded: in a payload (`SCons(hd(bad(n)),
-…)`), under an observation (`tl(bad(n))`), or alone (`bad()`).
-
-**Nested constructors** above a self-call (`Vis(Ask, λ n => Tau(echo()))`)
-need a carrier that remembers the pending constructor. The kernel design's
-§6 sketches the elaborator generating those carrier states. This round
-refuses the shape with `issues/codata-nested-guards.md`, and the workaround is
-to write the state yourself: `echo(w: Phase)` with `Waiting`/`Ticking`.
+…)`), under an observation (`tl(bad(n))`), alone (`bad()`), or inside any tree
+that is not a constructor of the declaration (`SCons(n, tl(SCons(n, bad(n))))`:
+corecursion *up to* a function, `issues/codata-corecursion-up-to.md`).
 
 ### 5.3 What it does not do
 
@@ -179,6 +179,51 @@ to write the state yourself: `echo(w: Phase)` with `Waiting`/`Ticking`.
   not).
 - No copatterns. Definitions are written with constructors, and observations
   are `match`.
+
+### 5.4 Nested constructors
+
+A constructor nested above a self-call (`Vis(Ask, λ n => Tau(echo(n)))`,
+`SCons(n, SCons(Succ(n), pairs(Succ(Succ(n)))))`) needs a carrier that
+remembers the pending constructor (kernel design §6). The carrier grows one
+layer per extra constructor. Let `F(C) = Σ(s : S). Π(p : P s). C + ⟦D⟧` be a
+node over the carrier `C`, the step type's shape. Then
+
+```
+C₀ = X                     (the varying tuple)
+C_{j+1} = X + F(C_j)       (a seed, or a pending node one layer down)
+```
+
+and a definition whose longest chain of nested constructors above a call
+has `d + 1` links has carrier `C_d`. The chain is counted on the surface
+before the body is elaborated (`corec_nesting`), so every type is known when
+the hook runs. With `d = 0` nothing changes: `C₀` is the carrier §5.1
+builds.
+
+- **The body** is a node at `F(C_d)`. A child at layer `j` (`C_j + ⟦D⟧`) takes
+  a self-call as `inl(inl(seed))` (`inl(seed)` at `j = 0`), an existing tree
+  as `inr(e)`, and a constructor with a call inside as
+  `inl(inr(node))` with `node : F(C_{j-1})`, its own children at layer
+  `j - 1`. The hook finds a child's layer by comparing the expected type
+  with each `C_j + ⟦D⟧`, top first.
+- **The step** is `case x { inl(v) ⇒ body[v]; inr(node) ⇒ lift(node) }`, and
+  the seed is `inl(⟨varying arguments⟩)`. `lift : F(C_{d-1}) → F(C_d)` keeps
+  the label and moves each child up a layer with `embed : C_j → C_{j+1}` (a
+  seed stays `inl`; a pending node's own children are lifted in turn).
+- **No closure conversion.** A pending node is a value built where it is
+  written, so it holds whatever it mentions (the `n` a `λ n` bound, the
+  varying parameters) as ordinary subterms. Nothing is abstracted, and no
+  state needs a type of its own.
+- **Observations compute by β**, one per layer: `out` of the definition
+  gives the body's node with the nested child as `corec(…, inr(node))`; `out`
+  of that runs `lift`, whose seed children are `corec(…, inl(v))`, which is
+  the definition itself at `v`. So `tl(tl(pairs(n))) = pairs(Succ(Succ(n)))`
+  holds by `refl`, as `tl(from(n)) = from(Succ(n))` does. A nested node is
+  not definitionally the constructor written in the source (no η, §4): its
+  observation is.
+- **Indexed codata keeps one layer** this round: a nested call there is
+  refused with `issues/codata-nested-guards-indexed.md`. The indexed carrier
+  carries an equation per seed (`docs/codata-indexed-design.md` §6), and a
+  pending node sits at its child's index, not the step's.
 
 ## 6. Layers
 
@@ -210,8 +255,15 @@ certgen refuses codata (§1).
 - **checking position**: constructors as arguments, `match` and existing
   trees in step position, function children with a dependent domain.
 - **negative controls**: a wrong observation, `from(n) = SCons(n, …)` by
-  `refl` (no η), unguarded calls in each of the three places, a nested
-  guard, recursion out of codata, an index.
+  `refl` (no η), unguarded calls in each of the three places, a call inside
+  an existing tree, recursion out of codata, an index.
+- **nested constructors** (§5.4, `nested_constructors_above_a_self_call`):
+  two and three layers at literal and neutral seeds, back to the definition
+  by `refl`; a pending node under a λ that captures the answer, beside a
+  `match` arm that is an existing tree; a bare function child one layer
+  down; an open element type; wrong observations at a layer refused by the
+  kernel. `lib/_tests/std/itree/coitree_tests.hthr` has the same over
+  `CoTree`, and `codata_indexed.rs` the indexed refusal.
 
 Plus a module-image round trip (`codata_round_trips_through_images`): the
 declaration, its constructors and a corecursive function written to an
@@ -223,6 +275,6 @@ image, replayed, and used from an importing module.
 2. **The library** (design §10 step 5): the coinductive `ITree` with `bind`
    and `iter`, `approx` into the finite tree, `Bisim`, eutt, and the bridge
    `Bisim ⇔ Π n. Same(approx n t, approx n u)`.
-3. **Nested guards** (`issues/codata-nested-guards.md`): generated carrier
-   states, which `bind` and `iter` will want.
+3. ~~**Nested guards**~~: done for unindexed codata (§5.4); indexed is
+   `issues/codata-nested-guards-indexed.md`.
 4. ~~Codes for `M`~~: done (`docs/kernel-m-codes-design.md`).

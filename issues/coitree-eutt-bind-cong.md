@@ -1,11 +1,11 @@
 ---
 title: bind congruence up to eutt
-status: open
+status: closed
 labels: [codata,coinduction,itree,library]
 area: interaction-trees
 milestone: [it-coinductive]
 created: 2026-10-22
-updated: 2026-10-22
+updated: 2026-11-01
 ---
 
 `Eutt` (`lib/std/itree/coitree_eutt.hthr`) has the monad laws through `of_bisim`,
@@ -27,3 +27,6 @@ Corecursive on `t ≈ u`, as `CoTree::bind_cong` is on `Bisim`:
 ## What it assumes from elsewhere
 - **[[coitree-eutt]]** owns `Eutt`, `after` and `trans`. Assumed here: only
   their statements.
+
+## Log
+- 2026-11-01: Done (`lib/std/itree/coitree_eutt.hthr`, `docs/coitree-design.md` §7.5). `Eutt::bind_cong` plus `bind_cong_l`/`bind_cong_r`. A tau or a call carries over at the same counts (`CoTree::after_bind`, guarded by `Obs::NotRet`: a leaf reached before `k` drops would spill the rest into `h(r)`). At a leaf the counts are only upper bounds, so that branch is the existing relation `bind(t, h1) ≈ h1(r) ≈ h2(r) ≈ bind(u, h2)` through `trans` and `Eutt::bind_leaf`. Probes in `lib/_tests/std/itree/coitree_eutt_tests.hthr`. The eutt-level unfolding `f(x) ≈ bind(body(x), f)` of `docs/partial-functions-design.md` §4.3 can use it now.
