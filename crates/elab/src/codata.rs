@@ -2859,7 +2859,7 @@ impl Elaborator {
         let ExprKind::Var(name) = &head.kind else {
             return None;
         };
-        if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| &a.name == name) {
+        if cx.names.iter_inner().any(|n| n == name) || cx.aliases.iter_inner().any(|a| &a.name == name) {
             return None;
         }
         let (found, i) = self.lookup_ctor(name)?;

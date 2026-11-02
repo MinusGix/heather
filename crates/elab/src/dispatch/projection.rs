@@ -107,7 +107,7 @@ impl Elaborator {
         // guessing the missing arguments from the subject or global instances.
         let mut scoped_hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for d in cx.dicts.iter().rev() {
+        for d in cx.dicts.iter_inner() {
             if !seen.insert(d.name.clone()) {
                 continue;
             }

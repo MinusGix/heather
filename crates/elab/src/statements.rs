@@ -457,8 +457,8 @@ fn elaborate_let(
 /// the same name hides it.
 fn renamed(cx: &Cx, expression: &Expr) -> Option<Option<Rc<AtomicBool>>> {
     let ExprKind::Var(name) = &expression.kind else { return None };
-    let local = cx.names.iter().rposition(|n| n == name);
-    let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+    let local = cx.names.lookup(name);
+    let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
     match (local, alias) {
         (Some(pos), Some(a)) if a.depth <= pos => Some(None),
         (_, Some(a)) => Some(a.spliced.clone()),
@@ -611,7 +611,7 @@ mod tests {
             let ExprKind::Var(name) = &expression.kind else {
                 panic!("the fixture checks an alias reference");
             };
-            assert!(cx.aliases.iter().any(|alias| alias.name == *name));
+            assert!(cx.aliases.iter_inner().any(|alias| alias.name == *name));
             self.checked.set(self.checked.get() + 1);
             Ok(Term::Zero)
         }

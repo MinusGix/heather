@@ -211,8 +211,8 @@ impl Elaborator {
                 callee: callee(name),
                 // A constructor is the bare reading unless a local or alias
                 // shadows it, and a constructor is never discarded.
-                ambient: (cx.names.iter().any(|n| n == name)
-                    || cx.aliases.iter().any(|a| a.name == *name)
+                ambient: (cx.names.iter_inner().any(|n| n == name)
+                    || cx.aliases.iter_inner().any(|a| a.name == *name)
                     || self.ctor_of(name).is_none())
                 .then(|| name.to_string()),
             })
@@ -363,7 +363,7 @@ impl Elaborator {
             // fail, and saying which spelling reaches the member is strictly
             // better than "unbound" — a reading that resolved is never touched.
             if let ExprKind::Var(f) = &recv.kind
-                && !cx.names.iter().any(|n| n == f)
+                && !cx.names.iter_inner().any(|n| n == f)
                 && self.names_a_function(f)
                 && matches!(self.resolve_name(name), NameRes::NotFound)
                 && matches!(self.resolve_name(&format!("{f}::{name}")), NameRes::Found(_))
@@ -474,12 +474,12 @@ impl Elaborator {
         carrier: &ReceiverCarrier,
         span: Span,
     ) -> Option<bool> {
-        let local_pos = cx.names.iter().rposition(|n| n == name);
-        let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+        let local_pos = cx.names.lookup(name);
+        let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
         let (mut ty, skel) = match (local_pos, alias) {
-            (Some(pos), Some(a)) if a.depth <= pos => (self.local(cx, pos).1, cx.skels[pos].clone()),
+            (Some(pos), Some(a)) if a.depth <= pos => (self.local(cx, pos).1, cx.names.skel(pos).cloned()),
             (_, Some(a)) => (a.ty.shift_local((cx.names.len() - a.depth) as u32), a.skel.clone()),
-            (Some(pos), None) => (self.local(cx, pos).1, cx.skels[pos].clone()),
+            (Some(pos), None) => (self.local(cx, pos).1, cx.names.skel(pos).cloned()),
             (None, None) => return None,
         };
         let Some(subject) = skel.as_ref().map_or(Some(0), |s| {
@@ -1015,8 +1015,8 @@ impl Elaborator {
         // The global must be what the name means here: a local, a `let`
         // alias or the declaration under construction shadows it, and its
         // type is not a committed signature.
-        if cx.names.iter().any(|n| n == g)
-            || cx.aliases.iter().any(|a| a.name == *g)
+        if cx.names.iter_inner().any(|n| n == g)
+            || cx.aliases.iter_inner().any(|a| a.name == *g)
             || cx.selfref.as_ref().is_some_and(|s| s.matches(g))
         {
             return None;

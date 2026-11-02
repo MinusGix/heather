@@ -114,8 +114,8 @@ impl Builder<'_> {
             let name = format!("__rel_cong_{}", self.serial);
             self.serial += 1;
             if !self.cx.names.contains(&name)
-                && !self.cx.aliases.iter().any(|a| a.name == name)
-                && !self.cx.tyvars.iter().any(|a| a.name == name)
+                && !self.cx.aliases.iter_inner().any(|a| a.name == name)
+                && !self.cx.tyvars.iter_inner().any(|a| a.name == name)
             {
                 return name;
             }
@@ -286,7 +286,7 @@ impl Builder<'_> {
         let mut seen = std::collections::HashSet::new();
         let mut examined = 0;
         let mut found: Option<Term> = None;
-        for d in self.cx.dicts.iter().rev() {
+        for d in self.cx.dicts.iter_inner() {
             if !seen.insert(d.name.clone()) {
                 continue;
             }
@@ -825,7 +825,7 @@ pub(crate) fn derive(
     let mut fresh = || loop {
         let name = format!("__derive_arg_{serial}");
         serial += 1;
-        if !cx.names.contains(&name) && !cx.aliases.iter().any(|a| a.name == name) {
+        if !cx.names.contains(&name) && !cx.aliases.iter_inner().any(|a| a.name == name) {
             break name;
         }
     };

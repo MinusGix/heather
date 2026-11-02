@@ -288,7 +288,7 @@ impl Elaborator {
                 );
             }
         }
-        let local = matches!(&base.kind, ExprKind::Var(name) if cx.names.iter().any(|n| n == name));
+        let local = matches!(&base.kind, ExprKind::Var(name) if cx.names.iter_inner().any(|n| n == name));
         let bound = "__with_base";
         let receiver = if local { base.clone() } else { Expr { kind: ExprKind::Var(bound.into()), span: base.span } };
         let written = decl
@@ -323,7 +323,7 @@ impl Elaborator {
     /// The constructor this name refers to *here* — `None` when it is not a
     /// constructor, or when a local binder or `let` alias shadows it.
     pub(super) fn ctor_here(&self, cx: &Cx, name: &str) -> Option<(Rc<Inductive>, usize)> {
-        if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name) {
+        if cx.names.iter_inner().any(|n| n == name) || cx.aliases.iter_inner().any(|a| a.name == *name) {
             return None;
         }
         self.ctor_of(name)
@@ -426,7 +426,7 @@ impl Elaborator {
         if let Some(hit) = self.ctor_here(cx, name) {
             return Some(hit);
         }
-        if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name) {
+        if cx.names.iter_inner().any(|n| n == name) || cx.aliases.iter_inner().any(|a| a.name == *name) {
             return None;
         }
         if !self.only_ctors_visible(name) {

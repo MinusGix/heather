@@ -360,11 +360,11 @@ impl Elaborator {
         for pos in (0..cx.names.len()).rev() {
             let (t, ty, l) = self.local(cx, pos);
             if self.conv_here(cx, &ty, goal, &l) {
-                tr.push(line(depth, "local", cx.names[pos].clone()));
+                tr.push(line(depth, "local", cx.names[pos].to_string()));
                 return Some(t);
             }
         }
-        for a in cx.aliases.iter().rev() {
+        for a in cx.aliases.iter_inner() {
             let by = (cx.names.len() - a.depth) as u32;
             let ty = a.ty.shift_local(by);
             if self.conv_here(cx, &ty, goal, &a.level) {
@@ -992,12 +992,12 @@ impl Elaborator {
             if let Some(u) = self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &l, span) {
                 return Some((
                     u,
-                    format!("{} (upcast to `{}`)", cx.names[pos], cind.name),
+                    format!("{} (upcast to `{}`)", &cx.names[pos], cind.name),
                     (t, ty),
                 ));
             }
         }
-        for a in cx.aliases.iter().rev() {
+        for a in cx.aliases.iter_inner() {
             let by = (cx.names.len() - a.depth) as u32;
             let ty = a.ty.shift_local(by);
             let t = (*a.term).shift_local(by);

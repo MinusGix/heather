@@ -1308,7 +1308,7 @@ impl Reifier<'_> {
                 let Some(rel) = Relation::of_type(self.elab, self.cx, &ty, self.span) else { continue };
                 let (map, args) = app_spine(&rel.left);
                 if args.len() == 1 {
-                    edges.push(LocalEdge { hom: name.clone(), source: source.clone(), map: Rc::new(map.clone()) });
+                    edges.push(LocalEdge { hom: name.to_string(), source: source.clone(), map: Rc::new(map.clone()) });
                     break;
                 }
             }

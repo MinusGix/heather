@@ -1,6 +1,6 @@
 ---
 title: The elaborator's Cx copies Vec<String> columns at every clone; make it a persistent binder spine
-status: open
+status: closed
 labels: [elaboration,performance,representation]
 area: language
 created: 2026-11-02
@@ -29,3 +29,36 @@ There is no kernel change and nothing observable changes. Acceptance: `scripts/p
 ## What it assumes from elsewhere
 
 - **[[elab-field-lifetimes-explicit]]** regroups `Elaborator`, not `Cx`. Its branch removed `Cx::quoted` in favour of the dynamic scope's `quote_depth`. Assumed here: nothing else about `Cx`'s fields.
+
+## Resolution (2026-11-02)
+
+`crates/elab/src/spine.rs` adds `Spine<T>`, a persistent snoc list with a
+cached length (the elaborator's copy of the kernel's `CtxEntries` shape), and
+`Binders`, one spine of `{ name: Rc<str>, skel }` nodes read through
+name-shaped accessors. `Cx` now holds:
+
+- `names: Binders`, replacing both `names: Vec<String>` and `skels`
+  (`cx.names.skel(i)` reads a skeleton; one push path, so the two still
+  cannot desync);
+- `aliases`, `tyvars`, `dicts`, `index_ambiguity` and `op_locals` as `Spine`s.
+
+A `Cx` clone is therefore a fixed number of refcount bumps, whatever the
+context's depth. Positions still count from the outermost end, so
+`cx.names[i]` and `cx.names.len()` sites are unchanged. Shadowing lookups
+(`cx.names.lookup(name)`, the old `iter().rposition`) and every
+order-independent scan walk the spine innermost-first without allocating;
+the outermost-first `iter()` collects references first and is left only on
+cold paths (diagnostics, `omega`'s source renaming, `subst`). `Cx::prefix`
+shares the cut spine; `Cx::hygienic` and the two renaming sites
+(`omega_cert::source_context`, a named type's field scope) rebuild it once
+through `Binders::renamed`. The display `Speller` pushes and pops on a
+`Binders` instead of copying the names into a `Vec<String>`.
+
+Measured with `scripts/perf ab --base origin/master --samples 3` on
+`docs/showcase/calc_parser.hthr` (two runs): the 37 deterministic counter
+columns identical across both binaries; wall −4.1% (samples separate) and
+−1.8% (inside the spread). The gain is smaller than the survey's 12–14% share
+because #357 had already stopped the probes' diagnostic notes from copying
+`Cx`, which was most of that share. Interning names
+([[resolver-lookup-constant]]) is not done here; `Rc<str>` compares are a
+length check and a memcmp.

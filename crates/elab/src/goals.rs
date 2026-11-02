@@ -583,10 +583,10 @@ impl GoalArena {
                     goal.cx.names.iter().zip(&goal.cx.gamma.entries).enumerate()
                 {
                     if !name.starts_with('#') {
-                        context.push((name.clone(), display(&goal.cx.prefix(i), &entry.ty)));
+                        context.push((name.to_string(), display(&goal.cx.prefix(i), &entry.ty)));
                     }
                 }
-                for alias in &goal.cx.aliases {
+                for alias in goal.cx.aliases.iter() {
                     context.push((
                         alias.name.clone(),
                         display(&goal.cx.prefix(alias.depth), &alias.ty),

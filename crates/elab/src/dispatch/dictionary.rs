@@ -32,7 +32,7 @@ impl Elaborator {
         clvl: &Level,
     ) -> Option<Vec<Expr>> {
         let tkey = self.key_of(target)?;
-        for d in cx.dicts.iter().rev() {
+        for d in cx.dicts.iter_inner() {
             let Some(dkey) = self.key_of(&d.class) else {
                 continue;
             };
@@ -373,7 +373,7 @@ impl Elaborator {
     }
 
     fn scope_dict_index_own(&self, cx: &Cx, tkey: &str) -> Option<Vec<Option<Expr>>> {
-        for d in cx.dicts.iter().rev() {
+        for d in cx.dicts.iter_inner() {
             let Some(dkey) = self.key_of(&d.class) else {
                 continue;
             };
@@ -431,7 +431,7 @@ impl Elaborator {
     /// dictionary binder and every `.f` that is not one of its class's
     /// indices, so an ordinary field projection is untouched.
     pub(crate) fn index_of_dict(&self, cx: &Cx, dict: &str, name: &str) -> Option<Expr> {
-        let d = cx.dicts.iter().rev().find(|d| d.name == dict)?;
+        let d = cx.dicts.iter_inner().find(|d| d.name == dict)?;
         let info = self.lookup_class(&d.class)?;
         let k = info.valparams.iter().position(|p| p.name == name)?;
         d.index.get(k).cloned()
