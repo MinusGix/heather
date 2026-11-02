@@ -264,17 +264,26 @@ module.exports = grammar({
 
     block: $ => choice(
       seq('{', '}'),
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement)), choice(
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form)), choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
       ), '}'),
+      // A statement body ends in a statement and has no result
+      // (docs/sequencing-surface-design.md §4).
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form)),
+        choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form), '}'),
     ),
     // `let x = e;`, and the binding statement `let x <- e;` (`←` too,
     // docs/sequencing-surface-design.md §3.1).
     let_statement: $ => seq(
-      'let', choice(field('name', $.identifier), $.destructure_pattern),
+      'let', optional('mut'), choice(field('name', $.identifier), $.destructure_pattern),
       optional(seq(':', field('type', $._annotation_type))), choice('=', '<-', '←'), field('value', $._expression), ';',
     ),
+    // `x := e;` reassigns a `let mut` local (§4).
+    assignment_statement: $ => seq(field('name', $.identifier), ':=', field('value', $._expression), ';'),
+    // A statement `if`/`match`: its bodies are statements, and it needs no
+    // `;` (§5.1).
+    statement_form: $ => choice($.if_expression, $.match_expression),
     // `e;` discards a computation's result in a block over a carrier.
     expression_statement: $ => seq(field('value', $._expression), ';'),
     // `have x = e;` binds opaquely (docs/have-design.md): one name, never a
@@ -533,7 +542,8 @@ module.exports = grammar({
     if_expression: $ => prec.right(seq(
       'if', optional(seq(field('evidence', $.identifier), ':')),
       field('condition', $._head_expression), field('consequence', $.block),
-      'else', field('alternative', $.block),
+      // A statement `if` may omit its `else`, and chains with `else if`.
+      optional(seq('else', field('alternative', choice($.block, $.if_expression)))),
     )),
     if_let_expression: $ => prec.right(seq(
       'if', 'let', optional(seq(field('evidence', $.identifier), ':')),

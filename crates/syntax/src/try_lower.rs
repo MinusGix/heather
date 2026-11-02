@@ -186,6 +186,10 @@ fn ty_visit(t: &Ty, f: &mut impl FnMut(&Expr)) {
         _ => {}
     }
 }
+/// Every expression child of `e`, annotations included: the walk other
+/// parser-side lowerings share.
+pub(crate) fn visit_children(e: &Expr, f: &mut impl FnMut(&Expr)) { visit(e, f) }
+
 fn visit(e: &Expr, f: &mut impl FnMut(&Expr)) {
     match & e.kind {
         ExprKind::App { head, args, named, .. } => {

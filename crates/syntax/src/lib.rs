@@ -15,6 +15,7 @@ pub mod lexer;
 pub mod parser;
 pub mod roles;
 mod try_lower;
+mod imperative;
 
 pub use ast::*;
 pub use parser::{class_ty, parse_file, pos_carrier, ParseError, BY_TACTIC, POS_RESULT, POS_SEARCH};

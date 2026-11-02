@@ -162,6 +162,7 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             record_facts: Vec::new(),
             propagation_count: 0,
             propagation_depth: 0,
+            elseless_if: false,
         };
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
@@ -208,6 +209,10 @@ struct Parser {
     propagation_count: usize,
     /// Ordinary function/lambda bodies admit propagation; signatures do not.
     propagation_depth: usize,
+    /// The expression being parsed heads a block statement, so an `if` there
+    /// may omit its `else` (docs/sequencing-surface-design.md §4). Taken by
+    /// the `if` it reaches first, so nothing nested inherits it.
+    elseless_if: bool,
     /// Suppress the record literal `D { … }` (docs/surface-records.md §6.1).
     ///
     /// `{` after an expression is ambiguous exactly where a *block* follows
@@ -375,6 +380,34 @@ fn render_owner(e: &Expr) -> Option<String> {
 /// namespace of its own, so an operator expression is the ordinary
 /// [`ExprKind::App`] it has always been — only its head survives as what was
 /// written instead of as what it used to desugar to.
+/// A braced block that ends in a statement: the body of a statement form
+/// (docs/sequencing-surface-design.md §4).
+fn is_statement_body(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Block(b) if matches!(&b.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT))
+}
+
+/// `{}`, which elsewhere is an empty proof block (`ExprKind::AutoRefl`).
+fn is_empty_body(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Block(b) if b.stmts.is_empty() && matches!(b.result.kind, ExprKind::AutoRefl))
+}
+
+/// An `if`/`match` whose bodies are statement bodies: a statement. `{}` is
+/// a statement body beside one, so `None => {}` assigns nothing; an
+/// `if`/`match` of `{}` alone stays the proof it was.
+fn is_statement_form(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Match { arms, .. }
+        if arms.iter().any(|a| is_statement_body(&a.body))
+            && arms.iter().all(|a| is_statement_body(&a.body) || is_empty_body(&a.body)))
+}
+
+/// A statement after which a block may end with no result: an assignment
+/// or a statement form.
+fn is_imperative_statement(s: &Stmt) -> bool {
+    matches!(s, Stmt::Let { expr, .. } if matches!(&expr.kind, ExprKind::App { head, args, .. }
+        if args.len() == 1 && matches!(&head.kind, ExprKind::Var(n)
+            if n == crate::imperative::ASSIGN || n == crate::imperative::STMT)))
+}
+
 fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity }, span };
     Expr {
@@ -2801,6 +2834,7 @@ impl Parser {
         crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
         crate::try_lower::reject_bind_in_type(&result)?;
         for p in &params { crate::try_lower::reject_bind_in_type(&p.ty)?; }
+        crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
         Ok(Decl { kind, is_meta, is_evidence, value: false, elaborates, name, tyvars, params, result, decreases, body, span })
@@ -2919,12 +2953,22 @@ impl Parser {
         }
         let parsed = self.block_statements(&mut stmts)?;
         let block = self.block_tail(open, stmts, parsed)?;
+        let block = crate::imperative::lower_block(block, &mut self.next_hygienic)?;
         crate::try_lower::binds_in_block(block, &mut self.next_hygienic)
     }
 
     /// [`Self::block_body`] after its statements: the result (`parsed` when
     /// [`Self::block_statements`] already read it), its `on`s, and the `}`.
     fn block_tail(&mut self, open: Span, stmts: Vec<Stmt>, parsed: Option<Expr>) -> R<Block> {
+        // A statement body ends in a statement and has no result
+        // (docs/sequencing-surface-design.md §4): `{ x := e }`, or `{}`.
+        if parsed.is_none()
+            && matches!(self.peek(), TokKind::RBrace)
+            && stmts.last().is_none_or(is_imperative_statement)
+        {
+            let close = self.expect(&TokKind::RBrace, "`}`")?;
+            return Ok(Block { stmts, result: Box::new(crate::imperative::unit(close)), ons: Vec::new(), span: open.join(close) });
+        }
         if let Some(result) = parsed {
             let ons = self.block_ons(Vec::new())?;
             let close = self.expect(&TokKind::RBrace, "`}`")?;
@@ -3173,6 +3217,12 @@ impl Parser {
             let end = self.expect(&TokKind::Semi, "`;` to end the `let code`")?;
             return Ok(Stmt::LetCode { name, expr, span: start.join(end) });
         }
+        // `let mut x = e;` — a local `:=` may reassign (§4). `mut` is
+        // contextual: `let mut = e;` still binds a name `mut`.
+        let mutable = self.at_kw("mut") && matches!(self.nth(1), TokKind::Ident(_));
+        if mutable {
+            self.bump();
+        }
         let (mut name, _) = self.binder_ident("`let` binding name")?;
         let ty = if matches!(self.peek(), TokKind::Colon) {
             self.bump();
@@ -3193,11 +3243,13 @@ impl Parser {
             }
             let span = expr.span;
             let expr = crate::try_lower::bind_marker(expr, span);
+            let expr = if mutable { crate::imperative::marked(crate::imperative::MUT, expr, span) } else { expr };
             return Ok(Stmt::Let { name, ty, expr, span: start.join(end), opaque: false });
         }
         self.expect_eq("`let` binding")?;
         let expr = self.expr()?;
         let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
+        let expr = if mutable { let span = expr.span; crate::imperative::marked(crate::imperative::MUT, expr, span) } else { expr };
         Ok(Stmt::Let { name, ty, expr, span: start.join(end), opaque: false })
     }
 
@@ -3235,7 +3287,59 @@ impl Parser {
             {
                 return Ok(None);
             }
-            let expr = self.expr()?;
+            // A statement `if` may omit its `else` (§4): only here, at the
+            // head of a statement.
+            self.elseless_if = self.at_kw("if");
+            let expr = self.expr();
+            self.elseless_if = false;
+            let expr = expr?;
+            // `x := e` — reassign a `let mut` local (§4, §5.1). The `;` may
+            // be left off before the block's `}`, as a statement body's last
+            // assignment usually is.
+            if matches!(self.peek(), TokKind::ColonEq) {
+                let ExprKind::Var(name) = &expr.kind else {
+                    return Err(ParseError {
+                        msg: "only a local is assigned: write `x := e` (a field path, `x.f := e`, is not \
+                              supported yet)".into(),
+                        span: expr.span,
+                    });
+                };
+                let name = name.clone();
+                self.bump();
+                let value = self.expr()?;
+                let end = if matches!(self.peek(), TokKind::RBrace) {
+                    value.span
+                } else {
+                    self.expect(&TokKind::Semi, "`;` to end the assignment")?
+                };
+                let span = expr.span.join(end);
+                let marked = value.span;
+                stmts.push(Stmt::Let {
+                    name,
+                    ty: None,
+                    expr: crate::imperative::marked(crate::imperative::ASSIGN, value, marked),
+                    span,
+                    opaque: false,
+                });
+                continue;
+            }
+            // A statement `if`/`match`: a block-like form whose bodies are
+            // statements. It needs no `;`.
+            if is_statement_form(&expr) {
+                if matches!(self.peek(), TokKind::Semi) {
+                    self.bump();
+                }
+                let span = expr.span;
+                let name = self.hygienic("stmt");
+                stmts.push(Stmt::Let {
+                    name,
+                    ty: None,
+                    expr: crate::imperative::marked(crate::imperative::STMT, expr, span),
+                    span,
+                    opaque: false,
+                });
+                continue;
+            }
             if !matches!(self.peek(), TokKind::Semi) {
                 return Ok(Some(expr));
             }
@@ -5482,11 +5586,50 @@ impl Parser {
         // while relational expressions become decoded type expressions.
         let proposition = expr_as_ty(&condition);
 
+        let elseless = std::mem::take(&mut self.elseless_if);
         let yes = self.if_branch("the `if` branch")?;
-        if !self.eat_kw("else") {
+        let no = if self.eat_kw("else") {
+            if self.at_kw("if") {
+                // `else if c { … }`: the nested `if` is the `else` branch, and
+                // a statement's chain may end without an `else` too.
+                self.elseless_if = elseless;
+                let nested = self.if_expr();
+                self.elseless_if = false;
+                let nested = nested?;
+                let span = nested.span;
+                // Braced, as every branch is: a statement chain's tail is a
+                // statement body holding the nested statement form.
+                let block = if is_statement_form(&nested) {
+                    let name = self.hygienic("stmt");
+                    Block {
+                        stmts: vec![Stmt::Let {
+                            name,
+                            ty: None,
+                            expr: crate::imperative::marked(crate::imperative::STMT, nested, span),
+                            span,
+                            opaque: false,
+                        }],
+                        result: Box::new(crate::imperative::unit(Span { start: span.end, end: span.end })),
+                        ons: Vec::new(),
+                        span,
+                    }
+                } else {
+                    Block { stmts: Vec::new(), result: Box::new(nested), ons: Vec::new(), span }
+                };
+                Expr { kind: ExprKind::Block(Box::new(block)), span }
+            } else {
+                self.if_branch("the `else` branch")?
+            }
+        } else if elseless && is_statement_body(&yes) {
+            // A statement `if` with no `else` assigns nothing when `c` fails.
+            let span = Span { start: yes.span.end, end: yes.span.end };
+            Expr {
+                kind: ExprKind::Block(Box::new(Block { stmts: Vec::new(), result: Box::new(crate::imperative::unit(span)), ons: Vec::new(), span })),
+                span,
+            }
+        } else {
             return self.err("an `if` needs an `else { … }` branch");
-        }
-        let no = self.if_branch("the `else` branch")?;
+        };
 
         let ev_span = condition.span;
         let decide_head = Expr {
