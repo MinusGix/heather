@@ -109,6 +109,7 @@ pub mod heather_emit;
 pub mod relational_context;
 pub mod stats;
 pub use datarepr::{Obligation, Provenance};
+mod layered;
 mod names;
 mod oracle;
 mod readback;
