@@ -1,6 +1,6 @@
 ---
 title: A let that shadows a decreases function's parameter breaks its obligations and unfolding
-status: open
+status: closed
 labels: [elaboration, termination]
 area: language
 code: crates/elab/src/measure.rs:172
@@ -42,3 +42,16 @@ shadowed binders.
   `select_scope` learned to include an equation binder about a needed
   binder, so an argument passed through a non-shadowing `let` keeps the
   arm's equation (`alias_before`, `alias_inside` in the same probe file).
+- 2026-11-02: Fixed. `alpha::deshadow` renames every binder that shadows a
+  name in scope (a parameter, or an enclosing or earlier binder: block
+  `let`s, `let { … }` patterns, arm binders, equation binders, λ binders)
+  to a fresh `name__N` across its scope, and `elab_measure_decl` /
+  `elab_measure_group` lower the deshadowed declaration
+  (`measure::deshadowed`). So the measure and every lifted telescope name
+  each binder once, and `select_scope`'s shadow checks no longer fire on a
+  `decreases` body. The probes `shadowed`, `rebound` (case 2: needed binder
+  shadowed later, `rebound_unfold` exists), `shadowed_arm` and the
+  negative control `shadowed_grows` (refused as `m__1 < m`) are in
+  `lib/_tests/std/core/decreases_unfolding_tests.hthr`. The `while`
+  lowering's SSA pass stays: its condition is placed after the hoisted
+  `let`s and must read the parameters.
