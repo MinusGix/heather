@@ -3028,7 +3028,7 @@ impl Parser {
         // `split e;` — the statement-position case split. It *is* the block's
         // result, so the statement list ends here and the `on Ctor(…)` arms
         // that follow are its arms (docs/match-equation-split-design.md §5).
-        let (result, mut ons) = if self.at_kw("split") {
+        let (result, ons) = if self.at_kw("split") {
             self.split_result()?
         } else {
             let result = self.expr()?;
