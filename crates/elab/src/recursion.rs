@@ -68,6 +68,10 @@ pub(crate) fn descends_on_param(cx: &Cx, scrut: &Term) -> Option<usize> {
 /// split refines the goal in each arm and not the ih, so the call would not
 /// fit. This `match` stays the recursion there, refused as before
 /// (issues/recursion-case-split-dependent-ih.md).
+///
+/// The outermost `match` on a parameter is a case split by the same reading
+/// when no self-call descends through it but one descends through a `match`
+/// on another parameter inside it ([`outer_case_split`]).
 pub(crate) fn guard_param<A: std::borrow::Borrow<heather_syntax::Arm>>(
     cx: &Cx,
     scrut: &Term,
@@ -75,8 +79,69 @@ pub(crate) fn guard_param<A: std::borrow::Borrow<heather_syntax::Arm>>(
 ) -> Option<usize> {
     let dec = descends_on_param(cx, scrut)?;
     let s = cx.selfref.as_ref()?;
-    let Some(guard) = &cx.guard else { return Some(dec) };
+    let Some(guard) = &cx.guard else {
+        return (!outer_case_split(s, arms, dec)).then_some(dec);
+    };
     (descends_through(s, arms, dec) || guard.ih_mentions(dec)).then_some(dec)
+}
+
+/// Is a `match` on parameter `dec` with these `arms`, with no recursion
+/// around it, a case split: no self-call descends through it, and one does
+/// through a `match` on another parameter inside it
+/// (issues/recursion-outer-match-takes-guard-without-descent.md)? Then that
+/// inner `match` is the recursion. Where no inner `match` is either, this one
+/// stays the guard, so a lone `match n { Succ(k) => f(n) }` is still refused
+/// naming `k`. Every call a guard here could accept descends through it, so
+/// calling it a split only turns refusals into acceptances or other
+/// refusals.
+fn outer_case_split<A: std::borrow::Borrow<heather_syntax::Arm>>(
+    self_ref: &SelfRef,
+    arms: &[A],
+    dec: usize,
+) -> bool {
+    if descends_through(self_ref, arms, dec) {
+        return false;
+    }
+    let mut inner = false;
+    for arm in arms {
+        let arm = arm.borrow();
+        // A name the arm binds anywhere is not read as the parameter it
+        // shadows: such a `match` keeps this one the guard.
+        let mut bound = arm_names(arm);
+        crate::surface::walk_expr(&arm.body, &mut |e| match &e.kind {
+            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| bound.extend(arm_names(a))),
+            ExprKind::Lam { binders, .. } => bound.extend(binders.iter().map(|b| b.name.clone())),
+            ExprKind::Block(block) => {
+                for statement in &block.stmts {
+                    match statement {
+                        Stmt::Let { name, .. } => bound.push(name.clone()),
+                        Stmt::LetRecord { fields, .. } => {
+                            fields.iter().for_each(|f| pattern_names(&f.pat, &mut bound))
+                        }
+                        Stmt::LetCode { .. } => {}
+                    }
+                }
+            }
+            _ => {}
+        });
+        crate::surface::walk_expr(&arm.body, &mut |e| {
+            let ExprKind::Match { scrut, arms, .. } = &e.kind else { return };
+            let ExprKind::Var(name) = &scrut.kind else { return };
+            if bound.contains(name) {
+                return;
+            }
+            if let Some(p) = self_ref.params[self_ref.n_tyvars..]
+                .iter()
+                .position(|(own, _)| own == name)
+                .map(|p| p + self_ref.n_tyvars)
+                && p != dec
+                && descends_through(self_ref, arms, p)
+            {
+                inner = true;
+            }
+        });
+    }
+    inner
 }
 
 /// Does a self-call in `arms` pass, at parameter `dec`'s position, something
@@ -128,7 +193,8 @@ fn bind_local(scope: &mut Vec<Bound>, names: impl IntoIterator<Item = String>) {
 
 /// Every self-call in `e`, with the arguments in declaration order, whether
 /// it is `@`-marked, and the scope at it — binder-aware like [`reads`], with
-/// every `λ` and `match` binder arm-local and a `let` local when its value is.
+/// every `λ` binder arm-local, and a `let` or a nested `match`'s binder local
+/// when its value or scrutinee is.
 fn self_calls(
     self_ref: &SelfRef,
     e: &Expr,
@@ -146,9 +212,18 @@ fn self_calls(
         }
         ExprKind::Match { scrut, arms, .. } => {
             self_calls(self_ref, scrut, scope, out);
+            // A nested `match`'s binders are pieces of its scrutinee: local
+            // when it reads a local (a predecessor's own predecessor), not
+            // when it is on another parameter or something built outside.
+            let deps = deps(scrut, scope);
             for arm in arms {
                 let mut inner = scope.to_vec();
-                bind_local(&mut inner, arm_names(arm));
+                inner.extend(arm_names(arm).into_iter().filter(|n| n != "_").map(|name| Bound {
+                    name,
+                    deps: deps.clone(),
+                    param: None,
+                    stale: None,
+                }));
                 self_calls(self_ref, &arm.body, &inner, out);
             }
         }
@@ -387,7 +462,38 @@ fn reads(e: &Expr, scope: &[Bound], out: &mut dyn FnMut(&Bound, Span)) {
             reads(&block.result, &inner, out);
             block.ons.iter().for_each(|o| reads(&o.expr, &inner, out));
         }
+        // A type argument reads names too (`decide_bit<d = 0>()`), which
+        // `for_each_child` does not descend into.
+        ExprKind::TyApp { head, args } => {
+            reads(head, scope, out);
+            args.iter().for_each(|t| ty_reads(t, scope, out));
+        }
+        ExprKind::TyLit(t) => ty_reads(t, scope, out),
         _ => crate::surface::for_each_child(e, &mut |c| reads(c, scope, out)),
+    }
+}
+
+/// [`reads`] through the expressions inside a written type. A name a
+/// dependent arrow binds is not scoped, so reading one over-reports: the
+/// readers only ever refuse or reroute on a dependency, never accept on one.
+fn ty_reads(t: &Ty, scope: &[Bound], out: &mut dyn FnMut(&Bound, Span)) {
+    match &t.kind {
+        TyKind::Nat | TyKind::Univ { .. } | TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
+        TyKind::Eq(a, b) => {
+            reads(a, scope, out);
+            reads(b, scope, out);
+        }
+        TyKind::OfExpr(e) | TyKind::TypeOf(e) | TyKind::Fin(e) => reads(e, scope, out),
+        TyKind::Named { args, .. } => args.iter().for_each(|a| ty_reads(a, scope, out)),
+        TyKind::Fn { dom, cod, .. } => {
+            ty_reads(dom, scope, out);
+            ty_reads(cod, scope, out);
+        }
+        TyKind::Vec { elem, len } => {
+            ty_reads(elem, scope, out);
+            reads(len, scope, out);
+        }
+        TyKind::Squash(inner) | TyKind::Code { ty: inner, .. } => ty_reads(inner, scope, out),
     }
 }
 
@@ -471,6 +577,7 @@ impl Planner<'_> {
                         descends_through(self.self_ref, arms, dec)
                     } else {
                         recurses_on(self.self_ref, arms, dec)
+                            && !outer_case_split(self.self_ref, arms, dec)
                     }
                 });
                 if let Some(dec) = dec
@@ -515,6 +622,10 @@ impl Planner<'_> {
         let param = &self.self_ref.params[dec].0;
         let why = "the recursion is compiled at the `match`, so a recursive call in its \
                    arms means the `match` alone at the smaller value";
+        // The parameters the self-calls change: the ih generalizes them, so a
+        // branch above the `match` that reads one is decided by the top
+        // call's value and skipped by every recursive one.
+        let varied = varied_params(self.self_ref, self.types, arms, dec);
         let refusal = if !tail {
             Some(format!(
                 "this recursive `match` on `{param}` is not the result of `{name}`: {why}, \
@@ -528,6 +639,15 @@ impl Planner<'_> {
                  `{param}`: {why}, so the branch is decided once, by the top call. Branch \
                  inside the arms instead (issues/fn-recursion-means-the-function.md)"
             ))
+        } else if let Some(&p) = spine.iter().find(|p| varied.contains(p)) {
+            let varied = &self.self_ref.params[p].0;
+            Some(format!(
+                "this recursive `match` on `{param}` sits under a branch that depends on \
+                 `{varied}`, which its recursive calls change, so the branch is decided \
+                 once, by the top call's `{varied}`, and the recursive calls skip it: \
+                 {why}. Branch inside the arms instead \
+                 (issues/recursion-branch-on-varied-parameter.md)"
+            ))
         } else {
             None
         };
@@ -539,7 +659,6 @@ impl Planner<'_> {
         // vary is evaluated once, at the top call's value of it; the varied
         // parameter itself is the ih's generalized binder, so reading *it*
         // is this level's value (issues/recursion-let-reads-changing-parameter.md).
-        let varied = varied_params(self.self_ref, self.types, arms, dec);
         let above: Vec<Bound> = scope
             .iter()
             .map(|b| Bound {
