@@ -38,8 +38,9 @@ fn nat_suite_checks() {
     // §3 is the device's fourth cell rather than §13.6's decline. Plus 6
     // for the binding-statement classes `Bind`/`Pointed` and the calls
     // `Bind::seq`/`Pointed::ret` the lowering writes
-    // (docs/sequencing-surface-design.md §13).
-    assert_eq!(e.psi().bindings.len(), 23);
+    // (docs/sequencing-surface-design.md §13). Plus 3 for the `Mutated`
+    // record a `mut self` method returns (docs/effects-capabilities-design.md §2).
+    assert_eq!(e.psi().bindings.len(), 26);
 }
 
 #[test]
@@ -70,7 +71,9 @@ fn a_fn_is_transparent_and_a_theorem_is_not() {
     // theorems.
     let mut want = vec![true; 8];
     want.extend([false; 4]);
+    // Then the three generated definitions of the prelude's `Mutated`.
     want.extend([true; 6]);
+    want.extend([true; 3]);
     want.push(true);
     want.extend([false; 4]);
     assert_eq!(bodied, want);

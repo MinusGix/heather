@@ -64,7 +64,9 @@ fn nat_suite_ergonomic() {
     // `3·nfields + 1 = 7` projection definitions its dependent spine now gets
     // (`docs/telescoped-record-projections-design.md` §3).
     // +6: the prelude's binding-statement classes and calls.
-    assert_eq!(e.psi().bindings.len(), 23);
+    // +3: the prelude's `Mutated` record (a `mut self` method's result,
+    // docs/effects-capabilities-design.md §2).
+    assert_eq!(e.psi().bindings.len(), 26);
 }
 
 #[test]

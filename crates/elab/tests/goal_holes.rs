@@ -80,7 +80,9 @@ fn a_body_hole_is_discharged_by_name() {
     // `fn` is a *defined* Ψ-global since issues/simulate-conversion-cost.md)
     // + this one; goals never leak into the real Ψ.
     // +6: the prelude's binding-statement classes and calls.
-    assert_eq!(e.psi().bindings.len(), 22);
+    // +3: the prelude's `Mutated` record (a `mut self` method's result,
+    // docs/effects-capabilities-design.md §2).
+    assert_eq!(e.psi().bindings.len(), 25);
 }
 
 #[test]

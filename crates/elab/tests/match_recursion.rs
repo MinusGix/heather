@@ -60,7 +60,9 @@ fn nat_suite_recursive_style() {
     // and 4 theorems, all landed as Ψ-globals (a `fn` is a *defined* one
     // since issues/simulate-conversion-cost.md).
     // +6: the prelude's binding-statement classes and calls.
-    assert_eq!(e.psi().bindings.len(), 23);
+    // +3: the prelude's `Mutated` record (a `mut self` method's result,
+    // docs/effects-capabilities-design.md §2).
+    assert_eq!(e.psi().bindings.len(), 26);
 }
 
 #[test]
