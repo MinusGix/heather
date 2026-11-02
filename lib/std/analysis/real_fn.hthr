@@ -367,6 +367,41 @@ theorem DerivOn::chain_step(f, f1, g, g1: K → K, M, N, e, e1, e3, x, y, h: K, 
         e1 * ((M + K.multiplicative.unit) * h), N * (e3 * h), e * h, rg, t, ring, linarith(q1, q2, s2))
 }
 
+// `DerivOn::chain`'s last step, with every modulus a parameter. The moduli
+// are theorem results, and projecting the nested ones in the body made the
+// kernel normalise the witnesses behind them, proofs and all
+// (`issues/library-gate-module-cold-rail.md`).
+theorem DerivOn::chain_close(D, E: K → Type, f, f1, g, g1: K → K, M, N, e: K, hm: MapsTo(D, E, f), bg: BoundedOn(E, g1, N),
+    pL: K.unit <= M + K.multiplicative.unit,
+    b1: ∃ e2: K, K.unit < e2 ∧ (M + K.multiplicative.unit) * e2 <= OrderedField::half(e),
+    b3: ∃ e2: K, K.unit < e2 ∧ N * e2 <= OrderedField::half(e),
+    a0: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(f(y) + K.inv(f(x)), (M + K.multiplicative.unit) * h)),
+    ag: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → E(x) → E(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(g(y) + K.inv(g(x)) + K.inv(g1(x) * (y + K.inv(x))), b1.witness * h)),
+    af: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(f(y) + K.inv(f(x)) + K.inv(f1(x) * (y + K.inv(x))), b3.witness * h)),
+    bc: ∃ e2: K, K.unit < e2 ∧ (M + K.multiplicative.unit) * e2 <= ag.witness,
+    au: ∃ d: K, K.unit < d ∧ d <= a0.witness ∧ d <= af.witness,
+    ad: ∃ d: K, K.unit < d ∧ d <= au.witness ∧ d <= bc.witness):
+    ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(g(f(y)) + K.inv(g(f(x))) + K.inv((g1(f(x)) * f1(x)) * (y + K.inv(x))), e * h))
+{
+    Exists(ad.witness, And(ad.proof.left, λ x y h dx dy hxy hd => {
+        let hu = PseudoOrder::le_trans(h, ad.witness, au.witness, hd, ad.proof.right.left);
+        let lip = a0.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, a0.witness, hu, au.proof.right.left));
+        let small: ((M + K.multiplicative.unit) * h <= ag.witness) = PseudoOrder::le_trans((M + K.multiplicative.unit) * h,
+            (M + K.multiplicative.unit) * bc.witness, ag.witness,
+            OrderedField::mul_le_mono_l(h, bc.witness, M + K.multiplicative.unit,
+                PseudoOrder::le_trans(h, ad.witness, bc.witness, hd, ad.proof.right.right), pL), bc.proof.right);
+        DerivOn::chain_step(f, f1, g, g1, M, N, e, b1.witness, b3.witness, x, y, h,
+            LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy),
+            ag.proof.right(f(x), f(y), (M + K.multiplicative.unit) * h, hm(x, dx), hm(y, dy), lip, small),
+            af.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, af.witness, hu, au.proof.right.right)),
+            bg.right(f(x), hm(x, dx)), b1.proof.right, b3.proof.right)
+    }))
+}
+
 // The chain rule, for `f` with a bounded derivative mapping `D` into a
 // domain where `g`'s derivative is bounded.
 theorem DerivOn::chain(D, E: K → Type, f, f1, g, g1: K → K, M, N: K, hm: MapsTo(D, E, f),
@@ -386,19 +421,7 @@ theorem DerivOn::chain(D, E: K → Type, f, f1, g, g1: K → K, M, N: K, hm: Map
         let af = hf(b3.witness, b3.proof.left);
         let au = OrderedField::below_both(a0.witness, af.witness, a0.proof.left, af.proof.left);
         let ad = OrderedField::below_both(au.witness, bc.witness, au.proof.left, bc.proof.left);
-        Exists(ad.witness, And(ad.proof.left, λ x y h dx dy hxy hd => {
-            let hu = PseudoOrder::le_trans(h, ad.witness, au.witness, hd, ad.proof.right.left);
-            let lip = a0.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, a0.witness, hu, au.proof.right.left));
-            let small: ((M + K.multiplicative.unit) * h <= ag.witness) = PseudoOrder::le_trans((M + K.multiplicative.unit) * h,
-                (M + K.multiplicative.unit) * bc.witness, ag.witness,
-                OrderedField::mul_le_mono_l(h, bc.witness, M + K.multiplicative.unit,
-                    PseudoOrder::le_trans(h, ad.witness, bc.witness, hd, ad.proof.right.right), pL), bc.proof.right);
-            DerivOn::chain_step(f, f1, g, g1, M, N, e, b1.witness, b3.witness, x, y, h,
-                LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy),
-                ag.proof.right(f(x), f(y), (M + K.multiplicative.unit) * h, hm(x, dx), hm(y, dy), lip, small),
-                af.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, af.witness, hu, au.proof.right.right)),
-                bg.right(f(x), hm(x, dx)), b1.proof.right, b3.proof.right)
-        }))
+        DerivOn::chain_close(D, E, f, f1, g, g1, M, N, e, hm, bg, pL, b1, b3, a0, ag, af, bc, au, ad)
     }
 }
 
@@ -444,6 +467,47 @@ theorem DerivOn::mul_step(f, f1, g, g1: K → K, A, B, M, N, e, e1, e3, x, y, h:
         t1, t2, t3, parts, total)
 }
 
+// `DerivOn::mul`'s last step, with every modulus a parameter, as in
+// `DerivOn::chain_close`.
+theorem DerivOn::mul_close(D: K → Type, f, f1, g, g1: K → K, A, B, M, N, e: K,
+    bf: BoundedOn(D, f, A), bg: BoundedOn(D, g, B),
+    pP: K.unit <= (M + K.multiplicative.unit) * (N + K.multiplicative.unit),
+    al: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(f(y) + K.inv(f(x)), (M + K.multiplicative.unit) * h)),
+    bl: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(g(y) + K.inv(g(x)), (N + K.multiplicative.unit) * h)),
+    c1: ∃ e2: K, K.unit < e2 ∧ B * e2 <= OrderedField::half(OrderedField::half(e)),
+    af: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(f(y) + K.inv(f(x)) + K.inv(f1(x) * (y + K.inv(x))), c1.witness * h)),
+    c3: ∃ e2: K, K.unit < e2 ∧ A * e2 <= OrderedField::half(OrderedField::half(e)),
+    ag: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(g(y) + K.inv(g(x)) + K.inv(g1(x) * (y + K.inv(x))), c3.witness * h)),
+    cc: ∃ e2: K, K.unit < e2 ∧ (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * e2 <= OrderedField::half(e),
+    au: ∃ d: K, K.unit < d ∧ d <= al.witness ∧ d <= bl.witness,
+    av: ∃ d: K, K.unit < d ∧ d <= af.witness ∧ d <= ag.witness,
+    aw: ∃ d: K, K.unit < d ∧ d <= au.witness ∧ d <= av.witness,
+    ad: ∃ d: K, K.unit < d ∧ d <= aw.witness ∧ d <= cc.witness):
+    ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
+        AbsLe(f(y) * g(y) + K.inv(f(x) * g(x)) + K.inv((f1(x) * g(x) + f(x) * g1(x)) * (y + K.inv(x))), e * h))
+{
+    Exists(ad.witness, And(ad.proof.left, λ x y h dx dy hxy hd => {
+        let hw = PseudoOrder::le_trans(h, ad.witness, aw.witness, hd, ad.proof.right.left);
+        let hu = PseudoOrder::le_trans(h, aw.witness, au.witness, hw, aw.proof.right.left);
+        let hv = PseudoOrder::le_trans(h, aw.witness, av.witness, hw, aw.proof.right.right);
+        DerivOn::mul_step(f, f1, g, g1, A, B, M, N, e, c1.witness, c3.witness, x, y, h,
+            LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy), bf.right(x, dx), bg.right(x, dx),
+            af.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, av.witness, af.witness, hv, av.proof.right.left)),
+            ag.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, av.witness, ag.witness, hv, av.proof.right.right)),
+            al.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, al.witness, hu, au.proof.right.left)),
+            bl.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, bl.witness, hu, au.proof.right.right)),
+            c1.proof.right, c3.proof.right,
+            PseudoOrder::le_trans((M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h,
+                (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * cc.witness, OrderedField::half(e),
+                OrderedField::mul_le_mono_l(h, cc.witness, (M + K.multiplicative.unit) * (N + K.multiplicative.unit),
+                    PseudoOrder::le_trans(h, ad.witness, cc.witness, hd, ad.proof.right.right), pP), cc.proof.right))
+    }))
+}
+
 // The product rule, on a domain where both factors and both derivatives are
 // bounded. The moduli are chosen by projection, not by `match`: each
 // choice is a witness the next one reads.
@@ -472,22 +536,7 @@ theorem DerivOn::mul(D: K → Type, f, f1, g, g1: K → K, A, B, M, N: K, hf: De
         let av = OrderedField::below_both(af.witness, ag.witness, af.proof.left, ag.proof.left);
         let aw = OrderedField::below_both(au.witness, av.witness, au.proof.left, av.proof.left);
         let ad = OrderedField::below_both(aw.witness, cc.witness, aw.proof.left, cc.proof.left);
-        Exists(ad.witness, And(ad.proof.left, λ x y h dx dy hxy hd => {
-            let hw = PseudoOrder::le_trans(h, ad.witness, aw.witness, hd, ad.proof.right.left);
-            let hu = PseudoOrder::le_trans(h, aw.witness, au.witness, hw, aw.proof.right.left);
-            let hv = PseudoOrder::le_trans(h, aw.witness, av.witness, hw, aw.proof.right.right);
-            DerivOn::mul_step(f, f1, g, g1, A, B, M, N, e, c1.witness, c3.witness, x, y, h,
-                LocatedAddGroup::abs_le_nonneg(y + K.inv(x), h, hxy), bf.right(x, dx), bg.right(x, dx),
-                af.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, av.witness, af.witness, hv, av.proof.right.left)),
-                ag.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, av.witness, ag.witness, hv, av.proof.right.right)),
-                al.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, al.witness, hu, au.proof.right.left)),
-                bl.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, bl.witness, hu, au.proof.right.right)),
-                c1.proof.right, c3.proof.right,
-                PseudoOrder::le_trans((M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h,
-                    (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * cc.witness, OrderedField::half(e),
-                    OrderedField::mul_le_mono_l(h, cc.witness, (M + K.multiplicative.unit) * (N + K.multiplicative.unit),
-                        PseudoOrder::le_trans(h, ad.witness, cc.witness, hd, ad.proof.right.right), pP), cc.proof.right))
-        }))
+        DerivOn::mul_close(D, f, f1, g, g1, A, B, M, N, e, bf, bg, pP, al, bl, c1, af, c3, ag, cc, au, av, aw, ad)
     }
 }
 

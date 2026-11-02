@@ -111,6 +111,14 @@ property of Heather.
   is cheap). Pass the proof to a helper theorem that matches on its
   parameter, or move the result with `j` over an equation:
   [[match-on-proof-call-cost]].
+- **The same holds for projections chained through theorem results.**
+  `let au = below_both(a.witness, ..); let ad = below_both(au.witness, ..)`
+  and then a body over `ad.witness` made the kernel normalise the nested
+  witnesses, proofs and all (`DerivOn::chain` and `DerivOn::mul` in
+  `real_fn.hthr`: 8.3M and 8.9M steps). Compute the `∃` results with `let`,
+  then hand them all to a `*_close` theorem whose parameters they are; its
+  body projects variables (`DerivOn::chain_close`: 0.9M steps for both
+  halves) — [[library-gate-module-cold-rail]].
 - `absurd` needs a constructor clash; `False` goes by `false_elim`.
 - Tier-2 laws through `Vis` are not provable with `=` (no funext): state
   them up to the tree's equivalence.
