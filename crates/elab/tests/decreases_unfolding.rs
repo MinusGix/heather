@@ -319,6 +319,26 @@ fn a_member_by_measure_gets_its_equation_under_the_qualified_name() {
     "#);
 }
 
+const MERGE: &str = r#"
+theorem succ_add_le(a, b: Nat): Succ(a + b) <= Succ(a) + b {
+    match b { Zero => nat::Nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
+}
+fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
+    match xs {
+        Nil => ys,
+        Cons(x, xt) => match ys {
+            Nil => Cons(x, xt),
+            Cons(y, yt) => match nat::Nat::le_dec(x, y) {
+                Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
+                Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
+            },
+        },
+    }
+    on ?dec1 := succ_add_le(xt.len(), yt.len());
+    on ?dec2 := nat::Nat::le_refl(Succ(xt.len()) + yt.len());
+}
+"#;
+
 #[test]
 fn a_match_on_a_computed_scrutinee_is_walked_through_its_own_eliminator() {
     // `merge`'s `match nat::Nat::le_dec(x, y)` reduces neither anchor, so the

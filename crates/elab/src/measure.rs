@@ -1915,7 +1915,8 @@ impl<'a> Rewrite<'a> {
             || mentions_context(node, &name)
             || self.ons.iter().any(|o| mentions_context(&o.expr, &name))
         { name.push('_'); }
-        self.scope.push(Binder { name: name.clone(), ty: Some(ty) });
+        let value = (!self.members.iter().any(|m| mentions_context(scrut, &m.name))).then(|| scrut.clone());
+        self.scope.push(Binder { name: name.clone(), ty: Some(ty), value });
         self.scrut_aliases.push((name.clone(), scrut.clone()));
         Some(name)
     }
@@ -2092,7 +2093,16 @@ impl<'a> Rewrite<'a> {
                         let n = self.scope.len();
                         self.bind_arm(a, scrut_ty.as_ref());
                         if let Some(eq) = &eqbind {
-                            let ty = pattern_expr(a, span).map(|p| eq_ty((**scrut).clone(), p, span));
+                            // An [`AutoEqs`] equation is stated about the
+                            // alias's value, so that a query reading it as a
+                            // fact (`omega` over `leb(n, 1) = False`) sees
+                            // its locals; a written one stays at the alias.
+                            let stated = match &scrut.kind {
+                                ExprKind::Var(v) if auto_eq_index(eq).is_some() => self.scrut_aliases.iter().rev()
+                                    .find(|(n, _)| n == v).map(|(_, e)| e.clone()),
+                                _ => None,
+                            }.unwrap_or_else(|| (**scrut).clone());
+                            let ty = pattern_expr(a, span).map(|p| eq_ty(stated.clone(), p, span));
                             self.scope.push(Binder { name: eq.clone(), ty, value: None });
                         }
                         let mut arm = a.clone();
@@ -3010,6 +3020,12 @@ impl Respell<'_> {
                 // A computed scrutinee, or an equation binding: neither side
                 // reduces into an arm, so both are spelled out (§3's
                 // amendment; issues/decreases-unfold-convoy-scrutinee.md).
+                // A computed scrutinee with no equation written goes through
+                // the alias the rewrite gave it, which carries its
+                // [`AutoEqs`] equation where an obligation reads one.
+                if eqbind.is_none() && !matches!(scrut.kind, ExprKind::Var(_)) && !self.has_self_call(scrut) {
+                    return self.convoy_at_anchor(e, scrut, None, arms);
+                }
                 if eqbind.is_some() || !matches!(scrut.kind, ExprKind::Var(_)) {
                     return self.match_spelled(e, scrut, eqbind.as_deref(), arms);
                 }
@@ -3463,7 +3479,7 @@ impl Respell<'_> {
             self.rw.bind_arm(a, scrut_ty.as_ref());
             if let Some(h) = &eq_any {
                 let ty = pattern_expr(a, span).map(|p| eq_ty(stated.clone(), p, span));
-                self.rw.scope.push(Binder { name: h.to_string(), ty });
+                self.rw.scope.push(Binder { name: h.to_string(), ty, value: None });
             }
             let saved_lets = std::mem::take(&mut self.lets);
             let saved_anchors = self.anchors.replace((rebind(&ra.body), a.body.clone()));
