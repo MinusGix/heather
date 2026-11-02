@@ -144,6 +144,14 @@ fn pos_sugar_angle_brackets_are_delimiters() {
 }
 
 #[test]
+fn a_bind_arrow_is_spaced_and_hugs_its_paren() {
+    check(
+        "fn f(x: M) -> M { let a<-x; g(( <-x), a) }",
+        "fn f(x: M) -> M { let a <- x; g((<- x), a) }",
+    );
+}
+
+#[test]
 fn projections_and_qualified_names_stay_tight() {
     check("fn f(p: Pair) -> Nat { p . fst }", "fn f(p: Pair) -> Nat { p.fst }");
     check("import nat::{le_refl, le_trans};", "import nat::{le_refl, le_trans};");

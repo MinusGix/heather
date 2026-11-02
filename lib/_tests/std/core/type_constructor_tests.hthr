@@ -49,17 +49,12 @@ fn infer_open<A>(x: Option<A>) → Option<A> { pick_open(x) }
 fn infer_open_tac<A>(t: Tac<A>) → Tac<A> { pick_open(t) }
 theorem infer_open_proof<A>(x: Option<A>): pick_open(x) = x { refl }
 
-// Piece 3: classes over a type constructor.
-class Bind<M: Type → Type> { bind: {A, B: Type} → M(A) → (A → M(B)) → M(B) }
-class Pure<M: Type → Type> { pure: {A: Type} → A → M(A) }
+// Piece 3: classes over a type constructor. `Bind` and `Pointed` are the
+// prelude's (the carrier protocol of binding statements,
+// docs/sequencing-surface-design.md §2), with their instances at `Option`
+// (option.hthr) and `Tac` (tactic.hthr).
 
-instance Bind<Option> { bind := Option::and_then }
-instance Pure<Option> { pure := λ {A} a => Some(a) }
-instance Bind<Tac> { bind := Tac::bind }
-// `Tac::Pure`, qualified: the class `Pure`'s record constructor is `Pure` too.
-instance Pure<Tac> { pure := λ {A} a => Tac::Pure(a) }
-
-fn twice({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pure<M> := infer) → M(Nat) {
+fn twice({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pointed<M> := infer) → M(Nat) {
     b.bind(x, λ n => p.pure(n + n))
 }
 fn none_nat() → Option<Nat> { None }
@@ -69,7 +64,7 @@ theorem twice_none(): twice(none_nat()) = none_nat() { refl }
 theorem twice_tac(): twice(Tac::Pure(4)) = Tac::Pure(8) { refl }
 
 // Generic code over the class passes its dictionaries on by scope.
-fn four_times({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pure<M> := infer) → M(Nat) {
+fn four_times({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pointed<M> := infer) → M(Nat) {
     twice(twice(x))
 }
 theorem four_times_option(): four_times(Some(1)) = Some(4) { refl }
@@ -78,7 +73,7 @@ theorem twice_option_neutral(x: Option<Nat>): twice(x) = x.and_then(λ n => Some
 
 // A class extending classes over a constructor, filled from the canonical
 // parents at the same constructor.
-class Monad<M: Type → Type> extends Bind<M>, Pure<M> {}
+class Monad<M: Type → Type> extends Bind<M>, Pointed<M> {}
 instance Monad<Option> {}
 fn twice_m({M: Type → Type}, x: M(Nat), m: Monad<M> := infer) → M(Nat) {
     m.bind(x, λ n => m.pure(n + n))

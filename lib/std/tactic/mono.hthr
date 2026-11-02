@@ -275,33 +275,39 @@ record Pushes { le_l: GlobalRef, le_r: GlobalRef, lt_l: GlobalRef, lt_r: GlobalR
 record Mono { le: OpKey, lt: OpKey, reflexive: Option<GlobalRef>, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>, truth: Handle, holds: GlobalRef, edges: List<EdgeRef> }
 
 fn mono_try_global(name: String) → Tac<Option<GlobalRef>> {
-    lookup(name).bind(λ c => match c { Accepted(g) => Pure(Some(g)), Refused(_) => Pure(None) })
+    match <- lookup(name) { Accepted(g) => Pure(Some(g)), Refused(_) => Pure(None) }
 }
 
-fn mono_global(name: String) → Tac<GlobalRef> {
-    lookup(name).bind(λ c => match c { Accepted(g) => Pure(g), Refused(why) => fail("mono: " ++ why, []) })
-}
+fn mono_global(name: String) → Tac<GlobalRef> { lookup(name).or_fail("mono: ") }
 
 // The laws whose operation and lemma both resolve.
 fn mono_laws(ls: List<MonoLaw>) → Tac<List<Law>> {
     match ls {
         Nil => Pure([]),
-        Cons(l, rest) => mono_try_global(l.op).bind(λ op => mono_try_global(l.lemma).bind(λ lemma => mono_laws(rest).bind(λ more =>
+        Cons(l, rest) => {
+            let op <- mono_try_global(l.op);
+            let lemma <- mono_try_global(l.lemma);
+            let more <- mono_laws(rest);
             match op {
                 None => Pure(more),
                 Some(o) => match lemma { None => Pure(more), Some(m) => Pure(Cons(Law(l.strict, KGlobal(o.id), l.moves, m), more)) },
-            }))),
+            }
+        },
     }
 }
 
 fn mono_signs(ls: List<SignLaw>) → Tac<List<Sign>> {
     match ls {
         Nil => Pure([]),
-        Cons(l, rest) => mono_try_global(l.op).bind(λ op => mono_try_global(l.lemma).bind(λ lemma => mono_signs(rest).bind(λ more =>
+        Cons(l, rest) => {
+            let op <- mono_try_global(l.op);
+            let lemma <- mono_try_global(l.lemma);
+            let more <- mono_signs(rest);
             match op {
                 None => Pure(more),
                 Some(o) => match lemma { None => Pure(more), Some(m) => Pure(Cons(Sign(l.strict, KGlobal(o.id), m), more)) },
-            }))),
+            }
+        },
     }
 }
 
@@ -310,18 +316,22 @@ fn mono_is(o: Option<GlobalRef>, g: GlobalRef) → Bool { match o { None => Fals
 // What every run needs beside its laws: a theorem of `True`, for an order
 // that computes.
 fn mono_run(le, lt: OpKey, rf, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>) → Tac<Mono> {
-    mono_global("mono_trivial").bind(λ triv => infer(Global(triv)).bind(λ c => match c {
-        Refused(why) => fail("mono: " ++ why, []),
-        Accepted(truth) => Pure(Mono(le, lt, rf, weaken, laws, signs, pushes, given, truth, triv, [])),
-    }))
+    let triv <- mono_global("mono_trivial");
+    let truth <- infer(Global(triv)).or_fail("mono: ");
+    Pure(Mono(le, lt, rf, weaken, laws, signs, pushes, given, truth, triv, []))
 }
 
 // The four push lemmas, when all of them resolve.
 fn mono_pushes(o: Option<PushLaws>) → Tac<Option<Pushes>> {
     match o {
         None => Pure(None),
-        Some(n) => mono_try_global(n.le_l).bind(λ ga => mono_try_global(n.le_r).bind(λ gb => mono_try_global(n.lt_l).bind(λ gc => mono_try_global(n.lt_r).bind(λ gd =>
-            Pure(match ga { None => None, Some(x) => match gb { None => None, Some(y) => match gc { None => None, Some(z) => match gd { None => None, Some(w) => Some(Pushes(x, y, z, w)) } } } }))))),
+        Some(n) => {
+            let ga <- mono_try_global(n.le_l);
+            let gb <- mono_try_global(n.le_r);
+            let gc <- mono_try_global(n.lt_l);
+            let gd <- mono_try_global(n.lt_r);
+            Pure({ let x <- ga; let y <- gb; let z <- gc; let w <- gd; Some(Pushes(x, y, z, w)) })
+        },
     }
 }
 
@@ -329,19 +339,28 @@ fn mono_pushes(o: Option<PushLaws>) → Tac<Option<Pushes>> {
 fn mono_carrier(cs: List<MonoCarrier>, rel: GlobalRef, given: List<Given>) → Tac<Option<Mono>> {
     match cs {
         Nil => Pure(None),
-        Cons(c, rest) => mono_try_global(c.le).bind(λ le => mono_try_global(c.lt).bind(λ lt =>
+        Cons(c, rest) => {
+            let le <- mono_try_global(c.le);
+            let lt <- mono_try_global(c.lt);
             match mono_is(le, rel) || mono_is(lt, rel) {
                 False => mono_carrier(rest, rel, given),
                 True => match le {
                     None => Pure(None),
                     Some(l) => match lt {
                         None => Pure(None),
-                        Some(s) => mono_try_global(c.reflexive).bind(λ rf => mono_try_global(c.weaken).bind(λ weaken =>
-                            mono_laws(c.laws).bind(λ laws => mono_signs(c.signs).bind(λ signs => mono_pushes(c.pushes).bind(λ pushes =>
-                            mono_run(KGlobal(l.id), KGlobal(s.id), rf, weaken, laws, signs, pushes, given).bind(λ M => Pure(Some(M)))))))),
+                        Some(s) => {
+                            let rf <- mono_try_global(c.reflexive);
+                            let weaken <- mono_try_global(c.weaken);
+                            let laws <- mono_laws(c.laws);
+                            let signs <- mono_signs(c.signs);
+                            let pushes <- mono_pushes(c.pushes);
+                            let M <- mono_run(KGlobal(l.id), KGlobal(s.id), rf, weaken, laws, signs, pushes, given);
+                            Pure(Some(M))
+                        },
                     },
                 },
-            }))
+            }
+        }
     }
 }
 
@@ -356,7 +375,7 @@ fn mono_arg(args: List<Handle>, i: Nat) → Option<Handle> {
 fn mono_index_key(args: List<Handle>, i: Nat) → Tac<Option<OpKey>> {
     match mono_arg(args, i) {
         None => Pure(None),
-        Some(a) => view(a).bind(λ v => match mono_call(v) { None => Pure(None), Some(c) => Pure(Some(c.op)) }),
+        Some(a) => match mono_call(<- view(a)) { None => Pure(None), Some(c) => Pure(Some(c.op)) },
     }
 }
 
@@ -364,29 +383,37 @@ fn mono_class_key(args: List<Handle>, op: ClassOp) → Tac<Option<OpKey>> {
     match op {
         Index(i) => mono_index_key(args, i),
         Field(name) => Pure(Some(KField(name))),
-        Named(name) => mono_try_global(name).bind(λ o => Pure(match o { None => None, Some(g) => Some(KGlobal(g.id)) })),
+        Named(name) => Pure(match <- mono_try_global(name) { None => None, Some(g) => Some(KGlobal(g.id)) }),
     }
 }
 
 fn mono_class_laws(args: List<Handle>, ls: List<ClassLaw>) → Tac<List<Law>> {
     match ls {
         Nil => Pure([]),
-        Cons(l, rest) => mono_class_key(args, l.op).bind(λ k => mono_try_global(l.lemma).bind(λ lemma => mono_class_laws(args, rest).bind(λ more =>
+        Cons(l, rest) => {
+            let k <- mono_class_key(args, l.op);
+            let lemma <- mono_try_global(l.lemma);
+            let more <- mono_class_laws(args, rest);
             match k {
                 None => Pure(more),
                 Some(o) => match lemma { None => Pure(more), Some(m) => Pure(Cons(Law(l.strict, o, l.moves, m), more)) },
-            }))),
+            }
+        },
     }
 }
 
 fn mono_class_signs(args: List<Handle>, ls: List<ClassSign>) → Tac<List<Sign>> {
     match ls {
         Nil => Pure([]),
-        Cons(l, rest) => mono_class_key(args, l.op).bind(λ k => mono_try_global(l.lemma).bind(λ lemma => mono_class_signs(args, rest).bind(λ more =>
+        Cons(l, rest) => {
+            let k <- mono_class_key(args, l.op);
+            let lemma <- mono_try_global(l.lemma);
+            let more <- mono_class_signs(args, rest);
             match k {
                 None => Pure(more),
                 Some(o) => match lemma { None => Pure(more), Some(m) => Pure(Cons(Sign(l.strict, o, m), more)) },
-            }))),
+            }
+        },
     }
 }
 
@@ -399,25 +426,33 @@ fn mono_class_pushes() → PushLaws {
 // The run for a dictionary of class `c`, whose arguments are `args`, when
 // its `<=` or `<` is `rel`.
 fn mono_dictionary(c: MonoClass, args: List<Handle>, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
-    mono_index_key(args, c.le).bind(λ le => mono_index_key(args, c.lt).bind(λ lt => match le {
+    let le <- mono_index_key(args, c.le);
+    let lt <- mono_index_key(args, c.lt);
+    match le {
         None => Pure(None),
         Some(l) => match lt {
             None => Pure(None),
             Some(s) => match l.same(rel) || s.same(rel) {
                 False => Pure(None),
-                True => mono_try_global("StrictOrder::le_refl").bind(λ rf => mono_try_global("StrictOrder::le_of_lt").bind(λ weaken =>
-                    mono_class_laws(args, c.laws).bind(λ laws => mono_class_signs(args, c.signs).bind(λ signs => mono_pushes(Some(mono_class_pushes())).bind(λ pushes =>
-                    mono_run(l, s, rf, weaken, laws, signs, pushes, given).bind(λ M => Pure(Some(M)))))))),
+                True => {
+                    let rf <- mono_try_global("StrictOrder::le_refl");
+                    let weaken <- mono_try_global("StrictOrder::le_of_lt");
+                    let laws <- mono_class_laws(args, c.laws);
+                    let signs <- mono_class_signs(args, c.signs);
+                    let pushes <- mono_pushes(Some(mono_class_pushes()));
+                    let M <- mono_run(l, s, rf, weaken, laws, signs, pushes, given);
+                    Pure(Some(M))
+                },
             },
         },
-    }))
+    }
 }
 
 // The first class of `cs` whose global is `g`.
 fn mono_class_named(cs: List<MonoClass>, g: GlobalRef) → Tac<Option<MonoClass>> {
     match cs {
         Nil => Pure(None),
-        Cons(c, rest) => mono_try_global(c.class).bind(λ o => match mono_is(o, g) { True => Pure(Some(c)), False => mono_class_named(rest, g) }),
+        Cons(c, rest) => match mono_is(<- mono_try_global(c.class), g) { True => Pure(Some(c)), False => mono_class_named(rest, g) },
     }
 }
 
@@ -426,16 +461,17 @@ fn mono_class_named(cs: List<MonoClass>, g: GlobalRef) → Tac<Option<MonoClass>
 fn mono_class_carrier(ls: List<LocalInfo>, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
     match ls {
         Nil => Pure(None),
-        Cons(l, rest) => view(l.ty).bind(λ v => {
+        Cons(l, rest) => {
+            let v <- view(l.ty);
             let next: Tac<Option<Mono>> = mono_class_carrier(rest, rel, given);
             match v {
-                HGlobal(g, _, args) => mono_class_named(mono_classes(), g).bind(λ o => match o {
+                HGlobal(g, _, args) => match <- mono_class_named(mono_classes(), g) {
                     None => next,
-                    Some(c) => mono_dictionary(c, args, rel, given).bind(λ m => match m { Some(M) => Pure(Some(M)), None => next }),
-                }),
+                    Some(c) => match <- mono_dictionary(c, args, rel, given) { Some(M) => Pure(Some(M)), None => next },
+                },
                 _ => next,
             }
-        }),
+        },
     }
 }
 
@@ -488,11 +524,11 @@ fn mono_same(fuel: Nat, as, bs: List<Handle>) → Tac<Bool> {
             Nil => Pure(True),
             Cons(a, ra) => match bs {
                 Nil => mono_no(),
-                Cons(b, rb) => view(a).bind(λ va => view(b).bind(λ vb => match mono_pair(va, vb) {
+                Cons(b, rb) => match mono_pair(<- view(a), <- view(b)) {
                     Differ => mono_no(),
                     Queue(xs, ys) => mono_same(f, xs ++ ra, ys ++ rb),
-                    Convert => defeq(Hd(a), Hd(b)).bind(λ s => match s { True => mono_same(f, ra, rb), False => mono_no() }),
-                })),
+                    Convert => match <- defeq(Hd(a), Hd(b)) { True => mono_same(f, ra, rb), False => mono_no() },
+                },
             },
         },
     }
@@ -504,7 +540,11 @@ fn mono_diffs(i: Nat, as, bs: List<Handle>) → Tac<List<Nat>> {
         Nil => Pure([]),
         Cons(a, ra) => match bs {
             Nil => Pure([]),
-            Cons(b, rb) => mono_same(4096, [a], [b]).bind(λ s => mono_diffs(Succ(i), ra, rb).bind(λ rest => Pure(match s { True => rest, False => Cons(i, rest) }))),
+            Cons(b, rb) => {
+                let s <- mono_same(4096, [a], [b]);
+                let rest <- mono_diffs(Succ(i), ra, rb);
+                Pure(match s { True => rest, False => Cons(i, rest) })
+            },
         },
     }
 }
@@ -530,10 +570,10 @@ fn mono_closed(fuel: Nat, hs: List<Handle>) → Tac<Bool> {
         Zero => mono_no(),
         Succ(f) => match hs {
             Nil => Pure(True),
-            Cons(h, rest) => view(h).bind(λ v => match mono_parts(v) {
+            Cons(h, rest) => match mono_parts(<- view(h)) {
                 Some(parts) => mono_closed(f, parts ++ rest),
                 None => mono_no(),
-            }),
+            },
         },
     }
 }
@@ -543,7 +583,7 @@ fn mono_closed(fuel: Nat, hs: List<Handle>) → Tac<Bool> {
 
 // The relation a statement applies, if it is a call.
 fn mono_rel_of(h: Handle) → Tac<Option<OpKey>> {
-    view(h).bind(λ v => match mono_call(v) { Some(c) => Pure(Some(c.op)), None => Pure(None) })
+    match mono_call(<- view(h)) { Some(c) => Pure(Some(c.op)), None => Pure(None) }
 }
 
 fn mono_key_is(o: Option<OpKey>, k: OpKey) → Bool { match o { None => False, Some(r) => k.same(r) } }
@@ -551,26 +591,26 @@ fn mono_key_is(o: Option<OpKey>, k: OpKey) → Bool { match o { None => False, S
 // A candidate whose statement is the goal, compared by conversion only when
 // it applies the goal's relation.
 fn mono_fits(rel: OpKey, target, ty: Handle) → Tac<Bool> {
-    mono_rel_of(ty).bind(λ o => match mono_key_is(o, rel) { False => Pure(False), True => defeq(Hd(ty), Hd(target)) })
+    match mono_key_is(<- mono_rel_of(ty), rel) { False => Pure(False), True => defeq(Hd(ty), Hd(target)) }
 }
 
 fn mono_given_among(rel: OpKey, target: Handle, gs: List<Given>) → Tac<Option<Expr>> {
     match gs {
         Nil => Pure(None),
-        Cons(g, rest) => mono_fits(rel, target, g.ty).bind(λ ok => match ok { True => Pure(Some(g.e)), False => mono_given_among(rel, target, rest) }),
+        Cons(g, rest) => match <- mono_fits(rel, target, g.ty) { True => Pure(Some(g.e)), False => mono_given_among(rel, target, rest) },
     }
 }
 
 fn mono_local_among(rel: OpKey, target: Handle, ls: List<LocalInfo>) → Tac<Option<Expr>> {
     match ls {
         Nil => Pure(None),
-        Cons(l, rest) => mono_fits(rel, target, l.ty).bind(λ ok => match ok { True => Pure(Some(Local(l.ref))), False => mono_local_among(rel, target, rest) }),
+        Cons(l, rest) => match <- mono_fits(rel, target, l.ty) { True => Pure(Some(Local(l.ref))), False => mono_local_among(rel, target, rest) },
     }
 }
 
 // A given term, then a hypothesis, whose statement is the goal.
 fn mono_exact(M: Mono, rel: OpKey, g: GoalInfo) → Tac<Option<Expr>> {
-    mono_given_among(rel, g.target, M.given).bind(λ o => match o { Some(e) => Pure(Some(e)), None => mono_local_among(rel, g.target, g.locals) })
+    match <- mono_given_among(rel, g.target, M.given) { Some(e) => Pure(Some(e)), None => mono_local_among(rel, g.target, g.locals) }
 }
 
 // ---------------------------------------------------------------------------
@@ -599,13 +639,13 @@ fn mono_open<A>(target: Handle, tried: List<Note>) → Tac<A> {
 fn mono_first(ts: List<Tac<Expr>>, target: Handle, tried: List<Note>) → Tac<Expr> {
     match ts {
         Nil => mono_open(target, tried),
-        Cons(t, rest) => attempt(t).bind(λ o => match o {
+        Cons(t, rest) => match <- attempt(t) {
             Done(e) => Pure(e),
             Failed(msg, notes) => {
                 let more: List<Note> = Cons(Tried("an alternative", msg), under_all(notes));
                 mono_first(rest, target, tried ++ more)
             },
-        }),
+        },
     }
 }
 
@@ -617,10 +657,10 @@ fn mono_opt(o: Option<GlobalRef>, t: GlobalRef → Tac<Expr>) → List<Tac<Expr>
 
 // Closed sides: the order computes.
 fn mono_compute(M: Mono, target, l, r: Handle) → Tac<Expr> {
-    mono_closed(4096, [l, r]).bind(λ closed => match closed {
+    match <- mono_closed(4096, [l, r]) {
         False => fail("mono: a side is not closed", []),
-        True => defeq(Hd(target), Hd(M.truth)).bind(λ t => match t { True => Pure(Global(M.holds)), False => fail("mono: the order does not compute to `True`", []) }),
-    })
+        True => match <- defeq(Hd(target), Hd(M.truth)) { True => Pure(Global(M.holds)), False => fail("mono: the order does not compute to `True`", []) },
+    }
 }
 
 // The hypotheses that are functions, applied: one that states the goal
@@ -629,27 +669,35 @@ fn mono_compute(M: Mono, target, l, r: Handle) → Tac<Expr> {
 fn mono_premised_locals(prove: Tac<Expr>, ls: List<LocalInfo>) → Tac<List<Tac<Expr>>> {
     match ls {
         Nil => Pure([]),
-        Cons(l, rest) => view(l.ty).bind(λ v => mono_premised_locals(prove, rest).bind(λ more =>
-            Pure(match v { HPi(_) => Cons(apply(Local(l.ref), prove), more), _ => more }))),
+        Cons(l, rest) => {
+            let v <- view(l.ty);
+            let more <- mono_premised_locals(prove, rest);
+            Pure(match v { HPi(_) => Cons(apply(Local(l.ref), prove), more), _ => more })
+        },
     }
 }
 
 fn mono_premised_given(prove: Tac<Expr>, gs: List<Given>) → Tac<List<Tac<Expr>>> {
     match gs {
         Nil => Pure([]),
-        Cons(g, rest) => view(g.ty).bind(λ v => mono_premised_given(prove, rest).bind(λ more =>
-            Pure(match v { HPi(_) => Cons(apply(g.e, prove), more), _ => more }))),
+        Cons(g, rest) => {
+            let v <- view(g.ty);
+            let more <- mono_premised_given(prove, rest);
+            Pure(match v { HPi(_) => Cons(apply(g.e, prove), more), _ => more })
+        },
     }
 }
 
 // A goal whose sides do not split. `prove` proves a premise.
 fn mono_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → Tac<Expr> {
-    goal().bind(λ g => mono_premised_given(prove, M.given).bind(λ given => mono_premised_locals(prove, g.locals).bind(λ locals => view(r).bind(λ vr => {
-        let signs: List<Sign> = match mono_call(vr) { Some(c) => mono_signs_for(M.signs, strict, c.op), None => [] };
-        let reflexive: List<Tac<Expr>> = match strict { True => [], False => mono_opt(M.reflexive, λ g => apply(Global(g), fail("mono: reflexivity has no premise", []))) };
-        let weakened: List<Tac<Expr>> = match strict { True => [], False => mono_opt(M.weaken, λ g => apply(Global(g), prove)) };
-        mono_first(reflexive ++ mono_sign_tacs(prove, signs) ++ given ++ locals ++ Cons(mono_compute(M, target, l, r), weakened), target, [])
-    }))))
+    let g <- goal();
+    let given <- mono_premised_given(prove, M.given);
+    let locals <- mono_premised_locals(prove, g.locals);
+    let vr <- view(r);
+    let signs: List<Sign> = match mono_call(vr) { Some(c) => mono_signs_for(M.signs, strict, c.op), None => [] };
+    let reflexive: List<Tac<Expr>> = match strict { True => [], False => mono_opt(M.reflexive, λ g => apply(Global(g), fail("mono: reflexivity has no premise", []))) };
+    let weakened: List<Tac<Expr>> = match strict { True => [], False => mono_opt(M.weaken, λ g => apply(Global(g), prove)) };
+    mono_first(reflexive ++ mono_sign_tacs(prove, signs) ++ given ++ locals ++ Cons(mono_compute(M, target, l, r), weakened), target, [])
 }
 
 // ---------------------------------------------------------------------------
@@ -663,11 +711,13 @@ fn mono_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → 
 // Are both handles one map applied to one argument, the same map: a global,
 // or a local (a section's `map`, whose morphism is in scope)?
 fn mono_images_of_one(l, r: Handle) → Tac<Bool> {
-    view(l).bind(λ vl => view(r).bind(λ vr => Pure(match vl {
+    let vl <- view(l);
+    let vr <- view(r);
+    Pure(match vl {
         HGlobal(f, _, Cons(_, Nil)) => match vr { HGlobal(g, _, Cons(_, Nil)) => f.id.same(g.id), _ => False },
         HLocal(x, Cons(_, Nil)) => match vr { HLocal(y, Cons(_, Nil)) => x.id.same(y.id), _ => False },
         _ => False,
-    })))
+    })
 }
 
 fn mono_none() → Tac<Option<Expr>> { Pure(None) }
@@ -675,20 +725,23 @@ fn mono_none() → Tac<Option<Expr>> { Pure(None) }
 // The goal `rel(a, b)` proved by `prove`, as its own goal.
 fn mono_sub(rel: OpKey, a, b: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
     match rel {
-        KGlobal(id) => as_type(App(App(Global(GlobalRef(id)), Hd(a)), Hd(b))).bind(λ c => match c {
+        KGlobal(id) => match <- as_type(App(App(Global(GlobalRef(id)), Hd(a)), Hd(b))) {
             Refused(_) => mono_none(),
-            Accepted(t) => goal().bind(λ g => attempt(focus(GoalInfo(t, g.locals), prove)).bind(λ o => match o {
-                Done(e) => Pure(Some(e)),
-                Failed(_, _) => mono_none(),
-            })),
-        }),
+            Accepted(t) => {
+                let g <- goal();
+                match <- attempt(focus(GoalInfo(t, g.locals), prove)) {
+                    Done(e) => Pure(Some(e)),
+                    Failed(_, _) => mono_none(),
+                }
+            },
+        },
         _ => mono_none(),
     }
 }
 
 // The move's proof where a premise is the `≈` it states, `prove` elsewhere.
 fn mono_moved_or(p: Expr, prove: Tac<Expr>) → Tac<Expr> {
-    attempt(exact(p)).bind(λ r => match r { Done(e) => Pure(e), Failed(_, _) => prove })
+    match <- attempt(exact(p)) { Done(e) => Pure(e), Failed(_, _) => prove }
 }
 
 // At a class carrier the order is a local and the push lemma is
@@ -696,46 +749,46 @@ fn mono_moved_or(p: Expr, prove: Tac<Expr>) → Tac<Expr> {
 // moved point a hole the `≈` premise solves, and its order premise is the
 // restated goal, proved by `prove`.
 fn mono_push_applied(push: GlobalRef, mv: Moved, prove: Tac<Expr>) → Tac<Option<Expr>> {
-    attempt(apply(Global(push), mono_moved_or(mv.proof, prove))).bind(λ r => match r { Done(e) => Pure(Some(e)), Failed(_, _) => mono_none() })
+    match <- attempt(apply(Global(push), mono_moved_or(mv.proof, prove))) { Done(e) => Pure(Some(e)), Failed(_, _) => mono_none() }
 }
 
 // `l rel r` from `l ≈ l2` and `l2 rel r` (`push` is the carrier's lemma
 // taking them in that order), when `l` is an image an edge moves.
 fn mono_push_left(es: List<EdgeRef>, rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
-    cast_move_in(l, 4, es).bind(λ m => match m {
+    match <- cast_move_in(l, 4, es) {
         None => mono_none(),
         Some(mv) => match rel {
-            KGlobal(_) => mono_sub(rel, mv.to, r, prove).bind(λ q => Pure(match q {
+            KGlobal(_) => Pure(match <- mono_sub(rel, mv.to, r, prove) {
                 None => None,
                 Some(h) => Some(App(App(App(App(App(Global(push), Hd(l)), Hd(mv.to)), Hd(r)), mv.proof), h)),
-            })),
+            }),
             _ => mono_push_applied(push, mv, prove),
         },
-    })
+    }
 }
 
 // `l rel r` from `r ≈ r2` and `l rel r2`.
 fn mono_push_right(es: List<EdgeRef>, rel: OpKey, push: GlobalRef, l, r: Handle, prove: Tac<Expr>) → Tac<Option<Expr>> {
-    cast_move_in(r, 4, es).bind(λ m => match m {
+    match <- cast_move_in(r, 4, es) {
         None => mono_none(),
         Some(mv) => match rel {
-            KGlobal(_) => mono_sub(rel, l, mv.to, prove).bind(λ q => Pure(match q {
+            KGlobal(_) => Pure(match <- mono_sub(rel, l, mv.to, prove) {
                 None => None,
                 Some(h) => Some(App(App(App(App(App(Global(push), Hd(l)), Hd(mv.to)), Hd(r)), mv.proof), h)),
-            })),
+            }),
             _ => mono_push_applied(push, mv, prove),
         },
-    })
+    }
 }
 
 // An order between two images of one edge, by the edge's order law.
 fn mono_cast_order(es: List<EdgeRef>, strict, both: Bool, prove: Tac<Expr>) → Tac<Option<Expr>> {
     match both {
         False => mono_none(),
-        True => cast_try_global(match strict { True => cast_lt_law(), False => cast_le_law() }).bind(λ o => match o {
+        True => match <- cast_try_global(match strict { True => cast_lt_law(), False => cast_le_law() }) {
             None => mono_none(),
-            Some(law) => attempt(apply(Global(law), cast_premise_among(es, prove))).bind(λ r => match r { Done(e) => Pure(Some(e)), Failed(_, _) => mono_none() }),
-        }),
+            Some(law) => match <- attempt(apply(Global(law), cast_premise_among(es, prove))) { Done(e) => Pure(Some(e)), Failed(_, _) => mono_none() },
+        },
     }
 }
 
@@ -745,10 +798,13 @@ fn mono_cast_order(es: List<EdgeRef>, strict, both: Bool, prove: Tac<Expr>) → 
 fn mono_cast_facts(es: List<EdgeRef>, fs: List<Expr>) → Tac<Option<Expr>> {
     match fs {
         Nil => mono_none(),
-        Cons(f, rest) => mark().bind(λ m => attempt(cast_from_among(f, 0, Pure(es))).bind(λ o => match o {
-            Done(e) => Pure(Some(e)),
-            Failed(_, _) => restore(m).bind(λ _ => mono_cast_facts(es, rest)),
-        })),
+        Cons(f, rest) => {
+            let m <- mark();
+            match <- attempt(cast_from_among(f, 0, Pure(es))) {
+                Done(e) => Pure(Some(e)),
+                Failed(_, _) => { restore(m); mono_cast_facts(es, rest) },
+            }
+        },
     }
 }
 
@@ -766,19 +822,23 @@ fn mono_cast_or_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Hand
         Some(P) => {
             let rel: OpKey = match strict { True => M.lt, False => M.le };
             let leaf: Tac<Expr> = mono_leaf(M, prove, strict, target, l, r);
-            mono_images_of_one(l, r).bind(λ both => mono_cast_order(M.edges, strict, both, prove).bind(λ o => match o {
+            let both <- mono_images_of_one(l, r);
+            match <- mono_cast_order(M.edges, strict, both, prove) {
                 Some(e) => Pure(e),
-                None => mono_push_left(M.edges, rel, match strict { True => P.lt_l, False => P.le_l }, l, r, prove).bind(λ o2 => match o2 {
+                None => match <- mono_push_left(M.edges, rel, match strict { True => P.lt_l, False => P.le_l }, l, r, prove) {
                     Some(e) => Pure(e),
-                    None => mono_push_right(M.edges, rel, match strict { True => P.lt_r, False => P.le_r }, l, r, prove).bind(λ o3 => match o3 {
+                    None => match <- mono_push_right(M.edges, rel, match strict { True => P.lt_r, False => P.le_r }, l, r, prove) {
                         Some(e) => Pure(e),
-                        None => goal().bind(λ g => mono_cast_facts(M.edges, mono_given_exprs(M.given) ++ mono_local_exprs(g.locals)).bind(λ o4 => match o4 {
-                            Some(e) => Pure(e),
-                            None => leaf,
-                        })),
-                    }),
-                }),
-            }))
+                        None => {
+                            let g <- goal();
+                            match <- mono_cast_facts(M.edges, mono_given_exprs(M.given) ++ mono_local_exprs(g.locals)) {
+                                Some(e) => Pure(e),
+                                None => leaf,
+                            }
+                        },
+                    },
+                },
+            }
         },
     }
 }
@@ -798,40 +858,41 @@ fn mono_unsubs() → List<Unsub> {
 fn mono_unsub_named(f: GlobalRef, x, y: Handle, other: Option<GlobalRef>, us: List<Unsub>) → Tac<Option<Expr>> {
     match us {
         Nil => Pure(None),
-        Cons(u, rest) => mono_try_global(u.sub).bind(λ o => match o {
+        Cons(u, rest) => match <- mono_try_global(u.sub) {
             None => mono_unsub_named(f, x, y, other, rest),
             Some(g) => match g.id.same(f.id) {
                 False => mono_unsub_named(f, x, y, other, rest),
-                True => mono_try_global(u.add).bind(λ a => mono_try_global(u.neg).bind(λ n => Pure(match a {
-                    None => None,
-                    Some(ga) => match n {
-                        None => None,
-                        Some(gn) => match other {
-                            None => None,
-                            Some(h) => match h.id.same(ga.id) { True => Some(App(App(Global(ga), Hd(x)), App(Global(gn), Hd(y)))), False => None },
-                        },
-                    },
-                }))),
+                True => {
+                    let a <- mono_try_global(u.add);
+                    let n <- mono_try_global(u.neg);
+                    Pure({
+                        let ga <- a;
+                        let gn <- n;
+                        let h <- other;
+                        match h.id.same(ga.id) { True => Some(App(App(Global(ga), Hd(x)), App(Global(gn), Hd(y)))), False => None }
+                    })
+                },
             },
-        }),
+        },
     }
 }
 
 fn mono_head_global(h: Handle) → Tac<Option<GlobalRef>> {
-    view(h).bind(λ v => Pure(match v { HGlobal(f, _, _) => Some(f), _ => None }))
+    Pure(match <- view(h) { HGlobal(f, _, _) => Some(f), _ => None })
 }
 
 fn mono_unsub_side(h, other: Handle) → Tac<Option<Expr>> {
-    mono_head_global(other).bind(λ og => match og {
+    let og <- mono_head_global(other);
+    match og {
         None => Pure(None),
-        Some(_) => view(h).bind(λ v => match v {
+        Some(_) => match <- view(h) {
             HGlobal(f, _, args) => match args {
                 Cons(x, more) => match more { Cons(y, rest) => match rest { Nil => mono_unsub_named(f, x, y, og, mono_unsubs()), Cons(_, _) => Pure(None) }, Nil => Pure(None) },
                 Nil => Pure(None),
             },
             _ => Pure(None),
-        }),
-    })
+        },
+    }
 }
 
 fn mono_or_hd(o: Option<Expr>, h: Handle) → Expr { match o { None => Hd(h), Some(e) => e } }
@@ -839,13 +900,16 @@ fn mono_or_hd(o: Option<Expr>, h: Handle) → Expr { match o { None => Hd(h), So
 fn mono_unsub_goal(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Expr) → Tac<Option<Expr>> {
     let order: OpKey = match strict { True => M.lt, False => M.le };
     match order {
-        KGlobal(id) => as_type(App(App(Global(GlobalRef(id)), l), r)).bind(λ c => match c {
+        KGlobal(id) => match <- as_type(App(App(Global(GlobalRef(id)), l), r)) {
             Refused(_) => mono_none(),
-            Accepted(t) => goal().bind(λ g => attempt(focus(GoalInfo(t, g.locals), prove)).bind(λ o => match o {
-                Done(e) => Pure(Some(e)),
-                Failed(_, _) => mono_none(),
-            })),
-        }),
+            Accepted(t) => {
+                let g <- goal();
+                match <- attempt(focus(GoalInfo(t, g.locals), prove)) {
+                    Done(e) => Pure(Some(e)),
+                    Failed(_, _) => mono_none(),
+                }
+            },
+        },
         _ => mono_none(),
     }
 }
@@ -854,10 +918,12 @@ fn mono_unsub_goal(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Expr) → Tac<
 // `None` where neither side is a subtraction. The restated goal is the
 // goal up to unfolding `-`, so its proof is the goal's.
 fn mono_unsub(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Handle) → Tac<Option<Expr>> {
-    mono_unsub_side(l, r).bind(λ ol => mono_unsub_side(r, l).bind(λ or => match ol {
+    let ol <- mono_unsub_side(l, r);
+    let or <- mono_unsub_side(r, l);
+    match ol {
         None => match or { None => mono_none(), Some(_) => mono_unsub_goal(M, prove, strict, mono_or_hd(ol, l), mono_or_hd(or, r)) },
         Some(_) => mono_unsub_goal(M, prove, strict, mono_or_hd(ol, l), mono_or_hd(or, r)),
-    }))
+    }
 }
 
 // Sides with no shared operation: a subtraction read as a sum first, then
@@ -865,32 +931,37 @@ fn mono_unsub(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Handle) → Tac<Opt
 fn mono_unshared(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → Tac<Expr> {
     match M.pushes {
         None => mono_cast_or_leaf(M, prove, strict, target, l, r),
-        Some(_) => mono_unsub(M, prove, strict, l, r).bind(λ o => match o {
+        Some(_) => match <- mono_unsub(M, prove, strict, l, r) {
             Some(e) => Pure(e),
             None => mono_cast_or_leaf(M, prove, strict, target, l, r),
-        }),
+        },
     }
 }
 
 // Split the goal by the law for its sides' shared operation, or read it
 // through a cast, or prove it as a leaf. `prove` proves the law's premises.
 fn mono_split(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) → Tac<Expr> {
-    view(l).bind(λ vl => view(r).bind(λ vr => match mono_call(vl) {
+    let vl <- view(l);
+    let vr <- view(r);
+    match mono_call(vl) {
         Some(cl) => match mono_call(vr) {
             Some(cr) => match cl.op.same(cr.op) && mono_len(cl.args).same(mono_len(cr.args)) {
                 False => mono_unshared(M, prove, strict, target, l, r),
-                True => mono_diffs(0, cl.args, cr.args).bind(λ diffs => match diffs {
-                    Nil => mono_leaf(M, prove, strict, target, l, r),
-                    Cons(_, _) => match mono_law_for(M.laws, strict, cl.op, diffs) {
-                        None => mono_cast_or_leaf(M, prove, strict, target, l, r),
-                        Some(law) => apply(Global(law.lemma), prove),
-                    },
-                }),
+                True => {
+                    let diffs <- mono_diffs(0, cl.args, cr.args);
+                    match diffs {
+                        Nil => mono_leaf(M, prove, strict, target, l, r),
+                        Cons(_, _) => match mono_law_for(M.laws, strict, cl.op, diffs) {
+                            None => mono_cast_or_leaf(M, prove, strict, target, l, r),
+                            Some(law) => apply(Global(law.lemma), prove),
+                        },
+                    }
+                },
             },
             None => mono_cast_or_leaf(M, prove, strict, target, l, r),
         },
         None => mono_cast_or_leaf(M, prove, strict, target, l, r),
-    }))
+    }
 }
 
 // Prove the current goal: outright, by a law, or as a leaf. A premise
@@ -899,11 +970,17 @@ fn mono_split(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Handle) →
 // is proved outright or not at all.
 fn mono_prove(M: Mono, fuel: Nat) → Tac<Expr> {
     match fuel {
-        Zero => goal().bind(λ g => fail("mono: the goal is deeper than the search goes", [At(Hd(g.target), Tried("the goal", "not reached"))])),
-        Succ(f) => goal().bind(λ g => view(g.target).bind(λ v => match v {
+        Zero => {
+            let g <- goal();
+            fail("mono: the goal is deeper than the search goes", [At(Hd(g.target), Tried("the goal", "not reached"))])
+        },
+        Succ(f) => {
+            let g <- goal();
+            let v <- view(g.target);
+            match v {
             HPi(_) => intro_as("k", mono_prove(M, f)),
             _ => match mono_call(v) {
-                Some(c) => mono_exact(M, c.op, g).bind(λ o => match o {
+                Some(c) => match <- mono_exact(M, c.op, g) {
                     Some(e) => Pure(e),
                     None => match mono_arg(c.args, 0) {
                         None => mono_open(g.target, []),
@@ -918,20 +995,21 @@ fn mono_prove(M: Mono, fuel: Nat) → Tac<Expr> {
                             },
                         },
                     },
-                }),
+                },
                 None => mono_open(g.target, []),
             },
-        }))
+            }
+        },
     }
 }
 
 fn mono_given(hs: List<Expr>) → Tac<List<Given>> {
     match hs {
         Nil => Pure([]),
-        Cons(h, rest) => infer(h).bind(λ c => match c {
+        Cons(h, rest) => match <- infer(h) {
             Refused(why) => fail("mono: a given term does not check: " ++ why, [At(h, Tried("the given term", "ill-typed"))]),
-            Accepted(ty) => mono_given(rest).bind(λ more => Pure(Cons(Given(h, ty), more))),
-        }),
+            Accepted(ty) => Pure(Cons(Given(h, ty), <- mono_given(rest))),
+        },
     }
 }
 
@@ -943,10 +1021,10 @@ fn mono_not_order<A>(target: Handle) → Tac<A> {
 // or a class dictionary's in scope.
 fn mono_find(g: GoalInfo, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
     match rel {
-        KGlobal(id) => mono_carrier(mono_carriers, GlobalRef(id), given).bind(λ c => match c {
+        KGlobal(id) => match <- mono_carrier(mono_carriers, GlobalRef(id), given) {
             Some(M) => Pure(Some(M)),
             None => mono_class_carrier(g.locals, rel, given),
-        }),
+        },
         _ => mono_class_carrier(g.locals, rel, given),
     }
 }
@@ -955,20 +1033,24 @@ fn mono_find(g: GoalInfo, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> 
 fn mono_with_edges(M: Mono) → Tac<Mono> {
     match M.pushes {
         None => Pure(M),
-        Some(_) => cast_all_edges().bind(λ es => Pure(Mono(M.le, M.lt, M.reflexive, M.weaken, M.laws, M.signs, M.pushes, M.given, M.truth, M.holds, es))),
+        Some(_) => Pure(Mono(M.le, M.lt, M.reflexive, M.weaken, M.laws, M.signs, M.pushes, M.given, M.truth, M.holds, <- cast_all_edges())),
     }
 }
 
 // `mono_with(hs, depth)`: prove `l <= r` or `l < r` by monotonicity, with
 // the terms `hs` for the leaves, splitting at most `depth` goals deep.
 fn mono_with(hs: List<Expr>, depth: Nat := 64) → Tac<Expr> {
-    goal().bind(λ g => view(g.target).bind(λ v => match mono_call(v) {
-        Some(c) => mono_given(hs).bind(λ given => mono_find(g, c.op, given).bind(λ found => match found {
-            None => mono_not_order(g.target),
-            Some(M) => mono_with_edges(M).bind(λ M2 => mono_prove(M2, depth)),
-        })),
+    let g <- goal();
+    match mono_call(<- view(g.target)) {
+        Some(c) => {
+            let given <- mono_given(hs);
+            match <- mono_find(g, c.op, given) {
+                None => mono_not_order(g.target),
+                Some(M) => mono_prove(<- mono_with_edges(M), depth),
+            }
+        },
         None => mono_not_order(g.target),
-    }))
+    }
 }
 
 // `mono()`: `mono_with` from the goal's hypotheses alone.

@@ -1,10 +1,10 @@
 # One sequencing surface: binding over a carrier, local state and loops
 
-Status: **proposal, for Minus's decision.** Round R1 of
-`docs/compiler-milestones-proposal.md` (§3, §7; milestone `lang-sequencing`),
-issue `issues/sequencing-surface-design.md`. Written on master `3099a7d`.
-Nothing here is built. §11 lists the decisions, §12 what R2 and R3 take from
-this note.
+Status: **decided (2026-10-31); layer 1 built (R2, 2026-11-01).** Round R1
+of `docs/compiler-milestones-proposal.md` (§3, §7; milestone
+`lang-sequencing`), issue `issues/sequencing-surface-design.md`. Written on
+master `3099a7d`. §11 lists the decisions, §12 what R2 and R3 take from this
+note, and §13 what building R2 changed. Layer 2 (R3) is not built yet.
 
 Constraints from Minus's decisions on the proposal (2026-10-31), not
 reopened here:
@@ -784,6 +784,73 @@ at worst by the representation's bound on a binder-per-link chain (the
 `let/under` bench, PR #199), and never worse than the tower it replaces.
 Each loop's body is elaborated once, as its step's declaration.
 
+## 13. R2 as built (2026-11-01)
+
+Layer 1 landed for `issues/binding-statements.md`. Probes:
+`lib/_tests/std/core/binding_statements_tests.hthr`; parse-level refusals:
+`crates/syntax/tests/binding_statements.rs`. What building it changed from
+§2–§3 and §12, each with its reason:
+
+1. **The lowering is in the parser, not in `elab_stmts`.** §3.4 put it in
+   the elaborator because the carrier comes from the expected type. It does
+   not need to: the lowered term is an ordinary call of a prelude function,
+   `Bind::seq(e, λ x => rest)`, and *application elaboration* finds the
+   carrier (`M(B) ≟` the expected type, `M(A) ≟` `e`'s type) and resolves
+   `Bind<M>` as any `:= infer` parameter. So the parser does it, in
+   `crates/syntax/src/try_lower.rs`, which now runs one continuation-passing
+   walk for two protocols: `?` (scoped to the function or λ body, blocks
+   transparent) and binds (scoped to the **block**: every block is lowered
+   when it closes, so an inner block in value position is a scope of its own
+   with its own carrier, §2.2, and a λ body likewise). `let x <- e;` is the
+   nested bind at a `let`'s right side, `let x = (<- e);`, and `e;` the same
+   at a private `#seqN` name. Nothing downstream learns a new node, so the
+   walks §3.4 listed (`count_holes`, `scan_splices`, `expr_mentions`) are
+   untouched. The elaborator keeps two small pieces: it schedules the
+   generated continuation after the expected type (a `#bind` λ is
+   checking-only, `classify_application_argument`), so that the rest of a
+   block checks at `M(B)` instead of being inferred from its first token; and
+   on the failure path only, it restates a carrier-search error at the bound
+   expression in the statement's terms (`crates/elab/src/binding.rs`).
+2. **The second class is `Pointed<M>`, not `Pure<M>`.** Both classes live in
+   the implicit prelude (as `CollectionLiteral` does for `[…]`, so the syntax
+   has one protocol identity), which means every module sees them, and a
+   class's record constructor is named after it: `Pure` would have taken
+   `Tac::Pure` from every tactic module
+   (`docs/higher-kinded-classes-design.md` §5.2). The prelude also defines the
+   two calls the lowering writes, `Bind::seq` and `Pointed::ret`.
+3. **The carrier is the first bound expression's when that determines one,
+   else the expected type's.** §2.2 ordered them the other way. The
+   application walk unifies argument types before the expected result, so a
+   block whose first computation is an `Option` and whose expected type is
+   `List<…>` is refused at its *result* ("this has type `List<Nat>`, but
+   `Option<Nat>` is expected here"), not at the computation with §10's
+   "the block's carrier is `List`" wording. The two orders agree whenever
+   the block is well typed; only that refusal's site differs. A computation
+   that does not determine its constructor (`Pointed::ret(3)`) still takes
+   the expected type's.
+4. **A non-tail `match` whose arms bind is in inference position.** As for
+   `?`, such a match is packaged (each arm ends in `Pointed::ret`) and bound
+   once, which makes it `Bind::seq`'s first argument, where nothing gives it
+   a motive: `let r = match c { True => (<- x) + 1, False => 0 };` is
+   refused with the motive message. A tail match, a match whose scrutinee
+   alone binds (`Pure(match <- e { … })`), and arms written as computations
+   all work. §5.5's join point would retire it, and R3 needs it anyway.
+5. **Instances at `Option` and `Tac` only.** `Result`, `Parser<T, ·>` and
+   `ITree<E, ·>` vary in an argument that is not alone, so their instances
+   are at a λ carrier, which `issues/class-instance-at-lambda-carrier.md`
+   owns. The parser-combinator customer waits on it; `regex.hthr`'s
+   generator chain is the second customer instead.
+6. **`?` for `Option` (§3.5) is not built.** The parser lowers `?` to
+   `result::Result::and_then` before any type is known, and choosing
+   `Option::and_then` instead is type-directed. It stays in the issue.
+7. **The discarded-result lint (§3.1) is not built.** `e;` at a non-`True`
+   result is accepted silently.
+
+The helpers of §2.3 landed as `List::for_m`, `List::traverse` (both over the
+classes, structural) and `Tac::or_fail`. `when` waited for a customer. `mono`
+was ported: its 75 `.bind(` sites are now statements, `match <- e` and
+nested binds, and `regex`'s ten-link tower is ten statements.
+
 ## Appendix: probes (run on `3099a7d`, `heather check -L lib`)
 
 - **P1, a class over a type constructor.** Works:
@@ -829,3 +896,70 @@ Each loop's body is elaborated once, as its step's declaration.
   `cd_loop(3, Nil) = [1, 2, 3]` by `refl`. `cd_loop_unfold` is refused,
   because the lifted obligation depends on the match equation
   (`unfolding-computed-scrutinee`).
+8. **Over `Tac`, a bind costs more in the gate than the method call did.**
+   `Bind::seq` is generic in `M`, and `Tac` (a tier-2 declaration) has no
+   type code function, so `M := λ A. ⌜Tac<El A>⌝` and every `M(X)` in the
+   call is a β-redex over `Tac`'s whole code, compared structurally against
+   the inline `Tac<X>`. A ported tactic module's declarations roughly double
+   their gate counters (shape: a constant per bind proportional to `Tac`'s
+   lowering). `Option` has a code function and pays nothing.
+   `issues/tier2-type-code-functions.md` owns the fix; the lowering itself
+   need not change.
+
+## 14. R3a's first slice as built (2026-11-02)
+
+Local state, statement forms and `for` over lists. What departs from §4–§7:
+
+1. **Straight-line code and statement forms lower in the parser**
+   (`crates/syntax/src/imperative.rs`), when each block closes, before its
+   binds (§13 item 1). `let mut x = e;` is `let x = e;`, `x := e` is
+   `let x: TypeOf(x) = e;`, and a statement `if`/`match` is one annotated
+   join per local it assigns. The annotation is `TypeOf(x)`, the type of the
+   local's current value, so the parser needs no types; §5.1's "layer 2
+   runs in the elaborator" holds only for loops (item 5).
+2. **A statement body belongs to its enclosing scope.** An inner block
+   cannot tell when it closes whether an assignment in it is an outer
+   local's, so it leaves the assignment as a residual and the block that
+   declared the local rewrites the statement holding it. An inner form that
+   assigns an outer local becomes the residual `x := match c { … { body; x } }`.
+   A residual left at the end of the declaration is the "not mutable"
+   refusal, which also covers assignments through a λ or a block in value
+   position.
+3. **Joins of several locals are staged.** Each copy of the form reads the
+   locals as they were before it, so each join lands in a private
+   `#stageN` first and the locals are rebound after the last. Without this
+   a later copy's condition would read an earlier join's result (found by
+   `count_words`, whose `else if inside = False` reads a local the same `if`
+   assigns).
+4. **`else` is optional only on a statement `if`, and `else if` chains.**
+   `{}` is a statement body next to a real one (`None => {}`), while an
+   `if`/`match` of `{}` alone stays the empty proof block.
+5. **`for x in xs` lifts in the elaborator** (`crates/elab/src/loops.rs`), as
+   `decreases` does: the parser threads the locals the body assigns through
+   a `\0loop` marker, and before the declaration is elaborated the loop
+   becomes `f::step` (and `f::State` for several locals) over
+   `List::foldl`. Each part is an ordinary declaration checked the
+   ordinary way. The step's telescope is the declaration's solver
+   parameters, the captures (the locals the body mentions, at the types the
+   `BinderTys` oracle recovers from the part of the scope they read), the
+   state, then the element. With one local the state is that local, so
+   `sum::step(n, x) = n + x` by `refl`. The names are minted `f#step` and
+   designated `f::step` after `f` exists, as `f#body` is. A step with loops
+   of its own is lowered the same way.
+6. **`f::State`'s fields follow the locals' declaration order**, not the
+   order the body assigns them, so `count_words::State(words, inside)` reads
+   as the function was written.
+7. **`f_unfold` is generated for functions with a loop**, not yet for every
+   function with a layer-2 statement. It is always attempted and never a
+   reason to refuse `f`.
+8. **Not built yet:** `break`/`continue`/`return` (`ForStep`, `List::for_in`),
+   ranges, labels, `while` (both kinds), loops in a carrier scope (§6),
+   assignment to field paths, `mut self`, destructuring `for` binders, and
+   loops under a `match` arm that binds. A `for` iterates a `List` only.
+   A loop inside a statement `if` that assigns several locals is copied
+   into each join, and so lifted once per copy.
+9. **Step facts by `split_all; omega` over a nested `if` are refused by the
+   kernel**, a bug that hand-written functions of the same shape show too
+   (`issues/split-all-nested-if-omega-kernel-refusal.md`). Facts by `refl`
+   at a neutral state work (the probes in
+   `lib/_tests/std/core/imperative_statements_tests.hthr`).

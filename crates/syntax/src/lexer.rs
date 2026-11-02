@@ -121,6 +121,11 @@ pub enum TokKind {
     Wedge,     // ∧
     Vee,       // ∨
     Iff,       // ↔   (and `<->`)
+    /// `<-` and `←` (U+2190): the bind of a binding statement, `let x <- e;`,
+    /// and the nested bind `(<- e)` (docs/sequencing-surface-design.md §3.1).
+    /// `<-` is matched after `<->` takes its three bytes, so `a <-> b` is
+    /// unchanged; `a<-b` for `a < -b` is written nowhere in the library.
+    LArrow,    // ←   (and `<-`)
     Exists,    // ∃
     /// `∑` (U+2211) and `∏` (U+220F) — the big-operator binders, `∑ k < n, e`
     /// (issues/notation-extensibility.md, the one binder production). Three
@@ -604,6 +609,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "∧" => Some(TokKind::Wedge),
             "∨" => Some(TokKind::Vee),
             "↔" | "<->" => Some(TokKind::Iff),
+            "←" => Some(TokKind::LArrow),
             "∃" => Some(TokKind::Exists),
             "∑" => Some(TokKind::BigSum),
             "∏" => Some(TokKind::BigProd),
@@ -700,6 +706,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "=>" => (TokKind::FatArrow, 2),
             "==" => (TokKind::EqEq, 2),
             "<=" => (TokKind::LtEq, 2),
+            "<-" => (TokKind::LArrow, 2),
             ":=" => (TokKind::ColonEq, 2),
             "::" => (TokKind::ColonColon, 2),
             _ => match c {

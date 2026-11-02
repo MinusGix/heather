@@ -264,15 +264,30 @@ module.exports = grammar({
 
     block: $ => choice(
       seq('{', '}'),
-      seq('{', repeat(choice($.let_statement, $.have_statement)), choice(
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form)), choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
       ), '}'),
+      // A statement body ends in a statement and has no result
+      // (docs/sequencing-surface-design.md §4).
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form)),
+        choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form), '}'),
     ),
+    // `let x = e;`, and the binding statement `let x <- e;` (`←` too,
+    // docs/sequencing-surface-design.md §3.1).
     let_statement: $ => seq(
-      'let', choice(field('name', $.identifier), $.destructure_pattern),
-      optional(seq(':', field('type', $._annotation_type))), '=', field('value', $._expression), ';',
+      'let', optional('mut'), choice(field('name', $.identifier), $.destructure_pattern),
+      optional(seq(':', field('type', $._annotation_type))), choice('=', '<-', '←'), field('value', $._expression), ';',
     ),
+    // `x := e;` reassigns a `let mut` local (§4).
+    assignment_statement: $ => seq(field('name', $.identifier), ':=', field('value', $._expression), ';'),
+    // A statement `if`/`match`: its bodies are statements, and it needs no
+    // `;` (§5.1).
+    statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement),
+    // `for x in xs { body }` (§5.2): `in` is contextual.
+    for_statement: $ => seq('for', field('binder', $.identifier), 'in', field('iterable', $._head_expression), field('body', $.block)),
+    // `e;` discards a computation's result in a block over a carrier.
+    expression_statement: $ => seq(field('value', $._expression), ';'),
     // `have x = e;` binds opaquely (docs/have-design.md): one name, never a
     // pattern. `have` stays a contextual word, so `have(x)` is still a call.
     have_statement: $ => seq(
@@ -485,6 +500,7 @@ module.exports = grammar({
       $.inverse_expression,
       $.type_application_expression,
       $.prefix_expression,
+      $.bind_expression,
       $.binary_expression,
       $.function_type,
     ),
@@ -528,7 +544,8 @@ module.exports = grammar({
     if_expression: $ => prec.right(seq(
       'if', optional(seq(field('evidence', $.identifier), ':')),
       field('condition', $._head_expression), field('consequence', $.block),
-      'else', field('alternative', $.block),
+      // A statement `if` may omit its `else`, and chains with `else if`.
+      optional(seq('else', field('alternative', choice($.block, $.if_expression)))),
     )),
     if_let_expression: $ => prec.right(seq(
       'if', 'let', optional(seq(field('evidence', $.identifier), ':')),
@@ -635,6 +652,8 @@ module.exports = grammar({
       choice($.binder_group, $.implicit_binder_group, $._expression), choice('->', '→'), $._expression,
     )),
     prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._expression)),
+    // `<- e`, a nested bind: it takes the whole expression after it.
+    bind_expression: $ => prec.right(0, seq(choice('<-', '←'), field('value', $._expression))),
     binary_expression: $ => choice(
       ...binary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...binary($, ['∨'], PREC.OR, 'right'),
