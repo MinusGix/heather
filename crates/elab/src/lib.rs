@@ -3479,6 +3479,20 @@ impl Elaborator {
     }
 
     fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
+        // `unfolding f, g`: the declaration sees through these interface
+        // definitions, its gate included (docs/interface-definitions-design.md §4).
+        if !decl.unfolding.is_empty() {
+            let keys = self.unfolding_keys(decl)?;
+            let mut inner = decl.clone();
+            inner.unfolding.clear();
+            self.scope.unfolded.extend(keys.iter().cloned());
+            self.refresh_delta_psi();
+            let out = self.elab_decl_owned(&inner);
+            let keep = self.scope.unfolded.len() - keys.len();
+            self.scope.unfolded.truncate(keep);
+            self.refresh_delta_psi();
+            return out;
+        }
         // A `meta fn` is a different declaration form: modal signature,
         // quotation body, `Layer::Meta` check, elaborator-side registration
         // (docs/in-language-map-design.md §3–4).
@@ -3502,8 +3516,8 @@ impl Elaborator {
             plain.is_interface = false;
             return self.session_transaction(|me| {
                 me.elab_decl_owned(&plain)?;
-                me.interface_equations(decl)?;
-                me.register_interface(decl)
+                let equations = me.interface_equations(decl)?;
+                me.register_interface(decl, equations)
             });
         }
         // `decreases e` is not one declaration but a family of them
@@ -4719,6 +4733,19 @@ impl Elaborator {
         body: &Term,
         opaque: bool,
     ) -> R<()> {
+        // A declaration of a module that imports interface definitions is
+        // checked with their bodies withheld, as the elaborator's worlds are
+        // (docs/interface-definitions-design.md §3): the gate's conversion is
+        // where a proof's unfolding actually happens. Withholding only takes
+        // δ-steps away, so the gate never accepts more than it would without.
+        let gated;
+        let psi = match self.delta_psi.withheld.clone() {
+            Some(withheld) => {
+                gated = Rc::new(psi.withholding(Some(withheld)));
+                &gated
+            }
+            None => psi,
+        };
         let item = gate::GateItem { name, ctx, ty, level, body, opaque, layer: Layer::Code, lands_in_psi: true };
         if self.policy.gate.as_ref().is_some_and(|g| g.admits(psi, &item)) {
             return Ok(());
@@ -4740,7 +4767,10 @@ impl Elaborator {
                 Some(verdict) => verdict,
                 None => stats::time_kernel(|| self.kernel_check_term(psi, Layer::Code, ctx, body, ty, level)),
             };
-            verdict.map_err(|e| self.kernel_refusal(name, span, e, psi, Layer::Code, ctx, Some(body), ty, level))?;
+            verdict.map_err(|e| {
+                let refusal = self.kernel_refusal(name, span, e, psi, Layer::Code, ctx, Some(body), ty, level);
+                self.withheld_note(refusal, psi, ty, Some(body))
+            })?;
             let unsealed = recording.finish();
             if let Some(g) = self.policy.gate.as_ref() {
                 g.accepted(psi, &item, &unsealed);

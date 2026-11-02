@@ -1867,6 +1867,12 @@ impl Withheld {
         self.arity.len()
     }
 
+    /// Every entry, `(absolute index, arity)`, ascending: what a verdict
+    /// cache keys a check made under this boundary on.
+    pub fn entries(&self) -> impl Iterator<Item = (usize, u32)> + '_ {
+        self.arity.iter().map(|(at, arity)| (*at, *arity))
+    }
+
     /// The same set without the entries in `released` (absolute indices):
     /// what an `unfold f;` statement leaves withheld.
     pub fn releasing(&self, released: &[usize]) -> Withheld {

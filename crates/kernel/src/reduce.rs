@@ -681,8 +681,7 @@ fn unseal_spine(t: &Term, defs: Defs<'_>) -> Option<Term> {
 
 /// The withheld definition at the head of `t` when `t` is a call of it that
 /// may unfold: saturated (at least its arity of term arguments) and closed
-/// (those arguments read no free local variable and carry no substitution
-/// tail). `docs/interface-definitions-design.md` §3; the value machine's
+/// (those arguments read no free local variable). `docs/interface-definitions-design.md` §3; the value machine's
 /// rule is `Eval::glue_withheld`, and the two agree on every argument the
 /// value machine can classify.
 pub(crate) fn withheld_call(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
@@ -704,11 +703,9 @@ pub(crate) fn withheld_call(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
         return None;
     }
     // `args` runs outermost first, so the call's own arguments are its last
-    // `arity` entries; any before them are applied to its result.
-    let closed = args[args.len() - arity..].iter().all(|a| {
-        let u = crate::bounds::term_local_use(a);
-        u.bound == 0 && !u.has_tail
-    });
+    // `arity` entries; any before them are applied to its result. A
+    // substitution tail is no sign of a variable (`eval/withheld.rs`).
+    let closed = args[args.len() - arity..].iter().all(|a| crate::bounds::term_local_use(a).bound == 0);
     closed.then_some(var)
 }
 

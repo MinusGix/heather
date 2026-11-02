@@ -72,10 +72,11 @@ fn closed_clo<'v>(c: &'v TmClo<'v>, pending: u32, budget: &mut u32) -> bool {
     *budget -= 1;
     match c {
         TmClo::Syn { env, body } => {
+            // Every `u^δ` carries a substitution tail, so `has_tail` is no
+            // sign of a variable: an `·^k` tail reads none. A `wk_g` tail
+            // reads a context variable's prefix, which an elaborator's Γ
+            // (based at `·`) does not have.
             let used = crate::bounds::term_local_use(body);
-            if used.has_tail {
-                return false;
-            }
             (pending..used.bound).all(|i| {
                 if i < 64 && used.uses & (1u64 << i) == 0 {
                     return true;

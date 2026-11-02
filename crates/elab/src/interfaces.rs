@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc as Rc;
 
-use heather_kernel::term::Withheld;
+use heather_kernel::term::{GlobalCtx, Term, Type, Withheld};
 use heather_syntax::{Block, Decl, DeclKind, Expr, ExprKind, Span, Ty, TyKind};
 
 use crate::{ElabError, Elaborator, R};
@@ -27,6 +27,10 @@ pub(crate) struct InterfaceInfo {
     /// How many arguments a call needs before its body may unfold: the
     /// declaration's parameters, type parameters included.
     pub(crate) arity: u32,
+    /// The declaration's name as written, and its generated equations' names
+    /// (§5): what a refusal at the boundary tells a client to cite.
+    pub(crate) name: String,
+    pub(crate) equations: Vec<String>,
 }
 
 /// Every interface definition the session has seen, by global key.
@@ -64,7 +68,7 @@ impl Elaborator {
         let current = &self.names.scope().module;
         let mut withheld = Withheld::new();
         for (key, info) in self.interfaces.iter() {
-            if &info.module == current {
+            if &info.module == current || self.scope.unfolded.contains(key) {
                 continue;
             }
             if let Some(global) = self.names.global(key) {
@@ -78,6 +82,81 @@ impl Elaborator {
     /// into: what the withheld-mismatch note asks.
     pub(crate) fn withheld_here(&self, key: &str) -> bool {
         self.interfaces.get(key).is_some_and(|info| info.module != self.names.scope().module)
+    }
+
+    /// `error`, a refusal of a check made with interface bodies withheld
+    /// (`psi`), with a note naming the withheld definitions the refused
+    /// statement or proof mentions and what to cite instead (§4). Without
+    /// it a client sees a plain mismatch where the body used to convert.
+    pub(crate) fn withheld_note(&self, error: ElabError, psi: &GlobalCtx, ty: &Type, body: Option<&Term>) -> ElabError {
+        let Some(withheld) = psi.withheld.as_deref() else { return error };
+        let len = psi.bindings.len();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut record = |i: u32| {
+            seen.insert(i);
+            Some(i)
+        };
+        ty.reindex_global(&mut record);
+        if let Some(body) = body {
+            body.reindex_global(&mut record);
+        }
+        let mut lines = Vec::new();
+        for (key, info) in self.interfaces.iter() {
+            let Some(global) = self.names.global(key) else { continue };
+            let abs = global.abs as usize;
+            if withheld.arity(abs).is_none() || abs >= len || !seen.contains(&((len - 1 - abs) as u32)) {
+                continue;
+            }
+            let cite = if info.equations.is_empty() {
+                "a lemma about it".to_string()
+            } else {
+                let eqs: Vec<String> = info.equations.iter().map(|e| format!("`{e}`")).collect();
+                format!("{} or a lemma about it", eqs.join(", "))
+            };
+            lines.push(format!(
+                "`{}` is an interface definition of `{}`, so its body is withheld here at open \
+                 arguments: cite {cite}, or declare the proof `unfolding {}` \
+                 (docs/interface-definitions-design.md §4)",
+                info.name, info.module, info.name
+            ));
+        }
+        if lines.is_empty() {
+            return error;
+        }
+        let extra = lines.join("; ");
+        match error {
+            ElabError::Kernel { decl, span, err, note, site } => ElabError::Kernel {
+                decl,
+                span,
+                err,
+                note: Some(match note {
+                    Some(n) => format!("{n}\nnote: {extra}"),
+                    None => extra,
+                }),
+                site,
+            },
+            ElabError::Elab { msg, span } => ElabError::Elab { msg: format!("{msg}\nnote: {extra}"), span },
+            other => other,
+        }
+    }
+
+    /// The global keys an `unfolding` clause names, each an interface
+    /// definition (§4). Naming anything else is refused: the clause would
+    /// do nothing, and a reader would believe it did.
+    pub(crate) fn unfolding_keys(&self, decl: &Decl) -> R<Vec<String>> {
+        decl.unfolding
+            .iter()
+            .map(|name| {
+                let key = self.key_of(name).filter(|k| self.interfaces.get(k).is_some());
+                key.ok_or_else(|| ElabError::Elab {
+                    msg: format!(
+                        "`unfolding {name}`: `{name}` is not an interface definition, so its \
+                         body is never withheld (docs/interface-definitions-design.md §4)"
+                    ),
+                    span: decl.span,
+                })
+            })
+            .collect()
     }
 
     /// The refusals of `docs/interface-definitions-design.md` §1 that need
@@ -117,7 +196,7 @@ impl Elaborator {
     }
 
     /// Register the elaborated interface definition `decl`.
-    pub(crate) fn register_interface(&mut self, decl: &Decl) -> R<()> {
+    pub(crate) fn register_interface(&mut self, decl: &Decl, equations: Vec<String>) -> R<()> {
         let refuse = |msg: String| Err(ElabError::Elab { msg, span: decl.span });
         let Some(key) = self.key_of(&decl.name) else {
             return refuse(format!("`{}` is not a declared global", decl.name));
@@ -127,7 +206,7 @@ impl Elaborator {
         };
         let arity = global.params.len() as u32;
         let module = self.names.scope().module.clone();
-        self.semantic_commit_interface(key, InterfaceInfo { module, arity });
+        self.semantic_commit_interface(key, InterfaceInfo { module, arity, name: decl.name.clone(), equations });
         Ok(())
     }
 }
@@ -224,6 +303,7 @@ fn theorem(decl: &Decl, name: String, lhs: Expr, rhs: Expr, span: Span) -> Decl 
         params: decl.params.clone(),
         result: Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span },
         decreases: None,
+        unfolding: Vec::new(),
         body: Block { stmts: Vec::new(), result: Box::new(Expr { kind: ExprKind::Refl, span }), ons: Vec::new(), span },
         span,
     }
@@ -244,7 +324,8 @@ impl Elaborator {
     /// A recursive body of another shape gets none: `f(x̄) = body` at an open
     /// argument is not definitional for a structural recursion (the arm reads
     /// the recursor's hypothesis where the body says `f`).
-    pub(crate) fn interface_equations(&mut self, decl: &Decl) -> R<()> {
+    pub(crate) fn interface_equations(&mut self, decl: &Decl) -> R<Vec<String>> {
+        let mut made = Vec::new();
         let span = decl.span;
         let base = decl.name.rsplit("::").next().unwrap_or(&decl.name).to_string();
         let recursive = mentions(&decl.body, &base, &decl.name);
@@ -252,17 +333,20 @@ impl Elaborator {
         if !recursive && self.key_of(&unfold).is_none() {
             let eq = theorem(decl, unfold.clone(), call(decl, span), body_expr(decl), span);
             self.elab_decl_one(&eq, None)?;
+            made.push(unfold.clone());
+        } else if self.key_of(&unfold).is_some() {
+            made.push(unfold.clone());
         }
         if !decl.body.stmts.is_empty() {
-            return Ok(());
+            return Ok(made);
         }
-        let ExprKind::Match { scrut, arms, .. } = &decl.body.result.kind else { return Ok(()) };
-        let ExprKind::Var(scrut_name) = &scrut.kind else { return Ok(()) };
-        let Some(at) = decl.params.iter().position(|p| &p.name == scrut_name) else { return Ok(()) };
-        let TyKind::Named { name: ind_name, args: ind_args } = &decl.params[at].ty.kind else { return Ok(()) };
-        let Some(ind) = self.lookup_inductive(ind_name).cloned() else { return Ok(()) };
+        let ExprKind::Match { scrut, arms, .. } = &decl.body.result.kind else { return Ok(made) };
+        let ExprKind::Var(scrut_name) = &scrut.kind else { return Ok(made) };
+        let Some(at) = decl.params.iter().position(|p| &p.name == scrut_name) else { return Ok(made) };
+        let TyKind::Named { name: ind_name, args: ind_args } = &decl.params[at].ty.kind else { return Ok(made) };
+        let Some(ind) = self.lookup_inductive(ind_name).cloned() else { return Ok(made) };
         if ind.params.len() != ind_args.len() {
-            return Ok(());
+            return Ok(made);
         }
         let ty_args: std::collections::HashMap<String, Ty> =
             ind.params.iter().cloned().zip(ind_args.iter().cloned()).collect();
@@ -317,7 +401,8 @@ impl Elaborator {
             let mut eq = theorem(decl, format!("{unfold}_{}", ctor.name), lhs, rhs, span);
             eq.params = params;
             self.elab_decl_one(&eq, None)?;
+            made.push(eq.name);
         }
-        Ok(())
+        Ok(made)
     }
 }

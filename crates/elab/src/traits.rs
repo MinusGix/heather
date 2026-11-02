@@ -3058,6 +3058,7 @@ impl Elaborator {
                         .collect(),
                     result: m.result.clone(),
                     decreases: m.decreases.clone(),
+                    unfolding: m.unfolding.clone(),
                     body: m.body.clone(),
                     span: m.span,
                 };
@@ -3946,6 +3947,7 @@ impl Elaborator {
             params: instance_params(d),
             result,
             decreases: None,
+            unfolding: Vec::new(),
             body: body_of(body),
             span,
         };

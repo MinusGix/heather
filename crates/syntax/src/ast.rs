@@ -495,6 +495,11 @@ pub struct Decl {
     /// then elaborated as strong induction on a bound for `e`, and every
     /// recursive call owes `e[args] < e`, a goal hole named `decN`.
     pub decreases: Option<Expr>,
+    /// `unfolding f, g` — interface definitions whose bodies this
+    /// declaration may see through (docs/interface-definitions-design.md
+    /// §4). Declaration-wide: the kernel gate checks a declaration as one
+    /// term, so the boundary can only move per declaration.
+    pub unfolding: Vec<String>,
     pub body: Block,
     pub span: Span,
 }

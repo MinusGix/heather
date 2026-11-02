@@ -351,7 +351,7 @@ pub(crate) enum DeltaEvent {
     Derived(DerivedInst),
     Evidence(EvidenceRule),
     /// An interface definition (`interfaces.rs`), by global key.
-    Interface { key: String, module: String, arity: u32 },
+    Interface { key: String, info: crate::interfaces::InterfaceInfo },
     Repr {
         key: DatareprKey,
         name: String,
@@ -611,11 +611,7 @@ impl Elaborator {
     }
 
     pub(crate) fn semantic_commit_interface(&mut self, key: String, info: crate::interfaces::InterfaceInfo) {
-        self.record_module_event(|| DeltaEvent::Interface {
-            key: key.clone(),
-            module: info.module.clone(),
-            arity: info.arity,
-        });
+        self.record_module_event(|| DeltaEvent::Interface { key: key.clone(), info: info.clone() });
         self.interfaces.commit(key, info);
         self.refresh_delta_psi();
     }
@@ -1400,9 +1396,7 @@ impl Elaborator {
             DeltaEvent::Designation { key, info } => self.semantic_commit_designation(key, info),
             DeltaEvent::Derived(info) => self.semantic_commit_derived(info),
             DeltaEvent::Evidence(rule) => self.semantic_commit_evidence(rule),
-            DeltaEvent::Interface { key, module, arity } => {
-                self.semantic_commit_interface(key, crate::interfaces::InterfaceInfo { module, arity });
-            }
+            DeltaEvent::Interface { key, info } => self.semantic_commit_interface(key, info),
             DeltaEvent::Repr { key, name, info, monomorph, obligations } => {
                 self.semantic_commit_repr(key, name, info, monomorph, obligations);
             }

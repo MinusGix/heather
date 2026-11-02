@@ -357,6 +357,22 @@ impl Inner {
         let answer = (|| {
             let iface = iface?;
             let key = merkle::check_key(&self.prefix, item.body, item.opaque, &iface)?;
+            // A check made under an interface boundary is a different
+            // question: the same item may pass transparently and be refused
+            // with bodies withheld (docs/interface-definitions-design.md §3).
+            let key = match psi.withheld.as_deref() {
+                Some(withheld) => {
+                    let mut h = crate::sha256::Sha256::new();
+                    h.update(b"heather-withheld-check\0");
+                    h.update(&key);
+                    for (at, arity) in withheld.entries() {
+                        h.update(&(at as u64).to_le_bytes());
+                        h.update(&arity.to_le_bytes());
+                    }
+                    h.finish()
+                }
+                None => key,
+            };
             Some((iface, key))
         })();
         self.open.entry(at).or_default().push(OpenQuestion {

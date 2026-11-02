@@ -489,6 +489,7 @@ impl<'a> Lift<'a> {
             params,
             result: step_ty,
             decreases: None,
+            unfolding: Vec::new(),
             body,
             span,
         }));
@@ -766,6 +767,7 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys) -> R<Family> {
         params: decl.params.clone(),
         result: Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span },
         decreases: None,
+        unfolding: Vec::new(),
         body: Block { stmts: vec![], result: Box::new(Expr { kind: ExprKind::Refl, span }), ons: vec![], span },
         span,
     };

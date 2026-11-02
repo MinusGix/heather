@@ -521,6 +521,7 @@ fn companion(decl: &Decl, name: String, params: Vec<Param>, result: Ty, body: Bl
         params,
         result,
         decreases: None,
+        unfolding: Vec::new(),
         body,
         span: decl.span,
     }
@@ -824,6 +825,7 @@ pub(crate) fn lower(
     ));
     let f_decl = Decl {
         decreases: None,
+        unfolding: Vec::new(),
         body: block(
             app(
                 companion_ref(decl, &rec_name(&decl.name), span),
@@ -1126,6 +1128,7 @@ pub(crate) fn lower_group(
             span,
         },
         decreases: None,
+        unfolding: Vec::new(),
         body: block(
             Expr {
                 kind: ExprKind::TyLit(Box::new(product)),
@@ -1243,6 +1246,7 @@ pub(crate) fn lower_group(
         params: vec![param(Z, nat_ty, span)],
         result: grp_at(var(Z, span)),
         decreases: None,
+        unfolding: Vec::new(),
         body: block(elim, first.body.span),
         span: first.span,
     };
@@ -1261,6 +1265,7 @@ pub(crate) fn lower_group(
             ));
             Decl {
                 decreases: None,
+                unfolding: Vec::new(),
                 body: block(
                     project(
                         app(
@@ -1805,6 +1810,7 @@ impl<'a> Rewrite<'a> {
             params,
             result: lt_ty(at_args.clone(), refined.clone(), span),
             decreases: None,
+            unfolding: Vec::new(),
             body,
             span: self.decl.span,
         };
@@ -3898,6 +3904,7 @@ pub(crate) fn companions(
         params: ext_params,
         result: eq_ty(body_at(A, G1, H1), body_at(B, G2, H2), span),
         decreases: None,
+        unfolding: Vec::new(),
         body: ext_body,
         span: decl.span,
     };
@@ -4078,6 +4085,7 @@ pub(crate) fn companions(
             span,
         ),
         decreases: None,
+        unfolding: Vec::new(),
         body: block(app(irrel_elim, irrel_args, span), decl.body.span),
         span: decl.span,
     };
@@ -4120,6 +4128,7 @@ pub(crate) fn companions(
             span,
         ),
         decreases: None,
+        unfolding: Vec::new(),
         body: Block {
             stmts: std::mem::take(&mut unfold.lets),
             result: Box::new(unfold_proof.proof),

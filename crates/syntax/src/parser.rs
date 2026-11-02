@@ -969,6 +969,7 @@ impl Parser {
             params,
             result: positive(call),
             decreases: None,
+            unfolding: Vec::new(),
             body,
             span,
         }))
@@ -2299,6 +2300,7 @@ impl Parser {
                 params: rparams,
                 result: Ty { kind: TyKind::OfExpr(Box::new(stmt)), span: fspan },
                 decreases: None,
+                unfolding: Vec::new(),
                 body: Block { stmts: Vec::new(), result: Box::new(project(&fact)), ons: Vec::new(), span: fspan },
                 span: fspan,
             });
@@ -2894,6 +2896,20 @@ impl Parser {
         } else {
             None
         };
+        // `unfolding f, g` — see through these interface definitions in this
+        // declaration (docs/interface-definitions-design.md §4). Contextual,
+        // like `decreases`.
+        let mut unfolding = Vec::new();
+        if self.eat_kw("unfolding") {
+            loop {
+                let (name, _) = self.qual_ident("an interface definition's name")?;
+                unfolding.push(name);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+        }
         // The `given` clause — the constraint sentence written where its
         // subject is not a binder (`given List<A>: Monoid`) — is deliberately
         // NOT decided (issues/requires-placement-syntax.md, log 2026-08-07).
@@ -2950,7 +2966,7 @@ impl Parser {
         crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, is_evidence, is_interface, value: false, elaborates, name, tyvars, params, result, decreases, body, span })
+        Ok(Decl { kind, is_meta, is_evidence, is_interface, value: false, elaborates, name, tyvars, params, result, decreases, unfolding, body, span })
     }
 
     /// `def name<A>: T = e;`, `def name = e;` (docs/value-definitions-design.md
@@ -3030,6 +3046,7 @@ impl Parser {
             params,
             result,
             decreases: None,
+            unfolding: Vec::new(),
             body,
             span: start.join(end),
         })
