@@ -901,7 +901,7 @@ pub(crate) fn elab_self_call(
                      (docs/inductive-tier2-w-lowering.md §8)"
                         .to_string(),
                 ),
-                GuardKind::Wf { cov, .. } => match cov {
+                GuardKind::Wf { cov, shape, .. } => match cov {
                     // The window exists, so the rule is not "the immediate
                     // field": it is "within the chain the recursion carries".
                     Some(window) => {
@@ -926,17 +926,44 @@ pub(crate) fn elab_self_call(
                     }
                     None => (
                         "one of the recursive fields bound by".to_string(),
-                        ". A deeper subterm is refused too, even though it is genuinely \
+                        match shape {
+                            // Chain-shaped, and the arms asked for nothing
+                            // deeper, so no window was built
+                            // (issues/descend-refusal-misreads-chain-shape.md).
+                            WfShape::Chain => ". The induction hypothesis this `match` binds is \
+                                 the value at each recursive field. This declaration is \
+                                 chain-shaped, so a deeper subterm is reachable too, but \
+                                 only one that a nested `match` on the recursive field \
+                                 binds: the recursion then carries a window of earlier \
+                                 values down the chain \
+                                 (docs/list-course-of-values-design.md §4). This argument \
+                                 is neither"
+                                .to_string(),
+                            WfShape::Branching => format!(
+                                "{} A window of earlier values exists for \
+                                 **chain-shaped** declarations — every constructor with at \
+                                 most one recursive field and no container \
+                                 (docs/list-course-of-values-design.md §1) — and this one \
+                                 is not: a branching constructor has no chain to walk, only \
+                                 a tree of children, and a container field is a group of \
+                                 children that a self-call maps over rather than descends \
+                                 into",
+                                ". A deeper subterm is refused too, even though it is genuinely \
                          smaller: the induction hypothesis this `match` binds is the \
                          value at each recursive field and at nothing else, so a call \
-                         anywhere else has no term to elaborate to. A window of earlier \
-                         values exists for **chain-shaped** declarations — every \
-                         constructor with at most one recursive field and no container \
-                         (docs/list-course-of-values-design.md §1) — and this one is \
-                         not: a branching constructor has no chain to walk, only a tree \
-                         of children, and a container field is a group of children that \
-                         a self-call maps over rather than descends into"
-                            .to_string(),
+                         anywhere else has no term to elaborate to."
+                            ),
+                            WfShape::NoWindowRoute => format!(
+                                "{} A window of earlier values is built only for a \
+                                 chain-shaped declaration without indices or function \
+                                 fields (docs/list-course-of-values-design.md §1), and this \
+                                 one is lowered by a route that carries none",
+                                ". A deeper subterm is refused too, even though it is genuinely \
+                         smaller: the induction hypothesis this `match` binds is the \
+                         value at each recursive field and at nothing else, so a call \
+                         anywhere else has no term to elaborate to."
+                            ),
+                        },
                     ),
                 },
             };
@@ -1253,7 +1280,7 @@ impl Guard {
     pub(crate) fn ih_mentions(&self, param: usize) -> bool {
         let (depth, types): (usize, Vec<&Type>) = match &self.kind {
             GuardKind::Nat { depth, comps, .. } => (*depth, comps.iter().collect()),
-            GuardKind::Wf { depth, children, cov, container, fn_children } => (
+            GuardKind::Wf { depth, children, cov, container, fn_children, .. } => (
                 *depth,
                 children
                     .iter()
@@ -1357,6 +1384,13 @@ pub(crate) enum GuardKind {
         /// aliases are unchanged by the window, and only what a self-call at
         /// a **deeper** subterm lowers to is new.
         cov: Option<Rc<WfCov>>,
+        /// Why [`Self::Wf::cov`] could have been built, read only to explain
+        /// a refused self-call when it was not
+        /// (issues/descend-refusal-misreads-chain-shape.md): a missing
+        /// window means one thing for a chain-shaped declaration whose arms
+        /// asked for nothing deeper, and another for a declaration no window
+        /// is built for.
+        shape: WfShape,
         /// The arm's *container* field, if it has one
         /// (`docs/container-fields.md` §4.2). A container is a group of
         /// children rather than one, so a self-call over it maps rather than
@@ -1401,6 +1435,21 @@ pub(crate) struct FnChildIh {
 /// deeper inside the arm shifts it by the difference — except `motive`,
 /// `gamma` and `tail`, which travel as they were written so that a nested
 /// `match` can reindex them at *its* scrutinee.
+/// Whether a `Wf` recursion's declaration can carry a course-of-values
+/// window (`docs/list-course-of-values-design.md` §1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WfShape {
+    /// Chain-shaped, on the route that builds windows: one is built when the
+    /// arms make a self-call below the immediate child, through a nested
+    /// `match` on it.
+    Chain,
+    /// A constructor with more than one recursive field, or a container.
+    Branching,
+    /// A route that builds no window whatever the shape: an indexed family,
+    /// or a declaration with a recursive function field.
+    NoWindowRoute,
+}
+
 pub(crate) struct WfCov {
     /// The chain this arm makes available, outermost first: `chain[0]` is the
     /// arm's own child, `chain[1]` the child a nested `match chain[0]` binds,

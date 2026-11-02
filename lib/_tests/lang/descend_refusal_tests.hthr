@@ -1,0 +1,25 @@
+// What a refused non-descending self-call says about the course-of-values
+// window depends on the declaration's shape, not on whether this `match`
+// happened to build a window (`issues/descend-refusal-misreads-chain-shape.md`).
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import nat; import logic;
+
+inductive Chain { end, link(next: Chain) }
+
+// Chain-shaped: a value a nested `match` on the field binds is reachable
+// (the window), so the positive is a call two links down.
+fn Chain::skip2(self c: Chain) → Nat {
+  match c { end => 0, link(next) => match next { end => 1, link(after) => skip2(after) + 1 } }
+}
+theorem skip2_closed(): Chain::skip2(Chain::link(Chain::link(Chain::link(Chain::end)))) = 2 { refl }
+
+// The same declaration, a call at the scrutinee itself: refused, and the
+// refusal says the declaration is chain-shaped rather than branching.
+// expect-error: This declaration is chain-shaped, so a deeper subterm is reachable too, but only one that a nested `match` on the recursive field binds
+fn Chain::stuck(self c: Chain) → Nat { match c { end => 0, link(next) => stuck(c) } }
+
+// Branching: the old explanation, which is true here.
+inductive Tree { leaf, node(l: Tree, r: Tree) }
+// expect-error: and this one is not: a branching constructor has no chain to walk
+fn Tree::stuck(self t: Tree) → Nat { match t { leaf => 0, node(l, r) => stuck(t) } }

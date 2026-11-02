@@ -1022,6 +1022,7 @@ impl Elaborator {
                                 container: None,
                                 fn_children,
                                 cov: None,
+                                shape: crate::recursion::WfShape::NoWindowRoute,
                             },
                             rebind: None,
                             generalized: crate::generalize::guard_gen(cx, dec, Some(span)),
