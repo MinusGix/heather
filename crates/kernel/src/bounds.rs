@@ -37,12 +37,16 @@
 //!
 //! The memo key is the subtree's `Rc` address. Terms have no interior
 //! mutability (DESIGN.md §Representation), so a given allocation's contents
-//! never change; and each entry holds a strong `Rc` clone of its key, so the
-//! allocation cannot be freed and its address cannot be recycled while the
-//! entry lives. A hit therefore always describes exactly the queried term.
-//! The table is thread-local (terms are `Rc`, single-threaded by
-//! construction), fixed-size and direct-mapped; a colliding insert evicts,
-//! which costs only recomputation.
+//! never change while it is alive; and each entry holds a [`Weak`] reference
+//! to its key, which keeps the *allocation* from being freed — so its
+//! address cannot be recycled — while the entry lives, without keeping the
+//! contents (or the subtree below them) alive. Every query comes from a
+//! caller holding a strong `Rc` to the node, so an address match names a
+//! live allocation the entry was computed from, and a hit always describes
+//! exactly the queried term (the full argument is on `Slot`). The table is
+//! thread-local (terms are `Rc`, single-threaded by construction),
+//! fixed-size and direct-mapped; a colliding insert evicts, which costs only
+//! recomputation.
 //!
 //! ## How wrong bounds are caught
 //!
@@ -57,6 +61,7 @@
 
 use std::cell::RefCell;
 use std::sync::Arc as Rc;
+use std::sync::Weak;
 
 use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, Term, Type};
 
@@ -105,15 +110,29 @@ impl LocalUse {
 }
 
 /// The memo: two fixed-size direct-mapped caches, one per sort. A slot's
-/// keep-alive `Rc` doubles as its key (`Rc::as_ptr` compare), so key
-/// validity and entry liveness are one thing; a colliding insert evicts,
-/// which costs only recomputation (usually cheap — the evictee's children
-/// are still cached). Fixed size means no growth, no rehash, and no flush
-/// policy, and it bounds both table memory and how many dead subtrees the
-/// keep-alives can pin.
+/// key is a [`Weak`] reference to the node it describes (compared by
+/// address), which pins the node's *allocation* but not its contents; a
+/// colliding insert evicts, which costs only recomputation (usually cheap —
+/// the evictee's children are still cached). Fixed size means no growth, no
+/// rehash, and no flush policy, and it bounds table memory and how many dead
+/// allocations the keys can pin (one node each, never a subtree).
+///
+/// **Why the key is weak.** A strong keep-alive (the design until
+/// 2026-11-02) made the table the last owner of every dead subtree it had
+/// seen, so a colliding insert paid for the evictee's whole cascading free —
+/// cold memory, pinned since its last query — and the data-oriented survey
+/// found that eviction drop at about half of all samples under this file on
+/// cold library checks (`issues/bounds-metadata-taxes-one-shot-checking.md`).
+/// A weak key lets a dead term free where it dies, while still warm; the
+/// eviction is one decrement of a weak count and, at most, one block's
+/// deallocation. It also stops the table inflating `Rc::strong_count`,
+/// which the substitution memo and `syntax_eq` read as "reachable twice".
+///
+/// A slot also carries the two-stage marker, so a probe touches one cache
+/// line, not two parallel tables.
 ///
 /// Memoization is **two-stage**: a query's first miss stores only a marker
-/// (a bare address, no keep-alive), and the bounds are computed when the
+/// (a bare address, no reference), and the bounds are computed when the
 /// same address is queried again. This is what keeps the metadata from taxing one-shot terms — an
 /// elaborated declaration is built, checked once, and dropped, and paying a
 /// bounds walk plus a table entry per node there bought nothing (measured
@@ -125,13 +144,54 @@ impl LocalUse {
 /// computed then covers its whole subtree, because the recursive compute
 /// ([`Cache::term_use`]) stores unconditionally — stability propagates down.
 struct Cache {
-    terms: Vec<Option<(Rc<Term>, LocalUse)>>,
-    term_marks: Vec<usize>,
-    types: Vec<Option<(Rc<Type>, LocalUse)>>,
-    type_marks: Vec<usize>,
+    terms: Vec<Slot<Term>>,
+    types: Vec<Slot<Type>>,
 }
 
-/// log2 of the slot count per sort. 2^16 slots × 24 bytes × 2 sorts ≈ 3 MiB.
+/// One direct-mapped entry: the memoized answer under a weak key, and the
+/// two-stage marker, side by side so a probe reads one cache line.
+///
+/// Soundness of the weak key: a caller asks about a node it holds by a
+/// strong `Rc`, so the allocation is live; the key pins its own allocation,
+/// so no other node can occupy that address while the key lives. An address
+/// match therefore names the same allocation the answer was computed from,
+/// and an allocation's contents never change while any strong reference
+/// exists (no interior mutability, DESIGN.md §Representation) — nor can its
+/// strong count climb back from zero. So a hit always describes exactly the
+/// queried term. Contents dropped behind a key are never read: the key is
+/// only ever compared, never upgraded.
+#[repr(align(32))]
+struct Slot<T> {
+    key: Option<Weak<T>>,
+    used: LocalUse,
+    /// The two-stage marker: a bare address, or 0.
+    mark: usize,
+}
+
+impl<T> Slot<T> {
+    fn empty() -> Slot<T> {
+        Slot {
+            key: None,
+            used: LocalUse::CLOSED,
+            mark: 0,
+        }
+    }
+
+    /// The memoized answer, when the key is `t`'s own allocation.
+    fn hit(&self, t: &Rc<T>) -> Option<LocalUse> {
+        match &self.key {
+            Some(k) if std::ptr::eq(k.as_ptr(), Rc::as_ptr(t)) => Some(self.used),
+            _ => None,
+        }
+    }
+
+    fn store(&mut self, t: &Rc<T>, u: LocalUse) {
+        self.key = Some(Rc::downgrade(t));
+        self.used = u;
+    }
+}
+
+/// log2 of the slot count per sort. 2^16 slots × 32 bytes × 2 sorts = 4 MiB.
 const BITS: u32 = 16;
 
 fn slot(p: usize) -> usize {
@@ -142,10 +202,8 @@ fn slot(p: usize) -> usize {
 impl Cache {
     fn new() -> Cache {
         Cache {
-            terms: vec![None; 1 << BITS],
-            term_marks: vec![0; 1 << BITS],
-            types: vec![None; 1 << BITS],
-            type_marks: vec![0; 1 << BITS],
+            terms: (0..1 << BITS).map(|_| Slot::empty()).collect(),
+            types: (0..1 << BITS).map(|_| Slot::empty()).collect(),
         }
     }
 
@@ -171,13 +229,11 @@ impl Cache {
             _ => {}
         }
         let i = slot(Rc::as_ptr(t) as usize);
-        if let Some((k, u)) = &self.terms[i] {
-            if Rc::ptr_eq(k, t) {
-                return *u;
-            }
+        if let Some(u) = self.terms[i].hit(t) {
+            return u;
         }
         let u = self.compute_term(t);
-        self.terms[i] = Some((Rc::clone(t), u));
+        self.terms[i].store(t, u);
         u
     }
 
@@ -190,15 +246,14 @@ impl Cache {
     fn term_query(&mut self, t: &Rc<Term>) -> Option<LocalUse> {
         let p = Rc::as_ptr(t) as usize;
         let i = slot(p);
-        if let Some((k, u)) = &self.terms[i] {
-            if Rc::ptr_eq(k, t) {
-                return Some(*u);
-            }
+        let s = &mut self.terms[i];
+        if let Some(u) = s.hit(t) {
+            return Some(u);
         }
-        if self.term_marks[i] == p {
+        if s.mark == p {
             Some(self.term_use(t))
         } else {
-            self.term_marks[i] = p;
+            s.mark = p;
             None
         }
     }
@@ -224,28 +279,25 @@ impl Cache {
             _ => {}
         }
         let i = slot(Rc::as_ptr(t) as usize);
-        if let Some((k, u)) = &self.types[i] {
-            if Rc::ptr_eq(k, t) {
-                return *u;
-            }
+        if let Some(u) = self.types[i].hit(t) {
+            return u;
         }
         let u = self.compute_type(t);
-        self.types[i] = Some((Rc::clone(t), u));
+        self.types[i].store(t, u);
         u
     }
 
     fn type_query(&mut self, t: &Rc<Type>) -> Option<LocalUse> {
         let p = Rc::as_ptr(t) as usize;
         let i = slot(p);
-        if let Some((k, u)) = &self.types[i] {
-            if Rc::ptr_eq(k, t) {
-                return Some(*u);
-            }
+        let s = &mut self.types[i];
+        if let Some(u) = s.hit(t) {
+            return Some(u);
         }
-        if self.type_marks[i] == p {
+        if s.mark == p {
             Some(self.type_use(t))
         } else {
-            self.type_marks[i] = p;
+            s.mark = p;
             None
         }
     }
