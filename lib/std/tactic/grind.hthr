@@ -1160,7 +1160,6 @@ fn pick_candidate(g: Graph, lm: Lemma, h: Handle, s: Subst, u: Nat, target: Expr
     }
 }
 
-
 // How far this near match's candidates were tried before (0: never).
 fn tried_upto(ts: List<NearTried>, j: Nat, item: Nat, node: Nat, args: List<Option<Nat>>) → Nat {
     match ts {
