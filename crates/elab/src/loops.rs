@@ -582,10 +582,9 @@ impl Lift<'_> {
         let args = |at: Span| -> Vec<Expr> {
             captures.iter().map(|(n, _)| var(n, at)).chain(vars.iter().map(|v| var(v, at))).collect()
         };
-        // The body runs before the condition's match, in SSA form: the
-        // `decreases` lowering reads a name by its last binding, so a body
-        // that rebinds `m` would have the measure's `m` read the new value,
-        // and its unfolding companions decline shadowed binders. Hoisted
+        // The body runs before the condition's match, in SSA form, so the
+        // condition placed after its `let`s still reads the parameters (the
+        // `decreases` lowering deshadows on its own, `alpha::deshadow`). Hoisted
         // above the match, the lets are what every arm sees; the `False` arm
         // ignores them (the body is pure), and the match's equation is about
         // the parameters, which the obligation compares.

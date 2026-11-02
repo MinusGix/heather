@@ -591,6 +591,18 @@ fn liftable(decl: &Decl) -> bool {
         .all(|o| matches!(o.target, OnTarget::Name(_)))
 }
 
+/// `decl` with its body deshadowed ([`crate::alpha::deshadow`]) against its
+/// parameters and type parameters, which the lowering's measure, obligation
+/// telescopes and unfolding walk all read by name.
+pub(crate) fn deshadowed(decl: &Decl) -> Decl {
+    let bound: Vec<String> = decl.tyvars.iter().map(|t| t.name.clone())
+        .chain(decl.params.iter().map(|p| p.name.clone()))
+        .collect();
+    let mut decl = decl.clone();
+    crate::alpha::deshadow(&mut decl.body, &bound);
+    decl
+}
+
 /// Lower `decl`, whose body recurses under `decreases measure`, into the
 /// lifted obligations of §4 and the `f#body` / `f#rec` / `f` family (module
 /// docs, and `docs/decreases-unfolding-design.md` §2). `name` is the

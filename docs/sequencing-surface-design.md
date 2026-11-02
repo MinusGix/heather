@@ -1031,11 +1031,13 @@ and `List::for_in` (both in `lib/std/data/list.hthr`). What departs from
    arm keeps them out of the shapes the unfolding companions handle worst.
 3. **The body is put in SSA form** (`crates/elab/src/alpha.rs`): each
    top-level `let` that rebinds a name gets a fresh `name__N`, along with
-   every later occurrence of it. Without this, `m := m - 1` makes the
-   measure's `m` read the new value (the obligation becomes `m < m`), and
-   the unfolding companions decline shadowed binders. Both are `decreases`
-   bugs that hand-written functions hit too
-   (`issues/decreases-shadowed-let.md`).
+   every later occurrence of it, so the condition's match, placed after
+   the hoisted `let`s, still reads the parameters. This also kept two
+   `decreases` bugs away (the measure's `m` reading a shadowing `m`, and
+   the unfolding companions declining shadowed binders); the `decreases`
+   lowering now deshadows every body itself (`alpha::deshadow`,
+   `issues/decreases-shadowed-let.md`), so hand-written functions no
+   longer hit them either.
 4. **`f::run_unfold` is generated** (§7.3's dependency, unfolding over a
    computed scrutinee, has landed). It needed one fix in `measure.rs`: a
    lifted obligation's telescope now includes an equation binder about a
