@@ -50,14 +50,33 @@ theorem tower_lens<A>(a, b, c: List<A>): ((a ++ b) ++ c).len() = a.len() + (b.le
 theorem tower_closed(xs, ys, zs: List<Nat>): ((xs ++ ys) ++ zs) ++ [1, 2] = xs ++ (ys ++ (zs ++ [1, 2])) { by grind_using(["List::append_assoc"], []) }
 // A commutative lemma among them (its instances turn every sum round), and
 // a round whose matching outgrew one evaluation's fuel until each lemma's
-// matching was made its own (`settled`); it stops one definitional step
-// short (`-OfNat(k)` is `Int::negOfNat(k)` only by computation,
-// issues/grind-definitional-equalities.md).
+// matching was made its own (`settled`).
 theorem regroup(a, b, c: Int): (a + b) + c = b + (c + a) { by grind_using(["Int::add_assoc", "Int::add_comm"], []) }
-// expect-error: no new instance after 2 rounds
+
+// Definitional equalities (issues/grind-definitional-equalities.md): a
+// pattern's argument matched up to `Defeq`, its free binder drawn from the
+// graph's terms. `Int::neg_add`'s `Succ` step from the four lemmas its
+// `calc` cites, as `lib/std/num/int.hthr` states it: `OfNat(Succ(k))` is
+// `OfNat(k).isucc()`, and `-OfNat(k)` is `Int::negOfNat(k)`, only by
+// computation, at a neutral `k`; and the step with the first spelled the
+// lemmas' way. Then a list at an open element type, `[a] ++ xs` against
+// `Cons(a, ys)` and `[] ++ ys` against `xs` (the second only from the
+// right side's pattern, `g(ys)`); a checking position; and a negative
+// control, where no term of the graph makes `Cons(a, ys)` the list.
+theorem neg_add_succ(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(Succ(k))) = -a + NegSucc(k) {
+    by grind_using(["Int::add_isucc", "Int::neg_isucc", "Int::add_ipred", "Int::ipred_negOfNat"], [])
+}
 theorem neg_add_step(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(k).isucc()) = -a + Int::negOfNat(k).ipred() {
     by grind_using(["Int::add_isucc", "Int::neg_isucc", "Int::add_ipred", "Int::ipred_negOfNat"], [])
 }
+theorem near_cons<A>(f, g: List<A> → Nat, a: A, k: (ys: List<A>) → f(Cons(a, ys)) = g(ys), xs: List<A>): f(List::append([a], xs)) = g(xs) { by grind() }
+theorem near_nil<A>(f, g: List<A> → Nat, k: (ys: List<A>) → f(List::append([], ys)) = g(ys), xs: List<A>): f(xs) = g(xs) { by grind() }
+theorem near_checking<A>(f, g: List<A> → Nat, a: A, k: (ys: List<A>) → f(Cons(a, ys)) = g(ys), xs: List<A>): g(xs) = f(List::append([a], xs)) {
+    let p: (f(List::append([a], xs)) = g(xs)) = by grind();
+    sym(p)
+}
+// expect-error: grind: the two sides are not in one class
+theorem near_refused<A>(f, g: List<A> → Nat, a, b: A, k: (ys: List<A>) → f(Cons(a, ys)) = g(ys), xs: List<A>): f(List::append([b], xs)) = g(xs) { by grind() }
 // The report of the lemmas used (a `tactic-report` warning): here
 // `List::append_assoc`, and not `List::append_nil`.
 theorem reported<A>(a, b, c: List<A>): (a ++ b) ++ c = a ++ (b ++ c) { by grind_report(["List::append_assoc", "List::append_nil"], []) }
@@ -112,7 +131,7 @@ theorem conj_checking(f: Nat → Nat, a, b: Nat, k: (a = b) ∧ True): f(b) = f(
 // expect-error: grind: the two sides are not in one class
 theorem not_closed(f: Nat → Nat, a, b: Nat, h: f(a) = b): f(b) = a { by grind() }
 // A lemma whose pattern meets nothing in the graph: the report says which.
-// expect-error: its pattern never matched
+// expect-error: its patterns never matched
 theorem never_matched(f, g: Nat → Nat, k: (n: Nat) → g(n) = n, a: Nat): f(a) = a { by grind() }
 // A premise the instance cannot prove: `a = 0` is in no class, no local and
 // no instance, so the instance waits and the report names the premise.
