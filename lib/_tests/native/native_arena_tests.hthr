@@ -1,0 +1,30 @@
+// Probes of the arena's cell representation (native_arena): two lines
+// consed onto an empty arena, laid out and read back by evaluation, and the
+// `cons_abs` law at a neutral line. The tools that write these cells run as
+// compiled code against GNU (`crates/cli/tests/native_tools.rs`). The
+// runtime fn lowering that will import the module is
+// issues/runtime-fn-arena-lists.md.
+import native_arena;
+import list;
+import bitvec;
+import logic;
+import nat;
+
+fn ab() → List<BitVec(8)> { [BitVec::ofNat(97), BitVec::ofNat(98)] }
+fn c() → List<BitVec(8)> { [BitVec::ofNat(99)] }
+fn two() → ArenaRef { ArenaRef::nil(Nil).cons(ab()).cons(c()) }
+
+// The cells' bytes: the first at offset 0 (no next cell, length 2, "ab"),
+// the second after it (the first's name, offset plus one, then length 1,
+// "c"); the list is named by the second.
+theorem two_bytes(): two().bytes.map(λ (b: BitVec(8)) => b.toNat()) = [0, 0, 0, 0, 2, 0, 0, 0, 97, 98, 1, 0, 0, 0, 1, 0, 0, 0, 99] { refl }
+theorem two_name(): two().at = 11 { refl }
+
+// Read back, newest first.
+theorem two_abs(): two().abs().map(λ (l: List<BitVec(8)>) => l.map(λ (b: BitVec(8)) => b.toNat())) = [[99], [97, 98]] { refl }
+
+// The law at any line that fits: one cell onto the empty arena is that line.
+theorem cons_onto_nil(line: List<BitVec(8)>, fits: ArenaRef::nil(Nil).bytes.len() + 8 + line.len() <= arena_limit()):
+    ArenaRef::nil(Nil).cons(line).abs() = [line] {
+    match ArenaRef::nil(Nil).cons_abs(line, ArenaRef::nil_abs(Nil).left, fits) { And(_, e) => e }
+}

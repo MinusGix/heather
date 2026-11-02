@@ -1,0 +1,361 @@
+// Lists in a bump arena: the cells a `runtime fn`'s lists live in at run
+// time, and what they mean (docs/native-heap-arena-design.md §4;
+// issues/native-heap-arena.md, issues/datarepr-separation.md).
+//
+// An arena is a run of bytes, used from the bottom up: it is only ever
+// grown at its top, and a byte below the top is never written again. A cell
+// is named by its offset plus one, so the name 0 is no cell. A cell of a
+// list of byte strings (`List<List<BitVec(8)>>`, a file's lines) is the
+// name of the next cell, the length of its payload, and the payload, each
+// name and length four bytes, least significant first:
+//
+//     offset o:      next (4 bytes)   length (4 bytes)   payload (length bytes)
+//
+// So a list is a name and the bytes it is read from (`ArenaRef`), and what
+// it means is read off them (`ArenaRef::abs`). This is the `datarepr`
+// discipline (docs/datarepr-design.md §1): the representation is not the
+// spec type, an abstraction function reads the spec value off it, and an
+// invariant (`ArenaRef::inv`) is what every law assumes. Its images are
+// operations, not total functions (FINDING 1, §1.3): consing writes a cell
+// at the top, and an arena of finite capacity may have no room, so the
+// image laws are stated on the allocation's success arm, where the cell's
+// end is within `arena_limit()`.
+//
+// What makes a bump arena easy to reason about is the order of its cells:
+// a list is built by consing, so every cell names a cell below it, and the
+// bytes a list is read from are never written after it is built. So growing
+// the arena keeps every list in it (`ArenaRef::extend_abs`), and consing
+// onto a list means the cell and then the list (`ArenaRef::cons_abs`) —
+// whatever else was allocated between them. That is what lets one arena
+// hold many lists, each a name the program keeps in a word.
+
+import logic;
+import nat;
+import list;
+import option;
+import bitvec;
+import bitvec_bytes;
+import vector;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Vectors as lists
+
+// `cong` with its function given.
+theorem arena_cong<A, B>(f: A → B, {a, b: A}, p: a = b): f(a) = f(b) { j(p, λ x _ => f(a) = f(x), refl) }
+
+// A vector's entries, first to last.
+fn vector_entries<A>({k: Nat}, v: [A; k]) → List<A> {
+    (match k as λ j => [A; j] → List<A> {
+        Zero => λ v => Nil,
+        Succ(_, ih) => λ v => Cons(head(v), ih(tail(v))),
+    })(v)
+}
+
+// A list's first `k` entries as a vector, `pad` past its end.
+fn List::vector_of<A>(self xs: List<A>, k: Nat, pad: A) → [A; k] {
+    (match k as λ j => List<A> → [A; j] {
+        Zero => λ xs => [],
+        Succ(_, ih) => λ xs => match xs { Nil => cons(pad, ih(Nil)), Cons(h, t) => cons(h, ih(t)) },
+    })(xs)
+}
+
+theorem vector_entries_len<A>(k: Nat): (v: [A; k]) → vector_entries(v).len() = k {
+    match k as λ j => (v: [A; j]) → vector_entries(v).len() = j {
+        Zero => λ v => refl,
+        Succ(_, ih) => λ v => Nat::cong(λ m => Succ(m), ih(tail(v))),
+    }
+}
+
+// A vector's entries, read back as a vector, are the vector, whatever
+// follows them.
+theorem vector_of_entries<A>(k: Nat, pad: A): (v: [A; k]) → (rest: List<A>) → (vector_entries(v) ++ rest).vector_of(k, pad) = v {
+    match k as λ j => (v: [A; j]) → (rest: List<A>) → (vector_entries(v) ++ rest).vector_of(j, pad) = v {
+        Zero => λ v rest => refl,
+        Succ(_, ih) => λ v rest => {
+            let inner: (cons(head(v), (vector_entries(tail(v)) ++ rest).vector_of(_, pad)) = cons(head(v), tail(v))) =
+                rewrite(ih(tail(v), rest), refl);
+            inner
+        },
+    }
+}
+
+// What follows a list's first `k` entries does not change them.
+theorem List::vector_of_append<A>(k: Nat, pad: A): (xs, more: List<A>) → k <= xs.len() → (xs ++ more).vector_of(k, pad) = xs.vector_of(k, pad) {
+    match k as λ j => (xs, more: List<A>) → j <= xs.len() → (xs ++ more).vector_of(j, pad) = xs.vector_of(j, pad) {
+        Zero => λ xs more _ => refl,
+        Succ(j, ih) => λ xs more => match xs as λ ys => Succ(j) <= ys.len() → (ys ++ more).vector_of(Succ(j), pad) = ys.vector_of(Succ(j), pad) {
+            Nil => λ never => false_elim(never),
+            Cons(h, t) => λ fits => {
+                let inner: (cons(h, (t ++ more).vector_of(j, pad)) = cons(h, t.vector_of(j, pad))) = rewrite(ih(t, more, fits), refl);
+                inner
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lists as lists
+
+theorem List::drop_append_len<A>(self xs: List<A>, ys: List<A>): (xs ++ ys).drop(xs.len()) = ys {
+    match xs { Nil => match ys { Nil => refl, Cons(_, _) => refl }, Cons(_, t) => t.drop_append_len(ys) }
+}
+
+theorem List::drop_append_le<A>(self xs: List<A>, ys: List<A>): (n: Nat) → n <= xs.len() → (xs ++ ys).drop(n) = xs.drop(n) ++ ys {
+    match xs {
+        Nil => λ n => match n { Zero => λ _ => match ys { Nil => refl, Cons(_, _) => refl }, Succ(_) => λ never => false_elim(never) },
+        Cons(h, t) => λ n => match n { Zero => λ _ => refl, Succ(k) => λ fits => t.drop_append_le(ys, k, fits) },
+    }
+}
+
+theorem List::take_append_le<A>(self xs: List<A>, ys: List<A>): (n: Nat) → n <= xs.len() → (xs ++ ys).take(n) = xs.take(n) {
+    match xs {
+        Nil => λ n => match n { Zero => λ _ => match ys { Nil => refl, Cons(_, _) => refl }, Succ(_) => λ never => false_elim(never) },
+        Cons(h, t) => λ n => match n { Zero => λ _ => refl, Succ(k) => λ fits => List::cong_cons(h, t.take_append_le(ys, k, fits)) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Names and lengths: four bytes, least significant first
+
+// The largest arena: the data segment's limit (`io_data_limit`), so a
+// cell's name and length always fit in four bytes.
+fn arena_limit() → Nat { 0x40000000 }
+
+theorem arena_limit_fits(): arena_limit() < Nat::pow(2, 32) { trivial }
+
+fn arena_word(n: Nat) → List<BitVec(8)> { vector_entries(BitVec::ofNat(n, n := 32).bytes_le(4)) }
+
+// The number the first four bytes hold (zero past the end).
+fn read_word(xs: List<BitVec(8)>) → Nat { BitVec::of_bytes_le(xs.vector_of(4, BitVec::zero())).toNat() }
+
+theorem arena_word_len(n: Nat): arena_word(n).len() = 4 { vector_entries_len(4, BitVec::ofNat(n, n := 32).bytes_le(4)) }
+
+theorem read_arena_word(n: Nat, rest: List<BitVec(8)>, fits: n < Nat::pow(2, 32)): read_word(arena_word(n) ++ rest) = n {
+    let w: BitVec(32) = BitVec::ofNat(n, n := 32);
+    let back: ((arena_word(n) ++ rest).vector_of(4, BitVec::zero()) = w.bytes_le(4)) = vector_of_entries(4, BitVec::zero(), w.bytes_le(4), rest);
+    let word: (read_word(arena_word(n) ++ rest) = BitVec::of_bytes_le(w.bytes_le(4)).toNat()) =
+        arena_cong(λ (v: [BitVec(8); 4]) => BitVec::of_bytes_le(v).toNat(), back);
+    let packed: (BitVec::of_bytes_le(w.bytes_le(4)).toNat() = w.toNat()) =
+        arena_cong(λ (u: BitVec(32)) => u.toNat(), BitVec::of_bytes_le_bytes_le(4, w));
+    trans(word, trans(packed, BitVec::toNat_ofNat(32, n, fits)))
+}
+
+// What follows four bytes does not change the number they hold.
+theorem read_word_append(xs, more: List<BitVec(8)>, fits: 4 <= xs.len()): read_word(xs ++ more) = read_word(xs) {
+    arena_cong(λ (v: [BitVec(8); 4]) => BitVec::of_bytes_le(v).toNat(), List::vector_of_append(4, BitVec::zero(), xs, more, fits))
+}
+
+theorem List::drop_zero<A>(self xs: List<A>): xs.drop(0) = xs { match xs { Nil => refl, Cons(_, _) => refl } }
+
+// A list's first `len` entries are all of it.
+theorem List::take_whole<A>(self xs: List<A>): xs.take(xs.len()) = xs {
+    match xs { Nil => refl, Cons(h, t) => List::cong_cons(h, t.take_whole()) }
+}
+
+// ---------------------------------------------------------------------------
+// Cells
+
+// A cell's bytes: the next cell's name, the payload's length, the payload.
+fn cell_bytes(next: Nat, payload: List<BitVec(8)>) → List<BitVec(8)> {
+    arena_word(next) ++ (arena_word(payload.len()) ++ payload)
+}
+
+theorem cell_bytes_len(next: Nat, payload: List<BitVec(8)>): cell_bytes(next, payload).len() = 8 + payload.len() {
+    let outer = List::len_append(arena_word(next), arena_word(payload.len()) ++ payload);
+    let inner = List::len_append(arena_word(payload.len()), payload);
+    omega(outer, inner, arena_word_len(next), arena_word_len(payload.len()))
+}
+
+// What the bytes from a cell's offset say: the next cell, the payload's
+// length, and the payload.
+fn cell_next(xs: List<BitVec(8)>) → Nat { read_word(xs) }
+fn cell_length(xs: List<BitVec(8)>) → Nat { read_word(xs.drop(4)) }
+fn cell_payload(xs: List<BitVec(8)>) → List<BitVec(8)> { xs.drop(8).take(cell_length(xs)) }
+
+// The list from the cell named `at`, read in at most `fuel` cells.
+fn arena_lines(bytes: List<BitVec(8)>, fuel, at: Nat) → List<List<BitVec(8)>> {
+    match fuel {
+        Zero => Nil,
+        Succ(f) => match at {
+            Zero => Nil,
+            Succ(o) => Cons(cell_payload(bytes.drop(o)), arena_lines(bytes, f, cell_next(bytes.drop(o)))),
+        },
+    }
+}
+
+// The cell named `at` is within the bytes and names a cell below it, and
+// `rest` holds of the cell it names.
+fn arena_cell(bytes: List<BitVec(8)>, at: Nat, rest: Nat → Type) → Type {
+    match at {
+        Zero => True,
+        Succ(o) => (cell_next(bytes.drop(o)) <= o)
+            ∧ ((o + 8 + cell_length(bytes.drop(o)) <= bytes.len()) ∧ rest(cell_next(bytes.drop(o)))),
+    }
+}
+
+// The cells from `at` are within the bytes, each naming a cell below it,
+// and the list ends (at the name 0) within `fuel` cells.
+fn arena_cells(bytes: List<BitVec(8)>, fuel, at: Nat) → Type {
+    match fuel {
+        Zero => at = 0,
+        Succ(f) => arena_cell(bytes, at, λ next => arena_cells(bytes, f, next)),
+    }
+}
+
+// A cell's name is within the bytes.
+theorem arena_cells_within(bytes: List<BitVec(8)>, n: Nat): (at: Nat) → arena_cells(bytes, n, at) → at <= bytes.len() {
+    match n {
+        Zero => λ at none => j(sym(none), λ a _ => a <= bytes.len(), trivial),
+        Succ(f) => λ at => match at as λ a => arena_cells(bytes, Succ(f), a) → a <= bytes.len() {
+            Zero => λ _ => trivial,
+            Succ(o) => λ ok => omega(ok.right.left),
+        },
+    }
+}
+
+// More fuel reads the same list.
+theorem arena_more_fuel(bytes: List<BitVec(8)>, n: Nat): (at: Nat) → arena_cells(bytes, n, at) → (m: Nat) → n <= m →
+        arena_cells(bytes, m, at) ∧ (arena_lines(bytes, m, at) = arena_lines(bytes, n, at)) {
+    match n {
+        Zero => λ at none m _ => j(sym(none), λ a _ => arena_cells(bytes, m, a) ∧ (arena_lines(bytes, m, a) = arena_lines(bytes, Zero, a)),
+            match m as λ k => arena_cells(bytes, k, Zero) ∧ (arena_lines(bytes, k, Zero) = arena_lines(bytes, Zero, Zero)) {
+                Zero => And(refl, refl),
+                Succ(_) => And(trivial, refl),
+            }),
+        Succ(f) => λ at => match at as λ a => arena_cells(bytes, Succ(f), a) → (m: Nat) → Succ(f) <= m →
+                arena_cells(bytes, m, a) ∧ (arena_lines(bytes, m, a) = arena_lines(bytes, Succ(f), a)) {
+            Zero => λ _ m _ => match m as λ k => arena_cells(bytes, k, Zero) ∧ (arena_lines(bytes, k, Zero) = arena_lines(bytes, Succ(f), Zero)) {
+                Zero => And(refl, refl),
+                Succ(_) => And(trivial, refl),
+            },
+            Succ(o) => λ ok m => match m as λ k => Succ(f) <= k →
+                    arena_cells(bytes, k, Succ(o)) ∧ (arena_lines(bytes, k, Succ(o)) = arena_lines(bytes, Succ(f), Succ(o))) {
+                Zero => λ never => false_elim(never),
+                Succ(g) => λ le => {
+                    let rest = arena_more_fuel(bytes, f, cell_next(bytes.drop(o)), ok.right.right, g, le);
+                    And(And(ok.left, And(ok.right.left, rest.left)), List::cong_cons(cell_payload(bytes.drop(o)), rest.right))
+                },
+            },
+        },
+    }
+}
+
+// Bytes added above the cells change neither them nor the list they read
+// as: the arena grows only at its top.
+theorem arena_extend(bytes, more: List<BitVec(8)>, n: Nat): (at: Nat) → arena_cells(bytes, n, at) →
+        arena_cells(bytes ++ more, n, at) ∧ (arena_lines(bytes ++ more, n, at) = arena_lines(bytes, n, at)) {
+    match n {
+        Zero => λ at none => And(none, refl),
+        Succ(f) => λ at => match at as λ a => arena_cells(bytes, Succ(f), a) →
+                arena_cells(bytes ++ more, Succ(f), a) ∧ (arena_lines(bytes ++ more, Succ(f), a) = arena_lines(bytes, Succ(f), a)) {
+            Zero => λ _ => And(trivial, refl),
+            Succ(o) => λ ok => {
+                let xs = bytes.drop(o);
+                let ys = (bytes ++ more).drop(o);
+                let xs_len: (xs.len() = bytes.len() - o) = bytes.len_drop(o);
+                let o_le: (o <= bytes.len()) = omega(ok.right.left);
+                let hd: (ys = xs ++ more) = bytes.drop_append_le(more, o, o_le);
+                let four: (4 <= xs.len()) = omega(ok.right.left, xs_len);
+                let tail_len: (xs.drop(4).len() = xs.len() - 4) = xs.len_drop(4);
+                let four_after: (4 <= xs.drop(4).len()) = omega(ok.right.left, xs_len, tail_len);
+                let eight: (8 <= xs.len()) = omega(ok.right.left, xs_len);
+                let next_eq: (cell_next(ys) = cell_next(xs)) =
+                    trans(arena_cong(λ (zs: List<BitVec(8)>) => read_word(zs), hd), read_word_append(xs, more, four));
+                let length_more: (cell_length(xs ++ more) = cell_length(xs)) =
+                    trans(arena_cong(λ (zs: List<BitVec(8)>) => read_word(zs), xs.drop_append_le(more, 4, four)),
+                        read_word_append(xs.drop(4), more, four_after));
+                let length_eq: (cell_length(ys) = cell_length(xs)) =
+                    trans(arena_cong(λ (zs: List<BitVec(8)>) => cell_length(zs), hd), length_more);
+                let payload_len: (xs.drop(8).len() = xs.len() - 8) = xs.len_drop(8);
+                let payload_fits: (cell_length(xs) <= xs.drop(8).len()) = omega(ok.right.left, xs_len, payload_len);
+                let at_length: ((xs ++ more).drop(8).take(cell_length(xs ++ more)) = (xs ++ more).drop(8).take(cell_length(xs))) =
+                    arena_cong(λ (k: Nat) => (xs ++ more).drop(8).take(k), length_more);
+                let payload_more: (cell_payload(xs ++ more) = cell_payload(xs)) =
+                    trans(at_length, trans(arena_cong(λ (zs: List<BitVec(8)>) => zs.take(cell_length(xs)), xs.drop_append_le(more, 8, eight)),
+                        xs.drop(8).take_append_le(more, cell_length(xs), payload_fits)));
+                let payload_eq: (cell_payload(ys) = cell_payload(xs)) =
+                    trans(arena_cong(λ (zs: List<BitVec(8)>) => cell_payload(zs), hd), payload_more);
+                let rest = arena_extend(bytes, more, f, cell_next(xs), ok.right.right);
+                let next_le: (cell_next(ys) <= o) = j(sym(next_eq), λ k _ => k <= o, ok.left);
+                let bound: (o + 8 + cell_length(ys) <= (bytes ++ more).len()) =
+                    omega(length_eq, ok.right.left, List::len_append(bytes, more));
+                let cells_rest: arena_cells(bytes ++ more, f, cell_next(ys)) =
+                    j(sym(next_eq), λ k _ => arena_cells(bytes ++ more, f, k), rest.left);
+                let lines_rest: (arena_lines(bytes ++ more, f, cell_next(ys)) = arena_lines(bytes, f, cell_next(xs))) =
+                    trans(arena_cong(λ (k: Nat) => arena_lines(bytes ++ more, f, k), next_eq), rest.right);
+                let lines: (Cons(cell_payload(ys), arena_lines(bytes ++ more, f, cell_next(ys))) = Cons(cell_payload(xs), arena_lines(bytes, f, cell_next(xs)))) =
+                    trans(arena_cong(λ (p: List<BitVec(8)>) => Cons(p, arena_lines(bytes ++ more, f, cell_next(ys))), payload_eq),
+                        List::cong_cons(cell_payload(xs), lines_rest));
+                And(And(next_le, And(bound, cells_rest)), lines)
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lists of byte strings in an arena: the representation
+
+// A list: the arena's bytes and the name of its first cell (0 for `Nil`).
+record ArenaRef { bytes: List<BitVec(8)>, at: Nat }
+
+// What it means (`abs`), and what every law assumes of it (`inv`). A list
+// of `k` cells needs at most `k` steps to read, and a cell's name is more
+// than the name it holds, so the name is fuel enough.
+fn ArenaRef::abs(self r: ArenaRef) → List<List<BitVec(8)>> { arena_lines(r.bytes, r.at, r.at) }
+fn ArenaRef::inv(self r: ArenaRef) → Type { arena_cells(r.bytes, r.at, r.at) }
+
+// `Nil` in any arena.
+fn ArenaRef::nil(bytes: List<BitVec(8)>) → ArenaRef { ArenaRef(bytes, 0) }
+
+theorem ArenaRef::nil_abs(bytes: List<BitVec(8)>): ArenaRef::nil(bytes).inv() ∧ (ArenaRef::nil(bytes).abs() = Nil) { And(refl, refl) }
+
+// `Cons(line, r)`: a cell at the arena's top naming `r`'s first cell, the
+// arena grown by it. On a machine the cell is allocated, and the arena may
+// have no room for it; that is the allocation's failure arm (an exit), and
+// the laws below are its success arm.
+fn ArenaRef::cons(self r: ArenaRef, line: List<BitVec(8)>) → ArenaRef {
+    ArenaRef(r.bytes ++ cell_bytes(r.at, line), Succ(r.bytes.len()))
+}
+
+// Growing the arena keeps every list in it: the same name reads the same
+// list from more bytes.
+theorem ArenaRef::extend_abs(self r: ArenaRef, more: List<BitVec(8)>, ok: r.inv()):
+        ArenaRef(r.bytes ++ more, r.at).inv() ∧ (ArenaRef(r.bytes ++ more, r.at).abs() = r.abs()) {
+    arena_extend(r.bytes, more, r.at, r.at, ok)
+}
+
+// Consing means the cell and then the list, while the arena stays within
+// its limit.
+theorem ArenaRef::cons_abs(self r: ArenaRef, line: List<BitVec(8)>, ok: r.inv(), fits: r.bytes.len() + 8 + line.len() <= arena_limit()):
+        r.cons(line).inv() ∧ (r.cons(line).abs() = Cons(line, r.abs())) {
+    let top = r.bytes.len();
+    let cell = cell_bytes(r.at, line);
+    let grown = r.bytes ++ cell;
+    let at_le: (r.at <= top) = arena_cells_within(r.bytes, r.at, r.at, ok);
+    let at_fits: (r.at < Nat::pow(2, 32)) = omega(at_le, fits, arena_limit_fits());
+    let len_fits: (line.len() < Nat::pow(2, 32)) = omega(fits, arena_limit_fits());
+    let ys = grown.drop(top);
+    let here: (ys = cell) = r.bytes.drop_append_len(cell);
+    let next_eq: (cell_next(ys) = r.at) =
+        trans(arena_cong(λ (zs: List<BitVec(8)>) => cell_next(zs), here), read_arena_word(r.at, arena_word(line.len()) ++ line, at_fits));
+    let length_cell: (cell_length(cell) = line.len()) = read_arena_word(line.len(), line, len_fits);
+    let length_eq: (cell_length(ys) = line.len()) = trans(arena_cong(λ (zs: List<BitVec(8)>) => cell_length(zs), here), length_cell);
+    let past_header: (cell.drop(8) = line) = line.drop_zero();
+    let payload_cell: (cell_payload(cell) = line) =
+        trans(arena_cong(λ (zs: List<BitVec(8)>) => zs.take(cell_length(cell)), past_header),
+            trans(arena_cong(λ (k: Nat) => line.take(k), length_cell), line.take_whole()));
+    let payload_eq: (cell_payload(ys) = line) = trans(arena_cong(λ (zs: List<BitVec(8)>) => cell_payload(zs), here), payload_cell);
+    let ext = arena_extend(r.bytes, cell, r.at, r.at, ok);
+    let more = arena_more_fuel(grown, r.at, r.at, ext.left, top, at_le);
+    let next_le: (cell_next(ys) <= top) = j(sym(next_eq), λ k _ => k <= top, at_le);
+    let bound: (top + 8 + cell_length(ys) <= grown.len()) =
+        omega(length_eq, List::len_append(r.bytes, cell), cell_bytes_len(r.at, line));
+    let cells_rest: arena_cells(grown, top, cell_next(ys)) = j(sym(next_eq), λ k _ => arena_cells(grown, top, k), more.left);
+    let lines_rest: (arena_lines(grown, top, cell_next(ys)) = r.abs()) =
+        trans(arena_cong(λ (k: Nat) => arena_lines(grown, top, k), next_eq), trans(more.right, ext.right));
+    let lines: (Cons(cell_payload(ys), arena_lines(grown, top, cell_next(ys))) = Cons(line, r.abs())) =
+        trans(arena_cong(λ (p: List<BitVec(8)>) => Cons(p, arena_lines(grown, top, cell_next(ys))), payload_eq),
+            List::cong_cons(line, lines_rest));
+    And(And(next_le, And(bound, cells_rest)), lines)
+}

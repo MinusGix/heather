@@ -1,0 +1,120 @@
+// `tac` and `sort`: the first native tools whose data is recursive, a list
+// of the input's lines held in an arena (docs/native-heap-arena-design.md;
+// issues/native-heap-arena.md). Written with the builder (`native_build`)
+// over its arena (`native_build_arena`), and lowered to sources
+// `heather write-elf` compiles; `native_compile_correct` is the proof of
+// each, as it is of every builder tool.
+//
+// Both build the list the same way, by consing: each line is a cell opened
+// onto the list read so far, its bytes pushed after its header as they
+// arrive, and closed at its newline. So a line is limited only by the
+// arena, and the list's first cell is the input's last line. Neither tool
+// writes a cell again once it is closed (the arena's discipline,
+// `native_build_arena`).
+//
+// Running out of arena says "memory exhausted" as GNU's tools do
+// (`xalloc_die`) and exits with the status GNU's tool fails with: 1 for
+// `tac`, 2 for `sort`.
+
+import native_build;
+import native_build_arena;
+import native_tools;
+import list;
+import bitvec;
+import string;
+import char;
+import bool;
+import nat;
+
+// "memory exhausted" on stderr, then the exit.
+fn exhausted(texts: Buf, status: Nat) → Act {
+    write_span(stderr(), texts, num(0), texts.size(), λ _ => exit(num(status))) ++ exit(num(status))
+}
+
+// The input's lines as a list of cells, the last line first, its first
+// cell's name in `head`: each byte pushed onto the open cell, a cell opened
+// before a line's first byte and closed after its newline (`keep_newline`)
+// or before it, and a last line with no newline closed when the input ends.
+// `full` is what running out does; `body` runs after the input ends.
+fn read_lines(a: Arena, data: Buf, keep_newline: Bool, full: Act, head: Var, body: Act) → Act {
+    local(num(0), λ open => name(λ list =>
+        each_read(stdin(), data, λ n => for_count(n.get(), λ k => local(data.at(k.get()), λ c =>
+            when(open.get().not(), a.open_cell(list, head, full) ++ open.set(num(1)))
+            ++ branch(c.get().equals(num(10)),
+                (match keep_newline { True => a.push(c.get(), full), False => skip() })
+                    ++ a.close_cell(head.get()) ++ open.set(num(0)),
+                a.push(c.get(), full)))))
+        ++ when(open.get(), a.close_cell(head.get()))))
+    ++ body
+}
+
+// ---------------------------------------------------------------------------
+// tac
+
+// GNU's `tac` over stdin: its lines, each with its newline, written last
+// first, and a last line without a newline written first and as it is
+// ("a\nb" gives "ba\n"). GNU's options and its file arguments are not here.
+// A failed read or write exits 1, as does running out of arena.
+fn tac(capacity, heap: Nat) → Tool {
+    buffer(capacity, λ data => buffer(heap, λ cells => buffer_of(ascii_text("tac: memory exhausted\n"), λ texts => run(
+        with_arena(cells, λ a => local(num(0), λ head =>
+            read_lines(a, data, True, exhausted(texts, 1), head,
+                a.each(head.get(), λ p len =>
+                    write_span(stdout(), cells, a.payload(p.get()), len.get(), λ _ => exit(num(1)))))))))))
+}
+
+fn tac_tool() → Tool { tac(4096, 1048576) }
+
+// ---------------------------------------------------------------------------
+// sort
+
+// Whether cell `x` (its payload `lx` bytes long) comes before cell `y`
+// (`ly`), into `out`: its line's bytes are less, or they are the same bytes
+// and `x` is the lower cell. The bytes from 0 agree while `i` counts them.
+fn before(a: Arena, x, lx, y, ly: Val, out: Var) → Act {
+    local(a.payload(x), λ cx => local(a.payload(y), λ cy => local(num(0), λ i =>
+    local(num(0), λ bx => local(num(0), λ by => local(num(1), λ same =>
+        loop_while(same.get(),
+            same.set(i.get().below(lx).and_also(i.get().below(ly)))
+            ++ when(same.get(),
+                bx.set(a.buf.at(cx.get() + i.get())) ++ by.set(a.buf.at(cy.get() + i.get()))
+                ++ same.set(bx.get().equals(by.get()))
+                ++ when(same.get(), i.set(i.get() + num(1)))))
+        ++ branch(i.get().below(lx).and_also(i.get().below(ly)),
+            out.set(bx.get().below(by.get())),
+            branch(lx.equals(ly), out.set(x.below(y)), out.set(lx.below(ly))))))))))
+}
+
+// GNU's `sort` over stdin in the C locale (`LC_ALL=C`): its lines, each
+// written with a newline (a last line without one gets one), ordered by
+// their bytes compared unsigned, a line before every longer line it begins.
+// GNU's options and its file arguments are not here. A failed read or
+// write and running out of arena exit 2, as GNU's does.
+//
+// The list is read, never changed: each pass over it finds the least line
+// after the one last written, in the order of the lines' bytes and then of
+// their cells (so lines alike are written once each, in turn), and writes
+// it. That takes as many passes as there are lines.
+fn sort(capacity, heap: Nat) → Tool {
+    buffer(capacity, λ data => buffer(heap, λ cells => buffer_of([BitVec::ofNat(10)], λ newline =>
+    buffer_of(ascii_text("sort: memory exhausted\n"), λ texts => run(
+        with_arena(cells, λ a => local(num(0), λ head =>
+            read_lines(a, data, False, exhausted(texts, 2), head,
+                local(num(0), λ last => local(num(0), λ last_len => local(num(1), λ more =>
+                local(num(0), λ best => local(num(0), λ best_len => local(num(0), λ after => local(num(0), λ under =>
+                loop_while(more.get(),
+                    best.set(num(0))
+                    ++ a.each(head.get(), λ q q_len =>
+                        after.set(num(1))
+                        ++ when(last.get(), before(a, last.get(), last_len.get(), q.get(), q_len.get(), after))
+                        ++ under.set(num(1))
+                        ++ when(after.get().and_also(best.get()), before(a, q.get(), q_len.get(), best.get(), best_len.get(), under))
+                        ++ when(after.get().and_also(under.get()), best.set(q.get()) ++ best_len.set(q_len.get())))
+                    ++ branch(best.get(),
+                        write_span(stdout(), cells, a.payload(best.get()), best_len.get(), λ _ => exit(num(2)))
+                            ++ write_span(stdout(), newline, num(0), num(1), λ _ => exit(num(2)))
+                            ++ last.set(best.get()) ++ last_len.set(best_len.get()),
+                        more.set(num(0)))))))))))))))))))
+}
+
+fn sort_tool() → Tool { sort(4096, 1048576) }
