@@ -7,6 +7,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc as Rc;
 
+use crate::layered::{Layer, Layered, index_hash};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssumptionKind {
     User,
@@ -50,13 +52,20 @@ struct ProvenanceLayer {
     entries: BTreeMap<String, Rc<Entry>>,
 }
 
+impl Layer for ProvenanceLayer {
+    const TABLES: usize = 1;
+
+    fn keys(&self, _: usize, out: &mut dyn FnMut(u64)) {
+        self.entries.keys().for_each(|k| out(index_hash(k.as_str())));
+    }
+}
+
 /// Append-only provenance split into immutable image layers and one suffix
 /// delta. Capturing an image seals the current delta; its first declaration
 /// therefore never clones the imported dependency graph.
 #[derive(Clone, Default)]
 pub(crate) struct Provenance {
-    sealed: Rc<Vec<Rc<ProvenanceLayer>>>,
-    current: Rc<ProvenanceLayer>,
+    tables: Layered<ProvenanceLayer>,
 }
 
 impl Provenance {
@@ -67,24 +76,14 @@ impl Provenance {
     }
 
     fn seal_current(&mut self) {
-        if self.current.entries.is_empty() {
+        if self.tables.current().entries.is_empty() {
             return;
         }
-        crate::stats::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
-        self.current = Rc::new(ProvenanceLayer::default());
+        self.tables.seal_current();
     }
 
     fn entry(&self, key: &str) -> Option<&Entry> {
-        self.current
-            .entries
-            .get(key)
-            .or_else(|| {
-                self.sealed
-                    .iter()
-                    .rev()
-                    .find_map(|layer| layer.entries.get(key))
-            })
-            .map(Rc::as_ref)
+        self.tables.find(0, key, |layer| layer.entries.get(key)).map(Rc::as_ref)
     }
 
     pub(crate) fn commit(&mut self, key: String, is_axiom: bool, mut direct: Vec<String>) {
@@ -124,7 +123,7 @@ impl Provenance {
                 }
             }
         }
-        crate::stats::make_mut(&mut self.current).entries.insert(
+        self.tables.current_mut().entries.insert(
             key,
             Rc::new(Entry {
                 is_axiom,
@@ -150,7 +149,7 @@ impl Provenance {
 
     pub(crate) fn tainted(&self) -> Vec<AxiomReport> {
         let mut entries = BTreeMap::new();
-        for layer in self.sealed.iter().chain(std::iter::once(&self.current)) {
+        for layer in self.tables.layers_oldest_first() {
             for (key, entry) in &layer.entries {
                 entries.insert(key.as_str(), entry.as_ref());
             }
@@ -180,18 +179,18 @@ mod tests {
         }
 
         let image = base.semantic_snapshot();
-        assert_eq!(image.sealed.len(), 1);
-        assert!(image.current.entries.is_empty());
+        assert_eq!(image.tables.sealed_len(), 1);
+        assert!(image.tables.current().entries.is_empty());
 
         let mut suffix = image.clone();
-        assert!(Rc::ptr_eq(&image.sealed, &suffix.sealed));
+        assert!(image.tables.shares_sealed_with(&suffix.tables));
         suffix.commit(
             "next::result".into(),
             false,
             vec!["m::d127".into()],
         );
 
-        assert!(Rc::ptr_eq(&image.sealed, &suffix.sealed));
+        assert!(image.tables.shares_sealed_with(&suffix.tables));
         assert!(image.report("next::result").is_none());
         let report = suffix.report("next::result").expect("suffix entry");
         assert_eq!(report.direct, ["m::d127"]);

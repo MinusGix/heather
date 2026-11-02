@@ -43,6 +43,7 @@ use heather_syntax::ast::Span;
 use crate::inductive::{IdxTy, Inductive};
 use crate::stats::decline;
 use crate::{Alias, Cx, Elaborator, R, TyVar};
+use crate::layered::{Layer as RegistryLayer, Layered, index_hash};
 
 /// The key of a machine-named definition. Keys are **nominal**: a declaration
 /// tag plus, where the device is per-constructor, its position. That is what
@@ -1182,6 +1183,34 @@ struct GenDefLayer {
     guard_at: HashMap<GuardKey, u32>,
 }
 
+/// [`GenDefLayer`]'s tables, as the layer index numbers them.
+const BY_KEY: usize = 0;
+const BY_ABS: usize = 1;
+const FAM_LVL: usize = 2;
+const TY_CODE: usize = 3;
+const TY_CODE_FN: usize = 4;
+const WF_SLOTS: usize = 5;
+const SPINE_CODES: usize = 6;
+const GUARD_AT: usize = 7;
+
+impl RegistryLayer for GenDefLayer {
+    const TABLES: usize = 8;
+
+    fn keys(&self, table: usize, out: &mut dyn FnMut(u64)) {
+        match table {
+            BY_KEY => self.by_key.keys().for_each(|k| out(index_hash(k))),
+            BY_ABS => self.by_abs.keys().for_each(|k| out(index_hash(k))),
+            FAM_LVL => self.fam_lvl.keys().for_each(|k| out(index_hash(k))),
+            TY_CODE => self.ty_code.keys().for_each(|k| out(index_hash(k))),
+            TY_CODE_FN => self.ty_code_fn.keys().for_each(|k| out(index_hash(k))),
+            WF_SLOTS => self.wf_slots.keys().for_each(|k| out(index_hash(k))),
+            SPINE_CODES => self.spine_codes.keys().for_each(|k| out(index_hash(k))),
+            GUARD_AT => self.guard_at.keys().for_each(|k| out(index_hash(k))),
+            _ => unreachable!("GenDefLayer has {} tables", Self::TABLES),
+        }
+    }
+}
+
 /// Which guard copy a [`GenDefLayer::guard_at`] entry scopes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum GuardKey {
@@ -1200,54 +1229,48 @@ pub(crate) fn mentions_global(ty: &Type) -> bool {
 /// [`Elaborator::push_gen_def`].
 #[derive(Clone, Default)]
 pub(crate) struct GenDefs {
-    sealed: Rc<Vec<Rc<GenDefLayer>>>,
-    current: Rc<GenDefLayer>,
+    tables: Layered<GenDefLayer>,
 }
 
 impl GenDefs {
     pub(crate) fn semantic_snapshot(&self) -> Self {
         let mut defs = self.clone();
-        if !defs.current.by_key.is_empty() {
-            crate::stats::make_mut(&mut defs.sealed).push(Rc::clone(&defs.current));
-            defs.current = Rc::new(GenDefLayer::default());
+        if !defs.tables.current().by_key.is_empty() {
+            defs.tables.seal_current();
         }
         defs
     }
 
-    fn layers(&self) -> impl Iterator<Item = &GenDefLayer> {
-        std::iter::once(self.current.as_ref()).chain(self.sealed.iter().rev().map(Rc::as_ref))
-    }
-
     fn contains_key(&self, key: &GenDef) -> bool {
-        self.layers().any(|layer| layer.by_key.contains_key(key))
+        self.abs_for(key).is_some()
     }
 
     pub(crate) fn abs_for(&self, key: &GenDef) -> Option<&u32> {
-        self.layers().find_map(|layer| layer.by_key.get(key))
+        self.tables.find(BY_KEY, key, |layer| layer.by_key.get(key))
     }
 
     pub(crate) fn key_for_abs(&self, abs: &u32) -> Option<&GenDef> {
-        self.layers().find_map(|layer| layer.by_abs.get(abs))
+        self.tables.find(BY_ABS, abs, |layer| layer.by_abs.get(abs))
     }
 
     fn fam_levels(&self, tag: &u32) -> Option<&(Level, Level)> {
-        self.layers().find_map(|layer| layer.fam_lvl.get(tag))
+        self.tables.find(FAM_LVL, tag, |layer| layer.fam_lvl.get(tag))
     }
 
     fn ty_code(&self, tag: &u32) -> Option<&(Rc<Type>, Level)> {
-        self.layers().find_map(|layer| layer.ty_code.get(tag))
+        self.tables.find(TY_CODE, tag, |layer| layer.ty_code.get(tag))
     }
 
     fn has_ty_codes(&self) -> bool {
-        self.layers().any(|layer| !layer.ty_code.is_empty())
+        !self.tables.current().ty_code.is_empty() || self.tables.sealed_holds_any(TY_CODE)
     }
 
     fn ty_code_fn(&self, tag: &u32) -> Option<&TyCodeFn> {
-        self.layers().find_map(|layer| layer.ty_code_fn.get(tag))
+        self.tables.find(TY_CODE_FN, tag, |layer| layer.ty_code_fn.get(tag))
     }
 
     fn has_ty_code_fns(&self) -> bool {
-        self.layers().any(|layer| !layer.ty_code_fn.is_empty())
+        !self.tables.current().ty_code_fn.is_empty() || self.tables.sealed_holds_any(TY_CODE_FN)
     }
 
     pub(crate) fn has_ty_code_fn(&self, tag: u32) -> bool {
@@ -1255,11 +1278,11 @@ impl GenDefs {
     }
 
     pub(crate) fn insert_ty_code_fn(&mut self, tag: u32, value: TyCodeFn) {
-        crate::stats::make_mut(&mut self.current).ty_code_fn.insert(tag, value);
+        self.tables.current_mut().ty_code_fn.insert(tag, value);
     }
 
     fn wf_slots(&self, tag: &u32) -> Option<&WfSlots> {
-        self.layers().find_map(|layer| layer.wf_slots.get(tag))
+        self.tables.find(WF_SLOTS, tag, |layer| layer.wf_slots.get(tag))
     }
 
     pub(crate) fn has_binding(&self, key: &GenDef, abs: u32) -> bool {
@@ -1279,15 +1302,15 @@ impl GenDefs {
     }
 
     fn has_wf_slots(&self) -> bool {
-        self.layers().any(|layer| !layer.wf_slots.is_empty())
+        !self.tables.current().wf_slots.is_empty() || self.tables.sealed_holds_any(WF_SLOTS)
     }
 
     fn spine_codes(&self, tag: &u32) -> Option<&SpineCodes> {
-        self.layers().find_map(|layer| layer.spine_codes.get(tag))
+        self.tables.find(SPINE_CODES, tag, |layer| layer.spine_codes.get(tag))
     }
 
     fn has_spine_codes(&self) -> bool {
-        self.layers().any(|layer| !layer.spine_codes.is_empty())
+        !self.tables.current().spine_codes.is_empty() || self.tables.sealed_holds_any(SPINE_CODES)
     }
 
     pub(crate) fn has_spine_code_entry(&self, tag: u32) -> bool {
@@ -1295,38 +1318,38 @@ impl GenDefs {
     }
 
     pub(crate) fn insert_spine_codes(&mut self, tag: u32, value: SpineCodes) {
-        crate::stats::make_mut(&mut self.current).spine_codes.insert(tag, value);
+        self.tables.current_mut().spine_codes.insert(tag, value);
     }
 
     pub(crate) fn insert_ty_code(&mut self, tag: u32, value: (Rc<Type>, Level)) {
-        crate::stats::make_mut(&mut self.current).ty_code.insert(tag, value);
+        self.tables.current_mut().ty_code.insert(tag, value);
     }
 
     pub(crate) fn guard_at(&self, key: GuardKey) -> Option<u32> {
-        self.layers().find_map(|layer| layer.guard_at.get(&key).copied())
+        self.tables.find(GUARD_AT, &key, |layer| layer.guard_at.get(&key).copied())
     }
 
     pub(crate) fn insert_guard_at(&mut self, key: GuardKey, at: u32) {
-        crate::stats::make_mut(&mut self.current).guard_at.insert(key, at);
+        self.tables.current_mut().guard_at.insert(key, at);
     }
 
     pub(crate) fn insert_wf_slots(&mut self, tag: u32, value: WfSlots) {
-        crate::stats::make_mut(&mut self.current).wf_slots.insert(tag, value);
+        self.tables.current_mut().wf_slots.insert(tag, value);
     }
 
     pub(crate) fn insert_fam_levels(&mut self, tag: u32, value: (Level, Level)) {
-        crate::stats::make_mut(&mut self.current).fam_lvl.insert(tag, value);
+        self.tables.current_mut().fam_lvl.insert(tag, value);
     }
 
     pub(crate) fn insert_binding(&mut self, key: GenDef, abs: u32) {
-        let layer = crate::stats::make_mut(&mut self.current);
+        let layer = self.tables.current_mut();
         layer.by_key.insert(key, abs);
         layer.by_abs.insert(abs, key);
     }
 
     #[cfg(test)]
     pub(crate) fn shares_sealed_with(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.sealed, &other.sealed)
+        self.tables.shares_sealed_with(&other.tables)
     }
 }
 
