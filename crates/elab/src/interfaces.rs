@@ -344,34 +344,44 @@ impl Elaborator {
         let ExprKind::Var(scrut_name) = &scrut.kind else { return Ok(made) };
         let Some(at) = decl.params.iter().position(|p| &p.name == scrut_name) else { return Ok(made) };
         let TyKind::Named { name: ind_name, args: ind_args } = &decl.params[at].ty.kind else { return Ok(made) };
-        let Some(ind) = self.lookup_inductive(ind_name).cloned() else { return Ok(made) };
-        if ind.params.len() != ind_args.len() {
-            return Ok(made);
-        }
-        let ty_args: std::collections::HashMap<String, Ty> =
-            ind.params.iter().cloned().zip(ind_args.iter().cloned()).collect();
+        // The constructors with their field types, at the parameter's type
+        // arguments. `Nat` is the kernel's, not a declared inductive.
+        let ctors: Vec<(String, Vec<Ty>)> = if ind_name == "Nat" && ind_args.is_empty() && self.lookup_inductive("Nat").is_none() {
+            vec![("Zero".into(), Vec::new()), ("Succ".into(), vec![decl.params[at].ty.clone()])]
+        } else {
+            let Some(ind) = self.lookup_inductive(ind_name).cloned() else { return Ok(made) };
+            if ind.params.len() != ind_args.len() {
+                return Ok(made);
+            }
+            let ty_args: std::collections::HashMap<String, Ty> =
+                ind.params.iter().cloned().zip(ind_args.iter().cloned()).collect();
+            ind.ctors
+                .iter()
+                .map(|c| (c.name.clone(), c.fields.iter().map(|(_, ty)| crate::traits::subst_ty(&ty_args, ty)).collect()))
+                .collect()
+        };
         let qualified = var(&decl.name, span);
         for arm in arms.iter().filter(|a| !a.default) {
-            let Some(ctor) = ind.ctors.iter().find(|c| c.name == arm.ctor) else { continue };
-            if arm.binders.len() != ctor.fields.len() {
+            let Some((ctor_name, field_tys)) = ctors.iter().find(|(name, _)| *name == arm.ctor) else { continue };
+            if arm.binders.len() != field_tys.len() {
                 continue;
             }
             let mut binders = Vec::new();
             for (i, pat) in arm.binders.iter().enumerate() {
                 let heather_syntax::Pat::Var { name, .. } = pat else { binders.clear(); break };
-                let name = if name == "_" { format!("__{}_{i}", ctor.name) } else { name.clone() };
+                let name = if name == "_" { format!("__{ctor_name}_{i}") } else { name.clone() };
                 binders.push(name);
             }
-            if binders.len() != ctor.fields.len() {
+            if binders.len() != field_tys.len() {
                 continue;
             }
             let mut params = decl.params.clone();
             let fields: Vec<heather_syntax::Param> = binders
                 .iter()
-                .zip(&ctor.fields)
-                .map(|(name, (_, ty))| heather_syntax::Param {
+                .zip(field_tys)
+                .map(|(name, ty)| heather_syntax::Param {
                     name: name.clone(),
-                    ty: crate::traits::subst_ty(&ty_args, ty),
+                    ty: ty.clone(),
                     implicit: false,
                     is_self: false,
                     ..decl.params[at].clone()
@@ -379,11 +389,11 @@ impl Elaborator {
                 .collect();
             params.splice(at..=at, fields);
             let ctor_expr = if binders.is_empty() {
-                var(&ctor.name, span)
+                var(ctor_name, span)
             } else {
                 Expr {
                     kind: ExprKind::App {
-                        head: Box::new(var(&ctor.name, span)),
+                        head: Box::new(var(ctor_name, span)),
                         args: binders.iter().map(|b| var(b, span)).collect(),
                         named: Vec::new(),
                         explicit: false,
@@ -393,12 +403,11 @@ impl Elaborator {
                 }
             };
             let lhs = crate::measure::subst(&call(decl, span), &[(scrut_name.as_str(), &ctor_expr)], &mut Vec::new());
-            let rhs = if base == decl.name {
-                arm.body.clone()
-            } else {
-                crate::measure::subst(&arm.body, &[(base.as_str(), &qualified)], &mut Vec::new())
-            };
-            let mut eq = theorem(decl, format!("{unfold}_{}", ctor.name), lhs, rhs, span);
+            // The arm may still name the scrutinee, which is now the
+            // constructor application.
+            let rhs = crate::measure::subst(&arm.body, &[(scrut_name.as_str(), &ctor_expr)], &mut Vec::new());
+            let rhs = if base == decl.name { rhs } else { crate::measure::subst(&rhs, &[(base.as_str(), &qualified)], &mut Vec::new()) };
+            let mut eq = theorem(decl, format!("{unfold}_{ctor_name}"), lhs, rhs, span);
             eq.params = params;
             self.elab_decl_one(&eq, None)?;
             made.push(eq.name);
