@@ -4715,6 +4715,9 @@ impl Parser {
             // writes it has one — but a rung had to be chosen and this is the
             // one its shape asks for.
             TokKind::Bullet => Some(("∙", 7, 8)),
+            // `⊓` binds tighter than `⊔`, as `*` does `+`: the lattice's
+            // two operations read like the semiring's.
+            TokKind::Meet => Some(("⊓", 7, 8)),
             _ => None,
         }
     }
@@ -4735,6 +4738,7 @@ impl Parser {
             TokKind::PipePipe => Some("||"),
             TokKind::Bullet => Some("∙"),
             TokKind::Join => Some("⊔"),
+            TokKind::Meet => Some("⊓"),
             TokKind::Approx => Some("≈"),
             TokKind::LtEq => Some("<="),
             TokKind::Lt => Some("<"),
@@ -6926,6 +6930,23 @@ mod tests {
         let (_, args, _) = as_call(&k);
         assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "≈"));
         assert!(matches!(&args[1].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊔"));
+    }
+
+    #[test]
+    fn meet_binds_tighter_than_join() {
+        // `a ⊔ b ⊓ c ≈ d` is `(a ⊔ (b ⊓ c)) ≈ d`, and `⊓` is left-associative.
+        let k = body("a⊔b⊓c≈d");
+        let (_, args, _) = as_call(&k);
+        let (join, operands, _) = as_call(&args[0].kind);
+        assert_eq!(join, "⊔");
+        assert_eq!(as_call(&operands[1].kind).0, "⊓");
+        let k = body("a⊓b⊓c");
+        let (meet, operands, _) = as_call(&k);
+        assert_eq!(meet, "⊓");
+        assert_eq!(as_call(&operands[0].kind).0, "⊓");
+        let k = body("f(⊓)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊓"));
     }
 
     // -- binder symbols (issues/binder-symbol-as-notation.md) --------------

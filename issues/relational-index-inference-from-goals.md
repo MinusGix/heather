@@ -3,7 +3,7 @@ title: Infer relation and operation indices from relational theorem goals
 status: closed
 labels: [elaboration,relations,inference,ergonomics]
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-11-02
 ---
 
 A compact Mergeable(≈, ⊔) theorem checks, but calling merge_twice_auto(known, incoming) at SameMembers((known ++ incoming) ++ incoming, known ++ incoming) leaves an unresolved relation/operation index and cannot resolve the dictionary. Original reproducer, now a positive regression: `relational_notation_infers_scoped_and_concrete_indices` in `lib_setoid_mergeable`. Infer only indices determined by the expected relation and operation applications or scoped evidence; never pick a default relation from the carrier. Cover concrete list use, locally constrained use, two relations/operations on one carrier, and an underdetermined call that still requests an explicit choice. Diagnostics should name the mathematical indices instead of generated #constraint/#op names.
@@ -52,3 +52,4 @@ higher-order inference remains with [[elab-unifier-completeness]].
 ## Log
 
 - 2026-09-05: Implemented expected-goal index inference, preserving named relations before reduction and matching local or type-specialized rigid heads. Added recent-declaration and refusal regressions, readable symbolic diagnostics, and the concise list-client documentation. Final furnace run -- scripts/test passed: 2,355 tests, 0 failed, 5 ignored.
+- 2026-11-02: The argument-side twin is [[index-inference-through-unfolding]]: a hypothesis typed by a carrier's definition (`Rat::Same(x, y)`) does not pin a generic theorem's indices even when it unfolds to the statement.

@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,mathematics,locale-theory,order,research]
 area: mathematics
 created: 2026-09-02
-updated: 2026-10-23
+updated: 2026-11-02
 ---
 
 Build the point-free foundation needed before localic real numbers: complete
@@ -36,3 +36,4 @@ as maps only as a derived notion; a locale is not defined by its points.
   cover spaces (arXiv:2412.20835) are a point-set alternative: completing `Q`
   by Cauchy filters gives the Dedekind reals, cover maps `R → R` match locale
   morphisms, and compactness reads "every Cauchy cover has a finite subcover".
+- 2026-11-02: The finitary vocabulary this assumes now exists (`lib/std/algebra/lattice.hthr`, docs/lattice-structure-design.md): meets, joins, lattices and bounds over `PartialOrderRel(≈, ≤)`, relation-indexed, so a frame of opens can be ordered modulo a setoid with no extensionality. Distributivity is not a class yet; a frame would add it with its arbitrary joins.

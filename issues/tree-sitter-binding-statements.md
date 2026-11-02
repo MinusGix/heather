@@ -21,3 +21,7 @@ The `varies A` clause on `inductive`/`record`/`codata`
 (docs/lambda-carrier-instances-design.md §7.1, rule `varies_clause`) is in
 `grammar.js` and the inventory since 2026-11-02 and waits on the same
 regeneration; add a corpus case for it too.
+
+## Log
+
+- 2026-11-02: `⊓` (the meet, multiplicative rung) joined `grammar.js`, the inventory and both `highlights.scm` on 2026-11-02 and waits on the same regeneration. `tree-sitter-cli` installs in the cloud container now (`npm install` in `tree-sitter-heather/` succeeded), but `tree-sitter generate` stops on the current `grammar.js` before reaching the new symbol: `Unresolved conflict for symbol sequence: 'generate' '{' if_expression • '}'`, between `statement_form` and `_expression` (the statement `if` the imperative-statements round added). That conflict needs a precedence or a `conflicts` entry first.

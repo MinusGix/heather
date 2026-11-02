@@ -359,7 +359,7 @@ module.exports = grammar({
       ...headBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...headBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...headBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...headBinary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...headBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...headBinary($, ['^'], PREC.POWER, 'right'),
     ),
 
@@ -422,7 +422,7 @@ module.exports = grammar({
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...typeBinary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...typeBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...typeBinary($, ['^'], PREC.POWER, 'right'),
     ),
     declaration_quantified_type: $ => prec.right(seq(
@@ -457,7 +457,7 @@ module.exports = grammar({
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left', $._annotation_type),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left', $._annotation_type),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left', $._annotation_type),
-      ...typeBinary($, ['*', '∙'], PREC.MUL, 'left', $._annotation_type),
+      ...typeBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left', $._annotation_type),
       ...typeBinary($, ['^'], PREC.POWER, 'right', $._annotation_type),
     ),
     annotation_quantified_type: $ => prec.right(seq(
@@ -678,11 +678,11 @@ module.exports = grammar({
       ...binary($, ['||'], PREC.BOOL_OR, 'left'),
       ...binary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...binary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...binary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...binary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...binary($, ['^'], PREC.POWER, 'right'),
     ),
 
-    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '≈', '<=', '<', '^', '⁻¹'),
+    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '⊓', '≈', '<=', '<', '^', '⁻¹'),
     // These words introduce a special form only with their fixed follower in
     // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.

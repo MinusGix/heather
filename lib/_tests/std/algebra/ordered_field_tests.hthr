@@ -250,3 +250,38 @@ theorem strict_mixed_refused(x, y, z: A, h1: x < y, h2: y <= z): x < z {
     calc { x < y := h1, <= z := h2, }
 }
 }
+
+// ---------------------------------------------------------------------------
+// Cancellation (issues/cancellative-algebra-api.md). Addition cancels with no
+// side condition at every ordered additive monoid, `Nat` included; a factor
+// cancels when it is positive (any ordered semiring) or apart from zero (any
+// ordered ring).
+theorem nat_add_cancel(x, y, z: Nat, h: x + z = y + z): x = y { OrderedAddMonoid::add_cancel_r(x, y, z, h) }
+theorem nat_add_le_cancel(x, y, z: Nat, h: z + x <= z + y): x <= y { OrderedAddMonoid::add_le_cancel_l(x, y, z, h) }
+theorem rat_add_cancel(x, y, z: Rat, h: z + x ≈ z + y): x ≈ y { OrderedAddMonoid::add_cancel_l(x, y, z, h) }
+theorem nat_mul_cancel_pos(x, y, z: Nat, hz: 0 < z, h: z * x = z * y): x = y { OrderedSemiring::mul_cancel_pos_l(x, y, z, hz, h) }
+theorem dyadic_mul_cancel_pos(x, y, z: Dyadic, hz: 0 < z, h: x * z ≈ y * z): x ≈ y { OrderedSemiring::mul_cancel_pos_r(x, y, z, hz, h) }
+theorem int_mul_le_cancel(x, y, z: Int, hz: OfNat(0) < z, h: z * x <= z * y): x <= y { OrderedSemiring::mul_le_cancel_pos_l(x, y, z, hz, h) }
+theorem int_mul_cancel_neg(x, y: Int, h: NegSucc(2) * x = NegSucc(2) * y): x = y {
+    OrderedRing::mul_cancel_apart_l(x, y, NegSucc(2), Inl(Int::negsucc_lt_ofnat(2, 0)), h)
+}
+theorem creal_mul_cancel_apart(x, y, z: CReal, hz: ApartBy(CReal::Lt, z, 0), h: x * z ≈ y * z): x ≈ y {
+    OrderedRing::mul_cancel_apart_r(x, y, z, hz, h)
+}
+
+// The carriers' own nonzero forms, where deciding the sign turns `≠ 0` into
+// positive or apart.
+theorem nat_mul_cancel_ne(x, y, z: Nat, hz: ¬(z = 0), h: x * z = y * z): x = y { x.mul_cancel_r(y, z, hz, h) }
+theorem int_mul_cancel_ne(x, y, z: Int, hz: ¬(z = OfNat(0)), h: z * x = z * y): x = y { z.mul_cancel_l(x, y, hz, h) }
+
+// The customer: cross-multiplication equality is transitive through a
+// positive middle factor, which is `Rat::same_trans` at `Int`.
+theorem int_cross_trans(a, b, c, d, e, f: Int, hd: OfNat(0) < d, h1: a * d ≈ c * b, h2: c * f ≈ e * d): a * f ≈ e * b {
+    OrderedSemiring::cross_same_trans(a, b, c, d, e, f, hd, h1, h2)
+}
+
+// Without a side condition multiplication does not cancel: a zero factor
+// equates everything.
+theorem nat_mul_not_cancellative(): ¬((x, y, z: Nat) → z * x = z * y → x = y) {
+    λ h => omega(h(0, 1, 0, omega))
+}

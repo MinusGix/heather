@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,algebra,setoids,design]
 area: mathematics
 milestone: [math-classes]
 created: 2026-09-04
-updated: 2026-10-23
+updated: 2026-11-02
 ---
 
 Decision: reusable algebraic theory should be relation-indexed. The current
@@ -123,3 +123,4 @@ style. **[[algebraic-theory-composition]]** owns its underlying dictionary rules
 - 2026-10-20: The relational semigroup is now `SemigroupRel`, so a module imports `algebra` and `algebra_rel` together ([[rat-numerals-and-semigroup-clash]]); siblings follow the suffix.
 - 2026-10-20: [[semiring-ring-structure-api]] adds `MonoidRel`, `CommMonoidRel` and `GroupRel` to `algebra_rel` and the two-operation layers in `lib/std/algebra/semiring.hthr`, with `Rat` a `CommRing` under `Rat::Same` and `Nat`/`Int` under `RelId` (`designation ≈ at Nat/Int := RelId`, so identity carriers state the generic theorems with `=`).
 - 2026-10-23: Every CommRing instance (Int, Rat, CReal, Dyadic) re-proves zero_mul/mul_zero that the additive group implies; a child class implementing inherited fields would remove that, see [[class-inherited-field-implementations]] (Arend's partial implementations, docs/arend-survey.md §4).
+- 2026-11-02: Lattices landed relation-indexed (docs/lattice-structure-design.md): `PartialOrderRel(≈, ≤)` and the meet/join classes take `≈` as an index, so `Nat`/`Int` are lattices at `RelId` (laws read as `=` via the `≈` designation) and `Dyadic` modulo `Dyadic::Same`. The algebraic face is the relation-indexed `Mergeable`. Cancellation (ordered-algebra-design §6) is stated modulo `≈` too.
