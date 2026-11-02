@@ -150,6 +150,15 @@ record ArmInfo { ctor: String, body: Handle }
 
 record MatchInfo { scrut: Handle, arms: List<ArmInfo>, args: List<Handle> }
 
+// A term as a head applied to arguments, as `Spine` answers it: every
+// argument in order, implicit ones included, each with whether the
+// function's type at it is dependent (its codomain mentions it, as a type
+// argument's does). A term that is no application is its own head with no
+// arguments.
+record SpineArg { arg: Handle, dependent: Bool }
+
+record SpineInfo { head: Handle, args: List<SpineArg> }
+
 // ---------------------------------------------------------------------------
 // Declarations, as a generator builds them (design §19).
 //
@@ -259,6 +268,11 @@ inductive Req {
     // computation and the evidence rules, search rules last. Refused, with
     // the search's trace, when nothing answers; a refusal leaves nothing.
     Synth(goal: Handle),
+    // The term `h` stands for as a head applied to arguments, read off its
+    // applications with nothing reduced (`SpineInfo`). `View` lists only the
+    // arguments a call writes; this lists them all, as the kernel has them.
+    // Refused for a type.
+    Spine(h: Handle),
 }
 
 inductive Never {}
@@ -291,6 +305,7 @@ fn Resp(r: Req) → Type {
         Body(_) => Checked<Handle>,
         Arms(_) => Checked<MatchInfo>,
         Synth(_) => Checked<Handle>,
+        Spine(_) => Checked<SpineInfo>,
     }
 }
 
@@ -360,6 +375,7 @@ fn body(g: GlobalRef) → Tac<Checked<Handle>> { Ask(Body(g), λ c => Pure(c)) }
 
 fn arms(h: Handle) → Tac<Checked<MatchInfo>> { Ask(Arms(h), λ c => Pure(c)) }
 fn synth(goal: Handle) → Tac<Checked<Handle>> { Ask(Synth(goal), λ c => Pure(c)) }
+fn spine(h: Handle) → Tac<Checked<SpineInfo>> { Ask(Spine(h), λ c => Pure(c)) }
 
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
@@ -384,6 +400,7 @@ inductive Answer {
     ACtors(c: Checked<List<CtorInfo>>),
     AHoles(c: Checked<List<Handle>>),
     AArms(c: Checked<MatchInfo>),
+    ASpine(c: Checked<SpineInfo>),
 }
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
@@ -414,6 +431,7 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Body(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Arms(_) => match a { AArms(c) => Fits(c), _ => Mismatch },
         Synth(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Spine(_) => match a { ASpine(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -769,7 +787,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`. 10: `Hole`. 11: `Mark`.
 // 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
-// 22: `Body`. 23: `Arms`. 24: `Synth`.
+// 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -798,6 +816,7 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Body(_) => 22,
             Arms(_) => 23,
             Synth(_) => 24,
+            Spine(_) => 25,
         },
     }
 }
@@ -845,6 +864,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Body(g) => g.id,
             Arms(h) => h.id,
             Synth(goal) => goal.id,
+            Spine(h) => h.id,
             _ => 0,
         },
     }
@@ -1171,6 +1191,20 @@ fn host_holes_next(a: Answer, h: Nat) → Answer {
 }
 
 fn host_no_holes(why: String) → Answer { AHoles(Refused(why)) }
+
+fn host_spine(head: Nat) → Answer { ASpine(Accepted(SpineInfo(Handle(head), []))) }
+
+fn host_spine_arg(a: Answer, h: Nat, dependent: Nat) → Answer {
+    match a {
+        ASpine(c) => match c {
+            Accepted(sp) => ASpine(Accepted(SpineInfo(sp.head, sp.args ++ [SpineArg(Handle(h), bool_of(dependent))]))),
+            Refused(_) => a,
+        },
+        _ => a,
+    }
+}
+
+fn host_no_spine(why: String) → Answer { ASpine(Refused(why)) }
 
 fn host_nat(n: Nat) → Answer { ANat(n) }
 

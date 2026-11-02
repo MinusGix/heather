@@ -1,0 +1,644 @@
+// `grind`, round 1: congruence closure over the goal's equations, with a
+// certified proof when it closes the goal and the state it built when it does
+// not (issues/grind-port.md, docs/grind-design.md).
+//
+// `by grind()` proves an equation `l = r` from the equations among the goal's
+// locals; `by grind_with([e, …])` adds the equations the terms `e` prove
+// (a lemma at its instance, `List::append_nil(xs)`, or a local's
+// consequence, `h(3)`). The tactic builds an e-graph: every term the
+// equations and the goal mention, its subterms, and their classes under the
+// equations closed by congruence (`f(a) = g(b)` once `f = g` and `a = b`).
+// Terms are read as the kernel has them, a head applied to arguments
+// (`Spine`): an argument the function's type is dependent at (a type
+// argument) is part of the head and compared as it is, every other one is a
+// position congruence reads. A constructor value is read as its constructor
+// applied to its fields. A term read no further is an atom, and two atoms
+// are one node when they are the same global, local or literal, or are
+// definitionally equal (`Defeq`).
+//
+// When the two sides land in one class, the proof is the path between them in
+// the graph: each step is an equation it was given (or its `sym`) or a
+// congruence (`cong`, `congr_fun`, `congr` below, over the explanations of
+// the steps' parts), joined by `trans`. The kernel checks the term at the
+// `by`; the graph is never trusted.
+//
+// When they do not, the failure is the graph itself: the class of each side,
+// every class of more than one term with its members, and which locals were
+// read as equations and which were not. One equation between a member of each
+// side's class closes the goal; the report is there so a reader (a person, or
+// a model at the hint interface) can name it and rerun with it as a hint.
+//
+// Not yet: lemmas with binders instantiated by e-matching (`grind_with`
+// takes them at their instances), case splits, constructor injectivity and
+// disjointness, disequalities, and relations other than `=`. Each is a
+// later round of docs/grind-design.md §6.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+import derive;
+import pair;
+
+// Congruence of an application in both places, and in the function alone.
+// (`cong`, the prelude's, is the argument alone.)
+theorem congr<A, B>({f: A → B}, {g: A → B}, {a: A}, {b: A}, hf: f = g, ha: a = b): f(a) = g(b) {
+    j(hf, λ h q => f(a) = h(b), j(ha, λ y q => f(a) = f(y), refl))
+}
+
+theorem congr_fun<A, B>({f: A → B}, {g: A → B}, {a: A}, hf: f = g): f(a) = g(a) {
+    j(hf, λ h q => f(a) = h(a), refl)
+}
+
+// ---------------------------------------------------------------------------
+// The graph.
+
+// How an atom is compared: by the global, local or literal it is (decided
+// here), or, for a constructor function and any other term, by `Defeq`
+// against the atoms of the same key.
+inductive AtomKey { KGlobal(id: Nat), KLocal(id: Nat), KLit(n: Nat), KCtor(ty: Nat, i: Nat), KOther }
+
+// What a node stands for: an atom, or `f` applied to `a`, where `dependent`
+// says the function's type is dependent at `a`.
+inductive GKind { GAtom(key: AtomKey, h: Handle), GApp(f: Nat, a: Nat, dependent: Bool) }
+
+// A node: what it is, the term as a tactic cites it, and whether it is a term
+// the equations or the goal mention (a partial application inside one is
+// not, and is left out of the report).
+record GNode { kind: GKind, expr: Expr, whole: Bool }
+
+// Why two nodes are equal: an equation given, by its proof and its name, or
+// congruence of the two applications.
+inductive Why { ByFact(proof: Expr, name: String), ByCong }
+
+record Edge { u: Nat, v: Nat, why: Why }
+
+// The nodes, each one's class (its representative's number), and the edges:
+// one per merge of two classes, so they form a forest and the path between
+// two nodes of one class is unique.
+record Graph { nodes: List<GNode>, cls: List<Nat>, edges: List<Edge> }
+
+record Interned { g: Graph, node: Nat }
+
+// The graph with the facts read: a note for each equation read or set aside,
+// and the names of the locals that are no equation.
+record Facts { g: Graph, read: List<Note>, skipped: List<String> }
+
+fn graph_empty() → Graph { Graph([], [], []) }
+
+fn nat_or(o: Option<Nat>, d: Nat) → Nat { match o { Some(n) => n, None => d } }
+
+fn class_of(g: Graph, i: Nat) → Nat { nat_or(g.cls.nth(i), i) }
+
+fn node_at(g: Graph, i: Nat) → Option<GNode> { g.nodes.nth(i) }
+
+fn expr_at(g: Graph, i: Nat) → Expr {
+    match node_at(g, i) { Some(n) => n.expr, None => NatLit(0) }
+}
+
+// A new node, in a class of its own.
+fn add_node(g: Graph, n: GNode) → Interned {
+    let i = g.nodes.len();
+    Interned(Graph(g.nodes ++ [n], g.cls ++ [i], g.edges), i)
+}
+
+// Mark node `i` as the term `h`, mentioned whole: the report and the proof
+// cite it by `h`, as it was written, rather than by the node's structure.
+fn mark_whole(g: Graph, i: Nat, h: Handle) → Graph {
+    Graph(g.nodes.update(i, λ n => GNode(n.kind, Hd(h), True)), g.cls, g.edges)
+}
+
+// The application node of `f` to `a`, made once.
+fn app_among(ns: List<GNode>, f: Nat, a: Nat, i: Nat) → Option<Nat> {
+    match ns {
+        Nil => None,
+        Cons(n, rest) => match n.kind {
+            GApp(f2, a2, _) => match f.same(f2).and(a.same(a2)) {
+                True => Some(i),
+                False => app_among(rest, f, a, Succ(i)),
+            },
+            GAtom(_, _) => app_among(rest, f, a, Succ(i)),
+        },
+    }
+}
+
+fn app_node(g: Graph, f: Nat, a: Nat, dependent: Bool) → Interned {
+    match app_among(g.nodes, f, a, 0) {
+        Some(i) => Interned(g, i),
+        None => add_node(g, GNode(GApp(f, a, dependent), App(expr_at(g, f), expr_at(g, a)), False)),
+    }
+}
+
+// Two keys: `Some(b)` when the keys decide whether the atoms are one, `None`
+// when `Defeq` does.
+fn key_decides(a: AtomKey, b: AtomKey) → Option<Bool> {
+    match a {
+        KGlobal(x) => match b { KGlobal(y) => Some(x.same(y)), _ => Some(False) },
+        KLocal(x) => match b { KLocal(y) => Some(x.same(y)), _ => Some(False) },
+        KLit(x) => match b { KLit(y) => Some(x.same(y)), _ => Some(False) },
+        KCtor(t, i) => match b { KCtor(u, k) => match t.same(u).and(i.same(k)) { True => None, False => Some(False) }, _ => Some(False) },
+        KOther => match b { KOther => None, _ => Some(False) },
+    }
+}
+
+// The atom an atom of `key` is decided to be, and the atoms `Defeq` has to
+// compare it with.
+record AtomSearch { found: Option<Nat>, ask: List<Nat> }
+
+fn atom_search(ns: List<GNode>, key: AtomKey, h: Handle, i: Nat, ask: List<Nat>) → AtomSearch {
+    match ns {
+        Nil => AtomSearch(None, ask),
+        Cons(n, rest) => match n.kind {
+            GApp(_, _, _) => atom_search(rest, key, h, Succ(i), ask),
+            GAtom(k, h2) => match key_decides(key, k) {
+                Some(b) => match b {
+                    True => AtomSearch(Some(i), []),
+                    False => atom_search(rest, key, h, Succ(i), ask),
+                },
+                None => match h.id.same(h2.id) {
+                    True => AtomSearch(Some(i), []),
+                    False => atom_search(rest, key, h, Succ(i), ask ++ [i]),
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Closing the graph under congruence.
+
+// Merge the classes of `u` and `v`, recording why; nothing if they are one.
+fn graph_merge(g: Graph, u: Nat, v: Nat, why: Why) → Graph {
+    let cu = class_of(g, u);
+    let cv = class_of(g, v);
+    match cu.same(cv) {
+        True => g,
+        False => Graph(g.nodes, g.cls.map(λ c => match c.same(cv) { True => cu, False => c }), g.edges ++ [Edge(u, v, why)]),
+    }
+}
+
+// An application's signature: the classes of its function and argument.
+record Sig { node: Nat, f: Nat, a: Nat }
+
+fn sigs_from(g: Graph, ns: List<GNode>, i: Nat) → List<Sig> {
+    match ns {
+        Nil => [],
+        Cons(n, rest) => match n.kind {
+            GApp(f, a, dependent) => match dependent {
+                False => Cons(Sig(i, class_of(g, f), class_of(g, a)), sigs_from(g, rest, Succ(i))),
+                True => sigs_from(g, rest, Succ(i)),
+            },
+            GAtom(_, _) => sigs_from(g, rest, Succ(i)),
+        },
+    }
+}
+
+// The first earlier application with the same signature.
+fn sig_twin(seen: List<Sig>, s: Sig) → Option<Nat> {
+    match seen {
+        Nil => None,
+        Cons(t, rest) => match t.f.same(s.f).and(t.a.same(s.a)) {
+            True => Some(t.node),
+            False => sig_twin(rest, s),
+        },
+    }
+}
+
+// One pass: every application merged with the first earlier one of the same
+// signature. Signatures are read at the start of the pass; classes only grow,
+// so one that matched then still does.
+fn congruence_pass(g: Graph, sigs: List<Sig>, seen: List<Sig>) → Graph {
+    match sigs {
+        Nil => g,
+        Cons(s, rest) => match sig_twin(seen, s) {
+            Some(t) => congruence_pass(graph_merge(g, t, s.node, ByCong), rest, seen),
+            None => congruence_pass(g, rest, Cons(s, seen)),
+        },
+    }
+}
+
+// Passes until one merges nothing.
+fn close_graph(fuel: Nat, g: Graph) → Graph {
+    match fuel {
+        Zero => g,
+        Succ(f) => {
+            let g2 = congruence_pass(g, sigs_from(g, g.nodes, 0), []);
+            match g2.edges.len().same(g.edges.len()) {
+                True => g2,
+                False => close_graph(f, g2),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Explaining an equality: the path between two nodes in the forest of edges.
+
+// One step along an edge, from its `u` to its `v` when `forward`.
+record Step { edge: Edge, forward: Bool }
+
+// A node reached in the search, the steps that reached it (last first), and
+// the edge it was reached by (one past the last edge for the start).
+record Frame { at: Nat, path: List<Step>, came: Nat }
+
+fn step_to(e: Edge, from: Nat) → Option<Step> {
+    match e.u.same(from) {
+        True => Some(Step(e, True)),
+        False => match e.v.same(from) { True => Some(Step(e, False)), False => None },
+    }
+}
+
+fn step_end(s: Step) → Nat { match s.forward { True => s.edge.v, False => s.edge.u } }
+
+// The frames one edge away from `fr`, other than back along the edge it came by.
+fn neighbours(es: List<Edge>, k: Nat, fr: Frame, stack: List<Frame>) → List<Frame> {
+    match es {
+        Nil => stack,
+        Cons(e, rest) => match k.same(fr.came) {
+            True => neighbours(rest, Succ(k), fr, stack),
+            False => match step_to(e, fr.at) {
+                Some(s) => neighbours(rest, Succ(k), fr, Cons(Frame(step_end(s), Cons(s, fr.path), k), stack)),
+                None => neighbours(rest, Succ(k), fr, stack),
+            },
+        },
+    }
+}
+
+// Depth first; the edges form a forest, so the search ends.
+fn path_search(fuel: Nat, es: List<Edge>, stack: List<Frame>, to: Nat) → Option<List<Step>> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match stack {
+            Nil => None,
+            Cons(fr, rest) => match fr.at.same(to) {
+                True => Some(fr.path.rev()),
+                False => path_search(f, es, neighbours(es, 0, fr, rest), to),
+            },
+        },
+    }
+}
+
+fn path_between(g: Graph, a: Nat, b: Nat) → Option<List<Step>> {
+    let n = g.edges.len();
+    path_search(Succ(Succ(n + n)), g.edges, [Frame(a, [], n)], b)
+}
+
+// The lemmas a proof cites.
+record GrindLaws { trans: GlobalRef, sym: GlobalRef, cong: GlobalRef, congr: GlobalRef, congr_fun: GlobalRef, rfl: GlobalRef }
+
+fn sym_of(l: GrindLaws, p: Expr) → Expr { apps(Global(l.sym), [Blank, Blank, Blank, p]) }
+
+fn trans_of(l: GrindLaws, p: Expr, q: Expr) → Expr { apps(Global(l.trans), [Blank, Blank, Blank, Blank, p, q]) }
+
+fn rfl_of(l: GrindLaws, e: Expr) → Expr { apps(Global(l.rfl), [Blank, e]) }
+
+// What a proof is asked to show: one node equal to another, or the steps of
+// a path joined by `trans`. One function proves both, so the explanation of a
+// congruence step can ask for its parts' (no mutual recursion between
+// declarations).
+inductive Explain { Equal(a: Nat, b: Nat), Steps(ss: List<Step>) }
+
+// The two applications of a congruence step, from the step's start.
+record CongPair { f1: Nat, a1: Nat, f2: Nat, a2: Nat }
+
+fn cong_pair(g: Graph, from: Nat, to: Nat) → Option<CongPair> {
+    match node_at(g, from) {
+        None => None,
+        Some(n1) => match node_at(g, to) {
+            None => None,
+            Some(n2) => match n1.kind {
+                GAtom(_, _) => None,
+                GApp(f1, a1, _) => match n2.kind {
+                    GAtom(_, _) => None,
+                    GApp(f2, a2, _) => Some(CongPair(f1, a1, f2, a2)),
+                },
+            },
+        },
+    }
+}
+
+fn opt_bind2(x: Option<Expr>, y: Option<Expr>, k: Expr → Expr → Expr) → Option<Expr> {
+    match x { None => None, Some(a) => match y { None => None, Some(b) => Some(k(a, b)) } }
+}
+
+fn opt_map(x: Option<Expr>, k: Expr → Expr) → Option<Expr> {
+    match x { None => None, Some(a) => Some(k(a)) }
+}
+
+fn prove(fuel: Nat, l: GrindLaws, g: Graph, q: Explain) → Option<Expr> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match q {
+            Equal(a, b) => match a.same(b) {
+                True => Some(rfl_of(l, expr_at(g, a))),
+                False => match path_between(g, a, b) {
+                    None => None,
+                    Some(ss) => prove(f, l, g, Steps(ss)),
+                },
+            },
+            Steps(ss) => match ss {
+                Nil => None,
+                Cons(s, rest) => {
+                    let from: Nat = match s.forward { True => s.edge.u, False => s.edge.v };
+                    let to = step_end(s);
+                    let first: Option<Expr> = match s.edge.why {
+                        ByFact(p, _) => match s.forward { True => Some(p), False => Some(sym_of(l, p)) },
+                        ByCong => match cong_pair(g, from, to) {
+                            None => None,
+                            Some(c) => match c.f1.same(c.f2) {
+                                True => opt_map(prove(f, l, g, Equal(c.a1, c.a2)), λ pa =>
+                                    apps(Global(l.cong), [Blank, Blank, expr_at(g, c.f1), Blank, Blank, pa])),
+                                False => match c.a1.same(c.a2) {
+                                    True => opt_map(prove(f, l, g, Equal(c.f1, c.f2)), λ pf =>
+                                        apps(Global(l.congr_fun), [Blank, Blank, expr_at(g, c.f1), expr_at(g, c.f2), expr_at(g, c.a1), pf])),
+                                    False => opt_bind2(prove(f, l, g, Equal(c.f1, c.f2)), prove(f, l, g, Equal(c.a1, c.a2)), λ pf pa =>
+                                        apps(Global(l.congr), [Blank, Blank, expr_at(g, c.f1), expr_at(g, c.f2), expr_at(g, c.a1), expr_at(g, c.a2), pf, pa])),
+                                },
+                            },
+                        },
+                    };
+                    match rest {
+                        Nil => first,
+                        Cons(_, _) => opt_bind2(first, prove(f, l, g, Steps(rest)), λ p r => trans_of(l, p, r)),
+                    }
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The report when the sides are not in one class.
+
+fn grind_num(n: Nat) → String { "#" ++ decimal_name(Succ(n), n) }
+
+// The whole terms of class `c`.
+fn members(ns: List<GNode>, g: Graph, c: Nat, i: Nat) → List<Expr> {
+    match ns {
+        Nil => [],
+        Cons(n, rest) => match n.whole.and(class_of(g, i).same(c)) {
+            True => Cons(n.expr, members(rest, g, c, Succ(i))),
+            False => members(rest, g, c, Succ(i)),
+        },
+    }
+}
+
+fn member_notes(es: List<Expr>, c: String) → List<Note> {
+    match es {
+        Nil => [],
+        Cons(e, rest) => Cons(Under(At(e, Tried("member", "of class " ++ c))), member_notes(rest, c)),
+    }
+}
+
+fn exprs_count(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => Succ(exprs_count(rest)) } }
+
+// Every class of more than one whole term, by its representative, once.
+fn class_notes(g: Graph, cs: List<Nat>, i: Nat, done: List<Nat>) → List<Note> {
+    match cs {
+        Nil => [],
+        Cons(c, rest) => match c.same(i).and(done.filter(λ d => d.same(c)).len().same(0)) {
+            False => class_notes(g, rest, Succ(i), done),
+            True => {
+                let ms = members(g.nodes, g, c, 0);
+                match exprs_count(ms) {
+                    Zero => class_notes(g, rest, Succ(i), Cons(c, done)),
+                    Succ(k) => match k {
+                        Zero => class_notes(g, rest, Succ(i), Cons(c, done)),
+                        Succ(_) => Cons(Tried("class " ++ grind_num(c), decimal_name(Succ(Succ(k)), Succ(k)) ++ " terms"), member_notes(ms, grind_num(c)))
+                            ++ class_notes(g, rest, Succ(i), Cons(c, done)),
+                    },
+                }
+            },
+        },
+    }
+}
+
+// The names of the locals that are not equations, as one line.
+fn names_line(ns: List<String>) → String {
+    match ns {
+        Nil => "",
+        Cons(n, rest) => match rest { Nil => n, Cons(_, _) => n ++ ", " ++ names_line(rest) },
+    }
+}
+
+fn stuck_notes(g: Graph, l: Nat, r: Nat, fs: Facts) → List<Note> {
+    let cl = grind_num(class_of(g, l));
+    let cr = grind_num(class_of(g, r));
+    let skipped: List<Note> = match fs.skipped { Nil => [], Cons(_, _) => [Tried("not equations, not read", names_line(fs.skipped))] };
+    Cons(At(expr_at(g, l), Tried("the left side", "in class " ++ cl)),
+    Cons(At(expr_at(g, r), Tried("the right side", "in class " ++ cr)),
+        class_notes(g, g.cls, 0, []) ++ fs.read ++ skipped
+            ++ [Tried("to close it", "one more equation between a member of " ++ cl ++ " and a member of " ++ cr ++ ", as a hint: `grind_with([…])`")]))
+}
+
+// ---------------------------------------------------------------------------
+// Reading terms into the graph.
+
+fn atom_key(v: Head) → AtomKey {
+    match v {
+        HGlobal(g, _, args) => match args { Nil => KGlobal(g.id), Cons(_, _) => KOther },
+        HLocal(x, args) => match args { Nil => KLocal(x.id), Cons(_, _) => KOther },
+        HLit(n) => KLit(n),
+        _ => KOther,
+    }
+}
+
+// The first of `ask` that `Defeq` finds is `h`.
+fn atom_among(g: Graph, h: Handle, ask: List<Nat>) → Tac<Option<Nat>> {
+    match ask {
+        Nil => Pure(None),
+        Cons(i, rest) => defeq(Hd(h), expr_at(g, i)).bind(λ same => match same {
+            True => Pure(Some(i)),
+            False => atom_among(g, h, rest),
+        }),
+    }
+}
+
+// The atom node of `h`, read under `key`.
+fn atom(g: Graph, h: Handle, key: AtomKey) → Tac<Interned> {
+    let s = atom_search(g.nodes, key, h, 0, []);
+    match s.found {
+        Some(i) => Pure(Interned(g, i)),
+        None => atom_among(g, h, s.ask).bind(λ o => match o {
+            Some(i) => Pure(Interned(g, i)),
+            None => Pure(add_node(g, GNode(GAtom(key, h), Hd(h), False))),
+        }),
+    }
+}
+
+// The fields of a constructor value, as arguments of its function.
+fn field_args(hs: List<Handle>) → List<SpineArg> {
+    match hs { Nil => [], Cons(h, rest) => Cons(SpineArg(h, False), field_args(rest)) }
+}
+
+// A term read, marked as one the equations or the goal mention.
+fn whole(h: Handle, t: Tac<Interned>) → Tac<Interned> { t.bind(λ r => Pure(Interned(mark_whole(r.g, r.node, h), r.node))) }
+
+fn then(t: Tac<Interned>, k: Interned → Tac<Interned>) → Tac<Interned> { t.bind(k) }
+
+// A term, or the arguments still to apply to node `at`.
+inductive Intern { ITerm(h: Handle), IArgs(at: Nat, args: List<SpineArg>) }
+
+// A constructor value's function, when `Ctors` builds one.
+fn ctor_fn(cs: List<CtorInfo>, i: Nat) → Option<Handle> {
+    match cs.nth(i) { None => None, Some(c) => c.ctor }
+}
+
+// How a term whose spine has no arguments is read: as its constructor's
+// function applied to its fields, or as an atom.
+inductive Leaf { LCtor(ty: Nat, i: Nat, fields: List<Handle>), LAtom(key: AtomKey) }
+
+fn leaf_of(v: Head) → Leaf {
+    match v {
+        HCtor(ty, i, _, fields) => match fields { Nil => LAtom(KOther), Cons(_, _) => LCtor(ty.id, i, fields) },
+        _ => LAtom(atom_key(v)),
+    }
+}
+
+fn ctor_leaf(g: Graph, h: Handle, ty: Nat, i: Nat) → Tac<Option<Interned>> {
+    infer(Hd(h)).bind(λ c => match c {
+        Refused(_) => Pure(None),
+        Accepted(t) => ctors(t).bind(λ cs => match cs {
+            Refused(_) => Pure(None),
+            Accepted(infos) => match ctor_fn(infos, i) {
+                None => Pure(None),
+                Some(fh) => atom(g, fh, KCtor(ty, i)).bind(λ a => Pure(Some(a))),
+            },
+        }),
+    })
+}
+
+fn intern(fuel: Nat, g: Graph, t: Intern) → Tac<Interned> {
+    match fuel {
+        Zero => fail("grind: a term nests deeper than the reader's fuel", []),
+        Succ(f) => match t {
+            ITerm(h) => whole(h, spine(h).bind(λ c => match c {
+                Accepted(sp) => match sp.args {
+                    Cons(_, _) => view(sp.head).bind(λ v => atom(g, sp.head, atom_key(v))).bind(λ hd => intern(f, hd.g, IArgs(hd.node, sp.args))),
+                    Nil => view(h).bind(λ v => match leaf_of(v) {
+                        LAtom(key) => atom(g, h, key),
+                        LCtor(ty, i, fields) => ctor_leaf(g, h, ty, i).bind(λ o => match o {
+                            None => atom(g, h, KOther),
+                            Some(fnode) => intern(f, fnode.g, IArgs(fnode.node, field_args(fields))),
+                        }),
+                    }),
+                },
+                Refused(_) => atom(g, h, KOther),
+            })),
+            IArgs(at, args) => match args {
+                Nil => Pure(Interned(g, at)),
+                Cons(a, rest) => then(match a.dependent {
+                    True => view(a.arg).bind(λ v => atom(g, a.arg, atom_key(v))),
+                    False => intern(f, g, ITerm(a.arg)),
+                }, λ x => {
+                    let n = app_node(x.g, at, x.node, a.dependent);
+                    intern(f, n.g, IArgs(n.node, rest))
+                }),
+            },
+        },
+    }
+}
+
+fn read_term(g: Graph, h: Handle) → Tac<Interned> { intern(4096, g, ITerm(h)) }
+
+// Is `ty` an equation under binders (`(n: Nat) → f(n) = n`)?
+fn concludes_equation(fuel: Nat, ty: Handle) → Tac<Bool> {
+    match fuel {
+        Zero => Pure(False),
+        Succ(f) => view(ty).bind(λ v => match v {
+            HEq(_, _) => Pure(True),
+            HPi(_) => open(ty, "_").bind(λ c => match c {
+                Refused(_) => Pure(False),
+                Accepted(o) => concludes_equation(f, o.body),
+            }),
+            _ => Pure(False),
+        }),
+    }
+}
+
+// The two sides of an equation, as written or once in head normal form.
+fn sides_of(ty: Handle) → Tac<Option<Pair<Handle, Handle>>> {
+    view(ty).bind(λ v => match v {
+        HEq(l, r) => Pure(Some(Pair(l, r))),
+        _ => whnf(ty).bind(λ c => match c {
+            Refused(_) => Pure(None),
+            Accepted(w) => view(w).bind(λ wv => match wv {
+                HEq(l, r) => Pure(Some(Pair(l, r))),
+                _ => Pure(None),
+            }),
+        }),
+    })
+}
+
+// One fact: `proof` of the statement `ty`, called `name`.
+// A local that is no equation is only named in the report's last line; a
+// hint that is none has a line of its own.
+fn read_fact(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) → Tac<Facts> {
+    sides_of(ty).bind(λ o => match o {
+        None => concludes_equation(8, ty).bind(λ q => match q {
+            True => Pure(Facts(acc.g, acc.read ++ [Tried(name, "an equation under binders, not read: give it at an instance as a hint")], acc.skipped)),
+            False => match local {
+                True => Pure(Facts(acc.g, acc.read, acc.skipped ++ [name])),
+                False => Pure(Facts(acc.g, acc.read ++ [Tried(name, "not an equation, not read")], acc.skipped)),
+            },
+        }),
+        Some(p) => read_term(acc.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
+            Pure(Facts(graph_merge(y.g, x.node, y.node, ByFact(proof, name)), acc.read ++ [Tried(name, "read as an equation")], acc.skipped)))),
+    })
+}
+
+fn read_locals(acc: Facts, ls: List<LocalInfo>) → Tac<Facts> {
+    match ls {
+        Nil => Pure(acc),
+        Cons(l, rest) => read_fact(acc, Local(l.ref), l.name, l.ty, True).bind(λ a => read_locals(a, rest)),
+    }
+}
+
+fn read_hints(acc: Facts, hs: List<Expr>, k: Nat) → Tac<Facts> {
+    match hs {
+        Nil => Pure(acc),
+        Cons(e, rest) => infer(e).bind(λ c => match c {
+            Refused(why) => fail("grind: hint " ++ decimal_name(Succ(k), k) ++ " does not elaborate: " ++ why, []),
+            Accepted(ty) => read_fact(acc, e, "hint " ++ decimal_name(Succ(k), k), ty, False).bind(λ a => read_hints(a, rest, Succ(k))),
+        }),
+    }
+}
+
+fn law(name: String) → Tac<GlobalRef> { lookup(name).or_fail("grind: `" ++ name ++ "`: ") }
+
+fn grind_laws() → Tac<GrindLaws> {
+    law("trans").bind(λ t => law("sym").bind(λ s => law("cong").bind(λ c =>
+    law("grind::congr").bind(λ cr => law("grind::congr_fun").bind(λ cf => law("tactic::rfl").bind(λ r =>
+    Pure(GrindLaws(t, s, c, cr, cf, r))))))))
+}
+
+// Close the graph and prove `l = r` from it, or fail with what it holds.
+fn conclude(l: GrindLaws, fs: Facts, lhs: Nat, rhs: Nat) → Tac<Expr> {
+    let g = close_graph(Succ(fs.g.nodes.len()), fs.g);
+    match class_of(g, lhs).same(class_of(g, rhs)) {
+        False => fail("grind: the two sides are not in one class", stuck_notes(g, lhs, rhs, fs)),
+        True => match prove(Succ(Succ(g.nodes.len() * (g.edges.len() + 2))), l, g, Equal(lhs, rhs)) {
+            None => fail("grind: the two sides are in one class, but no path between them was found", []),
+            Some(p) => Pure(p),
+        },
+    }
+}
+
+// `grind_with(hints)`: prove the goal, an equation, from the equations among
+// its locals and the ones `hints` prove, closed under congruence.
+fn grind_with(hints: List<Expr>) → Tac<Expr> {
+    goal().bind(λ gl => sides_of(gl.target).bind(λ o => match o {
+        None => fail("grind: the goal is not an equation", [At(Hd(gl.target), Tried("the goal", "not an equation"))]),
+        Some(p) => grind_laws().bind(λ l =>
+            read_term(graph_empty(), p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
+            read_locals(Facts(y.g, [], []), gl.locals).bind(λ fs => read_hints(fs, hints, 0).bind(λ fs2 =>
+            conclude(l, fs2, x.node, y.node)))))),
+    }))
+}
+
+// `grind()`: `grind_with` with no hints.
+fn grind() → Tac<Expr> { grind_with([]) }

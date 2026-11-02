@@ -1,0 +1,55 @@
+// Probes of `lib/std/tactic/grind.hthr`: congruence closure over the goal's
+// equations and the hints, and its refusals, which report the graph. Tests,
+// not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import char; import string; import tactic; import grind;
+
+// Equations chained, and turned around.
+theorem chain(a, b, c, d: Nat, h1: a = b, h2: c = b, h3: c = d): a = d { by grind() }
+// Congruence: an argument, the function, both, and under several layers.
+theorem arg(f: Nat → Nat, a, b: Nat, h: a = b): f(a) = f(b) { by grind() }
+theorem fun_and_arg(f, g: Nat → Nat, a, b: Nat, hf: f = g, ha: a = b): f(a) = g(b) { by grind() }
+theorem two_args(f: Nat → Nat → Nat, a, b, c, d: Nat, h1: a = b, h2: c = d): f(a, c) = f(b, d) { by grind() }
+theorem partial(f: Nat → Nat → Nat, a, b, c: Nat, h1: a = b, h2: f(b, c) = c): f(a, c) = c { by grind() }
+// A fixed point reached through the graph rather than given: `f(a) = a`
+// makes `f(f(a))` a member of `a`'s class.
+theorem fixed_point(f: Nat → Nat, a: Nat, h: f(a) = a): f(f(f(a))) = a { by grind() }
+// An open element type, and type arguments read as part of the head.
+theorem open_type<A>(f: A → A, x, y: A, h: x = y): f(f(x)) = f(f(y)) { by grind() }
+theorem open_lists<A>(xs, ys, zs: List<A>, h: xs = ys): (xs ++ zs).len() = (ys ++ zs).len() { by grind() }
+// Constructor values, read as their constructor applied to the fields.
+theorem ctor_fields(x, y: Nat, xs, ys: List<Nat>, h1: x = y, h2: xs = ys): Cons(x, xs) = Cons(y, ys) { by grind() }
+theorem ctor_option<A>(x, y: A, h: x = y): Some(x) = Some(y) { by grind() }
+// Hints: a lemma at its instance, and a local's consequence.
+theorem hint_lemma(xs: List<Nat>): xs ++ [] = xs { by grind_with([List::append_nil(xs)]) }
+theorem hint_local(f: Nat → Nat, k: (n: Nat) → f(n) = n, a: Nat): f(f(a)) = a { by grind_with([k(a)]) }
+// The shape of `Format::down_of_le`'s two hand-built steps
+// (lib/std/num/float/eft.hthr), with the two lemmas as hints: a `trans` of a
+// `cong` and an instance, and the same again under a product.
+theorem down_of_le_steps(h, k, b, e: Nat, s: Succ(b) = (b - e) + Succ(e), hk: h = k * Nat::pow(2, Succ(b))): h = (k * Nat::pow(2, b - e)) * Nat::pow(2, Succ(e)) {
+    by grind_with([Nat::pow_add(2, b - e, Succ(e)), sym(k.mul_assoc(Nat::pow(2, b - e), Nat::pow(2, Succ(e))))])
+}
+// A checking position: the goal comes from a `let`'s annotation, and from
+// the codomain of a λ.
+theorem in_let(f: Nat → Nat, a, b: Nat, h: a = b): f(b) = f(a) {
+    let p: (f(a) = f(b)) = by grind();
+    sym(p)
+}
+fn under_lambda(f: Nat → Nat, a, b: Nat, h: a = b) → Nat → f(a) = f(b) { λ n => by grind() }
+
+// The two sides in different classes: the failure is the graph.
+// expect-error: grind: the two sides are not in one class
+theorem not_closed(f: Nat → Nat, a, b: Nat, h: f(a) = b): f(b) = a { by grind() }
+// An equation under binders is not instantiated (that is e-matching); the
+// report says so and asks for an instance.
+// expect-error: an equation under binders, not read
+theorem binders_not_read(f: Nat → Nat, k: (n: Nat) → f(n) = n, a: Nat): f(f(a)) = a { by grind() }
+// A congruence is not injectivity: `f(a) = f(b)` says nothing of `a` and `b`.
+// expect-error: grind: the two sides are not in one class
+theorem not_injective(f: Nat → Nat, a, b: Nat, h: f(a) = f(b)): a = b { by grind() }
+// Only equations are goals.
+// expect-error: grind: the goal is not an equation
+theorem not_equation(a, b: Nat, h: a = b): a <= b { by grind() }
+// A hint that is no equation is listed as not read.
+// expect-error: hint 0: not an equation, not read
+theorem order_hint(a, b, c: Nat, h: a <= b): a = c { by grind_with([h]) }
