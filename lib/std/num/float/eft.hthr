@@ -1323,3 +1323,614 @@ theorem Finite::two_product_exact({F: Format}, a, b, p, e: Finite(F), even: Bool
     let ee: (e.val() ≈ a.val() * b.val() - p.val()) = j(he, λ o _ => o.Exact(a.val() * b.val() - p.val()), Finite::two_product(a, b, p, even, mode, c, hc, range, is));
     Rat::le_antisymm(linarith(ee), linarith(ee))
 }
+
+// ---------------------------------------------------------------------------
+// Veltkamp splitting.
+
+// A float at or above `half · 2^(k+1)` half-units has exponent at least `k`.
+theorem Finite::bexp_ge({F: Format}, f: Finite(F), k: Nat, ge: (F.half() * Nat::pow(2, Succ(k))).int() <= f.H()): k <= f.bexp {
+    let e = Finite::H_of_nonneg(f, omega(ge));
+    let B = Nat::pow(2, Succ(f.bexp));
+    let u: (f.units() * 2 = f.mag * B) = f.mag.mul_assoc(Nat::pow(2, f.bexp), 2);
+    let gc = F.canonical_elim(f.mag, f.bexp, f.ok);
+    match k.le_dec(f.bexp) as λ _ => k <= f.bexp {
+        Inl(le) => le,
+        Inr(gt) => {
+            let pk: (Nat::pow(2, Succ(Succ(f.bexp))) <= Nat::pow(2, Succ(k))) = Nat::pow_le_pow_r(2, Succ(Succ(f.bexp)), Succ(k), omega, omega(gt));
+            let st: (Succ(f.mag) * B <= F.top() * B) = Nat::mul_le_mono_r(B, Succ(f.mag), F.top(), gc.left);
+            let sk: (Succ(f.mag) * B = B + f.mag * B) = f.mag.mul_succ_left(B);
+            let r: ((F.half() * 2) * B = F.half() * (B * 2)) = ring;
+            let td: (F.top() = F.half() * 2) = F.top_double();
+            let hm: (F.half() * Nat::pow(2, Succ(Succ(f.bexp))) <= F.half() * Nat::pow(2, Succ(k))) = Nat::mul_le_mono_l(F.half(), Nat::pow(2, Succ(Succ(f.bexp))), Nat::pow(2, Succ(k)), pk);
+            let b2: (Nat::pow(2, Succ(Succ(f.bexp))) = B * 2) = refl;
+            let bp: (0 < B) = Nat::pow_pos(a := 2, n := Succ(f.bexp));
+            let tb: (F.top() * B = (F.half() * 2) * B) = Nat::cong(λ (w: Nat) => w * B, td);
+            let hb: (F.half() * Nat::pow(2, Succ(Succ(f.bexp))) = F.half() * (B * 2)) = Nat::cong(λ (w: Nat) => F.half() * w, b2);
+            false_elim(omega(e, u, st, sk, r, tb, hb, hm, bp, ge))
+        },
+    }
+}
+
+// A nearest float to a nonnegative grid value below `top · 2^(c+1)` is
+// within `2^c` half-units of it.
+theorem Format::near_err_at(self F: Format, x: Rat, h, c: Nat, ex: x ≈ F.grid(h.int()), lt: h < F.top() * Nat::pow(2, Succ(c)),
+    range: x <= (Finite::max_finite(F)).val(), p: Finite(F), near: Finite::Nearest(x, p)):
+    p.H() - h.int() <= Nat::pow(2, c).int() ∧ h.int() - p.H() <= Nat::pow(2, c).int()
+{
+    let a: F.Approx(x, h, False) = ex;
+    let gm = (Finite::max_finite(F)).val_grid();
+    let hm: (h.int() <= (Finite::max_finite(F)).H()) = F.le_of_grid_le(h.int(), (Finite::max_finite(F)).H(), linarith(ex, gm, range));
+    let lim = F.max_H_lt_limit();
+    let below: (h < F.limit_h()) = omega;
+    let e = F.e_of(h);
+    let ec: (e <= c) = F.e_of_le(h, c, lt);
+    let Q = Nat::pow(2, e);
+    let be: ((F.down(h)).bexp = e) = (F.down_below(h, below)).right.right;
+    let ne: ((p.val() - x).abs() <= F.grid(Q.int())) = j(be, λ w _ => (p.val() - x).abs() <= F.grid(Nat::pow(2, w).int()),
+        F.nearest_err(x, h, False, a, below, range, p, near));
+    let q1: (p.val() - x <= (p.val() - x).abs()) = (p.val() - x).le_abs();
+    let q2: (-(p.val() - x) <= (p.val() - x).abs()) = (p.val() - x).neg_le_abs();
+    let gp = p.val_grid();
+    let s1 = F.grid_sub(p.H(), h.int());
+    let s2 = F.grid_sub(h.int(), p.H());
+    let u1: (p.H() - h.int() <= Q.int()) = F.le_of_grid_le(p.H() - h.int(), Q.int(), linarith(ex, gp, s1, q1, ne));
+    let u2: (h.int() - p.H() <= Q.int()) = F.le_of_grid_le(h.int() - p.H(), Q.int(), linarith(ex, gp, s2, q2, ne));
+    let qc: (Q <= Nat::pow(2, c)) = Nat::pow_le_pow_r(2, e, c, omega, ec);
+    And(omega(u1, qc), omega(u2, qc))
+}
+
+// A nearest float to a value some float has is at that value (the float
+// still packed).
+theorem Finite::near_exact_rep({F: Format}, s: Finite(F), X: Int, x: Rat, ex: x ≈ F.grid(X), r: ∃ f: Finite(F), f.H() = X, near: Finite::Nearest(x, s)): s.H() = X {
+    match r as λ _ => s.H() = X {
+        Exists(f, fh) => Finite::near_exact_H(s, f, X, x, ex, fh, near),
+    }
+}
+
+// A value on the grid at or below the largest float's half-units is at most
+// its value.
+theorem Format::le_max_of_grid(self F: Format, x: Rat, X: Int, ex: x ≈ F.grid(X), le: X <= (Finite::max_finite(F)).H()): x <= (Finite::max_finite(F)).val() {
+    let gm = (Finite::max_finite(F)).val_grid();
+    linarith(ex, gm, F.grid_le(X, (Finite::max_finite(F)).H(), le))
+}
+
+// Veltkamp at a positive normal `x` (mantissa `m`, cell `P = 2^(c+1)`
+// half-units) and `S = 2^s`, in steps. `Q = S·P` is the coarse grid.
+// `g >= half · Q`: the float `half · Q` is at or below `(S + 1)·x`.
+theorem Format::vk_gq(self F: Format, x, g: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    normal: F.half() <= x.mag, range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H()
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let cxe: ((m * (S + 1)) * P = m * (S * P) + m * P) = ring;
+    let mq: (m * Q = m * (S * P)) = Nat::cong(λ (w: Nat) => m * w, qsp);
+    let hmq: (h * Q <= m * Q) = Nat::mul_le_mono_r(Q, h, m, normal);
+    let lim = F.max_H_lt_limit();
+    let td: (F.top() = h * 2) = F.top_double();
+    let hp: (0 < h) = Format::half_pos(F := F);
+    let below: (h * Q < F.limit_h()) = omega(hmq, cxe, mq, range, lim);
+    let fit: (Succ(h) <= F.top()) = omega(td, hp);
+    let fhq = F.down_exact(h * Q, h, c + s, below, refl, fit);
+    let gq0: ((F.down(h * Q)).H() <= g.H()) = Finite::near_ge(g, F.down(h * Q), ((m * (S + 1)) * P).int(), cx, ecx, omega(fhq, hmq, cxe, mq), ng);
+    omega(gq0, fhq)
+}
+
+// `|g - (S + 1)·x| <= Q`: the cut of `(S + 1)·x` is below `top · 2Q`.
+theorem Format::vk_gerr(self F: Format, x, g: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    s1: 1 <= s, range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    g.H() - ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= Nat::pow(2, Succ(x.bexp + s)).int()
+        ∧ ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() - g.H() <= Nat::pow(2, Succ(x.bexp + s)).int()
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let CX = (m * (S + 1)) * P;
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let qp: (0 < Q) = Nat::pow_pos(a := 2, n := Succ(c + s));
+    let s2a: (Nat::pow(2, 1) <= S) = Nat::pow_le_pow_r(2, 1, s, omega, s1);
+    let p21: (Nat::pow(2, 1) = 2) = refl;
+    let s2: (2 <= S) = omega(s2a, p21);
+    let gc = F.canonical_elim(m, c, x.ok);
+    let cxe: (CX = m * (S * P) + m * P) = ring;
+    let mq: (m * Q = m * (S * P)) = Nat::cong(λ (w: Nat) => m * w, qsp);
+    let mlt: (Succ(m) * Q <= F.top() * Q) = Nat::mul_le_mono_r(Q, Succ(m), F.top(), gc.left);
+    let msq: (Succ(m) * Q = Q + m * Q) = m.mul_succ_left(Q);
+    let twoP: (2 * P <= S * P) = Nat::mul_le_mono_r(P, 2, S, s2);
+    let twoPe: (2 * P = P + P) = ring;
+    let mPQ: (m * P <= m * Q) = Nat::mul_le_mono_l(m, P, Q, omega(twoP, twoPe, qsp));
+    let rg: (cx <= (Finite::max_finite(F)).val()) = F.le_max_of_grid(cx, CX.int(), ecx, range);
+    let pq: (Nat::pow(2, Succ(Succ(c + s))) = Q * 2) = refl;
+    let tq2a: (F.top() * (Q * 2) = F.top() * Q + F.top() * Q) = ring;
+    let tq2: (F.top() * Nat::pow(2, Succ(Succ(c + s))) = F.top() * Q + F.top() * Q) = trans(Nat::cong(λ (w: Nat) => F.top() * w, pq), tq2a);
+    F.near_err_at(cx, CX, Succ(c + s), ecx, omega(cxe, mq, mPQ, mlt, msq, tq2, qp), rg, g, ng)
+}
+
+// At `x = half · P`, `(S + 1)·x` is `R·(S + 1)` cells of the coarse grid
+// (`half = R·S`), a float, so `g` is it.
+theorem Format::vk_gexact(self F: Format, x, g: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    mE: x.mag = F.half(), s1: 1 <= s, sp: s <= F.frac, range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    g.H() = ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let CX = (m * (S + 1)) * P;
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let td: (F.top() = h * 2) = F.top_double();
+    let s2a: (Nat::pow(2, 1) <= S) = Nat::pow_le_pow_r(2, 1, s, omega, s1);
+    let p21: (Nat::pow(2, 1) = 2) = refl;
+    let s2: (2 <= S) = omega(s2a, p21);
+    let fs: ((F.frac - s) + s = F.frac) = Nat::sub_add_cancel(s, F.frac, sp);
+    let R = Nat::pow(2, F.frac - s);
+    let hr: (h = R * S) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(fs)), Nat::pow_add(2, F.frac - s, s));
+    let rp: (0 < R) = Nat::pow_pos(a := 2, n := F.frac - s);
+    let lim = F.max_H_lt_limit();
+    let c1: ((m * (S + 1)) * P = ((R * S) * (S + 1)) * P) = Nat::cong(λ (w: Nat) => (w * (S + 1)) * P, trans(mE, hr));
+    let r1: (((R * S) * (S + 1)) * P = (R * (S + 1)) * (S * P)) = ring;
+    let c2: ((R * (S + 1)) * Q = (R * (S + 1)) * (S * P)) = Nat::cong(λ (w: Nat) => (R * (S + 1)) * w, qsp);
+    let hk: (CX = (R * (S + 1)) * Q) = omega(c1, r1, c2);
+    let rs: (R * (S + 1) = R * S + R) = ring;
+    let r2: (R * 2 <= R * S) = Nat::mul_le_mono_l(R, 2, S, s2);
+    let nt: (Succ(R * (S + 1)) <= F.top()) = omega(rs, r2, hr, td, rp);
+    let bl: (CX < F.limit_h()) = omega(range, lim);
+    let fx = F.down_exact(CX, R * (S + 1), c + s, bl, hk, nt);
+    Finite::near_exact_H(g, F.down(CX), CX.int(), cx, ecx, fx, ng)
+}
+
+// `g - x >= half · Q`.
+theorem Format::vk_kq(self F: Format, x, g: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    xn: x.neg = False, normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H()
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let ux: (x.units() * 2 = m * P) = m.mul_assoc(Nat::pow(2, c), 2);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let cxe: ((m * (S + 1)) * P = m * (S * P) + m * P) = ring;
+    let mq: (m * Q = m * (S * P)) = Nat::cong(λ (w: Nat) => m * w, qsp);
+    match m.le_dec(h) as λ _ => (h * Q).int() <= g.H() - x.H() {
+        Inl(mh) => {
+            let mE: (m = h) = omega(mh, normal);
+            let gx = F.vk_gexact(x, g, s, cx, ecx, ng, mE, s1, sp, range);
+            let hm2: (m * Q = h * Q) = Nat::cong(λ (w: Nat) => w * Q, mE);
+            omega(gx, eX, ux, cxe, mq, hm2)
+        },
+        Inr(mh) => {
+            // `g >= (S + 1)·x - Q >= x + half · Q`.
+            let e2 = (F.vk_gerr(x, g, s, cx, ecx, ng, s1, range)).right;
+            let h1q: (Succ(h) * Q <= m * Q) = Nat::mul_le_mono_r(Q, Succ(h), m, omega(mh));
+            let hsq: (Succ(h) * Q = Q + h * Q) = h.mul_succ_left(Q);
+            omega(e2, eX, ux, cxe, mq, h1q, hsq)
+        },
+    }
+}
+
+// `x < half · Q`.
+theorem Format::vk_xq(self F: Format, x: Finite(F), s: Nat, xn: x.neg = False, s1: 1 <= s): x.H() < (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() {
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let td: (F.top() = h * 2) = F.top_double();
+    let pp: (0 < P) = Nat::pow_pos(a := 2, n := Succ(c));
+    let s2a: (Nat::pow(2, 1) <= S) = Nat::pow_le_pow_r(2, 1, s, omega, s1);
+    let p21: (Nat::pow(2, 1) = 2) = refl;
+    let s2: (2 <= S) = omega(s2a, p21);
+    let gc = F.canonical_elim(m, c, x.ok);
+    let ux: (x.units() * 2 = m * P) = m.mul_assoc(Nat::pow(2, c), 2);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let hq: (h * Q = h * (S * P)) = Nat::cong(λ (w: Nat) => h * w, qsp);
+    let mlp: (Succ(m) * P <= F.top() * P) = Nat::mul_le_mono_r(P, Succ(m), F.top(), gc.left);
+    let msp: (Succ(m) * P = P + m * P) = m.mul_succ_left(P);
+    let tp: (F.top() * P = (h * 2) * P) = Nat::cong(λ (w: Nat) => w * P, td);
+    let h2s: (h * 2 <= h * S) = Nat::mul_le_mono_l(h, 2, S, s2);
+    let h2p: ((h * 2) * P <= (h * S) * P) = Nat::mul_le_mono_r(P, h * 2, h * S, h2s);
+    let hsp: ((h * S) * P = h * (S * P)) = h.mul_assoc(S, P);
+    omega(eX, ux, mlp, msp, tp, h2p, hsp, hq, pp)
+}
+
+// The float `half · Q` from `g - x >= half · Q` (with `x >= 0`).
+theorem Format::vk_hq({F: Format}, x, g: Finite(F), s: Nat, xn: x.neg = False, kq: (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H()):
+    (F.down(F.half() * Nat::pow(2, Succ(x.bexp + s)))).H() = (F.half() * Nat::pow(2, Succ(x.bexp + s))).int()
+{
+    let h = F.half();
+    let Q = Nat::pow(2, Succ(x.bexp + s));
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let lim = F.max_H_lt_limit();
+    let mx = Finite::H_le_max(g);
+    let below: (h * Q < F.limit_h()) = omega(kq, mx, lim, eX);
+    let td: (F.top() = h * 2) = F.top_double();
+    let hp: (0 < h) = Format::half_pos(F := F);
+    F.down_exact(h * Q, h, x.bexp + s, below, refl, omega(td, hp))
+}
+
+// `d <= -half · Q`, so `d` is on the coarse grid.
+theorem Format::vk_db(self F: Format, x, g, d: Finite(F), s: Nat, dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, kq: (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H()): x.bexp + s <= d.bexp
+{
+    let h = F.half();
+    let Q = Nat::pow(2, Succ(x.bexp + s));
+    let Fq = F.down(h * Q);
+    let fhq: (Fq.H() = (h * Q).int()) = Format::vk_hq(x, g, s, xn, kq);
+    let nf = Finite::H_of_neg(Fq);
+    let dq: (d.H() <= (-Fq).H()) = Finite::near_le(d, -Fq, x.H() - g.H(), dx, edx, omega(nf, fhq, kq), nd);
+    let nd2 = Finite::H_of_neg(d);
+    let ndq: ((h * Q).int() <= (-d).H()) = omega(dq, nf, fhq, nd2);
+    Finite::bexp_ge(-d, x.bexp + s, ndq)
+}
+
+// `-d` is a nearest float to `g - x`.
+theorem Format::vk_flip(self F: Format, x, g, d: Finite(F), dx: Rat, edx: dx ≈ F.grid(x.H() - g.H())): -dx ≈ F.grid(g.H() - x.H()) {
+    let gk: (-F.grid(x.H() - g.H()) ≈ F.grid(-(x.H() - g.H()))) = Rat::same_sym(Dyadic(x.H() - g.H(), F.qmin() - 1).rat_neg());
+    let kk: (-(x.H() - g.H()) = g.H() - x.H()) = omega;
+    j(kk, λ v _ => -dx ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(edx), gk))
+}
+
+// `g/2 <= -d <= g`: Sterbenz makes `g + d` a float.
+theorem Format::vk_xh(self F: Format, x, g, d: Finite(F), s: Nat, dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, s1: 1 <= s, kq: (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H(),
+    xq: x.H() < (F.half() * Nat::pow(2, Succ(x.bexp + s))).int(), gb: x.bexp + s <= g.bexp):
+    ∃ f: Finite(F), f.H() = g.H() + d.H()
+{
+    let K = g.H() - x.H();
+    let edk = F.vk_flip(x, g, d, dx, edx);
+    let ndk = Finite::nearest_flip(dx, d, nd);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let up: ((-d).H() <= g.H()) = Finite::near_le(-d, g, K, -dx, edk, omega(eX), ndk);
+    let gn: (0 <= g.H()) = omega(kq, eX);
+    let lo: (g.H() <= (-d).H() + (-d).H()) = match F.half_float(g, gn, omega(gb, s1)) as λ _ => g.H() <= (-d).H() + (-d).H() {
+        Exists(D, dh) => {
+            let dk = Finite::near_ge(-d, D, K, -dx, edk, omega(dh, kq, xq, eX), ndk);
+            omega(dk, dh)
+        },
+    };
+    let nd2 = Finite::H_of_neg(d);
+    let xhe: (g.H() - (-d).H() = g.H() + d.H()) = omega(nd2);
+    j(xhe, λ v _ => ∃ f: Finite(F), f.H() = v, Finite::sterbenz_H(g, -d, omega(up, gn), lo))
+}
+
+// `|x - (g + d)| <= Q/2` from `-d` nearest to `g - x = Kn <= T = top · Q`
+// half-units (`Kn` and `T` as variables, so the case split does not
+// reduce them).
+theorem Format::vk_bound_at(self F: Format, x, g, d: Finite(F), s: Nat, dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, Kn, T: Nat, kn: Kn.int() = g.H() - x.H(), kt: Kn <= T, eT: T = F.half() * Nat::pow(2, Succ(Succ(x.bexp + s)))):
+    x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H())
+{
+    let E = Nat::pow(2, x.bexp + s);
+    let lim = F.max_H_lt_limit();
+    let mx = Finite::H_le_max(g);
+    let td: (F.top() = F.half() * 2) = F.top_double();
+    let hp: (0 < F.half()) = Format::half_pos(F := F);
+    let edk = F.vk_flip(x, g, d, dx, edx);
+    let ndk = Finite::nearest_flip(dx, d, nd);
+    let nd2 = Finite::H_of_neg(d);
+    let edk2: (-dx ≈ F.grid(Kn.int())) = j(sym(kn), λ v _ => -dx ≈ F.grid(v), edk);
+    let ep: (0 <= E.int()) = omega;
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    match Succ(Kn).le_dec(T) as λ _ => x.H() - (g.H() + d.H()) <= E.int() ∧ -E.int() <= x.H() - (g.H() + d.H()) {
+        Inl(lt) => {
+            let rk: (-dx <= (Finite::max_finite(F)).val()) = F.le_max_of_grid(-dx, Kn.int(), edk2, omega(kn, mx, eX));
+            let Q = Nat::pow(2, Succ(x.bexp + s));
+            let q2a: (F.top() * Q = (F.half() * 2) * Q) = Nat::cong(λ (w: Nat) => w * Q, td);
+            let q2b: ((F.half() * 2) * Q = F.half() * (Q * 2)) = ring;
+            let q2c: (F.half() * Nat::pow(2, Succ(Succ(x.bexp + s))) = F.half() * (Q * 2)) = Nat::cong(λ (w: Nat) => F.half() * w, refl);
+            let w = F.near_err_at(-dx, Kn, x.bexp + s, edk2, omega(lt, eT, q2a, q2b, q2c), rk, -d, ndk);
+            let w1 = w.left;
+            let w2 = w.right;
+            And(omega(w1, w2, kn, nd2), omega(w1, w2, kn, nd2))
+        },
+        Inr(ge) => {
+            // `g - x = top · Q` exactly: a float, so `-d` is it and the error is 0.
+            let hk: (Kn = F.half() * Nat::pow(2, Succ(Succ(x.bexp + s)))) = omega(ge, kt, eT);
+            let bl: (Kn < F.limit_h()) = omega(kn, mx, lim, eX);
+            let fk = F.down_exact(Kn, F.half(), Succ(x.bexp + s), bl, hk, omega(td, hp));
+            let ek = Finite::near_exact_H(-d, F.down(Kn), Kn.int(), -dx, edk2, fk, ndk);
+            And(omega(ek, kn, nd2, ep), omega(ek, kn, nd2, ep))
+        },
+    }
+}
+
+// The arithmetic of `vk_bound`'s `g - x <= top · Q`, over variables so
+// `omega` does not see the products' structure.
+theorem Format::vk_kt_arith(K, G, X, C, mSP, mP, mQ, Q, sQ, tQ: Nat, gH, xH: Int,
+    kn: K.int() = gH - xH, e1: gH - C.int() <= Q.int(), cxe: C = mSP + mP, mq: mQ = mSP,
+    eX: xH = X.int(), ux: X = mP, mlt: sQ <= tQ, msq: sQ = Q + mQ): K <= tQ
+{
+    omega(kn, e1, cxe, mq, eX, ux, mlt, msq)
+}
+
+theorem Format::vk_kn_arith(G, X, mP, hQ: Nat, gH, xH: Int, eg: gH = G.int(), eX: xH = X.int(), ux: X = mP,
+    kq: hQ.int() <= gH - xH): (G - mP).int() = gH - xH
+{
+    omega(eg, eX, ux, kq)
+}
+
+// `|x - (g + d)| <= Q/2`: `-d` is a nearest float to `g - x <= top · Q`.
+theorem Format::vk_bound(self F: Format, x, g, d: Finite(F), s: Nat, dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, kq: (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H(),
+    e1: g.H() - ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= Nat::pow(2, Succ(x.bexp + s)).int()):
+    x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H())
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let td: (F.top() = h * 2) = F.top_double();
+    let gc = F.canonical_elim(m, c, x.ok);
+    let ux: (x.units() * 2 = m * P) = m.mul_assoc(Nat::pow(2, c), 2);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let cxe: ((m * (S + 1)) * P = m * (S * P) + m * P) = ring;
+    let mq: (m * Q = m * (S * P)) = Nat::cong(λ (w: Nat) => m * w, qsp);
+    let mlt: (Succ(m) * Q <= F.top() * Q) = Nat::mul_le_mono_r(Q, Succ(m), F.top(), gc.left);
+    let msq: (Succ(m) * Q = Q + m * Q) = m.mul_succ_left(Q);
+    let gn: (0 <= g.H()) = omega(kq, eX);
+    let eg = Finite::H_of_nonneg(g, gn);
+    let kn: ((g.units() * 2 - m * P).int() = g.H() - x.H()) = Format::vk_kn_arith(g.units() * 2, x.units() * 2, m * P,
+        h * Q, g.H(), x.H(), eg, eX, ux, kq);
+    let tq: (F.top() * Q = (h * 2) * Q) = Nat::cong(λ (w: Nat) => w * Q, td);
+    let r3: ((h * 2) * Q = h * (Q * 2)) = ring;
+    let pq2: (h * Nat::pow(2, Succ(Succ(c + s))) = h * (Q * 2)) = Nat::cong(λ (w: Nat) => h * w, refl);
+    let kt: (g.units() * 2 - m * P <= F.top() * Q) = Format::vk_kt_arith(g.units() * 2 - m * P, g.units() * 2, x.units() * 2,
+        (m * (S + 1)) * P, m * (S * P), m * P, m * Q, Q, Succ(m) * Q, F.top() * Q, g.H(), x.H(), kn, e1, cxe, mq, eX, ux, mlt, msq);
+    F.vk_bound_at(x, g, d, s, dx, edx, nd, xn, g.units() * 2 - m * P, F.top() * Q, kn, kt, trans(trans(tq, r3), sym(pq2)))
+}
+
+// Veltkamp at a positive normal `x`, at half-units: for `g` nearest to
+// `(S + 1)·x` and `d` nearest to `x - g`, `g + d` is a float on the grid
+// `s` exponents above `x`'s, and `x - (g + d)` is a float within half that
+// grid's spacing (the rounding error of `d`).
+theorem Format::veltkamp_pos(self F: Format, x, g, d: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H())
+        ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H()))
+        ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))
+{
+    let gq = F.vk_gq(x, g, s, cx, ecx, ng, normal, range);
+    let gb: (x.bexp + s <= g.bexp) = Finite::bexp_ge(g, x.bexp + s, gq);
+    let kq = F.vk_kq(x, g, s, cx, ecx, ng, xn, normal, s1, sp, range);
+    let xq = F.vk_xq(x, s, xn, s1);
+    let db = F.vk_db(x, g, d, s, dx, edx, nd, xn, kq);
+    let e1 = (F.vk_gerr(x, g, s, cx, ecx, ng, s1, range)).left;
+    let ng2 = Finite::H_of_neg(g);
+    let xg: (x.H() - g.H() = x.H() + (-g).H()) = omega(ng2);
+    let edx2: (dx ≈ F.grid(x.H() + (-g).H())) = j(xg, λ v _ => dx ≈ F.grid(v), edx);
+    let xle: ((x.H() + (-g).H()) - d.H() = x.H() - (g.H() + d.H())) = omega(ng2);
+    And(F.vk_xh(x, g, d, s, dx, edx, nd, xn, s1, kq, xq, gb),
+        And(on_grid_add(x.bexp + s, g.H(), d.H(), Finite::H_on_grid(g, x.bexp + s, gb), Finite::H_on_grid(d, x.bexp + s, db)),
+            And(j(xle, λ v _ => ∃ f: Finite(F), f.H() = v, Finite::add_err_H(x, -g, d, dx, edx2, nd)),
+                F.vk_bound(x, g, d, s, dx, edx, nd, xn, kq, e1))))
+}
+
+// `(2^s + 1)·x` at half-units for a positive `x`: `m·(2^s + 1)·2^(c+1)`.
+theorem Format::vk_cxt(self F: Format, x: Finite(F), s: Nat, xn: x.neg = False):
+    (Nat::pow(2, s) + 1).int() * x.H() = ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()
+{
+    let m = x.mag;
+    let C = (Nat::pow(2, s) + 1);
+    let P = Nat::pow(2, Succ(x.bexp));
+    let ux: (x.units() * 2 = m * P) = m.mul_assoc(Nat::pow(2, x.bexp), 2);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let hx: (x.H() = (m * P).int()) = omega(eX, ux);
+    let r: (C * (m * P) = (m * C) * P) = ring;
+    let i1: ((C * (m * P)).int() = ((m * C) * P).int()) = Int::cong_of(λ (w: Nat) => w.int(), r);
+    let i2: ((C * (m * P)).int() = C.int() * (m * P).int()) = Nat::int_mul(C, m * P);
+    let ec: (C.int() * x.H() = C.int() * (m * P).int()) = Int::cong(λ (v: Int) => C.int() * v, hx);
+    trans(ec, trans(sym(i2), i1))
+}
+
+// `veltkamp_pos` with `(2^s + 1)·x` read off `x`'s half-units.
+theorem Format::veltkamp_posH(self F: Format, x, g, d: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid((Nat::pow(2, s) + 1).int() * x.H()), ng: Finite::Nearest(cx, g),
+    dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    hi: (Nat::pow(2, s) + 1).int() * x.H() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H())
+        ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H()))
+        ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))
+{
+    let e = F.vk_cxt(x, s, xn);
+    let ecx2: (cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int())) = j(e, λ v _ => cx ≈ F.grid(v), ecx);
+    F.veltkamp_pos(x, g, d, s, cx, ecx2, ng, dx, edx, nd, xn, normal, s1, sp, omega(e, hi))
+}
+
+// The facts of `veltkamp_posH` at `-x`, `-g`, `-d`, read back (a separate
+// theorem, as for `two_sum_unflip`).
+theorem Finite::vk_unflip({F: Format}, x, g, d: Finite(F), s: Nat,
+    w: (∃ f: Finite(F), f.H() = (-g).H() + (-d).H()) ∧ OnGrid(x.bexp + s, (-g).H() + (-d).H()) ∧ (∃ f: Finite(F), f.H() = (-x).H() - ((-g).H() + (-d).H())) ∧ ((-x).H() - ((-g).H() + (-d).H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= (-x).H() - ((-g).H() + (-d).H()))):
+    (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H())
+        ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H()))
+        ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))
+{
+    let hx = Finite::H_of_neg(x);
+    let hg = Finite::H_of_neg(g);
+    let hd = Finite::H_of_neg(d);
+    let e1: (-((-g).H() + (-d).H()) = g.H() + d.H()) = omega(hg, hd);
+    let e3: (-((-x).H() - ((-g).H() + (-d).H())) = x.H() - (g.H() + d.H())) = omega(hx, hg, hd);
+    let a1: (∃ f: Finite(F), f.H() = g.H() + d.H()) = j(e1, λ v _ => ∃ f: Finite(F), f.H() = v, Finite::neg_exists((-g).H() + (-d).H(), w.left));
+    let a2: OnGrid(x.bexp + s, g.H() + d.H()) = j(e1, λ v _ => OnGrid(x.bexp + s, v), on_grid_neg(x.bexp + s, (-g).H() + (-d).H(), w.right.left));
+    let a3: (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H())) = j(e3, λ v _ => ∃ f: Finite(F), f.H() = v,
+        Finite::neg_exists((-x).H() - ((-g).H() + (-d).H()), w.right.right.left));
+    let w4 = w.right.right.right;
+    let b1 = w4.left;
+    let b2 = w4.right;
+    And(a1, And(a2, And(a3, And(omega(b1, b2, hx, hg, hd), omega(b1, b2, hx, hg, hd)))))
+}
+
+// A float's sign bit is one of the two.
+theorem Finite::sign_cases({F: Format}, x: Finite(F)): x.neg = False ∨ x.neg = True {
+    match x as λ y => y.neg = False ∨ y.neg = True {
+        Finite(n, m, b, ok) => match n as λ t => (Finite(t, m, b, ok)).neg = False ∨ (Finite(t, m, b, ok)).neg = True {
+            False => Inl(refl),
+            True => Inr(refl),
+        },
+    }
+}
+
+// Veltkamp at a normal `x` of either sign, at half-units: a negative `x`
+// is `veltkamp_posH` at `-x`, `-g`, `-d`.
+theorem Format::veltkamp_H(self F: Format, x, g, d: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid((Nat::pow(2, s) + 1).int() * x.H()), ng: Finite::Nearest(cx, g),
+    dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    lo: -(Finite::max_finite(F)).H() <= (Nat::pow(2, s) + 1).int() * x.H(), hi: (Nat::pow(2, s) + 1).int() * x.H() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H())
+        ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H()))
+        ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))
+{
+    match Finite::sign_cases(x) as λ _ => ((∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H()) ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H())) ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))) {
+        Inl(xn) => F.veltkamp_posH(x, g, d, s, cx, ecx, ng, dx, edx, nd, xn, normal, s1, sp, hi),
+        Inr(xt) => {
+            let C = (Nat::pow(2, s) + 1);
+            let yn: ((-x).neg = False) = j(sym(xt), λ b _ => !b = False, refl);
+            let hx = Finite::H_of_neg(x);
+            let hg = Finite::H_of_neg(g);
+            let X = C.int() * x.H();
+            let r: (C.int() * -x.H() = -X) = ring;
+            let r2: (C.int() * (-x).H() = C.int() * -x.H()) = Int::cong(λ (v: Int) => C.int() * v, hx);
+            let nx: (C.int() * (-x).H() = -X) = trans(r2, r);
+            let gx: (-F.grid(X) ≈ F.grid(-X)) = Rat::same_sym(Dyadic(X, F.qmin() - 1).rat_neg());
+            let ecx2: (-cx ≈ F.grid(C.int() * (-x).H())) = j(sym(nx), λ v _ => -cx ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(ecx), gx));
+            let D = x.H() - g.H();
+            let gd: (-F.grid(D) ≈ F.grid(-D)) = Rat::same_sym(Dyadic(D, F.qmin() - 1).rat_neg());
+            let sd: (-D = (-x).H() - (-g).H()) = omega(hx, hg);
+            let edx2: (-dx ≈ F.grid((-x).H() - (-g).H())) = j(sd, λ v _ => -dx ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(edx), gd));
+            let ng2 = Finite::nearest_flip(cx, g, ng);
+            let nd2 = Finite::nearest_flip(dx, d, nd);
+            Finite::vk_unflip(x, g, d, s, F.veltkamp_posH(-x, -g, -d, s, -cx, ecx2, ng2, -dx, edx2, nd2, yn, normal, s1, sp, omega(nx, lo)))
+        },
+    }
+}
+
+// A sum in any mode that some float equals is that float, at half-units.
+theorem Finite::add_exact_H({F: Format}, a, b, r: Finite(F), mode: Mode, e: ∃ f: Finite(F), f.H() = a.H() + b.H(),
+    h: a.add(b, mode := mode) = Float::Fin(r)): r.H() = a.H() + b.H()
+{
+    let ga = a.val_grid();
+    let gb = b.val_grid();
+    let gr = r.val_grid();
+    let sab = F.grid_add(a.H(), b.H());
+    match e as λ _ => r.H() = a.H() + b.H() {
+        Exists(f, fh) => {
+            let v = Finite::val_of_H(f, a.H() + b.H(), fh);
+            let ev: (f.val() ≈ a.val() + b.val()) = Rat::le_antisymm(linarith(v, sab, ga, gb), linarith(v, sab, ga, gb));
+            let er: (r.val() ≈ a.val() + b.val()) = j(h, λ o _ => o.Exact(a.val() + b.val()),
+                F.exact_of_rounds(mode, a.val() + b.val(), a.add(b, mode := mode), f, ev, Finite::add_correct(a, b, mode)));
+            let u1 = F.le_of_grid_le(r.H(), a.H() + b.H(), linarith(er, gr, sab, ga, gb));
+            let u2 = F.le_of_grid_le(a.H() + b.H(), r.H(), linarith(er, gr, sab, ga, gb));
+            omega(u1, u2)
+        },
+    }
+}
+
+// The same for a difference.
+theorem Finite::sub_exact_H({F: Format}, a, b, r: Finite(F), mode: Mode, e: ∃ f: Finite(F), f.H() = a.H() - b.H(),
+    h: a.sub(b, mode := mode) = Float::Fin(r)): r.H() = a.H() - b.H()
+{
+    let ga = a.val_grid();
+    let gb = b.val_grid();
+    let gr = r.val_grid();
+    let sab = F.grid_sub(a.H(), b.H());
+    match e as λ _ => r.H() = a.H() - b.H() {
+        Exists(f, fh) => {
+            let er: (r.val() ≈ a.val() - b.val()) = j(h, λ o _ => o.Exact(a.val() - b.val()),
+                F.exact_of_rounds(mode, a.val() - b.val(), a.sub(b, mode := mode), f, Finite::val_of_diff(a, b, f, fh), Finite::sub_correct(a, b, mode)));
+            let u1 = F.le_of_grid_le(r.H(), a.H() - b.H(), linarith(er, gr, sab, ga, gb));
+            let u2 = F.le_of_grid_le(a.H() - b.H(), r.H(), linarith(er, gr, sab, ga, gb));
+            omega(u1, u2)
+        },
+    }
+}
+
+// Veltkamp's last two steps from the half-unit facts: `xh = g + d` and
+// `xl = x - xh` are exact in any mode.
+theorem Finite::veltkamp_tail({F: Format}, x, g, d, xh, xl: Finite(F), s: Nat, mode: Mode,
+    hh: g.add(d, mode := mode) = Float::Fin(xh), hl: x.sub(xh, mode := mode) = Float::Fin(xl),
+    w: (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H()) ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H())) ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))):
+    xh.val() + xl.val() ≈ x.val() ∧ OnGrid(x.bexp + s, xh.H()) ∧ (xl.H() <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= xl.H())
+{
+    let w4 = w.right.right.right;
+    let b1 = w4.left;
+    let b2 = w4.right;
+    let eh: (xh.H() = g.H() + d.H()) = Finite::add_exact_H(g, d, xh, mode, w.left, hh);
+    let e3: (x.H() - (g.H() + d.H()) = x.H() - xh.H()) = omega(eh);
+    let r3: (∃ f: Finite(F), f.H() = x.H() - xh.H()) = j(e3, λ v _ => ∃ f: Finite(F), f.H() = v, w.right.right.left);
+    let el: (xl.H() = x.H() - xh.H()) = Finite::sub_exact_H(x, xh, xl, mode, r3, hl);
+    let gx = x.val_grid();
+    let gh = xh.val_grid();
+    let gl = xl.val_grid();
+    let sx = F.grid_sub(x.H(), xh.H());
+    let vl = Finite::val_of_H(xl, x.H() - xh.H(), el);
+    let og: OnGrid(x.bexp + s, xh.H()) = j(sym(eh), λ v _ => OnGrid(x.bexp + s, v), w.right.left);
+    And(Rat::le_antisymm(linarith(vl, sx, gx, gh), linarith(vl, sx, gx, gh)), And(og, And(omega(b1, el, eh), omega(b2, el, eh))))
+}
+
+// Veltkamp splitting (Veltkamp, Dekker): with `C = 2^s + 1` a float,
+// `1 <= s <= frac`, `g = ○(C·x)` and `d = ○(x - g)` in a nearest mode,
+// then `xh = g + d` and `xl = x - xh` in any mode, at a normal `x` with
+// `C·x` in range: `xh + xl = x` exactly, `xh` lies on the grid `s`
+// exponents above `x`'s (so it has at most `prec - s` significant bits),
+// and `|xl|` is at most half that grid's spacing (so it fits in `s` bits).
+theorem Finite::veltkamp({F: Format}, x, cf, g, d, xh, xl: Finite(F), s: Nat, even: Bool, mode: Mode,
+    cv: cf.val() ≈ Rat::ofInt((Nat::pow(2, s) + 1).int()), normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    range: (cf.val() * x.val()).abs() <= (Finite::max_finite(F)).val(),
+    hg: cf.mul(x, mode := Mode::nearest(even)) = Float::Fin(g), hd: x.sub(g, mode := Mode::nearest(even)) = Float::Fin(d),
+    hh: g.add(d, mode := mode) = Float::Fin(xh), hl: x.sub(xh, mode := mode) = Float::Fin(xl)):
+    xh.val() + xl.val() ≈ x.val() ∧ OnGrid(x.bexp + s, xh.H()) ∧ (xl.H() <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= xl.H())
+{
+    let C = (Nat::pow(2, s) + 1);
+    let hr = j(hg, λ o _ => RoundsTo(F, Mode::nearest(even), cf.val() * x.val(), o), Finite::mul_correct(cf, x, Mode::nearest(even)));
+    let ng = F.nearest_of_rounds(even, cf.val() * x.val(), g, hr);
+    let hr1 = j(hd, λ o _ => RoundsTo(F, Mode::nearest(even), x.val() - g.val(), o), Finite::sub_correct(x, g, Mode::nearest(even)));
+    let nd = F.nearest_of_rounds(even, x.val() - g.val(), d, hr1);
+    let gx = x.val_grid();
+    let gg = g.val_grid();
+    let X = C.int() * x.H();
+    let ecx: (cf.val() * x.val() ≈ F.grid(X)) = Rat::same_trans(Rat::mul_respects(cv, gx), F.grid_scale(C, x.H()));
+    let xg = F.grid_sub(x.H(), g.H());
+    let edx: (x.val() - g.val() ≈ F.grid(x.H() - g.H())) = Rat::le_antisymm(linarith(gx, gg, xg), linarith(gx, gg, xg));
+    let M = (Finite::max_finite(F)).H();
+    let gm = (Finite::max_finite(F)).val_grid();
+    let gmn: (-F.grid(M) ≈ F.grid(-M)) = Rat::same_sym(Dyadic(M, F.qmin() - 1).rat_neg());
+    let q1: (cf.val() * x.val() <= (cf.val() * x.val()).abs()) = (cf.val() * x.val()).le_abs();
+    let q2: (-(cf.val() * x.val()) <= (cf.val() * x.val()).abs()) = (cf.val() * x.val()).neg_le_abs();
+    let hi: (X <= M) = F.le_of_grid_le(X, M, linarith(ecx, gm, q1, range));
+    let lo: (-M <= X) = F.le_of_grid_le(-M, X, linarith(ecx, gm, gmn, q2, range));
+    Finite::veltkamp_tail(x, g, d, xh, xl, s, mode, hh, hl,
+        F.veltkamp_H(x, g, d, s, cf.val() * x.val(), ecx, ng, x.val() - g.val(), edx, nd, normal, s1, sp, lo, hi))
+}

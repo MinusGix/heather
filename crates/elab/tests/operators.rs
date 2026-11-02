@@ -63,7 +63,8 @@ fn nat_suite_ergonomic() {
     // (`docs/per-instantiation-type-codes-design.md` §2) together with the
     // `3·nfields + 1 = 7` projection definitions its dependent spine now gets
     // (`docs/telescoped-record-projections-design.md` §3).
-    assert_eq!(e.psi().bindings.len(), 17);
+    // +6: the prelude's binding-statement classes and calls.
+    assert_eq!(e.psi().bindings.len(), 23);
 }
 
 #[test]

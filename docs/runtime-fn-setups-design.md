@@ -1,6 +1,6 @@
 # `runtime fn` setups: what a setup is, what it checks, how it is proved once, how it lowers
 
-Status: **decided 2026-10-31 (§14, as recommended); R5a built 2026-11-01.**
+Status: **decided 2026-10-31 (§14, as recommended); R5a built 2026-11-01; R5b's V6 2026-11-01.**
 Round R4 of `docs/compiler-milestones-proposal.md` (issue
 `runtime-fn-setups-design`, milestone `nh-front`). Written on master
 `f9a1a59`. R5a (§13) built `rt`, its meaning, the host requests and the
@@ -471,7 +471,10 @@ A table from globals to `rt::Op`, each with its FunctionIR node and its case of
 `sound`: `BitVec::add`/`sub`/`band`/`bor`/`bxor`, shifts, `eq_bit`,
 `unsigned_lt_bit`, `signed_lt_bit` (FunctionIR's nodes today), `Bool::and`,
 `or`, `not`, `Bool::word`, `zero_extend`/`truncate` between widths, and the
-byte reads and writes of a `Bytes` value at a word index. Multiplication,
+byte reads and writes of a `Bytes` value at a word index (`rt`'s `Get` and
+`Set`, meaning `List::byte_at` and `List::with_byte`, landed with the
+`Unique` fact; a write is in place where `lib/lang/facts/write_facts.hthr`'s
+plan carries `Unique`, `docs/facts-on-demand-design.md` §7). Multiplication,
 division and remainder have no FunctionIR node yet; the decimal formatter
 needs them or a loop, so `function-ir-alu-core` gains them as N1's first
 back-half addition. The table is a library value, so a later setup (or P3's
@@ -683,6 +686,13 @@ default's cases for everything it lowers the same way, which is the
 composition `scoped-declaration-generators` asks for ("a generator may return
 evidence consumed by another") in its simplest form.
 
+The judgment's first form is built: `Program::owned` in
+`lib/lang/facts/unique.hthr` is the uniqueness check over `rt` writes, with
+parameters owned and calls as moves, and `Unique::of_owned` reads each
+write's fact off its verdict (`docs/facts-on-demand-design.md` §7). What
+remains for R12 is the surface (borrows a user writes) and the lowering's
+`sound`.
+
 **Constant time.** Judgment: no `If`, `Case`, loop bound or buffer index
 depends on a parameter marked secret (a marked parameter is a generator
 argument, `runtime(constant_time(secret := [k])) fn`). Lowering: the default
@@ -721,6 +731,12 @@ starts certifying (§6.3's lifecycle) and the note is corrected.
 V2, V4 and V5 hold, every pin by `refl`; V3 holds for `foldl` and, for
 `decreases`, up to the generated unfolding equation (§16.3). V6 moves to R5b,
 where the lowering it fixes the invariant of is designed.
+
+*Results (R5b, 2026-11-01; `lib/_tests/native/runtime/rt_lower_tests.hthr`):*
+V6 holds. The `Add` and `If` cases (with variables and `Let`, which every
+program has) are proved once by induction over `Tm` (`Tm::lower_sound`,
+§16.5). V3's measured pin now reaches the function, because `count_down_unfold`
+exists (§16.3).
 
 ---
 
@@ -856,7 +872,9 @@ connectives, records, `foldl` and convoys, and a wrong reflection is refused
   (`docs/decreases-unfolding-design.md`): the measured pin is
   `refl` composed with that theorem, still generated, never hand-written.
   For a body whose test is a `match h:`, which is every native loop,
-  `f_unfold` is refused today: `issues/decreases-unfold-convoy-scrutinee.md`.
+  `f_unfold` was refused at first. R5b fixed it
+  (`issues/decreases-unfold-convoy-scrutinee.md`), and
+  `count_down_reflects` is that composition.
   The lowering of a measured function consumes `f_unfold` and the
   obligations (`f#obl_N`) as its evidence, in R5b.
 
@@ -879,4 +897,42 @@ connectives, records, `foldl` and convoys, and a wrong reflection is refused
   that issue is fixed.
 - `Bytes(cap)`'s capacity is not in the type: the reflector writes
   `Bytes(0)` and the capacity becomes a setup choice (a generator argument).
+
+### 16.5 V6: the lowering's invariant (R5b, 2026-11-01)
+
+`lib/native/runtime/rt_lower.hthr` lowers a term, in a context of one port
+per variable and from a fresh id `next`, to a structured region, the port that
+holds its value, and the next fresh id. `Tm::lower_sound` states what every
+case owes. Its premises: the environment holds (each port holds its
+variable's encoding, a word at its width and a bit as `ofBool`) and every port
+is below `next`. Its conclusion: after `StructuredRegion::eval`, `next` has
+grown, every id below the old `next` is kept, and the result port holds the
+encoded `Tm::sem`. The theorem is stated over the total evaluator, so
+FunctionIR's `program_eval_computes` carries it to the relational semantics
+the back half consumes. What V6 settled:
+
+- **The lowering decides what the meaning casts.** Wherever the meaning reads
+  a value at another code, the lowering asks `Ty::check` for the equation and
+  refuses without it, and the proof carries the encoding along that equation
+  (`Ty::cast_holds`). So `sound` has no `judge(p) = Ok` hypothesis. An accepted
+  lowering is typed, and `judge` (§5) only reports reasons. The record in §2.1
+  keeps its shape, with the hypothesis unused.
+- **`Keeps` makes it compose.** A `Let` body reads its context after the bound
+  term's region ran, and the two arms of a branch start from the same
+  valuation. The first arm's fresh ids sit below the second's, and both move
+  their result to one port above both.
+- **The chain is one `Option::and_then` per check**, each continuation a named
+  function where it is not recursive. The proof walks the same chain with
+  `Option::and_then_elim`, which hands each step its equation (`port_at(…) =
+  Some(p)`, `Ty::at(g, a) = Word(w)`). The match compiler never has to see
+  inside `Tm::lower`.
+- **Per program nothing is proved.** `pick_agrees` and `twice_agrees`
+  instantiate the theorem at an evaluated lowering, and the meaning lands on
+  the Heather function by conversion. A wrong claim and an `Add` lowered to a
+  `Sub` node are both refused.
+
+The cases to come are the remaining primitives, `Lit`, `IfEq`, records, calls
+and `Fold` (§6.3's table). After them comes the `Fun` wrapper, which binds
+parameters with `Valuation::bind` and reads the result with `Function::eval`.
+That wrapper is §6.1's `Agrees`.
 

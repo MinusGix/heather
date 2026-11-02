@@ -262,7 +262,7 @@ fn regex_found(name: String, c: Checked<GlobalRef>) → Tac<GlobalRef> {
     }
 }
 
-fn regex_ref(name: String) → Tac<GlobalRef> { lookup(name).bind(λ c => regex_found(name, c)) }
+fn regex_ref(name: String) → Tac<GlobalRef> { regex_found(name, <- lookup(name)) }
 
 // The constructor at position `i`, as a function of its fields.
 fn regex_ctor(cs: List<CtorInfo>, i: Nat) → Tac<Expr> {
@@ -298,17 +298,17 @@ fn regex_domain(v: Head) → Tac<Handle> {
 }
 
 fn regex_refs() → Tac<RegexRefs> {
-    regex_ref("Regex::accepts").bind(λ accepts =>
-    infer(Global(accepts)).bind(λ c => regex_typed(c)).bind(λ f =>
-    view(f).bind(λ v => regex_domain(v)).bind(λ h =>
-    ctors(h).bind(λ c => regex_shape(c)).bind(λ cs =>
-    regex_ctor(cs, 0).bind(λ no_match =>
-    regex_ctor(cs, 1).bind(λ eps =>
-    regex_ctor(cs, 2).bind(λ range =>
-    regex_ctor(cs, 3).bind(λ seq =>
-    regex_ctor(cs, 4).bind(λ alt =>
-    regex_ctor(cs, 5).bind(λ star =>
-    Pure(RegexRefs(Hd(h), no_match, eps, range, seq, alt, star, Global(accepts)))))))))))))
+    let accepts <- regex_ref("Regex::accepts");
+    let f <- regex_typed(<- infer(Global(accepts)));
+    let h <- regex_domain(<- view(f));
+    let cs <- regex_shape(<- ctors(h));
+    let no_match <- regex_ctor(cs, 0);
+    let eps <- regex_ctor(cs, 1);
+    let range <- regex_ctor(cs, 2);
+    let seq <- regex_ctor(cs, 3);
+    let alt <- regex_ctor(cs, 4);
+    let star <- regex_ctor(cs, 5);
+    Pure(RegexRefs(Hd(h), no_match, eps, range, seq, alt, star, Global(accepts)))
 }
 
 // The term `r` as an `Expr`.
@@ -326,16 +326,17 @@ fn Regex::expr(self r: Regex, k: RegexRefs) → Expr {
 fn regex_decls(name: String, k: RegexRefs, r: Regex) → Tac<List<Decl>> {
     let term = r.expr(k);
     let meaning = Expr::App(k.accepts, term);
-    infer(meaning).bind(λ c => regex_typed(c)).bind(λ ty => Pure([
+    let ty <- regex_typed(<- infer(meaning));
+    Pure([
         Decl(AsValue, name, [], Hd(ty), meaning),
         Decl(AsValue, name ++ "::term", [], k.ty, term),
-    ]))
+    ])
 }
 
 // The prefix generator: `regex def name = "…";`.
 fn regex(name: String, source: String) → Tac<List<Decl>> {
     match Regex::parse(source) {
         None => fail("regex: `" ++ source ++ "` is not a regular expression (an unclosed `(` or `[`, a stray `)` or postfix operator, or a trailing backslash)", []),
-        Some(r) => regex_refs().bind(λ k => regex_decls(name, k, r)),
+        Some(r) => regex_decls(name, <- regex_refs(), r),
     }
 }

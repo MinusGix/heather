@@ -69,6 +69,16 @@ property of Heather.
   took minutes; stating the step's arithmetic as a lemma over bare
   numbers (native_compile_perform's `push_arith`) made it free. `omega(h, …)` names the load-bearing facts; whether it
   should read *only* those is [[omega-listed-facts-only]], an open decision.
+- **Products of `pow` terms: restate the step over variables.** `omega`
+  over `Nat` facts whose atoms are `m * pow(2, …)` products re-reads their
+  structure; the same facts handed to a lemma over bare `Nat`/`Int`
+  variables cost a hundredth (`eft.hthr`'s `vk_kt_arith`, `vk_kn_arith`:
+  `vk_bound` went from twenty seconds to a third of one).
+- **Annotate a `let` with the type its term has.** An annotation that
+  differs from it by a computation (`(h * Q).int() <= g.H()` for a term at
+  `(F.down(h * Q)).H() <= g.H()`) makes the checker evaluate the
+  computation to compare them, which can run out of memory; annotate the
+  term's own type and convert with `omega` and the equation.
 - **It needs a checking position:** `let k: (T) = omega(…);`. Where
   nothing is expected the refusal says so (as for `ring`, `linarith`,
   `nlinarith`, `bv_omega`, `positivity`;
@@ -84,7 +94,11 @@ property of Heather.
   taken as arrows after it. If unsure, take `(o) → obs(t) = o → …` and match
   on `o`.
 - A recursion that varies another parameter returns a function
-  (`(self fuel): (n: Nat) → …`), with the matched parameter first.
+  (`(self fuel): (n: Nat) → …`), with the matched parameter first. The
+  elaborator generalizes a varied parameter itself
+  (`docs/ih-generalization-design.md`), but not for a self-call under an
+  `∃` in a `Type`-valued `fn`; curry that one by hand (`summation.hthr`'s
+  `List::RecSum_of`, [[ih-generalization-under-exists]]).
 - The guard is the nearest `match` on a parameter: a self-call under a case
   split on another parameter is refused
   ([[recursion-guard-takes-nearest-parameter-match]]); split in a helper.
@@ -97,6 +111,14 @@ property of Heather.
   is cheap). Pass the proof to a helper theorem that matches on its
   parameter, or move the result with `j` over an equation:
   [[match-on-proof-call-cost]].
+- **The same holds for projections chained through theorem results.**
+  `let au = below_both(a.witness, ..); let ad = below_both(au.witness, ..)`
+  and then a body over `ad.witness` made the kernel normalise the nested
+  witnesses, proofs and all (`DerivOn::chain` and `DerivOn::mul` in
+  `real_fn.hthr`: 8.3M and 8.9M steps). Compute the `∃` results with `let`,
+  then hand them all to a `*_close` theorem whose parameters they are; its
+  body projects variables (`DerivOn::chain_close`: 0.9M steps for both
+  halves) — [[library-gate-module-cold-rail]].
 - `absurd` needs a constructor clash; `False` goes by `false_elim`.
 - Tier-2 laws through `Vis` are not provable with `=` (no funext): state
   them up to the tree's equivalence.

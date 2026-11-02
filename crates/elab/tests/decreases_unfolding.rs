@@ -221,25 +221,103 @@ fn a_self_call_under_a_lambda_is_refused_but_the_function_still_checks() {
     "#);
 }
 
-const MERGE: &str = r#"
-theorem succ_add_le(a, b: Nat): Succ(a + b) <= Succ(a) + b {
-    match b { Zero => nat::Nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
+#[test]
+fn a_match_on_a_computed_scrutinee_is_spelled_on_both_sides() {
+    // `merge`'s `match nat::Nat::le_dec(x, y)`: the anchors do not reduce past
+    // a stuck scrutinee, so the walk spells the match on both sides at a
+    // motive generalizing the scrutinee (§3's second amendment;
+    // issues/decreases-unfold-convoy-scrutinee.md). Outside the walk before.
+    ok(r#"
+        theorem succ_add_le(a, b: Nat): Succ(a + b) <= Succ(a) + b {
+            match b { Zero => nat::Nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
+        }
+        fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
+            match xs {
+                Nil => ys,
+                Cons(x, xt) => match ys {
+                    Nil => Cons(x, xt),
+                    Cons(y, yt) => match nat::Nat::le_dec(x, y) {
+                        Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
+                        Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
+                    },
+                },
+            }
+            on ?dec1 := succ_add_le(xt.len(), yt.len());
+            on ?dec2 := nat::Nat::le_refl(Succ(xt.len()) + yt.len());
+        }
+        theorem cite(x, y: Nat, xt, yt: List<Nat>): merge(Cons(x, xt), Cons(y, yt)) = match nat::Nat::le_dec(x, y) {
+            Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
+            Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
+        } { merge_unfold(Cons(x, xt), Cons(y, yt)) }
+    "#);
 }
-fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
-    match xs {
-        Nil => ys,
-        Cons(x, xt) => match ys {
-            Nil => Cons(x, xt),
-            Cons(y, yt) => match nat::Nat::le_dec(x, y) {
-                Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
-                Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
-            },
-        },
-    }
-    on ?dec1 := succ_add_le(xt.len(), yt.len());
-    on ?dec2 := nat::Nat::le_refl(Succ(xt.len()) + yt.len());
+
+#[test]
+fn a_convoy_on_a_computed_scrutinee_gets_its_equation() {
+    // `match h: c`, the loop test of every measured `runtime fn`: the
+    // obligation reads `h`, whose type names the walk's alias of `c`; the
+    // lifted obligation states it about `c` itself, and the walk spells the
+    // convoy on both sides (issues/decreases-unfold-convoy-scrutinee.md).
+    ok(r#"
+        fn cd(n, acc: Nat) -> Nat decreases n {
+            match h: n.leb(0) {
+                True => acc,
+                False => cd(n - 1, acc + n),
+            }
+        }
+        theorem cite(n, acc: Nat): cd(n, acc) = match h: n.leb(0) { True => acc, False => cd(n - 1, acc + n) } {
+            cd_unfold(n, acc)
+        }
+    "#);
 }
-"#;
+
+// -- back inside the walk -----------------------------------------------------
+
+#[test]
+fn an_obligation_left_to_omega_is_lifted_and_carries_the_equation() {
+    // §4's refutation and its fix, pinned together: `halve_steps` writes no
+    // `on`, so its obligation is `omega`'s — and `omega` reconstructs against
+    // the *context*, so the body and the two companions must reference one
+    // lifted `halve_steps#obl_1` rather than each re-run it. The customer is
+    // the equation at an **open** argument, which is what the whole round is
+    // for; `halve_three` next door pins that the literal still computes.
+    ok(r#"
+        fn halve_steps(n: Nat) -> Nat decreases n {
+            match n { Zero => 0, Succ(k) => Succ(halve_steps(k)) }
+        }
+        theorem hs_id(n: Nat): halve_steps(n) = n {
+            match n {
+                Zero => halve_steps_unfold(0),
+                Succ(k, ih) =>
+                    j(ih, λ y _ => halve_steps(Succ(k)) = Succ(y), halve_steps_unfold(Succ(k))),
+            }
+        }
+        theorem hs_three(): halve_steps(3) = 3 { refl }
+    "#);
+}
+
+#[test]
+fn a_member_by_measure_gets_its_equation_under_the_qualified_name() {
+    // §5's last paragraph: a member recurses under its **base** name, and the
+    // equation is read outside the body, so its right-hand side spells the
+    // self-call qualified. Two refinement stages over two different
+    // scrutinees, one of them the measure's — and the arm binders the lifted
+    // obligation quantifies are typed from `List<A>`, not from `Nat`.
+    ok(r#"
+        import option;
+        fn List::nth2<A>(xs: List<A>, i: Nat) -> Option<A> decreases i {
+            match xs {
+                Nil => None,
+                Cons(x, xt) => match i { Zero => Some(x), Succ(k) => nth2(xt, k) },
+            }
+        }
+
+        theorem nth2_step<A>(x: A, xt: List<A>, k: Nat):
+            List::nth2(Cons(x, xt), Succ(k)) = List::nth2(xt, k) {
+            List::nth2_unfold(Cons(x, xt), Succ(k))
+        }
+    "#);
+}
 
 #[test]
 fn a_match_on_a_computed_scrutinee_is_walked_through_its_own_eliminator() {
@@ -427,48 +505,3 @@ fn an_obligation_the_guard_does_not_give_is_still_refused() {
 
 // -- back inside the walk -----------------------------------------------------
 
-#[test]
-fn an_obligation_left_to_omega_is_lifted_and_carries_the_equation() {
-    // §4's refutation and its fix, pinned together: `halve_steps` writes no
-    // `on`, so its obligation is `omega`'s — and `omega` reconstructs against
-    // the *context*, so the body and the two companions must reference one
-    // lifted `halve_steps#obl_1` rather than each re-run it. The customer is
-    // the equation at an **open** argument, which is what the whole round is
-    // for; `halve_three` next door pins that the literal still computes.
-    ok(r#"
-        fn halve_steps(n: Nat) -> Nat decreases n {
-            match n { Zero => 0, Succ(k) => Succ(halve_steps(k)) }
-        }
-        theorem hs_id(n: Nat): halve_steps(n) = n {
-            match n {
-                Zero => halve_steps_unfold(0),
-                Succ(k, ih) =>
-                    j(ih, λ y _ => halve_steps(Succ(k)) = Succ(y), halve_steps_unfold(Succ(k))),
-            }
-        }
-        theorem hs_three(): halve_steps(3) = 3 { refl }
-    "#);
-}
-
-#[test]
-fn a_member_by_measure_gets_its_equation_under_the_qualified_name() {
-    // §5's last paragraph: a member recurses under its **base** name, and the
-    // equation is read outside the body, so its right-hand side spells the
-    // self-call qualified. Two refinement stages over two different
-    // scrutinees, one of them the measure's — and the arm binders the lifted
-    // obligation quantifies are typed from `List<A>`, not from `Nat`.
-    ok(r#"
-        import option;
-        fn List::nth2<A>(xs: List<A>, i: Nat) -> Option<A> decreases i {
-            match xs {
-                Nil => None,
-                Cons(x, xt) => match i { Zero => Some(x), Succ(k) => nth2(xt, k) },
-            }
-        }
-
-        theorem nth2_step<A>(x: A, xt: List<A>, k: Nat):
-            List::nth2(Cons(x, xt), Succ(k)) = List::nth2(xt, k) {
-            List::nth2_unfold(Cons(x, xt), Succ(k))
-        }
-    "#);
-}

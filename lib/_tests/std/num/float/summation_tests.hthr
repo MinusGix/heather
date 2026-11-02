@@ -1,0 +1,48 @@
+// Probes of `lib/std/num/float/summation.hthr` at binary16: the recursive
+// sum's bound and Kahan's step, by evaluation and by citing the theorems,
+// with negative controls. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import int; import omega; import rat; import list;
+import dyadic; import float; import round; import error; import arith; import eft; import summation;
+fn h16(neg: Bool, m, b: Nat, ok: binary16().canonical(m, b).IsTrue()) → Finite(binary16()) { Finite(neg, m, b, ok) }
+fn one() → Finite(binary16()) { h16(False, 1024, 14, trivial) }
+fn one_up() → Finite(binary16()) { h16(False, 1025, 14, trivial) }
+// 2^-11, half an ulp of 1; 2^-10; 3 · 2^-12; 2^-12.
+fn half_ulp() → Finite(binary16()) { h16(False, 1024, 3, trivial) }
+fn ulp1() → Finite(binary16()) { h16(False, 1024, 4, trivial) }
+fn b3() → Finite(binary16()) { h16(False, 1536, 3, trivial) }
+fn q() → Finite(binary16()) { h16(False, 1024, 2, trivial) }
+fn pzero() → Finite(binary16()) { Finite::zero(binary16(), False) }
+
+// The recursive sum of 1, 2^-11, 2^-11: both ties round to even, so s = 1
+// and the error is 2^-10, inside γ(2)·(1 + 2^-10).
+fn xs() → List<Finite(binary16())> { [half_ulp(), half_ulp()] }
+theorem rs_step(): one().add(half_ulp()) = Float::Fin(one()) { refl }
+theorem rs_trace(): xs().RecSum(NearestEven, one(), one()) {
+    Exists(one(), And(trivial, And(refl, Exists(one(), And(trivial, And(refl, refl))))))
+}
+theorem rs_bound(): (one().val() - (Cons(one(), xs())).val_sum()).abs() <= (binary16()).gamma(NearestEven, 2) * (Cons(one(), xs())).abs_sum() {
+    (binary16()).rec_sum_error(NearestEven, one(), xs(), one(), rs_trace(), trivial)
+}
+// Negative control: one rounding fewer is not enough, the error is past
+// γ(1)·∑|xᵢ|.
+theorem rs_needs_n(): ¬((one().val() - (Cons(one(), xs())).val_sum()).abs() <= (binary16()).gamma(NearestEven, 1) * (Cons(one(), xs())).abs_sum()) {
+    Rat::not_le_of_lt(x := (binary16()).gamma(NearestEven, 1) * (Cons(one(), xs())).abs_sum(), y := (one().val() - (Cons(one(), xs())).val_sum()).abs(), h := trivial)
+}
+
+// Kahan's step on s = 1, y = 3 · 2^-12: t = 1 + 2^-10, t - s = 2^-10, and
+// c = 2^-10 - 3 · 2^-12 = 2^-12 is minus t's error.
+theorem ks_t(): one().add(b3()) = Float::Fin(one_up()) { refl }
+theorem ks_z(): one_up().sub(one()) = Float::Fin(ulp1()) { refl }
+theorem ks_c(): ulp1().sub(b3()) = Float::Fin(q()) { refl }
+theorem ks_exact(): one_up().val() - q().val() ≈ one().val() + b3().val() {
+    Finite::kahan_step(one(), b3(), one_up(), ulp1(), q(), True, NearestEven, trivial, refl, refl, refl)
+}
+// Negative control: out of order (s = 3 · 2^-12, y = 1), t - s = 1 + 2^-12
+// rounds to 1, c = 0, and t - c misses s + y.
+theorem ks_t2(): b3().add(one()) = Float::Fin(one_up()) { refl }
+theorem ks_z2(): one_up().sub(b3()) = Float::Fin(one()) { refl }
+theorem ks_c2(): one().sub(one()) = Float::Fin(pzero()) { refl }
+theorem ks_needs_order(): ¬(one_up().val() - pzero().val() ≈ b3().val() + one().val()) {
+    λ e => Rat::not_le_of_lt(x := b3().val() + one().val(), y := one_up().val() - pzero().val(), h := trivial)(Rat::le_of_same(e))
+}

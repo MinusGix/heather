@@ -38,8 +38,8 @@ import rt;
 // What the reflector recognises, as the host's global references.
 
 // A primitive global: a word operation (by `Op::code`'s number), a `Bool`
-// connective, a literal, an extension, or `foldl`.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl }
+// connective, a literal, an extension, `foldl`, or a byte read or write.
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -254,6 +254,20 @@ fn rt_arm(m: MatchInfo, i: Nat) → Tac<Handle> {
     match m.arms.nth(i) { None => rt_refuse("a match without its arms"), Some(a) => rt_arm_body(m, a) }
 }
 
+// A byte read or write: its operands as variables, its buffer's capacity
+// from the buffer's code.
+fn rt_bytes_op(k: Known, st: RSt, h: Handle, operand: Bool, name: String, args: List<Handle>, op: Nat → Op,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    match args {
+        Nil => rt_refuse("`" ++ name ++ "` without its buffer"),
+        Cons(xs, _) => k.ty_of(xs).bind(λ t => match t {
+            Bytes(c) => RSt::operands(step, st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(op(c), r.snd)))),
+            _ => rt_refuse("`" ++ name ++ "` of something other than a byte buffer"),
+        }),
+    }
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -294,6 +308,8 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             }),
                             Nil => rt_refuse("`zero_extend` without its width"),
                         },
+                        PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
+                        PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
                         PFoldl => match args {
                             Cons(over, more) => match more {
                                 Cons(step, rest) => match rest {
@@ -392,7 +408,8 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
      Pair("BitVec::bor", PWord(3)), Pair("BitVec::bxor", PWord(4)), Pair("BitVec::eq_bit", PWord(5)),
      Pair("BitVec::unsigned_lt_bit", PWord(6)), Pair("BitVec::signed_lt_bit", PWord(7)),
      Pair("Bool::and", PConj), Pair("Bool::or", PDisj), Pair("Bool::not", PNeg),
-     Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("List::foldl", PFoldl)]
+     Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("List::foldl", PFoldl),
+     Pair("List::byte_at", PGet), Pair("List::with_byte", PSet)]
 }
 
 fn rt_prims(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {

@@ -167,6 +167,28 @@ claimed are *not* in the fragment:
   `even_or_odd_wf` back in, and the only thing left outside is a site whose
   statement names a binder the generator cannot type.
 
+**Amended again (2026-11-01, issues/decreases-unfold-convoy-scrutinee.md).**
+Obligations are lifted now, so a stuck scrutinee no longer costs a named hole
+twice, and the rendering cost was the only thing keeping it out. `merge` is
+in, and so is `match h: c` (a convoy), which every measured `runtime fn` uses
+for its loop test. `Respell::match_spelled` proves such a match by the match
+again, at a motive that spells both sides with the scrutinee generalized:
+
+`(match c as λ s => (e: c = s) → L(s, e) = R(s, e) { C => λ h => p_C })(refl)`
+
+`L(s, e)` is the left side's convoy at `s`, each arm the walk's left
+rendering of it, and `R` is the same with the right renderings. A plain match
+drops `e`. At `s := c, e := refl` both sides are the anchors' own matches by
+conversion. Each arm's `let`s (convoy equations at `refl`, obligations) are
+repeated around its renderings, because the motive sits outside the arm. The
+match must be at the anchor, since the motive needs the result type. Below
+the anchor (inside an argument) it is still refused.
+
+A lifted obligation used to quantify over the walk's `__dec_scrut_N` alias as
+if it were a parameter, which made `h: __dec_scrut_N = False` unprovable in
+the lifted statement. It now substitutes the alias's value into the statement
+instead.
+
 Refusal is **not** an error on `f`: the companion is simply not emitted, and
 `f` checks exactly as it does today. A later reference to `f_unfold` is what
 reports, naming the body shape that stopped the walk and this section — the

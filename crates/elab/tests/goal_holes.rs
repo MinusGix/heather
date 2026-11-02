@@ -79,7 +79,8 @@ fn a_body_hole_is_discharged_by_name() {
     // decline into the device's fourth cell) + 3 preamble (`add` included: a
     // `fn` is a *defined* Ψ-global since issues/simulate-conversion-cost.md)
     // + this one; goals never leak into the real Ψ.
-    assert_eq!(e.psi().bindings.len(), 16);
+    // +6: the prelude's binding-statement classes and calls.
+    assert_eq!(e.psi().bindings.len(), 22);
 }
 
 #[test]

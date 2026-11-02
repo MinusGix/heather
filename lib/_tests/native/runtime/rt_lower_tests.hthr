@@ -1,0 +1,113 @@
+// Probes of the default setup's lowering of `rt` into FunctionIR and its
+// soundness proved once (`lib/native/runtime/rt_lower.hthr`): V6 of
+// docs/runtime-fn-setups-design.md §12. Per program nothing is proved: the
+// lowering is evaluated, the theorem `Tm::lower_sound` is instantiated, and
+// the pin (`rt` meaning to function, by conversion) closes the gap. Tests,
+// not library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import rt;
+import function_ir;
+import function_ir_eval;
+import rt_lower;
+
+fn no_records_world() → World { World(RecInfo::none, [], trivial) }
+
+// What a lowering's region leaves at its result port as a word, or zero
+// where the lowering refused.
+fn Lowered::word(o: Option<Lowered>, call: Answers(), values: Valuation()) → BitVec(64) {
+    match o { None => BitVec::ofNat(0), Some(c) => c.region.eval(call, values)(64, c.result) }
+}
+
+// ---------------------------------------------------------------------------
+// A branch on a bit, one arm an `Add` (V6's two cases together).
+
+fn pick(c: Bool, x, y: BitVec(64)) → BitVec(64) {
+    match c { True => x.add(y), False => y }
+}
+
+// The context binds `c`, `x`, `y` in order, so `y` is variable 0. Their
+// ports are the function's parameter ids 0, 1, 2.
+fn pick_context() → List<Ty> { [Word(64), Word(64), Bit] }
+
+fn pick_body() → Tm { If(2, Prim(Add(64), [1, 0]), Var(0)) }
+
+// The lowering accepts it, by evaluation: the sum at id 3, the branch's
+// result at 4, the next fresh id 5.
+theorem pick_lowers():
+    Tm::lower(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3).map(λ (c: Lowered) => Pair(c.result, c.next)) = Some(Pair(4, 5)) { refl }
+
+// The region the lowering emits computes `pick`, from any valuation holding
+// the arguments at their ports: the once-proof, instantiated.
+theorem pick_agrees(c: Bool, x, y: BitVec(64), call: Answers(), values: Valuation(),
+    held_c: values(1, 0) = BitVec::ofBool(c), held_x: values(64, 1) = x, held_y: values(64, 2) = y):
+    Lowered::word(Tm::lower(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3), call, values) = pick(c, x, y) {
+    Tm::lower_sound(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3, call, values, Pair(y, Pair(x, Pair(c, trivial))),
+        ⟨held_y, ⟨held_x, ⟨held_c, trivial⟩⟩⟩, ⟨Nat::lt_succ_self(2), ⟨trivial, ⟨trivial, trivial⟩⟩⟩).right.right.right
+}
+
+// ---------------------------------------------------------------------------
+// A shared subterm: the sum bound once and read twice.
+
+fn twice(x: BitVec(64)) → BitVec(64) {
+    let s = x.add(x);
+    s.add(s)
+}
+
+fn twice_body() → Tm { Let(Prim(Add(64), [0, 0]), Prim(Add(64), [0, 0])) }
+
+theorem twice_agrees(x: BitVec(64), call: Answers(), values: Valuation(), held_x: values(64, 0) = x):
+    Lowered::word(Tm::lower(twice_body(), no_records_world(), [Word(64)], [0], 1), call, values) = twice(x) {
+    Tm::lower_sound(twice_body(), no_records_world(), [Word(64)], [0], 1, call, values, Pair(x, trivial),
+        ⟨held_x, trivial⟩, ⟨Nat::lt_succ_self(0), trivial⟩).right.right.right
+}
+
+// ---------------------------------------------------------------------------
+// Refusals.
+
+// A branch on a word is ill-typed: the lowering refuses it, so the theorem
+// says nothing of it.
+theorem branch_on_word_refused(): Tm::lower(If(0, Var(0), Var(0)), no_records_world(), [Word(64)], [0], 1) = None { refl }
+
+// Arms of different codes are refused.
+theorem arms_disagree_refused():
+    Tm::lower(If(0, Var(0), Var(1)), no_records_world(), [Bit, Word(64)], [0, 1], 2) = None { refl }
+
+// A wrong claim about the emitted region is refused: it computes `pick`,
+// not the difference.
+// expect-error(kernel): the kernel rejected `pick_not_sub`: NotConvertible
+theorem pick_not_sub(x, y: BitVec(64), call: Answers(), values: Valuation(),
+    held_c: values(1, 0) = BitVec::ofBool(True), held_x: values(64, 1) = x, held_y: values(64, 2) = y):
+    Lowered::word(Tm::lower(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3), call, values) = x.sub(y) {
+    Tm::lower_sound(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3, call, values, Pair(y, Pair(x, Pair(True, trivial))),
+        ⟨held_y, ⟨held_x, ⟨held_c, trivial⟩⟩⟩, ⟨Nat::lt_succ_self(2), ⟨trivial, ⟨trivial, trivial⟩⟩⟩).right.right.right
+}
+
+// The negative control on the lowering itself: an `Add` lowered to a `Sub`
+// node fails the `Add` case's proof, word for word the proof of the right
+// lowering (`Tm::add_node_sound`).
+fn wrong_add_node(next, width, pa, pb: Nat) → Option<Lowered> {
+    Some(Lowered(nodes_region([Sub(width, next, pa, pb)]), next, Succ(next)))
+}
+
+// expect-error(kernel): the kernel rejected `wrong_add_node_sound`: NotConvertible
+theorem wrong_add_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, width, a, b, pa, pb: Nat,
+    at_a: port_at(ports, a) = Some(pa), at_b: port_at(ports, b) = Some(pb), ea: Ty::at(g, a) = Word(width), eb: Ty::at(g, b) = Word(width)):
+    Tm::LowerHolds(Prim(Add(width), [a, b]), w, g, ports, next, wrong_add_node(next, width, pa, pb)) {
+    λ call values env held below => {
+        let sum = λ (wd: Nat) => values(wd, pa).add(values(wd, pb));
+        let left = Ty::cast_holds(w.tys, values, pa, Ty::at(g, a), Word(width), ea, Env::get(w.tys, g, env, a),
+            env_holds_at(w.tys, values, g, ports, env, held, a, pa, at_a));
+        let right = Ty::cast_holds(w.tys, values, pb, Ty::at(g, b), Word(width), eb, Env::get(w.tys, g, env, b),
+            env_holds_at(w.tys, values, g, ports, env, held, b, pb, at_b));
+        ⟨Nat::le_succ_r(next, next, next.le_refl()), ⟨next.lt_succ_self(),
+            ⟨λ wd id lt => Valuation::set_other(values, next, sum, wd, id, Nat::ne_of_lt(id, next, lt)),
+                trans(Valuation::set_here(values, next, sum, width), eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.add(y), left, right))⟩⟩⟩
+    }
+}

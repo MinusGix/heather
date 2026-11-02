@@ -138,3 +138,42 @@ theorem ts_needs_nearest(): ¬(tiny().sub(ulp1())).Exact(tiny().val() - ulp1().v
         Rat::not_le_of_lt(x := (-ulp1()).val(), y := tiny().val() - ulp1().val(), h := trivial)(Rat::le_of_same(Rat::same_sym(e)))
     }
 }
+
+// Veltkamp splitting at s = 5 (C = 33 = 1056 · 2^-5) on x = 1537 · 2^-10:
+// g = 1585 · 2^-5, d = -1537 · 2^-5, xh = 1.5 (6 bits), xl = 2^-10.
+fn c33() → Finite(binary16()) { h16(False, 1056, 19, trivial) }
+fn vx() → Finite(binary16()) { h16(False, 1537, 14, trivial) }
+fn vg() → Finite(binary16()) { h16(False, 1585, 19, trivial) }
+fn vd() → Finite(binary16()) { h16(True, 1537, 19, trivial) }
+fn vxh() → Finite(binary16()) { h16(False, 1536, 14, trivial) }
+theorem vk_g(): c33().mul(vx()) = Float::Fin(vg()) { refl }
+theorem vk_d(): vx().sub(vg()) = Float::Fin(vd()) { refl }
+theorem vk_xh(): vg().add(vd()) = Float::Fin(vxh()) { refl }
+theorem vk_xl(): vx().sub(vxh()) = Float::Fin(ulp1()) { refl }
+theorem vk_split(): vxh().val() + ulp1().val() ≈ vx().val() ∧ OnGrid(vx().bexp + 5, vxh().H())
+    ∧ (ulp1().H() <= Nat::pow(2, vx().bexp + 5).int() ∧ -Nat::pow(2, vx().bexp + 5).int() <= ulp1().H())
+{
+    Finite::veltkamp(vx(), c33(), vg(), vd(), vxh(), ulp1(), 5, True, NearestEven, Rat::le_antisymm(trivial, trivial), trivial, trivial, trivial, trivial,
+        refl, refl, refl, refl)
+}
+// The last two steps may round in any mode, and a negative `x` splits the
+// same way, negated.
+theorem vk_split_neg(): (-vxh()).val() + (-ulp1()).val() ≈ (-vx()).val() {
+    (Finite::veltkamp(-vx(), c33(), -vg(), -vd(), -vxh(), -ulp1(), 5, True, TowardPos, Rat::le_antisymm(trivial, trivial), trivial, trivial, trivial, trivial,
+        refl, refl, refl, refl)).left
+}
+// Negative control: with `d` rounded toward zero, d = -1536 · 2^-5, xh =
+// 49 · 2^-5 and xl = -31 · 2^-10, past half the spacing (16 · 2^-10) of xh's grid.
+fn vd_rz() → Finite(binary16()) { h16(True, 1536, 19, trivial) }
+fn vxh_rz() → Finite(binary16()) { h16(False, 1568, 14, trivial) }
+fn vxl_rz() → Finite(binary16()) { h16(True, 1984, 8, trivial) }
+theorem vk_d_rz(): vx().sub(vg(), mode := TowardZero) = Float::Fin(vd_rz()) { refl }
+theorem vk_xh_rz(): vg().add(vd_rz()) = Float::Fin(vxh_rz()) { refl }
+theorem vk_xl_rz(): vx().sub(vxh_rz()) = Float::Fin(vxl_rz()) { refl }
+theorem vk_needs_nearest(): ¬(-Nat::pow(2, vx().bexp + 5).int() <= vxl_rz().H()) {
+    λ h => {
+        let e: (vxl_rz().H() = -1015808) = refl;
+        let p: (Nat::pow(2, vx().bexp + 5).int() = 524288) = refl;
+        omega(h, e, p)
+    }
+}
