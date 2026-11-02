@@ -314,6 +314,10 @@ when a snapshot seals a new layer; `semantic_snapshot` is the one place.
 Ambiguity semantics depend on seeing every entry for a name across layers;
 the merged index keeps that by holding the concatenated entry list per name.
 
+**Done (2026-11-02).** Built as log-many shared runs rather than one merged
+index per world, so retained module states share them
+(`crates/elab/src/layered.rs`; the measurement is in the issue's log).
+
 ## 7. Smaller items (under 2% each here; recorded, not filed)
 
 - **Readback materializes the whole environment.** `readback.rs` ~523
