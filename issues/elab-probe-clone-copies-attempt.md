@@ -37,3 +37,4 @@ In [[elab-field-lifetimes-explicit]]'s lifetime groups, a probe is one more clon
 ## Log
 
 - 2026-11-02: Second file, same A/B (3 interleaved cold samples, 2026-11-02, cloud box): lib/std/num/rat.hthr went 37.91 / 37.61 / 40.00 s to 35.72 / 36.64 / 36.71 s wall, −3.3%, separate. The kernel gate overlapped, and the same 34 counter columns were identical. rat is light on operator chains, so the win scales with how many operator leaves a file probes; calc_parser is the heavy case at −20%.
+- 2026-11-02: First step taken: CheckNote and ReflNote hold Rc<Cx> (separate PR from branch claude/project-thread-1bpp32). scripts/test --pr: 2921 passed, 0 failed. The structural fix (mark and truncate the attempt) stays open here.

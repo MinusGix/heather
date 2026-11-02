@@ -6280,7 +6280,7 @@ impl Elaborator {
         stats::count(stats::Counter::DiagCandidates);
         self.attempt.check_notes.borrow_mut().push(CheckNote {
             span,
-            cx: cx.clone(),
+            cx: Rc::new(cx.clone()),
             got: got.clone(),
             expected: expected.clone(),
             level: lvl.clone(),
@@ -6463,7 +6463,7 @@ impl Elaborator {
         stats::count(stats::Counter::DiagCandidates);
         self.attempt.refl_notes.borrow_mut().push(ReflNote {
             span,
-            cx: cx.clone(),
+            cx: Rc::new(cx.clone()),
             lhs: lhs.clone(),
             rhs: rhs.clone(),
             ty: ty.clone(),
