@@ -190,3 +190,108 @@ fn not_a_list(n: Nat) → Nat {
 theorem sum_unfolds(xs: List<Nat>): sum(xs) = xs.foldl(λ (s: Nat) (x: Nat) => sum::step(s, x), 0) {
     sum_unfold(xs)
 }
+
+// ---- Early exit (§5.2): the step returns `ForStep`, the loop is `for_in` ----
+
+// `break` in a statement `if`: the rest of the body is the `if`'s other arm.
+fn sum_until_zero(xs: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        if x = 0 { break }
+        n := n + x
+    }
+    n
+}
+theorem sum_until_zero_lit(): sum_until_zero([1, 2, 0, 5]) = 3 { refl }
+theorem sum_until_zero_all(): sum_until_zero([1, 2]) = 3 { refl }
+// The step's equations, at a literal and a neutral element.
+theorem sum_until_zero_stops(n: Nat): sum_until_zero::step(n, 0) = ForStep::Break(n) { refl }
+theorem sum_until_zero_goes(n, k: Nat): sum_until_zero::step(n, k + 1) = ForStep::Next(n + (k + 1)) { refl }
+// Neutral: the function reads the state out of the exit.
+theorem sum_until_zero_is(xs: List<Nat>):
+    sum_until_zero(xs) = (xs.for_in(sum_until_zero::step, 0)).state(0) { refl }
+
+// `continue` skips the rest of this element's body.
+fn sum_skipping_twos(xs: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        if x = 2 { continue }
+        n := n + x
+    }
+    n
+}
+theorem sum_skipping_twos_lit(): sum_skipping_twos([1, 2, 3, 2]) = 4 { refl }
+
+// `break` in a `match` arm, with two locals: the state record's fields.
+fn sum_to_none(xs: List<Option<Nat>>) → Nat {
+    let mut total = 0;
+    let mut count = 0;
+    for o in xs {
+        match o {
+            None => { break },
+            Some(k) => { total := total + k },
+        }
+        count := count + 1
+    }
+    total + count
+}
+theorem sum_to_none_lit(): sum_to_none([Some(3), Some(4), None, Some(100)]) = 9 { refl }
+
+// A nested loop's `break` is its own; the outer body goes on.
+fn inner_break(xs, ys: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        for y in ys { if y = 3 { break } n := n + y }
+        if x = 9 { continue }
+        n := n + x
+    }
+    n
+}
+theorem inner_break_lit(): inner_break([1, 9, 2], [1, 3, 5]) = 6 { refl }
+
+// `return` from a search with no state: the function's value is the
+// `Return`, and otherwise the rest of the body.
+fn find_big(xs: List<Nat>) → Nat {
+    for x in xs {
+        if 10 <= x { return x }
+    }
+    0
+}
+theorem find_big_lit(): find_big([1, 12, 30]) = 12 { refl }
+theorem find_big_none(): find_big([1, 2]) = 0 { refl }
+
+// `return` of a value computed from the state.
+fn index_of(xs: List<Nat>, t: Nat) → Option<Nat> {
+    let mut i = 0;
+    for x in xs {
+        if x = t { return Some(i) }
+        i := i + 1
+    }
+    None
+}
+theorem index_of_lit(): index_of([5, 6, 7], 7) = Some(2) { refl }
+theorem index_of_none(): index_of([5, 6], 9) = None { refl }
+
+// An open element type, and the rest of the body reading the state.
+fn first_or<A>(xs: List<A>, d: A) → A {
+    let mut seen = 0;
+    for x in xs {
+        seen := seen + 1;
+        return x
+    }
+    d
+}
+theorem first_or_lit(): first_or([7, 8], 0) = 7 { refl }
+theorem first_or_open<A>(a, d: A, xs: List<A>): first_or(List::Cons(a, xs), d) = a { refl }
+theorem first_or_nil<A>(d: A): first_or(List::Nil, d) = d { refl }
+
+fn doubled_unless_big(xs: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        if 100 <= x { return 0 }
+        n := n + x
+    }
+    n * 2
+}
+theorem doubled_unless_big_lit(): doubled_unless_big([1, 2]) = 6 { refl }
+theorem doubled_unless_big_returns(): doubled_unless_big([1, 200, 2]) = 0 { refl }

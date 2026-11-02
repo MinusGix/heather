@@ -203,6 +203,30 @@ fn List::foldl<A, B>(self xs: List<A>, f: B → A → B, z: B) → B {
     }
 }
 
+// One step of a loop that may exit early (docs/sequencing-surface-design.md
+// §5.2): go on with the state, stop the loop with it, or leave the function
+// with its value. A `for` whose body has `break`, `continue` or `return`
+// lowers to `List::for_in` over a step returning this.
+inductive ForStep<S, R> { Next(s: S), Break(s: S), Return(r: R) }
+
+// The state a loop continues with after a `Next` or `Break`, `d` after a
+// `Return` (which leaves the function, so nothing reads it).
+fn ForStep::state<S, R>(self f: ForStep<S, R>, d: S) → S {
+    match f { Next(s) => s, Break(s) => s, Return(_) => d }
+}
+
+// `foldl` that stops at the first `Break` or `Return`.
+fn List::for_in<A, S, R>(self xs: List<A>, step: S → A → ForStep<S, R>, s: S) → ForStep<S, R> {
+    match xs {
+        Nil => Next(s),
+        Cons(h, t) => match step(s, h) {
+            Next(u) => t.for_in(step, u),
+            Break(u) => Break(u),
+            Return(r) => Return(r),
+        },
+    }
+}
+
 // A left fold whose step is a computation in a carrier `M`: the binding
 // counterpart of `foldl`, and what a `for` loop in a carrier block lowers to
 // (docs/sequencing-surface-design.md §6.1). Each step runs after the

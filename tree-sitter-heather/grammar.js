@@ -269,14 +269,15 @@ module.exports = grammar({
 
     block: $ => choice(
       seq('{', '}'),
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form)), choice(
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)), choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
       ), '}'),
       // A statement body ends in a statement and has no result
       // (docs/sequencing-surface-design.md §4).
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form)),
-        choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form), '}'),
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
+        choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form,
+          'break', 'continue', seq('return', field('value', $._expression))), '}'),
     ),
     // `let x = e;`, and the binding statement `let x <- e;` (`←` too,
     // docs/sequencing-surface-design.md §3.1).
@@ -291,6 +292,9 @@ module.exports = grammar({
     statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement),
     // `for x in xs { body }` (§5.2): `in` is contextual.
     for_statement: $ => seq('for', field('binder', $.identifier), 'in', field('iterable', $._head_expression), field('body', $.block)),
+    // `break;`, `continue;`, `return e;` in a `for` body (§5.2): contextual
+    // words, statements only before `;` or `}`.
+    exit_statement: $ => choice(seq('break', ';'), seq('continue', ';'), seq('return', field('value', $._expression), ';')),
     // `e;` discards a computation's result in a block over a carrier.
     expression_statement: $ => seq(field('value', $._expression), ';'),
     // `have x = e;` binds opaquely (docs/have-design.md): one name, never a

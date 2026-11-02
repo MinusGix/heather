@@ -45,6 +45,19 @@ pub const LOOP: &str = "\0loop";
 pub const STATE: &str = "\0state";
 /// After a loop, a local's value out of its result: `\0proj(#forN, v)`.
 pub const PROJ: &str = "\0proj";
+/// `break;`, `continue;` and `return e;` as statements, at a private name.
+pub(crate) const BREAK: &str = "\0break";
+pub(crate) const CONTINUE: &str = "\0continue";
+pub(crate) const RETURN: &str = "\0return";
+/// The leaves of a loop body that exits early (§5.2): go on with the state
+/// `\0next(v̄)`, stop with it `\0brk(v̄)`, or leave the function with a
+/// value `\0ret(e)`. The elaborator spells them `ForStep`'s constructors.
+pub const NEXT: &str = "\0next";
+pub const BRK: &str = "\0brk";
+pub const RET: &str = "\0ret";
+/// A function body after a loop that may `return`: `\0after(#forN, { rest })`,
+/// the loop's `Return` value or else the rest.
+pub const AFTER: &str = "\0after";
 
 fn fail<T>(span: Span, msg: impl Into<String>) -> R<T> { Err(ParseError { span, msg: msg.into() }) }
 
@@ -99,6 +112,112 @@ fn unmark_for(e: &Expr) -> Option<(&Expr, &LamBinder, &Block)> {
     Some((&args[0], binders.first()?, b))
 }
 
+/// An exit statement: its marker, and `return`'s value.
+fn exit_of(s: &Stmt) -> Option<(&'static str, Option<&Expr>, Span)> {
+    let Stmt::Let { expr, span, .. } = s else { return None };
+    let ExprKind::App { head, args, .. } = &expr.kind else { return None };
+    let ExprKind::Var(n) = &head.kind else { return None };
+    for m in [BREAK, CONTINUE, RETURN] {
+        if n == m { return Some((m, args.first(), *span)); }
+    }
+    None
+}
+
+/// Does a loop body exit early: an exit statement in it, or in a statement
+/// form's body inside it — not in a nested loop's, whose exits are its own.
+fn has_exit(b: &Block) -> bool {
+    b.stmts.iter().any(|s| exit_of(s).is_some() || matches!(s, Stmt::Let { expr, .. } if unmark(expr, STMT).is_some_and(form_has_exit)))
+}
+
+fn form_has_exit(form: &Expr) -> bool {
+    matches!(&form.kind, ExprKind::Match { arms, .. }
+        if arms.iter().any(|a| matches!(&a.body.kind, ExprKind::Block(b) if has_exit(b))))
+}
+
+/// Does a loop body `return` (a [`has_exit`] whose exit is a `return`)?
+fn body_returns(b: &Block) -> bool {
+    b.stmts.iter().any(|s| matches!(exit_of(s), Some((m, _, _)) if m == RETURN)
+        || matches!(s, Stmt::Let { expr, .. } if unmark(expr, STMT).is_some_and(|form| matches!(&form.kind,
+            ExprKind::Match { arms, .. } if arms.iter().any(|a| matches!(&a.body.kind, ExprKind::Block(b) if body_returns(b)))))))
+}
+
+fn is_exit_stmt(s: &Stmt) -> bool {
+    exit_of(s).is_some() || matches!(s, Stmt::Let { expr, .. } if unmark(expr, STMT).is_some_and(form_has_exit))
+}
+
+/// Does a lowered loop body hold a `\0ret` leaf?
+fn returns(e: &Expr) -> bool {
+    let mut found = false;
+    let mut go = |x: &Expr| {
+        if matches!(&x.kind, ExprKind::App { head, .. } if matches!(&head.kind, ExprKind::Var(n) if n == RET)) {
+            found = true;
+        }
+    };
+    walk(e, &mut go);
+    found
+}
+
+fn walk(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    f(e);
+    crate::try_lower::visit_children(e, &mut |x| walk(x, f));
+}
+
+/// A loop body that exits early, lowered **in tail position** (§5.2): a
+/// statement form that exits takes the rest of the body into each of its
+/// arms, so the body is one expression whose leaves are `\0next(v̄)`,
+/// `\0brk(v̄)` and `\0ret(e)`. An arm that exits drops the rest. The rest is
+/// copied into every arm that falls through, which is linear when, as
+/// usual, one arm does.
+fn tail(mut stmts: Vec<Stmt>, env: &[String], vars: &[String], end: Span, next: &mut usize) -> R<Block> {
+    let leaf = |m: &str, span: Span| call(m, vars.iter().map(|v| var(v, span)).collect(), span);
+    let Some(i) = stmts.iter().position(is_exit_stmt) else {
+        let (mut b, _) = lower_in_env(Block { stmts, result: Box::new(unit(end)), ons: Vec::new(), span: end }, env, next)?;
+        b.result = Box::new(leaf(NEXT, end));
+        return Ok(b);
+    };
+    let rest = stmts.split_off(i);
+    let (mut pre, env) = lower_in_env(Block { stmts, result: Box::new(unit(end)), ons: Vec::new(), span: end }, env, next)?;
+    let head = &rest[0];
+    let after = &rest[1..];
+    if let Some((m, value, span)) = exit_of(head) {
+        pre.result = Box::new(match m {
+            BREAK => leaf(BRK, span),
+            CONTINUE => leaf(NEXT, span),
+            _ => call(RET, vec![value.expect("`return` has a value").clone()], span),
+        });
+        return Ok(pre);
+    }
+    let Stmt::Let { expr, .. } = head else { unreachable!("an exit statement is a `let`") };
+    let mut form = unmark(expr, STMT).expect("a statement form").clone();
+    let ExprKind::Match { arms, .. } = &mut form.kind else {
+        return fail(form.span, "a statement form is an `if` or a `match`");
+    };
+    for arm in arms {
+        let ExprKind::Block(body) = &arm.body.kind else {
+            return fail(arm.body.span, "a statement `match` arm is a braced block of statements: `P => { x := e }`");
+        };
+        let mut spliced = if body.stmts.is_empty() && matches!(body.result.kind, ExprKind::AutoRefl) { Vec::new() } else { body.stmts.clone() };
+        spliced.extend(after.iter().cloned());
+        let lowered = tail(spliced, &env, vars, body.span, next)?;
+        arm.body = Expr { span: arm.body.span, kind: ExprKind::Block(Box::new(lowered)) };
+    }
+    pre.result = Box::new(form);
+    Ok(pre)
+}
+
+/// No statement follows an exit in the block that holds it.
+fn check_unreachable(b: &Block) -> R<()> {
+    for (i, s) in b.stmts.iter().enumerate() {
+        if let Some((m, _, span)) = exit_of(s)
+            && i + 1 < b.stmts.len()
+        {
+            let word = match m { BREAK => "break", CONTINUE => "continue", _ => "return" };
+            return fail(span, format!("nothing after `{word}` runs: it ends the block"));
+        }
+    }
+    Ok(())
+}
+
 fn call(head: &str, args: Vec<Expr>, span: Span) -> Expr {
     Expr {
         kind: ExprKind::App { head: Box::new(var(head, span)), args, named: vec![], explicit: false, goal_oriented: false },
@@ -136,7 +255,13 @@ pub(crate) fn lower_block(b: Block, next: &mut usize) -> R<Block> {
     lower_in(b, &[], next)
 }
 
-fn lower_in(mut b: Block, outer: &[String], next: &mut usize) -> R<Block> {
+fn lower_in(b: Block, outer: &[String], next: &mut usize) -> R<Block> {
+    Ok(lower_in_env(b, outer, next)?.0)
+}
+
+/// [`lower_in`], and the mutable locals in scope at the block's end.
+fn lower_in_env(mut b: Block, outer: &[String], next: &mut usize) -> R<(Block, Vec<String>)> {
+    check_unreachable(&b)?;
     let mut env: Vec<String> = outer.to_vec();
     let mut stmts = Vec::with_capacity(b.stmts.len());
     for s in std::mem::take(&mut b.stmts) {
@@ -167,18 +292,25 @@ fn lower_in(mut b: Block, outer: &[String], next: &mut usize) -> R<Block> {
                     // The state in declaration order, so `f::State(v̄)` reads
                     // as the locals were written; a residual's last.
                     vars.sort_by_key(|v| env.iter().position(|e| e == v).unwrap_or(usize::MAX));
-                    if vars.is_empty() {
+                    // A loop that may `return` computes its exit even
+                    // with no state (a search).
+                    if vars.is_empty() && !body_returns(body) {
                         return fail(span,
                             "this `for` assigns no `let mut` local, so it computes nothing: in pure code \
-                             a loop only reassigns locals");
+                             a loop only reassigns locals or `return`s");
                     }
                     let mut inner = env.clone();
                     for v in &vars {
                         if !inner.contains(v) { inner.push(v.clone()); }
                     }
-                    let mut lowered = lower_in(body.clone(), &inner, next)?;
-                    let end = lowered.result.span;
-                    lowered.result = Box::new(call(STATE, vars.iter().map(|v| var(v, end)).collect(), end));
+                    let lowered = if has_exit(body) {
+                        tail(body.stmts.clone(), &inner, &vars, body.result.span, next)?
+                    } else {
+                        let mut lowered = lower_in(body.clone(), &inner, next)?;
+                        let end = lowered.result.span;
+                        lowered.result = Box::new(call(STATE, vars.iter().map(|v| var(v, end)).collect(), end));
+                        lowered
+                    };
                     let lam = Expr {
                         kind: ExprKind::Lam {
                             binders: vec![x.clone()],
@@ -200,6 +332,10 @@ fn lower_in(mut b: Block, outer: &[String], next: &mut usize) -> R<Block> {
                             opaque: false,
                         });
                     }
+                } else if unmark(&expr, STMT).is_some_and(form_has_exit) || exit_of(&Stmt::Let { name: name.clone(), ty: None, expr: expr.clone(), span, opaque }).is_some() {
+                    // An exit, or a form holding one, is the enclosing loop's
+                    // to lower in tail position ([`tail`]).
+                    stmts.push(Stmt::Let { name, ty, expr, span, opaque });
                 } else if let Some(form) = unmark(&expr, STMT) {
                     let mut vars = Vec::new();
                     assigned_by_form(form, &mut vars);
@@ -259,7 +395,7 @@ fn lower_in(mut b: Block, outer: &[String], next: &mut usize) -> R<Block> {
         }
     }
     b.stmts = stmts;
-    Ok(b)
+    Ok((b, env))
 }
 
 /// `form` with each body rewritten to end in `v`'s value after it: one copy
@@ -285,6 +421,35 @@ fn join(form: &Expr, v: &str, env: &[String], next: &mut usize) -> R<Expr> {
         arm.body = Expr { kind: ExprKind::Block(Box::new(lowered)), span: arm.body.span };
     }
     Ok(form)
+}
+
+/// A function body whose top-level loop may `return`: the rest of the body
+/// after it becomes `\0after(#forN, { rest })` (§5.2), so the loop's
+/// `Return` is the function's value. Run once on the declaration's body,
+/// before [`reject_residue`]; a returning loop anywhere else is refused
+/// there.
+pub(crate) fn lower_returns(mut body: Block) -> Block {
+    let Some(i) = body.stmts.iter().position(|s| matches!(s, Stmt::Let { expr, .. }
+        if is_loop(expr) && returns(expr)))
+    else {
+        return body;
+    };
+    let rest: Vec<Stmt> = body.stmts.split_off(i + 1);
+    let Stmt::Let { name, span, .. } = &body.stmts[i] else { unreachable!() };
+    let (name, span) = (name.clone(), *span);
+    let inner = lower_returns(Block {
+        stmts: rest,
+        result: std::mem::replace(&mut body.result, Box::new(unit(span))),
+        ons: Vec::new(),
+        span: body.span,
+    });
+    let inner = Expr { span: inner.span, kind: ExprKind::Block(Box::new(inner)) };
+    body.result = Box::new(call(AFTER, vec![var(&name, span), inner], span));
+    body
+}
+
+fn is_loop(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::App { head, .. } if matches!(&head.kind, ExprKind::Var(n) if n == LOOP))
 }
 
 /// A layer-2 marker left once a declaration is parsed: an assignment no
@@ -315,6 +480,32 @@ fn find_residue(e: &Expr, error: &mut Option<ParseError>) {
             }
         }
         for s in &b.stmts {
+            if let Some((m, _, span)) = exit_of(s) {
+                let word = match m { BREAK => "break", CONTINUE => "continue", _ => "return" };
+                *error = Some(ParseError {
+                    span,
+                    msg: if m == RETURN {
+                        "`return` is supported inside a `for` for now, not elsewhere in a function".into()
+                    } else {
+                        format!("`{word}` is outside any loop")
+                    },
+                });
+                return;
+            }
+            if let Stmt::Let { name, expr, span, .. } = s
+                && is_loop(expr)
+                && returns(expr)
+                && !matches!(&b.result.kind, ExprKind::App { head, args, .. }
+                    if matches!(&head.kind, ExprKind::Var(n) if n == AFTER)
+                        && matches!(args.first().map(|a| &a.kind), Some(ExprKind::Var(l)) if l == name))
+            {
+                *error = Some(ParseError {
+                    span: *span,
+                    msg: "a `for` whose body may `return` is supported only as a statement of the function's \
+                          own body for now, not inside another statement or loop".into(),
+                });
+                return;
+            }
             if let Stmt::Let { expr, span, .. } = s
                 && unmark_for(expr).is_some()
             {

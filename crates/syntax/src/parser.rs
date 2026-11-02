@@ -403,9 +403,12 @@ fn is_statement_form(e: &Expr) -> bool {
 /// A statement after which a block may end with no result: an assignment
 /// or a statement form.
 fn is_imperative_statement(s: &Stmt) -> bool {
+    // `break`/`continue` are zero-argument markers; the rest carry one.
     matches!(s, Stmt::Let { expr, .. } if matches!(&expr.kind, ExprKind::App { head, args, .. }
-        if !args.is_empty() && matches!(&head.kind, ExprKind::Var(n)
-            if n == crate::imperative::ASSIGN || n == crate::imperative::STMT || n == crate::imperative::FOR)))
+        if matches!(&head.kind, ExprKind::Var(n)
+            if (!args.is_empty() && (n == crate::imperative::ASSIGN || n == crate::imperative::STMT
+                || n == crate::imperative::FOR || n == crate::imperative::RETURN))
+                || (args.is_empty() && (n == crate::imperative::BREAK || n == crate::imperative::CONTINUE)))))
 }
 
 fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
@@ -2850,6 +2853,7 @@ impl Parser {
         crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
         crate::try_lower::reject_bind_in_type(&result)?;
         for p in &params { crate::try_lower::reject_bind_in_type(&p.ty)?; }
+        let body = crate::imperative::lower_returns(body);
         crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
@@ -3350,6 +3354,46 @@ impl Parser {
                 || self.at_sequent_binders()
             {
                 return Ok(None);
+            }
+            // `break;`, `continue;`, `return e;` (§4): statements of a
+            // loop body, lowered by the loop ([`crate::imperative`]).
+            if (self.at_kw("break") || self.at_kw("continue"))
+                && matches!(self.nth(1), TokKind::Semi | TokKind::RBrace)
+            {
+                let word = if self.at_kw("break") { crate::imperative::BREAK } else { crate::imperative::CONTINUE };
+                let span = self.bump().span;
+                if matches!(self.peek(), TokKind::Semi) { self.bump(); }
+                let name = self.hygienic("exit");
+                stmts.push(Stmt::Let {
+                    name,
+                    ty: None,
+                    expr: Expr {
+                        kind: ExprKind::App {
+                            head: Box::new(Expr { kind: ExprKind::Var(word.into()), span }),
+                            args: vec![], named: vec![], explicit: false, goal_oriented: false,
+                        },
+                        span,
+                    },
+                    span,
+                    opaque: false,
+                });
+                continue;
+            }
+            if self.at_kw("return") && !matches!(self.nth(1), TokKind::Semi | TokKind::RBrace) {
+                let start = self.bump().span;
+                let value = self.expr()?;
+                let end = if matches!(self.peek(), TokKind::RBrace) { value.span } else { self.expect(&TokKind::Semi, "`;` to end the `return`")? };
+                let span = start.join(end);
+                let name = self.hygienic("exit");
+                let vspan = value.span;
+                stmts.push(Stmt::Let {
+                    name,
+                    ty: None,
+                    expr: crate::imperative::marked(crate::imperative::RETURN, value, vspan),
+                    span,
+                    opaque: false,
+                });
+                continue;
             }
             // `for x in e { body }` (§5.2): a statement, needing no `;`.
             if self.at_kw("for")

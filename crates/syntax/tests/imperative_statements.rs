@@ -79,3 +79,42 @@ fn a_for_must_assign_and_be_a_statement() {
     let error = parse_file("fn f(xs: L) -> Nat { let mut n = 0; for x in xs {} n }").unwrap_err();
     assert!(error.msg.contains("assigns no `let mut` local"), "{}", error.msg);
 }
+
+#[test]
+fn an_early_exit_is_refused_where_no_loop_lowers_it() {
+    for (src, says) in [
+        // No loop around it.
+        ("fn f() -> Nat { let mut n = 0; break; n }", "is outside any loop"),
+        ("fn f() -> Nat { let mut n = 0; continue; n }", "is outside any loop"),
+        ("fn f(k: Nat) -> Nat { return k; }", "supported inside a `for` for now"),
+        // Code after an exit never runs.
+        ("fn f(xs: L) -> Nat { let mut n = 0; for x in xs { break; n := x } n }", "nothing after `break` runs"),
+        // A returning loop nested in another loop or in a statement `if`:
+        // its `Return` would have to cross the enclosing step.
+        ("fn f(xs: L) -> Nat { let mut n = 0; for x in xs { for y in xs { if c { return 7 } n := y } } n }",
+         "only as a statement of the function's own body"),
+        ("fn f(xs: L) -> Nat { let mut n = 0; if c { for x in xs { if d { return 7 } n := x } } n }",
+         "only as a statement of the function's own body"),
+        // A loop that neither assigns a local nor returns computes nothing.
+        ("fn f(xs: L) -> Nat { for x in xs { if c { break } } 0 }", "computes nothing"),
+    ] {
+        let error = parse_file(src).unwrap_err();
+        assert!(error.msg.contains(says), "{src}: {}", error.msg);
+    }
+}
+
+#[test]
+fn an_early_exit_leaves_only_the_loop_markers() {
+    // Exits become `ForStep` leaves the elaborator builds; no exit statement
+    // or statement-form marker survives the parse.
+    for src in [
+        "fn f(xs: L) -> Nat { let mut n = 0; for x in xs { if c { break } n := x } n }",
+        "fn f(xs: L) -> Nat { let mut n = 0; for x in xs { match x { A => { continue }, B => { n := 1 } } n := 2 } n }",
+        "fn f(xs: L) -> Nat { for x in xs { if c { return x } } 0 }",
+    ] {
+        let parsed = format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+        for marker in ["\\0break", "\\0continue", "\\0return", "\\0stmt", "\\0assign"] {
+            assert!(!parsed.contains(marker), "{src} keeps {marker}");
+        }
+    }
+}
