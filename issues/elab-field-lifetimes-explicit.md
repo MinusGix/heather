@@ -1,6 +1,6 @@
 ---
 title: Group the Elaborator's fields by lifetime (module pass, dynamic scope, policy, memos)
-status: open
+status: closed
 labels: [elaboration,refactor,state-machine]
 area: infrastructure
 created: 2026-11-02
@@ -31,3 +31,36 @@ Mechanical, no behaviour change; the gain is that a new field must pick a group.
 ## Related
 
 Filed together from the implicit-state-machines survey (`docs/implicit-state-machines-survey.md`, 2026-11-02, ranked there): [[module-pass-state-machine]], [[kernel-psi-bound-cache]], [[decl-attempt-lifecycle]], [[goal-slot-state-enum]], [[kernel-checker-mode-enum]].
+
+## Log
+
+- 2026-11-02 — DONE. The flat fields are five groups beside the committed
+  world, in `crates/elab/src/lifetimes.rs` (the module doc carries the
+  clone/rollback table): `ModulePass` (pool, replay, journal, slice plan,
+  container decls/at, warnings, both omega report lists, pending derived,
+  unfold refusals, export proofs), `DeclAttempt` (unchanged),
+  `DynamicScope` (the extent fields, including the survey's
+  declaration-extent four: `member_owner`, `misplaced_recursion`,
+  `instance_scope`, `impl_provenance`, whose rule is the dynamic scope's,
+  not `prepare`/`finish`'s), `Policy`, `Memos`.
+  - `restore_from_clone` destructures the snapshot and restores every
+    group but the module pass; `ModulePass::roll_back_to` decides field by
+    field (pool and replay stay live, journal cut to the snapshot's lengths,
+    the rest the snapshot's — exactly the old behaviour). `ModulePass`'s
+    `Clone` names every field, and `KernelPool`/`ReplaySlot` are no longer
+    `Clone` (`JournalSlot`'s clone is `lengths_only`), so the clone rule has
+    one home. A new field in either does not compile until it picks a rule.
+  - `Memos::clear_positional` (names every memo) replaces the three copies
+    of the two clears (`SessionCheckpoint::restore`, both slice replays).
+  - `Elaborator::scoped` / `scoped_cell` restore the outer value; the
+    hand-restored sites and the three resetting ones (`impl_provenance`,
+    `misplaced_recursion`, `meta_pushed` at the end of a `meta fn`) use
+    them. Left on their own guards: the depth counters with guards already,
+    `resolve_depth` (absolute sets), `instance_scope` (a block that
+    accumulates, cleared by its block and by `restore_module_pass`).
+  - "Under a quotation" has one home, `DynamicScope::quote_depth`
+    (`Elaborator::under_quotation`); `Cx::quoted` is gone. Only behavioural
+    edge: the named-type memo now skips a fresh `Cx` inside a payload too.
+  - Not done here, owned elsewhere: the module-pass checkpoint's own reset
+    list (`restore_module_pass`) is [[module-pass-state-machine]]'s; the
+    `DeclAttempt` field lists are [[decl-attempt-lifecycle]]'s.

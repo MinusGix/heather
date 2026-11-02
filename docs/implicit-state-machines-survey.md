@@ -75,6 +75,11 @@ mechanical move of field declarations and accesses (`self.kernel_pool` →
 `self.pass.kernel_pool`) with no behaviour change; the win is that the next
 field has to pick a class. Overlaps the data-oriented survey's regrouping.
 
+**Done (2026-11-02).** `crates/elab/src/lifetimes.rs` holds the groups and
+the table of their rules; §7's duplicate and §8's helper landed with it
+([[elab-field-lifetimes-explicit]]'s log). The line numbers above are as
+surveyed.
+
 ## 2. The module pass: parallel → join → discard → serial replay
 
 **Where.** `elab_module_source` and `check_module_source_inner`
