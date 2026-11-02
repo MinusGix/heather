@@ -815,6 +815,12 @@ theorem Rat::pos_of_mul_pos({x, y: Rat}, hx: 0 < x, h: 0 < x * y): 0 < y {
     Rat::lt_of_not_le(λ le => Rat::not_le_of_lt(h, Rat::le_respects(y.mul_comm(x), x.zero_mul(), Rat::mul_le_mono_r(le, Rat::le_of_lt(hx)))))
 }
 
+// A positive factor reflects a product's order: were y ≤ x, the products
+// would be ordered the same way.
+theorem Rat::lt_of_mul_lt_mul_l({x, y, z: Rat}, hz: 0 < z, h: z * x < z * y): x < y {
+    Rat::lt_of_not_le(λ le => Rat::not_le_of_lt(h, Rat::mul_le_mono_l(le, Rat::le_of_lt(hz))))
+}
+
 // A factor at most zero reverses the order: `x ≤ y` gives `y·z ≤ x·z`. It is
 // the nonnegative case at `-z`, with the sign moved out of each product.
 theorem Rat::mul_le_mono_r_nonpos({x, y, z: Rat}, h: x <= y, hz: z <= 0): y * z <= x * z {
@@ -1865,6 +1871,15 @@ instance CommRingOfInt<Rat>(Rat::Same, Rat::add, Rat::mul) {
 // cross-multiplied one, which means `¬(y < x)`, and the reciprocal is `x⁻¹`
 // at the same apartness proof.
 
+// Translation reflects `<`: the rationals decide `≤`, so refuting the
+// other order is enough.
+theorem Rat::lt_of_add_lt_add_r(self x, y, z: Rat, h: x + z < y + z): x < y {
+    match y.le_dec(x) as λ _ => x < y {
+        Inl(le) => false_elim(Rat::not_le_of_lt(x := x + z, y := y + z, h := h)(y.add_le_mono_r(x, z, le))),
+        Inr(no) => Rat::lt_of_not_le(x := x, y := y, h := no),
+    }
+}
+
 theorem Rat::zero_lt_one(): Rat::Lt(0, 1) { omega }
 
 instance StrictOrder<Rat>(Rat::Same, Rat::Lt, Rat::Le) {
@@ -1884,6 +1899,7 @@ instance PseudoOrder<Rat>(Rat::Same, Rat::Lt, Rat::Le) {}
 
 instance OrderedAddGroup<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add) {
     add_lt_mono_r := Rat::add_lt_mono_r,
+    add_lt_reflect_r := Rat::lt_of_add_lt_add_r,
 }
 
 instance LocatedAddGroup<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add) {}
@@ -1893,16 +1909,16 @@ instance OrderedField<Rat>(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul) {
     recip := λ x h => x.inv(h := h),
     mul_recip := λ x h => x.mul_inv(h := h),
     zero_lt_one := Rat::zero_lt_one(),
-    mul_pos := λ x y hx hy => Rat::mul_pos(hx, hy),
-    pos_of_mul_pos := λ x y hx h => Rat::pos_of_mul_pos(hx, h),
+    mul_lt_l := λ x y z h hz => Rat::mul_lt_mono_l(h, hz),
+    mul_lt_reflect_l := λ x y z hz h => Rat::lt_of_mul_lt_mul_l(hz, h),
     of_nat_zero := Rat::same_refl(0),
     of_nat_succ := λ n => omega,
     archimedean := Rat::archimedean,
 }
 
-// A square is nonnegative (`OrderedField::sq_nonneg`), named at the carrier
+// A square is nonnegative (`OrderedRing::sq_nonneg`), named at the carrier
 // so a hint can cite it: `nlinarith(Rat::sq_nonneg(a - b))`.
-theorem Rat::sq_nonneg(self x: Rat): 0 <= x * x { OrderedField::sq_nonneg(x) }
+theorem Rat::sq_nonneg(self x: Rat): 0 <= x * x { OrderedRing::sq_nonneg(x) }
 
 // Subtraction is monotone in its left argument and antitone in its right,
 // and both directions cancel.
@@ -1973,13 +1989,6 @@ theorem Rat::same_of_dist_above(self x, a, b: Rat, xb: x <= b, ba: b <= a, d: (a
     let db = (b - x).abs_of_nonneg(Rat::sub_nonneg(x := b, y := x, h := xb));
     let da = (a - x).abs_of_nonneg(Rat::sub_nonneg(x := a, y := x, h := xa));
     Rat::le_antisymm(x.le_of_sub_le_sub_r(a, b, Rat::le_respects(da, db, d)), ba)
-}
-
-theorem Rat::lt_of_add_lt_add_r(self x, y, z: Rat, h: x + z < y + z): x < y {
-    match y.le_dec(x) as λ _ => x < y {
-        Inl(le) => false_elim(Rat::not_le_of_lt(x := x + z, y := y + z, h := h)(y.add_le_mono_r(x, z, le))),
-        Inr(no) => Rat::lt_of_not_le(x := x, y := y, h := no),
-    }
 }
 
 // Comparing the distances from `x` to `a` and to `b` is comparing `x` with
@@ -2129,11 +2138,11 @@ theorem Rat::sum_abs_le(n: Nat, f: Nat → Rat): (∑ k < n, f(k)).abs() <= ∑ 
 // for `mono` (lib/std/tactic/mono.hthr), whose `apply` reads a class
 // lemma's dictionary off the scope, which a concrete carrier has none of.
 theorem Rat::range_le(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) <= g(k)): MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g) {
-    LocatedAddGroup::range_le(n, f, g, h)
+    LocatedAddMonoid::range_le(n, f, g, h)
 }
 
 theorem Rat::range_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → k < n → 0 <= f(k)): 0 <= MonoidRel::range(+, n, f) {
-    LocatedAddGroup::range_nonneg(n, f, h)
+    LocatedAddMonoid::range_nonneg(n, f, h)
 }
 
 // `2^-j`, written `1/(ones(j) + 1)`, is the `j`-th power of a half.

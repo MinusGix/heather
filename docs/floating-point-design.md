@@ -1560,7 +1560,7 @@ the two affine bounds `r ≤ (1 + u)·q + η` and `(1 - u)·q - η ≤ r`
 (`Rat::sides_of_abs`), with nonnegative slopes when `0 ≤ u ≤ 1`
 (`Rat::slopes_nonneg`). An affine bound with a nonnegative slope at a
 rational below `x` holds at `x` (`Rat::affine_up`: the morphism keeps `≤`,
-`+` and `*`, and `OrderedField::mul_le_mono_l` moves the slope's product),
+`+` and `*`, and `OrderedSemiring::mul_le_mono_l` moves the slope's product),
 and one at a rational above `x` holds below it (`Rat::affine_down`). Cut
 the interval around `x` to `[b, M]` and read the two sides at its ends:
 

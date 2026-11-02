@@ -57,7 +57,7 @@ theorem not_strict(a, b, c: Rat, h: a <= b): a + c < b + c { by mono() }
 theorem not_order(a: Rat): a ≈ a { by mono() }
 
 // A class carrier: the order and operations are a dictionary's in scope,
-// and the laws are the class's (`OrderedAddGroup::add_le_mono_l`, …), whose
+// and the laws are the class's (`OrderedAddMonoid::add_le_mono_l`, …), whose
 // dictionary `apply` finds there, upcast from the section's own.
 section<A: OrderedField(≈, <, <=, +, *)> {
 theorem class_add_left(x, y, z: A, h: x <= y): z + x <= z + y { by mono() }
@@ -77,11 +77,25 @@ theorem class_sign_sum(a, b: A, ha: A.unit <= a, hb: A.unit <= b): A.unit <= a +
 theorem class_sign_strict(a, b: A, ha: A.unit < a, hb: A.unit < b): A.unit < a * b + a { by mono() }
 theorem class_both_factors(a, b, c, d: A, h1: a <= b, h2: c <= d, ha: A.unit <= a, hc: A.unit <= c): a * c <= b * d { by mono() }
 theorem class_given(a, b, t: A, f: (k: Nat) → a <= b + A.of_nat(k), ht: A.unit <= t): t * a <= t * (b + A.of_nat(3)) { by mono_with([f(3)]) }
-// A fixed factor of unknown sign; a strict order from `<=`.
+}
+
+// The refusals, at the semiring whose laws they would need: a fixed factor
+// of unknown sign, and a strict order from `<=`. At a stronger class the
+// same refusal is reached through an upcast dictionary in every subgoal,
+// which costs it memory (issues/mono-failure-under-upcast-cost.md).
+section<A: OrderedSemiring(≈, <, <=, +, *)> {
+theorem semiring_mul_nonneg_factor(a, b, c: A, h: a <= b, hc: A.unit <= c): c * a <= c * b { by mono() }
+theorem semiring_sign_strict(a, b: A, ha: A.unit < a, hb: A.unit < b): A.unit < a * b + a { by mono() }
 // expect-error: mono: nothing proves this goal
 theorem class_no_sign(a, b, c: A, h: a <= b): a * c <= b * c { by mono() }
 // expect-error: mono: nothing proves this goal
 theorem class_not_strict(a, b, c: A, h: a <= b): a + c < b + c { by mono() }
+}
+
+// A monoid has translation and the sign of a sum, and no negation.
+section<A: LocatedAddMonoid(≈, <, <=, +)> {
+theorem monoid_add_both(a, b, c, d: A, h1: a <= b, h2: c <= d): a + c <= b + d { by mono() }
+theorem monoid_sign_sum(a, b: A, ha: A.unit <= a, hb: A.unit <= b): A.unit <= a + b { by mono() }
 }
 
 // A weaker class has fewer laws, and they still apply.

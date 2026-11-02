@@ -85,10 +85,10 @@ fn dictionary_in_scope(name: String, count: Nat) → Tac<Expr> {
 section<A: OrderedField(≈, <, <=, +, *)> {
 // A class's lemma at its own dictionary, at an ancestor's (an upcast), and
 // one whose conclusion reads a dictionary field.
-theorem field_law(x, y, z: A, h: x < y, hz: A.unit < z): z * x < z * y { by use_law("OrderedField::mul_lt_mono_l") }
-theorem ancestor_law(x, y, z: A, h: x <= y): z + x <= z + y { by use_law("OrderedAddGroup::add_le_mono_l") }
+theorem field_law(x, y, z: A, h: x < y, hz: A.unit < z): z * x < z * y { by use_law("OrderedSemiring::mul_lt_mono_l") }
+theorem ancestor_law(x, y, z: A, h: x <= y): z + x <= z + y { by use_law("OrderedAddMonoid::add_le_mono_l") }
 theorem field_conclusion(x, y: A, h: x <= y): A.inv(y) <= A.inv(x) { by use_law("LocatedAddGroup::neg_le") }
-theorem zero_conclusion(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y { by use_law("OrderedAddGroup::add_pos") }
+theorem zero_conclusion(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y { by use_law("OrderedAddMonoid::add_pos") }
 
 // `A.inv(x)` is a field read off the dictionary, applied to `x`; `A.unit` is
 // one applied to nothing.
