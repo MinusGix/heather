@@ -2554,10 +2554,9 @@ impl Elaborator {
         let owner = format!("impl {} for {}", d.op, d.repr);
         // The emission's `impl` block lands through the ordinary path below,
         // which is what records the registry entry; this says who wrote it.
-        self.scope.impl_provenance = Some(Provenance::Derived);
-        let r = self.elab_generated(&em.text, &owner, d.span, &Splices::default());
-        self.scope.impl_provenance = None;
-        r
+        self.scoped(|s| &mut s.impl_provenance, Some(Provenance::Derived), |me| {
+            me.elab_generated(&em.text, &owner, d.span, &Splices::default())
+        })
     }
 
     /// The `Impl` registered for `op` at repr `rp`, if any — the

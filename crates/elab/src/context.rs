@@ -77,18 +77,6 @@ pub(crate) struct Cx {
     /// (docs/in-language-map-design.md §5). `None` everywhere else, which is
     /// what keeps the entire quotation machinery inert for ordinary code.
     pub(crate) meta: Option<Rc<quote::MetaEnv>>,
-    /// Set while a **quotation payload** elaborates (`quote.rs`'s `pcx`), and
-    /// nowhere else. The checked spellings of
-    /// `docs/intro-by-type-design.md` §2.3 may not appear inside a `box`: the
-    /// code grammar, `code_eq` and the 60 recursor branches range over that
-    /// payload, and `tm_pair`'s branch telescope types its field
-    /// sub-structures by `U_S`/`U_T`, which a collapsed annotation cannot
-    /// state (§2.2). The design spelled this restriction as "layers p and m",
-    /// which does not transcribe: Heather checks **every** declaration body at
-    /// `Layer::Code` (`lib.rs` ~3637, and `DESIGN.md`'s δ-layer-preservation
-    /// argument is why), so a layer predicate is constantly false. "Under a
-    /// quotation" is the property §2.2 actually needs.
-    pub(crate) quoted: bool,
     /// Set while a **corecursive** body elaborates (docs/codata-elaborator-design.md
     /// §5): the definition's step and child types, which a checking position
     /// at either of them is elaborated against by `Elaborator::corec_check`.
@@ -229,7 +217,6 @@ impl Cx {
             index_ambiguity: vec![],
             op_locals: vec![],
             meta: None,
-            quoted: false,
             corec: None,
             codata_match: None,
         }
@@ -292,7 +279,6 @@ impl Cx {
             index_ambiguity: vec![],
             op_locals: vec![],
             meta: None,
-            quoted: self.quoted,
             corec: None,
             codata_match: None,
         }

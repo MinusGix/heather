@@ -132,10 +132,9 @@ impl Elaborator {
     /// at `Layer::Meta`, and commit it to the meta-program registry.
     pub(crate) fn elab_meta_decl(&mut self, decl: &Decl) -> R<()> {
         debug_assert_eq!(decl.kind, DeclKind::Fn);
-        let r = self.elab_meta_decl_inner(decl);
-        // The oracle padding must not outlive the declaration, error or not.
-        self.scope.meta_pushed.borrow_mut().clear();
-        r
+        // The oracle padding is the declaration's own, and must not outlive
+        // it, error or not.
+        self.scoped(|s| s.meta_pushed.get_mut(), Vec::new(), |me| me.elab_meta_decl_inner(decl))
     }
 
     /// A `meta fn`'s signature: the binder list and the result type, in the
@@ -478,9 +477,7 @@ impl Elaborator {
         let [heather_syntax::ast::Item::Decl(sig_decl)] = &file.items[..] else {
             unreachable!("a slot's expected signature is one declaration")
         };
-        let saved = self.scope.meta_pushed.replace(Vec::new());
-        let elaborated = self.meta_sig(sig_decl);
-        self.scope.meta_pushed.replace(saved);
+        let elaborated = self.scoped_cell(|s| &s.meta_pushed, Vec::new(), || self.meta_sig(sig_decl));
         let (_, _, sig, want_res, want_res_lvl) = elaborated.map_err(|e| ElabError::Elab {
             msg: format!(
                 "`{}`'s expected signature does not elaborate in this file — it needs \
@@ -816,14 +813,13 @@ impl Elaborator {
         let mut pcx = Cx::empty();
         pcx.gamma = qctx.shift_global(n);
         pcx.meta = Some(Rc::new(inner));
+        let expected_p = (*qty).clone().shift_global(n);
         // Inside a `box` the component forms stay the only spelling
         // (`docs/intro-by-type-design.md` §2.3): this payload is what the
         // code recursors range over.
-        pcx.quoted = true;
-        let expected_p = (*qty).clone().shift_global(n);
-        self.scope.quote_depth.set(self.scope.quote_depth.get() + 1);
-        let payload_t = self.elab_check(&pcx, payload, &expected_p, &qlvl);
-        self.scope.quote_depth.set(self.scope.quote_depth.get() - 1);
+        let depth = self.scope.quote_depth.get() + 1;
+        let payload_t =
+            self.scoped_cell(|s| &s.quote_depth, depth, || self.elab_check(&pcx, payload, &expected_p, &qlvl));
         // The letbox padding must not outlive this quote, error or not.
         {
             let mut mp = self.scope.meta_pushed.borrow_mut();

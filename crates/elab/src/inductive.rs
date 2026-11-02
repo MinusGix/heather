@@ -1704,7 +1704,7 @@ impl Elaborator {
         let memo = args.is_empty()
             && cx.dicts.is_empty()
             && cx.meta.is_none()
-            && !cx.quoted
+            && !self.under_quotation()
             && ind.scope.module != self.names.module();
         let key = (Rc::as_ptr(ind) as usize, self.in_generated());
         let psi = self.psi.bindings.len();
@@ -3268,7 +3268,7 @@ impl Elaborator {
         // expected type for a flat declaration, the emitted shape for a
         // recursive one. A recursive declaration whose `expected` is not a
         // `Wf` is the error below; it takes no `@` and falls through to it.
-        let at = if !self.emits_at_forms(cx) {
+        let at = if !self.emits_at_forms() {
             None
         } else if ind.recursive {
             wf_slots.as_ref().map(|(s, _)| Rc::clone(s))
@@ -3455,7 +3455,7 @@ impl Elaborator {
         // the object the round exists to stop writing down — and they are
         // still what the fields were checked against above; they are just
         // not written.
-        if self.emits_at_forms(cx) {
+        if self.emits_at_forms() {
             return Ok(Term::PairAt {
                 ty: None,
                 fst: value,
@@ -3966,7 +3966,7 @@ impl Elaborator {
         // field type is a structural read too: keep it inline until a caller
         // actually writes an annotation. Emitting a selected conjunction here
         // recursively matches every remaining instance again at every dot.
-        if self.emits_at_forms(cx) {
+        if self.emits_at_forms() {
             crate::stats::count(crate::stats::Counter::ProjectionStructural);
             // The walk descends a spine that is a `Σ` outright without
             // substituting: `pending` are the earlier fields' projections,

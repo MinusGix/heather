@@ -764,9 +764,9 @@ impl Elaborator {
             let mark = SearchMark::of(self);
             tr.push(line(depth, "candidate", g.clone()));
             self.scope.resolve_depth.set(depth + 1);
-            let outer = self.scope.rule_citation.replace(Some(g.clone()));
-            let built = self.build_candidate(cx, &g, goal, lvl, span);
-            *self.scope.rule_citation.borrow_mut() = outer;
+            let built = self.scoped_cell(|s| &s.rule_citation, Some(g.clone()), || {
+                self.build_candidate(cx, &g, goal, lvl, span)
+            });
             self.scope.resolve_depth.set(depth);
             match built {
                 Ok(t) if self.checks_at(cx, &t, goal, lvl) => return Some(t),
@@ -829,10 +829,10 @@ impl Elaborator {
         let spelled = self
             .spell_type_clean(cx, goal)
             .unwrap_or_else(|| "the goal".to_string());
-        let outer = self.scope.positivity.replace(Some(PositivityRun::default()));
         let mut tr = Vec::new();
-        let found = self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr);
-        *self.scope.positivity.borrow_mut() = outer;
+        let found = self.scoped_cell(|s| &s.positivity, Some(PositivityRun::default()), || {
+            self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr)
+        });
         found.ok_or_else(|| ElabError::Elab {
             msg: format!("`positivity` could not prove `{spelled}` — the search:{}", render_trace(&tr)),
             span,
@@ -847,10 +847,10 @@ impl Elaborator {
         let spelled = self
             .spell_type_clean(cx, goal)
             .unwrap_or_else(|| "the goal".to_string());
-        let outer = self.scope.positivity.replace(None);
         let mut tr = Vec::new();
-        let found = self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr);
-        *self.scope.positivity.borrow_mut() = outer;
+        let found = self.scoped_cell(|s| &s.positivity, None, || {
+            self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr)
+        });
         found.ok_or_else(|| ElabError::Elab {
             msg: format!("no evidence for `{spelled}` — the search:{}", render_trace(&tr)),
             span,
@@ -887,14 +887,12 @@ impl Elaborator {
         }
         // Omega's own certificate is elaborated with plain `infer`: a
         // positivity run does not reach into it.
-        let run = self.scope.positivity.take();
         let mark = SearchMark::of(self);
         let e = Expr {
             kind: ExprKind::Var("omega".to_string()),
             span,
         };
-        let proved = self.elab_check(cx, &e, goal, lvl);
-        *self.scope.positivity.borrow_mut() = run;
+        let proved = self.scoped_cell(|s| &s.positivity, None, || self.elab_check(cx, &e, goal, lvl));
         match proved {
             Ok(t) => {
                 tr.push(line(depth, "omega", "proved"));

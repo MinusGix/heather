@@ -907,7 +907,7 @@ impl Elaborator {
         // The tuple's checked spelling, exactly as `build_fields_skel`'s
         // (`docs/intro-by-type-design.md` §4.1): no annotation, since every
         // layer is in checking position.
-        if self.emits_at_forms(cx) {
+        if self.emits_at_forms() {
             return Ok(Term::PairAt {
                 ty: None,
                 fst: value,

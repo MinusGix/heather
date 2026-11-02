@@ -240,11 +240,23 @@ pub(crate) struct DynamicScope {
     /// because the Omega certificate route raises it from a `&self` checking
     /// position.
     pub(crate) generated_depth: Cell<usize>,
-    /// Quotation payloads currently elaborating. [`Cx::quoted`] marks the
-    /// payload's own context, but a helper inside it that starts from a
-    /// fresh `Cx` does not inherit the bit; this does, and it is what
-    /// [`Elaborator::emits_at_forms`] reads beside it
-    /// (`docs/intro-by-type-design.md` §2.3).
+    /// Quotation payloads currently elaborating (`quote.rs`), read through
+    /// [`Elaborator::under_quotation`]. The checked spellings of
+    /// `docs/intro-by-type-design.md` §2.3 may not appear inside a `box`: the
+    /// code grammar, `code_eq` and the 60 recursor branches range over that
+    /// payload, and `tm_pair`'s branch telescope types its field
+    /// sub-structures by `U_S`/`U_T`, which a collapsed annotation cannot
+    /// state (§2.2). The design spelled this restriction as "layers p and m",
+    /// which does not transcribe: Heather checks **every** declaration body at
+    /// `Layer::Code` (`DESIGN.md`'s δ-layer-preservation argument is why), so
+    /// a layer predicate is constantly false. "Under a quotation" is the
+    /// property §2.2 actually needs.
+    ///
+    /// The one home of that bit. It used to be held twice, here and as a
+    /// `Cx::quoted` flag on the payload's context, because a helper inside a
+    /// payload that starts from a fresh `Cx` lost the flag; a dynamic extent
+    /// is exactly what this group is for, so the flag went
+    /// (`docs/implicit-state-machines-survey.md` §7).
     pub(crate) quote_depth: Cell<u32>,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote

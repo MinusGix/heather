@@ -1102,8 +1102,8 @@ impl application::ExplicitArgElab for Elaborator {
         self.whnf(cx, ty, span)
     }
 
-    fn emits_checked_applications(&self, cx: &Cx) -> bool {
-        self.emits_at_forms(cx)
+    fn emits_checked_applications(&self, _cx: &Cx) -> bool {
+        self.emits_at_forms()
     }
 
     fn respell_application_annotations(
@@ -3363,10 +3363,7 @@ impl Elaborator {
     }
 
     fn elab_decl_as(&mut self, decl: &Decl, owner: Option<String>) -> R<()> {
-        let saved = std::mem::replace(&mut self.scope.member_owner, owner);
-        let result = self.elab_decl_owned(decl);
-        self.scope.member_owner = saved;
-        result
+        self.scoped(|s| &mut s.member_owner, owner, |me| me.elab_decl_owned(decl))
     }
 
     fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
@@ -3413,10 +3410,8 @@ impl Elaborator {
                     return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name);
                 }
                 recursion::RecursionPlan::Misplaced { dec, msg } => {
-                    *self.scope.misplaced_recursion.borrow_mut() = Some((self_ref.name.clone(), dec, msg));
-                    let result = self.elab_decl_one(decl, None);
-                    *self.scope.misplaced_recursion.borrow_mut() = None;
-                    return result;
+                    let misplaced = Some((self_ref.name.clone(), dec, msg));
+                    return self.scoped(|s| s.misplaced_recursion.get_mut(), misplaced, |me| me.elab_decl_one(decl, None));
                 }
             }
         }
@@ -9916,12 +9911,18 @@ impl Elaborator {
     /// goal block. Every site that renumbers a `GlobalVar` against the
     /// padding takes this; only `GoalArena::allocate`'s own
     /// `goal_base − 1 − k` does not.
-    /// Does `cx` emit the checked spellings (`docs/intro-by-type-design.md`
-    /// §4.1)? Everywhere but inside a quotation payload: the kernel refuses
-    /// them there (§2.3), and both the context bit and the elaborator's own
-    /// depth are asked, so no fresh `Cx` inside a payload can escape it.
-    pub(crate) fn emits_at_forms(&self, cx: &Cx) -> bool {
-        !cx.quoted && self.scope.quote_depth.get() == 0
+    /// Does elaboration here emit the checked spellings
+    /// (`docs/intro-by-type-design.md` §4.1)? Everywhere but inside a
+    /// quotation payload: the kernel refuses them there (§2.3).
+    pub(crate) fn emits_at_forms(&self) -> bool {
+        !self.under_quotation()
+    }
+
+    /// Is a quotation payload elaborating above this point? Asked of the
+    /// elaborator's dynamic scope, never of a `Cx`: a helper inside a payload
+    /// that starts from a fresh `Cx` is still inside it.
+    pub(crate) fn under_quotation(&self) -> bool {
+        self.scope.quote_depth.get() > 0
     }
 
     pub(crate) fn global_padding(&self) -> u32 {

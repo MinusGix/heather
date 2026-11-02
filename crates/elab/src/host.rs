@@ -1498,9 +1498,9 @@ impl Elaborator {
             plain: Cell::new(None),
             no_goal: keyword == "generate",
         });
-        let outer = self.scope.by_quoting.replace(Some(Rc::clone(&quoting)));
-        let term = self.elab_check(cx, e, &dom, &dom_level);
-        self.scope.by_quoting.replace(outer);
+        let term = self.scoped_cell(|s| &s.by_quoting, Some(Rc::clone(&quoting)), || {
+            self.elab_check(cx, e, &dom, &dom_level)
+        });
         let term = term?;
         let Some(closed) = crate::unification::strengthen_tm(&LocalCtx::nil(), &term, cx.gamma.len() as u32) else {
             return err(
@@ -1576,9 +1576,7 @@ impl Elaborator {
         // Inferred for real, with quoting off: what is quoted is an
         // ordinary term, and its dependencies and notes are this
         // elaborator's.
-        let outer = self.scope.by_quoting.replace(None);
-        let inferred = self.elab_infer(cx, e);
-        self.scope.by_quoting.replace(outer);
+        let inferred = self.scoped_cell(|s| &s.by_quoting, None, || self.elab_infer(cx, e));
         let (term, ty, level) = inferred?;
         let d = (cx.gamma.len() - q.root.len()) as u32;
         let (Some(term), Some(ty)) = (
@@ -3227,8 +3225,7 @@ impl Elaborator {
     /// `leaves` says, and hand back what they did.
     fn build(&self, cx: &Cx, skeleton: &Skeleton, goal: &Type, lvl: &Level, leaves: Leaves, span: Span) -> (R<Term>, Leaves) {
         let state = Rc::new(RefCell::new(leaves));
-        let outer = self.scope.host_leaves.replace(Some(Rc::clone(&state)));
-        let built = match skeleton {
+        let built = self.scoped_cell(|s| &s.host_leaves, Some(Rc::clone(&state)), || match skeleton {
             Skeleton::Cases { scrut, ty, level, motive, equation, arms } => self.elab_convoy(
                 cx,
                 heather_syntax::MatchForm::Match,
@@ -3244,8 +3241,7 @@ impl Elaborator {
                 span,
             ),
             Skeleton::Constructor(e) => self.elab_check(cx, e, goal, lvl),
-        };
-        self.scope.host_leaves.replace(outer);
+        });
         let leaves = state.borrow().clone();
         (built, leaves)
     }
@@ -3583,10 +3579,7 @@ impl Elaborator {
         fills.push((Held::Type(result.clone(), level.clone()), n));
         fills.push((Held::Term(m.body.clone(), result.clone(), level.clone()), n));
         let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
-        let outer = self.scope.host_leaves.replace(Some(state));
-        let published = self.elab_decl(&decl);
-        self.scope.host_leaves.replace(outer);
-        published
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_decl(&decl))
     }
 
     /// `Close(split, proofs)`: each proof checked at its branch's goal
