@@ -1,0 +1,521 @@
+// Lattices: meets and joins as universal properties of an order, modulo the
+// carrier's `≈` (issues/lattice-structure-api.md,
+// docs/lattice-structure-design.md).
+//
+// One canonical theory, presented by the order. `MeetSemilattice(≈, ≤, ⊓)`
+// says that `x ⊓ y` is a greatest lower bound; commutativity, associativity,
+// idempotence and absorption are theorems here, not fields. The algebraic
+// presentation is `algebra_rel`'s `Mergeable(≈, ⊓)` (a commutative,
+// idempotent semigroup modulo `≈`), and the two are connected by
+// constructors both ways rather than kept as two interfaces with two
+// theorem libraries: `MeetSemilattice::mergeable` reads the algebra off the
+// order, and `Mergeable::meet_semilattice` builds the order `x ⊓ y ≈ x` from
+// the algebra. `MeetSemilattice::le_iff_meet` says the round trip gives the
+// order back.
+//
+// The relation, the order and each operation are indices, so one carrier has
+// as many lattices as it has orders and operations, and none is "the" one.
+// `≈` is an index of its own, as in `StrictOrder(≈, <, ≤)` and
+// `Semiring(≈, +, *)`: `Nat` and `Int` are lattices at `RelId`, so their laws
+// read as equations, while `Dyadic`'s `min`/`max` are a lattice modulo
+// `Dyadic::Same` (instance in `dyadic.hthr`), where two spellings of one
+// number are `≈` and not `=`.
+
+import logic;
+import nat;
+import int;
+import pair;
+import relation;
+import relation_props;
+import algebra_rel;
+import order;
+
+// ---------------------------------------------------------------------------
+// The order modulo `≈`.
+
+// A preorder whose antisymmetry lands in `≈`. `order`'s `PartialOrder(R)`
+// is the special case at identity, where antisymmetry gives `=`; a carrier
+// whose equality is a setoid (`Dyadic`, `Rat`, `CReal`) has only this. The
+// preorder and the two mixed chains are tagged parents, as `StrictOrder`'s
+// are, so `calc` steps through `≤` and `≈` inside a generic section and a
+// carrier with those instances registered fills them by reference.
+class PartialOrderRel<A>(same as ≈: A → A → Type, le as <=: A → A → Type)
+    extends Equivalence<A>(same), Preorder<A>(le) as le_preorder,
+        Trans<A>(same, le, le) as same_le, Trans<A>(le, same, le) as le_same
+{
+    le_antisymm: (x, y: A) → x <= y → y <= x → x ≈ y,
+}
+
+section<A: PartialOrderRel(≈, <=)> {
+
+theorem PartialOrderRel::le_refl(x: A): x <= x { A.le_preorder.rel_refl(x) }
+
+theorem PartialOrderRel::le_trans(x, y, z: A, hxy: x <= y, hyz: y <= z): x <= z {
+    A.le_preorder.rel_trans(x, y, z, hxy, hyz)
+}
+
+theorem PartialOrderRel::le_of_same(x, y: A, h: x ≈ y): x <= y {
+    A.same_le.rel_chain(x, y, y, h, PartialOrderRel::le_refl(y))
+}
+
+theorem PartialOrderRel::le_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2, h: x <= y): x2 <= y2 {
+    A.same_le.rel_chain(x2, x, y2, A.rel_sym(x, x2, hx), A.le_same.rel_chain(x, y, y2, h, hy))
+}
+
+// Two points with the same lower bounds are the same: the Yoneda reading of
+// antisymmetry, which is how every meet law below is proved.
+theorem PartialOrderRel::same_of_lower(x, y: A, down: (z: A) → z <= x → z <= y,
+    up: (z: A) → z <= y → z <= x): x ≈ y
+{
+    A.le_antisymm(x, y, down(x, PartialOrderRel::le_refl(x)), up(y, PartialOrderRel::le_refl(y)))
+}
+
+theorem PartialOrderRel::same_of_upper(x, y: A, down: (z: A) → x <= z → y <= z,
+    up: (z: A) → y <= z → x <= z): x ≈ y
+{
+    A.le_antisymm(x, y, up(y, PartialOrderRel::le_refl(y)), down(x, PartialOrderRel::le_refl(x)))
+}
+
+}
+
+// The identity case: every partial order is one modulo `RelId`.
+fn PartialOrder::rel<A: PartialOrder(R)>(R: A → A → Type) → PartialOrderRel<A>(RelId<A>, R) {
+    PartialOrderRel {
+        rel_refl: λ x => refl,
+        rel_sym: λ x y h => sym(h),
+        rel_trans: λ x y z hxy hyz => trans(hxy, hyz),
+        le_preorder: Preorder(A.rel_refl, A.rel_trans),
+        same_le: Trans(λ x y z h1 h2 => subst(sym(h1), h2)),
+        le_same: Trans(λ x y z h1 h2 => subst(h2, h1)),
+        le_antisymm: A.rel_antisym,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Meet semilattices.
+
+class MeetSemilattice<A>(same as ≈: A → A → Type, le as <=: A → A → Type, meet as ⊓: A → A → A)
+    extends PartialOrderRel<A>(same, le)
+{
+    meet_le_l: (x, y: A) → x ⊓ y <= x,
+    meet_le_r: (x, y: A) → x ⊓ y <= y,
+    le_meet: (x, y, z: A) → z <= x → z <= y → z <= x ⊓ y,
+}
+
+section<A: MeetSemilattice(≈, <=, ⊓)> {
+
+// Below a meet is below both.
+theorem MeetSemilattice::le_meet_iff(x, y, z: A): z <= x ⊓ y ↔ (z <= x ∧ z <= y) {
+    Iff(
+        mp := λ (h: z <= x ⊓ y) => And(
+            PartialOrderRel::le_trans(z, x ⊓ y, x, h, A.meet_le_l(x, y)),
+            PartialOrderRel::le_trans(z, x ⊓ y, y, h, A.meet_le_r(x, y))),
+        mpr := λ (h: z <= x ∧ z <= y) => A.le_meet(x, y, z, h.left, h.right))
+}
+
+theorem MeetSemilattice::meet_le_mono(x, x2, y, y2: A, hx: x <= x2, hy: y <= y2): x ⊓ y <= x2 ⊓ y2 {
+    A.le_meet(x2, y2, x ⊓ y,
+        PartialOrderRel::le_trans(x ⊓ y, x, x2, A.meet_le_l(x, y), hx),
+        PartialOrderRel::le_trans(x ⊓ y, y, y2, A.meet_le_r(x, y), hy))
+}
+
+theorem MeetSemilattice::meet_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2): x ⊓ y ≈ x2 ⊓ y2 {
+    A.le_antisymm(x ⊓ y, x2 ⊓ y2,
+        MeetSemilattice::meet_le_mono(x, x2, y, y2, PartialOrderRel::le_of_same(x, x2, hx), PartialOrderRel::le_of_same(y, y2, hy)),
+        MeetSemilattice::meet_le_mono(x2, x, y2, y,
+            PartialOrderRel::le_of_same(x2, x, A.rel_sym(x, x2, hx)), PartialOrderRel::le_of_same(y2, y, A.rel_sym(y, y2, hy))))
+}
+
+theorem MeetSemilattice::meet_comm(x, y: A): x ⊓ y ≈ y ⊓ x {
+    A.le_antisymm(x ⊓ y, y ⊓ x,
+        A.le_meet(y, x, x ⊓ y, A.meet_le_r(x, y), A.meet_le_l(x, y)),
+        A.le_meet(x, y, y ⊓ x, A.meet_le_r(y, x), A.meet_le_l(y, x)))
+}
+
+theorem MeetSemilattice::meet_assoc(x, y, z: A): (x ⊓ y) ⊓ z ≈ x ⊓ (y ⊓ z) {
+    let xy_l: ((x ⊓ y) ⊓ z <= x ⊓ y) = A.meet_le_l(x ⊓ y, z);
+    let yz_r: (x ⊓ (y ⊓ z) <= y ⊓ z) = A.meet_le_r(x, y ⊓ z);
+    A.le_antisymm((x ⊓ y) ⊓ z, x ⊓ (y ⊓ z),
+        A.le_meet(x, y ⊓ z, (x ⊓ y) ⊓ z,
+            PartialOrderRel::le_trans((x ⊓ y) ⊓ z, x ⊓ y, x, xy_l, A.meet_le_l(x, y)),
+            A.le_meet(y, z, (x ⊓ y) ⊓ z,
+                PartialOrderRel::le_trans((x ⊓ y) ⊓ z, x ⊓ y, y, xy_l, A.meet_le_r(x, y)),
+                A.meet_le_r(x ⊓ y, z))),
+        A.le_meet(x ⊓ y, z, x ⊓ (y ⊓ z),
+            A.le_meet(x, y, x ⊓ (y ⊓ z),
+                A.meet_le_l(x, y ⊓ z),
+                PartialOrderRel::le_trans(x ⊓ (y ⊓ z), y ⊓ z, y, yz_r, A.meet_le_l(y, z))),
+            PartialOrderRel::le_trans(x ⊓ (y ⊓ z), y ⊓ z, z, yz_r, A.meet_le_r(y, z))))
+}
+
+theorem MeetSemilattice::meet_idem(x: A): x ⊓ x ≈ x {
+    A.le_antisymm(x ⊓ x, x, A.meet_le_l(x, x),
+        A.le_meet(x, x, x, PartialOrderRel::le_refl(x), PartialOrderRel::le_refl(x)))
+}
+
+// The order is recoverable from the operation: `x ≤ y` exactly when the meet
+// is `x`. This is the round trip through `Mergeable::meet_semilattice`.
+theorem MeetSemilattice::meet_same_of_le(x, y: A, h: x <= y): x ⊓ y ≈ x {
+    A.le_antisymm(x ⊓ y, x, A.meet_le_l(x, y), A.le_meet(x, y, x, PartialOrderRel::le_refl(x), h))
+}
+
+theorem MeetSemilattice::le_of_meet_same(x, y: A, h: x ⊓ y ≈ x): x <= y {
+    PartialOrderRel::le_trans(x, x ⊓ y, y, PartialOrderRel::le_of_same(x, x ⊓ y, A.rel_sym(x ⊓ y, x, h)), A.meet_le_r(x, y))
+}
+
+theorem MeetSemilattice::le_iff_meet(x, y: A): x <= y ↔ x ⊓ y ≈ x {
+    Iff(mp := λ (h: x <= y) => MeetSemilattice::meet_same_of_le(x, y, h),
+        mpr := λ (h: x ⊓ y ≈ x) => MeetSemilattice::le_of_meet_same(x, y, h))
+}
+
+// The algebraic face: a meet semilattice is a commutative idempotent
+// semigroup modulo `≈`.
+fn MeetSemilattice::mergeable() → Mergeable<A>(≈, ⊓) {
+    Mergeable {
+        rel_refl: A.rel_refl,
+        rel_sym: A.rel_sym,
+        rel_trans: A.rel_trans,
+        respects2: λ x x2 hx y y2 hy => MeetSemilattice::meet_respects(x, x2, y, y2, hx, hy),
+        assoc: MeetSemilattice::meet_assoc,
+        comm: MeetSemilattice::meet_comm,
+        idem: MeetSemilattice::meet_idem,
+    }
+}
+
+}
+
+// The algebra builds the order: a commutative idempotent semigroup modulo
+// `≈` is a meet semilattice under `x ≤ y := x ⊓ y ≈ x`, its meet the
+// operation itself.
+fn MergeLe<A>(same: A → A → Type, merge: A → A → A) → A → A → Type { λ x y => same(merge(x, y), x) }
+
+section<A: Mergeable(≈, ⊓)> {
+
+theorem Mergeable::meet_cong_l(x, x2, y: A, h: x ≈ x2): x ⊓ y ≈ x2 ⊓ y {
+    rel_cong(h)
+}
+
+theorem Mergeable::meet_cong_r(x, y, y2: A, h: y ≈ y2): x ⊓ y ≈ x ⊓ y2 {
+    rel_cong(h)
+}
+
+fn Mergeable::meet_semilattice() → MeetSemilattice<A>(≈, MergeLe(≈, ⊓), ⊓) {
+    let le_trans = λ (x: A) (y: A) (z: A) (hxy: x ⊓ y ≈ x) (hyz: y ⊓ z ≈ y) => calc {
+        x ⊓ z ≈ (x ⊓ y) ⊓ z := Mergeable::meet_cong_l(x, x ⊓ y, z, A.rel_sym(x ⊓ y, x, hxy)),
+        ≈ x ⊓ (y ⊓ z) := A.assoc(x, y, z),
+        ≈ x ⊓ y := Mergeable::meet_cong_r(x, y ⊓ z, y, hyz),
+        ≈ x := hxy,
+    };
+    MeetSemilattice {
+        rel_refl: A.rel_refl,
+        rel_sym: A.rel_sym,
+        rel_trans: A.rel_trans,
+        le_preorder: Preorder(A.idem, le_trans),
+        same_le: Trans(λ x y z (e: x ≈ y) (h: y ⊓ z ≈ y) => calc {
+            x ⊓ z ≈ y ⊓ z := Mergeable::meet_cong_l(x, y, z, e),
+            ≈ y := h,
+            ≈ x := A.rel_sym(x, y, e),
+        }),
+        le_same: Trans(λ x y z (h: x ⊓ y ≈ x) (e: y ≈ z) => calc {
+            x ⊓ z ≈ x ⊓ y := Mergeable::meet_cong_r(x, z, y, A.rel_sym(y, z, e)),
+            ≈ x := h,
+        }),
+        le_antisymm: λ x y (hxy: x ⊓ y ≈ x) (hyx: y ⊓ x ≈ y) => calc {
+            x ≈ x ⊓ y := A.rel_sym(x ⊓ y, x, hxy),
+            ≈ y ⊓ x := A.comm(x, y),
+            ≈ y := hyx,
+        },
+        meet_le_l: λ x y => calc {
+            (x ⊓ y) ⊓ x ≈ x ⊓ (x ⊓ y) := A.comm(x ⊓ y, x),
+            ≈ (x ⊓ x) ⊓ y := A.rel_sym((x ⊓ x) ⊓ y, x ⊓ (x ⊓ y), A.assoc(x, x, y)),
+            ≈ x ⊓ y := Mergeable::meet_cong_l(x ⊓ x, x, y, A.idem(x)),
+        },
+        meet_le_r: λ x y => calc {
+            (x ⊓ y) ⊓ y ≈ x ⊓ (y ⊓ y) := A.assoc(x, y, y),
+            ≈ x ⊓ y := Mergeable::meet_cong_r(x, y ⊓ y, y, A.idem(y)),
+        },
+        le_meet: λ x y z (hx: z ⊓ x ≈ z) (hy: z ⊓ y ≈ z) => calc {
+            z ⊓ (x ⊓ y) ≈ (z ⊓ x) ⊓ y := A.rel_sym((z ⊓ x) ⊓ y, z ⊓ (x ⊓ y), A.assoc(z, x, y)),
+            ≈ z ⊓ y := Mergeable::meet_cong_l(z ⊓ x, z, y, hx),
+            ≈ z := hy,
+        },
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Join semilattices.
+
+// The order dual of the meet: `x ⊔ y` is a least upper bound. The theorems
+// are the meet's read upside down, written out: a generic theorem cannot yet
+// be spent at a dictionary built in place (`MeetSemilattice` at the converse
+// order), so the duality is a pattern here, not a constructor.
+class JoinSemilattice<A>(same as ≈: A → A → Type, le as <=: A → A → Type, join as ⊔: A → A → A)
+    extends PartialOrderRel<A>(same, le)
+{
+    le_join_l: (x, y: A) → x <= x ⊔ y,
+    le_join_r: (x, y: A) → y <= x ⊔ y,
+    join_le: (x, y, z: A) → x <= z → y <= z → x ⊔ y <= z,
+}
+
+section<A: JoinSemilattice(≈, <=, ⊔)> {
+
+theorem JoinSemilattice::join_le_iff(x, y, z: A): x ⊔ y <= z ↔ (x <= z ∧ y <= z) {
+    Iff(
+        mp := λ (h: x ⊔ y <= z) => And(
+            PartialOrderRel::le_trans(x, x ⊔ y, z, A.le_join_l(x, y), h),
+            PartialOrderRel::le_trans(y, x ⊔ y, z, A.le_join_r(x, y), h)),
+        mpr := λ (h: x <= z ∧ y <= z) => A.join_le(x, y, z, h.left, h.right))
+}
+
+theorem JoinSemilattice::join_le_mono(x, x2, y, y2: A, hx: x <= x2, hy: y <= y2): x ⊔ y <= x2 ⊔ y2 {
+    A.join_le(x, y, x2 ⊔ y2,
+        PartialOrderRel::le_trans(x, x2, x2 ⊔ y2, hx, A.le_join_l(x2, y2)),
+        PartialOrderRel::le_trans(y, y2, x2 ⊔ y2, hy, A.le_join_r(x2, y2)))
+}
+
+theorem JoinSemilattice::join_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2): x ⊔ y ≈ x2 ⊔ y2 {
+    A.le_antisymm(x ⊔ y, x2 ⊔ y2,
+        JoinSemilattice::join_le_mono(x, x2, y, y2, PartialOrderRel::le_of_same(x, x2, hx), PartialOrderRel::le_of_same(y, y2, hy)),
+        JoinSemilattice::join_le_mono(x2, x, y2, y,
+            PartialOrderRel::le_of_same(x2, x, A.rel_sym(x, x2, hx)), PartialOrderRel::le_of_same(y2, y, A.rel_sym(y, y2, hy))))
+}
+
+theorem JoinSemilattice::join_comm(x, y: A): x ⊔ y ≈ y ⊔ x {
+    A.le_antisymm(x ⊔ y, y ⊔ x,
+        A.join_le(x, y, y ⊔ x, A.le_join_r(y, x), A.le_join_l(y, x)),
+        A.join_le(y, x, x ⊔ y, A.le_join_r(x, y), A.le_join_l(x, y)))
+}
+
+theorem JoinSemilattice::join_assoc(x, y, z: A): (x ⊔ y) ⊔ z ≈ x ⊔ (y ⊔ z) {
+    let xy_l: (x ⊔ y <= (x ⊔ y) ⊔ z) = A.le_join_l(x ⊔ y, z);
+    let yz_r: (y ⊔ z <= x ⊔ (y ⊔ z)) = A.le_join_r(x, y ⊔ z);
+    A.le_antisymm((x ⊔ y) ⊔ z, x ⊔ (y ⊔ z),
+        A.join_le(x ⊔ y, z, x ⊔ (y ⊔ z),
+            A.join_le(x, y, x ⊔ (y ⊔ z),
+                A.le_join_l(x, y ⊔ z),
+                PartialOrderRel::le_trans(y, y ⊔ z, x ⊔ (y ⊔ z), A.le_join_l(y, z), yz_r)),
+            PartialOrderRel::le_trans(z, y ⊔ z, x ⊔ (y ⊔ z), A.le_join_r(y, z), yz_r)),
+        A.join_le(x, y ⊔ z, (x ⊔ y) ⊔ z,
+            PartialOrderRel::le_trans(x, x ⊔ y, (x ⊔ y) ⊔ z, A.le_join_l(x, y), xy_l),
+            A.join_le(y, z, (x ⊔ y) ⊔ z,
+                PartialOrderRel::le_trans(y, x ⊔ y, (x ⊔ y) ⊔ z, A.le_join_r(x, y), xy_l),
+                A.le_join_r(x ⊔ y, z))))
+}
+
+theorem JoinSemilattice::join_idem(x: A): x ⊔ x ≈ x {
+    A.le_antisymm(x ⊔ x, x,
+        A.join_le(x, x, x, PartialOrderRel::le_refl(x), PartialOrderRel::le_refl(x)),
+        A.le_join_l(x, x))
+}
+
+theorem JoinSemilattice::join_same_of_le(x, y: A, h: x <= y): x ⊔ y ≈ y {
+    A.le_antisymm(x ⊔ y, y, A.join_le(x, y, y, h, PartialOrderRel::le_refl(y)), A.le_join_r(x, y))
+}
+
+theorem JoinSemilattice::le_of_join_same(x, y: A, h: x ⊔ y ≈ y): x <= y {
+    PartialOrderRel::le_trans(x, x ⊔ y, y, A.le_join_l(x, y), PartialOrderRel::le_of_same(x ⊔ y, y, h))
+}
+
+theorem JoinSemilattice::le_iff_join(x, y: A): x <= y ↔ x ⊔ y ≈ y {
+    Iff(mp := λ (h: x <= y) => JoinSemilattice::join_same_of_le(x, y, h),
+        mpr := λ (h: x ⊔ y ≈ y) => JoinSemilattice::le_of_join_same(x, y, h))
+}
+
+fn JoinSemilattice::mergeable() → Mergeable<A>(≈, ⊔) {
+    Mergeable {
+        rel_refl: A.rel_refl,
+        rel_sym: A.rel_sym,
+        rel_trans: A.rel_trans,
+        respects2: λ x x2 hx y y2 hy => JoinSemilattice::join_respects(x, x2, y, y2, hx, hy),
+        assoc: JoinSemilattice::join_assoc,
+        comm: JoinSemilattice::join_comm,
+        idem: JoinSemilattice::join_idem,
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Lattices and bounds.
+
+// Both operations over one order. The two parents share `PartialOrderRel`,
+// which the class composes once.
+class Lattice<A>(same as ≈: A → A → Type, le as <=: A → A → Type, meet as ⊓: A → A → A,
+    join as ⊔: A → A → A)
+    extends MeetSemilattice<A>(same, le, meet), JoinSemilattice<A>(same, le, join)
+{}
+
+section<A: Lattice(≈, <=, ⊓, ⊔)> {
+
+theorem Lattice::meet_join_absorb(x, y: A): x ⊓ (x ⊔ y) ≈ x {
+    MeetSemilattice::meet_same_of_le(x, x ⊔ y, A.le_join_l(x, y))
+}
+
+theorem Lattice::join_meet_absorb(x, y: A): x ⊔ (x ⊓ y) ≈ x {
+    A.rel_trans(x ⊔ (x ⊓ y), (x ⊓ y) ⊔ x, x, JoinSemilattice::join_comm(x, x ⊓ y),
+        JoinSemilattice::join_same_of_le(x ⊓ y, x, A.meet_le_l(x, y)))
+}
+
+theorem Lattice::meet_le_join(x, y: A): x ⊓ y <= x ⊔ y {
+    PartialOrderRel::le_trans(x ⊓ y, x, x ⊔ y, A.meet_le_l(x, y), A.le_join_l(x, y))
+}
+
+// The two algebraic readings of the order agree.
+theorem Lattice::meet_same_iff_join_same(x, y: A): x ⊓ y ≈ x ↔ x ⊔ y ≈ y {
+    Iff(mp := λ (h: x ⊓ y ≈ x) => JoinSemilattice::join_same_of_le(x, y, MeetSemilattice::le_of_meet_same(x, y, h)),
+        mpr := λ (h: x ⊔ y ≈ y) => MeetSemilattice::meet_same_of_le(x, y, JoinSemilattice::le_of_join_same(x, y, h)))
+}
+
+}
+
+// A least and a greatest element, each a capability of its own: `Nat` has
+// the first and not the second, `Int` neither.
+class OrderBot<A>(le as <=: A → A → Type) {
+    bot: A,
+    bot_le: (x: A) → bot <= x,
+}
+
+class OrderTop<A>(le as <=: A → A → Type) {
+    top: A,
+    le_top: (x: A) → x <= top,
+}
+
+section<A: MeetSemilattice(≈, <=, ⊓) + OrderBot(<=)> {
+
+theorem OrderBot::bot_meet(x: A): A.bot ⊓ x ≈ A.bot {
+    MeetSemilattice::meet_same_of_le(A.bot, x, A.bot_le(x))
+}
+
+}
+
+section<A: JoinSemilattice(≈, <=, ⊔) + OrderBot(<=)> {
+
+theorem OrderBot::bot_join(x: A): A.bot ⊔ x ≈ x {
+    JoinSemilattice::join_same_of_le(A.bot, x, A.bot_le(x))
+}
+
+}
+
+section<A: MeetSemilattice(≈, <=, ⊓) + OrderTop(<=)> {
+
+theorem OrderTop::top_meet(x: A): A.top ⊓ x ≈ x {
+    A.rel_trans(A.top ⊓ x, x ⊓ A.top, x, MeetSemilattice::meet_comm(A.top, x),
+        MeetSemilattice::meet_same_of_le(x, A.top, A.le_top(x)))
+}
+
+}
+
+section<A: JoinSemilattice(≈, <=, ⊔) + OrderTop(<=)> {
+
+theorem OrderTop::top_join(x: A): A.top ⊔ x ≈ A.top {
+    A.rel_trans(A.top ⊔ x, x ⊔ A.top, A.top, JoinSemilattice::join_comm(A.top, x),
+        JoinSemilattice::join_same_of_le(x, A.top, A.le_top(x)))
+}
+
+}
+
+class BoundedLattice<A>(same as ≈: A → A → Type, le as <=: A → A → Type, meet as ⊓: A → A → A,
+    join as ⊔: A → A → A)
+    extends Lattice<A>(same, le, meet, join), OrderBot<A>(le), OrderTop<A>(le)
+{}
+
+// ---------------------------------------------------------------------------
+// Products.
+
+// Componentwise operations. With `order`'s `ProductOrder` as both the order
+// and the relation, a product of lattices is a lattice; unlike linearity
+// (`order`'s product stops at a partial order), every lattice layer survives.
+fn ProductOp<A, B>(f: A → A → A, g: B → B → B) → Pair<A, B> → Pair<A, B> → Pair<A, B> {
+    λ x y => Pair(f(x.fst, y.fst), g(x.snd, y.snd))
+}
+
+fn product_partial_order_rel<A: PartialOrderRel(SA, LA), B: PartialOrderRel(SB, LB)>(
+    SA, LA: A → A → Type, SB, LB: B → B → Type)
+    → PartialOrderRel<Pair<A, B>>(ProductOrder(SA, SB), ProductOrder(LA, LB))
+{
+    PartialOrderRel {
+        rel_refl: λ x => And(A.rel_refl(x.fst), B.rel_refl(x.snd)),
+        rel_sym: λ x y h => And(A.rel_sym(x.fst, y.fst, h.left), B.rel_sym(x.snd, y.snd, h.right)),
+        rel_trans: λ x y z h1 h2 => And(
+            A.rel_trans(x.fst, y.fst, z.fst, h1.left, h2.left),
+            B.rel_trans(x.snd, y.snd, z.snd, h1.right, h2.right)),
+        le_preorder: Preorder(
+            λ x => And(A.le_preorder.rel_refl(x.fst), B.le_preorder.rel_refl(x.snd)),
+            λ x y z h1 h2 => And(
+                A.le_preorder.rel_trans(x.fst, y.fst, z.fst, h1.left, h2.left),
+                B.le_preorder.rel_trans(x.snd, y.snd, z.snd, h1.right, h2.right))),
+        same_le: Trans(λ x y z h1 h2 => And(
+            A.same_le.rel_chain(x.fst, y.fst, z.fst, h1.left, h2.left),
+            B.same_le.rel_chain(x.snd, y.snd, z.snd, h1.right, h2.right))),
+        le_same: Trans(λ x y z h1 h2 => And(
+            A.le_same.rel_chain(x.fst, y.fst, z.fst, h1.left, h2.left),
+            B.le_same.rel_chain(x.snd, y.snd, z.snd, h1.right, h2.right))),
+        le_antisymm: λ x y h1 h2 => And(
+            A.le_antisymm(x.fst, y.fst, h1.left, h2.left),
+            B.le_antisymm(x.snd, y.snd, h1.right, h2.right)),
+    }
+}
+
+fn product_lattice<A: Lattice(SA, LA, MA, JA), B: Lattice(SB, LB, MB, JB)>(
+    SA, LA: A → A → Type, MA, JA: A → A → A, SB, LB: B → B → Type, MB, JB: B → B → B)
+    → Lattice<Pair<A, B>>(ProductOrder(SA, SB), ProductOrder(LA, LB), ProductOp(MA, MB), ProductOp(JA, JB))
+{
+    let order = product_partial_order_rel(SA, LA, SB, LB);
+    Lattice {
+        rel_refl: order.rel_refl,
+        rel_sym: order.rel_sym,
+        rel_trans: order.rel_trans,
+        le_preorder: order.le_preorder,
+        same_le: order.same_le,
+        le_same: order.le_same,
+        le_antisymm: order.le_antisymm,
+        meet_le_l: λ x y => And(A.meet_le_l(x.fst, y.fst), B.meet_le_l(x.snd, y.snd)),
+        meet_le_r: λ x y => And(A.meet_le_r(x.fst, y.fst), B.meet_le_r(x.snd, y.snd)),
+        le_meet: λ x y z hx hy => And(
+            A.le_meet(x.fst, y.fst, z.fst, hx.left, hy.left),
+            B.le_meet(x.snd, y.snd, z.snd, hx.right, hy.right)),
+        le_join_l: λ x y => And(A.le_join_l(x.fst, y.fst), B.le_join_l(x.snd, y.snd)),
+        le_join_r: λ x y => And(A.le_join_r(x.fst, y.fst), B.le_join_r(x.snd, y.snd)),
+        join_le: λ x y z hx hy => And(
+            A.join_le(x.fst, y.fst, z.fst, hx.left, hy.left),
+            B.join_le(x.snd, y.snd, z.snd, hx.right, hy.right)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The naturals and the integers: `min` and `max` at `RelId`.
+
+// The order modulo identity; its preorder and the mixed chains are `order`'s
+// registered instances.
+instance PartialOrderRel<Nat>(RelId<Nat>, Nat::Le) {
+    le_antisymm := Nat::le_antisym,
+}
+
+instance Lattice<Nat>(RelId<Nat>, Nat::Le, Nat::min, Nat::max) {
+    meet_le_l := Nat::min_le_l,
+    meet_le_r := Nat::min_le_r,
+    le_meet := λ x y z hx hy => Nat::le_min(x, y, z, hx, hy),
+    le_join_l := Nat::le_max_l,
+    le_join_r := Nat::le_max_r,
+    join_le := Nat::max_le,
+}
+
+instance OrderBot<Nat>(Nat::Le) {
+    bot := 0,
+    bot_le := Nat::nonneg,
+}
+
+instance PartialOrderRel<Int>(RelId<Int>, Int::Le) {
+    le_antisymm := Int::le_antisym,
+}
+
+instance Lattice<Int>(RelId<Int>, Int::Le, Int::min, Int::max) {
+    meet_le_l := Int::min_le_l,
+    meet_le_r := Int::min_le_r,
+    le_meet := λ x y z hx hy => x.le_min(y, z, hx, hy),
+    le_join_l := Int::le_max_l,
+    le_join_r := Int::le_max_r,
+    join_le := λ x y z hx hy => x.max_le(y, z, hx, hy),
+}

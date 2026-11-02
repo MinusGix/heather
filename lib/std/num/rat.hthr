@@ -24,6 +24,7 @@ import nat;
 import int;
 import omega;
 import ring;
+import relation;
 import relation_props;
 import algebra;
 import algebra_rel;
@@ -46,12 +47,15 @@ theorem Rat::same_refl(self x: Rat): x ≈ x { refl }
 
 theorem Rat::same_sym({x, y: Rat}, h: x ≈ y): y ≈ x { sym(h) }
 
-// a/p ≈ b/q and b/q ≈ c/r give a/p ≈ c/r: multiply the goal by q, which
-// the two hypotheses rearrange into each other, and cancel q (positive by
-// `y.den_pos`).
+// a/p ≈ b/q and b/q ≈ c/r give a/p ≈ c/r: cross-multiplication is
+// transitive through the positive middle denominator q
+// (`OrderedSemiring::cross_same_trans` at `Int`, which multiplies the goal by
+// q, rearranges, and cancels q; positive by `y.den_pos`).
 theorem Rat::same_trans({x, y, z: Rat}, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
-    let scaled: ((x.num * z.den.int()) * y.den.int() = (z.num * x.den.int()) * y.den.int()) = ring(hxy, hyz);
-    (x.num * z.den.int()).mul_cancel_pos_r(z.num * x.den.int(), y.den.int(), scaled, p_pos := y.den_pos)
+    let q: (OfNat(0) < y.den.int()) = y.den_pos;
+    let h1: (x.num * y.den.int() ≈ y.num * x.den.int()) = hxy;
+    let h2: (y.num * z.den.int() ≈ z.num * y.den.int()) = hyz;
+    OrderedSemiring::cross_same_trans(x.num, x.den.int(), y.num, y.den.int(), z.num, z.den.int(), q, h1, h2)
 }
 
 instance Equivalence<Rat>(Rat::Same) {

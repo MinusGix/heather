@@ -386,6 +386,32 @@ theorem OrderedAddMonoid::add_le_mono_l(x, y, z: A, h: x <= y): z + x <= z + y {
     A.le_of_not_lt(z + x, z + y, λ back => A.not_lt_of_le(x, y, h, OrderedAddMonoid::add_lt_cancel_l(y, x, z, back)))
 }
 
+// Cancellation (issues/cancellative-algebra-api.md). Addition cancels with
+// no side condition: an ordered additive monoid is cancellative, because a
+// gap between the summands would survive translation and contradict the
+// equation. This is the unconditional kind; multiplication's, which needs a
+// positive or apart factor, is at the semiring and the ring below. Every
+// group cancels as well (`GroupRel` laws), so with these two every carrier
+// here has its additive cancellation without a class of its own.
+theorem OrderedAddMonoid::add_cancel_r(x, y, z: A, h: x + z ≈ y + z): x ≈ y {
+    A.lt_tight(x, y,
+        λ l => StrictOrder::not_apart_of_same(x + z, y + z, h, Inl(A.add_lt_mono_r(x, y, z, l))),
+        λ g => StrictOrder::not_apart_of_same(x + z, y + z, h, Inr(A.add_lt_mono_r(y, x, z, g))))
+}
+
+theorem OrderedAddMonoid::add_cancel_l(x, y, z: A, h: z + x ≈ z + y): x ≈ y {
+    OrderedAddMonoid::add_cancel_r(x, y, z,
+        A.rel_trans(x + z, z + x, y + z, A.comm(x, z), A.rel_trans(z + x, z + y, y + z, h, A.comm(z, y))))
+}
+
+theorem OrderedAddMonoid::add_le_cancel_r(x, y, z: A, h: x + z <= y + z): x <= y {
+    A.le_of_not_lt(x, y, λ yx => A.not_lt_of_le(x + z, y + z, h, A.add_lt_mono_r(y, x, z, yx)))
+}
+
+theorem OrderedAddMonoid::add_le_cancel_l(x, y, z: A, h: z + x <= z + y): x <= y {
+    A.le_of_not_lt(x, y, λ yx => A.not_lt_of_le(z + x, z + y, h, OrderedAddMonoid::add_lt_mono_l(y, x, z, yx)))
+}
+
 // A sum of positives is positive.
 theorem OrderedAddMonoid::add_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y {
     calc {
@@ -760,6 +786,56 @@ theorem OrderedSemiring::mul_lt_cancel_r(x, y, z: A, hz: A.unit < z, h: x * z < 
     A.mul_lt_reflect_l(x, y, z, hz, A.lt_respects(x * z, z * x, y * z, z * y, A.commutative.comm(x, z), A.commutative.comm(y, z), h))
 }
 
+// Cancelling a positive factor (issues/cancellative-algebra-api.md). The
+// side condition is a hypothesis, never a class: a semiring with zero is not
+// cancellative, and what licenses the step is the factor's sign. The proof
+// is the reflection law read twice: a gap between `x` and `y` would scale to
+// a gap between the products, which the equation denies.
+theorem OrderedSemiring::mul_cancel_pos_l(x, y, z: A, hz: A.unit < z, h: z * x ≈ z * y): x ≈ y {
+    A.lt_tight(x, y,
+        λ l => StrictOrder::not_apart_of_same(z * x, z * y, h, Inl(A.mul_lt_l(x, y, z, l, hz))),
+        λ g => StrictOrder::not_apart_of_same(z * x, z * y, h, Inr(A.mul_lt_l(y, x, z, g, hz))))
+}
+
+theorem OrderedSemiring::mul_cancel_pos_r(x, y, z: A, hz: A.unit < z, h: x * z ≈ y * z): x ≈ y {
+    OrderedSemiring::mul_cancel_pos_l(x, y, z, hz,
+        A.rel_trans(z * x, x * z, z * y, A.commutative.comm(z, x), A.rel_trans(x * z, y * z, z * y, h, A.commutative.comm(y, z))))
+}
+
+theorem OrderedSemiring::mul_le_cancel_pos_l(x, y, z: A, hz: A.unit < z, h: z * x <= z * y): x <= y {
+    A.le_of_not_lt(x, y, λ yx => A.not_lt_of_le(z * x, z * y, h, A.mul_lt_l(y, x, z, yx, hz)))
+}
+
+theorem OrderedSemiring::mul_le_cancel_pos_r(x, y, z: A, hz: A.unit < z, h: x * z <= y * z): x <= y {
+    A.le_of_not_lt(x, y, λ yx => A.not_lt_of_le(x * z, y * z, h, OrderedSemiring::mul_lt_mono_r(y, x, z, yx, hz)))
+}
+
+// Cross-multiplication is transitive through a positive middle factor, the
+// forcing customer of the cancellation kit: `a/b ≈ c/d` and `c/d ≈ e/f`
+// (each `≈` read as `a·d ≈ c·b`) give `a/b ≈ e/f` once `d` is positive.
+// Multiply the goal by `d`; the two hypotheses rearrange each side into the
+// other; cancel `d`. `Rat::same_trans` is this at `Int`.
+theorem OrderedSemiring::cross_same_trans(a, b, c, d, e, f: A, hd: A.unit < d,
+    h1: a * d ≈ c * b, h2: c * f ≈ e * d): a * f ≈ e * b
+{
+    let m = A.multiplicative;
+    let swap = λ (u: A) (v: A) => A.commutative.comm(u, v);
+    let scaled: (d * (a * f) ≈ d * (e * b)) = calc {
+        d * (a * f) ≈ (d * a) * f := A.rel_sym((d * a) * f, d * (a * f), m.assoc(d, a, f)),
+        ≈ (a * d) * f := OrderedSemiring::mul_respects(d * a, a * d, f, f, swap(d, a), A.rel_refl(f)),
+        ≈ (c * b) * f := OrderedSemiring::mul_respects(a * d, c * b, f, f, h1, A.rel_refl(f)),
+        ≈ (b * c) * f := OrderedSemiring::mul_respects(c * b, b * c, f, f, swap(c, b), A.rel_refl(f)),
+        ≈ b * (c * f) := m.assoc(b, c, f),
+        ≈ b * (e * d) := OrderedSemiring::mul_respects(b, b, c * f, e * d, A.rel_refl(b), h2),
+        ≈ b * (d * e) := OrderedSemiring::mul_respects(b, b, e * d, d * e, A.rel_refl(b), swap(e, d)),
+        ≈ (b * d) * e := A.rel_sym((b * d) * e, b * (d * e), m.assoc(b, d, e)),
+        ≈ (d * b) * e := OrderedSemiring::mul_respects(b * d, d * b, e, e, swap(b, d), A.rel_refl(e)),
+        ≈ d * (b * e) := m.assoc(d, b, e),
+        ≈ d * (e * b) := OrderedSemiring::mul_respects(d, d, b * e, e * b, A.rel_refl(d), swap(b, e)),
+    };
+    OrderedSemiring::mul_cancel_pos_l(a * f, e * b, d, hd, scaled)
+}
+
 // A product of positives is positive: x·0 < x·y.
 theorem OrderedSemiring::mul_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x * y {
     StrictOrder::lt_respects_l(x * A.unit, A.unit, x * y, A.mul_zero(x), A.mul_lt_l(A.unit, y, x, hy, hx))
@@ -859,6 +935,31 @@ theorem OrderedRing::mul_le_mono_l_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit
 
 theorem OrderedRing::mul_le_mono_r_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit): y * z <= x * z {
     StrictOrder::le_respects(z * y, y * z, z * x, x * z, A.commutative.comm(z, y), A.commutative.comm(z, x), OrderedRing::mul_le_mono_l_nonpos(x, y, z, h, hz))
+}
+
+// Cancelling a factor apart from zero, the constructive "nonzero": a
+// negative factor is a positive one negated, so its products are the
+// positive one's negated, and negation cancels. `¬(z ≈ 0)` would not do at
+// the reals, which cannot turn it into a sign; at a decidable carrier the two
+// agree, and `Int::mul_cancel_l` takes `z ≠ 0` there.
+theorem OrderedRing::mul_cancel_apart_l(x, y, z: A, hz: ApartBy(<, z, A.unit), h: z * x ≈ z * y): x ≈ y {
+    match hz {
+        Inl(neg) => {
+            let nz = A.inv(z);
+            let flipped: (nz * x ≈ nz * y) = calc {
+                nz * x ≈ A.inv(z * x) := Ring::neg_mul(z, x),
+                ≈ A.inv(z * y) := A.inv_respects(z * x, z * y, h),
+                ≈ nz * y := A.rel_sym(nz * y, A.inv(z * y), Ring::neg_mul(z, y)),
+            };
+            OrderedSemiring::mul_cancel_pos_l(x, y, nz, OrderedAddGroup::neg_pos(z, neg), flipped)
+        },
+        Inr(pos) => OrderedSemiring::mul_cancel_pos_l(x, y, z, pos, h),
+    }
+}
+
+theorem OrderedRing::mul_cancel_apart_r(x, y, z: A, hz: ApartBy(<, z, A.unit), h: x * z ≈ y * z): x ≈ y {
+    OrderedRing::mul_cancel_apart_l(x, y, z, hz,
+        A.rel_trans(z * x, x * z, z * y, A.commutative.comm(z, x), A.rel_trans(x * z, y * z, z * y, h, A.commutative.comm(y, z))))
 }
 
 // A square is nonnegative, with no decision on the sign of `x`: were `x·x`

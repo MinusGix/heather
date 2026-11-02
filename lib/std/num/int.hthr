@@ -1852,6 +1852,36 @@ theorem Int::mul_le_cancel_pos_r(self a, b: Int, p: Pos<Int>, h: a * p <= b * p)
     Int::le_of_not_lt(b, a, λ lt => (a * p).not_lt_of_ge(b * p, h)(b.mul_lt_mono_r(a, p, lt, p_pos)))
 }
 
+// The same with the factor on the left and its sign a plain hypothesis.
+theorem Int::mul_cancel_pos_l(self k, a, b: Int, hk: OfNat(0) < k, h: k * a = k * b): a = b {
+    match a.lt_trichotomy(b) {
+        Inl(lt) => false_elim((k * a).lt_irrefl()(j(sym(h), λ right q => k * a < right, a.mul_lt_mono_l(b, k, lt, hk)))),
+        Inr(rest) => match rest {
+            Inl(eq) => eq,
+            Inr(gt) => false_elim((k * b).lt_irrefl()(j(h, λ right q => k * b < right, b.mul_lt_mono_l(a, k, gt, hk)))),
+        },
+    }
+}
+
+// A nonzero factor cancels: a negative one is a positive one negated, and
+// negation cancels from both products. The generic form at an ordered ring
+// takes the factor apart from zero (`OrderedRing::mul_cancel_apart_l`); at
+// `Int` the decision turns `≠ 0` into that.
+theorem Int::mul_cancel_l(self k, a, b: Int, hk: ¬(k = OfNat(0)), h: k * a = k * b): a = b {
+    match k as λ k => ¬(k = OfNat(0)) → k * a = k * b → a = b {
+        OfNat(n) => match n {
+            Zero => λ hk h => false_elim(hk(refl)),
+            Succ(m) => λ hk h => OfNat(Succ(m)).mul_cancel_pos_l(a, b, trivial, h),
+        },
+        NegSucc(m) => λ hk h => OfNat(Succ(m)).mul_cancel_pos_l(a, b, trivial,
+            trans(NegSucc(m).mul_neg_l(a), trans(prelude::cong(h), sym(NegSucc(m).mul_neg_l(b))))),
+    }(hk, h)
+}
+
+theorem Int::mul_cancel_r(self a, b, k: Int, hk: ¬(k = OfNat(0)), h: a * k = b * k): a = b {
+    k.mul_cancel_l(a, b, hk, trans(sym(a.mul_comm(k)), trans(h, b.mul_comm(k))))
+}
+
 // ---------------------------------------------------------------------------
 // Signs of a product with a positive factor: the product has the other
 // factor's sign, and the other factor has the product's.

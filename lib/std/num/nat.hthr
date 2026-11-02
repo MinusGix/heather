@@ -1043,6 +1043,33 @@ theorem Nat::lt_of_mul_lt_mul_l(self k, n, m: Nat, h: k * n < k * m): n < m {
     Nat::lt_of_not_le(n, m, λ le => (k * n).lt_irrefl(Succ(k * n).le_trans(k * m, k * n, h, k.mul_le_mono_l(m, n, le))))
 }
 
+// A nonzero left factor cancels from an equation
+// (issues/cancellative-algebra-api.md): a gap between `n` and `m` would scale
+// to one between the products. The generic positive-factor form is
+// `OrderedSemiring::mul_cancel_pos_l`; at `Nat`, nonzero and positive agree
+// (`Nat::pos_of_ne_zero`).
+theorem Nat::pos_of_ne_zero(self k: Nat, h: ¬(k = 0)): 0 < k {
+    match k as λ k => ¬(k = 0) → 0 < k {
+        Zero => λ h => false_elim(h(refl)),
+        Succ(_) => λ h => trivial,
+    }(h)
+}
+
+theorem Nat::mul_cancel_l(self k, n, m: Nat, hk: ¬(k = 0), h: k * n = k * m): n = m {
+    let pos: (0 < k) = k.pos_of_ne_zero(hk);
+    match n.lt_trichotomy(m) {
+        Inl(lt) => false_elim((k * n).lt_irrefl(j(sym(h), λ right q => k * n < right, k.mul_lt_mono_l(n, m, pos, lt)))),
+        Inr(rest) => match rest {
+            Inl(eq) => eq,
+            Inr(gt) => false_elim((k * m).lt_irrefl(j(h, λ right q => k * m < right, k.mul_lt_mono_l(m, n, pos, gt)))),
+        },
+    }
+}
+
+theorem Nat::mul_cancel_r(self n, m, k: Nat, hk: ¬(k = 0), h: n * k = m * k): n = m {
+    k.mul_cancel_l(n, m, hk, trans(sym(n.mul_comm(k)), trans(h, m.mul_comm(k))))
+}
+
 // A common right factor cancels from a strict comparison.
 theorem Nat::lt_of_mul_lt_mul_r(self a, b, c: Nat, h: a * c < b * c): a < b {
     match b.le_dec(a) {

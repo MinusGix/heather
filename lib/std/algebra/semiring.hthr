@@ -40,6 +40,7 @@ import list;
 import relation;
 import relation_props;
 import algebra_rel;
+import order;
 
 // ---------------------------------------------------------------------------
 // The one-operation consumers.
@@ -522,12 +523,6 @@ instance Distributes<Nat>(RelId<Nat>, Nat::add, Nat::mul) {
 instance CommSemiring<Nat>(RelId<Nat>, Nat::add, Nat::mul) {
     zero_mul := Nat::mul_left_zero,
     mul_zero := λ (x: Nat) => refl,
-}
-
-instance Equivalence<Int>(RelId<Int>) {
-    rel_refl := λ x => refl,
-    rel_sym := λ x y h => sym(h),
-    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
 }
 
 instance Respects2<Int, Int, Int>(RelId<Int>, RelId<Int>, RelId<Int>, Int::add) { respects2 := respects2_relid(Int::add) }

@@ -151,5 +151,44 @@ theorem, because `mono`'s carrier tables cite them.
   carries the upcast record. A successful search costs what it did. A failing one
   peaks at a few GB (`issues/mono-failure-under-upcast-cost.md`), so `mono`'s
   refusal probes sit in an `OrderedSemiring` section.
-- **Lattices** (`issues/lattice-structure-api.md`) and **trichotomy**
-  (`issues/trichotomy-proposition.md`) are adjacent and unchanged.
+- **Lattices** landed separately (`docs/lattice-structure-design.md`).
+  **Trichotomy** (`issues/trichotomy-proposition.md`) is adjacent and unchanged.
+
+## 6. Cancellation
+
+Issue: `issues/cancellative-algebra-api.md`. The issue asked for an API that keeps
+an unconditionally cancellative operation apart from the integral-domain-shaped
+step that cancels a nonzero factor. The forcing customer was transitivity of
+cross-multiplication for unreduced rationals with positive denominators.
+
+**The distinction is carried by hypotheses, not by a class.** Unconditional
+cancellation has no side condition in its statement, and conditional
+cancellation names its condition:
+
+| Theorem | Layer | Side condition |
+| --- | --- | --- |
+| `OrderedAddMonoid::add_cancel_{l,r}`, `add_le_cancel_{l,r}` | ordered additive monoid | none |
+| `OrderedSemiring::mul_cancel_pos_{l,r}`, `mul_le_cancel_pos_{l,r}` | ordered semiring | `0 < z` |
+| `OrderedRing::mul_cancel_apart_{l,r}` | ordered ring | `ApartBy(<, z, 0)` |
+| `Nat::mul_cancel_{l,r}`, `Int::mul_cancel_{l,r}` | the carrier | `¬(z = 0)` |
+
+Additive cancellation is a theorem of every ordered additive monoid, because a
+gap between the summands survives translation and contradicts the equation. It
+is a theorem of every group as well. Together these two cover every carrier
+here, so a `Cancellative(≈, op)` class has no consumer yet and was not added.
+The first carrier that is neither ordered nor a group (`List` under `++`) would
+be the one to ask for it.
+
+Multiplicative cancellation follows from the reflection law `mul_lt_reflect_l`
+and tightness, so it needs no field. A gap between `x` and `y` would scale to a
+gap between `z·x` and `z·y`. At a ring the condition weakens to apartness from
+zero, the constructive "nonzero": a negative factor is a positive one negated.
+`¬(z ≈ 0)` is not offered at the generic layers, because the reals cannot turn
+it into a sign. At `Nat` and `Int` the decision makes `≠ 0` and apartness
+agree, so their `≠ 0` forms are carrier theorems in `nat.hthr` and `int.hthr`,
+proved from the carriers' own lemmas.
+
+**The customer.** `OrderedSemiring::cross_same_trans` says that `a·d ≈ c·b` and
+`c·f ≈ e·d` give `a·f ≈ e·b` once `d` is positive. `Rat::same_trans` is that
+theorem at `Int`. It replaced a `ring` call followed by
+`Int::mul_cancel_pos_r`.
