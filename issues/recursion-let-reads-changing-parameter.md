@@ -68,10 +68,15 @@ neutral `x`, a `have` in a checking position, the self-call argument, a
 `let` chain under a nested `match`, a list recursion at an open element type,
 the refusal, the negative control, and the structural controls).
 
-Not covered: a parameter whose *type* mentions a varied one (generalized by
-dependency closure in `generalize::varying_params`) is not itself treated as
-varied by the surface planner; a `let` bound from such a parameter alone
-above the `match` would still be stale.
+Dependency closure (follow-up, 2026-11-02): a parameter that
+`generalize::varying_params` generalizes only because its *type* mentions a
+varied one is not a gap. The self-call passes it as itself (anything else is
+caught by the planner's own scan, and an omitted implicit generalized one is
+refused at the call), so a `let` bound from it holds the same value at every
+level; `a_parameter_varied_only_through_its_type_keeps_its_value` pins that
+it keeps the structural lowering. The nearby shape that *is* wrong, an
+implicit parameter *before* the varied one that the call would infer a new
+value for, is refused only by the kernel: [[recursion-implicit-inferred-at-self-call]].
 
 Audit: a whole-library `heather check` with the fix raised no
 `recursion-by-measure` note and no new error outside `lib/_tests`'s expected
