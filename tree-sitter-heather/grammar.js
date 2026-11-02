@@ -84,12 +84,12 @@ module.exports = grammar({
     ),
 
     function_declaration: $ => seq(
-      optional('meta'), 'fn', field('name', $._qualified_name),
+      optional(choice('meta', 'interface')), 'fn', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       optional(seq('for', $.slot_path)),
       choice('->', '→'), field('return_type', $._declaration_type),
-      optional($.decreases_clause), field('body', $.block),
+      optional($.decreases_clause), optional($.unfolding_clause), field('body', $.block),
     ),
 
     theorem_declaration: $ => seq(
@@ -97,7 +97,7 @@ module.exports = grammar({
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       ':', field('return_type', $._declaration_type),
-      optional($.decreases_clause), field('body', $.block),
+      optional($.decreases_clause), optional($.unfolding_clause), field('body', $.block),
     ),
 
     axiom_declaration: $ => seq(
@@ -204,6 +204,10 @@ module.exports = grammar({
     // The measure is read with the declaration-type sub-grammar, which is the
     // expression grammar minus the forms that would swallow the body's `{`.
     decreases_clause: $ => seq('decreases', $._declaration_type),
+    // `unfolding f, g`: the interface definitions whose bodies this
+    // declaration may read at open arguments
+    // (docs/interface-definitions-design.md §4).
+    unfolding_clause: $ => seq('unfolding', commaSep1($._qualified_name)),
     requirement: $ => choice(
       field('class', $.requirement_class_reference),
       seq(field('name', $.identifier), ':', field('class', $.requirement_class_reference)),

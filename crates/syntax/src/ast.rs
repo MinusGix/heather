@@ -460,6 +460,12 @@ pub struct Decl {
     /// carry it, and the elaborator refuses one with a parameter search could
     /// not fill.
     pub is_evidence: bool,
+    /// `interface fn` — an **interface definition**
+    /// (docs/interface-definitions-design.md): outside its module, a proof
+    /// reaches its body only through its generated equations, its lemmas or
+    /// an `unfold f;`, while a call at closed arguments still computes. Only
+    /// a `fn` may carry it.
+    pub is_interface: bool,
     /// `def name: T = e;` — a **value definition** (issues/value-definitions.md,
     /// docs/value-definitions-design.md). Its kind is [`DeclKind::Fn`] with no
     /// written parameters, so it is elaborated, gated, imaged and unfolded
@@ -489,6 +495,11 @@ pub struct Decl {
     /// then elaborated as strong induction on a bound for `e`, and every
     /// recursive call owes `e[args] < e`, a goal hole named `decN`.
     pub decreases: Option<Expr>,
+    /// `unfolding f, g` — interface definitions whose bodies this
+    /// declaration may see through (docs/interface-definitions-design.md
+    /// §4). Declaration-wide: the kernel gate checks a declaration as one
+    /// term, so the boundary can only move per declaration.
+    pub unfolding: Vec<String>,
     pub body: Block,
     pub span: Span,
 }

@@ -649,6 +649,7 @@ impl Elaborator {
             kind: first.kind,
             is_meta: false,
             is_evidence: false,
+            is_interface: false,
             value: false,
             elaborates: None,
             name: rec_name(&first.name),
@@ -659,6 +660,7 @@ impl Elaborator {
             ],
             result,
             decreases: None,
+            unfolding: Vec::new(),
             body: Block { stmts: Vec::new(), result: Box::new(body), ons, span: first.body.span },
             span: first.span,
         })
@@ -877,6 +879,7 @@ fn mot_decl(g: &Group, level: u64) -> Decl {
         kind: DeclKind::Fn,
         is_meta: false,
         is_evidence: false,
+        is_interface: false,
             value: false,
         elaborates: None,
         name: mot_name(&first.name),
@@ -884,6 +887,7 @@ fn mot_decl(g: &Group, level: u64) -> Decl {
         params: vec![param("#j", g.members_ty(span), span)],
         result,
         decreases: None,
+        unfolding: Vec::new(),
         body: Block { stmts: Vec::new(), result: Box::new(body), ons: Vec::new(), span },
         span: first.span,
     }

@@ -481,6 +481,7 @@ impl<'a> Lift<'a> {
             kind: DeclKind::Fn,
             is_meta: false,
             is_evidence: false,
+            is_interface: false,
             value: false,
             elaborates: None,
             name: step.clone(),
@@ -488,6 +489,7 @@ impl<'a> Lift<'a> {
             params,
             result: step_ty,
             decreases: None,
+            unfolding: Vec::new(),
             body,
             span,
         }));
@@ -611,6 +613,8 @@ impl Lift<'_> {
         self.parts.push(Part::Decl(Decl {
             kind: DeclKind::Fn,
             is_meta: false,
+            is_interface: false,
+            unfolding: Vec::new(),
             is_evidence: false,
             value: false,
             elaborates: None,
@@ -757,6 +761,7 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys) -> R<Family> {
         kind: DeclKind::Theorem,
         is_meta: false,
         is_evidence: false,
+        is_interface: false,
         value: false,
         elaborates: None,
         name: measure::unfold_name(&decl.name),
@@ -764,6 +769,7 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys) -> R<Family> {
         params: decl.params.clone(),
         result: Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span },
         decreases: None,
+        unfolding: Vec::new(),
         body: Block { stmts: vec![], result: Box::new(Expr { kind: ExprKind::Refl, span }), ons: vec![], span },
         span,
     };

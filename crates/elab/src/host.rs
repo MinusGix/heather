@@ -3751,6 +3751,7 @@ impl Elaborator {
             kind: if m.theorem { DeclKind::Theorem } else { DeclKind::Fn },
             is_meta: false,
             is_evidence: false,
+            is_interface: false,
             value: m.value,
             elaborates: None,
             name: m.name.clone(),
@@ -3758,6 +3759,7 @@ impl Elaborator {
             params,
             result: leaf_ty(n),
             decreases: None,
+            unfolding: Vec::new(),
             body: Block { stmts: Vec::new(), result: Box::new(leaf_expr(n + 1, span)), ons: Vec::new(), span },
             span,
         };

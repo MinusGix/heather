@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x1e";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1b";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x1f";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1c";
 
 /// The two encodings' versions, image then interface: what a module cache
 /// key covers, so a bump of either is a clean miss for every reader rather
@@ -1672,6 +1672,7 @@ fn put_decl(w: &mut Writer, decl: &Decl) {
     });
     w.bool(decl.is_meta);
     w.bool(decl.is_evidence);
+    w.bool(decl.is_interface);
     w.option(decl.elaborates.as_ref(), |w, slot| {
         w.string(&slot.family); w.string(&slot.name); put_span(w, slot.span);
     });
@@ -1679,6 +1680,7 @@ fn put_decl(w: &mut Writer, decl: &Decl) {
     w.vec(&decl.tyvars, |w, var| { w.string(&var.name); w.u64(var.level); put_span(w, var.span); });
     w.vec(&decl.params, put_param); put_ty(w, &decl.result);
     w.option(decl.decreases.as_ref(), put_expr);
+    w.vec(&decl.unfolding, |w, name| w.string(name));
     if w.interface && matches!(decl.kind, DeclKind::Theorem | DeclKind::Axiom) {
         // The checked kernel binding retains the statement and opacity bit.
         // The proof block is neither delta-visible nor re-lowered downstream.
@@ -1696,11 +1698,11 @@ fn get_decl(r: &mut Reader<'_>) -> Result<Decl, ModuleImageDecodeError> {
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "declaration kind", tag }),
     };
     Ok(Decl {
-        kind, value, is_meta: r.bool()?, is_evidence: r.bool()?, elaborates: r.option(|r| Ok(SlotPath {
+        kind, value, is_meta: r.bool()?, is_evidence: r.bool()?, is_interface: r.bool()?, elaborates: r.option(|r| Ok(SlotPath {
             family: r.string()?, name: r.string()?, span: get_span(r)?,
         }))?, name: r.string()?, tyvars: r.vec(|r| Ok(TyParam {
             name: r.string()?, level: r.u64()?, span: get_span(r)?,
-        }))?, params: r.vec(get_param)?, result: get_ty(r)?, decreases: r.option(get_expr)?,
+        }))?, params: r.vec(get_param)?, result: get_ty(r)?, decreases: r.option(get_expr)?, unfolding: r.vec(Reader::string)?,
         body: get_block(r)?, span: get_span(r)?,
     })
 }
@@ -2137,6 +2139,10 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             w.byte(18); w.string(&rule.global); w.string(&rule.relation);
             w.vec(&rule.heads, |w, head| w.option(head.as_ref(), |w, head| w.string(head)));
         }
+        DeltaEvent::Interface { key, info } => {
+            w.byte(19); w.string(key); w.string(&info.module); w.u32(info.arity); w.string(&info.name);
+            w.vec(&info.equations, |w, eq| w.string(eq));
+        }
         DeltaEvent::Repr { key, name, info, monomorph, obligations } => {
             w.byte(11); w.option(key.0.as_ref(), |w, tag| w.u32(*tag)); w.string(&key.1);
             w.string(name); put_datarepr(w, info);
@@ -2192,6 +2198,9 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         18 => DeltaEvent::Evidence(EvidenceRule {
             global: r.string()?, relation: r.string()?, heads: r.vec(|r| r.option(Reader::string))?,
         }),
+        19 => DeltaEvent::Interface { key: r.string()?, info: crate::interfaces::InterfaceInfo {
+            module: r.string()?, arity: r.u32()?, name: r.string()?, equations: r.vec(Reader::string)?,
+        } },
         11 => DeltaEvent::Repr {
             key: (r.option(Reader::u32)?, r.string()?), name: r.string()?, info: get_datarepr(r)?,
             monomorph: r.option(|r| Ok((r.u32()?, r.string()?)))?, obligations: r.vec(get_obligation)?,

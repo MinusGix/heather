@@ -130,6 +130,7 @@ mod goal_combinators;
 mod goals;
 pub mod host;
 mod indexed;
+mod interfaces;
 mod infinitary;
 mod inductive;
 mod spelling;
@@ -579,6 +580,8 @@ pub struct CommittedWorld {
     representations: Shared<Representations>,
     provenance: Shared<provenance::Provenance>,
     meta_programs: Shared<MetaPrograms>,
+    /// Interface definitions by global key (`interfaces.rs`).
+    interfaces: Shared<interfaces::Interfaces>,
 }
 
 impl CommittedWorld {
@@ -592,6 +595,7 @@ impl CommittedWorld {
             representations: Shared::new(Representations::default()),
             provenance: Shared::new(provenance::Provenance::default()),
             meta_programs: Shared::new(MetaPrograms::default()),
+            interfaces: Shared::new(interfaces::Interfaces::default()),
         }
     }
 }
@@ -2583,6 +2587,11 @@ impl Elaborator {
             }
         }
         self.names.enter_scope(scope);
+        // The interface boundary is per module: the definitions this module
+        // declares are transparent in it, every other module's are withheld.
+        if !self.interfaces.is_empty() {
+            self.refresh_delta_psi();
+        }
         Ok(())
     }
 
@@ -3494,6 +3503,20 @@ impl Elaborator {
     }
 
     fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
+        // `unfolding f, g`: the declaration sees through these interface
+        // definitions, its gate included (docs/interface-definitions-design.md §4).
+        if !decl.unfolding.is_empty() {
+            let keys = self.unfolding_keys(decl)?;
+            let mut inner = decl.clone();
+            inner.unfolding.clear();
+            self.scope.unfolded.extend(keys.iter().cloned());
+            self.refresh_delta_psi();
+            let out = self.elab_decl_owned(&inner);
+            let keep = self.scope.unfolded.len() - keys.len();
+            self.scope.unfolded.truncate(keep);
+            self.refresh_delta_psi();
+            return out;
+        }
         // A `meta fn` is a different declaration form: modal signature,
         // quotation body, `Layer::Meta` check, elaborator-side registration
         // (docs/in-language-map-design.md §3–4).
@@ -3507,6 +3530,19 @@ impl Elaborator {
             self.evidence_shape(decl)?;
             self.elab_decl_one(decl, None)?;
             return self.register_evidence(decl);
+        }
+        // An `interface fn` is elaborated as the `fn` it is, then registered,
+        // with its unfolding equations beside it
+        // (docs/interface-definitions-design.md).
+        if decl.is_interface {
+            self.interface_shape(decl)?;
+            let mut plain = decl.clone();
+            plain.is_interface = false;
+            return self.session_transaction(|me| {
+                me.elab_decl_owned(&plain)?;
+                let equations = me.interface_equations(decl)?;
+                me.register_interface(decl, equations)
+            });
         }
         // `decreases e` is not one declaration but a family of them
         // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,
@@ -4721,6 +4757,19 @@ impl Elaborator {
         body: &Term,
         opaque: bool,
     ) -> R<()> {
+        // A declaration of a module that imports interface definitions is
+        // checked with their bodies withheld, as the elaborator's worlds are
+        // (docs/interface-definitions-design.md §3): the gate's conversion is
+        // where a proof's unfolding actually happens. Withholding only takes
+        // δ-steps away, so the gate never accepts more than it would without.
+        let gated;
+        let psi = match self.delta_psi.withheld.clone() {
+            Some(withheld) => {
+                gated = Rc::new(psi.withholding(Some(withheld)));
+                &gated
+            }
+            None => psi,
+        };
         let item = gate::GateItem { name, ctx, ty, level, body, opaque, layer: Layer::Code, lands_in_psi: true };
         if self.policy.gate.as_ref().is_some_and(|g| g.admits(psi, &item)) {
             return Ok(());
@@ -4742,7 +4791,10 @@ impl Elaborator {
                 Some(verdict) => verdict,
                 None => stats::time_kernel(|| self.kernel_check_term(psi, Layer::Code, ctx, body, ty, level)),
             };
-            verdict.map_err(|e| self.kernel_refusal(name, span, e, psi, Layer::Code, ctx, Some(body), ty, level))?;
+            verdict.map_err(|e| {
+                let refusal = self.kernel_refusal(name, span, e, psi, Layer::Code, ctx, Some(body), ty, level);
+                self.withheld_note(refusal, psi, ty, Some(body))
+            })?;
             let unsealed = recording.finish();
             if let Some(g) = self.policy.gate.as_ref() {
                 g.accepted(psi, &item, &unsealed);
@@ -10521,8 +10573,15 @@ impl Elaborator {
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
     fn refresh_delta_psi(&mut self) {
         self.attempt.goal_arena.invalidate_delta_world();
+        // The interface boundary (`interfaces.rs`): the elaborator's worlds
+        // withhold other modules' interface definitions; `psi`, the gate's,
+        // never does.
+        let withheld = self.withheld_policy();
         if self.global_padding() == 0 {
-            self.delta_psi = self.psi.clone();
+            self.delta_psi = match withheld {
+                Some(w) => Shared::new(self.psi.withholding(Some(w))),
+                None => self.psi.clone(),
+            };
             return;
         }
         let placeholder = GlobalBinding::Tm {
@@ -10532,7 +10591,11 @@ impl Elaborator {
             level: Level::Zero,
             body: None,
         };
-        *self.delta_psi = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+        let padded = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+        *self.delta_psi = match withheld {
+            Some(w) => padded.withholding(Some(w)),
+            None => padded,
+        };
     }
 }
 
