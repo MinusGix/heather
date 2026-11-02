@@ -1,0 +1,126 @@
+// Probes of `lib/std/data/egraph.hthr`: closures computed by evaluation, at
+// an operator type of their own, and explanations folded into a printable
+// trace. Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import egraph;
+
+// A tiny term language: constants by number, and one binary operator `f`.
+inductive Op { K(n: Nat), F }
+
+fn Op::same(self a: Op, b: Op) → Bool {
+    match a {
+        K(n) => match b { K(m) => n.same(m), F => False },
+        F => match b { K(_) => False, F => True },
+    }
+}
+
+fn op_same(a: Op, b: Op) → Bool { a.same(b) }
+
+// a = 0, b = 1, c = 2, f(a, c) = 3, f(b, c) = 4, then a = b given.
+fn g0() → EGraph<Op, Nat> {
+    let x = EGraph::empty<Op, Nat>().add(op_same, K(0), []);
+    let y = x.g.add(op_same, K(1), []);
+    let z = y.g.add(op_same, K(2), []);
+    let p = z.g.add(op_same, F, [x.id, z.id]);
+    let q = p.g.add(op_same, F, [y.id, z.id]);
+    q.g.union(0, 1, 7)
+}
+
+// Hash-consing: the same operator over the same children is one node.
+theorem add_shares(): (g0().add(op_same, F, [0, 2])).id.same(3) = True { refl }
+// The given equation alone does not reach the applications; closing does.
+theorem before_close(): g0().same_class(3, 4) = False { refl }
+theorem after_close(): (g0().close(op_same, 5)).same_class(3, 4) = True { refl }
+// Nothing else meets.
+theorem apart(): (g0().close(op_same, 5)).same_class(2, 3) = False { refl }
+
+fn opt_same(o: Option<List<Nat>>, p: Option<List<Nat>>) → Bool {
+    match o { None => match p { None => True, Some(_) => False }, Some(xs) => match p { None => False, Some(ys) => nats_same(xs, ys) } }
+}
+
+// A trace of an explanation: the given fact's number (negated as `100 +`
+// when turned round), `0` for a node equal to itself, a congruence as `1000`
+// plus its children's traces.
+fn trace_alg() → PathAlg<Nat, List<Nat>> {
+    PathAlg(λ _ => [0], λ j fwd => match fwd { True => [j], False => [100 + j] }, λ _ _ ks => Cons(1000, ks.map(λ k => k.proof).foldl(λ acc p => acc ++ p, [])), λ p q => p ++ q)
+}
+
+theorem explain_given(): opt_same(g0().explain(trace_alg(), 0, 1), Some([7])) = True { refl }
+theorem explain_reversed(): opt_same(g0().explain(trace_alg(), 1, 0), Some([107])) = True { refl }
+theorem explain_congruence(): opt_same((g0().close(op_same, 5)).explain(trace_alg(), 3, 4), Some([1000, 7, 0])) = True { refl }
+theorem explain_none(): opt_same((g0().close(op_same, 5)).explain(trace_alg(), 2, 3), None) = True { refl }
+
+// E-matching, with the operators as their own pattern operators.
+fn op_test(q: Op, o: Op, s: Subst) → Option<Subst> { match q.same(o) { True => Some(s), False => None } }
+
+fn count(g: EGraph<Op, Nat>, p: Pattern<Op>) → Nat { (g.ematch(op_test, g.class_table(), p)).len() }
+
+// `f(x, c)`, `f(b, x)` and `f(x, x)`: items numbered, the root last.
+fn f_x_c() → Pattern<Op> { Pattern([PVar(0), POp(K(2), []), POp(F, [0, 1])], 2, 1) }
+fn f_b_x() → Pattern<Op> { Pattern([POp(K(1), []), PVar(0), POp(F, [0, 1])], 2, 1) }
+fn f_x_x() → Pattern<Op> { Pattern([PVar(0), POp(F, [0, 0])], 1, 1) }
+
+// The graph of `g0` without its equation.
+fn g1() → EGraph<Op, Nat> {
+    let x = EGraph::empty<Op, Nat>().add(op_same, K(0), []);
+    let y = x.g.add(op_same, K(1), []);
+    let z = y.g.add(op_same, K(2), []);
+    let p = z.g.add(op_same, F, [x.id, z.id]);
+    p.g.add(op_same, F, [y.id, z.id]).g
+}
+
+// A variable matches anything; a constant only its own class, which the
+// equation `a = b` widens; a variable twice only one class twice.
+theorem ematch_var(): count(g1(), f_x_c()).same(2) = True { refl }
+theorem ematch_const(): count(g1(), f_b_x()).same(1) = True { refl }
+theorem ematch_by_class(): count(g0(), f_b_x()).same(2) = True { refl }
+theorem ematch_twice(): count(g0(), f_x_x()).same(0) = True { refl }
+// The two matches of `f(x, c)` bind `x` to `a` and `b`: apart in `g1`, one
+// class in `g0`, which is how a client tells a new instance from a seen one.
+fn bound(g: EGraph<Op, Nat>) → List<List<Option<Nat>>> { (g.ematch(op_test, g.class_table(), f_x_c())).map(λ m => m.s.at) }
+theorem ematch_apart(): (match bound(g1()) { Cons(a, rest) => match rest { Cons(b, _) => g1().subst_same(a, b), Nil => True }, Nil => True }) = False { refl }
+theorem ematch_same(): (match bound(g0()) { Cons(a, rest) => match rest { Cons(b, _) => g0().subst_same(a, b), Nil => False }, Nil => False }) = True { refl }
+
+// The soundness theorems at work: the graph above, read with `a`, `b`, `c`
+// for the constants and any `f` for the operator, proves `f(a, c) = f(b, c)`
+// from `a = b`, with no explanation built: the class is the proof.
+fn val(a: Nat, b: Nat, c: Nat, n: Nat) → Nat { match n { Zero => a, Succ(m) => match m { Zero => b, Succ(_) => c } } }
+
+fn interp(f: Nat → Nat → Nat, a: Nat, b: Nat, c: Nat, o: Op, xs: List<Nat>) → Nat {
+    match o {
+        K(n) => val(a, b, c, n),
+        F => match xs { Nil => 0, Cons(x, rest) => match rest { Nil => 0, Cons(y, _) => f(x, y) } },
+    }
+}
+
+fn den(f: Nat → Nat → Nat, a: Nat, b: Nat, c: Nat, i: Nat) → Nat {
+    match i { Zero => a, Succ(i1) => match i1 { Zero => b, Succ(i2) => match i2 { Zero => c, Succ(i3) => match i3 { Zero => f(a, c), Succ(_) => f(b, c) } } } }
+}
+
+theorem op_same_sound(x: Op, y: Op): op_same(x, y) = True → x = y {
+    match x {
+        K(n) => match y { K(m) => λ h => cong_fn<Nat, Op>(λ k => K(k), Nat::same_sound(n, m, h)), F => λ h => absurd(h) },
+        F => match y { K(_) => λ h => absurd(h), F => λ _ => refl },
+    }
+}
+
+theorem by_classes(f: Nat → Nat → Nat, a: Nat, b: Nat, c: Nat, h: a = b): f(a, c) = f(b, c) {
+    let d = λ (i: Nat) => den(f, a, b, c, i);
+    let it = λ (o: Op) (xs: List<Nat>) => interp(f, a, b, c, o, xs);
+    let e0 = EGraph::empty<Op, Nat>();
+    let s0 = EGraph::empty_agrees<Op, Nat, Nat>(d, it);
+    let x = e0.add(op_same, K(0), []);
+    let s1 = e0.add_agrees(op_same, d, it, s0, K(0), [], refl);
+    let y = x.g.add(op_same, K(1), []);
+    let s2 = x.g.add_agrees(op_same, d, it, s1, K(1), [], refl);
+    let z = y.g.add(op_same, K(2), []);
+    let s3 = y.g.add_agrees(op_same, d, it, s2, K(2), [], refl);
+    let p = z.g.add(op_same, F, [0, 2]);
+    let s4 = z.g.add_agrees(op_same, d, it, s3, F, [0, 2], refl);
+    let q = p.g.add(op_same, F, [1, 2]);
+    let s5 = p.g.add_agrees(op_same, d, it, s4, F, [1, 2], refl);
+    let u = q.g.union(0, 1, 7);
+    let s6 = q.g.union_agrees(d, it, s5, 0, 1, 7, h);
+    let s7 = close_agrees(op_same, op_same_sound, d, it, 5, u, s6);
+    (u.close(op_same, 5)).same_class_sound(d, s7.right, 3, 4, refl)
+}

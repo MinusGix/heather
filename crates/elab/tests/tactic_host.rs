@@ -103,6 +103,32 @@ fn failure_lists_what_was_tried() {
     assert!(q < n, "{msg}");
 }
 
+/// `Say`: what a run says about itself is one `tactic-report` warning at the
+/// `by`, rendered as a failure's notes are, and only once the run's result
+/// is the goal's proof. A run that says something and then fails reports
+/// only its failure.
+#[test]
+fn say_reports_only_a_run_that_succeeds() {
+    let mut e = elaborator();
+    let src = "import tactic;\nimport nat;\nimport list;\nimport string;\n
+         fn told() → tactic::Tac<tactic::Expr> {
+             say(\"used h\", [Tried(\"twice\", \"the same\")]).bind(λ _ => say(\"and again\", []).bind(λ _ => assumption()))
+         }
+         theorem t(n: Nat, h: n = 3): n = 3 { by told }";
+    e.elab_source(src).unwrap_or_else(|err| panic!("{}", err.render(src)));
+    let warnings = e.take_warnings();
+    assert_eq!(warnings.len(), 1, "one warning per run");
+    assert_eq!(warnings[0].lint, heather_elab::Lint::TacticReport);
+    assert_eq!(warnings[0].msg, "`by told`: used h\n  tried twice: the same\nand again");
+    let mut e = elaborator();
+    let failing = "import tactic;\nimport nat;\nimport list;\nimport string;\n
+         fn told() → tactic::Tac<tactic::Expr> { say(\"used h\", []).bind(λ _ => assumption()) }
+         theorem t(n: Nat, h: n = 4): n = 3 { by told }";
+    let msg = message(e.elab_source(failing).expect_err("the run fails"));
+    assert!(msg.contains("no local's type is the goal"), "{msg}");
+    assert!(e.take_warnings().is_empty(), "a failed run says nothing else");
+}
+
 /// A tactic is a function like any other: composed with `bind`, and written
 /// in the client module.
 #[test]

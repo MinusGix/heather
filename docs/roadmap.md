@@ -289,11 +289,14 @@ checked certificates and `Tac` on the tree library's `ITree`
 ([host-elaboration-interface](../issues/host-elaboration-interface.md)), and
 generators at open types and in sections
 ([generator-ctors-open-types](../issues/generator-ctors-open-types.md),
-[generate-in-sections](../issues/generate-in-sections.md)). There
-is no general rewriting tactic, so routine equalities are hand `trans`/`cong`
-towers ([grind-port](../issues/grind-port.md),
-[monoid-normalisation](../issues/monoid-normalisation.md),
-[equation-rewrite-in-goal](../issues/equation-rewrite-in-goal.md)).
+[generate-in-sections](../issues/generate-in-sections.md)). `grind`
+closes an equation by congruence closure over the goal's equations and hints
+given at their instances, and fails with its graph
+(`docs/grind-design.md`); until it instantiates lemmas itself
+([grind-e-matching](../issues/grind-e-matching.md)), routine equalities
+that need a lemma are still hand `trans`/`cong` towers or hint lists
+([grind-port](../issues/grind-port.md),
+[monoid-normalisation](../issues/monoid-normalisation.md)).
 
 **Milestones.** `tac-in-heather` (submilestones `tac-host-interface`,
 `tac-first-port`), then `tac-general` (written in Heather if

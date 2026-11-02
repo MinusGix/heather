@@ -4,7 +4,7 @@ status: open
 labels: [tooling,frontend,design,metaprogramming]
 area: tactics
 created: 2026-08-05
-updated: 2026-10-23
+updated: 2026-11-02
 ---
 
 From the 2026-08-05 riff under [[ai-facing-tooling]]. Not scheduled —
@@ -94,3 +94,4 @@ source theorem rather than occupy an equal-ranked slot.
   library to be worth it") is met: at about 2,500 declarations agents
   already grep for lemmas. Suggested first slice: name search and pattern
   search over module images, `--json`, no ranking yet.
+- 2026-11-02: Piece 3's used-subset report exists for grind: `grind_report(names, hints)` says which hints and named lemmas the proof cites and which it does not, as a `tactic-report` warning (the `Say` host request, docs/host-elaboration-interface-design.md §23; [[grind-e-matching]]).

@@ -390,6 +390,11 @@ pub enum Request {
     Arms(u64),
     /// A type's handle, to be inhabited by `:= infer`'s search.
     Synth(u64),
+    /// A term's application spine, by its handle.
+    Spine(u64),
+    /// What a run says about itself, rendered like `Fail`'s message and
+    /// notes, and reported only if the run succeeds.
+    Say(String, Vec<NoteView>),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -426,6 +431,15 @@ pub struct ArmsView {
     pub args: Vec<u64>,
 }
 
+/// A term's application spine, as `Spine` answers it (`tactic::SpineInfo`):
+/// the head, and every argument it is applied to (implicit ones included),
+/// each with whether the function's type at that argument is dependent.
+#[derive(Clone, Debug)]
+pub struct SpineView {
+    pub head: u64,
+    pub args: Vec<(u64, bool)>,
+}
+
 /// An answer, at the request's own kind. `Err` carries the reason a request
 /// that may be refused was.
 #[derive(Clone, Debug)]
@@ -450,6 +464,7 @@ pub enum Answer {
     /// The holes `Holes` made.
     Holes(Result<Vec<u64>, String>),
     Arms(Result<ArmsView, String>),
+    Spine(Result<SpineView, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -615,8 +630,8 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         }
     }
 
-    /// A failure's message and notes.
-    fn failure(&self) -> Result<Request, String> {
+    /// A failure's message and notes, or what `Say` says.
+    fn failure(&self) -> Result<(String, Vec<NoteView>), String> {
         let tree = self.tree;
         let msg = self.string(self.call("host_failure", vec![tree])?)?;
         let count = self.nat_of("host_note_count", vec![tree])?;
@@ -625,7 +640,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         for i in 0..count {
             notes.push(self.note(self.call("host_note", vec![tree, self.lit(i)])?, &mut budget)?);
         }
-        Ok(Request::Fail(msg, notes))
+        Ok((msg, notes))
     }
 
     /// `Publish`'s declarations, one at a time and each part by itself.
@@ -792,6 +807,14 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(out)
             }
             Answer::Arms(Err(why)) => self.call("host_no_arms", vec![self.string_value(why)?]),
+            Answer::Spine(Ok(sp)) => {
+                let mut out = self.call("host_spine", vec![self.lit(sp.head)])?;
+                for (h, dependent) in &sp.args {
+                    out = self.call("host_spine_arg", vec![out, self.lit(*h), self.lit(*dependent as u64)])?;
+                }
+                Ok(out)
+            }
+            Answer::Spine(Err(why)) => self.call("host_no_spine", vec![self.string_value(why)?]),
         }
     }
 
@@ -809,7 +832,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let b = self.expr(self.call("host_rhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Defeq(a, b)))
             }
-            3 => Ok(Step::Ask(self.failure()?)),
+            3 => {
+                let (msg, notes) = self.failure()?;
+                Ok(Step::Ask(Request::Fail(msg, notes)))
+            }
             4 => {
                 let mut budget = READ_BUDGET;
                 Ok(Step::Ask(Request::Infer(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
@@ -866,6 +892,11 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             22 => Ok(Step::Ask(Request::Body(self.nat_of("host_handle", vec![tree])?))),
             23 => Ok(Step::Ask(Request::Arms(self.nat_of("host_handle", vec![tree])?))),
             24 => Ok(Step::Ask(Request::Synth(self.nat_of("host_handle", vec![tree])?))),
+            25 => Ok(Step::Ask(Request::Spine(self.nat_of("host_handle", vec![tree])?))),
+            26 => {
+                let (msg, notes) = self.failure()?;
+                Ok(Step::Ask(Request::Say(msg, notes)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1016,6 +1047,8 @@ struct Run {
     /// (docs/runtime-fn-setups-design.md §3.2). The `Rc` held here keeps the
     /// address from being reused while the run lasts.
     shared: std::collections::HashMap<(usize, usize), (Rc<Term>, u64)>,
+    /// What the run said (`Say`), reported at its span once it succeeds.
+    said: Vec<String>,
 }
 
 /// A remembered reification: the world it was made in (its terms are
@@ -1125,6 +1158,7 @@ impl Run {
             generator,
             readings: std::collections::HashMap::new(),
             shared: std::collections::HashMap::new(),
+            said: Vec::new(),
         }
     }
 
@@ -1636,7 +1670,15 @@ impl Elaborator {
         run.issue_quoted(quoted);
         self.issue_lets(cx, &mut run);
         match self.drive(&mut run, speaker) {
-            Ok(Ended::Result(e)) => self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg)),
+            Ok(Ended::Result(e)) => {
+                let proof = self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg))?;
+                // What the run said is reported only now that it succeeded,
+                // as one warning: the lints are kept one per span.
+                if !run.said.is_empty() {
+                    self.emit_lint(crate::Lint::TacticReport, format!("`by {shown}`: {}", run.said.join("\n")), span);
+                }
+                Ok(proof)
+            }
             Ok(Ended::Published(_)) => fail("only `generate` publishes declarations".into()),
             Err(msg) => fail(msg),
         }
@@ -1688,6 +1730,12 @@ impl Elaborator {
                 Request::Body(g) => Answer::Handle(refusable(self.body_request(run, g))?),
                 Request::Arms(h) => Answer::Arms(refusable(self.arms_request(run, h))?),
                 Request::Synth(h) => Answer::Handle(refusable(self.synth_request(run, h, span))?),
+                Request::Spine(h) => Answer::Spine(refusable(self.spine_request(run, h))?),
+                Request::Say(msg, notes) => {
+                    let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
+                    run.said.push(format!("{msg}{rendered}"));
+                    Answer::Unit
+                }
                 Request::Publish(decls) if run.generator => return Ok(Ended::Published(decls)),
                 Request::Publish(_) => return Err("only `generate` publishes declarations; a tactic cannot".into()),
             };
@@ -2156,6 +2204,62 @@ impl Elaborator {
             args.push(run.issue_shared(at, a, aty, alevel));
         }
         Ok(ArmsView { scrut: s, arms, args })
+    }
+
+    /// `Spine(h)`: the term `h` stands for as a head applied to arguments,
+    /// read off the kernel's applications with nothing reduced: every
+    /// argument, implicit ones included, in order, each with whether the
+    /// function's type at it is dependent (its codomain mentions it, as a
+    /// type argument's does). A term that is no application is its own head
+    /// with no arguments. A subterm the term shares is one handle wherever
+    /// it occurs (as for `Arms`), but equal subterms built apart are not:
+    /// identity beyond sharing is `Defeq`'s (docs/grind-design.md §3).
+    fn spine_request(&self, run: &mut Run, h: u64) -> Result<SpineView, Fault> {
+        let (at, held) = run.held(h)?;
+        let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a term"))) };
+        let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let t = Rc::new(t);
+        let mut spine = Vec::new();
+        let mut head = &t;
+        loop {
+            match &**head {
+                // A checked application names its codomain; `app@` leaves
+                // it to the head's type.
+                Term::App { fun, arg, cod, .. } => {
+                    spine.push((fun, arg, Some(cod)));
+                    head = fun;
+                }
+                Term::AppAt { fun, arg } => {
+                    spine.push((fun, arg, None));
+                    head = fun;
+                }
+                _ => break,
+            }
+        }
+        spine.reverse();
+        let cx = run.cx(at)?;
+        let mut args = Vec::with_capacity(spine.len());
+        for (fun, a, cod) in spine {
+            let dependent = match cod {
+                Some(cod) => crate::unification::strengthen_ty(&cx.gamma, cod, 1).is_none(),
+                None => {
+                    let (fty, _) = self.kernel_type(run, at, fun).ok_or_else(|| Fault::Ill("a function in the spine has no type".into()))?;
+                    let pi = self
+                        .goal_oracle()
+                        .whnf_type(&cx.gamma, &fty)
+                        .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?;
+                    let Type::Pi { cod, .. } = pi else {
+                        return Err(Fault::Ill("a function in the spine is not of a function type".into()));
+                    };
+                    crate::unification::strengthen_ty(&cx.gamma, &cod, 1).is_none()
+                }
+            };
+            let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
+            args.push((run.issue_shared(at, a, aty, alevel), dependent));
+        }
+        let (hty, hlevel) = self.kernel_type(run, at, head).ok_or_else(|| Fault::Ill("the head has no type".into()))?;
+        let head = run.issue_shared(at, head, hty, hlevel);
+        Ok(SpineView { head, args })
     }
 
     /// A name, elaborated where the `by` is. Elaboration may leave notes and

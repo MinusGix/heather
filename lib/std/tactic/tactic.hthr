@@ -150,6 +150,15 @@ record ArmInfo { ctor: String, body: Handle }
 
 record MatchInfo { scrut: Handle, arms: List<ArmInfo>, args: List<Handle> }
 
+// A term as a head applied to arguments, as `Spine` answers it: every
+// argument in order, implicit ones included, each with whether the
+// function's type at it is dependent (its codomain mentions it, as a type
+// argument's does). A term that is no application is its own head with no
+// arguments.
+record SpineArg { arg: Handle, dependent: Bool }
+
+record SpineInfo { head: Handle, args: List<SpineArg> }
+
 // ---------------------------------------------------------------------------
 // Declarations, as a generator builds them (design §19).
 //
@@ -259,6 +268,17 @@ inductive Req {
     // computation and the evidence rules, search rules last. Refused, with
     // the search's trace, when nothing answers; a refusal leaves nothing.
     Synth(goal: Handle),
+    // The term `h` stands for as a head applied to arguments, read off its
+    // applications with nothing reduced (`SpineInfo`). `View` lists only the
+    // arguments a call writes; this lists them all, as the kernel has them.
+    // Refused for a type.
+    Spine(h: Handle),
+    // Say something about a run that succeeds: the message and its notes,
+    // rendered as `Fail` renders them, are a `tactic-report` warning at the
+    // `by` once its result is the goal's proof. A run that fails says only
+    // its failure. For a tactic's account of what it used (`grind_report`),
+    // which a reader turns into a smaller invocation.
+    Say(msg: String, notes: List<Note>),
 }
 
 inductive Never {}
@@ -291,6 +311,8 @@ fn Resp(r: Req) → Type {
         Body(_) => Checked<Handle>,
         Arms(_) => Checked<MatchInfo>,
         Synth(_) => Checked<Handle>,
+        Spine(_) => Checked<SpineInfo>,
+        Say(_, _) => True,
     }
 }
 
@@ -360,6 +382,8 @@ fn body(g: GlobalRef) → Tac<Checked<Handle>> { Ask(Body(g), λ c => Pure(c)) }
 
 fn arms(h: Handle) → Tac<Checked<MatchInfo>> { Ask(Arms(h), λ c => Pure(c)) }
 fn synth(goal: Handle) → Tac<Checked<Handle>> { Ask(Synth(goal), λ c => Pure(c)) }
+fn spine(h: Handle) → Tac<Checked<SpineInfo>> { Ask(Spine(h), λ c => Pure(c)) }
+fn say(msg: String, notes: List<Note>) → Tac<True> { Ask(Say(msg, notes), λ u => Pure(u)) }
 
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
@@ -384,6 +408,7 @@ inductive Answer {
     ACtors(c: Checked<List<CtorInfo>>),
     AHoles(c: Checked<List<Handle>>),
     AArms(c: Checked<MatchInfo>),
+    ASpine(c: Checked<SpineInfo>),
 }
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
@@ -414,6 +439,8 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Body(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Arms(_) => match a { AArms(c) => Fits(c), _ => Mismatch },
         Synth(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Spine(_) => match a { ASpine(c) => Fits(c), _ => Mismatch },
+        Say(_, _) => match a { AUnit => Fits(trivial), _ => Mismatch },
     }
 }
 
@@ -769,7 +796,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 6: `Resolve`. 7: `View`. 8: `Whnf`. 9: `Match`. 10: `Hole`. 11: `Mark`.
 // 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
-// 22: `Body`. 23: `Arms`. 24: `Synth`.
+// 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`. 26: `Say`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -798,6 +825,8 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Body(_) => 22,
             Arms(_) => 23,
             Synth(_) => 24,
+            Spine(_) => 25,
+            Say(_, _) => 26,
         },
     }
 }
@@ -845,6 +874,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Body(g) => g.id,
             Arms(h) => h.id,
             Synth(goal) => goal.id,
+            Spine(h) => h.id,
             _ => 0,
         },
     }
@@ -962,17 +992,18 @@ fn decl_param_implicit(d: Decl, i: Nat) → Nat { match params_at(d.params, i).i
 // request.
 fn host_generator(g: Tac<List<Decl>>) → Tac<Expr> { g.bind(λ ds => publish(ds)) }
 
-// A failure's message. Its notes are read one at a time, and the elaborator
-// renders them, since an `At` note's term is spelled by its diagnostics.
+// A failure's message, or what `Say` says. Its notes are read one at a
+// time, and the elaborator renders them, since an `At` note's term is
+// spelled by its diagnostics.
 fn host_failure(t: Tac<Expr>) → String {
     match t {
         Pure(_) => "",
-        Ask(r, _) => match r { Fail(msg, _) => msg, _ => "" },
+        Ask(r, _) => match r { Fail(msg, _) => msg, Say(msg, _) => msg, _ => "" },
     }
 }
 
 fn host_notes(t: Tac<Expr>) → List<Note> {
-    match t { Pure(_) => [], Ask(r, _) => match r { Fail(_, notes) => notes, _ => [] } }
+    match t { Pure(_) => [], Ask(r, _) => match r { Fail(_, notes) => notes, Say(_, notes) => notes, _ => [] } }
 }
 
 fn notes_len(ns: List<Note>) → Nat { match ns { Nil => 0, Cons(_, rest) => Succ(notes_len(rest)) } }
@@ -1171,6 +1202,20 @@ fn host_holes_next(a: Answer, h: Nat) → Answer {
 }
 
 fn host_no_holes(why: String) → Answer { AHoles(Refused(why)) }
+
+fn host_spine(head: Nat) → Answer { ASpine(Accepted(SpineInfo(Handle(head), []))) }
+
+fn host_spine_arg(a: Answer, h: Nat, dependent: Nat) → Answer {
+    match a {
+        ASpine(c) => match c {
+            Accepted(sp) => ASpine(Accepted(SpineInfo(sp.head, sp.args ++ [SpineArg(Handle(h), bool_of(dependent))]))),
+            Refused(_) => a,
+        },
+        _ => a,
+    }
+}
+
+fn host_no_spine(why: String) → Answer { ASpine(Refused(why)) }
 
 fn host_nat(n: Nat) → Answer { ANat(n) }
 
