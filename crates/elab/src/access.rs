@@ -181,26 +181,22 @@ impl Elaborator {
     /// Run `f` with generated mode raised. A guard rather than two statements
     /// because every caller has error paths.
     pub(crate) fn generated_mode<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        self.generated_depth.set(self.generated_depth.get() + 1);
-        let r = f(self);
-        self.generated_depth.set(self.generated_depth.get() - 1);
-        r
+        let depth = self.scope.generated_depth.get() + 1;
+        self.scoped(|s| s.generated_depth.get_mut(), depth, f)
     }
 
     /// The `&self` form of [`Self::generated_mode`], for generated
     /// expressions elaborated from a checking position that holds no
     /// exclusive borrow (the Omega certificate route).
     pub(crate) fn generated_scope<T>(&self, f: impl FnOnce(&Self) -> T) -> T {
-        self.generated_depth.set(self.generated_depth.get() + 1);
-        let r = f(self);
-        self.generated_depth.set(self.generated_depth.get() - 1);
-        r
+        let depth = self.scope.generated_depth.get() + 1;
+        self.scoped_cell(|s| &s.generated_depth, depth, || f(self))
     }
 
     /// Whether generated source is being elaborated right now. Diagnostics
     /// against generated spans have no user file to point into.
     pub(crate) fn in_generated(&self) -> bool {
-        self.generated_depth.get() > 0
+        self.scope.generated_depth.get() > 0
     }
 
     /// Every access path of a `datarepr` (design §3.1), registered at the

@@ -390,6 +390,11 @@ pub struct InductiveDecl {
     /// available if they are ever wanted here; both are rejected for now.
     /// Empty for every declaration written before this grammar existed.
     pub valparams: Vec<Param>,
+    /// `inductive Result<A, E> varies A { … }` — the parameter a type
+    /// constructor over this declaration abstracts, when it is not the last
+    /// one (docs/lambda-carrier-instances-design.md §7.1). The name as
+    /// written and its span; `None` for the default slot.
+    pub varies: Option<(String, Span)>,
     pub ctors: Vec<CtorDecl>,
     /// Written `record D<…> { f: T, … }` — one constructor, named after the
     /// declaration, every field named (docs/surface-records.md §2). The

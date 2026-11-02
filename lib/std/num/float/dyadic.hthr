@@ -609,6 +609,45 @@ theorem Dyadic::neg_pos({d: Dyadic}, h: d < 0): 0 < -d {
     Rat::lt_respects(Rat::same_sym(Dyadic::rat_neg(0)), Rat::same_sym(d.rat_neg()), Rat::neg_lt(x := d.rat(), y := Dyadic::rat(0), h := h))
 }
 
+// ---------------------------------------------------------------------------
+// The ordered ring (lib/std/algebra/ordered_field.hthr): translation and
+// positive factors keep and reflect `<`, each read off the rationals' law on
+// the images. `Dyadic` is no field (a reciprocal leaves it), so this is
+// where its order and arithmetic meet.
+
+theorem Dyadic::add_lt_mono_r(self a, b, c: Dyadic, h: a < b): a + c < b + c {
+    Rat::lt_respects(Rat::same_sym(a.rat_add(c)), Rat::same_sym(b.rat_add(c)), a.rat().add_lt_mono_r(b.rat(), c.rat(), h))
+}
+
+theorem Dyadic::lt_of_add_lt_add_r(self a, b, c: Dyadic, h: a + c < b + c): a < b {
+    a.rat().lt_of_add_lt_add_r(b.rat(), c.rat(), Rat::lt_respects(a.rat_add(c), b.rat_add(c), h))
+}
+
+theorem Dyadic::mul_lt_mono_l({a, b, c: Dyadic}, h: a < b, hc: 0 < c): c * a < c * b {
+    Rat::lt_respects(Rat::same_sym(c.rat_mul(a)), Rat::same_sym(c.rat_mul(b)), Rat::mul_lt_mono_l(h, Dyadic::rat_pos(hc)))
+}
+
+theorem Dyadic::lt_of_mul_lt_mul_l({a, b, c: Dyadic}, hc: 0 < c, h: c * a < c * b): a < b {
+    Rat::lt_of_mul_lt_mul_l(Dyadic::rat_pos(hc), Rat::lt_respects(c.rat_mul(a), c.rat_mul(b), h))
+}
+
+theorem Dyadic::zero_lt_one(): Dyadic::Lt(0, 1) {
+    Rat::lt_respects(Rat::same_sym(Dyadic::rat_zero()), Rat::same_sym(Dyadic::rat_one()), Rat::zero_lt_one())
+}
+
+instance OrderedAddGroup<Dyadic>(Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add) {
+    add_lt_mono_r := Dyadic::add_lt_mono_r,
+    add_lt_reflect_r := Dyadic::lt_of_add_lt_add_r,
+}
+
+instance LocatedAddGroup<Dyadic>(Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add) {}
+
+instance OrderedRing<Dyadic>(Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add, Dyadic::mul) {
+    zero_lt_one := Dyadic::zero_lt_one(),
+    mul_lt_l := λ a b c h hc => Dyadic::mul_lt_mono_l(h, hc),
+    mul_lt_reflect_l := λ a b c hc h => Dyadic::lt_of_mul_lt_mul_l(hc, h),
+}
+
 theorem Dyadic::recip_down_at(m: Nat, e: Int, p: Nat, hm: 0 < m):
     Dyadic(m.int(), e).recip_down(p).rat() <= Dyadic(m.int(), e).rat().recip()
 {

@@ -190,8 +190,8 @@ impl Elaborator {
     /// Install a stored declaration scope for one read of stored syntax. The
     /// guard restores the caller's scope on every return path.
     pub(crate) fn use_scope<'a>(&'a self, scope: &Rc<crate::names::Scope>) -> ResolutionScope<'a> {
-        self.resolution_scopes.borrow_mut().push(Rc::clone(scope));
-        ResolutionScope { stack: &self.resolution_scopes }
+        self.scope.resolution_scopes.borrow_mut().push(Rc::clone(scope));
+        ResolutionScope { stack: &self.scope.resolution_scopes }
     }
 }
 

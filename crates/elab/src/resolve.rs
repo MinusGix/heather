@@ -150,9 +150,9 @@ impl SearchMark {
             dependencies: e.attempt.direct_dependencies.borrow().clone(),
             notes: e.attempt.check_notes.borrow().len(),
             goals: e.attempt.goal_arena.mark(),
-            warnings: e.warnings.borrow().len(),
-            omega_reports: e.omega_reports.borrow().len(),
-            omega_failures: e.omega_failure_reports.borrow().len(),
+            warnings: e.pass.warnings.borrow().len(),
+            omega_reports: e.pass.omega_reports.borrow().len(),
+            omega_failures: e.pass.omega_failure_reports.borrow().len(),
         }
     }
 
@@ -160,9 +160,9 @@ impl SearchMark {
         *e.attempt.direct_dependencies.borrow_mut() = self.dependencies;
         e.attempt.check_notes.borrow_mut().truncate(self.notes);
         e.attempt.goal_arena.rollback(self.goals);
-        e.warnings.borrow_mut().truncate(self.warnings);
-        e.omega_reports.borrow_mut().truncate(self.omega_reports);
-        e.omega_failure_reports.borrow_mut().truncate(self.omega_failures);
+        e.pass.warnings.borrow_mut().truncate(self.warnings);
+        e.pass.omega_reports.borrow_mut().truncate(self.omega_reports);
+        e.pass.omega_failure_reports.borrow_mut().truncate(self.omega_failures);
     }
 }
 
@@ -327,7 +327,7 @@ impl Elaborator {
         let spelled = goal;
         let inline = self.unspell_here(goal);
         let goal = inline.as_ref().unwrap_or(goal);
-        let depth = self.resolve_depth.get();
+        let depth = self.scope.resolve_depth.get();
         tr.push(line(depth, "goal", display.to_string()));
         if depth >= MAX_DEPTH {
             tr.push(line(
@@ -360,11 +360,11 @@ impl Elaborator {
         for pos in (0..cx.names.len()).rev() {
             let (t, ty, l) = self.local(cx, pos);
             if self.conv_here(cx, &ty, goal, &l) {
-                tr.push(line(depth, "local", cx.names[pos].clone()));
+                tr.push(line(depth, "local", cx.names[pos].to_string()));
                 return Some(t);
             }
         }
-        for a in cx.aliases.iter().rev() {
+        for a in cx.aliases.iter_inner() {
             let by = (cx.names.len() - a.depth) as u32;
             let ty = a.ty.shift_local(by);
             if self.conv_here(cx, &ty, goal, &a.level) {
@@ -472,9 +472,9 @@ impl Elaborator {
                     format!("{g} (index `{index}`)")
                 },
             ));
-            self.resolve_depth.set(depth + 1);
+            self.scope.resolve_depth.set(depth + 1);
             let built = self.build_candidate(cx, &g, goal, lvl, span);
-            self.resolve_depth.set(depth);
+            self.scope.resolve_depth.set(depth);
             match built {
                 Ok(t) if self.checks_at(cx, &t, goal, lvl) => {
                     // Only a *derivation* is canonicalized. A declared
@@ -605,10 +605,10 @@ impl Elaborator {
             }
             let (aty, alvl) = self.instance_type_at(cx, aind.tag, &aargs)?;
             tr.push(line(depth, "join", format!("`{}` from `{}`", ind.name, ainfo.name)));
-            self.resolve_depth.set(depth + 1);
+            self.scope.resolve_depth.set(depth + 1);
             let shown = ainfo.name.clone();
             let got = self.resolve_goal(cx, &aty, &alvl, &shown, prefer, span, tr);
-            self.resolve_depth.set(depth);
+            self.scope.resolve_depth.set(depth);
             let got = got?;
             let alias = format!("#join{k}");
             tcx.aliases.push(Rc::new(crate::Alias {
@@ -683,7 +683,7 @@ impl Elaborator {
         let computes = stats::time_kernel(|| {
             typing::check_term(
                 &psi, 0, Layer::Code, &cx.gamma, &trivial, goal, lvl,
-                self.fuel.min(COMPUTE_FUEL),
+                self.policy.fuel.min(COMPUTE_FUEL),
             )
             .is_ok()
         });
@@ -763,11 +763,11 @@ impl Elaborator {
             // named atom list and its audit report go with it.
             let mark = SearchMark::of(self);
             tr.push(line(depth, "candidate", g.clone()));
-            self.resolve_depth.set(depth + 1);
-            let outer = self.rule_citation.replace(Some(g.clone()));
-            let built = self.build_candidate(cx, &g, goal, lvl, span);
-            *self.rule_citation.borrow_mut() = outer;
-            self.resolve_depth.set(depth);
+            self.scope.resolve_depth.set(depth + 1);
+            let built = self.scoped_cell(|s| &s.rule_citation, Some(g.clone()), || {
+                self.build_candidate(cx, &g, goal, lvl, span)
+            });
+            self.scope.resolve_depth.set(depth);
             match built {
                 Ok(t) if self.checks_at(cx, &t, goal, lvl) => return Some(t),
                 Ok(_) => tr.push(line(
@@ -829,10 +829,10 @@ impl Elaborator {
         let spelled = self
             .spell_type_clean(cx, goal)
             .unwrap_or_else(|| "the goal".to_string());
-        let outer = self.positivity.replace(Some(PositivityRun::default()));
         let mut tr = Vec::new();
-        let found = self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr);
-        *self.positivity.borrow_mut() = outer;
+        let found = self.scoped_cell(|s| &s.positivity, Some(PositivityRun::default()), || {
+            self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr)
+        });
         found.ok_or_else(|| ElabError::Elab {
             msg: format!("`positivity` could not prove `{spelled}` — the search:{}", render_trace(&tr)),
             span,
@@ -847,10 +847,10 @@ impl Elaborator {
         let spelled = self
             .spell_type_clean(cx, goal)
             .unwrap_or_else(|| "the goal".to_string());
-        let outer = self.positivity.replace(None);
         let mut tr = Vec::new();
-        let found = self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr);
-        *self.positivity.borrow_mut() = outer;
+        let found = self.scoped_cell(|s| &s.positivity, None, || {
+            self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr)
+        });
         found.ok_or_else(|| ElabError::Elab {
             msg: format!("no evidence for `{spelled}` — the search:{}", render_trace(&tr)),
             span,
@@ -869,7 +869,7 @@ impl Elaborator {
         depth: usize,
         tr: &mut Vec<TraceLine>,
     ) -> Option<Term> {
-        let stuck_before = match &*self.positivity.borrow() {
+        let stuck_before = match &*self.scope.positivity.borrow() {
             None => return None,
             Some(run) => run.stuck.iter().any(|g| g == goal),
         };
@@ -887,14 +887,12 @@ impl Elaborator {
         }
         // Omega's own certificate is elaborated with plain `infer`: a
         // positivity run does not reach into it.
-        let run = self.positivity.take();
         let mark = SearchMark::of(self);
         let e = Expr {
             kind: ExprKind::Var("omega".to_string()),
             span,
         };
-        let proved = self.elab_check(cx, &e, goal, lvl);
-        *self.positivity.borrow_mut() = run;
+        let proved = self.scoped_cell(|s| &s.positivity, None, || self.elab_check(cx, &e, goal, lvl));
         match proved {
             Ok(t) => {
                 tr.push(line(depth, "omega", "proved"));
@@ -909,7 +907,7 @@ impl Elaborator {
                 let verdict = msg.lines().next().unwrap_or_default();
                 let verdict = verdict.split(';').next().unwrap_or_default();
                 tr.push(line(depth, "omega", verdict.to_string()));
-                if let Some(run) = self.positivity.borrow_mut().as_mut() {
+                if let Some(run) = self.scope.positivity.borrow_mut().as_mut() {
                     run.stuck.push(goal.clone());
                 }
                 None
@@ -994,12 +992,12 @@ impl Elaborator {
             if let Some(u) = self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &l, span) {
                 return Some((
                     u,
-                    format!("{} (upcast to `{}`)", cx.names[pos], cind.name),
+                    format!("{} (upcast to `{}`)", &cx.names[pos], cind.name),
                     (t, ty),
                 ));
             }
         }
-        for a in cx.aliases.iter().rev() {
+        for a in cx.aliases.iter_inner() {
             let by = (cx.names.len() - a.depth) as u32;
             let ty = a.ty.shift_local(by);
             let t = (*a.term).shift_local(by);
@@ -1126,7 +1124,7 @@ impl Elaborator {
     fn checks_at(&self, cx: &Cx, t: &Term, goal: &Type, lvl: &Level) -> bool {
         let psi = self.goal_psi();
         stats::time_kernel(|| {
-            typing::check_term(&psi, 0, Layer::Code, &cx.gamma, t, goal, lvl, self.fuel).is_ok()
+            typing::check_term(&psi, 0, Layer::Code, &cx.gamma, t, goal, lvl, self.policy.fuel).is_ok()
         })
     }
 
@@ -1139,7 +1137,7 @@ impl Elaborator {
     /// same goal", with an inconclusive answer counted as "not".
     fn derived_conv(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
         stats::time_kernel(|| {
-            oracle::SemanticOracle::in_world(self.goal_psi(), self.fuel.min(DERIVED_LOOKUP_FUEL))
+            oracle::SemanticOracle::in_world(self.goal_psi(), self.policy.fuel.min(DERIVED_LOOKUP_FUEL))
                 .convert_type(&cx.gamma, Layer::Prog, ty, goal, lvl)
                 .is_ok()
         })
@@ -1206,7 +1204,7 @@ impl Elaborator {
         if !self.type_is_closed(&closed, lvl) {
             return;
         }
-        let mut pending = self.pending_derived.borrow_mut();
+        let mut pending = self.pass.pending_derived.borrow_mut();
         if pending.iter().any(|(t, l, _, head)| {
             heads_may_agree(head.as_deref(), prefer) && self.derived_conv(&Cx::empty(), t, &closed, l)
         }) {
@@ -1257,7 +1255,7 @@ impl Elaborator {
         if self.global_padding() != 0 || !self.type_is_closed(goal, lvl) {
             return;
         }
-        let mut pending = self.pending_derived.borrow_mut();
+        let mut pending = self.pass.pending_derived.borrow_mut();
         if pending.iter().any(|(t, l, _, head)| {
             heads_may_agree(head.as_deref(), prefer)
                 && self.derived_conv(&Cx::empty(), t, goal, l)
@@ -1286,7 +1284,7 @@ impl Elaborator {
                 &LocalCtx::nil(),
                 goal,
                 lvl,
-                self.fuel,
+                self.policy.fuel,
             )
             .is_ok()
         })
@@ -1313,7 +1311,7 @@ impl Elaborator {
         // now hits) or fails and is dropped.
         for _ in 0..MAX_DEPTH {
             let pending: Vec<(Type, Level, u32, Option<String>)> =
-                std::mem::take(&mut self.pending_derived.borrow_mut());
+                std::mem::take(&mut self.pass.pending_derived.borrow_mut());
             if pending.is_empty() {
                 return;
             }
@@ -1325,7 +1323,7 @@ impl Elaborator {
                 self.mint_one(&goal.shift_global(grew), &lvl, prefer.as_deref());
             }
         }
-        self.pending_derived.borrow_mut().clear();
+        self.pass.pending_derived.borrow_mut().clear();
     }
 
     fn mint_one(&mut self, goal: &Type, lvl: &Level, prefer: Option<&str>) {
@@ -1355,7 +1353,7 @@ impl Elaborator {
                 &term,
                 goal,
                 lvl,
-                self.fuel,
+                self.policy.fuel,
             )
             .is_ok()
         });

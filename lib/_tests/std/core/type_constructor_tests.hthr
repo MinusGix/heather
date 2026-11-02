@@ -37,8 +37,22 @@ fn infer_box(x: Box(Nat)) → Box(Nat) { pick(x) }
 fn infer_list(xs: List<Nat>) → List<Nat> { pick(xs) }
 fn infer_tac(t: Tac<Nat>) → Tac<Nat> { pick(t) }
 theorem infer_tac_literal(): pick(Tac::Pure(4)) = Tac::Pure(4) { refl }
-// `Result<Bool, Nat>` at `M(Nat)` is `M := Result<Bool, _>`: the last argument.
-fn infer_result_last(r: Result<Bool, Nat>) → Result<Bool, Nat> { pick(r) }
+// A declaration's declared slot (`inductive Result<A, E> varies A`) is the
+// argument abstracted, so `Result<Nat, Bool>` at `M(Nat)` is
+// `M := λ A => Result<A, Bool>` (docs/lambda-carrier-instances-design.md §7).
+// Literal, neutral, open, and in a checking position.
+theorem infer_result_slot(): pick(Result::Ok<Nat, Bool>(3)) = Ok(3) { refl }
+fn infer_result_neutral(r: Result<Nat, Bool>) → Result<Nat, Bool> { pick(r) }
+fn infer_result_open_error<E>(r: Result<Nat, E>) → Result<Nat, E> { pick(r) }
+fn infer_result_open<A, E>(r: Result<A, E>) → Result<A, E> { pick_open(r) }
+fn infer_result_in_let(r: Result<Nat, Bool>) → Result<Nat, Bool> {
+    let s: Result<Nat, Bool> = pick(r);
+    s
+}
+// With no `varies`, the last argument is the slot: `Pair2<Bool, Nat>` is
+// `M := Pair2<Bool>`, η-short.
+inductive Pair2<A, B> { Both(a: A, b: B) }
+fn infer_default_slot(p: Pair2<Bool, Nat>) → Pair2<Bool, Nat> { pick(p) }
 fn infer_in_let(x: Option<Nat>) → Option<Nat> {
     let y: Option<Nat> = pick(x);
     y
@@ -62,6 +76,24 @@ fn none_nat() → Option<Nat> { None }
 theorem twice_option(): twice(Some(3)) = Some(6) { refl }
 theorem twice_none(): twice(none_nat()) = none_nat() { refl }
 theorem twice_tac(): twice(Tac::Pure(4)) = Tac::Pure(8) { refl }
+// At a λ carrier (result.hthr's instances at `λ A => Result<A, E>`), and at a
+// partial application whose slot is the last argument.
+fn ok_nat(n: Nat) → Result<Nat, Bool> { Ok(n) }
+fn err_nat() → Result<Nat, Bool> { Err(True) }
+theorem twice_result(): twice(ok_nat(3)) = ok_nat(6) { refl }
+theorem twice_result_err(): twice(err_nat()) = err_nat() { refl }
+theorem twice_result_neutral(r: Result<Nat, Bool>): twice(r) = r.and_then(λ n => Ok(n + n)) { refl }
+fn twice_result_open<E>(r: Result<Nat, E>) → Result<Nat, E> { twice(r) }
+inductive Either2<E, A> { Left2(e: E), Right2(a: A) }
+fn Either2::and_then<E, A, B>(self x: Either2<E, A>, f: A → Either2<E, B>) → Either2<E, B> {
+    match x { Left2(e) => Left2(e), Right2(a) => f(a) }
+}
+instance<E> Bind<Either2<E>> { bind := λ {A} {B} x f => x.and_then(f) }
+instance<E> Pointed<Either2<E>> { pure := λ {A} a => Right2(a) }
+fn right_nat(n: Nat) → Either2<Bool, Nat> { Right2(n) }
+theorem twice_partial(): twice(right_nat(3)) = right_nat(6) { refl }
+// A partial application as a constructor value, η-short.
+theorem partial_value(): pick_at(Either2<Bool>, right_nat(2)) = right_nat(2) { refl }
 
 // Generic code over the class passes its dictionaries on by scope.
 fn four_times({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pointed<M> := infer) → M(Nat) {
@@ -91,8 +123,25 @@ fn no_instance_at_list(xs: List<Nat>) → List<Nat> { twice(xs) }
 // expect-error: `Option` takes 1 type argument(s), but the expected type constructor provides 2
 fn too_few_arguments(x: Option<Nat>) → Nat { 0 + pick2(Option, x) }
 
-// expect-error: to fix the others, write the constructor as a λ
+// expect-error: to fix others, write the constructor as a λ
 fn too_many_parameters(r: Result<Nat, Bool>) → Result<Nat, Bool> { pick_at(Result, r) }
+
+// The value type at the declared slot is not `Nat`: refused, not
+// re-abstracted at another argument.
+// expect-error: but `Result<Nat, Nat>` is expected here
+fn result_slot_mismatch(r: Result<Bool, Nat>) → Result<Bool, Nat> { pick(r) }
+
+// expect-error: must provide 1 before its `Type`; it provides 2
+fn partial_wrong_arity(p: Pair2<Bool, Nat>) → Pair2<Bool, Nat> { pick2(Pair2<Bool>, p) }
+
+// An instance at a λ abstracting anything but the declared slot is refused:
+// no use site would ever select it.
+// expect-error: is unreachable: a use site learns `Result`'s constructor at its declared slot, `A`
+instance<A> Bind<λ (E: Type) => Result<A, E>> {
+    bind := λ {E} {F} r f => match r { Ok(a) => Ok(a), Err(e) => f(e) }
+}
+// expect-error: is unreachable
+instance Pointed<λ (A: Type) => List<List<A>>> { pure := λ {A} a => [[a]] }
 
 // expect-error: is not a universe: a type parameter takes a type
 fn not_a_type_constructor() → Type { (λ (F: Nat → Type) => F(0))(Option) }

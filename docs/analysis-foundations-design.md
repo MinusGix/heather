@@ -327,7 +327,7 @@ evaluation (§8).
 **Heather specifics.** The Leibniz product is corecursion *up to* `+`: its
 tail is `f'g + fg'`, not a direct self-call. Heather's corecursion accepts a
 self-call only as a direct child of the returned constructor
-(`issues/codata-nested-guards.md`), and its bisimilarity is a relation,
+(`issues/codata-corecursion-up-to.md`), and its bisimilarity is a relation,
 not `=`. So the decision is to **take the method, not the datatype**:
 
 - A series is a coefficient function `Nat → A`.
@@ -336,8 +336,10 @@ not `=`. So the decision is to **take the method, not the datatype**:
 - The bisimulation principle is a theorem proved by induction on `n`.
 
 Codata becomes the better representation once corecursion up to "friendly"
-operations exists (Blanchette and others, 2015). That belongs to
-`codata-nested-guards`. Nothing here waits for it.
+operations exists (Blanchette and others, 2015). Its first round landed on
+2026-11-02 for monomorphic friends (`docs/codata-elaborator-design.md`
+§5.5); a series generic over a ring waits on
+`codata-up-to-friends-round-2`. Nothing here waits for it.
 
 **Integration is the inverse of the shift.** Prepending a head, `cons(c,
 f)`, is the antiderivative of `f` with value `c` at the point. The

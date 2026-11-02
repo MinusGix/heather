@@ -162,13 +162,13 @@ theorem DerivOn::recip_step(u, u1, v: K → K, B, N, e, e1, d, x, y, h: K, hn: K
     let t2 = OrderedField::abs_le_mul(v(x) * u1(x) * (y + K.inv(x)), v(x) * v(y) * (u(y) + K.inv(u(x))),
         B * N * h, B * B * ((N + K.multiplicative.unit) * h), vuh, bdv);
     let C = B * N * (B * B * (N + K.multiplicative.unit));
-    let pC: (K.unit <= C) = OrderedField::mul_nonneg(B * N, B * B * (N + K.multiplicative.unit),
-        OrderedField::mul_nonneg(B, N, pB, pN),
-        OrderedField::mul_nonneg(B * B, N + K.multiplicative.unit, OrderedField::mul_nonneg(B, B, pB, pB), linarith(pN, o)));
-    let q1: (B * B * e1 * h <= e2 * h) = OrderedField::mul_le_mono_r(B * B * e1, e2, h, b1, hn);
-    let ch: (C * h <= C * d) = OrderedField::mul_le_mono_l(h, d, C, hh, pC);
-    let chh: (C * h * h <= C * d * h) = OrderedField::mul_le_mono_r(C * h, C * d, h, ch, hn);
-    let q2: (C * d * h <= e2 * h) = OrderedField::mul_le_mono_r(C * d, e2, h, b2, hn);
+    let pC: (K.unit <= C) = OrderedSemiring::mul_nonneg(B * N, B * B * (N + K.multiplicative.unit),
+        OrderedSemiring::mul_nonneg(B, N, pB, pN),
+        OrderedSemiring::mul_nonneg(B * B, N + K.multiplicative.unit, OrderedSemiring::mul_nonneg(B, B, pB, pB), linarith(pN, o)));
+    let q1: (B * B * e1 * h <= e2 * h) = OrderedSemiring::mul_le_mono_r(B * B * e1, e2, h, b1, hn);
+    let ch: (C * h <= C * d) = OrderedSemiring::mul_le_mono_l(h, d, C, hh, pC);
+    let chh: (C * h * h <= C * d * h) = OrderedSemiring::mul_le_mono_r(C * h, C * d, h, ch, hn);
+    let q2: (C * d * h <= e2 * h) = OrderedSemiring::mul_le_mono_r(C * d, e2, h, b2, hn);
     let s = OrderedField::half_add(e);
     let s2: (e2 * h + e2 * h ≈ e * h) = ring(s);
     let t2e: (B * N * h * (B * B * ((N + K.multiplicative.unit) * h)) ≈ C * h * h) = ring;
@@ -193,10 +193,10 @@ theorem DerivOn::recip(D: K → Type, u, u1, v: K → K, B, N: K, hu: DerivOn(D,
         let pN = hn.left;
         let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
         let C = B * N * (B * B * (N + K.multiplicative.unit));
-        let pC: (K.unit <= C) = OrderedField::mul_nonneg(B * N, B * B * (N + K.multiplicative.unit),
-            OrderedField::mul_nonneg(B, N, pB, pN),
-            OrderedField::mul_nonneg(B * B, N + K.multiplicative.unit, OrderedField::mul_nonneg(B, B, pB, pB), linarith(pN, o)));
-        let b1 = OrderedField::shrink(B * B, OrderedField::half(e), OrderedField::mul_nonneg(B, B, pB, pB), p2);
+        let pC: (K.unit <= C) = OrderedSemiring::mul_nonneg(B * N, B * B * (N + K.multiplicative.unit),
+            OrderedSemiring::mul_nonneg(B, N, pB, pN),
+            OrderedSemiring::mul_nonneg(B * B, N + K.multiplicative.unit, OrderedSemiring::mul_nonneg(B, B, pB, pB), linarith(pN, o)));
+        let b1 = OrderedField::shrink(B * B, OrderedField::half(e), OrderedSemiring::mul_nonneg(B, B, pB, pB), p2);
         let au = hu(b1.witness, b1.proof.left);
         let al = DerivOn::local_lipschitz(D, u, u1, N, hu, hn);
         let b2 = OrderedField::shrink(C, OrderedField::half(e), pC, p2);

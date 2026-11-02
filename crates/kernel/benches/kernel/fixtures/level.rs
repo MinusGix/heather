@@ -5,24 +5,27 @@
 //! at ~14% of a whole `heather check` run
 //! ([[level-normalization-allocation]]).
 //!
-//! Two families, because level comparison has two regimes and they must not
-//! be conflated:
+//! Levels are canonical by construction (`issues/kernel-compact-level.md`),
+//! so `equiv` is `==` and the normalization a comparison used to run now
+//! runs once, when a join is built. Three families:
 //!
-//! - `level/equiv-shared` — the two sides are the *same* syntax. Constant
-//!   time is a claim (`Level::equiv`'s reflexivity pre-check, with `Rc`
-//!   pointer equality stopping the walk at shared subtrees), and the flat
-//!   slope is what states it.
-//! - `level/equiv-rebuilt` — the two sides are equivalent but structurally
-//!   distinct, so the pre-check *misses* and the full `adjust(count(l))`
-//!   normalization runs on both. This is the family that guards against a
-//!   fast path that quietly became the only path.
+//! - `level/equiv-shared` — the two sides are the *same* value. Constant
+//!   time is a claim (`Rc` pointer equality decides a shared join at the
+//!   root), and the flat slope is what states it.
+//! - `level/equiv-rebuilt` — the two sides are equal but built separately,
+//!   in opposite join orders, so they share no `Rc` and the comparison walks
+//!   both joins' component slices. Linear, and it was linear with a
+//!   `BTreeMap` per side before; what it guards is a comparison that grew
+//!   past that.
+//! - `level/join` — building `a ⊔ b` from two `n/2`-variable joins: the
+//!   merge that canonicity costs, paid at construction. Expected ~n log n.
 
 use heather_kernel::level::{Level, UnivVar};
 
 use crate::harness::{Case, Family};
 
 pub fn families() -> Vec<Family> {
-    vec![equiv_shared(), equiv_rebuilt()]
+    vec![equiv_shared(), equiv_rebuilt(), join()]
 }
 
 /// `⨆_{i<n} (i mod 3) + ℓᵢ`, built left to right (`fwd`) or right to left.
@@ -66,15 +69,15 @@ fn equiv_shared() -> Family {
     }
 }
 
-/// Equivalent levels the pre-check cannot see: the same joins in the other
-/// order. Both sides normalize in full.
+/// Equal levels that share nothing: the same joins in the other order,
+/// which canonicity makes the same value but not the same allocation.
 fn equiv_rebuilt() -> Family {
     let cases = [4u64, 8, 16, 32, 64]
         .iter()
         .map(|&n| {
             let a = tower(n as u32, true);
             let b = tower(n as u32, false);
-            assert!(n < 2 || a != b, "the two towers must not be the same syntax");
+            assert!(a == b, "levels are canonical: the two towers must be one value");
             let go = move || a.equiv(&b) as u64;
             assert!(go() == 1, "the reordered join is not equivalent at n = {n}");
             Case::new(n, 1, go)
@@ -82,9 +85,32 @@ fn equiv_rebuilt() -> Family {
         .collect();
     Family {
         name: "level/equiv-rebuilt",
-        what: "l ≈ l' on equivalent-but-distinct syntax — the normalize path",
+        what: "l ≈ l' on equal levels built apart — the slice comparison",
         unit: "variables",
-        expect_slope: Some((0.85, 1.65)),
+        expect_slope: Some((0.6, 1.5)),
+        cases,
+    }
+}
+
+/// `a ⊔ b` for two disjoint `n/2`-variable joins, the merge canonicity pays
+/// at construction instead of at every comparison.
+fn join() -> Family {
+    let cases = [4u64, 8, 16, 32, 64]
+        .iter()
+        .map(|&n| {
+            let half = (n / 2) as u32;
+            let a = tower(half, true);
+            let b = tower(half, true).shift(half, 0);
+            let go = move || matches!(Level::max(a.clone(), b.clone()), Level::Join(_)) as u64;
+            assert!(go() == 1, "the join of disjoint towers is a join at n = {n}");
+            Case::new(n, 1, go)
+        })
+        .collect();
+    Family {
+        name: "level/join",
+        what: "a ⊔ b of two n/2-variable joins — the canonicalizing merge",
+        unit: "variables",
+        expect_slope: Some((0.2, 1.4)),
         cases,
     }
 }

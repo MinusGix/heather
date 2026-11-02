@@ -1591,7 +1591,7 @@ impl Elaborator {
                 dom: Rc::new(dom.clone()),
                 cod: Rc::new(ty),
             };
-            ty_level = Level::max(dom_level.clone(), ty_level).normalize().canonical();
+            ty_level = Level::max(dom_level.clone(), ty_level);
         }
         Some(CodeFnAt { template, l, targs, ty, ty_level, body })
     }
@@ -2653,7 +2653,7 @@ impl Elaborator {
             return Some(Rc::clone(raw));
         };
         let by = len.checked_sub(at)?;
-        if let Some((b, f, r, read)) = self.guard_reads.borrow().get(&key)
+        if let Some((b, f, r, read)) = self.memos.guard_reads.borrow().get(&key)
             && *b == by
             && *f == frame
             && Rc::ptr_eq(r, raw)
@@ -2661,7 +2661,7 @@ impl Elaborator {
             return Some(Rc::clone(read));
         }
         let read = Rc::new(guard_read(raw, by, frame));
-        self.guard_reads.borrow_mut().insert(key, (by, frame, Rc::clone(raw), Rc::clone(&read)));
+        self.memos.guard_reads.borrow_mut().insert(key, (by, frame, Rc::clone(raw), Rc::clone(&read)));
         Some(read)
     }
 
@@ -2672,7 +2672,7 @@ impl Elaborator {
             return Some((Rc::clone(&slots.shape), Rc::clone(&slots.arity)));
         }
         let hit = self
-            .guard_slot_formers
+            .memos.guard_slot_formers
             .borrow()
             .get(&tag)
             .filter(|(raw, _)| Rc::ptr_eq(raw, &slots.shape))
@@ -2685,7 +2685,7 @@ impl Elaborator {
                     shape: Rc::clone(&slots.shape),
                     arity: Rc::clone(&slots.arity),
                 });
-                self.guard_slot_formers.borrow_mut().insert(tag, (Rc::clone(&slots.shape), Rc::clone(&former)));
+                self.memos.guard_slot_formers.borrow_mut().insert(tag, (Rc::clone(&slots.shape), Rc::clone(&former)));
                 former
             }
         };
@@ -2706,7 +2706,7 @@ impl Elaborator {
         let by = len.checked_sub(at)?;
         let raw = &codes.ctors.first()?.0;
         let hit = self
-            .guard_spine_reads
+            .memos.guard_spine_reads
             .borrow()
             .get(&tag)
             .filter(|(b, fr, r, _)| *b == by && *fr == frame && Rc::ptr_eq(r, raw))
@@ -2715,7 +2715,7 @@ impl Elaborator {
             Some(read) => read,
             None => {
                 let read = Rc::new(codes.read(by, frame));
-                self.guard_spine_reads.borrow_mut().insert(tag, (by, frame, Rc::clone(raw), Rc::clone(&read)));
+                self.memos.guard_spine_reads.borrow_mut().insert(tag, (by, frame, Rc::clone(raw), Rc::clone(&read)));
                 read
             }
         };
@@ -2808,6 +2808,96 @@ impl Elaborator {
     ///
     /// Computes the declaration's open lowering per call, and is reached only
     /// from that one unifier arm, after the registered route declined.
+    /// [`slot_lambda`] for a written `λ (x: Type) => D<…, x, …>` whose binder
+    /// sits exactly at `D`'s declared slot (default: the last parameter) and
+    /// nowhere else, checked against a constructor type `Ty l_s → Ty l`
+    /// (docs/lambda-carrier-instances-design.md §7.3 reader 3): the same term
+    /// the unifier learns at a use site, so an instance carrier written this
+    /// way and a `?M` solved from `Result<Nat, Bool>` meet structurally. At
+    /// the last slot it is η-short, `app(D#tycode_fn^δ; ā)`. `Ok(None)` for
+    /// every other λ, which is then checked as an ordinary one.
+    pub(crate) fn check_slot_lambda(
+        &self,
+        cx: &Cx,
+        binders: &[heather_syntax::LamBinder],
+        body: &heather_syntax::Expr,
+        expected: &Type,
+        span: Span,
+    ) -> R<Option<Term>> {
+        let [binder] = binders else { return Ok(None) };
+        if binder.implicit {
+            return Ok(None);
+        }
+        let Some((name, targs)) = crate::inductive::named_head(body) else { return Ok(None) };
+        let Some(ind) = self.lookup_inductive(name).cloned() else { return Ok(None) };
+        if targs.len() != ind.params.len()
+            || ind.params.is_empty()
+            || !ind.valparams.is_empty()
+            || ind.index.is_some()
+            || ind.codata
+            || !ind.co_index.is_empty()
+            || self.shadowed(cx, name)
+        {
+            return Ok(None);
+        }
+        let Some(s) = slot_of_lambda(&binder.name, targs) else { return Ok(None) };
+        if s != ind.varies.unwrap_or(ind.params.len() - 1) {
+            return Ok(None);
+        }
+        let Type::Pi { dom, cod, .. } = self.whnf(cx, expected, span)? else { return Ok(None) };
+        let (Type::Ty(l_s), Type::Ty(want)) = (&*dom, &*cod) else { return Ok(None) };
+        let Some(entry) = self.ty_code_fn_now(ind.tag, 0) else { return Ok(None) };
+        if !entry.level.equiv(want) || !entry.param_levels.get(s).is_some_and(|l| l.equiv(l_s)) {
+            return Ok(None);
+        }
+        let mut codes: Vec<Rc<Term>> = Vec::with_capacity(targs.len());
+        for (i, targ) in targs.iter().enumerate() {
+            if i == s {
+                codes.push(Rc::new(Term::Zero));
+                continue;
+            }
+            let (t, l) = self.elab_ty(cx, targ)?;
+            if !entry.param_levels[i].equiv(&l) {
+                return Ok(None);
+            }
+            codes.push(Rc::new(crate::expr::ExprElab::quote_type_at(self, cx, &t, &l, &l, span)?));
+        }
+        if s + 1 == codes.len() {
+            codes.pop();
+            return Ok(self.code_fn_prefix(cx, ind.tag, &codes));
+        }
+        let Some(head) = self.gen_ref(cx, GenDef::TyCodeFn(ind.tag)) else { return Ok(None) };
+        Ok(Some(slot_lambda(&head, &codes, s, l_s.clone(), want.clone())))
+    }
+
+    /// A type `El(app(D#tycode_fn^δ; a₀ … a_{n−1}))` read as the type
+    /// constructor at `D`'s **declared** slot `s` applied to `a_s`
+    /// (docs/lambda-carrier-instances-design.md §7.2): the pair
+    ///
+    /// ```text
+    /// ( λ (x: Ty l_s). app(D#tycode_fn^δ; a₀↑ … a_{s−1}↑, x, a_{s+1}↑ … a_{n−1}↑),  a_s )
+    /// ```
+    ///
+    /// for the unifier's applied meta `?M(p) ≟ D<ā>`, which then learns `?M`
+    /// as the λ and pairs `p` with `a_s`. `None` when `D` declares no slot or
+    /// its slot is the last parameter: the aligned spine already learns the
+    /// η-short `app(D#tycode_fn^δ; a₀ … a_{n−2})` there.
+    pub(crate) fn slot_view(&self, tm: &Term) -> Option<(Term, Term)> {
+        let (GenDef::TyCodeFn(tag), args) = self.gen_app_of(tm)? else { return None };
+        let ind = self.types.by_tag(tag)?;
+        let s = ind.varies?;
+        if s + 1 == ind.params.len() || args.len() != ind.params.len() || !ind.valparams.is_empty() {
+            return None;
+        }
+        let entry = self.ty_code_fn_now(tag, 0)?;
+        let mut head = tm;
+        while let Some((fun, _)) = crate::spelling::app_of(head) {
+            head = fun;
+        }
+        let lam = slot_lambda(head, &args, s, entry.param_levels.get(s)?.clone(), entry.level.clone());
+        Some((lam, (*args[s]).clone()))
+    }
+
     pub(crate) fn constructor_spelling(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
         let ind = self.tag_of(ty)?;
         if ind.params.is_empty()
@@ -3153,6 +3243,37 @@ impl Elaborator {
         let Type::Ty(level) = cur else { return None };
         let spine = self.gen_spine(cx, tag, args, 0, 0)?;
         Some((Type::El { level: level.clone(), tm: Rc::new(spine) }, level))
+    }
+
+    /// `app(D#tycode_fn^δ; ā)` for a **leading** prefix `ā` of the code
+    /// function's parameters, in `cx`: the type constructor that fixes them
+    /// and abstracts the rest, η-short (docs/lambda-carrier-instances-design.md
+    /// §7.2). With every argument given it is [`Self::gen_spine`]'s spine.
+    pub(crate) fn code_fn_prefix(&self, cx: &Cx, tag: u32, args: &[Rc<Term>]) -> Option<Term> {
+        let entry = self.ty_code_fn_now(tag, 0)?;
+        let mut head = self.gen_ref(cx, GenDef::TyCodeFn(tag))?;
+        let mut cur = weakened(&entry.stmt, cx, 0);
+        for arg in args {
+            let Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } = cur
+            else {
+                return None;
+            };
+            head = crate::spelling::checked_app(
+                Rc::new(head),
+                dom_level,
+                cod_level,
+                dom,
+                Rc::clone(&cod),
+                Rc::clone(arg),
+            );
+            cur = cod.apply_local(&id_subst_at(cx, 0).extended(Rc::clone(arg)));
+        }
+        Some(head)
     }
 
     fn gen_spine(&self, cx: &Cx, tag: u32, args: &[Rc<Term>], d: u32, g: u32) -> Option<Term> {
@@ -3880,7 +4001,24 @@ impl Elaborator {
                 self.inlined_arguments(&entry, &args, |el| self.unspell_ty_deep(len_at, el))
             && let Some(frame) = spine_frame(tm)
         {
-            return Some(instance_of_template(&entry, &args, frame));
+            let inline = instance_of_template(&entry, &args, frame);
+            // An argument that is itself a type constructor — a partial
+            // application `app(E#tycode_fn^δ; b̄)`, the carrier of a class over
+            // a type constructor (docs/lambda-carrier-instances-design.md
+            // §7.2) — is applied inside the template, so the instance has
+            // code applications the arguments' own unspelling never saw.
+            let constructor_arg = args.iter().any(|a| {
+                let mut h = &**a;
+                while let Some((fun, _)) = crate::spelling::app_of(h) {
+                    h = fun;
+                }
+                matches!(h, Term::GlobalTm { var, .. }
+                    if matches!(self.code_key_at(len_at, *var), Some(GenDef::TyCodeFn(_))))
+            });
+            if constructor_arg && let Some(deeper) = self.unspell_ty_deep(len_at, &inline) {
+                return Some(deeper);
+            }
+            return Some(inline);
         }
         let or = |orig: &Rc<Type>, new: Option<Type>| match new {
             Some(t) => Rc::new(t),
@@ -4075,7 +4213,7 @@ impl Elaborator {
                 lands_in_psi: true,
             };
             let admitted = self
-                .gate
+                .policy.gate
                 .as_ref()
                 .is_some_and(|g| g.admits(&self.psi, &item));
             drop(item);
@@ -4110,9 +4248,9 @@ impl Elaborator {
                     // The serial replay's reused verdict, if this obligation
                     // is the one a worker of the discarded pass already
                     // answered (`docs/parallel-kernel-gate-design.md` §5.2).
-                    let verdict = match self.kernel_replay.reuse(
+                    let verdict = match self.pass.kernel_replay.reuse(
                         self.psi.bindings.len(),
-                        self.fuel,
+                        self.policy.fuel,
                         &item,
                     ) {
                         Some(verdict) => verdict,
@@ -4130,7 +4268,7 @@ impl Elaborator {
                         site: crate::KernelSite::Other,
                     })?;
                     let unsealed = recording.finish();
-                    if let Some(g) = self.gate.as_ref() {
+                    if let Some(g) = self.policy.gate.as_ref() {
                         g.accepted(&self.psi, &item, &unsealed);
                     }
                 } else {
@@ -4280,7 +4418,7 @@ impl Elaborator {
     }
 
     fn meta_offset(&self) -> u32 {
-        self.meta_pushed.borrow().len() as u32
+        self.scope.meta_pushed.borrow().len() as u32
     }
 
     /// Whether `t` is exactly `u^δ` for the definition `key` — the head test
@@ -4507,7 +4645,7 @@ fn wrap_tel(tel: &[(Type, Level)], inner: Type, inner_level: Level) -> (Type, Le
             dom: Rc::new(dom.clone()),
             cod: Rc::new(ty),
         };
-        level = Level::max(dom_level.clone(), level).normalize().canonical();
+        level = Level::max(dom_level.clone(), level);
     }
     (ty, level)
 }
@@ -4524,7 +4662,7 @@ fn wrap_tel_lam(tel: &[(Type, Level)], inner: Term, inner_level: Level) -> Term 
             dom: Rc::new(dom.clone()),
             body: Rc::new(body),
         };
-        level = Level::max(dom_level.clone(), level).normalize().canonical();
+        level = Level::max(dom_level.clone(), level);
     }
     body
 }
@@ -4547,3 +4685,41 @@ fn shift_tel(tel: &mut [(Type, Level)]) {
     }
 }
 
+
+/// `λ (x: Ty l_s). app(head↑; a₀↑ … a_{s−1}↑, x, a_{s+1}↑ … a_{n−1}↑)`: the type
+/// constructor that abstracts argument `s` of a code-function spine and fixes
+/// the others (docs/lambda-carrier-instances-design.md §7.2). `args[s]` is
+/// ignored. `level` is the level of the types the constructor builds.
+pub(crate) fn slot_lambda(head: &Term, args: &[Rc<Term>], s: usize, l_s: Level, level: Level) -> Term {
+    let mut body = head.shift_local(1);
+    for (i, arg) in args.iter().enumerate() {
+        let a = if i == s { Term::Var(LocalVar(0)) } else { arg.shift_local(1) };
+        body = Term::AppAt { fun: Rc::new(body), arg: Rc::new(a) };
+    }
+    Term::Lam {
+        dom_level: Level::succ(l_s.clone()),
+        cod_level: Level::succ(level),
+        dom: Rc::new(Type::Ty(l_s)),
+        body: Rc::new(body),
+    }
+}
+
+/// The one position of a written type-argument list that is exactly the bare
+/// name `x`, when `x` occurs nowhere else in it — a λ body `D<…, x, …>` that
+/// abstracts one argument and fixes the others.
+pub(crate) fn slot_of_lambda(x: &str, targs: &[heather_syntax::Ty]) -> Option<usize> {
+    let mut found = None;
+    for (i, t) in targs.iter().enumerate() {
+        match &t.kind {
+            heather_syntax::TyKind::Named { name, args } if name == x && args.is_empty() => {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(i);
+            }
+            _ if crate::traits::ty_var_count(t, x) != 0 => return None,
+            _ => {}
+        }
+    }
+    found
+}

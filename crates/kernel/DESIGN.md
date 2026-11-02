@@ -19,8 +19,11 @@ applications. Concretely:
   (`Nat`, `Π`, `Ty l` as terms) decode via `El`. Non-cumulative; explicit
   levels on Π, λ, app.
 - Universe levels with variables, `⊔`, `ω`; equivalence decided by the
-  count/adjust map normalization (ch. 04 §universe-levels). `ω` is
-  checker-internal: never written in programs, only the type level of `ΠΠ`.
+  count/adjust map normalization (ch. 04 §universe-levels), and a `Level` *is*
+  that normal form: every constructor returns the canonical representative,
+  so `≈` is `==` (16 bytes, joins behind an `Rc`; `level.rs`,
+  `issues/kernel-compact-level.md`). `ω` is checker-internal: never written
+  in programs, only the type level of `ΠΠ`.
 - Universe polymorphism: `ΠΠ ℓ⃗. T` / `Λ ℓ⃗. t` / `t $ l⃗`, non-empty level
   vectors, layer m only.
 - Nat with its recursor; fully-annotated dependent functions

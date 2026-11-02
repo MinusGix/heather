@@ -315,6 +315,10 @@ existing generic traversal rather than adding a third transcription of the
 syntax. `conv.rs`'s `code_eq` is `a == b || a.normalized() == b.normalized()`,
 so the common case stays allocation-free.
 
+*Later (2026-11-02, `issues/kernel-compact-level.md`):* levels became
+canonical by construction, so `normalize_levels` was retired and `code_eq` is
+plain `==`. The quotient is now the representation's, not a pass's.
+
 **One thing the test could not pose, which is itself informative.** There is no
 pair of codes at *inequivalent levels but the same code type*: `□(Δ ⊢ Ty l)`
 fixes `l`, and at layer `c` a type determines its level — that is

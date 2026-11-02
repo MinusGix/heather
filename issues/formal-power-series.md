@@ -33,8 +33,12 @@ Scope:
   the forward-mode AD theorem `ml-layers` wants.
 
 Codata is not the representation in this round: the Leibniz product is
-corecursion up to `+`, which Heather's guard refuses
-(`issues/codata-nested-guards.md`). Revisit when that issue lands.
+corecursion up to `+`, which Heather's guard refused when this was filed.
+Since 2026-11-02 it is accepted for a monomorphic series type
+(`docs/codata-elaborator-design.md` §5.5, the Hurwitz product up to stream
+addition, observations by `refl`); a series generic over a ring needs a
+polymorphic friend with the ring's class binder
+([[codata-up-to-friends-round-2]]).
 
 ## What it assumes from elsewhere
 - **[[finite-sums-and-products]]** and **[[finite-difference-calculus]]**:

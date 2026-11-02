@@ -84,8 +84,10 @@ From `docs/coitree-design.md` and the code under `lib/std/itree/`:
 **What is missing** is the coinductive `rec`. The codata surface cannot
 write it as a direct corecursion: a non-tail self-call sits under a `bind`,
 which is not a constructor, so it is not a guarded call
-(`docs/codata-elaborator-design.md` §5.2; `issues/codata-nested-guards.md`
-covers only calls under a *second constructor*, which this is not). The
+(`docs/codata-elaborator-design.md` §5.2; nested constructors, §5.4, cover
+only calls under a *second constructor*, which this is not; a call under a
+friend, §5.5, takes friends of the definition's own type, and `bind` changes
+the tree's result type: `issues/codata-up-to-friends-round-2.md`). The
 standard way around that is Coq's ITrees `interp_mrec`: run a loop whose
 state is the pending tree, and at a call replace the call with the body
 bound to the call's continuation. `iter` supplies the guard, so nothing new
@@ -194,7 +196,7 @@ name of its body, which `f_unfold` exposes.
   (the probe's three laws). Up to `Eutt` the useful form is
   `f(x) ≈ bind(f#body(x), f)` with calls answered by `f`. That form needs the
   eutt `bind` congruence (`issues/coitree-eutt-bind-cong.md`), which becomes
-  a prerequisite.
+  a prerequisite. *(`Eutt::bind_cong` landed 2026-11-01.)*
 - **`CoTree::Returns(t, b)`**: a record of a count `n` and
   `after(n, t) = ORet(b)`. This is the only place a natural number appears,
   and it is existential. Literal runs prove it with a count and `refl`.
@@ -342,8 +344,8 @@ needed. Every theorem below is proved once, over any `D`, `E` and body.
   `rec_total`'s witness.
 - **Not built**: `rec_refines` against `Program::rec`, which is
   `issues/coitree-rec-program-bridge.md` (§4.4: only non-tail native
-  recursion needs it), and the eutt-level `f(x) ≈ bind(body(x), f)`, which
-  waits on `coitree-eutt-bind-cong`.
+  recursion needs it), and the eutt-level `f(x) ≈ bind(body(x), f)`, whose
+  prerequisite `Eutt::bind_cong` landed 2026-11-01.
 
 **The customer.** `Tm::step_co` is `Tm::step` with each recursive
 reduction as a call. `Option` is gone, because it only ever stood for

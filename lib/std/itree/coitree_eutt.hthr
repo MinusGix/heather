@@ -433,3 +433,86 @@ theorem Bisim::refines<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), b: Bisim<
         ITree::refines_of_same(E, λ n => CoTree::approx(E, n, t), λ n => CoTree::approx(E, n, u),
             λ n => Bisim::approx(E, n, t, u, b)))
 }
+
+// ---------------------------------------------------------------------------
+// `bind` is a congruence up to taus
+
+// An observation that is not a leaf: `bind` passes it through.
+fn Obs::NotRet<R>(E: Events, o: Obs<R>(E)) → Type {
+    match o { ORet(_) => False, OTau(_) => True, OVis(_, _) => True }
+}
+
+// Dropping `k` steps off `bind(t, h)` drops them off `t`, until `t` reaches a
+// silent step or a call: the leaves are where `h` takes over.
+theorem CoTree::after_bind<A, B>(E: Events, h: A → CoTree<B>(E), o: Obs<A>(E), nr: Obs::NotRet(E, o), k: Nat,
+    t: CoTree<A>(E)): CoTree::after(E, k, t) = o → CoTree::after(E, k, CoTree::bind(E, t, h)) = Obs::bind(E, o, h)
+{
+    match k {
+        Zero => λ (e: CoTree::obs(E, t) = o) => CoTree::obs_bind_at(E, t, h, o, e),
+        Succ(k2) => match h0: CoTree::obs(E, t) {
+            ORet(_) => λ e => false_elim(j(prelude::sym(e), λ y q => Obs::NotRet(E, y), nr)),
+            OTau(s) => λ e => prelude::trans(
+                CoTree::after_succ(E, k2, CoTree::bind(E, t, h), CoTree::bind(E, s, h), CoTree::obs_bind_at(E, t, h, OTau(s), h0)),
+                CoTree::after_bind(E, h, o, nr, k2, s, e)),
+            OVis(c, k1) => λ e =>
+                j(e, λ y q => CoTree::after(E, Succ(k2), CoTree::bind(E, t, h)) = Obs::bind(E, y, h),
+                    CoTree::after_settled(E, Succ(k2), CoTree::bind(E, t, h), OVis(c, λ a => CoTree::bind(E, k1(a), h)),
+                        CoTree::obs_bind_at(E, t, h, OVis(c, k1), h0), trivial)),
+        },
+    }
+}
+
+// A tree that returns `r` after `k` drops, continued with `h`, is `h(r)` up to
+// the drops.
+fn Eutt::bind_leaf<A, B>(E: Events, h: A → CoTree<B>(E), r: A, k: Nat, t: CoTree<A>(E)) →
+    CoTree::after(E, k, t) = ORet(r) → Eutt<B>(E, CoTree::bind(E, t, h), h(r))
+{
+    match k {
+        Zero => λ (e: CoTree::obs(E, t) = ORet(r)) =>
+            Eutt::of_bisim(E, CoTree::bind(E, t, h), h(r), Bisim::of_obs(E, CoTree::bind(E, t, h), h(r),
+                CoTree::obs_bind_at(E, t, h, ORet(r), e))),
+        Succ(k2) => match h0: CoTree::obs(E, t) {
+            ORet(_) => λ e =>
+                Eutt::of_bisim(E, CoTree::bind(E, t, h), h(r), Bisim::of_obs(E, CoTree::bind(E, t, h), h(r),
+                    CoTree::obs_bind_at(E, t, h, ORet(r), prelude::trans(h0, e)))),
+            OTau(s) => λ e => Eutt::peel_l(E, CoTree::bind(E, t, h), CoTree::bind(E, s, h), h(r), Zero,
+                CoTree::obs_bind_at(E, t, h, OTau(s), h0), Eutt::bind_leaf(E, h, r, k2, s, e)),
+            OVis(_, _) => λ e => absurd(e),
+        },
+    }
+}
+
+// `t ≈ u` and `h1(a) ≈ h2(a)` for every `a` give `bind(t, h1) ≈ bind(u, h2)`.
+// A silent step or a call carries over through `bind` at the same counts
+// (`after_bind`); at a leaf `r` the result is the existing relation
+// `bind(t, h1) ≈ h1(r) ≈ h2(r) ≈ bind(u, h2)`.
+fn Eutt::bind_cong<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), h1: A → CoTree<B>(E), h2: A → CoTree<B>(E),
+    e: Eutt<A>(E, t, u), hh: (a: A) → Eutt<B>(E, h1(a), h2(a))) →
+    Eutt<B>(E, CoTree::bind(E, t, h1), CoTree::bind(E, u, h2))
+{
+    match e {
+        ERet(nl, nr, r, ht, hu) =>
+            Eutt::trans(E, CoTree::bind(E, t, h1), h1(r), CoTree::bind(E, u, h2), Eutt::bind_leaf(E, h1, r, nl, t, ht),
+                Eutt::trans(E, h1(r), h2(r), CoTree::bind(E, u, h2), hh(r),
+                    Eutt::sym(E, CoTree::bind(E, u, h2), h2(r), Eutt::bind_leaf(E, h2, r, nr, u, hu)))),
+        ETau(nl, nr, t2, u2, ht, hu, n) => ETau(nl, nr, CoTree::bind(E, t2, h1), CoTree::bind(E, u2, h2),
+            CoTree::after_bind(E, h1, OTau(t2), trivial, nl, t, ht), CoTree::after_bind(E, h2, OTau(u2), trivial, nr, u, hu),
+            Eutt::bind_cong(E, t2, u2, h1, h2, n, hh)),
+        EVis(nl, nr, c, k1, k2, ht, hu, n) => EVis(nl, nr, c, λ a => CoTree::bind(E, k1(a), h1), λ a => CoTree::bind(E, k2(a), h2),
+            CoTree::after_bind(E, h1, OVis(c, k1), trivial, nl, t, ht), CoTree::after_bind(E, h2, OVis(c, k2), trivial, nr, u, hu),
+            λ a => Eutt::bind_cong(E, k1(a), k2(a), h1, h2, n(a), hh)),
+    }
+}
+
+// The congruence on each side alone.
+fn Eutt::bind_cong_l<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), h: A → CoTree<B>(E), e: Eutt<A>(E, t, u)) →
+    Eutt<B>(E, CoTree::bind(E, t, h), CoTree::bind(E, u, h))
+{
+    Eutt::bind_cong(E, t, u, h, h, e, λ a => Eutt::refl(E, h(a)))
+}
+
+fn Eutt::bind_cong_r<A, B>(E: Events, t: CoTree<A>(E), h1: A → CoTree<B>(E), h2: A → CoTree<B>(E),
+    hh: (a: A) → Eutt<B>(E, h1(a), h2(a))) → Eutt<B>(E, CoTree::bind(E, t, h1), CoTree::bind(E, t, h2))
+{
+    Eutt::bind_cong(E, t, t, h1, h2, Eutt::refl(E, t), hh)
+}

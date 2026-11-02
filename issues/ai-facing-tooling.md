@@ -5,7 +5,7 @@ labels: [tooling,design,meta,diagnostics]
 area: tactics
 milestone: [tac-general]
 created: 2026-08-05
-updated: 2026-10-27
+updated: 2026-11-02
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 riff (while the
@@ -130,3 +130,4 @@ diagnostics motivated by the x86 certificate round. This issue owns the shared
 structured-output conventions.
 - 2026-10-23: Arend's answer to the same premise is a skills pack for agents (formalize, prove, quirks, error diagnosis); Heather's is [[agent-skills-pack]] (docs/arend-survey.md §6).
 - 2026-10-27: Related, filed 2026-10-27: [[lemma-search]] (heather search, exact?, apply?) returns its candidates as data in this form.
+- 2026-11-02: grind's failure report is the first instance (docs/grind-design.md §4): each side's class, every class with its members, the facts read and not, and the equation that would close it, as Note data; see [[grind-port]].

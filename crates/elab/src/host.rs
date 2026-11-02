@@ -195,7 +195,7 @@ impl MatchDicts {
         }
         let mut out: Vec<(Type, Level)> = Vec::new();
         if ind.params.len() == 1 {
-            for d in cx.dicts.iter().rev() {
+            for d in cx.dicts.iter_inner() {
                 let Ok((carrier, clvl)) = el.elab_ty(cx, &d.carrier) else { continue };
                 let Some(index) = el.scope_index(cx, &ind.name, &carrier, &clvl) else { continue };
                 let targs = [(carrier, clvl)];
@@ -390,6 +390,11 @@ pub enum Request {
     Arms(u64),
     /// A type's handle, to be inhabited by `:= infer`'s search.
     Synth(u64),
+    /// A term's application spine, by its handle.
+    Spine(u64),
+    /// What a run says about itself, rendered like `Fail`'s message and
+    /// notes, and reported only if the run succeeds.
+    Say(String, Vec<NoteView>),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -426,6 +431,15 @@ pub struct ArmsView {
     pub args: Vec<u64>,
 }
 
+/// A term's application spine, as `Spine` answers it (`tactic::SpineInfo`):
+/// the head, and every argument it is applied to (implicit ones included),
+/// each with whether the function's type at that argument is dependent.
+#[derive(Clone, Debug)]
+pub struct SpineView {
+    pub head: u64,
+    pub args: Vec<(u64, bool)>,
+}
+
 /// An answer, at the request's own kind. `Err` carries the reason a request
 /// that may be refused was.
 #[derive(Clone, Debug)]
@@ -450,6 +464,7 @@ pub enum Answer {
     /// The holes `Holes` made.
     Holes(Result<Vec<u64>, String>),
     Arms(Result<ArmsView, String>),
+    Spine(Result<SpineView, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -615,8 +630,8 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         }
     }
 
-    /// A failure's message and notes.
-    fn failure(&self) -> Result<Request, String> {
+    /// A failure's message and notes, or what `Say` says.
+    fn failure(&self) -> Result<(String, Vec<NoteView>), String> {
         let tree = self.tree;
         let msg = self.string(self.call("host_failure", vec![tree])?)?;
         let count = self.nat_of("host_note_count", vec![tree])?;
@@ -625,7 +640,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         for i in 0..count {
             notes.push(self.note(self.call("host_note", vec![tree, self.lit(i)])?, &mut budget)?);
         }
-        Ok(Request::Fail(msg, notes))
+        Ok((msg, notes))
     }
 
     /// `Publish`'s declarations, one at a time and each part by itself.
@@ -792,6 +807,14 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(out)
             }
             Answer::Arms(Err(why)) => self.call("host_no_arms", vec![self.string_value(why)?]),
+            Answer::Spine(Ok(sp)) => {
+                let mut out = self.call("host_spine", vec![self.lit(sp.head)])?;
+                for (h, dependent) in &sp.args {
+                    out = self.call("host_spine_arg", vec![out, self.lit(*h), self.lit(*dependent as u64)])?;
+                }
+                Ok(out)
+            }
+            Answer::Spine(Err(why)) => self.call("host_no_spine", vec![self.string_value(why)?]),
         }
     }
 
@@ -809,7 +832,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let b = self.expr(self.call("host_rhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Defeq(a, b)))
             }
-            3 => Ok(Step::Ask(self.failure()?)),
+            3 => {
+                let (msg, notes) = self.failure()?;
+                Ok(Step::Ask(Request::Fail(msg, notes)))
+            }
             4 => {
                 let mut budget = READ_BUDGET;
                 Ok(Step::Ask(Request::Infer(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
@@ -866,6 +892,11 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             22 => Ok(Step::Ask(Request::Body(self.nat_of("host_handle", vec![tree])?))),
             23 => Ok(Step::Ask(Request::Arms(self.nat_of("host_handle", vec![tree])?))),
             24 => Ok(Step::Ask(Request::Synth(self.nat_of("host_handle", vec![tree])?))),
+            25 => Ok(Step::Ask(Request::Spine(self.nat_of("host_handle", vec![tree])?))),
+            26 => {
+                let (msg, notes) = self.failure()?;
+                Ok(Step::Ask(Request::Say(msg, notes)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1016,6 +1047,8 @@ struct Run {
     /// (docs/runtime-fn-setups-design.md §3.2). The `Rc` held here keeps the
     /// address from being reused while the run lasts.
     shared: std::collections::HashMap<(usize, usize), (Rc<Term>, u64)>,
+    /// What the run said (`Say`), reported at its span once it succeeds.
+    said: Vec<String>,
 }
 
 /// A remembered reification: the world it was made in (its terms are
@@ -1125,6 +1158,7 @@ impl Run {
             generator,
             readings: std::collections::HashMap::new(),
             shared: std::collections::HashMap::new(),
+            said: Vec::new(),
         }
     }
 
@@ -1443,7 +1477,7 @@ impl Elaborator {
         let shown = tactic_name(tactic);
         if let heather_syntax::ast::ExprKind::Var(name) = &tactic.kind {
             if self.key_of(name).is_none() && !self.shadowed(cx, name) {
-                if let Some(make) = self.native_tactics.borrow().get(name.as_str()) {
+                if let Some(make) = self.policy.native_tactics.borrow().get(name.as_str()) {
                     let mut speaker: Box<dyn NativeTactic> = make();
                     return self.run_tactic(cx, &mut speaker, &shown, goal, lvl, Vec::new(), span);
                 }
@@ -1498,9 +1532,9 @@ impl Elaborator {
             plain: Cell::new(None),
             no_goal: keyword == "generate",
         });
-        let outer = self.by_quoting.replace(Some(Rc::clone(&quoting)));
-        let term = self.elab_check(cx, e, &dom, &dom_level);
-        self.by_quoting.replace(outer);
+        let term = self.scoped_cell(|s| &s.by_quoting, Some(Rc::clone(&quoting)), || {
+            self.elab_check(cx, e, &dom, &dom_level)
+        });
         let term = term?;
         let Some(closed) = crate::unification::strengthen_tm(&LocalCtx::nil(), &term, cx.gamma.len() as u32) else {
             return err(
@@ -1526,7 +1560,7 @@ impl Elaborator {
     /// term of the goal's context, not of the tactic expression's own
     /// binders.
     pub(crate) fn quote_for_by(&self, cx: &Cx, e: &Expr, expected: &Type, lvl: &Level) -> R<Option<Term>> {
-        let Some(q) = self.by_quoting.borrow().clone() else {
+        let Some(q) = self.scope.by_quoting.borrow().clone() else {
             return Ok(None);
         };
         if q.plain.get() == Some(e.span) {
@@ -1539,7 +1573,7 @@ impl Elaborator {
         // A type's name is quoted as the type (`generate congruences(Tm)`).
         if let heather_syntax::ast::ExprKind::Var(name) = &e.kind
             && !self.shadowed(cx, name)
-            && !cx.names.iter().any(|n| n == name)
+            && !cx.names.iter_inner().any(|n| n == name)
             && self.lookup_inductive(name).is_some_and(|ind| ind.params.is_empty() && ind.valparams.is_empty())
         {
             let written = heather_syntax::ast::Ty {
@@ -1558,7 +1592,7 @@ impl Elaborator {
         // insert them.
         if let heather_syntax::ast::ExprKind::Var(name) = &e.kind
             && !self.shadowed(cx, name)
-            && !cx.names.iter().any(|n| n == name)
+            && !cx.names.iter_inner().any(|n| n == name)
             && let Some((term, ty, level)) = self.raw_global(name)
             && !(level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level))
         {
@@ -1576,9 +1610,7 @@ impl Elaborator {
         // Inferred for real, with quoting off: what is quoted is an
         // ordinary term, and its dependencies and notes are this
         // elaborator's.
-        let outer = self.by_quoting.replace(None);
-        let inferred = self.elab_infer(cx, e);
-        self.by_quoting.replace(outer);
+        let inferred = self.scoped_cell(|s| &s.by_quoting, None, || self.elab_infer(cx, e));
         let (term, ty, level) = inferred?;
         let d = (cx.gamma.len() - q.root.len()) as u32;
         let (Some(term), Some(ty)) = (
@@ -1638,7 +1670,15 @@ impl Elaborator {
         run.issue_quoted(quoted);
         self.issue_lets(cx, &mut run);
         match self.drive(&mut run, speaker) {
-            Ok(Ended::Result(e)) => self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg)),
+            Ok(Ended::Result(e)) => {
+                let proof = self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg))?;
+                // What the run said is reported only now that it succeeded,
+                // as one warning: the lints are kept one per span.
+                if !run.said.is_empty() {
+                    self.emit_lint(crate::Lint::TacticReport, format!("`by {shown}`: {}", run.said.join("\n")), span);
+                }
+                Ok(proof)
+            }
             Ok(Ended::Published(_)) => fail("only `generate` publishes declarations".into()),
             Err(msg) => fail(msg),
         }
@@ -1690,6 +1730,12 @@ impl Elaborator {
                 Request::Body(g) => Answer::Handle(refusable(self.body_request(run, g))?),
                 Request::Arms(h) => Answer::Arms(refusable(self.arms_request(run, h))?),
                 Request::Synth(h) => Answer::Handle(refusable(self.synth_request(run, h, span))?),
+                Request::Spine(h) => Answer::Spine(refusable(self.spine_request(run, h))?),
+                Request::Say(msg, notes) => {
+                    let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
+                    run.said.push(format!("{msg}{rendered}"));
+                    Answer::Unit
+                }
                 Request::Publish(decls) if run.generator => return Ok(Ended::Published(decls)),
                 Request::Publish(_) => return Err("only `generate` publishes declarations; a tactic cannot".into()),
             };
@@ -1746,7 +1792,7 @@ impl Elaborator {
             }
             let entry = cx.gamma.entries.get(i).expect("a context entry below its length");
             let ty = run.issue(0, Held::Type(entry.ty.shift_local((n - i) as u32), entry.level.clone()));
-            locals.push(LocalView { id: i as u64, name: cx.names.get(i).cloned().unwrap_or_else(|| "_".to_string()), ty });
+            locals.push(LocalView { id: i as u64, name: cx.names.get(i).map(str::to_string).unwrap_or_else(|| "_".to_string()), ty });
         }
         locals.extend(lets.map(|(_, l)| l));
         GoalView { target: 0, locals }
@@ -1761,10 +1807,11 @@ impl Elaborator {
     /// without being handed it.
     fn issue_lets(&self, cx: &Cx, run: &mut Run) {
         let n = cx.names.len();
-        for (k, alias) in cx.aliases.iter().enumerate() {
-            let Some(later) = cx.names.get(alias.depth..) else { continue };
-            let shadowed = later.iter().any(|m| *m == alias.name)
-                || cx.aliases[k + 1..].iter().any(|b| b.name == alias.name);
+        let aliases: Vec<_> = cx.aliases.iter().collect();
+        for (k, alias) in aliases.iter().enumerate() {
+            let Some(later) = n.checked_sub(alias.depth) else { continue };
+            let shadowed = cx.names.iter_inner().take(later).any(|m| m == alias.name)
+                || aliases[k + 1..].iter().any(|b| b.name == alias.name);
             let written = alias.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
             if shadowed || !written {
                 continue;
@@ -2159,6 +2206,62 @@ impl Elaborator {
         Ok(ArmsView { scrut: s, arms, args })
     }
 
+    /// `Spine(h)`: the term `h` stands for as a head applied to arguments,
+    /// read off the kernel's applications with nothing reduced: every
+    /// argument, implicit ones included, in order, each with whether the
+    /// function's type at it is dependent (its codomain mentions it, as a
+    /// type argument's does). A term that is no application is its own head
+    /// with no arguments. A subterm the term shares is one handle wherever
+    /// it occurs (as for `Arms`), but equal subterms built apart are not:
+    /// identity beyond sharing is `Defeq`'s (docs/grind-design.md §3).
+    fn spine_request(&self, run: &mut Run, h: u64) -> Result<SpineView, Fault> {
+        let (at, held) = run.held(h)?;
+        let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a term"))) };
+        let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let t = Rc::new(t);
+        let mut spine = Vec::new();
+        let mut head = &t;
+        loop {
+            match &**head {
+                // A checked application names its codomain; `app@` leaves
+                // it to the head's type.
+                Term::App { fun, arg, cod, .. } => {
+                    spine.push((fun, arg, Some(cod)));
+                    head = fun;
+                }
+                Term::AppAt { fun, arg } => {
+                    spine.push((fun, arg, None));
+                    head = fun;
+                }
+                _ => break,
+            }
+        }
+        spine.reverse();
+        let cx = run.cx(at)?;
+        let mut args = Vec::with_capacity(spine.len());
+        for (fun, a, cod) in spine {
+            let dependent = match cod {
+                Some(cod) => crate::unification::strengthen_ty(&cx.gamma, cod, 1).is_none(),
+                None => {
+                    let (fty, _) = self.kernel_type(run, at, fun).ok_or_else(|| Fault::Ill("a function in the spine has no type".into()))?;
+                    let pi = self
+                        .goal_oracle()
+                        .whnf_type(&cx.gamma, &fty)
+                        .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?;
+                    let Type::Pi { cod, .. } = pi else {
+                        return Err(Fault::Ill("a function in the spine is not of a function type".into()));
+                    };
+                    crate::unification::strengthen_ty(&cx.gamma, &cod, 1).is_none()
+                }
+            };
+            let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
+            args.push((run.issue_shared(at, a, aty, alevel), dependent));
+        }
+        let (hty, hlevel) = self.kernel_type(run, at, head).ok_or_else(|| Fault::Ill("the head has no type".into()))?;
+        let head = run.issue_shared(at, head, hty, hlevel);
+        Ok(SpineView { head, args })
+    }
+
     /// A name, elaborated where the `by` is. Elaboration may leave notes and
     /// dependencies behind; a failed one is rolled back.
     fn resolve_request(&self, run: &mut Run, name: &str, span: Span) -> Result<u64, String> {
@@ -2166,7 +2269,7 @@ impl Elaborator {
             return Err(format!("`{name}` is not a name"));
         }
         let root = &run.scopes[0].cx;
-        if !root.names.iter().any(|n| n == name) {
+        if !root.names.iter_inner().any(|n| n == name) {
             if let Some((term, ty, level)) = self.raw_global(name) {
                 let n = root.gamma.len() as u32;
                 return Ok(run.issue(0, Held::Term(term.shift_local(n), ty.shift_local(n), level)));
@@ -2336,7 +2439,7 @@ impl Elaborator {
     fn kernel_type(&self, run: &Run, at: usize, t: &Term) -> Option<(Type, Level)> {
         let cx = run.cx(at).ok()?;
         let oracle = self.goal_oracle();
-        heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, t, self.fuel).ok()
+        heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, t, self.policy.fuel).ok()
     }
 
     /// One layer of a handle, read the way the diagnostics read it
@@ -3207,7 +3310,7 @@ impl Elaborator {
                 run.opened.push((scope, p));
                 locals.push(id);
                 let entry = bcx.gamma.entries.get(p).expect("a context entry below its length");
-                let name = bcx.names.get(p).cloned().unwrap_or_else(|| "_".to_string());
+                let name = bcx.names.get(p).map(str::to_string).unwrap_or_else(|| "_".to_string());
                 shown.push((id, name, entry.ty.shift_local((len - p) as u32), entry.level.clone()));
             }
             run.scopes.push(Scope { parent: Some(at), cx: bcx, world: 0, locals });
@@ -3227,8 +3330,7 @@ impl Elaborator {
     /// `leaves` says, and hand back what they did.
     fn build(&self, cx: &Cx, skeleton: &Skeleton, goal: &Type, lvl: &Level, leaves: Leaves, span: Span) -> (R<Term>, Leaves) {
         let state = Rc::new(RefCell::new(leaves));
-        let outer = self.host_leaves.replace(Some(Rc::clone(&state)));
-        let built = match skeleton {
+        let built = self.scoped_cell(|s| &s.host_leaves, Some(Rc::clone(&state)), || match skeleton {
             Skeleton::Cases { scrut, ty, level, motive, equation, arms } => self.elab_convoy(
                 cx,
                 heather_syntax::MatchForm::Match,
@@ -3244,15 +3346,14 @@ impl Elaborator {
                 span,
             ),
             Skeleton::Constructor(e) => self.elab_check(cx, e, goal, lvl),
-        };
-        self.host_leaves.replace(outer);
+        });
         let leaves = state.borrow().clone();
         (built, leaves)
     }
 
     /// Leaf `k` of the split being elaborated (see [`Leaves`]).
     pub(crate) fn host_leaf(&self, cx: &Cx, k: usize, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
-        let Some(state) = self.host_leaves.borrow().clone() else {
+        let Some(state) = self.scope.host_leaves.borrow().clone() else {
             return err("a tactic's split leaf outside its split", span);
         };
         let mut leaves = state.borrow_mut();
@@ -3279,7 +3380,7 @@ impl Elaborator {
 
     /// The type at a generated declaration's leaf `k` (see [`Leaves`]).
     pub(crate) fn host_ty_leaf(&self, cx: &Cx, k: usize, span: Span) -> R<(Type, Level)> {
-        let Some(state) = self.host_leaves.borrow().clone() else {
+        let Some(state) = self.scope.host_leaves.borrow().clone() else {
             return err("a generated declaration's type outside its declaration", span);
         };
         let leaves = state.borrow();
@@ -3520,7 +3621,7 @@ impl Elaborator {
             }
             let cx = run.cx(s).map_err(|f| at(f.msg()))?;
             let entry = cx.gamma.entries.get(i).expect("an introduced local");
-            let shown = cx.names.get(i).filter(|n| is_name(n) && !n.contains("::")).cloned().unwrap_or_else(|| format!("x{}", params.len()));
+            let shown = cx.names.get(i).filter(|n| is_name(n) && !n.contains("::")).map(str::to_string).unwrap_or_else(|| format!("x{}", params.len()));
             params.push((shown, implicit, (*entry.ty).clone(), entry.level.clone()));
             parent = s;
         }
@@ -3583,10 +3684,7 @@ impl Elaborator {
         fills.push((Held::Type(result.clone(), level.clone()), n));
         fills.push((Held::Term(m.body.clone(), result.clone(), level.clone()), n));
         let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
-        let outer = self.host_leaves.replace(Some(state));
-        let published = self.elab_decl(&decl);
-        self.host_leaves.replace(outer);
-        published
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_decl(&decl))
     }
 
     /// `Close(split, proofs)`: each proof checked at its branch's goal
@@ -3650,7 +3748,7 @@ impl Elaborator {
     /// Make `name` available as `by name` (design §8a). A name a source file
     /// declares, or a local, takes precedence over a native tactic.
     pub fn register_native_tactic(&mut self, name: &str, make: fn() -> Box<dyn NativeTactic>) {
-        self.native_tactics.borrow_mut().insert(name.to_string(), make);
+        self.policy.native_tactics.borrow_mut().insert(name.to_string(), make);
     }
 }
 

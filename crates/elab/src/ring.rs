@@ -1308,7 +1308,7 @@ impl Reifier<'_> {
                 let Some(rel) = Relation::of_type(self.elab, self.cx, &ty, self.span) else { continue };
                 let (map, args) = app_spine(&rel.left);
                 if args.len() == 1 {
-                    edges.push(LocalEdge { hom: name.clone(), source: source.clone(), map: Rc::new(map.clone()) });
+                    edges.push(LocalEdge { hom: name.to_string(), source: source.clone(), map: Rc::new(map.clone()) });
                     break;
                 }
             }
@@ -2507,8 +2507,8 @@ impl Elaborator {
             })
             .collect();
         let cert = reconstruct(self, cx, goal, &named, span).map_err(err)?;
-        self.ring_depth.set(self.ring_depth.get() + 1);
-        let _depth = Depth(&self.ring_depth);
+        self.scope.ring_depth.set(self.scope.ring_depth.get() + 1);
+        let _depth = Depth(&self.scope.ring_depth);
         let (list_ty, parsed) = parse_atom_list(&cert.atoms, &cert.carrier)
             .map_err(|detail| err(format!("`ring` wrote an atom list that does not parse: {detail}\n  generated: {}", cert.atoms)))?;
         // The atoms that do not spell are named by aliases bound to their

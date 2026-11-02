@@ -7,7 +7,7 @@
 // dictionary in scope. Tests, not library: nothing outside lib/_tests
 // imports this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import option; import list; import pair;
-import tactic; import string;
+import tactic; import string; import result;
 
 // A chain of binds over `Option`: the carrier is the expected type's.
 fn add_opt(x, y: Option<Nat>) → Option<Nat> {
@@ -20,6 +20,23 @@ theorem add_opt_none_left(y: Option<Nat>): add_opt(None, y) = None { refl }
 // A neutral computation: the lowered term is the hand-written chain.
 theorem add_opt_unfolds(x, y: Option<Nat>):
     add_opt(x, y) = x.and_then(λ a => y.and_then(λ b => Some(a + b))) { refl }
+
+// Over `Result`, whose instances are at the λ carrier `λ A => Result<A, E>`
+// (docs/lambda-carrier-instances-design.md §7): the first `Err` stops the
+// chain. At a literal, at a neutral pair, and at an open error type.
+fn add_res(x, y: Result<Nat, Bool>) → Result<Nat, Bool> {
+    let a <- x;
+    let b <- y;
+    Ok(a + b)
+}
+theorem add_res_ok(): add_res(Ok(2), Ok(3)) = Ok(5) { refl }
+theorem add_res_err_left(y: Result<Nat, Bool>): add_res(Err(False), y) = Err(False) { refl }
+theorem add_res_unfolds(x, y: Result<Nat, Bool>):
+    add_res(x, y) = x.and_then(λ a => y.and_then(λ b => Ok(a + b))) { refl }
+fn add_res_open<E>(x, y: Result<Nat, E>) → Result<Nat, E> {
+    let a <- x;
+    Pointed::ret(a + (<- y))
+}
 
 // The binder annotated, and `←` for `<-`.
 fn annotated(x: Option<Nat>) → Option<Nat> {

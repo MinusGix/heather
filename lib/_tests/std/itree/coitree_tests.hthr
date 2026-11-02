@@ -37,3 +37,45 @@ fn ret_r_twice<R>(E: Events, t: CoTree<R>(E)) → Bisim<R>(E, CoTree::bind<R, R>
         CoTree::bind<R, R>(E, t, λ r => CRet(r)), t,
         CoTree::bind_ret_r(E, CoTree::bind(E, t, λ r => CRet(r))), CoTree::bind_ret_r(E, t))
 }
+
+// Constructors nested above a corecursive call (codata-elaborator-design
+// §5.4): a call, then a silent step, then the call again, with the answer
+// captured by the pending `CTau` as the next seed and a leaf in another arm.
+fn Ask() → Events { Events(True, λ _ => Nat) }
+fn answer(o: Obs<Nat>(Ask()), a: Nat) → CoTree<Nat>(Ask()) {
+    match o { ORet(r) => CRet(r), OTau(s) => s, OVis(_, k) => k(a) }
+}
+fn echo(acc: Nat) → CoTree<Nat>(Ask()) {
+    CVis(trivial, λ n => match n { Zero => CRet(acc), Succ(_) => CTau(echo(n + acc)) })
+}
+theorem echo_ticks(): CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(1)), 2)) = OTau(echo(3)) { refl }
+theorem echo_ticks_open(acc: Nat, m: Nat):
+    CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(acc)), Succ(m))) = OTau(echo(Succ(m) + acc)) { refl }
+theorem echo_stops(acc: Nat): CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(acc)), 0)) = ORet(acc) { refl }
+// expect-error(kernel): the kernel rejected `echo_stops_wrong`: NotConvertible
+theorem echo_stops_wrong(): CoTree::obs(Ask(), answer(CoTree::obs(Ask(), echo(2)), 0)) = ORet(0) { refl }
+
+// Generic results and events, three layers, and a fixed continuation.
+fn loop2<R>(E: Events, c: E.Cmd) → CoTree<R>(E) { CVis(c, λ a => CTau(CTau(loop2(E, c)))) }
+fn mixed<R>(E: Events, c: E.Cmd, k: E.Resp(c) → CoTree<R>(E)) → CoTree<R>(E) { CTau(CVis(c, λ a => CTau(mixed(E, c, k)))) }
+theorem loop2_approx<R>(E: Events, c: E.Cmd):
+    CoTree::approx(E, 4, loop2<R>(E, c)) = Vis(c, λ a => Tau(Tau(Vis(c, λ b => Cut)))) { refl }
+theorem mixed_approx<R>(E: Events, c: E.Cmd, k: E.Resp(c) → CoTree<R>(E)):
+    CoTree::approx(E, 4, mixed(E, c, k)) = Tau(Vis(c, λ a => Tau(Tau(Cut)))) { refl }
+
+// Nested above a call into an indexed family: a bisimulation that matches
+// two observations per step, each pending node at its own pair of trees.
+fn after<R>(E: Events, t: CoTree<R>(E)) → CoTree<R>(E) { match CoTree::obs(E, t) { OTau(s) => s, _ => t } }
+fn tick2<R>(E: Events) → CoTree<R>(E) { CTau(CTau(tick2(E))) }
+fn tick2_self<R>(E: Events) → Bisim<R>(E, tick2(E), tick2(E)) {
+    BTau(after(E, tick2(E)), after(E, tick2(E)), refl, refl,
+         BTau(after(E, after(E, tick2(E))), after(E, after(E, tick2(E))), refl, refl, tick2_self(E)))
+}
+fn spin_twice<R>(E: Events) → Bisim<R>(E, CoTree::spin(E), CoTree::spin(E)) {
+    BTau(CoTree::spin(E), CoTree::spin(E), refl, refl, BTau(CoTree::spin(E), CoTree::spin(E), refl, refl, spin_twice(E)))
+}
+theorem spin_twice_approx<R>(E: Events, n: Nat):
+    ITree::Same(E, CoTree::approx(E, n, CoTree::spin<R>(E)), CoTree::approx(E, n, CoTree::spin<R>(E)))
+{
+    Bisim::approx(E, n, CoTree::spin(E), CoTree::spin(E), spin_twice(E))
+}

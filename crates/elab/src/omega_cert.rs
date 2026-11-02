@@ -875,27 +875,34 @@ fn coefficient_source(source: &str) -> Option<Vec<Z>> {
 pub(crate) fn source_context(cx: &Cx) -> std::borrow::Cow<'_, Cx> {
     let shadowed: Vec<_> = cx.names.iter().enumerate().filter_map(|(pos, name)| {
         (!name.starts_with('#')
-            && (cx.names[pos + 1..].contains(name)
-                || cx.aliases.iter().any(|alias| alias.name == *name && alias.depth > pos)))
+            && (cx.names.iter().skip(pos + 1).any(|later| later == name)
+                || cx.aliases.iter_inner().any(|alias| alias.name == *name && alias.depth > pos)))
             .then_some(pos)
     }).collect();
     if shadowed.is_empty() {
         return std::borrow::Cow::Borrowed(cx);
     }
-    let mut used: std::collections::HashSet<_> = cx.names.iter().cloned()
-        .chain(cx.aliases.iter().map(|alias| alias.name.clone())).collect();
-    let mut named = cx.clone();
+    let mut used: std::collections::HashSet<String> = cx.names.iter().map(str::to_string)
+        .chain(cx.aliases.iter_inner().map(|alias| alias.name.clone())).collect();
+    let mut fresh = std::collections::HashMap::new();
     let mut next = 0;
     for pos in shadowed {
         loop {
             let name = format!("__omega_local_{next}");
             next += 1;
             if used.insert(name.clone()) {
-                named.names[pos] = name;
+                fresh.insert(pos, name);
                 break;
             }
         }
     }
+    let mut named = cx.clone();
+    let mut pos = 0;
+    named.names = cx.names.renamed(|name| {
+        let new = fresh.remove(&pos).unwrap_or_else(|| name.to_string());
+        pos += 1;
+        new
+    });
     std::borrow::Cow::Owned(named)
 }
 
@@ -921,12 +928,12 @@ struct LocalFact {
 fn local_fact_entries(elab: &Elaborator, cx: &Cx) -> Vec<LocalFact> {
     let mut seen = std::collections::HashSet::new();
     let mut facts = Vec::new();
-    for name in cx.names.iter().chain(cx.aliases.iter().map(|alias| &alias.name)) {
-        if name.starts_with('#') || !seen.insert(name.clone()) {
+    for name in cx.names.iter().chain(cx.aliases.iter().map(|alias| alias.name.as_str())) {
+        if name.starts_with('#') || !seen.insert(name.to_string()) {
             continue;
         }
         if let Ok((term, ty, level)) = elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 }) {
-            push_conjuncts(elab, cx, name.clone(), Rc::new(term), ty, level, &mut facts);
+            push_conjuncts(elab, cx, name.to_string(), Rc::new(term), ty, level, &mut facts);
         }
     }
     facts
@@ -3562,7 +3569,7 @@ fn split_bool_guards(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
         return Ok(None);
     }
     let (round, settled) = {
-        let rounds = elab.omega_settled_guards.borrow();
+        let rounds = elab.scope.omega_settled_guards.borrow();
         let settled: std::collections::HashSet<String> = rounds.iter().flatten().cloned().collect();
         (rounds.len(), settled)
     };

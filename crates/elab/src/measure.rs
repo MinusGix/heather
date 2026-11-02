@@ -3086,7 +3086,6 @@ impl Respell<'_> {
         } else {
             None
         };
-        let matched = alias.as_ref().map(|n| var(n, span)).unwrap_or_else(|| (*scrut).clone());
         let mut walked = Vec::new();
         for a in arms {
             if a.default {

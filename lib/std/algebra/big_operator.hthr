@@ -355,29 +355,33 @@ theorem Semiring::range_cauchy(N: Nat, a, b: Nat → A):
 
 }
 
-section<A: LocatedAddGroup(≈, <, <=, +)> {
+section<A: LocatedAddMonoid(≈, <, <=, +)> {
 
 // Monotonicity and the sign are stated over the terms `f` themselves
 // rather than `∑ k < n, f(k)`, its η-expansion: a tactic matching the
 // conclusion against `∑ k < n, f(k) + c` then reads the terms off as they
 // are (`mono`; the two convert).
-theorem LocatedAddGroup::range_le(n: Nat, f, g: Nat → A):
+theorem LocatedAddMonoid::range_le(n: Nat, f, g: Nat → A):
     ((k: Nat) → Nat::Lt(k, n) → f(k) <= g(k)) → MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g)
 {
     match n {
         Zero => λ h => StrictOrder::le_refl(A.unit),
-        Succ(m) => λ h => LocatedAddGroup::add_le_mono(∑ k < m, f(k), ∑ k < m, g(k), f(m), g(m),
-            LocatedAddGroup::range_le(m, f, g, λ k hk => h(k, omega(hk))), h(m, m.lt_succ_self())),
+        Succ(m) => λ h => LocatedAddMonoid::add_le_mono(∑ k < m, f(k), ∑ k < m, g(k), f(m), g(m),
+            LocatedAddMonoid::range_le(m, f, g, λ k hk => h(k, omega(hk))), h(m, m.lt_succ_self())),
     }
 }
 
-theorem LocatedAddGroup::range_nonneg(n: Nat, f: Nat → A):
+theorem LocatedAddMonoid::range_nonneg(n: Nat, f: Nat → A):
     ((k: Nat) → Nat::Lt(k, n) → A.unit <= f(k)) → A.unit <= MonoidRel::range(+, n, f)
 {
     λ h => StrictOrder::le_respects(∑ k < n, A.unit, A.unit, ∑ k < n, f(k), ∑ k < n, f(k),
         MonoidRel::range_unit(+, n, λ k => A.unit, λ k hk => A.rel_refl(A.unit)), A.rel_refl(∑ k < n, f(k)),
-        LocatedAddGroup::range_le(n, λ k => A.unit, f, h))
+        LocatedAddMonoid::range_le(n, λ k => A.unit, f, h))
 }
+
+}
+
+section<A: LocatedAddGroup(≈, <, <=, +)> {
 
 // The triangle inequality, with the bound stated rather than computed:
 // termwise `|f(k)| <= g(k)` gives `|∑ f| <= ∑ g`.
@@ -393,23 +397,12 @@ theorem LocatedAddGroup::range_abs_le(n: Nat, f, g: Nat → A):
 
 }
 
-// Monotonicity at `Nat` and `Int`, which have no `LocatedAddGroup`
-// instance: `Nat` is no group, and `Int`'s order laws are its own. They live
-// here rather than beside the carriers, which this module imports. `mono`
-// splits a sum's order termwise by these and `LocatedAddGroup::range_le`,
-// stated over the terms as it is.
+// Monotonicity at `Nat` and `Int` by name: the generic theorem at their
+// instances (`ordered_field`), what `mono`'s carrier tables cite.
 theorem Nat::range_le(n: Nat, f, g: Nat → Nat): ((k: Nat) → k < n → f(k) <= g(k)) → MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g) {
-    match n {
-        Zero => λ h => Nat::le_refl(0),
-        Succ(m) => λ h => Nat::add_le_mono(∑ k < m, f(k), ∑ k < m, g(k), f(m), g(m),
-            Nat::range_le(m, f, g, λ k hk => h(k, omega(hk))), h(m, m.lt_succ_self())),
-    }
+    λ h => LocatedAddMonoid::range_le(n, f, g, h)
 }
 
 theorem Int::range_le(n: Nat, f, g: Nat → Int): ((k: Nat) → k < n → f(k) <= g(k)) → MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g) {
-    match n {
-        Zero => λ h => Int::le_refl(OfNat(0)),
-        Succ(m) => λ h => Int::add_le_mono(∑ k < m, f(k), ∑ k < m, g(k), f(m), g(m),
-            Int::range_le(m, f, g, λ k hk => h(k, omega(hk))), h(m, m.lt_succ_self())),
-    }
+    λ h => LocatedAddMonoid::range_le(n, f, g, h)
 }

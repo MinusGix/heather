@@ -5,16 +5,21 @@ env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz
 env	profile	release
 env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
 env	commit	709e71c
-case	level/equiv-shared	4	5.3
-case	level/equiv-shared	8	5.3
-case	level/equiv-shared	16	4.9
-case	level/equiv-shared	32	5.1
-case	level/equiv-shared	64	5.1
-case	level/equiv-rebuilt	4	512.4
-case	level/equiv-rebuilt	8	1000.5
-case	level/equiv-rebuilt	16	2108.5
-case	level/equiv-rebuilt	32	4966.7
-case	level/equiv-rebuilt	64	11402.8
+case	level/equiv-shared	4	2.0
+case	level/equiv-shared	8	2.0
+case	level/equiv-shared	16	2.0
+case	level/equiv-shared	32	2.0
+case	level/equiv-shared	64	2.0
+case	level/equiv-rebuilt	4	5.0
+case	level/equiv-rebuilt	8	8.0
+case	level/equiv-rebuilt	16	13.0
+case	level/equiv-rebuilt	32	27.0
+case	level/equiv-rebuilt	64	55.0
+case	level/join	4	69.0
+case	level/join	8	111.0
+case	level/join	16	135.0
+case	level/join	32	176.0
+case	level/join	64	260.0
 case	subst/shift-local	71	6226.3
 case	subst/shift-local	135	13617.4
 case	subst/shift-local	263	26958.0

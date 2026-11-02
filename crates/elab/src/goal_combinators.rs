@@ -56,7 +56,7 @@ fn finite_locals(elab: &Elaborator, cx: &Cx) -> Vec<FiniteLocal> {
                 return None;
             }
             Some(FiniteLocal {
-                name: name.clone(),
+                name: name.to_string(),
                 constructors: inductive
                     .ctors
                     .iter()
@@ -549,7 +549,7 @@ fn case_equation(name: &str) -> bool {
 /// cannot prove. Closing the case here is what keeps every goal a leaf sees
 /// one that some run reaches (issues/split-all-nested-scrutinee-kernel-reject.md).
 fn refuted_case(elab: &Elaborator, cx: &Cx, span: Span) -> Option<Expr> {
-    if elab.shadowed(cx, "absurd") || cx.names.iter().any(|name| name == "absurd") {
+    if elab.shadowed(cx, "absurd") || cx.names.iter_inner().any(|name| name == "absurd") {
         return None;
     }
     let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
@@ -574,7 +574,7 @@ fn refuted_case(elab: &Elaborator, cx: &Cx, span: Span) -> Option<Expr> {
 /// A name no local and no global in scope has, from `base`.
 pub(crate) fn fresh(elab: &Elaborator, cx: &Cx, base: String) -> String {
     let mut name = base;
-    while elab.shadowed(cx, &name) || cx.names.iter().any(|n| *n == name) {
+    while elab.shadowed(cx, &name) || cx.names.iter_inner().any(|n| *n == name) {
         name.push('_');
     }
     name
@@ -658,7 +658,7 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
 /// still the leaf's.
 fn closed_by_split(elab: &Elaborator, cx: &Cx, goal: &Type, span: Span) -> Option<Expr> {
     match goal {
-        Type::Id { lhs, rhs, .. } if lhs == rhs && !elab.shadowed(cx, "refl") && !cx.names.iter().any(|name| name == "refl") => {
+        Type::Id { lhs, rhs, .. } if lhs == rhs && !elab.shadowed(cx, "refl") && !cx.names.iter_inner().any(|name| name == "refl") => {
             Some(Expr { kind: ExprKind::Refl, span })
         }
         _ => None,
@@ -713,7 +713,7 @@ pub(crate) fn check_refl_leaf(elab: &Elaborator, cx: &Cx, leaf: &Expr, goal: &Ty
                 .iter()
                 .filter(|name| case_equation(name))
                 .filter_map(|name| {
-                    let (_, ty, _) = elab.elab_infer(cx, &Expr { kind: ExprKind::Var(name.clone()), span }).ok()?;
+                    let (_, ty, _) = elab.elab_infer(cx, &Expr { kind: ExprKind::Var(name.to_string()), span }).ok()?;
                     Some(format!("`{}`", elab.display_type(cx, &ty)))
                 })
                 .collect();

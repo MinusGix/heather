@@ -68,12 +68,12 @@ impl Elaborator {
         if name == "Zero" || name == "Succ" {
             return None;
         }
-        let local_pos = cx.names.iter().rposition(|n| n == name);
-        let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+        let local_pos = cx.names.lookup(name);
+        let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
         match (local_pos, alias) {
-            (Some(pos), Some(a)) if a.depth <= pos => cx.skels[pos].clone(),
+            (Some(pos), Some(a)) if a.depth <= pos => cx.names.skel(pos).cloned(),
             (_, Some(a)) => a.skel.clone(),
-            (Some(pos), None) => cx.skels[pos].clone(),
+            (Some(pos), None) => cx.names.skel(pos).cloned(),
             (None, None) => None,
         }
     }
@@ -89,8 +89,8 @@ impl Elaborator {
         if name == "Zero" || name == "Succ" || cx.meta.is_some() {
             return None;
         }
-        if cx.names.iter().any(|n| n == name)
-            || cx.aliases.iter().any(|a| a.name == *name)
+        if cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
             || self.ctor_of(name).is_some()
             || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
         {
@@ -103,8 +103,8 @@ impl Elaborator {
         if name == "Zero" || name == "Succ" || cx.meta.is_some() {
             return None;
         }
-        if cx.names.iter().any(|n| n == name)
-            || cx.aliases.iter().any(|a| a.name == *name)
+        if cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
             || self.ctor_of(name).is_some()
             || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
         {
@@ -159,8 +159,8 @@ impl Elaborator {
         if name == "Zero" || name == "Succ" || cx.meta.is_some() {
             return false;
         }
-        if cx.names.iter().any(|n| n == name)
-            || cx.aliases.iter().any(|a| a.name == *name)
+        if cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
             || self.ctor_of(name).is_some()
             || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
         {
@@ -179,11 +179,11 @@ impl Elaborator {
         }
         // Everything past here depends only on the declaration, so it is
         // computed once (see [`Elaborator::result_only_memo`]).
-        if let Some(&hit) = self.result_only_memo.borrow().get(&info.abs) {
+        if let Some(&hit) = self.memos.result_only_memo.borrow().get(&info.abs) {
             return hit;
         }
         let hit = self.walk_for_result_only(info.abs, &params);
-        self.result_only_memo.borrow_mut().insert(info.abs, hit);
+        self.memos.result_only_memo.borrow_mut().insert(info.abs, hit);
         hit
     }
 

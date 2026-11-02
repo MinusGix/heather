@@ -4,7 +4,7 @@ status: open
 labels: [frontend,diagnostics,notation,ergonomics]
 area: language
 created: 2026-08-20
-updated: 2026-09-15
+updated: 2026-11-02
 ---
 
 Kernel-term diagnostics currently recover a global application as a named call:
@@ -60,3 +60,4 @@ the printer must not invent notation that a user could not write.
   conspicuous mismatch. Surface-AST rendering already preserves written
   operator nodes; this issue owns the harder kernel-to-surface inverse.
 - 2026-09-15: 2026-09-15: a second customer for the resugaring pass: [[wrong-dictionary-field-refusal-names-projection]] — a named projection reference now appears in a wrong-field refusal where the declaration's name used to.
+- 2026-11-02: grind's failure report is a customer: it spells `-(a + OfNat(k).isucc())` as `neg(add(a, isucc(OfNat(k))))` ([[grind-library-sweep]]).

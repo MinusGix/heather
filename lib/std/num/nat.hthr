@@ -1032,6 +1032,17 @@ theorem Nat::mul_le_mono(self a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c <=
              c.mul_le_mono_r(a, b, h1), b.mul_le_mono_l(c, d, h2))
 }
 
+// Multiplying by a positive keeps a strict inequality: k·(n + 1) is k·n + k,
+// already past k·n, and at most k·m.
+theorem Nat::mul_lt_mono_l(self k, n, m: Nat, hk: 0 < k, h: n < m): k * n < k * m {
+    Succ(k * n).le_trans(k * n + k, k * m, (k * n).add_le_mono_l(1, k, hk), k.mul_le_mono_l(Succ(n), m, h))
+}
+
+// A common left factor cancels from a strict comparison.
+theorem Nat::lt_of_mul_lt_mul_l(self k, n, m: Nat, h: k * n < k * m): n < m {
+    Nat::lt_of_not_le(n, m, λ le => (k * n).lt_irrefl(Succ(k * n).le_trans(k * m, k * n, h, k.mul_le_mono_l(m, n, le))))
+}
+
 // A common right factor cancels from a strict comparison.
 theorem Nat::lt_of_mul_lt_mul_r(self a, b, c: Nat, h: a * c < b * c): a < b {
     match b.le_dec(a) {

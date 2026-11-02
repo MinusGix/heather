@@ -123,7 +123,7 @@ pub(super) struct DeclAttempt {
     /// outermost binders when it locates a refusal no recorded site
     /// explains, and so the names its note uses for them
     /// (`Elaborator::refused_site_cx`).
-    pub(super) telescope: RefCell<Vec<String>>,
+    pub(super) telescope: RefCell<crate::spine::Binders>,
 }
 
 /// [`DeclAttempt::instance_matches`]' key past the subject type: the tag, the
@@ -203,10 +203,16 @@ pub(super) struct DecideUse {
 /// and type variables; the two types are `Rc`-shared kernel nodes, so what is
 /// really held alive is one declaration attempt's worth of terms that the
 /// attempt is holding anyway.
+///
+/// The context sits behind an `Rc` because speculative probes clone the
+/// whole elaborator, and with it every note recorded so far: a `Cx` by value
+/// re-allocated each note's binder names per probe, about a fifth of cold
+/// elaboration on operator-heavy files
+/// (issues/elab-probe-clone-copies-attempt.md).
 #[derive(Clone)]
 pub(super) struct CheckNote {
     pub(super) span: Span,
-    pub(super) cx: Cx,
+    pub(super) cx: Rc<Cx>,
     pub(super) got: Type,
     pub(super) expected: Type,
     pub(super) level: Level,
@@ -217,7 +223,7 @@ pub(super) struct CheckNote {
 #[derive(Clone)]
 pub(super) struct ReflNote {
     pub(super) span: Span,
-    pub(super) cx: Cx,
+    pub(super) cx: Rc<Cx>,
     pub(super) lhs: Term,
     pub(super) rhs: Term,
     pub(super) ty: Type,

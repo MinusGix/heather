@@ -223,7 +223,7 @@ impl Elaborator {
     /// for [`Self::share_registered_lowering`]. A miss (other arguments,
     /// other globals) replaces the entry.
     fn share_iwf_part(&self, tag: u32, index: bool, fresh: Type) -> Rc<Type> {
-        let mut memo = self.iwf_part_memo.borrow_mut();
+        let mut memo = self.memos.iwf_part_memo.borrow_mut();
         match memo.get(&(tag, index)) {
             Some(kept) if **kept == fresh => Rc::clone(kept),
             _ => {
@@ -376,7 +376,7 @@ impl Elaborator {
         let n = tel.len() as u32;
         let tel_vars: Vec<Rc<Term>> = (0..n).map(|k| Rc::new(Term::Var(LocalVar(n - 1 - k)))).collect();
         let (l, li) = (sig.level.clone(), sig.idx_level.clone());
-        let lvl = |a: &Level, b: &Level| Level::max(a.clone(), b.clone()).normalize().canonical();
+        let lvl = |a: &Level, b: &Level| Level::max(a.clone(), b.clone());
         // n : Π(x : S). Nat.
         let ar_stmt = Type::Pi {
             dom_level: l.clone(),
@@ -907,7 +907,7 @@ impl Elaborator {
         // The tuple's checked spelling, exactly as `build_fields_skel`'s
         // (`docs/intro-by-type-design.md` §4.1): no annotation, since every
         // layer is in checking position.
-        if self.emits_at_forms(cx) {
+        if self.emits_at_forms() {
             return Ok(Term::PairAt {
                 ty: None,
                 fst: value,
@@ -962,7 +962,7 @@ impl Elaborator {
         jcx.push("#z".into(), fam.ty_at(Term::Var(LocalVar(0)), 1), fam.lvl());
         let psi = self.goal_psi();
         let fits = |m: &Type| {
-            heather_kernel::typing::check_type(&psi, 0, Layer::Prog, &jcx.gamma, m, mlvl, self.fuel)
+            heather_kernel::typing::check_type(&psi, 0, Layer::Prog, &jcx.gamma, m, mlvl, self.policy.fuel)
                 .is_ok()
         };
         if let Some(inv) = self.iwf_inverted_motive(cx, ind, fam, motive, mlvl, span)?

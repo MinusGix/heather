@@ -231,17 +231,33 @@ the converse through `sym`. Each trace of `approx(n, t)` is one of some
 `Bisim::refines` is the same statement through `Same` approximations
 (`Bisim::approx`, `ITree::refines_of_same`).
 
-### 7.5 What is not here
+### 7.5 `bind` is a congruence
 
-- **A `bind` congruence up to eutt** (`t ≈ u` and `h1 ≈ h2` pointwise give
-  `bind(t, h1) ≈ bind(u, h2)`). It needs `after` through `bind`
-  (`after(k, bind(t, h))` from `after(k, t)`), and is the next law a handler
-  proof will want. `issues/coitree-eutt.md`.
+`Eutt::bind_cong`: `t ≈ u` and `h1(a) ≈ h2(a)` for every `a` give
+`bind(t, h1) ≈ bind(u, h2)`, corecursive on `t ≈ u` as `CoTree::bind_cong`
+is on `Bisim`. `bind_cong_l` and `bind_cong_r` fix one side.
+
+- A silent step or a call carries over at the **same counts**:
+  `after(k, t) = o` with `o` not a leaf gives `after(k, bind(t, h)) =
+  Obs::bind(o, h)` (`CoTree::after_bind`, by induction on `k` with
+  `obs_bind_at`). A leaf reached early is excluded by `Obs::NotRet`: there the
+  remaining drops would spill into `h(r)`.
+- At a leaf the count is only an upper bound, so the counts do not shift
+  into `hh(r)`. The branch is an existing relation instead,
+  `bind(t, h1) ≈ h1(r) ≈ h2(r) ≈ bind(u, h2)` by `trans`, which the
+  corecursive surface takes as a whole node (codata §5.2).
+  `Eutt::bind_leaf` gives `bind(t, h) ≈ h(r)` from `after(k, t) = ORet(r)`,
+  by recursion on `k` (`peel_l` per tau).
+
+### 7.6 What is not here
+
 - **Up-to techniques** (a corecursive call under `trans` or `bind`). The
-  `codata` surface's guard is one constructor (codata §5); every proof here
-  is written so its self-calls sit directly under one.
+  `codata` surface's guard is constructors (codata §5.2, §5.4), not
+  functions, or friends on unindexed codata (codata §5.5); `Bisim`/`Eutt`
+  are indexed, so every proof here is written so its self-calls sit under a
+  constructor (`issues/codata-up-to-friends-round-2.md`).
 
-### 7.6 Cost
+### 7.7 Cost
 
 Before the change in `docs/codata-named-signature-design.md` §8, a `match`
 on an `Eutt` bound each payload field to a projection annotated with every
@@ -251,7 +267,7 @@ product of the fields' dependencies. With checked projections the module is
 dominated by `trans`, `traces_vis` and the declaration itself, each in
 proportion to its size.
 
-### 7.7 Testing
+### 7.8 Testing
 
 `crates/elab/tests/lib_std_coitree_eutt.rs` (the `family_library` binary):
 
@@ -265,7 +281,10 @@ proportion to its size.
 - **negative controls**: a count too small to reach the leaf, and different
   leaves, are refused by conversion;
 - the bridge used at `CTau(CTau(t))` and at `bind(t, CRet)`, and a goal over
-  `Eutt` names it with its trees.
+  `Eutt` names it with its trees;
+- `bind_cong` at a literal tree with taus on both sides of the bind, at a
+  neutral tree through each side, into refinement, and a leaf continued at
+  another value refused (`lib/_tests/std/itree/coitree_eutt_tests.hthr`).
 
 ---
 
