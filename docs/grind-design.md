@@ -387,3 +387,58 @@ closed graph above `match rounds` and found the same instances every round.
 The elaborator accepts the shape and computes the wrong function
 ([recursion-let-reads-changing-parameter](../issues/recursion-let-reads-changing-parameter.md));
 `saturate` now matches on `rounds` first.
+
+## 10. The library sweep (2026-11-02)
+
+Issue: [grind-library-sweep](../issues/grind-library-sweep.md). Of the
+library's theorems, 143 build four or more `trans`/`cong` steps by hand
+(most in `lib/native`, then `std/num`, `std/arch`, `std/os`). A sample
+across the areas, each equational step restated as a probe and given to
+`grind_report` with the lemmas its hand proof cites:
+
+| proof | step | result | blocker |
+|---|---|---|---|
+| `Memory::set_set_comm` | each `get` after two `set`s | closes from the three instances (`grind_with`), not from the names | **premises**: `get_set_hit`/`get_set_other` need `space.same(y, x) = True/False`, which the branch has as a local |
+| `Int::neg_add` | the `Succ` step of its `calc` | the pattern never matches as written; with the step made syntactic, stops one equation short | **definitional equalities**: `OfNat(Succ(k))` is `OfNat(k).isucc()` and `-OfNat(k)` is `Int::negOfNat(k)` only by computation |
+| (`Int`) | `(a + b) + c = b + (c + a)` | closes from `add_assoc` and `add_comm` | none |
+| `Float::same_of_squeeze` | `n = m` from `n = k`, `k = False`, `m = False` | closes | none |
+| `Float::same_of_squeeze` | `m = False`, `m = True` ⊢ anything | the report shows `True` and `False` in one class, and stops | **constructor facts** (R3) |
+| `Env::compose_same` | `trans(ka.left, trans(k0.left, sym(kb.left)))` | nothing read | **conjunctions**: the equations are fields of `∧`/record locals |
+| `commit_chain` | each branch | premises proved by derived terms (`Succ(a).le_trans(b, c, first, bc)`) | **premises**, some needing a search (`Synth`) |
+| `BitVec::sub_bits_cons_leaf` | each of eight branches | per branch, after a `Bool` split and computation | **case splits** (R4) and definitional steps |
+
+What it says, in order of how much it would unlock:
+
+1. **Premises** ([grind-lemma-premises](../issues/grind-lemma-premises.md)):
+   the most common reason a named lemma cannot be used. Most are a `Bool`
+   test or an order fact the branch already has as a local.
+2. **Definitional equalities**
+   ([grind-definitional-equalities](../issues/grind-definitional-equalities.md)):
+   the number and integer lemmas are stated on the constructors' functions
+   (`isucc`, `negOfNat`), while goals hold the computed forms. The hand
+   proofs cross these silently, because the kernel compares up to
+   conversion.
+3. **Conjunctions** ([grind-read-conjunctions](../issues/grind-read-conjunctions.md))
+   and **constructor facts** ([grind-constructor-facts](../issues/grind-constructor-facts.md)):
+   small readers, each needed by a whole family of native proofs.
+4. **Case splits** ([grind-splits-and-theories](../issues/grind-splits-and-theories.md)):
+   the bit-vector and float proofs split before they chain.
+
+Two defects the sweep found in grind itself are fixed here:
+
+- **Evaluation fuel.** The host gives the evaluation between two requests a
+  fixed fuel, and one round (closing the graph, matching four lemmas,
+  rendering the report) outgrew it on a 29-node graph. Each lemma's
+  matching, and the closed graph, are now their own evaluations (`settled`
+  asks the host about a number that depends on each piece). The report's
+  class listing read every class's members off the class list, cubic in
+  the nodes; it now reads the class table once.
+- The report spells terms as the kernel's calls (`neg(add(a, …))`), the
+  general diagnostic gap of
+  [diagnostic-operator-resugaring](../issues/diagnostic-operator-resugaring.md),
+  which grind's report is now a customer of.
+
+No library proof was replaced. The proofs grind closes today are the ones
+whose instances are written out, and a `grind_with` naming those instances
+is no shorter than the hand `trans` chain. The replacements come with
+premises.
