@@ -404,8 +404,8 @@ fn is_statement_form(e: &Expr) -> bool {
 /// or a statement form.
 fn is_imperative_statement(s: &Stmt) -> bool {
     matches!(s, Stmt::Let { expr, .. } if matches!(&expr.kind, ExprKind::App { head, args, .. }
-        if args.len() == 1 && matches!(&head.kind, ExprKind::Var(n)
-            if n == crate::imperative::ASSIGN || n == crate::imperative::STMT)))
+        if !args.is_empty() && matches!(&head.kind, ExprKind::Var(n)
+            if n == crate::imperative::ASSIGN || n == crate::imperative::STMT || n == crate::imperative::FOR)))
 }
 
 fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
@@ -3273,6 +3273,54 @@ impl Parser {
     /// meaning. The forms the result position reads by its first token
     /// (`split`, `split_all`, a sequent header, `on`, `}`) end the loop
     /// unparsed.
+    /// `for x in e { body }` (docs/sequencing-surface-design.md §5.2): the
+    /// marker `\0for(e, λ x => body)` at a private name, for
+    /// [`crate::imperative`] to thread the `let mut` locals the body assigns
+    /// and the elaborator to lift into a named step over a fold.
+    fn for_stmt(&mut self) -> R<Stmt> {
+        let start = self.bump().span;
+        let (x, xspan) = self.binder_ident("`for` binder")?;
+        self.bump(); // `in`
+        let iter = self.with_record_lit(true, |p| p.expr())?;
+        if !matches!(self.peek(), TokKind::LBrace) {
+            return self.err("a `for` body is a braced block of statements: `for x in xs { … }`");
+        }
+        let body = self.block()?;
+        if !matches!(&body.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT)
+            && !(body.stmts.is_empty() && matches!(body.result.kind, ExprKind::AutoRefl))
+        {
+            return Err(ParseError {
+                msg: "a `for` body ends in a statement, not a value: it reassigns `let mut` locals, \
+                      so it has no result".into(),
+                span: body.result.span,
+            });
+        }
+        if matches!(self.peek(), TokKind::Semi) {
+            self.bump();
+        }
+        let span = start.join(body.span);
+        let body = Expr { span: body.span, kind: ExprKind::Block(Box::new(body)) };
+        let lam = Expr {
+            kind: ExprKind::Lam {
+                binders: vec![LamBinder { name: x, ty: None, implicit: false, span: xspan }],
+                body: Box::new(body),
+            },
+            span,
+        };
+        let marked = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr { kind: ExprKind::Var(crate::imperative::FOR.into()), span }),
+                args: vec![iter, lam],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let name = self.hygienic("for");
+        Ok(Stmt::Let { name, ty: None, expr: marked, span, opaque: false })
+    }
+
     fn block_statements(&mut self, stmts: &mut Vec<Stmt>) -> R<Option<Expr>> {
         loop {
             if self.at_stmt() {
@@ -3286,6 +3334,14 @@ impl Parser {
                 || self.at_sequent_binders()
             {
                 return Ok(None);
+            }
+            // `for x in e { body }` (§5.2): a statement, needing no `;`.
+            if self.at_kw("for")
+                && matches!(self.nth(1), TokKind::Ident(_))
+                && matches!(self.nth(2), TokKind::Ident(w) if w == "in")
+            {
+                stmts.push(self.for_stmt()?);
+                continue;
             }
             // A statement `if` may omit its `else` (§4): only here, at the
             // head of a statement.

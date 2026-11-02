@@ -35,6 +35,16 @@ pub(crate) const ASSIGN: &str = "\0assign";
 pub(crate) const STMT: &str = "\0stmt";
 /// The result of a statement body, which has none.
 pub(crate) const UNIT: &str = "\0unit";
+/// `for x in e { body }`: `\0for(e, λ x => body)`, at a private name.
+pub(crate) const FOR: &str = "\0for";
+/// A `for` once its body is lowered: `\0loop(e, λ x => { body; \0state(v̄) },
+/// v̄)` over the `let mut` locals `v̄` the body assigns, for the elaborator
+/// to lift into a named step over a fold (§5.2).
+pub const LOOP: &str = "\0loop";
+/// The state a lowered loop body ends in: `\0state(v̄)`.
+pub const STATE: &str = "\0state";
+/// After a loop, a local's value out of its result: `\0proj(#forN, v)`.
+pub const PROJ: &str = "\0proj";
 
 fn fail<T>(span: Span, msg: impl Into<String>) -> R<T> { Err(ParseError { span, msg: msg.into() }) }
 
@@ -75,8 +85,25 @@ fn type_of(name: &str, span: Span) -> Ty { Ty { kind: TyKind::TypeOf(Box::new(va
 /// keeps every ordinary block on the path it had.
 fn has_markers(b: &Block) -> bool {
     b.stmts.iter().any(|s| matches!(s, Stmt::Let { expr, .. }
-        if unmark(expr, MUT).is_some() || unmark(expr, ASSIGN).is_some() || unmark(expr, STMT).is_some()))
+        if unmark(expr, MUT).is_some() || unmark(expr, ASSIGN).is_some() || unmark(expr, STMT).is_some()
+            || unmark_for(expr).is_some()))
         || is_unit(&b.result)
+}
+
+/// The iterable, binder and body of a `\0for(e, λ x => body)`.
+fn unmark_for(e: &Expr) -> Option<(&Expr, &LamBinder, &Block)> {
+    let ExprKind::App { head, args, .. } = &e.kind else { return None };
+    if args.len() != 2 || !matches!(&head.kind, ExprKind::Var(n) if n == FOR) { return None; }
+    let ExprKind::Lam { binders, body } = &args[1].kind else { return None };
+    let ExprKind::Block(b) = &body.kind else { return None };
+    Some((&args[0], binders.first()?, b))
+}
+
+fn call(head: &str, args: Vec<Expr>, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::App { head: Box::new(var(head, span)), args, named: vec![], explicit: false, goal_oriented: false },
+        span,
+    }
 }
 
 /// The names a statement body assigns and leaves to its scope: its residual
@@ -129,6 +156,50 @@ fn lower_in(mut b: Block, outer: &[String], next: &mut usize) -> R<Block> {
                         // declared it (module docs).
                         stmts.push(Stmt::Let { name, ty, expr, span, opaque });
                     }
+                } else if let Some((iter, x, body)) = unmark_for(&expr) {
+                    // The loop's state is the `let mut` locals its body
+                    // assigns (§5.2), threaded as the STMT joins are: the
+                    // body lowered with them mutable, each read back after
+                    // the loop, and a residual for a local this block did
+                    // not declare.
+                    let mut vars = Vec::new();
+                    assigned(body, &mut vars);
+                    // The state in declaration order, so `f::State(v̄)` reads
+                    // as the locals were written; a residual's last.
+                    vars.sort_by_key(|v| env.iter().position(|e| e == v).unwrap_or(usize::MAX));
+                    if vars.is_empty() {
+                        return fail(span,
+                            "this `for` assigns no `let mut` local, so it computes nothing: in pure code \
+                             a loop only reassigns locals");
+                    }
+                    let mut inner = env.clone();
+                    for v in &vars {
+                        if !inner.contains(v) { inner.push(v.clone()); }
+                    }
+                    let mut lowered = lower_in(body.clone(), &inner, next)?;
+                    let end = lowered.result.span;
+                    lowered.result = Box::new(call(STATE, vars.iter().map(|v| var(v, end)).collect(), end));
+                    let lam = Expr {
+                        kind: ExprKind::Lam {
+                            binders: vec![x.clone()],
+                            body: Box::new(Expr { span: lowered.span, kind: ExprKind::Block(Box::new(lowered)) }),
+                        },
+                        span,
+                    };
+                    let mut args = vec![iter.clone(), lam];
+                    args.extend(vars.iter().map(|v| var(v, span)));
+                    stmts.push(Stmt::Let { name: name.clone(), ty: None, expr: call(LOOP, args, span), span, opaque });
+                    for v in vars {
+                        let read = call(PROJ, vec![var(&name, span), var(&v, span)], span);
+                        let mine = env.contains(&v);
+                        stmts.push(Stmt::Let {
+                            name: v.clone(),
+                            ty: if mine { Some(type_of(&v, span)) } else { None },
+                            expr: if mine { read } else { marked(ASSIGN, read, span) },
+                            span,
+                            opaque: false,
+                        });
+                    }
                 } else if let Some(form) = unmark(&expr, STMT) {
                     let mut vars = Vec::new();
                     assigned_by_form(form, &mut vars);
@@ -146,8 +217,29 @@ fn lower_in(mut b: Block, outer: &[String], next: &mut usize) -> R<Block> {
                     for v in &vars {
                         if !inner.contains(v) { inner.push(v.clone()); }
                     }
-                    for v in vars {
-                        let joined = join(form, &v, &inner, next)?;
+                    // Every copy of the form reads the locals as they were
+                    // before it: with several, each join lands in a private
+                    // name first, and the locals are rebound after the last.
+                    let staged = vars.len() > 1;
+                    let mut values = Vec::with_capacity(vars.len());
+                    for v in &vars {
+                        let joined = join(form, v, &inner, next)?;
+                        if staged {
+                            let tmp = format!("#stage{}", *next);
+                            *next += 1;
+                            stmts.push(Stmt::Let {
+                                name: tmp.clone(),
+                                ty: Some(type_of(v, form.span)),
+                                expr: joined,
+                                span: form.span,
+                                opaque: false,
+                            });
+                            values.push(var(&tmp, form.span));
+                        } else {
+                            values.push(joined);
+                        }
+                    }
+                    for (v, joined) in vars.into_iter().zip(values) {
                         let mine = env.contains(&v);
                         stmts.push(Stmt::Let {
                             name: v.clone(),
@@ -218,6 +310,18 @@ fn find_residue(e: &Expr, error: &mut Option<ParseError>) {
                         "`{name}` is not mutable: declare it `let mut {name}` (an assignment reaches a \
                          `let mut` local of its own block or of a statement body inside it, never \
                          through a λ or a block in value position)"),
+                });
+                return;
+            }
+        }
+        for s in &b.stmts {
+            if let Stmt::Let { expr, span, .. } = s
+                && unmark_for(expr).is_some()
+            {
+                *error = Some(ParseError {
+                    span: *span,
+                    msg: "a `for` is a statement of a block that declares the `let mut` locals it \
+                          assigns".into(),
                 });
                 return;
             }

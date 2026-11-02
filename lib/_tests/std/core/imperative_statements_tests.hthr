@@ -100,3 +100,93 @@ fn retyped() → Nat {
     x := True;
     0
 }
+
+// ---- `for` loops (§5.2): a named step over `List::foldl` ----
+
+// One local: the step is `sum::step(n, x)`, the local then the element.
+fn sum(xs: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs { n := n + x }
+    n
+}
+theorem sum_lit(): sum([1, 2, 3]) = 6 { refl }
+theorem sum_step(n, x: Nat): sum::step(n, x) = n + x { refl }
+// Neutral: the function is the fold of its step.
+theorem sum_is_fold(xs: List<Nat>): sum(xs) = xs.foldl(sum::step, 0) { refl }
+
+// An open element type.
+fn count<A>(xs: List<A>) → Nat {
+    let mut n = 0;
+    for x in xs { n := n + 1 }
+    n
+}
+theorem count_lit(): count<Bool>([True, False]) = 2 { refl }
+theorem count_open<A>(a: A, xs: List<A>): count(List::Cons(a, xs)) = xs.foldl(count::step, count::step(0, a)) { refl }
+
+// Several locals: the state is the record `f::State`, its fields the locals
+// in declaration order, and a statement `if` in the body.
+fn count_words(bytes: List<Nat>) → Nat {
+    let mut words = 0;
+    let mut inside = Bool::False;
+    for b in bytes {
+        if b = 32 {
+            inside := Bool::False
+        } else if inside = Bool::False {
+            inside := Bool::True;
+            words := words + 1
+        }
+    }
+    words
+}
+theorem count_words_lit(): count_words([1, 2, 32, 32, 5, 32]) = 2 { refl }
+theorem count_words_space(s: count_words::State): count_words::step(s, 32).inside = Bool::False { refl }
+theorem count_words_space_keeps(s: count_words::State): count_words::step(s, 32).words = s.words { refl }
+theorem count_words_start(w: Nat):
+    count_words::step(count_words::State(w, Bool::False), 7).words = w + 1 { refl }
+
+// A capture: a local the body reads but does not assign is a parameter of
+// the step, before the state.
+fn scaled(xs: List<Nat>, k: Nat) → Nat {
+    let mut acc = 0;
+    let base = k * 2;
+    for x in xs { acc := acc + x * base }
+    acc
+}
+theorem scaled_lit(): scaled([1, 2], 3) = 18 { refl }
+theorem scaled_step(base, acc, x: Nat): scaled::step(base, acc, x) = acc + x * base { refl }
+
+// A loop under a statement `if`, assigning the function's local.
+fn sum_if(c: Bool, xs: List<Nat>) → Nat {
+    let mut n = 100;
+    if c = True {
+        n := 0;
+        for x in xs { n := n + x }
+    }
+    n
+}
+theorem sum_if_on(): sum_if(True, [4, 5]) = 9 { refl }
+theorem sum_if_off(xs: List<Nat>): sum_if(False, xs) = 100 { refl }
+
+// Nested loops: the inner loop is the outer step's, lowered the same way.
+fn pairs(xs, ys: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        for y in ys { n := n + x * y }
+    }
+    n
+}
+theorem pairs_lit(): pairs([1, 2], [3, 4]) = 21 { refl }
+
+// Iterating something that is not a `List` is refused at the loop.
+// expect-error: a `for` iterates a `List` for now
+fn not_a_list(n: Nat) → Nat {
+    let mut k = 0;
+    for x in n { k := k + 1 }
+    k
+}
+
+// `f_unfold` (§7.1): the function is its lowered body, for tactics that
+// treat `f(x̄)` as an atom.
+theorem sum_unfolds(xs: List<Nat>): sum(xs) = xs.foldl(λ (s: Nat) (x: Nat) => sum::step(s, x), 0) {
+    sum_unfold(xs)
+}

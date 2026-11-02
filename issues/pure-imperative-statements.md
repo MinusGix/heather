@@ -5,7 +5,7 @@ labels: [frontend,syntax,elaboration,ergonomics]
 area: language
 milestone: [lang-sequencing]
 created: 2026-10-31
-updated: 2026-11-01
+updated: 2026-11-02
 ---
 
 Round R3 of `docs/compiler-milestones-proposal.md` (§3.1, §3.3, §7): local state and loops in pure functions.
@@ -39,3 +39,4 @@ R3a: `wc`'s step is written imperatively, and its facts are proved by the existi
 ## Log
 
 - 2026-11-01: Layer 1 landed ([[binding-statements]], docs/sequencing-surface-design.md §13): the lowering is in the parser's continuation walk (try_lower.rs), scoped per block. Statement if/match here needs the join points of [[bind-in-non-tail-match-arms]].
+- 2026-11-02: First R3a slice built (docs/sequencing-surface-design.md §14): let mut, :=, statement if/match with optional else and else-if (parser, staged per-variable joins, residuals for enclosing scopes), and for over lists lifted in the elaborator to f::step/f::State over foldl, with captures, nested loops and f_unfold. Open here: break/continue/return, ranges, labels, while, carrier-scope loops, field-path assignment, mut self, the invariant theorems, and wc's step (its split_all; omega facts hit [[split-all-nested-if-omega-kernel-refusal]]).

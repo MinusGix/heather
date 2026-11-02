@@ -283,7 +283,9 @@ module.exports = grammar({
     assignment_statement: $ => seq(field('name', $.identifier), ':=', field('value', $._expression), ';'),
     // A statement `if`/`match`: its bodies are statements, and it needs no
     // `;` (§5.1).
-    statement_form: $ => choice($.if_expression, $.match_expression),
+    statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement),
+    // `for x in xs { body }` (§5.2): `in` is contextual.
+    for_statement: $ => seq('for', field('binder', $.identifier), 'in', field('iterable', $._head_expression), field('body', $.block)),
     // `e;` discards a computation's result in a block over a carrier.
     expression_statement: $ => seq(field('value', $._expression), ';'),
     // `have x = e;` binds opaquely (docs/have-design.md): one name, never a

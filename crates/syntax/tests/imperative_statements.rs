@@ -58,3 +58,24 @@ fn a_proof_if_of_empty_blocks_stays_a_proof() {
     assert!(parsed.contains("AutoRefl"));
     assert!(!parsed.contains("\\0stmt"));
 }
+
+#[test]
+fn a_for_threads_the_locals_its_body_assigns() {
+    let src = "fn f(xs: L) -> Nat { let mut n = 0; let mut m = 1; for x in xs { m := m + x; n := n + 1 } n }";
+    let parsed = format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{}", e.msg)));
+    assert!(parsed.contains(heather_syntax::LOOP.escape_debug().to_string().as_str()), "{parsed}");
+    assert!(parsed.contains(heather_syntax::PROJ.escape_debug().to_string().as_str()));
+    assert!(!parsed.contains("\\0for\""));
+}
+
+#[test]
+fn a_for_must_assign_and_be_a_statement() {
+    let error = parse_file("fn f(xs: L) -> Nat { let mut n = 0; for x in xs { let y = x; } n }").unwrap_err();
+    assert!(error.msg.contains("`;` to end") || error.msg.contains("expected"), "{}", error.msg);
+    let error = parse_file("fn f(xs: L) -> Nat { let n = 0; for x in xs { n := n + x } n }").unwrap_err();
+    assert!(error.msg.contains("is not mutable"), "{}", error.msg);
+    let error = parse_file("fn f(xs: L) -> Nat { let mut n = 0; for x in xs { x } n }").unwrap_err();
+    assert!(error.msg.contains("ends in a statement, not a value"), "{}", error.msg);
+    let error = parse_file("fn f(xs: L) -> Nat { let mut n = 0; for x in xs {} n }").unwrap_err();
+    assert!(error.msg.contains("assigns no `let mut` local"), "{}", error.msg);
+}

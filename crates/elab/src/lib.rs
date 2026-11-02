@@ -80,6 +80,7 @@ mod application;
 pub mod arithmetic;
 mod attempt;
 mod binding;
+mod loops;
 pub mod cutsat;
 mod cutsat_cert;
 pub mod omega;
@@ -3611,6 +3612,11 @@ impl Elaborator {
         // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,
         // the declaration itself, and — for a `fn` whose body the walk of §3
         // handles — the unfolding companions.
+        // `for` loops lift into a named step over a fold, and the
+        // declaration is the family that results (crates/elab/src/loops.rs).
+        if loops::has_loop(decl) {
+            return self.session_transaction(|me| me.elab_loop_decl(decl));
+        }
         if decl.decreases.is_some() {
             return self.session_transaction(|me| me.elab_measure_decl(decl));
         }
@@ -3787,6 +3793,32 @@ impl Elaborator {
                 })
             }
         }
+    }
+
+    /// A declaration whose body holds `for` loops: each loop's step and
+    /// state, then the declaration over folds (crates/elab/src/loops.rs).
+    /// Each part goes through [`Self::elab_decl`], so a step with loops of
+    /// its own is lowered the same way.
+    fn elab_loop_decl(&mut self, decl: &Decl) -> R<()> {
+        let family = loops::lower(decl, self)?;
+        for part in &family.parts {
+            match part {
+                loops::Part::State(d) => self.elab_inductive(d)?,
+                loops::Part::Decl(d) => self.elab_decl(d)?,
+            }
+        }
+        // §7.1: always attempted, and never a reason to refuse `f` — the
+        // generated statement is untrusted, so a refusal is recorded for a
+        // later `f_unfold` reference to report.
+        if let Err(e) = self.elab_decl_one(&family.unfold, None) {
+            self.unfold_refusals.borrow_mut().insert(family.unfold.name.clone(), format!("the generated `{}` was refused ({e})", family.unfold.name));
+        }
+        // Designated last: the generated parts above are spelled with the
+        // minted names, which a designation takes out of the surface.
+        for (designed, minted) in &family.designations {
+            self.designate_access(designed, minted);
+        }
+        Ok(())
     }
 
     /// `fn f(x̄) -> T decreases e { body }` is not one declaration but the

@@ -905,3 +905,61 @@ nested binds, and `regex`'s ten-link tower is ten statements.
    lowering). `Option` has a code function and pays nothing.
    `issues/tier2-type-code-functions.md` owns the fix; the lowering itself
    need not change.
+
+## 14. R3a's first slice as built (2026-11-02)
+
+Local state, statement forms and `for` over lists. What departs from §4–§7:
+
+1. **Straight-line code and statement forms lower in the parser**
+   (`crates/syntax/src/imperative.rs`), when each block closes, before its
+   binds (§13 item 1). `let mut x = e;` is `let x = e;`, `x := e` is
+   `let x: TypeOf(x) = e;`, and a statement `if`/`match` is one annotated
+   join per local it assigns. The annotation is `TypeOf(x)`, the type of the
+   local's current value, so the parser needs no types; §5.1's "layer 2
+   runs in the elaborator" holds only for loops (item 5).
+2. **A statement body belongs to its enclosing scope.** An inner block
+   cannot tell when it closes whether an assignment in it is an outer
+   local's, so it leaves the assignment as a residual and the block that
+   declared the local rewrites the statement holding it. An inner form that
+   assigns an outer local becomes the residual `x := match c { … { body; x } }`.
+   A residual left at the end of the declaration is the "not mutable"
+   refusal, which also covers assignments through a λ or a block in value
+   position.
+3. **Joins of several locals are staged.** Each copy of the form reads the
+   locals as they were before it, so each join lands in a private
+   `#stageN` first and the locals are rebound after the last. Without this
+   a later copy's condition would read an earlier join's result (found by
+   `count_words`, whose `else if inside = False` reads a local the same `if`
+   assigns).
+4. **`else` is optional only on a statement `if`, and `else if` chains.**
+   `{}` is a statement body next to a real one (`None => {}`), while an
+   `if`/`match` of `{}` alone stays the empty proof block.
+5. **`for x in xs` lifts in the elaborator** (`crates/elab/src/loops.rs`), as
+   `decreases` does: the parser threads the locals the body assigns through
+   a `\0loop` marker, and before the declaration is elaborated the loop
+   becomes `f::step` (and `f::State` for several locals) over
+   `List::foldl`. Each part is an ordinary declaration checked the
+   ordinary way. The step's telescope is the declaration's solver
+   parameters, the captures (the locals the body mentions, at the types the
+   `BinderTys` oracle recovers from the part of the scope they read), the
+   state, then the element. With one local the state is that local, so
+   `sum::step(n, x) = n + x` by `refl`. The names are minted `f#step` and
+   designated `f::step` after `f` exists, as `f#body` is. A step with loops
+   of its own is lowered the same way.
+6. **`f::State`'s fields follow the locals' declaration order**, not the
+   order the body assigns them, so `count_words::State(words, inside)` reads
+   as the function was written.
+7. **`f_unfold` is generated for functions with a loop**, not yet for every
+   function with a layer-2 statement. It is always attempted and never a
+   reason to refuse `f`.
+8. **Not built yet:** `break`/`continue`/`return` (`ForStep`, `List::for_in`),
+   ranges, labels, `while` (both kinds), loops in a carrier scope (§6),
+   assignment to field paths, `mut self`, destructuring `for` binders, and
+   loops under a `match` arm that binds. A `for` iterates a `List` only.
+   A loop inside a statement `if` that assigns several locals is copied
+   into each join, and so lifted once per copy.
+9. **Step facts by `split_all; omega` over a nested `if` are refused by the
+   kernel**, a bug that hand-written functions of the same shape show too
+   (`issues/split-all-nested-if-omega-kernel-refusal.md`). Facts by `refl`
+   at a neutral state work (the probes in
+   `lib/_tests/std/core/imperative_statements_tests.hthr`).
