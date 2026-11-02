@@ -134,7 +134,7 @@ impl Elaborator {
         debug_assert_eq!(decl.kind, DeclKind::Fn);
         let r = self.elab_meta_decl_inner(decl);
         // The oracle padding must not outlive the declaration, error or not.
-        self.meta_pushed.borrow_mut().clear();
+        self.scope.meta_pushed.borrow_mut().clear();
         r
     }
 
@@ -175,7 +175,7 @@ impl Elaborator {
                     menv.pushed.push(MetaBinder::Ctx {
                         name: p.name.clone(),
                     });
-                    self.meta_pushed.borrow_mut().push(GlobalBinding::Ctx);
+                    self.scope.meta_pushed.borrow_mut().push(GlobalBinding::Ctx);
                     sig.push(Sig::Ctx);
                 }
                 // `TyCode(g)` as an **ordinary parameter**: a code-of-a-type
@@ -369,7 +369,7 @@ impl Elaborator {
                 lands_in_psi: false,
             };
             if !self
-                .gate
+                .policy.gate
                 .as_ref()
                 .is_some_and(|g| g.admits(&self.psi, &item))
             {
@@ -395,7 +395,7 @@ impl Elaborator {
                     site: crate::KernelSite::Other,
                 })?;
                 let unsealed = recording.finish();
-                if let Some(g) = self.gate.as_ref() {
+                if let Some(g) = self.policy.gate.as_ref() {
                     g.accepted(&self.psi, &item, &unsealed);
                 }
             }
@@ -478,9 +478,9 @@ impl Elaborator {
         let [heather_syntax::ast::Item::Decl(sig_decl)] = &file.items[..] else {
             unreachable!("a slot's expected signature is one declaration")
         };
-        let saved = self.meta_pushed.replace(Vec::new());
+        let saved = self.scope.meta_pushed.replace(Vec::new());
         let elaborated = self.meta_sig(sig_decl);
-        self.meta_pushed.replace(saved);
+        self.scope.meta_pushed.replace(saved);
         let (_, _, sig, want_res, want_res_lvl) = elaborated.map_err(|e| ElabError::Elab {
             msg: format!(
                 "`{}`'s expected signature does not elaborate in this file — it needs \
@@ -800,7 +800,7 @@ impl Elaborator {
                 ty: Rc::clone(&ty_i),
                 level: level.clone(),
             });
-            self.meta_pushed.borrow_mut().push(GlobalBinding::Tm {
+            self.scope.meta_pushed.borrow_mut().push(GlobalBinding::Tm {
                 ctx: ctx_i,
                 layer: Layer::Code,
                 ty: ty_i,
@@ -821,12 +821,12 @@ impl Elaborator {
         // code recursors range over.
         pcx.quoted = true;
         let expected_p = (*qty).clone().shift_global(n);
-        self.quote_depth.set(self.quote_depth.get() + 1);
+        self.scope.quote_depth.set(self.scope.quote_depth.get() + 1);
         let payload_t = self.elab_check(&pcx, payload, &expected_p, &qlvl);
-        self.quote_depth.set(self.quote_depth.get() - 1);
+        self.scope.quote_depth.set(self.scope.quote_depth.get() - 1);
         // The letbox padding must not outlive this quote, error or not.
         {
-            let mut mp = self.meta_pushed.borrow_mut();
+            let mut mp = self.scope.meta_pushed.borrow_mut();
             let keep = mp.len() - n as usize;
             mp.truncate(keep);
         }
@@ -846,7 +846,7 @@ impl Elaborator {
                 Rc::new(payload_t),
                 &expected_p,
                 &qlvl,
-                self.fuel,
+                self.policy.fuel,
             ) {
                 Ok(t) => (*t).clone(),
                 Err(e) => {
@@ -940,7 +940,7 @@ impl Elaborator {
             Layer::Prog,
             &cx.gamma,
             payload,
-            self.fuel,
+            self.policy.fuel,
         )
         .map_err(|_| ElabError::Elab {
             msg: "emitted code does not type at this use site".into(),
@@ -1093,7 +1093,7 @@ impl Elaborator {
             heather_kernel::layer::Layer::Prog,
             &cx.gamma,
             payload,
-            self.fuel,
+            self.policy.fuel,
         )
         .map_err(|_| ElabError::Elab {
             msg: format!(
@@ -1291,12 +1291,12 @@ impl Elaborator {
             // The telescope's globals go into the oracle padding for the arm's
             // elaboration: nothing can *name* them, but every ambient global an
             // arm body does name is that many indices further out.
-            self.meta_pushed
+            self.scope.meta_pushed
                 .borrow_mut()
                 .extend(shape.globals.iter().cloned());
             let arm_t = self.elab_check(&acx, &arm.body, &shape.ty, &shape.level);
             {
-                let mut mp = self.meta_pushed.borrow_mut();
+                let mut mp = self.scope.meta_pushed.borrow_mut();
                 let keep = mp.len() - shape.globals.len();
                 mp.truncate(keep);
             }

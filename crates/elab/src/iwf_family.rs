@@ -223,7 +223,7 @@ impl Elaborator {
     /// for [`Self::share_registered_lowering`]. A miss (other arguments,
     /// other globals) replaces the entry.
     fn share_iwf_part(&self, tag: u32, index: bool, fresh: Type) -> Rc<Type> {
-        let mut memo = self.iwf_part_memo.borrow_mut();
+        let mut memo = self.memos.iwf_part_memo.borrow_mut();
         match memo.get(&(tag, index)) {
             Some(kept) if **kept == fresh => Rc::clone(kept),
             _ => {
@@ -962,7 +962,7 @@ impl Elaborator {
         jcx.push("#z".into(), fam.ty_at(Term::Var(LocalVar(0)), 1), fam.lvl());
         let psi = self.goal_psi();
         let fits = |m: &Type| {
-            heather_kernel::typing::check_type(&psi, 0, Layer::Prog, &jcx.gamma, m, mlvl, self.fuel)
+            heather_kernel::typing::check_type(&psi, 0, Layer::Prog, &jcx.gamma, m, mlvl, self.policy.fuel)
                 .is_ok()
         };
         if let Some(inv) = self.iwf_inverted_motive(cx, ind, fam, motive, mlvl, span)?

@@ -294,7 +294,7 @@ impl Elaborator {
         let mut mcx = cx.clone();
         mcx.push("_".to_string(), (**carrier).clone(), carrier_level.clone());
         let psi = self.goal_psi();
-        typing::check_type(&psi, 0, Layer::Prog, &mcx.gamma, &motive, lvl, self.fuel).map_err(|_| {
+        typing::check_type(&psi, 0, Layer::Prog, &mcx.gamma, &motive, lvl, self.policy.fuel).map_err(|_| {
             ElabError::Elab {
                 msg: format!(
                     "`rewrite`: abstracting the left side{} from {what} does not leave a type: \
@@ -562,7 +562,7 @@ impl Elaborator {
     /// Do two terms scoped in `cx` convert, at the first one's type?
     fn terms_convert(&self, cx: &Cx, a: &Term, b: &Term) -> bool {
         let oracle = self.goal_oracle();
-        let Ok((ty, level)) = typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, a, self.fuel) else {
+        let Ok((ty, level)) = typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, a, self.policy.fuel) else {
             return false;
         };
         self.motive_candidate_converts(cx, b, a, &ty, &level)

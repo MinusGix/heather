@@ -179,11 +179,11 @@ impl Elaborator {
         }
         // Everything past here depends only on the declaration, so it is
         // computed once (see [`Elaborator::result_only_memo`]).
-        if let Some(&hit) = self.result_only_memo.borrow().get(&info.abs) {
+        if let Some(&hit) = self.memos.result_only_memo.borrow().get(&info.abs) {
             return hit;
         }
         let hit = self.walk_for_result_only(info.abs, &params);
-        self.result_only_memo.borrow_mut().insert(info.abs, hit);
+        self.memos.result_only_memo.borrow_mut().insert(info.abs, hit);
         hit
     }
 

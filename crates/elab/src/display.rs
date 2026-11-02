@@ -93,7 +93,7 @@ impl Elaborator {
     /// The first Ψ index past every binding the elaborator knows, where
     /// display-only placeholder globals start.
     pub(crate) fn placeholder_base(&self) -> u32 {
-        self.psi.bindings.len() as u32 + self.global_padding() + self.meta_pushed.borrow().len() as u32
+        self.psi.bindings.len() as u32 + self.global_padding() + self.scope.meta_pushed.borrow().len() as u32
     }
 
     /// A type mentioning placeholder globals (from [`Self::placeholder_base`]

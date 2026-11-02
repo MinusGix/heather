@@ -1443,7 +1443,7 @@ impl Elaborator {
         let shown = tactic_name(tactic);
         if let heather_syntax::ast::ExprKind::Var(name) = &tactic.kind {
             if self.key_of(name).is_none() && !self.shadowed(cx, name) {
-                if let Some(make) = self.native_tactics.borrow().get(name.as_str()) {
+                if let Some(make) = self.policy.native_tactics.borrow().get(name.as_str()) {
                     let mut speaker: Box<dyn NativeTactic> = make();
                     return self.run_tactic(cx, &mut speaker, &shown, goal, lvl, Vec::new(), span);
                 }
@@ -1498,9 +1498,9 @@ impl Elaborator {
             plain: Cell::new(None),
             no_goal: keyword == "generate",
         });
-        let outer = self.by_quoting.replace(Some(Rc::clone(&quoting)));
+        let outer = self.scope.by_quoting.replace(Some(Rc::clone(&quoting)));
         let term = self.elab_check(cx, e, &dom, &dom_level);
-        self.by_quoting.replace(outer);
+        self.scope.by_quoting.replace(outer);
         let term = term?;
         let Some(closed) = crate::unification::strengthen_tm(&LocalCtx::nil(), &term, cx.gamma.len() as u32) else {
             return err(
@@ -1526,7 +1526,7 @@ impl Elaborator {
     /// term of the goal's context, not of the tactic expression's own
     /// binders.
     pub(crate) fn quote_for_by(&self, cx: &Cx, e: &Expr, expected: &Type, lvl: &Level) -> R<Option<Term>> {
-        let Some(q) = self.by_quoting.borrow().clone() else {
+        let Some(q) = self.scope.by_quoting.borrow().clone() else {
             return Ok(None);
         };
         if q.plain.get() == Some(e.span) {
@@ -1576,9 +1576,9 @@ impl Elaborator {
         // Inferred for real, with quoting off: what is quoted is an
         // ordinary term, and its dependencies and notes are this
         // elaborator's.
-        let outer = self.by_quoting.replace(None);
+        let outer = self.scope.by_quoting.replace(None);
         let inferred = self.elab_infer(cx, e);
-        self.by_quoting.replace(outer);
+        self.scope.by_quoting.replace(outer);
         let (term, ty, level) = inferred?;
         let d = (cx.gamma.len() - q.root.len()) as u32;
         let (Some(term), Some(ty)) = (
@@ -2336,7 +2336,7 @@ impl Elaborator {
     fn kernel_type(&self, run: &Run, at: usize, t: &Term) -> Option<(Type, Level)> {
         let cx = run.cx(at).ok()?;
         let oracle = self.goal_oracle();
-        heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, t, self.fuel).ok()
+        heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, t, self.policy.fuel).ok()
     }
 
     /// One layer of a handle, read the way the diagnostics read it
@@ -3227,7 +3227,7 @@ impl Elaborator {
     /// `leaves` says, and hand back what they did.
     fn build(&self, cx: &Cx, skeleton: &Skeleton, goal: &Type, lvl: &Level, leaves: Leaves, span: Span) -> (R<Term>, Leaves) {
         let state = Rc::new(RefCell::new(leaves));
-        let outer = self.host_leaves.replace(Some(Rc::clone(&state)));
+        let outer = self.scope.host_leaves.replace(Some(Rc::clone(&state)));
         let built = match skeleton {
             Skeleton::Cases { scrut, ty, level, motive, equation, arms } => self.elab_convoy(
                 cx,
@@ -3245,14 +3245,14 @@ impl Elaborator {
             ),
             Skeleton::Constructor(e) => self.elab_check(cx, e, goal, lvl),
         };
-        self.host_leaves.replace(outer);
+        self.scope.host_leaves.replace(outer);
         let leaves = state.borrow().clone();
         (built, leaves)
     }
 
     /// Leaf `k` of the split being elaborated (see [`Leaves`]).
     pub(crate) fn host_leaf(&self, cx: &Cx, k: usize, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
-        let Some(state) = self.host_leaves.borrow().clone() else {
+        let Some(state) = self.scope.host_leaves.borrow().clone() else {
             return err("a tactic's split leaf outside its split", span);
         };
         let mut leaves = state.borrow_mut();
@@ -3279,7 +3279,7 @@ impl Elaborator {
 
     /// The type at a generated declaration's leaf `k` (see [`Leaves`]).
     pub(crate) fn host_ty_leaf(&self, cx: &Cx, k: usize, span: Span) -> R<(Type, Level)> {
-        let Some(state) = self.host_leaves.borrow().clone() else {
+        let Some(state) = self.scope.host_leaves.borrow().clone() else {
             return err("a generated declaration's type outside its declaration", span);
         };
         let leaves = state.borrow();
@@ -3583,9 +3583,9 @@ impl Elaborator {
         fills.push((Held::Type(result.clone(), level.clone()), n));
         fills.push((Held::Term(m.body.clone(), result.clone(), level.clone()), n));
         let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
-        let outer = self.host_leaves.replace(Some(state));
+        let outer = self.scope.host_leaves.replace(Some(state));
         let published = self.elab_decl(&decl);
-        self.host_leaves.replace(outer);
+        self.scope.host_leaves.replace(outer);
         published
     }
 
@@ -3650,7 +3650,7 @@ impl Elaborator {
     /// Make `name` available as `by name` (design §8a). A name a source file
     /// declares, or a local, takes precedence over a native tactic.
     pub fn register_native_tactic(&mut self, name: &str, make: fn() -> Box<dyn NativeTactic>) {
-        self.native_tactics.borrow_mut().insert(name.to_string(), make);
+        self.policy.native_tactics.borrow_mut().insert(name.to_string(), make);
     }
 }
 

@@ -1709,13 +1709,13 @@ impl Elaborator {
         let key = (Rc::as_ptr(ind) as usize, self.in_generated());
         let psi = self.psi.bindings.len();
         if memo {
-            let hit = self.named_type_memo.borrow().get(&key).map(|(_, at, hit)| (*at, hit.clone()));
+            let hit = self.memos.named_type_memo.borrow().get(&key).map(|(_, at, hit)| (*at, hit.clone()));
             if let Some((at, (ty, level))) = hit.filter(|(at, _)| *at <= psi) {
                 if at == psi {
                     return Ok((ty, level));
                 }
                 let out = self.share_registered_lowering(ind.tag, (ty.shift_global((psi - at) as u32), level));
-                self.named_type_memo.borrow_mut().insert(key, (Rc::clone(ind), psi, out.clone()));
+                self.memos.named_type_memo.borrow_mut().insert(key, (Rc::clone(ind), psi, out.clone()));
                 return Ok(out);
             }
         }
@@ -1730,7 +1730,7 @@ impl Elaborator {
         // any depth. Hiding the use site's binders should make every bare
         // lowering closed; this is the backstop, paid once per miss.
         if memo && out.0.shift_local(1) == out.0 {
-            self.named_type_memo.borrow_mut().insert(key, (ind, psi, out.clone()));
+            self.memos.named_type_memo.borrow_mut().insert(key, (ind, psi, out.clone()));
         }
         Ok(out)
     }
@@ -6301,7 +6301,7 @@ impl Elaborator {
                 Rc::new(side.shift_local(2)), &index, span,
             )?;
             Ok(oracle
-                .nat_value(&mcx.gamma, &Rc::new(probe), self.fuel)
+                .nat_value(&mcx.gamma, &Rc::new(probe), self.policy.fuel)
                 .and_then(|k| usize::try_from(k).ok())
                 .filter(|&k| k < ind.ctors.len()))
         };
