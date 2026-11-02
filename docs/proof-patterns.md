@@ -111,9 +111,9 @@ property of Heather.
   is the `match` a self-call descends through
   ([[recursion-guard-takes-nearest-parameter-match]]). Not yet in a theorem
   about the split parameter, whose ih mentions it; split in a helper there
-  ([[recursion-case-split-dependent-ih]]). The outermost `match` on a
-  parameter is still the guard even when nothing descends through it
-  ([[recursion-outer-match-takes-guard-without-descent]]).
+  ([[recursion-case-split-dependent-ih]]). An outer split works too, unless
+  the calls change its parameter: then the branch is refused, since the
+  recursive calls would skip it ([[recursion-branch-on-varied-parameter]]).
 - A motive-less nested match on a `Cons` tail needs a written motive
   ([[nested-match-on-list-tail-motive]]).
 - **Don't match on a large theorem call's result.** `match lemma(..) as
