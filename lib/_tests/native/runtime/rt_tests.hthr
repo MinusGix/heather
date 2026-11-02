@@ -257,6 +257,32 @@ theorem count_down_body_reflects(n, acc: BitVec(64)): count_down_rt().meaning(co
     match h: n.eq_bit(BitVec::ofNat(0)) { True => acc, False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)) } { refl }
 
 // ---------------------------------------------------------------------------
+// A byte read and a byte write. A write is a primitive returning the new
+// buffer; whether it may reuse the old one's storage is the `Unique` fact's
+// question (lib/lang/facts/unique.hthr), not the meaning's.
+
+fn bump(xs: List<BitVec(8)>, i: BitVec(64)) → BitVec(8) {
+    let ys = xs.with_byte(i, xs.byte_at(i).add(BitVec::ofNat(1)));
+    ys.byte_at(BitVec::ofNat(0))
+}
+
+fn bump_rt() → Fun {
+    Fun([Bytes(0), Word(64)], Word(8),
+        Let(Prim(Get(0), [1, 0]),
+        Let(Lit(Word(8), 1),
+        Let(Prim(Add(8), [1, 0]),
+        Let(Prim(Set(0), [4, 3, 0]),
+        Let(Lit(Word(64), 0),
+            Prim(Get(0), [1, 0])))))))
+}
+
+fn bump_world() → World { World(RecInfo::none, [bump_rt().sig()], Pair(bump, trivial)) }
+
+theorem bump_reflected(): True { by reflects_as(["bump"], [], [bump_rt()]) }
+
+theorem bump_reflects(xs: List<BitVec(8)>, i: BitVec(64)): bump_rt().meaning(bump_world())(xs, i) = bump(xs, i) { refl }
+
+// ---------------------------------------------------------------------------
 // Refusals name their reason.
 
 fn helper(a: BitVec(64)) → BitVec(64) { a.add(a) }

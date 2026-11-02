@@ -176,6 +176,15 @@ fn Ty::curry(tys: Nat → RecInfo, r: Ty, ps: List<Ty>)
 }
 
 // ---------------------------------------------------------------------------
+// Byte buffers: a read and a write at a word index. Out of range, the read
+// is 0 and the write changes nothing (a setup that lowers them checks the
+// index, or carries `InBounds`).
+
+fn List::byte_at(self xs: List<BitVec(8)>, i: BitVec(64)) → BitVec(8) { xs.nth(i.toNat()).unwrap_or(BitVec::ofNat(0)) }
+
+fn List::with_byte(self xs: List<BitVec(8)>, i: BitVec(64), v: BitVec(8)) → List<BitVec(8)> { xs.update(i.toNat(), λ _ => v) }
+
+// ---------------------------------------------------------------------------
 // Primitives: the operations a setup may know, each with its signature and
 // the Heather function it means. A setup's primitive table says which of
 // them it lowers (§7.1).
@@ -186,6 +195,10 @@ inductive Op {
     Conj, Disj, Neg,
     // `x.zero_extend(extra)` of a `BitVec(w)`.
     Zext(w: Nat, extra: Nat),
+    // `xs.byte_at(i)` and `xs.with_byte(i, v)` of a byte buffer. A write
+    // consumes its buffer: in place when nothing reads the old one after it
+    // (`Unique`, lib/lang/facts/unique.hthr), a copy otherwise.
+    Get(cap: Nat), Set(cap: Nat),
 }
 
 fn Op::params(self o: Op) → List<Ty> {
@@ -195,6 +208,7 @@ fn Op::params(self o: Op) → List<Ty> {
         Eq(w) => [Word(w), Word(w)], Ult(w) => [Word(w), Word(w)], Slt(w) => [Word(w), Word(w)],
         Conj => [Bit, Bit], Disj => [Bit, Bit], Neg => [Bit],
         Zext(w, _) => [Word(w)],
+        Get(c) => [Bytes(c), Word(64)], Set(c) => [Bytes(c), Word(64), Word(8)],
     }
 }
 
@@ -204,6 +218,7 @@ fn Op::result(self o: Op) → Ty {
         Eq(_) => Bit, Ult(_) => Bit, Slt(_) => Bit,
         Conj => Bit, Disj => Bit, Neg => Bit,
         Zext(w, extra) => Word(extra + w),
+        Get(_) => Word(8), Set(c) => Bytes(c),
     }
 }
 
@@ -221,6 +236,8 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Disj => λ (x: Bool) (y: Bool) => x.or(y),
         Neg => λ (x: Bool) => x.not(),
         Zext(w, extra) => λ (x: BitVec(w)) => x.zero_extend(extra),
+        Get(_) => λ (xs: List<BitVec(8)>) (i: BitVec(64)) => xs.byte_at(i),
+        Set(_) => λ (xs: List<BitVec(8)>) (i: BitVec(64)) (v: BitVec(8)) => xs.with_byte(i, v),
     }
 }
 
@@ -435,6 +452,7 @@ fn Op::code(self o: Op) → Pair<Nat, Pair<Nat, Nat>> {
         Eq(w) => Pair(5, Pair(w, 0)), Ult(w) => Pair(6, Pair(w, 0)), Slt(w) => Pair(7, Pair(w, 0)),
         Conj => Pair(8, Pair(0, 0)), Disj => Pair(9, Pair(0, 0)), Neg => Pair(10, Pair(0, 0)),
         Zext(w, extra) => Pair(11, Pair(w, extra)),
+        Get(c) => Pair(12, Pair(c, 0)), Set(c) => Pair(13, Pair(c, 0)),
     }
 }
 
