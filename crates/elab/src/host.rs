@@ -392,6 +392,8 @@ pub enum Request {
     Synth(u64),
     /// A term's application spine, by its handle.
     Spine(u64),
+    /// The fields of a one-constructor value.
+    Fields(RExpr),
     /// What a run says about itself, rendered like `Fail`'s message and
     /// notes, and reported only if the run succeeds.
     Say(String, Vec<NoteView>),
@@ -465,6 +467,9 @@ pub enum Answer {
     Holes(Result<Vec<u64>, String>),
     Arms(Result<ArmsView, String>),
     Spine(Result<SpineView, String>),
+    /// The type's reference, and each field's name and a handle to its
+    /// projection (`Fields`).
+    Fields(Result<(u64, Vec<(String, u64)>), String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -815,6 +820,14 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(out)
             }
             Answer::Spine(Err(why)) => self.call("host_no_spine", vec![self.string_value(why)?]),
+            Answer::Fields(Ok((ty, fs))) => {
+                let mut out = self.call("host_fields", vec![self.lit(*ty)])?;
+                for (name, h) in fs {
+                    out = self.call("host_fields_next", vec![out, self.string_value(name)?, self.lit(*h)])?;
+                }
+                Ok(out)
+            }
+            Answer::Fields(Err(why)) => self.call("host_no_fields", vec![self.string_value(why)?]),
         }
     }
 
@@ -896,6 +909,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             26 => {
                 let (msg, notes) = self.failure()?;
                 Ok(Step::Ask(Request::Say(msg, notes)))
+            }
+            27 => {
+                let mut budget = READ_BUDGET;
+                Ok(Step::Ask(Request::Fields(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
             }
             other => Err(format!("a request tree with tag {other}")),
         }
@@ -1735,6 +1752,7 @@ impl Elaborator {
                 Request::Arms(h) => Answer::Arms(refusable(self.arms_request(run, h))?),
                 Request::Synth(h) => Answer::Handle(refusable(self.synth_request(run, h, span))?),
                 Request::Spine(h) => Answer::Spine(refusable(self.spine_request(run, h))?),
+                Request::Fields(e) => Answer::Fields(refusable(self.fields_request(run, &e))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2264,6 +2282,67 @@ impl Elaborator {
         let (hty, hlevel) = self.kernel_type(run, at, head).ok_or_else(|| Fault::Ill("the head has no type".into()))?;
         let head = run.issue_shared(at, head, hty, hlevel);
         Ok(SpineView { head, args })
+    }
+
+    /// `Fields(e)`: the term `e`, of a non-indexed inductive type
+    /// with one constructor (a record, `∧`), as the type (a reference, as
+    /// `Lookup` answers its name) and its fields: each one's name
+    /// (its position where it has none) and a handle to its projection, the
+    /// term `h.name` elaborates to (`project_field`), at the field's type.
+    /// Refused for a type of more constructors or none, codata, an indexed
+    /// family, and a type with a field a later field's type mentions (`∃`'s
+    /// `witness`): there a field's type is about the value, not a fact of
+    /// its own (docs/grind-design.md §12).
+    fn fields_request(&self, run: &mut Run, e: &RExpr) -> Result<(u64, Vec<(String, u64)>), Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        let unsolved = || Fault::Ill("it mentions a hole nothing has solved".into());
+        let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
+            run.restore(mark);
+            return Err(unsolved());
+        };
+        let t = Rc::new(t);
+        let cx = run.cx(at)?;
+        // The spelling the inductive is read off is the one projected at,
+        // as `inductive_of` reads it: as written, unspelled, or once in head
+        // normal form (`a.Same(b)` is a definition whose value is a `∧`).
+        let of = |t: &Type| crate::goal_combinators::type_inductive(self, &cx, t);
+        let spelled = std::iter::once(Some(ty.clone()))
+            .chain(std::iter::once_with(|| self.unspell_here(&ty)))
+            .chain(std::iter::once_with(|| self.goal_oracle().whnf_type(&cx.gamma, &ty).ok()))
+            .flatten()
+            .find_map(|s| of(&s).map(|ind| (ind, s)));
+        let Some((ind, record_ty)) = spelled else {
+            return Err(Fault::Ill(format!("`{}` is not an inductive type", self.display_type(&cx, &ty))));
+        };
+        if ind.codata || ind.index.is_some() || ind.ctors.len() != 1 {
+            return Err(Fault::Ill(format!("`{}` is not a one-constructor inductive (codata, an indexed family, or {} constructors)", ind.name, ind.ctors.len())));
+        }
+        let span = run.span;
+        let n = ind.ctors[0].fields.len();
+        // A field a later one's type mentions is the binder of its `Σ`'s
+        // second component; the tag (entry 0) is not a field.
+        let mut cur = self.goal_oracle().whnf_type(&cx.gamma, &record_ty).map_err(|_| Fault::Ill("ran out of fuel exposing the record".into()))?;
+        for step in 0..=n {
+            let Type::Sigma { snd, .. } = cur else { break };
+            let Some(rest) = crate::unification::strengthen_ty(&cx.gamma, &snd, 1) else {
+                if step == 0 {
+                    break;
+                }
+                let name = ind.ctors[0].fields[step - 1].0.clone().unwrap_or_else(|| format!("{}", step - 1));
+                return Err(Fault::Ill(format!("`{}`'s field `{name}` is mentioned by a later field's type", ind.name)));
+            };
+            cur = self.goal_oracle().whnf_type(&cx.gamma, &rest).map_err(|_| Fault::Ill("ran out of fuel exposing the record".into()))?;
+        }
+        let mut out = Vec::with_capacity(n);
+        for (idx, (name, _)) in ind.ctors[0].fields.iter().enumerate() {
+            let (p, pty, plevel) = self
+                .project_field(&cx, &ind, &record_ty, Rc::clone(&t), idx, span)
+                .map_err(|e| Fault::Ill(format!("field {idx} of `{}`: {}", ind.name, elab_message(e))))?;
+            out.push((name.clone().unwrap_or_else(|| format!("{idx}")), run.issue(at, Held::Term(p, pty, plevel))));
+        }
+        Ok((run.global_ref(GlobalKey::Type(ind.tag)), out))
     }
 
     /// A name, elaborated where the `by` is. Elaboration may leave notes and

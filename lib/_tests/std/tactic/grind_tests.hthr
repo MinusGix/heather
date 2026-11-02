@@ -87,6 +87,27 @@ theorem premise_hint(f, g: Nat → Nat, n: Nat, k: (i: Nat) → Succ(i).Le(n) �
 // The report names the locals the premises cite.
 theorem premise_reported(f, g: Nat → Nat, n: Nat, k: (i: Nat) → i < n → f(i) = g(i), a: Nat, h: a < n): f(a) = g(a) { by grind_report([], []) }
 
+// Conjunctions and records of equations (issues/grind-read-conjunctions.md):
+// a one-constructor fact is read field by field, `k.left`, `k.right`, each
+// proved by its projection. Nested, through a definition whose value is a
+// `∧` (`Env::Same`'s shape), a lemma among the fields, a hint, a record that
+// is not `∧`, a field at an open element type, a field that proves a
+// premise, and a checking position.
+theorem conj(a, b, c: Nat, k: a = b ∧ b = c): a = c { by grind() }
+theorem conj_nested(a, b, c, d: Nat, k: (a = b) ∧ ((b = c) ∧ (c = d))): d = a { by grind() }
+fn Pairs(a, b, c: Nat) → Type { (a = b) ∧ (b = c) }
+theorem conj_defined(a, b, c: Nat, k: Pairs(a, b, c)): a = c { by grind() }
+theorem conj_lemma(f, g: Nat → Nat, a, b: Nat, k: ((n: Nat) → f(n) = g(n)) ∧ (g(a) = b)): f(a) = b { by grind() }
+theorem conj_hint(f: Nat → Nat, a, b, c: Nat, k: (n: Nat) → (f(n) = n) ∧ (n = n)): f(f(a)) = a { by grind_with([k(a), k(f(a))]) }
+record Hops(a, b, c: Nat) { ab: a = b, bc: b = c }
+theorem conj_record(f: Nat → Nat, a, b, c: Nat, p: Hops(a, b, c)): f(a) = f(c) { by grind() }
+theorem conj_open<A>(x, y, z: A, k: (x = y) ∧ (y = z)): x = z { by grind() }
+theorem conj_premise(f, g: Nat → Nat, n: Nat, k: (i: Nat) → i < n → f(i) = g(i), a: Nat, h: (a < n) ∧ True): f(a) = g(a) { by grind() }
+theorem conj_checking(f: Nat → Nat, a, b: Nat, k: (a = b) ∧ True): f(b) = f(a) {
+    let p: (f(a) = f(b)) = by grind();
+    sym(p)
+}
+
 // The two sides in different classes: the failure is the graph.
 // expect-error: grind: the two sides are not in one class
 theorem not_closed(f: Nat → Nat, a, b: Nat, h: f(a) = b): f(b) = a { by grind() }
@@ -117,3 +138,16 @@ theorem not_equation(a, b: Nat, h: a = b): a <= b { by grind() }
 // by itself.
 // expect-error: hint 0: not an equation: kept for the premises
 theorem order_hint(a, b, c: Nat, h: a <= b): a = c { by grind_with([h]) }
+// A conjunction none of whose sides is an equation is read as nothing, as
+// before; a record whose field a later field's type mentions (an
+// existential, whose proof is about its witness) is kept whole, and so is
+// `↔`.
+// expect-error: grind: the two sides are not in one class
+theorem conj_no_equation(a, b, c: Nat, k: (a <= b) ∧ (b <= c)): a = c { by grind() }
+record Pinned { here: Nat, there: Nat, same: here = there }
+// expect-error: grind: the two sides are not in one class
+theorem dependent_unread(p: Pinned, x: Nat, h: p.there = x): p.here = x { by grind() }
+// expect-error: grind: the two sides are not in one class
+theorem exists_unread(a, b: Nat, k: ∃ n: Nat, a = b): a = b { by grind() }
+// expect-error: grind: the two sides are not in one class
+theorem iff_unread(a, b: Nat, k: (a = b) ↔ True): a = b { by grind() }
