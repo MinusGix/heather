@@ -260,15 +260,6 @@ fn nested_guard_msg(name: &str) -> String {
     )
 }
 
-fn nested_indexed_msg(name: &str) -> String {
-    format!(
-        "this call to `{name}` sits under a second constructor of an indexed codata type: \
-         nested constructors above a corecursive call are generated for unindexed codata \
-         only so far — name the inner layer as a seed state of its own instead \
-         (issues/codata-nested-guards-indexed.md)"
-    )
-}
-
 enum Kid {
     /// `t: D` — one position, `Unit`.
     Plain,
@@ -347,6 +338,19 @@ impl MParts {
     /// The family at another index `idx`, scoped at depth `k`.
     fn d_of(&self, k: u32, idx: Rc<Term>) -> Type {
         self.sig.shift_local(k).at(idx)
+    }
+
+    /// The same declaration's parts at the index `idx`, scoped `k` binders
+    /// past this one's context: a pending node is built at its child's
+    /// index, not the step's (§5.4 of docs/codata-elaborator-design.md). The
+    /// `k` binders are placeholders, since every reader of `g` takes only
+    /// its length and base (a weakening, or a named signature's unfolding).
+    fn reindexed(&self, k: u32, idx: Rc<Term>) -> MParts {
+        let mut g = self.g.clone();
+        for _ in 0..k {
+            g = g.extended(Rc::new(Type::Unit { level: Level::Zero }), Level::Zero);
+        }
+        MParts::read(&self.d_of(k, idx), &g).expect("`M` at another index is `M`")
     }
 
     /// `o(j, label, pos)`, the index of the child at `pos`, at depth `k`.
@@ -1731,6 +1735,17 @@ impl Elaborator {
         }
     }
 
+    /// The step type over `carrier` at the index `idx` (scoped at depth `k`),
+    /// `F(C)(idx) = Σ(s : S(idx)). Π(p : P(idx, s)). C(o) + ⟦D⟧(o)`: a pending
+    /// node's type at its own index (§5.4). Unindexed every index is `⟨⟩`,
+    /// and this is [`Self::step_ty`].
+    fn node_ty_at(&self, p: &MParts, k: u32, idx: &Rc<Term>, carrier: &Carrier) -> Type {
+        if !p.indexed {
+            return self.step_ty(p, k, carrier);
+        }
+        self.step_ty(&p.reindexed(k, Rc::clone(idx)), 0, &carrier.under(k))
+    }
+
     // -- match (§4) -----------------------------------------------------------
 
     /// `match s ≡ (λo. (case fst o of Q) (snd o)) (out s)`, with `Q(v) =
@@ -2090,13 +2105,15 @@ impl Elaborator {
         };
         // Constructors nested above a self-call (§5.4): the carrier grows one
         // pending-node layer per extra constructor, `C₀ = X`, `C_{j+1} = X +
-        // F(C_j)`. Indexed codata keeps the one-layer carrier, and a nested
-        // call there is refused where it sits.
-        let nest = if p.indexed { 0 } else { self.corec_nesting(cx, selfref, &ind, &body).saturating_sub(1) };
+        // F(C_j)`, families over the index `i` when the declaration has one:
+        // `C_{j+1}(i) = X(i) + F(C_j)(i)`, a pending node sitting at its own
+        // index.
+        let nest = self.corec_nesting(cx, selfref, &ind, &body).saturating_sub(1);
         let mut levels = vec![carrier];
         for j in 0..nest {
             let below = &levels[j];
-            let f = self.step_ty(&p, 1, below);
+            let at_i = if p.indexed { var(0) } else { triv() };
+            let f = self.node_ty_at(&p, 1, &at_i, below);
             let f_level = Self::node_level(&p, below);
             let x = &levels[0];
             levels.push(Carrier {
@@ -2180,45 +2197,61 @@ impl Elaborator {
         };
         let n = site.rank.len();
         let nv = site.varying();
-        // In (body, i, x): the varying parameters are the carrier's
-        // components (of `fst x` when indexed), the fixed ones the outer
-        // binders.
-        let tuple = if p.indexed { Term::FstAt { pair: var(0) } } else { Term::Var(LocalVar(0)) };
         let base = cx.gamma.prefix(n_ty);
-        let mut subst = embed(&base, (n + 2) as u32);
-        for (j, r) in site.rank.iter().enumerate() {
-            let t = match r {
-                None => Term::Var(LocalVar((n - 1 - j + 2) as u32)),
-                Some(r) => tuple_proj(nv, *r, tuple.clone()),
-            };
-            subst = subst.extended(Rc::new(t));
-        }
-        let nest = site.levels.len() - 1;
-        let mut step = if nest == 0 {
-            b.apply_local(&subst)
-        } else {
-            // A nested carrier (§5.4): `case x { inl(v) => the body at v;
-            // inr(node) => node, its children moved up a layer }`. The body
-            // reads its varying parameters off the case's binder.
-            let mut subst = embed(&base, (n + 3) as u32);
+        let li = p.sig.idx_level.clone();
+        // The body at a seed `v : X(i)`, in (body, i, x) past `extra` more
+        // binders, `v` scoped there: the varying parameters are `v`'s
+        // components (of `fst v` when indexed), the fixed ones the outer
+        // binders. Indexed, the body is moved from `g[v]` to `i` along the
+        // seed's equation (docs/codata-indexed-design.md §6).
+        let body_at = |extra: u32, v: Rc<Term>| -> Term {
+            let tuple = if p.indexed { Term::FstAt { pair: Rc::clone(&v) } } else { (*v).clone() };
+            let mut subst = embed(&base, (n as u32) + 2 + extra);
             for (j, r) in site.rank.iter().enumerate() {
                 let t = match r {
-                    None => Term::Var(LocalVar((n - 1 - j + 3) as u32)),
-                    Some(r) => tuple_proj(nv, *r, Term::Var(LocalVar(0))),
+                    None => Term::Var(LocalVar((n - 1 - j) as u32 + 2 + extra)),
+                    Some(r) => tuple_proj(nv, *r, tuple.clone()),
                 };
                 subst = subst.extended(Rc::new(t));
             }
+            let body = b.apply_local(&subst);
+            if !p.indexed {
+                return body;
+            }
+            Term::J {
+                ty_level: li.clone(),
+                motive_level: site.step_level.clone(),
+                ty: Rc::new(p.sig.idx.shift_local(2 + extra)),
+                lhs: Rc::new(p.index.apply_local(&subst)),
+                motive: Rc::new(
+                    m_step_ty(&p.sig, &site.carrier.level, &site.carrier.fam).inst_top(4 + extra, &Term::Var(LocalVar(1))),
+                ),
+                case: Rc::new(body),
+                rhs: var(1 + extra),
+                proof: Rc::new(Term::SndAt { pair: v }),
+            }
+        };
+        // The step's index `i`, at depth `2 + extra` (`⟨⟩` unindexed).
+        let i_at = |extra: u32| if p.indexed { var(1 + extra) } else { triv() };
+        let nest = site.levels.len() - 1;
+        let step = if nest == 0 {
+            body_at(0, var(0))
+        } else {
+            // A nested carrier (§5.4): `case x { inl(v) => the body at v;
+            // inr(node) => node, its children moved up a layer }`. Indexed,
+            // only the `inl` arm moves along an equation: a pending node is
+            // already at `i`.
             let x = &site.levels[0];
             let below = &site.levels[nest - 1];
             Term::Case {
                 lhs_level: x.level.clone(),
                 rhs_level: Self::node_level(&p, below),
                 motive_level: site.step_level.clone(),
-                lhs: Rc::new(x.at(2, &triv())),
-                rhs: Rc::new(self.step_ty(&p, 2, below)),
-                motive: Rc::new(self.step_ty(&p, 3, &site.carrier)),
-                case_l: Rc::new(b.apply_local(&subst)),
-                case_r: Rc::new(self.corec_lift(&p, &site.levels, nest - 1, 3, var(0))),
+                lhs: Rc::new(x.at(2, &i_at(0))),
+                rhs: Rc::new(self.node_ty_at(&p, 2, &i_at(0), below)),
+                motive: Rc::new(self.node_ty_at(&p, 3, &i_at(1), &site.carrier)),
+                case_l: Rc::new(body_at(1, var(0))),
+                case_r: Rc::new(self.corec_lift(&p, &site.levels, nest - 1, 3, &i_at(1), var(0))),
                 scrut: var(0),
             }
         };
@@ -2226,31 +2259,11 @@ impl Elaborator {
             let j = site.rank.iter().position(|x| *x == Some(r)).expect("a varying parameter");
             Ok(Rc::new(Term::Var(LocalVar((n - 1 - j) as u32))))
         })?;
-        let vt = if nest == 0 {
-            vt
-        } else {
-            let below = &site.levels[nest - 1];
-            Term::Inl {
-                lhs_level: site.levels[0].level.clone(),
-                rhs_level: Self::node_level(&p, below),
-                lhs: Rc::new(site.levels[0].at(0, &triv())),
-                rhs: Rc::new(self.step_ty(&p, 0, below)),
-                val: Rc::new(vt),
-            }
-        };
+        // The seed, `⟨varying⟩` (with `refl` of the result index when
+        // indexed), on the left of a nested carrier.
+        let x = &site.levels[0];
         let seed = if p.indexed {
-            let li = p.sig.idx_level.clone();
-            step = Term::J {
-                ty_level: li.clone(),
-                motive_level: site.step_level.clone(),
-                ty: Rc::new(p.sig.idx.shift_local(2)),
-                lhs: Rc::new(p.index.apply_local(&subst)),
-                motive: Rc::new(m_step_ty(&p.sig, &site.carrier.level, &site.carrier.fam).inst_top(4, &Term::Var(LocalVar(1)))),
-                case: Rc::new(step),
-                rhs: var(1),
-                proof: Rc::new(Term::SndAt { pair: var(0) }),
-            };
-            let Type::Sigma { fst_level, snd_level, fst, snd } = site.carrier.at(0, &p.index) else {
+            let Type::Sigma { fst_level, snd_level, fst, snd } = x.at(0, &p.index) else {
                 unreachable!("an indexed carrier is a Σ")
             };
             Term::Pair {
@@ -2263,6 +2276,18 @@ impl Elaborator {
             }
         } else {
             vt
+        };
+        let seed = if nest == 0 {
+            seed
+        } else {
+            let below = &site.levels[nest - 1];
+            Term::Inl {
+                lhs_level: x.level.clone(),
+                rhs_level: Self::node_level(&p, below),
+                lhs: Rc::new(x.at(0, &p.index)),
+                rhs: Rc::new(self.node_ty_at(&p, 0, &p.index, below)),
+                val: Rc::new(seed),
+            }
         };
         Ok(Term::Corec {
             sig: Rc::clone(&p.sig),
@@ -2380,7 +2405,7 @@ impl Elaborator {
                     lhs_level: levels[0].level.clone(),
                     rhs_level: Self::node_level(&p, &levels[j - 1]),
                     lhs: Rc::new(levels[0].at(0, &idx)),
-                    rhs: Rc::new(self.step_ty(&p, 0, &levels[j - 1])),
+                    rhs: Rc::new(self.node_ty_at(&p, 0, &idx, &levels[j - 1])),
                     val: Rc::new(seed),
                 },
             };
@@ -2400,17 +2425,25 @@ impl Elaborator {
             if let Some(at) = nested_self_call(&site.selfref, e) {
                 // A constructor nested above a self-call is a pending node:
                 // the seed `inr(node)` of the layer below, whose step emits
-                // the node (§5.4).
+                // the node (§5.4). Indexed, the node is built at the child's
+                // own index, its payload and children read from there.
                 if j > 0
                     && let Some((i, args)) = self.codata_ctor_app(cx, &site.ind, e)
                 {
                     let below = &levels[j - 1];
-                    let node = self.corec_node(cx, &p, &site.ind, below, i, &args, e.span)?;
+                    let at_idx;
+                    let q = if p.indexed {
+                        at_idx = p.reindexed(0, self.written_index(cx, &idx));
+                        &at_idx
+                    } else {
+                        &p
+                    };
+                    let node = self.corec_node(cx, q, &site.ind, below, i, &args, e.span)?;
                     let pending = Term::Inr {
                         lhs_level: levels[0].level.clone(),
                         rhs_level: Self::node_level(&p, below),
                         lhs: Rc::new(levels[0].at(0, &idx)),
-                        rhs: Rc::new(self.step_ty(&p, 0, below)),
+                        rhs: Rc::new(self.node_ty_at(&p, 0, &idx, below)),
                         val: Rc::new(node),
                     };
                     return Ok(Some(Term::Inl {
@@ -2421,11 +2454,8 @@ impl Elaborator {
                         val: Rc::new(pending),
                     }));
                 }
-                // Indexed codata does not nest yet, and anything else that
-                // corecurses inside an existing tree is unguarded.
-                if p.indexed && self.codata_ctor_app(cx, &site.ind, e).is_some() {
-                    return err(nested_indexed_msg(&site.selfref.written_name), at);
-                }
+                // Anything else that corecurses inside an existing tree is
+                // unguarded.
                 return err(nested_guard_msg(&site.selfref.written_name), at);
             }
             let d_here = p.d_of(0, Rc::clone(&idx));
@@ -2570,83 +2600,99 @@ impl Elaborator {
         Ok(self.step_pair(p, 0, label, carrier, kids))
     }
 
-    /// `C_j ⊂ C_{j+1}` on `c : C_j`, at depth `k` (unindexed, §5.4): a seed
-    /// stays a seed, and a pending node's children move up a layer.
-    fn corec_embed(&self, p: &MParts, levels: &[Carrier], j: usize, k: u32, c: Rc<Term>) -> Term {
+    /// `C_j(idx) ⊂ C_{j+1}(idx)` on `c : C_j(idx)`, at depth `k` (`idx`
+    /// scoped there, `⟨⟩` unindexed; §5.4): a seed stays a seed, and a
+    /// pending node's children move up a layer.
+    #[allow(clippy::too_many_arguments)]
+    fn corec_embed(&self, p: &MParts, levels: &[Carrier], j: usize, k: u32, idx: &Rc<Term>, c: Rc<Term>) -> Term {
         let x = &levels[0];
-        let f_j = || Rc::new(self.step_ty(p, k, &levels[j]));
         if j == 0 {
             return Term::Inl {
                 lhs_level: x.level.clone(),
                 rhs_level: Self::node_level(p, &levels[0]),
-                lhs: Rc::new(x.at(k, &triv())),
-                rhs: f_j(),
+                lhs: Rc::new(x.at(k, idx)),
+                rhs: Rc::new(self.node_ty_at(p, k, idx, &levels[0])),
                 val: c,
             };
         }
+        let idx1 = Rc::new(idx.shift_local(1));
         Term::Case {
             lhs_level: x.level.clone(),
             rhs_level: Self::node_level(p, &levels[j - 1]),
             motive_level: levels[j + 1].level.clone(),
-            lhs: Rc::new(x.at(k, &triv())),
-            rhs: Rc::new(self.step_ty(p, k, &levels[j - 1])),
-            motive: Rc::new(levels[j + 1].at(k + 1, &triv())),
+            lhs: Rc::new(x.at(k, idx)),
+            rhs: Rc::new(self.node_ty_at(p, k, idx, &levels[j - 1])),
+            motive: Rc::new(levels[j + 1].at(k + 1, &idx1)),
             case_l: Rc::new(Term::Inl {
                 lhs_level: x.level.clone(),
                 rhs_level: Self::node_level(p, &levels[j]),
-                lhs: Rc::new(x.at(k + 1, &triv())),
-                rhs: Rc::new(self.step_ty(p, k + 1, &levels[j])),
+                lhs: Rc::new(x.at(k + 1, &idx1)),
+                rhs: Rc::new(self.node_ty_at(p, k + 1, &idx1, &levels[j])),
                 val: var(0),
             }),
             case_r: Rc::new(Term::Inr {
                 lhs_level: x.level.clone(),
                 rhs_level: Self::node_level(p, &levels[j]),
-                lhs: Rc::new(x.at(k + 1, &triv())),
-                rhs: Rc::new(self.step_ty(p, k + 1, &levels[j])),
-                val: Rc::new(self.corec_lift(p, levels, j - 1, k + 1, var(0))),
+                lhs: Rc::new(x.at(k + 1, &idx1)),
+                rhs: Rc::new(self.node_ty_at(p, k + 1, &idx1, &levels[j])),
+                val: Rc::new(self.corec_lift(p, levels, j - 1, k + 1, &idx1, var(0))),
             }),
             scrut: c,
         }
     }
 
-    /// `F(C_j) → F(C_{j+1})` on the node `n`, at depth `k`: the same label,
-    /// each child moved along [`Self::corec_embed`].
-    fn corec_lift(&self, p: &MParts, levels: &[Carrier], j: usize, k: u32, n: Rc<Term>) -> Term {
-        let up = &levels[j + 1];
-        let lw = p.lw.clone();
+    /// `F(C_j)(idx) → F(C_{j+1})(idx)` on the node `n`, at depth `k` (`idx`
+    /// scoped there): the same label, each child moved along
+    /// [`Self::corec_embed`] at its own index.
+    #[allow(clippy::too_many_arguments)]
+    fn corec_lift(&self, p: &MParts, levels: &[Carrier], j: usize, k: u32, idx: &Rc<Term>, n: Rc<Term>) -> Term {
+        // The node's own parts, read at depth `b` past their context: `p`
+        // itself unindexed (at depth `k`); indexed, `p` at `idx`, whose
+        // context already counts the `k` binders.
+        let at_idx;
+        let (q, b, cj, up) = if p.indexed {
+            at_idx = p.reindexed(k, Rc::clone(idx));
+            (&at_idx, 0, levels[j].under(k), levels[j + 1].under(k))
+        } else {
+            (p, k, levels[j].clone(), levels[j + 1].clone())
+        };
+        let lw = q.lw.clone();
         let label = Rc::new(Term::FstAt { pair: Rc::clone(&n) });
-        // Under `λ q`, at depth `k + 1`: the child `snd n q : C_j + ⟦D⟧`.
+        // Under `λ q`, at depth `b + 1`: the child `snd n q : C_j(o) + ⟦D⟧(o)`,
+        // `o` its index; and `o` again in the case's arms.
         let child = Rc::new(Term::AppAt { fun: Rc::new(Term::SndAt { pair: Rc::new(n.shift_local(1)) }), arg: var(0) });
+        let o1 = q.next_tm(b + 1, Rc::new(label.shift_local(1)), var(0));
+        let o2 = Rc::new(o1.shift_local(1));
         let case = Term::Case {
-            lhs_level: levels[j].level.clone(),
+            lhs_level: cj.level.clone(),
             rhs_level: lw.clone(),
             motive_level: Level::join(up.level.clone(), lw.clone()),
-            lhs: Rc::new(levels[j].at(k + 1, &triv())),
-            rhs: Rc::new(p.d_of(k + 1, triv())),
-            motive: Rc::new(self.child_sum(p, up, k + 2, triv())),
+            lhs: Rc::new(cj.at(b + 1, &o1)),
+            rhs: Rc::new(q.d_of(b + 1, Rc::clone(&o1))),
+            motive: Rc::new(self.child_sum(q, &up, b + 2, Rc::clone(&o2))),
             case_l: Rc::new(Term::Inl {
                 lhs_level: up.level.clone(),
                 rhs_level: lw.clone(),
-                lhs: Rc::new(up.at(k + 2, &triv())),
-                rhs: Rc::new(p.d_of(k + 2, triv())),
-                val: Rc::new(self.corec_embed(p, levels, j, k + 2, var(0))),
+                lhs: Rc::new(up.at(b + 2, &o2)),
+                rhs: Rc::new(q.d_of(b + 2, Rc::clone(&o2))),
+                val: Rc::new(self.corec_embed(p, levels, j, k + 2, &o2, var(0))),
             }),
             case_r: Rc::new(Term::Inr {
                 lhs_level: up.level.clone(),
                 rhs_level: lw.clone(),
-                lhs: Rc::new(up.at(k + 2, &triv())),
-                rhs: Rc::new(p.d_of(k + 2, triv())),
+                lhs: Rc::new(up.at(b + 2, &o2)),
+                rhs: Rc::new(q.d_of(b + 2, Rc::clone(&o2))),
                 val: var(0),
             }),
             scrut: child,
         };
         let kids = Term::Lam {
-            dom_level: p.lp.clone(),
+            dom_level: q.lp.clone(),
             cod_level: Level::join(up.level.clone(), lw),
-            dom: Rc::new(p.pos_at(k, Rc::clone(&label))),
+            dom: Rc::new(q.pos_at(b, Rc::clone(&label))),
             body: Rc::new(case),
         };
-        self.step_pair(p, k, label, up, kids)
+        self.step_pair(q, b, label, &up, kids)
     }
 
     /// A corecursive call's seed at a child of index `idx` (scoped at `cx`):
@@ -2751,6 +2797,50 @@ impl Elaborator {
             parts.push((fst_level, snd_level, fst, snd, v));
         }
         Ok(Term::Triv { level: Level::Zero })
+    }
+
+    /// A pending node's index `o(g, label, pos)` read the way the child
+    /// wrote it (`Succ(n)`, `⟨tl(s), tl(t)⟩`): the case on the literal label
+    /// taken (through a named signature's `D#mnext`) and each projection out
+    /// of the step's own index read off below it, with no other global
+    /// unfolded (§5.4). The node's payload types are read at it, so a wrong
+    /// payload is reported at its own `refl` in the written index's terms,
+    /// not through the case tree. Bounded; out of budget a part stays as it
+    /// was, which is the same index.
+    fn written_index(&self, cx: &Cx, idx: &Rc<Term>) -> Rc<Term> {
+        fn go(o: &crate::oracle::SemanticOracle, g: &LocalCtx, t: &Rc<Term>, depth: u32) -> Rc<Term> {
+            let Some(depth) = depth.checked_sub(1) else {
+                return Rc::clone(t);
+            };
+            let Ok(w) = o.whnf_term_opaque(g, t) else {
+                return Rc::clone(t);
+            };
+            parts(o, g, w, depth)
+        }
+        fn parts(o: &crate::oracle::SemanticOracle, g: &LocalCtx, w: Term, depth: u32) -> Rc<Term> {
+            let sub = |x: &Rc<Term>| go(o, g, x, depth);
+            Rc::new(match w {
+                Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
+                    Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst: sub(&fst), snd: sub(&snd) }
+                }
+                Term::PairAt { ty, fst, snd } => Term::PairAt { ty, fst: sub(&fst), snd: sub(&snd) },
+                Term::Succ(x) => Term::Succ(sub(&x)),
+                Term::AppAt { fun, arg } => Term::AppAt { fun: sub(&fun), arg: sub(&arg) },
+                Term::App { fun, dom_level, cod_level, dom, cod, arg } => {
+                    Term::App { fun: sub(&fun), dom_level, cod_level, dom, cod, arg: sub(&arg) }
+                }
+                w => w,
+            })
+        }
+        // A named signature's `D#mnext` is the one global unfolded: it is
+        // the case tree itself.
+        let top = match self.gen_app_of(idx) {
+            Some((GenDef::MNext(tag), args)) => self
+                .unfold_gen_app(GenDef::MNext(tag), &args, cx.gamma.entries.len() as u32, cx.gamma.base)
+                .map(Rc::new),
+            _ => None,
+        };
+        go(&self.goal_oracle().bounded(256), &cx.gamma, top.as_ref().unwrap_or(idx), 32)
     }
 
     /// `e` as an application of one of `ind`'s constructors, with its
