@@ -75,6 +75,24 @@ theorem near_checking<A>(f, g: List<A> → Nat, a: A, k: (ys: List<A>) → f(Con
     let p: (f(List::append([a], xs)) = g(xs)) = by grind();
     sym(p)
 }
+// Two free binders (`x` and `ys`), asked about with holes and looked up:
+// `?x := a`, `?ys := [] ++ xs`, which is `xs`, in a checking position and
+// at a literal list; a free type binder (`len<?A>(?xs)` against
+// `near_len(bs)`, whose `?A := Bool` is an atom of the graph); and a
+// negative control, where the solution `?ys` is no term of `g(zs)`.
+theorem near_two<A>(f, g: List<A> → Nat, k: (x: A, ys: List<A>) → f(Cons(x, ys)) = g(ys), a: A, xs: List<A>): f(List::append([a], xs)) = g(xs) { by grind() }
+theorem near_two_checking<A>(f, g: List<A> → Nat, k: (x: A, ys: List<A>) → f(Cons(x, ys)) = g(ys), a: A, xs: List<A>): g(xs) = f(List::append([a], xs)) {
+    let p: (f(List::append([a], xs)) = g(xs)) = by grind();
+    sym(p)
+}
+theorem near_two_closed(f, g: List<Nat> → Nat, k: (x: Nat, ys: List<Nat>) → f(Cons(x, ys)) = g(ys)): f(List::append([1], [2, 3])) = g([2, 3]) { by grind() }
+fn near_len<A>(xs: List<A>) → Nat { xs.len() }
+theorem near_type(c: Nat → Nat, k: (A: Type, xs: List<A>) → c(List::len(xs)) = 0, bs: List<Bool>): c(near_len(bs)) = 0 { by grind() }
+// One free binder the holes leave unsolved (`len([] ++ ?xs)` against
+// `near_len(bs)` stops at two stuck matches), drawn from the graph instead.
+theorem near_drawn(c: Nat → Nat, k: (xs: List<Bool>) → c(List::len(List::append(Nil, xs))) = 0, bs: List<Bool>): c(near_len(bs)) = 0 { by grind() }
+// expect-error: grind: the two sides are not in one class
+theorem near_two_refused<A>(f, g: List<A> → Nat, k: (x: A, ys: List<A>) → f(Cons(x, ys)) = g(ys), a: A, xs, zs: List<A>): f(List::append([a], xs)) = g(zs) { by grind() }
 // expect-error: grind: the two sides are not in one class
 theorem near_refused<A>(f, g: List<A> → Nat, a, b: A, k: (ys: List<A>) → f(Cons(a, ys)) = g(ys), xs: List<A>): f(List::append([b], xs)) = g(xs) { by grind() }
 // The report of the lemmas used (a `tactic-report` warning): here
