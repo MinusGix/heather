@@ -131,6 +131,14 @@ property of Heather.
   then hand them all to a `*_close` theorem whose parameters they are; its
   body projects variables (`DerivOn::chain_close`: 0.9M steps for both
   halves) — [[library-gate-module-cold-rail]].
+- **An interface definition is an atom at open arguments outside its
+  module** (`docs/interface-definitions-design.md`): `refl` and lemma
+  statements that leaned on its body are refused, with a note naming the
+  equations. Move a fact across the call with its arm equation,
+  `rewrite(f_unfold_Ctor(…), in := h)` (or `sym(…)` for the other
+  direction), or declare the proof `unfolding f` when it really is about
+  the body. A call at closed arguments still computes, so §1's verdicts are
+  unchanged.
 - `absurd` needs a constructor clash; `False` goes by `false_elim`.
 - Tier-2 laws through `Vis` are not provable with `=` (no funext): state
   them up to the tree's equivalence.
