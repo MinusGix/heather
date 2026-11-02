@@ -198,6 +198,21 @@ fn a_varied_value_at_a_parameter_with_no_measure_is_refused() {
     );
 }
 
+/// `d` is generalized only because its type mentions the varied `x`
+/// (`generalize::varying_params`' dependency closure), and the self-call
+/// passes it as itself, so a `let` bound from it holds this level's value
+/// too: no note, and the structural answer is the source's. (A parameter a
+/// call passes anything else is varied by the planner's own scan; an implicit
+/// one it omits is refused at the call.)
+#[test]
+fn a_parameter_varied_only_through_its_type_keeps_its_value() {
+    let notes = ok("fn T(x: Nat) -> Type { Nat }
+         fn f(n: Nat, x: Nat, d: T(x)) -> Nat { let y = d; match n { Zero => plus(y, x), Succ(k) => f(k, plus(x, 10), d) } }
+         theorem f_1(): f(1, 0, 5) = 15 { refl }
+         theorem f_step(k: Nat, x: Nat, d: Nat): f(Succ(k), x, d) = f(k, plus(x, 10), d) { refl }");
+    assert_eq!(notes, 0);
+}
+
 #[test]
 fn reading_the_varied_parameter_itself_keeps_the_structural_lowering() {
     // The ih's generalized binder is this level's value, and so is a `let`
