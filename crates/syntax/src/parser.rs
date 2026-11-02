@@ -163,6 +163,7 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             propagation_count: 0,
             propagation_depth: 0,
             elseless_if: false,
+            range_header: false,
         };
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
@@ -213,6 +214,8 @@ struct Parser {
     /// may omit its `else` (docs/sequencing-surface-design.md §4). Taken by
     /// the `if` it reaches first, so nothing nested inherits it.
     elseless_if: bool,
+    /// Parsing a `for` header, where `a..b` is a range (§5.2).
+    range_header: bool,
     /// Suppress the record literal `D { … }` (docs/surface-records.md §6.1).
     ///
     /// `{` after an expression is ambiguous exactly where a *block* follows
@@ -3301,7 +3304,35 @@ impl Parser {
         let start = self.bump().span;
         let (x, xspan) = self.binder_ident("`for` binder")?;
         self.bump(); // `in`
-        let iter = self.with_record_lit(true, |p| p.expr())?;
+        let saved = std::mem::replace(&mut self.range_header, true);
+        let iter = self.with_record_lit(true, |p| p.expr());
+        self.range_header = saved;
+        let mut iter = iter?;
+        // `for i in a..b`: the range is `List::range_from(a, b - a)`, and
+        // `0..n` is `List::range(n)` (§5.2), written only here, so no
+        // `Range` type is needed yet.
+        if matches!(self.peek(), TokKind::Dot) && matches!(self.nth(1), TokKind::Dot) {
+            self.bump();
+            self.bump();
+            let hi = self.with_record_lit(true, |p| p.expr())?;
+            let span = iter.span.join(hi.span);
+            let app = |head: &str, args: Vec<Expr>| Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr { kind: ExprKind::Var(head.into()), span }),
+                    args,
+                    named: vec![],
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            };
+            iter = if matches!(&iter.kind, ExprKind::Num(n) if *n == Numeral::ZERO) {
+                app("List::range", vec![hi])
+            } else {
+                let len = op_call("-", OpFixity::Infix, vec![hi, iter.clone()], span);
+                app("List::range_from", vec![iter, len])
+            };
+        }
         if !matches!(self.peek(), TokKind::LBrace) {
             return self.err("a `for` body is a braced block of statements: `for x in xs { … }`");
         }
@@ -4923,6 +4954,15 @@ impl Parser {
                         head: Box::new(Expr { kind: ExprKind::Var(crate::try_lower::TRY.into()), span: end }),
                         args: vec![e], named: Vec::new(), explicit: false, goal_oriented: false,
                     }, span };
+                }
+                // `a..b`: a range's `..` (a `for` header, §5.2), never a
+                // member access.
+                TokKind::Dot if matches!(self.nth(1), TokKind::Dot) => {
+                    if self.range_header { break; }
+                    return self.err(
+                        "`a..b` is a range only in a `for` header (`for i in a..b { … }`); elsewhere write \
+                         `List::range_from(a, b - a)`",
+                    );
                 }
                 TokKind::Dot => {
                     self.bump();
