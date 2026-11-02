@@ -49,6 +49,10 @@ inductive Ty {
     Bit,
     // `List<BitVec(8)>`, held in a buffer of the capacity.
     Bytes(cap: Nat),
+    // `List<List<BitVec(8)>>`, a list of byte strings (a file's lines), laid
+    // out as the name of its first cell in an arena (N4,
+    // docs/native-heap-arena-design.md §7; the cells are `native_arena`'s).
+    Lines,
     // The record of the type table's entry `i`.
     Named(i: Nat),
 }
@@ -56,7 +60,7 @@ inductive Ty {
 // A record field's type, read without the table: a record's fields are
 // flat, and a `Named` field (refused by every judgment) means `True`.
 fn Ty::Flat(self t: Ty) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Named(_) => True }
+    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True }
 }
 
 // A tuple of flat fields, `True`-terminated.
@@ -65,7 +69,7 @@ fn Ty::Flats(ts: List<Ty>) → Type {
 }
 
 fn Ty::flat_default(self t: Ty) → t.Flat() {
-    match t { Word(_) => BitVec::ofNat(0), Bit => False, Bytes(_) => Nil, Named(_) => trivial }
+    match t { Word(_) => BitVec::ofNat(0), Bit => False, Bytes(_) => Nil, Lines => Nil, Named(_) => trivial }
 }
 
 fn Ty::flats_default(ts: List<Ty>) → Ty::Flats(ts) {
@@ -88,7 +92,7 @@ fn Ty::at(ts: List<Ty>, i: Nat) → Ty {
 }
 
 fn Ty::sem(self t: Ty, tys: Nat → RecInfo) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Named(i) => tys(i).T }
+    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys(i).T }
 }
 
 // Every type is inhabited, so a meaning is total: an ill-typed node (which
@@ -98,21 +102,29 @@ fn Ty::default(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) {
         Word(_) => BitVec::ofNat(0),
         Bit => False,
         Bytes(_) => Nil,
+        Lines => Nil,
         Named(i) => tys(i).mk(Ty::flats_default(tys(i).fields)),
     }
 }
 
 fn Ty::to_flat(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → t.Flat() {
-    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Named(_) => λ _ => trivial }
+    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial }
 }
 
 fn Ty::of_flat(self t: Ty, tys: Nat → RecInfo) → t.Flat() → t.sem(tys) {
-    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Named(i) => λ _ => Named(i).default(tys) }
+    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys) }
 }
 
-// A byte buffer's list, whatever its capacity.
-fn Ty::bytes(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → List<BitVec(8)> {
-    match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, Bytes(_) => λ v => v, Named(_) => λ _ => Nil }
+// The code of a list's elements: a byte for a byte buffer, a byte string
+// for a list of lines (`Bit`, which nothing folds, for the rest).
+fn Ty::elem(self t: Ty) → Ty {
+    match t { Word(_) => Bit, Bit => Bit, Bytes(_) => Word(8), Lines => Bytes(0), Named(_) => Bit }
+}
+
+// A list's elements, at their code (empty for a code that is no list): at
+// a closed code, the value itself.
+fn Ty::items(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → List<t.elem().sem(tys)> {
+    match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, Bytes(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil }
 }
 
 // The equation between two codes, as data: at two closed codes it
@@ -129,6 +141,7 @@ fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
             Bytes(d) => match c.equation(d) { Inl(e) => Inl(j(e, λ x _ => Bytes(c) = Bytes(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
+        Lines => match b { Lines => Inl(refl), _ => Inr(trivial) },
         Named(i) => match b {
             Named(k) => match i.equation(k) { Inl(e) => Inl(j(e, λ x _ => Named(i) = Named(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
@@ -205,6 +218,12 @@ inductive Op {
     // consumes its buffer: in place when nothing reads the old one after it
     // (`Unique`, lib/lang/facts/unique.hthr), a copy otherwise.
     Get(cap: Nat), Set(cap: Nat),
+    // `Cons(line, lines)`: a line consed onto a list of lines, a byte
+    // string from a buffer of the capacity. An arena cell written at the
+    // top (`ArenaRef::cons_abs`); every other list in the arena keeps its
+    // meaning (`ArenaRef::extend_abs`). `Nil` is a literal (`Lit(Lines, 0)`,
+    // the name 0).
+    ConsLine(cap: Nat),
 }
 
 fn Op::params(self o: Op) → List<Ty> {
@@ -215,6 +234,7 @@ fn Op::params(self o: Op) → List<Ty> {
         Conj => [Bit, Bit], Disj => [Bit, Bit], Neg => [Bit],
         Zext(w, _) => [Word(w)],
         Get(c) => [Bytes(c), Word(64)], Set(c) => [Bytes(c), Word(64), Word(8)],
+        ConsLine(c) => [Bytes(c), Lines],
     }
 }
 
@@ -225,6 +245,7 @@ fn Op::result(self o: Op) → Ty {
         Conj => Bit, Disj => Bit, Neg => Bit,
         Zext(w, extra) => Word(extra + w),
         Get(_) => Word(8), Set(c) => Bytes(c),
+        ConsLine(_) => Lines,
     }
 }
 
@@ -244,6 +265,7 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Zext(w, extra) => λ (x: BitVec(w)) => x.zero_extend(extra),
         Get(_) => λ (xs: List<BitVec(8)>) (i: BitVec(64)) => xs.byte_at(i),
         Set(_) => λ (xs: List<BitVec(8)>) (i: BitVec(64)) (v: BitVec(8)) => xs.with_byte(i, v),
+        ConsLine(_) => λ (x: List<BitVec(8)>) (xs: List<List<BitVec(8)>>) => Cons(x, xs),
     }
 }
 
@@ -271,8 +293,9 @@ inductive Tm {
     Field(i: Nat, k: Nat, of: Nat),
     // A function of the program, by index, on variables.
     Call(f: Nat, args: List<Nat>),
-    // `over.foldl(step, init)`: a byte buffer folded by a function of the
-    // program, the state at the step's result code (R3's loop shape).
+    // `over.foldl(step, init)`: a byte buffer or a list of lines folded by a
+    // function of the program, the state at the step's result code, the
+    // element at the list's element code (R3's loop shape).
     Fold(over: Nat, init: Nat, step: Nat),
 }
 
@@ -348,6 +371,7 @@ fn Tm::lit(t: Ty, n: Nat, tys: Nat → RecInfo) → t.sem(tys) {
         Word(_) => BitVec::ofNat(n),
         Bit => match n { Zero => False, Succ(_) => True },
         Bytes(_) => Nil,
+        Lines => Nil,
         Named(i) => Named(i).default(tys),
     }
 }
@@ -369,12 +393,12 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
 }
 
 // A fold's step: the program's function `k` as a function of the state and
-// a byte, its arguments cast to its parameters (at closed codes, the
-// function itself up to η).
-fn Tm::step(w: World, k: Nat)
-    → Sig::at(w.sigs, k).result.sem(w.tys) → BitVec(8) → Sig::at(w.sigs, k).result.sem(w.tys)
+// an element at the code `e`, its arguments cast to its parameters (at
+// closed codes, the function itself up to η).
+fn Tm::step(w: World, e: Ty, k: Nat)
+    → Sig::at(w.sigs, k).result.sem(w.tys) → e.sem(w.tys) → Sig::at(w.sigs, k).result.sem(w.tys)
 {
-    λ acc b => Tm::apply(w, [Word(8), Sig::at(w.sigs, k).result], Pair(b, Pair(acc, trivial)),
+    λ acc b => Tm::apply(w, [e, Sig::at(w.sigs, k).result], Pair(b, Pair(acc, trivial)),
         Sig::at(w.sigs, k).result, Sig::at(w.sigs, k).params, Sig::get(w.tys, w.sigs, w.callees, k), [1, 0])
 }
 
@@ -407,8 +431,8 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
         Call(f, args) => λ g env =>
             Tm::apply(w, g, env, Sig::at(w.sigs, f).result, Sig::at(w.sigs, f).params, Sig::get(w.tys, w.sigs, w.callees, f), args),
         Fold(over, init, step) => λ g env =>
-            List::foldl(Ty::at(g, over).bytes(w.tys, Env::get(w.tys, g, env, over)),
-                Tm::step(w, step),
+            List::foldl(Ty::at(g, over).items(w.tys, Env::get(w.tys, g, env, over)),
+                Tm::step(w, Ty::at(g, over).elem(), step),
                 Ty::cast(w.tys, Ty::at(g, init), Sig::at(w.sigs, step).result, Env::get(w.tys, g, env, init))),
     }
 }
@@ -432,6 +456,7 @@ fn Ty::same(self a: Ty, b: Ty) → Bool {
         Word(w) => match b { Word(v) => w.same(v), _ => False },
         Bit => match b { Bit => True, _ => False },
         Bytes(c) => match b { Bytes(d) => c.same(d), _ => False },
+        Lines => match b { Lines => True, _ => False },
         Named(i) => match b { Named(k) => i.same(k), _ => False },
     }
 }
@@ -459,6 +484,7 @@ fn Op::code(self o: Op) → Pair<Nat, Pair<Nat, Nat>> {
         Conj => Pair(8, Pair(0, 0)), Disj => Pair(9, Pair(0, 0)), Neg => Pair(10, Pair(0, 0)),
         Zext(w, extra) => Pair(11, Pair(w, extra)),
         Get(c) => Pair(12, Pair(c, 0)), Set(c) => Pair(13, Pair(c, 0)),
+        ConsLine(c) => Pair(14, Pair(c, 0)),
     }
 }
 

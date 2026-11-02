@@ -1,0 +1,130 @@
+// Probes of `tac` and `sort` written over `Io` (`line_tools`): literal and
+// neutral inputs, GNU's test cases as literals, failing worlds, and
+// agreement with the builder `tac` `write-elf` compiles today
+// (`native_heap_tools`) at the worlds its source fits the kernel's fuel.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import option;
+import bool;
+import bitvec;
+import itree;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import native_source;
+import native_build;
+import native_heap_tools;
+import line_tools;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// What a run shows: its status and the bytes it wrote to stdout.
+record Outcome { status: BitVec(64), out: List<BitVec(8)> }
+
+fn Outcome::of(m: Mutated<Io, BitVec(64)>) → Outcome { Outcome(m.value, m.after.sent(Io::stdout())) }
+
+// A builder tool's source read against a world, at a fuel.
+fn Tool::outcome(self t: Tool, io: Io, fuel: Nat) → Option<Outcome> {
+    Io::against(t.source().tree([], fuel), io).map(Outcome::of)
+}
+
+fn piped(chunks: List<List<BitVec(8)>>) → Io { Io::of(World::piped(chunks)) }
+
+// "a\n" then "bc" then "\nd": three reads, a line across two of them, and a
+// last line with no newline.
+fn three_chunks() → Io { piped([[b(97), b(10)], [b(98), b(99)], [b(10), b(100)]]) }
+
+// "b\n\na\nb\n" in one read: lines alike, and an empty line.
+fn alike() → Io { piped([[b(98), b(10), b(10), b(97), b(10), b(98), b(10)]]) }
+
+// "ab\na\nB": a line before every longer line it begins, and bytes compared
+// unsigned ('B' < 'a').
+fn prefixes() → Io { piped([[b(97), b(98), b(10), b(97), b(10), b(66)]]) }
+
+// ---------------------------------------------------------------------------
+// Reading lines
+
+theorem lines_kept(): List::lines_last_first([b(97), b(10), b(98)], Bool::True) = [[b(98)], [b(97), b(10)]] { refl }
+theorem lines_dropped(): List::lines_last_first([b(97), b(10), b(98)], Bool::False) = [[b(98)], [b(97)]] { refl }
+theorem lines_empty(): List::lines_last_first([], Bool::True) = [] { refl }
+// A lone newline is one empty line.
+theorem lines_blank(): List::lines_last_first([b(10)], Bool::False) = [[]] { refl }
+
+// Neutral reader: no bytes leave it as it is, and a byte that is not a
+// newline joins the open line whatever came before.
+theorem feed_nothing(r: LineReader, k: Bool): r.feed([], k) = r { refl }
+theorem feed_byte(r: LineReader, k: Bool): r.feed([b(97)], k) = LineReader(r.done, r.open ++ [b(97)]) { refl }
+theorem feed_newline(r: LineReader): r.feed([b(10)], Bool::False) = LineReader(List::Cons(r.open, r.done), []) { refl }
+
+// ---------------------------------------------------------------------------
+// The byte order
+
+theorem before_less(): List::bytes_before([b(97)], [b(98)]) = Bool::True { refl }
+theorem before_prefix(): List::bytes_before([b(97)], [b(97), b(98)]) = Bool::True { refl }
+theorem before_longer(): List::bytes_before([b(97), b(98)], [b(97)]) = Bool::False { refl }
+theorem before_self(): List::bytes_before([b(97), b(98)], [b(97), b(98)]) = Bool::False { refl }
+// Unsigned: 0xff comes after 'a'.
+theorem before_unsigned(): List::bytes_before([b(255)], [b(97)]) = Bool::False { refl }
+// The empty line comes before every other, and not before itself.
+theorem before_empty(x: BitVec(8), xs: List<BitVec(8)>): List::bytes_before([], List::Cons(x, xs)) = Bool::True { refl }
+theorem before_empty_self(): List::bytes_before([], []) = Bool::False { refl }
+
+// ---------------------------------------------------------------------------
+// tac
+
+theorem tac_three(): Outcome::of(Io::tac(three_chunks(), 4, List::range(8)))
+    = Outcome(BitVec::ofNat(0), [b(100), b(98), b(99), b(10), b(97), b(10)]) { refl }
+theorem tac_nothing(): Outcome::of(Io::tac(piped([]), 4, List::range(4))) = Outcome(BitVec::ofNat(0), []) { refl }
+
+// A world whose reads fail: nothing written, status 1.
+fn broken() → World() {
+    λ past c => match c {
+        ReadCmd(_, _) => ReadFailed(5),
+        WriteCmd(_, bytes) => Wrote(bytes.len()),
+        OpenCmd(_) => OpenFailed(2),
+        CloseCmd(_) => Closed,
+        StatCmd(_) => StatFailed(2),
+    }
+}
+theorem tac_read_fails(): Outcome::of(Io::tac(Io::of(broken()), 4, List::range(4))) = Outcome(BitVec::ofNat(1), []) { refl }
+
+// A world whose writes fail: status 1.
+fn deaf() → World() {
+    λ past c => match c {
+        ReadCmd(_, _) => match Exchange::reads(past) { Zero => ReadBytes([b(97), b(10)]), Succ(_) => ReadBytes([]) },
+        WriteCmd(_, _) => WriteFailed(5),
+        OpenCmd(_) => OpenFailed(2),
+        CloseCmd(_) => Closed,
+        StatCmd(_) => StatFailed(2),
+    }
+}
+theorem tac_write_fails(): Outcome::of(Io::tac(Io::of(deaf()), 4, List::range(4))).status = BitVec::ofNat(1) { refl }
+
+// ---------------------------------------------------------------------------
+// sort
+
+theorem sort_alike(): Outcome::of(Io::sort(alike(), 8, List::range(8)))
+    = Outcome(BitVec::ofNat(0), [b(10), b(97), b(10), b(98), b(10), b(98), b(10)]) { refl }
+theorem sort_prefixes(): Outcome::of(Io::sort(prefixes(), 8, List::range(8)))
+    = Outcome(BitVec::ofNat(0), [b(66), b(10), b(97), b(10), b(97), b(98), b(10)]) { refl }
+theorem sort_nothing(): Outcome::of(Io::sort(piped([]), 4, List::range(4))) = Outcome(BitVec::ofNat(0), []) { refl }
+theorem sort_read_fails(): Outcome::of(Io::sort(Io::of(broken()), 4, List::range(4))) = Outcome(BitVec::ofNat(2), []) { refl }
+theorem sort_write_fails(): Outcome::of(Io::sort(Io::of(deaf()), 4, List::range(4))).status = BitVec::ofNat(2) { refl }
+
+// ---------------------------------------------------------------------------
+// The builder tools, read against the same worlds. A builder tool's source
+// is evaluated by conversion here, and only the smallest worlds fit one
+// declaration's kernel fuel: building the source and running its arena code
+// (each name read back by doubling, each loop a `Repeat`) is past it on any
+// input of two lines. So the agreement is checked at a line and at nothing,
+// against the literal the surface tac gives above (never one computation
+// against the other, docs/proof-patterns.md §1); the GNU tests the builder
+// tools pass (crates/cli/tests/native_tools.rs) are what the literal probes
+// above transcribe.
+
+theorem tac_line(): Outcome::of(Io::tac(piped([[b(97), b(10)]]), 2, List::range(4))) = Outcome(BitVec::ofNat(0), [b(97), b(10)]) { refl }
+theorem tac_source_line(): tac(2, 16).outcome(piped([[b(97), b(10)]]), 16) = Some(Outcome(BitVec::ofNat(0), [b(97), b(10)])) { refl }
+theorem tac_source_nothing(): tac(2, 16).outcome(piped([]), 16) = Some(Outcome(BitVec::ofNat(0), [])) { refl }

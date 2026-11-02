@@ -40,3 +40,7 @@ representation's laws once (`ArenaRef::nil_abs`, `extend_abs`, `cons_abs`).
 `sort` (lines into a list) and `tac`, written as ordinary Heather marked
 `runtime fn`, pass the GNU tests `crates/cli/tests/native_tools.rs` runs on the
 builder versions, and the builder versions are deleted.
+
+## Log
+
+- 2026-11-02: First front-end round (docs/native-heap-arena-design.md §7.1). `tac` and `sort` are written as ordinary Heather over `Io` in `lib/native/runtime/line_tools.hthr`, using loops only and no recursion, and the arena stays write-once. `line_tools_tests` checks them against GNU's cases as literals by `refl`, and checks `tac` against its builder source at one line. Larger worlds pass one declaration's kernel fuel when the builder source is evaluated by conversion. `rt` gains `Ty::Lines`, `Op::ConsLine`, `Nil` as `Lit(Lines, 0)`, and `Fold` over any list code (`Ty::elem`/`Ty::items`). The reflector reads them, and each pins by `refl`, with negative controls. Left, in order: `Holds` at `Lines` as an arena name (this needs R6's lowering to `Source`); `ConsLine`'s case of `lower_sound` (`cons_abs`/`extend_abs`, exit when full); list `match`, which the host does not present as a `Case` ([[runtime-reflect-list-match]]); a byte push onto the open line, `for_in` exits, and records with list fields; then `runtime fn` on both tools and the builder versions deleted.

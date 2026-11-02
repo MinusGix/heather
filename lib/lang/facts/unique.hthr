@@ -47,8 +47,9 @@ import rt;
 // level, which a variable bound later inside a branch can repeat; that only
 // makes two names look shared that are not, never the other way.
 
-// Whether a value of the code may hold a buffer.
-fn Ty::holds_bytes(self t: Ty) → Bool { match t { Word(_) => False, Bit => False, Bytes(_) => True, Named(_) => True } }
+// Whether a value of the code may hold a buffer. A list of lines holds
+// none: its cells are copies, written once and never in place.
+fn Ty::holds_bytes(self t: Ty) → Bool { match t { Word(_) => False, Bit => False, Bytes(_) => True, Lines => False, Named(_) => True } }
 
 fn Nat::among(self n: Nat, xs: List<Nat>) → Bool {
     match xs { Nil => False, Cons(x, rest) => n.same(x) || n.among(rest) }
