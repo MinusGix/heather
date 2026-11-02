@@ -4,7 +4,7 @@ status: open
 labels: [design,traits,ergonomics]
 area: language
 created: 2026-08-09
-updated: 2026-08-09
+updated: 2026-11-02
 ---
 
 Filed ahead of need, from the operators round's close (2026-08-09). Once the
@@ -74,3 +74,4 @@ one.
 ## Log
 
 - 2026-08-09: Decision recorded from user review (2026-08-09): the as-notation of [[binder-symbol-as-notation]] does not double as the advertised default — local niceness and claimed defaults are different speech acts; Monoid leans toward advertising nothing.
+- 2026-11-02: From [[strict-order-presentation]] (closed 2026-11-02, docs/strict-order-presentation-design.md §2.3): both order relations are class indices, so no derived-notation expression is needed. The one requirement left here is that `(≈, <, ≤)` is advertised and overridden as one package. Today every order binder spells all three, so no collision can arise yet.

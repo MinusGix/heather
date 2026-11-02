@@ -2,7 +2,7 @@
 // `Rat` and at `CReal`, on the concrete domain `|x| <= 1`, and a refutation
 // that keeps `DerivOn` from being vacuous. Tests, not library: nothing
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
-import logic; import nat; import int; import list; import relation_props; import algebra_rel;
+import logic; import nat; import int; import list; import relation_props; import order; import algebra_rel;
 import semiring; import ordered_field; import big_operator; import ring; import linarith;
 import rat; import creal; import real_fn;
 

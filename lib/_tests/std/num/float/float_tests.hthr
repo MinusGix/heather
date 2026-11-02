@@ -4,7 +4,7 @@
 // (docs/test-value-audit.md §4.5).
 // Moved from crates/elab/tests/lib_std_float.rs.
 import logic; import bool; import nat; import int; import omega; import rat;
-import dyadic; import float; import relation_props; import algebra_rel; import ordered_field;
+import dyadic; import float; import relation_props; import order; import algebra_rel; import ordered_field;
 
 // Literal floats are canonical by evaluation.
 fn one32() → Finite(binary32()) { Finite(False, 8388608, 126, trivial) }
