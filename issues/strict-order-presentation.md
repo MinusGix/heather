@@ -1,11 +1,11 @@
 ---
 title: Decide how order classes present strict and non-strict relations
-status: open
+status: closed
 labels: [design,traits,notation,stdlib,orders]
 area: mathematics
 milestone: [math-classes]
 created: 2026-08-09
-updated: 2026-08-20
+updated: 2026-11-02
 ---
 
 Direction issue from the operation-indexed order discussion. An order library
@@ -163,3 +163,4 @@ issue owns the semantics before syntax is chosen.
   `Trans<r>`. Generic relation-property records may still be useful as theorem
   parameters, but making every law independently canonical would multiply
   resolution choices and lose the algebraic bundle a consumer normally wants.
+- 2026-11-02: **Decided and closed** (docs/strict-order-presentation-design.md). Option B holds where `<` is primitive. `StrictOrder(≈, <, ≤)` takes both relations as indices, and its agreement is Bishop's `x ≤ y ↔ ¬(y < x)`. That, with tightness, makes it the family of constructive *linear* orders. `Preorder`/`PartialOrder` keep one relation. This reverses the 2026-08-16 target `Preorder<A>(le, lt)`, because each of that entry's three reasons (Nat's computing `Lt`, products and ordinals, well-founded `<`) is served by the strict-first family. B's agreement `lt ↔ le ∧ ¬ge` would force a product's `<` to be the strict part anyway. New in this round: the classes present their relational views as tagged parents. `StrictOrder` has `Transitive(<)` and the four `≈` pairs, and `PseudoOrder` has `Preorder(≤)` and the two `<`/`≤` pairs. So a generic `calc` steps through `<`, `≈` and `≤`, which was refused before. Carriers fill the views by reference. The notation requirement, that `(≈, <, ≤)` is one package, moves to [[class-default-operators]]. Retiring the per-carrier copies of the views waits on [[class-inherited-field-implementations]]. The import cost it exposed is [[class-parent-names-resolve-in-client-scope]].

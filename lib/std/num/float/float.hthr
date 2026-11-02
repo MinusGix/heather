@@ -273,6 +273,11 @@ instance(F: Format) StrictOrder<Finite(F)>(Finite::Same, Finite::Lt, Finite::Le)
     lt_tight := λ x y h1 h2 => Finite::same_of_not_lt(h1, h2),
     le_of_not_lt := λ x y h => Finite::le_of_not_lt(h),
     not_lt_of_le := λ x y h => Finite::not_lt_of_le(h),
+    lt_transitive := Transitive(λ x y z h1 h2 => Finite::lt_trans(h1, h2)),
+    same_lt := Trans(λ x y z h1 h2 => Finite::lt_of_le_of_lt(Finite::le_of_same(h1), h2)),
+    lt_same := Trans(λ x y z h1 h2 => Finite::lt_of_lt_of_le(h1, Finite::le_of_same(h2))),
+    same_le := Trans(λ x y z h1 h2 => Finite::le_trans(Finite::le_of_same(h1), h2)),
+    le_same := Trans(λ x y z h1 h2 => Finite::le_trans(h1, Finite::le_of_same(h2))),
 }
 
 instance(F: Format) Cotransitive<Finite(F)>(Finite::Lt) {
@@ -290,6 +295,14 @@ instance(F: Format) PseudoOrder<Finite(F)>(Finite::Same, Finite::Lt, Finite::Le)
     le_of_not_lt := λ x y h => Finite::le_of_not_lt(h),
     not_lt_of_le := λ x y h => Finite::not_lt_of_le(h),
     rel_cotrans := Finite::lt_cotrans,
+    lt_transitive := Transitive(λ x y z h1 h2 => Finite::lt_trans(h1, h2)),
+    same_lt := Trans(λ x y z h1 h2 => Finite::lt_of_le_of_lt(Finite::le_of_same(h1), h2)),
+    lt_same := Trans(λ x y z h1 h2 => Finite::lt_of_lt_of_le(h1, Finite::le_of_same(h2))),
+    same_le := Trans(λ x y z h1 h2 => Finite::le_trans(Finite::le_of_same(h1), h2)),
+    le_same := Trans(λ x y z h1 h2 => Finite::le_trans(h1, Finite::le_of_same(h2))),
+    le_preorder := Preorder(Finite::le_refl, λ x y z h1 h2 => Finite::le_trans(h1, h2)),
+    lt_le := Trans(λ x y z h1 h2 => Finite::lt_of_lt_of_le(h1, h2)),
+    le_lt := Trans(λ x y z h1 h2 => Finite::lt_of_le_of_lt(h1, h2)),
 }
 
 // Negation flips the sign bit and nothing else.

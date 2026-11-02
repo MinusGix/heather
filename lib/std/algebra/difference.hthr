@@ -41,6 +41,7 @@ import omega;
 import list;
 import relation;
 import relation_props;
+import order;
 import algebra_rel;
 import semiring;
 import ordered_field;

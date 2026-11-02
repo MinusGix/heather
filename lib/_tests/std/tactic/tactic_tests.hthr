@@ -5,7 +5,7 @@
 // whose dictionary `Match` finds in scope. Tests, not library: nothing
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import char; import string; import tactic;
-import relation_props; import algebra_rel; import semiring; import ordered_field;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field;
 
 // A block's `let` is one of the goal's locals: a fact it binds is found by a
 // tactic that searches them, without being handed it

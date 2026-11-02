@@ -23,6 +23,7 @@ import logic;
 import nat;
 import int;
 import relation_props;
+import order;
 import algebra_rel;
 import semiring;
 import ordered_field;

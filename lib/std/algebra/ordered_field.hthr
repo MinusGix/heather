@@ -62,6 +62,7 @@ import relation_props;
 import algebra_rel;
 import semiring;
 import omega;
+import order;
 
 // ---------------------------------------------------------------------------
 // Relations built from the strict order.
@@ -84,8 +85,20 @@ fn Within<A>(le: A → A → Type, a, x, b: A) → Type { le(a, x) ∧ le(x, b) 
 // `¬(y < x)`. The `<` laws are fields of their own rather than the
 // `Irreflexive`/`Transitive` parents: those would put `Transitive` at two
 // indices (`≈`'s and `<`'s) into one dictionary.
+//
+// Both relations are indices, and the class presents what they are as
+// relations (docs/strict-order-presentation-design.md): `<` is a
+// `Transitive` relation, and `≈` chains with either order, as tagged parents.
+// They are what lets a `calc` inside `section<A: StrictOrder(…)>` step through
+// `<`, `≈` and `≤`. A carrier with those instances registered (`Rat`, `CReal`,
+// `Dyadic`, `Nat`, `Int`) fills them by reference; a parameterized one
+// (`Finite(F)`) writes them. Until a class can fill an inherited field from
+// its own (issues/class-inherited-field-implementations.md), they are the
+// carrier's to supply although they follow from the fields below.
 class StrictOrder<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type)
-    extends Equivalence<A>(same)
+    extends Equivalence<A>(same), Transitive<A>(lt) as lt_transitive,
+        Trans<A>(same, lt, lt) as same_lt, Trans<A>(lt, same, lt) as lt_same,
+        Trans<A>(same, le, le) as same_le, Trans<A>(le, same, le) as le_same
 {
     lt_irrefl: (x: A) → ¬(x < x),
     lt_trans: (x, y, z: A) → x < y → y < z → x < z,
@@ -238,8 +251,12 @@ class Cotransitive<A>(R: A → A → Type) {
     rel_cotrans: (x, y, z: A) → R(x, y) → R(x, z) ∨ R(z, y),
 }
 
+// A located strict order. Its `≤` is a preorder and chains with `<` both ways
+// round, tagged like `StrictOrder`'s views and for the same reason: both
+// need cotransitivity (`PseudoOrder::le_trans`, `lt_of_lt_of_le`).
 class PseudoOrder<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type)
-    extends StrictOrder<A>(same, lt, le), Cotransitive<A>(lt)
+    extends StrictOrder<A>(same, lt, le), Cotransitive<A>(lt), Preorder<A>(le) as le_preorder,
+        Trans<A>(lt, le, lt) as lt_le, Trans<A>(le, lt, lt) as le_lt
 {}
 
 section<A: PseudoOrder(≈, <, <=)> {
@@ -344,7 +361,10 @@ theorem OrderedAddMonoid::add_lt_mono_l(x, y, z: A, h: x < y): z + x < z + y {
 theorem OrderedAddMonoid::add_lt_mono(x, x2, y, y2: A, hx: x < x2, hy: y < y2):
     x + y < x2 + y2
 {
-    A.lt_trans(x + y, x2 + y, x2 + y2, A.add_lt_mono_r(x, x2, y, hx), OrderedAddMonoid::add_lt_mono_l(y, y2, x2, hy))
+    calc {
+        x + y < x2 + y := A.add_lt_mono_r(x, x2, y, hx),
+        < x2 + y2 := OrderedAddMonoid::add_lt_mono_l(y, y2, x2, hy),
+    }
 }
 
 // The reflection law, as a theorem a tactic can look up by name.
@@ -368,7 +388,10 @@ theorem OrderedAddMonoid::add_le_mono_l(x, y, z: A, h: x <= y): z + x <= z + y {
 
 // A sum of positives is positive.
 theorem OrderedAddMonoid::add_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y {
-    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), OrderedAddMonoid::add_lt_mono(A.unit, x, A.unit, y, hx, hy))
+    calc {
+        A.unit ≈ A.unit + A.unit := A.rel_sym(A.unit + A.unit, A.unit, A.unit_r(A.unit)),
+        < x + y := OrderedAddMonoid::add_lt_mono(A.unit, x, A.unit, y, hx, hy),
+    }
 }
 
 }
@@ -405,21 +428,33 @@ theorem LocatedAddMonoid::pos_of_add_pos(x, y: A, h: A.unit < x + y):
 theorem LocatedAddMonoid::add_le_mono(x, x2, y, y2: A, hx: x <= x2, hy: y <= y2):
     x + y <= x2 + y2
 {
-    PseudoOrder::le_trans(x + y, x2 + y, x2 + y2, OrderedAddMonoid::add_le_mono_r(x, x2, y, hx), OrderedAddMonoid::add_le_mono_l(y, y2, x2, hy))
+    calc {
+        x + y <= x2 + y := OrderedAddMonoid::add_le_mono_r(x, x2, y, hx),
+        <= x2 + y2 := OrderedAddMonoid::add_le_mono_l(y, y2, x2, hy),
+    }
 }
 
 // A strict bound and a weak one add to a strict one.
 theorem LocatedAddMonoid::add_lt_le_mono(x, x2, y, y2: A, hx: x < x2, hy: y <= y2): x + y < x2 + y2 {
-    PseudoOrder::lt_of_lt_of_le(x + y, x2 + y, x2 + y2, A.add_lt_mono_r(x, x2, y, hx), OrderedAddMonoid::add_le_mono_l(y, y2, x2, hy))
+    calc {
+        x + y < x2 + y := A.add_lt_mono_r(x, x2, y, hx),
+        <= x2 + y2 := OrderedAddMonoid::add_le_mono_l(y, y2, x2, hy),
+    }
 }
 
 theorem LocatedAddMonoid::add_le_lt_mono(x, x2, y, y2: A, hx: x <= x2, hy: y < y2): x + y < x2 + y2 {
-    PseudoOrder::lt_of_le_of_lt(x + y, x2 + y, x2 + y2, OrderedAddMonoid::add_le_mono_r(x, x2, y, hx), OrderedAddMonoid::add_lt_mono_l(y, y2, x2, hy))
+    calc {
+        x + y <= x2 + y := OrderedAddMonoid::add_le_mono_r(x, x2, y, hx),
+        < x2 + y2 := OrderedAddMonoid::add_lt_mono_l(y, y2, x2, hy),
+    }
 }
 
 // A sum of nonnegatives is nonnegative.
 theorem LocatedAddMonoid::add_nonneg(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x + y {
-    StrictOrder::le_respects(A.unit + A.unit, A.unit, x + y, x + y, A.unit_r(A.unit), A.rel_refl(x + y), LocatedAddMonoid::add_le_mono(A.unit, x, A.unit, y, hx, hy))
+    calc {
+        A.unit ≈ A.unit + A.unit := A.rel_sym(A.unit + A.unit, A.unit, A.unit_r(A.unit)),
+        <= x + y := LocatedAddMonoid::add_le_mono(A.unit, x, A.unit, y, hx, hy),
+    }
 }
 
 }

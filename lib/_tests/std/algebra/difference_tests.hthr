@@ -3,7 +3,7 @@
 // at closed ones, with negative controls. Tests, not library: nothing
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import nat; import int; import list; import relation;
-import relation_props; import algebra_rel; import semiring; import ordered_field;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field;
 import big_operator; import difference; import rat; import creal;
 import omega; import ring; import tactic;
 

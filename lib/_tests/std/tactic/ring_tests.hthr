@@ -7,7 +7,7 @@
 // crates/elab/tests/lib_std_ring.rs; the refusals stay there, except the
 // ones at a `≈` carrier, which are below.
 import logic; import nat; import int; import list; import omega; import ring;
-import relation_props; import algebra_rel; import semiring; import ordered_field; import rat; import creal;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field; import rat; import creal;
 
 // Identities at `Int`, over neutral atoms and closed numerals.
 theorem squares(a, b: Int): (a + b) * (a - b) = a * a - b * b { ring }

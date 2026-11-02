@@ -2,7 +2,7 @@
 // directly, and its refusals. Tests, not library: nothing outside lib/_tests
 // imports this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import mono;
-import relation_props; import algebra_rel; import semiring; import ordered_field;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field;
 
 // One law per layer, chosen by the positions where the two sides differ: a
 // fixed operand owes no premise, a moved one owes its own order.

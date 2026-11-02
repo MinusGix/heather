@@ -4,7 +4,7 @@
 // library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import int; import rat; import creal; import list; import tactic; import cast; import mono; import omega; import ring; import linarith;
-import relation_props; import algebra_rel; import semiring; import ordered_field; import morphism; import dyadic;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field; import morphism; import dyadic;
 
 // An image of an operation is read as the operation of the images, on
 // either side, and the order between the images then splits as usual.
