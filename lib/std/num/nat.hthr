@@ -871,6 +871,16 @@ fn Nat::equation(self n: Nat) → (m: Nat) → (n = m) ∨ True {
     }
 }
 
+// A number's equation with itself is `refl`, at an open number too: a
+// transport along `n.equation(n)` computes away.
+theorem Nat::equation_self(self n: Nat): n.equation(n) = Inl(refl) {
+    match n {
+        Zero => refl,
+        Succ(k) => j(sym(k.equation_self()), λ d _ =>
+            (match d as λ _ => (Succ(k) = Succ(k)) ∨ True { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => Succ(k) = Succ(x), refl)) }) = Inl(refl), refl),
+    }
+}
+
 instance(n, m: Nat) Decide<n = m> { dec := Nat::eq_dec(n, m), bit := n.same(m), reflects := And(n.same_sound(m), λ h => n.ne_of_same(m, h)) }
 
 // The same decision as a property of the carrier, which is what a polymorphic
