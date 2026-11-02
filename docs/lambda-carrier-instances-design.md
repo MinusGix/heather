@@ -1,6 +1,8 @@
 # Instances at a carrier that is not `Head<…, A>`
 
-Status: **proposed**, 2026-11-02, awaiting Minus's choice. Tracking issue:
+Status: **decided** 2026-11-02 (Minus): route 5, the type declares its
+varying slot, built on route 4's partial-application carriers. §7 is the
+design being built; §1–§6 are the comparison that led to it. Tracking issue:
 `issues/class-instance-at-lambda-carrier.md`. Builds on
 `docs/higher-kinded-classes-design.md` (R2a) and
 `docs/sequencing-surface-design.md` §13 (binding statements).
@@ -244,7 +246,7 @@ crosses calls, keeping that file's stated decision):
 | 5 declared slot | yes | yes | yes | no | unifier-local | per type | none |
 | 6 candidates | **yes** | **yes** | yes (with 4) | yes (with 3) | in-call, unique-or-refuse | no | small β |
 
-## 6. Recommendation
+## 6. Recommendation (as first proposed)
 
 **Route 4 now, route 6 as the rule, route 3 for headless carriers, and keep
 `Result<A, E>`.**
@@ -266,3 +268,76 @@ crosses calls, keeping that file's stated decision):
 Independent of the choice: the misleading `Result<Nat, Nat> expected`
 diagnostic and the `Bind<Result>` goal display (§2) are worth fixing on
 their own (`issues/applied-meta-approximation-diagnostics.md`).
+
+## 7. Decision and design: the type declares its varying slot
+
+Minus chose route 5 over route 6 (2026-11-02): inference stays local to the
+unifier and does not depend on which instances are in scope, and it also
+fixes the plain `pick(r)` call that route 6 left on the approximation.
+Route 6 remains an extension for a type that ever needs two slots inferred.
+
+### 7.1 Declaring the slot
+
+```heather
+inductive Result<A, E> varies A { Ok(value: A), Err(error: E) }
+```
+
+`varies X` is a contextual clause after the parameter lists (and before an
+index telescope or the body), on `inductive`, `record` and `codata`. `X`
+names a type parameter, or a value parameter whose type is a universe.
+
+**Default.** With no clause, the slot is the last type-level argument of the
+declaration's spine (type parameters, then universe-typed value parameters).
+For every declaration that infers today the default is the slot the
+approximation already abstracts, so nothing changes for them. `CoTree<R>(E)`
+gets `R` by default: `E: Events` is not type-level, so it is never the
+slot.
+
+### 7.2 The constructor at a slot
+
+For `D` with type-level spine `a₀ … a_{n−1}` and slot `s`, the constructor
+fixing the others is
+
+```
+C_s(ā∖s)  =  app(D#tycode_fn^δ; a₀ … a_{n−2})                       when s = n−1
+          =  λ (x: Ty l_s). app(D#tycode_fn^δ; a₀↑ … a_{s−1}↑, x, a_{s+1}↑ … a_{n−1}↑)   otherwise
+```
+
+η-short when the slot is last (one global applied, the reference spelling
+of every `M(X)`), and otherwise a λ whose body is one code-function
+application, so `M(X)` is a single β-step from the reference spelling. One
+helper builds it, and its three readers below share it, so a carrier
+written at a declaration and one learned at a use site are the same term.
+
+### 7.3 The three readers
+
+1. **Partial application as a value** (route 4): `Parser<T>` or
+   `Res2<Bool>` checked at `Type → Type` is `app(D#tycode_fn^δ; ā)`
+   (positional; the missing arguments are the trailing ones). Today only
+   the bare name is accepted.
+2. **The unifier.** The applied-meta arm (`flex_applied_head` with a
+   pattern spine of **one** argument) learns `?M := C_s(ā∖s)` and pairs the
+   argument with `a_s`, instead of taking the head plus the leading
+   arguments. Longer pattern spines (`?M(x, y)`) keep today's aligned rule.
+3. **Instance carriers.** A kinded class's instance head may be a bare
+   name, a partial application, or a λ `λ (A: Type) => D<…, A, …>` whose
+   bound variable sits exactly at `D`'s slot and nowhere else. The carrier
+   is elaborated to `C_s` so that resolution unifies it structurally with
+   what the use site learned; its registry key and canonical name are
+   `D`'s (`Result::Bind`); the occurrence check reads binders in the fixed
+   arguments. A carrier abstracting any other position is refused at the
+   declaration and names the declared slot: inference never produces it,
+   so such an instance is unreachable. (A section `Result<·, E>` is a
+   possible later spelling of the same λ.)
+
+### 7.4 What it leaves
+
+- A second inferred slot per type (a functor over `Result`'s error) is
+  unavailable; `M := λ E => Result<A, E>` written at the call still works.
+- A carrier with no head (`State`) is a named type-level `fn`, as in Lean.
+- Tier-2 declarations (`Tac`) and codata have no code function, so their
+  constructor is the λ over the inline lowering, as today; its per-use cost
+  stays with `issues/tier2-type-code-functions.md`. CoTree additionally
+  needs `constructor_spelling` to learn codata and value parameters.
+- The tree-sitter grammar learns `varies` when its parser is next
+  regenerated.
