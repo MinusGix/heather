@@ -1326,6 +1326,7 @@ impl application::ImplicitApplicationElab for Elaborator {
         Some(self.expr_elab().infer_callback_from_domains(self,cx,binders,body,&domains))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn unify_application_argument_type(
         &self,
         cx: &Cx,
@@ -1333,9 +1334,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         argument: &Type,
         n: u32,
         sols: &mut [Sol],
+        meta_doms: &[Type],
         span: Span,
     ) {
-        self.unify_arg_ty(cx, parameter, argument, n, sols, span)
+        self.unify_arg_ty(cx, parameter, argument, n, sols, meta_doms, span)
     }
 
     fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span) {
@@ -1719,6 +1721,12 @@ pub fn kernel_workers_from_env() -> Option<usize> {
 pub fn kernel_workers_from_spec(spec: &str) -> Option<usize> {
     spec.trim().parse::<usize>().ok().filter(|n| *n > 0)
 }
+
+/// How many reducts of an argument's type [`Elaborator::unify_arg_ty`] reads
+/// after a solution it learned did not fit its slot: a δ step and the β steps
+/// that apply the unfolded body, twice over, and no whnf at large
+/// (issues/index-inference-through-unfolding.md).
+const INDEX_UNFOLD_STEPS: u64 = 8;
 
 /// The one shape an invisible difference almost always has, named so the
 /// reader does not have to know how a type is represented to act on it
@@ -9613,6 +9621,18 @@ impl Elaborator {
     ///    the honest outcome is the caller's own per-slot message about the
     ///    implicit it could not infer, not a complaint about a type the writer
     ///    never asked to reduce.
+    ///
+    /// Every read is **held to the slots' declared types** (`meta_doms`):
+    /// an operation-typed slot whose type is already known keeps only a
+    /// solution that inhabits it ([`Self::reject_ill_typed_solutions`]), so
+    /// the one thing a read may undo is what that same read just recorded.
+    /// When it undid something, the argument was written in other symbols —
+    /// `x ≈ y` at `Rat` against `a * d ≈ c * b` at `Int` — and before the
+    /// whnf the read walks the type's first [`INDEX_UNFOLD_STEPS`] reducts,
+    /// stopping at the first declaration application that teaches something
+    /// that fits: `Dyadic::Le(a, b)` is `Rat::Le(a.rat(), b.rat())` one δ
+    /// step on (issues/index-inference-through-unfolding.md).
+    #[allow(clippy::too_many_arguments)]
     fn unify_arg_ty(
         &self,
         cx: &Cx,
@@ -9620,6 +9640,7 @@ impl Elaborator {
         arg_ty: &Type,
         n: u32,
         sols: &mut [Sol],
+        meta_doms: &[Type],
         span: Span,
     ) {
         let learned = |sols: &[Sol]| sols.iter().filter(|s| s.solved().is_some()).count();
@@ -9637,14 +9658,91 @@ impl Elaborator {
         let dom = dom_inline.as_ref().unwrap_or(dom_orig);
         let arg_inline = self.unspell_deep_now(arg_ty, 0);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
-        self.unify_root(cx, dom, arg_ty, n, sols, span);
+        let unify_checked = |sols: &mut [Sol], subject: &Type| -> bool {
+            let mark: Vec<bool> = sols.iter().map(|s| matches!(s, Sol::Unsolved)).collect();
+            self.unify_root(cx, dom, subject, n, sols, span);
+            self.reject_ill_typed_solutions(cx, &mark, sols, meta_doms, n)
+        };
+        let rejected = unify_checked(sols, arg_ty);
         if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
             return;
         }
+        // An operation slot the syntactic read filled with a declaration of
+        // another type: `Rat::Same(x, y)` read as `?≈(?*(a, d), ?*(c, b))` at
+        // `Int` pairs `?≈` with `Rat::Same` (issues/index-inference-through-
+        // unfolding.md). The argument's type was written in its own symbols,
+        // and the parameter's are a step or two of unfolding away; read those
+        // reducts, nearest first, while they are still applications of a
+        // declaration, and stop at the first that teaches something that
+        // fits. Bounded, and only on this path, so no call that read cleanly
+        // ever steps.
+        if rejected
+            && let Type::El { level, tm } = arg_ty
+        {
+            let oracle = self.goal_oracle();
+            for reduct in oracle.term_reducts(&cx.gamma, tm, INDEX_UNFOLD_STEPS) {
+                if !unification::global_spine(&reduct) {
+                    continue;
+                }
+                let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
+                unify_checked(sols, &unfolded);
+                if learned(sols) != before {
+                    return;
+                }
+            }
+        }
         if let Ok(head) = self.whnf(cx, arg_ty, span) {
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            self.unify_root(cx, dom, &head, n, sols, span);
+            unify_checked(sols, &head);
         }
+    }
+
+    /// Undo the solutions a read just recorded (`unsolved` marks the slots
+    /// that were open before it) at **operation-typed** slots whose declared
+    /// type is known and which the solution does not inhabit. The congruence
+    /// aligns a flexible spine against any rigid one of its length, so
+    /// `?≈(l, r)` against `Rat::Same(x, y)` takes `?≈ := Rat::Same` even where
+    /// `?≈ : Int → Int → Type` is already fixed; that solution is not a
+    /// candidate answer, and keeping it hands the instance search a goal no
+    /// instance can be (issues/index-inference-through-unfolding.md). Only `Π`
+    /// domains are judged, since those are the slots this alignment fills,
+    /// and a solution whose type the kernel cannot infer is kept: still
+    /// learn-only, and the kernel still judges the call. `true` when one was
+    /// undone.
+    fn reject_ill_typed_solutions(
+        &self,
+        cx: &Cx,
+        unsolved: &[bool],
+        sols: &mut [Sol],
+        meta_doms: &[Type],
+        n: u32,
+    ) -> bool {
+        let fresh: Vec<usize> = (0..sols.len().min(meta_doms.len()))
+            .filter(|&i| unsolved[i] && sols[i].solved().is_some() && matches!(meta_doms[i], Type::Pi { .. }))
+            .collect();
+        if fresh.is_empty() {
+            return false;
+        }
+        let psi = self.goal_psi();
+        let oracle = oracle::SemanticOracle::in_world(psi.clone(), self.policy.fuel);
+        let mut rejected = false;
+        for i in fresh {
+            let Some(dom) = zonked(&meta_doms[i], n, sols) else { continue };
+            let solution = Rc::clone(sols[i].solved().expect("a fresh solution"));
+            let Ok((ty, level)) = stats::time_kernel(|| {
+                typing::infer_term(&psi, 0, Layer::Prog, &cx.gamma, &solution, self.policy.fuel)
+            }) else {
+                continue;
+            };
+            let fits = stats::time_kernel(|| {
+                oracle.convert_type(&cx.gamma, Layer::Prog, &ty, &dom, &level).is_ok()
+            });
+            if !fits {
+                sols[i] = Sol::Unsolved;
+                rejected = true;
+            }
+        }
+        rejected
     }
 
     /// Expected-type-directed solving (docs/unifier-completeness-design.md
@@ -9724,11 +9822,18 @@ impl Elaborator {
         let expected = inline_expected.as_ref().unwrap_or(expected);
         let Some((m, s_raw, t_raw)) = flex else {
             // Preserve named relations and operation applications before
-            // unfolding a transparent relation into its definition.
+            // unfolding a transparent relation into its definition. Held to
+            // the slots' types as an argument's read is: `x ≈ z` at `Rat`
+            // against `?≈(?*(a, f), ?*(e, b))` at `Int` pairs `?≈` with
+            // `Rat::Same` (issues/index-inference-through-unfolding.md).
+            let unsolved: Vec<bool> = sols.iter().map(|s| matches!(s, Sol::Unsolved)).collect();
             self.unify_root(cx, result_ty, expected, n, sols, span);
+            self.reject_ill_typed_solutions(cx, &unsolved, sols, meta_doms, n);
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
+            let unsolved: Vec<bool> = sols.iter().map(|s| matches!(s, Sol::Unsolved)).collect();
             self.unify_root(cx, result_ty, &head, n, sols, span);
+            self.reject_ill_typed_solutions(cx, &unsolved, sols, meta_doms, n);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`
