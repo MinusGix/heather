@@ -5674,6 +5674,14 @@ impl Elaborator {
             // matches the type it is checked against. A written annotation is
             // a readability aid and must be convertible with it
             // (docs/surface-function-types.md §5.2).
+            // A type constructor written as a λ abstracting a declaration's
+            // declared slot takes the canonical spelling the unifier learns
+            // (docs/lambda-carrier-instances-design.md §7.3).
+            ExprKind::Lam { binders, body }
+                if let Some(term) = self.check_slot_lambda(cx, binders, body, expected, e.span)? =>
+            {
+                Ok(term)
+            }
             ExprKind::Lam { binders, body } => self
                 .expr_elab()
                 .check_lambda(self, cx, binders, body, expected, lvl, skel, e.span),
@@ -9124,6 +9132,7 @@ impl Elaborator {
         let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
         let respell = |t: &Type| self.respell_ty(cx, t);
         let constructor = |t: &Type| self.constructor_spelling(cx, t, span);
+        let slot_view = |t: &Term| self.slot_view(t);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
@@ -9131,6 +9140,7 @@ impl Elaborator {
             canonical_head: &canonical_head,
             respell: &respell,
             constructor: &constructor,
+            slot_view: &slot_view,
         };
         unify_ty_root(&u, pat, subj, n, 0, sols);
     }
@@ -9145,6 +9155,7 @@ impl Elaborator {
         let canonical_head = |t: &Term, e: u32| self.canonical_head(cx, t, e);
         let respell = |t: &Type| self.respell_ty(cx, t);
         let constructor = |t: &Type| self.constructor_spelling(cx, t, span);
+        let slot_view = |t: &Term| self.slot_view(t);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
@@ -9152,6 +9163,7 @@ impl Elaborator {
             canonical_head: &canonical_head,
             respell: &respell,
             constructor: &constructor,
+            slot_view: &slot_view,
         };
         unify_ty_root(&u, pat, subj, n, d, sols);
     }
