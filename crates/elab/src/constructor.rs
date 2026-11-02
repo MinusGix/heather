@@ -200,7 +200,7 @@ impl Elaborator {
         if ctor != cons {
             return;
         }
-        if self.warnings.borrow().iter().any(|warning| {
+        if self.pass.warnings.borrow().iter().any(|warning| {
             warning.lint == crate::Lint::ManualListConstruction
                 && warning.span.start <= expr.span.start
                 && expr.span.end <= warning.span.end
@@ -501,7 +501,7 @@ impl Elaborator {
         // type name has a universe type and cannot check there; dropping that
         // reading is therefore a shrink, while a `Global` or `Meta` may return
         // the expected type and must still make this route stand down.
-        let scopes = self.resolution_scopes.borrow();
+        let scopes = self.scope.resolution_scopes.borrow();
         self.names.visible_entries_are(
             scopes.last().map(Rc::as_ref),
             name,

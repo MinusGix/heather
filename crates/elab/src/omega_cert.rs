@@ -3562,7 +3562,7 @@ fn split_bool_guards(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
         return Ok(None);
     }
     let (round, settled) = {
-        let rounds = elab.omega_settled_guards.borrow();
+        let rounds = elab.scope.omega_settled_guards.borrow();
         let settled: std::collections::HashSet<String> = rounds.iter().flatten().cloned().collect();
         (rounds.len(), settled)
     };

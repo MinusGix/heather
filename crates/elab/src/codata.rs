@@ -1850,7 +1850,7 @@ impl Elaborator {
                             (term, ty, lf.clone())
                         }
                         _ => {
-                            let r = if self.emits_at_forms(&acx) {
+                            let r = if self.emits_at_forms() {
                                 self.projection_at(&acx, &ctor_ty, &value_here, payload_k, span)?
                             } else {
                                 self.projection(&acx, &ctor_ty, &value_here, payload_k, span)?

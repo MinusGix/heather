@@ -3046,7 +3046,7 @@ impl Elaborator {
                 // members after it (design §4.2): a member cannot reference
                 // itself or a later one by short name.
                 member_names.push(m.name.clone());
-                self.instance_scope
+                self.scope.instance_scope
                     .push((m.name.clone(), format!("{prefix}::{}", m.name)));
             }
         }
@@ -3054,7 +3054,7 @@ impl Elaborator {
         // On the failure path the whole snapshot is restored, which clears it
         // too.
         let r = self.assemble_instance(d, &class, &head, &head_key, &prefix, &class_ty, &written);
-        self.instance_scope.clear();
+        self.scope.instance_scope.clear();
         r?;
         let global = qkey(self.names.module(), &prefix);
         let info = InstanceInfo { global, written, index, parameterized };

@@ -184,7 +184,7 @@ impl Elaborator {
             motive_level = Level::join(dom_level, motive_level);
         }
         let psi = self.goal_psi();
-        typing::check_type(&psi, 0, Layer::Prog, &ycx.gamma, &motive, &motive_level, self.fuel).map_err(|_| {
+        typing::check_type(&psi, 0, Layer::Prog, &ycx.gamma, &motive, &motive_level, self.policy.fuel).map_err(|_| {
             ElabError::Elab {
                 msg: format!(
                     "`subst`: generalising the goal over `{x_name}` and the locals that depend on it \

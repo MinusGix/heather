@@ -2653,7 +2653,7 @@ impl Elaborator {
             return Some(Rc::clone(raw));
         };
         let by = len.checked_sub(at)?;
-        if let Some((b, f, r, read)) = self.guard_reads.borrow().get(&key)
+        if let Some((b, f, r, read)) = self.memos.guard_reads.borrow().get(&key)
             && *b == by
             && *f == frame
             && Rc::ptr_eq(r, raw)
@@ -2661,7 +2661,7 @@ impl Elaborator {
             return Some(Rc::clone(read));
         }
         let read = Rc::new(guard_read(raw, by, frame));
-        self.guard_reads.borrow_mut().insert(key, (by, frame, Rc::clone(raw), Rc::clone(&read)));
+        self.memos.guard_reads.borrow_mut().insert(key, (by, frame, Rc::clone(raw), Rc::clone(&read)));
         Some(read)
     }
 
@@ -2672,7 +2672,7 @@ impl Elaborator {
             return Some((Rc::clone(&slots.shape), Rc::clone(&slots.arity)));
         }
         let hit = self
-            .guard_slot_formers
+            .memos.guard_slot_formers
             .borrow()
             .get(&tag)
             .filter(|(raw, _)| Rc::ptr_eq(raw, &slots.shape))
@@ -2685,7 +2685,7 @@ impl Elaborator {
                     shape: Rc::clone(&slots.shape),
                     arity: Rc::clone(&slots.arity),
                 });
-                self.guard_slot_formers.borrow_mut().insert(tag, (Rc::clone(&slots.shape), Rc::clone(&former)));
+                self.memos.guard_slot_formers.borrow_mut().insert(tag, (Rc::clone(&slots.shape), Rc::clone(&former)));
                 former
             }
         };
@@ -2706,7 +2706,7 @@ impl Elaborator {
         let by = len.checked_sub(at)?;
         let raw = &codes.ctors.first()?.0;
         let hit = self
-            .guard_spine_reads
+            .memos.guard_spine_reads
             .borrow()
             .get(&tag)
             .filter(|(b, fr, r, _)| *b == by && *fr == frame && Rc::ptr_eq(r, raw))
@@ -2715,7 +2715,7 @@ impl Elaborator {
             Some(read) => read,
             None => {
                 let read = Rc::new(codes.read(by, frame));
-                self.guard_spine_reads.borrow_mut().insert(tag, (by, frame, Rc::clone(raw), Rc::clone(&read)));
+                self.memos.guard_spine_reads.borrow_mut().insert(tag, (by, frame, Rc::clone(raw), Rc::clone(&read)));
                 read
             }
         };
@@ -4075,7 +4075,7 @@ impl Elaborator {
                 lands_in_psi: true,
             };
             let admitted = self
-                .gate
+                .policy.gate
                 .as_ref()
                 .is_some_and(|g| g.admits(&self.psi, &item));
             drop(item);
@@ -4110,9 +4110,9 @@ impl Elaborator {
                     // The serial replay's reused verdict, if this obligation
                     // is the one a worker of the discarded pass already
                     // answered (`docs/parallel-kernel-gate-design.md` §5.2).
-                    let verdict = match self.kernel_replay.reuse(
+                    let verdict = match self.pass.kernel_replay.reuse(
                         self.psi.bindings.len(),
-                        self.fuel,
+                        self.policy.fuel,
                         &item,
                     ) {
                         Some(verdict) => verdict,
@@ -4130,7 +4130,7 @@ impl Elaborator {
                         site: crate::KernelSite::Other,
                     })?;
                     let unsealed = recording.finish();
-                    if let Some(g) = self.gate.as_ref() {
+                    if let Some(g) = self.policy.gate.as_ref() {
                         g.accepted(&self.psi, &item, &unsealed);
                     }
                 } else {
@@ -4280,7 +4280,7 @@ impl Elaborator {
     }
 
     fn meta_offset(&self) -> u32 {
-        self.meta_pushed.borrow().len() as u32
+        self.scope.meta_pushed.borrow().len() as u32
     }
 
     /// Whether `t` is exactly `u^δ` for the definition `key` — the head test
