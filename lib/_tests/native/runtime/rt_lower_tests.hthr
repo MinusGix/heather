@@ -1,6 +1,7 @@
 // Probes of the default setup's lowering of `rt` into FunctionIR and its
 // soundness proved once (`lib/native/runtime/rt_lower.hthr`): V6 of
-// docs/runtime-fn-setups-design.md §12. Per program nothing is proved: the
+// docs/runtime-fn-setups-design.md §12, and round 2's primitives, literals,
+// convoys, calls and the function wrapper. Per program nothing is proved: the
 // lowering is evaluated, the theorem `Tm::lower_sound` is instantiated, and
 // the pin (`rt` meaning to function, by conversion) closes the gap. Tests,
 // not library: nothing imports this module.
@@ -48,7 +49,7 @@ theorem pick_lowers():
 theorem pick_agrees(c: Bool, x, y: BitVec(64), call: Answers(), values: Valuation(),
     held_c: values(1, 0) = BitVec::ofBool(c), held_x: values(64, 1) = x, held_y: values(64, 2) = y):
     Lowered::word(Tm::lower(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3), call, values) = pick(c, x, y) {
-    Tm::lower_sound(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3, call, values, Pair(y, Pair(x, Pair(c, trivial))),
+    Tm::lower_sound(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3, call, Tm::calls_agree_none(RecInfo::none, call), values, Pair(y, Pair(x, Pair(c, trivial))),
         ⟨held_y, ⟨held_x, ⟨held_c, trivial⟩⟩⟩, ⟨Nat::lt_succ_self(2), ⟨trivial, ⟨trivial, trivial⟩⟩⟩).right.right.right
 }
 
@@ -64,7 +65,7 @@ fn twice_body() → Tm { Let(Prim(Add(64), [0, 0]), Prim(Add(64), [0, 0])) }
 
 theorem twice_agrees(x: BitVec(64), call: Answers(), values: Valuation(), held_x: values(64, 0) = x):
     Lowered::word(Tm::lower(twice_body(), no_records_world(), [Word(64)], [0], 1), call, values) = twice(x) {
-    Tm::lower_sound(twice_body(), no_records_world(), [Word(64)], [0], 1, call, values, Pair(x, trivial),
+    Tm::lower_sound(twice_body(), no_records_world(), [Word(64)], [0], 1, call, Tm::calls_agree_none(RecInfo::none, call), values, Pair(x, trivial),
         ⟨held_x, trivial⟩, ⟨Nat::lt_succ_self(0), trivial⟩).right.right.right
 }
 
@@ -85,7 +86,7 @@ theorem arms_disagree_refused():
 theorem pick_not_sub(x, y: BitVec(64), call: Answers(), values: Valuation(),
     held_c: values(1, 0) = BitVec::ofBool(True), held_x: values(64, 1) = x, held_y: values(64, 2) = y):
     Lowered::word(Tm::lower(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3), call, values) = x.sub(y) {
-    Tm::lower_sound(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3, call, values, Pair(y, Pair(x, Pair(True, trivial))),
+    Tm::lower_sound(pick_body(), no_records_world(), pick_context(), [2, 1, 0], 3, call, Tm::calls_agree_none(RecInfo::none, call), values, Pair(y, Pair(x, Pair(True, trivial))),
         ⟨held_y, ⟨held_x, ⟨held_c, trivial⟩⟩⟩, ⟨Nat::lt_succ_self(2), ⟨trivial, ⟨trivial, trivial⟩⟩⟩).right.right.right
 }
 
@@ -100,7 +101,7 @@ fn wrong_add_node(next, width, pa, pb: Nat) → Option<Lowered> {
 theorem wrong_add_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, width, a, b, pa, pb: Nat,
     at_a: port_at(ports, a) = Some(pa), at_b: port_at(ports, b) = Some(pb), ea: Ty::at(g, a) = Word(width), eb: Ty::at(g, b) = Word(width)):
     Tm::LowerHolds(Prim(Add(width), [a, b]), w, g, ports, next, wrong_add_node(next, width, pa, pb)) {
-    λ call values env held below => {
+    λ call agree values env held below => {
         let sum = λ (wd: Nat) => values(wd, pa).add(values(wd, pb));
         let left = Ty::cast_holds(w.tys, values, pa, Ty::at(g, a), Word(width), ea, Env::get(w.tys, g, env, a),
             env_holds_at(w.tys, values, g, ports, env, held, a, pa, at_a));
@@ -111,3 +112,154 @@ theorem wrong_add_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, widt
                 trans(Valuation::set_here(values, next, sum, width), eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.add(y), left, right))⟩⟩⟩
     }
 }
+
+// ---------------------------------------------------------------------------
+// Round 2: comparisons, `&&` and `!` on bits.
+
+// What a lowering's region leaves at its result port as a bit, or zero
+// where the lowering refused.
+fn Lowered::bit(o: Option<Lowered>, call: Answers(), values: Valuation()) → BitVec(1) {
+    match o { None => BitVec::ofNat(0), Some(c) => c.region.eval(call, values)(1, c.result) }
+}
+
+fn outside(lo, x, hi: BitVec(64)) → Bool { !(lo.unsigned_lt_bit(x) && x.unsigned_lt_bit(hi)) }
+
+// `lo`, `x`, `hi` in order, so `hi` is variable 0, at ports 0, 1, 2.
+fn outside_body() → Tm {
+    Let(Prim(Ult(64), [2, 1]), Let(Prim(Ult(64), [2, 1]), Let(Prim(Conj, [1, 0]), Prim(Neg, [0]))))
+}
+
+fn words3() → List<Ty> { [Word(64), Word(64), Word(64)] }
+
+theorem outside_agrees(lo, x, hi: BitVec(64), call: Answers(), values: Valuation(),
+    held_hi: values(64, 0) = hi, held_x: values(64, 1) = x, held_lo: values(64, 2) = lo):
+    Lowered::bit(Tm::lower(outside_body(), no_records_world(), words3(), [0, 1, 2], 3), call, values) = BitVec::ofBool(outside(lo, x, hi)) {
+    Tm::lower_sound(outside_body(), no_records_world(), words3(), [0, 1, 2], 3, call, Tm::calls_agree_none(RecInfo::none, call), values,
+        Pair(hi, Pair(x, Pair(lo, trivial))), ⟨held_hi, ⟨held_x, ⟨held_lo, trivial⟩⟩⟩, ⟨trivial, ⟨trivial, ⟨Nat::lt_succ_self(2), trivial⟩⟩⟩).right.right.right
+}
+
+// A wrong claim: the region negates the conjunction.
+// expect-error(kernel): the kernel rejected `outside_not_inside`: NotConvertible
+theorem outside_not_inside(lo, x, hi: BitVec(64), call: Answers(), values: Valuation(),
+    held_hi: values(64, 0) = hi, held_x: values(64, 1) = x, held_lo: values(64, 2) = lo):
+    Lowered::bit(Tm::lower(outside_body(), no_records_world(), words3(), [0, 1, 2], 3), call, values)
+        = BitVec::ofBool(lo.unsigned_lt_bit(x) && x.unsigned_lt_bit(hi)) {
+    Tm::lower_sound(outside_body(), no_records_world(), words3(), [0, 1, 2], 3, call, Tm::calls_agree_none(RecInfo::none, call), values,
+        Pair(hi, Pair(x, Pair(lo, trivial))), ⟨held_hi, ⟨held_x, ⟨held_lo, trivial⟩⟩⟩, ⟨trivial, ⟨trivial, ⟨Nat::lt_succ_self(2), trivial⟩⟩⟩).right.right.right
+}
+
+// A bit literal is the one-bit word of its truth.
+theorem bit_literal_agrees(call: Answers(), values: Valuation()):
+    Lowered::bit(Tm::lower(Lit(Bit, 5), no_records_world(), [], [], 0), call, values) = BitVec::ofBool(True) {
+    Tm::lower_sound(Lit(Bit, 5), no_records_world(), [], [], 0, call, Tm::calls_agree_none(RecInfo::none, call), values,
+        trivial, trivial, trivial).right.right.right
+}
+
+// The negative control on the lowering: `!` against a constant zero is the
+// bit itself, and the `Neg` case's proof fails on it.
+fn wrong_neg_lowered(next, pa: Nat) → Lowered {
+    Lowered(nodes_region([Const(1, next, 0), BitXor(1, Succ(next), pa, next)]), Succ(next), Succ(Succ(next)))
+}
+
+// expect-error(mismatch)
+theorem wrong_neg_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, pa: Nat, at_a: port_at(ports, a) = Some(pa), ea: Ty::at(g, a) = Bit):
+    Tm::LowerHolds(Prim(Neg, [a]), w, g, ports, next, Some(wrong_neg_lowered(next, pa))) {
+    λ call agree values env held below => {
+        let one = Valuation::set(values, next, λ wd => BitVec::ofNat(0));
+        let x = Ty::cast(w.tys, Ty::at(g, a), Bit, Env::get(w.tys, g, env, a));
+        let pa_lt: (pa < next) = below_at(ports, next, below, a, pa, at_a);
+        let step: (next <= Succ(next)) = Nat::le_succ_r(next, next, next.le_refl());
+        ⟨Nat::le_succ_r(next, Succ(next), step), ⟨Succ(next).lt_succ_self(),
+            ⟨λ wd id lt => trans(Valuation::set_other(one, Succ(next), λ v => one(v, pa).bxor(one(v, next)), wd, id,
+                    Nat::ne_of_lt(id, Succ(next), Nat::lt_of_lt_of_le(id, next, Succ(next), lt, step))),
+                Valuation::set_other(values, next, λ v => BitVec::ofNat(0), wd, id, Nat::ne_of_lt(id, next, lt))),
+            trans(Valuation::set_here(one, Succ(next), λ v => one(v, pa).bxor(one(v, next)), 1),
+                trans(eq2(λ (p: BitVec(1)) (q: BitVec(1)) => p.bxor(q),
+                        trans(Valuation::set_other(values, next, λ v => BitVec::ofNat(0), 1, pa, Nat::ne_of_lt(pa, next, pa_lt)),
+                            Tm::operand(w, g, ports, values, env, held, a, pa, at_a, Bit, ea)),
+                        Valuation::set_here(values, next, λ v => BitVec::ofNat(0), 1)),
+                    Tm::bxor_one(x)))⟩⟩⟩
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions: the wrapper from `Function::eval` to the reflected meaning.
+// The reflections are the reflector's (`lib/_tests/native/runtime/rt_tests.hthr`
+// checks them against the elaborated bodies); here each is lowered and the
+// theorem instantiated, and the pin closes by conversion.
+
+// What a function's lowering returns on words, or zero where it refused.
+fn Function::word(o: Option<Function>, call: Answers(), xs: List<BitVec(64)>) → BitVec(64) {
+    match o { None => BitVec::ofNat(0), Some(code) => code.eval(call, xs) }
+}
+
+// A program with no calls needs no hypothesis about them.
+fn twice_fun() → Fun { Fun([Word(64)], Word(64), twice_body()) }
+
+theorem twice_compiled(call: Answers(), x: BitVec(64)): Function::word(twice_fun().lower(no_records_world()), call, [x]) = twice(x) {
+    Fun::lower_sound(twice_fun(), no_records_world(), call, Tm::calls_agree_none(RecInfo::none, call), x)
+}
+
+// A literal and an exclusive or (`calls.hthr`'s leaf), and a call of it.
+fn leaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    left.add(right).bxor(BitVec::ofNat(0x0123456789abcdef))
+}
+
+fn caller(left: BitVec(64), right: BitVec(64)) → BitVec(64) { leaf(left, right) }
+
+fn leaf_rt() → Fun {
+    Fun([Word(64), Word(64)], Word(64),
+        Let(Prim(Add(64), [1, 0]), Let(Lit(Word(64), 0x0123456789abcdef), Prim(Bxor(64), [1, 0]))))
+}
+
+fn caller_rt() → Fun { Fun([Word(64), Word(64)], Word(64), Call(0, [1, 0])) }
+
+fn calls_world() → World {
+    World(RecInfo::none, [leaf_rt().sig(), caller_rt().sig()], Pair(leaf, Pair(caller, trivial)))
+}
+
+theorem leaf_compiled(call: Answers(), agree: Tm::CallsAgree(calls_world(), call), a, b: BitVec(64)):
+    Function::word(leaf_rt().lower(calls_world()), call, [a, b]) = leaf(a, b) {
+    Fun::lower_sound(leaf_rt(), calls_world(), call, agree, a, b)
+}
+
+// The call is FunctionIR's `Call` of function 0, answered by `leaf`'s
+// meaning: the hypothesis a program discharges from `leaf_compiled`.
+theorem caller_compiled(call: Answers(), agree: Tm::CallsAgree(calls_world(), call), a, b: BitVec(64)):
+    Function::word(caller_rt().lower(calls_world()), call, [a, b]) = caller(a, b) {
+    Fun::lower_sound(caller_rt(), calls_world(), call, agree, a, b)
+}
+
+// A `match h:` convoy (rt_tests' V4) lowers as a branch.
+fn safe_pred(n: BitVec(64)) → BitVec(64) {
+    match h: n.eq_bit(BitVec::ofNat(0)) { True => n, False => n.sub(BitVec::ofNat(1)) }
+}
+
+fn safe_pred_rt() → Fun {
+    Fun([Word(64)], Word(64),
+        Let(Lit(Word(64), 0), Let(Prim(Eq(64), [1, 0]), IfEq(0, Var(2), Let(Lit(Word(64), 1), Prim(Sub(64), [3, 0]))))))
+}
+
+fn safe_pred_world() → World { World(RecInfo::none, [safe_pred_rt().sig()], Pair(safe_pred, trivial)) }
+
+theorem safe_pred_compiled(call: Answers(), agree: Tm::CallsAgree(safe_pred_world(), call), n: BitVec(64)):
+    Function::word(safe_pred_rt().lower(safe_pred_world()), call, [n]) = safe_pred(n) {
+    Fun::lower_sound(safe_pred_rt(), safe_pred_world(), call, agree, n)
+}
+
+// ---------------------------------------------------------------------------
+// Refusals of round 2.
+
+// `zero_extend` has no node yet.
+theorem zext_refused(): Tm::lower(Prim(Zext(32, 32), [0]), no_records_world(), [Word(32)], [0], 1) = None { refl }
+
+// A call at a signature that is not all words.
+fn bit_callee_world() → World { World(RecInfo::none, [Sig([Bit], Word(64))], Pair(λ (b: Bool) => BitVec::ofNat(0), trivial)) }
+
+theorem call_of_bit_refused(): Tm::lower(Call(0, [0]), bit_callee_world(), [Bit], [0], 1) = None { refl }
+
+// A call with an argument too few.
+theorem call_arity_refused(): Tm::lower(Call(0, [0]), calls_world(), [Word(64)], [0], 1) = None { refl }
+
+// A function of a bit has no word entry.
+theorem fun_of_bit_refused(): Fun([Bit], Word(64), Lit(Word(64), 0)).lower(no_records_world()) = None { refl }
