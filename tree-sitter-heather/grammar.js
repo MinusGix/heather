@@ -289,9 +289,14 @@ module.exports = grammar({
     assignment_statement: $ => seq(field('name', $.identifier), ':=', field('value', $._expression), ';'),
     // A statement `if`/`match`: its bodies are statements, and it needs no
     // `;` (§5.1).
-    statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement),
+    statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement, $.while_statement),
     // `for x in xs { body }` (§5.2): `in` is contextual.
-    for_statement: $ => seq('for', field('binder', $.identifier), 'in', field('iterable', $._head_expression), field('body', $.block)),
+    // `a..b` is a range, written only in a `for` header.
+    for_statement: $ => seq('for', field('binder', $.identifier), 'in', field('iterable', $._head_expression),
+      optional(seq('..', field('end', $._head_expression))), field('body', $.block)),
+    // `while c decreases m { body }` (§5.3): a recursive function over the
+    // locals the body assigns, `m` its measure.
+    while_statement: $ => seq('while', field('condition', $._head_expression), 'decreases', field('measure', $._head_expression), field('body', $.block)),
     // `break;`, `continue;`, `return e;` in a `for` body (§5.2): contextual
     // words, statements only before `;` or `}`.
     exit_statement: $ => choice(seq('break', ';'), seq('continue', ';'), seq('return', field('value', $._expression), ';')),
@@ -354,7 +359,7 @@ module.exports = grammar({
       ...headBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...headBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...headBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...headBinary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...headBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...headBinary($, ['^'], PREC.POWER, 'right'),
     ),
 
@@ -417,7 +422,7 @@ module.exports = grammar({
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...typeBinary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...typeBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...typeBinary($, ['^'], PREC.POWER, 'right'),
     ),
     declaration_quantified_type: $ => prec.right(seq(
@@ -452,7 +457,7 @@ module.exports = grammar({
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left', $._annotation_type),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left', $._annotation_type),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left', $._annotation_type),
-      ...typeBinary($, ['*', '∙'], PREC.MUL, 'left', $._annotation_type),
+      ...typeBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left', $._annotation_type),
       ...typeBinary($, ['^'], PREC.POWER, 'right', $._annotation_type),
     ),
     annotation_quantified_type: $ => prec.right(seq(
@@ -673,11 +678,11 @@ module.exports = grammar({
       ...binary($, ['||'], PREC.BOOL_OR, 'left'),
       ...binary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...binary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...binary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...binary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...binary($, ['^'], PREC.POWER, 'right'),
     ),
 
-    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '≈', '<=', '<', '^', '⁻¹'),
+    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '⊓', '≈', '<=', '<', '^', '⁻¹'),
     // These words introduce a special form only with their fixed follower in
     // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.

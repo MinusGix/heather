@@ -1,0 +1,38 @@
+// Probes of `decreases` unfolding equations (docs/decreases-unfolding-design.md)
+// over body shapes the `while` lowering produces (docs/sequencing-surface-design.md
+// §5.3, §16). Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import omega; import int;
+
+// A recursive argument passed through a `let`, before the condition's
+// match: the unfolding's lifted obligation still reads the arm's equation
+// about the parameter behind the alias.
+fn alias_before(m: Nat, out: List<Nat>) → List<Nat> decreases m {
+    let m2 = m - 1;
+    match h: decide_bit<1 <= m>() { True => alias_before(m2, List::Cons(m, out)), False => out }
+}
+theorem alias_before_lit(): alias_before(3, List::Nil) = [1, 2, 3] { refl }
+theorem alias_before_unfolds(m: Nat, out: List<Nat>):
+    alias_before(m, out) = (match h: decide_bit<1 <= m>() { True => alias_before(m - 1, List::Cons(m, out)), False => out }) {
+    alias_before_unfold(m, out)
+}
+
+// The same through `let`s inside the arm.
+fn alias_inside(m: Nat, out: List<Nat>) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() {
+        True => { let o2 = List::Cons(m, out); let m2 = m - 1; alias_inside(m2, o2) },
+        False => out,
+    }
+}
+theorem alias_inside_unfolds(m: Nat, out: List<Nat>):
+    alias_inside(m, out) = (match h: decide_bit<1 <= m>() { True => alias_inside(m - 1, List::Cons(m, out)), False => out }) {
+    alias_inside_unfold(m, out)
+}
+
+// Open: a `let` that rebinds a parameter the measure mentions is read as
+// the measure's own variable (issues/decreases-shadowed-let.md), so the
+// obligation compares the new value with itself.
+// expect-error: this recursive call must decrease the measure
+fn shadowed(m: Nat, out: List<Nat>) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() { True => { let m = m - 1; shadowed(m, List::Cons(m, out)) }, False => out }
+}

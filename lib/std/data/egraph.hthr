@@ -26,7 +26,9 @@
 // those; one that hands its `explain` evidence to the kernel needs nothing.
 //
 // A pattern's instances among the graph's terms, up to the classes, are
-// found by `ematch` (e-matching), for a client that instantiates lemmas.
+// found by `ematch` (e-matching), for a client that instantiates lemmas;
+// `ematch_loose` also finds the near ones, which leave one item for the
+// client to decide by something the graph does not know.
 //
 // Costs, as shapes: a node is found by a scan of the nodes (hash-consing is
 // linear per add), a class by a list lookup, and `union` relabels the
@@ -478,6 +480,81 @@ record EMatched { root: Nat, s: Subst }
 // for the patterns searched together.
 fn EGraph::ematch<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, table: List<List<Nat>>, p: Pattern<Q>) → List<EMatched> {
     concat_map(List::range(g.size()), λ n => g.ematch_at(test, table, p, n).map(λ s => EMatched(n, s)))
+}
+
+// E-matching with slack: the matches `ematch` finds, and the near ones. An
+// item the client allows (`slack(i)`) that meets a class none of whose
+// members it matches is left for the client to decide by something the
+// graph does not know (grind's `Defeq`), and the match goes on past it, at
+// most once per match. So a near match is a substitution, which leaves
+// unbound the variables only that item binds, and the item and the node it
+// met. The root is never left: a near match is rooted at a node whose
+// operator the pattern's root matches.
+record Slack { item: Nat, node: Nat }
+
+record Loose { s: Subst, slack: Option<Slack> }
+
+// What a class gave item `i`: its matches, or, when it gave none and the
+// item may be left, one near match leaving it.
+fn loose_defer(slack: Nat → Bool, i: Nat, n: Nat, l: Loose, found: List<Loose>) → List<Loose> {
+    match found {
+        Cons(_, _) => found,
+        Nil => match l.slack {
+            Some(_) => [],
+            None => match slack(i) { True => [Loose(l.s, Some(Slack(i, n)))], False => [] },
+        },
+    }
+}
+
+fn with_subst(l: Loose, s: Subst) → Loose { Loose(s, l.slack) }
+
+fn EGraph::loose_go<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, slack: Nat → Bool, p: Pattern<Q>, table: List<List<Nat>>, fuel: Nat, t: EMatch, l: Loose) → List<Loose> {
+    match fuel {
+        Zero => [],
+        Succ(f) => match t {
+            MClass(i, n) => match p.items.nth(i) {
+                None => [],
+                Some(it) => match it {
+                    PVar(v) => opt_list(g.bind(l.s, v, n)).map(λ s => with_subst(l, s)),
+                    POp(_, _) => loose_defer(slack, i, n, l, concat_map(table_members(table, g.find(n)), λ m => g.loose_go(test, slack, p, table, f, MNode(i, m), l))),
+                },
+            },
+            MNode(i, m) => match p.items.nth(i) {
+                None => [],
+                Some(it) => match it {
+                    PVar(v) => opt_list(g.bind(l.s, v, m)).map(λ s => with_subst(l, s)),
+                    POp(q, ks) => match g.node(m) {
+                        None => [],
+                        Some(nd) => match test(q, nd.op, l.s) {
+                            None => [],
+                            Some(s2) => g.loose_go(test, slack, p, table, f, MKids(ks, nd.kids), with_subst(l, s2)),
+                        },
+                    },
+                },
+            },
+            MKids(is, ns) => match is {
+                Nil => match ns { Nil => [l], Cons(_, _) => [] },
+                Cons(i, ir) => match ns {
+                    Nil => [],
+                    Cons(n, nr) => concat_map(g.loose_go(test, slack, p, table, f, MClass(i, n), l), λ l2 => g.loose_go(test, slack, p, table, f, MKids(ir, nr), l2)),
+                },
+            },
+        },
+    }
+}
+
+// A match or a near match, with the node its root met.
+record LooseMatched { root: Nat, l: Loose }
+
+// The matches and near matches of `p` with its root at node `n`; a match
+// is one whose `slack` is `None`, and those are exactly `ematch_at`'s.
+fn EGraph::ematch_loose_at<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, slack: Nat → Bool, table: List<List<Nat>>, p: Pattern<Q>, n: Nat) → List<LooseMatched> {
+    g.loose_go(test, slack, p, table, Succ(Succ(4 * p.items.len())), MNode(p.root, n), Loose(Subst::empty(p.vars), None)).map(λ l => LooseMatched(n, l))
+}
+
+// Every match and near match of `p`, root by root.
+fn EGraph::ematch_loose<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, slack: Nat → Bool, table: List<List<Nat>>, p: Pattern<Q>) → List<LooseMatched> {
+    concat_map(List::range(g.size()), λ n => g.ematch_loose_at(test, slack, table, p, n))
 }
 
 // Do two substitutions bind each of the first `n` variables in one class?

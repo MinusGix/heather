@@ -166,6 +166,7 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             mut_params: Vec::new(),
             pending_mut: None,
             mutables: Vec::new(),
+            range_header: false,
         };
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
@@ -229,6 +230,8 @@ struct Parser {
     /// it a candidate ([`crate::imperative::MUTCALL`]) for the scope that
     /// declared the local to claim.
     mutables: Vec<String>,
+    /// Parsing a `for` header, where `a..b` is a range (§5.2).
+    range_header: bool,
     /// Suppress the record literal `D { … }` (docs/surface-records.md §6.1).
     ///
     /// `{` after an expression is ambiguous exactly where a *block* follows
@@ -3439,17 +3442,92 @@ impl Parser {
         let start = self.bump().span;
         let (x, xspan) = self.binder_ident("`for` binder")?;
         self.bump(); // `in`
-        let iter = self.with_record_lit(true, |p| p.expr())?;
+        let saved = std::mem::replace(&mut self.range_header, true);
+        let iter = self.with_record_lit(true, |p| p.expr());
+        self.range_header = saved;
+        let mut iter = iter?;
+        // `for i in a..b`: the range is `List::range_from(a, b - a)`, and
+        // `0..n` is `List::range(n)` (§5.2), written only here, so no
+        // `Range` type is needed yet.
+        if matches!(self.peek(), TokKind::Dot) && matches!(self.nth(1), TokKind::Dot) {
+            self.bump();
+            self.bump();
+            let hi = self.with_record_lit(true, |p| p.expr())?;
+            let span = iter.span.join(hi.span);
+            let app = |head: &str, args: Vec<Expr>| Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr { kind: ExprKind::Var(head.into()), span }),
+                    args,
+                    named: vec![],
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            };
+            iter = if matches!(&iter.kind, ExprKind::Num(n) if *n == Numeral::ZERO) {
+                app("List::range", vec![hi])
+            } else {
+                let len = op_call("-", OpFixity::Infix, vec![hi, iter.clone()], span);
+                app("List::range_from", vec![iter, len])
+            };
+        }
         if !matches!(self.peek(), TokKind::LBrace) {
             return self.err("a `for` body is a braced block of statements: `for x in xs { … }`");
         }
+        self.loop_stmt(start, iter, x, xspan, "for")
+    }
+
+    /// `while c decreases m { body }` (docs/sequencing-surface-design.md
+    /// §5.3): the `for` marker over the header `\0while(decide_bit<c>(),
+    /// m)` and a private binder, so [`crate::imperative`] threads its state
+    /// as a `for`'s, and the elaborator lifts it into a recursive `f::run`
+    /// instead of a step over a fold.
+    fn while_stmt(&mut self) -> R<Stmt> {
+        let start = self.bump().span;
+        let condition = self.with_record_lit(true, |p| p.expr())?;
+        let cspan = condition.span;
+        if !self.eat_kw("decreases") {
+            return self.err(
+                "a `while` names what it decreases, `while c decreases m { … }`: the loop is a \
+                 recursive function, and `m` is its measure (a fuelled `while` is not built yet)",
+            );
+        }
+        let measure = self.with_record_lit(true, |p| p.expr())?;
+        if !matches!(self.peek(), TokKind::LBrace) {
+            return self.err("a `while` body is a braced block of statements: `while c decreases m { … }`");
+        }
+        // The condition as a plain `if` decides it, so the step sees the
+        // same `decide_bit` match the measure obligation reads (§5.3).
+        let scrut = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp {
+                        head: Box::new(Expr { kind: ExprKind::Var("decide_bit".into()), span: cspan }),
+                        args: vec![expr_as_ty(&condition)],
+                    },
+                    span: cspan,
+                }),
+                args: vec![],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: cspan,
+        };
+        let header = crate::imperative::call_marker(crate::imperative::WHILE, vec![scrut, measure], start.join(cspan));
+        let x = self.hygienic("while");
+        self.loop_stmt(start, header, x, start, "while")
+    }
+
+    /// The braced body of a `for` or `while`, and its marker.
+    fn loop_stmt(&mut self, start: Span, iter: Expr, x: String, xspan: Span, kw: &str) -> R<Stmt> {
         let body = self.block()?;
         if !matches!(&body.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT)
             && !(body.stmts.is_empty() && matches!(body.result.kind, ExprKind::AutoRefl))
         {
             return Err(ParseError {
-                msg: "a `for` body ends in a statement, not a value: it reassigns `let mut` locals, \
-                      so it has no result".into(),
+                msg: format!("a `{kw}` body ends in a statement, not a value: it reassigns `let mut` locals, \
+                      so it has no result"),
                 span: body.result.span,
             });
         }
@@ -3539,6 +3617,11 @@ impl Parser {
                 && matches!(self.nth(2), TokKind::Ident(w) if w == "in")
             {
                 stmts.push(self.for_stmt()?);
+                continue;
+            }
+            // `while c decreases m { body }` (§5.3), a statement too.
+            if self.at_kw("while") && !matches!(self.nth(1), TokKind::Semi | TokKind::RBrace) {
+                stmts.push(self.while_stmt()?);
                 continue;
             }
             // A statement `if` may omit its `else` (§4): only here, at the
@@ -4777,6 +4860,9 @@ impl Parser {
             // writes it has one — but a rung had to be chosen and this is the
             // one its shape asks for.
             TokKind::Bullet => Some(("∙", 7, 8)),
+            // `⊓` binds tighter than `⊔`, as `*` does `+`: the lattice's
+            // two operations read like the semiring's.
+            TokKind::Meet => Some(("⊓", 7, 8)),
             _ => None,
         }
     }
@@ -4797,6 +4883,7 @@ impl Parser {
             TokKind::PipePipe => Some("||"),
             TokKind::Bullet => Some("∙"),
             TokKind::Join => Some("⊔"),
+            TokKind::Meet => Some("⊓"),
             TokKind::Approx => Some("≈"),
             TokKind::LtEq => Some("<="),
             TokKind::Lt => Some("<"),
@@ -5016,6 +5103,15 @@ impl Parser {
                         head: Box::new(Expr { kind: ExprKind::Var(crate::try_lower::TRY.into()), span: end }),
                         args: vec![e], named: Vec::new(), explicit: false, goal_oriented: false,
                     }, span };
+                }
+                // `a..b`: a range's `..` (a `for` header, §5.2), never a
+                // member access.
+                TokKind::Dot if matches!(self.nth(1), TokKind::Dot) => {
+                    if self.range_header { break; }
+                    return self.err(
+                        "`a..b` is a range only in a `for` header (`for i in a..b { … }`); elsewhere write \
+                         `List::range_from(a, b - a)`",
+                    );
                 }
                 TokKind::Dot => {
                     self.bump();
@@ -6979,6 +7075,23 @@ mod tests {
         let (_, args, _) = as_call(&k);
         assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "≈"));
         assert!(matches!(&args[1].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊔"));
+    }
+
+    #[test]
+    fn meet_binds_tighter_than_join() {
+        // `a ⊔ b ⊓ c ≈ d` is `(a ⊔ (b ⊓ c)) ≈ d`, and `⊓` is left-associative.
+        let k = body("a⊔b⊓c≈d");
+        let (_, args, _) = as_call(&k);
+        let (join, operands, _) = as_call(&args[0].kind);
+        assert_eq!(join, "⊔");
+        assert_eq!(as_call(&operands[1].kind).0, "⊓");
+        let k = body("a⊓b⊓c");
+        let (meet, operands, _) = as_call(&k);
+        assert_eq!(meet, "⊓");
+        assert_eq!(as_call(&operands[0].kind).0, "⊓");
+        let k = body("f(⊓)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊓"));
     }
 
     // -- binder symbols (issues/binder-symbol-as-notation.md) --------------

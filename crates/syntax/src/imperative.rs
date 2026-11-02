@@ -67,6 +67,10 @@ pub const MUTATED: &str = "\0mutated";
 /// A function body after a loop that may `return`: `\0after(#forN, { rest })`,
 /// the loop's `Return` value or else the rest.
 pub const AFTER: &str = "\0after";
+/// `\0while(decide_bit<c>(), m)`: a `while`'s header, in the place of a
+/// `for`'s list (§5.3). The loop is otherwise a `for`'s, over a private
+/// binder the body never reads.
+pub const WHILE: &str = "\0while";
 
 fn call_marked(marker: &str, input: Expr, span: Span) -> Expr { marked(marker, input, span) }
 
@@ -276,6 +280,8 @@ fn check_unreachable(b: &Block) -> R<()> {
     Ok(())
 }
 
+pub(crate) fn call_marker(head: &str, args: Vec<Expr>, span: Span) -> Expr { call(head, args, span) }
+
 fn call(head: &str, args: Vec<Expr>, span: Span) -> Expr {
     Expr {
         kind: ExprKind::App { head: Box::new(var(head, span)), args, named: vec![], explicit: false, goal_oriented: false },
@@ -358,8 +364,14 @@ fn lower_in_env(mut b: Block, outer: &[String], next: &mut usize) -> R<(Block, V
                     // with no state (a search).
                     if vars.is_empty() && !body_returns(body) {
                         return fail(span,
-                            "this `for` assigns no `let mut` local, so it computes nothing: in pure code \
+                            "this loop assigns no `let mut` local, so it computes nothing: in pure code \
                              a loop only reassigns locals or `return`s");
+                    }
+                    let is_while = matches!(&iter.kind, ExprKind::App { head, .. } if matches!(&head.kind, ExprKind::Var(n) if n == WHILE));
+                    if is_while && has_exit(body) {
+                        return fail(span,
+                            "`break`, `continue` and `return` in a `while` are not built yet (§5.3): end the \
+                             loop through its condition");
                     }
                     let mut inner = env.clone();
                     for v in &vars {

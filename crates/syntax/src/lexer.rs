@@ -108,6 +108,11 @@ pub enum TokKind {
     /// differently. Five bytes, so it has a window of its own.
     SupInverse, // ⁻¹
     Join,      // ⊔ — additive-precedence operation notation, no fallback
+    /// `⊓` — the meet beside `⊔`'s join, on the multiplicative rung as `∙`
+    /// is, so `x ⊔ y ⊓ z` reads as `+` over `*` does. Notation only: like
+    /// `⊔` it has no fallback name, so it means whatever index a binder
+    /// spelled with it (`meet as ⊓`, `lib/std/algebra/lattice.hthr`).
+    Meet,      // ⊓
     /// The propositional connectives (issues/std-logic-module.md). Unicode is
     /// the spelling, not an alternative to an ASCII digraph set: `λ` and `∙`
     /// already lex, so this follows the precedent rather than setting one.
@@ -606,6 +611,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "∙" => Some(TokKind::Bullet),
             "≈" => Some(TokKind::Approx),
             "⊔" => Some(TokKind::Join),
+            "⊓" => Some(TokKind::Meet),
             "∧" => Some(TokKind::Wedge),
             "∨" => Some(TokKind::Vee),
             "↔" | "<->" => Some(TokKind::Iff),

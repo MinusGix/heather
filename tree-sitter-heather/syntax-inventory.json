@@ -5,14 +5,14 @@
     "give", "have", "impl", "import", "inductive", "infer", "instance", "j", "let", "match", "mut",
     "meta", "mk", "on", "postfix", "prefix", "record", "refl", "by",
     "requires", "assuming", "section", "self", "split", "split_all",
-    "theorem", "generate", "def", "break", "continue", "return", "Squash", "squash_ind", "decreases", "decreasing", "with", "varies"
+    "theorem", "generate", "def", "break", "continue", "return", "while", "Squash", "squash_ind", "decreases", "decreasing", "with", "varies"
   ],
   "punctuation": [
     "(", ")", "{", "}", "[", "]", "⟨", "⟩", "|", ",", ":", ";", "@", "$", ".", "->", "→",
     "=>", "⊢", "|-", "=", ":=", "::", ">", "λ", "∥", "⟦", "⟧", "<-", "←"
   ],
   "fixed_operators": [
-    "+", "-", "!", "++", "*", "<", "<=", "&&", "||", "∙", "⊔", "≈", "¬", "∧", "∨", "↔",
+    "+", "-", "!", "++", "*", "<", "<=", "&&", "||", "∙", "⊔", "⊓", "≈", "¬", "∧", "∨", "↔",
     "<->", "∀", "∃", "∑", "∏", "≠", "^", "⁻¹", "↑"
   ],
   "rejected_fixed_tokens": ["=="]

@@ -36,6 +36,7 @@ import relation_props;
 import algebra;
 import algebra_rel;
 import order;
+import lattice;
 import ordered_field;
 import semiring;
 import rat;
@@ -718,6 +719,36 @@ theorem Dyadic::le_max_of(self a, b: Dyadic, t: Rat, h: t <= a.rat() ∨ t <= b.
         Inl(ab) => match h { Inl(at) => Rat::le_trans(x := t, y := a.rat(), z := b.rat(), hxy := at, hyz := ab), Inr(bt) => bt },
         Inr(no) => match h { Inl(at) => at, Inr(bt) => Rat::le_trans(bt, Rat::le_of_lt(Rat::lt_of_not_le(x := b.rat(), y := a.rat(), h := no))) },
     }
+}
+
+// The larger is above anything either one is above, and the smaller below
+// anything both are above: with the two above, `min` and `max` are a meet and
+// a join modulo `≈` (the `Lattice` instance below).
+theorem Dyadic::le_min_of(self a, b: Dyadic, t: Rat, ha: t <= a.rat(), hb: t <= b.rat()): t <= a.min(b).rat() {
+    match a.le_dec(b) as λ c => t <= (match c { Inl(_) => a, Inr(_) => b }).rat() {
+        Inl(_) => ha,
+        Inr(_) => hb,
+    }
+}
+
+theorem Dyadic::max_le_of(self a, b: Dyadic, t: Rat, ha: a.rat() <= t, hb: b.rat() <= t): a.max(b).rat() <= t {
+    match a.le_dec(b) as λ c => (match c { Inl(_) => b, Inr(_) => a }).rat() <= t {
+        Inl(_) => hb,
+        Inr(_) => ha,
+    }
+}
+
+instance PartialOrderRel<Dyadic>(Dyadic::Same, Dyadic::Le) {
+    le_antisymm := λ a b h1 h2 => Dyadic::same_of_not_lt(Dyadic::not_lt_of_le(h2), Dyadic::not_lt_of_le(h1)),
+}
+
+instance Lattice<Dyadic>(Dyadic::Same, Dyadic::Le, Dyadic::min, Dyadic::max) {
+    meet_le_l := λ a b => a.min_le_of(b, a.rat(), Inl(a.le_refl())),
+    meet_le_r := λ a b => a.min_le_of(b, b.rat(), Inr(b.le_refl())),
+    le_meet := λ a b c ha hb => a.le_min_of(b, c.rat(), ha, hb),
+    le_join_l := λ a b => a.le_max_of(b, a.rat(), Inl(a.le_refl())),
+    le_join_r := λ a b => a.le_max_of(b, b.rat(), Inr(b.le_refl())),
+    join_le := λ a b c ha hb => a.max_le_of(b, c.rat(), ha, hb),
 }
 
 fn Dyadic::lt_bool(self a, b: Dyadic) → Bool { match b.le_dec(a) { Inl(_) => False, Inr(_) => True } }

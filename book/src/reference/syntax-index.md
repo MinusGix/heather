@@ -114,7 +114,7 @@ Goal discharges occur after the block's result expression. In a `split`,
 
 ```text
 prefix:        -  ¬
-multiplicative: *  ∙
+multiplicative: *  ∙  ⊓
 additive:      +  -  ++  ⊔
 boolean:       &&  ||
 comparison:    <  <=  =  ≠

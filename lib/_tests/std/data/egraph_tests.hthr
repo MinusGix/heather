@@ -81,6 +81,27 @@ fn bound(g: EGraph<Op, Nat>) → List<List<Option<Nat>>> { (g.ematch(op_test, g.
 theorem ematch_apart(): (match bound(g1()) { Cons(a, rest) => match rest { Cons(b, _) => g1().subst_same(a, b), Nil => True }, Nil => True }) = False { refl }
 theorem ematch_same(): (match bound(g0()) { Cons(a, rest) => match rest { Cons(b, _) => g0().subst_same(a, b), Nil => False }, Nil => False }) = True { refl }
 
+// E-matching with slack (`ematch_loose`): an item the client allows that
+// meets a class none of whose members it matches is left, with the node it
+// met, at most once per match and never at the root. `f(f(x, y), c)` has no
+// match in `g1`, and a near match at each `f` whose first argument (`a`,
+// `b`) is no `f`; with nothing allowed, none. `f(b, x)` with every item
+// allowed keeps its one match and leaves `b` at `a` once: the constants are
+// never roots. `f(f(x, y), f(z, w))` would need two items left.
+fn ff_x_y_c() → Pattern<Op> { Pattern([PVar(0), PVar(1), POp(F, [0, 1]), POp(K(2), []), POp(F, [2, 3])], 4, 2) }
+fn ff_x_y_f_z_w() → Pattern<Op> { Pattern([PVar(0), PVar(1), POp(F, [0, 1]), PVar(2), PVar(3), POp(F, [3, 4]), POp(F, [2, 5])], 6, 4) }
+
+fn loose(g: EGraph<Op, Nat>, slack: Nat → Bool, p: Pattern<Op>) → List<LooseMatched> { g.ematch_loose(op_test, slack, g.class_table(), p) }
+
+fn left_nodes(ms: List<LooseMatched>) → List<Nat> {
+    match ms { Nil => [], Cons(m, rest) => match m.l.slack { Some(sl) => Cons(sl.node, left_nodes(rest)), None => left_nodes(rest) } }
+}
+
+theorem loose_none(): (loose(g1(), λ _ => False, ff_x_y_c())).len().same(0) = True { refl }
+theorem loose_near(): nats_same(left_nodes(loose(g1(), λ i => i.same(2), ff_x_y_c())), [0, 1]) = True { refl }
+theorem loose_keeps_matches(): (loose(g1(), λ _ => True, f_b_x())).len().same(2).and(left_nodes(loose(g1(), λ _ => True, f_b_x())).len().same(1)) = True { refl }
+theorem loose_once(): (loose(g1(), λ i => i.same(2).or(i.same(5)), ff_x_y_f_z_w())).len().same(0) = True { refl }
+
 // The soundness theorems at work: the graph above, read with `a`, `b`, `c`
 // for the constants and any `f` for the operator, proves `f(a, c) = f(b, c)`
 // from `a = b`, with no explanation built: the class is the proof.

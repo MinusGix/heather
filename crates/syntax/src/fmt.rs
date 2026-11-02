@@ -149,6 +149,7 @@ fn is_infix(tok: &Tok, roles: &HashMap<usize, TokenRole>) -> bool {
         | TokKind::Bullet
         | TokKind::Approx
         | TokKind::Join
+        | TokKind::Meet
         | TokKind::Wedge
         | TokKind::Vee
         | TokKind::Iff

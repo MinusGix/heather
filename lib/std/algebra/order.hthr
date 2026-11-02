@@ -69,6 +69,16 @@ instance Trans<Int>(Int::Le, Int::Lt, Int::Lt) {
     rel_chain := Int::lt_of_le_of_lt,
 }
 
+// `Int`'s identity setoid, as `relation_props` registers `Nat`'s. It lives
+// with the orders rather than with the ring (`semiring`) so that an order
+// structure over `RelId<Int>` (`lattice`'s) can be registered without the
+// ring's module and without minting a second copy of this dictionary.
+instance Equivalence<Int>(RelId<Int>) {
+    rel_refl := λ x => refl,
+    rel_sym := λ x y h => sym(h),
+    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
+}
+
 // Identity, the setoid both carriers are ordered over (`RelId`), chains with
 // either order by transport. A strict order's class holds these pairs
 // (`StrictOrder`'s `same_lt` and its siblings, `ordered_field`), so a generic

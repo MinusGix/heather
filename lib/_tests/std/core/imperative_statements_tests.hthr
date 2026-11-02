@@ -7,7 +7,7 @@
 // crates/syntax/tests/imperative_statements.rs: a parse error refuses the
 // whole file). Tests, not library: nothing outside lib/_tests imports
 // this module (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import option; import list;
+import logic; import bool; import nat; import option; import list; import omega; import int;
 
 // Straight-line reassignment: each `:=` is a new alias checked at the
 // local's declared type.
@@ -296,6 +296,96 @@ fn doubled_unless_big(xs: List<Nat>) → Nat {
 theorem doubled_unless_big_lit(): doubled_unless_big([1, 2]) = 6 { refl }
 theorem doubled_unless_big_returns(): doubled_unless_big([1, 200, 2]) = 0 { refl }
 
+// ---- `while c decreases m { … }` (§5.3): a recursive `f::run` ----
+
+// Several locals: `f::run` takes them as separate parameters and returns
+// the state record; the measure obligation reads the condition from the
+// match's equation (`omega`, so this module imports `omega` and `int`).
+fn countdown(n: Nat) → List<Nat> {
+    let mut m = n;
+    let mut out: List<Nat> = List::Nil;
+    while 1 <= m decreases m {
+        out := List::Cons(m, out);
+        m := m - 1
+    }
+    out
+}
+theorem countdown_lit(): countdown(3) = [1, 2, 3] { refl }
+// Neutral: the function is its run from the initial state.
+theorem countdown_is(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { refl }
+theorem countdown_unfolds(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { countdown_unfold(n) }
+theorem countdown_stops(out: List<Nat>): countdown::run(0, out) = countdown::State(0, out) { refl }
+// The run's equation (§7.3), at a neutral state: one step under the
+// condition, the state itself otherwise.
+theorem countdown_run_unfolds(m: Nat, out: List<Nat>):
+    countdown::run(m, out) = (match h: decide_bit<1 <= m>() {
+        True => countdown::run(m - 1, List::Cons(m, out)),
+        False => countdown::State(m, out),
+    }) {
+    countdown::run_unfold(m, out)
+}
+
+// One local: the run returns it.
+fn drain(n: Nat) → Nat {
+    let mut i = n;
+    while 1 <= i decreases i { i := i - 1 }
+    i
+}
+theorem drain_lit(): drain(4) = 0 { refl }
+theorem drain_is(n: Nat): drain(n) = drain::run(n) { refl }
+
+// A capture, an open element type, a measure over two locals and a
+// statement `if` in the body.
+fn pad<A>(xs: List<A>, a: A, k: Nat) → List<A> {
+    let mut acc = xs;
+    let mut i = 0;
+    let twice = 3;
+    while i + 1 <= k decreases k - i {
+        if i = twice { acc := List::Cons(a, List::Cons(a, acc)) } else { acc := List::Cons(a, acc) }
+        i := i + 1
+    }
+    acc
+}
+theorem pad_lit(): pad([9], 0, 5) = [0, 0, 0, 0, 0, 0, 9] { refl }
+theorem pad_open<A>(a: A): pad(List::Nil, a, 1) = [a] { refl }
+
+// A body that does not decrease the measure is refused at its obligation.
+// expect-error: this recursive call must decrease the measure
+fn stuck(n: Nat) → Nat {
+    let mut m = n;
+    let mut k = 0;
+    while 1 <= m decreases m { k := k + 1 }
+    k
+}
+
+// ---- Ranges in a `for` header (§5.2) ----
+
+// `0..n` is `List::range(n)`, so the loop is a fold over it.
+fn triangle(n: Nat) → Nat {
+    let mut s = 0;
+    for i in 0..n { s := s + i }
+    s
+}
+theorem triangle_lit(): triangle(4) = 6 { refl }
+theorem triangle_is(n: Nat): triangle(n) = List::range(n).foldl(triangle::step, 0) { refl }
+
+// `a..b` is `List::range_from(a, b - a)`: empty when `b ≤ a`, and bounds
+// that are any expression.
+fn span_sum(a, b: Nat) → Nat {
+    let mut s = 0;
+    for i in a..b { s := s + i }
+    s
+}
+theorem span_sum_lit(): span_sum(3, 6) = 12 { refl }
+theorem span_sum_empty(): span_sum(6, 3) = 0 { refl }
+theorem span_sum_is(a, b: Nat): span_sum(a, b) = List::range_from(a, b - a).foldl(span_sum::step, 0) { refl }
+
+fn upto_len(xs: List<Nat>) → Nat {
+    let mut s = 0;
+    for i in 1..xs.len() { s := s + i }
+    s
+}
+theorem upto_len_lit(): upto_len([7, 7, 7]) = 3 { refl }
 // ---------------------------------------------------------------------------
 // `mut self` methods (§8.2): a call on a `let mut` local updates it
 
