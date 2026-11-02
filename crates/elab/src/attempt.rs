@@ -9,7 +9,8 @@ use heather_kernel::term::{LocalCtx, Term, Type};
 use heather_syntax::Span;
 
 use crate::context::Cx;
-use crate::{OperatorFallbackUse, goals::GoalArena};
+use crate::OperatorFallbackUse;
+use crate::goals::{GoalArena, GoalCheckpoint};
 
 /// Scratch state for an ordinary declaration.
 ///
@@ -61,8 +62,10 @@ pub(super) struct DeclAttempt {
     /// the report names its instance (`docs/reflection-through-decide-instances-design.md` §4).
     pub(super) decide_uses: RefCell<Vec<DecideUse>>,
     /// Resolved ordinary globals actually inserted while elaborating the
-    /// declaration body. Stored by qualified identity, never basename.
-    pub(super) direct_dependencies: RefCell<BTreeSet<String>>,
+    /// declaration body. Stored by qualified identity, never basename. A
+    /// [`DependencySet`] so that a probe or a rejected search candidate can
+    /// take its edges back by a length, not by copying the set.
+    pub(super) direct_dependencies: RefCell<DependencySet>,
 
     /// Stable goal identities and their temporary Ψ prefix.
     pub(super) goal_arena: GoalArena,
@@ -175,6 +178,172 @@ impl DeclAttempt {
         self.decide_uses.get_mut().clear();
         self.telescope.get_mut().clear();
     }
+
+    /// Where a speculative probe started ([`crate::Elaborator::probe`]): the
+    /// length of every log, and the value of every cell. O(fields), whatever
+    /// the attempt has recorded — the probe's clone used to copy all of it,
+    /// a fifth of cold elaboration on operator-heavy files
+    /// (`issues/elab-probe-clone-copies-attempt.md`).
+    ///
+    /// Names every field, so a new one has to pick its probe rule.
+    pub(super) fn mark(&self) -> AttemptMark {
+        let DeclAttempt {
+            op_fallback_notes,
+            op_fallback_uses,
+            check_notes,
+            unmarked_receivers,
+            member_receivers,
+            refl_notes,
+            decide_uses,
+            direct_dependencies,
+            goal_arena,
+            children_annotations,
+            wf_slot_annotations,
+            // Hash maps, so they have no length to cut back to. Kept across a
+            // probe unless it allocated a goal (`Self::restore`).
+            instance_matches: _,
+            emitted_entries: _,
+            char_literals,
+            slot_probe_target,
+            motive_speculation,
+            motive_redundancy_probe,
+            telescope,
+        } = self;
+        AttemptMark {
+            op_fallback_notes: op_fallback_notes.borrow().len(),
+            op_fallback_uses: op_fallback_uses.borrow().len(),
+            check_notes: check_notes.borrow().len(),
+            unmarked_receivers: unmarked_receivers.borrow().len(),
+            member_receivers: member_receivers.borrow().len(),
+            refl_notes: refl_notes.borrow().len(),
+            decide_uses: decide_uses.borrow().len(),
+            direct_dependencies: direct_dependencies.borrow().mark(),
+            goal_arena: goal_arena.checkpoint(),
+            children_annotations: children_annotations.borrow().len(),
+            wf_slot_annotations: wf_slot_annotations.borrow().len(),
+            char_literals: char_literals.borrow().len(),
+            slot_probe_target: slot_probe_target.get(),
+            motive_speculation: motive_speculation.get(),
+            motive_redundancy_probe: motive_redundancy_probe.get(),
+            telescope: telescope.borrow().clone(),
+        }
+    }
+
+    /// Take the attempt back to `mark`: every log cut to its length, every
+    /// cell given its value back, the goal arena restored
+    /// ([`GoalArena::restore`]).
+    ///
+    /// Every log here only grows between `prepare` and `finish` — the ones
+    /// that are cleared or drained are so on `&mut` paths a probe (which
+    /// holds `&self`) cannot reach — so the cut is exact. The vector memos
+    /// are cut too; their entries are keyed by the Ψ scope and context, and
+    /// cutting them costs only a recomputation. The two hash-map memos keep
+    /// a probe's entries, unless the probe allocated a goal: a key may
+    /// mention a slot, and the slot it named is about to be freed for another
+    /// goal, so they are dropped then.
+    pub(super) fn restore(&self, mark: AttemptMark) {
+        let DeclAttempt {
+            op_fallback_notes,
+            op_fallback_uses,
+            check_notes,
+            unmarked_receivers,
+            member_receivers,
+            refl_notes,
+            decide_uses,
+            direct_dependencies,
+            goal_arena,
+            children_annotations,
+            wf_slot_annotations,
+            instance_matches,
+            emitted_entries,
+            char_literals,
+            slot_probe_target,
+            motive_speculation,
+            motive_redundancy_probe,
+            telescope,
+        } = self;
+        op_fallback_notes.borrow_mut().truncate(mark.op_fallback_notes);
+        op_fallback_uses.borrow_mut().truncate(mark.op_fallback_uses);
+        check_notes.borrow_mut().truncate(mark.check_notes);
+        unmarked_receivers.borrow_mut().truncate(mark.unmarked_receivers);
+        member_receivers.borrow_mut().truncate(mark.member_receivers);
+        refl_notes.borrow_mut().truncate(mark.refl_notes);
+        decide_uses.borrow_mut().truncate(mark.decide_uses);
+        direct_dependencies.borrow_mut().rollback(mark.direct_dependencies);
+        if goal_arena.restore(mark.goal_arena) {
+            instance_matches.borrow_mut().clear();
+            emitted_entries.borrow_mut().clear();
+        }
+        children_annotations.borrow_mut().truncate(mark.children_annotations);
+        wf_slot_annotations.borrow_mut().truncate(mark.wf_slot_annotations);
+        char_literals.borrow_mut().truncate(mark.char_literals);
+        slot_probe_target.set(mark.slot_probe_target);
+        motive_speculation.set(mark.motive_speculation);
+        motive_redundancy_probe.set(mark.motive_redundancy_probe);
+        *telescope.borrow_mut() = mark.telescope;
+    }
+}
+
+/// [`DeclAttempt::mark`]'s answer.
+pub(super) struct AttemptMark {
+    op_fallback_notes: usize,
+    op_fallback_uses: usize,
+    check_notes: usize,
+    unmarked_receivers: usize,
+    member_receivers: usize,
+    refl_notes: usize,
+    decide_uses: usize,
+    direct_dependencies: usize,
+    goal_arena: GoalCheckpoint,
+    children_annotations: usize,
+    wf_slot_annotations: usize,
+    char_literals: usize,
+    slot_probe_target: Option<Span>,
+    motive_speculation: bool,
+    motive_redundancy_probe: bool,
+    telescope: crate::spine::Binders,
+}
+
+/// [`DeclAttempt::direct_dependencies`]: a set of qualified names that
+/// remembers the order its members arrived in, so that a rollback is a
+/// length ([`Self::mark`], [`Self::rollback`]) and not a copy of the set.
+/// Probes and rejected search candidates take their edges back this way, and
+/// a search tries one candidate after another.
+#[derive(Clone, Default)]
+pub(super) struct DependencySet {
+    names: BTreeSet<String>,
+    /// The members in the order they were first inserted.
+    arrived: Vec<String>,
+}
+
+impl DependencySet {
+    pub(super) fn insert(&mut self, name: String) {
+        if !self.names.contains(&name) {
+            self.names.insert(name.clone());
+            self.arrived.push(name);
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.names.clear();
+        self.arrived.clear();
+    }
+
+    /// The members in name order.
+    pub(super) fn iter(&self) -> impl Iterator<Item = &String> {
+        self.names.iter()
+    }
+
+    pub(super) fn mark(&self) -> usize {
+        self.arrived.len()
+    }
+
+    /// Forget every member that arrived after `mark`.
+    pub(super) fn rollback(&mut self, mark: usize) {
+        for name in self.arrived.drain(mark.min(self.arrived.len())..) {
+            self.names.remove(&name);
+        }
+    }
 }
 
 /// One written `decide`: the `or_index(inst.dec)` its `refl` claims is `0`,
@@ -221,4 +390,22 @@ pub(super) struct ReflNote {
     pub(super) rhs: Term,
     pub(super) ty: Type,
     pub(super) level: Level,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DependencySet;
+
+    #[test]
+    fn dependency_set_rolls_back_by_arrival() {
+        let mut set = DependencySet::default();
+        set.insert("b".into());
+        let mark = set.mark();
+        set.insert("a".into());
+        set.insert("b".into());
+        set.insert("c".into());
+        assert_eq!(set.iter().cloned().collect::<Vec<_>>(), ["a", "b", "c"]);
+        set.rollback(mark);
+        assert_eq!(set.iter().cloned().collect::<Vec<_>>(), ["b"], "an existing member is not forgotten");
+    }
 }

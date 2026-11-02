@@ -1,6 +1,6 @@
 ---
 title: Speculative elaborator probes deep-copy the declaration attempt: a fifth of cold elaboration
-status: open
+status: closed
 labels: [elaboration,performance,representation]
 area: language
 created: 2026-11-02
@@ -38,3 +38,4 @@ In [[elab-field-lifetimes-explicit]]'s lifetime groups, a probe is one more clon
 
 - 2026-11-02: Second file, same A/B (3 interleaved cold samples, 2026-11-02, cloud box): lib/std/num/rat.hthr went 37.91 / 37.61 / 40.00 s to 35.72 / 36.64 / 36.71 s wall, −3.3%, separate. The kernel gate overlapped, and the same 34 counter columns were identical. rat is light on operator chains, so the win scales with how many operator leaves a file probes; calc_parser is the heavy case at −20%.
 - 2026-11-02: First step taken: CheckNote and ReflNote hold Rc<Cx> (separate PR from branch claude/project-thread-1bpp32). scripts/test --pr: 2921 passed, 0 failed. The structural fix (mark and truncate the attempt) stays open here.
+- 2026-11-02: Structural fix taken; closed. `Elaborator::probe(|| …)` (`lifetimes.rs`) runs a `&self` probe in place and cuts it back: each group gained a probe rule that destructures every field (`DeclAttempt::{mark, restore}`, `ModulePass::probe_mark`, `DynamicScope::cells`), the goal arena gained `checkpoint`/`restore` with an undo log for solutions and spellings written into existing goals, and `direct_dependencies` became a `DependencySet` rolled back by length (so search candidates no longer copy the set either). All nine `&self` clone probes use it. `scripts/test --pr`: 2942 passed, 0 failed. `scripts/perf ab --base origin/master` on calc_parser, 3 interleaved cold samples, cloud box: wall median 4.73 → 4.72 s (samples 4.68–5.08 vs 4.71–4.95), **no change**: #357's `Rc<Cx>` and #363's persistent `Cx` had already taken the measurable share (calc_parser was 7.6 s before them). One counter moved, `instance_match_calls` 4,148 → 4,025, because a probe's `instance_matches` entries now survive it (a clone dropped them); 35 columns identical. No residue: the one remaining whole-elaborator clone that is not a fork, `elab_instance`'s snapshot, is taken between declarations, when the attempt is empty.

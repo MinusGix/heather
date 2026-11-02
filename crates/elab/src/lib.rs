@@ -717,11 +717,11 @@ impl expr::StructuralTypeElab for Elaborator {
 
     fn type_endpoint_can_anchor(&self, cx: &Cx, expression: &Expr) -> bool {
         !self.is_checking_only(cx, expression)
-            && self.clone().elab_infer(cx, expression).is_ok()
+            && self.probe(|| self.elab_infer(cx, expression).is_ok())
     }
 
     fn type_endpoint_infers_by_fallback(&self, cx: &Cx, expression: &Expr) -> bool {
-        self.deferral_can_fall_back(cx, expression) && self.clone().elab_infer(cx, expression).is_ok()
+        self.deferral_can_fall_back(cx, expression) && self.probe(|| self.elab_infer(cx, expression).is_ok())
     }
 
     fn type_endpoint_may_need_checking(&self, cx: &Cx, expression: &Expr) -> bool {
@@ -5003,8 +5003,7 @@ impl Elaborator {
             return Ok(t.clone());
         }
         if capture_slots && has_free_slots(e) {
-            let probe = self.clone();
-            match probe.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false) {
+            match self.probe(|| self.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false)) {
                 Ok(_) => {
                     // Every slot found a smaller function-typed checking
                     // position. Repeat on the real elaborator; the probe's
@@ -5023,11 +5022,10 @@ impl Elaborator {
                     for_each_free_slot(e, &mut |_, span| slots.push(span));
                     let mut nested = Vec::new();
                     for target in slots {
-                        let targeted = self.clone();
-                        targeted.attempt.slot_probe_target.set(Some(target));
-                        match targeted
-                            .elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false)
-                        {
+                        match self.probe(|| {
+                            self.attempt.slot_probe_target.set(Some(target));
+                            self.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false)
+                        }) {
                             Ok(_) => nested.push(target),
                             Err(ElabError::ArgSlotEscape { span }) if span == target => {}
                             Err(other) => return Err(other),
@@ -5043,9 +5041,9 @@ impl Elaborator {
             }
         }
         // A written motive in checking position has a mechanically testable
-        // redundancy criterion: clone the elaborator, remove just the motive,
+        // redundancy criterion: in a probe ([`Self::probe`]), remove just the motive,
         // and ask the ordinary goal-derived route to check the same match
-        // against the same expected type. The clone makes goals, warnings,
+        // against the same expected type. The probe makes goals, warnings,
         // fallback provenance, derived instances, and fuel bookkeeping
         // transactional; no declaration is duplicated — but the match is
         // elaborated twice and kernel-checked once more, paid in full when
@@ -5071,25 +5069,19 @@ impl Elaborator {
                 unreachable!()
             };
             *omitted_motive = None;
-            let probe = self.clone();
             // One probe per written motive: the matches nested under this
             // one are elaborated here with their motives kept and are probed
             // by the real pass below, once each, not once per enclosing
             // probe (`attempt.rs`).
-            probe.attempt.motive_redundancy_probe.set(true);
-            if let Ok(term) =
-                probe.elab_check_skel_slots(cx, &omitted, expected, lvl, hint, skel, capture_slots)
-                && probe
-                    .kernel_check_term(
-                        &probe.goal_psi(),
-                        Layer::Prog,
-                        &cx.gamma,
-                        &term,
-                        expected,
-                        lvl,
-                    )
-                    .is_ok()
-            {
+            let redundant = self.probe(|| {
+                self.attempt.motive_redundancy_probe.set(true);
+                self.elab_check_skel_slots(cx, &omitted, expected, lvl, hint, skel, capture_slots)
+                    .is_ok_and(|term| {
+                        self.kernel_check_term(&self.goal_psi(), Layer::Prog, &cx.gamma, &term, expected, lvl)
+                            .is_ok()
+                    })
+            });
+            if redundant {
                 self.emit_lint_with_fix(
                     Lint::RedundantMatchMotive,
                     format!(

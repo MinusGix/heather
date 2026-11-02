@@ -59,11 +59,14 @@ impl Elaborator {
         {
             return error;
         }
-        // The failure path only: a scratch copy, so that the probe leaves no
-        // goal, warning or instance behind.
-        let probe = self.clone();
-        let Ok((_, ty, _)) = probe.elab_infer(cx, input) else { return error };
-        let shown = self.display_type(cx, &ty);
+        // The failure path only: a probe, so that it leaves no goal, warning
+        // or instance behind.
+        let Some(shown) = self.probe(|| {
+            let (_, ty, _) = self.elab_infer(cx, input).ok()?;
+            Some(self.display_type(cx, &ty))
+        }) else {
+            return error;
+        };
         let msg = if discards {
             let assign = if matches!(input.kind, ExprKind::Eq(..)) {
                 "; an equation is a proposition, so to assign, write `x := e`"
