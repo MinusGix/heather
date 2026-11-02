@@ -245,13 +245,13 @@ fn proof_alg(l: GrindLaws, g: Graph) → PathAlg<Fact, Expr> {
 
 fn grind_num(n: Nat) → String { "#" ++ decimal_name(Succ(n), n) }
 
-// The whole terms of class `c`.
-fn members(ns: List<GInfo>, g: Graph, c: Nat, i: Nat) → List<Expr> {
-    match ns {
+// The whole terms among nodes `ms`, as cited.
+fn whole_of(g: Graph, ms: List<Nat>) → List<Expr> {
+    match ms {
         Nil => [],
-        Cons(n, rest) => match n.whole.and(class_of(g, i).same(c)) {
-            True => Cons(n.expr, members(rest, g, c, Succ(i))),
-            False => members(rest, g, c, Succ(i)),
+        Cons(m, rest) => match g.info.nth(m) {
+            Some(n) => match n.whole { True => Cons(n.expr, whole_of(g, rest)), False => whole_of(g, rest) },
+            None => whole_of(g, rest),
         },
     }
 }
@@ -265,23 +265,23 @@ fn member_notes(es: List<Expr>, c: String) → List<Note> {
 
 fn exprs_count(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => Succ(exprs_count(rest)) } }
 
-// Every class of more than one whole term, by its representative, once.
-fn class_notes(g: Graph, cs: List<Nat>, i: Nat, done: List<Nat>) → List<Note> {
-    match cs {
+// Every class of more than one whole term, by its representative, from the
+// graph's class table (`rows`, class `c` first): one pass, where reading
+// each class's members off the class list would be cubic in the nodes.
+fn class_notes(g: Graph, rows: List<List<Nat>>, c: Nat) → List<Note> {
+    match rows {
         Nil => [],
-        Cons(c, rest) => match c.same(i).and(done.filter(λ d => d.same(c)).len().same(0)) {
-            False => class_notes(g, rest, Succ(i), done),
-            True => {
-                let ms = members(g.info, g, c, 0);
-                match exprs_count(ms) {
-                    Zero => class_notes(g, rest, Succ(i), Cons(c, done)),
-                    Succ(k) => match k {
-                        Zero => class_notes(g, rest, Succ(i), Cons(c, done)),
-                        Succ(_) => Cons(Tried("class " ++ grind_num(c), decimal_name(Succ(Succ(k)), Succ(k)) ++ " terms"), member_notes(ms, grind_num(c)))
-                            ++ class_notes(g, rest, Succ(i), Cons(c, done)),
-                    },
-                }
-            },
+        Cons(ms, rest) => {
+            let ws = whole_of(g, ms);
+            let n = exprs_count(ws);
+            match n {
+                Zero => class_notes(g, rest, Succ(c)),
+                Succ(k) => match k {
+                    Zero => class_notes(g, rest, Succ(c)),
+                    Succ(_) => Cons(Tried("class " ++ grind_num(c), decimal_name(Succ(n), n) ++ " terms"), member_notes(ws, grind_num(c)))
+                        ++ class_notes(g, rest, Succ(c)),
+                },
+            }
         },
     }
 }
@@ -300,7 +300,7 @@ fn stuck_notes(g: Graph, l: Nat, r: Nat, fs: Facts) → List<Note> {
     let skipped: List<Note> = match fs.skipped { Nil => [], Cons(_, _) => [Tried("not equations, not read", names_line(fs.skipped))] };
     Cons(At(expr_at(g, l), Tried("the left side", "in class " ++ cl)),
     Cons(At(expr_at(g, r), Tried("the right side", "in class " ++ cr)),
-        class_notes(g, g.eg.cls, 0, []) ++ fs.read ++ skipped
+        class_notes(g, g.eg.class_table(), 0) ++ fs.read ++ skipped
             ++ [Tried("to close it", "one more equation between a member of " ++ cl ++ " and a member of " ++ cr ++ ", as a hint: `grind_with([…])`")]))
 }
 
@@ -714,14 +714,22 @@ fn new_insts(g: Graph, k: Nat, n: Nat, ms: List<EMatched>, seen: List<Inst>) →
 
 record Found { insts: List<Inst>, lemmas: List<Lemma> }
 
-fn round_insts(g: Graph, table: List<List<Nat>>, ls: List<Lemma>, k: Nat, seen: List<Inst>, cap: Nat) → Found {
+// Continue with `t` once `n` is computed. The host gives the evaluation
+// between two requests a fixed fuel, and a round's pure work (closing the
+// graph, matching every lemma against every node) outgrows it on a graph of
+// a few dozen terms; asking about `n`, a number that depends on one piece of
+// that work, makes the piece its own evaluation.
+fn settled<A>(n: Nat, t: Tac<A>) → Tac<A> { defeq(NatLit(n), NatLit(n)).bind(λ _ => t) }
+
+fn round_insts(g: Graph, table: List<List<Nat>>, ls: List<Lemma>, k: Nat, seen: List<Inst>, cap: Nat) → Tac<Found> {
     match ls {
-        Nil => Found([], []),
+        Nil => Pure(Found([], [])),
         Cons(lm, rest) => {
             let ms = g.eg.ematch(λ q op s => gq_test(g, q, op, s), table, lm.pat);
             let fresh = new_insts(g, k, lm.binders, ms, seen).take(cap);
-            let tail = round_insts(g, table, rest, Succ(k), seen ++ fresh, cap.sub(fresh.len()));
-            Found(fresh ++ tail.insts, Cons(Lemma(lm.name, lm.proof, lm.binders, lm.pat, lm.matched + ms.len(), lm.added), tail.lemmas))
+            let here = Lemma(lm.name, lm.proof, lm.binders, lm.pat, lm.matched + ms.len(), lm.added);
+            settled(here.matched + fresh.len(), round_insts(g, table, rest, Succ(k), seen ++ fresh, cap.sub(fresh.len())).bind(λ tail =>
+                Pure(Found(fresh ++ tail.insts, Cons(here, tail.lemmas)))))
         },
     }
 }
@@ -856,6 +864,8 @@ fn settle(report: Bool, l: GrindLaws, fs: Facts, lhs: Nat, rhs: Nat, why: String
     }
 }
 
+fn on_found(t: Tac<Found>, k: Found → Tac<Expr>) → Tac<Expr> { t.bind(k) }
+
 // Close the graph; prove `l = r` from it, or instantiate the lemmas once
 // more (at most `rounds` times), or fail with what it holds.
 fn saturate(rounds: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, lhs: Nat, rhs: Nat) → Tac<Expr> {
@@ -869,12 +879,14 @@ fn saturate(rounds: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, lhs:
                 False => match fs.lemmas {
                     Nil => stuck(g, fs, lhs, rhs, ""),
                     Cons(_, _) => {
-                        let found = round_insts(g, g.eg.class_table(), fs.lemmas, 0, fs.seen, grind_round_cap());
-                        let next = Facts(g, fs.read, fs.skipped, found.lemmas, fs.seen ++ found.insts, fs.offered);
-                        match found.insts {
-                            Nil => stuck(g, next, lhs, rhs, match done { Zero => "no instance in the graph", Succ(_) => "no new instance after " ++ decimal_name(Succ(done), done) ++ " rounds" }),
-                            Cons(_, _) => add_insts(next, found.insts).bind(λ fs2 => saturate(r, Succ(done), report, l, fs2, lhs, rhs)),
-                        }
+                        let table = g.eg.class_table();
+                        settled(table.len() + g.eg.edges.len(), on_found(round_insts(g, table, fs.lemmas, 0, fs.seen, grind_round_cap()), λ found => {
+                            let next = Facts(g, fs.read, fs.skipped, found.lemmas, fs.seen ++ found.insts, fs.offered);
+                            match found.insts {
+                                Nil => stuck(g, next, lhs, rhs, match done { Zero => "no instance in the graph", Succ(_) => "no new instance after " ++ decimal_name(Succ(done), done) ++ " rounds" }),
+                                Cons(_, _) => add_insts(next, found.insts).bind(λ fs2 => saturate(r, Succ(done), report, l, fs2, lhs, rhs)),
+                            }
+                        }))
                     },
                 },
             }

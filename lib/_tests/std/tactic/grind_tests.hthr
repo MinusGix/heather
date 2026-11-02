@@ -2,7 +2,7 @@
 // equations, the hints and the lemmas they instantiate, and its refusals,
 // which report the graph. Tests, not library: nothing outside lib/_tests
 // imports this module (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import list; import option; import char; import string; import tactic; import grind;
+import logic; import bool; import nat; import list; import option; import char; import string; import tactic; import int; import grind;
 
 // Equations chained, and turned around.
 theorem chain(a, b, c, d: Nat, h1: a = b, h2: c = b, h3: c = d): a = d { by grind() }
@@ -48,6 +48,16 @@ theorem tower<A>(a, b, c, d: List<A>): ((a ++ b) ++ c) ++ d = a ++ (b ++ (c ++ d
 theorem tower_nil<A>(a, b, c: List<A>): ((a ++ []) ++ b) ++ c = a ++ (b ++ c) { by grind_using(["List::append_assoc", "List::append_nil"], []) }
 theorem tower_lens<A>(a, b, c: List<A>): ((a ++ b) ++ c).len() = a.len() + (b.len() + c.len()) { by grind_using(["List::len_append", "Nat::add_assoc"], []) }
 theorem tower_closed(xs, ys, zs: List<Nat>): ((xs ++ ys) ++ zs) ++ [1, 2] = xs ++ (ys ++ (zs ++ [1, 2])) { by grind_using(["List::append_assoc"], []) }
+// A commutative lemma among them (its instances turn every sum round), and
+// a round whose matching outgrew one evaluation's fuel until each lemma's
+// matching was made its own (`settled`); it stops one definitional step
+// short (`-OfNat(k)` is `Int::negOfNat(k)` only by computation,
+// issues/grind-definitional-equalities.md).
+theorem regroup(a, b, c: Int): (a + b) + c = b + (c + a) { by grind_using(["Int::add_assoc", "Int::add_comm"], []) }
+// expect-error: no new instance after 2 rounds
+theorem neg_add_step(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(k).isucc()) = -a + Int::negOfNat(k).ipred() {
+    by grind_using(["Int::add_isucc", "Int::neg_isucc", "Int::add_ipred", "Int::ipred_negOfNat"], [])
+}
 // The report of the lemmas used (a `tactic-report` warning): here
 // `List::append_assoc`, and not `List::append_nil`.
 theorem reported<A>(a, b, c: List<A>): (a ++ b) ++ c = a ++ (b ++ c) { by grind_report(["List::append_assoc", "List::append_nil"], []) }
