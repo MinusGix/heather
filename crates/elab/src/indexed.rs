@@ -1233,7 +1233,7 @@ impl Elaborator {
         // Self-call plumbing (§6): the guard descends on the matched
         // parameter, and the index parameter — when the family's index is
         // itself a parameter — is *rebound* to the arm's pattern variable.
-        let dec = crate::recursion::descends_on_param(cx, &scrut);
+        let dec = crate::recursion::guard_param(cx, &scrut, arms);
         let idx_param = match (&dec, &*fam.idx) {
             (Some(_), Term::Var(LocalVar(i))) => {
                 let pos = cx.names.len() - 1 - *i as usize;
