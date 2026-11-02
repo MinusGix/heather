@@ -84,16 +84,16 @@ theorem CReal::atanh_clamp_in(t: CReal): AbsLe(CReal::atanh_clamp(t), CReal::hal
     let a1: (t + -H <= (t + -H).abs()) = (t + -H).le_abs();
     let mle: (m <= H) = {
         let k: (H * (H + t + -((t + -H).abs())) <= H * (H + H)) =
-            OrderedField::mul_le_mono_l(H + t + -((t + -H).abs()), H + H, H, linarith(a1), CReal::le_of_lt(pH));
+            OrderedSemiring::mul_le_mono_l(H + t + -((t + -H).abs()), H + H, H, linarith(a1), CReal::le_of_lt(pH));
         let k2: (H * (H + H) ≈ H) = ring(s);
         linarith(k, k2, mu)
     };
     let up: ((m + H).abs() <= H + H + H + -m) = CReal::abs_le(linarith(pH), linarith(mle));
     let lo: (-(m + H) <= (m + H).abs()) = (m + H).neg_le_abs();
     let ku: (H * (m + -H + (m + H).abs()) <= H * (H + H)) =
-        OrderedField::mul_le_mono_l(m + -H + (m + H).abs(), H + H, H, linarith(up), CReal::le_of_lt(pH));
+        OrderedSemiring::mul_le_mono_l(m + -H + (m + H).abs(), H + H, H, linarith(up), CReal::le_of_lt(pH));
     let kl: (H * (-(H + H)) <= H * (m + -H + (m + H).abs())) =
-        OrderedField::mul_le_mono_l(-(H + H), m + -H + (m + H).abs(), H, linarith(lo), CReal::le_of_lt(pH));
+        OrderedSemiring::mul_le_mono_l(-(H + H), m + -H + (m + H).abs(), H, linarith(lo), CReal::le_of_lt(pH));
     let e1: (H * (H + H) ≈ H) = ring(s);
     let e2: (H * (-(H + H)) ≈ -H) = ring(s);
     let lo2: (-H <= CReal::atanh_clamp(t)) = linarith(kl, e2, ku0);
@@ -234,7 +234,7 @@ theorem CReal::atanh_den_ge(t: CReal): CReal::half_r() <= CReal::atanh_den(t) {
     let hk = CReal::atanh_clamp_in(t);
     let sq = OrderedField::abs_le_mul(k, k, H, H, hk, hk);
     let sqr: (k * k <= H * H) = sq.right;
-    let hh: (H * H <= H * 1) = OrderedField::mul_le_mono_l(H, 1, H, CReal::half_r_le_one(), CReal::le_of_lt(CReal::half_r_pos()));
+    let hh: (H * H <= H * 1) = OrderedSemiring::mul_le_mono_l(H, 1, H, CReal::half_r_le_one(), CReal::le_of_lt(CReal::half_r_pos()));
     let u: (CReal::atanh_den(t) ≈ 1 + -(k * k)) = CReal::same_refl(CReal::atanh_den(t));
     linarith(sqr, hh, u, CReal::half_r_add())
 }
@@ -259,7 +259,7 @@ theorem CReal::atanh_g_pos(t: CReal): 0 < CReal::atanh_g(t) {
 theorem CReal::atanh_g_half(t: CReal): CReal::atanh_g(t) * CReal::half_r() <= 1 {
     let g = CReal::atanh_g(t);
     let a: (g * CReal::half_r() <= g * CReal::atanh_den(t)) =
-        OrderedField::mul_le_mono_l(CReal::half_r(), CReal::atanh_den(t), g, CReal::atanh_den_ge(t), CReal::le_of_lt(CReal::atanh_g_pos(t)));
+        OrderedSemiring::mul_le_mono_l(CReal::half_r(), CReal::atanh_den(t), g, CReal::atanh_den_ge(t), CReal::le_of_lt(CReal::atanh_g_pos(t)));
     let m = CReal::atanh_g_mul(t);
     let gd = CReal::same_trans(CReal::mul_comm(g, CReal::atanh_den(t)), m);
     CReal::le_trans(a, CReal::le_of_same(gd))
@@ -378,7 +378,7 @@ theorem CReal::atanh_close(w: CReal, n: Nat, hn: OrderedField::npow(CReal::half_
     let pH: (0 <= H) = CReal::le_of_lt(CReal::half_r_pos());
     let pn: (0 <= OrderedField::npow(H, n)) = OrderedField::npow_nonneg(H, pH, n);
     let un: (OrderedField::npow(H, Succ(n)) ≈ OrderedField::npow(H, n) * H) = CReal::same_refl(OrderedField::npow(H, Succ(n)));
-    let hm: (OrderedField::npow(H, n) * H <= OrderedField::npow(H, n) * 1) = OrderedField::mul_le_mono_l(H, 1, OrderedField::npow(H, n), CReal::half_r_le_one(), pn);
+    let hm: (OrderedField::npow(H, n) * H <= OrderedField::npow(H, n) * 1) = OrderedSemiring::mul_le_mono_l(H, 1, OrderedField::npow(H, n), CReal::half_r_le_one(), pn);
     let hp = CReal::half_r_pow(Succ(n));
     let a = CReal::atanh_near(t, dt, Succ(n));
     let first = LocatedAddGroup::abs_le_weaken(CReal::atanh(t) + -CReal::atanh_n(Succ(n), t), CReal::atanh(t) + -CReal::atanh_n(Succ(n), t),

@@ -113,29 +113,14 @@ enum TmProgress<T> {
 
 /// `Ψ; Γ ⊢_i T ≈ T' : l` — convertibility of types.
 /// Syntactic equality **modulo level equivalence** — the quotient DeLaM
-/// ch. 05's Static Code lemma (`lem:dt:static`) takes over its equalities.
-/// Used only to compare boxed code, where layer `c` does not compute and
-/// equivalence therefore *is* equality.
-trait CodeEq: PartialEq {
-    fn normalized(&self) -> Self;
-}
-
-impl CodeEq for Type {
-    fn normalized(&self) -> Type {
-        self.normalize_levels()
-    }
-}
-
-impl CodeEq for Term {
-    fn normalized(&self) -> Term {
-        self.normalize_levels()
-    }
-}
-
-/// `a = b` modulo level equivalence. The `==` fast path keeps the common
-/// case allocation-free; only genuinely different syntax pays for a rewrite.
-fn code_eq<T: CodeEq>(a: &T, b: &T) -> bool {
-    a == b || a.normalized() == b.normalized()
+/// ch. 05's Static Code lemma (`lem:dt:static`) takes over its equalities,
+/// the paper's own example being that `Ty (ℓ ⊔ ℓ')` and `Ty (ℓ' ⊔ ℓ)` are
+/// equal **as code**. Used only to compare boxed code, where layer `c` does
+/// not compute and equivalence therefore *is* equality. Levels are
+/// canonical by construction (`level.rs`), so the quotient is plain `==`;
+/// see `LevelNf::canonical` for what would break that.
+fn code_eq<T: PartialEq>(a: &T, b: &T) -> bool {
+    a == b
 }
 
 pub fn conv_type(

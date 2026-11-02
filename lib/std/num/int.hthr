@@ -1212,6 +1212,16 @@ theorem Int::mul_lt_mono_r(self a, b, k: Int, h: a < b, hk: OfNat(0) < k): a * k
     (a * k).isucc().le_trans(a.isucc() * k, b * k, rewrite(sym(expand), step), grown)
 }
 
+theorem Int::mul_lt_mono_l(self a, b, k: Int, h: a < b, hk: OfNat(0) < k): k * a < k * b {
+    rewrite(k.mul_comm(a), k.mul_comm(b), a.mul_lt_mono_r(b, k, h, hk))
+}
+
+// A positive left factor cancels from a strict comparison: were b ≤ a, the
+// products would be ordered the same way.
+theorem Int::lt_of_mul_lt_mul_l(self a, b, k: Int, hk: OfNat(0) < k, h: k * a < k * b): a < b {
+    a.lt_of_not_le(b, λ le => (k * b).not_lt_of_ge(k * a, b.mul_le_mono_l(a, k, le, OfNat(0).le_of_lt(k, hk)), h))
+}
+
 theorem Int::le_neg(self a: Int): (b: Int) → a <= b → -b <= -a {
     match a {
         OfNat(m) => λ b =>

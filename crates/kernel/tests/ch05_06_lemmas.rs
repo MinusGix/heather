@@ -571,9 +571,10 @@ fn the_generator_oracle_holds_across_seed_streams() {
 ///
 /// **This test found the kernel on the too-fine side.** `conv.rs` compared
 /// boxed code with plain `==`, which rejects the paper's own example
-/// verbatim. Fixed by `Term::normalize_levels` / `Type::normalize_levels`
-/// (`subst.rs`), which rewrites levels to `LevelNf::canonical`; the negatives
-/// below pin that the fix did not go too far.
+/// verbatim. Fixed first by a `normalize_levels` rewrite before comparing,
+/// and now by construction: levels are canonical (`level.rs`,
+/// `issues/kernel-compact-level.md`), so the two spellings are one value and
+/// `==` is the quotient. The negatives below pin that it did not go too far.
 #[test]
 fn code_equality_is_equality_modulo_level_equivalence() {
     use heather_kernel::conv::conv_term;
@@ -675,7 +676,7 @@ fn code_equality_is_equality_modulo_level_equivalence() {
     // The sharpest one available, and it lands on the open `Vec` gap:
     // `Vec^0(Nat; 0) ⇝ Unit`, so these two are *convertible as types* at
     // layer p and both sit at level 0 — but as code they are different
-    // syntax and must stay apart. A `normalize_levels` that accidentally
+    // syntax and must stay apart. A level canonicalization that accidentally
     // reduced, or a comparison that fell through to type conversion, would
     // accept this.
     probe(
@@ -695,10 +696,13 @@ fn code_equality_is_equality_modulo_level_equivalence() {
 /// well-typed code, a **level-equivalent variant is convertible with it**.
 ///
 /// The variant is produced by `apply_univ` with `φ(ℓᵢ) = ℓᵢ ⊔ ℓᵢ` — a
-/// substitution that is the identity up to level equivalence but rewrites
-/// every level position to something structurally different. Deliberately
-/// *not* built with `normalize_levels`, which is what `conv.rs` uses
-/// internally: the check would then be circular and could not fail.
+/// substitution that is the identity up to level equivalence. Levels are
+/// canonical by construction (`issues/kernel-compact-level.md`), so the
+/// variant must come out *identical*, which is the stronger claim; before
+/// that it rewrote every level position to something structurally
+/// different and this test checked that conversion still equated them. A
+/// code counts as exercised when a non-equivalent substitution
+/// (`ℓᵢ ↦ 1 + ℓᵢ`) does move it, i.e. it mentions a level variable.
 #[test]
 fn level_equivalent_code_is_convertible() {
     use heather_kernel::conv::conv_term;
@@ -724,10 +728,12 @@ fn level_equivalent_code_is_convertible() {
             })
             .collect();
         let twin = code.apply_univ(&phi);
-        if twin == *code {
-            continue; // no level occurred; nothing to compare
+        let bumped: Vec<Level> = (0..env.univs).map(|i| Level::succ(Level::Var(UnivVar(i)))).collect();
+        if code.apply_univ(&bumped) == *code {
+            continue; // no level variable occurred; nothing to compare
         }
         exercised += 1;
+        assert!(twin == *code, "seed {seed}: an equivalent universe substitution changed the code's syntax");
 
         let ty = Type::CodeTm { ctx: delta, ty: cty, level: cl };
         let a = Term::BoxTm(Rc::clone(&code));

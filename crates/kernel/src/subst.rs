@@ -33,8 +33,7 @@
 //! (`tests/subst_laws.rs`, `shift_composition`), and they hold structurally,
 //! not merely up to some equivalence: at `by = 0` each mapper's variable case
 //! is `v ↦ v`, each `tail` case adds zero to a length or renumbers by zero,
-//! and `Level::shift(0, _)` is the identity because `Level::succ`/`max` are
-//! plain constructors that normalize nothing. The `_above` variants are the
+//! and `Level::shift(0, _)` returns its level unchanged. The `_above` variants are the
 //! same operation with a cutoff, and a cutoff only narrows *which* variables
 //! move, so at `by = 0` they are identities too. So the fast path cannot be
 //! distinguished from the traversal by any caller.
@@ -251,7 +250,7 @@ trait Mapper {
     }
 
     /// Report a mapped level, noting a change only if it really moved.
-    /// Levels are tiny trees (`Zero`/`Succ`/`Var`/`Max`), so `==` here is an
+    /// Levels are inline or one shared join, so `==` here is an
     /// exact test at leaf-ish cost — unlike comparing terms, which is the one
     /// thing this design must never do.
     fn mapped(&mut self, new: Level, old: &Level) -> Level {
@@ -1443,40 +1442,6 @@ impl Mapper for ShiftUniv {
 // Substitutions
 // ---------------------------------------------------------------------------
 
-/// Rewrite every level to the canonical representative of its ≈-class.
-/// Not a substitution — a normalization, so that equality *modulo level
-/// equivalence* (the quotient DeLaM ch. 05's Static Code lemma takes) is
-/// plain `==` on the rewritten syntax. Depth-independent: normalization
-/// never renumbers a variable, so binders need no care.
-struct NormalizeLevels {
-    changes: u64,
-    memo: NodeMemo,
-}
-
-impl Mapper for NormalizeLevels {
-    const LOCAL_OP: bool = false;
-    const NAME: &'static str = "normalize_levels";
-
-    fn changes(&mut self) -> &mut u64 {
-        &mut self.changes
-    }
-
-    fn memo(&mut self) -> Option<&mut NodeMemo> {
-        Some(&mut self.memo)
-    }
-
-    fn level(&mut self, l: &Level, _at: Depths) -> Level {
-        // `0` and a bare `ℓ` are already their own canonical representatives,
-        // and they are almost every level a real term contains; taking them
-        // here skips a walk and a `BTreeMap` allocation apiece
-        // (issues/level-normalization-allocation.md).
-        if matches!(l, Level::Zero | Level::Var(_)) {
-            return l.clone();
-        }
-        self.mapped(l.normalize().canonical(), l)
-    }
-}
-
 /// Universe substitution `φ`: `phi[i]` replaces universe variable `i`
 /// (innermost = 0), scoped in the source universe context.
 struct SubstUniv<'a> {
@@ -2014,20 +1979,6 @@ macro_rules! ops {
             /// Apply a global substitution `σ`.
             pub fn apply_global(&self, sigma: &GlobalSubst) -> $ty {
                 $map(self, &mut SubstGlobal { sigma, changes: 0, memo: NodeMemo::default() }, Depths::default())
-            }
-
-            /// Rewrite every level to the canonical representative of its
-            /// ≈-class, so that `a.normalize_levels() == b.normalize_levels()`
-            /// decides **syntactic equality modulo level equivalence**.
-            ///
-            /// That quotient is what DeLaM ch. 05's Static Code lemma
-            /// (`lem:dt:static`) states: at layers `v`/`c`, equivalence *is*
-            /// equality, "quotient over the equivalence of universe levels" —
-            /// the paper's own example being that `Ty (ℓ ⊔ ℓ')` and
-            /// `Ty (ℓ' ⊔ ℓ)` are equal **as code**. `conv.rs` uses this to
-            /// compare boxed code.
-            pub fn normalize_levels(&self) -> $ty {
-                $map(self, &mut NormalizeLevels { changes: 0, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// `self[s/x]` weakened past `by` binders: `self` is scoped in

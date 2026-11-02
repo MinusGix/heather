@@ -173,9 +173,9 @@ theorem Rat::affine_up(x: K, lo, R, a, b: Rat, a_nn: Rat::Le(0, a), l: map(lo) <
     let A = map(a);
     let L = Rat::add(Rat::mul(a, lo), b);
     let e0: (map(L) ≈ A * map(lo) + map(b)) = K.rel_trans(map(L), map(Rat::mul(a, lo)) + map(b), A * map(lo) + map(b),
-        hom.map_add(Rat::mul(a, lo), b), OrderedAddGroup::add_respects(map(Rat::mul(a, lo)), A * map(lo), map(b), map(b), hom.map_mul(a, lo), K.rel_refl(map(b))));
+        hom.map_add(Rat::mul(a, lo), b), OrderedAddMonoid::add_respects(map(Rat::mul(a, lo)), A * map(lo), map(b), map(b), hom.map_mul(a, lo), K.rel_refl(map(b))));
     let a0: (K.unit <= A) = StrictOrder::le_of_same_l(K.unit, map(0), A, K.rel_sym(map(0), K.unit, hom.map_zero), hom.map_le(0, a, a_nn));
-    let m: (A * map(lo) + map(b) <= A * x + map(b)) = OrderedAddGroup::add_le_mono_r(A * map(lo), A * x, map(b), OrderedField::mul_le_mono_l(map(lo), x, A, l, a0));
+    let m: (A * map(lo) + map(b) <= A * x + map(b)) = OrderedAddMonoid::add_le_mono_r(A * map(lo), A * x, map(b), OrderedSemiring::mul_le_mono_l(map(lo), x, A, l, a0));
     PseudoOrder::le_trans(map(R), A * map(lo) + map(b), A * x + map(b),
         StrictOrder::le_of_same_r(map(R), map(L), A * map(lo) + map(b), K.rel_sym(map(L), A * map(lo) + map(b), e0), hom.map_le(R, L, at)), m)
 }
@@ -185,9 +185,9 @@ theorem Rat::affine_down(x: K, hi, R, a, b: Rat, a_nn: Rat::Le(0, a), h: x <= ma
     let A = map(a);
     let H = Rat::add(Rat::mul(a, hi), b);
     let e0: (map(H) ≈ A * map(hi) + map(b)) = K.rel_trans(map(H), map(Rat::mul(a, hi)) + map(b), A * map(hi) + map(b),
-        hom.map_add(Rat::mul(a, hi), b), OrderedAddGroup::add_respects(map(Rat::mul(a, hi)), A * map(hi), map(b), map(b), hom.map_mul(a, hi), K.rel_refl(map(b))));
+        hom.map_add(Rat::mul(a, hi), b), OrderedAddMonoid::add_respects(map(Rat::mul(a, hi)), A * map(hi), map(b), map(b), hom.map_mul(a, hi), K.rel_refl(map(b))));
     let a0: (K.unit <= A) = StrictOrder::le_of_same_l(K.unit, map(0), A, K.rel_sym(map(0), K.unit, hom.map_zero), hom.map_le(0, a, a_nn));
-    let m: (A * x + map(b) <= A * map(hi) + map(b)) = OrderedAddGroup::add_le_mono_r(A * x, A * map(hi), map(b), OrderedField::mul_le_mono_l(x, map(hi), A, h, a0));
+    let m: (A * x + map(b) <= A * map(hi) + map(b)) = OrderedAddMonoid::add_le_mono_r(A * x, A * map(hi), map(b), OrderedSemiring::mul_le_mono_l(x, map(hi), A, h, a0));
     PseudoOrder::le_trans(A * x + map(b), A * map(hi) + map(b), map(R), m,
         StrictOrder::le_of_same_l(A * map(hi) + map(b), map(H), map(R), K.rel_sym(map(H), A * map(hi) + map(b), e0), hom.map_le(H, R, at)))
 }
@@ -240,11 +240,11 @@ theorem Rat::err_in_nonpos(x: K, P: Rat → Type, R, u, e, c, M: Rat, u_nn: Rat:
 
 // A zero intercept drops out.
 theorem Rat::image_add_zero(y: K): y + map(0) ≈ y {
-    K.rel_trans(y + map(0), y + K.unit, y, OrderedAddGroup::add_respects(y, y, map(0), K.unit, K.rel_refl(y), hom.map_zero), K.unit_r(y))
+    K.rel_trans(y + map(0), y + K.unit, y, OrderedAddMonoid::add_respects(y, y, map(0), K.unit, K.rel_refl(y), hom.map_zero), K.unit_r(y))
 }
 
 theorem Rat::image_add_neg_zero(y: K): y + map(Rat::neg(0)) ≈ y {
-    K.rel_trans(y + map(Rat::neg(0)), y + map(0), y, OrderedAddGroup::add_respects(y, y, map(Rat::neg(0)), map(0), K.rel_refl(y), hom.map_respects(Rat::neg(0), 0, refl)),
+    K.rel_trans(y + map(Rat::neg(0)), y + map(0), y, OrderedAddMonoid::add_respects(y, y, map(Rat::neg(0)), map(0), K.rel_refl(y), hom.map_respects(Rat::neg(0), 0, refl)),
         Rat::image_add_zero(hom, y))
 }
 

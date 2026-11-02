@@ -1,13 +1,16 @@
-// The constructive ordered field, as layers of classes over a setoid
-// (issues/constructive-ordered-field-interface.md;
-// docs/constructive-ordered-field-design.md).
+// Order meeting `+` and `*`, from a strict order up to the constructive
+// ordered field, as layers of classes over a setoid
+// (issues/constructive-ordered-field-interface.md,
+// issues/ordered-algebra-api.md; docs/constructive-ordered-field-design.md,
+// docs/ordered-algebra-design.md).
 //
 // Nothing here decides anything. Equality is a setoid `≈`, never `=`; the
-// strict order `<` is primitive (at both carriers it is positive data, a
-// gap); `≤` is an index characterised as `¬(y < x)`, Bishop's, so a carrier
-// may keep its own spelling of it; apartness is `x < y ∨ y < x`; and the
+// strict order `<` is primitive (at the reals it is positive data, a gap);
+// `≤` is an index characterised as `¬(y < x)`, Bishop's, so a carrier may
+// keep its own spelling of it; apartness is `x < y ∨ y < x`; and the
 // inverse takes an apartness proof instead of returning a junk value at zero.
-// No layer has trichotomy, decidable `≈`, or decidable `≤`.
+// No layer has trichotomy, decidable `≈`, or decidable `≤`. Carriers that do
+// decide (`Nat`, `Int`, `Dyadic`) fill the same layers.
 //
 // The layers, weakest first, each with the theorems that need no more:
 //
@@ -18,20 +21,27 @@
 //   together. Cotransitivity is locatedness: every point is placed on one
 //   side or the other of every gap. Transitivity of `≤`, the mixed `<`/`≤`
 //   steps and every closed-interval lemma need it.
-// - `OrderedAddGroup(≈, <, ≤, +)`: a strict order and an abelian group under
-//   `+` (modulo `≈`, `algebra_rel`'s `GroupRel`) with translation-invariant
-//   `<`. Absolute-value bounds are stated as predicates (`AbsLt(x, e)` is the
-//   open interval `(-e, e)`), so no carrier has to compute an absolute value
-//   or a maximum.
-// - `LocatedAddGroup`, the two above together: positivity of a bound, a sum
-//   splitting a gap between its summands, and the `≤` forms of the bounds.
-// - `OrderedField(≈, <, ≤, +, *)`: a located group that is a commutative
-//   ring (`semiring`'s `CommRing`), with a reciprocal on elements apart from
-//   zero, products of positives positive, a positive factor reflecting a
-//   product's sign, and the Archimedean property over an embedding of `Nat`.
-//   The reciprocal's sign, the order reversal of inversion and the
-//   Archimedean property's reciprocal form (`archimedean_recip`) are derived
-//   here.
+// - `OrderedAddMonoid(≈, <, ≤, +)`: a strict order and a commutative monoid
+//   under `+` whose translation keeps and reflects `<`; `LocatedAddMonoid`
+//   adds locatedness. Sums, termwise monotonicity of `∑` and the signs of
+//   sums live here, so they hold at `Nat`.
+// - `OrderedAddGroup` and `LocatedAddGroup`: the monoids whose `+` is a
+//   group (`algebra_rel`'s `GroupRel`). Negation, subtraction and the
+//   absolute-value bounds, stated as predicates (`AbsLt(x, e)` is the open
+//   interval `(-e, e)`) so that no carrier has to compute an absolute value.
+// - `OrderedSemiring(≈, <, ≤, +, *)`: a located monoid that is a commutative
+//   semiring, with `0 < 1` and a positive factor keeping and reflecting `<`.
+//   Products' signs and monotonicity by nonnegative factors live here.
+// - `OrderedRing`: an ordered semiring whose `+` is a located group, with
+//   nothing new; a square's sign and nonpositive factors live here.
+// - `OrderedField`: an ordered ring with a reciprocal on elements apart from
+//   zero and the Archimedean property over an embedding of `Nat`. The
+//   reciprocal's sign, the order reversal of inversion and the Archimedean
+//   property's reciprocal form (`archimedean_recip`) are derived here.
+//
+// Carriers: `Nat` is an ordered semiring, `Int` and `Dyadic` ordered rings
+// (the first two at the end of this module, `Dyadic` beside its type), and
+// `Rat` and `CReal` ordered fields.
 //
 // The algebra is the ring layers', not restated: zero is `A.unit`, negation
 // `A.inv`, one `A.multiplicative.unit`, and every `GroupRel`, `Ring` and
@@ -47,9 +57,11 @@
 import logic;
 import nat;
 import int;
+import relation;
 import relation_props;
 import algebra_rel;
 import semiring;
+import omega;
 
 // ---------------------------------------------------------------------------
 // Relations built from the strict order.
@@ -300,19 +312,129 @@ theorem PseudoOrder::between_of_within(a, x, b, a2, b2: A, ha: a2 < a, hb: b < b
 }
 
 // ---------------------------------------------------------------------------
-// The ordered additive group.
+// The ordered additive monoid.
 
-// An abelian group under `+` modulo `≈` whose strict order is invariant
-// under translation. The group is `algebra_rel`'s `GroupRel` beside its
-// `Commutative` law, untagged, so zero is `A.unit`, negation `A.inv`, and
-// `rel_cong` reaches through `+`; every `GroupRel` theorem applies here, and
-// only the order's law is new.
-class OrderedAddGroup<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
+// A commutative monoid under `+` modulo `≈` (`algebra_rel`'s
+// `CommMonoidRel`, untagged, so zero is `A.unit`) whose strict order
+// translation both keeps and reflects. In a group the reflection follows
+// from the keeping, by adding the inverse; a monoid such as `Nat` has no
+// inverse to add, so there it is a law of its own. Everything about sums
+// that needs no negation is proved here, and so holds at `Nat` as at the
+// fields.
+class OrderedAddMonoid<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
     add as +: A → A → A)
-    extends StrictOrder<A>(same, lt, le), GroupRel<A>(same, add), Commutative<A>(same, add)
+    extends StrictOrder<A>(same, lt, le), CommMonoidRel<A>(same, add)
 {
     add_lt_mono_r: (x, y, z: A) → x < y → x + z < y + z,
+    add_lt_reflect_r: (x, y, z: A) → x + z < y + z → x < y,
 }
+
+section<A: OrderedAddMonoid(≈, <, <=, +)> {
+
+theorem OrderedAddMonoid::add_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2):
+    x + y ≈ x2 + y2
+{
+    A.rel_trans(x + y, x2 + y, x2 + y2, rel_cong(hx), rel_cong(hy))
+}
+
+theorem OrderedAddMonoid::add_lt_mono_l(x, y, z: A, h: x < y): z + x < z + y {
+    A.lt_respects(x + z, z + x, y + z, z + y, A.comm(x, z), A.comm(y, z), A.add_lt_mono_r(x, y, z, h))
+}
+
+theorem OrderedAddMonoid::add_lt_mono(x, x2, y, y2: A, hx: x < x2, hy: y < y2):
+    x + y < x2 + y2
+{
+    A.lt_trans(x + y, x2 + y, x2 + y2, A.add_lt_mono_r(x, x2, y, hx), OrderedAddMonoid::add_lt_mono_l(y, y2, x2, hy))
+}
+
+// The reflection law, as a theorem a tactic can look up by name.
+theorem OrderedAddMonoid::add_lt_cancel_r(x, y, z: A, h: x + z < y + z): x < y {
+    A.add_lt_reflect_r(x, y, z, h)
+}
+
+theorem OrderedAddMonoid::add_lt_cancel_l(x, y, z: A, h: z + x < z + y): x < y {
+    OrderedAddMonoid::add_lt_cancel_r(x, y, z, A.lt_respects(z + x, x + z, z + y, y + z, A.comm(z, x), A.comm(z, y), h))
+}
+
+// `≤` is translation-invariant without locatedness: a refutation of `<`
+// moves along a refutation of the cancelled `<`.
+theorem OrderedAddMonoid::add_le_mono_r(x, y, z: A, h: x <= y): x + z <= y + z {
+    A.le_of_not_lt(x + z, y + z, λ back => A.not_lt_of_le(x, y, h, OrderedAddMonoid::add_lt_cancel_r(y, x, z, back)))
+}
+
+theorem OrderedAddMonoid::add_le_mono_l(x, y, z: A, h: x <= y): z + x <= z + y {
+    A.le_of_not_lt(z + x, z + y, λ back => A.not_lt_of_le(x, y, h, OrderedAddMonoid::add_lt_cancel_l(y, x, z, back)))
+}
+
+// A sum of positives is positive.
+theorem OrderedAddMonoid::add_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y {
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), OrderedAddMonoid::add_lt_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// The located monoid: a sum's order from both summands at once, and the sign
+// of a sum.
+
+class LocatedAddMonoid<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
+    add as +: A → A → A)
+    extends OrderedAddMonoid<A>(same, lt, le, add), PseudoOrder<A>(same, lt, le)
+{}
+
+section<A: LocatedAddMonoid(≈, <, <=, +)> {
+
+// A gap between sums is a gap between one pair of summands: the strong
+// extensionality of `+`, read off cotransitivity.
+theorem LocatedAddMonoid::add_lt_cancel(x, x2, y, y2: A, h: x + y < x2 + y2):
+    x < x2 ∨ y < y2
+{
+    match A.rel_cotrans(x + y, x2 + y2, x2 + y, h) {
+        Inl(l) => Inl(OrderedAddMonoid::add_lt_cancel_r(x, x2, y, l)),
+        Inr(r) => Inr(OrderedAddMonoid::add_lt_cancel_l(y, y2, x2, r)),
+    }
+}
+
+theorem LocatedAddMonoid::pos_of_add_pos(x, y: A, h: A.unit < x + y):
+    A.unit < x ∨ A.unit < y
+{
+    LocatedAddMonoid::add_lt_cancel(A.unit, x, A.unit, y, StrictOrder::lt_respects_l(A.unit, A.unit + A.unit, x + y,
+        A.rel_sym(A.unit + A.unit, A.unit, A.unit_r(A.unit)), h))
+}
+
+theorem LocatedAddMonoid::add_le_mono(x, x2, y, y2: A, hx: x <= x2, hy: y <= y2):
+    x + y <= x2 + y2
+{
+    PseudoOrder::le_trans(x + y, x2 + y, x2 + y2, OrderedAddMonoid::add_le_mono_r(x, x2, y, hx), OrderedAddMonoid::add_le_mono_l(y, y2, x2, hy))
+}
+
+// A strict bound and a weak one add to a strict one.
+theorem LocatedAddMonoid::add_lt_le_mono(x, x2, y, y2: A, hx: x < x2, hy: y <= y2): x + y < x2 + y2 {
+    PseudoOrder::lt_of_lt_of_le(x + y, x2 + y, x2 + y2, A.add_lt_mono_r(x, x2, y, hx), OrderedAddMonoid::add_le_mono_l(y, y2, x2, hy))
+}
+
+theorem LocatedAddMonoid::add_le_lt_mono(x, x2, y, y2: A, hx: x <= x2, hy: y < y2): x + y < x2 + y2 {
+    PseudoOrder::lt_of_le_of_lt(x + y, x2 + y, x2 + y2, OrderedAddMonoid::add_le_mono_r(x, x2, y, hx), OrderedAddMonoid::add_lt_mono_l(y, y2, x2, hy))
+}
+
+// A sum of nonnegatives is nonnegative.
+theorem LocatedAddMonoid::add_nonneg(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x + y {
+    StrictOrder::le_respects(A.unit + A.unit, A.unit, x + y, x + y, A.unit_r(A.unit), A.rel_refl(x + y), LocatedAddMonoid::add_le_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// The ordered additive group.
+
+// An ordered monoid whose `+` is an abelian group (`algebra_rel`'s
+// `GroupRel`, untagged, so negation is `A.inv` and every `GroupRel` theorem
+// applies here). Nothing is new but the inverse; what it adds is
+// subtraction, the sign of a negation and the absolute-value bounds.
+class OrderedAddGroup<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
+    add as +: A → A → A)
+    extends OrderedAddMonoid<A>(same, lt, le, add), GroupRel<A>(same, add)
+{}
 
 section<A: OrderedAddGroup(≈, <, <=, +)> {
 
@@ -325,17 +447,11 @@ fn AbsLe(x, e: A) → Type { Within(<=, A.inv(e), x, e) }
 // x and y are within e of each other: |x - y| < e.
 fn Close(x, y, e: A) → Type { AbsLt(x + A.inv(y), e) }
 
-theorem OrderedAddGroup::add_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2):
-    x + y ≈ x2 + y2
-{
-    A.rel_trans(x + y, x2 + y, x2 + y2, rel_cong(hx), rel_cong(hy))
-}
-
 // Cancelling a pair inside a sum, on either side of the pair.
 theorem OrderedAddGroup::add_neg_add(x, z: A): x + (A.inv(x) + z) ≈ z {
     calc {
         x + (A.inv(x) + z) ≈ (x + A.inv(x)) + z := A.rel_sym((x + A.inv(x)) + z, x + (A.inv(x) + z), A.assoc(x, A.inv(x), z)),
-        ≈ A.unit + z := OrderedAddGroup::add_respects(x + A.inv(x), A.unit, z, z, A.inv_r(x), A.rel_refl(z)),
+        ≈ A.unit + z := OrderedAddMonoid::add_respects(x + A.inv(x), A.unit, z, z, A.inv_r(x), A.rel_refl(z)),
         ≈ z := A.unit_l(z),
     }
 }
@@ -343,7 +459,7 @@ theorem OrderedAddGroup::add_neg_add(x, z: A): x + (A.inv(x) + z) ≈ z {
 theorem OrderedAddGroup::neg_add_add(x, z: A): A.inv(x) + (x + z) ≈ z {
     calc {
         A.inv(x) + (x + z) ≈ (A.inv(x) + x) + z := A.rel_sym((A.inv(x) + x) + z, A.inv(x) + (x + z), A.assoc(A.inv(x), x, z)),
-        ≈ A.unit + z := OrderedAddGroup::add_respects(A.inv(x) + x, A.unit, z, z, A.inv_l(x), A.rel_refl(z)),
+        ≈ A.unit + z := OrderedAddMonoid::add_respects(A.inv(x) + x, A.unit, z, z, A.inv_l(x), A.rel_refl(z)),
         ≈ z := A.unit_l(z),
     }
 }
@@ -351,7 +467,7 @@ theorem OrderedAddGroup::neg_add_add(x, z: A): A.inv(x) + (x + z) ≈ z {
 theorem OrderedAddGroup::add_neg_cancel_r(x, y: A): (x + y) + A.inv(y) ≈ x {
     calc {
         (x + y) + A.inv(y) ≈ x + (y + A.inv(y)) := A.assoc(x, y, A.inv(y)),
-        ≈ x + A.unit := OrderedAddGroup::add_respects(x, x, y + A.inv(y), A.unit, A.rel_refl(x), A.inv_r(y)),
+        ≈ x + A.unit := OrderedAddMonoid::add_respects(x, x, y + A.inv(y), A.unit, A.rel_refl(x), A.inv_r(y)),
         ≈ x := A.unit_r(x),
     }
 }
@@ -359,7 +475,7 @@ theorem OrderedAddGroup::add_neg_cancel_r(x, y: A): (x + y) + A.inv(y) ≈ x {
 theorem OrderedAddGroup::sub_add_cancel(x, y: A): (x + A.inv(y)) + y ≈ x {
     calc {
         (x + A.inv(y)) + y ≈ x + (A.inv(y) + y) := A.assoc(x, A.inv(y), y),
-        ≈ x + A.unit := OrderedAddGroup::add_respects(x, x, A.inv(y) + y, A.unit, A.rel_refl(x), A.inv_l(y)),
+        ≈ x + A.unit := OrderedAddMonoid::add_respects(x, x, A.inv(y) + y, A.unit, A.rel_refl(x), A.inv_l(y)),
         ≈ x := A.unit_r(x),
     }
 }
@@ -371,7 +487,7 @@ theorem OrderedAddGroup::neg_zero(x: A): A.inv(A.unit) ≈ A.unit {
 theorem OrderedAddGroup::neg_add(x, y: A): A.inv(x + y) ≈ A.inv(x) + A.inv(y) {
     let cancels = calc {
         (x + y) + (A.inv(x) + A.inv(y)) ≈ (x + A.inv(x)) + (y + A.inv(y)) := CommMonoidRel::interchange(≈, +, x, y, A.inv(x), A.inv(y)),
-        ≈ A.unit + A.unit := OrderedAddGroup::add_respects(x + A.inv(x), A.unit, y + A.inv(y), A.unit, A.inv_r(x), A.inv_r(y)),
+        ≈ A.unit + A.unit := OrderedAddMonoid::add_respects(x + A.inv(x), A.unit, y + A.inv(y), A.unit, A.inv_r(x), A.inv_r(y)),
         ≈ A.unit := A.unit_r(A.unit),
     };
     A.rel_sym(A.inv(x) + A.inv(y), A.inv(x + y), GroupRel::inv_unique(+, x + y, A.inv(x) + A.inv(y), cancels))
@@ -383,7 +499,7 @@ theorem OrderedAddGroup::sub_add_sub(x, y, z: A):
 {
     A.rel_trans((x + A.inv(y)) + (y + A.inv(z)), x + (A.inv(y) + (y + A.inv(z))), x + A.inv(z),
         A.assoc(x, A.inv(y), y + A.inv(z)),
-        OrderedAddGroup::add_respects(x, x, A.inv(y) + (y + A.inv(z)), A.inv(z), A.rel_refl(x),
+        OrderedAddMonoid::add_respects(x, x, A.inv(y) + (y + A.inv(z)), A.inv(z), A.rel_refl(x),
             OrderedAddGroup::neg_add_add(y, A.inv(z))))
 }
 
@@ -391,54 +507,19 @@ theorem OrderedAddGroup::sub_add_sub(x, y, z: A):
 theorem OrderedAddGroup::neg_sub(x, y: A): A.inv(x + A.inv(y)) ≈ y + A.inv(x) {
     calc {
         A.inv(x + A.inv(y)) ≈ A.inv(x) + A.inv(A.inv(y)) := OrderedAddGroup::neg_add(x, A.inv(y)),
-        ≈ A.inv(x) + y := OrderedAddGroup::add_respects(A.inv(x), A.inv(x), A.inv(A.inv(y)), y, A.rel_refl(A.inv(x)), GroupRel::inv_inv(+, y)),
+        ≈ A.inv(x) + y := OrderedAddMonoid::add_respects(A.inv(x), A.inv(x), A.inv(A.inv(y)), y, A.rel_refl(A.inv(x)), GroupRel::inv_inv(+, y)),
         ≈ y + A.inv(x) := A.comm(A.inv(x), y),
     }
 }
 
 // Order and translation.
 
-theorem OrderedAddGroup::add_lt_mono_l(x, y, z: A, h: x < y): z + x < z + y {
-    A.lt_respects(x + z, z + x, y + z, z + y, A.comm(x, z), A.comm(y, z), A.add_lt_mono_r(x, y, z, h))
-}
-
-theorem OrderedAddGroup::add_lt_mono(x, x2, y, y2: A, hx: x < x2, hy: y < y2):
-    x + y < x2 + y2
-{
-    A.lt_trans(x + y, x2 + y, x2 + y2, A.add_lt_mono_r(x, x2, y, hx), OrderedAddGroup::add_lt_mono_l(y, y2, x2, hy))
-}
-
-theorem OrderedAddGroup::add_lt_cancel_r(x, y, z: A, h: x + z < y + z): x < y {
-    A.lt_respects((x + z) + A.inv(z), x, (y + z) + A.inv(z), y,
-        OrderedAddGroup::add_neg_cancel_r(x, z), OrderedAddGroup::add_neg_cancel_r(y, z),
-        A.add_lt_mono_r(x + z, y + z, A.inv(z), h))
-}
-
-theorem OrderedAddGroup::add_lt_cancel_l(x, y, z: A, h: z + x < z + y): x < y {
-    OrderedAddGroup::add_lt_cancel_r(x, y, z, A.lt_respects(z + x, x + z, z + y, y + z, A.comm(z, x), A.comm(z, y), h))
-}
-
-// `≤` is translation-invariant without locatedness: a refutation of `<`
-// moves along a refutation of the cancelled `<`.
-theorem OrderedAddGroup::add_le_mono_r(x, y, z: A, h: x <= y): x + z <= y + z {
-    A.le_of_not_lt(x + z, y + z, λ back => A.not_lt_of_le(x, y, h, OrderedAddGroup::add_lt_cancel_r(y, x, z, back)))
-}
-
-theorem OrderedAddGroup::add_le_mono_l(x, y, z: A, h: x <= y): z + x <= z + y {
-    A.le_of_not_lt(z + x, z + y, λ back => A.not_lt_of_le(x, y, h, OrderedAddGroup::add_lt_cancel_l(y, x, z, back)))
-}
-
-// A sum of positives is positive.
-theorem OrderedAddGroup::add_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y {
-    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), OrderedAddGroup::add_lt_mono(A.unit, x, A.unit, y, hx, hy))
-}
-
 // x < y gives -y < -x: add -x + -y to both sides.
 theorem OrderedAddGroup::neg_lt(x, y: A, h: x < y): A.inv(y) < A.inv(x) {
     let shifted: (x + (A.inv(x) + A.inv(y)) < y + (A.inv(x) + A.inv(y))) =
         A.add_lt_mono_r(x, y, A.inv(x) + A.inv(y), h);
     let right = calc {
-        y + (A.inv(x) + A.inv(y)) ≈ y + (A.inv(y) + A.inv(x)) := OrderedAddGroup::add_respects(y, y,
+        y + (A.inv(x) + A.inv(y)) ≈ y + (A.inv(y) + A.inv(x)) := OrderedAddMonoid::add_respects(y, y,
             A.inv(x) + A.inv(y), A.inv(y) + A.inv(x), A.rel_refl(y), A.comm(A.inv(x), A.inv(y))),
         ≈ A.inv(x) := OrderedAddGroup::add_neg_add(y, A.inv(x)),
     };
@@ -495,8 +576,8 @@ theorem OrderedAddGroup::abs_lt_add(x, y, e, d: A, hx: AbsLt(x, e), hy: AbsLt(y,
 {
     And(StrictOrder::lt_respects_l(A.inv(e) + A.inv(d), A.inv(e + d), x + y,
             A.rel_sym(A.inv(e + d), A.inv(e) + A.inv(d), OrderedAddGroup::neg_add(e, d)),
-            OrderedAddGroup::add_lt_mono(A.inv(e), x, A.inv(d), y, hx.left, hy.left)),
-        OrderedAddGroup::add_lt_mono(x, e, y, d, hx.right, hy.right))
+            OrderedAddMonoid::add_lt_mono(A.inv(e), x, A.inv(d), y, hx.left, hy.left)),
+        OrderedAddMonoid::add_lt_mono(x, e, y, d, hx.right, hy.right))
 }
 
 // A point within every positive bound of zero is zero. Tightness, not
@@ -532,7 +613,7 @@ theorem OrderedAddGroup::same_of_close(x, y: A,
 {
     calc {
         x ≈ (x + A.inv(y)) + y := A.rel_sym((x + A.inv(y)) + y, x, OrderedAddGroup::sub_add_cancel(x, y)),
-        ≈ A.unit + y := OrderedAddGroup::add_respects(x + A.inv(y), A.unit, y, y,
+        ≈ A.unit + y := OrderedAddMonoid::add_respects(x + A.inv(y), A.unit, y, y,
             OrderedAddGroup::same_zero_of_abs_lt(x + A.inv(y), all), A.rel_refl(y)),
         ≈ y := A.unit_l(y),
     }
@@ -545,28 +626,10 @@ theorem OrderedAddGroup::same_of_close(x, y: A,
 
 class LocatedAddGroup<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
     add as +: A → A → A)
-    extends OrderedAddGroup<A>(same, lt, le, add), PseudoOrder<A>(same, lt, le)
+    extends OrderedAddGroup<A>(same, lt, le, add), LocatedAddMonoid<A>(same, lt, le, add)
 {}
 
 section<A: LocatedAddGroup(≈, <, <=, +)> {
-
-// A gap between sums is a gap between one pair of summands: the strong
-// extensionality of `+`, read off cotransitivity.
-theorem LocatedAddGroup::add_lt_cancel(x, x2, y, y2: A, h: x + y < x2 + y2):
-    x < x2 ∨ y < y2
-{
-    match A.rel_cotrans(x + y, x2 + y2, x2 + y, h) {
-        Inl(l) => Inl(OrderedAddGroup::add_lt_cancel_r(x, x2, y, l)),
-        Inr(r) => Inr(OrderedAddGroup::add_lt_cancel_l(y, y2, x2, r)),
-    }
-}
-
-theorem LocatedAddGroup::pos_of_add_pos(x, y: A, h: A.unit < x + y):
-    A.unit < x ∨ A.unit < y
-{
-    LocatedAddGroup::add_lt_cancel(A.unit, x, A.unit, y, StrictOrder::lt_respects_l(A.unit, A.unit + A.unit, x + y,
-        A.rel_sym(A.unit + A.unit, A.unit, A.unit_r(A.unit)), h))
-}
 
 // A bound with a point under it is positive. This one needs locatedness:
 // -e < e places zero, and zero below -e makes e positive by negation.
@@ -578,30 +641,10 @@ theorem LocatedAddGroup::abs_lt_pos(x, e: A, h: AbsLt(x, e)): A.unit < e {
     }
 }
 
-theorem LocatedAddGroup::add_le_mono(x, x2, y, y2: A, hx: x <= x2, hy: y <= y2):
-    x + y <= x2 + y2
-{
-    PseudoOrder::le_trans(x + y, x2 + y, x2 + y2, OrderedAddGroup::add_le_mono_r(x, x2, y, hx), OrderedAddGroup::add_le_mono_l(y, y2, x2, hy))
-}
-
 theorem LocatedAddGroup::neg_le(x, y: A, h: x <= y): A.inv(y) <= A.inv(x) {
     A.le_of_not_lt(A.inv(y), A.inv(x), λ back => A.not_lt_of_le(x, y, h,
         A.lt_respects(A.inv(A.inv(y)), y, A.inv(A.inv(x)), x, GroupRel::inv_inv(+, y), GroupRel::inv_inv(+, x),
             OrderedAddGroup::neg_lt(A.inv(x), A.inv(y), back))))
-}
-
-// A strict bound and a weak one add to a strict one.
-theorem LocatedAddGroup::add_lt_le_mono(x, x2, y, y2: A, hx: x < x2, hy: y <= y2): x + y < x2 + y2 {
-    PseudoOrder::lt_of_lt_of_le(x + y, x2 + y, x2 + y2, A.add_lt_mono_r(x, x2, y, hx), OrderedAddGroup::add_le_mono_l(y, y2, x2, hy))
-}
-
-theorem LocatedAddGroup::add_le_lt_mono(x, x2, y, y2: A, hx: x <= x2, hy: y < y2): x + y < x2 + y2 {
-    PseudoOrder::lt_of_le_of_lt(x + y, x2 + y, x2 + y2, OrderedAddGroup::add_le_mono_r(x, x2, y, hx), OrderedAddGroup::add_lt_mono_l(y, y2, x2, hy))
-}
-
-// A sum of nonnegatives is nonnegative.
-theorem LocatedAddGroup::add_nonneg(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x + y {
-    StrictOrder::le_respects(A.unit + A.unit, A.unit, x + y, x + y, A.unit_r(A.unit), A.rel_refl(x + y), LocatedAddGroup::add_le_mono(A.unit, x, A.unit, y, hx, hy))
 }
 
 theorem LocatedAddGroup::abs_le_of_abs_lt(x, e: A, h: AbsLt(x, e)): AbsLe(x, e) {
@@ -613,8 +656,8 @@ theorem LocatedAddGroup::abs_le_add(x, y, e, d: A, hx: AbsLe(x, e), hy: AbsLe(y,
 {
     And(StrictOrder::le_respects(A.inv(e) + A.inv(d), A.inv(e + d), x + y, x + y,
             A.rel_sym(A.inv(e + d), A.inv(e) + A.inv(d), OrderedAddGroup::neg_add(e, d)), A.rel_refl(x + y),
-            LocatedAddGroup::add_le_mono(A.inv(e), x, A.inv(d), y, hx.left, hy.left)),
-        LocatedAddGroup::add_le_mono(x, e, y, d, hx.right, hy.right))
+            LocatedAddMonoid::add_le_mono(A.inv(e), x, A.inv(d), y, hx.left, hy.left)),
+        LocatedAddMonoid::add_le_mono(x, e, y, d, hx.right, hy.right))
 }
 
 // A non-strict bound inside a strict one is strict.
@@ -627,36 +670,200 @@ theorem LocatedAddGroup::abs_lt_of_abs_le(x, e, d: A, h: AbsLe(x, e), ed: e < d)
 }
 
 // ---------------------------------------------------------------------------
+// The ordered semiring.
+
+// A located monoid whose `+` is the additive monoid of a commutative
+// semiring (`semiring`'s `CommSemiring`), with `0 < 1` and multiplication by
+// a positive factor keeping and reflecting `<`. These are the forms `Nat`
+// has: with no subtraction, `mul_pos` alone does not give monotonicity, so
+// the monotone forms are the laws and the signs of products are theorems.
+// The reflection is strong extensionality of `*` at a positive factor, a
+// constructive law of its own: the other laws only refute `y ≤ x`, which is
+// not a gap. The product's laws are reached through the `multiplicative`
+// and `commutative` tags; one is `A.multiplicative.unit`.
+//
+// The class is commutative and located, as every carrier here is; no
+// consumer has asked for a weaker one.
+class OrderedSemiring<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
+    add as +: A → A → A, mul as *: A → A → A)
+    extends LocatedAddMonoid<A>(same, lt, le, add), CommSemiring<A>(same, add, mul)
+{
+    zero_lt_one: unit < multiplicative.unit,
+    mul_lt_l: (x, y, z: A) → x < y → unit < z → z * x < z * y,
+    mul_lt_reflect_l: (x, y, z: A) → unit < z → z * x < z * y → x < y,
+}
+
+section<A: OrderedSemiring(≈, <, <=, +, *)> {
+
+// Products respect `≈` on both sides: the multiplicative semigroup's
+// `Respects2`, reached through the tag.
+theorem OrderedSemiring::mul_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2):
+    x * y ≈ x2 * y2
+{
+    A.multiplicative.respects2(x, x2, hx, y, y2, hy)
+}
+
+theorem OrderedSemiring::one_apart_zero(x: A): ApartBy(<, A.multiplicative.unit, A.unit) {
+    Inr(A.zero_lt_one)
+}
+
+// The class's laws as theorems a tactic can look up by name, and their
+// right-hand forms by commutativity.
+theorem OrderedSemiring::mul_lt_mono_l(x, y, z: A, h: x < y, hz: A.unit < z): z * x < z * y {
+    A.mul_lt_l(x, y, z, h, hz)
+}
+
+theorem OrderedSemiring::mul_lt_mono_r(x, y, z: A, h: x < y, hz: A.unit < z): x * z < y * z {
+    A.lt_respects(z * x, x * z, z * y, y * z, A.commutative.comm(z, x), A.commutative.comm(z, y), A.mul_lt_l(x, y, z, h, hz))
+}
+
+theorem OrderedSemiring::mul_lt_cancel_l(x, y, z: A, hz: A.unit < z, h: z * x < z * y): x < y {
+    A.mul_lt_reflect_l(x, y, z, hz, h)
+}
+
+theorem OrderedSemiring::mul_lt_cancel_r(x, y, z: A, hz: A.unit < z, h: x * z < y * z): x < y {
+    A.mul_lt_reflect_l(x, y, z, hz, A.lt_respects(x * z, z * x, y * z, z * y, A.commutative.comm(x, z), A.commutative.comm(y, z), h))
+}
+
+// A product of positives is positive: x·0 < x·y.
+theorem OrderedSemiring::mul_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x * y {
+    StrictOrder::lt_respects_l(x * A.unit, A.unit, x * y, A.mul_zero(x), A.mul_lt_l(A.unit, y, x, hy, hx))
+}
+
+// A positive factor reflects the product's sign: x·0 < x·y.
+theorem OrderedSemiring::pos_of_mul_pos(x, y: A, hx: A.unit < x, h: A.unit < x * y): A.unit < y {
+    A.mul_lt_reflect_l(A.unit, y, x, hx, StrictOrder::lt_respects_l(A.unit, x * A.unit, x * y, A.rel_sym(x * A.unit, A.unit, A.mul_zero(x)), h))
+}
+
+// A negative product with a positive factor has a negative other factor:
+// z·e < 0·e.
+theorem OrderedSemiring::neg_of_mul_neg(z, e: A, he: A.unit < e, h: z * e < A.unit): z < A.unit {
+    OrderedSemiring::mul_lt_cancel_r(z, A.unit, e, he, StrictOrder::lt_respects_r(z * e, A.unit, A.unit * e, A.rel_sym(A.unit * e, A.unit, A.zero_mul(e)), h))
+}
+
+// Multiplying by a nonnegative keeps a weak inequality. Were `z·y < z·x`, a
+// positive `z` would reflect it to `y < x`, so `z` is not positive; nor is
+// it negative, so it is zero by tightness, and then both products are zero.
+// The conclusion is a refutation, so nothing about `z` is decided.
+theorem OrderedSemiring::mul_le_mono_l(x, y, z: A, h: x <= y, hz: A.unit <= z): z * x <= z * y {
+    A.le_of_not_lt(z * x, z * y, λ back => {
+        let not_pos: ¬(A.unit < z) = λ pz => A.not_lt_of_le(x, y, h, A.mul_lt_reflect_l(y, x, z, pz, back));
+        let zero: (z ≈ A.unit) = A.lt_tight(z, A.unit, A.not_lt_of_le(A.unit, z, hz), not_pos);
+        let vanish = λ (w: A) => A.rel_trans(z * w, A.unit * w, A.unit,
+            OrderedSemiring::mul_respects(z, A.unit, w, w, zero, A.rel_refl(w)), A.zero_mul(w));
+        A.lt_irrefl(A.unit, A.lt_respects(z * y, A.unit, z * x, A.unit, vanish(y), vanish(x), back))
+    })
+}
+
+theorem OrderedSemiring::mul_le_mono_r(x, y, z: A, h: x <= y, hz: A.unit <= z): x * z <= y * z {
+    StrictOrder::le_respects(z * x, x * z, z * y, y * z, A.commutative.comm(z, x), A.commutative.comm(z, y), OrderedSemiring::mul_le_mono_l(x, y, z, h, hz))
+}
+
+// A product of nonnegatives is nonnegative.
+theorem OrderedSemiring::mul_nonneg(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x * y {
+    StrictOrder::le_respects(x * A.unit, A.unit, x * y, x * y, A.mul_zero(x), A.rel_refl(x * y), OrderedSemiring::mul_le_mono_l(A.unit, y, x, hy, hx))
+}
+
+// Both factors moved, both nonnegative below.
+theorem OrderedSemiring::mul_le_mul(a, b, c, d: A, h1: a <= b, h2: c <= d, ha: A.unit <= a, hc: A.unit <= c): a * c <= b * d {
+    PseudoOrder::le_trans(a * c, b * c, b * d, OrderedSemiring::mul_le_mono_r(a, b, c, h1, hc),
+        OrderedSemiring::mul_le_mono_l(c, d, b, h2, PseudoOrder::le_trans(A.unit, a, b, ha, h1)))
+}
+
+// A nonnegative factor of a positive product makes the other factor
+// positive. The reflection law asks for a positive factor; a nonnegative
+// one is placed by cotransitivity: either (z + 1)·d is positive too, and
+// z + 1 is, or z·d + d < z·d puts d below zero, and then z·d ≤ z·0.
+theorem OrderedSemiring::pos_of_mul_pos_nonneg(z, d: A, hz: A.unit <= z, h: A.unit < z * d): A.unit < d {
+    match A.rel_cotrans(A.unit, z * d, z * d + d, h) {
+        Inl(above) => {
+            let spread = calc {
+                (z + A.multiplicative.unit) * d ≈ z * d + A.multiplicative.unit * d := A.distrib_r(z, A.multiplicative.unit, d),
+                ≈ z * d + d := OrderedAddMonoid::add_respects(z * d, z * d, A.multiplicative.unit * d, d, A.rel_refl(z * d), A.multiplicative.unit_l(d)),
+            };
+            let shifted: (A.unit < z + A.multiplicative.unit) = PseudoOrder::lt_of_lt_of_le(A.unit, A.multiplicative.unit, z + A.multiplicative.unit, A.zero_lt_one,
+                StrictOrder::le_respects(A.unit + A.multiplicative.unit, A.multiplicative.unit, z + A.multiplicative.unit, z + A.multiplicative.unit,
+                    A.unit_l(A.multiplicative.unit), A.rel_refl(z + A.multiplicative.unit), OrderedAddMonoid::add_le_mono_r(A.unit, z, A.multiplicative.unit, hz)));
+            OrderedSemiring::pos_of_mul_pos(z + A.multiplicative.unit, d, shifted,
+                StrictOrder::lt_respects_r(A.unit, z * d + d, (z + A.multiplicative.unit) * d, A.rel_sym((z + A.multiplicative.unit) * d, z * d + d, spread), above))
+        },
+        Inr(below) => {
+            let negative: (d < A.unit) = OrderedAddMonoid::add_lt_cancel_l(d, A.unit, z * d,
+                StrictOrder::lt_respects_r(z * d + d, z * d, z * d + A.unit, A.rel_sym(z * d + A.unit, z * d, A.unit_r(z * d)), below));
+            let capped: (z * d <= A.unit) = StrictOrder::le_respects(z * d, z * d, z * A.unit, A.unit, A.rel_refl(z * d), A.mul_zero(z),
+                OrderedSemiring::mul_le_mono_l(d, A.unit, z, StrictOrder::le_of_lt(d, A.unit, negative), hz));
+            false_elim(A.not_lt_of_le(z * d, A.unit, capped, h))
+        },
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// The ordered ring.
+
+// An ordered semiring whose `+` is a group: the semiring and the located
+// group together, with nothing new. What negation adds is the sign of a
+// square and multiplication by a nonpositive factor.
+class OrderedRing<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
+    add as +: A → A → A, mul as *: A → A → A)
+    extends OrderedSemiring<A>(same, lt, le, add, mul), LocatedAddGroup<A>(same, lt, le, add), CommRing<A>(same, add, mul)
+{}
+
+section<A: OrderedRing(≈, <, <=, +, *)> {
+
+// Multiplying by a nonpositive reverses a weak inequality: negate the
+// factor, multiply, and negate back.
+theorem OrderedRing::mul_le_mono_l_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit): z * y <= z * x {
+    let nz: (A.unit <= A.inv(z)) = StrictOrder::le_of_same_l(A.unit, A.inv(A.unit), A.inv(z), A.rel_sym(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(z)), LocatedAddGroup::neg_le(z, A.unit, hz));
+    let flipped: (A.inv(A.inv(z) * y) <= A.inv(A.inv(z) * x)) = LocatedAddGroup::neg_le(A.inv(z) * x, A.inv(z) * y, OrderedSemiring::mul_le_mono_l(x, y, A.inv(z), h, nz));
+    let back = λ (w: A) => A.rel_trans(A.inv(A.inv(z) * w), A.inv(A.inv(z * w)), z * w,
+        A.inv_respects(A.inv(z) * w, A.inv(z * w), Ring::neg_mul(z, w)), GroupRel::inv_inv(+, z * w));
+    StrictOrder::le_respects(A.inv(A.inv(z) * y), z * y, A.inv(A.inv(z) * x), z * x, back(y), back(x), flipped)
+}
+
+theorem OrderedRing::mul_le_mono_r_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit): y * z <= x * z {
+    StrictOrder::le_respects(z * y, y * z, z * x, x * z, A.commutative.comm(z, y), A.commutative.comm(z, x), OrderedRing::mul_le_mono_l_nonpos(x, y, z, h, hz))
+}
+
+// A square is nonnegative, with no decision on the sign of `x`: were `x·x`
+// negative, `x < 0` would make it the positive `(-x)·(-x)`, so `0 ≤ x`, and
+// then `x·x` is a product of nonnegatives after all.
+theorem OrderedRing::sq_nonneg(x: A): A.unit <= x * x {
+    A.le_of_not_lt(A.unit, x * x, λ neg => {
+        let not_below: ¬(x < A.unit) = λ below => {
+            let flipped: (A.unit < A.inv(x) * A.inv(x)) =
+                OrderedSemiring::mul_pos(A.inv(x), A.inv(x), OrderedAddGroup::neg_pos(x, below), OrderedAddGroup::neg_pos(x, below));
+            A.lt_irrefl(A.unit, A.lt_trans(A.unit, x * x, A.unit,
+                StrictOrder::lt_respects_r(A.unit, A.inv(x) * A.inv(x), x * x, Ring::neg_mul_neg(x, x), flipped), neg))
+        };
+        let up: (A.unit <= x) = A.le_of_not_lt(A.unit, x, not_below);
+        A.not_lt_of_le(A.unit, x * x, OrderedSemiring::mul_nonneg(x, x, up, up), neg)
+    })
+}
+
+}
+
+// ---------------------------------------------------------------------------
 // The field.
 
-// A located group whose `+` is the additive group of a commutative ring
-// (`semiring`'s `CommRing`), with `0 < 1`, products of positives positive, a
-// positive factor reflecting the product's sign, a reciprocal on exactly the
-// elements apart from zero, and the Archimedean property: every element is
-// below some natural number. The ring's laws are its parent's, so every
-// `Ring` theorem applies to an ordered field: one is
-// `A.multiplicative.unit`, and the product's laws are reached through the
-// `multiplicative` and `commutative` tags.
+// An ordered ring with a reciprocal on exactly the elements apart from zero
+// and the Archimedean property: every element is below some natural number.
+// The ring's laws and the order's are its parents', so every `Ring` and
+// `OrderedRing` theorem applies to an ordered field.
 //
 // The reciprocal is `recip`, not `inv`: `inv` is the additive group's
-// negation, inherited untagged.
-//
-// The reflection (`0 < x` and `0 < x * y` give `0 < y`) is strong
-// extensionality of `*` at zero, a constructive axiom of its own: the ring
-// laws and `mul_pos` only refute `y ≤ 0`, which is not a gap. It is what the
-// reciprocal's sign and the Archimedean property's reciprocal form need.
+// negation, inherited untagged. The reciprocal's sign and the Archimedean
+// property's reciprocal form follow from the semiring's reflection law.
 // `of_nat` is a field, with its two defining laws, so a carrier keeps its own
 // embedding (`Rat::ofInt`, `CReal::ofRat`) and the law speaks of it.
 class OrderedField<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
     add as +: A → A → A, mul as *: A → A → A)
-    extends LocatedAddGroup<A>(same, lt, le, add), CommRing<A>(same, add, mul)
+    extends OrderedRing<A>(same, lt, le, add, mul)
 {
     of_nat: Nat → A,
     recip: (x: A) → ApartBy(lt, x, unit) → A,
     mul_recip: (x: A) → (h: ApartBy(lt, x, unit)) → x * recip(x, h) ≈ multiplicative.unit,
-    zero_lt_one: unit < multiplicative.unit,
-    mul_pos: (x, y: A) → unit < x → unit < y → unit < x * y,
-    pos_of_mul_pos: (x, y: A) → unit < x → unit < x * y → unit < y,
     of_nat_zero: of_nat(Zero) ≈ unit,
     of_nat_succ: (n: Nat) → of_nat(Succ(n)) ≈ of_nat(n) + multiplicative.unit,
     archimedean: (x: A) → ∃ n: Nat, x < of_nat(n),
@@ -664,45 +871,17 @@ class OrderedField<A>(same as ≈: A → A → Type, lt as <: A → A → Type, 
 
 section<A: OrderedField(≈, <, <=, +, *)> {
 
-// Products respect `≈` on both sides: the multiplicative semigroup's
-// `Respects2`, reached through the tag.
-theorem OrderedField::mul_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2):
-    x * y ≈ x2 * y2
-{
-    A.multiplicative.respects2(x, x2, hx, y, y2, hy)
-}
-
-theorem OrderedField::one_apart_zero(x: A): ApartBy(<, A.multiplicative.unit, A.unit) {
-    Inr(A.zero_lt_one)
-}
-
-// Multiplying by a positive keeps a strict inequality: the gap times the
-// factor is positive, and distributivity turns it back into a gap.
-theorem OrderedField::mul_lt_mono_l(x, y, z: A, h: x < y, hz: A.unit < z): z * x < z * y {
-    let product: (A.unit < z * (y + A.inv(x))) = A.mul_pos(z, y + A.inv(x), hz, OrderedAddGroup::sub_pos(x, y, h));
-    let spread = calc {
-        z * (y + A.inv(x)) ≈ z * y + z * A.inv(x) := A.distrib_l(z, y, A.inv(x)),
-        ≈ z * y + A.inv(z * x) := OrderedAddGroup::add_respects(z * y, z * y, z * A.inv(x), A.inv(z * x),
-            A.rel_refl(z * y), Ring::mul_neg(z, x)),
-    };
-    OrderedAddGroup::lt_of_sub_pos(z * x, z * y, StrictOrder::lt_respects_r(A.unit, z * (y + A.inv(x)), z * y + A.inv(z * x), spread, product))
-}
-
-theorem OrderedField::mul_lt_mono_r(x, y, z: A, h: x < y, hz: A.unit < z): x * z < y * z {
-    A.lt_respects(z * x, x * z, z * y, y * z, A.commutative.comm(z, x), A.commutative.comm(z, y), OrderedField::mul_lt_mono_l(x, y, z, h, hz))
-}
-
 // The inverse is unique, whichever apartness proof built it.
 theorem OrderedField::recip_unique(x: A, h: ApartBy(<, x, A.unit), u: A, hu: x * u ≈ A.multiplicative.unit):
     u ≈ A.recip(x, h)
 {
     calc {
         u ≈ u * A.multiplicative.unit := A.rel_sym(u * A.multiplicative.unit, u, A.multiplicative.unit_r(u)),
-        ≈ u * (x * A.recip(x, h)) := OrderedField::mul_respects(u, u, A.multiplicative.unit, x * A.recip(x, h), A.rel_refl(u),
+        ≈ u * (x * A.recip(x, h)) := OrderedSemiring::mul_respects(u, u, A.multiplicative.unit, x * A.recip(x, h), A.rel_refl(u),
             A.rel_sym(x * A.recip(x, h), A.multiplicative.unit, A.mul_recip(x, h))),
         ≈ (u * x) * A.recip(x, h) := A.rel_sym((u * x) * A.recip(x, h), u * (x * A.recip(x, h)), A.multiplicative.assoc(u, x, A.recip(x, h))),
-        ≈ (x * u) * A.recip(x, h) := OrderedField::mul_respects(u * x, x * u, A.recip(x, h), A.recip(x, h), A.commutative.comm(u, x), A.rel_refl(A.recip(x, h))),
-        ≈ A.multiplicative.unit * A.recip(x, h) := OrderedField::mul_respects(x * u, A.multiplicative.unit, A.recip(x, h), A.recip(x, h), hu, A.rel_refl(A.recip(x, h))),
+        ≈ (x * u) * A.recip(x, h) := OrderedSemiring::mul_respects(u * x, x * u, A.recip(x, h), A.recip(x, h), A.commutative.comm(u, x), A.rel_refl(A.recip(x, h))),
+        ≈ A.multiplicative.unit * A.recip(x, h) := OrderedSemiring::mul_respects(x * u, A.multiplicative.unit, A.recip(x, h), A.recip(x, h), hu, A.rel_refl(A.recip(x, h))),
         ≈ A.recip(x, h) := A.multiplicative.unit_l(A.recip(x, h)),
     }
 }
@@ -711,7 +890,7 @@ theorem OrderedField::recip_respects(x, x2: A, h: ApartBy(<, x, A.unit), h2: Apa
     hx: x ≈ x2): A.recip(x, h) ≈ A.recip(x2, h2)
 {
     OrderedField::recip_unique(x2, h2, A.recip(x, h), A.rel_trans(x2 * A.recip(x, h), x * A.recip(x, h), A.multiplicative.unit,
-        OrderedField::mul_respects(x2, x, A.recip(x, h), A.recip(x, h), A.rel_sym(x, x2, hx), A.rel_refl(A.recip(x, h))),
+        OrderedSemiring::mul_respects(x2, x, A.recip(x, h), A.recip(x, h), A.rel_sym(x, x2, hx), A.rel_refl(A.recip(x, h))),
         A.mul_recip(x, h)))
 }
 
@@ -723,7 +902,7 @@ theorem OrderedField::recip_mul(x: A, h: ApartBy(<, x, A.unit)): A.recip(x, h) *
 theorem OrderedField::of_nat_lt_succ(x: A, n: Nat): A.of_nat(n) < A.of_nat(Succ(n)) {
     A.lt_respects(A.of_nat(n) + A.unit, A.of_nat(n), A.of_nat(n) + A.multiplicative.unit, A.of_nat(Succ(n)),
         A.unit_r(A.of_nat(n)), A.rel_sym(A.of_nat(Succ(n)), A.of_nat(n) + A.multiplicative.unit, A.of_nat_succ(n)),
-        OrderedAddGroup::add_lt_mono_l(A.unit, A.multiplicative.unit, A.of_nat(n), A.zero_lt_one))
+        OrderedAddMonoid::add_lt_mono_l(A.unit, A.multiplicative.unit, A.of_nat(n), A.zero_lt_one))
 }
 
 theorem OrderedField::of_nat_pos(x: A, n: Nat): A.unit < A.of_nat(Succ(n)) {
@@ -741,7 +920,7 @@ theorem OrderedField::of_nat_pos(x: A, n: Nat): A.unit < A.of_nat(Succ(n)) {
 theorem OrderedField::recip_pos(x: A, h: ApartBy(<, x, A.unit), hx: A.unit < x):
     A.unit < A.recip(x, h)
 {
-    A.pos_of_mul_pos(x, A.recip(x, h), hx, StrictOrder::lt_respects_r(A.unit, A.multiplicative.unit, x * A.recip(x, h),
+    OrderedSemiring::pos_of_mul_pos(x, A.recip(x, h), hx, StrictOrder::lt_respects_r(A.unit, A.multiplicative.unit, x * A.recip(x, h),
         A.rel_sym(x * A.recip(x, h), A.multiplicative.unit, A.mul_recip(x, h)), A.zero_lt_one))
 }
 
@@ -754,7 +933,7 @@ theorem OrderedField::recip_neg(x: A, h: ApartBy(<, x, A.unit), hx: x < A.unit):
         Ring::neg_mul_neg(x, u), A.mul_recip(x, h));
     let product: (A.unit < A.inv(x) * A.inv(u)) = StrictOrder::lt_respects_r(A.unit, A.multiplicative.unit, A.inv(x) * A.inv(u),
         A.rel_sym(A.inv(x) * A.inv(u), A.multiplicative.unit, one), A.zero_lt_one);
-    OrderedAddGroup::neg_of_neg_pos(u, A.pos_of_mul_pos(A.inv(x), A.inv(u), OrderedAddGroup::neg_pos(x, hx), product))
+    OrderedAddGroup::neg_of_neg_pos(u, OrderedSemiring::pos_of_mul_pos(A.inv(x), A.inv(u), OrderedAddGroup::neg_pos(x, hx), product))
 }
 
 // The inverse undoes itself, at any proofs of the two apartnesses.
@@ -772,126 +951,20 @@ theorem OrderedField::recip_lt_recip(x, y: A, hx: ApartBy(<, x, A.unit), hy: Apa
     let u = A.recip(x, hx);
     let v = A.recip(y, hy);
     let w = u * v;
-    let pw: (A.unit < w) = A.mul_pos(u, v, OrderedField::recip_pos(x, hx, px),
+    let pw: (A.unit < w) = OrderedSemiring::mul_pos(u, v, OrderedField::recip_pos(x, hx, px),
         OrderedField::recip_pos(y, hy, A.lt_trans(A.unit, x, y, px, h)));
     let left = calc {
         x * w ≈ (x * u) * v := A.rel_sym((x * u) * v, x * w, A.multiplicative.assoc(x, u, v)),
-        ≈ A.multiplicative.unit * v := OrderedField::mul_respects(x * u, A.multiplicative.unit, v, v, A.mul_recip(x, hx), A.rel_refl(v)),
+        ≈ A.multiplicative.unit * v := OrderedSemiring::mul_respects(x * u, A.multiplicative.unit, v, v, A.mul_recip(x, hx), A.rel_refl(v)),
         ≈ v := A.multiplicative.unit_l(v),
     };
     let right = calc {
-        y * w ≈ y * (v * u) := OrderedField::mul_respects(y, y, w, v * u, A.rel_refl(y), A.commutative.comm(u, v)),
+        y * w ≈ y * (v * u) := OrderedSemiring::mul_respects(y, y, w, v * u, A.rel_refl(y), A.commutative.comm(u, v)),
         ≈ (y * v) * u := A.rel_sym((y * v) * u, y * (v * u), A.multiplicative.assoc(y, v, u)),
-        ≈ A.multiplicative.unit * u := OrderedField::mul_respects(y * v, A.multiplicative.unit, u, u, A.mul_recip(y, hy), A.rel_refl(u)),
+        ≈ A.multiplicative.unit * u := OrderedSemiring::mul_respects(y * v, A.multiplicative.unit, u, u, A.mul_recip(y, hy), A.rel_refl(u)),
         ≈ u := A.multiplicative.unit_l(u),
     };
-    A.lt_respects(x * w, v, y * w, u, left, right, OrderedField::mul_lt_mono_r(x, y, w, h, pw))
-}
-
-// A product of positives is positive: the class's `mul_pos`, as a theorem a
-// tactic can look up by name (a theorem named `mul_pos` would make every
-// `A.mul_pos` in these sections ambiguous with it).
-theorem OrderedField::mul_pos_of_pos(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x * y {
-    A.mul_pos(x, y, hx, hy)
-}
-
-// A negative product with a positive factor has a negative other factor:
-// divide by it.
-theorem OrderedField::neg_of_mul_neg(z, e: A, he: A.unit < e, h: z * e < A.unit): z < A.unit {
-    let apart: ApartBy(<, e, A.unit) = Inr(he);
-    let divided = calc {
-        (z * e) * A.recip(e, apart) ≈ z * (e * A.recip(e, apart)) := A.multiplicative.assoc(z, e, A.recip(e, apart)),
-        ≈ z * A.multiplicative.unit := OrderedField::mul_respects(z, z, e * A.recip(e, apart), A.multiplicative.unit, A.rel_refl(z), A.mul_recip(e, apart)),
-        ≈ z := A.multiplicative.unit_r(z),
-    };
-    A.lt_respects((z * e) * A.recip(e, apart), z, A.unit * A.recip(e, apart), A.unit, divided, A.zero_mul(A.recip(e, apart)),
-        OrderedField::mul_lt_mono_r(z * e, A.unit, A.recip(e, apart), h, OrderedField::recip_pos(e, apart, he)))
-}
-
-// A nonnegative factor of a positive product makes the other factor
-// positive. `pos_of_mul_pos` asks for a positive factor; a nonnegative one
-// is placed by cotransitivity: either (z + 1)·d is positive too, and z + 1
-// is, or d is negative, and then z·(-d) < 0 puts z below zero.
-theorem OrderedField::pos_of_mul_pos_nonneg(z, d: A, hz: A.unit <= z, h: A.unit < z * d): A.unit < d {
-    match A.rel_cotrans(A.unit, z * d, z * d + d, h) {
-        Inl(above) => {
-            let spread = calc {
-                (z + A.multiplicative.unit) * d ≈ z * d + A.multiplicative.unit * d := A.distrib_r(z, A.multiplicative.unit, d),
-                ≈ z * d + d := OrderedAddGroup::add_respects(z * d, z * d, A.multiplicative.unit * d, d, A.rel_refl(z * d), A.multiplicative.unit_l(d)),
-            };
-            let shifted: (A.unit < z + A.multiplicative.unit) = PseudoOrder::lt_of_lt_of_le(A.unit, A.multiplicative.unit, z + A.multiplicative.unit, A.zero_lt_one,
-                StrictOrder::le_respects(A.unit + A.multiplicative.unit, A.multiplicative.unit, z + A.multiplicative.unit, z + A.multiplicative.unit,
-                    A.unit_l(A.multiplicative.unit), A.rel_refl(z + A.multiplicative.unit), OrderedAddGroup::add_le_mono_r(A.unit, z, A.multiplicative.unit, hz)));
-            A.pos_of_mul_pos(z + A.multiplicative.unit, d, shifted,
-                StrictOrder::lt_respects_r(A.unit, z * d + d, (z + A.multiplicative.unit) * d, A.rel_sym((z + A.multiplicative.unit) * d, z * d + d, spread), above))
-        },
-        Inr(below) => {
-            let negative: (d < A.unit) = OrderedAddGroup::add_lt_cancel_l(d, A.unit, z * d,
-                StrictOrder::lt_respects_r(z * d + d, z * d, z * d + A.unit, A.rel_sym(z * d + A.unit, z * d, A.unit_r(z * d)), below));
-            let flipped: (z * A.inv(d) < A.unit) = StrictOrder::lt_respects_l(A.inv(z * d), z * A.inv(d), A.unit, A.rel_sym(z * A.inv(d), A.inv(z * d), Ring::mul_neg(z, d)),
-                StrictOrder::lt_respects_r(A.inv(z * d), A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(z), OrderedAddGroup::neg_lt(A.unit, z * d, h)));
-            false_elim(A.not_lt_of_le(A.unit, z, hz, OrderedField::neg_of_mul_neg(z, A.inv(d), OrderedAddGroup::neg_pos(d, negative), flipped)))
-        },
-    }
-}
-
-// Multiplying by a nonnegative keeps a weak inequality: a product the other
-// way round would be a positive gap z·(x - y) with z ≥ 0, so x - y > 0.
-theorem OrderedField::mul_le_mono_l(x, y, z: A, h: x <= y, hz: A.unit <= z): z * x <= z * y {
-    A.le_of_not_lt(z * x, z * y, λ back => {
-        let spread = calc {
-            z * x + A.inv(z * y) ≈ z * x + z * A.inv(y) := OrderedAddGroup::add_respects(z * x, z * x, A.inv(z * y), z * A.inv(y), A.rel_refl(z * x),
-                A.rel_sym(z * A.inv(y), A.inv(z * y), Ring::mul_neg(z, y))),
-            ≈ z * (x + A.inv(y)) := A.rel_sym(z * (x + A.inv(y)), z * x + z * A.inv(y), A.distrib_l(z, x, A.inv(y))),
-        };
-        A.not_lt_of_le(x, y, h, OrderedAddGroup::lt_of_sub_pos(y, x, OrderedField::pos_of_mul_pos_nonneg(z, x + A.inv(y), hz,
-            StrictOrder::lt_respects_r(A.unit, z * x + A.inv(z * y), z * (x + A.inv(y)), spread, OrderedAddGroup::sub_pos(z * y, z * x, back)))))
-    })
-}
-
-theorem OrderedField::mul_le_mono_r(x, y, z: A, h: x <= y, hz: A.unit <= z): x * z <= y * z {
-    StrictOrder::le_respects(z * x, x * z, z * y, y * z, A.commutative.comm(z, x), A.commutative.comm(z, y), OrderedField::mul_le_mono_l(x, y, z, h, hz))
-}
-
-// Multiplying by a nonpositive reverses a weak inequality: negate the
-// factor, multiply, and negate back.
-theorem OrderedField::mul_le_mono_l_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit): z * y <= z * x {
-    let nz: (A.unit <= A.inv(z)) = StrictOrder::le_of_same_l(A.unit, A.inv(A.unit), A.inv(z), A.rel_sym(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(z)), LocatedAddGroup::neg_le(z, A.unit, hz));
-    let flipped: (A.inv(A.inv(z) * y) <= A.inv(A.inv(z) * x)) = LocatedAddGroup::neg_le(A.inv(z) * x, A.inv(z) * y, OrderedField::mul_le_mono_l(x, y, A.inv(z), h, nz));
-    let back = λ (w: A) => A.rel_trans(A.inv(A.inv(z) * w), A.inv(A.inv(z * w)), z * w,
-        A.inv_respects(A.inv(z) * w, A.inv(z * w), Ring::neg_mul(z, w)), GroupRel::inv_inv(+, z * w));
-    StrictOrder::le_respects(A.inv(A.inv(z) * y), z * y, A.inv(A.inv(z) * x), z * x, back(y), back(x), flipped)
-}
-
-theorem OrderedField::mul_le_mono_r_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit): y * z <= x * z {
-    StrictOrder::le_respects(z * y, y * z, z * x, x * z, A.commutative.comm(z, y), A.commutative.comm(z, x), OrderedField::mul_le_mono_l_nonpos(x, y, z, h, hz))
-}
-
-// A product of nonnegatives is nonnegative.
-theorem OrderedField::mul_nonneg(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x * y {
-    StrictOrder::le_respects(x * A.unit, A.unit, x * y, x * y, A.mul_zero(x), A.rel_refl(x * y), OrderedField::mul_le_mono_l(A.unit, y, x, hy, hx))
-}
-
-// A square is nonnegative, with no decision on the sign of `x`: were `x·x`
-// negative, `x < 0` would make it the positive `(-x)·(-x)`, so `0 ≤ x`, and
-// then `x·x` is a product of nonnegatives after all.
-theorem OrderedField::sq_nonneg(x: A): A.unit <= x * x {
-    A.le_of_not_lt(A.unit, x * x, λ neg => {
-        let not_below: ¬(x < A.unit) = λ below => {
-            let flipped: (A.unit < A.inv(x) * A.inv(x)) =
-                A.mul_pos(A.inv(x), A.inv(x), OrderedAddGroup::neg_pos(x, below), OrderedAddGroup::neg_pos(x, below));
-            A.lt_irrefl(A.unit, A.lt_trans(A.unit, x * x, A.unit,
-                StrictOrder::lt_respects_r(A.unit, A.inv(x) * A.inv(x), x * x, Ring::neg_mul_neg(x, x), flipped), neg))
-        };
-        let up: (A.unit <= x) = A.le_of_not_lt(A.unit, x, not_below);
-        A.not_lt_of_le(A.unit, x * x, OrderedField::mul_nonneg(x, x, up, up), neg)
-    })
-}
-
-// Both factors moved, both nonnegative below.
-theorem OrderedField::mul_le_mul(a, b, c, d: A, h1: a <= b, h2: c <= d, ha: A.unit <= a, hc: A.unit <= c): a * c <= b * d {
-    PseudoOrder::le_trans(a * c, b * c, b * d, OrderedField::mul_le_mono_r(a, b, c, h1, hc),
-        OrderedField::mul_le_mono_l(c, d, b, h2, PseudoOrder::le_trans(A.unit, a, b, ha, h1)))
+    A.lt_respects(x * w, v, y * w, u, left, right, OrderedSemiring::mul_lt_mono_r(x, y, w, h, pw))
 }
 
 // The Archimedean property's inverse form: a positive x is above some
@@ -932,4 +1005,78 @@ fn OrderedField::with_ints() → CommRingOfInt<A>(≈, +, *) {
     CommRing::with_ints()
 }
 
+}
+
+// ---------------------------------------------------------------------------
+// The integers and the naturals.
+
+// `Nat` is an ordered semiring and `Int` an ordered ring, at `RelId` (their
+// `≈`, as in `semiring`). Both decide their orders, so each law is a case
+// split or `omega`; the products' laws are the carriers' own
+// (`Nat::mul_lt_mono_l`, `Int::lt_of_mul_lt_mul_l`). Every theorem above
+// that stops short of the field reads at both, `LocatedAddMonoid::range_le`
+// and `OrderedSemiring::mul_le_mul` among them.
+
+instance StrictOrder<Nat>(RelId<Nat>, Nat::Lt, Nat::Le) {
+    lt_irrefl := Nat::lt_irrefl,
+    lt_trans := Nat::lt_trans,
+    lt_respects := λ x x2 y y2 hx hy h => subst(hx, subst(hy, h)),
+    lt_tight := λ x y h1 h2 => match x.lt_trichotomy(y) {
+        Inl(l) => false_elim(h1(l)),
+        Inr(r) => match r { Inl(e) => e, Inr(g) => false_elim(h2(g)) },
+    },
+    le_of_not_lt := λ x y h => Nat::le_of_not_lt(y, x, h),
+    not_lt_of_le := λ x y h back => y.lt_irrefl(Nat::lt_of_lt_of_le(y, x, y, back, h)),
+}
+
+instance Cotransitive<Nat>(Nat::Lt) {
+    rel_cotrans := λ x y z h => match x.lt_or_ge(z) {
+        Inl(l) => Inl(l),
+        Inr(ge) => Inr(omega(ge, h)),
+    },
+}
+
+instance OrderedAddMonoid<Nat>(RelId<Nat>, Nat::Lt, Nat::Le, Nat::add) {
+    add_lt_mono_r := λ x y z h => omega(h),
+    add_lt_reflect_r := λ x y z h => omega(h),
+}
+
+instance LocatedAddMonoid<Nat>(RelId<Nat>, Nat::Lt, Nat::Le, Nat::add) {}
+
+instance OrderedSemiring<Nat>(RelId<Nat>, Nat::Lt, Nat::Le, Nat::add, Nat::mul) {
+    zero_lt_one := Nat::lt_succ_self(0),
+    mul_lt_l := λ x y z h hz => z.mul_lt_mono_l(x, y, hz, h),
+    mul_lt_reflect_l := λ x y z hz h => z.lt_of_mul_lt_mul_l(x, y, h),
+}
+
+instance StrictOrder<Int>(RelId<Int>, Int::Lt, Int::Le) {
+    lt_irrefl := Int::lt_irrefl,
+    lt_trans := Int::lt_trans,
+    lt_respects := λ x x2 y y2 hx hy h => subst(hx, subst(hy, h)),
+    lt_tight := λ x y h1 h2 => match x.lt_trichotomy(y) {
+        Inl(l) => false_elim(h1(l)),
+        Inr(r) => match r { Inl(e) => e, Inr(g) => false_elim(h2(g)) },
+    },
+    le_of_not_lt := λ x y h => Int::le_of_not_lt(y, x, h),
+    not_lt_of_le := Int::not_lt_of_ge,
+}
+
+instance Cotransitive<Int>(Int::Lt) {
+    rel_cotrans := λ x y z h => match x.lt_trichotomy(z) {
+        Inl(l) => Inl(l),
+        Inr(r) => Inr(omega(r, h)),
+    },
+}
+
+instance OrderedAddGroup<Int>(RelId<Int>, Int::Lt, Int::Le, Int::add) {
+    add_lt_mono_r := λ x y z h => omega(h),
+    add_lt_reflect_r := λ x y z h => omega(h),
+}
+
+instance LocatedAddGroup<Int>(RelId<Int>, Int::Lt, Int::Le, Int::add) {}
+
+instance OrderedRing<Int>(RelId<Int>, Int::Lt, Int::Le, Int::add, Int::mul) {
+    zero_lt_one := OfNat(0).lt_isucc_self(),
+    mul_lt_l := λ x y z h hz => x.mul_lt_mono_l(y, z, h, hz),
+    mul_lt_reflect_l := λ x y z hz h => x.lt_of_mul_lt_mul_l(y, z, hz, h),
 }

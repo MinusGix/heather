@@ -2233,6 +2233,18 @@ theorem CReal::ofNat_succ(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) ≈ 
     CReal::same_trans(CReal::ofRat_respects(omega), CReal::ofRat_add(Rat::ofInt(OfNat(n)), 1))
 }
 
+// A positive factor reflects a product's order: z·(y - x) is the positive
+// gap, so y - x is positive.
+theorem CReal::lt_of_mul_lt_mul_l({x, y, z: CReal}, hz: 0 < z, h: z * x < z * y): x < y {
+    let spread: (z * y - z * x ≈ z * (y - x)) = ring;
+    let gap: (0 < y - x) = CReal::pos_of_mul_pos(hz, CReal::lt_respects(CReal::same_refl(0), spread, CReal::sub_pos(h)));
+    calc {
+        x ≈ 0 + x := CReal::same_sym(x.zero_add()),
+        < (y - x) + x := CReal::add_lt_mono_r(0, y - x, x, gap),
+        ≈ y := y.sub_add_cancel(x),
+    }
+}
+
 // `≤` is `¬(y < x)` by definition here, so both of its laws are the identity.
 instance StrictOrder<CReal>(CReal::Same, CReal::Lt, CReal::Le) {
     lt_irrefl := CReal::lt_irrefl,
@@ -2251,17 +2263,18 @@ instance PseudoOrder<CReal>(CReal::Same, CReal::Lt, CReal::Le) {}
 
 instance OrderedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {
     add_lt_mono_r := CReal::add_lt_mono_r,
+    add_lt_reflect_r := CReal::add_lt_cancel_r,
 }
 
 instance LocatedAddGroup<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add) {}
 
 // A sum's order and sign, termwise, as at `Rat` (`Rat::range_le`).
 theorem CReal::range_le(n: Nat, f, g: Nat → CReal, h: (k: Nat) → k < n → f(k) <= g(k)): MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g) {
-    LocatedAddGroup::range_le(n, f, g, h)
+    LocatedAddMonoid::range_le(n, f, g, h)
 }
 
 theorem CReal::range_nonneg(n: Nat, f: Nat → CReal, h: (k: Nat) → k < n → 0 <= f(k)): 0 <= MonoidRel::range(+, n, f) {
-    LocatedAddGroup::range_nonneg(n, f, h)
+    LocatedAddMonoid::range_nonneg(n, f, h)
 }
 
 instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {
@@ -2269,16 +2282,16 @@ instance OrderedField<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CRea
     recip := λ x h => x.inv(h := h),
     mul_recip := λ x h => x.mul_inv(h := h),
     zero_lt_one := CReal::zero_lt_one(),
-    mul_pos := λ x y hx hy => CReal::mul_pos(hx, hy),
-    pos_of_mul_pos := λ x y hx h => CReal::pos_of_mul_pos(hx, h),
+    mul_lt_l := λ x y z h hz => CReal::mul_lt_mono_l(h, hz),
+    mul_lt_reflect_l := λ x y z hz h => CReal::lt_of_mul_lt_mul_l(hz, h),
     of_nat_zero := CReal::same_refl(0),
     of_nat_succ := CReal::ofNat_succ,
     archimedean := CReal::archimedean,
 }
 
-// A square is nonnegative (`OrderedField::sq_nonneg`), named at the carrier
+// A square is nonnegative (`OrderedRing::sq_nonneg`), named at the carrier
 // so a hint can cite it: `nlinarith(CReal::sq_nonneg(a - b))`.
-theorem CReal::sq_nonneg(self x: CReal): 0 <= x * x { OrderedField::sq_nonneg(x) }
+theorem CReal::sq_nonneg(self x: CReal): 0 <= x * x { OrderedRing::sq_nonneg(x) }
 
 // ---------------------------------------------------------------------------
 // Completeness (docs/creal-completeness-round.md). A sequence of reals is

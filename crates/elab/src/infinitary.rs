@@ -544,7 +544,7 @@ impl Elaborator {
             dom: w0,
             cod: Rc::new(Type::Ty(lw.clone())),
         };
-        let mut ty_level = Level::max(lw, succ_lw).normalize().canonical();
+        let mut ty_level = Level::max(lw, succ_lw);
         // The telescope's domains in the emission spelling, as
         // `register_ty_code_fn`'s: the statement and the λ read one list.
         for (dom, dom_level) in self.emitted_tel(&binders).iter().rev() {
@@ -560,7 +560,7 @@ impl Elaborator {
                 dom: Rc::new(dom.clone()),
                 cod: Rc::new(ty),
             };
-            ty_level = Level::max(dom_level.clone(), ty_level).normalize().canonical();
+            ty_level = Level::max(dom_level.clone(), ty_level);
         }
         let _ = self.push_gen_def(key, &ind.name, ty, ty_level, body, span);
     }

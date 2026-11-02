@@ -102,10 +102,13 @@ pub type Hash = [u8; 32];
 /// impossible by construction rather than merely unlikely. (`store::FORMAT` is
 /// bumped alongside, which is what makes the invalidation *loud* — see
 /// `docs/cache-v1-design.md` §12.)
-const DOMAIN_IFACE: &[u8] = b"heather/iface/2\0";
-const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/1\0";
-const DOMAIN_CHECK: &[u8] = b"heather/check/2\0";
-const DOMAIN_STATEMENT: &[u8] = b"heather/statement/1\0";
+///
+/// **Bumped again with canonical levels** (`issues/kernel-compact-level.md`):
+/// a level is now hashed as its normal form, not as a `1+`/`⊔` tree.
+const DOMAIN_IFACE: &[u8] = b"heather/iface/3\0";
+const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/2\0";
+const DOMAIN_CHECK: &[u8] = b"heather/check/3\0";
+const DOMAIN_STATEMENT: &[u8] = b"heather/statement/2\0";
 
 /// The interface hashes of a Ψ prefix, in binding order.
 ///
@@ -124,11 +127,10 @@ pub type Prefix = [Option<Hash>];
 #[rustfmt::skip]
 mod tag {
     // levels
-    pub const L_VAR: u8 = 0x01;
-    pub const L_ZERO: u8 = 0x02;
-    pub const L_SUCC: u8 = 0x03;
-    pub const L_MAX: u8 = 0x04;
+    // 0x01–0x04 were the tree spelling (`ℓ`, `0`, `1+`, `⊔`) before levels
+    // were canonical (scheme `/3`); retired, not reused.
     pub const L_OMEGA: u8 = 0x05;
+    pub const L_NF: u8 = 0x06;
     // layers
     pub const LAYER_VAR: u8 = 0x08;
     pub const LAYER_CODE: u8 = 0x09;
@@ -324,6 +326,14 @@ impl<'a> Walk<'a> {
         }
     }
 
+    #[inline]
+    fn u64(&mut self, n: u64) {
+        self.buf.extend_from_slice(&n.to_le_bytes());
+        if self.buf.len() >= FLUSH_AT {
+            self.flush();
+        }
+    }
+
     /// A sequence length. `u32` like every other integer here; a context or
     /// substitution longer than 4 billion entries cannot be built in the first
     /// place (they are `Vec`s of `Rc`s), and saturating keeps the width fixed.
@@ -387,23 +397,23 @@ impl<'a> Walk<'a> {
         });
     }
 
+    /// A level as its canonical parts (`Level` is canonical by
+    /// construction, so equivalent levels hash alike): `ω`, or the optional
+    /// constant and the `(ℓ, n)` terms in ascending order.
     fn level(&mut self, l: &Level) {
-        match l {
-            Level::Var(v) => {
-                self.tag(tag::L_VAR);
-                self.u32(v.0);
+        let Some((konst, vars)) = l.parts() else { return self.tag(tag::L_OMEGA) };
+        self.tag(tag::L_NF);
+        match konst {
+            Some(k) => {
+                self.tag(1);
+                self.u64(k);
             }
-            Level::Zero => self.tag(tag::L_ZERO),
-            Level::Succ(l) => {
-                self.tag(tag::L_SUCC);
-                self.level(l);
-            }
-            Level::Max(a, b) => {
-                self.tag(tag::L_MAX);
-                self.level(a);
-                self.level(b);
-            }
-            Level::Omega => self.tag(tag::L_OMEGA),
+            None => self.tag(0),
+        }
+        self.u32(vars.len() as u32);
+        for (v, n) in vars {
+            self.u32(v.0);
+            self.u64(n);
         }
     }
 

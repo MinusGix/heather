@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x1c";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x19";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x1d";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1a";
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -495,11 +495,9 @@ impl<'a> Reader<'a> {
 }
 
 mod tag {
-    pub const LEVEL_VAR: u8 = 0;
-    pub const LEVEL_ZERO: u8 = 1;
-    pub const LEVEL_SUCC: u8 = 2;
-    pub const LEVEL_MAX: u8 = 3;
+    // 0–3 were the tree spelling before levels were canonical.
     pub const LEVEL_OMEGA: u8 = 4;
+    pub const LEVEL_NF: u8 = 5;
 
     pub const LAYER_VAR: u8 = 0;
     pub const LAYER_CODE: u8 = 1;
@@ -519,33 +517,42 @@ mod tag {
     pub const SHARED: u8 = 0xff;
 }
 
+/// A level as its canonical parts: `ω`, or the optional constant and the
+/// `(ℓ, n)` terms. Decoding rebuilds through [`Level::of_parts`], so no image
+/// can produce a non-canonical level.
 fn put_level(w: &mut Writer, level: &Level) {
     w.nodes += 1;
-    match level {
-        Level::Var(var) => {
-            w.byte(tag::LEVEL_VAR);
-            w.u32(var.0);
+    let Some((konst, vars)) = level.parts() else { return w.byte(tag::LEVEL_OMEGA) };
+    w.byte(tag::LEVEL_NF);
+    match konst {
+        Some(k) => {
+            w.byte(1);
+            w.u64(k);
         }
-        Level::Zero => w.byte(tag::LEVEL_ZERO),
-        Level::Succ(level) => {
-            w.byte(tag::LEVEL_SUCC);
-            put_level(w, level);
-        }
-        Level::Max(left, right) => {
-            w.byte(tag::LEVEL_MAX);
-            put_level(w, left);
-            put_level(w, right);
-        }
-        Level::Omega => w.byte(tag::LEVEL_OMEGA),
+        None => w.byte(0),
+    }
+    w.len(vars.len());
+    for (var, n) in vars {
+        w.u32(var.0);
+        w.u64(n);
     }
 }
 
 fn get_level(r: &mut Reader<'_>) -> Result<Level, ModuleImageDecodeError> {
     r.node(|r| match r.byte()? {
-        tag::LEVEL_VAR => Ok(Level::Var(UnivVar(r.u32()?))),
-        tag::LEVEL_ZERO => Ok(Level::Zero),
-        tag::LEVEL_SUCC => Ok(Level::Succ(Rc::new(get_level(r)?))),
-        tag::LEVEL_MAX => Ok(Level::Max(Rc::new(get_level(r)?), Rc::new(get_level(r)?))),
+        tag::LEVEL_NF => {
+            let konst = match r.byte()? {
+                0 => None,
+                1 => Some(r.u64()?),
+                tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "level constant", tag }),
+            };
+            let len = r.len()?;
+            let mut vars = Vec::with_capacity(len);
+            for _ in 0..len {
+                vars.push((UnivVar(r.u32()?), r.u64()?));
+            }
+            Ok(Level::of_parts(konst, vars))
+        }
         tag::LEVEL_OMEGA => Ok(Level::Omega),
         tag => Err(ModuleImageDecodeError::InvalidTag { sort: "level", tag }),
     })

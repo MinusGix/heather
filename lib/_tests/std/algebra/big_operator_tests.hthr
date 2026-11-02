@@ -95,11 +95,11 @@ theorem open_cauchy<A: Semiring(≈, +, *)>(N: Nat, a, b: Nat → A):
 // Order: a sum of nonnegative terms is nonnegative, and the triangle
 // inequality at `Rat`.
 theorem rat_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → Nat::Lt(k, n) → 0 <= f(k)): 0 <= ∑ k < n, f(k) {
-    LocatedAddGroup::range_nonneg(n, f, h)
+    LocatedAddMonoid::range_nonneg(n, f, h)
 }
 theorem rat_triangle(n: Nat, f: Nat → Rat): (∑ k < n, f(k)).abs() <= ∑ k < n, f(k).abs() { Rat::sum_abs_le(n, f) }
 theorem creal_le(n: Nat, f, g: Nat → CReal, h: (k: Nat) → Nat::Lt(k, n) → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) {
-    LocatedAddGroup::range_le(n, f, g, h)
+    LocatedAddMonoid::range_le(n, f, g, h)
 }
 
 // Distributivity at an open semiring, and the product of two sums.

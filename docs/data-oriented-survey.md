@@ -214,6 +214,11 @@ it (an enum of `Small(u32 offset, u32 var-or-tag)` and `Big(Arc<…>)` is 16
 bytes; 8 needs a packed `NonZeroU64` with manual decoding, still safe code).
 Take the 16-byte version first: `Term` ~104, `Type` ~56.
 
+**Status (2026-11-02).** Done as the 16-byte, canonical-by-construction
+version: `Term` 104, `Type` 56, `Val` 72. perf ab, calc_parser cold: max
+RSS −10%, kernel gate −7%, wall −4%, all separating. The 8-byte step needs
+an interned join table: [[kernel-level-eight-bytes]].
+
 ## 4. The bounds memo is a side table
 
 **Where.** `crates/kernel/src/bounds.rs`: per-node free-variable bounds,
