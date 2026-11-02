@@ -165,18 +165,24 @@ positions (with nesting, at each layer of the carrier):
   constructor is a pending node, the child `inl(inr(node))`, the node built
   at the layer below.
 
+- **under a friend** (§5.5), the carrier is the free algebra of the friends
+  and the child type is `C + ⟦D⟧` over it: a friend's call is the child
+  `inl(node)`, its codata arguments leaves (seeds, existing trees) or friend
+  nodes in turn.
+
 Every other self-call is refused as unguarded: in a payload (`SCons(hd(bad(n)),
 …)`), under an observation (`tl(bad(n))`), alone (`bad()`), or inside any tree
-that is not a constructor of the declaration (`SCons(n, tl(SCons(n, bad(n))))`:
-corecursion *up to* a function, `issues/codata-corecursion-up-to.md`).
+that is not a constructor of the declaration and not a friend's call
+(`SCons(n, tl(bad(n)))`: `tl` reads two layers, so it is not a friend, §5.5).
 
 ### 5.3 What it does not do
 
 - No mutual corecursion and no corecursion through a helper function: one
   `fn`, one `corec`.
-- No "productive up to" calls (`bind`'s `Ret(r) => h(r)` is the existing-tree
-  case, which is fine; a call that is guarded only after an unfolding is
-  not).
+- No "productive up to" calls beyond friends (§5.5): `bind`'s `Ret(r) =>
+  h(r)` is the existing-tree case, which is fine; a call under a function
+  that is not a friend, guarded only after that function's unfolding, is
+  not.
 - No copatterns. Definitions are written with constructors, and observations
   are `match`.
 
@@ -246,6 +252,110 @@ builds.
   sb_two(tl(tl(s)))` holds by `refl`, `J` computing at `refl` under the
   `inl` arm one layer down.
 
+### 5.5 Corecursion up to friends
+
+A call may sit under a **friend**: a function of the definition's own codata
+type that consumes at most one layer of each codata argument to produce one
+layer of output (Blanchette, Bouzy, Lochbihler, Popescu and Traytel,
+*Friends with Benefits*, 2017). The customer is the Leibniz (Hurwitz) product
+of formal power series, `(fg)' = f'g + fg'`:
+
+```
+fn sadd(s: Stream, t: Stream) -> Stream {
+    match s { SCons(a, s2) => match t { SCons(b, t2) => SCons(add(a, b), sadd(s2, t2)) } }
+}
+fn smul(f: Stream, g: Stream) -> Stream {
+    SCons(mul(hd(f), hd(g)), sadd(smul(tl(f), g), smul(f, tl(g))))
+}
+```
+
+**Which functions are friends.** Decided syntactically on the friend's own
+definition, with no registration and no proof obligation: the check is the
+friend's body elaborating over the free carrier below ("friend mode"), and
+the kernel checks the result as part of the definition's `corec`. A candidate
+is a call inside one of the declaration's constructors, to a global `fn`
+whose result is the definition's codata type, with a corecursive call among
+its arguments; a function of another result type is not a candidate, so the
+guard's own messages stand for it (`SCons(hd(bad(n)), …)`). In friend mode a
+codata parameter `s` (a parameter of the definition's codata type) may be
+
+- the scrutinee of a `match` whose arms bind plain names: the arm reads the
+  node of `s` (its label and its children, at `C + ⟦D⟧`);
+- an argument of the friend's call to itself, which must be a child of the
+  constructor its step returns;
+- a child of that constructor, or the whole result (`append`'s `CNil => b`):
+  the output is then `s`'s own first node.
+
+A child bound by such a `match` may be passed on as a child or as an
+argument to the friend itself (applied, for a function child). Anything
+else is refused with the place it happened, said at the definition's call:
+reading a child again (`skip(tl(s2))`, two layers, which would make
+`f = SCons(n, skip(f))` unproductive), using `s` as a tree (`hd(s)`), a
+call to itself outside a child, or a codata argument inside a tree the step
+builds. Other parameters are **data**: stored in the friend's node.
+
+**The carrier** is the free algebra of the definition's friends over its
+seeds and existing trees, a finitary tree (`Wf`, so the children are a
+`Vec`, compared by conversion):
+
+```
+S = X + (⟦D⟧ + (A₁ + (… + A_m)))      A_f = friend f's data arguments' tuple
+n(a) = case a { X ⇒ 0; ⟦D⟧ ⇒ 0; A_f ⇒ friend f's codata arity }
+C = Wf(a : S). n(a)
+```
+
+In the body, a corecursive call at a child is the leaf `inl(sup(inj_X(seed);
+⟨⟩))`, a friend's call `inl(sup(inj_{A_f}(data); ⟨c₁, …, c_k⟩))` with each
+codata argument a seed leaf, a friend node in turn, or an existing tree's
+leaf `sup(inj_D(t); ⟨⟩)`; any other child is `inr(t)` as before. The seed
+is `sup(inj_X(⟨varying⟩); ⟨⟩)`.
+
+**The step** is structural recursion on the tree,
+
+```
+step(x) = elim_Wf(x; a cs ih. (case a of
+            X v    ⇒ λcs ih. body[v]
+            ⟦D⟧ t  ⇒ λcs ih. (λo. ⟨fst o, λq. inr(snd o q)⟩)(out t)
+            A_f d  ⇒ λcs ih. friend_f(d, cs, ih)) cs ih)
+```
+
+the case a convoy, since `cs : Vec(C; n a)` and `ih : Π(i : Fin(n a)).
+F(C)` are typed at `a`. `friend_f` is the friend's body elaborated over `C`
+with its data parameters bound to `d`'s components and its codata parameter
+`j` to the carrier value `cs_j`, whose node is `ih(j)`; its own call is a node
+of `C` (a child pattern variable `y : C + ⟦D⟧` enters as `case y {inl c ⇒ c;
+inr t ⇒ sup(inj_D(t); ⟨⟩)}`). So a friend node's step reads its arguments'
+first nodes, which the `Wf` recursion has already computed, and produces one
+node: productivity is the `corec`'s, termination the `Wf` recursion's, and
+neither rests on the friendliness check, which only decides what elaborates.
+
+**Friend mode** re-elaborates the friend's surface body at each definition
+that calls it, under the friend's own module's names (`Cx::hygienic`, the
+module's resolution scope), from the declaration a module image keeps. Its
+body is not stored as a separate carrier-polymorphic term: that would need
+the carrier's universe level abstracted, and the definition's own carrier
+is in hand.
+
+**What `refl` keeps.** Observations compute as far as the friend's own
+unfolding does: `hd(tl(smul(f, g))) = add(mul(hd(tl f), hd g), mul(hd f,
+hd(tl g)))` and `nth(smul(from(1), from(1)), 2) = 14` hold by `refl`, the
+friend node's step running both seeds' bodies. A tree under a friend is not
+convertible with the friend applied to the trees: `tl(smul(f, g))` is a
+`corec` over the friend node, not `sadd(smul(tl f, g), smul(f, tl g))`.
+Their equality is a bisimilarity.
+
+**This round does not do** (`issues/codata-up-to-friends-round-2.md`):
+
+- indexed codata (`Bisim`/`Eutt` up to `trans`), where a friend's arguments
+  sit at different indices;
+- polymorphic friends (type parameters, implicit parameters) and friends
+  whose parameter types mention other parameters;
+- friends whose codata arguments are of another instance or under a function
+  (`bind`'s `t : CoTree<R>` and `h : R → CoTree<S>`, for a direct coinductive
+  `rec`);
+- friends calling other friends, and constructors nested above a call beside
+  a friend (§5.4 with §5.5).
+
 ## 6. Layers
 
 Every declaration over codata is bound at **layer c**, like every other:
@@ -290,6 +400,14 @@ certgen refuses codata (§1).
   function child whose domain is read at the pending node's index, and
   controls: a nested call at the wrong index, a wrong payload, a wrong
   observation).
+- **corecursion up to friends** (§5.5): the Hurwitz product up to stream
+  addition at neutral and literal streams, a friend with a data argument
+  and a fixed parameter, a friend returning its argument (`append` on a
+  colist), a friend over function children with the call in a `match` arm
+  under a λ, a friend replayed from another module's image beside a
+  same-named global, and controls: a wrong observation, a friend reading
+  two layers (`skip`), one using its argument as a tree (`peek`), a call in
+  a friend's data argument, and nested constructors beside a friend.
 
 Plus a module-image round trip (`codata_round_trips_through_images`): the
 declaration, its constructors and a corecursive function written to an
@@ -303,4 +421,7 @@ image, replayed, and used from an importing module.
    `Bisim ⇔ Π n. Same(approx n t, approx n u)`.
 3. ~~**Nested guards**~~: done (§5.4), unindexed 2026-11-01 and indexed
    2026-11-02.
+5. ~~**Corecursion up to friends**~~: round 1 done (§5.5, unindexed,
+   monomorphic friends), 2026-11-02; the rest is
+   `issues/codata-up-to-friends-round-2.md`.
 4. ~~Codes for `M`~~: done (`docs/kernel-m-codes-design.md`).

@@ -88,6 +88,11 @@ pub(crate) struct Cx {
     /// at either of them is elaborated against by `Elaborator::corec_check`.
     /// `None` everywhere else, which keeps the hook inert.
     pub(crate) corec: Option<Rc<crate::codata::CorecSite>>,
+    /// Set while a **friend**'s body is re-elaborated over a corecursive
+    /// definition's free carrier (docs/codata-elaborator-design.md §5.5):
+    /// its codata arguments are nodes of that carrier, read by
+    /// `Elaborator::friend_check`. `None` everywhere else.
+    pub(crate) friend: Option<Rc<crate::codata::FriendMode>>,
     /// The codata type of the innermost `match` on codata, while its arms
     /// elaborate — only so an unguarded self-call there can say that codata
     /// has no structural order (docs/codata-elaborator-design.md §4).
@@ -224,6 +229,7 @@ impl Cx {
             op_locals: Spine::new(),
             meta: None,
             corec: None,
+            friend: None,
             codata_match: None,
         }
     }
@@ -285,6 +291,7 @@ impl Cx {
             op_locals: Spine::new(),
             meta: None,
             corec: None,
+            friend: None,
             codata_match: None,
         }
     }

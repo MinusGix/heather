@@ -4932,6 +4932,13 @@ impl Elaborator {
         {
             return Ok(t);
         }
+        // A friend's body over a corecursive definition's free carrier
+        // (docs/codata-elaborator-design.md §5.5).
+        if let Some(mode) = cx.friend.as_ref()
+            && let Some(t) = self.friend_check(cx, mode, e, expected, lvl)?
+        {
+            return Ok(t);
+        }
         if let Some(quoted) = self.quote_for_by(cx, e, expected, lvl)? {
             return Ok(quoted);
         }
