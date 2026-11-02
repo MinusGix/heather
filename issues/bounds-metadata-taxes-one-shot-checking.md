@@ -4,7 +4,7 @@ status: open
 labels: [kernel,performance]
 area: kernel
 created: 2026-07-31
-updated: 2026-09-11
+updated: 2026-11-02
 ---
 
 [[subst-visits-closed-subtrees]]'s round left one deliberate regression:
@@ -79,3 +79,5 @@ WHERE IT LANDS IN THE SUITE: the declaration cache gates it away for four of the
 - 2026-08-17: Trigger-adjacent observation from the 2026-08-17 kernel baseline re-record (bench-gate round): level/equiv-rebuilt is 1.33-1.43x against the 0674cac (2026-07-31) baseline, uniform across sizes with slopes unchanged -- a constant factor on one-shot-structured level equality, consistent with this issue's accepted ~1.4x rather than a new pathology. Recorded so the next baseline diff does not re-discover it; no lever pulled.
 - 2026-09-05: Trigger-adjacent (2026-09-05, [[omega-per-goal-elaboration-cost]]): under reduce::whnf_type_delta on a computing Int proposition, bounds::Cache::compute_term was ~50% of samples -- every substitution step's fresh subtree misses the memo and is walked whole. Fixed upstream by not reducing; recorded here as the shape a real trigger would take. Details: [[elaborator-whnf-probes-on-computing-types]].
 - 2026-09-11: Retitled 2026-09-11 to the current figure (1.17x, 476 vs 405 us on code/check-identity-recursor after the NbE round); the 1.4x in the old title was the pre-NbE number.
+- 2026-11-02: Datum from the data-oriented survey (2026-11-02, `docs/data-oriented-survey.md` §4). A gdb stack sampler on cold checks at width one finds bounds.rs frames in 14.5% of samples on docs/showcase/calc_parser.hthr and 14.0% on lib/std/num + lib/std/tactic (9 151 stacks). That is ordinary library elaboration, not a one-shot fixture, and it is the largest share since the 2026-07-31 deep-path datum. Some of it is evictions at bounds.rs ~180 dropping the last reference to a dead subtree, which charges the cascading free to whoever evicted.
+    A lever not listed above: a per-node header computed at construction from the children's headers (O(arity), no walk), in the style of Lean 4's `Expr.Data`. The skip test would then read the node being visited instead of probing a 3 MiB table through a thread-local `RefCell`. The construction-invariant objection in bounds.rs's module docs stands, so this only makes sense together with a single kernel construction API ([[kernel-arena-terms-frozen-prefix]] item 5). Recorded as a lever, not a round.
