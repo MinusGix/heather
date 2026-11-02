@@ -1,6 +1,6 @@
 ---
 title: Substitution allocates fresh Var leaves for id(Γ) and a fresh memo table per call
-status: open
+status: closed
 labels: [kernel,performance,substitution]
 area: kernel
 created: 2026-11-02
@@ -30,3 +30,11 @@ Local to `subst.rs` and `term.rs`. Interned leaves shared across kernel workers 
 
 - **[[subst-rebuild-then-discard]]** owns the rebuild-then-drop pair. Assumed here: nothing; the two are independent.
 - **[[kernel-arena-terms-frozen-prefix]]**: under arenas both allocations disappear. Assumed here: only that the arena is not imminent.
+
+## Log
+
+- 2026-11-02: Built (branch claude/project-thread-7z45uf). `Term::var_rc`/`var_rcs_descending` (term.rs) hand out per-thread interned `Var(i)` leaves below 4 096; `LocalSubst::id` is `|Γ|` refcount increments, and `sub_tm` interns every `Var` it outputs (`Term::into_rc`). A `Var` leaf is mapped *before* the shared-node memo is asked and enters it only when it became a payload: the first cut skipped the memo for `Var` outright, and `a_shared_chain_stays_shared_through_shift_and_substitution` caught the payload being copied apart along two paths. `NodeMemo`'s tables come from a per-thread pool (8 tables, kept only up to capacity 4 096, since `clear` costs capacity) and go back emptied, so keep-alives still die with the call.
+
+  Counters (perf ab, calc_parser, widths 1 and 8): `subst_memo_hits` −9% (leaf hits gone), `syntax_eq_nodes` −0.3–0.5% (equal leaves are now `ptr_eq`). One behaviour move, benign: `parser_diagnostics::commit_chain` gates 12 fewer declarations, because `grind`'s host hands out one handle per shared subterm (`host.rs` `issue_shared`, keyed by scope and address, never under a binder), and the same variable is now one node. Seconds: −2.0% wall at width 1 and −0.7% at width 8, both inside the per-sample spread, so no time result.
+
+  Not done: `Zero`, `TmNat`, `Type::Nat` interning, and the 311 literal `Rc::new(Term::Var(..))` sites (schemas and tests, off the hot path).
