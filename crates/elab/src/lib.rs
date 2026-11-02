@@ -80,6 +80,7 @@ mod application;
 pub mod arithmetic;
 mod attempt;
 mod binding;
+mod alpha;
 mod loops;
 pub mod cutsat;
 mod cutsat_cert;

@@ -3305,13 +3305,60 @@ impl Parser {
         if !matches!(self.peek(), TokKind::LBrace) {
             return self.err("a `for` body is a braced block of statements: `for x in xs { … }`");
         }
+        self.loop_stmt(start, iter, x, xspan, "for")
+    }
+
+    /// `while c decreases m { body }` (docs/sequencing-surface-design.md
+    /// §5.3): the `for` marker over the header `\0while(decide_bit<c>(),
+    /// m)` and a private binder, so [`crate::imperative`] threads its state
+    /// as a `for`'s, and the elaborator lifts it into a recursive `f::run`
+    /// instead of a step over a fold.
+    fn while_stmt(&mut self) -> R<Stmt> {
+        let start = self.bump().span;
+        let condition = self.with_record_lit(true, |p| p.expr())?;
+        let cspan = condition.span;
+        if !self.eat_kw("decreases") {
+            return self.err(
+                "a `while` names what it decreases, `while c decreases m { … }`: the loop is a \
+                 recursive function, and `m` is its measure (a fuelled `while` is not built yet)",
+            );
+        }
+        let measure = self.with_record_lit(true, |p| p.expr())?;
+        if !matches!(self.peek(), TokKind::LBrace) {
+            return self.err("a `while` body is a braced block of statements: `while c decreases m { … }`");
+        }
+        // The condition as a plain `if` decides it, so the step sees the
+        // same `decide_bit` match the measure obligation reads (§5.3).
+        let scrut = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp {
+                        head: Box::new(Expr { kind: ExprKind::Var("decide_bit".into()), span: cspan }),
+                        args: vec![expr_as_ty(&condition)],
+                    },
+                    span: cspan,
+                }),
+                args: vec![],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: cspan,
+        };
+        let header = crate::imperative::call_marker(crate::imperative::WHILE, vec![scrut, measure], start.join(cspan));
+        let x = self.hygienic("while");
+        self.loop_stmt(start, header, x, start, "while")
+    }
+
+    /// The braced body of a `for` or `while`, and its marker.
+    fn loop_stmt(&mut self, start: Span, iter: Expr, x: String, xspan: Span, kw: &str) -> R<Stmt> {
         let body = self.block()?;
         if !matches!(&body.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT)
             && !(body.stmts.is_empty() && matches!(body.result.kind, ExprKind::AutoRefl))
         {
             return Err(ParseError {
-                msg: "a `for` body ends in a statement, not a value: it reassigns `let mut` locals, \
-                      so it has no result".into(),
+                msg: format!("a `{kw}` body ends in a statement, not a value: it reassigns `let mut` locals, \
+                      so it has no result"),
                 span: body.result.span,
             });
         }
@@ -3401,6 +3448,11 @@ impl Parser {
                 && matches!(self.nth(2), TokKind::Ident(w) if w == "in")
             {
                 stmts.push(self.for_stmt()?);
+                continue;
+            }
+            // `while c decreases m { body }` (§5.3), a statement too.
+            if self.at_kw("while") && !matches!(self.nth(1), TokKind::Semi | TokKind::RBrace) {
+                stmts.push(self.while_stmt()?);
                 continue;
             }
             // A statement `if` may omit its `else` (§4): only here, at the
