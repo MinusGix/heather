@@ -1042,6 +1042,12 @@ fn global_head(mut t: &Term) -> bool {
     matches!(t, Term::GlobalTm { .. })
 }
 
+/// An application whose head is a global: a declaration applied, as an
+/// argument's type is before δ has contracted it into its body.
+pub(crate) fn global_spine(t: &Term) -> bool {
+    spelling::is_app(t) && global_head(t)
+}
+
 /// The two components of a pair in either spelling.
 fn pair_of(t: &Term) -> Option<(&Term, &Term)> {
     match t {

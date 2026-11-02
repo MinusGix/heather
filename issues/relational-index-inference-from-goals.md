@@ -53,3 +53,4 @@ higher-order inference remains with [[elab-unifier-completeness]].
 
 - 2026-09-05: Implemented expected-goal index inference, preserving named relations before reduction and matching local or type-specialized rigid heads. Added recent-declaration and refusal regressions, readable symbolic diagnostics, and the concise list-client documentation. Final furnace run -- scripts/test passed: 2,355 tests, 0 failed, 5 ignored.
 - 2026-11-02: The argument-side twin is [[index-inference-through-unfolding]]: a hypothesis typed by a carrier's definition (`Rat::Same(x, y)`) does not pin a generic theorem's indices even when it unfolds to the statement.
+- 2026-11-02: The expected-type harvest now holds its solutions to the slots' types too: `x ≈ z` at `Rat` no longer gives `?≈ := Rat::Same` at an `Int` carrier ([[index-inference-through-unfolding]]).
