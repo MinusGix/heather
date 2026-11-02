@@ -219,6 +219,9 @@ move for its metas (`unification.rs:98`, `Sol { Unsolved, Withheld, Solved }`),
 replacing a planted `Term::Zero` that made a withheld slot look solved; the
 goal slot is the same shape one module over. Small and local.
 
+**Landed** (2026-11-02): `goals::GoalState { Open, Solved, Proved,
+Transparent }` replaced the triple; `lifted()` matches on it.
+
 ## 6. The kernel checker's mode
 
 **Where.** `typing::Tc` (`typing.rs:1080`).
