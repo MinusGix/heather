@@ -167,7 +167,7 @@ theorem wrong_neg_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, pa: Na
     λ call agree values env held below => {
         let one = Valuation::set(values, next, λ wd => BitVec::ofNat(0));
         let x = Ty::cast(w.tys, Ty::at(g, a), Bit, Env::get(w.tys, g, env, a));
-        let pa_lt: (pa < next) = below_at(ports, next, below, a, pa, at_a);
+        let pa_lt: (pa < next) = Ty::below_cast(w.tys, Ty::at(g, a), Bit, ea, pa, next, below_at(w.tys, g, ports, next, below, a, pa, at_a));
         let step: (next <= Succ(next)) = Nat::le_succ_r(next, next, next.le_refl());
         ⟨Nat::le_succ_r(next, Succ(next), step), ⟨Succ(next).lt_succ_self(),
             ⟨λ wd id lt => trans(Valuation::set_other(one, Succ(next), λ v => one(v, pa).bxor(one(v, next)), wd, id,
@@ -263,3 +263,124 @@ theorem call_arity_refused(): Tm::lower(Call(0, [0]), calls_world(), [Word(64)],
 
 // A function of a bit has no word entry.
 theorem fun_of_bit_refused(): Fun([Bit], Word(64), Lit(Word(64), 0)).lower(no_records_world()) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Records (round 3): a record is its fields at consecutive ports. `Make`
+// moves the field variables there, `Field` is the field's port (no code),
+// and a branch moves a record a field at a time.
+
+record WcState { lines: BitVec(64), words: BitVec(64), inside: Bool }
+
+// rt_tests' V2, as the reflector reflects it.
+fn wc_step(s: WcState, nl: Bool, space: Bool) → WcState {
+    WcState(lines := s.lines.add(match nl { False => BitVec::ofNat(0), True => BitVec::ofNat(1) }),
+            words := match !space && !s.inside { False => s.words, True => s.words.add(BitVec::ofNat(1)) },
+            inside := !space)
+}
+
+fn wc_tys(i: Nat) → RecInfo {
+    RecInfo(WcState, [Word(64), Word(64), Bit],
+        λ t => WcState(t.fst, t.snd.fst, t.snd.snd.fst),
+        λ s => Pair(s.lines, Pair(s.words, Pair(s.inside, trivial))),
+        λ t => refl)
+}
+
+fn wc_step_body() → Tm {
+    Let(Field(0, 0, 2),
+    Let(If(2, Lit(Word(64), 1), Lit(Word(64), 0)),
+    Let(Prim(Add(64), [1, 0]),
+    Let(Prim(Neg, [3]),
+    Let(Field(0, 2, 6),
+    Let(Prim(Neg, [0]),
+    Let(Prim(Conj, [2, 0]),
+    Let(If(0, Let(Field(0, 1, 9), Let(Lit(Word(64), 1), Prim(Add(64), [1, 0]))), Field(0, 1, 9)),
+        Make(0, [5, 0, 4])))))))))
+}
+
+fn wc_world() → World { World(wc_tys, [], trivial) }
+
+// `s`, `nl`, `space` in order: `space` is variable 0 at port 4, `nl` at 3,
+// and `s`'s fields at ports 0, 1, 2.
+fn wc_context() → List<Ty> { [Bit, Bit, Named(0)] }
+
+// The record a lowering leaves at its result ports: lines, words, the bit.
+fn Lowered::wc(o: Option<Lowered>, call: Answers(), values: Valuation()) → Pair<BitVec(64), Pair<BitVec(64), BitVec(1)>> {
+    match o {
+        None => Pair(BitVec::ofNat(0), Pair(BitVec::ofNat(0), BitVec::ofNat(0))),
+        Some(c) => Pair(c.region.eval(call, values)(64, c.result),
+            Pair(c.region.eval(call, values)(64, Succ(c.result)), c.region.eval(call, values)(1, Succ(Succ(c.result))))),
+    }
+}
+
+fn WcState::ports(self s: WcState) → Pair<BitVec(64), Pair<BitVec(64), BitVec(1)>> {
+    Pair(s.lines, Pair(s.words, BitVec::ofBool(s.inside)))
+}
+
+// A branch between two records moves the chosen one a field at a time.
+fn choose(c: Bool, s, t: WcState) → WcState { match c { True => s, False => t } }
+
+theorem choose_agrees(c: Bool, s, t: WcState, call: Answers(), values: Valuation(),
+    held_c: values(1, 6) = BitVec::ofBool(c),
+    s_lines: values(64, 3) = s.lines, s_words: values(64, 4) = s.words, s_inside: values(1, 5) = BitVec::ofBool(s.inside),
+    t_lines: values(64, 0) = t.lines, t_words: values(64, 1) = t.words, t_inside: values(1, 2) = BitVec::ofBool(t.inside)):
+    Lowered::wc(Tm::lower(If(2, Var(1), Var(0)), wc_world(), [Named(0), Named(0), Bit], [0, 3, 6], 7), call, values) = choose(c, s, t).ports() {
+    let ran = Tm::lower_sound(If(2, Var(1), Var(0)), wc_world(), [Named(0), Named(0), Bit], [0, 3, 6], 7, call, Tm::calls_agree_none(wc_tys, call),
+        values, Pair(t, Pair(s, Pair(c, trivial))),
+        ⟨⟨t_lines, ⟨t_words, ⟨t_inside, trivial⟩⟩⟩, ⟨⟨s_lines, ⟨s_words, ⟨s_inside, trivial⟩⟩⟩, ⟨held_c, trivial⟩⟩⟩,
+        ⟨⟨trivial, ⟨trivial, ⟨trivial, trivial⟩⟩⟩, ⟨⟨trivial, ⟨trivial, ⟨trivial, trivial⟩⟩⟩, ⟨trivial, trivial⟩⟩⟩).right.right.right;
+    eq2(λ (a: BitVec(64)) (b: Pair<BitVec(64), BitVec(1)>) => Pair(a, b), ran.left,
+        eq2(λ (a: BitVec(64)) (b: BitVec(1)) => Pair(a, b), ran.right.left, ran.right.right.left))
+}
+
+// Refusals: a field past the record's end, and a record of a record.
+theorem field_past_end_refused(): Tm::lower(Field(0, 3, 0), wc_world(), [Named(0)], [0], 3) = None { refl }
+
+fn nested_tys(i: Nat) → RecInfo { RecInfo(True, [Named(0)], λ _ => trivial, λ _ => Pair(trivial, trivial), λ t => refl) }
+
+theorem record_of_record_refused(): Tm::lower(Make(0, [0]), World(nested_tys, [], trivial), [Named(0)], [0], 1) = None { refl }
+
+// The lowering's promise read off with the lowered region abstract: the
+// elaborator then never spells the lowered region inside the record's type.
+fn Lowered::WcOr(r: Option<Lowered>, call: Answers(), values: Valuation(), m: WcState) → Type {
+    match r { None => True, Some(_) => Lowered::wc(r, call, values) = m.ports() }
+}
+
+theorem wc_step_lowered(r: Option<Lowered>, s: WcState, nl, space: Bool, call: Answers(), values: Valuation(),
+    held_lines: values(64, 0) = s.lines, held_words: values(64, 1) = s.words, held_inside: values(1, 2) = BitVec::ofBool(s.inside),
+    held_nl: values(1, 3) = BitVec::ofBool(nl), held_space: values(1, 4) = BitVec::ofBool(space),
+    h: Tm::LowerHolds(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5, r)):
+    Lowered::WcOr(r, call, values, wc_step(s, nl, space)) {
+    match r as λ o => Tm::LowerHolds(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5, o) → Lowered::WcOr(o, call, values, wc_step(s, nl, space)) {
+        None => λ _ => trivial,
+        Some(_) => λ h => {
+            let ran = h(call, Tm::calls_agree_none(wc_tys, call), values,
+                Pair(space, Pair(nl, Pair(s, trivial))),
+                ⟨held_space, ⟨held_nl, ⟨⟨held_lines, ⟨held_words, ⟨held_inside, trivial⟩⟩⟩, trivial⟩⟩⟩,
+                ⟨trivial, ⟨trivial, ⟨⟨trivial, ⟨trivial, ⟨trivial, trivial⟩⟩⟩, trivial⟩⟩⟩).right.right.right;
+            eq2(λ (a: BitVec(64)) (b: Pair<BitVec(64), BitVec(1)>) => Pair(a, b), ran.left,
+                eq2(λ (a: BitVec(64)) (b: BitVec(1)) => Pair(a, b), ran.right.left, ran.right.right.left))
+        },
+    }(h)
+}
+
+// `wc_step`'s reflected body lowers, and its region leaves the step's record.
+theorem wc_step_agrees(s: WcState, nl, space: Bool, call: Answers(), values: Valuation(),
+    held_lines: values(64, 0) = s.lines, held_words: values(64, 1) = s.words, held_inside: values(1, 2) = BitVec::ofBool(s.inside),
+    held_nl: values(1, 3) = BitVec::ofBool(nl), held_space: values(1, 4) = BitVec::ofBool(space)):
+    Lowered::wc(Tm::lower(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5), call, values) = wc_step(s, nl, space).ports() {
+    wc_step_lowered(Tm::lower(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5), s, nl, space, call, values,
+        held_lines, held_words, held_inside, held_nl, held_space,
+        Tm::lower_sound(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5))
+}
+
+// A wrong claim: the step does not swap the counts.
+// expect-error(mismatch)
+theorem wc_step_not_swapped(s: WcState, nl, space: Bool, call: Answers(), values: Valuation(),
+    held_lines: values(64, 0) = s.lines, held_words: values(64, 1) = s.words, held_inside: values(1, 2) = BitVec::ofBool(s.inside),
+    held_nl: values(1, 3) = BitVec::ofBool(nl), held_space: values(1, 4) = BitVec::ofBool(space)):
+    Lowered::wc(Tm::lower(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5), call, values)
+        = WcState(wc_step(s, nl, space).words, wc_step(s, nl, space).lines, wc_step(s, nl, space).inside).ports() {
+    wc_step_lowered(Tm::lower(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5), s, nl, space, call, values,
+        held_lines, held_words, held_inside, held_nl, held_space,
+        Tm::lower_sound(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5))
+}

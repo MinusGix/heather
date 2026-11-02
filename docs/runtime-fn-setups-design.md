@@ -984,13 +984,43 @@ What is left of N1, and what each waits on:
   the hypothesis becomes `CallsAgree` below a bound and the lowering refuses a
   call at or above it. A self-call is not a call under N1 but a loop
   (`Measured`), and recursion through calls is N2's.
-- **Records.** A record is several ports, so a variable's encoding spans
-  them: `Holds` at `Named(i)` reads its fields at consecutive ports, and
-  `Below`/`Keeps` cover the span. `Make` needs `get(mk(t)) = t` for the
-  table's entry, which the kernel's η for pairs and `Unit` (crates/kernel/DESIGN.md)
-  should give by `refl` for every reflected record.
+- **Records.** Done in round 3 (§16.7).
 - **`Fold` and the byte primitives.** `StructuredRegion::eval` reads every
   buffer as empty (a `BufferLoad` is zero there); buffers live in
   `function_ir_state`'s run. So `Fold` needs the theorem stated over that
   semantics, with `Bytes` encoded as a buffer and a length word.
+
+### 16.7 Round 3: records as their fields (R5b, 2026-11-02)
+
+A record is scalar-replaced (§7.2): a variable of `Named(i)` still has one
+port in the context, the port of its first field, and its fields sit at the
+consecutive ports from there (`Ty::FieldsHold`). What changed to make that
+sound:
+
+- **Spans, not ports.** `Below` is typed by the context's codes: a record's
+  span is below `next` when each field's port is (`Ty::Below`,
+  `Ty::FieldsBelow`), and a lowering promises its result's span below its
+  next fresh id, not just its first port. What a valuation keeps of a value
+  is likewise its span (`Ty::Same`), so `Keeps` carries every variable,
+  records included, past a region.
+- **`Field` is free.** It lowers to no code: field `k`'s value is already at
+  `Ty::field_port(k, p)`. `Make` moves each field variable to the fresh
+  ports, and a branch with a record result moves it a field at a time
+  (`Ty::moves`, proved once by `Ty::moves_sound`).
+- **The record law is on the table.** `Make`'s case needs the projection of
+  what it built to be its fields, so `RecInfo` gains `round: get(mk(t)) = t`.
+  For a record's own constructor and fields it is `refl`: the kernel's η for
+  pairs and `True` (crates/kernel/DESIGN.md) closes it, so a table entry
+  costs nothing per record.
+- **Fields are flat.** A record of a record is refused (`Ty::check_ones`), as
+  is a field past the end (`Ty::has_field`): the meaning reads a default
+  there that no port holds.
+
+`wc_step` (rt_tests' V2, a `WcState` updated through fields, two branches,
+`!`, `&&` and `Make`) lowers and agrees with the Heather function through the
+theorem, and a record-valued branch does too. The probe reads the theorem off
+at an abstract lowering (`wc_step_lowered` takes `r: Option<Lowered>`):
+projected at the computed lowering itself, the elaborator spells the whole
+lowered region inside the conclusion's type and the check does not finish
+(docs/proof-patterns.md §1).
 

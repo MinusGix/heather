@@ -72,9 +72,15 @@ fn Ty::flats_default(ts: List<Ty>) → Ty::Flats(ts) {
     match ts { Nil => trivial, Cons(t, rest) => Pair(t.flat_default(), Ty::flats_default(rest)) }
 }
 
-// A record type as the meaning reads it: the type, its fields' codes, and
-// the constructor and the projections as functions of the field tuple.
-record RecInfo { T: Type, fields: List<Ty>, mk: Ty::Flats(fields) → T, get: T → Ty::Flats(fields) }
+// A record type as the meaning reads it: the type, its fields' codes, the
+// constructor and the projections as functions of the field tuple, and that
+// projecting what was built gives the fields back (`refl` for a record's own
+// constructor and fields, by η for pairs and `True`): what a setup that keeps
+// a record as its fields relies on.
+record RecInfo {
+    T: Type, fields: List<Ty>, mk: Ty::Flats(fields) → T, get: T → Ty::Flats(fields),
+    round: (t: Ty::Flats(fields)) → get(mk(t)) = t,
+}
 
 // The `i`th code, `Bit` past the end (every judgment refuses that index).
 fn Ty::at(ts: List<Ty>, i: Nat) → Ty {
@@ -415,7 +421,7 @@ fn Fun::meaning(self f: Fun, w: World) → Ty::Arrows(w.tys, f.params, f.result)
 }
 
 // The type table of a program with no records.
-fn RecInfo::none(i: Nat) → RecInfo { RecInfo(True, [], λ _ => trivial, λ _ => trivial) }
+fn RecInfo::none(i: Nat) → RecInfo { RecInfo(True, [], λ _ => trivial, λ _ => trivial, λ t => refl) }
 
 // ---------------------------------------------------------------------------
 // Equality of reflected code, as `Bool`: what a reflector's value numbering
