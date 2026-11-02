@@ -17,7 +17,10 @@
 // one, and a pattern's argument may match up to a definitional step: where
 // `a + isucc(b)` meets `a + OfNat(Succ(k))`, `Defeq` finds `b := OfNat(k)`
 // among the graph's terms, and the instance comes with the edge
-// `isucc(OfNat(k)) = OfNat(Succ(k))` by `refl` (§13). `grind_report` also
+// `isucc(OfNat(k)) = OfNat(Succ(k))` by `refl` (§13). Several binders the
+// argument alone binds are asked about with holes, and their solutions
+// looked up among the graph's nodes (`Cons(?x, ?ys)` against `[a] ++ xs`,
+// §13.4). `grind_report` also
 // says, on success, which hints the proof cites.
 //
 // Terms are read as the kernel has them, a head applied to arguments
@@ -129,10 +132,11 @@ record Interned { g: Graph, node: Nat }
 record LPat { pat: Pattern<GQ>, left: Bool, terms: List<Option<Handle>>, slack: List<Bool> }
 
 // A near match tried (docs/grind-design.md §13): the pattern, the item left
-// and the node it met, the nodes the binders met, and how many of the
-// graph's nodes were tried as the item's free binder. `Defeq` reads terms,
-// not classes, so a candidate that failed fails again.
-record NearTried { pat: Nat, item: Nat, node: Nat, args: List<Option<Nat>>, upto: Nat }
+// and the node it met, the nodes the binders met, how many of the graph's
+// nodes were tried as the item's one free binder, and whether the item was
+// asked about with holes at its free binders (§13.4). `Defeq` reads terms,
+// not classes, so a question that failed fails again.
+record NearTried { pat: Nat, item: Nat, node: Nat, args: List<Option<Nat>>, upto: Nat, asked: Bool }
 
 // A lemma: an equation under binders, its proof, the patterns its instances
 // are found by (each side that binds every binder something depends on),
@@ -1056,12 +1060,15 @@ fn bump_added(lm: Lemma, def: Bool) → Lemma {
 // A near match left one item of a pattern, an application in an argument
 // position (`isucc(b)` in `a + isucc(b)`), at a node no member of whose
 // class the item matches (`OfNat(Succ(k))`). It is an instance when the
-// item, at what the match bound, is that node by `Defeq`; a binder only
-// the item binds is drawn from the graph's terms, as e-matching draws every
-// binder (`b := OfNat(k)`). The instance is then added as any other, with
-// one more edge: the item's instance and the node, by `defn` below, whose
-// `refl` the kernel checks by computation. At most one binder is drawn,
-// and a round asks at most `grind_defeq_budget()` such questions.
+// item, at what the match bound, is that node by `Defeq`. The binders only
+// the item binds are holes first: `Defeq` solves what the comparison
+// determines (`Cons(?x, ?ys)` against `[a] ++ xs`), and each solution is
+// looked up among the graph's nodes. Where that leaves the one free binder
+// undetermined, it is drawn from the graph's terms, as e-matching draws
+// every binder (`b := OfNat(k)`, which `isucc(?b)` does not determine). The
+// instance is then added as any other, with one more edge: the item's
+// instance and the node, by `defn` below, whose `refl` the kernel checks by
+// computation. A round asks at most `grind_defeq_budget()` such questions.
 
 theorem defn<A>(x: A, y: A, h: x = y): x = y { h }
 
@@ -1160,18 +1167,110 @@ fn pick_candidate(g: Graph, lm: Lemma, h: Handle, s: Subst, u: Nat, target: Expr
     }
 }
 
-// How far this near match's candidates were tried before (0: never).
-fn tried_upto(ts: List<NearTried>, j: Nat, item: Nat, node: Nat, args: List<Option<Nat>>) → Nat {
+fn is_whole(g: Graph, i: Nat) → Bool { match g.info.nth(i) { Some(n) => n.whole, None => False } }
+
+// What was tried of this near match before, if it was.
+fn tried_at(ts: List<NearTried>, j: Nat, item: Nat, node: Nat, args: List<Option<Nat>>) → Option<NearTried> {
     match ts {
-        Nil => 0,
+        Nil => None,
         Cons(t, rest) => match t.pat.same(j).and(t.item.same(item)).and(t.node.same(node)).and(opts_same(t.args, args)) {
-            True => t.upto,
-            False => tried_upto(rest, j, item, node, args),
+            True => Some(t),
+            False => tried_at(rest, j, item, node, args),
         },
     }
 }
 
-fn is_whole(g: Graph, i: Nat) → Bool { match g.info.nth(i) { Some(n) => n.whole, None => False } }
+fn upto_of(o: Option<NearTried>) → Nat { match o { None => 0, Some(t) => t.upto } }
+
+fn asked_of(o: Option<NearTried>) → Bool { match o { None => False, Some(t) => t.asked } }
+
+// Binder `i`'s argument when the item is asked about with holes: the node
+// the match bound it to, else its hole.
+fn hole_arg(g: Graph, s: Subst, hs: List<Handle>, i: Nat) → Expr {
+    match s.get(i) {
+        Some(n) => expr_at(g, n),
+        None => match hs.nth(i) { Some(x) => Hd(x), None => Blank },
+    }
+}
+
+// The item's subterm `h` at the binders' nodes `a`, a hole at a premise.
+fn inst_expr(g: Graph, lm: Lemma, h: Handle, a: List<Option<Nat>>) → Expr {
+    apps(lams(lm.refs, Hd(h)), List::range(lm.binders).map(λ i => match a.nth(i) {
+        Some(o) => match o { Some(n) => expr_at(g, n), None => Blank },
+        None => Blank,
+    }))
+}
+
+// The nodes a hole's solution is looked up among: the whole terms, in
+// order, then the atoms that are not (a type argument, read as part of an
+// operator).
+fn solution_candidates(g: Graph) → List<Nat> {
+    List::append(List::range(g.info.len()).filter(λ c => is_whole(g, c)), g.atoms.map(λ a => a.node).filter(λ c => is_whole(g, c).not()))
+}
+
+// The first of the nodes `cs` the solved hole `x` is, by `Defeq` (each
+// question undone), and the budget left.
+record Solved { node: Option<Nat>, left: Nat }
+
+fn node_of(g: Graph, x: Handle, cs: List<Nat>, budget: Nat) → Tac<Solved> {
+    match cs {
+        Nil => Pure(Solved(None, budget)),
+        Cons(c, rest) => match budget {
+            Zero => Pure(Solved(None, 0)),
+            Succ(b) => defeq_undone(Hd(x), expr_at(g, c)).bind(λ same => match same {
+                True => Pure(Solved(Some(c), b)),
+                False => node_of(g, x, rest, b),
+            }),
+        },
+    }
+}
+
+// The binders' nodes `args` with each free binder's solution looked up,
+// while the budget lasts: `None` once a hole is left unsolved or no node is
+// its solution.
+record Solutions { args: Option<List<Option<Nat>>>, left: Nat }
+
+fn solutions(g: Graph, hs: List<Handle>, free: List<Nat>, cs: List<Nat>, args: List<Option<Nat>>, budget: Nat) → Tac<Solutions> {
+    match free {
+        Nil => Pure(Solutions(Some(args), budget)),
+        Cons(u, rest) => match hs.nth(u) {
+            None => Pure(Solutions(None, budget)),
+            Some(x) => view(x).bind(λ v => match v {
+                HHole => Pure(Solutions(None, budget)),
+                _ => node_of(g, x, cs, budget).bind(λ sv => match sv.node {
+                    None => Pure(Solutions(None, sv.left)),
+                    Some(c) => solutions(g, hs, rest, cs, args.update(u, λ _ => Some(c)), sv.left),
+                }),
+            }),
+        },
+    }
+}
+
+// The item asked about with a hole at each binder the match left free
+// (`Holes` at the lemma's proof, so each hole has its binder's type at the
+// arguments before it): where `Defeq` solves them (`Cons(?x, ?ys)` against
+// `[a] ++ xs` gives `?x := a`, `?ys := [] ++ xs`), each solution is looked
+// up among the graph's nodes (`xs`), the holes are forgotten, and the
+// instance at those nodes is asked once more with none, the question its
+// definitional edge stands for.
+fn by_holes(g: Graph, lm: Lemma, h: Handle, s: Subst, args: List<Option<Nat>>, free: List<Nat>, target: Expr, budget: Nat) → Tac<Solutions> {
+    match budget {
+        Zero => Pure(Solutions(None, 0)),
+        Succ(b) => mark().bind(λ m => holes(lm.proof, lm.binders).bind(λ c => match c {
+            Refused(_) => restore(m).bind(λ _ => Pure(Solutions(None, Succ(b)))),
+            Accepted(hs) => defeq(apps(lams(lm.refs, Hd(h)), List::range(lm.binders).map(λ i => hole_arg(g, s, hs, i))), target).bind(λ same => match same {
+                False => restore(m).bind(λ _ => Pure(Solutions(None, b))),
+                True => solutions(g, hs, free, solution_candidates(g), args, b).bind(λ sol => restore(m).bind(λ _ => match sol.args {
+                    None => Pure(sol),
+                    Some(a) => match sol.left {
+                        Zero => Pure(Solutions(None, 0)),
+                        Succ(b2) => defeq_undone(inst_expr(g, lm, h, a), target).bind(λ ok => Pure(Solutions(match ok { True => Some(a), False => None }, b2))),
+                    },
+                })),
+            }),
+        })),
+    }
+}
 
 fn nats_once(xs: List<Nat>, seen: List<Nat>) → List<Nat> {
     match xs {
@@ -1193,13 +1292,32 @@ fn near_inst(nr: Near, lp: LPat, path: List<Nat>, a: List<Option<Nat>>) → Opti
 // the near match recorded as tried, and the budget left.
 record Resolved { inst: Option<Inst>, lemma: Lemma, left: Nat }
 
+// The one free binder `u` drawn from the graph's whole terms from node
+// `from` on.
+fn draw_one(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat>, u: Nat, from: Nat, asked: Bool, budget: Nat) → Tac<Resolved> {
+    let item = nr.slack.item;
+    let node = nr.slack.node;
+    let args = nr.s.at.take(lm.binders);
+    let cs = List::range(g.info.len()).filter(λ c => from.leb(c).and(is_whole(g, c)));
+    let tried = λ (upto: Nat) => with_tried(lm, NearTried(nr.pat, item, node, args, upto, asked));
+    match cs {
+        Nil => Pure(Resolved(None, match asked { True => tried(from), False => lm }, budget)),
+        Cons(_, _) => pick_candidate(g, lm, h, nr.s, u, expr_at(g, node), cs, budget, g.info.len()).bind(λ pk =>
+            Pure(Resolved(match pk.found {
+                None => None,
+                Some(c) => near_inst(nr, lp, path, args.update(u, λ _ => Some(c))),
+            }, tried(pk.upto), pk.left))),
+    }
+}
+
 fn resolve_at(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat>, seen: List<Inst>, budget: Nat) → Tac<Resolved> {
     let item = nr.slack.item;
     let node = nr.slack.node;
     let args = nr.s.at.take(lm.binders);
     let vars = nats_once(item_vars(lp.pat.items, Succ(lp.pat.items.len()), item), []);
     let free = vars.filter(λ v => Succ(v).leb(lm.binders).and(match nr.s.get(v) { None => True, Some(_) => False }));
-    let from = tried_upto(lm.tried, nr.pat, item, node, args);
+    let before = tried_at(lm.tried, nr.pat, item, node, args);
+    let from = upto_of(before);
     let skip: Tac<Resolved> = Pure(Resolved(None, lm, budget));
     let target = expr_at(g, node);
     match free {
@@ -1208,22 +1326,25 @@ fn resolve_at(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat
             Zero => match budget {
                 Zero => skip,
                 Succ(b) => defeq_undone(sub_instance(g, lm, h, nr.s, lm.binders, Blank), target).bind(λ same =>
-                    Pure(Resolved(match same { True => near_inst(nr, lp, path, args), False => None }, with_tried(lm, NearTried(nr.pat, item, node, args, 1)), b))),
+                    Pure(Resolved(match same { True => near_inst(nr, lp, path, args), False => None }, with_tried(lm, NearTried(nr.pat, item, node, args, 1, False)), b))),
             },
         },
-        Cons(u, more) => match more {
-            Cons(_, _) => skip,
-            Nil => {
-                let cs = List::range(g.info.len()).filter(λ c => from.leb(c).and(is_whole(g, c)));
-                match cs {
-                    Nil => skip,
-                    Cons(_, _) => pick_candidate(g, lm, h, nr.s, u, target, cs, budget, g.info.len()).bind(λ pk =>
-                        Pure(Resolved(match pk.found {
-                            None => None,
-                            Some(c) => near_inst(nr, lp, path, args.update(u, λ _ => Some(c))),
-                        }, with_tried(lm, NearTried(nr.pat, item, node, args, pk.upto)), pk.left))),
-                }
-            },
+        Cons(u, more) => {
+            let one = match more { Nil => True, Cons(_, _) => False };
+            match asked_of(before) {
+                True => match one { True => draw_one(g, lm, nr, lp, h, path, u, from, True, budget), False => skip },
+                False => by_holes(g, lm, h, nr.s, args, free, target, budget).bind(λ sol => match sol.args {
+                    Some(a) => Pure(Resolved(near_inst(nr, lp, path, a), with_tried(lm, NearTried(nr.pat, item, node, args, from, True)), sol.left)),
+                    // Out of budget: asked again next round.
+                    None => match sol.left {
+                        Zero => skip,
+                        Succ(_) => match one {
+                            True => draw_one(g, lm, nr, lp, h, path, u, from, True, sol.left),
+                            False => Pure(Resolved(None, with_tried(lm, NearTried(nr.pat, item, node, args, from, True)), sol.left)),
+                        },
+                    },
+                }),
+            }
         },
     }
 }

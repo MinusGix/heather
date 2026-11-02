@@ -876,7 +876,7 @@ impl Elaborator {
                 Some(real) => self.elab_check(cx, arg.borrow(), &real, fst_level)?,
                 None => match self.elab_infer(cx, arg.borrow()) {
                     Ok((tm, ty, _)) => {
-                        self.unify_arg_ty(cx, fst, &ty, n, &mut sols, span);
+                        self.unify_arg_ty(cx, fst, &ty, n, &mut sols, &[], span);
                         tm
                     }
                     Err(e) => {

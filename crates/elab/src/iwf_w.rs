@@ -1552,6 +1552,7 @@ impl Elaborator {
                             fn_children,
                             // Not chain-shaped for the window's purposes.
                             cov: None,
+                            shape: crate::recursion::WfShape::NoWindowRoute,
                         },
                         rebind: env.idx_param.map(|p| (p, rebind)),
                         generalized: crate::generalize::guard_gen(&acx, dec, None),

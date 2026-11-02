@@ -119,10 +119,11 @@ impl OwedChecks {
         got: Type,
         n: u32,
         sols: &mut [Sol],
+        meta_doms: &[Type],
         span: Span,
         at: Span,
     ) {
-        elab.unify_application_argument_type(cx, dom, &got, n, sols, span);
+        elab.unify_application_argument_type(cx, dom, &got, n, sols, meta_doms, span);
         self.owed.push((dom.clone(), got, level.clone(), at));
     }
 
@@ -171,6 +172,9 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
     /// its domain at all. Reach it through [`OwedChecks::learn`], which
     /// records that comparison for the gate; the one direct call teaches a
     /// literal's counted length before the literal itself is checked.
+    /// `meta_doms` are the declared types of the slots allocated so far: a
+    /// solution read at a slot whose domain is known is held to it.
+    #[allow(clippy::too_many_arguments)]
     fn unify_application_argument_type(
         &self,
         cx: &Cx,
@@ -178,6 +182,7 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         argument: &Type,
         n: u32,
         sols: &mut [Sol],
+        meta_doms: &[Type],
         span: Span,
     );
 
@@ -353,7 +358,7 @@ pub(crate) fn retry_obligations(
                             }
                             other => other?,
                         };
-                        owed.learn(elab,cx,&obligation.dom,&obligation.dom_level,ty,n,sols,obligation.expr.span,obligation.expr.span);
+                        owed.learn(elab,cx,&obligation.dom,&obligation.dom_level,ty,n,sols,meta_doms,obligation.expr.span,obligation.expr.span);
                         sols[obligation.slot] = Sol::Solved(Rc::new(term));
                         progressed = true;
                         break;
@@ -380,7 +385,7 @@ pub(crate) fn retry_obligations(
                     }
                     other => other?,
                 };
-                owed.learn(elab, cx, &obligation.dom, &obligation.dom_level, ty, n, sols, span, obligation.expr.span);
+                owed.learn(elab, cx, &obligation.dom, &obligation.dom_level, ty, n, sols, meta_doms, span, obligation.expr.span);
                 sols[obligation.slot] = Sol::Solved(Rc::new(term));
                 continue;
             }
@@ -1003,7 +1008,7 @@ fn apply_implicit_planned(
                     elem: Rc::new(elem),
                     len: Rc::new(Term::NatLit((items.len() as u64).into())),
                 };
-                elab.unify_application_argument_type(cx, &dom, &counted, n, &mut sols, span);
+                elab.unify_application_argument_type(cx, &dom, &counted, n, &mut sols, &meta_doms, span);
             }
             // A default waits for the earlier arguments it mentions as well
             // as for its domain.
@@ -1104,7 +1109,7 @@ fn apply_implicit_planned(
                         }
                         other => other?,
                     };
-                    owed.learn(elab, cx, &dom, &dom_level, inferred_ty, n, &mut sols, span, argument.span);
+                    owed.learn(elab, cx, &dom, &dom_level, inferred_ty, n, &mut sols, &meta_doms, span, argument.span);
                     Rc::new(inferred.shift_global(n))
                 }
             }
@@ -1142,7 +1147,7 @@ fn apply_implicit_planned(
                 break;
             }
             let (inferred, inferred_ty, _) = elab.infer_application_argument(cx, argument)?;
-            owed.learn(elab, cx, &dom, &dom_level, inferred_ty, n, &mut sols, span, argument.span);
+            owed.learn(elab, cx, &dom, &dom_level, inferred_ty, n, &mut sols, &meta_doms, span, argument.span);
             let argument = Rc::new(inferred.shift_global(n));
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
             level = cod_level.clone();
@@ -1403,6 +1408,7 @@ mod tests {
             _argument: &Type,
             _n: u32,
             _sols: &mut [Sol],
+            _meta_doms: &[Type],
             _span: Span,
         ) {
             assert!(self.inferred.is_some(), "the fixture has no inferred argument");

@@ -31,7 +31,7 @@ use heather_syntax::{Arm, Expr, Span};
 use crate::inductive::{ConstBody, FieldKind, Inductive, Spine, inject};
 use crate::sum_layout::Child;
 use crate::matching::{ChainStep, cov_comps, cov_proj, cov_ty, cov_tuple};
-use crate::recursion::{ContainerIh, EqSplit, Guard, GuardKind, WfCov};
+use crate::recursion::{ContainerIh, EqSplit, Guard, GuardKind, WfCov, WfShape};
 use crate::{Alias, Cx, Elaborator, R, embed, err};
 
 /// The pieces every part of the lowering needs, gathered once so that the
@@ -1437,6 +1437,7 @@ impl Elaborator {
                                 container: container_ih.clone(),
                                 fn_children: Vec::new(),
                                 cov,
+                                shape: if chain_shaped(ind) { WfShape::Chain } else { WfShape::Branching },
                             },
                             rebind: None,
                             generalized: crate::generalize::guard_gen(cx, dec, Some(span)),
@@ -1624,6 +1625,7 @@ impl Elaborator {
                                 children: Vec::new(),
                                 container: None,
                                 cov: Some(window),
+                                shape: WfShape::Chain,
                                 fn_children: Vec::new(),
                             },
                             rebind: None,

@@ -1,6 +1,6 @@
 ---
 title: The "must descend" refusal calls a chain-shaped type branching when no window was built
-status: open
+status: closed
 labels: [diagnostics,frontend]
 area: language
 code: crates/elab/src/recursion.rs:776 @ ff5be99
@@ -23,3 +23,15 @@ fn Chain::depth(self c: Chain) → Nat { match c { end => 0, link(next) => depth
 
 Found while pinning [[self-reference-hides-same-named-global]]. The branch
 should ask the type's shape, not the guard's window, before saying which.
+
+## Log
+
+- 2026-11-02: Done. `GuardKind::Wf` carries a `shape: WfShape` (`Chain`,
+  `Branching`, `NoWindowRoute`), set where the guard is built (`wf.rs` from
+  `chain_shaped(ind)`; the indexed, IWf and infinitary routes say
+  `NoWindowRoute`), and the windowless refusal reads it: a chain-shaped
+  declaration is told that a deeper subterm is reachable only as a value a
+  nested `match` on the recursive field binds; a branching one keeps the old
+  text; a windowless route says so. Pinned in
+  `lib/_tests/lang/descend_refusal_tests.hthr`, with the two-links-down
+  positive beside it.

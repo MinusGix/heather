@@ -1,6 +1,6 @@
 ---
 title: Pin a generic theorem's indices from a hypothesis whose type unfolds to its statement
-status: open
+status: closed
 labels: [traits,elaboration,inference]
 area: language
 created: 2026-11-02
@@ -18,3 +18,52 @@ So an argument's type pins indices only when it is spelled in the indices' own s
 Wanted: when an argument's declared type is a δ-redex whose head is a global definition and its unfolding matches the parameter's type, unify against the unfolding before giving up on the indices, bounded to a step or two so that resolution never runs whnf at large. The refusal should at least name the argument that failed to pin anything, since the current message lists candidates that were "not of the goal type" without saying which argument disagreed.
 
 Controls: the restated call (works today), a hypothesis at `Dyadic::Le` against an `OrderedSemiring` theorem, and a negative control whose unfolding genuinely does not match.
+
+## Diagnosis
+
+The call never got as far as needing an unfolding. `unify_tm`'s rigid-spine
+alignment (a flexible operation spine learns a rigid head of the same value
+arity, the rule [[relational-index-inference-from-goals]] added) read
+`?≈(?*(a, d), ?*(c, b))` against `Rat::Same(x, y)` and recorded
+`?≈ := Rat::Same`, though `?≈ : Int → Int → Type` was already fixed by the
+explicit `Int` arguments. The expected type `x ≈ z` did the same. Nothing
+checked the solution against its slot, so instance search ran at
+`OrderedSemiring<Int>(Rat::Same, …)` and every candidate was "built, but not
+of the goal type". Restating at `Int` worked because the hypothesis then
+spelled `RelId<Int>` and pinned the slot correctly.
+
+## Implementation
+
+- `Elaborator::reject_ill_typed_solutions` (crates/elab/src/lib.rs): after an
+  argument's read and after the expected-type harvest, a slot whose declared
+  type is a `Π` and already meta-free keeps a solution that read recorded
+  only if the kernel infers it a type convertible to that domain. Only that
+  read's own solutions are undone. A solution whose type cannot be inferred
+  is kept, so the read stays learn-only and the kernel still judges the call.
+- When a solution was undone, `unify_arg_ty` reads the argument type's first
+  `INDEX_UNFOLD_STEPS` (8) reducts, nearest first. It reads only those that
+  are still applications of a declaration, stops at the first that teaches
+  something that fits, and falls back to the existing whnf retry. Calls whose
+  read is clean never step.
+- With `?≈` left open, the designation rung fills `≈ := RelId<Int>` from the
+  carrier as it does for the restated call. `Rat::same_trans` now passes
+  `hxy`, `hyz` as stated.
+- On the diagnostic: the misleading "not of the goal type" list no longer
+  arises from this shape. A hypothesis whose unfolding does not match (the
+  negative control) is refused at that argument with its type and the
+  expected one. An index that neither a designation, the goal nor an
+  unfolding pins keeps the existing "the index `R` … is not pinned" message,
+  which names the index, not the argument.
+
+Probes: `lib/_tests/std/num/rat_tests.hthr` (`cross_trans_as_stated`, the
+restated control, the swapped negative control) and
+`lib/_tests/std/num/float/dyadic_tests.hthr` (`Dyadic::Le` against
+`OrderedAddMonoid::add_le_mono_r` at `Rat`, and `trans_through_rat`, where an
+implicit `R` with no designation and no expected type is pinned only by the
+hypothesis's unfolding `Rat::Le(a.rat(), b.rat())`). Without the slot check
+all three positive probes are refused. Without the reduct walk only
+`trans_through_rat` is refused.
+
+## Log
+
+- 2026-11-02: Fixed by holding inferred operation indices to their slots' types and reading the argument's δ-reducts after a rejection (see Implementation). scripts/test --pr: 2985 passed, 0 failed, 2 ignored.

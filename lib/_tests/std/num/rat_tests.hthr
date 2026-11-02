@@ -4,7 +4,7 @@
 // §4.5). Moved from crates/elab/tests/lib_std_rat.rs; the refusals that need
 // the checker stay there.
 import logic; import bool; import nat; import list; import int; import algebra; import omega; import ring;
-import rat; import order; import relation_props; import algebra_rel;
+import rat; import order; import relation; import relation_props; import algebra_rel; import semiring; import ordered_field;
 
 // Instance resolution finds the registered dictionaries at `Rat`: the
 // equivalence, the strict order's transitivity, and `Decide` for `if`.
@@ -121,3 +121,25 @@ theorem rewrite_under_binder_open(x, y: Rat, h: x ≈ y, f: (Rat → Rat) → Ra
 // `at :=` numbers tree positions, which a shared walk does not have.
 // expect-error: a relation rewrite rewrites every occurrence
 theorem rewrite_at(x, y: Rat, h: x ≈ y, e: y + x ≈ x): x + x ≈ x { rewrite(h, e, at := 1) }
+
+// A hypothesis stated at `Rat` pins a generic theorem's indices at `Int`
+// through its definition (issues/index-inference-through-unfolding.md):
+// `x ≈ y` is `Rat::Same(x, y)`, which unfolds to `cross_same_trans`'s
+// `a * d ≈ c * b`. The call's carrier is `Int` from the explicit arguments,
+// so `≈ := Rat::Same` read off the hypothesis (or off the goal) does not fit
+// the slot and the indices come from `Int`'s designations.
+theorem cross_trans_as_stated(x, y, z: Rat, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
+    OrderedSemiring::cross_same_trans(x.num, x.den.int(), y.num, y.den.int(), z.num, z.den.int(), y.den_pos, hxy, hyz)
+}
+// The same call with the hypotheses restated at `Int` first.
+theorem cross_trans_restated(x, y, z: Rat, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
+    let h1: (x.num * y.den.int() ≈ y.num * x.den.int()) = hxy;
+    let h2: (y.num * z.den.int() ≈ z.num * y.den.int()) = hyz;
+    OrderedSemiring::cross_same_trans(x.num, x.den.int(), y.num, y.den.int(), z.num, z.den.int(), y.den_pos, h1, h2)
+}
+// Negative control: the unfolding does not match. Swapped, `y ≈ z` is not
+// `x.num * y.den ≈ y.num * x.den`, and the refusal is at that argument.
+// expect-error(mismatch)
+theorem cross_trans_swapped(x, y, z: Rat, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
+    OrderedSemiring::cross_same_trans(x.num, x.den.int(), y.num, y.den.int(), z.num, z.den.int(), y.den_pos, hyz, hxy)
+}
