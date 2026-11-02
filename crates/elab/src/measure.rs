@@ -2093,12 +2093,11 @@ impl<'a> Rewrite<'a> {
                         let n = self.scope.len();
                         self.bind_arm(a, scrut_ty.as_ref());
                         if let Some(eq) = &eqbind {
-                            // An [`AutoEqs`] equation is stated about the
-                            // alias's value, so that a query reading it as a
-                            // fact (`omega` over `leb(n, 1) = False`) sees
-                            // its locals; a written one stays at the alias.
+                            // Stated about the alias's value, so that a
+                            // query reading it as a fact (`omega` over
+                            // `leb(n, 1) = False`) sees its locals.
                             let stated = match &scrut.kind {
-                                ExprKind::Var(v) if auto_eq_index(eq).is_some() => self.scrut_aliases.iter().rev()
+                                ExprKind::Var(v) => self.scrut_aliases.iter().rev()
                                     .find(|(n, _)| n == v).map(|(_, e)| e.clone()),
                                 _ => None,
                             }.unwrap_or_else(|| (**scrut).clone());
@@ -3098,7 +3097,8 @@ impl Respell<'_> {
             let depth = self.rw.scope.len();
             self.rw.bind_arm(a, scrut_ty.as_ref());
             if let Some(eq) = eqbind {
-                let ty = pattern_expr(a, span).map(|p| eq_ty(matched.clone(), p, span));
+                // About the scrutinee itself, as `Rewrite::expr` states it.
+                let ty = pattern_expr(a, span).map(|p| eq_ty((*scrut).clone(), p, span));
                 self.rw.scope.push(Binder { name: eq.to_string(), ty, value: None });
             }
             let inner = self.walk(&a.body, false);
