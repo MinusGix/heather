@@ -81,3 +81,12 @@ the ones before it); records (a variable's encoding spans several ports, and
 `StructuredRegion::eval`, so the theorem moves to `function_ir_state`'s run);
 `zero_extend` (no node, `function-ir-alu-core`).
 
+**2026-11-02 (R5b round 3).** Records: `Make` and `Field` lowered and
+proved, a record being its fields at consecutive ports (design §16.7). The
+invariant's `Below` and frame (`Ty::Same`) are now spans typed by the
+context's codes; branches move records a field at a time; `RecInfo` gains
+`round: get(mk(t)) = t`, `refl` by η for every reflected record. Probes:
+`wc_step` and a record-valued branch agree with their Heather functions
+through the theorem. Left for N1: the program wrapper, `Fold` and the byte
+primitives, `zero_extend`.
+

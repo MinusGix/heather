@@ -1,5 +1,5 @@
 // The default setup's lowering of `rt` into FunctionIR, and its soundness
-// proved once (docs/runtime-fn-setups-design.md §6.3, §16.5 and §16.6;
+// proved once (docs/runtime-fn-setups-design.md §6.3, §16.5–§16.7;
 // issues/runtime-default-setup-soundness.md).
 //
 // A term lowers in a context of ports, one per variable, and from a fresh
@@ -33,13 +33,19 @@
 // `Fun::lower_sound` is the theorem a program discharges it with, function by
 // function.
 //
+// Records are scalar-replaced: a record variable's port is its first
+// field's, and its fields sit at the consecutive ports (`Ty::FieldsHold`), so
+// what the invariant bounds and keeps of a variable is its span (`Ty::Below`,
+// `Ty::Same`), not one port.
+//
 // The cases: variables, literals, `Let`, `If` and `IfEq` (the convoy is
 // erased, the same branch), the primitives FunctionIR has a node for (word
-// `+ - & | ^`, `== <u <s` as a bit, `&& || !` on bits), and calls at a
-// signature of words; then `Fun::lower_sound`, from `Function::eval` to the
-// curried meaning. Records, `Fold`, `zero_extend` and the byte primitives
-// lower to `None`, so the theorem holds of them vacuously until their case is
-// written (issues/runtime-default-setup-soundness.md says what each waits on).
+// `+ - & | ^`, `== <u <s` as a bit, `&& || !` on bits), `Make` and `Field`,
+// and calls at a signature of words; then `Fun::lower_sound`, from
+// `Function::eval` to the curried meaning. `Fold`, `zero_extend` and the
+// byte primitives lower to `None`, so the theorem holds of them vacuously
+// until their case is written (issues/runtime-default-setup-soundness.md
+// says what each waits on).
 
 import logic;
 import bool;
@@ -55,10 +61,11 @@ import function_ir_eval;
 // ---------------------------------------------------------------------------
 // Encodings: what a port holds for a value of a code.
 
-// A word at its width; a bit as the one-bit word `ofBool`, which is what a
-// comparison node writes and what a conditional reads (its head bit). Byte
-// buffers and records have no single port; none is lowered yet.
-fn Ty::Holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat) → t.sem(tys) → Type {
+// A record's field at one port: a word at its width, a bit as the one-bit
+// word `ofBool`. A byte buffer has no port's worth of value (`Fold`'s round
+// gives it a buffer), and a record field of a record type is refused, so
+// neither holds.
+fn Ty::FlatHolds(self t: Ty, values: Valuation(), port: Nat) → t.Flat() → Type {
     match t {
         Word(w) => λ v => values(w, port) = v,
         Bit => λ v => values(1, port) = BitVec::ofBool(v),
@@ -67,9 +74,68 @@ fn Ty::Holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat) �
     }
 }
 
+// A record's fields at consecutive ports from `port` (scalar replacement,
+// design §7.2).
+fn Ty::FieldsHold(fs: List<Ty>, values: Valuation()) → Nat → Ty::Flats(fs) → Type {
+    match fs {
+        Nil => λ port _ => True,
+        Cons(f, rest) => λ port t => f.FlatHolds(values, port, t.fst) ∧ Ty::FieldsHold(rest, values, Succ(port), t.snd),
+    }
+}
+
+// A word at its width; a bit as the one-bit word `ofBool`, which is what a
+// comparison node writes and what a conditional reads (its head bit); a
+// record as its fields from the port on. Byte buffers have none yet.
+fn Ty::Holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat) → t.sem(tys) → Type {
+    match t {
+        Word(w) => λ v => values(w, port) = v,
+        Bit => λ v => values(1, port) = BitVec::ofBool(v),
+        Bytes(_) => λ _ => False,
+        Named(i) => λ v => Ty::FieldsHold(tys(i).fields, values, port, tys(i).get(v)),
+    }
+}
+
 // The width a value of the code is moved at.
 fn Ty::width(self t: Ty) → Nat {
     match t { Word(w) => w, Bit => 1, Bytes(_) => 64, Named(_) => 64 }
+}
+
+// A code whose value is one port (every code but a record).
+fn Ty::OnePort(self t: Ty) → Type {
+    match t { Word(_) => True, Bit => True, Bytes(_) => True, Named(_) => False }
+}
+
+fn Ty::check_one(self t: Ty) → Option<t.OnePort()> {
+    match t as λ x => Option<x.OnePort()> { Word(_) => Some(trivial), Bit => Some(trivial), Bytes(_) => Some(trivial), Named(_) => None }
+}
+
+fn Ty::OnePorts(fs: List<Ty>) → Type {
+    match fs { Nil => True, Cons(f, rest) => f.OnePort() ∧ Ty::OnePorts(rest) }
+}
+
+fn Ty::check_ones(fs: List<Ty>) → Option<Ty::OnePorts(fs)> {
+    match fs {
+        Nil => Some(trivial),
+        Cons(f, rest) => f.check_one().and_then(λ o => Ty::check_ones(rest).and_then(λ os => Some(⟨o, os⟩))),
+    }
+}
+
+// Field `k`'s port, from the record's.
+fn Ty::field_port(k: Nat) → Nat → Nat {
+    match k { Zero => λ port => port, Succ(j) => λ port => Ty::field_port(j, Succ(port)) }
+}
+
+fn Ty::has_field(fs: List<Ty>, k: Nat) → Bool {
+    match fs { Nil => False, Cons(_, rest) => match k { Zero => True, Succ(j) => Ty::has_field(rest, j) } }
+}
+
+// The first port after a record's fields from `port`, and after a value's.
+fn Ty::fields_past(fs: List<Ty>) → Nat → Nat {
+    match fs { Nil => λ port => port, Cons(_, rest) => λ port => Ty::fields_past(rest, Succ(port)) }
+}
+
+fn Ty::past(self t: Ty, tys: Nat → RecInfo, port: Nat) → Nat {
+    match t { Word(_) => Succ(port), Bit => Succ(port), Bytes(_) => Succ(port), Named(i) => Ty::fields_past(tys(i).fields, port) }
 }
 
 // The equation between two codes, when they agree.
@@ -103,10 +169,29 @@ theorem Ty::cast_holds(tys: Nat → RecInfo, values: Valuation(), port: Nat, a, 
 }
 
 // What a port holds depends only on the port's values: a port of `after`
-// with the values of a port of `values` holds what that one holds.
-theorem Ty::holds_at(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(), from, to: Nat,
-    same: (wd: Nat) → after(wd, to) = values(wd, from)): (v: t.sem(tys)) → t.Holds(tys, values, from, v) → t.Holds(tys, after, to, v) {
+
+// What a port holds depends only on the ports it spans: a value at `to` in
+// `after` whose ports carry the values of the ports at `from` in `values`
+// holds what that one holds.
+fn Ty::SameFields(fs: List<Ty>, values, after: Valuation()) → Nat → Nat → Type {
+    match fs {
+        Nil => λ from to => True,
+        Cons(_, rest) => λ from to => ((wd: Nat) → after(wd, to) = values(wd, from)) ∧ Ty::SameFields(rest, values, after, Succ(from), Succ(to)),
+    }
+}
+
+fn Ty::Same(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(), from, to: Nat) → Type {
     match t {
+        Word(_) => (wd: Nat) → after(wd, to) = values(wd, from),
+        Bit => (wd: Nat) → after(wd, to) = values(wd, from),
+        Bytes(_) => (wd: Nat) → after(wd, to) = values(wd, from),
+        Named(i) => Ty::SameFields(tys(i).fields, values, after, from, to),
+    }
+}
+
+theorem Ty::flat_at(self f: Ty, values, after: Valuation(), from, to: Nat, same: (wd: Nat) → after(wd, to) = values(wd, from)):
+    (v: f.Flat()) → f.FlatHolds(values, from, v) → f.FlatHolds(after, to, v) {
+    match f {
         Word(w) => λ v h => trans(same(w), h),
         Bit => λ v h => trans(same(1), h),
         Bytes(_) => λ v h => h,
@@ -114,11 +199,131 @@ theorem Ty::holds_at(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(
     }
 }
 
-// A move copies what its source holds.
-theorem Ty::holds_move(self t: Ty, tys: Nat → RecInfo, values: Valuation(), source, out: Nat):
-    (v: t.sem(tys)) → t.Holds(tys, values, source, v) → t.Holds(tys, Valuation::set(values, out, λ wd => values(wd, source)), out, v) {
-    t.holds_at(tys, values, Valuation::set(values, out, λ wd => values(wd, source)), source, out,
-        λ wd => Valuation::set_here(values, out, λ x => values(x, source), wd))
+theorem Ty::fields_at(fs: List<Ty>, values, after: Valuation()): (from, to: Nat) → Ty::SameFields(fs, values, after, from, to) →
+    (t: Ty::Flats(fs)) → Ty::FieldsHold(fs, values, from, t) → Ty::FieldsHold(fs, after, to, t) {
+    match fs {
+        Nil => λ from to same t h => h,
+        Cons(f, rest) => λ from to same t h =>
+            ⟨f.flat_at(values, after, from, to, same.left, t.fst, h.left), Ty::fields_at(rest, values, after, Succ(from), Succ(to), same.right, t.snd, h.right)⟩,
+    }
+}
+
+theorem Ty::holds_at(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(), from, to: Nat):
+    t.Same(tys, values, after, from, to) → (v: t.sem(tys)) → t.Holds(tys, values, from, v) → t.Holds(tys, after, to, v) {
+    match t {
+        Word(w) => λ same v h => trans(same(w), h),
+        Bit => λ same v h => trans(same(1), h),
+        Bytes(_) => λ same v h => h,
+        Named(i) => λ same v h => Ty::fields_at(tys(i).fields, values, after, from, to, same, tys(i).get(v), h),
+    }
+}
+
+// A one-port code's span is its port.
+theorem Ty::same_one(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(), from, to: Nat):
+    t.OnePort() → ((wd: Nat) → after(wd, to) = values(wd, from)) → t.Same(tys, values, after, from, to) {
+    match t {
+        Word(_) => λ _ same => same,
+        Bit => λ _ same => same,
+        Bytes(_) => λ _ same => same,
+        Named(_) => λ never _ => false_elim(never),
+    }
+}
+
+// Two valuations equal everywhere agree on every span.
+theorem Ty::fields_everywhere(fs: List<Ty>, values, after: Valuation(), all: (wd, id: Nat) → after(wd, id) = values(wd, id)):
+    (p: Nat) → Ty::SameFields(fs, values, after, p, p) {
+    match fs { Nil => λ p => trivial, Cons(_, rest) => λ p => ⟨λ wd => all(wd, p), Ty::fields_everywhere(rest, values, after, all, Succ(p))⟩ }
+}
+
+theorem Ty::same_everywhere(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(), p: Nat,
+    all: (wd, id: Nat) → after(wd, id) = values(wd, id)): t.Same(tys, values, after, p, p) {
+    match t {
+        Word(_) => λ wd => all(wd, p),
+        Bit => λ wd => all(wd, p),
+        Bytes(_) => λ wd => all(wd, p),
+        Named(i) => Ty::fields_everywhere(tys(i).fields, values, after, all, p),
+    }
+}
+
+// A port holding a field holds the field read back at its code.
+theorem Ty::holds_of_flat(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat):
+    (v: t.Flat()) → t.FlatHolds(values, port, v) → t.Holds(tys, values, port, t.of_flat(tys, v)) {
+    match t { Word(_) => λ v h => h, Bit => λ v h => h, Bytes(_) => λ v h => h, Named(_) => λ v h => false_elim(h) }
+}
+
+// A one-port value's port holds it as a field.
+theorem Ty::flat_of_holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat):
+    t.OnePort() → (v: t.sem(tys)) → t.Holds(tys, values, port, v) → t.FlatHolds(values, port, t.to_flat(tys, v)) {
+    match t { Word(_) => λ _ v h => h, Bit => λ _ v h => h, Bytes(_) => λ _ v h => h, Named(_) => λ never v h => false_elim(never) }
+}
+
+// Field `k` of a record's fields holds at its port.
+theorem Ty::fields_hold_at(fs: List<Ty>, values: Valuation()): (port, k: Nat) → Ty::has_field(fs, k).IsTrue() →
+    (t: Ty::Flats(fs)) → Ty::FieldsHold(fs, values, port, t) → Ty::at(fs, k).FlatHolds(values, Ty::field_port(k, port), Ty::flat_nth(fs, t, k)) {
+    match fs {
+        Nil => λ port k never => false_elim(never),
+        Cons(_, rest) => λ port k => match k {
+            Zero => λ _ t h => h.left,
+            Succ(j) => λ has t h => Ty::fields_hold_at(rest, values, Succ(port), j, has, t.snd, h.right),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spans below a bound.
+
+fn Ty::FieldsBelow(fs: List<Ty>) → Nat → Nat → Type {
+    match fs { Nil => λ port next => True, Cons(_, rest) => λ port next => (port < next) ∧ Ty::FieldsBelow(rest, Succ(port), next) }
+}
+
+// Every port the value spans is below `next`.
+fn Ty::Below(self t: Ty, tys: Nat → RecInfo, port, next: Nat) → Type {
+    match t {
+        Word(_) => port < next,
+        Bit => port < next,
+        Bytes(_) => port < next,
+        Named(i) => Ty::FieldsBelow(tys(i).fields, port, next),
+    }
+}
+
+theorem Ty::one_below(self t: Ty, tys: Nat → RecInfo, port, next: Nat): t.OnePort() → port < next → t.Below(tys, port, next) {
+    match t { Word(_) => λ _ lt => lt, Bit => λ _ lt => lt, Bytes(_) => λ _ lt => lt, Named(_) => λ never _ => false_elim(never) }
+}
+
+theorem Ty::below_one(self t: Ty, tys: Nat → RecInfo, port, next: Nat): t.OnePort() → t.Below(tys, port, next) → port < next {
+    match t { Word(_) => λ _ b => b, Bit => λ _ b => b, Bytes(_) => λ _ b => b, Named(_) => λ never _ => false_elim(never) }
+}
+
+theorem Ty::below_cast(tys: Nat → RecInfo, a, b: Ty, e: a = b, port, next: Nat, h: a.Below(tys, port, next)): b.Below(tys, port, next) {
+    j(e, λ x _ => x.Below(tys, port, next), h)
+}
+
+theorem Ty::fields_below_mono(fs: List<Ty>, next, later: Nat, le: next <= later): (port: Nat) →
+    Ty::FieldsBelow(fs, port, next) → Ty::FieldsBelow(fs, port, later) {
+    match fs {
+        Nil => λ port _ => trivial,
+        Cons(_, rest) => λ port b => ⟨Nat::lt_of_lt_of_le(port, next, later, b.left, le), Ty::fields_below_mono(rest, next, later, le, Succ(port), b.right)⟩,
+    }
+}
+
+theorem Ty::below_mono(self t: Ty, tys: Nat → RecInfo, port, next, later: Nat, le: next <= later): t.Below(tys, port, next) → t.Below(tys, port, later) {
+    match t {
+        Word(_) => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
+        Bit => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
+        Bytes(_) => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
+        Named(i) => λ b => Ty::fields_below_mono(tys(i).fields, next, later, le, port, b),
+    }
+}
+
+theorem Ty::fields_below_at(fs: List<Ty>, next: Nat): (port, k: Nat) → Ty::has_field(fs, k).IsTrue() →
+    Ty::FieldsBelow(fs, port, next) → Ty::field_port(k, port) < next {
+    match fs {
+        Nil => λ port k never => false_elim(never),
+        Cons(_, rest) => λ port k => match k {
+            Zero => λ _ b => b.left,
+            Succ(j) => λ has b => Ty::fields_below_at(rest, next, Succ(port), j, has, b.right),
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,14 +345,36 @@ fn EnvHolds(tys: Nat → RecInfo, values: Valuation(), g: List<Ty>) → List<Nat
     }
 }
 
-// Every port is below `next`.
-fn Below(ports: List<Nat>, next: Nat) → Type {
-    match ports { Nil => True, Cons(p, rest) => (p < next) ∧ Below(rest, next) }
+// Every variable's span is below `next`, one port per variable.
+fn Below(tys: Nat → RecInfo, g: List<Ty>) → List<Nat> → Nat → Type {
+    match g {
+        Nil => λ ports next => match ports { Nil => True, Cons(_, _) => False },
+        Cons(t, rest) => λ ports next => match ports { Nil => False, Cons(p, ps) => t.Below(tys, p, next) ∧ Below(tys, rest, ps, next) },
+    }
 }
 
 // `after` keeps every id below `next`.
 fn Keeps(values, after: Valuation(), next: Nat) → Type {
     (wd: Nat) → (id: Nat) → id < next → after(wd, id) = values(wd, id)
+}
+
+theorem Ty::fields_kept(fs: List<Ty>, values, after: Valuation(), next: Nat, keeps: Keeps(values, after, next)): (port: Nat) →
+    Ty::FieldsBelow(fs, port, next) → Ty::SameFields(fs, values, after, port, port) {
+    match fs {
+        Nil => λ port _ => trivial,
+        Cons(_, rest) => λ port b => ⟨λ wd => keeps(wd, port, b.left), Ty::fields_kept(rest, values, after, next, keeps, Succ(port), b.right)⟩,
+    }
+}
+
+// A span below `next` is kept by what keeps every id below it.
+theorem Ty::same_kept(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(), next: Nat, keeps: Keeps(values, after, next), port: Nat):
+    t.Below(tys, port, next) → t.Same(tys, values, after, port, port) {
+    match t {
+        Word(_) => λ b wd => keeps(wd, port, b),
+        Bit => λ b wd => keeps(wd, port, b),
+        Bytes(_) => λ b wd => keeps(wd, port, b),
+        Named(i) => λ b => Ty::fields_kept(tys(i).fields, values, after, next, keeps, port, b),
+    }
 }
 
 theorem env_holds_at(tys: Nat → RecInfo, values: Valuation(), g: List<Ty>): (ports: List<Nat>) → (env: Env(tys, g)) →
@@ -168,32 +395,43 @@ theorem env_holds_at(tys: Nat → RecInfo, values: Valuation(), g: List<Ty>): (p
     }
 }
 
-theorem below_at(ports: List<Nat>, next: Nat): Below(ports, next) → (i, p: Nat) → port_at(ports, i) = Some(p) → p < next {
-    match ports {
-        Nil => λ _ i p (at: None<Nat>() = Some(p)) => Option::none_ne_some(p, at, p < next),
-        Cons(q, qs) => λ below i => match i {
-            Zero => λ p (at: Some(q) = Some(p)) => j(Option::some_inj(q, p, at), λ x _ => x < next, below.left),
-            Succ(k) => λ p at => below_at(qs, next, below.right, k, p, at),
+theorem below_at(tys: Nat → RecInfo, g: List<Ty>): (ports: List<Nat>) → (next: Nat) → Below(tys, g, ports, next) →
+    (i, p: Nat) → port_at(ports, i) = Some(p) → Ty::at(g, i).Below(tys, p, next) {
+    match g {
+        Nil => λ ports next => match ports {
+            Nil => λ _ i p (at: None<Nat>() = Some(p)) => Option::none_ne_some(p, at, Ty::at(Nil, i).Below(tys, p, next)),
+            Cons(_, _) => λ never => false_elim(never),
+        },
+        Cons(t, rest) => λ ports next => match ports {
+            Nil => λ never => false_elim(never),
+            Cons(q, qs) => λ below i => match i {
+                Zero => λ p (at: Some(q) = Some(p)) => j(Option::some_inj(q, p, at), λ x _ => t.Below(tys, x, next), below.left),
+                Succ(k) => λ p at => below_at(tys, rest, qs, next, below.right, k, p, at),
+            },
         },
     }
 }
 
-theorem below_mono(ports: List<Nat>, next, later: Nat, le: next <= later): Below(ports, next) → Below(ports, later) {
-    match ports {
-        Nil => λ _ => trivial,
-        Cons(p, rest) => λ below => ⟨Nat::lt_of_lt_of_le(p, next, later, below.left, le), below_mono(rest, next, later, le, below.right)⟩,
+theorem below_mono(tys: Nat → RecInfo, g: List<Ty>, next, later: Nat, le: next <= later): (ports: List<Nat>) →
+    Below(tys, g, ports, next) → Below(tys, g, ports, later) {
+    match g {
+        Nil => λ ports => match ports { Nil => λ b => b, Cons(_, _) => λ b => b },
+        Cons(t, rest) => λ ports => match ports {
+            Nil => λ b => b,
+            Cons(p, ps) => λ below => ⟨t.below_mono(tys, p, next, later, le, below.left), below_mono(tys, rest, next, later, le, ps, below.right)⟩,
+        },
     }
 }
 
 // The environment still holds after a region that keeps its ports.
 theorem env_holds_keeps(tys: Nat → RecInfo, g: List<Ty>, values, after: Valuation(), next: Nat, keeps: Keeps(values, after, next)):
-    (ports: List<Nat>) → (env: Env(tys, g)) → Below(ports, next) → EnvHolds(tys, values, g, ports, env) → EnvHolds(tys, after, g, ports, env) {
+    (ports: List<Nat>) → (env: Env(tys, g)) → Below(tys, g, ports, next) → EnvHolds(tys, values, g, ports, env) → EnvHolds(tys, after, g, ports, env) {
     match g {
         Nil => λ ports env _ held => held,
         Cons(t, rest) => λ ports => match ports {
             Nil => λ env _ held => held,
             Cons(p, ps) => λ env below held =>
-                ⟨t.holds_at(tys, values, after, p, p, λ wd => keeps(wd, p, below.left), env.fst, held.left),
+                ⟨t.holds_at(tys, values, after, p, p, t.same_kept(tys, values, after, next, keeps, p, below.left), env.fst, held.left),
                     env_holds_keeps(tys, rest, values, after, next, keeps, ps, env.snd, below.right, held.right)⟩,
         },
     }
@@ -246,9 +484,79 @@ theorem branch_holds(t: Ty, tys: Nat → RecInfo, values: Valuation(), condition
     t.Holds(tys, branch(condition, when_true, when_false).eval(call, values), out, match b { False => no, True => yes }) {
     match b {
         True => t.holds_at(tys, when_true.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out, out,
-            λ wd => branch_true(values, condition, when_true, when_false, call, h, wd, out), yes, held_true),
+            t.same_everywhere(tys, when_true.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out,
+                λ wd id => branch_true(values, condition, when_true, when_false, call, h, wd, id)), yes, held_true),
         False => t.holds_at(tys, when_false.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out, out,
-            λ wd => branch_false(values, condition, when_true, when_false, call, h, wd, out), no, held_false),
+            t.same_everywhere(tys, when_false.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out,
+                λ wd id => branch_false(values, condition, when_true, when_false, call, h, wd, id)), no, held_false),
+    }
+}
+
+// A value moved from `src` to fresh ports from `out`, a field at a time.
+fn Ty::field_moves(fs: List<Ty>) → Nat → Nat → List<Node> {
+    match fs { Nil => λ out src => Nil, Cons(f, rest) => λ out src => Cons(Move(f.width(), out, src), Ty::field_moves(rest, Succ(out), Succ(src))) }
+}
+
+fn Ty::moves(self t: Ty, tys: Nat → RecInfo, out, src: Nat) → List<Node> {
+    match t {
+        Word(w) => [Move(w, out, src)],
+        Bit => [Move(1, out, src)],
+        Bytes(_) => [Move(64, out, src)],
+        Named(i) => Ty::field_moves(tys(i).fields, out, src),
+    }
+}
+
+// What a move to fresh ports promises: the value at its new ports, every
+// id below them kept, the new span below its end.
+fn Ty::MovedFields(fs: List<Ty>, values, after: Valuation(), out: Nat, t: Ty::Flats(fs)) → Type {
+    Ty::FieldsHold(fs, after, out, t) ∧ (Keeps(values, after, out) ∧ (Ty::FieldsBelow(fs, out, Ty::fields_past(fs, out)) ∧ (out <= Ty::fields_past(fs, out))))
+}
+
+theorem Ty::field_moves_sound(fs: List<Ty>): (values: Valuation()) → (out, src: Nat) → Ty::FieldsBelow(fs, src, out) →
+    (t: Ty::Flats(fs)) → Ty::FieldsHold(fs, values, src, t) → Ty::MovedFields(fs, values, eval_nodes(Ty::field_moves(fs, out, src), values), out, t) {
+    match fs {
+        Nil => λ values out src _ t _ => ⟨trivial, ⟨λ wd id _ => refl, ⟨trivial, out.le_refl()⟩⟩⟩,
+        Cons(f, rest) => λ values out src below t h => {
+            let moved = Valuation::set(values, out, λ wd => values(wd, src));
+            let step: (out <= Succ(out)) = Nat::le_succ_r(out, out, out.le_refl());
+            let kept: Keeps(values, moved, out) = λ wd id lt => Valuation::set_other(values, out, λ x => values(x, src), wd, id, Nat::ne_of_lt(id, out, lt));
+            let later = Ty::field_moves_sound(rest, moved, Succ(out), Succ(src),
+                Ty::fields_below_mono(rest, out, Succ(out), step, Succ(src), below.right), t.snd,
+                Ty::fields_at(rest, values, moved, Succ(src), Succ(src), Ty::fields_kept(rest, values, moved, out, kept, Succ(src), below.right), t.snd, h.right));
+            let after = eval_nodes(Ty::field_moves(rest, Succ(out), Succ(src)), moved);
+            ⟨⟨f.flat_at(values, after, src, out,
+                    λ wd => trans(later.right.left(wd, out, out.lt_succ_self()), Valuation::set_here(values, out, λ x => values(x, src), wd)), t.fst, h.left),
+                later.left⟩,
+                ⟨λ wd id lt => trans(later.right.left(wd, id, Nat::lt_of_lt_of_le(id, out, Succ(out), lt, step)), kept(wd, id, lt)),
+                    ⟨⟨later.right.right.right, later.right.right.left⟩,
+                        Nat::le_trans(out, Succ(out), Ty::fields_past(rest, Succ(out)), step, later.right.right.right)⟩⟩⟩
+        },
+    }
+}
+
+// The same for a value of any code.
+fn Ty::Moved(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(), out: Nat, v: t.sem(tys)) → Type {
+    t.Holds(tys, after, out, v) ∧ (Keeps(values, after, out) ∧ (t.Below(tys, out, t.past(tys, out)) ∧ (out <= t.past(tys, out))))
+}
+
+theorem Ty::one_move_sound(t: Ty, tys: Nat → RecInfo, one: t.OnePort(), values: Valuation(), out, src: Nat, v: t.sem(tys),
+    h: t.Holds(tys, values, src, v)):
+    t.Holds(tys, Valuation::set(values, out, λ wd => values(wd, src)), out, v) ∧ (Keeps(values, Valuation::set(values, out, λ wd => values(wd, src)), out) ∧
+        (t.Below(tys, out, Succ(out)) ∧ (out <= Succ(out)))) {
+    ⟨t.holds_at(tys, values, Valuation::set(values, out, λ wd => values(wd, src)), src, out,
+            t.same_one(tys, values, Valuation::set(values, out, λ wd => values(wd, src)), src, out, one,
+                λ wd => Valuation::set_here(values, out, λ x => values(x, src), wd)), v, h),
+        ⟨λ wd id lt => Valuation::set_other(values, out, λ x => values(x, src), wd, id, Nat::ne_of_lt(id, out, lt)),
+            ⟨t.one_below(tys, out, Succ(out), one, out.lt_succ_self()), Nat::le_succ_r(out, out, out.le_refl())⟩⟩⟩
+}
+
+theorem Ty::moves_sound(self t: Ty, tys: Nat → RecInfo, values: Valuation(), out, src: Nat):
+    t.Below(tys, src, out) → (v: t.sem(tys)) → t.Holds(tys, values, src, v) → t.Moved(tys, values, eval_nodes(t.moves(tys, out, src), values), out, v) {
+    match t {
+        Word(w) => λ _ v h => Ty::one_move_sound(Word(w), tys, trivial, values, out, src, v, h),
+        Bit => λ _ v h => Ty::one_move_sound(Bit, tys, trivial, values, out, src, v, h),
+        Bytes(c) => λ _ v h => Ty::one_move_sound(Bytes(c), tys, trivial, values, out, src, v, h),
+        Named(i) => λ below v h => Ty::field_moves_sound(tys(i).fields, values, out, src, below, tys(i).get(v), h),
     }
 }
 
@@ -406,24 +714,65 @@ fn Tm::lower_prim(op: Op, g: List<Ty>, ports: List<Nat>, next: Nat, args: List<N
 // A bound term's region, then its body's.
 fn Tm::compose(le, lb: Lowered) → Option<Lowered> { Some(Lowered(Compose(le.region, lb.region), lb.result, lb.next)) }
 
-// A branch: each arm moves its result to one port above both.
-fn Tm::branch_lowered(ty_yes: Ty, pc: Nat, ly, ln: Lowered) → Lowered {
+// A branch: each arm moves its result to fresh ports above both (a record
+// a field at a time).
+fn Tm::branch_lowered(tys: Nat → RecInfo, ty_yes: Ty, pc: Nat, ly, ln: Lowered) → Lowered {
     Lowered(branch(pc,
-            Compose(ly.region, nodes_region([Move(ty_yes.width(), ln.next, ly.result)])),
-            Compose(ln.region, nodes_region([Move(ty_yes.width(), ln.next, ln.result)]))),
-        ln.next, Succ(ln.next))
+            Compose(ly.region, nodes_region(ty_yes.moves(tys, ln.next, ly.result))),
+            Compose(ln.region, nodes_region(ty_yes.moves(tys, ln.next, ln.result)))),
+        ln.next, ty_yes.past(tys, ln.next))
 }
 
-fn Tm::branch_typed(ty_yes, ty_no: Ty, pc: Nat, ly, ln: Lowered) → Option<Lowered> {
-    ty_no.check(ty_yes).and_then(λ _ => Some(Tm::branch_lowered(ty_yes, pc, ly, ln)))
+fn Tm::branch_typed(tys: Nat → RecInfo, ty_yes, ty_no: Ty, pc: Nat, ly, ln: Lowered) → Option<Lowered> {
+    ty_no.check(ty_yes).and_then(λ _ => Some(Tm::branch_lowered(tys, ty_yes, pc, ly, ln)))
 }
 
-fn Tm::branch_checked(g: List<Ty>, c: Nat, ty_yes, ty_no: Ty, pc: Nat, ly, ln: Lowered) → Option<Lowered> {
-    Ty::at(g, c).check(Bit).and_then(λ _ => Tm::branch_typed(ty_yes, ty_no, pc, ly, ln))
+fn Tm::branch_checked(tys: Nat → RecInfo, g: List<Ty>, c: Nat, ty_yes, ty_no: Ty, pc: Nat, ly, ln: Lowered) → Option<Lowered> {
+    Ty::at(g, c).check(Bit).and_then(λ _ => Tm::branch_typed(tys, ty_yes, ty_no, pc, ly, ln))
 }
 
-fn Tm::lower_branch(g: List<Ty>, ports: List<Nat>, c: Nat, ty_yes, ty_no: Ty, ly, ln: Lowered) → Option<Lowered> {
-    port_at(ports, c).and_then(λ pc => Tm::branch_checked(g, c, ty_yes, ty_no, pc, ly, ln))
+fn Tm::lower_branch(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, c: Nat, ty_yes, ty_no: Ty, ly, ln: Lowered) → Option<Lowered> {
+    port_at(ports, c).and_then(λ pc => Tm::branch_checked(tys, g, c, ty_yes, ty_no, pc, ly, ln))
+}
+
+// A record from field variables: each moved to the fields' ports from
+// `out`, one per field.
+fn Tm::make_args(g: List<Ty>, ports: List<Nat>, fs: List<Ty>, args: List<Nat>, out: Nat) → Option<List<Node>> {
+    match fs {
+        Nil => match args { Nil => Some(Nil), Cons(_, _) => None },
+        Cons(f, rest) => match args {
+            Nil => None,
+            Cons(a, more) => port_at(ports, a).and_then(λ q =>
+                Ty::at(g, a).check(f).and_then(λ _ => Tm::make_args(g, ports, rest, more, Succ(out)).and_then(λ ns => Some(Cons(Move(f.width(), out, q), ns))))),
+        },
+    }
+}
+
+fn Tm::make_moves(w: World, g: List<Ty>, ports: List<Nat>, next, i: Nat, args: List<Nat>) → Option<Lowered> {
+    Tm::make_args(g, ports, w.tys(i).fields, args, next).and_then(λ ns =>
+        Some(Lowered(nodes_region(ns), next, Ty::fields_past(w.tys(i).fields, next))))
+}
+
+// `Make`: the record at fresh ports, its fields flat (no record fields).
+fn Tm::lower_make(w: World, g: List<Ty>, ports: List<Nat>, next, i: Nat, args: List<Nat>) → Option<Lowered> {
+    Ty::check_ones(w.tys(i).fields).and_then(λ _ => Tm::make_moves(w, g, ports, next, i, args))
+}
+
+fn Tm::field_one(w: World, next, i, k, p: Nat) → Option<Lowered> {
+    Ty::at(w.tys(i).fields, k).check_one().and_then(λ _ => Some(Lowered(nodes_region(Nil), Ty::field_port(k, p), next)))
+}
+
+fn Tm::field_ranged(w: World, next, i, k, p: Nat) → Option<Lowered> {
+    Tm::check_true(Ty::has_field(w.tys(i).fields, k)).and_then(λ _ => Tm::field_one(w, next, i, k, p))
+}
+
+fn Tm::field_typed(w: World, g: List<Ty>, next, i, k, of, p: Nat) → Option<Lowered> {
+    Ty::at(g, of).check(Named(i)).and_then(λ _ => Tm::field_ranged(w, next, i, k, p))
+}
+
+// `Field`: no code at all, the field's own port.
+fn Tm::lower_field(w: World, g: List<Ty>, ports: List<Nat>, next, i, k, of: Nat) → Option<Lowered> {
+    port_at(ports, of).and_then(λ p => Tm::field_typed(w, g, next, i, k, of, p))
 }
 
 // A call's arguments: each a word variable, one per parameter.
@@ -464,12 +813,12 @@ fn Tm::lower(self t: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat) →
         // Each arm from the same context; the second's fresh ids above the
         // first's (either may run, never both).
         If(c, yes, no) => Tm::lower(yes, w, g, ports, next).and_then(λ ly =>
-            Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln))),
+            Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln))),
         // The convoyed equation is erased: the same branch as `If`.
         IfEq(c, yes, no) => Tm::lower(yes, w, g, ports, next).and_then(λ ly =>
-            Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln))),
-        Make(_, _) => None,
-        Field(_, _, _) => None,
+            Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln))),
+        Make(i, args) => Tm::lower_make(w, g, ports, next, i, args),
+        Field(i, k, of) => Tm::lower_field(w, g, ports, next, i, k, of),
         Call(f, args) => Tm::lower_call(w, g, ports, next, f, args),
         Fold(_, _, _) => None,
     }
@@ -486,19 +835,19 @@ fn Tm::LowerHolds(self t: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat
     match r {
         None => True,
         Some(c) => (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
-            EnvHolds(w.tys, values, g, ports, env) → Below(ports, next) →
-            (next <= c.next) ∧ ((c.result < c.next) ∧ (Keeps(values, c.region.eval(call, values), next) ∧
+            EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+            (next <= c.next) ∧ (Tm::ty(t, w, g).Below(w.tys, c.result, c.next) ∧ (Keeps(values, c.region.eval(call, values), next) ∧
                 Tm::ty(t, w, g).Holds(w.tys, c.region.eval(call, values), c.result, Tm::sem(t, w, g, env)))),
     }
 }
 
 // A region that sets one fresh port: what it promises, from the value it
 // leaves there.
-theorem Tm::set_sound(tys: Nat → RecInfo, values: Valuation(), next: Nat, r: Ty, v: (wd: Nat) → BitVec(wd), m: r.sem(tys),
+theorem Tm::set_sound(tys: Nat → RecInfo, values: Valuation(), next: Nat, r: Ty, one: r.OnePort(), v: (wd: Nat) → BitVec(wd), m: r.sem(tys),
     h: r.Holds(tys, Valuation::set(values, next, v), next, m)):
-    (next <= Succ(next)) ∧ ((next < Succ(next)) ∧ (Keeps(values, Valuation::set(values, next, v), next) ∧
+    (next <= Succ(next)) ∧ (r.Below(tys, next, Succ(next)) ∧ (Keeps(values, Valuation::set(values, next, v), next) ∧
         r.Holds(tys, Valuation::set(values, next, v), next, m))) {
-    ⟨Nat::le_succ_r(next, next, next.le_refl()), ⟨next.lt_succ_self(),
+    ⟨Nat::le_succ_r(next, next, next.le_refl()), ⟨r.one_below(tys, next, Succ(next), one, next.lt_succ_self()),
         ⟨λ wd id lt => Valuation::set_other(values, next, v, wd, id, Nat::ne_of_lt(id, next, lt)), h⟩⟩⟩
 }
 
@@ -547,12 +896,12 @@ theorem Tm::word_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, b,
     at_a: port_at(ports, a) = Some(pa), at_b: port_at(ports, b) = Some(pb), width: Nat,
     op: (wd: Nat) → BitVec(wd) → BitVec(wd) → BitVec(wd), ea: Ty::at(g, a) = Word(width), eb: Ty::at(g, b) = Word(width)):
     (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
-    EnvHolds(w.tys, values, g, ports, env) → Below(ports, next) →
+    EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
     (next <= Succ(next)) ∧ ((next < Succ(next)) ∧ (Keeps(values, Valuation::set(values, next, λ wd => op(wd, values(wd, pa), values(wd, pb))), next) ∧
         Word(width).Holds(w.tys, Valuation::set(values, next, λ wd => op(wd, values(wd, pa), values(wd, pb))), next,
             op(width, Ty::cast(w.tys, Ty::at(g, a), Word(width), Env::get(w.tys, g, env, a)),
                 Ty::cast(w.tys, Ty::at(g, b), Word(width), Env::get(w.tys, g, env, b)))))) {
-    λ call agree values env held below => Tm::set_sound(w.tys, values, next, Word(width), λ wd => op(wd, values(wd, pa), values(wd, pb)),
+    λ call agree values env held below => Tm::set_sound(w.tys, values, next, Word(width), trivial, λ wd => op(wd, values(wd, pa), values(wd, pb)),
         op(width, Ty::cast(w.tys, Ty::at(g, a), Word(width), Env::get(w.tys, g, env, a)),
             Ty::cast(w.tys, Ty::at(g, b), Word(width), Env::get(w.tys, g, env, b))),
         Tm::word_op_holds(values, next, pa, pb, width, op, Ty::cast(w.tys, Ty::at(g, a), Word(width), Env::get(w.tys, g, env, a)),
@@ -566,12 +915,12 @@ theorem Tm::cmp_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, b, 
     at_a: port_at(ports, a) = Some(pa), at_b: port_at(ports, b) = Some(pb), width: Nat,
     cmp: BitVec(width) → BitVec(width) → Bool, ea: Ty::at(g, a) = Word(width), eb: Ty::at(g, b) = Word(width)):
     (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
-    EnvHolds(w.tys, values, g, ports, env) → Below(ports, next) →
+    EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
     (next <= Succ(next)) ∧ ((next < Succ(next)) ∧ (Keeps(values, Valuation::set(values, next, bit_value(cmp(values(width, pa), values(width, pb)))), next) ∧
         Bit.Holds(w.tys, Valuation::set(values, next, bit_value(cmp(values(width, pa), values(width, pb)))), next,
             cmp(Ty::cast(w.tys, Ty::at(g, a), Word(width), Env::get(w.tys, g, env, a)),
                 Ty::cast(w.tys, Ty::at(g, b), Word(width), Env::get(w.tys, g, env, b)))))) {
-    λ call agree values env held below => Tm::set_sound(w.tys, values, next, Bit, bit_value(cmp(values(width, pa), values(width, pb))),
+    λ call agree values env held below => Tm::set_sound(w.tys, values, next, Bit, trivial, bit_value(cmp(values(width, pa), values(width, pb))),
         cmp(Ty::cast(w.tys, Ty::at(g, a), Word(width), Env::get(w.tys, g, env, a)),
             Ty::cast(w.tys, Ty::at(g, b), Word(width), Env::get(w.tys, g, env, b))),
         Tm::cmp_op_holds(values, next, pa, pb, width, cmp, Ty::cast(w.tys, Ty::at(g, a), Word(width), Env::get(w.tys, g, env, a)),
@@ -588,14 +937,14 @@ theorem Tm::bit_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, b, 
     law: (x, y: Bool) → op(1, BitVec::ofBool(x), BitVec::ofBool(y)) = BitVec::ofBool(f(x, y)),
     ea: Ty::at(g, a) = Bit, eb: Ty::at(g, b) = Bit):
     (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
-    EnvHolds(w.tys, values, g, ports, env) → Below(ports, next) →
+    EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
     (next <= Succ(next)) ∧ ((next < Succ(next)) ∧ (Keeps(values, Valuation::set(values, next, λ wd => op(wd, values(wd, pa), values(wd, pb))), next) ∧
         Bit.Holds(w.tys, Valuation::set(values, next, λ wd => op(wd, values(wd, pa), values(wd, pb))), next,
             f(Ty::cast(w.tys, Ty::at(g, a), Bit, Env::get(w.tys, g, env, a)), Ty::cast(w.tys, Ty::at(g, b), Bit, Env::get(w.tys, g, env, b)))))) {
     λ call agree values env held below => {
         let x = Ty::cast(w.tys, Ty::at(g, a), Bit, Env::get(w.tys, g, env, a));
         let y = Ty::cast(w.tys, Ty::at(g, b), Bit, Env::get(w.tys, g, env, b));
-        Tm::set_sound(w.tys, values, next, Bit, λ wd => op(wd, values(wd, pa), values(wd, pb)), f(x, y),
+        Tm::set_sound(w.tys, values, next, Bit, trivial, λ wd => op(wd, values(wd, pa), values(wd, pb)), f(x, y),
             trans(Tm::word_op_holds(values, next, pa, pb, 1, op, BitVec::ofBool(x), BitVec::ofBool(y),
                 Tm::operand(w, g, ports, values, env, held, a, pa, at_a, Bit, ea),
                 Tm::operand(w, g, ports, values, env, held, b, pb, at_b, Bit, eb)), law(x, y)))
@@ -613,10 +962,10 @@ theorem Tm::lower_lit_sound(w: World, g: List<Ty>, ports: List<Nat>, next: Nat, 
     Tm::LowerHolds(Lit(c, n), w, g, ports, next, Tm::lower_lit(c, n, next)) {
     match c {
         Word(width) => λ call agree values env held below =>
-            Tm::set_sound(w.tys, values, next, Word(width), λ wd => BitVec::ofNat(n), BitVec::ofNat(n),
+            Tm::set_sound(w.tys, values, next, Word(width), trivial, λ wd => BitVec::ofNat(n), BitVec::ofNat(n),
                 Valuation::set_here(values, next, λ wd => BitVec::ofNat(n), width)),
         Bit => λ call agree values env held below =>
-            Tm::set_sound(w.tys, values, next, Bit, λ wd => BitVec::ofNat(Tm::bit_code(n)), Tm::lit(Bit, n, w.tys),
+            Tm::set_sound(w.tys, values, next, Bit, trivial, λ wd => BitVec::ofNat(Tm::bit_code(n)), Tm::lit(Bit, n, w.tys),
                 trans(Valuation::set_here(values, next, λ wd => BitVec::ofNat(Tm::bit_code(n)), 1), sym(Tm::bit_code_holds(w.tys, n)))),
         Bytes(_) => trivial,
         Named(_) => trivial,
@@ -673,7 +1022,7 @@ theorem Tm::neg_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, pa: Nat,
     λ call agree values env held below => {
         let one = Valuation::set(values, next, λ wd => BitVec::ofNat(1));
         let x = Ty::cast(w.tys, Ty::at(g, a), Bit, Env::get(w.tys, g, env, a));
-        let pa_lt: (pa < next) = below_at(ports, next, below, a, pa, at_a);
+        let pa_lt: (pa < next) = Ty::below_cast(w.tys, Ty::at(g, a), Bit, ea, pa, next, below_at(w.tys, g, ports, next, below, a, pa, at_a));
         let step: (next <= Succ(next)) = Nat::le_succ_r(next, next, next.le_refl());
         ⟨Nat::le_succ_r(next, Succ(next), step), ⟨Succ(next).lt_succ_self(),
             ⟨λ wd id lt => trans(Valuation::set_other(one, Succ(next), λ v => one(v, pa).bxor(one(v, next)), wd, id,
@@ -729,40 +1078,38 @@ theorem Tm::if_sound(c: Nat, yes, no: Tm, w: World,
     let ty_yes = Tm::ty(yes, w, g);
     let ty_no = Tm::ty(no, w, g);
     Option::and_then_elim(P, trivial, Tm::lower(yes, w, g, ports, next),
-        λ ly => Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(g, ports, c, ty_yes, ty_no, ly, ln)), λ ly lowered_yes =>
-    Option::and_then_elim(P, trivial, Tm::lower(no, w, g, ports, ly.next), λ ln => Tm::lower_branch(g, ports, c, ty_yes, ty_no, ly, ln),
+        λ ly => Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(w.tys, g, ports, c, ty_yes, ty_no, ly, ln)), λ ly lowered_yes =>
+    Option::and_then_elim(P, trivial, Tm::lower(no, w, g, ports, ly.next), λ ln => Tm::lower_branch(w.tys, g, ports, c, ty_yes, ty_no, ly, ln),
         λ ln lowered_no =>
-    Option::and_then_elim(P, trivial, port_at(ports, c), λ pc => Tm::branch_checked(g, c, ty_yes, ty_no, pc, ly, ln), λ pc at_c =>
-    Option::and_then_elim(P, trivial, Ty::at(g, c).check(Bit), λ _ => Tm::branch_typed(ty_yes, ty_no, pc, ly, ln), λ ec _ =>
-    Option::and_then_elim(P, trivial, ty_no.check(ty_yes), λ _ => Some(Tm::branch_lowered(ty_yes, pc, ly, ln)), λ en _ =>
+    Option::and_then_elim(P, trivial, port_at(ports, c), λ pc => Tm::branch_checked(w.tys, g, c, ty_yes, ty_no, pc, ly, ln), λ pc at_c =>
+    Option::and_then_elim(P, trivial, Ty::at(g, c).check(Bit), λ _ => Tm::branch_typed(w.tys, ty_yes, ty_no, pc, ly, ln), λ ec _ =>
+    Option::and_then_elim(P, trivial, ty_no.check(ty_yes), λ _ => Some(Tm::branch_lowered(w.tys, ty_yes, pc, ly, ln)), λ en _ =>
         λ call agree values env held below => {
             let out = ln.next;
-            let width = ty_yes.width();
             let first = j(lowered_yes, λ r _ => Tm::LowerHolds(yes, w, g, ports, next, r),
                 ih_yes(g, ports, next))(call, agree, values, env, held, below);
             let second = j(lowered_no, λ r _ => Tm::LowerHolds(no, w, g, ports, ly.next, r),
-                ih_no(g, ports, ly.next))(call, agree, values, env, held, below_mono(ports, next, ly.next, first.left, below));
+                ih_no(g, ports, ly.next))(call, agree, values, env, held, below_mono(w.tys, g, next, ly.next, first.left, ports, below));
             let mid_yes = ly.region.eval(call, values);
             let mid_no = ln.region.eval(call, values);
             let reaches: (next <= out) = Nat::le_trans(next, ly.next, out, first.left, second.left);
             let scrutinee = Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c));
             let bit = Tm::operand(w, g, ports, values, env, held, c, pc, at_c, Bit, ec);
             let chosen = trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), bit), BitVec::head_bit_ofBool(scrutinee));
-            let when_true = Compose(ly.region, nodes_region([Move(width, out, ly.result)]));
-            let when_false = Compose(ln.region, nodes_region([Move(width, out, ln.result)]));
-            ⟨Nat::le_succ_r(next, out, reaches), ⟨out.lt_succ_self(),
+            let no_cast = Ty::cast(w.tys, ty_no, ty_yes, Tm::sem(no, w, g, env));
+            let moved_yes = ty_yes.moves_sound(w.tys, mid_yes, out, ly.result,
+                ty_yes.below_mono(w.tys, ly.result, ly.next, out, second.left, first.right.left), Tm::sem(yes, w, g, env), first.right.right.right);
+            let moved_no = ty_yes.moves_sound(w.tys, mid_no, out, ln.result, Ty::below_cast(w.tys, ty_no, ty_yes, en, ln.result, out, second.right.left),
+                no_cast, Ty::cast_holds(w.tys, mid_no, ln.result, ty_no, ty_yes, en, Tm::sem(no, w, g, env), second.right.right.right));
+            let when_true = Compose(ly.region, nodes_region(ty_yes.moves(w.tys, out, ly.result)));
+            let when_false = Compose(ln.region, nodes_region(ty_yes.moves(w.tys, out, ln.result)));
+            ⟨Nat::le_trans(next, out, ty_yes.past(w.tys, out), reaches, moved_yes.right.right.right), ⟨moved_yes.right.right.left,
                 ⟨branch_keeps(values, pc, when_true, when_false, call, next,
-                    λ wd id lt => trans(Valuation::set_other(mid_yes, out, λ x => mid_yes(x, ly.result), wd, id,
-                        Nat::ne_of_lt(id, out, Nat::lt_of_lt_of_le(id, next, out, lt, reaches))), first.right.right.left(wd, id, lt)),
-                    λ wd id lt => trans(Valuation::set_other(mid_no, out, λ x => mid_no(x, ln.result), wd, id,
-                        Nat::ne_of_lt(id, out, Nat::lt_of_lt_of_le(id, next, out, lt, reaches))),
+                    λ wd id lt => trans(moved_yes.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, out, lt, reaches)), first.right.right.left(wd, id, lt)),
+                    λ wd id lt => trans(moved_no.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, out, lt, reaches)),
                         second.right.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, ly.next, lt, first.left)))),
                 branch_holds(ty_yes, w.tys, values, pc, when_true, when_false, call, out, scrutinee,
-                    Tm::sem(yes, w, g, env), Ty::cast(w.tys, ty_no, ty_yes, Tm::sem(no, w, g, env)), chosen,
-                    ty_yes.holds_move(w.tys, mid_yes, ly.result, out, Tm::sem(yes, w, g, env), first.right.right.right),
-                    Ty::cast_holds(w.tys, Valuation::set(mid_no, out, λ x => mid_no(x, ln.result)), out, ty_no, ty_yes,
-                        en, Tm::sem(no, w, g, env),
-                        ty_no.holds_move(w.tys, mid_no, ln.result, out, Tm::sem(no, w, g, env), second.right.right.right)))⟩⟩⟩
+                    Tm::sem(yes, w, g, env), no_cast, chosen, moved_yes.left, moved_no.left)⟩⟩⟩
         })))))
 }
 
@@ -844,10 +1191,108 @@ theorem Tm::lower_call_sound(w: World, g: List<Ty>, ports: List<Nat>, next, f: N
             let v = word_value(call(f, words_of(values, qs)));
             let word: (Valuation::set(values, next, v, 64, next) = Ty::cast(w.tys, r, Word(64), meaning)) =
                 trans(Valuation::set_here(values, next, v, 64), answered);
-            Tm::set_sound(w.tys, values, next, r, v, meaning,
+            Tm::set_sound(w.tys, values, next, r, j(sym(er), λ x _ => x.OnePort(), trivial), v, meaning,
                 j(Ty::cast_back(w.tys, r, Word(64), er, meaning), λ u _ => r.Holds(w.tys, Valuation::set(values, next, v), next, u),
                     Ty::cast_holds(w.tys, Valuation::set(values, next, v), next, Word(64), r, sym(er), Ty::cast(w.tys, r, Word(64), meaning), word)))
         })))
+}
+
+// `Make`'s moves: the field variables' values at the fields' ports, from
+// any valuation that still keeps the environment's (below `next`), each move
+// at or above `next`.
+fn Tm::MadeFields(w: World, g: List<Ty>, env: Env(w.tys, g), next: Nat, fs: List<Ty>, args: List<Nat>, out: Nat, ns: List<Node>,
+    values0: Valuation()) → Type {
+    (values: Valuation()) → Keeps(values0, values, next) → next <= out →
+        Ty::MovedFields(fs, values, eval_nodes(ns, values), out, Tm::fields(w, g, env, fs, args))
+}
+
+theorem Tm::make_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values0: Valuation(), env: Env(w.tys, g),
+    held: EnvHolds(w.tys, values0, g, ports, env), next: Nat, below: Below(w.tys, g, ports, next), fs: List<Ty>):
+    (args: List<Nat>) → (out: Nat) → Ty::OnePorts(fs) → (ns: List<Node>) → Tm::make_args(g, ports, fs, args, out) = Some(ns) →
+    Tm::MadeFields(w, g, env, next, fs, args, out, ns, values0) {
+    match fs {
+        Nil => λ args => match args {
+            Nil => λ out ones ns e => j(Option::some_inj(Nil, ns, e), λ z _ => Tm::MadeFields(w, g, env, next, Nil, Nil, out, z, values0),
+                λ values _ _ => ⟨trivial, ⟨λ wd id _ => refl, ⟨trivial, out.le_refl()⟩⟩⟩),
+            Cons(a, more) => λ out ones ns e => Option::none_ne_some(ns, e, Tm::MadeFields(w, g, env, next, Nil, Cons(a, more), out, ns, values0)),
+        },
+        Cons(f, rest) => λ args => match args {
+            Nil => λ out ones ns e => Option::none_ne_some(ns, e, Tm::MadeFields(w, g, env, next, Cons(f, rest), Nil, out, ns, values0)),
+            Cons(a, more) => λ out ones => {
+                let Goal = λ (ns: List<Node>) => Tm::MadeFields(w, g, env, next, Cons(f, rest), Cons(a, more), out, ns, values0);
+                let P = λ (o: Option<List<Node>>) => (ns: List<Node>) → o = Some(ns) → Goal(ns);
+                let none: P(None) = λ ns e => Option::none_ne_some(ns, e, Goal(ns));
+                Option::and_then_elim(P, none, port_at(ports, a), λ q =>
+                    Ty::at(g, a).check(f).and_then(λ _ => Tm::make_args(g, ports, rest, more, Succ(out)).and_then(λ ns => Some(Cons(Move(f.width(), out, q), ns)))),
+                    λ q at_q =>
+                Option::and_then_elim(P, none, Ty::at(g, a).check(f),
+                    λ _ => Tm::make_args(g, ports, rest, more, Succ(out)).and_then(λ ns => Some(Cons(Move(f.width(), out, q), ns))), λ ea _ =>
+                Option::and_then_elim(P, none, Tm::make_args(g, ports, rest, more, Succ(out)), λ ns => Some(Cons(Move(f.width(), out, q), ns)),
+                    λ found e_rest => λ ns e => j(Option::some_inj(Cons(Move(f.width(), out, q), found), ns, e), λ z _ => Goal(z),
+                    λ values keeps0 le => {
+                        let x = Ty::cast(w.tys, Ty::at(g, a), f, Env::get(w.tys, g, env, a));
+                        let moved = Valuation::set(values, out, λ wd => values(wd, q));
+                        let step: (out <= Succ(out)) = Nat::le_succ_r(out, out, out.le_refl());
+                        let q_next: (q < next) = f.below_one(w.tys, q, next, ones.left,
+                            Ty::below_cast(w.tys, Ty::at(g, a), f, ea, q, next, below_at(w.tys, g, ports, next, below, a, q, at_q)));
+                        let kept: Keeps(values0, moved, next) = λ wd id lt => trans(Valuation::set_other(values, out, λ v => values(v, q), wd, id,
+                            Nat::ne_of_lt(id, out, Nat::lt_of_lt_of_le(id, next, out, lt, le))), keeps0(wd, id, lt));
+                        let later = Tm::make_args_sound(w, g, ports, values0, env, held, next, below, rest, more, Succ(out), ones.right, found, e_rest,
+                            moved, kept, Nat::le_succ_r(next, out, le));
+                        let after = eval_nodes(found, moved);
+                        ⟨⟨f.flat_at(values0, after, q, out,
+                                λ wd => trans(later.right.left(wd, out, out.lt_succ_self()),
+                                    trans(Valuation::set_here(values, out, λ v => values(v, q), wd), keeps0(wd, q, q_next))),
+                                f.to_flat(w.tys, x),
+                                f.flat_of_holds(w.tys, values0, q, ones.left, x, Tm::operand(w, g, ports, values0, env, held, a, q, at_q, f, ea))),
+                            later.left⟩,
+                            ⟨λ wd id lt => trans(later.right.left(wd, id, Nat::lt_of_lt_of_le(id, out, Succ(out), lt, step)),
+                                    Valuation::set_other(values, out, λ v => values(v, q), wd, id, Nat::ne_of_lt(id, out, lt))),
+                                ⟨⟨later.right.right.right, later.right.right.left⟩,
+                                    Nat::le_trans(out, Succ(out), Ty::fields_past(rest, Succ(out)), step, later.right.right.right)⟩⟩⟩
+                    }))))
+            },
+        },
+    }
+}
+
+// `Make`: the moves, and the record's projection of what it built is its
+// fields (`RecInfo::round`).
+theorem Tm::lower_make_sound(w: World, g: List<Ty>, ports: List<Nat>, next, i: Nat, args: List<Nat>):
+    Tm::LowerHolds(Make(i, args), w, g, ports, next, Tm::lower_make(w, g, ports, next, i, args)) {
+    let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Make(i, args), w, g, ports, next, r);
+    Option::and_then_elim(P, trivial, Ty::check_ones(w.tys(i).fields), λ _ => Tm::make_moves(w, g, ports, next, i, args), λ ones _ =>
+    Option::and_then_elim(P, trivial, Tm::make_args(g, ports, w.tys(i).fields, args, next),
+        λ ns => Some(Lowered(nodes_region(ns), next, Ty::fields_past(w.tys(i).fields, next))), λ ns e_ns =>
+        λ call agree values env held below => {
+            let fs = w.tys(i).fields;
+            let t = Tm::fields(w, g, env, fs, args);
+            let made = Tm::make_args_sound(w, g, ports, values, env, held, next, below, fs, args, next, ones, ns, e_ns,
+                values, λ wd id _ => refl, next.le_refl());
+            ⟨made.right.right.right, ⟨made.right.right.left, ⟨made.right.left,
+                j(sym(w.tys(i).round(t)), λ u _ => Ty::FieldsHold(fs, eval_nodes(ns, values), next, u), made.left)⟩⟩⟩
+        }))
+}
+
+// `Field`: the record's field `k` is at its port already.
+theorem Tm::lower_field_sound(w: World, g: List<Ty>, ports: List<Nat>, next, i, k, of: Nat):
+    Tm::LowerHolds(Field(i, k, of), w, g, ports, next, Tm::lower_field(w, g, ports, next, i, k, of)) {
+    let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Field(i, k, of), w, g, ports, next, r);
+    Option::and_then_elim(P, trivial, port_at(ports, of), λ p => Tm::field_typed(w, g, next, i, k, of, p), λ p at_p =>
+    Option::and_then_elim(P, trivial, Ty::at(g, of).check(Named(i)), λ _ => Tm::field_ranged(w, next, i, k, p), λ e _ =>
+    Option::and_then_elim(P, trivial, Tm::check_true(Ty::has_field(w.tys(i).fields, k)), λ _ => Tm::field_one(w, next, i, k, p), λ has _ =>
+    Option::and_then_elim(P, trivial, Ty::at(w.tys(i).fields, k).check_one(),
+        λ _ => Some(Lowered(nodes_region(Nil), Ty::field_port(k, p), next)), λ one _ =>
+        λ call agree values env held below => {
+            let fs = w.tys(i).fields;
+            let x = Ty::cast(w.tys, Ty::at(g, of), Named(i), Env::get(w.tys, g, env, of));
+            let record: Ty::FieldsHold(fs, values, p, w.tys(i).get(x)) = Tm::operand(w, g, ports, values, env, held, of, p, at_p, Named(i), e);
+            let spans: Ty::FieldsBelow(fs, p, next) =
+                Ty::below_cast(w.tys, Ty::at(g, of), Named(i), e, p, next, below_at(w.tys, g, ports, next, below, of, p, at_p));
+            ⟨next.le_refl(), ⟨Ty::at(fs, k).one_below(w.tys, Ty::field_port(k, p), next, one, Ty::fields_below_at(fs, next, p, k, has, spans)),
+                ⟨λ wd id _ => refl, Ty::at(fs, k).holds_of_flat(w.tys, values, Ty::field_port(k, p), Ty::flat_nth(fs, w.tys(i).get(x), k),
+                    Ty::fields_hold_at(fs, values, p, k, has, w.tys(i).get(x), record))⟩⟩⟩
+        }))))
 }
 
 theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
@@ -857,7 +1302,7 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
             Option::and_then_elim(λ (r: Option<Lowered>) => Tm::LowerHolds(Var(i), w, g, ports, next, r), trivial,
                 port_at(ports, i), λ p => Some(Lowered(nodes_region(Nil), p, next)), λ p at =>
                 λ call agree values env held below =>
-                    ⟨next.le_refl(), ⟨below_at(ports, next, below, i, p, at),
+                    ⟨next.le_refl(), ⟨below_at(w.tys, g, ports, next, below, i, p, at),
                         ⟨λ wd id _ => refl, env_holds_at(w.tys, values, g, ports, env, held, i, p, at)⟩⟩⟩),
         Lit(c, n) => λ g ports next => Tm::lower_lit_sound(w, g, ports, next, c, n),
         Prim(op, args) => λ g ports next => Tm::lower_prim_sound(op, w, g, ports, next, args),
@@ -874,7 +1319,7 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
                     let then = j(lowered_body, λ r _ => Tm::LowerHolds(body, w, inner, Cons(le.result, ports), le.next, r),
                         Tm::lower_sound(body, w, inner, Cons(le.result, ports), le.next))(call, agree, mid, Pair(Tm::sem(e, w, g, env), env),
                         ⟨first.right.right.right, env_holds_keeps(w.tys, g, values, mid, next, first.right.right.left, ports, env, below, held)⟩,
-                        ⟨first.right.left, below_mono(ports, next, le.next, first.left, below)⟩);
+                        ⟨first.right.left, below_mono(w.tys, g, next, le.next, first.left, ports, below)⟩);
                     ⟨Nat::le_trans(next, le.next, lb.next, first.left, then.left), ⟨then.right.left,
                         ⟨λ wd id lt => trans(then.right.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, le.next, lt, first.left)),
                             first.right.right.left(wd, id, lt)),
@@ -888,8 +1333,8 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
             Tm::if_sound(c, yes, no, w,
                 λ g2 ports2 next2 => Tm::lower_sound(yes, w, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_sound(no, w, g2, ports2, next2),
                 g, ports, next)),
-        Make(_, _) => λ g ports next => trivial,
-        Field(_, _, _) => λ g ports next => trivial,
+        Make(i, args) => λ g ports next => Tm::lower_make_sound(w, g, ports, next, i, args),
+        Field(i, k, of) => λ g ports next => Tm::lower_field_sound(w, g, ports, next, i, k, of),
         Call(f, args) => λ g ports next => Tm::lower_call_sound(w, g, ports, next, f, args),
         Fold(_, _, _) => λ g ports next => trivial,
     }
@@ -1027,11 +1472,13 @@ theorem Fun::env_extend_holds(tys: Nat → RecInfo, values: Valuation(), ps: Lis
     }
 }
 
-theorem Fun::below_onto(ps: List<Ty>): (m: Nat) → (ports: List<Nat>) → Below(ports, m) → Below(Fun::ports_onto(ps, m, ports), Fun::past(ps, m)) {
+theorem Fun::below_onto(tys: Nat → RecInfo, ps: List<Ty>): (g: List<Ty>) → (m: Nat) → (ports: List<Nat>) → Ty::Words(ps) →
+    Below(tys, g, ports, m) → Below(tys, Ty::bind_onto(ps, g), Fun::ports_onto(ps, m, ports), Fun::past(ps, m)) {
     match ps {
-        Nil => λ m ports below => below,
-        Cons(_, rest) => λ m ports below => Fun::below_onto(rest, Succ(m), Cons(m, ports),
-            ⟨m.lt_succ_self(), below_mono(ports, m, Succ(m), Nat::le_succ_r(m, m, m.le_refl()), below)⟩),
+        Nil => λ g m ports _ below => below,
+        Cons(p, rest) => λ g m ports ok below => Fun::below_onto(tys, rest, Cons(p, g), Succ(m), Cons(m, ports), ok.right,
+            ⟨Ty::below_cast(tys, Word(64), p, sym(ok.left), m, Succ(m), m.lt_succ_self()),
+                below_mono(tys, g, m, Succ(m), Nat::le_succ_r(m, m, m.le_refl()), ports, below)⟩),
     }
 }
 
@@ -1065,7 +1512,7 @@ theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
                 let ran = j(lowered, λ r _ => Tm::LowerHolds(f.body, w, f.context(), ports, next, r),
                     Tm::lower_sound(f.body, w, f.context(), ports, next))(call, agree, values, env,
                     Fun::env_extend_holds(w.tys, values, f.params, Nil, Nil, trivial, 0, xs, ok, trivial, Fun::bind_bound(ids, xs, apart)),
-                    Fun::below_onto(f.params, 0, Nil, trivial));
+                    Fun::below_onto(w.tys, f.params, Nil, 0, Nil, ok, trivial));
                 Ty::cast_holds(w.tys, after, c.result, f.result, Word(64), er, Ty::cast(w.tys, body_ty, f.result, Tm::sem(f.body, w, f.context(), env)),
                     Ty::cast_holds(w.tys, after, c.result, body_ty, f.result, eb, Tm::sem(f.body, w, f.context(), env), ran.right.right.right))
             }))))))

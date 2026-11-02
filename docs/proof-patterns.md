@@ -29,6 +29,14 @@ property of Heather.
   a literal width converts in lockstep (about 10k steps) where the same
   lemma at a variable width costs about 130. Stretches over an abstract
   label are elaborated once and cited with `refl` at each use.
+- **Read a compiler's promise off at an abstract output.** Projecting a
+  soundness conclusion (`Tm::LowerHolds(t, …, Tm::lower(t, …))(…).right`)
+  makes the elaborator spell the computed output inside the conclusion's
+  type, and that grows with the program: `wc_step`'s did not finish. A
+  lemma taking `r: Option<Lowered>` and the promise at `r`, matching on `r`
+  and projecting there, costs what the abstract proof costs; the
+  instance passes `Tm::lower(t, …)` for `r` and lets the kernel evaluate it
+  once (`wc_step_lowered`, lib/_tests/native/runtime/rt_lower_tests.hthr).
 
 ## 2. Statements and proof shape
 

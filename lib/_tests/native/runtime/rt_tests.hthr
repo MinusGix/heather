@@ -162,7 +162,8 @@ fn wc_step(s: WcState, nl: Bool, space: Bool) → WcState {
 fn wc_tys(i: Nat) → RecInfo {
     RecInfo(WcState, [Word(64), Word(64), Bit],
         λ t => WcState(t.fst, t.snd.fst, t.snd.snd.fst),
-        λ s => Pair(s.lines, Pair(s.words, Pair(s.inside, trivial))))
+        λ s => Pair(s.lines, Pair(s.words, Pair(s.inside, trivial))),
+        λ t => refl)
 }
 
 fn wc_step_rt() → Fun {
