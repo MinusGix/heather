@@ -45,4 +45,5 @@ vs `Sim` (Linux spec, PR #110, renamed to `SimProgram`), `Eutt::trans` vs
   that elaborates and then mismatches its expected type is refused by the
   caller, which does not know the head was a self-reference. Pinned in
   `lib/_tests/lang/self_reference_tests.hthr` (four noted refusals, one
-  un-noted control, the qualified spelling checking).
+  un-noted control, the qualified spelling checking). Pinning it found
+  [[descend-refusal-misreads-chain-shape]].
