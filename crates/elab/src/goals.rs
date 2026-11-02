@@ -93,6 +93,13 @@ pub(super) struct GoalArena {
     /// on demand from the elaborator's padded Ψ and dropped whenever a slot
     /// or that Ψ changes (`Self::delta_world`).
     delta_world: RefCell<Option<GlobalCtx>>,
+    /// Each slot's binding as [`Self::world`] places it, for the slots
+    /// `0..len` with a goal: slot `k`'s depends only on goal `k`, which never
+    /// changes once pushed, so the cache grows with the goals and is cut back
+    /// with them. Without it every goal oracle shifted every transparent
+    /// slot's context, type and body again (a long `let` chain of `linarith`
+    /// steps paid that per step, `issues/library-gate-module-cold-rail.md`).
+    slot_bindings: RefCell<Vec<GlobalBinding>>,
 }
 
 /// The one goal effect expression leaves may perform.
@@ -135,6 +142,7 @@ impl GoalArena {
         self.spans.get_mut().clear();
         self.frozen.set(false);
         self.delta_world.get_mut().take();
+        self.slot_bindings.get_mut().clear();
     }
 
     /// The elaborator's padded Ψ moved: the δ world is rebuilt from the new
@@ -194,6 +202,7 @@ impl GoalArena {
             self.delta_world.borrow_mut().take();
         }
         entries.truncate(mark);
+        self.slot_bindings.borrow_mut().truncate(mark);
         self.spans.borrow_mut().retain(|_, index| *index < mark);
     }
 
@@ -561,17 +570,21 @@ impl GoalArena {
             return psi.clone();
         }
         let goals = self.entries.borrow();
-        psi.extended((0..self.base as usize).map(|k| match goals.get(k) {
-                Some(Goal { transparent: Some(named), level, .. }) => self.definition(k, level, named),
-                Some(goal) => GlobalBinding::Tm {
+        let mut slots = self.slot_bindings.borrow_mut();
+        for k in slots.len()..goals.len() {
+            let goal = &goals[k];
+            slots.push(match &goal.transparent {
+                Some(named) => self.definition(k, &goal.level, named),
+                None => GlobalBinding::Tm {
                     ctx: goal.cx.gamma.clone(),
                     layer: Layer::Code,
                     ty: Rc::new(goal.ty.clone()),
                     level: goal.level.clone(),
                     body: None,
                 },
-                None => placeholder(),
-            }))
+            });
+        }
+        psi.extended((0..self.base as usize).map(|k| slots.get(k).cloned().unwrap_or_else(placeholder)))
     }
 
     pub(super) fn substitution(&self) -> GlobalSubst {
