@@ -204,7 +204,7 @@ use traits::Traits;
 use types::Types;
 use solution_check::SolutionCheck;
 use oracle::Unfold;
-use unification::{ResolveOb, Sol, unify_ty_root, zonked, zonked_tm};
+use unification::{Guesses, ResolveOb, Sol, unify_ty_root, zonked, zonked_tm};
 pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_ty};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong`/`cong_succ`, monomorphic at
@@ -1392,9 +1392,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
     ) -> Vec<(usize, Rc<Term>)> {
-        self.unify_arg_ty(cx, parameter, argument, n, sols, meta_doms, span)
+        self.unify_arg_ty(cx, parameter, argument, n, sols, meta_doms, guesses, span)
     }
 
     fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span, clash: Option<application::SlotClash>) {
@@ -1412,9 +1413,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
     ) -> R<()> {
-        self.solve_from_expected(cx, result, expected, n, sols, meta_doms, span)
+        self.solve_from_expected(cx, result, expected, n, sols, meta_doms, guesses, span)
     }
 
     fn resolve_application_obligation(
@@ -1468,7 +1470,12 @@ impl application::ImplicitApplicationElab for Elaborator {
         // solved, `Bind<List>`, not the parameter it was written with.
         let display = written
             .zip(prefer.as_deref())
-            .and_then(|(w, key)| self.kinded_goal_display(w, params, key))
+            .and_then(|(w, key)| {
+                // Spelled only once committed: a scratch-world spine's globals
+                // sit `n` places over.
+                let committed = obligation.applied.as_ref().and_then(|t| zonked_tm(t, n, sols));
+                self.kinded_goal_display(cx, w, params, key, committed.as_ref())
+            })
             .unwrap_or(display);
         let mut trace = Vec::new();
         match self.resolve_goal(
@@ -6811,13 +6818,50 @@ impl Elaborator {
             _ => self.spell_term_clean(cx, t),
         };
         let name = &clash.name;
-        match (show(&clash.first), show(&clash.later)) {
+        let first = show(&clash.first);
+        if clash.guessed {
+            // A guess is the head with its leading arguments, the last one
+            // abstracted ([`unification::Guesses`]); the reader who meant
+            // another argument writes the λ.
+            let guess = first.or_else(|| self.spell_type_constructor(cx, clash)).map(|f| format!(" as `{f}`")).unwrap_or_default();
+            let later = match clash.later.as_ref().and_then(show) {
+                Some(later) => format!(", and this argument's type would make it `{later}`"),
+                None => String::new(),
+            };
+            return format!(
+                "; `{name}` was guessed{guess}{later}: no argument fixes it, so it took the type's \
+                 constructor with every argument but the last, and abstracted the last. If \
+                 another argument is the one that varies, give `{name}` as a λ \
+                 (`{name} := λ A => …`)"
+            );
+        }
+        match (first, clash.later.as_ref().and_then(show)) {
             (Some(first), Some(later)) if first != later => format!(
                 "; `{name}` was inferred as `{first}` from an earlier argument, \
                  and this argument's type would make it `{later}`"
             ),
             _ => format!("; `{name}` was inferred from an earlier argument, and this argument's type disagrees"),
         }
+    }
+
+    /// A solution at a type-constructor slot (`M: Type → Type`), spelled
+    /// applied to a hole: `Pair2<Nat>` as `Pair2<Nat, ·>`, the argument it
+    /// abstracted shown where it goes. `None` for any other slot type, or a
+    /// solution that does not spell.
+    fn spell_type_constructor(&self, cx: &Cx, clash: &application::SlotClash) -> Option<String> {
+        let Some(Type::Pi { dom_level, cod_level, dom, cod }) = &clash.dom else { return None };
+        let (Type::Ty(_), Type::Ty(level)) = (&**dom, &**cod) else { return None };
+        let mut hole = cx.clone();
+        hole.push("·".to_string(), (**dom).clone(), dom_level.clone());
+        let tm = Term::App {
+            fun: Rc::new(clash.first.shift_local(1)),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::new(dom.shift_local(1)),
+            cod: Rc::new(cod.shift_local_above(1, 1)),
+            arg: Rc::new(Term::Var(LocalVar(0))),
+        };
+        self.display_type_clean(&hole, &Type::El { level: level.clone(), tm: Rc::new(tm) })
     }
 
     /// The first recorded checking mismatch that has something to say, probed
@@ -9937,7 +9981,7 @@ impl Elaborator {
     /// write was refused for not inhabiting it ([`SolutionCheck`]).
     #[allow(clippy::too_many_arguments)]
     fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], doms: &[Type], span: Span) -> bool {
-        self.unify_checked(cx, pat, subj, n, 0, sols, doms, None, span)
+        self.unify_checked(cx, pat, subj, n, 0, sols, doms, None, Guesses::Take, span)
     }
 
     /// [`Self::unify_root`] for a subject `d` binders past `cx`: the
@@ -9946,12 +9990,13 @@ impl Elaborator {
     /// enclosing the one a comparison happens in, are unified this way.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn unify_under(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol], doms: &[Type], span: Span) -> bool {
-        self.unify_checked(cx, pat, subj, n, d, sols, doms, None, span)
+        self.unify_checked(cx, pat, subj, n, d, sols, doms, None, Guesses::Take, span)
     }
 
     /// The one root of the unifier: its context in `cx`, its writes held to
-    /// `doms` by a [`SolutionCheck`], and `disagree` told of a later
-    /// subject a solved slot meets ([`unification::U::disagree`]).
+    /// `doms` by a [`SolutionCheck`], `disagree` told of a later subject a
+    /// solved slot meets ([`unification::U::disagree`]), and its guesses
+    /// taken, postponed or recorded as `guesses` says.
     #[allow(clippy::too_many_arguments)]
     fn unify_checked(
         &self,
@@ -9963,6 +10008,7 @@ impl Elaborator {
         sols: &mut [Sol],
         doms: &[Type],
         disagree: Option<&dyn Fn(usize, &Term)>,
+        guesses: Guesses<'_>,
         span: Span,
     ) -> bool {
         let type_args = |t: &Term, e: u32| self.spine_type_args(cx, t, e, span);
@@ -9984,6 +10030,7 @@ impl Elaborator {
             admit: &admit,
             disagree,
             next_head: &next_head,
+            guesses,
         };
         unify_ty_root(&u, pat, subj, n, d, sols);
         check.settle(sols)
@@ -10055,10 +10102,11 @@ impl Elaborator {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
     ) -> Vec<(usize, Rc<Term>)> {
         let clashes = RefCell::new(Vec::new());
-        self.unify_arg_reads(cx, dom_orig, arg_ty, n, sols, meta_doms, &clashes, span);
+        self.unify_arg_reads(cx, dom_orig, arg_ty, n, sols, meta_doms, &clashes, guesses, span);
         clashes.into_inner()
     }
 
@@ -10072,6 +10120,7 @@ impl Elaborator {
         sols: &mut [Sol],
         meta_doms: &[Type],
         clashes: &RefCell<Vec<(usize, Rc<Term>)>>,
+        guesses: Guesses<'_>,
         span: Span,
     ) {
         let learned = |sols: &[Sol]| sols.iter().filter(|s| s.solved().is_some()).count();
@@ -10090,9 +10139,9 @@ impl Elaborator {
         let arg_inline = self.unspell_deep_now(arg_ty, 0);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
         let unify_checked =
-            |sols: &mut [Sol], subject: &Type| -> bool { self.unify_root(cx, dom, subject, n, sols, meta_doms, span) };
+            |sols: &mut [Sol], subject: &Type| -> bool { self.unify_checked(cx, dom, subject, n, 0, sols, meta_doms, None, guesses, span) };
         let record = |slot: usize, later: &Term| clashes.borrow_mut().push((slot, Rc::new(later.clone())));
-        let rejected = self.unify_checked(cx, dom, arg_ty, n, 0, sols, meta_doms, Some(&record), span);
+        let rejected = self.unify_checked(cx, dom, arg_ty, n, 0, sols, meta_doms, Some(&record), guesses, span);
         if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
             return;
         }
@@ -10163,6 +10212,7 @@ impl Elaborator {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
     ) -> R<()> {
         // The LGG trigger, read off the scratch-world result type.
@@ -10204,7 +10254,7 @@ impl Elaborator {
             // the slots' types as an argument's read is: `x ≈ z` at `Rat`
             // against `?≈(?*(a, f), ?*(e, b))` at `Int` pairs `?≈` with
             // `Rat::Same` (issues/index-inference-through-unfolding.md).
-            self.unify_root(cx, result_ty, expected, n, sols, meta_doms, span);
+            self.unify_checked(cx, result_ty, expected, n, 0, sols, meta_doms, None, guesses, span);
             // The expected type's weak head can teach only the metas the
             // result type still mentions: unification records into the
             // pattern's metas and nowhere else. Once it mentions none, the
@@ -10218,7 +10268,7 @@ impl Elaborator {
             }
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            self.unify_root(cx, result_ty, &head, n, sols, meta_doms, span);
+            self.unify_checked(cx, result_ty, &head, n, 0, sols, meta_doms, None, guesses, span);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`

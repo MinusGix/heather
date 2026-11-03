@@ -13,7 +13,7 @@ use heather_kernel::term::{GlobalVar, LocalSubst, Term, Type};
 use heather_syntax::{Expr, ExprKind, LamBinder, Span, Ty, TyKind};
 
 use crate::surface::is_projection_section;
-use crate::unification::{DeferredArg, EarlierArg, ResolveOb, Sol, zonked, zonked_tm};
+use crate::unification::{DeferredArg, EarlierArg, Guesses, ResolveOb, Sol, zonked, zonked_tm};
 use crate::{Cx, ElabError, R, err};
 
 mod callable;
@@ -102,7 +102,13 @@ pub(crate) enum ObligationProgress {
 /// before its discharge (a re-plan, an error) records nothing.
 #[derive(Default)]
 pub(crate) struct OwedChecks {
-    owed: Vec<(Type, Type, Level, Span, Option<(usize, Rc<Term>)>)>,
+    /// Each owed comparison, with the implicit it has something to say
+    /// about: a slot this argument's type disagreed with (`Some` subject), or
+    /// one the guess pass guessed from it (`None`).
+    owed: Vec<(Type, Type, Level, Span, Option<(usize, Option<Rc<Term>>)>)>,
+    /// Set when a read left one of its guesses for later
+    /// ([`Guesses::Postpone`]): the call then owes a guess pass.
+    postponed: std::cell::Cell<bool>,
 }
 
 /// An implicit the unifier had already solved, met again by a later
@@ -114,19 +120,24 @@ pub(crate) struct OwedChecks {
 pub(crate) struct SlotClash {
     /// The implicit's parameter name.
     pub(crate) name: String,
+    /// Its solution was a guess the call took last ([`Guesses`]), not a
+    /// consequence of the equation.
+    pub(crate) guessed: bool,
     /// Its declared type, in the committed world (a `Ty` slot's solution is
     /// a code and is shown as the type it decodes to).
     pub(crate) dom: Option<Type>,
     /// What it was solved to, and what this argument's type would have made
-    /// it, both committed-world terms.
+    /// it, both committed-world terms. No `later` is a guess with no
+    /// disagreement: the guess is what the argument's mismatch follows from.
     pub(crate) first: Rc<Term>,
-    pub(crate) later: Rc<Term>,
+    pub(crate) later: Option<Rc<Term>>,
 }
 
 impl OwedChecks {
     /// Learn from an inferred argument's type `got` at the scratch-world
     /// parameter type `dom`, and owe their comparison, reported at the
-    /// argument's own span `at` (`span` is the learning's, as before).
+    /// argument's own span `at` (`span` is the learning's, as before). A
+    /// guess the read meets waits for [`Self::guess`].
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn learn(
         &mut self,
@@ -141,8 +152,63 @@ impl OwedChecks {
         span: Span,
         at: Span,
     ) {
-        let clash = elab.unify_application_argument_type(cx, dom, &got, n, sols, meta_doms, span).into_iter().next();
+        let clash = elab
+            .unify_application_argument_type(cx, dom, &got, n, sols, meta_doms, Guesses::Postpone(&self.postponed), span)
+            .into_iter()
+            .next()
+            .map(|(slot, later)| (slot, Some(later)));
         self.owed.push((dom.clone(), got, level.clone(), at, clash));
+    }
+
+    /// The flag a read outside [`Self::learn`] — the expected type's —
+    /// postpones its guesses into.
+    pub(crate) fn postponed(&self) -> &std::cell::Cell<bool> {
+        &self.postponed
+    }
+
+    /// The **guess pass** (docs/elaborator-principles-survey.md P2,
+    /// issues/unifier-guesses-postponed.md): every forced solution is in —
+    /// each inferred argument's type and the expected type have been read
+    /// with their guesses postponed — and a slot is still open. Read them
+    /// again in the same order with the guesses taken, each recorded in
+    /// `guessed`; an argument whose read made a guess, or met a slot that
+    /// disagrees with one, keeps the slot to name if its comparison is
+    /// refused. `expected` is the call's result type and its expected type,
+    /// when the expected type was read. Nothing to do when no read
+    /// postponed a guess.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn guess(
+        &mut self,
+        elab: &impl ImplicitApplicationElab,
+        cx: &Cx,
+        expected: Option<(&Type, &Type)>,
+        n: u32,
+        sols: &mut [Sol],
+        meta_doms: &[Type],
+        guessed: &std::cell::RefCell<Vec<usize>>,
+        span: Span,
+    ) -> R<()> {
+        if !self.postponed.get() || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
+            return Ok(());
+        }
+        for (dom, got, _, _, said) in &mut self.owed {
+            let before = guessed.borrow().len();
+            let clash = elab
+                .unify_application_argument_type(cx, dom, got, n, sols, meta_doms, Guesses::Record(guessed), span)
+                .into_iter()
+                .find(|(slot, _)| guessed.borrow().contains(slot));
+            if said.is_none() {
+                *said = clash
+                    .map(|(slot, later)| (slot, Some(later)))
+                    .or_else(|| guessed.borrow().get(before).map(|&slot| (slot, None)));
+            }
+        }
+        if let Some((result, expected)) = expected
+            && sols.iter().any(|s| matches!(s, Sol::Unsolved))
+        {
+            elab.solve_application_from_expected(cx, result, expected, n, sols, meta_doms, Guesses::Record(guessed), span)?;
+        }
+        Ok(())
     }
 
     /// Record every owed comparison, each domain under the call's solutions,
@@ -153,7 +219,7 @@ impl OwedChecks {
         elab: &impl ImplicitApplicationElab,
         cx: &Cx,
         substitution: &GlobalSubst,
-        clash: impl Fn(usize, Rc<Term>) -> Option<SlotClash>,
+        clash: impl Fn(usize, Option<Rc<Term>>) -> Option<SlotClash>,
     ) {
         for (dom, got, level, span, later) in self.owed {
             let clash = later.and_then(|(slot, later)| clash(slot, later));
@@ -212,6 +278,7 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
     ) -> Vec<(usize, Rc<Term>)>;
 
@@ -234,6 +301,7 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
     ) -> R<()>;
 
@@ -1040,7 +1108,7 @@ fn apply_implicit_planned(
                     elem: Rc::new(elem),
                     len: Rc::new(Term::NatLit((items.len() as u64).into())),
                 };
-                elab.unify_application_argument_type(cx, &dom, &counted, n, &mut sols, &meta_doms, span);
+                elab.unify_application_argument_type(cx, &dom, &counted, n, &mut sols, &meta_doms, Guesses::Take, span);
             }
             // A default waits for the earlier arguments it mentions as well
             // as for its domain.
@@ -1189,12 +1257,16 @@ fn apply_implicit_planned(
         spill.drain(..taken);
     }
 
+    let expected = expected.filter(|_| spill.is_empty());
     if let Some(expected) = expected
-        && spill.is_empty()
         && sols.iter().any(|solution| solution.solved().is_none())
     {
-        elab.solve_application_from_expected(cx, &ty, expected, n, &mut sols, &meta_doms, span)?;
+        elab.solve_application_from_expected(cx, &ty, expected, n, &mut sols, &meta_doms, Guesses::Postpone(owed.postponed()), span)?;
     }
+    // Every forced solution is in; a guess any read postponed is taken now,
+    // and remembered so that a refusal names it.
+    let guessed = std::cell::RefCell::new(Vec::new());
+    owed.guess(elab, cx, expected.map(|e| (&ty, e)), n, &mut sols, &meta_doms, &guessed, span)?;
     retry_obligations(
         elab,
         cx,
@@ -1312,13 +1384,15 @@ fn apply_implicit_planned(
         entries.push(GlobalEntry::Tm(solution));
     }
     let substitution = GlobalSubst { entries };
+    let guessed = guessed.into_inner();
     owed.discharge(elab, cx, &substitution, |slot, later| {
         let first = Rc::clone(sols.get(slot)?.solved()?);
+        let guessed = guessed.contains(&slot);
         let name = slot_param.get(slot).and_then(|&p| params.get(p))?.name.clone();
         // A slot's type is in the scratch world; only a meta-free one is
         // carried over, which is the one a message can spell.
         let dom = meta_doms.get(slot).and_then(|d| zonked(d, n, &sols));
-        Some(SlotClash { name, dom, first, later })
+        Some(SlotClash { name, guessed, dom, first, later })
     });
     let (term, ty) = (
         term.apply_global(&substitution),
@@ -1448,6 +1522,7 @@ mod tests {
             _n: u32,
             _sols: &mut [Sol],
             _meta_doms: &[Type],
+            _guesses: Guesses<'_>,
             _span: Span,
         ) -> Vec<(usize, Rc<Term>)> {
             assert!(self.inferred.is_some(), "the fixture has no inferred argument");
@@ -1469,6 +1544,7 @@ mod tests {
             _n: u32,
             sols: &mut [Sol],
             _meta_doms: &[Type],
+            _guesses: Guesses<'_>,
             _span: Span,
         ) -> R<()> {
             self.events.borrow_mut().push("expected");

@@ -1730,17 +1730,37 @@ impl Elaborator {
     /// `Bind<M>` shown as `Bind<List>` — for a class over a type constructor
     /// (issues/higher-kinded-classes.md). `key` is
     /// [`Self::solver_carrier_head`]'s answer; `None` for every other goal.
+    ///
+    /// A carrier that fixes some of the constructor's arguments shows them,
+    /// `Bind<Pair2<Bool, ·>>` rather than `Bind<Pair2>`
+    /// (issues/applied-meta-approximation-diagnostics.md): `applied`, the
+    /// call's spine as it was solved, gives the carrier, spelled in `cx`
+    /// when it spells.
     pub(crate) fn kinded_goal_display(
         &self,
+        cx: &crate::Cx,
         written: &Ty,
         params: &[ParamMeta],
         key: &str,
+        applied: Option<&Term>,
     ) -> Option<String> {
         let reference = self.class_ref_of_ty(written)?;
         let class = self.lookup_class(&reference.name)?;
         if !class.is_kinded() {
             return None;
         }
+        let carrier = |name: &str| -> Option<String> {
+            let position = params.iter().position(|p| !p.is_type && p.name == name)?;
+            let mut spine = Vec::new();
+            let mut head = applied?;
+            while let Some((fun, arg)) = crate::spelling::app_of(head) {
+                spine.push(arg);
+                head = fun;
+            }
+            spine.reverse();
+            let shown = self.spell_term_clean(cx, spine.get(position)?)?;
+            shown.contains('<').then_some(shown)
+        };
         let shown = key.rsplit("::").next().unwrap_or(key).to_string();
         let mut changed = false;
         let args: Vec<Ty> = reference
@@ -1752,7 +1772,8 @@ impl Elaborator {
                     if args.is_empty() && params.iter().any(|p| !p.is_type && p.name == *name) =>
                 {
                     changed = true;
-                    Ty { kind: TyKind::Named { name: shown.clone(), args: Vec::new() }, span: a.span }
+                    let shown = carrier(name).unwrap_or_else(|| shown.clone());
+                    Ty { kind: TyKind::Named { name: shown, args: Vec::new() }, span: a.span }
                 }
                 _ => a.clone(),
             })

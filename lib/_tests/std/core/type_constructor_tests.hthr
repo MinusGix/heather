@@ -53,6 +53,17 @@ fn infer_result_in_let(r: Result<Nat, Bool>) → Result<Nat, Bool> {
 // `M := Pair2<Bool>`, η-short.
 inductive Pair2<A, B> { Both(a: A, b: B) }
 fn infer_default_slot(p: Pair2<Bool, Nat>) → Pair2<Bool, Nat> { pick(p) }
+// That abstraction is a guess, and a guess is taken last
+// (issues/unifier-guesses-postponed.md): the expected type `PF(Nat)` forces
+// `M := PF`, which the argument's guess `M := Pair2<Nat, ·>` used to take
+// first. In a body, in a checking position, and at an open element type.
+fn PF(A: Type) → Type { Pair2<A, Bool> }
+fn guess_after_expected(p: Pair2<Nat, Bool>) → PF(Nat) { pick(p) }
+fn guess_after_expected_let(p: Pair2<Nat, Bool>) → PF(Nat) {
+    let q: PF(Nat) = pick(p);
+    q
+}
+fn guess_after_expected_open<A>(p: Pair2<A, Bool>) → PF(A) { pick_open(p) }
 fn infer_in_let(x: Option<Nat>) → Option<Nat> {
     let y: Option<Nat> = pick(x);
     y
@@ -120,6 +131,10 @@ fn ambiguous_constructor() → Nat { twice(3) }
 // expect-error: no instance for `Bind<List>`
 fn no_instance_at_list(xs: List<Nat>) → List<Nat> { twice(xs) }
 
+// A carrier fixing an argument shows it, and the hole it abstracts.
+// expect-error: no instance for `Bind<Pair2<Bool, ·>>`
+fn no_instance_at_partial(p: Pair2<Bool, Nat>) → Pair2<Bool, Nat> { twice(p) }
+
 // expect-error: `Option` takes 1 type argument(s), but the expected type constructor provides 2
 fn too_few_arguments(x: Option<Nat>) → Nat { 0 + pick2(Option, x) }
 
@@ -130,6 +145,10 @@ fn too_many_parameters(r: Result<Nat, Bool>) → Result<Nat, Bool> { pick_at(Res
 // re-abstracted at another argument.
 // expect-error: but `Result<Nat, Nat>` is expected here
 fn result_slot_mismatch(r: Result<Bool, Nat>) → Result<Bool, Nat> { pick(r) }
+
+// With nothing to force it, `M` is the guess, and the refusal names it.
+// expect-error: `M` was guessed as `Pair2<Nat, ·>`
+fn guess_named(p: Pair2<Nat, Bool>) → Pair2<Nat, Bool> { pick(p) }
 
 // expect-error: must provide 1 before its `Type`; it provides 2
 fn partial_wrong_arity(p: Pair2<Bool, Nat>) → Pair2<Bool, Nat> { pick2(Pair2<Bool>, p) }
