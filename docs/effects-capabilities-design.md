@@ -222,23 +222,67 @@ meaning. Sequencing is `reads_bind`, and loops are the next lemma (§4).
 
 ## 4. Loops and fuel
 
-A source's `Repeat` is `ITree::iter` at fuel `n`, which is cut after `n`
-passes. A surface loop over a world is a `for` over a list of `passes`,
-which runs at most `passes.len()` times. They agree whenever the tree is not
-cut. `cat_agrees_piped` is at fuel 4 against a world of three reads.
+**Today.** A source's `Repeat` is `ITree::iter` at fuel `n`, which is cut
+after `n` passes. A surface loop over a world is a `for` over a list of
+`passes`, which runs at most `passes.len()` times. They agree whenever the
+tree is not cut. `cat_agrees_piped` is at fuel 4 against a world of three
+reads.
 
-The loop lemma for `Reads` is the next proof, and two statements are
-candidates:
+**Why that has to go** (`issues/effectful-loops-without-passes.md`). The
+bound is real: a world is any function of the history, so "read until the
+input ends" diverges for some worlds (`yes | tac`), and a total `fn` cannot
+mean it. But `passes` puts that partiality in the worst place:
 
-- `Io::against(iter(n, body, a), io)` equals a `for` over `List::range(n)`
-  of the step;
-- or the same as an inequality that ignores `Cut`.
+- running out reads as an outcome the binary never has: `Io::cat` returns
+  status 0 when its outer `passes` run out, `tac` and `sort` write a
+  truncated read as the whole input, and `write_bytes` reports a failure,
+  where the tree is `Cut` and claims nothing;
+- it is a ghost value posing as an argument: the compiled loop has no
+  counter, so `runtime fn main` could only supply it by counting (not GNU's
+  behaviour) or ignoring it (a signature that lies). `while … fuel` compiles
+  to a counting loop for the same reason, so it is not the answer for loops
+  over a world;
+- `Io::Reads` is an equality at every world, and a loop tree at a fixed
+  fuel is `Cut` (read as `None`) at some of them, so no loop lemma of that
+  shape exists.
 
-The surface's `while … fuel n exhausted e`, designed in
-`docs/sequencing-surface-design.md` §5.3, is the spelling programs will
-want. It is not built (`imperative-statements-built`: "fuelled while"
-open). Until it is, a program takes its `passes` list as a parameter, and
-`runtime fn main` will supply it.
+**Decided (Minus, 2026-11-03): the meaning is coinductive, and agreement is
+up to taus.** A function whose body has a loop over a world with no measure
+means `Io → Partial<Mutated<Io, R>>`, the world threaded over the delay
+monad (`Partial<B> = CoTree<B>(Events::none())`,
+`docs/partial-functions-design.md` §4.1; its §4.4 is this case). The world
+answers every call, so the only coinductive structure left is silent steps.
+That is the `runtime fn` setup's one piece of magic: the return type is
+wrapped, and the elaborator's `mut self` threading becomes a bind in the
+`Partial` carrier. A loop with no measure is allowed in any carrier that has
+an iteration operator.
+
+- **Agreement.** `Io::against` gets a corecursive form that reads a
+  `CoTree` over Linux's events into `Partial<Mutated<Io, R>>`, and
+  `Io::Reads` becomes "`Eutt` at every world". `reads_bind` and the loop
+  lemma are restated up to `Eutt` and proved once. A lowering with one `Tau`
+  per pass on both sides (lockstep) is a fast path that a tactic proves by
+  induction on depth; it is not required, because compiler passes that
+  change how often a loop goes round preserve `Eutt` and not lockstep.
+- **What specs see.** `Returns(f(io), m) → P(m)` (fixpoint induction), a
+  `Returns` with a count at a scripted world by `refl` (today's probes keep
+  their number as the count), and divergence over every count. All of these
+  are invariant under `Eutt`, so it shows up only in "program ≈ program"
+  statements.
+- **Diverging runs.** `Partial` forgets what a run that never returns wrote.
+  Reactive specs (`yes`, a server, `cat` on a terminal) are stated on the
+  tree over Linux's events, where writes are visible and `Eutt::traces`
+  carries them.
+- **Rejected:** a budget in `Io` (CakeML's clock in the state: honest, and
+  no codata, but `Io` changes shape for every customer and results are junk
+  when exhausted; it survives as the observation of `Partial` at a count);
+  `while … fuel` (above); a finite-input world (rules out terminals and the
+  most-general `World()`); an interaction tree as the surface meaning (keeps
+  traces, but drops world threading from user code).
+
+The work, in `issues/`: `partial-fn-surface`, `eutt-iteration-and-io-reading`,
+`codata-up-to-friends-round-2` (up-to proofs), `eutt-setoid-rewrite` and
+`eutt-tactics`; then `effectful-loops-without-passes` moves the customers.
 
 ## 5. Uniqueness is the setup's judgment
 
@@ -307,6 +351,9 @@ reversed:
 4. **The capability is the world a computation layer threads, not an `rt`
    type** (§8.1), against setups design §8's "rt gains capability types".
    *Taken: linearity by construction.*
+5. **Loops over a world mean `Io → Partial<Mutated<Io, R>>`, agreement is up
+   to taus** (§4), over a budget in `Io`, `while … fuel`, or a finite-input
+   world. *Decided by Minus, 2026-11-03.*
 
 ## 8. Capabilities in `rt`: the computation layer
 

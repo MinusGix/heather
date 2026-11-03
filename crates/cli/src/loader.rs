@@ -101,6 +101,7 @@ pub fn load_providing(root: &Path, search: &[PathBuf], provided: &[&str]) -> Res
         out: Vec::new(),
         imports: Vec::new(),
         by_name: HashMap::new(),
+        common: None,
     };
     w.visit(root)?;
     Ok(w.out)
@@ -197,6 +198,7 @@ fn load_many_inner<'a>(
         out: Vec::new(),
         imports: Vec::new(),
         by_name: HashMap::new(),
+        common: None,
     };
     for root in roots {
         w.visit(root)?;
@@ -227,6 +229,11 @@ struct Walk<'a> {
     /// error: names are how imports refer to each other, so a duplicate makes
     /// every reference to it ambiguous in a way qualification cannot fix.
     by_name: HashMap<String, PathBuf>,
+    /// The common prelude (`heather_elab::COMMON_MODULE`) and the names of
+    /// its closure, found on the first visit: `None` before it, `Some(None)`
+    /// when no search directory holds it. Every module outside the closure
+    /// imports it implicitly (issues/std-prelude-facade.md).
+    common: Option<Option<(PathBuf, std::collections::HashSet<String>)>>,
 }
 
 impl Walk<'_> {
@@ -288,6 +295,13 @@ impl Walk<'_> {
             }
             Err(_) => Vec::new(),
         };
+        let mut imports = imports;
+        if let Some((path, closure)) = self.common_prelude()?
+            && !closure.contains(&name)
+            && !imports.iter().any(|(m, _)| m == heather_elab::COMMON_MODULE)
+        {
+            imports.insert(0, (heather_elab::COMMON_MODULE.to_string(), path));
+        }
         self.stack.push((canon.clone(), name.clone()));
         for (_, dep) in &imports {
             self.visit(dep)?;
@@ -298,6 +312,40 @@ impl Walk<'_> {
         self.out.push(Module { name, path: canon, src });
         self.imports.push(imports.into_iter().map(|(_, dep)| self.done[&dep.canonicalize().expect("visited")].clone()).collect());
         Ok(())
+    }
+
+    /// The common prelude's file and the names of its closure, found on the
+    /// `-L` search path (not beside a file: a run without the library on its
+    /// path has no prelude, even for a file that sits next to it), once per
+    /// walk. Its closure is read by a walk of its own, so a module inside it
+    /// is known before any of them is visited here; a module outside it gets
+    /// it as a first import.
+    fn common_prelude(&mut self) -> Result<Option<(PathBuf, std::collections::HashSet<String>)>, LoadError> {
+        if self.common.is_none() {
+            let found = match self.resolve(heather_elab::COMMON_MODULE, Path::new("")) {
+                Ok(path) => {
+                    let mut inner = Walk {
+                        search: self.search,
+                        below: self.below.clone(),
+                        overlays: self.overlays,
+                        provided: self.provided,
+                        done: HashMap::new(),
+                        stack: Vec::new(),
+                        out: Vec::new(),
+                        imports: Vec::new(),
+                        by_name: HashMap::new(),
+                        // Inside the prelude's own closure nothing imports it.
+                        common: Some(None),
+                    };
+                    inner.visit(&path)?;
+                    Some((path, inner.out.into_iter().map(|m| m.name).collect()))
+                }
+                Err(Unresolved::Missing(_)) => None,
+                Err(Unresolved::Refused(e)) => return Err(e),
+            };
+            self.common = Some(found);
+        }
+        Ok(self.common.clone().flatten())
     }
 
     /// `import m;` from `from`: the importing file's directory, then the `-L`

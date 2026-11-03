@@ -61,3 +61,7 @@ place of "all of std sees all of std".
 - **[[numerals-without-algebra-import]]** owns the syntax classes read by
   identity. Assumed here: only that a literal does not need its class's name
   in scope, so the facade need not export it for literals to work.
+
+## Log
+
+- 2026-11-03: 2026-11-03: Built (thread 'Design a shared common prelude'): `lib/std/common.hthr`, implicit for every module later than it in a run's order (loader, `semantic::module_imports`, elaborator agree). Two rules the facade needed, decided with Minus: a type exported through a facade carries its own module's members (read at lookup), and the prelude's closure is visible qualified-only (instances, designations, `nat::…`). docs/modules-design.md §3.5. Not yet done: removing the now-redundant import lines across lib (a mechanical follow-up; explicit imports stay valid since a facade name is the same declaration). Probe: lib/_tests/std/common_tests.hthr.

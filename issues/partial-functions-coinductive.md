@@ -4,7 +4,7 @@ status: open
 labels: [design,termination,coinduction,native]
 area: language
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-03
 ---
 
 Item 5, part 2, of the fundamental-improvements memo of 2026-10-31 (Claude Doc, https://claude.ai/artifact/Y2Jo9y9Mgd52QdguvaL43s): a function that may not terminate says `partial`
@@ -60,3 +60,6 @@ formatter is not a customer: its fuel is a termination witness, which
   `Program::rec` is [[coitree-rec-program-bridge]]. Left here: the surface
   (round 2) and runtime loops (round 3). Also not yet done: proving that
   `Ω` never returns, which needs a lemma saying a λ's only reduct is itself.
+- 2026-11-03: Round 2 is now [[partial-fn-surface]], and round 3 (runtime loops) is
+  [[effectful-loops-without-passes]], after Minus decided that loops over a
+  world mean `Io → Partial<Mutated<Io, R>>` (`docs/effects-capabilities-design.md` §4).

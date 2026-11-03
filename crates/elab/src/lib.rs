@@ -195,7 +195,8 @@ use representations::Representations;
 use slots::{Ingredient, Slot};
 pub(crate) use surface::{count_holes, count_holes_expr, count_tactic_slots, strengthen_global};
 use surface::{
-    bool_condition, expression_as_type, for_each_free_slot, has_free_slots,
+    Condition, condition_connective, condition_expression, decide_call, expression_as_type, is_true_of,
+    lowered_condition, rebuild_connective, for_each_free_slot, has_free_slots,
     lower_argument_slots, slot_profile,
 };
 use traits::Traits;
@@ -215,6 +216,7 @@ pub const PRELUDE: &str = include_str!("prelude.hthr");
 /// (docs/modules-design.md §3.2). Public so a loader can skip resolving it to
 /// a file — there is no `prelude.hthr` on disk to find.
 pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
+pub const COMMON_MODULE: &str = names::COMMON_MODULE;
 
 pub use diagnostics::{ElabError, GoalReport, GoalSource, IndexedRoute, KernelSite, LintFix, Warning};
 pub use heather_syntax::Span;
@@ -498,6 +500,14 @@ const BUILTIN_METHODS: [&str; 8] = [
 /// `docs/traits-named-upcast-design.md` §2.1). `None` for every other answer,
 /// which is every answer already at the goal's own class.
 type Upcast = Option<(Term, Type)>;
+
+/// What an `if` condition's expression is, for its `Bool` reading
+/// (`Elaborator::condition_type`).
+enum ConditionType {
+    Bool(Term, Type),
+    Other(String),
+    Unread,
+}
 
 #[derive(Clone)]
 struct OperatorFallbackUse {
@@ -2611,6 +2621,20 @@ impl Elaborator {
                     exported,
                 }),
             }
+        }
+        // The common prelude, implicitly, when it is already in this world:
+        // the modules it exports from are elaborated before it and so never
+        // import it, and every later module's closure holds it, as the
+        // loader and the image keys add it (issues/std-prelude-facade.md).
+        if module != COMMON_MODULE
+            && self.names.has_module(COMMON_MODULE)
+            && scope.imports.iter().all(|i| i.module != COMMON_MODULE)
+        {
+            scope.imports.push(ImportSpec {
+                module: COMMON_MODULE.to_string(),
+                listed: Vec::new(),
+                exported: Vec::new(),
+            });
         }
         self.names.enter_scope(scope);
         // The interface boundary is per module: the definitions this module
@@ -7161,8 +7185,8 @@ impl Elaborator {
                 e.span,
             );
         }
-        if let Some((condition, evidence)) = bool_condition(e) {
-            return self.elab_condition(cx, e, &condition, evidence, expected);
+        if let Some(condition) = lowered_condition(e) {
+            return self.elab_condition(cx, e, &condition, expected);
         }
         let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
         Ok((self.reduced_decision(cx, e, term), ty, level))
@@ -7178,12 +7202,15 @@ impl Elaborator {
     /// - a **`Bool`**: the Bool itself. `decide_bit<b.IsTrue()>()` is `b` by
     ///   the `IsTrue` instance's own `bit := b`, so `if b` is the match on `b`
     ///   that the frontends and `rt` read, with nothing to unfold; with
-    ///   evidence (`if h: b`) it is `decide<b.IsTrue()>()`, so `h: b.IsTrue()`.
+    ///   evidence (`if h: b`) it is `decide<b.IsTrue()>()`, so `h: b.IsTrue()`;
+    /// - a **connective mixing the two** (`b ∧ n = 0`, `(n = 0) && b`): the
+    ///   proposition with each `Bool` operand read as `b.IsTrue()`
+    ///   ([`Self::mixed_condition`]).
     ///
-    /// A condition that is neither is refused naming both readings; one that
-    /// does not elaborate as a term, or is a type, keeps the proposition
+    /// A condition that is none of these is refused naming the readings; one
+    /// that does not elaborate as a term, or is a type, keeps the proposition
     /// reading's own error.
-    fn elab_condition(&self, cx: &Cx, e: &Expr, condition: &Expr, evidence: bool, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+    fn elab_condition(&self, cx: &Cx, e: &Expr, c: &Condition, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         let as_proposition = matching::MatchRollback::new(self);
         let proposition_error = match self.elab_infer_written(cx, e, expected) {
             Ok((term, ty, level)) => {
@@ -7193,52 +7220,107 @@ impl Elaborator {
             Err(error) => error,
         };
         drop(as_proposition);
-        let bool_ty = Ty { kind: TyKind::Named { name: "bool::Bool".to_string(), args: Vec::new() }, span: condition.span };
-        let as_bool = matching::MatchRollback::new(self);
-        let Ok((term, ty, _)) = self.elab_infer(cx, condition) else { return Err(proposition_error) };
-        let Ok((bool_ty, _)) = self.elab_ty(cx, &bool_ty) else { return Err(proposition_error) };
-        let Ok(head) = self.whnf(cx, &ty, condition.span) else { return Err(proposition_error) };
-        if matches!(head, Type::Ty(_)) {
-            return Err(proposition_error);
+        let mut not_bool = None;
+        if let Some(condition) = &c.expr {
+            match self.condition_type(cx, condition, !c.evidence) {
+                ConditionType::Bool(term, bool_ty) => {
+                    if !c.evidence {
+                        return Ok((term, bool_ty, Level::Zero));
+                    }
+                    // The Bool read as the proposition its `IsTrue` instance decides.
+                    let span = condition.span;
+                    let is_true = Ty { kind: TyKind::OfExpr(Box::new(is_true_of(condition))), span };
+                    return self.elab_infer_written(cx, &decide_call(is_true, true, span), expected).map_err(|_| proposition_error);
+                }
+                ConditionType::Other(got) => not_bool = Some((got, condition.span)),
+                ConditionType::Unread => {}
+            }
         }
-        if self.goal_oracle().convert_type(&cx.gamma, Layer::Prog, &head, &bool_ty, &Level::Zero).is_err() {
-            let got = self.display_type_clean(cx, &ty).unwrap_or_else(|| "this type".into());
+        if let Some(mixed) = self.mixed_condition(cx, c, expected) {
+            return mixed;
+        }
+        if let Some((got, span)) = not_bool {
             return err(
                 format!(
                     "a condition is a proposition, decided by its `Decide` instance, or a `Bool`; \
                      this is a value of `{got}`"
                 ),
-                condition.span,
+                span,
             );
         }
-        if !evidence {
-            as_bool.commit();
-            return Ok((term, bool_ty, Level::Zero));
+        Err(proposition_error)
+    }
+
+    /// What a condition's expression elaborates to: a `Bool` (the term and
+    /// the elaborated `Bool` type), a value of another type (spelled), or
+    /// nothing the `Bool` reading can use (no elaboration, or a type). Every
+    /// trace of the attempt is rolled back unless `keep` and it is a `Bool`.
+    fn condition_type(&self, cx: &Cx, condition: &Expr, keep: bool) -> ConditionType {
+        let attempt = matching::MatchRollback::new(self);
+        let bool_ty = Ty { kind: TyKind::Named { name: "bool::Bool".to_string(), args: Vec::new() }, span: condition.span };
+        let Ok((term, ty, _)) = self.elab_infer(cx, condition) else { return ConditionType::Unread };
+        let Ok((bool_ty, _)) = self.elab_ty(cx, &bool_ty) else { return ConditionType::Unread };
+        let Ok(head) = self.whnf(cx, &ty, condition.span) else { return ConditionType::Unread };
+        if matches!(head, Type::Ty(_)) {
+            return ConditionType::Unread;
         }
-        // The Bool read as the proposition its `IsTrue` instance decides.
-        drop(as_bool);
-        let span = condition.span;
-        let is_true = Expr {
-            kind: ExprKind::Dot { recv: Box::new(condition.clone()), name: "IsTrue".into(), tyargs: Vec::new(), args: Some(Vec::new()), named: Vec::new() },
-            span,
-        };
-        let call = Expr {
-            kind: ExprKind::App {
-                head: Box::new(Expr {
-                    kind: ExprKind::TyApp {
-                        head: Box::new(Expr { kind: ExprKind::Var("decide".into()), span }),
-                        args: vec![Ty { kind: TyKind::OfExpr(Box::new(is_true)), span }],
-                    },
-                    span,
-                }),
-                args: Vec::new(),
-                named: Vec::new(),
-                explicit: false,
-                goal_oriented: false,
-            },
-            span,
-        };
-        self.elab_infer_written(cx, &call, expected).map_err(|_| proposition_error)
+        if self.goal_oracle().convert_type(&cx.gamma, Layer::Prog, &head, &bool_ty, &Level::Zero).is_err() {
+            return ConditionType::Other(self.display_type_clean(cx, &ty).unwrap_or_else(|| "this type".into()));
+        }
+        if keep {
+            attempt.commit();
+        }
+        ConditionType::Bool(term, bool_ty)
+    }
+
+    /// A connective whose operands are not all of one kind
+    /// (issues/mixed-bool-prop-condition.md): the condition read on the
+    /// proposition side, each `Bool` operand as `b.IsTrue()`, so
+    /// `if b ∧ n = 0` decides `b.IsTrue() ∧ n = 0`, whose bit is
+    /// `b && n.same(0)` by the instances, and `if h: b ∧ n = 0` binds the
+    /// evidence of both. The proposition side is the one that keeps evidence
+    /// available. A `Bool` subtree is one operand (`(a && b).IsTrue()`), and
+    /// `&&`, `||` and `!` between a proposition and a `Bool` are read as
+    /// `∧`, `∨` and `¬`. `None` when the condition is no connective or no
+    /// operand is a `Bool`: the readings already tried own the error.
+    ///
+    /// `&&` binds tighter than `=`, so `b && n = 0` is `(b && n) = 0`, never
+    /// this reading; it is written `b ∧ n = 0` or `b && (n = 0)`.
+    fn mixed_condition(&self, cx: &Cx, c: &Condition, expected: Option<&Type>) -> Option<R<(Term, Type, Level)>> {
+        condition_connective(&c.ty)?;
+        let mut bools = 0;
+        let proposition = self.mixed_operand(cx, &c.ty, true, &mut bools);
+        if bools == 0 {
+            return None;
+        }
+        let call = decide_call(proposition, c.evidence, c.ty.span);
+        let attempt = matching::MatchRollback::new(self);
+        let read = self.elab_infer_written(cx, &call, expected);
+        if read.is_ok() {
+            attempt.commit();
+        }
+        Some(read.map(|(term, ty, level)| (self.reduced_decision(cx, &call, term), ty, level)))
+    }
+
+    /// One operand of [`Self::mixed_condition`], rebuilt: a `Bool` as its
+    /// `IsTrue`, a connective over its rebuilt operands, anything else as
+    /// written. `root` is the whole condition, already known not to be a
+    /// `Bool`.
+    fn mixed_operand(&self, cx: &Cx, ty: &Ty, root: bool, bools: &mut usize) -> Ty {
+        if !root
+            && let Some(operand) = condition_expression(ty)
+            && let ConditionType::Bool(..) = self.condition_type(cx, &operand, false)
+        {
+            *bools += 1;
+            return Ty { kind: TyKind::OfExpr(Box::new(is_true_of(&operand))), span: ty.span };
+        }
+        match condition_connective(ty) {
+            Some((name, operands)) => {
+                let operands = operands.iter().map(|o| self.mixed_operand(cx, o, false, bools)).collect();
+                rebuild_connective(name, operands, ty.span)
+            }
+            None => ty.clone(),
+        }
     }
 
     /// `decide_bit<P>()` at a resolved instance, read as the instance's own

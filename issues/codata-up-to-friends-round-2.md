@@ -4,7 +4,8 @@ status: open
 labels: [codata,coinduction,elaborator]
 area: interaction-trees
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-03
+milestone: [nh-effects]
 ---
 
 Corecursion up to friends landed for unindexed codata and monomorphic
@@ -48,3 +49,10 @@ Smaller gaps, each refused with its reason today:
 - **`docs/codata-elaborator-design.md` §5.5** owns the round-1 carrier and
   friend mode. Assumed here: only that the step is structural recursion on
   the free carrier and friend nodes read their arguments' nodes from `ih`.
+
+## Log
+
+- 2026-11-03: The up-to proofs for `Eutt` (up to `trans` and up to `bind`) are now wanted
+  by `nh-effects`: [[eutt-iteration-and-io-reading]] states its loop lemmas
+  first and logs which proofs wait here, and [[eutt-tactics]] builds its
+  coinduction tactic on them (`docs/effects-capabilities-design.md` §4).

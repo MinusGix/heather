@@ -157,7 +157,12 @@ Rules that follow from "same declaration, new spelling":
   the facade's clients. Reexports chain: a facade may export a name it only
   sees through another facade, and the origin is still the declaring module.
 - **Selecting a type selects its constructors.** Methods, instances and
-  other type-owned members remain explicit selections (`Box::get`).
+  other type-owned members remain explicit selections (`Box::get`) — except
+  that since 2026-11-03 a client that sees a type only through a facade also
+  reaches the members the type's own module declares on it (`xs.map` through
+  `export list::{List}`). They are read at the client's lookup, not copied
+  into the facade, so a member added later needs no new facade image
+  (§3.5).
 - **Ambiguity is by origin.** A diamond reaching one declaration through
   two facades is a single hit; two different declarations sharing a name are
   ambiguous at use exactly as in §4, with no import-order precedence. A
@@ -183,6 +188,40 @@ components in `lib/std/parser/` (the former core now lives in
 `parser_core.hthr` so that no component imports the facade that exports
 it); the mechanism is pinned in `crates/elab/tests/modules.rs` and the
 loader/replay path in `crates/cli/tests/semantic.rs`.
+
+### 3.5 The common prelude (2026-11-03)
+
+`lib/std/common.hthr` is a facade over the core modules (`logic`, `bool`,
+`option`, `list`, `pair`, `algebra`) that every module **later than it in a
+run's order** imports implicitly (`heather_elab::COMMON_MODULE`,
+`issues/std-prelude-facade.md`). The loader reads the prelude's closure
+first and gives every module outside it the prelude as a first import; the
+image keys (`semantic::module_imports`) and the elaborator (an import added
+when the prelude is already in the module's world) apply the same rule, so
+the modules the prelude exports from never see it and nothing cycles. A run
+without the library on its search path has no prelude, and nothing changes.
+
+What an importer gets:
+
+- **Bare names**: exactly the prelude's export lists — the core types and
+  their constructors, the `algebra` classes, `decide`/`decide_bit` for `if` —
+  and, through §3.4's member rule, each exported type's own members. Not
+  the core's theorems: `nat`'s and `int`'s `le_trans` stay out of every
+  module's bare namespace.
+- **Qualified names**: every module in the prelude's closure, qualified
+  only (`nat::Nat::add_comm`, `logic::not_not_intro`). This is the
+  "qualified-only" visibility `issues/feature-implicit-module-dependencies.md`
+  asked for, and it is what the elaborator's own spellings need: an
+  instance's global (`list::List::CollectionLiteral`) and a designated
+  operation (`bool::Bool::and`) are qualified names resolved at the use
+  site.
+
+Why a curated facade and not "all of std sees all of std": measured on the
+cloud box, the prelude's closure is already in almost every module's, so
+the prelude costs almost nothing to build or replay, while an umbrella over
+the whole library costs about a minute to replay warm for a one-line client,
+and inside std the same idea is an import cycle that the single Ψ telescope
+collapses into one unit (`issues/std-prelude-facade.md` has the numbers).
 
 ## 4. Names: unambiguous-or-qualified, never silently shadowed
 

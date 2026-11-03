@@ -530,7 +530,12 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         // first (`docs/module-dag-design.md` §7): the library gate's
         // children share one store, and without this one waits on another's
         // build lock with modules of its own ready.
-        let imports: Vec<Vec<String>> = modules.iter().map(|m| heather_cli::semantic::written_imports(&m.src)).collect();
+        let common_at = modules.iter().position(|m| m.name == heather_elab::COMMON_MODULE);
+        let imports: Vec<Vec<String>> = modules
+            .iter()
+            .enumerate()
+            .map(|(i, m)| heather_cli::semantic::module_imports(&m.name, &m.src, common_at.is_some_and(|c| c < i)))
+            .collect();
         // What each module still to come needs, so a finished module's world
         // goes once nothing left imports it (`docs/module-dag-design.md` §8).
         semantic.expect_load(modules.iter().zip(&imports).map(|(m, i)| (m.name.as_str(), i.as_slice())));

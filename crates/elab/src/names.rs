@@ -537,6 +537,11 @@ impl Names {
 /// nothing else special: it is an ordinary module that happens to be
 /// elaborated first (docs/modules-design.md §3.2).
 pub(crate) const PRELUDE_MODULE: &str = "prelude";
+/// The library's common prelude (`lib/std/common.hthr`): a facade that every
+/// module later than it in a run's order imports implicitly, by name only
+/// (its `export` lists). The modules it exports from come before it, so they
+/// never see it (issues/std-prelude-facade.md).
+pub(crate) const COMMON_MODULE: &str = "common";
 
 /// The module name a bare `check_source`/`elab_source` call elaborates into —
 /// the degenerate one-module program every test and every pre-modules caller
@@ -582,8 +587,10 @@ fn resolve_kinds(
     // `nat::Nat::le_add` — a module path. Visibility is required: qualification
     // names which visible module you meant, it does not reach into a module
     // this file never imported.
-    let visible_module =
-        qual == scope.module || scope.imports_module(qual) || qual == PRELUDE_MODULE;
+    let visible_module = qual == scope.module
+        || scope.imports_module(qual)
+        || qual == PRELUDE_MODULE
+        || common_reaches(names, scope, qual);
     if visible_module && names.declares(qual, base) {
         // ... unless a visible module also declares the whole string as a
         // member — `f::pos` of a function `f` named like the module `f`
@@ -616,10 +623,53 @@ fn resolve_kinds(
         NameRes::Ambiguous(origins) => return NameRes::Ambiguous(origins),
         NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {}
     }
+    // `List::map` where `List` is visible only through a facade's export
+    // (`common`'s `export list::{List}`): exporting a type exports the
+    // members its own module declares on it, as it exports its constructors
+    // (issues/std-prelude-facade.md). Read here, at the lookup, and not
+    // materialized at the export, so a member added later is reached without
+    // the facade being elaborated again, and the lookup records the member's
+    // name as every other lookup does.
+    if let NameRes::Found(origin) = resolve_bare(names, scope, qual)
+        && names.entries(qual).any(|e| e.origin == origin && e.module != origin && scope.imports_module(&e.module))
+        && names.entries(name).any(|e| e.module == origin && e.origin == origin && (kinds.is_empty() || kinds.contains(&e.kind)))
+    {
+        return NameRes::Found(origin);
+    }
     if visible_module {
         return NameRes::NotFound;
     }
     NameRes::NoSuchQualifier(qual.to_string())
+}
+
+/// Is `module` in the common prelude's closure, in a scope that imports the
+/// prelude? Such a module is visible **qualified only** there: `list::x`
+/// resolves, a bare `x` does not unless the prelude exports it. That is what
+/// the elaborator's own spellings need — an instance's global
+/// (`list::List::CollectionLiteral`), a designated operation
+/// (`bool::Bool::and`) — and it keeps the core's lemma names out of the bare
+/// namespace (issues/std-prelude-facade.md,
+/// issues/feature-implicit-module-dependencies.md). Read off the prelude's
+/// own scope, so nothing about it is stored in the importer's.
+fn common_reaches(names: &Names, scope: &Scope, module: &str) -> bool {
+    if scope.module == COMMON_MODULE || !scope.imports_module(COMMON_MODULE) {
+        return false;
+    }
+    let mut seen: Vec<&str> = vec![COMMON_MODULE];
+    let mut stack: Vec<&str> = vec![COMMON_MODULE];
+    while let Some(m) = stack.pop() {
+        let Some(s) = names.module_scope(m) else { continue };
+        for i in &s.imports {
+            if i.module == module {
+                return true;
+            }
+            if !seen.contains(&i.module.as_str()) {
+                seen.push(&i.module);
+                stack.push(&i.module);
+            }
+        }
+    }
+    false
 }
 
 fn resolve_bare(names: &Names, scope: &Scope, name: &str) -> NameRes {

@@ -48,7 +48,17 @@ fn ir_v1() -> PathBuf {
 /// `-L lib/std` matches `crates/cli/src/main.rs`'s `DEFAULT_LIB`.
 fn closure(file: &Path) -> Vec<(String, String)> {
     let root = file;
-    let search = [lib_dir().join("std")];
+    // A root that imports nothing is loaded with no search path: it is timed
+    // alone, as `vec_code.hthr` always was, and not over the common prelude
+    // every module with the library on its path now imports
+    // (issues/std-prelude-facade.md). The prelude's own cold cost is a
+    // closure's, which the replay family already times.
+    let src = std::fs::read_to_string(root).unwrap_or_default();
+    let search = if heather_cli::semantic::written_imports(&src).is_empty() {
+        Vec::new()
+    } else {
+        vec![lib_dir().join("std")]
+    };
     let modules = heather_cli::loader::load(root, &search)
         .unwrap_or_else(|e| panic!("corpus fixture `{}`: {}", file.display(), e.msg));
     modules.into_iter().map(|m| (m.name, m.src)).collect()
