@@ -16,11 +16,9 @@ use std::sync::Arc as Rc;
 use heather_kernel::term::{Term, Type};
 
 use crate::omega_cert::{integer_source, local_facts, named_args, nat_term_source, parse_generated_expr};
+use crate::oracle::Unfold;
 use crate::{Cx, Elaborator};
 
-/// Head reducts a word may take before it is a leaf (§3): enough for a
-/// definition that calls another, not enough to evaluate one.
-const UNFOLD_STEPS: u64 = 16;
 
 pub(crate) struct Generated {
     /// The proof, as source.
@@ -337,12 +335,9 @@ impl<'a> Walk<'a> {
             return Shape::Leaf;
         }
         let oracle = self.elab.goal_oracle();
-        for reduct in oracle.term_reducts(&self.cx.gamma, word, UNFOLD_STEPS) {
-            if let Some(shape) = self.known(&Rc::new(reduct)) {
-                return shape;
-            }
-        }
-        Shape::Leaf
+        oracle
+            .unfold_to(&self.cx.gamma, word, Unfold::WordShape, |reduct| self.known(&Rc::new(reduct)))
+            .unwrap_or(Shape::Leaf)
     }
 
     fn known(&self, word: &Rc<Term>) -> Option<Shape> {

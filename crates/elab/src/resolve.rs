@@ -25,6 +25,7 @@ use heather_kernel::term::{GlobalBinding, GlobalVar, LocalCtx, LocalSubst, Subst
 use heather_kernel::typing;
 use heather_syntax::{Expr, ExprKind, Span, TyKind};
 
+use crate::oracle::Unfold;
 use crate::{Cx, ElabError, Elaborator, oracle, stats};
 
 /// How deep backchaining may go before it refuses. Declaration-time
@@ -51,12 +52,6 @@ const DERIVED_LOOKUP_FUEL: u64 = 1 << 12;
 /// an inconclusive check is a miss that falls through to the rules.
 const COMPUTE_FUEL: u64 = 1 << 12;
 
-/// How many reduction steps a goal headed by a definition **no rule is
-/// about** may take to reach one that some rule is about
-/// (docs/inverse-power-notation-design.md §4): `PowOk(x, -1)` unfolds to
-/// `x.Apart(0)` in a handful. A goal still stuck past this is answered as
-/// before, by the trace's `no-rule`.
-const UNFOLD_STEPS: u64 = 64;
 
 /// One record of a resolution search — the trace is a flat list of these, not
 /// a prose paragraph (design §7, `issues/ai-facing-tooling.md` §7). `key` is
@@ -790,7 +785,7 @@ impl Elaborator {
     }
 
     /// The first reduct of `goal` headed by a relation other than `relation`
-    /// that some evidence rule is about, within [`UNFOLD_STEPS`]. Stepping
+    /// that some evidence rule is about, within [`Unfold::RuleGoal`]. Stepping
     /// one reduct at a time rather than taking the weak head normal form is
     /// the point: the normal form of `PowOk(x, -1)` is `x.Apart(0)`'s own
     /// disjunction, which no rule is keyed by.
@@ -803,7 +798,7 @@ impl Elaborator {
                 .and_then(|abs| self.names.global_name_at(abs as u32).map(str::to_string))
         };
         let oracle = self.goal_oracle();
-        for reduct in oracle.term_reducts(&cx.gamma, tm, UNFOLD_STEPS) {
+        for reduct in oracle.unfold(&cx.gamma, tm, Unfold::RuleGoal) {
             let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
             // The first relation the goal reaches decides: a rule about it,
             // or nothing. Stepping on through a rule-less relation would

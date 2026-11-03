@@ -10,6 +10,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
 use heather_syntax::{Arm, Block, Expr, ExprKind, MatchForm, Pat, Span, Stmt};
 
+use crate::oracle::Unfold;
 use crate::{Cx, Elaborator};
 
 /// Re-enter after each branch's motive has specialized the goal. Like the
@@ -188,7 +189,7 @@ fn comparison_args<'a>(elab: &Elaborator, term: &'a Term) -> Option<(&'static (&
 fn comparison_of(elab: &Elaborator, cx: &Cx, scrut: &Term) -> Option<Rc<Term>> {
     let oracle = elab.goal_oracle();
     std::iter::once(scrut.clone())
-        .chain(oracle.term_reducts(&cx.gamma, scrut, 8))
+        .chain(oracle.unfold(&cx.gamma, scrut, Unfold::Comparison))
         .find(|reduct| comparison_args(elab, reduct).is_some())
         .map(|comparison| Rc::new(settled(elab, cx, &comparison)))
 }
@@ -379,7 +380,7 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
         return stuck_scrutinee(elab, cx, inner, budget);
     }
     let oracle = elab.goal_oracle();
-    for reduct in std::iter::once(term.clone()).chain(oracle.term_reducts(&cx.gamma, term, 64)) {
+    for reduct in std::iter::once(term.clone()).chain(oracle.unfold(&cx.gamma, term, Unfold::StuckScrutinee)) {
         if *budget == 0 {
             return None;
         }
@@ -483,7 +484,7 @@ pub(crate) fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Te
     if out.len() > before {
         return;
     }
-    for reduct in elab.goal_oracle().term_reducts(&cx.gamma, term, 64) {
+    for reduct in elab.goal_oracle().unfold(&cx.gamma, term, Unfold::StuckScrutinee) {
         if *budget == 0 {
             return;
         }
@@ -775,7 +776,7 @@ fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Ter
         return None;
     }
     let oracle = elab.goal_oracle();
-    for reduct in oracle.term_reducts(&cx.gamma, call, 16) {
+    for reduct in oracle.unfold(&cx.gamma, call, Unfold::MatchedArm) {
         if !eliminator_headed(&reduct) {
             continue;
         }

@@ -201,6 +201,7 @@ use surface::{
 use traits::Traits;
 use types::Types;
 use solution_check::SolutionCheck;
+use oracle::Unfold;
 use unification::{ResolveOb, Sol, unify_ty_root, zonked, zonked_tm};
 pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_ty};
 
@@ -1767,11 +1768,6 @@ pub fn kernel_workers_from_spec(spec: &str) -> Option<usize> {
     spec.trim().parse::<usize>().ok().filter(|n| *n > 0)
 }
 
-/// How many reducts of an argument's type [`Elaborator::unify_arg_ty`] reads
-/// after a solution it learned did not fit its slot: a δ step and the β steps
-/// that apply the unfolded body, twice over, and no whnf at large
-/// (issues/index-inference-through-unfolding.md).
-const INDEX_UNFOLD_STEPS: u64 = 8;
 
 /// The one shape an invisible difference almost always has, named so the
 /// reader does not have to know how a type is represented to act on it
@@ -7271,7 +7267,7 @@ impl Elaborator {
     /// operand, itself an instance's bit) read the same way.
     fn instance_bit(&self, cx: &Cx, term: &Term) -> Option<Term> {
         let oracle = self.goal_oracle();
-        for reduct in oracle.term_reducts(&cx.gamma, term, 32) {
+        for reduct in oracle.unfold(&cx.gamma, term, Unfold::InstanceBit) {
             if crate::spelling::is_inj(&reduct) {
                 return Some(reduct);
             }
@@ -9917,7 +9913,7 @@ impl Elaborator {
     /// read never records what the call could not keep.
     /// When it undid something, the argument was written in other symbols —
     /// `x ≈ y` at `Rat` against `a * d ≈ c * b` at `Int` — and before the
-    /// whnf the read walks the type's first [`INDEX_UNFOLD_STEPS`] reducts,
+    /// whnf the read walks the type's first [`Unfold::IndexRead`] reducts,
     /// stopping at the first declaration application that teaches something
     /// that fits: `Dyadic::Le(a, b)` is `Rat::Le(a.rat(), b.rat())` one δ
     /// step on (issues/index-inference-through-unfolding.md).
@@ -9989,7 +9985,7 @@ impl Elaborator {
             && let Type::El { level, tm } = arg_ty
         {
             let oracle = self.goal_oracle();
-            for reduct in oracle.term_reducts(&cx.gamma, tm, INDEX_UNFOLD_STEPS) {
+            for reduct in oracle.unfold(&cx.gamma, tm, Unfold::IndexRead) {
                 if !unification::global_spine(&reduct) {
                     continue;
                 }
