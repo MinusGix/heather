@@ -99,8 +99,8 @@ is one `cong`), and the ones that differ are its own.
 The option not taken is a signless `BitVec` with both `UInt(n)` and
 `SInt(n)` wrappers (Lean's `UInt8`/`Int8` over `BitVec 8`). It is the more
 symmetric design and buys one thing: `BitVec` with no order at all. It
-costs a wrapper on the most common type in the native library; §6 is the
-question that decides between them.
+costs a wrapper on the most common type in the native library, and was
+declined (Minus, 2026-11-03).
 
 ## 4. Division
 
@@ -133,8 +133,8 @@ at.
 
 ## 6. Open
 
-- **The decision for Minus**: `u8` as `BitVec(8)` (built), or a signless
-  `BitVec` under two wrappers (§3).
+- ~~The decision for Minus~~ Decided (Minus, 2026-11-03): `u8` stays
+  `BitVec(8)`; only signed words are a record (§3).
 - **Operator symbols.** `/`, `%`, `<<`, `>>`, `&`, `|` do not lex today;
   division and shifts are methods. `issues/integer-operator-symbols.md`.
 - **Division laws.** The Euclidean characterization of `udivrem` (`a = q·d +
