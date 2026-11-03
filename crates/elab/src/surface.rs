@@ -132,6 +132,39 @@ pub(crate) fn expression_as_type(e: &Expr) -> Option<Ty> {
     Some(Ty { kind, span: e.span })
 }
 
+/// The condition of an `if` or `while` the parser lowered to
+/// `decide_bit<c>()` (`decide<c>()` with an evidence binder), read back as
+/// the expression `c` was written as; the flag is the evidence form. The
+/// parser gives the call's head the condition's own span, which a written
+/// `decide_bit<P>()` (head spanning the name alone) never has, so only the
+/// lowered form takes the `Bool` reading
+/// (issues/bool-conditions-and-literals.md). A condition that is type syntax
+/// with no expression reading (`Fin(n)`, `T<A>`, `x = y`) is not offered:
+/// it can only be a proposition.
+pub(crate) fn bool_condition(e: &Expr) -> Option<(Expr, bool)> {
+    let ExprKind::App { head, args, named, explicit: false, .. } = &e.kind else { return None };
+    if !args.is_empty() || !named.is_empty() {
+        return None;
+    }
+    let ExprKind::TyApp { head: callee, args: tyargs } = &head.kind else { return None };
+    let ExprKind::Var(name) = &callee.kind else { return None };
+    let evidence = match name.as_str() {
+        "decide_bit" => false,
+        "decide" => true,
+        _ => return None,
+    };
+    let [condition] = tyargs.as_slice() else { return None };
+    if callee.span != condition.span {
+        return None;
+    }
+    let condition = match &condition.kind {
+        TyKind::Named { name, args } if args.is_empty() => Expr { kind: ExprKind::Var(name.clone()), span: condition.span },
+        TyKind::OfExpr(c) => (**c).clone(),
+        _ => return None,
+    };
+    Some((condition, evidence))
+}
+
 // -- anonymous argument-slot sections --------------------------------------
 
 /// A resource bound, not a semantic arity limit. Indexed lowering allocates
