@@ -75,9 +75,6 @@ conversion.
     `Act::traced`, `solutions`, `mono_class_carrier`, `mono_prove`,
     `norm_num_reify`, `interval_reify`. The equation is one δ step on each
     side; the cost is conversion over their bodies.
-  - Not stated (4): `Stmt::weights` (its body calls a local helper,
-    `bump_all`, that the restated body cannot see), `Scope::nodes` (the
-    recursed parameter's type is not one the split can name),
-    `Hurwitz::sin_cos_at` (a `Pair` constructor whose expected type the
-    restated body loses), `RingExpr::atom_rel` (an instance search the
-    statement's telescope does not answer).
+  - Not stated (2): `Stmt::weights` (its body calls a local helper,
+    `bump_all`, that the restated body cannot see) and `Scope::nodes` (the
+    recursed parameter's type is not one the split can name).
