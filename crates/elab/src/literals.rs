@@ -38,6 +38,19 @@ const DECIMAL_RAT: &str = "rat::Decimal::rat";
 const HEX_TYPE: &str = "rat::HexFloat";
 const HEX_INTRO: &str = "rat::HexFloat::lit";
 const HEX_RAT: &str = "rat::HexFloat::rat";
+// The literal classes, read by identity (`Elaborator::syntax_class`): a
+// literal at a carrier needs the class's module in its closure, not its name
+// in scope.
+pub(crate) const NUMERAL: &str = "algebra::Numeral";
+const CHAR_LITERAL: &str = "char::CharLiteral";
+const STRING_LITERAL: &str = "string::StringLiteral";
+const HEX_LITERAL: &str = "rat::HexLiteral";
+const DECIMAL_LITERAL: &str = "rat::DecimalLiteral";
+
+/// `Numeral` of `algebra::Numeral`: the spelling a diagnostic shows.
+fn key_name(key: &str) -> &str {
+    key.rsplit("::").next().unwrap_or(key)
+}
 
 /// The spec type, its introduction form and its reading at `Rat`, for a
 /// decimal or a hex float literal.
@@ -76,11 +89,24 @@ impl Elaborator {
     /// route optional: without `std/char` imported there is no `Char` to
     /// build, and the literal falls through to the class rung.
     fn expected_is(&self, cx: &Cx, expected: &Type, name: &str, span: Span) -> bool {
-        let Some(key) = self.key_of(name) else {
+        let Some(key) = self.closure_key(name) else {
             return false;
         };
         self.carrier_of_ty(cx, expected, span)
             .is_some_and(|carrier| carrier.key == key)
+    }
+
+    /// The key of a literal's spec name (`char::Char`, `char::ofNat`), read
+    /// in this module's scope or, failing that, in the declaring module's own
+    /// when that module is in the closure: a character literal at a byte
+    /// (`CharLiteral<BitVec(8)>`, from `byte`) builds its `Char` first, and
+    /// `char` is then in the closure without being named here
+    /// (issues/literal-classes-need-importing.md).
+    fn closure_key(&self, name: &str) -> Option<String> {
+        self.key_of(name).or_else(|| {
+            let module = key_module(name);
+            self.names.has_module(module).then(|| self.read_in_module(module, |s| s.key_of(name)))?
+        })
     }
 
     /// Run `read` with names resolved as `module` reads them: the module
@@ -108,7 +134,7 @@ impl Elaborator {
     /// can only go the `Inl` way because the lexer already refused every
     /// non-scalar payload.
     fn char_intro(&self, c: char, span: Span) -> Option<(Expr, String)> {
-        let intro = self.key_of(CHAR_INTRO)?;
+        let intro = self.closure_key(CHAR_INTRO)?;
         let module = key_module(&intro).to_string();
         let yes = self.read_in_module(&module, |s| s.key_of(DECIDE_YES))?;
         let code = Expr {
@@ -149,18 +175,15 @@ impl Elaborator {
     fn literal_class(
         &self,
         cx: &Cx,
-        class_name: &str,
+        class_key: &str,
         field_name: &str,
         literal: &Expr,
         expected: &Type,
         expected_level: &Level,
         span: Span,
     ) -> Option<R<Term>> {
-        let class = self.lookup_class(class_name)?;
-        if class.params.len() != 1 || !class.valparams.is_empty() {
-            return None;
-        }
-        let ind = self.lookup_inductive(&class.name).cloned()?;
+        let (_, ind) = self.syntax_class(class_key)?;
+        let class_name = key_name(class_key);
         let field = ind.field_index(field_name)?;
         Some((|| {
             let targs = [(expected.clone(), expected_level.clone())];
@@ -311,7 +334,7 @@ impl Elaborator {
             return Ok(term);
         }
         if let Some(result) =
-            self.literal_class(cx, "CharLiteral", "ofChar", e, expected, lvl, e.span)
+            self.literal_class(cx, CHAR_LITERAL, "ofChar", e, expected, lvl, e.span)
         {
             return result;
         }
@@ -345,7 +368,7 @@ impl Elaborator {
             return self.read_in_module(&module, |s| s.elab_check(cx, &intro, expected, lvl));
         }
         if let Some(result) =
-            self.literal_class(cx, "StringLiteral", "ofString", e, expected, lvl, e.span)
+            self.literal_class(cx, STRING_LITERAL, "ofString", e, expected, lvl, e.span)
         {
             return result;
         }
@@ -405,9 +428,9 @@ impl Elaborator {
         }
         let rung = if lit.hex {
             let proof = var("trivial", e.span);
-            self.literal_class_fields(cx, "HexLiteral", "ofHex", None, &[e.clone(), proof], expected, lvl, e.span)
+            self.literal_class_fields(cx, HEX_LITERAL, "ofHex", None, &[e.clone(), proof], expected, lvl, e.span)
         } else {
-            self.literal_class_fields(cx, "DecimalLiteral", "ofDecimal", Some("exact"), std::slice::from_ref(e), expected, lvl, e.span)
+            self.literal_class_fields(cx, DECIMAL_LITERAL, "ofDecimal", Some("exact"), std::slice::from_ref(e), expected, lvl, e.span)
         };
         if let Some(result) = rung {
             // The only way `trivial` fails at `HexLiteral`'s `Ok` is a value
@@ -475,7 +498,7 @@ impl Elaborator {
     fn literal_class_fields(
         &self,
         cx: &Cx,
-        class_name: &str,
+        class_key: &str,
         field_name: &str,
         check: Option<&str>,
         args: &[Expr],
@@ -483,11 +506,8 @@ impl Elaborator {
         expected_level: &Level,
         span: Span,
     ) -> Option<R<(Term, Option<Term>)>> {
-        let class = self.lookup_class(class_name)?;
-        if class.params.len() != 1 || !class.valparams.is_empty() {
-            return None;
-        }
-        let ind = self.lookup_inductive(&class.name).cloned()?;
+        let (_, ind) = self.syntax_class(class_key)?;
+        let class_name = key_name(class_key);
         let field = ind.field_index(field_name)?;
         let check = match check {
             Some(name) => Some((name, ind.field_index(name)?)),

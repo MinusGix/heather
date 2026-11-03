@@ -1984,6 +1984,25 @@ impl Elaborator {
         self.traits.class(&self.key_of(name)?).cloned()
     }
 
+    /// A one-parameter class the surface syntax reads by its **identity**
+    /// (`algebra::Numeral` for a numeral, `char::CharLiteral` for a character
+    /// literal), with the record it lowers to: found whenever its declaring
+    /// module is in this module's closure, whether or not the module can
+    /// name it (issues/numerals-without-algebra-import.md). Its instances
+    /// are visible by the closure already (docs/module-dag-design.md §2), so
+    /// requiring the class's *name* in scope as well was the only gap, and
+    /// it is the one `[…]` never had: `CollectionLiteral` is read by key.
+    /// The registry digest covers class events, so an image that read one
+    /// this way is invalidated as one that named it would be.
+    pub(crate) fn syntax_class(&self, key: &str) -> Option<(Rc<ClassInfo>, Rc<crate::inductive::Inductive>)> {
+        let class = self.traits.class(key)?.clone();
+        if class.params.len() != 1 || !class.valparams.is_empty() {
+            return None;
+        }
+        let ind = self.types.inductive(key)?.clone();
+        Some((class, ind))
+    }
+
     /// A written head of a class over a type constructor, re-spelled as the
     /// record it lowers to (issues/higher-kinded-classes.md, piece 3):
     ///

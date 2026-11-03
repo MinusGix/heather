@@ -8635,15 +8635,14 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         // At another expected carrier, use the ordinary class resolver. The
-        // class is optional at the language level: a program that has not
-        // imported the standard algebra module keeps the historical Nat-only
-        // mismatch below. Once `Numeral` is visible, however, a missing
+        // class is optional at the language level: a program whose closure
+        // does not hold the standard algebra module keeps the historical
+        // Nat-only mismatch below. Once `algebra::Numeral` is in the closure,
+        // however — read by identity, not by a name this module may not
+        // import (issues/numerals-without-algebra-import.md) — a missing
         // instance is the useful diagnosis and not a later Nat-vs-carrier
         // conversion error.
-        if let Some(class) = self.lookup_class("Numeral")
-            && class.params.len() == 1
-            && class.valparams.is_empty()
-            && let Some(ind) = self.lookup_inductive(&class.name).cloned()
+        if let Some((_, ind)) = self.syntax_class(literals::NUMERAL)
             && let Some(field) = ind.field_index("ofNat")
         {
             let targs = [(expected.clone(), expected_level.clone())];
