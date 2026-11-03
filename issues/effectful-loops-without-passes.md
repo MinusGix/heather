@@ -5,7 +5,8 @@ labels: [language,effects,design]
 area: language
 milestone: [nh-effects,lang-sequencing]
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-03
+blocked-by: [partial-fn-surface, eutt-iteration-and-io-reading]
 ---
 
 Effectful loops take a `passes: List<Nat>` and run `for _ in passes`. This is true of `Io::cat` (`lib/_tests/std/os/linux/linux_world_tests.hthr`), `Io::write_all`, and `Io::tac`/`Io::sort` (`lib/native/runtime/line_tools.hthr`). Minus asked what it is really for (PR #394 review, 2026-11-02). It serves two purposes at once, and neither is the program's intent:
@@ -26,4 +27,27 @@ Recommendation: 1, with 3 as the spelling for pure loops that genuinely need a b
 
 ## Done when
 
-The option is decided and recorded in `docs/effects-capabilities-design.md`, and `Io::tac`, `Io::sort` and `Io::cat` take no `passes`, with their probes unchanged in what they state.
+`Io::tac`, `Io::sort`, `Io::cat` and `Io::write_all` take no `passes` and
+mean `Io → Partial<Mutated<Io, R>>` (`docs/effects-capabilities-design.md`
+§4); their probes state the same things, with today's pass counts as the
+`Returns` count; a `Source`'s `Repeat` gets a fuel-free denotation over
+`CoTree::iter` (bridged to the fuelled one by `iter_refines`), and
+`cat_agrees_piped`/`cat_agrees_failing` state `Eutt` through the coinductive
+`Io::Reads`.
+
+## Log
+
+- 2026-11-03: Analysed with Minus in a project thread. Beyond the body above: the
+  partiality is real (`yes | tac` diverges), so the question is where it
+  lives; today's exhaustion reads as a real outcome (`Io::cat` returns 0 when
+  its outer `passes` run out, `tac`/`sort` write a truncated read as success);
+  `Io::Reads` is an equality at every world, so no fixed-fuel loop tree can
+  satisfy it; and `while … fuel` compiles to a counting loop, so it is not the
+  answer for loops over a world. **Decided by Minus: the meaning is
+  coinductive, `Io → Partial<Mutated<Io, R>>`, and agreement is up to taus**
+  (he prefers `Eutt` plus automation to a lockstep-only discipline). Recorded
+  in `docs/effects-capabilities-design.md` §4 and §7.5. The work is split
+  into [[partial-fn-surface]], [[eutt-iteration-and-io-reading]],
+  [[codata-up-to-friends-round-2]] (up-to proofs), [[eutt-setoid-rewrite]] and
+  [[eutt-tactics]]; this issue stays the customer rewrite, blocked on the first
+  two. "Done when" revised to match.
