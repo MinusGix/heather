@@ -1,10 +1,10 @@
 ---
 title: Match an instance's conclusion against the goal before building the candidate
-status: open
+status: closed
 labels: [traits,resolution,unification]
 area: language
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-03
 ---
 
 Instance search builds every candidate by elaborating a reference to it at
@@ -34,3 +34,7 @@ discrimination index over conclusions is the later optimisation, which
   rejected before building.
 
 After [[unifier-checked-assignment]] and [[unifier-lazy-delta]].
+
+## Log
+
+- 2026-11-03: Done (the instance half). `Elaborator::conclusion_clashes` reads a registered instance's type past its parameters, each a fresh slot as an application's implicits are, and runs the elaborator's unifier (checked assignment, δ-lazy) against the goal with a `unification::Clash` listener. The unifier's one negative answer: two canonical forms of different kinds (type formers, code formers, `Zero`/`Succ`, numerals, `inl`/`inr`) met along a path of injective formers; below an application's arguments, a projection or an eliminator nothing is decided, and a head the pattern could unfold is never a clash. A clashing candidate is dropped unbuilt with "rejected: conclusion does not match" (`conclusion_clashes` counter). The acceptance's `decide_bit<Canonical(…)>()` resolves since [[unifier-lazy-delta]]; probes in `lib/_tests/std/core/bool_tests.hthr` (`Spread`, `no_decision`). The host's `match_at` was already the unifier (`unify_root` then conversion); rewrite's `match_spine` is the matcher left, filed as [[rewrite-matcher-on-unifier]]. The discrimination index stays [[resolution-candidate-fan-out]]'s.

@@ -9981,7 +9981,56 @@ impl Elaborator {
     /// write was refused for not inhabiting it ([`SolutionCheck`]).
     #[allow(clippy::too_many_arguments)]
     fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], doms: &[Type], span: Span) -> bool {
-        self.unify_checked(cx, pat, subj, n, 0, sols, doms, None, Guesses::Take, span)
+        self.unify_checked(cx, pat, subj, n, 0, sols, doms, None, Guesses::Take, None, span)
+    }
+
+    /// Does the registered instance `global`'s **conclusion** — its type
+    /// past every parameter, each parameter a fresh slot — decidedly differ
+    /// from `goal` ([`unification::Clash`])? Instance search asks before it
+    /// builds the candidate (issues/instance-conclusion-matched-first.md):
+    /// building elaborates a reference at the goal, premises and all, and
+    /// then the kernel refuses it, which is the whole cost of a candidate
+    /// that could never have matched. A closed instance is its own
+    /// conclusion. `false` is "may match", always the answer when the
+    /// conclusion cannot be read (a universe-polymorphic instance's `UΠ`, a
+    /// binding out of reach) or the unifier could not decide.
+    pub(crate) fn conclusion_clashes(&self, cx: &Cx, global: &str, goal: &Type, span: Span) -> bool {
+        let Some(GlobalInfo { abs, .. }) = self.names.global(global) else { return false };
+        let Some(GlobalBinding::Tm { ty, .. }) = self.psi.bindings.get(*abs as usize) else { return false };
+        // The use-site type, as a reference to the global would carry it
+        // (`elab_var`): rescoped to the full Ψ, then out of the empty context
+        // it was declared in into this Γ.
+        let len = self.psi.bindings.len() as u32;
+        let meta_off = self.scope.meta_pushed.borrow().len() as u32;
+        let var = len - 1 - abs + self.global_padding() + meta_off;
+        let empty = LocalSubst {
+            tail: SubstTail::Empty { len: cx.gamma.entries.len() as u32, base: cx.gamma.base },
+            terms: vec![],
+        };
+        let ty = ty.shift_global(var + 1).apply_local(&empty);
+        // One slot per leading binder, instantiated as an application's
+        // implicits are: the slots sit innermost, under the identity.
+        let mut n = 0u32;
+        let mut t = &ty;
+        while let Type::Pi { cod, .. } = t {
+            n += 1;
+            t = cod;
+        }
+        let mut doms = Vec::with_capacity(n as usize);
+        let mut conclusion = ty.shift_global(n);
+        for slot in 0..n {
+            let Type::Pi { dom, cod, .. } = conclusion else { return false };
+            doms.push((*dom).clone());
+            let meta = Term::GlobalTm { var: GlobalVar(slot), subst: LocalSubst::id(&cx.gamma) };
+            conclusion = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(meta)));
+        }
+        let pat = self.unspell_deep_now(&conclusion, n).unwrap_or(conclusion);
+        let subj = self.unspell_deep_now(goal, 0);
+        let subj = subj.as_ref().unwrap_or(goal);
+        let mut sols = vec![Sol::Unsolved; n as usize];
+        let clash = unification::Clash::default();
+        self.unify_checked(cx, &pat, subj, n, 0, &mut sols, &doms, None, Guesses::Take, Some(&clash), span);
+        clash.seen()
     }
 
     /// [`Self::unify_root`] for a subject `d` binders past `cx`: the
@@ -9990,7 +10039,7 @@ impl Elaborator {
     /// enclosing the one a comparison happens in, are unified this way.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn unify_under(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol], doms: &[Type], span: Span) -> bool {
-        self.unify_checked(cx, pat, subj, n, d, sols, doms, None, Guesses::Take, span)
+        self.unify_checked(cx, pat, subj, n, d, sols, doms, None, Guesses::Take, None, span)
     }
 
     /// The one root of the unifier: its context in `cx`, its writes held to
@@ -10009,6 +10058,7 @@ impl Elaborator {
         doms: &[Type],
         disagree: Option<&dyn Fn(usize, &Term)>,
         guesses: Guesses<'_>,
+        clash: Option<&unification::Clash>,
         span: Span,
     ) -> bool {
         let type_args = |t: &Term, e: u32| self.spine_type_args(cx, t, e, span);
@@ -10031,6 +10081,7 @@ impl Elaborator {
             disagree,
             next_head: &next_head,
             guesses,
+            clash,
         };
         unify_ty_root(&u, pat, subj, n, d, sols);
         check.settle(sols)
@@ -10139,9 +10190,9 @@ impl Elaborator {
         let arg_inline = self.unspell_deep_now(arg_ty, 0);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
         let unify_checked =
-            |sols: &mut [Sol], subject: &Type| -> bool { self.unify_checked(cx, dom, subject, n, 0, sols, meta_doms, None, guesses, span) };
+            |sols: &mut [Sol], subject: &Type| -> bool { self.unify_checked(cx, dom, subject, n, 0, sols, meta_doms, None, guesses, None, span) };
         let record = |slot: usize, later: &Term| clashes.borrow_mut().push((slot, Rc::new(later.clone())));
-        let rejected = self.unify_checked(cx, dom, arg_ty, n, 0, sols, meta_doms, Some(&record), guesses, span);
+        let rejected = self.unify_checked(cx, dom, arg_ty, n, 0, sols, meta_doms, Some(&record), guesses, None, span);
         if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
             return;
         }
@@ -10254,7 +10305,7 @@ impl Elaborator {
             // the slots' types as an argument's read is: `x ≈ z` at `Rat`
             // against `?≈(?*(a, f), ?*(e, b))` at `Int` pairs `?≈` with
             // `Rat::Same` (issues/index-inference-through-unfolding.md).
-            self.unify_checked(cx, result_ty, expected, n, 0, sols, meta_doms, None, guesses, span);
+            self.unify_checked(cx, result_ty, expected, n, 0, sols, meta_doms, None, guesses, None, span);
             // The expected type's weak head can teach only the metas the
             // result type still mentions: unification records into the
             // pattern's metas and nowhere else. Once it mentions none, the
@@ -10268,7 +10319,7 @@ impl Elaborator {
             }
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            self.unify_checked(cx, result_ty, &head, n, 0, sols, meta_doms, None, guesses, span);
+            self.unify_checked(cx, result_ty, &head, n, 0, sols, meta_doms, None, guesses, None, span);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`

@@ -63,7 +63,7 @@ impl Elaborator {
                 type_args: &type_args, canonical_head: &canonical_head, respell: &respell,
                 constructor: &constructor, slot_view: &slot_view,
                 admit: &admit, disagree: None, next_head: &next_head,
-                guesses: crate::unification::Guesses::Take,
+                guesses: crate::unification::Guesses::Take, clash: None,
             };
             unify_ty_root(&u, &pattern, &subject, k, 0, &mut inner);
             check.settle(&mut inner);

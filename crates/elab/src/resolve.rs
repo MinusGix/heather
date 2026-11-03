@@ -467,6 +467,12 @@ impl Elaborator {
                     format!("{g} (index `{index}`)")
                 },
             ));
+            // A conclusion that cannot meet the goal is dropped unbuilt.
+            if self.conclusion_clashes(cx, &g, goal, span) {
+                crate::stats::count(crate::stats::Counter::ConclusionClashes);
+                tr.push(line(depth + 1, "rejected", "conclusion does not match".to_string()));
+                continue;
+            }
             self.scope.resolve_depth.set(depth + 1);
             let built = self.build_candidate(cx, &g, goal, lvl, span);
             self.scope.resolve_depth.set(depth);

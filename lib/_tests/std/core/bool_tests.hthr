@@ -39,3 +39,19 @@ theorem guard_closed_no(): guard(0, 7) = False { refl }
 fn lazy_delta_g(n, m: Nat) → Bool { n.leb(m) && !m.leb(n) }
 theorem lazy_delta_pick({a, b: Bool}, h: (a && b).IsTrue()): a.IsTrue() { a.is_true_and(b, h).left }
 theorem lazy_delta_pick_through_g(n, m: Nat, h: lazy_delta_g(n, m).IsTrue()): n.leb(m).IsTrue() { lazy_delta_pick(h) }
+
+// Instance search matches a candidate's conclusion before building it
+// (issues/instance-conclusion-matched-first.md). A proposition defined as a
+// connective resolves through the δ step the match takes
+// (issues/decide-at-defined-proposition.md), at an open and a literal
+// argument and in a checking position.
+fn Spread(a, b: Nat) → Type { a <= b ∧ (b = 0 ∨ 1 <= a) }
+theorem spread_bit(a, b: Nat): decide_bit<Spread(a, b)>() = a.leb(b) && (b.same(0) || 1.leb(a)) { refl }
+theorem spread_literal(): decide_bit<Spread(1, 2)>() = True { refl }
+theorem spread_intro(a: Nat, pos: 1 <= a): decide_bit<Spread(a, a)>().IsTrue() {
+    decide_intro<Spread(a, a)>(And(Nat::le_refl(a), Inr(pos)))
+}
+// A candidate whose conclusion cannot meet the goal (`Or`, `True`, … at a
+// conjunction) is dropped unbuilt, and the trace says so.
+// expect-error: rejected: conclusion does not match
+fn no_decision(f: Nat → Type) → Bool { decide_bit<f(3) ∧ True>() }

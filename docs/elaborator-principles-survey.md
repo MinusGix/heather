@@ -389,3 +389,5 @@ here needs it); higher-order pattern inversion beyond the identity renaming
 - `unifier-guesses-postponed` (P2)
 - `instance-conclusion-matched-first` (§4)
 - `recursion-on-elaborated-terms` (P5 and §6.3's lowering)
+- `rewrite-matcher-on-unifier` (§4's remainder, filed 2026-11-03 when
+  instance search moved onto the unifier; the host's `match_at` already had)
