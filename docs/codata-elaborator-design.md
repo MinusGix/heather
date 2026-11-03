@@ -344,17 +344,95 @@ convertible with the friend applied to the trees: `tl(smul(f, g))` is a
 `corec` over the friend node, not `sadd(smul(tl f, g), smul(f, tl g))`.
 Their equality is a bisimilarity.
 
-**This round does not do** (`issues/codata-up-to-friends-round-2.md`):
+**Round 1 did not do** indexed codata, polymorphic friends, friends with
+function-valued codata arguments, or constructors nested beside a friend;
+round 2 (§5.6) replaced the `Wf` carrier to do them.
 
-- indexed codata (`Bisim`/`Eutt` up to `trans`), where a friend's arguments
-  sit at different indices;
-- polymorphic friends (type parameters, implicit parameters) and friends
-  whose parameter types mention other parameters;
-- friends whose codata arguments are of another instance or under a function
-  (`bind`'s `t : CoTree<R>` and `h : R → CoTree<S>`, for a direct coinductive
-  `rec`);
-- friends calling other friends, and constructors nested above a call beside
-  a friend (§5.4 with §5.5).
+### 5.6 The free carrier as an indexed tree (round 2)
+
+Round 2 (`issues/codata-up-to-friends-round-2.md`, 2026-11-03) gives friends
+codata arguments **at other indices than their result** and **under a
+function**, which the up-to proofs of `docs/coitree-design.md` §7.6 need:
+
+```
+fn sb_trans(s, t, u, a: SBisim(s, t), b: SBisim(t, u)) -> SBisim(s, u)   // up to transitivity
+fn dbind(t: Dl, h: Nat -> Dl) -> Dl {                                     // bind-shaped
+    match t { Now(n) => h(n), Later(t2) => Later(dbind(t2, h)) }
+}
+```
+
+**The carrier** is now an ordinary `W` type over one sum of shapes, with the
+indices kept in a predicate beside it rather than in the tree (an indexed
+`W` would fix every child's index by its parent's shape, and a friend's node
+does not know its arguments' indices until its label is read):
+
+```
+W₀  = W(x : V + Σi.⟦D⟧(i) + [Σi.S(i)] + A₁ + … + A_m). P(x)
+P(x) = case x { V ⇒ ∅; ⟦D⟧ ⇒ ∅; S ⇒ positions of the node; A_f ⇒ P_f }
+C(i) = Σ(t : W₀). ok(t)(i)                     C = W₀ unindexed
+ok   = elim_W(t; a f ih. λj. Σ(e : out(a) = j). Π(p : P a). ih p (child(a, p)))
+```
+
+`V` is the seed (the varying parameters' tuple), `⟦D⟧` an existing tree,
+the bracketed summand a pending node (constructors nested above a call,
+§5.4, now combined with friends), and `A_f` friend `f`'s label: its data
+arguments **including the indices its codata arguments sit at** (the
+intermediate `t` of `sb_trans`). `P_f` has one position per codata argument,
+and a function-valued one `h : Π(y : B). D(o(y))` contributes the summand `B`
+(its payload), so its child at `inr(y)` is `h(y)`. `out(a)` is the index a
+node sits at (the seed's `g[v]`, the tree's own, the friend's result index
+read off its label) and `child(a, p)` the index its children were written
+at; `ok` says every node sits where its parent wrote it. All of `P`, `out`
+and `child` are cases on the shape into codes, so the kernel computes them
+for literal labels and the step's `J` along `fst(ok)` is a `refl` at every
+node the definition built.
+
+**The step** is `elim_W` on `fst x` with motive `Π(j : I). El(ok z j) →
+F(C)(j)`, each branch moving the node from `out(a)` to `j` along the
+proof's first component: the seed runs the body at the varying tuple, a tree
+is observed, a pending node emits itself with its children paired with their
+proofs, and a friend runs its re-elaborated body with its codata parameter
+`j` bound to the carrier value `⟨f(inl j), snd ok (inl j)⟩` (a function
+parameter to `λ y. ⟨f(inr y), …⟩`), whose first node is `ih` at that
+position. Productivity and termination stay the `corec`'s and the `W`
+recursion's; the friendliness check only decides what elaborates.
+
+**Friend signatures** are read in two passes. Pass one binds the friend's
+type and value parameters and matches its result type's signature
+telescope (`CoTree<R>(E)`'s `R, E`) against the definition's: matched type
+parameters are fixed to the definition's, matched value parameters become
+aliases of the definition's terms. Pass two classifies the rest: a
+parameter whose type is the definition's family at some index, plainly or
+under one arrow, is a codata argument (a child of the node); anything else
+is data, stored in the label, including type parameters the result does not
+fix (`bind_up<A, B>`'s `A`), which the call must then write
+(`Eutt::bind_up<Step<A, B>, B>(…)`). A friend's result index must be the
+index of the position its call sits at: `sb_trans(s, s, s′, …)` at a child
+of type `SBisim(s, s)` is refused at the call ("a friend's result index must
+be the one its position wrote"), naming both.
+
+**In friend mode**, beyond §5.5's: `match` on a function parameter applied
+to a payload (`match h(n)`, one layer of `h`'s answer at `n`), the applied
+parameter as the whole result (`Now(n) => h(n)`), a function child passed
+whole as a function child (η-expanded), and friend calls at a friend's
+codata argument (`up_to_bisim(…, bind_up(…, λ x => … self …), …)`): the
+carrier is the free algebra of every friend the definition calls.
+
+**What it still does not do** (logged in the issue):
+
+- a friend at the top of the body, unguarded (`f(…) = trans(…, f(…))`):
+  the seed's step must produce a layer, and a friend node over seeds only
+  produces one by stepping the seeds again, which is not structural on the
+  `W` tree. Wrap the statement in one constructor (`Eutt(CTau(x), CTau(y))`)
+  and peel it with `tau_l`/`tau_r` afterwards, as `iter_cong` does in
+  `lib/_tests/std/itree/coitree_eutt_tests.hthr`;
+- friends that call other friends in their own bodies, and friends with
+  class binders (series over a ring);
+- a codata argument at another *instance* of the family as a child
+  (`bind`'s `t : CoTree<A>` under a `CoTree<B>` result): it is data, read
+  as a whole, which `Eutt::bind_up` uses (its `e : Eutt<A>` is matched as
+  data), but a self-call on its children is a data argument, so a direct
+  coinductive `rec` through `bind` still waits.
 
 ## 6. Layers
 
@@ -422,6 +500,7 @@ image, replayed, and used from an importing module.
 3. ~~**Nested guards**~~: done (§5.4), unindexed 2026-11-01 and indexed
    2026-11-02.
 5. ~~**Corecursion up to friends**~~: round 1 done (§5.5, unindexed,
-   monomorphic friends), 2026-11-02; the rest is
+   monomorphic friends), 2026-11-02; round 2 (§5.6: indexed, polymorphic,
+   bind-shaped, nested beside friends) 2026-11-03; what is left is
    `issues/codata-up-to-friends-round-2.md`.
 4. ~~Codes for `M`~~: done (`docs/kernel-m-codes-design.md`).

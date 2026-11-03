@@ -48,3 +48,14 @@ The lemmas above are proved or stated and logged as waiting on up-to
 coinduction, `reads_iter` among the proved ones if direct corecursion
 suffices, and a probe reads a fuel-free loop tree at a scripted world to a
 `Returns` with a count by `refl`.
+
+## Log
+
+### 2026-11-03: the friends of `Eutt` are in (from [[codata-up-to-friends-round-2]])
+
+A proof may now call itself under `Eutt::up_to_bisim` and `Eutt::bind_up`
+(end of `coitree_eutt.hthr`). `lib/_tests/std/itree/coitree_eutt_tests.hthr`
+proves the loop congruence and the one-pass unfolding that way (`iter_cong`,
+`iter_unfold`, as probes; promote them into the library here). A friend
+must sit under a constructor: state the self-calling lemma for `CTau`-wrapped
+trees and peel the taus with `tau_l`/`tau_r`, as `iter_cong_tau` does.
