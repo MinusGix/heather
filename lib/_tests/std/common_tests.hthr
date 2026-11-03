@@ -24,6 +24,10 @@ theorem second_pair(): second(Pair(1, True)) = True { refl }
 fn wrap<A>(xs: List<A>) → List<Option<A>> { xs.map(λ x => Some(x)) }
 theorem wrap_is<A>(a: A): wrap<A>([a]) = [Some(a)] { refl }
 
+// `+` at `Nat` is `nat`'s designation, reached qualified.
+fn dbl(x: Nat) → Nat { x + x }
+theorem dbl_two(): dbl(2) = 4 { refl }
+
 theorem double_negation_intro(p: Or<Nat, Nat>): Not(Not(Or<Nat, Nat>)) { λ h => h(p) }
 
 // The core modules are reachable qualified: `logic::not_not_intro` and

@@ -296,7 +296,7 @@ impl Walk<'_> {
             Err(_) => Vec::new(),
         };
         let mut imports = imports;
-        if let Some((path, closure)) = self.common_prelude(&canon)?
+        if let Some((path, closure)) = self.common_prelude()?
             && !closure.contains(&name)
             && !imports.iter().any(|(m, _)| m == heather_elab::COMMON_MODULE)
         {
@@ -314,13 +314,15 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// The common prelude's file and the names of its closure, resolved as
-    /// an import of `from` would be, once per walk. Its closure is read by a
-    /// walk of its own, so a module inside it is known before any of them is
-    /// visited here; a module outside it gets it as a first import.
-    fn common_prelude(&mut self, from: &Path) -> Result<Option<(PathBuf, std::collections::HashSet<String>)>, LoadError> {
+    /// The common prelude's file and the names of its closure, found on the
+    /// `-L` search path (not beside a file: a run without the library on its
+    /// path has no prelude, even for a file that sits next to it), once per
+    /// walk. Its closure is read by a walk of its own, so a module inside it
+    /// is known before any of them is visited here; a module outside it gets
+    /// it as a first import.
+    fn common_prelude(&mut self) -> Result<Option<(PathBuf, std::collections::HashSet<String>)>, LoadError> {
         if self.common.is_none() {
-            let found = match self.resolve(heather_elab::COMMON_MODULE, from) {
+            let found = match self.resolve(heather_elab::COMMON_MODULE, Path::new("")) {
                 Ok(path) => {
                     let mut inner = Walk {
                         search: self.search,
