@@ -49,6 +49,10 @@ pub enum Lint {
     /// A `fn`'s recursive `match` reads its own parameter, so the `fn` is
     /// compiled by measure (issues/fn-recursion-means-the-function.md).
     RecursionByMeasure,
+    /// A structural `fn` whose compiled definition does not unfold to its
+    /// source (issues/recursion-meaning-check.md). Review-mode only: its
+    /// recognizer states and gates one equation per recursive `fn`.
+    RecursionMeaning,
     /// A decimal literal at a carrier that does not hold its value exactly
     /// (`0.1` at a binary float), decided by the carrier's `DecimalLiteral`
     /// instance (docs/floating-point-design.md §15).
@@ -72,6 +76,7 @@ impl Lint {
             Self::RedundantMatchMotive => "redundant-match-motive",
             Self::ManualListConstruction => "manual-list-construction",
             Self::RecursionByMeasure => "recursion-by-measure",
+            Self::RecursionMeaning => "recursion-meaning",
             Self::InexactLiteral => "inexact-literal",
             Self::TacticReport => "tactic-report",
         }

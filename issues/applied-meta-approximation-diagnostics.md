@@ -29,3 +29,7 @@ argument (with the `M := λ A => …` spelling to write instead), and a kinded
 goal at a partial application displays its fixed arguments. Under
 [[class-instance-at-lambda-carrier]]'s route 6 the class case changes, but
 `pick` keeps the approximation, so the message is owed either way.
+
+## Log
+
+- 2026-11-02: docs/elaborator-principles-survey.md proposes taking this approximation last, as a named guess: [[unifier-guesses-postponed]].

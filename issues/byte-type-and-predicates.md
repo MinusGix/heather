@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,native,surface-syntax,design]
 area: heather-in-heather
 created: 2026-10-07
-updated: 2026-10-21
+updated: 2026-11-02
 ---
 
 A byte-reading program spells its byte type `BitVec(8)` everywhere and writes
@@ -55,3 +55,4 @@ Questions to settle:
 ## Log
 
 - 2026-10-21: The code cited above (crates/elab/tests/fixtures/open_read_close.hthr, examples/x86-native/wc.hthr) was burned in B1 ([[native-burn-process-stack]]; last at 189659d, tag native-v0); the language ask stands on its own.
+- 2026-11-02: 2026-11-02 (PR #394 review): Minus asks for named abbreviations such as u8 and u64 for the common BitVec widths. Probed: `def u8: Type = BitVec(8);` is a value and cannot be used as a type ("`u8` cannot be used here"), and a top-level `type` alias is still a parse error. So the alias question here is the general one: a top-level type alias, with u8/u16/u32/u64 (and `Byte`) as its first customers.

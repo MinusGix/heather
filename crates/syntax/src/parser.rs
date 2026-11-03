@@ -2955,14 +2955,12 @@ impl Parser {
         crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
         crate::try_lower::reject_bind_in_type(&result)?;
         for p in &params { crate::try_lower::reject_bind_in_type(&p.ty)?; }
-        if mut_self.is_some() && crate::imperative::has_return(&body) {
-            return Err(ParseError {
-                msg: "`return` is not supported in a `mut self` method yet: its receiver goes back \
-                      out beside the result, which an early exit would skip".into(),
-                span: body.span,
-            });
+        let mut body = crate::imperative::lower_returns(body);
+        // A `mut self` method's `return e` leaves with its receiver as it
+        // stands there, `Mutated(x, e)`, as the body's own end does (§8.2).
+        if let Some(receiver) = &mut_self {
+            crate::imperative::return_receiver(&mut body, receiver, MUTATED_RECORD);
         }
-        let body = crate::imperative::lower_returns(body);
         crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);

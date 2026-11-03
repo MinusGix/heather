@@ -39,3 +39,7 @@ passing it varied.
 - `walk_shape` checks.
 - A split whose ih would not fit after refinement is refused by the
   elaborator, never only by the kernel.
+
+## Log
+
+- 2026-11-02: A top-level recursion lowering would retire this family: [[recursion-on-elaborated-terms]]; meanwhile [[recursion-meaning-check]] catches miscompiles.

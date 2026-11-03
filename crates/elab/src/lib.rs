@@ -142,6 +142,7 @@ mod literals;
 pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
+mod meaning;
 mod measure_context;
 mod metaprograms;
 mod mutual_family;
@@ -1200,6 +1201,13 @@ impl application::ExplicitArgElab for Elaborator {
 }
 
 impl recursion::SelfCallElab for Elaborator {
+    fn note_recursion_on(&self, dec: &str) {
+        let mut decs = self.attempt.recursion_decs.borrow_mut();
+        if !decs.iter().any(|d| d == dec) {
+            decs.push(dec.to_string());
+        }
+    }
+
     fn infer_self_call_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, argument)
     }
@@ -2013,8 +2021,10 @@ impl Elaborator {
     }
 
     /// Turn on the review-mode lints — today `redundant-match-motive`, whose
-    /// recognizer re-elaborates and kernel-checks every written motive. Off
-    /// by default; `heather check --review` sets it.
+    /// recognizer re-elaborates and kernel-checks every written motive, and
+    /// `recursion-meaning`, which states and gates one unfolding equation per
+    /// structurally recursive `fn` (`meaning.rs`). Off by default; `heather
+    /// check --review` sets it.
     pub fn set_review_lints(&mut self, on: bool) {
         self.policy.review_lints = on;
     }
@@ -2123,6 +2133,17 @@ impl Elaborator {
     #[doc(hidden)]
     pub fn forget_owed_argument_checks(&mut self) {
         self.policy.owed_checks_forgotten = true;
+    }
+
+    /// Lower every recursive `fn` structurally, without asking the planner
+    /// whether that means its source. Test-time only: it reproduces the
+    /// planner's past misses (issues/recursion-let-reads-changing-parameter.md,
+    /// the varied branch of #389) so the meaning check
+    /// (issues/recursion-meaning-check.md) can be tested against real
+    /// miscompiles rather than constructed ones.
+    #[doc(hidden)]
+    pub fn skip_recursion_plan(&mut self) {
+        self.policy.recursion_plan_skipped = true;
     }
 
     /// Drain emission-slot findings without disabling the walk.
@@ -3570,6 +3591,9 @@ impl Elaborator {
             heather_syntax::ast::TyKind::Named { name, .. }
                 if self.lookup_inductive(name).is_some_and(|i| i.codata));
         if decl.kind == DeclKind::Fn && !corecursive {
+            if self.policy.recursion_plan_skipped {
+                return self.elab_structural_fn(decl);
+            }
             let self_ref = recursion::SelfRef::of_decl(decl);
             let types: Vec<Option<&Ty>> = decl
                 .tyvars
@@ -3587,8 +3611,22 @@ impl Elaborator {
                     return self.scoped(|s| s.misplaced_recursion.get_mut(), misplaced, |me| me.elab_decl_one(decl, None));
                 }
             }
+            return self.elab_structural_fn(decl);
         }
         self.elab_decl_one(decl, None)
+    }
+
+    /// A `fn` the planner lowers structurally. In review mode, also check
+    /// that the lowering means the source (issues/recursion-meaning-check.md);
+    /// only a `fn` whose self-calls were lowered under a guard has a
+    /// recursion to check.
+    fn elab_structural_fn(&mut self, decl: &Decl) -> R<()> {
+        self.elab_decl_one(decl, None)?;
+        let decs = self.attempt.recursion_decs.borrow().clone();
+        if self.policy.review_lints && !decs.is_empty() {
+            self.review_recursion_meaning(decl, &decs);
+        }
+        Ok(())
     }
 
     /// A `fn` whose recursive `match` reads its own parameter, lowered as if

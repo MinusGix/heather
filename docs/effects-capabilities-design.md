@@ -133,11 +133,13 @@ copy, with the result unchanged. That is what `main(mut io: Io)` will want.
 The refusals are named at parse time:
 
 - a `mut` parameter of a theorem;
-- an implicit `mut` parameter;
-- `return` in a `mut self` body. The receiver goes back out beside the
-  result, and the early exit's `\0after` route would skip that. Lifting this
-  is a follow-up (`issues/mut-self-early-return.md`): wrap the `Return`
-  value in the after-branch too, with the receiver as it stood at the exit.
+- an implicit `mut` parameter.
+
+`return e` in a `mut self` body (built 2026-11-02,
+`issues/mut-self-early-return.md`) returns `Mutated(x, e)` over the
+receiver as the body has threaded it to the `return`: the parser wraps each
+loop `Return` leaf after lowering the body (sequencing design §15.7). It is
+allowed exactly where pure code allows `return`.
 
 ### 2.2 Calling
 
