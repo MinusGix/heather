@@ -132,6 +132,12 @@ pub(super) struct DeclAttempt {
     /// explains, and so the names its note uses for them
     /// (`Elaborator::refused_site_cx`).
     pub(super) telescope: RefCell<crate::spine::Binders>,
+    /// The names of the parameters a structurally guarded self-call recursed
+    /// on. Cleared by `prepare` but **not** by
+    /// `finish`, so the caller of a finished attempt can still read which
+    /// parameter its recursion descended on: the meaning check
+    /// (issues/recursion-meaning-check.md) splits on it.
+    pub(super) recursion_decs: RefCell<Vec<String>>,
 }
 
 /// [`DeclAttempt::instance_matches`]' key past the subject type: the tag, the
@@ -160,6 +166,7 @@ impl DeclAttempt {
         self.decide_uses.get_mut().clear();
         self.trivial_uses.get_mut().clear();
         self.telescope.get_mut().clear();
+        self.recursion_decs.get_mut().clear();
         self.direct_dependencies.get_mut().clear();
         self.children_annotations.get_mut().clear();
         self.wf_slot_annotations.get_mut().clear();
@@ -225,6 +232,7 @@ impl DeclAttempt {
             match_eq_next,
             match_eq_wanted,
             telescope,
+            recursion_decs,
         } = self;
         AttemptMark {
             op_fallback_notes: op_fallback_notes.borrow().len(),
@@ -246,6 +254,7 @@ impl DeclAttempt {
             match_eq_next: match_eq_next.get(),
             match_eq_wanted: match_eq_wanted.borrow().len(),
             telescope: telescope.borrow().clone(),
+            recursion_decs: recursion_decs.borrow().len(),
         }
     }
 
@@ -284,6 +293,7 @@ impl DeclAttempt {
             match_eq_next,
             match_eq_wanted,
             telescope,
+            recursion_decs,
         } = self;
         op_fallback_notes.borrow_mut().truncate(mark.op_fallback_notes);
         op_fallback_uses.borrow_mut().truncate(mark.op_fallback_uses);
@@ -309,6 +319,7 @@ impl DeclAttempt {
         match_eq_next.set(mark.match_eq_next);
         match_eq_wanted.borrow_mut().truncate(mark.match_eq_wanted);
         *telescope.borrow_mut() = mark.telescope;
+        recursion_decs.borrow_mut().truncate(mark.recursion_decs);
     }
 }
 
@@ -333,6 +344,7 @@ pub(super) struct AttemptMark {
     match_eq_next: u32,
     match_eq_wanted: usize,
     telescope: crate::spine::Binders,
+    recursion_decs: usize,
 }
 
 /// [`DeclAttempt::direct_dependencies`]: a set of qualified names that
@@ -419,6 +431,8 @@ pub(super) struct CheckNote {
     pub(super) got: Type,
     pub(super) expected: Type,
     pub(super) level: Level,
+    /// An implicit the argument's type disagreed about, for the message.
+    pub(super) clash: Option<crate::application::SlotClash>,
 }
 
 /// One written `refl` and the equation it claimed, for the same deferred

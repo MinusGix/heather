@@ -718,7 +718,7 @@ and R2 or R3 adds it as a negative control:
 | `while` with neither `decreases` nor `fuel` | "a `while` needs a measure (`decreases m`) or fuel (`fuel n`)" |
 | `while … decreases` in a carrier scope | "a measure cannot see values a bind produces: use `fuel`" |
 | `while … fuel` without `exhausted` | "say what happens when the fuel runs out" |
-| a `mut self` method on a value that is not a `let mut` local | "call it on a `let mut` local, or write `@M::m(…)` for the pair" |
+| a `mut self` method on a value that is not a `let mut` local | "nothing here keeps the update: call it on a `let mut` local …, or call `M::m(…)` by its qualified name for the `Mutated` record" (built; docs/effects-capabilities-design.md §2.2) |
 
 ## 11. Decisions for Minus
 

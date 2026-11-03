@@ -1995,7 +1995,7 @@ impl Elaborator {
                 })
                 .collect();
             let d = (run.len(at) - run.len(home)) as u32;
-            self.unify_under(&hcx, pat, subj, m as u32, d, &mut trial, run.span);
+            self.unify_under(&hcx, pat, subj, m as u32, d, &mut trial, &[], run.span);
             for (k, t) in trial.into_iter().enumerate() {
                 if matches!(sols[k], Sol::Unsolved) && t.solved().is_some() {
                     sols[k] = t;
@@ -2621,7 +2621,7 @@ impl Elaborator {
         let template = Type::El { level: level.clone(), tm: Rc::new(code) };
         let inline = self.unspell_here_in(&template, m)?;
         let mut sols = vec![Sol::Unsolved; m as usize];
-        self.unify_root(&cx, &inline, ty, m, &mut sols, Span { start: 0, end: 0 });
+        self.unify_root(&cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
         let solved = crate::unification::zonked(&inline, m, &sols)?;
         if !self.conv_types(&cx, &solved, ty, level) {
             return None;
@@ -2816,6 +2816,7 @@ impl Elaborator {
         }
         let n = k as u32;
         let pat = Self::match_scope(cx, concl, n, n);
+        let slot_tys = Self::match_slot_tys(cx, doms, n);
         let attempt = |choice: Option<usize>| -> Result<Vec<Option<Term>>, bool> {
             let mut sols = vec![Sol::Unsolved; k];
             if let Some(c) = choice
@@ -2823,7 +2824,7 @@ impl Elaborator {
             {
                 return Err(false);
             }
-            self.unify_root(cx, &pat, target, n, &mut sols, span);
+            self.unify_root(cx, &pat, target, n, &mut sols, &slot_tys, span);
             self.match_dictionaries(cx, doms, n, &mut sols, dicts, None, span);
             let solved = crate::unification::zonked(&pat, n, &sols).ok_or(true)?;
             if !self.conv_types(cx, &solved, target, lvl) {
@@ -2841,6 +2842,12 @@ impl Elaborator {
             }
         }
         attempt(None).ok()
+    }
+
+    /// A match's parameter types over its scratch world, each slot's own
+    /// type, which the unifier holds its solution to.
+    fn match_slot_tys(cx: &Cx, doms: &[(Type, Level)], n: u32) -> Vec<Type> {
+        doms.iter().enumerate().map(|(i, (dom, _))| Self::match_scope(cx, dom, i as u32, n)).collect()
     }
 
     /// `ty`, scoped in `cx` plus `i` of a match's `n` parameters, over the
@@ -2868,6 +2875,7 @@ impl Elaborator {
     #[allow(clippy::too_many_arguments)]
     fn match_dictionaries(&self, cx: &Cx, doms: &[(Type, Level)], n: u32, sols: &mut [Sol], dicts: &MatchDicts, choice: Option<usize>, span: Span) -> bool {
         let mut any = false;
+        let mut slot_tys: Option<Vec<Type>> = None;
         for (i, (dom, dlvl)) in doms.iter().enumerate() {
             if sols[i].solved().is_some() {
                 continue;
@@ -2891,7 +2899,8 @@ impl Elaborator {
             let mut found = false;
             for (goal, glvl) in dicts.goals(self, cx, &ind, span).iter() {
                 let mut trial = sols.to_vec();
-                self.unify_root(cx, &inline, goal, n, &mut trial, span);
+                let slot_tys = slot_tys.get_or_insert_with(|| Self::match_slot_tys(cx, doms, n));
+                self.unify_root(cx, &inline, goal, n, &mut trial, slot_tys, span);
                 let fits = crate::unification::zonked(&pat, n, &trial).is_some_and(|z| self.conv_types(cx, &z, goal, glvl));
                 if !fits {
                     continue;

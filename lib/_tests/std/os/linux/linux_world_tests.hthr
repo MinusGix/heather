@@ -37,6 +37,17 @@ fn two_reads(io: Io) → TwoReads {
 
 theorem two_reads_lit(): two_reads(piped()) = TwoReads(ReadBytes([b(104), b(105)]), ReadBytes([b(33)]), 2) { refl }
 
+// An annotated `let` holds the annotation to the answer, not the record,
+// and still updates `io`.
+fn two_reads_annotated(io: Io) → TwoReads {
+    let mut io = io;
+    let first: ReadResult = io.read(Io::stdin(), 8);
+    let second: ReadResult = io.read(Io::stdin(), 8);
+    TwoReads(first, second, io.past.len())
+}
+theorem two_reads_annotated_lit(): two_reads_annotated(piped()) = two_reads(piped()) { refl }
+theorem two_reads_annotated_neutral(io: Io): two_reads_annotated(io) = two_reads(io) { refl }
+
 // A read cut to the size asked for.
 theorem read_cut(): Io::read(piped(), Io::stdin(), 1).value = ReadBytes([b(104)]) { refl }
 
@@ -130,4 +141,28 @@ fn discards(mut io: Io) → Nat {
 fn through_lambda(mut io: Io) → Nat {
     let f = λ (n: Nat) => { let r = io.read(Io::stdin(), n); r };
     0
+}
+
+// A `mut self` call on a local that is not mutable is refused at the call:
+// it would give the `Mutated` record where the answer was meant, and leave
+// `io` as it was.
+// expect-error: `read` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn on_immutable_param(io: Io) → ReadResult {
+    let r = io.read(Io::stdin(), 8);
+    r
+}
+// expect-error: `read` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn on_immutable_let(w: World()) → Nat {
+    let io = Io::of(w);
+    let r = io.read(Io::stdin(), 8);
+    io.past.len()
+}
+
+// …and on a `let mut` local outside a statement, where nothing threads the
+// update either: as an argument, the call's record would be the argument.
+fn answer(r: ReadResult) → ReadResult { r }
+// expect-error: `read` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn as_argument(mut io: Io) → ReadResult {
+    let r = answer(io.read(Io::stdin(), 8));
+    r
 }

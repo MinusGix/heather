@@ -23,6 +23,15 @@ import algebra;
 
 record BitVec(n: Nat) { bits: [Bool; n] }
 
+// `u8`, `u27`, `u64`: a word of that many bits. A width family
+// (docs/fixed-width-integers-design.md §2): `u64` in type position is
+// `u(64)`, expanded on the spot, so a `u64` *is* a `BitVec(64)` — every
+// lemma, designation and lowering here applies to it unchanged. Unsigned is
+// this type's own reading (`<` is `unsigned_lt`, a numeral is `ofNat`), so
+// an unsigned word needs no type of its own; a signed one does
+// (`i8`, `lib/std/bitvec/sint.hthr`).
+def u: Nat → Type = BitVec;
+
 fn BitVec::nil() → BitVec(0) { BitVec([]) }
 
 fn BitVec::from_bits({n: Nat}, bits: [Bool; n]) → BitVec(n) { BitVec(bits) }
@@ -1257,6 +1266,11 @@ instance(n: Nat, a, b: BitVec(n)) Decide<a = b> {
 // byte is, too: lib/std/bitvec/byte.hthr).
 designation <= at BitVec(n) := BitVec::unsigned_le
 designation < at BitVec(n) := BitVec::unsigned_lt
+// Wrapping arithmetic (the module header): what `u8` arithmetic means.
+designation + at BitVec(n) := BitVec::add
+designation - at BitVec(n) := BitVec::sub
+designation * at BitVec(n) := BitVec::mul
+designation prefix - at BitVec(n) := BitVec::neg
 instance(n: Nat) Numeral<BitVec(n)> { ofNat := λ (k: Nat) => BitVec::ofNat(k) }
 
 theorem BitVec::decrement_increment_step(n: Nat, b: Bool, x: BitVec(n),

@@ -179,6 +179,51 @@ pub(super) struct U<'a> {
     /// an applied meta of one argument. `None` declines, and the aligned
     /// spine's head-plus-leading-arguments rule applies.
     pub(super) slot_view: &'a dyn Fn(&Term) -> Option<(Term, Term)>,
+    /// Every write goes through [`assign`], and this is its one check
+    /// (docs/elaborator-principles-survey.md P1,
+    /// issues/unifier-checked-assignment.md): may `slot` take the solution,
+    /// given what the others hold now? The elaborator's answer holds it to
+    /// the slot's declared type ([`crate::Elaborator::solution_fits`]);
+    /// `false` leaves the slot open, which learn-only always permits.
+    pub(super) admit: &'a dyn Fn(usize, &Term, &[Sol]) -> bool,
+    /// Told when a slot already solved meets a subject that is not its
+    /// solution, syntactically: the first write won, and this is the later
+    /// one it was never compared with. Only told, never acted on: the two
+    /// may still convert, and the caller decides whether a refusal it is
+    /// about to report is this disagreement's downstream. `None` skips the
+    /// comparison (and the strengthening it needs).
+    pub(super) disagree: Option<&'a dyn Fn(usize, &Term)>,
+}
+
+/// The unifier's one write. An open slot takes `s` if [`U::admit`] lets
+/// it; a solved one is compared with `s` when a caller listens
+/// ([`U::disagree`]); a withheld one is never touched.
+fn assign(u: &U<'_>, slot: usize, s: Term, sols: &mut [Sol]) {
+    match &sols[slot] {
+        Sol::Unsolved => {
+            if (u.admit)(slot, &s, sols) {
+                sols[slot] = Sol::Solved(Rc::new(s));
+            }
+        }
+        Sol::Solved(t) => {
+            if let Some(disagree) = u.disagree
+                && **t != s
+            {
+                disagree(slot, &s);
+            }
+        }
+        Sol::Withheld => {}
+    }
+}
+
+/// Is a write to `slot` worth reading the subject for: open, or solved
+/// and compared.
+fn writable(u: &U<'_>, slot: usize, sols: &[Sol]) -> bool {
+    match &sols[slot] {
+        Sol::Unsolved => true,
+        Sol::Solved(_) => u.disagree.is_some(),
+        Sol::Withheld => false,
+    }
 }
 
 impl<'a> U<'a> {
@@ -232,6 +277,8 @@ impl<'a> U<'a> {
             respell: &|_| None,
             constructor: &|_| None,
             slot_view: &|_| None,
+            admit: &|_, _, _| true,
+            disagree: None,
         }
     }
 }
@@ -273,12 +320,12 @@ pub(super) fn unify_ty(
         // and by an instrumented full run, design §6.1); anything else — a
         // non-variable payload, and the today-unreachable permuted or
         // dropping renamings — is declined, which learn-only always permits.
-        if matches!(sols[var.0 as usize], Sol::Unsolved)
+        if writable(u, var.0 as usize, sols)
             && *subst == embed(u.gamma, d)
             && let Some(s) = u.subject_ty(subj, d)
             && let Some(c) = code::code_of(&s)
         {
-            sols[var.0 as usize] = Sol::Solved(Rc::new(c));
+            assign(u, var.0 as usize, c, sols);
         }
         return;
     }
@@ -581,11 +628,11 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
     if let Term::GlobalTm { var, subst } = pat
         && var.0 < n
     {
-        if matches!(sols[var.0 as usize], Sol::Unsolved)
+        if writable(u, var.0 as usize, sols)
             && *subst == embed(u.gamma, d)
             && let Some(s) = u.subject_tm(subj, d)
         {
-            sols[var.0 as usize] = Sol::Solved(Rc::new(s));
+            assign(u, var.0 as usize, s, sols);
         }
         return;
     }

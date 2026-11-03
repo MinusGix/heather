@@ -3439,8 +3439,8 @@ impl Parser {
         let expr = if mutable {
             let span = expr.span;
             crate::imperative::marked(crate::imperative::MUT, expr, span)
-        } else if ty.is_none() && self.mut_receiver(&expr) {
-            // `let p = x.m(a);` on a mutable `x` (§8.2).
+        } else if self.mut_receiver(&expr) {
+            // `let p = x.m(a);` on a mutable `x` (§8.2), annotated or not.
             let span = expr.span;
             crate::imperative::marked(crate::imperative::MUTCALL, expr, span)
         } else {

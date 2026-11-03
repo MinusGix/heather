@@ -1,7 +1,35 @@
 // A character literal at a byte is its code (`'\n'` is `ofNat(8, 10)`), so a
 // program writes `b = '\n'` (docs/native-programs-read-like-programs-design.md
 // §3, S3). A module of its own so `bitvec` does not import `char`.
+//
+// The byte classes are the C locale's `<ctype.h>` sets, which is what a byte
+// program such as `wc` under `LC_ALL=C` counts by: `is_space` is `isspace`,
+// with vertical tab and form feed (Rust's `is_ascii_whitespace` and
+// `Char::is_space` leave vertical tab out). Each is a comparison of the byte
+// (`eq_bit`, `unsigned_lt_bit`), so a step that branches on one is split at
+// the comparison as a written `b = '\n'` is
+// (issues/byte-type-and-predicates.md).
+import bool;
+import algebra;
 import char;
 import bitvec;
 
 instance CharLiteral<BitVec(8)> { ofChar := λ (c: Char) => BitVec::ofNat(c.toNat()) }
+
+// `lo <= b <= hi`, unsigned.
+fn BitVec::in_range(self b: u8, lo, hi: u8) → Bool { !b.unsigned_lt_bit(lo) && !hi.unsigned_lt_bit(b) }
+
+fn BitVec::is_newline(self b: u8) → Bool { b.eq_bit('\n') }
+// ' ', and tab, newline, vertical tab, form feed and return (9 through 13).
+fn BitVec::is_space(self b: u8) → Bool { b.eq_bit(' ') || b.in_range('\t', '\r') }
+fn BitVec::is_blank(self b: u8) → Bool { b.eq_bit(' ') || b.eq_bit('\t') }
+fn BitVec::is_digit(self b: u8) → Bool { b.in_range('0', '9') }
+fn BitVec::is_upper(self b: u8) → Bool { b.in_range('A', 'Z') }
+fn BitVec::is_lower(self b: u8) → Bool { b.in_range('a', 'z') }
+fn BitVec::is_alpha(self b: u8) → Bool { b.is_upper() || b.is_lower() }
+fn BitVec::is_alnum(self b: u8) → Bool { b.is_alpha() || b.is_digit() }
+fn BitVec::is_xdigit(self b: u8) → Bool { b.is_digit() || b.in_range('a', 'f') || b.in_range('A', 'F') }
+// Printable: ' ' through '~'.
+fn BitVec::is_print(self b: u8) → Bool { b.in_range(' ', '~') }
+fn BitVec::is_control(self b: u8) → Bool { b.unsigned_lt_bit(' ') || b.eq_bit(127) }
+fn BitVec::is_ascii(self b: u8) → Bool { b.unsigned_lt_bit(128) }

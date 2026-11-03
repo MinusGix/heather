@@ -578,6 +578,22 @@ fn read_tag(t: &Type) -> Option<u32> {
 /// `gamma` or δ. An `El` of a *neutral* code (an unapplied abbreviation, a
 /// variable at `Type<n>`) is left exactly as it is — unfolding that is
 /// conversion's job, lazily, not this walk's.
+/// `u27` as `("u", 27)`: a name ending in a decimal width, read as a width
+/// family applied to it (docs/fixed-width-integers-design.md §2.2). The
+/// family part ends in a letter and the width has no leading zero, so `x_1`
+/// and `u08` are never read this way.
+pub(crate) fn split_width(name: &str) -> Option<(&str, heather_numeral::Numeral)> {
+    let digits = name.len() - name.bytes().rev().take_while(u8::is_ascii_digit).count();
+    let (family, width) = name.split_at(digits);
+    if width.is_empty() || (width.len() > 1 && width.starts_with('0')) {
+        return None;
+    }
+    if !family.chars().last().is_some_and(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    Some((family, width.parse::<u64>().ok().map(heather_numeral::Numeral::from_u64)?))
+}
+
 pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
     fn is_code_former(t: &Term) -> bool {
         matches!(
@@ -1691,6 +1707,11 @@ impl Elaborator {
                 let expression = Expr { kind: ExprKind::Var(name.to_string()), span };
                 return self.expr_elab().lower_expression_type(self, cx, &expression, span);
             }
+            if args.is_empty()
+                && let Some(lowered) = self.lower_type_value(cx, name, span)?
+            {
+                return Ok(lowered);
+            }
             return Err(self.name_miss(name, format!("unknown type `{name}`"), span));
         };
         if args.len() != ind.params.len() {
@@ -1774,6 +1795,94 @@ impl Elaborator {
             self.memos.named_type_memo.borrow_mut().insert(key, (ind, psi, out.clone()));
         }
         Ok(out)
+    }
+
+    /// A type named by a **value definition** (docs/fixed-width-integers-design.md
+    /// §2): `u8` where `def u8: Type = BitVec(8);`, and `u27` where `def u:
+    /// Nat → Type = …;` is a **width family** and `u27` itself names
+    /// nothing, read as `u(27)`. `None` when the name is neither, so the
+    /// caller's "unknown type" stands.
+    ///
+    /// Unlike a type-valued `fn` call (`docs/types-as-expressions.md` §4,
+    /// lazily `El` of the call), the name is expanded **on the spot**: δ
+    /// through the definition and decoded to the type it names, so `u8` *is*
+    /// `BitVec(8)` to every reader after this one — numerals, instance
+    /// search, designations, the native frontend. A `def` at a universe has
+    /// nothing to compute; it is a name for a type, and the expansion is what
+    /// keeps it from being a second type that every head-keyed table would
+    /// have to learn.
+    pub(crate) fn lower_type_value(&self, cx: &Cx, name: &str, span: Span) -> R<Option<(Type, Level)>> {
+        let var = |name: String| Expr { kind: ExprKind::Var(name), span };
+        let expression = if !self.shadowed_locally(cx, name) && self.global_value(name).is_some() {
+            var(name.to_string())
+        } else if let Some((family, width)) = split_width(name)
+            && let Some(qualified) = self.global_value(family)
+        {
+            // A local `i: Nat` does not hide `i64`: the family is read in
+            // type position, where no local value could have been meant, and
+            // `i`/`u` are the commonest binder names there are. Shadowed, it
+            // is named by its module, which no local can be.
+            let head = if self.shadowed_locally(cx, family) { qualified } else { family.to_string() };
+            Expr {
+                kind: ExprKind::App {
+                    head: Box::new(var(head)),
+                    args: vec![Expr { kind: ExprKind::Num(width), span }],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            }
+        } else {
+            return Ok(None);
+        };
+        self.expand_type_value(cx, &expression, name, span).map(Some)
+    }
+
+    /// `u(n)` written applied in type position, `u` a global `def`: the
+    /// family read at an open width, expanded as [`Self::lower_type_value`]
+    /// expands `u8`, so `i(n)` is `SInt(n)` to every reader. `None` for any
+    /// other head.
+    pub(crate) fn try_type_value_app(&self, cx: &Cx, e: &Expr, span: Span) -> R<Option<(Type, Level)>> {
+        let ExprKind::App { head, .. } = &e.kind else { return Ok(None) };
+        let ExprKind::Var(name) = &head.kind else { return Ok(None) };
+        if self.shadowed_locally(cx, name) || self.global_value(name).is_none() {
+            return Ok(None);
+        }
+        self.expand_type_value(cx, e, name, span).map(Some)
+    }
+
+    /// Elaborate `expression`, a `def` or a `def` applied, and expand the
+    /// type it names: δ through the definition, then decoded.
+    fn expand_type_value(&self, cx: &Cx, expression: &Expr, name: &str, span: Span) -> R<(Type, Level)> {
+        let (term, ty, _) = self.elab_infer(cx, expression)?;
+        let Type::Ty(level) = self.whnf(cx, &ty, span)? else {
+            return err(
+                format!(
+                    "`{name}` is a value of type `{}`, not a type: only a `def` at a universe \
+                     (`def {name}: Type = …;`), or a width family `def u: Nat → Type = …;` \
+                     spelled `u8`, names a type",
+                    self.display_type(cx, &ty)
+                ),
+                span,
+            );
+        };
+        let el = Type::El { level: level.clone(), tm: Rc::new(term) };
+        let head = self.whnf(cx, &el, span)?;
+        let expanded = decode_deep(&head).unwrap_or(head);
+        Ok((expanded, level))
+    }
+
+    fn shadowed_locally(&self, cx: &Cx, name: &str) -> bool {
+        cx.names.iter_inner().any(|n| n == name) || cx.aliases.iter_inner().any(|a| a.name == name)
+    }
+
+    /// The module-qualified spelling of the global `def` `name`, when it is
+    /// one.
+    fn global_value(&self, name: &str) -> Option<String> {
+        let crate::names::NameRes::Found(module) = self.resolve_name(name) else { return None };
+        let base = name.strip_prefix(&format!("{module}::")).unwrap_or(name);
+        self.names.is_value(&module, base).then(|| format!("{module}::{base}"))
     }
 
     /// `D<ā>(v̄)` written in **type position**: a record applied to its value

@@ -1,0 +1,28 @@
+// Literals at a bitvector whose classes the module does not import
+// (issues/numerals-without-algebra-import.md,
+// issues/literal-classes-need-importing.md). `Numeral` is declared in
+// `algebra` and `CharLiteral` in `char`; this module names neither, and
+// reaches both only through `bitvec` and `byte`'s closures, which is where
+// their instances already were. The literals elaborate to the carrier's own
+// construction, pinned by `refl` in checking position, at a literal and at
+// an open width; the last probe is the negative control. Tests, not
+// library: nothing outside lib/_tests imports this module.
+import bitvec; import byte;
+
+fn ten() → BitVec(8) { 10 }
+theorem ten_is_ofNat(): ten() = BitVec::ofNat(10) { refl }
+
+// An open width: the instance is `(n: Nat) Numeral<BitVec(n)>`.
+fn seven(n: Nat) → BitVec(n) { 7 }
+theorem seven_is_ofNat(n: Nat): seven(n) = @BitVec::ofNat(n, 7) { refl }
+
+// A numeral argument, checked at the parameter's carrier.
+fn bump(x: BitVec(8)) → BitVec(8) { BitVec::add(x, 1) }
+theorem bump_is_add(x: BitVec(8)): bump(x) = BitVec::add(x, BitVec::ofNat(1)) { refl }
+
+// A character literal at a byte, through `byte`'s `CharLiteral<BitVec(8)>`.
+fn newline() → BitVec(8) { '\n' }
+theorem newline_is_ten(): newline() = ten() { refl }
+
+// expect-error(kernel): NotConvertible
+theorem ten_is_not_eleven(): ten() = BitVec::ofNat(11) { refl }

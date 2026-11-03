@@ -1,0 +1,86 @@
+// Division of words, unsigned and signed (docs/fixed-width-integers-design.md
+// §4). Unsigned division is restoring long division over the dividend's bits,
+// most significant first, so a closed quotient costs the width squared and
+// never the operands' magnitude: a `u64` divides in 64 steps of a 65-bit
+// compare and subtract, where `Nat::div` through `toNat` would count the
+// quotient down one successor at a time.
+//
+// Division by zero follows SMT-LIB's `bvudiv`/`bvurem`, which is what the
+// long division computes without a special case: every step's remainder is
+// at least zero, so the quotient is all ones and the remainder is the
+// dividend. Signed division truncates toward zero, as C, Rust, x86 `IDIV`
+// and LLVM `sdiv` do, and its remainder takes the dividend's sign; both are
+// SMT-LIB's `bvsdiv`/`bvsrem`, read off the magnitudes, so `MIN / -1` wraps
+// to `MIN` and nothing traps.
+import bool;
+import int;
+import pair;
+import bitvec;
+
+// One step of long division: bring the next dividend bit `b` down into the
+// remainder and subtract the divisor when it fits. The remainder is held one
+// bit wider than the divisor: it is below the divisor before the step, so
+// doubling it and adding a bit cannot carry out, and its top bit, the one
+// `init` drops, is zero.
+fn BitVec::division_step({n, m: Nat}, d: BitVec(Succ(n)), b: Bool,
+        high: Pair<BitVec(m), BitVec(Succ(n))>) → Pair<BitVec(Succ(m)), BitVec(Succ(n))> {
+    let r = high.snd.init().cons_bit(b);
+    match r.unsigned_lt_bit(d) {
+        True => Pair(high.fst.cons_bit(False), r),
+        False => Pair(high.fst.cons_bit(True), r.sub(d)),
+    }
+}
+
+// The quotient and remainder of the `m`-bit `a` by the divisor `d`, held at
+// its widened width. Recursion on the dividend's width: the high `m - 1`
+// bits are divided first, which is the long division's left-to-right order
+// for a least-significant-first vector.
+fn BitVec::long_division({n: Nat}, d: BitVec(Succ(n)), m: Nat, a: BitVec(m))
+        → Pair<BitVec(m), BitVec(Succ(n))> {
+    (match m as λ k => BitVec(k) → Pair<BitVec(k), BitVec(Succ(n))> {
+        Zero => λ a => Pair(BitVec::nil(), BitVec::zero()),
+        Succ(_, ih) => λ a => BitVec::division_step(d, a.head_bit(), ih(a.tail_bits())),
+    })(a)
+}
+
+// Unsigned quotient and remainder. `d.snoc(False)` is `d` zero-extended by
+// one bit, the remainder's width; the remainder comes back below `d`, so its
+// top bit is zero and `init` returns it at `n` bits.
+fn BitVec::udivrem({n: Nat}, self a, d: BitVec(n)) → Pair<BitVec(n), BitVec(n)> {
+    let qr = BitVec::long_division(d.snoc(False), n, a);
+    Pair(qr.fst, qr.snd.init())
+}
+
+fn BitVec::udiv({n: Nat}, self a, d: BitVec(n)) → BitVec(n) { a.udivrem(d).fst }
+
+fn BitVec::urem({n: Nat}, self a, d: BitVec(n)) → BitVec(n) { a.udivrem(d).snd }
+
+// The two's-complement magnitude: `x` when its sign bit is clear, `-x`
+// otherwise. At the most negative value `-x` is `x` again, whose unsigned
+// reading is that value's magnitude, so the signed operations below need no
+// case for it.
+fn BitVec::magnitude({n: Nat}, self x: BitVec(n)) → BitVec(n) {
+    match x.sign_bit() { True => x.neg(), False => x }
+}
+
+// Signed quotient, truncated toward zero: the magnitudes' quotient, negated
+// when the signs differ.
+fn BitVec::sdiv({n: Nat}, self a, d: BitVec(n)) → BitVec(n) {
+    let q = a.magnitude().udiv(d.magnitude());
+    match a.sign_bit().xor(d.sign_bit()) { True => q.neg(), False => q }
+}
+
+// Signed remainder, with the dividend's sign: `a = d * a.sdiv(d) + a.srem(d)`.
+fn BitVec::srem({n: Nat}, self a, d: BitVec(n)) → BitVec(n) {
+    let r = a.magnitude().urem(d.magnitude());
+    match a.sign_bit() { True => r.neg(), False => r }
+}
+
+// The low `n` bits of an integer in two's complement: `-(k + 1)` is the
+// complement of `k`, so a negative integer needs no subtraction from `2^n`.
+fn BitVec::ofInt({n: Nat}, z: Int) → BitVec(n) {
+    match z {
+        OfNat(k) => BitVec::ofNat(k),
+        NegSucc(k) => BitVec::ofNat(k).complement(),
+    }
+}

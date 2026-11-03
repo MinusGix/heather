@@ -136,12 +136,14 @@ mod inductive;
 mod spelling;
 mod sum_layout;
 mod lgg;
+mod solution_check;
 mod lint;
 mod lifetimes;
 mod literals;
 pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
+mod meaning;
 mod measure_context;
 mod metaprograms;
 mod mutual_family;
@@ -198,6 +200,7 @@ use surface::{
 };
 use traits::Traits;
 use types::Types;
+use solution_check::SolutionCheck;
 use unification::{ResolveOb, Sol, unify_ty_root, zonked, zonked_tm};
 pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_ty};
 
@@ -788,6 +791,9 @@ impl expr::UniverseElab for Elaborator {
         if let Some(lowered) = self.try_indexed_ty(cx, expression, span)? {
             return Ok(Some(lowered));
         }
+        if let Some(lowered) = self.try_type_value_app(cx, expression, span)? {
+            return Ok(Some(lowered));
+        }
         self.try_valparam_ty(cx, expression, span)
     }
 
@@ -939,6 +945,10 @@ impl statements::StatementElab for Elaborator {
 
     fn infer_statement_expression(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, expression)
+    }
+
+    fn infer_mut_call(&self, cx: &Cx, call: &Expr) -> R<(Term, Type, Level)> {
+        self.scoped_cell(|s| &s.mut_call_site, Some(call.span), || self.elab_infer(cx, call))
     }
 
     fn read_local(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
@@ -1196,6 +1206,13 @@ impl application::ExplicitArgElab for Elaborator {
 }
 
 impl recursion::SelfCallElab for Elaborator {
+    fn note_recursion_on(&self, dec: &str) {
+        let mut decs = self.attempt.recursion_decs.borrow_mut();
+        if !decs.iter().any(|d| d == dec) {
+            decs.push(dec.to_string());
+        }
+    }
+
     fn infer_self_call_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, argument)
     }
@@ -1364,15 +1381,15 @@ impl application::ImplicitApplicationElab for Elaborator {
         sols: &mut [Sol],
         meta_doms: &[Type],
         span: Span,
-    ) {
+    ) -> Vec<(usize, Rc<Term>)> {
         self.unify_arg_ty(cx, parameter, argument, n, sols, meta_doms, span)
     }
 
-    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span) {
+    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span, clash: Option<application::SlotClash>) {
         if self.policy.owed_checks_forgotten {
             return;
         }
-        self.note_check_mismatch(cx, got, expected, level, span)
+        self.note_check_clash(cx, got, expected, level, span, clash)
     }
 
     fn solve_application_from_expected(
@@ -2009,8 +2026,10 @@ impl Elaborator {
     }
 
     /// Turn on the review-mode lints — today `redundant-match-motive`, whose
-    /// recognizer re-elaborates and kernel-checks every written motive. Off
-    /// by default; `heather check --review` sets it.
+    /// recognizer re-elaborates and kernel-checks every written motive, and
+    /// `recursion-meaning`, which states and gates one unfolding equation per
+    /// structurally recursive `fn` (`meaning.rs`). Off by default; `heather
+    /// check --review` sets it.
     pub fn set_review_lints(&mut self, on: bool) {
         self.policy.review_lints = on;
     }
@@ -2119,6 +2138,17 @@ impl Elaborator {
     #[doc(hidden)]
     pub fn forget_owed_argument_checks(&mut self) {
         self.policy.owed_checks_forgotten = true;
+    }
+
+    /// Lower every recursive `fn` structurally, without asking the planner
+    /// whether that means its source. Test-time only: it reproduces the
+    /// planner's past misses (issues/recursion-let-reads-changing-parameter.md,
+    /// the varied branch of #389) so the meaning check
+    /// (issues/recursion-meaning-check.md) can be tested against real
+    /// miscompiles rather than constructed ones.
+    #[doc(hidden)]
+    pub fn skip_recursion_plan(&mut self) {
+        self.policy.recursion_plan_skipped = true;
     }
 
     /// Drain emission-slot findings without disabling the walk.
@@ -3566,6 +3596,9 @@ impl Elaborator {
             heather_syntax::ast::TyKind::Named { name, .. }
                 if self.lookup_inductive(name).is_some_and(|i| i.codata));
         if decl.kind == DeclKind::Fn && !corecursive {
+            if self.policy.recursion_plan_skipped {
+                return self.elab_structural_fn(decl);
+            }
             let self_ref = recursion::SelfRef::of_decl(decl);
             let types: Vec<Option<&Ty>> = decl
                 .tyvars
@@ -3583,8 +3616,22 @@ impl Elaborator {
                     return self.scoped(|s| s.misplaced_recursion.get_mut(), misplaced, |me| me.elab_decl_one(decl, None));
                 }
             }
+            return self.elab_structural_fn(decl);
         }
         self.elab_decl_one(decl, None)
+    }
+
+    /// A `fn` the planner lowers structurally. In review mode, also check
+    /// that the lowering means the source (issues/recursion-meaning-check.md);
+    /// only a `fn` whose self-calls were lowered under a guard has a
+    /// recursion to check.
+    fn elab_structural_fn(&mut self, decl: &Decl) -> R<()> {
+        self.elab_decl_one(decl, None)?;
+        let decs = self.attempt.recursion_decs.borrow().clone();
+        if self.policy.review_lints && !decs.is_empty() {
+            self.review_recursion_meaning(decl, &decs);
+        }
+        Ok(())
     }
 
     /// A `fn` whose recursive `match` reads its own parameter, lowered as if
@@ -6583,6 +6630,13 @@ impl Elaborator {
     /// two types that might yet convert is worse than no message. Only
     /// `NotConvertible`, which is the decided answer, is reported.
     fn note_check_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span) {
+        self.note_check_clash(cx, got, expected, lvl, span, None)
+    }
+
+    /// [`Self::note_check_mismatch`] for an argument whose type disagreed
+    /// with an implicit already solved: the clash is said beside the
+    /// mismatch if the gate refuses (issues/unifier-checked-assignment.md).
+    fn note_check_clash(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span, clash: Option<application::SlotClash>) {
         // **Recording is not probing** (`issues/elab-diagnostic-probe-cost.md`).
         // The conversion below used to run here, on every checking site of
         // every declaration, to find out whether there was anything to say —
@@ -6605,6 +6659,7 @@ impl Elaborator {
             got: got.clone(),
             expected: expected.clone(),
             level: lvl.clone(),
+            clash,
         });
     }
 
@@ -6627,6 +6682,7 @@ impl Elaborator {
             got,
             expected,
             level,
+            clash,
         } = note;
         if self
             .goal_oracle()
@@ -6668,7 +6724,8 @@ impl Elaborator {
         let want_s = self.display_type_clean(cx, expected);
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
-                "this has type `{g}`, but `{w}` is expected here{}{}",
+                "this has type `{g}`, but `{w}` is expected here{}{}{}",
+                clash.as_ref().map(|c| self.slot_clash_note(cx, c)).unwrap_or_default(),
                 self.opaque_equation_note(cx, got, expected),
                 self.cast_help(cx, got, expected, *span),
             )),
@@ -6691,6 +6748,28 @@ impl Elaborator {
             ),
         };
         Some((note, *span))
+    }
+
+    /// What an argument's [`application::SlotClash`] adds to its mismatch:
+    /// the implicit, what an earlier argument solved it to, and what this
+    /// one's type says. Each value is spelled as the type it decodes to when
+    /// the slot is a type, as a term otherwise; one that does not spell
+    /// leaves the clause out rather than show a raw node.
+    fn slot_clash_note(&self, cx: &Cx, clash: &application::SlotClash) -> String {
+        let show = |t: &Rc<Term>| match &clash.dom {
+            Some(Type::Ty(level)) => {
+                self.display_type_clean(cx, &Type::El { level: level.clone(), tm: Rc::clone(t) })
+            }
+            _ => self.spell_term_clean(cx, t),
+        };
+        let name = &clash.name;
+        match (show(&clash.first), show(&clash.later)) {
+            (Some(first), Some(later)) if first != later => format!(
+                "; `{name}` was inferred as `{first}` from an earlier argument, \
+                 and this argument's type would make it `{later}`"
+            ),
+            _ => format!("; `{name}` was inferred from an earlier argument, and this argument's type disagrees"),
+        }
     }
 
     /// The first recorded checking mismatch that has something to say, probed
@@ -8711,15 +8790,14 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         // At another expected carrier, use the ordinary class resolver. The
-        // class is optional at the language level: a program that has not
-        // imported the standard algebra module keeps the historical Nat-only
-        // mismatch below. Once `Numeral` is visible, however, a missing
+        // class is optional at the language level: a program whose closure
+        // does not hold the standard algebra module keeps the historical
+        // Nat-only mismatch below. Once `algebra::Numeral` is in the closure,
+        // however — read by identity, not by a name this module may not
+        // import (issues/numerals-without-algebra-import.md) — a missing
         // instance is the useful diagnosis and not a later Nat-vs-carrier
         // conversion error.
-        if let Some(class) = self.lookup_class("Numeral")
-            && class.params.len() == 1
-            && class.valparams.is_empty()
-            && let Some(ind) = self.lookup_inductive(&class.name).cloned()
+        if let Some((ind, named)) = self.literal_class_record(literals::NUMERAL)
             && let Some(field) = ind.field_index("ofNat")
         {
             let targs = [(expected.clone(), expected_level.clone())];
@@ -8729,31 +8807,36 @@ impl Elaborator {
                 .unwrap_or_else(|| "the expected type".to_string());
             let display = format!("Numeral<{carrier}>");
             let mut trace = Vec::new();
-            let Some(dict) =
-                self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
-            else {
-                return Err(ElabError::Resolution {
-                    goal: display,
-                    span,
-                    trace,
-                });
-            };
-            let (embed, embed_ty, embed_level) =
-                self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
-            let since = self.attempt.trivial_uses.borrow().len();
-            let (out, _, _) = application::apply_explicit(
-                self,
-                cx,
-                Some("ofNat"),
-                Rc::new(Vec::new()),
-                0,
-                embed,
-                embed_ty,
-                embed_level,
-                std::slice::from_ref(e),
-            )?;
-            self.settle_deferred_units(since)?;
-            return Ok(self.reduced_embedding(cx, out));
+            match self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace) {
+                Some(dict) => {
+                    let (embed, embed_ty, embed_level) =
+                        self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
+                    let since = self.attempt.trivial_uses.borrow().len();
+                    let (out, _, _) = application::apply_explicit(
+                        self,
+                        cx,
+                        Some("ofNat"),
+                        Rc::new(Vec::new()),
+                        0,
+                        embed,
+                        embed_ty,
+                        embed_level,
+                        std::slice::from_ref(e),
+                    )?;
+                    self.settle_deferred_units(since)?;
+                    return Ok(self.reduced_embedding(cx, out));
+                }
+                None if named => {
+                    return Err(ElabError::Resolution {
+                        goal: display,
+                        span,
+                        trace,
+                    });
+                }
+                // Reached by identity only, and no instance: the `Nat`
+                // reading below, as before the class was reachable.
+                None => {}
+            }
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type
@@ -9719,23 +9802,13 @@ impl Elaborator {
     }
 
     /// The unifier's context for a root attempt in `cx`: the scope, and
-    /// [`Self::spine_type_args`] for the `app@` nodes of a subject.
-    fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], span: Span) {
-        let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, span);
-        let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
-        let respell = |t: &Type| self.respell_ty(cx, t);
-        let constructor = |t: &Type| self.constructor_spelling(cx, t, span);
-        let slot_view = |t: &Term| self.slot_view(t);
-        let u = unification::U {
-            gamma: &cx.gamma,
-            subject_metas: None,
-            type_args: &type_args,
-            canonical_head: &canonical_head,
-            respell: &respell,
-            constructor: &constructor,
-            slot_view: &slot_view,
-        };
-        unify_ty_root(&u, pat, subj, n, 0, sols);
+    /// [`Self::spine_type_args`] for the `app@` nodes of a subject. Every
+    /// solution is held to its slot's declared type in `doms` (the call's
+    /// scratch world; a slot past its end is not judged), and `true` means a
+    /// write was refused for not inhabiting it ([`SolutionCheck`]).
+    #[allow(clippy::too_many_arguments)]
+    fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], doms: &[Type], span: Span) -> bool {
+        self.unify_checked(cx, pat, subj, n, 0, sols, doms, None, span)
     }
 
     /// [`Self::unify_root`] for a subject `d` binders past `cx`: the
@@ -9743,12 +9816,33 @@ impl Elaborator {
     /// the `d` is not learned. The tactic host's holes, made in a scope
     /// enclosing the one a comparison happens in, are unified this way.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn unify_under(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol], span: Span) {
+    pub(crate) fn unify_under(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol], doms: &[Type], span: Span) -> bool {
+        self.unify_checked(cx, pat, subj, n, d, sols, doms, None, span)
+    }
+
+    /// The one root of the unifier: its context in `cx`, its writes held to
+    /// `doms` by a [`SolutionCheck`], and `disagree` told of a later
+    /// subject a solved slot meets ([`unification::U::disagree`]).
+    #[allow(clippy::too_many_arguments)]
+    fn unify_checked(
+        &self,
+        cx: &Cx,
+        pat: &Type,
+        subj: &Type,
+        n: u32,
+        d: u32,
+        sols: &mut [Sol],
+        doms: &[Type],
+        disagree: Option<&dyn Fn(usize, &Term)>,
+        span: Span,
+    ) -> bool {
         let type_args = |t: &Term, e: u32| self.spine_type_args(cx, t, e, span);
         let canonical_head = |t: &Term, e: u32| self.canonical_head(cx, t, e);
         let respell = |t: &Type| self.respell_ty(cx, t);
         let constructor = |t: &Type| self.constructor_spelling(cx, t, span);
         let slot_view = |t: &Term| self.slot_view(t);
+        let check = SolutionCheck::new(self, cx, doms, n);
+        let admit = |i: usize, s: &Term, sols: &[Sol]| check.admit(i, s, sols);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
@@ -9757,8 +9851,11 @@ impl Elaborator {
             respell: &respell,
             constructor: &constructor,
             slot_view: &slot_view,
+            admit: &admit,
+            disagree,
         };
         unify_ty_root(&u, pat, subj, n, d, sols);
+        check.settle(sols)
     }
 
     /// Application with implicit-argument insertion
@@ -9815,9 +9912,9 @@ impl Elaborator {
     ///    never asked to reduce.
     ///
     /// Every read is **held to the slots' declared types** (`meta_doms`):
-    /// an operation-typed slot whose type is already known keeps only a
-    /// solution that inhabits it ([`Self::reject_ill_typed_solutions`]), so
-    /// the one thing a read may undo is what that same read just recorded.
+    /// a slot whose type is already known takes only a solution that
+    /// inhabits it ([`SolutionCheck`], at the unifier's one write), so a
+    /// read never records what the call could not keep.
     /// When it undid something, the argument was written in other symbols —
     /// `x ≈ y` at `Rat` against `a * d ≈ c * b` at `Int` — and before the
     /// whnf the read walks the type's first [`INDEX_UNFOLD_STEPS`] reducts,
@@ -9825,6 +9922,11 @@ impl Elaborator {
     /// that fits: `Dyadic::Le(a, b)` is `Rat::Le(a.rat(), b.rat())` one δ
     /// step on (issues/index-inference-through-unfolding.md).
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// Returns the slots already solved that the argument's own type met
+    /// with another subject ([`application::SlotClash`]): read off the
+    /// first, syntactic read only, since the retries run only when it
+    /// learned nothing.
     fn unify_arg_ty(
         &self,
         cx: &Cx,
@@ -9833,6 +9935,23 @@ impl Elaborator {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        span: Span,
+    ) -> Vec<(usize, Rc<Term>)> {
+        let clashes = RefCell::new(Vec::new());
+        self.unify_arg_reads(cx, dom_orig, arg_ty, n, sols, meta_doms, &clashes, span);
+        clashes.into_inner()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn unify_arg_reads(
+        &self,
+        cx: &Cx,
+        dom_orig: &Type,
+        arg_ty: &Type,
+        n: u32,
+        sols: &mut [Sol],
+        meta_doms: &[Type],
+        clashes: &RefCell<Vec<(usize, Rc<Term>)>>,
         span: Span,
     ) {
         let learned = |sols: &[Sol]| sols.iter().filter(|s| s.solved().is_some()).count();
@@ -9850,12 +9969,10 @@ impl Elaborator {
         let dom = dom_inline.as_ref().unwrap_or(dom_orig);
         let arg_inline = self.unspell_deep_now(arg_ty, 0);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
-        let unify_checked = |sols: &mut [Sol], subject: &Type| -> bool {
-            let mark: Vec<bool> = sols.iter().map(|s| matches!(s, Sol::Unsolved)).collect();
-            self.unify_root(cx, dom, subject, n, sols, span);
-            self.reject_ill_typed_solutions(cx, &mark, sols, meta_doms, n)
-        };
-        let rejected = unify_checked(sols, arg_ty);
+        let unify_checked =
+            |sols: &mut [Sol], subject: &Type| -> bool { self.unify_root(cx, dom, subject, n, sols, meta_doms, span) };
+        let record = |slot: usize, later: &Term| clashes.borrow_mut().push((slot, Rc::new(later.clone())));
+        let rejected = self.unify_checked(cx, dom, arg_ty, n, 0, sols, meta_doms, Some(&record), span);
         if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
             return;
         }
@@ -9889,53 +10006,6 @@ impl Elaborator {
         }
     }
 
-    /// Undo the solutions a read just recorded (`unsolved` marks the slots
-    /// that were open before it) at **operation-typed** slots whose declared
-    /// type is known and which the solution does not inhabit. The congruence
-    /// aligns a flexible spine against any rigid one of its length, so
-    /// `?≈(l, r)` against `Rat::Same(x, y)` takes `?≈ := Rat::Same` even where
-    /// `?≈ : Int → Int → Type` is already fixed; that solution is not a
-    /// candidate answer, and keeping it hands the instance search a goal no
-    /// instance can be (issues/index-inference-through-unfolding.md). Only `Π`
-    /// domains are judged, since those are the slots this alignment fills,
-    /// and a solution whose type the kernel cannot infer is kept: still
-    /// learn-only, and the kernel still judges the call. `true` when one was
-    /// undone.
-    fn reject_ill_typed_solutions(
-        &self,
-        cx: &Cx,
-        unsolved: &[bool],
-        sols: &mut [Sol],
-        meta_doms: &[Type],
-        n: u32,
-    ) -> bool {
-        let fresh: Vec<usize> = (0..sols.len().min(meta_doms.len()))
-            .filter(|&i| unsolved[i] && sols[i].solved().is_some() && matches!(meta_doms[i], Type::Pi { .. }))
-            .collect();
-        if fresh.is_empty() {
-            return false;
-        }
-        let psi = self.goal_psi();
-        let oracle = oracle::SemanticOracle::in_world(psi.clone(), self.policy.fuel);
-        let mut rejected = false;
-        for i in fresh {
-            let Some(dom) = zonked(&meta_doms[i], n, sols) else { continue };
-            let solution = Rc::clone(sols[i].solved().expect("a fresh solution"));
-            let Ok((ty, level)) = stats::time_kernel(|| {
-                typing::infer_term(&psi, 0, Layer::Prog, &cx.gamma, &solution, self.policy.fuel)
-            }) else {
-                continue;
-            };
-            let fits = stats::time_kernel(|| {
-                oracle.convert_type(&cx.gamma, Layer::Prog, &ty, &dom, &level).is_ok()
-            });
-            if !fits {
-                sols[i] = Sol::Unsolved;
-                rejected = true;
-            }
-        }
-        rejected
-    }
 
     /// Expected-type-directed solving (docs/unifier-completeness-design.md
     /// §5): the expected type, consulted for the implicits an argument's type
@@ -10018,9 +10088,7 @@ impl Elaborator {
             // the slots' types as an argument's read is: `x ≈ z` at `Rat`
             // against `?≈(?*(a, f), ?*(e, b))` at `Int` pairs `?≈` with
             // `Rat::Same` (issues/index-inference-through-unfolding.md).
-            let unsolved: Vec<bool> = sols.iter().map(|s| matches!(s, Sol::Unsolved)).collect();
-            self.unify_root(cx, result_ty, expected, n, sols, span);
-            self.reject_ill_typed_solutions(cx, &unsolved, sols, meta_doms, n);
+            self.unify_root(cx, result_ty, expected, n, sols, meta_doms, span);
             // The expected type's weak head can teach only the metas the
             // result type still mentions: unification records into the
             // pattern's metas and nowhere else. Once it mentions none, the
@@ -10034,9 +10102,7 @@ impl Elaborator {
             }
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            let unsolved: Vec<bool> = sols.iter().map(|s| matches!(s, Sol::Unsolved)).collect();
-            self.unify_root(cx, result_ty, &head, n, sols, span);
-            self.reject_ill_typed_solutions(cx, &unsolved, sols, meta_doms, n);
+            self.unify_root(cx, result_ty, &head, n, sols, meta_doms, span);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`
@@ -10044,10 +10110,10 @@ impl Elaborator {
         // spines it heads). The pattern is in the scratch world and the
         // subject in the committed one, exactly as at an argument's domain.
         sols[m] = Sol::Withheld;
-        self.unify_root(cx, result_ty, expected, n, sols, span);
+        self.unify_root(cx, result_ty, expected, n, sols, meta_doms, span);
         let expected_head = self.whnf(cx, expected, span)?;
         let expected_head = self.unspell_deep_now(&expected_head, 0).unwrap_or(expected_head);
-        self.unify_root(cx, result_ty, &expected_head, n, sols, span);
+        self.unify_root(cx, result_ty, &expected_head, n, sols, meta_doms, span);
         sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are
         // substituted away: the witnesses are compared with `==`, and an

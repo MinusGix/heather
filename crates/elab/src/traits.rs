@@ -1984,6 +1984,45 @@ impl Elaborator {
         self.traits.class(&self.key_of(name)?).cloned()
     }
 
+    /// A one-parameter class the surface syntax reads by its **identity**
+    /// (`algebra::Numeral` for a numeral, `char::CharLiteral` for a character
+    /// literal), with the record it lowers to: found whenever its declaring
+    /// module is in this module's closure, whether or not the module can
+    /// name it (issues/numerals-without-algebra-import.md). Its instances
+    /// are visible by the closure already (docs/module-dag-design.md §2), so
+    /// requiring the class's *name* in scope as well was the only gap, and
+    /// it is the one `[…]` never had: `CollectionLiteral` is read by key.
+    /// The registry digest covers class events, so an image that read one
+    /// this way is invalidated as one that named it would be.
+    /// The record of the literal class `key` (`algebra::Numeral`), and
+    /// whether this module names it. A class the module names — the
+    /// library's, or one of its own with the same name and shape — is used as
+    /// it always was, a failed search included. One reached only by identity
+    /// ([`Self::syntax_class`]) is an offer: when its search finds nothing,
+    /// the caller keeps the reading it had before the class was reachable
+    /// (a numeral is a `Nat`), so a carrier that computes to `Nat` (`Resp(c)`
+    /// at a constructor) still checks.
+    pub(crate) fn literal_class_record(&self, key: &str) -> Option<(Rc<crate::inductive::Inductive>, bool)> {
+        let name = key.rsplit("::").next().unwrap_or(key);
+        if let Some(class) = self.lookup_class(name)
+            && class.params.len() == 1
+            && class.valparams.is_empty()
+            && let Some(ind) = self.lookup_inductive(&class.name).cloned()
+        {
+            return Some((ind, true));
+        }
+        self.syntax_class(key).map(|(_, ind)| (ind, false))
+    }
+
+    pub(crate) fn syntax_class(&self, key: &str) -> Option<(Rc<ClassInfo>, Rc<crate::inductive::Inductive>)> {
+        let class = self.traits.class(key)?.clone();
+        if class.params.len() != 1 || !class.valparams.is_empty() {
+            return None;
+        }
+        let ind = self.types.inductive(key)?.clone();
+        Some((class, ind))
+    }
+
     /// A written head of a class over a type constructor, re-spelled as the
     /// record it lowers to (issues/higher-kinded-classes.md, piece 3):
     ///

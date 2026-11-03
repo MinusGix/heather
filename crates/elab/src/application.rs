@@ -102,7 +102,25 @@ pub(crate) enum ObligationProgress {
 /// before its discharge (a re-plan, an error) records nothing.
 #[derive(Default)]
 pub(crate) struct OwedChecks {
-    owed: Vec<(Type, Type, Level, Span)>,
+    owed: Vec<(Type, Type, Level, Span, Option<(usize, Rc<Term>)>)>,
+}
+
+/// An implicit the unifier had already solved, met again by a later
+/// argument's type with another subject (issues/unifier-checked-assignment.md):
+/// the first write won, and this is the write it was never compared with. Kept
+/// raw beside the argument's owed comparison and spelled only if the gate
+/// refuses the call, so a call that elaborates pays for an `Rc` clone.
+#[derive(Clone)]
+pub(crate) struct SlotClash {
+    /// The implicit's parameter name.
+    pub(crate) name: String,
+    /// Its declared type, in the committed world (a `Ty` slot's solution is
+    /// a code and is shown as the type it decodes to).
+    pub(crate) dom: Option<Type>,
+    /// What it was solved to, and what this argument's type would have made
+    /// it, both committed-world terms.
+    pub(crate) first: Rc<Term>,
+    pub(crate) later: Rc<Term>,
 }
 
 impl OwedChecks {
@@ -123,14 +141,23 @@ impl OwedChecks {
         span: Span,
         at: Span,
     ) {
-        elab.unify_application_argument_type(cx, dom, &got, n, sols, meta_doms, span);
-        self.owed.push((dom.clone(), got, level.clone(), at));
+        let clash = elab.unify_application_argument_type(cx, dom, &got, n, sols, meta_doms, span).into_iter().next();
+        self.owed.push((dom.clone(), got, level.clone(), at, clash));
     }
 
-    /// Record every owed comparison, each domain under the call's solutions.
-    fn discharge(self, elab: &impl ImplicitApplicationElab, cx: &Cx, substitution: &GlobalSubst) {
-        for (dom, got, level, span) in self.owed {
-            elab.note_argument_mismatch(cx, &got, &dom.apply_global(substitution), &level, span);
+    /// Record every owed comparison, each domain under the call's solutions,
+    /// with the implicit this argument disagreed about, if any (`clash`
+    /// names a slot and gives what it was solved to and its type).
+    fn discharge(
+        self,
+        elab: &impl ImplicitApplicationElab,
+        cx: &Cx,
+        substitution: &GlobalSubst,
+        clash: impl Fn(usize, Rc<Term>) -> Option<SlotClash>,
+    ) {
+        for (dom, got, level, span, later) in self.owed {
+            let clash = later.and_then(|(slot, later)| clash(slot, later));
+            elab.note_argument_mismatch(cx, &got, &dom.apply_global(substitution), &level, span, clash);
         }
     }
 }
@@ -173,7 +200,9 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
     /// records that comparison for the gate; the one direct call teaches a
     /// literal's counted length before the literal itself is checked.
     /// `meta_doms` are the declared types of the slots allocated so far: a
-    /// solution read at a slot whose domain is known is held to it.
+    /// solution read at a slot whose domain is known is held to it. Returns
+    /// the slots already solved that the argument's type met with another
+    /// subject, and that subject ([`SlotClash`]).
     #[allow(clippy::too_many_arguments)]
     fn unify_application_argument_type(
         &self,
@@ -184,14 +213,17 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         sols: &mut [Sol],
         meta_doms: &[Type],
         span: Span,
-    );
+    ) -> Vec<(usize, Rc<Term>)>;
 
     /// Record that the argument at `span`, of type `got`, sits at a parameter
     /// of type `expected` (both in the committed world) with nothing in the
     /// elaborator having compared the two: the gate compares them, and this is
     /// the site its refusal is reported at. Recording, not probing — the
-    /// checking forms' [`crate::Elaborator::note_check_mismatch`].
-    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span);
+    /// checking forms' [`crate::Elaborator::note_check_mismatch`]. `clash` is
+    /// an implicit this argument's type disagreed about, said beside the
+    /// mismatch if there is one.
+    #[allow(clippy::too_many_arguments)]
+    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span, clash: Option<SlotClash>);
 
     #[allow(clippy::too_many_arguments)]
     fn solve_application_from_expected(
@@ -1280,7 +1312,14 @@ fn apply_implicit_planned(
         entries.push(GlobalEntry::Tm(solution));
     }
     let substitution = GlobalSubst { entries };
-    owed.discharge(elab, cx, &substitution);
+    owed.discharge(elab, cx, &substitution, |slot, later| {
+        let first = Rc::clone(sols.get(slot)?.solved()?);
+        let name = slot_param.get(slot).and_then(|&p| params.get(p))?.name.clone();
+        // A slot's type is in the scratch world; only a meta-free one is
+        // carried over, which is the one a message can spell.
+        let dom = meta_doms.get(slot).and_then(|d| zonked(d, n, &sols));
+        Some(SlotClash { name, dom, first, later })
+    });
     let (term, ty) = (
         term.apply_global(&substitution),
         ty.apply_global(&substitution),
@@ -1410,13 +1449,14 @@ mod tests {
             _sols: &mut [Sol],
             _meta_doms: &[Type],
             _span: Span,
-        ) {
+        ) -> Vec<(usize, Rc<Term>)> {
             assert!(self.inferred.is_some(), "the fixture has no inferred argument");
             // Learns nothing, as a failed unification does.
             self.events.borrow_mut().push("unify");
+            Vec::new()
         }
 
-        fn note_argument_mismatch(&self, _cx: &Cx, got: &Type, expected: &Type, _level: &Level, _span: Span) {
+        fn note_argument_mismatch(&self, _cx: &Cx, got: &Type, expected: &Type, _level: &Level, _span: Span, _clash: Option<SlotClash>) {
             self.events.borrow_mut().push("note");
             self.notes.borrow_mut().push((got.clone(), expected.clone()));
         }

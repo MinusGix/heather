@@ -41,6 +41,8 @@ mod mutual_recursion;
 mod termination_measures;
 #[path = "../recursion_meaning.rs"]
 mod recursion_meaning;
+#[path = "../recursion_meaning_check.rs"]
+mod recursion_meaning_check;
 #[path = "../termination_local_evidence.rs"]
 mod termination_local_evidence;
 #[path = "../decreases_unfolding.rs"]
