@@ -445,6 +445,33 @@ fn tick_until_zero(xs: List<Nat>) → Nat {
 }
 theorem tick_until_zero_lit(): tick_until_zero([1, 2, 0, 5]) = 3 { refl }
 
+// `return` in a `mut self` method leaves with the receiver as the body has
+// threaded it so far: here after the ticks before the zero.
+fn Counter::tick_nonzero(mut self c: Counter, xs: List<Nat>) → Bool {
+    for x in xs {
+        if x = 0 { return Bool::False }
+        c.tick(x);
+    }
+    Bool::True
+}
+theorem tick_nonzero_stops(c: Counter): Counter::tick_nonzero(c, [1, 0, 5])
+    = Mutated(Counter(c.n + 1, Cons(1, c.log)), Bool::False) { refl }
+theorem tick_nonzero_runs(c: Counter): Counter::tick_nonzero(c, [2])
+    = Mutated(Counter(c.n + 2, Cons(2, c.log)), Bool::True) { refl }
+theorem tick_nonzero_lit(): Counter::tick_nonzero(Counter(0, []), [3, 4, 0]).after = Counter(7, [4, 3]) { refl }
+
+// A search that does not touch the receiver in its loop returns it as it
+// came in; the rest of the body runs only when the loop ends.
+fn Counter::tick_unless_zero(mut self c: Counter, xs: List<Nat>) → Nat {
+    for x in xs {
+        if x = 0 { return c.n }
+    }
+    c.tick(1)
+}
+theorem tick_unless_zero_found(c: Counter): Counter::tick_unless_zero(c, [5, 0]) = Mutated(c, c.n) { refl }
+theorem tick_unless_zero_not(c: Counter): Counter::tick_unless_zero(c, [5])
+    = Mutated(Counter(c.n + 1, Cons(1, c.log)), c.n + 1) { refl }
+
 // A `mut` parameter is a local copy; the call is the function's value.
 fn tick_tail(mut c: Counter) → Nat { c.tick(4) }
 theorem tick_tail_lit(): tick_tail(Counter(1, [])) = 5 { refl }

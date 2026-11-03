@@ -1,6 +1,6 @@
 ---
 title: Early return from a mut self method
-status: open
+status: closed
 labels: [language,effects,frontend]
 area: language
 milestone: [lang-sequencing,nh-effects]
@@ -19,3 +19,7 @@ A `mut self` method cannot `return` early. The parser refuses it with "`return` 
 ## Done when
 
 `Io::read_lines` is written with `ReadFailed(_) => { return None }`, it checks against the same literal probes (`lib/_tests/native/runtime/line_tools_tests.hthr`), and a probe pins a `return` inside a `for` in a `mut self` method at a neutral world.
+
+## Log
+
+- 2026-11-02: Built: the parser wraps each returning loop's `\0ret(e)` leaf in `Mutated(x, e)` over the receiver as threaded there (crates/syntax/src/imperative.rs `return_receiver`, sequencing design §15.7). `Io::read_lines` returns `None` at a failed read; probes: `read_lines_fails` at a neutral history (line_tools_tests), `tick_nonzero_*`/`tick_unless_zero_*` at a neutral receiver (imperative_statements_tests). Return outside a top-level loop stays refused as in pure code.

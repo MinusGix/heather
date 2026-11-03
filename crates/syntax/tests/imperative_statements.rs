@@ -153,6 +153,10 @@ fn a_mut_self_method_returns_its_receiver_beside_its_result() {
     // body ends in `Mutated(c, value)` (docs/sequencing-surface-design.md §8.2).
     let parsed = format!("{:?}", parse_file("fn C::tick(mut self c: C, n: Nat) -> Nat { c := g(c, n); n }").unwrap());
     assert!(parsed.contains("\"Mutated\""), "{parsed}");
+    // A `return` in a loop leaves with the receiver as it stands there:
+    // the `Return` carries `Mutated(c, x)`, as the body's own end does.
+    let parsed = format!("{:?}", parse_file("fn C::f(mut self c: C, xs: List<Nat>) -> Nat { for x in xs { c := g(c, x); return x; } 0 }").unwrap());
+    assert_eq!(parsed.matches("\"Mutated\"").count(), 3, "{parsed}");
     // A plain `mut` parameter is a local copy: the result is unchanged.
     let parsed = format!("{:?}", parse_file("fn f(mut c: C) -> Nat { c := g(c); h(c) }").unwrap());
     assert!(!parsed.contains("\"Mutated\""), "{parsed}");
@@ -163,7 +167,6 @@ fn a_mut_parameter_is_refused_where_nothing_is_updated() {
     for (src, says) in [
         ("theorem t(mut n: Nat): n = n { refl }", "only a `fn` takes `mut` parameters"),
         ("fn f({mut n: Nat}) -> Nat { n }", "an implicit parameter cannot be `mut`"),
-        ("fn C::f(mut self c: C, xs: List<Nat>) -> Nat { for x in xs { return x; } 0 }", "`return` is not supported in a `mut self` method"),
     ] {
         let error = parse_file(src).unwrap_err();
         assert!(error.msg.contains(says), "{src}: {}", error.msg);

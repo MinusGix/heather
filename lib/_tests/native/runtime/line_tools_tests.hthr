@@ -91,6 +91,10 @@ fn broken() → World() {
         StatCmd(_) => StatFailed(2),
     }
 }
+// A failed read returns at once, with the world as that read left it: one
+// exchange more, over any history before it.
+theorem read_lines_fails(past: List<Exchange>): Io::read_lines(Io(broken(), past), zeros(4), 4, True, List::range(4))
+    = Mutated(Io(broken(), Cons(Exchange(ReadCmd(Io::stdin(), 4), ReadFailed(5)), past)), None) { refl }
 theorem tac_read_fails(): Outcome::of(Io::tac(Io::of(broken()), zeros(4), 4, List::range(4))) = Outcome(1, []) { refl }
 
 // A world whose writes fail: status 1.

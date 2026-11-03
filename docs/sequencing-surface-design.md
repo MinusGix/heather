@@ -1012,6 +1012,14 @@ and `List::for_in` (both in `lib/std/data/list.hthr`). What departs from
    `break` and `continue` are its own.
 6. **Not built yet:** labels, `return` from a nested or conditional loop,
    ranges, `while`, and the `List::for_in_invariant` theorem (§7.2).
+7. **In a `mut self` method** (§8.2, built 2026-11-02 after the above),
+   `return e` leaves with the receiver as the body has threaded it there:
+   after the body is lowered, each `\0ret(e)` leaf of a returning loop is
+   rewritten to `\0ret(Mutated(x, e))`, so the loop's `Return` is the
+   method's whole result, as the body's own end `Mutated(x, value)` is. The
+   leaf reads `x` where it stands, which is the loop state's alias when the
+   body calls on the receiver or assigns it, and the receiver as it came in
+   when the loop only searches. The refusals are pure code's (5).
 
 ## 16. `while` as built (2026-11-02)
 
