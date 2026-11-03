@@ -420,6 +420,11 @@ pub(crate) enum Unfold {
     /// A type code reaching the encoding of an inductive family it decodes
     /// to (iwf_family.rs, indexed.rs).
     FamilyEncoding,
+    /// A rigid subject at a head mismatch in the unifier, reaching its next
+    /// head: one δ step and the β steps that expose what the body is
+    /// headed by (issues/unifier-lazy-delta.md). A bound on one hop, not on
+    /// the chain: each hop is taken only at a mismatch.
+    NextHead,
 }
 
 impl Unfold {
@@ -431,7 +436,7 @@ impl Unfold {
             Unfold::Comparison | Unfold::IndexRead => 8,
             Unfold::HoleComparison | Unfold::MatchedArm | Unfold::WordShape => 16,
             Unfold::InstanceBit | Unfold::LiteralEmbedding => 32,
-            Unfold::Proposition | Unfold::RuleGoal | Unfold::StuckScrutinee => 64,
+            Unfold::Proposition | Unfold::RuleGoal | Unfold::StuckScrutinee | Unfold::NextHead => 64,
             Unfold::FamilyEncoding => 1024,
         }
     }

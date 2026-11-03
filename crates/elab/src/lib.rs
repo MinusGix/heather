@@ -9797,6 +9797,24 @@ impl Elaborator {
         unification::canonical(&w).then_some(w)
     }
 
+    /// [`unification::U::next_head`]: `t`, in `cx`, unfolded to the first
+    /// reduct whose spine is headed by another global or local, or by a
+    /// former or constructor. A β-redex or an eliminator on the way is
+    /// stepped through, as a whnf would: a definition whose body is a
+    /// `match` on a constructor argument reaches the arm it selects. One
+    /// stuck on a neutral is no next head (`None`), and nor is a walk past
+    /// [`Unfold::NextHead`] head reducts or the oracle's fuel.
+    fn next_head(&self, cx: &Cx, t: &Term) -> Option<Term> {
+        let head = spelling::app_spine(t).0.clone();
+        self.semantic_oracle().unfold_to(&cx.gamma, t, Unfold::NextHead, |r| {
+            let exposed = match spelling::app_spine(&r).0 {
+                h @ (Term::GlobalTm { .. } | Term::Var(_)) => *h != head,
+                h => !steps_through(h),
+            };
+            exposed.then_some(r)
+        })
+    }
+
     /// The unifier's context for a root attempt in `cx`: the scope, and
     /// [`Self::spine_type_args`] for the `app@` nodes of a subject. Every
     /// solution is held to its slot's declared type in `doms` (the call's
@@ -9839,6 +9857,7 @@ impl Elaborator {
         let slot_view = |t: &Term| self.slot_view(t);
         let check = SolutionCheck::new(self, cx, doms, n);
         let admit = |i: usize, s: &Term, sols: &[Sol]| check.admit(i, s, sols);
+        let next_head = |t: &Term| self.next_head(cx, t);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
@@ -9849,6 +9868,7 @@ impl Elaborator {
             slot_view: &slot_view,
             admit: &admit,
             disagree,
+            next_head: &next_head,
         };
         unify_ty_root(&u, pat, subj, n, d, sols);
         check.settle(sols)
@@ -10881,4 +10901,30 @@ struct PackedFamily<'a> {
     /// `F(i)`, scoped `k` binders past Γ, `i` scoped there too.
     at: &'a dyn Fn(Term, u32) -> Type,
     eliminate: &'a dyn Fn(&Cx, &[Arm], Term, Type, Level) -> R<Term>,
+}
+
+/// A spine head [`Elaborator::next_head`] keeps stepping through: a λ (the
+/// spine is a β-redex) or an eliminator, which reduces once its scrutinee
+/// is a constructor and is no head a pattern could meet before then.
+fn steps_through(h: &Term) -> bool {
+    matches!(
+        h,
+        Term::Lam { .. }
+            | Term::ElimNat { .. }
+            | Term::J { .. }
+            | Term::ElimSEmpty { .. }
+            | Term::ElimSquash { .. }
+            | Term::ElimEmpty { .. }
+            | Term::Fst { .. }
+            | Term::Snd { .. }
+            | Term::FstAt { .. }
+            | Term::SndAt { .. }
+            | Term::Case { .. }
+            | Term::ElimW { .. }
+            | Term::ElimWf { .. }
+            | Term::ElimIWf { .. }
+            | Term::Out { .. }
+            | Term::ElimCodeTy { .. }
+            | Term::ElimCodeTm { .. }
+    )
 }

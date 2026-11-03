@@ -57,11 +57,12 @@ impl Elaborator {
             let slot_view = |t: &Term| self.slot_view(t);
             let check = SolutionCheck::new(self, cx, &doms, k);
             let admit = |i: usize, s: &Term, sols: &[Sol]| check.admit(i, s, sols);
+            let next_head = |t: &Term| self.next_head(cx, t);
             let u = U {
                 gamma: &cx.gamma, subject_metas: Some((n, sols)),
                 type_args: &type_args, canonical_head: &canonical_head, respell: &respell,
                 constructor: &constructor, slot_view: &slot_view,
-                admit: &admit, disagree: None,
+                admit: &admit, disagree: None, next_head: &next_head,
             };
             unify_ty_root(&u, &pattern, &subject, k, 0, &mut inner);
             check.settle(&mut inner);
