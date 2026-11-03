@@ -50,8 +50,13 @@ reviewed the first draft on 2026-10-20; changes since are in the log.
   notes and a survey, not implementation.
 - **horizon**: tracked so its needs shape decisions now. No rounds yet.
 - **enabling**: the language, kernel and tooling everything else stands on.
-  Not prioritised against the directions. Its work is *pulled* by a direction's
-  milestone or blocker, and an enabling issue with no puller waits.
+  Not prioritised against the directions. Its work is pulled by a
+  direction's milestone or blocker, and it also invests ahead of demand: an
+  issue labelled `wanted` (one two or more directions will clearly need, or
+  that Minus asks for) may be worked with no puller, built at its proper
+  general design rather than the slice one customer needs. A round hurt by
+  a weak foundation says so with a dependency request rather than working
+  around it silently (`docs/agent-policy.md` §1–§4).
 
 ## Areas
 
@@ -495,7 +500,10 @@ issues ([frontend-roadmap](../issues/frontend-roadmap.md),
 [lint-roadmap](../issues/lint-roadmap.md),
 [perf-dashboard](../issues/perf-dashboard.md)). When a direction's milestone
 needs one of their issues, the issue names that milestone. That is how an
-enabling issue shows it has a puller.
+enabling issue shows it has a puller. Work with no puller yet is still
+legitimate when it is `wanted` (`docs/agent-policy.md` §1); milestones of
+the enabling areas' own, judged by what they unlock, are proposed in
+[enabling-area-directions](../issues/enabling-area-directions.md).
 
 `language` has two milestones of its own, both pulled by
 `hih-native-heather` and the tactics (`docs/compiler-milestones-proposal.md`
@@ -652,3 +660,9 @@ separate machines do not slow each other's tests.
 - 2026-10-31: `float-reals` marked done: `RoundsTo` and the error model's transfer stated once over any ordered field with a morphism from `Rat` (`RoundsToReal` its `CReal` reading), faithful rounding of an enclosed real that always ends, correct rounding from the grid gap (`docs/floating-point-design.md` §17–§18, issues/float-reals-ordered-field.md).
 - 2026-11-01: `hih-pl-spec` and `hih-pl-wp` move from `hih-program-logic` to `hih-native-heather` (Minus, after the daily step-back review): with the compiler work re-aimed at `runtime fn` setups, they had no milestone pulling on them, and they are the Linux spec and the program logic that the setups' one-time soundness proofs (`nh-effects`, `nh-procedures`, `nh-heap`) are stated against. Their "done when" and their issues' milestone tags are unchanged; `hih-program-logic` keeps `hih-pl-source` and the done `hih-pl-first-program` and `hih-tools`.
 - 2026-11-01: `it-coinductive` marked done: its submilestones had landed, and the last open issues under it closed on this round's PR (`Eutt::bind_cong`, issues/coitree-eutt-bind-cong.md; nested constructors above a corecursive call, `docs/codata-elaborator-design.md` §5.4). Indexed nesting and corecursion up to friendly functions are filed without a milestone (issues/codata-nested-guards-indexed.md, issues/codata-corecursion-up-to.md).
+- 2026-11-02: Minus: the enabling tier stops waiting on a puller. Pulling
+  alone had encouraged the minimal work a feature needed, and native code
+  had to be burned for accumulating it. Enabling work now also invests
+  ahead of demand (`wanted`), and a round hurt by a weak foundation files a
+  dependency request instead of a silent workaround. Both, with what
+  threads decide alone and what they ask, are in `docs/agent-policy.md`.
