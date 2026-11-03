@@ -217,6 +217,7 @@ impl Mover<'_> {
             | DeltaEvent::Instance { .. }
             | DeltaEvent::Designation { .. }
             | DeltaEvent::Evidence(_)
+            | DeltaEvent::Interface { .. }
             | DeltaEvent::Repr { .. }
             | DeltaEvent::Impl { .. }
             | DeltaEvent::Access { .. }

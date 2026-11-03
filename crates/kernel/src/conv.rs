@@ -758,9 +758,12 @@ fn delta_head_in(t: &Term, defs: Defs<'_>, eliminated: bool) -> Option<GlobalVar
         | Term::Snd { pair, .. }
         | Term::FstAt { pair }
         | Term::SndAt { pair } => delta_head_in(pair, defs, true),
-        Term::App { fun, .. }
-        | Term::AppAt { fun, .. }
-        | Term::UApp { fun, .. }
+        // A saturated closed call of a withheld definition is δ-stuck on it
+        // (`reduce::withheld_call`); any other call of one is a neutral.
+        Term::App { fun, .. } | Term::AppAt { fun, .. } => {
+            crate::reduce::withheld_call(t, defs).or_else(|| delta_head_in(fun, defs, eliminated))
+        }
+        Term::UApp { fun, .. }
         | Term::CtxApp { fun, .. }
         | Term::TyApp { fun, .. } => delta_head_in(fun, defs, eliminated),
         _ => None,

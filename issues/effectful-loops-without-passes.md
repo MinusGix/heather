@@ -1,0 +1,29 @@
+---
+title: Effectful loops without a passes list
+status: open
+labels: [language,effects,design]
+area: language
+milestone: [nh-effects,lang-sequencing]
+created: 2026-11-02
+updated: 2026-11-02
+---
+
+Effectful loops take a `passes: List<Nat>` and run `for _ in passes`. This is true of `Io::cat` (`lib/_tests/std/os/linux/linux_world_tests.hthr`), `Io::write_all`, and `Io::tac`/`Io::sort` (`lib/native/runtime/line_tools.hthr`). Minus asked what it is really for (PR #394 review, 2026-11-02). It serves two purposes at once, and neither is the program's intent:
+
+- **Totality of the meaning.** "Read until the input ends" terminates only if the world's input is finite, and a `World()` is any function of the history, so nothing bounds it. A `fn` must be total, so the loop needs a bound, and `passes` is that bound.
+- **Agreement with the source.** A `Source`'s `Repeat` is `ITree::iter` at a fuel `n` and is cut past it. The surface loop agrees with the compiled one whenever neither is cut (`docs/effects-capabilities-design.md` §4).
+
+The program never means "at most `passes.len()` reads". It means "until end of input or a failure". The bound leaks into every signature, every caller, and `runtime fn main`'s argument.
+
+## Options
+
+1. **Fuel in the world.** `Io` carries the budget the way it carries the history: it is only meaning, and nothing at run time. A world-bounded loop (`while io.alive() { … }`, or a `loop` the lowering knows) spends one unit per pass, and running out is a defined outcome of the reading. Programs stop naming a bound. `Io::Reads` quantifies over budgets, and a compiled program's `Repeat` fuel is the same budget. The cost is that `Io` changes shape for every customer, and the budget's outcome needs a name in results.
+2. **Loops as coinductive trees.** Write the loop without a bound and make the meaning a tree: [[partial-functions-coinductive]] (`CoTree::rec`), read against a world with fuel only in `Io::against`. This is the honest meaning, but a `mut self` method would then no longer be a plain `Io → Mutated<Io, R>` function, so every theorem about effectful code goes through the tree.
+3. **`while … fuel n exhausted e`.** This is the surface already designed (`docs/sequencing-surface-design.md` §5.3, not built). It names the bound once per loop rather than threading a list, but the bound is still the program's parameter.
+4. **A finite-input world.** Restrict the worlds whose reads terminate by a measure (input left). That would be a `decreases` loop, but it rules out every world that is not a pipe of finite input, which the most-general `World()` was chosen to allow.
+
+Recommendation: 1, with 3 as the spelling for pure loops that genuinely need a bound. This is Minus's call before any customer rewrite; tac, sort, cat, wc and head would all move together.
+
+## Done when
+
+The option is decided and recorded in `docs/effects-capabilities-design.md`, and `Io::tac`, `Io::sort` and `Io::cat` take no `passes`, with their probes unchanged in what they state.

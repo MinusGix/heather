@@ -1105,7 +1105,7 @@ fn rename_block(m: &Ren, b: &Block) -> Block {
 /// type parameters replaced by the types the constraint applies it to. A
 /// substitution rather than [`rename_ty`]'s rename, because a constraint may
 /// name a *composite* carrier (`requires m: Monoid<List<A>>(append)`).
-fn subst_ty(m: &HashMap<String, Ty>, t: &Ty) -> Ty {
+pub(crate) fn subst_ty(m: &HashMap<String, Ty>, t: &Ty) -> Ty {
     if let TyKind::Named { name, args } = &t.kind
         && args.is_empty()
         && let Some(a) = m.get(name)
@@ -3042,6 +3042,7 @@ impl Elaborator {
                     kind: m.kind,
                     is_meta: m.is_meta,
                     is_evidence: m.is_evidence,
+                    is_interface: m.is_interface,
                     value: m.value,
                     elaborates: m.elaborates.clone(),
                     name: full,
@@ -3057,6 +3058,7 @@ impl Elaborator {
                         .collect(),
                     result: m.result.clone(),
                     decreases: m.decreases.clone(),
+                    unfolding: m.unfolding.clone(),
                     body: m.body.clone(),
                     span: m.span,
                 };
@@ -3937,6 +3939,7 @@ impl Elaborator {
             kind,
             is_meta: false,
             is_evidence: false,
+            is_interface: false,
             value: false,
             elaborates: None,
             name: name.to_string(),
@@ -3944,6 +3947,7 @@ impl Elaborator {
             params: instance_params(d),
             result,
             decreases: None,
+            unfolding: Vec::new(),
             body: body_of(body),
             span,
         };

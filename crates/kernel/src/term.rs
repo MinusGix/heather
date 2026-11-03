@@ -1813,7 +1813,7 @@ impl GlobalBinding {
 /// compares it structurally, and it is only ever extended at declaration
 /// granularity. Appending to a shared context copies at most one bounded tail
 /// rather than the entire prefix.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct GlobalCtx {
     pub bindings: GlobalBindings,
     /// Sealed proofs: the bodies of opaque bindings that may be unsealed at
@@ -1823,6 +1823,82 @@ pub struct GlobalCtx {
     /// before the proof was kept; losing an entry only makes the theorem
     /// opaque again, never wrong.
     pub sealed: SealedProofs,
+    /// The elaborator's **interface boundary**
+    /// (`docs/interface-definitions-design.md` §3): definitions whose body
+    /// this world withholds at open arguments. `None` but in the
+    /// elaborator's worlds for a module that imports interface definitions,
+    /// and in the gate's Ψ for that module's declarations. Withholding only
+    /// removes δ-steps (a gluing unfolds the body ordinary δ would), so it
+    /// can make the kernel refuse more, never accept more. Like
+    /// [`GlobalCtx::sealed`] it is not part of any binding, so the
+    /// verdict cache mixes it into its check key (`crates/cache`).
+    pub withheld: Option<Rc<Withheld>>,
+}
+
+/// Ψ prints as it did before it had a boundary when it has none, so the
+/// printed form a world without interfaces hashes to is unchanged
+/// (`crates/elab/tests/determinism.rs`).
+impl std::fmt::Debug for GlobalCtx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("GlobalCtx");
+        s.field("bindings", &self.bindings).field("sealed", &self.sealed);
+        if let Some(w) = &self.withheld {
+            s.field("withheld", w);
+        }
+        s.finish()
+    }
+}
+
+/// Definitions a world withholds, by absolute Ψ index, each with its
+/// **arity**: the number of explicit term applications a call needs before
+/// the body may unfold (the declaration's parameters, type parameters
+/// included). A withheld definition is an opaque neutral until a call of it
+/// is saturated at arguments that read no free local variable; from there it
+/// unfolds as any definition does (`crate::reduce::Defs::withheld`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Withheld {
+    arity: std::collections::BTreeMap<usize, u32>,
+}
+
+impl Withheld {
+    pub fn new() -> Withheld {
+        Withheld::default()
+    }
+
+    /// Withhold the definition at absolute index `at` until `arity`
+    /// arguments are applied.
+    pub fn insert(&mut self, at: usize, arity: u32) {
+        self.arity.insert(at, arity);
+    }
+
+    /// The arity the binding at absolute index `at` is withheld at, if it is.
+    pub fn arity(&self, at: usize) -> Option<u32> {
+        self.arity.get(&at).copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.arity.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.arity.len()
+    }
+
+    /// Every entry, `(absolute index, arity)`, ascending: what a verdict
+    /// cache keys a check made under this boundary on.
+    pub fn entries(&self) -> impl Iterator<Item = (usize, u32)> + '_ {
+        self.arity.iter().map(|(at, arity)| (*at, *arity))
+    }
+
+    /// The same set without the entries in `released` (absolute indices):
+    /// what an `unfold f;` statement leaves withheld.
+    pub fn releasing(&self, released: &[usize]) -> Withheld {
+        let mut arity = self.arity.clone();
+        for at in released {
+            arity.remove(at);
+        }
+        Withheld { arity }
+    }
 }
 
 const SEALED_CHUNK: usize = 64;
@@ -2175,7 +2251,17 @@ impl GlobalBindings {
 impl GlobalCtx {
     /// Ψ from its bindings, outermost first.
     pub fn new(bindings: Vec<GlobalBinding>) -> GlobalCtx {
-        GlobalCtx { bindings: GlobalBindings::new(bindings), sealed: SealedProofs::default() }
+        GlobalCtx { bindings: GlobalBindings::new(bindings), sealed: SealedProofs::default(), withheld: None }
+    }
+
+    /// This world with `withheld` as its interface boundary (`None` lifts
+    /// it). The bindings get a fresh identity, so no memo keyed on Ψ's
+    /// identity (`typing.rs`'s scopes) answers across the two policies.
+    pub fn withholding(&self, withheld: Option<Rc<Withheld>>) -> GlobalCtx {
+        let mut world = self.clone();
+        world.withheld = withheld.filter(|w| !w.is_empty());
+        world.bindings.identity = Rc::new(());
+        world
     }
 
     /// Append one binding (copy-on-write if this Ψ is shared).
@@ -2238,7 +2324,7 @@ impl GlobalCtx {
 
     /// The first `n` bindings of Ψ, sharing its full chunks.
     pub fn prefix(&self, n: usize) -> GlobalCtx {
-        GlobalCtx { bindings: self.bindings.prefix(n), sealed: self.sealed.prefix(n) }
+        GlobalCtx { bindings: self.bindings.prefix(n), sealed: self.sealed.prefix(n), withheld: self.withheld.clone() }
     }
 
     /// Share the bounded append tail for an immutable semantic image.

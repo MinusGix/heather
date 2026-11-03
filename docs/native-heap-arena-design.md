@@ -303,6 +303,69 @@ through `abs`. With this round that becomes concrete:
 That is `issues/runtime-fn-arena-lists.md`, after R6. Its done-when is the
 one this issue started with: `sort` and `tac` as ordinary Heather.
 
+### 7.1 What the first front-end round built (2026-11-02)
+
+The parts that do not wait on R6:
+
+- **The customers, written.** `lib/native/runtime/line_tools.hthr` has
+  `Io::tac` and `Io::sort` as ordinary Heather over `Io`: `let mut`, `for`
+  over lists, statement `if` and `match`, and `mut self` reads and writes.
+  The calls are `rt_io`'s word-level ones (`Io::read_into` into a buffer
+  the program keeps, `Io::write_from` of a span), so they will reflect
+  through `ETm`. A line written out of the arena is then a span of the arena
+  buffer, so a `Bytes` value has to be lowerable as a view (buffer, offset,
+  length), not only as a whole buffer. Nothing in them recurses, so none
+  needs procedures. The input is read
+  into a `LineReader`, whose finished lines are consed last first, the
+  order the arena holds them in. `tac` writes that list as it is. `sort`
+  writes it in byte order by the builder's selection, one walk per line,
+  with ties broken by place (`LinePick`). The list is only read, so the
+  program allocates no cell after reading, and the arena stays write-once.
+- **What the meaning leaves out.** The arena's capacity is not in the
+  function. Running out is the lowered program's defined exit (§2), so the
+  lowering's theorem will say "this function's outcome, or the exhaustion
+  exit".
+- **Checked against GNU's cases.** `line_tools_tests` states what the two
+  write on the cases `native_tools.rs` runs against GNU: lines across
+  reads, blank lines, a last line without a newline, lines alike, prefixes,
+  bytes compared unsigned, and failing reads and writes. Each is a literal
+  checked by `refl`. Reading the builder tools' sources against the same
+  worlds fits one declaration's kernel fuel only at a single line, because
+  building the source and running its arena code by conversion is past the
+  fuel at two lines. So `tac` is checked against its builder source at one
+  line and at no input, and the literals carry the rest.
+- **`rt` has the code.** `Ty::Lines` is `List<List<BitVec(8)>>`. `Nil` is
+  the literal `Lit(Lines, 0)` (the name 0), and `Cons` is the primitive
+  `ConsLine(cap)`. `Fold` reads its element code from the list's code
+  (`Ty::elem`, `Ty::items`), so one node folds both a byte buffer and a
+  list of lines. The reflector reads `List<List<BitVec(8)>>` as `Lines` and
+  the two constructors. It refuses `Cons` onto a byte buffer, since a
+  buffer is written in place, and a list of anything else. Each of these
+  pins by `refl` (`rt_tests`, among them `reversed`, which is `tac`'s list
+  as a fold onto `Nil`). The lowering refuses `ConsLine`, and `Ty::Holds`
+  at `Lines` is `False`, as it is at `Bytes`, until the arena lowering.
+
+Left, in order:
+
+1. **Ports.** `Ty::Holds` at `Lines` should say the port holds a name with
+   `ArenaRef(arena bytes, at).inv()` and `abs` the value. The arena is a
+   buffer, so this needs R6's lowering to `Source`: `StructuredRegion::eval`
+   reads every buffer as empty.
+2. **`ConsLine`'s case.** A cell copies the line's bytes from their buffer
+   at the top, and running out exits. That is `cons_abs` on the success arm
+   and `extend_abs` for every other live list.
+3. **Matching on a list.** An elaborated `match` on a `List` is not a
+   kernel `Case` the host presents. The reflector sees "a form the
+   reflected fragment does not have", so `Arms` has to present recursive
+   matches, or the reflector has to read the eliminator
+   (`issues/runtime-reflect-list-match.md`).
+4. **What the customers use that `rt` lacks.** `open ++ [c]` (a byte
+   pushed onto the open line, which in the arena is a push onto the open
+   cell); `for` with `break` or `return` (`List::for_in`); records with a
+   list or buffer field; and `Io` itself (R6).
+5. **Then** `runtime fn` on `Io::tac` and `Io::sort`, the GNU tests on the
+   compiled binaries, and the builder versions deleted.
+
 ## 8. Slices
 
 1. **This round.** The design (this note); the representation and its laws

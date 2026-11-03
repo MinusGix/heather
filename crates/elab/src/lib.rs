@@ -130,6 +130,7 @@ mod goal_combinators;
 mod goals;
 pub mod host;
 mod indexed;
+mod interfaces;
 mod infinitary;
 mod inductive;
 mod spelling;
@@ -580,6 +581,8 @@ pub struct CommittedWorld {
     representations: Shared<Representations>,
     provenance: Shared<provenance::Provenance>,
     meta_programs: Shared<MetaPrograms>,
+    /// Interface definitions by global key (`interfaces.rs`).
+    interfaces: Shared<interfaces::Interfaces>,
 }
 
 impl CommittedWorld {
@@ -593,6 +596,7 @@ impl CommittedWorld {
             representations: Shared::new(Representations::default()),
             provenance: Shared::new(provenance::Provenance::default()),
             meta_programs: Shared::new(MetaPrograms::default()),
+            interfaces: Shared::new(interfaces::Interfaces::default()),
         }
     }
 }
@@ -852,6 +856,30 @@ impl expr::EqualityCheckingElab for Elaborator {
 impl expr::ExpectedTypeDiagnosticsElab for Elaborator {
     fn display_expected_type(&self, cx: &Cx, expected: &Type) -> String {
         self.display_type(cx, expected)
+    }
+}
+
+impl expr::UnitCheckingElab for Elaborator {
+    fn read_expected_type_within(&self, cx: &Cx, expected: &Type, span: Span) -> R<Option<Type>> {
+        // Budget first: a head the value machine reaches within it is read
+        // as before, through the registry-aware read, at no more than the
+        // budget again. Only a spent budget is "a verdict still to compute".
+        match self
+            .semantic_oracle()
+            .bounded(diagnostics::VERDICT_READ_STEPS)
+            .whnf_type(&cx.gamma, expected)
+        {
+            Ok(_) => self.whnf(cx, expected, span).map(Some),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn defer_unit_verdict(&self, cx: &Cx, expected: &Type, span: Span) {
+        self.attempt.trivial_uses.borrow_mut().push(attempt::TrivialUse {
+            span,
+            cx: Rc::new(cx.clone()),
+            expected: expected.clone(),
+        });
     }
 }
 
@@ -2580,6 +2608,11 @@ impl Elaborator {
             }
         }
         self.names.enter_scope(scope);
+        // The interface boundary is per module: the definitions this module
+        // declares are transparent in it, every other module's are withheld.
+        if !self.interfaces.is_empty() {
+            self.refresh_delta_psi();
+        }
         Ok(())
     }
 
@@ -3491,6 +3524,20 @@ impl Elaborator {
     }
 
     fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
+        // `unfolding f, g`: the declaration sees through these interface
+        // definitions, its gate included (docs/interface-definitions-design.md §4).
+        if !decl.unfolding.is_empty() {
+            let keys = self.unfolding_keys(decl)?;
+            let mut inner = decl.clone();
+            inner.unfolding.clear();
+            self.scope.unfolded.extend(keys.iter().cloned());
+            self.refresh_delta_psi();
+            let out = self.elab_decl_owned(&inner);
+            let keep = self.scope.unfolded.len() - keys.len();
+            self.scope.unfolded.truncate(keep);
+            self.refresh_delta_psi();
+            return out;
+        }
         // A `meta fn` is a different declaration form: modal signature,
         // quotation body, `Layer::Meta` check, elaborator-side registration
         // (docs/in-language-map-design.md §3–4).
@@ -3504,6 +3551,19 @@ impl Elaborator {
             self.evidence_shape(decl)?;
             self.elab_decl_one(decl, None)?;
             return self.register_evidence(decl);
+        }
+        // An `interface fn` is elaborated as the `fn` it is, then registered,
+        // with its unfolding equations beside it
+        // (docs/interface-definitions-design.md).
+        if decl.is_interface {
+            self.interface_shape(decl)?;
+            let mut plain = decl.clone();
+            plain.is_interface = false;
+            return self.session_transaction(|me| {
+                me.elab_decl_owned(&plain)?;
+                let equations = me.interface_equations(decl)?;
+                me.register_interface(decl, equations)
+            });
         }
         // `decreases e` is not one declaration but a family of them
         // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,
@@ -4735,6 +4795,19 @@ impl Elaborator {
         body: &Term,
         opaque: bool,
     ) -> R<()> {
+        // A declaration of a module that imports interface definitions is
+        // checked with their bodies withheld, as the elaborator's worlds are
+        // (docs/interface-definitions-design.md §3): the gate's conversion is
+        // where a proof's unfolding actually happens. Withholding only takes
+        // δ-steps away, so the gate never accepts more than it would without.
+        let gated;
+        let psi = match self.delta_psi.withheld.clone() {
+            Some(withheld) => {
+                gated = Rc::new(psi.withholding(Some(withheld)));
+                &gated
+            }
+            None => psi,
+        };
         let item = gate::GateItem { name, ctx, ty, level, body, opaque, layer: Layer::Code, lands_in_psi: true };
         if self.policy.gate.as_ref().is_some_and(|g| g.admits(psi, &item)) {
             return Ok(());
@@ -4756,7 +4829,10 @@ impl Elaborator {
                 Some(verdict) => verdict,
                 None => stats::time_kernel(|| self.kernel_check_term(psi, Layer::Code, ctx, body, ty, level)),
             };
-            verdict.map_err(|e| self.kernel_refusal(name, span, e, psi, Layer::Code, ctx, Some(body), ty, level))?;
+            verdict.map_err(|e| {
+                let refusal = self.kernel_refusal(name, span, e, psi, Layer::Code, ctx, Some(body), ty, level);
+                self.withheld_note(refusal, psi, ty, Some(body))
+            })?;
             let unsealed = recording.finish();
             if let Some(g) = self.policy.gate.as_ref() {
                 g.accepted(psi, &item, &unsealed);
@@ -5645,7 +5721,7 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                self.expr_elab().check_unit_form(self, cx, expected, e.span)
+                self.expr_elab().check_unit_form(self, cx, expected, lvl, e.span)
             }
             // `decide` — proof by reflection at a decided goal
             // (docs/reflection-through-decide-instances-design.md §4). Sugar
@@ -8626,6 +8702,7 @@ impl Elaborator {
             };
             let (embed, embed_ty, embed_level) =
                 self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
+            let since = self.attempt.trivial_uses.borrow().len();
             let (out, _, _) = application::apply_explicit(
                 self,
                 cx,
@@ -8637,6 +8714,7 @@ impl Elaborator {
                 embed_level,
                 std::slice::from_ref(e),
             )?;
+            self.settle_deferred_units(since)?;
             return Ok(self.reduced_embedding(cx, out));
         }
         // A numeral is the leaf case of
@@ -8844,7 +8922,7 @@ impl Elaborator {
         // at the `on` (issues/elab-accepts-conjunction-for-equation.md).
         let conversion = matches!(e, TypeError::NotConvertible | TypeError::HeadMismatch);
         if conversion
-            && let Some((note, at)) = self.refused_decide()
+            && let Some((note, at)) = self.refused_decide().or_else(|| self.refused_trivial())
         {
             return ElabError::Kernel {
                 decl: decl.to_string(),
@@ -9184,6 +9262,37 @@ impl Elaborator {
                     u.span,
                 )
             })
+        })
+    }
+
+    /// After a `NotConvertible` at the gate: the first `trivial` left unread
+    /// ([`expr::UnitCheckingElab`]) whose expected type, reduced now under
+    /// the gate's own budget, is not `True`. [`Self::refused_decide`]'s
+    /// counterpart: the reduction runs only on the failure path, and an
+    /// inconclusive one stays silent.
+    fn refused_trivial(&self) -> Option<(String, Span)> {
+        let uses = self.attempt.trivial_uses.borrow();
+        if uses.is_empty() {
+            return None;
+        }
+        let oracle = oracle::SemanticOracle::in_world(self.goal_psi(), self.policy.fuel);
+        uses.iter().find_map(|u| {
+            let head = oracle.whnf_type(&u.cx.gamma, &u.expected).ok()?;
+            if matches!(head, Type::Unit { .. }) {
+                return None;
+            }
+            let goal = self.display_type(&u.cx, &u.expected);
+            let reduct = match self.display_type_clean(&u.cx, &head) {
+                Some(r) if r != goal => format!(", which reduces to `{r}`"),
+                _ => String::new(),
+            };
+            Some((
+                format!(
+                    "`trivial` proves `True`, but `{goal}` is expected here{reduct}: \
+                     the verdict is false, or not closed enough to compute"
+                ),
+                u.span,
+            ))
         })
     }
 
@@ -9874,6 +9983,17 @@ impl Elaborator {
             let unsolved: Vec<bool> = sols.iter().map(|s| matches!(s, Sol::Unsolved)).collect();
             self.unify_root(cx, result_ty, expected, n, sols, span);
             self.reject_ill_typed_solutions(cx, &unsolved, sols, meta_doms, n);
+            // The expected type's weak head can teach only the metas the
+            // result type still mentions: unification records into the
+            // pattern's metas and nowhere else. Once it mentions none, the
+            // read would learn nothing, and at a closed verdict it is the
+            // verdict's whole evaluation, which the kernel is about to run
+            // again — `decide_yes(refl)` at `heavy(300).IsTrue()`, whose
+            // result `P` the line above has just solved
+            // (issues/closed-verdict-evaluated-twice.md).
+            if zonked(result_ty, n, sols).is_some() {
+                return Ok(());
+            }
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
             let unsolved: Vec<bool> = sols.iter().map(|s| matches!(s, Sol::Unsolved)).collect();
@@ -10491,8 +10611,15 @@ impl Elaborator {
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
     fn refresh_delta_psi(&mut self) {
         self.attempt.goal_arena.invalidate_delta_world();
+        // The interface boundary (`interfaces.rs`): the elaborator's worlds
+        // withhold other modules' interface definitions; `psi`, the gate's,
+        // never does.
+        let withheld = self.withheld_policy();
         if self.global_padding() == 0 {
-            self.delta_psi = self.psi.clone();
+            self.delta_psi = match withheld {
+                Some(w) => Shared::new(self.psi.withholding(Some(w))),
+                None => self.psi.clone(),
+            };
             return;
         }
         let placeholder = GlobalBinding::Tm {
@@ -10502,7 +10629,11 @@ impl Elaborator {
             level: Level::Zero,
             body: None,
         };
-        *self.delta_psi = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+        let padded = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+        *self.delta_psi = match withheld {
+            Some(w) => padded.withholding(Some(w)),
+            None => padded,
+        };
     }
 }
 

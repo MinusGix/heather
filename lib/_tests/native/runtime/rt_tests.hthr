@@ -286,6 +286,66 @@ theorem bump_reflected(): True { by reflects_as(["bump"], [], [bump_rt()]) }
 theorem bump_reflects(xs: List<BitVec(8)>, i: BitVec(64)): bump_rt().meaning(bump_world())(xs, i) = bump(xs, i) { refl }
 
 // ---------------------------------------------------------------------------
+// Lists of lines (`Lines`, N4's first code; issues/runtime-fn-arena-lists.md):
+// `Nil` is a literal, `Cons` the `ConsLine` primitive, and `foldl` walks the
+// list with a byte string as the element. `reversed` is `tac`'s list:
+// folding the input's lines onto `Nil` conses each onto the ones before it.
+
+fn push_line(lines: List<List<BitVec(8)>>, line: List<BitVec(8)>) → List<List<BitVec(8)>> { List::Cons(line, lines) }
+
+fn count_step(n: BitVec(64), line: List<BitVec(8)>) → BitVec(64) { n.add(BitVec::ofNat(1)) }
+
+fn count_lines(lines: List<List<BitVec(8)>>, start: BitVec(64)) → BitVec(64) { lines.foldl(count_step, start) }
+
+fn keep_step(acc: List<List<BitVec(8)>>, line: List<BitVec(8)>) → List<List<BitVec(8)>> { List::Cons(line, acc) }
+
+fn reversed(lines: List<List<BitVec(8)>>) → List<List<BitVec(8)>> { lines.foldl(keep_step, List::Nil) }
+
+fn push_line_rt() → Fun { Fun([Lines, Bytes(0)], Lines, Prim(ConsLine(0), [0, 1])) }
+
+fn count_step_rt() → Fun { Fun([Word(64), Bytes(0)], Word(64), Let(Lit(Word(64), 1), Prim(Add(64), [2, 0]))) }
+
+fn count_lines_rt() → Fun { Fun([Lines, Word(64)], Word(64), Fold(1, 0, 1)) }
+
+fn keep_step_rt() → Fun { Fun([Lines, Bytes(0)], Lines, Prim(ConsLine(0), [0, 1])) }
+
+fn reversed_rt() → Fun { Fun([Lines], Lines, Let(Lit(Lines, 0), Fold(1, 0, 3))) }
+
+fn lines_world() → World {
+    World(RecInfo::none, [push_line_rt().sig(), count_step_rt().sig(), count_lines_rt().sig(), keep_step_rt().sig(), reversed_rt().sig()],
+        Pair(push_line, Pair(count_step, Pair(count_lines, Pair(keep_step, Pair(reversed, trivial))))))
+}
+
+theorem lines_reflected(): True {
+    by reflects_as(["push_line", "count_step", "count_lines", "keep_step", "reversed"], [],
+        [push_line_rt(), count_step_rt(), count_lines_rt(), keep_step_rt(), reversed_rt()])
+}
+
+theorem push_line_reflects(xs: List<List<BitVec(8)>>, x: List<BitVec(8)>): push_line_rt().meaning(lines_world())(xs, x) = push_line(xs, x) { refl }
+
+theorem count_lines_reflects(xs: List<List<BitVec(8)>>, n: BitVec(64)): count_lines_rt().meaning(lines_world())(xs, n) = count_lines(xs, n) { refl }
+
+theorem reversed_reflects(xs: List<List<BitVec(8)>>): reversed_rt().meaning(lines_world())(xs) = reversed(xs) { refl }
+
+// The negative control: the operands the wrong way round are a byte string
+// where a list is expected, which means the default, not the function.
+// expect-error(kernel): the kernel rejected `push_line_misreflects`: NotConvertible
+theorem push_line_misreflects(xs: List<List<BitVec(8)>>, x: List<BitVec(8)>):
+    Fun([Lines, Bytes(0)], Lines, Prim(ConsLine(0), [1, 0])).meaning(lines_world())(xs, x) = push_line(xs, x) { refl }
+
+// A byte buffer is written in place, never consed onto.
+fn cons_byte(x: BitVec(8), xs: List<BitVec(8)>) → List<BitVec(8)> { List::Cons(x, xs) }
+
+// expect-error: `Cons` onto a byte buffer
+theorem cons_byte_refused(): True { by reflects_as(["cons_byte"], [], []) }
+
+// A list of words wider than a byte has no layout yet.
+fn first_word(xs: List<BitVec(64)>, d: BitVec(64)) → BitVec(64) { d }
+
+// expect-error: a list of these has no runtime layout under the reflected fragment
+theorem word_list_refused(): True { by reflects_as(["first_word"], [], []) }
+
+// ---------------------------------------------------------------------------
 // Refusals name their reason.
 
 fn helper(a: BitVec(64)) → BitVec(64) { a.add(a) }

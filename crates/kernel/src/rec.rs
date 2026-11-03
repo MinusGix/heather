@@ -92,6 +92,7 @@ pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
     for (i, t) in psi.sealed.iter() {
         out.seal_kept(i, Rc::new(SealedProof::derived(Rc::clone(t), move |t| t.shift_univ(by))));
     }
+    out.withheld = psi.withheld.clone();
     out
 }
 

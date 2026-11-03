@@ -68,6 +68,7 @@ mod bits;
 mod probe;
 mod runs;
 mod transduce;
+mod withheld;
 
 type Res<T> = Result<T, OutOfFuel>;
 
@@ -2069,7 +2070,19 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
         }
         let n = *n;
-        Ok(Work::Val(self.push_elim(n, e)))
+        let applies = matches!(e, Elim::App { .. });
+        let v = self.push_elim(n, e);
+        // A call of a withheld definition that this application saturates at
+        // closed arguments is glued here, and computes from now on
+        // (`eval/withheld.rs`).
+        if applies && matches!(&n.head, Head::Global { var, .. } if self.defs.withheld(*var).is_some()) {
+            if let Val::Neutral(m) = v {
+                if let Some(glued) = self.glue_withheld(m) {
+                    return Ok(Work::Val(glued));
+                }
+            }
+        }
+        Ok(Work::Val(v))
     }
 
     /// [`Eval::step_elim`] at a canonical head whose β does not re-enter

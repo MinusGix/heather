@@ -296,6 +296,10 @@ pub(crate) struct DynamicScope {
     /// members use earlier members by name" (docs/traits-layer1-design.md
     /// §4.2). Empty outside a block, which makes the mechanism inert.
     pub(crate) instance_scope: Vec<(String, String)>,
+    /// The interface definitions (global keys) the declaration being
+    /// elaborated names in its `unfolding` clause: released from the
+    /// withheld set for its extent (`interfaces.rs`). Empty elsewhere.
+    pub(crate) unfolded: Vec<String>,
     /// Set while a `:= derive()` route elaborates the transfer generator's
     /// emission, so that the `impl` block *inside* that emission records
     /// `Derived` rather than what its own clauses look like. `None` everywhere
@@ -403,6 +407,7 @@ impl DynamicScope {
             member_owner: _,
             misplaced_recursion,
             instance_scope: _,
+            unfolded: _,
             impl_provenance: _,
             resolution_scopes,
             generated_depth,

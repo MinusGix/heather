@@ -17,9 +17,9 @@
 // (`issues/elaborated-let-sharing-lost.md`).
 //
 // What it reads, and what it refuses with the reason: words and `Bool`,
-// records it is told about, byte buffers; the primitives of `Known`; calls of
-// the program's own functions; `foldl` of one of them; `match` and
-// `match h:` on a `Bool`. Anything else is "not in the reflected fragment",
+// records it is told about, byte buffers, lists of lines (`Nil` and `Cons`);
+// the primitives of `Known`; calls of the program's own functions; `foldl`
+// of one of them; `match` and `match h:` on a `Bool`. Anything else is "not in the reflected fragment",
 // naming the form, never a guess.
 
 import logic;
@@ -129,6 +129,30 @@ fn rt_literal(h: Handle) → Tac<Nat> {
 // ---------------------------------------------------------------------------
 // Types.
 
+// Whether a type is `BitVec(8)`.
+fn Known::is_byte(self k: Known, h: Handle) → Tac<Bool> {
+    let v <- view(h);
+    match v {
+        HGlobal(g, _, args) => match g.id.same(k.bitvec) {
+            True => match args { Cons(w, _) => { let n <- rt_literal(w); Pure(n.same(8)) }, Nil => Pure(False) },
+            False => Pure(False),
+        },
+        _ => Pure(False),
+    }
+}
+
+// Whether a type is `List<BitVec(8)>`.
+fn Known::is_bytes(self k: Known, h: Handle) → Tac<Bool> {
+    let v <- view(h);
+    match v {
+        HGlobal(g, _, args) => match g.id.same(k.list) {
+            True => match args { Cons(a, _) => k.is_byte(a), Nil => Pure(False) },
+            False => Pure(False),
+        },
+        _ => Pure(False),
+    }
+}
+
 fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
     view(h).bind(λ v => match v {
         HGlobal(g, name, args) => match g.id.same(k.bitvec) {
@@ -139,8 +163,18 @@ fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
             False => match g.id.same(k.boolean) {
                 True => Pure(Bit),
                 False => match g.id.same(k.list) {
-                    // A byte buffer; its capacity is the setup's to choose.
-                    True => Pure(Bytes(0)),
+                    // A list of bytes is a byte buffer, its capacity the
+                    // setup's to choose; a list of those is a list of lines.
+                    True => match args {
+                        Cons(a, _) => k.is_byte(a).bind(λ byte => match byte {
+                            True => Pure(Bytes(0)),
+                            False => k.is_bytes(a).bind(λ bytes => match bytes {
+                                True => Pure(Lines),
+                                False => rt_refuse("a list of these has no runtime layout under the reflected fragment"),
+                            }),
+                        }),
+                        Nil => rt_refuse("`List` without its element type"),
+                    },
                     False => match Known::rec(k.recs, g.id, 0) {
                         Some(i) => Pure(Named(i)),
                         None => rt_refuse("`" ++ name ++ "` has no runtime layout under the reflected fragment"),
@@ -345,9 +379,29 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                 },
                 HCtor(ty, i, name, fields) => match ty.id.same(k.boolean) {
                     True => Pure(st.finish(h, operand, Lit(Bit, i))),
-                    False => match Known::rec(k.recs, ty.id, 0) {
+                    False => match ty.id.same(k.list) {
+                        True => k.ty_of(h).bind(λ lt => match i {
+                            // `Nil`: the empty buffer, or the name 0.
+                            Zero => Pure(st.finish(h, operand, Lit(lt, 0))),
+                            Succ(_) => match lt {
+                                Lines => match fields.rev() {
+                                    Cons(tl, more) => match more {
+                                        Cons(hd, _) => k.ty_of(hd).bind(λ ht => match ht {
+                                            Bytes(c) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, [hd, tl]).bind(λ r =>
+                                                Pure(r.fst.finish(h, operand, Prim(ConsLine(c), r.snd)))),
+                                            _ => rt_refuse("a line that is not a byte buffer"),
+                                        }),
+                                        Nil => rt_refuse("`Cons` without its head"),
+                                    },
+                                    Nil => rt_refuse("`Cons` without its tail"),
+                                },
+                                _ => rt_refuse("`Cons` onto a byte buffer: a buffer is written in place (`with_byte`), not consed onto"),
+                            },
+                        }),
+                        False => match Known::rec(k.recs, ty.id, 0) {
                         Some(ri) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => Pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
                         None => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
+                        },
                     },
                 },
                 HMatch(_) => arms(h).bind(λ c => rt_accepted("a `match`", c)).bind(λ m =>
@@ -455,7 +509,7 @@ fn rt_nats(ns: List<Nat>) → String {
 }
 
 fn Ty::show(self t: Ty) → String {
-    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", Bytes(c) => "Bytes(" ++ rt_nat(c) ++ ")", Named(i) => "Named(" ++ rt_nat(i) ++ ")" }
+    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", Bytes(c) => "Bytes(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")" }
 }
 
 fn Ty::shows(ts: List<Ty>) → String {

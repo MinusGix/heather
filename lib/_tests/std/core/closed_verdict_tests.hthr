@@ -1,0 +1,29 @@
+// Probes of closed verdicts (issues/closed-verdict-evaluated-twice.md): a
+// closed `Bool` verdict proved as `b.IsTrue()` by `trivial` or `decide` is
+// evaluated once, by the gate, as `b = True` by `refl` is. The verdict here
+// costs far more than the elaborator's budgeted read of an expected type, so
+// these are the spellings that used to evaluate `b` in the elaborator first.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+
+import bool; import nat; import list;
+
+fn heavy(k: Nat) → Bool { List::range(k).map(λ i => i * i).len().leb(k) }
+fn heavy_false(k: Nat) → Bool { heavy(k).not() }
+
+// The three spellings of one true verdict.
+theorem by_refl(): heavy(300) = True { refl }
+theorem by_trivial(): heavy(300).IsTrue() { trivial }
+theorem by_decide(): heavy(300).IsTrue() { decide }
+
+// A false verdict is still refused at the call that claimed it, the
+// elaborator reducing it only once the gate has refused.
+// expect-error(kernel): `trivial` proves `True`, but `IsTrue(heavy_false(300))` is expected here, which reduces to `False`
+theorem false_by_trivial(): heavy_false(300).IsTrue() { trivial }
+// expect-error(kernel): `decide` resolved `Decide<IsTrue(heavy_false(300))>`
+theorem false_by_decide(): heavy_false(300).IsTrue() { decide }
+
+// Below the read budget `trivial` reads the type itself, and says so before
+// the gate is asked.
+// expect-error: `trivial` proves `True`, but `IsTrue(heavy_false(3))` is expected here
+theorem cheap_false_by_trivial(): heavy_false(3).IsTrue() { trivial }

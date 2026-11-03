@@ -181,6 +181,28 @@ pub(crate) trait ExpectedTypeDiagnosticsElab: ExpectedTypeElab {
     fn display_expected_type(&self, cx: &Cx, expected: &Type) -> String;
 }
 
+/// What `trivial` needs beyond reading its expected type: a *budgeted* read,
+/// and a way to leave a closed verdict to the gate
+/// (`issues/closed-verdict-evaluated-twice.md`).
+///
+/// `trivial` at `heavy(300).IsTrue()` is a verdict: the expected type is
+/// `True` exactly when `heavy(300)` computes to `True`. Reading it to its weak
+/// head in the elaborator runs that computation, and the kernel then runs it
+/// again to check `⟨⟩` against the statement — twice the cost of the same
+/// verdict written `heavy(300) = True` by `refl`, whose expected type is an
+/// `=` already. So the read is bounded, and past the bound the elaborator
+/// records and the gate decides, as `refl` already does.
+pub(crate) trait UnitCheckingElab: ExpectedTypeDiagnosticsElab {
+    /// The expected type's weak head within a small fixed step budget, or
+    /// `None` when the budget ran out before a head was reached.
+    fn read_expected_type_within(&self, cx: &Cx, expected: &Type, span: Span) -> R<Option<Type>>;
+
+    /// Record — never raise — that a `trivial` was emitted at an expected
+    /// type the elaborator did not reduce, so a gate refusal is reported at
+    /// it. The structural view has no gate to report from.
+    fn defer_unit_verdict(&self, _cx: &Cx, _expected: &Type, _span: Span) {}
+}
+
 /// Recursive checking required by checking-only indexed constructors.
 pub(crate) trait RecursiveCheckingElab {
     fn check_expression(
@@ -746,14 +768,26 @@ impl<'a> ExprElab<'a> {
 
     /// The canonical inhabitant of Unit/True. Name and constructor shadowing
     /// have already been decided by root orchestration.
+    ///
+    /// An expected type whose head the budgeted read does not reach is a
+    /// verdict still to compute (`b.IsTrue()` at a closed, expensive `b`):
+    /// `⟨⟩` at the expected type's own level is emitted unread, and the
+    /// kernel's check of it is the one evaluation
+    /// ([`UnitCheckingElab`]). `⟨⟩^l : Unit^l @ l`, so if the type does
+    /// reduce to a `Unit` it is the one at `level`.
     pub(crate) fn check_unit_form(
         &self,
-        elab: &impl ExpectedTypeDiagnosticsElab,
+        elab: &impl UnitCheckingElab,
         cx: &Cx,
         expected: &Type,
+        level: &Level,
         span: Span,
     ) -> R<Term> {
-        match elab.read_expected_type(cx, expected, span)? {
+        let Some(head) = elab.read_expected_type_within(cx, expected, span)? else {
+            elab.defer_unit_verdict(cx, expected, span);
+            return Ok(Term::Triv { level: level.clone() });
+        };
+        match head {
             Type::Unit { level } => Ok(Term::Triv { level }),
             _ => err(
                 format!(
@@ -1344,6 +1378,12 @@ mod tests {
         }
     }
 
+    impl UnitCheckingElab for StructuralFake {
+        fn read_expected_type_within(&self, _cx: &Cx, expected: &Type, _span: Span) -> R<Option<Type>> {
+            Ok(Some(expected.clone()))
+        }
+    }
+
     impl LambdaBinderElab for StructuralFake {
         fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)> {
             self.lower_type(cx, annotation)
@@ -1742,6 +1782,7 @@ mod tests {
                 &fake,
                 &Cx::empty(),
                 &Type::Unit { level: Level::constant(2) },
+                &Level::constant(2),
                 SPAN,
             )
             .unwrap(),
