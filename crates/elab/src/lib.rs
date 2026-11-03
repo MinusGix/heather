@@ -8714,15 +8714,14 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         // At another expected carrier, use the ordinary class resolver. The
-        // class is optional at the language level: a program that has not
-        // imported the standard algebra module keeps the historical Nat-only
-        // mismatch below. Once `Numeral` is visible, however, a missing
+        // class is optional at the language level: a program whose closure
+        // does not hold the standard algebra module keeps the historical
+        // Nat-only mismatch below. Once `algebra::Numeral` is in the closure,
+        // however — read by identity, not by a name this module may not
+        // import (issues/numerals-without-algebra-import.md) — a missing
         // instance is the useful diagnosis and not a later Nat-vs-carrier
         // conversion error.
-        if let Some(class) = self.lookup_class("Numeral")
-            && class.params.len() == 1
-            && class.valparams.is_empty()
-            && let Some(ind) = self.lookup_inductive(&class.name).cloned()
+        if let Some((ind, named)) = self.literal_class_record(literals::NUMERAL)
             && let Some(field) = ind.field_index("ofNat")
         {
             let targs = [(expected.clone(), expected_level.clone())];
@@ -8732,31 +8731,36 @@ impl Elaborator {
                 .unwrap_or_else(|| "the expected type".to_string());
             let display = format!("Numeral<{carrier}>");
             let mut trace = Vec::new();
-            let Some(dict) =
-                self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
-            else {
-                return Err(ElabError::Resolution {
-                    goal: display,
-                    span,
-                    trace,
-                });
-            };
-            let (embed, embed_ty, embed_level) =
-                self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
-            let since = self.attempt.trivial_uses.borrow().len();
-            let (out, _, _) = application::apply_explicit(
-                self,
-                cx,
-                Some("ofNat"),
-                Rc::new(Vec::new()),
-                0,
-                embed,
-                embed_ty,
-                embed_level,
-                std::slice::from_ref(e),
-            )?;
-            self.settle_deferred_units(since)?;
-            return Ok(self.reduced_embedding(cx, out));
+            match self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace) {
+                Some(dict) => {
+                    let (embed, embed_ty, embed_level) =
+                        self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
+                    let since = self.attempt.trivial_uses.borrow().len();
+                    let (out, _, _) = application::apply_explicit(
+                        self,
+                        cx,
+                        Some("ofNat"),
+                        Rc::new(Vec::new()),
+                        0,
+                        embed,
+                        embed_ty,
+                        embed_level,
+                        std::slice::from_ref(e),
+                    )?;
+                    self.settle_deferred_units(since)?;
+                    return Ok(self.reduced_embedding(cx, out));
+                }
+                None if named => {
+                    return Err(ElabError::Resolution {
+                        goal: display,
+                        span,
+                        trace,
+                    });
+                }
+                // Reached by identity only, and no instance: the `Nat`
+                // reading below, as before the class was reachable.
+                None => {}
+            }
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type
