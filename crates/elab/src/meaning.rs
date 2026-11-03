@@ -168,7 +168,7 @@ impl Elaborator {
         if depth == 0 {
             return refl;
         }
-        let mut next = |fresh: &mut usize| {
+        let next = |fresh: &mut usize| {
             *fresh += 1;
             format!("{scrut}__m{fresh}")
         };
@@ -261,6 +261,7 @@ pub(crate) fn meaning_decl(decl: &Decl, proof: Expr) -> Decl {
         is_meta: false,
         is_evidence: false,
         value: false,
+        is_interface: false,
         elaborates: None,
         name: meaning_name(&decl.name),
         tyvars: decl.tyvars.clone(),
@@ -270,6 +271,7 @@ pub(crate) fn meaning_decl(decl: &Decl, proof: Expr) -> Decl {
             span,
         },
         decreases: None,
+        unfolding: Vec::new(),
         body: Block { stmts: Vec::new(), result: Box::new(proof), ons: Vec::new(), span: decl.body.span },
         span,
     }

@@ -54,6 +54,19 @@ fn ordinary_structural_recursions_mean_their_source() {
     assert!(ws.is_empty(), "{ws:?}");
 }
 
+/// An interface definition's body is withheld at open arguments once it is
+/// registered (issues/interface-definitions.md), where `refl` could not
+/// unfold it. It is elaborated as the plain `fn` first, and checked there,
+/// before the body is withheld: it holds, and nothing is reported.
+#[test]
+fn an_interface_definition_is_checked_before_its_body_is_withheld() {
+    let src = "
+        interface fn twice(n: Nat) → Nat { match n { Zero => 0, Succ(k) => Succ(Succ(twice(k))) } }
+    ";
+    let ws = reviewed(src);
+    assert!(ws.is_empty(), "{ws:?}");
+}
+
 /// A course-of-values recursion reads the predecessor's predecessor, so its
 /// source's nested `match` reduces only after a second split: the check
 /// deepens instead of reporting it.
