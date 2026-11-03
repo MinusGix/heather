@@ -2246,7 +2246,7 @@ impl Elaborator {
         {
             return Ok(None);
         }
-        let t = self.generic_former_lambda_at(cx, ind, &fixed, &levels, Some(&want), span)?;
+        let t = self.generic_former_lambda_at(cx, ind, &fixed, &[], &levels, Some(&want), span)?;
         Ok(Some(t))
     }
 
@@ -2263,7 +2263,24 @@ impl Elaborator {
         levels: &[Level],
         span: Span,
     ) -> R<Term> {
-        self.generic_former_lambda_at(cx, ind, &[], levels, None, span)
+        self.generic_former_lambda_at(cx, ind, &[], &[], levels, None, span)
+    }
+
+    /// [`Self::generic_former_lambda`] with the declaration's value
+    /// arguments fixed: `λ x̄. ⌜D<El x̄>(v̄)⌝`, each `vargs` entry scoped in
+    /// `cx` (a codata family's events, `λ R. ⌜CoTree<El R>(E)⌝`,
+    /// issues/codata-type-constructor-carrier.md). The caller has checked
+    /// that no value parameter's type mentions a type parameter, so the
+    /// fixed values are well typed under every `x̄`.
+    pub(crate) fn generic_former_lambda_with_values(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        vargs: &[(Term, Type, Level)],
+        levels: &[Level],
+        span: Span,
+    ) -> R<Term> {
+        self.generic_former_lambda_at(cx, ind, &[], vargs, levels, None, span)
     }
 
     /// [`Self::generic_former_lambda`] with the leading type arguments
@@ -2274,6 +2291,7 @@ impl Elaborator {
         cx: &Cx,
         ind: &Inductive,
         fixed: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
         levels: &[Level],
         want: Option<&Level>,
         span: Span,
@@ -2301,7 +2319,11 @@ impl Elaborator {
                 )
             }))
             .collect();
-        let (lowered, level) = self.lower_instance(&pcx, ind, &targs, &[], span)?;
+        let vargs: Vec<(Term, Type, Level)> = vargs
+            .iter()
+            .map(|(v, t, l)| (v.shift_local(m as u32), t.shift_local(m as u32), l.clone()))
+            .collect();
+        let (lowered, level) = self.lower_instance(&pcx, ind, &targs, &vargs, span)?;
         let want = want.cloned().unwrap_or_else(|| level.clone());
         let mut t =
             crate::expr::ExprElab::quote_type_at(self, &pcx, &lowered, &level, &want, span)?;

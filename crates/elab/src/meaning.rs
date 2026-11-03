@@ -261,7 +261,7 @@ pub(crate) fn meaning_decl(decl: &Decl, proof: Expr) -> Decl {
         is_meta: false,
         is_evidence: false,
         value: false,
-        is_interface: false,
+        is_interface: false, partial: None,
         elaborates: None,
         name: meaning_name(&decl.name),
         tyvars: decl.tyvars.clone(),

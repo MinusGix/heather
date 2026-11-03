@@ -82,6 +82,7 @@ mod attempt;
 mod binding;
 mod alpha;
 mod loops;
+mod partial;
 pub mod cutsat;
 mod cutsat_cert;
 pub mod omega;
@@ -3600,6 +3601,11 @@ impl Elaborator {
         // handles — the unfolding companions.
         // `for` loops lift into a named step over a fold, and the
         // declaration is the family that results (crates/elab/src/loops.rs).
+        // `partial fn` is the family of crates/elab/src/partial.rs: its body
+        // over the carrier of its own calls, and `f` as `CoTree::rec` of it.
+        if decl.partial.is_some() {
+            return self.session_transaction(|me| me.elab_partial_decl(decl));
+        }
         if loops::has_loop(decl) {
             return self.session_transaction(|me| me.elab_loop_decl(decl));
         }
@@ -3845,6 +3851,23 @@ impl Elaborator {
         }
         // Designated last: the generated parts above are spelled with the
         // minted names, which a designation takes out of the surface.
+        for (designed, minted) in &family.designations {
+            self.designate_access(designed, minted);
+        }
+        Ok(())
+    }
+
+    /// A `partial fn`: `f#body`, then `f` over `CoTree::rec`, then
+    /// `f_unfold` (crates/elab/src/partial.rs). Each part goes through
+    /// [`Self::elab_decl`], so a body with loops is lowered as any is.
+    fn elab_partial_decl(&mut self, decl: &Decl) -> R<()> {
+        let family = partial::lower(decl)?;
+        for part in &family.parts {
+            self.elab_decl(part)?;
+        }
+        if let Err(e) = self.elab_decl_one(&family.unfold, None) {
+            self.pass.unfold_refusals.borrow_mut().insert(family.unfold.name.clone(), format!("the generated `{}` was refused ({e})", family.unfold.name));
+        }
         for (designed, minted) in &family.designations {
             self.designate_access(designed, minted);
         }
@@ -5219,6 +5242,11 @@ impl Elaborator {
             return self
                 .elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
                 .map_err(|error| self.restate_bind_error(cx, input, discards, error));
+        }
+        if binding::generated_loop(e) {
+            return self
+                .elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
+                .map_err(|error| self.restate_loop_error(cx, e, Some(expected), error));
         }
         self.elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
     }
@@ -7110,6 +7138,11 @@ impl Elaborator {
             return self
                 .elab_infer_at_written(cx, e, expected)
                 .map_err(|error| self.restate_bind_error(cx, input, discards, error));
+        }
+        if binding::generated_loop(e) {
+            return self
+                .elab_infer_at_written(cx, e, expected)
+                .map_err(|error| self.restate_loop_error(cx, e, expected, error));
         }
         self.elab_infer_at_written(cx, e, expected)
     }

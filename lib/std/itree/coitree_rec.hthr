@@ -41,6 +41,13 @@ import omega;
 // the result.
 fn Events::calls(A: Type, B: Type) → Events { Events(A, λ _ => B) }
 
+// One call of a function `A → B`, as an event of its body's carrier: what a
+// self-call `f(a)` in a `partial fn` is (docs/partial-functions-design.md
+// §4.2).
+fn CoTree::call<A, B>(E: Events, a: A) → CoTree<B>(Events::sum(Events::calls(A, B), E)) {
+    CVis(Inl(a), λ b => CRet(b))
+}
+
 // ---------------------------------------------------------------------------
 // The loop
 
@@ -247,6 +254,16 @@ theorem CoTree::safe_bind<A, B>(D: Events, E: Events, P: (d: D.Cmd) → D.Resp(d
 {
     λ m => j(sym(CoTree::obs_bind(Events::sum(D, E), t, h)), λ y _ => CoTree::SafeObs(D, E, P, Q2, m, y),
         CoTree::safe_bind_obs(D, E, P, Q1, Q2, h, hh, m, CoTree::obs(Events::sum(D, E), t), st(m)))
+}
+
+// A call bound to a continuation, `let r <- f(d); k(r)` in a `partial fn`'s
+// body: safe when the continuation is safe at every answer within `P(d)`.
+theorem CoTree::safe_call_bind<R>(D: Events, E: Events, P: (d: D.Cmd) → D.Resp(d) → Type, Q: R → Type, d: D.Cmd,
+    k: D.Resp(d) → CoTree<R>(Events::sum(D, E)), h: (a: D.Resp(d)) → P(d, a) → CoTree::Safe(D, E, P, k(a), Q)):
+    CoTree::Safe(D, E, P, CoTree::bind(Events::sum(D, E), CVis(Inl(d), λ b => CRet(b)), k), Q)
+{
+    CoTree::safe_bind(D, E, P, P(d), Q, CVis(Inl(d), λ b => CRet(b)), k,
+        CoTree::safe_call(D, E, P, P(d), d, λ b => CRet(b), λ a p => CoTree::safe_ret(D, E, P, P(d), a, p)), h)
 }
 
 // Fixpoint induction, at a pending tree: when every body is safe for `P`, a

@@ -1,6 +1,6 @@
 ---
 title: partial fn surface, and while with no measure in carriers that iterate
-status: open
+status: closed
 labels: [design,termination,coinduction,sequencing]
 area: language
 milestone: [lang-sequencing,nh-effects]
@@ -42,3 +42,7 @@ a loop over a world with no measure means `Io → Partial<Mutated<Io, R>>`.
 its soundness still goes through `rec_sound`; a `while` with no measure
 checks in a `Partial` block, with a probe that returns at a count by `refl`
 and a refusal for the same loop in a carrier without an iteration operator.
+
+## Log
+
+- 2026-11-03: Built (thread "Add the partial fn surface"); docs/partial-functions-design.md §9 and docs/sequencing-surface-design.md §18 record what departed. `partial fn` lowers in crates/elab/src/partial.rs to `f#body` (designated `f::body`) over the carrier of its calls, `f = CoTree::rec(…)` and `f_unfold`; several parameters nest in `Mutated`; `partial(E) fn` for events; refusals for a body that never calls itself, a self-call neither bound nor in tail position, and `f` passed as a value. `while c { … }` with no measure lowers in the parser to one `Iterate::then(init, step, k)` call, over the new `Iterate` class (itree.hthr) with instances at `CoTree<_>(E)`; refused with its reason in `Option` and in pure code. `CoTree` became a carrier first (codata-type-constructor-carrier, closed). Done-when: `Tm::whnf_co` is a `partial fn` and `whnf_co_sound` is `rec_sound` over `Tm::whnf_co::body` (kernel_whnf.hthr); `count(3)` returns 3 at a count by `refl` and the same loop is refused in `Option` (lib/_tests/std/itree/partial_fn_tests.hthr). Split out: [[partial-fn-tail-iter]] (the tail case to `iter`, which needs an iteration invariant rule) and [[partial-fn-use-site-refusal]].

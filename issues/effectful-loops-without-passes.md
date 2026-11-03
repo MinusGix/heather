@@ -6,7 +6,7 @@ area: language
 milestone: [nh-effects,lang-sequencing]
 created: 2026-11-02
 updated: 2026-11-03
-blocked-by: [partial-fn-surface, eutt-iteration-and-io-reading]
+blocked-by: [eutt-iteration-and-io-reading]
 ---
 
 Effectful loops take a `passes: List<Nat>` and run `for _ in passes`. This is true of `Io::cat` (`lib/_tests/std/os/linux/linux_world_tests.hthr`), `Io::write_all`, and `Io::tac`/`Io::sort` (`lib/native/runtime/line_tools.hthr`). Minus asked what it is really for (PR #394 review, 2026-11-02). It serves two purposes at once, and neither is the program's intent:
@@ -51,3 +51,4 @@ mean `Io → Partial<Mutated<Io, R>>` (`docs/effects-capabilities-design.md`
   [[codata-up-to-friends-round-2]] (up-to proofs), [[eutt-setoid-rewrite]] and
   [[eutt-tactics]]; this issue stays the customer rewrite, blocked on the first
   two. "Done when" revised to match.
+- 2026-11-03: [[partial-fn-surface]] landed: `Partial(B)`, `partial fn`, and `while c { … }` with no measure in any carrier with an `Iterate` instance (CoTree, Partial). What this issue still waits on is [[eutt-iteration-and-io-reading]]; a world-threading loop also needs `Iterate` at state over `Partial` (`Io → Partial<Mutated<Io, R>>`), which is an instance away once that carrier is a constructor the unifier learns.

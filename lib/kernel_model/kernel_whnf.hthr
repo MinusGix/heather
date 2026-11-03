@@ -1,10 +1,12 @@
 // Weak-head reduction with no fuel (docs/partial-functions-design.md §5):
-// the evaluator of `kernel_reduction.hthr` as a partial function. Each
-// recursive call of `Tm::step` is a call event, and `CoTree::rec` answers it
-// by reducing again, so there is no fuel and no `None`: a term whose
-// reduction never stops is a computation that never returns. Its soundness
-// is `Tm::whnf_sound`'s proof read as a fixpoint induction
-// (`CoTree::rec_sound`): every value a reduction returns is a reduct.
+// the evaluator of `kernel_reduction.hthr` as a `partial fn`. Each recursive
+// reduction is a call, and `CoTree::rec` answers it by reducing again, so
+// there is no fuel and no `None`: a term whose reduction never stops is a
+// computation that never returns. Its soundness is `Tm::whnf_sound`'s proof
+// read as a fixpoint induction (`CoTree::rec_sound`) over the function's
+// body `Tm::whnf_co::body`: every value a reduction returns is a reduct.
+// `Tm::step_co` and its helpers spell the body's arms out with the calls as
+// events; the safety proofs are stated over them.
 import logic;
 import nat;
 import itree;
@@ -49,8 +51,32 @@ fn Tm::step_co(t: Tm) → CoTree<Tm>(Events::sum(Events::calls(Tm, Tm), Events::
 }
 
 // Weak-head reduction: a computation that returns the weak-head normal form
-// if reduction stops, and never returns if it does not.
-fn Tm::whnf_co(t: Tm) → CoTree<Tm>(Events::none()) { CoTree::rec(Events::calls(Tm, Tm), Events::none(), Tm::step_co, t) }
+// if reduction stops, and never returns if it does not. A `partial fn`
+// (docs/partial-functions-design.md §4): its type is `Tm → Partial(Tm)`, each
+// recursive reduction is bound with `<-` or is the result, and the
+// elaborator writes it as `CoTree::rec` of its body `Tm::whnf_co::body`.
+partial fn Tm::whnf_co(t: Tm) → Tm {
+    match t {
+        App(f, a) => {
+            let h <- Tm::whnf_co(f);
+            match h { Lam(b) => Tm::whnf_co(b.open(a)), _ => Pointed::ret(App(h, a)) }
+        },
+        NRec(z, s, n) => {
+            let h <- Tm::whnf_co(n);
+            match h {
+                NZero => Tm::whnf_co(z),
+                NSucc(m) => Tm::whnf_co(App(App(s, m), NRec(z, s, m))),
+                _ => Pointed::ret(NRec(z, s, h)),
+            }
+        },
+        SProj(p, w) => {
+            let h <- Tm::whnf_co(w);
+            match h { SPair(a, b) => Tm::whnf_co(p.pick(a, b)), _ => Pointed::ret(SProj(p, h)) }
+        },
+        NRun(c, w) => match c { Zero => Tm::whnf_co(w), Succ(m) => Pointed::ret(NSucc(NRun(m, w))) },
+        _ => Pointed::ret(t),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Soundness
@@ -126,6 +152,26 @@ theorem Tm::step_co_safe(t: Tm): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events:
 }
 
 // Every value weak-head reduction returns is a reduct, with no fuel in sight.
+// `Tm::whnf_co`'s body is `Tm::step_co` at each constructor: the calls are
+// the same events, and each continuation the same match.
+theorem Tm::whnf_co_body_safe(t: Tm): CoTree::Safe<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, Tm::whnf_co::body(t), λ v => t.Reduces(v)) {
+    match t {
+        Bv(i) => Tm::step_co_safe(Bv(i)),
+        Fv(x) => Tm::step_co_safe(Fv(x)),
+        Lam(b) => Tm::step_co_safe(Lam(b)),
+        App(f2, b2) => CoTree::safe_call_bind<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => App(f2, b2).Reduces(v), f2,
+            λ h => Tm::app_head_co(b2, h), λ h fh => Tm::app_head_co_safe(f2, b2, h, fh)),
+        NZero => Tm::step_co_safe(NZero),
+        NSucc(m) => Tm::step_co_safe(NSucc(m)),
+        NRec(z2, s2, n2) => CoTree::safe_call_bind<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => NRec(z2, s2, n2).Reduces(v), n2,
+            λ h => Tm::rec_head_co(z2, s2, h), λ h nh => Tm::rec_head_co_safe(z2, s2, n2, h, nh)),
+        SPair(c, d) => Tm::step_co_safe(SPair(c, d)),
+        SProj(q, w) => CoTree::safe_call_bind<Tm>(Events::calls(Tm, Tm), Events::none(), Tm::Evaluates, λ v => SProj(q, w).Reduces(v), w,
+            λ h => Tm::proj_head_co(q, h), λ h wh => Tm::proj_head_co_safe(q, w, h, wh)),
+        NRun(c, w) => match c { Zero => Tm::step_co_safe(NRun(0, w)), Succ(m) => Tm::step_co_safe(NRun(Succ(m), w)) },
+    }
+}
+
 theorem Tm::whnf_co_sound(t: Tm, v: Tm, h: Returns(Events::none(), Tm::whnf_co(t), v)): t.Reduces(v) {
-    CoTree::rec_sound(Events::calls(Tm, Tm), Events::none(), Tm::step_co, Tm::Evaluates, Tm::step_co_safe, t, v, h)
+    CoTree::rec_sound(Events::calls(Tm, Tm), Events::none(), Tm::whnf_co::body, Tm::Evaluates, Tm::whnf_co_body_safe, t, v, h)
 }
