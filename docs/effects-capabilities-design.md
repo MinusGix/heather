@@ -46,8 +46,10 @@ Three pieces make that work, all built in this round:
    one: the parser and the elaborator lower it, and the kernel learns
    nothing.
 3. **The tree reading** (§3). `Io::against(t, io)` reads a tree over
-   Linux's calls against a world. `Io::Reads(t, f)` says the reading is `f`
-   at every world, and `Io::reads_bind` is sequencing's case, proved once.
+   Linux's calls against a world. `Io::Reads(t, f)` says the coinductive
+   reading (`Io::against_co`) is `f` up to taus at every world (§4), and
+   `Io::reads_bind` and `Io::reads_iter` are sequencing's and the loop's
+   cases, proved once.
    It is the statement a `runtime fn` setup's `sound` will prove for every
    program.
 
@@ -213,6 +215,12 @@ is the construct-by-construct agreement the issue asks for: "the pure
 reading users reason with agrees with `denote` construct by construct,
 proved once".
 
+*Since 2026-11-03 (§4)* this finite `Reads` is restated: `Io::Reads(t, f)`
+takes a `CoTree` and `f: Io → Partial<Mutated<Io, R>>`, and is `Eutt` of
+`Io::against_co(t, io)` and `f(io)` at every world. `Io::against` and
+`against_bind` stay as above for fuelled probes, and `Io::against_returns`
+turns a fuelled `Some(m)` into a `Returns` of the embedded tree.
+
 **Where it goes.** For effectful code, the setup design's `sound`
 (`docs/runtime-fn-setups-design.md` §6.1) states
 `Implements(c.denote(args), p.tree(args))`. With capabilities it is
@@ -264,6 +272,15 @@ an iteration operator.
   per pass on both sides (lockstep) is a fast path that a tactic proves by
   induction on depth; it is not required, because compiler passes that
   change how often a loop goes round preserve `Eutt` and not lockstep.
+  **Built (2026-11-03)**, in `linux_world_co.hthr`: `Io::against_co`, `Io::Reads` as `Eutt` at every
+  world (the finite `Reads` and its lemmas are gone; `Io::against` stays
+  for fuelled probes, and `Io::against_returns` turns one into a `Returns`
+  of the embedded tree), `reads_ret`/`reads_trigger`/`reads_bind`, and the
+  loop lemma `Io::reads_iter`: a body that reads as `step` gives a loop that
+  reads as `Io::iterate(step)`, `CoTree::iter` in `Partial` over the state
+  `Mutated<Io, A>`. All by direct corecursion (`docs/coitree-design.md`
+  §7.9); a fuel-free cat reads to a `Returns` at count 7 at the piped world
+  by `refl` (`linux_world_tests.hthr`).
 - **What specs see.** `Returns(f(io), m) → P(m)` (fixpoint induction), a
   `Returns` with a count at a scripted world by `refl` (today's probes keep
   their number as the count), and divergence over every count. All of these

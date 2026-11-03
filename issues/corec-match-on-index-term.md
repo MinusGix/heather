@@ -24,8 +24,8 @@ The same happens matching `h: CoTree::obs(E, t)` when the index is
 `obs(t)` only where the index names `t` (`Bisim::refl`), which is why they
 never met it. Reproduced on master at 4a0f52a (before the round-2 friends
 work). The workaround is to state the index over a definition that hides
-the matched term (`iter_from(E, body, t)` in
-`lib/_tests/std/itree/coitree_eutt_tests.hthr`).
+the matched term, as `CoTree::iter_from_unfold` does with
+`CoTree::iter_from(E, body, t)`.
 
 Likely cause: the arm's expected type is the carrier/step type with the
 index rewritten by the match's motive, and the constructor path
@@ -35,5 +35,4 @@ the corecursion site recognises the position.
 ## Done when
 
 Both examples above elaborate, with a test on an indexed codata whose index
-mentions the scrutinee (literal and neutral scrutinee), and the workaround
-comment in the probe is dropped.
+mentions the scrutinee (literal and neutral scrutinee).

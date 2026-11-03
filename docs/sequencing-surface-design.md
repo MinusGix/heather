@@ -575,6 +575,11 @@ whatever the body does. A carrier `while` therefore takes `fuel`, and
 `decreases` is refused with that reason. The tactics already work this
 way: `mono_same(4096, …)` is a fuel budget.
 
+*2026-11-03: a carrier that can iterate (an `Iterate` instance: `Partial`,
+`CoTree<_>(E)`) takes `while c { … }` with neither `decreases` nor `fuel`
+(§18; decided by Minus with docs/effects-capabilities-design.md §4). The
+`fuel` form for the other carriers is still not built.*
+
 ### 6.3 `?` and `return` agree
 
 `e?` inside a loop body must exit the **function**, not just the generated
@@ -1072,3 +1077,51 @@ and `List::for_in` (both in `lib/std/data/list.hthr`). What departs from
 token. The parser reads two `.`s as a range only while parsing a `for`
 header, and anywhere else it refuses them with a message pointing at
 `range_from`. No `Range` type exists, as §5.2 planned.
+
+## 18. `while` with no measure as built (2026-11-03)
+
+`while c { body }` with no `decreases`, in a block over a carrier with an
+`Iterate` instance (`lib/std/itree/itree.hthr`: `iter: (A → M(Step<A, B>))
+→ A → M(B)`, an Elgot monad; instances at `CoTree<_>(E)` and so at
+`Partial`). Probes: `lib/_tests/std/itree/partial_fn_tests.hthr`. What it
+does, and what departs from §5.3 and §6:
+
+1. **It lowers in the parser, whole.** The header is `\0while(decide_bit<c>())`
+   with no measure, so `crate::imperative` threads the locals the body
+   assigns exactly as a `for`'s, and then writes the loop itself instead of
+   the `\0loop` marker the elaborator lifts. No named step is generated: the
+   step is a λ in the block, so captures need no types.
+2. **The step** is `λ (#s: TypeOf(v̄)) => { v̄ = #s; match decide_bit<c>() {
+   True => { body; Pointed::ret(Step::Continue(v̄)) }, False =>
+   Pointed::ret(Step::Break(v̄)) } }`. With several locals the state is
+   nested in the prelude's pair, `Mutated(v₁, Mutated(v₂, v₃))`, read back
+   by `.after`/`.value`; this needs no declaration the parser cannot write.
+   The annotation is the locals' types before the loop, which `:=` keeps.
+3. **The loop and the rest of the block are one call**,
+   `Iterate::then(init, step, λ #bindN => rest)`. The parser binds the loop
+   (`let #whileN = (<- \0iterate(step, init));`), and the bind lowering
+   writes that bind as one call instead of `Bind::seq(Iterate::loop(…), …)`.
+   That matters: `Bind::seq`'s first argument is inferred, and the step λ's
+   `match` cannot be checked while `M` is unknown. As one call, both λs are
+   checking-only arguments, scheduled after `M` is learned from the block's
+   expected type.
+4. **The body's binds wait.** A loop body's block closes before its
+   enclosing statement knows which locals the loop threads, and lowering
+   its binds at close would bury its assignments inside a continuation. So
+   the body of a `while` with no measure keeps its `\0bind` markers when it
+   closes (`Parser::defer_binds`) and they are lowered in the step's `True`
+   arm, after the state is read.
+5. **Refusals.** In a carrier with no `Iterate` instance, and in pure code,
+   the loop is refused with its reason ("a `while` with no measure may go
+   round forever, so it runs only in a block over a carrier that can
+   iterate …"), restated by `Elaborator::restate_loop_error` from the
+   instance search, the unbound `Iterate::then`, or the step's motive
+   failure. A loop that assigns no local is refused at parse time: its
+   condition can never change.
+6. **Not built yet:** `break`/`continue`/`return` in it (as for a measured
+   `while`), a `for` in a carrier block (`List::for_m`, §6.1), and a
+   statement `if`/`match` whose arms bind inside the loop body (their binds
+   are lowered when the arm closes, as anywhere in a carrier block). The
+   tree-sitter grammar has the optional `decreases`; its `parser.c` is
+   regenerated with the binding statements
+   (`issues/tree-sitter-binding-statements.md`).

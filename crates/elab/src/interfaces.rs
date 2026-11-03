@@ -315,7 +315,7 @@ fn theorem(decl: &Decl, name: String, lhs: Expr, rhs: Expr, span: Span) -> Decl 
         kind: DeclKind::Theorem,
         is_meta: false,
         is_evidence: false,
-        is_interface: false,
+        is_interface: false, partial: None,
         value: false,
         elaborates: None,
         name,

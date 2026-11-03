@@ -255,12 +255,15 @@ is on `Bisim`. `bind_cong_l` and `bind_cong_r` fix one side.
   may call itself under `Eutt::up_to_bisim` (transitivity with strong
   bisimilarity on both sides) and `Eutt::bind_up` (the congruence of
   `bind`), the friends of `Eutt` at the end of `coitree_eutt.hthr` (codata
-  §5.6); the loop congruence is proved that way in
-  `lib/_tests/std/itree/coitree_eutt_tests.hthr`. `Eutt::trans` itself is
-  not a friend and must not become one: up to `≈`-transitivity is unsound
+  §5.6); the loop congruence is proved that way, as a probe beside §7.9's
+  direct `Eutt::iter_cong`, in `lib/_tests/std/itree/coitree_eutt_tests.hthr`.
+  `Eutt::trans` itself is not a friend and must not become one: up to
+  `≈`-transitivity is unsound
   (`spin ≈ CTau(CRet(0))` would close as `ETau(0, 0, spin, CRet(0), refl,
   refl, trans(self, tau_l(CRet(0))))`, which is false). The other proofs
-  here predate the friends and keep their self-calls under a constructor.
+  here predate the friends and keep their self-calls under a constructor, or
+  (§7.9) avoid a self-call under `trans` by generalising the hypothesis to
+  a relation the step lands in.
 
 ### 7.7 Cost
 
@@ -290,6 +293,58 @@ proportion to its size.
 - `bind_cong` at a literal tree with taus on both sides of the bind, at a
   neutral tree through each side, into refinement, and a leaf continued at
   another value refused (`lib/_tests/std/itree/coitree_eutt_tests.hthr`).
+
+### 7.9 Loops, recursion and readings up to taus
+
+`issues/eutt-iteration-and-io-reading.md` (2026-11-03). Every proof is
+direct corecursion; none waits on up-to coinduction.
+
+- **One tool for every function of trees.** `CoTree::after_map`: a function
+  `F` that is a function `Fo` of observations (`obs(F(t)) = Fo(obs(t))`) and
+  maps a silent step to a silent step takes `after(k, t) = o` to
+  `AfterIs(F(t), Fo(o))`, a count of its own and `after(m, F(t)) = Fo(o)`.
+  The count is `t`'s real number of drops, not `k`: a function that turns a
+  settled node into a silent step (a loop going round, a call being
+  answered) would otherwise spill the rest of `k` into what follows.
+  `iter_from`, `mrec` and `Io::against_co` are instances, each by `refl`.
+- **`Eutt::iter_from_cong`** (`iter_cong` at a start): pending passes
+  `t ≈ u` and bodies `hb(a): body1(a) ≈ body2(a)` give equivalent loops. A
+  `Continue(a)` leaf is one `CTau` on both sides to the next passes, which
+  `hb(a)` relates, so the self-call sits under `ETau`. `iter_from(body, t)`
+  is the loop resumed inside a pass; `iter(body, a)` is `iter_from(body,
+  body(a))` by `δ`.
+- **Unfolding.** `CoTree::iter_unfold` is a `Bisim`: `iter(body, a)` is
+  `bind(body(a), iter_next)` with `iter_next(Continue(a)) = CTau(iter(a))`.
+  `Eutt::iter_unfold` drops the tau (`iter_again`).
+- **Recursion.** `Eutt::mrec_cong`/`rec_cong` (pointwise-equivalent bodies,
+  equivalent pending trees). At a command of the pending tree the two sides'
+  step is classified once by `CoTree::mrec_step` (a `match c as …`), into
+  an inductive `MrecStep` the corecursive body matches on: a call is a
+  silent step to `bind(body(d), k)` on both sides, related by `bind_cong`;
+  a command of `E` is answered as `CTau(mrec(k(a)))`, which is
+  `mrec(CTau(k(a)))` by `δι`, so the children are runs again with no nested
+  constructor. `Eutt::mrec_bind`: running `bind(t, k)` is running `t` then
+  `mrec ∘ k`. Stated plainly it needs up to `trans` at a call, where the
+  bind reassociates (`bind_assoc` is only a `Bisim`); generalised over a
+  pending tree `p` with `Bisim(p, bind(q, k))` it is direct, the
+  reassociation landing in the hypothesis.
+- **`Returns::eutt`**: a return is seen through `Eutt` (`Eutt::to`), so specs
+  stated with `Returns` never mention it.
+- **The world's reading** (`lib/std/os/linux/linux_world_co.hthr`,
+  `docs/effects-capabilities-design.md` §4): `Io::against_co` answers each
+  `CVis` from the world as one `CTau`; `against_co_cong`, `against_co_bind`
+  (a `Bisim`), `Io::Reads` as `Eutt` at every world, `reads_ret`,
+  `reads_trigger`, `reads_bind`, and the loop lemma `reads_iter`. The loop
+  lemma's plain statement needs up to `trans` (the next pass's reading is
+  only equivalent to the step's); `Io::reads_loop` generalises it to "the
+  pass's reading is equivalent to the iteration's pending pass `u`" and
+  traces each silent step or return of the reading back to the pass
+  (`pass_tau`, `pass_ret`, by induction on the count).
+- **Rewriting.** `Eutt::iter_respects` and `Io::against_co_respects` are
+  the respect evidence `rewrite` along `Eutt` uses to reach inside a loop's
+  body and a tree under its reading (`docs/equation-rewrite-design.md`
+  §11). `Eutt::mrec_respects` is stated, but the rewrite does not find it
+  yet (`issues/eutt-rewrite-iteration-evidence.md`).
 
 ---
 

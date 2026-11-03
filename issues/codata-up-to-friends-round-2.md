@@ -56,6 +56,7 @@ Smaller gaps, each refused with its reason today:
   by `nh-effects`: [[eutt-iteration-and-io-reading]] states its loop lemmas
   first and logs which proofs wait here, and [[eutt-tactics]] builds its
   coinduction tactic on them (`docs/effects-capabilities-design.md` §4).
+- 2026-11-03: 2026-11-03: [[eutt-iteration-and-io-reading]] closed with every lemma proved by direct corecursion (iter_cong, mrec_cong, mrec_bind, reads_bind, the loop lemma reads_iter): where a self-call would sit under trans, the hypothesis is generalised to the relation the step lands in (docs/coitree-design.md §7.9, docs/proof-patterns.md §4). nh-effects no longer waits on up-to Eutt; eutt-tactics still wants it for an ecofix-style tactic.
 
 ## Log
 
@@ -79,7 +80,8 @@ parent wrote. Done:
 - **friend calls inside a friend's argument** in the definition;
 - the library: `Eutt::up_to_bisim` and `Eutt::bind_up` (with
   `Bisim::after`, `CoTree::bind_ret_at` for exact counts), and the loop
-  congruence proved through both in `lib/_tests/std/itree/coitree_eutt_tests.hthr`.
+  congruence proved through both in `lib/_tests/std/itree/coitree_eutt_tests.hthr`
+  (`iter_cong_up_to`; the library's `Eutt::iter_cong` is direct, PR #409).
 
 Left (each refused with its reason):
 

@@ -63,3 +63,4 @@ formatter is not a customer: its fuel is a termination witness, which
 - 2026-11-03: Round 2 is now [[partial-fn-surface]], and round 3 (runtime loops) is
   [[effectful-loops-without-passes]], after Minus decided that loops over a
   world mean `Io → Partial<Mutated<Io, R>>` (`docs/effects-capabilities-design.md` §4).
+- 2026-11-03: Round 2 built ([[partial-fn-surface]], closed): `partial fn` and `while` with no measure; docs/partial-functions-design.md §9. The tail case to `CoTree::iter` is [[partial-fn-tail-iter]], which round 3 (partial `runtime fn` loops) wants.

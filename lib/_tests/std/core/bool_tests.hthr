@@ -31,3 +31,11 @@ theorem imp_intro(n: Nat): decide_bit<n <= 0 → n = 0>().IsTrue() { decide_intr
 // Closed guards decide by evaluation, both ways.
 theorem guard_closed(): guard(3, 7) = True { refl }
 theorem guard_closed_no(): guard(0, 7) = False { refl }
+
+// An implicit read through a definition at a head mismatch
+// (issues/unifier-lazy-delta.md, issues/unifier-spine-across-distinct-heads.md):
+// `(?a && ?b).IsTrue()` against `g(n, m).IsTrue()` unfolds `g` to its
+// `&&`, as conversion would, so `pick(h)` infers `a := n.leb(m)`.
+fn lazy_delta_g(n, m: Nat) → Bool { n.leb(m) && !m.leb(n) }
+theorem lazy_delta_pick({a, b: Bool}, h: (a && b).IsTrue()): a.IsTrue() { a.is_true_and(b, h).left }
+theorem lazy_delta_pick_through_g(n, m: Nat, h: lazy_delta_g(n, m).IsTrue()): n.leb(m).IsTrue() { lazy_delta_pick(h) }

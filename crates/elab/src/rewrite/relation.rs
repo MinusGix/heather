@@ -78,8 +78,11 @@ impl Elaborator {
                 _ => return Ok(None),
             }
         };
-        let Type::El { level: holds, .. } = &cur else { unreachable!("a relation is an `El`") };
-        let holds = holds.clone();
+        let holds = match &cur {
+            Type::El { level, .. } => level.clone(),
+            Type::M { sig, .. } => sig.family_level(),
+            _ => unreachable!("a relation is an `El` or a family"),
+        };
         if k == 0 {
             return RelationRewrite::new(self, cx, h.span, pattern, proof.clone(), 0, holds).map(Some);
         }
@@ -223,6 +226,12 @@ impl GoalNodes {
     fn types(&mut self, cx: &Cx, ty: &Type, seen: &mut std::collections::HashSet<(*const Term, usize)>) {
         match ty {
             Type::El { tm, .. } => self.walk(tm, 0, seen),
+            Type::M { .. } => {
+                if let Some(rel) = Relation::of_family(ty) {
+                    self.walk(&rel.left, 0, seen);
+                    self.walk(&rel.right, 0, seen);
+                }
+            }
             Type::Pi { dom, cod, .. } => {
                 self.types(cx, dom, seen);
                 if let Some(cod) = crate::strengthen_ty(&cx.gamma, cod, 1) {
@@ -306,7 +315,21 @@ impl Polarity {
 #[derive(Clone)]
 enum Node {
     Same,
-    Changed { term: Rc<Term>, proof: Rc<Term>, over: Domains },
+    /// `rel` is the relation `proof` relates by when it is not the
+    /// rewrite's own: a context that leaves the carrier relates its result
+    /// by whatever its evidence names (§11.4).
+    Changed { term: Rc<Term>, proof: Rc<Term>, over: Domains, rel: Option<Rc<Rel>> },
+}
+
+/// A relation a node changed by other than the rewrite's own `R`, with its
+/// carrier, both scoped in the rewrite's context, and the level of an
+/// application `rel(x, y)`.
+#[derive(PartialEq)]
+pub(super) struct Rel {
+    head: Rc<Term>,
+    carrier: Rc<Type>,
+    level: Level,
+    holds: Level,
 }
 
 /// The binders' types and levels a pointwise relation ranges over,
@@ -320,7 +343,20 @@ impl Node {
 
     /// A change related by `R` itself.
     fn related(term: Rc<Term>, proof: Rc<Term>) -> Node {
-        Node::Changed { term, proof, over: Rc::from([]) }
+        Node::Changed { term, proof, over: Rc::from([]), rel: None }
+    }
+
+    /// A change related by `rel`, `None` for `R` itself.
+    fn related_by(term: Rc<Term>, proof: Rc<Term>, rel: Option<Rc<Rel>>) -> Node {
+        Node::Changed { term, proof, over: Rc::from([]), rel }
+    }
+
+    /// The relation the change is by, `None` for `R` itself.
+    fn rel(&self) -> Option<&Rc<Rel>> {
+        match self {
+            Node::Changed { rel, .. } => rel.as_ref(),
+            Node::Same => None,
+        }
     }
 
     /// A λ that changed: related pointwise.
@@ -334,7 +370,7 @@ impl Node {
 pub(super) enum Plan {
     Same,
     /// `S(l, r)`, each side with its step when it changed.
-    Relation { relation: Rc<Term>, left: Side, right: Side },
+    Relation { relation: Rc<Term>, carrier: Rc<Type>, level: Level, left: Side, right: Side },
     /// `P → Q`: `from` and `to` are the implication before and after.
     Arrow { from: Type, to: Type, premise: Box<Plan>, conclusion: Box<Plan> },
 }
@@ -344,6 +380,8 @@ pub(super) struct Side {
     to: Rc<Term>,
     /// `R(from, to)`; `None` when the side did not change.
     proof: Option<Rc<Term>>,
+    /// The relation `proof` is by, when not `R`.
+    rel: Option<Rc<Rel>>,
 }
 
 /// The congruence a node asks for: over its last argument, or its last two,
@@ -374,10 +412,12 @@ enum Lookup {
     /// The context does not map the carrier to itself: no evidence of this
     /// shape can be stated.
     Untyped,
-    /// Evidence, ready to apply to `x, x', h` (twice, for `Binary`).
-    Found(Rc<Term>),
-    /// The statement, which resolution did not prove.
-    Missing(Type, Level),
+    /// Evidence, ready to apply to `x, x', h` (twice, for `Binary`), and
+    /// the relation the result changes by when it is not `R`.
+    Found(Rc<Term>, Option<Rc<Rel>>),
+    /// The statement, which resolution did not prove, and the relation it
+    /// names for the result.
+    Missing(Type, Level, Option<Rc<Rel>>),
 }
 
 impl Lookup {
@@ -385,11 +425,15 @@ impl Lookup {
     fn shifted(self, d: u32) -> Lookup {
         match self {
             Lookup::Untyped => Lookup::Untyped,
-            Lookup::Found(ev) => Lookup::Found(Rc::new(ev.shift_local(d))),
-            Lookup::Missing(ty, level) => Lookup::Missing(ty.shift_local(d), level),
+            Lookup::Found(ev, rel) => Lookup::Found(Rc::new(ev.shift_local(d)), rel),
+            Lookup::Missing(ty, level, rel) => Lookup::Missing(ty.shift_local(d), level, rel),
         }
     }
 }
+
+/// A context asked about: its shape, the relation its argument changes by,
+/// the context, and whether its result was asked at another carrier.
+type ContextKey = (Shape, Option<Rc<Rel>>, Rc<Term>, bool);
 
 /// A λ the walk is below.
 struct Binder {
@@ -442,7 +486,7 @@ pub(super) struct RelationRewrite<'a> {
     /// While evidence is stated below binders a context mentions: `cx` is
     /// extended by them, and a missing statement is refused, not raised.
     deep: bool,
-    contexts: Vec<(Shape, Rc<Term>, Lookup)>,
+    contexts: Vec<(ContextKey, Lookup)>,
     /// `Reflexive<C>(R)`'s `rel_refl`, once looked for.
     reflexive: Option<Option<Rc<Term>>>,
     /// Relation terms and the aliases that spell them.
@@ -546,7 +590,6 @@ impl<'a> RelationRewrite<'a> {
     /// that connects the two. `what` names the goal in errors.
     pub(super) fn goal(&mut self, goal: &Type, what: &str) -> R<(Type, Plan)> {
         if let Some(rel) = Relation::of_type(self.e, self.original, goal, self.span) {
-            let Type::El { level, tm } = goal else { unreachable!("a relation is an `El`") };
             let left = self.term(&rel.left)?;
             let right = self.term(&rel.right)?;
             if !left.changed() && !right.changed() {
@@ -562,16 +605,20 @@ impl<'a> RelationRewrite<'a> {
                     span: self.span,
                 });
             }
-            let (_, args) = crate::spelling::app_spine(tm);
-            let mut nodes = vec![Node::Same; args.len() - 2];
-            nodes.extend([left.clone(), right.clone()]);
-            let next = Type::El { level: level.clone(), tm: rebuild(tm, &nodes) };
+            let to = |node: &Node, from: &Rc<Term>| match node {
+                Node::Changed { term, .. } => Rc::clone(term),
+                Node::Same => Rc::clone(from),
+            };
+            let next = Relation::with_sides(goal, to(&left, &rel.left), to(&right, &rel.right))
+                .expect("a relation application has two sides");
             let side = |from: Rc<Term>, node: Node| match node {
-                Node::Same => Side { to: Rc::clone(&from), from, proof: None },
-                Node::Changed { term, proof, .. } => Side { from, to: term, proof: Some(proof) },
+                Node::Same => Side { to: Rc::clone(&from), from, proof: None, rel: None },
+                Node::Changed { term, proof, rel, .. } => Side { from, to: term, proof: Some(proof), rel },
             };
             let plan = Plan::Relation {
                 relation: rel.head,
+                carrier: rel.carrier,
+                level: rel.level,
                 left: side(rel.left, left),
                 right: side(rel.right, right),
             };
@@ -622,20 +669,24 @@ impl<'a> RelationRewrite<'a> {
         let up = |t: &Rc<Term>| if depth == 0 { Rc::clone(t) } else { Rc::new(t.shift_local(depth)) };
         match plan {
             Plan::Same => Ok(input),
-            Plan::Relation { relation, left, right } => {
-                let r = Rc::clone(&self.relation);
+            Plan::Relation { relation, carrier, level, left, right } => {
+                // Each side's relation: `R`, or what a context that left
+                // `R`'s carrier named, at the goal's carrier either way.
+                let by = |side: &Side| side.rel.as_ref().map_or_else(|| Rc::clone(&self.relation), |r| Rc::clone(&r.head));
+                let (rl, rr) = (by(left), by(right));
+                let at = (carrier, level);
                 let mut acc = input;
                 match polarity {
                     // From `S(l', r')`: `R(r, r')` turned round closes the
                     // right side, then `R(l, l')` the left.
                     Polarity::Backward => {
                         if let Some(pr) = &right.proof {
-                            let back = self.symmetric(pr, &right.from, &right.to)?;
-                            let chain = self.chain(relation, &r, relation)?;
+                            let back = self.symmetric(pr, &right.from, &right.to, &rr, at)?;
+                            let chain = self.chain(relation, &rr, relation, at)?;
                             acc = apply(up(&chain), [up(&left.to), up(&right.to), up(&right.from), acc, up(&back)]);
                         }
                         if let Some(pl) = &left.proof {
-                            let chain = self.chain(&r, relation, relation)?;
+                            let chain = self.chain(&rl, relation, relation, at)?;
                             acc = apply(up(&chain), [up(&left.from), up(&left.to), up(&right.from), up(pl), acc]);
                         }
                     }
@@ -643,12 +694,12 @@ impl<'a> RelationRewrite<'a> {
                     // side, then `R(r, r')` the right.
                     Polarity::Forward => {
                         if let Some(pl) = &left.proof {
-                            let back = self.symmetric(pl, &left.from, &left.to)?;
-                            let chain = self.chain(&r, relation, relation)?;
+                            let back = self.symmetric(pl, &left.from, &left.to, &rl, at)?;
+                            let chain = self.chain(&rl, relation, relation, at)?;
                             acc = apply(up(&chain), [up(&left.to), up(&left.from), up(&right.from), up(&back), acc]);
                         }
                         if let Some(pr) = &right.proof {
-                            let chain = self.chain(relation, &r, relation)?;
+                            let chain = self.chain(relation, &rr, relation, at)?;
                             acc = apply(up(&chain), [up(&left.to), up(&right.from), up(&right.to), acc, up(pr)]);
                         }
                     }
@@ -790,7 +841,7 @@ impl<'a> RelationRewrite<'a> {
         self.binders.push(Binder { here, dom: Rc::clone(dom), level: dom_level.clone(), scope: self.scopes });
         let inner = self.term(body);
         self.binders.pop();
-        let Node::Changed { term, proof, over } = inner? else {
+        let Node::Changed { term, proof, over, rel } = inner? else {
             return Ok(Node::Same);
         };
         // The body's own binders, if it is a λ too, scoped where this λ sits:
@@ -812,7 +863,8 @@ impl<'a> RelationRewrite<'a> {
         }
         // The level of `p`'s type: `R(t, t')`, or for a λ body the `Π` the
         // pointwise relation unfolds to.
-        let holds = over.iter().rev().fold(self.holds.clone(), |l, (_, dl)| Level::join(dl.clone(), l));
+        let base = rel.as_ref().map_or_else(|| self.holds.clone(), |r| r.holds.clone());
+        let holds = over.iter().rev().fold(base, |l, (_, dl)| Level::join(dl.clone(), l));
         Ok(Node::Changed {
             term: Rc::new(Term::Lam {
                 dom_level: dom_level.clone(),
@@ -822,6 +874,7 @@ impl<'a> RelationRewrite<'a> {
             }),
             proof: Rc::new(Term::Lam { dom_level: dom_level.clone(), cod_level: holds, dom: Rc::clone(dom), body: proof }),
             over: doms.into(),
+            rel,
         })
     }
 
@@ -852,22 +905,25 @@ impl<'a> RelationRewrite<'a> {
         let term = rebuild(t, nodes);
         let last = n - 1;
         let pointwise = changed.iter().any(|&i| nodes[i].pointwise());
-        if n >= 2 && changed[0] >= n - 2 && !pointwise {
+        // `Respects2` is over `R` alone: an argument a context carried to
+        // another relation crosses only unary evidence.
+        let own = changed.iter().all(|&i| nodes[i].rel().is_none());
+        if n >= 2 && changed[0] >= n - 2 && !pointwise && own {
             let op = prefix(t, 2);
-            let binary = self.lookup_here(&Shape::Binary, &op)?;
+            let binary = self.lookup_here(&Shape::Binary, None, &op, None)?;
             // A binary operation with only its last argument changed may have
             // unary evidence instead; with neither, the obligation is the
             // binary one, as `rel_cong` leaves it.
             let use_binary = match &binary {
-                Lookup::Found(_) => true,
+                Lookup::Found(..) => true,
                 Lookup::Untyped => false,
                 Lookup::Missing(..) => {
                     changed != [last]
-                        || !matches!(self.lookup_here(&Shape::Unary, &prefix(t, 1))?, Lookup::Found(_))
+                        || !matches!(self.lookup_here(&Shape::Unary, None, &prefix(t, 1), None)?, Lookup::Found(..))
                 }
             };
             if use_binary {
-                let respects = self.discharge_here(&Shape::Binary, &op)?;
+                let (respects, _) = self.discharge_here(&Shape::Binary, None, &op, None)?;
                 let (x, x2, hx) = self.side(args[n - 2], &nodes[n - 2])?;
                 let (y, y2, hy) = self.side(args[last], &nodes[last])?;
                 return Ok(Node::related(term, apply(respects, [x, x2, hx, y, y2, hy])));
@@ -886,33 +942,86 @@ impl<'a> RelationRewrite<'a> {
                 span: self.span,
             });
         };
-        let Node::Changed { term: x2, proof: hx, over } = &nodes[i] else { unreachable!() };
+        let Node::Changed { term: x2, proof: hx, over, rel } = &nodes[i] else { unreachable!() };
+        let input = rel.clone();
+        // The argument's carrier: `R`'s, or that of the relation a context
+        // below carried it to.
+        let (carrier, level) = match &input {
+            Some(r) => (Rc::clone(&r.carrier), r.level.clone()),
+            None => (Rc::clone(&self.carrier), self.level.clone()),
+        };
         // A λ argument crosses its consumer by pointwise evidence, its
         // context written as a λ (`λ g. f(…, g, …)`) as the library's rules
         // state it (`MonoidRel::range_pointwise`); any other argument by
         // `PreservesRelation(R, R, …)`.
-        let (shape, context) = if over.is_empty() {
-            let carrier = Rc::new(self.carrier.shift_local(self.depth()));
-            let context = if i == last { prefix(t, 1) } else { self.context(t, i, carrier, self.level.clone()) };
-            (Shape::Unary, context)
+        let (shape, dom, dom_level) = if over.is_empty() {
+            (Shape::Unary, Rc::new(carrier.shift_local(self.depth())), level.clone())
         } else {
-            let (fun, level) = self.function_type(over);
-            (Shape::Pointwise(Rc::clone(over)), self.context(t, i, Rc::new(fun), level))
+            let (fun, flevel) = self.function_type(over, &carrier, &level);
+            (Shape::Pointwise(Rc::clone(over)), Rc::new(fun), flevel)
         };
-        if matches!(self.lookup_here(&shape, &context)?, Lookup::Untyped) {
+        let unary = over.is_empty() && i == last;
+        let context = if unary { prefix(t, 1) } else { self.context(t, i, Rc::clone(&dom), dom_level.clone(), level.clone()) };
+        let mut found = self.lookup_here(&shape, input.as_ref(), &context, None)?;
+        let mut context = context;
+        let mut target = None;
+        if matches!(found, Lookup::Untyped) {
+            // The context leaves the carrier (`bind(t, h)` at another result
+            // type): its result changes by whatever relation its evidence
+            // names at the type it maps into (§11.4).
+            if let Some((d, d_level)) = self.result_type(t) {
+                if !unary {
+                    context = self.context(t, i, Rc::clone(&dom), dom_level.clone(), d_level.clone());
+                }
+                let at = (d, d_level);
+                found = self.lookup_here(&shape, input.as_ref(), &context, Some(&at))?;
+                target = Some(at);
+            }
+        }
+        if matches!(found, Lookup::Untyped) {
+            let carrier_shown = self.e.display_type(self.original, &carrier);
             return Err(ElabError::Elab {
-                msg: format!(
-                    "`rewrite`: rewriting inside{} changes an argument of a context that does \
-                     not map {} to `{}`; a relation rewrite stays in the relation's carrier",
-                    self.shown(t),
-                    if over.is_empty() { "it" } else { "functions into it" },
-                    self.e.display_type(self.original, &self.carrier),
-                ),
+                msg: match &target {
+                    None => format!(
+                        "`rewrite`: rewriting inside{} changes an argument of a context that does \
+                         not map {} to `{carrier_shown}`; a relation rewrite stays in the relation's carrier",
+                        self.shown(t),
+                        if over.is_empty() { "it" } else { "functions into it" },
+                    ),
+                    Some((d, _)) => format!(
+                        "`rewrite`: rewriting inside{} changes an argument of a context from {}`{carrier_shown}` \
+                         to `{}`, and no evidence about it names the relation its result changes by\n  \
+                         hint: state `PreservesRelation(R, S, f)` for its context as an `evidence theorem`, \
+                         with the relation `S` at `{}`",
+                        self.shown(t),
+                        if over.is_empty() { "" } else { "functions into " },
+                        self.e.display_type(self.original, d),
+                        self.e.display_type(self.original, d),
+                    ),
+                },
                 span: self.span,
             });
         }
-        let preserves = self.discharge_here(&shape, &context)?;
-        Ok(Node::related(term, apply(preserves, [Rc::clone(args[i]), Rc::clone(x2), Rc::clone(hx)])))
+        let (preserves, out) = self.discharge_here(&shape, input.as_ref(), &context, target.as_ref())?;
+        Ok(Node::related_by(term, apply(preserves, [Rc::clone(args[i]), Rc::clone(x2), Rc::clone(hx)]), out))
+    }
+
+    /// The type of node `t` and its level, scoped in the rewrite's context:
+    /// what a context that leaves the carrier maps into. `None` when it
+    /// mentions a binder the walk is below.
+    fn result_type(&self, t: &Rc<Term>) -> Option<(Rc<Type>, Level)> {
+        let oracle = self.e.goal_oracle();
+        let (ty, level) = heather_kernel::typing::infer_term(
+            oracle.world(),
+            0,
+            heather_kernel::layer::Layer::Prog,
+            &self.here().gamma,
+            t,
+            self.e.policy.fuel,
+        )
+        .ok()?;
+        let lowered = crate::strengthen_ty(&self.original.gamma, &ty, self.depth())?;
+        Some((Rc::new(lowered), level))
     }
 
     /// `x`, what it became, and `R(x, x')` — reflexivity for an argument that
@@ -926,20 +1035,20 @@ impl<'a> RelationRewrite<'a> {
 
     /// `λ z. f(…, z, …)` with `z : dom` at argument `i` of `t`'s spine: the
     /// context of a change that is not in the last argument, or of a λ.
-    fn context(&self, t: &Rc<Term>, i: usize, dom: Rc<Type>, dom_level: Level) -> Rc<Term> {
+    fn context(&self, t: &Rc<Term>, i: usize, dom: Rc<Type>, dom_level: Level, cod_level: Level) -> Rc<Term> {
         let (head, args) = crate::spelling::app_spine(t);
         let body = args.iter().enumerate().fold(Rc::new(head.shift_local(1)), |fun, (j, a)| {
             let arg = if j == i { Rc::new(Term::Var(LocalVar(0))) } else { Rc::new(a.shift_local(1)) };
             Rc::new(Term::AppAt { fun, arg })
         });
-        Rc::new(Term::Lam { dom_level, cod_level: self.level.clone(), dom, body })
+        Rc::new(Term::Lam { dom_level, cod_level, dom, body })
     }
 
     /// `D₁ → … → Dₙ → C` for a λ's binder types, at the walk's depth, and
     /// its level.
-    fn function_type(&self, over: &[(Rc<Type>, Level)]) -> (Type, Level) {
+    fn function_type(&self, over: &[(Rc<Type>, Level)], carrier: &Type, level: &Level) -> (Type, Level) {
         let m = over.len() as u32;
-        let start = ((*self.carrier).shift_local(self.depth() + m), self.level.clone());
+        let start = (carrier.shift_local(self.depth() + m), level.clone());
         over.iter().enumerate().rev().fold(start, |(ty, level), (j, (dom, dl))| {
             let ty = Type::Pi {
                 dom_level: dl.clone(),
@@ -955,14 +1064,20 @@ impl<'a> RelationRewrite<'a> {
     // Evidence
 
     /// [`Self::lookup`] at the walk's depth.
-    fn lookup_here(&mut self, shape: &Shape, context: &Rc<Term>) -> R<Lookup> {
-        self.scoped(shape, context, |rw, shape, context| rw.lookup(shape, context), Lookup::shifted)
+    fn lookup_here(&mut self, shape: &Shape, input: Option<&Rc<Rel>>, context: &Rc<Term>, target: Option<&(Rc<Type>, Level)>) -> R<Lookup> {
+        self.scoped(shape, context, |rw, shape, context| rw.lookup(shape, input, context, target), Lookup::shifted)
     }
 
     /// [`Self::discharge`] at the walk's depth.
-    fn discharge_here(&mut self, shape: &Shape, context: &Rc<Term>) -> R<Rc<Term>> {
-        self.scoped(shape, context, |rw, shape, context| rw.discharge(shape, context), |ev, d| {
-            Rc::new(ev.shift_local(d))
+    fn discharge_here(
+        &mut self,
+        shape: &Shape,
+        input: Option<&Rc<Rel>>,
+        context: &Rc<Term>,
+        target: Option<&(Rc<Type>, Level)>,
+    ) -> R<(Rc<Term>, Option<Rc<Rel>>)> {
+        self.scoped(shape, context, |rw, shape, context| rw.discharge(shape, input, context, target), |(ev, rel), d| {
+            (Rc::new(ev.shift_local(d)), rel)
         })
     }
 
@@ -1010,15 +1125,22 @@ impl<'a> RelationRewrite<'a> {
     }
 
     /// What resolution says about `context`'s congruence of `shape`, asked
-    /// once per context.
-    fn lookup(&mut self, shape: &Shape, context: &Rc<Term>) -> R<Lookup> {
-        if let Some((_, _, found)) = self.contexts.iter().find(|(s, c, _)| s == shape && c == context) {
+    /// once per context. The argument changes by `input` (`R` when `None`);
+    /// the result by the same relation, or, with a `target` type the context
+    /// maps into, by a relation its evidence names there (§11.4).
+    fn lookup(&mut self, shape: &Shape, input: Option<&Rc<Rel>>, context: &Rc<Term>, target: Option<&(Rc<Type>, Level)>) -> R<Lookup> {
+        let key = (shape.clone(), input.cloned(), Rc::clone(context), target.is_some());
+        if let Some((_, found)) = self.contexts.iter().find(|(k, _)| *k == key) {
             return Ok(found.clone());
         }
-        let c = self.carrier_name.clone();
-        let rel = self.relation_alias(&Rc::clone(&self.relation))?;
+        let (carrier, level, relation) = match input {
+            Some(r) => (Rc::clone(&r.carrier), r.level.clone(), Rc::clone(&r.head)),
+            None => (Rc::clone(&self.carrier), self.level.clone(), Rc::clone(&self.relation)),
+        };
+        let c = self.carrier_named(&carrier, &level);
+        let rel = self.relation_alias_at(&relation, &c, &carrier)?;
         // The relation the context's argument changes by, and its type.
-        let (input, argument) = match shape {
+        let (input_text, argument) = match shape {
             Shape::Unary | Shape::Binary => (rel.clone(), c.clone()),
             Shape::Pointwise(over) => {
                 let mut input = rel.clone();
@@ -1031,41 +1153,156 @@ impl<'a> RelationRewrite<'a> {
                 (input, format!("({fun})"))
             }
         };
+        let out = match target {
+            Some((d, l)) => self.carrier_named(d, l),
+            None => c.clone(),
+        };
         let operation = match shape {
             Shape::Binary => format!("{c} → {c} → {c}"),
-            Shape::Unary | Shape::Pointwise(_) => format!("{argument} → {c}"),
+            Shape::Unary | Shape::Pointwise(_) => format!("{argument} → {out}"),
         };
         let (op_ty, op_level) = self.statement(&operation)?;
         let found = if !self.checks(context, &op_ty, &op_level) {
             Lookup::Untyped
+        } else if let Some((d, l)) = target {
+            let op = self.alias(Rc::clone(context), op_ty, op_level);
+            self.leaving(&input_text, &op, context, d, l, &out)?
         } else {
             let op = self.alias(Rc::clone(context), op_ty, op_level);
             let statement = match shape {
-                Shape::Unary | Shape::Pointwise(_) => format!("relation_props::PreservesRelation({input}, {rel}, {op})"),
+                Shape::Unary | Shape::Pointwise(_) => format!("relation_props::PreservesRelation({input_text}, {rel}, {op})"),
                 Shape::Binary => format!("algebra_rel::Respects2<{c}, {c}, {c}>({rel}, {rel}, {rel}, {op})"),
             };
             let (ty, level) = self.statement(&statement)?;
             match self.resolve(&ty, &level) {
-                Some(ev) => Lookup::Found(self.applicable(shape, ev, ty, level)?),
-                None => Lookup::Missing(ty, level),
+                Some(ev) => Lookup::Found(self.applicable(shape, ev, ty, level)?, input.cloned()),
+                None => Lookup::Missing(ty, level, input.cloned()),
             }
         };
-        self.contexts.push((shape.clone(), Rc::clone(context), found.clone()));
+        self.contexts.push((key, found.clone()));
         Ok(found)
     }
 
+    /// The evidence for a context `op` that maps the argument's carrier
+    /// into `target` (spelled `out`): each relation `S` at `target` that an
+    /// evidence rule about `op` names, in turn, with `PreservesRelation(input,
+    /// S, op)` resolved; the first relation's statement as the obligation when
+    /// none resolves, and `Untyped` when no rule names one.
+    #[allow(clippy::too_many_arguments)]
+    fn leaving(
+        &mut self,
+        input: &str,
+        op: &str,
+        context: &Rc<Term>,
+        target: &Rc<Type>,
+        target_level: &Level,
+        out: &str,
+    ) -> R<Lookup> {
+        let mut first = None;
+        for candidate in self.named_relations(context) {
+            // A relation found below binders is kept for the node's parents,
+            // so it must not mention them.
+            let Some(root) = (if self.deep {
+                crate::strengthen_tm(&self.original.gamma, &candidate, self.depth()).map(Rc::new)
+            } else {
+                Some(Rc::clone(&candidate))
+            }) else {
+                continue;
+            };
+            let Some(holds) = self.relation_level(&candidate) else { continue };
+            let carrier = Rc::clone(target);
+            let Ok(s) = self.relation_alias_at(&root, out, &carrier) else { continue };
+            let (ty, level) = self.statement(&format!("relation_props::PreservesRelation({input}, {s}, {op})"))?;
+            let rel = Rc::new(Rel { head: root, carrier, level: target_level.clone(), holds });
+            if let Some(ev) = self.resolve(&ty, &level) {
+                return Ok(Lookup::Found(Rc::new(ev), Some(rel)));
+            }
+            first.get_or_insert((ty, level, rel));
+        }
+        Ok(first.map_or(Lookup::Untyped, |(ty, level, rel)| Lookup::Missing(ty, level, Some(rel))))
+    }
+
+    /// The relations evidence rules about `PreservesRelation` name for the
+    /// result of `context` (their `S` in `PreservesRelation(R, S, f)`), each
+    /// rule's `f` matched against `context` and `S` instantiated by the
+    /// match, scoped where `cx` is. A rule whose `S` the match leaves open
+    /// names none.
+    fn named_relations(&mut self, context: &Rc<Term>) -> Vec<Rc<Term>> {
+        let Some(info) = self.e.names.global(&crate::names::qkey("relation_props", "PreservesRelation")) else {
+            return Vec::new();
+        };
+        let Some(key) = self.e.names.global_name_at(info.abs).map(str::to_string) else { return Vec::new() };
+        let rules: Vec<String> = self.e.traits.evidence_rules(&key).iter().map(|r| r.global.clone()).collect();
+        let mut out: Vec<Rc<Term>> = Vec::new();
+        for g in rules {
+            let e = Expr { kind: heather_syntax::ExprKind::Var(g), span: self.span };
+            let Ok((_, ty, _)) = self.e.generated_scope(|el| el.elab_infer(&self.cx, &e)) else { continue };
+            // The rule's telescope, opened as written.
+            let mut k = 0u32;
+            let mut cur = ty;
+            while let Type::Pi { cod, .. } = cur {
+                cur = (*cod).clone();
+                k += 1;
+            }
+            let Type::El { tm, .. } = &cur else { continue };
+            let (_, args) = crate::spelling::app_spine(tm);
+            let [.., _, s, f] = args.as_slice() else { continue };
+            let mut binds = vec![None; k as usize];
+            if !self.e.match_deep(&self.cx, f, context, k, 0, &mut binds) {
+                continue;
+            }
+            if let Some(named) = super::instantiate(&self.cx.gamma, s, k, &binds) {
+                let named = Rc::new(named);
+                if !out.contains(&named) {
+                    out.push(named);
+                }
+            }
+        }
+        out
+    }
+
+    /// `h` for a relation `C → C → Type<h>`, read off its type.
+    fn relation_level(&self, r: &Term) -> Option<Level> {
+        let oracle = self.e.goal_oracle();
+        let (ty, _) = heather_kernel::typing::infer_term(
+            oracle.world(),
+            0,
+            heather_kernel::layer::Layer::Prog,
+            &self.cx.gamma,
+            r,
+            self.e.policy.fuel,
+        )
+        .ok()?;
+        let mut cur = ty;
+        for _ in 0..2 {
+            let Type::Pi { cod, .. } = self.e.whnf(&self.cx, &cur, self.span).ok()? else { return None };
+            cur = (*cod).clone();
+        }
+        match self.e.whnf(&self.cx, &cur, self.span).ok()? {
+            Type::Ty(h) => Some(h),
+            _ => None,
+        }
+    }
+
     /// The evidence for a context [`Self::lookup`] typed, an obligation when
-    /// resolution did not find it.
-    fn discharge(&mut self, shape: &Shape, context: &Rc<Term>) -> R<Rc<Term>> {
-        match self.lookup(shape, context)? {
-            Lookup::Found(ev) => Ok(ev),
+    /// resolution did not find it, and the relation its result changes by.
+    fn discharge(
+        &mut self,
+        shape: &Shape,
+        input: Option<&Rc<Rel>>,
+        context: &Rc<Term>,
+        target: Option<&(Rc<Type>, Level)>,
+    ) -> R<(Rc<Term>, Option<Rc<Rel>>)> {
+        match self.lookup(shape, input, context, target)? {
+            Lookup::Found(ev, rel) => Ok((ev, rel)),
             Lookup::Untyped => unreachable!("discharged only once typed"),
-            Lookup::Missing(ty, level) => {
+            Lookup::Missing(ty, level, rel) => {
                 let goal = self.obligation_here(ty.clone(), level.clone(), "compatibility")?;
                 let ev = self.applicable(shape, goal, ty, level)?;
-                let entry = self.contexts.iter_mut().find(|(s, c, _)| s == shape && c == context);
-                entry.expect("looked up above").2 = Lookup::Found(Rc::clone(&ev));
-                Ok(ev)
+                let key = (shape.clone(), input.cloned(), Rc::clone(context), target.is_some());
+                let entry = self.contexts.iter_mut().find(|(k, _)| *k == key);
+                entry.expect("looked up above").1 = Lookup::Found(Rc::clone(&ev), rel.clone());
+                Ok((ev, rel))
             }
         }
     }
@@ -1110,36 +1347,49 @@ impl<'a> RelationRewrite<'a> {
         self.obligation_here(ty, level, "fixed")
     }
 
-    /// `R(y, x)` from `p : R(x, y)`.
-    fn symmetric(&mut self, p: &Rc<Term>, x: &Rc<Term>, y: &Rc<Term>) -> R<Rc<Term>> {
-        let r = Rc::clone(&self.relation);
-        let sym = self.class_field("Symmetric", &[r], "rel_sym", "symmetry")?;
+    /// `R(y, x)` from `p : R(x, y)`, `R` at `carrier`.
+    fn symmetric(&mut self, p: &Rc<Term>, x: &Rc<Term>, y: &Rc<Term>, r: &Rc<Term>, carrier: (&Rc<Type>, &Level)) -> R<Rc<Term>> {
+        let sym = self.class_field("Symmetric", &[Rc::clone(r)], "rel_sym", "symmetry", carrier)?;
         Ok(apply(sym, [Rc::clone(x), Rc::clone(y), Rc::clone(p)]))
     }
 
     /// The step that chains `first(x, y)` and `second(y, z)` into
     /// `goal(x, z)`: `Transitive`'s when all three are one relation, else
     /// `Trans`'s, the classes `calc` chains with.
-    fn chain(&mut self, first: &Rc<Term>, second: &Rc<Term>, goal: &Rc<Term>) -> R<Rc<Term>> {
-        if first == goal && second == goal {
-            self.class_field("Transitive", &[Rc::clone(goal)], "rel_trans", "transitivity")
+    fn chain(&mut self, first: &Rc<Term>, second: &Rc<Term>, goal: &Rc<Term>, carrier: (&Rc<Type>, &Level)) -> R<Rc<Term>> {
+        if self.same_relation(first, goal) && self.same_relation(second, goal) {
+            self.class_field("Transitive", &[Rc::clone(goal)], "rel_trans", "transitivity", carrier)
         } else {
             let relations = [Rc::clone(first), Rc::clone(second), Rc::clone(goal)];
-            self.class_field("Trans", &relations, "rel_chain", "transitivity")
+            self.class_field("Trans", &relations, "rel_chain", "transitivity", carrier)
         }
     }
 
+    /// Are two relations, scoped in the rewrite's context, the same: as
+    /// written, or by conversion (`Eutt::Rel<R>(E)` and the λ a goal
+    /// `Eutt<R>(E, t, u)` is read by).
+    fn same_relation(&self, a: &Rc<Term>, b: &Rc<Term>) -> bool {
+        a == b || self.e.terms_convert(self.original, a, b)
+    }
+
     /// `class<C>(relations…)`'s `field`, resolved or an obligation, once.
-    fn class_field(&mut self, class: &'static str, relations: &[Rc<Term>], field: &str, label: &str) -> R<Rc<Term>> {
+    fn class_field(
+        &mut self,
+        class: &'static str,
+        relations: &[Rc<Term>],
+        field: &str,
+        label: &str,
+        (carrier, level): (&Rc<Type>, &Level),
+    ) -> R<Rc<Term>> {
         if let Some((_, _, t)) = self.fields.iter().find(|(c, rs, _)| *c == class && rs.as_slice() == relations) {
             return Ok(Rc::clone(t));
         }
+        let c = self.carrier_named(carrier, level);
         let mut names = Vec::new();
         for r in relations {
-            names.push(self.relation_alias(r)?);
+            names.push(self.relation_alias_at(r, &c, carrier)?);
         }
-        let (ty, level) =
-            self.statement(&format!("relation_props::{class}<{}>({})", self.carrier_name, names.join(", ")))?;
+        let (ty, level) = self.statement(&format!("relation_props::{class}<{c}>({})", names.join(", ")))?;
         let dict = match self.resolve(&ty, &level) {
             Some(dict) => dict,
             None => self.obligation(ty.clone(), level.clone(), label)?,
@@ -1230,23 +1480,43 @@ impl<'a> RelationRewrite<'a> {
 
     /// The alias that spells relation `r` (`C → C → Type`), made once.
     fn relation_alias(&mut self, r: &Rc<Term>) -> R<String> {
+        let (c, carrier) = (self.carrier_name.clone(), Rc::clone(&self.carrier));
+        self.relation_alias_at(r, &c, &carrier)
+    }
+
+    /// The type variable that spells `carrier`: the rewrite's own, or one
+    /// made for it.
+    fn carrier_named(&mut self, carrier: &Rc<Type>, level: &Level) -> String {
+        if **carrier == *self.carrier {
+            return self.carrier_name.clone();
+        }
+        // Carriers are scoped in the rewrite's context; below binders `cx`
+        // is extended by them.
+        let here = if self.deep { Rc::new(carrier.shift_local(self.depth())) } else { Rc::clone(carrier) };
+        self.domain(&here, level)
+    }
+
+    /// [`Self::relation_alias`] for a relation on `carrier`, spelled `c`.
+    fn relation_alias_at(&mut self, r: &Rc<Term>, c: &str, carrier: &Rc<Type>) -> R<String> {
         if let Some((_, name)) = self.relations.iter().find(|(t, _)| t == r) {
             return Ok(name.clone());
         }
-        let c = &self.carrier_name;
         let (ty, level) = self.statement(&format!("{c} → {c} → Type"))?;
-        if !self.checks(r, &ty, &level) {
+        // Relations are scoped in the rewrite's context; below binders `cx`
+        // is extended by them.
+        let here = if self.deep { Rc::new(r.shift_local(self.depth())) } else { Rc::clone(r) };
+        if !self.checks(&here, &ty, &level) {
             return Err(ElabError::Elab {
                 msg: format!(
                     "`rewrite`:{} is not a relation on `{}` alone; a relation rewrite needs \
                      a non-dependent `C → C → Type`",
                     self.shown(r),
-                    self.e.display_type(self.original, &self.carrier),
+                    self.e.display_type(self.original, carrier),
                 ),
                 span: self.span,
             });
         }
-        let name = self.alias(Rc::clone(r), ty, level);
+        let name = self.alias(here, ty, level);
         self.relations.push((Rc::clone(r), name.clone()));
         Ok(name)
     }

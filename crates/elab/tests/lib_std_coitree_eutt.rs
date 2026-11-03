@@ -21,6 +21,9 @@ const MODULES: &[(&str, &str)] = &[
     ("itree", include_str!("../../../lib/std/itree/itree.hthr")),
     ("itree_trace", include_str!("../../../lib/std/itree/itree_trace.hthr")),
     ("coitree", include_str!("../../../lib/std/itree/coitree.hthr")),
+    ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
+    ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
+    ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
     ("coitree_eutt", include_str!("../../../lib/std/itree/coitree_eutt.hthr")),
 ];
 

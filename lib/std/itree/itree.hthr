@@ -127,6 +127,29 @@ fn ITree::next<R>(E: Events, t: ITree<R>(E)) → Next<R>(E) {
 // with a result.
 inductive Step<A, B> { Continue(a: A), Break(b: B) }
 
+// A carrier that can iterate (an Elgot monad): `iter(body, a)` runs `body`
+// from `a` for as long as it says `Continue`, with no fuel and no measure.
+// `CoTree<_>(E)` and `Partial` have one (`coitree.hthr`); a carrier whose
+// computations all finish (`Option`, `Result`) has none, which is why a
+// `while` with no measure checks only in the first kind
+// (docs/partial-functions-design.md §4.2, docs/sequencing-surface-design.md
+// §6.2). Laws are not fields.
+class Iterate<M: Type → Type> { iter: {A, B: Type} → (A → M(Step<A, B>)) → A → M(B) }
+
+// The calls a `while c { … }` with no measure lowers to, in a block over
+// such a carrier: the loop from `init`, then the rest of the block `k` at
+// the state it leaves with. One call, so that `M` is learned from the
+// block's expected type before the step is checked
+// (docs/sequencing-surface-design.md §18).
+fn Iterate::loop<A, B>({M: Type → Type}, body: A → M(Step<A, B>), init: A, d: Iterate<M> := infer) → M(B) {
+    d.iter(body, init)
+}
+fn Iterate::then<S, C>({M: Type → Type}, init: S, body: S → M(Step<S, S>), k: S → M(C),
+    d: Iterate<M> := infer, b: Bind<M> := infer) → M(C)
+{
+    b.bind(d.iter(body, init), k)
+}
+
 // `iter(E, n, body, a)` runs `body` from `a`, going round at most `n` times;
 // each time round is a `Tau`, and the `n+1`-th is a `Cut`.
 fn ITree::iter<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), a: A) → ITree<B>(E) {

@@ -143,6 +143,14 @@ property of Heather.
   direction), or declare the proof `unfolding f` when it really is about
   the body. A call at closed arguments still computes, so §1's verdicts are
   unchanged.
+- **A corecursive proof whose self-call would sit under `trans` (up-to
+  coinduction, not built for indexed codata): generalise the hypothesis**
+  to the relation the step lands in, so the next call's arguments are
+  whatever the step produced. `Io::reads_loop` takes "the pass's reading
+  `≈ u`" for any `u`, not "`= step`"; `Eutt::mrec_bind_from` takes
+  `Bisim(p, bind(q, k))`, not `p = bind(q, k)`. Through a function of
+  trees, follow the drops with `CoTree::after_map`'s exact count
+  (`docs/coitree-design.md` §7.9).
 - `absurd` needs a constructor clash; `False` goes by `false_elim`.
 - Tier-2 laws through `Vis` are not provable with `=` (no funext): state
   them up to the tree's equivalence.

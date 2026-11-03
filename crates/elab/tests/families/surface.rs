@@ -25,6 +25,8 @@ mod implicit_args;
 mod implicit_fn_binders;
 #[path = "../unifier_checked_assignment.rs"]
 mod unifier_checked_assignment;
+#[path = "../unifier_lazy_delta.rs"]
+mod unifier_lazy_delta;
 #[path = "../named_arguments.rs"]
 mod named_arguments;
 #[path = "../overapplication.rs"]

@@ -480,6 +480,12 @@ fn head_name(t: &Ty) -> Option<&str> {
             // (docs/lambda-carrier-instances-design.md §7.3).
             ExprKind::Lam { binders, body } if binders.len() == 1 => match &body.kind {
                 ExprKind::TyApp { head, .. } => spine_head(head),
+                // `λ (R: Type) => CoTree<R>(E)`: the value arguments are
+                // fixed, so the head is the former's.
+                ExprKind::App { head, .. } => match &head.kind {
+                    ExprKind::TyApp { head, .. } => spine_head(head),
+                    _ => None,
+                },
                 _ => None,
             },
             _ => None,
@@ -1770,15 +1776,47 @@ impl Elaborator {
         decl: &InstanceDecl,
     ) -> R<String> {
         let mut parts = Vec::with_capacity(cref.index.len());
+        // A value-generic binder's declaration-stable key.
+        let generic = |n: &str| {
+            decl.tyvars
+                .iter()
+                .map(|p| &p.name)
+                .chain(decl.valparams.iter().map(|p| &p.name))
+                .position(|name| name == n)
+        };
         for (p, a) in class.valparams.iter().zip(cref.index.iter()) {
-            let head = match &a.kind {
-                ExprKind::Var(n) => Some(n),
+            let named = |e: &'_ Expr| match &e.kind {
+                ExprKind::Var(n) => Some(n.clone()),
                 ExprKind::TyApp { head, .. } => match &head.kind {
-                    ExprKind::Var(n) => Some(n),
+                    ExprKind::Var(n) => Some(n.clone()),
                     _ => None,
                 },
                 _ => None,
             };
+            // A global applied to the instance's own value binders,
+            // `Eutt::Rel<R>(E)`: a relation family at a value parameter
+            // (docs/equation-rewrite-design.md §11). The binders are
+            // determined by unifying the head with the goal, as a bare
+            // binder index is, so the key is the global's and their
+            // positions.
+            if let ExprKind::App { head, args, named: nargs, .. } = &a.kind
+                && nargs.is_empty()
+                && let Some(n) = named(head)
+                && generic(&n).is_none()
+                && let Some(binders) = args
+                    .iter()
+                    .map(|x| match &x.kind {
+                        ExprKind::Var(v) => generic(v).map(|i| format!("#binder{i}")),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+            {
+                let key = self.key_of(&n).unwrap_or_else(|| n.clone());
+                parts.push(format!("{key}#at{}", binders.concat()));
+                continue;
+            }
+            let head = named(a);
+            let head = head.as_ref();
             let Some(n) = head else {
                 // A symbol in an instance head would make the registry key
                 // depend on the designation table's state at declaration
@@ -1800,7 +1838,7 @@ impl Elaborator {
                     format!(
                         "the index `{}` of this instance is not spellable: `{}` must be a \
                          global reference (possibly at this instance's own type \
-                         parameters), because the registry key is computed from the \
+                         parameters, or applied to its own binders), because the registry key is computed from the \
                          declaration alone (docs/operation-indexed-classes-design.md \
                          §3.1). A structure built from an unnamed operation is a `let`-bound \
                          value, found by scope rather than registered",
@@ -1814,13 +1852,7 @@ impl Elaborator {
             // head with the goal, just like a binder in the carrier. Give it
             // a declaration-stable, unwritable key component: binder spelling
             // must not make alpha-equivalent instances distinct.
-            let generic = decl
-                .tyvars
-                .iter()
-                .map(|p| &p.name)
-                .chain(decl.valparams.iter().map(|p| &p.name))
-                .position(|name| name == n);
-            parts.push(match generic {
+            parts.push(match generic(n) {
                 Some(i) => format!("#binder{i}"),
                 None => self.key_of(n).unwrap_or_else(|| n.clone()),
             });
@@ -3081,7 +3113,7 @@ impl Elaborator {
                     kind: m.kind,
                     is_meta: m.is_meta,
                     is_evidence: m.is_evidence,
-                    is_interface: m.is_interface,
+                    is_interface: m.is_interface, partial: None,
                     value: m.value,
                     elaborates: m.elaborates.clone(),
                     name: full,
@@ -3837,8 +3869,23 @@ impl Elaborator {
             let TyKind::OfExpr(e) = &arg.kind else { continue };
             let ExprKind::Lam { binders, body } = &e.kind else { continue };
             let carrier = render_expr(e);
-            let named = crate::inductive::named_head(body)
-                .and_then(|(name, targs)| Some((name, targs, self.lookup_inductive(name)?.clone())));
+            // `D<…, A>(v̄)`: a declaration with value parameters after its
+            // type parameters (`CoTree<R>(E)`) fixes its value arguments, so
+            // they must not mention the binder
+            // (issues/codata-type-constructor-carrier.md).
+            let (former, fixed_values) = match &body.kind {
+                ExprKind::App { head, args, .. } => (&**head, Some(args)),
+                _ => (&**body, None),
+            };
+            let values_free = |b: &str| {
+                fixed_values.is_none_or(|vs| vs.iter().all(|v| expr_var_count(v, b) == 0))
+            };
+            let named = crate::inductive::named_head(former)
+                .and_then(|(name, targs)| Some((name, targs, self.lookup_inductive(name)?.clone())))
+                .filter(|(_, _, ind)| {
+                    fixed_values.map_or(0, |vs| vs.len()) == ind.valparams.len()
+                        && binders.first().is_some_and(|b| values_free(&b.name))
+                });
             let reason = match (binders.as_slice(), named) {
                 ([b], Some((name, targs, ind))) if !b.implicit && targs.len() == ind.params.len() => {
                     let slot = ind.varies.unwrap_or(ind.params.len().saturating_sub(1));
@@ -3978,7 +4025,7 @@ impl Elaborator {
             kind,
             is_meta: false,
             is_evidence: false,
-            is_interface: false,
+            is_interface: false, partial: None,
             value: false,
             elaborates: None,
             name: name.to_string(),

@@ -520,6 +520,12 @@ impl Elaborator {
         if let Some(closed) = crate::strengthen_tm(&cx.gamma, pat, k) {
             return closed == **t || self.terms_convert(cx, &closed, t);
         }
+        // A codata constructor is a `corec` whose signature holds the type's
+        // parameters and whose step holds the fields: matched structurally,
+        // binders and all (docs/equation-rewrite-design.md §11.2).
+        if let Term::Corec { .. } = pat {
+            return matches!(**t, Term::Corec { .. }) && self.match_deep(cx, pat, t, k, 0, binds);
+        }
         // `λ z. g(z)` with `z` not in `g` is `g` (η): a law's `λ k. f(k)`
         // binds `f`, to what the goal's λ contracts to, or to the λ itself.
         if let Some(g) = eta(pat) {
@@ -536,6 +542,115 @@ impl Elaborator {
                 deferred.push((pat.clone(), Rc::clone(t)));
                 true
             }
+        }
+    }
+
+    /// `pat` against `t`, both `d` binders below the match's context, node
+    /// by node: a pattern variable (`Var(d)` … `Var(d + k - 1)`) binds the
+    /// subterm it meets, which must not mention those `d` binders, and
+    /// everything else must agree in shape. A part with no pattern variable
+    /// is compared as written, or by conversion at depth 0. The forms a
+    /// codata constructor is built from are walked; any other form with a
+    /// pattern variable inside is no match.
+    fn match_deep(&self, cx: &Cx, pat: &Term, t: &Term, k: u32, d: u32, binds: &mut [Option<Rc<Term>>]) -> bool {
+        if let Term::Var(x) = pat {
+            let x = x.0;
+            if x >= d && x < d + k {
+                let Some(lowered) = lower(t, 0, d) else { return false };
+                let slot = &mut binds[(x - d) as usize];
+                return match slot {
+                    Some(bound) => **bound == lowered || self.terms_convert(cx, &bound.clone(), &lowered),
+                    None => {
+                        *slot = Some(Rc::new(lowered));
+                        true
+                    }
+                };
+            }
+        }
+        if let Some(closed) = lower(pat, d, k) {
+            return closed == *t || (d == 0 && self.terms_convert(cx, &closed, t));
+        }
+        let deep = |p: &Term, s: &Term, by: u32, binds: &mut [Option<Rc<Term>>]| self.match_deep(cx, p, s, k, d + by, binds);
+        let deep_ty = |p: &Type, s: &Type, by: u32, binds: &mut [Option<Rc<Term>>]| self.match_deep_ty(cx, p, s, k, d + by, binds);
+        if let (Some((pf, pa)), Some((tf, ta))) = (crate::spelling::app_of(pat), crate::spelling::app_of(t)) {
+            return deep(pf, tf, 0, binds) && deep(pa, ta, 0, binds);
+        }
+        match (pat, t) {
+            // A binder's type is matched when it can be: the same type has
+            // more than one spelling (a code decoded or not), and a λ's
+            // domain is fixed by what it is applied in, which the caller's
+            // statement checks.
+            (Term::Lam { dom: pd, body: pb, .. }, Term::Lam { dom: td, body: tb, .. }) => {
+                let mut tried = binds.to_vec();
+                if deep_ty(pd, td, 0, &mut tried) {
+                    binds.clone_from_slice(&tried);
+                }
+                deep(pb, tb, 1, binds)
+            }
+            (Term::Pair { fst_ty: pa, snd_ty: pb, fst: pf, snd: ps, .. }, Term::Pair { fst_ty: ta, snd_ty: tb, fst: tf, snd: ts, .. }) => {
+                deep_ty(pa, ta, 0, binds) && deep_ty(pb, tb, 1, binds) && deep(pf, tf, 0, binds) && deep(ps, ts, 0, binds)
+            }
+            (Term::PairAt { fst: pf, snd: ps, ty: None }, Term::PairAt { fst: tf, snd: ts, ty: None }) => {
+                deep(pf, tf, 0, binds) && deep(ps, ts, 0, binds)
+            }
+            (Term::InlAt { val: p, ty: None }, Term::InlAt { val: v, ty: None })
+            | (Term::InrAt { val: p, ty: None }, Term::InrAt { val: v, ty: None }) => deep(p, v, 0, binds),
+            (Term::Inl { lhs: pl, rhs: pr, val: p, .. }, Term::Inl { lhs: tl, rhs: tr, val: v, .. })
+            | (Term::Inr { lhs: pl, rhs: pr, val: p, .. }, Term::Inr { lhs: tl, rhs: tr, val: v, .. }) => {
+                deep_ty(pl, tl, 0, binds) && deep_ty(pr, tr, 0, binds) && deep(p, v, 0, binds)
+            }
+            (Term::SRefl { ty: pt, tm: p, .. }, Term::SRefl { ty: tt, tm: v, .. }) => deep_ty(pt, tt, 0, binds) && deep(p, v, 0, binds),
+            (
+                Term::Corec { sig: ps, carrier: pc, step: pst, index: pi, seed: pse, .. },
+                Term::Corec { sig: ts, carrier: tc, step: tst, index: ti, seed: tse, .. },
+            ) => {
+                self.match_sig(cx, ps, ts, k, d, binds)
+                    && deep_ty(pc, tc, 1, binds)
+                    && deep(pst, tst, 2, binds)
+                    && deep(pi, ti, 0, binds)
+                    && deep(pse, tse, 0, binds)
+            }
+            // Any other form is compared once the variables it mentions are
+            // bound (an `elim_Empty`'s motive, in a constructor with no
+            // children, mentions only the type's parameters).
+            _ => instantiate_at(pat, d, k, binds).is_some_and(|p| p == *t),
+        }
+    }
+
+    fn match_sig(
+        &self,
+        cx: &Cx,
+        p: &heather_kernel::term::MSig,
+        t: &heather_kernel::term::MSig,
+        k: u32,
+        d: u32,
+        binds: &mut [Option<Rc<Term>>],
+    ) -> bool {
+        // `M(I; i. S; i s. P; i s p. o)`.
+        self.match_deep_ty(cx, &p.idx, &t.idx, k, d, binds)
+            && self.match_deep_ty(cx, &p.shape, &t.shape, k, d + 1, binds)
+            && self.match_deep_ty(cx, &p.pos, &t.pos, k, d + 2, binds)
+            && self.match_deep(cx, &p.next, &t.next, k, d + 3, binds)
+    }
+
+    /// [`Self::match_deep`] over types.
+    fn match_deep_ty(&self, cx: &Cx, pat: &Type, t: &Type, k: u32, d: u32, binds: &mut [Option<Rc<Term>>]) -> bool {
+        if let Some(closed) = lower_ty(pat, d, k) {
+            return closed == *t;
+        }
+        match (pat, t) {
+            (Type::El { tm: p, .. }, Type::El { tm: s, .. }) => self.match_deep(cx, p, s, k, d, binds),
+            (Type::Pi { dom: pd, cod: pc, .. }, Type::Pi { dom: td, cod: tc, .. })
+            | (Type::Sigma { fst: pd, snd: pc, .. }, Type::Sigma { fst: td, snd: tc, .. }) => {
+                self.match_deep_ty(cx, pd, td, k, d, binds) && self.match_deep_ty(cx, pc, tc, k, d + 1, binds)
+            }
+            (Type::Sum { lhs: pl, rhs: pr, .. }, Type::Sum { lhs: tl, rhs: tr, .. }) => {
+                self.match_deep_ty(cx, pl, tl, k, d, binds) && self.match_deep_ty(cx, pr, tr, k, d, binds)
+            }
+            (Type::M { sig: ps, index: pi }, Type::M { sig: ts, index: ti }) => {
+                self.match_sig(cx, ps, ts, k, d, binds) && self.match_deep(cx, pi, ti, k, d, binds)
+            }
+            _ => false,
         }
     }
 
@@ -567,6 +682,56 @@ impl Elaborator {
         };
         self.motive_candidate_converts(cx, b, a, &ty, &level)
     }
+}
+
+/// `t` with its variables `at` … `at + n - 1` dropped, the ones above
+/// lowered; `None` when it mentions one of them.
+fn lower(t: &Term, at: u32, n: u32) -> Option<Term> {
+    let mut cur = t.clone();
+    for _ in 0..n {
+        let dropped = cur.inst_top_above(0, at, &Term::Zero);
+        if dropped.shift_local_above(1, at) != cur {
+            return None;
+        }
+        cur = dropped;
+    }
+    Some(cur)
+}
+
+/// `t`, `d` binders below the match's context, with its pattern variables
+/// (`Var(d)` … `Var(d + k - 1)`) replaced by `binds`; `None` when one it
+/// mentions is unbound.
+fn instantiate_at(t: &Term, d: u32, k: u32, binds: &[Option<Rc<Term>>]) -> Option<Term> {
+    let mut cur = t.clone();
+    // Each step substitutes `Var(d)` and lowers what is above it, so a
+    // payload is raised first by the steps still to come after it.
+    for (j, slot) in binds.iter().take(k as usize).enumerate() {
+        let next = match slot {
+            Some(b) => cur.inst_top_above(0, d, &b.shift_local(k - 1 - j as u32)),
+            None => {
+                let dropped = cur.inst_top_above(0, d, &Term::Zero);
+                if dropped.shift_local_above(1, d) != cur {
+                    return None;
+                }
+                dropped
+            }
+        };
+        cur = next;
+    }
+    Some(cur)
+}
+
+/// [`lower`] over a type.
+fn lower_ty(t: &Type, at: u32, n: u32) -> Option<Type> {
+    let mut cur = t.clone();
+    for _ in 0..n {
+        let dropped = cur.inst_top_above(0, at, &Term::Zero);
+        if dropped.shift_local_above(1, at) != cur {
+            return None;
+        }
+        cur = dropped;
+    }
+    Some(cur)
 }
 
 /// `at :=` with a relation: occurrence numbers are tree positions, and the
@@ -661,6 +826,9 @@ fn same_key(pat: &Term, t: &Term, k: u32) -> bool {
     }
     match (ph, th) {
         (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) => a == b,
+        // Codata constructors: whether they are the same one is the match's
+        // to say (`match_deep`).
+        (Term::Corec { .. }, Term::Corec { .. }) => true,
         (Term::Var(a), Term::Var(b)) => a.0 >= k && a.0 - k == b.0,
         _ => *ph == th.shift_local(k),
     }

@@ -84,7 +84,10 @@ module.exports = grammar({
     ),
 
     function_declaration: $ => seq(
-      optional(choice('meta', 'interface')), 'fn', field('name', $._qualified_name),
+      // `partial fn`, `partial(E) fn`: a function that may not return
+      // (docs/partial-functions-design.md §4).
+      optional(choice('meta', 'interface', seq('partial', optional(seq('(', field('events', $._head_expression), ')'))))),
+      'fn', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       optional(seq('for', $.slot_path)),
@@ -300,7 +303,8 @@ module.exports = grammar({
       optional(seq('..', field('end', $._head_expression))), field('body', $.block)),
     // `while c decreases m { body }` (§5.3): a recursive function over the
     // locals the body assigns, `m` its measure.
-    while_statement: $ => seq('while', field('condition', $._head_expression), 'decreases', field('measure', $._head_expression), field('body', $.block)),
+    // With no `decreases`, a loop of a carrier that iterates (docs/sequencing-surface-design.md §18).
+    while_statement: $ => seq('while', field('condition', $._head_expression), optional(seq('decreases', field('measure', $._head_expression))), field('body', $.block)),
     // `break;`, `continue;`, `return e;` in a `for` body (§5.2): contextual
     // words, statements only before `;` or `}`.
     exit_statement: $ => choice(seq('break', ';'), seq('continue', ';'), seq('return', field('value', $._expression), ';')),
