@@ -218,15 +218,34 @@ fn missing_decide_reports_the_resolution_trace_at_the_condition() {
     assert!(msg.contains("Mystery"), "{msg}");
 }
 
+/// A `Bool` condition branches on the Bool (issues/bool-conditions-and-literals.md),
+/// but it is still not coerced to a proposition: only the `if`'s own lowered
+/// call reads it, and a written `decide_bit<b>()` is still a type error. A
+/// condition that is neither a proposition nor a `Bool` names both readings.
 #[test]
-fn bool_is_data_and_is_not_coerced_to_a_proposition() {
-    let src = r#"
+fn a_bool_condition_branches_but_is_not_coerced_to_a_proposition() {
+    ok(
+        &mut with_std(),
+        r#"
         import logic;
         import bool;
-        fn bad(b: Bool) -> Nat { if b { 1 } else { 0 } }
-    "#;
-    let msg = bad(&mut with_std(), src);
+        fn pick(b: Bool) -> Nat { if b { 1 } else { 0 } }
+        theorem t(): pick(True) = 1 { refl }
+        theorem f(): pick(False) = 0 { refl }
+        "#,
+    );
+    let msg = bad(&mut with_std(), r#"
+        import logic;
+        import bool;
+        fn bad(b: Bool) -> Bool { decide_bit<b>() }
+    "#);
     assert!(msg.contains("unknown type `b`") || msg.contains("not a type"), "{msg}");
+    let msg = bad(&mut with_std(), r#"
+        import logic;
+        import bool;
+        fn bad(n: Nat) -> Nat { if n { 1 } else { 0 } }
+    "#);
+    assert!(msg.contains("a proposition") && msg.contains("a `Bool`") && msg.contains("`Nat`"), "{msg}");
 }
 
 #[test]
