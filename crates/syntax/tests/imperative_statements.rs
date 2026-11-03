@@ -122,8 +122,9 @@ fn an_early_exit_leaves_only_the_loop_markers() {
 #[test]
 fn a_while_names_its_measure_and_does_not_exit_yet() {
     for (src, says) in [
-        // A `while` is a recursive function: its measure is required.
-        ("fn f(n: Nat) -> Nat { let mut m = n; while 1 <= m { m := m - 1 } m }", "names what it decreases"),
+        // With no measure, the loop is its carrier's (§18); one that assigns
+        // nothing could only stop at once or never.
+        ("fn f(n: Nat) -> P { while 1 <= n { } r(n) }", "its condition can never change"),
         // Early exit threads `ForStep` through `f::run` (§5.3), not built yet.
         ("fn f(n: Nat) -> Nat { let mut m = n; while 1 <= m decreases m { if c { break } m := m - 1 } m }",
          "in a `while` are not built yet"),
@@ -135,6 +136,23 @@ fn a_while_names_its_measure_and_does_not_exit_yet() {
     }
     // `while` stays a name where it is not a statement.
     parse_file("fn f(while: Nat) -> Nat { while }").unwrap_or_else(|e| panic!("{}", e.msg));
+}
+
+// A `while` with no measure (docs/sequencing-surface-design.md §18) is one
+// `Iterate::then(init, step, rest)` call, written by the parser: no loop
+// marker for the elaborator to lift, and the body's binds lowered inside
+// the step, after the state is read.
+#[test]
+fn a_while_with_no_measure_is_one_iterate_call() {
+    let src = "fn f(k: Nat, t: T) -> P { let mut i = 0; let mut a = 0; while i <= k { let x <- t; a := a + x; i := i + 1 } r(a) }";
+    let parsed = format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{}", e.msg)));
+    assert!(parsed.contains("Iterate::then"), "{parsed}");
+    assert!(parsed.contains("Bind::seq"), "the body's bind is lowered: {parsed}");
+    assert!(parsed.contains("Step::Continue") && parsed.contains("Step::Break"), "{parsed}");
+    assert!(parsed.contains("\"Mutated\""), "two locals nest in `Mutated`: {parsed}");
+    for marker in ["\\0loop", "\\0bind", "\\0iterate", "\\0assign", "\\0for"] {
+        assert!(!parsed.contains(marker), "keeps {marker}: {parsed}");
+    }
 }
 
 #[test]

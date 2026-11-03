@@ -165,6 +165,7 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             elseless_if: false,
             mut_params: Vec::new(),
             pending_mut: None,
+            defer_binds: false,
             mutables: Vec::new(),
             range_header: false,
         };
@@ -225,6 +226,12 @@ struct Parser {
     /// each as a `let mut` local, and a `mut self` one is returned beside the
     /// result. Taken by the first [`Parser::block_body`].
     pending_mut: Option<Vec<(String, bool)>>,
+    /// The next block opened is the body of a `while` with no measure
+    /// (docs/sequencing-surface-design.md §18): its binds stay as markers
+    /// until the loop is lowered, because they run inside the loop's step,
+    /// after the locals it threads are known. Taken by the first
+    /// [`Parser::block_body`].
+    defer_binds: bool,
     /// The `let mut` locals and `mut` parameters lexically in scope, innermost
     /// last: a method call on one of them may update it, so the parser marks
     /// it a candidate ([`crate::imperative::MUTCALL`]) for the scope that
@@ -837,6 +844,11 @@ impl Parser {
             self.assuming_items()
         } else if self.at_kw("section") {
             self.section_items()
+        } else if self.at_kw("partial")
+            && (matches!(self.nth(1), TokKind::LParen)
+                || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str())))
+        {
+            Ok(vec![Item::Decl(self.partial_decl()?)])
         } else {
             match self.item()? {
                 Item::Decl(mut d) => {
@@ -961,7 +973,7 @@ impl Parser {
             kind: DeclKind::Theorem,
             is_meta: false,
             is_evidence: true,
-            is_interface: false,
+            is_interface: false, partial: None,
             value: false,
             elaborates: None,
             name: format!("{}::pos", d.name),
@@ -1405,6 +1417,37 @@ impl Parser {
             return Ok(Item::Prefixed(self.prefixed()?));
         }
         Ok(Item::Decl(self.decl()?))
+    }
+
+    /// `partial fn f(…) → B { … }` or `partial(E) fn …` ([`Decl::partial`],
+    /// docs/partial-functions-design.md §4). Contextual: `partial` is a word
+    /// only before `fn` or `(`, at an item's head.
+    fn partial_decl(&mut self) -> R<Decl> {
+        let start = self.bump().span;
+        let mut events = None;
+        if matches!(self.peek(), TokKind::LParen) {
+            self.bump();
+            events = Some(self.expr()?);
+            self.expect(&TokKind::RParen, "`)` to close `partial(E)`")?;
+        }
+        if !self.at_kw("fn") {
+            return self.err(
+                "`partial` marks a `fn`: a function that may not return. A theorem, a value \
+                 or an axiom has no run to diverge",
+            );
+        }
+        let mut d = self.decl()?;
+        if d.decreases.is_some() {
+            return Err(ParseError {
+                msg: "a `partial fn` has no measure: it may not return, which is what `partial` says. \
+                      Drop `partial` to prove it terminates with `decreases`"
+                    .into(),
+                span: d.span,
+            });
+        }
+        d.partial = Some(PartialSpec { events, span: start });
+        d.span = start.join(d.span);
+        Ok(d)
     }
 
     /// `P decl` or `P(args) decl` ([`Item::Prefixed`]). One prefix: a second
@@ -2292,7 +2335,7 @@ impl Parser {
                 kind: DeclKind::Theorem,
                 is_meta: false,
                 is_evidence: true,
-                is_interface: false,
+                is_interface: false, partial: None,
             value: false,
                 elaborates: None,
                 name: format!("{name}::{field}_positive"),
@@ -2964,7 +3007,7 @@ impl Parser {
         crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, is_evidence, is_interface, value: false, elaborates, name, tyvars, params, result, decreases, unfolding, body, span })
+        Ok(Decl { kind, is_meta, is_evidence, is_interface, partial: None, value: false, elaborates, name, tyvars, params, result, decreases, unfolding, body, span })
     }
 
     /// `def name<A>: T = e;`, `def name = e;` (docs/value-definitions-design.md
@@ -3036,7 +3079,7 @@ impl Parser {
             kind: DeclKind::Fn,
             is_meta: false,
             is_evidence: false,
-            is_interface: false,
+            is_interface: false, partial: None,
             value: true,
             elaborates: None,
             name,
@@ -3064,6 +3107,7 @@ impl Parser {
 
     fn block_body(&mut self, open: Span) -> R<Block> {
         let pending = self.pending_mut.take();
+        let defer = std::mem::take(&mut self.defer_binds);
         let saved = self.mutables.len();
         if let Some(ps) = &pending {
             self.mutables.extend(ps.iter().map(|(n, _)| n.clone()));
@@ -3071,6 +3115,9 @@ impl Parser {
         let block = self.block_body_in(open, pending);
         self.mutables.truncate(saved);
         let block = crate::imperative::lower_block(block?, &mut self.next_hygienic)?;
+        if defer {
+            return Ok(block);
+        }
         crate::try_lower::binds_in_block(block, &mut self.next_hygienic)
     }
 
@@ -3520,19 +3567,26 @@ impl Parser {
     /// m)` and a private binder, so [`crate::imperative`] threads its state
     /// as a `for`'s, and the elaborator lifts it into a recursive `f::run`
     /// instead of a step over a fold.
+    ///
+    /// With no `decreases`, `while c { body }` is a loop in a block over a
+    /// carrier that iterates (§18): the header is `\0while(decide_bit<c>())`
+    /// alone, and the body's binds wait for the loop's lowering.
     fn while_stmt(&mut self) -> R<Stmt> {
         let start = self.bump().span;
         let condition = self.with_record_lit(true, |p| p.expr())?;
         let cspan = condition.span;
-        if !self.eat_kw("decreases") {
-            return self.err(
-                "a `while` names what it decreases, `while c decreases m { … }`: the loop is a \
-                 recursive function, and `m` is its measure (a fuelled `while` is not built yet)",
-            );
-        }
-        let measure = self.with_record_lit(true, |p| p.expr())?;
+        let measure = if self.eat_kw("decreases") {
+            Some(self.with_record_lit(true, |p| p.expr())?)
+        } else {
+            None
+        };
         if !matches!(self.peek(), TokKind::LBrace) {
-            return self.err("a `while` body is a braced block of statements: `while c decreases m { … }`");
+            return self.err(if measure.is_some() {
+                "a `while` body is a braced block of statements: `while c decreases m { … }`"
+            } else {
+                "a `while` body is a braced block of statements: `while c { … }` (in a block over a \
+                 carrier that iterates) or `while c decreases m { … }`"
+            });
         }
         // The condition as a plain `if` decides it, so the step sees the
         // same `decide_bit` match the measure obligation reads (§5.3).
@@ -3552,8 +3606,11 @@ impl Parser {
             },
             span: cspan,
         };
-        let header = crate::imperative::call_marker(crate::imperative::WHILE, vec![scrut, measure], start.join(cspan));
+        let mut header_args = vec![scrut];
+        header_args.extend(measure.clone());
+        let header = crate::imperative::call_marker(crate::imperative::WHILE, header_args, start.join(cspan));
         let x = self.hygienic("while");
+        self.defer_binds = measure.is_none();
         self.loop_stmt(start, header, x, start, "while")
     }
 

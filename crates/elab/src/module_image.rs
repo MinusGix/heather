@@ -1698,7 +1698,7 @@ fn get_decl(r: &mut Reader<'_>) -> Result<Decl, ModuleImageDecodeError> {
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "declaration kind", tag }),
     };
     Ok(Decl {
-        kind, value, is_meta: r.bool()?, is_evidence: r.bool()?, is_interface: r.bool()?, elaborates: r.option(|r| Ok(SlotPath {
+        kind, value, is_meta: r.bool()?, is_evidence: r.bool()?, is_interface: r.bool()?, partial: None, elaborates: r.option(|r| Ok(SlotPath {
             family: r.string()?, name: r.string()?, span: get_span(r)?,
         }))?, name: r.string()?, tyvars: r.vec(|r| Ok(TyParam {
             name: r.string()?, level: r.u64()?, span: get_span(r)?,

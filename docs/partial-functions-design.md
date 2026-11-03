@@ -375,3 +375,75 @@ One thing the probes surfaced: a body whose `match` is on a computed
 scrutinee (`big(n)`) needs that scrutinee as a parameter of a helper
 (`search_at(n, b)`) before a proof can case on it. That is
 `issues/unfolding-computed-scrutinee.md` again, met from the proof side.
+
+## 9. Round 2 as built (2026-11-03)
+
+`issues/partial-fn-surface.md`. Probes:
+`lib/_tests/std/itree/partial_fn_tests.hthr`. What building it changed from
+§4.1–§4.3, each with its reason:
+
+1. **`CoTree` had to become a carrier first.** A body over its calls'
+   carrier needs `Bind<λ R => CoTree<R>(E)>`, and a use site learns that
+   constructor from `CoTree<Nat>(E)` only if `constructor_spelling` reads
+   codata and value parameters after the slot. It now does: the value
+   arguments are fixed inside the λ, `λ R. ⌜CoTree<El R>(E)⌝`, and declined
+   when a value parameter's type mentions a type parameter (the fixed value
+   would be ill typed at another slot). An instance head may be `λ (R:
+   Type) => CoTree<R>(E)` as long as the binder is not in the value
+   arguments (`issues/codata-type-constructor-carrier.md`, closed). The
+   instances (`Bind`, `Pointed`, `Iterate`) are in `coitree.hthr`.
+2. **`Partial(B)`, not `Partial<B>`.** It is `def Partial: Type → Type = λ B
+   => CoTree<B>(Events::none())`, a type-valued `def`, which is expanded
+   where it is used (docs/fixed-width-integers-design.md), so `Partial(Nat)`
+   *is* `CoTree<Nat>(Events::none())` and every `CoTree` lemma applies. Angle
+   brackets name a declaration's type parameters, and a `def` has none.
+   Diagnostics still display the expansion, `CoTree<Nat>(none)`
+   (`issues/type-name-display-respelling.md`).
+3. **The lowering is in the elaborator** (`crates/elab/src/partial.rs`), as
+   `for` and `decreases` are, so that the body is a declaration of its own
+   with a designated name. `partial fn f(x: A) → B { body }` is
+   `fn f#body(x: A) → CoTree<B>(Events::sum(Events::calls(A, B), E))`, each
+   self-call `f(e)` rewritten to `CoTree::call<A, B>(E, e)` (new in
+   `coitree_rec.hthr`), then `fn f(x: A) → Partial(B) { CoTree::rec(…,
+   λ (x: A) => f#body(x), x) }` and `f_unfold`, which is that definition by
+   `refl`. `f#body` is designated `f::body`, the name `rec_sound` takes.
+   Values leave the body with `Pointed::ret(v)`, as in any carrier block
+   (`docs/sequencing-surface-design.md` §13).
+4. **A self-call is either bound or in tail position.** The rewrite walks
+   the lowered body: a self-call is the bound expression of a
+   `Bind::seq` (`let r <- f(e);`, `(<- f(e))`), or a block's result, a
+   `match` arm's, or a bind continuation's when that bind is itself in tail
+   position. Anything else is refused with §4.2's reason. Passing `f` as a
+   value is refused too.
+5. **Several parameters are one argument**, nested in the prelude's pair
+   (`Mutated(x₁, Mutated(x₂, x₃))`), which `f#body` reads back; this needs
+   no generated record. A parameter whose type mentions an earlier one is
+   refused, since the call family has one argument type. Implicit, searched
+   and defaulted parameters are refused for now.
+6. **Events are `partial(E) fn`.** The declared result stays `B`, and `f :
+   A → CoTree<B>(E)`. An `E` command is issued in the body with
+   `CoTree::trigger(Events::sum(Events::calls(A, B), E), Inr(c))` today; a
+   `trigger` that injects on its own is a small follow-up.
+7. **Every call goes through `CoTree::rec`, tail calls included.** §4.2's
+   tail case (one `CoTree::iter` of a pass) is what a native loop wants,
+   but proving a result through it needs an iteration invariant rule the
+   library does not have, while `rec_sound` covers every body. Split out:
+   `issues/partial-fn-tail-iter.md`. A `while` with no measure *is* an
+   `iter` (`docs/sequencing-surface-design.md` §18), so loops already have
+   the native shape.
+8. **Proof patterns.** A bound call's safety is the new
+   `CoTree::safe_call_bind` (the continuation safe at every answer within
+   `P(d)`). Conversion does not identify a body with a hand-written step
+   that spells the same tree differently: codata has no η, so a tree built
+   by `bind` and one built by `CVis` directly are different values even
+   when every observation agrees. The customer's safety proof therefore
+   cases on the argument and uses `safe_call_bind` at the bound calls, and
+   the hand-written arms where the trees coincide.
+9. **The customer.** `Tm::whnf_co` is now a `partial fn` written as the
+   evaluator reads, and `Tm::whnf_co_sound` is `rec_sound` over
+   `Tm::whnf_co::body` with `Tm::whnf_co_body_safe`. `Tm::step_co` and its
+   helpers stay as the spelled-out arms the safety proof cites.
+10. **Not built:** calling a partial function where a `B` is expected is a
+   plain type mismatch, not §4.2's named refusal
+   (`issues/partial-fn-use-site-refusal.md`); mutual `partial` functions;
+   `Partial::get`'s alias (`CoTree::get` works on `Partial` as is).

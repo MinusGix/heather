@@ -10,7 +10,7 @@
 //! restates the error in the statement's terms. Nothing here runs on a
 //! success, so the lowering's terms and costs are untouched.
 
-use heather_syntax::{BIND_SEQ, Expr, ExprKind, Stmt};
+use heather_syntax::{BIND_SEQ, ITERATE_THEN, Expr, ExprKind, Stmt};
 
 use crate::{Cx, ElabError, Elaborator};
 
@@ -37,7 +37,60 @@ pub(crate) fn generated(e: &Expr) -> Option<(&Expr, bool)> {
     Some((&args[0], discards))
 }
 
+/// A `while` with no measure, lowered with the rest of its block to
+/// `Iterate::then(init, step, λ #bindN => rest)`
+/// (docs/sequencing-surface-design.md §18).
+pub(crate) fn generated_loop(e: &Expr) -> bool {
+    let ExprKind::App { head, args, named, .. } = &e.kind else { return false };
+    named.is_empty()
+        && args.len() == 3
+        && matches!(&head.kind, ExprKind::Var(n) if n == ITERATE_THEN)
+        && matches!(&args[2].kind, ExprKind::Lam { binders, .. }
+            if binders.len() == 1 && binders[0].name.starts_with("#bind"))
+}
+
 impl Elaborator {
+    /// `error`, from elaborating a lowered `while` with no measure `call`,
+    /// restated when it is the carrier's iteration operator that is missing:
+    /// the block is pure, or its carrier has no `Iterate` instance.
+    pub(crate) fn restate_loop_error(&self, cx: &Cx, call: &Expr, expected: Option<&crate::Type>, error: ElabError) -> ElabError {
+        let message = error.message();
+        // With no carrier to learn, the step's generated `match` on the
+        // condition is checked with its type unknown and is the first thing
+        // to fail.
+        let step_match = match &call.kind {
+            ExprKind::App { args, .. } => match args.get(1).map(|a| &a.kind) {
+                Some(ExprKind::Lam { body, .. }) => match &body.kind {
+                    ExprKind::Block(b) => Some(b.result.span),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+        let at_step = step_match.is_some() && error.span() == step_match && message.contains("needs a motive");
+        if error.span() != Some(call.span) && !at_step {
+            return error;
+        }
+        let unbound = message.contains("`Iterate::then`") || message.contains("`Iterate`");
+        if !at_step && !unbound && !message.contains("`Iterate<") && !message.contains("type constructor `M`") {
+            return error;
+        }
+        let carrier = expected.filter(|_| !message.contains("is qualified by")).map(|t| self.display_type(cx, t));
+        let msg = match carrier {
+            Some(shown) => format!(
+                "a `while` with no measure may go round forever, so it runs only in a block over a carrier \
+                 that can iterate (an `Iterate` instance: `Partial`, `CoTree<_>(E)`), and `{shown}` has \
+                 none: give the loop a measure, `while c decreases m {{ … }}`"
+            ),
+            None => "a `while` with no measure may go round forever, so it runs only in a block over a \
+                     carrier that can iterate (an `Iterate` instance, `import itree`; `Partial` and \
+                     `CoTree<_>(E)` have one): in pure code, give the loop a measure, `while c decreases m { … }`"
+                .to_string(),
+        };
+        ElabError::Elab { msg, span: call.span }
+    }
+
     /// `error`, from elaborating the generated bind `call`, restated when it
     /// is the carrier search failing at the bound expression `input`.
     pub(crate) fn restate_bind_error(

@@ -27,6 +27,9 @@ pub(crate) const BIND: &str = "\0bind";
 pub const BIND_SEQ: &str = "Bind::seq";
 /// The prelude call a carrier block packages a value with.
 pub const POINTED_RET: &str = "Pointed::ret";
+/// The call a `while` with no measure and the rest of its block lower to
+/// (`lib/std/itree/itree.hthr`).
+pub const ITERATE_THEN: &str = "Iterate::then";
 
 /// Which propagation the walk lowers. The two differ only in their marker,
 /// the call that continues, the wrapper that packages a local scope's value,
@@ -135,6 +138,10 @@ fn ty_children(t: &mut Ty, f: &mut impl FnMut(&mut Expr)) {
         _ => {}
     }
 }
+/// Every expression child of `e`, mutably, annotations included: for a
+/// rewrite outside the parser (`crates/elab/src/partial.rs`).
+pub fn expr_children_mut(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) { children(e, f) }
+
 fn children(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
     match &mut e.kind {
         ExprKind::App { head, args, named, .. } => {
@@ -370,6 +377,26 @@ pub(crate) fn block(mut b: Block, next: &mut usize) -> R<Block> {
     Ok(b)
 }
 
+/// A `while` with no measure (`crate::imperative::ITERATE`), bound:
+/// `Bind::seq(\0iterate(step, init), k)` is one call `Iterate::then(init,
+/// step, k)`, so that the carrier is learned from the block's expected type
+/// before the step is checked (docs/sequencing-surface-design.md §18).
+fn iterate_then(e: &mut Expr) {
+    if let ExprKind::App { head, args, .. } = &mut e.kind
+        && matches!(&head.kind, ExprKind::Var(n) if n == BIND_SEQ)
+        && args.len() == 2
+        && let ExprKind::App { head: inner, args: inner_args, .. } = &args[0].kind
+        && matches!(&inner.kind, ExprKind::Var(n) if n == crate::imperative::ITERATE)
+        && inner_args.len() == 2
+    {
+        let step = inner_args[0].clone();
+        let init = inner_args[1].clone();
+        let k = args.pop().expect("two arguments");
+        *e = call(ITERATE_THEN, vec![init, step, k], e.span);
+    }
+    children(e, &mut iterate_then);
+}
+
 
 pub(crate) fn expression(e: Expr, next: &mut usize) -> R<Expr> {
     if !contains(&e) { return Ok(e); }
@@ -401,7 +428,8 @@ pub(crate) fn binds_in_block(mut b: Block, next: &mut usize) -> R<Block> {
     let mut lower = Lower { next:*next, p:BINDING };
     let lowered = lower.scope(e);
     *next = lower.next;
-    let lowered = lowered?;
+    let mut lowered = lowered?;
+    iterate_then(&mut lowered);
     b.stmts.clear(); b.result = Box::new(lowered); b.ons = ons;
     Ok(b)
 }

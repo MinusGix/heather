@@ -480,6 +480,12 @@ fn head_name(t: &Ty) -> Option<&str> {
             // (docs/lambda-carrier-instances-design.md §7.3).
             ExprKind::Lam { binders, body } if binders.len() == 1 => match &body.kind {
                 ExprKind::TyApp { head, .. } => spine_head(head),
+                // `λ (R: Type) => CoTree<R>(E)`: the value arguments are
+                // fixed, so the head is the former's.
+                ExprKind::App { head, .. } => match &head.kind {
+                    ExprKind::TyApp { head, .. } => spine_head(head),
+                    _ => None,
+                },
                 _ => None,
             },
             _ => None,
@@ -3081,7 +3087,7 @@ impl Elaborator {
                     kind: m.kind,
                     is_meta: m.is_meta,
                     is_evidence: m.is_evidence,
-                    is_interface: m.is_interface,
+                    is_interface: m.is_interface, partial: None,
                     value: m.value,
                     elaborates: m.elaborates.clone(),
                     name: full,
@@ -3837,8 +3843,23 @@ impl Elaborator {
             let TyKind::OfExpr(e) = &arg.kind else { continue };
             let ExprKind::Lam { binders, body } = &e.kind else { continue };
             let carrier = render_expr(e);
-            let named = crate::inductive::named_head(body)
-                .and_then(|(name, targs)| Some((name, targs, self.lookup_inductive(name)?.clone())));
+            // `D<…, A>(v̄)`: a declaration with value parameters after its
+            // type parameters (`CoTree<R>(E)`) fixes its value arguments, so
+            // they must not mention the binder
+            // (issues/codata-type-constructor-carrier.md).
+            let (former, fixed_values) = match &body.kind {
+                ExprKind::App { head, args, .. } => (&**head, Some(args)),
+                _ => (&**body, None),
+            };
+            let values_free = |b: &str| {
+                fixed_values.is_none_or(|vs| vs.iter().all(|v| expr_var_count(v, b) == 0))
+            };
+            let named = crate::inductive::named_head(former)
+                .and_then(|(name, targs)| Some((name, targs, self.lookup_inductive(name)?.clone())))
+                .filter(|(_, _, ind)| {
+                    fixed_values.map_or(0, |vs| vs.len()) == ind.valparams.len()
+                        && binders.first().is_some_and(|b| values_free(&b.name))
+                });
             let reason = match (binders.as_slice(), named) {
                 ([b], Some((name, targs, ind))) if !b.implicit && targs.len() == ind.params.len() => {
                     let slot = ind.varies.unwrap_or(ind.params.len().saturating_sub(1));
@@ -3978,7 +3999,7 @@ impl Elaborator {
             kind,
             is_meta: false,
             is_evidence: false,
-            is_interface: false,
+            is_interface: false, partial: None,
             value: false,
             elaborates: None,
             name: name.to_string(),

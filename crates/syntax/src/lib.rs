@@ -22,6 +22,6 @@ pub use parser::{class_ty, parse_file, pos_carrier, ParseError, BY_TACTIC, MUTAT
 pub use fmt::format_source;
 pub use roles::{argument_lists, token_roles, ArgumentLists, Delims, TokenRole};
 
-pub use try_lower::without_decrease_labels;
-pub use try_lower::{BIND_SEQ, POINTED_RET};
+pub use try_lower::{expr_children_mut, without_decrease_labels};
+pub use try_lower::{BIND_SEQ, ITERATE_THEN, POINTED_RET};
 pub use imperative::{AFTER, BRK, LOOP, MUTATED, MUTCALL, NEXT, PROJ, RET, STATE, WHILE};

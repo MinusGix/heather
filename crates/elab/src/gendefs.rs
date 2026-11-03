@@ -2923,10 +2923,12 @@ impl Elaborator {
 
     pub(crate) fn constructor_spelling(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
         let ind = self.tag_of(ty)?;
+        // A codata declaration and one with value parameters after its type
+        // parameters (`CoTree<R>(E)`) have a constructor too: the value
+        // arguments are fixed inside the λ, as the leading type arguments
+        // are (issues/codata-type-constructor-carrier.md).
         if ind.params.is_empty()
-            || !ind.valparams.is_empty()
             || ind.index.is_some()
-            || ind.codata
             || !ind.co_index.is_empty()
             || !ind.members.is_empty()
             || self.ty_code_fn_now(ind.tag, 0).is_some()
@@ -2942,9 +2944,57 @@ impl Elaborator {
             level: at.l,
         };
         let (level, args) = self.instance_match_entry(cx, &ind, &entry, ty, 0, 0)?;
-        let mut head = self.generic_former_lambda(cx, &ind, &entry.param_levels, span).ok()?;
-        let mut cur = weakened(&entry.stmt, cx, 0);
-        for arg in &args {
+        let np = ind.params.len();
+        let mut head = if ind.valparams.is_empty() {
+            self.generic_former_lambda(cx, &ind, &entry.param_levels, span).ok()?
+        } else {
+            // The value arguments are fixed under the type binders, so none
+            // of their types may read a type parameter (`Parser<T>(x: T)`
+            // would make the fixed `x` ill typed at any other `T`).
+            let mut tel = (*entry.stmt).clone();
+            let mut doms = Vec::new();
+            while let Type::Pi { dom, cod, .. } = tel {
+                doms.push(dom);
+                tel = (*cod).clone();
+            }
+            for (k, dom) in doms.iter().enumerate().skip(np) {
+                if (0..np).any(|i| crate::unification::mentions_binder(dom, k as u32, (k - 1 - i) as u32)) {
+                    return None;
+                }
+            }
+            let mut cur = weakened(&entry.stmt, cx, 0);
+            let mut vargs = Vec::with_capacity(ind.valparams.len());
+            for (k, arg) in args.iter().enumerate() {
+                let Type::Pi { dom_level, dom, cod, .. } = cur else { return None };
+                if k >= np {
+                    vargs.push(((**arg).clone(), (*dom).clone(), dom_level));
+                }
+                cur = cod.apply_local(&id_subst_at(cx, 0).extended(Rc::clone(arg)));
+            }
+            self.generic_former_lambda_with_values(cx, &ind, &vargs, &entry.param_levels, span).ok()?
+        };
+        // The constructor's own type: the statement's type binders over
+        // `Ty l`, without the value binders the constructor fixed.
+        let former = if ind.valparams.is_empty() {
+            Rc::clone(&entry.stmt)
+        } else {
+            let mut doms = Vec::with_capacity(np);
+            let mut tel = (*entry.stmt).clone();
+            while doms.len() < np {
+                let Type::Pi { dom_level, dom, cod, .. } = tel else { return None };
+                doms.push((dom_level, dom));
+                tel = (*cod).clone();
+            }
+            let mut ty = Type::Ty(entry.level.clone());
+            let mut ty_level = Level::succ(entry.level.clone());
+            for (dom_level, dom) in doms.into_iter().rev() {
+                ty = Type::Pi { dom_level: dom_level.clone(), cod_level: ty_level.clone(), dom, cod: Rc::new(ty) };
+                ty_level = Level::max(dom_level, ty_level);
+            }
+            Rc::new(ty)
+        };
+        let mut cur = weakened(&former, cx, 0);
+        for arg in args.iter().take(np) {
             let Type::Pi {
                 dom_level,
                 cod_level,

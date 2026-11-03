@@ -131,6 +131,25 @@ fn CoTree::iter<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A) → Co
 }
 
 // ---------------------------------------------------------------------------
+// A sequencing carrier
+
+// `CoTree<_>(E)` is a carrier for binding statements, and one that iterates,
+// so a block over it may write `let x <- t;` and a `while` with no measure
+// (docs/sequencing-surface-design.md §18). The instances are at the
+// constructor `λ R => CoTree<R>(E)`, which a use site learns from
+// `CoTree<Nat>(E)` (issues/codata-type-constructor-carrier.md).
+instance(E: Events) Bind<λ (R: Type) => CoTree<R>(E)> { bind := λ {A} {B} t h => CoTree::bind(E, t, h) }
+instance(E: Events) Pointed<λ (R: Type) => CoTree<R>(E)> { pure := λ {A} a => CRet(a) }
+instance(E: Events) Iterate<λ (R: Type) => CoTree<R>(E)> { iter := λ {A} {B} body a => CoTree::iter(E, body, a) }
+
+// A computation that may not return, with no other effect: Capretta's delay
+// monad (docs/partial-functions-design.md §4.1). `Partial(B)` *is*
+// `CoTree<B>(Events::none())`, so every `CoTree` lemma, `Returns` and
+// `CoTree::get` apply to it, and it is a carrier through the instances
+// above. A `partial fn f(x: A) → B` has type `A → Partial(B)`.
+def Partial: Type → Type = λ (B: Type) => CoTree<B>(Events::none());
+
+// ---------------------------------------------------------------------------
 // Unfolding laws: one observation of each combinator
 
 theorem CoTree::obs_bind_obs<A, B>(E: Events, o: Obs<A>(E), h: A → CoTree<B>(E)):
