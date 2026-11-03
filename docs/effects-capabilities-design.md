@@ -272,7 +272,7 @@ an iteration operator.
   per pass on both sides (lockstep) is a fast path that a tactic proves by
   induction on depth; it is not required, because compiler passes that
   change how often a loop goes round preserve `Eutt` and not lockstep.
-  **Built (2026-11-03)**: `Io::against_co`, `Io::Reads` as `Eutt` at every
+  **Built (2026-11-03)**, in `linux_world_co.hthr`: `Io::against_co`, `Io::Reads` as `Eutt` at every
   world (the finite `Reads` and its lemmas are gone; `Io::against` stays
   for fuelled probes, and `Io::against_returns` turns one into a `Returns`
   of the embedded tree), `reads_ret`/`reads_trigger`/`reads_bind`, and the

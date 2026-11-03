@@ -324,7 +324,7 @@ direct corecursion; none waits on up-to coinduction.
   reassociation landing in the hypothesis.
 - **`Returns::eutt`**: a return is seen through `Eutt` (`Eutt::to`), so specs
   stated with `Returns` never mention it.
-- **The world's reading** (`lib/std/os/linux/linux_world.hthr`,
+- **The world's reading** (`lib/std/os/linux/linux_world_co.hthr`,
   `docs/effects-capabilities-design.md` §4): `Io::against_co` answers each
   `CVis` from the world as one `CTau`; `against_co_cong`, `against_co_bind`
   (a `Bisim`), `Io::Reads` as `Eutt` at every world, `reads_ret`,
