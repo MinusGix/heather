@@ -34,13 +34,13 @@ spelled `RelId<Int>` and pinned the slot correctly.
 
 ## Implementation
 
-- `Elaborator::reject_ill_typed_solutions` (crates/elab/src/lib.rs): after an
-  argument's read and after the expected-type harvest, a slot whose declared
-  type is a `Π` and already meta-free keeps a solution that read recorded
-  only if the kernel infers it a type convertible to that domain. Only that
-  read's own solutions are undone. A solution whose type cannot be inferred
-  is kept, so the read stays learn-only and the kernel still judges the call.
-- When a solution was undone, `unify_arg_ty` reads the argument type's first
+- The unifier's one write holds each solution to its slot's declared type
+  (`SolutionCheck`, crates/elab/src/solution_check.rs, since
+  [[unifier-checked-assignment]]; this issue first added it as a post-hoc
+  `reject_ill_typed_solutions` over Π slots after a whole read). A solution
+  whose type cannot be inferred is kept, so the read stays learn-only and
+  the kernel still judges the call.
+- When a write was refused, `unify_arg_ty` reads the argument type's first
   `INDEX_UNFOLD_STEPS` (8) reducts, nearest first. It reads only those that
   are still applications of a declaration, stops at the first that teaches
   something that fits, and falls back to the existing whnf retry. Calls whose

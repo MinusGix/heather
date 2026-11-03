@@ -431,6 +431,8 @@ pub(super) struct CheckNote {
     pub(super) got: Type,
     pub(super) expected: Type,
     pub(super) level: Level,
+    /// An implicit the argument's type disagreed about, for the message.
+    pub(super) clash: Option<crate::application::SlotClash>,
 }
 
 /// One written `refl` and the equation it claimed, for the same deferred
