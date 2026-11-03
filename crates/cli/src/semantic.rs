@@ -579,7 +579,10 @@ impl SemanticSession {
             self.base = Some(Base { image: elab.semantic_image(), len: elab.psi().bindings.len(), hashes: None });
         }
         let mut imports: Vec<String> =
-            written_imports(&module.src).into_iter().filter(|m| self.done.contains_key(m)).collect();
+            module_imports(&module.name, &module.src, self.done.contains_key(heather_elab::COMMON_MODULE))
+                .into_iter()
+                .filter(|m| self.done.contains_key(m))
+                .collect();
         imports.sort();
         imports.dedup();
         let canon = self.canon_of(&imports);
@@ -1594,6 +1597,20 @@ fn placeholder(len: usize) -> GlobalCtx {
     GlobalCtx::new(vec![GlobalBinding::Ctx; len])
 }
 
+/// The modules module `name` imports: [`written_imports`], plus the common
+/// prelude when `common_earlier` — when the run's order has the common prelude
+/// before this module, which the loader arranges for every module outside
+/// its closure, and the elaborator reads the same way
+/// (issues/std-prelude-facade.md).
+pub fn module_imports(name: &str, src: &str, common_earlier: bool) -> Vec<String> {
+    let mut imports = written_imports(src);
+    let common = heather_elab::COMMON_MODULE;
+    if common_earlier && name != common && !imports.iter().any(|m| m == common) {
+        imports.push(common.to_string());
+    }
+    imports
+}
+
 /// The modules a source imports, as written, the prelude aside. The loader
 /// read the same lines; a parse error is the elaborator's to report.
 pub fn written_imports(src: &str) -> Vec<String> {
@@ -1843,8 +1860,11 @@ impl BuildPlan {
         let at: HashMap<String, usize> = modules.iter().enumerate().map(|(i, m)| (m.name.clone(), i)).collect();
         let mut imports: Vec<Vec<String>> = Vec::with_capacity(modules.len());
         let mut canon: Vec<Canon> = Vec::with_capacity(modules.len());
-        for m in &modules {
-            let mut written: Vec<String> = written_imports(&m.src).into_iter().filter(|d| at.contains_key(d)).collect();
+        let common_at = at.get(heather_elab::COMMON_MODULE).copied();
+        for (i, m) in modules.iter().enumerate() {
+            let common_earlier = common_at.is_some_and(|c| c < i);
+            let mut written: Vec<String> =
+                module_imports(&m.name, &m.src, common_earlier).into_iter().filter(|d| at.contains_key(d)).collect();
             written.sort();
             written.dedup();
             let c = canon_over(&written, &|d| &canon[at[d]].order, &|d| &imports[at[d]]);

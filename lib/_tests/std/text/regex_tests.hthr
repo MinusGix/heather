@@ -87,9 +87,11 @@ regex def unclosed = "(ab";
 theorem unclosed_used(): unclosed("ab") = True {}
 
 // The value is handed to the generator at the type it asks for, and the
-// call is checked before it runs.
+// call is checked before it runs. (A bare numeral here is refused earlier,
+// as `no instance for Numeral<String>`, now that the common prelude puts
+// `Numeral` in every module's scope.)
 // expect-error: the generator's call is ill-typed
-regex def numeric = 5;
+regex def numeric = Nat::add(2, 3);
 
 // expect-error: is not the expected type here
 regex def boolean = True;
