@@ -1,0 +1,25 @@
+// Probes of `lib/std/bitvec/bitvec_div.hthr`: unsigned long division at
+// closed values, by zero, at the machine width (where a magnitude-bounded
+// division could not finish), and the signed division of the word read in
+// two's complement. Tests, not library (docs/test-value-audit.md §4.5).
+import bool; import logic; import nat; import int; import algebra; import bitvec; import bitvec_div;
+
+fn b(k: u8) → u8 { k }
+fn w(k: u64) → u64 { k }
+
+theorem udiv_closed(): b(200).udiv(7) = 28 { refl }
+theorem urem_closed(): b(200).urem(7) = 4 { refl }
+theorem udiv_exact(): b(255).udiv(255) = 1 ∧ b(255).urem(255) = 0 { And(refl, refl) }
+theorem udiv_small(): b(3).udiv(200) = 0 ∧ b(3).urem(200) = 3 { And(refl, refl) }
+theorem udiv_by_zero(): b(200).udiv(0) = 255 ∧ b(200).urem(0) = 200 { And(refl, refl) }
+theorem udiv_not(): decide_bit<b(200).udiv(7) = 29>() = False { refl }
+theorem udiv_u64(): w(18446744073709551615).udiv(10) = 1844674407370955161 { refl }
+theorem urem_u64(): w(18446744073709551615).urem(10) = 5 { refl }
+theorem odd_width(): (@BitVec::udiv(27, 100000000, 9999)) = 10001 { refl }
+
+// The word read signed: `-7` is `249`.
+theorem sdiv_word(): b(-7).sdiv(2) = -3 ∧ b(-7).srem(2) = -1 { And(refl, refl) }
+theorem sdiv_differs(): decide_bit<b(249).sdiv(2) = b(249).udiv(2)>() = False { refl }
+theorem magnitude_min(): b(128).magnitude() = 128 { refl }
+
+theorem of_int(): b(BitVec::ofInt(NegSucc(0))) = 255 ∧ b(BitVec::ofInt(NegSucc(127))) = 128 { And(refl, refl) }

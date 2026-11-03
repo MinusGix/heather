@@ -789,6 +789,9 @@ impl expr::UniverseElab for Elaborator {
         if let Some(lowered) = self.try_indexed_ty(cx, expression, span)? {
             return Ok(Some(lowered));
         }
+        if let Some(lowered) = self.try_type_value_app(cx, expression, span)? {
+            return Ok(Some(lowered));
+        }
         self.try_valparam_ty(cx, expression, span)
     }
 
