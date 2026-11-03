@@ -20,14 +20,17 @@
 // words; docs/runtime-fn-setups-design.md §8).
 //
 // The tree reading. A tree over Linux's calls (`Source::tree`, a spec) is
-// read against a world by `Io::against`: each command is put to the world
-// and answered, as the compiled program's calls are by Linux. A capability
-// program `f` agrees with a tree `t` when the reading is `f` against every
-// world (`Io::Reads(t, f)`). That is how a compiled program's tree and the
-// function it was compiled from are tied: the tree's reading at every world
-// is the function, so the tree is what the function does. `Io::reads_bind`
-// is sequencing's case, `ITree::run_state_bind`'s statement for this
-// handler, proved once.
+// read against a world: each command is put to the world and answered, as
+// the compiled program's calls are by Linux. `Io::against` reads a finite
+// (fuelled) tree to an `Option`; `Io::against_co` (`linux_world_co`) reads a coinductive one
+// to a computation in `Partial`, so a loop that never ends reads as one
+// that never returns. A capability program `f` agrees with a tree `t` when
+// the reading is `f` up to silent steps at every world (`Io::Reads(t, f)`,
+// `docs/effects-capabilities-design.md` §4). That is how a compiled
+// program's tree and the function it was compiled from are tied: the tree's
+// reading at every world is the function, so the tree is what the function
+// does. `Io::reads_bind` is sequencing's case and `Io::reads_iter` the
+// loop's, each proved once.
 import logic;
 import nat;
 import list;
@@ -150,11 +153,6 @@ fn Io::against<R>(t: ITree<R>(Events::linux()), io: Io) → Option<Mutated<Io, R
     }
 }
 
-// The tree is what the capability program does, at every world.
-fn Io::Reads<R>(t: ITree<R>(Events::linux()), f: Io → Mutated<Io, R>) → Type {
-    (io: Io) → Io::against(t, io) = Some(f(io))
-}
-
 theorem Io::against_ret<R>(r: R, io: Io): Io::against<R>(Ret(r), io) = Some(Mutated(io, r)) { refl }
 
 // A call issued is the call put to the world.
@@ -175,21 +173,7 @@ theorem Io::against_bind<A, B>(t: ITree<A>(Events::linux()), h: A → ITree<B>(E
     }
 }
 
-// A call reads as the capability call.
-theorem Io::reads_trigger(c: LinuxCmd<Nat>): Io::Reads(ITree::trigger(Events::linux(), c), λ io => Io::call(io, c)) {
-    λ io => Io::against_trigger(c, io)
-}
-
-theorem Io::reads_ret<R>(r: R): Io::Reads<R>(Ret(r), λ io => Mutated(io, r)) { λ io => refl }
-
-// `let a = f(io); g(a)(io)` reads as the trees in sequence: the agreement of
-// a capability program with its tree is proved construct by construct.
-theorem Io::reads_bind<A, B>(t: ITree<A>(Events::linux()), f: Io → Mutated<Io, A>,
-    h: A → ITree<B>(Events::linux()), g: A → Io → Mutated<Io, B>,
-    rt: Io::Reads(t, f), rh: (a: A) → Io::Reads(h(a), g(a))):
-    Io::Reads(ITree::bind(Events::linux(), t, h), λ io => g(f(io).value, f(io).after))
-{
-    λ io => trans(Io::against_bind(t, h, io),
-        j(sym(rt(io)), λ o q => o.and_then(λ m => Io::against(h(m.value), m.after)) = Some(g(f(io).value, f(io).after)),
-            rh(f(io).value, f(io).after)))
-}
+// The coinductive reading, `Io::Reads` up to taus and the loop lemma are in
+// `linux_world_co` (docs/effects-capabilities-design.md §4), so the modules
+// that only run programs against a world do not load the coinductive
+// library.

@@ -72,6 +72,42 @@ theorem wrong_leaf(E: Events, h: Nat → CoTree<Nat>(E)):
     CoTree::after(E, 1, CoTree::bind<Nat, Nat>(E, CTau(CRet(1)), h)) = CoTree::after(E, 0, h(2)) { refl }
 
 // ---------------------------------------------------------------------------
+// Loops up to taus
+
+// A countdown, and the same body one silent step slower each pass.
+fn down(E: Events, n: Nat) → CoTree<Step<Nat, Nat>>(E) {
+    match n { Zero => CRet(Break(7)), Succ(m) => CRet(Continue(m)) }
+}
+fn down_slow(E: Events, n: Nat) → CoTree<Step<Nat, Nat>>(E) { CTau(down(E, n)) }
+
+// The loops are equivalent, by the congruence alone, at a neutral start.
+fn down_loops(E: Events, n: Nat) → Eutt<Nat>(E, CoTree::iter(E, λ a => down(E, a), n), CoTree::iter(E, λ a => down_slow(E, a), n)) {
+    Eutt::iter_cong(E, λ a => down(E, a), λ a => down_slow(E, a), λ a => Eutt::tau_r(E, down(E, a)), n)
+}
+
+// Each returns at a count of its own: one step per pass that goes round, and
+// the slow one a step more per pass.
+fn down_3(E: Events) → Eutt<Nat>(E, CoTree::iter(E, λ a => down(E, a), 3), CRet(7)) { ERet(3, 0, 7, refl, refl) }
+fn down_slow_3(E: Events) → Eutt<Nat>(E, CoTree::iter(E, λ a => down_slow(E, a), 3), CRet(7)) { ERet(7, 0, 7, refl, refl) }
+
+// The unfolding at a neutral start: the body, then the loop again.
+fn down_unfolds(E: Events, n: Nat) → Eutt<Nat>(E, CoTree::iter(E, λ a => down(E, a), n),
+    CoTree::bind(E, down(E, n), λ x => CoTree::iter_again(E, λ a => down(E, a), x)))
+{
+    Eutt::iter_unfold(E, λ a => down(E, a), n)
+}
+// …and step for step, with the silent step in front of the next pass.
+fn down_unfolds_bisim(E: Events, n: Nat) → Bisim<Nat>(E, CoTree::iter(E, λ a => down(E, a), n),
+    CoTree::bind(E, down(E, n), λ x => CoTree::iter_next(E, λ a => down(E, a), x)))
+{
+    CoTree::iter_unfold(E, λ a => down(E, a), n)
+}
+// At a literal start the unfolding's right side observes a silent step to
+// the loop at the predecessor.
+theorem down_next_obs(E: Events): CoTree::obs(E, CoTree::bind(E, down(E, 2), λ x => CoTree::iter_next(E, λ a => down(E, a), x)))
+    = OTau(CoTree::iter(E, λ a => down(E, a), 1)) { refl }
+
+// ---------------------------------------------------------------------------
 // Rewriting along `Eutt` (docs/equation-rewrite-design.md §11): a monad or
 // tau law, unapplied, at the top of an `Eutt` goal and under a
 // continuation's binder, with no hand `trans`.
@@ -149,4 +185,12 @@ fn leave<A, B>(E: Events, t: CoTree<A>(E), f: A → B) → CoTree<B>(E) { CoTree
 // expect-error: no evidence about it names the relation its result changes by
 fn rewrite_no_named_relation<A, B>(E: Events, t: CoTree<A>(E), f: A → B) → Eutt<B>(E, leave(E, CTau(t), f), leave(E, t, f)) {
     rewrite(Eutt::tau_l, Eutt::refl(E, leave(E, t, f)))
+}
+
+// Rewriting inside a loop's body (`Eutt::iter_respects`): every pass loses
+// its silent step.
+fn rewrite_in_loop(E: Events, n: Nat) →
+    Eutt<Nat>(E, CoTree::iter(E, λ a => CTau(down(E, a)), n), CoTree::iter(E, λ a => down(E, a), n))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(E, CoTree::iter(E, λ a => down(E, a), n)))
 }
