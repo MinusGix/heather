@@ -951,7 +951,9 @@ impl Elaborator {
             return None;
         };
         args.pop()?;
-        Some(args)
+        // The shape is scoped under the index binder, which the other
+        // arguments do not mention.
+        Some(args.iter().map(|a| Rc::new(a.inst_top(0, &Term::Zero))).collect())
     }
 
     /// Read `name`'s signature as a friend's at this definition: `None` when
@@ -1051,8 +1053,9 @@ impl Elaborator {
             let level = Level::constant(tv.level);
             match &assign[b] {
                 Some(code) => {
+                    // Read at the site; here, past the data binders pushed so far.
                     let ty = Type::El { level: level.clone(), tm: Rc::clone(code) };
-                    c2.tyvars.push(TyVar { name: tv.name.clone(), ty: ty.clone(), level: level.clone(), depth: c2.names.len() });
+                    c2.tyvars.push(TyVar { name: tv.name.clone(), ty: ty.shift_local(data.len() as u32), level: level.clone(), depth: c2.names.len() });
                     tyargs.push(TyArg::Fixed(ty, level));
                 }
                 None => {
@@ -1874,6 +1877,26 @@ impl Elaborator {
             let pi_idx = mode.param_index(now, j, y);
             self.free_same_index(cx, free, k, &pi_idx, idx, &mode.friend, span)
         };
+        // A function child passed whole at a function child position: its
+        // η-expansion, whose body meets the child position applied.
+        if let ExprKind::Var(s) = &e.kind
+            && mode.child_param(cx, s)
+            && matches!(self.whnf(cx, expected, e.span), Ok(Type::Pi { .. }))
+        {
+            let y = "#eta".to_string();
+            let at = |kind| Expr { kind, span: e.span };
+            let lam = at(ExprKind::Lam {
+                binders: vec![heather_syntax::LamBinder { name: y.clone(), ty: None, implicit: false, span: e.span }],
+                body: Box::new(at(ExprKind::App {
+                    head: Box::new(e.clone()),
+                    args: vec![at(ExprKind::Var(y))],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                })),
+            });
+            return Ok(Some(self.elab_check(cx, &lam, expected, lvl)?));
+        }
         if let Some(idx) = child_idx {
             if let Some((args, tys)) = &self_call {
                 let v = own_node(&idx, args, tys)?;

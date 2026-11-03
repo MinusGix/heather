@@ -68,3 +68,68 @@ theorem bind_tau_refines<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E)
 // expect-error(kernel): the kernel rejected `wrong_leaf`: NotConvertible
 theorem wrong_leaf(E: Events, h: Nat → CoTree<Nat>(E)):
     CoTree::after(E, 1, CoTree::bind<Nat, Nat>(E, CTau(CRet(1)), h)) = CoTree::after(E, 0, h(2)) { refl }
+
+// Coinduction up to the friends of `Eutt` (`Eutt::up_to_bisim`,
+// `Eutt::bind_up`): the loop congruence, proved by calling itself inside the
+// continuation's relation of the unfolded loop. `iter` is a `bind` of one
+// pass with `iter_k` up to bisimilarity (`iter_unfold`), so the proof is
+// `bind_up` under `up_to_bisim`, two friends deep.
+fn iter_k<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E)) → Step<A, B> → CoTree<B>(E) {
+    λ x => match x { Continue(a) => CTau(CoTree::iter(E, body, a)), Break(b) => CRet(b) }
+}
+// The loop from a pass's tree. The relation's index names `t`, not
+// `obs(t)`, which the proof matches on (a corecursion matching a term its
+// index mentions is refused today: issues/corec-match-on-index-term.md).
+fn iter_from<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), t: CoTree<Step<A, B>>(E)) → CoTree<B>(E) {
+    CoTree::iter_obs(E, body, CoTree::obs(E, t))
+}
+fn iter_unfold_at<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), t: CoTree<Step<A, B>>(E)) →
+    Bisim<B>(E, iter_from(E, body, t), CoTree::bind(E, t, iter_k(E, body)))
+{
+    match h: CoTree::obs(E, t) {
+        ORet(Continue(a)) => BTau(CoTree::iter(E, body, a), CoTree::iter(E, body, a),
+                j(prelude::sym(h), λ y q => CoTree::obs(E, CoTree::iter_obs(E, body, y)) = OTau(CoTree::iter(E, body, a)), refl),
+                CoTree::obs_bind_at(E, t, iter_k(E, body), ORet(Continue(a)), h), Bisim::refl(E, CoTree::iter(E, body, a))),
+        ORet(Break(b)) => BRet(b,
+                j(prelude::sym(h), λ y q => CoTree::obs(E, CoTree::iter_obs(E, body, y)) = ORet(b), refl),
+                CoTree::obs_bind_at(E, t, iter_k(E, body), ORet(Break(b)), h)),
+        OTau(s) => BTau(iter_from(E, body, s), CoTree::bind(E, s, iter_k(E, body)),
+            j(prelude::sym(h), λ y q => CoTree::obs(E, CoTree::iter_obs(E, body, y)) = OTau(iter_from(E, body, s)), refl),
+            CoTree::obs_bind_at(E, t, iter_k(E, body), OTau(s), h), iter_unfold_at(E, body, s)),
+        OVis(c, k) => BVis(c, λ a => iter_from(E, body, k(a)), λ a => CoTree::bind(E, k(a), iter_k(E, body)),
+            j(prelude::sym(h), λ y q => CoTree::obs(E, CoTree::iter_obs(E, body, y)) = OVis(c, λ a => iter_from(E, body, k(a))), refl),
+            CoTree::obs_bind_at(E, t, iter_k(E, body), OVis(c, k), h), λ a => iter_unfold_at(E, body, k(a))),
+    }
+}
+fn iter_unfold<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A) →
+    Bisim<B>(E, CoTree::iter(E, body, a), CoTree::bind(E, body(a), iter_k(E, body)))
+{
+    iter_unfold_at(E, body, body(a))
+}
+// Under one `CTau` on each side, so that the friends sit inside a
+// constructor; the continuation's relation at `Continue(a2)` is then the
+// proof's own type at `a2`, a corecursive call guarded by that `ETau`.
+fn iter_cong_tau<A, B>(E: Events, b1: A → CoTree<Step<A, B>>(E), b2: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → Eutt<Step<A, B>>(E, b1(a), b2(a)), a: A) →
+    Eutt<B>(E, CTau(CoTree::iter(E, b1, a)), CTau(CoTree::iter(E, b2, a)))
+{
+    ETau(0, 0, CoTree::iter(E, b1, a), CoTree::iter(E, b2, a), refl, refl,
+        Eutt::up_to_bisim(E, CoTree::iter(E, b1, a), CoTree::bind(E, b1(a), iter_k(E, b1)), CoTree::bind(E, b2(a), iter_k(E, b2)),
+            CoTree::iter(E, b2, a),
+            Bisim::sym(E, CoTree::iter(E, b1, a), CoTree::bind(E, b1(a), iter_k(E, b1)), iter_unfold(E, b1, a)),
+            Eutt::bind_up<Step<A, B>, B>(E, b1(a), b2(a), iter_k(E, b1), iter_k(E, b2), hb(a),
+                λ x => match x {
+                    Continue(a2) => iter_cong_tau(E, b1, b2, hb, a2),
+                    Break(r) => ERet(0, 0, r, refl, refl),
+                }),
+            Bisim::sym(E, CoTree::iter(E, b2, a), CoTree::bind(E, b2(a), iter_k(E, b2)), iter_unfold(E, b2, a))))
+}
+// The loop congruence: bodies equivalent up to taus at every state give
+// loops equivalent up to taus.
+fn iter_cong<A, B>(E: Events, b1: A → CoTree<Step<A, B>>(E), b2: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → Eutt<Step<A, B>>(E, b1(a), b2(a)), a: A) → Eutt<B>(E, CoTree::iter(E, b1, a), CoTree::iter(E, b2, a))
+{
+    Eutt::trans(E, CoTree::iter(E, b1, a), CTau(CoTree::iter(E, b1, a)), CoTree::iter(E, b2, a), Eutt::tau_r(E, CoTree::iter(E, b1, a)),
+        Eutt::trans(E, CTau(CoTree::iter(E, b1, a)), CTau(CoTree::iter(E, b2, a)), CoTree::iter(E, b2, a),
+            iter_cong_tau(E, b1, b2, hb, a), Eutt::tau_l(E, CoTree::iter(E, b2, a))))
+}
