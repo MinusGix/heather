@@ -989,11 +989,12 @@ impl<'a> RelationRewrite<'a> {
                         if over.is_empty() { "it" } else { "functions into it" },
                     ),
                     Some((d, _)) => format!(
-                        "`rewrite`: rewriting inside{} changes an argument of a context from `{carrier_shown}` \
+                        "`rewrite`: rewriting inside{} changes an argument of a context from {}`{carrier_shown}` \
                          to `{}`, and no evidence about it names the relation its result changes by\n  \
                          hint: state `PreservesRelation(R, S, f)` for its context as an `evidence theorem`, \
                          with the relation `S` at `{}`",
                         self.shown(t),
+                        if over.is_empty() { "" } else { "functions into " },
                         self.e.display_type(self.original, d),
                         self.e.display_type(self.original, d),
                     ),
@@ -1165,7 +1166,7 @@ impl<'a> RelationRewrite<'a> {
             Lookup::Untyped
         } else if let Some((d, l)) = target {
             let op = self.alias(Rc::clone(context), op_ty, op_level);
-            self.leaving(&input_text, &relation, &op, context, d, l, &out)?
+            self.leaving(&input_text, &op, context, d, l, &out)?
         } else {
             let op = self.alias(Rc::clone(context), op_ty, op_level);
             let statement = match shape {
@@ -1191,7 +1192,6 @@ impl<'a> RelationRewrite<'a> {
     fn leaving(
         &mut self,
         input: &str,
-        relation: &Rc<Term>,
         op: &str,
         context: &Rc<Term>,
         target: &Rc<Type>,
@@ -1199,7 +1199,7 @@ impl<'a> RelationRewrite<'a> {
         out: &str,
     ) -> R<Lookup> {
         let mut first = None;
-        for candidate in self.named_relations(relation, context) {
+        for candidate in self.named_relations(context) {
             // A relation found below binders is kept for the node's parents,
             // so it must not mention them.
             let Some(root) = (if self.deep {
@@ -1227,7 +1227,7 @@ impl<'a> RelationRewrite<'a> {
     /// rule's `f` matched against `context` and `S` instantiated by the
     /// match, scoped where `cx` is. A rule whose `S` the match leaves open
     /// names none.
-    fn named_relations(&mut self, _relation: &Rc<Term>, context: &Rc<Term>) -> Vec<Rc<Term>> {
+    fn named_relations(&mut self, context: &Rc<Term>) -> Vec<Rc<Term>> {
         let Some(info) = self.e.names.global(&crate::names::qkey("relation_props", "PreservesRelation")) else {
             return Vec::new();
         };
