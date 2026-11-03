@@ -127,22 +127,22 @@ theorem count_open<A>(a: A, xs: List<A>): count(List::Cons(a, xs)) = xs.foldl(co
 // in declaration order, and a statement `if` in the body.
 fn count_words(bytes: List<Nat>) → Nat {
     let mut words = 0;
-    let mut inside = Bool::False;
+    let mut inside = False;
     for b in bytes {
         if b = 32 {
-            inside := Bool::False
-        } else if inside = Bool::False {
-            inside := Bool::True;
+            inside := False
+        } else if !inside {
+            inside := True;
             words := words + 1
         }
     }
     words
 }
 theorem count_words_lit(): count_words([1, 2, 32, 32, 5, 32]) = 2 { refl }
-theorem count_words_space(s: count_words::State): count_words::step(s, 32).inside = Bool::False { refl }
+theorem count_words_space(s: count_words::State): count_words::step(s, 32).inside = False { refl }
 theorem count_words_space_keeps(s: count_words::State): count_words::step(s, 32).words = s.words { refl }
 theorem count_words_start(w: Nat):
-    count_words::step(count_words::State(w, Bool::False), 7).words = w + 1 { refl }
+    count_words::step(count_words::State(w, False), 7).words = w + 1 { refl }
 
 // A capture: a local the body reads but does not assign is a parameter of
 // the step, before the state.
@@ -427,12 +427,12 @@ theorem counted_lit(): counted([1, 2, 3]) = [3, 2, 1] { refl }
 // A statement `if` whose body is the call, with and without the `;`.
 fn branch_tick(b: Bool) → Nat {
     let mut c = Counter(0, []);
-    if b = Bool::True { c.tick(5) }
-    if b = Bool::True { c.tick(1); }
+    if b { c.tick(5) }
+    if b { c.tick(1); }
     c.n
 }
-theorem branch_tick_t(): branch_tick(Bool::True) = 6 { refl }
-theorem branch_tick_f(): branch_tick(Bool::False) = 0 { refl }
+theorem branch_tick_t(): branch_tick(True) = 6 { refl }
+theorem branch_tick_f(): branch_tick(False) = 0 { refl }
 
 // With an early exit.
 fn tick_until_zero(xs: List<Nat>) → Nat {
@@ -486,3 +486,47 @@ fn tick_plain_lambda(c: Counter) → Nat {
     let g = λ (d: Counter) => d.tick(1);
     0
 }
+
+// A `Bool` as a condition (issues/bool-conditions-and-literals.md): `if b`
+// is the match on `b` itself, `if !b` and `if a && b` the match on that
+// Bool, each at a literal and a neutral Bool, at an open result type.
+// A proposition condition keeps its decided reading (everything above).
+fn select<A>(b: Bool, x, y: A) → A { if b { x } else { y } }
+fn select_not<A>(b: Bool, x, y: A) → A { if !b { x } else { y } }
+fn select_and<A>(a, b: Bool, x, y: A) → A { if a && b { x } else { y } }
+fn select_or<A>(a, b: Bool, x, y: A) → A { if a || b { x } else { y } }
+theorem select_t(): select(True, 1, 2) = 1 { refl }
+theorem select_f(): select(False, 1, 2) = 2 { refl }
+theorem select_open<A>(b: Bool, x, y: A): select(b, x, y) = match b { True => x, False => y } { refl }
+theorem select_not_f(): select_not(False, 1, 2) = 1 { refl }
+theorem select_not_t(): select_not(True, 1, 2) = 2 { refl }
+theorem select_not_open<A>(b: Bool, x, y: A): select_not(b, x, y) = select(!b, x, y) { refl }
+theorem select_and_tt(): select_and(True, True, 1, 2) = 1 { refl }
+theorem select_and_f<A>(b: Bool, x, y: A): select_and(False, b, x, y) = y { refl }
+theorem select_and_open<A>(a, b: Bool, x, y: A): select_and(a, b, x, y) = select(a && b, x, y) { refl }
+theorem select_or_t<A>(b: Bool, x, y: A): select_or(True, b, x, y) = x { refl }
+
+// Checking position: the `if` takes its result type from the annotation.
+fn select_checked(b: Bool) → Nat { let n: Nat = if !b { 1 } else { 2 }; n }
+theorem select_checked_t(): select_checked(True) = 2 { refl }
+
+// With evidence, `h` is the proposition the Bool decides, `b.IsTrue()`.
+fn witnessed(b: Bool) → Nat { if h: b { let _w: b.IsTrue() = h; 1 } else { 0 } }
+theorem witnessed_t(): witnessed(True) = 1 { refl }
+theorem witnessed_f(): witnessed(False) = 0 { refl }
+
+// `False`/`True` with no type written are the `Bool` constructors in a term
+// position, `logic` imported or not; at a universe `False` is still the type.
+fn any_zero(xs: List<Nat>) → Bool {
+    let mut found = False;
+    for x in xs { if x = 0 { found := True } }
+    found
+}
+theorem any_zero_t(): any_zero([1, 0]) = True { refl }
+theorem any_zero_f(): any_zero([1, 2]) = False { refl }
+fn empty_type() → Type { let p: Type = False; p }
+theorem empty_type_is_false(): empty_type() = False { refl }
+
+// A condition that is neither a proposition nor a `Bool`.
+// expect-error: a condition is a proposition, decided by its `Decide` instance, or a `Bool`; this is a value of `Nat`
+fn nat_condition(n: Nat) → Nat { if n { 1 } else { 2 } }

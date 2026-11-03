@@ -5,7 +5,7 @@ labels: [native,memory,datarepr]
 area: heather-in-heather
 milestone: [nh-heap]
 created: 2026-10-31
-updated: 2026-11-02
+updated: 2026-11-03
 ---
 
 Round R9 of `docs/compiler-milestones-proposal.md` (§4.2 N4, §7), milestone `nh-heap`: recursive data at run
@@ -56,3 +56,4 @@ time. `hih-first-alloc` moved here.
   [[native-write-elf-join-liveness]]. Both tools match GNU's on the tests'
   inputs, exhaustion included. What remains of the done-when ("as ordinary
   Heather") is [[runtime-fn-arena-lists]].
+- 2026-11-03: 2026-11-03: The builder sort's write-elf gate is killed at the suite's rail on a fresh box; not a regression (identical certificate on master). Filed [[native-sort-gate-rail]].

@@ -195,7 +195,7 @@ use representations::Representations;
 use slots::{Ingredient, Slot};
 pub(crate) use surface::{count_holes, count_holes_expr, count_tactic_slots, strengthen_global};
 use surface::{
-    expression_as_type, for_each_free_slot, has_free_slots,
+    bool_condition, expression_as_type, for_each_free_slot, has_free_slots,
     lower_argument_slots, slot_profile,
 };
 use traits::Traits;
@@ -7165,8 +7165,84 @@ impl Elaborator {
                 e.span,
             );
         }
+        if let Some((condition, evidence)) = bool_condition(e) {
+            return self.elab_condition(cx, e, &condition, evidence, expected);
+        }
         let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
         Ok((self.reduced_decision(cx, e, term), ty, level))
+    }
+
+    /// An `if`'s (or a `while`'s) condition, which the parser lowered to
+    /// `decide_bit<c>()` (`decide<c>()` with an evidence binder) before any
+    /// type was known (issues/bool-conditions-and-literals.md). The
+    /// condition's type picks the reading:
+    ///
+    /// - a **proposition**: its `Decide` instance's bit, as always — this
+    ///   reading is tried first and is the whole cost when it succeeds;
+    /// - a **`Bool`**: the Bool itself. `decide_bit<b.IsTrue()>()` is `b` by
+    ///   the `IsTrue` instance's own `bit := b`, so `if b` is the match on `b`
+    ///   that the frontends and `rt` read, with nothing to unfold; with
+    ///   evidence (`if h: b`) it is `decide<b.IsTrue()>()`, so `h: b.IsTrue()`.
+    ///
+    /// A condition that is neither is refused naming both readings; one that
+    /// does not elaborate as a term, or is a type, keeps the proposition
+    /// reading's own error.
+    fn elab_condition(&self, cx: &Cx, e: &Expr, condition: &Expr, evidence: bool, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        let as_proposition = matching::MatchRollback::new(self);
+        let proposition_error = match self.elab_infer_written(cx, e, expected) {
+            Ok((term, ty, level)) => {
+                as_proposition.commit();
+                return Ok((self.reduced_decision(cx, e, term), ty, level));
+            }
+            Err(error) => error,
+        };
+        drop(as_proposition);
+        let bool_ty = Ty { kind: TyKind::Named { name: "bool::Bool".to_string(), args: Vec::new() }, span: condition.span };
+        let as_bool = matching::MatchRollback::new(self);
+        let Ok((term, ty, _)) = self.elab_infer(cx, condition) else { return Err(proposition_error) };
+        let Ok((bool_ty, _)) = self.elab_ty(cx, &bool_ty) else { return Err(proposition_error) };
+        let Ok(head) = self.whnf(cx, &ty, condition.span) else { return Err(proposition_error) };
+        if matches!(head, Type::Ty(_)) {
+            return Err(proposition_error);
+        }
+        if self.goal_oracle().convert_type(&cx.gamma, Layer::Prog, &head, &bool_ty, &Level::Zero).is_err() {
+            let got = self.display_type_clean(cx, &ty).unwrap_or_else(|| "this type".into());
+            return err(
+                format!(
+                    "a condition is a proposition, decided by its `Decide` instance, or a `Bool`; \
+                     this is a value of `{got}`"
+                ),
+                condition.span,
+            );
+        }
+        if !evidence {
+            as_bool.commit();
+            return Ok((term, bool_ty, Level::Zero));
+        }
+        // The Bool read as the proposition its `IsTrue` instance decides.
+        drop(as_bool);
+        let span = condition.span;
+        let is_true = Expr {
+            kind: ExprKind::Dot { recv: Box::new(condition.clone()), name: "IsTrue".into(), tyargs: Vec::new(), args: Some(Vec::new()), named: Vec::new() },
+            span,
+        };
+        let call = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp {
+                        head: Box::new(Expr { kind: ExprKind::Var("decide".into()), span }),
+                        args: vec![Ty { kind: TyKind::OfExpr(Box::new(is_true)), span }],
+                    },
+                    span,
+                }),
+                args: Vec::new(),
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        self.elab_infer_written(cx, &call, expected).map_err(|_| proposition_error)
     }
 
     /// `decide_bit<P>()` at a resolved instance, read as the instance's own
@@ -10402,7 +10478,7 @@ impl Elaborator {
             (Some(pos), None) => return Ok(self.local(cx, pos)),
             (None, None) => {}
         }
-        if let Some((ind, i)) = self.ctor_of(name) {
+        if let Some((ind, i)) = self.ctor_of(name).or_else(|| self.ctor_over_types(name)) {
             return self.infer_ctor(cx, &ind, i, &[] as &[Expr], span);
         }
         // The enclosing declaration's own name: only a saturated, guarded

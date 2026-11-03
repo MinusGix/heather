@@ -63,8 +63,8 @@ fn LineReader::feed(self r: LineReader, bytes: List<BitVec(8)>, keep_newline: Bo
     let mut done = r.done;
     let mut open = r.open;
     for c in bytes {
-        if c.eq_bit(newline()) = True {
-            if keep_newline = True { open := open ++ [c] }
+        if c.eq_bit(newline()) {
+            if keep_newline { open := open ++ [c] }
             done := List::Cons(open, done);
             open := []
         } else {
@@ -96,8 +96,8 @@ fn Io::read_lines(mut self io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), k
     let mut held = buf;
     for _ in passes {
         let got = io.read_into(Io::stdin(), held, capacity);
-        if got.result.signed_lt_bit(0) = True { return None }
-        if got.result.eq_bit(0) = True { break }
+        if got.result.signed_lt_bit(0) { return None }
+        if got.result.eq_bit(0) { break }
         held := got.buf;
         r := r.feed(span(got.buf, 0, got.result.toNat()), keep_newline)
     }
@@ -114,9 +114,9 @@ fn Io::write_bytes(mut self io: Io, bytes: List<BitVec(8)>, passes: List<Nat>) �
     let len: BitVec(64) = BitVec::ofNat(bytes.len());
     let mut sent: BitVec(64) = 0;
     for _ in passes {
-        if sent.eq_bit(len) = True { break }
+        if sent.eq_bit(len) { break }
         let wrote = io.write_from(Io::stdout(), bytes, sent, len.sub(sent));
-        if wrote.signed_lt_bit(0) = True { return False }
+        if wrote.signed_lt_bit(0) { return False }
         sent := sent.add(wrote)
     }
     sent.eq_bit(len)
@@ -126,7 +126,7 @@ fn Io::write_bytes(mut self io: Io, bytes: List<BitVec(8)>, passes: List<Nat>) �
 fn Io::write_lines(mut self io: Io, lines: List<List<BitVec(8)>>, passes: List<Nat>) → Bool {
     for line in lines {
         let wrote = io.write_bytes(line, passes);
-        if wrote = False { return False }
+        if !wrote { return False }
     }
     True
 }
@@ -147,7 +147,7 @@ fn Io::tac(mut self io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), passes: 
         None => { status := 1 },
         Some(lines) => {
             let ok = io.write_lines(lines, passes);
-            if ok = False { status := 1 }
+            if !ok { status := 1 }
         },
     }
     status
@@ -165,8 +165,8 @@ fn List::bytes_before(self a: List<BitVec(8)>, b: List<BitVec(8)>) → Bool {
         match rest {
             Nil => { return False },
             Cons(y, more) => {
-                if x.unsigned_lt_bit(y) = True { return True }
-                if y.unsigned_lt_bit(x) = True { return False }
+                if x.unsigned_lt_bit(y) { return True }
+                if y.unsigned_lt_bit(x) { return False }
                 rest := more
             },
         }
@@ -196,7 +196,7 @@ fn LinePick::next_in(self last: LinePick, lines: List<List<BitVec(8)>>) → Line
         let here = LinePick(at, line);
         let later = last.at.same(0).or(last.before(here));
         let better = best.at.same(0).or(here.before(best));
-        if later.and(better) = True { best := here }
+        if later && better { best := here }
     }
     best
 }
@@ -206,14 +206,14 @@ fn LinePick::next_in(self last: LinePick, lines: List<List<BitVec(8)>>) → Line
 // before it. The list is only read, so sorting allocates nothing, which
 // keeps the arena write-once. Whether every write went.
 fn Io::write_sorted(mut self io: Io, lines: List<List<BitVec(8)>>, passes: List<Nat>) → Bool {
-    let mut ok: Bool = True;
+    let mut ok = True;
     let mut last = LinePick::none();
     for _ in lines {
         let next = last.next_in(lines);
         let wrote = io.write_bytes(next.line, passes);
-        if wrote = False { ok := False; break }
+        if !wrote { ok := False; break }
         let ended = io.write_bytes([newline()], passes);
-        if ended = False { ok := False; break }
+        if !ended { ok := False; break }
         last := next
     }
     ok
@@ -229,7 +229,7 @@ fn Io::sort(mut self io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), passes:
         None => { status := 2 },
         Some(lines) => {
             let ok = io.write_sorted(lines, passes);
-            if ok = False { status := 2 }
+            if !ok { status := 2 }
         },
     }
     status

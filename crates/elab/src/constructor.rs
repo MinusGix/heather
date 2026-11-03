@@ -329,6 +329,41 @@ impl Elaborator {
         self.ctor_of(name)
     }
 
+    /// A bare name that is one constructor and otherwise only **type names**
+    /// — `False` with `bool` and `logic` both imported — read in a term
+    /// position as the constructor (issues/bool-conditions-and-literals.md).
+    ///
+    /// Unlike [`Self::ctor_here_expected`]'s route this is a *choice*, not a
+    /// shrink: in inference position the type reading would have checked too,
+    /// as a code. It is made because every position that wants the type has
+    /// already taken it before a constructor route runs: type position
+    /// filters to `Inductive` names (`names::resolve_kinds`), and checking at
+    /// a universe reads the expression as a type ahead of the constructor arms
+    /// (`elab_check_skel`). What is left is a term whose type is not a
+    /// universe, or not known yet, and there a type written as a value is the
+    /// rare reading — `let P: Type = False` still spells it. Two visible
+    /// constructors, or a function or value of the name, keep the ambiguity:
+    /// those are not settled by position.
+    pub(super) fn ctor_over_types(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
+        // On the miss path of every global name: one table probe first.
+        if name.contains("::") || !self.names.declares_any_as(name, &[NameKind::Ctor]) {
+            return None;
+        }
+        let only_ctors_and_types = {
+            let scopes = self.scope.resolution_scopes.borrow();
+            self.names.visible_entries_are(
+                scopes.last().map(Rc::as_ref),
+                name,
+                &[NameKind::Ctor, NameKind::Inductive],
+            )
+        };
+        if !only_ctors_and_types || !matches!(self.resolve_name(name), crate::names::NameRes::Ambiguous(_)) {
+            return None;
+        }
+        let key = self.key_of_kinds(name, &[NameKind::Ctor])?;
+        self.types.constructor(&key).map(|(i, k)| (Rc::clone(i), *k))
+    }
+
     /// The declaration an expected type names, for the checking-position
     /// constructor route. A `Π` is peeled first: an **unsaturated**
     /// constructor is checked against the function type it η-expands into
