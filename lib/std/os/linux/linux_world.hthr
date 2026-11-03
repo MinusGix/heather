@@ -173,7 +173,6 @@ theorem Io::against_bind<A, B>(t: ITree<A>(Events::linux()), h: A → ITree<B>(E
     }
 }
 
-
 // The coinductive reading, `Io::Reads` up to taus and the loop lemma are in
 // `linux_world_co` (docs/effects-capabilities-design.md §4), so the modules
 // that only run programs against a world do not load the coinductive
