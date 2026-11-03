@@ -39,3 +39,13 @@ theorem comm_qualified(a, b: Nat): nat::Nat::add(a, b) = nat::Nat::add(b, a) { n
 // classes, not the core's theorems.
 // expect-error: unbound name
 theorem dni_bare(p: Bool): Not(Not(Bool)) { not_not_intro(Bool, p) }
+
+// A record family's index partially applied (`G(0)`) is first tried as the
+// record's constructor, whose field is no numeral's carrier. `Numeral` named
+// only by the prelude keeps the old fallback there, so the family reading
+// still wins (issues/showcase-calc-parser-refused-since-prelude.md).
+inductive Shape { Leaf, Node(child: Shape) }
+record Tagged(level: Nat, x: Nat) { shape: Shape, same: level = level }
+fn arity<A>(P: A → Type, a: A) → Nat { 0 }
+fn tagged_family() → Nat { arity(Tagged(0), 5) }
+theorem tagged_family_zero(): tagged_family() = 0 { refl }
