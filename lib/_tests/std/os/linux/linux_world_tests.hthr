@@ -12,6 +12,10 @@ import option;
 import bool;
 import bitvec;
 import itree;
+import coitree;
+import coitree_eutt;
+import coitree_rec;
+import coitree_bridge;
 import linux_calls;
 import linux_trees;
 import linux_world;
@@ -123,6 +127,106 @@ theorem cat_agrees_piped():
     Io::against(cat(256).tree([], 4), piped()) = Some(Io::cat(piped(), 256, List::range(4))) { refl }
 theorem cat_agrees_failing():
     Io::against(cat(8).tree([], 3), Io::of(deaf())) = Some(Io::cat(Io::of(deaf()), 8, List::range(3))) { refl }
+
+// ---------------------------------------------------------------------------
+// A loop with no fuel, read up to taus (design §4)
+
+// One pass of cat as a tree: read a buffer; at the end of the input or a
+// failed call, stop with the status; otherwise write the chunk and go round.
+fn cat_pass(capacity: Nat, st: Nat) → CoTree<Step<Nat, BitVec(64)>>(Events::linux()) {
+    CVis(ReadCmd(Io::stdin(), capacity), λ (r: ReadResult) => match r {
+        ReadFailed(_) => CRet(Break(BitVec::ofNat(1))),
+        ReadBytes(bytes) => if bytes.len() = 0 { CRet(Break(BitVec::ofNat(0))) } else {
+            CVis(WriteCmd(Io::stdout(), bytes), λ (w: WriteResult) => match w {
+                Wrote(_) => CRet(Continue(st)),
+                WriteFailed(_) => CRet(Break(BitVec::ofNat(1))),
+            })
+        },
+    })
+}
+
+// cat with no fuel and no `passes`: it goes round for as long as the input
+// lasts.
+fn cat_co(capacity: Nat) → CoTree<BitVec(64)>(Events::linux()) {
+    CoTree::iter(Events::linux(), λ st => cat_pass(capacity, st), 0)
+}
+
+// Read against the piped world it returns, after one silent step per call
+// (three reads, two writes) and one per pass that goes round (two): the
+// count is the only number in sight, and it is the reading's, not a fuel
+// the program was given.
+theorem cat_co_status():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.value), BitVec::ofNat(0))
+{
+    Returns(7, refl)
+}
+theorem cat_co_copies():
+    Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.after.sent(Io::stdout())),
+        [b(104), b(105), b(33)])
+{
+    Returns(7, refl)
+}
+// A count larger than needed is harmless.
+theorem cat_co_late():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.value), BitVec::ofNat(0))
+{
+    Returns(30, refl)
+}
+// The same calls with the same answers as the surface cat, history and all.
+theorem cat_co_agrees(): Returns(Events::none(), Io::against_co(cat_co(256), piped()), Io::cat(piped(), 256, List::range(4))) {
+    Returns(7, refl)
+}
+// A failing write stops it with status 1 after one read and one write.
+theorem cat_co_write_fails():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(8), Io::of(deaf())), λ m => m.value), BitVec::ofNat(1))
+{
+    Returns(2, refl)
+}
+
+// The negative controls: a count too small to reach the end, and a wrong
+// status.
+// expect-error(kernel): the kernel rejected `cat_co_short`: NotConvertible
+theorem cat_co_short():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.value), BitVec::ofNat(0))
+{
+    Returns(6, refl)
+}
+// expect-error(kernel): the kernel rejected `cat_co_wrong`: NotConvertible
+theorem cat_co_wrong():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.value), BitVec::ofNat(1))
+{
+    Returns(7, refl)
+}
+
+// A fuelled probe carries over: the source cat at fuel 4 reads to the
+// surface cat's result, so its embedding returns it.
+theorem cat_agrees_piped_co():
+    Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), cat(256).tree([], 4)), piped()),
+        Io::cat(piped(), 256, List::range(4)))
+{
+    Io::against_returns(cat(256).tree([], 4), piped(), Io::cat(piped(), 256, List::range(4)), cat_agrees_piped())
+}
+
+// The loop lemma at a neutral world, for a loop that never ends: `yes`
+// writes forever. Its pass reads as one capability write, so the loop reads
+// as that write iterated in `Partial`, at every world.
+fn yes_pass(st: Nat) → CoTree<Step<Nat, Nat>>(Events::linux()) {
+    CVis(WriteCmd(Io::stdout(), [b(121), b(10)]), λ (w: WriteResult) => CRet(Continue(st)))
+}
+fn yes_step(st: Nat, io: Io) → CoTree<Mutated<Io, Step<Nat, Nat>>>(Events::none()) {
+    CRet(Mutated(Io::write(io, Io::stdout(), [b(121), b(10)]).after, Continue(st)))
+}
+fn yes_pass_reads(st: Nat) → Io::Reads(yes_pass(st), λ io => yes_step(st, io)) {
+    λ io => ERet(1, 0, Mutated(Io::write(io, Io::stdout(), [b(121), b(10)]).after, Continue(st)), refl, refl)
+}
+fn yes_reads(st: Nat) → Io::Reads(CoTree::iter(Events::linux(), λ s => yes_pass(s), st), λ io => Io::iterate(λ s i => yes_step(s, i), st, io)) {
+    Io::reads_iter(λ s => yes_pass(s), λ s i => yes_step(s, i), λ s => yes_pass_reads(s), st)
+}
+// …and it never returns: at a literal world, no count reaches a result
+// within the depth probed.
+theorem yes_runs_on(): ¬Obs::Settled(Events::none(), CoTree::after(Events::none(), 40, Io::against_co(CoTree::iter(Events::linux(), λ s => yes_pass(s), 0), piped()))) {
+    λ s => s
+}
 
 // ---------------------------------------------------------------------------
 // Refusals

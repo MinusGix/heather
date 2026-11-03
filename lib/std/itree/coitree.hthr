@@ -130,6 +130,27 @@ fn CoTree::iter<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A) → Co
     CoTree::iter_obs(E, body, CoTree::obs(E, body(a)))
 }
 
+// The loop resumed in the middle of a pass, `t` being what is left of the
+// pass's tree: `iter(body, a)` is `iter_from(body, body(a))`.
+fn CoTree::iter_from<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), t: CoTree<Step<A, B>>(E)) → CoTree<B>(E) {
+    CoTree::iter_obs(E, body, CoTree::obs(E, t))
+}
+
+// One step of the loop, as an observation: `obs(iter_from(body, t))` is
+// `Obs::iter(body, obs(t))` by `δβ`.
+fn Obs::iter<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), o: Obs<Step<A, B>>(E)) → Obs<B>(E) {
+    CoTree::obs(E, CoTree::iter_obs(E, body, o))
+}
+
+// What the loop goes on with when a pass returns: one silent step, then the
+// next pass; or the result.
+fn CoTree::iter_next<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), x: Step<A, B>) → CoTree<B>(E) {
+    match x {
+        Continue(a) => CTau(CoTree::iter(E, body, a)),
+        Break(b) => CRet(b),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Unfolding laws: one observation of each combinator
 
@@ -169,6 +190,20 @@ theorem CoTree::iter_break<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a
     CoTree::obs(E, CoTree::iter(E, body, a)) = ORet(b)
 {
     j(sym(e), λ y q => CoTree::obs(E, CoTree::iter_obs(E, body, y)) = ORet(b), refl)
+}
+
+// …at a known observation of the pending pass.
+theorem CoTree::iter_at<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), t: CoTree<Step<A, B>>(E), o: Obs<Step<A, B>>(E),
+    e: CoTree::obs(E, t) = o): CoTree::obs(E, CoTree::iter_from(E, body, t)) = Obs::iter(E, body, o)
+{
+    j(e, λ y q => CoTree::obs(E, CoTree::iter_from(E, body, t)) = Obs::iter(E, body, y), refl)
+}
+
+// A pass that returns `x` goes on as `iter_next(x)`.
+theorem CoTree::iter_next_obs<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), x: Step<A, B>):
+    Obs::iter(E, body, ORet(x)) = CoTree::obs(E, CoTree::iter_next(E, body, x))
+{
+    match x { Continue(_) => refl, Break(_) => refl }
 }
 
 // ---------------------------------------------------------------------------
@@ -425,4 +460,33 @@ fn CoTree::bind_cong<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), h1: A �
             CoTree::obs_bind_at(E, t, h1, OVis(c, k1), ht), CoTree::obs_bind_at(E, u, h2, OVis(c, k2), hu),
             λ a => CoTree::bind_cong(E, k1(a), k2(a), h1, h2, n(a), hh)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The loop unfolds once
+
+// The loop is its pass followed by what comes after it: step for step, from
+// any point in a pass.
+fn CoTree::iter_from_unfold<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), t: CoTree<Step<A, B>>(E)) →
+    Bisim<B>(E, CoTree::iter_from(E, body, t), CoTree::bind(E, t, λ x => CoTree::iter_next(E, body, x)))
+{
+    match h: CoTree::obs(E, t) {
+        ORet(x) => Bisim::of_obs(E, CoTree::iter_from(E, body, t), CoTree::bind(E, t, λ x2 => CoTree::iter_next(E, body, x2)),
+            prelude::trans(CoTree::iter_at(E, body, t, ORet(x), h), prelude::trans(CoTree::iter_next_obs(E, body, x),
+                prelude::sym(CoTree::obs_bind_at(E, t, λ x2 => CoTree::iter_next(E, body, x2), ORet(x), h))))),
+        OTau(s) => BTau(CoTree::iter_from(E, body, s), CoTree::bind(E, s, λ x => CoTree::iter_next(E, body, x)),
+            CoTree::iter_at(E, body, t, OTau(s), h), CoTree::obs_bind_at(E, t, λ x => CoTree::iter_next(E, body, x), OTau(s), h),
+            CoTree::iter_from_unfold(E, body, s)),
+        OVis(c, k) => BVis(c, λ a => CoTree::iter_from(E, body, k(a)), λ a => CoTree::bind(E, k(a), λ x => CoTree::iter_next(E, body, x)),
+            CoTree::iter_at(E, body, t, OVis(c, k), h), CoTree::obs_bind_at(E, t, λ x => CoTree::iter_next(E, body, x), OVis(c, k), h),
+            λ a => CoTree::iter_from_unfold(E, body, k(a))),
+    }
+}
+
+// `iter(body, a)` is `body(a)`, then `CTau` and the next pass at a `Continue`
+// or the result at a `Break`.
+fn CoTree::iter_unfold<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A) →
+    Bisim<B>(E, CoTree::iter(E, body, a), CoTree::bind(E, body(a), λ x => CoTree::iter_next(E, body, x)))
+{
+    CoTree::iter_from_unfold(E, body, body(a))
 }

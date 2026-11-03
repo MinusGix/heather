@@ -1,6 +1,6 @@
 ---
 title: Loops up to taus, and the world reading as a coinductive Io::Reads
-status: open
+status: closed
 labels: [coinduction,itree,effects]
 area: interaction-trees
 milestone: [nh-effects]
@@ -48,3 +48,14 @@ The lemmas above are proved or stated and logged as waiting on up-to
 coinduction, `reads_iter` among the proved ones if direct corecursion
 suffices, and a probe reads a fuel-free loop tree at a scripted world to a
 `Returns` with a count by `refl`.
+
+## Log
+
+- 2026-11-03: 2026-11-03: DONE, every lemma proved by direct corecursion; nothing waits on [[codata-up-to-friends-round-2]]. `docs/coitree-design.md` §7.9 has the shape of each proof.
+  - `coitree.hthr`: `iter_from` (the loop resumed inside a pass), `Obs::iter`, `iter_next`, `iter_at`, and the unfolding `CoTree::iter_unfold` as a `Bisim` (`iter(body, a)` is `bind(body(a), Continue(a2) ↦ CTau(iter(a2)) | Break(b) ↦ CRet(b))` step for step).
+  - `coitree_eutt.hthr`: `AfterIs` and `CoTree::after_map` (any function of trees that is a function of observations and keeps silent steps follows the drops with an exact count; `iter_from`, `mrec`, `against_co` are instances by `refl`), `Eutt::iter_from_cong`/`iter_cong`, `Eutt::iter_unfold` (tau dropped, `iter_again`).
+  - `coitree_rec.hthr`: `Returns::eutt`, `Eutt::mrec_cong`/`rec_cong` (via the `MrecStep` classification of a command), `Eutt::mrec_call`, and `Eutt::mrec_bind` (running a bind is running its halves in sequence) generalised over `Bisim(p, bind(q, k))` so `bind_assoc` lands in the hypothesis.
+  - `linux_world.hthr`: `Io::against_co` (each `CVis` answered by the world as one `CTau`), `against_co_cong`, `against_co_bind` (a `Bisim`), `Io::Reads` restated as `Eutt` at every world (the finite `Reads`/`reads_*` removed; nothing else used them), `reads_ret`, `reads_trigger`, `reads_bind`, the loop lemma `Io::reads_iter` into `Io::iterate` (`CoTree::iter` in `Partial` over `Mutated<Io, A>`), and the bridge `Io::against_returns` (a fuelled `against(t, io) = Some(m)` gives `Returns(against_co(of_tree(t), io), m)`).
+  - The loop lemma's plain statement needs up to `trans`; `Io::reads_loop` generalises the hypothesis to "the pass's reading ≈ the iteration's pending pass" and traces the reading's taus and returns back to the pass (`pass_tau`, `pass_ret`, induction on the count). Written up as a rule in `docs/proof-patterns.md` §4.
+  - Probes: `linux_world_tests.hthr` reads a fuel-free `cat_co` at the piped world to `Returns` at count 7 by `refl` (status, bytes, and the whole `Mutated` against `Io::cat`), a failing write at count 2, too-short and wrong-value controls, a fuelled probe carried over by `against_returns`, and `yes` (never ends) through `reads_iter` at a neutral world; `coitree_eutt_tests`/`coitree_rec_tests` use `iter_cong`, both unfoldings, `rec_cong` with `Returns::eutt`, and `mrec_bind` at open arguments.
+  - Found on the way: `inj` through a corecursive function's observation is accepted by the elaborator and refused by the kernel (`NotInferable`): [[kernel-refuses-inj-through-corecursive-reduct]]; `Obs::ret_same` is the workaround used in `pass_ret`.

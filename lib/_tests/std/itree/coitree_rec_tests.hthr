@@ -106,3 +106,34 @@ fn sum_value(n: Nat) → Nat {
     CoTree::get(Events::none(), sum_to(n), Exists(sum_total(n).witness, sum_total(n).proof.left))
 }
 theorem sum_value_4(): sum_value(4) = 10 { refl }
+
+// ---------------------------------------------------------------------------
+// Up to taus
+
+// The search with one silent step in front of every body: the same function
+// up to taus (`rec_cong`), so it returns what the search returns, through
+// the equivalence alone (`Returns::eutt`), whatever its own count is.
+fn search_slow_body(n: Nat) → CoTree<Nat>(Events::sum(Events::calls(Nat, Nat), Events::none())) { CTau(search_body(n)) }
+fn search_slow(n: Nat) → CoTree<Nat>(Events::none()) {
+    CoTree::rec(Events::calls(Nat, Nat), Events::none(), search_slow_body, n)
+}
+fn search_slow_agrees(n: Nat) → Eutt<Nat>(Events::none(), search(n), search_slow(n)) {
+    Eutt::rec_cong(Events::calls(Nat, Nat), Events::none(), search_body, search_slow_body,
+        λ d => Eutt::tau_r(Events::sum(Events::calls(Nat, Nat), Events::none()), search_body(d)), n)
+}
+theorem search_slow_0_returns(): Returns(Events::none(), search_slow(0), 8) {
+    Returns::eutt(Events::none(), search(0), search_slow(0), 8, search_0_returns(), search_slow_agrees(0))
+}
+// The count it carries is the slow search's own.
+theorem search_slow_0(): CoTree::after(Events::none(), 60, search_slow(0)) = ORet(8) { refl }
+
+// Running a pending tree that calls the search and then adds one is the
+// search followed by adding one, up to taus, at a neutral argument.
+fn search_then(n: Nat) → Eutt<Nat>(Events::none(),
+    CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body,
+        CoTree::bind<Nat, Nat>(Events::sum(Events::calls(Nat, Nat), Events::none()), search_body(n), λ r => CRet(Succ(r)))),
+    CoTree::bind(Events::none(), CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n)),
+        λ x => CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, CRet(Succ(x)))))
+{
+    Eutt::mrec_bind<Nat, Nat>(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n), λ r => CRet(Succ(r)))
+}
