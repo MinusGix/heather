@@ -116,7 +116,7 @@ searches lost their p for real leaves. `intervals` reads real leaves at
   - The elaborator's unifier pairs rigid spines only when their heads agree.
   - So the tactic host's comparison with holes now retries over the committed
     side's δ/β reducts, one step at a time and at most 16
-    (`HOLE_UNFOLD_STEPS` in `crates/elab/src/host.rs`). It never takes the
+    (`Unfold::HoleComparison` in `crates/elab/src/oracle.rs`). It never takes the
     weak head normal form, which would unfold `ofRat` too.
   - This is a failure-path retry: a comparison that already succeeds is not
     affected.

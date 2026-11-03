@@ -29,6 +29,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
 use heather_syntax::{Expr, Item, OpFixity, Span, parse_file};
 
+use crate::oracle::Unfold;
 use crate::context::Alias;
 use crate::statements::LetValue;
 use crate::omega_cert::{integer_source, named_args};
@@ -272,9 +273,6 @@ struct LocalEdge {
     map: Rc<Term>,
 }
 
-/// How many δ-steps a definition is unfolded looking for the edge image it
-/// names ([`Reifier::wrapped_image`]).
-const WRAPPER_STEPS: u64 = 4;
 
 /// How many edges deep an image of an image is read.
 const EDGE_NESTING: u32 = 3;
@@ -949,7 +947,7 @@ impl Reifier<'_> {
         // δ-step's result carries the definition's own substitution.
         let oracle = self.elab.goal_oracle().bounded(NUMERAL_STEPS);
         let source = oracle
-            .term_reducts(&self.cx.gamma, tm, WRAPPER_STEPS)
+            .unfold(&self.cx.gamma, tm, Unfold::RingWrapper)
             .filter_map(|reduct| self.elab.spell_term_source(self.cx, &reduct))
             .find(|source| EDGES.iter().any(|edge| source.starts_with(&format!("{}(", edge.map))))?;
         let image = parse_expr(&source)

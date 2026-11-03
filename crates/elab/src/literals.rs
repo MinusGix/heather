@@ -21,6 +21,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{CtxBase, Term, Type};
 use heather_syntax::{Expr, ExprKind, ScaledLit, Span};
 
+use crate::oracle::Unfold;
 use crate::{application, Cx, ElabError, Elaborator, R};
 
 /// The surface name of the `Char` record, its introduction form, and the
@@ -275,7 +276,7 @@ impl Elaborator {
     pub(crate) fn reduced_embedding(&self, cx: &Cx, out: Term) -> Term {
         let oracle = self.goal_oracle();
         let mut last = None;
-        for reduct in oracle.term_reducts(&cx.gamma, &out, 32) {
+        for reduct in oracle.unfold(&cx.gamma, &out, Unfold::LiteralEmbedding) {
             let (head, _) = crate::spelling::app_spine(&reduct);
             if matches!(head, Term::GlobalTm { .. }) {
                 return self.literal_arguments(cx, &reduct);

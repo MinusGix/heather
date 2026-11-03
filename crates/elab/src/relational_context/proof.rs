@@ -8,6 +8,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{parse_file, Expr, Item, Span};
 
+use crate::oracle::Unfold;
 use crate::{err, goals, Alias, Cx, ElabError, Elaborator, TyVar, R};
 
 fn expression(text: &str, span: Span) -> R<Expr> {
@@ -373,8 +374,8 @@ impl Builder<'_> {
         let oracle = self.e.semantic_oracle();
         let (l, r) = crate::stats::timed(crate::stats::Timer::ElabWhnf, || {
             (
-                oracle.term_reducts(&self.cx.gamma, left, 1).next(),
-                oracle.term_reducts(&self.cx.gamma, right, 1).next(),
+                oracle.unfold(&self.cx.gamma, left, Unfold::OneStep).next(),
+                oracle.unfold(&self.cx.gamma, right, Unfold::OneStep).next(),
             )
         });
         if l.is_none() && r.is_none() {

@@ -66,6 +66,7 @@ use heather_kernel::value::{Elim, Env, PiAnn, TmClo, TyClo, Val, ValueArena};
 use heather_kernel::value::program::ContextProgram;
 use heather_syntax::ast::{Expr, Span};
 
+use crate::oracle::Unfold;
 use crate::context::{Alias, Cx};
 use crate::unification::Sol;
 use crate::{err, Elaborator, R};
@@ -155,9 +156,6 @@ const READ_BUDGET: usize = 4096;
 /// Leading parameters `Match` will treat as unknowns before giving up.
 const MATCH_PARAMETERS: usize = 64;
 
-/// How many δ/β reducts of a committed term a comparison with holes tries
-/// before giving up ([`Elaborator::same_tm`]).
-const HOLE_UNFOLD_STEPS: u64 = 16;
 
 /// What one `Match` learns about class parameters, shared by its attempts at
 /// every parameter count: the goals the dictionaries in scope answer, per
@@ -1954,7 +1952,7 @@ impl Elaborator {
         let oracle = self.goal_oracle();
         // A reduct is a committed term; the holes are the world's first globals.
         let m = run.world() as u32;
-        for reduct in oracle.term_reducts(&cx.gamma, &committed, HOLE_UNFOLD_STEPS) {
+        for reduct in oracle.unfold(&cx.gamma, &committed, Unfold::HoleComparison) {
             let r = Reified { term: reduct.shift_global(m), ty: side.ty.clone(), level: side.level.clone() };
             if self.same_ty(run, at, &refl(&r), &refl(partial), &partial.level)? {
                 return Ok(true);

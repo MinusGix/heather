@@ -34,3 +34,24 @@ Out of scope: display budgets, `STUCK_SPELLING_STEPS`, kernel fuel.
 
 Step 1 lands with identical counters over the library; each site removed
 from the budget list in step 2 cites the probe that shows it unchanged.
+
+## Log
+
+- 2026-11-03: Step 1 built. `SemanticOracle::unfold(gamma, term, walk)`
+  is the one reduct walk, and `unfold_to(…, read)` is it read for the first
+  reduct `read` answers. `term_reducts` and the six per-file budget constants
+  (`PROPOSITION_UNFOLD_STEPS`, `UNFOLD_STEPS` ×2, `WRAPPER_STEPS`,
+  `HOLE_UNFOLD_STEPS`, `INDEX_UNFOLD_STEPS`) are gone. Every budget is a
+  variant of `oracle::Unfold`, named by what its walk looks for, with the
+  budget it had: `OneStep` 1, `RingWrapper` 4, `Comparison`/`IndexRead` 8,
+  `HoleComparison`/`MatchedArm`/`WordShape` 16,
+  `InstanceBit`/`LiteralEmbedding` 32, `Proposition`/`RuleGoal`/
+  `StuckScrutinee` 64, `FamilyEncoding` 1024. The 17 sites keep their
+  predicates where they were: most are loops whose body returns from the
+  enclosing function, and those stay loops over `unfold`. The four
+  find-the-first sites (`unfolded_proposition`, `bv_omega`'s word shape, the
+  two family encodings) use `unfold_to`. No transparency parameter yet: every
+  walk is transparent today, and an interface definition is withheld on the
+  kernel Ψ the walk reads, so the parameter waits for a walk that needs
+  another setting. Step 2 retires the variants one at a time.
+

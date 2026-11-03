@@ -41,6 +41,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type, nth};
 use heather_syntax::ast::{Arm, Expr, ExprKind, MatchForm, Span};
 
+use crate::oracle::Unfold;
 use crate::gendefs::GenDef;
 use crate::inductive::{FieldKind, IdxTy, Inductive, Spine, inject, nat_lit};
 use crate::sum_layout::Child;
@@ -443,17 +444,9 @@ impl Elaborator {
             return None;
         };
         let oracle = self.semantic_oracle();
-        for tm in oracle.term_reducts(&cx.gamma, tm, 1024) {
-            let tm = Rc::new(tm);
-            let cand = Type::El {
-                level: level.clone(),
-                tm: Rc::clone(&tm),
-            };
-            if let Some(r) = self.indexed_of(&cand) {
-                return Some(r);
-            }
-        }
-        None
+        oracle.unfold_to(&cx.gamma, tm, Unfold::FamilyEncoding, |tm| {
+            self.indexed_of(&Type::El { level: level.clone(), tm: Rc::new(tm) })
+        })
     }
 
     /// `⟦I⟧` for a declaration's index type (§2, §8.2), scoped in `cx`.

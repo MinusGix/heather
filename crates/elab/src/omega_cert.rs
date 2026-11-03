@@ -13,6 +13,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalSubst, Term, Type};
 use heather_syntax::{Expr, Item, parse_file};
 
+use crate::oracle::Unfold;
 use crate::arithmetic::{
     Affine, AtomId, AtomTable, Coeffs as AffineCoeffs, Domain, ReflectedConstraint, Relation,
 };
@@ -665,9 +666,6 @@ pub(crate) fn integral_sides(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(b
     relation(ty).or_else(|| relation(&negated_domain(elab, cx, ty)?))
 }
 
-/// Reducts a defined proposition may take to reach a relation: the same
-/// bound the goal side unfolds under.
-const PROPOSITION_UNFOLD_STEPS: u64 = 64;
 
 /// The relation a defined proposition unfolds to
 /// (issues/omega-unfolds-defined-propositions.md): `Rat::Le(x, y)` is
@@ -691,14 +689,12 @@ fn unfolded_proposition(
         return None;
     }
     let oracle = elab.goal_oracle();
-    for reduct in oracle.term_reducts(&cx.gamma, tm, PROPOSITION_UNFOLD_STEPS) {
+    let unfolded = oracle.unfold_to(&cx.gamma, tm, Unfold::Proposition, |reduct| {
         let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
-        if reads(&unfolded) {
-            let decoded = crate::inductive::decoded(&unfolded);
-            return Some(crate::goal_combinators::simplify_goal(elab, cx, &decoded));
-        }
-    }
-    None
+        reads(&unfolded).then_some(unfolded)
+    })?;
+    let decoded = crate::inductive::decoded(&unfolded);
+    Some(crate::goal_combinators::simplify_goal(elab, cx, &decoded))
 }
 
 fn dot_args<'a>(elab: &Elaborator, tm: &'a Term) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
@@ -3407,7 +3403,7 @@ fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
         GuardShape::Not(x) => Some(with_arg_at(b, 0, &unfold_guard(elab, cx, x)?)),
         GuardShape::Atom if head_is_global(b) && !is_ctor_value(b) => {
             let oracle = elab.goal_oracle();
-            oracle.term_reducts(&cx.gamma, b, PROPOSITION_UNFOLD_STEPS).map(Rc::new).find(|reduct| {
+            oracle.unfold(&cx.gamma, b, Unfold::Proposition).map(Rc::new).find(|reduct| {
                 matches!(
                     guard_shape(elab, reduct),
                     GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb
@@ -3884,7 +3880,7 @@ pub(crate) fn reconstruct(
         // would unfold `Le` itself into its recursor. `True` closes outright.
         if let Type::El { level, tm } = expected {
             let oracle = elab.goal_oracle();
-            for reduct in oracle.term_reducts(&cx.gamma, tm, 64) {
+            for reduct in oracle.unfold(&cx.gamma, tm, Unfold::Proposition) {
                 if matches!(&reduct, Term::TmUnit { .. }) {
                     let source = "trivial".to_string();
                     return Ok(Certificate {

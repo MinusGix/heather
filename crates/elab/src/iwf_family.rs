@@ -37,6 +37,7 @@ use heather_kernel::term::{
 };
 use heather_syntax::ast::{Arm, Expr, MatchForm, Span};
 
+use crate::oracle::Unfold;
 use crate::gendefs::GenDef;
 use crate::inductive::{Ctor, FieldKind, Inductive, Spine, inject, nat_lit, tag_value};
 use crate::recursion::{Guard, GuardKind};
@@ -175,16 +176,9 @@ impl Elaborator {
             return None;
         };
         let oracle = self.semantic_oracle();
-        for tm in oracle.term_reducts(&cx.gamma, tm, 1024) {
-            let cand = Type::El {
-                level: level.clone(),
-                tm: Rc::new(tm),
-            };
-            if let Some(r) = self.iwf_of(&cand) {
-                return Some(r);
-            }
-        }
-        None
+        oracle.unfold_to(&cx.gamma, tm, Unfold::FamilyEncoding, |tm| {
+            self.iwf_of(&Type::El { level: level.clone(), tm: Rc::new(tm) })
+        })
     }
 
     // -- the type -------------------------------------------------------------
