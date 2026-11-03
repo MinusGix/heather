@@ -374,6 +374,13 @@ pub(crate) struct DynamicScope {
     /// How many `ring` certificates are being checked above this point
     /// (`ring.rs`): their library names resolve as `omega`'s do.
     pub(crate) ring_depth: Cell<usize>,
+    /// The span of the method call `\0mutated(x.m(a))` or `\0mutcall(…)`
+    /// that `statements::elaborate_mut_call` is inferring: there a dot call
+    /// may resolve to a `mut self` method, since the statement threads its
+    /// receiver. A dot call of one anywhere else is refused
+    /// ([`Elaborator::refuse_unthreaded_mut_call`],
+    /// docs/effects-capabilities-design.md §2.2). `None` everywhere else.
+    pub(crate) mut_call_site: Cell<Option<Span>>,
 }
 
 /// The values of [`DynamicScope`]'s cells, for a probe to put back
@@ -394,6 +401,7 @@ pub(crate) struct ScopeCells {
     omega_depth: usize,
     omega_settled_guards: Vec<Vec<String>>,
     ring_depth: usize,
+    mut_call_site: Option<Span>,
 }
 
 impl DynamicScope {
@@ -422,6 +430,7 @@ impl DynamicScope {
             omega_depth,
             omega_settled_guards,
             ring_depth,
+            mut_call_site,
         } = self;
         ScopeCells {
             misplaced_recursion: misplaced_recursion.borrow().clone(),
@@ -438,6 +447,7 @@ impl DynamicScope {
             omega_depth: omega_depth.get(),
             omega_settled_guards: omega_settled_guards.borrow().clone(),
             ring_depth: ring_depth.get(),
+            mut_call_site: mut_call_site.get(),
         }
     }
 
@@ -456,6 +466,7 @@ impl DynamicScope {
         self.omega_depth.set(cells.omega_depth);
         *self.omega_settled_guards.borrow_mut() = cells.omega_settled_guards;
         self.ring_depth.set(cells.ring_depth);
+        self.mut_call_site.set(cells.mut_call_site);
     }
 }
 

@@ -45,6 +45,13 @@ pub(crate) trait StatementElab {
 
     fn infer_statement_expression(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)>;
 
+    /// A marked method call `x.m(a)` ([`heather_syntax::MUTCALL`]), inferred
+    /// where its dot call may resolve to a `mut self` method: everywhere
+    /// else the elaborator refuses one, since nothing threads its receiver.
+    fn infer_mut_call(&self, cx: &Cx, call: &Expr) -> R<(Term, Type, Level)> {
+        self.infer_statement_expression(cx, call)
+    }
+
     /// A local or alias in scope, by name, read without recording a splice
     /// (`Elaborator::resolve_reading`): the right side of a renaming `let`.
     fn read_local(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)>;
@@ -116,6 +123,12 @@ pub(crate) fn elaborate<'s>(
             Stmt::Let { name, ty: None, expr, span, .. } if let Some((call, claimed)) = method_on_mutable(expr) => {
                 values.extend(elaborate_mut_call(elab, &mut cx, name, call, claimed, *span)?);
             }
+            // An annotated candidate the declaring block did not claim (it
+            // splits a claimed one through a private name): an ordinary
+            // `let`, where a `mut self` call is refused at the dot call.
+            Stmt::Let { name, ty: Some(ty), expr, .. } if let Some((call, _)) = method_on_mutable(expr) => {
+                values.extend(elaborate_let(elab, &mut cx, name, Some(ty), call)?);
+            }
             Stmt::Let { name, ty, expr, .. } => {
                 values.extend(elaborate_let(elab, &mut cx, name, ty.as_ref(), expr)?);
             }
@@ -165,7 +178,7 @@ fn elaborate_mut_call(
     };
     let ExprKind::Var(receiver) = &recv.kind else { unreachable!("the parser marks calls on a local only") };
     let statement = name.starts_with("#seq");
-    let (term, ty, level) = elab.infer_statement_expression(cx, call)?;
+    let (term, ty, level) = elab.infer_mut_call(cx, call)?;
     let record = elab
         .record_for_destructuring(cx, &ty, span)
         .filter(|r| r.name == heather_syntax::MUTATED_RECORD);

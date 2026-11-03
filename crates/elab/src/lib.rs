@@ -945,6 +945,10 @@ impl statements::StatementElab for Elaborator {
         self.elab_infer(cx, expression)
     }
 
+    fn infer_mut_call(&self, cx: &Cx, call: &Expr) -> R<(Term, Type, Level)> {
+        self.scoped_cell(|s| &s.mut_call_site, Some(call.span), || self.elab_infer(cx, call))
+    }
+
     fn read_local(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
         self.resolve_reading(cx, name, span)
     }
