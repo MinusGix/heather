@@ -203,6 +203,116 @@ pub(super) struct U<'a> {
     pub(super) next_head: &'a dyn Fn(&Term) -> Option<Term>,
     /// Whether the approximate rules may write now ([`Guesses`]).
     pub(super) guesses: Guesses<'a>,
+    /// Told when the two sides are **decidedly different** ([`Clash`]).
+    /// `None` keeps the unifier silent about it, as every learning caller
+    /// does.
+    pub(super) clash: Option<&'a Clash>,
+}
+
+/// The unifier's one negative answer: the pattern and the subject meet,
+/// along a path of **injective** formers from the root, at two canonical
+/// forms that differ — two type formers (`Σ` against `Id`), two code formers,
+/// two numerals, `Zero` against `Succ`, `inl` against `inr`. No solution of
+/// the pattern's slots makes those equal, so no solution makes the roots
+/// equal: instance search drops a candidate whose conclusion clashes with
+/// the goal before building it (issues/instance-conclusion-matched-first.md).
+///
+/// Below an application's arguments, a projection's receiver or an
+/// eliminator, a difference decides nothing — `f(0)` and `f(1)` may well be
+/// equal — so a descent through one of those is counted in `opaque`, and a
+/// clash is recorded only at depth zero. A subject's reduct (the δ-lazy step,
+/// a canonical head) stands for the subject itself, so those steps are not
+/// opaque. A distinct-heads mismatch that does not unfold is not a clash
+/// either: the pattern's own head may unfold, and only the subject is ever
+/// unfolded here.
+#[derive(Default)]
+pub(crate) struct Clash {
+    seen: Cell<bool>,
+    opaque: Cell<u32>,
+}
+
+impl Clash {
+    /// Did the two sides clash?
+    pub(crate) fn seen(&self) -> bool {
+        self.seen.get()
+    }
+}
+
+/// Note a clash at the current position, if the path to it is injective.
+fn clash(u: &U<'_>) {
+    if let Some(c) = u.clash
+        && c.opaque.get() == 0
+    {
+        c.seen.set(true);
+    }
+}
+
+/// Run `f` below a non-injective position ([`Clash`]).
+fn opaquely<R>(u: &U<'_>, f: impl FnOnce() -> R) -> R {
+    if let Some(c) = u.clash {
+        c.opaque.set(c.opaque.get() + 1);
+        let r = f();
+        c.opaque.set(c.opaque.get() - 1);
+        r
+    } else {
+        f()
+    }
+}
+
+/// A type former that is its own normal form, by kind: two of different
+/// kinds are different types whatever their components. `El` (it decodes a
+/// code that may compute) and the global and modal formers are not.
+fn former_kind(t: &Type) -> Option<u8> {
+    Some(match t {
+        Type::Nat => 0,
+        Type::Pi { .. } => 1,
+        Type::Ty(_) => 2,
+        Type::Id { .. } => 3,
+        Type::SEq { .. } => 4,
+        Type::SEmpty { .. } => 5,
+        Type::Squash { .. } => 6,
+        Type::Sigma { .. } => 7,
+        Type::Unit { .. } => 8,
+        Type::Empty { .. } => 9,
+        Type::Sum { .. } => 10,
+        Type::Vec { .. } => 11,
+        Type::Fin { .. } => 12,
+        Type::Wf { .. } => 13,
+        Type::DVec { .. } => 14,
+        Type::IWf { .. } => 15,
+        Type::W { .. } => 16,
+        _ => return None,
+    })
+}
+
+/// A canonical term's constructor, by kind: a code former, or a natural
+/// number's `Zero`/`Succ` (a numeral is either, by its value). Two different
+/// kinds never convert.
+fn canonical_kind(t: &Term) -> Option<u8> {
+    Some(match t {
+        Term::Zero => 0,
+        Term::NatLit(k) if k.is_zero() => 0,
+        Term::Succ(_) | Term::NatLit(_) => 1,
+        Term::TmNat => 2,
+        Term::TmPi { .. } => 3,
+        Term::TmTy { .. } => 4,
+        Term::TmId { .. } => 5,
+        Term::TmSEq { .. } => 6,
+        Term::TmSEmpty { .. } => 7,
+        Term::TmSquash { .. } => 8,
+        Term::TmSigma { .. } => 9,
+        Term::TmUnit { .. } => 10,
+        Term::TmEmpty { .. } => 11,
+        Term::TmSum { .. } => 12,
+        Term::TmW { .. } => 13,
+        Term::TmVec { .. } => 14,
+        Term::TmFin { .. } => 15,
+        Term::TmWf { .. } => 16,
+        Term::TmDVec { .. } => 17,
+        Term::TmIWf { .. } => 18,
+        Term::TmM { .. } => 19,
+        _ => return None,
+    })
 }
 
 /// What the unifier does at one of its **guesses**: a rule that picks one
@@ -361,6 +471,7 @@ impl<'a> U<'a> {
             disagree: None,
             next_head: &|_| None,
             guesses: Guesses::Take,
+            clash: None,
         }
     }
 }
@@ -589,7 +700,7 @@ pub(super) fn unify_ty(
                     Some((m, _)) => c.shift_global(m),
                     None => (*c).clone(),
                 };
-                flex_spine(u, tm, &c.apply_local(&embed(u.gamma, d)), n, d, sols);
+                opaquely(u, || flex_spine(u, tm, &c.apply_local(&embed(u.gamma, d)), n, d, sols));
                 return;
             }
             // `?M(p)` against a declaration with a declared slot: `?M` is the
@@ -597,7 +708,7 @@ pub(super) fn unify_ty(
             // the head with the leading arguments.
             if flex
                 && let Some(Type::El { tm: r, .. }) = &respelled
-                && slot_pair(u, tm, r, n, d, sols)
+                && opaquely(u, || slot_pair(u, tm, r, n, d, sols))
             {
                 return;
             }
@@ -625,7 +736,14 @@ pub(super) fn unify_ty(
         // `Nat`/`Unit`/`Empty`/`Ty` and every mismatched pairing: nothing to
         // learn. A mismatch is not an error here — this function only ever
         // learns, and the kernel is what decides whether the call typechecks.
-        _ => {}
+        // Two formers of different kinds are told, though ([`Clash`]).
+        (p, s) => {
+            if let (Some(a), Some(b)) = (former_kind(p), former_kind(s))
+                && a != b
+            {
+                clash(u);
+            }
+        }
     }
 }
 
@@ -802,7 +920,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
                 && spine_len(pat) == 1
                 && matches!(spine_head(s), Term::GlobalTm { .. })
                 && let Some(s0) = u.subject_tm(s, d)
-                && slot_pair(u, pat, &s0, n, d, sols)
+                && opaquely(u, || slot_pair(u, pat, &s0, n, d, sols))
             {
                 return;
             }
@@ -855,8 +973,10 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
                 unify_unfolded(u, pat, s, n, d, sols);
                 return;
             }
-            unify_tm(u, f1, f2, n, d, sols);
-            unify_tm(u, a1, a2, n, d, sols);
+            opaquely(u, || {
+                unify_tm(u, f1, f2, n, d, sols);
+                unify_tm(u, a1, a2, n, d, sols);
+            });
         }
         // Constructor values (issues/unify-through-constructor-values.md). An
         // inductive's constructor is a `supf`/`sup` node whose label is an
@@ -889,6 +1009,8 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             let (left2, v2) = injection_of(s).expect("an injection");
             if left1 == left2 {
                 unify_tm(u, v1, v2, n, d, sols);
+            } else {
+                clash(u);
             }
         }
         // Projections, in either spelling on either side. A record type
@@ -903,7 +1025,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             let (first1, r1) = projection_of(p).expect("a projection");
             let (first2, r2) = projection_of(s).expect("a projection");
             if first1 == first2 {
-                unify_tm(u, r1, r2, n, d, sols);
+                opaquely(u, || unify_tm(u, r1, r2, n, d, sols));
             }
         }
         (Term::Lam { body: b1, .. }, Term::Lam { body: b2, .. }) => {
@@ -954,12 +1076,12 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
                 scrut: t2,
                 ..
             },
-        ) => {
+        ) => opaquely(u, || {
             unify_ty(u, m1, m2, n, d + 1, sols);
             unify_tm(u, b1, b2, n, d, sols);
             unify_tm(u, s1, s2, n, d + 2, sols);
             unify_tm(u, t1, t2, n, d, sols);
-        }
+        }),
         (
             Term::TmPi {
                 dom: a1, cod: b1, ..
@@ -1098,6 +1220,14 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
 /// step: one headed by a global, a β-redex or an eliminator. Each hop is a
 /// strict reduct, so the chain ends where the subject stops reducing.
 fn unify_unfolded(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
+    // Two canonical forms of different kinds: neither steps, so they are
+    // different values ([`Clash`]).
+    if let (Some(a), Some(b)) = (canonical_kind(pat), canonical_kind(subj))
+        && (a != b || matches!((pat, subj), (Term::NatLit(x), Term::NatLit(y)) if x != y))
+    {
+        clash(u);
+        return;
+    }
     if !reducible(subj) || zonked_tm(pat, n, sols).is_some() {
         return;
     }
@@ -1563,6 +1693,36 @@ mod tests {
         unify_tm(&u, &pat, &subject, 1, 0, &mut solutions);
         assert!(matches!(&solutions[0], Sol::Solved(t) if **t == global));
         assert!(!postponed.get());
+    }
+
+    #[test]
+    fn a_clash_is_two_canonical_forms_on_an_injective_path() {
+        let gamma = LocalCtx::nil();
+        let clashes = |pat: &Term, subj: &Term| {
+            let c = Clash::default();
+            let u = U { clash: Some(&c), ..U::syntactic(&gamma) };
+            unify_tm(&u, pat, subj, 1, 0, &mut [Sol::Unsolved]);
+            c.seen()
+        };
+        let Type::El { tm: hole, .. } = meta(&gamma) else {
+            unreachable!()
+        };
+        let one = Term::Succ(Rc::new(Term::Zero));
+        // `Succ(?0)` against `0`, and two numerals: no solution meets them.
+        assert!(clashes(&Term::Succ(Rc::clone(&hole)), &Term::Zero));
+        assert!(clashes(&Term::NatLit(2u64.into()), &Term::NatLit(3u64.into())));
+        // `Succ(?0)` against `1` meets at `?0 := 0`.
+        assert!(!clashes(&Term::Succ(Rc::clone(&hole)), &one));
+        // Below an application's arguments a difference decides nothing:
+        // `g(0)` and `g(1)` may be equal.
+        let g = Term::GlobalTm { var: GlobalVar(1), subst: embed(&gamma, 0) };
+        let g_at = |a: Term| app(g.clone(), Type::Nat, a);
+        assert!(!clashes(&g_at(Term::Zero), &g_at(one.clone())));
+        // Two type formers of different kinds.
+        let c = Clash::default();
+        let u = U { clash: Some(&c), ..U::syntactic(&gamma) };
+        unify_ty(&u, &Type::Nat, &Type::Ty(Level::Zero), 0, 0, &mut []);
+        assert!(c.seen());
     }
 
     #[test]

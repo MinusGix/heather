@@ -1,10 +1,10 @@
 ---
 title: Instance search does not unfold a defined proposition to its connective
-status: open
+status: closed
 labels: [traits,decidability,elaboration,ergonomics]
 area: tactics
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-11-03
 ---
 
 `decide_bit<F.Canonical(mag, bexp)>()`, with
@@ -28,3 +28,7 @@ instance at the definition (`derive Decide` on a proposition,
 (`Canonical`, `Spec`s) decidable without a declaration each.
 
 Related: [[decide-bit-is-the-comparison]], [[omega-unfolds-defined-propositions]].
+
+## Log
+
+- 2026-11-03: Resolved by [[unifier-lazy-delta]]: the unifier unfolds the goal's carrier (`Canon(a, b)`) to its next head where the instance head `?P ∧ ?Q` does not meet it, so `And::Decide` is found with no retry. Probes `spread_bit`, `spread_literal`, `spread_intro` in `lib/_tests/std/core/bool_tests.hthr` ([[instance-conclusion-matched-first]]).
