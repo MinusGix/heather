@@ -4,7 +4,7 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::Term;
-use heather_syntax::{Decl, Expr, ExprKind, LamBinder, OnTarget, Span, Stmt, Ty, TyKind};
+use heather_syntax::{Decl, Expr, ExprKind, LamBinder, OnTarget, OpFixity, Span, Stmt, Ty, TyKind};
 
 use crate::{ElabError, R, err};
 
@@ -133,15 +133,22 @@ pub(crate) fn expression_as_type(e: &Expr) -> Option<Ty> {
 }
 
 /// The condition of an `if` or `while` the parser lowered to
-/// `decide_bit<c>()` (`decide<c>()` with an evidence binder), read back as
-/// the expression `c` was written as; the flag is the evidence form. The
-/// parser gives the call's head the condition's own span, which a written
-/// `decide_bit<P>()` (head spanning the name alone) never has, so only the
-/// lowered form takes the `Bool` reading
-/// (issues/bool-conditions-and-literals.md). A condition that is type syntax
-/// with no expression reading (`Fin(n)`, `T<A>`, `x = y`) is not offered:
-/// it can only be a proposition.
-pub(crate) fn bool_condition(e: &Expr) -> Option<(Expr, bool)> {
+/// `decide_bit<c>()` (`decide<c>()` with an evidence binder): the condition
+/// as written in type position, the expression it was written as when it has
+/// one, and whether it is the evidence form. The parser gives the call's head
+/// the condition's own span, which a written `decide_bit<P>()` (head spanning
+/// the name alone) never has, so only the lowered form takes the `Bool` and
+/// mixed readings (issues/bool-conditions-and-literals.md,
+/// issues/mixed-bool-prop-condition.md). A condition that is type syntax
+/// with no expression reading (`Fin(n)`, `T<A>`, `x = y`, `P ∧ Q`) has no
+/// `expr`: it is not a `Bool`, though a connective's operands may be.
+pub(crate) struct Condition {
+    pub(crate) ty: Ty,
+    pub(crate) expr: Option<Expr>,
+    pub(crate) evidence: bool,
+}
+
+pub(crate) fn lowered_condition(e: &Expr) -> Option<Condition> {
     let ExprKind::App { head, args, named, explicit: false, .. } = &e.kind else { return None };
     if !args.is_empty() || !named.is_empty() {
         return None;
@@ -157,12 +164,112 @@ pub(crate) fn bool_condition(e: &Expr) -> Option<(Expr, bool)> {
     if callee.span != condition.span {
         return None;
     }
-    let condition = match &condition.kind {
-        TyKind::Named { name, args } if args.is_empty() => Expr { kind: ExprKind::Var(name.clone()), span: condition.span },
-        TyKind::OfExpr(c) => (**c).clone(),
-        _ => return None,
+    Some(Condition { ty: condition.clone(), expr: condition_expression(condition), evidence })
+}
+
+/// The expression a condition's type syntax was written as, when it is one
+/// the `Bool` reading can elaborate: a bare name, or a decoded expression.
+pub(crate) fn condition_expression(ty: &Ty) -> Option<Expr> {
+    match &ty.kind {
+        TyKind::Named { name, args } if args.is_empty() => Some(Expr { kind: ExprKind::Var(name.clone()), span: ty.span }),
+        TyKind::OfExpr(c) => Some((**c).clone()),
+        _ => None,
+    }
+}
+
+/// A condition's connective, read on the proposition side, with its
+/// operands: `∧`, `∨`, `↔`, a non-dependent `→` and `¬` as written, and the
+/// Boolean `&&`, `||` and `!` as the connective each decides
+/// (issues/mixed-bool-prop-condition.md). `None` for a leaf.
+pub(crate) fn condition_connective(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
+    fn operand(e: &Expr) -> Ty {
+        expression_as_type(e).unwrap_or_else(|| Ty { kind: TyKind::OfExpr(Box::new(e.clone())), span: e.span })
+    }
+    match &ty.kind {
+        TyKind::Named { name, args } if args.len() == 2 => {
+            let name = match name.as_str() {
+                "And" => "And",
+                "Or" => "Or",
+                "Iff" => "Iff",
+                _ => return None,
+            };
+            Some((name, args.clone()))
+        }
+        TyKind::Fn { binder: None, implicit: false, dom, cod } => Some(("->", vec![(**dom).clone(), (**cod).clone()])),
+        TyKind::OfExpr(e) => {
+            let ExprKind::App { head, args, named, explicit: false, .. } = &e.kind else { return None };
+            if !named.is_empty() {
+                return None;
+            }
+            let name = match (&head.kind, args.len()) {
+                (ExprKind::Var(name), 1) if name == "Not" => "Not",
+                (ExprKind::OpSymbol { symbol, fixity: OpFixity::Prefix }, 1) if symbol == "!" => "Not",
+                (ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix }, 2) if symbol == "&&" => "And",
+                (ExprKind::OpSymbol { symbol, fixity: OpFixity::Infix }, 2) if symbol == "||" => "Or",
+                _ => return None,
+            };
+            Some((name, args.iter().map(operand).collect()))
+        }
+        _ => None,
+    }
+}
+
+/// The connective [`condition_connective`] named, rebuilt over new operands
+/// as the parser builds it.
+pub(crate) fn rebuild_connective(name: &str, mut operands: Vec<Ty>, span: Span) -> Ty {
+    let kind = match name {
+        "->" => {
+            let cod = operands.pop().expect("an arrow has two operands");
+            let dom = operands.pop().expect("an arrow has two operands");
+            TyKind::Fn { binder: None, implicit: false, dom: Box::new(dom), cod: Box::new(cod) }
+        }
+        "Not" => {
+            let inner = operands.pop().expect("a negation has one operand");
+            let arg = Expr { span: inner.span, kind: ExprKind::TyLit(Box::new(inner)) };
+            TyKind::OfExpr(Box::new(Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr { kind: ExprKind::Var("Not".into()), span }),
+                    args: vec![arg],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            }))
+        }
+        _ => TyKind::Named { name: name.to_string(), args: operands },
     };
-    Some((condition, evidence))
+    Ty { kind, span }
+}
+
+/// `b.IsTrue()`: a `Bool` read as the proposition its `IsTrue` instance
+/// decides.
+pub(crate) fn is_true_of(b: &Expr) -> Expr {
+    Expr {
+        kind: ExprKind::Dot { recv: Box::new(b.clone()), name: "IsTrue".into(), tyargs: Vec::new(), args: Some(Vec::new()), named: Vec::new() },
+        span: b.span,
+    }
+}
+
+/// `decide_bit<P>()` (`decide<P>()` with `evidence`), spanned as the parser
+/// spans its lowered condition.
+pub(crate) fn decide_call(proposition: Ty, evidence: bool, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::App {
+            head: Box::new(Expr {
+                kind: ExprKind::TyApp {
+                    head: Box::new(Expr { kind: ExprKind::Var(if evidence { "decide" } else { "decide_bit" }.into()), span }),
+                    args: vec![proposition],
+                },
+                span,
+            }),
+            args: Vec::new(),
+            named: Vec::new(),
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    }
 }
 
 // -- anonymous argument-slot sections --------------------------------------

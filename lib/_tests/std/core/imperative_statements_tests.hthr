@@ -530,3 +530,48 @@ theorem empty_type_is_false(): empty_type() = False { refl }
 // A condition that is neither a proposition nor a `Bool`.
 // expect-error: a condition is a proposition, decided by its `Decide` instance, or a `Bool`; this is a value of `Nat`
 fn nat_condition(n: Nat) → Nat { if n { 1 } else { 2 } }
+
+// A connective mixing a `Bool` with a proposition
+// (issues/mixed-bool-prop-condition.md): the condition is the proposition
+// with each `Bool` operand read as its `IsTrue`, so `b ∧ n = 0` decides
+// `b.IsTrue() ∧ n = 0`, whose bit is `b && n.same(0)`. `&&`, `||` and `!`
+// between a proposition and a `Bool` are `∧`, `∨` and `¬`.
+fn mixed_and<A>(b: Bool, n: Nat, x, y: A) → A { if b ∧ n = 0 { x } else { y } }
+fn mixed_or<A>(b: Bool, n: Nat, x, y: A) → A { if n = 0 ∨ !b { x } else { y } }
+fn mixed_amp<A>(b: Bool, n: Nat, x, y: A) → A { if (n = 0) && b { x } else { y } }
+fn mixed_not<A>(b: Bool, n: Nat, x, y: A) → A { if ¬(b ∧ n = 0) { x } else { y } }
+fn mixed_imp<A>(b: Bool, n: Nat, x, y: A) → A { if b → n = 0 { x } else { y } }
+// A Bool subtree is one operand: `(a || b).IsTrue() ∧ n = 0`.
+fn mixed_nested<A>(a, b: Bool, n: Nat, x, y: A) → A { if (a || b) ∧ n = 0 { x } else { y } }
+theorem mixed_and_tt(): mixed_and(True, 0, 1, 2) = 1 { refl }
+theorem mixed_and_tf(): mixed_and(True, 3, 1, 2) = 2 { refl }
+theorem mixed_and_f<A>(n: Nat, x, y: A): mixed_and(False, n, x, y) = y { refl }
+theorem mixed_and_open<A>(b: Bool, n: Nat, x, y: A): mixed_and(b, n, x, y) = select(b && n.same(0), x, y) { refl }
+theorem mixed_or_z<A>(b: Bool, x, y: A): mixed_or(b, 0, x, y) = x { refl }
+theorem mixed_or_f(): mixed_or(False, 4, 1, 2) = 1 { refl }
+theorem mixed_or_t(): mixed_or(True, 4, 1, 2) = 2 { refl }
+theorem mixed_amp_t(): mixed_amp(True, 0, 1, 2) = 1 { refl }
+theorem mixed_amp_f<A>(x, y: A): mixed_amp(False, 0, x, y) = y { refl }
+theorem mixed_not_t(): mixed_not(True, 0, 1, 2) = 2 { refl }
+theorem mixed_not_f<A>(n: Nat, x, y: A): mixed_not(False, n, x, y) = x { refl }
+theorem mixed_imp_f<A>(n: Nat, x, y: A): mixed_imp(False, n, x, y) = x { refl }
+theorem mixed_imp_t(): mixed_imp(True, 5, 1, 2) = 2 { refl }
+theorem mixed_nested_t<A>(b: Bool, x, y: A): mixed_nested(True, b, 0, x, y) = x { refl }
+theorem mixed_nested_f(): mixed_nested(False, False, 0, 1, 2) = 2 { refl }
+
+// Checking position, and evidence: `h` proves both operands.
+fn mixed_checked(b: Bool, n: Nat) → Nat { let r: Nat = if b ∧ n = 0 { 1 } else { 2 }; r }
+theorem mixed_checked_t(): mixed_checked(True, 0) = 1 { refl }
+fn mixed_witness(b: Bool, n: Nat) → Nat {
+    if h: b ∧ n = 0 { let _w: b.IsTrue() = h.left; let _z: (n = 0) = h.right; 1 } else { 0 }
+}
+theorem mixed_witness_t(): mixed_witness(True, 0) = 1 { refl }
+theorem mixed_witness_f(): mixed_witness(True, 1) = 0 { refl }
+
+// `&&` binds tighter than `=`, so `b && n = 0` is `(b && n) = 0`, never the
+// mixed reading: write `b ∧ n = 0` or `b && (n = 0)`.
+// expect-error: no instance for `Decide<b && n = 0>`
+fn bool_and_eq(b: Bool, n: Nat) → Nat { if b && n = 0 { 1 } else { 2 } }
+// An operand that is neither: no reading.
+// expect-error: unknown type `m`
+fn neither_operand(m, n: Nat) → Nat { if m ∧ n = 0 { 1 } else { 2 } }
