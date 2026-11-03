@@ -1,6 +1,6 @@
 ---
 title: calc_parser showcase is refused from scratch since the common prelude (#406)
-status: open
+status: closed
 labels: [regression,elaboration,literals]
 area: language
 created: 2026-11-03
@@ -33,3 +33,7 @@ fails on both sides, which is how it was found.
 The showcase checks from scratch again, and something that re-elaborates
 the showcases (the nightly exact-image lane, or a fresh `--pr` run when
 `crates/elab` changes) would have caught it.
+
+## Log
+
+- 2026-11-03: Fixed: the numeral was read at the constructor because common's export of `Numeral` made every module name the class, so a failed `Numeral<Derivation>` search inside the speculative constructor reading of `Grammar(0)` was a hard Resolution error rather than the Nat fallback that lets the family reading win. A class named only through the common prelude (`Names::seen_only_through`) now keeps the fallback (`literal_class_record`, traits.rs); a module importing the class itself still gets the error. Probe: `tagged_family` in lib/_tests/std/core/common_tests.hthr (refused on master). Every in-process showcase row now also has a `cli_check_<name>` test in crates/cli/tests/showcase.rs, which runs through the loader and so sees the implicit prelude; `in_process_rows_each_have_a_cli_test` keeps that list equal to the manifest's in-process tiers.

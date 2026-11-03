@@ -348,6 +348,25 @@ impl Names {
             .flat_map(move |layer| layer.index.entries(name))
     }
 
+    /// Is `name` visible in `scope` only through the import of `via` (and not
+    /// declared by the module itself, nor reached by any other import)?
+    pub(crate) fn seen_only_through(&self, scope: Option<&Scope>, name: &str, via: &str) -> bool {
+        let scope = scope.unwrap_or(&self.scope);
+        let mut seen = false;
+        for e in self.entries(name) {
+            if e.module == scope.module || e.module == PRELUDE_MODULE {
+                return false;
+            }
+            if scope.imports_module(&e.module) {
+                if e.module != via {
+                    return false;
+                }
+                seen = true;
+            }
+        }
+        seen
+    }
+
     pub(crate) fn declares(&self, module: &str, name: &str) -> bool {
         self.entries(name).any(|e| e.module == module)
     }

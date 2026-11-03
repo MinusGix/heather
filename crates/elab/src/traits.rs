@@ -2062,7 +2062,15 @@ impl Elaborator {
             && class.valparams.is_empty()
             && let Some(ind) = self.lookup_inductive(&class.name).cloned()
         {
-            return Some((ind, true));
+            // Named only by the common prelude's export is not asking for the
+            // class: the module's literals read as they did before the
+            // prelude, a failed search falling back too. Speculative readings
+            // rely on that — `Grammar(0)`, a record family's index, is first
+            // tried as the record's constructor, whose field is no numeral's
+            // carrier (issues/showcase-calc-parser-refused-since-prelude.md).
+            let scopes = self.scope.resolution_scopes.borrow();
+            let via_common = self.names.seen_only_through(scopes.last().map(Rc::as_ref), name, crate::COMMON_MODULE);
+            return Some((ind, !via_common));
         }
         self.syntax_class(key).map(|(_, ind)| (ind, false))
     }
