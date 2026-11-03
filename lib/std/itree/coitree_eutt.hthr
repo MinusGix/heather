@@ -716,7 +716,6 @@ evidence theorem Eutt::iter_respects<A, B>({E: Events}, {a: A}):
     λ b1 b2 hb => Eutt::iter_cong(E, b1, b2, hb, a)
 }
 
-
 // ---------------------------------------------------------------------------
 // Up-to lemmas: friends of `Eutt`
 //
