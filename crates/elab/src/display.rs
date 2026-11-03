@@ -616,6 +616,25 @@ impl Speller<'_> {
             && let Some(ind) = self.el.types.by_tag(tag)
             && let Some(source) = self.source_instance(&ind, &args, d)
         { return source; }
+        // A type constructor applied to only some of its type arguments, as
+        // a kinded carrier is — `Bind<Pair2<Bool, ·>>` — shows the arguments
+        // it fixes and a hole for each it leaves; the call spelling below
+        // drops type arguments, which leaves the bare name `Pair2`
+        // (issues/applied-meta-approximation-diagnostics.md). For a reader
+        // only: `·` re-parses as a section.
+        if !self.qualified
+            && !self.annotations
+            && let Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) = self.el.gen_app_of(t)
+            && let Some(ind) = self.el.types.by_tag(tag)
+            && args.len() < ind.params.len()
+        {
+            let mut shown: Vec<String> = args
+                .iter()
+                .map(|a| self.ty(&Type::El { level: crate::Level::Zero, tm: Rc::clone(a) }, d + 1))
+                .collect();
+            shown.extend((args.len()..ind.params.len()).map(|_| "·".to_string()));
+            return format!("{}<{}>", ind.name, shown.join(", "));
+        }
         // `3`, not `S(S(S(0)))`.
         if let Some(k) = crate::inductive::nat_numeral(t) {
             return k.to_string();

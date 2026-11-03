@@ -1,5 +1,6 @@
 //! Implicit-application scratch state and state-free structural unification.
 
+use std::cell::{Cell, RefCell};
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
@@ -200,6 +201,62 @@ pub(super) struct U<'a> {
     /// P3, issues/unifier-lazy-delta.md). `None` when the subject does not
     /// unfold, or not within the walk's budget.
     pub(super) next_head: &'a dyn Fn(&Term) -> Option<Term>,
+    /// Whether the approximate rules may write now ([`Guesses`]).
+    pub(super) guesses: Guesses<'a>,
+}
+
+/// What the unifier does at one of its **guesses**: a rule that picks one
+/// solution among several the equation allows, rather than the one it
+/// forces (docs/elaborator-principles-survey.md P2,
+/// issues/unifier-guesses-postponed.md). There are two, both at an unsolved
+/// applied meta whose rigid subject spine is **longer** than the pattern's:
+/// `?M(Nat) ≟ Pair2<Nat, Bool>` learns `?M := Pair2<Nat>` (the head with its
+/// leading arguments, the last argument abstracted), though `λ A ⇒
+/// Pair2<A, Bool>` and `λ _ ⇒ Pair2<Nat, Bool>` solve it as well; and
+/// `?op(x, y) ≟ append<A>(x, y)` learns the type prefix the same way. The
+/// equal-length alignment, a meta at a declared slot ([`slot_pair`]) and
+/// every first-order rule are decided, and run in every mode.
+#[derive(Clone, Copy)]
+pub(crate) enum Guesses<'a> {
+    /// Guess where the rule applies, as every caller but an application's
+    /// own reads did before guesses were ordered.
+    Take,
+    /// Do not guess: leave the slot open and set the flag, so the caller can
+    /// take the guess **last**, once every forced solution the call has
+    /// (its other arguments, the expected type) is in.
+    Postpone(&'a Cell<bool>),
+    /// Guess, and record the slot guessed, so that a refusal downstream can
+    /// name the guess rather than only its consequence.
+    Record(&'a RefCell<Vec<usize>>),
+}
+
+impl Guesses<'_> {
+    /// May the guess at `slot` be taken now?
+    fn take(self, slot: usize) -> bool {
+        match self {
+            Guesses::Take => true,
+            Guesses::Postpone(postponed) => {
+                postponed.set(true);
+                false
+            }
+            Guesses::Record(guessed) => {
+                let mut guessed = guessed.borrow_mut();
+                if !guessed.contains(&slot) {
+                    guessed.push(slot);
+                }
+                true
+            }
+        }
+    }
+}
+
+/// Is `?M(p̄) ≟ C(ā)`, with `?M` the open slot `slot`, a guess: a subject
+/// spine longer than the pattern's, so that `?M` would take `C` with leading
+/// arguments the equation does not force ([`Guesses`])?
+fn guess_at(head: &Term, n: u32, pat: &Term, subj: &Term, sols: &[Sol]) -> Option<usize> {
+    let Term::GlobalTm { var, .. } = head else { return None };
+    (var.0 < n && matches!(sols[var.0 as usize], Sol::Unsolved) && spine_len(subj) > spine_len(pat))
+        .then_some(var.0 as usize)
 }
 
 /// The subject `s`, `d` binders past `gamma`, unfolded to its next head
@@ -303,6 +360,7 @@ impl<'a> U<'a> {
             admit: &|_, _, _| true,
             disagree: None,
             next_head: &|_| None,
+            guesses: Guesses::Take,
         }
     }
 }
@@ -762,6 +820,14 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             {
                 return;
             }
+            // The aligned spine is a guess when the subject's is longer: the
+            // leading arguments `?M` takes are one choice among several
+            // ([`Guesses`]), so it waits while the caller postpones guesses.
+            if let Some(slot) = guess_at(head, n, pat, subj, sols)
+                && !u.guesses.take(slot)
+            {
+                return;
+            }
             // Two rigid spines of different lengths are never the same
             // application, so their arguments have nothing to pair: aligned
             // from the right, they pair a predicate's class indices with
@@ -1126,6 +1192,13 @@ fn flex_spine(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [So
         pargs.push(arg);
         head = fun;
     }
+    // A longer subject spine is the head-with-leading-arguments guess
+    // ([`Guesses`]); an equal one pairs the λ with `?M` as it stands.
+    if let Some(slot) = guess_at(head, n, pat, subj, sols)
+        && !u.guesses.take(slot)
+    {
+        return;
+    }
     let mut sargs = Vec::new();
     let mut prefix = subj;
     for _ in 0..pargs.len() {
@@ -1455,6 +1528,41 @@ mod tests {
         let mut withheld = [Sol::Withheld];
         unify_tm(&U::syntactic(&gamma), &pat, &subject, 1, 0, &mut withheld);
         assert!(matches!(withheld[0], Sol::Withheld));
+    }
+
+    #[test]
+    fn a_guess_waits_while_postponed_and_is_recorded_when_taken() {
+        let gamma = LocalCtx::nil();
+        let global = Term::GlobalTm { var: GlobalVar(0), subst: embed(&gamma, 0) };
+        let Type::El { tm, .. } = meta(&gamma) else {
+            unreachable!()
+        };
+        // `?0(0)` against `g<Nat>(0)`: the type prefix `g<Nat>` is a guess.
+        let pat = app((*tm).clone(), Type::Nat, Term::Zero);
+        let specialized = app(global.clone(), Type::Ty(Level::Zero), Term::TmNat);
+        let subject = app(specialized.clone(), Type::Nat, Term::Zero);
+        let postponed = Cell::new(false);
+        let u = U { guesses: Guesses::Postpone(&postponed), ..U::syntactic(&gamma) };
+        let mut solutions = [Sol::Unsolved];
+        unify_tm(&u, &pat, &subject, 1, 0, &mut solutions);
+        assert!(matches!(solutions[0], Sol::Unsolved));
+        assert!(postponed.get());
+
+        let guessed = RefCell::new(Vec::new());
+        let u = U { guesses: Guesses::Record(&guessed), ..U::syntactic(&gamma) };
+        unify_tm(&u, &pat, &subject, 1, 0, &mut solutions);
+        assert!(matches!(&solutions[0], Sol::Solved(t) if **t == specialized));
+        assert_eq!(*guessed.borrow(), vec![0]);
+
+        // `?0(0)` against `g(0)`: the equal-length alignment is decided, and
+        // runs while guesses wait.
+        let subject = app(global.clone(), Type::Nat, Term::Zero);
+        let postponed = Cell::new(false);
+        let u = U { guesses: Guesses::Postpone(&postponed), ..U::syntactic(&gamma) };
+        let mut solutions = [Sol::Unsolved];
+        unify_tm(&u, &pat, &subject, 1, 0, &mut solutions);
+        assert!(matches!(&solutions[0], Sol::Solved(t) if **t == global));
+        assert!(!postponed.get());
     }
 
     #[test]

@@ -204,7 +204,10 @@ These are for R2 (`issues/binding-statements.md`) and for Minus.
    [[class-instance-at-lambda-carrier]] owns the choice. *Decided and built
    2026-11-02: the type declares its slot (`inductive Result<A, E> varies
    A`), and instances sit at `λ (A: Type) => Result<A, E>`
-   (`docs/lambda-carrier-instances-design.md` §7).* One is to put the
+   (`docs/lambda-carrier-instances-design.md` §7). Since 2026-11-03 the
+   approximation itself is a guess taken last, after the call's other
+   arguments and its expected type, and a refusal it causes names it
+   (`unification::Guesses`, issues/unifier-guesses-postponed.md).* One is to put the
    varying argument last (`Result<E, A>`, Haskell's `Either e a`), which
    the approximation then handles. The other is λ-carrier instances plus a
    use-site rule that picks `λ A => Result<A, E>`, which is no longer
