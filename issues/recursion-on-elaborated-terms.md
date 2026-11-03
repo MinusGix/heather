@@ -4,7 +4,7 @@ status: open
 labels: [recursion,elaboration,design]
 area: language
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-03
 ---
 
 The recursion planner (`recursion::plan`, `reads`, `bind_statement`) decides
@@ -53,3 +53,4 @@ with the right meaning.
 ## Log
 
 - 2026-11-02: Step 1's renamer exists since #393: `alpha::deshadow` (used by the `decreases` lowering via `measure::deshadowed`). The structural planner does not run over it yet.
+- 2026-11-03: 2026-11-03: Design note docs/recursion-at-the-top-design.md (options A below-at-the-top staged, B binder identities only, C keep patching; A recommended), awaiting Minus's choice. Probes in lib/_tests/std/core/recursion_binder_tests.hthr: the LetCode and MatchCode readings are unreachable today (a meta fn cannot call itself; code types are refused outside meta fn signatures; nested let code is refused), each an expect-error with its reason; an unused `let j = n` in the recursive arm is refused, which A would accept. Slice 1 filed as [[recursion-below-nat-fallback]]. Side find: [[meta-fn-mismatch-reaches-kernel]].

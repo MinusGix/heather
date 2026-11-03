@@ -373,7 +373,8 @@ for either.
 6. **One matcher for instance heads, rewrite and host matching**
    (`instance-conclusion-matched-first`). After 1–5 so it reuses them.
 7. **P5 and the top-level recursion lowering** (`recursion-on-elaborated-terms`).
-   A design round; P4 keeps the current lowering honest meanwhile.
+   A design round; P4 keeps the current lowering honest meanwhile. The
+   options are in docs/recursion-at-the-top-design.md.
 
 What this does **not** propose: a constraint store with cross-call
 postponement (the unifier design declined it for good reasons, and nothing
@@ -388,6 +389,9 @@ here needs it); higher-order pattern inversion beyond the identity renaming
 - `unifier-lazy-delta` (P3)
 - `unifier-guesses-postponed` (P2)
 - `instance-conclusion-matched-first` (§4)
-- `recursion-on-elaborated-terms` (P5 and §6.3's lowering)
+- `recursion-on-elaborated-terms` (P5 and §6.3's lowering), whose design
+  note (docs/recursion-at-the-top-design.md) filed
+  `recursion-below-nat-fallback` (slice 1, if option A is chosen) and
+  `meta-fn-mismatch-reaches-kernel` (found probing)
 - `rewrite-matcher-on-unifier` (§4's remainder, filed 2026-11-03 when
   instance search moved onto the unifier; the host's `match_at` already had)
