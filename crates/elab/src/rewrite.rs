@@ -576,8 +576,16 @@ impl Elaborator {
             return deep(pf, tf, 0, binds) && deep(pa, ta, 0, binds);
         }
         match (pat, t) {
+            // A binder's type is matched when it can be: the same type has
+            // more than one spelling (a code decoded or not), and a λ's
+            // domain is fixed by what it is applied in, which the caller's
+            // statement checks.
             (Term::Lam { dom: pd, body: pb, .. }, Term::Lam { dom: td, body: tb, .. }) => {
-                deep_ty(pd, td, 0, binds) && deep(pb, tb, 1, binds)
+                let mut tried = binds.to_vec();
+                if deep_ty(pd, td, 0, &mut tried) {
+                    binds.clone_from_slice(&tried);
+                }
+                deep(pb, tb, 1, binds)
             }
             (Term::Pair { fst_ty: pa, snd_ty: pb, fst: pf, snd: ps, .. }, Term::Pair { fst_ty: ta, snd_ty: tb, fst: tf, snd: ts, .. }) => {
                 deep_ty(pa, ta, 0, binds) && deep_ty(pb, tb, 1, binds) && deep(pf, tf, 0, binds) && deep(ps, ts, 0, binds)
@@ -602,7 +610,10 @@ impl Elaborator {
                     && deep(pi, ti, 0, binds)
                     && deep(pse, tse, 0, binds)
             }
-            _ => false,
+            // Any other form is compared once the variables it mentions are
+            // bound (an `elim_Empty`'s motive, in a constructor with no
+            // children, mentions only the type's parameters).
+            _ => instantiate_at(pat, d, k, binds).is_some_and(|p| p == *t),
         }
     }
 
@@ -683,6 +694,29 @@ fn lower(t: &Term, at: u32, n: u32) -> Option<Term> {
             return None;
         }
         cur = dropped;
+    }
+    Some(cur)
+}
+
+/// `t`, `d` binders below the match's context, with its pattern variables
+/// (`Var(d)` … `Var(d + k - 1)`) replaced by `binds`; `None` when one it
+/// mentions is unbound.
+fn instantiate_at(t: &Term, d: u32, k: u32, binds: &[Option<Rc<Term>>]) -> Option<Term> {
+    let mut cur = t.clone();
+    // Each step substitutes `Var(d)` and lowers what is above it, so a
+    // payload is raised first by the steps still to come after it.
+    for (j, slot) in binds.iter().take(k as usize).enumerate() {
+        let next = match slot {
+            Some(b) => cur.inst_top_above(0, d, &b.shift_local(k - 1 - j as u32)),
+            None => {
+                let dropped = cur.inst_top_above(0, d, &Term::Zero);
+                if dropped.shift_local_above(1, d) != cur {
+                    return None;
+                }
+                dropped
+            }
+        };
+        cur = next;
     }
     Some(cur)
 }

@@ -573,3 +573,9 @@ evidence theorem Eutt::vis_respects<R>({E: Events}, {c: E.Cmd}):
 {
     λ k1 k2 n => Eutt::vis_cong(E, c, k1, k2, n)
 }
+
+evidence theorem Eutt::map_respects<A, B>({E: Events}, {f: A → B}):
+    PreservesRelation(Eutt::Rel<A>(E), Eutt::Rel<B>(E), λ t => CoTree::map(E, t, f))
+{
+    λ t u e => Eutt::bind_cong_l(E, t, u, λ r => CRet(f(r)), e)
+}
