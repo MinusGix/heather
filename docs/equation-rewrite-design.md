@@ -487,9 +487,8 @@ Each is a follow-up issue:
 - **`↔` goals** (`issues/rewrite-setoid-iff-goals.md`): `Iff` is a record,
   so its two directions are projections and a constructor the plan would
   build around each half.
-- **Leaving the carrier** (`issues/rewrite-setoid-heterogeneous.md`):
-  congruence through a function `C → D` needs a relation at `D`, which the
-  walk would have to infer per node, as Rocq's `Proper` search does.
+- ~~**Leaving the carrier**~~: done for unary contexts whose evidence names
+  the result's relation, §11.4.
 - **`at :=`**: refused, with the pointer to
   `issues/relational-rewrite-controls.md`; a DAG walk has no tree positions to
   number.
@@ -619,3 +618,100 @@ Evidence missing below binders is an obligation closed over them and applied
 back, §10.4's `(z: Nat) -> PreservesRelation(Same, Same, g(z))`. A consumer
 whose context does not map those functions into the carrier is not crossed,
 and the walk goes on to its other rules, ending in the usual mismatch.
+
+## 11. Rewriting along `Eutt`
+
+`issues/eutt-setoid-rewrite.md`, 2026-11-03. Effectful-loop proofs
+(`docs/effects-capabilities-design.md` §4) are chains of the monad laws and
+the tau laws under `bind`s, each a hand `Eutt::trans` tower before this
+round. Now a law rewrites in place:
+
+```heather
+fn rewrite_assoc_under<A, B, C, D>(E: Events, s: CoTree<D>(E), t: D → CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E)) →
+    Eutt<C>(E, CoTree::bind(E, s, λ y => CoTree::bind(E, CoTree::bind(E, t(y), f), g)),
+        CoTree::bind(E, s, λ y => CoTree::bind(E, t(y), λ x => CoTree::bind(E, f(x), g))))
+{
+    rewrite(Eutt::bind_assoc, Eutt::refl(E, CoTree::bind(E, s, λ y => CoTree::bind(E, t(y), λ x => CoTree::bind(E, f(x), g)))))
+}
+```
+
+Four things stood between §9's rewrite and that proof; each is general, and
+`Eutt` is their first customer.
+
+### 11.1 A codata family is a relation
+
+`Eutt<R>(E, t, u)` lowers to `M(…)(⟨t, u⟩)` (`docs/codata-indexed-design.md`
+§3), not to an application, so §9.1 did not read it as one. A goal at an
+indexed codata family whose last two indices have one type, the second not
+depending on the first, now reads as `S(t, u)` with `S` the λ
+`λ a b. ⌜M(…)(⟨…, a, b⟩)⌝`, its code quoted as emission spells it so an
+obligation shows `Eutt<R>(E, x, y)` (`Relation::of_family`,
+`crates/elab/src/relational_context/proof.rs`). The rewritten goal replaces
+the two indices.
+
+The surface cannot apply a family to fewer than its indices, so the library
+names the relation `Eutt::Rel<R>(E) := λ t u => Eutt<R>(E, t, u)`; the two
+convert (δ and η), which is all resolution and the chain (§9.2, compared by
+conversion when deciding between `Transitive` and `Trans`) need. Its
+`Equivalence` instance is indexed by `Eutt::Rel<R>(E)`, a global applied to
+the instance's own value binder: an instance index may now be that, keyed by
+the global and the binders' positions, as a bare binder index already was
+(`index_spelling`, `crates/elab/src/traits.rs`).
+
+### 11.2 Constructors are occurrences
+
+A codata constructor is a `corec` (`docs/codata-elaborator-design.md` §3), not
+an application, so `CTau(t)` had no head for §6.2's keying and §6.1's match.
+Two `corec`s are now candidates for each other, and the match walks them
+structurally (`match_deep`, `crates/elab/src/rewrite.rs`): the signature, where
+the type's parameters sit (`R`, `E`), the step, where the label's payload and
+the children sit (`a` in `CRet(a)`, `t` in `CTau(t)`), under their binders. A
+binder's domain is matched when it can be (a type has more than one
+spelling), and any other form once the variables it mentions are bound, as
+written. So `Eutt::tau_l` and `Eutt::bind_ret_l`, whose left sides hold
+constructors, instantiate unapplied.
+
+The walk does not go *into* a constructor: an occurrence inside `CTau(…)` or
+a call's continuation is refused, as §9.3 refuses any form that is no
+application (`issues/rewrite-setoid-codata-constructors.md`).
+`Eutt::tau_respects` and `Eutt::vis_respects` are stated for when it does.
+
+### 11.3 The evidence
+
+In `coitree_eutt.hthr`, every rule as §10.2 writes them:
+
+| context | rule | from |
+|---|---|---|
+| `bind(t, ·)`, the continuation | `Eutt::bind_respects_k` (pointwise) | `bind_cong_r` |
+| `bind(·, h)`, the tree | `Eutt::bind_respects_t` | `bind_cong_l` |
+| `map(·, f)` | `Eutt::map_respects` | `bind_cong_l` |
+| `CTau(·)`, `CVis(c, ·)` | `Eutt::tau_respects`, `Eutt::vis_respects` | `tau_cong`, `vis_cong` |
+
+A client imports `relation_props` and `algebra_rel`, which the rewrite states
+its evidence in (§9.4). A function with no rule leaves `?compatibility` with
+its statement, `PreservesRelation(…, twice(E))`.
+
+### 11.4 Leaving the carrier
+
+`bind(t, h)` with `t : CoTree<A>(E)` is a `CoTree<B>(E)`: the context maps the
+carrier elsewhere, and §9.3 refused it. Rocq infers the result's relation by
+`Proper` search with an evar (`issues/rewrite-setoid-heterogeneous.md`); here
+it is read off the registered evidence. When the context does not map the
+carrier to itself, its type `C → D` is inferred, and each evidence rule about
+`PreservesRelation` whose function matches the context (§11.2's match, over
+the λ the rule states) names a relation `S` at `D` by its instantiated second
+argument. `PreservesRelation(R, S, context)` is resolved for each in turn; the
+first that resolves relates the node, and with none the first is the
+obligation. The node then carries `S` with its carrier, and every node above
+it continues from `S`: its parent's congruence takes `S` as the argument's
+relation, a λ above it is related by `Pointwise(S)`, and the goal's side
+chains `S` into the goal's relation at the goal's carrier.
+
+Only unary and pointwise contexts leave the carrier: `Respects2` is over `R`
+alone, so a binary node with a changed argument at another relation takes the
+unary route or is refused. A relation found below binders must not mention
+them. No rule naming a relation is refused with that hint. Still open, in the
+follow-up (`issues/rewrite-setoid-heterogeneous-sources.md`): hypotheses in
+scope as a source of `S`, a fallback to `=` at the target, two changed
+arguments arriving at different relations.
+

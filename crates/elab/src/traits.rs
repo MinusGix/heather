@@ -1770,15 +1770,47 @@ impl Elaborator {
         decl: &InstanceDecl,
     ) -> R<String> {
         let mut parts = Vec::with_capacity(cref.index.len());
+        // A value-generic binder's declaration-stable key.
+        let generic = |n: &str| {
+            decl.tyvars
+                .iter()
+                .map(|p| &p.name)
+                .chain(decl.valparams.iter().map(|p| &p.name))
+                .position(|name| name == n)
+        };
         for (p, a) in class.valparams.iter().zip(cref.index.iter()) {
-            let head = match &a.kind {
-                ExprKind::Var(n) => Some(n),
+            let named = |e: &'_ Expr| match &e.kind {
+                ExprKind::Var(n) => Some(n.clone()),
                 ExprKind::TyApp { head, .. } => match &head.kind {
-                    ExprKind::Var(n) => Some(n),
+                    ExprKind::Var(n) => Some(n.clone()),
                     _ => None,
                 },
                 _ => None,
             };
+            // A global applied to the instance's own value binders,
+            // `Eutt::Rel<R>(E)`: a relation family at a value parameter
+            // (docs/equation-rewrite-design.md §11). The binders are
+            // determined by unifying the head with the goal, as a bare
+            // binder index is, so the key is the global's and their
+            // positions.
+            if let ExprKind::App { head, args, named: nargs, .. } = &a.kind
+                && nargs.is_empty()
+                && let Some(n) = named(head)
+                && generic(&n).is_none()
+                && let Some(binders) = args
+                    .iter()
+                    .map(|x| match &x.kind {
+                        ExprKind::Var(v) => generic(v).map(|i| format!("#binder{i}")),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+            {
+                let key = self.key_of(&n).unwrap_or_else(|| n.clone());
+                parts.push(format!("{key}#at{}", binders.concat()));
+                continue;
+            }
+            let head = named(a);
+            let head = head.as_ref();
             let Some(n) = head else {
                 // A symbol in an instance head would make the registry key
                 // depend on the designation table's state at declaration
@@ -1800,7 +1832,7 @@ impl Elaborator {
                     format!(
                         "the index `{}` of this instance is not spellable: `{}` must be a \
                          global reference (possibly at this instance's own type \
-                         parameters), because the registry key is computed from the \
+                         parameters, or applied to its own binders), because the registry key is computed from the \
                          declaration alone (docs/operation-indexed-classes-design.md \
                          §3.1). A structure built from an unnamed operation is a `let`-bound \
                          value, found by scope rather than registered",
@@ -1814,13 +1846,7 @@ impl Elaborator {
             // head with the goal, just like a binder in the carrier. Give it
             // a declaration-stable, unwritable key component: binder spelling
             // must not make alpha-equivalent instances distinct.
-            let generic = decl
-                .tyvars
-                .iter()
-                .map(|p| &p.name)
-                .chain(decl.valparams.iter().map(|p| &p.name))
-                .position(|name| name == n);
-            parts.push(match generic {
+            parts.push(match generic(n) {
                 Some(i) => format!("#binder{i}"),
                 None => self.key_of(n).unwrap_or_else(|| n.clone()),
             });
