@@ -45,3 +45,27 @@ their solutions.
   removed.
 - A probe where a meta occurs twice with disagreeing subjects reports the
   disagreement instead of the downstream type mismatch.
+
+## Log
+
+- 2026-11-03: Built. `unification::assign` is the unifier's one write
+  (the `El` rule and the term rule both go through it). An open slot takes
+  a solution only if `U::admit` lets it, which is `SolutionCheck`
+  (crates/elab/src/solution_check.rs). The check holds the solution to the
+  slot's declared type whenever that type is meta-free at the write, and
+  judges the slots whose type was still open when the read ends (undoing
+  misfits then). Sort-typed slots are not judged, and a solution the kernel
+  cannot type or a conversion out of fuel keeps the write. Every caller
+  that knows its slots' types passes them: argument reads, the
+  expected-type harvest (both routes, including the LGG trigger's), the
+  tactic host's `match_at`/`match_dictionaries`, and the bare polymorphic
+  argument. The host's holes and `view_instance` have none and convert
+  their whole pattern afterwards. `reject_ill_typed_solutions` and its
+  mark/undo are deleted, and `unify_root` returns whether a write was
+  refused, which drives the δ-reduct retry. A solved slot met again by an
+  argument's own type with another subject is reported to `U::disagree`.
+  It is kept raw beside the argument's owed comparison (`SlotClash`) and
+  spelled only if the gate refuses: "`A` was inferred as `Nat` from an
+  earlier argument, and this argument's type would make it `Flag`"
+  (crates/elab/tests/unifier_checked_assignment.rs). The new counter
+  `solution_checks` counts the kernel-judged writes.

@@ -23,6 +23,8 @@ mod callback_expected_types;
 mod implicit_args;
 #[path = "../implicit_fn_binders.rs"]
 mod implicit_fn_binders;
+#[path = "../unifier_checked_assignment.rs"]
+mod unifier_checked_assignment;
 #[path = "../named_arguments.rs"]
 mod named_arguments;
 #[path = "../overapplication.rs"]
