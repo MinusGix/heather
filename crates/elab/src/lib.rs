@@ -214,6 +214,7 @@ pub const PRELUDE: &str = include_str!("prelude.hthr");
 /// (docs/modules-design.md §3.2). Public so a loader can skip resolving it to
 /// a file — there is no `prelude.hthr` on disk to find.
 pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
+pub const COMMON_MODULE: &str = names::COMMON_MODULE;
 
 pub use diagnostics::{ElabError, GoalReport, GoalSource, IndexedRoute, KernelSite, LintFix, Warning};
 pub use heather_syntax::Span;
@@ -2615,6 +2616,20 @@ impl Elaborator {
                     exported,
                 }),
             }
+        }
+        // The common prelude, implicitly, when it is already in this world:
+        // the modules it exports from are elaborated before it and so never
+        // import it, and every later module's closure holds it, as the
+        // loader and the image keys add it (issues/std-prelude-facade.md).
+        if module != COMMON_MODULE
+            && self.names.has_module(COMMON_MODULE)
+            && scope.imports.iter().all(|i| i.module != COMMON_MODULE)
+        {
+            scope.imports.push(ImportSpec {
+                module: COMMON_MODULE.to_string(),
+                listed: Vec::new(),
+                exported: Vec::new(),
+            });
         }
         self.names.enter_scope(scope);
         // The interface boundary is per module: the definitions this module
