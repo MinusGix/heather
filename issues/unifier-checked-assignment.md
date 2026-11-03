@@ -1,10 +1,10 @@
 ---
 title: Write unifier solutions in one place that checks their type and agreement
-status: open
+status: closed
 labels: [unification,inference,elaboration]
 area: language
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-03
 ---
 
 `unify_tm` writes a solution at one line (`sols[i] = Sol::Solved(s)`,

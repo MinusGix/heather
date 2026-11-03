@@ -557,7 +557,7 @@ pub(super) fn unify_ty(
         // (issues/unifier-lazy-delta.md) — a hypothesis `Lt(x, y)` against a
         // domain spelled as the `Id` or `Π` its definition is.
         (p, Type::El { level, tm })
-            if !matches!(p, Type::El { .. } | Type::Ty(_)) && global_head(tm) =>
+            if !matches!(p, Type::El { .. } | Type::Ty(_)) && reducible(tm) && zonked(pat, n, sols).is_none() =>
         {
             if let Some(r) = subject_unfolded(u, tm, d) {
                 let unfolded = Type::El { level: level.clone(), tm: Rc::new(r) };
@@ -786,11 +786,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             let mismatch = (rigid_atom(head, n) && rigid_head(s) && spine_len(p) != spine_len(s))
                 || u.distinct_heads(head, spine_head(s), n);
             if mismatch {
-                if global_head(s)
-                    && let Some(r) = subject_unfolded(u, s, d)
-                {
-                    unify_tm(u, pat, &r, n, d, sols);
-                }
+                unify_unfolded(u, pat, s, n, d, sols);
                 return;
             }
             unify_tm(u, f1, f2, n, d, sols);
@@ -1019,8 +1015,62 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             unify_tm(u, a1, a2, n, d, sols);
             unify_tm(u, b1, b2, n, d, sols);
         }
-        _ => {}
+        // Any other pairing: the two do not meet as they stand, and the
+        // subject may still compute to something that does — a field type
+        // read through a projection, `fst(⟨λ b => BitVec(64), …⟩)`, or a
+        // definition's body. The δ-lazy order's step, as at a head mismatch.
+        _ => unify_unfolded(u, pat, subj, n, d, sols),
     }
+}
+
+/// The δ-lazy order's step (issues/unifier-lazy-delta.md): when `pat` and
+/// `subj` do not meet as they stand, unfold the subject to its next head
+/// ([`U::next_head`]) and compare again. Only while the pattern still has an
+/// open slot to learn — otherwise there is nothing to read, and at a closed
+/// verdict the unfolding is the verdict's whole evaluation
+/// (issues/closed-verdict-evaluated-twice.md) — and only a subject that can
+/// step: one headed by a global, a β-redex or an eliminator. Each hop is a
+/// strict reduct, so the chain ends where the subject stops reducing.
+fn unify_unfolded(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
+    if !reducible(subj) || zonked_tm(pat, n, sols).is_some() {
+        return;
+    }
+    if let Some(r) = subject_unfolded(u, subj, d) {
+        unify_tm(u, pat, &r, n, d, sols);
+    }
+}
+
+/// Can `t` take a head step: its spine is headed by a global (δ), a λ (β)
+/// or an eliminator (ι, once its scrutinee is a constructor)?
+fn reducible(t: &Term) -> bool {
+    let h = spine_head(t);
+    matches!(h, Term::GlobalTm { .. }) || steps_through(h)
+}
+
+/// A spine head a walk to the next head keeps stepping through: a λ (the
+/// spine is a β-redex) or an eliminator, which reduces once its scrutinee
+/// is a constructor and is no head a pattern could meet before then.
+pub(crate) fn steps_through(h: &Term) -> bool {
+    matches!(
+        h,
+        Term::Lam { .. }
+            | Term::ElimNat { .. }
+            | Term::J { .. }
+            | Term::ElimSEmpty { .. }
+            | Term::ElimSquash { .. }
+            | Term::ElimEmpty { .. }
+            | Term::Fst { .. }
+            | Term::Snd { .. }
+            | Term::FstAt { .. }
+            | Term::SndAt { .. }
+            | Term::Case { .. }
+            | Term::ElimW { .. }
+            | Term::ElimWf { .. }
+            | Term::ElimIWf { .. }
+            | Term::Out { .. }
+            | Term::ElimCodeTy { .. }
+            | Term::ElimCodeTm { .. }
+    )
 }
 
 /// A form [`U::canonical_head`] can reduce a subject to.

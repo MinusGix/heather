@@ -9809,7 +9809,7 @@ impl Elaborator {
         self.semantic_oracle().unfold_to(&cx.gamma, t, Unfold::NextHead, |r| {
             let exposed = match spelling::app_spine(&r).0 {
                 h @ (Term::GlobalTm { .. } | Term::Var(_)) => *h != head,
-                h => !steps_through(h),
+                h => !unification::steps_through(h),
             };
             exposed.then_some(r)
         })
@@ -9899,41 +9899,30 @@ impl Elaborator {
     /// flavor for the zero-argument checking-position route.
     #[allow(clippy::too_many_arguments)]
     /// Read implicit solutions off an argument's type
-    /// (docs/argument-type-reduction-design.md): the syntactic read first,
-    /// and — only when it learned *nothing* — the same read against the
-    /// type's weak head normal form.
+    /// (docs/argument-type-reduction-design.md): one read, in which the
+    /// unifier itself unfolds the argument's type wherever it does not meet
+    /// the parameter's as it stands (the δ-lazy order,
+    /// issues/unifier-lazy-delta.md).
     ///
-    /// The retry is for an argument whose type is a **motive applied**. An
-    /// induction principle with a value-parameter motive (`int_ind`'s `P: Int
-    /// -> Type`) binds its hypothesis at `P(OfNat(k))`, which after `P` is
-    /// given is a β-redex `(λ (z: Int) => add(a, z) = add(z, a))(OfNat(k))` —
-    /// an `Id` that does not say so yet, so `cong_int(isucc, ih)` and
-    /// `sym(ih)` both refused (issues/motive-application-hides-hypothesis-
-    /// type.md). Reducing makes the evidence readable, and it is the same
-    /// sentence [`Self::solve_from_expected`] already applies to the *expected*
-    /// type one screen below.
-    ///
-    /// Three properties keep it from being a widening:
-    ///
-    ///  - **learn-only, twice.** [`unify_ty`] records into `Unsolved` slots and
-    ///    never fails, so the retry can add solutions and cannot retract or
-    ///    contradict one. A wrong solution is still a kernel rejection.
-    ///  - **no progress is the trigger**, not "something is still unsolved":
-    ///    an argument whose type taught anything at all takes exactly the path
-    ///    it took before this existed, so no call that already elaborated
-    ///    reaches the reduction.
-    ///  - **the reduction is opportunistic.** Out of fuel is not an error here:
-    ///    the honest outcome is the caller's own per-slot message about the
-    ///    implicit it could not infer, not a complaint about a type the writer
-    ///    never asked to reduce.
+    /// There used to be a second read against the type's weak head normal
+    /// form, taken when the first learned *nothing*: for an argument whose
+    /// type is a **motive applied** (`P(OfNat(k))`, a β-redex
+    /// `(λ (z: Int) => add(a, z) = add(z, a))(OfNat(k))`,
+    /// issues/motive-application-hides-hypothesis-type.md), a field type read
+    /// through a projection, or a definition's body. The unifier's own step
+    /// reaches each of those, at the place the read stops meeting and only
+    /// while it has a slot to learn, so the retry is gone. The *expected*
+    /// type's whnf in [`Self::solve_from_expected`] stays: a higher-kinded
+    /// carrier (`?M(?B)` against `Tac<Nat>`) is matched by its spelling, not
+    /// by unfolding.
     ///
     /// Every read is **held to the slots' declared types** (`meta_doms`):
     /// a slot whose type is already known takes only a solution that
     /// inhabits it ([`SolutionCheck`], at the unifier's one write), so a
     /// read never records what the call could not keep.
-    /// When it undid something, the argument was written in other symbols —
-    /// `x ≈ y` at `Rat` against `a * d ≈ c * b` at `Int` — and before the
-    /// whnf the read walks the type's first [`Unfold::IndexRead`] reducts,
+    /// When it refused something, the argument was written in other symbols —
+    /// `x ≈ y` at `Rat` against `a * d ≈ c * b` at `Int` — and the read
+    /// walks the type's first [`Unfold::IndexRead`] reducts,
     /// stopping at the first declaration application that teaches something
     /// that fits: `Dyadic::Le(a, b)` is `Rat::Le(a.rat(), b.rat())` one δ
     /// step on (issues/index-inference-through-unfolding.md).
@@ -9941,8 +9930,8 @@ impl Elaborator {
     ///
     /// Returns the slots already solved that the argument's own type met
     /// with another subject ([`application::SlotClash`]): read off the
-    /// first, syntactic read only, since the retries run only when it
-    /// learned nothing.
+    /// first read only, since the reduct walk runs only when it learned
+    /// nothing.
     fn unify_arg_ty(
         &self,
         cx: &Cx,
@@ -10015,10 +10004,6 @@ impl Elaborator {
                     return;
                 }
             }
-        }
-        if let Ok(head) = self.whnf(cx, arg_ty, span) {
-            let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            unify_checked(sols, &head);
         }
     }
 
@@ -10903,28 +10888,3 @@ struct PackedFamily<'a> {
     eliminate: &'a dyn Fn(&Cx, &[Arm], Term, Type, Level) -> R<Term>,
 }
 
-/// A spine head [`Elaborator::next_head`] keeps stepping through: a λ (the
-/// spine is a β-redex) or an eliminator, which reduces once its scrutinee
-/// is a constructor and is no head a pattern could meet before then.
-fn steps_through(h: &Term) -> bool {
-    matches!(
-        h,
-        Term::Lam { .. }
-            | Term::ElimNat { .. }
-            | Term::J { .. }
-            | Term::ElimSEmpty { .. }
-            | Term::ElimSquash { .. }
-            | Term::ElimEmpty { .. }
-            | Term::Fst { .. }
-            | Term::Snd { .. }
-            | Term::FstAt { .. }
-            | Term::SndAt { .. }
-            | Term::Case { .. }
-            | Term::ElimW { .. }
-            | Term::ElimWf { .. }
-            | Term::ElimIWf { .. }
-            | Term::Out { .. }
-            | Term::ElimCodeTy { .. }
-            | Term::ElimCodeTm { .. }
-    )
-}
