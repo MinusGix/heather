@@ -1,0 +1,169 @@
+// Signed fixed-width integers: `i8`, `i27`, `i64`
+// (docs/fixed-width-integers-design.md §3).
+//
+// An `SInt(n)` is a word read in two's complement. It is a type of its own,
+// not a name for `BitVec(n)`, because the operators mean different things on
+// the two readings: `<` and `<=` compare signed, `div`/`rem` truncate toward
+// zero, `shift_right` copies the sign bit, `extend` sign-extends, a numeral
+// may be negative (`-1` is all ones), and `toInt` is the value. What the two
+// readings share — `+`, `-`, `*`, the bitwise operations, `shift_left`,
+// equality — is the word's own operation applied to `bits`, so every
+// `BitVec` lemma about those reaches an `SInt` through its field.
+//
+// `i64` in type position is `i(64)`, a width family as `u` is
+// (`lib/std/bitvec/bitvec.hthr`), expanded on the spot to `SInt(64)`.
+import bool;
+import logic;
+import nat;
+import int;
+import algebra;
+import bitvec;
+import bitvec_div;
+
+record SInt(n: Nat) { bits: BitVec(n) }
+
+def i: Nat → Type = SInt;
+
+// The two readings of one word. Neither moves a bit.
+fn BitVec::as_signed({n: Nat}, self x: BitVec(n)) → SInt(n) { SInt(x) }
+fn SInt::as_unsigned({n: Nat}, self x: SInt(n)) → BitVec(n) { x.bits }
+
+// ---------------------------------------------------------------------------
+// Values
+
+fn SInt::ofNat({n: Nat}, k: Nat) → SInt(n) { SInt(BitVec::ofNat(k)) }
+fn SInt::ofInt({n: Nat}, z: Int) → SInt(n) { SInt(BitVec::ofInt(z)) }
+fn SInt::toInt({n: Nat}, self x: SInt(n)) → Int { x.bits.toInt() }
+
+fn SInt::zero({n: Nat}) → SInt(n) { SInt(BitVec::zero()) }
+fn SInt::one({n: Nat}) → SInt(n) { SInt(BitVec::one()) }
+fn SInt::minus_one({n: Nat}) → SInt(n) { SInt(BitVec::all_ones()) }
+
+fn SInt::sign_bit({n: Nat}, self x: SInt(n)) → Bool { x.bits.sign_bit() }
+fn SInt::is_negative({n: Nat}, self x: SInt(n)) → Bool { x.bits.sign_bit() }
+
+instance(n: Nat) Numeral<SInt(n)> { ofNat := λ (k: Nat) => SInt::ofNat(k) }
+
+// ---------------------------------------------------------------------------
+// Wrapping arithmetic: the word's, whose low bits are the same at either
+// reading.
+
+fn SInt::add({n: Nat}, self a, b: SInt(n)) → SInt(n) { SInt(a.bits.add(b.bits)) }
+fn SInt::sub({n: Nat}, self a, b: SInt(n)) → SInt(n) { SInt(a.bits.sub(b.bits)) }
+fn SInt::mul({n: Nat}, self a, b: SInt(n)) → SInt(n) { SInt(a.bits.mul(b.bits)) }
+fn SInt::neg({n: Nat}, self a: SInt(n)) → SInt(n) { SInt(a.bits.neg()) }
+
+// The magnitude as an unsigned word: `|MIN|` is `2^(n-1)`, which an
+// unsigned word holds and a signed one does not.
+fn SInt::magnitude({n: Nat}, self a: SInt(n)) → BitVec(n) { a.bits.magnitude() }
+
+// Truncating division and its remainder (`lib/std/bitvec/bitvec_div.hthr`):
+// `-7 / 2 = -3`, `-7 % 2 = -1`, `MIN / -1 = MIN`, `x / 0 = -1` or `1` by
+// `x`'s sign, `x % 0 = x`.
+fn SInt::div({n: Nat}, self a, b: SInt(n)) → SInt(n) { SInt(a.bits.sdiv(b.bits)) }
+fn SInt::rem({n: Nat}, self a, b: SInt(n)) → SInt(n) { SInt(a.bits.srem(b.bits)) }
+
+// Signed overflow of the wrapping `add`/`sub`: the true sum is outside the
+// width's range exactly when this is `True`.
+fn SInt::overflows_add({n: Nat}, self a, b: SInt(n)) → Bool { a.bits.signed_overflow_add(b.bits) }
+fn SInt::overflows_sub({n: Nat}, self a, b: SInt(n)) → Bool { a.bits.signed_overflow_sub(b.bits) }
+
+designation + at SInt(n) := SInt::add
+designation - at SInt(n) := SInt::sub
+designation * at SInt(n) := SInt::mul
+designation prefix - at SInt(n) := SInt::neg
+
+// ---------------------------------------------------------------------------
+// Bits and shifts. A left shift is the word's; a right shift copies the sign
+// bit, as `>>` on a signed integer does in Rust and Java and every C
+// compiler; `logical_shift_right` is the word's zero-filling one.
+
+fn SInt::band({n: Nat}, self a, b: SInt(n)) → SInt(n) { SInt(a.bits.band(b.bits)) }
+fn SInt::bor({n: Nat}, self a, b: SInt(n)) → SInt(n) { SInt(a.bits.bor(b.bits)) }
+fn SInt::bxor({n: Nat}, self a, b: SInt(n)) → SInt(n) { SInt(a.bits.bxor(b.bits)) }
+fn SInt::complement({n: Nat}, self a: SInt(n)) → SInt(n) { SInt(a.bits.complement()) }
+
+fn SInt::shift_left({n: Nat}, self a: SInt(n), count: Nat) → SInt(n) { SInt(a.bits.shift_left(count)) }
+fn SInt::shift_right({n: Nat}, self a: SInt(n), count: Nat) → SInt(n) {
+    SInt(a.bits.arithmetic_shift_right(count))
+}
+fn SInt::logical_shift_right({n: Nat}, self a: SInt(n), count: Nat) → SInt(n) {
+    SInt(a.bits.shift_right(count))
+}
+
+// Widening keeps the value (sign extension); narrowing keeps the low bits.
+// `extend` is at a positive width, the one with a sign bit.
+fn SInt::extend({n: Nat}, extra: Nat, self a: SInt(Succ(n))) → SInt(extra + Succ(n)) {
+    SInt(a.bits.sign_extend(extra))
+}
+fn SInt::truncate(n, extra: Nat, self a: SInt(extra + n)) → SInt(n) { SInt(a.bits.truncate(n, extra)) }
+
+// ---------------------------------------------------------------------------
+// Order: the signed reading. The propositions are `toInt`'s order, as
+// `BitVec::signed_lt` is; the bits are what a program branches on.
+
+fn SInt::Lt({n: Nat}, self a, b: SInt(n)) → Type { a.bits.signed_lt(b.bits) }
+fn SInt::Le({n: Nat}, self a, b: SInt(n)) → Type { a.bits.signed_le(b.bits) }
+
+fn SInt::lt_bit({n: Nat}, self a, b: SInt(n)) → Bool { a.bits.signed_lt_bit(b.bits) }
+fn SInt::le_bit({n: Nat}, self a, b: SInt(n)) → Bool { !b.bits.signed_lt_bit(a.bits) }
+fn SInt::eq_bit({n: Nat}, self a, b: SInt(n)) → Bool { a.bits.eq_bit(b.bits) }
+
+fn SInt::min({n: Nat}, self a, b: SInt(n)) → SInt(n) { match a.lt_bit(b) { True => a, False => b } }
+fn SInt::max({n: Nat}, self a, b: SInt(n)) → SInt(n) { match a.lt_bit(b) { True => b, False => a } }
+
+designation < at SInt(n) := SInt::Lt
+designation <= at SInt(n) := SInt::Le
+
+instance(n: Nat, a, b: SInt(n)) Decide<SInt::Lt(a, b)> {
+    dec := a.bits.signed_lt_dec(b.bits),
+    bit := or_bit(a.bits.signed_lt_dec(b.bits)),
+    reflects := or_bit_reflects(a.bits.signed_lt_dec(b.bits)),
+}
+instance(n: Nat, a, b: SInt(n)) Decide<SInt::Le(a, b)> {
+    dec := a.bits.signed_le_dec(b.bits),
+    bit := or_bit(a.bits.signed_le_dec(b.bits)),
+    reflects := or_bit_reflects(a.bits.signed_le_dec(b.bits)),
+}
+
+// ---------------------------------------------------------------------------
+// Equality is the word's: an `SInt` is its bits.
+
+theorem SInt::eta(n: Nat, a: SInt(n)): SInt(a.bits) = a { refl }
+
+theorem SInt::eq_of_bits(n: Nat, a, b: SInt(n), same: a.bits = b.bits): a = b {
+    trans(sym(SInt::eta(n, a)), trans(cong(same, f := λ (x: BitVec(n)) => SInt(x)), SInt::eta(n, b)))
+}
+
+theorem SInt::bits_of_eq(n: Nat, a, b: SInt(n), same: a = b): a.bits = b.bits {
+    cong(same, f := λ (x: SInt(n)) => x.bits)
+}
+
+fn SInt::eq_dec({n: Nat}, self a, b: SInt(n)) → a = b ∨ a ≠ b {
+    match a.bits.eq_bit_dec(b.bits) {
+        Inl(same) => Inl(SInt::eq_of_bits(n, a, b, same)),
+        Inr(differ) => Inr(λ same => differ(SInt::bits_of_eq(n, a, b, same))),
+    }
+}
+
+instance(n: Nat, a, b: SInt(n)) Decide<a = b> {
+    dec := a.eq_dec(b),
+    bit := a.eq_bit(b),
+    reflects := And(λ e => SInt::eq_of_bits(n, a, b, BitVec::eq_of_eq_bit(n, a.bits, b.bits, e)),
+        λ e same => BitVec::ne_of_eq_bit(n, a.bits, b.bits, e, SInt::bits_of_eq(n, a, b, same))),
+}
+
+// ---------------------------------------------------------------------------
+// Laws, carried from the word's through `bits`.
+
+theorem SInt::add_comm(n: Nat, a, b: SInt(n)): a + b = b + a {
+    cong(BitVec::add_comm(n, a.bits, b.bits), f := λ (x: BitVec(n)) => SInt(x))
+}
+
+theorem SInt::add_sub_cancel(n: Nat, a, b: SInt(n)): (a + b) - b = a {
+    trans(cong(BitVec::add_sub_cancel(n, a.bits, b.bits), f := λ (x: BitVec(n)) => SInt(x)), SInt::eta(n, a))
+}
+
+// The unsigned and signed readings are inverse: neither moves a bit.
+theorem SInt::as_signed_as_unsigned(n: Nat, a: SInt(n)): a.as_unsigned().as_signed() = a { refl }
+theorem SInt::as_unsigned_as_signed(n: Nat, x: BitVec(n)): x.as_signed().as_unsigned() = x { refl }

@@ -1,0 +1,39 @@
+// Probes of `lib/std/bitvec/byte.hthr`: the C-locale byte classes at their
+// edges, including vertical tab and form feed, which `isspace` counts and
+// `Char::is_space` does not, and the unsigned word names. Tests, not library
+// (docs/test-value-audit.md §4.5).
+import bool; import logic; import algebra; import char; import bitvec; import byte;
+
+fn b(k: u8) → u8 { k }
+
+// `u8` is `BitVec(8)`: one type, so either spelling converts.
+fn same(x: u8) → BitVec(8) { x }
+fn wider(x: u8) → u16 { x.zero_extend(8) }
+theorem wrap(): b(250) + 10 = 4 { refl }
+theorem char_at_byte(): b('\n') = 10 { refl }
+
+theorem space_vt_ff(): b(11).is_space() = True ∧ b(12).is_space() = True { And(refl, refl) }
+theorem space_edges(): b(8).is_space() = False ∧ b(14).is_space() = False ∧ b(' ').is_space() = True {
+    And(refl, And(refl, refl))
+}
+theorem newline(): b('\n').is_newline() = True ∧ b('\r').is_newline() = False { And(refl, refl) }
+theorem digits(): b('0').is_digit() = True ∧ b('9').is_digit() = True ∧ b('/').is_digit() = False ∧ b(':').is_digit() = False {
+    And(refl, And(refl, And(refl, refl)))
+}
+theorem letters(): b('A').is_upper() = True ∧ b('[').is_alpha() = False ∧ b('z').is_lower() = True ∧ b('{').is_alpha() = False {
+    And(refl, And(refl, And(refl, refl)))
+}
+theorem hex(): b('f').is_xdigit() = True ∧ b('g').is_xdigit() = False ∧ b('F').is_xdigit() = True { And(refl, And(refl, refl)) }
+theorem print_control(): b('~').is_print() = True ∧ b(127).is_print() = False ∧ b(127).is_control() = True ∧ b(200).is_ascii() = False {
+    And(refl, And(refl, And(refl, refl)))
+}
+// At an open byte the class is its comparisons.
+theorem alnum_open(x: u8): x.is_alnum() = (x.is_alpha() || x.is_digit()) { refl }
+
+// A `def` names a type only at a universe, and a width is written without
+// leading zeros.
+def not_a_type: Nat = 3;
+// expect-error: is a value of type
+fn misuse(x: not_a_type) → Nat { x }
+// expect-error: unknown type `u08`
+fn padded(x: u08) → Nat { 0 }
