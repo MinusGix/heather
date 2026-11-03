@@ -78,8 +78,11 @@ impl Elaborator {
                 _ => return Ok(None),
             }
         };
-        let Type::El { level: holds, .. } = &cur else { unreachable!("a relation is an `El`") };
-        let holds = holds.clone();
+        let holds = match &cur {
+            Type::El { level, .. } => level.clone(),
+            Type::M { sig, .. } => sig.family_level(),
+            _ => unreachable!("a relation is an `El` or a family"),
+        };
         if k == 0 {
             return RelationRewrite::new(self, cx, h.span, pattern, proof.clone(), 0, holds).map(Some);
         }
@@ -223,6 +226,12 @@ impl GoalNodes {
     fn types(&mut self, cx: &Cx, ty: &Type, seen: &mut std::collections::HashSet<(*const Term, usize)>) {
         match ty {
             Type::El { tm, .. } => self.walk(tm, 0, seen),
+            Type::M { .. } => {
+                if let Some(rel) = Relation::of_family(ty) {
+                    self.walk(&rel.left, 0, seen);
+                    self.walk(&rel.right, 0, seen);
+                }
+            }
             Type::Pi { dom, cod, .. } => {
                 self.types(cx, dom, seen);
                 if let Some(cod) = crate::strengthen_ty(&cx.gamma, cod, 1) {
@@ -546,7 +555,6 @@ impl<'a> RelationRewrite<'a> {
     /// that connects the two. `what` names the goal in errors.
     pub(super) fn goal(&mut self, goal: &Type, what: &str) -> R<(Type, Plan)> {
         if let Some(rel) = Relation::of_type(self.e, self.original, goal, self.span) {
-            let Type::El { level, tm } = goal else { unreachable!("a relation is an `El`") };
             let left = self.term(&rel.left)?;
             let right = self.term(&rel.right)?;
             if !left.changed() && !right.changed() {
@@ -562,10 +570,12 @@ impl<'a> RelationRewrite<'a> {
                     span: self.span,
                 });
             }
-            let (_, args) = crate::spelling::app_spine(tm);
-            let mut nodes = vec![Node::Same; args.len() - 2];
-            nodes.extend([left.clone(), right.clone()]);
-            let next = Type::El { level: level.clone(), tm: rebuild(tm, &nodes) };
+            let to = |node: &Node, from: &Rc<Term>| match node {
+                Node::Changed { term, .. } => Rc::clone(term),
+                Node::Same => Rc::clone(from),
+            };
+            let next = Relation::with_sides(goal, to(&left, &rel.left), to(&right, &rel.right))
+                .expect("a relation application has two sides");
             let side = |from: Rc<Term>, node: Node| match node {
                 Node::Same => Side { to: Rc::clone(&from), from, proof: None },
                 Node::Changed { term, proof, .. } => Side { from, to: term, proof: Some(proof) },

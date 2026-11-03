@@ -21,6 +21,9 @@ import nat;
 import itree;
 import itree_trace;
 import coitree;
+import relation;
+import relation_props;
+import algebra_rel;
 
 // ---------------------------------------------------------------------------
 // Dropping silent steps
@@ -515,4 +518,58 @@ fn Eutt::bind_cong_r<A, B>(E: Events, t: CoTree<A>(E), h1: A → CoTree<B>(E), h
     hh: (a: A) → Eutt<B>(E, h1(a), h2(a))) → Eutt<B>(E, CoTree::bind(E, t, h1), CoTree::bind(E, t, h2))
 {
     Eutt::bind_cong(E, t, t, h1, h2, Eutt::refl(E, t), hh)
+}
+
+// ---------------------------------------------------------------------------
+// Rewriting along `Eutt`
+
+// `Eutt` is an equivalence, so a relation `rewrite(h, e)` with `h : Eutt(t, u)`
+// rewrites inside an `Eutt` goal and chains each side's step into it
+// (docs/equation-rewrite-design.md §9, §11).
+//
+// `Eutt<R>(E)` is a codata family, which an expression cannot apply to fewer
+// than its indices; `Eutt::Rel` names it as a relation, and converts with
+// the relation a rewrite reads off a goal `Eutt<R>(E, t, u)`.
+fn Eutt::Rel<R>(E: Events) → CoTree<R>(E) → CoTree<R>(E) → Type { λ t u => Eutt<R>(E, t, u) }
+
+instance<R>(E: Events) Equivalence<CoTree<R>(E)>(Eutt::Rel<R>(E)) {
+    rel_refl := λ t => Eutt::refl(E, t),
+    rel_sym := λ t u e => Eutt::sym(E, t, u, e),
+    rel_trans := λ t u v a b => Eutt::trans(E, t, u, v, a, b),
+}
+
+// A silent step and a call respect `Eutt`: what a rewrite crosses `CTau`
+// and a call's continuation by.
+fn Eutt::tau_cong<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u)) → Eutt<R>(E, CTau(t), CTau(u)) {
+    Eutt::trans(E, CTau(t), t, CTau(u), Eutt::tau_l(E, t), Eutt::trans(E, t, u, CTau(u), e, Eutt::tau_r(E, u)))
+}
+
+fn Eutt::vis_cong<R>(E: Events, c: E.Cmd, k1: E.Resp(c) → CoTree<R>(E), k2: E.Resp(c) → CoTree<R>(E),
+    n: (a: E.Resp(c)) → Eutt<R>(E, k1(a), k2(a))) → Eutt<R>(E, CVis(c, k1), CVis(c, k2))
+{
+    EVis(0, 0, c, k1, k2, refl, refl, n)
+}
+
+// The respect evidence a relation rewrite resolves (§10.2, §11): every
+// parameter in braces, outside any section, the context written as a λ.
+evidence theorem Eutt::bind_respects_k<A, B>({E: Events}, {t: CoTree<A>(E)}):
+    PreservesRelation(Pointwise<A, CoTree<B>(E)>(Eutt::Rel<B>(E)), Eutt::Rel<B>(E), λ h => CoTree::bind(E, t, h))
+{
+    λ h1 h2 hh => Eutt::bind_cong_r(E, t, h1, h2, hh)
+}
+
+evidence theorem Eutt::bind_respects_t<A, B>({E: Events}, {h: A → CoTree<B>(E)}):
+    PreservesRelation(Eutt::Rel<A>(E), Eutt::Rel<B>(E), λ t => CoTree::bind(E, t, h))
+{
+    λ t u e => Eutt::bind_cong_l(E, t, u, h, e)
+}
+
+evidence theorem Eutt::tau_respects<R>({E: Events}): PreservesRelation(Eutt::Rel<R>(E), Eutt::Rel<R>(E), λ t => CTau(t)) {
+    λ t u e => Eutt::tau_cong(E, t, u, e)
+}
+
+evidence theorem Eutt::vis_respects<R>({E: Events}, {c: E.Cmd}):
+    PreservesRelation(Pointwise<E.Resp(c), CoTree<R>(E)>(Eutt::Rel<R>(E)), Eutt::Rel<R>(E), λ k => CVis(c, k))
+{
+    λ k1 k2 n => Eutt::vis_cong(E, c, k1, k2, n)
 }

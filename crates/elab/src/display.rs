@@ -405,6 +405,14 @@ impl Speller<'_> {
             && let Some(ind) = self.el.types.by_tag(tag)
             && let Some(source) = self.source_instance(&ind, &args, d)
         { return source; }
+        // A codata instance as a code (a type argument, `PreservesRelation<
+        // CoTree<R>(E), …>`) is spelled as the instance it decodes to.
+        if let Type::El { tm, .. } = ty
+            && matches!(**tm, Term::TmM { .. })
+            && let std::borrow::Cow::Owned(decoded) = crate::inductive::decoded(ty)
+        {
+            return self.ty(&decoded, d + 1);
+        }
         // A reference to a registered lowering is spelled through the
         // registry's inline copy, which is what `tag_of` recognizes.
         if let Some(inline) = self.el.unspell_here(ty) {
@@ -620,6 +628,9 @@ impl Speller<'_> {
             return out;
         }
         match t {
+            // A codata instance's code, `λ a b => Eutt<R>(E, a, b)`'s body:
+            // the instance it decodes to.
+            Term::TmM { .. } => self.ty(&Type::El { level: heather_kernel::level::Level::Zero, tm: Rc::new(t.clone()) }, d + 1),
             Term::Var(LocalVar(i)) => self.var(*i).unwrap_or_else(|| self.raw_tm(t)),
             Term::Succ(p) => format!("Succ({})", self.tm(p, d + 1)),
             Term::Refl { .. } => "refl".to_string(),

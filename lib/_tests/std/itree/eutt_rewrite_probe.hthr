@@ -1,0 +1,43 @@
+import logic; import nat; import itree; import itree_trace; import coitree; import coitree_eutt; import relation; import relation_props; import algebra_rel;
+
+fn top_assoc<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E), u: CoTree<C>(E),
+    e: Eutt<C>(E, CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g)), u)) →
+    Eutt<C>(E, CoTree::bind(E, CoTree::bind(E, t, f), g), u)
+{
+    rewrite(Eutt::bind_assoc, e)
+}
+
+fn top_tau<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, CTau(t), t) {
+    rewrite(Eutt::tau_l, Eutt::refl(E, t))
+}
+
+fn under_tau<A, B>(E: Events, s: CoTree<A>(E), h: A → CoTree<B>(E)) →
+    Eutt<B>(E, CoTree::bind(E, s, λ y => CTau(h(y))), CoTree::bind(E, s, h))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(E, CoTree::bind(E, s, h)))
+}
+
+fn under_assoc<A, B, C, D>(E: Events, s: CoTree<D>(E), t: D → CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E)) →
+    Eutt<C>(E, CoTree::bind(E, s, λ y => CoTree::bind(E, CoTree::bind(E, t(y), f), g)),
+        CoTree::bind(E, s, λ y => CoTree::bind(E, t(y), λ x => CoTree::bind(E, f(x), g))))
+{
+    rewrite(Eutt::bind_assoc, Eutt::refl(E, CoTree::bind(E, s, λ y => CoTree::bind(E, t(y), λ x => CoTree::bind(E, f(x), g)))))
+}
+
+fn first_arg_same<A>(E: Events, t: CoTree<A>(E), h: A → CoTree<A>(E)) →
+    Eutt<A>(E, CoTree::bind(E, CTau(t), h), CoTree::bind(E, t, h))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(E, CoTree::bind(E, t, h)))
+}
+
+fn twice<R>(E: Events, t: CoTree<R>(E)) → CoTree<R>(E) { CoTree::bind(E, t, λ r => CRet(r)) }
+
+fn no_evidence<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, twice(E, CTau(t)), twice(E, t)) {
+    rewrite(Eutt::tau_l, Eutt::refl(E, twice(E, t)))
+}
+
+fn first_arg_other<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E)) →
+    Eutt<B>(E, CoTree::bind(E, CTau(t), h), CoTree::bind(E, t, h))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(E, CoTree::bind(E, t, h)))
+}
