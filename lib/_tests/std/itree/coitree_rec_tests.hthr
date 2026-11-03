@@ -6,7 +6,7 @@
 // read back by `get`. Tests, not library: nothing outside lib/_tests imports
 // this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import itree; import itree_trace; import coitree; import coitree_eutt; import coitree_rec;
-import omega;
+import omega; import relation; import relation_props; import algebra_rel;
 
 // ---------------------------------------------------------------------------
 // An unbounded search: the least `m >= n` whose square is at least 50. A
@@ -136,4 +136,15 @@ fn search_then(n: Nat) → Eutt<Nat>(Events::none(),
         λ x => CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, CRet(Succ(x)))))
 {
     Eutt::mrec_bind<Nat, Nat>(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n), λ r => CRet(Succ(r)))
+}
+
+// Rewriting inside a pending tree, through the run: `Eutt::mrec_respects`
+// is stated, but the rewrite does not find it for a run whose calls are
+// `Events::sum(…)` (issues/eutt-rewrite-iteration-evidence.md).
+// expect-error: no evidence about it names the relation its result changes by
+fn rewrite_in_run(n: Nat) →
+    Eutt<Nat>(Events::none(), CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, CTau(search_body(n))),
+        CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n)))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(Events::none(), CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n))))
 }

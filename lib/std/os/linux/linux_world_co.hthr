@@ -12,6 +12,8 @@ import coitree;
 import coitree_eutt;
 import coitree_rec;
 import coitree_bridge;
+import relation;
+import relation_props;
 import linux_calls;
 import linux_trees;
 import linux_world;
@@ -22,10 +24,10 @@ import linux_world;
 // A coinductive tree read against a world: each command put to the world
 // and answered, as one silent step, and each silent step kept. What comes
 // out has no events left, only silent steps and perhaps a result: a
-// computation in the delay monad (`Partial`, `CoTree<_>(Events::none())`,
+// computation in the delay monad (`Partial`,
 // docs/partial-functions-design.md §4.1), so a loop that never ends reads
 // as one that never returns, and a result is reached at a count.
-fn Io::against_co_obs<R>(o: Obs<R>(Events::linux()), io: Io) → CoTree<Mutated<Io, R>>(Events::none()) {
+fn Io::against_co_obs<R>(o: Obs<R>(Events::linux()), io: Io) → Partial(Mutated<Io, R>) {
     match o {
         ORet(r) => CRet(Mutated(io, r)),
         OTau(s) => CTau(Io::against_co_obs(CoTree::obs(Events::linux(), s), io)),
@@ -33,7 +35,7 @@ fn Io::against_co_obs<R>(o: Obs<R>(Events::linux()), io: Io) → CoTree<Mutated<
     }
 }
 
-fn Io::against_co<R>(t: CoTree<R>(Events::linux()), io: Io) → CoTree<Mutated<Io, R>>(Events::none()) {
+fn Io::against_co<R>(t: CoTree<R>(Events::linux()), io: Io) → Partial(Mutated<Io, R>) {
     Io::against_co_obs(CoTree::obs(Events::linux(), t), io)
 }
 
@@ -131,7 +133,7 @@ fn Io::against_co_bind<A, B>(h: A → CoTree<B>(Events::linux()), t: CoTree<A>(E
 // silent steps. A program with a loop over the world means a computation
 // `Io → Partial<Mutated<Io, R>>` (design §4), and so does a tree's reading;
 // the two need not go round in lockstep.
-fn Io::Reads<R>(t: CoTree<R>(Events::linux()), f: Io → CoTree<Mutated<Io, R>>(Events::none())) → Type {
+fn Io::Reads<R>(t: CoTree<R>(Events::linux()), f: Io → Partial(Mutated<Io, R>)) → Type {
     (io: Io) → Eutt<Mutated<Io, R>>(Events::none(), Io::against_co(t, io), f(io))
 }
 
@@ -147,8 +149,8 @@ fn Io::reads_trigger(c: LinuxCmd<Nat>) → Io::Reads(CoTree::trigger(Events::lin
 
 // `let a = f(io); g(a)(io)` reads as the trees in sequence: the agreement of
 // a capability program with its tree is proved construct by construct.
-fn Io::reads_bind<A, B>(t: CoTree<A>(Events::linux()), f: Io → CoTree<Mutated<Io, A>>(Events::none()),
-    h: A → CoTree<B>(Events::linux()), g: A → Io → CoTree<Mutated<Io, B>>(Events::none()),
+fn Io::reads_bind<A, B>(t: CoTree<A>(Events::linux()), f: Io → Partial(Mutated<Io, A>),
+    h: A → CoTree<B>(Events::linux()), g: A → Io → Partial(Mutated<Io, B>),
     rt: Io::Reads(t, f), rh: (a: A) → Io::Reads(h(a), g(a))) →
     Io::Reads(CoTree::bind(Events::linux(), t, h), λ io => CoTree::bind(Events::none(), f(io), λ m => g(m.value, m.after)))
 {
@@ -175,8 +177,8 @@ fn Io::shift<A, B>(m: Mutated<Io, Step<A, B>>) → Step<Mutated<Io, A>, Mutated<
 
 // One pass of a loop over a world, in `Partial`: the state is the world and
 // the loop's own state.
-fn Io::lift_step<A, B>(step: A → Io → CoTree<Mutated<Io, Step<A, B>>>(Events::none()), s: Mutated<Io, A>) →
-    CoTree<Step<Mutated<Io, A>, Mutated<Io, B>>>(Events::none())
+fn Io::lift_step<A, B>(step: A → Io → Partial(Mutated<Io, Step<A, B>>), s: Mutated<Io, A>) →
+    Partial(Step<Mutated<Io, A>, Mutated<Io, B>>)
 {
     CoTree::map(Events::none(), step(s.value, s.after), λ m => Io::shift(m))
 }
@@ -184,28 +186,28 @@ fn Io::lift_step<A, B>(step: A → Io → CoTree<Mutated<Io, Step<A, B>>>(Events
 // The loop: `step` iterated in `Partial` with the world threaded, from `a`
 // at `io`. What a function with a loop over the world and no measure means
 // (design §4).
-fn Io::iterate<A, B>(step: A → Io → CoTree<Mutated<Io, Step<A, B>>>(Events::none()), a: A, io: Io) →
-    CoTree<Mutated<Io, B>>(Events::none())
+fn Io::iterate<A, B>(step: A → Io → Partial(Mutated<Io, Step<A, B>>), a: A, io: Io) →
+    Partial(Mutated<Io, B>)
 {
     CoTree::iter(Events::none(), λ s => Io::lift_step(step, s), Mutated(io, a))
 }
 
 // The reading of a pending pass, its answer shifted as the iteration's.
 fn Io::pass_reading_obs<A, B>(o: Obs<Step<A, B>>(Events::linux()), io: Io) →
-    CoTree<Step<Mutated<Io, A>, Mutated<Io, B>>>(Events::none())
+    Partial(Step<Mutated<Io, A>, Mutated<Io, B>>)
 {
     CoTree::map(Events::none(), Io::against_co_obs(o, io), λ m => Io::shift(m))
 }
 
 fn Io::pass_reading<A, B>(t: CoTree<Step<A, B>>(Events::linux()), io: Io) →
-    CoTree<Step<Mutated<Io, A>, Mutated<Io, B>>>(Events::none())
+    Partial(Step<Mutated<Io, A>, Mutated<Io, B>>)
 {
     Io::pass_reading_obs(CoTree::obs(Events::linux(), t), io)
 }
 
 // The reading of the loop, resumed at a pending pass.
 fn Io::loop_reading<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), t: CoTree<Step<A, B>>(Events::linux()), io: Io) →
-    CoTree<Mutated<Io, B>>(Events::none())
+    Partial(Mutated<Io, B>)
 {
     Io::against_co(CoTree::iter_from(Events::linux(), body, t), io)
 }
@@ -228,7 +230,7 @@ theorem Io::loop_reading_at<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()
 // gone on to `t2` at the world `io2`, and the loop's reading has taken a
 // silent step to the loop's reading there.
 record PassTau<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), t: CoTree<Step<A, B>>(Events::linux()), io: Io,
-    x2: CoTree<Step<Mutated<Io, A>, Mutated<Io, B>>>(Events::none()))
+    x2: Partial(Step<Mutated<Io, A>, Mutated<Io, B>>))
 {
     t2: CoTree<Step<A, B>>(Events::linux()),
     io2: Io,
@@ -251,7 +253,7 @@ record PassRet<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), t: CoTree<
 }
 
 theorem Io::pass_tau<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: Nat): (t: CoTree<Step<A, B>>(Events::linux())) →
-    (io: Io) → (x2: CoTree<Step<Mutated<Io, A>, Mutated<Io, B>>>(Events::none())) →
+    (io: Io) → (x2: Partial(Step<Mutated<Io, A>, Mutated<Io, B>>)) →
     CoTree::after(Events::none(), n, Io::pass_reading(t, io)) = OTau(x2) → PassTau<A, B>(body, t, io, x2)
 {
     match n {
@@ -338,8 +340,8 @@ theorem Io::pass_ret<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
 // returns, the pass returned (`pass_ret`), and at a `Continue` both loops
 // take a silent step to a new pass, related by the body's reading.
 fn Io::reads_loop<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()),
-    step: A → Io → CoTree<Mutated<Io, Step<A, B>>>(Events::none()), rb: (a: A) → Io::Reads(body(a), step(a)),
-    t: CoTree<Step<A, B>>(Events::linux()), io: Io, u: CoTree<Step<Mutated<Io, A>, Mutated<Io, B>>>(Events::none()),
+    step: A → Io → Partial(Mutated<Io, Step<A, B>>), rb: (a: A) → Io::Reads(body(a), step(a)),
+    t: CoTree<Step<A, B>>(Events::linux()), io: Io, u: Partial(Step<Mutated<Io, A>, Mutated<Io, B>>),
     e: Eutt<Step<Mutated<Io, A>, Mutated<Io, B>>>(Events::none(), Io::pass_reading(t, io), u)) →
     Eutt<Mutated<Io, B>>(Events::none(), Io::loop_reading(body, t, io), CoTree::iter_from<Mutated<Io, A>, Mutated<Io, B>>(Events::none(), λ s => Io::lift_step(step, s), u))
 {
@@ -386,7 +388,7 @@ fn Io::reads_loop<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()),
 // Proved once; a capability program's loop over the world agrees with its
 // tree's loop by this, however differently the two go round.
 fn Io::reads_iter<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()),
-    step: A → Io → CoTree<Mutated<Io, Step<A, B>>>(Events::none()), rb: (a: A) → Io::Reads(body(a), step(a)), a: A) →
+    step: A → Io → Partial(Mutated<Io, Step<A, B>>), rb: (a: A) → Io::Reads(body(a), step(a)), a: A) →
     Io::Reads(CoTree::iter(Events::linux(), body, a), λ io => Io::iterate(step, a, io))
 {
     λ io => Io::reads_loop(body, step, rb, body(a), io, Io::lift_step(step, Mutated(io, a)),
@@ -403,7 +405,7 @@ theorem Io::against_returns<R>(t: ITree<R>(Events::linux())): (io: Io) → (m: M
     Io::against(t, io) = Some(m) → Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), t), io), m)
 {
     match t {
-        Ret(r) => λ io m e => j(inj(e), λ y q => Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), Ret(r)), io), y),
+        Ret(r) => λ io m e => j(inj(e), λ y q => Returns<Mutated<Io, R>>(Events::none(), Io::against_co<R>(CoTree::of_tree(Events::linux(), Ret(r)), io), y),
             Returns(0, refl)),
         Tau(u) => λ io m e => {
             let h: Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), u), io), m) = Io::against_returns(u, io, m, e);
@@ -416,4 +418,16 @@ theorem Io::against_returns<R>(t: ITree<R>(Events::linux())): (io: Io) → (m: M
         },
         Cut => λ io m e => absurd(e),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rewriting along `Eutt` through the reading
+
+// The reading respects `Eutt` (`against_co_cong`), from trees over Linux's
+// calls to computations in `Partial` (docs/equation-rewrite-design.md
+// §11.4): a rewrite inside a tree reaches its reading.
+evidence theorem Io::against_co_respects<R>({io: Io}):
+    PreservesRelation(Eutt::Rel<R>(Events::linux()), Eutt::Rel<Mutated<Io, R>>(Events::none()), λ t => Io::against_co(t, io))
+{
+    λ t u e => Io::against_co_cong(t, u, e, io)
 }

@@ -77,8 +77,9 @@ theorem two_arguments<A: Equivalence(R)>(R: A → A → Type, k: A → Nat → A
     h: R(x, y), e: R(k(y, n, y), y)): R(k(x, n, x), y)
 { rewrite(h, e) }
 
-// A function out of the carrier leaves it, and the rewrite stays in it.
-// expect-error: does not map
+// A function out of the carrier leaves it, and with no evidence naming the
+// relation at `Nat` the rewrite is refused (docs/equation-rewrite-design.md §11.4).
+// expect-error: no evidence about it names the relation its result changes by
 theorem leaves_the_carrier<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, back: Nat → A, x, y, z: A,
     h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
 { rewrite(h, e) }

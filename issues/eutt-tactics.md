@@ -6,7 +6,7 @@ area: tactics
 milestone: [nh-effects]
 created: 2026-11-03
 updated: 2026-11-03
-blocked-by: [eutt-iteration-and-io-reading, codata-up-to-friends-round-2, eutt-setoid-rewrite]
+blocked-by: [eutt-iteration-and-io-reading, codata-up-to-friends-round-2]
 ---
 
 Tactics for proofs up to taus, once there are targets to prove

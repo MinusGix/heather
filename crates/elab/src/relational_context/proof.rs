@@ -34,6 +34,25 @@ impl Relation {
     /// `ty` read as written as `R(left, right)` with both domains of `R` the
     /// same carrier; `None` for anything else, an `=` among them.
     pub(crate) fn of_type(e: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Relation> {
+        if let Some(mut rel) = Relation::of_family(ty) {
+            // The code as emission spells it, `Eutt<R>(E, a, b)`, so an
+            // obligation over the relation reads as the family.
+            let Term::Lam { body: inner, .. } = &*rel.head else { unreachable!("built as a λ") };
+            let Term::Lam { body: code, .. } = &**inner else { unreachable!("built as a λ") };
+            let Type::M { sig, .. } = ty else { unreachable!("a family") };
+            let mut here = cx.clone();
+            here.push("__a".into(), (*rel.carrier).clone(), rel.level.clone());
+            here.push("__b".into(), rel.carrier.shift_local(1), rel.level.clone());
+            let decoded = Type::El { level: sig.family_level(), tm: Rc::clone(code) };
+            let holds = sig.family_level();
+            if let Ok(t) = crate::expr::ExprElab::quote_type_at(e, &here, &e.whnf(&here, &decoded, span).unwrap_or(decoded), &holds, &holds, span) {
+                let Term::Lam { dom_level, cod_level, dom, .. } = &*rel.head else { unreachable!() };
+                let Term::Lam { dom_level: il, cod_level: ic, dom: id, .. } = &**inner else { unreachable!() };
+                let inner = Term::Lam { dom_level: il.clone(), cod_level: ic.clone(), dom: Rc::clone(id), body: Rc::new(t) };
+                rel.head = Rc::new(Term::Lam { dom_level: dom_level.clone(), cod_level: cod_level.clone(), dom: Rc::clone(dom), body: Rc::new(inner) });
+            }
+            return Some(rel);
+        }
         let Type::El { tm, .. } = ty else { return None };
         let (fun, right) = crate::spelling::app_of(tm)?;
         let (head, left) = crate::spelling::app_of(fun)?;
@@ -59,6 +78,108 @@ impl Relation {
             carrier: dom.0,
             level: dom.1,
         })
+    }
+}
+
+impl Relation {
+    /// A goal at an indexed codata family whose last two indices are the
+    /// sides, `Eutt<R>(E, t, u)` (docs/equation-rewrite-design.md §11): the
+    /// family lowers to `M(…)(⟨…, t, u⟩)`, not to an application, so its
+    /// relation is the λ `λ a b. ⌜M(…)(⟨…, a, b⟩)⌝`, which converts with a
+    /// library's name for it (`Eutt::Rel<R>(E)`).
+    pub(crate) fn of_family(ty: &Type) -> Option<Relation> {
+        let (sig, descents, pair) = family_sides(ty)?;
+        let Term::Pair { fst_level, fst_ty, fst, snd, .. } = pair else { unreachable!("a pair") };
+        let holds = sig.family_level();
+        let Type::M { index, .. } = ty else { unreachable!("a family") };
+        let body = Type::M {
+            sig: sig.shift_local(2),
+            index: Rc::new(with_last_pair(&index.shift_local(2), descents, Rc::new(Term::Var(LocalVar(1))), Rc::new(Term::Var(LocalVar(0))))),
+        };
+        let code = crate::code::code_of(&body)?;
+        let inner = Term::Lam {
+            dom_level: fst_level.clone(),
+            cod_level: Level::succ(holds.clone()),
+            dom: Rc::new(fst_ty.shift_local(1)),
+            body: Rc::new(code),
+        };
+        let head = Term::Lam {
+            dom_level: fst_level.clone(),
+            cod_level: Level::join(fst_level.clone(), Level::succ(holds)),
+            dom: Rc::clone(fst_ty),
+            body: Rc::new(inner),
+        };
+        Some(Relation {
+            head: Rc::new(head),
+            left: Rc::clone(fst),
+            right: Rc::clone(snd),
+            carrier: Rc::clone(fst_ty),
+            level: fst_level.clone(),
+        })
+    }
+
+    /// `ty`, a relation application [`Relation::of_type`] read, with its two
+    /// sides replaced: the application's last two arguments, or a family's
+    /// last two indices.
+    pub(crate) fn with_sides(ty: &Type, left: Rc<Term>, right: Rc<Term>) -> Option<Type> {
+        match ty {
+            Type::M { sig, index } => {
+                let (_, descents, _) = family_sides(ty)?;
+                Some(Type::M { sig: Rc::clone(sig), index: Rc::new(with_last_pair(index, descents, left, right)) })
+            }
+            Type::El { level, tm } => {
+                let (fun, _) = crate::spelling::app_of(tm)?;
+                let (head, _) = crate::spelling::app_of(fun)?;
+                let fun = Rc::new(Term::AppAt { fun: Rc::clone(head), arg: left });
+                Some(Type::El { level: level.clone(), tm: Rc::new(Term::AppAt { fun, arg: right }) })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The signature of an indexed codata family `ty`, how many pairs down its
+/// index tuple the last two indices sit, and that pair, when the two have
+/// one type, the later not depending on the earlier.
+fn family_sides(ty: &Type) -> Option<(&Rc<heather_kernel::term::MSig>, usize, &Term)> {
+    let Type::M { sig, index } = ty else { return None };
+    // How many index binders: one per `Σ` down the telescope, plus the last.
+    let mut n = 1;
+    let mut idx = &*sig.idx;
+    while let Type::Sigma { snd, .. } = idx {
+        n += 1;
+        idx = snd;
+    }
+    if n < 2 {
+        return None;
+    }
+    let mut pair = &**index;
+    for _ in 0..n - 2 {
+        let Term::Pair { snd, .. } = pair else { return None };
+        pair = snd;
+    }
+    let Term::Pair { fst_ty, snd_ty, .. } = pair else { return None };
+    let lowered = snd_ty.inst_top(0, &Term::Zero);
+    (lowered.shift_local(1) == **snd_ty && lowered == **fst_ty).then_some((sig, n - 2, pair))
+}
+
+/// `index` with the pair `descents` pairs down replaced by `⟨left, right⟩`.
+fn with_last_pair(index: &Term, descents: usize, left: Rc<Term>, right: Rc<Term>) -> Term {
+    let Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } = index else {
+        unreachable!("family_sides found the pair")
+    };
+    let (fst, snd) = if descents == 0 {
+        (left, right)
+    } else {
+        (Rc::clone(fst), Rc::new(with_last_pair(snd, descents - 1, left, right)))
+    };
+    Term::Pair {
+        fst_level: fst_level.clone(),
+        snd_level: snd_level.clone(),
+        fst_ty: Rc::clone(fst_ty),
+        snd_ty: Rc::clone(snd_ty),
+        fst,
+        snd,
     }
 }
 

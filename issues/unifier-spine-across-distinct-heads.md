@@ -1,10 +1,10 @@
 ---
 title: Implicit inference takes the arguments of an application with a different head
-status: open
+status: closed
 labels: [elab,unifier,diagnostics]
 area: language
 created: 2026-10-30
-updated: 2026-11-02
+updated: 2026-11-03
 ---
 
 Found while building omega's guard round ([[omega-reads-bool-guards]]).
@@ -37,3 +37,4 @@ against `?a && ?b`, or accepted; never a solution of the wrong type.
 ## Log
 
 - 2026-11-02: [[unifier-lazy-delta]] proposes the second reading (unfold at the head mismatch) as the general rule.
+- 2026-11-03: Fixed by the second reading ([[unifier-lazy-delta]]): `Bool::and(?a, ?b)` against `g(n, m)` unfolds `g` to `n.leb(m) && !m.leb(n)`, so `pick(h)` elaborates. The probe is lib/_tests/std/core/bool_tests.hthr `lazy_delta_pick_through_g`.

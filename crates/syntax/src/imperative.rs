@@ -71,6 +71,10 @@ pub const AFTER: &str = "\0after";
 /// `for`'s list (§5.3). The loop is otherwise a `for`'s, over a private
 /// binder the body never reads.
 pub const WHILE: &str = "\0while";
+/// A `while` with no measure, once lowered (§18): `\0iterate(step, init)`,
+/// always the input of a bind, which [`crate::try_lower`] writes as one call
+/// `Iterate::then(init, step, k)` over the rest of the block `k`.
+pub(crate) const ITERATE: &str = "\0iterate";
 
 fn call_marked(marker: &str, input: Expr, span: Span) -> Expr { marked(marker, input, span) }
 
@@ -350,6 +354,12 @@ fn lower_in_env(mut b: Block, outer: &[String], next: &mut usize) -> R<(Block, V
                     vars.sort_by_key(|v| env.iter().position(|e| e == v).unwrap_or(usize::MAX));
                     // A loop that may `return` computes its exit even
                     // with no state (a search).
+                    if vars.is_empty() && carrier_while(iter).is_some() {
+                        return fail(span,
+                            "this `while` assigns no `let mut` local, so its condition can never change: \
+                             a loop with no measure threads the locals its body assigns (a loop that \
+                             runs forever is `CoTree::spin`)");
+                    }
                     if vars.is_empty() && !body_returns(body) {
                         return fail(span,
                             "this loop assigns no `let mut` local, so it computes nothing: in pure code \
@@ -364,6 +374,31 @@ fn lower_in_env(mut b: Block, outer: &[String], next: &mut usize) -> R<(Block, V
                     let mut inner = env.clone();
                     for v in &vars {
                         if !inner.contains(v) { inner.push(v.clone()); }
+                    }
+                    if let Some(cond) = carrier_while(iter) {
+                        // A `while` with no measure: a loop of the block's
+                        // carrier (§18), lowered here in full.
+                        let step = carrier_step(cond, body, &inner, &vars, x, next)?;
+                        let init = state_expr(&vars, span);
+                        let looped = call(ITERATE, vec![step, init], span);
+                        stmts.push(Stmt::Let {
+                            name: name.clone(),
+                            ty: None,
+                            expr: crate::try_lower::bind_marker(looped, span),
+                            span,
+                            opaque,
+                        });
+                        for (v, read) in state_reads(&name, &vars, span) {
+                            let mine = env.contains(&v);
+                            stmts.push(Stmt::Let {
+                                name: v.clone(),
+                                ty: if mine { Some(type_of(&v, span)) } else { None },
+                                expr: if mine { read } else { marked(ASSIGN, read, span) },
+                                span,
+                                opaque: false,
+                            });
+                        }
+                        continue;
                     }
                     let lowered = if has_exit(body) {
                         tail(body.stmts.clone(), &inner, &vars, body.result.span, next)?
@@ -654,4 +689,100 @@ fn find_residue(e: &Expr, error: &mut Option<ParseError>) {
         }
     }
     crate::try_lower::visit_children(e, &mut |x| find_residue(x, error));
+}
+
+/// The condition of a `while` with no measure: its header is
+/// `\0while(decide_bit<c>())` alone (a measured one also carries `m`).
+fn carrier_while(header: &Expr) -> Option<&Expr> {
+    match &header.kind {
+        ExprKind::App { head, args, .. } if args.len() == 1 && matches!(&head.kind, ExprKind::Var(n) if n == WHILE) => {
+            Some(&args[0])
+        }
+        _ => None,
+    }
+}
+
+/// The state a carrier loop threads: the one local itself, or the locals
+/// nested in the prelude's pair `Mutated(v₁, Mutated(v₂, …))`, which needs no
+/// declaration the parser cannot write.
+fn state_expr(vars: &[String], span: Span) -> Expr {
+    match vars {
+        [v] => var(v, span),
+        [v, rest @ ..] => call("Mutated", vec![var(v, span), state_expr(rest, span)], span),
+        [] => unreachable!("a carrier loop threads at least one local"),
+    }
+}
+
+/// Each local out of a state `s` that [`state_expr`] built.
+fn state_reads(s: &str, vars: &[String], span: Span) -> Vec<(String, Expr)> {
+    let mut out = Vec::with_capacity(vars.len());
+    let mut at = var(s, span);
+    let dot = |recv: Expr, name: &str| Expr {
+        kind: ExprKind::Dot { recv: Box::new(recv), name: name.into(), tyargs: vec![], args: None, named: vec![] },
+        span,
+    };
+    for (i, v) in vars.iter().enumerate() {
+        if i + 1 == vars.len() {
+            out.push((v.clone(), at));
+            break;
+        }
+        out.push((v.clone(), dot(at.clone(), "after")));
+        at = dot(at, "value");
+    }
+    out
+}
+
+/// The step of a `while c { body }` with no measure (§18):
+///
+/// ```text
+/// λ (#s: TypeOf(v̄)) => { let vᵢ = #s…; match decide_bit<c>() {
+///     True => { body; Pointed::ret(Step::Continue(v̄)) },
+///     False => Pointed::ret(Step::Break(v̄)) } }
+/// ```
+///
+/// The body's binds were left as markers when it closed and are lowered
+/// here, in the `True` arm, so they run inside the step and after the
+/// locals are read. The state's annotation is the locals' types before the
+/// loop, which `:=` keeps.
+fn carrier_step(cond: &Expr, body: &Block, env: &[String], vars: &[String], x: &LamBinder, next: &mut usize) -> R<Expr> {
+    let span = body.span;
+    let ret = |ctor: &str, at: Span| {
+        call(crate::try_lower::POINTED_RET, vec![call(ctor, vec![state_expr(vars, at)], at)], at)
+    };
+    let mut lowered = lower_in(body.clone(), env, next)?;
+    let end = lowered.result.span;
+    lowered.result = Box::new(ret("Step::Continue", end));
+    let lowered = crate::try_lower::binds_in_block(lowered, next)?;
+    let arms = vec![
+        Arm {
+            ctor: "True".into(),
+            default: false,
+            binders: vec![],
+            body: Expr { span: lowered.span, kind: ExprKind::Block(Box::new(lowered)) },
+            span,
+        },
+        Arm { ctor: "False".into(), default: false, binders: vec![], body: ret("Step::Break", span), span },
+    ];
+    let decide = Expr {
+        kind: ExprKind::Match { form: MatchForm::Match, generated: true, scrut: Box::new(cond.clone()), eqbind: None, motive: None, arms },
+        span,
+    };
+    let s = format!("{}#s", x.name);
+    let reads = if vars.len() == 1 {
+        vec![Stmt::Let { name: vars[0].clone(), ty: None, expr: var(&s, span), span, opaque: false }]
+    } else {
+        state_reads(&s, vars, span)
+            .into_iter()
+            .map(|(v, e)| Stmt::Let { name: v, ty: None, expr: e, span, opaque: false })
+            .collect()
+    };
+    let block = Block { stmts: reads, result: Box::new(decide), ons: Vec::new(), span };
+    let annotation = Ty { kind: TyKind::TypeOf(Box::new(state_expr(vars, span))), span };
+    Ok(Expr {
+        kind: ExprKind::Lam {
+            binders: vec![LamBinder { name: s, ty: Some(annotation), implicit: false, span: x.span }],
+            body: Box::new(Expr { span, kind: ExprKind::Block(Box::new(block)) }),
+        },
+        span,
+    })
 }

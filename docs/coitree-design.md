@@ -334,6 +334,11 @@ direct corecursion; none waits on up-to coinduction.
   pass's reading is equivalent to the iteration's pending pass `u`" and
   traces each silent step or return of the reading back to the pass
   (`pass_tau`, `pass_ret`, by induction on the count).
+- **Rewriting.** `Eutt::iter_respects` and `Io::against_co_respects` are
+  the respect evidence `rewrite` along `Eutt` uses to reach inside a loop's
+  body and a tree under its reading (`docs/equation-rewrite-design.md`
+  §11). `Eutt::mrec_respects` is stated, but the rewrite does not find it
+  yet (`issues/eutt-rewrite-iteration-evidence.md`).
 
 ---
 

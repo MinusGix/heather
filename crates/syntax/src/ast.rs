@@ -443,6 +443,14 @@ pub struct FieldDecl {
     pub span: Span,
 }
 
+/// What `partial` marks on a `fn` ([`Decl::partial`]).
+#[derive(Debug, Clone)]
+pub struct PartialSpec {
+    /// `partial(E)`: the events the computation may issue; `None` for none.
+    pub events: Option<Expr>,
+    pub span: Span,
+}
+
 /// `fn name(params) -> T { body }` (computing definition),
 /// `theorem name(params): T { proof }` (opaque), or
 /// `axiom name(params): T;` (an explicit, bodiless assumption).
@@ -466,6 +474,14 @@ pub struct Decl {
     /// an `unfold f;`, while a call at closed arguments still computes. Only
     /// a `fn` may carry it.
     pub is_interface: bool,
+    /// `partial fn f(x: A) → B` — a function that may not return
+    /// (docs/partial-functions-design.md §4): it has type `A → Partial(B)`,
+    /// and its body is a block over the carrier of its own calls, each
+    /// self-call bound with `<-` or in tail position. `partial(E) fn` gives
+    /// the computation the events `E`, and the type `A → CoTree<B>(E)`.
+    /// Lowered by the elaborator (`crates/elab/src/partial.rs`). Only a `fn`
+    /// may carry it.
+    pub partial: Option<PartialSpec>,
     /// `def name: T = e;` — a **value definition** (issues/value-definitions.md,
     /// docs/value-definitions-design.md). Its kind is [`DeclKind::Fn`] with no
     /// written parameters, so it is elaborated, gated, imaged and unfolded

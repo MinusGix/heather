@@ -1,6 +1,6 @@
 ---
 title: Rewrite along Eutt inside eutt goals and under binds
-status: open
+status: closed
 labels: [setoids,relations,tactics,coinduction]
 area: tactics
 milestone: [tac-general,nh-effects]
@@ -35,3 +35,21 @@ A probe rewrites `Eutt::bind_assoc` and `Eutt::tau_l` inside an `Eutt` goal,
 once at the top and once under a continuation's binder, with no hand
 `trans`, and a refusal names the missing respect evidence for a function
 that has none.
+
+## Log
+
+- 2026-11-03: done (`docs/equation-rewrite-design.md` §11). `Eutt` goals
+  read as relation applications (an indexed codata family whose last two
+  indices are the sides); `Eutt::Rel<R>(E)` names the relation, with an
+  `Equivalence` instance (instance indices may now be a global applied to the
+  instance's binders); codata constructors match as occurrences, so
+  `Eutt::tau_l` and `Eutt::bind_ret_l` instantiate unapplied; respect evidence
+  for `bind` (both arguments), `map`, `CTau`, `CVis`. The probes in
+  `lib/_tests/std/itree/coitree_eutt_tests.hthr` rewrite `bind_assoc` and
+  `tau_l` at the top and under a continuation's binder with no hand `trans`,
+  and a function with no evidence leaves a `?compatibility` naming it.
+  Through `bind`'s tree at another result type is
+  [[rewrite-setoid-heterogeneous]]'s case, done in the same round.
+  Not done: walking *into* a constructor ([[rewrite-setoid-codata-constructors]]);
+  `iter`/`rec`/`against_co` evidence waits on [[eutt-iteration-and-io-reading]]
+  landing its congruences ([[eutt-rewrite-iteration-evidence]]).

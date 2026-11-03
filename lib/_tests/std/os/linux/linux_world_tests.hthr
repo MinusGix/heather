@@ -20,6 +20,9 @@ import linux_calls;
 import linux_trees;
 import linux_world;
 import linux_world_co;
+import relation;
+import relation_props;
+import algebra_rel;
 import native_source;
 import native_cat;
 
@@ -227,6 +230,13 @@ fn yes_reads(st: Nat) → Io::Reads(CoTree::iter(Events::linux(), λ s => yes_pa
 // within the depth probed.
 theorem yes_runs_on(): ¬Obs::Settled(Events::none(), CoTree::after(Events::none(), 40, Io::against_co(CoTree::iter(Events::linux(), λ s => yes_pass(s), 0), piped()))) {
     λ s => s
+}
+
+// Rewriting inside a tree, through its reading (`Io::against_co_respects`).
+fn rewrite_in_reading(io: Io) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(CTau(cat_co(8)), io), Io::against_co(cat_co(8), io))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(Events::none(), Io::against_co(cat_co(8), io)))
 }
 
 // ---------------------------------------------------------------------------
