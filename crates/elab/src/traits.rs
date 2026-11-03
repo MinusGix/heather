@@ -1994,6 +1994,26 @@ impl Elaborator {
     /// it is the one `[…]` never had: `CollectionLiteral` is read by key.
     /// The registry digest covers class events, so an image that read one
     /// this way is invalidated as one that named it would be.
+    /// The record of the literal class `key` (`algebra::Numeral`), and
+    /// whether this module names it. A class the module names — the
+    /// library's, or one of its own with the same name and shape — is used as
+    /// it always was, a failed search included. One reached only by identity
+    /// ([`Self::syntax_class`]) is an offer: when its search finds nothing,
+    /// the caller keeps the reading it had before the class was reachable
+    /// (a numeral is a `Nat`), so a carrier that computes to `Nat` (`Resp(c)`
+    /// at a constructor) still checks.
+    pub(crate) fn literal_class_record(&self, key: &str) -> Option<(Rc<crate::inductive::Inductive>, bool)> {
+        let name = key.rsplit("::").next().unwrap_or(key);
+        if let Some(class) = self.lookup_class(name)
+            && class.params.len() == 1
+            && class.valparams.is_empty()
+            && let Some(ind) = self.lookup_inductive(&class.name).cloned()
+        {
+            return Some((ind, true));
+        }
+        self.syntax_class(key).map(|(_, ind)| (ind, false))
+    }
+
     pub(crate) fn syntax_class(&self, key: &str) -> Option<(Rc<ClassInfo>, Rc<crate::inductive::Inductive>)> {
         let class = self.traits.class(key)?.clone();
         if class.params.len() != 1 || !class.valparams.is_empty() {

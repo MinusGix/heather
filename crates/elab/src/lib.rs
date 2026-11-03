@@ -8642,7 +8642,7 @@ impl Elaborator {
         // import (issues/numerals-without-algebra-import.md) — a missing
         // instance is the useful diagnosis and not a later Nat-vs-carrier
         // conversion error.
-        if let Some((_, ind)) = self.syntax_class(literals::NUMERAL)
+        if let Some((ind, named)) = self.literal_class_record(literals::NUMERAL)
             && let Some(field) = ind.field_index("ofNat")
         {
             let targs = [(expected.clone(), expected_level.clone())];
@@ -8652,31 +8652,36 @@ impl Elaborator {
                 .unwrap_or_else(|| "the expected type".to_string());
             let display = format!("Numeral<{carrier}>");
             let mut trace = Vec::new();
-            let Some(dict) =
-                self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
-            else {
-                return Err(ElabError::Resolution {
-                    goal: display,
-                    span,
-                    trace,
-                });
-            };
-            let (embed, embed_ty, embed_level) =
-                self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
-            let since = self.attempt.trivial_uses.borrow().len();
-            let (out, _, _) = application::apply_explicit(
-                self,
-                cx,
-                Some("ofNat"),
-                Rc::new(Vec::new()),
-                0,
-                embed,
-                embed_ty,
-                embed_level,
-                std::slice::from_ref(e),
-            )?;
-            self.settle_deferred_units(since)?;
-            return Ok(self.reduced_embedding(cx, out));
+            match self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace) {
+                Some(dict) => {
+                    let (embed, embed_ty, embed_level) =
+                        self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
+                    let since = self.attempt.trivial_uses.borrow().len();
+                    let (out, _, _) = application::apply_explicit(
+                        self,
+                        cx,
+                        Some("ofNat"),
+                        Rc::new(Vec::new()),
+                        0,
+                        embed,
+                        embed_ty,
+                        embed_level,
+                        std::slice::from_ref(e),
+                    )?;
+                    self.settle_deferred_units(since)?;
+                    return Ok(self.reduced_embedding(cx, out));
+                }
+                None if named => {
+                    return Err(ElabError::Resolution {
+                        goal: display,
+                        span,
+                        trace,
+                    });
+                }
+                // Reached by identity only, and no instance: the `Nat`
+                // reading below, as before the class was reachable.
+                None => {}
+            }
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type

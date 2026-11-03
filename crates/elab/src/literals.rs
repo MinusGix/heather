@@ -182,10 +182,10 @@ impl Elaborator {
         expected_level: &Level,
         span: Span,
     ) -> Option<R<Term>> {
-        let (_, ind) = self.syntax_class(class_key)?;
+        let (ind, named) = self.literal_class_record(class_key)?;
         let class_name = key_name(class_key);
         let field = ind.field_index(field_name)?;
-        Some((|| {
+        (|| {
             let targs = [(expected.clone(), expected_level.clone())];
             let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &[], span)?;
             let carrier = self
@@ -196,6 +196,9 @@ impl Elaborator {
             let Some(dict) =
                 self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
             else {
+                if !named {
+                    return Ok(None);
+                }
                 return Err(ElabError::Resolution {
                     goal: display,
                     span,
@@ -217,8 +220,9 @@ impl Elaborator {
                 std::slice::from_ref(literal),
             )?;
             self.settle_deferred_units(since)?;
-            Ok(self.reduced_embedding(cx, out))
-        })())
+            Ok(Some(self.reduced_embedding(cx, out)))
+        })()
+        .transpose()
     }
 
     /// A literal's embedding at a carrier whose instance is known, read as
@@ -506,14 +510,14 @@ impl Elaborator {
         expected_level: &Level,
         span: Span,
     ) -> Option<R<(Term, Option<Term>)>> {
-        let (_, ind) = self.syntax_class(class_key)?;
+        let (ind, named) = self.literal_class_record(class_key)?;
         let class_name = key_name(class_key);
         let field = ind.field_index(field_name)?;
         let check = match check {
             Some(name) => Some((name, ind.field_index(name)?)),
             None => None,
         };
-        Some((|| {
+        (|| {
             let targs = [(expected.clone(), expected_level.clone())];
             let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &[], span)?;
             let carrier = self
@@ -524,6 +528,9 @@ impl Elaborator {
             let Some(dict) =
                 self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
             else {
+                if !named {
+                    return Ok(None);
+                }
                 return Err(ElabError::Resolution {
                     goal: display,
                     span,
@@ -553,8 +560,9 @@ impl Elaborator {
                 Some((name, index)) => Some(apply(name, index, &args[..1])?),
                 None => None,
             };
-            Ok((self.reduced_embedding(cx, out), checked))
-        })())
+            Ok(Some((self.reduced_embedding(cx, out), checked)))
+        })()
+        .transpose()
     }
 
     fn literal_needs_module(&self, type_key: &str, span: Span) -> ElabError {
