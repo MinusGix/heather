@@ -1839,7 +1839,7 @@ impl Elaborator {
             None => p.lw.clone(),
         };
         let kid_ty = |k: u32, label: Rc<Term>, pos: Rc<Term>| match over {
-            Some(c) => self.child_sum(p, c, k, triv()),
+            Some(c) => self.child_sum(p, c, k, p.next_tm(k, label, pos)),
             None => p.child_ty(k, label, pos),
         };
         let kids_ty = |k: u32, label: Rc<Term>| Type::Pi {
@@ -2218,35 +2218,30 @@ impl Elaborator {
                 level: Level::max(x.level.clone(), f_level),
             });
         }
-        // Calls under friends (§5.5): the carrier is the free algebra of the
-        // friends over the seeds and existing trees, one layer.
+        // Calls under friends (§5.5, §5.6): the carrier is the free algebra
+        // of the friends over the seeds, existing trees and (with
+        // constructors nested above a call) pending nodes.
         let seeds = levels[0].clone();
-        let friends = self.corec_friends(cx, selfref, &ind, &head, &body)?;
+        let friends = self.corec_friends(cx, selfref, &upto::SiteTy { ind: &ind, d_ty: &head }, &body)?;
         let mut free_parts = None;
         if let Some(first) = friends.first() {
-            if p.indexed {
-                return err(
-                    format!(
-                        "`{}` corecurses under the friend `{}`, and corecursion up to a friend is unindexed \
-                         this round (docs/codata-elaborator-design.md §5.5)",
-                        decl.name, first.written
-                    ),
-                    first.span,
-                );
-            }
-            if nest > 0 {
-                return err(
-                    format!(
-                        "`{}` corecurses under the friend `{}` and nests constructors above a corecursive \
-                         call: the two are not combined this round (docs/codata-elaborator-design.md §5.5)",
-                        decl.name, first.written
-                    ),
-                    first.span,
-                );
-            }
-            let x = seeds.at(0, &triv());
-            let ty = Rc::new(Self::free_ty((&x, &seeds.level), &head, &p.lw, &friends));
-            levels = vec![Carrier { fam: ty.c(0).shift_local(1), level: ty.level.clone() }];
+            // The seed's own index `g[v]`, over (body, v).
+            let seed_out = if p.indexed {
+                let base = cx.gamma.prefix(n_ty);
+                let mut subst = embed(&base, (n + 1) as u32);
+                for (j, r) in rank.iter().enumerate() {
+                    let t = match r {
+                        None => Term::Var(LocalVar((n - 1 - j + 1) as u32)),
+                        Some(r) => tuple_proj(nv, *r, Term::Var(LocalVar(0))),
+                    };
+                    subst = subst.extended(Rc::new(t));
+                }
+                Rc::new(p.index.apply_local(&subst))
+            } else {
+                triv()
+            };
+            let ty = Rc::new(self.free_ty(cx, &p, (&vtuple, &vtuple_level), seed_out, &friends, nest > 0, first.span)?);
+            levels = vec![Carrier { fam: ty.fam(), level: ty.level.clone() }];
             free_parts = Some((ty, friends));
         }
         let carrier = levels.last().expect("level 0").clone();
@@ -2255,7 +2250,7 @@ impl Elaborator {
         let step_level = Level::join(p.ls.clone(), Level::join(p.lp.clone(), kf.clone()));
         let free = match free_parts {
             Some((ty, friends)) => {
-                Some(Rc::new(self.free_arms(cx, &ind, &head, &carrier, ty, friends, &decl.name, &step_level)?))
+                Some(Rc::new(self.free_arms(cx, &ind, &p, &carrier, ty, friends, &decl.name, &step_level)?))
             }
             None => None,
         };
@@ -2336,17 +2331,21 @@ impl Elaborator {
         // components (of `fst v` when indexed), the fixed ones the outer
         // binders. Indexed, the body is moved from `g[v]` to `i` along the
         // seed's equation (docs/codata-indexed-design.md §6).
-        let body_at = |extra: u32, v: Rc<Term>| -> Term {
-            let tuple = if p.indexed { Term::FstAt { pair: Rc::clone(&v) } } else { (*v).clone() };
-            let mut subst = embed(&base, (n as u32) + 2 + extra);
+        // The body at the varying tuple `tuple`, `kk` binders past the body.
+        let body_tuple = |kk: u32, tuple: Term| -> (Term, LocalSubst) {
+            let mut subst = embed(&base, (n as u32) + kk);
             for (j, r) in site.rank.iter().enumerate() {
                 let t = match r {
-                    None => Term::Var(LocalVar((n - 1 - j) as u32 + 2 + extra)),
+                    None => Term::Var(LocalVar((n - 1 - j) as u32 + kk)),
                     Some(r) => tuple_proj(nv, *r, tuple.clone()),
                 };
                 subst = subst.extended(Rc::new(t));
             }
-            let body = b.apply_local(&subst);
+            (b.apply_local(&subst), subst)
+        };
+        let body_at = |extra: u32, v: Rc<Term>| -> Term {
+            let tuple = if p.indexed { Term::FstAt { pair: Rc::clone(&v) } } else { (*v).clone() };
+            let (body, subst) = body_tuple(2 + extra, tuple);
             if !p.indexed {
                 return body;
             }
@@ -2368,7 +2367,7 @@ impl Elaborator {
         let nest = site.levels.len() - 1;
         let step = if let Some(free) = &site.free {
             // A free carrier (§5.5): structural recursion on the `Wf` tree.
-            self.free_step(cx, site, free, &p, &body_at)
+            self.free_step(cx, site, free, &p, &|kk, v| body_tuple(kk, (*v).clone()).0)
         } else if nest == 0 {
             body_at(0, var(0))
         } else {
@@ -2398,7 +2397,7 @@ impl Elaborator {
         // indexed), on the left of a nested carrier.
         let x = &site.levels[0];
         let seed = if p.indexed {
-            let Type::Sigma { fst_level, snd_level, fst, snd } = x.at(0, &p.index) else {
+            let Type::Sigma { fst_level, snd_level, fst, snd } = site.seeds.at(0, &p.index) else {
                 unreachable!("an indexed carrier is a Σ")
             };
             Term::Pair {
@@ -2413,7 +2412,7 @@ impl Elaborator {
             vt
         };
         let seed = if let Some(free) = &site.free {
-            free.ty.leaf(0, 0, Rc::new(seed))
+            free.ty.seed_leaf(0, &p.index, Rc::new(seed))
         } else if nest == 0 {
             seed
         } else {
@@ -2512,6 +2511,12 @@ impl Elaborator {
         let child_of = |cx: &Cx, d: u32, expected: &Type| -> Option<(usize, Rc<Term>)> {
             (0..levels.len()).rev().find_map(|j| self.corec_child_index(cx, &p, &levels[j], d, expected, e.span).map(|i| (j, i)))
         };
+        // A carrier position of a free carrier (§5.6).
+        if let Some(free) = &site.free
+            && let Some(t) = self.free_site_check(cx, site, free, e, expected)?
+        {
+            return Ok(Some(t));
+        }
         let child_idx = child_of(cx, 0, expected);
         let self_call = surface_self_call(&site.selfref, e);
         if let Some((args, _)) = self_call {
@@ -2538,7 +2543,7 @@ impl Elaborator {
             // Above the first layer a seed is the left summand, `X ⊂ X + F(…)`;
             // over a free carrier, a leaf of it (§5.5).
             let seed = match j {
-                _ if site.free.is_some() => site.free.as_ref().expect("free").ty.leaf(0, by, Rc::new(seed)),
+                _ if site.free.is_some() => site.free.as_ref().expect("free").ty.seed_leaf(by, &idx, Rc::new(seed)),
                 0 => seed,
                 _ => Term::Inl {
                     lhs_level: levels[0].level.clone(),
@@ -2561,13 +2566,13 @@ impl Elaborator {
             if control {
                 return Ok(None);
             }
-            // A friend's call with corecursive calls under it: a node of the
-            // free carrier (§5.5).
+            // A friend's call, or a constructor, with corecursive calls under
+            // it: a node of the free carrier (§5.5, §5.6), built at its
+            // carrier position.
             if let Some(free) = &site.free
-                && let Some((f, args)) = self.friend_call(cx, free, e)
                 && nested_self_call(&site.selfref, e).is_some()
             {
-                let v = self.user_friend_value(cx, site, free, &p, f, &args, e.span)?;
+                let v = self.elab_check(cx, e, &free.ty.c_at(by, &idx), &free.ty.level)?;
                 return Ok(Some(Term::Inl {
                     lhs_level: levels[j].level.clone(),
                     rhs_level: p.lw.clone(),

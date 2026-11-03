@@ -194,3 +194,35 @@ fn rewrite_in_loop(E: Events, n: Nat) →
 {
     rewrite(Eutt::tau_l, Eutt::refl(E, CoTree::iter(E, λ a => down(E, a), n)))
 }
+
+// Coinduction up to the friends of `Eutt` (`Eutt::up_to_bisim`,
+// `Eutt::bind_up`): the loop congruence again, here by calling itself
+// inside the continuation's relation of the unfolded loop
+// (`CoTree::iter_from_unfold`), two friends deep, rather than by direct
+// corecursion as `Eutt::iter_cong` is. Under one `CTau` on each side, so
+// that the friends sit inside a constructor; the continuation's relation at
+// `Continue(a2)` is then the proof's own type at `a2`.
+fn iter_cong_tau<A, B>(E: Events, b1: A → CoTree<Step<A, B>>(E), b2: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → Eutt<Step<A, B>>(E, b1(a), b2(a)), a: A) →
+    Eutt<B>(E, CTau(CoTree::iter(E, b1, a)), CTau(CoTree::iter(E, b2, a)))
+{
+    ETau(0, 0, CoTree::iter(E, b1, a), CoTree::iter(E, b2, a), refl, refl,
+        Eutt::up_to_bisim(E, CoTree::iter(E, b1, a), CoTree::bind(E, b1(a), λ x => CoTree::iter_next(E, b1, x)),
+            CoTree::bind(E, b2(a), λ x => CoTree::iter_next(E, b2, x)), CoTree::iter(E, b2, a),
+            Bisim::sym(E, CoTree::iter(E, b1, a), CoTree::bind(E, b1(a), λ x => CoTree::iter_next(E, b1, x)),
+                CoTree::iter_from_unfold(E, b1, b1(a))),
+            Eutt::bind_up<Step<A, B>, B>(E, b1(a), b2(a), λ x => CoTree::iter_next(E, b1, x), λ x => CoTree::iter_next(E, b2, x), hb(a),
+                λ x => match x {
+                    Continue(a2) => iter_cong_tau(E, b1, b2, hb, a2),
+                    Break(r) => ERet(0, 0, r, refl, refl),
+                }),
+            Bisim::sym(E, CoTree::iter(E, b2, a), CoTree::bind(E, b2(a), λ x => CoTree::iter_next(E, b2, x)),
+                CoTree::iter_from_unfold(E, b2, b2(a)))))
+}
+fn iter_cong_up_to<A, B>(E: Events, b1: A → CoTree<Step<A, B>>(E), b2: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → Eutt<Step<A, B>>(E, b1(a), b2(a)), a: A) → Eutt<B>(E, CoTree::iter(E, b1, a), CoTree::iter(E, b2, a))
+{
+    Eutt::trans(E, CoTree::iter(E, b1, a), CTau(CoTree::iter(E, b1, a)), CoTree::iter(E, b2, a), Eutt::tau_r(E, CoTree::iter(E, b1, a)),
+        Eutt::trans(E, CTau(CoTree::iter(E, b1, a)), CTau(CoTree::iter(E, b2, a)), CoTree::iter(E, b2, a),
+            iter_cong_tau(E, b1, b2, hb, a), Eutt::tau_l(E, CoTree::iter(E, b2, a))))
+}

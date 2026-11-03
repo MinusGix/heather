@@ -380,7 +380,7 @@ fn self_call_under_an_observation_is_refused() {
 #[test]
 fn self_call_inside_an_existing_tree_is_refused() {
     let msg = elab_err(&format!("{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, tl(SCons(n, bad(n)))) }}"));
-    assert!(msg.contains("nests constructors above a corecursive call"), "{msg}");
+    assert!(msg.contains("`tl` is not a friend of the corecursive `bad`"), "{msg}");
     let msg = elab_err(&format!("{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, tl(bad(n))) }}"));
     assert!(msg.contains("`tl` is not a friend of the corecursive `bad`"), "{msg}");
     let msg = elab_err(&format!("{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, SCons(hd(bad(n)), bad(n))) }}"));
@@ -523,8 +523,85 @@ fn corecursion_up_to_controls() {
     assert!(msg.contains("`peek` is not a friend of the corecursive `f`"), "{msg}");
     let msg = elab_err(&format!("{STREAM}{FRIENDS}\nfn f(n: Nat) -> Stream {{ SCons(n, scale(hd(f(n)), f(n))) }}"));
     assert!(msg.contains("data argument of the friend `scale`"), "{msg}");
-    let msg = elab_err(&format!("{STREAM}{FRIENDS}\nfn f(n: Nat) -> Stream {{ SCons(n, SCons(n, sadd(f(n), f(n)))) }}"));
-    assert!(msg.contains("nests constructors above a corecursive call"), "{msg}");
+}
+
+// Constructors nested above a call beside a friend, and a constructor with a
+// call inside a friend's argument: pending nodes of the free carrier
+// (docs/codata-elaborator-design.md §5.6), observed by `refl` at a neutral
+// and a literal seed.
+#[test]
+fn nested_constructors_beside_a_friend() {
+    elab(&format!(
+        "{STREAM}{FRIENDS}
+         fn twice(n: Nat) -> Stream {{ SCons(n, SCons(Succ(n), sadd(twice(n), twice(n)))) }}
+         fn lead(n: Nat) -> Stream {{ SCons(n, sadd(SCons(1, lead(n)), from(0))) }}
+         theorem twice_1(n: Nat): hd(tl(twice(n))) = Succ(n) {{ refl }}
+         theorem twice_2(n: Nat): hd(tl(tl(twice(n)))) = add(n, n) {{ refl }}
+         theorem twice_3(): nth(twice(1), 3) = 4 {{ refl }}
+         theorem lead_1(n: Nat): hd(tl(lead(n))) = add(1, 0) {{ refl }}
+         theorem lead_2(n: Nat): hd(tl(tl(lead(n)))) = add(n, 1) {{ refl }}"
+    ));
+}
+
+// A bind-shaped friend: its second argument is a function into the codata
+// type, and it reads one layer of that function's answer (`match h(n)`),
+// as `bind` on interaction trees does. A definition corecurses under it with
+// a λ whose body holds the corecursive call, at a function position of the
+// free carrier (docs/codata-elaborator-design.md §5.6).
+const DBIND: &str = r#"
+codata Dl { Now(n: Nat), Later(t: Dl) }
+fn dbind(t: Dl, h: Nat -> Dl) -> Dl {
+    match t {
+        Now(n) => match h(n) { Now(m) => Now(m), Later(u) => Later(u) },
+        Later(t2) => Later(dbind(t2, h))
+    }
+}
+fn obs(t: Dl, k: Nat) -> Nat {
+    match k {
+        Zero => match t { Now(n) => n, Later(_) => 99 },
+        Succ(j) => match t { Now(n) => n, Later(u) => obs(u, j) }
+    }
+}
+"#;
+
+#[test]
+fn bind_shaped_friend() {
+    elab(&format!(
+        "{STREAM}{DBIND}
+         fn count(n: Nat) -> Dl {{
+             Later(dbind(Now(n), λ m => match m {{ Zero => Now(7), Succ(j) => count(j) }}))
+         }}
+         fn wait(n: Nat) -> Dl {{ Later(dbind(Later(Now(n)), λ m => wait(Succ(m)))) }}
+         theorem count_0(): obs(count(0), 1) = 7 {{ refl }}
+         theorem count_2(): obs(count(2), 2) = 99 {{ refl }}
+         theorem count_3(): obs(count(2), 3) = 7 {{ refl }}
+         theorem count_open(n: Nat): obs(count(Succ(n)), 0) = 99 {{ refl }}
+         theorem wait_open(n: Nat): obs(wait(n), 5) = 99 {{ refl }}
+         fn dbind2(t: Dl, h: Nat -> Dl) -> Dl {{
+             match t {{ Now(n) => h(n), Later(t2) => Later(dbind2(t2, h)) }}
+         }}
+         fn count2(n: Nat) -> Dl {{
+             Later(dbind2(Now(n), λ m => match m {{ Zero => Now(7), Succ(j) => count2(j) }}))
+         }}
+         theorem count2_3(): obs(count2(2), 3) = 7 {{ refl }}
+         theorem count2_open(n: Nat): obs(count2(Succ(n)), 0) = 99 {{ refl }}"
+    ));
+}
+
+// The bind-shaped controls: a wrong observation is refused by the kernel,
+// and a friend that reads two layers of its function argument's answer is
+// not a friend.
+#[test]
+fn bind_shaped_friend_controls() {
+    let count = "fn count(n: Nat) -> Dl { Later(dbind(Now(n), λ m => match m { Zero => Now(7), Succ(j) => count(j) })) }";
+    let msg = elab_err(&format!("{STREAM}{DBIND}{count}\ntheorem wrong(): obs(count(2), 3) = 8 {{ refl }}"));
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    let deep = "fn deep(t: Dl, h: Nat -> Dl) -> Dl {
+        match t { Now(n) => match h(n) { Now(m) => Now(m), Later(u) => match u { Now(m) => Now(m), Later(w) => Later(w) } }, Later(t2) => Later(deep(t2, h)) }
+    }
+    fn f(n: Nat) -> Dl { Later(deep(Now(n), λ m => f(m))) }";
+    let msg = elab_err(&format!("{STREAM}{DBIND}{deep}"));
+    assert!(msg.contains("`deep` is not a friend of the corecursive `f`"), "{msg}");
 }
 
 // A nested layer's observation is computed, not guessed: a wrong one is

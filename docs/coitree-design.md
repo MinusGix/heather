@@ -251,13 +251,19 @@ is on `Bisim`. `bind_cong_l` and `bind_cong_r` fix one side.
 
 ### 7.6 What is not here
 
-- **Up-to techniques** (a corecursive call under `trans` or `bind`). The
-  `codata` surface's guard is constructors (codata §5.2, §5.4), not
-  functions, or friends on unindexed codata (codata §5.5); `Bisim`/`Eutt`
-  are indexed, so every proof here is written so its self-calls sit under a
-  constructor (`issues/codata-up-to-friends-round-2.md`). §7.9's proofs show
-  the way round that so far: a self-call that would sit under `trans` is
-  avoided by generalising the hypothesis to a relation the step lands in.
+- **Up-to techniques beyond the two friends.** Since 2026-11-03 a proof
+  may call itself under `Eutt::up_to_bisim` (transitivity with strong
+  bisimilarity on both sides) and `Eutt::bind_up` (the congruence of
+  `bind`), the friends of `Eutt` at the end of `coitree_eutt.hthr` (codata
+  §5.6); the loop congruence is proved that way, as a probe beside §7.9's
+  direct `Eutt::iter_cong`, in `lib/_tests/std/itree/coitree_eutt_tests.hthr`.
+  `Eutt::trans` itself is not a friend and must not become one: up to
+  `≈`-transitivity is unsound
+  (`spin ≈ CTau(CRet(0))` would close as `ETau(0, 0, spin, CRet(0), refl,
+  refl, trans(self, tau_l(CRet(0))))`, which is false). The other proofs
+  here predate the friends and keep their self-calls under a constructor, or
+  (§7.9) avoid a self-call under `trans` by generalising the hypothesis to
+  a relation the step lands in.
 
 ### 7.7 Cost
 

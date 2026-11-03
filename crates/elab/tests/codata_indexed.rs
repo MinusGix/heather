@@ -293,3 +293,46 @@ fn goals_spell_indexed_codata_by_name() {
     let msg = elab_err(&format!("{STREAM}\ntheorem g(s: Stream, b: SBisim(s, tl(s))): hd(s) = hd(s) {{ ?g }}"));
     assert!(msg.contains("b : SBisim(s, tl(s))"), "{msg}");
 }
+
+// -- corecursion up to friends on indexed codata (docs/codata-elaborator-design.md §5.6) --
+
+// `sb_trans` reads one layer of each relation and calls itself on their
+// children, so it is a friend of a bisimilarity proof: a self-call under it
+// is coinduction up to transitivity. Its relations sit at other indices than
+// its result (`⟨s, t⟩`, `⟨t, u⟩` against `⟨s, u⟩`), which the free carrier's
+// predicate records.
+const UPTO: &str = r#"
+fn sb_trans(s: Stream, t: Stream, u: Stream, a: SBisim(s, t), b: SBisim(t, u)) -> SBisim(s, u) {
+    match a { Same(h1, k1) => match b { Same(h2, k2) => Same(trans(h1, h2), sb_trans(tl(s), tl(t), tl(u), k1, k2)) } }
+}
+fn cst(n: Nat) -> Stream { SCons(n, cst(n)) }
+fn alt(n: Nat) -> Stream { SCons(n, SCons(n, alt(n))) }
+fn up(n: Nat) -> SBisim(cst(n), alt(n)) {
+    Same(refl, sb_trans(cst(n), cst(n), tl(alt(n)), sb_refl(cst(n)), Same(refl, up(n))))
+}
+"#;
+
+#[test]
+fn corecursion_up_to_transitivity() {
+    elab(&format!(
+        "{STREAM}{UPTO}
+         theorem up_heads(n: Nat): heads(cst(n), alt(n), up(n)) = refl {{ refl }}
+         fn up_2(n: Nat) -> hd(tl(tl(cst(n)))) = hd(tl(tl(alt(n)))) {{
+             heads(tl(tl(cst(n))), tl(tl(alt(n))), tails(tl(cst(n)), tl(alt(n)), tails(cst(n), alt(n), up(n))))
+         }}
+         fn up_open(m: Nat) -> SBisim(cst(Succ(m)), alt(Succ(m))) {{ up(Succ(m)) }}"
+    ));
+}
+
+// The friend's result index is the position's: a call whose arguments put
+// it elsewhere is refused at the call, naming both indices.
+#[test]
+fn friend_at_the_wrong_index_is_refused() {
+    let msg = elab_err(&format!(
+        "{STREAM}{UPTO}
+         fn bad(n: Nat) -> SBisim(cst(n), cst(n)) {{
+             Same(refl, sb_trans(cst(n), cst(n), cst(Succ(n)), sb_refl(cst(n)), bad(n)))
+         }}"
+    ));
+    assert!(msg.contains("a friend's result index must be the one its position wrote"), "{msg}");
+}
