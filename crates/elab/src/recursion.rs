@@ -20,6 +20,12 @@ pub(crate) trait SelfCallElab: ExplicitArgElab {
     fn self_call_application_params(&self, name: &str) -> Rc<Vec<ParamMeta>>;
     /// The declaration `name`'s [`RecursionPlan::Misplaced`], if it has one.
     fn misplaced_recursion(&self, name: &str) -> Option<(usize, String)>;
+    /// A self-call was lowered under a guard on the parameter named `dec`.
+    /// The meaning check reads which parameter the recursion descended on
+    /// (issues/recursion-meaning-check.md). By name: the declaration the
+    /// check restates is the written one, whose telescope a constraint
+    /// expansion or a section may have grown before elaboration.
+    fn note_recursion_on(&self, _dec: &str) {}
     /// Apply the ih to the varied arguments, inferring the generalized
     /// implicits the call leaves out (`mask[i]`: the ih's `i`th Π is one) by
     /// the ordinary implicit-inserting application engine.
@@ -825,6 +831,7 @@ pub(crate) fn elab_self_call(
             span,
         );
     }
+    elab.note_recursion_on(&self_ref.params[guard.dec].0);
     if args.len() < positions.len() {
         return err(
             format!(

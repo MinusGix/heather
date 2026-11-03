@@ -4,7 +4,7 @@ status: open
 labels: [elab,unifier,diagnostics]
 area: language
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-11-02
 ---
 
 Found while building omega's guard round ([[omega-reads-bool-guards]]).
@@ -33,3 +33,7 @@ omega no longer depends on either: §17 of
 `docs/omega-measure-reduction-design.md` binds the unfolded guard as an
 alias instead. Acceptance: the probe above is refused naming `g(n, m)`
 against `?a && ?b`, or accepted; never a solution of the wrong type.
+
+## Log
+
+- 2026-11-02: [[unifier-lazy-delta]] proposes the second reading (unfold at the head mismatch) as the general rule.

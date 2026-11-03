@@ -55,3 +55,4 @@ shadowed binders.
   `lib/_tests/std/core/decreases_unfolding_tests.hthr`. The `while`
   lowering's SSA pass stays: its condition is placed after the hoisted
   `let`s and must read the parameters.
+- 2026-11-02: [[recursion-on-elaborated-terms]] proposes running the structural recursion planner over the same `alpha::deshadow` (docs/elaborator-principles-survey.md §6).

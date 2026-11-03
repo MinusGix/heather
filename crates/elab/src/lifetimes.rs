@@ -492,6 +492,11 @@ pub(crate) struct Policy {
     /// Test-time only: inferred arguments owe no check note
     /// ([`Self::forget_owed_argument_checks`]).
     pub(crate) owed_checks_forgotten: bool,
+    /// Test-time only: the structural recursion planner (`recursion::plan`)
+    /// is not consulted, so a `fn` it would refuse or lower by measure is
+    /// lowered structurally — the miscompiles the meaning check exists to
+    /// catch ([`Elaborator::skip_recursion_plan`]).
+    pub(crate) recursion_plan_skipped: bool,
 }
 
 impl Policy {
@@ -505,6 +510,7 @@ impl Policy {
             value_metrics: None,
             emission_findings: None,
             owed_checks_forgotten: false,
+            recursion_plan_skipped: false,
         }
     }
 }
