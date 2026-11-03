@@ -193,6 +193,29 @@ pub(super) struct U<'a> {
     /// about to report is this disagreement's downstream. `None` skips the
     /// comparison (and the strengthening it needs).
     pub(super) disagree: Option<&'a dyn Fn(usize, &Term)>,
+    /// A rigid subject term in `gamma` unfolded to its **next head**: the
+    /// first transparent reduct whose spine is headed by another global or
+    /// local, or is no application at all. What the δ-lazy order compares
+    /// next at a rigid head mismatch (docs/elaborator-principles-survey.md
+    /// P3, issues/unifier-lazy-delta.md). `None` when the subject does not
+    /// unfold, or not within the walk's budget.
+    pub(super) next_head: &'a dyn Fn(&Term) -> Option<Term>,
+}
+
+/// The subject `s`, `d` binders past `gamma`, unfolded to its next head
+/// ([`U::next_head`]) and weakened back: the δ-lazy order's one step at a
+/// rigid head mismatch. Only the subject unfolds. It is committed-world and
+/// closed under `gamma` once strengthened; the pattern mentions this call's
+/// metas, which no world here declares. Learning from a reduct of the
+/// subject learns what conversion with the subject would: they convert.
+fn subject_unfolded(u: &U<'_>, s: &Term, d: u32) -> Option<Term> {
+    let s0 = u.subject_tm(s, d)?;
+    let w = (u.next_head)(&s0)?;
+    let w = match u.subject_metas {
+        Some((m, _)) => w.shift_global(m),
+        None => w,
+    };
+    Some(w.apply_local(&embed(u.gamma, d)))
 }
 
 /// The unifier's one write. An open slot takes `s` if [`U::admit`] lets
@@ -279,6 +302,7 @@ impl<'a> U<'a> {
             slot_view: &|_| None,
             admit: &|_, _, _| true,
             disagree: None,
+            next_head: &|_| None,
         }
     }
 }
@@ -527,6 +551,19 @@ pub(super) fn unify_ty(
                 unify_ty(u, pat, &r.apply_local(&embed(u.gamma, d)), n, d, sols);
             }
         }
+        // A former against `El` of a code a definition computes: the
+        // δ-lazy order's step at the type level. The subject's code unfolds
+        // to its next head, and the decoded result meets the pattern again
+        // (issues/unifier-lazy-delta.md) — a hypothesis `Lt(x, y)` against a
+        // domain spelled as the `Id` or `Π` its definition is.
+        (p, Type::El { level, tm })
+            if !matches!(p, Type::El { .. } | Type::Ty(_)) && reducible(tm) && zonked(pat, n, sols).is_none() =>
+        {
+            if let Some(r) = subject_unfolded(u, tm, d) {
+                let unfolded = Type::El { level: level.clone(), tm: Rc::new(r) };
+                unify_ty(u, pat, &unfolded, n, d, sols);
+            }
+        }
         // `Nat`/`Unit`/`Empty`/`Ty` and every mismatched pairing: nothing to
         // learn. A mismatch is not an error here — this function only ever
         // learns, and the kernel is what decides whether the call typechecks.
@@ -731,24 +768,25 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             // whatever sits at the other's positions — `AbsLt(?A, ?≈, ?<,
             // ?≤, ?+, ?d, x, e)` against `-e < x ∧ x < e` taught `?+ :=
             // Rat::Lt`, and against `Close(x, y, e)`, every index one place
-            // over (issues/constrained-predicate-expected-type.md). Either
-            // side may still unfold to the other; that is a whnf's to find,
-            // and the callers' retries take it.
-            if rigid_atom(head, n)
-                && rigid_head(s)
-                && spine_len(p) != spine_len(s)
-            {
-                return;
-            }
-            // Nor are two rigid spines with different heads, at any length:
+            // over (issues/constrained-predicate-expected-type.md). Nor are
+            // two rigid spines with different heads, at any length:
             // `Has2(B(lo, hi), ?x)` against `And<Nat, Nat>` paired the
             // predicate's argument with the conjunction's second type and
             // taught `?x := ⌜Nat⌝`, which the expected type would have
             // solved as `x`
             // (issues/and-at-match-predicate-implicit-level-mismatch.md).
-            // As above, a δ-step may still make them meet; that is the
-            // whnf retry's to find.
-            if u.distinct_heads(head, spine_head(s), n) {
+            //
+            // Either side may still unfold to the other, and that is the
+            // δ-lazy order's step, as in the kernel's conversion: a subject
+            // headed by a global unfolds to its next head and is compared
+            // again (issues/unifier-lazy-delta.md). `Bool::and(?a, ?b)`
+            // against `g(n, m)`, where `g`'s body is `n.leb(m) && !m.leb(n)`,
+            // learns `?a := n.leb(m)` rather than nothing
+            // (issues/unifier-spine-across-distinct-heads.md).
+            let mismatch = (rigid_atom(head, n) && rigid_head(s) && spine_len(p) != spine_len(s))
+                || u.distinct_heads(head, spine_head(s), n);
+            if mismatch {
+                unify_unfolded(u, pat, s, n, d, sols);
                 return;
             }
             unify_tm(u, f1, f2, n, d, sols);
@@ -977,8 +1015,62 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             unify_tm(u, a1, a2, n, d, sols);
             unify_tm(u, b1, b2, n, d, sols);
         }
-        _ => {}
+        // Any other pairing: the two do not meet as they stand, and the
+        // subject may still compute to something that does — a field type
+        // read through a projection, `fst(⟨λ b => BitVec(64), …⟩)`, or a
+        // definition's body. The δ-lazy order's step, as at a head mismatch.
+        _ => unify_unfolded(u, pat, subj, n, d, sols),
     }
+}
+
+/// The δ-lazy order's step (issues/unifier-lazy-delta.md): when `pat` and
+/// `subj` do not meet as they stand, unfold the subject to its next head
+/// ([`U::next_head`]) and compare again. Only while the pattern still has an
+/// open slot to learn — otherwise there is nothing to read, and at a closed
+/// verdict the unfolding is the verdict's whole evaluation
+/// (issues/closed-verdict-evaluated-twice.md) — and only a subject that can
+/// step: one headed by a global, a β-redex or an eliminator. Each hop is a
+/// strict reduct, so the chain ends where the subject stops reducing.
+fn unify_unfolded(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
+    if !reducible(subj) || zonked_tm(pat, n, sols).is_some() {
+        return;
+    }
+    if let Some(r) = subject_unfolded(u, subj, d) {
+        unify_tm(u, pat, &r, n, d, sols);
+    }
+}
+
+/// Can `t` take a head step: its spine is headed by a global (δ), a λ (β)
+/// or an eliminator (ι, once its scrutinee is a constructor)?
+fn reducible(t: &Term) -> bool {
+    let h = spine_head(t);
+    matches!(h, Term::GlobalTm { .. }) || steps_through(h)
+}
+
+/// A spine head a walk to the next head keeps stepping through: a λ (the
+/// spine is a β-redex) or an eliminator, which reduces once its scrutinee
+/// is a constructor and is no head a pattern could meet before then.
+pub(crate) fn steps_through(h: &Term) -> bool {
+    matches!(
+        h,
+        Term::Lam { .. }
+            | Term::ElimNat { .. }
+            | Term::J { .. }
+            | Term::ElimSEmpty { .. }
+            | Term::ElimSquash { .. }
+            | Term::ElimEmpty { .. }
+            | Term::Fst { .. }
+            | Term::Snd { .. }
+            | Term::FstAt { .. }
+            | Term::SndAt { .. }
+            | Term::Case { .. }
+            | Term::ElimW { .. }
+            | Term::ElimWf { .. }
+            | Term::ElimIWf { .. }
+            | Term::Out { .. }
+            | Term::ElimCodeTy { .. }
+            | Term::ElimCodeTm { .. }
+    )
 }
 
 /// A form [`U::canonical_head`] can reduce a subject to.

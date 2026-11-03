@@ -4,7 +4,7 @@ status: open
 labels: [unification,inference,elaboration]
 area: language
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-03
 ---
 
 When two rigid heads differ, the elaborator's unifier learns nothing
@@ -45,3 +45,7 @@ some library calls elaborate differently; the library gate is the check.
 
 Depends on [[unifier-checked-assignment]] (so an unfolding cannot commit a
 wrong-typed solution) and is easier after [[one-unfold-to-primitive]].
+
+## Log
+
+- 2026-11-03: Built (subject side). Wherever a pattern and a subject do not meet as they stand — two rigid spines with different heads or lengths, a former against `El` of a computed code, or any other pairing the congruence has no rule for — the unifier unfolds the subject to its next head (`U::next_head`: δ, then the β and ι steps that expose what the body is headed by, at most `Unfold::NextHead` head reducts per hop) and compares again (`unify_unfolded`). Only while the pattern still has an open slot (so a closed verdict is never evaluated for nothing) and only a subject headed by a global, a λ or an eliminator. Only the subject unfolds: the pattern mentions this call's metas, which no world here declares, and learning from a reduct of the subject learns what conversion with it would. Heights are not used. `unify_arg_ty`'s whnf retry is deleted: the whole library re-elaborates without it (`heather check -L lib --expectations lib`, 262 expected refusals matched). `solve_from_expected`'s whnf of the expected type stays: with it deleted, `Bind::seq`'s higher-kinded carrier (`?M(?B)` against `Tac<Nat>`) went unsolved in mono.hthr, regex.hthr and binding_statements_tests, which is a spelling question (respell/slot_view), not δ. `Unfold::IndexRead` also stays: its trigger is a flex head whose write was refused for its type, which this step does not read. Probe: lib/_tests/std/core/bool_tests.hthr `lazy_delta_pick_through_g`; Rust: crates/elab/tests/unifier_lazy_delta.rs.
