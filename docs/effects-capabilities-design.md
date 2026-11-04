@@ -329,15 +329,17 @@ In order:
 
 1. **`rt` capability types and an `Invoke` node** (setups design §8, N3).
    *Built as a computation layer, not a `Ty` (§8):* `ETm` with `Invoke`
-   over pure `Tm`, in `lib/native/runtime/rt_io.hthr`. What is left of the
-   item is the reflector reading an `io`-threading body into `Invoke`s
-   (§8.3).
+   over pure `Tm`, in `lib/native/runtime/rt_io.hthr`, and the reflector
+   reading an `io`-threading body into `Invoke`s
+   (`lib/native/runtime/rt_io_reflect.hthr`, §8.3, slice 3).
 2. **`rt` to `Source`.** Runs of pure statements become `Compute` leaves
    through N1's lowering, `Invoke`s become `Invoke` statements, and loops
    holding `Invoke`s become `Repeat`. `sound` is `Io::Reads` of the
    source's tree against the reflected meaning, by `reads_bind` and the loop
    lemma.
-3. **Linearity** as a clause of the default judgment (§5).
+3. **Linearity** as a clause of the default judgment (§5). *Built with
+   the reflector (§8.3):* no `ETm` names the world, so the clause is the
+   reflector's refusals at the call.
 4. **`runtime fn main(mut io: Io, args: Args) → BitVec(64)`** publishing a
    `Source` that `write-elf` compiles as it compiles a builder tool today.
    This needs byte and string literals in programs and implicit compiler
@@ -412,7 +414,10 @@ the elaborated body node for node: `echo_reflects`, an `EFun` against the
 surface `Io::echo_once`, holds by `refl`, and a stale-buffer variant is
 refused by the kernel (the negative control).
 
-### 8.3 The reflector (next slice)
+### 8.3 The reflector
+
+*Built (2026-11-04, slice 3):* `lib/native/runtime/rt_io_reflect.hthr`,
+`reflects_io_as` in `lib/_tests/native/runtime/rt_io_tests.hthr`.
 
 The surface body is a chain of `Mutated` lets: each `io.m(…)` elaborates to
 `let p = m(io_k, …); io_{k+1} = p.after; … p.value …`. The reflector:
@@ -427,6 +432,41 @@ The surface body is a chain of `Mutated` lets: each `io.m(…)` elaborates to
 4. maps `.value` projections (`p.value.buf`, `p.value.result`) to the
    `Invoke`-bound variables, keying repeated occurrences of one call by its
    reflected operand levels, as pure `rt` keys repeated subterms.
+
+What the build found and decided:
+
+- **The calls are shared.** `elaborate_mut_call` binds one call and
+  projects both `.after` and `.value` from it, so `Body` hands out one
+  handle per call wherever the body reads it (unlike pure lets,
+  `issues/elaborated-let-sharing-lost.md`). The reflector keys answers on
+  that handle. A copy that is not the same handle is placed by its world's
+  position on the chain and confirmed by `Defeq` against the call recorded
+  there, rather than by operand levels: literals are not value-numbered, so
+  re-reflecting a copy's operands would bind them again.
+- **Where it lives.** The walk is `rt_reflect`'s, with `Known` gaining an
+  optional `IoKnown` (the world's local, the methods, the calls made so
+  far). With it, a field read of a call's answer is the variable its
+  `Invoke` bound (`rt_read`), and the world is never a value. Without it,
+  pure reflection is unchanged. `rt_io_reflect` drives the order: operands,
+  their `Let`s, the `Invoke`, and the answer recorded for what follows.
+- **Named constants.** `Io::stdin()` is a global with no parameters whose
+  body is a word literal; the reflector reads such a global as its literal
+  (its δ-reduct), in pure code too. Any other global still has to be a
+  function of the program.
+- **Refusals** (step 2, each probed with `expect-error`): the world read as
+  a value, whole or a field of it; the world after a call read as a value;
+  an answer of a call the chain does not go through, whether from a copy
+  of `io` (`let mut old = io; … old.m(…)`) or from a qualified call whose
+  world after is dropped; a call on a method the reflector does not know
+  (`Io::read`, whose answer has no word-level code); a world through a
+  branch (§8.4). A copy whose call is the chain's call, same operands, is
+  the same call and reflects as it: the meaning of reading it twice is
+  reading it once.
+- **Not refused:** a call whose world and answer are both dropped. It is
+  not in the elaborated term at all, so it is not in the meaning either,
+  and the reflection agrees with the meaning; the program just does not
+  make the call the source wrote. A lint belongs at the elaborator
+  (an unused `let mut` world), not here.
 
 ### 8.4 Known limits
 
