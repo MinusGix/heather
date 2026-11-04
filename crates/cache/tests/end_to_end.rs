@@ -332,7 +332,10 @@ fn the_file_round_trips() {
         text.starts_with(&format!("heather-cache\t{FORMAT}\n")),
         "versioned header: {text:.40}"
     );
-    assert!(text.contains(KERNEL_SEMANTICS), "the fingerprint is in the header");
+    assert!(
+        text.contains(&format!("\nkernel\t{KERNEL_SEMANTICS}\t")),
+        "the fingerprint heads its section"
+    );
     assert!(text.contains("\thelper\n"), "names are there for the human reading it");
 
     let (reopened, why) = Cache::open(dir.clone());
@@ -344,11 +347,13 @@ fn the_file_round_trips() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A cache written by a different kernel is discarded, loudly, and the run is
-/// a full re-check.
+/// A cache written by a different kernel is not believed, loudly, and the run
+/// is a full re-check — but the other kernel's verdicts are kept for it.
 ///
 /// This is the format rule the issue fixed before any format existed: an entry
-/// is meaningful only against the semantics that produced it.
+/// is meaningful only against the semantics that produced it. What changed
+/// with `issues/verdict-store-one-kernel.md` is only what happens to the
+/// entries this reader cannot use: they stay, in their own section.
 #[test]
 fn a_stale_kernel_fingerprint_discards_everything() {
     let dir = tempdir("fingerprint");
@@ -356,36 +361,188 @@ fn a_stale_kernel_fingerprint_discards_everything() {
     let cache = run_with(Rc::new(Cache::over(Store::empty(dir.clone()))), &src);
     cache.save().expect("write");
 
-    // Rewrite the header as if another kernel had produced it — and fix the
-    // checksum, so that this is a *fingerprint* failure and not a corruption
-    // one.
+    // Re-label the section as another kernel's. The fingerprint is not under
+    // the section's checksum, so that this is a *fingerprint* failure and not
+    // a corruption one.
+    let other = "0".repeat(64);
     let path = Store::path(&dir);
     let text = std::fs::read_to_string(&path).unwrap();
-    let doctored: String = text
-        .lines()
-        .map(|l| {
-            if l.starts_with("kernel-semantics\t") {
-                format!("kernel-semantics\t{}\n", "0".repeat(64))
-            } else {
-                format!("{l}\n")
-            }
-        })
-        .collect();
+    let doctored = text.replacen(&format!("kernel\t{KERNEL_SEMANTICS}\t"), &format!("kernel\t{other}\t"), 1);
+    assert_ne!(doctored, text, "the section header names its kernel");
     std::fs::write(&path, doctored).unwrap();
 
     let (reopened, why) = Cache::open(dir.clone());
-    match why {
-        Some(Rejected::KernelChanged { entries }) => {
-            assert!(entries > 0, "it should say how much it is throwing away");
-            let msg = Rejected::KernelChanged { entries }.message().expect("a loud message");
+    let stale = match why {
+        Some(Rejected::KernelChanged { entries, kernels }) => {
+            assert!(entries > 0, "it should say how much it cannot use");
+            assert_eq!(kernels, 1);
+            let msg = Rejected::KernelChanged { entries, kernels }.message().expect("a loud message");
             assert!(msg.contains("full check"), "and what that means: {msg}");
+            entries
         }
         _ => panic!("a stale fingerprint must be reported as one"),
-    }
-    assert_eq!(reopened.entries(), 0, "nothing may survive");
+    };
+    assert_eq!(reopened.entries(), 0, "nothing may be believed");
     let after = run_with(Rc::new(reopened), &src);
     assert!(after.counts().checked > 0, "and the kernel must run again");
 
+    // Saving this kernel's verdicts keeps the other kernel's section whole.
+    after.save().expect("write");
+    let theirs = Store::load(dir.clone(), &other).ok().expect("the other kernel's section survives");
+    assert_eq!(theirs.entries.len(), stale, "every one of its entries");
+    let (mine, why) = Cache::open(dir.clone());
+    assert!(why.is_none(), "and this kernel now has its own");
+    assert_eq!(mine.entries(), after.entries());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn key(n: u8) -> [u8; 32] {
+    [n; 32]
+}
+
+fn kernel(n: u8) -> String {
+    format!("{n:02x}").repeat(32)
+}
+
+/// A store with one entry `key(n)`, saved as kernel `k` at `now`.
+fn save_one(dir: &std::path::Path, k: &str, n: u8, now: u64) {
+    let mut s = Store::empty(dir.to_path_buf());
+    s.insert(key(n), key(n), &format!("decl{n}"));
+    s.save_at(k, now).expect("write");
+}
+
+fn loaded(dir: &std::path::Path, k: &str) -> Option<Store> {
+    Store::load(dir.to_path_buf(), k).ok()
+}
+
+/// Checkouts with different kernels sharing one store keep each other's
+/// verdicts, and each believes only its own (`issues/verdict-store-one-kernel.md`).
+#[test]
+fn kernels_sharing_a_store_keep_their_own_verdicts() {
+    let dir = tempdir("shared-kernels");
+    let (a, b) = (kernel(0xa1), kernel(0xb2));
+    let t = 1_800_000_000;
+    save_one(&dir, &a, 1, t);
+    save_one(&dir, &b, 2, t + 10);
+    save_one(&dir, &a, 3, t + 20);
+
+    let sa = loaded(&dir, &a).expect("a's section");
+    let sb = loaded(&dir, &b).expect("b's section");
+    assert!(sa.contains(&key(1)) && sa.contains(&key(3)), "a's saves merged");
+    assert!(!sa.contains(&key(2)), "a never believes b's verdict");
+    assert!(sb.contains(&key(2)) && !sb.contains(&key(1)) && !sb.contains(&key(3)));
+    assert_eq!(sa.used, Some(t + 20), "a section carries its last save");
+
+    match Store::load(dir.clone(), &kernel(0xc3)) {
+        Err((s, Rejected::KernelChanged { entries: 3, kernels: 2 })) => assert!(s.entries.is_empty()),
+        _ => panic!("a third kernel finds nothing of its own, and says what it saw"),
+    }
+
+    // Most recently used first, so the file reads newest-kernel-first.
+    let text = std::fs::read_to_string(Store::path(&dir)).unwrap();
+    let order: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("kernel\t")).map(|l| &l[..64]).collect();
+    assert_eq!(order, vec![a.as_str(), b.as_str()]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Old kernels leave by age — unused past `MAX_AGE_SECS`, or beyond the
+/// `MAX_KERNELS` most recent — never because another kernel saved last.
+#[test]
+fn old_kernels_are_evicted_by_age() {
+    use heather_cache::store::{MAX_AGE_SECS, MAX_KERNELS};
+    let dir = tempdir("evict");
+    let t = 1_800_000_000;
+    save_one(&dir, &kernel(1), 1, t);
+    save_one(&dir, &kernel(2), 2, t + MAX_AGE_SECS - 5);
+    // Kernel 1 last saved MAX_AGE_SECS ago: this save drops it. Kernel 2 is
+    // within the window and stays.
+    save_one(&dir, &kernel(3), 3, t + MAX_AGE_SECS);
+    assert!(loaded(&dir, &kernel(1)).is_none(), "an idle kernel ages out");
+    assert!(loaded(&dir, &kernel(2)).is_some());
+    assert!(loaded(&dir, &kernel(3)).is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // The count bound keeps the most recently used.
+    let dir = tempdir("evict-count");
+    let n = MAX_KERNELS as u8 + 3;
+    for i in 1..=n {
+        save_one(&dir, &kernel(i), i, t + u64::from(i));
+    }
+    for i in 1..=n {
+        let kept = loaded(&dir, &kernel(i)).is_some();
+        assert_eq!(kept, i > n - MAX_KERNELS as u8, "kernel {i} of {n}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A fully warm kernel saves nothing new, yet must not age out: a loaded
+/// section is due a fresh stamp once it is `REFRESH_SECS` old.
+#[test]
+fn a_warm_kernel_refreshes_its_stamp() {
+    use heather_cache::store::REFRESH_SECS;
+    let dir = tempdir("refresh");
+    let t = 1_800_000_000;
+    save_one(&dir, &kernel(1), 1, t);
+    let s = loaded(&dir, &kernel(1)).unwrap();
+    assert!(!s.wants_save(t + REFRESH_SECS - 1), "a fresh stamp is left alone");
+    assert!(s.wants_save(t + REFRESH_SECS), "an old one is renewed");
+    s.save_at(&kernel(1), t + REFRESH_SECS).unwrap();
+    assert_eq!(loaded(&dir, &kernel(1)).unwrap().used, Some(t + REFRESH_SECS));
+    assert!(!Store::empty(dir.clone()).wants_save(t), "an empty run writes nothing");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One kernel's damaged section is that kernel's miss, not every kernel's: a
+/// reader verifies only its own, and the next save drops the damaged one.
+#[test]
+fn a_damaged_section_is_only_its_kernels_loss() {
+    let dir = tempdir("damaged-section");
+    let t = 1_800_000_000;
+    let (a, b) = (kernel(0xa1), kernel(0xb2));
+    save_one(&dir, &a, 1, t);
+    save_one(&dir, &b, 2, t + 1);
+    let path = Store::path(&dir);
+    let text = std::fs::read_to_string(&path).unwrap();
+    // b saved last, so its section is first; flip a byte of its entry.
+    let doctored = text.replacen(&format!("ok\t{}", heather_cache::sha256::hex(&key(2))), &format!("ok\t{}", heather_cache::sha256::hex(&key(4))), 1);
+    assert_ne!(doctored, text);
+    std::fs::write(&path, doctored).unwrap();
+
+    assert!(loaded(&dir, &a).is_some_and(|s| s.contains(&key(1))), "a is untouched");
+    assert!(matches!(Store::load(dir.clone(), &b), Err((_, Rejected::Malformed(_)))), "b is told");
+    save_one(&dir, &a, 3, t + 2);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains(&b), "the damaged section is not carried forward");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A format-3 file (one kernel, no sections) is read rather than discarded:
+/// its keys mean what they meant, so the bump costs no shared store a cold
+/// run. The first save rewrites it in sections.
+#[test]
+fn a_single_kernel_file_is_read_as_one_section() {
+    use heather_cache::sha256::{hex, sha256};
+    use heather_cache::store::LEGACY_FORMAT;
+    let dir = tempdir("legacy");
+    std::fs::create_dir_all(&dir).unwrap();
+    let k = kernel(0xa1);
+    let body = format!("ok\t{}\t{}\tdecl1\n", hex(&key(1)), hex(&key(1)));
+    let text = format!(
+        "heather-cache\t{LEGACY_FORMAT}\nkernel-semantics\t{k}\nchecksum\t{}\n{body}",
+        hex(&sha256(body.as_bytes()))
+    );
+    std::fs::write(Store::path(&dir), text).unwrap();
+    let s = loaded(&dir, &k).expect("a format-3 file under its own kernel loads");
+    assert!(s.contains(&key(1)));
+    assert!(matches!(Store::load(dir.clone(), &kernel(2)), Err((_, Rejected::KernelChanged { kernels: 1, .. }))));
+
+    save_one(&dir, &kernel(2), 2, 1_800_000_000);
+    let text = std::fs::read_to_string(Store::path(&dir)).unwrap();
+    assert!(text.starts_with(&format!("heather-cache\t{FORMAT}\n")), "rewritten at the current format");
+    assert!(loaded(&dir, &k).is_some_and(|s| s.contains(&key(1))), "the old kernel's verdicts carried over");
+    assert!(loaded(&dir, &kernel(2)).is_some_and(|s| s.contains(&key(2))));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

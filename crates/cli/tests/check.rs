@@ -361,8 +361,12 @@ fn a_stale_cache_is_discarded_out_loud() {
     let doctored: String = text
         .lines()
         .map(|l| {
-            if l.starts_with("kernel-semantics\t") {
-                format!("kernel-semantics\t{}\n", "0".repeat(64))
+            // This kernel's section, re-labelled as another kernel's.
+            if l.starts_with("kernel\t") {
+                let mut f: Vec<&str> = l.split('\t').collect();
+                let other = "0".repeat(64);
+                f[1] = &other;
+                format!("{}\n", f.join("\t"))
             } else {
                 format!("{l}\n")
             }
