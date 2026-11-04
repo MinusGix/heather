@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn the_bundled_library_checks() {
         let mut elab = Elaborator::with_prelude().unwrap();
-        let mut session = SemanticSession::new(Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/native-test-images"))));
+        let mut session = SemanticSession::new(Some(heather_cli::showcase::native_test_images()));
         for &(name, src) in SUPPORT {
             check_module(&mut elab, &mut session, &loader::Module {
                 name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),

@@ -662,3 +662,31 @@ fn every_unmet_expectation_is_an_error_where_it_is() {
     }
     assert!(err.contains("expect/unmet.hthr: 8 errors"), "{err}");
 }
+
+/// `HEATHER_CACHE_DIR` moves `heather check --cache`'s default store out of
+/// the working directory, so the checkouts of one repository (an agent's
+/// worktrees) can share it; unset, the store stays in `.heather/cache`.
+#[test]
+fn the_cache_dir_variable_moves_the_default_store() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("heather-cache-dir-{}-{nonce}", std::process::id()));
+    let work = root.join("work");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/good.hthr"), work.join("good.hthr")).unwrap();
+    let run = |shared: Option<&std::path::Path>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
+        cmd.current_dir(&work).args(["check", "--cache", "good.hthr"]).env_remove("HEATHER_CACHE_DIR");
+        if let Some(dir) = shared { cmd.env("HEATHER_CACHE_DIR", dir); }
+        let out = cmd.output().expect("run heather");
+        assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    };
+
+    run(Some(&shared));
+    assert!(shared.join("check").is_dir(), "no store under {}", shared.display());
+    assert!(!work.join(".heather").exists(), "the working directory got a store too");
+
+    run(None);
+    assert!(work.join(".heather/cache").is_dir());
+    std::fs::remove_dir_all(&root).ok();
+}

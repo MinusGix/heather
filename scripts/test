@@ -198,10 +198,13 @@ fi
 # §3.1.2), so its first suite replays library modules instead of elaborating
 # them all cold. Seconds, once; skipped when the stores exist or off-cloud.
 # Replay rechecks every image, so a seeded one can only be a miss. Never the
-# verdict store. HEATHER_NO_SEED=1 skips it.
+# verdict store. HEATHER_NO_SEED=1 skips it. The stores live in target/, or in
+# $HEATHER_CACHE_DIR when it is set (heather_cache::store_root).
+STORE_ROOT="${HEATHER_CACHE_DIR:-target}"
 if [[ "${CLAUDE_CODE_REMOTE:-}" == true && -z "${HEATHER_NO_SEED:-}" &&
-      ! -e target/semantic-test-images ]]; then
-  timeout 300 scripts/sentinel seed target && echo "seeded image stores from the master sentinel"
+      ! -e "$STORE_ROOT/semantic-test-images" ]]; then
+  mkdir -p "$STORE_ROOT"
+  timeout 300 scripts/sentinel seed "$STORE_ROOT" && echo "seeded image stores from the master sentinel"
 fi
 
 # Compile without limits (rustc is memory-hungry but trusted)...

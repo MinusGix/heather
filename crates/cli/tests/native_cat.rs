@@ -30,7 +30,7 @@ fn write_elf(file: &str, source: &str, output: &Path) -> std::process::Output {
     cmd.current_dir(&root)
         .args(["write-elf", file, source, "-o"])
         .arg(output)
-        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+        .arg("--cache-dir").arg(showcase::cli_check_images());
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }

@@ -141,7 +141,7 @@ fn execute(group: &str, cases: &[Case], claims: &[&str]) {
         let assembly = dir.join(format!("{file}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .args(["compile-x86", &format!("examples/x86-native/{file}.hthr"), symbol, "-o"]).arg(&assembly)
-            .args(["--cache-dir", "target/native-test-images", "--kernel-workers", "1"])
+            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
             .output().unwrap();
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         assert!(String::from_utf8_lossy(&result.stdout).contains("certified program bytes"), "{file} took the verified lowering");
@@ -201,7 +201,7 @@ fn loop_sources_are_refused() {
         std::fs::write(dir.join(format!("{file}.hthr")), format!("import bitvec;\n{recursion}{body}")).unwrap();
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .arg("compile-x86").arg(dir.join(format!("{file}.hthr"))).args([file, "-o"]).arg(dir.join(format!("{file}.s")))
-            .args(["--cache-dir", "target/native-test-images", "--kernel-workers", "1"])
+            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
             .output().unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success() && stderr.contains(why), "{file}: {stderr}");

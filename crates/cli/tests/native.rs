@@ -13,7 +13,7 @@ fn source_to_native_binary() {
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))
         .current_dir(&root)
         .args(["compile-x86", "examples/x86-native/mix.hthr", "mix", "-o"])
-        .arg(&assembly).args(["--cache-dir", "target/native-test-images"])
+        .arg(&assembly).arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
         .arg("--item-timings").arg(&tsv)
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));

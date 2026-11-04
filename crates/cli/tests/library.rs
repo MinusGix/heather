@@ -227,7 +227,7 @@ fn gate_folders() -> Vec<PathBuf> {
 /// the errors of any module the first step could not build, which it
 /// elaborates again to say why. Every module is checked over its own import
 /// closure, so its image has one key in every process that loads it. The
-/// store is the showcase gate's too ([`showcase::CLI_CHECK_IMAGES`]). Warm,
+/// store is the showcase gate's too ([`showcase::cli_check_images`]). Warm,
 /// the first step finds nothing to build and every module replays.
 /// The fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`) replays
 /// images an earlier build wrote, as the showcase gate does.
@@ -244,7 +244,7 @@ fn every_library_module_checks() {
     let images_flags = |cmd: &mut Command| {
         cmd.current_dir(&root);
         cmd.env("HEATHER_KERNEL_WORKERS", "1");
-        cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+        cmd.arg("--cache").arg("--cache-dir").arg(showcase::cli_check_images());
         cmd.arg("--expectations");
         if stale {
             cmd.arg("--accept-stale-images");
