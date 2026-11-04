@@ -1,6 +1,6 @@
 ---
 title: Master red 2026-11-04 (library, native_cat, native_tools; incomplete)
-status: open
+status: closed
 labels: [testing, sentinel]
 area: infrastructure
 created: 2026-11-04
@@ -97,3 +97,46 @@ builds died with signal 9. The native_cat/native_tools panics carry no message i
 the log. The log does not say who sent the signal, so this looks like one cause
 (killed children), but that is not established; a rerun is needed to tell a
 resource kill from a regression.
+
+## Log
+
+**2026-11-04, rerun on a fresh cloud box at `4c1b702` (master, #417 on top of
+#414).** No code regression; the red is the per-process CPU rail
+(`ulimit -t 300`, which Linux enforces with SIGKILL when the soft and hard
+limits are equal, so every "signal 9" above reads as a rail kill), on a box
+that ran about 2.4x slower than this one (6675 s against 2732 s for the same
+cold suite).
+
+- Full cold `scripts/test` (exact images, empty stores): `== suite: 3770
+  passed, 2 failed, 2 ignored ==` in 2732 s. `library.rs`, `native_cat.rs`,
+  `showcase_calculator` and `parser_library` pass. The two failures are
+  `compiled_sort_runs_as_gnu_sort` and `compiled_tac_runs_as_gnu_tac`
+  (native_tools), both killed at about 304 s while checking the certificate:
+  [[native-sort-gate-rail]]. A memory sampler beside the run never saw less
+  than 9 GiB available and the kernel log has no OOM kill, so these are rail
+  kills, not memory.
+- lib/native cold, one process per module (the gate's build step), at master
+  and at `b037918` (2026-11-02): every module builds at both, 918 against 840
+  CPU-s in all (the extra is mostly the new common prelude module), the same
+  3.4 GiB peak. The modules the sentinel lost are the heaviest:
+  `native_compile_correct` about 150 s and `native_build_parts` about 115 s,
+  that is 50% and 38% of the rail here. Killing them takes a box more than
+  twice as slow per CPU-second, which is what the sentinel's box was.
+- The two elab members the sentinel killed cost, cold and alone,
+  showcase_calculator 184 CPU-s (238 at `b037918`) and parser_library 170
+  (167): no regression, but at 55–60% of the rail.
+- `write-elf` of `sort_tool` over warm images: 323 CPU-s at master, 348 at
+  `b037918`, byte-identical ELF. So sort was at the rail before any of the
+  2026-11-03 merges ([[master-red-2026-11-03]] is the same failure).
+
+Fix: native_cat and native_tools run under a 900 s CPU rail
+(`CPU_RAIL_OVERRIDES` in `scripts/run-test-targets.mjs`, and the focused
+`scripts/test --test native_cat|native_tools` path); the address-space cap is
+unchanged. Under it `scripts/test -p heather-cli --test native_tools` passes,
+14 of 14.
+
+On the `--pr` question: the PR lane did not miss a regression here, since
+there was none to miss. What it cannot see is margin: a slower box turns
+every process above half the rail into a candidate kill, and the runner only
+reports CPU per target, summed over its children, so a single `heather` child
+near its own rail is invisible ([[test-cpu-rail-child-accounting]]).
