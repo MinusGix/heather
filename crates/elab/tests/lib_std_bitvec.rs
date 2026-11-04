@@ -34,7 +34,7 @@ const BITVEC: &str = include_str!("../../../lib/std/bitvec/bitvec.hthr");
 /// so the on-disk image keys this file reads are the ones the warmup wrote.
 const MODULES: &[(&str, &str)] = &[
     ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
-    ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")), ("int", INT),
+    ("pair", PAIR), ("list", LIST), ("relation", include_str!("../../../lib/std/relation/relation.hthr")), ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")), ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")), ("algebra", ALGEBRA), ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")), ("int", INT),
     ("bitvec", BITVEC),
 ];
 

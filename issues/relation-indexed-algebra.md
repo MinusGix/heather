@@ -1,11 +1,11 @@
 ---
 title: Make algebraic theories generic over their equality relation
-status: open
+status: closed
 labels: [stdlib,mathematics,algebra,setoids,design]
 area: mathematics
 milestone: [math-classes]
 created: 2026-09-04
-updated: 2026-11-02
+updated: 2026-11-04
 ---
 
 Decision: reusable algebraic theory should be relation-indexed. The current
@@ -124,3 +124,4 @@ style. **[[algebraic-theory-composition]]** owns its underlying dictionary rules
 - 2026-10-20: [[semiring-ring-structure-api]] adds `MonoidRel`, `CommMonoidRel` and `GroupRel` to `algebra_rel` and the two-operation layers in `lib/std/algebra/semiring.hthr`, with `Rat` a `CommRing` under `Rat::Same` and `Nat`/`Int` under `RelId` (`designation ≈ at Nat/Int := RelId`, so identity carriers state the generic theorems with `=`).
 - 2026-10-23: Every CommRing instance (Int, Rat, CReal, Dyadic) re-proves zero_mul/mul_zero that the additive group implies; a child class implementing inherited fields would remove that, see [[class-inherited-field-implementations]] (Arend's partial implementations, docs/arend-survey.md §4).
 - 2026-11-02: Lattices landed relation-indexed (docs/lattice-structure-design.md): `PartialOrderRel(≈, ≤)` and the meet/join classes take `≈` as an index, so `Nat`/`Int` are lattices at `RelId` (laws read as `=` via the `≈` designation) and `Dyadic` modulo `Dyadic::Same`. The algebraic face is the relation-indexed `Mergeable`. Cancellation (ordered-algebra-design §6) is stated modulo `≈` too.
+- 2026-11-04: 2026-11-04: Built as a generalized source theory (docs/relation-indexed-algebra-design.md). A class may now extend a parent at a computed index (`extends MonoidRel<A>(RelId<A>, op)`), so algebra's Semigroup/Monoid/CommMonoid/Group are algebra_rel's classes at RelId with no fields of their own. One theorem library: mconcat is MonoidRel::fold, op_inv_unique is GroupRel::inv_unique, op_unit_of_comm is CommMonoidRel::unit_r_of_comm, and the one-operation consumers moved from semiring to algebra_rel. The duplicate Nat/Int relational instances in semiring are gone; the identity instances register them as parents. Demos at Nat, Int, Bool, List and Rat (unreduced) in lib/_tests/std/algebra/semiring_tests.hthr: fold_append at both, inv_unique at both, mconcat_append from a Monoid binder, dictionary views. Migration cost table in the design note §5. The `=`-as-structure-relation experiment was not run (§4): identity carriers already read as `=`, and it stays an open experiment. Clients of algebra need no new imports: parents are recorded by declaration and members of unimported owners are reached through nameable descendants ([[class-parent-names-resolve-in-client-scope]]).

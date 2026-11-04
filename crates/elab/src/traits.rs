@@ -247,6 +247,11 @@ impl Traits {
         self.class_members.contains(name)
     }
 
+    /// Every registered class, by key.
+    pub(crate) fn classes_iter(&self) -> impl Iterator<Item = (&String, &Rc<ClassInfo>)> {
+        self.classes.iter()
+    }
+
     pub(crate) fn classes_declaring(&self, name: &str) -> Vec<(String, Rc<ClassInfo>)> {
         let mut out: Vec<_> =
             self.classes
@@ -661,9 +666,49 @@ pub(crate) fn render_expr(e: &Expr) -> String {
 fn same_parent_fiber(a: &ClassRef, b: &ClassRef) -> bool {
     same_parent_carrier(a, b)
         && a.index.len() == b.index.len()
-        && a.index.iter().zip(&b.index).all(|(x, y)| {
-            matches!((&x.kind, &y.kind), (ExprKind::Var(xn), ExprKind::Var(yn)) if xn == yn)
-        })
+        && a.index.iter().zip(&b.index).all(|(x, y)| same_index_arg(x, y))
+}
+
+/// The names an index argument mentions where a global could stand: a
+/// variable, an applied head, and a type's head. Enough for what an index is
+/// (an operation, a relation, `RelId<A>`); a binder-carrying form adds none.
+fn free_names_expr(e: &Expr, out: &mut Vec<String>) {
+    match &e.kind {
+        ExprKind::Var(n) => out.push(n.clone()),
+        ExprKind::App { head, args, .. } => {
+            free_names_expr(head, out);
+            for a in args {
+                free_names_expr(a, out);
+            }
+        }
+        ExprKind::TyApp { head, args } => {
+            free_names_expr(head, out);
+            for t in args {
+                free_names_ty(t, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn free_names_ty(t: &Ty, out: &mut Vec<String>) {
+    if let TyKind::Named { name, args } = &t.kind {
+        out.push(name.clone());
+        for a in args {
+            free_names_ty(a, out);
+        }
+    }
+}
+
+/// Two `extends` index arguments name one value: the same index parameter, or
+/// the same computed index spelled alike (`RelId<A>` reached through `Monoid`
+/// and again through `CommMonoidRel`). Syntactic, as the registry key is.
+fn same_index_arg(x: &Expr, y: &Expr) -> bool {
+    match (&x.kind, &y.kind) {
+        (ExprKind::Var(xn), ExprKind::Var(yn)) => xn == yn,
+        (ExprKind::Var(_), _) | (_, ExprKind::Var(_)) => false,
+        _ => render_expr(x) == render_expr(y),
+    }
 }
 
 fn same_parent_carrier(a: &ClassRef, b: &ClassRef) -> bool {
@@ -712,10 +757,16 @@ mod inequality_render_tests {
     }
 }
 
+/// A class as a diagnostic names it: an ancestor is recorded by its
+/// declaration key (`algebra_rel::MonoidRel`), and the reader wrote the name.
+fn class_shown(name: &str) -> &str {
+    name.rsplit("::").next().unwrap_or(name)
+}
+
 pub(crate) fn class_ref_written(r: &ClassRef) -> String {
     let head = format!(
         "{}<{}>",
-        r.name,
+        class_shown(&r.name),
         r.args.iter().map(render_ty).collect::<Vec<_>>().join(", ")
     );
     if r.index.is_empty() {
@@ -799,7 +850,59 @@ pub(crate) fn op_index_symbol(name: &str) -> Option<&str> {
 // lowering would then report as an unknown type — loud, but at the wrong
 // place, so nothing here takes a wildcard shortcut.
 
-type Ren = HashMap<String, String>;
+/// A parent's instantiation. `names` is the rename the layer-1 restriction
+/// makes enough for type parameters and for an index passed up unchanged;
+/// `exprs` holds an index a child computes (`extends MonoidRel<A>(RelId<A>,
+/// op)`, docs/relation-indexed-algebra-design.md §3), and `tys` a type
+/// parameter instantiated at a composite type, which only an *instance* does
+/// (its ancestors at `List<A>`). A name in `exprs`/`tys` is replaced by the
+/// image whole; every other name is renamed or kept.
+#[derive(Default, Clone)]
+pub(crate) struct Ren {
+    names: HashMap<String, String>,
+    exprs: HashMap<String, Expr>,
+    tys: HashMap<String, Ty>,
+}
+
+impl Ren {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&mut self, from: String, to: String) {
+        self.names.insert(from, to);
+    }
+
+    /// The substitution that instantiates a class's own names — its type
+    /// parameters and index — at one use: what an ancestor's arguments,
+    /// written in the class's names, become at that use.
+    pub(crate) fn at_use(info: &ClassInfo, args: &[Ty], index: &[Expr]) -> Self {
+        let mut m = Self::new();
+        for (p, a) in info.params.iter().zip(args) {
+            m.tys.insert(p.clone(), a.clone());
+        }
+        for (p, e) in info.valparams.iter().zip(index) {
+            m.exprs.insert(p.name.clone(), e.clone());
+            if let Some(sym) = &p.symbol {
+                m.exprs.insert(symbol_key(sym), e.clone());
+            }
+        }
+        m
+    }
+}
+
+/// An ancestor's index, written in its descendant's names, at one use of the
+/// descendant (`Ren::at_use`).
+pub(crate) fn ancestor_index_at(info: &ClassInfo, args: &[Ty], index: &[Expr], anc: &ClassRef) -> Vec<Expr> {
+    let m = Ren::at_use(info, args, index);
+    anc.index.iter().map(|e| rename_expr(&m, e)).collect()
+}
+
+/// An ancestor's type arguments at one use of its descendant.
+pub(crate) fn ancestor_args_at(info: &ClassInfo, args: &[Ty], index: &[Expr], anc: &ClassRef) -> Vec<Ty> {
+    let m = Ren::at_use(info, args, index);
+    anc.args.iter().map(|t| rename_ty(&m, t)).collect()
+}
 
 /// Where a class holds an ancestor, for a diagnostic: untagged, or at the
 /// path of tags that reaches it.
@@ -820,17 +923,27 @@ fn symbol_key(symbol: &str) -> String {
 /// A class's own body symbols read as its own index names — what the
 /// phantom-index check counts occurrences through.
 fn own_symbols(info: &ClassInfo) -> Ren {
-    info.valparams
-        .iter()
-        .filter_map(|p| p.symbol.as_ref().map(|s| (symbol_key(s), p.name.clone())))
-        .collect()
+    Ren {
+        names: info
+            .valparams
+            .iter()
+            .filter_map(|p| p.symbol.as_ref().map(|s| (symbol_key(s), p.name.clone())))
+            .collect(),
+        ..Ren::default()
+    }
 }
 
 fn ren(m: &Ren, n: &str) -> String {
-    m.get(n).cloned().unwrap_or_else(|| n.to_string())
+    m.names.get(n).cloned().unwrap_or_else(|| n.to_string())
 }
 
 fn rename_ty(m: &Ren, t: &Ty) -> Ty {
+    if let TyKind::Named { name, args } = &t.kind
+        && args.is_empty()
+        && let Some(image) = m.tys.get(name)
+    {
+        return image.clone();
+    }
     let kind = match &t.kind {
         TyKind::Nat => TyKind::Nat,
         TyKind::Univ { level } => TyKind::Univ { level: *level },
@@ -872,17 +985,23 @@ fn rename_ty(m: &Ren, t: &Ty) -> Ty {
 fn rename_expr(m: &Ren, e: &Expr) -> Expr {
     use ExprKind::*;
     let kind = match &e.kind {
-        Var(n) => Var(ren(m, n)),
+        Var(n) => match m.exprs.get(n) {
+            Some(image) => return image.clone(),
+            None => Var(ren(m, n)),
+        },
         // A symbol a parent's head bound (`op as ∙`) is that parent's index,
         // so instantiating the parent spells it as the child's argument: the
         // child installs its own symbols, not the parent's
         // (`symbol_key`). Any other symbol names nothing in the telescope
         // and is kept.
-        OpSymbol { symbol, fixity } => match m.get(&symbol_key(symbol)) {
-            Some(n) => Var(n.clone()),
-            None => OpSymbol {
-                symbol: symbol.clone(),
-                fixity: *fixity,
+        OpSymbol { symbol, fixity } => match m.exprs.get(&symbol_key(symbol)) {
+            Some(image) => return image.clone(),
+            None => match m.names.get(&symbol_key(symbol)) {
+                Some(n) => Var(n.clone()),
+                None => OpSymbol {
+                    symbol: symbol.clone(),
+                    fixity: *fixity,
+                },
             },
         },
         Univ { level } => Univ { level: *level },
@@ -1375,7 +1494,7 @@ impl Elaborator {
                              paths (`{}` and `{}`), so its canonical parent would be \
                              ambiguous",
                             d.name,
-                            candidate.name,
+                            class_shown(&candidate.name),
                             previous.path.join("."),
                             candidate.path.join(".")
                         ),
@@ -1397,7 +1516,7 @@ impl Elaborator {
                              in generic code. Inherit it once, and take any further law it \
                              needs as a law class of its own",
                             d.name,
-                            candidate.name,
+                            class_shown(&candidate.name),
                             class_ref_written(&candidate),
                             where_reached(&previous.path),
                             where_reached(&candidate.path)
@@ -1430,10 +1549,7 @@ impl Elaborator {
                     for (i, (left, right)) in
                         previous.index.iter().zip(&candidate.index).enumerate()
                     {
-                        let same = matches!(
-                            (&left.kind, &right.kind),
-                            (ExprKind::Var(x), ExprKind::Var(y)) if x == y
-                        );
+                        let same = same_index_arg(left, right);
                         let Some(param) = info.valparams.get(i) else {
                             continue;
                         };
@@ -1448,7 +1564,7 @@ impl Elaborator {
                                     "`{}` cannot inherit `{}` at two values of `{}`: that \
                                      index does not occur in the parent dictionary's field \
                                      types, so the kernel sees the two fibers as convertible",
-                                    d.name, candidate.name, param.name
+                                    d.name, class_shown(&candidate.name), param.name
                                 ),
                                 candidate.span,
                             );
@@ -1465,14 +1581,20 @@ impl Elaborator {
                      unqualified flattening cannot identify them; give the parent \
                      dictionaries distinct `as` names",
                     d.name,
-                    candidate.name,
+                    class_shown(&candidate.name),
                     class_ref_written(previous),
                     class_ref_written(&candidate)
                 ),
                 candidate.span,
             )
         };
-        for parent in &d.extends {
+        // A parent is recorded by its declaration, not its spelling: a client
+        // that sees this class instantiates its ancestors in the client's
+        // scope, where the parent's module (and a computed index's globals,
+        // `RelId`) need not be imported
+        // (issues/class-parent-names-resolve-in-client-scope.md).
+        let qualified: Vec<ClassRef> = d.extends.iter().map(|p| self.qualified_parent(d, p)).collect();
+        for parent in &qualified {
             let (pinfo, rename) = self.parent_view(d, parent)?;
             // The parent's own ancestors come with it, renamed the same way.
             for a in &pinfo.ancestors {
@@ -1947,23 +2069,20 @@ impl Elaborator {
             );
         }
         for (p, a) in info.valparams.iter().zip(parent.index.iter()) {
+            // A *computed* index (`extends MonoidRel<A>(RelId<A>, op)`): the
+            // parent's index name and body symbol read as the expression, so
+            // instantiating the parent substitutes it. It is written in the
+            // child's names, which every later instantiation substitutes in
+            // turn (`Ren::at_use`): the identity theories are the relational
+            // ones at `RelId` this way (docs/relation-indexed-algebra-design.md
+            // §3). A bare name that is no index parameter of the child stays
+            // the slip it always was.
             let ExprKind::Var(n) = &a.kind else {
-                return err(
-                    format!(
-                        "an `extends` index must be one of `{}`'s own value parameters \
-                         (`{}`), and `{}` is not: a chain passes its index up unchanged, \
-                         and a parent at a *computed* index is the diamond \
-                         (docs/operation-indexed-classes-design.md §8), not this form",
-                        d.name,
-                        d.valparams
-                            .iter()
-                            .map(|p| p.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        render_expr(a)
-                    ),
-                    a.span,
-                );
+                rename.exprs.insert(p.name.clone(), a.clone());
+                if let Some(sym) = &p.symbol {
+                    rename.exprs.insert(symbol_key(sym), a.clone());
+                }
+                continue;
             };
             if !d.valparams.iter().any(|q| q.name == *n) {
                 return err(
@@ -1986,6 +2105,34 @@ impl Elaborator {
             }
         }
         Ok((info, rename))
+    }
+
+    /// `parent` with its class name, and every global its index arguments
+    /// name, replaced by the declaration key it resolves to here. The
+    /// child's own parameters are left as written: instantiation substitutes
+    /// them. A name that does not resolve is left for the ordinary refusal.
+    fn qualified_parent(&self, d: &ClassDecl, parent: &ClassRef) -> ClassRef {
+        let own = |n: &str| d.params.iter().any(|p| p == n) || d.valparams.iter().any(|p| p.name == n);
+        let mut names = Vec::new();
+        for e in &parent.index {
+            free_names_expr(e, &mut names);
+        }
+        let mut m = Ren::new();
+        for n in names {
+            if own(&n) {
+                continue;
+            }
+            if let Some(k) = self.key_of(&n) {
+                m.insert(n, k);
+            }
+        }
+        ClassRef {
+            name: self.key_of(&parent.name).unwrap_or_else(|| parent.name.clone()),
+            args: parent.args.clone(),
+            index: parent.index.iter().map(|e| rename_expr(&m, e)).collect(),
+            path: parent.path.clone(),
+            span: parent.span,
+        }
     }
 
     /// The diagnostic for a name in class position that is not a class. A
@@ -3273,38 +3420,15 @@ impl Elaborator {
 
         // An ancestor's arguments are written in terms of *the class's* type
         // parameters (design §3), so instantiating the class at `T⃗`
-        // instantiates its ancestors by the same positional substitution. The
-        // §3 restriction is what makes this a lookup rather than a walk.
+        // instantiates its ancestors by the same substitution, and their
+        // index by the instance's: a computed ancestor index (`RelId<A>`)
+        // becomes `RelId<Nat>` at `Nat` (docs/relation-indexed-algebra-design.md
+        // §3).
         let anc_args = |a: &ClassRef| -> Vec<Ty> {
-            a.args
-                .iter()
-                .map(|arg| match &arg.kind {
-                    TyKind::Named { name, args } if args.is_empty() => class
-                        .params
-                        .iter()
-                        .position(|p| p == name)
-                        .map(|i| d.class.args[i].clone())
-                        .unwrap_or_else(|| arg.clone()),
-                    _ => arg.clone(),
-                })
-                .collect()
+            ancestor_args_at(&class, &d.class.args, &d.class.index, a)
         };
-        // The same substitution at the index: an ancestor's index arguments are
-        // the child's own value-parameter names (`parent_view`'s restriction),
-        // so instantiating is the positional lookup again.
         let anc_index = |a: &ClassRef| -> Vec<Expr> {
-            a.index
-                .iter()
-                .map(|arg| match &arg.kind {
-                    ExprKind::Var(name) => class
-                        .valparams
-                        .iter()
-                        .position(|p| p.name == *name)
-                        .and_then(|i| d.class.index.get(i).cloned())
-                        .unwrap_or_else(|| arg.clone()),
-                    _ => arg.clone(),
-                })
-                .collect()
+            ancestor_index_at(&class, &d.class.args, &d.class.index, a)
         };
         let anc_ref = |a: &ClassRef| -> ClassRef {
             ClassRef {

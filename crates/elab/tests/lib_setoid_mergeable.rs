@@ -23,6 +23,8 @@ const MODULES: &[(&str, &str)] = &[
         "algebra_rel",
         include_str!("../../../lib/std/algebra/algebra_rel.hthr"),
     ),
+    // The showcase's `Bool` instance reuses `algebra`'s canonical laws.
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
     (
         "relation_context",
         include_str!("../../../lib/std/tactic/relation_context.hthr"),
@@ -132,7 +134,6 @@ fn omega_proves_positive_subtype_closure() {
             "lift_positive",
             include_str!("../../../docs/showcase/lift_positive.hthr"),
         ),
-        ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
         ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
         ("int", include_str!("../../../lib/std/num/int.hthr")),
         ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),

@@ -982,7 +982,9 @@ impl Elaborator {
         if !cind.is_record {
             return None;
         }
-        let ckey = self.key_of(&cind.name)?;
+        // By the tag's declaration, not the name: the goal's class may be a
+        // parent the client never imported (`MonoidRel` under `Monoid`).
+        let ckey = crate::names::qkey(&cind.scope.module, &cind.name);
         if !self.traits.has_class(&ckey) {
             return None;
         }
@@ -1043,7 +1045,7 @@ impl Elaborator {
         if dind.name == cind.name {
             return None; // the exact pass already had its chance
         }
-        let dkey = self.key_of(&dind.name)?;
+        let dkey = crate::names::qkey(&dind.scope.module, &dind.name);
         let dinfo = self.traits.class(&dkey)?;
         let mut tcx = cx.clone();
         tcx.aliases.push(Rc::new(crate::Alias {

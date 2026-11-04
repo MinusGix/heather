@@ -1,6 +1,9 @@
 import nat;
 import logic;
 import bool;
+import relation;
+import relation_props;
+import algebra_rel;
 import algebra;
 import morphism;
 
@@ -1434,6 +1437,19 @@ theorem Int::abs_mul(self a, b: Int): (a * b).abs() = a.abs() * b.abs() { Int::c
 theorem Int::abs_neg(self a: Int): (-a).abs() = a.abs() { Int::cong_ofnat(a.natAbs_neg()) }
 
 // ---------------------------------------------------------------------------
+// The identity structures (`algebra`), each `algebra_rel`'s at `RelId`. The
+// setoid lives here, before them, so the order structures (`order`,
+// `lattice`) and the ring (`semiring`) over `RelId<Int>` all find this one
+// dictionary rather than minting copies.
+
+instance Equivalence<Int>(RelId<Int>) {
+    rel_refl := λ x => refl,
+    rel_sym := λ x y h => sym(h),
+    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
+}
+
+instance Respects2<Int, Int, Int>(RelId<Int>, RelId<Int>, RelId<Int>, Int::add) { respects2 := respects2_relid(Int::add) }
+instance Respects2<Int, Int, Int>(RelId<Int>, RelId<Int>, RelId<Int>, Int::mul) { respects2 := respects2_relid(Int::mul) }
 
 instance CommMonoid<Int>(Int::add) {
     unit := OfNat(0),
@@ -1455,6 +1471,7 @@ instance Group<Int>(Int::add) {
     inv := Int::neg,
     inv_l := Int::neg_add_self,
     inv_r := Int::add_neg,
+    inv_respects := λ x y h => cong(h),
 }
 
 theorem Int::neg_unique(self x, y: Int, h: x + y = OfNat(0)): y = -x {

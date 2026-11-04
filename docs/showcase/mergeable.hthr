@@ -8,6 +8,7 @@ import list;
 import relation;
 import relation_props;
 import algebra_rel;
+import algebra;
 import list_setoid;
 
 // A theorem at an open element type uses the library's inferred List instance.
@@ -30,13 +31,13 @@ theorem and_respects(x, x2: Bool, hx: x = x2, y, y2: Bool, hy: y = y2):
         j(hy, λ y3 h => x.and(y) = x.and(y3), refl))
 }
 
+// `algebra`'s `CommMonoid<Bool>(and)` already registers the setoid, the
+// congruence, associativity and commutativity at `RelId` (the identity
+// monoid is the relational one at identity), so this instance reuses that
+// exact evidence and writes only idempotence. Restating a canonical field is
+// an override, and an override owes conversion with the canonical proof
+// (`and_respects` is not `respects2_relid(Bool::and)`).
 instance Mergeable<Bool>(RelId<Bool>, Bool::and) {
-    rel_refl := λ x => refl,
-    rel_sym := λ x y h => sym(h),
-    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
-    respects2 := and_respects,
-    assoc := Bool::and_assoc,
-    comm := Bool::and_comm,
     idem := and_idem,
 }
 

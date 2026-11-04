@@ -5,7 +5,7 @@ labels: [traits,classes,modules,ergonomics]
 area: language
 milestone: [math-classes]
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-04
 ---
 
 A class's `extends` clause names its parents (and their index relations) by
@@ -47,3 +47,7 @@ resolve, and the module to import. It should not read as a misuse of
 - **[[module-reexports]]** owns re-exporting. Assumed here: only that an
   `export` is not the fix, because a class's parents are not part of what a
   client asked to see.
+
+## Log
+
+- 2026-11-04: 2026-11-04: Partly addressed by [[relation-indexed-algebra]]'s round, whose identity classes made every client of `algebra` hit this (their parents are `algebra_rel`'s). A class now records its parents by declaration key (`traits::qualified_parent`: the class name and every global in a computed index, `relation::RelId`); the dot sugars take a member's owner as a candidate when a nameable class reaches it (`declaring_classes`), build its goal by key, and the scope upcast keys goal and binder by the tag's declaration, not the bare name; the value-slot refusal names the nearest nameable descendant (`Semigroup<Bool>(Bool::and)` for `assoc`). The `order`-import symptom above was not re-tested against this, so the sixteen `import order;` lines stay until someone removes one and checks.
