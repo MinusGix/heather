@@ -6,7 +6,7 @@ From the repository root on x86_64 Linux with a C compiler/linker:
 cargo build -p heather-cli
 mkdir -p target/x86-native
 (ulimit -v 8388608 -t 300; target/debug/heather compile-x86 \
-  examples/x86-native/mix.hthr mix -o target/x86-native/mix.s \
+  examples/x86-native/word_mix.hthr mix -o target/x86-native/mix.s \
   --cache-dir target/native-images)
 cc -std=c11 -Wall -Wextra -Werror examples/x86-native/main.c \
   target/x86-native/mix.s -o target/x86-native/mix
@@ -22,9 +22,25 @@ mix(20, 22) = 81985529216486963; 10005 native cases passed
 The command refuses existing assembly or certificate outputs. Remove those
 outputs deliberately before rebuilding, or choose a fresh output name.
 
-`mix.hthr` is the compiled program: it shares an addition, adds a full-width
+`word_mix.hthr` is the compiled program, marked `runtime fn mix`: it shares an addition, adds a full-width
 constant, and XORs the results. The C file supplies `main` and checks boundary values and
 10,000 deterministic pseudorandom pairs against unsigned C arithmetic.
+
+## Runtime fns
+
+A function runs only when it is marked: `runtime fn f` (with `import
+runtime;` and the modules its generator reads, `runtime-generator-imports`)
+publishes `f::program`, a FunctionIR program of `f` and every runtime fn it
+calls, each from its `Compile` instance, and `f::agrees`, that the program
+evaluates to `f` ([design §16.9](../../docs/runtime-fn-setups-design.md)).
+`compile-x86` compiles a marked function through those: its certificate's
+`_agrees` is `f::agrees`, and nothing about the program is proved by the
+compiler. An unmarked function is refused, naming the marker, unless its
+program has a loop or a test through a `Bool` helper, which the default
+setup does not compile yet; those go through the older Rust reflector the
+rest of this page describes, until the loop round retires it. The files
+here that are loop-free are marked; `branches.hthr`'s `composed`, `either`
+and `calls_either` call the `Bool` helper `unequal` and stay unmarked.
 
 ## What `compile-x86` certifies
 
@@ -41,7 +57,8 @@ connective needs it. A source outside that fragment is refused, with a
 message naming what it does not support.
 
 The certificate does not reason about this particular program's
-instructions. It reflects the source into a FunctionIR program and states:
+instructions. For a function the Rust reflector compiles, it reflects the
+source into a FunctionIR program and states:
 
 - the program's lowering by `lower_program`, with the planner's placement,
   as a literal (`_lowers`, checked by evaluation);
@@ -68,12 +85,12 @@ instructions. It reflects the source into a FunctionIR program and states:
 The assembly is the whole program: each function's frame, body and RET,
 with the exported symbol at its function's label. The platform ABI around
 it (stack alignment, the C caller, the loader) is outside the proof.
-`program.hthr` is a three-level example with calls in both arms of a
+`levels.hthr` is a three-level example with calls in both arms of a
 branch:
 
 ```sh
 (ulimit -v 8388608 -t 300; target/debug/heather compile-x86 \
-  examples/x86-native/program.hthr program -o target/x86-native/program.s \
+  examples/x86-native/levels.hthr program -o target/x86-native/levels.s \
   --cache-dir target/native-images)
 ```
 

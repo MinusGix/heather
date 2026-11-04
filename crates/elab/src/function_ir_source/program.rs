@@ -84,6 +84,11 @@ pub struct ProgramFunction {
     /// A match decided a connective or a helper: the expansion is the
     /// source only by case analysis.
     pub decided: bool,
+    /// A test calls a `Bool` helper, whose body is inlined: the default
+    /// `runtime fn` setup does not compile that yet (`compile-x86` keeps
+    /// such a program on this reflector, docs/runtime-fn-setups-design.md
+    /// §16.9).
+    pub helped: bool,
     /// The function is a recursion on a fuel: its parameters are the bound
     /// and the words, and its body the loop and what follows it.
     pub looped: Option<ReflectedLoop>,
@@ -378,7 +383,7 @@ impl Program<'_> {
         self.stack.pop();
         let (region, expansion) = region?;
         let index = self.functions.len();
-        self.functions.push(ProgramFunction { source_name: name, arity, body: region, result, expansion, decided: body.decided, looped: None });
+        self.functions.push(ProgramFunction { source_name: name, arity, body: region, result, expansion, decided: body.decided, helped: body.helped, looped: None });
         self.index.insert(at, index);
         Ok(index)
     }
@@ -424,7 +429,7 @@ impl Program<'_> {
         let (body, looped) = reflected?;
         let index = self.functions.len();
         let arguments: Vec<String> = (0..=n).map(|i| format!("a{i}")).collect();
-        let mut function = ProgramFunction { source_name: name, arity: n + 1, body, result: n as u64 + 1, expansion: String::new(), decided: false,
+        let mut function = ProgramFunction { source_name: name, arity: n + 1, body, result: n as u64 + 1, expansion: String::new(), decided: false, helped: false,
             looped: Some(looped) };
         function.expansion = function.answer(&arguments);
         self.functions.push(function);
@@ -530,7 +535,7 @@ impl Program<'_> {
         let (body, looped) = reflected?;
         let index = self.functions.len();
         let arguments: Vec<String> = (0..n).map(|i| format!("a{i}")).collect();
-        let mut function = ProgramFunction { source_name: name, arity: n, body, result: n as u64, expansion: String::new(), decided: false,
+        let mut function = ProgramFunction { source_name: name, arity: n, body, result: n as u64, expansion: String::new(), decided: false, helped: false,
             looped: Some(looped) };
         function.expansion = function.answer(&arguments);
         self.functions.push(function);
@@ -662,6 +667,8 @@ struct Body {
     decided: bool,
     /// The helpers being inlined, to refuse recursion.
     helpers: Vec<usize>,
+    /// A `Bool` helper was inlined somewhere in the body.
+    helped: bool,
     /// A loop's pass spells its comparisons as Bool variables, named by
     /// port; `conditions` spells each in full, in name order.
     cases: bool,
@@ -702,7 +709,7 @@ struct Pending { nodes: Vec<Node>, inputs: Vec<Port>, outputs: Vec<Port> }
 
 impl Body {
     fn new(parameters: Vec<Port>, next_id: u64, spell: BTreeMap<u64, String>) -> Self {
-        Body { parameters, next_id, scope: Scope::default(), steps: Vec::new(), spell, decided: false, helpers: Vec::new(), cases: false,
+        Body { parameters, next_id, scope: Scope::default(), steps: Vec::new(), spell, decided: false, helpers: Vec::new(), helped: false, cases: false,
             case_names: BTreeMap::new(), conditions: Vec::new(), called: false }
     }
 
@@ -902,6 +909,7 @@ impl Body {
                 self.flush(&mut pending);
                 let (_, body) = program.body_of(at, arity)?;
                 self.decided = true;
+                self.helped = true;
                 self.helpers.push(at);
                 let inner = Rc::new(Cx { at, parameters });
                 let expansion = self.branch(program, &body, &inner, 0, yes, no, target);

@@ -804,8 +804,16 @@ fn Tm::call_args(g: List<Ty>, ports: List<Nat>, ps: List<Ty>, args: List<Nat>) �
     }
 }
 
+// The call, its result then moved off the port the call writes: the x86
+// lowering answers a call in RAX, which the next call does not keep, and a
+// `Move` gives the result a port the planner places (as the Rust reflector's
+// programs do).
+fn Tm::called(f: Nat, qs: List<Nat>, next: Nat) → Lowered {
+    Lowered(Compose(Call(f, qs, next), nodes_region([Move(64, Succ(next), next)])), Succ(next), Succ(Succ(next)))
+}
+
 fn Tm::lower_call_args(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Tm::call_args(g, ports, Sig::at(w.sigs, f).params, args).and_then(λ qs => Some(Lowered(Call(f, qs, next), next, Succ(next))))
+    Tm::call_args(g, ports, Sig::at(w.sigs, f).params, args).and_then(λ qs => Some(Tm::called(f, qs, next)))
 }
 
 fn Tm::lower_call_result(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
@@ -1201,18 +1209,28 @@ theorem Tm::lower_call_sound(w: World, g: List<Ty>, ports: List<Nat>, next, f: N
     Option::and_then_elim(P, trivial, Ty::check_words(Sig::at(w.sigs, f).params), λ _ => Tm::lower_call_result(w, g, ports, next, f, args), λ ok _ =>
     Option::and_then_elim(P, trivial, Sig::at(w.sigs, f).result.check(Word(64)), λ _ => Tm::lower_call_args(w, g, ports, next, f, args), λ er _ =>
     Option::and_then_elim(P, trivial, Tm::call_args(g, ports, Sig::at(w.sigs, f).params, args),
-        λ qs => Some(Lowered(Call(f, qs, next), next, Succ(next))), λ qs e_qs =>
+        λ qs => Some(Tm::called(f, qs, next)), λ qs e_qs =>
         λ call agree values env held below => {
             let r = Sig::at(w.sigs, f).result;
             let meaning = Tm::apply(w, g, env, r, Sig::at(w.sigs, f).params, Sig::get(w.tys, w.sigs, w.callees, f), args);
             let answered = Tm::call_args_sound(w, g, ports, values, env, held, r, Sig::at(w.sigs, f).params, args,
                 Sig::get(w.tys, w.sigs, w.callees, f), λ ws => call(f, ws), ok, agree(f, ⟨ok, er⟩), qs, e_qs);
             let v = word_value(call(f, words_of(values, qs)));
-            let word: (Valuation::set(values, next, v, 64, next) = Ty::cast(w.tys, r, Word(64), meaning)) =
-                trans(Valuation::set_here(values, next, v, 64), answered);
-            Tm::set_sound(w.tys, values, next, r, j(sym(er), λ x _ => x.OnePort(), trivial), v, meaning,
-                j(Ty::cast_back(w.tys, r, Word(64), er, meaning), λ u _ => r.Holds(w.tys, Valuation::set(values, next, v), next, u),
-                    Ty::cast_holds(w.tys, Valuation::set(values, next, v), next, Word(64), r, sym(er), Ty::cast(w.tys, r, Word(64), meaning), word)))
+            let called = Valuation::set(values, next, v);
+            let word: (called(64, next) = Ty::cast(w.tys, r, Word(64), meaning)) = trans(Valuation::set_here(values, next, v, 64), answered);
+            // The move: the result again, one port up.
+            let moved = λ (wd: Nat) => called(wd, next);
+            let after = Valuation::set(called, Succ(next), moved);
+            let word_moved: (after(64, Succ(next)) = Ty::cast(w.tys, r, Word(64), meaning)) =
+                trans(Valuation::set_here(called, Succ(next), moved, 64), word);
+            let second = Tm::set_sound(w.tys, called, Succ(next), r, j(sym(er), λ x _ => x.OnePort(), trivial), moved, meaning,
+                j(Ty::cast_back(w.tys, r, Word(64), er, meaning), λ u _ => r.Holds(w.tys, after, Succ(next), u),
+                    Ty::cast_holds(w.tys, after, Succ(next), Word(64), r, sym(er), Ty::cast(w.tys, r, Word(64), meaning), word_moved)));
+            ⟨Nat::le_succ_r(next, Succ(next), Nat::le_succ_r(next, next, next.le_refl())),
+                ⟨second.right.left,
+                    ⟨λ wd id lt => trans(second.right.right.left(wd, id, Nat::lt_trans(id, next, Succ(next), lt, next.lt_succ_self())),
+                        Valuation::set_other(values, next, v, wd, id, Nat::ne_of_lt(id, next, lt))),
+                        second.right.right.right⟩⟩⟩
         })))
 }
 

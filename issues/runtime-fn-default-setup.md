@@ -54,4 +54,19 @@ integration round. The other slices have their own issues:
   loops, which `rt_lower` does not yet: `Fold`, measured recursion), `heather
   reflect` from instances, and callees by instance search so a hand-written
   instance can be called. Filed [[class-carrier-as-term]].
-
+- 2026-11-04: 2026-11-04 (round 2): the program wrapper and `compile-x86` on runtime fns
+  (design §16.9). `runtime fn f` now also publishes `f::program`, one FunctionIR
+  program of `f` and every runtime fn it reaches (callees first, each placed
+  once, each from its `Compile` instance with its calls renamed,
+  `Function::relabel`), and `f::agrees` is unconditional:
+  `program_eval(f::program, last, [xs…]) = f(xs…)`, from `Compile::part` per
+  instance and `program_eval_sources`. The rt lowering moves a call's result
+  off the port the call writes (RAX does not survive the next call).
+  `compile-x86` compiles a marked function through `f::program`/`f::agrees` and
+  refuses an unmarked one by name, except programs with a loop or a test through
+  a `Bool` helper, which stay on the Rust reflector. The loop-free examples are
+  marked; `mix.hthr` became `word_mix.hthr` and `program.hthr` `levels.hthr`
+  ([[runtime-fn-named-like-its-module]]). Filed [[runtime-generator-imports]].
+  Still open here: `Fold` and measured recursion in the lowering, then deleting
+  `crates/elab/src/function_ir_source/`; `Bool` helpers; `heather reflect` from
+  instances; callees by instance search.

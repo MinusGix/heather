@@ -4,7 +4,7 @@
 
 extern uint64_t mix(uint64_t left, uint64_t right);
 
-/* The full-width asymmetric constant mix.hthr adds; every byte differs, so
+/* The full-width asymmetric constant word_mix.hthr adds; every byte differs, so
    a wrong immediate byte order in the exported code cannot pass. */
 #define MIX_CONSTANT UINT64_C(81985529216486895)
 

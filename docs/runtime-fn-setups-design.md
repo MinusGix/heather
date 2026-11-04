@@ -1089,3 +1089,65 @@ does not yet), `heather reflect` from instances, and callees by instance
 search. A module using `runtime` imports what the generator looks up
 (`tactic`, `char`, `string`, `rt`, `rt_lower`, `function_ir`,
 `function_ir_eval`, `runtime`).
+
+### 16.9 R5d round 2: linking, and `compile-x86` on runtime fns (2026-11-04)
+
+`f::agrees` no longer assumes anything: it is
+`program_eval(f::program, root, [xs…]) = f(xs…)`, where `f::program` is
+one FunctionIR program built from the `Compile` instances of `f` and of
+every runtime fn it reaches. What the round fixed:
+
+- **Linking is renaming.** An instance's code answers its calls by index
+  into its own table (entry 0 itself, its callees after). A program numbers
+  functions its own way, callees first, so each function goes in with its
+  calls renamed (`Function::relabel`, `function_ir_eval.hthr`), and
+  `Function::relabel_eval` proves once that a renamed code evaluates as the
+  code with each call answered at its new name. Nothing else about the code
+  changes; no proof unfolds it.
+- **Calls are answered by meanings, not by code.** The program's calls are
+  answered by a list of word functions, each function's meaning uncurried
+  (`Ty::uncurry`, `Compile::uncurried`). Every world is answered by its own
+  uncurried meanings (`World::calls_agree_own`, from
+  `Ty::answers_uncurry`), so an instance's agreement can be read at its own
+  table's meanings, with no circularity: an entry for the function itself
+  is answered by its meaning too. `Compile::part` is the per-function step,
+  stated over the class, so it holds for any instance, hand-written or
+  generated: where the program's word functions read through the renaming
+  are the table's meanings (`linked`, one equation between lists of word
+  functions, checked by conversion), the code is evaluable against its
+  table and takes its function's parameters (both by evaluation), the
+  renamed code returns its meaning. The parts are `program_sourced`'s
+  conjuncts, and `program_eval_sources` (moved from `function_ir_compile`
+  to `function_ir_eval`) turns them into the program's agreement. That
+  "function `i` is answered only by functions below `i`" is
+  `program_evaluable`, checked by evaluation; the lowering needs no bound.
+- **The program.** The generator walks the tables depth first (each
+  callee's table read by reflecting it again, as its own generator did) and
+  places each function once, callees first, the function itself last. A
+  callee's instance is its published `g::compile`, found by name (the
+  name read off a view of the global); the function's own is spelled
+  inline, since a group's members cannot cite each other.
+- **A call's result is moved.** The x86 lowering answers a call in RAX and
+  the next call does not keep RAX (it spills the other caller-saved
+  registers), so two calls in a row lost the first result. `Tm::lower_call`
+  now emits the `Call` and then a `Move` of its result to the next fresh
+  port, as the Rust reflector's programs do; `Tm::lower_call_sound` covers
+  the move.
+- **`compile-x86`.** A function marked `runtime fn` compiles through its
+  published program: the certificate defines its program as `f::program`
+  and its `_agrees` as `f::agrees`, and the rest (placement, lowering,
+  bytes, `compiled_returns`) is unchanged. An unmarked function is refused
+  ("`f` is not a runtime fn: mark it `runtime fn f`…"), except where the
+  Rust reflector's program has a loop or a test through a `Bool` helper,
+  which the default setup does not compile yet: those stay on the Rust
+  reflector until the loop round. The loop-free examples are marked
+  (`branches.hthr` but its three `unequal` callers); `mix.hthr` and
+  `program.hthr` became `word_mix.hthr` and `levels.hthr`, because a
+  runtime fn named like its module cannot publish members
+  (`runtime-fn-named-like-its-module`).
+
+Left: `Fold` and measured recursion in the lowering, then the Rust
+reflector's deletion; `Bool`-returning helpers (a call of a non-word
+signature); `heather reflect` from instances; callees by instance search
+rather than by `g::compile`'s name; and the imports a module using
+`runtime` must write (`runtime-generator-imports`).
