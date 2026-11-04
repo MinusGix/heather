@@ -297,17 +297,15 @@ theorem Io::pass_ret<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
     match n {
         Zero => λ t io r e => match h0: CoTree::obs(Events::linux(), t) {
             ORet(x) => PassRet(x, io, 0,
-                Obs::ret_same(Events::none(), CoTree::after(Events::none(), 0, Io::pass_reading(t, io)), Io::shift(Mutated(io, x)), r,
-                    Io::pass_reading_at(t, io, ORet(x), h0), e, λ y => y = Io::shift(Mutated(io, x)), refl),
+                prelude::sym(inj(prelude::trans(prelude::sym(Io::pass_reading_at(t, io, ORet(x), h0)), e))),
                 Io::loop_reading_at(body, t, io, ORet(x), h0)),
             OTau(s) => absurd(prelude::trans(prelude::sym(Io::pass_reading_at(t, io, OTau(s), h0)), e)),
             OVis(c, k) => absurd(prelude::trans(prelude::sym(Io::pass_reading_at(t, io, OVis(c, k), h0)), e)),
         },
         Succ(n2) => λ t io r e => match h0: CoTree::obs(Events::linux(), t) {
             ORet(x) => PassRet(x, io, 0,
-                Obs::ret_same(Events::none(), CoTree::after(Events::none(), Succ(n2), Io::pass_reading(t, io)), Io::shift(Mutated(io, x)), r,
-                    CoTree::after_settled(Events::none(), Succ(n2), Io::pass_reading(t, io), ORet(Io::shift(Mutated(io, x))),
-                        Io::pass_reading_at(t, io, ORet(x), h0), trivial), e, λ y => y = Io::shift(Mutated(io, x)), refl),
+                prelude::sym(inj(prelude::trans(prelude::sym(CoTree::after_settled(Events::none(), Succ(n2), Io::pass_reading(t, io),
+                    ORet(Io::shift(Mutated(io, x))), Io::pass_reading_at(t, io, ORet(x), h0), trivial)), e))),
                 Io::loop_reading_at(body, t, io, ORet(x), h0)),
             OTau(s) => {
                 let w: PassRet<A, B>(body, s, io, r) = Io::pass_ret(body, n2, s, io, r,

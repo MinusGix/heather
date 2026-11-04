@@ -120,6 +120,71 @@ pub(crate) fn project_value(t: &Term) -> Option<&Rc<Term>> {
     Some(if first { a } else { b })
 }
 
+/// `t` with every projection of a literal pair read off the pair, wherever
+/// it sits among the formers a reduct's fields are built of.
+///
+/// A weak head reached through the checked spelling carries such redexes in
+/// its arguments: a `match` arm binds a component of an intro written bare
+/// (`docs/codata-named-signature-design.md` §5), and the arm's own `fst@`/
+/// `snd@` of that binder is what the reduct substitutes it into. The kernel
+/// infers a projection's receiver, and a bare `pair@` does not infer, so the
+/// reduct is a term the kernel refuses with `NotInferable` wherever it is
+/// emitted (issues/kernel-refuses-inj-through-corecursive-reduct.md).
+/// Reading the component off is Σ's own β rule, so the result is convertible
+/// with `t`, and it only removes nodes, so no scope moves and nothing is
+/// shifted. Types are left whole: their term slots are the annotations the
+/// spelling kept, and a reduct's types are not where it put a redex. Shares
+/// every untouched subtree.
+pub(crate) fn contract_projections(t: &Rc<Term>) -> Rc<Term> {
+    if let Some((first, pair)) = proj_of(t) {
+        let inner = contract_projections(pair);
+        if let Some((a, b)) = pair_of(&inner) {
+            return Rc::clone(if first { a } else { b });
+        }
+        if Rc::ptr_eq(&inner, pair) {
+            return Rc::clone(t);
+        }
+        let mut out = (**t).clone();
+        match &mut out {
+            Term::Fst { pair, .. } | Term::FstAt { pair, .. } | Term::Snd { pair, .. } | Term::SndAt { pair, .. } => {
+                *pair = inner;
+            }
+            _ => unreachable!("proj_of matched a projection"),
+        }
+        return Rc::new(out);
+    }
+    // Every term child of the formers below, rewritten in place, and `false` when
+    // none moved.
+    fn each(slots: &mut [&mut Rc<Term>]) -> bool {
+        let mut moved = false;
+        for slot in slots.iter_mut() {
+            let new = contract_projections(slot);
+            if !Rc::ptr_eq(&new, slot) {
+                **slot = new;
+                moved = true;
+            }
+        }
+        moved
+    }
+    let mut out = (**t).clone();
+    let moved = match &mut out {
+        Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => each(&mut [fst, snd]),
+        Term::Inl { val, .. } | Term::Inr { val, .. } | Term::InlAt { val, .. } | Term::InrAt { val, .. } => {
+            each(&mut [val])
+        }
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => each(&mut [fun, arg]),
+        Term::Lam { body, .. } => each(&mut [body]),
+        Term::Succ(n) => each(&mut [n]),
+        Term::Refl { tm, .. } => each(&mut [tm]),
+        Term::Supf { label, children, .. } => each(&mut [label, children]),
+        Term::Corec { index, seed, .. } => each(&mut [index, seed]),
+        Term::Out { index, scrut, .. } => each(&mut [index, scrut]),
+        Term::Case { case_l, case_r, scrut, .. } => each(&mut [case_l, case_r, scrut]),
+        _ => false,
+    };
+    if moved { Rc::new(out) } else { Rc::clone(t) }
+}
+
 /// Compare a projection path without comparing its typing annotations.
 /// Arm aliases and motive instantiations carry different emitted spellings
 /// of the same Σ types.

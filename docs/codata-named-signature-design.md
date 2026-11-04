@@ -108,6 +108,17 @@ means, only how much of it is annotation. The kernel rechecks every
 declaration, and a mistake here is a rejection (`NotInferable`), which is
 how the receiver rule was found.
 
+**Reducts.** The rule holds of the term as written, not of what reduction
+makes of it. A `match` arm reads its field as `fst@(snd@(v))` over the
+label `v`, which infers while `v` is a binder; reducing the `match` on a
+constructor substitutes the label, a bare `pair@`, for `v`, and the field
+becomes a projection of a bare pair, which does not infer. Nothing in the
+kernel minds (its reductions never re-infer), but an elaborator route that
+emits a weak head it computed (`inj`/`absurd` emit their endpoints and
+fields) must read those projections off first:
+`spelling::contract_projections`, which is Σ's β rule
+(issues/kernel-refuses-inj-through-corecursive-reduct.md).
+
 ## 6. Cost
 
 `Bisim::refl` and `Bisim::sym` over `CoTree` dropped by more than an

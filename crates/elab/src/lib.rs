@@ -9416,9 +9416,14 @@ impl Elaborator {
             Some((msg, at)) => (at, Some(msg)),
             None => (span, None),
         };
+        // A term the kernel cannot infer is the elaborator's too: every form
+        // it emits is meant to infer or to sit where it is checked, so a
+        // `NotInferable` names a route that placed a checked spelling in an
+        // inference position, and the locator below says which term
+        // (issues/kernel-refuses-inj-through-corecursive-reduct.md).
         let site = if refl_note.is_some() {
             KernelSite::Recorded
-        } else if conversion {
+        } else if conversion || matches!(e, TypeError::NotInferable) {
             KernelSite::Unrecorded
         } else {
             KernelSite::Other
