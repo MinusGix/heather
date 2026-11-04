@@ -79,3 +79,46 @@ theorem spin_twice_approx<R>(E: Events, n: Nat):
 {
     Bisim::approx(E, n, CoTree::spin(E), CoTree::spin(E), spin_twice(E))
 }
+
+// `inj` and `absurd` through an observation that reaches its constructor only
+// by reducing a codata `match` (issues/kernel-refuses-inj-through-corecursive-reduct.md):
+// the reduct reads its fields as projections of a bare pair, which the
+// kernel cannot infer, so `inj` reads them off before emitting. A literal
+// tree with a neutral payload, a combinator whose field is a λ applied to
+// such a projection, a client's own corecursive function at an open event
+// set, a checking position, and the negative control.
+theorem inj_obs_ret(E: Events, n: Nat, r: Nat, e: CoTree::obs<Nat>(E, CRet(n)) = ORet(r)): n = r { inj(e) }
+theorem inj_obs_map(E: Events, n: Nat, r: Nat,
+    e: CoTree::obs<Nat>(E, CoTree::map<Nat, Nat>(E, CRet(n), λ m => Succ(m))) = ORet(r)): Succ(n) = r
+{
+    inj(e)
+}
+
+record Stamped<R> { count: Nat, value: R }
+
+fn stamp_obs<R>(E: Events, ans: (c: E.Cmd) → E.Resp(c), o: Obs<R>(E), w: Nat) → Partial(Stamped<R>) {
+    match o {
+        ORet(r) => CRet(Stamped(w, r)),
+        OTau(s) => CTau(stamp_obs(E, ans, CoTree::obs(E, s), Succ(w))),
+        OVis(c, k) => CTau(stamp_obs(E, ans, CoTree::obs(E, k(ans(c))), Succ(w))),
+    }
+}
+
+theorem inj_corec_ret<R>(E: Events, ans: (c: E.Cmd) → E.Resp(c), x: R, w: Nat, r: R,
+    e: CoTree::obs<R>(Events::none(), CoTree::map<Stamped<R>, R>(Events::none(), stamp_obs<R>(E, ans, ORet(x), w), λ m => m.value)) = ORet(r)):
+    x = r
+{
+    let q: (x = r) = inj(e);
+    q
+}
+theorem inj_corec_tau_ret<R>(E: Events, ans: (c: E.Cmd) → E.Resp(c), s: CoTree<R>(E), w: Nat, r: Stamped<R>,
+    e: CoTree::obs<Stamped<R>>(Events::none(), stamp_obs<R>(E, ans, OTau(s), w)) = ORet(r)): False
+{
+    absurd(e)
+}
+// expect-error: which are different constructors (use `absurd`)
+theorem inj_corec_tau_ret_refused<R>(E: Events, ans: (c: E.Cmd) → E.Resp(c), s: CoTree<R>(E), w: Nat, r: Stamped<R>,
+    e: CoTree::obs<Stamped<R>>(Events::none(), stamp_obs<R>(E, ans, OTau(s), w)) = ORet(r)): False
+{
+    inj(e)
+}

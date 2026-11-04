@@ -6243,9 +6243,14 @@ impl Elaborator {
         let (proof, sty, level, lhs, rhs) = self.equation_as_written(cx, e, who)?;
         // A constructor equation may be reached by computation. No-confusion
         // is about the reduced endpoints rather than their source spelling.
+        // A reduct through the checked spelling (a codata `match`, whose arm
+        // projects a component of a bare intro) carries projections of bare
+        // pairs in its arguments, which the kernel cannot infer; the
+        // endpoints and every field read off them are emitted, so they are
+        // read off here (issues/kernel-refuses-inj-through-corecursive-reduct.md).
         let (lhs, rhs) = (
-            self.whnf_tm(cx, &lhs, e.span)?,
-            self.whnf_tm(cx, &rhs, e.span)?,
+            crate::spelling::contract_projections(&self.whnf_tm(cx, &lhs, e.span)?),
+            crate::spelling::contract_projections(&self.whnf_tm(cx, &rhs, e.span)?),
         );
         Ok((proof, sty, level, lhs, rhs))
     }
