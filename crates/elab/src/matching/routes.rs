@@ -308,6 +308,13 @@ impl Elaborator {
         // emits exactly the term it always did; more makes the recursor carry a
         // tuple (`cov_*` below, issues/recursion-at-deeper-subterms.md).
         let d = match dec {
+            // At the top the chain starts at the parameter itself, which the
+            // body's own `match` takes apart (`recursion_at_top_body`): seeded
+            // there, every depth is one more than it is below the arm.
+            Some(dec) if self.top_guard(span).is_some() => match cx.selfref.as_ref() {
+                Some(s) => self.cov_depth(cx, succ_body, &s.params[dec].0, dec, None).saturating_sub(1).max(1),
+                None => 1,
+            },
             Some(dec) => self.cov_depth(cx, succ_body, &k, dec, None),
             None => 1,
         };

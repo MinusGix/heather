@@ -150,11 +150,14 @@ codata (corecursion is a different lowering), and `meta fn`s.
    refusals of fn-recursion-means-the-function and
    recursion-case-split-dependent-ih for `Nat`.
 
-   *As built* (§5): one level of `below`, which is the existing Nat guard's
-   ih, so no new definition yet; the depth-*d* `Below` comes with slice 2.
+   *As built* (§5): `below` is the existing Nat guard's ih and its
+   course-of-values window, which the body's nested matches convoy, so no
+   new definition was needed and calls at any depth are reached.
 2. *Nat, the default.* After `perf ab`, every `Nat` structural recursion
-   lowers by `below`; delete the Nat guard selection and the Nat window
-   (`chain_convoy`). Retires cov-window-term-size's Nat half.
+   lowers at the top; delete the Nat guard selection (`guard_param`,
+   `outer_case_split`, the planner's Nat routing). The window stays, as the
+   `below` it is (§5); cov-window-term-size's Nat half becomes a question
+   about that one representation.
 3. *Tier-1 `Wf`.* The generic `Below` for chain-shaped and branching `Wf`
    inductives; delete the Wf window and the term comparison. Retires
    cov-window-in-theorem-arms, cov-convoy-motive-second-ambient,
@@ -192,10 +195,13 @@ to the arm's constructor term (`let z = Succ(z#pred);`). Under
   `match z` binds `k` to the guard's predecessor and a self-call at `k` is
   the ih, compared by binder position as every Nat guard is.
 
-The ih is the eliminator's own, one level deep: the depth-*d* window of
-today's lowering is not carried, so a call two below the parameter in such a
-body still meets the fallback (slice 2 builds `Below`). Implicit parameters
-stay fixed.
+The ih is the eliminator's own, with the course-of-values window of today's
+lowering (docs/course-of-values-recursion-design.md) as the `below`: its
+depth is read from the chain of nested matches starting at the parameter
+itself (`cov_depth` seeded there, one level up), and the body's `match` on
+the predecessor convoys it exactly as it does below an ordinary arm, so a
+call *d* below the parameter is the window's *d*-th component. Implicit
+parameters stay fixed.
 
 It runs where the plan was `ByMeasure`, before the measure (which now
 lowers only what does not elaborate at the top), and where elaboration refused a

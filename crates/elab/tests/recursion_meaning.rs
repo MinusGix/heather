@@ -109,7 +109,7 @@ fn every_way_of_reading_it_means_the_source() {
         theorem g_2(): g(2) = 3 { refl }");
     ok("fn g(n: Nat) -> Nat { have m = n; match n { Zero => 0, Succ(k) => plus(g(k), m) } }
         theorem g_2(): g(2) = 3 { refl }");
-    // Two levels down, through the course-of-values chain: by measure.
+    // Two levels down, through the course-of-values chain.
     ok("fn h(n: Nat) -> Nat {
             match n { Zero => 0, Succ(k) => match k { Zero => 1, Succ(j) => plus(h(j), n) } }
         }
@@ -127,16 +127,22 @@ fn without_the_measure_route_a_read_is_refused_with_what_to_import() {
         "{PLUS}fn sum(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => plus(sum(k), n) }} }}"
     ))
     .expect("compiled at the top");
-    // Two levels down it is the measure's, which needs `omega`.
+    // Two levels down too, through the window the nested `match` carries.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(&format!(
+        "{PLUS}fn h(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => match k {{ Zero => 1, Succ(j) => plus(h(j), n) }} }} }}"
+    ))
+    .expect("compiled at the top");
+    // A list has no top lowering yet: the measure's, which needs `omega`.
     let mut e = Elaborator::with_prelude().expect("prelude");
     let src = format!(
-        "{PLUS}fn h(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => match k {{ Zero => 1, Succ(j) => plus(h(j), n) }} }} }}"
+        "{PLUS}fn w(xs: List<Nat>) -> Nat {{ match xs {{ Nil => 0, Cons(_, t) => plus(w(t), xs.len()) }} }}"
     );
     let msg = match e.elab_source(&src) {
         Err(ElabError::Elab { msg, .. }) => msg,
         other => panic!("expected a refusal, got {other:?}"),
     };
-    assert!(msg.contains("`n` is read inside its own recursive `match`"), "{msg}");
+    assert!(msg.contains("`xs` is read inside its own recursive `match`"), "{msg}");
     assert!(msg.contains("import omega"), "{msg}");
 }
 
