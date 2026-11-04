@@ -85,7 +85,7 @@ def showcase(name):
 # else about the entry (modes, cache, `--timings`, the report) is the same.
 # Until burn B2 this was `build-x86` on `reused_callee.hthr`'s per-function
 # certificate (docs/native-program-logic-design.md §3.2).
-X86_CERTIFICATE = ("examples/x86-native/program.hthr", [])
+X86_CERTIFICATE = ("examples/x86-native/levels.hthr", [])
 COMPILE_X86 = {
     X86_CERTIFICATE[0]: ["program"],
 }

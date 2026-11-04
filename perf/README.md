@@ -28,7 +28,7 @@ Rules, so the diary keeps meaning something:
 - The raw `--timings` tables a snapshot summarized are left under
   `target/perf/<stamp>/` (not committed); `scripts/timings` reads them.
 - **One corpus entry is a certificate, not a check**:
-  `examples/x86-native/program.hthr` runs through `compile-x86 program`
+  `examples/x86-native/levels.hthr` runs through `compile-x86 program`
   (`COMPILE_X86` in `scripts/perf`), the x86 line's recipe, so the generated
   certificate's items are in the report beside the library's. Snapshots
   before burn B2 have `reused_callee.hthr` through `build-x86` in that place,
@@ -141,7 +141,7 @@ emits constructors the library no longer has, and the after binary cannot
 check the before tree's. `--whole-tree` (with `--base`) runs the before binary
 inside its worktree, over that commit's sources. Each side is then one whole
 tree, and a moved counter is the round's combined result. The native build
-workload (`COMPILE_X86`, `examples/x86-native/program.hthr`) is the usual
+workload (`COMPILE_X86`, `examples/x86-native/levels.hthr`) is the usual
 reason to use it.
 
 ### A source change: `--source-patch`
