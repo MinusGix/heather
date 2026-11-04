@@ -1,8 +1,10 @@
-// Probes of effectful `rt` (`rt_io`; docs/effects-capabilities-design.md §8):
-// a `mut self` method over `Io`, its computation written as `ETm`, and the
-// pin `meaning = f` by `refl` at a neutral world and neutral operands, the
-// equation a `runtime fn` publishes. Plus the meaning run at a scripted
-// world, and a negative control. Tests, not library: nothing outside
+// Probes of effectful `rt` (`rt_io`, `rt_io_reflect`;
+// docs/effects-capabilities-design.md §8): a `mut self` method over `Io`, its
+// computation written as `ETm`, checked against the reflector's output from
+// the real elaborated body (`reflects_io_as`), and the pin `meaning = f` by
+// `refl` at a neutral world and neutral operands, the equation a `runtime fn`
+// publishes. Plus the meaning run at a scripted world, negative controls, and
+// the refusals that are the capability's linearity check. Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic;
 import nat;
@@ -11,9 +13,13 @@ import option;
 import pair;
 import bitvec;
 import linux_calls;
+import char;
+import string;
+import tactic;
 import linux_world;
 import rt;
 import rt_io;
+import rt_io_reflect;
 
 // Read up to 64 bytes from stdin into the buffer, and write what came back
 // to stdout: the write's result word.
@@ -25,22 +31,28 @@ fn Io::echo_once(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
 
 // Its computation. Variables, innermost first, are noted at each node.
 fn echo_rt() → EFun {
-    EFun([Bytes(64)], Word(64),
+    EFun([Bytes(0)], Word(64),
         // buf
         Let(Lit(Word(64), 0),
         // stdin, buf
         Let(Lit(Word(64), 64),
         // max, stdin, buf
-        Invoke(Reads(64), [1, 2, 0],
+        Invoke(Reads(0), [1, 2, 0],
         // result, buf′, max, stdin, buf
         Let(Lit(Word(64), 1),
         // stdout, result, buf′, …
         Let(Lit(Word(64), 0),
         // zero, stdout, result, buf′, …
-        Invoke(Writes(64), [1, 3, 0, 2],
+        Invoke(Writes(0), [1, 3, 0, 2],
         // written, …
         Pure(Var(0)))))))))
 }
+
+// The reflector reads it off the elaborated body: the world chain gives the
+// call order, `Io::stdin()` is its literal, and `r.buf`, `r.result` are the
+// read's `Invoke`-bound variables. (A buffer's capacity is the setup's to
+// choose, so the reflection says 0.)
+theorem echo_reflected(): True { by reflects_io_as(["Io::echo_once"], [], [], [echo_rt()]) }
 
 // The pin: the computation means the method, world and all, at every world
 // and buffer.
@@ -59,9 +71,101 @@ theorem echo_result(): echo_rt().meaning(ETm::plain_world())(piped())(zeros()).v
 // another program: the pin refuses it.
 fn echo_stale_rt() → EFun {
     EFun([Bytes(64)], Word(64),
-        Let(Lit(Word(64), 0), Let(Lit(Word(64), 64), Invoke(Reads(64), [1, 2, 0],
+        Let(Lit(Word(64), 0), Let(Lit(Word(64), 64), Invoke(Reads(0), [1, 2, 0],
         Let(Lit(Word(64), 1), Let(Lit(Word(64), 0), Invoke(Writes(64), [1, 7, 0, 2], Pure(Var(0)))))))))
 }
 // expect-error(kernel): the kernel rejected `echo_stale_misreflects`: NotConvertible
 theorem echo_stale_misreflects(io: Io, buf: List<BitVec(8)>):
     echo_stale_rt().meaning(ETm::plain_world())(io)(buf) = Io::echo_once(io, buf) { refl }
+
+// ---------------------------------------------------------------------------
+// The reflector over more shapes.
+
+// Open a path, read from it into the buffer, close it, and answer the read's
+// result plus the close's: three calls, operands from earlier answers, and
+// pure arithmetic over two answers at the end.
+fn Io::read_file(mut self io: Io, path: List<BitVec(8)>, buf: List<BitVec(8)>) → BitVec(64) {
+    let fd = io.open_path(path, BitVec::ofNat(16));
+    let r = io.read_into(fd, buf, BitVec::ofNat(64));
+    let c = io.close_fd(fd);
+    r.result.add(c)
+}
+
+fn read_file_rt() → EFun {
+    EFun([Bytes(0), Bytes(0)], Word(64),
+        // buf, path
+        Let(Lit(Word(64), 16),
+        // sixteen, buf, path
+        Invoke(Opens(0), [2, 0],
+        // fd, …
+        Let(Lit(Word(64), 64),
+        // max, fd, sixteen, buf, path
+        Invoke(Reads(0), [1, 3, 0],
+        // result, buf′, max, fd, …
+        Invoke(Closes, [3],
+        // closed, result, …
+        Pure(Prim(Add(64), [1, 0]))))))))
+}
+
+theorem read_file_reflected(): True { by reflects_io_as(["Io::read_file"], [], [], [read_file_rt()]) }
+
+theorem read_file_reflects(io: Io, path: List<BitVec(8)>, buf: List<BitVec(8)>):
+    read_file_rt().meaning(ETm::plain_world())(io)(path, buf) = Io::read_file(io, path, buf) { refl }
+
+// A method that never calls: `Pure`, the world unchanged.
+fn Io::no_call(mut self io: Io, n: BitVec(64)) → BitVec(64) { n.add(n) }
+
+theorem no_call_reflected(): True {
+    by reflects_io_as(["Io::no_call"], [], [], [EFun([Word(64)], Word(64), Pure(Prim(Add(64), [0, 0])))])
+}
+
+theorem no_call_reflects(io: Io, n: BitVec(64)):
+    EFun([Word(64)], Word(64), Pure(Prim(Add(64), [0, 0]))).meaning(ETm::plain_world())(io)(n) = Io::no_call(io, n) { refl }
+
+// ---------------------------------------------------------------------------
+// Linearity: what the reflector refuses, at the call.
+
+// A copy of the world: the second write runs on the world before the first,
+// so the meaning forks the history. The answer read is of a call the chain
+// does not go through.
+fn Io::forked(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
+    let mut old = io;
+    let a = io.write_from(Io::stdout(), buf, BitVec::ofNat(0), BitVec::ofNat(1));
+    let b = old.write_from(Io::stderr(), buf, BitVec::ofNat(0), BitVec::ofNat(1));
+    a.add(b)
+}
+
+// expect-error: answers a call the body does not thread its world through
+theorem forked_refused(): True { by reflects_io_as(["Io::forked"], [], [], []) }
+
+// A call whose world after is dropped: its answer is read, but the next
+// call does not take its world.
+fn Io::dropped(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
+    let p = Io::write_from(io, Io::stdout(), buf, BitVec::ofNat(0), BitVec::ofNat(1));
+    let c = io.close_fd(Io::stdout());
+    p.value.add(c)
+}
+
+// expect-error: answers a call the body does not thread its world through
+theorem dropped_refused(): True { by reflects_io_as(["Io::dropped"], [], [], []) }
+
+// The world read as data: whole, or a field of it.
+fn Io::world_as_value(mut self io: Io) → Io { io }
+
+// expect-error: the world `io` used as a value
+theorem world_whole_refused(): True { by reflects_io_as(["Io::world_as_value"], [], [], []) }
+
+fn Io::history(mut self io: Io) → List<Exchange> { io.past }
+
+// expect-error: the world `io` used as a value
+theorem history_refused(): True { by reflects_io_as(["Io::history"], [], [], []) }
+
+// A call the reflector does not know: `Io::read` answers a `ReadResult`,
+// which has no word-level code.
+fn Io::read_some(mut self io: Io) → Nat {
+    let r = io.read(Io::stdin(), 4);
+    0
+}
+
+// expect-error: is not a call on Linux the reflector knows
+theorem read_some_refused(): True { by reflects_io_as(["Io::read_some"], [], [], []) }

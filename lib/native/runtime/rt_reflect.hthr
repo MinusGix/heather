@@ -19,8 +19,13 @@
 // What it reads, and what it refuses with the reason: words and `Bool`,
 // records it is told about, byte buffers, lists of lines (`Nil` and `Cons`);
 // the primitives of `Known`; calls of the program's own functions; `foldl`
-// of one of them; `match` and `match h:` on a `Bool`. Anything else is "not in the reflected fragment",
-// naming the form, never a guess.
+// of one of them; `match` and `match h:` on a `Bool`; a named constant (a
+// global with no parameters whose body is a literal). Anything else is "not
+// in the reflected fragment", naming the form, never a guess.
+//
+// An effectful body (`rt_io_reflect`) is read by the same walk with the
+// world in `Known::io`: a call's answer is the variables its `Invoke` bound,
+// and the world itself is never a value.
 
 import logic;
 import bool;
@@ -45,6 +50,19 @@ record PrimEntry { g: Nat, p: Prim }
 
 record RecEntry { g: Nat }
 
+// A call on Linux an effectful body has made (`rt_io_reflect`,
+// docs/effects-capabilities-design.md §8.3), as the reflector reads its
+// answer back: its place on the world chain (the first call is 0), the
+// method, the call as the body has it, and the variables its `Invoke` bound
+// the answer to: `.value` when the answer is one word, `.value.<field>` when
+// it is a record of them.
+record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields: List<Pair<String, Nat>> }
+
+// What an effectful body's reflection knows of its world: the capability's
+// local, the word-level methods that call Linux, and the calls made so far,
+// in order.
+record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
+
 record Known {
     prims: List<PrimEntry>,
     // The program's functions, in order: a `Call`'s index.
@@ -58,6 +76,8 @@ record Known {
     bitvec: Nat,
     boolean: Nat,
     list: Nat,
+    // The world of an effectful body; `None` for pure code.
+    io: Option<IoKnown>,
 }
 
 fn Known::prim(ps: List<PrimEntry>, g: Nat) → Option<Prim> {
@@ -341,6 +361,154 @@ fn rt_callee(k: Known, st: RSt, g: GlobalRef, name: String) → Tac<Option<Pair<
     }
 }
 
+// A named constant (`Io::stdin()`): a global with no parameters whose body
+// is a word literal or a `Bool` is read as that literal, which is its
+// δ-reduct. Any other global is a function the program must name.
+fn rt_constant(k: Known, g: GlobalRef, name: String) → Tac<Handle> {
+    let refused = "`" ++ name ++ "` is an ordinary fn: mark it `runtime fn`, or the setup has no primitive for it";
+    body(g).bind(λ c => match c {
+        Refused(_) => rt_refuse(refused),
+        Accepted(b) => view(b).bind(λ v => match v {
+            HGlobal(bg, _, args) => match Known::prim(k.prims, bg.id) {
+                Some(p) => match p {
+                    POfNat => match args { Cons(n, _) => view(n).bind(λ nv => match nv { HLit(_) => Pure(b), _ => rt_refuse(refused) }), Nil => rt_refuse(refused) },
+                    _ => rt_refuse(refused),
+                },
+                None => rt_refuse(refused),
+            },
+            HCtor(ty, _, _, fields) => match ty.id.same(k.boolean) { True => Pure(b), False => rt_refuse(refused) },
+            _ => rt_refuse(refused),
+        }),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The world of an effectful body (docs/effects-capabilities-design.md §8.3).
+//
+// Each `io.m(…)` on the capability elaborates to one call `m(io_k, …)`, shared
+// wherever the body reads it: `.after` is the world the next call takes, and
+// `.value` (or a field of it) the answer. The world chain is read from the
+// body's final world back to the parameter: that is the call order, and a
+// world that is anything but the chain is refused here, at the call.
+
+fn Known::is_world(self k: Known, x: LocalRef) → Bool {
+    match k.io { None => False, Some(io) => x.id.same(io.world) }
+}
+
+fn IoKnown::is_method(self io: IoKnown, g: GlobalRef) → Bool {
+    match Known::index(io.methods, g.id, 0) { Some(_) => True, None => False }
+}
+
+// The calls a world has been through, the first first: the parameter has
+// been through none, and `m(w, …).after` through `w`'s and then `m`.
+fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
+    match fuel {
+        Zero => rt_refuse("the world's chain of calls is longer than the reflector's fuel"),
+        Succ(f) => view(w).bind(λ v => match v {
+            HLocal(x, _) => match x.id.same(io.world) {
+                True => Pure([]),
+                False => rt_refuse("a world that is not the capability `io`"),
+            },
+            HField(c, name, _) => match Known::str_same(name, "after") {
+                True => view(c).bind(λ cv => match cv {
+                    HGlobal(g, cname, args) => match io.is_method(g) {
+                        True => match args {
+                            Cons(prev, _) => rt_world_calls(f, io, prev).bind(λ cs => Pure(cs ++ [c])),
+                            Nil => rt_refuse("`" ++ cname ++ "` without its world"),
+                        },
+                        False => rt_refuse("`" ++ cname ++ "` is not a call on Linux the reflector knows (`Io::read_into`, `Io::write_from`, `Io::open_path`, `Io::close_fd`)"),
+                    },
+                    _ => rt_refuse("the world after something other than a call on Linux"),
+                }),
+                False => rt_refuse("a world read out of a record (`." ++ name ++ "`)"),
+            },
+            HMatch(_) => rt_refuse("the world through a branch: a call under `if` or `match` is not reflected yet"),
+            _ => rt_refuse("a world that is not the capability threaded through calls"),
+        }),
+    }
+}
+
+fn rt_call_by_handle(cs: List<CallRes>, id: Nat) → Option<CallRes> {
+    match cs { Nil => None, Cons(c, rest) => match c.call.id.same(id) { True => Some(c), False => rt_call_by_handle(rest, id) } }
+}
+
+fn rt_call_at(cs: List<CallRes>, pos: Nat) → Option<CallRes> {
+    match cs { Nil => None, Cons(c, rest) => match c.pos.same(pos) { True => Some(c), False => rt_call_at(rest, pos) } }
+}
+
+fn rt_answer_field(fs: List<Pair<String, Nat>>, name: String) → Option<Nat> {
+    match fs { Nil => None, Cons(p, rest) => match Known::str_same(p.fst, name) { True => Some(p.snd), False => rt_answer_field(rest, name) } }
+}
+
+// Whether `r` is a call on Linux.
+fn rt_call_of(io: IoKnown, r: Handle) → Tac<Bool> {
+    view(r).bind(λ v => match v { HGlobal(g, _, _) => Pure(io.is_method(g)), _ => Pure(False) })
+}
+
+// The call a read of an answer names, among the calls made so far: the
+// same handle, or a copy of the call at its world's place on the chain. A
+// call on a world the chain does not continue (a copied `io`, or a call
+// whose world after is dropped) is another program, refused here.
+fn rt_answer(fuel: Nat, io: IoKnown, c: Handle) → Tac<CallRes> {
+    match rt_call_by_handle(io.calls, c.id) {
+        Some(a) => Pure(a),
+        None => view(c).bind(λ v => match v {
+            HGlobal(g, name, args) => match args {
+                Cons(w, _) => rt_world_calls(fuel, io, w).bind(λ before =>
+                    match rt_call_at(io.calls, before.len()) {
+                        Some(a) => match a.method.same(g.id) {
+                            True => defeq(Hd(c), Hd(a.call)).bind(λ same => match same {
+                                True => Pure(a),
+                                False => rt_refuse("`" ++ name ++ "` answers a call the body does not thread its world through (a copy of `io`, or a call whose world after is dropped)"),
+                            }),
+                            False => rt_refuse("`" ++ name ++ "` answers a call the body does not thread its world through (a copy of `io`, or a call whose world after is dropped)"),
+                        },
+                        None => rt_refuse("`" ++ name ++ "` answers a call the body does not thread its world through (a copy of `io`, or a call whose world after is dropped)"),
+                    }),
+                Nil => rt_refuse("`" ++ name ++ "` without its world"),
+            },
+            _ => rt_refuse("an answer of something other than a call on Linux"),
+        }),
+    }
+}
+
+// A field read. In effectful code, the answer of a call is the variables its
+// `Invoke` bound, and the world after a call is never a value; anything else
+// is an ordinary record's field.
+fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    match k.io {
+        None => rt_field(f, k, st, h, operand, r, name, step),
+        Some(io) => rt_call_of(io, r).bind(λ direct => match direct {
+            True => match Known::str_same(name, "after") {
+                True => rt_refuse("the world after a call used as a value: it is threaded on to the next call, never runtime data"),
+                False => rt_answer(f, io, r).bind(λ a => match a.value {
+                    Some(l) => Pure(st.finish(h, operand, Var(l))),
+                    None => rt_refuse("a call's whole answer used as one value: read its fields"),
+                }),
+            },
+            False => view(r).bind(λ rv => match rv {
+                HLocal(x, _) => match x.id.same(io.world) {
+                    True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                    False => rt_field(f, k, st, h, operand, r, name, step),
+                },
+                HField(c, inner, _) => match Known::str_same(inner, "value") {
+                    True => rt_call_of(io, c).bind(λ called => match called {
+                        True => rt_answer(f, io, c).bind(λ a => match rt_answer_field(a.fields, name) {
+                            Some(l) => Pure(st.finish(h, operand, Var(l))),
+                            None => rt_refuse("`" ++ name ++ "` is not a field of the call's answer"),
+                        }),
+                        False => rt_field(f, k, st, h, operand, r, name, step),
+                    }),
+                    False => rt_field(f, k, st, h, operand, r, name, step),
+                },
+                _ => rt_field(f, k, st, h, operand, r, name, step),
+            }),
+        }),
+    }
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -350,7 +518,10 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                 HLocal(x, args) => match args {
                     Nil => match rt_assoc(st.locals, x.id) {
                         Some(l) => Pure(st.finish(h, operand, Var(l))),
-                        None => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
+                        None => match k.is_world(x) {
+                            True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                            False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
+                        },
                     },
                     Cons(_, _) => rt_refuse("a local applied to arguments (a function value)"),
                 },
@@ -408,12 +579,12 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
                                 Cons(_, _) => rt_unknown(name),
                             },
-                            Nil => rt_unknown(name),
+                            Nil => rt_constant(k, g, name).bind(λ c => rt_go(f, k, st, c, operand)),
                         },
                     }),
                 },
                 HField(r, name, args) => match args {
-                    Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
+                    Nil => rt_read(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
                     Cons(_, _) => rt_refuse("a field applied to arguments (a function value)"),
                 },
                 HCtor(ty, i, name, fields) => match ty.id.same(k.boolean) {
@@ -532,7 +703,7 @@ fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<K
     rt_global("BitVec").bind(λ bv =>
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
-    Pure(Known(ps, gs, rs, discover, bv, bo, li))))))))
+    Pure(Known(ps, gs, rs, discover, bv, bo, li, None))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }

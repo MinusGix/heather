@@ -28,6 +28,17 @@ const OUTPUT_LIMIT = 1024 * 1024;
 // (issues/test-runner-records-no-per-target-cpu.md).
 const CPU_RAIL_SECONDS = 300;
 const CPU_WARN_FRACTION = 0.5;
+// Targets whose every test spawns one `heather write-elf` of a whole tool,
+// each its own process under the rail it inherits: the compile by kernel
+// evaluation and the certificate's kernel check, over warm images, at width
+// one. sort's sits at the rail on an idle cloud box (about 300–345 CPU-s at
+// both 2026-11-02 and 2026-11-04 master, byte-identical ELF), tac's just
+// under, and a slower box takes several more across: the 2026-11-03 and
+// 2026-11-04 master reds (issues/native-sort-gate-rail.md). They keep the
+// address-space cap; the CPU rail is three times the default until a cheaper
+// certificate brings the tools back under it.
+export const CPU_RAIL_OVERRIDES = new Map([["native_cat", 900], ["native_tools", 900]]);
+export function cpuRail(name) { return CPU_RAIL_OVERRIDES.get(name) ?? CPU_RAIL_SECONDS; }
 
 export function parseArtifacts(text, root = process.cwd()) {
   const seen = new Set();
@@ -397,9 +408,9 @@ const KERNEL_WORKERS = process.env.HEATHER_KERNEL_WORKERS ?? "1";
 // died of a signal is re-raised on the wrapper, so the runner still sees
 // `signal=SIGKILL` for a rail kill exactly as it did with `exec`.
 export const CPU_MARKER = "heather-test-target-cpu";
-export function limitedCommand(command, args, env = {}) {
+export function limitedCommand(command, args, env = {}, rail = CPU_RAIL_SECONDS) {
   return spawn("bash", ["--noprofile", "--norc", "-c",
-    `ulimit -v ${LIMIT_KIB}; ulimit -t ${CPU_RAIL_SECONDS}; ` +
+    `ulimit -v ${LIMIT_KIB}; ulimit -t ${rail}; ` +
     `TIMEFORMAT='${CPU_MARKER} user=%U sys=%S'; time \"$@\"; s=$?; ` +
     `if (( s > 128 )); then kill -$((s - 128)) $$; fi; exit $s`,
     "heather-test-target", command, ...args], {
@@ -528,8 +539,8 @@ export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv
         const started = process.hrtime.bigint();
         const args = [...libtestArgs, ...(target.args ?? [])];
         const command = TEST_TIMES
-          ? limitedCommand(target.executable, timedLibtestArgs(args), { RUSTC_BOOTSTRAP: "1", ...extraEnv })
-          : limitedCommand(target.executable, args, extraEnv);
+          ? limitedCommand(target.executable, timedLibtestArgs(args), { RUSTC_BOOTSTRAP: "1", ...extraEnv }, cpuRail(target.name))
+          : limitedCommand(target.executable, args, extraEnv, cpuRail(target.name));
         collect(command).then((run) => {
           run.wall = Number(process.hrtime.bigint() - started) / 1e9;
           run.target = target;

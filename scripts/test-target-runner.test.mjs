@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CPU_MARKER, binaryOf, collect, completionMessage, familyShards, jobBounds, limitedCommand, listingArgs, orderTargets, parseArtifacts, parseCpu, parseResults, parseTestTimes, PREREQUISITES, probeArgs, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
+import { CPU_MARKER, binaryOf, collect, completionMessage, cpuRail, familyShards, jobBounds, limitedCommand, listingArgs, orderTargets, parseArtifacts, parseCpu, parseResults, parseTestTimes, PREREQUISITES, probeArgs, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -287,4 +287,14 @@ test("the limited wrapper hands the child its extra environment", async () => {
   // own environment carries RUSTC_BOOTSTRAP; this checks the wrapper passes it.
   const run = await collect(limitedCommand("bash", ["-c", "echo $RUSTC_BOOTSTRAP"], { RUSTC_BOOTSTRAP: "1" }));
   assert.match(run.output, /^1$/m);
+});
+
+test("the native write-elf gates run under their own CPU rail, every other target under the default", async () => {
+  assert.equal(cpuRail("native_tools"), 900);
+  assert.equal(cpuRail("native_cat"), 900);
+  assert.equal(cpuRail("library"), 300);
+  const run = await collect(limitedCommand("bash", ["-c", "ulimit -t"], {}, cpuRail("native_tools")));
+  assert.match(run.output, /^900$/m);
+  const plain = await collect(limitedCommand("bash", ["-c", "ulimit -t"]));
+  assert.match(plain.output, /^300$/m);
 });
