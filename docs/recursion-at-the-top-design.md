@@ -158,6 +158,16 @@ codata (corecursion is a different lowering), and `meta fn`s.
    `outer_case_split`, the planner's Nat routing). The window stays, as the
    `below` it is (§5); cov-window-term-size's Nat half becomes a question
    about that one representation.
+
+   *First attempt* (2026-11-04, issues/recursion-at-top-nat-default.md):
+   not landable as stated. The kernel folds a run of successors at once
+   for a `Nat` step it classifies as affine or synchronous (`eval/runs.rs`),
+   which `add` and `mul` are; the top's step, a Σ over a generalized
+   motive, is opaque to it, so closed arithmetic runs out of fuel. And
+   taking the inner recursion's parameter moves its `match` outside a case
+   split, which changes what reduces at an open argument. Waiting on a
+   decision between teaching the classifier the top's shape and keeping
+   the top as the fallback.
 3. *Tier-1 `Wf`.* The generic `Below` for chain-shaped and branching `Wf`
    inductives; delete the Wf window and the term comparison. Retires
    cov-window-in-theorem-arms, cov-convoy-motive-second-ambient,

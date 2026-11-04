@@ -85,3 +85,20 @@ fn fib_read(n: Nat, acc: Nat) → Nat {
 }
 theorem fib_read_lit(): fib_read(4, 0) = 18 { refl }
 theorem fib_read_step(j: Nat, a: Nat): fib_read(Succ(Succ(j)), a) = fib_read(Succ(j), a) + fib_read(j, a + Succ(Succ(j))) { refl }
+
+// Two varied parameters before the decreasing one reach the ih in their
+// own order (issues/recursion-varied-arguments-reversed.md): the ih was
+// applied to `b, a`, so `sw_varied(0, 10, [1])` was 11. The plain
+// lowering (a `List`), then at the top (the arm reads `n`), where `a` and
+// `b` are generalized without being varied and the unfolding shows the
+// order.
+fn sw_varied(a, b: Nat, xs: List<Nat>) → Nat {
+    match xs { Nil => a, Cons(_, t) => sw_varied(Succ(a), Succ(b), t) }
+}
+theorem sw_varied_lit(): sw_varied(0, 10, [1]) = 1 { refl }
+
+fn three_varied(a, b, n: Nat) → Nat {
+    match n { Zero => a, Succ(k) => { let j = n; Succ(three_varied(a, b, k)) } }
+}
+theorem three_varied_step(a, b, k: Nat): three_varied(a, b, Succ(k)) = Succ(three_varied(a, b, k)) { refl }
+theorem three_varied_lit(): three_varied(0, 10, 1) = 1 { refl }

@@ -30,3 +30,33 @@ parameters (the planner's guess first).
 - The Nat guard-selection code is deleted, with its probes
   (`recursion_case_split_tests.hthr`) still passing or converted to
   acceptances with their meanings pinned by `refl`.
+
+## Log
+
+- 2026-11-04: first attempt (patch kept at
+  `/mnt/project-files/recursion/nat-default-flip.patch`): every
+  non-measure `fn` whose outermost `match` on a parameter has a self-call
+  descending through it, that parameter an explicit `Nat`, lowered at the
+  top first. The library does not survive it, for two reasons that are not
+  bugs in the lowering:
+  - **The kernel's fold acceleration is lost.** `eval/runs.rs` and
+    `probe.rs` classify a `Nat` eliminator's step as affine or synchronous
+    and fold a run of successors at once; `Nat::add`, `Nat::mul` and their
+    kin are such folds. At the top the step is a Σ over a Π-generalized
+    motive and classifies as opaque, so `1000000 + 1000000 = 2000000` by
+    `refl` runs out of fuel (it checks with `add`/`mul` left plain). In the
+    library: 190 errors, almost all `OutOfFuel` in the float, int and creal
+    tests, `bitvec_signed`, `native_arena`, and one test module's run
+    killed at the memory rail.
+  - **Which arguments a function computes on changes.** Taking the
+    parameter the inner recursion is on moves its `match` outside a case
+    split: `inner(d, n)` (recursion_case_split_tests) no longer reduces at
+    `d = 0` with `n` open, and `List::drop(Nil, n)` would not either had a
+    List-first function been taken.
+  Found on the way, and fixed separately: the ih received the varied
+  arguments reversed when the decreasing parameter came third
+  ([[recursion-varied-arguments-reversed]]); with every other parameter
+  generalized at the top it broke `nat.hthr`'s `ldiv_fuel` unfoldings.
+  Blocked on a decision: teach the fold classifier the top's shape, flip only
+  where the plain step is not a classified fold, or keep the top as the
+  fallback.

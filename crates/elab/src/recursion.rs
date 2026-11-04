@@ -918,10 +918,14 @@ pub(crate) fn elab_self_call(
     // Arguments at generalized positions, in position order: applied to the
     // ih below, and checked there against its Π domains.
     let mut varied: Vec<&Expr> = Vec::new();
+    // The decreasing argument first, the rest in position order: a swap
+    // would reverse the varied arguments between them when it is not the
+    // second (`f(a, b, n)` applied the ih to `b, a`;
+    // issues/recursion-varied-arguments-reversed.md).
     let order = {
         let mut order: Vec<usize> = (0..args.len()).collect();
         if let Some(decreasing) = positions.iter().position(|&position| position == guard.dec) {
-            order.swap(0, decreasing);
+            order[..=decreasing].rotate_right(1);
         }
         order
     };
