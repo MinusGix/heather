@@ -11,8 +11,9 @@
 // The layers, each with the theorems that need no more:
 //
 // - `MonoidRel(≈, ∙)` (algebra_rel): the fold over a list and its append law.
-// - `CommMonoidRel(≈, ∙)`: a fold of pointwise products splits.
-// - `GroupRel(≈, ∙)`: inverses are unique, and an inverse's inverse is back.
+// - `CommMonoidRel(≈, ∙)` (algebra_rel): a fold of pointwise products splits.
+// - `GroupRel(≈, ∙)` (algebra_rel): inverses are unique, and an inverse's
+//   inverse is back.
 // - `Distributes(≈, +, *)`: distributivity, a theory of its own indexed by
 //   both operations; it holds no unit and no group.
 // - `Semiring(≈, +, *)`: an additive commutative monoid, a multiplicative
@@ -41,89 +42,6 @@ import relation;
 import relation_props;
 import algebra_rel;
 import order;
-
-// ---------------------------------------------------------------------------
-// The one-operation consumers.
-
-// The fold of a list under a monoid: `x₁ ∙ (x₂ ∙ (… ∙ unit))`. The operation
-// is written, positionally, and the constraint's slot says it is the same one
-// (algebra's `mconcat`); the relation comes from the carrier.
-fn MonoidRel::fold<A: MonoidRel(≈, op)>(op as ∙: A → A → A, xs: List<A>) → A {
-    match xs {
-        Nil => A.unit,
-        Cons(h, t) => h ∙ MonoidRel::fold(op, t),
-    }
-}
-
-theorem MonoidRel::fold_append<A: MonoidRel(≈, op)>(op as ∙: A → A → A, xs, ys: List<A>):
-    MonoidRel::fold(op, xs ++ ys) ≈ MonoidRel::fold(op, xs) ∙ MonoidRel::fold(op, ys)
-{
-    match xs {
-        Nil => A.rel_sym(A.unit ∙ MonoidRel::fold(op, ys), MonoidRel::fold(op, ys), A.unit_l(MonoidRel::fold(op, ys))),
-        Cons(h, t) => calc {
-            h ∙ MonoidRel::fold(op, t ++ ys)
-                ≈ h ∙ (MonoidRel::fold(op, t) ∙ MonoidRel::fold(op, ys)) := rel_cong(MonoidRel::fold_append(op, t, ys)),
-                ≈ (h ∙ MonoidRel::fold(op, t)) ∙ MonoidRel::fold(op, ys) := A.rel_sym(
-                    (h ∙ MonoidRel::fold(op, t)) ∙ MonoidRel::fold(op, ys),
-                    h ∙ (MonoidRel::fold(op, t) ∙ MonoidRel::fold(op, ys)),
-                    A.assoc(h, MonoidRel::fold(op, t), MonoidRel::fold(op, ys))),
-        },
-    }
-}
-
-// The commutative consumers ask for the monoid and the commutativity law
-// separately, not for `CommMonoidRel`, so a commutative semiring's product —
-// its `multiplicative` monoid beside its `commutative` law — reaches them as
-// a sum does. The relation is linked, as `merge_twice` links it: a caller
-// with the relation as a symbol passes `≈`.
-
-// The middle-four interchange, the one rearrangement commutativity buys.
-theorem CommMonoidRel::interchange<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type,
-    op as ∙: A → A → A, a, b, c, d: A):
-    (a ∙ b) ∙ (c ∙ d) ≈ (a ∙ c) ∙ (b ∙ d)
-{
-    calc {
-        (a ∙ b) ∙ (c ∙ d)
-            ≈ a ∙ (b ∙ (c ∙ d)) := A.assoc(a, b, c ∙ d),
-            ≈ a ∙ ((b ∙ c) ∙ d) := rel_cong(A.rel_sym((b ∙ c) ∙ d, b ∙ (c ∙ d), A.assoc(b, c, d))),
-            ≈ a ∙ ((c ∙ b) ∙ d) := rel_cong(A.comm(b, c)),
-            ≈ a ∙ (c ∙ (b ∙ d)) := rel_cong(A.assoc(c, b, d)),
-            ≈ (a ∙ c) ∙ (b ∙ d) := A.rel_sym((a ∙ c) ∙ (b ∙ d), a ∙ (c ∙ (b ∙ d)), A.assoc(a, c, b ∙ d)),
-    }
-}
-
-// A fold of pointwise products is the product of the folds: Σ (f + g) is
-// Σ f + Σ g, and at a commutative product Π (f * g) is Π f * Π g.
-theorem CommMonoidRel::fold_map_op<A: MonoidRel(same, op) + Commutative(same, op), B>(same as ≈: A → A → Type,
-    op as ∙: A → A → A, xs: List<B>, f, g: B → A):
-    MonoidRel::fold(op, xs.map(λ x => f(x) ∙ g(x))) ≈ MonoidRel::fold(op, xs.map(f)) ∙ MonoidRel::fold(op, xs.map(g))
-{
-    match xs {
-        Nil => A.rel_sym(A.unit ∙ A.unit, A.unit, A.unit_l(A.unit)),
-        Cons(h, t) => calc {
-            (f(h) ∙ g(h)) ∙ MonoidRel::fold(op, t.map(λ x => f(x) ∙ g(x)))
-                ≈ (f(h) ∙ g(h)) ∙ (MonoidRel::fold(op, t.map(f)) ∙ MonoidRel::fold(op, t.map(g)))
-                    := rel_cong(CommMonoidRel::fold_map_op(same, op, t, f, g)),
-                ≈ (f(h) ∙ MonoidRel::fold(op, t.map(f))) ∙ (g(h) ∙ MonoidRel::fold(op, t.map(g)))
-                    := CommMonoidRel::interchange(same, op, f(h), g(h), MonoidRel::fold(op, t.map(f)), MonoidRel::fold(op, t.map(g))),
-        },
-    }
-}
-
-// An inverse is unique: the group form of algebra's `op_inv_unique`.
-theorem GroupRel::inv_unique<A: GroupRel(≈, op)>(op as ∙: A → A → A, x, y: A, h: x ∙ y ≈ A.unit): y ≈ A.inv(x) {
-    calc {
-        y ≈ A.unit ∙ y := A.rel_sym(A.unit ∙ y, y, A.unit_l(y)),
-            ≈ (A.inv(x) ∙ x) ∙ y := rel_cong(A.rel_sym(A.inv(x) ∙ x, A.unit, A.inv_l(x))),
-            ≈ A.inv(x) ∙ (x ∙ y) := A.assoc(A.inv(x), x, y),
-            ≈ A.inv(x) ∙ A.unit := rel_cong(h),
-            ≈ A.inv(x) := A.unit_r(A.inv(x)),
-    }
-}
-
-theorem GroupRel::inv_inv<A: GroupRel(≈, op)>(op as ∙: A → A → A, x: A): A.inv(A.inv(x)) ≈ x {
-    A.rel_sym(x, A.inv(A.inv(x)), GroupRel::inv_unique(op, A.inv(x), x, A.inv_l(x)))
-}
 
 // ---------------------------------------------------------------------------
 // The two-operation theories.
@@ -489,31 +407,14 @@ fn CommRing::with_ints() → CommRingOfInt<A>(≈, +, *) {
 // Instances at the identity carriers.
 //
 // `≈` designates `RelId` at `Nat` and `Int`: the structure relation of their
-// semirings is identity, and a generic theorem's `≈` reads back as `=`.
-// `Nat`'s identity setoid is `relation_props`'s; `Int`'s is here, beside the
-// structures that use it, because `relation_props` comes before `int`.
+// semirings is identity, and a generic theorem's `≈` reads back as `=`. The
+// monoids and the group are `algebra`'s and `int`'s identity instances, which
+// register these relational ones as their parents
+// (docs/relation-indexed-algebra-design.md), so a ring here adds only its
+// distributivity and its zero laws.
 
 designation ≈ at Nat := RelId
 designation ≈ at Int := RelId
-
-instance Respects2<Nat, Nat, Nat>(RelId<Nat>, RelId<Nat>, RelId<Nat>, Nat::add) { respects2 := respects2_relid(Nat::add) }
-instance Respects2<Nat, Nat, Nat>(RelId<Nat>, RelId<Nat>, RelId<Nat>, Nat::mul) { respects2 := respects2_relid(Nat::mul) }
-
-instance CommMonoidRel<Nat>(RelId<Nat>, Nat::add) {
-    assoc := Nat::add_assoc,
-    unit := 0,
-    unit_l := Nat::add_left_zero,
-    unit_r := λ (x: Nat) => refl,
-    comm := Nat::add_comm,
-}
-
-instance CommMonoidRel<Nat>(RelId<Nat>, Nat::mul) {
-    assoc := Nat::mul_assoc,
-    unit := 1,
-    unit_l := Nat::mul_left_one,
-    unit_r := Nat::add_left_zero,
-    comm := Nat::mul_comm,
-}
 
 instance Distributes<Nat>(RelId<Nat>, Nat::add, Nat::mul) {
     distrib_l := Nat::mul_add_distr,
@@ -523,32 +424,6 @@ instance Distributes<Nat>(RelId<Nat>, Nat::add, Nat::mul) {
 instance CommSemiring<Nat>(RelId<Nat>, Nat::add, Nat::mul) {
     zero_mul := Nat::mul_left_zero,
     mul_zero := λ (x: Nat) => refl,
-}
-
-instance Respects2<Int, Int, Int>(RelId<Int>, RelId<Int>, RelId<Int>, Int::add) { respects2 := respects2_relid(Int::add) }
-instance Respects2<Int, Int, Int>(RelId<Int>, RelId<Int>, RelId<Int>, Int::mul) { respects2 := respects2_relid(Int::mul) }
-
-instance CommMonoidRel<Int>(RelId<Int>, Int::add) {
-    assoc := Int::add_assoc,
-    unit := OfNat(0),
-    unit_l := Int::zero_add,
-    unit_r := Int::add_zero,
-    comm := Int::add_comm,
-}
-
-instance GroupRel<Int>(RelId<Int>, Int::add) {
-    inv := Int::neg,
-    inv_l := Int::neg_add_self,
-    inv_r := Int::add_neg,
-    inv_respects := λ x y h => cong(h),
-}
-
-instance CommMonoidRel<Int>(RelId<Int>, Int::mul) {
-    assoc := Int::mul_assoc,
-    unit := OfNat(1),
-    unit_l := Int::one_mul,
-    unit_r := Int::mul_one,
-    comm := Int::mul_comm,
 }
 
 instance Distributes<Int>(RelId<Int>, Int::add, Int::mul) {

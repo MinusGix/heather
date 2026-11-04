@@ -127,14 +127,14 @@ impl Elaborator {
         let mut hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
         let mut tried: Vec<String> = Vec::new();
         let mut unpinned: Option<ElabError> = None;
-        for (_, info) in &cands {
-            let Some(ind) = self.lookup_inductive(&info.name).cloned() else {
+        for (key, info) in &cands {
+            let Some(ind) = self.types.inductive(key).cloned() else {
                 continue;
             };
             let targs = [(rty.clone(), rlvl.clone())];
             // An indexed class's goal has a value slot, and the ladder's step 2
             // is what fills it here (§5.1): scope, then refuse by name.
-            let vargs = match self.index_vargs(cx, info, &ind, &targs, &carrier, span) {
+            let vargs = match self.index_vargs(cx, key, info, &ind, &targs, &carrier, span) {
                 Ok(Some(v)) => v,
                 Ok(None) => continue,
                 Err(e) => {

@@ -50,16 +50,12 @@ theorem nat_min_idem(a: Nat): a.min(a) = a { nat_min_mergeable().idem(a) }
 // ... and the order built from an algebra: `Bool`'s conjunction is a
 // commutative idempotent semigroup, so `a && b = a` is an order with `&&` its
 // meet. `False` is below everything there.
+//
+// The setoid, the congruence, associativity and commutativity are `algebra`'s
+// `CommMonoid<Bool>(and)`'s, registered at `RelId` (its relational parents),
+// so the instance writes only the law they lack; the canonical evidence is
+// reused exactly, not restated (docs/relation-indexed-algebra-design.md).
 instance Mergeable<Bool>(RelId<Bool>, Bool::and) {
-    rel_refl := λ x => refl,
-    rel_sym := λ x y h => sym(h),
-    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
-    respects2 := respects2_relid(Bool::and),
-    assoc := λ x y z => match x as λ x => Bool::and(Bool::and(x, y), z) = Bool::and(x, Bool::and(y, z)) { True => refl, False => refl },
-    comm := λ x y => match x as λ x => Bool::and(x, y) = Bool::and(y, x) {
-        True => match y as λ y => Bool::and(True, y) = Bool::and(y, True) { True => refl, False => refl },
-        False => match y as λ y => Bool::and(False, y) = Bool::and(y, False) { True => refl, False => refl },
-    },
     idem := λ x => match x as λ x => Bool::and(x, x) = x { True => refl, False => refl },
 }
 fn and_semilattice() → MeetSemilattice<Bool>(RelId<Bool>, MergeLe(RelId<Bool>, Bool::and), Bool::and) {

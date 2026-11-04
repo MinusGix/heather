@@ -33,6 +33,9 @@ fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = support::library(&[
         ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
         ("option", OPTION), ("pair", PAIR), ("list", LIST),
+        ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
+        ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
+        ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
         ("algebra", ALGEBRA),
     ]);
     if !extra.is_empty() {

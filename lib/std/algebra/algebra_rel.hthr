@@ -1,7 +1,15 @@
-// Small relation-indexed algebraic laws. Kept separate from the identity-only
-// algebra hierarchy while its migration is designed, and from lean execution
-// semantics so importing relation does not elaborate an unused law hierarchy.
+// The relation-indexed one-operation algebra: the source theory
+// (docs/relation-indexed-algebra-design.md). Every law is modulo the
+// structure relation `≈`, an index like the operation, so a carrier with
+// unreduced representations (`Rat` modulo `Rat::Same`) and one compared by
+// identity are instances of one class. `algebra`'s `Semigroup`, `Monoid`,
+// `CommMonoid` and `Group` are these classes at `RelId`, declared as children
+// at that computed index rather than as a second hierarchy, so every theorem
+// here is also an identity theorem, and `algebra` restates none of them.
+// Kept apart from lean execution semantics so importing relation does not
+// elaborate an unused law hierarchy.
 
+import list;
 import relation;
 import relation_props;
 
@@ -80,4 +88,104 @@ theorem merge_twice<A: Mergeable(same, merge)>(
         merge(state, merge(incoming, incoming)), merge(state, incoming),
         A.assoc(state, incoming, incoming),
         rel_cong(A.idem(incoming)))
+}
+
+// ---------------------------------------------------------------------------
+// The one-operation consumers.
+
+// The fold of a list under a monoid: `x₁ ∙ (x₂ ∙ (… ∙ unit))`. The operation
+// is written, positionally, and the constraint's slot says it is the same one;
+// the relation comes from a binder in scope or the carrier's `≈`. `algebra`'s
+// `mconcat` is this fold at an identity monoid, by definition.
+fn MonoidRel::fold<A: MonoidRel(≈, op)>(op as ∙: A → A → A, xs: List<A>) → A {
+    match xs {
+        Nil => A.unit,
+        Cons(h, t) => h ∙ MonoidRel::fold(op, t),
+    }
+}
+
+// A one-element fold is its element: the unit law, through the fold.
+theorem MonoidRel::fold_single<A: MonoidRel(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A, x: A):
+    MonoidRel::fold(op, [x]) ≈ x
+{
+    A.unit_r(x)
+}
+
+theorem MonoidRel::fold_append<A: MonoidRel(≈, op)>(op as ∙: A → A → A, xs, ys: List<A>):
+    MonoidRel::fold(op, xs ++ ys) ≈ MonoidRel::fold(op, xs) ∙ MonoidRel::fold(op, ys)
+{
+    match xs {
+        Nil => A.rel_sym(A.unit ∙ MonoidRel::fold(op, ys), MonoidRel::fold(op, ys), A.unit_l(MonoidRel::fold(op, ys))),
+        Cons(h, t) => calc {
+            h ∙ MonoidRel::fold(op, t ++ ys)
+                ≈ h ∙ (MonoidRel::fold(op, t) ∙ MonoidRel::fold(op, ys)) := rel_cong(MonoidRel::fold_append(op, t, ys)),
+                ≈ (h ∙ MonoidRel::fold(op, t)) ∙ MonoidRel::fold(op, ys) := A.rel_sym(
+                    (h ∙ MonoidRel::fold(op, t)) ∙ MonoidRel::fold(op, ys),
+                    h ∙ (MonoidRel::fold(op, t) ∙ MonoidRel::fold(op, ys)),
+                    A.assoc(h, MonoidRel::fold(op, t), MonoidRel::fold(op, ys))),
+        },
+    }
+}
+
+// The commutative consumers ask for the monoid and the commutativity law
+// separately, not for `CommMonoidRel`, so a commutative semiring's product —
+// its `multiplicative` monoid beside its `commutative` law — reaches them as
+// a sum does. The relation is linked, as `merge_twice` links it: a caller
+// with the relation as a symbol passes `≈`.
+
+// The middle-four interchange, the one rearrangement commutativity buys.
+theorem CommMonoidRel::interchange<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type,
+    op as ∙: A → A → A, a, b, c, d: A):
+    (a ∙ b) ∙ (c ∙ d) ≈ (a ∙ c) ∙ (b ∙ d)
+{
+    calc {
+        (a ∙ b) ∙ (c ∙ d)
+            ≈ a ∙ (b ∙ (c ∙ d)) := A.assoc(a, b, c ∙ d),
+            ≈ a ∙ ((b ∙ c) ∙ d) := rel_cong(A.rel_sym((b ∙ c) ∙ d, b ∙ (c ∙ d), A.assoc(b, c, d))),
+            ≈ a ∙ ((c ∙ b) ∙ d) := rel_cong(A.comm(b, c)),
+            ≈ a ∙ (c ∙ (b ∙ d)) := rel_cong(A.assoc(c, b, d)),
+            ≈ (a ∙ c) ∙ (b ∙ d) := A.rel_sym((a ∙ c) ∙ (b ∙ d), a ∙ (c ∙ (b ∙ d)), A.assoc(a, c, b ∙ d)),
+    }
+}
+
+// A fold of pointwise products is the product of the folds: Σ (f + g) is
+// Σ f + Σ g, and at a commutative product Π (f * g) is Π f * Π g.
+theorem CommMonoidRel::fold_map_op<A: MonoidRel(same, op) + Commutative(same, op), B>(same as ≈: A → A → Type,
+    op as ∙: A → A → A, xs: List<B>, f, g: B → A):
+    MonoidRel::fold(op, xs.map(λ x => f(x) ∙ g(x))) ≈ MonoidRel::fold(op, xs.map(f)) ∙ MonoidRel::fold(op, xs.map(g))
+{
+    match xs {
+        Nil => A.rel_sym(A.unit ∙ A.unit, A.unit, A.unit_l(A.unit)),
+        Cons(h, t) => calc {
+            (f(h) ∙ g(h)) ∙ MonoidRel::fold(op, t.map(λ x => f(x) ∙ g(x)))
+                ≈ (f(h) ∙ g(h)) ∙ (MonoidRel::fold(op, t.map(f)) ∙ MonoidRel::fold(op, t.map(g)))
+                    := rel_cong(CommMonoidRel::fold_map_op(same, op, t, f, g)),
+                ≈ (f(h) ∙ MonoidRel::fold(op, t.map(f))) ∙ (g(h) ∙ MonoidRel::fold(op, t.map(g)))
+                    := CommMonoidRel::interchange(same, op, f(h), g(h), MonoidRel::fold(op, t.map(f)), MonoidRel::fold(op, t.map(g))),
+        },
+    }
+}
+
+// A commutative monoid's right unit law follows from its left one; `algebra`'s
+// `op_unit_of_comm` is this theorem at identity.
+theorem CommMonoidRel::unit_r_of_comm<A: CommMonoidRel(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A, x: A):
+    x ∙ A.unit ≈ x
+{
+    A.rel_trans(x ∙ A.unit, A.unit ∙ x, x, A.comm(x, A.unit), A.unit_l(x))
+}
+
+// An inverse is unique; `algebra`'s `op_inv_unique` is this theorem at
+// identity.
+theorem GroupRel::inv_unique<A: GroupRel(≈, op)>(op as ∙: A → A → A, x, y: A, h: x ∙ y ≈ A.unit): y ≈ A.inv(x) {
+    calc {
+        y ≈ A.unit ∙ y := A.rel_sym(A.unit ∙ y, y, A.unit_l(y)),
+            ≈ (A.inv(x) ∙ x) ∙ y := rel_cong(A.rel_sym(A.inv(x) ∙ x, A.unit, A.inv_l(x))),
+            ≈ A.inv(x) ∙ (x ∙ y) := A.assoc(A.inv(x), x, y),
+            ≈ A.inv(x) ∙ A.unit := rel_cong(h),
+            ≈ A.inv(x) := A.unit_r(A.inv(x)),
+    }
+}
+
+theorem GroupRel::inv_inv<A: GroupRel(≈, op)>(op as ∙: A → A → A, x: A): A.inv(A.inv(x)) ≈ x {
+    A.rel_sym(x, A.inv(A.inv(x)), GroupRel::inv_unique(op, A.inv(x), x, A.inv_l(x)))
 }

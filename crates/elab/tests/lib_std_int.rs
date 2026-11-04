@@ -28,6 +28,9 @@ fn elaborated() -> Elaborator {
     for (name, src) in [
         ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
         ("option", OPTION), ("pair", PAIR), ("list", LIST),
+        ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
+        ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
+        ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
         ("algebra", ALGEBRA), ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")), ("int", INT),
     ] {
         if let Err(err) = e.elab_module_source(name, src) {

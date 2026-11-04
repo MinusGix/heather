@@ -24,11 +24,29 @@ impl Elaborator {
     /// "Visible here" is `key_of(C.name) == the key C is stored under`: the
     /// ordinary §4 name regime, asked by resolving the class's own name, and
     /// not a second visibility rule.
+    /// The classes owning a member `name` that a dot sugar may build a goal
+    /// at: those nameable here, and those a nameable class reaches as an
+    /// ancestor. The second is how `G.unit` reads under `G: CommMonoid(o)`,
+    /// and `a.assoc(b, c)` at `Bool`, when the owners (`algebra_rel`'s
+    /// `MonoidRel`, `SemigroupRel`) were never imported: a class brings its
+    /// parents' members with it
+    /// (issues/class-parent-names-resolve-in-client-scope.md).
     pub(crate) fn declaring_classes(&self, name: &str) -> Vec<(String, Rc<traits::ClassInfo>)> {
-        self.traits
-            .classes_declaring(name)
-            .into_iter()
+        let owners = self.traits.classes_declaring(name);
+        if owners.iter().all(|(key, info)| self.key_of(&info.name).as_deref() == Some(key.as_str())) {
+            return owners;
+        }
+        let reached: std::collections::HashSet<String> = self
+            .traits
+            .classes_iter()
             .filter(|(key, info)| self.key_of(&info.name).as_deref() == Some(key.as_str()))
+            .flat_map(|(_, info)| info.ancestors.iter().filter_map(|a| self.key_of(&a.name)).collect::<Vec<_>>())
+            .collect();
+        owners
+            .into_iter()
+            .filter(|(key, info)| {
+                self.key_of(&info.name).as_deref() == Some(key.as_str()) || reached.contains(key)
+            })
             .collect()
     }
 
@@ -199,12 +217,12 @@ impl Elaborator {
         let mut hits = scoped_hits;
         let mut tried: Vec<String> = Vec::new();
         let mut unpinned: Option<ElabError> = None;
-        for (_, info) in &cands {
-            let Some(ind) = self.lookup_inductive(&info.name).cloned() else {
+        for (key, info) in &cands {
+            let Some(ind) = self.types.inductive(key).cloned() else {
                 continue;
             };
             let targs = [(carrier.clone(), clvl.clone())];
-            let vargs = match self.index_vargs(cx, info, &ind, &targs, &subject, span) {
+            let vargs = match self.index_vargs(cx, key, info, &ind, &targs, &subject, span) {
                 Ok(Some(v)) => v,
                 Ok(None) => continue,
                 Err(e) => {

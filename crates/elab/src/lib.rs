@@ -1618,7 +1618,7 @@ impl application::ImplicitApplicationElab for Elaborator {
             && let Some(class) = self.lookup_class(&reference.name)
             && !class.valparams.is_empty()
         {
-            return self.value_slot_refusal(&class, name, None, span);
+            return self.value_slot_refusal(&class, None, name, None, span);
         }
         // A class over a type constructor (issues/higher-kinded-classes.md):
         // its carrier is a value implicit, so `<…>` cannot give it. Name it,
@@ -2820,6 +2820,16 @@ impl Elaborator {
     fn key_of_kinds(&self, name: &str, kinds: &[NameKind]) -> Option<String> {
         if self.access_refusal(name).is_some() {
             return None;
+        }
+        // A registered instance's global, by its key: generated, unwritable
+        // (`#`), and reachable wherever its instance is, which is the whole
+        // run's closure (docs/module-dag-design.md §2) and not only the
+        // modules this one names. A child instance fills an inherited field
+        // from a parent registered in a module it never imported
+        // (`algebra`'s `CommMonoidRel<Nat>(RelId, add)` under `semiring`'s
+        // `CommSemiring<Nat>`).
+        if name.contains('#') && split_qual(name).is_some() && self.names.global(name).is_some() {
+            return Some(name.to_string());
         }
         if let Some(k) = self.key_of_declared_kinds(name, kinds) {
             return Some(k);
