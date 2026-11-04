@@ -245,7 +245,8 @@ theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c))
 /// accepted exactly this elaborated content against exactly these referents'
 /// interface hashes. A changed library file, prelude or elaboration output
 /// changes every downstream key (a miss, a full check); a changed kernel
-/// discards the whole store, loudly, on open. `DEFAULT_FUEL` is a
+/// finds no section of its own and says so on open (other kernels' sections
+/// are kept for them, `issues/verdict-store-one-kernel.md`). `DEFAULT_FUEL` is a
 /// `crates/kernel/src` constant, so the fuel caveat of
 /// `issues/cache-verdicts-omit-check-settings.md` is covered by the
 /// fingerprint for as long as fuel stays one.
