@@ -1,6 +1,7 @@
 # Recursion at the top: compiling structural recursion against `below`
 
-Status: **proposed**, awaiting Minus's choice between §4's options
+Status: **decided** (Minus, 2026-11-04): option A, staged as §4 lists;
+slice 1 is issues/recursion-below-nat-fallback.md
 (issues/recursion-on-elaborated-terms.md). Step 7 of
 docs/elaborator-principles-survey.md §8, extending its §6.2–6.3.
 

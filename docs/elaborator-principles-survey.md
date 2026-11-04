@@ -391,7 +391,7 @@ here needs it); higher-order pattern inversion beyond the identity renaming
 - `instance-conclusion-matched-first` (§4)
 - `recursion-on-elaborated-terms` (P5 and §6.3's lowering), whose design
   note (docs/recursion-at-the-top-design.md) filed
-  `recursion-below-nat-fallback` (slice 1, if option A is chosen) and
+  `recursion-below-nat-fallback` (slice 1 of option A, chosen 2026-11-04) and
   `meta-fn-mismatch-reaches-kernel` (found probing)
 - `rewrite-matcher-on-unifier` (§4's remainder, filed 2026-11-03 when
   instance search moved onto the unifier; the host's `match_at` already had)

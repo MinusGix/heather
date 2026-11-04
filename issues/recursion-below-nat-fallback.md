@@ -7,8 +7,8 @@ created: 2026-11-03
 updated: 2026-11-03
 ---
 
-Slice 1 of docs/recursion-at-the-top-design.md §4 option A, **if Minus
-picks A** (issues/recursion-on-elaborated-terms.md).
+Slice 1 of docs/recursion-at-the-top-design.md §4 option A, which Minus
+chose 2026-11-04 (issues/recursion-on-elaborated-terms.md).
 
 Where today's planner refuses a structural recursion on `Nat` because of
 where the recursion is compiled (the decreasing parameter read inside its
