@@ -75,23 +75,8 @@ fn Io::open(mut self io: Io, path: List<BitVec(8)>) → OpenResult { io.call(Ope
 fn Io::close(mut self io: Io, fd: BitVec(64)) → CloseResult { io.call(CloseCmd(fd)) }
 fn Io::stat(mut self io: Io, target: StatTarget) → StatResult { io.call(StatCmd(target)) }
 
-// Every byte of `bytes` written to `fd`, a write at a time, for at most
-// `passes.len()` writes: whether all of it went. A failed write, or running
-// out of passes, is `False`.
-fn Io::write_all(mut self io: Io, fd: BitVec(64), bytes: List<BitVec(8)>, passes: List<Nat>) → Bool {
-    let mut left = bytes;
-    let mut ok = False;
-    for _ in passes {
-        if left.len() = 0 { ok := True; break }
-        let r = io.write(fd, left);
-        match r {
-            Wrote(n) => { left := left.drop(n) },
-            WriteFailed(_) => { break },
-        }
-    }
-    if left.len() = 0 { ok := True }
-    ok
-}
+// `Io::write_all`, which goes round until every byte is sent, is in
+// `linux_world_co`: a loop with no bound means a computation in `Partial`.
 
 // ---------------------------------------------------------------------------
 // What a program did: its history, oldest first

@@ -10,20 +10,27 @@ milestone `nh-effects`). It extends `docs/sequencing-surface-design.md` §8
 ## 0. In one page
 
 ```heather
-fn Io::cat(mut self io: Io, capacity: Nat, passes: List<Nat>) → BitVec(64) {
+fn Io::cat(io: Io, capacity: Nat) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
     let mut status: BitVec(64) = BitVec::ofNat(0);
-    for _ in passes {
-        let r = io.read(Io::stdin(), capacity);
-        match r {
-            ReadFailed(_) => { status := BitVec::ofNat(1); break },
-            ReadBytes(bytes) => {
-                if bytes.len() = 0 { break }
-                let ok = io.write_all(Io::stdout(), bytes, passes);
-                if ok = Bool::False { status := BitVec::ofNat(1); break }
-            },
+    let mut left: List<BitVec(8)> = [];
+    let mut going = True;
+    while going {
+        if left.len() = 0 {
+            let r = io.read(Io::stdin(), capacity);
+            match r {
+                ReadFailed(_) => { status := BitVec::ofNat(1); going := False },
+                ReadBytes(bytes) => { if bytes.len() = 0 { going := False } else { left := bytes } },
+            }
+        } else {
+            let w = io.write(Io::stdout(), left);
+            match w {
+                Wrote(n) => { left := left.drop(n) },
+                WriteFailed(_) => { status := BitVec::ofNat(1); going := False },
+            }
         }
     }
-    status
+    Pointed::ret(Mutated(io, status))
 }
 ```
 
@@ -35,7 +42,11 @@ That is GNU `cat` with no arguments, in ordinary Heather. It is pure:
 - on a `let mut` local or `mut` parameter, the call binds the answer and
   rebinds `io` to the world after it (SSA, §5.1 of the sequencing design).
 
-Nobody writes a monad, and the meaning is world threading.
+Nobody writes a monad, and the meaning is world threading. The loop goes
+round until the input ends, so it has no bound: it is a `while` with no
+measure, and the function means `Io → Partial(Mutated<Io, R>)`, the world
+threaded over the delay monad (§4). Until 2026-11-04 it took a `passes`
+list that bounded the loop; that is gone.
 
 Three pieces make that work, all built in this round:
 
@@ -57,13 +68,18 @@ The probe that ties them together:
 
 ```heather
 theorem cat_agrees_piped():
-    Io::against(cat(256).tree([], 4), piped()) = Some(Io::cat(piped(), 256, List::range(4))) { refl }
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([]), piped()), Io::cat(piped(), 256))
+{
+    ERet(30, 20, cat_piped_end(), refl, refl)
+}
 ```
 
 Here `native_cat`'s `cat` is the hand-built `Source` that `write-elf`
-compiles. Read against the same world, it makes the same calls as the
-surface program, gets the same answers, in the same order, and exits with
-the same status: the two `Mutated` values are equal, history and all.
+compiles, read with no fuel (`Source::tree_co`, §4). Read against the same
+world, it makes the same calls as the surface program, gets the same
+answers, in the same order, and exits with the same status: the two
+readings return the same `Mutated` value, history and all, so they are
+equivalent up to silent steps. That is `Io::Reads` at one world.
 
 ## 1. The capability
 
@@ -80,7 +96,8 @@ fn Io::call(mut self io: Io, c: LinuxCmd<Nat>) → c.Resp() {
 ```
 
 `read`, `write`, `open`, `close` and `stat` are one `call` each, and
-`write_all` loops over `write`.
+`write_all` (`linux_world_co`) loops over `write` until every byte is sent,
+a computation in `Partial` (§4.1).
 
 **Why one world, not `uniq Fd` per descriptor.** Linux's answers on
 different descriptors are not independent. A terminal echoes what is
@@ -230,11 +247,11 @@ meaning. Sequencing is `reads_bind`, and loops are the next lemma (§4).
 
 ## 4. Loops and fuel
 
-**Today.** A source's `Repeat` is `ITree::iter` at fuel `n`, which is cut
-after `n` passes. A surface loop over a world is a `for` over a list of
-`passes`, which runs at most `passes.len()` times. They agree whenever the
-tree is not cut. `cat_agrees_piped` is at fuel 4 against a world of three
-reads.
+**Until 2026-11-04.** A source's `Repeat` was `ITree::iter` at fuel `n`,
+which is cut after `n` passes, and a surface loop over a world was a `for`
+over a list of `passes`, which runs at most `passes.len()` times. They
+agreed whenever the tree was not cut: `cat_agrees_piped` was at fuel 4
+against a world of three reads. §4.1 is what replaced it.
 
 **Why that has to go** (`issues/effectful-loops-without-passes.md`). The
 bound is real: a world is any function of the history, so "read until the
@@ -300,6 +317,54 @@ an iteration operator.
 The work, in `issues/`: `partial-fn-surface`, `eutt-iteration-and-io-reading`,
 `codata-up-to-friends-round-2` (up-to proofs), `eutt-setoid-rewrite` and
 `eutt-tactics`; then `effectful-loops-without-passes` moves the customers.
+
+### 4.1 The customers moved (2026-11-04)
+
+`issues/effectful-loops-without-passes.md`, milestone `it-world-loops`.
+
+- **A `Source` with no fuel** (`lib/native/native_source_co.hthr`).
+  `Stmt::denote_co` reads a `Repeat` as `CoTree::iter`; procedures still
+  nest to the source's depth (one call past it exits 139), so depth is
+  counted but no fuel is. `Source::tree_co(args)` is the program's tree.
+  It is a function of the environment (`Env → CoTree<Flow>`) so that its
+  recursion is on the statement: a function whose result is codata is read
+  as corecursive.
+- **The bridge** is `Program::Refines` both ways, so the fuelled program
+  and the fuel-free tree are the same program. `Source::tree_co_refines`:
+  every trace `src.denote(args)` produces at some fuel, `src.tree_co(args)`
+  produces at some depth. That is the direction a compiled program's
+  theorem travels: its ELF refines the fuelled program, so it refines the
+  fuel-free one. `Source::tree_co_refined` is the converse, which moves a
+  spec proved on the fuelled side over. Both go construct by construct
+  (`coitree_bridge`), over `ITree::Into(t, c)` (a finite tree's traces are
+  the coinductive one's) and `CoTree::Onto(c, p)` (the coinductive tree's
+  are a growing family's). A bind's trace is split (`IsTrace::split_bind`,
+  the converse of `IsTrace::bind`, in `itree_trace`) and each part found
+  at its own depth or fuel, then raised to their sum. A loop is
+  `CoTree::iter_refined`/`iter_refines` generalised to a body that is
+  itself a denotation (`ITree::into_iter`, by induction on the fuel;
+  `CoTree::onto_iter`, by induction on the depth), so a `Repeat` inside a
+  `Repeat`, sharing the source's one fuel, is covered.
+- **The programs.** `Io::write_all` (`linux_world_co`), `Io::tac`,
+  `Io::sort`, `Io::read_lines` and `Io::write_lines` (`line_tools`), and
+  the test module's `Io::cat` take no `passes` and mean
+  `Io → Partial(Mutated<Io, R>)`, written with `while` and no measure. Two
+  limits of that `while` shape them (sequencing design §18, item 6): it has
+  no `break`, so a loop stops by a `going` flag; and a bind inside a
+  statement arm of its body is not lowered, so one loop cannot call
+  another. So `cat` is one loop that holds what is left to write of the last
+  read (read when nothing is left, otherwise write), `tac` and `sort` read
+  in one loop and write in another, sequenced by binds at the top of the
+  block, and `sort` orders its lines first (`List::sorted_out`, a pure walk
+  per line that conses the greatest first) and then writes them.
+- **The probes** state the same things as before, as a `Returns` at a count
+  of silent steps; a negative control at a count too small; and a world
+  whose input never ends (`yes | tac`), where no count settles.
+- **The agreements.** `cat_agrees_piped` and `cat_agrees_failing` state
+  `Eutt` between the source's fuel-free reading and the surface cat at a
+  world, by the two counts and the end both reach (`ERet`), which is
+  `Io::Reads` at that world. At every world it is R6 item 2 (§6).
+
 
 ## 5. Uniqueness is the setup's judgment
 

@@ -1,5 +1,6 @@
 // Probes of `tac` and `sort` written over `Io` (`line_tools`): literal and
-// neutral inputs, GNU's test cases as literals, failing worlds, and
+// neutral inputs, GNU's test cases as literals, failing worlds, a world
+// whose input never ends, and
 // agreement with the builder `tac` `write-elf` compiles today
 // (`native_heap_tools`) at the worlds its source fits the kernel's fuel.
 // Tests, not library: nothing outside lib/_tests imports this module
@@ -12,6 +13,9 @@ import bool;
 import algebra;
 import bitvec;
 import itree;
+import coitree;
+import coitree_eutt;
+import coitree_rec;
 import linux_calls;
 import linux_trees;
 import linux_world;
@@ -27,6 +31,10 @@ fn zeros(n: Nat) → List<BitVec(8)> { List::replicate(0, n) }
 record Outcome { status: BitVec(64), out: List<BitVec(8)> }
 
 fn Outcome::of(m: Mutated<Io, BitVec(64)>) → Outcome { Outcome(m.value, m.after.sent(Io::stdout())) }
+
+// What a run with no bound shows, once it returns: a computation in
+// `Partial`, observed by `Returns` at a count of silent steps.
+fn Outcome::co(p: Partial(Mutated<Io, BitVec(64)>)) → Partial(Outcome) { CoTree::map(Events::none(), p, Outcome::of) }
 
 // A builder tool's source read against a world, at a fuel.
 fn Tool::outcome(self t: Tool, io: Io, fuel: Nat) → Option<Outcome> {
@@ -77,9 +85,36 @@ theorem before_empty_self(): List::bytes_before([], []) = False { refl }
 // ---------------------------------------------------------------------------
 // tac
 
-theorem tac_three(): Outcome::of(Io::tac(three_chunks(), zeros(4), 4, List::range(8)))
-    = Outcome(0, [100, 98, 99, 10, 97, 10]) { refl }
-theorem tac_nothing(): Outcome::of(Io::tac(piped([]), zeros(4), 4, List::range(4))) = Outcome(0, []) { refl }
+theorem tac_three(): Returns(Events::none(), Outcome::co(Io::tac(three_chunks(), zeros(4), 4)), Outcome(0, [100, 98, 99, 10, 97, 10])) {
+    Returns(40, refl)
+}
+theorem tac_nothing(): Returns(Events::none(), Outcome::co(Io::tac(piped([]), zeros(4), 4)), Outcome(0, [])) { Returns(10, refl) }
+// The negative controls: a count too small to reach the end, and a wrong
+// output.
+// expect-error(kernel): the kernel rejected `tac_three_short`: NotConvertible
+theorem tac_three_short(): Returns(Events::none(), Outcome::co(Io::tac(three_chunks(), zeros(4), 4)), Outcome(0, [100, 98, 99, 10, 97, 10])) {
+    Returns(3, refl)
+}
+// expect-error(kernel): the kernel rejected `tac_three_wrong`: NotConvertible
+theorem tac_three_wrong(): Returns(Events::none(), Outcome::co(Io::tac(three_chunks(), zeros(4), 4)), Outcome(0, [97, 10, 100, 98, 99, 10])) {
+    Returns(40, refl)
+}
+
+// A world whose input never ends (`yes | tac`): every read answers "y\n",
+// so tac never gets to write, and no count reaches a result within the
+// depth probed. Nothing cuts it off at a number of passes.
+fn endless() → World() {
+    λ past c => match c {
+        ReadCmd(_, _) => ReadBytes([121, 10]),
+        WriteCmd(_, bytes) => Wrote(bytes.len()),
+        OpenCmd(_) => OpenFailed(2),
+        CloseCmd(_) => Closed,
+        StatCmd(_) => StatFailed(2),
+    }
+}
+theorem tac_endless(): logic::Not(Obs::Settled(Events::none(), CoTree::after(Events::none(), 12, Io::tac(Io::of(endless()), zeros(4), 4)))) {
+    λ s => s
+}
 
 // A world whose reads fail: nothing written, status 1.
 fn broken() → World() {
@@ -93,9 +128,9 @@ fn broken() → World() {
 }
 // A failed read returns at once, with the world as that read left it: one
 // exchange more, over any history before it.
-theorem read_lines_fails(past: List<Exchange>): Io::read_lines(Io(broken(), past), zeros(4), 4, True, List::range(4))
-    = Mutated(Io(broken(), Cons(Exchange(ReadCmd(Io::stdin(), 4), ReadFailed(5)), past)), None) { refl }
-theorem tac_read_fails(): Outcome::of(Io::tac(Io::of(broken()), zeros(4), 4, List::range(4))) = Outcome(1, []) { refl }
+theorem read_lines_fails(past: List<Exchange>): Returns<Mutated<Io, Option<List<List<BitVec(8)>>>>>(Events::none(), Io::read_lines(Io(broken(), past), zeros(4), 4, True),
+    Mutated(Io(broken(), Cons(Exchange(ReadCmd(Io::stdin(), 4), ReadFailed(5)), past)), None)) { Returns(4, refl) }
+theorem tac_read_fails(): Returns(Events::none(), Outcome::co(Io::tac(Io::of(broken()), zeros(4), 4)), Outcome(1, [])) { Returns(10, refl) }
 
 // A world whose writes fail: status 1.
 fn deaf() → World() {
@@ -107,18 +142,26 @@ fn deaf() → World() {
         StatCmd(_) => StatFailed(2),
     }
 }
-theorem tac_write_fails(): Outcome::of(Io::tac(Io::of(deaf()), zeros(4), 4, List::range(4))).status = 1 { refl }
+theorem tac_write_fails(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::tac(Io::of(deaf()), zeros(4), 4), λ m => m.value), 1) {
+    Returns(20, refl)
+}
 
 // ---------------------------------------------------------------------------
 // sort
 
-theorem sort_alike(): Outcome::of(Io::sort(alike(), zeros(8), 8, List::range(8)))
-    = Outcome(0, [10, 97, 10, 98, 10, 98, 10]) { refl }
-theorem sort_prefixes(): Outcome::of(Io::sort(prefixes(), zeros(8), 8, List::range(8)))
-    = Outcome(0, [66, 10, 97, 10, 97, 98, 10]) { refl }
-theorem sort_nothing(): Outcome::of(Io::sort(piped([]), zeros(4), 4, List::range(4))) = Outcome(0, []) { refl }
-theorem sort_read_fails(): Outcome::of(Io::sort(Io::of(broken()), zeros(4), 4, List::range(4))) = Outcome(2, []) { refl }
-theorem sort_write_fails(): Outcome::of(Io::sort(Io::of(deaf()), zeros(4), 4, List::range(4))).status = 2 { refl }
+theorem sort_alike(): Returns(Events::none(), Outcome::co(Io::sort(alike(), zeros(8), 8)), Outcome(0, [10, 97, 10, 98, 10, 98, 10])) {
+    Returns(60, refl)
+}
+theorem sort_prefixes(): Returns(Events::none(), Outcome::co(Io::sort(prefixes(), zeros(8), 8)), Outcome(0, [66, 10, 97, 10, 97, 98, 10])) {
+    Returns(60, refl)
+}
+theorem sort_nothing(): Returns(Events::none(), Outcome::co(Io::sort(piped([]), zeros(4), 4)), Outcome(0, [])) { Returns(10, refl) }
+theorem sort_read_fails(): Returns(Events::none(), Outcome::co(Io::sort(Io::of(broken()), zeros(4), 4)), Outcome(2, [])) { Returns(10, refl) }
+theorem sort_write_fails(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::sort(Io::of(deaf()), zeros(4), 4), λ m => m.value), 2) {
+    Returns(20, refl)
+}
+// What sort writes, at a neutral line: the line, then a newline.
+theorem sorted_one(l: List<BitVec(8)>): List::sorted_out([l]) = [l, [10]] { refl }
 
 // ---------------------------------------------------------------------------
 // The builder tools, read against the same worlds. A builder tool's source
@@ -131,6 +174,6 @@ theorem sort_write_fails(): Outcome::of(Io::sort(Io::of(deaf()), zeros(4), 4, Li
 // tools pass (crates/cli/tests/native_tools.rs) are what the literal probes
 // above transcribe.
 
-theorem tac_line(): Outcome::of(Io::tac(piped([[97, 10]]), zeros(2), 2, List::range(4))) = Outcome(0, [97, 10]) { refl }
+theorem tac_line(): Returns(Events::none(), Outcome::co(Io::tac(piped([[97, 10]]), zeros(2), 2)), Outcome(0, [97, 10])) { Returns(20, refl) }
 theorem tac_source_line(): tac(2, 16).outcome(piped([[97, 10]]), 16) = Some(Outcome(0, [97, 10])) { refl }
 theorem tac_source_nothing(): tac(2, 16).outcome(piped([]), 16) = Some(Outcome(0, [])) { refl }

@@ -7,6 +7,8 @@ import logic;
 import nat;
 import list;
 import option;
+import bool;
+import bitvec;
 import itree;
 import coitree;
 import coitree_eutt;
@@ -391,6 +393,31 @@ fn Io::reads_iter<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()),
 {
     λ io => Io::reads_loop(body, step, rb, body(a), io, Io::lift_step(step, Mutated(io, a)),
         Eutt::bind_cong_l(Events::none(), Io::against_co(body(a), io), step(a, io), λ m => CRet(Io::shift(m)), rb(a, io)))
+}
+
+// ---------------------------------------------------------------------------
+// Programs over a world with no bound
+
+// Every byte of `bytes` written to `fd`, a write at a time, again for what is
+// left until all of it is sent: whether all of it went. A failed write stops
+// it with `False`. It goes round for as long as the world takes part of the
+// bytes, and forever if it takes none: a loop over the world, so a
+// computation in `Partial` (design §4).
+fn Io::write_all(io: Io, fd: BitVec(64), bytes: List<BitVec(8)>) → Partial(Mutated<Io, Bool>) {
+    let mut io = io;
+    let mut left = bytes;
+    let mut ok = True;
+    let mut going = True;
+    while going {
+        if left.len() = 0 { going := False } else {
+            let r = io.write(fd, left);
+            match r {
+                Wrote(n) => { left := left.drop(n) },
+                WriteFailed(_) => { ok := False; going := False },
+            }
+        }
+    }
+    Pointed::ret(Mutated(io, ok))
 }
 
 // ---------------------------------------------------------------------------
