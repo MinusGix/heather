@@ -310,6 +310,9 @@ The parts that do not wait on R6:
 - **The customers, written.** `lib/native/runtime/line_tools.hthr` has
   `Io::tac` and `Io::sort` as ordinary Heather over `Io`: `let mut`, `for`
   over lists, statement `if` and `match`, and `mut self` reads and writes.
+  Since 2026-11-04 their reading and writing loops are `while` with no
+  measure and they mean `Io → Partial(Mutated<Io, R>)`, with no `passes`
+  (`docs/effects-capabilities-design.md` §4.1).
   The calls are `rt_io`'s word-level ones (`Io::read_into` into a buffer
   the program keeps, `Io::write_from` of a span), so they will reflect
   through `ETm`. A line written out of the arena is then a span of the arena

@@ -1,0 +1,171 @@
+// A `Source` with no fuel: its statements as a coinductive tree over
+// Linux's calls (issues/effectful-loops-without-passes.md;
+// docs/effects-capabilities-design.md §4).
+//
+// `Stmt::denote` reads a `Repeat` as `ITree::iter` at a fuel, cut past it,
+// and the fuel is shared by every loop and every call. Here a `Repeat` is
+// `CoTree::iter`: it goes round for as long as its again-bit says, so a
+// loop that never ends is a tree that never returns, not one that is cut.
+// Procedures nest to the source's depth as before (a call past it exits
+// 139), so depth is still counted, but no fuel is.
+//
+// The two meanings are tied by `Source::tree_co_refines`: every trace the
+// fuelled tree produces at some fuel, the fuel-free one produces at some
+// depth (`Program::Refines`). That is the direction a compiled program's
+// theorem travels in: its ELF refines the fuelled program
+// (`native_source_sim`), so it refines the fuel-free one, whose reading at
+// a world is a computation in `Partial` (`Io::against_co`).
+import logic;
+import nat;
+import list;
+import option;
+import bitvec;
+import itree;
+import itree_trace;
+import coitree;
+import coitree_eutt;
+import coitree_bridge;
+import linux_calls;
+import linux_trees;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import bool;
+import native_source;
+
+// ---------------------------------------------------------------------------
+// The fuel-free denotation
+
+// What a call does, with no fuel.
+fn PerformsCo() → Type { Nat → List<Nat> → List<Nat> → Env → CoTree<Flow>(Events::linux()) }
+
+// A function of the environment, so that the recursion is on the statement:
+// a function whose result is codata would be read as corecursive.
+fn Stmt::denote_co(self s: Stmt, call: Answers(), perform: PerformsCo()) → Env → CoTree<Flow>(Events::linux()) {
+    match s {
+        Compute(region) => λ env => CRet(Onward(env.compute(call, region))),
+        Invoke(shape) => λ env => CVis(shape.cmd(env), λ a => CRet(Onward(shape.answer(env, a)))),
+        Then(first, rest) => λ env => CoTree::bind(Events::linux(), first.denote_co(call, perform)(env), λ flow => match flow {
+            Onward(next) => rest.denote_co(call, perform)(next),
+            Exited(status) => CRet(Exited(status)),
+        }),
+        Branch(condition, yes, no) => λ env => match env.bit(condition) {
+            True => yes.denote_co(call, perform)(env),
+            False => no.denote_co(call, perform)(env),
+        },
+        Repeat(body, again) => λ env => CoTree::iter(Events::linux(),
+            λ e => CoTree::map(Events::linux(), body.denote_co(call, perform)(e), λ flow => flow.pass(again)), env),
+        Exit(status) => λ env => CRet(Exited(env.word(status))),
+        Arg(index, buf, len) => λ env => CRet(Onward(env.arg(env.number(index), buf, len))),
+        Perform(procedure, args, results) => λ env => perform(procedure, args, results, env),
+    }
+}
+
+// What a call does at depth `depth`, as `Source::performs` with no fuel.
+fn Source::performs_co(self src: Source, call: Answers(), depth: Nat) → PerformsCo() {
+    match depth {
+        Zero => λ procedure args results env => CRet(Exited(call_depth_status())),
+        Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) {
+            None => CRet(Onward(env)),
+            Some(proc) => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, d))(proc.enter(env, args)),
+                λ flow => proc.leave(env, results, flow)),
+        },
+    }
+}
+
+fn Source::main_tree_co(self src: Source, args: List<List<BitVec(8)>>) → CoTree<Flow>(Events::linux()) {
+    src.main.denote_co(program_eval(src.functions), src.performs_co(program_eval(src.functions), src.depth))(src.start(args))
+}
+
+// The program run with the command line `args`, with no fuel.
+fn Source::tree_co(self src: Source, args: List<List<BitVec(8)>>) → CoTree<BitVec(64)>(Events::linux()) {
+    CoTree::map(Events::linux(), src.main_tree_co(args), λ flow => flow.status())
+}
+
+// ---------------------------------------------------------------------------
+// The fuelled tree is inside the fuel-free one
+
+// Each call's fuelled tree inside its fuel-free one.
+fn performs_into(perform: Performs(), perform_co: PerformsCo()) → Type {
+    (procedure: Nat) → (args, results: List<Nat>) → (env: Env) →
+        ITree::Into(Events::linux(), perform(procedure, args, results, env), perform_co(procedure, args, results, env))
+}
+
+// At every fuel, construct by construct (`ITree::into_bind`,
+// `ITree::into_iter`).
+theorem Stmt::into_co(self s: Stmt, call: Answers(), perform: Performs(), perform_co: PerformsCo(),
+    hp: performs_into(perform, perform_co), n: Nat): (env: Env) →
+    ITree::Into(Events::linux(), s.denote(call, perform, n, env), s.denote_co(call, perform_co)(env))
+{
+    match s {
+        Compute(region) => λ env => ITree::into_ret(Events::linux(), Onward(env.compute(call, region))),
+        Invoke(shape) => λ env => ITree::into_vis(Events::linux(), shape.cmd(env), λ a => Ret(Onward(shape.answer(env, a))),
+            λ a => CRet(Onward(shape.answer(env, a))), λ a => ITree::into_ret(Events::linux(), Onward(shape.answer(env, a)))),
+        Then(first, rest) => λ env => ITree::into_bind(Events::linux(), first.denote(call, perform, n, env), first.denote_co(call, perform_co)(env),
+            λ flow => match flow { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) },
+            λ flow => match flow { Onward(next) => rest.denote_co(call, perform_co)(next), Exited(status) => CRet(Exited(status)) },
+            first.into_co(call, perform, perform_co, hp, n, env),
+            λ flow => match flow as λ f => ITree::Into(Events::linux(),
+                    match f as λ _ => ITree<Flow>(Events::linux()) { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) },
+                    match f as λ _ => CoTree<Flow>(Events::linux()) { Onward(next) => rest.denote_co(call, perform_co)(next), Exited(status) => CRet(Exited(status)) }) {
+                Onward(next) => rest.into_co(call, perform, perform_co, hp, n, next),
+                Exited(status) => ITree::into_ret(Events::linux(), Exited(status)),
+            }),
+        Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b => ITree::Into(Events::linux(),
+                match b as λ _ => ITree<Flow>(Events::linux()) { True => yes.denote(call, perform, n, env), False => no.denote(call, perform, n, env) },
+                match b as λ _ => CoTree<Flow>(Events::linux()) { True => yes.denote_co(call, perform_co)(env), False => no.denote_co(call, perform_co)(env) }) {
+            True => yes.into_co(call, perform, perform_co, hp, n, env),
+            False => no.into_co(call, perform, perform_co, hp, n, env),
+        },
+        Repeat(body, again) => λ env => ITree::into_iter(Events::linux(),
+            λ e => ITree::map(Events::linux(), body.denote(call, perform, n, e), λ flow => flow.pass(again)),
+            λ e => CoTree::map(Events::linux(), body.denote_co(call, perform_co)(e), λ flow => flow.pass(again)),
+            λ e => ITree::into_map(Events::linux(), body.denote(call, perform, n, e), body.denote_co(call, perform_co)(e),
+                λ flow => flow.pass(again), body.into_co(call, perform, perform_co, hp, n, e)),
+            n, env),
+        Exit(status) => λ env => ITree::into_ret(Events::linux(), Exited(env.word(status))),
+        Arg(index, buf, len) => λ env => ITree::into_ret(Events::linux(), Onward(env.arg(env.number(index), buf, len))),
+        Perform(procedure, args, results) => λ env => hp(procedure, args, results, env),
+    }
+}
+
+// Every call at every depth, by induction on the depth.
+theorem Source::performs_into_co(self src: Source, call: Answers(), n: Nat, depth: Nat):
+    performs_into(src.performs(call, n, depth), src.performs_co(call, depth))
+{
+    match depth {
+        Zero => λ procedure args results env => ITree::into_ret(Events::linux(), Exited(call_depth_status())),
+        Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) as λ o => ITree::Into(Events::linux(),
+                match o as λ _ => ITree<Flow>(Events::linux()) {
+                    None => Ret(Onward(env)),
+                    Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                        λ flow => proc.leave(env, results, flow)),
+                },
+                match o as λ _ => CoTree<Flow>(Events::linux()) {
+                    None => CRet(Onward(env)),
+                    Some(proc) => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, d))(proc.enter(env, args)),
+                        λ flow => proc.leave(env, results, flow)),
+                }) {
+            None => ITree::into_ret(Events::linux(), Onward(env)),
+            Some(proc) => ITree::into_map(Events::linux(),
+                proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                proc.body.denote_co(call, src.performs_co(call, d))(proc.enter(env, args)),
+                λ flow => proc.leave(env, results, flow),
+                proc.body.into_co(call, src.performs(call, n, d), src.performs_co(call, d), src.performs_into_co(call, n, d), n, proc.enter(env, args))),
+        },
+    }
+}
+
+// The bridge: every trace the program produces at some fuel, its fuel-free
+// tree produces at some depth. A compiled program refines `src.denote`
+// (`native_source_sim`), so through this it refines `src.tree_co`.
+theorem Source::tree_co_refines(self src: Source, args: List<List<BitVec(8)>>):
+    Program::Refines(Events::linux(), src.denote(args), CoTree::program(Events::linux(), src.tree_co(args)))
+{
+    λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => src.tree(args, n), tr)) =>
+        ITree::into_map(Events::linux(), src.main_tree(args, c.n), src.main_tree_co(args), λ flow => flow.status(),
+            src.main.into_co(program_eval(src.functions), src.performs(program_eval(src.functions), c.n, src.depth),
+                src.performs_co(program_eval(src.functions), src.depth),
+                src.performs_into_co(program_eval(src.functions), c.n, src.depth), c.n, src.start(args)),
+            tr, c.h)
+}

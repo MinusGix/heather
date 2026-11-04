@@ -1,0 +1,68 @@
+// Probes of a `Source` read with no fuel (`native_source_co`): a loop that
+// counts down returns at a depth with its status, as the fuelled tree does
+// at enough fuel; a loop that never stops is a tree that never returns,
+// where every fuelled tree is cut; procedures nest to the source's depth
+// as before; and the bridge (`Source::tree_co_refines`) at a source. The
+// negative controls: a wrong status, and a depth too small to reach the
+// end. Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import bitvec;
+import itree;
+import itree_trace;
+import coitree;
+import coitree_eutt;
+import coitree_rec;
+import linux_trees;
+import function_ir;
+import native_source;
+import native_source_co;
+
+fn ops(nodes: List<Node>) → Stmt { Compute(Dataflow(Region(Ports([]), nodes, Ports([])))) }
+
+// Word 0 counts down from `k`; bit 1 is "go round again" (word 0 is not
+// zero after the pass); word 3 is the status, 7.
+fn countdown(k: Nat) → Source {
+    Source::of([], Then(ops([Const(64, 0, k), Const(64, 2, 0), Const(64, 4, 1), Const(64, 3, 7)]),
+        Then(Repeat(ops([Sub(64, 0, 0, 4), Equal(64, 5, 0, 2), Const(1, 6, 1), BitXor(1, 1, 5, 6)]), 1), Exit(3))))
+}
+
+// The status a fuel-free tree returns with, after `n` silent steps.
+fn status_after(src: Source, n: Nat) → Obs<BitVec(64)>(Events::linux()) { CoTree::after(Events::linux(), n, src.tree_co([])) }
+
+// Three passes, two of them going round: two silent steps.
+theorem countdown_3(): status_after(countdown(3), 2) = ORet(7) { refl }
+theorem countdown_returns(): Returns<BitVec(64)>(Events::linux(), countdown(5).tree_co([]), 7) { Returns(30, refl) }
+// The fuelled tree agrees at enough fuel.
+theorem countdown_fuelled(): ITree::next(Events::linux(), countdown(3).tree([], 4)) = Exits(7) { refl }
+
+// The negative controls.
+// expect-error(kernel): the kernel rejected `countdown_wrong`: NotConvertible
+theorem countdown_wrong(): status_after(countdown(3), 20) = ORet(0) { refl }
+// expect-error(kernel): the kernel rejected `countdown_short`: NotConvertible
+theorem countdown_short(): status_after(countdown(3), 1) = ORet(7) { refl }
+
+// A loop whose again-bit is always set: no depth settles it. Every fuelled
+// tree of it is cut, which claims nothing; this one claims divergence.
+fn forever() → Source { Source::of([], Repeat(ops([Const(1, 0, 1)]), 0)) }
+
+theorem forever_runs(): ¬Obs::Settled(Events::linux(), status_after(forever(), 40)) { λ s => s }
+theorem forever_fuelled_cut(): ITree::next(Events::linux(), forever().tree([], 3)) = Stops { refl }
+
+// Procedures nest to the depth as before: one call past it exits 139.
+fn calls(depth: Nat) → Source {
+    Source(functions := [], buffers := [], words := 4,
+        main := Then(Perform(0, [], []), Exit(1)),
+        procedures := [Procedure(params := [], results := [], body := Then(ops([Const(64, 0, 0)]), Perform(0, [], [])))],
+        depth := depth)
+}
+theorem calls_too_deep(): status_after(calls(3), 20) = ORet(139) { refl }
+
+// The bridge at a source: its fuelled program is inside its fuel-free one.
+theorem countdown_refines(k: Nat):
+    Program::Refines(Events::linux(), countdown(k).denote([]), CoTree::program(Events::linux(), countdown(k).tree_co([])))
+{
+    countdown(k).tree_co_refines([])
+}

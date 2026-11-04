@@ -25,6 +25,7 @@ import relation_props;
 import algebra_rel;
 import native_source;
 import native_cat;
+import native_source_co;
 
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 
@@ -82,28 +83,61 @@ theorem write_checks(io: Io): Io::write(io, Io::stdout(), []).value = io.world(i
 
 // GNU cat with no arguments: read stdin a buffer at a time and write each
 // chunk whole to stdout, until the end of the input (status 0) or a failed
-// read or write (status 1). `passes` bounds both loops, as a source's
-// `Repeat` is bounded by its fuel.
-fn Io::cat(mut self io: Io, capacity: Nat, passes: List<Nat>) → BitVec(64) {
+// read or write (status 1). The loop holds what is left to write of the
+// last read: with nothing left it reads, and otherwise it writes what is
+// left. It goes round until the input ends, so it has no bound, and means
+// a computation in `Partial` (docs/effects-capabilities-design.md §4).
+fn Io::cat(io: Io, capacity: Nat) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
     let mut status: BitVec(64) = BitVec::ofNat(0);
-    for _ in passes {
-        let r = io.read(Io::stdin(), capacity);
-        match r {
-            ReadFailed(_) => { status := BitVec::ofNat(1); break },
-            ReadBytes(bytes) => {
-                if bytes.len() = 0 { break }
-                let ok = io.write_all(Io::stdout(), bytes, passes);
-                if ok = Bool::False { status := BitVec::ofNat(1); break }
-            },
+    let mut left: List<BitVec(8)> = [];
+    let mut going = True;
+    while going {
+        if left.len() = 0 {
+            let r = io.read(Io::stdin(), capacity);
+            match r {
+                ReadFailed(_) => { status := BitVec::ofNat(1); going := False },
+                ReadBytes(bytes) => { if bytes.len() = 0 { going := False } else { left := bytes } },
+            }
+        } else {
+            let w = io.write(Io::stdout(), left);
+            match w {
+                Wrote(n) => { left := left.drop(n) },
+                WriteFailed(_) => { status := BitVec::ofNat(1); going := False },
+            }
         }
     }
-    status
+    Pointed::ret(Mutated(io, status))
 }
 
-theorem cat_status(): Io::cat(piped(), 256, List::range(4)).value = BitVec::ofNat(0) { refl }
-theorem cat_copies(): Io::cat(piped(), 256, List::range(4)).after.sent(Io::stdout()) = [b(104), b(105), b(33)] { refl }
+// What cat ends with at the piped world, written out call by call: three
+// reads (the last at the end of the input), each chunk written whole after
+// its read, and status 0.
+fn cat_piped_end() → Mutated<Io, BitVec(64)> {
+    let mut io = piped();
+    io.read(Io::stdin(), 256);
+    io.write(Io::stdout(), [b(104), b(105)]);
+    io.read(Io::stdin(), 256);
+    io.write(Io::stdout(), [b(33)]);
+    io.read(Io::stdin(), 256);
+    Mutated(io, BitVec::ofNat(0))
+}
+
+theorem cat_returns(): Returns(Events::none(), Io::cat(piped(), 256), cat_piped_end()) { Returns(20, refl) }
+theorem cat_status(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::cat(piped(), 256), λ m => m.value), BitVec::ofNat(0)) {
+    Returns(20, refl)
+}
+theorem cat_copies(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), Io::cat(piped(), 256), λ m => m.after.sent(Io::stdout())),
+    [b(104), b(105), b(33)])
+{
+    Returns(20, refl)
+}
 // A buffer smaller than a chunk: the chunk is read in pieces of its size.
-theorem cat_small_buffer(): Io::cat(piped(), 1, List::range(4)).after.sent(Io::stdout()) = [b(104), b(33)] { refl }
+theorem cat_small_buffer(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), Io::cat(piped(), 1), λ m => m.after.sent(Io::stdout())),
+    [b(104), b(33)])
+{
+    Returns(20, refl)
+}
 
 // A failing write: the world refuses every write.
 fn deaf() → World() {
@@ -115,7 +149,17 @@ fn deaf() → World() {
         StatCmd(_) => StatFailed(2),
     }
 }
-theorem cat_write_fails(): Io::cat(Io::of(deaf()), 8, List::range(3)).value = BitVec::ofNat(1) { refl }
+theorem cat_write_fails(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::cat(Io::of(deaf()), 8), λ m => m.value), BitVec::ofNat(1)) {
+    Returns(20, refl)
+}
+
+// …after one read and one refused write.
+fn cat_deaf_end() → Mutated<Io, BitVec(64)> {
+    let mut io = Io::of(deaf());
+    io.read(Io::stdin(), 8);
+    io.write(Io::stdout(), [b(1)]);
+    Mutated(io, BitVec::ofNat(1))
+}
 
 // ---------------------------------------------------------------------------
 // The surface cat and the hand-built `Source` cat agree
@@ -123,14 +167,35 @@ theorem cat_write_fails(): Io::cat(Io::of(deaf()), 8, List::range(3)).value = Bi
 // Read against the same world, `native_cat`'s source (written statement by
 // statement in the effectful layer) and the capability program above make
 // the same calls with the same answers, in the same order, and exit with the
-// same status: the two reach `Mutated` values that are equal, history and
-// all. The source's tree is what `write-elf` compiles, so this is the
-// agreement a `runtime fn` setup will prove once (`Io::reads_bind`) checked
-// here at one world.
+// same status: their readings are equivalent up to silent steps, history
+// and all. The source is read with no fuel (`Source::tree_co`,
+// `native_source_co`), so its `Repeat` goes round for as long as its
+// again-bit says, as the surface loop does; the statement is
+// `Io::Reads(cat(256).tree_co([]), λ io => Io::cat(io, 256))` at one world.
+// The source's tree is what `write-elf` compiles, and its fuelled meaning
+// is inside this one (`Source::tree_co_refines`), so this is the agreement a
+// `runtime fn` setup will prove once (`Io::reads_bind`, `Io::reads_iter`)
+// checked here at a world.
 theorem cat_agrees_piped():
-    Io::against(cat(256).tree([], 4), piped()) = Some(Io::cat(piped(), 256, List::range(4))) { refl }
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([]), piped()), Io::cat(piped(), 256))
+{
+    ERet(30, 20, cat_piped_end(), refl, refl)
+}
 theorem cat_agrees_failing():
-    Io::against(cat(8).tree([], 3), Io::of(deaf())) = Some(Io::cat(Io::of(deaf()), 8, List::range(3))) { refl }
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(8).tree_co([]), Io::of(deaf())), Io::cat(Io::of(deaf()), 8))
+{
+    ERet(30, 20, cat_deaf_end(), refl, refl)
+}
+// The negative control: a different end, the status of a failure.
+// expect-error(kernel): the kernel rejected `cat_agrees_wrong`: NotConvertible
+theorem cat_agrees_wrong():
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([]), piped()), Io::cat(piped(), 256))
+{
+    ERet(30, 20, Mutated(cat_piped_end().after, BitVec::ofNat(1)), refl, refl)
+}
+
+// The fuelled reading still reaches the same end at enough fuel.
+theorem cat_agrees_fuelled(): Io::against(cat(256).tree([], 4), piped()) = Some(cat_piped_end()) { refl }
 
 // ---------------------------------------------------------------------------
 // A loop with no fuel, read up to taus (design §4)
@@ -177,8 +242,8 @@ theorem cat_co_late():
     Returns(30, refl)
 }
 // The same calls with the same answers as the surface cat, history and all.
-theorem cat_co_agrees(): Returns(Events::none(), Io::against_co(cat_co(256), piped()), Io::cat(piped(), 256, List::range(4))) {
-    Returns(7, refl)
+theorem cat_co_agrees(): Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat_co(256), piped()), Io::cat(piped(), 256)) {
+    ERet(7, 20, cat_piped_end(), refl, refl)
 }
 // A failing write stops it with status 1 after one read and one write.
 theorem cat_co_write_fails():
@@ -203,12 +268,11 @@ theorem cat_co_wrong():
 }
 
 // A fuelled probe carries over: the source cat at fuel 4 reads to the
-// surface cat's result, so its embedding returns it.
+// surface cat's end, so its embedding returns it.
 theorem cat_agrees_piped_co():
-    Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), cat(256).tree([], 4)), piped()),
-        Io::cat(piped(), 256, List::range(4)))
+    Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), cat(256).tree([], 4)), piped()), cat_piped_end())
 {
-    Io::against_returns(cat(256).tree([], 4), piped(), Io::cat(piped(), 256, List::range(4)), cat_agrees_piped())
+    Io::against_returns(cat(256).tree([], 4), piped(), cat_piped_end(), cat_agrees_fuelled())
 }
 
 // The loop lemma at a neutral world, for a loop that never ends: `yes`

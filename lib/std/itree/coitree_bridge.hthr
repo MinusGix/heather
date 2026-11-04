@@ -374,3 +374,128 @@ theorem CoTree::bind_refined<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B
         CoTree::program(E, CoTree::bind(E, t, h)),
         λ n tr it => Converges(n + n, CoTree::bind_converges(E, t, h, n, n, tr, it)))
 }
+
+// ---------------------------------------------------------------------------
+// A finite tree inside a coinductive one, trace by trace
+//
+// `ITree::Into(t, c)`: every trace of the finite tree `t` is one of `c` at
+// some depth. A denotation given twice, once at a fuel and once with none,
+// is related this way at every fuel, construct by construct: the
+// constructors, `bind` (through `IsTrace::split_bind`), and a loop over
+// bodies so related (`ITree::into_iter`), with the fuelled loop's fuel and
+// its body's free to differ.
+
+fn ITree::Into<R>(E: Events, t: ITree<R>(E), c: CoTree<R>(E)) → Type {
+    (tr: Trace<R>(E)) → IsTrace(E, t, tr) → Converges<R>(E, λ k => CoTree::approx(E, k, c), tr)
+}
+
+theorem ITree::into_ret<R>(E: Events, r: R): ITree::Into<R>(E, Ret(r), CRet(r)) {
+    λ tr it => Converges(Succ(Zero), it)
+}
+
+theorem ITree::into_tau<R>(E: Events, t: ITree<R>(E), c: CoTree<R>(E), h: ITree::Into(E, t, c)):
+    ITree::Into(E, Tau(t), CTau(c))
+{
+    λ tr it => {
+        let d: Converges<R>(E, λ k => CoTree::approx(E, k, c), tr) = h(tr, it);
+        Converges(Succ(d.n), d.h)
+    }
+}
+
+theorem ITree::into_vis<R>(E: Events, c: E.Cmd, k: E.Resp(c) → ITree<R>(E), kc: E.Resp(c) → CoTree<R>(E),
+    h: (a: E.Resp(c)) → ITree::Into(E, k(a), kc(a))): ITree::Into(E, Vis(c, k), CVis(c, kc))
+{
+    λ tr (it: VisTrace<R>(E, c, tr, λ a rest => IsTrace(E, k(a), rest))) => match it {
+        Prefix(at) => CoTree::converges_nil(E, CVis(c, kc), tr, at),
+        Pending(at) => j(sym(at), λ y q => Converges<R>(E, λ k2 => CoTree::approx(E, k2, CVis(c, kc)), y),
+            Converges(Succ(Zero), Pending(refl))),
+        Answered(a, rest, at, sub) => {
+            let d: Converges<R>(E, λ k2 => CoTree::approx(E, k2, kc(a)), rest) = h(a, rest, sub);
+            j(sym(at), λ y q => Converges<R>(E, λ k2 => CoTree::approx(E, k2, CVis(c, kc)), y),
+                Converges(Succ(d.n), Answered(a, rest, refl, d.h)))
+        },
+    }
+}
+
+theorem ITree::into_cut<R>(E: Events, c: CoTree<R>(E)): ITree::Into(E, Cut, c) {
+    λ tr (it: CutTrace<R>(E, tr)) => CoTree::converges_nil(E, c, tr, CutTrace::ended(E, tr, it))
+}
+
+// Into a tree equivalent up to taus.
+theorem ITree::into_eutt<R>(E: Events, t: ITree<R>(E), c: CoTree<R>(E), u: CoTree<R>(E), h: ITree::Into(E, t, c),
+    e: Eutt<R>(E, c, u)): ITree::Into(E, t, u)
+{
+    λ tr it => Eutt::refines(E, c, u, e, tr, h(tr, it))
+}
+
+theorem ITree::into_bisim<R>(E: Events, t: ITree<R>(E), c: CoTree<R>(E), u: CoTree<R>(E), h: ITree::Into(E, t, c),
+    b: Bisim<R>(E, c, u)): ITree::Into(E, t, u)
+{
+    λ tr it => Bisim::refines(E, c, u, b, tr, h(tr, it))
+}
+
+// Sequencing: split the trace of the bind, find each part at a depth, and
+// bind the approximations at those depths (`CoTree::bind_converges`).
+theorem ITree::into_bind<A, B>(E: Events, t: ITree<A>(E), c: CoTree<A>(E), h: A → ITree<B>(E), d: A → CoTree<B>(E),
+    ht: ITree::Into(E, t, c), hh: (r: A) → ITree::Into(E, h(r), d(r))):
+    ITree::Into(E, ITree::bind(E, t, h), CoTree::bind(E, c, d))
+{
+    λ tr it => {
+        let sp: BindSplit<A, B>(E, t, h, tr) = IsTrace::split_bind(E, t, h, tr, it);
+        match sp {
+            Inside(first, i, u, at) => {
+                let c1: Converges<A>(E, λ k => CoTree::approx(E, k, c), first) = ht(first, i);
+                let inner: IsTrace(E, ITree::bind(E, CoTree::approx(E, c1.n, c), λ r => CoTree::approx(E, Zero, d(r))),
+                        Trace::seq(E, first, λ _ => TEnd)) =
+                    IsTrace::bind_at(E, CoTree::approx(E, c1.n, c), λ r => CoTree::approx(E, Zero, d(r)), first, λ _ => TEnd, c1.h,
+                        λ r ret => false_elim(u(Trace::returns_of_with(E, first, r, ret))));
+                j(sym(at), λ y q => Converges<B>(E, λ k => CoTree::approx(E, k, CoTree::bind(E, c, d)), y),
+                    Converges(Zero + c1.n, CoTree::bind_converges(E, c, d, Zero, c1.n, Trace::seq(E, first, λ _ => TEnd), inner)))
+            },
+            Past(first, r, i, ret, rest, sub, at) => {
+                let c1: Converges<A>(E, λ k => CoTree::approx(E, k, c), first) = ht(first, i);
+                let c2: Converges<B>(E, λ k => CoTree::approx(E, k, d(r)), rest) = hh(r, rest, sub);
+                let inner: IsTrace(E, ITree::bind(E, CoTree::approx(E, c1.n, c), λ r2 => CoTree::approx(E, c2.n, d(r2))),
+                        Trace::seq(E, first, λ _ => rest)) =
+                    IsTrace::bind_at(E, CoTree::approx(E, c1.n, c), λ r2 => CoTree::approx(E, c2.n, d(r2)), first, λ _ => rest, c1.h,
+                        λ r2 ret2 => j(Trace::returns_with_unique(E, first, r, r2, ret, ret2),
+                            λ y q => IsTrace(E, CoTree::approx(E, c2.n, d(y)), rest), c2.h));
+                j(sym(at), λ y q => Converges<B>(E, λ k => CoTree::approx(E, k, CoTree::bind(E, c, d)), y),
+                    Converges(c2.n + c1.n, CoTree::bind_converges(E, c, d, c2.n, c1.n, Trace::seq(E, first, λ _ => rest), inner)))
+            },
+        }
+    }
+}
+
+theorem ITree::into_map<A, B>(E: Events, t: ITree<A>(E), c: CoTree<A>(E), f: A → B, h: ITree::Into(E, t, c)):
+    ITree::Into(E, ITree::map(E, t, f), CoTree::map(E, c, f))
+{
+    ITree::into_bind(E, t, c, λ r => Ret(f(r)), λ r => CRet(f(r)), h, λ r => ITree::into_ret(E, f(r)))
+}
+
+// A loop: the fuelled loop at any fuel, over bodies each inside the
+// fuel-free loop's body, is inside the fuel-free loop. By induction on the
+// fuel, one pass at a time through `CoTree::iter_unfold`.
+theorem ITree::into_iter<A, B>(E: Events, body: A → ITree<Step<A, B>>(E), cbody: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → ITree::Into(E, body(a), cbody(a)), n: Nat): (a: A) →
+    ITree::Into(E, ITree::iter(E, n, body, a), CoTree::iter(E, cbody, a))
+{
+    match n {
+        Zero => λ a => ITree::into_cut(E, CoTree::iter(E, cbody, a)),
+        Succ(m) => λ a => {
+            let next: (x: Step<A, B>) → ITree::Into(E, ITree::iter_next(E, m, body, x),
+                    CoTree::iter_next(E, cbody, x)) =
+                λ x => match x as λ y => ITree::Into(E, ITree::iter_next(E, m, body, y),
+                        CoTree::iter_next(E, cbody, y)) {
+                    Continue(a2) => ITree::into_tau(E, ITree::iter(E, m, body, a2), CoTree::iter(E, cbody, a2), ITree::into_iter(E, body, cbody, hb, m, a2)),
+                    Break(b) => ITree::into_ret(E, b),
+                };
+            ITree::into_bisim(E, ITree::iter(E, Succ(m), body, a),
+                CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x)), CoTree::iter(E, cbody, a),
+                ITree::into_bind(E, body(a), cbody(a), λ x => ITree::iter_next(E, m, body, x),
+                    λ x => CoTree::iter_next(E, cbody, x), hb(a), next),
+                Bisim::sym(E, CoTree::iter(E, cbody, a), CoTree::bind(E, cbody(a), λ x => CoTree::iter_next(E, cbody, x)),
+                    CoTree::iter_unfold(E, cbody, a)))
+        },
+    }
+}

@@ -3,10 +3,9 @@ title: Effectful loops without a passes list
 status: open
 labels: [language,effects,design]
 area: language
-milestone: [nh-effects,lang-sequencing]
+milestone: [it-world-loops,nh-effects,lang-sequencing]
 created: 2026-11-02
 updated: 2026-11-03
-blocked-by: [eutt-iteration-and-io-reading]
 ---
 
 Effectful loops take a `passes: List<Nat>` and run `for _ in passes`. This is true of `Io::cat` (`lib/_tests/std/os/linux/linux_world_tests.hthr`), `Io::write_all`, and `Io::tac`/`Io::sort` (`lib/native/runtime/line_tools.hthr`). Minus asked what it is really for (PR #394 review, 2026-11-02). It serves two purposes at once, and neither is the program's intent:

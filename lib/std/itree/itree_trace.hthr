@@ -513,6 +513,94 @@ theorem IsTrace::bind<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E), tr:
     }
 }
 
+// A trace returns at most one value.
+theorem Trace::returns_with_unique<R>(E: Events, tr: Trace<R>(E), r: R, s: R):
+    Trace::ReturnsWith(E, tr, r) → Trace::ReturnsWith(E, tr, s) → r = s
+{
+    match tr {
+        TEnd => λ never _ => false_elim(never),
+        TRet(_) => λ a b => trans(sym(a), b),
+        TCall(_) => λ never _ => false_elim(never),
+        TAns(_, _, rest) => λ a b => Trace::returns_with_unique(E, rest, r, s, a, b),
+    }
+}
+
+// `IsTrace::bind`, asking for the continuation's trace only at the value the
+// trace of `t` returns.
+theorem IsTrace::bind_at<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E), tr: Trace<A>(E), k: A → Trace<B>(E),
+    it: IsTrace(E, t, tr), ik: (r: A) → Trace::ReturnsWith(E, tr, r) → IsTrace(E, h(r), k(r))):
+    IsTrace(E, ITree::bind(E, t, h), Trace::seq(E, tr, k))
+{
+    match t {
+        Ret(x) => {
+            let w: RetTrace<A>(E, x, tr) = it;
+            match w {
+                Stopped(e) => j(sym(e), λ y q => IsTrace(E, h(x), Trace::seq(E, y, k)), IsTrace::nil(E, h(x))),
+                Returned(e) => j(sym(e), λ y q => IsTrace(E, h(x), Trace::seq(E, y, k)),
+                    ik(x, j(sym(e), λ y q => Trace::ReturnsWith(E, y, x), refl))),
+            }
+        },
+        Tau(s) => IsTrace::bind_at(E, s, h, tr, k, it, ik),
+        Vis(c, k0) => {
+            let w: VisTrace<A>(E, c, tr, λ a rest => IsTrace(E, k0(a), rest)) = it;
+            let out: VisTrace<B>(E, c, Trace::seq(E, tr, k), λ a rest => IsTrace(E, ITree::bind(E, k0(a), h), rest)) = match w {
+                Prefix(e) => Prefix(j(sym(e), λ y q => Trace::seq(E, y, k) = TEnd, refl)),
+                Pending(e) => Pending(j(sym(e), λ y q => Trace::seq(E, y, k) = TCall(c), refl)),
+                Answered(a, rest, e, sub) => Answered(a, Trace::seq(E, rest, k),
+                    j(sym(e), λ y q => Trace::seq(E, y, k) = TAns(c, a, Trace::seq(E, rest, k)), refl),
+                    IsTrace::bind_at(E, k0(a), h, rest, k, sub, λ r ret => ik(r, j(sym(e), λ y q => Trace::ReturnsWith(E, y, r), ret)))),
+            };
+            out
+        },
+        Cut => {
+            let out: CutTrace<B>(E, Trace::seq(E, tr, k)) =
+                Ended(j(sym(CutTrace::ended(E, tr, it)), λ y q => Trace::seq(E, y, k) = TEnd, refl));
+            out
+        },
+    }
+}
+
+// How a trace of `bind(t, h)` comes about: a trace of `t` that has not
+// returned, or one that returned `r` followed by a trace of `h(r)`.
+inductive BindSplit<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E), tr: Trace<B>(E)) {
+    Inside(first: Trace<A>(E), it: IsTrace(E, t, first), unreturned: ¬Trace::Returns(E, first),
+        at: tr = Trace::seq(E, first, λ _ => TEnd)),
+    Past(first: Trace<A>(E), r: A, it: IsTrace(E, t, first), ret: Trace::ReturnsWith(E, first, r), rest: Trace<B>(E),
+        sub: IsTrace(E, h(r), rest), at: tr = Trace::seq(E, first, λ _ => rest)),
+}
+
+// Every trace of a bind splits so: the converse of `IsTrace::bind`.
+theorem IsTrace::split_bind<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E), tr: Trace<B>(E)):
+    IsTrace(E, ITree::bind(E, t, h), tr) → BindSplit<A, B>(E, t, h, tr)
+{
+    match t {
+        Ret(x) => λ it => Past(TRet(x), x, Returned(refl), refl, tr, it, refl),
+        Tau(s) => λ it => {
+            let sp: BindSplit<A, B>(E, s, h, tr) = IsTrace::split_bind(E, s, h, tr, it);
+            let out: BindSplit<A, B>(E, Tau(s), h, tr) = match sp {
+                Inside(first, i, u, at) => Inside(first, i, u, at),
+                Past(first, r, i, ret, rest, sub, at) => Past(first, r, i, ret, rest, sub, at),
+            };
+            out
+        },
+        Vis(c, k0) => λ (it: VisTrace<B>(E, c, tr, λ a rest => IsTrace(E, ITree::bind(E, k0(a), h), rest))) => match it {
+            Prefix(e) => Inside(TEnd, Prefix(refl), λ n => n, e),
+            Pending(e) => Inside(TCall(c), Pending(refl), λ n => n, e),
+            Answered(a, rest, e, sub) => {
+                let sp: BindSplit<A, B>(E, k0(a), h, rest) = IsTrace::split_bind(E, k0(a), h, rest, sub);
+                let out: BindSplit<A, B>(E, Vis(c, k0), h, tr) = match sp {
+                    Inside(first, i, u, at) => Inside(TAns(c, a, first), Answered(a, first, refl, i), u,
+                        trans(e, j(at, λ y q => TAns(c, a, rest) = TAns(c, a, y), refl))),
+                    Past(first, r, i, ret, rest2, sub2, at) => Past(TAns(c, a, first), r, Answered(a, first, refl, i), ret, rest2, sub2,
+                        trans(e, j(at, λ y q => TAns(c, a, rest) = TAns(c, a, y), refl))),
+                };
+                out
+            },
+        },
+        Cut => λ (it: CutTrace<B>(E, tr)) => Inside(TEnd, Ended(refl), λ n => n, CutTrace::ended(E, tr, it)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Programs: a family that carries its growth
 //
