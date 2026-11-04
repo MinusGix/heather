@@ -312,32 +312,32 @@ fn unchanged_arguments_still_emit_the_plain_recursor() {
 #[test]
 fn a_written_motive_is_the_manual_route() {
     // A `match` with a *written* motive is the manual route, and a written
-    // motive that does not quantify `m` has no ih at `Succ(m)`: the varying
-    // call meets the old refusal — now saying why, and where the fix is.
-    let msg = elab_err(
-        r#"
+    // motive that does not quantify `m` has no ih at `Succ(m)`. The plain
+    // lowering refuses the varying call; recursion at the top generalizes
+    // `m` around the whole body (docs/recursion-at-the-top-design.md §5),
+    // and the written `match` takes its arm inside it.
+    ok(r#"
         fn g(n: Nat, m: Nat) -> Nat {
             match n as λ z => Nat { Zero => m, Succ(k) => g(k, Succ(m)) }
         }
-        "#,
-    );
-    assert!(msg.contains("unchanged"), "{msg}");
-    assert!(msg.contains("known result type"), "{msg}");
+        theorem g_2(): g(2, 0) = 2 { refl }
+        theorem g_step(k: Nat, m: Nat): g(Succ(k), m) = g(k, Succ(m)) { refl }
+        "#);
 }
 
 #[test]
 fn a_shadowing_name_does_not_fake_an_unchanged_argument() {
     // The scan reads `m` and plans nothing; the by-binder check then sees a
-    // lambda-bound `m`, not the parameter, and refuses. Neither half trusts
-    // the name.
-    let msg = elab_err(
-        r#"
+    // lambda-bound `m`, not the parameter, and refuses the plain lowering.
+    // Neither half trusts the name. At the top, `m` is generalized, so the
+    // call means what it says: `s(Succ(k), m) = s(k, 0)`.
+    ok(r#"
         fn s(n: Nat, m: Nat) -> Nat {
             match n { Zero => m, Succ(k) => (λ (m: Nat) => s(k, m))(0) }
         }
-        "#,
-    );
-    assert!(msg.contains("unchanged"), "{msg}");
+        theorem s_1(): s(1, 5) = 0 { refl }
+        theorem s_step(k: Nat, m: Nat): s(Succ(k), m) = s(k, 0) { refl }
+        "#);
 }
 
 #[test]

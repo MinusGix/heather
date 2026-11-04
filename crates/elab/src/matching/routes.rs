@@ -268,12 +268,39 @@ impl Elaborator {
             _ => return err("`Succ` binds `(k)` or `(k, ih)`", succ.span),
         };
         let (zero, succ_body) = (&zero.body, &succ.body);
+        // Inside recursion at the top, the body's own `match` on the
+        // recursion's parameter meets that parameter's constructor term, and
+        // takes its arm: `Succ(k)` binds `k` to the predecessor the guard
+        // already holds, so a self-call at `k` is the ih
+        // (docs/recursion-at-the-top-design.md §3). The term is the arm the
+        // recursor would reduce to.
+        if ih.is_none() && self.scope.recursion_at_top.is_some() {
+            let at = motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
+            match &scrut_t {
+                Term::Zero => return self.elab_check(cx, zero, &at, &mlvl),
+                Term::Succ(t) => {
+                    let mut acx = cx.clone();
+                    acx.aliases.push(Rc::new(crate::Alias {
+                        name: k.clone(),
+                        depth: acx.names.len(),
+                        term: Rc::clone(t),
+                        ty: Type::Nat,
+                        level: Level::Zero,
+                        skel: None,
+                        spliced: None,
+                        shifted: Default::default(),
+                    }));
+                    return self.elab_check(&acx, succ_body, &at, &mlvl);
+                }
+                _ => {}
+            }
+        }
         // Does this match descend on one of the declaration's own parameters?
         // If so, self-calls in the arm become the ih. If not (a nested match on
         // some other term), the enclosing arm's guard — if any — still stands,
         // possibly *extended* by this match (§ course-of-values below).
         let dec = if ih.is_none() {
-            crate::recursion::guard_param(cx, &scrut_t, arms)
+            self.top_guard(span).or_else(|| crate::recursion::guard_param(cx, &scrut_t, arms))
         } else {
             None
         };

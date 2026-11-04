@@ -1,0 +1,41 @@
+// Probes of the recursion planner's name-keyed scope
+// (issues/recursion-on-elaborated-terms.md, docs/recursion-at-the-top-design.md
+// §2): the binding forms the planner does not record (`let code`, `match code`
+// arms) cannot reach a recursion it compiles. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import nat;
+
+// A `match code` arm binder shadowing the decreasing parameter's predecessor
+// would be misread by the planner, but a `meta fn` cannot call itself.
+// expect-error: unbound name `count`
+meta fn count(g: Ctx, n: Nat, body: Code(g |- Nat)) -> Nat {
+    match n {
+        Zero => 0,
+        Succ(k) => match code body as Nat { tm_succ(k) => count(g, k, body), _ => 0 },
+    }
+}
+
+// Nor can an ordinary recursive `fn` hold code at all.
+// expect-error: `Ctx`/`TyCode`/`Code` are meta-layer types
+fn count_fn(g: Ctx, n: Nat, body: Code(g |- Nat)) -> Nat {
+    match n {
+        Zero => 0,
+        Succ(k) => match code body as Nat { tm_succ(k) => count_fn(g, k, body), _ => 0 },
+    }
+}
+
+// `let code` aliases only among a `meta fn` body's top statements; in an arm
+// it is refused before any recursion is planned.
+// expect-error: `let code` is meta-layer syntax
+meta fn depth(g: Ctx, n: Nat, x: Code(g |- Nat)) -> Code(g |- Nat) {
+    match n { Zero => x, Succ(k) => { let code k = x; x } }
+}
+
+// At the top it aliases, and the alias is the one read.
+meta fn alias(g: Ctx, x: Code(g |- Nat)) -> Code(g |- Nat) {
+    let code k = x;
+    k
+}
+
+// The parameter read in its own arm, which the planner's name-keyed scope
+// sees, is lowered by recursion at the top: recursion_at_top_tests.hthr.

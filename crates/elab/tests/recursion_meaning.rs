@@ -80,18 +80,24 @@ fn refused(src: &str, needle: &str) {
     assert!(msg.contains("fn-recursion-means-the-function"), "{msg}");
 }
 
-// -- Reading the parameter: compiled by measure --------------------------------
+// -- Reading the parameter: compiled at the top, else by measure --------------
+//
+// A `Nat` recursion that reads its parameter is compiled at the top
+// (docs/recursion-at-the-top-design.md §5): it unfolds by conversion, and its
+// `f_unfold` is generated as the measure route's was. The measure is the
+// fallback where that does not elaborate (a call two below, a `List`).
 
 #[test]
-fn the_parameter_in_its_own_arm_is_compiled_by_measure() {
+fn the_parameter_in_its_own_arm_is_compiled_at_the_top() {
     let notes = ok("fn sum(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => plus(sum(k), n) } }
          theorem sum_2(): sum(2) = 3 { refl }
-         theorem sum_step(k: Nat): sum(Succ(k)) = plus(sum(k), Succ(k)) { sum_unfold(Succ(k)) }");
-    assert_eq!(notes, 1);
+         theorem sum_step(k: Nat): sum(Succ(k)) = plus(sum(k), Succ(k)) { sum_unfold(Succ(k)) }
+         theorem sum_conv(k: Nat): sum(Succ(k)) = plus(sum(k), Succ(k)) { refl }");
+    assert_eq!(notes, 0);
 }
 
 #[test]
-fn every_way_of_reading_it_is_compiled_by_measure() {
+fn every_way_of_reading_it_means_the_source() {
     // The base arm runs at the bottom level, where `n` is zero.
     ok("fn z(n: Nat) -> Nat { match n { Zero => n, Succ(k) => z(k) } }
         theorem z_3(): z(3) = 0 { refl }");
@@ -100,7 +106,7 @@ fn every_way_of_reading_it_is_compiled_by_measure() {
         theorem g_2(): g(2) = 3 { refl }");
     ok("fn g(n: Nat) -> Nat { have m = n; match n { Zero => 0, Succ(k) => plus(g(k), m) } }
         theorem g_2(): g(2) = 3 { refl }");
-    // Two levels down, through the course-of-values chain.
+    // Two levels down, through the course-of-values chain: by measure.
     ok("fn h(n: Nat) -> Nat {
             match n { Zero => 0, Succ(k) => match k { Zero => 1, Succ(j) => plus(h(j), n) } }
         }
@@ -112,9 +118,16 @@ fn every_way_of_reading_it_is_compiled_by_measure() {
 
 #[test]
 fn without_the_measure_route_a_read_is_refused_with_what_to_import() {
+    // At the top, the one-level read needs nothing imported.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(&format!(
+        "{PLUS}fn sum(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => plus(sum(k), n) }} }}"
+    ))
+    .expect("compiled at the top");
+    // Two levels down it is the measure's, which needs `omega`.
     let mut e = Elaborator::with_prelude().expect("prelude");
     let src = format!(
-        "{PLUS}fn sum(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => plus(sum(k), n) }} }}"
+        "{PLUS}fn h(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => match k {{ Zero => 1, Succ(j) => plus(h(j), n) }} }} }}"
     );
     let msg = match e.elab_source(&src) {
         Err(ElabError::Elab { msg, .. }) => msg,
@@ -144,15 +157,16 @@ fn a_parameter_with_no_measure_is_refused() {
 const U: &str = "fn u(n: Nat, x: Nat) -> Nat { let y = plus(x, 1); match n { Zero => y, Succ(k) => u(k, plus(x, 10)) } }\n";
 
 #[test]
-fn a_let_bound_from_a_varied_parameter_is_compiled_by_measure() {
+fn a_let_bound_from_a_varied_parameter_is_compiled_at_the_top() {
     // Literal and neutral `x`, at a literal `n`; and the unfolding equation at
     // a neutral `n`, which is the self-call at the varied value.
     let notes = ok(&format!(
         "{U}theorem u_2(): u(2, 0) = 21 {{ refl }}
          theorem u_1_once(x: Nat): u(1, x) = plus(plus(x, 10), 1) {{ refl }}
-         theorem u_step(k: Nat, x: Nat): u(Succ(k), x) = u(k, plus(x, 10)) {{ u_unfold(Succ(k), x) }}"
+         theorem u_step(k: Nat, x: Nat): u(Succ(k), x) = u(k, plus(x, 10)) {{ u_unfold(Succ(k), x) }}
+         theorem u_conv(k: Nat, x: Nat): u(Succ(k), x) = u(k, plus(x, 10)) {{ refl }}"
     ));
-    assert_eq!(notes, 1);
+    assert_eq!(notes, 0);
 }
 
 #[test]
@@ -272,22 +286,24 @@ fn reading_the_varied_parameter_itself_keeps_the_structural_lowering() {
     assert_eq!(notes, 0);
 }
 
-// -- The recursive `match` off the result: refused -----------------------------
+// -- The recursive `match` off the result: at the top for `Nat`, else refused --
 
 #[test]
-fn a_recursive_match_off_the_result_is_refused() {
-    refused(
-        "fn f(n: Nat) -> Nat { plus(1, match n { Zero => 0, Succ(k) => f(k) }) }",
-        "is not the result of `f`",
-    );
-    refused(
-        "fn e(n: Nat) -> Nat { plus(match n { Zero => 0, Succ(k) => e(k) }, n) }",
-        "is not the result of `e`",
-    );
-    refused(
-        "fn l(n: Nat) -> Nat { let r: Nat = match n { Zero => 0, Succ(k) => l(k) }; plus(r, 1) }",
-        "is not the result of `l`",
-    );
+fn a_recursive_match_off_the_result_is_compiled_at_the_top() {
+    // The whole body recomputes at each level, so what surrounds the `match`
+    // is applied at every level, as the source says.
+    let notes = ok("fn f(n: Nat) -> Nat { plus(1, match n { Zero => 0, Succ(k) => f(k) }) }
+         theorem f_2(): f(2) = 3 { refl }
+         theorem f_step(k: Nat): f(Succ(k)) = plus(1, f(k)) { refl }
+         fn e(n: Nat) -> Nat { plus(match n { Zero => 0, Succ(k) => e(k) }, n) }
+         theorem e_2(): e(2) = 3 { refl }
+         fn l(n: Nat) -> Nat { let r: Nat = match n { Zero => 0, Succ(k) => l(k) }; plus(r, 1) }
+         theorem l_2(): l(2) = 3 { refl }");
+    assert_eq!(notes, 0);
+}
+
+#[test]
+fn a_recursive_match_off_the_result_is_refused_off_nat() {
     refused(
         "fn v(xs: List<Nat>) -> Nat { Succ(match xs { Nil => 0, Cons(_, t) => v(t) }) }",
         "is not the result of `v`",
@@ -295,13 +311,14 @@ fn a_recursive_match_off_the_result_is_refused() {
 }
 
 #[test]
-fn a_recursive_match_under_a_branch_on_its_parameter_is_refused() {
-    refused(
-        "inductive B { T, F }
+fn a_recursive_match_under_a_branch_on_its_parameter_is_compiled_at_the_top() {
+    // The branch is decided at every level, not once by the top call.
+    let notes = ok("inductive B { T, F }
          fn is_zero(n: Nat) -> B { match n { Zero => T, Succ(_) => F } }
-         fn f(n: Nat) -> Nat { match is_zero(n) { T => 7, F => match n { Zero => 0, Succ(k) => f(k) } } }",
-        "sits under a branch that depends on `n`",
-    );
+         fn f(n: Nat) -> Nat { match is_zero(n) { T => 7, F => match n { Zero => 0, Succ(k) => plus(1, f(k)) } } }
+         theorem f_2(): f(2) = 9 { refl }
+         theorem f_step(k: Nat): f(Succ(k)) = plus(1, f(k)) { refl }");
+    assert_eq!(notes, 0);
 }
 
 // -- What keeps the structural lowering ----------------------------------------

@@ -290,6 +290,14 @@ pub(crate) struct DynamicScope {
     /// parameter, and the refusal a self-call lowered on it raises
     /// (issues/fn-recursion-means-the-function.md). `None` everywhere else.
     pub(crate) misplaced_recursion: RefCell<Option<(String, usize, String)>>,
+    /// While a declaration is lowered by recursion at the top
+    /// (docs/recursion-at-the-top-design.md §3, slice 1): the parameter it
+    /// recurses on and the span of the `match` on it that
+    /// [`Elaborator::recursion_at_top_body`] wrapped the body in. That
+    /// `match` is the guard, with every other explicit parameter
+    /// generalized, and a `Nat` `match` on a constructor term inside it
+    /// takes its arm. `None` everywhere else.
+    pub(crate) recursion_at_top: Option<(usize, Span)>,
     /// While an `instance` block is being elaborated: the members that have
     /// already landed, as (written name, full name). An unqualified reference
     /// to one of them resolves to its global, which is the whole of "later
@@ -414,6 +422,7 @@ impl DynamicScope {
         let DynamicScope {
             member_owner: _,
             misplaced_recursion,
+            recursion_at_top: _,
             instance_scope: _,
             unfolded: _,
             impl_provenance: _,

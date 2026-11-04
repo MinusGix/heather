@@ -163,7 +163,7 @@ impl Elaborator {
     /// docs/course-of-values-recursion-design.md) needs its source's nested
     /// `match` to reduce too, so the caller deepens on a refusal. A type this
     /// does not know the constructors of is split once, by a default arm.
-    fn meaning_split(&self, scrut: &str, ty: &Ty, depth: usize, fresh: &mut usize, span: Span) -> Expr {
+    pub(crate) fn meaning_split(&self, scrut: &str, ty: &Ty, depth: usize, fresh: &mut usize, span: Span) -> Expr {
         let refl = Expr { kind: ExprKind::Refl, span };
         if depth == 0 {
             return refl;
