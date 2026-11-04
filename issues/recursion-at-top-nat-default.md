@@ -1,6 +1,6 @@
 ---
 title: Make recursion at the top the lowering for every Nat recursion
-status: open
+status: closed
 labels: [recursion,elaboration]
 area: language
 created: 2026-11-04
@@ -75,3 +75,8 @@ parameters (the planner's guess first).
   guard, an outer case split keeps the plain lowering, and `List`/`Wf`
   share the code. Its remaining Nat role is those cases plus the
   fallbacks; slice 3 is where it shrinks.
+- `perf ab --base origin/master` (full corpus, calc_parser's closure): 52
+  recursions at the top; every counter within 1% except `cow_copies`
+  (+7.7%, a few hundred) and `decls_gated` (+0.9%); seconds inside the
+  spread. Library, showcases and `--pr` as on master. Closed with the guard
+  selection kept, for the reasons above.
