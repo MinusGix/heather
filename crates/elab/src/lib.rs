@@ -3649,13 +3649,27 @@ impl Elaborator {
                 .map(|_| None)
                 .chain(decl.params.iter().map(|p| Some(&p.ty)))
                 .collect();
-            match recursion::plan(&self_ref, &types, &decl.body) {
+            let plan = recursion::plan(&self_ref, &types, &decl.body);
+            // Recursion at the top is the lowering of every structural
+            // recursion on an explicit `Nat` parameter
+            // (issues/recursion-at-top-nat-default.md); the plain lowering is
+            // the fallback where it does not elaborate. A `ByMeasure` plan
+            // keeps its route below, which tries the top first and keeps
+            // the `f_unfold` its clients cite.
+            if !matches!(plan, recursion::RecursionPlan::ByMeasure { .. })
+                && let Some(dec) = recursion::top_default_param(&self_ref, &decl.body)
+                && self.at_top_candidate(decl, dec)
+                && self.try_recursion_at_top(decl, dec, TopAttempt::Default)
+            {
+                return Ok(());
+            }
+            match plan {
                 recursion::RecursionPlan::Structural => {}
                 recursion::RecursionPlan::ByMeasure { dec, read, name, from } => {
                     // Recursion at the top means the source wherever it
                     // elaborates, and unfolds by conversion; the measure is
                     // the fallback (docs/recursion-at-the-top-design.md §4).
-                    if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec) {
+                    if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
                         return Ok(());
                     }
                     return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name, from);
@@ -3709,7 +3723,7 @@ impl Elaborator {
         }
         let first = decl.tyvars.len();
         for dec in first..first + decl.params.len() {
-            if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec) {
+            if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
                 return Ok(());
             }
         }
@@ -3719,24 +3733,44 @@ impl Elaborator {
     /// One attempt at recursion at the top on `dec`: elaborated and gated
     /// like any declaration, and on failure rolled back with everything it
     /// raised, since the caller has another lowering (or the original
-    /// refusal) to fall back to. Gated inline, as the meaning check is: at a
-    /// wider pool a kernel refusal would fail the module's join instead of
-    /// this attempt. On success `f_unfold` follows, the source equation
-    /// clients cite (the measure lowering's artifact, which this replaces).
-    fn try_recursion_at_top(&mut self, decl: &Decl, dec: usize) -> bool {
+    /// refusal) to fall back to.
+    ///
+    /// A [`TopAttempt::Fallback`] answers a refusal or replaces the measure
+    /// route: it is gated inline, as the meaning check is, since at a wider
+    /// pool a kernel refusal would fail the module's join instead of this
+    /// attempt, and on success `f_unfold` follows, the source equation the
+    /// measure route's clients cite. A [`TopAttempt::Default`] is every
+    /// ordinary Nat recursion, gated at the pool's width: the rare kernel
+    /// refusal fails the parallel pass, and the serial replay (width one)
+    /// falls back as the inline gate would, so the answer is the same at
+    /// every width.
+    fn try_recursion_at_top(&mut self, decl: &Decl, dec: usize, attempt: TopAttempt) -> bool {
         let lowered = self.recursion_at_top_body(decl, dec);
         let warn_mark = self.pass.warnings.borrow().len();
-        let at = Some((dec, lowered.span));
-        let width = self.pass.kernel_pool.swap_width(1);
+        let inline = attempt == TopAttempt::Fallback;
+        let at = Some((dec, lowered.span, inline));
+        let width = inline.then(|| self.pass.kernel_pool.swap_width(1));
         let r = self.session_transaction(|me| {
-            me.scoped(|s| &mut s.recursion_at_top, at, |me| me.elab_decl_one(&lowered, None))
+            me.scoped(|s| &mut s.recursion_at_top_surface, Some(std::rc::Rc::new(decl.clone())), |me| {
+                me.scoped(|s| &mut s.recursion_at_top, at, |me| me.elab_decl_one(&lowered, None))
+            })
         });
-        self.pass.kernel_pool.swap_width(width);
+        if let Some(width) = width {
+            self.pass.kernel_pool.swap_width(width);
+        }
         if r.is_err() {
             self.pass.warnings.borrow_mut().truncate(warn_mark);
+            stats::count(stats::Counter::RecursionAtTopFallbacks);
             return false;
         }
+        stats::count(stats::Counter::RecursionAtTop);
         let decs = self.attempt.recursion_decs.borrow().clone();
+        if !inline {
+            if self.policy.review_lints && !decs.is_empty() {
+                self.review_recursion_meaning(decl, &decs);
+            }
+            return true;
+        }
         // `f(x̄) = { body }`, by one split on the parameter: each side takes
         // the same step, which is the lowering's whole claim (§3).
         let param = &decl.params[dec - decl.tyvars.len()];
@@ -3828,7 +3862,7 @@ impl Elaborator {
     /// The parameter a `match` at `span` recurses on, if it is the `match`
     /// [`Self::recursion_at_top_body`] wrapped the declaration in.
     pub(crate) fn top_guard(&self, span: Span) -> Option<usize> {
-        self.scope.recursion_at_top.filter(|&(_, at)| at == span).map(|(dec, _)| dec)
+        self.scope.recursion_at_top.filter(|&(_, at, _)| at == span).map(|(dec, _, _)| dec)
     }
 
     /// What recursion at the top generalizes: every explicit value
@@ -4463,7 +4497,10 @@ impl Elaborator {
     ) -> R<PendingDecl> {
         // Keep the writer's declaration, not the constraint-expanded working
         // copy: representation obligations later restate the surface API.
-        let surface = decl.clone();
+        let surface = match &self.scope.recursion_at_top_surface {
+            Some(written) if written.name == decl.name => (**written).clone(),
+            _ => decl.clone(),
+        };
         // The constraint binders' desugaring at an **indexed** class
         // (docs/operation-indexed-classes-design.md §4): the index binders in
         // front of the dictionary, or the dictionary floated past the
@@ -5803,7 +5840,17 @@ impl Elaborator {
                 let top = self.top_guard(e.span);
                 let guard = top.or_else(|| recursion::guard_param(cx, &scrut_t, arms));
                 let mut positions = match (top, guard) {
-                    (Some(dec), _) => Self::top_positions(cx, dec),
+                    // A default attempt generalizes what the calls vary, as
+                    // the plain lowering does: a parameter every call passes
+                    // unchanged keeps the step a fold over values, which the
+                    // kernel's run folds read (`eval/runs.rs`); generalizing
+                    // it made `addr(m, n)`'s step a fold over functions. Too
+                    // few positions refuse the call, and the plain lowering
+                    // answers. A fallback generalizes every parameter.
+                    (Some(dec), _) if self.scope.recursion_at_top.is_some_and(|(_, _, all)| all) => {
+                        Self::top_positions(cx, dec)
+                    }
+                    (Some(dec), _) => self.varying_params(cx, arms, dec),
                     (None, Some(dec)) => self.varying_params(cx, arms, dec),
                     (None, None) => Vec::new(),
                 };
@@ -11295,3 +11342,11 @@ struct PackedFamily<'a> {
     eliminate: &'a dyn Fn(&Cx, &[Arm], Term, Type, Level) -> R<Term>,
 }
 
+
+/// Why [`Elaborator::try_recursion_at_top`] runs: as the lowering of an
+/// ordinary Nat recursion, or in place of a refusal or the measure route.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TopAttempt {
+    Default,
+    Fallback,
+}

@@ -294,10 +294,16 @@ pub(crate) struct DynamicScope {
     /// (docs/recursion-at-the-top-design.md §3, slice 1): the parameter it
     /// recurses on and the span of the `match` on it that
     /// [`Elaborator::recursion_at_top_body`] wrapped the body in. That
-    /// `match` is the guard, with every other explicit parameter
-    /// generalized, and a `Nat` `match` on a constructor term inside it
-    /// takes its arm. `None` everywhere else.
-    pub(crate) recursion_at_top: Option<(usize, Span)>,
+    /// `match` is the guard, and a `Nat` `match` on a constructor term
+    /// inside it takes its arm. The flag: every other explicit parameter is
+    /// generalized (a fallback attempt), or only those the calls vary (the
+    /// default). `None` everywhere else.
+    pub(crate) recursion_at_top: Option<(usize, Span, bool)>,
+    /// The written declaration a recursion at the top lowers, recorded as
+    /// its surface in place of the wrapped body: readers of the surface
+    /// (`reprgen`, the representation obligations) read the writer's
+    /// arms, not the wrapper's. `None` everywhere else.
+    pub(crate) recursion_at_top_surface: Option<std::rc::Rc<heather_syntax::Decl>>,
     /// While an `instance` block is being elaborated: the members that have
     /// already landed, as (written name, full name). An unqualified reference
     /// to one of them resolves to its global, which is the whole of "later
@@ -423,6 +429,7 @@ impl DynamicScope {
             member_owner: _,
             misplaced_recursion,
             recursion_at_top: _,
+            recursion_at_top_surface: _,
             instance_scope: _,
             unfolded: _,
             impl_provenance: _,

@@ -102,3 +102,11 @@ fn three_varied(a, b, n: Nat) → Nat {
 }
 theorem three_varied_step(a, b, k: Nat): three_varied(a, b, Succ(k)) = Succ(three_varied(a, b, k)) { refl }
 theorem three_varied_lit(): three_varied(0, 10, 1) = 1 { refl }
+
+// Every Nat recursion lowers at the top (issues/recursion-at-top-nat-default.md),
+// generalizing only what its calls vary: a parameter passed unchanged keeps
+// the step a fold over values, which the kernel folds a run of at once. With
+// `m` generalized this `refl` ran out of fuel.
+fn add_right(m, n: Nat) → Nat { match n { Zero => m, Succ(k) => Succ(add_right(m, k)) } }
+theorem add_right_big(): add_right(1000000, 1000000) = 2000000 { refl }
+theorem add_right_step(m, k: Nat): add_right(m, Succ(k)) = Succ(add_right(m, k)) { refl }
