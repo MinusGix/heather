@@ -1,10 +1,10 @@
 ---
 title: Master red 2026-11-03 (native_tools compiled_sort)
-status: open
+status: closed
 labels: [testing, sentinel]
 area: infrastructure
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-04
 ---
 
 Nightly sentinel at `b0379188b742` (origin/master head when the run started):
@@ -43,3 +43,10 @@ an artifact of the unreachable baseline rather than a library failure; not verif
 
 A single failing test, so one failure; its cause is not established from the logs
 (the log only shows the certificate check for `sort_tool` taking ~305 s and failing).
+
+## Log
+
+**2026-11-04.** Same cause as [[master-red-2026-11-04]]: `sort_tool`'s
+`write-elf` costs 320–350 CPU-s over warm images at both `b037918` and
+`4c1b702`, against the 300 s rail. native_tools now runs under a 900 s rail;
+the cost itself stays with [[native-sort-gate-rail]].

@@ -4,7 +4,7 @@ status: open
 labels: [tests,tooling]
 area: infrastructure
 created: 2026-09-20
-updated: 2026-09-20
+updated: 2026-11-04
 ---
 
 ## Scope
@@ -30,3 +30,12 @@ as a statement about the root process's remaining allowance.
 - Preserve all current CPU/memory limits, scheduling, signal propagation, and
   test-result counting.
 - Cover a bounded test that spawns a child, alongside a single-process target.
+
+## Log
+
+**2026-11-04.** This blind spot is why the 2026-11-03 and 2026-11-04 master
+reds had no warning: native_tools reports 2932 CPU-s as a target, always far
+"past" a 300 s rail it is never killed by as a whole, while its one
+`write-elf` child per test sits at 100% of its own rail
+([[native-sort-gate-rail]], [[master-red-2026-11-04]]). The library gate's
+heaviest module children sit at 40–50%.
