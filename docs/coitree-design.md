@@ -416,6 +416,32 @@ Both are written as the eutt bridge is (§7.4): one level at an observation
 type (`BindTracesAt`, `BindConvergesAt`), and `obs_bind_at` moving the
 bind's observation.
 
+### 8.3a Denotations, construct by construct (2026-11-04)
+
+§8.2's loop has a fixed finite body. A denotation given twice, once at a
+fuel and once with none (`native_source_co`'s `Stmt::denote_co` against
+`Stmt::denote`), has a loop body that is itself a denotation, using the same
+fuel as the loop. The bridge for it is a pair of relations, each closed
+under the constructors, `bind` and loops:
+
+- `ITree::Into(t, c)`: every trace of the finite `t` is one of `c` at some
+  depth. `into_bind` splits the bind's trace (`IsTrace::split_bind`,
+  `itree_trace`: a trace of `bind(t, h)` is a trace of `t` that has not
+  returned, or one that returned `r` followed by a trace of `h(r)`), finds
+  each part at a depth, and binds the approximations there
+  (`bind_converges`). `into_iter` is by induction on the fuel, one pass at a
+  time through `CoTree::iter_unfold`.
+- `CoTree::Onto(c, p)`: every trace of `c` at some depth is one of the
+  growing family `p` at some fuel. `onto_bind` splits the bound
+  approximations' trace (`bind_traces`) and raises the two fuels to their
+  sum (`fuel_monotone`). `onto_iter` is by induction on the depth, with the
+  rest of the loop after a pass found at every fuel from some on
+  (`IterRestAt`), and `ITree::iter_body_below` (a growing body grows a loop
+  at the same fuel) to meet the body's fuel.
+
+`IsTrace::bind_at` is `IsTrace::bind` asking for the continuation's trace
+only at the value the first trace returns, which a split supplies.
+
 ### 8.4 Testing
 
 `crates/elab/tests/lib_std_coitree_bridge.rs` (the `family_library`

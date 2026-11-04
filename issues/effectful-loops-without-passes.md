@@ -1,11 +1,11 @@
 ---
 title: Effectful loops without a passes list
-status: open
+status: closed
 labels: [language,effects,design]
 area: language
 milestone: [it-world-loops,nh-effects,lang-sequencing]
 created: 2026-11-02
-updated: 2026-11-03
+updated: 2026-11-04
 ---
 
 Effectful loops take a `passes: List<Nat>` and run `for _ in passes`. This is true of `Io::cat` (`lib/_tests/std/os/linux/linux_world_tests.hthr`), `Io::write_all`, and `Io::tac`/`Io::sort` (`lib/native/runtime/line_tools.hthr`). Minus asked what it is really for (PR #394 review, 2026-11-02). It serves two purposes at once, and neither is the program's intent:
@@ -51,3 +51,4 @@ mean `Io → Partial<Mutated<Io, R>>` (`docs/effects-capabilities-design.md`
   [[eutt-tactics]]; this issue stays the customer rewrite, blocked on the first
   two. "Done when" revised to match.
 - 2026-11-03: [[partial-fn-surface]] landed: `Partial(B)`, `partial fn`, and `while c { … }` with no measure in any carrier with an `Iterate` instance (CoTree, Partial). What this issue still waits on is [[eutt-iteration-and-io-reading]]; a world-threading loop also needs `Iterate` at state over `Partial` (`Io → Partial<Mutated<Io, R>>`), which is an instance away once that carrier is a constructor the unifier learns.
+- 2026-11-04: Done (thread "Give loops over worlds a fuel-free meaning"). `Io::write_all` (now in `linux_world_co`), `Io::tac`, `Io::sort`, `Io::read_lines`, `Io::write_lines` and the test module's `Io::cat` take no `passes` and mean `Io → Partial(Mutated<Io, R>)`, written with `while` and no measure; their probes are `Returns` at a count, with negative controls and a world whose input never ends. A `Source`'s `Repeat` has a fuel-free denotation over `CoTree::iter` (`lib/native/native_source_co.hthr`), the same program as the fuelled one both ways (`Source::tree_co_refines`/`tree_co_refined`, over `ITree::Into`/`CoTree::Onto` in `coitree_bridge`, generalising `iter_refines` to a body that is a family in the fuel). `cat_agrees_piped`/`cat_agrees_failing` state `Eutt` between the source's fuel-free reading and the surface cat at a world (`Io::Reads` at that world). The `while` with no measure has no `break` and does not lower a bind inside a statement arm of its body, so loops stop by a flag and one loop cannot call another (`docs/effects-capabilities-design.md` §4.1).

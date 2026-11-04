@@ -329,19 +329,22 @@ The work, in `issues/`: `partial-fn-surface`, `eutt-iteration-and-io-reading`,
   It is a function of the environment (`Env → CoTree<Flow>`) so that its
   recursion is on the statement: a function whose result is codata is read
   as corecursive.
-- **The bridge** is `Source::tree_co_refines`: every trace the fuelled
-  program `src.denote(args)` produces at some fuel, `src.tree_co(args)`
-  produces at some depth (`Program::Refines`). That is the direction a
-  compiled program's theorem travels: its ELF refines the fuelled program,
-  so it refines the fuel-free one. It is proved construct by construct over
-  a relation `ITree::Into(t, c)` (`coitree_bridge`): `into_bind` splits a
-  bind's trace (`IsTrace::split_bind`, the converse of `IsTrace::bind`, in
-  `itree_trace`) and binds the approximations at the depths each part
-  needs; `into_iter` goes one pass at a time through `CoTree::iter_unfold`,
-  so the fuelled loop's body may use the fuel too (a `Repeat` inside a
-  `Repeat`). The converse direction (the fuel-free tree inside the
-  fuelled program) is not proved; it is what a spec proved on the fuelled
-  side would need to move over, and nothing asks for it yet.
+- **The bridge** is `Program::Refines` both ways, so the fuelled program
+  and the fuel-free tree are the same program. `Source::tree_co_refines`:
+  every trace `src.denote(args)` produces at some fuel, `src.tree_co(args)`
+  produces at some depth. That is the direction a compiled program's
+  theorem travels: its ELF refines the fuelled program, so it refines the
+  fuel-free one. `Source::tree_co_refined` is the converse, which moves a
+  spec proved on the fuelled side over. Both go construct by construct
+  (`coitree_bridge`), over `ITree::Into(t, c)` (a finite tree's traces are
+  the coinductive one's) and `CoTree::Onto(c, p)` (the coinductive tree's
+  are a growing family's). A bind's trace is split (`IsTrace::split_bind`,
+  the converse of `IsTrace::bind`, in `itree_trace`) and each part found
+  at its own depth or fuel, then raised to their sum. A loop is
+  `CoTree::iter_refined`/`iter_refines` generalised to a body that is
+  itself a denotation (`ITree::into_iter`, by induction on the fuel;
+  `CoTree::onto_iter`, by induction on the depth), so a `Repeat` inside a
+  `Repeat`, sharing the source's one fuel, is covered.
 - **The programs.** `Io::write_all` (`linux_world_co`), `Io::tac`,
   `Io::sort`, `Io::read_lines` and `Io::write_lines` (`line_tools`), and
   the test module's `Io::cat` take no `passes` and mean

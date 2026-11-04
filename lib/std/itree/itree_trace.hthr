@@ -274,6 +274,25 @@ theorem ITree::iter_below<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>
     }
 }
 
+// A body that grows at every state grows a loop at the same fuel.
+theorem ITree::iter_body_below<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E), body2: A → ITree<Step<A, B>>(E),
+    grows: (a: A) → ITree::Below(E, body(a), body2(a))): (a: A) →
+    ITree::Below(E, ITree::iter(E, n, body, a), ITree::iter(E, n, body2, a))
+{
+    match n {
+        Zero => λ a => trivial,
+        Succ(m) => λ a => {
+            let step: (x: Step<A, B>) → ITree::Below(E, ITree::iter_next(E, m, body, x), ITree::iter_next(E, m, body2, x)) =
+                λ x => match x {
+                    Continue(a2) => SameTau(ITree::iter(E, m, body2, a2), refl, ITree::iter_body_below(E, m, body, body2, grows, a2)),
+                    Break(_) => refl,
+                };
+            ITree::below_bind(E, body(a), body2(a), λ x => ITree::iter_next(E, m, body, x),
+                λ x => ITree::iter_next(E, m, body2, x), grows(a), step)
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Programs: families of trees indexed by fuel
 

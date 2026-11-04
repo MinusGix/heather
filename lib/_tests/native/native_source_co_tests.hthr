@@ -2,7 +2,8 @@
 // counts down returns at a depth with its status, as the fuelled tree does
 // at enough fuel; a loop that never stops is a tree that never returns,
 // where every fuelled tree is cut; procedures nest to the source's depth
-// as before; and the bridge (`Source::tree_co_refines`) at a source. The
+// as before; and the bridge (`Source::tree_co_refines`, `tree_co_refined`)
+// at a source. The
 // negative controls: a wrong status, and a depth too small to reach the
 // end. Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
@@ -60,9 +61,15 @@ fn calls(depth: Nat) → Source {
 }
 theorem calls_too_deep(): status_after(calls(3), 20) = ORet(139) { refl }
 
-// The bridge at a source: its fuelled program is inside its fuel-free one.
+// The bridge at a source, both ways: the fuelled program and the fuel-free
+// tree have the same traces.
 theorem countdown_refines(k: Nat):
     Program::Refines(Events::linux(), countdown(k).denote([]), CoTree::program(Events::linux(), countdown(k).tree_co([])))
 {
     countdown(k).tree_co_refines([])
+}
+theorem countdown_refined(k: Nat):
+    Program::Refines(Events::linux(), CoTree::program(Events::linux(), countdown(k).tree_co([])), countdown(k).denote([]))
+{
+    countdown(k).tree_co_refined([])
 }
