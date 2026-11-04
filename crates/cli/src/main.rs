@@ -193,7 +193,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
     let mut opts = Opts {
         search: Vec::new(),
         cache: false,
-        cache_dir: PathBuf::from(heather_cache::DEFAULT_DIR),
+        cache_dir: heather_cache::default_dir(),
         json: false,
         deny_axioms: false,
         review: false,

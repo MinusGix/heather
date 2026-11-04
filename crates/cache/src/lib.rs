@@ -16,7 +16,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use heather_elab::gate::{GateItem, KernelGate};
 use heather_kernel::term::GlobalCtx;
@@ -52,6 +52,50 @@ pub const ELABORATOR_SEMANTICS: &str = env!("HEATHER_ELABORATOR_SEMANTICS");
 
 /// The per-repository cache directory, relative to the working directory.
 pub const DEFAULT_DIR: &str = ".heather/cache";
+
+/// Names a directory to hold every cache this checkout's tools and suites
+/// keep, in place of their defaults. For several checkouts of one repository
+/// (git worktrees, one per agent) that should share what they can: every
+/// store below is content-addressed, and every replay is kernel-rechecked or
+/// vouched for under the reader's own kernel (`docs/cache-v1-design.md`), so a
+/// shared store can cost a miss but never a wrong answer. A relative value is
+/// taken from the repository root (from the working directory for
+/// [`default_dir`]); set it absolute.
+pub const CACHE_DIR_ENV: &str = "HEATHER_CACHE_DIR";
+
+/// The stores the suites and gates share, by name beneath [`store_root`].
+pub const SEMANTIC_TEST_IMAGES: &str = "semantic-test-images";
+pub const NATIVE_TEST_IMAGES: &str = "native-test-images";
+pub const CLI_CHECK_IMAGES: &str = "cli-check-images";
+pub const DECL_CACHE: &str = "decl-cache";
+
+fn cache_dir_env() -> Option<PathBuf> {
+    std::env::var_os(CACHE_DIR_ENV).filter(|d| !d.is_empty()).map(PathBuf::from)
+}
+
+/// Where the suites' and gates' stores live: `$HEATHER_CACHE_DIR`, else the
+/// checkout's `target/`. Independent of `CARGO_TARGET_DIR`, which moves
+/// Cargo's build and not these.
+pub fn store_root(repo_root: &Path) -> PathBuf {
+    match cache_dir_env() {
+        Some(dir) => repo_root.join(dir),
+        None => repo_root.join("target"),
+    }
+}
+
+/// One named store beneath [`store_root`] ([`SEMANTIC_TEST_IMAGES`] and the rest).
+pub fn shared_store(repo_root: &Path, name: &str) -> PathBuf {
+    store_root(repo_root).join(name)
+}
+
+/// `heather check --cache`'s directory when no `--cache-dir` names one:
+/// `$HEATHER_CACHE_DIR/check`, else [`DEFAULT_DIR`].
+pub fn default_dir() -> PathBuf {
+    match cache_dir_env() {
+        Some(dir) => dir.join("check"),
+        None => PathBuf::from(DEFAULT_DIR),
+    }
+}
 
 /// What a run did, for the output line that keeps trust visible.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]

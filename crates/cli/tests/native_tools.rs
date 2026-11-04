@@ -36,7 +36,7 @@ fn write_program(module: &str, symbol: &str, output: &Path, both_allocators: boo
     cmd.current_dir(&root)
         .args(["write-elf", module, symbol, "-o"])
         .arg(output)
-        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+        .arg("--cache-dir").arg(showcase::cli_check_images());
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }
@@ -506,7 +506,7 @@ fn reflected_word_program_is_current() {
     let result = Command::new(env!("CARGO_BIN_EXE_heather"))
         .current_dir(&root)
         .args(["reflect", "lib/native/native_tool_words.hthr", "raise_letter", "-o"]).arg(&output)
-        .arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES)
+        .arg("--cache-dir").arg(showcase::cli_check_images())
         .output().unwrap();
     assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
     assert!(!output.with_extension("unchecked.hthr").exists(), "no unchecked module is left");

@@ -27,6 +27,11 @@
     image format, the caches or the loader (`crates/cache`,
     `crates/cli/src/semantic.rs`). Why: `docs/testing-architecture-design.md`.
     Docs-only or issue-only changes need no suite at all.
+  - **`HEATHER_CACHE_DIR`** moves every suite and gate store (the semantic,
+    native and CLI image stores, `decl-cache`, and `heather check --cache`'s
+    default) out of `target/`, so worktrees of this repo can share them
+    (`issues/shared-cache-dir.md`). Never point two worktrees at one
+    `CARGO_TARGET_DIR`: Cargo's mtime freshness then runs the other's build.
   - `scripts/test --long` (own target dir) also runs every slow kernel
     self-check every time (`crates/kernel/src/checks.rs`; the default samples
     one in sixteen) — a sweep for rounds touching the kernel's traversals or

@@ -97,7 +97,7 @@ export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
 export const PREREQUISITES = new Map([["library", {
   readers: ["native_cat", "native_tools"],
   built: ["lib/native", "lib/_tests/native"],
-  store: "target/cli-check-images",
+  store: "cli-check-images",
 }]]);
 const PROBE_SECONDS = 10;
 
@@ -132,9 +132,15 @@ export function binaryOf(text, name) {
 
 // The probe's command: the modules of `built`'s loads that `store` has no
 // image of, under the lane's image policy (the gate's and `write-elf`'s).
+// `store` names a store beneath target/, or beneath $HEATHER_CACHE_DIR when it
+// is set, as the gate's own path does (heather_cache::store_root).
 export function probeArgs({ built, store }, env = process.env) {
   const stale = env.HEATHER_SEMANTIC_IMAGES === "accept-stale" ? ["--accept-stale-images"] : [];
-  return ["check", "--cache-dir", store, ...stale, "--unbuilt", ...built];
+  return ["check", "--cache-dir", storePath(store, env), ...stale, "--unbuilt", ...built];
+}
+
+export function storePath(store, env = process.env) {
+  return `${env.HEATHER_CACHE_DIR || "target"}/${store}`;
 }
 
 // Resolves to true when the probe found nothing unbuilt (exit 0); a refusal,

@@ -243,6 +243,8 @@ test("the probe is the manifest's heather asking the gate's store under the lane
   assert.deepEqual(probeArgs(library, {}),
     ["check", "--cache-dir", "target/cli-check-images", "--unbuilt", "lib/native", "lib/_tests/native"]);
   assert.deepEqual(probeArgs(library, { HEATHER_SEMANTIC_IMAGES: "accept-stale" }).slice(3, 4), ["--accept-stale-images"]);
+  // A shared cache directory moves the store the probe asks, as it moves the gate's.
+  assert.deepEqual(probeArgs(library, { HEATHER_CACHE_DIR: "/lanes/base" }).slice(1, 3), ["--cache-dir", "/lanes/base/cli-check-images"]);
 });
 
 test("the wrapper's CPU line is summed and removed from the child's output", () => {

@@ -61,12 +61,21 @@ pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("repo root")
 }
 
-/// The semantic image store the CLI's check gates share, repo-relative: the
+/// The semantic image store the CLI's check gates share: the
 /// showcase rows (`tests/showcase.rs`) and the whole-library gate
 /// (`tests/library.rs`) check the same library prefix, so one store lets
 /// either replay what the other built. The store's single-flight build makes
 /// concurrent askers wait rather than elaborate a module twice.
-pub const CLI_CHECK_IMAGES: &str = "target/cli-check-images";
+/// `target/cli-check-images`, or beneath `$HEATHER_CACHE_DIR` when it is set.
+pub fn cli_check_images() -> PathBuf {
+    heather_cache::shared_store(&repo_root(), heather_cache::CLI_CHECK_IMAGES)
+}
+
+/// The store the native tests and their `compile-x86` children share:
+/// `target/native-test-images`, or beneath `$HEATHER_CACHE_DIR`.
+pub fn native_test_images() -> PathBuf {
+    heather_cache::shared_store(&repo_root(), heather_cache::NATIVE_TEST_IMAGES)
+}
 
 pub fn manifest_path() -> PathBuf {
     repo_root().join("docs/showcase/showcases.tsv")

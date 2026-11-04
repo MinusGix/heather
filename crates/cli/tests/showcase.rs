@@ -39,7 +39,7 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
     // fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`, set by
     // scripts/test) replays an image an earlier build wrote, as
     // crates/elab/tests/support does.
-    cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+    cmd.arg("--cache").arg("--cache-dir").arg(showcase::cli_check_images());
     // Every library module is keyed by its own closure
     // (`docs/module-dag-design.md`), so the row's closure replays the gate's
     // images and only the row's own module is elaborated.
