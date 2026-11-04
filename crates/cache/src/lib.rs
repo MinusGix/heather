@@ -237,11 +237,14 @@ impl Cache {
         self.inner.borrow().store.entries.len()
     }
 
-    /// Write the file back if anything was added.
+    /// Write the file back if anything was added, or if this kernel's
+    /// section is due a fresh last-used stamp (`store::REFRESH_SECS`): other
+    /// kernels sharing the store evict by that stamp.
     pub fn save(&self) -> std::io::Result<()> {
         let inner = self.inner.borrow();
-        if inner.store.dirty {
-            inner.store.save(KERNEL_SEMANTICS)?;
+        let now = store::now_secs();
+        if inner.store.wants_save(now) {
+            inner.store.save_at(KERNEL_SEMANTICS, now)?;
         }
         Ok(())
     }
