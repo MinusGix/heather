@@ -5,7 +5,7 @@ labels: [native,compiler,metaprogramming]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-11-01
+updated: 2026-11-04
 ---
 
 Round R5 of `docs/compiler-milestones-proposal.md` (§4.2 N1, §7): the `runtime fn` generator and the default
@@ -39,3 +39,19 @@ integration round. The other slices have their own issues:
 ## Log
 
 - 2026-11-01: The prefix mechanism R5d uses is built ([[declaration-prefix-generators]]): `runtime` is called as `runtime("f", setup…)` after `f` is published, and `lookup("f")` gives its `GlobalRef` (docs/value-definitions-design.md §3.2).
+- 2026-11-04 (round 1): the generator, the setup record and the `Compile` class
+  (`lib/native/runtime/runtime.hthr`, design §16.8). `runtime fn f` publishes
+  `f::rt`, `f::world`, `f::judged`, `f::reflects`, `f::code`, `f::agrees` and
+  `instance Compile(f)` for N1's word fragment; callees are found by the walk
+  (a global with a published `g::rt`) and answered by table index, so
+  `f::agrees` assumes `Tm::CallsAgree`. Probes:
+  `lib/_tests/native/runtime/runtime_tests.hthr` (calls, connectives, sharing,
+  a convoy, instance search, five refusals). Host: `DeclForm::AsInstance`, and
+  the numeral reader reads runs whole. Still open here: the program wrapper
+  (one FunctionIR program from the callees' instances, discharging
+  `CallsAgree`), `compile-x86` on `Compile(f)` (with `mix.hthr` opting in and
+  unmarked functions refused), the Rust reflector's deletion (it also covers
+  loops, which `rt_lower` does not yet: `Fold`, measured recursion), `heather
+  reflect` from instances, and callees by instance search so a hand-written
+  instance can be called. Filed [[class-carrier-as-term]].
+

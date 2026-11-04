@@ -187,7 +187,11 @@ record Projected { ty: GlobalRef, fields: List<FieldProj> }
 // is already published when it runs (`lookup(name)` finds it); a prefixed
 // `def` is not, and the group must declare that name.
 
-inductive DeclForm { AsTheorem, AsFunction, AsValue }
+// `AsInstance(class, args, index)` is a value (`AsValue`) that is also
+// registered as the instance `class<args…>(index…)`, its index arguments
+// named (an instance head spells its index by name), its fields read off the
+// value: the same instance written in source as `{ f := name.f, … }`.
+inductive DeclForm { AsTheorem, AsFunction, AsValue, AsInstance(class: String, args: List<Expr>, index: List<String>) }
 
 record Param { x: LocalRef, implicit: Bool }
 
@@ -983,7 +987,27 @@ fn decls_at(ds: List<Decl>, i: Nat) → Decl {
 fn host_decl(t: Tac<Expr>, i: Nat) → Decl { decls_at(host_decls(t), i) }
 
 // 0: a theorem. 1: a function.
-fn decl_form(d: Decl) → Nat { match d.form { AsTheorem => 0, AsFunction => 1, AsValue => 2 } }
+fn decl_form(d: Decl) → Nat { match d.form { AsTheorem => 0, AsFunction => 1, AsValue => 2, AsInstance(_, _, _) => 3 } }
+
+fn decl_instance_class(d: Decl) → String { match d.form { AsInstance(c, _, _) => c, _ => "" } }
+
+fn decl_instance_args(d: Decl) → List<Expr> { match d.form { AsInstance(_, args, _) => args, _ => [] } }
+
+fn decl_instance_arg_count(d: Decl) → Nat { exprs_len(decl_instance_args(d)) }
+
+fn decl_instance_arg(d: Decl, i: Nat) → Expr { exprs_at(decl_instance_args(d), i) }
+
+fn decl_instance_names(d: Decl) → List<String> { match d.form { AsInstance(_, _, index) => index, _ => [] } }
+
+fn strings_len(ss: List<String>) → Nat { match ss { Nil => 0, Cons(_, rest) => Succ(strings_len(rest)) } }
+
+fn strings_at(ss: List<String>, i: Nat) → String {
+    match ss { Nil => "", Cons(s, rest) => match i { Zero => s, Succ(k) => strings_at(rest, k) } }
+}
+
+fn decl_instance_index_count(d: Decl) → Nat { strings_len(decl_instance_names(d)) }
+
+fn decl_instance_index(d: Decl, i: Nat) → String { strings_at(decl_instance_names(d), i) }
 
 fn decl_name(d: Decl) → String { d.name }
 

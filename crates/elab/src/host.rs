@@ -113,24 +113,27 @@ impl<'a, 'v> Reader<'a, 'v> {
         ev.force(c).and_then(|v| ev.delta_whnf(v)).map_err(|_| "the host query ran out of fuel".to_string())
     }
 
-    /// A numeral's value, a run of successors at a time; past a million it
-    /// declines.
+    /// A numeral's value, a run of successors at a time. Past a million
+    /// single successors it declines (each is a step); a run is read whole,
+    /// so a literal word (`0x0123456789abcdef`, which a `runtime fn`'s
+    /// reflection quotes back) reads in one step, up to `u64::MAX`.
     pub(crate) fn nat(&self, c: &'v TmClo<'v>) -> Result<u64, String> {
         let mut v = self.force(c)?;
         let mut n = 0u64;
+        let mut steps = 0u64;
         loop {
             let next = match &*v {
                 Val::Zero => return Ok(n),
                 Val::Succ(p) => {
-                    n += 1;
-                    if n > 1_000_000 {
+                    n = n.checked_add(1).ok_or("an implausible numeral")?;
+                    steps += 1;
+                    if steps > 1_000_000 {
                         return Err("an implausible numeral".into());
                     }
                     *p
                 }
                 Val::NatRun { program, tail } => {
-                    let remaining = 1_000_000 - n;
-                    let Some(count) = ContextProgram::repetition_count_up_to(program, remaining)
+                    let Some(count) = ContextProgram::repetition_count_up_to(program, u64::MAX - n)
                     else {
                         return Err("an implausible numeral".into());
                     };
@@ -343,6 +346,9 @@ pub struct DeclView {
     pub theorem: bool,
     /// `AsValue`: a `def`, which takes no parameters.
     pub value: bool,
+    /// `AsInstance(class, args, index)`: a `def` that is also registered as
+    /// the instance `class<args…>(index…)`, the index arguments by name.
+    pub instance: Option<(String, Vec<RExpr>, Vec<String>)>,
     pub name: String,
     pub params: Vec<(u64, bool)>,
     pub result: RExpr,
@@ -661,9 +667,22 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             let form = self.nat_of("decl_form", vec![d])?;
+            let instance = if form == 3 {
+                let class = self.string(self.call("decl_instance_class", vec![d])?)?;
+                let args = (0..self.nat_of("decl_instance_arg_count", vec![d])?)
+                    .map(|j| self.expr(self.call("decl_instance_arg", vec![d, self.lit(j)])?, &mut budget))
+                    .collect::<Result<Vec<_>, String>>()?;
+                let index = (0..self.nat_of("decl_instance_index_count", vec![d])?)
+                    .map(|j| self.string(self.call("decl_instance_index", vec![d, self.lit(j)])?))
+                    .collect::<Result<Vec<_>, String>>()?;
+                Some((class, args, index))
+            } else {
+                None
+            };
             decls.push(DeclView {
                 theorem: form == 0,
-                value: form == 2,
+                value: form == 2 || form == 3,
+                instance,
                 name: self.string(self.call("decl_name", vec![d])?)?,
                 params,
                 result: self.expr(self.call("decl_result", vec![d])?, &mut budget)?,
@@ -1451,6 +1470,9 @@ impl Run {
 pub(crate) struct Member {
     theorem: bool,
     value: bool,
+    /// The instance the value is registered as: the class, its type
+    /// arguments (in the root scope) and its index arguments by name.
+    instance: Option<(String, Vec<(Type, Level)>, Vec<String>)>,
     name: String,
     params: Vec<(String, bool, Type, Level)>,
     result: (Type, Level),
@@ -3699,6 +3721,22 @@ impl Elaborator {
         if d.value && !d.params.is_empty() {
             return Err(at("a value (`AsValue`) takes no parameters; a function is `AsFunction`".into()));
         }
+        let instance = match &d.instance {
+            None => None,
+            Some((class, args, index)) => {
+                let args = args
+                    .iter()
+                    .map(|a| self.reify_ty(run, a, 0))
+                    .collect::<Result<Vec<_>, Fault>>()
+                    .map_err(|f| at(format!("its instance's type argument: {}", f.msg())))?;
+                let args = args
+                    .into_iter()
+                    .map(|(t, l)| run.committed_ty(&t).map(|t| (t, l)))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| at("its instance's type argument mentions a hole nothing solved".into()))?;
+                Some((class.clone(), args, index.clone()))
+            }
+        };
         let mut parent = 0;
         let mut params = Vec::with_capacity(d.params.len());
         for &(x, implicit) in &d.params {
@@ -3729,7 +3767,7 @@ impl Elaborator {
         let unsolved = |what: &str| at(format!("its {what} mentions a hole nothing solved"));
         let result = run.committed_ty(&result).ok_or_else(|| unsolved("statement"))?;
         let body = run.committed_tm(&body.term).ok_or_else(|| unsolved("body"))?;
-        Ok(Member { theorem: d.theorem, value: d.value, name: name.clone(), params, result: (result, level), body })
+        Ok(Member { theorem: d.theorem, value: d.value, instance, name: name.clone(), params, result: (result, level), body })
     }
 
     /// Elaborate one generated declaration from its skeleton (see
@@ -3776,7 +3814,81 @@ impl Elaborator {
         fills.push((Held::Type(result.clone(), level.clone()), n));
         fills.push((Held::Term(m.body.clone(), result.clone(), level.clone()), n));
         let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
-        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_decl(&decl))
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_decl(&decl))?;
+        match &m.instance {
+            None => Ok(()),
+            Some(instance) => self.publish_instance_member(&m.name, instance, psi, span),
+        }
+    }
+
+    /// An `AsInstance` member, after its value is published: the instance
+    /// `class<args…>(index…) { field := name.field, … }`, elaborated as the
+    /// same instance written in source (so its key, its coherence and its
+    /// index spelling are the ordinary checks). The type arguments are
+    /// leaves standing for the types the generator built.
+    fn publish_instance_member(
+        &mut self,
+        name: &str,
+        (class, args, index): &(String, Vec<(Type, Level)>, Vec<String>),
+        psi: usize,
+        span: Span,
+    ) -> R<()> {
+        use heather_syntax::ast::{ClassRef, ExprKind, InstanceBody, InstanceDecl, InstanceField, Ty, TyKind};
+        let Some(info) = self.key_of(class).and_then(|key| self.traits.class(&key).cloned()) else {
+            return err(format!("`{name}` is to be an instance of `{class}`, which is not a class in scope"), span);
+        };
+        let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span };
+        let fields = info
+            .fields
+            .iter()
+            .filter_map(|f| f.name.clone())
+            .map(|field| InstanceField {
+                expr: Expr {
+                    kind: ExprKind::Dot { recv: Box::new(var(name)), name: field.clone(), tyargs: Vec::new(), args: None, named: Vec::new() },
+                    span,
+                },
+                name: field,
+                span,
+            })
+            .collect();
+        // Each type argument is a leaf standing for the type the generator
+        // built, read in the empty context. A function type is spelled as an
+        // arrow between two leaves (its codomain read under the binder),
+        // because an instance's key reads the carrier's head off its
+        // spelling: an arrow is keyed as an arrow (`#Fn`), a leaf by nothing.
+        let leaf = |k: usize| Ty { kind: TyKind::Named { name: format!("{LEAF}{k}"), args: Vec::new() }, span };
+        let mut fills: Vec<(Held, usize)> = Vec::new();
+        let mut spelled = Vec::with_capacity(args.len());
+        for (t, l) in args {
+            match t {
+                Type::Pi { dom_level, cod_level, dom, cod } => {
+                    let k = fills.len();
+                    fills.push((Held::Type((**dom).clone(), dom_level.clone()), 0));
+                    fills.push((Held::Type((**cod).clone(), cod_level.clone()), 1));
+                    spelled.push(Ty { kind: TyKind::Fn { binder: None, implicit: false, dom: Box::new(leaf(k)), cod: Box::new(leaf(k + 1)) }, span });
+                }
+                _ => {
+                    spelled.push(leaf(fills.len()));
+                    fills.push((Held::Type(t.clone(), l.clone()), 0));
+                }
+            }
+        }
+        let decl = InstanceDecl {
+            tyvars: Vec::new(),
+            valparams: Vec::new(),
+            class: ClassRef {
+                name: class.clone(),
+                args: spelled,
+                index: index.iter().map(|n| var(n)).collect(),
+                path: Vec::new(),
+                span,
+            },
+            requires: Vec::new(),
+            body: InstanceBody::Literal(fields),
+            span,
+        };
+        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_instance(&decl))
     }
 
     /// `Close(split, proofs)`: each proof checked at its branch's goal

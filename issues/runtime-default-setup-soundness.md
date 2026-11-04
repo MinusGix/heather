@@ -5,7 +5,7 @@ labels: [native,compiler,proofs]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-11-02
+updated: 2026-11-04
 ---
 
 Slice R5b of `docs/runtime-fn-setups-design.md` (§2, §5–§7): the `Setup`
@@ -90,3 +90,8 @@ context's codes; branches move records a field at a time; `RecInfo` gains
 through the theorem. Left for N1: the program wrapper, `Fold` and the byte
 primitives, `zero_extend`.
 
+**2026-11-04.** The `Setup` record (`{ name, judge, lower, sound }`, `sound`
+being `Fun::lower_sound`), `Fun::judge` with reasons, and the `Compile` class
+landed in `lib/native/runtime/runtime.hthr` with the generator
+([[runtime-fn-default-setup]], design §16.8). The open items here are
+unchanged: the program wrapper, `Fold` and the byte primitives, `zero_extend`.
