@@ -1,0 +1,255 @@
+// The effectful reflector: a `mut self` method over `Io`, read from its
+// elaborated body as an `ETm` (docs/effects-capabilities-design.md §8.3,
+// issues/effects-uniqueness-surface.md, slice 3).
+//
+// Each `io.m(…)` on the capability elaborates to one call `m(io_k, …)`, a
+// `Mutated` record shared wherever the body reads it: its `.after` is the
+// world the next call takes, its `.value` the answer. The body's result is
+// `Mutated(world, value)`. The reflector:
+//
+// 1. walks the world chain from the result's world back to the `io`
+//    parameter, which gives the call order (`rt_world_calls`);
+// 2. reflects each call's operands as pure `rt` (`rt_reflect`'s walk, with
+//    value numbering), binds them with `Let`s, and emits the `Invoke`;
+// 3. reads every later `.value` (or `.value.buf`, `.value.result`) of a call
+//    as the variables its `Invoke` bound;
+// 4. refuses, at the call, a world that is not the chain's: the capability
+//    read as a value, the world after a call read as a value, or an answer
+//    of a call the chain does not go through (a copy of `io`, a call whose
+//    world after is dropped). That is the linearity check of the default
+//    setup (docs/runtime-fn-setups-design.md §5.1): with no `ETm` able to
+//    name the world, a body that reflects at all threads it straight
+//    through.
+//
+// Untrusted like every producer: the pin `meaning = f` by `refl` is what a
+// `runtime fn` publishes, and a wrong reflection fails it.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import linux_world;
+import rt;
+import rt_io;
+import rt_reflect;
+
+// ---------------------------------------------------------------------------
+// The calls on Linux the reflector knows: the word-level methods `rt_io`
+// defines `Effect::sem` by, in `Effect`'s order.
+
+fn rt_io_method_names() → List<String> { ["Io::read_into", "Io::write_from", "Io::open_path", "Io::close_fd"] }
+
+// The effect of the `i`-th method, at its buffer's capacity.
+fn rt_io_effect(i: Nat, cap: Nat) → Effect {
+    match i { Zero => Reads(cap), Succ(a) => match a { Zero => Writes(cap), Succ(b) => match b { Zero => Opens(cap), Succ(_) => Closes } } }
+}
+
+// Which operand (after the world) is the method's buffer.
+fn rt_io_buffer(i: Nat) → Option<Nat> {
+    match i { Zero => Some(1), Succ(a) => match a { Zero => Some(1), Succ(b) => match b { Zero => Some(0), Succ(_) => None } } }
+}
+
+// The capacity of the call's buffer, from its code.
+fn rt_io_capacity(k: Known, i: Nat, ops: List<Handle>) → Tac<Nat> {
+    match rt_io_buffer(i) {
+        None => Tac::Pure(0),
+        Some(at) => match ops.nth(at) {
+            None => rt_refuse("a call on Linux without its buffer"),
+            Some(b) => k.ty_of(b).bind(λ t => match t {
+                Bytes(c) => Tac::Pure(c),
+                _ => rt_refuse("a call on Linux whose buffer is not a byte buffer"),
+            }),
+        },
+    }
+}
+
+// What a call's `Invoke` binds, at the depth it ran at: a read's buffer and
+// result, any other call's result word.
+fn rt_io_answer(pos: Nat, g: Nat, c: Handle, i: Nat, d: Nat) → CallRes {
+    match i {
+        Zero => CallRes(pos, g, c, None, [Pair("buf", d), Pair("result", Succ(d))]),
+        Succ(_) => CallRes(pos, g, c, Some(d), []),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The walk.
+
+// A computation read so far, the most recent step first: a pure value
+// bound, or a call.
+inductive ESeg { SLet(e: Tm), SInvoke(e: Effect, args: List<Nat>) }
+
+fn ESeg::close(segs: List<ESeg>, last: ETm) → ETm {
+    segs.foldl(λ acc s => match s { SLet(e) => ETm::Let(e, acc), SInvoke(e, args) => ETm::Invoke(e, args, acc) }, last)
+}
+
+fn ESeg::lets(lets: List<Tm>) → List<ESeg> { lets.map(λ e => SLet(e)) }
+
+fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs, k.recs, k.bitvec, k.boolean, k.list, Some(io)) }
+
+record IoWalk { st: RSt, segs: List<ESeg>, io: IoKnown }
+
+// The calls in order: each one's operands as variables (bound by the lets
+// before it), then its `Invoke`, its answer recorded for what follows.
+fn rt_io_calls(fuel: Nat, k: Known, w: IoWalk, calls: List<Handle>) → Tac<IoWalk> {
+    match calls {
+        Nil => Tac::Pure(w),
+        Cons(c, rest) => view(c).bind(λ v => match v {
+            HGlobal(g, name, args) => match Known::index(w.io.methods, g.id, 0) {
+                None => rt_refuse("`" ++ name ++ "` is not a call on Linux the reflector knows"),
+                Some(i) => match args {
+                    Nil => rt_refuse("`" ++ name ++ "` without its world"),
+                    Cons(_, ops) => {
+                        let kw = k.at_world(w.io);
+                        RSt::operands(λ s a => rt_go(fuel, kw, s, a, True), w.st, ops).bind(λ r =>
+                        rt_io_capacity(kw, i, ops).bind(λ cap =>
+                        rt_io_calls(fuel, k, IoWalk(
+                            RSt(r.fst.depth + rt_io_effect(i, cap).results().len(), [], r.fst.memo, r.fst.handles, r.fst.locals),
+                            Cons(SInvoke(rt_io_effect(i, cap), r.fst.indices(r.snd)), ESeg::lets(r.fst.lets) ++ w.segs),
+                            IoKnown(w.io.world, w.io.methods, w.io.calls ++ [rt_io_answer(w.io.calls.len(), g.id, c, i, r.fst.depth)])),
+                            rest)))
+                    },
+                },
+            },
+            _ => rt_refuse("a world that is not the capability threaded through calls"),
+        }),
+    }
+}
+
+// The global a type's head is, if it is one.
+fn rt_io_head(h: Handle) → Tac<Option<Nat>> {
+    view(h).bind(λ v => match v { HGlobal(g, _, _) => Tac::Pure(Some(g.id)), _ => Tac::Pure(None) })
+}
+
+record IoNames { io: Nat, mutated: Nat, methods: List<Nat> }
+
+// An effectful function: its first parameter is the world, its body the
+// record `Mutated(world, value)`.
+fn rt_io_reflect_fun(fuel: Nat, k: Known, names: IoNames, g: Nat) → Tac<EFun> {
+    body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c)).bind(λ b =>
+    view(b).bind(λ bv => match bv {
+        HLam(dom) => rt_io_head(dom).bind(λ dh => match dh.map(λ d => d.same(names.io)).unwrap_or(False) {
+            False => rt_refuse("an effectful function's first parameter is its world, `io: Io`"),
+            True => open(b, "io").bind(λ oc => rt_accepted("its world", oc)).bind(λ o => {
+                let io = IoKnown(o.local.ref.id, names.methods, []);
+                rt_params(fuel, k.at_world(io), RSt(0, [], [], [], []), [], o.body).bind(λ p =>
+                view(p.snd).bind(λ rv => match rv {
+                    HCtor(ty, _, _, fields) => match ty.id.same(names.mutated) {
+                        False => rt_refuse("an effectful body ends in `Mutated(io, value)`"),
+                        True => match fields.rev() {
+                            Cons(value, more) => match more {
+                                Cons(world, _) => rt_world_calls(fuel, io, world).bind(λ calls =>
+                                    rt_io_calls(fuel, k, IoWalk(p.fst.fst, [], io), calls).bind(λ w =>
+                                    rt_go(fuel, k.at_world(w.io), w.st, value, False).bind(λ r =>
+                                    k.at_world(w.io).ty_of(value).bind(λ result =>
+                                    Tac::Pure(EFun(p.fst.snd, result,
+                                        ESeg::close(ESeg::lets(r.fst.lets) ++ w.segs, ETm::Pure(r.snd)))))))),
+                                Nil => rt_refuse("`Mutated` without its world"),
+                            },
+                            Nil => rt_refuse("`Mutated` without its value"),
+                        },
+                    },
+                    HMatch(_) => rt_refuse("an effectful body that branches over its world is not reflected yet (design §8.4)"),
+                    _ => rt_refuse("an effectful body ends in `Mutated(io, value)`"),
+                }))
+            }),
+        }),
+        _ => rt_refuse("an effectful function takes its world `io: Io` first"),
+    }))
+}
+
+fn rt_io_reflect_funs(fuel: Nat, k: Known, names: IoNames, gs: List<Nat>) → Tac<List<EFun>> {
+    match gs {
+        Nil => Tac::Pure([]),
+        Cons(g, rest) => rt_io_reflect_fun(fuel, k, names, g).bind(λ f =>
+            rt_io_reflect_funs(fuel, k, names, rest).bind(λ fs => Tac::Pure(Cons(f, fs)))),
+    }
+}
+
+// The effectful functions `efuns`, by name, reflected from their elaborated
+// bodies; they may call the pure runtime functions `funs` and read the
+// records `recs`.
+fn rt_io_reflect(efuns: List<String>, funs: List<String>, recs: List<String>) → Tac<List<EFun>> {
+    rt_known(funs, recs).bind(λ k =>
+    rt_globals(efuns).bind(λ es =>
+    rt_globals(rt_io_method_names()).bind(λ ms =>
+    rt_global("Io").bind(λ io =>
+    rt_global("Mutated").bind(λ mu =>
+    rt_io_reflect_funs(4096, k, IoNames(io, mu, ms), es))))))
+}
+
+// ---------------------------------------------------------------------------
+// Equality and rendering, for the check and its failures.
+
+fn Effect::same(self a: Effect, b: Effect) → Bool {
+    match a {
+        Reads(c) => match b { Reads(d) => c.same(d), _ => False },
+        Writes(c) => match b { Writes(d) => c.same(d), _ => False },
+        Opens(c) => match b { Opens(d) => c.same(d), _ => False },
+        Closes => match b { Closes => True, _ => False },
+    }
+}
+
+fn ETm::same(self t: ETm) → ETm → Bool {
+    match t {
+        Pure(v) => λ u => match u { Pure(v2) => v.same(v2), _ => False },
+        Let(e, body) => λ u => match u { Let(e2, body2) => e.same(e2).and(body.same(body2)), _ => False },
+        Invoke(e, args, body) => λ u => match u {
+            Invoke(e2, args2, body2) => e.same(e2).and(Tm::nats_same(args, args2)).and(body.same(body2)),
+            _ => False,
+        },
+    }
+}
+
+fn EFun::same(self f: EFun, g: EFun) → Bool {
+    Ty::all_same(f.params, g.params).and(f.result.same(g.result)).and(f.body.same(g.body))
+}
+
+fn Effect::show(self e: Effect) → String {
+    match e {
+        Reads(c) => "Reads(" ++ rt_nat(c) ++ ")",
+        Writes(c) => "Writes(" ++ rt_nat(c) ++ ")",
+        Opens(c) => "Opens(" ++ rt_nat(c) ++ ")",
+        Closes => "Closes",
+    }
+}
+
+fn ETm::show(self t: ETm) → String {
+    match t {
+        Pure(v) => "Pure(" ++ v.show() ++ ")",
+        Let(e, body) => "Let(" ++ e.show() ++ ", " ++ body.show() ++ ")",
+        Invoke(e, args, body) => "Invoke(" ++ e.show() ++ ", [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
+    }
+}
+
+fn EFun::show(self f: EFun) → String {
+    "EFun([" ++ Ty::shows(f.params) ++ "], " ++ f.result.show() ++ ", " ++ f.body.show() ++ ")"
+}
+
+fn rt_io_compare(got: List<EFun>, expected: List<EFun>) → Tac<Expr> {
+    match got {
+        Nil => match expected {
+            Nil => resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => Tac::Pure(Hd(h))),
+            Cons(_, _) => rt_refuse("fewer functions reflected than expected"),
+        },
+        Cons(g, rest) => match expected {
+            Nil => rt_refuse("more functions reflected than expected"),
+            Cons(e, more) => match g.same(e) {
+                True => rt_io_compare(rest, more),
+                False => rt_refuse("the reflection differs:\n  got      " ++ g.show() ++ "\n  expected " ++ e.show()),
+            },
+        },
+    }
+}
+
+// The check `lib/_tests` runs: the reflection of the effectful functions
+// `efuns` is `expected`, function by function. Proves `True`; a difference
+// fails, showing both.
+fn reflects_io_as(efuns: List<String>, funs: List<String>, recs: List<String>, expected: List<EFun>) → Tac<Expr> {
+    rt_io_reflect(efuns, funs, recs).bind(λ got => rt_io_compare(got, expected))
+}
