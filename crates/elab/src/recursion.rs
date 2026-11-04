@@ -243,8 +243,55 @@ fn self_calls(
             self_calls(self_ref, &block.result, &inner, out);
             block.ons.iter().for_each(|o| self_calls(self_ref, &o.expr, &inner, out));
         }
-        _ => crate::surface::for_each_child(e, &mut |c| self_calls(self_ref, c, scope, out)),
+        _ => {
+            crate::surface::for_each_child(e, &mut |c| self_calls(self_ref, c, scope, out));
+            type_children(e, &mut |c| self_calls(self_ref, c, scope, out));
+        }
     }
+}
+
+/// The expressions written inside `e`'s own types, which
+/// [`crate::surface::for_each_child`] does not enter: a `Type`-valued arm
+/// such as `n = n ∧ E(k)` is a type, and the self-call is inside it. The
+/// planner's readers must see such a call, or the `match` around it is not
+/// found to be a recursion and its arms' reads of the parameter go unchecked
+/// (issues/recursion-below-nat-fallback.md).
+fn type_children(e: &Expr, go: &mut dyn FnMut(&Expr)) {
+    match &e.kind {
+        ExprKind::TyLit(t) => ty_exprs(t, go),
+        ExprKind::TyApp { args, .. } => args.iter().for_each(|t| ty_exprs(t, go)),
+        _ => {}
+    }
+}
+
+/// The expressions a written type holds, in the places [`ty_reads`] reads.
+fn ty_exprs(t: &Ty, go: &mut dyn FnMut(&Expr)) {
+    match &t.kind {
+        TyKind::Nat | TyKind::Univ { .. } | TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
+        TyKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        TyKind::OfExpr(e) | TyKind::TypeOf(e) | TyKind::Fin(e) => go(e),
+        TyKind::Named { args, .. } => args.iter().for_each(|a| ty_exprs(a, go)),
+        TyKind::Fn { dom, cod, .. } => {
+            ty_exprs(dom, go);
+            ty_exprs(cod, go);
+        }
+        TyKind::Vec { elem, len } => {
+            ty_exprs(elem, go);
+            go(len);
+        }
+        TyKind::Squash(inner) | TyKind::Code { ty: inner, .. } => ty_exprs(inner, go),
+    }
+}
+
+/// [`crate::surface::walk_expr`], entering written types too
+/// ([`type_children`]).
+fn walk_with_types(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    f(e);
+    crate::surface::for_each_child(e, &mut |c| walk_with_types(c, f));
+    type_children(e, &mut |c| walk_with_types(c, f));
 }
 
 /// `cx` for the arms of a `match` that [`guard_param`] passed over as a case
@@ -280,7 +327,7 @@ pub(crate) fn recurses_on<A: std::borrow::Borrow<heather_syntax::Arm>>(
     let own = &self_ref.params[dec].0;
     let mut found = false;
     for arm in arms {
-        crate::surface::walk_expr(&arm.borrow().body, &mut |e| {
+        walk_with_types(&arm.borrow().body, &mut |e| {
             let Some((args, explicit)) = surface_self_call(self_ref, e) else { return };
             // The written slots skip value implicits unless `@`-marked.
             let slot = (self_ref.n_tyvars..self_ref.params.len())
@@ -315,7 +362,7 @@ fn varied_params(
 ) -> Vec<usize> {
     let mut varied = Vec::new();
     for arm in arms {
-        crate::surface::walk_expr(&arm.body, &mut |e| {
+        walk_with_types(&arm.body, &mut |e| {
             let Some((args, explicit)) = surface_self_call(self_ref, e) else { return };
             let positions = (self_ref.n_tyvars..self_ref.params.len())
                 .filter(|&p| explicit || !self_ref.params[p].1);

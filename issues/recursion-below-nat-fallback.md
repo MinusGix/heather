@@ -4,7 +4,7 @@ status: open
 labels: [recursion,elaboration]
 area: language
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-04
 ---
 
 Slice 1 of docs/recursion-at-the-top-design.md §4 option A, which Minus
@@ -28,10 +28,16 @@ the current one refuses.
 
 ## Acceptance
 
-- `lib/_tests/std/core/recursion_binder_tests.hthr`'s `unused_read` and the
-  `walk_shape` example of [[recursion-case-split-dependent-ih]] are
-  accepted, with `refl` probes at literals *and* a neutral-argument
-  unfolding (`f(Succ(k), …) = …` by `refl`), plus a negative control (a
-  call on a non-subterm still refused, by name).
+- `lib/_tests/std/core/recursion_at_top_tests.hthr`: the parameter read
+  inside its arm (an unused `let`, the arm's value), a `let` above the
+  `match` from a varied parameter, an open element type and a `Type`-valued
+  recursion, each with `refl` at a literal *and* an open-argument unfolding;
+  a negative control refused with the plain lowering's message.
 - `heather check --review`'s meaning check passes on them.
-- Display folds the accessor back to `f(k)` in a goal that whnfs through it.
+- The [[recursion-case-split-dependent-ih]] `walk_shape` example turned out
+  not to be a lowering question (docs/recursion-at-the-top-design.md §5),
+  so it is not part of this slice.
+
+## Log
+
+- 2026-11-04: 2026-11-04: Built (docs/recursion-at-the-top-design.md §5): a top wrapper over the one-level Nat guard, taking the constructor arm of a Nat match inside it, tried at a ByMeasure plan, a Misplaced refusal and a refused self-call, rolled back on failure. Found and fixed on the way: the planner missed self-calls written inside types, so a Type-valued arm reading its parameter (`n = n ∧ E(k)`) was compiled with the top call's value; it now lowers at the top.

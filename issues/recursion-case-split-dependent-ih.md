@@ -4,7 +4,7 @@ status: open
 labels: [frontend,recursion,elaboration]
 area: language
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-04
 ---
 
 A case split inside structural recursion keeps the enclosing guard
@@ -43,3 +43,4 @@ passing it varied.
 ## Log
 
 - 2026-11-02: A top-level recursion lowering would retire this family: [[recursion-on-elaborated-terms]]; meanwhile [[recursion-meaning-check]] catches miscompiles.
+- 2026-11-04: 2026-11-04: Recursion at the top ([[recursion-below-nat-fallback]]) generalizes `n`, but `walk_shape` still does not check there: the call passes the arm's `n`, which a `match` does not substitute by the arm's constructor, so its type is about `n` while the goal is about `Zero` in any lowering. The remaining fix is a match refinement (the arm's `n` is the pattern), not a recursion one (docs/recursion-at-the-top-design.md §5). Passing the constructor (`walk_shape(k, 0)`) is accepted already.

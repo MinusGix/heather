@@ -3642,16 +3642,190 @@ impl Elaborator {
             match recursion::plan(&self_ref, &types, &decl.body) {
                 recursion::RecursionPlan::Structural => {}
                 recursion::RecursionPlan::ByMeasure { dec, read, name, from } => {
+                    // Recursion at the top means the source wherever it
+                    // elaborates, and unfolds by conversion; the measure is
+                    // the fallback (docs/recursion-at-the-top-design.md §4).
+                    if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec) {
+                        return Ok(());
+                    }
                     return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name, from);
                 }
+                // Refused only at a self-call lowered under a guard on
+                // `dec`, so the plain lowering goes first; its refusal is
+                // what recursion at the top answers.
                 recursion::RecursionPlan::Misplaced { dec, msg } => {
-                    let misplaced = Some((self_ref.name.clone(), dec, msg));
-                    return self.scoped(|s| s.misplaced_recursion.get_mut(), misplaced, |me| me.elab_decl_one(decl, None));
+                    let misplaced = Some((self_ref.name.clone(), dec, msg.clone()));
+                    return self.elab_at_top_on_refusal(decl, Some(&msg), |me| {
+                        me.scoped(|s| s.misplaced_recursion.get_mut(), misplaced, |me| me.elab_decl_one(decl, None))
+                    });
                 }
             }
-            return self.elab_structural_fn(decl);
+            return self.elab_at_top_on_refusal(decl, None, |me| me.elab_structural_fn(decl));
+        }
+        if decl.kind == DeclKind::Theorem {
+            return self.elab_at_top_on_refusal(decl, None, |me| me.elab_decl_one(decl, None));
         }
         self.elab_decl_one(decl, None)
+    }
+
+    /// Can `decl` recurse at the top on parameter `dec` (an index into the
+    /// type parameters then the value parameters)? Slice 1 is an explicit
+    /// `Nat` parameter (docs/recursion-at-the-top-design.md §4).
+    fn at_top_candidate(&self, decl: &Decl, dec: usize) -> bool {
+        dec.checked_sub(decl.tyvars.len())
+            .and_then(|i| decl.params.get(i))
+            .is_some_and(|p| !p.implicit && matches!(p.ty.kind, TyKind::Nat))
+    }
+
+    /// Elaborate `decl` by `elaborate`; where that refuses a self-call (a
+    /// structural refusal: the call does not descend at the guard the
+    /// lowering chose), try each explicit `Nat` parameter at the top before
+    /// reporting it (docs/recursion-at-the-top-design.md §4, slice 1).
+    fn elab_at_top_on_refusal(
+        &mut self,
+        decl: &Decl,
+        misplaced: Option<&str>,
+        elaborate: impl FnOnce(&mut Self) -> R<()>,
+    ) -> R<()> {
+        let error = match elaborate(self) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let refused_call = matches!(&error, ElabError::Elab { msg, .. }
+            if msg.starts_with(&format!("recursive call to `{}`", recursion::SelfRef::of_decl(decl).name))
+                || Some(msg.as_str()) == misplaced);
+        if !refused_call {
+            return Err(error);
+        }
+        let first = decl.tyvars.len();
+        for dec in first..first + decl.params.len() {
+            if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec) {
+                return Ok(());
+            }
+        }
+        Err(error)
+    }
+
+    /// One attempt at recursion at the top on `dec`: elaborated and gated
+    /// like any declaration, and on failure rolled back with everything it
+    /// raised, since the caller has another lowering (or the original
+    /// refusal) to fall back to. Gated inline, as the meaning check is: at a
+    /// wider pool a kernel refusal would fail the module's join instead of
+    /// this attempt. On success `f_unfold` follows, the source equation
+    /// clients cite (the measure lowering's artifact, which this replaces).
+    fn try_recursion_at_top(&mut self, decl: &Decl, dec: usize) -> bool {
+        let lowered = self.recursion_at_top_body(decl, dec);
+        let warn_mark = self.pass.warnings.borrow().len();
+        let at = Some((dec, lowered.span));
+        let width = self.pass.kernel_pool.swap_width(1);
+        let r = self.session_transaction(|me| {
+            me.scoped(|s| &mut s.recursion_at_top, at, |me| me.elab_decl_one(&lowered, None))
+        });
+        self.pass.kernel_pool.swap_width(width);
+        if r.is_err() {
+            self.pass.warnings.borrow_mut().truncate(warn_mark);
+            return false;
+        }
+        let decs = self.attempt.recursion_decs.borrow().clone();
+        // `f(x̄) = { body }`, by one split on the parameter: each side takes
+        // the same step, which is the lowering's whole claim (§3).
+        let param = &decl.params[dec - decl.tyvars.len()];
+        let proof = self.meaning_split(&param.name, &param.ty, 1, &mut 0, decl.span);
+        let mut unfold = meaning::meaning_decl(decl, proof);
+        unfold.name = measure::unfold_name(&decl.name);
+        if let Err(e) = self.elab_decl_one(&unfold, None) {
+            self.pass.unfold_refusals.borrow_mut().insert(
+                unfold.name.clone(),
+                format!("the generated `{}` was refused ({e})", unfold.name),
+            );
+        }
+        if self.policy.review_lints && !decs.is_empty() {
+            self.review_recursion_meaning(decl, &decs);
+        }
+        true
+    }
+
+    /// `decl` with its body under one `match` on parameter `dec`, each arm
+    /// rebinding the parameter's name to that arm's constructor term:
+    ///
+    /// ```text
+    /// match z { Zero => { let z = Zero; body }, Succ(z#pred) => { let z = Succ(z#pred); body } }
+    /// ```
+    ///
+    /// Elaborated under [`DynamicScope::recursion_at_top`], this `match` is
+    /// the recursion and every other explicit parameter is generalized, so
+    /// the body recomputes at each level with this level's values: a read of
+    /// `z` is this level's `z`, and a `match z` inside takes its arm, whose
+    /// predecessor is the guard's (docs/recursion-at-the-top-design.md §3).
+    fn recursion_at_top_body(&self, decl: &Decl, dec: usize) -> Decl {
+        let span = decl.span;
+        let z = decl.params[dec - decl.tyvars.len()].name.clone();
+        let pred = format!("{z}#pred");
+        let var = |name: &str| Expr { kind: ExprKind::Var(name.to_string()), span };
+        let arm = |ctor: &str, binders: Vec<heather_syntax::Pat>, value: Expr| {
+            let mut stmts = vec![heather_syntax::Stmt::Let { name: z.clone(), ty: None, expr: value, span, opaque: false }];
+            stmts.extend(decl.body.stmts.iter().cloned());
+            heather_syntax::Arm {
+                ctor: ctor.to_string(),
+                default: false,
+                binders,
+                body: Expr {
+                    kind: ExprKind::Block(Box::new(heather_syntax::Block {
+                        stmts,
+                        result: decl.body.result.clone(),
+                        ons: decl.body.ons.clone(),
+                        span: decl.body.span,
+                    })),
+                    span: decl.body.span,
+                },
+                span,
+            }
+        };
+        let succ = Expr {
+            kind: ExprKind::App {
+                head: Box::new(var("Succ")),
+                args: vec![var(&pred)],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let arms = vec![
+            arm("Zero", Vec::new(), var("Zero")),
+            arm("Succ", vec![heather_syntax::Pat::Var { name: pred.clone(), span }], succ),
+        ];
+        let mut lowered = decl.clone();
+        lowered.body = heather_syntax::Block {
+            stmts: Vec::new(),
+            result: Box::new(Expr {
+                kind: ExprKind::Match {
+                    form: MatchForm::Match,
+                    generated: true,
+                    scrut: Box::new(var(&z)),
+                    eqbind: None,
+                    motive: None,
+                    arms,
+                },
+                span,
+            }),
+            ons: Vec::new(),
+            span: decl.body.span,
+        };
+        lowered
+    }
+
+    /// The parameter a `match` at `span` recurses on, if it is the `match`
+    /// [`Self::recursion_at_top_body`] wrapped the declaration in.
+    pub(crate) fn top_guard(&self, span: Span) -> Option<usize> {
+        self.scope.recursion_at_top.filter(|&(_, at)| at == span).map(|(dec, _)| dec)
+    }
+
+    /// What recursion at the top generalizes: every explicit value
+    /// parameter but the one it recurses on, ascending.
+    fn top_positions(cx: &Cx, dec: usize) -> Vec<usize> {
+        let Some(s) = cx.selfref.as_ref() else { return Vec::new() };
+        (s.n_tyvars..s.params.len()).filter(|&p| p != dec && !s.params[p].1).collect()
     }
 
     /// A `fn` the planner lowers structurally. In review mode, also check
@@ -5616,10 +5790,12 @@ impl Elaborator {
                 // leaves the enclosing guard standing (`guard_param`), and
                 // its arms' calls vary nothing of its own.
                 let dec = recursion::descends_on_param(cx, &scrut_t);
-                let guard = recursion::guard_param(cx, &scrut_t, arms);
-                let mut positions = match guard {
-                    Some(dec) => self.varying_params(cx, arms, dec),
-                    None => Vec::new(),
+                let top = self.top_guard(e.span);
+                let guard = top.or_else(|| recursion::guard_param(cx, &scrut_t, arms));
+                let mut positions = match (top, guard) {
+                    (Some(dec), _) => Self::top_positions(cx, dec),
+                    (None, Some(dec)) => self.varying_params(cx, arms, dec),
+                    (None, None) => Vec::new(),
                 };
                 // With `match h:` the convoy's equation is stated about the
                 // computed scrutinee itself, and an arm that passes `h` to a

@@ -1,0 +1,72 @@
+// Probes of recursion at the top on `Nat` (docs/recursion-at-the-top-design.md
+// §3, issues/recursion-below-nat-fallback.md): where compiling the recursion
+// at the `match` would not mean the source (the parameter, or a `let` from a
+// parameter the calls vary, read inside the arm), the body is compiled under
+// one `match` on the parameter at the top, every other explicit parameter
+// generalized, so it recomputes at each level. Unfolding holds by conversion,
+// at a literal and at an open argument. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import list;
+
+// The parameter read inside its own arm by a `let` nothing uses.
+fn unused_read(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => { let j = n; Succ(unused_read(k)) } }
+}
+theorem unused_read_lit(): unused_read(3) = 3 { refl }
+theorem unused_read_succ(m: Nat): unused_read(Succ(m)) = Succ(unused_read(m)) { refl }
+
+// …and by the arm's own value: `n` is this level's.
+fn tri(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => n + tri(k) }
+}
+theorem tri_lit(): tri(4) = 10 { refl }
+theorem tri_succ(m: Nat): tri(Succ(m)) = Succ(m) + tri(m) { refl }
+
+// A `let` above the `match` from a parameter the calls vary: recomputed at
+// each level, so `b` is this level's `a + 1`.
+fn bump(n: Nat, a: Nat) → Nat {
+    let b = a + 1;
+    match n { Zero => b, Succ(k) => bump(k, b) }
+}
+theorem bump_lit(): bump(2, 0) = 3 { refl }
+theorem bump_succ(m: Nat, a: Nat): bump(Succ(m), a) = bump(m, a + 1) { refl }
+
+// The parameter read above the `match` and inside it.
+fn above(n: Nat) → Nat {
+    let twice = n + n;
+    match n { Zero => twice, Succ(k) => twice + above(k) }
+}
+theorem above_lit(): above(2) = 6 { refl }
+theorem above_succ(m: Nat): above(Succ(m)) = (Succ(m) + Succ(m)) + above(m) { refl }
+
+// An open element type, fixed across the calls.
+fn pad<A>(n: Nat, x: A, xs: List<A>) → List<A> {
+    match n { Zero => xs, Succ(k) => { let more = n; Cons(x, pad(k, x, xs)) } }
+}
+theorem pad_lit(): pad(2, 7, Nil) = [7, 7] { refl }
+theorem pad_succ<A>(m: Nat, x: A, xs: List<A>): pad(Succ(m), x, xs) = Cons(x, pad(m, x, xs)) { refl }
+
+// A `Type`-valued recursion whose self-call sits inside the arm's type. The
+// planner did not see that call, so the arm's `n` was the top call's value:
+// `Steps(2)` was `2 = 2 ∧ (2 = 2 ∧ True)`. Read in checking position too.
+fn Steps(n: Nat) → Type {
+    match n { Zero => True, Succ(k) => n = n ∧ Steps(k) }
+}
+theorem steps_meaning(): Steps(2) = (2 = 2 ∧ (1 = 1 ∧ True)) { refl }
+theorem steps_succ(m: Nat): Steps(Succ(m)) = (Succ(m) = Succ(m) ∧ Steps(m)) { refl }
+theorem steps_two(): Steps(2) { And(refl, And(refl, trivial)) }
+
+// Negative control: a call at the parameter itself does not descend, at the
+// top or at the `match`, and the refusal is the plain lowering's.
+// expect-error: recursive call to `stuck` must descend: argument `n` has to be `k`
+fn stuck(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => { let j = n; stuck(n) } }
+}
+
+// Slice 1 carries one level: a call two below the parameter, with the
+// parameter read in the arm, still meets the measure lowering's refusal
+// here, where `omega` is not imported (slice 2 lifts it).
+// expect-error: is read inside its own recursive `match`
+fn half_read(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => match k { Zero => n, Succ(j) => Succ(half_read(j)) } }
+}

@@ -149,6 +149,9 @@ codata (corecursion is a different lowering), and `meta fn`s.
    by `below` instead. Nothing accepted today changes term. Retires the
    refusals of fn-recursion-means-the-function and
    recursion-case-split-dependent-ih for `Nat`.
+
+   *As built* (§5): one level of `below`, which is the existing Nat guard's
+   ih, so no new definition yet; the depth-*d* `Below` comes with slice 2.
 2. *Nat, the default.* After `perf ab`, every `Nat` structural recursion
    lowers by `below`; delete the Nat guard selection and the Nat window
    (`chain_convoy`). Retires cov-window-term-size's Nat half.
@@ -173,3 +176,47 @@ A is the survey's principle stated as a lowering: the recursion is one rule
 (the eliminator at the top) and everything else is ordinary elaboration. Its
 first slice changes nothing that is accepted today, so it can land and be
 reverted without touching the library.
+
+## 5. Slice 1 as built
+
+`recursion_at_top_body` (crates/elab/src/lib.rs) wraps the body in one
+`match` on the parameter at the top, each arm rebinding the parameter's name
+to the arm's constructor term (`let z = Succ(z#pred);`). Under
+`DynamicScope::recursion_at_top`:
+
+- that `match` is the guard (`top_guard`), whatever `guard_param` would
+  say, and every other explicit value parameter is generalized
+  (`top_positions`);
+- a `Nat` `match` whose scrutinee is a constructor term takes its arm, the
+  `Succ(k)` binder an alias of the term (routes.rs), so the body's own
+  `match z` binds `k` to the guard's predecessor and a self-call at `k` is
+  the ih, compared by binder position as every Nat guard is.
+
+The ih is the eliminator's own, one level deep: the depth-*d* window of
+today's lowering is not carried, so a call two below the parameter in such a
+body still meets the fallback (slice 2 builds `Below`). Implicit parameters
+stay fixed.
+
+It runs where the plan was `ByMeasure`, before the measure (which now
+lowers only what does not elaborate at the top), and where elaboration refused a
+self-call or the plan's `Misplaced` refusal fired (fns and theorems). Each
+attempt is a rolled-back transaction; on failure the original route or
+refusal stands. A top attempt the *kernel* refuses fails the module's
+parallel pass and is decided in the serial replay, the same answer at any
+width.
+
+**Found on the way**: the planner did not see a self-call written inside a
+type (`n = n ∧ E(k)`, a `Type`-valued arm), because `surface::walk_expr`
+does not enter types, so it never found the `match` to be a recursion and
+let the arm read the top call's `n`: `E(2)` was `2 = 2 ∧ (2 = 2 ∧ True)`. The
+meaning check (`--review`) flagged it. The planner's self-call readers now
+enter written types (`recursion::type_children`), and such an `E` lowers at
+the top with its source's meaning.
+
+**Not retired by this slice**: recursion-case-split-dependent-ih's
+`walk_shape` passes `n` unchanged under `match n`, and a `match` does not
+substitute its scrutinee variable in the arm, so the call's type is about
+`n` while the goal is about `Zero` in every lowering. At the top the ih is
+generalized over `n`, so the call fits once the arm's `n` *is* `Zero`; that
+is a `match` refinement, not a recursion lowering, and stays with that
+issue. Passing the constructor (`walk_shape(k, 0)`) is accepted already.
