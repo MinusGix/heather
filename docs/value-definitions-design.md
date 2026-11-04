@@ -171,6 +171,13 @@ of §3.2 spelled out.
 set on the declaration the host elaborates from the member's skeleton). A
 value takes no parameters; a member with any is refused.
 
+`AsInstance(class, args, index)` (2026-11-04, for `runtime fn`,
+docs/runtime-fn-setups-design.md §16.8) is a value that is also registered
+as the instance `class<args…>(index…)`: the host elaborates the instance
+written in source as `{ field := name.field, … }`, so its key, coherence and
+index spelling are the ordinary checks. The type arguments are `Expr`s read
+as types; a function type is spelled as an arrow, so it is keyed as one.
+
 ## 4. The customer: `regex` (`lib/std/text/regex.hthr`)
 
 ```heather
@@ -224,5 +231,5 @@ source. The empty-call check is one name resolution per zero-argument call.
   `is_hex::term.accepts` (`generate-group-internal-references`).
 - **A rewritten `def` with type parameters**, and a corecursive `def` (write
   a `fn`).
-- **`runtime fn f`** itself, publishing `instance Compile(f)`: round R5d
-  (`runtime-fn-default-setup`).
+- **`runtime fn f`** itself, publishing `instance Compile(f)`: built
+  2026-11-04 (`runtime-fn-default-setup`, setups note §16.8).

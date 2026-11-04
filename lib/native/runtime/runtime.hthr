@@ -1,0 +1,465 @@
+// `runtime fn`: the default setup, the `Compile` class, and the generator
+// that marks a function for the machine (docs/runtime-fn-setups-design.md
+// §2, §9; issues/runtime-fn-default-setup.md).
+//
+// An ordinary `fn` is kerneltime mathematics. Writing `runtime fn f` runs
+// the generator `runtime` over the elaborated `f` (a declaration prefix,
+// docs/value-definitions-design.md §3), which
+//
+// - reflects `f`'s body into `rt` (`rt_reflect.hthr`), finding the other
+//   runtime fns it calls;
+// - judges it under the default setup, refusing with the reason;
+// - and publishes, beside `f`, one group (all of it or none):
+//
+//   | `f::rt`       | the reflection, a `Fun`                                  |
+//   | `f::world`    | what its meaning reads: no records, the program's        |
+//   |               | signatures (`f` is entry 0, its callees after), and      |
+//   |               | their meanings, which are the Heather functions          |
+//   | `f::judged`   | `Fun::judge(f::rt, f::world) = Ok`, by evaluation         |
+//   | `f::reflects` | `f::rt.meaning(f::world)(xs…) = f(xs…)`, by conversion    |
+//   | `f::code`     | the FunctionIR function the default setup lowers it to   |
+//   | `f::agrees`   | called with every function of the table answered with    |
+//   |               | its meaning, `f::code` answers `f`                        |
+//   | `f::compile`  | the `Compile(f)` instance holding all of that            |
+//
+// Nothing in the group is a proof about `f` written for `f`: `f::agrees` is
+// `Fun::lower_sound` (`rt_lower.hthr`, proved once over `rt`) read at the
+// reflection, and it lands on `f` because the reflection's meaning converts
+// to `f` (the pin). A wrong reflection is refused by the kernel as a failed
+// conversion, never compiled to a wrong program.
+//
+// A group's members cannot cite each other yet
+// (issues/generate-group-internal-references.md), so each spells the
+// reflection and the table out again; they are data, and small.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import rt;
+import rt_reflect;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+
+// ---------------------------------------------------------------------------
+// The judgment: what the default setup compiles today, with the reason for
+// what it does not. The lowering refuses everything the judgment refuses
+// (it returns `None`), so soundness does not assume the judgment
+// (design §16.5); the judgment is what turns a refusal into a reason.
+
+inductive Verdict { Ok, Refused(why: String) }
+
+fn Verdict::and(self a: Verdict, b: Verdict) → Verdict { match a { Ok => b, Refused(why) => Refused(why) } }
+
+fn Ty::is_word64(self t: Ty) → Bool { match t { Word(w) => w.same(64), _ => False } }
+
+fn Ty::all_word64(ts: List<Ty>) → Bool {
+    match ts { Nil => True, Cons(t, rest) => t.is_word64().and(Ty::all_word64(rest)) }
+}
+
+fn Sig::is_words(self s: Sig) → Bool { Ty::all_word64(s.params).and(s.result.is_word64()) }
+
+fn Op::judge(self o: Op) → Verdict {
+    match o {
+        Zext(_, _) => Refused("`zero_extend` has no FunctionIR node yet (issues/function-ir-alu-core.md)"),
+        Get(_) => Refused("a byte read: byte buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
+        Set(_) => Refused("a byte write: byte buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
+        ConsLine(_) => Refused("a list of lines: arena lists are not lowered by the default setup yet"),
+        _ => Ok,
+    }
+}
+
+// A term of the function at entry 0 of `sigs`.
+fn Tm::judge(self t: Tm, sigs: List<Sig>) → Verdict {
+    match t {
+        Var(_) => Ok,
+        Lit(c, _) => match c {
+            Word(_) => Ok,
+            Bit => Ok,
+            _ => Refused("a literal that is not a word or a `Bool`: byte buffers and lists are not lowered yet"),
+        },
+        Prim(op, _) => op.judge(),
+        Let(e, body) => e.judge(sigs).and(body.judge(sigs)),
+        If(_, yes, no) => yes.judge(sigs).and(no.judge(sigs)),
+        IfEq(_, yes, no) => yes.judge(sigs).and(no.judge(sigs)),
+        Make(_, _) => Ok,
+        Field(_, _, _) => Ok,
+        Call(f, _) => match f {
+            Zero => Refused("a call of itself: recursion is not lowered yet (issues/native-compiled-procedures.md)"),
+            Succ(_) => match Sig::at(sigs, f).is_words() {
+                True => Ok,
+                False => Refused("a call of a function that does not take and return 64-bit words (issues/function-ir-multi-word-calls.md)"),
+            },
+        },
+        Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
+    }
+}
+
+// The function at entry 0 of its world's table: 64-bit words in and out
+// (FunctionIR's calling convention today), and a body of what the lowering
+// covers.
+fn Fun::judge(self f: Fun, w: World) → Verdict {
+    match Ty::all_word64(f.params) {
+        False => Refused("a parameter that is not a 64-bit word: the default setup compiles functions from 64-bit words to a 64-bit word (issues/function-ir-multi-word-calls.md)"),
+        True => match f.result.is_word64() {
+            False => Refused("a result that is not a 64-bit word: the default setup compiles functions from 64-bit words to a 64-bit word (issues/function-ir-multi-word-calls.md)"),
+            True => f.body.judge(w.sigs),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A setup (design §2.1): a judgment, a lowering, and the lowering's
+// soundness, proved once. Every setup reads the same `rt`.
+
+record Setup {
+    name: String,
+    judge: Fun → World → Verdict,
+    lower: Fun → World → Option<Function>,
+    sound: (f: Fun) → (w: World) → f.LowerHolds(w, lower(f, w)),
+}
+
+// The default setup: abstract programming over words and `Bool`, lowered
+// to FunctionIR (design §7, `rt_lower.hthr`).
+fn Setup::default() → Setup { Setup("default", Fun::judge, Fun::lower, λ f w => Fun::lower_sound(f, w)) }
+
+fn Setup::lowers(r: Option<Function>) → Bool { match r { None => False, Some(_) => True } }
+
+// The lowered function, or an empty one where the lowering refused (which
+// the generator never publishes: it checks `Setup::lowered` first).
+fn Setup::code_of(r: Option<Function>) → Function { match r { None => Function([], nodes_region(Nil), 0), Some(c) => c } }
+
+fn Setup::code(self s: Setup, f: Fun, w: World) → Function { Setup::code_of(s.lower(f, w)) }
+
+fn Setup::lowered(self s: Setup, f: Fun, w: World) → Bool { Setup::lowers(s.lower(f, w)) }
+
+// Read at an abstract lowering (docs/proof-patterns.md §1): a lowering that
+// produced code answers with the function's meaning.
+theorem Setup::of_lowered(f: Fun, w: World, r: Option<Function>): Setup::lowers(r).IsTrue() → f.LowerHolds(w, r) →
+    (call: Answers()) → Tm::CallsAgree(w, call) →
+    Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::code_of(r).eval(call, xs)) {
+    match r {
+        None => λ never _ => false_elim(never),
+        Some(_) => λ _ holds => holds,
+    }
+}
+
+// What a setup's code means, wherever the setup lowered: the agreement every
+// `runtime fn` reads off, with `ok` checked by evaluation.
+theorem Setup::code_answers(s: Setup, f: Fun, w: World, ok: s.lowered(f, w).IsTrue()):
+    (call: Answers()) → Tm::CallsAgree(w, call) →
+    Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => s.code(f, w).eval(call, xs)) {
+    Setup::of_lowered(f, w, s.lower(f, w), ok, s.sound(f, w))
+}
+
+// ---------------------------------------------------------------------------
+// The `Compile` class (design §9.3): a function's code and the code's
+// agreement with the function, keyed on the function itself (an
+// operation-indexed class, docs/operation-indexed-classes-design.md). The
+// `runtime` generator publishes an instance per runtime fn; a hand-written
+// instance (tuned FunctionIR and its proof) is one too.
+//
+// The code answers its calls by index into `world`'s table, so its
+// agreement assumes every function of the table is answered with its
+// meaning (`Tm::CallsAgree`): a program built from the callees' own
+// instances discharges that (the program wrapper, issues/runtime-fn-default-setup.md).
+// `typed` is `refl` at every instance: it is what lets the class state the
+// agreement about `f` itself while `f`'s type is any `F`.
+
+// A type as a term of `Type`: a bare variable in a motive's body reads as
+// a type name, and a class field that names its carrier as a term in an
+// equation (`F = T`) is refused at a generic use of the class
+// (issues/class-carrier-as-term.md); through `Itself` both work.
+fn Itself(T: Type) → Type { T }
+
+// A value read at a type it is equal to: itself, at `refl`.
+fn retype<F>(T: Type, e: Itself(F) = Itself(T), f: F) → T { j(e, λ x _ => Itself(x), f) }
+
+class Compile<F>(f: F) {
+    reflected: Fun,
+    world: World,
+    typed: Itself(F) = Itself(Ty::Arrows(world.tys, reflected.params, reflected.result)),
+    code: Function,
+    agrees: (call: Answers()) → Tm::CallsAgree(world, call) →
+        Ty::Answers(world.tys, reflected.params, reflected.result,
+            retype(Ty::Arrows(world.tys, reflected.params, reflected.result), typed, f), λ xs => code.eval(call, xs)),
+}
+
+// `Itself(F) = Itself(F)` with `F` read off `f`: what the generator passes
+// for `typed`, `F` being a type it cannot spell as a term. A definition, not
+// a theorem: `retype` along it must compute.
+fn Setup::typed_refl<F>(f: F) → Itself(F) = Itself(F) { refl }
+
+// A runtime fn's instance, from its reflection: the default setup's code
+// and the agreement `Setup::code_answers` gives, carried to `f` along the
+// pin. At a runtime fn `typed` and `pinned` are both `refl`, which the
+// kernel checks by conversion (the reflection's meaning unfolds to `f`'s
+// body node for node, docs/runtime-fn-setups-design.md §4.3), and `ok` is
+// `trivial`, the lowering evaluated.
+fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, typed: Itself(F) = Itself(Ty::Arrows(w.tys, rt.params, rt.result)),
+    pinned: retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f) = rt.meaning(w), ok: s.lowered(rt, w).IsTrue()) → Compile<F>(f)
+{
+    Compile(rt, w, typed, s.code(rt, w), λ call agree =>
+        j(sym(pinned), λ g _ => Ty::Answers(w.tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs)),
+            Setup::code_answers(s, rt, w, ok, call, agree)))
+}
+
+// A table of meanings that answers every call with a default: what the
+// generator's own run judges and lowers against (neither reads the
+// meanings).
+fn Sig::sems_default(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs) {
+    match sigs { Nil => trivial, Cons(s, rest) => Pair(Ty::arrows_default(tys, s.params, s.result), Sig::sems_default(tys, rest)) }
+}
+
+// A world from its parts: what the generator spells (`World`'s constructor
+// has a field whose type mentions the ones before it, so `Ctors` gives it no
+// function).
+fn World::of(tys: Nat → RecInfo, sigs: List<Sig>, callees: Sig::Sems(tys, sigs)) → World { World(tys, sigs, callees) }
+
+// ---------------------------------------------------------------------------
+// The generator's plumbing: names it reads, and reflected code quoted back
+// into terms.
+
+fn runtime_fail<A>(why: String) → Tac<A> { fail("runtime: " ++ why, []) }
+
+fn runtime_ref(name: String) → Tac<GlobalRef> {
+    lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (`import runtime;` and the modules `runtime` imports): ")
+}
+
+fn runtime_global(name: String) → Tac<Expr> { runtime_ref(name).bind(λ g => Pure(Global(g))) }
+
+fn ap(f: Expr, args: List<Expr>) → Expr { args.foldl(λ acc a => App(acc, a), f) }
+
+fn runtime_ctor_exprs(cs: List<CtorInfo>) → Tac<List<Expr>> {
+    match cs {
+        Nil => Pure([]),
+        Cons(c, rest) => match c.ctor {
+            None => runtime_fail("`" ++ c.name ++ "` has no constructor function"),
+            Some(h) => runtime_ctor_exprs(rest).bind(λ es => Pure(Cons(Hd(h), es))),
+        },
+    }
+}
+
+// The constructors of the type `h`, as terms, in declaration order.
+fn runtime_ctors_at(h: Handle) → Tac<List<Expr>> { ctors(h).or_fail("runtime: ").bind(λ cs => runtime_ctor_exprs(cs)) }
+
+// The types the generator names, as the types of values: a type former is
+// not a term, so an `Expr` cannot spell `Ty` or `List<Ty>`, and a type read
+// off a function type below its first binder lives under that binder. A
+// value's type is read at the root.
+def runtime_w_ty: Ty = Bit;
+def runtime_w_tm: Tm = Var(0);
+def runtime_w_op: Op = Neg;
+def runtime_w_fun: Fun = Fun([], Bit, Var(0));
+def runtime_w_sig: Sig = Sig([], Bit);
+def runtime_w_world: World = World(RecInfo::none, [], trivial);
+def runtime_w_verdict: Verdict = Ok;
+def runtime_w_function: Function = Setup::code_of(None);
+def runtime_w_tys: List<Ty> = [];
+def runtime_w_nats: List<Nat> = [];
+def runtime_w_sigs: List<Sig> = [];
+def runtime_w_words: List<BitVec(64)> = [];
+def runtime_w_word: BitVec(64) = BitVec::ofNat(0);
+
+record RtTypes { ty: Handle, tm: Handle, op: Handle, fun_t: Handle, sig: Handle, world: Handle, verdict: Handle, function: Handle,
+    tys: Handle, nats: Handle, sigs: Handle, words: Handle, word: Handle }
+
+fn runtime_type_of(name: String) → Tac<Handle> {
+    runtime_ref(name).bind(λ g => infer(Global(g)).or_fail("runtime: `" ++ name ++ "`: "))
+}
+
+fn runtime_type_handles() → Tac<RtTypes> {
+    Pure(RtTypes(<- runtime_type_of("runtime_w_ty"), <- runtime_type_of("runtime_w_tm"), <- runtime_type_of("runtime_w_op"),
+        <- runtime_type_of("runtime_w_fun"), <- runtime_type_of("runtime_w_sig"), <- runtime_type_of("runtime_w_world"),
+        <- runtime_type_of("runtime_w_verdict"), <- runtime_type_of("runtime_w_function"), <- runtime_type_of("runtime_w_tys"),
+        <- runtime_type_of("runtime_w_nats"), <- runtime_type_of("runtime_w_sigs"), <- runtime_type_of("runtime_w_words"),
+        <- runtime_type_of("runtime_w_word")))
+}
+
+fn runtime_at(es: List<Expr>, i: Nat) → Expr { es.nth(i).unwrap_or(Blank) }
+
+// The constructors quoting reads: `Ty`, `Tm`, `Op`, `Fun`, `Sig`, and the
+// lists of codes, indices and signatures.
+record RtQ { ty: List<Expr>, tm: List<Expr>, op: List<Expr>, tys: List<Expr>, nats: List<Expr>, sigs: List<Expr>, mk_fun: Expr, mk_sig: Expr }
+
+fn RtQ::seq(nil_cons: List<Expr>, xs: List<Expr>) → Expr {
+    match xs { Nil => runtime_at(nil_cons, 0), Cons(x, rest) => ap(runtime_at(nil_cons, 1), [x, RtQ::seq(nil_cons, rest)]) }
+}
+
+fn Ty::quote(self t: Ty, q: RtQ) → Expr {
+    match t {
+        Word(w) => ap(runtime_at(q.ty, 0), [NatLit(w)]),
+        Bit => runtime_at(q.ty, 1),
+        Bytes(c) => ap(runtime_at(q.ty, 2), [NatLit(c)]),
+        Lines => runtime_at(q.ty, 3),
+        Named(i) => ap(runtime_at(q.ty, 4), [NatLit(i)]),
+    }
+}
+
+fn Ty::quotes(ts: List<Ty>, q: RtQ) → Expr { RtQ::seq(q.tys, ts.map(λ t => Ty::quote(t, q))) }
+
+fn RtQ::nat_list(self q: RtQ, ns: List<Nat>) → Expr { RtQ::seq(q.nats, ns.map(λ n => NatLit(n))) }
+
+fn Op::quote(self o: Op, q: RtQ) → Expr {
+    let c = runtime_at(q.op, o.code().fst);
+    match o {
+        Conj => c, Disj => c, Neg => c,
+        Zext(w, extra) => ap(c, [NatLit(w), NatLit(extra)]),
+        _ => ap(c, [NatLit(o.code().snd.fst)]),
+    }
+}
+
+fn Tm::quote(self t: Tm, q: RtQ) → Expr {
+    match t {
+        Var(i) => ap(runtime_at(q.tm, 0), [NatLit(i)]),
+        Lit(c, n) => ap(runtime_at(q.tm, 1), [Ty::quote(c, q), NatLit(n)]),
+        Prim(op, args) => ap(runtime_at(q.tm, 2), [Op::quote(op, q), q.nat_list(args)]),
+        Let(e, body) => ap(runtime_at(q.tm, 3), [e.quote(q), body.quote(q)]),
+        If(c, yes, no) => ap(runtime_at(q.tm, 4), [NatLit(c), yes.quote(q), no.quote(q)]),
+        IfEq(c, yes, no) => ap(runtime_at(q.tm, 5), [NatLit(c), yes.quote(q), no.quote(q)]),
+        Make(i, args) => ap(runtime_at(q.tm, 6), [NatLit(i), q.nat_list(args)]),
+        Field(i, k, of) => ap(runtime_at(q.tm, 7), [NatLit(i), NatLit(k), NatLit(of)]),
+        Call(f, args) => ap(runtime_at(q.tm, 8), [NatLit(f), q.nat_list(args)]),
+        Fold(over, init, step) => ap(runtime_at(q.tm, 9), [NatLit(over), NatLit(init), NatLit(step)]),
+    }
+}
+
+fn Fun::quote(self f: Fun, q: RtQ) → Expr { ap(q.mk_fun, [Ty::quotes(f.params, q), Ty::quote(f.result, q), Tm::quote(f.body, q)]) }
+
+fn Sig::quote(self s: Sig, q: RtQ) → Expr { ap(q.mk_sig, [Ty::quotes(s.params, q), Ty::quote(s.result, q)]) }
+
+fn runtime_quoting(ts: RtTypes) → Tac<RtQ> {
+    let tys <- runtime_ctors_at(ts.ty);
+    let tms <- runtime_ctors_at(ts.tm);
+    let ops <- runtime_ctors_at(ts.op);
+    let ty_list <- runtime_ctors_at(ts.tys);
+    let nat_list <- runtime_ctors_at(ts.nats);
+    let sig_list <- runtime_ctors_at(ts.sigs);
+    let funs <- runtime_ctors_at(ts.fun_t);
+    let sigs <- runtime_ctors_at(ts.sig);
+    Pure(RtQ(tys, tms, ops, ty_list, nat_list, sig_list, runtime_at(funs, 0), runtime_at(sigs, 0)))
+}
+
+// A pair, its types left to the elaborator: what the generator spells a
+// table of meanings with.
+fn Pair::of<A, B>(a: A, b: B) → Pair<A, B> { Pair(a, b) }
+
+// The table of the program's meanings, `Pair(g₀, Pair(g₁, … trivial))`.
+fn runtime_callees(pair: Expr, unit: Expr, gs: List<Nat>) → Expr {
+    match gs { Nil => unit, Cons(g, rest) => ap(pair, [Blank, Blank, Global(GlobalRef(g)), runtime_callees(pair, unit, rest)]) }
+}
+
+// A callee's signature, read off its type.
+fn runtime_sig_from(fuel: Nat, k: Known, t: Handle, ps: List<Ty>) → Tac<Sig> {
+    match fuel {
+        Zero => runtime_fail("a callee with more parameters than the generator reads"),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(dom) => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
+                runtime_sig_from(f, k, o.body, ps ++ [p]))),
+            _ => k.ty(t).bind(λ r => Pure(Sig(ps, r))),
+        }),
+    }
+}
+
+fn runtime_sigs(k: Known, gs: List<Nat>) → Tac<List<Sig>> {
+    match gs {
+        Nil => Pure([]),
+        Cons(g, rest) => infer(Global(GlobalRef(g))).or_fail("runtime: a callee's type: ").bind(λ t =>
+            runtime_sig_from(64, k, t, []).bind(λ s => runtime_sigs(k, rest).bind(λ ss => Pure(Cons(s, ss))))),
+    }
+}
+
+// The function's parameters as locals for a declaration's telescope, each
+// under the one before: words, as the judgment checked.
+fn runtime_params(word: Handle, ps: List<Ty>, under: Option<LocalRef>, i: Nat) → Tac<List<LocalRef>> {
+    match ps {
+        Nil => Pure([]),
+        Cons(_, rest) => assume(Hd(word), "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
+            runtime_params(word, rest, Some(x.ref), Succ(i)).bind(λ more => Pure(Cons(x.ref, more)))),
+    }
+}
+
+fn runtime_locals(xs: List<LocalRef>) → List<Expr> { xs.map(λ x => Local(x)) }
+
+fn runtime_params_of(xs: List<LocalRef>) → List<Param> { xs.map(λ x => Param(x, False)) }
+
+// ---------------------------------------------------------------------------
+// The generator: `runtime fn f(…) → … { … }`.
+
+fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>) → Tac<List<Decl>> {
+    let ts <- runtime_type_handles();
+    let q <- runtime_quoting(ts);
+    // `refl` at a closed term, its type given: checked against a statement
+    // by conversion (the kernel's), where a hole would be left to the
+    // unifier, which does not unfold the reflection's meaning.
+    let rfl <- runtime_global("tactic::rfl");
+    let typed_refl <- runtime_global("Setup::typed_refl");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let pair <- runtime_global("Pair::of");
+    let callees = runtime_callees(pair, Hd(trivial_h), funs);
+    let world_of <- runtime_global("World::of");
+    let no_records <- runtime_global("RecInfo::none");
+    let setup <- runtime_global("Setup::default");
+    let verdicts <- runtime_ctors_at(ts.verdict);
+    let judge <- runtime_global("Fun::judge");
+    let meaning <- runtime_global("Fun::meaning");
+    let code_of <- runtime_global("Setup::code");
+    let eval <- runtime_global("Function::eval");
+    let answers <- runtime_global("Setup::code_answers");
+    let compile <- runtime_global("Setup::compile");
+    let answers_t <- runtime_global("Answers");
+    let calls_agree <- runtime_global("Tm::CallsAgree");
+    let word_list <- runtime_ctors_at(ts.words);
+    let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let rt_e = Fun::quote(rfun, q);
+    let world_e = ap(world_of, [no_records, RtQ::seq(q.sigs, sigs.map(λ s => Sig::quote(s, q))), callees]);
+    let code_e = ap(code_of, [setup, rt_e, world_e]);
+    // `f::reflects` and `f::agrees` quantify over the parameters.
+    let xs <- runtime_params(ts.word, rfun.params, None, 0);
+    let call <- assume(answers_t, "call", None).or_fail("runtime: ");
+    let agree <- assume(ap(calls_agree, [world_e, Local(call.ref)]), "agree", Some(call.ref)).or_fail("runtime: ");
+    let ys <- runtime_params(ts.word, rfun.params, Some(agree.ref), 0);
+    let at_ys = runtime_locals(ys);
+    let instance_e = ap(compile, [Blank, Global(f), setup, rt_e, world_e, ap(typed_refl, [Blank, Global(f)]), ap(rfl, [Blank, Global(f)]),
+        Hd(trivial_h)]);
+    let instance_t <- infer(instance_e).or_fail("runtime: `" ++ name ++ "`'s instance: ");
+    Pure([
+        Decl(AsValue, name ++ "::rt", [], Hd(ts.fun_t), rt_e),
+        Decl(AsValue, name ++ "::world", [], Hd(ts.world), world_e),
+        Decl(AsTheorem, name ++ "::judged", [], Equation(ap(judge, [rt_e, world_e]), runtime_at(verdicts, 0)),
+            ap(rfl, [Blank, runtime_at(verdicts, 0)])),
+        Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
+            Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
+            ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))])),
+        Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
+        Decl(AsTheorem, name ++ "::agrees", Cons(Param(call.ref, False), Cons(Param(agree.ref, False), runtime_params_of(ys))),
+            Equation(ap(eval, [code_e, Local(call.ref), RtQ::seq(word_list, at_ys)]), ap(Global(f), at_ys)),
+            ap(ap(answers, [setup, rt_e, world_e, Hd(trivial_h), Local(call.ref), Local(agree.ref)]), at_ys)),
+        Decl(AsInstance("Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e),
+    ])
+}
+
+fn runtime(name: String) → Tac<List<Decl>> {
+    let f <- runtime_ref(name);
+    let k <- rt_known_in([name], [], True);
+    let reflected <- rt_reflect_one(4096, k, f.id);
+    let rfun = reflected.fst;
+    let callee_sigs <- runtime_sigs(k, reflected.snd.drop(1));
+    let sigs = Cons(rfun.sig(), callee_sigs);
+    let world = World(RecInfo::none, sigs, Sig::sems_default(RecInfo::none, sigs));
+    match Fun::judge(rfun, world) {
+        Refused(why) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
+        Ok => match Setup::lowers(Fun::lower(rfun, world)) {
+            False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
+            True => runtime_publish(name, f, rfun, sigs, reflected.snd),
+        },
+    }
+}

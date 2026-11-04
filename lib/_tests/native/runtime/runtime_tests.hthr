@@ -1,0 +1,132 @@
+// Probes of `runtime fn` (lib/native/runtime/runtime.hthr): the generator
+// reflects each function, judges it under the default setup, and publishes
+// its reflection, the pin, its FunctionIR code, the code's agreement with the
+// function and its `Compile` instance, with no proof written for any of them
+// here. A function a runtime fn calls must be one too; a refusal names its
+// reason and publishes nothing. Tests, not library: nothing imports this
+// module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// Straight-line code and a call (examples/x86-native/calls.hthr).
+
+runtime fn leaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    left.add(right).bxor(BitVec::ofNat(0x0123456789abcdef))
+}
+
+// `leaf` is found to be a runtime fn and becomes entry 1 of the table.
+runtime fn caller(left: BitVec(64), right: BitVec(64)) → BitVec(64) { leaf(left, right).sub(left) }
+
+// What the generator published, read back. The reflection is data, and the
+// pin is a theorem about `caller` itself.
+theorem caller_rt_is(): caller::rt =
+    Fun([Word(64), Word(64)], Word(64), Let(Call(1, [1, 0]), Prim(Sub(64), [0, 2]))) { refl }
+
+theorem caller_table(): caller::world.sigs = [Sig([Word(64), Word(64)], Word(64)), Sig([Word(64), Word(64)], Word(64))] { refl }
+
+theorem caller_pinned(a, b: BitVec(64)): caller::rt.meaning(caller::world)(a, b) = caller(a, b) { caller::reflects(a, b) }
+
+// The code answers `caller` wherever its table's functions are answered by
+// their meanings (FunctionIR's `Call` of entry 1 is `leaf`).
+theorem caller_compiled(call: Answers(), agree: Tm::CallsAgree(caller::world, call), a, b: BitVec(64)):
+    caller::code.eval(call, [a, b]) = caller(a, b) { caller::agrees(call, agree, a, b) }
+
+// The instance is found by search, keyed on the function.
+fn code_of<F>(f: F, c: Compile<F>(f) := infer) → Function { c.code }
+
+theorem leaf_found(): code_of(leaf) = leaf::code { refl }
+
+theorem caller_found(): code_of(caller) = caller::code { refl }
+
+// The instance's agreement, read through the class at the function.
+theorem leaf_through_class(c: Compile<BitVec(64) → BitVec(64) → BitVec(64)>(leaf), call: Answers(),
+    agree: Tm::CallsAgree(c.world, call)):
+    Ty::Answers(c.world.tys, c.reflected.params, c.reflected.result,
+        retype(Ty::Arrows(c.world.tys, c.reflected.params, c.reflected.result), c.typed, leaf), λ xs => c.code.eval(call, xs)) {
+    c.agrees(call, agree)
+}
+
+// ---------------------------------------------------------------------------
+// Branches on comparisons through `&&`, `||` and `!`
+// (examples/x86-native/branches.hthr), with no case split anywhere.
+
+runtime fn choose(a, b: BitVec(64)) → BitVec(64) {
+    match a.unsigned_lt_bit(b) || (b.eq_bit(BitVec::ofNat(7)) && !a.signed_lt_bit(b)) {
+        False => a.bxor(b),
+        True => b.sub(a),
+    }
+}
+
+theorem choose_compiled(call: Answers(), agree: Tm::CallsAgree(choose::world, call), a, b: BitVec(64)):
+    choose::code.eval(call, [a, b]) = choose(a, b) { choose::agrees(call, agree, a, b) }
+
+// ---------------------------------------------------------------------------
+// Shared values and two calls of one callee (examples/x86-native/sharing.hthr).
+
+runtime fn sleaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) { left.sub(right) }
+
+runtime fn scaller(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
+    let saved = left.bor(right);
+    let first = sleaf(right, left);
+    let second = sleaf(left, right);
+    let shared = first.add(saved);
+    shared.add(shared).add(first.add(first.add(second)))
+}
+
+// One table entry for `sleaf`, however often it is called.
+theorem scaller_table(): scaller::world.sigs.len() = 2 { refl }
+
+// ---------------------------------------------------------------------------
+// A `match h:` convoy: the equation is erased, and the pin still converts.
+
+runtime fn safe_pred(n: BitVec(64)) → BitVec(64) {
+    match h: n.eq_bit(BitVec::ofNat(0)) { True => n, False => n.sub(BitVec::ofNat(1)) }
+}
+
+theorem safe_pred_compiled(call: Answers(), agree: Tm::CallsAgree(safe_pred::world, call), n: BitVec(64)):
+    safe_pred::code.eval(call, [n]) = safe_pred(n) { safe_pred::agrees(call, agree, n) }
+
+// ---------------------------------------------------------------------------
+// Refusals. Each names its reason, and the function under the prefix is not
+// published either (the item is one transaction).
+
+fn helper(a: BitVec(64)) → BitVec(64) { a.add(a) }
+
+// expect-error: `helper` is an ordinary fn: mark it `runtime fn`
+runtime fn uses_helper(a: BitVec(64)) → BitVec(64) { helper(a).sub(a) }
+
+// expect-error: unbound name `uses_helper`
+theorem uses_helper_unpublished(a: BitVec(64)): uses_helper(a) = a { refl }
+
+// expect-error: a result that is not a 64-bit word
+runtime fn is_small(a: BitVec(64)) → Bool { a.unsigned_lt_bit(BitVec::ofNat(8)) }
+
+// expect-error: a parameter that is not a 64-bit word
+runtime fn sum_bytes(xs: List<BitVec(8)>, start: BitVec(64)) → BitVec(64) { start }
+
+// `decreases` recursion reads through the generated recursor, which the
+// reflector does not read yet (docs/runtime-fn-setups-design.md §16.3).
+// expect-error: `count_down#rec` is generated (a `decreases` function's recursion)
+runtime fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}

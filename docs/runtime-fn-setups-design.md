@@ -1,6 +1,6 @@
 # `runtime fn` setups: what a setup is, what it checks, how it is proved once, how it lowers
 
-Status: **decided 2026-10-31 (§14, as recommended); R5a built 2026-11-01; R5b's V6 2026-11-01.**
+Status: **decided 2026-10-31 (§14, as recommended); R5a built 2026-11-01; R5b's V6 2026-11-01; R5d's generator 2026-11-04 (§16.8).**
 Round R4 of `docs/compiler-milestones-proposal.md` (issue
 `runtime-fn-setups-design`, milestone `nh-front`). Written on master
 `f9a1a59`. R5a (§13) built `rt`, its meaning, the host requests and the
@@ -1024,3 +1024,68 @@ projected at the computed lowering itself, the elaborator spells the whole
 lowered region inside the conclusion's type and the check does not finish
 (docs/proof-patterns.md §1).
 
+
+### 16.8 R5d round 1: the generator (2026-11-04)
+
+`runtime fn f` works end to end for N1's word fragment:
+`lib/native/runtime/runtime.hthr` holds the default setup, the `Compile`
+class and the generator, and `lib/_tests/native/runtime/runtime_tests.hthr`
+marks `calls.hthr`'s, `branches.hthr`'s and `sharing.hthr`'s functions and a
+convoy, with no proof written for any of them. What the round fixed:
+
+- **The group.** `f::rt` (the reflection), `f::world` (no records; the
+  table's entry 0 is `f`, its callees after, their meanings the Heather
+  functions), `f::judged` (`Fun::judge(f::rt, f::world) = Ok`, by
+  evaluation), `f::reflects` (the pin, by conversion), `f::code`
+  (`Setup::code`, the default lowering), `f::agrees` (`f::code` answers `f`
+  wherever the table's functions are answered with their meanings, which is
+  `Fun::lower_sound` read at the reflection) and `f::compile`, the
+  `Compile(f)` instance. Members cannot cite each other
+  (`generate-group-internal-references`), so each spells the reflection
+  again; it is data.
+- **The class** (§9.3's sketch, made precise):
+  `class Compile<F>(f: F) { reflected, world, typed, code, agrees }`. The
+  agreement is §6.1's, about `f` itself: `typed` is the equation between `F`
+  and the reflection's curried type, `refl` at every instance, and `agrees`
+  states `Ty::Answers` of `f` read along it. `agrees` still assumes the
+  table's calls are answered (`Tm::CallsAgree`): the code answers its calls
+  by table index, and the program wrapper that discharges this from the
+  callees' own instances is next. `Setup::compile` builds an instance from a
+  reflection, carrying `Setup::code_answers` to `f` along the pin, which the
+  generator passes as `refl` and the kernel checks by conversion. The
+  equation is stated as `Itself(F) = Itself(…)`: a class field naming its
+  carrier as a bare term is refused at generic uses of the class
+  (`class-carrier-as-term`).
+- **The record of §2.1** is `Setup { name, judge, lower, sound }` over
+  `Fun` and `World`; `sound` is `Fun::lower_sound`, with no judgment
+  hypothesis (§16.5). `Fun::judge` reports reasons for what the lowering
+  refuses (a parameter or result that is not a 64-bit word, a call of a
+  function that is not, recursion, `Fold`, the byte and line primitives,
+  `zero_extend`), reading the function as entry 0 of its table.
+- **Callees are found by the walk.** The reflector's state carries the
+  program's functions; in the generator's mode a call of a global `g` with a
+  published `g::rt` appends `g` to the table. So a callee is compiled in its
+  own declaration and cited by table index. A hand-written `Compile(g)`
+  instance is not found this way yet: callee resolution by instance search
+  (§9.2) needs `Synth` of a class at a function, which the generator cannot
+  spell (a type former is not a term in an `Expr`).
+- **Host changes.** `DeclForm` gains `AsInstance(class, args, index)`: a
+  value also registered as `class<args…>(index…) { f := value.f, … }`,
+  elaborated as that instance written in source; a function-type argument is
+  spelled as an arrow so the instance is keyed as an arrow (`#Fn`). The
+  host's numeral reader reads a run of successors whole, so a 64-bit literal
+  a reflection quotes back is read in one step.
+- **Spelling types and proofs from a generator.** An `Expr` cannot apply a
+  type former, and a type read below a function type's first binder lives
+  under it, so the generator reads `Ty`, `List<Ty>`, … off the types of
+  witness values (`runtime_w_*`). `refl` is passed as `tactic::rfl` at an
+  explicit term with its type left to a hole: the unifier does not unfold a
+  reflection's meaning, while the kernel's conversion does.
+
+Left for R5d: the program wrapper (one FunctionIR program from the callees'
+instances, discharging `CallsAgree`), `compile-x86` reading `Compile(f)`,
+retiring the Rust reflector (which also covers loops, which the lowering
+does not yet), `heather reflect` from instances, and callees by instance
+search. A module using `runtime` imports what the generator looks up
+(`tactic`, `char`, `string`, `rt`, `rt_lower`, `function_ir`,
+`function_ir_eval`, `runtime`).

@@ -90,7 +90,7 @@ fn ESeg::close(segs: List<ESeg>, last: ETm) → ETm {
 
 fn ESeg::lets(lets: List<Tm>) → List<ESeg> { lets.map(λ e => SLet(e)) }
 
-fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs, k.recs, k.bitvec, k.boolean, k.list, Some(io)) }
+fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, Some(io)) }
 
 record IoWalk { st: RSt, segs: List<ESeg>, io: IoKnown }
 
@@ -109,7 +109,7 @@ fn rt_io_calls(fuel: Nat, k: Known, w: IoWalk, calls: List<Handle>) → Tac<IoWa
                         RSt::operands(λ s a => rt_go(fuel, kw, s, a, True), w.st, ops).bind(λ r =>
                         rt_io_capacity(kw, i, ops).bind(λ cap =>
                         rt_io_calls(fuel, k, IoWalk(
-                            RSt(r.fst.depth + rt_io_effect(i, cap).results().len(), [], r.fst.memo, r.fst.handles, r.fst.locals),
+                            RSt(r.fst.depth + rt_io_effect(i, cap).results().len(), [], r.fst.memo, r.fst.handles, r.fst.locals, r.fst.funs),
                             Cons(SInvoke(rt_io_effect(i, cap), r.fst.indices(r.snd)), ESeg::lets(r.fst.lets) ++ w.segs),
                             IoKnown(w.io.world, w.io.methods, w.io.calls ++ [rt_io_answer(w.io.calls.len(), g.id, c, i, r.fst.depth)])),
                             rest)))
@@ -137,7 +137,7 @@ fn rt_io_reflect_fun(fuel: Nat, k: Known, names: IoNames, g: Nat) → Tac<EFun> 
             False => rt_refuse("an effectful function's first parameter is its world, `io: Io`"),
             True => open(b, "io").bind(λ oc => rt_accepted("its world", oc)).bind(λ o => {
                 let io = IoKnown(o.local.ref.id, names.methods, []);
-                rt_params(fuel, k.at_world(io), RSt(0, [], [], [], []), [], o.body).bind(λ p =>
+                rt_params(fuel, k.at_world(io), RSt(0, [], [], [], [], k.funs), [], o.body).bind(λ p =>
                 view(p.snd).bind(λ rv => match rv {
                     HCtor(ty, _, _, fields) => match ty.id.same(names.mutated) {
                         False => rt_refuse("an effectful body ends in `Mutated(io, value)`"),
