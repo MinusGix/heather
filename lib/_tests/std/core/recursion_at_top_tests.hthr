@@ -63,10 +63,25 @@ fn stuck(n: Nat) → Nat {
     match n { Zero => 0, Succ(k) => { let j = n; stuck(n) } }
 }
 
-// Slice 1 carries one level: a call two below the parameter, with the
-// parameter read in the arm, still meets the measure lowering's refusal
-// here, where `omega` is not imported (slice 2 lifts it).
-// expect-error: is read inside its own recursive `match`
+// Course of values at the top: the body's nested `match` on the
+// predecessor carries the window, so a call two (or three) below the
+// parameter is its ih, with the parameter read in the arm.
 fn half_read(n: Nat) → Nat {
     match n { Zero => 0, Succ(k) => match k { Zero => n, Succ(j) => Succ(half_read(j)) } }
 }
+theorem half_read_lit(): half_read(5) = 3 { refl }
+theorem half_read_step(j: Nat): half_read(Succ(Succ(j))) = Succ(half_read(j)) { refl }
+
+fn three(n: Nat) → Nat {
+    let m = n;
+    match n { Zero => m, Succ(a) => match a { Zero => m, Succ(b) => match b { Zero => m, Succ(c) => m + three(c) } } }
+}
+theorem three_lit(): three(6) = 9 { refl }
+theorem three_step(c: Nat): three(Succ(Succ(Succ(c)))) = Succ(Succ(Succ(c))) + three(c) { refl }
+
+// Two calls at two depths, one of them varying a generalized parameter.
+fn fib_read(n: Nat, acc: Nat) → Nat {
+    match n { Zero => acc, Succ(k) => match k { Zero => acc + n, Succ(j) => fib_read(k, acc) + fib_read(j, acc + n) } }
+}
+theorem fib_read_lit(): fib_read(4, 0) = 18 { refl }
+theorem fib_read_step(j: Nat, a: Nat): fib_read(Succ(Succ(j)), a) = fib_read(Succ(j), a) + fib_read(j, a + Succ(Succ(j))) { refl }

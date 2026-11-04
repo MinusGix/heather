@@ -1,6 +1,6 @@
 ---
 title: Lower a refused Nat recursion by below at the top
-status: open
+status: closed
 labels: [recursion,elaboration]
 area: language
 created: 2026-11-03
@@ -41,3 +41,4 @@ the current one refuses.
 ## Log
 
 - 2026-11-04: 2026-11-04: Built (docs/recursion-at-the-top-design.md §5): a top wrapper over the one-level Nat guard, taking the constructor arm of a Nat match inside it, tried at a ByMeasure plan, a Misplaced refusal and a refused self-call, rolled back on failure. Found and fixed on the way: the planner missed self-calls written inside types, so a Type-valued arm reading its parameter (`n = n ∧ E(k)`) was compiled with the top call's value; it now lowers at the top.
+- 2026-11-04: 2026-11-04: Depth *d* at the top (second PR): `cov_depth` is seeded at the parameter in the top wrapper, so the window the body's nested matches convoy reaches calls at any depth (`half_read`, a three-deep `three`, `fib_read` varying a generalized parameter at two depths). Closed; the default flip is [[recursion-at-top-nat-default]].
