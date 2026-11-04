@@ -184,6 +184,51 @@ fn descends_through<A: std::borrow::Borrow<heather_syntax::Arm>>(
     found
 }
 
+/// The parameter recursion at the top takes for `body` by default: the one
+/// the body's outermost `match` on a parameter takes apart, when some
+/// self-call descends through it; the one the plain lowering's guard is.
+/// Another parameter would recurse too where the calls allow it, but it
+/// would change which arguments the function computes on (`drop(xs, n)`
+/// at `Nil` and a neutral `n`), which its clients' proofs read. `None`
+/// where no `match` qualifies or a parameter's name is rebound anywhere in
+/// the body: syntactic, and a sizing decision like [`recurses_on`], so a
+/// name it cannot place keeps the plain lowering.
+pub(crate) fn top_default_param(self_ref: &SelfRef, body: &heather_syntax::Block) -> Option<usize> {
+    let body = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
+    let mut bound: Vec<String> = Vec::new();
+    walk_with_types(&body, &mut |e| match &e.kind {
+        ExprKind::Match { arms, .. } => arms.iter().for_each(|a| bound.extend(arm_names(a))),
+        ExprKind::Lam { binders, .. } => bound.extend(binders.iter().map(|b| b.name.clone())),
+        ExprKind::Block(block) => {
+            for statement in &block.stmts {
+                match statement {
+                    Stmt::Let { name, .. } => bound.push(name.clone()),
+                    Stmt::LetRecord { fields, .. } => fields.iter().for_each(|f| pattern_names(&f.pat, &mut bound)),
+                    Stmt::LetCode { name, .. } => bound.push(name.clone()),
+                }
+            }
+        }
+        _ => {}
+    });
+    // The first `match` on a parameter decides: where no self-call descends
+    // through it, it is a case split around the recursion, and taking the
+    // inner parameter would move that split inside (`inner(0, n)` would stop
+    // reducing at an open `n`), so the plain lowering keeps it.
+    let mut first: Option<Option<usize>> = None;
+    walk_with_types(&body, &mut |e| {
+        if first.is_some() {
+            return;
+        }
+        let ExprKind::Match { scrut, arms, .. } = &e.kind else { return };
+        let ExprKind::Var(name) = &scrut.kind else { return };
+        let Some(dec) = (self_ref.n_tyvars..self_ref.params.len()).find(|&p| &self_ref.params[p].0 == name) else {
+            return;
+        };
+        first = Some(descends_through(self_ref, arms, dec).then_some(dec));
+    });
+    first.flatten().filter(|&dec| !bound.contains(&self_ref.params[dec].0))
+}
+
 /// The dependency [`descends_through`] tracks: bound inside the arm. Not a
 /// parameter position, so [`deps`]' other readers never see it.
 const ARM_LOCAL: usize = usize::MAX;

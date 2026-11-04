@@ -159,15 +159,19 @@ codata (corecursion is a different lowering), and `meta fn`s.
    `below` it is (§5); cov-window-term-size's Nat half becomes a question
    about that one representation.
 
-   *First attempt* (2026-11-04, issues/recursion-at-top-nat-default.md):
-   not landable as stated. The kernel folds a run of successors at once
-   for a `Nat` step it classifies as affine or synchronous (`eval/runs.rs`),
-   which `add` and `mul` are; the top's step, a Σ over a generalized
-   motive, is opaque to it, so closed arithmetic runs out of fuel. And
-   taking the inner recursion's parameter moves its `match` outside a case
-   split, which changes what reduces at an open argument. Waiting on a
-   decision between teaching the classifier the top's shape and keeping
-   the top as the fallback.
+   *As built* (2026-11-04, issues/recursion-at-top-nat-default.md): every
+   `fn` whose first `match` on a parameter takes apart an explicit `Nat`
+   that a self-call descends through lowers at the top first. A first
+   attempt generalized every other parameter, as step 2 of §3 says, and
+   lost the kernel's run folds (`eval/runs.rs`): `add(m, n)`'s step became
+   a fold over functions, opaque to the classifier, and closed arithmetic
+   ran out of fuel. So the default generalizes what the calls vary, as the
+   plain lowering does, and only a fallback generalizes everything. An
+   outer case split (the first parameter `match` with no descent) keeps
+   the plain lowering, since moving it inside changes what reduces at an
+   open argument. The guard selection stays: nested recursion under the
+   top, case splits and the other tiers still use it.
+
 3. *Tier-1 `Wf`.* The generic `Below` for chain-shaped and branching `Wf`
    inductives; delete the Wf window and the term comparison. Retires
    cov-window-in-theorem-arms, cov-convoy-motive-second-ambient,

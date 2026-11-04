@@ -137,6 +137,8 @@ registry! {
         DotReceiverReuses = "dot_receiver_reuses",
         SolutionChecks = "solution_checks",
         ConclusionClashes = "conclusion_clashes",
+        RecursionAtTop = "recursion_at_top",
+        RecursionAtTopFallbacks = "recursion_at_top_fallbacks",
     }
 }
 

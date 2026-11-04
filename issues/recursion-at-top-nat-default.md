@@ -1,6 +1,6 @@
 ---
 title: Make recursion at the top the lowering for every Nat recursion
-status: open
+status: closed
 labels: [recursion,elaboration]
 area: language
 created: 2026-11-04
@@ -57,6 +57,26 @@ parameters (the planner's guess first).
   arguments reversed when the decreasing parameter came third
   ([[recursion-varied-arguments-reversed]]); with every other parameter
   generalized at the top it broke `nat.hthr`'s `ldiv_fuel` unfoldings.
-  Blocked on a decision: teach the fold classifier the top's shape, flip only
-  where the plain step is not a classified fold, or keep the top as the
-  fallback.
+- 2026-11-04: second attempt, after Minus's go-ahead ("Try it"). The
+  acceleration loss was the motive, not the shape: a one-parameter `dbl(n)`
+  at the top stays a classified fold, `addr(m, n)` with `m` generalized
+  does not (a fold over functions). A default attempt now generalizes only
+  what the calls vary (`varying_params`, as the plain lowering does; too
+  few positions refuse the call and the plain lowering answers), and the
+  parameter is the one the first `match` on a parameter takes apart, only
+  when a self-call descends through it (an outer case split keeps the plain
+  lowering, so `inner(0, n)` reduces as before). A fallback attempt still
+  generalizes everything. Whole library: clean with `--expectations`, 196
+  recursions at the top, 19 attempts falling back (section-carrier
+  functions such as `Ring::nat_cast`, `MonoidRel::range`, and the
+  case-split probes).
+- The guard selection is **not** deleted, and cannot be for `Nat` alone:
+  a nested (lexicographic) recursion under the top still needs its inner
+  guard, an outer case split keeps the plain lowering, and `List`/`Wf`
+  share the code. Its remaining Nat role is those cases plus the
+  fallbacks; slice 3 is where it shrinks.
+- `perf ab --base origin/master` (full corpus, calc_parser's closure): 52
+  recursions at the top; every counter within 1% except `cow_copies`
+  (+7.7%, a few hundred) and `decls_gated` (+0.9%); seconds inside the
+  spread. Library, showcases and `--pr` as on master. Closed with the guard
+  selection kept, for the reasons above.
