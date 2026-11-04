@@ -457,49 +457,54 @@ fn no_ports() → Ports { Ports(Nil) }
 
 fn nodes_region(nodes: List<Node>) → StructuredRegion { Dataflow(Region(no_ports(), nodes, no_ports())) }
 
-// A branch: the arm the bit at `condition` chooses.
-fn branch(condition: Nat, when_true, when_false: StructuredRegion) → StructuredRegion {
-    Conditional(no_ports(), condition, no_ports(), no_ports(), when_true, when_false)
+// A branch: the arm the bit at `condition` chooses. `outputs` are the ports
+// both arms write, which the evaluation does not read: the x86 planner puts
+// each in one register for both arms, so that the join keeps it.
+fn branch(condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion) → StructuredRegion {
+    Conditional(no_ports(), condition, no_ports(), outputs, when_true, when_false)
 }
 
-theorem branch_true(values: Valuation(), condition: Nat, when_true, when_false: StructuredRegion, call: Answers(),
+// The ports moves write.
+fn moved_ports(ns: List<Node>) → Ports { Ports(ns.map(node_output)) }
+
+theorem branch_true(values: Valuation(), condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion, call: Answers(),
     h: values(1, condition).head_bit() = True, wd, id: Nat):
-    branch(condition, when_true, when_false).eval(call, values)(wd, id) = when_true.eval(call, values)(wd, id) {
+    branch(condition, outputs, when_true, when_false).eval(call, values)(wd, id) = when_true.eval(call, values)(wd, id) {
     j(sym(h), λ b _ => (match b { False => when_false.eval(call, values)(wd, id), True => when_true.eval(call, values)(wd, id) })
         = when_true.eval(call, values)(wd, id), refl)
 }
 
-theorem branch_false(values: Valuation(), condition: Nat, when_true, when_false: StructuredRegion, call: Answers(),
+theorem branch_false(values: Valuation(), condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion, call: Answers(),
     h: values(1, condition).head_bit() = False, wd, id: Nat):
-    branch(condition, when_true, when_false).eval(call, values)(wd, id) = when_false.eval(call, values)(wd, id) {
+    branch(condition, outputs, when_true, when_false).eval(call, values)(wd, id) = when_false.eval(call, values)(wd, id) {
     j(sym(h), λ b _ => (match b { False => when_false.eval(call, values)(wd, id), True => when_true.eval(call, values)(wd, id) })
         = when_false.eval(call, values)(wd, id), refl)
 }
 
 // A branch keeps what both its arms keep.
-theorem branch_keeps(values: Valuation(), condition: Nat, when_true, when_false: StructuredRegion, call: Answers(), next: Nat,
+theorem branch_keeps(values: Valuation(), condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion, call: Answers(), next: Nat,
     kept_true: Keeps(values, when_true.eval(call, values), next), kept_false: Keeps(values, when_false.eval(call, values), next)):
-    Keeps(values, branch(condition, when_true, when_false).eval(call, values), next) {
+    Keeps(values, branch(condition, outputs, when_true, when_false).eval(call, values), next) {
     λ wd id below => (match values(1, condition).head_bit() as λ b => values(1, condition).head_bit() = b →
-        branch(condition, when_true, when_false).eval(call, values)(wd, id) = values(wd, id) {
-        True => λ h => trans(branch_true(values, condition, when_true, when_false, call, h, wd, id), kept_true(wd, id, below)),
-        False => λ h => trans(branch_false(values, condition, when_true, when_false, call, h, wd, id), kept_false(wd, id, below)),
+        branch(condition, outputs, when_true, when_false).eval(call, values)(wd, id) = values(wd, id) {
+        True => λ h => trans(branch_true(values, condition, outputs, when_true, when_false, call, h, wd, id), kept_true(wd, id, below)),
+        False => λ h => trans(branch_false(values, condition, outputs, when_true, when_false, call, h, wd, id), kept_false(wd, id, below)),
     })(refl)
 }
 
 // A branch on a bit holds, at a port both arms write, the value the bit
 // chooses.
-theorem branch_holds(t: Ty, tys: Nat → RecInfo, values: Valuation(), condition: Nat, when_true, when_false: StructuredRegion,
+theorem branch_holds(t: Ty, tys: Nat → RecInfo, values: Valuation(), condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion,
     call: Answers(), out: Nat, b: Bool, yes, no: t.sem(tys), h: values(1, condition).head_bit() = b,
     held_true: t.Holds(tys, when_true.eval(call, values), out, yes), held_false: t.Holds(tys, when_false.eval(call, values), out, no)):
-    t.Holds(tys, branch(condition, when_true, when_false).eval(call, values), out, match b { False => no, True => yes }) {
+    t.Holds(tys, branch(condition, outputs, when_true, when_false).eval(call, values), out, match b { False => no, True => yes }) {
     match b {
-        True => t.holds_at(tys, when_true.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out, out,
-            t.same_everywhere(tys, when_true.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out,
-                λ wd id => branch_true(values, condition, when_true, when_false, call, h, wd, id)), yes, held_true),
-        False => t.holds_at(tys, when_false.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out, out,
-            t.same_everywhere(tys, when_false.eval(call, values), branch(condition, when_true, when_false).eval(call, values), out,
-                λ wd id => branch_false(values, condition, when_true, when_false, call, h, wd, id)), no, held_false),
+        True => t.holds_at(tys, when_true.eval(call, values), branch(condition, outputs, when_true, when_false).eval(call, values), out, out,
+            t.same_everywhere(tys, when_true.eval(call, values), branch(condition, outputs, when_true, when_false).eval(call, values), out,
+                λ wd id => branch_true(values, condition, outputs, when_true, when_false, call, h, wd, id)), yes, held_true),
+        False => t.holds_at(tys, when_false.eval(call, values), branch(condition, outputs, when_true, when_false).eval(call, values), out, out,
+            t.same_everywhere(tys, when_false.eval(call, values), branch(condition, outputs, when_true, when_false).eval(call, values), out,
+                λ wd id => branch_false(values, condition, outputs, when_true, when_false, call, h, wd, id)), no, held_false),
     }
 }
 
@@ -734,7 +739,7 @@ fn Tm::compose(le, lb: Lowered) → Option<Lowered> { Some(Lowered(Compose(le.re
 // A branch: each arm moves its result to fresh ports above both (a record
 // a field at a time).
 fn Tm::branch_lowered(tys: Nat → RecInfo, ty_yes: Ty, pc: Nat, ly, ln: Lowered) → Lowered {
-    Lowered(branch(pc,
+    Lowered(branch(pc, moved_ports(ty_yes.moves(tys, ln.next, ly.result)),
             Compose(ly.region, nodes_region(ty_yes.moves(tys, ln.next, ly.result))),
             Compose(ln.region, nodes_region(ty_yes.moves(tys, ln.next, ln.result)))),
         ln.next, ty_yes.past(tys, ln.next))
@@ -1131,11 +1136,11 @@ theorem Tm::if_sound(c: Nat, yes, no: Tm, w: World,
             let when_true = Compose(ly.region, nodes_region(ty_yes.moves(w.tys, out, ly.result)));
             let when_false = Compose(ln.region, nodes_region(ty_yes.moves(w.tys, out, ln.result)));
             ⟨Nat::le_trans(next, out, ty_yes.past(w.tys, out), reaches, moved_yes.right.right.right), ⟨moved_yes.right.right.left,
-                ⟨branch_keeps(values, pc, when_true, when_false, call, next,
+                ⟨branch_keeps(values, pc, moved_ports(ty_yes.moves(w.tys, out, ly.result)), when_true, when_false, call, next,
                     λ wd id lt => trans(moved_yes.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, out, lt, reaches)), first.right.right.left(wd, id, lt)),
                     λ wd id lt => trans(moved_no.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, out, lt, reaches)),
                         second.right.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, ly.next, lt, first.left)))),
-                branch_holds(ty_yes, w.tys, values, pc, when_true, when_false, call, out, scrutinee,
+                branch_holds(ty_yes, w.tys, values, pc, moved_ports(ty_yes.moves(w.tys, out, ly.result)), when_true, when_false, call, out, scrutinee,
                     Tm::sem(yes, w, g, env), no_cast, chosen, moved_yes.left, moved_no.left)⟩⟩⟩
         })))))
 }

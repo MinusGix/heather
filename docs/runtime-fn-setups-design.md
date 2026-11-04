@@ -1133,6 +1133,11 @@ every runtime fn it reaches. What the round fixed:
   now emits the `Call` and then a `Move` of its result to the next fresh
   port, as the Rust reflector's programs do; `Tm::lower_call_sound` covers
   the move.
+- **A conditional names its outputs.** `branch` now takes the ports both
+  arms move their result into (`moved_ports`), as a `Conditional`'s
+  `outputs`. With none, the x86 planner placed each arm's result on its
+  own and a nested `if` left them in different registers, which the join
+  refuses; with the outputs named it picks one register for both arms.
 - **`compile-x86`.** A function marked `runtime fn` compiles through its
   published program: the certificate defines its program as `f::program`
   and its `_agrees` as `f::agrees`, and the rest (placement, lowering,
