@@ -129,12 +129,16 @@ fn e2m1() → Format { Format(1, trivial, 0, 2, FiniteOnly) }
 // Canonical form.
 
 // The significand fits in `prec` bits, the exponent is in range, only the
-// least exponent holds significands below `2^(prec - 1)`, and the pattern the
-// format reserves for NaN is not taken.
+// least exponent holds significands below `2^(prec - 1)`, and a format that
+// reserves its top pattern for NaN leaves room below it in the top binade.
+// Stated as the proposition and computed as its decision, whose bit is the
+// comparisons themselves (`leb`, `same`, `&&`, `||`, `!`;
+// issues/decide-bit-is-the-comparison.md), so the proof field of a `Finite`
+// is proof-irrelevant, a closed format decides it by `refl`, and the four
+// conditions go in and out by `decide_intro` / `decide_elim`.
 fn Format::canonical(self F: Format, mag, bexp: Nat) → Bool {
-    let normal = match bexp { Zero => True, Succ(_) => F.half().leb(mag) };
-    let reserved = F.specials.reserves_top() && F.span.leb(bexp) && F.top().leb(Succ(mag));
-    Succ(mag).leb(F.top()) && bexp.leb(F.span) && normal && !reserved
+    decide_bit<Succ(mag) <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
+        ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top())>()
 }
 
 record Finite(F: Format) { neg: Bool, mag: Nat, bexp: Nat, ok: F.canonical(mag, bexp).IsTrue() }
@@ -269,6 +273,11 @@ instance(F: Format) StrictOrder<Finite(F)>(Finite::Same, Finite::Lt, Finite::Le)
     lt_tight := λ x y h1 h2 => Finite::same_of_not_lt(h1, h2),
     le_of_not_lt := λ x y h => Finite::le_of_not_lt(h),
     not_lt_of_le := λ x y h => Finite::not_lt_of_le(h),
+    lt_transitive := Transitive(λ x y z h1 h2 => Finite::lt_trans(h1, h2)),
+    same_lt := Trans(λ x y z h1 h2 => Finite::lt_of_le_of_lt(Finite::le_of_same(h1), h2)),
+    lt_same := Trans(λ x y z h1 h2 => Finite::lt_of_lt_of_le(h1, Finite::le_of_same(h2))),
+    same_le := Trans(λ x y z h1 h2 => Finite::le_trans(Finite::le_of_same(h1), h2)),
+    le_same := Trans(λ x y z h1 h2 => Finite::le_trans(h1, Finite::le_of_same(h2))),
 }
 
 instance(F: Format) Cotransitive<Finite(F)>(Finite::Lt) {
@@ -286,6 +295,14 @@ instance(F: Format) PseudoOrder<Finite(F)>(Finite::Same, Finite::Lt, Finite::Le)
     le_of_not_lt := λ x y h => Finite::le_of_not_lt(h),
     not_lt_of_le := λ x y h => Finite::not_lt_of_le(h),
     rel_cotrans := Finite::lt_cotrans,
+    lt_transitive := Transitive(λ x y z h1 h2 => Finite::lt_trans(h1, h2)),
+    same_lt := Trans(λ x y z h1 h2 => Finite::lt_of_le_of_lt(Finite::le_of_same(h1), h2)),
+    lt_same := Trans(λ x y z h1 h2 => Finite::lt_of_lt_of_le(h1, Finite::le_of_same(h2))),
+    same_le := Trans(λ x y z h1 h2 => Finite::le_trans(Finite::le_of_same(h1), h2)),
+    le_same := Trans(λ x y z h1 h2 => Finite::le_trans(h1, Finite::le_of_same(h2))),
+    le_preorder := Preorder(Finite::le_refl, λ x y z h1 h2 => Finite::le_trans(h1, h2)),
+    lt_le := Trans(λ x y z h1 h2 => Finite::lt_of_lt_of_le(h1, h2)),
+    le_lt := Trans(λ x y z h1 h2 => Finite::lt_of_le_of_lt(h1, h2)),
 }
 
 // Negation flips the sign bit and nothing else.
@@ -298,7 +315,7 @@ theorem Finite::neg_neg({F: Format}, self x: Finite(F)): -(-x) = x {
 }
 
 theorem Finite::dyadic_neg({F: Format}, self x: Finite(F)): (-x).dyadic() ≈ -x.dyadic() {
-    match x.neg as λ s => Dyadic(match !s { False => x.mag.int(), True => -x.mag.int() }, x.q()) ≈ -Dyadic(match s { False => x.mag.int(), True => -x.mag.int() }, x.q()) {
+    match x.neg {
         False => Dyadic(-x.mag.int(), x.q()).same_refl(),
         True => j(sym(x.mag.int().neg_neg()), λ m _ => Dyadic(x.mag.int(), x.q()) ≈ Dyadic(m, x.q()), Dyadic(x.mag.int(), x.q()).same_refl()),
     }
@@ -355,10 +372,7 @@ theorem Format::four_le_top(self F: Format): 4 <= F.top() {
     omega
 }
 
-// The canonical form from its four conditions, each stated as a fact about
-// naturals: the significand fits, the exponent is in range, a significand
-// below `2^(prec - 1)` sits at the least exponent, and a format that reserves
-// its top pattern for NaN leaves room below it in the top binade.
+// The canonical form from its four conditions.
 theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
     fits: Succ(mag) <= F.top(),
     range: bexp <= F.span,
@@ -366,27 +380,7 @@ theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
     free: F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top()):
     F.canonical(mag, bexp).IsTrue()
 {
-    let fits_bit = Succ(mag).leb_complete(F.top(), fits);
-    let range_bit = bexp.leb_complete(F.span, range);
-    let normal_bit = match bexp as λ b => (b = 0 ∨ F.half() <= mag) → (match b { Zero => True, Succ(_) => F.half().leb(mag) }).IsTrue() {
-        Zero => λ _ => trivial,
-        Succ(_) => λ n => match n {
-            Inl(zero) => false_elim(omega(zero)),
-            Inr(le) => F.half().leb_complete(mag, le),
-        },
-    }(normal);
-    let reserved = F.specials.reserves_top() && F.span.leb(bexp) && F.top().leb(Succ(mag));
-    let free_bit = reserved.is_true_not_intro(λ r => {
-        let rs = (F.specials.reserves_top() && F.span.leb(bexp)).is_true_and(F.top().leb(Succ(mag)), r);
-        let rr = F.specials.reserves_top().is_true_and(F.span.leb(bexp), rs.left);
-        let room = free(rr.left, F.span.leb_sound(bexp, rr.right));
-        let over = F.top().leb_sound(Succ(mag), rs.right);
-        omega
-    });
-    (Succ(mag).leb(F.top()) && bexp.leb(F.span) && (match bexp { Zero => True, Succ(_) => F.half().leb(mag) })).is_true_and_intro(!reserved,
-        (Succ(mag).leb(F.top()) && bexp.leb(F.span)).is_true_and_intro(match bexp { Zero => True, Succ(_) => F.half().leb(mag) },
-            Succ(mag).leb(F.top()).is_true_and_intro(bexp.leb(F.span), fits_bit, range_bit), normal_bit),
-        free_bit)
+    decide_intro(And(fits, And(range, And(normal, free))))
 }
 
 // The four conditions back out of the canonical form.
@@ -394,23 +388,7 @@ theorem Format::canonical_elim(self F: Format, mag, bexp: Nat, ok: F.canonical(m
     Succ(mag) <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
         ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top())
 {
-    let normal_bit = match bexp { Zero => True, Succ(_) => F.half().leb(mag) };
-    let reserved = F.specials.reserves_top() && F.span.leb(bexp) && F.top().leb(Succ(mag));
-    let all = (Succ(mag).leb(F.top()) && bexp.leb(F.span) && normal_bit).is_true_and(!reserved, ok);
-    let abc = (Succ(mag).leb(F.top()) && bexp.leb(F.span)).is_true_and(normal_bit, all.left);
-    let ab = Succ(mag).leb(F.top()).is_true_and(bexp.leb(F.span), abc.left);
-    let normal = match bexp as λ b => (match b { Zero => True, Succ(_) => F.half().leb(mag) }).IsTrue() → (b = 0 ∨ F.half() <= mag) {
-        Zero => λ _ => Inl(refl),
-        Succ(_) => λ t => Inr(F.half().leb_sound(mag, t)),
-    }(abc.right);
-    let free: (F.specials.reserves_top().IsTrue() → F.span <= bexp → Succ(Succ(mag)) <= F.top()) = λ rt sp => match Succ(Succ(mag)).le_dec(F.top()) as λ _ => Succ(Succ(mag)) <= F.top() {
-        Inl(room) => room,
-        Inr(none) => false_elim(reserved.is_true_not(all.right)(
-            (F.specials.reserves_top() && F.span.leb(bexp)).is_true_and_intro(F.top().leb(Succ(mag)),
-                F.specials.reserves_top().is_true_and_intro(F.span.leb(bexp), rt, F.span.leb_complete(bexp, sp)),
-                F.top().leb_complete(Succ(mag), Nat::le_of_not_lt(Succ(mag), F.top(), none))))),
-    };
-    And(Succ(mag).leb_sound(F.top(), ab.left), And(bexp.leb_sound(F.span, ab.right), And(normal, free)))
+    decide_elim(ok)
 }
 
 // Zero of either sign.
@@ -454,8 +432,6 @@ theorem Format::max_mag_bounds(self F: Format):
     let h = F.two_le_half();
     let t: (F.top() = F.half() * 2) = F.top_double();
     let four = F.four_le_top();
-    let s1 = Nat::sub_add_cancel(1, F.top(), Nat::le_trans(1, 4, F.top(), trivial, four));
-    let s2 = Nat::sub_add_cancel(2, F.top(), Nat::le_trans(2, 4, F.top(), trivial, four));
     match F.specials.reserves_top() as λ r => F.half() <= (match r { True => F.top() - 2, False => F.top() - 1 })
         ∧ Succ(match r { True => F.top() - 2, False => F.top() - 1 }) <= F.top()
         ∧ (r.IsTrue() → Succ(Succ(match r { True => F.top() - 2, False => F.top() - 1 })) = F.top())
@@ -480,8 +456,6 @@ fn Finite::max_finite(F: Format) → Finite(F) {
     let h = F.two_le_half();
     let t: (F.top() = F.half() * 2) = F.top_double();
     let four = F.four_le_top();
-    let s1 = Nat::sub_add_cancel(1, F.top(), Nat::le_trans(1, 4, F.top(), trivial, four));
-    let s2 = Nat::sub_add_cancel(2, F.top(), Nat::le_trans(2, 4, F.top(), trivial, four));
     let fits = match F.specials.reserves_top() as λ r => Succ(match r { True => F.top() - 2, False => F.top() - 1 }) <= F.top() {
         True => { let g: (F.top() - 2 + 1 <= F.top()) = omega; g },
         False => { let g: (F.top() - 1 + 1 <= F.top()) = omega; g },
@@ -503,7 +477,7 @@ fn Finite::max_finite(F: Format) → Finite(F) {
 fn Finite::ulp({F: Format}, self x: Finite(F)) → Dyadic { Dyadic(1, x.q()) }
 
 theorem Finite::zero_dyadic(F: Format, neg: Bool): (Finite::zero(F, neg)).dyadic() ≈ 0 {
-    match neg as λ s => Dyadic(match s { False => OfNat(0), True => -OfNat(0) }, F.qmin() + OfNat(0)) ≈ 0 {
+    match neg {
         False => Dyadic::zero_mant(F.qmin() + OfNat(0)),
         True => Dyadic::zero_mant(F.qmin() + OfNat(0)),
     }

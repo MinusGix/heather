@@ -1,0 +1,213 @@
+// `linarith`: linear arithmetic at an ordered field, read at the field's
+// setoid equality (issues/linarith-ordered-fields.md;
+// docs/linarith-design.md).
+//
+// The tactic (crates/elab/src/linarith.rs) reads the goal and the given
+// facts as linear forms over `ring`'s monomials, finds a nonnegative
+// combination by Fourier–Motzkin elimination, and writes a proof from the
+// lemmas below. Each lemma is generic over an ordered field that names its
+// integers, so the same certificate is checked at `Rat` and at `CReal`
+// through the class laws, never by unfolding a carrier's representation.
+// The one identity a certificate rests on, `k·(b - a) ≈ s`, is `ring`'s
+// (`RingExpr::sound_rel`): this file only turns facts into nonnegative
+// parts, adds them up, and reads the goal back off the scaled difference.
+//
+// Nothing here decides an order. A certificate for `a <= b` is a direct
+// proof that `b - a` is a nonnegative combination, which at `CReal` is a
+// refutation of `b < a` assembled from the instance's laws.
+//
+// Points are explicit (`ordered_field`'s convention); `num_pos` and
+// `zero_le` take a point only so a caller's carrier pins `A`.
+
+import logic;
+import nat;
+import int;
+import relation_props;
+import order;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import ring;
+import omega;
+
+// One dictionary: the two constraints share `≈`, `+` and `*` at `A`, so they
+// are one `CommRingOfInt+OrderedField` with one `CommRing` under both
+// (issues/constraints-sharing-indices.md).
+section<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)> {
+
+// ---------------------------------------------------------------------------
+// Coefficients: the carrier's positive numerals.
+
+theorem lin_one_pos(x: A): A.unit < A.of_int(OfNat(1)) {
+    StrictOrder::lt_respects_r(A.unit, A.multiplicative.unit, A.of_int(OfNat(1)),
+        A.rel_sym(A.of_int(OfNat(1)), A.multiplicative.unit, A.of_int_one), A.zero_lt_one)
+}
+
+theorem lin_num_pos(x: A, n: Nat): A.unit < A.of_int(OfNat(Succ(n))) {
+    match n {
+        Zero => lin_one_pos(x),
+        Succ(m) => StrictOrder::lt_respects_r(A.unit, A.of_int(OfNat(Succ(m))) + A.of_int(OfNat(1)), A.of_int(OfNat(Succ(Succ(m)))),
+            A.rel_sym(A.of_int(OfNat(Succ(Succ(m)))), A.of_int(OfNat(Succ(m))) + A.of_int(OfNat(1)), A.of_int_add(OfNat(Succ(m)), OfNat(1))),
+            OrderedAddMonoid::add_pos(A.of_int(OfNat(Succ(m))), A.of_int(OfNat(1)), lin_num_pos(x, m), lin_one_pos(x))),
+    }
+}
+
+theorem lin_num_nonneg(x: A, n: Nat): A.unit <= A.of_int(OfNat(Succ(n))) {
+    StrictOrder::le_of_lt(A.unit, A.of_int(OfNat(Succ(n))), lin_num_pos(x, n))
+}
+
+theorem lin_zero_le(x: A): A.unit <= A.unit { StrictOrder::le_refl(A.unit) }
+
+// ---------------------------------------------------------------------------
+// Facts as nonnegative parts: `a R b` gives `b - a` on the right side of zero.
+
+theorem lin_le_part(a, b: A, h: a <= b): A.unit <= b + A.inv(a) {
+    StrictOrder::le_respects(a + A.inv(a), A.unit, b + A.inv(a), b + A.inv(a), A.inv_r(a), A.rel_refl(b + A.inv(a)),
+        OrderedAddMonoid::add_le_mono_r(a, b, A.inv(a), h))
+}
+
+theorem lin_lt_part(a, b: A, h: a < b): A.unit < b + A.inv(a) { OrderedAddGroup::sub_pos(a, b, h) }
+
+// `¬(b < a)` is `a <= b` by the class's characterisation of `≤`.
+theorem lin_not_lt_part(a, b: A, h: ¬(b < a)): A.unit <= b + A.inv(a) {
+    lin_le_part(a, b, A.le_of_not_lt(a, b, h))
+}
+
+// An equation is two parts, one each way.
+theorem lin_same_part(a, b: A, h: a ≈ b): A.unit <= b + A.inv(a) {
+    lin_le_part(a, b, StrictOrder::le_of_same(a, b, h))
+}
+
+theorem lin_same_part_rev(a, b: A, h: a ≈ b): A.unit <= a + A.inv(b) {
+    lin_le_part(b, a, StrictOrder::le_of_same(b, a, A.rel_sym(a, b, h)))
+}
+
+// A part scaled by a positive coefficient.
+theorem lin_scale_le(k, x: A, hk: A.unit < k, hx: A.unit <= x): A.unit <= k * x {
+    OrderedSemiring::mul_nonneg(k, x, StrictOrder::le_of_lt(A.unit, k, hk), hx)
+}
+
+theorem lin_scale_lt(k, x: A, hk: A.unit < k, hx: A.unit < x): A.unit < k * x { OrderedSemiring::mul_pos(k, x, hk, hx) }
+
+// A denominator is positive when its reciprocal is: `s·d ≈ 1` with `s`
+// positive (`Rat::inv_succ(n)`, or a fact `0 < x⁻¹`). This is how a row is
+// scaled by the denominator a reciprocal in it clears.
+theorem lin_den_pos(s, d: A, hs: A.unit < s, e: s * d ≈ A.of_int(OfNat(1))): A.unit < d {
+    OrderedSemiring::pos_of_mul_pos(s, d, hs, StrictOrder::lt_respects_r(A.unit, A.of_int(OfNat(1)), s * d, A.rel_sym(s * d, A.of_int(OfNat(1)), e),
+        lin_one_pos(s)))
+}
+
+// ---------------------------------------------------------------------------
+// Sums of parts: strict as soon as one summand is.
+
+theorem lin_add_le_le(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x + y {
+    LocatedAddMonoid::add_nonneg(x, y, hx, hy)
+}
+
+theorem lin_add_lt_le(x, y: A, hx: A.unit < x, hy: A.unit <= y): A.unit < x + y {
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddMonoid::add_lt_le_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
+theorem lin_add_le_lt(x, y: A, hx: A.unit <= x, hy: A.unit < y): A.unit < x + y {
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddMonoid::add_le_lt_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
+theorem lin_add_lt_lt(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y {
+    OrderedAddMonoid::add_pos(x, y, hx, hy)
+}
+
+theorem lin_weaken(s: A, h: A.unit < s): A.unit <= s { StrictOrder::le_of_lt(A.unit, s, h) }
+
+// ---------------------------------------------------------------------------
+// Reading the goal back: `k·(b - a) ≈ s` with `k` positive and `s` a sum of
+// parts.
+
+theorem lin_le_of_sub_nonneg(a, b: A, h: A.unit <= b + A.inv(a)): a <= b {
+    StrictOrder::le_respects(A.unit + a, a, (b + A.inv(a)) + a, b, A.unit_l(a), OrderedAddGroup::sub_add_cancel(b, a),
+        OrderedAddMonoid::add_le_mono_r(A.unit, b + A.inv(a), a, h))
+}
+
+theorem lin_finish_le(a, b, k, s: A, hk: A.unit < k, hs: A.unit <= s, e: k * (b + A.inv(a)) ≈ s): a <= b {
+    let scaled: (A.unit <= k * (b + A.inv(a))) =
+        StrictOrder::le_respects(A.unit, A.unit, s, k * (b + A.inv(a)), A.rel_refl(A.unit), A.rel_sym(k * (b + A.inv(a)), s, e), hs);
+    lin_le_of_sub_nonneg(a, b, A.le_of_not_lt(A.unit, b + A.inv(a), λ below => A.not_lt_of_le(A.unit, k * (b + A.inv(a)), scaled,
+        StrictOrder::lt_respects_r(k * (b + A.inv(a)), k * A.unit, A.unit, A.mul_zero(k),
+            OrderedSemiring::mul_lt_mono_l(b + A.inv(a), A.unit, k, below, hk)))))
+}
+
+theorem lin_finish_lt(a, b, k, s: A, hk: A.unit < k, hs: A.unit < s, e: k * (b + A.inv(a)) ≈ s): a < b {
+    OrderedAddGroup::lt_of_sub_pos(a, b, OrderedSemiring::pos_of_mul_pos(k, b + A.inv(a), hk,
+        StrictOrder::lt_respects_r(A.unit, s, k * (b + A.inv(a)), A.rel_sym(k * (b + A.inv(a)), s, e), hs)))
+}
+
+// The facts alone are contradictory: a positive sum of parts that is zero.
+theorem lin_finish_false(s: A, hs: A.unit < s, e: s ≈ A.unit): False {
+    A.lt_irrefl(A.unit, StrictOrder::lt_respects_r(A.unit, s, A.unit, e, hs))
+}
+
+theorem lin_same_of_le(a, b: A, hab: a <= b, hba: b <= a): a ≈ b { StrictOrder::le_antisymm(a, b, hab, hba) }
+
+theorem lin_not_lt_of_le(a, b: A, h: b <= a): ¬(a < b) { A.not_lt_of_le(b, a, h) }
+
+// ---------------------------------------------------------------------------
+// `nlinarith` (docs/nonlinear-arithmetic-design.md): products of parts and
+// squares are parts too, and `a <= b` is read back from a refutation of
+// `b < a`, so the goal's negation can be multiplied like a fact.
+
+theorem nlin_mul_le(x, y: A, hx: A.unit <= x, hy: A.unit <= y): A.unit <= x * y { OrderedSemiring::mul_nonneg(x, y, hx, hy) }
+
+theorem nlin_mul_lt(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x * y { OrderedSemiring::mul_pos(x, y, hx, hy) }
+
+theorem nlin_sq(x: A): A.unit <= x * x { OrderedRing::sq_nonneg(x) }
+
+theorem nlin_le_of_refute(a, b: A, h: ¬(b < a)): a <= b { A.le_of_not_lt(a, b, h) }
+
+}
+
+// ---------------------------------------------------------------------------
+// `nlinarith` at `Int` and `Nat`: the product of two facts' differences,
+// stated over the facts' own sides, for `omega` to meet next to `ring`'s
+// statement of it over monomials.
+
+theorem nlin_int_le_le(a, b, c, d: Int, h1: a <= b, h2: c <= d): OfNat(0) <= (b - a) * (d - c) {
+    (b - a).mul_nonneg(d - c, omega(h1), omega(h2))
+}
+
+theorem nlin_int_lt_le(a, b, c, d: Int, h1: a < b, h2: c <= d): OfNat(0) <= (b - a) * (d - c) {
+    (b - a).mul_nonneg(d - c, omega(h1), omega(h2))
+}
+
+theorem nlin_int_le_lt(a, b, c, d: Int, h1: a <= b, h2: c < d): OfNat(0) <= (b - a) * (d - c) {
+    (b - a).mul_nonneg(d - c, omega(h1), omega(h2))
+}
+
+theorem nlin_int_lt_lt(a, b, c, d: Int, h1: a < b, h2: c < d): OfNat(0) < (b - a) * (d - c) {
+    let scaled = OfNat(0).mul_lt_mono_r(b - a, d - c, omega(h1), omega(h2));
+    rewrite(sym((d - c).zero_mul()), scaled)
+}
+
+theorem nlin_int_sq(x: Int): OfNat(0) <= x * x { x.sq_nonneg() }
+
+// At `Nat` a difference truncates, so the product `(b - a)·(d - c) ≥ 0` is
+// stated with its four terms on the sides they are positive on.
+theorem nlin_nat_le_le(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * d + b * c <= a * c + b * d {
+    let e: (b * d + a * c = (b * c + a * d) + (b - a) * (d - c)) = {
+        let rb: (b = (b - a) + a) = sym(a.sub_add_cancel(b, h1));
+        let rd: (d = (d - c) + c) = sym(c.sub_add_cancel(d, h2));
+        ring(rb, rd)
+    };
+    omega(e)
+}
+
+// A strict fact `a < b` is `a + 1 <= b`, which keeps the product strict.
+theorem nlin_nat_lt_le(a, b, c, d: Nat, h1: a < b, h2: c <= d): (a + 1) * d + b * c <= (a + 1) * c + b * d {
+    nlin_nat_le_le(a + 1, b, c, d, omega(h1), h2)
+}
+
+theorem nlin_nat_le_lt(a, b, c, d: Nat, h1: a <= b, h2: c < d): a * d + b * (c + 1) <= a * (c + 1) + b * d {
+    nlin_nat_le_le(a, b, c + 1, d, h1, omega(h2))
+}
+
+theorem nlin_nat_lt_lt(a, b, c, d: Nat, h1: a < b, h2: c < d): (a + 1) * d + b * (c + 1) <= (a + 1) * (c + 1) + b * d {
+    nlin_nat_le_le(a + 1, b, c + 1, d, omega(h1), omega(h2))
+}

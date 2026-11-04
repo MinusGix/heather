@@ -3,9 +3,8 @@ title: Pin Omega search and certificate growth telemetry
 status: open
 labels: [proofs,performance,arithmetic,testing]
 area: tactics
-blocked-by: [omega-linear-arithmetic]
 created: 2026-08-27
-updated: 2026-09-23
+updated: 2026-10-28
 ---
 
 Turn Omega's existing audit data into explicit scaling rails. Measure total and
@@ -45,3 +44,4 @@ division auxiliaries, and repeated shared opaque atoms.
 - 2026-09-05: OmegaReport grew a 'phases' field (OmegaPhases, per-invocation wall time by phase) in the [[omega-per-goal-elaboration-cost]] round, 2026-09-05; the counts this issue owns are untouched.
 - 2026-09-22: 2026-09-22: After the app@ round the CutSat lemmas lead the perf corpus; attribution question filed as [[omega-cutsat-lemma-cost]]. A clean probe of per-certificate check cost: an identity goal h : a < b ⊢ a < b over two list_len atoms checks in 224 ms ([[measure-obligation-omega-on-a-written-proof]]).
 - 2026-09-23: Correction to the 2026-09-22 entry: the calc_parser goal was not an identity. It was a mutual group's scaled obligation, and those sites now close without omega ([[measure-obligation-omega-on-a-written-proof]]). The per-certificate cost it pointed at stands: a two-variable linear Nat goal costs 200-500 ms per item cold (elaborating a ~5 KB certificate, then gating it), whatever the atoms.
+- 2026-10-28: Tracker tidy: dropped `blocked-by: [omega-linear-arithmetic]`. That issue is closed (the affine solver and its certificates landed), so nothing blocks this one; its scope here is unchanged.

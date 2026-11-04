@@ -1,0 +1,202 @@
+# Proof patterns: what costs, and what the language wants
+
+The rules rounds kept rediscovering, checked against master on 2026-10-29
+([[proof-patterns-audit-2026-10]] in issues/ has the probes and what was
+retired). Each rule says why, so it can be dropped when the reason goes.
+A rule that names an open issue is a workaround for that issue, not a
+property of Heather.
+
+## 1. Closed facts: evaluate once, in the kernel
+
+- **A closed verdict is evaluated once, by the kernel, in any of its three
+  spellings**: `b = True` by `refl`, `b.IsTrue()` by `trivial`, or
+  `b.IsTrue()` by `decide`. `trivial` reads its expected type only within a
+  small step budget and leaves a verdict past it to the gate; `decide`'s
+  application no longer reduces the goal once its `P` is solved. A false
+  verdict is still reported at the `trivial` or `decide` that claimed it,
+  the elaborator reducing it only after the gate refused
+  ([[closed-verdict-evaluated-twice]], closed; the probes are
+  `lib/_tests/std/core/closed_verdict_tests.hthr`).
+- **Never compare two separately computed values by `refl`.** Conversion
+  unfolds both sides in lockstep, a δ-step on each side per step. Small
+  lists cost about three single evaluations; an allocation's `Homes = Homes`
+  ran out of memory, and whole `MachineState` equalities run out of fuel.
+  Decide equality with a Bool function and state `same(a, b) = True`.
+- **A computed value is shared only by closure identity.** Two textual
+  copies are two evaluations. Name a value once: a `let`, a record field a
+  constructor computes (`Layout::of` holds the leaf pool), or
+  `Option::some_get` around a compile. In evaluated Nat code write `q * 2`,
+  not `q + q`.
+- **Never run a loop at a constant fuel by conversion.** It runs out of
+  fuel. Instantiate a generic lemma whose statement is syntactic instead.
+- **Prove at a neutral parameter, instantiate at the literal.** A lookup at
+  a literal width converts in lockstep (about 10k steps) where the same
+  lemma at a variable width costs about 130. Stretches over an abstract
+  label are elaborated once and cited with `refl` at each use.
+- **Read a compiler's promise off at an abstract output.** Projecting a
+  soundness conclusion (`Tm::LowerHolds(t, …, Tm::lower(t, …))(…).right`)
+  makes the elaborator spell the computed output inside the conclusion's
+  type, and that grows with the program: `wc_step`'s did not finish. A
+  lemma taking `r: Option<Lowered>` and the promise at `r`, matching on `r`
+  and projecting there, costs what the abstract proof costs; the
+  instance passes `Tm::lower(t, …)` for `r` and lets the kernel evaluate it
+  once (`wc_step_lowered`, lib/_tests/native/runtime/rt_lower_tests.hthr).
+
+## 2. Statements and proof shape
+
+- **Split a long proof into stage theorems with written statements.** One
+  theorem composing stages inline took 80 s and once ran out of memory; the
+  same stages as five theorems took 0.2 s each. A proof whose state λ holds
+  many lets makes every later let dearer (388 s, split to 27 s + 12 s).
+- **Annotate a λ binder you match on when the expected type is computed.**
+  The annotation is what the binder gets; unannotated, it gets the computed
+  domain and the match spells its unfolding (20–170× kernel steps).
+- **Put case analysis of a trace or other inductive in a small lemma over
+  its own type**, not inside a recursion or under a computed binder.
+- **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
+  `rewrite` and generic-lemma matching convert, or fail before instance
+  search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).
+
+## 3. omega
+
+- **Give it what it cannot read yet.** A Nat `a - b` is split into its two
+  cases, so no `Nat::sub_add_cancel` beside the call
+  ([[omega-nat-truncated-subtraction]]). An `Exists`'s `.proof` is read as
+  its contractum (`omega(e.proof)`), with no restating `have`; so is a
+  pattern-bound fact by `linarith`/`nlinarith`. A Bool guard
+  (`F.canonical(m, b).IsTrue()`, a record's `ok` field) is read by its
+  `&&`/`||`/`!`/`leb` structure, through a Bool definition's `let`s, so
+  `omega(g.ok)` replaces an `is_true_and`/`leb_sound` chain or an `_elim`
+  whose conjuncts only feed omega ([[omega-reads-bool-guards]]); a stuck
+  `match` inside the guard is still not read.
+- **Over records and layouts at a literal program, prefer Nat step lemmas**
+  (`Nat::le_trans`, `add_le_mono_l`) or a generic lemma over Nat variables.
+  The kernel converts the atoms' definitions. omega does read a field at
+  closed arguments as what was put there (`Lay::of(3).size` meets
+  `Lay::of(3).cap`), so a failure there is a missing fact, not an atom.
+- **It reads every hypothesis in scope.** Keep its context small: put
+  arithmetic in small lemmas, never `omega` inside a stretch or with `Rat`
+  facts in scope. Inside a claim of trees (a `Goes` built from nested
+  lets and lambdas) even a one-fact `omega` read the whole context and
+  took minutes; stating the step's arithmetic as a lemma over bare
+  numbers (native_compile_perform's `push_arith`) made it free. `omega(h, …)` names the load-bearing facts; whether it
+  should read *only* those is [[omega-listed-facts-only]], an open decision.
+- **Products of `pow` terms: restate the step over variables.** `omega`
+  over `Nat` facts whose atoms are `m * pow(2, …)` products re-reads their
+  structure; the same facts handed to a lemma over bare `Nat`/`Int`
+  variables cost a hundredth (`eft.hthr`'s `vk_kt_arith`, `vk_kn_arith`:
+  `vk_bound` went from twenty seconds to a third of one).
+- **Annotate a `let` with the type its term has.** An annotation that
+  differs from it by a computation (`(h * Q).int() <= g.H()` for a term at
+  `(F.down(h * Q)).H() <= g.H()`) makes the checker evaluate the
+  computation to compare them, which can run out of memory; annotate the
+  term's own type and convert with `omega` and the equation.
+- **It needs a checking position:** `let k: (T) = omega(…);`. Where
+  nothing is expected the refusal says so (as for `ring`, `linarith`,
+  `nlinarith`, `bv_omega`, `positivity`;
+  [[checking-tactic-in-inference-position-diagnostic]], closed).
+- **Linear arithmetic at `Rat`/`CReal` is `linarith`**, not `omega`, which
+  unfolds Rat facts into Int cross products.
+- **nat.hthr and int.hthr cannot import omega.** Facts about Nat and Int
+  still live there; prove them by case splits and the order kit.
+
+## 4. Matches and recursion
+
+- The convoy `match h : obs(t)` refines the goal, including hypotheses
+  taken as arrows after it. If unsure, take `(o) → obs(t) = o → …` and match
+  on `o`.
+- A recursion that varies another parameter returns a function
+  (`(self fuel): (n: Nat) → …`), with the matched parameter first. The
+  elaborator generalizes a varied parameter itself
+  (`docs/ih-generalization-design.md`), but not for a self-call under an
+  `∃` in a `Type`-valued `fn`; curry that one by hand (`summation.hthr`'s
+  `List::RecSum_of`, [[ih-generalization-under-exists]]).
+- A case split on another parameter inside a recursion is fine: the guard
+  is the `match` a self-call descends through
+  ([[recursion-guard-takes-nearest-parameter-match]]). Not yet in a theorem
+  about the split parameter, whose ih mentions it; split in a helper there
+  ([[recursion-case-split-dependent-ih]]). An outer split works too, unless
+  the calls change its parameter: then the branch is refused, since the
+  recursive calls would skip it ([[recursion-branch-on-varied-parameter]]).
+- A motive-less nested match on a `Cons` tail needs a written motive
+  ([[nested-match-on-list-tail-motive]]).
+- **Don't match on a large theorem call's result.** `match lemma(..) as
+  .. { Exists(f, fh) => .. }`, or a match on `w.left` for `let w =
+  lemma(..)`, makes the elaborator and the kernel unfold the proof (an
+  order of magnitude more steps in `eft.hthr`; a split on a small lemma
+  is cheap). Pass the proof to a helper theorem that matches on its
+  parameter, or move the result with `j` over an equation:
+  [[match-on-proof-call-cost]].
+- **The same holds for projections chained through theorem results.**
+  `let au = below_both(a.witness, ..); let ad = below_both(au.witness, ..)`
+  and then a body over `ad.witness` made the kernel normalise the nested
+  witnesses, proofs and all (`DerivOn::chain` and `DerivOn::mul` in
+  `real_fn.hthr`: 8.3M and 8.9M steps). Compute the `∃` results with `let`,
+  then hand them all to a `*_close` theorem whose parameters they are; its
+  body projects variables (`DerivOn::chain_close`: 0.9M steps for both
+  halves) — [[library-gate-module-cold-rail]].
+- **An interface definition is an atom at open arguments outside its
+  module** (`docs/interface-definitions-design.md`): `refl` and lemma
+  statements that leaned on its body are refused, with a note naming the
+  equations. Move a fact across the call with its arm equation,
+  `rewrite(f_unfold_Ctor(…), in := h)` (or `sym(…)` for the other
+  direction), or declare the proof `unfolding f` when it really is about
+  the body. A call at closed arguments still computes, so §1's verdicts are
+  unchanged.
+- **A corecursive proof whose self-call would sit under `trans` (up-to
+  coinduction, not built for indexed codata): generalise the hypothesis**
+  to the relation the step lands in, so the next call's arguments are
+  whatever the step produced. `Io::reads_loop` takes "the pass's reading
+  `≈ u`" for any `u`, not "`= step`"; `Eutt::mrec_bind_from` takes
+  `Bisim(p, bind(q, k))`, not `p = bind(q, k)`. Through a function of
+  trees, follow the drops with `CoTree::after_map`'s exact count
+  (`docs/coitree-design.md` §7.9).
+- `absurd` needs a constructor clash; `False` goes by `false_elim`.
+- Tier-2 laws through `Vis` are not provable with `=` (no funext): state
+  them up to the tree's equivalence.
+
+## 5. Names and syntax
+
+Diagnosed by the elaborator and by design: `let p: (a = b) = …` needs the
+parentheses; a parameter with a default is passed by name; declarations are
+used after they are declared; records have unqualified names; `split`,
+`match`, `fun`, `if` and `Type` are not binder names; `Zero` and `Succ` are
+built in; identifiers are ASCII.
+
+Not diagnosed well yet:
+
+- A member's bare base name is its self-reference: inside `Prog::Sim`,
+  `Sim()` is a recursive call. Reach the global as `<module>::Sim`
+  (`prelude::cong` for the prelude,
+  [[self-reference-hides-same-named-global]]).
+- Inside a section or class body, `+` and `*` are the carrier's operations
+  even at Nat operands: spell `Nat::add(a, b)`.
+- A generic lemma whose explicit arguments don't mention the carrier needs
+  it written (`sound_rel<Rat>(…)`, [[partial-type-application]]).
+- An all-numeral relation (`0 < 1`) is at Nat: write `Rat::Lt(0, 1)`
+  ([[all-numeral-relations-default-to-nat]]). Numerals at `BitVec` need
+  `import algebra;`, characters at a byte `import char;`
+  ([[literal-classes-need-importing]]).
+- `[x] ++ ys` has no carrier: write `Cons(x, ys)` or `List::append`
+  ([[list-literal-left-of-append]]). A statement may start with a literal
+  (`[1, 2] = xs`); `[` opens a vector type only when `;` follows its
+  element ([[statement-leading-list-literal-parse]]).
+- Generated source: never `list::Nil` (bare `Nil` resolves by expected
+  type), and Int numerals as `int::OfNat(k)`.
+
+## 6. Before pushing lib/
+
+- `heather check --cache --review <file>` on each touched module: plain
+  `check` hides the review tier of lints, and some suite tests assert none
+  fire.
+- `scripts/fmt` on new or edited `.hthr` files.
+- New surface syntax: `scripts/check-tree-sitter`, and new lexer symbols in
+  tree-sitter-heather/syntax-inventory.json.
+
+## 7. Measuring a proof's cost
+
+- Use a fresh `--cache-dir` per run: a warm store, and an identical
+  declaration earlier in the same process, answer from verdicts and make
+  items look 10–50× cheaper.
+- `--only module::Owner::name --timings f.tsv` probes one declaration over
+  a replayed prefix; read the table with `scripts/timings`.

@@ -315,6 +315,68 @@ fn a_group_computes_what_it_says() {
     assert!(!m.is_empty(), "{m}");
 }
 
+/// The ring `Mᵢ { Lᵢ, Nᵢ(a: Mᵢ₊₁, b: Mᵢ) }` of `m` members and one `sizeᵢ`
+/// each (`issues/mutual-group-recursion-gate-cost.md`, the bench family
+/// `inductive/mutual-recursion`).
+fn ring(m: usize) -> String {
+    let mut s = String::from(ADD);
+    for i in 0..m {
+        let j = (i + 1) % m;
+        s.push_str(&format!("inductive M{i} {{ L{i}, N{i}(a: M{j}, b: M{i}) }}\n"));
+    }
+    for i in 0..m {
+        let j = (i + 1) % m;
+        s.push_str(&format!(
+            "fn size{i}(t: M{i}) -> Nat {{ match t {{ L{i} => 1, N{i}(a, b) => add(size{j}(a), size{i}(b)) }} }}\n"
+        ));
+    }
+    s
+}
+
+#[test]
+fn an_eight_member_ring_unfolds_by_refl() {
+    // Eight members ran out of conversion fuel on the open unfolding: the
+    // two sides' recursions compared their steps through the ih's shifted
+    // copy of the step.
+    let src = ring(8);
+    elab(&format!(
+        "{src}
+         theorem open(a: M1, b: M0): size0(N0(a, b)) = add(size1(a), size0(b)) {{ refl }}
+         theorem deep(a: M0, b: M7): size7(N7(L0, N7(a, b))) = add(1, add(size0(a), size7(b))) {{ refl }}
+         theorem lit(): size0(N0(N1(L2, L1), L0)) = 3 {{ refl }}"
+    ));
+    // Negative control: the members' recursions are not interchangeable.
+    let m = elab_err(&format!(
+        "{src}
+         theorem wrong(a: M1, b: M0): size0(N0(a, b)) = add(size0(b), size0(b)) {{ refl }}"
+    ));
+    assert!(!m.is_empty(), "{m}");
+}
+
+/// The ring's evaluation steps, for the whole source, per doubling of the
+/// members (`issues/iwf-shape-spine-comb-depth.md`). Every node of the
+/// recursion's case tree converts the member index type spelled by its code
+/// (the motive's `El(D#members)`) against the inline sum the named
+/// signature's `D#iout` returns; each decoded the code and walked the sum,
+/// one more binder deep each time, so the steps grew as m² (3.6× from 16 to
+/// 32 members). The kernel keeps that conversion apart from Γ, and a
+/// family's shape and index type are one allocation across its mentions:
+/// 2.8× now, the rest the members' own statements (each re-judges the
+/// signature in its own gate).
+#[test]
+fn a_ring_converts_its_index_type_once_per_gate() {
+    use heather_kernel::stats as kstats;
+    fn steps(m: usize) -> u64 {
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        let src = ring(m);
+        let before = kstats::snapshot();
+        e.elab_source(&src).unwrap_or_else(|err| panic!("{}", err.render(&src)));
+        kstats::snapshot().since(&before).eval_steps
+    }
+    let (s16, s32) = (steps(16), steps(32));
+    assert!(s32 < 3 * s16, "evaluation steps grew {s16} → {s32} for 16 → 32 members");
+}
+
 #[test]
 fn a_theorem_group_is_mutual_induction() {
     elab(&format!(

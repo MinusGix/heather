@@ -4,7 +4,7 @@ status: open
 labels: [frontend,stdlib,elaboration,design]
 area: language
 created: 2026-07-31
-updated: 2026-09-14
+updated: 2026-11-01
 ---
 
 From the first real library file ([[ir-simulate-design]], lib/certgen/ir_v1.hthr):
@@ -97,3 +97,9 @@ issue's open scope.
 - 2026-08-16: Layer 1's shopping list for `Nat`/`List` API content now has its own owner: [[std-api-waves]] holds the wave sequencing, with [[std-logic-module]], [[nat-order-kit]], [[decide-class]] and [[std-int-encoding]] owning the content. Nothing moves here — this issue keeps residency and layer 2 (chaining ergonomics, the `?`-shaped question), which is the half none of those touch.
 
 - 2026-09-14: Result residency and function/lambda-scoped `?` with explicit Ok are implemented by [[result-propagation]], including a runnable parser client. This issue retains Option chaining and any customer-driven generic propagation protocol; implicit success wrapping remains an unselected design option.
+- 2026-10-31: 2026-10-31: docs/sequencing-surface-design.md §3.5: layer 2 closes with R2 ([[binding-statements]]), which adds Option as a carrier (Option::bind/pure) and ? for Option. Implicit success wrapping stays unselected.
+- 2026-11-01: Binding statements landed ([[binding-statements]]): `Option` is a carrier
+  (`let x <- o;` exits with `None`), which covers the `gather` shape. `?` for
+  `Option` is still open: the parser lowers `?` to `result::Result::and_then`
+  before any type is known, so choosing `Option::and_then` is type-directed and
+  belongs in the elaborator (docs/sequencing-surface-design.md §13 item 6).

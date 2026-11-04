@@ -23,8 +23,9 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type};
 use heather_kernel::typing;
-use heather_syntax::{Expr, ExprKind, Span};
+use heather_syntax::{Expr, ExprKind, Span, TyKind};
 
+use crate::oracle::Unfold;
 use crate::{Cx, ElabError, Elaborator, oracle, stats};
 
 /// How deep backchaining may go before it refuses. Declaration-time
@@ -51,12 +52,6 @@ const DERIVED_LOOKUP_FUEL: u64 = 1 << 12;
 /// an inconclusive check is a miss that falls through to the rules.
 const COMPUTE_FUEL: u64 = 1 << 12;
 
-/// How many reduction steps a goal headed by a definition **no rule is
-/// about** may take to reach one that some rule is about
-/// (docs/inverse-power-notation-design.md §4): `PowOk(x, -1)` unfolds to
-/// `x.Apart(0)` in a handful. A goal still stuck past this is answered as
-/// before, by the trace's `no-rule`.
-const UNFOLD_STEPS: u64 = 64;
 
 /// One record of a resolution search — the trace is a flat list of these, not
 /// a prose paragraph (design §7, `issues/ai-facing-tooling.md` §7). `key` is
@@ -136,7 +131,7 @@ pub(crate) struct PositivityRun {
 /// can be undone: its dependency edges, its checking notes, and (an `omega`
 /// inside `positivity`) its named atom lists, warnings and Omega reports.
 pub(crate) struct SearchMark {
-    dependencies: std::collections::BTreeSet<String>,
+    dependencies: usize,
     notes: usize,
     goals: usize,
     warnings: usize,
@@ -147,22 +142,22 @@ pub(crate) struct SearchMark {
 impl SearchMark {
     pub(crate) fn of(e: &Elaborator) -> Self {
         SearchMark {
-            dependencies: e.attempt.direct_dependencies.borrow().clone(),
+            dependencies: e.attempt.direct_dependencies.borrow().mark(),
             notes: e.attempt.check_notes.borrow().len(),
             goals: e.attempt.goal_arena.mark(),
-            warnings: e.warnings.borrow().len(),
-            omega_reports: e.omega_reports.borrow().len(),
-            omega_failures: e.omega_failure_reports.borrow().len(),
+            warnings: e.pass.warnings.borrow().len(),
+            omega_reports: e.pass.omega_reports.borrow().len(),
+            omega_failures: e.pass.omega_failure_reports.borrow().len(),
         }
     }
 
     pub(crate) fn rollback(self, e: &Elaborator) {
-        *e.attempt.direct_dependencies.borrow_mut() = self.dependencies;
+        e.attempt.direct_dependencies.borrow_mut().rollback(self.dependencies);
         e.attempt.check_notes.borrow_mut().truncate(self.notes);
         e.attempt.goal_arena.rollback(self.goals);
-        e.warnings.borrow_mut().truncate(self.warnings);
-        e.omega_reports.borrow_mut().truncate(self.omega_reports);
-        e.omega_failure_reports.borrow_mut().truncate(self.omega_failures);
+        e.pass.warnings.borrow_mut().truncate(self.warnings);
+        e.pass.omega_reports.borrow_mut().truncate(self.omega_reports);
+        e.pass.omega_failure_reports.borrow_mut().truncate(self.omega_failures);
     }
 }
 
@@ -324,9 +319,10 @@ impl Elaborator {
         // (`docs/per-instantiation-type-codes-design.md` §4.2, amended
         // 2026-09-10; `docs/wf-shape-code-design.md` §4). One head unspell at
         // the entry, so the whole search sees one spelling.
+        let spelled = goal;
         let inline = self.unspell_here(goal);
         let goal = inline.as_ref().unwrap_or(goal);
-        let depth = self.resolve_depth.get();
+        let depth = self.scope.resolve_depth.get();
         tr.push(line(depth, "goal", display.to_string()));
         if depth >= MAX_DEPTH {
             tr.push(line(
@@ -344,6 +340,14 @@ impl Elaborator {
         if let Some(t) = self.derived_hit(cx, goal, prefer) {
             return Some(t);
         }
+        // A merged class's assembly is minted at its applied spelling (step
+        // 2b), which the inline lowering does not convert to within the
+        // table's lookup fuel.
+        if inline.is_some() && self.tag_of(goal).is_some_and(|i| i.name.contains('+')) {
+            if let Some(t) = self.joined_hit(cx, spelled, prefer) {
+                return Some(t);
+            }
+        }
 
         // 1. Ascending scopes: locals innermost-first, then `let` aliases.
         //    "An explicit value in scope always wins over derivation" is this
@@ -351,11 +355,11 @@ impl Elaborator {
         for pos in (0..cx.names.len()).rev() {
             let (t, ty, l) = self.local(cx, pos);
             if self.conv_here(cx, &ty, goal, &l) {
-                tr.push(line(depth, "local", cx.names[pos].clone()));
+                tr.push(line(depth, "local", cx.names[pos].to_string()));
                 return Some(t);
             }
         }
-        for a in cx.aliases.iter().rev() {
+        for a in cx.aliases.iter_inner() {
             let by = (cx.names.len() - a.depth) as u32;
             let ty = a.ty.shift_local(by);
             if self.conv_here(cx, &ty, goal, &a.level) {
@@ -418,6 +422,9 @@ impl Elaborator {
             tr.push(line(depth, "head", head.to_string()));
         }
         if cands.is_empty() {
+            if let Some(t) = self.join_parents(cx, &ind, &ckey, spelled, goal, lvl, prefer, span, depth, tr) {
+                return Some(t);
+            }
             tr.push(line(
                 depth,
                 "no-instance",
@@ -440,7 +447,7 @@ impl Elaborator {
             // Candidate construction elaborates a real global reference, but
             // a rejected candidate is search state rather than part of the
             // winning term. Only the accepted branch may publish its edges.
-            let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
+            let dependency_mark = self.attempt.direct_dependencies.borrow().mark();
             // Likewise its checking mismatches: a candidate built at the goal
             // records one wherever it is not of the goal type, and that is
             // the search answering "no", not a site the gate could later
@@ -460,9 +467,15 @@ impl Elaborator {
                     format!("{g} (index `{index}`)")
                 },
             ));
-            self.resolve_depth.set(depth + 1);
+            // A conclusion that cannot meet the goal is dropped unbuilt.
+            if self.conclusion_clashes(cx, &g, goal, span) {
+                crate::stats::count(crate::stats::Counter::ConclusionClashes);
+                tr.push(line(depth + 1, "rejected", "conclusion does not match".to_string()));
+                continue;
+            }
+            self.scope.resolve_depth.set(depth + 1);
             let built = self.build_candidate(cx, &g, goal, lvl, span);
-            self.resolve_depth.set(depth);
+            self.scope.resolve_depth.set(depth);
             match built {
                 Ok(t) if self.checks_at(cx, &t, goal, lvl) => {
                     // Only a *derivation* is canonicalized. A declared
@@ -497,10 +510,144 @@ impl Elaborator {
                 }
                 Err(e) => tr.push(line(depth + 1, "rejected", e.message())),
             }
-            *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
+            self.attempt.direct_dependencies.borrow_mut().rollback(dependency_mark);
             self.attempt.check_notes.borrow_mut().truncate(notes_mark);
         }
-        None
+        self.join_parents(cx, &ind, &ckey, spelled, goal, lvl, prefer, span, depth, tr)
+    }
+
+    /// Step 2b: a **merged** class — the one a declaration's constraints
+    /// sharing symbols at one carrier became (`merge_linked_constraints`,
+    /// issues/constraints-sharing-indices.md) — has no instances of its own,
+    /// and is assembled from its parents' at the goal: each parent's type is
+    /// read off the goal's own arguments, resolved, and every field of the
+    /// merged record is read off the first parent that has it.
+    ///
+    /// At a concrete carrier the parents' shared ancestor is one canonical
+    /// instance reached by reference from both (traits-design §4), so the
+    /// fields agree and the record checks; at an open carrier with no merged
+    /// dictionary in scope they need not, and the kernel gate below says no.
+    /// A closed answer is queued for the canonical table like any derivation,
+    /// so a carrier pays for its assembly once.
+    #[allow(clippy::too_many_arguments)]
+    fn join_parents(
+        &self,
+        cx: &Cx,
+        ind: &crate::inductive::Inductive,
+        ckey: &str,
+        spelled: &Type,
+        goal: &Type,
+        lvl: &Level,
+        prefer: Option<&str>,
+        span: Span,
+        depth: usize,
+        tr: &mut Vec<TraceLine>,
+    ) -> Option<Term> {
+        if !ind.name.contains('+') || !ind.is_record {
+            return None;
+        }
+        let class = self.traits.class(ckey)?.clone();
+        if class.is_kinded() {
+            return None;
+        }
+        // The goal's arguments: off its applied spelling when it arrived
+        // spelled (unsolved operations stay goals there, which the parents'
+        // searches solve by unification as a registry candidate would), else
+        // matched off the inline lowering.
+        let read = match spelled {
+            Type::El { tm, .. } => match self.gen_app_of(tm) {
+                Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) if tag == ind.tag => Some(args),
+                _ => None,
+            },
+            _ => None,
+        };
+        let args = match read {
+            Some(args) => args,
+            None => self.instance_match(cx, ind, goal, 0, 0)?.1,
+        };
+        let np = class.params.len();
+        if args.len() != np + class.valparams.len() {
+            return None;
+        }
+        let parts: Vec<&str> = ind.name.split('+').collect();
+        let mut tcx = cx.clone();
+        let mut parents: Vec<(String, Rc<crate::inductive::Inductive>)> = Vec::new();
+        // The parents are the ancestors the name lists; a transitive ancestor
+        // need not even be nameable from here.
+        let bare = |n: &str| n.rsplit("::").next().unwrap_or(n).to_string();
+        for (k, a) in class
+            .ancestors
+            .iter()
+            .filter(|a| a.path.is_empty() && parts.contains(&bare(&a.name).as_str()))
+            .enumerate()
+        {
+            let akey = self.key_of(&a.name)?;
+            let ainfo = self.traits.class(&akey)?;
+            if !parts.contains(&ainfo.name.as_str()) {
+                continue;
+            }
+            let aind = self.types.inductive(&akey)?.clone();
+            // The parent's arguments are the merged class's own, by name: its
+            // type arguments are the class's parameters and its index the
+            // class's value parameters (`merge_linked_constraints` writes
+            // nothing else).
+            let mut aargs: Vec<Rc<Term>> = Vec::new();
+            for t in &a.args {
+                let TyKind::Named { name, args: targs } = &t.kind else { return None };
+                if !targs.is_empty() {
+                    return None;
+                }
+                aargs.push(Rc::clone(&args[class.params.iter().position(|p| p == name)?]));
+            }
+            for e in &a.index {
+                let ExprKind::Var(name) = &e.kind else { return None };
+                let at = class.valparams.iter().position(|v| v.name == *name)?;
+                aargs.push(Rc::clone(&args[np + at]));
+            }
+            let (aty, alvl) = self.instance_type_at(cx, aind.tag, &aargs)?;
+            tr.push(line(depth, "join", format!("`{}` from `{}`", ind.name, ainfo.name)));
+            self.scope.resolve_depth.set(depth + 1);
+            let shown = ainfo.name.clone();
+            let got = self.resolve_goal(cx, &aty, &alvl, &shown, prefer, span, tr);
+            self.scope.resolve_depth.set(depth);
+            let got = got?;
+            let alias = format!("#join{k}");
+            tcx.aliases.push(Rc::new(crate::Alias {
+                name: alias.clone(),
+                depth: cx.names.len(),
+                term: Rc::new(got),
+                ty: aty,
+                level: alvl,
+                skel: None,
+                spliced: None,
+                shifted: Default::default(),
+            }));
+            parents.push((alias, aind));
+        }
+        let mut fields = Vec::with_capacity(ind.ctors[0].fields.len());
+        for (n, _) in &ind.ctors[0].fields {
+            let n = n.clone()?;
+            let (alias, _) = parents
+                .iter()
+                .find(|(_, p)| p.ctors[0].fields.iter().any(|(m, _)| m.as_deref() == Some(n.as_str())))?;
+            fields.push(Expr {
+                kind: ExprKind::Dot {
+                    recv: Box::new(Expr { kind: ExprKind::Var(alias.clone()), span }),
+                    name: n,
+                    tyargs: Vec::new(),
+                    args: None,
+                    named: Vec::new(),
+                },
+                span,
+            });
+        }
+        let t = self.build_ctor(&tcx, ind, 0, &fields, goal, lvl, span).ok()?;
+        if !self.checks_at(cx, &t, goal, lvl) {
+            tr.push(line(depth, "rejected", "the parents' fields disagree here".to_string()));
+            return None;
+        }
+        self.record_joined(cx, spelled, lvl, prefer);
+        Some(t)
     }
 
     /// Steps 3 to 5 at a goal that is not a class: **computation**, the
@@ -537,7 +684,7 @@ impl Elaborator {
         let computes = stats::time_kernel(|| {
             typing::check_term(
                 &psi, 0, Layer::Code, &cx.gamma, &trivial, goal, lvl,
-                self.fuel.min(COMPUTE_FUEL),
+                self.policy.fuel.min(COMPUTE_FUEL),
             )
             .is_ok()
         });
@@ -590,6 +737,13 @@ impl Elaborator {
             })
             .map(|rule| rule.global.clone())
             .collect();
+        // A **search rule** (docs/facts-on-demand-design.md §3) is a rule
+        // with a premise that runs a tactic, `h: P := omega`: a producer that
+        // may cost a search. Every plain rule is tried first, in canonical
+        // order, and the search rules after them, so a goal a cheap producer
+        // answers never pays for a search.
+        let (mut rules, search): (Vec<_>, Vec<_>) = rules.into_iter().partition(|g| !self.is_search_rule(g));
+        rules.extend(search);
         if rules.is_empty() {
             tr.push(line(
                 depth,
@@ -610,11 +764,11 @@ impl Elaborator {
             // named atom list and its audit report go with it.
             let mark = SearchMark::of(self);
             tr.push(line(depth, "candidate", g.clone()));
-            self.resolve_depth.set(depth + 1);
-            let outer = self.rule_citation.replace(Some(g.clone()));
-            let built = self.build_candidate(cx, &g, goal, lvl, span);
-            *self.rule_citation.borrow_mut() = outer;
-            self.resolve_depth.set(depth);
+            self.scope.resolve_depth.set(depth + 1);
+            let built = self.scoped_cell(|s| &s.rule_citation, Some(g.clone()), || {
+                self.build_candidate(cx, &g, goal, lvl, span)
+            });
+            self.scope.resolve_depth.set(depth);
             match built {
                 Ok(t) if self.checks_at(cx, &t, goal, lvl) => return Some(t),
                 Ok(_) => tr.push(line(
@@ -637,7 +791,7 @@ impl Elaborator {
     }
 
     /// The first reduct of `goal` headed by a relation other than `relation`
-    /// that some evidence rule is about, within [`UNFOLD_STEPS`]. Stepping
+    /// that some evidence rule is about, within [`Unfold::RuleGoal`]. Stepping
     /// one reduct at a time rather than taking the weak head normal form is
     /// the point: the normal form of `PowOk(x, -1)` is `x.Apart(0)`'s own
     /// disjunction, which no rule is keyed by.
@@ -650,7 +804,7 @@ impl Elaborator {
                 .and_then(|abs| self.names.global_name_at(abs as u32).map(str::to_string))
         };
         let oracle = self.goal_oracle();
-        for reduct in oracle.term_reducts(&cx.gamma, tm, UNFOLD_STEPS) {
+        for reduct in oracle.unfold(&cx.gamma, tm, Unfold::RuleGoal) {
             let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
             // The first relation the goal reaches decides: a rule about it,
             // or nothing. Stepping on through a rule-less relation would
@@ -676,10 +830,10 @@ impl Elaborator {
         let spelled = self
             .spell_type_clean(cx, goal)
             .unwrap_or_else(|| "the goal".to_string());
-        let outer = self.positivity.replace(Some(PositivityRun::default()));
         let mut tr = Vec::new();
-        let found = self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr);
-        *self.positivity.borrow_mut() = outer;
+        let found = self.scoped_cell(|s| &s.positivity, Some(PositivityRun::default()), || {
+            self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr)
+        });
         found.ok_or_else(|| ElabError::Elab {
             msg: format!("`positivity` could not prove `{spelled}` — the search:{}", render_trace(&tr)),
             span,
@@ -694,10 +848,10 @@ impl Elaborator {
         let spelled = self
             .spell_type_clean(cx, goal)
             .unwrap_or_else(|| "the goal".to_string());
-        let outer = self.positivity.replace(None);
         let mut tr = Vec::new();
-        let found = self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr);
-        *self.positivity.borrow_mut() = outer;
+        let found = self.scoped_cell(|s| &s.positivity, None, || {
+            self.resolve_goal(cx, goal, lvl, &spelled, None, span, &mut tr)
+        });
         found.ok_or_else(|| ElabError::Elab {
             msg: format!("no evidence for `{spelled}` — the search:{}", render_trace(&tr)),
             span,
@@ -716,7 +870,7 @@ impl Elaborator {
         depth: usize,
         tr: &mut Vec<TraceLine>,
     ) -> Option<Term> {
-        let stuck_before = match &*self.positivity.borrow() {
+        let stuck_before = match &*self.scope.positivity.borrow() {
             None => return None,
             Some(run) => run.stuck.iter().any(|g| g == goal),
         };
@@ -734,14 +888,12 @@ impl Elaborator {
         }
         // Omega's own certificate is elaborated with plain `infer`: a
         // positivity run does not reach into it.
-        let run = self.positivity.take();
         let mark = SearchMark::of(self);
         let e = Expr {
             kind: ExprKind::Var("omega".to_string()),
             span,
         };
-        let proved = self.elab_check(cx, &e, goal, lvl);
-        *self.positivity.borrow_mut() = run;
+        let proved = self.scoped_cell(|s| &s.positivity, None, || self.elab_check(cx, &e, goal, lvl));
         match proved {
             Ok(t) => {
                 tr.push(line(depth, "omega", "proved"));
@@ -756,7 +908,7 @@ impl Elaborator {
                 let verdict = msg.lines().next().unwrap_or_default();
                 let verdict = verdict.split(';').next().unwrap_or_default();
                 tr.push(line(depth, "omega", verdict.to_string()));
-                if let Some(run) = self.positivity.borrow_mut().as_mut() {
+                if let Some(run) = self.scope.positivity.borrow_mut().as_mut() {
                     run.stuck.push(goal.clone());
                 }
                 None
@@ -777,11 +929,30 @@ impl Elaborator {
         lvl: &Level,
         span: Span,
     ) -> Result<Term, ElabError> {
-        let e = Expr {
+        let mut e = Expr {
             kind: ExprKind::Var(global.to_string()),
             span,
         };
+        // A bare reference fills implicits and solver parameters but leaves
+        // a defaulted parameter to a call (docs/named-arguments-design.md
+        // §9.6), so a search rule is built as the call that names nothing:
+        // its tactic premises run as their defaults, in the goal's context.
+        if self.is_search_rule(global) {
+            e = Expr {
+                kind: ExprKind::App { head: Box::new(e), args: Vec::new(), named: Vec::new(), explicit: false, goal_oriented: false },
+                span,
+            };
+        }
         self.elab_check(cx, &e, goal, lvl)
+    }
+
+    /// Does the global have a defaulted parameter: is it, as an evidence
+    /// rule, a search rule (docs/facts-on-demand-design.md §3)? Read off the
+    /// declaration's parameter table, so nothing new is stored in an image.
+    pub(crate) fn is_search_rule(&self, global: &str) -> bool {
+        self.names
+            .global(global)
+            .is_some_and(|info| info.params.iter().any(|p| p.default.is_some()))
     }
 
     /// Step 1b: answer the goal from a *child* dictionary in scope
@@ -811,7 +982,9 @@ impl Elaborator {
         if !cind.is_record {
             return None;
         }
-        let ckey = self.key_of(&cind.name)?;
+        // By the tag's declaration, not the name: the goal's class may be a
+        // parent the client never imported (`MonoidRel` under `Monoid`).
+        let ckey = crate::names::qkey(&cind.scope.module, &cind.name);
         if !self.traits.has_class(&ckey) {
             return None;
         }
@@ -822,12 +995,12 @@ impl Elaborator {
             if let Some(u) = self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &l, span) {
                 return Some((
                     u,
-                    format!("{} (upcast to `{}`)", cx.names[pos], cind.name),
+                    format!("{} (upcast to `{}`)", &cx.names[pos], cind.name),
                     (t, ty),
                 ));
             }
         }
-        for a in cx.aliases.iter().rev() {
+        for a in cx.aliases.iter_inner() {
             let by = (cx.names.len() - a.depth) as u32;
             let ty = a.ty.shift_local(by);
             let t = (*a.term).shift_local(by);
@@ -872,7 +1045,7 @@ impl Elaborator {
         if dind.name == cind.name {
             return None; // the exact pass already had its chance
         }
-        let dkey = self.key_of(&dind.name)?;
+        let dkey = crate::names::qkey(&dind.scope.module, &dind.name);
         let dinfo = self.traits.class(&dkey)?;
         let mut tcx = cx.clone();
         tcx.aliases.push(Rc::new(crate::Alias {
@@ -883,6 +1056,7 @@ impl Elaborator {
             level: dict_lvl.clone(),
             skel: None,
             spliced: None,
+            shifted: Default::default(),
         }));
         // A class may now contain the same ancestor at several tagged fibers.
         // Try each matching path; the expected goal (including its index)
@@ -953,7 +1127,7 @@ impl Elaborator {
     fn checks_at(&self, cx: &Cx, t: &Term, goal: &Type, lvl: &Level) -> bool {
         let psi = self.goal_psi();
         stats::time_kernel(|| {
-            typing::check_term(&psi, 0, Layer::Code, &cx.gamma, t, goal, lvl, self.fuel).is_ok()
+            typing::check_term(&psi, 0, Layer::Code, &cx.gamma, t, goal, lvl, self.policy.fuel).is_ok()
         })
     }
 
@@ -966,7 +1140,7 @@ impl Elaborator {
     /// same goal", with an inconclusive answer counted as "not".
     fn derived_conv(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
         stats::time_kernel(|| {
-            oracle::SemanticOracle::in_world(self.goal_psi(), self.fuel.min(DERIVED_LOOKUP_FUEL))
+            oracle::SemanticOracle::in_world(self.goal_psi(), self.policy.fuel.min(DERIVED_LOOKUP_FUEL))
                 .convert_type(&cx.gamma, Layer::Prog, ty, goal, lvl)
                 .is_ok()
         })
@@ -981,6 +1155,65 @@ impl Elaborator {
             .filter(|d| heads_may_agree(d.head.as_deref(), prefer))
             .find(|d| self.derived_conv(cx, &d.ty.shift_global(now - d.at), goal, &d.level))?;
         Some(self.derived_ref(cx, d.abs))
+    }
+
+    /// [`Self::derived_hit`] for a merged class's assembly (step 2b), at the
+    /// goal's applied spelling and in the goal world: a table entry's
+    /// committed globals sit `global_padding` further out there. A
+    /// tactic's certificate is elaborated with goals in flight, which is
+    /// where nearly every such call is.
+    fn joined_hit(&self, cx: &Cx, spelled: &Type, prefer: Option<&str>) -> Option<Term> {
+        let now = self.psi.bindings.len() as u32;
+        let pad = self.global_padding();
+        let d = self
+            .traits
+            .derived()
+            .iter()
+            .filter(|d| heads_may_agree(d.head.as_deref(), prefer))
+            .find(|d| {
+                let ty = d.ty.shift_global(now - d.at);
+                let ty = if pad == 0 { ty } else { weaken_global_below(&ty, pad) };
+                self.derived_conv(cx, &ty, spelled, &d.level)
+            })?;
+        Some(self.derived_ref(cx, d.abs))
+    }
+
+    /// Queue a merged class's assembly for the canonical table. Unlike
+    /// [`Self::record_derived`] it accepts a goal met with goals in flight:
+    /// the type is read out of the goal world (its committed globals
+    /// renumbered down past the arena, refused if it mentions a goal) and
+    /// out of the call's Γ (refused if it mentions a local), so the mint
+    /// re-runs the search in the empty context of the committed Ψ.
+    fn record_joined(&self, cx: &Cx, spelled: &Type, lvl: &Level, prefer: Option<&str>) {
+        if !matches!(cx.gamma.base, heather_kernel::term::CtxBase::Nil) {
+            return;
+        }
+        let n = cx.gamma.entries.len() as u32;
+        let Some(local) = crate::unification::strengthen_ty(&LocalCtx::nil(), spelled, n) else {
+            return;
+        };
+        let pad = self.global_padding();
+        let closed = if pad == 0 {
+            local
+        } else {
+            let down = local.apply_global(&heather_kernel::subst::GlobalSubst {
+                entries: (0..pad).map(|_| heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::Zero))).collect(),
+            });
+            if weaken_global_below(&down, pad) != local {
+                return;
+            }
+            down
+        };
+        if !self.type_is_closed(&closed, lvl) {
+            return;
+        }
+        let mut pending = self.pass.pending_derived.borrow_mut();
+        if pending.iter().any(|(t, l, _, head)| {
+            heads_may_agree(head.as_deref(), prefer) && self.derived_conv(&Cx::empty(), t, &closed, l)
+        }) {
+            return;
+        }
+        pending.push((closed, lvl.clone(), self.psi.bindings.len() as u32, prefer.map(str::to_string)));
     }
 
     /// `u^δ` for a minted global, the same construction [`Elaborator::resolve`]
@@ -1025,7 +1258,7 @@ impl Elaborator {
         if self.global_padding() != 0 || !self.type_is_closed(goal, lvl) {
             return;
         }
-        let mut pending = self.pending_derived.borrow_mut();
+        let mut pending = self.pass.pending_derived.borrow_mut();
         if pending.iter().any(|(t, l, _, head)| {
             heads_may_agree(head.as_deref(), prefer)
                 && self.derived_conv(&Cx::empty(), t, goal, l)
@@ -1054,7 +1287,7 @@ impl Elaborator {
                 &LocalCtx::nil(),
                 goal,
                 lvl,
-                self.fuel,
+                self.policy.fuel,
             )
             .is_ok()
         })
@@ -1081,7 +1314,7 @@ impl Elaborator {
         // now hits) or fails and is dropped.
         for _ in 0..MAX_DEPTH {
             let pending: Vec<(Type, Level, u32, Option<String>)> =
-                std::mem::take(&mut self.pending_derived.borrow_mut());
+                std::mem::take(&mut self.pass.pending_derived.borrow_mut());
             if pending.is_empty() {
                 return;
             }
@@ -1093,7 +1326,7 @@ impl Elaborator {
                 self.mint_one(&goal.shift_global(grew), &lvl, prefer.as_deref());
             }
         }
-        self.pending_derived.borrow_mut().clear();
+        self.pass.pending_derived.borrow_mut().clear();
     }
 
     fn mint_one(&mut self, goal: &Type, lvl: &Level, prefer: Option<&str>) {
@@ -1123,7 +1356,7 @@ impl Elaborator {
                 &term,
                 goal,
                 lvl,
-                self.fuel,
+                self.policy.fuel,
             )
             .is_ok()
         });
@@ -1260,4 +1493,10 @@ impl Measure {
                 .iter()
                 .all(|(b, n)| other.occurrences.get(b).is_some_and(|m| n <= m))
     }
+}
+
+/// A committed-world type read into a goal world `pad` arena entries deep:
+/// every global moves `pad` further out, since the arena sits innermost.
+fn weaken_global_below(t: &Type, pad: u32) -> Type {
+    t.shift_global(pad)
 }

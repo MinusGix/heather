@@ -25,17 +25,14 @@ theorem toNat_add(n: Nat, a, b: BitVec(n),
 // The machine's unsigned test decides the same strict bound as Nat.
 theorem unsigned_lt_nat(n: Nat, a, b: BitVec(n)):
     a.unsigned_lt_bit(b) = Succ(a.toNat()).leb(b.toNat()) {
-    (match a.unsigned_lt_bit(b) as λ found =>
-        (a.unsigned_lt_bit(b) = found) →
-        found = Succ(a.toNat()).leb(b.toNat()) {
-        True => λ yes => sym(bool::eq_true_of_is_true(Succ(a.toNat()).leb(b.toNat()), Succ(a.toNat()).leb_complete(b.toNat(), BitVec::borrow_sub_of_bit_true(n, a, b, yes)))),
-        False => λ no => (match Succ(a.toNat()).leb(b.toNat()) as λ found =>
-            (Succ(a.toNat()).leb(b.toNat()) = found) → bool::False = found {
-            False => λ same => refl,
-            True => λ yes => absurd(trans(sym(no), BitVec::borrow_sub_bit_of_borrow(n, a, b,
-                Succ(a.toNat()).leb_sound(b.toNat(), rewrite(yes, trivial))))),
-        })(refl),
-    })(refl)
+    match yes: a.unsigned_lt_bit(b) {
+        True => sym(bool::eq_true_of_is_true(Succ(a.toNat()).leb(b.toNat()), Succ(a.toNat()).leb_complete(b.toNat(), BitVec::borrow_sub_of_bit_true(n, a, b, yes)))),
+        False => match same: Succ(a.toNat()).leb(b.toNat()) {
+            False => refl,
+            True => absurd(trans(sym(yes), BitVec::borrow_sub_bit_of_borrow(n, a, b,
+                Succ(a.toNat()).leb_sound(b.toNat(), rewrite(same, trivial))))),
+        },
+    }
 }
 
 theorem strict_complement(n: Nat): (m: Nat) → Succ(n).leb(m) = m.leb(n).not() {
@@ -93,6 +90,21 @@ theorem toNat_sub(n: Nat, a, b: BitVec(n), fits: b.toNat() <= a.toNat()):
     trans(@cong(λ (x: BitVec(n)) => x.toNat(), a.sub(b), c, same), c_value)
 }
 
+// A word that is not zero, less one, is below it: the step of a recursion
+// counting a word down, `decreases x.toNat()`.
+theorem toNat_sub_one_lt(x: BitVec(64), nonzero: x.eq_bit(BitVec::ofNat(0)) = False): x.sub(BitVec::ofNat(1)).toNat() < x.toNat() {
+    let one: (BitVec::ofNat(1, n := 64).toNat() = 1) = refl;
+    let positive: (0 < x.toNat()) = match x.toNat() as λ m => (x.toNat() = m) → 0 < m {
+        Zero => λ (z: x.toNat() = 0) => {
+            let back: (x = BitVec::ofNat(0)) = trans(sym(BitVec::ofNat_toNat(64, x)), @cong(λ (t: Nat) => BitVec::ofNat(t, n := 64), x.toNat(), 0, z));
+            false_elim(BitVec::ne_of_eq_bit(64, x, BitVec::ofNat(0), nonzero)(back))
+        },
+        Succ(_) => λ _ => trivial,
+    }(refl);
+    let fits: (BitVec::ofNat(1, n := 64).toNat() <= x.toNat()) = rewrite(sym(one), positive);
+    rewrite(toNat_sub(64, x, BitVec::ofNat(1), fits), rewrite(one, x.toNat().sub_lt_of_pos(1, trivial, positive)))
+}
+
 // `(p * 2) * d` is `p * d` twice: the step from one width to the next.
 theorem scale_twice(p, d: Nat): (p * 2) * d = (p * d).twice() {
     trans(Nat::mul_assoc(p, 2, d),
@@ -103,8 +115,7 @@ theorem scale_twice(p, d: Nat): (p * 2) * d = (p * d).twice() {
 // A value splits at its low `n` bits: how the bytes of a word read back.
 theorem toNat_take_drop(n: Nat): (m: Nat) → (x: BitVec(m + n)) →
     x.toNat() = x.take_low(n, m).toNat() + Nat::pow(2, n) * x.drop_low(n, m).toNat() {
-    match n as λ k => (m: Nat) → (x: BitVec(m + k)) →
-        x.toNat() = x.take_low(k, m).toNat() + Nat::pow(2, k) * x.drop_low(k, m).toNat() {
+    match n {
         Zero => λ m x => sym(trans(Nat::add_left_zero(1 * x.toNat()), Nat::mul_left_one(x.toNat()))),
         Succ(k, ih) => λ m x => {
             let tail = x.tail_bits();

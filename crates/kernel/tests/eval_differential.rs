@@ -113,7 +113,7 @@ fn fresh<'v>(arena: &'v ValueArena<'v>, gamma: &LocalCtx, k: u32) -> (LocalCtx, 
     let mut args = Vec::with_capacity(k as usize);
     for j in 0..k {
         g.entries.push(CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero });
-        args.push(arena.tm(TmClo::val(Rc::new(Val::var(n + j)))));
+        args.push(arena.tm(TmClo::val(arena.val(Val::var(arena, n + j)))));
     }
     (g, args)
 }
@@ -217,14 +217,14 @@ impl<'a, 'v> Agree<'a, 'v> {
     // -- types --------------------------------------------------------------
 
     /// `v ⊩ whnf(t)` for types.
-    pub fn ty(&mut self, v: &Rc<VTy<'v>>, t: &Type, gamma: &LocalCtx, depth: u32) -> A {
+    pub fn ty(&mut self, v: &'v VTy<'v>, t: &Type, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
         let d = depth - 1;
         let w = whnf_type_delta(t, gamma, self.defs, FUEL)
             .map_err(|_| "rewriter out of fuel (type)".to_string())?;
-        match (&**v, &w) {
+        match (&*v, &w) {
             (VTy::Nat, Type::Nat) => ok(),
             (VTy::Ty(a), Type::Ty(b)) => self.lev(a, b, "Ty level"),
             (VTy::Unit { level: a }, Type::Unit { level: b })
@@ -306,10 +306,10 @@ impl<'a, 'v> Agree<'a, 'v> {
             ) => {
                 self.lev(a, b, "Vec level")?;
                 self.lazy_ty(elem, e2, gamma, d)?;
-                self.tm(&Rc::clone(len), k2, gamma, d)
+                self.tm(&len, k2, gamma, d)
             }
             (VTy::Fin { len }, Type::Fin { len: k2 }) => {
-                self.tm(&Rc::clone(len), k2, gamma, d)
+                self.tm(&len, k2, gamma, d)
             }
             // DVec: only at a stuck length, the family under `i : Fin len`.
             (
@@ -317,7 +317,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 Type::DVec { level: b, len: k2, fam: f2 },
             ) => {
                 self.lev(a, b, "DVec level")?;
-                self.tm(&Rc::clone(len), k2, gamma, d)?;
+                self.tm(&len, k2, gamma, d)?;
                 self.under_ty(fam, f2, gamma, 1, d)
             }
             // Universe/global binders: entered by instantiation, at a closed
@@ -390,7 +390,7 @@ impl<'a, 'v> Agree<'a, 'v> {
             }
             (VTy::Neutral(VNeTy::El { level: a, tm }), Type::El { level: b, tm: t2 }) => {
                 self.lev(a, b, "El level")?;
-                self.tm(&Rc::clone(tm), t2, gamma, d)
+                self.tm(&tm, t2, gamma, d)
             }
             _ => bad("type head constructor"),
         }
@@ -432,7 +432,7 @@ impl<'a, 'v> Agree<'a, 'v> {
         for (va, tb) in a.terms.iter().zip(&b.terms) {
             let v = self
                 .ev
-                .delta_whnf(Rc::clone(va))
+                .delta_whnf(*va)
                 .map_err(|_| "evaluator out of fuel".to_string())?;
             self.tm(&v, tb, gamma, depth)?;
         }
@@ -442,14 +442,14 @@ impl<'a, 'v> Agree<'a, 'v> {
     // -- terms --------------------------------------------------------------
 
     /// `v ⊩ whnf(t)` for terms.
-    pub fn tm(&mut self, v: &Rc<Val<'v>>, t: &Term, gamma: &LocalCtx, depth: u32) -> A {
+    pub fn tm(&mut self, v: &'v Val<'v>, t: &Term, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
         let d = depth - 1;
         let w = whnf_term_delta(t, gamma, self.defs, FUEL)
             .map_err(|_| "rewriter out of fuel (term)".to_string())?;
-        match (&**v, &w) {
+        match (&*v, &w) {
             // -- encodings --
             (Val::TmNat, Term::TmNat) => ok(),
             (Val::TmTy(a), Term::TmTy(b)) => self.lev(a, b, "`Ty level"),
@@ -541,7 +541,7 @@ impl<'a, 'v> Agree<'a, 'v> {
             // through `lazy_ty` rather than syntactically: this arm is where
             // "the rule's own annotations" (§3.3) is put to the test.
             (Val::BitRun { level, ty, width, bits, tail_len, tail }, Term::Pair { .. }) => {
-                let pair = Rc::new(Val::bit_run_unpack(
+                let pair = self.arena.val(Val::bit_run_unpack(
                     self.arena, level, ty, *width, *bits, tail_len, tail,
                 ));
                 self.tm(&pair, &w, gamma, depth)
@@ -713,7 +713,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 let levels = vec![Level::Zero; *a as usize];
                 let vb = self
                     .ev
-                    .elim(Rc::clone(v), Elim::UApp { levels: levels.clone() })
+                    .elim(v, Elim::UApp { levels: levels.clone() })
                     .map_err(|_| "evaluator out of fuel".to_string())?;
                 let vb =
                     self.ev.delta_whnf(vb).map_err(|_| "evaluator out of fuel".to_string())?;
@@ -727,7 +727,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 let vb = self
                     .ev
                     .elim(
-                        Rc::clone(v),
+                        v,
                         Elim::CtxApp { ctx: LocalCtx::nil() },
                     )
                     .map_err(|_| "evaluator out of fuel".to_string())?;
@@ -752,7 +752,7 @@ impl<'a, 'v> Agree<'a, 'v> {
                 let arg: Rc<Type> = Rc::new(Type::Nat);
                 let vb = self
                     .ev
-                    .elim(Rc::clone(v), Elim::TyApp { arg: Rc::clone(&arg) })
+                    .elim(v, Elim::TyApp { arg: Rc::clone(&arg) })
                     .map_err(|_| "evaluator out of fuel".to_string())?;
                 let vb =
                     self.ev.delta_whnf(vb).map_err(|_| "evaluator out of fuel".to_string())?;
@@ -783,7 +783,7 @@ impl<'a, 'v> Agree<'a, 'v> {
 
     /// A neutral value against a neutral term: peel the spine from the
     /// outside, matching the syntax's outermost eliminator each time.
-    fn ne(&mut self, n: &Rc<VNeutral<'v>>, w: &Term, gamma: &LocalCtx, depth: u32) -> A {
+    fn ne(&mut self, n: &'v VNeutral<'v>, w: &Term, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
@@ -795,7 +795,7 @@ impl<'a, 'v> Agree<'a, 'v> {
         // the same head, and `delta_whnf` has already forced any definition
         // at it (that is what makes this recursion well-founded against a
         // δ-reduced syntax side).
-        let prefix = Rc::new(VNeutral {
+        let prefix = self.arena.neutral(VNeutral {
             head: n.head.clone(),
             spine: rest,
             unfold: None,

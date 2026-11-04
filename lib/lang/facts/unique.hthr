@@ -1,0 +1,393 @@
+// `Unique`, the fact an in-place byte write needs, over `rt` code
+// (docs/facts-on-demand-design.md §7; issues/unique-fact.md).
+//
+// `xs.with_byte(i, v)` (`rt`'s `Set`) means a new buffer. A lowering may
+// build it in the old one's storage when nothing reads the old one after
+// the write: neither that name nor any name that shares its storage (a `let`
+// alias, a record holding it, a branch or call result that may be it). That
+// is `Unique(p, f, k)`: the `k`th write of function `f` of program `p`
+// consumes a buffer that is dead after it.
+//
+// A function owns its buffer parameters: a caller moves a buffer into a
+// call, and does not read it after (the entry's caller, outside the program,
+// is assumed to). So a write may consume a parameter's storage only when
+// every call of the function in the program moves its buffer arguments, and
+// a call is itself a consuming use, checked as a write is.
+//
+// Producers, cheapest first, as for `InBounds` (lib/lang/facts/in_bounds.hthr):
+//
+// 1. **The ownership judgment**, run once per program: every write and
+//    every call of every function consumes a dead buffer (`Owned(p)`). A
+//    program that passes it publishes the verdict as an evidence theorem,
+//    and `Unique::of_owned`, a plain rule, reads every write's fact off it
+//    without evaluating anything.
+// 2. **The per-site check**: the one write's verdict, by evaluation
+//    (`Unique::by_check`), for a program the judgment refuses as a whole
+//    (lib/lang/facts/write_facts.hthr asks for it as its fallback).
+//
+// Both are proved from one definition, so neither is trusted: what the
+// lowering sees is a proof of `Unique`. What `Unique` buys is the lowering's
+// to prove: a store of buffers in which every live name reads its slot
+// (issues/runtime-default-setup-soundness.md, which lowers `Bytes`).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import rt;
+
+// ---------------------------------------------------------------------------
+// What a value may share storage with.
+//
+// Every variable has a set of storage identities: a parameter, or a value a
+// node makes, is its own (its level); a `let` alias, a record field, or a
+// branch or call result has those of what it may be. Two names share
+// storage only if their identities meet. A made value's identity is its
+// level, which a variable bound later inside a branch can repeat; that only
+// makes two names look shared that are not, never the other way.
+
+// Whether a value of the code may hold a buffer. A list of lines holds
+// none: its cells are copies, written once and never in place.
+fn Ty::holds_bytes(self t: Ty) → Bool { match t { Word(_) => False, Bit => False, Bytes(_) => True, Lines => False, Named(_) => True } }
+
+fn Nat::among(self n: Nat, xs: List<Nat>) → Bool {
+    match xs { Nil => False, Cons(x, rest) => n.same(x) || n.among(rest) }
+}
+
+fn Nat::meets(xs, ys: List<Nat>) → Bool {
+    match xs { Nil => False, Cons(x, rest) => x.among(ys) || Nat::meets(rest, ys) }
+}
+
+// A variable's identities, and whether it may hold a buffer.
+record Share { ids: List<Nat>, buf: Bool }
+
+fn Share::at(g: List<Share>, i: Nat) → Share { g.nth(i).unwrap_or(Share([], False)) }
+
+fn Share::ids_of(g: List<Share>, vs: List<Nat>) → List<Nat> {
+    match vs { Nil => [], Cons(v, rest) => Share::at(g, v).ids ++ Share::ids_of(g, rest) }
+}
+
+// The identities of each argument that may hold a buffer.
+fn Share::bufs_of(g: List<Share>, vs: List<Nat>) → List<List<Nat>> {
+    match vs {
+        Nil => [],
+        Cons(v, rest) => match Share::at(g, v).buf {
+            True => Cons(Share::at(g, v).ids, Share::bufs_of(g, rest)),
+            False => Share::bufs_of(g, rest),
+        },
+    }
+}
+
+fn Share::join(a, b: Share) → Share { Share(a.ids ++ b.ids, a.buf || b.buf) }
+
+// What a term's value may share, at depth `d` in the context `g` (the most
+// recent variable first).
+fn Tm::share(self t: Tm, sigs: List<Sig>, d: Nat, g: List<Share>) → Share {
+    match t {
+        Var(i) => Share::at(g, i),
+        Lit(c, _) => Share([d], c.holds_bytes()),
+        Prim(op, _) => Share([d], op.result().holds_bytes()),
+        Let(e, body) => body.share(sigs, Succ(d), Cons(e.share(sigs, d, g), g)),
+        If(_, yes, no) => Share::join(yes.share(sigs, d, g), no.share(sigs, d, g)),
+        IfEq(_, yes, no) => Share::join(yes.share(sigs, d, g), no.share(sigs, d, g)),
+        Make(_, args) => Share(Cons(d, Share::ids_of(g, args)), True),
+        Field(_, _, of) => Share(Share::at(g, of).ids, True),
+        Call(f, args) => Share(Cons(d, Share::ids_of(g, args)), Sig::at(sigs, f).result.holds_bytes()),
+        Fold(_, init, step) => Share(Cons(d, Share::at(g, init).ids), Sig::at(sigs, step).result.holds_bytes()),
+    }
+}
+
+// The levels of the variables whose identities meet `c`.
+fn Share::class(g: List<Share>, c: List<Nat>) → List<Nat> {
+    match g {
+        Nil => [],
+        Cons(s, rest) => match Nat::meets(s.ids, c) { True => Cons(rest.len(), Share::class(rest, c)), False => Share::class(rest, c) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reads after a point.
+
+// Does variable `v`, at depth `d`, name one of the levels `ls` below `bound`?
+fn Tm::hit(v: Nat, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
+    (d - Succ(v)).among(ls) && Succ(d - Succ(v)).leb(bound)
+}
+
+fn Tm::hits(vs: List<Nat>, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
+    match vs { Nil => False, Cons(v, rest) => Tm::hit(v, d, bound, ls) || Tm::hits(rest, d, bound, ls) }
+}
+
+// Does `t`, at depth `d`, read one of the levels `ls` below `bound`?
+fn Tm::reads(self t: Tm, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
+    match t {
+        Var(i) => Tm::hit(i, d, bound, ls),
+        Lit(_, _) => False,
+        Prim(_, args) => Tm::hits(args, d, bound, ls),
+        Let(e, body) => e.reads(d, bound, ls) || body.reads(Succ(d), bound, ls),
+        If(c, yes, no) => Tm::hit(c, d, bound, ls) || yes.reads(d, bound, ls) || no.reads(d, bound, ls),
+        IfEq(c, yes, no) => Tm::hit(c, d, bound, ls) || yes.reads(d, bound, ls) || no.reads(d, bound, ls),
+        Make(_, args) => Tm::hits(args, d, bound, ls),
+        Field(_, _, of) => Tm::hit(of, d, bound, ls),
+        Call(_, args) => Tm::hits(args, d, bound, ls),
+        Fold(over, init, _) => Tm::hit(over, d, bound, ls) || Tm::hit(init, d, bound, ls),
+    }
+}
+
+// What runs after a point: the bodies of the `let`s it is inside, innermost
+// first, each with the depth of its own binder (the body sees the levels
+// below it, then the binder).
+record After { body: Tm, d: Nat }
+
+fn After::clear(ks: List<After>, ls: List<Nat>) → Bool {
+    match ks { Nil => True, Cons(k, rest) => !k.body.reads(Succ(k.d), k.d, ls) && After::clear(rest, ls) }
+}
+
+// Storage with the identities `c` is dead after the point: nothing after it
+// reads a variable that shares it.
+fn Share::dead(g: List<Share>, ks: List<After>, c: List<Nat>) → Bool { After::clear(ks, Share::class(g, c)) }
+
+fn Share::flat(cs: List<List<Nat>>) → List<Nat> {
+    match cs { Nil => [], Cons(c, rest) => c ++ Share::flat(rest) }
+}
+
+// No two of the buffers share storage: a callee owning two parameters may
+// write one in place.
+fn Share::apart(cs: List<List<Nat>>) → Bool {
+    match cs { Nil => True, Cons(c, rest) => !Nat::meets(c, Share::flat(rest)) && Share::apart(rest) }
+}
+
+// Buffers moved into a call: apart, and dead after it.
+fn Share::moves(g: List<Share>, ks: List<After>, cs: List<List<Nat>>) → Bool {
+    Share::apart(cs) && Share::dead(g, ks, Share::flat(cs))
+}
+
+// ---------------------------------------------------------------------------
+// The consuming uses of a function, in order, each with its verdict.
+
+inductive Consume {
+    // A byte write: whether its buffer is dead after it, and whether that
+    // buffer may be a parameter's storage.
+    Write(ok: Bool, param: Bool),
+    // A call of function `callee` (or a fold of it): whether the buffers
+    // it is passed are moved.
+    Pass(callee: Nat, ok: Bool),
+}
+
+fn Consume::ok(self c: Consume) → Bool { match c { Write(ok, _) => ok, Pass(_, ok) => ok } }
+
+// A parameter's identity is its level, below the parameter count.
+fn Share::of_param(c: List<Nat>, n: Nat) → Bool {
+    match c { Nil => False, Cons(x, rest) => Succ(x).leb(n) || Share::of_param(rest, n) }
+}
+
+fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: List<After>) → List<Consume> {
+    match t {
+        Var(_) => [],
+        Lit(_, _) => [],
+        Prim(op, args) => match op {
+            Set(_) => [Write(Succ(args.head_or(0)).leb(d) && Share::dead(g, ks, Share::at(g, args.head_or(0)).ids),
+                Share::of_param(Share::at(g, args.head_or(0)).ids, n))],
+            _ => [],
+        },
+        Let(e, body) => e.uses(sigs, n, d, g, Cons(After(body, d), ks)) ++ body.uses(sigs, n, Succ(d), Cons(e.share(sigs, d, g), g), ks),
+        If(_, yes, no) => yes.uses(sigs, n, d, g, ks) ++ no.uses(sigs, n, d, g, ks),
+        IfEq(_, yes, no) => yes.uses(sigs, n, d, g, ks) ++ no.uses(sigs, n, d, g, ks),
+        Make(_, _) => [],
+        Field(_, _, _) => [],
+        Call(f, args) => [Pass(f, Share::moves(g, ks, Share::bufs_of(g, args)))],
+        // The step owns the state: the start is moved, and is not the buffer
+        // being folded.
+        Fold(over, init, step) => [Pass(step, Share::moves(g, ks, Share::bufs_of(g, [init]))
+            && !Nat::meets(Share::flat(Share::bufs_of(g, [init])), Share::at(g, over).ids))],
+    }
+}
+
+// The parameters' context: each its own identity, the last one variable 0.
+fn Share::params(ps: List<Ty>, l: Nat, g: List<Share>) → List<Share> {
+    match ps { Nil => g, Cons(p, rest) => Share::params(rest, Succ(l), Cons(Share([l], p.holds_bytes()), g)) }
+}
+
+fn Fun::uses(self f: Fun, sigs: List<Sig>) → List<Consume> {
+    f.body.uses(sigs, f.params.len(), f.params.len(), Share::params(f.params, 0, []), [])
+}
+
+// ---------------------------------------------------------------------------
+// The verdicts of a program.
+
+fn Program::all_uses(self p: Program) → List<List<Consume>> { p.funs.map(λ f => f.uses(p.sigs())) }
+
+fn Program::uses(self p: Program, f: Nat) → List<Consume> { p.all_uses().nth(f).unwrap_or([]) }
+
+fn Consume::writes(cs: List<Consume>) → List<Consume> {
+    match cs {
+        Nil => [],
+        Cons(c, rest) => match c { Write(_, _) => Cons(c, Consume::writes(rest)), Pass(_, _) => Consume::writes(rest) },
+    }
+}
+
+fn Program::write(self p: Program, f: Nat, k: Nat) → Option<Consume> { Consume::writes(p.uses(f)).nth(k) }
+
+fn Program::write_count(self p: Program, f: Nat) → Nat { Consume::writes(p.uses(f)).len() }
+
+fn Consume::all_ok(cs: List<Consume>) → Bool {
+    match cs { Nil => True, Cons(c, rest) => c.ok() && Consume::all_ok(rest) }
+}
+
+// A use does not break `callee`'s ownership of its parameters.
+fn Consume::lets_own(self c: Consume, callee: Nat) → Bool {
+    match c { Write(_, _) => True, Pass(f, ok) => !f.same(callee) || ok }
+}
+
+fn Consume::all_let_own(cs: List<Consume>, callee: Nat) → Bool {
+    match cs { Nil => True, Cons(c, rest) => c.lets_own(callee) && Consume::all_let_own(rest, callee) }
+}
+
+fn Consume::every(xss: List<List<Consume>>, q: List<Consume> → Bool) → Bool {
+    match xss { Nil => True, Cons(x, rest) => q(x) && Consume::every(rest, q) }
+}
+
+// Function `f` owns its buffer parameters: every call of it in the program
+// moves them.
+fn Program::owns(self p: Program, f: Nat) → Bool { Consume::every(p.all_uses(), λ cs => Consume::all_let_own(cs, f)) }
+
+// The ownership judgment: every consuming use of every function is of a
+// dead buffer.
+fn Program::owned(self p: Program) → Bool { Consume::every(p.all_uses(), Consume::all_ok) }
+
+fn Consume::allows(self c: Consume, owns: Bool) → Bool {
+    match c { Write(ok, param) => ok && (!param || owns), Pass(_, _) => True }
+}
+
+fn Consume::allows_at(o: Option<Consume>, owns: Bool) → Bool { match o { None => True, Some(c) => c.allows(owns) } }
+
+// One write's verdict: its buffer is dead after it, and if that buffer may
+// be a parameter's, the function owns its parameters. No such write: `True`.
+fn Program::unique_at(self p: Program, f: Nat, k: Nat) → Bool { Consume::allows_at(p.write(f, k), p.owns(f)) }
+
+// ---------------------------------------------------------------------------
+// The facts. Both are equations of a verdict, so the search's computation
+// step (`trivial` at `True`) never answers them: they are answered by their
+// producers, in order.
+
+fn Unique(p: Program, f: Nat, k: Nat) → Type { p.unique_at(f, k) = True }
+
+fn Owned(p: Program) → Type { p.owned() = True }
+
+theorem Owned::by_check(p: Program, h: p.owned().IsTrue()): Owned(p) { eq_true_of_is_true(p.owned(), h) }
+
+// 2. The per-site check.
+theorem Unique::by_check(p: Program, f: Nat, k: Nat, h: p.unique_at(f, k).IsTrue()): Unique(p, f, k) {
+    eq_true_of_is_true(p.unique_at(f, k), h)
+}
+
+theorem Consume::every_nth(xss: List<List<Consume>>): (q: List<Consume> → Bool) → q(Nil).IsTrue() → Consume::every(xss, q).IsTrue()
+    → (i: Nat) → q(xss.nth(i).unwrap_or(Nil)).IsTrue()
+{
+    match xss {
+        Nil => λ q base h i => base,
+        Cons(x, rest) => λ q base h i => {
+            let parts = Bool::is_true_and(q(x), Consume::every(rest, q), h);
+            match i as λ m => q(Cons(x, rest).nth(m).unwrap_or(Nil)).IsTrue() {
+                Zero => parts.left,
+                Succ(m) => Consume::every_nth(rest, q, base, parts.right, m),
+            }
+        },
+    }
+}
+
+theorem Consume::every_mono(xss: List<List<Consume>>): (q, r: List<Consume> → Bool) → ((cs: List<Consume>) → q(cs).IsTrue() → r(cs).IsTrue())
+    → Consume::every(xss, q).IsTrue() → Consume::every(xss, r).IsTrue()
+{
+    match xss {
+        Nil => λ q r m h => trivial,
+        Cons(x, rest) => λ q r m h => {
+            let parts = Bool::is_true_and(q(x), Consume::every(rest, q), h);
+            Bool::is_true_and_intro(r(x), Consume::every(rest, r), m(x, parts.left), Consume::every_mono(rest, q, r, m, parts.right))
+        },
+    }
+}
+
+theorem Consume::lets_own_of_ok(self c: Consume, callee: Nat, h: c.ok().IsTrue()): c.lets_own(callee).IsTrue() {
+    (match c as λ x => x.ok().IsTrue() → x.lets_own(callee).IsTrue() {
+        Write(_, _) => λ _ => trivial,
+        Pass(f, ok) => match ok as λ b => b.IsTrue() → (!f.same(callee) || b).IsTrue() {
+            False => λ no => false_elim(no),
+            True => λ _ => Bool::is_true_of_eq(Bool::or_comm(!f.same(callee), True)),
+        },
+    })(h)
+}
+
+theorem Consume::all_let_own_of_ok(cs: List<Consume>): (callee: Nat) → Consume::all_ok(cs).IsTrue() → Consume::all_let_own(cs, callee).IsTrue() {
+    match cs {
+        Nil => λ callee h => trivial,
+        Cons(c, rest) => λ callee h => {
+            let parts = Bool::is_true_and(c.ok(), Consume::all_ok(rest), h);
+            Bool::is_true_and_intro(c.lets_own(callee), Consume::all_let_own(rest, callee),
+                c.lets_own_of_ok(callee, parts.left), Consume::all_let_own_of_ok(rest, callee, parts.right))
+        },
+    }
+}
+
+theorem Consume::allows_of_ok(self c: Consume, h: c.ok().IsTrue()): c.allows(True).IsTrue() {
+    (match c as λ x => x.ok().IsTrue() → x.allows(True).IsTrue() {
+        Write(ok, param) => match ok as λ b => b.IsTrue() → (b && (!param || True)).IsTrue() {
+            False => λ no => false_elim(no),
+            True => λ _ => Bool::is_true_of_eq(Bool::or_comm(!param, True)),
+        },
+        Pass(_, _) => λ _ => trivial,
+    })(h)
+}
+
+theorem Consume::write_allowed(cs: List<Consume>): (k: Nat) → Consume::all_ok(cs).IsTrue() → Consume::allows_at(Consume::writes(cs).nth(k), True).IsTrue() {
+    match cs {
+        Nil => λ k h => trivial,
+        Cons(c, rest) => λ k h => {
+            let parts = Bool::is_true_and(c.ok(), Consume::all_ok(rest), h);
+            (match c as λ x => x.ok().IsTrue() → Consume::allows_at(Consume::writes(Cons(x, rest)).nth(k), True).IsTrue() {
+                Write(ok, param) => λ here => match k as λ m => Consume::allows_at(Consume::writes(Cons(Write(ok, param), rest)).nth(m), True).IsTrue() {
+                    Zero => Write(ok, param).allows_of_ok(here),
+                    Succ(m) => Consume::write_allowed(rest, m, parts.right),
+                },
+                Pass(_, _) => λ _ => Consume::write_allowed(rest, k, parts.right),
+            })(parts.left)
+        },
+    }
+}
+
+// 1. The ownership judgment: a program that passes it has every write's
+// fact. A plain rule, its premise searched: a program's published verdict
+// answers it, so no site evaluates anything.
+evidence theorem Unique::of_owned({p: Program}, {f: Nat}, {k: Nat}, o: Owned(p) := infer): Unique(p, f, k) {
+    let all = Bool::is_true_of_eq(o);
+    let mine = Consume::every_nth(p.all_uses(), Consume::all_ok, trivial, all, f);
+    let owns = Consume::every_mono(p.all_uses(), Consume::all_ok, λ (cs: List<Consume>) => Consume::all_let_own(cs, f),
+        λ (cs: List<Consume>) (h: Consume::all_ok(cs).IsTrue()) => Consume::all_let_own_of_ok(cs, f, h), all);
+    let at_true = Consume::write_allowed(p.uses(f), k, mine);
+    eq_true_of_is_true(p.unique_at(f, k),
+        j(sym(eq_true_of_is_true(p.owns(f), owns)), λ b _ => Consume::allows_at(p.write(f, k), b).IsTrue(), at_true))
+}
+
+// ---------------------------------------------------------------------------
+// What a lowering consumes: each write of a function, with the fact where
+// one was found. A write with a proof may be built in place; one without is
+// a copy, which is always correct.
+
+inductive WriteMode { InPlace, Copied }
+
+record WriteSite(p: Program, f: Nat) { k: Nat, fact: Option<Unique(p, f, k)> }
+
+fn WriteSite::mode(p: Program, f: Nat, s: WriteSite(p, f)) → WriteMode { match s.fact { Some(_) => InPlace, None => Copied } }
+
+fn WriteSite::ks(p: Program, f: Nat, ss: List<WriteSite(p, f)>) → List<Nat> {
+    match ss { Nil => [], Cons(s, rest) => Cons(s.k, WriteSite::ks(p, f, rest)) }
+}
+
+fn WriteSite::modes(p: Program, f: Nat, ss: List<WriteSite(p, f)>) → List<WriteMode> {
+    match ss { Nil => [], Cons(s, rest) => Cons(WriteSite::mode(p, f, s), WriteSite::modes(p, f, rest)) }
+}
+
+// Every write of the function, once each, in order.
+record WritePlan(p: Program, f: Nat) { sites: List<WriteSite(p, f)>, all: WriteSite::ks(p, f, sites) = List::range(p.write_count(f)) }
+
+fn WritePlan::modes(p: Program, f: Nat, plan: WritePlan(p, f)) → List<WriteMode> { WriteSite::modes(p, f, plan.sites) }

@@ -1,0 +1,24 @@
+import bitvec;
+import bitvec_omega;
+import logic;
+import nat;
+import omega;
+
+// A loop bounded by a measure the function computes first: `climb` stops
+// when `lo` reaches `hi`, its termination by `decreases hi.sub(lo).toNat()`,
+// so its loop's bound is the word `hi.sub(lo)` (examples/x86-native/README.md).
+
+fn climb(lo, hi, acc: BitVec(64)) → BitVec(64) decreases hi.sub(lo).toNat() {
+    match h: lo.unsigned_lt_bit(hi) {
+        False => acc.bxor(lo),
+        True => climb(lo.add(BitVec::ofNat(1)), hi, acc.add(acc).add(lo)),
+    }
+    on ?dec1 := {
+        let below = bitvec_omega::unsigned_true(64, lo, hi, h);
+        bv_omega
+    };
+}
+
+fn climbing(a, b: BitVec(64)) → BitVec(64) {
+    climb(a.band(BitVec::ofNat(255)), b.band(BitVec::ofNat(1023)), b)
+}

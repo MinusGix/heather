@@ -155,11 +155,39 @@ claimed are *not* in the fragment:
   every obligation hole twice more (a named hole is single-use). `gcd`, `runs`
   and a nested-`match` polymorphic list function are in; **`merge` is out**, and
   is the negative control that says so.
+  **Amended again (2026-10-31):** a computed scrutinee, and a `match h:`
+  equation binding, are back in. The walk spells both sides of the match
+  out at a fresh scrutinee and re-matches on it, rendering `f#body`'s side
+  with a fork of the rewrite. Obligations are lifted, so the render carries
+  no holes (`docs/dependent-match-compiler-design.md` §8). `merge` is now a
+  positive test.
 - **An obligation left to `omega`.** See §4: `omega` is not a function of the
   goal alone, so the *first* implementation had to refuse such a body. Lifting
   the obligation (§4, "resolved by lifting") puts `halve_steps` and
   `even_or_odd_wf` back in, and the only thing left outside is a site whose
   statement names a binder the generator cannot type.
+
+**Amended again (2026-11-01, issues/decreases-unfold-convoy-scrutinee.md).**
+Obligations are lifted now, so a stuck scrutinee no longer costs a named hole
+twice, and the rendering cost was the only thing keeping it out. `merge` is
+in, and so is `match h: c` (a convoy), which every measured `runtime fn` uses
+for its loop test. `Respell::match_spelled` proves such a match by the match
+again, at a motive that spells both sides with the scrutinee generalized:
+
+`(match c as λ s => (e: c = s) → L(s, e) = R(s, e) { C => λ h => p_C })(refl)`
+
+`L(s, e)` is the left side's convoy at `s`, each arm the walk's left
+rendering of it, and `R` is the same with the right renderings. A plain match
+drops `e`. At `s := c, e := refl` both sides are the anchors' own matches by
+conversion. Each arm's `let`s (convoy equations at `refl`, obligations) are
+repeated around its renderings, because the motive sits outside the arm. The
+match must be at the anchor, since the motive needs the result type. Below
+the anchor (inside an argument) it is still refused.
+
+A lifted obligation used to quantify over the walk's `__dec_scrut_N` alias as
+if it were a parameter, which made `h: __dec_scrut_N = False` unprovable in
+the lifted statement. It now substitutes the alias's value into the statement
+instead.
 
 Refusal is **not** an error on `f`: the companion is simply not emitted, and
 `f` checks exactly as it does today. A later reference to `f_unfold` is what
@@ -402,3 +430,27 @@ checking position inside a larger goal.
   (`must decrease the measure`, the refined-statement message, the
   `omega`-less unsolved goal) all still read at the call, since a lifted
   obligation the checker refuses re-lowers un-lifted and reports there.
+
+## 11. Designed spellings for the recursor and its step (2026-10-26)
+
+`f#rec` and `f#body` have designed spellings, `f::rec` and `f::body`
+(`docs/repr-access-spellings-design.md`), and the minted names leave the
+surface as any designated name does. They are for a proof that cannot go
+through `f_unfold`, which is not generated where the body matches on a
+computed scrutinee (§3; every word loop decides on a comparison):
+
+- `f::rec(z, x̄, h)` is `f` at a bound `z` on its measure, `h : e < z`;
+  `f(x̄)` is `f::rec(Succ(e), x̄, nat::Nat::lt_succ_self(e))` by `refl`.
+- `f::body(k, g, x̄, h)` is one step, its recursion any `g`, and
+  `f::rec(Succ(k), x̄, h)` is `f::body(k, λ ȳ p => f::rec(k, ȳ, p), x̄, h)`
+  by `refl` (§2).
+
+A claim about `f` at an open argument is then a claim about `f::rec` by
+`Nat` induction on the bound, each step a claim about `f::body` with `g`
+abstracted, which `split_all` proves when the step is a tree of `match h:`
+convoys (`docs/goal-combinators.md`). The verified native compiler states
+its loop agreement this way (issues/function-ir-loop-measure-recursion.md).
+The spellings are designated after the companions are generated, which are
+spelled with the minted names; another module writes them under the
+declaring module's name, `m::f::rec`.
+

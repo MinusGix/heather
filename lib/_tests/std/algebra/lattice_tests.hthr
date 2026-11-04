@@ -1,0 +1,107 @@
+// Probes of `lib/std/algebra/lattice.hthr`: the meet and join laws stated
+// once and read at `Nat`, `Int` and `Dyadic`; the algebraic presentation
+// (`Mergeable`) and the order one reaching each other; a product; and a second
+// lattice on one carrier at another order. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import lattice; import order; import algebra_rel; import relation; import relation_props;
+import nat; import int; import pair; import logic; import bool; import dyadic; import rat; import semiring;
+
+// The layers each carrier registers.
+fn nat_layers() → Nat {
+    let o = Nat::PartialOrderRel(RelId<Nat>, Nat::Le);
+    let m = Nat::MeetSemilattice(RelId<Nat>, Nat::Le, Nat::min);
+    let j = Nat::JoinSemilattice(RelId<Nat>, Nat::Le, Nat::max);
+    let l = Nat::Lattice(RelId<Nat>, Nat::Le, Nat::min, Nat::max);
+    let b = Nat::OrderBot(Nat::Le);
+    0
+}
+fn int_layers() → Nat {
+    let l = Int::Lattice(RelId<Int>, Int::Le, Int::min, Int::max);
+    0
+}
+fn dyadic_layers() → Nat {
+    let l = Dyadic::Lattice(Dyadic::Same, Dyadic::Le, Dyadic::min, Dyadic::max);
+    0
+}
+
+// At `RelId` the laws are equations: `≈` at `Nat` and `Int` is `RelId`
+// (`semiring`'s designation), so `x ≈ y` is `x = y`.
+theorem nat_min_comm(x, y: Nat): x.min(y) ≈ y.min(x) { MeetSemilattice::meet_comm(x, y) }
+theorem nat_min_comm_eq(x, y: Nat): x.min(y) = y.min(x) { nat_min_comm(x, y) }
+theorem nat_max_assoc(x, y, z: Nat): (x.max(y)).max(z) ≈ x.max(y.max(z)) { JoinSemilattice::join_assoc(x, y, z) }
+theorem nat_absorb(x, y: Nat): x.min(x.max(y)) ≈ x { Lattice::meet_join_absorb(x, y) }
+theorem nat_min_zero(x: Nat): Nat::min(0, x) ≈ 0 { OrderBot::bot_meet(x) }
+theorem nat_max_zero(x: Nat): Nat::max(0, x) ≈ x { OrderBot::bot_join(x) }
+theorem int_max_idem(x: Int): x.max(x) ≈ x { JoinSemilattice::join_idem(x) }
+theorem int_min_of_le(x, y: Int, h: x <= y): x.min(y) ≈ x { MeetSemilattice::meet_same_of_le(x, y, h) }
+theorem int_le_of_max(x, y: Int, h: x.max(y) ≈ y): x <= y { JoinSemilattice::le_of_join_same(x, y, h) }
+
+// At `Dyadic` they hold modulo `Dyadic::Same`: two spellings of a number are
+// `≈`, and a meet of the one is `≈` the meet of the other.
+theorem dyadic_min_comm(x, y: Dyadic): x.min(y) ≈ y.min(x) { MeetSemilattice::meet_comm(x, y) }
+theorem dyadic_min_respects(x, x2, y: Dyadic, h: x ≈ x2): x.min(y) ≈ x2.min(y) {
+    MeetSemilattice::meet_respects(x, x2, y, y, h, y.same_refl())
+}
+
+// The algebraic face, read off the order, at a concrete carrier ...
+fn nat_min_mergeable() → Mergeable<Nat>(RelId<Nat>, Nat::min) { MeetSemilattice::mergeable() }
+theorem nat_min_idem(a: Nat): a.min(a) = a { nat_min_mergeable().idem(a) }
+
+// ... and the order built from an algebra: `Bool`'s conjunction is a
+// commutative idempotent semigroup, so `a && b = a` is an order with `&&` its
+// meet. `False` is below everything there.
+//
+// The setoid, the congruence, associativity and commutativity are `algebra`'s
+// `CommMonoid<Bool>(and)`'s, registered at `RelId` (its relational parents),
+// so the instance writes only the law they lack; the canonical evidence is
+// reused exactly, not restated (docs/relation-indexed-algebra-design.md).
+instance Mergeable<Bool>(RelId<Bool>, Bool::and) {
+    idem := λ x => match x as λ x => Bool::and(x, x) = x { True => refl, False => refl },
+}
+fn and_semilattice() → MeetSemilattice<Bool>(RelId<Bool>, MergeLe(RelId<Bool>, Bool::and), Bool::and) {
+    Mergeable::meet_semilattice()
+}
+theorem false_below(b: Bool): MergeLe(RelId<Bool>, Bool::and, False, b) { refl }
+theorem and_le_left(a, b: Bool): MergeLe(RelId<Bool>, Bool::and, a && b, a) { and_semilattice().meet_le_l(a, b) }
+
+// A product of lattices is a lattice, componentwise.
+fn nat_int_lattice() → Lattice<Pair<Nat, Int>>(ProductOrder(RelId<Nat>, RelId<Int>),
+    ProductOrder(Nat::Le, Int::Le), ProductOp(Nat::min, Int::min), ProductOp(Nat::max, Int::max))
+{
+    product_lattice(RelId<Nat>, Nat::Le, Nat::min, Nat::max, RelId<Int>, Int::Le, Int::min, Int::max)
+}
+theorem product_meet_below(x, y: Pair<Nat, Int>): ProductOrder(Nat::Le, Int::Le, ProductOp(Nat::min, Int::min, x, y), x) {
+    nat_int_lattice().meet_le_l(x, y)
+}
+
+// Two lattices on one carrier: under the converse order the roles swap, `max`
+// is the meet and `min` the join. Both are indices, so neither instance
+// shadows the other.
+fn Ge(a, b: Nat) → Type { b <= a }
+fn nat_ge_lattice() → Lattice<Nat>(RelId<Nat>, Ge, Nat::max, Nat::min) {
+    Lattice {
+        rel_refl: λ x => refl,
+        rel_sym: λ x y h => sym(h),
+        rel_trans: λ x y z hxy hyz => trans(hxy, hyz),
+        le_preorder: Preorder(Nat::le_refl, λ x y z (hxy: y <= x) (hyz: z <= y) => Nat::le_trans(z, y, x, hyz, hxy)),
+        same_le: Trans(λ x y z h1 h2 => subst(sym(h1), h2)),
+        le_same: Trans(λ x y z h1 h2 => subst(h2, h1)),
+        le_antisymm: λ x y (hxy: y <= x) (hyx: x <= y) => Nat::le_antisym(x, y, hyx, hxy),
+        meet_le_l: Nat::le_max_l,
+        meet_le_r: Nat::le_max_r,
+        le_meet: λ x y z (hx: x <= z) (hy: y <= z) => x.max_le(y, z, hx, hy),
+        le_join_l: Nat::min_le_l,
+        le_join_r: Nat::min_le_r,
+        join_le: λ x y z (hx: z <= x) (hy: z <= y) => Nat::le_min(x, y, z, hx, hy),
+    }
+}
+theorem ge_meet_is_max(x, y: Nat): Ge(x.max(y), x) { nat_ge_lattice().meet_le_l(x, y) }
+
+// `Int` has no least element, so a bound law is refused there.
+// expect-error: OrderBot
+theorem int_has_no_bot(x: Int): Int::min(OfNat(0), x) ≈ OfNat(0) { OrderBot::bot_meet(x) }
+
+// `⊓` is notation only, like `⊔`: away from a binder that named it, it means
+// nothing, at `Nat` as anywhere (no designation, no fallback name).
+// expect-error: no fallback name
+fn meet_has_no_global_meaning(x: Nat) → Nat { x ⊓ x }

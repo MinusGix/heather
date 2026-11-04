@@ -254,7 +254,7 @@ impl<'v> Env<'v> {
     pub fn identity(arena: &'v ValueArena<'v>, n: u32) -> Env<'v> {
         let mut env = Env::empty();
         for level in 0..n {
-            let value = Rc::new(Val::var(level));
+            let value = arena.val(Val::var(arena, level));
             env = env.push(arena, arena.tm(TmClo::val(value)));
         }
         env
@@ -295,13 +295,23 @@ impl<'v> Env<'v> {
 pub struct ValueArena<'v> {
     #[cfg(feature = "value-metrics")]
     metrics: Option<&'v ValueMetrics>,
-    term_cache: RefCell<ValueCache<*const TmClo<'v>, Val<'v>>>,
-    type_cache: RefCell<ValueCache<*const TyClo<'v>, VTy<'v>>>,
+    term_cache: RefCell<ValueCache<*const TmClo<'v>, &'v Val<'v>>>,
+    type_cache: RefCell<ValueCache<*const TyClo<'v>, &'v VTy<'v>>>,
     /// The probed class of each `Nat` fold step (`eval/probe.rs`), by the
-    /// step closure's identity. Closures live as long as the arena, so a
-    /// key is never reused; the class depends on nothing but the closure
-    /// and the definitions, which are fixed for one arena.
-    fold_classes: RefCell<HashMap<*const TmClo<'v>, Rc<algebra::FoldClass>>>,
+    /// step's [`TmClo::ident_under`] its two binders: the class depends on
+    /// nothing but what the step's body reads and the definitions, which are
+    /// fixed for one arena. Not the closure's address: every unfolding of a
+    /// definition whose body holds the fold allocates a fresh step closure
+    /// over that call's arguments, and a step that reads none of them was
+    /// re-probed once per call (on a native certificate piece, most of what
+    /// it spent on probes; issues/native-certificate-pieces-remaining-cost.md).
+    /// The key's addresses are kept alive by the arena's closures, as for
+    /// `transducers`'.
+    fold_classes: RefCell<PtrMap<CloId, Rc<algebra::FoldClass>>>,
+    /// Closed closures' values, by [`TmClo::closed_ident`]
+    /// ([`ValueArena::memo_closed`]); kept, like `term_cache`, for the
+    /// query, and alive by the same argument as `transducers`' keys.
+    closed_values: RefCell<PtrMap<CloId, &'v Val<'v>>>,
     /// Whether each element type satisfies the bit criterion, and with what
     /// injections (`docs/native-bitvector-values-design.md` §3.1), by the
     /// element closure's identity. Decided once per type, beside the fold
@@ -317,12 +327,15 @@ pub struct ValueArena<'v> {
     /// eliminations sharing a step but not a motive are two questions
     /// (`eval/transduce.rs`).
     ///
-    /// The key is the closures' [`TmClo::ident`], not their addresses: the
-    /// evaluator allocates a fresh closure cell at every `Term::ElimNat` it
-    /// evaluates, so an address key re-probes the same fold once per
-    /// occurrence — which for this class is a walk of the motive and one
-    /// application of the step per table entry. The identity's addresses are
-    /// a syntax `Rc` and an environment node, both of which the arena's own
+    /// The key is the closures' [`TmClo::ident_under`] their binders, not
+    /// their addresses: the evaluator allocates a fresh closure cell at
+    /// every `Term::ElimNat` it evaluates, so an address key re-probes the
+    /// same fold once per occurrence — which for this class is a walk of
+    /// the motive and one application of the step per table entry; the
+    /// environment's entries are left out when the step reads none of them,
+    /// as `take_low`'s and `drop_low`'s do not, each call's unfolding
+    /// otherwise being a new identity. The identity's addresses are a
+    /// syntax `Rc` and an environment node, both of which the arena's own
     /// closures keep alive for as long as this map lives, so neither can be
     /// freed and reused underneath it. A [`PtrMap`], because the lookup sits
     /// on every opaque `Nat` fold's step: the default hasher over five words
@@ -350,8 +363,16 @@ pub struct ValueArena<'v> {
     /// (issues/tier2-left-nested-bind-cost.md). The keys are arena closures,
     /// which live as long as this map, so no address is freed and reused
     /// under it; kept for the query like the force cache.
-    shared_apps: RefCell<ValueCache<(usize, usize), Val<'v>>>,
+    shared_apps: RefCell<ValueCache<(usize, usize), &'v Val<'v>>>,
     envs: Arena<EnvNode<'v>>,
+    /// The forced values themselves (`issues/value-cache-memo-in-arena.md`):
+    /// a value is born here, so forcing a node is a bump of this region
+    /// rather than a heap allocation beside it, and the memo above holds a
+    /// borrow of it rather than a reference count.
+    vals: Arena<Val<'v>>,
+    vtys: Arena<VTy<'v>>,
+    neutrals: Arena<VNeutral<'v>>,
+    elim_cells: Arena<Elim<'v>>,
     levels: Arena<Level>,
     elims: Arena<ElimNode<'v>>,
     terms: Arena<TmClo<'v>>,
@@ -392,6 +413,10 @@ struct ValueMetricCells {
     env_nodes: Cell<u64>,
     term_closures: Cell<u64>,
     type_closures: Cell<u64>,
+    /// The memo counters count table events: a lookup, a hit, a new key.
+    /// They are not allocation counts — the value an insert records was
+    /// born in the arena when it was forced, memoized or not
+    /// (`issues/value-cache-memo-in-arena.md`).
     term_cache_lookups: Cell<u64>,
     term_cache_hits: Cell<u64>,
     term_cache_inserts: Cell<u64>,
@@ -631,7 +656,7 @@ impl ValueMetricsSnapshot {
 /// and an order of magnitude cheaper (it was ~7% of a generated x86 module's
 /// profile as `hash_one` + `DefaultHasher::write`).
 #[derive(Default, Clone, Copy)]
-struct PtrHasher(u64);
+pub(crate) struct PtrHasher(u64);
 
 impl std::hash::Hasher for PtrHasher {
     #[inline]
@@ -660,30 +685,34 @@ impl std::hash::Hasher for PtrHasher {
     }
 }
 
-type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
+pub(crate) type PtrMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<PtrHasher>>;
 
 /// A memo from an arena's own closures (or pairs of them) to the values
 /// they forced to. It keeps every entry for as long as the arena lives: see
 /// [`ValueArena::cache_tm`] for why that is a constant factor over the arena
 /// and not a bound to choose.
 struct ValueCache<K, V> {
-    values: PtrMap<K, Rc<V>>,
+    values: PtrMap<K, V>,
 }
 
-impl<K: Copy + Eq + std::hash::Hash, V> ValueCache<K, V> {
+impl<K: Copy + Eq + std::hash::Hash, V: Copy> ValueCache<K, V> {
     fn new() -> ValueCache<K, V> {
         ValueCache { values: PtrMap::default() }
     }
 
-    fn get(&self, key: K) -> Option<Rc<V>> {
-        self.values.get(&key).cloned()
+    fn get(&self, key: K) -> Option<V> {
+        self.values.get(&key).copied()
     }
 
     /// Remember `value` for `key`; whether it was new.
-    fn insert(&mut self, key: K, value: &Rc<V>) -> bool {
-        if self.values.contains_key(&key) { return false; }
-        self.values.insert(key, Rc::clone(value));
-        true
+    fn insert(&mut self, key: K, value: V) -> bool {
+        match self.values.entry(key) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(value);
+                true
+            }
+        }
     }
 
     #[cfg(feature = "value-metrics")]
@@ -731,11 +760,11 @@ impl<'v> ValueArena<'v> {
     }
 
     /// See `shared_apps`.
-    pub(crate) fn shared_app(&self, key: (usize, usize)) -> Option<Rc<Val<'v>>> {
+    pub(crate) fn shared_app(&self, key: (usize, usize)) -> Option<&'v Val<'v>> {
         self.shared_apps.borrow().get(key)
     }
 
-    pub(crate) fn cache_shared_app(&self, key: (usize, usize), value: &Rc<Val<'v>>) {
+    pub(crate) fn cache_shared_app(&self, key: (usize, usize), value: &'v Val<'v>) {
         self.shared_apps.borrow_mut().insert(key, value);
     }
 
@@ -745,7 +774,8 @@ impl<'v> ValueArena<'v> {
             metrics: None,
             term_cache: RefCell::new(ValueCache::new()),
             type_cache: RefCell::new(ValueCache::new()),
-            fold_classes: RefCell::new(HashMap::new()),
+            fold_classes: RefCell::new(PtrMap::default()),
+            closed_values: RefCell::new(PtrMap::default()),
             bit_types: RefCell::new(HashMap::new()),
             bit_tys: std::cell::OnceCell::new(),
             transducers: RefCell::new(PtrMap::default()),
@@ -754,6 +784,10 @@ impl<'v> ValueArena<'v> {
             w_ih: RefCell::new(PtrMap::default()),
             shared_apps: RefCell::new(ValueCache::new()),
             envs: Arena::new(),
+            vals: Arena::new(),
+            vtys: Arena::new(),
+            neutrals: Arena::new(),
+            elim_cells: Arena::new(),
             levels: Arena::new(),
             elims: Arena::new(),
             terms: Arena::new(),
@@ -770,7 +804,8 @@ impl<'v> ValueArena<'v> {
                 metrics: Some(metrics),
                 term_cache: RefCell::new(ValueCache::new()),
                 type_cache: RefCell::new(ValueCache::new()),
-                fold_classes: RefCell::new(HashMap::new()),
+                fold_classes: RefCell::new(PtrMap::default()),
+                closed_values: RefCell::new(PtrMap::default()),
                 bit_types: RefCell::new(HashMap::new()),
                 bit_tys: std::cell::OnceCell::new(),
                 transducers: RefCell::new(PtrMap::default()),
@@ -778,7 +813,11 @@ impl<'v> ValueArena<'v> {
                 sealed_any: Cell::new(false),
                 w_ih: RefCell::new(PtrMap::default()),
                 shared_apps: RefCell::new(ValueCache::new()),
-                    envs: Arena::new(),
+                envs: Arena::new(),
+                vals: Arena::new(),
+                vtys: Arena::new(),
+                neutrals: Arena::new(),
+                elim_cells: Arena::new(),
                 levels: Arena::new(),
                 elims: Arena::new(),
                 terms: Arena::new(),
@@ -798,6 +837,27 @@ impl<'v> ValueArena<'v> {
             ValueMetrics::bump(&m.inner.term_closures);
         }
         self.terms.alloc(value)
+    }
+
+    /// A value, born in this region.
+    pub fn val(&'v self, value: Val<'v>) -> &'v Val<'v> {
+        self.vals.alloc(value)
+    }
+
+    /// A neutral's head, spine and glue, born in this region.
+    pub fn neutral(&'v self, value: VNeutral<'v>) -> &'v VNeutral<'v> {
+        self.neutrals.alloc(value)
+    }
+
+    /// An elimination that is not a spine node — a frame's, a glued
+    /// unfolding's, an induction hypothesis's — born in this region.
+    pub fn elim_cell(&'v self, value: Elim<'v>) -> &'v Elim<'v> {
+        self.elim_cells.alloc(value)
+    }
+
+    /// A type value, born in this region.
+    pub fn vty(&'v self, value: VTy<'v>) -> &'v VTy<'v> {
+        self.vtys.alloc(value)
     }
 
     pub fn ty(&'v self, value: TyClo<'v>) -> &'v TyClo<'v> {
@@ -837,11 +897,11 @@ impl<'v> ValueArena<'v> {
     /// The cached value for `clo`, if it is currently retained by this
     /// query's bounded cache.
     pub fn fold_class(&self, step: &'v TmClo<'v>) -> Option<Rc<algebra::FoldClass>> {
-        self.fold_classes.borrow().get(&(step as *const TmClo<'v>)).cloned()
+        self.fold_classes.borrow().get(&step.ident_under(2)).cloned()
     }
 
     pub fn cache_fold_class(&self, step: &'v TmClo<'v>, class: Rc<algebra::FoldClass>) {
-        self.fold_classes.borrow_mut().insert(step as *const TmClo<'v>, class);
+        self.fold_classes.borrow_mut().insert(step.ident_under(2), class);
     }
 
     /// The decided bit criterion for `elem`, if it has been decided; the
@@ -864,7 +924,7 @@ impl<'v> ValueArena<'v> {
         step: &'v TmClo<'v>,
         motive: &'v TyClo<'v>,
     ) -> Option<Option<Rc<Transducer>>> {
-        self.transducers.borrow().get(&(step.ident(), motive.ident())).cloned()
+        self.transducers.borrow().get(&(step.ident_under(2), motive.ident_under(1))).cloned()
     }
 
     pub fn cache_transducer(
@@ -873,7 +933,7 @@ impl<'v> ValueArena<'v> {
         motive: &'v TyClo<'v>,
         class: Option<Rc<Transducer>>,
     ) {
-        self.transducers.borrow_mut().insert((step.ident(), motive.ident()), class);
+        self.transducers.borrow_mut().insert((step.ident_under(2), motive.ident_under(1)), class);
     }
 
     /// `clo` glues the sealed proof at absolute Ψ index `at`.
@@ -891,9 +951,9 @@ impl<'v> ValueArena<'v> {
         self.sealed_glues.borrow().iter().find(|(c, _)| *c == key).map(|(_, at)| *at)
     }
 
-    pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<Rc<Val<'v>>> {
+    pub fn memo_tm(&self, clo: &'v TmClo<'v>) -> Option<&'v Val<'v>> {
         match clo {
-            TmClo::Val(value) => Some(Rc::clone(value)),
+            TmClo::Val(value) => Some(*value),
             _ => {
                 let found = self.term_cache.borrow().get(clo as *const TmClo<'v>);
                 #[cfg(feature = "value-metrics")]
@@ -908,9 +968,35 @@ impl<'v> ValueArena<'v> {
         }
     }
 
-    pub(crate) fn memo_ty(&self, clo: &'v TyClo<'v>) -> Option<Rc<VTy<'v>>> {
+    /// The value of a closure whose body reads nothing of its environment
+    /// ([`TmClo::closed_ident`]), forced under any other closure over the
+    /// same body: such a body denotes one value wherever it is read, so it
+    /// is evaluated once per query. Without it, a constant written inside a
+    /// definition — `Nat::pow(2, 32)` in `near_rel`, an opcode's
+    /// `ofNat(0x89)` — is recomputed at every unfolding, the closure being
+    /// allocated afresh over each call's arguments. A bare variable is never
+    /// closed, and is skipped before the footprint is asked.
+    pub fn memo_closed(&self, clo: &'v TmClo<'v>) -> Option<&'v Val<'v>> {
+        let key = Self::closed_key(clo)?;
+        self.closed_values.borrow().get(&key).copied()
+    }
+
+    pub fn cache_closed(&self, clo: &'v TmClo<'v>, value: &'v Val<'v>) {
+        if let Some(key) = Self::closed_key(clo) {
+            self.closed_values.borrow_mut().entry(key).or_insert(value);
+        }
+    }
+
+    fn closed_key(clo: &TmClo<'v>) -> Option<CloId> {
         match clo {
-            TyClo::Val(value) => Some(Rc::clone(value)),
+            TmClo::Syn { body, .. } if !matches!(&**body, Term::Var(_)) => clo.closed_ident(0),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn memo_ty(&self, clo: &'v TyClo<'v>) -> Option<&'v VTy<'v>> {
+        match clo {
+            TyClo::Val(value) => Some(*value),
             _ => {
                 let found = self.type_cache.borrow().get(clo as *const TyClo<'v>);
                 #[cfg(feature = "value-metrics")]
@@ -955,7 +1041,7 @@ impl<'v> ValueArena<'v> {
     ///
     /// Policy changes the fuel a query spends, never its value: the memo is
     /// a function of the closure alone, and only successes are remembered.
-    pub(crate) fn cache_tm(&self, clo: &'v TmClo<'v>, value: &Rc<Val<'v>>) {
+    pub(crate) fn cache_tm(&self, clo: &'v TmClo<'v>, value: &'v Val<'v>) {
         if !matches!(clo, TmClo::Val(_)) {
             let mut cache = self.term_cache.borrow_mut();
             let inserted = cache.insert(clo as *const TmClo<'v>, value);
@@ -970,7 +1056,7 @@ impl<'v> ValueArena<'v> {
     }
 
     /// [`Self::cache_tm`] for types.
-    pub(crate) fn cache_ty(&self, clo: &'v TyClo<'v>, value: &Rc<VTy<'v>>) {
+    pub(crate) fn cache_ty(&self, clo: &'v TyClo<'v>, value: &'v VTy<'v>) {
         if !matches!(clo, TyClo::Val(_)) {
             let mut cache = self.type_cache.borrow_mut();
             let inserted = cache.insert(clo as *const TyClo<'v>, value);
@@ -1004,18 +1090,18 @@ impl<'v> ValueArena<'v> {
 ///
 /// **A thunk never memoizes a failure**: the memo is written only on `Ok`, so
 /// a value graph forced under an insufficient budget and re-forced under a
-/// larger one still succeeds (design §6). Successful results live in the
-/// query arena's bounded cache, so sharing cannot retain an unbounded forced
-/// graph.
+/// larger one still succeeds (design §6). Successful results are born in the
+/// query arena and memoized there by the closure's address, so a forced graph
+/// is freed flat when the query ends, never by a recursive drop.
 pub enum TmClo<'v> {
     Syn {
         env: Env<'v>,
         body: Rc<Term>,
     },
-    Val(Rc<Val<'v>>),
+    Val(&'v Val<'v>),
     Elim {
         head: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
     },
 }
 
@@ -1024,11 +1110,11 @@ impl<'v> TmClo<'v> {
         TmClo::Syn { env, body }
     }
 
-    pub fn val(v: Rc<Val<'v>>) -> TmClo<'v> {
+    pub fn val(v: &'v Val<'v>) -> TmClo<'v> {
         TmClo::Val(v)
     }
 
-    pub fn elim(head: &'v TmClo<'v>, elim: Rc<Elim<'v>>) -> TmClo<'v> {
+    pub fn elim(head: &'v TmClo<'v>, elim: &'v Elim<'v>) -> TmClo<'v> {
         TmClo::Elim { head, elim }
     }
 
@@ -1056,6 +1142,31 @@ impl<'v> TmClo<'v> {
             }
             _ => (self as *const TmClo<'v> as usize, usize::MAX, u32::MAX, u32::MAX),
         }
+    }
+
+    /// [`TmClo::ident`] of a closure its user applies to `pending`
+    /// arguments, as an eliminator applies its step: when the body reads no
+    /// capture past those, the environment's entries are not part of the
+    /// identity, and two closures over the same body differing only there
+    /// are one ([`TmClo::closed_ident`]).
+    pub fn ident_under(&self, pending: u32) -> CloId {
+        self.closed_ident(pending).unwrap_or_else(|| self.ident())
+    }
+
+    /// The identity of a syntactic closure whose body reads no capture past
+    /// its `pending` binders: the body and the global offset it is read at,
+    /// whatever the entries. The length stays in it when the body holds a
+    /// substitution tail, which is rewritten by the whole environment's
+    /// length (`bounds.rs`; conversion's `env_identity` reads closures the
+    /// same way). `None` for a body that reads a capture, and for anything
+    /// that is not syntax.
+    pub fn closed_ident(&self, pending: u32) -> Option<CloId> {
+        let TmClo::Syn { env, body } = self else { return None };
+        let used = crate::bounds::term_local_use(body);
+        (used.bound <= pending).then(|| {
+            let len = if used.has_tail { env.len() } else { 0 };
+            (Rc::as_ptr(body) as usize, 0, len, env.gshift())
+        })
     }
 }
 
@@ -1087,7 +1198,7 @@ pub enum TyClo<'v> {
         env: Env<'v>,
         body: Rc<Type>,
     },
-    Val(Rc<VTy<'v>>),
+    Val(&'v VTy<'v>),
     Vec {
         level: &'v Level,
         elem: &'v TyClo<'v>,
@@ -1108,7 +1219,7 @@ impl<'v> TyClo<'v> {
         TyClo::Syn { env, body }
     }
 
-    pub fn val(v: Rc<VTy<'v>>) -> TyClo<'v> {
+    pub fn val(v: &'v VTy<'v>) -> TyClo<'v> {
         TyClo::Val(v)
     }
 
@@ -1132,6 +1243,18 @@ impl<'v> TyClo<'v> {
             }
             _ => (self as *const TyClo<'v> as usize, usize::MAX, u32::MAX, u32::MAX),
         }
+    }
+
+    /// See [`TmClo::ident_under`].
+    pub fn ident_under(&self, pending: u32) -> CloId {
+        if let TyClo::Syn { env, body } = self {
+            let used = crate::bounds::type_local_use(body);
+            if used.bound <= pending {
+                let len = if used.has_tail { env.len() } else { 0 };
+                return (Rc::as_ptr(body) as usize, 0, len, env.gshift());
+            }
+        }
+        self.ident()
     }
 
     pub fn as_syn(&self) -> Option<(&Env<'v>, &Rc<Type>)> {
@@ -1172,7 +1295,7 @@ pub enum VTail {
 #[derive(Clone)]
 pub struct VSubst<'v> {
     pub tail: VTail,
-    pub terms: Vec<Rc<Val<'v>>>,
+    pub terms: Vec<&'v Val<'v>>,
 }
 
 impl VTail {
@@ -1208,7 +1331,7 @@ pub enum Head<'v> {
     /// An eliminator applied to a value it cannot eliminate — reachable only
     /// on ill-typed input, where `reduce.rs` is likewise stuck without being
     /// neutral. Given a home here so that no input reaches a panic.
-    Stuck(Rc<Val<'v>>),
+    Stuck(&'v Val<'v>),
 }
 
 impl Head<'_> {
@@ -1242,7 +1365,7 @@ pub enum VNeTy<'v> {
     /// `El^l ν` at an encoding that does not decode. Forced, so the payload
     /// is a weak head value: a neutral (the ch. 06 case) or — on ill-typed
     /// input — a stuck one.
-    El { level: Level, tm: Rc<Val<'v>> },
+    El { level: Level, tm: &'v Val<'v> },
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,14 +1441,14 @@ pub enum VTy<'v> {
     Vec {
         level: Level,
         elem: &'v TyClo<'v>,
-        len: Rc<Val<'v>>,
+        len: &'v Val<'v>,
     },
     /// See [`VTy::Vec`].
-    Fin { len: Rc<Val<'v>> },
+    Fin { len: &'v Val<'v> },
     /// See [`VTy::Vec`]; `fam` has one pending binder, `i : Fin len`.
     DVec {
         level: Level,
-        len: Rc<Val<'v>>,
+        len: &'v Val<'v>,
         fam: &'v TyClo<'v>,
     },
     /// Binds *universe* variables, not a local: entered by instantiating the
@@ -1356,6 +1479,13 @@ pub enum VTy<'v> {
         level: Level,
     },
     Neutral(VNeTy<'v>),
+}
+
+impl<'v> VTy<'v> {
+    /// [`Val::ptr_eq`] for type values.
+    pub fn ptr_eq(a: &VTy<'v>, b: &VTy<'v>) -> bool {
+        std::ptr::eq(a, b)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1513,7 +1643,7 @@ pub enum Val<'v> {
     NatSync {
         program: Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
     },
     /// A fold over a *width* whose step is a bit transducer
     /// (`eval/transduce.rs`), waiting for the arguments its class fires at.
@@ -1527,9 +1657,9 @@ pub enum Val<'v> {
     BitFold {
         program: Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         class: Rc<Transducer>,
-        apps: Rc<Vec<Rc<Elim<'v>>>>,
+        apps: Rc<Vec<&'v Elim<'v>>>,
     },
     Refl {
         level: Level,
@@ -1613,7 +1743,7 @@ pub enum Val<'v> {
     /// rather than applied, it is first built as the λ it stands for
     /// (`Eval::wf_ih_lam`). A strategy change with no semantic content.
     WfIh {
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1632,7 +1762,27 @@ pub enum Val<'v> {
     /// than applied, it is first built as the λ it stands for
     /// (`Eval::w_ih_lam`). A strategy change with no semantic content.
     WIh {
-        elim: Rc<Elim<'v>>,
+        elim: &'v Elim<'v>,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+    },
+    /// The induction hypothesis an `elim_IWf` β hands its step,
+    /// `λ i. elim_IWf(e; c[a, i]; dnth(…; cs; i))`, held as the eliminator
+    /// and the label and children it was fired on (`Eval::fire_elim_iwf`),
+    /// for [`Val::WfIh`]'s reason. Here the copy also defeated conversion:
+    /// a recursive call's step was a shifted copy of the step, under a
+    /// longer environment, so comparing it with the same function's step
+    /// reached from anywhere else normalized the whole step, case tree and
+    /// annotations (issues/indexed-family-recursion-gate-cost.md). The
+    /// recursive eliminator is `elim` with its index replaced by the child's,
+    /// `c[a, i]`, so applied to a canonical index over a canonical tuple it
+    /// selects the child and fires that re-indexed eliminator on it, sharing
+    /// `elim`'s motive and step closures; applied to anything else, and
+    /// wherever it is inspected rather than applied, it is first built as the
+    /// λ it stands for (`Eval::iwf_ih_lam`). A strategy change with no
+    /// semantic content.
+    IWfIh {
+        elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,
         children: &'v TmClo<'v>,
     },
@@ -1660,7 +1810,17 @@ pub enum Val<'v> {
     BoxTy(Rc<Type>),
     BoxTm(Rc<Term>),
 
-    Neutral(Rc<VNeutral<'v>>),
+    Neutral(&'v VNeutral<'v>),
+}
+
+impl<'v> Val<'v> {
+    /// Whether two values are one region object. Values are born in the
+    /// query arena and never freed while it lives, so an address names one
+    /// value for the whole query (the `Rc::ptr_eq` this replaced could not
+    /// say as much once an `Rc` was dropped).
+    pub fn ptr_eq(a: &Val<'v>, b: &Val<'v>) -> bool {
+        std::ptr::eq(a, b)
+    }
 }
 
 impl<'v> Val<'v> {
@@ -1673,7 +1833,7 @@ impl<'v> Val<'v> {
         let (_, rest) = ContextProgram::uncons(program);
         match rest {
             None => tail,
-            Some(program) => arena.tm(TmClo::val(Rc::new(Val::NatRun { program, tail }))),
+            Some(program) => arena.tm(TmClo::val(arena.val(Val::NatRun { program, tail }))),
         }
     }
 
@@ -1702,11 +1862,11 @@ impl<'v> Val<'v> {
         let (rest_len, rest) = match std::num::NonZeroU64::new(u64::from(width - 1)) {
             None => (tail_len, tail),
             Some(count) => (
-                arena.tm(TmClo::val(Rc::new(Val::NatRun {
+                arena.tm(TmClo::val(arena.val(Val::NatRun {
                     program: ContextProgram::run((), count),
                     tail: tail_len,
                 }))),
-                arena.tm(TmClo::val(Rc::new(Val::BitRun {
+                arena.tm(TmClo::val(arena.val(Val::BitRun {
                     level: level.clone(),
                     ty,
                     width: width - 1,
@@ -1760,8 +1920,8 @@ impl<'v> Val<'v> {
     }
 
     /// The neutral variable at concrete level `lvl`.
-    pub fn var(lvl: u32) -> Val<'v> {
-        Val::Neutral(Rc::new(VNeutral {
+    pub fn var(arena: &'v ValueArena<'v>, lvl: u32) -> Val<'v> {
+        Val::Neutral(arena.neutral(VNeutral {
             head: Head::Var(lvl),
             spine: ElimSpine::empty(),
             unfold: None,
@@ -1769,8 +1929,8 @@ impl<'v> Val<'v> {
     }
 
     /// The neutral variable at abstract-prefix depth `depth`.
-    pub fn base_var(depth: u32) -> Val<'v> {
-        Val::Neutral(Rc::new(VNeutral {
+    pub fn base_var(arena: &'v ValueArena<'v>, depth: u32) -> Val<'v> {
+        Val::Neutral(arena.neutral(VNeutral {
             head: Head::BaseVar(depth),
             spine: ElimSpine::empty(),
             unfold: None,
@@ -2341,6 +2501,7 @@ impl fmt::Debug for Val<'_> {
             Val::Lam { dom, body, .. } => write!(f, "λ({dom:?}). {body:?}"),
             Val::WfIh { children, .. } => write!(f, "ih_Wf({children:?})"),
             Val::WIh { children, .. } => write!(f, "ih_W({children:?})"),
+            Val::IWfIh { children, .. } => write!(f, "ih_IWf({children:?})"),
             Val::ULam { num_vars, body, .. } => write!(f, "Λ[{num_vars}ℓ]. {body:?}"),
             Val::CtxLam { body, .. } => write!(f, "Λ(g). {body:?}"),
             Val::TyLam { body, .. } => write!(f, "Λ(U). {body:?}"),
@@ -2367,20 +2528,21 @@ mod tests {
         // must ride inside the enum `Val::Pair` already sizes: a `u128` would
         // raise the alignment to 16 and round every value up, which is why
         // §3.4's preferred `WIDTH_CAP` is not the one that shipped.
-        assert_eq!(std::mem::size_of::<Val<'_>>(), 88);
+        assert_eq!(std::mem::size_of::<Val<'_>>(), 72);
         // Types and eliminations ride the evaluator's and conversion's
         // recursion; a former with many components keeps them behind one
-        // pointer (`VIWfSig`) instead of growing every one.
-        assert_eq!(std::mem::size_of::<VTy<'_>>(), 72);
-        assert_eq!(std::mem::size_of::<Elim<'_>>(), 128);
+        // pointer (`VIWfSig`) instead of growing every one. A `Level` is two
+        // words (`issues/kernel-compact-level.md`).
+        assert_eq!(std::mem::size_of::<VTy<'_>>(), 56);
+        assert_eq!(std::mem::size_of::<Elim<'_>>(), 104);
     }
 
     #[test]
     fn deep_arena_value_chain_drops_without_using_the_native_stack() {
         let arena = ValueArena::new();
-        let mut clo = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let mut clo = arena.tm(TmClo::val(arena.val(Val::Zero)));
         for _ in 0..100_000 {
-            clo = arena.tm(TmClo::val(Rc::new(Val::Succ(clo))));
+            clo = arena.tm(TmClo::val(arena.val(Val::Succ(clo))));
         }
         assert!(arena.memo_tm(clo).is_some());
     }
@@ -2404,13 +2566,13 @@ mod tests {
     fn environment_value_identity_ignores_nodes_but_not_captured_values() {
         let arena = ValueArena::new();
         let base = super::Env::empty();
-        let shared = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let shared = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let left = base.push(&arena, shared);
         let right = base.push(&arena, shared);
         assert!(!super::Env::ptr_eq(&left, &right));
         assert!(super::Env::values_ptr_eq(&left, &right));
 
-        let separately_allocated = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let separately_allocated = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let different = base.push(&arena, separately_allocated);
         assert!(!super::Env::values_ptr_eq(&left, &different));
     }
@@ -2419,9 +2581,9 @@ mod tests {
     fn environment_prefix_identity_ignores_unobserved_outer_values() {
         let arena = ValueArena::new();
         let base = super::Env::empty();
-        let left_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let right_outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let shared_inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let left_outer = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let right_outer = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let shared_inner = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let left = base.push(&arena, left_outer).push(&arena, shared_inner);
         let right = base.push(&arena, right_outer).push(&arena, shared_inner);
 
@@ -2435,8 +2597,8 @@ mod tests {
     fn environment_prefix_keeps_length_and_abstract_boundary_in_sync() {
         let arena = ValueArena::new();
         let base = super::Env::empty();
-        let outer = arena.tm(TmClo::val(Rc::new(Val::Zero)));
-        let inner = arena.tm(TmClo::val(Rc::new(Val::Zero)));
+        let outer = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        let inner = arena.tm(TmClo::val(arena.val(Val::Zero)));
         let env = base.push(&arena, outer).push(&arena, inner);
 
         let prefix = env.prefix(1);
@@ -2459,7 +2621,7 @@ mod tests {
         let mut closures = Vec::with_capacity(n);
         for _ in 0..n {
             let clo = arena.tm(TmClo::syn(env, Rc::new(crate::term::Term::Zero)));
-            arena.cache_tm(clo, &Rc::new(Val::Zero));
+            arena.cache_tm(clo, &arena.val(Val::Zero));
             closures.push(clo);
         }
         assert!(arena.memo_tm(closures[0]).is_some());

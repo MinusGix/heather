@@ -1,0 +1,22 @@
+// Probes of `lib/std/num/float/dyadic.hthr`. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import relation; import relation_props; import algebra;
+import order; import semiring; import ordered_field; import rat; import dyadic;
+
+// A hypothesis at `Dyadic` against a theorem at `Rat`
+// (issues/index-inference-through-unfolding.md): `a <= b` is
+// `Dyadic::Le(a, b)`, which unfolds to `a.rat() <= b.rat()`. The carrier is
+// `Rat` from the explicit arguments, so `<= := Dyadic::Le` does not fit.
+theorem le_mono_through_rat(a, b: Dyadic, c: Rat, h: a <= b): a.rat() + c <= b.rat() + c {
+    OrderedAddMonoid::add_le_mono_r(a.rat(), b.rat(), c, h)
+}
+
+// An index no designation names and no expected type states: only the
+// hypothesis's unfolding, `Rat::Le(a.rat(), b.rat())`, says what `R` is.
+theorem trans_implicit<A: Transitive(R)>({R: A → A → Type}, a, b, c: A, h1: R(a, b), h2: R(b, c)): R(a, c) {
+    A.rel_trans(a, b, c, h1, h2)
+}
+theorem trans_through_rat(a, b, c: Dyadic, h1: a <= b, h2: b <= c): a.rat() <= c.rat() {
+    let r = trans_implicit(a.rat(), b.rat(), c.rat(), h1, h2);
+    r
+}

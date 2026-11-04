@@ -1,0 +1,45 @@
+// Probes of `lib/std/analysis/real_log_law.hthr`: log at real arguments
+// and its laws, read at concrete and neutral reals. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import list; import relation; import relation_props; import algebra;
+import algebra_rel; import order; import semiring; import ordered_field; import big_operator; import omega; import tactic;
+import ring; import linarith; import rat; import creal; import creal_lipschitz; import series; import elementary; import exp_law;
+import elementary_real; import real_fn; import real_fn_limit; import real_atanh; import real_exp; import real_log; import real_log_law;
+
+// log(exp a) = a at a neutral real, and at a rational.
+theorem log_exp_any(a: CReal): (CReal::exp(a)).log(h := CReal::exp_pos(a)) ≈ a { CReal::log_exp(a) }
+
+theorem log_exp_two(): (CReal::exp(CReal::ofRat(2))).log(h := CReal::exp_pos(CReal::ofRat(2))) ≈ CReal::ofRat(2) {
+    CReal::log_exp(CReal::ofRat(2))
+}
+
+// exp(log x) = x at a real that is positive by evidence, not by being rational.
+theorem exp_log_of_exp(a: CReal): CReal::exp((CReal::exp(a)).log(h := CReal::exp_pos(a))) ≈ CReal::exp(a) {
+    CReal::exp_log(CReal::exp(a), CReal::exp_pos(a))
+}
+
+// The value does not depend on which positivity evidence is passed.
+theorem log_evidence_free(x: CReal, h1, h2: 0 < x): x.log(h := h1) ≈ x.log(h := h2) { CReal::log_respects(h1, h2, x.same_refl()) }
+
+// At a rational it is the atanh sum.
+theorem log_at_three(h: 0 < CReal::ofRat(3)): (CReal::ofRat(3)).log(h := h) ≈ CReal::log_rat(3, omega) { CReal::log_ofRat(3, omega, h) }
+
+// log(x·y) = log x + log y, log 1 = 0, and monotonicity.
+theorem log_mul_any(x, y: CReal, hx: 0 < x, hy: 0 < y): (x * y).log(h := CReal::mul_pos(hx, hy)) ≈ x.log(h := hx) + y.log(h := hy) {
+    CReal::log_mul(hx, hy)
+}
+
+theorem log_one_zero(h: 0 < CReal::ofRat(1)): (CReal::ofRat(1)).log(h := h) ≈ 0 { CReal::log_one(h) }
+
+theorem log_mono(x, y: CReal, hx: 0 < x, hy: 0 < y, h: x <= y): x.log(h := hx) <= y.log(h := hy) { CReal::log_le(hx, hy, h) }
+
+// exp(d) >= 1 + d at d >= 0, and the clamp is 1-Lipschitz.
+theorem exp_tangent(d: CReal, hd: 0 <= d): 1 + d <= CReal::exp(d) { CReal::exp_ge_add_one(d, hd) }
+
+theorem clamp_lip(p, q: Rat): (p.clamp_up(Rat::inv_succ(3)) - q.clamp_up(Rat::inv_succ(3))).abs() <= (p - q).abs() {
+    Rat::clamp_up_lip(p, q, Rat::inv_succ(3))
+}
+
+// A negative control: log(exp a) is not a + 1.
+// expect-error (kernel)
+theorem log_exp_wrong(a: CReal): (CReal::exp(a)).log(h := CReal::exp_pos(a)) ≈ a + 1 { CReal::log_exp(a) }

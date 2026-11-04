@@ -4,7 +4,7 @@ status: open
 labels: [frontend, syntax, design]
 area: language
 created: 2026-07-24
-updated: 2026-08-11
+updated: 2026-10-27
 ---
 
 [[surface-syntax]] states the position as "a **fixed grammar** of common
@@ -322,3 +322,37 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   stands unchanged; the running score is that a curated addition costs three to
   four small edits, which is still the number a mechanism has to beat.
 - 2026-08-10: The second curated-lexicon data point landed via [[list-append-symbol]]: `++` costs the same lexer/binding-power/op-symbol/designation edits as predicted, shares additive precedence, and has no fallback. The extension-mechanism question remains unchanged.
+- 2026-10-27: docs/analysis-foundations-design.md (PR #220) asks for the big-operator binder production (`∑ k < n, e`, `∏`) ahead of the rest of the notation work: every analysis layer it orders reads through finite sums, and the library spelling `MonoidRel::range(+, n, λ k => …)` does not scale. Customer: [[finite-sums-and-products]].
+- 2026-10-27: [[finite-sums-and-products]] landed the library the `∑` production
+  would elaborate to (`MonoidRel::range(+, n, λ k => e)`), and found the one
+  thing a parse-time desugaring in the style of `∃` cannot do: a bare
+  `MonoidRel::range(+, n, f)` at a concrete carrier is refused on the left of
+  `≈`, `=` or `+`, because the operator's carrier is asked for before the
+  call's `A` is fixed (`MonoidRel::range<Rat>(…)` and the right-hand position
+  both work). So the production should elaborate its body first, under
+  `k: Nat`, and take the carrier from the body's type; until then the library
+  names a sum per carrier (`Rat::sum(n, f)`).
+
+- 2026-10-27: The big-operator production landed. `∑ k < n, e` and
+  `∏ k < n, e` are two three-byte lexer tokens and one prefix production that
+  desugars at parse time to `MonoidRel::range(+ | *, n, λ (k: Nat) => e)`:
+  no new AST node, as for `∃`. The bound and the body are each one
+  arithmetic expression, so the body runs over `+`/`*`/`&&`/`||` and stops at
+  a relation (`∑ k < n, f(k) ≈ s` compares the sum). The carrier question
+  logged above was not answered in the parser but in the elaborator, and more
+  generally than for sums: a call deferred only for a result-only implicit
+  (`deferral_can_fall_back`) is now probed by inference as a last resort when
+  an operator looks for its carrier, and an `=` whose left side infers that
+  way and whose right side is a bare numeral keeps the written order instead
+  of anchoring at `Nat`. Cost against the curated-addition score: lexer
+  tokens, one parser function, the inventory/tree-sitter rows, and two
+  elaborator rules that any result-only-implicit call benefits from. One edge
+  remains: a nested bare-operator call whose λ binders are unannotated
+  (`MonoidRel::antidiag(+, n, λ i k => …)` inside a `∑`) has no carrier to
+  infer from and needs `λ (i: Nat) (k: Nat) =>`.
+- 2026-10-27: That edge is closed. An unannotated λ whose binders' domains
+  the call already knows (`f: Nat → Nat → A`) now infers like its annotated
+  twin once nothing else is left to teach the call, and the body's type fixes
+  the carrier (docs/unifier-completeness-design.md, amendment 2026-10-27).
+  `∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k))` checks at
+  `Rat`, `Nat` and an open semiring with no binder annotations.

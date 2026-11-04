@@ -11,8 +11,9 @@
 // The layers, each with the theorems that need no more:
 //
 // - `MonoidRel(≈, ∙)` (algebra_rel): the fold over a list and its append law.
-// - `CommMonoidRel(≈, ∙)`: a fold of pointwise products splits.
-// - `GroupRel(≈, ∙)`: inverses are unique, and an inverse's inverse is back.
+// - `CommMonoidRel(≈, ∙)` (algebra_rel): a fold of pointwise products splits.
+// - `GroupRel(≈, ∙)` (algebra_rel): inverses are unique, and an inverse's
+//   inverse is back.
 // - `Distributes(≈, +, *)`: distributivity, a theory of its own indexed by
 //   both operations; it holds no unit and no group.
 // - `Semiring(≈, +, *)`: an additive commutative monoid, a multiplicative
@@ -40,89 +41,7 @@ import list;
 import relation;
 import relation_props;
 import algebra_rel;
-
-// ---------------------------------------------------------------------------
-// The one-operation consumers.
-
-// The fold of a list under a monoid: `x₁ ∙ (x₂ ∙ (… ∙ unit))`. The operation
-// is written, positionally, and the constraint's slot says it is the same one
-// (algebra's `mconcat`); the relation comes from the carrier.
-fn MonoidRel::fold<A: MonoidRel(≈, op)>(op as ∙: A → A → A, xs: List<A>) → A {
-    match xs {
-        Nil => A.unit,
-        Cons(h, t) => h ∙ MonoidRel::fold(op, t),
-    }
-}
-
-theorem MonoidRel::fold_append<A: MonoidRel(≈, op)>(op as ∙: A → A → A, xs, ys: List<A>):
-    MonoidRel::fold(op, xs ++ ys) ≈ MonoidRel::fold(op, xs) ∙ MonoidRel::fold(op, ys)
-{
-    match xs {
-        Nil => A.rel_sym(A.unit ∙ MonoidRel::fold(op, ys), MonoidRel::fold(op, ys), A.unit_l(MonoidRel::fold(op, ys))),
-        Cons(h, t) => calc {
-            h ∙ MonoidRel::fold(op, t ++ ys)
-                ≈ h ∙ (MonoidRel::fold(op, t) ∙ MonoidRel::fold(op, ys)) := rel_cong(MonoidRel::fold_append(op, t, ys)),
-                ≈ (h ∙ MonoidRel::fold(op, t)) ∙ MonoidRel::fold(op, ys) := A.rel_sym(
-                    (h ∙ MonoidRel::fold(op, t)) ∙ MonoidRel::fold(op, ys),
-                    h ∙ (MonoidRel::fold(op, t) ∙ MonoidRel::fold(op, ys)),
-                    A.assoc(h, MonoidRel::fold(op, t), MonoidRel::fold(op, ys))),
-        },
-    }
-}
-
-// The commutative consumers ask for the monoid and the commutativity law
-// separately, not for `CommMonoidRel`, so a commutative semiring's product —
-// its `multiplicative` monoid beside its `commutative` law — reaches them as
-// a sum does. The relation is linked, as `merge_twice` links it: a caller
-// with the relation as a symbol passes `≈`.
-
-// The middle-four interchange, the one rearrangement commutativity buys.
-theorem CommMonoidRel::interchange<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type,
-    op as ∙: A → A → A, a, b, c, d: A):
-    (a ∙ b) ∙ (c ∙ d) ≈ (a ∙ c) ∙ (b ∙ d)
-{
-    calc {
-        (a ∙ b) ∙ (c ∙ d)
-            ≈ a ∙ (b ∙ (c ∙ d)) := A.assoc(a, b, c ∙ d),
-            ≈ a ∙ ((b ∙ c) ∙ d) := rel_cong(A.rel_sym((b ∙ c) ∙ d, b ∙ (c ∙ d), A.assoc(b, c, d))),
-            ≈ a ∙ ((c ∙ b) ∙ d) := rel_cong(A.comm(b, c)),
-            ≈ a ∙ (c ∙ (b ∙ d)) := rel_cong(A.assoc(c, b, d)),
-            ≈ (a ∙ c) ∙ (b ∙ d) := A.rel_sym((a ∙ c) ∙ (b ∙ d), a ∙ (c ∙ (b ∙ d)), A.assoc(a, c, b ∙ d)),
-    }
-}
-
-// A fold of pointwise products is the product of the folds: Σ (f + g) is
-// Σ f + Σ g, and at a commutative product Π (f * g) is Π f * Π g.
-theorem CommMonoidRel::fold_map_op<A: MonoidRel(same, op) + Commutative(same, op), B>(same as ≈: A → A → Type,
-    op as ∙: A → A → A, xs: List<B>, f, g: B → A):
-    MonoidRel::fold(op, xs.map(λ x => f(x) ∙ g(x))) ≈ MonoidRel::fold(op, xs.map(f)) ∙ MonoidRel::fold(op, xs.map(g))
-{
-    match xs {
-        Nil => A.rel_sym(A.unit ∙ A.unit, A.unit, A.unit_l(A.unit)),
-        Cons(h, t) => calc {
-            (f(h) ∙ g(h)) ∙ MonoidRel::fold(op, t.map(λ x => f(x) ∙ g(x)))
-                ≈ (f(h) ∙ g(h)) ∙ (MonoidRel::fold(op, t.map(f)) ∙ MonoidRel::fold(op, t.map(g)))
-                    := rel_cong(CommMonoidRel::fold_map_op(same, op, t, f, g)),
-                ≈ (f(h) ∙ MonoidRel::fold(op, t.map(f))) ∙ (g(h) ∙ MonoidRel::fold(op, t.map(g)))
-                    := CommMonoidRel::interchange(same, op, f(h), g(h), MonoidRel::fold(op, t.map(f)), MonoidRel::fold(op, t.map(g))),
-        },
-    }
-}
-
-// An inverse is unique: the group form of algebra's `op_inv_unique`.
-theorem GroupRel::inv_unique<A: GroupRel(≈, op)>(op as ∙: A → A → A, x, y: A, h: x ∙ y ≈ A.unit): y ≈ A.inv(x) {
-    calc {
-        y ≈ A.unit ∙ y := A.rel_sym(A.unit ∙ y, y, A.unit_l(y)),
-            ≈ (A.inv(x) ∙ x) ∙ y := rel_cong(A.rel_sym(A.inv(x) ∙ x, A.unit, A.inv_l(x))),
-            ≈ A.inv(x) ∙ (x ∙ y) := A.assoc(A.inv(x), x, y),
-            ≈ A.inv(x) ∙ A.unit := rel_cong(h),
-            ≈ A.inv(x) := A.unit_r(A.inv(x)),
-    }
-}
-
-theorem GroupRel::inv_inv<A: GroupRel(≈, op)>(op as ∙: A → A → A, x: A): A.inv(A.inv(x)) ≈ x {
-    A.rel_sym(x, A.inv(A.inv(x)), GroupRel::inv_unique(op, A.inv(x), x, A.inv_l(x)))
-}
+import order;
 
 // ---------------------------------------------------------------------------
 // The two-operation theories.
@@ -151,6 +70,23 @@ class CommSemiring<A>(same as ≈: A → A → Type, add as +: A → A → A, mu
 class CommRing<A>(same as ≈: A → A → Type, add as +: A → A → A, mul as *: A → A → A)
     extends Ring<A>(same, add, mul), CommSemiring<A>(same, add, mul)
 {}
+
+// A commutative ring with its integers named (issues/ring-modulo-a-relation.md).
+// Every commutative ring has the integers in it, but `of_int` is a field so
+// that a carrier keeps its own embedding (`Rat::ofInt`, a rational numeral
+// at `CReal`) and a coefficient `ring` writes reads back as the carrier's
+// numeral, as `of_nat` does in `OrderedField`. The laws are the ring
+// homomorphism's; negation follows from them (`ring::RingExpr::of_int_neg`).
+// The integer operations are spelled out: the bound symbols are `A`'s.
+class CommRingOfInt<A>(same as ≈: A → A → Type, add as +: A → A → A, mul as *: A → A → A)
+    extends CommRing<A>(same, add, mul)
+{
+    of_int: Int → A,
+    of_int_zero: of_int(OfNat(0)) ≈ unit,
+    of_int_one: of_int(OfNat(1)) ≈ multiplicative.unit,
+    of_int_add: (a, b: Int) → of_int(Int::add(a, b)) ≈ of_int(a) + of_int(b),
+    of_int_mul: (a, b: Int) → of_int(Int::mul(a, b)) ≈ of_int(a) * of_int(b),
+}
 
 // ---------------------------------------------------------------------------
 // Semiring consequences.
@@ -225,34 +161,260 @@ theorem Ring::neg_mul_neg<A: Ring(≈, +, *)>(x, y: A): A.inv(x) * A.inv(y) ≈ 
 }
 
 // ---------------------------------------------------------------------------
+// The integers every ring has (docs/casting-design.md §5.6, §16). `Int` is
+// initial among rings: `0`, `1`, `+` and negation already name a map out of
+// it, so a ring needs no `of_int` field to have its integers. `nat_cast`
+// builds them from `0` and `1` (`1` is `multiplicative.unit` itself, not
+// `0 + 1`, so the two constants a generic statement writes are the casts of
+// `0` and `1` by computation), and `int_cast` adds negation; the laws are
+// the ring morphism's, proved once here.
+//
+// `CommRing::with_ints` packages a commutative ring with these as a
+// `CommRingOfInt` dictionary: what `ring`'s certificate lemmas take, so
+// that `ring` runs at a class carrier (`section<K: OrderedField(…)>`) with
+// no carrier instance (issues/cast-reading-at-class-carrier.md). A concrete
+// carrier keeps its own `of_int` (`Rat::ofInt`), whose numerals are what its
+// goals spell.
+
+section<A: Ring(≈, +, *)> {
+
+fn Ring::nat_cast(n: Nat) → A {
+    match n {
+        Zero => A.unit,
+        Succ(k) => match k {
+            Zero => A.multiplicative.unit,
+            Succ(_) => Ring::nat_cast(k) + A.multiplicative.unit,
+        },
+    }
+}
+
+fn Ring::int_cast(c: Int) → A {
+    match c {
+        OfNat(n) => Ring::nat_cast(n),
+        NegSucc(n) => A.inv(Ring::nat_cast(Succ(n))),
+    }
+}
+
+theorem Ring::nat_cast_succ(n: Nat): Ring::nat_cast<A>(Succ(n)) ≈ Ring::nat_cast<A>(n) + A.multiplicative.unit {
+    match n {
+        Zero => A.rel_sym(A.unit + A.multiplicative.unit, A.multiplicative.unit, A.unit_l(A.multiplicative.unit)),
+        Succ(k) => A.rel_refl(Ring::nat_cast<A>(Succ(k)) + A.multiplicative.unit),
+    }
+}
+
+// Negation fixes zero. The point only pins `A`.
+theorem Ring::inv_unit(x: A): A.inv(A.unit) ≈ A.unit {
+    A.rel_sym(A.unit, A.inv(A.unit), GroupRel::inv_unique(+, A.unit, A.unit, A.unit_l(A.unit)))
+}
+
+// Negation distributes over a sum: `+` is commutative.
+theorem Ring::inv_add(a, b: A): A.inv(a + b) ≈ A.inv(a) + A.inv(b) {
+    A.rel_sym(A.inv(a) + A.inv(b), A.inv(a + b), GroupRel::inv_unique(+, a + b, A.inv(a) + A.inv(b), calc {
+        (a + b) + (A.inv(a) + A.inv(b))
+            ≈ (a + A.inv(a)) + (b + A.inv(b)) := CommMonoidRel::interchange(≈, +, a, b, A.inv(a), A.inv(b)),
+            ≈ A.unit + (b + A.inv(b)) := rel_cong(A.inv_r(a)),
+            ≈ A.unit + A.unit := rel_cong(A.inv_r(b)),
+            ≈ A.unit := A.unit_l(A.unit),
+    }))
+}
+
+theorem Ring::nat_cast_add(m, n: Nat): Ring::nat_cast<A>(Nat::add(m, n)) ≈ Ring::nat_cast<A>(m) + Ring::nat_cast<A>(n) {
+    match n {
+        Zero => A.rel_sym(Ring::nat_cast<A>(m) + A.unit, Ring::nat_cast<A>(m), A.unit_r(Ring::nat_cast<A>(m))),
+        Succ(k) => calc {
+            Ring::nat_cast<A>(Succ(Nat::add(m, k)))
+                ≈ Ring::nat_cast<A>(Nat::add(m, k)) + A.multiplicative.unit := Ring::nat_cast_succ<A>(Nat::add(m, k)),
+                ≈ (Ring::nat_cast<A>(m) + Ring::nat_cast<A>(k)) + A.multiplicative.unit := rel_cong(Ring::nat_cast_add<A>(m, k)),
+                ≈ Ring::nat_cast<A>(m) + (Ring::nat_cast<A>(k) + A.multiplicative.unit)
+                    := A.assoc(Ring::nat_cast<A>(m), Ring::nat_cast<A>(k), A.multiplicative.unit),
+                ≈ Ring::nat_cast<A>(m) + Ring::nat_cast<A>(Succ(k))
+                    := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ<A>(k))),
+        },
+    }
+}
+
+theorem Ring::nat_cast_mul(m, n: Nat): Ring::nat_cast<A>(Nat::mul(m, n)) ≈ Ring::nat_cast<A>(m) * Ring::nat_cast<A>(n) {
+    match n {
+        Zero => A.rel_sym(Ring::nat_cast<A>(m) * A.unit, A.unit, A.mul_zero(Ring::nat_cast<A>(m))),
+        Succ(k) => calc {
+            Ring::nat_cast<A>(Nat::add(Nat::mul(m, k), m))
+                ≈ Ring::nat_cast<A>(Nat::mul(m, k)) + Ring::nat_cast<A>(m) := Ring::nat_cast_add<A>(Nat::mul(m, k), m),
+                ≈ Ring::nat_cast<A>(m) * Ring::nat_cast<A>(k) + Ring::nat_cast<A>(m) := rel_cong(Ring::nat_cast_mul<A>(m, k)),
+                ≈ Ring::nat_cast<A>(m) * Ring::nat_cast<A>(k) + Ring::nat_cast<A>(m) * A.multiplicative.unit
+                    := rel_cong(A.rel_sym(Ring::nat_cast<A>(m) * A.multiplicative.unit, Ring::nat_cast<A>(m), A.multiplicative.unit_r(Ring::nat_cast<A>(m)))),
+                ≈ Ring::nat_cast<A>(m) * (Ring::nat_cast<A>(k) + A.multiplicative.unit)
+                    := A.rel_sym(Ring::nat_cast<A>(m) * (Ring::nat_cast<A>(k) + A.multiplicative.unit),
+                        Ring::nat_cast<A>(m) * Ring::nat_cast<A>(k) + Ring::nat_cast<A>(m) * A.multiplicative.unit,
+                        A.distrib_l(Ring::nat_cast<A>(m), Ring::nat_cast<A>(k), A.multiplicative.unit)),
+                ≈ Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(k))
+                    := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ<A>(k))),
+        },
+    }
+}
+
+theorem Ring::int_cast_neg_of_nat(n: Nat): Ring::int_cast<A>(Int::negOfNat(n)) ≈ A.inv(Ring::nat_cast<A>(n)) {
+    match n {
+        Zero => A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit<A>(A.unit)),
+        Succ(k) => A.rel_refl(A.inv(Ring::nat_cast<A>(Succ(k)))),
+    }
+}
+
+// `Int::add`'s mixed-sign case is `subNatNat`, the casts' difference.
+theorem Ring::int_cast_sub_nat_nat(m, n: Nat): Ring::int_cast<A>(Int::subNatNat(m, n)) ≈ Ring::nat_cast<A>(m) + A.inv(Ring::nat_cast<A>(n)) {
+    match m {
+        Zero => calc {
+            Ring::int_cast<A>(Int::negOfNat(n))
+                ≈ A.inv(Ring::nat_cast<A>(n)) := Ring::int_cast_neg_of_nat<A>(n),
+                ≈ A.unit + A.inv(Ring::nat_cast<A>(n)) := A.rel_sym(A.unit + A.inv(Ring::nat_cast<A>(n)), A.inv(Ring::nat_cast<A>(n)), A.unit_l(A.inv(Ring::nat_cast<A>(n)))),
+        },
+        Succ(k) => match n {
+            Zero => calc {
+                Ring::nat_cast<A>(Succ(k))
+                    ≈ Ring::nat_cast<A>(Succ(k)) + A.unit := A.rel_sym(Ring::nat_cast<A>(Succ(k)) + A.unit, Ring::nat_cast<A>(Succ(k)), A.unit_r(Ring::nat_cast<A>(Succ(k)))),
+                    ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(A.unit) := rel_cong(A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit<A>(A.unit))),
+            },
+            Succ(l) => calc {
+                Ring::int_cast<A>(Int::subNatNat(k, l))
+                    ≈ Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l)) := Ring::int_cast_sub_nat_nat<A>(k, l),
+                    ≈ (Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l))) + A.unit
+                        := A.rel_sym((Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l))) + A.unit, Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l)),
+                            A.unit_r(Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l)))),
+                    ≈ (Ring::nat_cast<A>(k) + A.inv(Ring::nat_cast<A>(l))) + (A.multiplicative.unit + A.inv(A.multiplicative.unit))
+                        := rel_cong(A.rel_sym(A.multiplicative.unit + A.inv(A.multiplicative.unit), A.unit, A.inv_r(A.multiplicative.unit))),
+                    ≈ (Ring::nat_cast<A>(k) + A.multiplicative.unit) + (A.inv(Ring::nat_cast<A>(l)) + A.inv(A.multiplicative.unit))
+                        := CommMonoidRel::interchange(≈, +, Ring::nat_cast<A>(k), A.inv(Ring::nat_cast<A>(l)), A.multiplicative.unit, A.inv(A.multiplicative.unit)),
+                    ≈ (Ring::nat_cast<A>(k) + A.multiplicative.unit) + A.inv(Ring::nat_cast<A>(l) + A.multiplicative.unit)
+                        := rel_cong(A.rel_sym(A.inv(Ring::nat_cast<A>(l) + A.multiplicative.unit), A.inv(Ring::nat_cast<A>(l)) + A.inv(A.multiplicative.unit),
+                            Ring::inv_add<A>(Ring::nat_cast<A>(l), A.multiplicative.unit))),
+                    ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(Ring::nat_cast<A>(l) + A.multiplicative.unit)
+                        := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(k)), Ring::nat_cast<A>(k) + A.multiplicative.unit, Ring::nat_cast_succ<A>(k))),
+                    ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(Ring::nat_cast<A>(Succ(l)))
+                        := rel_cong(A.inv_respects(Ring::nat_cast<A>(l) + A.multiplicative.unit, Ring::nat_cast<A>(Succ(l)),
+                            A.rel_sym(Ring::nat_cast<A>(Succ(l)), Ring::nat_cast<A>(l) + A.multiplicative.unit, Ring::nat_cast_succ<A>(l)))),
+            },
+        },
+    }
+}
+
+theorem Ring::int_cast_add(a, b: Int): Ring::int_cast<A>(Int::add(a, b)) ≈ Ring::int_cast<A>(a) + Ring::int_cast<A>(b) {
+    match a {
+        OfNat(m) => match b {
+            OfNat(n) => Ring::nat_cast_add<A>(m, n),
+            NegSucc(n) => Ring::int_cast_sub_nat_nat<A>(m, Succ(n)),
+        },
+        NegSucc(m) => match b {
+            OfNat(n) => calc {
+                Ring::int_cast<A>(Int::subNatNat(n, Succ(m)))
+                    ≈ Ring::nat_cast<A>(n) + A.inv(Ring::nat_cast<A>(Succ(m))) := Ring::int_cast_sub_nat_nat<A>(n, Succ(m)),
+                    ≈ A.inv(Ring::nat_cast<A>(Succ(m))) + Ring::nat_cast<A>(n) := A.comm(Ring::nat_cast<A>(n), A.inv(Ring::nat_cast<A>(Succ(m)))),
+            },
+            NegSucc(n) => calc {
+                A.inv(Ring::nat_cast<A>(Succ(Succ(Nat::add(m, n)))))
+                    ≈ A.inv(Ring::nat_cast<A>(Succ(m)) + Ring::nat_cast<A>(Succ(n))) := A.inv_respects(
+                        Ring::nat_cast<A>(Succ(Succ(Nat::add(m, n)))), Ring::nat_cast<A>(Succ(m)) + Ring::nat_cast<A>(Succ(n)), calc {
+                        Ring::nat_cast<A>(Succ(Succ(Nat::add(m, n))))
+                            ≈ Ring::nat_cast<A>(Succ(Nat::add(m, n))) + A.multiplicative.unit := Ring::nat_cast_succ<A>(Succ(Nat::add(m, n))),
+                            ≈ (Ring::nat_cast<A>(Nat::add(m, n)) + A.multiplicative.unit) + A.multiplicative.unit := rel_cong(Ring::nat_cast_succ<A>(Nat::add(m, n))),
+                            ≈ ((Ring::nat_cast<A>(m) + Ring::nat_cast<A>(n)) + A.multiplicative.unit) + A.multiplicative.unit := rel_cong(Ring::nat_cast_add<A>(m, n)),
+                            ≈ (Ring::nat_cast<A>(m) + Ring::nat_cast<A>(n)) + (A.multiplicative.unit + A.multiplicative.unit)
+                                := A.assoc(Ring::nat_cast<A>(m) + Ring::nat_cast<A>(n), A.multiplicative.unit, A.multiplicative.unit),
+                            ≈ (Ring::nat_cast<A>(m) + A.multiplicative.unit) + (Ring::nat_cast<A>(n) + A.multiplicative.unit)
+                                := CommMonoidRel::interchange(≈, +, Ring::nat_cast<A>(m), Ring::nat_cast<A>(n), A.multiplicative.unit, A.multiplicative.unit),
+                            ≈ Ring::nat_cast<A>(Succ(m)) + (Ring::nat_cast<A>(n) + A.multiplicative.unit)
+                                := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(m) + A.multiplicative.unit, Ring::nat_cast_succ<A>(m))),
+                            ≈ Ring::nat_cast<A>(Succ(m)) + Ring::nat_cast<A>(Succ(n))
+                                := rel_cong(A.rel_sym(Ring::nat_cast<A>(Succ(n)), Ring::nat_cast<A>(n) + A.multiplicative.unit, Ring::nat_cast_succ<A>(n))),
+                    }),
+                    ≈ A.inv(Ring::nat_cast<A>(Succ(m))) + A.inv(Ring::nat_cast<A>(Succ(n))) := Ring::inv_add<A>(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(Succ(n))),
+            },
+        },
+    }
+}
+
+theorem Ring::int_cast_mul(a, b: Int): Ring::int_cast<A>(Int::mul(a, b)) ≈ Ring::int_cast<A>(a) * Ring::int_cast<A>(b) {
+    match a {
+        OfNat(m) => match b {
+            OfNat(n) => Ring::nat_cast_mul<A>(m, n),
+            NegSucc(n) => calc {
+                Ring::int_cast<A>(Int::negOfNat(Nat::mul(m, Succ(n))))
+                    ≈ A.inv(Ring::nat_cast<A>(Nat::mul(m, Succ(n)))) := Ring::int_cast_neg_of_nat<A>(Nat::mul(m, Succ(n))),
+                    ≈ A.inv(Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(n)))
+                        := A.inv_respects(Ring::nat_cast<A>(Nat::mul(m, Succ(n))), Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(n)), Ring::nat_cast_mul<A>(m, Succ(n))),
+                    ≈ Ring::nat_cast<A>(m) * A.inv(Ring::nat_cast<A>(Succ(n)))
+                        := A.rel_sym(Ring::nat_cast<A>(m) * A.inv(Ring::nat_cast<A>(Succ(n))), A.inv(Ring::nat_cast<A>(m) * Ring::nat_cast<A>(Succ(n))),
+                            Ring::mul_neg(Ring::nat_cast<A>(m), Ring::nat_cast<A>(Succ(n)))),
+            },
+        },
+        NegSucc(m) => match b {
+            OfNat(n) => calc {
+                Ring::int_cast<A>(Int::negOfNat(Nat::mul(Succ(m), n)))
+                    ≈ A.inv(Ring::nat_cast<A>(Nat::mul(Succ(m), n))) := Ring::int_cast_neg_of_nat<A>(Nat::mul(Succ(m), n)),
+                    ≈ A.inv(Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(n))
+                        := A.inv_respects(Ring::nat_cast<A>(Nat::mul(Succ(m), n)), Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(n), Ring::nat_cast_mul<A>(Succ(m), n)),
+                    ≈ A.inv(Ring::nat_cast<A>(Succ(m))) * Ring::nat_cast<A>(n)
+                        := A.rel_sym(A.inv(Ring::nat_cast<A>(Succ(m))) * Ring::nat_cast<A>(n), A.inv(Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(n)),
+                            Ring::neg_mul(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(n))),
+            },
+            NegSucc(n) => calc {
+                Ring::nat_cast<A>(Nat::mul(Succ(m), Succ(n)))
+                    ≈ Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(Succ(n)) := Ring::nat_cast_mul<A>(Succ(m), Succ(n)),
+                    ≈ A.inv(Ring::nat_cast<A>(Succ(m))) * A.inv(Ring::nat_cast<A>(Succ(n)))
+                        := A.rel_sym(A.inv(Ring::nat_cast<A>(Succ(m))) * A.inv(Ring::nat_cast<A>(Succ(n))), Ring::nat_cast<A>(Succ(m)) * Ring::nat_cast<A>(Succ(n)),
+                            Ring::neg_mul_neg(Ring::nat_cast<A>(Succ(m)), Ring::nat_cast<A>(Succ(n)))),
+            },
+        },
+    }
+}
+
+}
+
+section<A: CommRing(≈, +, *)> {
+
+// The ring with its integers named by `Ring::int_cast`. `+`'s `Respects2`
+// is rebuilt by `rel_cong`: a projection reaches a one-parameter class only.
+fn CommRing::with_ints() → CommRingOfInt<A>(≈, +, *) {
+    CommRingOfInt {
+        rel_refl: A.rel_refl,
+        rel_sym: A.rel_sym,
+        rel_trans: A.rel_trans,
+        respects2: λ x x2 hx y y2 hy => A.rel_trans(x + y, x2 + y, x2 + y2, rel_cong(hx), rel_cong(hy)),
+        assoc: A.assoc,
+        unit: A.unit,
+        unit_l: A.unit_l,
+        unit_r: A.unit_r,
+        comm: A.comm,
+        multiplicative: A.multiplicative,
+        distrib_l: A.distrib_l,
+        distrib_r: A.distrib_r,
+        zero_mul: A.zero_mul,
+        mul_zero: A.mul_zero,
+        inv: A.inv,
+        inv_l: A.inv_l,
+        inv_r: A.inv_r,
+        inv_respects: A.inv_respects,
+        commutative: A.commutative,
+        of_int: Ring::int_cast,
+        of_int_zero: A.rel_refl(A.unit),
+        of_int_one: A.rel_refl(A.multiplicative.unit),
+        of_int_add: λ a b => Ring::int_cast_add(a, b),
+        of_int_mul: λ a b => Ring::int_cast_mul(a, b),
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
 // Instances at the identity carriers.
 //
 // `≈` designates `RelId` at `Nat` and `Int`: the structure relation of their
-// semirings is identity, and a generic theorem's `≈` reads back as `=`.
-// `Nat`'s identity setoid is `relation_props`'s; `Int`'s is here, beside the
-// structures that use it, because `relation_props` comes before `int`.
+// semirings is identity, and a generic theorem's `≈` reads back as `=`. The
+// monoids and the group are `algebra`'s and `int`'s identity instances, which
+// register these relational ones as their parents
+// (docs/relation-indexed-algebra-design.md), so a ring here adds only its
+// distributivity and its zero laws.
 
 designation ≈ at Nat := RelId
 designation ≈ at Int := RelId
-
-instance Respects2<Nat, Nat, Nat>(RelId<Nat>, RelId<Nat>, RelId<Nat>, Nat::add) { respects2 := respects2_relid(Nat::add) }
-instance Respects2<Nat, Nat, Nat>(RelId<Nat>, RelId<Nat>, RelId<Nat>, Nat::mul) { respects2 := respects2_relid(Nat::mul) }
-
-instance CommMonoidRel<Nat>(RelId<Nat>, Nat::add) {
-    assoc := Nat::add_assoc,
-    unit := 0,
-    unit_l := Nat::add_left_zero,
-    unit_r := λ (x: Nat) => refl,
-    comm := Nat::add_comm,
-}
-
-instance CommMonoidRel<Nat>(RelId<Nat>, Nat::mul) {
-    assoc := Nat::mul_assoc,
-    unit := 1,
-    unit_l := Nat::mul_left_one,
-    unit_r := Nat::add_left_zero,
-    comm := Nat::mul_comm,
-}
 
 instance Distributes<Nat>(RelId<Nat>, Nat::add, Nat::mul) {
     distrib_l := Nat::mul_add_distr,
@@ -262,38 +424,6 @@ instance Distributes<Nat>(RelId<Nat>, Nat::add, Nat::mul) {
 instance CommSemiring<Nat>(RelId<Nat>, Nat::add, Nat::mul) {
     zero_mul := Nat::mul_left_zero,
     mul_zero := λ (x: Nat) => refl,
-}
-
-instance Equivalence<Int>(RelId<Int>) {
-    rel_refl := λ x => refl,
-    rel_sym := λ x y h => sym(h),
-    rel_trans := λ x y z hxy hyz => trans(hxy, hyz),
-}
-
-instance Respects2<Int, Int, Int>(RelId<Int>, RelId<Int>, RelId<Int>, Int::add) { respects2 := respects2_relid(Int::add) }
-instance Respects2<Int, Int, Int>(RelId<Int>, RelId<Int>, RelId<Int>, Int::mul) { respects2 := respects2_relid(Int::mul) }
-
-instance CommMonoidRel<Int>(RelId<Int>, Int::add) {
-    assoc := Int::add_assoc,
-    unit := OfNat(0),
-    unit_l := Int::zero_add,
-    unit_r := Int::add_zero,
-    comm := Int::add_comm,
-}
-
-instance GroupRel<Int>(RelId<Int>, Int::add) {
-    inv := Int::neg,
-    inv_l := Int::neg_add_self,
-    inv_r := Int::add_neg,
-    inv_respects := λ x y h => cong(h),
-}
-
-instance CommMonoidRel<Int>(RelId<Int>, Int::mul) {
-    assoc := Int::mul_assoc,
-    unit := OfNat(1),
-    unit_l := Int::one_mul,
-    unit_r := Int::mul_one,
-    comm := Int::mul_comm,
 }
 
 instance Distributes<Int>(RelId<Int>, Int::add, Int::mul) {

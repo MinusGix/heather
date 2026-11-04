@@ -4,7 +4,7 @@ status: open
 labels: [testing,performance,tooling,design]
 area: infrastructure
 created: 2026-10-23
-updated: 2026-10-24
+updated: 2026-10-29
 ---
 
 Minus (2026-10-23): the suite is slower than he would like, fresh box or
@@ -125,3 +125,8 @@ scratch (205 s). The detached build seems to have died with the hook.
   built and measured (above). Elab-edit PR run 240 → 182 s; a fresh
   thread's first suite 459 → 201 s.
 - 2026-10-24: Test value (not cost) audited in `docs/test-value-audit.md`: what each kind of test buys, and the policy for when a PR adds a Rust test versus a theorem. Proposals: [[library-whole-check-gate]], [[refusal-tests-pin-their-reason]], [[library-tests-as-theorems]], [[hthr-test-corpus]].
+- 2026-10-29: A fresh-box `--pr` run took 39 min. Neither prebuild nor
+  seeding had been working ([[session-prebuild-skipped-by-snapshot]],
+  [[sentinel-images-not-published]]), and the native certificate gates are
+  now ~45 % of the suite; what the PR lane should run is
+  [[pr-lane-cost-2026-10-29]].

@@ -35,6 +35,18 @@
 //! each pass by cases on its comparisons, which a loop's pass spells as Bool
 //! variables (`ReflectedLoop`).
 //!
+//! A function that `decreases` a measure `w.toNat()` of a word `w`
+//! (issues/function-ir-loop-measure-recursion.md) is a loop with no fuel to
+//! write: its program function takes the words only, computes `w` and runs a
+//! `Loop` of at most `w` passes of its step `f::body`, whose recursion
+//! `ih(y…, p)` goes round with `y…` (the proof `p` read by nothing), and a
+//! `match h:` convoy branches as the match it applies. The measure falls
+//! below the passes left at every pass, so with none left no recursion is
+//! taken: the conditional after the loop runs the step once more, a
+//! recursion leaf there giving its next first word (`Measured`). The
+//! certificate states the loop against `f::rec` at a bound on its measure
+//! (`function_ir_compile::loop_eval_agrees_measured`).
+//!
 //! Each function is proved on its own, its calls answered by its callees'
 //! sources (`function_ir_compile::program_eval_sources`), so a proof never
 //! unfolds a callee. A function evaluates, its calls answered by any
@@ -123,6 +135,30 @@ pub struct ReflectedLoop {
     /// The result with no fuel left, and whether it decided.
     pub base: String,
     pub base_decided: bool,
+    /// The recursion is a `decreases` function's, bounded by its measure;
+    /// `None` for a recursion on a fuel.
+    pub measured: Option<Measured>,
+}
+
+/// A loop that is a function's recursion on its measure
+/// (issues/function-ir-loop-measure-recursion.md): `f(x…)` is
+/// `f::rec(Succ(e), x…, _)` for a measure `e = w.toNat()` of a word `w`, and
+/// `f::rec(Succ(k), …)` is `f::body(k, f::rec(k), …)`. The function takes the
+/// words only; its bound, `w`, it computes first. A pass is `f::body`'s tree,
+/// its recursion `ih(y…, p)` going round with `y…`. With the passes run out
+/// the measure is below one and no recursion is left to take: the
+/// conditional after the loop runs the tree once more, a leaf that would
+/// recurse reading its next first word, which no run reaches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Measured {
+    /// The regions computing the bound from the parameters, when it is not
+    /// one of them.
+    pub prefix: Option<ProgramRegion>,
+    /// `w`, over the state's words `x0, x1, …`.
+    pub word: String,
+    /// The result with the passes run out: the next state's first word,
+    /// spelled with the pass's comparisons `c0, …`.
+    pub exhausted: String,
 }
 
 /// Function `k` is `functions[k]`, and calls only functions below it.
@@ -145,7 +181,7 @@ impl ProgramFunction {
     /// operations: its source applied, a loop's bound made its fuel.
     pub fn answer(&self, arguments: &[String]) -> String {
         match (&self.looped, arguments.split_first()) {
-            (Some(_), Some((bound, words))) => format!("{}(@bitvec::BitVec::toNat(64, {bound}){})", self.source_name,
+            (Some(looped), Some((bound, words))) if looped.measured.is_none() => format!("{}(@bitvec::BitVec::toNat(64, {bound}){})", self.source_name,
                 words.iter().map(|word| format!(", {word}")).collect::<String>()),
             _ => format!("{}({})", self.source_name, arguments.join(", ")),
         }
@@ -295,6 +331,19 @@ impl Program<'_> {
         self.signature(at).filter(|(_, result)| self.is_bool(at, result)).map(|(arity, _)| arity)
     }
 
+    /// A function that `decreases`, from its body under its `arity` λs:
+    /// `f::rec(Succ(e), x…, _)`, its words passed in order. Its measure `e`
+    /// and the global `f::body` its recursor steps by.
+    fn measured(&self, at: usize, name: &str, arity: usize, body: &Term) -> Option<(Term, usize)> {
+        let (head, args) = application_spine(body);
+        let recursor = self.elaborator.global_qualified_name_at(absolute(head, at)?)?;
+        if recursor != crate::measure::rec_name(name) || args.len() != arity + 2 { return None; }
+        let Term::Succ(measure) = args[0] else { return None; };
+        let passed = args[1..=arity].iter().enumerate().all(|(i, arg)| matches!(arg, Term::Var(LocalVar(v)) if *v as usize == arity - 1 - i));
+        let step = self.elaborator.global_abs(&crate::measure::body_name(name))?;
+        passed.then(|| ((**measure).clone(), step))
+    }
+
     /// A transparent global's body under its `arity` parameters' λs.
     fn body_of(&self, at: usize, arity: usize) -> Result<(String, Rc<Term>), SourceError> {
         let name = self.elaborator.global_qualified_name_at(at).ok_or_else(|| SourceError::Unsupported("a function has no qualified name".into()))?;
@@ -315,6 +364,9 @@ impl Program<'_> {
         let arity = self.word_signature(at)
             .ok_or_else(|| SourceError::Unsupported(format!("`{name}` is not a function of at most six BitVec(64) parameters returning BitVec(64)")))?;
         let (_, term) = self.body_of(at, arity)?;
+        if let Some((measure, step)) = self.measured(at, &name, arity, &term) {
+            return self.measure_function(at, name, arity, &measure, step);
+        }
         self.stack.push(at);
         let parameters: Vec<Port> = (0..arity as u64).map(|id| Port { id, width: 64 }).collect();
         let spell = (0..arity as u64).map(|id| (id, format!("a{id}"))).collect();
@@ -400,33 +452,8 @@ impl Program<'_> {
             names
         };
 
-        // A pass: the tree into the next state and the tag, then the exit
-        // bit, the tag one.
-        let mut fresh = Vec::new();
-        for _ in 0..=n { fresh.push(ids.fresh()?); }
-        let (parameters, count) = (fresh[..n].to_vec(), fresh[n]);
-        let state: Vec<Port> = parameters.iter().copied().map(word).collect();
-        let mut pass = Body::new(state.clone(), ids.next_id, named(&state));
-        pass.cases = true;
-        let mut targets = Vec::new();
-        for _ in 0..=n { targets.push(pass.fresh()?); }
-        let (next, tag) = (targets[..n].to_vec(), targets[n]);
-        let within = Rc::new(Cx { at, parameters: scope(&state, true) });
-        let tree = pass.compute(self, step, &within, 0,
-            &Target::Pass { state: next.clone(), tag, words: state.clone(), recursed: recursed.to_vec() })?;
-        let tree_region = pass.close()?;
-        let split = split_of(&tree_region, &pass.case_names)?;
-        if pass.conditions.len() > 16 || split.leaves() > 64 { return unsupported(&format!("`{name}`'s step branches too much for a loop's certificate")); }
-        let mut tail = Pending::default();
-        let one = pass.node(&mut tail, Some(Key::Constant(1)), 64, None, "@bitvec::BitVec::ofNat(64, 1)".into(),
-            |output| Node::Const { width: 64, output, value: 1 })?;
-        let exit = pass.node(&mut tail, None, 1, None, format!("@bitvec::BitVec::eq_bit(64, {}, {})", pass.spelling(word(tag)), pass.spelling(one)),
-            |output| Node::Equal { width: 64, output, left: tag, right: one.id })?;
-        pass.flush(&mut tail);
-        let exit_region = pass.close()?;
-        let spelled: Vec<String> = next.iter().map(|id| pass.spelling(word(*id))).collect();
-        let pass_text = format!("match {} {{ False => later([{}]), True => {} }}", pass.spelling(exit), spelled.join(", "), spelled[0]);
-        ids.next_id = pass.next_id;
+        let within = |state: &[Port]| Rc::new(Cx { at, parameters: scope(state, true) });
+        let pass = self.reflect_pass(&mut ids, name, n, step, &within, recursed, recursed.len() as u32, false)?;
 
         // After it: with the passes run out, the fuel's `Zero` arm of the
         // final state; else the first word.
@@ -441,12 +468,156 @@ impl Program<'_> {
             outputs: vec![word(result)] });
         let post = ProgramRegion::Conditional { inputs: words.iter().copied().chain([Port { id: exhausted, width: 1 }]).collect(), condition: exhausted,
             arguments: words, outputs: vec![word(result)], when_true: Box::new(when_true), when_false: Box::new(when_false) };
-        let body = ProgramRegion::Compose(Box::new(tree_region), Box::new(exit_region));
+        let ReflectedPass { parameters, count, next, exit, body, conditions, pass, tree, split, decided } = pass;
         let region = ProgramRegion::Compose(Box::new(ProgramRegion::Loop { inputs: inputs.clone(), bound: 0, parameters: parameters.clone(), count,
-            body: Box::new(body.clone()), exit: exit.id, next: next.clone(), outputs: outputs.clone(), exhausted }), Box::new(post.clone()));
-        Ok((region, ReflectedLoop { arity: n, inputs, bound: 0, parameters, count, exit: exit.id, next, outputs, exhausted, body, post,
-            conditions: pass.conditions, pass: pass_text, tree, split, decided: pass.decided, base: base_expansion, base_decided: zero.decided }))
+            body: Box::new(body.clone()), exit, next: next.clone(), outputs: outputs.clone(), exhausted }), Box::new(post.clone()));
+        Ok((region, ReflectedLoop { arity: n, inputs, bound: 0, parameters, count, exit, next, outputs, exhausted, body, post,
+            conditions, pass, tree, split, decided, base: base_expansion, base_decided: zero.decided, measured: None }))
     }
+
+    /// A loop's pass over `n` words from `step`, the step's names `within`
+    /// a state: the tree into the next state and the tag, then the exit bit,
+    /// the tag one. The recursion is the step's local `recursion` (at depth
+    /// zero), applied to the words at `recursed`, then a proof of its bound
+    /// when `proof`, which nothing reads.
+    #[allow(clippy::too_many_arguments)]
+    fn reflect_pass(&mut self, ids: &mut Body, name: &str, n: usize, step: &Term, within: &dyn Fn(&[Port]) -> Rc<Cx>, recursed: &[usize],
+        recursion: u32, proof: bool) -> Result<ReflectedPass, SourceError>
+    {
+        let word = |id: u64| Port { id, width: 64 };
+        let named = |ports: &[Port]| ports.iter().enumerate().map(|(i, port)| (port.id, format!("x{i}"))).collect();
+        let mut fresh = Vec::new();
+        for _ in 0..=n { fresh.push(ids.fresh()?); }
+        let (parameters, count) = (fresh[..n].to_vec(), fresh[n]);
+        let state: Vec<Port> = parameters.iter().copied().map(word).collect();
+        let mut pass = Body::new(state.clone(), ids.next_id, named(&state));
+        pass.cases = true;
+        let mut targets = Vec::new();
+        for _ in 0..=n { targets.push(pass.fresh()?); }
+        let (next, tag) = (targets[..n].to_vec(), targets[n]);
+        let tree = pass.compute(self, step, &within(&state), 0,
+            &Target::Pass { state: next.clone(), tag, words: state.clone(), recursed: recursed.to_vec(), recursion, proof })?;
+        let tree_region = pass.close()?;
+        let split = split_of(&tree_region, &pass.case_names)?;
+        if pass.conditions.len() > 16 || split.leaves() > 64 { return unsupported(&format!("`{name}`'s step branches too much for a loop's certificate")); }
+        let mut tail = Pending::default();
+        let one = pass.node(&mut tail, Some(Key::Constant(1)), 64, None, "@bitvec::BitVec::ofNat(64, 1)".into(),
+            |output| Node::Const { width: 64, output, value: 1 })?;
+        let exit = pass.node(&mut tail, None, 1, None, format!("@bitvec::BitVec::eq_bit(64, {}, {})", pass.spelling(word(tag)), pass.spelling(one)),
+            |output| Node::Equal { width: 64, output, left: tag, right: one.id })?;
+        pass.flush(&mut tail);
+        let exit_region = pass.close()?;
+        let spelled: Vec<String> = next.iter().map(|id| pass.spelling(word(*id))).collect();
+        let pass_text = format!("match {} {{ False => later([{}]), True => {} }}", pass.spelling(exit), spelled.join(", "), spelled[0]);
+        ids.next_id = pass.next_id;
+        Ok(ReflectedPass { parameters, count, next, exit: exit.id, body: ProgramRegion::Compose(Box::new(tree_region), Box::new(exit_region)),
+            conditions: pass.conditions, pass: pass_text, tree, split, decided: pass.decided })
+    }
+
+    /// The function computing `f(x…)`, where `f`, the global at `at` with
+    /// `n` words, recurses on its measure `e` (`Measured`): `f`'s body is
+    /// `rec(Succ(e), x…, _)`, `rec` the global at `rec`, and its step the
+    /// global at `step`.
+    fn measure_function(&mut self, at: usize, name: String, n: usize, measure: &Term, step_at: usize) -> Result<usize, SourceError> {
+        let (to_nat, measured) = application_spine(measure);
+        if absolute(to_nat, at) != Some(self.globals.to_nat) || measured.len() != 2 || nat_literal(measured[0]) != Some(64) {
+            return unsupported(&format!("`{name}`'s measure is compiled only as `w.toNat()` of a word `w`, the loop's bound"));
+        }
+        let (_, step) = self.body_of(step_at, n + 3)?;
+        self.stack.push(at);
+        let reflected = self.reflect_measured(at, &name, n, measured[1], &step, step_at);
+        self.stack.pop();
+        let (body, looped) = reflected?;
+        let index = self.functions.len();
+        let arguments: Vec<String> = (0..n).map(|i| format!("a{i}")).collect();
+        let mut function = ProgramFunction { source_name: name, arity: n, body, result: n as u64, expansion: String::new(), decided: false,
+            looped: Some(looped) };
+        function.expansion = function.answer(&arguments);
+        self.functions.push(function);
+        self.index.insert(at, index);
+        Ok(index)
+    }
+
+    /// The measured function's body and what its certificate states:
+    /// parameters `0, …, n - 1` the words, which are the loop's inputs, the
+    /// result `n`; the bound `w` (under the function's `n` λs) computed
+    /// first.
+    fn reflect_measured(&mut self, at: usize, name: &str, n: usize, w: &Term, step: &Term, step_at: usize)
+        -> Result<(ProgramRegion, ReflectedLoop), SourceError>
+    {
+        let word = |id: u64| Port { id, width: 64 };
+        let named = |ports: &[Port]| ports.iter().enumerate().map(|(i, port)| (port.id, format!("x{i}"))).collect();
+        let result = n as u64;
+        let inputs: Vec<u64> = (0..n as u64).collect();
+        let words: Vec<Port> = inputs.iter().copied().map(word).collect();
+        // The bound: `w` of the parameters.
+        let mut bounding = Body::new(words.clone(), n as u64 + 1, named(&words));
+        let mut pending = Pending::default();
+        let bound = bounding.value(self, &mut pending, w, &Cx { at, parameters: words.clone() }, 0)?;
+        bounding.flush(&mut pending);
+        let measure = bounding.spelling(bound);
+        let prefix = if bounding.steps.is_empty() { None } else { Some(bounding.close()?) };
+        let mut ids = Body::new(Vec::new(), bounding.next_id, BTreeMap::new());
+        // A step's names: `k`, the recursion, the words, the bound's proof.
+        let within = |state: &[Port]| {
+            let mut names = vec![UNREAD, UNREAD];
+            names.extend(state);
+            names.push(UNREAD);
+            Rc::new(Cx { at: step_at, parameters: names })
+        };
+        let recursed: Vec<usize> = (0..n).collect();
+        let pass = self.reflect_pass(&mut ids, name, n, step, &within, &recursed, n as u32 + 1, true)?;
+
+        // After it: with the passes run out, the tree once more and its next
+        // first word; else the first word.
+        let mut fresh = Vec::new();
+        for _ in 0..=n { fresh.push(ids.fresh()?); }
+        let (outputs, exhausted) = (fresh[..n].to_vec(), fresh[n]);
+        let ended: Vec<Port> = outputs.iter().copied().map(word).collect();
+        let mut last = Body::new(ended.clone(), ids.next_id, named(&ended));
+        last.cases = true;
+        let mut targets = Vec::new();
+        for _ in 0..=n { targets.push(last.fresh()?); }
+        let (next, tag) = (targets[..n].to_vec(), targets[n]);
+        last.compute(self, step, &within(&ended), 0,
+            &Target::Pass { state: next.clone(), tag, words: ended.clone(), recursed: recursed.clone(), recursion: n as u32 + 1, proof: true })?;
+        if last.conditions != pass.conditions {
+            return unsupported(&format!("`{name}`'s step reads its comparisons in a different order the second time"));
+        }
+        let exhausted_result = last.spelling(word(next[0]));
+        let mut tail = Pending::default();
+        last.node(&mut tail, None, 64, Some(result), exhausted_result.clone(), |output| Node::Move { width: 64, output, source: next[0] })?;
+        last.flush(&mut tail);
+        let when_true = last.close()?;
+        let when_false = ProgramRegion::Dataflow(Region { inputs: ended.clone(), nodes: vec![Node::Move { width: 64, output: result, source: outputs[0] }],
+            outputs: vec![word(result)] });
+        let post = ProgramRegion::Conditional { inputs: ended.iter().copied().chain([Port { id: exhausted, width: 1 }]).collect(), condition: exhausted,
+            arguments: ended, outputs: vec![word(result)], when_true: Box::new(when_true), when_false: Box::new(when_false) };
+        let ReflectedPass { parameters, count, next, exit, body, conditions, pass, tree, split, decided } = pass;
+        let looped = ProgramRegion::Compose(Box::new(ProgramRegion::Loop { inputs: inputs.clone(), bound: bound.id, parameters: parameters.clone(),
+            count, body: Box::new(body.clone()), exit, next: next.clone(), outputs: outputs.clone(), exhausted }), Box::new(post.clone()));
+        let region = match &prefix {
+            Some(prefix) => ProgramRegion::Compose(Box::new(prefix.clone()), Box::new(looped)),
+            None => looped,
+        };
+        Ok((region, ReflectedLoop { arity: n, inputs, bound: bound.id, parameters, count, exit, next, outputs, exhausted, body, post,
+            conditions, pass, tree, split, decided, base: String::new(), base_decided: false,
+            measured: Some(Measured { prefix, word: measure, exhausted: exhausted_result }) }))
+    }
+}
+
+/// A loop's pass, reflected (`Program::reflect_pass`).
+struct ReflectedPass {
+    parameters: Vec<u64>,
+    count: u64,
+    next: Vec<u64>,
+    exit: u64,
+    body: ProgramRegion,
+    conditions: Vec<String>,
+    pass: String,
+    tree: String,
+    split: Split,
+    decided: bool,
 }
 
 /// Where a term's names resolve: the global it is the body of, and its
@@ -504,11 +675,13 @@ struct Body {
 /// Where a tail's value goes: a word, or a loop pass's next state, the
 /// first word the result when it leaves, and its tag (one leaving, zero
 /// going round). `words` are the pass's state, and `recursed` the words the
-/// recursion passes, by position: the others it passes on unchanged.
+/// recursion passes, by position: the others it passes on unchanged. The
+/// recursion is the local `recursion` at depth zero, applied to them and,
+/// when `proof`, a proof of its bound last.
 #[derive(Clone)]
 enum Target {
     Word(u64),
-    Pass { state: Vec<u64>, tag: u64, words: Vec<Port>, recursed: Vec<usize> },
+    Pass { state: Vec<u64>, tag: u64, words: Vec<Port>, recursed: Vec<usize>, recursion: u32, proof: bool },
 }
 
 impl Target {
@@ -779,6 +952,20 @@ impl Body {
 
     /// The steps computing `term` into `target`, pushed; and its expansion.
     fn compute(&mut self, program: &mut Program, term: &Term, cx: &Rc<Cx>, depth: u32, target: &Target) -> Result<String, SourceError> {
+        // `match h: c { … }`: a match on `c` applied to `refl`, each arm
+        // taking the case's equation, which no value reads.
+        if let Term::AppAt { fun, arg } = term
+            && let Term::Case { scrut, case_l, case_r, .. } = &**fun
+            && matches!(&**arg, Term::Refl { tm, .. } if tm == scrut)
+        {
+            let under = |arm: &Rc<Term>| match &**arm {
+                Term::Lam { body, .. } => Ok(Rc::clone(body)),
+                _ => unsupported("a `match h:` arm must take its equation as a λ"),
+            };
+            let yes = Arm::Tail(under(case_r)?, Rc::clone(cx), depth + 2);
+            let no = Arm::Tail(under(case_l)?, Rc::clone(cx), depth + 2);
+            return self.branch(program, scrut, cx, depth, &yes, &no, target);
+        }
         if let Term::Case { scrut, case_l, case_r, .. } = term {
             let yes = Arm::Tail(Rc::clone(case_r), Rc::clone(cx), depth + 1);
             let no = Arm::Tail(Rc::clone(case_l), Rc::clone(cx), depth + 1);
@@ -791,12 +978,12 @@ impl Body {
                 self.put(&mut pending, value, *target)?;
                 self.spelling(value)
             }
-            Target::Pass { state, tag, words, recursed } => {
+            Target::Pass { state, tag, words, recursed, recursion, proof } => {
                 let (head, args) = application_spine(term);
-                let recurs = matches!(head, Term::Var(LocalVar(index)) if *index == recursed.len() as u32 + depth);
+                let recurs = matches!(head, Term::Var(LocalVar(index)) if *index == *recursion + depth);
                 let mut values = words.clone();
                 let leaving = if recurs {
-                    if args.len() != recursed.len() { return unsupported("the recursion's call must apply every word it varies"); }
+                    if args.len() != recursed.len() + usize::from(*proof) { return unsupported("the recursion's call must apply every word it varies"); }
                     for (argument, position) in args.iter().zip(recursed) { values[*position] = self.value(program, &mut pending, argument, cx, depth)?; }
                     0
                 } else {
@@ -905,7 +1092,7 @@ impl<'a, 'v> Reader<'a, 'v> {
         Ok(self.arena.tm(TmClo::syn(Env::empty(), std::sync::Arc::new(head))))
     }
 
-    fn force(&self, c: &'v TmClo<'v>) -> Result<std::sync::Arc<Val<'v>>, SourceError> {
+    fn force(&self, c: &'v TmClo<'v>) -> Result<&'v Val<'v>, SourceError> {
         let mut eval = heather_kernel::eval::Eval::new(READ_FUEL,
             heather_kernel::reduce::Defs::transparent_cached(self.psi, &self.cache), heather_kernel::term::CtxBase::Nil, self.arena);
         eval.force(c).and_then(|v| eval.delta_whnf(v)).map_err(|_| SourceError::Unsupported("evaluation ran out of fuel".into()))
@@ -917,7 +1104,7 @@ impl<'a, 'v> Reader<'a, 'v> {
         let w = self.force(c)?;
         let (label, children) = match &*w {
             Val::Supf { label, children, .. } => (*label, self.spine(children)?),
-            _ => (self.arena.tm(TmClo::val(std::sync::Arc::clone(&w))), vec![]),
+            _ => (self.arena.tm(TmClo::val(w)), vec![]),
         };
         let v = self.force(label)?;
         let (index, payload) = match &*v {

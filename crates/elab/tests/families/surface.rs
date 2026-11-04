@@ -23,6 +23,10 @@ mod callback_expected_types;
 mod implicit_args;
 #[path = "../implicit_fn_binders.rs"]
 mod implicit_fn_binders;
+#[path = "../unifier_checked_assignment.rs"]
+mod unifier_checked_assignment;
+#[path = "../unifier_lazy_delta.rs"]
+mod unifier_lazy_delta;
 #[path = "../named_arguments.rs"]
 mod named_arguments;
 #[path = "../overapplication.rs"]
@@ -33,6 +37,8 @@ mod let_and_blocks;
 mod have;
 #[path = "../operators.rs"]
 mod operators;
+#[path = "../sections.rs"]
+mod sections;
 #[path = "../sequent_binders.rs"]
 mod sequent_binders;
 #[path = "../quotation.rs"]

@@ -46,5 +46,5 @@ fn cat_pass() → Stmt {
 }
 
 fn cat(capacity: Nat) → Source {
-    Source(functions := [], buffers := [capacity], main := Then(cat_setup(capacity), Repeat(cat_pass(), 15)))
+    Source::of([Buffer(capacity)], Then(cat_setup(capacity), Repeat(cat_pass(), 15)))
 }

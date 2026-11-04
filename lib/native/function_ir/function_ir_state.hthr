@@ -1,0 +1,259 @@
+// FunctionIR's state edges evaluated (issues/native-source-bytes.md;
+// docs/native-effect-source-design.md §6): `run` is `eval` with a file of
+// buffers threaded through the schedule, the one state a region's byte nodes
+// act on.
+//
+// A `BufferLoad` reads a byte of the file and a `BufferStore` writes one, in
+// schedule order: for byte nodes on one buffer the schedule is an order,
+// not only a validation aid. Every other node, and every call, leaves the
+// file as it was; a conditional runs the arm its bit picks, and a loop
+// carries the file from pass to pass. A function a region calls sees no
+// buffers: a callee is `eval`ed on words.
+//
+// `eval` stays the word evaluator S4's lowering and compile-x86's
+// certificates are stated over, and it is `run` from no buffers, where a
+// load reads zero and a store has nowhere to land
+// (`StructuredRegion::run_empty`). S4 lowers to registers only and refuses
+// the byte nodes; the native compiler, which keeps every buffer in memory,
+// compiles them (`native_compile`).
+import function_ir;
+import function_ir_eval;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// A region's words and the buffers beside them.
+record State { values: Valuation(), buffers: Buffers() }
+
+// A word's low byte, as a byte store sends it.
+fn low_byte(word: BitVec(64)) → BitVec(8) { word.take_low(8, 56) }
+
+// Byte `index` of buffer `buffer` set to `byte`, where the buffer has one.
+fn store_byte(buffers: Buffers(), buffer, index: Nat, byte: BitVec(8)) → Buffers() {
+    buffers.update(buffer, λ bytes => bytes.update(index, λ _ => byte))
+}
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+fn Node::run(self node: Node, values: Valuation(), buffers: Buffers()) → State {
+    match node {
+        BufferLoad(output, buffer, index) => State(Valuation::set(values, output, load_value(buffers, buffer, index, values)), buffers),
+        BufferStore(output, buffer, index, value) => {
+            let after = store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value)));
+            State(Valuation::set(values, output, load_value(after, buffer, index, values)), after)
+        },
+        _ => State(node.step(values), buffers),
+    }
+}
+
+fn run_nodes(nodes: List<Node>, values: Valuation(), buffers: Buffers()) → State {
+    match nodes {
+        Nil => State(values, buffers),
+        Cons(node, rest) => {
+            let after = node.run(values, buffers);
+            run_nodes(rest, after.values, after.buffers)
+        },
+    }
+}
+
+// Whether a node touches no buffer.
+fn Node::pure(self node: Node) → Bool {
+    match node { BufferLoad(_, _, _) => False, BufferStore(_, _, _, _) => False, _ => True }
+}
+
+fn nodes_pure(nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => node.pure() && nodes_pure(rest) }
+}
+
+// A node that touches no buffer runs as it evaluates.
+theorem Node::run_pure(self node: Node, values: Valuation(), buffers: Buffers(), pure: node.pure().IsTrue()):
+    node.run(values, buffers) = State(node.step(values), buffers) {
+    match node as λ n => n.pure().IsTrue() → n.run(values, buffers) = State(n.step(values), buffers) {
+        Const(_, _, _) => λ _ => refl,
+        Move(_, _, _) => λ _ => refl,
+        Add(_, _, _, _) => λ _ => refl,
+        Sub(_, _, _, _) => λ _ => refl,
+        BitAnd(_, _, _, _) => λ _ => refl,
+        BitOr(_, _, _, _) => λ _ => refl,
+        BitXor(_, _, _, _) => λ _ => refl,
+        ShiftLeft(_, _, _, _) => λ _ => refl,
+        LogicalShiftRight(_, _, _, _) => λ _ => refl,
+        ArithmeticShiftRight(_, _, _, _) => λ _ => refl,
+        UnsignedLessThan(_, _, _, _) => λ _ => refl,
+        SignedLessThan(_, _, _, _) => λ _ => refl,
+        Equal(_, _, _, _) => λ _ => refl,
+        BufferLoad(_, _, _) => λ no => false_elim(no),
+        BufferStore(_, _, _, _) => λ no => false_elim(no),
+    }(pure)
+}
+
+// From no buffers every node runs as it evaluates, a byte node included.
+theorem Node::run_empty(self node: Node, values: Valuation()): node.run(values, Nil) = State(node.step(values), Nil) {
+    match node {
+        Const(_, _, _) => refl,
+        Move(_, _, _) => refl,
+        Add(_, _, _, _) => refl,
+        Sub(_, _, _, _) => refl,
+        BitAnd(_, _, _, _) => refl,
+        BitOr(_, _, _, _) => refl,
+        BitXor(_, _, _, _) => refl,
+        ShiftLeft(_, _, _, _) => refl,
+        LogicalShiftRight(_, _, _, _) => refl,
+        ArithmeticShiftRight(_, _, _, _) => refl,
+        UnsignedLessThan(_, _, _, _) => refl,
+        SignedLessThan(_, _, _, _) => refl,
+        Equal(_, _, _, _) => refl,
+        BufferLoad(_, _, _) => refl,
+        BufferStore(_, _, _, _) => refl,
+    }
+}
+
+theorem run_nodes_pure(nodes: List<Node>): nodes_pure(nodes).IsTrue() → (values: Valuation()) → (buffers: Buffers()) →
+    run_nodes(nodes, values, buffers) = State(eval_nodes(nodes, values), buffers) {
+    match nodes {
+        Nil => λ _ values buffers => refl,
+        Cons(node, rest) => λ pure values buffers => {
+            let parts = Bool::is_true_and(node.pure(), nodes_pure(rest), pure);
+            j(sym(node.run_pure(values, buffers, parts.left)),
+                λ s _ => run_nodes(rest, s.values, s.buffers) = State(eval_nodes(rest, node.step(values)), buffers),
+                run_nodes_pure(rest, parts.right, node.step(values), buffers))
+        },
+    }
+}
+
+theorem run_nodes_empty(nodes: List<Node>): (values: Valuation()) → run_nodes(nodes, values, Nil) = State(eval_nodes(nodes, values), Nil) {
+    match nodes {
+        Nil => λ values => refl,
+        Cons(node, rest) => λ values => j(sym(node.run_empty(values)),
+            λ s _ => run_nodes(rest, s.values, s.buffers) = State(eval_nodes(rest, node.step(values)), Nil),
+            run_nodes_empty(rest, node.step(values))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops
+
+// How a loop ends, and the buffers it leaves.
+record LoopState { end: LoopEnd, buffers: Buffers() }
+
+// `loop_eval` with the buffers carried from pass to pass.
+fn loop_run(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat) →
+    List<BitVec(64)> → Buffers() → LoopState {
+    match remaining {
+        Zero => λ state buffers => LoopState(LoopEnd(state, True), buffers),
+        Succ(rest) => λ state buffers => {
+            let after = step(pass_valuation(parameters, count, Succ(rest), state), buffers);
+            match after.values(1, exit).head_bit() {
+                False => loop_run(step, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+            }
+        },
+    }
+}
+
+// Passes that run from no buffers as they evaluate make a loop that does.
+theorem loop_run_empty(run_step: Valuation() → Buffers() → State, step: Valuation() → Valuation(),
+    same: (v: Valuation()) → run_step(v, Nil) = State(step(v), Nil), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    remaining: Nat): (state: List<BitVec(64)>) →
+    loop_run(run_step, parameters, count, exit, next, remaining, state, Nil) =
+        LoopState(loop_eval(step, parameters, count, exit, next, remaining, state), Nil) {
+    match remaining {
+        Zero => λ state => refl,
+        Succ(rest) => λ state => {
+            let before = pass_valuation(parameters, count, Succ(rest), state);
+            let after = step(before);
+            let ends = match after(1, exit).head_bit() as λ b =>
+                    (match b as λ _ => LoopState {
+                        False => loop_run(run_step, parameters, count, exit, next, rest, words_of(after, next), Nil),
+                        True => LoopState(LoopEnd(words_of(after, next), False), Nil),
+                    }) = LoopState(match b {
+                        False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                        True => LoopEnd(words_of(after, next), False),
+                    }, Nil) {
+                False => loop_run_empty(run_step, step, same, parameters, count, exit, next, rest, words_of(after, next)),
+                True => refl,
+            };
+            j(sym(same(before)), λ s _ => (match s.values(1, exit).head_bit() as λ _ => LoopState {
+                    False => loop_run(run_step, parameters, count, exit, next, rest, words_of(s.values, next), s.buffers),
+                    True => LoopState(LoopEnd(words_of(s.values, next), False), s.buffers),
+                }) = LoopState(match after(1, exit).head_bit() {
+                    False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False),
+                }, Nil), ends)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured regions
+
+fn StructuredRegion::run(self region: StructuredRegion, call: Answers(), values: Valuation(), buffers: Buffers()) → State {
+    match region {
+        Dataflow(body) => run_nodes(body.nodes, values, buffers),
+        Sequence(prefix, continuation) => {
+            let after = run_nodes(prefix.nodes, values, buffers);
+            continuation.run(call, after.values, after.buffers)
+        },
+        Compose(prefix, continuation) => {
+            let after = prefix.run(call, values, buffers);
+            continuation.run(call, after.values, after.buffers)
+        },
+        // Branched at each value read, as `eval` is.
+        Conditional(_, condition, _, _, when_true, when_false) => State(λ w id => match values(1, condition).head_bit() {
+                False => when_false.run(call, values, buffers).values(w, id),
+                True => when_true.run(call, values, buffers).values(w, id),
+            }, match values(1, condition).head_bit() {
+                False => when_false.run(call, values, buffers).buffers,
+                True => when_true.run(call, values, buffers).buffers,
+            }),
+        Call(callee, arguments, result) => State(Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))), buffers),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
+            let end = loop_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs), buffers);
+            State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted, bit_value(end.end.exhausted)), end.buffers)
+        },
+    }
+}
+
+// The theorem: from no buffers a region runs as it evaluates.
+theorem StructuredRegion::run_empty(self region: StructuredRegion, call: Answers()): (values: Valuation()) →
+    region.run(call, values, Nil) = State(region.eval(call, values), Nil) {
+    match region {
+        Dataflow(body) => λ values => run_nodes_empty(body.nodes, values),
+        Sequence(prefix, continuation) => λ values => j(sym(run_nodes_empty(prefix.nodes, values)),
+            λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, eval_nodes(prefix.nodes, values)), Nil),
+            continuation.run_empty(call, eval_nodes(prefix.nodes, values))),
+        Compose(prefix, continuation) => λ values => j(sym(prefix.run_empty(call, values)),
+            λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, prefix.eval(call, values)), Nil),
+            continuation.run_empty(call, prefix.eval(call, values))),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ values => {
+            let b = values(1, condition).head_bit();
+            let nil_either: ((match b as λ _ => Buffers() { False => Nil, True => Nil }) = Nil) =
+                match b { False => refl, True => refl };
+            j(sym(when_false.run_empty(call, values)), λ f _ => State(λ w id => match b {
+                        False => f.values(w, id),
+                        True => when_true.run(call, values, Nil).values(w, id),
+                    }, match b { False => f.buffers, True => when_true.run(call, values, Nil).buffers }) =
+                    State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), Nil),
+                j(sym(when_true.run_empty(call, values)), λ t _ => State(λ w id => match b {
+                            False => when_false.eval(call, values)(w, id),
+                            True => t.values(w, id),
+                        }, match b { False => Nil, True => t.buffers }) =
+                        State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), Nil),
+                    cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), held),
+                        nil_either)))
+        },
+        Call(_, _, _) => λ values => refl,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values => {
+            let step = λ (pass: Valuation()) => body.eval(call, pass);
+            let ended = loop_run_empty(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), step,
+                λ v => body.run_empty(call, v), parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs));
+            cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
+                bit_value(end.end.exhausted)), end.buffers), ended)
+        },
+    }
+}

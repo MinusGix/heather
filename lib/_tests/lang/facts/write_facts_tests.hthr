@@ -1,0 +1,170 @@
+// Probes of `Unique` (lib/lang/facts/unique.hthr) and the write planner
+// that asks for it (lib/lang/facts/write_facts.hthr), over functions
+// reflected into `rt`. Tests, not library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import rt;
+import rt_reflect;
+import unique;
+import write_facts;
+
+// ---------------------------------------------------------------------------
+// Four runtime functions, reflected. `bump` writes its parameter;
+// `keep_old` reads the old buffer after writing it; `twice` moves a buffer
+// through two calls; `peek_after` reads a buffer it moved into a call.
+
+fn bump(xs: List<BitVec(8)>, i: BitVec(64)) → List<BitVec(8)> { xs.with_byte(i, xs.byte_at(i).add(BitVec::ofNat(1))) }
+
+fn keep_old(xs: List<BitVec(8)>, i: BitVec(64)) → BitVec(8) {
+    let ys = xs.with_byte(i, BitVec::ofNat(0));
+    ys.byte_at(i).add(xs.byte_at(i))
+}
+
+fn twice(xs: List<BitVec(8)>) → List<BitVec(8)> { bump(bump(xs, BitVec::ofNat(0)), BitVec::ofNat(1)) }
+
+fn peek_after(xs: List<BitVec(8)>) → BitVec(8) {
+    bump(xs, BitVec::ofNat(0)).byte_at(BitVec::ofNat(0)).add(xs.byte_at(BitVec::ofNat(0)))
+}
+
+fn bump_rt() → Fun {
+    Fun([Bytes(0), Word(64)], Bytes(0),
+        Let(Prim(Get(0), [1, 0]), Let(Lit(Word(8), 1), Let(Prim(Add(8), [1, 0]), Prim(Set(0), [4, 3, 0])))))
+}
+
+fn keep_old_rt() → Fun {
+    Fun([Bytes(0), Word(64)], Word(8),
+        Let(Lit(Word(8), 0), Let(Prim(Set(0), [2, 1, 0]), Let(Prim(Get(0), [0, 2]), Let(Prim(Get(0), [4, 3]), Prim(Add(8), [1, 0]))))))
+}
+
+fn twice_rt() → Fun {
+    Fun([Bytes(0)], Bytes(0), Let(Lit(Word(64), 0), Let(Call(0, [1, 0]), Let(Lit(Word(64), 1), Call(0, [1, 0])))))
+}
+
+fn peek_after_rt() → Fun {
+    Fun([Bytes(0)], Word(8),
+        Let(Lit(Word(64), 0), Let(Call(0, [1, 0]), Let(Lit(Word(64), 0), Let(Prim(Get(0), [1, 0]),
+        Let(Lit(Word(64), 0), Let(Prim(Get(0), [5, 0]), Prim(Add(8), [2, 0]))))))))
+}
+
+theorem good_reflected(): True { by reflects_as(["bump", "twice"], [], [bump_rt(), twice_rt()]) }
+theorem mixed_reflected(): True { by reflects_as(["bump", "keep_old", "twice"], [], [bump_rt(), keep_old_rt(), twice_rt()]) }
+theorem leaky_reflected(): True { by reflects_as(["bump", "peek_after"], [], [bump_rt(), peek_after_rt()]) }
+
+// ---------------------------------------------------------------------------
+// The ownership judgment, run once and published: every write of `good`
+// is then in place by `Unique::of_owned`, with no per-site check
+// (`fallback` off).
+
+fn good() → Program { Program([bump_rt(), twice_rt()], 1) }
+
+theorem good_verdicts(): good().owned() = True { refl }
+
+evidence theorem good_owned(): Owned(good()) { Owned::by_check(good(), trivial) }
+
+generate plan_writes(good(), 0, "good_bump", False);
+
+theorem good_bump_in_place(): WritePlan::modes(good(), 0, good_bump()) = [InPlace] { refl }
+
+// ---------------------------------------------------------------------------
+// `keep_old` fails the judgment, so `mixed` publishes no verdict: without
+// the fallback nothing is found, and with it each write gets its own
+// verdict — `bump`'s in place, `keep_old`'s a copy.
+
+fn mixed() → Program { Program([bump_rt(), keep_old_rt(), twice_rt()], 2) }
+
+theorem mixed_refused(): mixed().owned() = False { refl }
+
+generate plan_writes(mixed(), 0, "mixed_bump_unasked", False);
+
+theorem mixed_bump_unasked_copied(): WritePlan::modes(mixed(), 0, mixed_bump_unasked()) = [Copied] { refl }
+
+generate plan_writes(mixed(), 0, "mixed_bump", True);
+
+theorem mixed_bump_in_place(): WritePlan::modes(mixed(), 0, mixed_bump()) = [InPlace] { refl }
+
+generate plan_writes(mixed(), 1, "mixed_keep_old", True);
+
+theorem mixed_keep_old_copied(): WritePlan::modes(mixed(), 1, mixed_keep_old()) = [Copied] { refl }
+
+// ---------------------------------------------------------------------------
+// `bump` writes its parameter, so it needs every caller to move the buffer
+// in; `peek_after` reads it after the call, so `bump`'s write is a copy in
+// `leaky` whatever is asked.
+
+fn leaky() → Program { Program([bump_rt(), peek_after_rt()], 1) }
+
+theorem leaky_unowned(): leaky().owns(0) = False { refl }
+
+generate plan_writes(leaky(), 0, "leaky_bump", True);
+
+theorem leaky_bump_copied(): WritePlan::modes(leaky(), 0, leaky_bump()) = [Copied] { refl }
+
+// ---------------------------------------------------------------------------
+// Sharing: each probe writes the parameter `xs` and then reads either a
+// name sharing the old storage (the verdict is `False`) or the new buffer
+// (its control, `True`). A one-function program owns its parameters.
+
+fn one(body: Tm) → Program { Program([Fun([Bytes(0), Bit], Word(8), body)], 0) }
+
+// A `let` alias: `a = xs` (variable 1 at depth 2), then `xs` written.
+fn via_alias(read: Nat) → Tm {
+    Let(Var(1), Let(Lit(Word(64), 0), Let(Lit(Word(8), 1), Let(Prim(Set(0), [4, 1, 0]), Prim(Get(0), [read, 2])))))
+}
+
+theorem alias_read(): one(via_alias(3)).unique_at(0, 0) = False { refl }
+theorem alias_new(): one(via_alias(0)).unique_at(0, 0) = True { refl }
+
+// A branch result that may be `xs`.
+fn via_branch(read: Nat) → Tm {
+    Let(If(0, Var(1), Var(1)), Let(Lit(Word(64), 0), Let(Lit(Word(8), 1), Let(Prim(Set(0), [4, 1, 0]), Prim(Get(0), [read, 2])))))
+}
+
+theorem branch_read(): one(via_branch(3)).unique_at(0, 0) = False { refl }
+theorem branch_new(): one(via_branch(0)).unique_at(0, 0) = True { refl }
+
+// A write inside a branch: what runs after the branch counts, the other
+// branch does not.
+fn in_branch(read: Nat) → Tm {
+    Let(Lit(Word(64), 0), Let(Lit(Word(8), 1), Let(If(2, Prim(Set(0), [3, 1, 0]), Var(3)), Prim(Get(0), [read, 2]))))
+}
+
+theorem in_branch_read(): one(in_branch(4)).unique_at(0, 0) = False { refl }
+theorem in_branch_result(): one(in_branch(0)).unique_at(0, 0) = True { refl }
+
+// A record holding `xs`, and a field of it (the verdict reads no record
+// table: a record may hold a buffer).
+
+fn via_record(read: Tm) → Tm {
+    Let(Make(0, [1]), Let(Lit(Word(64), 0), Let(Lit(Word(8), 1), Let(Prim(Set(0), [4, 1, 0]), read))))
+}
+
+theorem record_read(): one(via_record(Field(0, 0, 3))).unique_at(0, 0) = False { refl }
+theorem record_new(): one(via_record(Prim(Get(0), [0, 2]))).unique_at(0, 0) = True { refl }
+
+// Two writes of the same buffer: the first is a copy, the second may reuse.
+fn two_writes() → Tm {
+    Let(Lit(Word(64), 0), Let(Lit(Word(8), 1), Let(Prim(Set(0), [3, 1, 0]), Let(Prim(Set(0), [4, 2, 1]), Prim(Get(0), [0, 3])))))
+}
+
+theorem first_write_copied(): one(two_writes()).unique_at(0, 0) = False { refl }
+theorem second_write_reused(): one(two_writes()).unique_at(0, 1) = True { refl }
+
+// A call passed the same buffer twice does not own either.
+fn twin() → Program {
+    Program([Fun([Bytes(0), Bytes(0)], Bytes(0), Let(Lit(Word(64), 0), Let(Lit(Word(8), 1), Prim(Set(0), [3, 1, 0])))),
+             Fun([Bytes(0)], Bytes(0), Call(0, [0, 0]))], 1)
+}
+
+theorem twin_unowned(): twin().owns(0) = False { refl }
+theorem twin_copied(): twin().unique_at(0, 0) = False { refl }
+
+// A write of a variable out of scope is never in place.
+theorem unbound_write(): one(Let(Lit(Word(64), 0), Prim(Set(0), [7, 0, 0]))).unique_at(0, 0) = False { refl }

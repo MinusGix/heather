@@ -179,6 +179,17 @@ field record, no tag, which is the right answer for structs.
 
 Levels: `level(⟦D⟧) = ⊔_i level(⟦c_i⟧)`.
 
+**Wide declarations are balanced (2026-10-27,
+`issues/wide-inductive-balanced-sum.md`).** The right-nested spine above
+is the shape below eight constructors. From eight on, the `+` tree halves
+every constructor range instead (`[lo, hi) = [lo, mid) + [mid, hi)`,
+`mid = lo + ⌊(hi − lo)/2⌋`), so constructor `i` is about `log₂ n`
+injections deep rather than `i`, and §4's path and §5.2's `Case` nesting
+follow the tree: one `Case` per `+`, a side that is a payload taking its
+arm and a side that is a `+` the next `Case`. One module decides the shape
+(`crates/elab/src/sum_layout.rs`); every builder and reader walks its tree,
+and the right-nested formulas here are its `n < 8` instance.
+
 ### 3.3 The nominal tag (decided 2026-07-24; `sEq` since 2026-09-26)
 
 Structurally identical declarations must not share a kernel type (§8.1), so
@@ -212,8 +223,11 @@ So the tag must be irrelevant *in terms* while distinct *as a type*.
 Tag_D = sEq⁰(Nat; k_D; k_D)          inhabited by  srefl⁰(Nat; k_D)
 ```
 
-with `k_D` the declaration's index, spelled `Zero` or a compact `NatLit`
-and nothing else. Both properties come from `sEq`'s own rules
+with `k_D` the declaration's tag, spelled `Zero` or a compact `NatLit`
+and nothing else. Until 2026-10-30 `k_D` was the declaration's index (the
+count of inductives committed before it); it is now a hash of the qualified
+name (`types::declaration_tag`, `docs/module-dag-design.md` §3), so that a
+module's kernel terms do not depend on what its process loaded before it. Both properties come from `sEq`'s own rules
 (`docs/sprop-design.md`): any two terms at an `sEq` type are convertible
 (the irrelevance arm), so the dependent motive's `fst x ≡ tag` holds; and
 type conversion compares an `sEq`'s endpoints — irrelevance collapses

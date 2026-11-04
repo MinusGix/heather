@@ -442,7 +442,13 @@ slip into stage 2. The per-query arena is kept because stage 1b measured
 what abandoning it costs. A contiguous projection chain is one such query:
 its intermediate views reuse the preceding value instead of replaying the
 selection prefix at each link. This removes quadratic prefix replay without
-retaining an arena across independent typing or conversion queries. The
+retaining an arena across independent typing or conversion queries. A
+contiguous chain of unannotated injections is the same shape on the intro
+side — a constructor value `k` summands deep is `inr@ᵏ` of its tuple, and
+per node layer `j` viewed a selection `j` deep — so `Tc::injection_at_spine`
+views its layers in one arena too, and only the innermost value is checked
+against the full description
+(`issues/wide-inductive-constructor-mention-cost.md`). The
 elaborator's checked field reads likewise return the inferred structural
 type directly; emission belongs to a caller writing an annotation. Respell
 each inferred suffix and recursive instance matching revisits overlapping

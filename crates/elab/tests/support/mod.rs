@@ -27,11 +27,19 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::term::GlobalCtx;
 
+/// The repository root, under which the shared stores live unless
+/// `$HEATHER_CACHE_DIR` moves them.
+fn repo_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
 /// Build an in-process test base from checked semantic module images.
 ///
 /// The ordered input is the same dependency-first closure an ordinary test
 /// used to elaborate by hand. A cold run checks every source module and
-/// publishes beneath `target/semantic-test-images`; a warm run bounded-decodes
+/// publishes beneath `target/semantic-test-images` (beneath
+/// `$HEATHER_CACHE_DIR` when set, as for every store here:
+/// `heather_cache::store_root`); a warm run bounded-decodes
 /// every stored suffix and, before metadata becomes visible, either has the
 /// declaration-verdict store at `target/decl-cache` vouch for each stored
 /// definition or kernel-checks it (stored theorems are statement-checked;
@@ -79,14 +87,14 @@ pub fn semantic_test_base_with(
     modules: &[(&str, &str)],
     configure: impl FnOnce(&mut heather_elab::Elaborator),
 ) -> heather_elab::Elaborator {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/semantic-test-images");
+    let dir = heather_cache::shared_store(&repo_root(), heather_cache::SEMANTIC_TEST_IMAGES);
     semantic_test_base_in(modules, dir, configure)
 }
 
 /// The isolated-directory form used by the support boundary's own corruption
 /// and rebuild controls. Ordinary suites should use [`semantic_test_base`]
-/// so they share one content-addressed store beneath `target/`.
+/// so they share one content-addressed store beneath `target/` (or
+/// `$HEATHER_CACHE_DIR`).
 pub fn semantic_test_base_at(
     modules: &[(&str, &str)],
     dir: std::path::PathBuf,
@@ -118,7 +126,7 @@ fn semantic_test_base_in(
     // (`docs/parallel-kernel-gate-design.md` §5.3), so a binary that replays
     // an unchanged prefix no longer rechecks every body per process. The
     // gate is sealed to `NoGate` before the caller's own content, as ever.
-    let decl_cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/decl-cache");
+    let decl_cache = heather_cache::shared_store(&repo_root(), heather_cache::DECL_CACHE);
     let (cache, rejected) = heather_cache::Cache::open(decl_cache.clone());
     if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
         eprintln!("decl-cache: {msg}");
@@ -237,7 +245,8 @@ theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c))
 /// accepted exactly this elaborated content against exactly these referents'
 /// interface hashes. A changed library file, prelude or elaboration output
 /// changes every downstream key (a miss, a full check); a changed kernel
-/// discards the whole store, loudly, on open. `DEFAULT_FUEL` is a
+/// finds no section of its own and says so on open (other kernels' sections
+/// are kept for them, `issues/verdict-store-one-kernel.md`). `DEFAULT_FUEL` is a
 /// `crates/kernel/src` constant, so the fuel caveat of
 /// `issues/cache-verdicts-omit-check-settings.md` is covered by the
 /// fingerprint for as long as fuel stays one.
@@ -253,7 +262,7 @@ theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c))
 /// final save (atomic via rename, last writer wins); a lost update costs a
 /// re-check on the next run, never a wrong answer.
 pub fn with_decl_cache(e: &mut heather_elab::Elaborator, prefix: impl FnOnce(&mut heather_elab::Elaborator)) {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/decl-cache");
+    let dir = heather_cache::shared_store(&repo_root(), heather_cache::DECL_CACHE);
     let (cache, rejected) = heather_cache::Cache::open(dir.clone());
     // A discarded store says why (a changed kernel, a corrupt file): the one
     // thing a cache must never do is quietly do nothing.
@@ -333,6 +342,15 @@ pub fn assert_refused(e: &mut heather_elab::Elaborator, name: &str, src: &str, w
         || ["unbound name", "cannot find module", "neither an imported module", "is ambiguous"]
             .iter()
             .any(|slip| headline.contains(slip));
+    // A conversion refusal that no recorded site explains is an elaborator
+    // gap (`KernelSite::Unrecorded`,
+    // issues/elab-accepts-conjunction-for-equation.md), never a refusal to
+    // pin, whatever `why` says of it: the test fails until the route that
+    // placed the term records its site.
+    assert!(
+        !matches!(err, heather_elab::ElabError::Kernel { site: heather_elab::KernelSite::Unrecorded, .. }),
+        "{name}: the kernel's refusal is at no recorded site (an elaborator gap), got:\n{rendered}"
+    );
     match why {
         Refusal::Kernel => assert!(
             matches!(err, heather_elab::ElabError::Kernel { .. }),

@@ -736,6 +736,14 @@ rename rather than a substituting walk — the property layer 1 §3 exists to
 preserve — and it refuses `extends Monoid<A>(f(op))` by name, pointing at §8
 as where a parent at a *computed* index belongs. Nothing in §8 is prejudged.
 
+**Relaxed (2026-11-04).** An index argument may now be an expression over the
+child's parameters (`extends MonoidRel<A>(RelId<A>, op)`), instantiated by
+substitution through one walk (`traits::Ren::at_use`) at the child, at an
+instance and at a scope binder. It is what makes `algebra`'s identity classes
+the relational ones at `RelId`
+([relation-indexed-algebra-design.md](relation-indexed-algebra-design.md) §3).
+A bare name that is not one of the child's index parameters is still refused.
+
 ### 14.6 Dispatch and projection at a concrete carrier are now refusals
 
 §5.1's "scope, then refuse" is stated over the sugars in the abstract; what it

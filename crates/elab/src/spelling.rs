@@ -32,6 +32,49 @@ pub(crate) fn inj_of(t: &Term) -> Option<(bool, &Rc<Term>)> {
     }
 }
 
+/// Where a constructor value's injection path leads ([`inj_path`]).
+pub(crate) struct InjPath<'t> {
+    /// The constructor the path selects; when it stopped short, the first
+    /// constructor of the `+` it stopped at.
+    pub(crate) ctor: usize,
+    /// The payload, or the term the path stopped at (no injection: a
+    /// neutral, or a value that is not a constructor at all).
+    pub(crate) at: &'t Term,
+    /// Whether the path reached a payload.
+    pub(crate) reached: bool,
+    /// `at` as the last injection's own value, when the path crossed one
+    /// (`at` is the label itself otherwise).
+    pub(crate) val: Option<&'t Rc<Term>>,
+    /// Whether it crossed any injection.
+    pub(crate) injected: bool,
+}
+
+/// Walk a value of an `n`-constructor sum down its injections, the `+` tree
+/// being the one [`crate::sum_layout`] decides: each injection picks a side,
+/// until a payload. Either injection spelling — this reads the *path*, never
+/// an annotation, so `inr@` is an `inr`.
+pub(crate) fn inj_path<'t>(label: &'t Term, n: usize) -> InjPath<'t> {
+    use crate::sum_layout::Child;
+    let layout = crate::sum_layout::layout(n);
+    let (mut at, mut cur, mut last) = (layout.root(), label, None);
+    let path = |ctor, at, reached, val: Option<&'t Rc<Term>>| InjPath { ctor, at, reached, val, injected: val.is_some() };
+    loop {
+        match at {
+            None => return path(0, cur, false, last),
+            Some(Child::Leaf(k)) => return path(k, cur, true, last),
+            Some(Child::Node(j)) => {
+                let node = layout.node(j);
+                let Some((left, val)) = inj_of(cur) else {
+                    return path(node.lo, cur, false, last);
+                };
+                at = Some(node.side(!left));
+                cur = val;
+                last = Some(val);
+            }
+        }
+    }
+}
+
 /// The two components of either pair spelling.
 pub(crate) fn pair_of(t: &Term) -> Option<(&Rc<Term>, &Rc<Term>)> {
     match t {
@@ -60,6 +103,86 @@ pub(crate) fn proj_of(t: &Term) -> Option<(bool, &Rc<Term>)> {
         Term::Snd { pair, .. } | Term::SndAt { pair, .. } => Some((false, pair)),
         _ => None,
     }
+}
+
+/// The component a projection chain reads off a pair it is written over,
+/// by syntax alone: `fst(snd(pair(a; pair(b; c))))` is `b`. A field read
+/// off a constructed record (`CdState(s.m - 1, …).m`, a `decreases`
+/// measure at a self-call's argument) is this shape, and its component is
+/// the field's value with no δ step taken — where a weak head would unfold
+/// the value on into its definition's eliminator
+/// (issues/decreases-measure-record-field-unspelled.md). `None` unless every
+/// projection meets a pair.
+pub(crate) fn project_value(t: &Term) -> Option<&Rc<Term>> {
+    let (first, pair) = proj_of(t)?;
+    let inner: &Term = if proj_of(pair).is_some() { project_value(pair)? } else { pair };
+    let (a, b) = pair_of(inner)?;
+    Some(if first { a } else { b })
+}
+
+/// `t` with every projection of a literal pair read off the pair, wherever
+/// it sits among the formers a reduct's fields are built of.
+///
+/// A weak head reached through the checked spelling carries such redexes in
+/// its arguments: a `match` arm binds a component of an intro written bare
+/// (`docs/codata-named-signature-design.md` §5), and the arm's own `fst@`/
+/// `snd@` of that binder is what the reduct substitutes it into. The kernel
+/// infers a projection's receiver, and a bare `pair@` does not infer, so the
+/// reduct is a term the kernel refuses with `NotInferable` wherever it is
+/// emitted (issues/kernel-refuses-inj-through-corecursive-reduct.md).
+/// Reading the component off is Σ's own β rule, so the result is convertible
+/// with `t`, and it only removes nodes, so no scope moves and nothing is
+/// shifted. Types are left whole: their term slots are the annotations the
+/// spelling kept, and a reduct's types are not where it put a redex. Shares
+/// every untouched subtree.
+pub(crate) fn contract_projections(t: &Rc<Term>) -> Rc<Term> {
+    if let Some((first, pair)) = proj_of(t) {
+        let inner = contract_projections(pair);
+        if let Some((a, b)) = pair_of(&inner) {
+            return Rc::clone(if first { a } else { b });
+        }
+        if Rc::ptr_eq(&inner, pair) {
+            return Rc::clone(t);
+        }
+        let mut out = (**t).clone();
+        match &mut out {
+            Term::Fst { pair, .. } | Term::FstAt { pair, .. } | Term::Snd { pair, .. } | Term::SndAt { pair, .. } => {
+                *pair = inner;
+            }
+            _ => unreachable!("proj_of matched a projection"),
+        }
+        return Rc::new(out);
+    }
+    // Every term child of the formers below, rewritten in place, and `false` when
+    // none moved.
+    fn each(slots: &mut [&mut Rc<Term>]) -> bool {
+        let mut moved = false;
+        for slot in slots.iter_mut() {
+            let new = contract_projections(slot);
+            if !Rc::ptr_eq(&new, slot) {
+                **slot = new;
+                moved = true;
+            }
+        }
+        moved
+    }
+    let mut out = (**t).clone();
+    let moved = match &mut out {
+        Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => each(&mut [fst, snd]),
+        Term::Inl { val, .. } | Term::Inr { val, .. } | Term::InlAt { val, .. } | Term::InrAt { val, .. } => {
+            each(&mut [val])
+        }
+        Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => each(&mut [fun, arg]),
+        Term::Lam { body, .. } => each(&mut [body]),
+        Term::Succ(n) => each(&mut [n]),
+        Term::Refl { tm, .. } => each(&mut [tm]),
+        Term::Supf { label, children, .. } => each(&mut [label, children]),
+        Term::Corec { index, seed, .. } => each(&mut [index, seed]),
+        Term::Out { index, scrut, .. } => each(&mut [index, scrut]),
+        Term::Case { case_l, case_r, scrut, .. } => each(&mut [case_l, case_r, scrut]),
+        _ => false,
+    };
+    if moved { Rc::new(out) } else { Rc::clone(t) }
 }
 
 /// Compare a projection path without comparing its typing annotations.
@@ -101,7 +224,7 @@ pub(crate) fn tuple_fields(
             continue;
         }
         let field = Term::FstAt { pair: Rc::clone(&cur) };
-        let alias = cx.aliases.iter().rev().find_map(|a| {
+        let alias = cx.aliases.iter_inner().find_map(|a| {
             let shift = cx.names.len().checked_sub(a.depth)? as u32;
             let term = Rc::new(a.term.shift_local(shift));
             let shifted = Rc::new(term.shift_local(under));
@@ -151,6 +274,44 @@ pub(crate) fn app_spine(t: &Term) -> (&Term, Vec<&Rc<Term>>) {
     }
     args.reverse();
     (head, args)
+}
+
+/// `t` with the β-redexes at the head of its spine contracted, `(λx. b) s ⋯`
+/// to `b[s/x] ⋯`, until the head is no λ; `None` when there was none. Only
+/// the head: an argument's redexes are reached when the congruence gets to
+/// them.
+pub(crate) fn beta_head(t: &Term) -> Option<Term> {
+    let (fun, arg) = app_of(t)?;
+    let r = match &**fun {
+        Term::Lam { body, .. } => body.inst_top(0, arg),
+        _ => {
+            let fun = Rc::new(beta_head(fun)?);
+            match t {
+                Term::App { dom_level, cod_level, dom, cod, arg, .. } => Term::App {
+                    fun,
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: Rc::clone(dom),
+                    cod: Rc::clone(cod),
+                    arg: Rc::clone(arg),
+                },
+                _ => Term::AppAt { fun, arg: Rc::clone(arg) },
+            }
+        }
+    };
+    Some(beta_head(&r).unwrap_or(r))
+}
+
+/// `ty` with its `El` term's head β-redexes contracted ([`beta_head`]);
+/// `None` when there was none. A pattern-bound proof is typed so: an
+/// `Exists`'s `.proof` is `(λ k => P(k))(e.witness)`, read raw no relation is
+/// visible in it (issues/omega-redex-typed-fact-ignored.md,
+/// issues/linarith-redex-typed-fact.md).
+pub(crate) fn beta_head_ty(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::El { level, tm } => Some(Type::El { level: level.clone(), tm: Rc::new(beta_head(tm)?) }),
+        _ => None,
+    }
 }
 
 /// An application the elaborator **constructs** from a Π it holds, outside

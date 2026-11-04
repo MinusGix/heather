@@ -1,0 +1,187 @@
+// `norm_num` at `CReal`: closed real expressions evaluated to a rational
+// (docs/numeral-normalisation-design.md §3).
+//
+// A real is never decided by computation, so a closed fact at `CReal` goes
+// through the embedding's laws: the tactic reads each side into a
+// `NumReal` tree, `sound` shows the tree's real is the embedding of its
+// rational value, and the fact is the rational one's, decided by the
+// `Bool` verdicts in `rat.hthr`, carried across `CReal::ofRat`. The
+// tactic is in `norm_num.hthr`; it looks this module's names up only at a
+// goal at `CReal`, so a client of `norm_num` that never imports `creal`
+// never loads it.
+//
+// `real` spells each node as the operation it was read from, so a tree's
+// real converts to the side it was read off. An inverse and an integer
+// power carry the proof the goal wrote, about the real it wrote: a tree
+// cannot carry a proof about its own value, so the node holds the real `x`
+// beside the tree `a` read from it, and `Wf` asks that `a` denote `x`, as
+// `RealExpr::Wf` does for the interval checker.
+
+import logic;
+import bool;
+import nat;
+import int;
+import rat;
+import creal;
+
+inductive NumReal {
+    NumQ(q: Rat),
+    NumAdd(a: NumReal, b: NumReal),
+    NumSub(a: NumReal, b: NumReal),
+    NumNeg(a: NumReal),
+    NumMul(a: NumReal, b: NumReal),
+    NumPow(a: NumReal, n: Nat),
+    NumAbs(a: NumReal),
+    NumInv(a: NumReal, x: CReal, h: x.Apart(0)),
+    NumZPow(a: NumReal, x: CReal, n: Int, h: x.PowOk(n)),
+}
+
+fn NumReal::real(self t: NumReal) → CReal {
+    match t {
+        NumQ(q) => CReal::ofRat(q),
+        NumAdd(a, b) => a.real() + b.real(),
+        NumSub(a, b) => a.real() - b.real(),
+        NumNeg(a) => -a.real(),
+        NumMul(a, b) => a.real() * b.real(),
+        NumPow(a, n) => a.real().npow(n),
+        NumAbs(a) => a.real().abs(),
+        NumInv(_, x, h) => x.inv(h := h),
+        NumZPow(_, x, n, h) => x.pow(n, h := h),
+    }
+}
+
+// `q ^ n` at an integer exponent, with the reciprocal for a negative one:
+// what `CReal::pow` computes at an embedded `q`, with no apartness proof.
+fn NumReal::zpow(q: Rat, n: Int) → Rat {
+    match n {
+        OfNat(m) => q.npow(m),
+        NegSucc(k) => q.recip().npow(Succ(k)),
+    }
+}
+
+// The exact value. Inverses are `recip`, which `Rat::inv` computes.
+fn NumReal::rat(self t: NumReal) → Rat {
+    match t {
+        NumQ(q) => q,
+        NumAdd(a, b) => a.rat() + b.rat(),
+        NumSub(a, b) => a.rat() - b.rat(),
+        NumNeg(a) => -a.rat(),
+        NumMul(a, b) => a.rat() * b.rat(),
+        NumPow(a, n) => a.rat().npow(n),
+        NumAbs(a) => a.rat().abs(),
+        NumInv(a, _, _) => a.rat().recip(),
+        NumZPow(a, _, n, _) => NumReal::zpow(a.rat(), n),
+    }
+}
+
+fn NumReal::Wf(self t: NumReal) → Type {
+    match t {
+        NumQ(_) => True,
+        NumAdd(a, b) => a.Wf() ∧ b.Wf(),
+        NumSub(a, b) => a.Wf() ∧ b.Wf(),
+        NumNeg(a) => a.Wf(),
+        NumMul(a, b) => a.Wf() ∧ b.Wf(),
+        NumPow(a, _) => a.Wf(),
+        NumAbs(a) => a.Wf(),
+        NumInv(a, x, _) => a.real() ≈ x ∧ a.Wf(),
+        NumZPow(a, x, _, _) => a.real() ≈ x ∧ a.Wf(),
+    }
+}
+
+// A real the embedding of `q` up to `≈` has the embedded reciprocal as its
+// inverse: the apartness moves to `CReal::ofRat(q)` and down to `q`, and back
+// up as the embedding's own (an inverse reads its gap off the proof, so the
+// two proofs meet by `inv_respects`).
+theorem NumReal::inv_sound({x: CReal}, {q: Rat}, sx: x ≈ CReal::ofRat(q), h: x.Apart(0)): x.inv(h := h) ≈ CReal::ofRat(q.recip()) {
+    let hr: CReal::ofRat(q).Apart(0) = CReal::apart_respects(sx, CReal::same_refl(0), h);
+    let hq: q.Apart(0) = match hr {
+        Inl(lt) => Inl(CReal::lt_of_ofRat_lt(p := q, q := 0, h := lt)),
+        Inr(gt) => Inr(CReal::lt_of_ofRat_lt(p := 0, q := q, h := gt)),
+    };
+    CReal::same_trans(CReal::inv_respects(sx, h := h, h2 := CReal::ofRat_apart(h := hq)), CReal::ofRat_inv(q, h := hq))
+}
+
+theorem NumReal::zpow_sound({x: CReal}, {q: Rat}, sx: x ≈ CReal::ofRat(q), n: Int): (h: x.PowOk(n)) → x.pow(n, h := h) ≈ CReal::ofRat(NumReal::zpow(q, n)) {
+    match n {
+        OfNat(m) => λ h => CReal::same_trans(CReal::npow_respects(sx, m), CReal::ofRat_npow(q, m)),
+        NegSucc(k) => λ h => CReal::same_trans(CReal::npow_respects(NumReal::inv_sound(sx, h), Succ(k)), CReal::ofRat_npow(q.recip(), Succ(k))),
+    }
+}
+
+// The tree's real is the embedding of its value: each operation commutes
+// with `CReal::ofRat` up to `≈`.
+theorem NumReal::sound(self t: NumReal): t.Wf() → t.real() ≈ CReal::ofRat(t.rat()) {
+    match t {
+        NumQ(q) => λ w => CReal::ofRat(q).same_refl(),
+        NumAdd(a, b) => λ w => CReal::same_trans(CReal::add_respects(a.sound(w.left), b.sound(w.right)), CReal::same_sym(CReal::ofRat_add(a.rat(), b.rat()))),
+        NumSub(a, b) => λ w => CReal::same_trans(CReal::sub_respects(a.sound(w.left), b.sound(w.right)), CReal::same_sym(CReal::ofRat_sub(a.rat(), b.rat()))),
+        NumNeg(a) => λ w => CReal::same_trans(CReal::neg_respects(a.sound(w)), CReal::same_sym(CReal::ofRat_neg(a.rat()))),
+        NumMul(a, b) => λ w => CReal::same_trans(CReal::mul_respects(a.sound(w.left), b.sound(w.right)), CReal::same_sym(CReal::ofRat_mul(a.rat(), b.rat()))),
+        NumPow(a, n) => λ w => CReal::same_trans(CReal::npow_respects(a.sound(w), n), CReal::ofRat_npow(a.rat(), n)),
+        NumAbs(a) => λ w => CReal::same_trans(CReal::abs_respects(a.sound(w)), CReal::ofRat_abs(a.rat())),
+        NumInv(a, _, h) => λ w => NumReal::inv_sound(CReal::same_trans(CReal::same_sym(w.left), a.sound(w.right)), h),
+        NumZPow(a, _, n, h) => λ w => NumReal::zpow_sound(CReal::same_trans(CReal::same_sym(w.left), a.sound(w.right)), n, h),
+    }
+}
+
+// The facts, from the rational verdicts. Each states its conclusion over
+// the trees' reals, which convert to the goal's sides.
+theorem NumReal::same_of(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h: a.rat().same_bool(b.rat()) = True): a.real() ≈ b.real() {
+    CReal::same_trans(a.sound(wa), CReal::same_trans(CReal::ofRat_respects(a.rat().same_of_bool(b.rat(), h)), CReal::same_sym(b.sound(wb))))
+}
+
+theorem NumReal::lt_of(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h: a.rat().lt_bool(b.rat()) = True): a.real() < b.real() {
+    CReal::lt_respects(CReal::same_sym(a.sound(wa)), CReal::same_sym(b.sound(wb)), CReal::ofRat_lt(a.rat().lt_of_bool(b.rat(), h)))
+}
+
+theorem NumReal::le_of(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h: a.rat().le_bool(b.rat()) = True): a.real() <= b.real() {
+    CReal::le_respects(CReal::same_sym(a.sound(wa)), CReal::same_sym(b.sound(wb)), CReal::ofRat_le(a.rat().le_of_bool(b.rat(), h)))
+}
+
+theorem NumReal::apart_of_lt(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h: a.rat().lt_bool(b.rat()) = True): a.real().Apart(b.real()) {
+    Inl(NumReal::lt_of(a, b, wa, wb, h))
+}
+
+theorem NumReal::apart_of_gt(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h: b.rat().lt_bool(a.rat()) = True): a.real().Apart(b.real()) {
+    Inr(NumReal::lt_of(b, a, wb, wa, h))
+}
+
+// Refutations: the fact would carry back to the rationals, where the
+// verdict refutes it.
+theorem NumReal::not_same_of(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h: a.rat().same_bool(b.rat()) = False): ¬(a.real() ≈ b.real()) {
+    λ same => a.rat().not_same_of_bool(b.rat(), h, CReal::ofRat_inj(CReal::same_trans(CReal::same_sym(a.sound(wa)), CReal::same_trans(same, b.sound(wb)))))
+}
+
+theorem NumReal::not_lt_of(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h: a.rat().lt_bool(b.rat()) = False): ¬(a.real() < b.real()) {
+    λ lt => a.rat().not_lt_of_bool(b.rat(), h, CReal::lt_of_ofRat_lt(CReal::lt_respects(a.sound(wa), b.sound(wb), lt)))
+}
+
+theorem NumReal::not_le_of(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h: a.rat().le_bool(b.rat()) = False): ¬(a.real() <= b.real()) {
+    λ le => a.rat().not_le_of_bool(b.rat(), h, CReal::le_of_ofRat_le(CReal::le_respects(a.sound(wa), b.sound(wb), le)))
+}
+
+theorem NumReal::not_apart_of(a, b: NumReal, wa: a.Wf(), wb: b.Wf(), h1: a.rat().lt_bool(b.rat()) = False, h2: b.rat().lt_bool(a.rat()) = False): ¬(a.real().Apart(b.real())) {
+    λ ap => match ap {
+        Inl(lt) => NumReal::not_lt_of(a, b, wa, wb, h1, lt),
+        Inr(gt) => NumReal::not_lt_of(b, a, wb, wa, h2, gt),
+    }
+}
+
+// The constructors and the well-formedness witnesses as globals the tactic
+// can name (`Lookup` names functions, not constructors).
+fn norm_num_q(q: Rat) → NumReal { NumQ(q) }
+// The empty sum's and the empty product's values, which a range at the
+// bound zero converts to.
+fn norm_num_sum_unit() → Rat { 0 }
+fn norm_num_prod_unit() → Rat { 1 }
+fn norm_num_add(a, b: NumReal) → NumReal { NumAdd(a, b) }
+fn norm_num_sub(a, b: NumReal) → NumReal { NumSub(a, b) }
+fn norm_num_neg(a: NumReal) → NumReal { NumNeg(a) }
+fn norm_num_mul(a, b: NumReal) → NumReal { NumMul(a, b) }
+fn norm_num_pow(a: NumReal, n: Nat) → NumReal { NumPow(a, n) }
+fn norm_num_abs(a: NumReal) → NumReal { NumAbs(a) }
+fn norm_num_inv(a: NumReal, x: CReal, h: x.Apart(0)) → NumReal { NumInv(a, x, h) }
+fn norm_num_zpow(a: NumReal, x: CReal, n: Int, h: x.PowOk(n)) → NumReal { NumZPow(a, x, n, h) }
+theorem norm_num_wf_q(): True { trivial }
+theorem norm_num_wf_two(a, b: NumReal, wa: a.Wf(), wb: b.Wf()): a.Wf() ∧ b.Wf() { And(wa, wb) }
+theorem norm_num_wf_at(a: NumReal, x: CReal, e: a.real() ≈ x, wa: a.Wf()): a.real() ≈ x ∧ a.Wf() { And(e, wa) }

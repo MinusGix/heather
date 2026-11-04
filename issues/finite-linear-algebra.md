@@ -5,7 +5,7 @@ labels: [stdlib,mathematics]
 area: mathematics
 milestone: [ml-layers]
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-10-27
 ---
 
 Vectors `Fin n → R` and matrices over a commutative (semi)ring: sums,
@@ -26,3 +26,5 @@ and needs a constructive treatment over `CReal`; do not assume it here.
   finite sums over `Fin n` with reindexing and exchange of order.
 
 ## Log
+
+- 2026-10-27: Fin n sums with reindexing and exchange are now owned by [[finite-sums-and-products]].

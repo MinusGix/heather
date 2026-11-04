@@ -1,0 +1,89 @@
+// The process's stack (linux_x86_64_image; issues/io-image-process-stack.md):
+// a stack of the 128 KiB exec maps, placed where Linux puts one; the
+// loader's process of a file with it, which is loaded from the file; its top
+// at an entry RSP and a CALL's push in its top word; a word pushed there
+// read back with the segment still zero; and placements Linux never gives
+// refused.
+import linux_x86_64_image;
+import x86_64;
+import x86_64_byte_memory;
+import x86_64_stack;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_data_read;
+import linux_x86_64_byte_memory;
+import bitvec;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+fn probe_top() → Nat { 0x7ffffffde000 }
+fn probe_profile() → X86Profile { X86Profile::process(4096, probe_top(), io_stack_limit()) }
+
+theorem probe_within(): 4096 <= io_data_limit() { Nat::leb_sound(4096, io_data_limit(), trivial) }
+theorem probe_placed(): StackPlaced(4096, probe_top(), io_stack_limit()) {
+    StackPlaced(above := Nat::leb_sound(io_data_end(4096) + io_stack_limit(), probe_top(), trivial),
+        canonical := Nat::leb_sound(probe_top(), Nat::pow(2, 47), trivial),
+        within := Nat::leb_sound(io_stack_limit(), io_stack_limit(), trivial))
+}
+
+// A file of one RET, and the process the loader maps of it.
+fn probe_file() → List<BitVec(8)> { io_elf_file([BitVec::ofNat(0xc3)], 4096) }
+fn probe_memory() → X86Memory(probe_profile()) {
+    X86Memory::process_load(4096, probe_within(), probe_top(), io_stack_limit(), probe_placed(), probe_file())
+}
+
+theorem probe_loaded(): probe_memory().LoadedFrom(4096, probe_file()) {
+    X86Memory::process_load_loaded(4096, probe_within(), probe_top(), io_stack_limit(), probe_placed(), probe_file())
+}
+
+// Its code at the entry, and its segment zero.
+theorem probe_code(): CodeResident(probe_profile().fetch(), probe_memory(), [BitVec::ofNat(0xc3)], io_entry()) {
+    probe_memory().loaded_entry(4096, probe_within(), io_elf_header(BitVec::ofNat(233), BitVec::ofNat((233).shr(8)), 4096),
+        [BitVec::ofNat(0xc3)], refl, Nat::leb_sound(233, 65536, trivial), probe_loaded())
+}
+theorem probe_zero(): DataRegion::process_data(4096, probe_within(), probe_top(), io_stack_limit()).Holds(io_zero(), probe_memory()) {
+    probe_memory().loaded_data(4096, probe_within(), probe_top(), io_stack_limit(), probe_file(), probe_loaded())
+}
+
+fn probe_stack() → DataRegion { DataRegion::process_stack(4096, probe_top(), io_stack_limit(), probe_placed()) }
+
+// At an entry whose RSP is the top, the stack's top is RSP, and a CALL
+// there pushes into the stack's top word.
+theorem probe_entry(gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = probe_top()): probe_stack().stack().at(io_stack_limit()) = read_gpr(Rsp, gprs) {
+    DataRegion::process_stack_entry(4096, probe_top(), io_stack_limit(), probe_placed(), gprs, rsp)
+}
+theorem probe_push(gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = probe_top()): push_address(gprs) = probe_stack().stack().at(io_stack_limit() - 8) {
+    DataRegion::process_stack_push(4096, probe_top(), io_stack_limit(), probe_placed(), gprs, rsp, Nat::leb_sound(8, io_stack_limit(), trivial))
+}
+
+// A word pushed into the top word reads back, and the segment is still
+// zero.
+fn probe_pushed(word: BitVec(64)) → X86Memory(probe_profile()) {
+    probe_profile().store(probe_memory(), probe_stack().stack().at(io_stack_limit() - 8), word_bytes(word))
+}
+theorem probe_slot_fits(): io_stack_limit() - 8 + 8 <= io_stack_limit() {
+    let limit: (io_stack_limit() = 0x20000) = refl;
+    omega(limit)
+}
+theorem probe_reads_back(word: BitVec(64)):
+    read_word(probe_profile().data(), probe_pushed(word), probe_stack().stack().at(io_stack_limit() - 8)) = Some(word) {
+    probe_stack().stack().stored(probe_memory(), io_stack_limit() - 8, probe_slot_fits(), word)
+}
+theorem probe_segment_kept(word: BitVec(64)): DataRegion::process_data(4096, probe_within(), probe_top(), io_stack_limit()).Holds(io_zero(), probe_pushed(word)) {
+    DataRegion::process_stack_keeps_data(4096, probe_within(), probe_top(), io_stack_limit(), probe_placed(), probe_memory(), io_zero(),
+        io_stack_limit() - 8, word, probe_slot_fits(), probe_zero())
+}
+
+// A stack overlapping the segment is not placed, nor one deeper than exec
+// maps.
+theorem overlapping_not_placed(): ¬StackPlaced(4096, 0x410000, 8) {
+    let end: (io_data_end(4096) = 0x411000) = refl;
+    λ placed => omega(placed.above, end)
+}
+theorem deep_not_placed(top: Nat): ¬StackPlaced(4096, top, 0x20001) {
+    let limit: (io_stack_limit() = 0x20000) = refl;
+    λ placed => omega(placed.within, limit)
+}

@@ -169,7 +169,7 @@ impl Elaborator {
         for (j, &p) in reverted.iter().enumerate() {
             let dom = entry_ty(cx, p).apply_local(&sigma(&mcx.gamma, j));
             let dom_level = cx.gamma.entries[p].level.clone();
-            mcx.push(cx.names[p].clone(), dom.clone(), dom_level.clone());
+            mcx.push(cx.names[p].to_string(), dom.clone(), dom_level.clone());
             doms.push((dom, dom_level));
         }
         let mut motive = goal.apply_local(&sigma(&mcx.gamma, k));
@@ -184,7 +184,7 @@ impl Elaborator {
             motive_level = Level::join(dom_level, motive_level);
         }
         let psi = self.goal_psi();
-        typing::check_type(&psi, 0, Layer::Prog, &ycx.gamma, &motive, &motive_level, self.fuel).map_err(|_| {
+        typing::check_type(&psi, 0, Layer::Prog, &ycx.gamma, &motive, &motive_level, self.policy.fuel).map_err(|_| {
             ElabError::Elab {
                 msg: format!(
                     "`subst`: generalising the goal over `{x_name}` and the locals that depend on it \
@@ -204,8 +204,8 @@ impl Elaborator {
             let Type::Pi { dom_level, cod_level, dom, cod } = cur else {
                 unreachable!("the motive opens with one Π per reverted local");
             };
-            let name = if visible(cx, p) { cx.names[p].clone() } else { "#subst".to_string() };
-            ccx.push_skel(name, (*dom).clone(), dom_level.clone(), cx.skels[p].clone());
+            let name = if visible(cx, p) { cx.names[p].to_string() } else { "#subst".to_string() };
+            ccx.push_skel(name, (*dom).clone(), dom_level.clone(), cx.names.skel(p).cloned());
             lams.push((dom_level, cod_level, dom));
             cur = (*cod).clone();
         }
@@ -228,18 +228,19 @@ impl Elaborator {
         let mut aliases = Vec::new();
         if visible(cx, pos_x) {
             aliases.push(Alias {
-                name: x_name.clone(),
+                name: x_name.to_string(),
                 depth,
                 term: Rc::new(t.shift_local(k as u32)),
                 ty: ty.shift_local(k as u32),
                 level: level.clone(),
                 skel: None,
                 spliced: None,
+                shifted: Default::default(),
             });
         }
         if let Some(p) = pos_h.filter(|p| !reverted.contains(p) && visible(cx, *p)) {
             aliases.push(Alias {
-                name: cx.names[p].clone(),
+                name: cx.names[p].to_string(),
                 depth,
                 term: Rc::new(refl_t.shift_local(k as u32)),
                 ty: Type::Id { level: level.clone(), ty: Rc::clone(&ty), lhs: Rc::clone(&t), rhs: Rc::clone(&t) }
@@ -247,15 +248,16 @@ impl Elaborator {
                 level: level.clone(),
                 skel: None,
                 spliced: None,
+                shifted: Default::default(),
             });
         }
         for (i, a) in cx.aliases.iter().enumerate() {
-            let later = cx.aliases[i + 1..].iter().any(|b| b.name == a.name);
+            let later = cx.aliases.iter().skip(i + 1).any(|b| b.name == a.name);
             let by = (n - a.depth) as u32;
-            let (term, ty) = (a.term.shift_local(by), a.ty.shift_local(by));
+            let (term, ty) = a.at(by);
             if a.depth <= pos_x
                 || later
-                || cx.names[a.depth..].contains(&a.name)
+                || cx.names.iter().skip(a.depth).any(|later| later == a.name)
                 || !(mentions(gamma, &term, &stale) || mentions_ty(gamma, &ty, &stale))
             {
                 continue;
@@ -268,6 +270,7 @@ impl Elaborator {
                 level: a.level.clone(),
                 skel: a.skel.clone(),
                 spliced: None,
+                shifted: Default::default(),
             });
         }
         ccx.aliases.extend(aliases.into_iter().map(Rc::new));
@@ -363,5 +366,5 @@ fn mentions_ty(gamma: &LocalCtx, t: &Type, marked: &[bool]) -> bool {
 /// binder or a `let` bound after it?
 fn visible(cx: &Cx, p: usize) -> bool {
     let name = &cx.names[p];
-    cx.names.iter().rposition(|m| m == name) == Some(p) && !cx.aliases.iter().any(|a| a.name == *name && a.depth > p)
+    cx.names.lookup(name) == Some(p) && !cx.aliases.iter_inner().any(|a| a.name == *name && a.depth > p)
 }

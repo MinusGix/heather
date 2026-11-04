@@ -4,7 +4,7 @@
 // workspace runs. Keep policy (limits, lanes, doctests) there; this file owns
 // scheduling, buffered output, and exact result accounting.
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { dirname, normalize, resolve } from "node:path";
@@ -28,6 +28,17 @@ const OUTPUT_LIMIT = 1024 * 1024;
 // (issues/test-runner-records-no-per-target-cpu.md).
 const CPU_RAIL_SECONDS = 300;
 const CPU_WARN_FRACTION = 0.5;
+// Targets whose every test spawns one `heather write-elf` of a whole tool,
+// each its own process under the rail it inherits: the compile by kernel
+// evaluation and the certificate's kernel check, over warm images, at width
+// one. sort's sits at the rail on an idle cloud box (about 300–345 CPU-s at
+// both 2026-11-02 and 2026-11-04 master, byte-identical ELF), tac's just
+// under, and a slower box takes several more across: the 2026-11-03 and
+// 2026-11-04 master reds (issues/native-sort-gate-rail.md). They keep the
+// address-space cap; the CPU rail is three times the default until a cheaper
+// certificate brings the tools back under it.
+export const CPU_RAIL_OVERRIDES = new Map([["native_cat", 900], ["native_tools", 900]]);
+export function cpuRail(name) { return CPU_RAIL_OVERRIDES.get(name) ?? CPU_RAIL_SECONDS; }
 
 export function parseArtifacts(text, root = process.cwd()) {
   const seen = new Set();
@@ -60,6 +71,86 @@ export function parseArtifacts(text, root = process.cwd()) {
 }
 
 export const EXCLUSIVE_TARGETS = new Set(["frontend_bench_smoke"]);
+
+// Targets whose run builds a store other targets read, each with the targets
+// that read it. The library gate (crates/cli/tests/library.rs) builds the CLI
+// image store, and native_cat/native_tools's `write-elf` replays its closure
+// from it (every module is keyed by its own closure,
+// docs/module-dag-design.md); cold, one `write-elf` would build that closure
+// itself, past the CPU rail. So a prerequisite starts first and its readers
+// wait, while every other target fills the slots it leaves idle. A
+// prerequisite the run does not hold blocks nothing.
+//
+// A reader needs only the images its own loads replay, not the whole gate:
+// `built` names the folders whose loads cover them (every file the native
+// targets hand to `write-elf` is in one, and `write-elf`'s fixed imports,
+// `WRITE_ELF_IMPORTS`, are in lib/native's closure), and `store` the image
+// store. While the prerequisite runs, the runner asks `heather check
+// --unbuilt` (BuildPlan, docs/module-dag-design.md §12: image headers only,
+// nothing elaborated) every PROBE_SECONDS, and releases the readers as soon
+// as nothing there is unbuilt; if that never happens they start when the
+// prerequisite finishes, pass or fail, as before. Warm, the first probe
+// releases them.
+// scripts/test used to run the gate alone as a warmup before this phase and
+// then again here as a test (issues/library-gate-warmup-runs-alone.md).
+// `built` is mirrored by the library gate's `--build-first` (crates/cli/tests/library.rs).
+export const PREREQUISITES = new Map([["library", {
+  readers: ["native_cat", "native_tools"],
+  built: ["lib/native", "lib/_tests/native"],
+  store: "cli-check-images",
+}]]);
+const PROBE_SECONDS = 10;
+
+// Schedule order: prerequisites first, exclusive targets last, the rest
+// slowest-first by the latest history; each target gets `after`, the
+// prerequisites in this run it waits for.
+export function orderTargets(targets, history = new Map()) {
+  const present = new Set(targets.map((t) => t.name));
+  const waits = new Map();
+  for (const [before, { readers }] of PREREQUISITES) {
+    if (!present.has(before)) continue;
+    for (const reader of readers) waits.set(reader, [...(waits.get(reader) ?? []), before]);
+  }
+  const ordered = targets.map((t) => ({ ...t, after: waits.get(t.name) ?? [] }));
+  const rank = (t) => (t.exclusive ? 2 : PREREQUISITES.has(t.name) ? 0 : 1);
+  ordered.sort((a, b) => rank(a) - rank(b)
+    || (history.get(b.label) ?? 0) - (history.get(a.label) ?? 0) || a.label.localeCompare(b.label));
+  return ordered;
+}
+
+// The `heather` binary the test targets run (`CARGO_BIN_EXE_heather`): the
+// manifest's non-test artifact of the bin target, or null.
+export function binaryOf(text, name) {
+  for (const line of text.split("\n")) {
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (msg.reason === "compiler-artifact" && msg.executable && !msg.profile?.test
+      && msg.target?.name === name && msg.target.kind.includes("bin")) return msg.executable;
+  }
+  return null;
+}
+
+// The probe's command: the modules of `built`'s loads that `store` has no
+// image of, under the lane's image policy (the gate's and `write-elf`'s).
+// `store` names a store beneath target/, or beneath $HEATHER_CACHE_DIR when it
+// is set, as the gate's own path does (heather_cache::store_root).
+export function probeArgs({ built, store }, env = process.env) {
+  const stale = env.HEATHER_SEMANTIC_IMAGES === "accept-stale" ? ["--accept-stale-images"] : [];
+  return ["check", "--cache-dir", storePath(store, env), ...stale, "--unbuilt", ...built];
+}
+
+export function storePath(store, env = process.env) {
+  return `${env.HEATHER_CACHE_DIR || "target"}/${store}`;
+}
+
+// Resolves to true when the probe found nothing unbuilt (exit 0); a refusal,
+// a crash or a missing binary is not ready.
+function probe(heather, prerequisite) {
+  return new Promise((resolve) => {
+    execFile(heather, probeArgs(prerequisite), { cwd: process.cwd(), maxBuffer: 1024 * 1024, timeout: 120_000,
+      env: { ...process.env, HEATHER_KERNEL_WORKERS: "1" } }, (error) => resolve(!error));
+  });
+}
 
 // A family binary (`family_*`, crates/elab/Cargo.toml) links several test
 // files into one executable to save the links, not to share a process: it
@@ -111,13 +202,41 @@ export function listingArgs(libtestArgs) {
   return out;
 }
 
-function expandFamilies(artifacts, libtestArgs) {
+// `members` (the pr lane's selection, scripts/affected-targets.mjs) maps a
+// family to the members it chose to skip. A shard it does not name runs:
+// the selector only skips what it knows the inputs of.
+function expandFamilies(artifacts, libtestArgs, members = new Map()) {
   return artifacts.flatMap((artifact) => {
     if (!isFamily(artifact)) return [artifact];
     const listing = execFileSync(artifact.executable, ["--list", "--format", "terse", ...listingArgs(libtestArgs)],
       { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-    return familyShards(artifact, listing);
+    return selectShards(familyShards(artifact, listing), members.get(artifact.name));
   });
+}
+
+export function selectShards(shards, skip) {
+  return skip ? shards.filter((shard) => !skip.has(shard.name)) : shards;
+}
+
+// `family\tmember\trun|skip` lines, kept as each family's skipped members.
+export function parseMembers(text) {
+  const members = new Map();
+  for (const line of text.split("\n")) {
+    const [family, member, verdict] = line.split("\t");
+    if (!family || !member || verdict !== "skip") continue;
+    if (!members.has(family)) members.set(family, new Set());
+    members.get(family).add(member);
+  }
+  return members;
+}
+
+// The doc-test phase's command: every package (`*`), the listed ones, or
+// none (null) when the pr lane's selection left out every package.
+export function docTestArgs(packages, libtestArgs) {
+  const tail = ["--doc", "--", ...libtestArgs];
+  if (packages === null || packages.includes("*")) return ["test", "--workspace", "--exclude", "heather-elab-unit", ...tail];
+  const named = packages.filter((p) => p !== "heather-elab-unit");
+  return named.length ? ["test", ...named.flatMap((p) => ["-p", p]), ...tail] : null;
 }
 
 // A shard's per-test rows keep the names its file's own binary reported, so
@@ -295,9 +414,9 @@ const KERNEL_WORKERS = process.env.HEATHER_KERNEL_WORKERS ?? "1";
 // died of a signal is re-raised on the wrapper, so the runner still sees
 // `signal=SIGKILL` for a rail kill exactly as it did with `exec`.
 export const CPU_MARKER = "heather-test-target-cpu";
-export function limitedCommand(command, args, env = {}) {
+export function limitedCommand(command, args, env = {}, rail = CPU_RAIL_SECONDS) {
   return spawn("bash", ["--noprofile", "--norc", "-c",
-    `ulimit -v ${LIMIT_KIB}; ulimit -t ${CPU_RAIL_SECONDS}; ` +
+    `ulimit -v ${LIMIT_KIB}; ulimit -t ${rail}; ` +
     `TIMEFORMAT='${CPU_MARKER} user=%U sys=%S'; time \"$@\"; s=$?; ` +
     `if (( s > 128 )); then kill -$((s - 128)) $$; fi; exit $s`,
     "heather-test-target", command, ...args], {
@@ -372,25 +491,62 @@ function readOwnCgroupValue(name) {
   }
 }
 
-export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}) {
+// `ready(prerequisite)` resolves to whether its readers may start before it
+// finishes (`probe` over the manifest's `heather`; none, they never do),
+// asked every `probeSeconds`.
+export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}, ready = null, probeSeconds = PROBE_SECONDS) {
   const pending = [...targets];
   const completed = [];
+  const finished = new Set();
+  // Prerequisites whose readers were released before they finished.
+  const released = new Set();
+  const probing = new Set();
+  const timers = new Set();
   let active = 0;
   let failed = false;
   return new Promise((resolve) => {
+    // Ask again in `probeSeconds` while `name` runs and a reader still waits.
+    const watch = (name) => {
+      if (!ready || probing.has(name) || !PREREQUISITES.get(name)?.built) return;
+      probing.add(name);
+      const ask = async () => {
+        const waiting = () => !finished.has(name) && !released.has(name)
+          && pending.some((t) => (t.after ?? []).includes(name));
+        if (!waiting()) return;
+        if (await ready(name) && waiting()) {
+          released.add(name);
+          const readers = pending.filter((t) => (t.after ?? []).includes(name)).map((t) => t.name);
+          process.stdout.write(`[ready] ${name}: ${PREREQUISITES.get(name).built.join(", ")} built; ${readers.join(", ")} may start\n`);
+          pump();
+          return;
+        }
+        const timer = setTimeout(() => { timers.delete(timer); ask(); }, probeSeconds * 1000);
+        timers.add(timer);
+      };
+      ask();
+    };
     const pump = () => {
-      if ((!pending.length || (failed && !keepGoing)) && active === 0) return resolve(completed);
+      if ((!pending.length || (failed && !keepGoing)) && active === 0) {
+        for (const timer of timers) clearTimeout(timer);
+        return resolve(completed);
+      }
       while (active < jobs && pending.length && !(failed && !keepGoing)) {
-        if (pending[0].exclusive && active > 0) break;
-        const target = pending.shift();
-        if (target.exclusive && active !== 0) { pending.unshift(target); break; }
+        // The first target whose prerequisites have finished or released it;
+        // with nothing running and nothing ready, the head, so a cycle
+        // cannot hang.
+        let index = pending.findIndex((t) => (t.after ?? []).every((name) => finished.has(name) || released.has(name)));
+        if (index < 0 && active === 0) index = 0;
+        if (index < 0) break;
+        if (pending[index].exclusive && active > 0) break;
+        const [target] = pending.splice(index, 1);
         active++;
+        if (PREREQUISITES.has(target.name)) watch(target.name);
         process.stdout.write(`[start ${completed.length + active}/${targets.length}] ${target.label}${target.exclusive ? " (exclusive)" : ""}\n`);
         const started = process.hrtime.bigint();
         const args = [...libtestArgs, ...(target.args ?? [])];
         const command = TEST_TIMES
-          ? limitedCommand(target.executable, timedLibtestArgs(args), { RUSTC_BOOTSTRAP: "1", ...extraEnv })
-          : limitedCommand(target.executable, args, extraEnv);
+          ? limitedCommand(target.executable, timedLibtestArgs(args), { RUSTC_BOOTSTRAP: "1", ...extraEnv }, cpuRail(target.name))
+          : limitedCommand(target.executable, args, extraEnv, cpuRail(target.name));
         collect(command).then((run) => {
           run.wall = Number(process.hrtime.bigint() - started) / 1e9;
           run.target = target;
@@ -399,6 +555,7 @@ export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv
           run.result = parseResults(run.output);
           if (run.code !== 0 || run.signal || run.result.resultLines !== 1) failed = true;
           completed.push(run);
+          finished.add(target.name);
           active--;
           process.stdout.write(completionMessage(run, completed.length, targets.length));
           pump();
@@ -424,6 +581,9 @@ async function main() {
   const manifest = take("--manifest");
   const timingsPath = take("--timings");
   const jobsRequested = take("--jobs");
+  const optional = (flag) => (args.includes(flag) ? take(flag) : null);
+  const membersPath = optional("--members");
+  const docPackagesPath = optional("--doc-packages");
   const keepGoingIndex = args.indexOf("--keep-going");
   const keepGoing = keepGoingIndex >= 0;
   if (keepGoing) args.splice(keepGoingIndex, 1);
@@ -437,12 +597,10 @@ async function main() {
   const jobs = bounds.jobs;
   const history = loadHistory(timingsPath);
   const artifacts = parseArtifacts(readFileSync(manifest, "utf8"));
-  const targets = expandFamilies(artifacts, libtestArgs);
-  targets.sort((a, b) => {
-    if (a.exclusive !== b.exclusive) return a.exclusive ? 1 : -1;
-    return (history.get(b.label) ?? 0) - (history.get(a.label) ?? 0) || a.label.localeCompare(b.label);
-  });
-  if (!targets.length) throw new Error("Cargo manifest contained no test executables");
+  const members = membersPath ? parseMembers(readFileSync(membersPath, "utf8")) : new Map();
+  const targets = orderTargets(expandFamilies(artifacts, libtestArgs, members), history);
+  // The pr lane's selection may leave a family no member its skips keep.
+  if (!targets.length && !membersPath) throw new Error("Cargo manifest contained no test executables");
   console.log(`\n== test targets: ${targets.length} (${artifacts.length} binaries), ${jobs}-way bound (${jobs * LIMIT_KIB / 1024 / 1024} GiB maximum child address space) ==`);
   const reserveGib = (bounds.reserveKib / 1024 / 1024).toFixed(1);
   if (bounds.automatic) {
@@ -459,8 +617,10 @@ async function main() {
     mkdirSync(declsDir, { recursive: true });
     console.log(`declaration rows per test thread go to ${declsDir}/ (HEATHER_SUITE_DECLS)`);
   }
+  const heather = binaryOf(readFileSync(manifest, "utf8"), "heather");
+  const ready = heather ? (name) => probe(heather, PREREQUISITES.get(name)) : null;
   const runs = await runTargets(targets, jobs, libtestArgs, keepGoing,
-    declsDir ? { HEATHER_TIMINGS_DIR: resolve(declsDir) } : {});
+    declsDir ? { HEATHER_TIMINGS_DIR: resolve(declsDir) } : {}, ready);
   // Complete target blocks are emitted in stable label order, never interleaved.
   runs.sort((a, b) => a.target.label.localeCompare(b.target.label));
   for (const run of runs) {
@@ -482,20 +642,24 @@ async function main() {
 
   // Cargo remains responsible for doctest discovery. Its rustdoc children
   // inherit the same rails, and Cargo runs this phase serially.
-  console.log("\n== doc tests (serial) ==");
   // `heather-elab-unit` is elab's sources again, for its unit tests only
   // (`doctest = false`, which `--doc` does not honour): documenting it would
   // compile a second full O3 rlib of the elaborator after every elab edit,
   // for no doc test (issues/suite-iteration-chokepoints-2026-10.md).
-  const doc = await collect(limitedCommand("cargo", ["test", "--workspace", "--exclude", "heather-elab-unit", "--doc", "--", ...libtestArgs]));
-  process.stdout.write(doc.output);
-  const docResult = parseResults(doc.output);
-  merge(total, docResult);
-  if (doc.signal || docResult.resultLines === 0 || (doc.code !== 0 && docResult.failed === 0)) incomplete = true;
-
-  const docCpu = parseCpu(doc.output).cpu;
+  const docPackages = docPackagesPath ? readFileSync(docPackagesPath, "utf8").split("\n").filter(Boolean) : null;
+  const docArgs = docTestArgs(docPackages, libtestArgs);
   const timingRows = runs.map((run) => [run.result.duration || run.wall, run.target.label, run.cpu]);
-  timingRows.push([docResult.duration, "doc-tests", docCpu]);
+  if (docArgs) {
+    console.log("\n== doc tests (serial) ==");
+    const doc = await collect(limitedCommand("cargo", docArgs));
+    process.stdout.write(doc.output);
+    const docResult = parseResults(doc.output);
+    merge(total, docResult);
+    if (doc.signal || docResult.resultLines === 0 || (doc.code !== 0 && docResult.failed === 0)) incomplete = true;
+    timingRows.push([docResult.duration, "doc-tests", parseCpu(doc.output).cpu]);
+  } else {
+    console.log("\n== doc tests: none selected ==");
+  }
   timingRows.sort((a, b) => b[0] - a[0]);
   console.log(`\n== slowest test targets (reported test time; CPU = user+sys against the ${CPU_RAIL_SECONDS} s rail) ==`);
   const visible = timingRows.filter(([seconds]) => seconds >= 1).slice(0, 20);

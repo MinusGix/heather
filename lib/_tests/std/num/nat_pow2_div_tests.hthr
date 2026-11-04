@@ -1,0 +1,34 @@
+// `Nat::pow2_div` (lib/std/num/nat.hthr), `2^K / d` from a guessed quotient
+// that two comparisons check, is `ldiv` of `2^K` exactly: at a divisor of
+// one, a power of two (where the guessing loop's remainder would otherwise
+// reach the divisor), a float's unreduced denominator, a divisor wider than
+// a machine word, and divisors past `2^K` and past `K`'s own width. A wrong
+// guess falls back to `ldiv`'s quotient.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat;
+
+theorem pow2_div_one(): Nat::pow2_div(100, 1) = Nat::pow(2, 100).ldiv(1) { refl }
+theorem pow2_div_two(): Nat::pow2_div(100, 2) = Nat::pow(2, 100).ldiv(2) { refl }
+theorem pow2_div_three(): Nat::pow2_div(100, 3) = Nat::pow(2, 100).ldiv(3) { refl }
+theorem pow2_div_pow_two(): Nat::pow2_div(100, 1024) = Nat::pow(2, 100).ldiv(1024) { refl }
+theorem pow2_div_float_den(): Nat::pow2_div(128, 31525197391593472) = Nat::pow(2, 128).ldiv(31525197391593472) { refl }
+theorem pow2_div_wide(): Nat::pow2_div(200, 987654321987654321987654321) = Nat::pow(2, 200).ldiv(987654321987654321987654321) { refl }
+theorem pow2_div_over(): Nat::pow2_div(10, 1000) = Nat::pow(2, 10).ldiv(1000) { refl }
+theorem pow2_div_equal(): Nat::pow2_div(10, 1024) = Nat::pow(2, 10).ldiv(1024) { refl }
+theorem pow2_div_short(): Nat::pow2_div(3, 1024) = Nat::pow(2, 3).ldiv(1024) { refl }
+
+// The guess itself is the quotient, so the check keeps it and `ldiv` never runs.
+theorem guess_one(): Nat::pow2_div_guess(100, 1) = 1267650600228229401496703205376 { refl }
+theorem guess_two(): Nat::pow2_div_guess(100, 2) = 633825300114114700748351602688 { refl }
+theorem guess_three(): Nat::pow2_div_guess(100, 3) = 422550200076076467165567735125 { refl }
+theorem guess_pow_two(): Nat::pow2_div_guess(100, 1024) = 1237940039285380274899124224 { refl }
+theorem guess_float_den(): Nat::pow2_div_guess(128, 31525197391593472) = 10793980532273474774162 { refl }
+theorem guess_wide(): Nat::pow2_div_guess(200, 987654321987654321987654321) = 1627024768164865074571948152704065 { refl }
+theorem guess_over(): Nat::pow2_div_guess(10, 1000) = 1 { refl }
+theorem guess_equal(): Nat::pow2_div_guess(10, 1024) = 1 { refl }
+
+// A right guess is kept, a wrong one falls back to `ldiv`'s quotient.
+theorem div_checked_right(): Nat::div_checked(100, 7, 14) = MkDivMod(14, 2) { refl }
+theorem div_checked_low(): Nat::div_checked(100, 7, 13) = MkDivMod(14, 2) { refl }
+theorem div_checked_high(): Nat::div_checked(100, 7, 15) = MkDivMod(14, 2) { refl }

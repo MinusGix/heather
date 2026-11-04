@@ -170,8 +170,8 @@ impl Mover<'_> {
                         .collect::<Result<Vec<_>, RelocationRefusal>>()
                 };
                 let ctors = moved(&codes.ctors)?;
-                let tails = moved(&codes.tails)?;
-                DeltaEvent::GenSpineCodes { tag: *tag, codes: SpineCodes { ctors, tails }, at: self.scope32(*at)? }
+                let nodes = moved(&codes.nodes)?;
+                DeltaEvent::GenSpineCodes { tag: *tag, codes: SpineCodes { ctors, nodes }, at: self.scope32(*at)? }
             }
             // The inline copy and the arity are cut from the lowering, like
             // the copies above; the decoded copy is `El` of `D#shape`'s body,
@@ -217,6 +217,7 @@ impl Mover<'_> {
             | DeltaEvent::Instance { .. }
             | DeltaEvent::Designation { .. }
             | DeltaEvent::Evidence(_)
+            | DeltaEvent::Interface { .. }
             | DeltaEvent::Repr { .. }
             | DeltaEvent::Impl { .. }
             | DeltaEvent::Access { .. }
@@ -297,6 +298,20 @@ impl ModuleDelta {
             items,
             warnings: self.warnings.clone(),
             scope_at_entry: self.scope_at_entry.clone(),
+        })
+    }
+
+    /// The same delta over another dependency prefix of the same length,
+    /// unrewritten: for an image decoded against a placeholder prefix
+    /// (`docs/module-dag-design.md` §4) when the world it is loaded into puts
+    /// every module of its closure where its own canonical world did, so the
+    /// move is the identity. The caller vouches for that; the replay
+    /// rechecks every binding against the prefix it is given either way.
+    /// `None` when the lengths differ.
+    pub fn over_prefix(&self, dependency_psi: GlobalCtx) -> Option<ModuleDelta> {
+        (dependency_psi.bindings.len() == self.dependency_psi.bindings.len()).then(|| ModuleDelta {
+            dependency_psi,
+            ..self.clone()
         })
     }
 
@@ -403,12 +418,12 @@ impl RegistryPart {
                     let blank = |parts: &[(Rc<Type>, heather_kernel::level::Level)]| {
                         parts.iter().map(|(_, l)| (Rc::new(Type::Nat), l.clone())).collect::<Vec<_>>()
                     };
-                    for (ty, _) in codes.ctors.iter().chain(&codes.tails) {
+                    for (ty, _) in codes.ctors.iter().chain(&codes.nodes) {
                         hashes.push(h.ty(*at as usize, ty)?);
                     }
                     DeltaEvent::GenSpineCodes {
                         tag: *tag,
-                        codes: SpineCodes { ctors: blank(&codes.ctors), tails: blank(&codes.tails) },
+                        codes: SpineCodes { ctors: blank(&codes.ctors), nodes: blank(&codes.nodes) },
                         at: 0,
                     }
                 }

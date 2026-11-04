@@ -1,0 +1,114 @@
+// Probes of a case split inside structural recursion
+// (issues/recursion-guard-takes-nearest-parameter-match.md): a nested `match`
+// on a parameter that no self-call descends through is a case split, and the
+// enclosing `match` stays the recursion. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list;
+
+// The issue's shape: `d` descends, `n` is passed unchanged under a split on it.
+fn walk(d: Nat, n: Nat) → Nat {
+    match d { Zero => 0, Succ(k) => match n {
+        Zero => walk(k, n), Succ(_) => Succ(walk(k, n)) } }
+}
+theorem walk_lit(): walk(24, 3) = 24 { refl }
+theorem walk_at_zero(): walk(5, 0) = 0 { refl }
+
+// An accumulator split: the calls pass `1` and `Succ(acc)` at the split's
+// parameter, which varies it (generalized at the recursion) without
+// descending through the split.
+fn go(fuel: Nat, acc: Nat) → Nat {
+    match fuel { Zero => acc, Succ(k) => match acc {
+        Zero => go(k, 1), Succ(_) => go(k, Succ(acc)) } }
+}
+theorem go_lit(): go(3, 0) = 3 { refl }
+theorem go_from(): go(2, 7) = 9 { refl }
+
+// The outer recursion's own predecessor passed at the split parameter: still
+// the outer recursion, with `n` varied.
+fn twin(d: Nat, n: Nat) → Nat {
+    match d { Zero => n, Succ(k) => match n {
+        Zero => twin(k, k), Succ(_) => twin(k, n) } }
+}
+theorem twin_lit(): twin(3, 0) = 2 { refl }
+theorem twin_kept(): twin(3, 5) = 5 { refl }
+
+// A recursion on a list with a split on a `Bool` parameter (the declared-data
+// route), and a split under it on a `Nat` one.
+fn pick<A>(xs: List<A>, b: Bool, n: Nat) → Nat {
+    match xs { Nil => n, Cons(_, t) => match b {
+        True => pick(t, b, n), False => match n {
+            Zero => pick(t, b, n), Succ(_) => Succ(pick(t, b, n)) } } }
+}
+theorem pick_true(): pick<Nat>([1, 2, 3], True, 4) = 4 { refl }
+theorem pick_false(): pick<Nat>([1, 2, 3], False, 4) = 7 { refl }
+
+// Open: where the enclosing ih's type mentions the split parameter (a theorem
+// about it), the split refines the goal in each arm and not the ih, so the
+// split stays the recursion and is refused as before
+// (issues/recursion-case-split-dependent-ih.md).
+// expect-error: argument `n` has to be `_`
+theorem walk_shape(d: Nat, n: Nat): walk(d, n) = (match n { Zero => 0, Succ(_) => d }) {
+    match d { Zero => match n { Zero => refl, Succ(_) => refl }, Succ(k) => match n {
+        Zero => walk_shape(k, n), Succ(_) => Nat::cong(λ (w: Nat) => Succ(w), walk_shape(k, n)) } }
+}
+
+// A split whose arm descends through it is still the recursion, at its own
+// parameter.
+fn under(d: Nat, n: Nat) → Nat {
+    match n { Zero => d, Succ(m) => match d {
+        Zero => under(d, m), Succ(_) => Succ(under(d, m)) } }
+}
+theorem under_lit(): under(1, 3) = 4 { refl }
+
+// A call that descends through neither `match` is still refused, and the
+// refusal names both: the recursion on `d` and the split on `n`.
+// expect-error: The `match` on `n` inside it is not the recursion
+fn neither(d: Nat, n: Nat) → Nat {
+    match d { Zero => 0, Succ(k) => match n {
+        Zero => neither(d, n), Succ(_) => neither(d, n) } }
+}
+
+// The outermost `match` is a case split too when no self-call descends
+// through it and one does through a `match` on another parameter inside it
+// (issues/recursion-outer-match-takes-guard-without-descent.md).
+fn inner(d: Nat, n: Nat) → Nat {
+    match d { Zero => 0, Succ(_) => match n {
+        Zero => d, Succ(m) => inner(d, m) } }
+}
+theorem inner_lit(): inner(2, 5) = 2 { refl }
+theorem inner_at_zero(): inner(0, 5) = 0 { refl }
+theorem inner_is_d(d: Nat, n: Nat): inner(d, n) = d {
+    match d { Zero => refl, Succ(_) => match n {
+        Zero => refl, Succ(m) => inner_is_d(d, m) } }
+}
+
+// With no `match` inside to be the recursion, a lone one stays the guard and
+// its refusal names its predecessor.
+// expect-error: argument `n` has to be `k`
+fn lone(n: Nat) → Nat { match n { Zero => 0, Succ(k) => lone(n) } }
+
+// A branch above the recursion on a parameter its calls change is decided by
+// the top call and skipped by every recursive one, so it is refused, whether
+// the branch is a `match` on the parameter, an `if` or a computed scrutinee
+// (issues/recursion-branch-on-varied-parameter.md).
+// expect-error: sits under a branch that depends on `d`
+fn split_varied(d: Nat, xs: List<Nat>) → Nat {
+    match d { Zero => 0, Succ(_) => match xs {
+        Nil => 7, Cons(x, t) => split_varied(x, t) } }
+}
+// expect-error: sits under a branch that depends on `d`
+fn if_varied(d: Nat, xs: List<Nat>) → Nat {
+    if d = 0 { 0 } else { match xs { Nil => 7, Cons(x, t) => if_varied(x, t) } }
+}
+// expect-error: sits under a branch that depends on `d`
+fn bit_varied(d: Nat, xs: List<Nat>) → Nat {
+    match decide_bit<d = 0>() { True => 0, False => match xs {
+        Nil => 7, Cons(x, t) => bit_varied(x, t) } }
+}
+// The same branch over a parameter the calls pass unchanged is fine.
+fn split_kept(d: Nat, xs: List<Nat>) → Nat {
+    match d { Zero => 0, Succ(_) => match xs {
+        Nil => 7, Cons(_, t) => split_kept(d, t) } }
+}
+theorem split_kept_lit(): split_kept(1, [3, 0, 4]) = 7 { refl }
+theorem split_kept_zero(): split_kept(0, [3]) = 0 { refl }

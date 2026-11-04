@@ -204,3 +204,22 @@ theorem ripple_is_add_by_definition(n: Nat, x, y: BitVec(n)):
 // The wrong values, as `¬` theorems.
 theorem five_is_not_six(): ¬(@BitVec::toNat(3, @BitVec::from_bits(3, [True, False, True])) = 6) { decide }
 theorem one_plus_one_does_not_carry(h: @BitVec::carry_add(4, @BitVec::ofNat(4, 1), @BitVec::ofNat(4, 1))): False { h }
+
+// `ofNat` at closed arguments is born one word in the kernel
+// (docs/bitvector-literal-entry-design.md §10.10): at a literal and at a
+// computed state, a full asymmetric 64-bit value, a width past one word and a
+// numeral past `u64`, each against independently written bits — and the
+// distinctness the word must keep.
+theorem of_nat_byte_bits(): @BitVec::ofNat(8, 0xc5) =
+    @BitVec::from_bits(8, [True, False, True, False, False, False, True, True]) { refl }
+theorem of_nat_computed_state(): @BitVec::ofNat(8, 0x40 + 0x85) = @BitVec::ofNat(8, 0xc5) { refl }
+theorem of_nat_word(): @BitVec::toNat(64, @BitVec::ofNat(64, 0x0123456789abcdef)) = 0x0123456789abcdef { refl }
+theorem of_nat_past_a_word(): @BitVec::toNat(70, @BitVec::ofNat(70, 0x2dfedcba9876543210)) = 0x2dfedcba9876543210 { refl }
+theorem of_nat_wide_numeral(): @BitVec::toNat(8, @BitVec::ofNat(8, 0x10000000000000000000000000000000000c5)) = 0xc5 { refl }
+theorem of_nat_neutral(x: Nat): @BitVec::ofNat(8, x) = @BitVec::ofNat(8, x) { refl }
+theorem of_nat_checked(): @BitVec::toNat(16, { let w: BitVec(16) = @BitVec::ofNat(16, 0xbeef); w }) = 0xbeef { refl }
+fn equal_word(a, b: BitVec(64)) -> Bool {
+    match @bitvec::BitVec::eq_dec(64, a, b) { Inl(_) => True, Inr(_) => False }
+}
+theorem of_nat_distinct(): equal_word(@BitVec::ofNat(64, 0x401000), @BitVec::ofNat(64, 0x401008)) = False { refl }
+theorem of_nat_same(): equal_word(@BitVec::ofNat(64, 0x401000 + 8), @BitVec::ofNat(64, 0x401008)) = True { refl }

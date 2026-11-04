@@ -52,6 +52,17 @@ inductive Node {
     UnsignedLessThan(width: Nat, output: Nat, left: Nat, right: Nat),
     SignedLessThan(width: Nat, output: Nat, left: Nat, right: Nat),
     Equal(width: Nat, output: Nat, left: Nat, right: Nat),
+    // A buffer's byte, on the region's state edge
+    // (docs/native-effect-source-design.md §6; issues/native-source-bytes.md):
+    // the byte at the 64-bit word `index` of buffer `buffer`, zero-extended
+    // to a word, or zero past the buffer's end.
+    BufferLoad(output: Nat, buffer: Nat, index: Nat),
+    // The word `value`'s low byte stored at `index` of `buffer` where the
+    // buffer has one, nothing past its end; `output` the byte then there, as
+    // `BufferLoad` reads it. What either does to a buffer is the state evaluation
+    // threads (`function_ir_state`); the equations below say nothing of
+    // buffers, so they leave both outputs free.
+    BufferStore(output: Nat, buffer: Nat, index: Nat, value: Nat),
 }
 
 record Region {
@@ -75,6 +86,8 @@ fn node_output(node: Node) → Port {
         UnsignedLessThan(_, output, _, _) => Port(output, 1),
         SignedLessThan(_, output, _, _) => Port(output, 1),
         Equal(_, output, _, _) => Port(output, 1),
+        BufferLoad(output, _, _) => Port(output, 64),
+        BufferStore(output, _, _, _) => Port(output, 64),
     }
 }
 
@@ -323,6 +336,10 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
             CompareNodeIndexed(directory, index, width, output, left, right),
         Equal(width, output, left, right) =>
             CompareNodeIndexed(directory, index, width, output, left, right),
+        BufferLoad(output, _, at) =>
+            UnaryImmediateNodeIndexed(directory, index, 64, output, at),
+        BufferStore(output, _, at, value) =>
+            BinaryNodeIndexed(directory, index, 64, output, at, value),
     }
 }
 
@@ -612,6 +629,8 @@ fn NodeHolds(values: Valuation(), node: Node) → Type {
         Equal(width, output, left, right) =>
             values(1, output) = BitVec::ofBool(
                 values(width, left).eq_bit(values(width, right))),
+        BufferLoad(_, _, _) => True,
+        BufferStore(_, _, _, _) => True,
     }
 }
 

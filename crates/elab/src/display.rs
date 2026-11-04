@@ -14,10 +14,16 @@
 //!
 //! Three invariants, each against a way this could go wrong:
 //!
-//! - **The diagnostic path never reduces.** No δ, no β, no whnf, no fuel. The one registry
+//! - **The diagnostic path never reduces.** No δ, no whnf, no fuel. The one registry
 //!   consultation is [`Elaborator::unspell_here`], which is a lookup rather
 //!   than a reduction. So this code cannot affect what is checked — a stronger
-//!   guarantee than the reader's, which at least spends steps.
+//!   guarantee than the reader's, which at least spends steps. The one
+//!   contraction is a β-redex's, at a node that would otherwise print raw: a
+//!   redex has no surface form, and a let-bound or instantiated λ at a head
+//!   leaves one in the types a mismatch note holds
+//!   (`issues/elab-accepts-mismatch-under-redex-head.md`). It is syntactic
+//!   substitution, charged to the same node budget, and only in the reading
+//!   flavours: the source flavours, whose output is re-parsed, still decline.
 //! - **Every node either spells or falls back to that node's `{:?}`.** There
 //!   is no whole-type cliff: an unspellable argument prints raw inside a call
 //!   that prints as a call. A raw node is truncated ([`RAW_NODE_CHARS`]) so
@@ -87,7 +93,7 @@ impl Elaborator {
     /// The first Ψ index past every binding the elaborator knows, where
     /// display-only placeholder globals start.
     pub(crate) fn placeholder_base(&self) -> u32 {
-        self.psi.bindings.len() as u32 + self.global_padding() + self.meta_pushed.borrow().len() as u32
+        self.psi.bindings.len() as u32 + self.global_padding() + self.scope.meta_pushed.borrow().len() as u32
     }
 
     /// A type mentioning placeholder globals (from [`Self::placeholder_base`]
@@ -218,7 +224,7 @@ struct Speller<'a> {
     /// `cx.names` extended with one entry per binder the walk has descended
     /// under, so a `Var` under a printed `Π` resolves to the name just chosen
     /// for it.
-    names: RefCell<Vec<String>>,
+    names: RefCell<crate::spine::Binders>,
     nodes: Cell<u32>,
     fallbacks: Cell<u32>,
     /// Spell globals so the result can be **re-parsed** rather than only read.
@@ -279,17 +285,22 @@ impl Speller<'_> {
     /// spelling here comes back to `t`.
     fn alias(&self, t: &Term) -> Option<String> {
         let names = self.names.borrow();
-        let aliases = &self.cx.aliases;
-        aliases.iter().enumerate().rev().find_map(|(k, a)| {
+        // Innermost first, so the aliases bound after `a` are the ones
+        // already passed.
+        let mut later_aliases: Vec<&str> = Vec::new();
+        self.cx.aliases.iter_inner().find_map(|a| {
+            let shadowed_by_alias = later_aliases.contains(&a.name.as_str());
+            later_aliases.push(&a.name);
             // A context can carry an alias bound deeper than its own names
             // (one cut back to a prefix); that alias is not in scope here.
-            let later = names.get(a.depth..)?;
-            let shadowed = later.iter().any(|n| *n == a.name)
-                || aliases[k + 1..].iter().any(|b| b.name == a.name);
+            let later = names.len().checked_sub(a.depth)?;
+            // The term first: it is the test that almost always fails.
+            if !shifted_projection(&a.term, later as u32, t) {
+                return None;
+            }
+            let shadowed = shadowed_by_alias || names.iter_inner().take(later).any(|n| n == a.name);
             let written = a.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
-            (written && !shadowed && crate::spelling::same_projection(
-                &a.term.shift_local((names.len() - a.depth) as u32), t,
-            )).then(|| a.name.clone())
+            (written && !shadowed).then(|| a.name.clone())
         })
     }
 
@@ -312,8 +323,8 @@ impl Speller<'_> {
     /// preference list not already in scope, else `x{n}`.
     fn fresh(&self) -> String {
         let names = self.names.borrow();
-        let used = |candidate: &str| names.iter().any(|n| n == candidate)
-            || self.cx.aliases.iter().any(|a| a.name == candidate);
+        let used = |candidate: &str| names.contains(candidate)
+            || self.cx.aliases.iter_inner().any(|a| a.name == candidate);
         for cand in ["x", "y", "z", "a", "b", "c"] {
             if !used(cand) {
                 return cand.to_string();
@@ -359,7 +370,7 @@ impl Speller<'_> {
 
     /// Spell `body` under one binder named `name`.
     fn under(&self, name: &str, body: &Type, d: u32) -> String {
-        self.names.borrow_mut().push(name.to_string());
+        self.names.borrow_mut().push(name, None);
         let s = self.ty(body, d + 1);
         self.names.borrow_mut().pop();
         s
@@ -394,6 +405,14 @@ impl Speller<'_> {
             && let Some(ind) = self.el.types.by_tag(tag)
             && let Some(source) = self.source_instance(&ind, &args, d)
         { return source; }
+        // A codata instance as a code (a type argument, `PreservesRelation<
+        // CoTree<R>(E), …>`) is spelled as the instance it decodes to.
+        if let Type::El { tm, .. } = ty
+            && matches!(**tm, Term::TmM { .. })
+            && let std::borrow::Cow::Owned(decoded) = crate::inductive::decoded(ty)
+        {
+            return self.ty(&decoded, d + 1);
+        }
         // A reference to a registered lowering is spelled through the
         // registry's inline copy, which is what `tag_of` recognizes.
         if let Some(inline) = self.el.unspell_here(ty) {
@@ -557,7 +576,12 @@ impl Speller<'_> {
             }
             Type::Fin { len } => format!("Fin({})", self.tm(len, d)),
             Type::Pi { dom, cod, .. } => {
-                let dom_s = self.ty(dom, d + 1);
+                // `->` associates to the right: a function domain is
+                // parenthesized, or `(A -> B) -> C` would read as `A -> B -> C`.
+                let dom_s = match &**dom {
+                    Type::Pi { .. } => format!("({})", self.ty(dom, d + 1)),
+                    _ => self.ty(dom, d + 1),
+                };
                 if self.dependent(cod, d) {
                     let name = self.fresh();
                     let cod_s = self.under(&name, cod, d);
@@ -592,11 +616,40 @@ impl Speller<'_> {
             && let Some(ind) = self.el.types.by_tag(tag)
             && let Some(source) = self.source_instance(&ind, &args, d)
         { return source; }
+        // A type constructor applied to only some of its type arguments, as
+        // a kinded carrier is — `Bind<Pair2<Bool, ·>>` — shows the arguments
+        // it fixes and a hole for each it leaves; the call spelling below
+        // drops type arguments, which leaves the bare name `Pair2`
+        // (issues/applied-meta-approximation-diagnostics.md). For a reader
+        // only: `·` re-parses as a section.
+        if !self.qualified
+            && !self.annotations
+            && let Some((crate::gendefs::GenDef::TyCodeFn(tag), args)) = self.el.gen_app_of(t)
+            && let Some(ind) = self.el.types.by_tag(tag)
+            && args.len() < ind.params.len()
+        {
+            let mut shown: Vec<String> = args
+                .iter()
+                .map(|a| self.ty(&Type::El { level: crate::Level::Zero, tm: Rc::clone(a) }, d + 1))
+                .collect();
+            shown.extend((args.len()..ind.params.len()).map(|_| "·".to_string()));
+            return format!("{}<{}>", ind.name, shown.join(", "));
+        }
         // `3`, not `S(S(S(0)))`.
         if let Some(k) = crate::inductive::nat_numeral(t) {
             return k.to_string();
         }
+        // `'h'`, not `ofNat(104, decide_yes(refl))`.
+        if let Some(c) = self.char_literal(t) {
+            let mut out = String::from("'");
+            escape_into(c, '\'', &mut out);
+            out.push('\'');
+            return out;
+        }
         match t {
+            // A codata instance's code, `λ a b => Eutt<R>(E, a, b)`'s body:
+            // the instance it decodes to.
+            Term::TmM { .. } => self.ty(&Type::El { level: heather_kernel::level::Level::Zero, tm: Rc::new(t.clone()) }, d + 1),
             Term::Var(LocalVar(i)) => self.var(*i).unwrap_or_else(|| self.raw_tm(t)),
             Term::Succ(p) => format!("Succ({})", self.tm(p, d + 1)),
             Term::Refl { .. } => "refl".to_string(),
@@ -607,7 +660,7 @@ impl Speller<'_> {
             Term::Lam { dom, body, .. } => {
                 let dom_s = self.ty(dom, d + 1);
                 let name = self.fresh();
-                self.names.borrow_mut().push(name.clone());
+                self.names.borrow_mut().push(name.as_str(), None);
                 let body_s = self.tm(body, d + 1);
                 self.names.borrow_mut().pop();
                 format!("λ ({name}: {dom_s}) => {body_s}")
@@ -638,6 +691,7 @@ impl Speller<'_> {
             Term::Fst { .. } | Term::FstAt { .. } => self
                 .alias(t)
                 .or_else(|| self.field_read(t, d))
+                .or_else(|| self.value_field_read(t, d))
                 .or_else(|| self.projection_reduct(t, d))
                 .unwrap_or_else(|| self.raw_tm(t)),
             Term::GlobalTm { var, subst } => self
@@ -690,22 +744,12 @@ impl Speller<'_> {
         }
     }
 
-    /// Walk a tier-0 value's injection path over `n` constructors: `Inr`
-    /// steps past a constructor, `Inl` selects one. The constructor's number
-    /// and its payload tuple.
+    /// Walk a tier-0 value's injection path over `n` constructors
+    /// ([`crate::spelling::inj_path`]): the constructor's number and its
+    /// payload tuple.
     fn inj_path<'t>(&self, label: &'t Term, n: usize) -> (usize, &'t Term) {
-        let mut i = 0usize;
-        let mut cur = label;
-        loop {
-            match crate::spelling::inj_of(cur) {
-                Some((false, val)) if i + 1 < n => {
-                    i += 1;
-                    cur = val;
-                }
-                Some((true, val)) => return (i, val),
-                _ => return (i, cur),
-            }
-        }
+        let path = crate::spelling::inj_path(label, n);
+        (path.ctor, path.at)
     }
 
     /// A lowered constructor value as `C(f₁, …)` — the shape a `match` arm's
@@ -718,6 +762,28 @@ impl Speller<'_> {
     /// can fail, none of which a display path may do. Anything that does not
     /// line up exactly declines, so the worst case is the raw form.
     fn ctor_value(&self, t: &Term, d: u32) -> Option<String> {
+        let (ind, i, fields) = self.ctor_fields(t)?;
+        let ctor = &ind.ctors[i];
+        let Some(fields) = fields else {
+            return Some(self.elided(format!("{}(…)", ctor.name)));
+        };
+        if let Some(literal) = self.literal_value(t, &ind, &fields, d) {
+            return Some(literal);
+        }
+        let shown: Vec<String> = fields.iter().map(|v| self.tm(v, d + 1)).collect();
+        Some(if shown.is_empty() {
+            ctor.name.clone()
+        } else {
+            format!("{}({})", ctor.name, shown.join(", "))
+        })
+    }
+
+    /// A lowered constructor value read back: its declaration, the
+    /// constructor's number, and its fields in declaration order — `None`
+    /// for the fields when the payload tuple does not read. The reading half
+    /// of [`Self::ctor_value`], which [`Self::literal_value`] also walks a
+    /// list's spine with.
+    fn ctor_fields(&self, t: &Term) -> Option<(Rc<crate::inductive::Inductive>, usize, Option<Vec<Rc<Term>>>)> {
         let (label, children, ind) = match t {
             Term::Supf {
                 shape,
@@ -763,6 +829,12 @@ impl Speller<'_> {
         // Walk the injection path: `Inr` steps past a constructor, `Inl`
         // selects one.
         let (i, cur) = self.inj_path(label, ind.ctors.len());
+        let fields = self.ctor_tuple(&ind, i, cur, children)?;
+        Some((ind, i, fields))
+    }
+
+    /// [`Self::ctor_fields`]'s tuples, read for constructor `i`.
+    fn ctor_tuple(&self, ind: &crate::inductive::Inductive, i: usize, cur: &Term, children: Option<&Term>) -> Option<Option<Vec<Rc<Term>>>> {
         let ctor = ind.ctors.get(i)?;
         // A container field is neither payload nor a plain child, and reading
         // it back means reading a vector: out of scope for a display.
@@ -772,7 +844,7 @@ impl Speller<'_> {
         let Some(payload) = crate::spelling::tuple_fields(
             self.el, self.cx, cur, 1, ctor.payload().count(), self.binders(),
         ) else {
-            return Some(self.elided(format!("{}(…)", ctor.name)));
+            return Some(None);
         };
         let kids = match children {
             Some(children) => crate::spelling::tuple_fields(
@@ -784,7 +856,7 @@ impl Speller<'_> {
         // Re-interleave into declaration order, which is the order the surface
         // writes the constructor's arguments in.
         let (mut a, mut b) = (0usize, 0usize);
-        let mut shown = Vec::with_capacity(ctor.fields.len());
+        let mut fields = Vec::with_capacity(ctor.fields.len());
         for k in 0..ctor.fields.len() {
             let v = if ctor.kind[k].is_child() {
                 b += 1;
@@ -793,13 +865,93 @@ impl Speller<'_> {
                 a += 1;
                 payload.get(a - 1)?
             };
-            shown.push(self.tm(v, d + 1));
+            fields.push(Rc::clone(v));
         }
-        Some(if shown.is_empty() {
-            ctor.name.clone()
-        } else {
-            format!("{}({})", ctor.name, shown.join(", "))
-        })
+        Some(Some(fields))
+    }
+
+    /// A value of one of the library's literal types spelled as the literal
+    /// that elaborates to it: `"hi"` for a `string::String` over character
+    /// literals, and `[1, 2]` for a standard `list::List` spine. Keyed on the
+    /// declarations' identities, as the literals themselves are
+    /// (issues/canonical-list-literal-identity.md), so a look-alike
+    /// declaration spells as its constructors, and a list whose tail is not
+    /// a constructor (`Cons(1, xs)`) stays a call. A list is a bracket only
+    /// when the spelling is for reading: `[…]` checks and never infers, so a
+    /// re-parsed `[1, 2] = xs` would not come back, and the source flavour
+    /// keeps `Cons`. A list longer than the walk's budget ends in `…`.
+    fn literal_value(&self, t: &Term, ind: &crate::inductive::Inductive, fields: &[Rc<Term>], d: u32) -> Option<String> {
+        if self.standard(ind, "string", "String") {
+            let [chars] = fields else { return None };
+            let mut out = String::from("\"");
+            for item in self.list_items(chars)? {
+                if !self.charge(d) {
+                    return None;
+                }
+                escape_into(self.char_literal(&item)?, '"', &mut out);
+            }
+            out.push('"');
+            return Some(out);
+        }
+        if self.qualified || !self.standard(ind, "list", "List") {
+            return None;
+        }
+        let mut shown = Vec::new();
+        for item in self.list_items(t)? {
+            if self.nodes.get() == 0 {
+                shown.push(self.elided("…".to_string()));
+                break;
+            }
+            shown.push(self.tm(&item, d + 1));
+        }
+        Some(format!("[{}]", shown.join(", ")))
+    }
+
+    /// Is `ind` the declaration `module::name`?
+    fn standard(&self, ind: &crate::inductive::Inductive, module: &str, name: &str) -> bool {
+        self.el.types.inductive(&crate::names::qkey(module, name)).is_some_and(|it| it.tag == ind.tag)
+    }
+
+    /// The elements of a standard list value spelled out to its `Nil`, or
+    /// `None` when a cell is anything else.
+    fn list_items(&self, t: &Term) -> Option<Vec<Rc<Term>>> {
+        let mut items = Vec::new();
+        let mut cur = Rc::new(t.clone());
+        loop {
+            let (ind, i, fields) = self.ctor_fields(&cur)?;
+            if !self.standard(&ind, "list", "List") {
+                return None;
+            }
+            match (ind.ctors.get(i)?.name.as_str(), fields?.as_slice()) {
+                ("Nil", []) => return Some(items),
+                ("Cons", [head, tail]) => {
+                    items.push(Rc::clone(head));
+                    cur = Rc::clone(tail);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// The character a `char::ofNat(code, bool::decide_yes(…))` call
+    /// builds — exactly the term a character literal elaborates to
+    /// (`literals.rs`). The proof must be that one: a `Char` carries its
+    /// `scalar` proof relevantly, so an `ofNat` at some other proof is not
+    /// the literal and spells as the call it is.
+    fn char_literal(&self, t: &Term) -> Option<char> {
+        let args = self.call_of(t, "char::ofNat")?;
+        let [code, proof] = args.as_slice() else { return None };
+        self.call_of(proof, "bool::decide_yes")?;
+        let code = crate::inductive::nat_numeral(code)?.as_u64()?;
+        char::from_u32(u32::try_from(code).ok()?)
+    }
+
+    /// `t`'s arguments when it is a call of the declaration `key`.
+    fn call_of<'t>(&self, t: &'t Term, key: &str) -> Option<Vec<&'t Rc<Term>>> {
+        let (head, args) = crate::spelling::app_spine(t);
+        let Term::GlobalTm { var, subst } = head else { return None };
+        let abs = self.el.global_abs_of(*var)?;
+        (subst.terms.is_empty() && self.el.global_qualified_name_at(abs)? == key).then_some(args)
     }
 
     /// `r.name` for a field read a record's declaration left inline. A closed
@@ -821,25 +973,7 @@ impl Speller<'_> {
         if self.binders() != 0 {
             return None;
         }
-        let (true, mut pair) = crate::spelling::proj_of(t)? else {
-            return None;
-        };
-        let mut entry = 0usize;
-        while let Some((false, inner)) = crate::spelling::proj_of(pair) {
-            entry += 1;
-            pair = inner;
-        }
-        let idx = entry.checked_sub(1)?;
-        let (head, _) = crate::spelling::app_spine(pair);
-        if !matches!(head, Term::Var(_) | Term::GlobalTm { .. }) && crate::spelling::proj_of(head).is_none() {
-            return None;
-        }
-        let span = heather_syntax::Span { start: 0, end: 0 };
-        let ty = self.el.spine_type(self.cx, pair, span)?;
-        let record = self.el.record_of_at(self.cx, &ty, span)?;
-        let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
-            return None;
-        };
+        let (pair, name) = self.el.field_read_parts(self.cx, t)?;
         let shown = self.tm(pair, d + 1);
         Some(if matches!(&**pair, Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
             || crate::spelling::proj_of(pair).is_some()
@@ -848,6 +982,44 @@ impl Speller<'_> {
         } else {
             format!("({shown}).{name}")
         })
+    }
+
+    /// A field read off a constructed record value
+    /// (issues/decreases-measure-record-field-unspelled.md): a `decreases`
+    /// measure `s.m` at the self-call `f(CdState(s.m - 1, …))` is
+    /// `fst(snd(pair(…)))`, whose receiver is no variable [`Self::field_read`]
+    /// can type, and whose weak head unfolds the field's value (`s.m - 1`)
+    /// on into `sub`'s eliminator. For reading it is the read as written,
+    /// `CdState(s.m - 1, …).m`; for a source spelling it is the field's value
+    /// itself — the component projected by syntax, which re-elaborates to a
+    /// term the read converts to by Σ-β alone. A component that does not
+    /// spell leaves the attempt to the routes after this one.
+    fn value_field_read(&self, t: &Term, d: u32) -> Option<String> {
+        let field = crate::spelling::project_value(t)?;
+        if self.qualified {
+            let before = self.fallbacks.get();
+            let shown = self.tm(field, d + 1);
+            if self.fallbacks.get() == before {
+                return Some(shown);
+            }
+            self.fallbacks.set(before);
+            return None;
+        }
+        let mut receiver = t;
+        while let Some((_, pair)) = crate::spelling::proj_of(receiver) {
+            receiver = pair;
+        }
+        let (ind, _, Some(fields)) = self.ctor_fields(receiver)? else {
+            return None;
+        };
+        if !ind.is_record {
+            return None;
+        }
+        let k = fields.iter().position(|v| Rc::ptr_eq(v, field) || **v == **field)?;
+        let (Some(name), _) = ind.ctors[0].fields.get(k)? else {
+            return None;
+        };
+        Some(format!("{}.{name}", self.ctor_value(receiver, d + 1)?))
     }
 
     /// A projection nothing above names, spelled as its bounded weak head —
@@ -916,7 +1088,19 @@ impl Speller<'_> {
     fn call(&self, t: &Term, d: u32) -> String {
         let (head, args) = match self.call_parts(t) {
             Some(parts) => parts,
-            None => return self.raw_tm(t),
+            // A β-redex has no surface spelling, and its contractum is the
+            // same type to every reader: a let-bound or instantiated λ at the
+            // head (`post(u)` with `post := λ u => P(u.memory)`) spells as
+            // what it stands for (issues/elab-accepts-mismatch-under-redex-head.md).
+            // Only for a reader: a source flavour's caller re-parses what it
+            // gets (omega's and ring's atoms, generated annotations), and a
+            // declined redex is part of what those routes decide on.
+            None => {
+                return match crate::spelling::beta_head(t).filter(|_| !self.qualified && !self.annotations) {
+                    Some(r) => self.tm(&r, d + 1),
+                    None => self.raw_tm(t),
+                };
+            }
         };
         let (name, implicit) = match head {
             CallHead::Field(name) => {
@@ -967,8 +1151,7 @@ impl Speller<'_> {
     /// of the scope this display knows about.
     fn var(&self, i: u32) -> Option<String> {
         let names = self.names.borrow();
-        let pos = names.len().checked_sub(1 + i as usize)?;
-        names.get(pos).cloned()
+        names.nth_inner(i as usize).map(str::to_string)
     }
 
     /// A global's written name and how each of its parameters is shown.
@@ -988,6 +1171,12 @@ impl Speller<'_> {
         // come back here.
         if self.qualified && !self.el.base_name_resolves_to(&name, abs) {
             name = self.el.global_qualified_name_at(abs)?;
+            // Nor the qualified one, from a module this one does not import:
+            // a spelling that does not re-parse here declines like any
+            // other unspellable node, and `omega` abstracts it.
+            if !self.el.base_name_resolves_to(&name, abs) {
+                return None;
+            }
         }
         let params = self.el.params_at(abs);
         // Spelling for re-parsing keeps an implicit that nothing written
@@ -1010,7 +1199,14 @@ impl Speller<'_> {
                     // determines it, so it is spelled by name in both modes
                     // (docs/named-arguments-design.md §9.6).
                     Shown::Named(p.name.clone())
-                } else if !self.qualified || p.solver.is_some() || determined.get(i).copied().unwrap_or(true) {
+                } else if !self.qualified
+                    || p.solver.is_some()
+                    || determined.get(i).copied().unwrap_or(true)
+                    // A class index a symbol slot introduced (`MonoidRel::range`'s
+                    // `≈`) has a generated name no call can write: a call fills
+                    // it from the symbol's designation, as the source did.
+                    || crate::traits::op_index_symbol(&p.name).is_some()
+                {
                     Shown::Hidden
                 } else {
                     Shown::Named(p.name.clone())
@@ -1057,6 +1253,44 @@ impl Elaborator {
         Some((head, args))
     }
 
+    /// A lowered constructor value as the tactic host's `View` presents it:
+    /// its declaration, the constructor's number, and its fields in
+    /// declaration order. The display's own reader ([`Speller::ctor_fields`]),
+    /// so what a diagnostic spells as `C(…)` is what a view presents.
+    pub(crate) fn view_ctor(&self, cx: &Cx, t: &Term) -> Option<(Rc<crate::inductive::Inductive>, usize, Vec<Rc<Term>>)> {
+        let (ind, i, fields) = self.speller(cx).ctor_fields(t)?;
+        Some((ind, i, fields?))
+    }
+
+    /// A field read a record's declaration left inline, `fst(snd(…(r)))`,
+    /// as the record value `r` and the field's name: the recogniser behind
+    /// the speller's `r.name` (`Speller::field_read`), shared with the tactic
+    /// host's `View`. The record is read off the receiver's spine type, so
+    /// only a receiver whose head is a variable, a global or another field
+    /// read is recognised, and only at `cx`'s own scope.
+    pub(crate) fn field_read_parts<'t>(&self, cx: &Cx, t: &'t Term) -> Option<(&'t Rc<Term>, String)> {
+        let (true, mut pair) = crate::spelling::proj_of(t)? else {
+            return None;
+        };
+        let mut entry = 0usize;
+        while let Some((false, inner)) = crate::spelling::proj_of(pair) {
+            entry += 1;
+            pair = inner;
+        }
+        let idx = entry.checked_sub(1)?;
+        let (head, _) = crate::spelling::app_spine(pair);
+        if !matches!(head, Term::Var(_) | Term::GlobalTm { .. }) && crate::spelling::proj_of(head).is_none() {
+            return None;
+        }
+        let span = heather_syntax::Span { start: 0, end: 0 };
+        let ty = self.spine_type(cx, pair, span)?;
+        let record = self.record_of_at(cx, &ty, span)?;
+        let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
+            return None;
+        };
+        Some((pair, name.clone()))
+    }
+
     /// For each of the first `count` parameters of the global at `abs`,
     /// whether a later **explicit** parameter's domain mentions it, so that
     /// elaborating the written arguments infers it. An explicit parameter
@@ -1089,6 +1323,41 @@ impl Elaborator {
     }
 }
 
+/// `c` as it is written between `quote`s: the lexer's named escapes, a
+/// control character as `\u{…}`, and everything else as itself.
+fn escape_into(c: char, quote: char, out: &mut String) {
+    match c {
+        '\n' => out.push_str("\\n"),
+        '\t' => out.push_str("\\t"),
+        '\r' => out.push_str("\\r"),
+        '\0' => out.push_str("\\0"),
+        '\\' => out.push_str("\\\\"),
+        c if c == quote => {
+            out.push('\\');
+            out.push(c);
+        }
+        c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", u32::from(c))),
+        c => out.push(c),
+    }
+}
+
+/// `spelling::same_projection(&alias.shift_local(by), t)` without the shift
+/// unless the paths agree: a weakening keeps a projection a projection and a
+/// node of one kind that kind, and moves a variable by `by`. The shift copies
+/// the alias, and a walk asks every alias in scope at every projection it
+/// spells (omega's certificate reads its atoms this way).
+fn shifted_projection(alias: &Term, by: u32, t: &Term) -> bool {
+    match (crate::spelling::proj_of(alias), crate::spelling::proj_of(t)) {
+        (Some((af, ap)), Some((tf, tp))) => af == tf && shifted_projection(ap, by, tp),
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => match (alias, t) {
+            (Term::Var(i), Term::Var(j)) => i.0.checked_add(by) == Some(j.0),
+            _ if std::mem::discriminant(alias) != std::mem::discriminant(t) => false,
+            _ => alias.shift_local(by) == *t,
+        },
+    }
+}
+
 /// Truncate a raw node's rendering. `fmt.rs` already bounds it by nodes; this
 /// bounds it by columns, which is the axis a diagnostic is read on.
 fn elide(s: &str) -> String {
@@ -1103,6 +1372,33 @@ fn elide(s: &str) -> String {
 mod tests {
     use super::*;
     use heather_kernel::level::Level;
+
+    /// The alias test without its copy answers what the copy did, on paths
+    /// that agree, that part where the shift moves the base, and that differ
+    /// in a field, in length or in the base's kind.
+    #[test]
+    fn a_shifted_projection_agrees_with_shifting_the_alias() {
+        let var = |i| Rc::new(Term::Var(LocalVar(i)));
+        let fst = |p: Rc<Term>| Rc::new(Term::FstAt { pair: p });
+        let snd = |p: Rc<Term>| Rc::new(Term::SndAt { pair: p });
+        let aliases = [var(0), fst(var(1)), snd(fst(var(0))), fst(Rc::new(Term::Zero)), snd(Rc::new(Term::Succ(var(2))))];
+        let subjects = [
+            var(0), var(3), fst(var(1)), fst(var(4)), snd(var(4)), fst(fst(var(4))), snd(fst(var(3))),
+            snd(fst(var(2))), fst(Rc::new(Term::Zero)), snd(Rc::new(Term::Succ(var(5)))), snd(Rc::new(Term::Succ(var(2)))),
+        ];
+        for alias in &aliases {
+            for t in &subjects {
+                for by in [0, 1, 3] {
+                    assert_eq!(
+                        shifted_projection(alias, by, t),
+                        crate::spelling::same_projection(&alias.shift_local(by), t),
+                        "{alias:?} shifted by {by} against {t:?}",
+                    );
+                }
+            }
+        }
+        assert!(shifted_projection(&snd(fst(var(0))), 3, &snd(fst(var(3)))));
+    }
 
     #[test]
     fn rough_parameter_types_elide_kernel_only_nodes_and_exhausted_budgets() {

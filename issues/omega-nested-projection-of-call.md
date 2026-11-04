@@ -1,10 +1,10 @@
 ---
 title: omega stops at a projection of a projection of a call
-status: open
+status: closed
 labels: [omega,proofs,elaboration,ergonomics]
 area: tactics
 created: 2026-10-14
-updated: 2026-10-14
+updated: 2026-10-26
 ---
 
 omega reads a field of a call that unfolds to a constructor
@@ -36,3 +36,13 @@ go away.
 ## Log
 
 - 2026-10-14: The repro's shape is gone with the shifted Pos ([[retire-shifted-pos]]): Rat::inv_succ(n).den is Succ(n), one projection, and both 'Rat::inv_succ(n).den.int() = OfNat(n) + OfNat(1)' and 'Rat::inv_succ(n).den = Succ(n)' now check by omega. A projection of a projection of a call is still unread in general; a new repro needs a record field holding a record. inv_succ_half keeps its refl lets because ring, not omega, consumes them (ring reads Nat::int(Succ(..)) as an atom).
+- 2026-10-26: LANDED. A current repro needed no record-in-record: `P::of(n).pred = n`
+  (one field, put as a variable) was stuck too, because the Nat side kept a
+  field only on an arithmetic head. omega now reads a field of a field through
+  up to eight receivers and, on Nat, a field put as a variable or applied
+  global; design in docs/omega-measure-reduction-design.md §12. Probes:
+  `lib/_tests/std/tactic/omega_tests.hthr`, eight rows that were all stuck before
+  (three receivers deep, Int goal and fact, checking position, a field put as
+  a stuck call) and three controls (a stuck call is not unfolded, a false
+  claim through nested fields is refused, a neutral record's field stays an
+  atom). `inv_succ_half` keeps its refl lets: ring, not omega, reads them.

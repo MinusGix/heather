@@ -86,9 +86,31 @@ An operation binder can install a local symbol in its own scope:
 fn associative<A>(op as ∙: A -> A -> A, a, b, c: A): ... { ... }
 ```
 
+## Big operators
+
+`∑ k < n, e` is the sum of `e` over the indices `0, 1, …, n - 1`, and
+`∏ k < n, e` the product. Both are spellings of one fold from
+`std/algebra/big_operator` (`import big_operator;`):
+
+```heather
+theorem nat_sum_four(): ∑ k < 4, k = 6 { refl }
+theorem factor<A: Semiring(≈, +, *)>(c: A, n: Nat, f: Nat → A): c * ∑ k < n, f(k) ≈ ∑ k < n, c * f(k) {
+    Semiring::mul_range_l(c, n, f)
+}
+```
+
+The index is a `Nat`. The sum is taken under whatever `+` (or `*`) the body's
+carrier designates, so the same notation sums naturals, rationals, Cauchy
+reals, or an open semiring's elements, and every law in the module (splitting,
+reindexing, Fubini, distributivity, the triangle inequality) applies to it.
+The body is an arithmetic expression running as far right as one can, and it
+stops at a relation: `∑ k < n, f(k) + 1` sums `f(k) + 1`, while in
+`∑ k < n, f(k) ≈ s` the sum is the left side of `≈`. Parenthesise the sum to
+add something after it: `(∑ k < n, f(k)) + f(n)`.
+
 ## Precedence summary
 
-From tighter to looser among value operators: prefix `-`; `*` and `∙`; `+`,
+From tighter to looser among value operators: prefix `-`; `*`, `∙` and `⊓`; `+`,
 `-`, `++`, and `⊔`; `&&`; `||`; comparisons. `++` is right-associative;
 ordinary arithmetic operators are left-associative. `<`, `<=`, `=`, and `≠`
 form a single non-associative comparison level and cannot be chained.

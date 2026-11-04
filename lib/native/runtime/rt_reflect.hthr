@@ -1,0 +1,779 @@
+// The reflector: an elaborated body, read through the host interface, as
+// `rt` (docs/runtime-fn-setups-design.md §3,
+// issues/runtime-fn-reflected-language.md).
+//
+// Untrusted like every producer: a wrong reflection fails the pin
+// (`rt.hthr`), never compiles to a wrong program. It reads a definition's
+// body with `Body`, its parameters by opening the body's `λ`s, a `match` with
+// `Arms`, and every other node with `View`, and builds A-normal form: an
+// operand that is not a variable is bound by a `Let` first.
+//
+// **Value numbering.** A block's `let` is an alias, so the source's sharing
+// is a shared subterm, not a binder. The host hands out one handle per
+// shared subterm, and the reflector memoises on handles; it also numbers
+// values (a node whose operands it has already bound is bound once), as
+// the Rust reflector does, because an elaborated body today repeats a
+// let-bound value at each use rather than sharing it
+// (`issues/elaborated-let-sharing-lost.md`).
+//
+// What it reads, and what it refuses with the reason: words and `Bool`,
+// records it is told about, byte buffers, lists of lines (`Nil` and `Cons`);
+// the primitives of `Known`; calls of the program's own functions; `foldl`
+// of one of them; `match` and `match h:` on a `Bool`; a named constant (a
+// global with no parameters whose body is a literal). Anything else is "not
+// in the reflected fragment", naming the form, never a guess.
+//
+// An effectful body (`rt_io_reflect`) is read by the same walk with the
+// world in `Known::io`: a call's answer is the variables its `Invoke` bound,
+// and the world itself is never a value.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import rt;
+
+// ---------------------------------------------------------------------------
+// What the reflector recognises, as the host's global references.
+
+// A primitive global: a word operation (by `Op::code`'s number), a `Bool`
+// connective, a literal, an extension, `foldl`, or a byte read or write.
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet }
+
+record PrimEntry { g: Nat, p: Prim }
+
+record RecEntry { g: Nat }
+
+// A call on Linux an effectful body has made (`rt_io_reflect`,
+// docs/effects-capabilities-design.md §8.3), as the reflector reads its
+// answer back: its place on the world chain (the first call is 0), the
+// method, the call as the body has it, and the variables its `Invoke` bound
+// the answer to: `.value` when the answer is one word, `.value.<field>` when
+// it is a record of them.
+record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields: List<Pair<String, Nat>> }
+
+// What an effectful body's reflection knows of its world: the capability's
+// local, the word-level methods that call Linux, and the calls made so far,
+// in order.
+record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
+
+record Known {
+    prims: List<PrimEntry>,
+    // The program's functions, in order: a `Call`'s index.
+    funs: List<Nat>,
+    // The records the program reads, in order: a `Named` code's index.
+    recs: List<RecEntry>,
+    // Whether a call of a global that is not one of `funs` may name another
+    // runtime fn (one with a published reflection, `g::rt`): the `runtime`
+    // generator's mode, which appends it to the program (`RSt::funs`).
+    discover: Bool,
+    bitvec: Nat,
+    boolean: Nat,
+    list: Nat,
+    // The world of an effectful body; `None` for pure code.
+    io: Option<IoKnown>,
+}
+
+fn Known::prim(ps: List<PrimEntry>, g: Nat) → Option<Prim> {
+    match ps { Nil => None, Cons(p, rest) => match p.g.same(g) { True => Some(p.p), False => Known::prim(rest, g) } }
+}
+
+fn Known::index(gs: List<Nat>, g: Nat, i: Nat) → Option<Nat> {
+    match gs { Nil => None, Cons(x, rest) => match x.same(g) { True => Some(i), False => Known::index(rest, g, Succ(i)) } }
+}
+
+fn Known::rec(rs: List<RecEntry>, g: Nat, i: Nat) → Option<Nat> {
+    match rs { Nil => None, Cons(r, rest) => match r.g.same(g) { True => Some(i), False => Known::rec(rest, g, Succ(i)) } }
+}
+
+fn Known::str_same(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
+
+fn Known::field(names: List<String>, name: String, k: Nat) → Option<Nat> {
+    match names {
+        Nil => None,
+        Cons(n, rest) => match Known::str_same(n, name) { True => Some(k), False => Known::field(rest, name, Succ(k)) },
+    }
+}
+
+// The word operation of a `PWord` number at a width.
+fn Known::word_op(op: Nat, w: Nat) → Op {
+    match op {
+        Zero => Add(w),
+        Succ(a) => match a {
+            Zero => Sub(w),
+            Succ(b) => match b {
+                Zero => Band(w),
+                Succ(c) => match c {
+                    Zero => Bor(w),
+                    Succ(d) => match d {
+                        Zero => Bxor(w),
+                        Succ(e) => match e { Zero => Eq(w), Succ(f) => match f { Zero => Ult(w), Succ(_) => Slt(w) } },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Small plumbing.
+
+fn rt_refuse<A>(why: String) → Tac<A> { fail("rt: " ++ why, []) }
+
+fn rt_accepted<A>(what: String, c: Checked<A>) → Tac<A> {
+    match c { Accepted(a) => Pure(a), Refused(why) => rt_refuse(what ++ ": " ++ why) }
+}
+
+// A generated global (`f#rec`, a `decreases` function's recursor): its name
+// has a `#`, which no source name has.
+fn rt_generated(cs: List<Char>) → Bool {
+    match cs { Nil => False, Cons(c, rest) => match c.code.same(35) { True => True, False => rt_generated(rest) } }
+}
+
+// Why a global the reflector does not know is refused.
+fn rt_unknown<A>(name: String) → Tac<A> {
+    match rt_generated(name.chars) {
+        True => rt_refuse("`" ++ name ++ "` is generated (a `decreases` function's recursion): measured recursion is not reflected yet"),
+        False => rt_refuse("`" ++ name ++ "` is an ordinary fn: mark it `runtime fn`, or the setup has no primitive for it"),
+    }
+}
+
+fn rt_global(name: String) → Tac<Nat> {
+    lookup(name).bind(λ c => rt_accepted("`" ++ name ++ "`", c)).bind(λ g => Pure(g.id))
+}
+
+fn rt_globals(names: List<String>) → Tac<List<Nat>> {
+    match names { Nil => Pure([]), Cons(n, rest) => rt_global(n).bind(λ g => rt_globals(rest).bind(λ gs => Pure(Cons(g, gs)))) }
+}
+
+fn rt_assoc(xs: List<Pair<Nat, Nat>>, k: Nat) → Option<Nat> {
+    match xs { Nil => None, Cons(p, rest) => match p.fst.same(k) { True => Some(p.snd), False => rt_assoc(rest, k) } }
+}
+
+fn rt_memo(xs: List<Pair<Tm, Nat>>, t: Tm) → Option<Nat> {
+    match xs { Nil => None, Cons(p, rest) => match p.fst.same(t) { True => Some(p.snd), False => rt_memo(rest, t) } }
+}
+
+fn rt_literal(h: Handle) → Tac<Nat> {
+    view(h).bind(λ v => match v { HLit(n) => Pure(n), _ => rt_refuse("expected a numeral") })
+}
+
+// ---------------------------------------------------------------------------
+// Types.
+
+// Whether a type is `BitVec(8)`.
+fn Known::is_byte(self k: Known, h: Handle) → Tac<Bool> {
+    let v <- view(h);
+    match v {
+        HGlobal(g, _, args) => match g.id.same(k.bitvec) {
+            True => match args { Cons(w, _) => { let n <- rt_literal(w); Pure(n.same(8)) }, Nil => Pure(False) },
+            False => Pure(False),
+        },
+        _ => Pure(False),
+    }
+}
+
+// Whether a type is `List<BitVec(8)>`.
+fn Known::is_bytes(self k: Known, h: Handle) → Tac<Bool> {
+    let v <- view(h);
+    match v {
+        HGlobal(g, _, args) => match g.id.same(k.list) {
+            True => match args { Cons(a, _) => k.is_byte(a), Nil => Pure(False) },
+            False => Pure(False),
+        },
+        _ => Pure(False),
+    }
+}
+
+fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
+    view(h).bind(λ v => match v {
+        HGlobal(g, name, args) => match g.id.same(k.bitvec) {
+            True => match args {
+                Cons(w, _) => rt_literal(w).bind(λ n => Pure(Word(n))),
+                Nil => rt_refuse("`BitVec` without its width"),
+            },
+            False => match g.id.same(k.boolean) {
+                True => Pure(Bit),
+                False => match g.id.same(k.list) {
+                    // A list of bytes is a byte buffer, its capacity the
+                    // setup's to choose; a list of those is a list of lines.
+                    True => match args {
+                        Cons(a, _) => k.is_byte(a).bind(λ byte => match byte {
+                            True => Pure(Bytes(0)),
+                            False => k.is_bytes(a).bind(λ bytes => match bytes {
+                                True => Pure(Lines),
+                                False => rt_refuse("a list of these has no runtime layout under the reflected fragment"),
+                            }),
+                        }),
+                        Nil => rt_refuse("`List` without its element type"),
+                    },
+                    False => match Known::rec(k.recs, g.id, 0) {
+                        Some(i) => Pure(Named(i)),
+                        None => rt_refuse("`" ++ name ++ "` has no runtime layout under the reflected fragment"),
+                    },
+                },
+            },
+        },
+        _ => rt_refuse("a type with no runtime layout under the reflected fragment"),
+    })
+}
+
+fn Known::ty_of(self k: Known, h: Handle) → Tac<Ty> {
+    infer(Hd(h)).bind(λ c => rt_accepted("a node's type", c)).bind(λ t => k.ty(t))
+}
+
+// ---------------------------------------------------------------------------
+// The reflection state: the variables bound so far (parameters, arm
+// payloads that are read, and lets), the current block's lets, the most
+// recent first, the values numbered so far, by their nodes with operands as
+// levels, and the handles and locals already bound, by level.
+
+// `funs` is the program's functions so far, a `Call`'s index: `Known`'s,
+// then each runtime fn the walk found called, in the order it found them.
+record RSt { depth: Nat, lets: List<Tm>, memo: List<Pair<Tm, Nat>>, handles: List<Pair<Nat, Nat>>, locals: List<Pair<Nat, Nat>>, funs: List<Nat> }
+
+fn RSt::with_funs(self st: RSt, funs: List<Nat>) → RSt { RSt(st.depth, st.lets, st.memo, st.handles, st.locals, funs) }
+
+// A level as a de Bruijn index at the current depth.
+fn RSt::index(self st: RSt, l: Nat) → Nat { st.depth - Succ(l) }
+
+fn RSt::indices(self st: RSt, ls: List<Nat>) → List<Nat> { ls.map(λ l => st.index(l)) }
+
+// A node whose operands are levels, at the current depth.
+fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
+    match t {
+        Var(l) => Var(st.index(l)),
+        Prim(op, args) => Prim(op, st.indices(args)),
+        Make(i, args) => Make(i, st.indices(args)),
+        Field(i, k, of) => Field(i, k, st.index(of)),
+        Call(f, args) => Call(f, st.indices(args)),
+        Fold(over, init, step) => Fold(st.index(over), st.index(init), step),
+        If(c, yes, no) => If(st.index(c), yes, no),
+        IfEq(c, yes, no) => IfEq(st.index(c), yes, no),
+        _ => t,
+    }
+}
+
+fn RSt::bind(self st: RSt, t: Tm) → RSt {
+    RSt(Succ(st.depth), Cons(t, st.lets), st.memo, st.handles, st.locals, st.funs)
+}
+
+fn RSt::level(t: Tm) → Nat { match t { Var(l) => l, _ => 0 } }
+
+// The lets of a block around its result, the earliest outermost.
+fn RSt::wrap(lets: List<Tm>, t: Tm) → Tm { lets.foldl(λ acc e => Let(e, acc), t) }
+
+// A node built from levels, as the reflection of `h`: as an operand, a
+// variable (bound by a `Let` unless the node is one already, or numbered
+// before); otherwise the node at the current depth.
+fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, Tm> {
+    match operand {
+        False => Pair(st, st.at_depth(node)),
+        True => match node {
+            Var(l) => Pair(st, Var(l)),
+            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, _ => rt_memo(st.memo, node) }) {
+                Some(l) => Pair(RSt(st.depth, st.lets, st.memo, Cons(Pair(h.id, l), st.handles), st.locals, st.funs), Var(l)),
+                None => Pair(RSt(Succ(st.depth), Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
+                    Cons(Pair(h.id, st.depth), st.handles), st.locals, st.funs), Var(st.depth)),
+            },
+        },
+    }
+}
+
+// Each operand reflected as a variable, left to right: their levels.
+fn RSt::operands(step: RSt → Handle → Tac<Pair<RSt, Tm>>, st: RSt, hs: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
+    match hs {
+        Nil => Pure(Pair(st, [])),
+        Cons(h, rest) => step(st, h).bind(λ r => RSt::operands(step, r.fst, rest).bind(λ s => Pure(Pair(s.fst, Cons(RSt::level(r.snd), s.snd))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The walk. One function, by fuel (a reflection is a `Tac`, not structural
+// recursion on a term the reflector holds): `operand` asks for a variable.
+
+// `r.name` for a record the program reads: its table index and the field's
+// position.
+fn rt_field_names(fs: List<FieldInfo>) → List<String> { fs.map(λ f => f.name) }
+
+fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    k.ty_of(r).bind(λ t => match t {
+        Named(ri) => infer(Hd(r)).bind(λ c => rt_accepted("a record's type", c)).bind(λ rty =>
+            ctors(rty).bind(λ cc => rt_accepted("a record's constructor", cc)).bind(λ cs => match cs {
+                Cons(c, _) => match Known::field(rt_field_names(c.fields), name, 0) {
+                    Some(pos) => step(st, r).bind(λ rr => Pure(rr.fst.finish(h, operand, Field(ri, pos, RSt::level(rr.snd))))),
+                    None => rt_refuse("`" ++ name ++ "` is not a field of a record the program reads"),
+                },
+                Nil => rt_refuse("a record with no constructor"),
+            })),
+        _ => rt_unknown(name),
+    })
+}
+
+fn rt_arm_body(m: MatchInfo, a: ArmInfo) → Tac<Handle> {
+    open(a.body, "payload").bind(λ c => rt_accepted("a match arm", c)).bind(λ o =>
+        match m.args {
+            Nil => Pure(o.body),
+            Cons(_, _) => open(o.body, "equation").bind(λ c2 => rt_accepted("a `match h:` arm", c2)).bind(λ o2 => Pure(o2.body)),
+        })
+}
+
+fn rt_arm(m: MatchInfo, i: Nat) → Tac<Handle> {
+    match m.arms.nth(i) { None => rt_refuse("a match without its arms"), Some(a) => rt_arm_body(m, a) }
+}
+
+// A byte read or write: its operands as variables, its buffer's capacity
+// from the buffer's code.
+fn rt_bytes_op(k: Known, st: RSt, h: Handle, operand: Bool, name: String, args: List<Handle>, op: Nat → Op,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    match args {
+        Nil => rt_refuse("`" ++ name ++ "` without its buffer"),
+        Cons(xs, _) => k.ty_of(xs).bind(λ t => match t {
+            Bytes(c) => RSt::operands(step, st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(op(c), r.snd)))),
+            _ => rt_refuse("`" ++ name ++ "` of something other than a byte buffer"),
+        }),
+    }
+}
+
+// The program index of a called global: its place in the functions so far
+// or, in the generator's mode, a runtime fn not met before, appended (a
+// global `g` is one when `g::rt` is published, which only the `runtime`
+// generator does). `None` for anything else.
+fn rt_callee(k: Known, st: RSt, g: GlobalRef, name: String) → Tac<Option<Pair<RSt, Nat>>> {
+    match Known::index(st.funs, g.id, 0) {
+        Some(i) => Pure(Some(Pair(st, i))),
+        None => match k.discover {
+            False => Pure(None),
+            True => lookup(name ++ "::rt").bind(λ c => match c {
+                Accepted(_) => Pure(Some(Pair(st.with_funs(st.funs ++ [g.id]), st.funs.len()))),
+                Refused(_) => Pure(None),
+            }),
+        },
+    }
+}
+
+// A named constant (`Io::stdin()`): a global with no parameters whose body
+// is a word literal or a `Bool` is read as that literal, which is its
+// δ-reduct. Any other global is a function the program must name.
+fn rt_constant(k: Known, g: GlobalRef, name: String) → Tac<Handle> {
+    let refused = "`" ++ name ++ "` is an ordinary fn: mark it `runtime fn`, or the setup has no primitive for it";
+    body(g).bind(λ c => match c {
+        Refused(_) => rt_refuse(refused),
+        Accepted(b) => view(b).bind(λ v => match v {
+            HGlobal(bg, _, args) => match Known::prim(k.prims, bg.id) {
+                Some(p) => match p {
+                    POfNat => match args { Cons(n, _) => view(n).bind(λ nv => match nv { HLit(_) => Pure(b), _ => rt_refuse(refused) }), Nil => rt_refuse(refused) },
+                    _ => rt_refuse(refused),
+                },
+                None => rt_refuse(refused),
+            },
+            HCtor(ty, _, _, fields) => match ty.id.same(k.boolean) { True => Pure(b), False => rt_refuse(refused) },
+            _ => rt_refuse(refused),
+        }),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The world of an effectful body (docs/effects-capabilities-design.md §8.3).
+//
+// Each `io.m(…)` on the capability elaborates to one call `m(io_k, …)`, shared
+// wherever the body reads it: `.after` is the world the next call takes, and
+// `.value` (or a field of it) the answer. The world chain is read from the
+// body's final world back to the parameter: that is the call order, and a
+// world that is anything but the chain is refused here, at the call.
+
+fn Known::is_world(self k: Known, x: LocalRef) → Bool {
+    match k.io { None => False, Some(io) => x.id.same(io.world) }
+}
+
+fn IoKnown::is_method(self io: IoKnown, g: GlobalRef) → Bool {
+    match Known::index(io.methods, g.id, 0) { Some(_) => True, None => False }
+}
+
+// The calls a world has been through, the first first: the parameter has
+// been through none, and `m(w, …).after` through `w`'s and then `m`.
+fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
+    match fuel {
+        Zero => rt_refuse("the world's chain of calls is longer than the reflector's fuel"),
+        Succ(f) => view(w).bind(λ v => match v {
+            HLocal(x, _) => match x.id.same(io.world) {
+                True => Pure([]),
+                False => rt_refuse("a world that is not the capability `io`"),
+            },
+            HField(c, name, _) => match Known::str_same(name, "after") {
+                True => view(c).bind(λ cv => match cv {
+                    HGlobal(g, cname, args) => match io.is_method(g) {
+                        True => match args {
+                            Cons(prev, _) => rt_world_calls(f, io, prev).bind(λ cs => Pure(cs ++ [c])),
+                            Nil => rt_refuse("`" ++ cname ++ "` without its world"),
+                        },
+                        False => rt_refuse("`" ++ cname ++ "` is not a call on Linux the reflector knows (`Io::read_into`, `Io::write_from`, `Io::open_path`, `Io::close_fd`)"),
+                    },
+                    _ => rt_refuse("the world after something other than a call on Linux"),
+                }),
+                False => rt_refuse("a world read out of a record (`." ++ name ++ "`)"),
+            },
+            HMatch(_) => rt_refuse("the world through a branch: a call under `if` or `match` is not reflected yet"),
+            _ => rt_refuse("a world that is not the capability threaded through calls"),
+        }),
+    }
+}
+
+fn rt_call_by_handle(cs: List<CallRes>, id: Nat) → Option<CallRes> {
+    match cs { Nil => None, Cons(c, rest) => match c.call.id.same(id) { True => Some(c), False => rt_call_by_handle(rest, id) } }
+}
+
+fn rt_call_at(cs: List<CallRes>, pos: Nat) → Option<CallRes> {
+    match cs { Nil => None, Cons(c, rest) => match c.pos.same(pos) { True => Some(c), False => rt_call_at(rest, pos) } }
+}
+
+fn rt_answer_field(fs: List<Pair<String, Nat>>, name: String) → Option<Nat> {
+    match fs { Nil => None, Cons(p, rest) => match Known::str_same(p.fst, name) { True => Some(p.snd), False => rt_answer_field(rest, name) } }
+}
+
+// Whether `r` is a call on Linux.
+fn rt_call_of(io: IoKnown, r: Handle) → Tac<Bool> {
+    view(r).bind(λ v => match v { HGlobal(g, _, _) => Pure(io.is_method(g)), _ => Pure(False) })
+}
+
+// The call a read of an answer names, among the calls made so far: the
+// same handle, or a copy of the call at its world's place on the chain. A
+// call on a world the chain does not continue (a copied `io`, or a call
+// whose world after is dropped) is another program, refused here.
+fn rt_answer(fuel: Nat, io: IoKnown, c: Handle) → Tac<CallRes> {
+    match rt_call_by_handle(io.calls, c.id) {
+        Some(a) => Pure(a),
+        None => view(c).bind(λ v => match v {
+            HGlobal(g, name, args) => match args {
+                Cons(w, _) => rt_world_calls(fuel, io, w).bind(λ before =>
+                    match rt_call_at(io.calls, before.len()) {
+                        Some(a) => match a.method.same(g.id) {
+                            True => defeq(Hd(c), Hd(a.call)).bind(λ same => match same {
+                                True => Pure(a),
+                                False => rt_refuse("`" ++ name ++ "` answers a call the body does not thread its world through (a copy of `io`, or a call whose world after is dropped)"),
+                            }),
+                            False => rt_refuse("`" ++ name ++ "` answers a call the body does not thread its world through (a copy of `io`, or a call whose world after is dropped)"),
+                        },
+                        None => rt_refuse("`" ++ name ++ "` answers a call the body does not thread its world through (a copy of `io`, or a call whose world after is dropped)"),
+                    }),
+                Nil => rt_refuse("`" ++ name ++ "` without its world"),
+            },
+            _ => rt_refuse("an answer of something other than a call on Linux"),
+        }),
+    }
+}
+
+// A field read. In effectful code, the answer of a call is the variables its
+// `Invoke` bound, and the world after a call is never a value; anything else
+// is an ordinary record's field.
+fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    match k.io {
+        None => rt_field(f, k, st, h, operand, r, name, step),
+        Some(io) => rt_call_of(io, r).bind(λ direct => match direct {
+            True => match Known::str_same(name, "after") {
+                True => rt_refuse("the world after a call used as a value: it is threaded on to the next call, never runtime data"),
+                False => rt_answer(f, io, r).bind(λ a => match a.value {
+                    Some(l) => Pure(st.finish(h, operand, Var(l))),
+                    None => rt_refuse("a call's whole answer used as one value: read its fields"),
+                }),
+            },
+            False => view(r).bind(λ rv => match rv {
+                HLocal(x, _) => match x.id.same(io.world) {
+                    True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                    False => rt_field(f, k, st, h, operand, r, name, step),
+                },
+                HField(c, inner, _) => match Known::str_same(inner, "value") {
+                    True => rt_call_of(io, c).bind(λ called => match called {
+                        True => rt_answer(f, io, c).bind(λ a => match rt_answer_field(a.fields, name) {
+                            Some(l) => Pure(st.finish(h, operand, Var(l))),
+                            None => rt_refuse("`" ++ name ++ "` is not a field of the call's answer"),
+                        }),
+                        False => rt_field(f, k, st, h, operand, r, name, step),
+                    }),
+                    False => rt_field(f, k, st, h, operand, r, name, step),
+                },
+                _ => rt_field(f, k, st, h, operand, r, name, step),
+            }),
+        }),
+    }
+}
+
+fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
+    match fuel {
+        Zero => rt_refuse("the body is deeper than the reflector's fuel"),
+        Succ(f) => match (match operand { True => rt_assoc(st.handles, h.id), False => None }) {
+            Some(l) => Pure(Pair(st, Var(l))),
+            None => Tac::bind<Head, Pair<RSt, Tm>>(view(h), λ v => match v {
+                HLocal(x, args) => match args {
+                    Nil => match rt_assoc(st.locals, x.id) {
+                        Some(l) => Pure(st.finish(h, operand, Var(l))),
+                        None => match k.is_world(x) {
+                            True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                            False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
+                        },
+                    },
+                    Cons(_, _) => rt_refuse("a local applied to arguments (a function value)"),
+                },
+                HGlobal(g, name, args) => match Known::prim(k.prims, g.id) {
+                    Some(p) => match p {
+                        PWord(op) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r =>
+                            match args {
+                                Nil => rt_refuse("`" ++ name ++ "` without its operands"),
+                                Cons(a0, _) => k.ty_of(a0).bind(λ t => match t {
+                                    Word(w) => Pure(r.fst.finish(h, operand, Prim(Known::word_op(op, w), r.snd))),
+                                    _ => rt_refuse("`" ++ name ++ "` on something other than a word"),
+                                }),
+                            }),
+                        PConj => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(Conj, r.snd)))),
+                        PDisj => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(Disj, r.snd)))),
+                        PNeg => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(Neg, r.snd)))),
+                        POfNat => match args {
+                            Cons(n, _) => rt_literal(n).bind(λ value => k.ty_of(h).bind(λ t => Pure(st.finish(h, operand, Lit(t, value))))),
+                            Nil => rt_refuse("`BitVec::ofNat` without its numeral"),
+                        },
+                        PZext => match args {
+                            Cons(extra, rest) => rt_literal(extra).bind(λ e => match rest {
+                                Cons(x, _) => k.ty_of(x).bind(λ t => match t {
+                                    Word(w) => rt_go(f, k, st, x, True).bind(λ r => Pure(r.fst.finish(h, operand, Prim(Zext(w, e), [RSt::level(r.snd)])))),
+                                    _ => rt_refuse("`zero_extend` of something other than a word"),
+                                }),
+                                Nil => rt_refuse("`zero_extend` without its operand"),
+                            }),
+                            Nil => rt_refuse("`zero_extend` without its width"),
+                        },
+                        PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
+                        PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
+                        PFoldl => match args {
+                            Cons(over, more) => match more {
+                                Cons(step, rest) => match rest {
+                                    Cons(init, _) => view(step).bind(λ sv => match sv {
+                                        HGlobal(sg, sname, _) => rt_callee(k, st, sg, sname).bind(λ found => match found {
+                                            Some(si) => rt_go(f, k, si.fst, over, True).bind(λ r1 => rt_go(f, k, r1.fst, init, True).bind(λ r2 =>
+                                                Pure(r2.fst.finish(h, operand, Fold(RSt::level(r1.snd), RSt::level(r2.snd), si.snd))))),
+                                            None => rt_refuse("a fold's step `" ++ sname ++ "` is not a function of the program: mark it `runtime fn`"),
+                                        }),
+                                        _ => rt_refuse("a fold's step must be a named function of the program"),
+                                    }),
+                                    Nil => rt_refuse("`foldl` without its start"),
+                                },
+                                Nil => rt_refuse("`foldl` without its step"),
+                            },
+                            Nil => rt_refuse("`foldl` without its list"),
+                        },
+                    },
+                    None => rt_callee(k, st, g, name).bind(λ found => match found {
+                        Some(si) => RSt::operands(λ s a => rt_go(f, k, s, a, True), si.fst, args).bind(λ r => Pure(r.fst.finish(h, operand, Call(si.snd, r.snd)))),
+                        None => match args {
+                            Cons(r, rest) => match rest {
+                                Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
+                                Cons(_, _) => rt_unknown(name),
+                            },
+                            Nil => rt_constant(k, g, name).bind(λ c => rt_go(f, k, st, c, operand)),
+                        },
+                    }),
+                },
+                HField(r, name, args) => match args {
+                    Nil => rt_read(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
+                    Cons(_, _) => rt_refuse("a field applied to arguments (a function value)"),
+                },
+                HCtor(ty, i, name, fields) => match ty.id.same(k.boolean) {
+                    True => Pure(st.finish(h, operand, Lit(Bit, i))),
+                    False => match ty.id.same(k.list) {
+                        True => k.ty_of(h).bind(λ lt => match i {
+                            // `Nil`: the empty buffer, or the name 0.
+                            Zero => Pure(st.finish(h, operand, Lit(lt, 0))),
+                            Succ(_) => match lt {
+                                Lines => match fields.rev() {
+                                    Cons(tl, more) => match more {
+                                        Cons(hd, _) => k.ty_of(hd).bind(λ ht => match ht {
+                                            Bytes(c) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, [hd, tl]).bind(λ r =>
+                                                Pure(r.fst.finish(h, operand, Prim(ConsLine(c), r.snd)))),
+                                            _ => rt_refuse("a line that is not a byte buffer"),
+                                        }),
+                                        Nil => rt_refuse("`Cons` without its head"),
+                                    },
+                                    Nil => rt_refuse("`Cons` without its tail"),
+                                },
+                                _ => rt_refuse("`Cons` onto a byte buffer: a buffer is written in place (`with_byte`), not consed onto"),
+                            },
+                        }),
+                        False => match Known::rec(k.recs, ty.id, 0) {
+                        Some(ri) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => Pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
+                        None => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
+                        },
+                    },
+                },
+                HMatch(_) => arms(h).bind(λ c => rt_accepted("a `match`", c)).bind(λ m =>
+                    k.ty_of(m.scrut).bind(λ st_ty => match st_ty {
+                        Bit => rt_go(f, k, st, m.scrut, True).bind(λ rc =>
+                            rt_arm(m, 1).bind(λ yes_h => rt_arm(m, 0).bind(λ no_h =>
+                            rt_go(f, k, RSt(rc.fst.depth, [], rc.fst.memo, rc.fst.handles, rc.fst.locals, rc.fst.funs), yes_h, False).bind(λ ry =>
+                            rt_go(f, k, RSt(rc.fst.depth, [], rc.fst.memo, rc.fst.handles, rc.fst.locals, ry.fst.funs), no_h, False).bind(λ rn =>
+                            Pure(rc.fst.with_funs(rn.fst.funs).finish(h, operand, match m.args {
+                                Nil => If(RSt::level(rc.snd), RSt::wrap(ry.fst.lets, ry.snd), RSt::wrap(rn.fst.lets, rn.snd)),
+                                Cons(_, _) => IfEq(RSt::level(rc.snd), RSt::wrap(ry.fst.lets, ry.snd), RSt::wrap(rn.fst.lets, rn.snd)),
+                            }))))))),
+                        _ => rt_refuse("a `match` on something other than a `Bool` (enums are not reflected yet)"),
+                    })),
+                HLit(_) => rt_refuse("a `Nat` numeral is not runtime data under the reflected fragment"),
+                HLam(_) => rt_refuse("a function value is not runtime data under the reflected fragment"),
+                _ => rt_refuse("a form the reflected fragment does not have"),
+            }),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A function: its parameters (the body's leading `λ`s), its result's code,
+// and its body as a term.
+
+fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
+    match fuel {
+        Zero => rt_refuse("more parameters than the reflector's fuel"),
+        Succ(f) => view(b).bind(λ v => match v {
+            HLam(dom) => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
+                rt_params(f, k, RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
+                    tys ++ [t], o.body))),
+            _ => Pure(Pair(Pair(st, tys), b)),
+        }),
+    }
+}
+
+// A function, and the program's functions after it was walked (`k.funs`
+// and the runtime fns it was found to call).
+fn rt_reflect_one(fuel: Nat, k: Known, g: Nat) → Tac<Pair<Fun, List<Nat>>> {
+    body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c)).bind(λ b =>
+    rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b).bind(λ p =>
+    k.ty_of(p.snd).bind(λ result =>
+    rt_go(fuel, k, p.fst.fst, p.snd, False).bind(λ r =>
+    Pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))))))
+}
+
+fn rt_reflect_fun(fuel: Nat, k: Known, g: Nat) → Tac<Fun> { rt_reflect_one(fuel, k, g).bind(λ r => Pure(r.fst)) }
+
+fn rt_reflect_funs(fuel: Nat, k: Known, gs: List<Nat>) → Tac<List<Fun>> {
+    match gs {
+        Nil => Pure([]),
+        Cons(g, rest) => rt_reflect_fun(fuel, k, g).bind(λ f => rt_reflect_funs(fuel, k, rest).bind(λ fs => Pure(Cons(f, fs)))),
+    }
+}
+
+// The primitives the reflector knows, by name, resolved where it runs (the
+// caller imports `bitvec`, `bool` and `list`).
+fn rt_prim_names() → List<Pair<String, Prim>> {
+    [Pair("BitVec::add", PWord(0)), Pair("BitVec::sub", PWord(1)), Pair("BitVec::band", PWord(2)),
+     Pair("BitVec::bor", PWord(3)), Pair("BitVec::bxor", PWord(4)), Pair("BitVec::eq_bit", PWord(5)),
+     Pair("BitVec::unsigned_lt_bit", PWord(6)), Pair("BitVec::signed_lt_bit", PWord(7)),
+     Pair("Bool::and", PConj), Pair("Bool::or", PDisj), Pair("Bool::not", PNeg),
+     Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("List::foldl", PFoldl),
+     Pair("List::byte_at", PGet), Pair("List::with_byte", PSet)]
+}
+
+fn rt_prims(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
+    match ps {
+        Nil => Pure([]),
+        Cons(p, rest) => rt_global(p.fst).bind(λ g => rt_prims(rest).bind(λ es => Pure(Cons(PrimEntry(g, p.snd), es)))),
+    }
+}
+
+fn rt_recs(names: List<String>) → Tac<List<RecEntry>> {
+    match names {
+        Nil => Pure([]),
+        Cons(n, rest) => rt_global(n).bind(λ g => rt_recs(rest).bind(λ es => Pure(Cons(RecEntry(g), es)))),
+    }
+}
+
+// What the reflector knows, for a program of the functions `funs` (by
+// name, in order) reading the records `recs`.
+fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<Known> {
+    rt_prims(rt_prim_names()).bind(λ ps =>
+    rt_globals(funs).bind(λ gs =>
+    rt_recs(recs).bind(λ rs =>
+    rt_global("BitVec").bind(λ bv =>
+    rt_global("Bool").bind(λ bo =>
+    rt_global("List").bind(λ li =>
+    Pure(Known(ps, gs, rs, discover, bv, bo, li, None))))))))
+}
+
+fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }
+
+// The program's functions, reflected from their elaborated bodies.
+fn rt_reflect(funs: List<String>, recs: List<String>) → Tac<List<Fun>> {
+    rt_known(funs, recs).bind(λ k => rt_reflect_funs(4096, k, k.funs))
+}
+
+// ---------------------------------------------------------------------------
+// Rendering, for refusals and test failures.
+
+// A numeral up to 255 in decimal, a larger one elided: the value domain's
+// division is by steps, so a decimal of a 64-bit literal is out of reach.
+fn rt_nat(n: Nat) → String { match n.leb(255) { True => decimal_name(4, n), False => "…" } }
+
+fn rt_nats(ns: List<Nat>) → String {
+    match ns { Nil => "", Cons(n, rest) => match rest { Nil => rt_nat(n), Cons(_, _) => rt_nat(n) ++ ", " ++ rt_nats(rest) } }
+}
+
+fn Ty::show(self t: Ty) → String {
+    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", Bytes(c) => "Bytes(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")" }
+}
+
+fn Ty::shows(ts: List<Ty>) → String {
+    match ts { Nil => "", Cons(t, rest) => match rest { Nil => t.show(), Cons(_, _) => t.show() ++ ", " ++ Ty::shows(rest) } }
+}
+
+fn Op::show(self o: Op) → String {
+    "op" ++ rt_nat(o.code().fst) ++ "(" ++ rt_nat(o.code().snd.fst) ++ ", " ++ rt_nat(o.code().snd.snd) ++ ")"
+}
+
+fn Tm::show(self t: Tm) → String {
+    match t {
+        Var(i) => "Var(" ++ rt_nat(i) ++ ")",
+        Lit(c, n) => "Lit(" ++ c.show() ++ ", " ++ rt_nat(n) ++ ")",
+        Prim(op, args) => "Prim(" ++ op.show() ++ ", [" ++ rt_nats(args) ++ "])",
+        Let(e, body) => "Let(" ++ e.show() ++ ", " ++ body.show() ++ ")",
+        If(c, yes, no) => "If(" ++ rt_nat(c) ++ ", " ++ yes.show() ++ ", " ++ no.show() ++ ")",
+        IfEq(c, yes, no) => "IfEq(" ++ rt_nat(c) ++ ", " ++ yes.show() ++ ", " ++ no.show() ++ ")",
+        Make(i, args) => "Make(" ++ rt_nat(i) ++ ", [" ++ rt_nats(args) ++ "])",
+        Field(i, k, of) => "Field(" ++ rt_nat(i) ++ ", " ++ rt_nat(k) ++ ", " ++ rt_nat(of) ++ ")",
+        Call(f, args) => "Call(" ++ rt_nat(f) ++ ", [" ++ rt_nats(args) ++ "])",
+        Fold(over, init, step) => "Fold(" ++ rt_nat(over) ++ ", " ++ rt_nat(init) ++ ", " ++ rt_nat(step) ++ ")",
+    }
+}
+
+fn Fun::show(self f: Fun) → String { "Fun([" ++ Ty::shows(f.params) ++ "], " ++ f.result.show() ++ ", " ++ f.body.show() ++ ")" }
+
+// ---------------------------------------------------------------------------
+// The check `lib/_tests` runs: the reflection of the functions `funs`
+// (reading the records `recs`) is `expected`, function by function. Proves
+// `True`; a difference fails, showing both.
+
+fn rt_compare(got: List<Fun>, expected: List<Fun>) → Tac<Expr> {
+    match got {
+        Nil => match expected {
+            Nil => resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => Pure(Hd(h))),
+            Cons(_, _) => rt_refuse("fewer functions reflected than expected"),
+        },
+        Cons(g, rest) => match expected {
+            Nil => rt_refuse("more functions reflected than expected"),
+            Cons(e, more) => match g.same(e) {
+                True => rt_compare(rest, more),
+                False => rt_refuse("the reflection differs:\n  got      " ++ g.show() ++ "\n  expected " ++ e.show()),
+            },
+        },
+    }
+}
+
+fn reflects_as(funs: List<String>, recs: List<String>, expected: List<Fun>) → Tac<Expr> {
+    rt_reflect(funs, recs).bind(λ got => rt_compare(got, expected))
+}

@@ -66,7 +66,8 @@ use heather_kernel::value::{Elim, Env, PiAnn, TmClo, TyClo, Val, ValueArena};
 use heather_kernel::value::program::ContextProgram;
 use heather_syntax::ast::{Expr, Span};
 
-use crate::context::Cx;
+use crate::oracle::Unfold;
+use crate::context::{Alias, Cx};
 use crate::unification::Sol;
 use crate::{err, Elaborator, R};
 
@@ -107,29 +108,32 @@ impl<'a, 'v> Reader<'a, 'v> {
     /// The δ-transparent weak head **value** of a sub-structure. The arena's
     /// bounded cache shares recent forces while allowing values the walk has
     /// left behind to be reclaimed.
-    pub(crate) fn force(&self, c: &'v TmClo<'v>) -> Result<Rc<Val<'v>>, String> {
+    pub(crate) fn force(&self, c: &'v TmClo<'v>) -> Result<&'v Val<'v>, String> {
         let mut ev = Eval::new(READ_FUEL, Defs::transparent_cached(self.psi, &self.cache), CtxBase::Nil, self.arena);
         ev.force(c).and_then(|v| ev.delta_whnf(v)).map_err(|_| "the host query ran out of fuel".to_string())
     }
 
-    /// A numeral's value, a run of successors at a time; past a million it
-    /// declines.
+    /// A numeral's value, a run of successors at a time. Past a million
+    /// single successors it declines (each is a step); a run is read whole,
+    /// so a literal word (`0x0123456789abcdef`, which a `runtime fn`'s
+    /// reflection quotes back) reads in one step, up to `u64::MAX`.
     pub(crate) fn nat(&self, c: &'v TmClo<'v>) -> Result<u64, String> {
         let mut v = self.force(c)?;
         let mut n = 0u64;
+        let mut steps = 0u64;
         loop {
             let next = match &*v {
                 Val::Zero => return Ok(n),
                 Val::Succ(p) => {
-                    n += 1;
-                    if n > 1_000_000 {
+                    n = n.checked_add(1).ok_or("an implausible numeral")?;
+                    steps += 1;
+                    if steps > 1_000_000 {
                         return Err("an implausible numeral".into());
                     }
                     *p
                 }
                 Val::NatRun { program, tail } => {
-                    let remaining = 1_000_000 - n;
-                    let Some(count) = ContextProgram::repetition_count_up_to(program, remaining)
+                    let Some(count) = ContextProgram::repetition_count_up_to(program, u64::MAX - n)
                     else {
                         return Err("an implausible numeral".into());
                     };
@@ -155,12 +159,77 @@ const READ_BUDGET: usize = 4096;
 /// Leading parameters `Match` will treat as unknowns before giving up.
 const MATCH_PARAMETERS: usize = 64;
 
+
+/// What one `Match` learns about class parameters, shared by its attempts at
+/// every parameter count: the goals the dictionaries in scope answer, per
+/// class, and resolution's answer per goal.
+#[derive(Default)]
+struct MatchDicts {
+    classes: RefCell<Vec<Option<Rc<crate::inductive::Inductive>>>>,
+    goals: RefCell<Vec<(u32, Rc<Vec<(Type, Level)>>)>>,
+    resolved: RefCell<Vec<(Type, Option<Term>)>>,
+}
+
+impl MatchDicts {
+    /// The class the `i`-th parameter's type `dom` instantiates, if any, read
+    /// once: a parameter's type is the same at every parameter count.
+    fn class_at(&self, el: &Elaborator, i: usize, dom: &Type) -> Option<Rc<crate::inductive::Inductive>> {
+        if let Some(c) = self.classes.borrow().get(i) {
+            return c.clone();
+        }
+        let class = el.display_tag_of(dom).filter(|ind| {
+            ind.is_record && el.traits.has_class(&crate::names::qkey(&ind.scope.module, &ind.name))
+        });
+        let mut classes = self.classes.borrow_mut();
+        debug_assert_eq!(classes.len(), i, "parameters are read in order");
+        classes.push(class.clone());
+        class
+    }
+
+    /// The class's instantiations the dictionaries in scope answer,
+    /// innermost first: for each binder of the class or a descendant, the
+    /// class at the binder's carrier and at the index the binder passes up
+    /// (`Elaborator::scope_index`, the value-slot ladder's step 2).
+    fn goals(&self, el: &Elaborator, cx: &Cx, ind: &crate::inductive::Inductive, span: Span) -> Rc<Vec<(Type, Level)>> {
+        if let Some((_, g)) = self.goals.borrow().iter().find(|(tag, _)| *tag == ind.tag) {
+            return Rc::clone(g);
+        }
+        let mut out: Vec<(Type, Level)> = Vec::new();
+        if ind.params.len() == 1 {
+            for d in cx.dicts.iter_inner() {
+                let Ok((carrier, clvl)) = el.elab_ty(cx, &d.carrier) else { continue };
+                let Some(index) = el.scope_index(cx, &ind.name, &carrier, &clvl) else { continue };
+                let targs = [(carrier, clvl)];
+                let Ok(vargs) = el.valparam_args(cx, ind, &targs, &index, span) else { continue };
+                let Ok((goal, glvl)) = el.lower_instance(cx, ind, &targs, &vargs, span) else { continue };
+                if !out.iter().any(|(g, _)| *g == goal) {
+                    out.push((goal, glvl));
+                }
+            }
+        }
+        let out = Rc::new(out);
+        self.goals.borrow_mut().push((ind.tag, Rc::clone(&out)));
+        out
+    }
+
+    /// Resolution's dictionary for `goal`, asked once.
+    fn resolved(&self, el: &Elaborator, cx: &Cx, goal: &Type, lvl: &Level, name: &str, span: Span) -> Option<Term> {
+        if let Some((_, t)) = self.resolved.borrow().iter().find(|(g, _)| g == goal) {
+            return t.clone();
+        }
+        let t = el.resolve_goal(cx, goal, lvl, name, None, span, &mut Vec::new());
+        self.resolved.borrow_mut().push((goal.clone(), t.clone()));
+        t
+    }
+}
+
 /// An `Expr`, as the host reads one back from a tactic.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RExpr {
     /// A handle the host issued.
     Hd(u64),
-    /// A local of the goal's context, by its position from the outermost.
+    /// A local: one of the goal's context by its position from the
+    /// outermost, one of its `let`s, or one the tactic introduced ([`Run`]).
     Local(u64),
     App(Box<RExpr>, Box<RExpr>),
     NatLit(u64),
@@ -168,6 +237,44 @@ pub enum RExpr {
     Lam(u64, Box<RExpr>),
     /// A global the run issued a reference to.
     Global(u64),
+    /// An argument left to inference: a hole at the domain it fills.
+    Blank,
+    /// `Pi(x, body)`: the function type abstracting the introduced local
+    /// `x` out of the type `body`.
+    Pi(u64, Box<RExpr>),
+    /// The equation between two terms.
+    Equation(Box<RExpr>, Box<RExpr>),
+}
+
+impl RExpr {
+    /// Does a `Blank` occur in it? Each reading of one is a new hole.
+    fn has_blank(&self) -> bool {
+        match self {
+            RExpr::Blank => true,
+            RExpr::App(f, a) | RExpr::Equation(f, a) => f.has_blank() || a.has_blank(),
+            RExpr::Lam(_, b) | RExpr::Pi(_, b) => b.has_blank(),
+            RExpr::Hd(_) | RExpr::Local(_) | RExpr::NatLit(_) | RExpr::Global(_) => false,
+        }
+    }
+
+    /// Every local this `Expr` names outright, not through a handle.
+    fn locals(&self, out: &mut Vec<u64>) {
+        match self {
+            RExpr::Local(x) => out.push(*x),
+            RExpr::App(f, a) | RExpr::Equation(f, a) => {
+                f.locals(out);
+                a.locals(out);
+            }
+            RExpr::Lam(_, body) | RExpr::Pi(_, body) => body.locals(out),
+            RExpr::Hd(_) | RExpr::NatLit(_) | RExpr::Global(_) | RExpr::Blank => {}
+        }
+    }
+
+    /// Does this stand for a type by its form (`Pi`, `Equation`), rather
+    /// than possibly for a term?
+    fn is_type_form(&self) -> bool {
+        matches!(self, RExpr::Pi(..) | RExpr::Equation(..))
+    }
 }
 
 /// One note of a failure's search state (`tactic::Note`), as the host
@@ -220,6 +327,34 @@ pub struct SplitView {
     pub branches: Vec<BranchView>,
 }
 
+/// One constructor, as `Ctors` answers it: its name, each field's name
+/// (empty for an unnamed one) and a handle to its type (`None` for one that
+/// mentions an earlier field), and a handle to the constructor as a function
+/// of its fields where every field has one.
+#[derive(Clone, Debug)]
+pub struct CtorView {
+    pub name: String,
+    pub fields: Vec<(String, Option<u64>)>,
+    pub ctor: Option<u64>,
+}
+
+/// One declaration a generator publishes (`tactic::Decl`): its parameters
+/// are introduced locals with their implicitness, and its statement and body
+/// live under the last of them.
+#[derive(Clone, Debug)]
+pub struct DeclView {
+    pub theorem: bool,
+    /// `AsValue`: a `def`, which takes no parameters.
+    pub value: bool,
+    /// `AsInstance(class, args, index)`: a `def` that is also registered as
+    /// the instance `class<args…>(index…)`, the index arguments by name.
+    pub instance: Option<(String, Vec<RExpr>, Vec<String>)>,
+    pub name: String,
+    pub params: Vec<(u64, bool)>,
+    pub result: RExpr,
+    pub body: RExpr,
+}
+
 /// A request, as the host receives it from either kind of tactic.
 #[derive(Clone, Debug)]
 pub enum Request {
@@ -245,6 +380,27 @@ pub enum Request {
     Constructor(u64),
     /// A split's number and one proof per branch.
     Close(u64, Vec<RExpr>),
+    /// The type, the local's name, and the local it is introduced under.
+    Assume(RExpr, String, Option<u64>),
+    Ctors(u64),
+    AsType(RExpr),
+    /// A term, and how many holes to apply it to.
+    Holes(RExpr, u64),
+    /// A generator's declarations, which end its run.
+    Publish(Vec<DeclView>),
+    /// A global's elaborated value, by its reference.
+    Body(u64),
+    /// The `match` a handle stands for, with its arms.
+    Arms(u64),
+    /// A type's handle, to be inhabited by `:= infer`'s search.
+    Synth(u64),
+    /// A term's application spine, by its handle.
+    Spine(u64),
+    /// The fields of a one-constructor value.
+    Fields(RExpr),
+    /// What a run says about itself, rendered like `Fail`'s message and
+    /// notes, and reported only if the run succeeds.
+    Say(String, Vec<NoteView>),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -255,12 +411,39 @@ pub enum HeadView {
     /// The global's reference, its name, and the written arguments.
     Global(u64, String, Vec<u64>),
     Local(u64, Vec<u64>),
+    /// A field read a record's declaration left inline: the record, the
+    /// field's name, and the arguments the field is applied to.
+    Field(u64, String, Vec<u64>),
     Lit(u64),
     /// A `match` stuck on the scrutinee.
     Match(u64),
     /// A hole nothing has solved.
     Hole,
+    /// A λ, by a handle to its domain.
+    Lam(u64),
+    /// A constructor value: its type's reference, the constructor's number
+    /// and name, and its fields in declaration order.
+    Ctor(u64, u64, String, Vec<u64>),
     Other,
+}
+
+/// A `match` with its arms, as `Arms` answers it (`tactic::MatchInfo`): the
+/// scrutinee, each constructor's name and a handle to its arm as a function
+/// of the payload, and the arguments the match is applied to.
+#[derive(Clone, Debug)]
+pub struct ArmsView {
+    pub scrut: u64,
+    pub arms: Vec<(String, u64)>,
+    pub args: Vec<u64>,
+}
+
+/// A term's application spine, as `Spine` answers it (`tactic::SpineInfo`):
+/// the head, and every argument it is applied to (implicit ones included),
+/// each with whether the function's type at that argument is dependent.
+#[derive(Clone, Debug)]
+pub struct SpineView {
+    pub head: u64,
+    pub args: Vec<(u64, bool)>,
 }
 
 /// An answer, at the request's own kind. `Err` carries the reason a request
@@ -281,6 +464,16 @@ pub enum Answer {
     /// A global reference, from `Lookup`.
     Global(Result<u64, String>),
     Split(Result<SplitView, String>),
+    /// An `Assume`d local.
+    Local(Result<LocalView, String>),
+    Ctors(Result<Vec<CtorView>, String>),
+    /// The holes `Holes` made.
+    Holes(Result<Vec<u64>, String>),
+    Arms(Result<ArmsView, String>),
+    Spine(Result<SpineView, String>),
+    /// The type's reference, and each field's name and a handle to its
+    /// projection (`Fields`).
+    Fields(Result<(u64, Vec<(String, u64)>), String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -370,7 +563,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 }),
                 arg,
             };
-            out = self.arena.tm(TmClo::elim(out, Rc::new(elim)));
+            out = self.arena.tm(TmClo::elim(out, self.arena.elim_cell(elim)));
             ty = cod;
         }
         Ok(out)
@@ -412,6 +605,17 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(RExpr::Lam(x, Box::new(body)))
             }
             5 => Ok(RExpr::Global(self.nat_of("expr_nat", vec![e])?)),
+            6 => Ok(RExpr::Blank),
+            7 => {
+                let x = self.nat_of("expr_nat", vec![e])?;
+                let body = self.expr(self.call("expr_arg", vec![e])?, budget)?;
+                Ok(RExpr::Pi(x, Box::new(body)))
+            }
+            8 => {
+                let l = self.expr(self.call("expr_fn", vec![e])?, budget)?;
+                let r = self.expr(self.call("expr_arg", vec![e])?, budget)?;
+                Ok(RExpr::Equation(Box::new(l), Box::new(r)))
+            }
             other => Err(format!("an `Expr` with tag {other}")),
         }
     }
@@ -435,8 +639,8 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         }
     }
 
-    /// A failure's message and notes.
-    fn failure(&self) -> Result<Request, String> {
+    /// A failure's message and notes, or what `Say` says.
+    fn failure(&self) -> Result<(String, Vec<NoteView>), String> {
         let tree = self.tree;
         let msg = self.string(self.call("host_failure", vec![tree])?)?;
         let count = self.nat_of("host_note_count", vec![tree])?;
@@ -445,7 +649,47 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         for i in 0..count {
             notes.push(self.note(self.call("host_note", vec![tree, self.lit(i)])?, &mut budget)?);
         }
-        Ok(Request::Fail(msg, notes))
+        Ok((msg, notes))
+    }
+
+    /// `Publish`'s declarations, one at a time and each part by itself.
+    fn decls(&self) -> Result<Request, String> {
+        let tree = self.tree;
+        let count = self.nat_of("host_decl_count", vec![tree])?;
+        let mut budget = READ_BUDGET;
+        let mut decls = Vec::new();
+        for i in 0..count {
+            let d = self.call("host_decl", vec![tree, self.lit(i)])?;
+            let params = (0..self.nat_of("decl_param_count", vec![d])?)
+                .map(|j| {
+                    let x = self.nat_of("decl_param", vec![d, self.lit(j)])?;
+                    Ok((x, self.nat_of("decl_param_implicit", vec![d, self.lit(j)])? != 0))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let form = self.nat_of("decl_form", vec![d])?;
+            let instance = if form == 3 {
+                let class = self.string(self.call("decl_instance_class", vec![d])?)?;
+                let args = (0..self.nat_of("decl_instance_arg_count", vec![d])?)
+                    .map(|j| self.expr(self.call("decl_instance_arg", vec![d, self.lit(j)])?, &mut budget))
+                    .collect::<Result<Vec<_>, String>>()?;
+                let index = (0..self.nat_of("decl_instance_index_count", vec![d])?)
+                    .map(|j| self.string(self.call("decl_instance_index", vec![d, self.lit(j)])?))
+                    .collect::<Result<Vec<_>, String>>()?;
+                Some((class, args, index))
+            } else {
+                None
+            };
+            decls.push(DeclView {
+                theorem: form == 0,
+                value: form == 2 || form == 3,
+                instance,
+                name: self.string(self.call("decl_name", vec![d])?)?,
+                params,
+                result: self.expr(self.call("decl_result", vec![d])?, &mut budget)?,
+                body: self.expr(self.call("decl_body", vec![d])?, &mut budget)?,
+            });
+        }
+        Ok(Request::Publish(decls))
     }
 
     fn string(&self, s: &'v TmClo<'v>) -> Result<String, String> {
@@ -498,11 +742,18 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                     HeadView::Lit(n) => return self.call("host_head_lit", vec![self.lit(*n)]),
                     HeadView::Match(s) => return self.call("host_head_match", vec![self.lit(*s)]),
                     HeadView::Hole => return self.call("host_head_hole", vec![]),
+                    HeadView::Lam(dom) => return self.call("host_head_lam", vec![self.lit(*dom)]),
+                    HeadView::Ctor(ty, i, name, fields) => {
+                        (self.call("host_head_ctor", vec![self.lit(*ty), self.lit(*i), self.string_value(name)?])?, fields)
+                    }
                     HeadView::Other => return self.call("host_head_other", vec![]),
                     HeadView::Global(g, name, args) => {
                         (self.call("host_head_global", vec![self.lit(*g), self.string_value(name)?])?, args)
                     }
                     HeadView::Local(x, args) => (self.call("host_head_local", vec![self.lit(*x)])?, args),
+                    HeadView::Field(r, name, args) => {
+                        (self.call("host_head_field", vec![self.lit(*r), self.string_value(name)?])?, args)
+                    }
                 };
                 for h in args {
                     out = self.call("host_head_arg", vec![out, self.lit(*h)])?;
@@ -536,6 +787,64 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 Ok(out)
             }
             Answer::Split(Err(why)) => self.call("host_split_refused", vec![self.string_value(why)?]),
+            Answer::Local(Ok(l)) => {
+                let name = self.string_value(&l.name)?;
+                self.call("host_assumed", vec![self.lit(l.id), name, self.lit(l.ty)])
+            }
+            Answer::Local(Err(why)) => self.call("host_not_assumed", vec![self.string_value(why)?]),
+            Answer::Ctors(Ok(cs)) => {
+                let mut out = self.call("host_ctors", vec![])?;
+                for c in cs {
+                    out = self.call("host_ctor", vec![out, self.string_value(&c.name)?])?;
+                    for (name, f) in &c.fields {
+                        let name = self.string_value(name)?;
+                        out = match f {
+                            Some(h) => self.call("host_ctor_field", vec![out, name, self.lit(*h)])?,
+                            None => self.call("host_ctor_dependent_field", vec![out, name])?,
+                        };
+                    }
+                    if let Some(h) = c.ctor {
+                        out = self.call("host_ctor_fn", vec![out, self.lit(h)])?;
+                    }
+                }
+                Ok(out)
+            }
+            Answer::Ctors(Err(why)) => self.call("host_ctors_refused", vec![self.string_value(why)?]),
+            Answer::Holes(Ok(hs)) => {
+                let mut out = self.call("host_holes", vec![])?;
+                for h in hs {
+                    out = self.call("host_holes_next", vec![out, self.lit(*h)])?;
+                }
+                Ok(out)
+            }
+            Answer::Holes(Err(why)) => self.call("host_no_holes", vec![self.string_value(why)?]),
+            Answer::Arms(Ok(m)) => {
+                let mut out = self.call("host_arms", vec![self.lit(m.scrut)])?;
+                for (ctor, body) in &m.arms {
+                    out = self.call("host_arms_arm", vec![out, self.string_value(ctor)?, self.lit(*body)])?;
+                }
+                for h in &m.args {
+                    out = self.call("host_arms_arg", vec![out, self.lit(*h)])?;
+                }
+                Ok(out)
+            }
+            Answer::Arms(Err(why)) => self.call("host_no_arms", vec![self.string_value(why)?]),
+            Answer::Spine(Ok(sp)) => {
+                let mut out = self.call("host_spine", vec![self.lit(sp.head)])?;
+                for (h, dependent) in &sp.args {
+                    out = self.call("host_spine_arg", vec![out, self.lit(*h), self.lit(*dependent as u64)])?;
+                }
+                Ok(out)
+            }
+            Answer::Spine(Err(why)) => self.call("host_no_spine", vec![self.string_value(why)?]),
+            Answer::Fields(Ok((ty, fs))) => {
+                let mut out = self.call("host_fields", vec![self.lit(*ty)])?;
+                for (name, h) in fs {
+                    out = self.call("host_fields_next", vec![out, self.string_value(name)?, self.lit(*h)])?;
+                }
+                Ok(out)
+            }
+            Answer::Fields(Err(why)) => self.call("host_no_fields", vec![self.string_value(why)?]),
         }
     }
 
@@ -553,7 +862,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let b = self.expr(self.call("host_rhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Defeq(a, b)))
             }
-            3 => Ok(Step::Ask(self.failure()?)),
+            3 => {
+                let (msg, notes) = self.failure()?;
+                Ok(Step::Ask(Request::Fail(msg, notes)))
+            }
             4 => {
                 let mut budget = READ_BUDGET;
                 Ok(Step::Ask(Request::Infer(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
@@ -588,6 +900,36 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                     proofs.push(self.expr(self.call("host_proof", vec![tree, self.lit(i)])?, &mut budget)?);
                 }
                 Ok(Step::Ask(Request::Close(split, proofs)))
+            }
+            17 => {
+                let mut budget = READ_BUDGET;
+                let ty = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                let name = self.string(self.call("host_name", vec![tree])?)?;
+                let under = self.nat_of("host_under", vec![tree])?.checked_sub(1);
+                Ok(Step::Ask(Request::Assume(ty, name, under)))
+            }
+            18 => Ok(Step::Ask(Request::Ctors(self.nat_of("host_handle", vec![tree])?))),
+            19 => {
+                let mut budget = READ_BUDGET;
+                Ok(Step::Ask(Request::AsType(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
+            }
+            20 => Ok(Step::Ask(self.decls()?)),
+            21 => {
+                let mut budget = READ_BUDGET;
+                let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Holes(e, self.nat_of("host_hole_count", vec![tree])?)))
+            }
+            22 => Ok(Step::Ask(Request::Body(self.nat_of("host_handle", vec![tree])?))),
+            23 => Ok(Step::Ask(Request::Arms(self.nat_of("host_handle", vec![tree])?))),
+            24 => Ok(Step::Ask(Request::Synth(self.nat_of("host_handle", vec![tree])?))),
+            25 => Ok(Step::Ask(Request::Spine(self.nat_of("host_handle", vec![tree])?))),
+            26 => {
+                let (msg, notes) = self.failure()?;
+                Ok(Step::Ask(Request::Say(msg, notes)))
+            }
+            27 => {
+                let mut budget = READ_BUDGET;
+                Ok(Step::Ask(Request::Fields(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
             }
             other => Err(format!("a request tree with tag {other}")),
         }
@@ -633,7 +975,7 @@ impl<'v> Interpreted<'_, '_, 'v> {
         };
         let fst = self.arena.tm(TmClo::val(force(fst)?));
         let snd = self.arena.tm(TmClo::val(force(snd)?));
-        Ok(self.arena.tm(TmClo::val(Rc::new(Val::Pair { ann: ann.clone(), fst, snd }))))
+        Ok(self.arena.tm(TmClo::val(self.arena.val(Val::Pair { ann: ann.clone(), fst, snd }))))
     }
 }
 
@@ -651,7 +993,7 @@ struct Scope {
 
 /// What a handle stands for.
 #[derive(Clone)]
-enum Held {
+pub(crate) enum Held {
     Type(Type, Level),
     Term(Term, Type, Level),
 }
@@ -685,11 +1027,22 @@ enum GlobalKey {
     Builtin(&'static str),
 }
 
+/// A block `let` in scope at the goal, which a tactic sees as one of the
+/// goal's locals: a handle to its value and one to its type, both scoped in
+/// the goal's context. A `Local` naming it is its value, as a use of the
+/// name in source would be.
+struct LetLocal {
+    alias: Rc<Alias>,
+    value: u64,
+    ty: u64,
+}
+
 /// Everything one run issued: its scopes, its handles (each in a scope),
 /// the locals its scopes introduced, its holes, the global references it
 /// handed out and its splits. Ids of the goal's own locals are their
-/// positions in its context; any other local's id is the goal's length plus
-/// its index in `opened`.
+/// positions in its context; the goal's `let`s come next, by their index in
+/// `lets`; any other local's id is the goal's length plus the number of
+/// `let`s plus its index in `opened`.
 ///
 /// **Holes are metavariables in the elaborator's scratch-world form**
 /// (`unification.rs`): with `m` holes, a term of the run lives in Ψ extended
@@ -703,6 +1056,7 @@ enum GlobalKey {
 struct Run {
     scopes: Vec<Scope>,
     held: Vec<Issued>,
+    lets: Vec<LetLocal>,
     /// Each introduced local's scope and position there.
     opened: Vec<(usize, usize)>,
     holes: Vec<Hole>,
@@ -711,6 +1065,41 @@ struct Run {
     globals: Vec<GlobalKey>,
     splits: Vec<Rc<Split>>,
     span: Span,
+    /// A generator's run (`generate`): its root is the module's empty
+    /// context, it has no goal, and it ends by publishing.
+    generator: bool,
+    /// Applications already reified, by scope and `Expr`: a tactic builds an
+    /// application one argument at a time and asks for each prefix's type
+    /// (`apply_slots`, `cast_holes`), so each request re-reads the prefix
+    /// before it. A hit is the earlier reading, in the world it was made in
+    /// and valid while the hole solutions it was made under stand
+    /// ([`Reading`]).
+    readings: std::collections::HashMap<(usize, RExpr), Reading>,
+    /// Handles issued for subterms, by scope and the subterm's address, so
+    /// a subterm a term shares (a block's `let` is an alias, not a binder)
+    /// is one handle wherever a view meets it in that scope
+    /// (docs/runtime-fn-setups-design.md §3.2). The `Rc` held here keeps the
+    /// address from being reused while the run lasts.
+    shared: std::collections::HashMap<(usize, usize), (Rc<Term>, u64)>,
+    /// What the run said (`Say`), reported at its span once it succeeds.
+    said: Vec<String>,
+}
+
+/// A remembered reification: the world it was made in (its terms are
+/// shifted past the holes made since) and the trail's length then. A
+/// `Restore` below that length may have forgotten a solution the reading
+/// relied on (its argument's type matched the domain by it), so it drops
+/// the reading.
+struct Reading {
+    reified: Reified,
+    world: usize,
+    trail: usize,
+}
+
+/// How a run ended: with a tactic's result, or a generator's declarations.
+enum Ended {
+    Result(RExpr),
+    Published(Vec<DeclView>),
 }
 
 /// How a split's proof is built: surface syntax whose leaves are
@@ -742,6 +1131,11 @@ pub(crate) enum Leaves {
     /// Each leaf is its branch's proof, valid in a context of the length
     /// given.
     Fill(Vec<(Term, usize)>),
+    /// A generated declaration's parameter types, statement and body
+    /// ([`Elaborator::elab_generate`]), in a context of the length given.
+    /// They were built in a world of `psi` globals, and the declarations
+    /// published since are shifted past.
+    Member { fills: Vec<(Held, usize)>, psi: usize },
 }
 
 const LEAF: &str = "\0host-leaf-";
@@ -765,6 +1159,16 @@ enum Fault {
     Ill(String),
 }
 
+/// A request's outcome as its answer: refused for an ill-typed `Expr`, and
+/// the run's end for a broken protocol.
+fn refusable<T>(r: Result<T, Fault>) -> Result<Result<T, String>, String> {
+    match r {
+        Ok(t) => Ok(Ok(t)),
+        Err(Fault::Ill(why)) => Ok(Err(why)),
+        Err(Fault::Protocol(msg)) => Err(msg),
+    }
+}
+
 impl Fault {
     fn msg(self) -> String {
         match self {
@@ -774,6 +1178,31 @@ impl Fault {
 }
 
 impl Run {
+    fn new(cx: &Cx, span: Span, generator: bool) -> Run {
+        Run {
+            scopes: vec![Scope { parent: None, cx: cx.clone(), world: 0, locals: Vec::new() }],
+            held: Vec::new(),
+            lets: Vec::new(),
+            opened: Vec::new(),
+            holes: Vec::new(),
+            trail: Vec::new(),
+            globals: Vec::new(),
+            splits: Vec::new(),
+            span,
+            generator,
+            readings: std::collections::HashMap::new(),
+            shared: std::collections::HashMap::new(),
+            said: Vec::new(),
+        }
+    }
+
+    /// The handles an invocation's arguments quoted, in order, at the root.
+    fn issue_quoted(&mut self, quoted: Vec<Held>) {
+        for held in quoted {
+            self.issue(0, held);
+        }
+    }
+
     fn len(&self, s: usize) -> usize {
         self.scopes[s].cx.gamma.len()
     }
@@ -817,14 +1246,31 @@ impl Run {
         Ok((issued.scope, held))
     }
 
-    /// The scope a local belongs to and its position in that scope's context.
+    /// The id the next introduced local gets.
+    fn next_id(&self) -> u64 {
+        (self.len(0) + self.lets.len() + self.opened.len()) as u64
+    }
+
+    /// The goal's `let` a local id names, if it names one.
+    fn let_local(&self, id: u64) -> Option<&LetLocal> {
+        self.lets.get((id as usize).checked_sub(self.len(0))?)
+    }
+
+    /// The scope a binder's local belongs to and its position in that
+    /// scope's context. A `let` has no position; its id is refused here.
     fn local(&self, id: u64) -> Result<(usize, usize), Fault> {
         let root = self.len(0);
         let id = id as usize;
         if id < root {
             return Ok((0, id));
         }
-        self.opened.get(id - root).copied().ok_or_else(|| Fault::Protocol(format!("there is no local {id} in this run")))
+        if let Some(l) = self.lets.get(id - root) {
+            return Err(Fault::Protocol(format!("local {id} is the `let` `{}`, which no binder bound", l.alias.name)));
+        }
+        self.opened
+            .get(id - root - self.lets.len())
+            .copied()
+            .ok_or_else(|| Fault::Protocol(format!("there is no local {id} in this run")))
     }
 
     /// The type of position `i` of scope `at`'s context, scoped there, in the
@@ -841,12 +1287,13 @@ impl Run {
     fn scope_of(&self, e: &RExpr) -> Result<usize, Fault> {
         match e {
             RExpr::Hd(h) => Ok(self.held(*h)?.0),
+            RExpr::Local(x) if self.let_local(*x).is_some() => Ok(0),
             RExpr::Local(x) => Ok(self.local(*x)?.0),
-            RExpr::NatLit(_) | RExpr::Global(_) => Ok(0),
-            RExpr::App(f, a) => self.join(self.scope_of(f)?, self.scope_of(a)?),
-            RExpr::Lam(x, _) => {
+            RExpr::NatLit(_) | RExpr::Global(_) | RExpr::Blank => Ok(0),
+            RExpr::App(f, a) | RExpr::Equation(f, a) => self.join(self.scope_of(f)?, self.scope_of(a)?),
+            RExpr::Lam(x, _) | RExpr::Pi(x, _) => {
                 let (s, _) = self.local(*x)?;
-                self.scopes[s].parent.ok_or_else(|| Fault::Protocol(format!("`Lam` abstracts local {x}, which the tactic did not open")))
+                self.scopes[s].parent.ok_or_else(|| Fault::Protocol(format!("`Lam` or `Pi` abstracts local {x}, which the tactic did not open")))
             }
         }
     }
@@ -878,6 +1325,18 @@ impl Run {
     /// Issue a handle to a committed term or type.
     fn issue(&mut self, scope: usize, held: Held) -> u64 {
         self.issue_in(scope, 0, held)
+    }
+
+    /// A handle to a committed subterm `t` of a term held in `scope`: the
+    /// same handle each time the same shared subterm is met there.
+    fn issue_shared(&mut self, scope: usize, t: &Rc<Term>, ty: Type, level: Level) -> u64 {
+        let key = (scope, Rc::as_ptr(t) as usize);
+        if let Some((_, h)) = self.shared.get(&key) {
+            return *h;
+        }
+        let h = self.issue(scope, Held::Term((**t).clone(), ty, level));
+        self.shared.insert(key, (Rc::clone(t), h));
+        h
     }
 
     /// Issue a handle to something in the world of `world` holes.
@@ -994,6 +1453,9 @@ impl Run {
 
     /// Forget the solutions found after `mark`.
     fn restore(&mut self, mark: usize) {
+        if self.trail.len() > mark {
+            self.readings.retain(|_, r| r.trail <= mark);
+        }
         while self.trail.len() > mark {
             let j = self.trail.pop().expect("a solved hole");
             self.holes[j].sol = None;
@@ -1001,7 +1463,24 @@ impl Run {
     }
 }
 
+/// A generated declaration, read back from its generator's run: each
+/// parameter's name, implicitness and type (scoped in the parameters before
+/// it), the statement and the body under all of them. Everything is in the
+/// world the run was in.
+pub(crate) struct Member {
+    theorem: bool,
+    value: bool,
+    /// The instance the value is registered as: the class, its type
+    /// arguments (in the root scope) and its index arguments by name.
+    instance: Option<(String, Vec<(Type, Level)>, Vec<String>)>,
+    name: String,
+    params: Vec<(String, bool, Type, Level)>,
+    result: (Type, Level),
+    body: Term,
+}
+
 /// One elaborated piece of a returned `Expr`.
+#[derive(Clone)]
 struct Reified {
     term: Term,
     ty: Type,
@@ -1018,11 +1497,14 @@ pub(crate) struct Quoting {
     quote: (Term, Rc<Type>),
     /// The goal's context, where every quoted term must live.
     root: LocalCtx,
-    /// The quoted terms, in handle order after the goal.
-    terms: RefCell<Vec<(Term, Type, Level)>>,
+    /// The quoted terms and types, in handle order after the goal.
+    terms: RefCell<Vec<Held>>,
     /// The expression being checked without quoting, by the probe that
     /// decides whether it needs quoting at all.
     plain: Cell<Option<Span>>,
+    /// A generator's run issues no goal handle, so its quoted terms are
+    /// handles 0 onwards.
+    no_goal: bool,
 }
 
 impl Elaborator {
@@ -1032,30 +1514,49 @@ impl Elaborator {
         let shown = tactic_name(tactic);
         if let heather_syntax::ast::ExprKind::Var(name) = &tactic.kind {
             if self.key_of(name).is_none() && !self.shadowed(cx, name) {
-                if let Some(make) = self.native_tactics.borrow().get(name.as_str()) {
+                if let Some(make) = self.policy.native_tactics.borrow().get(name.as_str()) {
                     let mut speaker: Box<dyn NativeTactic> = make();
                     return self.run_tactic(cx, &mut speaker, &shown, goal, lvl, Vec::new(), span);
                 }
             }
         }
         let world = self.goal_psi();
-        let signature = |name: &str| -> R<(Term, Type)> {
-            let key = format!("tactic::{name}");
-            let Some(abs) = self.global_abs(&key) else {
-                return err("`by` runs a tactic written against the `tactic` protocol; add `import tactic;`", span);
-            };
-            let len = world.bindings.len();
-            let GlobalBinding::Tm { ty, .. } = &world.bindings[abs] else {
-                return err(format!("`{key}` is not a term-level global"), span);
-            };
-            let head = Term::GlobalTm { var: GlobalVar((len - 1 - abs) as u32), subst: LocalSubst::id(&LocalCtx::nil()) };
-            Ok((head, ty.shift_global((len - abs) as u32)))
+        let (closed, quoted) = self.protocol_value(cx, &world, tactic, "host_tag", "by", span)?;
+        // One arena for the whole run, which keeps what it forces: each
+        // resumed tree is built from closures the earlier ones forced
+        // (`ValueArena::cache_tm`).
+        let arena = ValueArena::new();
+        let reader = Reader::new(&world, &arena);
+        let tree = reader.root(closed);
+        let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };
+        self.run_tactic(cx, &mut speaker, &shown, goal, lvl, quoted, span)
+    }
+
+    /// `tactic::name`'s head and type in `world`.
+    fn protocol_signature(&self, world: &GlobalCtx, name: &str, keyword: &str, span: Span) -> R<(Term, Type)> {
+        let key = format!("tactic::{name}");
+        let Some(abs) = self.global_abs(&key) else {
+            return err(format!("`{keyword}` runs a value of the `tactic` protocol; add `import tactic;`"), span);
         };
-        let (_, tag) = signature("host_tag")?;
-        let Type::Pi { dom_level, dom, .. } = tag else {
-            return err("`tactic::host_tag` does not take a tactic", span);
+        let len = world.bindings.len();
+        let GlobalBinding::Tm { ty, .. } = &world.bindings[abs] else {
+            return err(format!("`{key}` is not a term-level global"), span);
         };
-        let (quote_head, quote_ty) = signature("host_quote")?;
+        let head = Term::GlobalTm { var: GlobalVar((len - 1 - abs) as u32), subst: LocalSubst::id(&LocalCtx::nil()) };
+        Ok((head, ty.shift_global((len - abs) as u32)))
+    }
+
+    /// Elaborate `e`, a `by`'s tactic or a `generate`'s generator, at the
+    /// type `tactic::entry` takes, with quoting on: a closed term and the
+    /// handles its arguments quoted. A generator issues no goal handle, so
+    /// its quoted handles start at 0.
+    fn protocol_value(&self, cx: &Cx, world: &GlobalCtx, e: &Expr, entry: &str, keyword: &str, span: Span) -> R<(Term, Vec<Held>)> {
+        let shown = tactic_name(e);
+        let (_, takes) = self.protocol_signature(world, entry, keyword, span)?;
+        let Type::Pi { dom_level, dom, .. } = takes else {
+            return err(format!("`tactic::{entry}` takes nothing"), span);
+        };
+        let (quote_head, quote_ty) = self.protocol_signature(world, "host_quote", keyword, span)?;
         let Type::Pi { cod_level, cod, .. } = &quote_ty else {
             return err("`tactic::host_quote` does not take a handle", span);
         };
@@ -1066,29 +1567,23 @@ impl Elaborator {
             root: cx.gamma.clone(),
             terms: RefCell::new(Vec::new()),
             plain: Cell::new(None),
+            no_goal: keyword == "generate",
         });
-        let outer = self.by_quoting.replace(Some(Rc::clone(&quoting)));
-        let term = self.elab_check(cx, tactic, &dom, &dom_level);
-        self.by_quoting.replace(outer);
+        let term = self.scoped_cell(|s| &s.by_quoting, Some(Rc::clone(&quoting)), || {
+            self.elab_check(cx, e, &dom, &dom_level)
+        });
         let term = term?;
         let Some(closed) = crate::unification::strengthen_tm(&LocalCtx::nil(), &term, cx.gamma.len() as u32) else {
             return err(
                 format!(
-                    "`by {shown}`: a tactic's arguments can mention the goal's locals only where it expects an \
+                    "`{keyword} {shown}`: its arguments can mention the goal's locals only where it expects an \
                      `Expr`; otherwise it reaches them through the `Goal` request"
                 ),
                 span,
             );
         };
         let quoted = quoting.terms.borrow().clone();
-        // One arena for the whole run, which keeps what it forces: each
-        // resumed tree is built from closures the earlier ones forced
-        // (`ValueArena::cache_tm`).
-        let arena = ValueArena::new();
-        let reader = Reader::new(&world, &arena);
-        let tree = reader.root(closed);
-        let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };
-        self.run_tactic(cx, &mut speaker, &shown, goal, lvl, quoted, span)
+        Ok((closed, quoted))
     }
 
     /// While a `by`'s tactic expression is elaborated, `e` at `expected`:
@@ -1102,7 +1597,7 @@ impl Elaborator {
     /// term of the goal's context, not of the tactic expression's own
     /// binders.
     pub(crate) fn quote_for_by(&self, cx: &Cx, e: &Expr, expected: &Type, lvl: &Level) -> R<Option<Term>> {
-        let Some(q) = self.by_quoting.borrow().clone() else {
+        let Some(q) = self.scope.by_quoting.borrow().clone() else {
             return Ok(None);
         };
         if q.plain.get() == Some(e.span) {
@@ -1112,32 +1607,51 @@ impl Elaborator {
         if !lvl.equiv(&q.level) || !self.conv_types(cx, expected, &q.expr, lvl) {
             return Ok(None);
         }
+        // A type's name is quoted as the type (`generate congruences(Tm)`).
+        if let heather_syntax::ast::ExprKind::Var(name) = &e.kind
+            && !self.shadowed(cx, name)
+            && !cx.names.iter_inner().any(|n| n == name)
+            && self.lookup_inductive(name).is_some_and(|ind| ind.params.is_empty() && ind.valparams.is_empty())
+        {
+            let written = heather_syntax::ast::Ty {
+                kind: heather_syntax::ast::TyKind::Named { name: name.clone(), args: Vec::new() },
+                span: e.span,
+            };
+            let (ty, level) = self.elab_ty(cx, &written)?;
+            let d = (cx.gamma.len() - q.root.len()) as u32;
+            let Some(ty) = crate::unification::strengthen_ty(&q.root, &ty, d) else {
+                return err("a quoted type must live in the goal's context", e.span);
+            };
+            return Ok(Some(self.quoted(&q, cx, Held::Type(ty, level), e.span)?));
+        }
         // A bare global is quoted as itself, its implicit parameters still
         // binders of its type for `Match` to solve; inferring it would
         // insert them.
         if let heather_syntax::ast::ExprKind::Var(name) = &e.kind
             && !self.shadowed(cx, name)
-            && !cx.names.iter().any(|n| n == name)
+            && !cx.names.iter_inner().any(|n| n == name)
             && let Some((term, ty, level)) = self.raw_global(name)
             && !(level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level))
         {
             let root = q.root.len() as u32;
-            return Ok(Some(self.quoted(&q, cx, term.shift_local(root), ty.shift_local(root), level, e.span)?));
+            return Ok(Some(self.quoted(&q, cx, Held::Term(term.shift_local(root), ty.shift_local(root), level), e.span)?));
         }
         q.plain.set(Some(e.span));
-        let probe = self.clone().elab_infer(cx, e);
-        q.plain.set(None);
-        match probe {
-            Err(_) => return Ok(None),
-            Ok((_, ty, level)) if level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level) => return Ok(None),
-            Ok(_) => {}
+        let plain = self.probe(|| {
+            let inferred = self.elab_infer(cx, e);
+            q.plain.set(None);
+            match inferred {
+                Err(_) => true,
+                Ok((_, ty, level)) => level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level),
+            }
+        });
+        if plain {
+            return Ok(None);
         }
         // Inferred for real, with quoting off: what is quoted is an
         // ordinary term, and its dependencies and notes are this
         // elaborator's.
-        let outer = self.by_quoting.replace(None);
-        let inferred = self.elab_infer(cx, e);
-        self.by_quoting.replace(outer);
+        let inferred = self.scoped_cell(|s| &s.by_quoting, None, || self.elab_infer(cx, e));
         let (term, ty, level) = inferred?;
         let d = (cx.gamma.len() - q.root.len()) as u32;
         let (Some(term), Some(ty)) = (
@@ -1150,16 +1664,16 @@ impl Elaborator {
                 e.span,
             );
         };
-        Ok(Some(self.quoted(&q, cx, term, ty, level, e.span)?))
+        Ok(Some(self.quoted(&q, cx, Held::Term(term, ty, level), e.span)?))
     }
 
     /// Record a quoted term of the goal's context and return the closed
     /// `host_quote(n)` that stands for it, weakened to `cx`.
-    fn quoted(&self, q: &Quoting, cx: &Cx, term: Term, ty: Type, level: Level, span: Span) -> R<Term> {
+    fn quoted(&self, q: &Quoting, cx: &Cx, held: Held, span: Span) -> R<Term> {
         let n = {
             let mut terms = q.terms.borrow_mut();
-            terms.push((term, ty, level));
-            terms.len() as u64
+            terms.push(held);
+            terms.len() as u64 - u64::from(q.no_goal)
         };
         let (head, pi) = &q.quote;
         let Type::Pi { dom_level, cod_level, dom, cod } = &**pi else {
@@ -1188,99 +1702,88 @@ impl Elaborator {
         shown: &str,
         goal: &Type,
         lvl: &Level,
-        quoted: Vec<(Term, Type, Level)>,
+        quoted: Vec<Held>,
         span: Span,
     ) -> R<Term> {
         let fail = |msg: String| err(format!("`by {shown}`: {msg}"), span);
-        let mut run = Run {
-            scopes: vec![Scope { parent: None, cx: cx.clone(), world: 0, locals: Vec::new() }],
-            held: Vec::new(),
-            opened: Vec::new(),
-            holes: Vec::new(),
-            trail: Vec::new(),
-            globals: Vec::new(),
-            splits: Vec::new(),
-            span,
-        };
+        let mut run = Run::new(cx, span, false);
         run.issue(0, Held::Type(goal.clone(), lvl.clone()));
-        for (term, ty, level) in quoted {
-            run.issue(0, Held::Term(term, ty, level));
+        run.issue_quoted(quoted);
+        self.issue_lets(cx, &mut run);
+        match self.drive(&mut run, speaker) {
+            Ok(Ended::Result(e)) => {
+                let proof = self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg))?;
+                // What the run said is reported only now that it succeeded,
+                // as one warning: the lints are kept one per span.
+                if !run.said.is_empty() {
+                    self.emit_lint(crate::Lint::TacticReport, format!("`by {shown}`: {}", run.said.join("\n")), span);
+                }
+                Ok(proof)
+            }
+            Ok(Ended::Published(_)) => fail("only `generate` publishes declarations".into()),
+            Err(msg) => fail(msg),
         }
+    }
+
+    /// The host loop: drive `speaker` until it returns a result or, in a
+    /// generator's run, publishes, answering its requests in the run's
+    /// scopes. The error is the reason the run stopped.
+    fn drive(&self, run: &mut Run, speaker: &mut dyn Speaker) -> Result<Ended, String> {
+        let span = run.span;
+        let what = if run.generator { "generator" } else { "tactic" };
         let mut step = speaker.start();
         for answered in 0..REQUEST_BUDGET {
             let request = match step {
-                Err(msg) => return fail(format!("{msg}, after {answered} requests")),
-                Ok(Step::Done(e)) => return self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg)),
+                Err(msg) => return Err(format!("{msg}, after {answered} requests")),
+                Ok(Step::Done(e)) => return Ok(Ended::Result(e)),
                 Ok(Step::Ask(request)) => request,
             };
             let answer = match request {
-                Request::Goal => Answer::Goal(self.goal_view(cx, &mut run)),
-                Request::Defeq(a, b) => match self.defeq(&mut run, &a, &b) {
-                    Ok(same) => Answer::Bool(same),
-                    Err(f) => return fail(f.msg()),
-                },
-                Request::Fail(msg, notes) => {
-                    let rendered = match self.render_notes(&mut run, &notes) {
-                        Ok(r) => r,
-                        Err(f) => return fail(f.msg()),
-                    };
-                    return fail(format!("the tactic failed: {msg}{rendered}"));
+                Request::Goal if run.generator => {
+                    return Err("a generator has no goal: `focus` a tactic on a statement it built".into());
                 }
-                Request::Infer(e) => match self.infer_request(&mut run, &e) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
-                    Ok(h) => Answer::Handle(Ok(h)),
-                },
-                Request::Open(h, name) => match self.open_request(&mut run, h, name) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Opened(Err(why)),
-                    Ok(o) => Answer::Opened(Ok(o)),
-                },
-                Request::Resolve(name) => Answer::Handle(self.resolve_request(&mut run, &name, span)),
-                Request::View(h) => match self.view_request(&mut run, h) {
-                    Ok(v) => Answer::Head(v),
-                    Err(f) => return fail(f.msg()),
-                },
-                Request::Whnf(h) => match self.whnf_request(&mut run, h) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
-                    Ok(h) => Answer::Handle(Ok(h)),
-                },
-                Request::Match(ty, target) => match self.match_request(&mut run, ty, target, span) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Match(Err(why)),
-                    Ok(slots) => Answer::Match(Ok(slots)),
-                },
-                Request::Hole(h) => match self.hole_request(&mut run, h) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
-                    Ok(h) => Answer::Handle(Ok(h)),
-                },
+                Request::Goal => Answer::Goal(self.goal_view(&run.scopes[0].cx.clone(), run)),
+                Request::Defeq(a, b) => Answer::Bool(self.defeq(run, &a, &b).map_err(Fault::msg)?),
+                Request::Fail(msg, notes) => {
+                    let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
+                    return Err(format!("the {what} failed: {msg}{rendered}"));
+                }
+                Request::Infer(e) => Answer::Handle(refusable(self.infer_request(run, &e))?),
+                Request::Open(h, name) => Answer::Opened(refusable(self.open_request(run, h, name))?),
+                Request::Resolve(name) => Answer::Handle(self.resolve_request(run, &name, span)),
+                Request::View(h) => Answer::Head(self.view_request(run, h).map_err(Fault::msg)?),
+                Request::Whnf(h) => Answer::Handle(refusable(self.whnf_request(run, h))?),
+                Request::Match(ty, target) => Answer::Match(refusable(self.match_request(run, ty, target, span))?),
+                Request::Hole(h) => Answer::Handle(refusable(self.hole_request(run, h))?),
                 Request::Mark => Answer::Nat(run.trail.len() as u64),
                 Request::Restore(mark) => {
                     run.restore(mark as usize);
                     Answer::Unit
                 }
-                Request::Lookup(name) => Answer::Global(self.lookup_request(&mut run, &name)),
-                Request::Cases(e, goal) => match self.cases_request(&mut run, &e, goal) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Split(Err(why)),
-                    Ok(split) => Answer::Split(Ok(split)),
-                },
-                Request::Constructor(goal) => match self.constructor_request(&mut run, goal) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Split(Err(why)),
-                    Ok(split) => Answer::Split(Ok(split)),
-                },
-                Request::Close(split, proofs) => match self.close_request(&mut run, split, &proofs) {
-                    Err(Fault::Protocol(msg)) => return fail(msg),
-                    Err(Fault::Ill(why)) => Answer::Handle(Err(why)),
-                    Ok(h) => Answer::Handle(Ok(h)),
-                },
+                Request::Lookup(name) => Answer::Global(self.lookup_request(run, &name)),
+                Request::Cases(e, goal) => Answer::Split(refusable(self.cases_request(run, &e, goal))?),
+                Request::Constructor(goal) => Answer::Split(refusable(self.constructor_request(run, goal))?),
+                Request::Close(split, proofs) => Answer::Handle(refusable(self.close_request(run, split, &proofs))?),
+                Request::Assume(ty, name, under) => Answer::Local(refusable(self.assume_request(run, &ty, name, under))?),
+                Request::Ctors(h) => Answer::Ctors(refusable(self.ctors_request(run, h))?),
+                Request::AsType(e) => Answer::Handle(refusable(self.as_type_request(run, &e))?),
+                Request::Holes(e, n) => Answer::Holes(refusable(self.holes_request(run, &e, n))?),
+                Request::Body(g) => Answer::Handle(refusable(self.body_request(run, g))?),
+                Request::Arms(h) => Answer::Arms(refusable(self.arms_request(run, h))?),
+                Request::Synth(h) => Answer::Handle(refusable(self.synth_request(run, h, span))?),
+                Request::Spine(h) => Answer::Spine(refusable(self.spine_request(run, h))?),
+                Request::Fields(e) => Answer::Fields(refusable(self.fields_request(run, &e))?),
+                Request::Say(msg, notes) => {
+                    let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
+                    run.said.push(format!("{msg}{rendered}"));
+                    Answer::Unit
+                }
+                Request::Publish(decls) if run.generator => return Ok(Ended::Published(decls)),
+                Request::Publish(_) => return Err("only `generate` publishes declarations; a tactic cannot".into()),
             };
             step = speaker.resume(answer);
         }
-        fail(format!("the tactic made more than {REQUEST_BUDGET} requests without finishing"))
+        Err(format!("the {what} made more than {REQUEST_BUDGET} requests without finishing"))
     }
 
     /// The tactic's result as a proof of the goal: elaborated, compared with
@@ -1295,47 +1798,127 @@ impl Elaborator {
                 self.display_type(cx, goal)
             ));
         }
-        run.committed_tm(&r.term).ok_or_else(|| {
+        let proof = run.committed_tm(&r.term).ok_or_else(|| {
             format!("the tactic's proof `{}` mentions a hole nothing solved", self.shown_tm(run, 0, &r.term))
-        })
+        })?;
+        // A `let` the result names is in the proof, which the kernel checks;
+        // one only a handle reached may not be, and its block still hands its
+        // value to the kernel (`statements::LetValue::discard_around`).
+        let mut named = Vec::new();
+        e.locals(&mut named);
+        for x in named {
+            if let Some(l) = run.let_local(x) {
+                l.alias.splice(0);
+            }
+        }
+        Ok(proof)
     }
 
+    /// The goal's locals, the most recent first: its binders, and between
+    /// them the `let`s each was followed by ([`Self::issue_lets`]).
     fn goal_view(&self, cx: &Cx, run: &mut Run) -> GoalView {
         let n = cx.gamma.len();
-        let mut locals = Vec::with_capacity(n);
+        let mut lets: Vec<(usize, LocalView)> = run
+            .lets
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(k, l)| (l.alias.depth, LocalView { id: (n + k) as u64, name: l.alias.name.clone(), ty: l.ty }))
+            .collect();
+        lets.sort_by_key(|(depth, _)| std::cmp::Reverse(*depth));
+        let mut lets = lets.into_iter().peekable();
+        let mut locals = Vec::with_capacity(n + run.lets.len());
         for i in (0..n).rev() {
+            while let Some((_, l)) = lets.next_if(|(depth, _)| *depth > i) {
+                locals.push(l);
+            }
             let entry = cx.gamma.entries.get(i).expect("a context entry below its length");
             let ty = run.issue(0, Held::Type(entry.ty.shift_local((n - i) as u32), entry.level.clone()));
-            locals.push(LocalView { id: i as u64, name: cx.names.get(i).cloned().unwrap_or_else(|| "_".to_string()), ty });
+            locals.push(LocalView { id: i as u64, name: cx.names.get(i).map(str::to_string).unwrap_or_else(|| "_".to_string()), ty });
         }
+        locals.extend(lets.map(|(_, l)| l));
         GoalView { target: 0, locals }
+    }
+
+    /// Make the `let`s in scope at the goal locals of the run: each one whose
+    /// name still means it there (not bound again by a later binder or
+    /// `let`) and was written (not one of the elaborator's `#` names). A
+    /// `let` is not a kernel binder, since its uses inline its value, but a
+    /// fact bound by one is a hypothesis like a parameter is, and a tactic
+    /// that searches the goal's locals (`assumption`, `mono`) should find it
+    /// without being handed it.
+    fn issue_lets(&self, cx: &Cx, run: &mut Run) {
+        let n = cx.names.len();
+        let aliases: Vec<_> = cx.aliases.iter().collect();
+        for (k, alias) in aliases.iter().enumerate() {
+            let Some(later) = n.checked_sub(alias.depth) else { continue };
+            let shadowed = cx.names.iter_inner().take(later).any(|m| m == alias.name)
+                || aliases[k + 1..].iter().any(|b| b.name == alias.name);
+            let written = alias.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
+            if shadowed || !written {
+                continue;
+            }
+            // Read, not spliced: whether the value reaches the proof is
+            // known only once the tactic has returned one (`finish`).
+            let (term, ty) = alias.at((n - alias.depth) as u32);
+            let value = run.issue(0, Held::Term(term, ty.clone(), alias.level.clone()));
+            let ty = run.issue(0, Held::Type(ty, alias.level.clone()));
+            run.lets.push(LetLocal { alias: Rc::clone(alias), value, ty });
+        }
     }
 
     /// `Defeq`: types with types and terms with terms, solving the holes
     /// either side mentions. A failed comparison solves nothing.
     fn defeq(&self, run: &mut Run, a: &RExpr, b: &RExpr) -> Result<bool, Fault> {
         let at = run.join(run.scope_of(a)?, run.scope_of(b)?)?;
-        let ty_of = |run: &Run, e: &RExpr| -> Result<Option<(Type, Level)>, Fault> {
-            let RExpr::Hd(h) = e else { return Ok(None) };
-            match run.held(*h)? {
-                (s, Held::Type(t, l)) => Ok(Some((run.lift(s, at, |k| t.shift_local(k))?, l))),
-                _ => Ok(None),
-            }
-        };
         let mark = run.trail.len();
-        let same = match (ty_of(run, a)?, ty_of(run, b)?) {
-            (Some((x, lx)), Some((y, ly))) => lx.equiv(&ly) && self.same_ty(run, at, &x, &y, &lx)?,
-            (Some(_), None) | (None, Some(_)) => false,
-            (None, None) => match (self.reify(run, a, at), self.reify(run, b, at)) {
-                (Ok(x), Ok(y)) => self.same_tm(run, at, &x, &y)?,
-                (Err(Fault::Protocol(m)), _) | (_, Err(Fault::Protocol(m))) => return Err(Fault::Protocol(m)),
-                _ => false,
-            },
-        };
+        let same = self.defeq_at(run, at, a, b)?;
         if !same {
             run.restore(mark);
         }
         Ok(same)
+    }
+
+    /// [`Self::defeq`] at scope `at`. Reading a side may make holes (a
+    /// `Blank`), which grows the world, so the first side is shifted into
+    /// the world the second left.
+    fn defeq_at(&self, run: &mut Run, at: usize, a: &RExpr, b: &RExpr) -> Result<bool, Fault> {
+        let types = a.is_type_form() || b.is_type_form() || self.is_type_handle(run, a)? || self.is_type_handle(run, b)?;
+        if types {
+            // Types with types; an ill-typed form is no type, equal to nothing.
+            let read = |me: &Self, run: &mut Run, e: &RExpr| match me.reify_ty(run, e, at) {
+                Ok(t) => Ok(Some(t)),
+                Err(Fault::Ill(_)) => Ok(None),
+                Err(f) => Err(f),
+            };
+            let Some((x, lx)) = read(self, run, a)? else { return Ok(false) };
+            let m = run.world();
+            let Some((y, ly)) = read(self, run, b)? else { return Ok(false) };
+            let x = x.shift_global((run.world() - m) as u32);
+            return Ok(lx.equiv(&ly) && self.same_ty(run, at, &x, &y, &lx)?);
+        }
+        let x = match self.reify(run, a, at) {
+            Ok(x) => x,
+            Err(Fault::Protocol(m)) => return Err(Fault::Protocol(m)),
+            Err(Fault::Ill(_)) => return Ok(false),
+        };
+        let m = run.world();
+        let y = match self.reify(run, b, at) {
+            Ok(y) => y,
+            Err(Fault::Protocol(m)) => return Err(Fault::Protocol(m)),
+            Err(Fault::Ill(_)) => return Ok(false),
+        };
+        let k = (run.world() - m) as u32;
+        let x = Reified { term: x.term.shift_global(k), ty: x.ty.shift_global(k), level: x.level };
+        self.same_tm(run, at, &x, &y)
+    }
+
+    /// Is `e` a handle to a type?
+    fn is_type_handle(&self, run: &Run, e: &RExpr) -> Result<bool, Fault> {
+        match e {
+            RExpr::Hd(h) => Ok(matches!(run.held(*h)?.1, Held::Type(..))),
+            _ => Ok(false),
+        }
     }
 
     /// Are two types of the current world the same at scope `at`? Committed
@@ -1348,7 +1931,10 @@ impl Elaborator {
             (Some(x), Some(y)) => Ok(run.cx(at).is_ok_and(|cx| self.conv_types(&cx, &x, &y, lvl))),
             (None, Some(y)) => self.solve(run, at, &pa, &y, lvl),
             (Some(x), None) => self.solve(run, at, &pb, &x, lvl),
-            (None, None) => Ok(false),
+            // Two open types are the same when they are the same syntax: a
+            // hole applied to a hole of a type that mentions earlier holes
+            // (`map: ?A → ?B` after `?A` and `?B`) compares exactly this.
+            (None, None) => Ok(pa == pb),
         }
     }
 
@@ -1368,7 +1954,33 @@ impl Elaborator {
             lhs: Rc::new(r.term.clone()),
             rhs: Rc::new(r.term.clone()),
         };
-        self.same_ty(run, at, &refl(x), &refl(y), &x.level)
+        if self.same_ty(run, at, &refl(x), &refl(y), &x.level)? {
+            return Ok(true);
+        }
+        // The unifier pairs two rigid spines only when their heads agree, and
+        // leaves a side that would unfold to the other "a whnf's to find": a
+        // named constant `third()` against `CReal::ofRat(?q)` learns nothing,
+        // though `third`'s body is that call. So the committed side is stepped
+        // one δ/β reduct at a time, and the comparison retried at each, before
+        // it gives up — not its weak head normal form, which would unfold
+        // `ofRat` too and leave no call to pair `?q` with.
+        let (committed, partial) = match (run.committed_tm(&x.term), run.committed_tm(&y.term)) {
+            (Some(a), None) => ((a, x), y),
+            (None, Some(b)) => ((b, y), x),
+            _ => return Ok(false),
+        };
+        let (committed, side) = committed;
+        let cx = run.cx(at)?;
+        let oracle = self.goal_oracle();
+        // A reduct is a committed term; the holes are the world's first globals.
+        let m = run.world() as u32;
+        for reduct in oracle.unfold(&cx.gamma, &committed, Unfold::HoleComparison) {
+            let r = Reified { term: reduct.shift_global(m), ty: side.ty.clone(), level: side.level.clone() };
+            if self.same_ty(run, at, &refl(&r), &refl(partial), &partial.level)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Unify `pat`, which mentions unsolved holes, with the committed `subj`
@@ -1403,7 +2015,7 @@ impl Elaborator {
                 })
                 .collect();
             let d = (run.len(at) - run.len(home)) as u32;
-            self.unify_under(&hcx, pat, subj, m as u32, d, &mut trial, run.span);
+            self.unify_under(&hcx, pat, subj, m as u32, d, &mut trial, &[], run.span);
             for (k, t) in trial.into_iter().enumerate() {
                 if matches!(sols[k], Sol::Unsolved) && t.solved().is_some() {
                     sols[k] = t;
@@ -1513,7 +2125,7 @@ impl Elaborator {
     fn open_request(&self, run: &mut Run, h: u64, name: String) -> Result<OpenedView, Fault> {
         let (at, ty) = match run.held(h)? {
             (s, Held::Type(t, _)) => (s, t),
-            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
+            (s, Held::Term(t, ty, _)) => return self.open_lam(run, h, s, &t, &ty, name),
         };
         let cx = run.cx(at)?;
         let ty = run.partial_ty(&ty);
@@ -1536,7 +2148,7 @@ impl Elaborator {
         let mut inner = cx.clone();
         inner.gamma = inner.gamma.shift_global(world as u32);
         inner.push(name.clone(), (*dom).clone(), dom_level.clone());
-        let id = (run.len(0) + run.opened.len()) as u64;
+        let id = run.next_id();
         let position = inner.gamma.len() - 1;
         run.scopes.push(Scope { parent: Some(at), cx: inner, world, locals: vec![id] });
         let scope = run.scopes.len() - 1;
@@ -1546,6 +2158,213 @@ impl Elaborator {
         Ok(OpenedView { local: LocalView { id, name, ty }, body, dependent })
     }
 
+    /// `Open` of a handle to a λ (a definition's body, a `match` arm): a
+    /// local of its domain, and its body under it, as a term at the
+    /// codomain of the λ's type.
+    fn open_lam(&self, run: &mut Run, h: u64, at: usize, t: &Term, ty: &Type, name: String) -> Result<OpenedView, Fault> {
+        let not_lam = || Fault::Ill(format!("handle {h} stands for a term that is not a λ"));
+        let t = run.committed_tm(t).ok_or_else(not_lam)?;
+        let Term::Lam { dom, dom_level, body, .. } = &t else { return Err(not_lam()) };
+        let cx = run.cx(at)?;
+        let ty = run.committed_ty(ty).ok_or_else(not_lam)?;
+        let pi = self
+            .goal_oracle()
+            .whnf_type(&cx.gamma, &ty)
+            .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?;
+        let Type::Pi { cod, cod_level, .. } = pi else { return Err(not_lam()) };
+        let dependent = crate::unification::strengthen_tm(&cx.gamma, body, 1).is_none();
+        let mut inner = cx.clone();
+        inner.push(name.clone(), (**dom).clone(), dom_level.clone());
+        let id = run.next_id();
+        let position = inner.gamma.len() - 1;
+        run.scopes.push(Scope { parent: Some(at), cx: inner, world: 0, locals: vec![id] });
+        let scope = run.scopes.len() - 1;
+        run.opened.push((scope, position));
+        let ty = run.issue(at, Held::Type((**dom).clone(), dom_level.clone()));
+        let body = run.issue(scope, Held::Term((**body).clone(), (*cod).clone(), cod_level));
+        Ok(OpenedView { local: LocalView { id, name, ty }, body, dependent })
+    }
+
+    /// `Body(g)`: the elaborated value of the definition `g` stands for, at
+    /// the root. Only a closed, monomorphic definition with a body has one:
+    /// a theorem's proof is discarded once checked and an axiom has none.
+    fn body_request(&self, run: &mut Run, g: u64) -> Result<u64, Fault> {
+        let key = run.globals.get(g as usize).cloned().ok_or_else(|| Fault::Ill(format!("{g} is not a global this run issued")))?;
+        let GlobalKey::At(abs) = key else {
+            return Err(Fault::Ill("a type or a kernel former has no body to read".into()));
+        };
+        let name = self.global_name_at(abs).unwrap_or_else(|| "this global".into());
+        let world = self.goal_psi();
+        let len = world.bindings.len();
+        let Some(GlobalBinding::Tm { ctx, ty, level, body, .. }) = world.bindings.get(abs) else {
+            return Err(Fault::Ill(format!("`{name}` is not a term")));
+        };
+        let Some(body) = body else {
+            return Err(Fault::Ill(format!("`{name}` has no body to read: a theorem's proof is not kept, and an axiom has none")));
+        };
+        if !ctx.entries.is_empty() || matches!(**ty, Type::UPi { .. }) {
+            return Err(Fault::Ill(format!("`{name}` is universe-polymorphic or context-dependent, and its body is not read yet")));
+        }
+        let shift = (len - abs) as u32;
+        Ok(run.issue(0, Held::Term(body.shift_global(shift), ty.shift_global(shift), level.clone())))
+    }
+
+    /// `Arms(h)`: the `match` `h` stands for, scrutinee and arms. A tier-0
+    /// match on a two-constructor inductive (`Bool`) is one kernel `Case`,
+    /// its arms the cases under the payload's binder; each is handed out as
+    /// a λ over the payload. A `match h:` is that `Case` applied to `refl`,
+    /// and the application's argument is listed. Wider matches nest `Case`s
+    /// and are refused until a reader needs them.
+    fn arms_request(&self, run: &mut Run, h: u64) -> Result<ArmsView, Fault> {
+        let (at, held) = run.held(h)?;
+        let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a match"))) };
+        let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let mut spine = Vec::new();
+        let mut head = &t;
+        while let Term::AppAt { fun, arg } = head {
+            spine.push(arg);
+            head = fun;
+        }
+        spine.reverse();
+        let Term::Case { lhs, rhs, lhs_level, rhs_level, motive_level, case_l, case_r, scrut, .. } = head else {
+            return Err(Fault::Ill("it is not a `match`".into()));
+        };
+        let (sty, slevel) = self.kernel_type(run, at, scrut).ok_or_else(|| Fault::Ill("its scrutinee has no type".into()))?;
+        let ind = self.display_tag_of(&sty).filter(|ind| ind.ctors.len() == 2)
+            .ok_or_else(|| Fault::Ill("only a `match` on a type with two constructors is presented yet".into()))?;
+        let s = run.issue_shared(at, scrut, sty, slevel);
+        let mut arms = Vec::with_capacity(2);
+        for (ctor, (dom, dom_level, case)) in ind.ctors.iter().zip([(lhs, lhs_level, case_l), (rhs, rhs_level, case_r)]) {
+            let lam = Term::Lam { dom_level: dom_level.clone(), cod_level: motive_level.clone(), dom: Rc::clone(dom), body: Rc::clone(case) };
+            let (aty, alevel) = self.kernel_type(run, at, &lam)
+                .ok_or_else(|| Fault::Ill("an arm does not type as a function of its payload".into()))?;
+            arms.push((ctor.name.clone(), run.issue(at, Held::Term(lam, aty, alevel))));
+        }
+        let mut args = Vec::with_capacity(spine.len());
+        for a in spine {
+            let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
+            args.push(run.issue_shared(at, a, aty, alevel));
+        }
+        Ok(ArmsView { scrut: s, arms, args })
+    }
+
+    /// `Spine(h)`: the term `h` stands for as a head applied to arguments,
+    /// read off the kernel's applications with nothing reduced: every
+    /// argument, implicit ones included, in order, each with whether the
+    /// function's type at it is dependent (its codomain mentions it, as a
+    /// type argument's does). A term that is no application is its own head
+    /// with no arguments. A subterm the term shares is one handle wherever
+    /// it occurs (as for `Arms`), but equal subterms built apart are not:
+    /// identity beyond sharing is `Defeq`'s (docs/grind-design.md §3).
+    fn spine_request(&self, run: &mut Run, h: u64) -> Result<SpineView, Fault> {
+        let (at, held) = run.held(h)?;
+        let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a term"))) };
+        let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let t = Rc::new(t);
+        let mut spine = Vec::new();
+        let mut head = &t;
+        loop {
+            match &**head {
+                // A checked application names its codomain; `app@` leaves
+                // it to the head's type.
+                Term::App { fun, arg, cod, .. } => {
+                    spine.push((fun, arg, Some(cod)));
+                    head = fun;
+                }
+                Term::AppAt { fun, arg } => {
+                    spine.push((fun, arg, None));
+                    head = fun;
+                }
+                _ => break,
+            }
+        }
+        spine.reverse();
+        let cx = run.cx(at)?;
+        let mut args = Vec::with_capacity(spine.len());
+        for (fun, a, cod) in spine {
+            let dependent = match cod {
+                Some(cod) => crate::unification::strengthen_ty(&cx.gamma, cod, 1).is_none(),
+                None => {
+                    let (fty, _) = self.kernel_type(run, at, fun).ok_or_else(|| Fault::Ill("a function in the spine has no type".into()))?;
+                    let pi = self
+                        .goal_oracle()
+                        .whnf_type(&cx.gamma, &fty)
+                        .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?;
+                    let Type::Pi { cod, .. } = pi else {
+                        return Err(Fault::Ill("a function in the spine is not of a function type".into()));
+                    };
+                    crate::unification::strengthen_ty(&cx.gamma, &cod, 1).is_none()
+                }
+            };
+            let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
+            args.push((run.issue_shared(at, a, aty, alevel), dependent));
+        }
+        let (hty, hlevel) = self.kernel_type(run, at, head).ok_or_else(|| Fault::Ill("the head has no type".into()))?;
+        let head = run.issue_shared(at, head, hty, hlevel);
+        Ok(SpineView { head, args })
+    }
+
+    /// `Fields(e)`: the term `e`, of a non-indexed inductive type
+    /// with one constructor (a record, `∧`), as the type (a reference, as
+    /// `Lookup` answers its name) and its fields: each one's name
+    /// (its position where it has none) and a handle to its projection, the
+    /// term `h.name` elaborates to (`project_field`), at the field's type.
+    /// Refused for a type of more constructors or none, codata, an indexed
+    /// family, and a type with a field a later field's type mentions (`∃`'s
+    /// `witness`): there a field's type is about the value, not a fact of
+    /// its own (docs/grind-design.md §12).
+    fn fields_request(&self, run: &mut Run, e: &RExpr) -> Result<(u64, Vec<(String, u64)>), Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        let unsolved = || Fault::Ill("it mentions a hole nothing has solved".into());
+        let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
+            run.restore(mark);
+            return Err(unsolved());
+        };
+        let t = Rc::new(t);
+        let cx = run.cx(at)?;
+        // The spelling the inductive is read off is the one projected at,
+        // as `inductive_of` reads it: as written, unspelled, or once in head
+        // normal form (`a.Same(b)` is a definition whose value is a `∧`).
+        let of = |t: &Type| crate::goal_combinators::type_inductive(self, &cx, t);
+        let spelled = std::iter::once(Some(ty.clone()))
+            .chain(std::iter::once_with(|| self.unspell_here(&ty)))
+            .chain(std::iter::once_with(|| self.goal_oracle().whnf_type(&cx.gamma, &ty).ok()))
+            .flatten()
+            .find_map(|s| of(&s).map(|ind| (ind, s)));
+        let Some((ind, record_ty)) = spelled else {
+            return Err(Fault::Ill(format!("`{}` is not an inductive type", self.display_type(&cx, &ty))));
+        };
+        if ind.codata || ind.index.is_some() || ind.ctors.len() != 1 {
+            return Err(Fault::Ill(format!("`{}` is not a one-constructor inductive (codata, an indexed family, or {} constructors)", ind.name, ind.ctors.len())));
+        }
+        let span = run.span;
+        let n = ind.ctors[0].fields.len();
+        // A field a later one's type mentions is the binder of its `Σ`'s
+        // second component; the tag (entry 0) is not a field.
+        let mut cur = self.goal_oracle().whnf_type(&cx.gamma, &record_ty).map_err(|_| Fault::Ill("ran out of fuel exposing the record".into()))?;
+        for step in 0..=n {
+            let Type::Sigma { snd, .. } = cur else { break };
+            let Some(rest) = crate::unification::strengthen_ty(&cx.gamma, &snd, 1) else {
+                if step == 0 {
+                    break;
+                }
+                let name = ind.ctors[0].fields[step - 1].0.clone().unwrap_or_else(|| format!("{}", step - 1));
+                return Err(Fault::Ill(format!("`{}`'s field `{name}` is mentioned by a later field's type", ind.name)));
+            };
+            cur = self.goal_oracle().whnf_type(&cx.gamma, &rest).map_err(|_| Fault::Ill("ran out of fuel exposing the record".into()))?;
+        }
+        let mut out = Vec::with_capacity(n);
+        for (idx, (name, _)) in ind.ctors[0].fields.iter().enumerate() {
+            let (p, pty, plevel) = self
+                .project_field(&cx, &ind, &record_ty, Rc::clone(&t), idx, span)
+                .map_err(|e| Fault::Ill(format!("field {idx} of `{}`: {}", ind.name, elab_message(e))))?;
+            out.push((name.clone().unwrap_or_else(|| format!("{idx}")), run.issue(at, Held::Term(p, pty, plevel))));
+        }
+        Ok((run.global_ref(GlobalKey::Type(ind.tag)), out))
+    }
+
     /// A name, elaborated where the `by` is. Elaboration may leave notes and
     /// dependencies behind; a failed one is rolled back.
     fn resolve_request(&self, run: &mut Run, name: &str, span: Span) -> Result<u64, String> {
@@ -1553,7 +2372,7 @@ impl Elaborator {
             return Err(format!("`{name}` is not a name"));
         }
         let root = &run.scopes[0].cx;
-        if !root.names.iter().any(|n| n == name) {
+        if !root.names.iter_inner().any(|n| n == name) {
             if let Some((term, ty, level)) = self.raw_global(name) {
                 let n = root.gamma.len() as u32;
                 return Ok(run.issue(0, Held::Term(term.shift_local(n), ty.shift_local(n), level)));
@@ -1596,6 +2415,95 @@ impl Elaborator {
 
     /// `Hole(ty)`: a new metavariable of the type `ty` stands for, at `ty`'s
     /// scope, as a handle to its occurrence there.
+    /// `Holes(e, n)`: `e` applied to `n` new holes, each at its parameter's
+    /// type with the holes before it as the earlier arguments. Each prefix
+    /// is remembered as a reading ([`Run::readings`]), so the tactic's
+    /// `infer` of the application it spells from the holes is a hit, and
+    /// the whole costs one exposure and one instantiation per hole (building
+    /// the same holes by `infer`, `open` and `hole` re-reads each prefix).
+    fn holes_request(&self, run: &mut Run, e: &RExpr, n: u64) -> Result<Vec<u64>, Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        let out = self.holes_at(run, e, n, at);
+        if out.is_err() {
+            // The holes made before the refusal stay, unsolved and
+            // unreachable: the world only grows.
+            run.restore(mark);
+        }
+        out
+    }
+
+    fn holes_at(&self, run: &mut Run, e: &RExpr, n: u64, at: usize) -> Result<Vec<u64>, Fault> {
+        let r = self.reify(run, e, at)?;
+        let m = run.world() as u32;
+        let fty = run.partial_ty(&r.ty);
+        let mut ty = match run.committed_ty(&fty) {
+            Some(c) => self
+                .goal_oracle()
+                .whnf_type(&run.cx(at)?.gamma, &c)
+                .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?
+                .shift_global(m),
+            None => fty.clone(),
+        };
+        // Every hole is made first, so what is built from them is shifted
+        // past them once, not once per hole.
+        let first = run.world();
+        for _ in 0..n {
+            run.holes.push(Hole { home: at, sol: None });
+        }
+        let k = n as u32;
+        let mut term = r.term.shift_global(k);
+        ty = ty.shift_global(k);
+        let mut level = r.level;
+        let mut spelled = e.clone();
+        let mut out = Vec::with_capacity(n as usize);
+        for i in 0..n as usize {
+            // Past the first, the type is an instantiated codomain over the
+            // new holes, never committed: a parameter must be one outright.
+            let Type::Pi { dom_level, cod_level, dom, cod } = ty else {
+                return Err(Fault::Ill(format!("`{}` takes fewer than {n} arguments", self.shown_ty(run, at, &fty))));
+            };
+            let hole = run.occurrence(first + i);
+            let h = run.issue_in(at, run.world(), Held::Term(hole.clone(), (*dom).clone(), dom_level.clone()));
+            let arg = Rc::new(hole);
+            ty = (*cod).clone().apply_local(&LocalSubst::id(&run.scopes[at].cx.gamma).extended(Rc::clone(&arg)));
+            term = Term::App { fun: Rc::new(term), dom_level, cod_level: cod_level.clone(), dom, cod, arg };
+            level = cod_level;
+            spelled = RExpr::App(Box::new(spelled), Box::new(RExpr::Hd(h)));
+            let reified = Reified { term: term.clone(), ty: ty.clone(), level: level.clone() };
+            let reading = Reading { reified, world: run.world(), trail: run.trail.len() };
+            run.readings.insert((at, spelled.clone()), reading);
+            out.push(h);
+        }
+        Ok(out)
+    }
+
+    /// `Synth(goal)`: the search a `:= infer` parameter runs, at the type
+    /// `goal` stands for, in its scope (docs/facts-on-demand-design.md §4).
+    /// This is how a generator asks for a fact and learns that there is
+    /// none: the search's failure is a refusal carrying its trace, and a
+    /// refused search leaves nothing behind ([`crate::resolve::SearchMark`]).
+    /// The type must mention no unsolved hole: the search's trials are the
+    /// elaborator's, which know nothing of a run's holes.
+    fn synth_request(&self, run: &mut Run, h: u64, span: Span) -> Result<u64, Fault> {
+        let unsolved = || Fault::Ill("`Synth` needs a type that mentions no unsolved hole".into());
+        let (at, ty, level) = match run.held(h)? {
+            (s, Held::Type(t, l)) => (s, run.committed_ty(&t).ok_or_else(unsolved)?, l),
+            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
+        };
+        let cx = run.cx(at)?;
+        let spelled = self.spell_type_clean(&cx, &ty).unwrap_or_else(|| "the goal".to_string());
+        let mark = crate::resolve::SearchMark::of(self);
+        let mut trace = Vec::new();
+        match self.resolve_goal(&cx, &ty, &level, &spelled, None, span, &mut trace) {
+            Some(t) => Ok(run.issue(at, Held::Term(t, ty, level))),
+            None => {
+                mark.rollback(self);
+                Err(Fault::Ill(format!("no evidence for `{spelled}` — the search:{}", crate::resolve::render_trace(&trace))))
+            }
+        }
+    }
+
     fn hole_request(&self, run: &mut Run, h: u64) -> Result<u64, Fault> {
         let (home, ty, level) = match run.held(h)? {
             (s, Held::Type(t, l)) => (s, run.partial_ty(&t), l),
@@ -1634,7 +2542,7 @@ impl Elaborator {
     fn kernel_type(&self, run: &Run, at: usize, t: &Term) -> Option<(Type, Level)> {
         let cx = run.cx(at).ok()?;
         let oracle = self.goal_oracle();
-        heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, t, self.fuel).ok()
+        heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, t, self.policy.fuel).ok()
     }
 
     /// One layer of a handle, read the way the diagnostics read it
@@ -1643,7 +2551,7 @@ impl Elaborator {
     fn view_request(&self, run: &mut Run, h: u64) -> Result<HeadView, Fault> {
         let (at, held) = run.held(h)?;
         let committed = match &held {
-            Held::Type(t, _) => run.committed_ty(t).map(Ok),
+            Held::Type(t, l) => run.committed_ty(t).map(|t| Ok((t, l.clone()))),
             Held::Term(t, ..) => run.committed_tm(t).map(Err),
         };
         if let Some(c) = committed {
@@ -1651,7 +2559,7 @@ impl Elaborator {
                 return Ok(HeadView::Other);
             }
             return Ok(match c {
-                Ok(ty) => self.view_type(run, at, &ty),
+                Ok((ty, level)) => self.view_type(run, at, &ty, &level),
                 Err(t) => self.view_term(run, at, &t),
             });
         }
@@ -1673,9 +2581,12 @@ impl Elaborator {
         })
     }
 
-    fn view_type(&self, run: &mut Run, at: usize, ty: &Type) -> HeadView {
+    fn view_type(&self, run: &mut Run, at: usize, ty: &Type, level: &Level) -> HeadView {
+        if let Some(v) = self.view_instance(run, at, ty, level) {
+            return v;
+        }
         if let Some(inline) = self.unspell_here(ty) {
-            return self.view_type(run, at, &inline);
+            return self.view_type(run, at, &inline, level);
         }
         if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })
             && let Some(ind) = self.display_tag_of(ty)
@@ -1707,6 +2618,62 @@ impl Elaborator {
         }
     }
 
+    /// A value-parameterized declaration's instantiation — a class's
+    /// dictionary type, `OrderedField<A>(≈, <, <=, +, *)` — as the global and
+    /// every argument it is instantiated at, type arguments as types and
+    /// value arguments as terms. The arguments are read by unifying `ty` with
+    /// the declaration's own template at unknown arguments, `C#tycode_fn`
+    /// applied to metavariables and read inline, and the template at what
+    /// was solved must convert to `ty`: a type that is not an instance
+    /// declines.
+    fn view_instance(&self, run: &mut Run, at: usize, ty: &Type, level: &Level) -> Option<HeadView> {
+        let ind = self.display_tag_of(ty)?;
+        if ind.valparams.is_empty() || ind.index.is_some() {
+            return None;
+        }
+        let cx = run.cx(at).ok()?;
+        let m = (ind.params.len() + ind.valparams.len()) as u32;
+        let mut code = self.gen_ref(&cx, crate::gendefs::GenDef::TyCodeFn(ind.tag))?.shift_global(m);
+        for j in 0..m {
+            let meta = Term::GlobalTm { var: GlobalVar(j), subst: LocalSubst::id(&cx.gamma) };
+            code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
+        }
+        let template = Type::El { level: level.clone(), tm: Rc::new(code) };
+        let inline = self.unspell_here_in(&template, m)?;
+        let mut sols = vec![Sol::Unsolved; m as usize];
+        self.unify_root(&cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
+        let solved = crate::unification::zonked(&inline, m, &sols)?;
+        if !self.conv_types(&cx, &solved, ty, level) {
+            return None;
+        }
+        let mut handles = Vec::with_capacity(sols.len());
+        for (i, sol) in sols.iter().enumerate() {
+            let a = sol.solved()?;
+            let (aty, alevel) = self.kernel_type(run, at, a)?;
+            handles.push(if i < ind.params.len() {
+                let Type::Ty(l) = aty else { return None };
+                run.issue(at, Held::Type(Type::El { level: l.clone(), tm: Rc::clone(a) }, l))
+            } else {
+                run.issue(at, Held::Term((**a).clone(), aty, alevel))
+            });
+        }
+        Some(HeadView::Global(run.global_ref(GlobalKey::Type(ind.tag)), ind.name.clone(), handles))
+    }
+
+    /// A field read left inline, `r.name(args…)`, as [`HeadView::Field`].
+    fn view_field(&self, run: &mut Run, at: usize, t: &Term) -> Option<HeadView> {
+        let (fun, args) = crate::spelling::app_spine(t);
+        let (record, name) = self.field_read_parts(&run.scopes[at].cx, fun)?;
+        let (rty, rlevel) = self.kernel_type(run, at, record)?;
+        let r = run.issue_shared(at, record, rty, rlevel);
+        let mut handles = Vec::with_capacity(args.len());
+        for a in args {
+            let (ty, level) = self.kernel_type(run, at, a)?;
+            handles.push(run.issue_shared(at, a, ty, level));
+        }
+        Some(HeadView::Field(r, name, handles))
+    }
+
     fn view_term(&self, run: &mut Run, at: usize, t: &Term) -> HeadView {
         if let Some(n) = crate::inductive::nat_value(t) {
             return HeadView::Lit(n as u64);
@@ -1718,9 +2685,29 @@ impl Elaborator {
         }
         if let Term::Case { scrut, .. } | Term::ElimNat { scrut, .. } = crate::goal_combinators::head_match(t) {
             return match self.kernel_type(run, at, scrut) {
-                Some((ty, level)) => HeadView::Match(run.issue(at, Held::Term((**scrut).clone(), ty, level))),
+                Some((ty, level)) => HeadView::Match(run.issue_shared(at, scrut, ty, level)),
                 None => HeadView::Other,
             };
+        }
+        if let Term::Lam { dom, dom_level, .. } = t {
+            return HeadView::Lam(run.issue(at, Held::Type((**dom).clone(), dom_level.clone())));
+        }
+        if let Some((ind, i, fields)) = self.view_ctor(&run.scopes[at].cx, t) {
+            let mut handles = Vec::with_capacity(fields.len());
+            for f in &fields {
+                let Some((ty, level)) = self.kernel_type(run, at, f) else {
+                    return HeadView::Other;
+                };
+                handles.push(run.issue_shared(at, f, ty, level));
+            }
+            let name = ind.ctors[i].name.clone();
+            return HeadView::Ctor(run.global_ref(GlobalKey::Type(ind.tag)), i as u64, name, handles);
+        }
+        // A β-redex is shown as its contractum, as the diagnostics spell it:
+        // an instantiated λ (a lemma's `f(k)` at `f := λ x => …`) is a call
+        // like any other.
+        if let Some(r) = crate::spelling::beta_head(t) {
+            return self.view_term(run, at, &r);
         }
         let n = run.len(at);
         if let Term::Var(LocalVar(i)) = t {
@@ -1730,14 +2717,14 @@ impl Elaborator {
             };
         }
         let Some((head, args)) = self.view_call(&run.scopes[at].cx, t) else {
-            return HeadView::Other;
+            return self.view_field(run, at, t).unwrap_or(HeadView::Other);
         };
         let mut handles = Vec::with_capacity(args.len());
         for a in &args {
             let Some((ty, level)) = self.kernel_type(run, at, a) else {
                 return HeadView::Other;
             };
-            handles.push(run.issue(at, Held::Term((**a).clone(), ty, level)));
+            handles.push(run.issue_shared(at, a, ty, level));
         }
         match head {
             crate::display::CallHead::Field(name) | crate::display::CallHead::Global(name, _) => {
@@ -1783,6 +2770,11 @@ impl Elaborator {
     /// unsolved one is left for the caller, who proves it. Nothing here is
     /// trusted: the caller's application is checked like any other `Expr`.
     /// Both must be free of unsolved holes.
+    ///
+    /// A parameter whose type is a class is filled the way a call's
+    /// constraint argument is ([`Self::match_dictionaries`]): from a
+    /// dictionary in scope, which also fixes the class's index parameters,
+    /// or by resolution once the match has determined its type.
     fn match_request(&self, run: &mut Run, ty: u64, target: u64, span: Span) -> Result<Vec<Option<u64>>, Fault> {
         let unsolved = || Fault::Ill("`Match` needs types that mention no unsolved hole".into());
         let (fs, fty) = match run.held(ty)? {
@@ -1800,8 +2792,10 @@ impl Elaborator {
         let mut inner = cx.clone();
         let shown = fty.clone();
         let mut concl = fty;
-        for k in 0..=MATCH_PARAMETERS {
-            if let Some(sols) = self.match_at(&cx, &concl, &tty, &tlvl, k, span) {
+        let mut doms: Vec<(Type, Level)> = Vec::new();
+        let dicts = MatchDicts::default();
+        for _ in 0..=MATCH_PARAMETERS {
+            if let Some(sols) = self.match_at(&cx, &concl, &tty, &tlvl, &doms, &dicts, span) {
                 let mut slots = Vec::with_capacity(sols.len());
                 for sol in sols {
                     slots.push(match sol.and_then(|t| self.kernel_type(run, at, &t).map(|(ty, l)| (t, ty, l))) {
@@ -1819,6 +2813,7 @@ impl Elaborator {
                 },
             };
             let Type::Pi { dom, dom_level, cod, .. } = pi else { break };
+            doms.push(((*dom).clone(), dom_level.clone()));
             inner.push("_".into(), (*dom).clone(), dom_level);
             concl = (*cod).clone();
         }
@@ -1830,25 +2825,121 @@ impl Elaborator {
     }
 
     /// One attempt of [`Self::match_request`]: `concl` is scoped in `cx`
-    /// plus `k` parameters, which become metavariables `0..k` of a scratch
-    /// world over the committed one, as in implicit application.
-    fn match_at(&self, cx: &Cx, concl: &Type, target: &Type, lvl: &Level, k: usize, span: Span) -> Option<Vec<Option<Term>>> {
+    /// plus the `doms.len()` parameters, which become metavariables `0..k` of
+    /// a scratch world over the committed one, as in implicit application.
+    /// Tried with the class parameters filled from scope first, and plainly
+    /// when that does not match.
+    fn match_at(&self, cx: &Cx, concl: &Type, target: &Type, lvl: &Level, doms: &[(Type, Level)], dicts: &MatchDicts, span: Span) -> Option<Vec<Option<Term>>> {
+        let k = doms.len();
         if k == 0 {
             return self.conv_types(cx, concl, target, lvl).then(Vec::new);
         }
         let n = k as u32;
+        let pat = Self::match_scope(cx, concl, n, n);
+        let slot_tys = Self::match_slot_tys(cx, doms, n);
+        let attempt = |choice: Option<usize>| -> Result<Vec<Option<Term>>, bool> {
+            let mut sols = vec![Sol::Unsolved; k];
+            if let Some(c) = choice
+                && !self.match_dictionaries(cx, doms, n, &mut sols, dicts, Some(c), span)
+            {
+                return Err(false);
+            }
+            self.unify_root(cx, &pat, target, n, &mut sols, &slot_tys, span);
+            self.match_dictionaries(cx, doms, n, &mut sols, dicts, None, span);
+            let solved = crate::unification::zonked(&pat, n, &sols).ok_or(true)?;
+            if !self.conv_types(cx, &solved, target, lvl) {
+                return Err(true);
+            }
+            Ok(sols.iter().map(|s| s.solved().map(|t| (**t).clone())).collect())
+        };
+        // Each dictionary in scope in turn, until one matches or there is
+        // none left to try; then the plain match.
+        for c in 0.. {
+            match attempt(Some(c)) {
+                Ok(sols) => return Some(sols),
+                Err(true) => continue,
+                Err(false) => break,
+            }
+        }
+        attempt(None).ok()
+    }
+
+    /// A match's parameter types over its scratch world, each slot's own
+    /// type, which the unifier holds its solution to.
+    fn match_slot_tys(cx: &Cx, doms: &[(Type, Level)], n: u32) -> Vec<Type> {
+        doms.iter().enumerate().map(|(i, (dom, _))| Self::match_scope(cx, dom, i as u32, n)).collect()
+    }
+
+    /// `ty`, scoped in `cx` plus `i` of a match's `n` parameters, over the
+    /// scratch world: the parameters are metavariables `0..i`.
+    fn match_scope(cx: &Cx, ty: &Type, i: u32, n: u32) -> Type {
         let mut subst = LocalSubst::id(&cx.gamma);
-        for i in 0..n {
-            subst = subst.extended(Rc::new(Term::GlobalTm { var: GlobalVar(i), subst: LocalSubst::id(&cx.gamma) }));
+        for j in 0..i {
+            subst = subst.extended(Rc::new(Term::GlobalTm { var: GlobalVar(j), subst: LocalSubst::id(&cx.gamma) }));
         }
-        let pat = concl.shift_global(n).apply_local(&subst);
-        let mut sols = vec![Sol::Unsolved; k];
-        self.unify_root(cx, &pat, target, n, &mut sols, span);
-        let solved = crate::unification::zonked(&pat, n, &sols)?;
-        if !self.conv_types(cx, &solved, target, lvl) {
-            return None;
+        ty.shift_global(n).apply_local(&subst)
+    }
+
+    /// Fill a match's class parameters as a call fills its constraint
+    /// arguments (`docs/operation-indexed-classes-design.md` §5). With a
+    /// `choice`, each class parameter is matched against the dictionaries in
+    /// scope — the class's own binder or a descendant's, at its carrier, as
+    /// the value-slot ladder reads them — which solves the class's carrier
+    /// and index parameters, and the parameter is the dictionary resolution
+    /// finds there (an upcast from a descendant's binder). The `choice`-th
+    /// that fits is taken; `false` when there is none, or no class parameter
+    /// at all. Without, a class parameter still unsolved whose type the match
+    /// has determined is resolved there, instances included. A wrong guess
+    /// costs the attempt and never a wrong term: the conclusion still has to
+    /// convert, and the application is checked.
+    #[allow(clippy::too_many_arguments)]
+    fn match_dictionaries(&self, cx: &Cx, doms: &[(Type, Level)], n: u32, sols: &mut [Sol], dicts: &MatchDicts, choice: Option<usize>, span: Span) -> bool {
+        let mut any = false;
+        let mut slot_tys: Option<Vec<Type>> = None;
+        for (i, (dom, dlvl)) in doms.iter().enumerate() {
+            if sols[i].solved().is_some() {
+                continue;
+            }
+            let Some(ind) = dicts.class_at(self, i, dom) else { continue };
+            any = true;
+            let pat = Self::match_scope(cx, dom, i as u32, n);
+            let Some(choice) = choice else {
+                if let Some(goal) = crate::unification::zonked(&pat, n, sols)
+                    && let Some(dict) = dicts.resolved(self, cx, &goal, dlvl, &ind.name, span)
+                {
+                    sols[i] = Sol::Solved(Rc::new(dict));
+                }
+                continue;
+            };
+            // The candidates are lowered inline, and a lemma's parameter is
+            // usually the reference `El (app(C#tycode_fn^δ; ā))`: read it
+            // inline too, so the two unify field by field.
+            let inline = self.unspell_here_in(&pat, n).unwrap_or_else(|| pat.clone());
+            let mut fitting = 0;
+            let mut found = false;
+            for (goal, glvl) in dicts.goals(self, cx, &ind, span).iter() {
+                let mut trial = sols.to_vec();
+                let slot_tys = slot_tys.get_or_insert_with(|| Self::match_slot_tys(cx, doms, n));
+                self.unify_root(cx, &inline, goal, n, &mut trial, slot_tys, span);
+                let fits = crate::unification::zonked(&pat, n, &trial).is_some_and(|z| self.conv_types(cx, &z, goal, glvl));
+                if !fits {
+                    continue;
+                }
+                let Some(dict) = dicts.resolved(self, cx, goal, glvl, &ind.name, span) else { continue };
+                fitting += 1;
+                if fitting <= choice {
+                    continue;
+                }
+                trial[i] = Sol::Solved(Rc::new(dict));
+                sols.clone_from_slice(&trial);
+                found = true;
+                break;
+            }
+            if !found {
+                return false;
+            }
         }
-        Some(sols.iter().map(|s| s.solved().map(|t| (**t).clone())).collect())
+        choice.is_none() || any
     }
 
     /// A returned `Expr` as a term of scope `at` in the current world, built
@@ -1871,6 +2962,10 @@ impl Elaborator {
                     level,
                 }),
             },
+            RExpr::Local(x) if run.let_local(*x).is_some() => {
+                let value = run.let_local(*x).expect("a `let` local").value;
+                self.reify(run, &RExpr::Hd(value), at)
+            }
             RExpr::Local(x) => {
                 let (s, i) = run.local(*x)?;
                 if !run.encloses(s, at) {
@@ -1893,36 +2988,21 @@ impl Elaborator {
                 let n = run.len(at) as u32;
                 Ok(Reified { term: term.shift_local(n).shift_global(m), ty: ty.shift_local(n).shift_global(m), level })
             }
-            RExpr::App(f, a) => {
-                let f = self.reify(run, f, at)?;
-                let fty = run.partial_ty(&f.ty);
-                let pi = match run.committed_ty(&fty) {
-                    Some(c) => self
-                        .goal_oracle()
-                        .whnf_type(&run.cx(at)?.gamma, &c)
-                        .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?
-                        .shift_global(m),
-                    None => fty.clone(),
-                };
-                let Type::Pi { dom_level, cod_level, dom, cod } = pi else {
-                    return Err(Fault::Ill(format!("`{}` is applied but is not a function", self.shown_ty(run, at, &fty))));
-                };
-                let a = self.reify(run, a, at)?;
-                if !a.level.equiv(&dom_level) || !self.same_ty(run, at, &a.ty, &dom, &dom_level)? {
-                    return Err(Fault::Ill(format!(
-                        "an argument of type `{}` where `{}` is expected",
-                        self.shown_ty(run, at, &a.ty),
-                        self.shown_ty(run, at, &dom)
-                    )));
+            RExpr::App(..) if !e.has_blank() => {
+                if let Some(r) = run.readings.get(&(at, e.clone())) {
+                    let k = (run.world() - r.world) as u32;
+                    let r = &r.reified;
+                    return Ok(Reified { term: r.term.shift_global(k), ty: r.ty.shift_global(k), level: r.level.clone() });
                 }
-                let arg = Rc::new(a.term);
-                let ty = (*cod).clone().apply_local(&LocalSubst::id(&run.scopes[at].cx.gamma).extended(Rc::clone(&arg)));
-                Ok(Reified {
-                    term: Term::App { fun: Rc::new(f.term), dom_level, cod_level: cod_level.clone(), dom, cod, arg },
-                    ty,
-                    level: cod_level,
-                })
+                let RExpr::App(f, a) = e else { unreachable!() };
+                let r = self.reify_app(run, f, a, at)?;
+                let reading = Reading { reified: r.clone(), world: run.world(), trail: run.trail.len() };
+                run.readings.insert((at, e.clone()), reading);
+                Ok(r)
             }
+            RExpr::App(f, a) => self.reify_app(run, f, a, at),
+            RExpr::Blank => Err(Fault::Ill("`Blank` stands only as an argument".into())),
+            RExpr::Pi(..) | RExpr::Equation(..) => Err(Fault::Ill("a `Pi` or an `Equation` stands for a type, not a term".into())),
             RExpr::Lam(x, body) => {
                 let (s, i) = run.local(*x)?;
                 if run.scopes[s].parent != Some(at) || run.scopes[s].locals.len() != 1 || i < run.len(0) {
@@ -1939,6 +3019,254 @@ impl Elaborator {
                 })
             }
         }
+    }
+
+    /// `f(a)`, reified at scope `at`.
+    fn reify_app(&self, run: &mut Run, f: &RExpr, a: &RExpr, at: usize) -> Result<Reified, Fault> {
+        let f = self.reify(run, f, at)?;
+        // Reading `f` may have made holes.
+        let m = run.world() as u32;
+        let fty = run.partial_ty(&f.ty);
+        let pi = match run.committed_ty(&fty) {
+            Some(c) => self
+                .goal_oracle()
+                .whnf_type(&run.cx(at)?.gamma, &c)
+                .map_err(|_| Fault::Ill("ran out of fuel exposing a function type".into()))?
+                .shift_global(m),
+            None => fty.clone(),
+        };
+        let Type::Pi { dom_level, cod_level, dom, cod } = pi else {
+            return Err(Fault::Ill(format!("`{}` is applied but is not a function", self.shown_ty(run, at, &fty))));
+        };
+        let (fun, dom, cod, arg) = if matches!(a, RExpr::Blank) {
+            // An argument left to inference: a hole at the domain,
+            // at this scope, which the rest of the `Expr` solves.
+            run.holes.push(Hole { home: at, sol: None });
+            let hole = run.occurrence(run.world() - 1);
+            (f.term.shift_global(1), Rc::new(dom.shift_global(1)), Rc::new(cod.shift_global(1)), hole)
+        } else {
+            let a = self.reify(run, a, at)?;
+            let k = run.world() as u32 - m;
+            let (fun, dom, cod) = (f.term.shift_global(k), Rc::new(dom.shift_global(k)), Rc::new(cod.shift_global(k)));
+            if !a.level.equiv(&dom_level) || !self.same_ty(run, at, &a.ty, &dom, &dom_level)? {
+                return Err(Fault::Ill(format!(
+                    "an argument of type `{}` where `{}` is expected",
+                    self.shown_ty(run, at, &a.ty),
+                    self.shown_ty(run, at, &dom)
+                )));
+            }
+            (fun, dom, cod, a.term)
+        };
+        let arg = Rc::new(arg);
+        let ty = (*cod).clone().apply_local(&LocalSubst::id(&run.scopes[at].cx.gamma).extended(Rc::clone(&arg)));
+        Ok(Reified {
+            term: Term::App { fun: Rc::new(fun), dom_level, cod_level: cod_level.clone(), dom, cod, arg },
+            ty,
+            level: cod_level,
+        })
+    }
+
+    /// An `Expr` standing for a type, as a type of scope `at` in the current
+    /// world: a type handle, a `Pi` abstracting an introduced local of
+    /// `at`'s child, an `Equation` between two terms of one type, or a term
+    /// whose type is a universe, decoded.
+    fn reify_ty(&self, run: &mut Run, e: &RExpr, at: usize) -> Result<(Type, Level), Fault> {
+        match e {
+            RExpr::Hd(h) => {
+                if let (s, Held::Type(ty, level)) = run.held(*h)? {
+                    return Ok((run.lift(s, at, |k| ty.shift_local(k))?, level));
+                }
+            }
+            RExpr::Pi(x, body) => {
+                let (s, i) = run.local(*x)?;
+                if run.scopes[s].parent != Some(at) || run.scopes[s].locals.len() != 1 || i < run.len(0) {
+                    return Err(Fault::Protocol(format!("`Pi` abstracts local {x}, which is not bound here")));
+                }
+                let (cod, cod_level) = self.reify_ty(run, body, s)?;
+                let entry = run.scopes[s].cx.gamma.entries.get(i).expect("an opened local");
+                let dom = Rc::new(entry.ty.shift_global((run.world() - run.scopes[s].world) as u32));
+                let dom_level = entry.level.clone();
+                let level = Level::join(dom_level.clone(), cod_level.clone());
+                return Ok((Type::Pi { dom_level, cod_level, dom, cod: Rc::new(cod) }, level));
+            }
+            RExpr::Equation(l, r) => {
+                let l = self.reify(run, l, at)?;
+                let m = run.world();
+                let r = self.reify(run, r, at)?;
+                let k = (run.world() - m) as u32;
+                let (lhs, ty) = (l.term.shift_global(k), l.ty.shift_global(k));
+                if !l.level.equiv(&r.level) || !self.same_ty(run, at, &r.ty, &ty, &l.level)? {
+                    return Err(Fault::Ill(format!(
+                        "an equation between a term of `{}` and one of `{}`",
+                        self.shown_ty(run, at, &ty),
+                        self.shown_ty(run, at, &r.ty)
+                    )));
+                }
+                return Ok((Type::Id { level: l.level.clone(), ty: Rc::new(ty), lhs: Rc::new(lhs), rhs: Rc::new(r.term) }, l.level));
+            }
+            _ => {}
+        }
+        // A term whose type is a universe stands for the type it codes.
+        let r = self.reify(run, e, at)?;
+        let ty = run.partial_ty(&r.ty);
+        let universe = match run.committed_ty(&ty) {
+            Some(c) => self
+                .goal_oracle()
+                .whnf_type(&run.cx(at)?.gamma, &c)
+                .map_err(|_| Fault::Ill("ran out of fuel reading a type".into()))?,
+            None => ty.clone(),
+        };
+        match universe {
+            Type::Ty(level) => Ok((Type::El { level: level.clone(), tm: Rc::new(r.term) }, level)),
+            _ => Err(Fault::Ill(format!("a term of `{}` stands where a type is expected", self.shown_ty(run, at, &ty)))),
+        }
+    }
+
+    /// `AsType(e)`: a handle to the type `e` stands for.
+    fn as_type_request(&self, run: &mut Run, e: &RExpr) -> Result<u64, Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        match self.reify_ty(run, e, at) {
+            Ok((ty, level)) => Ok(run.issue_now(at, Held::Type(run.partial_ty(&ty), level))),
+            Err(f) => {
+                run.restore(mark);
+                Err(f)
+            }
+        }
+    }
+
+    /// `Assume(ty, name, under)`: a new local of `ty`, in a scope of its own
+    /// under `under`'s scope (the root's for `None`), so that `Pi`, `Lam` and
+    /// a declaration's parameter list can abstract it.
+    fn assume_request(&self, run: &mut Run, ty: &RExpr, name: String, under: Option<u64>) -> Result<LocalView, Fault> {
+        let parent = match under {
+            None => 0,
+            Some(x) if run.let_local(x).is_some() => {
+                return Err(Fault::Protocol(format!("local {x} is a `let`, which opens no binder to assume under")));
+            }
+            Some(x) => run.local(x)?.0,
+        };
+        let mark = run.trail.len();
+        let (t, level) = self.reify_ty(run, ty, parent).inspect_err(|_| run.restore(mark))?;
+        let Some(t) = run.committed_ty(&t) else {
+            run.restore(mark);
+            return Err(Fault::Ill("`Assume` needs a type that mentions no unsolved hole".into()));
+        };
+        let mut inner = run.cx(parent)?;
+        inner.push(name.clone(), t.clone(), level.clone());
+        let id = run.next_id();
+        let position = inner.gamma.len() - 1;
+        run.scopes.push(Scope { parent: Some(parent), cx: inner, world: 0, locals: vec![id] });
+        let scope = run.scopes.len() - 1;
+        run.opened.push((scope, position));
+        let ty = run.issue(parent, Held::Type(t, level));
+        Ok(LocalView { id, name, ty })
+    }
+
+    /// `Ctors(ty)`: the constructors of the inductive `ty` is, each read off
+    /// its own application checked at `ty`, the way `Constructor` reads a
+    /// split: the application's fields are markers that record what they are
+    /// checked at, twice with different placeholders, and a field whose type
+    /// changes between the two mentions an earlier field. Where none does,
+    /// the constructor is also built as a function of its fields, by the
+    /// same application with the fields its parameters.
+    fn ctors_request(&self, run: &mut Run, h: u64) -> Result<Vec<CtorView>, Fault> {
+        let (s, ty, lvl) = self.committed_goal(run, h, None, "Ctors")?;
+        let cx = run.cx(s)?;
+        let Some(ind) = self.inductive_of(&cx, &ty) else {
+            return Err(Fault::Ill(format!("`{}` is not an inductive type", self.display_type(&cx, &ty))));
+        };
+        if ind.codata || ind.index.is_some() {
+            return Err(Fault::Ill(format!("`{}` is codata or an indexed family, and `Ctors` reads neither", ind.name)));
+        }
+        let span = run.span;
+        let mut out = Vec::with_capacity(ind.ctors.len());
+        for (k, ctor) in ind.ctors.iter().enumerate() {
+            let n = ctor.fields.len();
+            let app = |args: Vec<Expr>| -> Expr {
+                // By the expected type, not by a name the caller's scope
+                // might shadow: the anonymous forms where they apply.
+                let head = match (ind.ctors.len(), k) {
+                    (1, _) => heather_syntax::ANON_CTOR_ONLY.to_string(),
+                    (2, 0) => heather_syntax::ANON_CTOR_LEFT.to_string(),
+                    (2, _) => heather_syntax::ANON_CTOR_RIGHT.to_string(),
+                    _ => format!("{}::{}", ind.name, ctor.name),
+                };
+                let head = Expr { kind: heather_syntax::ast::ExprKind::Var(head), span };
+                if n == 0 && ind.ctors.len() > 2 {
+                    return head;
+                }
+                Expr {
+                    kind: heather_syntax::ast::ExprKind::App { head: Box::new(head), args, named: vec![], explicit: false, goal_oriented: false },
+                    span,
+                }
+            };
+            let expr = app((0..n).map(|j| leaf_expr(j, span)).collect());
+            let skeleton = Skeleton::Constructor(expr);
+            let mut runs = Vec::with_capacity(2);
+            for placeholder in [Term::Zero, Term::Succ(Rc::new(Term::Zero))] {
+                let (built, leaves) =
+                    self.probe(|| self.build(&cx, &skeleton, &ty, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, span));
+                built.map_err(|e| Fault::Ill(format!("`{}`: {}", ctor.name, elab_message(e))))?;
+                let Leaves::Record { seen, .. } = leaves else { unreachable!("a recording run stays one") };
+                runs.push(seen);
+            }
+            let (second, first) = (runs.pop().expect("two runs"), runs.pop().expect("two runs"));
+            let mut fields: Vec<Option<(Type, Level)>> = Vec::with_capacity(n);
+            for (a, b) in first.into_iter().zip(second) {
+                match (a, b) {
+                    (Some((acx, aty, al)), Some((bcx, bty, _))) => {
+                        let same = acx.gamma.len() == cx.gamma.len() && acx.gamma == bcx.gamma && aty == bty;
+                        fields.push(same.then_some((aty, al)));
+                    }
+                    _ => return Err(Fault::Ill(format!("a field of `{}` was never elaborated", ctor.name))),
+                }
+            }
+            let function = match fields.iter().cloned().collect::<Option<Vec<_>>>() {
+                Some(tys) => Some(self.ctor_function(run, s, &cx, &skeleton, &ty, &lvl, &tys).map_err(|e| {
+                    Fault::Ill(format!("`{}` as a function: {e}", ctor.name))
+                })?),
+                None => None,
+            };
+            let fields = fields
+                .into_iter()
+                .zip(&ctor.fields)
+                .map(|(f, (name, _))| (name.clone().unwrap_or_default(), f.map(|(t, l)| run.issue(s, Held::Type(t, l)))))
+                .collect();
+            out.push(CtorView { name: ctor.name.clone(), fields, ctor: function });
+        }
+        Ok(out)
+    }
+
+    /// A constructor as the function `λ x̄. C(x̄)` of its fields, whose types
+    /// `tys` mention no earlier field, issued at scope `s`.
+    #[allow(clippy::too_many_arguments)]
+    fn ctor_function(&self, run: &mut Run, s: usize, cx: &Cx, skeleton: &Skeleton, ty: &Type, lvl: &Level, tys: &[(Type, Level)]) -> Result<u64, String> {
+        let n = tys.len();
+        let mut inner = cx.clone();
+        for (j, (t, l)) in tys.iter().enumerate() {
+            let name = crate::goal_combinators::fresh(self, &inner, format!("x{j}"));
+            inner.push(name, t.shift_local(j as u32), l.clone());
+        }
+        let len = inner.gamma.len();
+        let fills = (0..n).map(|j| (Term::Var(LocalVar((n - 1 - j) as u32)), len)).collect();
+        let search = crate::resolve::SearchMark::of(self);
+        let mut term = match self.build(&inner, skeleton, &ty.shift_local(n as u32), lvl, Leaves::Fill(fills), run.span).0 {
+            Ok(t) => t,
+            Err(e) => {
+                search.rollback(self);
+                return Err(elab_message(e));
+            }
+        };
+        let mut fty = ty.shift_local(n as u32);
+        let mut level = lvl.clone();
+        for (j, (t, l)) in tys.iter().enumerate().rev() {
+            let dom = Rc::new(t.shift_local(j as u32));
+            term = Term::Lam { dom_level: l.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(term) };
+            fty = Type::Pi { dom_level: l.clone(), cod_level: level.clone(), dom, cod: Rc::new(fty) };
+            level = Level::join(l.clone(), level);
+        }
+        Ok(run.issue(s, Held::Term(term, fty, level)))
     }
 
     /// A handle's committed type, lifted to scope `to`, for a request that
@@ -2067,8 +3395,8 @@ impl Elaborator {
         let cx = run.cx(at)?;
         let mut runs = Vec::with_capacity(2);
         for placeholder in [Term::Zero, Term::Succ(Rc::new(Term::Zero))] {
-            let probe = self.clone();
-            let (built, leaves) = probe.build(&cx, &skeleton, &goal, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, run.span);
+            let (built, leaves) =
+                self.probe(|| self.build(&cx, &skeleton, &goal, &lvl, Leaves::Record { placeholder, seen: vec![None; n] }, run.span));
             built.map_err(|e| Fault::Ill(elab_message(e)))?;
             let Leaves::Record { seen, .. } = leaves else { unreachable!("a recording run stays one") };
             let seen: Option<Vec<_>> = seen.into_iter().collect();
@@ -2090,11 +3418,11 @@ impl Elaborator {
             let mut locals = Vec::with_capacity(len - base);
             let mut shown = Vec::with_capacity(len - base);
             for p in base..len {
-                let id = (run.len(0) + run.opened.len()) as u64;
+                let id = run.next_id();
                 run.opened.push((scope, p));
                 locals.push(id);
                 let entry = bcx.gamma.entries.get(p).expect("a context entry below its length");
-                let name = bcx.names.get(p).cloned().unwrap_or_else(|| "_".to_string());
+                let name = bcx.names.get(p).map(str::to_string).unwrap_or_else(|| "_".to_string());
                 shown.push((id, name, entry.ty.shift_local((len - p) as u32), entry.level.clone()));
             }
             run.scopes.push(Scope { parent: Some(at), cx: bcx, world: 0, locals });
@@ -2114,8 +3442,7 @@ impl Elaborator {
     /// `leaves` says, and hand back what they did.
     fn build(&self, cx: &Cx, skeleton: &Skeleton, goal: &Type, lvl: &Level, leaves: Leaves, span: Span) -> (R<Term>, Leaves) {
         let state = Rc::new(RefCell::new(leaves));
-        let outer = self.host_leaves.replace(Some(Rc::clone(&state)));
-        let built = match skeleton {
+        let built = self.scoped_cell(|s| &s.host_leaves, Some(Rc::clone(&state)), || match skeleton {
             Skeleton::Cases { scrut, ty, level, motive, equation, arms } => self.elab_convoy(
                 cx,
                 heather_syntax::MatchForm::Match,
@@ -2131,15 +3458,14 @@ impl Elaborator {
                 span,
             ),
             Skeleton::Constructor(e) => self.elab_check(cx, e, goal, lvl),
-        };
-        self.host_leaves.replace(outer);
+        });
         let leaves = state.borrow().clone();
         (built, leaves)
     }
 
     /// Leaf `k` of the split being elaborated (see [`Leaves`]).
     pub(crate) fn host_leaf(&self, cx: &Cx, k: usize, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
-        let Some(state) = self.host_leaves.borrow().clone() else {
+        let Some(state) = self.scope.host_leaves.borrow().clone() else {
             return err("a tactic's split leaf outside its split", span);
         };
         let mut leaves = state.borrow_mut();
@@ -2155,7 +3481,414 @@ impl Elaborator {
                 Some((t, n)) if *n == cx.gamma.len() => Ok(t.clone()),
                 _ => err("a split's branch was elaborated in another context than it was proved in", span),
             },
+            Leaves::Member { fills, psi } => match fills.get(k) {
+                Some((Held::Term(t, ..), n)) if *n == cx.gamma.len() => {
+                    Ok(t.shift_global((self.goal_psi().bindings.len() - *psi) as u32))
+                }
+                _ => err("a generated declaration's body was elaborated in another context than it was built in", span),
+            },
         }
+    }
+
+    /// The type at a generated declaration's leaf `k` (see [`Leaves`]).
+    pub(crate) fn host_ty_leaf(&self, cx: &Cx, k: usize, span: Span) -> R<(Type, Level)> {
+        let Some(state) = self.scope.host_leaves.borrow().clone() else {
+            return err("a generated declaration's type outside its declaration", span);
+        };
+        let leaves = state.borrow();
+        match &*leaves {
+            Leaves::Member { fills, psi } => match fills.get(k) {
+                Some((Held::Type(t, l), n)) if *n == cx.gamma.len() => {
+                    Ok((t.shift_global((self.goal_psi().bindings.len() - *psi) as u32), l.clone()))
+                }
+                _ => err("a generated declaration's type was elaborated in another context than it was built in", span),
+            },
+            _ => err("a generated declaration's type outside its declaration", span),
+        }
+    }
+
+    /// `generate g(args);`: run the generator `g(args)`, a
+    /// `tactic::Tac<List<tactic::Decl>>`, at the module's empty context,
+    /// and publish the declarations it ends with, every one of them or none
+    /// (design §19).
+    ///
+    /// Each declaration is built from surface syntax whose parameter types,
+    /// statement and body are markers standing for what the generator
+    /// built ([`Leaves::Member`]), and elaborated as an ordinary
+    /// declaration: its name is checked and registered, its implicit
+    /// parameters are the call convention, and the kernel gates it. So a
+    /// generated declaration is exactly what the same declaration written in
+    /// source would be. The group is one transaction: a member refused
+    /// rolls back the ones before it.
+    pub(crate) fn elab_generate(&mut self, g: &heather_syntax::ast::GenerateItem) -> R<()> {
+        let label = format!("generate {}", tactic_name(&g.generator));
+        let (members, psi) = self.run_generator(&g.generator, &label, g.span)?;
+        self.publish_members(&members, psi, &label, g.span)
+    }
+
+    /// Publish a generator's checked group, every member or none.
+    fn publish_members(&mut self, members: &[Member], psi: usize, label: &str, span: Span) -> R<()> {
+        self.session_transaction(|me| {
+            for m in members {
+                me.publish_member(m, psi, span).map_err(|e| match e {
+                    crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
+                        msg: format!("`{label}`: the generated `{}` was refused: {msg}", m.name),
+                        span,
+                    },
+                    other => other,
+                })?;
+            }
+            Ok(())
+        })
+    }
+
+    /// A declaration under a prefix generator, `P(args) fn f …` or
+    /// `P(args) def x = e;` (docs/value-definitions-design.md §3). The
+    /// generator is called with what the declaration hands it in front of
+    /// the written arguments, `P(name, args)` for a `fn` or `theorem` and
+    /// `P(name, value, args)` for a `def`, and run as `generate` runs its
+    /// generator.
+    ///
+    /// A `fn` or `theorem` is **consumed**: elaborated and published as
+    /// written, then read by the generator (by name, with `lookup`). A `def`
+    /// is **rewritten**: the declaration as written is not published; the
+    /// generator receives its value (at the type its parameter asks for: a
+    /// `String` as data, an `Expr` quoted), and its group must declare the
+    /// name. Either way the item is one transaction.
+    pub(crate) fn elab_prefixed(&mut self, p: &heather_syntax::ast::PrefixedItem) -> R<()> {
+        use heather_syntax::ast::{Block, ExprKind, Stmt, TyKind};
+        let d = &p.decl;
+        let prefix = match &p.generator.kind {
+            ExprKind::Var(n) => n.clone(),
+            ExprKind::App { head, .. } => match &head.kind {
+                ExprKind::Var(n) => n.clone(),
+                _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+            },
+            _ => unreachable!("the parser writes a prefix as a name or a call of one"),
+        };
+        let form = if d.value { "def" } else if d.kind == heather_syntax::ast::DeclKind::Theorem { "theorem" } else { "fn" };
+        let label = format!("{prefix} {form} {}", d.name);
+        if !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_)) {
+            return err(
+                format!(
+                    "`{prefix}` is not a generator in scope: a name before `{form}` is a \
+                     generator, a function returning `tactic::Tac<List<tactic::Decl>>` \
+                     (docs/value-definitions-design.md §3)"
+                ),
+                p.generator.span,
+            );
+        }
+        let name = Expr { kind: ExprKind::Str(d.name.clone()), span: d.span };
+        let mut handed = vec![name];
+        if d.value {
+            if !d.tyvars.is_empty() || !d.params.is_empty() {
+                return err(
+                    format!("`{label}`: a rewritten `def` cannot have type parameters yet"),
+                    d.span,
+                );
+            }
+            let value = (*d.body.result).clone();
+            // The written type, if any, is the value's: `{ let x: T = e; x }`.
+            let value = match &d.result.kind {
+                TyKind::TypeOf(_) => value,
+                _ => {
+                    let local = d.name.rsplit("::").next().unwrap_or(&d.name).to_string();
+                    let span = value.span;
+                    Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![Stmt::Let {
+                                name: local.clone(),
+                                ty: Some(d.result.clone()),
+                                expr: value,
+                                span,
+                                opaque: false,
+                            }],
+                            result: Box::new(Expr { kind: ExprKind::Var(local), span }),
+                            ons: Vec::new(),
+                            span,
+                        })),
+                        span,
+                    }
+                }
+            };
+            handed.push(value);
+        }
+        let generator = match &p.generator.kind {
+            ExprKind::App { head, args, named, explicit, goal_oriented } => Expr {
+                kind: ExprKind::App {
+                    head: head.clone(),
+                    args: handed.into_iter().chain(args.iter().cloned()).collect(),
+                    named: named.clone(),
+                    explicit: *explicit,
+                    goal_oriented: *goal_oriented,
+                },
+                span: p.generator.span,
+            },
+            _ => Expr {
+                kind: ExprKind::App {
+                    head: Box::new(p.generator.clone()),
+                    args: handed,
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span: p.generator.span,
+            },
+        };
+        self.session_transaction(|me| {
+            if !d.value {
+                me.elab_decl(d)?;
+            }
+            // A prefix's call is `P(name, args)` or `P(name, value, args)`,
+            // which the refusal says, since the writer did not spell it.
+            let convention = if d.value {
+                format!("a generator prefixing a `def` is called as `{prefix}(name, value, …)`")
+            } else {
+                format!("a generator prefixing a `{form}` is called as `{prefix}(name, …)`")
+            };
+            let (members, psi) = me.run_generator(&generator, &label, p.span).map_err(|e| match e {
+                crate::ElabError::Elab { msg, span } if !msg.starts_with(&format!("`{label}`")) => crate::ElabError::Elab {
+                    msg: format!("`{label}`: the declaration's call of its generator is refused ({convention}): {msg}"),
+                    span,
+                },
+                crate::ElabError::Elab { msg, span } if msg.contains("the generator's call is ill-typed") => {
+                    crate::ElabError::Elab { msg: format!("{msg}; {convention}"), span }
+                }
+                other => other,
+            })?;
+            if d.value && !members.iter().any(|m| m.name == d.name) {
+                return err(
+                    format!(
+                        "`{label}`: the generator did not declare `{}`: a generator prefixing a \
+                         `def` rewrites it, so its group declares the name",
+                        d.name
+                    ),
+                    p.span,
+                );
+            }
+            me.publish_members(&members, psi, &label, p.span)
+        })
+    }
+
+    /// Run a generator to its declarations, each read back and checked as
+    /// far as the run can (its body against its statement), and the number
+    /// of globals of the world they were built in.
+    fn run_generator(&self, generator: &Expr, label: &str, span: Span) -> R<(Vec<Member>, usize)> {
+        let fail = |msg: String| err(format!("`{label}`: {msg}"), span);
+        let cx = Cx::empty();
+        let world = self.goal_psi();
+        let (closed, quoted) = self.protocol_value(&cx, &world, generator, "host_generator", "generate", span)?;
+        let (head, runs) = self.protocol_signature(&world, "host_generator", "generate", span)?;
+        let Type::Pi { dom_level, cod_level, dom, cod } = runs else {
+            return err("`tactic::host_generator` takes nothing", span);
+        };
+        // The call is run before anything else reads it, and elaboration
+        // leaves a mismatch for the kernel to find, so the kernel checks it
+        // first: a value of the wrong type is refused here instead of being
+        // evaluated into a stuck answer.
+        if let Err(e) = self.kernel_check_term(&world, Layer::Code, &LocalCtx::nil(), &closed, &dom, &dom_level) {
+            return fail(format!(
+                "the generator's call is ill-typed: it is not a `tactic::Tac<List<tactic::Decl>>` \
+                 of these arguments ({e:?})"
+            ));
+        }
+        let tree = Term::App { fun: Rc::new(head), dom_level, cod_level, dom, cod, arg: Rc::new(closed) };
+        let arena = ValueArena::new();
+        let reader = Reader::new(&world, &arena);
+        let tree = reader.root(tree);
+        let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };
+        let mut run = Run::new(&cx, span, true);
+        run.issue_quoted(quoted);
+        match self.drive(&mut run, &mut speaker) {
+            Ok(Ended::Published(decls)) => {
+                let members = decls.iter().map(|d| self.member(&mut run, d)).collect::<Result<Vec<_>, String>>();
+                members.map(|m| (m, world.bindings.len())).or_else(fail)
+            }
+            Ok(Ended::Result(_)) => fail("a generator ends by publishing its declarations".into()),
+            Err(msg) => fail(msg),
+        }
+    }
+
+    /// One published declaration, read back: its parameters must be a
+    /// telescope of introduced locals from the root, each in the scope of
+    /// the one before, and its body must prove its statement there.
+    fn member(&self, run: &mut Run, d: &DeclView) -> Result<Member, String> {
+        let name = &d.name;
+        if !is_name(name) {
+            return Err(format!("`{name}` is not a declaration's name"));
+        }
+        let at = |why: String| format!("`{name}`: {why}");
+        if d.value && !d.params.is_empty() {
+            return Err(at("a value (`AsValue`) takes no parameters; a function is `AsFunction`".into()));
+        }
+        let instance = match &d.instance {
+            None => None,
+            Some((class, args, index)) => {
+                let args = args
+                    .iter()
+                    .map(|a| self.reify_ty(run, a, 0))
+                    .collect::<Result<Vec<_>, Fault>>()
+                    .map_err(|f| at(format!("its instance's type argument: {}", f.msg())))?;
+                let args = args
+                    .into_iter()
+                    .map(|(t, l)| run.committed_ty(&t).map(|t| (t, l)))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| at("its instance's type argument mentions a hole nothing solved".into()))?;
+                Some((class.clone(), args, index.clone()))
+            }
+        };
+        let mut parent = 0;
+        let mut params = Vec::with_capacity(d.params.len());
+        for &(x, implicit) in &d.params {
+            if run.let_local(x).is_some() {
+                return Err(at(format!("parameter {x} is a `let`, which binds nothing")));
+            }
+            let (s, i) = run.local(x).map_err(|f| at(f.msg()))?;
+            if run.scopes[s].parent != Some(parent) || run.scopes[s].locals.as_slice() != [x] {
+                return Err(at(format!("parameter {x} is not introduced under the parameter before it")));
+            }
+            let cx = run.cx(s).map_err(|f| at(f.msg()))?;
+            let entry = cx.gamma.entries.get(i).expect("an introduced local");
+            let shown = cx.names.get(i).filter(|n| is_name(n) && !n.contains("::")).map(str::to_string).unwrap_or_else(|| format!("x{}", params.len()));
+            params.push((shown, implicit, (*entry.ty).clone(), entry.level.clone()));
+            parent = s;
+        }
+        let (result, level) = self.reify_ty(run, &d.result, parent).map_err(|f| at(format!("its statement: {}", f.msg())))?;
+        let m = run.world();
+        let body = self.reify(run, &d.body, parent).map_err(|f| at(format!("its body: {}", f.msg())))?;
+        let result = result.shift_global((run.world() - m) as u32);
+        if !body.level.equiv(&level) || !self.same_ty(run, parent, &body.ty, &result, &level).map_err(|f| at(f.msg()))? {
+            return Err(at(format!(
+                "its body proves `{}`, not its statement `{}`",
+                self.shown_ty(run, parent, &body.ty),
+                self.shown_ty(run, parent, &result)
+            )));
+        }
+        let unsolved = |what: &str| at(format!("its {what} mentions a hole nothing solved"));
+        let result = run.committed_ty(&result).ok_or_else(|| unsolved("statement"))?;
+        let body = run.committed_tm(&body.term).ok_or_else(|| unsolved("body"))?;
+        Ok(Member { theorem: d.theorem, value: d.value, instance, name: name.clone(), params, result: (result, level), body })
+    }
+
+    /// Elaborate one generated declaration from its skeleton (see
+    /// [`Self::elab_generate`]).
+    fn publish_member(&mut self, m: &Member, psi: usize, span: Span) -> R<()> {
+        use heather_syntax::ast::{Block, Decl, DeclKind, Param, ParamOrigin, Ty, TyKind};
+        let n = m.params.len();
+        let leaf_ty = |k: usize| Ty { kind: TyKind::Named { name: format!("{LEAF}{k}"), args: Vec::new() }, span };
+        let params = m
+            .params
+            .iter()
+            .enumerate()
+            .map(|(k, (name, implicit, _, _))| Param {
+                name: name.clone(),
+                ty: leaf_ty(k),
+                implicit: *implicit,
+                is_self: false,
+                solver: None,
+                default: None,
+                origin: ParamOrigin::Written,
+                symbol: None,
+                span,
+            })
+            .collect();
+        let decl = Decl {
+            kind: if m.theorem { DeclKind::Theorem } else { DeclKind::Fn },
+            is_meta: false,
+            is_evidence: false,
+            is_interface: false, partial: None,
+            value: m.value,
+            elaborates: None,
+            name: m.name.clone(),
+            tyvars: Vec::new(),
+            params,
+            result: leaf_ty(n),
+            decreases: None,
+            unfolding: Vec::new(),
+            body: Block { stmts: Vec::new(), result: Box::new(leaf_expr(n + 1, span)), ons: Vec::new(), span },
+            span,
+        };
+        let mut fills: Vec<(Held, usize)> =
+            m.params.iter().enumerate().map(|(k, (_, _, t, l))| (Held::Type(t.clone(), l.clone()), k)).collect();
+        let (result, level) = &m.result;
+        fills.push((Held::Type(result.clone(), level.clone()), n));
+        fills.push((Held::Term(m.body.clone(), result.clone(), level.clone()), n));
+        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_decl(&decl))?;
+        match &m.instance {
+            None => Ok(()),
+            Some(instance) => self.publish_instance_member(&m.name, instance, psi, span),
+        }
+    }
+
+    /// An `AsInstance` member, after its value is published: the instance
+    /// `class<args…>(index…) { field := name.field, … }`, elaborated as the
+    /// same instance written in source (so its key, its coherence and its
+    /// index spelling are the ordinary checks). The type arguments are
+    /// leaves standing for the types the generator built.
+    fn publish_instance_member(
+        &mut self,
+        name: &str,
+        (class, args, index): &(String, Vec<(Type, Level)>, Vec<String>),
+        psi: usize,
+        span: Span,
+    ) -> R<()> {
+        use heather_syntax::ast::{ClassRef, ExprKind, InstanceBody, InstanceDecl, InstanceField, Ty, TyKind};
+        let Some(info) = self.key_of(class).and_then(|key| self.traits.class(&key).cloned()) else {
+            return err(format!("`{name}` is to be an instance of `{class}`, which is not a class in scope"), span);
+        };
+        let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span };
+        let fields = info
+            .fields
+            .iter()
+            .filter_map(|f| f.name.clone())
+            .map(|field| InstanceField {
+                expr: Expr {
+                    kind: ExprKind::Dot { recv: Box::new(var(name)), name: field.clone(), tyargs: Vec::new(), args: None, named: Vec::new() },
+                    span,
+                },
+                name: field,
+                span,
+            })
+            .collect();
+        // Each type argument is a leaf standing for the type the generator
+        // built, read in the empty context. A function type is spelled as an
+        // arrow between two leaves (its codomain read under the binder),
+        // because an instance's key reads the carrier's head off its
+        // spelling: an arrow is keyed as an arrow (`#Fn`), a leaf by nothing.
+        let leaf = |k: usize| Ty { kind: TyKind::Named { name: format!("{LEAF}{k}"), args: Vec::new() }, span };
+        let mut fills: Vec<(Held, usize)> = Vec::new();
+        let mut spelled = Vec::with_capacity(args.len());
+        for (t, l) in args {
+            match t {
+                Type::Pi { dom_level, cod_level, dom, cod } => {
+                    let k = fills.len();
+                    fills.push((Held::Type((**dom).clone(), dom_level.clone()), 0));
+                    fills.push((Held::Type((**cod).clone(), cod_level.clone()), 1));
+                    spelled.push(Ty { kind: TyKind::Fn { binder: None, implicit: false, dom: Box::new(leaf(k)), cod: Box::new(leaf(k + 1)) }, span });
+                }
+                _ => {
+                    spelled.push(leaf(fills.len()));
+                    fills.push((Held::Type(t.clone(), l.clone()), 0));
+                }
+            }
+        }
+        let decl = InstanceDecl {
+            tyvars: Vec::new(),
+            valparams: Vec::new(),
+            class: ClassRef {
+                name: class.clone(),
+                args: spelled,
+                index: index.iter().map(|n| var(n)).collect(),
+                path: Vec::new(),
+                span,
+            },
+            requires: Vec::new(),
+            body: InstanceBody::Literal(fields),
+            span,
+        };
+        let state = Rc::new(RefCell::new(Leaves::Member { fills, psi }));
+        self.scoped(|s| s.host_leaves.get_mut(), Some(state), |me| me.elab_instance(&decl))
     }
 
     /// `Close(split, proofs)`: each proof checked at its branch's goal
@@ -2219,12 +3952,12 @@ impl Elaborator {
     /// Make `name` available as `by name` (design §8a). A name a source file
     /// declares, or a local, takes precedence over a native tactic.
     pub fn register_native_tactic(&mut self, name: &str, make: fn() -> Box<dyn NativeTactic>) {
-        self.native_tactics.borrow_mut().insert(name.to_string(), make);
+        self.policy.native_tactics.borrow_mut().insert(name.to_string(), make);
     }
 }
 
 /// The tactic as its `by` wrote it, for messages.
-fn tactic_name(e: &Expr) -> String {
+pub(crate) fn tactic_name(e: &Expr) -> String {
     match &e.kind {
         heather_syntax::ast::ExprKind::Var(name) => name.clone(),
         heather_syntax::ast::ExprKind::App { head, .. } => format!("{}(…)", tactic_name(head)),

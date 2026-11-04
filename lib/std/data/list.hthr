@@ -203,6 +203,51 @@ fn List::foldl<A, B>(self xs: List<A>, f: B → A → B, z: B) → B {
     }
 }
 
+// One step of a loop that may exit early (docs/sequencing-surface-design.md
+// §5.2): go on with the state, stop the loop with it, or leave the function
+// with its value. A `for` whose body has `break`, `continue` or `return`
+// lowers to `List::for_in` over a step returning this.
+inductive ForStep<S, R> { Next(s: S), Break(s: S), Return(r: R) }
+
+// The state a loop continues with after a `Next` or `Break`, `d` after a
+// `Return` (which leaves the function, so nothing reads it).
+fn ForStep::state<S, R>(self f: ForStep<S, R>, d: S) → S {
+    match f { Next(s) => s, Break(s) => s, Return(_) => d }
+}
+
+// `foldl` that stops at the first `Break` or `Return`.
+fn List::for_in<A, S, R>(self xs: List<A>, step: S → A → ForStep<S, R>, s: S) → ForStep<S, R> {
+    match xs {
+        Nil => Next(s),
+        Cons(h, t) => match step(s, h) {
+            Next(u) => t.for_in(step, u),
+            Break(u) => Break(u),
+            Return(r) => Return(r),
+        },
+    }
+}
+
+// A left fold whose step is a computation in a carrier `M`: the binding
+// counterpart of `foldl`, and what a `for` loop in a carrier block lowers to
+// (docs/sequencing-surface-design.md §6.1). Each step runs after the
+// previous one, in list order.
+fn List::for_m<A, S>(self xs: List<A>, {M: Type → Type}, s: S, step: S → A → M(S),
+    b: Bind<M> := infer, p: Pointed<M> := infer) → M(S) {
+    match xs {
+        Nil => p.pure(s),
+        Cons(h, t) => b.bind(step(s, h), λ next => t.for_m(next, step)),
+    }
+}
+
+// Run `f` at every element in order and collect the results.
+fn List::traverse<A, B>(self xs: List<A>, {M: Type → Type}, f: A → M(B),
+    b: Bind<M> := infer, p: Pointed<M> := infer) → M(List<B>) {
+    match xs {
+        Nil => p.pure(Nil),
+        Cons(h, t) => b.bind(f(h), λ y => b.bind(t.traverse(f), λ ys => p.pure(Cons(y, ys)))),
+    }
+}
+
 // TODO: this should go in general file
 theorem cong_fn<A, B>(g: A → B, {a, b: A}, p: a = b): g(a) = g(b) {
     rewrite(p, refl)
@@ -569,6 +614,39 @@ theorem List::len_replicate<A>(x: A, n: Nat): List::replicate(x, n).len() = n {
     }
 }
 
+// The indices below `n`, ascending: `[0, 1, …, n - 1]`. Built at the end,
+// as big_operator's range sum is, so the two agree step by step.
+fn List::range(n: Nat) → List<Nat> {
+    match n {
+        Zero => Nil,
+        Succ(k) => List::range(k) ++ Cons(k, Nil),
+    }
+}
+
+theorem List::len_range(n: Nat): List::range(n).len() = n {
+    match n {
+        Zero => {},
+        Succ(k) => trans(List::range(k).len_append(Cons(k, Nil)), Nat::cong_succ(List::len_range(k))),
+    }
+}
+
+// `[a, a + 1, …, a + n - 1]`, built at the end as `range` is: `a..b` in a
+// `for` header is `List::range_from(a, b - a)`
+// (docs/sequencing-surface-design.md §5.2).
+fn List::range_from(a, n: Nat) → List<Nat> {
+    match n {
+        Zero => Nil,
+        Succ(k) => List::range_from(a, k) ++ Cons(a + k, Nil),
+    }
+}
+
+theorem List::len_range_from(a, n: Nat): List::range_from(a, n).len() = n {
+    match n {
+        Zero => {},
+        Succ(k) => trans(List::range_from(a, k).len_append(Cons(a + k, Nil)), Nat::cong_succ(List::len_range_from(a, k))),
+    }
+}
+
 fn List::zip<A, B>(self xs: List<A>) → List<B> → List<Pair<A, B>> {
     match xs {
         Nil => λ (ys: List<B>) => Nil,
@@ -714,6 +792,43 @@ theorem List::mem_filter<A>(self xs: List<A>, a: A, p: A → Bool):
     }
 }
 
+// What the filter keeps passes it.
+theorem List::mem_filter_holds<A>(self xs: List<A>, a: A, p: A → Bool): Mem(a, xs.filter(p)) → p(a) = True {
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => (match kept: p(h) {
+            True => λ m => match m {
+                Inl(e) => trans(cong_fn(p, e), kept),
+                Inr(m2) => t.mem_filter_holds(a, p, m2),
+            },
+            False => λ m => t.mem_filter_holds(a, p, m),
+        }),
+    }
+}
+
+theorem List::mem_take<A>(self xs: List<A>, a: A): (n: Nat) → Mem(a, xs.take(n)) → Mem(a, xs) {
+    match xs {
+        Nil => λ n m => false_elim(m),
+        Cons(_, t) => λ n => match n {
+            Zero => λ m => false_elim(m),
+            Succ(k) => λ m => match m {
+                Inl(e) => Inl(e),
+                Inr(m2) => Inr(t.mem_take(a, k, m2)),
+            },
+        },
+    }
+}
+
+theorem List::mem_drop<A>(self xs: List<A>, a: A): (n: Nat) → Mem(a, xs.drop(n)) → Mem(a, xs) {
+    match xs {
+        Nil => λ n m => false_elim(m),
+        Cons(_, t) => λ n => match n {
+            Zero => λ m => m,
+            Succ(k) => λ m => Inr(t.mem_drop(a, k, m)),
+        },
+    }
+}
+
 theorem List::mem_rev<A>(self xs: List<A>, a: A): Mem(a, xs.rev()) → Mem(a, xs) {
     match xs {
         Nil => λ m => false_elim(m),
@@ -762,6 +877,16 @@ fn List::nth<A>(self xs: List<A>, i: Nat) → Option<A> {
     match xs {
         Nil => None,
         Cons(h, t) => match i { Zero => Some(h), Succ(k) => t.nth(k) },
+    }
+}
+
+theorem List::nth_replicate<A>(x: A, n: Nat): (i: Nat) → i < n → List::replicate(x, n).nth(i) = Some(x) {
+    match n {
+        Zero => λ i never => false_elim(never),
+        Succ(k) => λ i => match i {
+            Zero => λ _ => refl,
+            Succ(l) => λ below => List::nth_replicate(x, k, l, below),
+        },
     }
 }
 
@@ -819,6 +944,81 @@ theorem List::nth_present<A>(self xs: List<A>): (i: Nat) → i < xs.len() → Ex
         Cons(h, t) => λ i => match i {
             Zero => λ _ => Exists(h, refl),
             Succ(k) => λ below => t.nth_present(k, below),
+        },
+    }
+}
+
+// The element at an index of a list mapped is the element there, mapped.
+theorem List::nth_map_some<A, B>(self xs: List<A>, f: A → B): (i: Nat) → (x: A) → xs.nth(i) = Some(x) → xs.map(f).nth(i) = Some(f(x)) {
+    match xs {
+        Nil => λ i x none => absurd(none),
+        Cons(h, t) => λ i => match i {
+            Zero => λ x some => cong_fn<A, Option<B>>(λ a => Some(f(a)), Option::some_inj(h, x, some)),
+            Succ(k) => λ x some => t.nth_map_some(f, k, x, some),
+        },
+    }
+}
+
+// The list with `f` applied to its element at `i`; past its end, the list.
+fn List::update<A>(self xs: List<A>, i: Nat, f: A → A) → List<A> {
+    match xs {
+        Nil => Nil,
+        Cons(h, t) => match i { Zero => Cons(f(h), t), Succ(k) => Cons(h, t.update(k, f)) },
+    }
+}
+
+theorem List::len_update<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.update(i, f).len() = xs.len() {
+    match xs {
+        Nil => λ i f => refl,
+        Cons(_, t) => λ i => match i {
+            Zero => λ f => refl,
+            Succ(k) => λ f => cong_fn<Nat, Nat>(λ n => Succ(n), t.len_update(k, f)),
+        },
+    }
+}
+
+theorem List::nth_update_here<A>(self xs: List<A>): (i: Nat) → (f: A → A) → (x: A) → xs.nth(i) = Some(x) →
+    xs.update(i, f).nth(i) = Some(f(x)) {
+    match xs {
+        Nil => λ i f x none => absurd(none),
+        Cons(h, t) => λ i => match i {
+            Zero => λ f x some => cong_fn<A, Option<A>>(λ a => Some(f(a)), Option::some_inj(h, x, some)),
+            Succ(k) => λ f x some => t.nth_update_here(k, f, x, some),
+        },
+    }
+}
+
+theorem List::nth_update_other<A>(self xs: List<A>): (i: Nat) → (f: A → A) → (k: Nat) → k ≠ i → xs.update(i, f).nth(k) = xs.nth(k) {
+    match xs {
+        Nil => λ i f k _ => refl,
+        Cons(_, t) => λ i => match i {
+            Zero => λ f k => match k { Zero => λ ne => false_elim(ne(refl)), Succ(_) => λ _ => refl },
+            Succ(m) => λ f k => match k {
+                Zero => λ _ => refl,
+                Succ(l) => λ ne => t.nth_update_other(m, f, l, λ same => ne(cong_fn<Nat, Nat>(λ n => Succ(n), same))),
+            },
+        },
+    }
+}
+
+// Where there is no element, there is none after an update either.
+theorem List::nth_update_none<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.nth(i) = None → xs.update(i, f).nth(i) = None {
+    match xs {
+        Nil => λ i f _ => refl,
+        Cons(_, t) => λ i => match i {
+            Zero => λ f some => absurd(some),
+            Succ(k) => λ f none => t.nth_update_none(k, f, none),
+        },
+    }
+}
+
+// Past its end, an update leaves the list as it was.
+theorem List::update_past<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.len() <= i → xs.update(i, f) = xs {
+    match xs {
+        Nil => λ i f _ => refl,
+        Cons(h, t) => λ i => match i {
+            Zero => λ f past => false_elim(past),
+            Succ(k) => λ f past => cong_fn<List<A>, List<A>>(λ r => Cons(h, r), t.update_past(k, f, past)),
         },
     }
 }
@@ -902,7 +1102,7 @@ fn List::list_eq_dec<A: DecEq>(self xs: List<A>) → (ys: List<A>) → xs = ys �
                                 Inl(tail_eq) => Inl(List::cons_eq(tail1, tail2, head1, head2, head_eq, tail_eq)),
                                 Inr(tail_ne) =>
                                     Inr(λ (p: (Cons(head1, tail1) = Cons(head2, tail2))) =>
-                                        tail_ne(List::cong_tail<A>(p))),
+                                        tail_ne(List::cong_tail(p))),
                             },
                     },
             },

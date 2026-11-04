@@ -4,7 +4,7 @@ status: open
 labels: [frontend,syntax,design,ergonomics]
 area: language
 created: 2026-08-07
-updated: 2026-08-09
+updated: 2026-10-26
 ---
 
 From the adoption round's reading (2026-08-07): `fn sum<A> requires m: Monoid<A> (xs: List<A>) -> A` reads oddly — the requires clause sits BETWEEN the type parameters and the value parameters, and with several dictionaries the head of the declaration becomes a wall before the first real argument. The position is semantically motivated (solver parameters are moved to the front because later parameter TYPES may mention them — rare but legal, e.g. `p: m.op(x, y) = z`) but the surface need not mirror the elaboration order.
@@ -950,3 +950,12 @@ tests included.
 - 2026-08-08: Stays open: the given clause, section variables, bundles, the _ carrier slot, as-naming, and the requires-removal decision (ledger above, now four entries) are all still this issue's.
 - 2026-08-08: The removal ledger's entry (4) is CLEARED: [[upcast-assembly-cost-at-open-carriers]] is fixed and closed (docs/traits-named-upcast-design.md — dispatch reads through the upcast; the anonymous and named spellings are one term), and plus_zero_of_comm migrated, so ZERO library declarations now keep requires for a performance reason. Entries (2) compound carriers and (3) the subgoal-spelling audit remain the removal's open prerequisites; (1) was cleared by candidate 23.
 - 2026-08-09: The 2026-08-07 note 'dot notation is the bundled layer's surface' is SUPERSEDED by the operation-indexed design pass (docs/operation-indexed-classes-design.md §9.1: there is no bundled layer — rejected alternative). Dot sugars at unindexed classes are unchanged; at indexed classes they ride the value-slot ladder, scope-then-refuse (doc §5.1). The removal ledger is unaffected: entries (2) compound carriers and (3) subgoal audit stay its open prerequisites.
+- 2026-10-26: Section variables assessed against the library (docs/sections-design.md, 2026-10-26). The recommendation departs from round 2's `section { given A: Monoid; }` with the mention rule: a section whose `<…>(…)` head is spliced into every member, refusing a generic/implicit section binder a member's head does not determine. Reason: the census (`scripts/signature-census`) finds the repetition is almost all a leading prefix, so the mention rule removes about the same text unless explicit arguments are reordered, while costing a rule to read and a proof-only `include` escape. Filed as [[section-spliced-heads]], pending Minus's decision (doc §8). `given`, bundles and `context` stay this issue's; the doc finds no customer yet for bundles (cross-file repetition is small).
+- 2026-10-26: 2026-10-26: SECTION VARIABLES SETTLED by docs/sections-design.md (PR #191, Minus
+  took its recommendations): `section<…>(…) { … }` with the declaration-head
+  grammar, spliced into every member's head with no inclusion rule; a binder a
+  member's head does not determine is refused at that member (§4.1 there
+  explains why splice beats round 2's syntactic mention rule). `section` is no
+  longer refused; `given` and `context` still are. Still open here: the `given`
+  clause, named bundles (sections-design §7 records when to look again), the
+  `_` carrier slot, `as m` naming, and the requires-removal decision.

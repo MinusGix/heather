@@ -6,7 +6,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalVar, LocalSubst, Term, Type};
 use heather_syntax::{Expr, ExprKind};
 
-use crate::{Cx, Elaborator, R};
+use crate::{Cx, Elaborator, R, SolutionCheck};
 use crate::unification::{Sol, U, partially_zonked, unify_ty_root, zonked};
 
 impl Elaborator {
@@ -35,10 +35,12 @@ impl Elaborator {
             let k = prefix as u32;
             ty = ty.shift_global(k);
             let mut inner = vec![Sol::Unsolved; prefix];
+            let mut doms = Vec::with_capacity(prefix);
             for slot in 0..k {
-                let Type::Pi { cod, cod_level, .. } = self.whnf(cx, &ty, argument.span)? else {
+                let Type::Pi { dom, cod, cod_level, .. } = self.whnf(cx, &ty, argument.span)? else {
                     return Ok(None);
                 };
+                doms.push((*dom).clone());
                 let meta = Rc::new(Term::GlobalTm {
                     var: GlobalVar(slot), subst: LocalSubst::id(&cx.gamma),
                 });
@@ -51,11 +53,20 @@ impl Elaborator {
             let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, argument.span);
             let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
             let respell = |t: &Type| self.respell_ty(cx, t);
+            let constructor = |t: &Type| self.constructor_spelling(cx, t, argument.span);
+            let slot_view = |t: &Term| self.slot_view(t);
+            let check = SolutionCheck::new(self, cx, &doms, k);
+            let admit = |i: usize, s: &Term, sols: &[Sol]| check.admit(i, s, sols);
+            let next_head = |t: &Term| self.next_head(cx, t);
             let u = U {
                 gamma: &cx.gamma, subject_metas: Some((n, sols)),
                 type_args: &type_args, canonical_head: &canonical_head, respell: &respell,
+                constructor: &constructor, slot_view: &slot_view,
+                admit: &admit, disagree: None, next_head: &next_head,
+                guesses: crate::unification::Guesses::Take, clash: None,
             };
             unify_ty_root(&u, &pattern, &subject, k, 0, &mut inner);
+            check.settle(&mut inner);
             // Even an unused implicit must be determined; zonking only the
             // result type would miss it and let ordinary checking guess.
             if inner.iter().any(|s| s.solved().is_none()) { return Ok(None); }

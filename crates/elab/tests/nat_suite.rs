@@ -35,8 +35,12 @@ fn nat_suite_checks() {
     // that declaration's *projections*: `CollectionLiteral<C>(n)` is
     // telescoped and its spine is dependent (`fromLiteral` mentions
     // `element`), which since docs/telescoped-record-projections-design.md
-    // §3 is the device's fourth cell rather than §13.6's decline.
-    assert_eq!(e.psi().bindings.len(), 17);
+    // §3 is the device's fourth cell rather than §13.6's decline. Plus 6
+    // for the binding-statement classes `Bind`/`Pointed` and the calls
+    // `Bind::seq`/`Pointed::ret` the lowering writes
+    // (docs/sequencing-surface-design.md §13). Plus 3 for the `Mutated`
+    // record a `mut self` method returns (docs/effects-capabilities-design.md §2).
+    assert_eq!(e.psi().bindings.len(), 26);
 }
 
 #[test]
@@ -61,10 +65,15 @@ fn a_fn_is_transparent_and_a_theorem_is_not() {
     // Eight generated definitions for the prelude's one telescoped dependent
     // record (`CollectionLiteral#tycode_fn` and its `3·nfields + 1 = 7`
     // projection definitions, `docs/telescoped-record-projections-design.md`
-    // §3), then the prelude's four theorems, then `fn add`, then the suite's
-    // four theorems.
+    // §3), then the prelude's four theorems, then six definitions for the
+    // binding-statement classes and their calls (`Bind`, `Pointed`,
+    // `Bind::seq`, `Pointed::ret`), then `fn add`, then the suite's four
+    // theorems.
     let mut want = vec![true; 8];
     want.extend([false; 4]);
+    // Then the three generated definitions of the prelude's `Mutated`.
+    want.extend([true; 6]);
+    want.extend([true; 3]);
     want.push(true);
     want.extend([false; 4]);
     assert_eq!(bodied, want);

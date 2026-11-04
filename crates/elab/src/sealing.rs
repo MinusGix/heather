@@ -25,12 +25,11 @@
 //! program's code (`CodeResident`, a conjunction per byte) is the case that
 //! decided it.
 
-use std::sync::Arc as Rc;
 
 use heather_kernel::eval::Eval;
 use heather_kernel::reduce::Defs;
 use heather_kernel::term::{CtxBase, GlobalCtx, Type};
-use heather_kernel::value::{Env, Head, TmClo, TyClo, VNeTy, VTy, Val, ValueArena};
+use heather_kernel::value::{Elim, Env, Head, TmClo, TyClo, VNeTy, VTy, Val, ValueArena};
 
 /// Reduction budget for the whole test: generous for a `fn` into `Type`
 /// that unfolds a few layers (`x < y` on the reals is three), small next to
@@ -48,21 +47,43 @@ const NODES: u32 = 64;
 pub(crate) fn carries_data(psi: &GlobalCtx, stmt: &Type) -> bool {
     let arena = ValueArena::new();
     let mut ev = Eval::new(FUEL, Defs::transparent(psi), CtxBase::Nil, &arena);
-    let mut walk = Walk { ev: &mut ev, arena: &arena, nodes: NODES };
+    let mut walk = Walk { ev: &mut ev, psi, arena: &arena, nodes: NODES };
     let Ok(v) = walk.ev.eval_ty(stmt, &Env::identity(&arena, 0)) else { return false };
-    walk.data(v, 0).unwrap_or(false)
+    walk.data(v, 0, true).unwrap_or(false)
 }
+
+/// Fuel for [`Walk::never_data`]'s look at a family alone: it unfolds one
+/// definition at variables, so it never runs anything the statement computes.
+const FAMILY_FUEL: u64 = 1 << 10;
+
+/// Formers [`Walk::never_data`] visits.
+const FAMILY_NODES: u32 = 16;
 
 struct Walk<'e, 'a, 'v> {
     ev: &'e mut Eval<'a, 'v>,
+    psi: &'a GlobalCtx,
     arena: &'v ValueArena<'v>,
     nodes: u32,
 }
 
 impl<'v> Walk<'_, '_, 'v> {
     /// `None`: out of fuel or of nodes — unknown, so opaque.
-    fn data(&mut self, ty: Rc<VTy<'v>>, depth: u32) -> Option<bool> {
+    ///
+    /// `last` says nothing is asked after this answer: the walk's verdict is
+    /// this one, and an unknown here is the same opaque `false` as a no. There,
+    /// and only there, a statement that is a family no instance of which can
+    /// carry data ([`Self::never_data`]) answers `false` without being run: the
+    /// one answer the full test could give. `x.IsTrue()` of a `Bool` program is
+    /// the case that decided it: the test otherwise runs the program, to its
+    /// fuel when it is large (a generated certificate's `checked` pass), only to
+    /// learn that `True` and `False` carry nothing. Not under a `Σ`'s first
+    /// component, where an unknown makes the whole statement unknown but a no
+    /// goes on to the second.
+    fn data(&mut self, ty: &'v VTy<'v>, depth: u32, last: bool) -> Option<bool> {
         self.nodes = self.nodes.checked_sub(1)?;
+        if last && self.never_data(&ty, depth) {
+            return Some(false);
+        }
         let ty = self.ev.delta_whnf_ty(ty).ok()?;
         Some(match &*ty {
             // No component to compute with: a proof of one of these is all
@@ -73,23 +94,23 @@ impl<'v> Walk<'_, '_, 'v> {
             // the shape of a modulus.
             VTy::Pi { cod, .. } => {
                 let cod = self.under(cod, depth)?;
-                self.data(cod, depth + 1)?
+                self.data(cod, depth + 1, last)?
             }
             VTy::Sigma { fst, snd, .. } => {
                 let fst = self.ev.force_ty(fst).ok()?;
-                self.data(fst, depth)? || {
+                self.data(fst, depth, false)? || {
                     let snd = self.under(snd, depth)?;
-                    self.data(snd, depth + 1)?
+                    self.data(snd, depth + 1, last)?
                 }
             }
             VTy::Vec { elem, .. } => {
                 let elem = self.ev.force_ty(elem).ok()?;
-                self.data(elem, depth)?
+                self.data(elem, depth, last)?
             }
             // A tuple carries what its family carries at a fresh position.
             VTy::DVec { fam, .. } => {
                 let fam = self.under(fam, depth)?;
-                self.data(fam, depth + 1)?
+                self.data(fam, depth + 1, last)?
             }
             // Under a universe, context or type binder: rare in a theorem's
             // statement, and not entered.
@@ -121,9 +142,76 @@ impl<'v> Walk<'_, '_, 'v> {
         })
     }
 
+    /// Whether `ty` is `El` of a global type family `F(a⃗)` such that *no*
+    /// `F(b⃗)` carries data: `F` at fresh variables, decided in a walk of its
+    /// own ([`Family::never`]) with its own fuel, so the arguments — however
+    /// much they would compute — are never forced, and the main walk's fuel
+    /// and nodes are untouched. A `false` here only means "not shown".
+    fn never_data(&mut self, ty: &'v VTy<'v>, depth: u32) -> bool {
+        let VTy::Neutral(VNeTy::El { level, tm }) = &*ty else { return false };
+        let Val::Neutral(n) = &*tm else { return false };
+        let Head::Global { var, subst } = &n.head else { return false };
+        if n.unfold.is_none() || n.spine.is_empty() || !n.spine.iter_rev().all(|e| e.is_application()) {
+            return false;
+        }
+        let mut args: Vec<&'v Elim<'v>> = n.spine.iter_rev().collect();
+        args.reverse();
+        let mut ev = Eval::new(FAMILY_FUEL, Defs::transparent(self.psi), CtxBase::Nil, self.arena);
+        let mut family = Family { ev: &mut ev, arena: self.arena, nodes: FAMILY_NODES };
+        let mut head = family.ev.global(*var, subst.clone());
+        let mut fresh = depth;
+        for e in args {
+            let Elim::App { ann, .. } = e else { return false };
+            let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(self.arena, fresh))));
+            fresh += 1;
+            let Ok(next) = family.ev.elim(head, Elim::App { ann: ann.clone(), arg: x }) else { return false };
+            head = next;
+        }
+        let at = self.arena.ty_el(level.clone(), self.arena.tm(TmClo::val(head)));
+        let Ok(ty) = family.ev.force_ty(at) else { return false };
+        family.never(ty, fresh)
+    }
+
     /// A one-binder type closure under a fresh variable at level `depth`.
-    fn under(&mut self, clo: &'v TyClo<'v>, depth: u32) -> Option<Rc<VTy<'v>>> {
-        let x = self.arena.tm(TmClo::val(Rc::new(Val::var(depth))));
+    fn under(&mut self, clo: &'v TyClo<'v>, depth: u32) -> Option<&'v VTy<'v>> {
+        let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(self.arena, depth))));
         self.ev.apply_ty(clo, &[x]).ok()
+    }
+}
+
+/// [`Walk::never_data`]'s walk: whether a type at variables is one no
+/// instance of which carries data. Only formers that carry nothing at any
+/// instance answer yes, and a `match` stuck on a variable answers yes when
+/// every arm does — the arms are all the instance can become. Anything else,
+/// fuel and nodes included, is a no.
+struct Family<'e, 'a, 'v> {
+    ev: &'e mut Eval<'a, 'v>,
+    arena: &'v ValueArena<'v>,
+    nodes: u32,
+}
+
+impl<'v> Family<'_, '_, 'v> {
+    fn never(&mut self, ty: &'v VTy<'v>, depth: u32) -> bool {
+        let Some(nodes) = self.nodes.checked_sub(1) else { return false };
+        self.nodes = nodes;
+        let Ok(ty) = self.ev.delta_whnf_ty(ty) else { return false };
+        match &*ty {
+            VTy::Id { .. } | VTy::SEq { .. } | VTy::SEmpty { .. } | VTy::Squash { .. } => true,
+            VTy::Unit { .. } | VTy::Empty { .. } => true,
+            VTy::Neutral(VNeTy::El { level, tm }) => {
+                let Val::Neutral(n) = &**tm else { return false };
+                let Some(Elim::Case { case_l, case_r, .. }) = n.spine.last() else { return false };
+                [*case_l, *case_r].into_iter().all(|arm| {
+                    let x = self.arena.tm(TmClo::val(self.arena.val(Val::var(self.arena, depth))));
+                    let Ok(code) = self.ev.apply(arm, &[x]) else { return false };
+                    let at = self.arena.ty_el(level.clone(), self.arena.tm(TmClo::val(code)));
+                    match self.ev.force_ty(at) {
+                        Ok(arm) => self.never(arm, depth + 1),
+                        Err(_) => false,
+                    }
+                })
+            }
+            _ => false,
+        }
     }
 }

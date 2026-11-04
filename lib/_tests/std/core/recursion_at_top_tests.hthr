@@ -1,0 +1,112 @@
+// Probes of recursion at the top on `Nat` (docs/recursion-at-the-top-design.md
+// §3, issues/recursion-below-nat-fallback.md): where compiling the recursion
+// at the `match` would not mean the source (the parameter, or a `let` from a
+// parameter the calls vary, read inside the arm), the body is compiled under
+// one `match` on the parameter at the top, every other explicit parameter
+// generalized, so it recomputes at each level. Unfolding holds by conversion,
+// at a literal and at an open argument. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import list;
+
+// The parameter read inside its own arm by a `let` nothing uses.
+fn unused_read(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => { let j = n; Succ(unused_read(k)) } }
+}
+theorem unused_read_lit(): unused_read(3) = 3 { refl }
+theorem unused_read_succ(m: Nat): unused_read(Succ(m)) = Succ(unused_read(m)) { refl }
+
+// …and by the arm's own value: `n` is this level's.
+fn tri(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => n + tri(k) }
+}
+theorem tri_lit(): tri(4) = 10 { refl }
+theorem tri_succ(m: Nat): tri(Succ(m)) = Succ(m) + tri(m) { refl }
+
+// A `let` above the `match` from a parameter the calls vary: recomputed at
+// each level, so `b` is this level's `a + 1`.
+fn bump(n: Nat, a: Nat) → Nat {
+    let b = a + 1;
+    match n { Zero => b, Succ(k) => bump(k, b) }
+}
+theorem bump_lit(): bump(2, 0) = 3 { refl }
+theorem bump_succ(m: Nat, a: Nat): bump(Succ(m), a) = bump(m, a + 1) { refl }
+
+// The parameter read above the `match` and inside it.
+fn above(n: Nat) → Nat {
+    let twice = n + n;
+    match n { Zero => twice, Succ(k) => twice + above(k) }
+}
+theorem above_lit(): above(2) = 6 { refl }
+theorem above_succ(m: Nat): above(Succ(m)) = (Succ(m) + Succ(m)) + above(m) { refl }
+
+// An open element type, fixed across the calls.
+fn pad<A>(n: Nat, x: A, xs: List<A>) → List<A> {
+    match n { Zero => xs, Succ(k) => { let more = n; Cons(x, pad(k, x, xs)) } }
+}
+theorem pad_lit(): pad(2, 7, Nil) = [7, 7] { refl }
+theorem pad_succ<A>(m: Nat, x: A, xs: List<A>): pad(Succ(m), x, xs) = Cons(x, pad(m, x, xs)) { refl }
+
+// A `Type`-valued recursion whose self-call sits inside the arm's type. The
+// planner did not see that call, so the arm's `n` was the top call's value:
+// `Steps(2)` was `2 = 2 ∧ (2 = 2 ∧ True)`. Read in checking position too.
+fn Steps(n: Nat) → Type {
+    match n { Zero => True, Succ(k) => n = n ∧ Steps(k) }
+}
+theorem steps_meaning(): Steps(2) = (2 = 2 ∧ (1 = 1 ∧ True)) { refl }
+theorem steps_succ(m: Nat): Steps(Succ(m)) = (Succ(m) = Succ(m) ∧ Steps(m)) { refl }
+theorem steps_two(): Steps(2) { And(refl, And(refl, trivial)) }
+
+// Negative control: a call at the parameter itself does not descend, at the
+// top or at the `match`, and the refusal is the plain lowering's.
+// expect-error: recursive call to `stuck` must descend: argument `n` has to be `k`
+fn stuck(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => { let j = n; stuck(n) } }
+}
+
+// Course of values at the top: the body's nested `match` on the
+// predecessor carries the window, so a call two (or three) below the
+// parameter is its ih, with the parameter read in the arm.
+fn half_read(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => match k { Zero => n, Succ(j) => Succ(half_read(j)) } }
+}
+theorem half_read_lit(): half_read(5) = 3 { refl }
+theorem half_read_step(j: Nat): half_read(Succ(Succ(j))) = Succ(half_read(j)) { refl }
+
+fn three(n: Nat) → Nat {
+    let m = n;
+    match n { Zero => m, Succ(a) => match a { Zero => m, Succ(b) => match b { Zero => m, Succ(c) => m + three(c) } } }
+}
+theorem three_lit(): three(6) = 9 { refl }
+theorem three_step(c: Nat): three(Succ(Succ(Succ(c)))) = Succ(Succ(Succ(c))) + three(c) { refl }
+
+// Two calls at two depths, one of them varying a generalized parameter.
+fn fib_read(n: Nat, acc: Nat) → Nat {
+    match n { Zero => acc, Succ(k) => match k { Zero => acc + n, Succ(j) => fib_read(k, acc) + fib_read(j, acc + n) } }
+}
+theorem fib_read_lit(): fib_read(4, 0) = 18 { refl }
+theorem fib_read_step(j: Nat, a: Nat): fib_read(Succ(Succ(j)), a) = fib_read(Succ(j), a) + fib_read(j, a + Succ(Succ(j))) { refl }
+
+// Two varied parameters before the decreasing one reach the ih in their
+// own order (issues/recursion-varied-arguments-reversed.md): the ih was
+// applied to `b, a`, so `sw_varied(0, 10, [1])` was 11. The plain
+// lowering (a `List`), then at the top (the arm reads `n`), where `a` and
+// `b` are generalized without being varied and the unfolding shows the
+// order.
+fn sw_varied(a, b: Nat, xs: List<Nat>) → Nat {
+    match xs { Nil => a, Cons(_, t) => sw_varied(Succ(a), Succ(b), t) }
+}
+theorem sw_varied_lit(): sw_varied(0, 10, [1]) = 1 { refl }
+
+fn three_varied(a, b, n: Nat) → Nat {
+    match n { Zero => a, Succ(k) => { let j = n; Succ(three_varied(a, b, k)) } }
+}
+theorem three_varied_step(a, b, k: Nat): three_varied(a, b, Succ(k)) = Succ(three_varied(a, b, k)) { refl }
+theorem three_varied_lit(): three_varied(0, 10, 1) = 1 { refl }
+
+// Every Nat recursion lowers at the top (issues/recursion-at-top-nat-default.md),
+// generalizing only what its calls vary: a parameter passed unchanged keeps
+// the step a fold over values, which the kernel folds a run of at once. With
+// `m` generalized this `refl` ran out of fuel.
+fn add_right(m, n: Nat) → Nat { match n { Zero => m, Succ(k) => Succ(add_right(m, k)) } }
+theorem add_right_big(): add_right(1000000, 1000000) = 2000000 { refl }
+theorem add_right_step(m, k: Nat): add_right(m, Succ(k)) = Succ(add_right(m, k)) { refl }

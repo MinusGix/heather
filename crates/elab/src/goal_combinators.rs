@@ -10,6 +10,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
 use heather_syntax::{Arm, Block, Expr, ExprKind, MatchForm, Pat, Span, Stmt};
 
+use crate::oracle::Unfold;
 use crate::{Cx, Elaborator};
 
 /// Re-enter after each branch's motive has specialized the goal. Like the
@@ -56,7 +57,7 @@ fn finite_locals(elab: &Elaborator, cx: &Cx) -> Vec<FiniteLocal> {
                 return None;
             }
             Some(FiniteLocal {
-                name: name.clone(),
+                name: name.to_string(),
                 constructors: inductive
                     .ctors
                     .iter()
@@ -160,7 +161,7 @@ fn case_domain(elab: &Elaborator, cx: &Cx, lhs: &Type) -> Option<Rc<crate::induc
 }
 
 /// `logic`'s `And`: a goal the leaf proves one side at a time.
-fn conjunction(inductive: &crate::inductive::Inductive) -> bool {
+pub(crate) fn conjunction(inductive: &crate::inductive::Inductive) -> bool {
     matches!(inductive.name.as_str(), "And" | "logic::And") && inductive.ctors.len() == 1 && inductive.ctors[0].fields.len() == 2
 }
 
@@ -188,7 +189,7 @@ fn comparison_args<'a>(elab: &Elaborator, term: &'a Term) -> Option<(&'static (&
 fn comparison_of(elab: &Elaborator, cx: &Cx, scrut: &Term) -> Option<Rc<Term>> {
     let oracle = elab.goal_oracle();
     std::iter::once(scrut.clone())
-        .chain(oracle.term_reducts(&cx.gamma, scrut, 8))
+        .chain(oracle.unfold(&cx.gamma, scrut, Unfold::Comparison))
         .find(|reduct| comparison_args(elab, reduct).is_some())
         .map(|comparison| Rc::new(settled(elab, cx, &comparison)))
 }
@@ -232,12 +233,116 @@ fn word_operation(elab: &Elaborator, term: &Term) -> bool {
         .is_some_and(|name| name.starts_with("bitvec::BitVec::"))
 }
 
-/// The match at a reduct's head, below any projections of it.
+/// The match at a reduct's head, below any projections of it, and through
+/// the `refl` a convoy is applied to.
 pub(crate) fn head_match(term: &Term) -> &Term {
     match crate::spelling::proj_of(term) {
         Some((_, pair)) => head_match(pair),
-        None => term,
+        None => match term {
+            Term::AppAt { fun, arg } if matches!(&**fun, Term::Case { .. }) && matches!(&**arg, Term::Refl { .. }) => fun,
+            _ => term,
+        },
     }
+}
+
+/// A convoy on `scrut`: `match scrut as λ z => (scrut = z) → T { … }`
+/// applied to `refl`, which `match h: scrut { … }` elaborates to.
+fn convoy_on(term: &Term, scrut: &Term) -> bool {
+    matches!(term, Term::AppAt { fun, arg }
+        if matches!(&**fun, Term::Case { scrut: s, .. } if **s == *scrut)
+            && matches!(&**arg, Term::Refl { tm, .. } if **tm == *scrut))
+}
+
+/// The subterms of a goal's sides that `found` picks, under none of their
+/// binders: the positions a split abstracts.
+fn picked(ty: &Type, found: &dyn Fn(&Term) -> bool) -> Vec<Term> {
+    fn walk(term: &Term, found: &dyn Fn(&Term) -> bool, out: &mut Vec<Term>) {
+        if found(term) {
+            if !out.contains(term) {
+                out.push(term.clone());
+            }
+            return;
+        }
+        match term {
+            Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
+                walk(fun, found, out);
+                walk(arg, found, out);
+            }
+            Term::Succ(inner) | Term::Inl { val: inner, .. } | Term::InlAt { val: inner, .. }
+            | Term::Inr { val: inner, .. } | Term::InrAt { val: inner, .. } => walk(inner, found, out),
+            Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
+                walk(fst, found, out);
+                walk(snd, found, out);
+            }
+            Term::Case { scrut: inner, .. } | Term::ElimNat { scrut: inner, .. } => walk(inner, found, out),
+            _ => {
+                if let Some((_, pair)) = crate::spelling::proj_of(term) {
+                    walk(pair, found, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    match ty {
+        Type::Id { lhs, rhs, .. } => {
+            walk(lhs, found, &mut out);
+            walk(rhs, found, &mut out);
+        }
+        Type::El { tm, .. } => walk(tm, found, &mut out),
+        _ => {}
+    }
+    out
+}
+
+/// `ty` with `scrut` abstracted as the motive's `z`, and each of `pairs`
+/// planted. A convoy on `scrut` keeps everything but its scrutinee: its
+/// motive, arms and `refl` are typed by `scrut` itself, so they keep it and
+/// only the match moves to `z`. That leaves the `refl` at the wrong type,
+/// which [`dependent_motive`] mends with the split's own equation; abstracted
+/// whole, an arm that uses its equation would be handed one about `z`, and
+/// the kernel refuses the split.
+fn abstract_scrutinee(ty: &Type, scrut: &Term, pairs: &[(Term, Term)]) -> Option<Type> {
+    let mut all: Vec<(Term, Term)> = picked(ty, &|term| convoy_on(term, scrut)).into_iter().filter_map(|convoy| {
+        let Term::AppAt { fun, arg } = &convoy else { return None };
+        // Weakened whole, so that the match's own binders stay bound; then
+        // its scrutinee is `z`.
+        let Term::Case { lhs_level, rhs_level, motive_level, lhs, rhs, motive, case_l, case_r, .. } = fun.shift_local(1) else { return None };
+        let moved = Term::AppAt {
+            fun: Rc::new(Term::Case {
+                lhs_level, rhs_level, motive_level, lhs, rhs, motive, case_l, case_r,
+                scrut: Rc::new(Term::Var(heather_kernel::term::LocalVar(0))),
+            }),
+            arg: Rc::new(arg.shift_local(1)),
+        };
+        Some((convoy, moved))
+    }).collect();
+    all.extend(pairs.iter().cloned());
+    all.push((scrut.clone(), Term::Var(heather_kernel::term::LocalVar(0))));
+    ty.abstract_local_with_all(&all)
+}
+
+/// A motive [`abstract_scrutinee`] left with convoys whose match is on `z`
+/// and whose argument is still `refl` at the scrutinee: the same motive under
+/// the split's equation `q : scrut = z` as a second binder, each such convoy
+/// applied to `q`. In the branch where `z` is a constructor the convoy then
+/// takes its arm with the case's equation, the type the arm was written at.
+/// `None` when there is no such convoy and the ordinary motive is right.
+fn dependent_motive(motive: &Type) -> Option<Type> {
+    let z = |term: &Term| matches!(term, Term::Var(heather_kernel::term::LocalVar(0)));
+    let convoys = picked(motive, &|term| matches!(term, Term::AppAt { fun, arg }
+        if matches!(&**fun, Term::Case { scrut, .. } if z(scrut)) && matches!(&**arg, Term::Refl { tm, .. } if !z(tm))));
+    if convoys.is_empty() {
+        return None;
+    }
+    let pairs: Vec<(Term, Term)> = convoys.into_iter().filter_map(|convoy| {
+        let Term::AppAt { fun, .. } = &convoy else { return None };
+        let applied = Term::AppAt {
+            fun: Rc::new(fun.shift_local(1)),
+            arg: Rc::new(Term::Var(heather_kernel::term::LocalVar(0))),
+        };
+        Some((convoy, applied))
+    }).collect();
+    motive.abstract_local_with_all(&pairs)
 }
 
 /// Inspect transparent heads, projections and application arguments, but never
@@ -275,7 +380,7 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
         return stuck_scrutinee(elab, cx, inner, budget);
     }
     let oracle = elab.goal_oracle();
-    for reduct in std::iter::once(term.clone()).chain(oracle.term_reducts(&cx.gamma, term, 64)) {
+    for reduct in std::iter::once(term.clone()).chain(oracle.unfold(&cx.gamma, term, Unfold::StuckScrutinee)) {
         if *budget == 0 {
             return None;
         }
@@ -318,7 +423,7 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
         {
             return Some(Blocked {
                 original: term.clone(),
-                replacement: payload(term_type(Rc::new(reduct.clone())).abstract_local(scrut)?),
+                replacement: payload(abstract_scrutinee(&term_type(Rc::new(reduct.clone())), scrut, &[])?),
                 scrutinee: comparison.clone(),
                 constructors: constructors(inductive),
                 comparison: Some(comparison),
@@ -335,7 +440,7 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
         elab.spell_term_source(cx, scrut)?;
         return Some(Blocked {
             original: term.clone(),
-            replacement: payload(term_type(Rc::new(reduct.clone())).abstract_local(scrut)?),
+            replacement: payload(abstract_scrutinee(&term_type(Rc::new(reduct.clone())), scrut, &[])?),
             scrutinee: scrut.clone(),
             constructors: constructors(&inductive),
             comparison: None,
@@ -353,7 +458,7 @@ pub(crate) fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Te
         return;
     }
     *budget -= 1;
-    let spells = |t: &Term| term_type(Rc::new(t.clone())).abstract_local(scrut).map(payload);
+    let spells = |t: &Term| abstract_scrutinee(&term_type(Rc::new(t.clone())), scrut, &[]).map(payload);
     if spells(term).is_some() || word_operation(elab, term) {
         return;
     }
@@ -379,11 +484,18 @@ pub(crate) fn co_occurrences(elab: &Elaborator, cx: &Cx, term: &Term, found: &Te
     if out.len() > before {
         return;
     }
-    for reduct in elab.goal_oracle().term_reducts(&cx.gamma, term, 64) {
+    for reduct in elab.goal_oracle().unfold(&cx.gamma, term, Unfold::StuckScrutinee) {
         if *budget == 0 {
             return;
         }
         *budget -= 1;
+        // A definition's body part-way through its β-steps (`(λ h => match
+        // c { … }(refl))(h)`) spells the scrutinee under a binder, where a
+        // convoy on it cannot be moved apart from its `refl`: read the
+        // reduct its arguments are all substituted into.
+        if crate::spelling::is_app(&reduct) && matches!(crate::spelling::app_spine(&reduct).0, Term::Lam { .. }) {
+            continue;
+        }
         if let Some(abstracted) = spells(&reduct) {
             out.push((term.clone(), (*abstracted).clone()));
             return;
@@ -405,6 +517,9 @@ pub(crate) struct StuckSplit {
     pub scrut: Expr,
     pub equation: String,
     pub motive: Type,
+    /// The motive under the case's equation as well, when a convoy in the
+    /// goal needs it (`dependent_motive`).
+    pub dependent: Option<Type>,
     pub arms: Vec<Arm>,
 }
 
@@ -413,6 +528,7 @@ pub(crate) struct StuckSplit {
 /// split the match blocking it, or hand it to the body.
 pub(crate) enum Step {
     Refuted(Expr),
+    Closed(Expr),
     Intro(Expr),
     Conjoin(Expr),
     Split(StuckSplit),
@@ -434,7 +550,7 @@ fn case_equation(name: &str) -> bool {
 /// cannot prove. Closing the case here is what keeps every goal a leaf sees
 /// one that some run reaches (issues/split-all-nested-scrutinee-kernel-reject.md).
 fn refuted_case(elab: &Elaborator, cx: &Cx, span: Span) -> Option<Expr> {
-    if elab.shadowed(cx, "absurd") || cx.names.iter().any(|name| name == "absurd") {
+    if elab.shadowed(cx, "absurd") || cx.names.iter_inner().any(|name| name == "absurd") {
         return None;
     }
     let var = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
@@ -459,7 +575,7 @@ fn refuted_case(elab: &Elaborator, cx: &Cx, span: Span) -> Option<Expr> {
 /// A name no local and no global in scope has, from `base`.
 pub(crate) fn fresh(elab: &Elaborator, cx: &Cx, base: String) -> String {
     let mut name = base;
-    while elab.shadowed(cx, &name) || cx.names.iter().any(|n| *n == name) {
+    while elab.shadowed(cx, &name) || cx.names.iter_inner().any(|n| *n == name) {
         name.push('_');
     }
     name
@@ -525,7 +641,28 @@ pub(crate) fn next_step(elab: &Elaborator, cx: &Cx, expected: &Type, leaf: &Expr
     let goal = simplify_goal(elab, cx, &crate::inductive::decoded(expected));
     match split_stuck(elab, cx, &goal, leaf, span) {
         Some(split) => Step::Split(split),
-        None => Step::Leaf(goal),
+        None => match closed_by_split(elab, cx, &goal, span) {
+            Some(refl) => Step::Closed(refl),
+            None => Step::Leaf(goal),
+        },
+    }
+}
+
+/// `refl` for a goal the splitting itself has proved: an equation whose two
+/// sides the simplification made the same term. The leaf is written for the
+/// cases still open, and need not prove the ones that closed: a function
+/// that answers a value in some arms and recurs in others meets a leaf
+/// written for its recursions (`all_goals { hg }`, a hypothesis stating
+/// them) at its answers as `acc = acc`, which only `refl` proves. As with a
+/// refuted case, such a goal is closed here and not handed on. The sides are
+/// compared as terms, not converted: a goal that holds only by computation is
+/// still the leaf's.
+fn closed_by_split(elab: &Elaborator, cx: &Cx, goal: &Type, span: Span) -> Option<Expr> {
+    match goal {
+        Type::Id { lhs, rhs, .. } if lhs == rhs && !elab.shadowed(cx, "refl") && !cx.names.iter_inner().any(|name| name == "refl") => {
+            Some(Expr { kind: ExprKind::Refl, span })
+        }
+        _ => None,
     }
 }
 
@@ -577,7 +714,7 @@ pub(crate) fn check_refl_leaf(elab: &Elaborator, cx: &Cx, leaf: &Expr, goal: &Ty
                 .iter()
                 .filter(|name| case_equation(name))
                 .filter_map(|name| {
-                    let (_, ty, _) = elab.elab_infer(cx, &Expr { kind: ExprKind::Var(name.clone()), span }).ok()?;
+                    let (_, ty, _) = elab.elab_infer(cx, &Expr { kind: ExprKind::Var(name.to_string()), span }).ok()?;
                     Some(format!("`{}`", elab.display_type(cx, &ty)))
                 })
                 .collect();
@@ -639,7 +776,7 @@ fn matched_at_constructor(elab: &Elaborator, cx: &Cx, call: &Term) -> Option<Ter
         return None;
     }
     let oracle = elab.goal_oracle();
-    for reduct in oracle.term_reducts(&cx.gamma, call, 16) {
+    for reduct in oracle.unfold(&cx.gamma, call, Unfold::MatchedArm) {
         if !eliminator_headed(&reduct) {
             continue;
         }
@@ -828,9 +965,9 @@ fn split_stuck(
         },
         _ => {}
     }
-    pairs.push((found.scrutinee.as_ref().clone(), Term::Var(heather_kernel::term::LocalVar(0))));
     let scrut = crate::omega_cert::parse_generated_expr(&source).ok()?;
-    let motive = expected.abstract_local_with_all(&pairs)?;
+    let motive = abstract_scrutinee(expected, &found.scrutinee, &pairs)?;
+    let dependent = dependent_motive(&motive);
     let equation = fresh(elab, cx, "__split_case".to_string());
     let order = fresh(elab, cx, format!("{equation}_nat"));
     // The comparison's operands, when the bridge library is there to read
@@ -914,6 +1051,7 @@ fn split_stuck(
         scrut,
         equation,
         motive,
+        dependent,
         arms,
     })
 }

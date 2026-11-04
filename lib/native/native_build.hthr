@@ -1,0 +1,804 @@
+// Native programs written over named words and buffers, lowered to the
+// effectful source (docs/native-real-programs-plan.md §3.3, round 5;
+// issues/native-source-builder.md).
+//
+// A `Source` is a tree over numbered words whose leaves the compiler takes
+// only in certain shapes (`Prog::computes`). A `Tool` is written instead:
+// its buffers and words are bound by Heather lambdas (`buffer`, `local`),
+// its values are expressions (`Val`), and its statements (`Act`) assign,
+// store a byte, branch and loop on a value being nonzero, read, write,
+// open, close, copy a command-line argument and exit. A procedure is an ordinary Heather function returning an `Act`, so
+// it is inlined where it is called (`write_all`, `each_read`, `for_count`).
+// A pure statement (`Calc`: assignments, byte stores, branches and bounded
+// loops over words) runs as one statement, `compute`, and lowers to one
+// structured region the compiler takes inside a leaf as written: a
+// `Conditional` for a branch, a counted `Loop` for a loop
+// (issues/native-build-loop-regions.md).
+//
+// `Tool::source` lowers a tool. It numbers the words in the order their
+// binders are met, and gives each statement temporaries past them, which are
+// dead once the statement is done; an expression's nodes compute each part
+// into a temporary of its own, and an assignment writes its last node
+// straight into its word. A condition becomes the one-bit word
+// `Branch`/`Repeat` test. The nodes are then cut into leaves greedily as
+// `Prog::computes` takes them (`List::takes`): a leaf goes on while S4 takes
+// it whole, its values in registers, and a node S4 does not take alone (a
+// byte node, `x := x + y`) is a leaf compiled a node at a time. So nothing
+// the builder writes is refused for its shape. The cutting is a fold over
+// the items (`List::pack`), so `write-elf` states a tool's lowering a part
+// at a time (native_build_parts).
+//
+// Nothing here is proved: a tool's meaning is the `Source` it lowers to,
+// and `native_compile_correct` speaks of that.
+
+import native_source;
+import native_compile;
+import native_structured;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import bitvec;
+import bool;
+import list;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Programs
+
+// A word the program names, and a buffer: the builder's numbering.
+record Var { id: Nat }
+record Buf { id: Nat, capacity: Nat }
+
+// A value: each a 64-bit word, the comparisons and `Not` one bit (0 or 1).
+inductive Val {
+    Number(value: Nat),
+    Held(var: Var),
+    Sum(left: Val, right: Val),
+    Difference(left: Val, right: Val),
+    BitsAnd(left: Val, right: Val),
+    BitsOr(left: Val, right: Val),
+    BitsXor(left: Val, right: Val),
+    ShiftedLeft(value: Val, amount: Nat),
+    ShiftedRight(value: Val, amount: Nat),
+    // Unsigned `<`, signed `<`, `=`.
+    Lower(left: Val, right: Val),
+    LowerSigned(left: Val, right: Val),
+    Equals(left: Val, right: Val),
+    // A bit flipped; a word's being zero.
+    Not(value: Val),
+    // The byte at an index of a buffer, zero past its end.
+    ByteAt(buf: Buf, index: Val),
+}
+
+// A pure statement: words and bytes only, no call to Linux. It lowers to
+// one structured region (`Calc::region`) that the compiler takes inside a
+// leaf as it is written (native_structured's `StructuredRegion::scoped`):
+// every node at width 64, a branch on a comparison's bit, a loop in
+// counted form. `Choose` lowers to a `Conditional`, `Passes` to a `Loop`.
+//
+// `Passes` makes at most `bound` passes over the words `state`: each runs
+// `body` on the passes left (counted down from `bound`), then ends the loop
+// if `stop` is nonzero, and `ran_out` is then 1 if the passes ran out
+// first, else 0. A pass sees only its own words: it reads the state, the
+// passes left and the words it binds, and what it writes to any other word
+// is lost (its valuation is its own, `StructuredRegion::eval`). So every
+// word a pass reads goes in its state, even one it never changes; `ran_out`
+// is not one of them.
+inductive Calc {
+    Nothing,
+    Both(parts: Bool → Calc),
+    Fresh(init: Val, body: Var → Calc),
+    Assign(var: Var, value: Val),
+    Store(buf: Buf, index: Val, value: Val),
+    Choose(condition: Val, arms: Bool → Calc),
+    Passes(bound: Val, state: List<Var>, body: Var → Calc, stop: Val, ran_out: Var),
+    // Function `callee` of the tool's program (`program`) on the words
+    // `arguments`, its result into `result`: a FunctionIR `Call`, so the
+    // value is `program_eval`'s and a function `heather reflect` wrote is
+    // read as the Heather function it reflects (its `_agrees` theorem).
+    Apply(callee: Nat, arguments: List<Val>, result: Var),
+}
+
+// A statement. `When` and the loops test their value's being nonzero. A
+// statement with two parts holds them as a function of a `Bool`, `True` the
+// first: `Act` has a function field (`Let`'s body), so no constructor may
+// have two recursive fields (docs/inductive-tier2-w-lowering.md §2.2).
+inductive Act {
+    Skip,
+    Seq(parts: Bool → Act),
+    // A fresh word, set to `init`, for the body.
+    Let(init: Val, body: Var → Act),
+    Set(var: Var, value: Val),
+    // The low byte of `value` stored at `index`, nothing past the end.
+    Poke(buf: Buf, index: Val, value: Val),
+    When(condition: Val, arms: Bool → Act),
+    While(condition: Val, body: Act),
+    // The body, then again while the condition holds.
+    DoWhile(body: Act, condition: Val),
+    // A read of at most `len` bytes (and the buffer's capacity) into the
+    // buffer's start, and a write of `len` bytes from `from`; the count or
+    // the negated errno into `result`.
+    ReadTo(fd: Val, buf: Buf, len: Val, result: Var),
+    WriteFrom(fd: Val, buf: Buf, from: Val, len: Val, result: Var),
+    // openat(AT_FDCWD, path, O_RDONLY) of the path in the buffer's first
+    // `len` bytes (and its capacity), up to a NUL; the descriptor or the
+    // negated errno into `result`. A close of `fd`, zero or the negated
+    // errno into `result`.
+    OpenOf(path: Buf, len: Val, result: Var),
+    CloseOf(fd: Val, result: Var),
+    // Argument `index` (argv[0] the program's name) copied to the buffer's
+    // start, as much as it holds, and its whole length into `len`; past
+    // the last argument, `len` minus one (`Env::arg`).
+    ArgTo(index: Val, buf: Buf, len: Var),
+    Quit(status: Val),
+    // A pure statement, one structured region.
+    Calculate(calc: Calc),
+    // A call of the tool's procedure `procedure` (`proc`): each argument
+    // placed, then the call, its results into `results`
+    // (docs/native-procedures-design.md).
+    CallProc(procedure: Nat, args: List<Val>, results: List<Var>),
+}
+
+// A procedure as its body sees it: its own index, to call itself, and its
+// parameters and results, words of its own numbered from 0.
+record Proc { index: Nat, params: List<Var>, results: List<Var> }
+
+// Its buffers, each bound for what follows, and the statement it runs;
+// running off the end exits 0.
+inductive Tool {
+    Run(main: Act),
+    WithBuffer(capacity: Nat, initial: List<BitVec(8)>, body: Buf → Tool),
+    // The FunctionIR functions its `Apply`s call, for what follows: the
+    // source's `functions`, as `program_eval` orders them (the last listed
+    // is function 0).
+    WithProgram(functions: List<Function>, body: Tool),
+    // A procedure of `params` parameters and `results` results, for what
+    // follows, which gets its index to call (procedures are numbered in
+    // order); its body gets it as a `Proc`.
+    WithProc(params: Nat, results: Nat, body: Proc → Act, rest: Nat → Tool),
+    // Calls nest at most `depth` deep (`Source.depth`); a call deeper exits
+    // 139.
+    WithDepth(depth: Nat, body: Tool),
+}
+
+// ---------------------------------------------------------------------------
+// Values as bits and words
+
+// A value as a bit, if it is one.
+fn Val::is_bit(self v: Val) → Bool {
+    match v {
+        Number(_) => False,
+        Held(_) => False,
+        Sum(_, _) => False,
+        Difference(_, _) => False,
+        BitsAnd(left, right) => left.is_bit() && right.is_bit(),
+        BitsOr(left, right) => left.is_bit() && right.is_bit(),
+        BitsXor(left, right) => left.is_bit() && right.is_bit(),
+        ShiftedLeft(_, _) => False,
+        ShiftedRight(_, _) => False,
+        Lower(_, _) => True,
+        LowerSigned(_, _) => True,
+        Equals(_, _) => True,
+        Not(_) => True,
+        ByteAt(_, _) => False,
+    }
+}
+
+fn Val::width(self v: Val) → Nat { match v.is_bit() { True => 1, False => 64 } }
+
+// The bit of its being nonzero.
+fn Val::truth(self v: Val) → Val { match v.is_bit() { True => v, False => Not(Not(v)) } }
+
+// A bitwise operation's width: one bit over two bits, else a word.
+fn Val::width_of(left, right: Val) → Nat { match left.is_bit() && right.is_bit() { True => 1, False => 64 } }
+fn Val::width_at(wide: Bool, left, right: Val) → Nat { match wide { True => 64, False => Val::width_of(left, right) } }
+
+// ---------------------------------------------------------------------------
+// Writing them
+
+fn num(value: Nat) → Val { Number(value) }
+fn stdin() → Val { Number(0) }
+fn stdout() → Val { Number(1) }
+fn stderr() → Val { Number(2) }
+
+fn Var::get(self var: Var) → Val { Held(var) }
+fn Var::set(self var: Var, value: Val) → Act { Set(var, value) }
+
+fn Val::plus(self left: Val, right: Val) → Val { Sum(left, right) }
+fn Val::minus(self left: Val, right: Val) → Val { Difference(left, right) }
+designation + at Val := Val::plus
+designation - at Val := Val::minus
+fn Val::bits_and(self left: Val, right: Val) → Val { BitsAnd(left, right) }
+fn Val::bits_or(self left: Val, right: Val) → Val { BitsOr(left, right) }
+fn Val::bits_xor(self left: Val, right: Val) → Val { BitsXor(left, right) }
+fn Val::shl(self value: Val, amount: Nat) → Val { ShiftedLeft(value, amount) }
+fn Val::shr(self value: Val, amount: Nat) → Val { ShiftedRight(value, amount) }
+fn Val::below(self left: Val, right: Val) → Val { Lower(left, right) }
+fn Val::below_signed(self left: Val, right: Val) → Val { LowerSigned(left, right) }
+fn Val::equals(self left: Val, right: Val) → Val { Equals(left, right) }
+fn Val::differs(self left: Val, right: Val) → Val { Not(Equals(left, right)) }
+fn Val::not(self value: Val) → Val { Not(value) }
+fn Val::negative(self value: Val) → Val { LowerSigned(value, Number(0)) }
+fn Val::nonzero(self value: Val) → Val { value.truth() }
+// Both nonzero, either nonzero.
+fn Val::and_also(self left: Val, right: Val) → Val { BitsAnd(left.truth(), right.truth()) }
+fn Val::or_else(self left: Val, right: Val) → Val { BitsOr(left.truth(), right.truth()) }
+
+fn Buf::at(self buf: Buf, index: Val) → Val { ByteAt(buf, index) }
+fn Buf::put(self buf: Buf, index: Val, value: Val) → Act { Poke(buf, index, value) }
+fn Buf::size(self buf: Buf) → Val { Number(buf.capacity) }
+
+// `True` to `yes`, `False` to `no`.
+fn Act::pair(yes, no: Act) → Bool → Act { λ b => match b { True => yes, False => no } }
+
+fn Act::then(self first: Act, rest: Act) → Act { Seq(Act::pair(first, rest)) }
+designation ++ at Act := Act::then
+
+fn skip() → Act { Skip }
+fn local(init: Val, body: Var → Act) → Act { Let(init, body) }
+fn when(condition: Val, yes: Act) → Act { When(condition, Act::pair(yes, Skip)) }
+fn branch(condition: Val, yes, no: Act) → Act { When(condition, Act::pair(yes, no)) }
+fn loop_while(condition: Val, body: Act) → Act { While(condition, body) }
+fn do_while(body: Act, condition: Val) → Act { DoWhile(body, condition) }
+fn read(fd: Val, buf: Buf, len: Val, result: Var) → Act { ReadTo(fd, buf, len, result) }
+fn write(fd: Val, buf: Buf, from, len: Val, result: Var) → Act { WriteFrom(fd, buf, from, len, result) }
+fn open(path: Buf, len: Val, fd: Var) → Act { OpenOf(path, len, fd) }
+fn close(fd: Val, result: Var) → Act { CloseOf(fd, result) }
+fn exit(status: Val) → Act { Quit(status) }
+fn arg(index: Val, buf: Buf, len: Var) → Act { ArgTo(index, buf, len) }
+
+fn run(main: Act) → Tool { Run(main) }
+fn buffer(capacity: Nat, body: Buf → Tool) → Tool { WithBuffer(capacity, [], body) }
+// A buffer holding `bytes` from the start, as long as they are.
+fn buffer_of(bytes: List<BitVec(8)>, body: Buf → Tool) → Tool { WithBuffer(bytes.len(), bytes, body) }
+// The program the tool's `call`s name (`heather reflect` writes one).
+fn program(functions: List<Function>, body: Tool) → Tool { WithProgram(functions, body) }
+// A procedure for what follows (`perform` calls it).
+fn proc(params: Nat, results: Nat, body: Proc → Act, rest: Nat → Tool) → Tool { WithProc(params, results, body, rest) }
+fn depth(depth: Nat, body: Tool) → Tool { WithDepth(depth, body) }
+fn perform(procedure: Nat, args: List<Val>, results: List<Var>) → Act { CallProc(procedure, args, results) }
+fn Proc::param(self p: Proc, i: Nat) → Var { p.params.nth(i).unwrap_or(Var(0)) }
+fn Proc::result(self p: Proc, i: Nat) → Var { p.results.nth(i).unwrap_or(Var(0)) }
+
+// Pure statements (`Calc`), written as `Act`'s are; `compute` runs one.
+fn Var::assign(self var: Var, value: Val) → Calc { Assign(var, value) }
+fn Buf::store(self buf: Buf, index: Val, value: Val) → Calc { Store(buf, index, value) }
+
+fn Calc::pair(yes, no: Calc) → Bool → Calc { λ b => match b { True => yes, False => no } }
+fn Calc::then(self first: Calc, rest: Calc) → Calc { Both(Calc::pair(first, rest)) }
+designation ++ at Calc := Calc::then
+
+fn nothing() → Calc { Nothing }
+fn fresh(init: Val, body: Var → Calc) → Calc { Fresh(init, body) }
+fn choose(condition: Val, yes, no: Calc) → Calc { Choose(condition, Calc::pair(yes, no)) }
+fn only_if(condition: Val, yes: Calc) → Calc { Choose(condition, Calc::pair(yes, Nothing)) }
+fn passes(bound: Val, state: List<Var>, body: Var → Calc, stop: Val, ran_out: Var) → Calc { Passes(bound, state, body, stop, ran_out) }
+fn compute(calc: Calc) → Act { Calculate(calc) }
+fn call(callee: Nat, arguments: List<Val>, result: Var) → Calc { Apply(callee, arguments, result) }
+
+// The body for each index from 0 below `count`, read once before the
+// first pass; the index and the words `state` are the passes' state, so
+// the body reads only them and the words it binds.
+fn count_up(count: Val, state: List<Var>, body: Var → Calc) → Calc {
+    fresh(num(0), λ i => fresh(num(0), λ out =>
+        passes(count, Cons(i, state), λ _ => body(i) ++ i.assign(i.get() + num(1)), num(0), out)))
+}
+
+// ---------------------------------------------------------------------------
+// Procedures, inlined where they are called
+
+// The body for each index from 0 below `count`, `count` read each time round.
+fn for_count(count: Val, body: Var → Act) → Act {
+    local(num(0), λ i => loop_while(i.get().below(count), body(i) ++ i.set(i.get() + num(1))))
+}
+
+// Reads from `fd` into the buffer until the input ends, the body run on each
+// read's count (never zero); a failed read exits 1.
+fn each_read(fd: Val, buf: Buf, body: Var → Act) → Act {
+    local(num(0), λ n => do_while(
+        read(fd, buf, buf.size(), n) ++ when(n.get().negative(), exit(num(1))) ++ when(n.get(), body(n)),
+        n.get()))
+}
+
+// The buffer's `len` bytes from `from` written to `fd`, again for what is
+// left until all are sent; a failed write runs `failed` with the negated
+// errno in `wrote`, and stops.
+fn write_span(fd: Val, buf: Buf, from, len: Val, failed: Var → Act) → Act {
+    local(num(0), λ sent => local(num(0), λ wrote => do_while(
+        write(fd, buf, from + sent.get(), len - sent.get(), wrote)
+            ++ branch(wrote.get().negative(), failed(wrote) ++ sent.set(len), sent.set(sent.get() + wrote.get())),
+        sent.get().below(len))))
+}
+
+// The buffer's first `len` bytes written to `fd`, again for what is left
+// until all are sent; a failed write exits 1.
+fn write_all(fd: Val, buf: Buf, len: Val) → Act {
+    local(num(0), λ sent => local(num(0), λ wrote => do_while(
+        write(fd, buf, sent.get(), len - sent.get(), wrote) ++ when(wrote.get().negative(), exit(num(1)))
+            ++ sent.set(sent.get() + wrote.get()),
+        sent.get().below(len))))
+}
+
+// ---------------------------------------------------------------------------
+// Values as nodes
+
+// The nodes that compute a value, the id that then holds it, and the next
+// id free.
+record Placed { nodes: List<Node>, id: Nat, next: Nat }
+
+// Two parts placed, then the node over them, into `at`.
+fn Placed::over(self a: Placed, b: Placed, node: Node, at: Nat) → Placed { Placed(a.nodes ++ b.nodes ++ [node], at, b.next) }
+
+// The value computed into `next` (a word's value is where it is), each part
+// into an id of its own past it; `wide`, every node at width 64, a bit as
+// the word 0 or 1 (`Calc`'s regions).
+fn Val::placed(self v: Val, wide: Bool, next: Nat) → Placed {
+    match v {
+        Number(value) => Placed([Const(64, next, value)], next, Succ(next)),
+        Held(var) => Placed([], var.id, next),
+        Sum(left, right) => {
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, Add(64, next, a.id, b.id), next)
+        },
+        Difference(left, right) => {
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, Sub(64, next, a.id, b.id), next)
+        },
+        BitsAnd(left, right) => {
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, BitAnd(Val::width_at(wide, left, right), next, a.id, b.id), next)
+        },
+        BitsOr(left, right) => {
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, BitOr(Val::width_at(wide, left, right), next, a.id, b.id), next)
+        },
+        BitsXor(left, right) => {
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, BitXor(Val::width_at(wide, left, right), next, a.id, b.id), next)
+        },
+        ShiftedLeft(value, amount) => {
+            let a = value.placed(wide, Succ(next));
+            a.over(Placed([], 0, a.next), ShiftLeft(64, next, a.id, amount), next)
+        },
+        ShiftedRight(value, amount) => {
+            let a = value.placed(wide, Succ(next));
+            a.over(Placed([], 0, a.next), LogicalShiftRight(64, next, a.id, amount), next)
+        },
+        Lower(left, right) => {
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, UnsignedLessThan(64, next, a.id, b.id), next)
+        },
+        LowerSigned(left, right) => {
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, SignedLessThan(64, next, a.id, b.id), next)
+        },
+        Equals(left, right) => {
+            let a = left.placed(wide, Succ(next));
+            let b = right.placed(wide, a.next);
+            a.over(b, Equal(64, next, a.id, b.id), next)
+        },
+        Not(value) => {
+            let a = value.placed(wide, Succ(next));
+            match value.is_bit() && !wide {
+                True => a.over(Placed([Const(1, a.next, 1)], a.next, Succ(a.next)), BitXor(1, next, a.id, a.next), next),
+                False => a.over(Placed([Const(64, a.next, 0)], a.next, Succ(a.next)), Equal(64, next, a.id, a.next), next),
+            }
+        },
+        ByteAt(buf, index) => {
+            let a = index.placed(wide, Succ(next));
+            a.over(Placed([], 0, a.next), BufferLoad(next, buf.id, a.id), next)
+        },
+    }
+}
+
+fn Val::place(self v: Val, next: Nat) → Placed { v.placed(False, next) }
+
+// The node with its output at `dest`.
+fn Node::output_to(self node: Node, dest: Nat) → Node {
+    match node {
+        Const(width, _, value) => Const(width, dest, value),
+        Move(width, _, source) => Move(width, dest, source),
+        Add(width, _, left, right) => Add(width, dest, left, right),
+        Sub(width, _, left, right) => Sub(width, dest, left, right),
+        BitAnd(width, _, left, right) => BitAnd(width, dest, left, right),
+        BitOr(width, _, left, right) => BitOr(width, dest, left, right),
+        BitXor(width, _, left, right) => BitXor(width, dest, left, right),
+        ShiftLeft(width, _, value, amount) => ShiftLeft(width, dest, value, amount),
+        LogicalShiftRight(width, _, value, amount) => LogicalShiftRight(width, dest, value, amount),
+        ArithmeticShiftRight(width, _, value, amount) => ArithmeticShiftRight(width, dest, value, amount),
+        UnsignedLessThan(width, _, left, right) => UnsignedLessThan(width, dest, left, right),
+        SignedLessThan(width, _, left, right) => SignedLessThan(width, dest, left, right),
+        Equal(width, _, left, right) => Equal(width, dest, left, right),
+        BufferLoad(_, buffer, index) => BufferLoad(dest, buffer, index),
+        BufferStore(_, buffer, index, value) => BufferStore(dest, buffer, index, value),
+    }
+}
+
+// A placed value's nodes, then the value in `dest`: the last node writes it
+// there, reading it or not (`x := x + y` is one wide node, compiled alone),
+// or a word's value is moved.
+fn List::into_dest(self nodes: List<Node>, dest, width, id: Nat) → List<Node> {
+    match nodes {
+        Nil => match id.differs(dest) { True => [Move(width, dest, id)], False => [] },
+        Cons(node, rest) => match rest {
+            Nil => [node.output_to(dest)],
+            Cons(_, _) => Cons(node, rest.into_dest(dest, width, id)),
+        },
+    }
+}
+
+// The nodes that set `dest` to the value, temporaries from `next`.
+fn Val::assigned(self v: Val, dest, next: Nat) → List<Node> {
+    let p = v.place(next);
+    p.nodes.into_dest(dest, v.width(), p.id)
+}
+
+// ---------------------------------------------------------------------------
+// Pure statements as one region
+
+// A value as a bit a region may branch on (native_structured's `Scope::bit`):
+// a comparison's own, a constant's 0 or 1, else the word compared with zero
+// twice.
+fn Val::compares(self v: Val) → Bool {
+    match v { Lower(_, _) => True, LowerSigned(_, _) => True, Equals(_, _) => True, Not(_) => True, _ => False }
+}
+
+fn Val::test(self v: Val) → Val {
+    match v {
+        Number(value) => Number(match value { Zero => 0, Succ(_) => 1 }),
+        _ => match v.compares() { True => v, False => Not(Not(v)) },
+    }
+}
+
+// The nodes, all at width 64, that set `dest` to the value, temporaries
+// from `next`.
+fn Val::assigned_wide(self v: Val, dest, next: Nat) → List<Node> {
+    let p = v.placed(True, next);
+    p.nodes.into_dest(dest, 64, p.id)
+}
+
+// A run of nodes, or a region.
+inductive Piece { Nodes(nodes: List<Node>), Part(region: StructuredRegion) }
+
+// A piece before others: a run of nodes joins the run after it, and an
+// empty run is dropped.
+fn Piece::onto(self p: Piece, rest: List<Piece>) → List<Piece> {
+    match p {
+        Nodes(nodes) => match nodes {
+            Nil => rest,
+            Cons(_, _) => match rest {
+                Nil => [p],
+                Cons(q, more) => match q { Nodes(after) => Cons(Nodes(nodes ++ after), more), Part(_) => Cons(p, rest) },
+            },
+        },
+        Part(_) => Cons(p, rest),
+    }
+}
+
+fn List::merged(self pieces: List<Piece>) → List<Piece> {
+    match pieces { Nil => [], Cons(p, rest) => p.onto(rest.merged()) }
+}
+
+fn Region::bare(nodes: List<Node>) → Region { Region(Ports([]), nodes, Ports([])) }
+
+// The pieces one after the other: a run of nodes the leaf of a `Sequence`,
+// a region the first of a `Compose`; nothing an empty leaf.
+fn List::joined(self pieces: List<Piece>) → StructuredRegion {
+    match pieces {
+        Nil => Dataflow(Region::bare([])),
+        Cons(p, rest) => match p {
+            Nodes(nodes) => match rest { Nil => Dataflow(Region::bare(nodes)), Cons(_, _) => Sequence(Region::bare(nodes), rest.joined()) },
+            Part(r) => match rest { Nil => r, Cons(_, _) => Compose(r, rest.joined()) },
+        },
+    }
+}
+
+// A word's id.
+fn List::ids(self vars: List<Var>) → List<Nat> { vars.map(λ (x: Var) => x.id) }
+
+// Values placed one after another, each into ids of its own.
+record PlacedAll { nodes: List<Node>, ids: List<Nat>, next: Nat }
+
+fn List::placed_words(self values: List<Val>, next: Nat) → PlacedAll {
+    match values {
+        Nil => PlacedAll([], [], next),
+        Cons(v, rest) => {
+            let p = v.placed(True, next);
+            let r = rest.placed_words(p.next);
+            PlacedAll(p.nodes ++ r.nodes, Cons(p.id, r.ids), r.next)
+        },
+    }
+}
+
+// Every loop's count in the region, the loops inside others' too.
+fn StructuredRegion::counts(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(_) => [],
+        Sequence(_, continuation) => continuation.counts(),
+        Compose(prefix, continuation) => prefix.counts() ++ continuation.counts(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.counts() ++ when_false.counts(),
+        Call(_, _, _) => [],
+        Loop(_, _, _, count, body, _, _, _, _) => Cons(count, body.counts()),
+    }
+}
+
+// Each id cleared: a word written, so dead before.
+fn List::cleared(self ids: List<Nat>) → List<Node> { ids.map(λ (id: Nat) => Const(64, id, 0)) }
+
+// The statement's pieces, temporaries from `next`. A branch tests its bit,
+// its arms' temporaries past the bit's; a loop's bound is placed first,
+// then come its count and exit bit, the pass's temporaries past them, and
+// the pass ends with its exit bit computed. Its state words are its
+// inputs, parameters, next state and outputs all at once, so the loop
+// updates them in place and moves nothing. After the loop its counts are
+// cleared: the allocator keys a loop's live set by its count, and a later
+// loop testing a word of the same id (a sibling numbers its words from the
+// same `next`) shares the set (native_alloc's `Source::loop_sets`), which
+// would make the count live after the loop that counts with it, and the
+// compiler refuses a loop that clobbers a word live after it
+// (native_structured's `loop_keeps`). Cleared, a count is dead there.
+fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
+    match c {
+        Nothing => [],
+        Both(parts) => parts(True).pieces(next) ++ parts(False).pieces(next),
+        Fresh(init, body) => Cons(Nodes(init.assigned_wide(next, Succ(next))), body(Var(next)).pieces(Succ(next))),
+        Assign(var, value) => [Nodes(value.assigned_wide(var.id, next))],
+        Store(buf, index, value) => {
+            let i = index.placed(True, next);
+            let v = value.placed(True, i.next);
+            [Nodes(i.nodes ++ v.nodes ++ [BufferStore(v.next, buf.id, i.id, v.id)])]
+        },
+        Choose(condition, arms) => {
+            let t = condition.test().placed(True, next);
+            [Nodes(t.nodes), Part(Conditional(Ports([]), t.id, Ports([]), Ports([]), arms(True).pieces(t.next).merged().joined(), arms(False).pieces(t.next).merged().joined()))]
+        },
+        Apply(callee, arguments, result) => {
+            let a = arguments.placed_words(next);
+            [Nodes(a.nodes), Part(Call(callee, a.ids, result.id))]
+        },
+        Passes(bound, state, body, stop, ran_out) => {
+            let b = bound.placed(True, next);
+            let count = b.next;
+            let exit = Succ(count);
+            let pass = body(Var(count)).pieces(Succ(exit)) ++ [Nodes(stop.test().placed(True, exit).nodes)];
+            let r = Loop(state.ids(), b.id, state.ids(), count, pass.merged().joined(), exit, state.ids(), state.ids(), ran_out.id);
+            [Nodes(b.nodes), Part(r), Nodes(r.counts().cleared())]
+        },
+    }
+}
+
+fn Calc::region(self c: Calc, next: Nat) → StructuredRegion { c.pieces(next).merged().joined() }
+
+// ---------------------------------------------------------------------------
+// Statements as nodes and control
+
+// A node, or a statement of the source whole.
+inductive Item { Op(node: Node), Do(stmt: Stmt) }
+
+fn List::ops(self nodes: List<Node>) → List<Item> { nodes.map(λ (node: Node) => Op(node)) }
+
+fn Stmt::leaf(nodes: List<Node>) → Stmt { Compute(Dataflow(Region(Ports([]), nodes, Ports([])))) }
+
+// Each port read where a port of its id was written, at that width.
+fn Port::agrees(self port: Port, written: List<Port>) → Bool {
+    match written {
+        Nil => True,
+        Cons(w, rest) => match port.id.differs(w.id) { True => port.agrees(rest), False => !port.width.differs(w.width) },
+    }
+}
+
+fn List::agree(self reads: List<Port>, written: List<Port>) → Bool {
+    match reads {
+        Nil => True,
+        Cons(port, rest) => port.agrees(written) && rest.agree(written),
+    }
+}
+
+// Every value a node reads inside the leaf at the width it was written:
+// S4 keeps a value at the width it was written, and the leaf's results are
+// settled zero-extended only after it.
+fn List::widths_agree(self nodes: List<Node>, written: List<Port>) → Bool {
+    match nodes {
+        Nil => True,
+        Cons(node, rest) => node.read_ports().agree(written) && rest.widths_agree(Cons(node_output(node), written)),
+    }
+}
+
+// Whether S4 takes the nodes whole (`Prog::pure_leaf`): all pure, its
+// inputs and nodes within the registers no word may live in
+// (`scratch_pool`), so whatever homes the words get, in evaluation order
+// and no input written (`leaf_checks`), values read at their widths. Its
+// values stay in registers, so it is the better leaf. `leaf_checks` less its
+// register checks, which hold of the pool's slices whatever the counts
+// (RBX is not in the pool, and the pool repeats no register), with the
+// inputs found once: a tool's lowering runs this for every node it packs.
+fn List::fits_registers(self nodes: List<Node>) → Bool {
+    let inputs = nodes_inputs(nodes);
+    nodes_pure(nodes) && ((inputs.len() + nodes.len()).leb(scratch_pool().len())
+        && ((nodes_evaluable(nodes) && ports_absent(inputs, nodes_writes(nodes))) && nodes.widths_agree([])))
+}
+
+// Whether the leaf so far takes the next node, as `Prog::computes` would.
+// S4 takes a leaf whole while it can, its values in registers; a leaf S4
+// does not take is compiled a node at a time, every node wide
+// (`nodes_wide`), and takes only nodes S4 would not take alone either (byte
+// nodes, `x := x + y`), so a node S4 can hold in registers starts a leaf of
+// its own. A node not taken starts the next leaf.
+fn List::takes(self group: List<Node>, node: Node) → Bool {
+    (group ++ [node]).fits_registers()
+        || (![node].fits_registers() && (!group.fits_registers() && nodes_wide(group ++ [node])))
+}
+
+// A packing under way: the statements done, the last first, and the
+// leaf being filled. Nothing looks into `done` but `Packing::stmt`, so a
+// packing's steps are the same whatever came before (`write-elf` states
+// them with `done` a variable, native_build_parts).
+record Packing { done: List<Stmt>, group: List<Node> }
+
+fn Packing::start() → Packing { Packing([], []) }
+
+// What is done, with the leaf so far closed if it has nodes.
+fn Packing::closed(self k: Packing) → List<Stmt> {
+    match k.group { Nil => k.done, Cons(_, _) => Cons(Stmt::leaf(k.group), k.done) }
+}
+
+// A node joins the leaf if it takes it, else starts the next one; a
+// statement of the source closes the leaf and is done.
+fn Packing::step(self k: Packing, item: Item) → Packing {
+    match item {
+        Op(node) => match k.group.takes(node) { True => Packing(k.done, k.group ++ [node]), False => Packing(k.closed(), [node]) },
+        Do(s) => Packing(Cons(s, k.closed()), []),
+    }
+}
+
+fn List::pack(self items: List<Item>, k: Packing) → Packing {
+    match items { Nil => k, Cons(item, rest) => rest.pack(k.step(item)) }
+}
+
+// The statements done, the last first, each then the next before `last`.
+fn List::chained(self done: List<Stmt>, last: Stmt) → Stmt {
+    match done { Nil => last, Cons(s, rest) => rest.chained(Then(s, last)) }
+}
+
+// The statement packed: each done, then the next; an empty leaf if none.
+fn Packing::stmt(self k: Packing) → Stmt {
+    match k.closed() { Nil => Stmt::leaf([]), Cons(last, rest) => rest.chained(last) }
+}
+
+// The items as statements: runs of nodes cut into leaves, each taking the
+// next node while it still fits.
+fn List::lowered(self items: List<Item>) → Stmt { items.pack(Packing::start()).stmt() }
+
+fn Act::items(self a: Act, next: Nat) → List<Item> {
+    match a {
+        Skip => [],
+        Seq(parts) => parts(True).items(next) ++ parts(False).items(next),
+        Let(init, body) => init.assigned(next, Succ(next)).ops() ++ body(Var(next)).items(Succ(next)),
+        Set(var, value) => value.assigned(var.id, next).ops(),
+        Poke(buf, index, value) => {
+            let i = index.place(next);
+            let v = value.place(i.next);
+            (i.nodes ++ v.nodes ++ [BufferStore(v.next, buf.id, i.id, v.id)]).ops()
+        },
+        When(condition, arms) => {
+            let t = condition.truth().place(next);
+            t.nodes.ops() ++ [Do(Branch(t.id, arms(True).items(next).lowered(), arms(False).items(next).lowered()))]
+        },
+        While(condition, body) => {
+            let t = condition.truth().place(next);
+            let pass = (body.items(Succ(next)) ++ t.nodes.ops()).lowered();
+            t.nodes.ops() ++ [Do(Branch(t.id, Repeat(pass, t.id), Stmt::leaf([])))]
+        },
+        DoWhile(body, condition) => {
+            let t = condition.truth().place(next);
+            [Do(Repeat((body.items(Succ(next)) ++ t.nodes.ops()).lowered(), t.id))]
+        },
+        ReadTo(fd, buf, len, result) => {
+            let f = fd.place(next);
+            let n = len.place(f.next);
+            (f.nodes ++ n.nodes).ops() ++ [Do(Invoke(Reads(f.id, buf.id, n.id, result.id)))]
+        },
+        WriteFrom(fd, buf, from, len, result) => {
+            let f = fd.place(next);
+            let s = from.place(f.next);
+            let n = len.place(s.next);
+            (f.nodes ++ s.nodes ++ n.nodes).ops() ++ [Do(Invoke(Writes(f.id, buf.id, s.id, n.id, result.id)))]
+        },
+        OpenOf(path, len, result) => {
+            let n = len.place(next);
+            n.nodes.ops() ++ [Do(Invoke(Opens(path.id, n.id, result.id)))]
+        },
+        CloseOf(fd, result) => {
+            let f = fd.place(next);
+            f.nodes.ops() ++ [Do(Invoke(Closes(f.id, result.id)))]
+        },
+        ArgTo(index, buf, len) => {
+            let k = index.place(next);
+            k.nodes.ops() ++ [Do(Arg(k.id, buf.id, len.id))]
+        },
+        Quit(status) => {
+            let s = status.place(next);
+            s.nodes.ops() ++ [Do(Exit(s.id))]
+        },
+        Calculate(calc) => [Do(Compute(calc.region(next)))],
+        CallProc(procedure, args, results) => {
+            let a = args.placed_words(next);
+            a.nodes.ops() ++ [Do(Perform(procedure, a.ids, results.ids()))]
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tools as sources
+
+// A tool's buffers in order, its program, its statement, and its
+// procedures and depth.
+record Opened { buffers: List<Buffer>, functions: List<Function>, main: Act, procedures: List<Procedure>, depth: Nat }
+
+// `count` words from `first`.
+fn Nat::vars_from(self first: Nat, count: Nat) → List<Var> { match count { Zero => [], Succ(k) => Cons(Var(first), Succ(first).vars_from(k)) } }
+
+// Procedure `index`: its parameters the words from 0, its results the
+// next, each set to zero first (so the body reads no word but its
+// parameters), then its body, its words from past them.
+fn Proc::lowered(index, params, results: Nat, body: Proc → Act) → Procedure {
+    let ps = Nat::vars_from(0, params);
+    let rs = params.vars_from(results);
+    Procedure(params := ps.ids(), results := rs.ids(),
+        body := (rs.map(λ (r: Var) => Op(Const(64, r.id, 0))) ++ body(Proc(index, ps, rs)).items(params + results)).lowered())
+}
+
+// `procs` procedures before it.
+fn Tool::opened_at(self t: Tool, buf: Nat, procs: Nat) → Opened {
+    match t {
+        Run(main) => Opened([], [], main, [], 0),
+        WithBuffer(capacity, initial, body) => {
+            let rest = body(Buf(buf, capacity)).opened_at(Succ(buf), procs);
+            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.functions, rest.main, rest.procedures, rest.depth)
+        },
+        WithProgram(functions, body) => {
+            let rest = body.opened_at(buf, procs);
+            Opened(rest.buffers, functions ++ rest.functions, rest.main, rest.procedures, rest.depth)
+        },
+        WithProc(params, results, body, after) => {
+            let rest = after(procs).opened_at(buf, Succ(procs));
+            Opened(rest.buffers, rest.functions, rest.main, Cons(Proc::lowered(procs, params, results, body), rest.procedures), rest.depth)
+        },
+        WithDepth(depth, body) => {
+            let rest = body.opened_at(buf, procs);
+            Opened(rest.buffers, rest.functions, rest.main, rest.procedures, depth)
+        },
+    }
+}
+
+fn Tool::opened(self t: Tool, buf: Nat) → Opened { t.opened_at(buf, 0) }
+
+// The words a procedure names.
+fn List::procedures_bound(self procs: List<Procedure>) → Nat {
+    match procs { Nil => 0, Cons(proc, rest) => (proc.params ++ proc.results).word_bound().max(proc.body.word_bound()).max(rest.procedures_bound()) }
+}
+
+// A tool's words: `main`'s, and its procedures' when it has them; its
+// depth only when it has procedures. Without, the source is the one
+// before procedures (`Tool::source_of`, native_build_parts).
+fn List::tool_words(self procs: List<Procedure>, main: Stmt) → Nat {
+    match procs { Nil => main.word_bound(), Cons(_, _) => main.word_bound().max(procs.procedures_bound()) }
+}
+fn List::tool_depth(self procs: List<Procedure>, depth: Nat) → Nat { match procs { Nil => 0, Cons(_, _) => depth } }
+
+// A tool's source declares the words its lowering names, temporaries
+// included.
+fn Tool::source(self t: Tool) → Source {
+    let o = t.opened(0);
+    let main = o.main.items(0).lowered();
+    Source(functions := o.functions, buffers := o.buffers, words := o.procedures.tool_words(main), main := main,
+        procedures := o.procedures, depth := o.procedures.tool_depth(o.depth))
+}

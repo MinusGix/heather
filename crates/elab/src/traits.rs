@@ -33,8 +33,16 @@ use crate::{ElabError, Elaborator, R, err};
 pub(crate) struct ClassInfo {
     /// Unqualified name, as written.
     pub name: String,
-    /// Type-parameter names, in order.
+    /// Type-parameter names, in order — every name written in the angle
+    /// brackets, kinded or not.
     pub params: Vec<String>,
+    /// Parallel to [`Self::params`]: a **constructor** parameter's kind
+    /// (`class Bind<M: Type → Type>`, issues/higher-kinded-classes.md), `None`
+    /// for an ordinary type parameter. A kinded parameter is a term, so the
+    /// class's record takes it as a leading value parameter, before
+    /// [`Self::valparams`]; [`Elaborator::kinded_class_ty`] moves a written
+    /// head's argument there.
+    pub kinds: Vec<Option<Ty>>,
     /// `class Monoid<A>(op: A -> A -> A)` — the declared **value indices**
     /// (docs/operation-indexed-classes-design.md §3), types written in terms
     /// of `params`. Empty for an unindexed class. Their names are what a
@@ -52,6 +60,16 @@ pub(crate) struct ClassInfo {
     /// the class's own fields. Used to phrase the collision diagnostic and to
     /// decide which ancestor an inherited field is filled from.
     pub owner: Vec<Option<String>>,
+}
+
+impl ClassInfo {
+    /// Does the class take a type constructor (`class Bind<M: Type → Type>`)?
+    /// Its record then has value parameters even with no written index, so a
+    /// literal of it is spelled without type arguments and takes them from
+    /// the expected type, as an indexed class's does.
+    pub(crate) fn is_kinded(&self) -> bool {
+        self.kinds.iter().any(Option::is_some)
+    }
 }
 
 /// A registered instance: one canonical value per (class, resolved carrier)
@@ -169,6 +187,10 @@ pub(crate) fn instance_key(class_key: &str, head_key: &str, index: &str) -> Inst
 #[derive(Clone, Default)]
 pub(crate) struct Traits {
     class_members: HashSet<String>,
+    /// The unqualified names of the classes with a kinded parameter
+    /// (`class Bind<M: Type → Type>`): the cheap prefilter that keeps
+    /// [`Elaborator::kinded_class_ty`] off every other named type.
+    kinded: HashSet<String>,
     classes: HashMap<String, Rc<ClassInfo>>,
     instances: HashMap<InstKey, InstanceInfo>,
     designations: HashMap<DesigKey, DesignationInfo>,
@@ -199,7 +221,18 @@ impl Traits {
         for name in info.fields.iter().filter_map(|field| field.name.as_ref()) {
             self.class_members.insert(name.clone());
         }
+        if info.kinds.iter().any(Option::is_some) {
+            self.kinded.insert(info.name.clone());
+        }
         self.classes.insert(key, Rc::new(info));
+    }
+
+    /// Could `name` (qualified or not) name a class with a kinded parameter?
+    /// A prefilter on the last path segment: `false` is certain, `true` is
+    /// then resolved.
+    pub(crate) fn maybe_kinded(&self, name: &str) -> bool {
+        !self.kinded.is_empty()
+            && self.kinded.contains(name.rsplit("::").next().unwrap_or(name))
     }
 
     pub(crate) fn class(&self, key: &str) -> Option<&Rc<ClassInfo>> {
@@ -212,6 +245,11 @@ impl Traits {
 
     pub(crate) fn has_member(&self, name: &str) -> bool {
         self.class_members.contains(name)
+    }
+
+    /// Every registered class, by key.
+    pub(crate) fn classes_iter(&self) -> impl Iterator<Item = (&String, &Rc<ClassInfo>)> {
+        self.classes.iter()
     }
 
     pub(crate) fn classes_declaring(&self, name: &str) -> Vec<(String, Rc<ClassInfo>)> {
@@ -295,6 +333,20 @@ impl Traits {
             .collect();
         out.sort();
         out.into_iter().map(|(_, g, p, i)| (g, p, i)).collect()
+    }
+
+    /// Every instance of a class: its head key and its index spelling, in
+    /// key order. The cast edges are read this way
+    /// (`Elaborator::cast_edges`, docs/casting-design.md §14).
+    pub(crate) fn instances_of_class(&self, class_key: &str) -> Vec<(String, String)> {
+        let mut out: Vec<_> = self
+            .instances
+            .keys()
+            .filter(|(class, _, _)| class == class_key)
+            .map(|(_, head, index)| (head.clone(), index.clone()))
+            .collect();
+        out.sort();
+        out
     }
 
     pub(crate) fn instances_answering(
@@ -428,6 +480,19 @@ fn head_name(t: &Ty) -> Option<&str> {
         // name at the end of its spine.
         TyKind::OfExpr(e) => match &e.kind {
             ExprKind::App { head, .. } | ExprKind::TyApp { head, .. } => spine_head(head),
+            // A λ carrier's head is its body's: `λ (A: Type) => Result<A, E>`
+            // keys and names its instances as `Result`'s
+            // (docs/lambda-carrier-instances-design.md §7.3).
+            ExprKind::Lam { binders, body } if binders.len() == 1 => match &body.kind {
+                ExprKind::TyApp { head, .. } => spine_head(head),
+                // `λ (R: Type) => CoTree<R>(E)`: the value arguments are
+                // fixed, so the head is the former's.
+                ExprKind::App { head, .. } => match &head.kind {
+                    ExprKind::TyApp { head, .. } => spine_head(head),
+                    _ => None,
+                },
+                _ => None,
+            },
             _ => None,
         },
         _ => None,
@@ -601,9 +666,49 @@ pub(crate) fn render_expr(e: &Expr) -> String {
 fn same_parent_fiber(a: &ClassRef, b: &ClassRef) -> bool {
     same_parent_carrier(a, b)
         && a.index.len() == b.index.len()
-        && a.index.iter().zip(&b.index).all(|(x, y)| {
-            matches!((&x.kind, &y.kind), (ExprKind::Var(xn), ExprKind::Var(yn)) if xn == yn)
-        })
+        && a.index.iter().zip(&b.index).all(|(x, y)| same_index_arg(x, y))
+}
+
+/// The names an index argument mentions where a global could stand: a
+/// variable, an applied head, and a type's head. Enough for what an index is
+/// (an operation, a relation, `RelId<A>`); a binder-carrying form adds none.
+fn free_names_expr(e: &Expr, out: &mut Vec<String>) {
+    match &e.kind {
+        ExprKind::Var(n) => out.push(n.clone()),
+        ExprKind::App { head, args, .. } => {
+            free_names_expr(head, out);
+            for a in args {
+                free_names_expr(a, out);
+            }
+        }
+        ExprKind::TyApp { head, args } => {
+            free_names_expr(head, out);
+            for t in args {
+                free_names_ty(t, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn free_names_ty(t: &Ty, out: &mut Vec<String>) {
+    if let TyKind::Named { name, args } = &t.kind {
+        out.push(name.clone());
+        for a in args {
+            free_names_ty(a, out);
+        }
+    }
+}
+
+/// Two `extends` index arguments name one value: the same index parameter, or
+/// the same computed index spelled alike (`RelId<A>` reached through `Monoid`
+/// and again through `CommMonoidRel`). Syntactic, as the registry key is.
+fn same_index_arg(x: &Expr, y: &Expr) -> bool {
+    match (&x.kind, &y.kind) {
+        (ExprKind::Var(xn), ExprKind::Var(yn)) => xn == yn,
+        (ExprKind::Var(_), _) | (_, ExprKind::Var(_)) => false,
+        _ => render_expr(x) == render_expr(y),
+    }
 }
 
 fn same_parent_carrier(a: &ClassRef, b: &ClassRef) -> bool {
@@ -652,10 +757,16 @@ mod inequality_render_tests {
     }
 }
 
+/// A class as a diagnostic names it: an ancestor is recorded by its
+/// declaration key (`algebra_rel::MonoidRel`), and the reader wrote the name.
+fn class_shown(name: &str) -> &str {
+    name.rsplit("::").next().unwrap_or(name)
+}
+
 pub(crate) fn class_ref_written(r: &ClassRef) -> String {
     let head = format!(
         "{}<{}>",
-        r.name,
+        class_shown(&r.name),
         r.args.iter().map(render_ty).collect::<Vec<_>>().join(", ")
     );
     if r.index.is_empty() {
@@ -669,6 +780,22 @@ pub(crate) fn class_ref_written(r: &ClassRef) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     )
+}
+
+/// A class head's argument written in a type slot, read as the expression a
+/// kinded parameter takes: `Option` is the name, `Result<Nat>` the generic
+/// application, and an expression in type position is itself. `None` for a
+/// structural type former, which no type constructor is spelled as.
+fn ty_as_expr(t: &Ty) -> Option<Expr> {
+    match &t.kind {
+        TyKind::Named { name, args } if args.is_empty() => Some(var(name, t.span)),
+        TyKind::Named { name, args } => Some(span_expr(
+            ExprKind::TyApp { head: Box::new(var(name, t.span)), args: args.clone() },
+            t.span,
+        )),
+        TyKind::OfExpr(e) => Some((**e).clone()),
+        _ => None,
+    }
 }
 
 fn span_expr(kind: ExprKind, span: Span) -> Expr {
@@ -723,7 +850,59 @@ pub(crate) fn op_index_symbol(name: &str) -> Option<&str> {
 // lowering would then report as an unknown type — loud, but at the wrong
 // place, so nothing here takes a wildcard shortcut.
 
-type Ren = HashMap<String, String>;
+/// A parent's instantiation. `names` is the rename the layer-1 restriction
+/// makes enough for type parameters and for an index passed up unchanged;
+/// `exprs` holds an index a child computes (`extends MonoidRel<A>(RelId<A>,
+/// op)`, docs/relation-indexed-algebra-design.md §3), and `tys` a type
+/// parameter instantiated at a composite type, which only an *instance* does
+/// (its ancestors at `List<A>`). A name in `exprs`/`tys` is replaced by the
+/// image whole; every other name is renamed or kept.
+#[derive(Default, Clone)]
+pub(crate) struct Ren {
+    names: HashMap<String, String>,
+    exprs: HashMap<String, Expr>,
+    tys: HashMap<String, Ty>,
+}
+
+impl Ren {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&mut self, from: String, to: String) {
+        self.names.insert(from, to);
+    }
+
+    /// The substitution that instantiates a class's own names — its type
+    /// parameters and index — at one use: what an ancestor's arguments,
+    /// written in the class's names, become at that use.
+    pub(crate) fn at_use(info: &ClassInfo, args: &[Ty], index: &[Expr]) -> Self {
+        let mut m = Self::new();
+        for (p, a) in info.params.iter().zip(args) {
+            m.tys.insert(p.clone(), a.clone());
+        }
+        for (p, e) in info.valparams.iter().zip(index) {
+            m.exprs.insert(p.name.clone(), e.clone());
+            if let Some(sym) = &p.symbol {
+                m.exprs.insert(symbol_key(sym), e.clone());
+            }
+        }
+        m
+    }
+}
+
+/// An ancestor's index, written in its descendant's names, at one use of the
+/// descendant (`Ren::at_use`).
+pub(crate) fn ancestor_index_at(info: &ClassInfo, args: &[Ty], index: &[Expr], anc: &ClassRef) -> Vec<Expr> {
+    let m = Ren::at_use(info, args, index);
+    anc.index.iter().map(|e| rename_expr(&m, e)).collect()
+}
+
+/// An ancestor's type arguments at one use of its descendant.
+pub(crate) fn ancestor_args_at(info: &ClassInfo, args: &[Ty], index: &[Expr], anc: &ClassRef) -> Vec<Ty> {
+    let m = Ren::at_use(info, args, index);
+    anc.args.iter().map(|t| rename_ty(&m, t)).collect()
+}
 
 /// Where a class holds an ancestor, for a diagnostic: untagged, or at the
 /// path of tags that reaches it.
@@ -744,23 +923,34 @@ fn symbol_key(symbol: &str) -> String {
 /// A class's own body symbols read as its own index names — what the
 /// phantom-index check counts occurrences through.
 fn own_symbols(info: &ClassInfo) -> Ren {
-    info.valparams
-        .iter()
-        .filter_map(|p| p.symbol.as_ref().map(|s| (symbol_key(s), p.name.clone())))
-        .collect()
+    Ren {
+        names: info
+            .valparams
+            .iter()
+            .filter_map(|p| p.symbol.as_ref().map(|s| (symbol_key(s), p.name.clone())))
+            .collect(),
+        ..Ren::default()
+    }
 }
 
 fn ren(m: &Ren, n: &str) -> String {
-    m.get(n).cloned().unwrap_or_else(|| n.to_string())
+    m.names.get(n).cloned().unwrap_or_else(|| n.to_string())
 }
 
 fn rename_ty(m: &Ren, t: &Ty) -> Ty {
+    if let TyKind::Named { name, args } = &t.kind
+        && args.is_empty()
+        && let Some(image) = m.tys.get(name)
+    {
+        return image.clone();
+    }
     let kind = match &t.kind {
         TyKind::Nat => TyKind::Nat,
         TyKind::Univ { level } => TyKind::Univ { level: *level },
         TyKind::Ctx => TyKind::Ctx,
         TyKind::Eq(a, b) => TyKind::Eq(Box::new(rename_expr(m, a)), Box::new(rename_expr(m, b))),
         TyKind::OfExpr(e) => TyKind::OfExpr(Box::new(rename_expr(m, e))),
+        TyKind::TypeOf(e) => TyKind::TypeOf(Box::new(rename_expr(m, e))),
         TyKind::Named { name, args } => TyKind::Named {
             name: ren(m, name),
             args: args.iter().map(|a| rename_ty(m, a)).collect(),
@@ -795,21 +985,28 @@ fn rename_ty(m: &Ren, t: &Ty) -> Ty {
 fn rename_expr(m: &Ren, e: &Expr) -> Expr {
     use ExprKind::*;
     let kind = match &e.kind {
-        Var(n) => Var(ren(m, n)),
+        Var(n) => match m.exprs.get(n) {
+            Some(image) => return image.clone(),
+            None => Var(ren(m, n)),
+        },
         // A symbol a parent's head bound (`op as ∙`) is that parent's index,
         // so instantiating the parent spells it as the child's argument: the
         // child installs its own symbols, not the parent's
         // (`symbol_key`). Any other symbol names nothing in the telescope
         // and is kept.
-        OpSymbol { symbol, fixity } => match m.get(&symbol_key(symbol)) {
-            Some(n) => Var(n.clone()),
-            None => OpSymbol {
-                symbol: symbol.clone(),
-                fixity: *fixity,
+        OpSymbol { symbol, fixity } => match m.exprs.get(&symbol_key(symbol)) {
+            Some(image) => return image.clone(),
+            None => match m.names.get(&symbol_key(symbol)) {
+                Some(n) => Var(n.clone()),
+                None => OpSymbol {
+                    symbol: symbol.clone(),
+                    fixity: *fixity,
+                },
             },
         },
         Univ { level } => Univ { level: *level },
         Num(n) => Num(n.clone()),
+        Scaled(lit) => Scaled(lit.clone()),
         Char(c) => Char(*c),
         Str(text) => Str(text.clone()),
         ArgSlot(index) => ArgSlot(*index),
@@ -1033,7 +1230,7 @@ fn rename_block(m: &Ren, b: &Block) -> Block {
 /// type parameters replaced by the types the constraint applies it to. A
 /// substitution rather than [`rename_ty`]'s rename, because a constraint may
 /// name a *composite* carrier (`requires m: Monoid<List<A>>(append)`).
-fn subst_ty(m: &HashMap<String, Ty>, t: &Ty) -> Ty {
+pub(crate) fn subst_ty(m: &HashMap<String, Ty>, t: &Ty) -> Ty {
     if let TyKind::Named { name, args } = &t.kind
         && args.is_empty()
         && let Some(a) = m.get(name)
@@ -1152,7 +1349,7 @@ fn expr_size(e: &Expr) -> usize {
 /// How often `v` occurs as a bare name in `t` — the second half of Paterson's
 /// condition, which is what refuses `C<A> requires C<Pair<A, A>>` even where
 /// the sizes happen to agree.
-fn ty_var_count(t: &Ty, v: &str) -> usize {
+pub(crate) fn ty_var_count(t: &Ty, v: &str) -> usize {
     match &t.kind {
         TyKind::Named { name, args } => {
             (name == v && args.is_empty()) as usize
@@ -1191,6 +1388,17 @@ fn expr_var_count(e: &Expr, v: &str) -> usize {
         }
         ExprKind::Var(name) => (name == v) as usize,
         ExprKind::Eq(a, b) => expr_var_count(a, v) + expr_var_count(b, v),
+        // A λ carrier, `λ (A: Type) => Result<A, E>`
+        // (docs/lambda-carrier-instances-design.md §7.3): its body's free
+        // occurrences, unless a binder shadows `v`.
+        ExprKind::Lam { binders, body } => {
+            if binders.iter().any(|b| b.name == v) {
+                0
+            } else {
+                binders.iter().filter_map(|b| b.ty.as_ref()).map(|t| ty_var_count(t, v)).sum::<usize>()
+                    + expr_var_count(body, v)
+            }
+        }
         _ => 0,
     }
 }
@@ -1286,7 +1494,7 @@ impl Elaborator {
                              paths (`{}` and `{}`), so its canonical parent would be \
                              ambiguous",
                             d.name,
-                            candidate.name,
+                            class_shown(&candidate.name),
                             previous.path.join("."),
                             candidate.path.join(".")
                         ),
@@ -1308,7 +1516,7 @@ impl Elaborator {
                              in generic code. Inherit it once, and take any further law it \
                              needs as a law class of its own",
                             d.name,
-                            candidate.name,
+                            class_shown(&candidate.name),
                             class_ref_written(&candidate),
                             where_reached(&previous.path),
                             where_reached(&candidate.path)
@@ -1341,10 +1549,7 @@ impl Elaborator {
                     for (i, (left, right)) in
                         previous.index.iter().zip(&candidate.index).enumerate()
                     {
-                        let same = matches!(
-                            (&left.kind, &right.kind),
-                            (ExprKind::Var(x), ExprKind::Var(y)) if x == y
-                        );
+                        let same = same_index_arg(left, right);
                         let Some(param) = info.valparams.get(i) else {
                             continue;
                         };
@@ -1359,7 +1564,7 @@ impl Elaborator {
                                     "`{}` cannot inherit `{}` at two values of `{}`: that \
                                      index does not occur in the parent dictionary's field \
                                      types, so the kernel sees the two fibers as convertible",
-                                    d.name, candidate.name, param.name
+                                    d.name, class_shown(&candidate.name), param.name
                                 ),
                                 candidate.span,
                             );
@@ -1376,14 +1581,20 @@ impl Elaborator {
                      unqualified flattening cannot identify them; give the parent \
                      dictionaries distinct `as` names",
                     d.name,
-                    candidate.name,
+                    class_shown(&candidate.name),
                     class_ref_written(previous),
                     class_ref_written(&candidate)
                 ),
                 candidate.span,
             )
         };
-        for parent in &d.extends {
+        // A parent is recorded by its declaration, not its spelling: a client
+        // that sees this class instantiates its ancestors in the client's
+        // scope, where the parent's module (and a computed index's globals,
+        // `RelId`) need not be imported
+        // (issues/class-parent-names-resolve-in-client-scope.md).
+        let qualified: Vec<ClassRef> = d.extends.iter().map(|p| self.qualified_parent(d, p)).collect();
+        for parent in &qualified {
             let (pinfo, rename) = self.parent_view(d, parent)?;
             // The parent's own ancestors come with it, renamed the same way.
             for a in &pinfo.ancestors {
@@ -1486,10 +1697,39 @@ impl Elaborator {
             result: None,
             span: d.span,
         };
+        // A kinded parameter is a type constructor, a term: the record takes
+        // it as a leading value parameter (`record Bind(M: Type → Type)`, the
+        // shape that already computes as a dictionary), and keeps the
+        // ordinary ones as its type parameters.
+        let kinds = if d.kinds.len() == d.params.len() {
+            d.kinds.clone()
+        } else {
+            vec![None; d.params.len()]
+        };
+        let mut rec_params = Vec::new();
+        let mut rec_valparams = Vec::new();
+        for (p, k) in d.params.iter().zip(&kinds) {
+            match k {
+                None => rec_params.push(p.clone()),
+                Some(kind) => rec_valparams.push(Param {
+                    name: p.clone(),
+                    ty: kind.clone(),
+                    implicit: false,
+                    is_self: false,
+                    solver: None,
+                    default: None,
+                    origin: heather_syntax::ParamOrigin::Written,
+                    symbol: None,
+                    span: kind.span,
+                }),
+            }
+        }
+        rec_valparams.extend(d.valparams.iter().cloned());
         let ind = InductiveDecl {
             name: d.name.clone(),
-            params: d.params.clone(),
-            valparams: d.valparams.clone(),
+            params: rec_params,
+            valparams: rec_valparams,
+            varies: None,
             ctors: vec![ctor],
             is_record: true,
             is_codata: false,
@@ -1500,6 +1740,7 @@ impl Elaborator {
         let info = ClassInfo {
             name: d.name.clone(),
             params: d.params.clone(),
+            kinds,
             valparams: d.valparams.clone(),
             fields,
             ancestors,
@@ -1571,7 +1812,97 @@ impl Elaborator {
             let abs = self.global_abs_of(*var)?;
             return self.names.global_name_at(abs as u32).map(str::to_string);
         }
+        // A class over a type constructor (issues/higher-kinded-classes.md):
+        // the carrier is a value parameter `{M: Type → Type}`, solved by now
+        // to the constructor — `D#tycode_fn^δ` for a declaration with a code
+        // function, whose key is the declaration's own. A λ constructor has
+        // no head to prefer.
+        if let TyKind::Named { name, args } = &carrier.kind
+            && args.is_empty()
+            && let Some(position) = params.iter().position(|p| !p.is_type && p.name == *name)
+        {
+            let mut spine = Vec::new();
+            let mut head = applied;
+            while let Some((fun, arg)) = crate::spelling::app_of(head) {
+                spine.push(&**arg);
+                head = fun;
+            }
+            spine.reverse();
+            let mut head = *spine.get(position)?;
+            while let Some((fun, _)) = crate::spelling::app_of(head) {
+                head = fun;
+            }
+            let Term::GlobalTm { var, .. } = head else {
+                return None;
+            };
+            let abs = self.global_abs_of(*var)?;
+            let crate::gendefs::GenDef::TyCodeFn(tag) =
+                *self.types.gdefs().key_for_abs(&(abs as u32))?
+            else {
+                return None;
+            };
+            let owner = self.types.by_tag(tag)?;
+            return Some(qkey(&owner.scope.module, &owner.name));
+        }
         head_name(carrier).map(|h| self.carrier_key(h))
+    }
+
+    /// A solver parameter's written class goal with its constructor
+    /// parameter replaced by the constructor the call solved it to —
+    /// `Bind<M>` shown as `Bind<List>` — for a class over a type constructor
+    /// (issues/higher-kinded-classes.md). `key` is
+    /// [`Self::solver_carrier_head`]'s answer; `None` for every other goal.
+    ///
+    /// A carrier that fixes some of the constructor's arguments shows them,
+    /// `Bind<Pair2<Bool, ·>>` rather than `Bind<Pair2>`
+    /// (issues/applied-meta-approximation-diagnostics.md): `applied`, the
+    /// call's spine as it was solved, gives the carrier, spelled in `cx`
+    /// when it spells.
+    pub(crate) fn kinded_goal_display(
+        &self,
+        cx: &crate::Cx,
+        written: &Ty,
+        params: &[ParamMeta],
+        key: &str,
+        applied: Option<&Term>,
+    ) -> Option<String> {
+        let reference = self.class_ref_of_ty(written)?;
+        let class = self.lookup_class(&reference.name)?;
+        if !class.is_kinded() {
+            return None;
+        }
+        let carrier = |name: &str| -> Option<String> {
+            let position = params.iter().position(|p| !p.is_type && p.name == name)?;
+            let mut spine = Vec::new();
+            let mut head = applied?;
+            while let Some((fun, arg)) = crate::spelling::app_of(head) {
+                spine.push(arg);
+                head = fun;
+            }
+            spine.reverse();
+            let shown = self.spell_term_clean(cx, spine.get(position)?)?;
+            shown.contains('<').then_some(shown)
+        };
+        let shown = key.rsplit("::").next().unwrap_or(key).to_string();
+        let mut changed = false;
+        let args: Vec<Ty> = reference
+            .args
+            .iter()
+            .zip(&class.kinds)
+            .map(|(a, k)| match (&a.kind, k) {
+                (TyKind::Named { name, args }, Some(_))
+                    if args.is_empty() && params.iter().any(|p| !p.is_type && p.name == *name) =>
+                {
+                    changed = true;
+                    let shown = carrier(name).unwrap_or_else(|| shown.clone());
+                    Ty { kind: TyKind::Named { name: shown, args: Vec::new() }, span: a.span }
+                }
+                _ => a.clone(),
+            })
+            .collect();
+        changed.then(|| {
+            render_ty(&heather_syntax::class_ty(reference.name, args, reference.index, written.span))
+        })
     }
 
     /// The **index spelling** of an instance head
@@ -1588,15 +1919,47 @@ impl Elaborator {
         decl: &InstanceDecl,
     ) -> R<String> {
         let mut parts = Vec::with_capacity(cref.index.len());
+        // A value-generic binder's declaration-stable key.
+        let generic = |n: &str| {
+            decl.tyvars
+                .iter()
+                .map(|p| &p.name)
+                .chain(decl.valparams.iter().map(|p| &p.name))
+                .position(|name| name == n)
+        };
         for (p, a) in class.valparams.iter().zip(cref.index.iter()) {
-            let head = match &a.kind {
-                ExprKind::Var(n) => Some(n),
+            let named = |e: &'_ Expr| match &e.kind {
+                ExprKind::Var(n) => Some(n.clone()),
                 ExprKind::TyApp { head, .. } => match &head.kind {
-                    ExprKind::Var(n) => Some(n),
+                    ExprKind::Var(n) => Some(n.clone()),
                     _ => None,
                 },
                 _ => None,
             };
+            // A global applied to the instance's own value binders,
+            // `Eutt::Rel<R>(E)`: a relation family at a value parameter
+            // (docs/equation-rewrite-design.md §11). The binders are
+            // determined by unifying the head with the goal, as a bare
+            // binder index is, so the key is the global's and their
+            // positions.
+            if let ExprKind::App { head, args, named: nargs, .. } = &a.kind
+                && nargs.is_empty()
+                && let Some(n) = named(head)
+                && generic(&n).is_none()
+                && let Some(binders) = args
+                    .iter()
+                    .map(|x| match &x.kind {
+                        ExprKind::Var(v) => generic(v).map(|i| format!("#binder{i}")),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()
+            {
+                let key = self.key_of(&n).unwrap_or_else(|| n.clone());
+                parts.push(format!("{key}#at{}", binders.concat()));
+                continue;
+            }
+            let head = named(a);
+            let head = head.as_ref();
             let Some(n) = head else {
                 // A symbol in an instance head would make the registry key
                 // depend on the designation table's state at declaration
@@ -1618,7 +1981,7 @@ impl Elaborator {
                     format!(
                         "the index `{}` of this instance is not spellable: `{}` must be a \
                          global reference (possibly at this instance's own type \
-                         parameters), because the registry key is computed from the \
+                         parameters, or applied to its own binders), because the registry key is computed from the \
                          declaration alone (docs/operation-indexed-classes-design.md \
                          §3.1). A structure built from an unnamed operation is a `let`-bound \
                          value, found by scope rather than registered",
@@ -1632,13 +1995,7 @@ impl Elaborator {
             // head with the goal, just like a binder in the carrier. Give it
             // a declaration-stable, unwritable key component: binder spelling
             // must not make alpha-equivalent instances distinct.
-            let generic = decl
-                .tyvars
-                .iter()
-                .map(|p| &p.name)
-                .chain(decl.valparams.iter().map(|p| &p.name))
-                .position(|name| name == n);
-            parts.push(match generic {
+            parts.push(match generic(n) {
                 Some(i) => format!("#binder{i}"),
                 None => self.key_of(n).unwrap_or_else(|| n.clone()),
             });
@@ -1712,23 +2069,20 @@ impl Elaborator {
             );
         }
         for (p, a) in info.valparams.iter().zip(parent.index.iter()) {
+            // A *computed* index (`extends MonoidRel<A>(RelId<A>, op)`): the
+            // parent's index name and body symbol read as the expression, so
+            // instantiating the parent substitutes it. It is written in the
+            // child's names, which every later instantiation substitutes in
+            // turn (`Ren::at_use`): the identity theories are the relational
+            // ones at `RelId` this way (docs/relation-indexed-algebra-design.md
+            // §3). A bare name that is no index parameter of the child stays
+            // the slip it always was.
             let ExprKind::Var(n) = &a.kind else {
-                return err(
-                    format!(
-                        "an `extends` index must be one of `{}`'s own value parameters \
-                         (`{}`), and `{}` is not: a chain passes its index up unchanged, \
-                         and a parent at a *computed* index is the diamond \
-                         (docs/operation-indexed-classes-design.md §8), not this form",
-                        d.name,
-                        d.valparams
-                            .iter()
-                            .map(|p| p.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        render_expr(a)
-                    ),
-                    a.span,
-                );
+                rename.exprs.insert(p.name.clone(), a.clone());
+                if let Some(sym) = &p.symbol {
+                    rename.exprs.insert(symbol_key(sym), a.clone());
+                }
+                continue;
             };
             if !d.valparams.iter().any(|q| q.name == *n) {
                 return err(
@@ -1751,6 +2105,34 @@ impl Elaborator {
             }
         }
         Ok((info, rename))
+    }
+
+    /// `parent` with its class name, and every global its index arguments
+    /// name, replaced by the declaration key it resolves to here. The
+    /// child's own parameters are left as written: instantiation substitutes
+    /// them. A name that does not resolve is left for the ordinary refusal.
+    fn qualified_parent(&self, d: &ClassDecl, parent: &ClassRef) -> ClassRef {
+        let own = |n: &str| d.params.iter().any(|p| p == n) || d.valparams.iter().any(|p| p.name == n);
+        let mut names = Vec::new();
+        for e in &parent.index {
+            free_names_expr(e, &mut names);
+        }
+        let mut m = Ren::new();
+        for n in names {
+            if own(&n) {
+                continue;
+            }
+            if let Some(k) = self.key_of(&n) {
+                m.insert(n, k);
+            }
+        }
+        ClassRef {
+            name: self.key_of(&parent.name).unwrap_or_else(|| parent.name.clone()),
+            args: parent.args.clone(),
+            index: parent.index.iter().map(|e| rename_expr(&m, e)).collect(),
+            path: parent.path.clone(),
+            span: parent.span,
+        }
     }
 
     /// The diagnostic for a name in class position that is not a class. A
@@ -1802,6 +2184,128 @@ impl Elaborator {
         self.traits.class(&self.key_of(name)?).cloned()
     }
 
+    /// A one-parameter class the surface syntax reads by its **identity**
+    /// (`algebra::Numeral` for a numeral, `char::CharLiteral` for a character
+    /// literal), with the record it lowers to: found whenever its declaring
+    /// module is in this module's closure, whether or not the module can
+    /// name it (issues/numerals-without-algebra-import.md). Its instances
+    /// are visible by the closure already (docs/module-dag-design.md §2), so
+    /// requiring the class's *name* in scope as well was the only gap, and
+    /// it is the one `[…]` never had: `CollectionLiteral` is read by key.
+    /// The registry digest covers class events, so an image that read one
+    /// this way is invalidated as one that named it would be.
+    /// The record of the literal class `key` (`algebra::Numeral`), and
+    /// whether this module names it. A class the module names — the
+    /// library's, or one of its own with the same name and shape — is used as
+    /// it always was, a failed search included. One reached only by identity
+    /// ([`Self::syntax_class`]) is an offer: when its search finds nothing,
+    /// the caller keeps the reading it had before the class was reachable
+    /// (a numeral is a `Nat`), so a carrier that computes to `Nat` (`Resp(c)`
+    /// at a constructor) still checks.
+    pub(crate) fn literal_class_record(&self, key: &str) -> Option<(Rc<crate::inductive::Inductive>, bool)> {
+        let name = key.rsplit("::").next().unwrap_or(key);
+        if let Some(class) = self.lookup_class(name)
+            && class.params.len() == 1
+            && class.valparams.is_empty()
+            && let Some(ind) = self.lookup_inductive(&class.name).cloned()
+        {
+            // Named only by the common prelude's export is not asking for the
+            // class: the module's literals read as they did before the
+            // prelude, a failed search falling back too. Speculative readings
+            // rely on that — `Grammar(0)`, a record family's index, is first
+            // tried as the record's constructor, whose field is no numeral's
+            // carrier (issues/showcase-calc-parser-refused-since-prelude.md).
+            let scopes = self.scope.resolution_scopes.borrow();
+            let via_common = self.names.seen_only_through(scopes.last().map(Rc::as_ref), name, crate::COMMON_MODULE);
+            return Some((ind, !via_common));
+        }
+        self.syntax_class(key).map(|(_, ind)| (ind, false))
+    }
+
+    pub(crate) fn syntax_class(&self, key: &str) -> Option<(Rc<ClassInfo>, Rc<crate::inductive::Inductive>)> {
+        let class = self.traits.class(key)?.clone();
+        if class.params.len() != 1 || !class.valparams.is_empty() {
+            return None;
+        }
+        let ind = self.types.inductive(key)?.clone();
+        Some((class, ind))
+    }
+
+    /// A written head of a class over a type constructor, re-spelled as the
+    /// record it lowers to (issues/higher-kinded-classes.md, piece 3):
+    ///
+    /// ```text
+    /// Bind<Option>            ⇝  Bind(Option)
+    /// StateM<S, M>(op)        ⇝  StateM<S>(M, op)      (M kinded, S not)
+    /// ```
+    ///
+    /// A kinded parameter is a term, so the class's record takes it as a
+    /// leading value parameter ([`Self::elab_class`]); the angle-bracket
+    /// spelling stays the class's interface, which every reader of a
+    /// [`ClassRef`] (registry keys, canonical names, `requires`) keeps
+    /// seeing. The argument becomes an expression: a bare generic name is
+    /// then checked at the kind, which is the η-expansion
+    /// `check_generic_former_value` does, and a parameter `M` is a local.
+    /// `None` for every type that is not such a head, so nothing else moves.
+    pub(crate) fn kinded_class_ty(&self, ty: &Ty) -> Option<Ty> {
+        let (name, args, index): (&str, &[Ty], &[Expr]) = match &ty.kind {
+            TyKind::Named { name, args } => (name, args, &[]),
+            TyKind::OfExpr(e) => match &e.kind {
+                ExprKind::App {
+                    head,
+                    args: index,
+                    named,
+                    explicit: false,
+                    goal_oriented: false,
+                } if named.is_empty() => match &head.kind {
+                    ExprKind::TyApp { head: h, args } => match &h.kind {
+                        ExprKind::Var(n) => (n, args, index),
+                        _ => return None,
+                    },
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if args.is_empty() || !self.traits.maybe_kinded(name) {
+            return None;
+        }
+        let info = self.lookup_class(name)?;
+        if info.kinds.len() != args.len() || info.kinds.iter().all(Option::is_none) {
+            return None;
+        }
+        let span = ty.span;
+        let mut targs = Vec::new();
+        let mut vargs = Vec::new();
+        for (a, k) in args.iter().zip(&info.kinds) {
+            match k {
+                None => targs.push(a.clone()),
+                Some(_) => vargs.push(ty_as_expr(a)?),
+            }
+        }
+        vargs.extend(index.iter().cloned());
+        let head = var(name, span);
+        let head = if targs.is_empty() {
+            head
+        } else {
+            span_expr(ExprKind::TyApp { head: Box::new(head), args: targs }, span)
+        };
+        Some(Ty {
+            kind: TyKind::OfExpr(Box::new(span_expr(
+                ExprKind::App {
+                    head: Box::new(head),
+                    args: vargs,
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            ))),
+            span,
+        })
+    }
+
     /// A parameter's type read as a **class reference**: the class's name, its
     /// type arguments, and its written index arguments. Both spellings — the
     /// unindexed `Named` one and the applied `OfExpr` one
@@ -1832,6 +2336,231 @@ impl Elaborator {
             }
             _ => None,
         }
+    }
+
+    /// Inline constraints that **share a symbol at one carrier** become one
+    /// constraint at a synthesized class extending them all
+    /// (issues/constraints-sharing-indices.md).
+    ///
+    /// `<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>` names one
+    /// `≈`, one `+` and one `*`, and both classes reach `CommRing` over them.
+    /// Two dictionaries would hold two `CommRing`s, and a lemma mixing laws
+    /// from both sides would be stated over two different units; linking the
+    /// second constraint's index to the first's binders shares the
+    /// operations but not the ancestor. One dictionary of the class
+    /// `CommRingOfInt+OrderedField`, whose `extends` flattens the shared
+    /// ancestor once, is what the writer meant: both classes are reached from
+    /// it by upcast, through one `CommRing`. A concrete carrier assembles it
+    /// from its two instances at resolution ([`Elaborator::join_parents`]),
+    /// which is sound there because the carrier's canonical instances already
+    /// share their ancestors by reference.
+    ///
+    /// The class is synthesized in this module the first time a declaration
+    /// asks for it and found by name after that. Its parents are sorted by
+    /// name, so the constraint's written order does not make a second class.
+    /// Only anonymous constraints whose every index slot is a symbol merge;
+    /// anything else is left to [`Self::expand_constraints`] unchanged.
+    pub(crate) fn merge_linked_constraints(&mut self, decl: &Decl) -> R<Option<Decl>> {
+        // Each candidate: (position, its class reference, the class, the
+        // carrier as written).
+        let mut cands: Vec<(usize, ClassRef, Rc<ClassInfo>, Vec<String>)> = Vec::new();
+        for (i, p) in decl.params.iter().enumerate() {
+            if p.solver.is_none() || !p.name.starts_with("#constraint") {
+                continue;
+            }
+            let Some(r) = self.class_ref_of_ty(&p.ty) else { continue };
+            let Some(class) = self.lookup_class(&r.name) else { continue };
+            if class.valparams.is_empty()
+                || class.is_kinded()
+                || r.index.len() != class.valparams.len()
+                || !r.index.iter().all(|a| matches!(a.kind, ExprKind::OpSymbol { .. }))
+            {
+                continue;
+            }
+            let carrier = r.args.iter().map(render_ty).collect();
+            cands.push((i, r, class, carrier));
+        }
+        if cands.len() < 2 {
+            return Ok(None);
+        }
+        let symbols_of = |r: &ClassRef| -> Vec<String> {
+            r.index
+                .iter()
+                .filter_map(|a| match &a.kind {
+                    ExprKind::OpSymbol { symbol, .. } => Some(symbol.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Connected components under "same carrier, a symbol in common".
+        let n = cands.len();
+        let mut comp: Vec<usize> = (0..n).collect();
+        fn root(comp: &mut [usize], mut i: usize) -> usize {
+            while comp[i] != i {
+                comp[i] = comp[comp[i]];
+                i = comp[i];
+            }
+            i
+        }
+        for a in 0..n {
+            for b in a + 1..n {
+                if cands[a].3 != cands[b].3 {
+                    continue;
+                }
+                let sa = symbols_of(&cands[a].1);
+                if symbols_of(&cands[b].1).iter().any(|s| sa.contains(s)) {
+                    let (ra, rb) = (root(&mut comp, a), root(&mut comp, b));
+                    comp[rb] = ra;
+                }
+            }
+        }
+        let roots: Vec<usize> = (0..n).map(|i| root(&mut comp, i)).collect();
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for i in 0..n {
+            match groups.iter_mut().find(|g| roots[g[0]] == roots[i]) {
+                Some(g) => g.push(i),
+                None => groups.push(vec![i]),
+            }
+        }
+        groups.retain(|g| g.len() >= 2);
+        if groups.is_empty() {
+            return Ok(None);
+        }
+        let mut params = decl.params.clone();
+        let mut drop: Vec<usize> = Vec::new();
+        for g in groups {
+            let mut members: Vec<&(usize, ClassRef, Rc<ClassInfo>, Vec<String>)> =
+                g.iter().map(|&k| &cands[k]).collect();
+            // A class written twice is §5.2's business, not a merge.
+            if members
+                .iter()
+                .enumerate()
+                .any(|(i, m)| members[..i].iter().any(|q| q.2.name == m.2.name))
+            {
+                continue;
+            }
+            members.sort_by(|a, b| a.2.name.cmp(&b.2.name));
+            let first = members[0];
+            let span = decl.params[first.0].span;
+            // The merged class's parameters are its first parent's, and every
+            // other parent's are renamed onto them positionally; the carriers
+            // agree, so the arities do.
+            let cparams = first.2.params.clone();
+            if members.iter().any(|m| m.2.params.len() != cparams.len()) {
+                continue;
+            }
+            // One value parameter per distinct symbol, in first-occurrence
+            // order over the sorted parents, under its first parent's name.
+            let mut syms: Vec<String> = Vec::new();
+            let mut sym_exprs: Vec<Expr> = Vec::new();
+            let mut valparams: Vec<Param> = Vec::new();
+            let mut extends: Vec<ClassRef> = Vec::new();
+            for m in &members {
+                let sub: HashMap<String, Ty> = m
+                    .2
+                    .params
+                    .iter()
+                    .cloned()
+                    .zip(cparams.iter().map(|p| Ty {
+                        kind: TyKind::Named { name: p.clone(), args: vec![] },
+                        span,
+                    }))
+                    .collect();
+                let mut index: Vec<Expr> = Vec::new();
+                for (v, a) in m.2.valparams.iter().zip(m.1.index.iter()) {
+                    let ExprKind::OpSymbol { symbol, .. } = &a.kind else { unreachable!() };
+                    let k = match syms.iter().position(|s| s == symbol) {
+                        Some(k) => k,
+                        None => {
+                            let mut name = v.name.clone();
+                            if valparams.iter().any(|q: &Param| q.name == name)
+                                || cparams.contains(&name)
+                            {
+                                name = format!("{name}_{}", valparams.len());
+                            }
+                            syms.push(symbol.clone());
+                            sym_exprs.push(a.clone());
+                            valparams.push(Param {
+                                name,
+                                ty: subst_ty(&sub, &v.ty),
+                                symbol: None,
+                                default: None,
+                                solver: None,
+                                ..v.clone()
+                            });
+                            syms.len() - 1
+                        }
+                    };
+                    index.push(var(&valparams[k].name, span));
+                }
+                // By key, so the join can find the parent from a module that
+                // does not import it by its bare name.
+                let pkey = self.key_of(&m.1.name).unwrap_or_else(|| m.1.name.clone());
+                extends.push(ClassRef {
+                    name: pkey,
+                    args: cparams
+                        .iter()
+                        .map(|p| Ty { kind: TyKind::Named { name: p.clone(), args: vec![] }, span })
+                        .collect(),
+                    index,
+                    path: Vec::new(),
+                    span,
+                });
+            }
+            let name = members.iter().map(|m| m.2.name.as_str()).collect::<Vec<_>>().join("+");
+            match self.lookup_class(&name) {
+                // Found by name: the same parents, linked the same way, or a
+                // different linking that this declaration cannot share.
+                Some(have) => {
+                    let same = have.valparams.len() == valparams.len()
+                        && extends.iter().all(|e| {
+                            have.ancestors.iter().any(|a| {
+                                a.path.is_empty()
+                                    && a.name == e.name
+                                    && a.index.iter().map(render_expr).eq(e.index.iter().map(render_expr))
+                            })
+                        });
+                    if !same {
+                        return err(
+                            format!(
+                                "these constraints share symbols at one carrier, so they are one \
+                                 dictionary of `{name}`; that class is already in scope with \
+                                 its parents' indices linked differently. Write the shared \
+                                 symbols in the same slots (issues/constraints-sharing-indices.md)"
+                            ),
+                            span,
+                        );
+                    }
+                }
+                None => self.elab_class(&ClassDecl {
+                    name: name.clone(),
+                    params: cparams.clone(),
+                    kinds: vec![None; cparams.len()],
+                    valparams,
+                    extends,
+                    fields: Vec::new(),
+                    span,
+                })?,
+            }
+            let p = &mut params[first.0];
+            p.ty = heather_syntax::class_ty(name, first.1.args.clone(), sym_exprs, p.ty.span);
+            // The merged binder stands where the earliest member was written.
+            let earliest = members.iter().map(|m| m.0).min().expect("a group has members");
+            if earliest != first.0 {
+                params.swap(earliest, first.0);
+            }
+            drop.extend(members.iter().map(|m| m.0).filter(|&i| i != earliest));
+        }
+        if drop.is_empty() {
+            return Ok(None);
+        }
+        let params = params
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !drop.contains(i))
+            .map(|(_, p)| p)
+            .collect();
+        Ok(Some(Decl { params, ..decl.clone() }))
     }
 
     /// The constraint binders' desugaring
@@ -2361,7 +3090,7 @@ impl Elaborator {
         // equality from Bool equality by the same resolved declaration keys
         // every other carrier uses, while the full instance type remains what
         // candidate trial checks against a goal.
-        let (head, head_key, equality) = if matches!(carrier.kind, TyKind::Eq(..)) {
+        let (head, head_key, headless_suffix) = if matches!(carrier.kind, TyKind::Eq(..)) {
             let cx = self.instance_head_cx(d)?;
             let (lowered, _) = self.elab_ty(&cx, carrier)?;
             let crate::Type::Id { ty, .. } = lowered else {
@@ -2383,7 +3112,16 @@ impl Elaborator {
             // cannot begin a source name, so this is a structural registry
             // component rather than a spelling that could resolve elsewhere.
             let equality_key = format!("#Eq@{}", owner.key);
-            (owner.written, equality_key, true)
+            (owner.written, equality_key, "#Eq")
+        } else if matches!(carrier.kind, TyKind::Fn { binder: None, implicit: false, .. }) {
+            // Implication is the other headless former a class is for:
+            // `Decide<P → Q>` decides a guard's side condition as written
+            // (issues/decide-bit-is-the-comparison.md). An arrow has no
+            // endpoint type to own it, so the class owns it: one structural
+            // key per class, `Decide::Decide#Fn`, which `#` keeps unwritable.
+            let owner = d.class.name.clone();
+            let key = format!("#Fn@{}", class_key);
+            (owner, key, "#Fn")
         } else {
             let Some(head) = head_name(carrier) else {
                 return err(
@@ -2407,7 +3145,7 @@ impl Elaborator {
                 );
             }
             let key = self.carrier_key(&head);
-            (head, key, false)
+            (head, key, "")
         };
         // The index (docs/operation-indexed-classes-design.md §3.1). Its
         // spelling joins the registry key, so it is computed from the
@@ -2433,16 +3171,15 @@ impl Elaborator {
             );
         }
         let index = self.index_spelling(&d.class, &class, d)?;
-        let equality_suffix = if equality { "#Eq" } else { "" };
         let prefix = if index.is_empty() {
-            format!("{head}::{}{equality_suffix}", class.name)
+            format!("{head}::{}{headless_suffix}", class.name)
         } else {
             // Two instances of one class at one carrier are the point (§3), so
             // the canonical name carries the index. `#` never begins an
             // identifier, so the suffix is unwritable and `Bool::Monoid(or)`
             // — the `T::C(args)` spelling of §5.1 — is how it is reached.
             format!(
-                "{head}::{}{equality_suffix}#{}",
+                "{head}::{}{headless_suffix}#{}",
                 class.name,
                 name_suffix(&index)
             )
@@ -2552,6 +3289,8 @@ impl Elaborator {
                     kind: m.kind,
                     is_meta: m.is_meta,
                     is_evidence: m.is_evidence,
+                    is_interface: m.is_interface, partial: None,
+                    value: m.value,
                     elaborates: m.elaborates.clone(),
                     name: full,
                     tyvars: d
@@ -2566,15 +3305,16 @@ impl Elaborator {
                         .collect(),
                     result: m.result.clone(),
                     decreases: m.decreases.clone(),
+                    unfolding: m.unfolding.clone(),
                     body: m.body.clone(),
                     span: m.span,
                 };
-                self.elab_decl(&decl)?;
+                self.elab_decl_unowned(&decl)?;
                 // Only *after* it lands does the name become visible to the
                 // members after it (design §4.2): a member cannot reference
                 // itself or a later one by short name.
                 member_names.push(m.name.clone());
-                self.instance_scope
+                self.scope.instance_scope
                     .push((m.name.clone(), format!("{prefix}::{}", m.name)));
             }
         }
@@ -2582,7 +3322,7 @@ impl Elaborator {
         // On the failure path the whole snapshot is restored, which clears it
         // too.
         let r = self.assemble_instance(d, &class, &head, &head_key, &prefix, &class_ty, &written);
-        self.instance_scope.clear();
+        self.scope.instance_scope.clear();
         r?;
         let global = qkey(self.names.module(), &prefix);
         let info = InstanceInfo { global, written, index, parameterized };
@@ -2680,38 +3420,15 @@ impl Elaborator {
 
         // An ancestor's arguments are written in terms of *the class's* type
         // parameters (design §3), so instantiating the class at `T⃗`
-        // instantiates its ancestors by the same positional substitution. The
-        // §3 restriction is what makes this a lookup rather than a walk.
+        // instantiates its ancestors by the same substitution, and their
+        // index by the instance's: a computed ancestor index (`RelId<A>`)
+        // becomes `RelId<Nat>` at `Nat` (docs/relation-indexed-algebra-design.md
+        // §3).
         let anc_args = |a: &ClassRef| -> Vec<Ty> {
-            a.args
-                .iter()
-                .map(|arg| match &arg.kind {
-                    TyKind::Named { name, args } if args.is_empty() => class
-                        .params
-                        .iter()
-                        .position(|p| p == name)
-                        .map(|i| d.class.args[i].clone())
-                        .unwrap_or_else(|| arg.clone()),
-                    _ => arg.clone(),
-                })
-                .collect()
+            ancestor_args_at(&class, &d.class.args, &d.class.index, a)
         };
-        // The same substitution at the index: an ancestor's index arguments are
-        // the child's own value-parameter names (`parent_view`'s restriction),
-        // so instantiating is the positional lookup again.
         let anc_index = |a: &ClassRef| -> Vec<Expr> {
-            a.index
-                .iter()
-                .map(|arg| match &arg.kind {
-                    ExprKind::Var(name) => class
-                        .valparams
-                        .iter()
-                        .position(|p| p.name == *name)
-                        .and_then(|i| d.class.index.get(i).cloned())
-                        .unwrap_or_else(|| arg.clone()),
-                    _ => arg.clone(),
-                })
-                .collect()
+            ancestor_index_at(&class, &d.class.args, &d.class.index, a)
         };
         let anc_ref = |a: &ClassRef| -> ClassRef {
             ClassRef {
@@ -2852,7 +3569,7 @@ impl Elaborator {
         let lit = span_expr(
             ExprKind::RecordLit {
                 name: class.name.clone(),
-                tyargs: if class.valparams.is_empty() {
+                tyargs: if class.valparams.is_empty() && !class.is_kinded() {
                     d.class.args.clone()
                 } else {
                     Vec::new()
@@ -3032,7 +3749,7 @@ impl Elaborator {
             let mut alit = span_expr(
                 ExprKind::RecordLit {
                     name: ainfo.name.clone(),
-                    tyargs: if ainfo.valparams.is_empty() {
+                    tyargs: if ainfo.valparams.is_empty() && !ainfo.is_kinded() {
                         aargs.clone()
                     } else {
                         Vec::new()
@@ -3235,6 +3952,7 @@ impl Elaborator {
     ///   index receives an alpha-stable registry component and is recovered by
     ///   the same candidate-head unification as a binder in the carrier.
     fn check_binders(&self, d: &InstanceDecl) -> R<()> {
+        self.check_lambda_carrier(d)?;
         let head = class_ref_written(&d.class);
         // A binder absent from the head is usually one of three wishes, and the
         // message routes all three: two have a spelling that works and the third
@@ -3285,6 +4003,69 @@ impl Elaborator {
             {
                 return err(routes("value binder", &p.name), p.span);
             }
+        }
+        Ok(())
+    }
+
+    /// A kinded class's carrier written as a λ must be one a use site can
+    /// learn: the constructor at a declaration's **declared slot**,
+    /// `λ (A: Type) => Result<A, E>` for `inductive Result<A, E> varies A`
+    /// (docs/lambda-carrier-instances-design.md §7.3). The unifier only ever
+    /// solves `?M(a) ≟ D<…>` to that constructor, so an instance at any
+    /// other λ would be an entry no inferred goal reaches — the same
+    /// unreachability [`Self::check_binders`] refuses for a binder.
+    fn check_lambda_carrier(&self, d: &InstanceDecl) -> R<()> {
+        if !self.traits.maybe_kinded(&d.class.name) {
+            return Ok(());
+        }
+        for arg in &d.class.args {
+            let TyKind::OfExpr(e) = &arg.kind else { continue };
+            let ExprKind::Lam { binders, body } = &e.kind else { continue };
+            let carrier = render_expr(e);
+            // `D<…, A>(v̄)`: a declaration with value parameters after its
+            // type parameters (`CoTree<R>(E)`) fixes its value arguments, so
+            // they must not mention the binder
+            // (issues/codata-type-constructor-carrier.md).
+            let (former, fixed_values) = match &body.kind {
+                ExprKind::App { head, args, .. } => (&**head, Some(args)),
+                _ => (&**body, None),
+            };
+            let values_free = |b: &str| {
+                fixed_values.is_none_or(|vs| vs.iter().all(|v| expr_var_count(v, b) == 0))
+            };
+            let named = crate::inductive::named_head(former)
+                .and_then(|(name, targs)| Some((name, targs, self.lookup_inductive(name)?.clone())))
+                .filter(|(_, _, ind)| {
+                    fixed_values.map_or(0, |vs| vs.len()) == ind.valparams.len()
+                        && binders.first().is_some_and(|b| values_free(&b.name))
+                });
+            let reason = match (binders.as_slice(), named) {
+                ([b], Some((name, targs, ind))) if !b.implicit && targs.len() == ind.params.len() => {
+                    let slot = ind.varies.unwrap_or(ind.params.len().saturating_sub(1));
+                    match crate::gendefs::slot_of_lambda(&b.name, targs) {
+                        Some(s) if s == slot => continue,
+                        _ => format!(
+                            "a use site learns `{name}`'s constructor at its declared slot, \
+                             `{}`{}, and only that one, so it would never select this \
+                             instance. Abstract `{}` alone (`λ ({}: Type) => {name}<…>`), \
+                             or name the constructor as a type-level `fn`",
+                            ind.params.get(slot).map_or("?", String::as_str),
+                            if ind.varies.is_some() { " (its `varies`)" } else { " (the last parameter)" },
+                            ind.params.get(slot).map_or("?", String::as_str),
+                            ind.params.get(slot).map_or("?", String::as_str),
+                        ),
+                    }
+                }
+                _ => "a use site learns a type constructor only as a declaration's \
+                      constructor at its declared slot (`λ (A: Type) => D<…, A, …>`), so it \
+                      would never select this instance. Name the constructor as a \
+                      type-level `fn` instead"
+                    .to_string(),
+            };
+            return err(
+                format!("an instance at the carrier `{carrier}` is unreachable: {reason}"),
+                arg.span,
+            );
         }
         Ok(())
     }
@@ -3397,15 +4178,18 @@ impl Elaborator {
             kind,
             is_meta: false,
             is_evidence: false,
+            is_interface: false, partial: None,
+            value: false,
             elaborates: None,
             name: name.to_string(),
             tyvars: d.tyvars.clone(),
             params: instance_params(d),
             result,
             decreases: None,
+            unfolding: Vec::new(),
             body: body_of(body),
             span,
         };
-        self.elab_decl(&decl)
+        self.elab_decl_unowned(&decl)
     }
 }

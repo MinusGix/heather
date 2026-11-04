@@ -1,0 +1,526 @@
+// A leaf compiled a node at a time (issues/native-compile-wider-leaves.md;
+// round 4 of docs/native-real-programs-plan.md): a leaf S4 does not take
+// whole runs as its nodes run one after another, each settled into the
+// environment before the next reads it (`Env::steps`), and each node's code
+// moves the environment on by that node's own leaf.
+//
+// The leaf's meaning keeps every result at every width (`Valuation::set`),
+// the environment keeps it as the number its port's width reads
+// (`Env::settle`). They agree at width 64 when every node works there
+// (`Node::wide`): a node then reads only words, and a result read back as a
+// word is the word the region holds, a comparison's bit included
+// (`Node::run_word`). So the two run alike (`Env::steps_settle`); where a
+// later node writes a word again, the earlier word put is put over
+// (`settle_put_over`).
+//
+// A pure node's code is S4's leaf of that one node, its output renamed so
+// the region reads every operand as it was (`Prog::node_alone`); a byte
+// node's is its own (native_compile_bytes).
+import native_source;
+import native_compile;
+import native_structured;
+import native_compile_facts;
+import native_compile_region;
+import native_compile_segments;
+import native_compile_leaf;
+import native_compile_bytes;
+import native_compile_homes;
+import native_alloc;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import linux_trees;
+import linux_x86_64_byte_memory;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_byte_memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Words put twice
+
+theorem List::put_twice<A>(i: Nat): (xs: List<A>) → (x, y, pad: A) → xs.put(i, x, pad).put(i, y, pad) = xs.put(i, y, pad) {
+    match i {
+        Zero => λ xs x y pad => match xs { Nil => refl, Cons(_, _) => refl },
+        Succ(_, ih) => λ xs x y pad => match xs {
+            Nil => cong_fn<List<A>, List<A>>(λ rest => Cons(pad, rest), ih(Nil, x, y, pad)),
+            Cons(h, rest) => cong_fn<List<A>, List<A>>(λ r => Cons(h, r), ih(rest, x, y, pad)),
+        },
+    }
+}
+
+theorem List::put_swap<A>(i: Nat): (k: Nat) → i ≠ k → (xs: List<A>) → (x, y, pad: A) →
+    xs.put(i, x, pad).put(k, y, pad) = xs.put(k, y, pad).put(i, x, pad) {
+    match i {
+        Zero => λ k => match k {
+            Zero => λ ne => false_elim(ne(refl)),
+            Succ(_) => λ _ xs x y pad => match xs { Nil => refl, Cons(_, _) => refl },
+        },
+        Succ(_, ih) => λ k => match k {
+            Zero => λ _ xs x y pad => match xs { Nil => refl, Cons(_, _) => refl },
+            Succ(l) => λ ne xs x y pad => match xs {
+                Nil => cong_fn<List<A>, List<A>>(λ rest => Cons(pad, rest), ih(l, λ e => ne(Nat::cong_succ(e)), Nil, x, y, pad)),
+                Cons(h, rest) => cong_fn<List<A>, List<A>>(λ r => Cons(h, r), ih(l, λ e => ne(Nat::cong_succ(e)), rest, x, y, pad)),
+            },
+        },
+    }
+}
+
+// A word put before the results settle is put over when a node writes it.
+theorem settle_put_over(nodes: List<Node>): (id: Nat) → Mem(id, nodes_writes(nodes)) → (words: List<Nat>) → (buffers: Buffers()) →
+    (args: List<List<BitVec(8)>>) → (a, c: Nat) → (after: Valuation()) →
+    Env(words.put(id, a, 0), buffers, args).settle(after, nodes_write_ports(nodes)) = Env(words.put(id, c, 0), buffers, args).settle(after, nodes_write_ports(nodes)) {
+    match nodes {
+        Nil => λ id m => false_elim(m),
+        Cons(node, rest) => λ id m words buffers args a c after => {
+            let out = node_output(node);
+            let k = after(out.width, out.id).toNat();
+            let tail = λ (ws: List<Nat>) => Env(ws, buffers, args).settle(after, nodes_write_ports(rest));
+            match id.eq_dec(out.id) {
+                Inl(e) => cong_fn<List<Nat>, Env>(tail, j(e, λ x _ => words.put(id, a, 0).put(x, k, 0) = words.put(id, c, 0).put(x, k, 0),
+                    trans(List::put_twice<Nat>(id, words, a, k, 0), sym(List::put_twice<Nat>(id, words, c, k, 0))))),
+                Inr(ne) => match m {
+                    Inl(e) => false_elim(ne(e)),
+                    Inr(later) => trans(cong_fn<List<Nat>, Env>(tail, List::put_swap<Nat>(id, out.id, ne, words, a, k, 0)),
+                        trans(settle_put_over(rest, id, later, words.put(out.id, k, 0), buffers, args, a, c, after),
+                            cong_fn<List<Nat>, Env>(tail, sym(List::put_swap<Nat>(id, out.id, ne, words, c, k, 0))))),
+                },
+            }
+        },
+    }
+}
+
+theorem Env::number_put(words: List<Nat>, buffers: Buffers(), args: List<List<BitVec(8)>>, id, k: Nat): Env(words.put(id, k, 0), buffers, args).number(id) = k {
+    j(sym(List::put_here(id, words, k, 0)), λ o _ => (match o { None => 0, Some(n) => n }) = k, refl)
+}
+
+// ---------------------------------------------------------------------------
+// A node run
+
+// A node writes only its output.
+theorem Node::step_other(self node: Node, values: Valuation(), w, id: Nat, ne: id ≠ node_output(node).id): node.step(values)(w, id) = values(w, id) {
+    Valuation::set_other(values, node_output(node).id, node.value(values), w, id, ne)
+}
+
+theorem Node::run_other(self node: Node, values: Valuation(), buffers: Buffers(), w, id: Nat, ne: id ≠ node_output(node).id):
+    node.run(values, buffers).values(w, id) = values(w, id) {
+    match node as λ n => id ≠ node_output(n).id → n.run(values, buffers).values(w, id) = values(w, id) {
+        Const(width, output, value) => λ ne => Const(width, output, value).step_other(values, w, id, ne),
+        Move(width, output, source) => λ ne => Move(width, output, source).step_other(values, w, id, ne),
+        Add(width, output, left, right) => λ ne => Add(width, output, left, right).step_other(values, w, id, ne),
+        Sub(width, output, left, right) => λ ne => Sub(width, output, left, right).step_other(values, w, id, ne),
+        BitAnd(width, output, left, right) => λ ne => BitAnd(width, output, left, right).step_other(values, w, id, ne),
+        BitOr(width, output, left, right) => λ ne => BitOr(width, output, left, right).step_other(values, w, id, ne),
+        BitXor(width, output, left, right) => λ ne => BitXor(width, output, left, right).step_other(values, w, id, ne),
+        ShiftLeft(width, output, value, amount) => λ ne => ShiftLeft(width, output, value, amount).step_other(values, w, id, ne),
+        LogicalShiftRight(width, output, value, amount) => λ ne => LogicalShiftRight(width, output, value, amount).step_other(values, w, id, ne),
+        ArithmeticShiftRight(width, output, value, amount) => λ ne => ArithmeticShiftRight(width, output, value, amount).step_other(values, w, id, ne),
+        UnsignedLessThan(width, output, left, right) => λ ne => UnsignedLessThan(width, output, left, right).step_other(values, w, id, ne),
+        SignedLessThan(width, output, left, right) => λ ne => SignedLessThan(width, output, left, right).step_other(values, w, id, ne),
+        Equal(width, output, left, right) => λ ne => Equal(width, output, left, right).step_other(values, w, id, ne),
+        BufferLoad(output, buffer, index) => λ ne => Valuation::set_other(values, output, load_value(buffers, buffer, index, values), w, id, ne),
+        BufferStore(output, buffer, index, value) => λ ne => Valuation::set_other(values, output,
+            load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values), w, id, ne),
+    }(ne)
+}
+
+theorem run_nodes_frame(nodes: List<Node>): (values: Valuation()) → (buffers: Buffers()) → (w, id: Nat) → absent(id, nodes_writes(nodes)).IsTrue() →
+    run_nodes(nodes, values, buffers).values(w, id) = values(w, id) {
+    match nodes {
+        Nil => λ values buffers w id _ => refl,
+        Cons(node, rest) => λ values buffers w id h => {
+            let parts = Bool::is_true_and(id.differs(node_output(node).id), absent(id, nodes_writes(rest)), h);
+            let s = node.run(values, buffers);
+            trans(run_nodes_frame(rest, s.values, s.buffers, w, id, parts.right),
+                node.run_other(values, buffers, w, id, id.differs_ne(node_output(node).id, parts.left)))
+        },
+    }
+}
+
+// Valuations that agree on words agree at a width that is 64.
+theorem Valuation::wide_same(values, other: Valuation(), same: (x: Nat) → values(64, x) = other(64, x), width: Nat,
+    wide: width.matches(64).IsTrue(), x: Nat): values(width, x) = other(width, x) {
+    j(sym(Nat::matches_eq(width, 64, wide)), λ w _ => values(w, x) = other(w, x), same(x))
+}
+
+theorem Node::step_here_same(self node: Node, values, other: Valuation(), w: Nat, at: node.value(values)(w) = node.value(other)(w)):
+    node.step(values)(w, node_output(node).id) = node.step(other)(w, node_output(node).id) {
+    trans(Valuation::set_here(values, node_output(node).id, node.value(values), w),
+        trans(at, sym(Valuation::set_here(other, node_output(node).id, node.value(other), w))))
+}
+
+// A wide node run over valuations that agree on words leaves the same
+// buffers and the same result at its port.
+theorem Node::run_wide(self node: Node, values, other: Valuation(), same: (x: Nat) → values(64, x) = other(64, x), buffers: Buffers(),
+    wide: node.wide().IsTrue()):
+    (node.run(values, buffers).buffers = node.run(other, buffers).buffers) ∧
+        (node.run(values, buffers).values(node_output(node).width, node_output(node).id) =
+            node.run(other, buffers).values(node_output(node).width, node_output(node).id)) {
+    let at = λ (width: Nat) (h: width.matches(64).IsTrue()) (x: Nat) => Valuation::wide_same(values, other, same, width, h, x);
+    match node as λ n => n.wide().IsTrue() → (n.run(values, buffers).buffers = n.run(other, buffers).buffers) ∧
+        (n.run(values, buffers).values(node_output(n).width, node_output(n).id) = n.run(other, buffers).values(node_output(n).width, node_output(n).id)) {
+        Const(width, output, value) => λ _ => ⟨refl, Const(width, output, value).step_here_same(values, other, width, refl)⟩,
+        Move(width, output, source) => λ h => ⟨refl, Move(width, output, source).step_here_same(values, other, width, at(width, h, source))⟩,
+        Add(width, output, left, right) => λ h => ⟨refl, Add(width, output, left, right).step_here_same(values, other, width,
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.add(y), at(width, h, left), at(width, h, right)))⟩,
+        Sub(width, output, left, right) => λ h => ⟨refl, Sub(width, output, left, right).step_here_same(values, other, width,
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.sub(y), at(width, h, left), at(width, h, right)))⟩,
+        BitAnd(width, output, left, right) => λ h => ⟨refl, BitAnd(width, output, left, right).step_here_same(values, other, width,
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.band(y), at(width, h, left), at(width, h, right)))⟩,
+        BitOr(width, output, left, right) => λ h => ⟨refl, BitOr(width, output, left, right).step_here_same(values, other, width,
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.bor(y), at(width, h, left), at(width, h, right)))⟩,
+        BitXor(width, output, left, right) => λ h => ⟨refl, BitXor(width, output, left, right).step_here_same(values, other, width,
+            eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.bxor(y), at(width, h, left), at(width, h, right)))⟩,
+        ShiftLeft(width, output, value, amount) => λ h => ⟨refl, ShiftLeft(width, output, value, amount).step_here_same(values, other, width,
+            cong_fn(λ (x: BitVec(width)) => x.shift_left(amount), at(width, h, value)))⟩,
+        LogicalShiftRight(width, output, value, amount) => λ h => ⟨refl, LogicalShiftRight(width, output, value, amount).step_here_same(values, other, width,
+            cong_fn(λ (x: BitVec(width)) => x.shift_right(amount), at(width, h, value)))⟩,
+        ArithmeticShiftRight(width, output, value, amount) => λ h => ⟨refl, ArithmeticShiftRight(width, output, value, amount).step_here_same(values, other,
+            width, cong_fn(λ (x: BitVec(width)) => x.arithmetic_shift_right(amount), at(width, h, value)))⟩,
+        UnsignedLessThan(width, output, left, right) => λ h => ⟨refl, UnsignedLessThan(width, output, left, right).step_here_same(values, other, 1,
+            cong_fn(λ (b: Bool) => bit_value(b, 1), eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.unsigned_lt_bit(y), at(width, h, left), at(width, h, right))))⟩,
+        SignedLessThan(width, output, left, right) => λ h => ⟨refl, SignedLessThan(width, output, left, right).step_here_same(values, other, 1,
+            cong_fn(λ (b: Bool) => bit_value(b, 1), eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.signed_lt_bit(y), at(width, h, left), at(width, h, right))))⟩,
+        Equal(width, output, left, right) => λ h => ⟨refl, Equal(width, output, left, right).step_here_same(values, other, 1,
+            cong_fn(λ (b: Bool) => bit_value(b, 1), eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.eq_bit(y), at(width, h, left), at(width, h, right))))⟩,
+        BufferLoad(output, buffer, index) => λ _ => ⟨refl, trans(Valuation::set_here(values, output, load_value(buffers, buffer, index, values), 64),
+            trans(cong_fn(λ (x: BitVec(64)) => word_value(byte_word(buffer_byte(buffers, buffer, x.toNat())), 64), same(index)),
+                sym(Valuation::set_here(other, output, load_value(buffers, buffer, index, other), 64))))⟩,
+        BufferStore(output, buffer, index, value) => λ _ => {
+            let kept = eq2(λ (i: BitVec(64)) (v: BitVec(64)) => store_byte(buffers, buffer, i.toNat(), low_byte(v)), same(index), same(value));
+            let mine = store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value)));
+            let theirs = store_byte(buffers, buffer, other(64, index).toNat(), low_byte(other(64, value)));
+            ⟨kept, trans(Valuation::set_here(values, output, load_value(mine, buffer, index, values), 64),
+                trans(eq2(λ (b: Buffers()) (x: BitVec(64)) => word_value(byte_word(buffer_byte(b, buffer, x.toNat())), 64), kept, same(index)),
+                    sym(Valuation::set_here(other, output, load_value(theirs, buffer, index, other), 64))))⟩
+        },
+    }(wide)
+}
+
+// A comparison's bit, read back as a word, is the word the region holds.
+theorem bit_word(b: Bool): BitVec::ofNat(bit_value(b, 1).toNat(), n := 64) = bit_value(b, 64) { match b { False => refl, True => refl } }
+
+theorem bit_step_word(values: Valuation(), output: Nat, b: Bool):
+    BitVec::ofNat(Valuation::set(values, output, bit_value(b), 1, output).toNat(), n := 64) = Valuation::set(values, output, bit_value(b), 64, output) {
+    trans(cong_fn(λ (x: BitVec(1)) => BitVec::ofNat(x.toNat(), n := 64), Valuation::set_here(values, output, bit_value(b), 1)),
+        trans(bit_word(b), sym(Valuation::set_here(values, output, bit_value(b), 64))))
+}
+
+theorem word_at_wide(values: Valuation(), width, id: Nat, wide: width.matches(64).IsTrue()): BitVec::ofNat(values(width, id).toNat(), n := 64) = values(64, id) {
+    j(sym(Nat::matches_eq(width, 64, wide)), λ w _ => BitVec::ofNat(values(w, id).toNat(), n := 64) = values(64, id), BitVec::ofNat_toNat(64, values(64, id)))
+}
+
+// A wide node's result, kept as its port's number and read back as a word,
+// is the word the region holds.
+theorem Node::run_word(self node: Node, values: Valuation(), buffers: Buffers(), wide: node.wide().IsTrue()):
+    BitVec::ofNat(node.run(values, buffers).values(node_output(node).width, node_output(node).id).toNat(), n := 64) =
+        node.run(values, buffers).values(64, node_output(node).id) {
+    match node as λ n => n.wide().IsTrue() →
+        BitVec::ofNat(n.run(values, buffers).values(node_output(n).width, node_output(n).id).toNat(), n := 64) = n.run(values, buffers).values(64, node_output(n).id) {
+        Const(width, output, value) => λ h => word_at_wide(Const(width, output, value).step(values), width, output, h),
+        Move(width, output, source) => λ h => word_at_wide(Move(width, output, source).step(values), width, output, h),
+        Add(width, output, left, right) => λ h => word_at_wide(Add(width, output, left, right).step(values), width, output, h),
+        Sub(width, output, left, right) => λ h => word_at_wide(Sub(width, output, left, right).step(values), width, output, h),
+        BitAnd(width, output, left, right) => λ h => word_at_wide(BitAnd(width, output, left, right).step(values), width, output, h),
+        BitOr(width, output, left, right) => λ h => word_at_wide(BitOr(width, output, left, right).step(values), width, output, h),
+        BitXor(width, output, left, right) => λ h => word_at_wide(BitXor(width, output, left, right).step(values), width, output, h),
+        ShiftLeft(width, output, value, amount) => λ h => word_at_wide(ShiftLeft(width, output, value, amount).step(values), width, output, h),
+        LogicalShiftRight(width, output, value, amount) => λ h => word_at_wide(LogicalShiftRight(width, output, value, amount).step(values), width, output, h),
+        ArithmeticShiftRight(width, output, value, amount) => λ h =>
+            word_at_wide(ArithmeticShiftRight(width, output, value, amount).step(values), width, output, h),
+        UnsignedLessThan(width, output, left, right) => λ _ => bit_step_word(values, output, values(width, left).unsigned_lt_bit(values(width, right))),
+        SignedLessThan(width, output, left, right) => λ _ => bit_step_word(values, output, values(width, left).signed_lt_bit(values(width, right))),
+        Equal(width, output, left, right) => λ _ => bit_step_word(values, output, values(width, left).eq_bit(values(width, right))),
+        BufferLoad(output, buffer, index) => λ _ => BitVec::ofNat_toNat(64, BufferLoad(output, buffer, index).run(values, buffers).values(64, output)),
+        BufferStore(output, buffer, index, value) => λ _ =>
+            BitVec::ofNat_toNat(64, BufferStore(output, buffer, index, value).run(values, buffers).values(64, output)),
+    }(wide)
+}
+
+// ---------------------------------------------------------------------------
+// A leaf as its nodes, one at a time
+
+fn Env::steps(self env: Env, nodes: List<Node>) → Env {
+    match nodes { Nil => env, Cons(node, rest) => env.computes([node]).steps(rest) }
+}
+
+// Run from a valuation whose words are the environment's, the leaf settles
+// as its nodes do one at a time.
+theorem Env::steps_settle(nodes: List<Node>): nodes_wide(nodes).IsTrue() → (values: Valuation()) → (env: Env) →
+    ((x: Nat) → values(64, x) = env.word(x)) →
+    Env(env.words, run_nodes(nodes, values, env.buffers).buffers, env.args).settle(run_nodes(nodes, values, env.buffers).values, nodes_write_ports(nodes)) =
+        env.steps(nodes) {
+    match nodes {
+        Nil => λ _ values env _ => refl,
+        Cons(node, rest) => λ wide values env agree => {
+            let parts = Bool::is_true_and(node.wide(), nodes_wide(rest), wide);
+            let out = node_output(node);
+            let s = node.run(values, env.buffers);
+            let after = run_nodes(rest, s.values, s.buffers);
+            let ran = node.run_wide(values, env.valuation(), agree, env.buffers, parts.left);
+            let first = Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), s.buffers, env.args);
+            let firsts: (first = env.computes([node])) = eq2(λ (k: Nat) (b: Buffers()) => Env(env.words.put(out.id, k, 0), b, env.args),
+                cong_fn(λ (x: BitVec(out.width)) => x.toNat(), ran.right), ran.left);
+            let agree_first = λ (x: Nat) => (match x.eq_dec(out.id) as λ _ => s.values(64, x) = first.word(x) {
+                Inl(e) => j(sym(e), λ y _ => s.values(64, y) = first.word(y),
+                    trans(sym(node.run_word(values, env.buffers, parts.left)),
+                        cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), sym(Env::number_put(env.words, s.buffers, env.args, out.id, s.values(out.width, out.id).toNat()))))),
+                Inr(ne) => trans(node.run_other(values, env.buffers, 64, x, ne), trans(agree(x),
+                    cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), sym(List::put_other(out.id, env.words, s.values(out.width, out.id).toNat(), 0, x, ne))))),
+            });
+            let over = (match absent(out.id, nodes_writes(rest)) as λ b => absent(out.id, nodes_writes(rest)) = b →
+                Env(env.words.put(out.id, after.values(out.width, out.id).toNat(), 0), after.buffers, env.args).settle(after.values, nodes_write_ports(rest)) =
+                    Env(env.words.put(out.id, s.values(out.width, out.id).toNat(), 0), after.buffers, env.args).settle(after.values, nodes_write_ports(rest)) {
+                True => λ fresh => cong_fn<Nat, Env>(λ k => Env(env.words.put(out.id, k, 0), after.buffers, env.args).settle(after.values, nodes_write_ports(rest)),
+                    cong_fn(λ (x: BitVec(out.width)) => x.toNat(),
+                        run_nodes_frame(rest, s.values, s.buffers, out.width, out.id, j(sym(fresh), λ b _ => b.IsTrue(), trivial)))),
+                False => λ written => settle_put_over(rest, out.id, absent_false_mem(out.id, nodes_writes(rest), written), env.words, after.buffers, env.args,
+                    after.values(out.width, out.id).toNat(), s.values(out.width, out.id).toNat(), after.values),
+            })(refl);
+            trans(over, trans(Env::steps_settle(rest, parts.right, s.values, first, agree_first), cong_fn<Env, Env>(λ e => e.steps(rest), firsts)))
+        },
+    }
+}
+
+theorem Env::computes_steps(self env: Env, nodes: List<Node>, wide: nodes_wide(nodes).IsTrue()): env.computes(nodes) = env.steps(nodes) {
+    Env::steps_settle(nodes, wide, env.valuation(), env, λ x => refl)
+}
+
+// ---------------------------------------------------------------------------
+// A pure node alone
+
+// Renamed, a node computes as it did, into its new output.
+theorem Node::renamed_step(self node: Node, spare: Nat, values: Valuation()):
+    node.renamed(spare).step(values)(node_output(node.renamed(spare)).width, node_output(node.renamed(spare)).id).toNat() =
+        node.value(values)(node_output(node).width).toNat() {
+    match node {
+        Const(width, _, value) => cong_fn(λ (x: BitVec(width)) => x.toNat(), Valuation::set_here(values, spare, Const(width, spare, value).value(values), width)),
+        Move(width, _, source) => cong_fn(λ (x: BitVec(width)) => x.toNat(), Valuation::set_here(values, spare, Move(width, spare, source).value(values), width)),
+        Add(width, _, left, right) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, Add(width, spare, left, right).value(values), width)),
+        Sub(width, _, left, right) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, Sub(width, spare, left, right).value(values), width)),
+        BitAnd(width, _, left, right) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, BitAnd(width, spare, left, right).value(values), width)),
+        BitOr(width, _, left, right) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, BitOr(width, spare, left, right).value(values), width)),
+        BitXor(width, _, left, right) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, BitXor(width, spare, left, right).value(values), width)),
+        ShiftLeft(width, _, value, amount) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, ShiftLeft(width, spare, value, amount).value(values), width)),
+        LogicalShiftRight(width, _, value, amount) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, LogicalShiftRight(width, spare, value, amount).value(values), width)),
+        ArithmeticShiftRight(width, _, value, amount) => cong_fn(λ (x: BitVec(width)) => x.toNat(),
+            Valuation::set_here(values, spare, ArithmeticShiftRight(width, spare, value, amount).value(values), width)),
+        UnsignedLessThan(width, _, left, right) => cong_fn(λ (x: BitVec(1)) => x.toNat(),
+            Valuation::set_here(values, spare, UnsignedLessThan(width, spare, left, right).value(values), 1)),
+        SignedLessThan(width, _, left, right) => cong_fn(λ (x: BitVec(1)) => x.toNat(),
+            Valuation::set_here(values, spare, SignedLessThan(width, spare, left, right).value(values), 1)),
+        Equal(width, _, left, right) => cong_fn(λ (x: BitVec(1)) => x.toNat(),
+            Valuation::set_here(values, spare, Equal(width, spare, left, right).value(values), 1)),
+        BufferLoad(_, buffer, index) => cong_fn(λ (x: BitVec(64)) => x.toNat(),
+            Valuation::set_here(values, spare, BufferLoad(spare, buffer, index).value(values), 64)),
+        BufferStore(_, buffer, index, value) => cong_fn(λ (x: BitVec(64)) => x.toNat(),
+            Valuation::set_here(values, spare, BufferStore(spare, buffer, index, value).value(values), 64)),
+    }
+}
+
+// A node renamed reads what it read.
+theorem Node::renamed_reads(self node: Node, output: Nat): function_ir_eval::Node::reads(node.renamed(output)) = function_ir_eval::Node::reads(node) {
+    match node {
+        Const(_, _, _) => refl,
+        Move(_, _, _) => refl,
+        Add(_, _, _, _) => refl,
+        Sub(_, _, _, _) => refl,
+        BitAnd(_, _, _, _) => refl,
+        BitOr(_, _, _, _) => refl,
+        BitXor(_, _, _, _) => refl,
+        ShiftLeft(_, _, _, _) => refl,
+        LogicalShiftRight(_, _, _, _) => refl,
+        ArithmeticShiftRight(_, _, _, _) => refl,
+        UnsignedLessThan(_, _, _, _) => refl,
+        SignedLessThan(_, _, _, _) => refl,
+        Equal(_, _, _, _) => refl,
+        BufferLoad(_, _, _) => refl,
+        BufferStore(_, _, _, _) => refl,
+    }
+}
+
+theorem Prog::within_node_alone(self p: Prog, layout: Layout, out: List<Nat>, node: Node, q: Prog, emitted: p.node_alone(layout, out, node) = Some(q)): p.Within(q) {
+    p.within_leaf_into(layout, out, [node.renamed(node.spare())], [node_output(node).id], q, emitted)
+}
+
+// A pure node's code: on with the environment its leaf computes, from the
+// node's reads and what is live after it.
+theorem Target::goes_node_alone(self t: Target, out: List<Nat>, env: Env, p, q: Prog, node: Node, pure: node.pure().IsTrue(),
+    apart: t.homes.apart(node_output(node).id, out).IsTrue(),
+    emitted: p.node_alone(t.layout(), out, node) = Some(q), within: q.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(q), out, tree, env.computes([node]))): t.At(prog_len(p), live_before(function_ir_eval::Node::reads(node), node_output(node).id, out), tree, env) {
+    let o = node_output(node);
+    let renamed = node.renamed(node.spare());
+    let v = env.valuation();
+    let k = node.value(v)(o.width).toNat();
+    let live = live_before(function_ir_eval::Node::reads(node), o.id, out);
+    let stored: (Env(env.words.put(o.id, renamed.step(v)(node_output(renamed).width, node_output(renamed).id).toNat(), 0), env.buffers, env.args) =
+            Env(env.words.put(o.id, k, 0), env.buffers, env.args)) =
+        cong_fn<Nat, Env>(λ n => Env(env.words.put(o.id, n, 0), env.buffers, env.args), node.renamed_step(node.spare(), v));
+    let computed: (Env(env.words.put(o.id, k, 0), env.buffers, env.args) = env.computes([node])) =
+        j(sym(node.run_pure(v, env.buffers, pure)),
+            λ s _ => Env(env.words.put(o.id, k, 0), env.buffers, env.args) = Env(env.words.put(o.id, s.values(o.width, o.id).toNat(), 0), s.buffers, env.args),
+            cong_fn<Nat, Env>(λ n => Env(env.words.put(o.id, n, 0), env.buffers, env.args),
+                cong_fn(λ (x: BitVec(o.width)) => x.toNat(), sym(Valuation::set_here(v, o.id, node.value(v), o.width)))));
+    let reads = λ (port: Port) (m: Mem(port, nodes_inputs([renamed]))) => {
+        let kept = ports_outside_mem(nodes_read_ports([renamed]), nodes_writes([renamed]), port, m);
+        match renamed.read_ports().mem_append(Nil, port, kept.left) as λ _ => Mem(port.id, live) {
+            Inl(here) => live_before_reads(function_ir_eval::Node::reads(node), o.id, out, port.id,
+                j(node.renamed_reads(node.spare()), λ xs _ => Mem(port.id, xs), renamed.read_port_id(port, here))),
+            Inr(never) => false_elim(never),
+        }
+    };
+    let keeps = λ (i: Nat) (m: Mem(i, out)) (unwritten: absent(i, [o.id]) = True) => {
+        let parts = Bool::is_true_and(i.differs(o.id), True, j(sym(unwritten), λ b _ => b.IsTrue(), trivial));
+        live_before_keeps(function_ir_eval::Node::reads(node), o.id, out, i, m, i.differs_ne(o.id, parts.left))
+    };
+    t.goes_leaf_into(live, out, env, p, q, [renamed], [o.id], emitted, within, tree, reads, keeps,
+        Bool::is_true_and_intro(t.homes.apart(o.id, out), True, apart, trivial),
+        j(sym(trans(stored, computed)), λ e _ => t.At(prog_len(q), out, tree, e), next))
+}
+
+// ---------------------------------------------------------------------------
+// Each node's code
+
+theorem Prog::within_one_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, names: Nat, c: Compiled,
+    emitted: p.one_node(layout, out, node, names) = Some(c)): p.Within(c.prog) {
+    (match node.pure() as λ b => (match b {
+            True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
+            False => p.byte_node(layout, out, node, names),
+        }) = Some(c) → p.Within(c.prog) {
+        True => (match alone: p.node_alone(layout, out, node) {
+            None => λ none => absurd(none),
+            Some(q) => λ same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog), p.within_node_alone(layout, out, node, q, alone)),
+        }),
+        False => p.within_byte_node(layout, out, names, c, node),
+    })(emitted)
+}
+
+theorem Target::goes_one_node(self t: Target, out: List<Nat>, env: Env, p: Prog, names: Nat, c: Compiled, tree: ITree<BitVec(64)>(Events::linux()), node: Node,
+    apart: t.homes.apart(node_output(node).id, out).IsTrue(),
+    emitted: p.one_node(t.layout(), out, node, names) = Some(c), within: c.prog.Within(t.program), next: t.At(prog_len(c.prog), out, tree, env.computes([node]))):
+    t.At(prog_len(p), live_before(function_ir_eval::Node::reads(node), node_output(node).id, out), tree, env) {
+    let layout = t.layout();
+    let live = live_before(function_ir_eval::Node::reads(node), node_output(node).id, out);
+    (match node.pure() as λ b => node.pure() = b → (match b {
+            True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
+            False => p.byte_node(layout, out, node, names),
+        }) = Some(c) → t.At(prog_len(p), live, tree, env) {
+        True => λ pure => (match alone: p.node_alone(layout, out, node) {
+            None => λ none => absurd(none),
+            Some(q) => λ same => {
+                let c_is = Option::some_inj(Compiled(q, names), c, same);
+                t.goes_node_alone(out, env, p, q, node, j(sym(pure), λ b _ => b.IsTrue(), trivial), apart, alone,
+                    j(sym(c_is), λ x _ => x.prog.Within(t.program), within), tree,
+                    j(sym(c_is), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes([node])), next))
+            },
+        }),
+        False => λ _ byte => t.goes_byte_node(out, env, p, names, c, tree, node, apart, byte, within, next),
+    })(refl, emitted)
+}
+
+theorem Prog::within_each_node(layout: Layout, out: List<Nat>, nodes: List<Node>): (p: Prog) → (names: Nat) → (c: Compiled) →
+    p.each_node(layout, out, nodes, names) = Some(c) → p.Within(c.prog) {
+    match nodes {
+        Nil => λ p names c some => j(Option::some_inj(Compiled(p, names), c, some), λ x _ => p.Within(x.prog), p.within_self()),
+        Cons(node, rest) => λ p names c => (match one: p.one_node(layout, nodes_live_in(rest, out), node, names) {
+            None => λ none => absurd(none),
+            Some(d) => λ more => p.within_trans(d.prog, c.prog, p.within_one_node(layout, nodes_live_in(rest, out), node, names, d, one),
+                Prog::within_each_node(layout, out, rest, d.prog, d.names, c, more)),
+        }),
+    }
+}
+
+theorem Target::goes_each_node(self t: Target, tree: ITree<BitVec(64)>(Events::linux()), out: List<Nat>, nodes: List<Node>): (env: Env) → (p: Prog) →
+    (names: Nat) → (c: Compiled) → p.each_node(t.layout(), out, nodes, names) = Some(c) → c.prog.Within(t.program) →
+    t.homes.nodes_apart(nodes, out).IsTrue() → t.At(prog_len(c.prog), out, tree, env.steps(nodes)) →
+    t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
+    match nodes {
+        Nil => λ env p names c some within _ next =>
+            j(sym(Option::some_inj(Compiled(p, names), c, some)), λ x _ => t.At(prog_len(x.prog), out, tree, env), next),
+        Cons(node, rest) => λ env p names c => {
+            let after = nodes_live_in(rest, out);
+            (match one: p.one_node(t.layout(), after, node, names) {
+                None => λ none => absurd(none),
+                Some(d) => λ more within apart next => {
+                    let parts = Bool::is_true_and(t.homes.apart(node_output(node).id, after), t.homes.nodes_apart(rest, out), apart);
+                    let w_d = d.prog.within_trans(c.prog, t.program, Prog::within_each_node(t.layout(), out, rest, d.prog, d.names, c, more), within);
+                    t.goes_one_node(after, env, p, names, d, tree, node, parts.left, one, w_d,
+                        t.goes_each_node(tree, out, rest, env.computes([node]), d.prog, d.names, c, more, within, parts.right, next))
+                },
+            })
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The leaf
+
+theorem Prog::pure_leaf_some(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, q: Prog, some: p.pure_leaf(layout, out, nodes) = Some(q)):
+    nodes_pure(nodes).IsTrue() ∧ p.leaf(layout, out, nodes) = Some(q) {
+    (match nodes_pure(nodes) as λ b => nodes_pure(nodes) = b → (match b { True => p.leaf(layout, out, nodes), False => None }) = Some(q) →
+        nodes_pure(nodes).IsTrue() ∧ p.leaf(layout, out, nodes) = Some(q) {
+        True => λ pure leafed => ⟨j(sym(pure), λ b _ => b.IsTrue(), trivial), leafed⟩,
+        False => λ _ none => absurd(none),
+    })(refl, some)
+}
+
+// Where a leaf's code starts, within it.
+theorem Prog::within_computes(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, names: Nat, c: Compiled,
+    emitted: p.computes(layout, out, nodes, names) = Some(c)): p.Within(c.prog) {
+    (match p.pure_leaf(layout, out, nodes) as λ o => p.pure_leaf(layout, out, nodes) = o → (match o {
+            Some(q) => Some(Compiled(q, names)),
+            None => match nodes_wide(nodes) { True => p.each_node(layout, out, nodes, names), False => None },
+        }) = Some(c) → p.Within(c.prog) {
+        Some(q) => λ whole same => j(Option::some_inj(Compiled(q, names), c, same), λ x _ => p.Within(x.prog),
+            p.within_leaf(layout, out, nodes, q, p.pure_leaf_some(layout, out, nodes, q, whole).right)),
+        None => λ _ => (match nodes_wide(nodes) {
+            True => λ each => Prog::within_each_node(layout, out, nodes, p, names, c, each),
+            False => λ none => absurd(none),
+        }),
+    })(refl, emitted)
+}
+
+// What a leaf's code claims: from its start with what its nodes need live, on
+// from its end with the environment the source computes and `out` live.
+theorem Target::goes_computes(self t: Target, out: List<Nat>, env: Env, p: Prog, nodes: List<Node>, names: Nat, c: Compiled,
+    emitted: p.computes(t.layout(), out, nodes, names) = Some(c), within: c.prog.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    checked: (t.homes.nodes_apart(nodes, out) && t.homes.all_apart(nodes_writes(nodes), out)).IsTrue(),
+    next: t.At(prog_len(c.prog), out, tree, env.computes(nodes))): t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
+    let layout = t.layout();
+    let aparts = Bool::is_true_and(t.homes.nodes_apart(nodes, out), t.homes.all_apart(nodes_writes(nodes), out), checked);
+    (match p.pure_leaf(layout, out, nodes) as λ o => p.pure_leaf(layout, out, nodes) = o → (match o {
+            Some(q) => Some(Compiled(q, names)),
+            None => match nodes_wide(nodes) { True => p.each_node(layout, out, nodes, names), False => None },
+        }) = Some(c) → t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
+        Some(q) => λ whole same => {
+            let leafed = p.pure_leaf_some(layout, out, nodes, q, whole);
+            let c_is = Option::some_inj(Compiled(q, names), c, same);
+            let w_q: q.Within(t.program) = j(sym(c_is), λ x _ => x.prog.Within(t.program), within);
+            let next_q: t.At(prog_len(q), out, tree, env.computes(nodes)) = j(sym(c_is), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes(nodes)), next);
+            let ran = run_nodes_pure(nodes, leafed.left, env.valuation(), env.buffers);
+            t.goes_leaf(out, env, p, q, nodes, leafed.right, w_q, tree, aparts.right,
+                j(ran, λ s _ => t.At(prog_len(q), out, tree, Env(env.words, s.buffers, env.args).settle(s.values, nodes_write_ports(nodes))), next_q))
+        },
+        None => λ _ => (match wide: nodes_wide(nodes) {
+            True => λ each => t.goes_each_node(tree, out, nodes, env, p, names, c, each, within, aparts.left,
+                j(env.computes_steps(nodes, j(sym(wide), λ b _ => b.IsTrue(), trivial)), λ e _ => t.At(prog_len(c.prog), out, tree, e), next)),
+            False => λ none => absurd(none),
+        }),
+    })(refl, emitted)
+}

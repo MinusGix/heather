@@ -53,6 +53,10 @@ pub enum AffineTree {
 pub enum FoldClass {
     /// Folds one step at a time.
     Opaque,
+    /// `ih` does not occur in the step: one ordinary step is the whole
+    /// fold, whatever the run, so the step is not probed
+    /// (`eval/probe.rs`).
+    Direct,
     /// One application of the step is `tree[ih]`. `uniform` means at every
     /// step; otherwise at every step but the innermost, whose `k` is the
     /// run's tail and was matched on.
@@ -107,6 +111,21 @@ impl AffineTree {
             }
         }
         Some(cur.clone())
+    }
+
+    /// The sub-tree at exactly `path`: no descent through a leaf, which
+    /// [`AffineTree::at`] allows and a reader of the tree's own shape must
+    /// not.
+    pub fn at_exact(&self, path: &[Proj]) -> Option<&AffineTree> {
+        let mut cur = self;
+        for step in path {
+            let AffineTree::Pair(fst, snd) = cur else { return None };
+            cur = match step {
+                Proj::Fst => fst,
+                Proj::Snd => snd,
+            };
+        }
+        Some(cur)
     }
 
     /// `outer ∘ inner`: the tree for two steps, the inner one first —

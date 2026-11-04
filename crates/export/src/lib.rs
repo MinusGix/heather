@@ -83,13 +83,11 @@ fn refuse<T>(what: &str) -> R<T> {
 }
 
 fn lvl(l: &Level) -> R<Lvl> {
-    Ok(Lvl(match l {
-        Level::Zero => 0,
-        Level::Succ(l) => lvl(l)?.0 + 1,
-        Level::Max(a, b) => lvl(a)?.0.max(lvl(b)?.0),
-        Level::Var(_) => return refuse("universe variable (level polymorphism)"),
-        Level::Omega => return refuse("level ω"),
-    }))
+    // Levels are canonical, so a variable-free one is a constant.
+    match l {
+        Level::Omega => refuse("level ω"),
+        _ => l.as_constant().map(Lvl).map_or_else(|| refuse("universe variable (level polymorphism)"), Ok),
+    }
 }
 
 fn app(f: Hx, args: Vec<Hx>) -> Hx {
@@ -746,6 +744,15 @@ impl Tr<'_> {
                 &[fst_level, snd_level],
                 vec![self.ty(fst_ty)?, self.lam_ty(fst_ty, snd_ty)?, self.tm(pair)?],
             )?,
+            // A packed vector literal is its pair chain to a target. The
+            // export's spelling pass already writes it out; this is for a
+            // term that reached here without one.
+            Term::VecLit { level, elem, zero, one, width, bits } => {
+                if !heather_kernel::term::vec_lit_in_range(*width, *bits) {
+                    return refuse("vector literal out of range");
+                }
+                self.tm(&heather_kernel::term::vec_lit_chain(level, elem, zero, one, *width, *bits))?
+            }
             // ---- checked spellings: the components are the target's to infer ----
             Term::PairAt { ty, fst, snd } => self.at_ty(ty, "pair", 2, vec![self.tm(fst)?, self.tm(snd)?])?,
             Term::InlAt { ty, val } => self.at_ty(ty, "inl", 2, vec![self.tm(val)?])?,

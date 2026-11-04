@@ -223,3 +223,5 @@ of them (logged on
 - **Completeness:** the diagonal limit of a regular sequence of reals, owned
   by [regular-cauchy-reals](../issues/regular-cauchy-reals.md) and stated
   against [real-completeness-interfaces](../issues/real-completeness-interfaces.md).
+  It landed in the fourth round
+  ([creal-completeness-round](creal-completeness-round.md)).

@@ -72,7 +72,7 @@ fn the_io_loop_reads_to_the_end_and_exits() {
         panic!("{}", err.render(DRAIN));
     }
     let wrong = drain_variant("// The exit:", |s| s.replace("theorem drain_exit(", "theorem drain_exit_one(")
-        .replace("Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(0)), state)", "Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(1)), state)")
+        .replace("Sim(X86Profile::io(4096).linux(), Ret(BitVec::ofNat(0)), state)", "Sim(X86Profile::io(4096).linux(), Ret(BitVec::ofNat(1)), state)")
         .replace("Ret(BitVec::ofNat(0)), page, state", "Ret(BitVec::ofNat(1)), page, state"));
     match e.elab_module_source("linux_wp_drain_exit_one", &wrong) {
         Ok(()) => panic!("an exit 0 passed off as exit 1 should be refused"),

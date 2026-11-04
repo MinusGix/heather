@@ -130,6 +130,66 @@ last pass, is not re-run. A lib-only PR relinks only the binaries that
 An elab edit relinks everything, so it gains nothing there. Family binaries
 share one binary across their member files, so a family is re-run whole.
 
+#### 2.2.1 Built (2026-10-30): selection in `--pr`
+
+Unfiltered, `scripts/test --pr` runs only the test files its diff from the
+merge base with `origin/master` can affect (`scripts/affected-targets.mjs`,
+called after the build; `HEATHER_PR_AFFECTED=all` runs every one). It is
+the fast lane's kind of optimisation (§5): unproven, with the sentinel's
+nightly full run as the reference that catches a miss.
+
+- **Compile-time inputs are Cargo's own.** Every unit's dep-info (`.d`)
+  names its sources and every `include_str!` target, so an elab test that
+  embeds a library prefix is selected by exactly the modules it embeds. A
+  test's inputs are its own `.d`, the libraries of every workspace package
+  it reaches (normal, dev and build edges from its own package, normal and
+  build edges beyond), each build script's `rerun-if-changed` paths, and its
+  own package's binaries (which an integration test may run). A dependency's
+  binary is not an input: `crates/cli/src/native/` reaches the CLI's tests,
+  not the elab tests that link only `heather_cli`'s library.
+- **Family members are selected one by one.** A family binary's `.d` is the
+  union of its members', so the selector splits it by the crate-root
+  modules the family file mounts: each owns its file, its `mod x;` children
+  and their literal includes, and a member's inputs are its own module's,
+  those of each root module it names (`crate::name`, `support::name`), and
+  whatever no module owns (support/mod.rs, a non-literal include), which
+  counts for every member. The runner takes the member list
+  (`--members`) and runs only those shards.
+- **Run-time readers are found by their sources.** A test file whose own
+  sources read files or spawn processes (`read_to_string`, `read_dir`,
+  `Command::new`, `CARGO_BIN_EXE_`, or the CLI's loader, world, showcase or
+  fmt entry points) may read anything under `lib/`, `examples/`,
+  `docs/showcase/` or the editor corpus, so any change there selects it.
+  These are the CLI's tests (the library gate, the showcase, the native
+  gates), the syntax corpus walks, the cache's store tests, and a handful
+  of elab files; about thirty of the suite's test files.
+- **Everything else falls back.** A file no `.d` names under a crate selects
+  that crate's tests, its dependents' and every run-time reader (a fixture
+  under `tests/` only the crate's own and the readers; bench data only the
+  crate's readers). Paths no test reads select nothing (`docs/` but
+  `docs/showcase/`, `issues/`, `perf/`, `scripts/` but the harness, any
+  `.md` no `.d` names). Anything else (a workspace manifest or lockfile,
+  the harness itself, a path outside the known directories, no merge base)
+  runs everything.
+- **Warm-ups and doc tests follow.** A warm-up runs when its own target is
+  selected (its prefix or the compiler changed, the only case in which its
+  images need building; the library gate for the CLI store); doc tests run
+  for the packages with a selected test. Nothing selected prints a zero
+  suite line. The native-gate rule of #260 still applies on top.
+
+Replayed over the last sixty merges, the shape is the one this section
+predicted. An edit to `crates/{kernel,syntax,elab}/src` still runs nearly
+everything, since every test links them; that is the coverage map's job,
+not this one's. Native rounds (`crates/cli/src/native/`, `lib/native/`,
+`lib/_tests/`) drop to the run-time readers plus their own files, about an
+eighth of the test files; a lib-only change runs the readers plus the elab
+files embedding the module, from about an eighth for a leaf module to about
+half for `int` or `list`; docs-only and survey PRs run nothing. Weighed by
+CPU the gain is smaller than by count, because the readers include the
+suite's heaviest files (the showcase, the library gate); narrowing a reader
+to the modules it actually loads (an import closure for the showcase, say)
+is the next step if the profile says those dominate.
+
 ### 2.3 What the lanes would mean
 
 | lane | when | what runs |
@@ -290,6 +350,10 @@ optimisation from "checked nightly" to "proven".
   for by the verdict store), so an elab edit no longer re-elaborates every
   library module. Plain `scripts/test` keeps the exact policy; a round runs
   it only when it changes the image format, the caches or the loader.
+  Since 2026-10-29 the native certificate gates run in it only when the diff
+  touches what they check, plus one smoke tool; the sentinel runs them
+  nightly (issues/pr-lane-cost-2026-10-29.md).
+  Since 2026-10-30 it runs only the test files the diff can affect (§2.2.1).
 - **`scripts/sentinel run`**, nightly from a scheduled cloud session on a
   fresh container at `master`: the exact-policy suite. Green, it publishes
   the image stores to the orphan branch `claude/sentinel-images` and reports

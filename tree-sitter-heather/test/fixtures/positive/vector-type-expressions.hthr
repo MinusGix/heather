@@ -6,3 +6,6 @@ fn from_named<A>(n: Nat, xs: V<A>(n)) -> [A; n] { xs }
 fn empty<A>() -> V<A>(0) { [] }
 fn one() -> V<Nat>(1) { [1] }
 fn two() -> V<Nat>(2) { [1, 2] }
+theorem literal_first(): [1, 2, 3] = three() { refl }
+theorem literal_first_hyp(xs: List<Nat>, h: [1, 2] = xs): [1, 2] = xs { h }
+theorem append_first(): [1] ++ [2] = [1, 2] { refl }

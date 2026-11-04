@@ -1,0 +1,97 @@
+// Probes of `regex` (`lib/std/text/regex.hthr`): the parser at the usual
+// spellings, the meaning at closed strings, and the `regex` prefix
+// generator, which rewrites `regex def name = "…";` into the parsed term and
+// its meaning (docs/value-definitions-design.md §4). Tests, not library:
+// nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+import regex;
+
+// ---------------------------------------------------------------------------
+// The parser.
+
+theorem parse_seq(): Regex::parse("ab") = Some(Seq(Range(97, 97), Range(98, 98))) {}
+
+theorem parse_alt_binds_loosest(): Regex::parse("ab|c") = Some(Alt(Seq(Range(97, 97), Range(98, 98)), Range(99, 99))) {}
+
+theorem parse_postfix_binds_tightest(): Regex::parse("ab*") = Some(Seq(Range(97, 97), Star(Range(98, 98)))) {}
+
+theorem parse_group(): Regex::parse("(ab)?") = Some(Alt(Eps, Seq(Range(97, 97), Range(98, 98)))) {}
+
+theorem parse_class(): Regex::parse("[0-9a-f]+") = Some(Seq(Alt(Range(48, 57), Range(97, 102)), Star(Alt(Range(48, 57), Range(97, 102))))) {}
+
+// A `-` that ends a class is itself.
+theorem parse_class_dash(): Regex::parse("[a-]") = Some(Alt(Range(97, 97), Range(45, 45))) {}
+
+theorem parse_escape(): Regex::parse("\\*") = Some(Range(42, 42)) {}
+
+theorem parse_empty(): Regex::parse("") = Some(Eps) {}
+
+theorem parse_unclosed_group(): Regex::parse("(ab") = None {}
+
+theorem parse_unclosed_class(): Regex::parse("[ab") = None {}
+
+theorem parse_stray_close(): Regex::parse("a)") = None {}
+
+theorem parse_leading_postfix(): Regex::parse("*a") = None {}
+
+// ---------------------------------------------------------------------------
+// The meaning.
+
+theorem star_accepts(): Seq(Range(97, 97), Star(Range(98, 98))).accepts("abbb") = True {}
+
+theorem star_accepts_none(): Seq(Range(97, 97), Star(Range(98, 98))).accepts("a") = True {}
+
+theorem seq_refuses_extra(): Seq(Range(97, 97), Range(98, 98)).accepts("abc") = False {}
+
+theorem no_match_refuses_empty(): NoMatch.accepts("") = False {}
+
+// ---------------------------------------------------------------------------
+// The generator: `is_hex` is the meaning of its term, by definition.
+
+regex def is_hex = "[0-9a-f]+";
+
+theorem hex_accepts(): is_hex("c0ffee") = True {}
+
+theorem hex_refuses_upper(): is_hex("c0fFee") = False {}
+
+theorem hex_refuses_empty(): is_hex("") = False {}
+
+theorem hex_is_its_meaning(s: String): is_hex(s) = is_hex::term.accepts(s) {}
+
+theorem hex_term(): is_hex::term = Seq(Alt(Range(48, 57), Range(97, 102)), Star(Alt(Range(48, 57), Range(97, 102)))) {}
+
+// A written type is the value's; the generator takes the value as data.
+regex def ident: String = "[a-z_][a-z0-9_]*";
+
+theorem ident_accepts(): ident("x_1") = True {}
+
+theorem ident_refuses_digit_first(): ident("1x") = False {}
+
+// Negative control: the meaning is not "anything".
+// expect-error(kernel): `refl` needs both sides to be definitionally equal
+theorem hex_wrong(): is_hex("xyz") = True { refl }
+
+// A string that spells no expression is refused, and nothing is declared.
+// expect-error: is not a regular expression
+regex def unclosed = "(ab";
+
+// expect-error: unbound name `unclosed`
+theorem unclosed_used(): unclosed("ab") = True {}
+
+// The value is handed to the generator at the type it asks for, and the
+// call is checked before it runs. (A bare numeral here is refused earlier,
+// as `no instance for Numeral<String>`, now that the common prelude puts
+// `Numeral` in every module's scope.)
+// expect-error: the generator's call is ill-typed
+regex def numeric = Nat::add(2, 3);
+
+// expect-error: is not the expected type here
+regex def boolean = True;

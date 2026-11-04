@@ -38,7 +38,11 @@ const MODULES: &[(&str, &str)] = &[
     ("option", OPTION),
     ("pair", PAIR),
     ("list", LIST),
+    ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
+    ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
+    ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
     ("algebra", ALGEBRA),
+    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("int", INT),
     ("omega", OMEGA),
 ];
@@ -221,12 +225,12 @@ fn a_self_call_under_a_lambda_is_refused_but_the_function_still_checks() {
 }
 
 #[test]
-fn a_match_on_a_computed_scrutinee_is_outside_the_walk() {
-    // `merge`'s `match nat::Nat::le_dec(x, y)`: the anchors do not reduce past a
-    // stuck scrutinee, and equating the arms would need the body rendered
-    // into the motive. Amends §3, which had claimed `merge`.
-    let msg = elab_err(
-        r#"
+fn a_match_on_a_computed_scrutinee_is_spelled_on_both_sides() {
+    // `merge`'s `match nat::Nat::le_dec(x, y)`: the anchors do not reduce past
+    // a stuck scrutinee, so the walk spells the match on both sides at a
+    // motive generalizing the scrutinee (§3's second amendment;
+    // issues/decreases-unfold-convoy-scrutinee.md). Outside the walk before.
+    ok(r#"
         theorem succ_add_le(a, b: Nat): Succ(a + b) <= Succ(a) + b {
             match b { Zero => nat::Nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
         }
@@ -244,10 +248,30 @@ fn a_match_on_a_computed_scrutinee_is_outside_the_walk() {
             on ?dec1 := succ_add_le(xt.len(), yt.len());
             on ?dec2 := nat::Nat::le_refl(Succ(xt.len()) + yt.len());
         }
-        theorem cite(xs, ys: List<Nat>): merge(xs, ys) = merge(xs, ys) { merge_unfold(xs, ys) }
-        "#,
-    );
-    assert!(msg.contains("scrutinee is not a variable"), "{msg}");
+        theorem cite(x, y: Nat, xt, yt: List<Nat>): merge(Cons(x, xt), Cons(y, yt)) = match nat::Nat::le_dec(x, y) {
+            Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
+            Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
+        } { merge_unfold(Cons(x, xt), Cons(y, yt)) }
+    "#);
+}
+
+#[test]
+fn a_convoy_on_a_computed_scrutinee_gets_its_equation() {
+    // `match h: c`, the loop test of every measured `runtime fn`: the
+    // obligation reads `h`, whose type names the walk's alias of `c`; the
+    // lifted obligation states it about `c` itself, and the walk spells the
+    // convoy on both sides (issues/decreases-unfold-convoy-scrutinee.md).
+    ok(r#"
+        fn cd(n, acc: Nat) -> Nat decreases n {
+            match h: n.leb(0) {
+                True => acc,
+                False => cd(n - 1, acc + n),
+            }
+        }
+        theorem cite(n, acc: Nat): cd(n, acc) = match h: n.leb(0) { True => acc, False => cd(n - 1, acc + n) } {
+            cd_unfold(n, acc)
+        }
+    "#);
 }
 
 // -- back inside the walk -----------------------------------------------------
@@ -297,3 +321,210 @@ fn a_member_by_measure_gets_its_equation_under_the_qualified_name() {
         }
     "#);
 }
+
+const MERGE: &str = r#"
+theorem succ_add_le(a, b: Nat): Succ(a + b) <= Succ(a) + b {
+    match b { Zero => nat::Nat::le_refl(Succ(a)), Succ(k) => succ_add_le(a, k) }
+}
+fn merge(xs, ys: List<Nat>) -> List<Nat> decreases xs.len() + ys.len() {
+    match xs {
+        Nil => ys,
+        Cons(x, xt) => match ys {
+            Nil => Cons(x, xt),
+            Cons(y, yt) => match nat::Nat::le_dec(x, y) {
+                Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
+                Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
+            },
+        },
+    }
+    on ?dec1 := succ_add_le(xt.len(), yt.len());
+    on ?dec2 := nat::Nat::le_refl(Succ(xt.len()) + yt.len());
+}
+"#;
+
+#[test]
+fn a_match_on_a_computed_scrutinee_is_walked_through_its_own_eliminator() {
+    // `merge`'s `match nat::Nat::le_dec(x, y)` reduces neither anchor, so the
+    // walk spells both sides of the match out at a fresh scrutinee and
+    // re-matches on it (docs/dependent-match-compiler-design.md §8). It was
+    // this file's negative control until then. The customer is the
+    // `Cons`/`Cons` case at open lists, whose right-hand side is the
+    // computed match with the self-calls as written.
+    ok(&format!("{MERGE}{}", r#"
+        theorem merge_cons(x, y: Nat, xt, yt: List<Nat>):
+            merge(Cons(x, xt), Cons(y, yt)) = (match nat::Nat::le_dec(x, y) {
+                Inl(_) => Cons(x, merge(xt, Cons(y, yt))),
+                Inr(_) => Cons(y, merge(Cons(x, xt), yt)),
+            }) { merge_unfold(Cons(x, xt), Cons(y, yt)) }
+    "#));
+    // Negative control: the equation is about the body, not a restatement of
+    // the call, so citing it for `merge(xs, ys) = merge(xs, ys)` at open
+    // lists is the kernel's refusal (the two sides are not convertible
+    // there, which is why the equation exists).
+    support::assert_refused(
+        &mut base(),
+        "m",
+        &format!("{IMPORTS}{MERGE}{}", r#"
+            theorem cite(xs, ys: List<Nat>): merge(xs, ys) = merge(xs, ys) { merge_unfold(xs, ys) }
+        "#),
+        support::Refusal::Kernel,
+    );
+}
+
+const CD_LOOP: &str = r#"
+record CdState { m: Nat, out: List<Nat> }
+fn cd_loop(s: CdState) -> CdState decreases s.m {
+    match h: Nat::leb(s.m, 0) {
+        True => s,
+        False => cd_loop(CdState(s.m - 1, Cons(s.m, s.out))),
+    }
+}
+"#;
+
+#[test]
+fn a_match_with_an_equation_binding_is_walked_and_its_obligation_takes_the_equation() {
+    // The `while … decreases` shape (docs/sequencing-surface-design.md §7.3):
+    // the obligation is `omega`'s and reads the arm's equation, so the lifted
+    // `cd_loop#obl_1` quantifies it, stated about `Nat::leb(s.m, 0)` and not
+    // about the `__dec_scrut_N` name the body binds it to; and the walk goes
+    // through the convoy.
+    ok(&format!("{CD_LOOP}{}", r#"
+        theorem cd_stmt(s: CdState): cd_loop(s) = (match h: Nat::leb(s.m, 0) {
+            True => s,
+            False => cd_loop(CdState(s.m - 1, Cons(s.m, s.out))),
+        }) { cd_loop_unfold(s) }
+        theorem cd_three(): cd_loop(CdState(3, Nil)) = CdState(0, [1, 2, 3]) { refl }
+    "#));
+    // The same equation binding on a variable scrutinee, which reduces into
+    // its arms, is the convoy rule too.
+    ok(r#"
+        fn hv2(n: Nat) -> Nat decreases n {
+            match h: n {
+                Zero => 0,
+                Succ(k) => Succ(hv2(k)),
+            }
+        }
+        theorem hv2_succ(k: Nat): hv2(Succ(k)) = Succ(hv2(k)) { hv2_unfold(Succ(k)) }
+    "#);
+}
+
+#[test]
+fn a_computed_scrutinee_at_an_open_element_type() {
+    // The other axes for the convoy rule: an **open** `A`, the computed
+    // scrutinee `p(x)` under a variable refinement of `xs`, and the equation
+    // transported along the arm's guard rather than cited as the whole proof.
+    ok(r#"
+        import bool;
+        fn keep_while<A>(xs: List<A>, p: A -> Bool) -> List<A> decreases xs.len() {
+            match xs {
+                Nil => Nil,
+                Cons(x, xt) => match h: p(x) {
+                    True => Cons(x, keep_while(xt, p)),
+                    False => Nil,
+                },
+            }
+        }
+        theorem kw_true<A>(x: A, xt: List<A>, p: A -> Bool, h: p(x) = True):
+            keep_while(Cons(x, xt), p) = Cons(x, keep_while(xt, p)) {
+            j(h,
+              λ b _ => keep_while(Cons(x, xt), p) = (match e: b as λ _ => List<A> {
+                  True => Cons(x, keep_while(xt, p)),
+                  False => Nil,
+              }),
+              keep_while_unfold(Cons(x, xt), p))
+        }
+    "#);
+}
+
+#[test]
+fn a_recursive_call_in_a_scrutinee_is_refused_but_the_function_still_checks() {
+    let src = r#"
+        fn nest(n: Nat) -> Nat decreases n {
+            match n {
+                Zero => 0,
+                Succ(k) => match nest(k) { Zero => 0, Succ(_) => 1 },
+            }
+            on ?dec1 := nat::Nat::lt_succ_self(k);
+        }
+    "#;
+    ok(src);
+    let msg = elab_err(&format!("{src}{}", r#"
+        theorem cite(n: Nat): nest(n) = nest(n) { nest_unfold(n) }
+    "#));
+    assert!(msg.contains("a recursive call in a `match` scrutinee"), "{msg}");
+}
+
+#[test]
+fn a_plain_match_on_a_computed_scrutinee_gets_its_equation_where_an_obligation_reads_it() {
+    // No `h:` written: `half`'s obligation `n - 2 < n` needs the guard, so
+    // the lowering binds the arm's equation for the lifted obligation alone
+    // (docs/dependent-match-compiler-design.md §4, §13), and the companions
+    // walk the convoy it leaves in `half#body`. The unfolding equation states
+    // the match as written.
+    ok(r#"
+        import bool;
+        fn half(n: Nat) -> Nat decreases n {
+            match Nat::leb(n, 1) {
+                True => 0,
+                False => Succ(half(n - 2)),
+            }
+        }
+        theorem half_stmt(n: Nat): half(n) = (match Nat::leb(n, 1) {
+            True => 0,
+            False => Succ(half(n - 2)),
+        }) { half_unfold(n) }
+        theorem half_seven(): half(7) = 3 { refl }
+    "#);
+    // An open element type, the candidate nested under an arm that recurses
+    // through a second match, and the equation read by `omega` there.
+    ok(r#"
+        import bool;
+        fn take_n<A>(n: Nat, xs: List<A>) -> List<A> decreases n {
+            match Nat::leb(n, 0) {
+                True => Nil,
+                False => match xs {
+                    Nil => Nil,
+                    Cons(x, xt) => Cons(x, take_n(n - 1, xt)),
+                },
+            }
+        }
+        theorem take_n_stmt<A>(n: Nat, xs: List<A>): take_n(n, xs) = (match Nat::leb(n, 0) as λ _ => List<A> {
+            True => Nil,
+            False => match xs { Nil => Nil, Cons(x, xt) => Cons(x, take_n(n - 1, xt)) },
+        }) { take_n_unfold(n, xs) }
+        theorem take_two(): take_n<Nat>(2, [7, 8, 9]) = [7, 8] { refl }
+    "#);
+    // A candidate no obligation reads keeps its plain match, and unfolds the
+    // same way.
+    ok(r#"
+        import bool;
+        fn walk(n: Nat) -> Nat decreases n {
+            match n {
+                Zero => 0,
+                Succ(k) => match Nat::leb(k, 3) { True => walk(k), False => Succ(walk(k)) },
+            }
+        }
+        theorem walk_succ(k: Nat): walk(Succ(k)) =
+            (match Nat::leb(k, 3) { True => walk(k), False => Succ(walk(k)) }) { walk_unfold(Succ(k)) }
+    "#);
+}
+
+#[test]
+fn an_obligation_the_guard_does_not_give_is_still_refused() {
+    // Negative control: the equation is `n.leb(1) = False`, which does not
+    // give `n - 1 + 1 < n`; the lifted obligation fails, the un-lifted
+    // fallback fails with it, and the declaration is refused.
+    let msg = elab_err(r#"
+        import bool;
+        fn bad(n: Nat) -> Nat decreases n {
+            match Nat::leb(n, 1) {
+                True => 0,
+                False => Succ(bad(n - 1 + 1)),
+            }
+        }
+    "#);
+    assert!(msg.contains("omega"), "{msg}");
+}
+
+// -- back inside the walk -----------------------------------------------------
+

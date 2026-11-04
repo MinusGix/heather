@@ -26,22 +26,28 @@ const MODULES: &[(&str, &str)] = &[
     ("option", include_str!("../../../lib/std/core/option.hthr")),
     ("pair", include_str!("../../../lib/std/core/pair.hthr")),
     ("list", include_str!("../../../lib/std/data/list.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
-    ("int", include_str!("../../../lib/std/num/int.hthr")),
-    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
-    ("ring", include_str!("../../../lib/std/tactic/ring.hthr")),
     ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
     ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
     ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
+    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
+    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
+    ("int", include_str!("../../../lib/std/num/int.hthr")),
+    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ("order", include_str!("../../../lib/std/algebra/order.hthr")),
+    ("lattice", include_str!("../../../lib/std/algebra/lattice.hthr")),
     ("semiring", include_str!("../../../lib/std/algebra/semiring.hthr")),
+    ("ring", include_str!("../../../lib/std/tactic/ring.hthr")),
     ("ordered_field", include_str!("../../../lib/std/algebra/ordered_field.hthr")),
+    ("big_operator", include_str!("../../../lib/std/algebra/big_operator.hthr")),
+    ("linarith", include_str!("../../../lib/std/tactic/linarith.hthr")),
     ("rat", include_str!("../../../lib/std/num/rat.hthr")),
     ("dyadic", include_str!("../../../lib/std/num/float/dyadic.hthr")),
     ("float", include_str!("../../../lib/std/num/float/float.hthr")),
     ("round", include_str!("../../../lib/std/num/float/round.hthr")),
     ("error", include_str!("../../../lib/std/num/float/error.hthr")),
     ("arith", include_str!("../../../lib/std/num/float/arith.hthr")),
+    ("window", include_str!("../../../lib/std/num/float/window.hthr")),
+    ("literal", include_str!("../../../lib/std/num/float/literal.hthr")),
 ];
 
 static BASE: OnceLock<SemanticImage> = OnceLock::new();
@@ -51,7 +57,8 @@ fn base() -> Elaborator {
 }
 
 const IMPORTS: &str = "import logic; import bool; import nat; import option; import list; import int; import omega; import rat;
-    import dyadic; import float; import round; import error; import arith; import relation_props; import algebra_rel; import ordered_field;\n";
+    import dyadic; import float; import round; import error; import arith; import relation_props; import algebra_rel; import ordered_field;
+    import literal;\n";
 
 fn mismatches(prefix: &str, cases: &[&str]) {
     for (i, case) in cases.iter().enumerate() {
@@ -127,5 +134,36 @@ fn a_product_of_too_many_roundings_is_refused() {
             (List::prod_one_add([d1, d2, d3, d4]) -1).abs() <= e2m1().gamma(NearestEven, 4)
             {{ e2m1().gamma_prod(NearestEven, [d1, d2, d3, d4], h, trivial) }}"),
         Refusal::Says("`trivial` proves `True`"),
+    );
+}
+
+/// How many inexact-literal warnings `src` raises; it must check.
+fn inexact_warnings(src: &str) -> usize {
+    let mut e = base();
+    e.elab_module_source("m", &format!("{IMPORTS}{src}"))
+        .unwrap_or_else(|err| panic!("expected this to check, got: {err}\n{src}"));
+    e.take_warnings().iter().filter(|w| w.lint == heather_elab::Lint::InexactLiteral).count()
+}
+
+/// The warning is the carrier's `exact` bit, run: a decimal the format holds
+/// is silent, one it rounds (or overflows) is not, and `Rat` holds them all.
+#[test]
+fn an_inexact_decimal_literal_draws_a_warning() {
+    assert_eq!(inexact_warnings("fn a() → Float(binary64()) { 0.1 }"), 1);
+    assert_eq!(inexact_warnings("fn a() → Float(binary16()) { 1e5 }"), 1);
+    assert_eq!(inexact_warnings("fn a() → Float(binary64()) { 0.5 }"), 0);
+    assert_eq!(inexact_warnings("fn a() → Float(binary32()) { 1e10 }"), 0);
+    assert_eq!(inexact_warnings("fn a() → Rat { 0.1 }"), 0);
+}
+
+/// A hex float must be exact: one with a bit past the format's precision is
+/// refused, and the refusal says so rather than spelling the obligation.
+#[test]
+fn an_unrepresentable_hex_float_is_refused() {
+    support::assert_refused(
+        &mut base(),
+        "hex_inexact",
+        &format!("{IMPORTS} fn bad() → Float(binary64()) {{ 0x1.00000000000008p0 }}"),
+        Refusal::Says("a hex float must be exact"),
     );
 }

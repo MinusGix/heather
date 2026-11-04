@@ -5,7 +5,7 @@ labels: [frontend,elaboration,metaprogramming,design]
 area: tactics
 milestone: [tac-general]
 created: 2026-07-27
-updated: 2026-08-22
+updated: 2026-10-27
 ---
 
 A general `cong` cannot have its function argument implicit today, so the
@@ -224,3 +224,4 @@ Decisions:
   where it supplies a subgoal, but—as predicted—does not cross the conversion
   wall. The successful site now dogfoods `cong(mul_one(a))`; the other four
   retain `cong_int` and their explicit contexts.
+- 2026-10-27: Customer filed 2026-10-27: [[monotonicity-tactic]] (gcongr) finds the shared pattern of an inequality's two sides by this anti-unification.

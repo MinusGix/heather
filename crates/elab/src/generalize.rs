@@ -26,7 +26,7 @@ use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
-use heather_syntax::{Arm, Expr, ExprKind, LamBinder, Span};
+use heather_syntax::{Arm, Expr, ExprKind, LamBinder, Pat, Span};
 
 use crate::surface::walk_expr;
 use crate::{Cx, Elaborator};
@@ -61,7 +61,9 @@ impl Elaborator {
     /// Which of the declaration's parameters a self-call inside `arms` passes
     /// at something other than the parameter itself, closed under dependency
     /// (a later parameter whose type mentions a generalized one is generalized
-    /// too, since its type is only right at the generalized value). Ascending.
+    /// too, since its type is only right at the generalized value; and an
+    /// earlier value implicit a generalized one's type mentions, which the
+    /// self-call infers). Ascending.
     ///
     /// Name-based, and therefore a sizing decision only (module docs).
     pub(crate) fn varying_params(&self, cx: &Cx, arms: &[Arm], dec: usize) -> Vec<usize> {
@@ -108,29 +110,177 @@ impl Elaborator {
         if varying.is_empty() {
             return varying;
         }
-        varying.sort_unstable();
-        // Dependency closure, in declaration order so it is transitive: a
-        // parameter's type is scoped in the prefix before it, where a
-        // generalized parameter `q < p` is `Var(p - 1 - q)`.
-        let first = varying[0];
-        for p in first + 1..s.params.len() {
-            if varying.contains(&p) {
-                continue;
+        // Dependency closure, to a fixpoint (a parameter's type is scoped in
+        // the prefix before it, where parameter `q < p` is `Var(p - 1 - q)`):
+        //
+        // - forward: a later parameter whose type mentions a generalized one
+        //   is generalized too, since its type is only right at the
+        //   generalized value;
+        // - backward, for a value implicit: an earlier `{q}` that a
+        //   generalized parameter's type mentions is determined by the
+        //   varied arguments (`g(k, x + 10, refl)` at `h: e = x` means
+        //   `e := x + 10`), so it is generalized and the self-call infers it
+        //   (issues/recursion-implicit-inferred-at-self-call.md). Kept
+        //   unchanged, the ih would see the top call's `e`.
+        let mentions = |p: usize, q: usize| {
+            q < p
+                && cx.gamma.entries.get(p).is_some_and(|entry| {
+                    entry.ty.abstract_local(&Term::Var(LocalVar((p - 1 - q) as u32))).is_some()
+                })
+        };
+        loop {
+            let before = varying.len();
+            for p in s.n_tyvars..s.params.len() {
+                if varying.contains(&p) || p == dec {
+                    continue;
+                }
+                let forward = varying.iter().any(|&q| mentions(p, q));
+                // An index the scrutinee's type mentions is rebound by the
+                // indexed route, never generalized (above).
+                let backward = s.params[p].1
+                    && !fixed.contains(&p)
+                    && varying.iter().any(|&q| mentions(q, p));
+                if forward || backward {
+                    varying.push(p);
+                }
             }
-            let Some(entry) = cx.gamma.entries.get(p) else { break };
-            let depends = varying
-                .iter()
-                .filter(|&&q| q < p)
-                .any(|&q| entry.ty.abstract_local(&Term::Var(LocalVar((p - 1 - q) as u32))).is_some());
-            // `p == dec` cannot happen: the scrutinee's dependencies were
-            // excluded above, so nothing it depends on is in `varying`.
-            if !depends || p == dec {
-                continue;
+            if varying.len() == before {
+                break;
             }
-            varying.push(p);
         }
         varying.sort_unstable();
         varying
+    }
+
+    /// The locals a `match` on the local `scrutinee` refines: every binder
+    /// after it whose type mentions it (directly or through another) and that
+    /// an arm names or the goal mentions, with the binders their types need
+    /// (issues/elab-match-refines-hypothesis-kernel-rejects.md). Generalized
+    /// into the motive like a varied parameter, so in the `Zero` arm of
+    /// `match n` a hypothesis `h: ¬(n = 0)` *is* `¬(0 = 0)` — in the kernel's
+    /// term, not only in what the arm's author was told. Ascending.
+    ///
+    /// Two kinds of binder stay where they are. A hidden `#` binder or a
+    /// reserved `__` one is the machinery's (an enclosing ih, a convoy
+    /// window, a measure recursion's `__dec_h`), and its reader states what
+    /// it needs about the binder as it was: the measure rewrite derives each
+    /// call's obligation from the unrefined `__dec_h` itself. And a structural
+    /// recursion's own `match` keeps its motive the recursion's: a self-call
+    /// can pass only declared parameters, and those it varies are
+    /// [`Self::varying_params`]'s already.
+    pub(crate) fn refined_hypotheses(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrutinee: &Term,
+        dec: Option<usize>,
+        expected: &Type,
+    ) -> Vec<usize> {
+        let m = cx.gamma.entries.len();
+        // A computed scrutinee is abstracted the same way, by syntactic
+        // occurrence (docs/dependent-match-compiler-design.md §5): a binder
+        // whose type contains the term is about it. Only binders after every
+        // local the term mentions can be, since the motive abstracts the term
+        // as it stands in `cx`.
+        let Term::Var(LocalVar(index)) = scrutinee else {
+            return self.refined_by_occurrence(cx, arms, scrutinee, expected);
+        };
+        let x = m - 1 - *index as usize;
+        if let (Some(_), Some(s)) = (dec, cx.selfref.as_ref()) {
+            let mut calls = false;
+            for arm in arms {
+                walk_expr(&arm.body, &mut |e| {
+                    calls |= crate::recursion::surface_self_call(s, e).is_some();
+                });
+            }
+            if calls {
+                return Vec::new();
+            }
+        }
+        // Every binder whose type is about the scrutinee, directly or through
+        // an earlier one: what the match *could* refine.
+        let mut about: Vec<usize> = Vec::new();
+        for q in x + 1..m {
+            if mentions_binder(cx, q, x) || about.iter().any(|&p| mentions_binder(cx, q, p)) {
+                about.push(q);
+            }
+        }
+        self.select_refined(cx, arms, expected, about)
+    }
+
+    /// [`Self::refined_hypotheses`] at a computed scrutinee.
+    fn refined_by_occurrence(&self, cx: &Cx, arms: &[Arm], scrutinee: &Term, expected: &Type) -> Vec<usize> {
+        let m = cx.gamma.entries.len();
+        let wrapped = Type::El { level: Level::Zero, tm: Rc::new(scrutinee.clone()) };
+        let first = (0..m)
+            .rev()
+            .find(|&p| wrapped.abstract_local(&Term::Var(LocalVar((m - 1 - p) as u32))).is_some())
+            .map_or(0, |p| p + 1);
+        let contains = |q: usize| {
+            cx.gamma.entries.get(q).is_some_and(|entry| {
+                entry.ty.shift_local((m - q) as u32).abstract_local(scrutinee).is_some()
+            })
+        };
+        let mut about: Vec<usize> = Vec::new();
+        for q in first..m {
+            if contains(q) || about.iter().any(|&p| mentions_binder(cx, q, p)) {
+                about.push(q);
+            }
+        }
+        if about.is_empty() {
+            return about;
+        }
+        self.select_refined(cx, arms, expected, about)
+    }
+
+    /// Of the binders `about` the scrutinee, what an arm names or the goal
+    /// mentions, closed under what their types need.
+    fn select_refined(&self, cx: &Cx, arms: &[Arm], expected: &Type, about: Vec<usize>) -> Vec<usize> {
+        let m = cx.gamma.entries.len();
+        let mentions = |q: usize, p: usize| mentions_binder(cx, q, p);
+        // Of those, what an arm names or the goal mentions. A `match` is also
+        // a computation: one in a function body or a motive must stay the
+        // term it always was, so that it still converts with the `match` it
+        // restates, and a hypothesis nothing reads would change that term
+        // while refining nothing. One the goal mentions must go with the
+        // goal, whose motive abstracts the scrutinee under it.
+        let mut named: Vec<String> = Vec::new();
+        for arm in arms {
+            walk_expr(&arm.body, &mut |e| {
+                if let ExprKind::Var(name) = &e.kind {
+                    named.push(name.clone());
+                }
+            });
+        }
+        let machinery = |q: usize| cx.names[q].starts_with('#') || cx.names[q].starts_with("__");
+        let mut refined: Vec<usize> = about
+            .iter()
+            .copied()
+            .filter(|&q| {
+                !machinery(q)
+                    && (named.iter().any(|n| n == &cx.names[q])
+                        || expected.abstract_local(&Term::Var(LocalVar((m - 1 - q) as u32))).is_some())
+            })
+            .collect();
+        // A refined binder's type is only right over the refined binders it
+        // mentions, so those go too; one that needs the machinery's stays.
+        let mut i = refined.len();
+        while i > 0 {
+            i -= 1;
+            let q = refined[i];
+            let needs: Vec<usize> =
+                about.iter().copied().filter(|&p| p < q && mentions(q, p) && !refined.contains(&p)).collect();
+            if needs.iter().any(|&p| machinery(p)) {
+                refined.remove(i);
+                continue;
+            }
+            if !needs.is_empty() {
+                refined.extend(needs);
+                refined.sort_unstable();
+                i = refined.len();
+            }
+        }
+        refined
     }
 
     /// `Π(y₁ : T_{j₁}) … Π(y_g : T_{j_g}). expected`, with every reference to a
@@ -174,10 +324,19 @@ impl Elaborator {
         arms.iter()
             .map(|arm| {
                 let span = arm.body.span;
+                // A pattern variable of the same name shadowed the local in
+                // the arm as written, so it still does: the generalized
+                // binder takes a name the body cannot spell.
+                let mut bound = Vec::new();
+                arm.binders.iter().for_each(|pat| pattern_names(pat, &mut bound));
                 let binders = positions
                     .iter()
                     .map(|&p| LamBinder {
-                        name: cx.names[p].clone(),
+                        name: if bound.contains(&&cx.names[p]) {
+                            format!("#{}", &cx.names[p])
+                        } else {
+                            cx.names[p].to_string()
+                        },
                         ty: None,
                         implicit: false,
                         span,
@@ -227,6 +386,15 @@ impl Elaborator {
             term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
         }
         term
+    }
+}
+
+/// Every variable a pattern binds, however deep.
+fn pattern_names<'a>(pat: &'a Pat, out: &mut Vec<&'a str>) {
+    match pat {
+        Pat::Var { name, .. } => out.push(name),
+        Pat::Ctor { args, .. } => args.iter().for_each(|arg| pattern_names(arg, out)),
+        Pat::Named { pat, .. } => pattern_names(pat, out),
     }
 }
 
@@ -319,5 +487,144 @@ mod tests {
         let back =
             cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Var(LocalVar(0)))));
         assert_eq!(back, goal);
+    }
+}
+
+/// Whether binder `q`'s type mentions the earlier binder `p`.
+fn mentions_binder(cx: &Cx, q: usize, p: usize) -> bool {
+    cx.gamma.entries.get(q).is_some_and(|entry| {
+        entry.ty.abstract_local(&Term::Var(LocalVar((q - 1 - p) as u32))).is_some()
+    })
+}
+
+/// An alias whose type mentions a `match`'s scrutinee, carried through the
+/// match as a convoy (docs/dependent-match-compiler-design.md §7.2).
+pub(crate) struct DependentAlias {
+    pub(crate) name: String,
+    pub(crate) ty: Type,
+    pub(crate) level: Level,
+    /// The alias by name: resolved, and so spliced, only once the match is
+    /// built and applied back to it.
+    pub(crate) alias: Rc<crate::Alias>,
+}
+
+impl Elaborator {
+    /// The aliases visible here whose type contains `scrutinee` and that some
+    /// arm names. An alias is a term, not a binder, so nothing else would
+    /// refine it: in the arm for `C`, its type would still speak of the
+    /// scrutinee, while the arm is checked as if it spoke of `C`. That is a
+    /// later field of a constructor whose type depends on the matched field,
+    /// the shape a deep pattern compiles to
+    /// (issues/deep-pattern-dependent-later-field.md).
+    pub(crate) fn dependent_aliases(&self, cx: &Cx, arms: &[Arm], scrutinee: &Term) -> Vec<DependentAlias> {
+        let mut named: Vec<String> = Vec::new();
+        for arm in arms {
+            walk_expr(&arm.body, &mut |e| {
+                if let ExprKind::Var(name) = &e.kind {
+                    named.push(name.clone());
+                }
+            });
+        }
+        // An arm that names the scrutinee speaks of it unrefined — it is not
+        // rebound to the arm's constructor — so whatever it pairs the
+        // scrutinee with must stay unrefined too: `g(c, k)` with `k : Resp(c) →
+        // Nat` checks only at `c`'s own type. The convoy is for an arm that
+        // cannot name the scrutinee, a deep pattern's column above all.
+        let names_scrutinee = cx.aliases.iter().any(|alias| {
+            named.iter().any(|n| *n == alias.name)
+                && alias.at((cx.names.len() - alias.depth) as u32).0 == *scrutinee
+        }) || matches!(scrutinee, Term::Var(LocalVar(i))
+            if named.iter().any(|n| *n == cx.names[cx.names.len() - 1 - *i as usize]));
+        if names_scrutinee {
+            return Vec::new();
+        }
+        let wrapped = Type::El { level: Level::Zero, tm: Rc::new(scrutinee.clone()) };
+        let mut seen: Vec<&str> = Vec::new();
+        let mut out = Vec::new();
+        for alias in cx.aliases.iter().rev() {
+            let name = alias.name.as_str();
+            if seen.contains(&name) {
+                continue;
+            }
+            seen.push(name);
+            if !named.iter().any(|n| n == name) || cx.names.iter().rposition(|n| n == name).is_some_and(|p| alias.depth <= p) {
+                continue;
+            }
+            let by = (cx.names.len() - alias.depth) as u32;
+            let (term, ty) = alias.at(by);
+            // The scrutinee itself, or an alias the scrutinee is built from,
+            // is not convoyed: abstracting it is the motive's job.
+            if term == *scrutinee || wrapped.abstract_local(&term).is_some() {
+                continue;
+            }
+            if ty.abstract_local(scrutinee).is_some() {
+                out.push(DependentAlias { name: alias.name.clone(), ty, level: alias.level.clone(), alias: Rc::clone(alias) });
+            }
+        }
+        out.reverse();
+        out
+    }
+
+    /// `Π(a₁ : T₁) … (aₙ : Tₙ). expected`, each domain weakened past the
+    /// binders before it.
+    pub(crate) fn alias_generalized(&self, dependents: &[DependentAlias], expected: &Type, level: &Level) -> (Type, Level) {
+        let n = dependents.len() as u32;
+        let mut ty = expected.shift_local(n);
+        let mut level = level.clone();
+        for (i, a) in dependents.iter().enumerate().rev() {
+            ty = Type::Pi {
+                dom_level: a.level.clone(),
+                cod_level: level.clone(),
+                dom: Rc::new(a.ty.shift_local(i as u32)),
+                cod: Rc::new(ty),
+            };
+            level = Level::max(a.level.clone(), level);
+        }
+        (ty, level)
+    }
+
+    /// Each arm under `λ a₁ … aₙ =>`, so that the body's names are the
+    /// convoyed binders; a pattern variable of the same name keeps the arm's
+    /// own meaning, as in [`Self::wrap_arms`].
+    pub(crate) fn wrap_alias_arms(&self, arms: &[Arm], dependents: &[DependentAlias]) -> Vec<Arm> {
+        arms.iter()
+            .map(|arm| {
+                let span = arm.body.span;
+                let mut bound = Vec::new();
+                arm.binders.iter().for_each(|pat| pattern_names(pat, &mut bound));
+                let binders = dependents
+                    .iter()
+                    .map(|a| LamBinder {
+                        name: if bound.contains(&a.name.as_str()) { format!("#{}", a.name) } else { a.name.clone() },
+                        ty: None,
+                        implicit: false,
+                        span,
+                    })
+                    .collect();
+                Arm {
+                    ctor: arm.ctor.clone(),
+                    default: arm.default,
+                    binders: arm.binders.clone(),
+                    body: Expr { kind: ExprKind::Lam { binders, body: Box::new(arm.body.clone()) }, span },
+                    span: arm.span,
+                }
+            })
+            .collect()
+    }
+
+    /// The match, of type `gen_ty`, applied back to the aliases it convoyed.
+    pub(crate) fn instantiate_aliases(&self, cx: &Cx, term: Term, gen_ty: Type, dependents: &[DependentAlias]) -> Term {
+        let mut term = term;
+        let mut ty = gen_ty;
+        for a in dependents {
+            let Type::Pi { dom_level, cod_level, dom, cod } = ty else {
+                unreachable!("alias_generalized built one Π per alias");
+            };
+            let by = (cx.names.len() - a.alias.depth) as u32;
+            let arg = Rc::new(a.alias.splice(by).0);
+            ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg)));
+            term = crate::spelling::checked_app(Rc::new(term), dom_level, cod_level, dom, cod, arg);
+        }
+        term
     }
 }

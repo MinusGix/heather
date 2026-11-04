@@ -5,28 +5,45 @@
 //
 // A statement computes a FunctionIR region over the environment's words,
 // asks Linux a call, runs two statements in sequence, branches on a bit,
-// repeats a body while a bit is set, or exits. `denote` maps each to the tree
-// construct of the same shape: a region is `Ret` of its evaluation
-// (`function_ir_eval`), a call is `Vis` with the answer decoded into the
-// environment, sequencing is `bind`, a loop is `iter`, and exit is a leaf.
+// repeats a body while a bit is set, copies a command-line argument into a
+// buffer, or exits. `denote` maps each to the tree construct of the same
+// shape: a region is `Ret` of its evaluation (`function_ir_eval`), a call is
+// `Vis` with the answer decoded into the environment, sequencing is `bind`,
+// a loop is `iter`, and an argument and exit are leaves.
 // Nothing about the machine is here: the compiler and its theorem (S3.2)
 // relate this meaning to code.
 //
 // The environment is a file of 64-bit words and a file of buffers, each a
 // list of bytes: what a uniqueness-threaded buffer denotes. A region sees
 // each word at every width as its low bits, and what it writes goes back
-// into the file zero-extended from the width it was written at. A call reads
+// into the file zero-extended from the width it was written at; its byte
+// nodes read and write the buffers in place (`function_ir_state`'s `run`).
+// A buffer starts as its initial bytes, then zeroes. A call reads
 // and writes buffers whole and never faults: a read asks for at most what
-// its buffer holds and lands at the buffer's start, and a write sends the
-// span its buffer holds. A failed call leaves its errno negated in its
-// result word, as Linux leaves it in RAX.
+// its buffer holds and lands at the buffer's start, a write sends the span
+// its buffer holds, and an open or a stat names the path its buffer holds,
+// up to its length or its first NUL. A failed call leaves its errno
+// negated in its result word, as Linux leaves it in RAX. The command line is
+// part of the environment, read and never written: a program's meaning is a
+// family over its arguments (`Source::denote(args)`).
 //
 // Every loop goes round at most the fuel's number of times, so a program is
 // the family of its trees over fuel (`Source::denote`, a `Program`), and
 // that family grows (`Stmt::grows`).
+//
+// A statement may also call one of the source's procedures (`Perform`,
+// docs/native-procedures-design.md §2). `denote` takes what a call does as
+// a parameter (`Performs()`), and the source gives it by depth
+// (`Source::performs`): the arguments' numbers copied into the parameters,
+// the body run one call deeper, then the procedure's locals given back as
+// the caller had them and the results copied out. Words are the callee's
+// own and buffers are shared. A call one deeper than the source's depth
+// exits with `call_depth_status`, so the meaning is total without fuel for
+// calls, and a machine with a finite stack can meet it exactly.
 
 import function_ir;
 import function_ir_eval;
+import function_ir_state;
 import linux_calls;
 import linux_trees;
 import itree;
@@ -52,8 +69,9 @@ fn List::put<A>(self xs: List<A>, i: Nat, x: A, pad: A) → List<A> {
 // A file of words, by id, each kept as the number it reads as unsigned, and
 // of buffers, by id; past its end a file reads zero, or an empty buffer.
 // Both are data, not functions, so a word or a buffer is computed once
-// however often it is read.
-record Env { words: List<Nat>, buffers: List<List<BitVec(8)>> }
+// however often it is read. The command line, `argv` with argv[0] first,
+// is read and never written.
+record Env { words: List<Nat>, buffers: List<List<BitVec(8)>>, args: List<List<BitVec(8)>> }
 
 fn Env::number(self env: Env, id: Nat) → Nat {
     match env.words.nth(id) { None => 0, Some(n) => n }
@@ -71,11 +89,11 @@ fn Env::buffer(self env: Env, id: Nat) → List<BitVec(8)> {
 fn Env::valuation(self env: Env) → Valuation() { λ w id => BitVec::ofNat(env.number(id)) }
 
 fn Env::set_word(self env: Env, id: Nat, word: BitVec(64)) → Env {
-    Env(env.words.put(id, word.toNat(), 0), env.buffers)
+    Env(env.words.put(id, word.toNat(), 0), env.buffers, env.args)
 }
 
 fn Env::set_buffer(self env: Env, id: Nat, bytes: List<BitVec(8)>) → Env {
-    Env(env.words, env.buffers.put(id, bytes, Nil))
+    Env(env.words, env.buffers.put(id, bytes, Nil), env.args)
 }
 
 // The ports a region writes, each at its width; a call's result is a word.
@@ -83,12 +101,24 @@ fn nodes_write_ports(nodes: List<Node>) → List<Port> {
     match nodes { Nil => [], Cons(node, rest) => Cons(node_output(node), nodes_write_ports(rest)) }
 }
 
-fn StructuredRegion::write_ports(self region: StructuredRegion) → List<Port> {
+// The ports a region's run writes, in the order it writes them: a
+// conditional's are its taken arm's, read as `run` branches, at the value
+// it reads its bit at; a loop's are its outputs and the bit it ends with.
+fn StructuredRegion::written(self region: StructuredRegion, call: Answers(), values: Valuation(), buffers: Buffers()) → List<Port> {
     match region {
         Dataflow(body) => nodes_write_ports(body.nodes),
-        Sequence(prefix, continuation) => nodes_write_ports(prefix.nodes) ++ continuation.write_ports(),
-        Compose(prefix, continuation) => prefix.write_ports() ++ continuation.write_ports(),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.write_ports() ++ when_false.write_ports(),
+        Sequence(prefix, continuation) => {
+            let after = run_nodes(prefix.nodes, values, buffers);
+            nodes_write_ports(prefix.nodes) ++ continuation.written(call, after.values, after.buffers)
+        },
+        Compose(prefix, continuation) => {
+            let after = prefix.run(call, values, buffers);
+            prefix.written(call, values, buffers) ++ continuation.written(call, after.values, after.buffers)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match values(1, condition).head_bit() {
+            False => when_false.written(call, values, buffers),
+            True => when_true.written(call, values, buffers),
+        },
         Call(_, _, result) => [Port(result, 64)],
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => word_ports(outputs) ++ [Port(exhausted, 1)],
     }
@@ -99,12 +129,13 @@ fn StructuredRegion::write_ports(self region: StructuredRegion) → List<Port> {
 fn Env::settle(self env: Env, after: Valuation(), ports: List<Port>) → Env {
     match ports {
         Nil => env,
-        Cons(port, rest) => Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers).settle(after, rest),
+        Cons(port, rest) => Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers, env.args).settle(after, rest),
     }
 }
 
 fn Env::compute(self env: Env, call: Answers(), region: StructuredRegion) → Env {
-    env.settle(region.eval(call, env.valuation()), region.write_ports())
+    let after = region.run(call, env.valuation(), env.buffers);
+    Env(env.words, after.buffers, env.args).settle(after.values, region.written(call, env.valuation(), env.buffers))
 }
 
 // ---------------------------------------------------------------------------
@@ -130,14 +161,24 @@ fn span(buffer: List<BitVec(8)>, from, len: Nat) → List<BitVec(8)> { buffer.dr
 // Bytes landed at a buffer's start; the buffer keeps its length.
 fn fill(buffer, bytes: List<BitVec(8)>) → List<BitVec(8)> { (bytes ++ buffer.drop(bytes.len())).take(buffer.len()) }
 
+// A path's bytes up to its first NUL: what Linux reads of it, a C string
+// ending at the NUL (`CStringAt`), so a path the source names past a NUL
+// is the part before it.
+fn List::before_nul(self bytes: List<BitVec(8)>) → List<BitVec(8)> {
+    match bytes {
+        Nil => Nil,
+        Cons(c, rest) => match c.toNat() { Zero => Nil, Succ(_) => Cons(c, rest.before_nul()) },
+    }
+}
+
 // What the call asks Linux, read off the environment.
 fn CallShape::cmd(self shape: CallShape, env: Env) → LinuxCmd<Nat> {
     match shape {
         Reads(fd, buf, len, _) => ReadCmd(env.word(fd), env.number(len).min(env.buffer(buf).len())),
         Writes(fd, buf, from, len, _) => WriteCmd(env.word(fd), span(env.buffer(buf), env.number(from), env.number(len))),
-        Opens(path, len, _) => OpenCmd(env.buffer(path).take(env.number(len))),
+        Opens(path, len, _) => OpenCmd(env.buffer(path).take(env.number(len)).before_nul()),
         Closes(fd, _) => CloseCmd(env.word(fd)),
-        StatsPath(path, len, _, _) => StatCmd(StatPath(env.buffer(path).take(env.number(len)))),
+        StatsPath(path, len, _, _) => StatCmd(StatPath(env.buffer(path).take(env.number(len)).before_nul())),
         StatsFd(fd, _, _) => StatCmd(StatFd(env.word(fd))),
     }
 }
@@ -146,7 +187,7 @@ fn CallShape::cmd(self shape: CallShape, env: Env) → LinuxCmd<Nat> {
 // count or a descriptor in the result word, or the errno negated; a read's
 // or a stat's bytes landed in its buffer.
 fn CallShape::answer(self shape: CallShape, env: Env) → shape.cmd(env).Resp() → Env {
-    match shape as λ s => s.cmd(env).Resp() → Env {
+    match shape {
         Reads(_, buf, _, result) => λ (r: ReadResult) => match r {
             ReadBytes(bytes) => env.set_buffer(buf, fill(env.buffer(buf), bytes)).set_word(result, count_word(bytes.len())),
             ReadFailed(errno) => env.set_word(result, errno_word(errno)),
@@ -175,6 +216,24 @@ fn CallShape::answer(self shape: CallShape, env: Env) → shape.cmd(env).Resp() 
 }
 
 // ---------------------------------------------------------------------------
+// The command line
+
+// The minus one a word holds for an argument past the last.
+fn missing_word() → BitVec(64) { BitVec::ofNat(1).neg() }
+
+// Argument `k` (argv[k], argv[0] the program's name) copied to the start of
+// buffer `buf`, as much of it as the buffer holds, and its whole length
+// into word `len`; past the last argument, `len` minus one and the buffer
+// as it was. So a program learns how many arguments it has by asking past
+// them, and that an argument was cut by its length.
+fn Env::arg(self env: Env, k, buf, len: Nat) → Env {
+    match env.args.nth(k) {
+        None => env.set_word(len, missing_word()),
+        Some(arg) => env.set_buffer(buf, fill(env.buffer(buf), arg)).set_word(len, count_word(arg.len())),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Statements
 
 inductive Stmt {
@@ -190,6 +249,14 @@ inductive Stmt {
     Repeat(body: Stmt, again: Nat),
     // Exit with a word's status: a leaf.
     Exit(status: Nat),
+    // The argument the word `index` names into buffer `buf`, its length
+    // into word `len` (`Env::arg`).
+    Arg(index: Nat, buf: Nat, len: Nat),
+    // Procedure `procedure` of the source (`Source::procedures`), its
+    // parameters given the words `args`, its results put in `results`
+    // (`Procedure::enter`, `Procedure::leave`;
+    // docs/native-procedures-design.md §2).
+    Perform(procedure: Nat, args: List<Nat>, results: List<Nat>),
 }
 
 // Where a statement leaves the program: on to the next statement, or out.
@@ -204,68 +271,191 @@ fn Flow::pass(self flow: Flow, again: Nat) → Step<Env, Flow> {
     }
 }
 
-fn Stmt::denote(self s: Stmt, call: Answers(), n: Nat, env: Env) → ITree<Flow>(Events::linux()) {
+// What a call does, given the procedure, its arguments, where its results
+// go, and the caller's environment: `Source::performs` at a depth.
+fn Performs() → Type { Nat → List<Nat> → List<Nat> → Env → ITree<Flow>(Events::linux()) }
+
+fn Stmt::denote(self s: Stmt, call: Answers(), perform: Performs(), n: Nat, env: Env) → ITree<Flow>(Events::linux()) {
     match s {
         Compute(region) => Ret(Onward(env.compute(call, region))),
         Invoke(shape) => Vis(shape.cmd(env), λ a => Ret(Onward(shape.answer(env, a)))),
-        Then(first, rest) => ITree::bind(Events::linux(), first.denote(call, n, env), λ flow => match flow {
-            Onward(next) => rest.denote(call, n, next),
+        Then(first, rest) => ITree::bind(Events::linux(), first.denote(call, perform, n, env), λ flow => match flow {
+            Onward(next) => rest.denote(call, perform, n, next),
             Exited(status) => Ret(Exited(status)),
         }),
         Branch(condition, yes, no) => match env.bit(condition) {
-            True => yes.denote(call, n, env),
-            False => no.denote(call, n, env),
+            True => yes.denote(call, perform, n, env),
+            False => no.denote(call, perform, n, env),
         },
         Repeat(body, again) => ITree::iter(Events::linux(), n,
-            λ e => ITree::map(Events::linux(), body.denote(call, n, e), λ flow => flow.pass(again)), env),
+            λ e => ITree::map(Events::linux(), body.denote(call, perform, n, e), λ flow => flow.pass(again)), env),
         Exit(status) => Ret(Exited(env.word(status))),
+        Arg(index, buf, len) => Ret(Onward(env.arg(env.number(index), buf, len))),
+        Perform(procedure, args, results) => perform(procedure, args, results, env),
     }
 }
 
-// More fuel grows a statement's tree.
-theorem Stmt::grows(self s: Stmt, call: Answers(), n: Nat): (env: Env) →
-    ITree::Below(Events::linux(), s.denote(call, n, env), s.denote(call, Succ(n), env)) {
+// One handler below another at every call: more fuel, or the same.
+fn performs_below(perform, perform2: Performs()) → Type {
+    (procedure: Nat) → (args, results: List<Nat>) → (env: Env) →
+        ITree::Below(Events::linux(), perform(procedure, args, results, env), perform2(procedure, args, results, env))
+}
+
+// More fuel grows a statement's tree, where a call's tree grows.
+theorem Stmt::grows(self s: Stmt, call: Answers(), perform, perform2: Performs(), below: performs_below(perform, perform2), n: Nat): (env: Env) →
+    ITree::Below(Events::linux(), s.denote(call, perform, n, env), s.denote(call, perform2, Succ(n), env)) {
     match s {
         Compute(_) => λ env => refl,
         Invoke(shape) => λ env => ITree::below_refl(Events::linux(), Vis(shape.cmd(env), λ a => Ret(Onward(shape.answer(env, a))))),
-        Then(first, rest) => λ env => ITree::below_bind(Events::linux(), first.denote(call, n, env), first.denote(call, Succ(n), env),
-            λ flow => match flow { Onward(next) => rest.denote(call, n, next), Exited(status) => Ret(Exited(status)) },
-            λ flow => match flow { Onward(next) => rest.denote(call, Succ(n), next), Exited(status) => Ret(Exited(status)) },
-            first.grows(call, n, env),
-            λ flow => match flow as λ f => ITree::Below(Events::linux(),
-                    match f as λ _ => ITree<Flow>(Events::linux()) { Onward(next) => rest.denote(call, n, next), Exited(status) => Ret(Exited(status)) },
-                    match f as λ _ => ITree<Flow>(Events::linux()) { Onward(next) => rest.denote(call, Succ(n), next), Exited(status) => Ret(Exited(status)) }) {
-                Onward(e) => rest.grows(call, n, e),
+        Then(first, rest) => λ env => ITree::below_bind(Events::linux(), first.denote(call, perform, n, env), first.denote(call, perform2, Succ(n), env),
+            λ flow => match flow { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) },
+            λ flow => match flow { Onward(next) => rest.denote(call, perform2, Succ(n), next), Exited(status) => Ret(Exited(status)) },
+            first.grows(call, perform, perform2, below, n, env),
+            λ flow => match flow {
+                Onward(e) => rest.grows(call, perform, perform2, below, n, e),
                 Exited(_) => refl,
             }),
         Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b =>
-                ITree::Below(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) { True => yes.denote(call, n, env), False => no.denote(call, n, env) },
-                    match b as λ _ => ITree<Flow>(Events::linux()) { True => yes.denote(call, Succ(n), env), False => no.denote(call, Succ(n), env) }) {
-            True => yes.grows(call, n, env),
-            False => no.grows(call, n, env),
+                ITree::Below(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) { True => yes.denote(call, perform, n, env), False => no.denote(call, perform, n, env) },
+                    match b { True => yes.denote(call, perform2, Succ(n), env), False => no.denote(call, perform2, Succ(n), env) }) {
+            True => yes.grows(call, perform, perform2, below, n, env),
+            False => no.grows(call, perform, perform2, below, n, env),
         },
         Repeat(body, again) => λ env => ITree::iter_below(Events::linux(), n,
-            λ e => ITree::map(Events::linux(), body.denote(call, n, e), λ flow => flow.pass(again)),
-            λ e => ITree::map(Events::linux(), body.denote(call, Succ(n), e), λ flow => flow.pass(again)),
-            λ e => ITree::below_bind(Events::linux(), body.denote(call, n, e), body.denote(call, Succ(n), e),
-                λ flow => Ret(flow.pass(again)), λ flow => Ret(flow.pass(again)), body.grows(call, n, e), λ flow => refl),
+            λ e => ITree::map(Events::linux(), body.denote(call, perform, n, e), λ flow => flow.pass(again)),
+            λ e => ITree::map(Events::linux(), body.denote(call, perform2, Succ(n), e), λ flow => flow.pass(again)),
+            λ e => ITree::below_bind(Events::linux(), body.denote(call, perform, n, e), body.denote(call, perform2, Succ(n), e),
+                λ flow => Ret(flow.pass(again)), λ flow => Ret(flow.pass(again)), body.grows(call, perform, perform2, below, n, e), λ flow => refl),
             env),
         Exit(_) => λ env => refl,
+        Arg(_, _, _) => λ env => refl,
+        Perform(procedure, args, results) => λ env => below(procedure, args, results, env),
     }
 }
 
 // ---------------------------------------------------------------------------
+// Procedures (docs/native-procedures-design.md)
+
+// Its parameters and results, words of its own, and its body.
+record Procedure { params: List<Nat>, results: List<Nat>, body: Stmt }
+
+// The words `ids` set to `words` in order, as far as both go.
+fn Env::set_words(self env: Env, ids: List<Nat>, words: List<BitVec(64)>) → Env {
+    match ids {
+        Nil => env,
+        Cons(id, rest) => match words {
+            Nil => env,
+            Cons(word, more) => env.set_word(id, word).set_words(rest, more),
+        },
+    }
+}
+
+// The words, in order.
+fn Env::words_at(self env: Env, ids: List<Nat>) → List<BitVec(64)> {
+    match ids { Nil => [], Cons(id, rest) => Cons(env.word(id), env.words_at(rest)) }
+}
+
+// The callee starts with every word zero but its parameters, each given its
+// argument's word, all read before any is set; the buffers and the command
+// line are the caller's.
+fn Procedure::enter(self proc: Procedure, caller: Env, args: List<Nat>) → Env {
+    Env(Nil, caller.buffers, caller.args).set_words(proc.params, caller.words_at(args))
+}
+
+// It returns to the caller's words with its own buffers, each result
+// copied out to its word; an exit goes on out.
+fn Procedure::leave(self proc: Procedure, caller: Env, results: List<Nat>, flow: Flow) → Flow {
+    match flow {
+        Onward(after) => Onward(Env(caller.words, after.buffers, caller.args).set_words(results, after.words_at(proc.results))),
+        Exited(status) => Exited(status),
+    }
+}
+
+// The status a call one deeper than the source's depth exits with: what a
+// shell reports for a process killed by SIGSEGV, the usual end of a stack
+// overflow.
+fn call_depth_status() → BitVec(64) { BitVec::ofNat(139) }
+
+// ---------------------------------------------------------------------------
 // Programs
 
-// Total functions its regions call, the capacity of each buffer (buffer `b`
-// is the `b`-th), and the statement it runs.
-record Source { functions: List<Function>, buffers: List<Nat>, main: Stmt }
+// A buffer: how many bytes it holds, and the bytes it starts with from
+// index 0; those past its capacity are dropped (`Source::start`).
+record Buffer { capacity: Nat, initial: List<BitVec(8)> := [] }
+
+// Total functions its regions call, its buffers (buffer `b` is the `b`-th),
+// how many words it names (word ids below `words`; the compiler gives each
+// a slot and refuses any other), and the statement it runs.
+// Its procedures (procedure `p` is the `p`-th), and how deep calls may nest
+// (`Source::performs`).
+record Source { functions: List<Function>, buffers: List<Buffer>, words: Nat, main: Stmt,
+    procedures: List<Procedure> := [], depth: Nat := 0 }
+
+// The words a call names: every operand but its buffers.
+fn CallShape::words(self shape: CallShape) → List<Nat> {
+    match shape {
+        Reads(fd, _, len, result) => [fd, len, result],
+        Writes(fd, _, from, len, result) => [fd, from, len, result],
+        Opens(_, len, result) => [len, result],
+        Closes(fd, result) => [fd, result],
+        StatsPath(_, len, _, result) => [len, result],
+        StatsFd(fd, _, result) => [fd, result],
+    }
+}
+
+// One past the largest id: the words a statement naming `ids` needs.
+fn List::word_bound(self ids: List<Nat>) → Nat { match ids { Nil => 0, Cons(id, rest) => Succ(id).max(rest.word_bound()) } }
+
+// Every id a region names, a loop's own words and its body's with them.
+fn StructuredRegion::ids(self region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_mentions(body.nodes),
+        Sequence(prefix, continuation) => nodes_mentions(prefix.nodes) ++ continuation.ids(),
+        Compose(prefix, continuation) => prefix.ids() ++ continuation.ids(),
+        Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.ids() ++ when_false.ids()),
+        Call(_, arguments, result) => Cons(result, arguments),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            Cons(bound, Cons(count, Cons(exit, Cons(exhausted, inputs ++ (parameters ++ (next ++ (outputs ++ body.ids()))))))),
+    }
+}
+
+// One past the largest word a statement names: what a source of it
+// declares (`Source::words`, `Source::of`) when every word it names gets a
+// slot.
+fn Stmt::word_bound(self s: Stmt) → Nat {
+    match s {
+        Compute(region) => region.ids().word_bound(),
+        Invoke(shape) => shape.words().word_bound(),
+        Then(first, rest) => first.word_bound().max(rest.word_bound()),
+        Branch(condition, yes, no) => Succ(condition).max(yes.word_bound().max(no.word_bound())),
+        Repeat(body, again) => Succ(again).max(body.word_bound()),
+        Exit(status) => Succ(status),
+        Arg(index, _, len) => Succ(index).max(Succ(len)),
+        Perform(_, args, results) => (args ++ results).word_bound(),
+    }
+}
+
+// A source with no functions whose words are the ones `main` names.
+fn Source::of(buffers: List<Buffer>, main: Stmt) → Source { Source(functions := [], buffers := buffers, words := main.word_bound(), main := main) }
 
 fn zero_byte() → BitVec(8) { BitVec::zero() }
 
-// Words all zero; each buffer its capacity of zero bytes.
-fn Source::start(self src: Source) → Env {
-    Env(Nil, src.buffers.map(λ size => List::replicate(zero_byte(), size)))
+fn Source::capacities(self src: Source) → List<Nat> { src.buffers.map(λ (b: Buffer) => b.capacity) }
+
+// Bytes stored into buffer `buf` of a file one at a time, from index `i`.
+fn List::stored(self bytes: List<BitVec(8)>, buf, i: Nat, file: Buffers()) → Buffers() {
+    match bytes { Nil => file, Cons(c, rest) => rest.stored(buf, Succ(i), store_byte(file, buf, i, c)) }
+}
+
+// Each buffer's initial bytes stored, buffer `buf` first.
+fn initial_stores(buffers: List<Buffer>, buf: Nat, file: Buffers()) → Buffers() {
+    match buffers { Nil => file, Cons(b, rest) => initial_stores(rest, Succ(buf), b.initial.stored(buf, 0, file)) }
+}
+
+// Words all zero; each buffer its capacity of zero bytes, then its initial
+// bytes stored; the command line `args`.
+fn Source::start(self src: Source, args: List<List<BitVec(8)>>) → Env {
+    Env(Nil, initial_stores(src.buffers, 0, src.capacities().map(λ size => List::replicate(zero_byte(), size))), args)
 }
 
 // Running off the end exits 0.
@@ -273,14 +463,64 @@ fn Flow::status(self flow: Flow) → BitVec(64) {
     match flow { Onward(_) => BitVec::zero(), Exited(status) => status }
 }
 
-fn Source::tree(self src: Source, n: Nat) → ITree<BitVec(64)>(Events::linux()) {
-    ITree::map(Events::linux(), src.main.denote(program_eval(src.functions), n, src.start()), λ flow => flow.status())
+// What a call does at depth `depth`: none past the depth; otherwise the
+// procedure's body, its own calls one deeper, entered and left as the
+// procedure says. A call to no procedure does nothing (the compile refuses
+// it).
+fn Source::performs(self src: Source, call: Answers(), n: Nat, depth: Nat) → Performs() {
+    match depth {
+        Zero => λ procedure args results env => Ret(Exited(call_depth_status())),
+        Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) {
+            None => Ret(Onward(env)),
+            Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                λ flow => proc.leave(env, results, flow)),
+        },
+    }
 }
 
-fn Source::denote(self src: Source) → Program<BitVec(64)>(Events::linux()) {
-    Program(λ n => src.tree(n), λ n => ITree::below_bind(Events::linux(),
-        src.main.denote(program_eval(src.functions), n, src.start()),
-        src.main.denote(program_eval(src.functions), Succ(n), src.start()),
+// More fuel grows every call's tree, at every depth.
+theorem Source::performs_grows(self src: Source, call: Answers(), n: Nat, depth: Nat):
+    performs_below(src.performs(call, n, depth), src.performs(call, Succ(n), depth)) {
+    match depth {
+        Zero => λ procedure args results env => refl,
+        Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) as λ o =>
+                ITree::Below(Events::linux(),
+                    match o as λ _ => ITree<Flow>(Events::linux()) {
+                        None => Ret(Onward(env)),
+                        Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                            λ flow => proc.leave(env, results, flow)),
+                    },
+                    match o {
+                        None => Ret(Onward(env)),
+                        Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, Succ(n), d), Succ(n), proc.enter(env, args)),
+                            λ flow => proc.leave(env, results, flow)),
+                    }) {
+            None => refl,
+            Some(proc) => ITree::below_bind(Events::linux(),
+                proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                proc.body.denote(call, src.performs(call, Succ(n), d), Succ(n), proc.enter(env, args)),
+                λ flow => Ret(proc.leave(env, results, flow)), λ flow => Ret(proc.leave(env, results, flow)),
+                proc.body.grows(call, src.performs(call, n, d), src.performs(call, Succ(n), d), src.performs_grows(call, n, d), n, proc.enter(env, args)),
+                λ flow => refl),
+        },
+    }
+}
+
+// `main` at fuel `n`, its calls nesting at most the source's depth.
+fn Source::main_tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<Flow>(Events::linux()) {
+    src.main.denote(program_eval(src.functions), src.performs(program_eval(src.functions), n, src.depth), n, src.start(args))
+}
+
+fn Source::tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<BitVec(64)>(Events::linux()) {
+    ITree::map(Events::linux(), src.main_tree(args, n), λ flow => flow.status())
+}
+
+// The program run with the command line `args`.
+fn Source::denote(self src: Source, args: List<List<BitVec(8)>>) → Program<BitVec(64)>(Events::linux()) {
+    Program(λ n => src.tree(args, n), λ n => ITree::below_bind(Events::linux(),
+        src.main_tree(args, n), src.main_tree(args, Succ(n)),
         λ flow => Ret(flow.status()), λ flow => Ret(flow.status()),
-        src.main.grows(program_eval(src.functions), n, src.start()), λ flow => refl))
+        src.main.grows(program_eval(src.functions), src.performs(program_eval(src.functions), n, src.depth),
+            src.performs(program_eval(src.functions), Succ(n), src.depth), src.performs_grows(program_eval(src.functions), n, src.depth),
+            n, src.start(args)), λ flow => refl))
 }

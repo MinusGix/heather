@@ -23,6 +23,7 @@ use std::sync::Arc as Rc;
 use heather_syntax::Decl;
 
 use super::ParamMeta;
+use crate::layered::{Layer, Layered, index_hash};
 
 thread_local! {
     /// While recording: the last `::` segment of every name and module this
@@ -141,6 +142,30 @@ struct NameLayer {
     surface_decls: HashMap<String, Decl>,
 }
 
+/// [`NameLayer`]'s tables, as the layer index numbers them.
+const SCOPES: usize = 0;
+const NAMES: usize = 1;
+const GLOBALS: usize = 2;
+const BY_ABS: usize = 3;
+const MEMBER_BASES: usize = 4;
+const SURFACE: usize = 5;
+
+impl Layer for NameLayer {
+    const TABLES: usize = 6;
+
+    fn keys(&self, table: usize, out: &mut dyn FnMut(u64)) {
+        match table {
+            SCOPES => self.module_scopes.keys().for_each(|k| out(index_hash(k.as_str()))),
+            NAMES => self.index.by_name.keys().for_each(|k| out(index_hash(k.as_str()))),
+            GLOBALS => self.globals.keys().for_each(|k| out(index_hash(k.as_str()))),
+            BY_ABS => self.by_abs.keys().for_each(|k| out(index_hash(k))),
+            MEMBER_BASES => self.member_bases.iter().for_each(|k| out(index_hash(k.as_str()))),
+            SURFACE => self.surface_decls.keys().for_each(|k| out(index_hash(k.as_str()))),
+            _ => unreachable!("NameLayer has {} tables", Self::TABLES),
+        }
+    }
+}
+
 impl NameLayer {
     fn is_empty(&self) -> bool {
         self.module_scopes.is_empty()
@@ -161,8 +186,7 @@ impl NameLayer {
 #[derive(Clone)]
 pub(crate) struct Names {
     scope: Scope,
-    sealed: Rc<Vec<Rc<NameLayer>>>,
-    current: Rc<NameLayer>,
+    tables: Layered<NameLayer>,
 }
 
 /// A callable global's Ψ coordinate and surface parameter metadata.
@@ -250,8 +274,7 @@ impl Names {
     pub(crate) fn new(module: impl Into<String>) -> Self {
         Names {
             scope: Scope::new(module),
-            sealed: Rc::new(Vec::new()),
-            current: Rc::new(NameLayer::default()),
+            tables: Layered::default(),
         }
     }
 
@@ -265,12 +288,7 @@ impl Names {
 
     pub(crate) fn module_scope(&self, module: &str) -> Option<&Scope> {
         note(module);
-        self.current.module_scopes.get(module).or_else(|| {
-            self.sealed
-                .iter()
-                .rev()
-                .find_map(|layer| layer.module_scopes.get(module))
-        })
+        self.tables.find(SCOPES, module, |layer| layer.module_scopes.get(module))
     }
 
     pub(crate) fn has_module(&self, module: &str) -> bool {
@@ -286,7 +304,7 @@ impl Names {
             self.seal_current();
         }
         if self.module_scope(&scope.module) != Some(&scope) {
-            crate::stats::make_mut(&mut self.current)
+            self.tables.current_mut()
                 .module_scopes
                 .insert(scope.module.clone(), scope.clone());
         }
@@ -300,7 +318,7 @@ impl Names {
                     if self.entries(name).any(|e| e.module == scope.module
                         && e.origin == entry.origin && e.kind == entry.kind) { continue; }
                     entry.module = scope.module.clone();
-                    crate::stats::make_mut(&mut self.current).index.by_name
+                    self.tables.current_mut().index.by_name
                         .entry(name.clone()).or_default().push(entry);
                 }
             }
@@ -317,23 +335,36 @@ impl Names {
     }
 
     fn seal_current(&mut self) {
-        if self.current.is_empty() {
+        if self.tables.current().is_empty() {
             return;
         }
-        crate::stats::make_mut(&mut self.sealed).push(Rc::clone(&self.current));
-        self.current = Rc::new(NameLayer::default());
-    }
-
-    fn layers(&self) -> impl Iterator<Item = &NameLayer> {
-        std::iter::once(self.current.as_ref()).chain(self.sealed.iter().rev().map(Rc::as_ref))
+        self.tables.seal_current();
     }
 
     fn entries<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a NameEntry> + 'a {
         note(name);
-        self.sealed
-            .iter()
+        self.tables
+            .candidates(NAMES, name)
             .flat_map(move |layer| layer.index.entries(name))
-            .chain(self.current.index.entries(name))
+    }
+
+    /// Is `name` visible in `scope` only through the import of `via` (and not
+    /// declared by the module itself, nor reached by any other import)?
+    pub(crate) fn seen_only_through(&self, scope: Option<&Scope>, name: &str, via: &str) -> bool {
+        let scope = scope.unwrap_or(&self.scope);
+        let mut seen = false;
+        for e in self.entries(name) {
+            if e.module == scope.module || e.module == PRELUDE_MODULE {
+                return false;
+            }
+            if scope.imports_module(&e.module) {
+                if e.module != via {
+                    return false;
+                }
+                seen = true;
+            }
+        }
+        seen
     }
 
     pub(crate) fn declares(&self, module: &str, name: &str) -> bool {
@@ -343,7 +374,7 @@ impl Names {
     /// Original owner of a public name, including a transitive reexport.
     pub(crate) fn origin(&self, module: &str, name: &str) -> Option<&str> {
         note(name);
-        self.layers().find_map(|layer| layer.index.entries(name).iter()
+        self.tables.find(NAMES, name, |layer| layer.index.entries(name).iter()
             .find(|e| e.module == module).map(|e| e.origin.as_str()))
     }
 
@@ -399,7 +430,7 @@ impl Names {
     }
 
     pub(crate) fn insert_current(&mut self, name: &str, kind: NameKind) {
-        crate::stats::make_mut(&mut self.current)
+        self.tables.current_mut()
             .index
             .insert(&self.scope.module, name, kind);
     }
@@ -423,7 +454,7 @@ impl Names {
         wanted: &dyn Fn(&str) -> bool,
     ) -> std::collections::BTreeMap<String, Vec<(String, String, u8)>> {
         let mut out: std::collections::BTreeMap<String, Vec<(String, String, u8)>> = Default::default();
-        for layer in self.layers() {
+        for layer in self.tables.layers() {
             for (name, entries) in &layer.index.by_name {
                 if !wanted(name) {
                     continue;
@@ -449,12 +480,11 @@ impl Names {
 
     pub(crate) fn global(&self, key: &str) -> Option<&GlobalInfo> {
         note(key);
-        self.layers().find_map(|layer| layer.globals.get(key))
+        self.tables.find(GLOBALS, key, |layer| layer.globals.get(key))
     }
 
     pub(crate) fn global_name_at(&self, abs: u32) -> Option<&str> {
-        self.layers()
-            .find_map(|layer| layer.by_abs.get(&abs).map(String::as_str))
+        self.tables.find(BY_ABS, &abs, |layer| layer.by_abs.get(&abs).map(String::as_str))
     }
 
     pub(crate) fn params_at(&self, abs: u32) -> Option<Rc<Vec<ParamMeta>>> {
@@ -464,13 +494,39 @@ impl Names {
 
     pub(crate) fn has_member_base(&self, name: &str) -> bool {
         note(name);
-        self.layers().any(|layer| layer.member_bases.contains(name))
+        self.tables
+            .find(MEMBER_BASES, name, |layer| layer.member_bases.contains(name).then_some(()))
+            .is_some()
     }
 
     pub(crate) fn surface_decl(&self, name: &str) -> Option<&Decl> {
         note(name);
-        self.layers()
-            .find_map(|layer| layer.surface_decls.get(name))
+        self.tables.find(SURFACE, name, |layer| layer.surface_decls.get(name))
+    }
+
+    /// The surface declaration of the global `module`'s `name`, read off the
+    /// layer that registered it (so a same-named declaration of another
+    /// module is never consulted).
+    pub(crate) fn surface_decl_in(&self, module: &str, name: &str) -> Option<&Decl> {
+        self.registering_layer(module, name)
+            .and_then(|layer| layer.surface_decls.get(name))
+    }
+
+    /// The layer that registered the global `module`'s `name`.
+    fn registering_layer(&self, module: &str, name: &str) -> Option<&NameLayer> {
+        let key = qkey(module, name);
+        self.tables.find(GLOBALS, key.as_str(), |layer| layer.globals.contains_key(&key).then_some(layer))
+    }
+
+    /// Is the global `module`'s `name` a `def` used as a value: a
+    /// [`Decl::value`] whose parameters, if any, are all implicit
+    /// (docs/value-definitions-design.md §2.3)? Read off the layer that
+    /// registered it, so a same-named declaration of another module is never
+    /// consulted.
+    pub(crate) fn is_value(&self, module: &str, name: &str) -> bool {
+        self.registering_layer(module, name)
+            .and_then(|layer| layer.surface_decls.get(name))
+            .is_some_and(|d| d.value && d.params.iter().all(|p| p.implicit))
     }
 
     pub(crate) fn commit_global(&mut self, abs: u32, reg: GlobalRegistration) {
@@ -483,7 +539,7 @@ impl Names {
         } = reg;
         debug_assert!(self.global(&key).is_none());
         debug_assert!(self.global_name_at(abs).is_none());
-        let current = crate::stats::make_mut(&mut self.current);
+        let current = self.tables.current_mut();
         current
             .index
             .insert(&self.scope.module, &name, NameKind::Global);
@@ -500,6 +556,11 @@ impl Names {
 /// nothing else special: it is an ordinary module that happens to be
 /// elaborated first (docs/modules-design.md §3.2).
 pub(crate) const PRELUDE_MODULE: &str = "prelude";
+/// The library's common prelude (`lib/std/common.hthr`): a facade that every
+/// module later than it in a run's order imports implicitly, by name only
+/// (its `export` lists). The modules it exports from come before it, so they
+/// never see it (issues/std-prelude-facade.md).
+pub(crate) const COMMON_MODULE: &str = "common";
 
 /// The module name a bare `check_source`/`elab_source` call elaborates into —
 /// the degenerate one-module program every test and every pre-modules caller
@@ -545,8 +606,10 @@ fn resolve_kinds(
     // `nat::Nat::le_add` — a module path. Visibility is required: qualification
     // names which visible module you meant, it does not reach into a module
     // this file never imported.
-    let visible_module =
-        qual == scope.module || scope.imports_module(qual) || qual == PRELUDE_MODULE;
+    let visible_module = qual == scope.module
+        || scope.imports_module(qual)
+        || qual == PRELUDE_MODULE
+        || common_reaches(names, scope, qual);
     if visible_module && names.declares(qual, base) {
         // ... unless a visible module also declares the whole string as a
         // member — `f::pos` of a function `f` named like the module `f`
@@ -579,10 +642,53 @@ fn resolve_kinds(
         NameRes::Ambiguous(origins) => return NameRes::Ambiguous(origins),
         NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {}
     }
+    // `List::map` where `List` is visible only through a facade's export
+    // (`common`'s `export list::{List}`): exporting a type exports the
+    // members its own module declares on it, as it exports its constructors
+    // (issues/std-prelude-facade.md). Read here, at the lookup, and not
+    // materialized at the export, so a member added later is reached without
+    // the facade being elaborated again, and the lookup records the member's
+    // name as every other lookup does.
+    if let NameRes::Found(origin) = resolve_bare(names, scope, qual)
+        && names.entries(qual).any(|e| e.origin == origin && e.module != origin && scope.imports_module(&e.module))
+        && names.entries(name).any(|e| e.module == origin && e.origin == origin && (kinds.is_empty() || kinds.contains(&e.kind)))
+    {
+        return NameRes::Found(origin);
+    }
     if visible_module {
         return NameRes::NotFound;
     }
     NameRes::NoSuchQualifier(qual.to_string())
+}
+
+/// Is `module` in the common prelude's closure, in a scope that imports the
+/// prelude? Such a module is visible **qualified only** there: `list::x`
+/// resolves, a bare `x` does not unless the prelude exports it. That is what
+/// the elaborator's own spellings need — an instance's global
+/// (`list::List::CollectionLiteral`), a designated operation
+/// (`bool::Bool::and`) — and it keeps the core's lemma names out of the bare
+/// namespace (issues/std-prelude-facade.md,
+/// issues/feature-implicit-module-dependencies.md). Read off the prelude's
+/// own scope, so nothing about it is stored in the importer's.
+fn common_reaches(names: &Names, scope: &Scope, module: &str) -> bool {
+    if scope.module == COMMON_MODULE || !scope.imports_module(COMMON_MODULE) {
+        return false;
+    }
+    let mut seen: Vec<&str> = vec![COMMON_MODULE];
+    let mut stack: Vec<&str> = vec![COMMON_MODULE];
+    while let Some(m) = stack.pop() {
+        let Some(s) = names.module_scope(m) else { continue };
+        for i in &s.imports {
+            if i.module == module {
+                return true;
+            }
+            if !seen.contains(&i.module.as_str()) {
+                seen.push(&i.module);
+                stack.push(&i.module);
+            }
+        }
+    }
+    false
 }
 
 fn resolve_bare(names: &Names, scope: &Scope, name: &str) -> NameRes {
@@ -665,7 +771,15 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
         NameRes::Ambiguous(origins) => Some(ambiguity_msg(name, origins)),
         NameRes::NoSuchQualifier(q) => Some(format!(
             "`{name}` is qualified by `{q}`, which is neither an imported module nor a \
-             type or function in scope here with a member by that name"
+             type or function in scope here with a member by that name{}",
+            // The one name the parser writes on the reader's behalf: `∑` and
+            // `∏` desugar to it, so say where it comes from.
+            if name == "MonoidRel::range" {
+                ". A `∑`/`∏` big operator is a call to `MonoidRel::range`: write \
+                 `import big_operator;`"
+            } else {
+                ""
+            }
         )),
         NameRes::Restricted(msg) => Some(msg.clone()),
         NameRes::NotFound => Some(fallback),
@@ -675,8 +789,6 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
 
 #[cfg(test)]
 mod layered_tests {
-    use std::sync::Arc as Rc;
-
     use super::*;
 
     #[test]
@@ -690,21 +802,21 @@ mod layered_tests {
         }
 
         let image = names.semantic_snapshot();
-        assert_eq!(image.sealed.len(), 64);
-        assert!(image.current.is_empty());
+        assert_eq!(image.tables.sealed_len(), 64);
+        assert_eq!(image.tables.run_count(), 1);
+        assert!(image.tables.current().is_empty());
         for i in 0..64 {
             assert!(image.declares(&format!("m{i}"), "shared"));
             assert!(image.declares(&format!("m{i}"), &format!("only_{i}")));
         }
 
         let mut suffix = image.clone();
-        let sealed = Rc::clone(&suffix.sealed);
         suffix.enter_scope(Scope::new("m63"));
-        assert!(Rc::ptr_eq(&sealed, &suffix.sealed));
+        assert!(image.tables.shares_sealed_with(&suffix.tables));
         suffix.insert_current("suffix", NameKind::Global);
-        assert!(Rc::ptr_eq(&image.sealed, &suffix.sealed));
-        assert!(image.current.is_empty());
-        assert_eq!(suffix.current.index.entries("suffix").len(), 1);
+        assert!(image.tables.shares_sealed_with(&suffix.tables));
+        assert!(image.tables.current().is_empty());
+        assert_eq!(suffix.tables.current().index.entries("suffix").len(), 1);
         assert!(!image.declares(image.module(), "suffix"));
         assert!(suffix.declares(suffix.module(), "suffix"));
     }

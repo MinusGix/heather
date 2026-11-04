@@ -1,0 +1,25 @@
+// What the emission joins (native_compile_correct) refuse: a statement of
+// the wrong kind. Apart from native_compile_tests, which `write-elf` loads
+// whole and which therefore holds no expected refusals.
+import native_source;
+import native_compile;
+import native_compile_correct;
+import native_alloc;
+import function_ir;
+import linux_x86_64_image;
+import bitvec;
+import bool;
+import list;
+import option;
+import x86_64_asm;
+import x86_64_asm_runs;
+
+fn low() → BitVec(64) { io_data_low() }
+fn exit_unless() → Source { Source::of([], Repeat(Branch(0, Exit(1), Exit(2)), 0)) }
+fn eu_layout() → Layout { exit_unless().layout(low(), Homes::slots(exit_unless())) }
+
+// A `Repeat`'s body is a `Branch`, which no `Then` join fits.
+// expect-error: `trivial` proves `True`, but `IsTrue(is_then(left((exit_unless).main)))` is expected here
+theorem branch_is_no_then(): exit_unless().main.left().emits(Start, eu_layout(), [], [], 0) = Exit(2).emits(Start, eu_layout(), [], [], 0) {
+    Stmt::emits_then_of(exit_unless().main.left(), trivial, Start, eu_layout(), [], [], 0, Compiled(Start, 0), refl)
+}

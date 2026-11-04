@@ -102,9 +102,13 @@ pub type Hash = [u8; 32];
 /// impossible by construction rather than merely unlikely. (`store::FORMAT` is
 /// bumped alongside, which is what makes the invalidation *loud* — see
 /// `docs/cache-v1-design.md` §12.)
-const DOMAIN_IFACE: &[u8] = b"heather/iface/2\0";
-const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/1\0";
-const DOMAIN_CHECK: &[u8] = b"heather/check/2\0";
+///
+/// **Bumped again with canonical levels** (`issues/kernel-compact-level.md`):
+/// a level is now hashed as its normal form, not as a `1+`/`⊔` tree.
+const DOMAIN_IFACE: &[u8] = b"heather/iface/3\0";
+const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/2\0";
+const DOMAIN_CHECK: &[u8] = b"heather/check/3\0";
+const DOMAIN_STATEMENT: &[u8] = b"heather/statement/2\0";
 
 /// The interface hashes of a Ψ prefix, in binding order.
 ///
@@ -123,11 +127,10 @@ pub type Prefix = [Option<Hash>];
 #[rustfmt::skip]
 mod tag {
     // levels
-    pub const L_VAR: u8 = 0x01;
-    pub const L_ZERO: u8 = 0x02;
-    pub const L_SUCC: u8 = 0x03;
-    pub const L_MAX: u8 = 0x04;
+    // 0x01–0x04 were the tree spelling (`ℓ`, `0`, `1+`, `⊔`) before levels
+    // were canonical (scheme `/3`); retired, not reused.
     pub const L_OMEGA: u8 = 0x05;
+    pub const L_NF: u8 = 0x06;
     // layers
     pub const LAYER_VAR: u8 = 0x08;
     pub const LAYER_CODE: u8 = 0x09;
@@ -256,6 +259,7 @@ mod tag {
     pub const E_TMM: u8 = 0x81;
     pub const E_TMDVEC: u8 = 0x82;
     pub const E_TMIWF: u8 = 0x83;
+    pub const E_VECLIT: u8 = 0x84;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -316,6 +320,14 @@ impl<'a> Walk<'a> {
 
     #[inline]
     fn u32(&mut self, n: u32) {
+        self.buf.extend_from_slice(&n.to_le_bytes());
+        if self.buf.len() >= FLUSH_AT {
+            self.flush();
+        }
+    }
+
+    #[inline]
+    fn u64(&mut self, n: u64) {
         self.buf.extend_from_slice(&n.to_le_bytes());
         if self.buf.len() >= FLUSH_AT {
             self.flush();
@@ -385,23 +397,23 @@ impl<'a> Walk<'a> {
         });
     }
 
+    /// A level as its canonical parts (`Level` is canonical by
+    /// construction, so equivalent levels hash alike): `ω`, or the optional
+    /// constant and the `(ℓ, n)` terms in ascending order.
     fn level(&mut self, l: &Level) {
-        match l {
-            Level::Var(v) => {
-                self.tag(tag::L_VAR);
-                self.u32(v.0);
+        let Some((konst, vars)) = l.parts() else { return self.tag(tag::L_OMEGA) };
+        self.tag(tag::L_NF);
+        match konst {
+            Some(k) => {
+                self.tag(1);
+                self.u64(k);
             }
-            Level::Zero => self.tag(tag::L_ZERO),
-            Level::Succ(l) => {
-                self.tag(tag::L_SUCC);
-                self.level(l);
-            }
-            Level::Max(a, b) => {
-                self.tag(tag::L_MAX);
-                self.level(a);
-                self.level(b);
-            }
-            Level::Omega => self.tag(tag::L_OMEGA),
+            None => self.tag(0),
+        }
+        self.u32(vars.len() as u32);
+        for (v, n) in vars {
+            self.u32(v.0);
+            self.u64(n);
         }
     }
 
@@ -831,6 +843,16 @@ impl<'a> Walk<'a> {
             Term::SndAt { pair } => {
                 self.tag(tag::E_SND_AT);
                 self.term(pair);
+            }
+            Term::VecLit { level, elem, zero, one, width, bits } => {
+                self.tag(tag::E_VECLIT);
+                self.level(level);
+                self.ty(elem);
+                self.term(zero);
+                self.term(one);
+                self.u32(*width);
+                self.u32(*bits as u32);
+                self.u32((bits >> 32) as u32);
             }
             Term::AppAt { fun, arg } => {
                 self.tag(tag::E_APP_AT);
@@ -1347,6 +1369,25 @@ pub fn check_key(prefix: &Prefix, body: &Term, opaque: bool, iface: &Hash) -> Op
     }
     w.tag(tag::KEY_PROOF);
     w.term(body);
+    w.finish()
+}
+
+/// The cache identity of one statement check: "the kernel accepted the
+/// statement of a binding with *this* interface, in a context whose
+/// interfaces hash thus". Asked by module-image replay for a declaration
+/// with no body, whose statement it would otherwise re-check on every load
+/// (`issues/native-process-fixed-cost.md`).
+///
+/// The interface hash is all of it. It renders the statement (its context,
+/// layer, type and level), and each global the statement refers to as that
+/// global's own interface hash, which is everything the statement check can
+/// read: the check is type formation over those referents' types and the
+/// δ-visible bodies their interfaces carry. A different domain keeps it
+/// apart from a definition's check key, which is the same interface hash
+/// under `KEY_DEF`.
+pub fn statement_key(prefix: &Prefix, iface: &Hash) -> Option<Hash> {
+    let mut w = Walk::new(DOMAIN_STATEMENT, prefix, prefix.len() as u32);
+    w.buf.extend_from_slice(iface);
     w.finish()
 }
 

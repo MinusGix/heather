@@ -203,6 +203,21 @@ domain zonks, and turns the never-zonks case into the §7.2 message instead
 of a junk instantiation. At a meta-free domain it is checked inline like
 every other member, which is the D2 path unchanged.
 
+**Amended 2026-10-27 ([[notation-extensibility]], the `∑` antidiagonal):**
+"cannot contribute a solution in inference mode" was too strong for a `Lam`
+whose unannotated binders' *domains* are meta-free and only the codomain
+waits. `MonoidRel::antidiag(+, n, λ i k => …)` inside a `∑` has `f: Nat →
+Nat → A`, nothing else in the call fixes `A`, and `i`, `k` are `Nat`
+regardless. Such a λ is as inferable as its annotated twin: when the retry
+is blocked, the fallback stage takes each unannotated binder's domain off the
+written parameter Π (one Π per binder, each domain zonked), infers the body
+under them, and the synthesized Π teaches the codomain through
+`OwedChecks::learn`, as an annotated λ's does (`infer_lambda_at_known_domains`,
+which generalizes the `?`-lowering's single `#try` binder). It runs only
+after expected-type solving, so a checking position still decides first. A
+domain that still mentions a meta keeps the §7.2 message; a body that does
+not infer leads with its own error and names the unpinned implicit.
+
 **Amended 2026-09-28 ([[polymorphic-argument-with-unsolved-callee]]):** a
 blocked bare polymorphic argument may also teach the enclosing call. The
 obligation retry instantiates its leading implicit prefix in a separate
@@ -739,3 +754,30 @@ elaborator-side instance of the invariant
 `issues/elaborator-canonical-type-spelling.md` asks for, which is to make
 readers see through names rather than make emitters guess, applied to the
 one reader that learns implicits.
+
+### 10.3 Projections (2026-10-31)
+
+A record type lowers inline to its fields' Σ tower, so a parameter that the
+fields read only through a projection reaches the unifier inside one:
+`record U(x: Q) { v: Nat, ok: x.k = v }` makes `U(?x)` carry
+`fst@(snd@(?x))` where the subject `U(x)` carries `fst@(snd@(x))`. `unify_tm`
+had no projection case, so nothing paired the receivers and `?x` was never
+learned (`issues/implicit-from-record-parameter-type.md`; `X86Memory(x)`,
+whose `relied: x.relies(perms)` applies a projection, is the case the library
+kept working around). A parameter written whole, or applied as a function,
+already met the `app` congruence.
+
+The new case pairs `fst`/`fst@` with either spelling of `fst`, and `snd`
+likewise, and recurses into the receivers. A projection is not injective, so
+`?x := x` is one solution of `fst(?x) = fst(x)` and not the only one; that is
+the same license the application congruence takes with a rigid head, and the
+kernel judges the completed call.
+
+The type speller had the same gap one layer over: `Holes::tm` (the instance
+matcher behind `respell_ty`, `docs/per-instantiation-type-codes-design.md`
+§4.1) read the annotated `Fst`/`Snd` but not the checked `fst@`/`snd@`, so
+such a parameter was never placed and the instance spelled as the bare name.
+A mismatch between `Other(x)` and `Other(y)` printed `Other` twice and fell
+through to the kernel ("a type that displays the same"); it now reads "this
+has type `Other(y)`, but `Other(x)` is expected here". The arm accepts the
+same spelling on both sides only, since step 2's walk is syntactic.

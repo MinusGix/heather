@@ -13,6 +13,11 @@
 //!
 //! Direction is the written one, never guessed: a goal that mentions `bᵢ`
 //! and not `aᵢ` is an error whose hint is `sym(hᵢ)`.
+//!
+//! A step whose proof is a relation application `R(a, b)` rather than an
+//! equation is a setoid rewrite (`rewrite/relation.rs`, design §9): the goal
+//! is rebuilt bottom-up, one congruence step per changed node, and the proof
+//! is chained by transitivity instead of `J`.
 
 use std::sync::Arc as Rc;
 
@@ -24,6 +29,10 @@ use heather_syntax::{Expr, ExprKind, NamedArg, Span};
 
 use crate::matching::MotiveSynthesisElab;
 use crate::{Cx, ElabError, Elaborator, R};
+
+mod relation;
+
+use relation::Polarity;
 
 impl Elaborator {
     /// `rewrite(h₁, …, hₙ, e)` at `goal`. `args` is the whole written
@@ -88,6 +97,15 @@ impl Elaborator {
             return self.elab_check(cx, body, goal, lvl);
         };
         let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
+        if let Some(mut step) = self.relation_step(cx, h, &proof, &proof_ty, goal, GOAL)? {
+            if at.is_some() {
+                return Err(relation_at_refused(h.span));
+            }
+            let (next, plan) = step.goal(goal, GOAL)?;
+            step.require_occurrence(goal, GOAL)?;
+            let case = self.rewrite_from(cx, rest, None, body, &next, lvl)?;
+            return Ok(Rc::unwrap_or_clone(step.emit(&plan, Polarity::Backward, Rc::new(case), 0)?));
+        }
         let (proof, Equation { level, ty, lhs, rhs }) = self.rewrite_instance(cx, h, proof, &proof_ty, goal, GOAL)?;
         let motive = self.rewrite_motive(cx, h, at, goal, GOAL, &ty, &level, &lhs, &rhs, lvl)?;
         // The goal after this step: `M[b/y]`.
@@ -173,6 +191,16 @@ impl Elaborator {
         let (mut term, mut ty_now, lvl) = self.elab_infer(cx, &hyp.expr)?;
         for h in args {
             let (proof, proof_ty, _) = self.elab_infer(cx, h)?;
+            if let Some(mut step) = self.relation_step(cx, h, &proof, &proof_ty, &ty_now, HYPOTHESIS)? {
+                if at.is_some() {
+                    return Err(relation_at_refused(h.span));
+                }
+                let (next, plan) = step.goal(&ty_now, HYPOTHESIS)?;
+                step.require_occurrence(&ty_now, HYPOTHESIS)?;
+                term = Rc::unwrap_or_clone(step.emit(&plan, Polarity::Forward, Rc::new(term), 0)?);
+                ty_now = next;
+                continue;
+            }
             let (proof, Equation { level, ty, lhs, rhs }) =
                 self.rewrite_instance(cx, h, proof, &proof_ty, &ty_now, HYPOTHESIS)?;
             let motive =
@@ -266,7 +294,7 @@ impl Elaborator {
         let mut mcx = cx.clone();
         mcx.push("_".to_string(), (**carrier).clone(), carrier_level.clone());
         let psi = self.goal_psi();
-        typing::check_type(&psi, 0, Layer::Prog, &mcx.gamma, &motive, lvl, self.fuel).map_err(|_| {
+        typing::check_type(&psi, 0, Layer::Prog, &mcx.gamma, &motive, lvl, self.policy.fuel).map_err(|_| {
             ElabError::Elab {
                 msg: format!(
                     "`rewrite`: abstracting the left side{} from {what} does not leave a type: \
@@ -296,8 +324,8 @@ impl Elaborator {
     ) -> R<(Term, Equation)> {
         let not_an_equation = |ty: &Type| ElabError::Elab {
             msg: format!(
-                "`rewrite` rewrites along an equation `a = b`, and this proof is of `{}`\n  \
-                 hint: a relation other than `=` rewrites with `rel_cong(h)` or a `calc` step",
+                "`rewrite` rewrites along an equation `a = b` or a relation `R(a, b)`, and \
+                 this proof is of `{}`",
                 self.display_type(cx, ty)
             ),
             span: h.span,
@@ -306,11 +334,13 @@ impl Elaborator {
         // scoped there.
         let mut pcx = cx.clone();
         let mut k = 0u32;
+        let mut telescope = Vec::new();
         let mut cur = self.whnf(cx, proof_ty, h.span)?;
         let (level, ty, lhs, rhs) = loop {
             match cur {
                 Type::Id { level, ty, lhs, rhs } => break (level, ty, lhs, rhs),
                 Type::Pi { dom_level, dom, cod, .. } if k < MAX_OPEN => {
+                    telescope.push(((*dom).clone(), dom_level.clone()));
                     pcx.push(format!("_{k}"), (*dom).clone(), dom_level);
                     k += 1;
                     cur = self.whnf(&pcx, &cod, h.span)?;
@@ -334,7 +364,7 @@ impl Elaborator {
             .take(CANDIDATES)
             .find_map(|t| {
                 let mut binds = vec![None; k as usize];
-                self.match_pattern(cx, &lhs, &t, k, &mut binds).then_some(binds)
+                self.match_pattern(cx, &lhs, &t, k, &mut binds, &telescope, h.span).then_some(binds)
             });
         let Some(binds) = found else {
             return Err(ElabError::Elab {
@@ -385,15 +415,85 @@ impl Elaborator {
     /// constructor value's annotation in another. Annotations of the spines
     /// themselves are not read: the instance is built from the bindings, and
     /// the caller's abstraction re-checks it by conversion, which decides.
-    fn match_pattern(&self, cx: &Cx, pat: &Term, t: &Rc<Term>, k: u32, binds: &mut [Option<Rc<Term>>]) -> bool {
+    ///
+    /// `telescope` is the `x`s' types, outermost first, each scoped in Γ and
+    /// the `x`s before it. A class dictionary among them that matching left
+    /// unbound is resolved at its instantiated type
+    /// ([`Self::bind_dictionaries`]).
+    #[allow(clippy::too_many_arguments)]
+    fn match_pattern(
+        &self,
+        cx: &Cx,
+        pat: &Term,
+        t: &Rc<Term>,
+        k: u32,
+        binds: &mut [Option<Rc<Term>>],
+        telescope: &[(Type, Level)],
+        span: Span,
+    ) -> bool {
         let mut deferred = Vec::new();
         if !self.match_spine(cx, pat, t, k, binds, &mut deferred) {
+            return false;
+        }
+        if !self.bind_dictionaries(cx, k, binds, telescope, span) {
             return false;
         }
         deferred.into_iter().all(|(p, t)| match instantiate(&cx.gamma, &p, k, binds) {
             Some(p) => p == *t || self.terms_convert(cx, &p, &t),
             None => false,
         })
+    }
+
+    /// Binds each class dictionary in `telescope` that matching left unbound
+    /// by resolution, at its type instantiated by the arguments before it. A
+    /// law stated in a class's section takes the section's dictionary, which
+    /// its left side mentions only inside what it builds from it (`range`'s
+    /// monoid, say), never as a part matching can bind. `false` when one does
+    /// not resolve: the candidate is not an instance — its operation is not
+    /// the class's.
+    fn bind_dictionaries(
+        &self,
+        cx: &Cx,
+        k: u32,
+        binds: &mut [Option<Rc<Term>>],
+        telescope: &[(Type, Level)],
+        span: Span,
+    ) -> bool {
+        for (j, (dom, level)) in telescope.iter().enumerate() {
+            let slot = k as usize - 1 - j;
+            if binds[slot].is_some() {
+                continue;
+            }
+            // Binder `i < j` is `Var(j - 1 - i)` in `dom`; extended outermost
+            // first.
+            let mut sigma = LocalSubst::id(&cx.gamma);
+            let mut bound = true;
+            for i in 0..j {
+                match &binds[k as usize - 1 - i] {
+                    Some(arg) => sigma = sigma.extended(Rc::clone(arg)),
+                    None => {
+                        bound = false;
+                        break;
+                    }
+                }
+            }
+            if !bound {
+                continue;
+            }
+            let ty = dom.apply_local(&sigma);
+            let is_class = self.display_tag_of(&ty).is_some_and(|ind| {
+                ind.is_record && self.traits.has_class(&crate::names::qkey(&ind.scope.module, &ind.name))
+            });
+            if !is_class {
+                continue;
+            }
+            let shown = self.display_type(cx, &ty);
+            match self.resolve_goal(cx, &ty, level, &shown, None, span, &mut Vec::new()) {
+                Some(dict) => binds[slot] = Some(Rc::new(dict)),
+                None => return false,
+            }
+        }
+        true
     }
 
     fn match_spine(
@@ -420,6 +520,18 @@ impl Elaborator {
         if let Some(closed) = crate::strengthen_tm(&cx.gamma, pat, k) {
             return closed == **t || self.terms_convert(cx, &closed, t);
         }
+        // A codata constructor is a `corec` whose signature holds the type's
+        // parameters and whose step holds the fields: matched structurally,
+        // binders and all (docs/equation-rewrite-design.md §11.2).
+        if let Term::Corec { .. } = pat {
+            return matches!(**t, Term::Corec { .. }) && self.match_deep(cx, pat, t, k, 0, binds);
+        }
+        // `λ z. g(z)` with `z` not in `g` is `g` (η): a law's `λ k. f(k)`
+        // binds `f`, to what the goal's λ contracts to, or to the λ itself.
+        if let Some(g) = eta(pat) {
+            let t = eta(t).map_or_else(|| Rc::clone(t), Rc::new);
+            return self.match_spine(cx, &g, &t, k, binds, deferred);
+        }
         match (crate::spelling::app_of(pat), crate::spelling::app_of(t)) {
             (Some((pf, pa)), Some((tf, ta))) => {
                 let (tf, ta) = (Rc::clone(tf), Rc::clone(ta));
@@ -430,6 +542,115 @@ impl Elaborator {
                 deferred.push((pat.clone(), Rc::clone(t)));
                 true
             }
+        }
+    }
+
+    /// `pat` against `t`, both `d` binders below the match's context, node
+    /// by node: a pattern variable (`Var(d)` … `Var(d + k - 1)`) binds the
+    /// subterm it meets, which must not mention those `d` binders, and
+    /// everything else must agree in shape. A part with no pattern variable
+    /// is compared as written, or by conversion at depth 0. The forms a
+    /// codata constructor is built from are walked; any other form with a
+    /// pattern variable inside is no match.
+    fn match_deep(&self, cx: &Cx, pat: &Term, t: &Term, k: u32, d: u32, binds: &mut [Option<Rc<Term>>]) -> bool {
+        if let Term::Var(x) = pat {
+            let x = x.0;
+            if x >= d && x < d + k {
+                let Some(lowered) = lower(t, 0, d) else { return false };
+                let slot = &mut binds[(x - d) as usize];
+                return match slot {
+                    Some(bound) => **bound == lowered || self.terms_convert(cx, &bound.clone(), &lowered),
+                    None => {
+                        *slot = Some(Rc::new(lowered));
+                        true
+                    }
+                };
+            }
+        }
+        if let Some(closed) = lower(pat, d, k) {
+            return closed == *t || (d == 0 && self.terms_convert(cx, &closed, t));
+        }
+        let deep = |p: &Term, s: &Term, by: u32, binds: &mut [Option<Rc<Term>>]| self.match_deep(cx, p, s, k, d + by, binds);
+        let deep_ty = |p: &Type, s: &Type, by: u32, binds: &mut [Option<Rc<Term>>]| self.match_deep_ty(cx, p, s, k, d + by, binds);
+        if let (Some((pf, pa)), Some((tf, ta))) = (crate::spelling::app_of(pat), crate::spelling::app_of(t)) {
+            return deep(pf, tf, 0, binds) && deep(pa, ta, 0, binds);
+        }
+        match (pat, t) {
+            // A binder's type is matched when it can be: the same type has
+            // more than one spelling (a code decoded or not), and a λ's
+            // domain is fixed by what it is applied in, which the caller's
+            // statement checks.
+            (Term::Lam { dom: pd, body: pb, .. }, Term::Lam { dom: td, body: tb, .. }) => {
+                let mut tried = binds.to_vec();
+                if deep_ty(pd, td, 0, &mut tried) {
+                    binds.clone_from_slice(&tried);
+                }
+                deep(pb, tb, 1, binds)
+            }
+            (Term::Pair { fst_ty: pa, snd_ty: pb, fst: pf, snd: ps, .. }, Term::Pair { fst_ty: ta, snd_ty: tb, fst: tf, snd: ts, .. }) => {
+                deep_ty(pa, ta, 0, binds) && deep_ty(pb, tb, 1, binds) && deep(pf, tf, 0, binds) && deep(ps, ts, 0, binds)
+            }
+            (Term::PairAt { fst: pf, snd: ps, ty: None }, Term::PairAt { fst: tf, snd: ts, ty: None }) => {
+                deep(pf, tf, 0, binds) && deep(ps, ts, 0, binds)
+            }
+            (Term::InlAt { val: p, ty: None }, Term::InlAt { val: v, ty: None })
+            | (Term::InrAt { val: p, ty: None }, Term::InrAt { val: v, ty: None }) => deep(p, v, 0, binds),
+            (Term::Inl { lhs: pl, rhs: pr, val: p, .. }, Term::Inl { lhs: tl, rhs: tr, val: v, .. })
+            | (Term::Inr { lhs: pl, rhs: pr, val: p, .. }, Term::Inr { lhs: tl, rhs: tr, val: v, .. }) => {
+                deep_ty(pl, tl, 0, binds) && deep_ty(pr, tr, 0, binds) && deep(p, v, 0, binds)
+            }
+            (Term::SRefl { ty: pt, tm: p, .. }, Term::SRefl { ty: tt, tm: v, .. }) => deep_ty(pt, tt, 0, binds) && deep(p, v, 0, binds),
+            (
+                Term::Corec { sig: ps, carrier: pc, step: pst, index: pi, seed: pse, .. },
+                Term::Corec { sig: ts, carrier: tc, step: tst, index: ti, seed: tse, .. },
+            ) => {
+                self.match_sig(cx, ps, ts, k, d, binds)
+                    && deep_ty(pc, tc, 1, binds)
+                    && deep(pst, tst, 2, binds)
+                    && deep(pi, ti, 0, binds)
+                    && deep(pse, tse, 0, binds)
+            }
+            // Any other form is compared once the variables it mentions are
+            // bound (an `elim_Empty`'s motive, in a constructor with no
+            // children, mentions only the type's parameters).
+            _ => instantiate_at(pat, d, k, binds).is_some_and(|p| p == *t),
+        }
+    }
+
+    fn match_sig(
+        &self,
+        cx: &Cx,
+        p: &heather_kernel::term::MSig,
+        t: &heather_kernel::term::MSig,
+        k: u32,
+        d: u32,
+        binds: &mut [Option<Rc<Term>>],
+    ) -> bool {
+        // `M(I; i. S; i s. P; i s p. o)`.
+        self.match_deep_ty(cx, &p.idx, &t.idx, k, d, binds)
+            && self.match_deep_ty(cx, &p.shape, &t.shape, k, d + 1, binds)
+            && self.match_deep_ty(cx, &p.pos, &t.pos, k, d + 2, binds)
+            && self.match_deep(cx, &p.next, &t.next, k, d + 3, binds)
+    }
+
+    /// [`Self::match_deep`] over types.
+    fn match_deep_ty(&self, cx: &Cx, pat: &Type, t: &Type, k: u32, d: u32, binds: &mut [Option<Rc<Term>>]) -> bool {
+        if let Some(closed) = lower_ty(pat, d, k) {
+            return closed == *t;
+        }
+        match (pat, t) {
+            (Type::El { tm: p, .. }, Type::El { tm: s, .. }) => self.match_deep(cx, p, s, k, d, binds),
+            (Type::Pi { dom: pd, cod: pc, .. }, Type::Pi { dom: td, cod: tc, .. })
+            | (Type::Sigma { fst: pd, snd: pc, .. }, Type::Sigma { fst: td, snd: tc, .. }) => {
+                self.match_deep_ty(cx, pd, td, k, d, binds) && self.match_deep_ty(cx, pc, tc, k, d + 1, binds)
+            }
+            (Type::Sum { lhs: pl, rhs: pr, .. }, Type::Sum { lhs: tl, rhs: tr, .. }) => {
+                self.match_deep_ty(cx, pl, tl, k, d, binds) && self.match_deep_ty(cx, pr, tr, k, d, binds)
+            }
+            (Type::M { sig: ps, index: pi }, Type::M { sig: ts, index: ti }) => {
+                self.match_sig(cx, ps, ts, k, d, binds) && self.match_deep(cx, pi, ti, k, d, binds)
+            }
+            _ => false,
         }
     }
 
@@ -456,10 +677,72 @@ impl Elaborator {
     /// Do two terms scoped in `cx` convert, at the first one's type?
     fn terms_convert(&self, cx: &Cx, a: &Term, b: &Term) -> bool {
         let oracle = self.goal_oracle();
-        let Ok((ty, level)) = typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, a, self.fuel) else {
+        let Ok((ty, level)) = typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, a, self.policy.fuel) else {
             return false;
         };
         self.motive_candidate_converts(cx, b, a, &ty, &level)
+    }
+}
+
+/// `t` with its variables `at` … `at + n - 1` dropped, the ones above
+/// lowered; `None` when it mentions one of them.
+fn lower(t: &Term, at: u32, n: u32) -> Option<Term> {
+    let mut cur = t.clone();
+    for _ in 0..n {
+        let dropped = cur.inst_top_above(0, at, &Term::Zero);
+        if dropped.shift_local_above(1, at) != cur {
+            return None;
+        }
+        cur = dropped;
+    }
+    Some(cur)
+}
+
+/// `t`, `d` binders below the match's context, with its pattern variables
+/// (`Var(d)` … `Var(d + k - 1)`) replaced by `binds`; `None` when one it
+/// mentions is unbound.
+fn instantiate_at(t: &Term, d: u32, k: u32, binds: &[Option<Rc<Term>>]) -> Option<Term> {
+    let mut cur = t.clone();
+    // Each step substitutes `Var(d)` and lowers what is above it, so a
+    // payload is raised first by the steps still to come after it.
+    for (j, slot) in binds.iter().take(k as usize).enumerate() {
+        let next = match slot {
+            Some(b) => cur.inst_top_above(0, d, &b.shift_local(k - 1 - j as u32)),
+            None => {
+                let dropped = cur.inst_top_above(0, d, &Term::Zero);
+                if dropped.shift_local_above(1, d) != cur {
+                    return None;
+                }
+                dropped
+            }
+        };
+        cur = next;
+    }
+    Some(cur)
+}
+
+/// [`lower`] over a type.
+fn lower_ty(t: &Type, at: u32, n: u32) -> Option<Type> {
+    let mut cur = t.clone();
+    for _ in 0..n {
+        let dropped = cur.inst_top_above(0, at, &Term::Zero);
+        if dropped.shift_local_above(1, at) != cur {
+            return None;
+        }
+        cur = dropped;
+    }
+    Some(cur)
+}
+
+/// `at :=` with a relation: occurrence numbers are tree positions, and the
+/// relation walk visits each shared node once.
+fn relation_at_refused(span: Span) -> ElabError {
+    ElabError::Elab {
+        msg: "`at :=` selects occurrences of an equation's left side; a relation rewrite \
+              rewrites every occurrence (issues/relational-rewrite-controls.md)\n  \
+              hint: rewrite with an instance of the lemma that only those occurrences match"
+            .into(),
+        span,
     }
 }
 
@@ -508,18 +791,44 @@ fn instantiate(gamma: &heather_kernel::term::LocalCtx, pat: &Term, k: u32, binds
     (binds.iter().all(Option::is_some) || one == at(&Term::Succ(Rc::new(Term::Zero)))).then_some(one)
 }
 
+/// `λ z. g(z)` contracted to `g`, when `z` does not occur in `g`.
+fn eta(t: &Term) -> Option<Term> {
+    let Term::Lam { body, .. } = t else { return None };
+    let (g, arg) = crate::spelling::app_of(body)?;
+    if !matches!(&**arg, Term::Var(x) if x.0 == 0) {
+        return None;
+    }
+    let lowered = g.inst_top(0, &Term::Zero);
+    (lowered.shift_local(1) == **g).then_some(lowered)
+}
+
 /// The key a candidate must share with a pattern: the same application
-/// head (a pattern variable never heads one here) and the same number of
-/// arguments. `k` is how many binders the pattern is scoped under beyond
-/// the candidate.
+/// head and the same number of arguments. `k` is how many binders the
+/// pattern is scoped under beyond the candidate. A pattern headed by one of
+/// its own variables — a class's operation, which a law stated in the
+/// class's section takes as an argument — is keyed instead by its first
+/// argument that is no variable of its own, which must share its key; a
+/// pattern with no such argument has none, as it would match every
+/// application.
 fn same_key(pat: &Term, t: &Term, k: u32) -> bool {
     let (ph, pargs) = crate::spelling::app_spine(pat);
     let (th, targs) = crate::spelling::app_spine(t);
     if pargs.len() != targs.len() {
         return false;
     }
+    let variable = |p: &Term| matches!(p, Term::Var(x) if x.0 < k);
+    if variable(ph) {
+        return pargs
+            .iter()
+            .zip(&targs)
+            .find(|(p, _)| !variable(p))
+            .is_some_and(|(p, t)| same_key(p, t, k));
+    }
     match (ph, th) {
         (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) => a == b,
+        // Codata constructors: whether they are the same one is the match's
+        // to say (`match_deep`).
+        (Term::Corec { .. }, Term::Corec { .. }) => true,
         (Term::Var(a), Term::Var(b)) => a.0 >= k && a.0 - k == b.0,
         _ => *ph == th.shift_local(k),
     }

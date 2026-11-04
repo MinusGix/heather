@@ -4,7 +4,7 @@ status: open
 labels: [compiler,function-ir,semantics,bitvec,x86]
 area: heather-in-heather
 created: 2026-08-31
-updated: 2026-09-03
+updated: 2026-11-02
 ---
 
 After the Add-DAG lowering path is executable, extend the official pure
@@ -66,3 +66,14 @@ Backend follow-ons are split by the target boundary they introduce:
 selection is owned by [[function-ir-x86-fused-compare-branch]]. This issue
 remains the semantic umbrella rather than accumulating their encoding and
 allocation details.
+
+## Log
+
+- 2026-10-31: 2026-10-31: Pulled by `nh-front` (`docs/runtime-fn-setups-design.md` §7.1): the default setup's primitive table needs `Mul`, `UDiv` and `URem` nodes (the decimal formatter as a `runtime fn`, hashing), each with its node equation for the setup's once-proof.
+
+**2026-11-02.** The `runtime fn` default setup's lowering
+(`lib/native/runtime/rt_lower.hthr`) refuses `rt`'s `Zext` for want of a node:
+a `Move` reads its source at the wider width, which says nothing of the
+narrow value. A zero-extend (and truncate) node with its equation would let
+`Tm::lower_sound` cover it like the other primitives.
+

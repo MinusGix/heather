@@ -148,6 +148,48 @@ fn a_literal_without_its_module_says_which_import_is_missing() {
     assert!(msg.contains("import string;"), "{msg}");
 }
 
+/// A literal's generated call names what the module declaring its type can
+/// see, not what the client imports: `char::ofNat`'s witness is
+/// `bool::decide_yes(refl)` and a string's characters are `char` literals, so
+/// a client that imports only `string` (or `char`) still builds them
+/// (issues/literal-needs-module-names-wrong-module.md). Each position the
+/// literal elaborates in, and a wrong literal refused for its value, not for
+/// an import.
+#[test]
+fn a_literal_needs_only_its_own_types_module() {
+    let only = |imports: &str, body: &str| -> Result<(), String> {
+        let src = format!("{imports}{body}");
+        let mut e = library();
+        e.elab_module_source("probe", &src).map_err(|error| error.render(&src))
+    };
+    let char_body = r#"
+fn plain() -> Char { 'x' }
+fn inferred() -> Nat { let c = 'x'; c.toNat() }
+fn in_a_list() -> List<Char> { ['a', 'b'] }
+"#;
+    let string_body = r#"
+fn hello() -> String { "hi" }
+fn inferred() -> Nat { let s = "hi"; s.len() }
+fn empty() -> String { "" }
+"#;
+    for (imports, body) in [
+        ("import nat;\nimport list;\nimport char;\n", char_body),
+        ("import nat;\nimport char;\nimport string;\n", string_body),
+        ("import nat;\nimport string;\n", string_body),
+    ] {
+        if let Err(msg) = only(imports, body) {
+            panic!("refused with {imports:?}:\n{msg}");
+        }
+    }
+    let mut e = library();
+    support::assert_refused(
+        &mut e,
+        "probe",
+        "import nat;\nimport string;\ntheorem wrong(): \"hi\" = \"ho\" { refl }\n",
+        support::Refusal::Kernel,
+    );
+}
+
 #[test]
 fn an_inference_position_literal_names_its_own_spec_type() {
     check(
@@ -191,4 +233,34 @@ theorem nested(): Cons(Cons(1, Nil), Nil) = Cons(Cons(1, Nil), Nil) { decide }
 theorem differ(): ¬(Cons('a', Nil) = Cons('b', Nil)) { decide }
 "#,
     );
+}
+
+/// A character met again in one declaration is the first one's term: its
+/// `Decide` resolution runs once, not once per letter, and the letters still
+/// read back as what was written — repeated and distinct ones alike.
+#[test]
+fn a_repeated_character_resolves_once_per_declaration() {
+    let goals = |text: &str| {
+        let src = format!("{PREAMBLE}fn word() -> String {{ \"{text}\" }}\n");
+        let mut e = library();
+        e.enable_item_timings();
+        if let Err(error) = e.elab_module_source("probe", &src) {
+            panic!("{}", error.render(&src));
+        }
+        let rows = e.take_item_timings();
+        heather_elab::stats::disable();
+        let row = rows.iter().find(|r| r.item == "word").expect("the measured declaration");
+        row.counters[heather_elab::stats::Counter::ResolveGoals as usize]
+    };
+    let (short, long) = (goals("ab"), goals("abababababababab"));
+    assert!(short > 0, "a character resolves its witness");
+    assert_eq!(short, long, "resolutions grew with repeated letters: {short} → {long}");
+    check(r#"
+fn word() -> String { "abba" }
+theorem spelled(): word().chars = ['a', 'b', 'b', 'a'] { refl }
+"#);
+    refused(r#"
+fn word() -> String { "abba" }
+theorem spelled(): word().chars = ['a', 'b', 'a', 'a'] { refl }
+"#);
 }

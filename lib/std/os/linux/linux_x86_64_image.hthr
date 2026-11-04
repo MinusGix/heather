@@ -1,19 +1,22 @@
-// The process Linux makes of the I/O profile's ELF (`io_elf_header` in
-// elf64_calls), as a memory of the byte model (x86_64_byte_memory;
+// The process Linux makes of the I/O profile's ELF (`io_elf_file`, below),
+// as a memory of the byte model (x86_64_byte_memory;
 // issues/io-image-on-byte-model.md): the file's bytes at 0x400000, readable
-// and executable, in a 64-KiB window; the RW segment's eight zero-filled KiB
-// at 0x410000, the page a program reads into and then the frame it keeps
-// words in, readable and writable; nothing else mapped.
+// and executable, in a 64-KiB window; the RW segment at 0x410000, the
+// program's `size` zero-filled bytes, readable and writable; nothing else
+// mapped.
 //
-// The profile (`X86Profile::io()`) relies on the page and the frame being
-// data and on nothing else, so each is a `DataRegion` of it
-// (`DataRegion::io_page`, `DataRegion::io_frame`) and a program sees either
-// through the buffer view. The code is not in the profile: a run needs its
-// bytes resident, and that is in the program's view
+// The segment's size is the program's (issues/native-data-capacity.md): its
+// words, its buffers and its scratch range, up to `io_data_limit()`. The
+// segment takes nothing from the file (`p_filesz` is zero and `p_memsz` the
+// size), so a large one costs nothing to write. The profile
+// (`X86Profile::io(size)`) relies on the segment being data and on nothing
+// else, so the segment is a `DataRegion` of it (`DataRegion::io_data`) and a
+// program sees it through the buffer view. The code is not in the profile: a
+// run needs its bytes resident, and that is in the program's view
 // (`DataRegion::program_view`), which keeps it because every store the view
 // allows lands on data, which nothing executes. The loader
 // (`X86Memory::io_load`) is where a file's code is first resident
-// (`X86Memory::io_load_resident`) and the RW segment first zero.
+// (`X86Memory::io_load_resident`) and the segment first zero.
 //
 // The loader classifies an address by its value rather than its bits, so a
 // fact about the image at an open offset is arithmetic, not bit slicing.
@@ -21,6 +24,9 @@ import x86_64;
 import x86_64_fetch;
 import x86_64_fetched_code;
 import x86_64_byte_memory;
+import x86_64_store;
+import x86_64_stack;
+import elf64;
 import linux_x86_64_byte_memory;
 import memory;
 import bitvec;
@@ -36,28 +42,71 @@ import omega;
 fn io_entry() → BitVec(64) { BitVec::ofNat(0x4000e8) }
 
 // ---------------------------------------------------------------------------
-// The profile and its regions
+// The profile and its region
 
 // Every byte of the `size` from `low` has the data permission.
 fn DataAt(perms: BitVec(64) → Perm, low: BitVec(64), size: Nat) → Type {
     (i: Nat) → i < size → perms(next_rip(low, i)) = Perm::data()
 }
 
-// What a process of the image relies on: the page and the frame are data.
-fn IoRelies(perms: BitVec(64) → Perm) → Type {
-    DataAt(perms, BitVec::ofNat(0x410000), 4096) ∧ DataAt(perms, BitVec::ofNat(0x411000), 4096)
-}
-fn X86Profile::io() → X86Profile { X86Profile(IoRelies) }
+// The largest segment the profile takes: a GiB, far below the canonical
+// boundary and the stack.
+fn io_data_limit() → Nat { 0x40000000 }
 
-fn DataRegion::io_page() → DataRegion {
-    DataRegion(profile := X86Profile::io(), low := BitVec::ofNat(0x410000), size := 4096,
-        canonical := Nat::leb_sound(BitVec::ofNat(0x410000, n := 64).toNat() + 4096, Nat::pow(2, 47), trivial),
-        data := λ perms relied => relied.left)
+// What a process of the image relies on: the segment's `size` bytes are data.
+fn X86Profile::io(size: Nat) → X86Profile { X86Profile(λ perms => DataAt(perms, BitVec::ofNat(0x410000), size)) }
+
+theorem io_data_canonical(size: Nat, within: size <= io_data_limit()): BitVec::ofNat(0x410000, n := 64).toNat() + size <= Nat::pow(2, 47) {
+    let low: (BitVec::ofNat(0x410000, n := 64).toNat() = 0x410000) = refl;
+    let limit: (io_data_limit() = 0x40000000) = refl;
+    let top: (0x410000 + 0x40000000 <= Nat::pow(2, 47)) = Nat::leb_sound(0x410000 + 0x40000000, Nat::pow(2, 47), trivial);
+    omega(low, limit, within, top)
 }
-fn DataRegion::io_frame() → DataRegion {
-    DataRegion(profile := X86Profile::io(), low := BitVec::ofNat(0x411000), size := 4096,
-        canonical := Nat::leb_sound(BitVec::ofNat(0x411000, n := 64).toNat() + 4096, Nat::pow(2, 47), trivial),
-        data := λ perms relied => relied.right)
+
+// An offset into the segment is its address's value less 0x410000.
+theorem io_data_offset(size: Nat, within: size <= io_data_limit(), i: Nat, inside: i < size):
+    next_rip(BitVec::ofNat(0x410000), i).toNat() = 0x410000 + i {
+    let limit: (io_data_limit() = 0x40000000) = refl;
+    let top: (0x410000 + 0x40000000 <= Nat::pow(2, 64)) = Nat::leb_sound(0x410000 + 0x40000000, Nat::pow(2, 64), trivial);
+    BitVec::ofNat_offset_toNat(64, 0x410000, i, omega(inside, within, limit, top))
+}
+
+// Where the segment starts.
+fn io_data_low() → BitVec(64) { BitVec::ofNat(0x410000) }
+
+fn DataRegion::io_data(size: Nat, within: size <= io_data_limit()) → DataRegion {
+    DataRegion(profile := X86Profile::io(size), low := io_data_low(), size := size,
+        canonical := io_data_canonical(size, within), data := λ perms relied => relied)
+}
+
+// ---------------------------------------------------------------------------
+// The file
+
+// The profile's ELF: `static_elf64_header` with its entry at 0x4000e8, past a
+// third program header, and that header a PT_LOAD of the RW segment: `size`
+// zero-filled bytes at 0x410000 (p_offset 0x1000, nothing from the file),
+// readable and writable. `low` and `high` are the file's size, the header
+// included; the RX mapping is the whole file at 0x400000, as before. That
+// Linux maps these headers as `X86Memory::io_load` says is the environment's
+// assumption, not a theorem.
+fn io_elf_header(low, high: BitVec(8), size: Nat) → List<BitVec(8)> {
+    let base = static_elf64_header(low, high);
+    let segment: List<BitVec(8)> = List::append([elf_byte(1), elf_byte(0), elf_byte(0), elf_byte(0), elf_byte(6), elf_byte(0), elf_byte(0), elf_byte(0)],
+        List::append(word_bytes(BitVec::ofNat(0x1000)), List::append(word_bytes(BitVec::ofNat(0x410000)), List::append(word_bytes(BitVec::ofNat(0x410000)),
+        List::append(word_bytes(BitVec::ofNat(0)), List::append(word_bytes(BitVec::ofNat(size)), word_bytes(BitVec::ofNat(0x1000))))))));
+    List::append(base.take(24), List::append(word_bytes(io_entry()), List::append(base.drop(32).take(24),
+        List::append([elf_byte(3), elf_byte(0)], List::append(base.drop(58), segment)))))
+}
+
+theorem io_elf_header_length(low, high: BitVec(8), size: Nat): io_elf_header(low, high, size).len() = 232 { refl }
+
+// The file of `code` with a segment of `size`: the header, its size read off
+// the code's length, then the code. The size is sixteen bits, so a file is
+// at most 65535 bytes; the loader's window (`X86Memory::io_load_entry`'s
+// `fits`) asks the same.
+fn io_elf_file(code: List<BitVec(8)>, size: Nat) → List<BitVec(8)> {
+    let length = 232 + code.len();
+    List::append(io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size), code)
 }
 
 // ---------------------------------------------------------------------------
@@ -65,14 +114,14 @@ fn DataRegion::io_frame() → DataRegion {
 
 // An address's permission and cell, by its value: the RW segment first, then
 // the file's window below it.
-fn io_perm_segment(n: Nat) → Perm { match Succ(n).leb(0x412000) { True => Perm::data(), False => Perm::none() } }
+fn io_perm_segment(size, n: Nat) → Perm { match Succ(n).leb(0x410000 + size) { True => Perm::data(), False => Perm::none() } }
 fn io_perm_file(length, n: Nat) → Perm {
     match 0x400000.leb(n) {
         True => match Succ(n).leb(0x400000 + length) { True => Perm::code(), False => Perm::none() },
         False => Perm::none(),
     }
 }
-fn io_perm(length, n: Nat) → Perm { match 0x410000.leb(n) { True => io_perm_segment(n), False => io_perm_file(length, n) } }
+fn io_perm(size, length, n: Nat) → Perm { match 0x410000.leb(n) { True => io_perm_segment(size, n), False => io_perm_file(length, n) } }
 
 fn io_cell_file(file: List<BitVec(8)>, n: Nat) → BitVec(8) {
     match 0x400000.leb(n) {
@@ -82,34 +131,28 @@ fn io_cell_file(file: List<BitVec(8)>, n: Nat) → BitVec(8) {
 }
 fn io_cell(file: List<BitVec(8)>, n: Nat) → BitVec(8) { match 0x410000.leb(n) { True => BitVec::zero(), False => io_cell_file(file, n) } }
 
-fn io_perms(file: List<BitVec(8)>) → BitVec(64) → Perm { λ (a: BitVec(64)) => io_perm(file.len(), a.toNat()) }
+fn io_perms(size: Nat, file: List<BitVec(8)>) → BitVec(64) → Perm { λ (a: BitVec(64)) => io_perm(size, file.len(), a.toNat()) }
 
 // The segment's byte `i` is data, whatever the file.
-theorem io_perm_in_segment(length, i: Nat, inside: i < 8192): io_perm(length, 0x410000 + i) = Perm::data() {
+theorem io_perm_in_segment(size, length, i: Nat, inside: i < size): io_perm(size, length, 0x410000 + i) = Perm::data() {
     let n = 0x410000 + i;
     let low = Nat::leb_true(0x410000, n, Nat::le_add_l(0x410000, i));
-    let high = Nat::leb_true(Succ(n), 0x412000, omega(inside));
-    j(sym(low), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(n), False => io_perm_file(length, n) }) = Perm::data(),
+    let high = Nat::leb_true(Succ(n), 0x410000 + size, omega(inside));
+    j(sym(low), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(size, n), False => io_perm_file(length, n) }) = Perm::data(),
         j(sym(high), λ s _ => (match s as λ _ => Perm { True => Perm::data(), False => Perm::none() }) = Perm::data(), refl))
 }
 
-theorem io_relies(file: List<BitVec(8)>): IoRelies(io_perms(file)) {
-    let top: (0x412000 <= Nat::pow(2, 64)) = Nat::leb_sound(0x412000, Nat::pow(2, 64), trivial);
-    ⟨λ i inside => trans(cong_fn<Nat, Perm>(λ n => io_perm(file.len(), n), BitVec::ofNat_offset_toNat(64, 0x410000, i, omega(inside, top))),
-            io_perm_in_segment(file.len(), i, omega(inside))),
-     λ i inside => {
-        let place: (0x411000 + i = 0x410000 + (4096 + i)) = omega;
-        trans(cong_fn<Nat, Perm>(λ n => io_perm(file.len(), n), trans(BitVec::ofNat_offset_toNat(64, 0x411000, i, omega(inside, top)), place)),
-            io_perm_in_segment(file.len(), 4096 + i, omega(inside)))
-     }⟩
+theorem io_relies(size: Nat, within: size <= io_data_limit(), file: List<BitVec(8)>): X86Profile::io(size).relies(io_perms(size, file)) {
+    λ i inside => trans(cong_fn<Nat, Perm>(λ n => io_perm(size, file.len(), n), io_data_offset(size, within, i, inside)),
+        io_perm_in_segment(size, file.len(), i, inside))
 }
 
-// The process Linux loads from `file`.
-fn X86Memory::io_load(file: List<BitVec(8)>) → X86Memory(X86Profile::io()) {
-    X86Memory(cells := λ (a: BitVec(64)) => io_cell(file, a.toNat()), perms := io_perms(file), relied := io_relies(file))
+// The process Linux loads from `file`, with a segment of `size`.
+fn X86Memory::io_load(size: Nat, within: size <= io_data_limit(), file: List<BitVec(8)>) → X86Memory(X86Profile::io(size)) {
+    X86Memory(cells := λ (a: BitVec(64)) => io_cell(file, a.toNat()), perms := io_perms(size, file), relied := io_relies(size, within, file))
 }
 
-// The segment starts zero: the page and the frame hold the zero buffer.
+// The segment starts zero.
 fn io_zero() → Nat → BitVec(8) { λ _ => BitVec::zero() }
 
 theorem io_cell_in_segment(file: List<BitVec(8)>, i: Nat): io_cell(file, 0x410000 + i) = BitVec::zero() {
@@ -117,31 +160,21 @@ theorem io_cell_in_segment(file: List<BitVec(8)>, i: Nat): io_cell(file, 0x41000
     j(sym(low), λ s _ => (match s as λ _ => BitVec(8) { True => BitVec::zero(), False => io_cell_file(file, 0x410000 + i) }) = BitVec::zero(), refl)
 }
 
-theorem X86Memory::io_load_page(file: List<BitVec(8)>): DataRegion::io_page().Holds(io_zero(), X86Memory::io_load(file)) {
-    let top: (0x412000 <= Nat::pow(2, 64)) = Nat::leb_sound(0x412000, Nat::pow(2, 64), trivial);
-    λ p inside => trans(cong_fn<Nat, BitVec(8)>(λ n => io_cell(file, n), BitVec::ofNat_offset_toNat(64, 0x410000, p, omega(inside, top))),
-        io_cell_in_segment(file, p))
-}
-
-theorem X86Memory::io_load_frame(file: List<BitVec(8)>): DataRegion::io_frame().Holds(io_zero(), X86Memory::io_load(file)) {
-    let top: (0x412000 <= Nat::pow(2, 64)) = Nat::leb_sound(0x412000, Nat::pow(2, 64), trivial);
-    λ p inside => {
-        let place: (0x411000 + p = 0x410000 + (4096 + p)) = omega;
-        trans(cong_fn<Nat, BitVec(8)>(λ n => io_cell(file, n), trans(BitVec::ofNat_offset_toNat(64, 0x411000, p, omega(inside, top)), place)),
-            io_cell_in_segment(file, 4096 + p))
-    }
+theorem X86Memory::io_load_data(size: Nat, within: size <= io_data_limit(), file: List<BitVec(8)>):
+    DataRegion::io_data(size, within).Holds(io_zero(), X86Memory::io_load(size, within, file)) {
+    λ p inside => trans(cong_fn<Nat, BitVec(8)>(λ n => io_cell(file, n), io_data_offset(size, within, p, inside)), io_cell_in_segment(file, p))
 }
 
 // ---------------------------------------------------------------------------
 // The file's bytes, resident where it is loaded
 
 // The file's byte `k`, inside the window: code, and the byte.
-theorem io_perm_in_file(length, k: Nat, inside: k < 65536, present: k < length): io_perm(length, 0x400000 + k) = Perm::code() {
+theorem io_perm_in_file(size, length, k: Nat, inside: k < 65536, present: k < length): io_perm(size, length, 0x400000 + k) = Perm::code() {
     let n = 0x400000 + k;
     let below = Nat::leb_false(0x410000, n, omega(inside));
     let low = Nat::leb_true(0x400000, n, Nat::le_add_l(0x400000, k));
     let high = Nat::leb_true(Succ(n), 0x400000 + length, omega(present));
-    j(sym(below), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(n), False => io_perm_file(length, n) }) = Perm::code(),
+    j(sym(below), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(size, n), False => io_perm_file(length, n) }) = Perm::code(),
         j(sym(low), λ s _ => (match s as λ _ => Perm {
                 True => match Succ(n).leb(0x400000 + length) { True => Perm::code(), False => Perm::none() },
                 False => Perm::none(),
@@ -168,23 +201,23 @@ theorem io_no_carry(k: Nat, inside: k < 65536): next_rip(BitVec::ofNat(0x400000)
     let word = next_rip(BitVec::ofNat(0x400000), k);
     let top: (0x400000 + 65537 <= Nat::pow(2, 64)) = Nat::leb_sound(0x400000 + 65537, Nat::pow(2, 64), trivial);
     let value: (word.toNat() = 0x400000 + k) = BitVec::ofNat_offset_toNat(64, 0x400000, k, omega(inside, top));
-    (match word.carry_add_bit(BitVec::ofNat(1)) as λ found => (word.carry_add_bit(BitVec::ofNat(1)) = found) → found = False {
-        False => λ _ => refl,
-        True => λ carried => {
+    match carried: word.carry_add_bit(BitVec::ofNat(1)) {
+        False => refl,
+        True => {
             let over = BitVec::carry_add_of_bit_true(64, word, BitVec::ofNat(1), carried);
             let spelled = j(value, λ a _ => Nat::pow(2, 64) <= a + 1, over);
             false_elim(omega(spelled, inside, top))
         },
-    })(refl)
+    }
 }
 
 // Code at file offset `k` onward is resident at `0x400000 + k`: one
 // induction over the code, with no byte evaluated.
-theorem X86Memory::io_load_suffix(file, code: List<BitVec(8)>): (k: Nat) → k + code.len() <= 65536 →
+theorem X86Memory::io_load_suffix(size: Nat, within: size <= io_data_limit(), file, code: List<BitVec(8)>): (k: Nat) → k + code.len() <= 65536 →
     ((i: Nat) → (byte: BitVec(8)) → code.nth(i) = Some(byte) → file.nth(k + i) = Some(byte)) →
-    CodeResident(X86Profile::io().fetch(), X86Memory::io_load(file), code, next_rip(BitVec::ofNat(0x400000), k)) {
-    let x = X86Profile::io();
-    let m = X86Memory::io_load(file);
+    CodeResident(X86Profile::io(size).fetch(), X86Memory::io_load(size, within, file), code, next_rip(BitVec::ofNat(0x400000), k)) {
+    let x = X86Profile::io(size);
+    let m = X86Memory::io_load(size, within, file);
     let top: (0x410000 <= Nat::pow(2, 47)) = Nat::leb_sound(0x410000, Nat::pow(2, 47), trivial);
     let wide: (Nat::pow(2, 47) <= Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47), Nat::pow(2, 64), trivial);
     match code {
@@ -197,11 +230,11 @@ theorem X86Memory::io_load_suffix(file, code: List<BitVec(8)>): (k: Nat) → k +
             let value: (a.toNat() = 0x400000 + k) = BitVec::ofNat_offset_toNat(64, 0x400000, k, omega(inside, top, wide));
             let perm: (x.perm(m, a) = Perm::code()) =
                 trans(x.perm_canonical(m, a, omega(value, inside, top)),
-                    trans(cong_fn<Nat, Perm>(λ n => io_perm(file.len(), n), value), io_perm_in_file(file.len(), k, inside, length)));
+                    trans(cong_fn<Nat, Perm>(λ n => io_perm(size, file.len(), n), value), io_perm_in_file(size, file.len(), k, inside, length)));
             let cell: (m.cells(a) = byte) = trans(cong_fn<Nat, BitVec(8)>(λ n => io_cell(file, n), value), io_cell_in_file(file, k, byte, inside, here));
             let read: (x.read(m, a) = Some(byte)) =
                 trans(x.read_at(m, a, cong_fn<Perm, Bool>(λ p => p.read, perm)), cong_fn<BitVec(8), Option<BitVec(8)>>(λ b => Some(b), cell));
-            let later = X86Memory::io_load_suffix(file, rest, Succ(k), omega(fits),
+            let later = X86Memory::io_load_suffix(size, within, file, rest, Succ(k), omega(fits),
                 λ i found present => j(sym(Nat::add_succ_left(k, i)), λ at _ => file.nth(at) = Some(found), placed(Succ(i), found, present)));
             ⟨cong_fn<Perm, Bool>(λ p => p.execute, perm),
              ⟨read, ⟨io_no_carry(k, inside),
@@ -211,9 +244,10 @@ theorem X86Memory::io_load_suffix(file, code: List<BitVec(8)>): (k: Nat) → k +
 }
 
 // A file of a header and code: the code is resident past the header.
-theorem X86Memory::io_load_resident(header, code: List<BitVec(8)>, fits: header.len() + code.len() <= 65536):
-    CodeResident(X86Profile::io().fetch(), X86Memory::io_load(header ++ code), code, next_rip(BitVec::ofNat(0x400000), header.len())) {
-    X86Memory::io_load_suffix(header ++ code, code, header.len(), fits, λ i byte present =>
+theorem X86Memory::io_load_resident(size: Nat, within: size <= io_data_limit(), header, code: List<BitVec(8)>,
+    fits: header.len() + code.len() <= 65536):
+    CodeResident(X86Profile::io(size).fetch(), X86Memory::io_load(size, within, header ++ code), code, next_rip(BitVec::ofNat(0x400000), header.len())) {
+    X86Memory::io_load_suffix(size, within, header ++ code, code, header.len(), fits, λ i byte present =>
         trans(cong_fn<Nat, Option<BitVec(8)>>(λ at => (header ++ code).nth(at), Nat::add_comm(header.len(), i)),
             trans(header.nth_append_r(code, i), present)))
 }
@@ -224,10 +258,284 @@ theorem io_entry_past_header(): next_rip(BitVec::ofNat(0x400000), 232) = io_entr
 }
 
 // The process at its entry, from a 232-byte header and code: the code
-// resident at the entry, and the page and the frame zero.
-theorem X86Memory::io_load_entry(header, code: List<BitVec(8)>, long: header.len() = 232, fits: 232 + code.len() <= 65536):
-    CodeResident(X86Profile::io().fetch(), X86Memory::io_load(header ++ code), code, io_entry()) {
-    let resident = X86Memory::io_load_resident(header, code, j(sym(long), λ n _ => n + code.len() <= 65536, fits));
+// resident at the entry.
+theorem X86Memory::io_load_entry(size: Nat, within: size <= io_data_limit(), header, code: List<BitVec(8)>, long: header.len() = 232,
+    fits: 232 + code.len() <= 65536):
+    CodeResident(X86Profile::io(size).fetch(), X86Memory::io_load(size, within, header ++ code), code, io_entry()) {
+    let resident = X86Memory::io_load_resident(size, within, header, code, j(sym(long), λ n _ => n + code.len() <= 65536, fits));
     j(trans(rip_count(BitVec::ofNat(0x400000), long), io_entry_past_header()),
-        λ y _ => CodeResident(X86Profile::io().fetch(), X86Memory::io_load(header ++ code), code, y), resident)
+        λ y _ => CodeResident(X86Profile::io(size).fetch(), X86Memory::io_load(size, within, header ++ code), code, y), resident)
+}
+
+// ---------------------------------------------------------------------------
+// A process loaded from the file, with a stack of its own
+
+// What Linux maps below the segment's end is the file, its window and the
+// RW segment, as `io_load` says; above it, the stack (and the command line
+// on it, `ArgvAt`) is the process's own, so a process is not `io_load`'s
+// memory but one that agrees with it below there, whatever else its profile
+// relies on.
+fn io_data_end(size: Nat) → Nat { 0x410000 + size }
+
+// The profile is the memory's, read off its type.
+fn X86Memory::LoadedFrom({x: X86Profile}, size: Nat, self m: X86Memory(x), file: List<BitVec(8)>) → Type {
+    (a: BitVec(64)) → a.toNat() < io_data_end(size) → (m.cells(a) = io_cell(file, a.toNat())) ∧ (m.perms(a) = io_perm(size, file.len(), a.toNat()))
+}
+
+// An address's permission and read, from its cell and permission alone.
+fn perm_with(a: BitVec(64), q: Perm) → Perm { match Succ(a.toNat()).leb(Nat::pow(2, 47)) { True => q, False => Perm::none() } }
+fn read_with(a: BitVec(64), c: BitVec(8), q: Perm) → Option<BitVec(8)> {
+    match Memory<BitVec(64), BitVec(8)>(BitVec::space(64), λ _ => c, λ _ => perm_with(a, q)).read(a) { Ok(byte) => Some(byte), Err(_) => None }
+}
+
+// Two memories alike at an address read and fetch alike there, whatever
+// their profiles: a profile says what a run relies on, not what a read sees.
+theorem X86Profile::alike_perm(self x: X86Profile, y: X86Profile, m: X86Memory(x), n: X86Memory(y), a: BitVec(64), perms: m.perms(a) = n.perms(a)):
+    x.perm(m, a) = y.perm(n, a) {
+    cong_fn<Perm, Perm>(λ q => perm_with(a, q), perms)
+}
+
+theorem X86Profile::alike_read(self x: X86Profile, y: X86Profile, m: X86Memory(x), n: X86Memory(y), a: BitVec(64), cells: m.cells(a) = n.cells(a),
+    perms: m.perms(a) = n.perms(a)): x.read(m, a) = y.read(n, a) {
+    trans(cong_fn<BitVec(8), Option<BitVec(8)>>(λ c => read_with(a, c, m.perms(a)), cells),
+        cong_fn<Perm, Option<BitVec(8)>>(λ q => read_with(a, n.cells(a), q), perms))
+}
+
+// Code resident in one memory is in another alike wherever the first
+// executes.
+theorem code_resident_alike(x, y: X86Profile, m: X86Memory(x), n: X86Memory(y),
+    alike: (a: BitVec(64)) → x.perm(m, a).execute = True → (m.cells(a) = n.cells(a)) ∧ (m.perms(a) = n.perms(a)),
+    bytes: List<BitVec(8)>): (start: BitVec(64)) → CodeResident(x.fetch(), m, bytes, start) → CodeResident(y.fetch(), n, bytes, start) {
+    match bytes {
+        Nil => λ start at => trivial,
+        Cons(_, rest) => λ start at => {
+            let same = alike(start, at.left);
+            ⟨trans(sym(cong_fn<Perm, Bool>(λ q => q.execute, x.alike_perm(y, m, n, start, same.right))), at.left),
+             ⟨trans(sym(x.alike_read(y, m, n, start, same.left, same.right)), at.right.left),
+              ⟨at.right.right.left, code_resident_alike(x, y, m, n, alike, rest, next_rip(start, 1), at.right.right.right)⟩⟩⟩
+        },
+    }
+}
+
+// Nothing at or past the segment's end is mapped by the loader…
+theorem io_perm_high(size, length, n: Nat, high: io_data_end(size) <= n): io_perm(size, length, n) = Perm::none() {
+    let end: (io_data_end(size) = 0x410000 + size) = refl;
+    let low = Nat::leb_true(0x410000, n, omega(high, end));
+    let over = Nat::leb_false(Succ(n), 0x410000 + size, omega(high, end));
+    j(sym(low), λ s _ => (match s as λ _ => Perm { True => io_perm_segment(size, n), False => io_perm_file(length, n) }) = Perm::none(),
+        j(sym(over), λ s _ => (match s as λ _ => Perm { True => Perm::data(), False => Perm::none() }) = Perm::none(), refl))
+}
+
+// …so what it executes lies below.
+theorem io_executable_low(size: Nat, within: size <= io_data_limit(), file: List<BitVec(8)>, a: BitVec(64),
+    exec: X86Profile::io(size).perm(X86Memory::io_load(size, within, file), a).execute = True): a.toNat() < io_data_end(size) {
+    match a.toNat().lt_or_ge(io_data_end(size)) {
+        Inl(low) => low,
+        Inr(high) => {
+            let gone: (perm_with(a, Perm::none()).execute = True) =
+                j(io_perm_high(size, file.len(), a.toNat(), high), λ q _ => perm_with(a, q).execute = True, exec);
+            (match Succ(a.toNat()).leb(Nat::pow(2, 47)) as λ c =>
+                    (match c as λ _ => Perm { True => Perm::none(), False => Perm::none() }).execute = True → a.toNat() < io_data_end(size) {
+                True => λ no => absurd(no),
+                False => λ no => absurd(no),
+            })(gone)
+        },
+    }
+}
+
+// A memory of any profile loaded from a 232-byte header and code: the code
+// resident at the entry.
+theorem X86Memory::loaded_entry({x: X86Profile}, size: Nat, within: size <= io_data_limit(), self m: X86Memory(x), header, code: List<BitVec(8)>,
+    long: header.len() = 232, fits: 232 + code.len() <= 65536, loaded: m.LoadedFrom(size, header ++ code)):
+    CodeResident(x.fetch(), m, code, io_entry()) {
+    code_resident_alike(X86Profile::io(size), x, X86Memory::io_load(size, within, header ++ code), m, λ a exec => {
+        let same = loaded(a, io_executable_low(size, within, header ++ code, a, exec));
+        ⟨sym(same.left), sym(same.right)⟩
+    }, code, io_entry(), X86Memory::io_load_entry(size, within, header, code, long, fits))
+}
+
+// The loader's own memory is loaded from the file.
+theorem X86Memory::io_load_loaded(size: Nat, within: size <= io_data_limit(), file: List<BitVec(8)>):
+    X86Memory::io_load(size, within, file).LoadedFrom(size, file) { λ a _ => ⟨refl, refl⟩ }
+
+// ---------------------------------------------------------------------------
+// The process's stack (issues/io-image-process-stack.md)
+
+// Linux maps a process's stack high in the user half and starts RSP in it,
+// the command line at RSP and above (`ArgvAt`). Below RSP, exec maps at
+// least 128 KiB (fs/exec.c, `setup_arg_pages`'s `stack_expand`, inside the
+// default stack limit) and the kernel grows the rest on demand. A process
+// relies on a fixed `depth` of that, no more than the 128 KiB exec maps
+// before the program runs, and never on the growth: what a fault would map
+// is not mapped when the run reads it.
+fn io_stack_limit() → Nat { 0x20000 }
+
+// Where the stack of `depth` bytes below `top` sits: above the segment,
+// below the canonical boundary, and within what exec maps. That the entry
+// RSP is such a `top` is the environment's assumption, beside `LoadedFrom`
+// and `ArgvAt`.
+record StackPlaced(size, top, depth: Nat) {
+    above: io_data_end(size) + depth <= top,
+    canonical: top <= Nat::pow(2, 47),
+    within: depth <= io_stack_limit(),
+}
+
+// The stack's lowest address.
+fn io_stack_low(top, depth: Nat) → BitVec(64) { BitVec::ofNat(top - depth) }
+
+// What a process relies on: what the image relies on, and the `depth`
+// bytes below `top` data.
+fn X86Profile::process(size, top, depth: Nat) → X86Profile {
+    X86Profile(λ perms => X86Profile::io(size).relies(perms) ∧ DataAt(perms, io_stack_low(top, depth), depth))
+}
+
+theorem io_stack_low_toNat(size, top, depth: Nat, placed: StackPlaced(size, top, depth)): io_stack_low(top, depth).toNat() = top - depth {
+    let wide = canonical_below_top();
+    BitVec::toNat_ofNat(64, top - depth, omega(placed.canonical, wide))
+}
+
+// An offset into the stack is its address's value less the stack's low.
+theorem io_stack_offset(size, top, depth: Nat, placed: StackPlaced(size, top, depth), i: Nat, inside: i <= depth):
+    next_rip(io_stack_low(top, depth), i).toNat() = top - depth + i {
+    let wide = canonical_below_top();
+    BitVec::ofNat_offset_toNat(64, top - depth, i, omega(inside, placed.above, placed.canonical, wide))
+}
+
+// The process's two regions: its segment, as the image's, and its stack.
+fn DataRegion::process_data(size: Nat, within: size <= io_data_limit(), top, depth: Nat) → DataRegion {
+    DataRegion(profile := X86Profile::process(size, top, depth), low := io_data_low(), size := size,
+        canonical := io_data_canonical(size, within), data := λ perms relied => relied.left)
+}
+
+fn DataRegion::process_stack(size, top, depth: Nat, placed: StackPlaced(size, top, depth)) → DataRegion {
+    DataRegion(profile := X86Profile::process(size, top, depth), low := io_stack_low(top, depth), size := depth,
+        canonical := {
+            let low = io_stack_low_toNat(size, top, depth, placed);
+            omega(low, placed.above, placed.canonical)
+        },
+        data := λ perms relied => relied.right)
+}
+
+// The stack's top is `top`: at the entry, RSP.
+theorem io_stack_top(size, top, depth: Nat, placed: StackPlaced(size, top, depth), rsp: BitVec(64), at: rsp.toNat() = top):
+    next_rip(io_stack_low(top, depth), depth) = rsp {
+    let a = next_rip(io_stack_low(top, depth), depth);
+    let value = io_stack_offset(size, top, depth, placed, depth, omega());
+    let same: (a.toNat() = rsp.toNat()) = omega(value, at, placed.above);
+    trans(sym(BitVec::ofNat_toNat(64, a)), trans(cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), same), BitVec::ofNat_toNat(64, rsp)))
+}
+
+// So from the entry the process's stack is a `Stack` whose top is RSP…
+theorem DataRegion::process_stack_entry(size, top, depth: Nat, placed: StackPlaced(size, top, depth), gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = top):
+    DataRegion::process_stack(size, top, depth, placed).stack().at(depth) = read_gpr(Rsp, gprs) {
+    io_stack_top(size, top, depth, placed, read_gpr(Rsp, gprs), rsp)
+}
+
+// …and a CALL there pushes its return address into the stack's top word.
+theorem DataRegion::process_stack_push(size, top, depth: Nat, placed: StackPlaced(size, top, depth), gprs: Gprs, rsp: read_gpr(Rsp, gprs).toNat() = top,
+    room: 8 <= depth): push_address(gprs) = DataRegion::process_stack(size, top, depth, placed).stack().at(depth - 8) {
+    let low = io_stack_low(top, depth);
+    let count: (next_rip(low, depth) = next_rip(low, depth - 8 + 8)) = rip_count(low, omega(room));
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ y => y.sub(BitVec::ofNat(8)), trans(sym(io_stack_top(size, top, depth, placed, read_gpr(Rsp, gprs), rsp)), count)),
+        push_at(low, depth - 8))
+}
+
+// The loader, with the stack: the image as `io_load` maps it, and the
+// `depth` bytes below `top` data. What Linux puts at and above `top` (the
+// command line) is not this model's: `ArgvAt` says what the process reads
+// there.
+fn process_perm(size, length, top, depth, n: Nat) → Perm {
+    match (top - depth).leb(n) {
+        True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
+        False => io_perm(size, length, n),
+    }
+}
+
+fn process_perms(size, top, depth: Nat, file: List<BitVec(8)>) → BitVec(64) → Perm {
+    λ (a: BitVec(64)) => process_perm(size, file.len(), top, depth, a.toNat())
+}
+
+// Below the stack, the image's permission.
+theorem process_perm_below(size, length, top, depth, n: Nat, below: n < top - depth): process_perm(size, length, top, depth, n) = io_perm(size, length, n) {
+    let low = Nat::leb_false(top - depth, n, below);
+    j(sym(low), λ s _ => (match s as λ _ => Perm {
+            True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
+            False => io_perm(size, length, n),
+        }) = io_perm(size, length, n), refl)
+}
+
+// The stack's byte `i` is data.
+theorem process_perm_in_stack(size, length, top, depth, i: Nat, inside: i < depth, placed: StackPlaced(size, top, depth)):
+    process_perm(size, length, top, depth, top - depth + i) = Perm::data() {
+    let n = top - depth + i;
+    let low = Nat::leb_true(top - depth, n, Nat::le_add_l(top - depth, i));
+    let high = Nat::leb_true(Succ(n), top, omega(inside, placed.above));
+    j(sym(low), λ s _ => (match s as λ _ => Perm {
+            True => match Succ(n).leb(top) { True => Perm::data(), False => Perm::none() },
+            False => io_perm(size, length, n),
+        }) = Perm::data(),
+        j(sym(high), λ s _ => (match s as λ _ => Perm { True => Perm::data(), False => Perm::none() }) = Perm::data(), refl))
+}
+
+theorem process_relies(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth), file: List<BitVec(8)>):
+    X86Profile::process(size, top, depth).relies(process_perms(size, top, depth, file)) {
+    let end: (io_data_end(size) = 0x410000 + size) = refl;
+    ⟨λ i inside => trans(cong_fn<Nat, Perm>(λ n => process_perm(size, file.len(), top, depth, n), io_data_offset(size, within, i, inside)),
+            trans(process_perm_below(size, file.len(), top, depth, 0x410000 + i, omega(inside, end, placed.above)),
+                io_perm_in_segment(size, file.len(), i, inside))),
+     λ i inside => trans(cong_fn<Nat, Perm>(λ n => process_perm(size, file.len(), top, depth, n), io_stack_offset(size, top, depth, placed, i, omega(inside))),
+            process_perm_in_stack(size, file.len(), top, depth, i, inside, placed))⟩
+}
+
+// The process the loader maps from `file`, with a segment of `size` and a
+// stack of `depth` below `top`.
+fn X86Memory::process_load(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth),
+    file: List<BitVec(8)>) → X86Memory(X86Profile::process(size, top, depth)) {
+    X86Memory(cells := λ (a: BitVec(64)) => io_cell(file, a.toNat()), perms := process_perms(size, top, depth, file),
+        relied := process_relies(size, within, top, depth, placed, file))
+}
+
+// It is loaded from the file: a process of the profile, at its entry, is
+// one Linux can start.
+theorem X86Memory::process_load_loaded(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth),
+    file: List<BitVec(8)>): X86Memory::process_load(size, within, top, depth, placed, file).LoadedFrom(size, file) {
+    λ a below => ⟨refl, process_perm_below(size, file.len(), top, depth, a.toNat(), omega(below, placed.above))⟩
+}
+
+// A process loaded from the file: its segment zero.
+theorem X86Memory::loaded_data(size: Nat, within: size <= io_data_limit(), top, depth: Nat, self m: X86Memory(X86Profile::process(size, top, depth)),
+    file: List<BitVec(8)>, loaded: m.LoadedFrom(size, file)): DataRegion::process_data(size, within, top, depth).Holds(io_zero(), m) {
+    let end: (io_data_end(size) = 0x410000 + size) = refl;
+    λ p inside => {
+        let value = io_data_offset(size, within, p, inside);
+        trans(loaded(next_rip(BitVec::ofNat(0x410000), p), j(sym(value), λ k _ => k < io_data_end(size), omega(inside, end))).left,
+            X86Memory::io_load_data(size, within, file, p, inside))
+    }
+}
+
+// The stack lies wholly above the segment: a word stored in it leaves the
+// segment as it was, so a call that pushes and spills keeps what the
+// program's buffers hold.
+theorem DataRegion::process_stack_keeps_data(size: Nat, within: size <= io_data_limit(), top, depth: Nat, placed: StackPlaced(size, top, depth),
+    m: X86Memory(X86Profile::process(size, top, depth)), v: Nat → BitVec(8), i: Nat, word: BitVec(64), fits: i + 8 <= depth,
+    holds: DataRegion::process_data(size, within, top, depth).Holds(v, m)):
+    DataRegion::process_data(size, within, top, depth).Holds(v,
+        X86Profile::process(size, top, depth).store(m, next_rip(io_stack_low(top, depth), i), word_bytes(word))) {
+    let x = X86Profile::process(size, top, depth);
+    let a = next_rip(io_stack_low(top, depth), i);
+    let end: (io_data_end(size) = 0x410000 + size) = refl;
+    λ p inside => {
+        let y = next_rip(io_data_low(), p);
+        let low = io_data_offset(size, within, p, inside);
+        let outside: ((q: Nat) → q < word_bytes(word).len() → BitVec::space(64).same(next_rip(a, q), y) = False) = λ q below => {
+            let long: (word_bytes(word).len() = 8) = refl;
+            let high = trans(cong_fn<BitVec(64), Nat>(λ b => b.toNat(), rip_compose(io_stack_low(top, depth), i, q)),
+                io_stack_offset(size, top, depth, placed, i + q, omega(below, long, fits)));
+            BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(a, q), y, λ same => {
+                let values = cong_fn<BitVec(64), Nat>(λ b => b.toNat(), same);
+                false_elim(omega(values, high, low, inside, end, placed.above))
+            })
+        };
+        trans(x.store_outside(m, a, word_bytes(word), y, outside), holds(p, inside))
+    }
 }

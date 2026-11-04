@@ -32,6 +32,7 @@ import nat;
 import int;
 import omega;
 import ring;
+import linarith;
 import option;
 import relation_props;
 import algebra;
@@ -64,20 +65,20 @@ fn Mode::sum_zero_neg(self m: Mode, a, b: Bool) → Bool {
 // ---------------------------------------------------------------------------
 // Finite operands.
 
-fn Finite::add({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+fn Finite::add({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) {
     F.round_exact(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg))
 }
 
 // `a - b` is `a + (-b)`, as IEEE defines it, so `x - x` is `+0`.
-fn Finite::sub({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) { a.add(-b, mode := mode) }
+fn Finite::sub({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) { a.add(-b, mode := mode) }
 
-fn Finite::mul({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+fn Finite::mul({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) {
     F.round_exact(mode, a.dyadic() * b.dyadic(), a.neg.xor(b.neg))
 }
 
 // `a · b + c` with one rounding. An exact zero takes the sum's rule with the
 // product signed as a product.
-fn Finite::fma({F: Format}, self a, b, c: Finite(F), mode: Mode := NearestEven) → Float(F) {
+fn Finite::fma({F: Format}, self a, b, c: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) {
     F.round_exact(mode, a.dyadic() * b.dyadic() + c.dyadic(), mode.sum_zero_neg(a.neg.xor(b.neg), c.neg))
 }
 
@@ -87,7 +88,7 @@ fn Finite::quot({F: Format}, self a, b: Finite(F)) → Rat { a.val() * b.val().r
 
 // The quotient's magnitude in half-units with its sticky bit, and the
 // exclusive or of the signs.
-fn Finite::div({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) → Float(F) {
+fn Finite::div({F: Format}, self a, b: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) {
     F.round_signed(mode, a.neg.xor(b.neg), F.rat_h(a.quot(b)), F.rat_st(a.quot(b)))
 }
 
@@ -95,7 +96,7 @@ fn Finite::div({F: Format}, self a, b: Finite(F), mode: Mode := NearestEven) →
 // Value theorems: each result is a correct rounding of the exact value.
 
 theorem Finite::add_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() + b.val(), a.add(b, mode := mode)) {
-    F.rounds_respects(mode, a.val() + b.val(), (a.dyadic() + b.dyadic()).rat(), Rat::same_sym(a.dyadic().rat_add(b.dyadic())), a.add(b, mode := mode),
+    F.rounds_respects(mode, a.val() + b.val(), (a.dyadic() + b.dyadic()).rat(), ring, a.add(b, mode := mode),
         F.round_exact_correct(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg)))
 }
 
@@ -105,14 +106,13 @@ theorem Finite::sub_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(
 }
 
 theorem Finite::mul_correct({F: Format}, a, b: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() * b.val(), a.mul(b, mode := mode)) {
-    F.rounds_respects(mode, a.val() * b.val(), (a.dyadic() * b.dyadic()).rat(), Rat::same_sym(a.dyadic().rat_mul(b.dyadic())), a.mul(b, mode := mode),
+    F.rounds_respects(mode, a.val() * b.val(), (a.dyadic() * b.dyadic()).rat(), ring, a.mul(b, mode := mode),
         F.round_exact_correct(mode, a.dyadic() * b.dyadic(), a.neg.xor(b.neg)))
 }
 
 theorem Finite::fma_correct({F: Format}, a, b, c: Finite(F), mode: Mode): RoundsTo(F, mode, a.val() * b.val() + c.val(), a.fma(b, c, mode := mode)) {
     let d = a.dyadic() * b.dyadic() + c.dyadic();
-    let e: (d.rat() ≈ a.val() * b.val() + c.val()) =
-        Rat::same_trans((a.dyadic() * b.dyadic()).rat_add(c.dyadic()), Rat::add_respects(a.dyadic().rat_mul(b.dyadic()), c.val().same_refl()));
+    let e: (d.rat() ≈ a.val() * b.val() + c.val()) = ring;
     F.rounds_respects(mode, a.val() * b.val() + c.val(), d.rat(), Rat::same_sym(e), a.fma(b, c, mode := mode),
         F.round_exact_correct(mode, d, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg)))
 }
@@ -157,7 +157,7 @@ theorem Finite::add_zero({F: Format}, a, b: Finite(F), mode: Mode, zero: a.val()
     a.add(b, mode := mode) = Fin(Finite::zero(F, mode.sum_zero_neg(a.neg, b.neg)))
 {
     F.round_exact_zero(mode, a.dyadic() + b.dyadic(), mode.sum_zero_neg(a.neg, b.neg),
-        Dyadic::zero_of_rat(Rat::same_trans(a.dyadic().rat_add(b.dyadic()), zero)))
+        Dyadic::zero_of_rat(ring(zero)))
 }
 
 // `x - x` is `+0`, except `-0` toward `-∞`, whatever the sign of `x`.
@@ -173,9 +173,9 @@ theorem Finite::sub_self({F: Format}, a: Finite(F), mode: Mode): a.sub(a, mode :
 // The sign of a dyadic built from a sign bit and a magnitude is that bit, or
 // `z` at zero.
 theorem Finite::sign_or_parts(s: Bool, m: Nat, e: Int): Dyadic(match s { False => m.int(), True => -m.int() }, e).sign_or(s) = s {
-    match s as λ t => Dyadic(match t { False => m.int(), True => -m.int() }, e).sign_or(t) = t {
-        False => match m as λ k => Dyadic(k.int(), e).sign_or(False) = False { Zero => refl, Succ(_) => refl },
-        True => match m as λ k => Dyadic(-k.int(), e).sign_or(True) = True { Zero => refl, Succ(_) => refl },
+    match s {
+        False => match m { Zero => refl, Succ(_) => refl },
+        True => match m { Zero => refl, Succ(_) => refl },
     }
 }
 
@@ -186,19 +186,19 @@ theorem Finite::sign_or_mul_parts(s, t: Bool, m, n: Nat, e: Int):
 {
     let left_zero = λ (y: Int) (z: Bool) => j(sym(Int::zero_mul(y)), λ v _ => Dyadic(v, e).sign_or(z) = z, refl);
     let right_zero = λ (x: Int) (z: Bool) => j(sym(x.mul_zero()), λ v _ => Dyadic(v, e).sign_or(z) = z, refl);
-    match m as λ k => Dyadic((match s { False => k.int(), True => -k.int() }) * (match t { False => n.int(), True => -n.int() }), e).sign_or(s.xor(t)) = s.xor(t) {
-        Zero => match s as λ u => Dyadic((match u { False => OfNat(0), True => -OfNat(0) }) * (match t { False => n.int(), True => -n.int() }), e).sign_or(u.xor(t)) = u.xor(t) {
+    match m {
+        Zero => match s {
             False => left_zero(match t { False => n.int(), True => -n.int() }, t),
             True => left_zero(match t { False => n.int(), True => -n.int() }, !t),
         },
-        Succ(i) => match n as λ k => Dyadic((match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match t { False => k.int(), True => -k.int() }), e).sign_or(s.xor(t)) = s.xor(t) {
-            Zero => match t as λ u => Dyadic((match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match u { False => OfNat(0), True => -OfNat(0) }), e).sign_or(s.xor(u)) = s.xor(u) {
+        Succ(i) => match n {
+            Zero => match t {
                 False => right_zero(match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }, s.xor(False)),
                 True => right_zero(match s { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }, s.xor(True)),
             },
-            Succ(l) => match s as λ u => Dyadic((match u { False => OfNat(Succ(i)), True => -OfNat(Succ(i)) }) * (match t { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(u.xor(t)) = u.xor(t) {
-                False => match t as λ w => Dyadic(OfNat(Succ(i)) * (match w { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(w) = w { False => refl, True => refl },
-                True => match t as λ w => Dyadic(-OfNat(Succ(i)) * (match w { False => OfNat(Succ(l)), True => -OfNat(Succ(l)) }), e).sign_or(!w) = !w { False => refl, True => refl },
+            Succ(l) => match s {
+                False => match t { False => refl, True => refl },
+                True => match t { False => refl, True => refl },
             },
         },
     }
@@ -219,8 +219,7 @@ theorem Finite::fma_zero({F: Format}, a, b, c: Finite(F), mode: Mode, zero: a.va
     a.fma(b, c, mode := mode) = Fin(Finite::zero(F, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg)))
 {
     let d = a.dyadic() * b.dyadic() + c.dyadic();
-    let e: (d.rat() ≈ a.val() * b.val() + c.val()) =
-        Rat::same_trans((a.dyadic() * b.dyadic()).rat_add(c.dyadic()), Rat::add_respects(a.dyadic().rat_mul(b.dyadic()), c.val().same_refl()));
+    let e: (d.rat() ≈ a.val() * b.val() + c.val()) = ring;
     F.round_exact_zero(mode, d, mode.sum_zero_neg(a.neg.xor(b.neg), c.neg), Dyadic::zero_of_rat(Rat::same_trans(e, zero)))
 }
 
@@ -294,10 +293,383 @@ theorem Finite::mul_comm({F: Format}, a, b: Finite(F), mode: Mode): Float::Same(
 }
 
 // ---------------------------------------------------------------------------
+// Square root (issues/float-sqrt.md).
+//
+// The square root of a float is irrational in general, so there is no
+// rational exact value to hand `RoundsTo`. None is needed: every clause of
+// `RoundsTo` compares the exact value only with points of the half-unit grid
+// (floats, midpoints of neighbouring floats, the overflow threshold, zero),
+// so a correct rounding of `√x` is a correct rounding of any rational on the
+// same side of every grid point as `√x`. `Format::SqrtCell(x, y)` says `y` is
+// such a rational, each comparison with `√x` read as one with `x` (`g ≤ √x`
+// iff `g ≤ 0 ∨ g² ≤ x`, `g < √x` iff `g < 0 ∨ g² < x`), and the value
+// theorem `Finite::sqrt_correct` says the result rounds every such `y`. The
+// cell is never empty (`Finite::sqrt_witness_cell`) and is exactly what the
+// rounding reads (`Format::cell_iff_approx`). Once `RoundsTo` is stated over
+// the reals (`float-reals`), `√x` itself lies in its cell and the theorem
+// carries over.
+//
+// The computation: `√x` in half-units is the root of `x / 2^(2(qmin - 1))`,
+// which is `mag · 2^(bexp + 2 - qmin)`. Written `N / 2^dn` with `N` and `dn`
+// natural, its root rounded down is `isqrt(⌊N / 2^dn⌋)`, and the root is
+// exact when `h² · 2^dn = N`.
+
+fn Format::grid_sq(self F: Format, m: Int) → Rat { F.grid(m) * F.grid(m) }
+
+// Grid point `m` is at most `√x`, or below it.
+fn Format::RootLe(self F: Format, m: Int, x: Rat) → Type { m <= 0 ∨ F.grid_sq(m) <= x }
+
+fn Format::RootLt(self F: Format, m: Int, x: Rat) → Type { m < 0 ∨ F.grid_sq(m) < x }
+
+// `y` lies on the same side of every grid point as `√x`.
+fn Format::SqrtCell(self F: Format, x, y: Rat) → Type {
+    (m: Int) → (F.grid(m) <= y ↔ F.RootLe(m, x)) ∧ (F.grid(m) < y ↔ F.RootLt(m, x))
+}
+
+// `√x` as the rounding sees it: `h` half-units and, when `sticky`, strictly
+// more but less than one half-unit more (`Format::Approx` with every bound
+// squared).
+fn Format::SqrtApprox(self F: Format, x: Rat, h: Nat, sticky: Bool) → Type {
+    match sticky { False => x ≈ F.grid_sq(h.int()), True => F.grid_sq(h.int()) < x ∧ x < F.grid_sq(h.int() + 1) }
+}
+
+theorem Format::grid_sq_dyadic(self F: Format, m: Int): F.grid_sq(m) ≈ Dyadic(m * m, (F.qmin() - 1) + (F.qmin() - 1)).rat() {
+    Rat::same_sym(Dyadic(m, F.qmin() - 1).rat_mul(Dyadic(m, F.qmin() - 1)))
+}
+
+theorem Format::grid_sq_le(self F: Format, m, n: Int, nn: 0 <= m, le: m <= n): F.grid_sq(m) <= F.grid_sq(n) {
+    let p: (m * m <= n * n) = nlinarith;
+    let d: (Dyadic(m * m, (F.qmin() - 1) + (F.qmin() - 1)).rat() <= Dyadic(n * n, (F.qmin() - 1) + (F.qmin() - 1)).rat()) =
+        Dyadic::le_of_mant_le(m * m, n * n, (F.qmin() - 1) + (F.qmin() - 1), p);
+    Rat::le_respects(Rat::same_sym(F.grid_sq_dyadic(m)), Rat::same_sym(F.grid_sq_dyadic(n)), d)
+}
+
+theorem Format::grid_sq_lt(self F: Format, m, n: Int, nn: 0 <= m, lt: m < n): F.grid_sq(m) < F.grid_sq(n) {
+    let p: (m * m < n * n) = nlinarith;
+    let d: (Dyadic(m * m, (F.qmin() - 1) + (F.qmin() - 1)).rat() < Dyadic(n * n, (F.qmin() - 1) + (F.qmin() - 1)).rat()) =
+        Dyadic::lt_of_mant_lt(m * m, n * n, (F.qmin() - 1) + (F.qmin() - 1), p);
+    Rat::lt_respects(Rat::same_sym(F.grid_sq_dyadic(m)), Rat::same_sym(F.grid_sq_dyadic(n)), d)
+}
+
+theorem Format::sqrt_approx_bounds(self F: Format, x: Rat, h: Nat, st: Bool, a: F.SqrtApprox(x, h, st)):
+    F.grid_sq(h.int()) <= x ∧ x < F.grid_sq(h.int() + 1)
+{
+    match st as λ s => F.SqrtApprox(x, h, s) → F.grid_sq(h.int()) <= x ∧ x < F.grid_sq(h.int() + 1) {
+        False => λ (e: x ≈ F.grid_sq(h.int())) => And(Rat::le_of_same(Rat::same_sym(e)),
+            Rat::lt_respects(Rat::same_sym(e), F.grid_sq(h.int() + 1).same_refl(), F.grid_sq_lt(h.int(), h.int() + 1, omega, omega))),
+        True => λ (b: F.grid_sq(h.int()) < x ∧ x < F.grid_sq(h.int() + 1)) => And(Rat::le_of_lt(b.left), b.right),
+    }(a)
+}
+
+// A grid point below the cut has its square below `x`; one at or past the
+// cut has its square at least `x`.
+theorem Format::sqrt_lt_of_below(self F: Format, x: Rat, h: Nat, st: Bool, a: F.SqrtApprox(x, h, st), m: Int, nn: 0 <= m,
+    lt: m < h.int() + Nat::of_bit(st).int()): F.grid_sq(m) < x
+{
+    match st as λ s => F.SqrtApprox(x, h, s) → m < h.int() + Nat::of_bit(s).int() → F.grid_sq(m) < x {
+        False => λ (e: x ≈ F.grid_sq(h.int())) (l: m < h.int() + Nat::of_bit(False).int()) =>
+            Rat::lt_respects(F.grid_sq(m).same_refl(), Rat::same_sym(e), F.grid_sq_lt(m, h.int(), nn, omega(l))),
+        True => λ (b: F.grid_sq(h.int()) < x ∧ x < F.grid_sq(h.int() + 1)) (l: m < h.int() + Nat::of_bit(True).int()) =>
+            Rat::lt_of_le_of_lt(F.grid_sq_le(m, h.int(), nn, omega(l)), b.left),
+    }(a, lt)
+}
+
+theorem Format::sqrt_le_of_above(self F: Format, x: Rat, h: Nat, st: Bool, a: F.SqrtApprox(x, h, st), m: Int,
+    ge: h.int() + Nat::of_bit(st).int() <= m): x <= F.grid_sq(m)
+{
+    match st as λ s => F.SqrtApprox(x, h, s) → h.int() + Nat::of_bit(s).int() <= m → x <= F.grid_sq(m) {
+        False => λ (e: x ≈ F.grid_sq(h.int())) (g: h.int() + Nat::of_bit(False).int() <= m) =>
+            Rat::le_respects(Rat::same_sym(e), F.grid_sq(m).same_refl(), F.grid_sq_le(h.int(), m, omega, omega(g))),
+        True => λ (b: F.grid_sq(h.int()) < x ∧ x < F.grid_sq(h.int() + 1)) (g: h.int() + Nat::of_bit(True).int() <= m) =>
+            Rat::le_of_lt(Rat::lt_of_lt_of_le(b.right, F.grid_sq_le(h.int() + 1, m, omega, omega(g)))),
+    }(a, ge)
+}
+
+// A rational in `√x`'s cell is described to the rounding as `√x` is.
+theorem Format::approx_of_cell(self F: Format, x, y: Rat, h: Nat, st: Bool, a: F.SqrtApprox(x, h, st), cell: F.SqrtCell(x, y)): F.Approx(y, h, st) {
+    match st as λ s => F.SqrtApprox(x, h, s) → F.Approx(y, h, s) {
+        False => λ (e: x ≈ F.grid_sq(h.int())) => {
+            let c = cell(h.int());
+            let ge: (F.grid(h.int()) <= y) = c.left.mpr(Inr(Rat::le_of_same(Rat::same_sym(e))));
+            let not_gt: ¬(F.grid(h.int()) < y) = λ lt => match c.right.mp(lt) {
+                Inl(neg) => false_elim(omega(neg)),
+                Inr(sq) => Rat::lt_irrefl(F.grid_sq(h.int()), Rat::lt_respects(F.grid_sq(h.int()).same_refl(), e, sq)),
+            };
+            Rat::le_antisymm(Rat::le_of_not_lt(not_gt), ge)
+        },
+        True => λ (b: F.grid_sq(h.int()) < x ∧ x < F.grid_sq(h.int() + 1)) => {
+            let lt: (F.grid(h.int()) < y) = cell(h.int()).right.mpr(Inr(b.left));
+            let not_le: ¬(F.grid(h.int() + 1) <= y) = λ le => match cell(h.int() + 1).left.mp(le) {
+                Inl(np) => false_elim(omega(np)),
+                Inr(sq) => Rat::not_le_of_lt(b.right, sq),
+            };
+            And(lt, Rat::lt_of_not_le(not_le))
+        },
+    }(a)
+}
+
+// Conversely, every rational the rounding describes as `√x` lies in its cell.
+theorem Format::cell_of_approx(self F: Format, x, y: Rat, h: Nat, st: Bool, a: F.SqrtApprox(x, h, st), ay: F.Approx(y, h, st)): F.SqrtCell(x, y) {
+    let bounds = F.sqrt_approx_bounds(x, h, st, a);
+    λ m => {
+        let le_iff: (F.grid(m) <= y ↔ F.RootLe(m, x)) = Iff(
+            mp := λ (le: F.grid(m) <= y) => {
+                let mh: (m <= h.int()) = F.le_cut(y, h, st, ay, m, le);
+                match Int::le_dec(m, 0) {
+                    Inl(np) => Inl(np),
+                    Inr(pos) => Inr(Rat::le_trans(F.grid_sq_le(m, h.int(), omega(pos), mh), bounds.left)),
+                }
+            },
+            mpr := λ (r: F.RootLe(m, x)) => {
+                let mh: (m <= h.int()) = match r {
+                    Inl(np) => omega(np),
+                    Inr(sq) => match Int::le_dec(m, h.int()) {
+                        Inl(ok) => ok,
+                        Inr(over) => false_elim(Rat::not_le_of_lt(Rat::lt_of_lt_of_le(bounds.right, F.grid_sq_le(h.int() + 1, m, omega, omega(over))), sq)),
+                    },
+                };
+                F.cut_le(y, h, st, ay, m, mh)
+            });
+        let lt_iff: (F.grid(m) < y ↔ F.RootLt(m, x)) = Iff(
+            mp := λ (lt: F.grid(m) < y) => {
+                let mb: (m < h.int() + Nat::of_bit(st).int()) = match Int::le_dec(h.int() + Nat::of_bit(st).int(), m) {
+                    Inl(ge) => false_elim(Rat::not_le_of_lt(lt, F.cut_ge(y, h, st, ay, m, ge))),
+                    Inr(no) => omega(no),
+                };
+                match Int::le_dec(0, m) {
+                    Inl(nn) => Inr(F.sqrt_lt_of_below(x, h, st, a, m, nn, mb)),
+                    Inr(neg) => Inl(omega(neg)),
+                }
+            },
+            mpr := λ (r: F.RootLt(m, x)) => {
+                let mb: (m < h.int() + Nat::of_bit(st).int()) = match r {
+                    Inl(neg) => omega(neg),
+                    Inr(sq) => match Int::le_dec(h.int() + Nat::of_bit(st).int(), m) {
+                        Inl(ge) => false_elim(Rat::not_lt_of_le(F.sqrt_le_of_above(x, h, st, a, m, ge), sq)),
+                        Inr(no) => omega(no),
+                    },
+                };
+                F.cut_lt(y, h, st, ay, m, mb)
+            });
+        And(le_iff, lt_iff)
+    }
+}
+
+theorem Format::cell_iff_approx(self F: Format, x, y: Rat, h: Nat, st: Bool, a: F.SqrtApprox(x, h, st)): F.SqrtCell(x, y) ↔ F.Approx(y, h, st) {
+    Iff(mp := λ (c: F.SqrtCell(x, y)) => F.approx_of_cell(x, y, h, st, a, c), mpr := λ (ay: F.Approx(y, h, st)) => F.cell_of_approx(x, y, h, st, a, ay))
+}
+
+// At `x = 0` the cell is zero.
+theorem Format::cell_zero(self F: Format, x, y: Rat, zx: x ≈ 0, cell: F.SqrtCell(x, y)): y ≈ 0 {
+    let c = cell(0);
+    let g0: (F.grid(0) ≈ 0) = F.grid_zero();
+    let zz: Rat::Same(Rat::mul(0, 0), 0) = omega;
+    let sq0: (F.grid_sq(0) ≈ 0) = Rat::same_trans(Rat::mul_respects(g0, g0), zz);
+    let ge: (F.grid(0) <= y) = c.left.mpr(Inl(Int::le_refl(0)));
+    let not_gt: ¬(F.grid(0) < y) = λ lt => match c.right.mp(lt) {
+        Inl(neg) => false_elim(omega(neg)),
+        Inr(sq) => Rat::lt_irrefl(0, Rat::lt_respects(sq0, zx, sq)),
+    };
+    Rat::same_trans(Rat::le_antisymm(Rat::le_of_not_lt(not_gt), ge), g0)
+}
+
+// A point inside a half-unit, for an inexact root's witness.
+fn Format::sqrt_witness(self F: Format, h: Nat, st: Bool) → Rat {
+    match st { False => F.grid(h.int()), True => Dyadic(h.int() * 2 + 1, F.qmin() - 1 - 1).rat() }
+}
+
+theorem Format::witness_approx(self F: Format, h: Nat, st: Bool): F.Approx(F.sqrt_witness(h, st), h, st) {
+    let g = F.qmin() - 1;
+    let ex: (g - 1 + Nat::int(1) = g) = omega;
+    let half = λ (k: Int) => {
+        let r: (Dyadic(k * 2, g - 1).rat() ≈ Dyadic(k, g).rat()) = j(ex, λ v _ => Dyadic(k * Nat::pow(2, 1).int(), g - 1) ≈ Dyadic(k, v), Dyadic::align(k, g - 1, 1));
+        r
+    };
+    match st {
+        False => F.grid(h.int()).same_refl(),
+        True => {
+            let lo: (Dyadic(h.int() * 2, g - 1).rat() < Dyadic(h.int() * 2 + 1, g - 1).rat()) = Dyadic::lt_of_mant_lt(h.int() * 2, h.int() * 2 + 1, g - 1, omega);
+            let hi: (Dyadic(h.int() * 2 + 1, g - 1).rat() < Dyadic((h.int() + 1) * 2, g - 1).rat()) = Dyadic::lt_of_mant_lt(h.int() * 2 + 1, (h.int() + 1) * 2, g - 1, omega);
+            And(Rat::lt_respects(half(h.int()), Dyadic(h.int() * 2 + 1, g - 1).rat().same_refl(), lo),
+                Rat::lt_respects(Dyadic(h.int() * 2 + 1, g - 1).rat().same_refl(), half(h.int() + 1), hi))
+        },
+    }
+}
+
+// The root's magnitude in half-units, and whether it is inexact.
+fn Finite::sqrt_exp({F: Format}, self a: Finite(F)) → Int { a.bexp.int() + 2 - F.qmin() }
+
+fn Finite::sqrt_up({F: Format}, self a: Finite(F)) → Nat { a.sqrt_exp().pos_part() }
+
+fn Finite::sqrt_dn({F: Format}, self a: Finite(F)) → Nat { a.sqrt_exp().neg_part() }
+
+fn Finite::sqrt_n({F: Format}, self a: Finite(F)) → Nat { a.mag * Nat::pow(2, a.sqrt_up()) }
+
+fn Finite::sqrt_h({F: Format}, self a: Finite(F)) → Nat { (a.sqrt_n().shr(a.sqrt_dn())).isqrt() }
+
+fn Finite::sqrt_st({F: Format}, self a: Finite(F)) → Bool {
+    match Succ((a.sqrt_h() * a.sqrt_h()) * Nat::pow(2, a.sqrt_dn())).le_dec(a.sqrt_n()) { Inl(_) => True, Inr(_) => False }
+}
+
+// The rounded root of the magnitude, in every format.
+fn Finite::sqrt_abs({F: Format}, self a: Finite(F), mode: Mode := Mode::NearestEven) → Float(F) { F.round_h(mode, a.sqrt_h(), a.sqrt_st()) }
+
+// IEEE 754 §9.2: `√-0 = -0`, and the root of a negative nonzero is NaN.
+fn Finite::sqrt({F: Format}, self a: Finite(F), mode: Mode := Mode::NearestEven, nan: F.specials.has_nan().IsTrue() := trivial) → Float(F) {
+    match a.neg { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }
+}
+
+theorem Finite::sqrt_approx_mag({F: Format}, a: Finite(F)): F.SqrtApprox(Dyadic(a.mag.int(), a.q()).rat(), a.sqrt_h(), a.sqrt_st()) {
+    let g = F.qmin() - 1;
+    let g2 = g + g;
+    let up = a.sqrt_up();
+    let dn = a.sqrt_dn();
+    let N = a.sqrt_n();
+    let D = Nat::pow(2, dn);
+    let M = N.shr(dn);
+    let h = a.sqrt_h();
+    let c = g2 - dn.int();
+    let parts = a.sqrt_exp().pos_sub_neg();
+    let ud: (up = a.sqrt_exp().pos_part()) = refl;
+    let dd: (dn = a.sqrt_exp().neg_part()) = refl;
+    let ed: (a.sqrt_exp() = a.bexp.int() + 2 - F.qmin()) = refl;
+    let qd: (a.q() = F.qmin() + a.bexp.int()) = refl;
+    let ce: (c + up.int() = a.q()) = omega;
+    let cg: (c + dn.int() = g2) = omega;
+    let xs: (Dyadic(a.mag.int(), a.q()).rat() ≈ Dyadic(N.int(), c).rat()) =
+        Dyadic::same_sym(j(ce, λ v _ => Dyadic(a.mag.int() * Nat::pow(2, up).int(), c) ≈ Dyadic(a.mag.int(), v), Dyadic::align(a.mag.int(), c, up)));
+    let gs = λ (mm: Nat) => {
+        let r: (Dyadic(mm.int(), g2).rat() ≈ Dyadic((mm * D).int(), c).rat()) =
+            Dyadic::same_sym(j(cg, λ v _ => Dyadic(mm.int() * D.int(), c) ≈ Dyadic(mm.int(), v), Dyadic::align(mm.int(), c, dn)));
+        r
+    };
+    let root: Nat::IsRoot(M, h) = M.isqrt_spec();
+    let lo: (M * D <= N) = Nat::shr_mul_le(dn, N);
+    let hi: (N < Succ(M) * D) = Nat::lt_succ_shr_mul(dn, N);
+    let below: ((h * h) * D <= N) = ((h * h) * D).le_trans(M * D, N, Nat::mul_le_mono_r(D, h * h, M, root.left), lo);
+    let above: (N < (Succ(h) * Succ(h)) * D) =
+        N.lt_of_lt_of_le(Succ(M) * D, (Succ(h) * Succ(h)) * D, hi, Nat::mul_le_mono_r(D, Succ(M), Succ(h) * Succ(h), root.right));
+    let sq0: (F.grid_sq(h.int()) ≈ Dyadic(((h * h) * D).int(), c).rat()) = Rat::same_trans(F.grid_sq_dyadic(h.int()), gs(h * h));
+    let e1: (Succ(h).int() = h.int() + 1) = omega;
+    let sq1: (F.grid_sq(h.int() + 1) ≈ Dyadic(((Succ(h) * Succ(h)) * D).int(), c).rat()) =
+        j(e1, λ v _ => F.grid_sq(v) ≈ Dyadic(((Succ(h) * Succ(h)) * D).int(), c).rat(), Rat::same_trans(F.grid_sq_dyadic(Succ(h).int()), gs(Succ(h) * Succ(h))));
+    match Succ((h * h) * D).le_dec(N) {
+        Inr(nlt) => {
+            let eq: ((h * h) * D = N) = omega(nlt, below);
+            let at: (F.grid_sq(h.int()) ≈ Dyadic(N.int(), c).rat()) = j(eq, λ v _ => F.grid_sq(h.int()) ≈ Dyadic(v.int(), c).rat(), sq0);
+            Rat::same_trans(xs, Rat::same_sym(at))
+        },
+        Inl(lt) => {
+            let l0: (Dyadic(((h * h) * D).int(), c).rat() < Dyadic(N.int(), c).rat()) = Dyadic::lt_of_mant_lt(((h * h) * D).int(), N.int(), c, omega(lt));
+            let l1: (Dyadic(N.int(), c).rat() < Dyadic(((Succ(h) * Succ(h)) * D).int(), c).rat()) =
+                Dyadic::lt_of_mant_lt(N.int(), ((Succ(h) * Succ(h)) * D).int(), c, omega(above));
+            And(Rat::lt_respects(Rat::same_sym(sq0), Rat::same_sym(xs), l0), Rat::lt_respects(Rat::same_sym(xs), Rat::same_sym(sq1), l1))
+        },
+    }
+}
+
+theorem Finite::val_of_mag_zero({F: Format}, a: Finite(F), em: a.mag = 0): a.val() ≈ 0 {
+    let z: (Dyadic(0, a.q()).rat() ≈ 0) = Rat::same_trans(x := Dyadic(0, a.q()).rat(), y := Dyadic::rat(0), z := 0, hxy := Dyadic::zero_mant(a.q()), hyz := Dyadic::rat_zero());
+    let pm: (Dyadic(a.mag.int(), a.q()).rat() ≈ 0) = j(sym(em), λ k _ => Dyadic(k.int(), a.q()).rat() ≈ 0, z);
+    let nm: (Dyadic(-a.mag.int(), a.q()).rat() ≈ 0) = j(sym(em), λ k _ => Dyadic(-k.int(), a.q()).rat() ≈ 0, z);
+    match a.neg { False => pm, True => nm }
+}
+
+theorem Finite::val_neg_lt({F: Format}, a: Finite(F), ea: a.neg = True, k: Nat, em: a.mag = Succ(k)): a.val() < 0 {
+    let z: (Dyadic(0, a.q()).rat() ≈ 0) = Rat::same_trans(x := Dyadic(0, a.q()).rat(), y := Dyadic::rat(0), z := 0, hxy := Dyadic::zero_mant(a.q()), hyz := Dyadic::rat_zero());
+    let l: (Dyadic(-Succ(k).int(), a.q()).rat() < Dyadic(0, a.q()).rat()) = Dyadic::lt_of_mant_lt(-Succ(k).int(), 0, a.q(), omega);
+    let base: (Dyadic(-Succ(k).int(), a.q()).rat() < 0) = Rat::lt_respects(Dyadic(-Succ(k).int(), a.q()).rat().same_refl(), z, l);
+    let at_mag: (Dyadic(-a.mag.int(), a.q()).rat() < 0) = j(sym(em), λ m _ => Dyadic(-m.int(), a.q()).rat() < 0, base);
+    j(sym(ea), λ b _ => Dyadic(match b { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat() < 0, at_mag)
+}
+
+theorem Finite::val_pos_lt({F: Format}, a: Finite(F), ea: a.neg = False, k: Nat, em: a.mag = Succ(k)): 0 < a.val() {
+    let z: (Dyadic(0, a.q()).rat() ≈ 0) = Rat::same_trans(x := Dyadic(0, a.q()).rat(), y := Dyadic::rat(0), z := 0, hxy := Dyadic::zero_mant(a.q()), hyz := Dyadic::rat_zero());
+    let l: (Dyadic(0, a.q()).rat() < Dyadic(Succ(k).int(), a.q()).rat()) = Dyadic::lt_of_mant_lt(0, Succ(k).int(), a.q(), omega);
+    let base: (0 < Dyadic(Succ(k).int(), a.q()).rat()) = Rat::lt_respects(z, Dyadic(Succ(k).int(), a.q()).rat().same_refl(), l);
+    let at_mag: (0 < Dyadic(a.mag.int(), a.q()).rat()) = j(sym(em), λ m _ => 0 < Dyadic(m.int(), a.q()).rat(), base);
+    j(sym(ea), λ b _ => 0 < Dyadic(match b { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat(), at_mag)
+}
+
+// The sign of a finite float, decided: a zero of either sign, positive, or
+// negative.
+fn Finite::sign_dec({F: Format}, self a: Finite(F)) → a.mag = 0 ∨ (0 < a.val() ∨ a.val() < 0) {
+    match a.mag as λ m => a.mag = m → a.mag = 0 ∨ (0 < a.val() ∨ a.val() < 0) {
+        Zero => λ em => Inl(em),
+        Succ(k) => λ em => Inr(match a.neg as λ s => a.neg = s → 0 < a.val() ∨ a.val() < 0 {
+            False => λ ea => Inl(Finite::val_pos_lt(a, ea, k, em)),
+            True => λ ea => Inr(Finite::val_neg_lt(a, ea, k, em)),
+        }(refl)),
+    }(refl)
+}
+
+// A nonnegative float's root, as the rounding sees it.
+theorem Finite::sqrt_approx({F: Format}, a: Finite(F), nn: 0 <= a.val()): F.SqrtApprox(a.val(), a.sqrt_h(), a.sqrt_st()) {
+    let h = a.sqrt_h();
+    let st = a.sqrt_st();
+    let base = a.sqrt_approx_mag();
+    match a.neg as λ s => a.neg = s → F.SqrtApprox(a.val(), h, st) {
+        False => λ ea => j(sym(ea), λ b _ => F.SqrtApprox(Dyadic(match b { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat(), h, st), base),
+        True => λ ea => match a.mag as λ k => a.mag = k → F.SqrtApprox(a.val(), h, st) {
+            Zero => λ em => {
+                let at0: F.SqrtApprox(Dyadic(Nat::int(0), a.q()).rat(), h, st) = j(em, λ k _ => F.SqrtApprox(Dyadic(k.int(), a.q()).rat(), h, st), base);
+                let neg: F.SqrtApprox(Dyadic(-a.mag.int(), a.q()).rat(), h, st) = j(sym(em), λ k _ => F.SqrtApprox(Dyadic(-k.int(), a.q()).rat(), h, st), at0);
+                j(sym(ea), λ b _ => F.SqrtApprox(Dyadic(match b { False => a.mag.int(), True => -a.mag.int() }, a.q()).rat(), h, st), neg)
+            },
+            Succ(k) => λ em => false_elim(Rat::not_le_of_lt(Finite::val_neg_lt(a, ea, k, em), nn)),
+        }(refl),
+    }(refl)
+}
+
+// The cell is never empty.
+theorem Finite::sqrt_witness_cell({F: Format}, a: Finite(F), nn: 0 <= a.val()): F.SqrtCell(a.val(), F.sqrt_witness(a.sqrt_h(), a.sqrt_st())) {
+    F.cell_of_approx(a.val(), F.sqrt_witness(a.sqrt_h(), a.sqrt_st()), a.sqrt_h(), a.sqrt_st(), a.sqrt_approx(nn), F.witness_approx(a.sqrt_h(), a.sqrt_st()))
+}
+
+// The value theorem: the root of a nonnegative float is a correct rounding of
+// every rational in `√x`'s cell, in every mode. `-0` is its own root.
+theorem Finite::sqrt_correct({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), nn: 0 <= a.val(), y: Rat, cell: F.SqrtCell(a.val(), y)):
+    RoundsTo(F, mode, y, a.sqrt(mode := mode, nan := nan))
+{
+    let ay = F.approx_of_cell(a.val(), y, a.sqrt_h(), a.sqrt_st(), a.sqrt_approx(nn), cell);
+    let main: RoundsTo(F, mode, y, a.sqrt_abs(mode := mode)) = F.round_h_correct(mode, y, a.sqrt_h(), a.sqrt_st(), ay);
+    match a.neg as λ s => a.neg = s → RoundsTo(F, mode, y, match s { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }) {
+        False => λ _ => main,
+        True => λ ea => match a.mag as λ k => a.mag = k → RoundsTo(F, mode, y, match k { Zero => Float::Fin(a), Succ(_) => NaN(nan) }) {
+            Zero => λ em => {
+                let xz = Finite::val_of_mag_zero(a, em);
+                let yz = F.cell_zero(a.val(), y, xz, cell);
+                F.rounds_respects(mode, y, a.val(), Rat::same_trans(yz, Rat::same_sym(xz)), Float::Fin(a), F.rounds_exact(mode, a))
+            },
+            Succ(k) => λ em => false_elim(Rat::not_le_of_lt(Finite::val_neg_lt(a, ea, k, em), nn)),
+        }(refl),
+    }(refl)
+}
+
+// A nonnegative root carries `+`; `√-0 = -0`; the root of a negative nonzero
+// is NaN.
+theorem Finite::sqrt_sign({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), pos: a.neg = False): (a.sqrt(mode := mode, nan := nan)).SignIs(False) {
+    j(sym(pos), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }).SignIs(False),
+        F.round_h_sign(mode, a.sqrt_h(), a.sqrt_st()))
+}
+
+theorem Finite::sqrt_neg_zero({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), neg: a.neg = True, z: a.mag = 0): a.sqrt(mode := mode, nan := nan) = Float::Fin(a) {
+    let inner = j(sym(z), λ m _ => (match m as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) }) = Float::Fin(a), refl);
+    j(sym(neg), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }) = Float::Fin(a), inner)
+}
+
+theorem Finite::sqrt_neg({F: Format}, a: Finite(F), mode: Mode, nan: F.specials.has_nan().IsTrue(), neg: a.neg = True, k: Nat, nz: a.mag = Succ(k)):
+    (a.sqrt(mode := mode, nan := nan)).is_nan() = True
+{
+    let inner = j(sym(nz), λ m _ => (match m as λ _ => Float(F) { Zero => Float::Fin(a), Succ(_) => NaN(nan) }).is_nan() = True, refl);
+    j(sym(neg), λ b _ => (match b as λ _ => Float(F) { False => a.sqrt_abs(mode := mode), True => match a.mag { Zero => Float::Fin(a), Succ(_) => NaN(nan) } }).is_nan() = True, inner)
+}
+
+// ---------------------------------------------------------------------------
 // Format conversion: the source's exact value rounded into the target. A
 // zero keeps its sign.
 
-fn Finite::convert({F: Format}, self f: Finite(F), G: Format, mode: Mode := NearestEven) → Float(G) { G.round_exact(mode, f.dyadic(), f.neg) }
+fn Finite::convert({F: Format}, self f: Finite(F), G: Format, mode: Mode := Mode::NearestEven) → Float(G) { G.round_exact(mode, f.dyadic(), f.neg) }
 
 theorem Finite::convert_correct({F: Format}, f: Finite(F), G: Format, mode: Mode): RoundsTo(G, mode, f.val(), f.convert(G, mode := mode)) {
     G.round_exact_correct(mode, f.dyadic(), f.neg)
@@ -395,23 +767,23 @@ fn Float::convert({F: Format}, self x: Float(F), G: Format, mode: Mode := Neares
     }
 }
 
-theorem Bool::xor_self(self b: Bool): b.xor(b) = False { match b as λ c => c.xor(c) = False { False => refl, True => refl } }
+theorem Bool::xor_self(self b: Bool): b.xor(b) = False { match b { False => refl, True => refl } }
 
-theorem Bool::xor_not(self b: Bool): b.xor(!b) = True { match b as λ c => c.xor(!c) = True { False => refl, True => refl } }
+theorem Bool::xor_not(self b: Bool): b.xor(!b) = True { match b { False => refl, True => refl } }
 
 // NaN propagates through every operation.
 theorem Float::add_nan({F: Format}, x: Float(F), h: F.specials.has_nan().IsTrue(), mode: Mode): (x.add(NaN(h), mode := mode)).is_nan() = True ∧ (Float::add(NaN(h), x, mode := mode)).is_nan() = True {
-    And(match x as λ y => (y.add(NaN(h), mode := mode)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+    And(match x { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
 }
 
 theorem Float::mul_nan({F: Format}, x: Float(F), h: F.specials.has_nan().IsTrue(), mode: Mode): (x.mul(NaN(h), mode := mode)).is_nan() = True ∧ (Float::mul(NaN(h), x, mode := mode)).is_nan() = True {
-    And(match x as λ y => (y.mul(NaN(h), mode := mode)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+    And(match x { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
 }
 
 theorem Float::div_nan({F: Format}, x: Float(F), h, nan: F.specials.has_nan().IsTrue(), mode: Mode):
     (x.div(NaN(h), mode := mode, nan := nan)).is_nan() = True ∧ (Float::div(NaN(h), x, mode := mode, nan := nan)).is_nan() = True
 {
-    And(match x as λ y => (y.div(NaN(h), mode := mode, nan := nan)).is_nan() = True { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
+    And(match x { Float::Fin(_) => refl, Inf(_, _) => refl, NaN(_) => refl }, refl)
 }
 
 // Infinities: same-signed ones add, opposite ones are invalid.
@@ -450,7 +822,7 @@ theorem Float::div_zero_zero({F: Format}, a, b: Finite(F), za: a.mag = 0, zb: b.
 {
     let inner = j(sym(za), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) }).is_nan() = True, refl);
     j(sym(zb), λ m _ => (match m as λ _ => Float(F) {
-        Zero => match a.mag as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
+        Zero => match a.mag { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
         Succ(_) => a.div(b, mode := mode),
     }).is_nan() = True, inner)
 }
@@ -462,7 +834,7 @@ theorem Float::div_by_zero_inf({F: Format}, a, b: Finite(F), k: Nat, na: a.mag =
         j(sym(is_true_dec_yes(F.specials.has_inf(), has)), λ c _ => (match c as λ _ => Float(F) { Inl(hh) => Inf(a.neg.xor(b.neg), hh), Inr(_) => NaN(nan) }) = Inf(a.neg.xor(b.neg), has), refl);
     let inner = j(sym(na), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) }) = Inf(a.neg.xor(b.neg), has), dz);
     j(sym(zb), λ m _ => (match m as λ _ => Float(F) {
-        Zero => match a.mag as λ _ => Float(F) { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
+        Zero => match a.mag { Zero => NaN(nan), Succ(_) => F.div_by_zero(a.neg.xor(b.neg), nan) },
         Succ(_) => a.div(b, mode := mode),
     }) = Inf(a.neg.xor(b.neg), has), inner)
 }
@@ -484,4 +856,32 @@ theorem Float::fma_inf_zero({F: Format}, b: Finite(F), z: b.mag = 0, n: Bool, h:
     (Float::fma(Inf(n, h), Float::Fin(b), c, mode := mode)).is_nan() = True
 {
     j(sym(z), λ m _ => (match m as λ _ => Float(F) { Zero => NaN(F.specials.nan_of_inf(h)), Succ(_) => Float::inf_add(n.xor(b.neg), h, c) }).is_nan() = True, refl)
+}
+
+// ---------------------------------------------------------------------------
+// Square root of the special values: `√+∞ = +∞`, `√-∞` is invalid, NaN
+// propagates.
+
+fn Float::sqrt({F: Format}, self x: Float(F), mode: Mode := NearestEven, nan: F.specials.has_nan().IsTrue() := trivial) → Float(F) {
+    match x {
+        Fin(a) => a.sqrt(mode := mode, nan := nan),
+        Inf(n, h) => match n { False => Inf(False, h), True => NaN(nan) },
+        NaN(h) => NaN(h),
+    }
+}
+
+theorem Float::sqrt_inf({F: Format}, h: F.specials.has_inf().IsTrue(), nan: F.specials.has_nan().IsTrue(), mode: Mode): Float::sqrt(Inf(False, h), mode := mode, nan := nan) = Inf(False, h) { refl }
+
+theorem Float::sqrt_neg_inf({F: Format}, h: F.specials.has_inf().IsTrue(), nan: F.specials.has_nan().IsTrue(), mode: Mode): (Float::sqrt(Inf(True, h), mode := mode, nan := nan)).is_nan() = True { refl }
+
+theorem Float::sqrt_nan({F: Format}, h, nan: F.specials.has_nan().IsTrue(), mode: Mode): (Float::sqrt(NaN(h), mode := mode, nan := nan)).is_nan() = True { refl }
+
+// ---------------------------------------------------------------------------
+// A float of nonzero magnitude has a nonzero value.
+
+theorem Finite::val_ne_zero({F: Format}, a: Finite(F), k: Nat, em: a.mag = Succ(k)): ¬(a.val() ≈ 0) {
+    match a.neg as λ b => a.neg = b → ¬(a.val() ≈ 0) {
+        False => λ ea (z: a.val() ≈ 0) => { let k0: False = linarith(Finite::val_pos_lt(a, ea, k, em), z); k0 },
+        True => λ ea (z: a.val() ≈ 0) => { let k0: False = linarith(Finite::val_neg_lt(a, ea, k, em), z); k0 },
+    }(refl)
 }

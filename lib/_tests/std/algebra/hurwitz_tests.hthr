@@ -1,0 +1,64 @@
+// Probes of `lib/std/algebra/hurwitz.hthr` (issues/formal-power-series.md):
+// Hurwitz series computed at closed points over `Int`, the laws at `Int`
+// and `Rat`, the ring instance read by `ring` and by generic theorems, and
+// series of series. Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import list; import pair; import relation;
+import relation_props; import algebra_rel; import semiring; import ordered_field;
+import big_operator; import difference; import hurwitz; import rat;
+import omega; import ring; import tactic;
+
+// Coefficients compute: `exp(2t)` has the powers of two, the product is the
+// binomial convolution, `sin` and `cos` cycle.
+theorem exp_coeff(): Hurwitz::exp(OfNat(2)).coeff(3) = OfNat(8) { refl }
+theorem exp_product_coeff(): Hurwitz::mul(Hurwitz::exp(OfNat(2)), Hurwitz::exp(OfNat(3))).coeff(3) = OfNat(125) { refl }
+theorem sin_coeffs(): Pair(Hurwitz::sin<Int>().coeff(1), Hurwitz::sin<Int>().coeff(3)) = Pair(OfNat(1), NegSucc(0)) { refl }
+theorem cos_coeffs(): Pair(Hurwitz::cos<Int>().coeff(2), Hurwitz::cos<Int>().coeff(4)) = Pair(NegSucc(0), OfNat(1)) { refl }
+// A negative control: `exp(2t)·exp(3t)` is `exp(5t)`, not `exp(6t)`.
+theorem exp_product_square(): Hurwitz::mul(Hurwitz::exp(OfNat(2)), Hurwitz::exp(OfNat(3))).coeff(2) = OfNat(25) { refl }
+theorem exp_six_square(): Hurwitz::exp(OfNat(6)).coeff(2) = OfNat(36) { refl }
+theorem exp_not_multiplied(): ¬(Hurwitz::mul(Hurwitz::exp(OfNat(2)), Hurwitz::exp(OfNat(3))).coeff(2) = Hurwitz::exp(OfNat(6)).coeff(2)) {
+    λ h => omega(trans(trans(sym(exp_product_square()), h), exp_six_square()))
+}
+
+// The laws, over `ℤ` and over `ℚ`.
+theorem int_exp_add(a, b: Int): Hurwitz::Same(Hurwitz::mul(Hurwitz::exp(a), Hurwitz::exp(b)), Hurwitz::exp(a + b)) { Hurwitz::exp_add(a, b) }
+theorem rat_exp_add(a, b: Rat): Hurwitz::Same(Hurwitz::mul(Hurwitz::exp(a), Hurwitz::exp(b)), Hurwitz::exp(a + b)) { Hurwitz::exp_add(a, b) }
+theorem int_pythagoras(): Hurwitz::Same(Hurwitz::add(Hurwitz::mul(Hurwitz::sin<Int>(), Hurwitz::sin<Int>()), Hurwitz::mul(Hurwitz::cos<Int>(), Hurwitz::cos<Int>())), Hurwitz::one<Int>()) {
+    Hurwitz::sin_sq_add_cos_sq<Int>()
+}
+// Read at one coefficient, the addition law is the binomial theorem, proved
+// again by coinduction rather than by Pascal's rule.
+theorem binomial_by_coinduction(a, b: Rat, n: Nat):
+    ∑ i < Succ(n), Semiring::of_nat<Rat>(n.choose(i)) * ((∏ k < i, a) * ∏ k < n - i, b) ≈ ∏ k < n, (a + b)
+{ Hurwitz::exp_add(a, b, n) }
+theorem rat_leibniz(f, g: Hurwitz<Rat>): Hurwitz::Same(Hurwitz::d(Hurwitz::mul(f, g)), Hurwitz::add(Hurwitz::mul(Hurwitz::d(f), g), Hurwitz::mul(f, Hurwitz::d(g)))) {
+    Hurwitz::leibniz(f, g)
+}
+
+// The ring instance: `ring` on series, and a generic theorem at them.
+theorem ring_series(f, g: Hurwitz<Int>): (f + g) * (f + g) ≈ f * f + (f * g + f * g) + g * g { ring }
+// expect-error: differ by
+theorem ring_series_not_identity(f, g: Hurwitz<Int>): (f + g) * (f + g) ≈ f * f + g * g { ring }
+theorem series_binomial(f, g: Hurwitz<Rat>, n: Nat):
+    ∏ k < n, (f + g) ≈ ∑ i < Succ(n), Semiring::of_nat<Hurwitz<Rat>>(n.choose(i)) * ((∏ k < i, f) * ∏ k < n - i, g)
+{ CommSemiring::binomial(f, g, n) }
+
+// Series of series: two variables, through the class system.
+theorem nested_one(F: Hurwitz<Hurwitz<Rat>>): Hurwitz::Same(Hurwitz::mul(F, Hurwitz::one()), F) { Hurwitz::mul_one(F) }
+theorem nested_exp_add(a, b: Hurwitz<Int>): Hurwitz::Same(Hurwitz::mul(Hurwitz::exp(a), Hurwitz::exp(b)), Hurwitz::exp(a + b)) { Hurwitz::exp_add(a, b) }
+
+// Dual numbers: `t ↦ (3 + t)²` has value 9 and derivative 6, read off
+// the jet of order one.
+fn at_three() → Hurwitz<Int> { Hurwitz::cons(OfNat(3), Hurwitz::one()) }
+theorem square_value(): Hurwitz::mul(at_three(), at_three()).coeff(0) = OfNat(9) { refl }
+theorem square_derivative(): Hurwitz::mul(at_three(), at_three()).coeff(1) = OfNat(6) { refl }
+theorem dual_product(f, g: Hurwitz<Rat>): Hurwitz::mul(f, g).coeff(1) ≈ f.coeff(1) * g.coeff(0) + f.coeff(0) * g.coeff(1) { Hurwitz::mul_first(f, g) }
+// Newton lifting inverts `exp(t)` (all ones) to `exp(-t)` at `Int`.
+theorem newton_exp_coeffs(): Pair(Hurwitz::newton_inv_iter(2, Hurwitz::exp<Int>(OfNat(1)), Hurwitz::constant<Int>(OfNat(1))).coeff(2),
+    Hurwitz::newton_inv_iter(2, Hurwitz::exp<Int>(OfNat(1)), Hurwitz::constant<Int>(OfNat(1))).coeff(3)) = Pair(OfNat(1), NegSucc(0)) { refl }
+// One step is order 2 only: the true inverse has `1` at index 2.
+theorem newton_one_step_short(): Hurwitz::newton_inv_iter(1, Hurwitz::exp<Int>(OfNat(1)), Hurwitz::constant<Int>(OfNat(1))).coeff(2) = NegSucc(0) { refl }
+theorem newton_exp_order(n: Nat, hn: Nat::Lt(n, 8)):
+    Hurwitz::inv_error(Hurwitz::exp<Int>(OfNat(1)), Hurwitz::newton_inv_iter(3, Hurwitz::exp<Int>(OfNat(1)), Hurwitz::constant<Int>(OfNat(1)))).coeff(n) = OfNat(0)
+{ Hurwitz::newton_inv_lifts<Int>(3, Hurwitz::exp<Int>(OfNat(1)), OfNat(1), refl, n, hn) }

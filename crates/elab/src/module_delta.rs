@@ -350,6 +350,8 @@ pub(crate) enum DeltaEvent {
     },
     Derived(DerivedInst),
     Evidence(EvidenceRule),
+    /// An interface definition (`interfaces.rs`), by global key.
+    Interface { key: String, info: crate::interfaces::InterfaceInfo },
     Repr {
         key: DatareprKey,
         name: String,
@@ -442,8 +444,10 @@ impl JournalSlot {
     }
 }
 
-impl Clone for JournalSlot {
-    fn clone(&self) -> Self {
+impl JournalSlot {
+    /// What a clone of the elaborator gets (`ModulePass`'s `Clone`): no
+    /// journal, only the lengths this one had.
+    pub(crate) fn lengths_only(&self) -> Self {
         Self { live: RefCell::new(None), mark: self.live.borrow().as_ref().map(ModuleJournal::lengths) }
     }
 }
@@ -461,7 +465,7 @@ impl Elaborator {
     /// closure keeps payload cloning off every ordinary source-elaboration
     /// path and off replay itself.
     pub(crate) fn record_module_event(&self, event: impl FnOnce() -> DeltaEvent) {
-        if let Some(journal) = self.module_journal.borrow_mut().as_mut() {
+        if let Some(journal) = self.pass.module_journal.borrow_mut().as_mut() {
             journal.events.push(event());
         }
     }
@@ -510,6 +514,9 @@ impl Elaborator {
             level: level.clone(),
             at,
         });
+        if crate::gendefs::mentions_global(&inline) {
+            self.types.gdefs_mut().insert_guard_at(crate::gendefs::GuardKey::TyCode(tag), at);
+        }
         self.types.gdefs_mut().insert_ty_code(tag, (inline, level));
     }
 
@@ -528,6 +535,9 @@ impl Elaborator {
             slots: slots.clone(),
             at,
         });
+        if crate::gendefs::mentions_global(&slots.shape) || slots.arity.shift_global(1) != *slots.arity {
+            self.types.gdefs_mut().insert_guard_at(crate::gendefs::GuardKey::WfSlots(tag), at);
+        }
         self.types.gdefs_mut().insert_wf_slots(tag, slots);
     }
 
@@ -537,6 +547,9 @@ impl Elaborator {
             codes: codes.clone(),
             at,
         });
+        if codes.ctors.iter().chain(&codes.nodes).any(|(ty, _)| crate::gendefs::mentions_global(ty)) {
+            self.types.gdefs_mut().insert_guard_at(crate::gendefs::GuardKey::Spine(tag), at);
+        }
         self.types.gdefs_mut().insert_spine_codes(tag, codes);
     }
 
@@ -595,6 +608,12 @@ impl Elaborator {
     pub(crate) fn semantic_commit_evidence(&mut self, rule: EvidenceRule) {
         self.record_module_event(|| DeltaEvent::Evidence(rule.clone()));
         self.traits.commit_evidence(rule);
+    }
+
+    pub(crate) fn semantic_commit_interface(&mut self, key: String, info: crate::interfaces::InterfaceInfo) {
+        self.record_module_event(|| DeltaEvent::Interface { key: key.clone(), info: info.clone() });
+        self.interfaces.commit(key, info);
+        self.refresh_delta_psi();
     }
 
     pub(crate) fn semantic_commit_derived(&mut self, info: DerivedInst) {
@@ -662,16 +681,16 @@ impl Elaborator {
         dependencies: ModuleDependencyIdentity,
     ) -> R<ModuleDelta> {
         assert!(
-            self.module_journal.borrow().is_none(),
+            self.pass.module_journal.borrow().is_none(),
             "module delta extraction is not nested"
         );
         let dependency_psi = (*self.psi).clone();
         let base_len = dependency_psi.bindings.len();
-        *self.module_journal.borrow_mut() =
-            Some(ModuleJournal::new(base_len, self.warnings.borrow().len()));
+        *self.pass.module_journal.borrow_mut() =
+            Some(ModuleJournal::new(base_len, self.pass.warnings.borrow().len()));
         let result = self.session_transaction(|me| me.elab_module_source(module, src));
         let journal = self
-            .module_journal
+            .pass.module_journal
             .borrow_mut()
             .take()
             .expect("module journal was installed");
@@ -689,7 +708,7 @@ impl Elaborator {
     ) -> ModuleDelta {
         let base = journal.base_psi;
         let extension = self.psi.bindings.iter().skip(base).cloned().collect();
-        let warnings = self.warnings.borrow()[journal.base_warnings..].to_vec();
+        let warnings = self.pass.warnings.borrow()[journal.base_warnings..].to_vec();
         let sealed = self.psi.sealed.iter().filter(|(i, _)| *i >= base).map(|(i, t)| (i - base, Rc::clone(t))).collect();
         let mut items = journal.items;
         // A proof checked on the pool belongs to the item that queued it:
@@ -757,8 +776,8 @@ impl Elaborator {
         previous: &ModuleDelta,
         force: std::collections::BTreeSet<String>,
     ) -> Result<(ModuleDelta, SliceReport, std::collections::BTreeSet<String>), Vec<ElabError>> {
-        assert!(self.slice_plan.is_none(), "sliced module checks are not nested");
-        self.slice_plan = Some(SlicePlan {
+        assert!(self.pass.slice_plan.is_none(), "sliced module checks are not nested");
+        self.pass.slice_plan = Some(SlicePlan {
             previous: Rc::new(previous.clone()),
             exact: false,
             report: SliceReport::default(),
@@ -767,14 +786,14 @@ impl Elaborator {
             changed: Default::default(),
         });
         let result = self.check_module_delta(module, src, dependencies);
-        let plan = self.slice_plan.take().expect("the slice plan was installed");
+        let plan = self.pass.slice_plan.take().expect("the slice plan was installed");
         result.map(|delta| (delta, plan.report, plan.met))
     }
 
     /// Is any of `names` (an item's name, or a group's members' names) one
     /// the plan forces from source? Records the ones it met.
     pub(crate) fn slice_forced(&mut self, names: &[String]) -> bool {
-        let Some(plan) = self.slice_plan.as_mut() else { return false };
+        let Some(plan) = self.pass.slice_plan.as_mut() else { return false };
         let mut forced = false;
         for name in names {
             if plan.force.contains(name) {
@@ -794,10 +813,10 @@ impl Elaborator {
     /// item's elaboration reads besides the earlier items of its module.
     pub(crate) fn slice_enter(&mut self, module: &str) {
         let scope = self.names.scope().clone();
-        if let Some(journal) = self.module_journal.borrow_mut().as_mut() {
+        if let Some(journal) = self.pass.module_journal.borrow_mut().as_mut() {
             journal.scope_at_entry = Some(scope.clone());
         }
-        let Some(plan) = self.slice_plan.as_ref() else { return };
+        let Some(plan) = self.pass.slice_plan.as_ref() else { return };
         let previous = &plan.previous;
         let exact = previous.module == module
             && previous.scope_at_entry.as_ref() == Some(&scope)
@@ -812,19 +831,19 @@ impl Elaborator {
             .filter(|(i, old)| self.psi.sealed_kept(*i).is_none_or(|now| !same_proof(now, old)))
             .map(|(i, _)| *i)
             .collect();
-        let plan = self.slice_plan.as_mut().expect("checked above");
+        let plan = self.pass.slice_plan.as_mut().expect("checked above");
         plan.exact = exact;
         plan.report = SliceReport::default();
         plan.changed = changed;
     }
 
     pub(crate) fn slice_begin(&self) -> Option<SliceMark> {
-        let journal = self.module_journal.borrow();
+        let journal = self.pass.module_journal.borrow();
         let journal = journal.as_ref()?;
         Some(SliceMark {
             psi: self.psi.bindings.len() - journal.base_psi,
             events: journal.events.len(),
-            warnings: self.warnings.borrow().len() - journal.base_warnings,
+            warnings: self.pass.warnings.borrow().len() - journal.base_warnings,
         })
     }
 
@@ -846,8 +865,8 @@ impl Elaborator {
         if replayed {
             // A replayed slice computed with what its first elaboration
             // opened, whatever its recheck opened now.
-            let index = self.module_journal.borrow().as_ref().map_or(0, |j| j.items.len());
-            if let Some(old) = self.slice_plan.as_ref().and_then(|p| p.previous.items.get(index)) {
+            let index = self.pass.module_journal.borrow().as_ref().map_or(0, |j| j.items.len());
+            if let Some(old) = self.pass.slice_plan.as_ref().and_then(|p| p.previous.items.get(index)) {
                 unsealed.extend(old.unsealed.iter().copied());
                 unsealed.sort_unstable();
                 unsealed.dedup();
@@ -862,12 +881,12 @@ impl Elaborator {
             unsealed,
         };
         let index = {
-            let mut journal = self.module_journal.borrow_mut();
+            let mut journal = self.pass.module_journal.borrow_mut();
             let journal = journal.as_mut().expect("slice_begin found a journal");
             journal.items.push(slice.clone());
             journal.items.len() - 1
         };
-        let Some(plan) = self.slice_plan.as_ref() else { return };
+        let Some(plan) = self.pass.slice_plan.as_ref() else { return };
         if !plan.exact || replayed {
             // A broken prefix stays broken: everything after the first item
             // whose contribution differed sits over a different world. A
@@ -881,7 +900,7 @@ impl Elaborator {
         // body does not.
         let previous = Rc::clone(&plan.previous);
         let same = previous.items.get(index).is_some_and(|old| {
-            let journal = self.module_journal.borrow();
+            let journal = self.pass.module_journal.borrow();
             let journal = journal.as_ref().expect("slice_begin found a journal");
             old.psi == slice.psi
                 && old.events == slice.events
@@ -892,14 +911,14 @@ impl Elaborator {
                     == crate::module_image::encode_events(&journal.events[slice.events.clone()], true)
         });
         if !same {
-            self.slice_plan.as_mut().expect("checked above").exact = false;
+            self.pass.slice_plan.as_mut().expect("checked above").exact = false;
             return;
         }
         // The same bindings and events: the prefix stays exact. A theorem
         // whose proof was edited is the case this exists for, and the
         // later items that opened that proof are the ones that must not
         // replay.
-        let base = self.module_journal.borrow().as_ref().map_or(0, |j| j.base_psi);
+        let base = self.pass.module_journal.borrow().as_ref().map_or(0, |j| j.base_psi);
         let old = &previous.items[index];
         let mut changed = Vec::new();
         for k in 0..slice.psi.len() {
@@ -914,7 +933,7 @@ impl Elaborator {
                 changed.push(base + slice.psi.start + k);
             }
         }
-        self.slice_plan.as_mut().expect("checked above").changed.extend(changed);
+        self.pass.slice_plan.as_mut().expect("checked above").changed.extend(changed);
     }
 
     /// Try to reproduce item `index` from the previous delta's slice. `true`
@@ -922,7 +941,7 @@ impl Elaborator {
     /// `false` means elaborate it. A slice the gate or the preflight checks
     /// refuse is rolled back and the item is elaborated instead.
     pub(crate) fn try_replay_slice(&mut self, index: usize, source: &str, start: usize) -> bool {
-        let Some(plan) = self.slice_plan.as_ref() else { return false };
+        let Some(plan) = self.pass.slice_plan.as_ref() else { return false };
         if !plan.exact {
             return false;
         }
@@ -947,7 +966,7 @@ impl Elaborator {
         // module replayed slower than it elaborated
         // (issues/check-module-delta-certificate-cost.md).
         let replayed = self.replay_slice(&previous, old, start);
-        let plan = self.slice_plan.as_mut().expect("checked above");
+        let plan = self.pass.slice_plan.as_mut().expect("checked above");
         match replayed {
             Ok(()) => {
                 plan.report.replayed += 1;
@@ -962,7 +981,7 @@ impl Elaborator {
 
     /// An item was elaborated from source under a slice plan.
     pub(crate) fn slice_elaborated(&mut self) {
-        if let Some(plan) = self.slice_plan.as_mut() {
+        if let Some(plan) = self.pass.slice_plan.as_mut() {
             plan.report.elaborated += 1;
         }
     }
@@ -981,7 +1000,7 @@ impl Elaborator {
         let sealed = previous.sealed_in(slice.psi.clone());
         // Inline, whatever the pool's width: the pool holds the bodies of the
         // items elaborated around this one, and their join is the module's.
-        self.recheck_extension(&previous.module, bindings, &sealed, false)?;
+        self.recheck_extension(&previous.module, bindings, &sealed, false, &mut true)?;
         // The item's text is unchanged but may sit elsewhere in the file:
         // every span the slice carries moves with it.
         let offset = start as i64 - slice.start as i64;
@@ -997,10 +1016,9 @@ impl Elaborator {
             self.apply_module_event(event);
         }
         self.refresh_delta_psi();
-        self.result_only_memo.borrow_mut().clear();
-        self.named_type_memo.borrow_mut().clear();
+        self.memos.clear_positional();
         let shift = |at: usize| (at as i64 + offset) as usize;
-        self.warnings.borrow_mut().extend(previous.warnings[slice.warnings.clone()].iter().map(|w| {
+        self.pass.warnings.borrow_mut().extend(previous.warnings[slice.warnings.clone()].iter().map(|w| {
             let mut w = w.clone();
             w.span = heather_syntax::Span { start: shift(w.span.start), end: shift(w.span.end) };
             if let Some(fix) = w.fix.as_mut() {
@@ -1026,16 +1044,16 @@ impl Elaborator {
         dependencies: ModuleDependencyIdentity,
     ) -> Result<ModuleDelta, Vec<ElabError>> {
         assert!(
-            self.module_journal.borrow().is_none(),
+            self.pass.module_journal.borrow().is_none(),
             "module delta extraction is not nested"
         );
         let dependency_psi = (*self.psi).clone();
         let base_len = dependency_psi.bindings.len();
-        *self.module_journal.borrow_mut() =
-            Some(ModuleJournal::new(base_len, self.warnings.borrow().len()));
+        *self.pass.module_journal.borrow_mut() =
+            Some(ModuleJournal::new(base_len, self.pass.warnings.borrow().len()));
         let errs = self.check_module_source_inner(module, src);
         let journal = self
-            .module_journal
+            .pass.module_journal
             .borrow_mut()
             .take()
             .expect("module journal was installed");
@@ -1045,12 +1063,58 @@ impl Elaborator {
         Ok(self.delta_from_journal(module, dependencies, dependency_psi, journal))
     }
 
+    /// [`Self::check_module_delta`], keeping the delta of what checked when
+    /// some declarations were refused: a refused declaration registers
+    /// nothing, so the journal holds exactly the module's other items. For a
+    /// module whose refusals are its point (`heather check --expectations`),
+    /// whose caller judges `errors` and decides whether the delta stands
+    /// for the module (`docs/module-dag-design.md` §11).
+    pub fn check_module_delta_refusing(
+        &mut self,
+        module: &str,
+        src: &str,
+        dependencies: ModuleDependencyIdentity,
+    ) -> (ModuleDelta, Vec<ElabError>) {
+        assert!(
+            self.pass.module_journal.borrow().is_none(),
+            "module delta extraction is not nested"
+        );
+        let dependency_psi = (*self.psi).clone();
+        let base_len = dependency_psi.bindings.len();
+        *self.pass.module_journal.borrow_mut() =
+            Some(ModuleJournal::new(base_len, self.pass.warnings.borrow().len()));
+        let errs = self.check_module_source_inner(module, src);
+        let journal = self
+            .pass.module_journal
+            .borrow_mut()
+            .take()
+            .expect("module journal was installed");
+        (self.delta_from_journal(module, dependencies, dependency_psi, journal), errs)
+    }
+
     /// Recheck the stored suffix, install metadata into a private candidate,
     /// and publish the candidate only after every operation succeeds.
     pub fn replay_module_delta(
         &mut self,
         delta: &ModuleDelta,
         dependencies: &ModuleDependencyIdentity,
+    ) -> Result<(), ModuleReplayError> {
+        self.replay_module_delta_keyed(delta, dependencies, None)
+    }
+
+    /// [`Self::replay_module_delta`] with `replay`, an identity of this exact
+    /// replay that its caller vouches for: the stored bytes the delta was
+    /// decoded from and the world it is replayed over, module by module
+    /// (`docs/module-dag-design.md` §13). A gate that has seen the identity
+    /// pass skips the recheck of the whole extension; one whose recheck
+    /// passes without opening a sealed proof records it. Everything else a
+    /// replay checks (the dependency identity, opened proofs, exports, the
+    /// metadata preflight) is checked either way.
+    pub fn replay_module_delta_keyed(
+        &mut self,
+        delta: &ModuleDelta,
+        dependencies: &ModuleDependencyIdentity,
+        replay: Option<&[u8; 32]>,
     ) -> Result<(), ModuleReplayError> {
         if dependencies != &delta.dependencies {
             return Err(ModuleReplayError::DependencyIdentity);
@@ -1071,7 +1135,17 @@ impl Elaborator {
         if !self.names.valid_exports(&delta.scope) {
             return Err(ModuleReplayError::MetadataConflict("reexports"));
         }
-        self.recheck_extension(&delta.module, &delta.extension, &delta.sealed, true)?;
+        let gate = self.policy.gate.clone();
+        match (&gate, replay) {
+            (Some(g), Some(key)) if g.admits_replay(key) => {}
+            _ => {
+                let mut clean = true;
+                self.recheck_extension(&delta.module, &delta.extension, &delta.sealed, true, &mut clean)?;
+                if let (Some(g), Some(key), true) = (&gate, replay, clean) {
+                    g.replay_accepted(key);
+                }
+            }
+        }
 
         let mut candidate = self.semantic_image().elaborator();
         candidate.names.enter_scope(delta.scope.clone());
@@ -1088,8 +1162,7 @@ impl Elaborator {
         }
         candidate.refresh_delta_psi();
         self.committed = candidate.committed;
-        self.result_only_memo.borrow_mut().clear();
-        self.named_type_memo.borrow_mut().clear();
+        self.memos.clear_positional();
         Ok(())
     }
 
@@ -1118,7 +1191,8 @@ impl Elaborator {
     /// identity) and an `admits` hit skips its statement and body the way it
     /// does for a fresh declaration; a miss is checked and `accepted` at the
     /// same points the source path uses. A theorem is stored without its
-    /// proof and has nothing to ask: its statement is checked. Before
+    /// proof, so it asks about its statement alone
+    /// ([`crate::gate::KernelGate::admits_statement`]). Before
     /// 2026-09-17 a replay rechecked every stored body regardless, so a warm
     /// run of an unchanged file cost more than an edited one
     /// (`issues/semantic-replay-phase-attribution.md`).
@@ -1128,17 +1202,18 @@ impl Elaborator {
         extension: &[GlobalBinding],
         sealed: &[(usize, Rc<SealedProof>)],
         on_pool: bool,
+        clean: &mut bool,
     ) -> Result<(), ModuleReplayError> {
-        let gate = self.gate.clone();
+        let gate = self.policy.gate.clone();
         // `on_pool == false` keeps every body on this thread even at width:
         // a slice replay runs inside a module pass whose own deferred bodies
         // are on the pool, and a join here would consume their outcomes.
-        let inline = self.kernel_pool.is_inline() || !on_pool;
+        let inline = self.pass.kernel_pool.is_inline() || !on_pool;
         // The one-call form checks bindings alone, and a definition that
         // computes with an earlier theorem's witness needs its sealed proof
         // in the prefix: with any, take the per-binding loop below.
         if gate.is_none() && inline && sealed.is_empty() {
-            return typing::check_global_ctx_extension(&self.psi, extension, 0, self.fuel)
+            return typing::check_global_ctx_extension(&self.psi, extension, 0, self.policy.fuel)
                 .map_err(ModuleReplayError::Kernel);
         }
         let mut prefix = Rc::clone(&self.psi.0);
@@ -1162,31 +1237,51 @@ impl Elaborator {
                 }
                 _ => None,
             };
+            // A declaration without a body (a theorem's statement, an opaque
+            // one) has no check key, but its statement has a verdict of its
+            // own: without one every load re-checked every such statement,
+            // which was the whole of a warm world's `image_recheck`
+            // (`issues/native-process-fixed-cost.md`).
+            let bodiless = matches!(binding, GlobalBinding::Tm { body: None, .. });
             let admitted = match (&gate, &body) {
                 (Some(g), Some(item)) => g.admits(&prefix, item),
+                (Some(g), None) if bodiless => g.admits_statement(&prefix, binding),
                 _ => false,
             };
             if !admitted {
-                if let Err(e) = typing::check_global_binding_statement(&prefix, binding, 0, self.fuel) {
+                let (checked, unsealed) = heather_kernel::unseal::record(|| {
+                    typing::check_global_binding_statement(&prefix, binding, 0, self.policy.fuel)
+                });
+                if let Err(e) = checked {
                     statement = Err(ModuleReplayError::Kernel(e));
                     break;
+                }
+                // `clean`: no check this replay ran opened a sealed proof,
+                // so a verdict about the whole replay may be kept on the
+                // same rule as one about a declaration.
+                *clean &= unsealed.is_empty();
+                if let (Some(g), true) = (&gate, bodiless) {
+                    g.statement_accepted(&prefix, binding, &unsealed);
                 }
                 if let Some(item) = &body {
                     if inline {
                         let (verdict, unsealed) = heather_kernel::unseal::record(|| {
                             typing::check_term(
-                                &prefix, 0, item.layer, item.ctx, item.body, item.ty, item.level, self.fuel,
+                                &prefix, 0, item.layer, item.ctx, item.body, item.ty, item.level, self.policy.fuel,
                             )
                         });
                         if let Err(e) = verdict {
                             statement = Err(ModuleReplayError::Kernel(e));
                             break;
                         }
+                        *clean &= unsealed.is_empty();
                         if let Some(g) = &gate {
                             g.accepted(&prefix, item, &unsealed);
                         }
                     } else {
-                        self.kernel_pool.submit(pool::Deferred {
+                        // Its seals are known only at the join.
+                        *clean = false;
+                        self.pass.kernel_pool.submit(pool::Deferred {
                             name: name.clone(),
                             span: heather_syntax::Span { start: 0, end: 0 },
                             psi: Rc::clone(&prefix),
@@ -1197,7 +1292,7 @@ impl Elaborator {
                             opaque: false,
                             layer: item.layer,
                             lands_in_psi: true,
-                            fuel: self.fuel,
+                            fuel: self.policy.fuel,
                             unsealed: Vec::new(),
                             row: None,
                         });
@@ -1219,7 +1314,7 @@ impl Elaborator {
         // a join here took *their* outcomes: a rejected proof before the slice
         // became this replay's failure, the item was elaborated instead, and
         // the pass's own join found nothing to refuse the module with.
-        let outcomes = if inline { Vec::new() } else { self.kernel_pool.join() };
+        let outcomes = if inline { Vec::new() } else { self.pass.kernel_pool.join() };
         let mut body = Ok(());
         for outcome in &outcomes {
             // The workers' counters fold into the module row as the gate's do;
@@ -1301,6 +1396,7 @@ impl Elaborator {
             DeltaEvent::Designation { key, info } => self.semantic_commit_designation(key, info),
             DeltaEvent::Derived(info) => self.semantic_commit_derived(info),
             DeltaEvent::Evidence(rule) => self.semantic_commit_evidence(rule),
+            DeltaEvent::Interface { key, info } => self.semantic_commit_interface(key, info),
             DeltaEvent::Repr { key, name, info, monomorph, obligations } => {
                 self.semantic_commit_repr(key, name, info, monomorph, obligations);
             }
@@ -1349,6 +1445,7 @@ impl Elaborator {
             DeltaEvent::Derived(info)
                 if self.traits.derived().iter().any(|old| old.abs == info.abs) => Some("derived-instance"),
             DeltaEvent::Evidence(rule) if self.traits.has_evidence(&rule.global) => Some("evidence-rule"),
+            DeltaEvent::Interface { key, .. } if self.interfaces.get(key).is_some() => Some("interface"),
             DeltaEvent::Repr { key, name, monomorph, .. }
                 if self.representations.for_spec(key).is_some()
                     || self.representations.has_name(name)
@@ -1409,7 +1506,7 @@ mod tests {
             e.psi().bindings.len() > after_good,
             "ordinary diagnostic recovery must retain the successful item"
         );
-        assert!(e.module_journal.borrow().is_none());
+        assert!(e.pass.module_journal.borrow().is_none());
     }
 
     #[test]
@@ -1419,16 +1516,16 @@ mod tests {
         // restored over a declaration that failed after recording must leave
         // the live journal at the snapshot's lengths.
         let mut e = Elaborator::new();
-        *e.module_journal.borrow_mut() = Some(ModuleJournal::new(0, 0));
+        *e.pass.module_journal.borrow_mut() = Some(ModuleJournal::new(0, 0));
         e.semantic_commit_name("before", NameKind::Global);
         let snapshot = e.clone();
         let mut probe = e.clone();
-        assert!(probe.module_journal.borrow().is_none());
+        assert!(probe.pass.module_journal.borrow().is_none());
         probe.semantic_commit_name("probed", NameKind::Global);
         e.semantic_commit_name("failed", NameKind::Global);
-        assert_eq!(e.module_journal.borrow().as_ref().unwrap().events.len(), 2);
+        assert_eq!(e.pass.module_journal.borrow().as_ref().unwrap().events.len(), 2);
         e.restore_from_clone(snapshot);
-        let journal = e.module_journal.borrow();
+        let journal = e.pass.module_journal.borrow();
         let events = &journal.as_ref().expect("the live journal survives a restore").events;
         assert!(matches!(events.as_slice(), [DeltaEvent::Name { name, .. }] if name == "before"));
     }

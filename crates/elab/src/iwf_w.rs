@@ -811,7 +811,7 @@ impl Elaborator {
         // here, to `args`, for every branch below.
         let mut cx = cx.clone();
         let tyvars = self.field_scope_cx(&cx, ind, args, &[]).tyvars;
-        cx.tyvars.extend(tyvars);
+        cx.tyvars.extend(tyvars.iter().cloned());
         let cx = &cx;
         // The function domains' one level `lp` (§1.3), read at a generic
         // payload, where the written indices are checked too.
@@ -876,8 +876,7 @@ impl Elaborator {
         let ptree = self.idx_case_tree(
             &xcx,
             &spine,
-            n,
-            0,
+            spine.root(),
             Type::Ty(lp.clone()),
             &Level::succ(lp.clone()),
             Rc::new(var(0)),
@@ -954,7 +953,7 @@ impl Elaborator {
                 ),
             ))
         };
-        let tree = self.idx_case_tree(&c3, &spine, n, 0, q(4, &var(0)), &lq, Rc::new(var(2)), 3, &ok_body)?;
+        let tree = self.idx_case_tree(&c3, &spine, spine.root(), q(4, &var(0)), &lq, Rc::new(var(2)), 3, &ok_body)?;
         // The step over (Γ, a, f, ih), moved under the tree `t` the predicate
         // is a function of.
         let step = app(app(tree, var(1)), var(0)).shift_local_above(1, 3);
@@ -1118,8 +1117,6 @@ impl Elaborator {
     /// route has already ordered the arms and built the motive over
     /// `(Γ, j, z)` (`env.motive`).
     pub(crate) fn iw_match(&self, cx: &Cx, env: &ArmEnv, sig: &IwSig, scrut: Term) -> R<Term> {
-        let ind = env.ind;
-        let n = ind.ctors.len();
         let m = Rc::clone(&env.fam.idx);
         let mlvl = env.mlvl;
         let w = MatchLevels::new(sig, mlvl);
@@ -1133,8 +1130,7 @@ impl Elaborator {
         let tree = self.idx_case_tree(
             &c3,
             env.spine,
-            n,
-            0,
+            env.spine.root(),
             w.q(env, sig, 0, 4, &var(0)),
             &w.lq,
             Rc::new(var(2)),
@@ -1540,6 +1536,7 @@ impl Elaborator {
                 ty,
                 level,
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         if !children.is_empty() || !fn_children.is_empty() {
@@ -1555,6 +1552,7 @@ impl Elaborator {
                             fn_children,
                             // Not chain-shaped for the window's purposes.
                             cov: None,
+                            shape: crate::recursion::WfShape::NoWindowRoute,
                         },
                         rebind: env.idx_param.map(|p| (p, rebind)),
                         generalized: crate::generalize::guard_gen(&acx, dec, None),

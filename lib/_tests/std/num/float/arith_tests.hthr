@@ -130,3 +130,33 @@ theorem zero_times({F: Format}, b: Finite(F), z: b.mag = 0, n: Bool, h: F.specia
 
 // Binary long division is division.
 theorem ldiv_is_div(n: Nat, d: Pos<Nat>): n.ldiv(d).quot() = n.div(d) { n.ldiv_div(d) }
+
+// Square roots: exact roots are exact, √2 rounds per mode, a subnormal's root
+// is normal, and the IEEE signs and specials.
+fn two16() → Finite(binary16()) { h16(False, 1024, 15, trivial) }
+fn four16() → Finite(binary16()) { h16(False, 1024, 16, trivial) }
+theorem root_four(): Rat::Same(val_or(four16().sqrt(), 99), 2) { refl }
+theorem root_nine(): Rat::Same(val_or(three().mul(three()).finite().unwrap_or(one()).sqrt(), 99), 3) { refl }
+theorem root_two(): Rat::Same(val_or(two16().sqrt(), 99), Rat(1448, 1024)) { refl }
+theorem root_two_up(): Rat::Same(val_or(two16().sqrt(mode := TowardPos), 99), Rat(1449, 1024)) { refl }
+theorem root_two_down(): Rat::Same(val_or(two16().sqrt(mode := TowardZero), 99), Rat(1448, 1024)) { refl }
+theorem root_three(): Rat::Same(val_or(three().sqrt(), 99), Rat(1774, 1024)) { refl }
+theorem root_two32(): Rat::Same(val_or(s32(False, 8388608, 127, trivial).sqrt(), 99), Rat(11863283, 8388608)) { refl }
+theorem root_tiny(): Rat::Same(val_or(Finite::min_subnormal(binary16()).sqrt(), 99), Rat(1, 4096)) { refl }
+theorem root_zero(): neg_bit(pz().sqrt()) = False { refl }
+theorem root_neg_zero(): neg_bit(nz().sqrt()) = True { refl }
+theorem root_neg(): ((-one()).sqrt()).is_nan() = True { refl }
+theorem root_inf(): Float::sqrt(pinf()) = pinf() { refl }
+fn ninf() → Float(binary16()) { Inf(True, trivial) }
+theorem root_neg_inf(): (Float::sqrt(ninf())).is_nan() = True { refl }
+
+// The value theorem at a literal: 1.414213563 lies in √2's cell (`h` is
+// √2 in half-units `2^-25`, inexact), so the root rounds it.
+theorem root_two_cell(): RoundsTo(binary16(), NearestEven, Rat(1414213563, 1000000000), two16().sqrt()) {
+    let y = Rat(1414213563, 1000000000);
+    let lo: ((binary16()).grid(OfNat(47453132)) < y) = trivial;
+    let hi: (y < (binary16()).grid(OfNat(47453132) + 1)) = trivial;
+    let ap: (binary16()).Approx(y, 47453132, True) = And(lo, hi);
+    Finite::sqrt_correct(two16(), NearestEven, trivial, trivial, y,
+        (binary16()).cell_of_approx(two16().val(), y, two16().sqrt_h(), two16().sqrt_st(), two16().sqrt_approx(trivial), ap))
+}

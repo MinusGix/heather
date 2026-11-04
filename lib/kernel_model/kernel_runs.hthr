@@ -239,7 +239,7 @@ theorem Tm::step_sound(ev: Tm → Option<Tm>, ih: Tm::Sound(ev)): Tm::Sound(Tm::
 }
 
 theorem Tm::whnf_sound(fuel: Nat): Tm::Sound(Tm::whnf(fuel)) {
-    match fuel as λ f => Tm::Sound(Tm::whnf(f)) {
+    match fuel {
         Zero => λ t v q => absurd(q),
         Succ(g, ih) => Tm::step_sound(Tm::whnf(g), ih),
     }
@@ -498,8 +498,7 @@ theorem Aff::both_inv(P: Aff → Type, ra, rb: Option<Aff>, x: Aff, e: Aff::both
         k: (xa, xb: Aff) → ra = Some(xa) → rb = Some(xb) → P(Branch(xa, xb))): P(x) {
     match ra as λ y => Aff::both(y, rb) = Some(x) → ((xa, xb: Aff) → y = Some(xa) → rb = Some(xb) → P(Branch(xa, xb))) → P(x) {
         None => λ q k2 => absurd(q),
-        Some(xa) => match rb as λ y => Aff::both(Some(xa), y) = Some(x) →
-                ((xa2, xb: Aff) → Some(xa) = Some(xa2) → y = Some(xb) → P(Branch(xa2, xb))) → P(x) {
+        Some(xa) => match rb {
             None => λ q2 k3 => absurd(q2),
             Some(xb) => λ q2 k3 => j(Option::some_inj(Branch(xa, xb), x, q2), λ y p => P(y), k3(xa, xb, refl, refl)),
         },
@@ -544,10 +543,8 @@ theorem Path::at_sound(self path: Path): (inner, x: Aff) → (u: Tm) → path.at
     match path {
         PHere => λ inner x u e =>
             j(Option::some_inj(inner, x, e), λ y p => inner.term(u).Reduces(y.term(u)), Tm::reduces_refl(inner.term(u))),
-        PThen(p, rest) => λ inner x u => match inner as λ y => PThen(p, rest).at(y) = Some(x) →
-                PThen(p, rest).apply(y.term(u)).Reduces(x.term(u)) {
-            Leaf(q, own) => match q as λ y => PThen(p, rest).at(Leaf(y, own)) = Some(x) →
-                    PThen(p, rest).apply(Leaf(y, own).term(u)).Reduces(x.term(u)) {
+        PThen(p, rest) => λ inner x u => match inner {
+            Leaf(q, own) => match q {
                 Zero => λ e => j(Option::some_inj(Leaf(0, own.then(PThen(p, rest))), x, e),
                     λ y pp => PThen(p, rest).apply(own.apply(u)).Reduces(y.term(u)),
                     Tm::reduces_eq(sym(own.then_apply(PThen(p, rest), u)))),
@@ -572,8 +569,7 @@ theorem Aff::graft_sound(q: Nat, x, r: Aff, u: Tm, e: Aff::graft(q, Some(x)) = S
         Lit(q2) => λ e2 => j(Option::some_inj(Lit(q2 + q), r, e2),
             λ y p => Tm::succs(q, Tm::succs(q2, NZero)).Reduces(y.term(u)),
             Tm::reduces_eq(Tm::succs_succs(q, q2, NZero))),
-        Branch(a, b) => match q as λ y => Aff::graft(y, Some(Branch(a, b))) = Some(r) →
-                Tm::succs(y, Branch(a, b).term(u)).Reduces(r.term(u)) {
+        Branch(a, b) => match q {
             Zero => λ e2 => j(Option::some_inj(Branch(a, b), r, e2),
                 λ y p => Branch(a, b).term(u).Reduces(y.term(u)), Tm::reduces_refl(Branch(a, b).term(u))),
             Succ(_) => λ e2 => absurd(e2),
@@ -621,9 +617,9 @@ fn Tm::ih_path(self t: Tm) → Path → Option<Path> {
 
 theorem Tm::ih_path_sound(self t: Tm): (acc, l: Path) → t.ih_path(acc) = Some(l) → l.apply(Fv(1)) = acc.apply(t) {
     match t {
-        Fv(a) => λ acc l => match a as λ y => Fv(y).ih_path(acc) = Some(l) → l.apply(Fv(1)) = acc.apply(Fv(y)) {
+        Fv(a) => λ acc l => match a {
             Zero => λ e => absurd(e),
-            Succ(b) => match b as λ y => Fv(Succ(y)).ih_path(acc) = Some(l) → l.apply(Fv(1)) = acc.apply(Fv(Succ(y))) {
+            Succ(b) => match b {
                 Zero => λ e => j(Option::some_inj(acc, l, e), λ y p => y.apply(Fv(1)) = acc.apply(Fv(1)), refl),
                 Succ(_) => λ e => absurd(e),
             },
@@ -683,7 +679,7 @@ theorem Tm::bump_sound(rd: Tm → Option<Aff>, ih: Tm::Reads(rd), p: Tm, x: Aff,
         NSucc(p).Reduces(x.term(Fv(1))) {
     match rd(p) as λ o => (rd(p) = o) → Aff::bump(o) = Some(x) → NSucc(p).Reduces(x.term(Fv(1))) {
         None => λ ep q => absurd(q),
-        Some(y) => match y as λ w => (rd(p) = Some(w)) → Aff::bump(Some(w)) = Some(x) → NSucc(p).Reduces(x.term(Fv(1))) {
+        Some(y) => match y {
             Leaf(q, l) => λ ep e2 => j(Option::some_inj(Leaf(Succ(q), l), x, e2), λ w pp => NSucc(p).Reduces(w.term(Fv(1))),
                 Tm::reduces_map(λ (t: Tm) => NSucc(t), Tm::ctx_succ(), ih(p, Leaf(q, l), ep))),
             Lit(q) => λ ep e2 => j(Option::some_inj(Lit(Succ(q)), x, e2), λ w pp => NSucc(p).Reduces(w.term(Fv(1))),
@@ -707,7 +703,7 @@ theorem Tm::read_value_sound(rd: Tm → Option<Aff>, ih: Tm::Reads(rd), v: Tm, x
 }
 
 theorem Tm::read_sound(fuel: Nat): Tm::Reads(Tm::read(fuel)) {
-    match fuel as λ f => Tm::Reads(Tm::read(f)) {
+    match fuel {
         Zero => λ t x q => absurd(q),
         Succ(g, ih) => λ t x e =>
             match Tm::whnf(g, t) as λ o => (Tm::whnf(g, t) = o) → Tm::read_head(Tm::read(g), o) = Some(x) →
@@ -738,9 +734,9 @@ fn Tm::sub3(kv, ihv, xv: Tm) → Nat → Tm {
 
 theorem Tm::sub3_closed(kv, ihv, xv: Tm, kc: kv.Lc(0), ihc: ihv.Lc(0), xc: xv.Lc(0)):
         (a: Nat) → Tm::sub3(kv, ihv, xv, a).Lc(0) {
-    λ a => match a as λ y => Tm::sub3(kv, ihv, xv, y).Lc(0) {
+    λ a => match a {
         Zero => kc,
-        Succ(b) => match b as λ y => Tm::sub3(kv, ihv, xv, Succ(y)).Lc(0) { Zero => ihc, Succ(_) => xc },
+        Succ(b) => match b { Zero => ihc, Succ(_) => xc },
     }
 }
 
@@ -751,7 +747,7 @@ theorem Tm::probe_affine(s: Tm, ground: s.Ground(), fuel: Nat, tree: Aff,
         kv, ihv: Tm, kc: kv.Lc(0), ihc: ihv.Lc(0)): App(App(s, kv), ihv).Reduces(tree.term(ihv)) {
     j(s.inst_ground(Tm::probe_sub(kv, ihv), ground), λ y p => App(App(y, kv), ihv).Reduces(tree.term(ihv)),
       Tm::read_inst(fuel, Tm::probe(s), tree, read, Tm::probe_sub(kv, ihv),
-          λ a => match a as λ b => Tm::probe_sub(kv, ihv, b).Lc(0) { Zero => kc, Succ(_) => ihc }))
+          λ a => match a { Zero => kc, Succ(_) => ihc }))
 }
 
 theorem Tm::probe_peeled_affine(s: Tm, ground: s.Ground(), fuel: Nat, tree: Aff,
@@ -774,7 +770,7 @@ fn Tm::Joins(self a: Tm, b: Tm) → Type { ∃ v: Tm, a.Reduces(v) ∧ b.Reduces
 theorem Tm::fold_affine_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: Nat, tree: Aff,
         read: Tm::read(fuel, Tm::probe(s)) = Some(tree), z, x: Tm, z_closed: z.Lc(0), x_closed: x.Lc(0),
         c: Nat): (r: Aff) → tree.iter(c) = Some(r) → NRec(z, s, NRun(c, x)).Reduces(r.term(NRec(z, s, x))) {
-    match c as λ n => (r: Aff) → tree.iter(n) = Some(r) → NRec(z, s, NRun(n, x)).Reduces(r.term(NRec(z, s, x))) {
+    match c {
         Zero => λ r e => j(Option::some_inj(Aff::identity(), r, e),
             λ y p => NRec(z, s, NRun(0, x)).Reduces(y.term(NRec(z, s, x))),
             Tm::reduces_one(Tm::ctx_rec(z, s, NRun(0, x), x, Tm::red_unpack_zero(x)))),
@@ -808,8 +804,7 @@ theorem Tm::fold_affine_peeled_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0
         read: Tm::read(fuel, Tm::probe_peeled(s)) = Some(tree), z, x: Tm, z_closed: z.Lc(0), x_closed: x.Lc(0),
         c: Nat): (r: Aff) → tree.iter(c) = Some(r) →
         NRec(z, s, NRun(Succ(c), x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
-    match c as λ n => (r: Aff) → tree.iter(n) = Some(r) →
-            NRec(z, s, NRun(Succ(n), x)).Reduces(r.term(App(App(s, x), NRec(z, s, x)))) {
+    match c {
         Zero => λ r e => j(Option::some_inj(Aff::identity(), r, e),
             λ y p => NRec(z, s, NRun(1, x)).Reduces(y.term(App(App(s, x), NRec(z, s, x)))),
             Tm::reduces_step(Tm::ctx_rec(z, s, NRun(1, x), NSucc(NRun(0, x)), Tm::red_unpack_succ(0, x)),
@@ -950,7 +945,7 @@ theorem Tm::strip_value_sound(st: Tm → Option<Nat>, ih: Tm::Strips(st), g: Nat
 }
 
 theorem Tm::strip_sound(fuel: Nat): Tm::Strips(Tm::strip(fuel)) {
-    match fuel as λ f => Tm::Strips(Tm::strip(f)) {
+    match fuel {
         Zero => λ t q e => absurd(e),
         Succ(g, ih) => λ t q e =>
             match Tm::whnf(g, t) as λ o => (Tm::whnf(g, t) = o) → Tm::strip_head(Tm::strip(g), g, o) = Some(q) →
@@ -967,8 +962,7 @@ theorem Tm::read_sync_sound(fuel: Nat, s: Tm, q: Nat, e: Tm::read_sync(fuel, s) 
     match Tm::whnf(fuel, Tm::probe(s)) as λ o => (Tm::whnf(fuel, Tm::probe(s)) = o) → Tm::sync_fun(fuel, o) = Some(q) →
             App(Tm::probe(s), NSucc(Fv(2))).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
         None => λ ew e2 => absurd(e2),
-        Some(v) => match v as λ y => (Tm::whnf(fuel, Tm::probe(s)) = Some(y)) → Tm::sync_lam(fuel, y) = Some(q) →
-                App(Tm::probe(s), NSucc(Fv(2))).Reduces(Tm::succs(q, App(Fv(1), Fv(2)))) {
+        Some(v) => match v {
             Lam(b) => λ ew2 e2 => Tm::reduces_trans(
                 Tm::reduces_map(λ (f: Tm) => App(f, NSucc(Fv(2))), Tm::ctx_app_head(NSucc(Fv(2))),
                     Tm::whnf_sound(fuel, Tm::probe(s), Lam(b), ew2)),
@@ -996,8 +990,7 @@ theorem Tm::fold_sync_unary(s: Tm, ground: s.Ground(), s_closed: s.Lc(0), fuel: 
         read: Tm::read_sync(fuel, s) = Some(q), z, t, x: Tm, z_closed: z.Lc(0), t_closed: t.Lc(0), x_closed: x.Lc(0),
         m: Nat): (a, b: Nat) → App(NRec(z, s, NRun(a + m, t)), NRun(b + m, x))
             .Reduces(Tm::succs(q * m, App(NRec(z, s, NRun(a, t)), NRun(b, x)))) {
-    match m as λ n => (a, b: Nat) → App(NRec(z, s, NRun(a + n, t)), NRun(b + n, x))
-            .Reduces(Tm::succs(q * n, App(NRec(z, s, NRun(a, t)), NRun(b, x)))) {
+    match m {
         Zero => λ a b => Tm::reduces_refl(App(NRec(z, s, NRun(a, t)), NRun(b, x))),
         Succ(n, ih) => λ a b => j(Tm::succs_succs(q, q * n, App(NRec(z, s, NRun(a, t)), NRun(b, x))),
             λ y p => App(NRec(z, s, NRun(Succ(a + n), t)), NRun(Succ(b + n), x)).Reduces(y),

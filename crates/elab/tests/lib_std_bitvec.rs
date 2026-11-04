@@ -34,7 +34,7 @@ const BITVEC: &str = include_str!("../../../lib/std/bitvec/bitvec.hthr");
 /// so the on-disk image keys this file reads are the ones the warmup wrote.
 const MODULES: &[(&str, &str)] = &[
     ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
-    ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("int", INT),
+    ("pair", PAIR), ("list", LIST), ("relation", include_str!("../../../lib/std/relation/relation.hthr")), ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")), ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")), ("algebra", ALGEBRA), ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")), ("int", INT),
     ("bitvec", BITVEC),
 ];
 
@@ -100,7 +100,9 @@ fn valuation_lookup_dispatch_cost_does_not_follow_result_width() {
         let counts: Vec<_> = [0, 8, 51, 200, 201, 250].into_iter().map(count).collect();
         eprintln!("BitVec lookup width {width}, ids 0/8/51/200/201/250: {counts:?}");
         for id in [8, 51, 200] {
-            assert_eq!(count(id) - count(0), 2 * id as u64,
+            // One step per successor: the arms never read the fold's ih,
+            // so no level is probed (issues/kernel-fold-probe-evaluates-recursive-arms.md).
+            assert_eq!(count(id) - count(0), id as u64,
                 "result type preparation leaked into case dispatch: {counts:?}");
         }
         assert_eq!(count(201), count(250), "the default arm must stop dispatch");

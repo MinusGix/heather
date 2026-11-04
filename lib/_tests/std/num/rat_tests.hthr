@@ -4,7 +4,7 @@
 // §4.5). Moved from crates/elab/tests/lib_std_rat.rs; the refusals that need
 // the checker stay there.
 import logic; import bool; import nat; import list; import int; import algebra; import omega; import ring;
-import rat; import order; import relation_props; import algebra_rel;
+import rat; import order; import relation; import relation_props; import algebra_rel; import semiring; import ordered_field;
 
 // Instance resolution finds the registered dictionaries at `Rat`: the
 // equivalence, the strict order's transitivity, and `Decide` for `if`.
@@ -82,3 +82,64 @@ theorem int_mixed(x, y, z: Int, a: x <= y, b: y < z): x < z { calc { x <= y := a
 // |x| is not x: -1/2 has absolute value 1/2.
 theorem abs_neg_half(): Rat(NegSucc(0), 2).abs() ≈ Rat(OfNat(1), 2) { refl }
 theorem abs_not_identity(): ¬((x: Rat) → x.abs() ≈ x) { λ h => omega(h(Rat(NegSucc(0), 2))) }
+
+// ---------------------------------------------------------------------------
+// `rewrite` along `≈` (docs/equation-rewrite-design.md §9): a proof of
+// `x ≈ y` turns `x` into `y` through `+` and `*` (their `Respects2`
+// instances), on either side of `≈` (the right side through `≈`'s
+// symmetry), and inside `<=` through the `Trans` pairs `calc` chains with.
+theorem rewrite_left(x, y, z: Rat, h: x ≈ y, e: y + z ≈ z): x + z ≈ z { rewrite(h, e) }
+theorem rewrite_right(x, y, z: Rat, h: x ≈ y, e: z ≈ y * z): z ≈ x * z { rewrite(h, e) }
+theorem rewrite_both(x, y: Rat, h: x ≈ y): x + x ≈ y + y { rewrite(h, refl) }
+theorem rewrite_into_le(x, y, z: Rat, h: x ≈ y, e: y + z <= z): x + z <= z { rewrite(h, e) }
+// An unapplied law finds its instance; the other argument of `*` stays, by
+// `≈`'s reflexivity.
+theorem rewrite_law(x, z: Rat, e: x * z ≈ z): (x + 0) * z ≈ z { rewrite(Rat::add_zero, e) }
+// A hypothesis is carried the other way: from what it says to the rewrite.
+theorem rewrite_hypothesis(x, y, z: Rat, h: x ≈ y, e: x + z ≈ z): y + z ≈ z { rewrite(h, in := e) }
+// An implication's premise is rewritten against its conclusion's direction.
+theorem rewrite_implication(x, y, z: Rat, h: x ≈ y, e: y ≈ z → y + y ≈ z): x ≈ z → x + x ≈ z { rewrite(h, e) }
+// `Rat::add_neg_cancel_r`'s `calc` chain, as three rewrites.
+theorem rewrite_chain(x, y: Rat): (x + y) + -y ≈ x { rewrite(x.add_assoc(y, -y), y.add_neg(), x.add_zero(), refl) }
+
+// The case is checked at the rewritten goal, not at the original.
+// expect-error(mismatch)
+theorem rewrite_checks_its_case(x, y, z: Rat, h: x ≈ y, e: x + z ≈ z): x + z ≈ z { rewrite(h, e) }
+// Direction is the written one: a goal holding only the right side is refused.
+// expect-error: does not mention the relation's left side
+theorem rewrite_not_reversed(x, y, z: Rat, h: x ≈ y, e: y + z ≈ z): y + z ≈ z { rewrite(h, e) }
+// `=` does not respect `≈`, so an equation goal is not rewritten along it.
+// expect-error: is not a relation application `S(l, r)`
+theorem rewrite_into_equation(x, y: Rat, h: x ≈ y, e: y.num = y.num): x.num = x.num { rewrite(h, e) }
+// Under a binder the two λs are related pointwise (§10), and the binder's
+// consumer crosses that relation by evidence: given here, an obligation when
+// missing.
+theorem rewrite_under_binder(x, y: Rat, h: x ≈ y, f: (Rat → Rat) → Rat,
+    c: PreservesRelation(Pointwise<Rat, Rat>(Rat::Same), Rat::Same, f), e: f(λ z => z + y) ≈ y): f(λ z => z + x) ≈ y { rewrite(h, e) }
+// expect-error: ?compatibility : PreservesRelation(Pointwise(Same), Same
+theorem rewrite_under_binder_open(x, y: Rat, h: x ≈ y, f: (Rat → Rat) → Rat, e: f(λ z => z + y) ≈ y): f(λ z => z + x) ≈ y { rewrite(h, e) }
+// `at :=` numbers tree positions, which a shared walk does not have.
+// expect-error: a relation rewrite rewrites every occurrence
+theorem rewrite_at(x, y: Rat, h: x ≈ y, e: y + x ≈ x): x + x ≈ x { rewrite(h, e, at := 1) }
+
+// A hypothesis stated at `Rat` pins a generic theorem's indices at `Int`
+// through its definition (issues/index-inference-through-unfolding.md):
+// `x ≈ y` is `Rat::Same(x, y)`, which unfolds to `cross_same_trans`'s
+// `a * d ≈ c * b`. The call's carrier is `Int` from the explicit arguments,
+// so `≈ := Rat::Same` read off the hypothesis (or off the goal) does not fit
+// the slot and the indices come from `Int`'s designations.
+theorem cross_trans_as_stated(x, y, z: Rat, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
+    OrderedSemiring::cross_same_trans(x.num, x.den.int(), y.num, y.den.int(), z.num, z.den.int(), y.den_pos, hxy, hyz)
+}
+// The same call with the hypotheses restated at `Int` first.
+theorem cross_trans_restated(x, y, z: Rat, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
+    let h1: (x.num * y.den.int() ≈ y.num * x.den.int()) = hxy;
+    let h2: (y.num * z.den.int() ≈ z.num * y.den.int()) = hyz;
+    OrderedSemiring::cross_same_trans(x.num, x.den.int(), y.num, y.den.int(), z.num, z.den.int(), y.den_pos, h1, h2)
+}
+// Negative control: the unfolding does not match. Swapped, `y ≈ z` is not
+// `x.num * y.den ≈ y.num * x.den`, and the refusal is at that argument.
+// expect-error(mismatch)
+theorem cross_trans_swapped(x, y, z: Rat, hxy: x ≈ y, hyz: y ≈ z): x ≈ z {
+    OrderedSemiring::cross_same_trans(x.num, x.den.int(), y.num, y.den.int(), z.num, z.den.int(), y.den_pos, hyz, hxy)
+}

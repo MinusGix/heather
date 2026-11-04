@@ -1,0 +1,175 @@
+// The producers of `InBounds`, the fact a dropped bounds check needs
+// (docs/facts-on-demand-design.md; lib/lang/facts/checked_reads.hthr is
+// the language and the compiler that consumes it).
+//
+// A fact is a proposition with open producers, tried cheapest first when a
+// compiler asks for it:
+//
+// 1. **A verified analysis**: an upper bound of an index over the boxes its
+//    arguments range over (`Ix::hi`), proved sound once. It is an evidence
+//    rule, so `:= infer`, and a generator's `Synth`, find it; its premise is
+//    one comparison of numbers, closed by evaluation (`InBounds::of_range`).
+// 2. **User lemmas**: any `evidence theorem` concluding `InBounds(…)`, for
+//    the read the analysis is too coarse for.
+// 3. **A bounded search**: every argument list in the box, tried by
+//    evaluation, when the box has at most `budget` points
+//    (`InBounds::by_exhaustion`), proved sound once, so a found fact is one
+//    evaluation the kernel repeats. It is the compiler's to ask for and to
+//    budget, not the fact's (lib/lang/facts/read_facts.hthr).
+//
+// None of these is trusted by the compiler, which sees only a proof of
+// `InBounds`.
+import list;
+import nat;
+import logic;
+import bool;
+import option;
+import checked_reads;
+
+// ---------------------------------------------------------------------------
+// 1. The range analysis
+
+// An upper bound of the index over every argument list within `bounds`.
+fn Ix::hi(self e: Ix, bounds: List<Nat>) → Nat {
+    match e {
+        Const(n) => n,
+        Arg(k) => word_at(bounds, k),
+        Add(a, b) => a.hi(bounds) + b.hi(bounds),
+        Sub(a, _) => a.hi(bounds),
+        Clamp(a, c) => a.hi(bounds).min(c),
+    }
+}
+
+theorem Ix::hi_sound(self e: Ix, args, bounds: List<Nat>, w: Within(args, bounds)): e.eval(args) <= e.hi(bounds) {
+    match e {
+        Const(n) => n.le_refl(),
+        Arg(k) => w(k),
+        Add(a, b) => Nat::add_le_mono(a.eval(args), a.hi(bounds), b.eval(args), b.hi(bounds), a.hi_sound(args, bounds, w), b.hi_sound(args, bounds, w)),
+        Sub(a, b) => Nat::le_trans(a.eval(args) - b.eval(args), a.eval(args), a.hi(bounds), a.eval(args).sub_le(b.eval(args)), a.hi_sound(args, bounds, w)),
+        Clamp(a, c) => Nat::le_min(a.hi(bounds), c, a.eval(args).min(c),
+            Nat::le_trans(a.eval(args).min(c), a.eval(args), a.hi(bounds), a.eval(args).min_le_l(c), a.hi_sound(args, bounds, w)),
+            a.eval(args).min_le_r(c)),
+    }
+}
+
+// The analysis as a producer. Its premise is a comparison of two numbers,
+// which `trivial` closes by evaluation at a closed read and fails to close
+// otherwise; a premise that runs something, rather than one `:= infer`
+// searches, is what makes this a search rule (design §3), tried after the
+// plain rules about `InBounds` — the user's lemmas.
+evidence theorem InBounds::of_range({len: Nat}, {bounds: List<Nat>}, {e: Ix}, h: e.hi(bounds) < len := trivial): InBounds(len, bounds, e) {
+    λ args w => Nat::le_trans(Succ(e.eval(args)), Succ(e.hi(bounds)), len, e.hi_sound(args, bounds, w), h)
+}
+
+// ---------------------------------------------------------------------------
+// 3. The bounded search: every argument list in the box
+
+// Does `q` hold at every number up to `b`?
+fn upto_all(b: Nat, q: Nat → Bool) → Bool {
+    match b { Zero => q(0), Succ(k) => q(0) && upto_all(k, λ v => q(Succ(v))) }
+}
+
+// Does `p` hold at every list of numbers each at most its bound?
+fn all_within(bounds: List<Nat>, p: List<Nat> → Bool) → Bool {
+    match bounds {
+        Nil => p(Nil),
+        Cons(b, bs) => upto_all(b, λ v => all_within(bs, λ rest => p(Cons(v, rest)))),
+    }
+}
+
+// How many lists that is: what the search costs.
+fn box_size(bounds: List<Nat>) → Nat {
+    match bounds { Nil => 1, Cons(b, bs) => Succ(b) * box_size(bs) }
+}
+
+// The search, refused past the budget.
+fn Ix::exhausts(self e: Ix, len: Nat, bounds: List<Nat>, budget: Nat) → Bool {
+    box_size(bounds).leb(budget) && all_within(bounds, λ vs => Succ(e.eval(vs)).leb(len))
+}
+
+theorem upto_all_sound(b: Nat): (q: Nat → Bool) → upto_all(b, q).IsTrue() → (v: Nat) → v <= b → q(v).IsTrue() {
+    match b {
+        Zero => λ q h v => match v { Zero => λ _ => h, Succ(_) => λ le => false_elim(le) },
+        Succ(k, ih) => λ q h v => {
+            let parts = Bool::is_true_and(q(0), upto_all(k, λ u => q(Succ(u))), h);
+            match v {
+                Zero => λ _ => parts.left,
+                Succ(u) => λ le => ih(λ x => q(Succ(x)), parts.right, u, le),
+            }
+        },
+    }
+}
+
+// The lists the search tries: each entry at most its bound, as long as the
+// bounds.
+fn Fits(bounds: List<Nat>) → List<Nat> → Type {
+    match bounds {
+        Nil => λ vs => vs = Nil<Nat>,
+        Cons(b, bs) => λ vs => match vs { Nil => False, Cons(v, rest) => v <= b ∧ Fits(bs, rest) },
+    }
+}
+
+theorem all_within_sound(bounds: List<Nat>): (p: List<Nat> → Bool) → all_within(bounds, p).IsTrue() → (vs: List<Nat>) → Fits(bounds, vs) → p(vs).IsTrue() {
+    match bounds {
+        Nil => λ p h vs fits => j(sym(fits), λ ws _ => p(ws).IsTrue(), h),
+        Cons(b, bs) => λ p h vs => match vs {
+            Nil => λ no => false_elim(no),
+            Cons(v, rest) => λ fits => all_within_sound(bs, λ (r: List<Nat>) => p(Cons(v, r)),
+                upto_all_sound(b, λ (u: Nat) => all_within(bs, λ (r: List<Nat>) => p(Cons(u, r))), h, v, fits.left), rest, fits.right),
+        },
+    }
+}
+
+// An argument list, cut or padded to the bounds' length.
+fn pad(args, bounds: List<Nat>) → List<Nat> {
+    match bounds { Nil => Nil, Cons(_, bs) => Cons(word_at(args, 0), pad(args.tail(), bs)) }
+}
+
+theorem word_at_succ(args: List<Nat>, k: Nat): word_at(args, Succ(k)) = word_at(args.tail(), k) {
+    match args { Nil => refl, Cons(_, _) => refl }
+}
+
+theorem within_tail(args: List<Nat>, b: Nat, bs: List<Nat>, w: Within(args, Cons(b, bs))): Within(args.tail(), bs) {
+    λ k => j(word_at_succ(args, k), λ x _ => x <= word_at(bs, k), w(Succ(k)))
+}
+
+theorem pad_fits(bounds: List<Nat>): (args: List<Nat>) → Within(args, bounds) → Fits(bounds, pad(args, bounds)) {
+    match bounds {
+        Nil => λ args w => refl,
+        Cons(b, bs) => λ args w => And(w(0), pad_fits(bs, args.tail(), within_tail(args, b, bs, w))),
+    }
+}
+
+theorem Nat::eq_zero_of_le_zero(self n: Nat, h: n <= 0): n = 0 {
+    match n as λ m => m <= 0 → m = 0 { Zero => λ _ => refl, Succ(_) => λ no => false_elim(no) }(h)
+}
+
+theorem pad_word(bounds: List<Nat>): (args: List<Nat>) → Within(args, bounds) → (k: Nat) → word_at(pad(args, bounds), k) = word_at(args, k) {
+    match bounds {
+        Nil => λ args w k => sym(word_at(args, k).eq_zero_of_le_zero(w(k))),
+        Cons(b, bs) => λ args w k => match k {
+            Zero => refl,
+            Succ(i) => trans(pad_word(bs, args.tail(), within_tail(args, b, bs, w), i), sym(word_at_succ(args, i))),
+        },
+    }
+}
+
+// An index reads its arguments only through `word_at`.
+theorem Ix::eval_ext(self e: Ix, a, b: List<Nat>, same: (k: Nat) → word_at(a, k) = word_at(b, k)): e.eval(a) = e.eval(b) {
+    match e {
+        Const(_) => refl,
+        Arg(k) => same(k),
+        Add(x, y) => trans(Nat::cong(λ (n: Nat) => n + y.eval(a), x.eval_ext(a, b, same)), Nat::cong(λ (n: Nat) => x.eval(b) + n, y.eval_ext(a, b, same))),
+        Sub(x, y) => trans(Nat::cong(λ (n: Nat) => n - y.eval(a), x.eval_ext(a, b, same)), Nat::cong(λ (n: Nat) => x.eval(b) - n, y.eval_ext(a, b, same))),
+        Clamp(x, c) => Nat::cong(λ (n: Nat) => n.min(c), x.eval_ext(a, b, same)),
+    }
+}
+
+// The search, when it says yes, proves the fact.
+theorem InBounds::by_exhaustion(len: Nat, bounds: List<Nat>, e: Ix, budget: Nat, h: e.exhausts(len, bounds, budget).IsTrue()): InBounds(len, bounds, e) {
+    λ args w => {
+        let all = Bool::is_true_and(box_size(bounds).leb(budget), all_within(bounds, λ vs => Succ(e.eval(vs)).leb(len)), h).right;
+        let padded = Succ(e.eval(pad(args, bounds))).leb_sound(len, all_within_sound(bounds, λ vs => Succ(e.eval(vs)).leb(len), all, pad(args, bounds), pad_fits(bounds, args, w)));
+        j(e.eval_ext(pad(args, bounds), args, pad_word(bounds, args, w)), λ n _ => n < len, padded)
+    }
+}

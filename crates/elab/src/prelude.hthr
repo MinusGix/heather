@@ -53,3 +53,33 @@ theorem Nat::cong_succ({a: Nat}, {b: Nat}, p: a = b): Succ(a) = Succ(b) {
 theorem cong<A, B>({f: A -> B}, {a: A}, {b: A}, p: a = b): f(a) = f(b) {
     j(p, λ y q => f(a) = f(y), refl)
 }
+
+// The carrier protocol of binding statements
+// (docs/sequencing-surface-design.md §2, §13):
+// `let x <- e; rest` is `Bind::seq(e, λ x => rest)`, and a value a block
+// must inject into its carrier is `Pointed::ret(v)`. Two classes over a type
+// constructor, so that any type with a `bind` is a carrier, and in the
+// implicit prelude so that the syntax has one canonical protocol identity,
+// as `CollectionLiteral` is for `[…]`. The second class is `Pointed`, not
+// `Pure`: a class's record constructor is named after it, and `Pure` is
+// `Tac`'s constructor in every module that writes tactics
+// (docs/higher-kinded-classes-design.md §5.2). Laws are not fields.
+class Bind<M: Type → Type> { bind: {A, B: Type} → M(A) → (A → M(B)) → M(B) }
+class Pointed<M: Type → Type> { pure: {A: Type} → A → M(A) }
+
+// The two calls the lowering writes. The carrier is the constructor of the
+// expected type when there is one, else of `m`'s type: ordinary unification
+// of `M(B)` and `M(A)`, with the instance resolved as any `:= infer` is.
+fn Bind::seq<A, B>({M: Type → Type}, m: M(A), k: A → M(B), d: Bind<M> := infer) → M(B) {
+    d.bind(m, k)
+}
+fn Pointed::ret<A>({M: Type → Type}, a: A, d: Pointed<M> := infer) → M(A) {
+    d.pure(a)
+}
+
+// What a `mut self` method returns (docs/sequencing-surface-design.md §8.2):
+// its receiver after the call, and the call's value. `let p = x.m(a);` on a
+// `let mut` local `x` binds `p` to the value and `x` to the receiver after
+// it, so a capability is a local the calls on it update, and the code stays
+// pure. In the prelude so that the parser's lowering has one record to name.
+record Mutated<S, R> { after: S, value: R }

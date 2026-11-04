@@ -67,6 +67,21 @@ macro_rules! counters {
             CELLS.with(|c| { $(c.$name.set(c.$name.get().wrapping_add(delta.$name));)* });
         }
 
+        /// Run `f` with none of its bumps reaching this thread's counters:
+        /// for the kernel's debug-only re-verification of a memo hit
+        /// (`typing.rs` §The typing memo), which judges again what the hit
+        /// skipped. Without it a debug build would count that work, and
+        /// which hits are sampled (a thread-local stride, `crate::checks`)
+        /// would move the counts. Still inert: the counters are restored,
+        /// never read by a judgment.
+        #[cfg(debug_assertions)]
+        pub(crate) fn unobserved<T>(f: impl FnOnce() -> T) -> T {
+            let saved = snapshot();
+            let out = f();
+            CELLS.with(|c| { $(c.$name.set(saved.$name);)* });
+            out
+        }
+
         impl Snapshot {
             /// The counters' column names, in the order [`Snapshot::values`]
             /// reports them.
@@ -128,6 +143,29 @@ counters! {
     /// (`issues/refl-theorem-step-cost.md`: the copying a fuel pin cannot
     /// see).
     shift_global_nodes,
+    /// Nodes the local shift and the local substitutions (`shift_local`,
+    /// `apply_local`, `inst_top`) visited, skipped and memoized ones
+    /// included. Its growth against the shared size of what they were given
+    /// is the tree/DAG gap `issues/subst-shared-node-memo.md` closes.
+    local_subst_nodes,
+    /// Shared nodes a substitution traversal answered from its per-call memo
+    /// (`subst.rs` §Keeping a shared DAG shared): one per second (or later)
+    /// path into the same node at the same depths.
+    subst_memo_hits,
+    /// Pairs of distinct nodes that `==` on `Term`/`Type` compared
+    /// (`syntax_eq.rs`): the structural equality behind the conversion
+    /// shortcut and the elaborator's `refl` test, pointer-equal children
+    /// not counted. Its growth against the shared size of the two sides is
+    /// the tree/DAG gap `issues/kernel-equality-walks-dags-as-trees.md`
+    /// closes.
+    syntax_eq_nodes,
+    /// Second (or later) paths into a pair of shared nodes that one `==`
+    /// call had already found equal, answered from its memo (`syntax_eq.rs`).
+    syntax_eq_memo_hits,
+    /// Judgments the kernel checker answered from its typing memo
+    /// (`typing.rs` §The typing memo): one per second (or later) path into
+    /// the same node in the same scope, the node's whole subtree unvisited.
+    typing_memo_hits,
     /// Definition bodies rescoped by `Defs::body` — one per `GlobalCache`
     /// body fill, i.e. per (definition, gate call) pair that unfolded it.
     delta_body_rescopes,

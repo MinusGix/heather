@@ -1,6 +1,17 @@
 //! The surface AST. Names, not de Bruijn; nothing here is trusted.
 pub use heather_numeral::Numeral;
 
+/// The value of a decimal or hex float literal: `mant · base^exp`, with
+/// `base` 10 for a decimal spelling and 2 for a hex float. Like a numeral's
+/// token it holds the value, not the spelling: `1.50` and `15e-1` are the
+/// same literal.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScaledLit {
+    pub mant: Numeral,
+    pub exp: i64,
+    pub hex: bool,
+}
+
 /// Byte range into the source, for diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
@@ -25,6 +36,11 @@ impl Span {
 #[derive(Debug, Clone)]
 pub struct File {
     pub items: Vec<Item>,
+    /// The `<…>` list of each `section` head, as (the head's span, its first
+    /// type parameter's, its last's). The parser splices those parameters
+    /// into every member (docs/sections-design.md §5.2), so no item's span
+    /// holds the list they were written in; `roles` locates it from here.
+    pub section_typarams: Vec<(Span, Span, Span)>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +68,39 @@ pub enum Item {
     /// declaration, so the import DAG is readable without elaborating
     /// anything.
     Import(ImportItem),
+    /// `runtime fn f(…)`, `regex def is_hex = "…";` — a declaration under a
+    /// **prefix generator** (docs/value-definitions-design.md §3).
+    Prefixed(PrefixedItem),
+    /// `generate g(args);` — run the Heather generator `g(args)`, a
+    /// `tactic::Tac<List<tactic::Decl>>`, and publish the declarations it
+    /// builds in this module, every one of them or none
+    /// (docs/host-elaboration-interface-design.md §19).
+    Generate(GenerateItem),
+}
+
+/// `P fn f(…) …`, `P(args) theorem t(…) …`, `P def x = e;`
+/// ([`Item::Prefixed`]). `generator` is `P` or `P(args)` as written; the
+/// elaborator appends what the declaration hands it (the declared name, and
+/// for a `def` its value), runs it as `generate` runs its generator, and
+/// publishes the group (docs/value-definitions-design.md §3).
+///
+/// A prefixed `fn` or `theorem` is **consumed**: it is published as written
+/// first, and the generator reads it by name. A prefixed `def` is
+/// **rewritten**: it is not published as written; its value goes to the
+/// generator, whose group must declare the name.
+#[derive(Debug, Clone)]
+pub struct PrefixedItem {
+    pub generator: Expr,
+    pub decl: Decl,
+    pub span: Span,
+}
+
+/// `generate g(args);` ([`Item::Generate`]). The generator is an expression
+/// like a `by`'s tactic: a name or a call.
+#[derive(Debug, Clone)]
+pub struct GenerateItem {
+    pub generator: Expr,
+    pub span: Span,
 }
 
 /// `designation<A> ++ at List<A> := append`
@@ -117,6 +166,22 @@ pub struct ImportItem {
 }
 
 impl Item {
+    /// The item's source extent, from its keyword to its closing token.
+    pub fn span(&self) -> Span {
+        match self {
+            Item::Decl(x) => x.span,
+            Item::Inductive(x) => x.span,
+            Item::Class(x) => x.span,
+            Item::Instance(x) => x.span,
+            Item::Designation(x) => x.span,
+            Item::Datarepr(x) => x.span,
+            Item::Impl(x) => x.span,
+            Item::Import(x) => x.span,
+            Item::Generate(x) => x.span,
+            Item::Prefixed(x) => x.span,
+        }
+    }
+
     /// The `fn`/`theorem` declaration, panicking otherwise. For tests and
     /// callers that have just constructed the item.
     pub fn into_decl(self) -> Decl {
@@ -137,6 +202,8 @@ impl Item {
             Item::Impl(i) => {
                 panic!("expected a declaration, found `impl {}`", i.op)
             }
+            Item::Generate(_) => panic!("expected a declaration, found `generate`"),
+            Item::Prefixed(p) => panic!("expected a declaration, found a prefixed `{}`", p.decl.name),
         }
     }
 }
@@ -210,6 +277,14 @@ pub struct DatareprField {
 pub struct ClassDecl {
     pub name: String,
     pub params: Vec<String>,
+    /// Parallel to [`Self::params`]: the **kind** a parameter is written at,
+    /// `class Bind<M: Type → Type>` (issues/higher-kinded-classes.md). `None`
+    /// is an ordinary type parameter, the only kind every class written
+    /// before this grammar has. A kinded parameter is a type constructor, a
+    /// term rather than a type, so the class's record takes it as a leading
+    /// value parameter; the written head `Bind<Option>` is still spelled in
+    /// the angle brackets.
+    pub kinds: Vec<Option<Ty>>,
     /// `class Monoid<A>(op: A -> A -> A)` — the class's **value indices**
     /// (docs/operation-indexed-classes-design.md §3). The same
     /// [`InductiveDecl::valparams`] a `record` head takes, and lowered by the
@@ -315,6 +390,11 @@ pub struct InductiveDecl {
     /// available if they are ever wanted here; both are rejected for now.
     /// Empty for every declaration written before this grammar existed.
     pub valparams: Vec<Param>,
+    /// `inductive Result<A, E> varies A { … }` — the parameter a type
+    /// constructor over this declaration abstracts, when it is not the last
+    /// one (docs/lambda-carrier-instances-design.md §7.1). The name as
+    /// written and its span; `None` for the default slot.
+    pub varies: Option<(String, Span)>,
     pub ctors: Vec<CtorDecl>,
     /// Written `record D<…> { f: T, … }` — one constructor, named after the
     /// declaration, every field named (docs/surface-records.md §2). The
@@ -363,6 +443,14 @@ pub struct FieldDecl {
     pub span: Span,
 }
 
+/// What `partial` marks on a `fn` ([`Decl::partial`]).
+#[derive(Debug, Clone)]
+pub struct PartialSpec {
+    /// `partial(E)`: the events the computation may issue; `None` for none.
+    pub events: Option<Expr>,
+    pub span: Span,
+}
+
 /// `fn name(params) -> T { body }` (computing definition),
 /// `theorem name(params): T { proof }` (opaque), or
 /// `axiom name(params): T;` (an explicit, bodiless assumption).
@@ -380,6 +468,27 @@ pub struct Decl {
     /// carry it, and the elaborator refuses one with a parameter search could
     /// not fill.
     pub is_evidence: bool,
+    /// `interface fn` — an **interface definition**
+    /// (docs/interface-definitions-design.md): outside its module, a proof
+    /// reaches its body only through its generated equations, its lemmas or
+    /// an `unfold f;`, while a call at closed arguments still computes. Only
+    /// a `fn` may carry it.
+    pub is_interface: bool,
+    /// `partial fn f(x: A) → B` — a function that may not return
+    /// (docs/partial-functions-design.md §4): it has type `A → Partial(B)`,
+    /// and its body is a block over the carrier of its own calls, each
+    /// self-call bound with `<-` or in tail position. `partial(E) fn` gives
+    /// the computation the events `E`, and the type `A → CoTree<B>(E)`.
+    /// Lowered by the elaborator (`crates/elab/src/partial.rs`). Only a `fn`
+    /// may carry it.
+    pub partial: Option<PartialSpec>,
+    /// `def name: T = e;` — a **value definition** (issues/value-definitions.md,
+    /// docs/value-definitions-design.md). Its kind is [`DeclKind::Fn`] with no
+    /// written parameters, so it is elaborated, gated, imaged and unfolded
+    /// exactly as a nullary `fn` is; the flag is what a use site reads to
+    /// refuse `name()` (a value is used as `name`), and what diagnostics and
+    /// the module image keep.
+    pub value: bool,
     /// `meta fn map_code(g: Ctx) for vec.map -> …` — the elaboration **slot**
     /// this template fills (docs/meta-def-registration-design.md §2.1). A
     /// `meta fn` without one is registered but never dispatched: the clause,
@@ -402,6 +511,11 @@ pub struct Decl {
     /// then elaborated as strong induction on a bound for `e`, and every
     /// recursive call owes `e[args] < e`, a goal hole named `decN`.
     pub decreases: Option<Expr>,
+    /// `unfolding f, g` — interface definitions whose bodies this
+    /// declaration may see through (docs/interface-definitions-design.md
+    /// §4). Declaration-wide: the kernel gate checks a declaration as one
+    /// term, so the boundary can only move per declaration.
+    pub unfolding: Vec<String>,
     pub body: Block,
     pub span: Span,
 }
@@ -657,6 +771,10 @@ pub enum TyKind {
     /// `$a` in type position — a `TyCode` binder used as a type inside a
     /// quote payload (a `GlobalTy` reference after elaboration).
     Splice { name: String },
+    /// The type of an expression, inferred: the result type of `def x = e;`
+    /// written without one (docs/value-definitions-design.md §2.2). Only
+    /// the parser makes it; there is no surface spelling.
+    TypeOf(Box<Expr>),
 }
 
 /// One field of a record literal: `unit: 0`. The span is the whole
@@ -889,6 +1007,11 @@ pub enum ExprKind {
     Univ { level: u64 },
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(Numeral),
+    /// A numeral with a point or an exponent: `1.5`, `1e-3`, `0x1.8p3`
+    /// (docs/floating-point-design.md §15). At `Decimal`/`HexFloat` it is the
+    /// record of its parts; at another carrier it resolves `DecimalLiteral`
+    /// or `HexLiteral` the way a numeral resolves `Numeral`.
+    Scaled(ScaledLit),
     /// `'x'` — a character literal, carrying the scalar value the lexer read
     /// (docs/string-char-design.md §3). At `Char` it elaborates to
     /// `char::ofNat(code, decide)`; at another carrier it resolves

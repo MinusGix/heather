@@ -94,7 +94,7 @@ theorem creal_inv_any_proof(x: CReal, h, h2: x.Apart(0)): x.inv(h := h) ≈ x.in
     OrderedField::recip_respects(x, x, h, h2, x.same_refl())
 }
 
-theorem rat_mul_lt(x, y, z: Rat, h: x < y, hz: 0 < z): z * x < z * y { OrderedField::mul_lt_mono_l(x, y, z, h, hz) }
+theorem rat_mul_lt(x, y, z: Rat, h: x < y, hz: 0 < z): z * x < z * y { OrderedSemiring::mul_lt_mono_l(x, y, z, h, hz) }
 
 // Every real is below some natural number, and the naturals climb.
 theorem creal_below_nat(x: CReal): ∃ n: Nat, x < CReal::ofRat(Rat::ofInt(OfNat(n))) { CReal::archimedean(x) }
@@ -122,9 +122,13 @@ theorem creal_inv_lt_inv(x, y: CReal, hx: 0 < x, hy: 0 < y, h: x < y): y⁻¹ < 
 }
 
 // Every positive real is above some 1/(n+1), the form the Cauchy reals'
-// own estimates are written in.
+// own estimates are written in. A real's inverse reads its argument where
+// the apartness proof's gap says, so the generic theorem's inverse, built
+// from its own proof, is the searched one only up to `≈`.
 theorem creal_archimedean_inv(x: CReal, hx: 0 < x):
     ∃ n: Nat, CReal::ofRat(Rat::ofInt(OfNat(Succ(n))))⁻¹ < x
 {
-    OrderedField::archimedean_recip(x, hx)
+    match OrderedField::archimedean_recip(x, hx) {
+        Exists(n, below) => Exists(n, CReal::lt_respects(CReal::inv_respects(CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))).same_refl(), h := Inr(OrderedField::of_nat_pos(x, n))), x.same_refl(), below)),
+    }
 }

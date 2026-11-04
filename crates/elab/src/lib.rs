@@ -79,11 +79,17 @@ mod access;
 mod application;
 pub mod arithmetic;
 mod attempt;
+mod binding;
+mod alpha;
+mod loops;
+mod partial;
 pub mod cutsat;
+mod cutsat_cert;
 pub mod omega;
 mod omega_cert;
 mod bv_omega;
 mod ring;
+mod linarith;
 mod rewrite;
 mod subst_local;
 pub use omega_cert::{CutSatReport, OmegaPhases, OmegaReport, OmegaResidualConstraint};
@@ -93,6 +99,7 @@ mod code;
 mod codata;
 mod constructor;
 mod context;
+mod spine;
 mod defaults;
 mod datarepr;
 mod diagnostics;
@@ -104,6 +111,7 @@ pub mod heather_emit;
 pub mod relational_context;
 pub mod stats;
 pub use datarepr::{Obligation, Provenance};
+mod layered;
 mod names;
 mod oracle;
 mod readback;
@@ -123,15 +131,20 @@ mod goal_combinators;
 mod goals;
 pub mod host;
 mod indexed;
+mod interfaces;
 mod infinitary;
 mod inductive;
 mod spelling;
+mod sum_layout;
 mod lgg;
+mod solution_check;
 mod lint;
+mod lifetimes;
 mod literals;
 pub use lint::{Lint, LintProfile};
 mod matching;
 mod measure;
+mod meaning;
 mod measure_context;
 mod metaprograms;
 mod mutual_family;
@@ -142,6 +155,7 @@ mod module_relocate;
 pub use module_relocate::{NameObservations, NameWorld, RegistryPart, RelocationRefusal, RelocationTarget, WorldHasher, source_identifiers};
 pub use names::{record_name_lookups, take_name_lookups};
 mod quote;
+mod range_sum;
 mod sealing;
 // The projected-tuple-tower round's two instruments
 // (`docs/projected-tuple-tower-design.md` §11, `probes/README.md`): the
@@ -152,7 +166,7 @@ mod representations;
 pub mod resolve;
 mod session;
 pub use module_delta::{ItemSlice, ModuleDelta, ModuleDependencyIdentity, ModuleReplayError, SliceReport};
-pub use module_image::{ModuleImageDecodeError, ModuleImageLimits};
+pub use module_image::{ModuleImageDecodeError, ModuleImageLimits, image_format};
 pub use session::SemanticImage;
 mod slots;
 mod statements;
@@ -169,6 +183,7 @@ pub(crate) use application::{
     ParamMeta, Skel, has_implicit_mark, skel_of_lam_binders, skel_of_ty, skel_params,
 };
 use attempt::{CheckNote, DeclAttempt, ReflNote};
+use lifetimes::{DynamicScope, Memos, ModulePass, Policy};
 pub(crate) use context::{Alias, Cx, DictBinder, TyVar};
 use inductive::Inductive;
 use metaprograms::{MetaDef, MetaPrograms};
@@ -181,12 +196,15 @@ use representations::Representations;
 use slots::{Ingredient, Slot};
 pub(crate) use surface::{count_holes, count_holes_expr, count_tactic_slots, strengthen_global};
 use surface::{
-    expression_as_type, for_each_free_slot, has_free_slots,
+    Condition, condition_connective, condition_expression, decide_call, expression_as_type, is_true_of,
+    lowered_condition, rebuild_connective, for_each_free_slot, has_free_slots,
     lower_argument_slots, slot_profile,
 };
 use traits::Traits;
 use types::Types;
-use unification::{ResolveOb, Sol, unify_ty_root, zonked, zonked_tm};
+use solution_check::SolutionCheck;
+use oracle::Unfold;
+use unification::{Guesses, ResolveOb, Sol, unify_ty_root, zonked, zonked_tm};
 pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_ty};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong`/`cong_succ`, monomorphic at
@@ -199,8 +217,9 @@ pub const PRELUDE: &str = include_str!("prelude.hthr");
 /// (docs/modules-design.md §3.2). Public so a loader can skip resolving it to
 /// a file — there is no `prelude.hthr` on disk to find.
 pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
+pub const COMMON_MODULE: &str = names::COMMON_MODULE;
 
-pub use diagnostics::{ElabError, GoalReport, GoalSource, IndexedRoute, LintFix, Warning};
+pub use diagnostics::{ElabError, GoalReport, GoalSource, IndexedRoute, KernelSite, LintFix, Warning};
 pub use heather_syntax::Span;
 
 impl From<ParseError> for ElabError {
@@ -220,6 +239,22 @@ impl ElabError {
                 "an argument slot needs an enclosing checking position with a function type".into()
             }
             other => other.to_string(),
+        }
+    }
+
+    /// Where the error points, when it points anywhere: an unsolved-goal
+    /// listing points at its first goal. A declaration's errors point
+    /// inside it, which is how `heather check --expectations` attributes
+    /// them to the declarations that expect them; one that points elsewhere
+    /// is reported as it stands, never taken as an expected refusal.
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            ElabError::Parse(e) => Some(e.span),
+            ElabError::Elab { span, .. }
+            | ElabError::Kernel { span, .. }
+            | ElabError::Resolution { span, .. }
+            | ElabError::ArgSlotEscape { span } => Some(*span),
+            ElabError::UnsolvedGoals { goals, .. } => goals.first().map(|g| g.span),
         }
     }
 
@@ -420,18 +455,7 @@ fn subject_text(e: &Expr) -> Option<String> {
 /// so this is exact for them and falls back to the kernel's bounded `Debug`
 /// for an elaborator-built one.
 fn show_level(l: &Level) -> String {
-    let mut n = 0u64;
-    let mut cur = l;
-    loop {
-        match cur {
-            Level::Zero => return n.to_string(),
-            Level::Succ(inner) => {
-                n += 1;
-                cur = inner;
-            }
-            _ => return format!("{l:?}"),
-        }
-    }
+    l.as_constant().map_or_else(|| format!("{l:?}"), |n| n.to_string())
 }
 
 /// `True` in a rendered type, wherever the kernel wrote its `Unit^0` spelling
@@ -477,6 +501,14 @@ const BUILTIN_METHODS: [&str; 8] = [
 /// `docs/traits-named-upcast-design.md` §2.1). `None` for every other answer,
 /// which is every answer already at the goal's own class.
 type Upcast = Option<(Term, Type)>;
+
+/// What an `if` condition's expression is, for its `Bool` reading
+/// (`Elaborator::condition_type`).
+enum ConditionType {
+    Bool(Term, Type),
+    Other(String),
+    Unread,
+}
 
 #[derive(Clone)]
 struct OperatorFallbackUse {
@@ -563,6 +595,8 @@ pub struct CommittedWorld {
     representations: Shared<Representations>,
     provenance: Shared<provenance::Provenance>,
     meta_programs: Shared<MetaPrograms>,
+    /// Interface definitions by global key (`interfaces.rs`).
+    interfaces: Shared<interfaces::Interfaces>,
 }
 
 impl CommittedWorld {
@@ -576,187 +610,32 @@ impl CommittedWorld {
             representations: Shared::new(Representations::default()),
             provenance: Shared::new(provenance::Provenance::default()),
             meta_programs: Shared::new(MetaPrograms::default()),
+            interfaces: Shared::new(interfaces::Interfaces::default()),
         }
     }
 }
 
-/// Cloning an elaborator shares its committed world. Transient policy,
-/// diagnostics, scratch space, and dynamic scopes retain their established
-/// clone behavior; [`SemanticImage::elaborator`] instead supplies fresh
-/// transient state around the shared world.
+/// An elaboration session. Its fields are grouped by lifetime, and each group
+/// has one clone rule and one rollback rule (`lifetimes.rs` has the table): a
+/// clone shares the committed world and copies or freshens the rest group by
+/// group; [`SemanticImage::elaborator`] instead supplies fresh transient state
+/// around the shared world.
 #[derive(Clone)]
 pub struct Elaborator {
+    /// Ψ, δΨ and the registries: what the session has accepted. Shared by
+    /// clones and copied on write.
     committed: Rc<CommittedWorld>,
-    /// Logical semantic additions made while one module delta is extracted.
-    /// Failed transactions truncate this alongside committed state.
-    module_journal: module_delta::JournalSlot,
-    /// The previous delta a module pass may replay slices from
-    /// (`check_module_delta_from`); `None` on every other pass.
-    slice_plan: Option<module_delta::SlicePlan>,
-    /// Dynamically installed scope while stored surface syntax is re-lowered.
-    /// This is execution state, not a committed name-registry fact, so it must
-    /// remain private to one elaborator when semantic state is shared.
-    resolution_scopes: RefCell<Vec<Rc<names::Scope>>>,
-    /// Nesting depth of generated-source elaboration. This is execution mode,
-    /// not representation registry state; zero means user source. A `Cell`
-    /// because the Omega certificate route raises it from a `&self` checking
-    /// position.
-    generated_depth: Cell<usize>,
-    /// Active checking/inference frames. Clones inherit the current depth so
-    /// speculative elaboration cannot start a fresh native-stack budget.
-    expr_depth: Cell<usize>,
-    /// Set while a `:= derive()` route elaborates the transfer generator's
-    /// emission, so that the `impl` block *inside* that emission records
-    /// `Derived` rather than what its own clauses look like. `None` everywhere
-    /// else, which makes the mechanism inert.
-    impl_provenance: Option<datarepr::Provenance>,
+    /// What the module pass in progress owns: the kernel gate's pool and
+    /// replay, the delta journal, the item loop, accumulated diagnostics.
+    pass: ModulePass,
     /// Scratch state with exactly one ordinary declaration's lifetime.
     attempt: DeclAttempt,
-    /// While an `instance` block is being elaborated: the members that have
-    /// already landed, as (written name, full name). An unqualified reference
-    /// to one of them resolves to its global, which is the whole of "later
-    /// members use earlier members by name" (docs/traits-layer1-design.md
-    /// §4.2). Empty outside a block, which makes the mechanism inert.
-    instance_scope: Vec<(String, String)>,
-    /// Goals this item's elaboration derived and that deserve a canonical
-    /// global. Ψ must not grow mid-declaration, so minting is a **restart**:
-    /// the item is rolled back, the queue drained, the item elaborated again
-    /// (§8). Empty for every program that resolves nothing, which is what
-    /// keeps the whole mechanism free.
-    pending_derived: RefCell<Vec<(Type, Level, u32, Option<String>)>>,
-    /// Non-fatal diagnostics raised so far, in the order they were raised
-    /// (`docs/diagnostic-warnings-design.md` §3). A `RefCell` because the
-    /// places that raise one hold `&self` — the pattern compiler is the first
-    /// customer and takes `&self` throughout, exactly as `goals` and
-    /// `pending_derived` do.
-    ///
-    /// Drained by [`Self::take_warnings`], never by the elaborator: a warning
-    /// belongs to whoever has the source text to render it against, and that
-    /// is the caller (§3).
-    warnings: RefCell<Vec<Warning>>,
-    /// Project-local style policy for written-source lints. General lints run
-    /// under every profile; the CLI selects `Stdlib` only for `lib/std`.
-    lint_profile: LintProfile,
-    /// Review-mode lints run only when a driver asks (`heather check
-    /// --review`): the ones whose recognizer is a second elaboration of the
-    /// item, which is a cost no ordinary check should pay to say nothing
-    /// (`issues/lint-redundant-match-motive.md`, 2026-09-17).
-    review_lints: bool,
-    /// Every theorem's proof, by absolute Ψ index, when an exporter asked
-    /// for them ([`Self::keep_proofs_for_export`]); `None` otherwise. Kept
-    /// beside Ψ and never sealed: sealing would let conversion unseal the
-    /// proof at a stuck elimination and could change verdicts, while export
-    /// only reads it (`issues/export-keeps-proofs.md`). Each entry carries
-    /// its statement, so an entry left behind by a rolled-back declaration
-    /// never answers for the binding that later reuses its index.
-    export_proofs: Option<std::collections::BTreeMap<usize, (Rc<Type>, Rc<Term>)>>,
-    /// The declaration being elaborated, if its recursion plan is
-    /// [`recursion::RecursionPlan::Misplaced`]: its recursion name, the
-    /// parameter, and the refusal a self-call lowered on it raises
-    /// (issues/fn-recursion-means-the-function.md). `None` everywhere else.
-    misplaced_recursion: RefCell<Option<(String, usize, String)>>,
-    /// Backchaining depth, for the recursion cap. A `Cell` because resolution
-    /// recurses *through* `elab_check` — the nested obligation is discovered
-    /// by `apply_implicit`, not passed down.
-    resolve_depth: Cell<usize>,
-    /// The `positivity` tactic in progress, if any: while it is `Some`, a
-    /// proposition goal the evidence rules cannot close falls back to
-    /// `omega` ([`resolve::PositivityRun`]). `None` everywhere else, so plain
-    /// `:= infer` never runs omega.
-    positivity: RefCell<Option<resolve::PositivityRun>>,
-    /// Tactics implemented in Rust, available as `by name`
-    /// ([`Elaborator::register_native_tactic`], docs/host-elaboration-interface-design.md §8a).
-    native_tactics: RefCell<HashMap<String, fn() -> Box<dyn host::NativeTactic>>>,
-    /// Set while a `by`'s tactic expression is elaborated: terms of the
-    /// goal's context are quoted where it expects a `tactic::Expr`
-    /// (`host::Quoting`).
-    by_quoting: RefCell<Option<Rc<host::Quoting>>>,
-    /// Set while a tactic's split is elaborated: what its branch leaves
-    /// record or are filled with (`host::Leaves`).
-    host_leaves: RefCell<Option<Rc<RefCell<host::Leaves>>>>,
-    fuel: u64,
-    /// Optional explicit collector for evaluator-region activity. Clones
-    /// share it so speculative and generated checking contribute to the same
-    /// requested measurement; ordinary elaborators leave it absent.
-    value_metrics: Option<Rc<ValueMetrics>>,
-    /// Optional emission-slot audit (`emission_walk`). Off by default and
-    /// shared by clones, exactly like the two collectors above: ordinary
-    /// elaboration pays one `Option` branch per declaration.
-    emission_findings: Option<Rc<RefCell<Vec<EmissionFinding>>>>,
-    /// Successful Omega reconstruction steps, including recursively generated
-    /// logical branches, in checking order.
-    omega_reports: RefCell<Vec<OmegaReport>>,
-    /// `f_unfold` names the `decreases` walk declined to generate, and why
-    /// (`docs/decreases-unfolding-design.md` §3): a reference to one reports
-    /// the body shape that stopped the walk rather than an unknown name.
-    unfold_refusals: RefCell<std::collections::HashMap<String, String>>,
-    /// The names the container being elaborated declares, and whether each
-    /// carries `decreases` — what `docs/mutual-recursion-design.md` §8's
-    /// sentence on an unbound forward reference needs. Full declared names:
-    /// a member `V::get` further down does not make a bare `get` "declared
-    /// below", since a member's base name is never ambient
-    /// (docs/receiver-member-resolution-design.md §3).
-    container_decls: RefCell<Vec<(String, bool, usize)>>,
-    /// How far the container's item loop has got — only a declaration still
-    /// *ahead* of it is the forward reference §8 explains.
-    container_at: Cell<usize>,
-    /// Exhausted Omega searches. Unlike successful certificate reports these
-    /// are diagnostic history, so declaration rollback deliberately retains
-    /// them for the caller that receives the corresponding error.
-    omega_failure_reports: RefCell<Vec<OmegaReport>>,
-    /// How many `omega` certificates are currently being checked above this
-    /// point: the nesting depth recorded in [`OmegaPhases`].
-    omega_depth: Cell<usize>,
-    /// How many `ring` certificates are being checked above this point
-    /// (`ring.rs`): their library names resolve as `omega`'s do.
-    ring_depth: Cell<usize>,
-    /// The evidence rule a search is citing right now (`resolve.rs`,
-    /// `build_candidate`). Its qualified name resolves when the module being
-    /// elaborated can see the rule's module, even inside a default that runs
-    /// in another declaring scope: `Rat(1, F.top())` in a float module runs
-    /// `Rat`'s `den_pos` default in `rat`'s scope, which does not import
-    /// `float`, yet the rule about `F.top()` is the caller's to use.
-    rule_citation: RefCell<Option<String>>,
-    /// The Ψ-extending binders of the `meta fn` currently elaborating (its
-    /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
-    /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
-    /// `GlobalVar`s resolve to the right bindings — the goal machinery's
-    /// padding trick, one layer up. Empty outside a `meta fn`.
-    meta_pushed: RefCell<Vec<GlobalBinding>>,
-    /// Quotation payloads currently elaborating. [`Cx::quoted`] marks the
-    /// payload's own context, but a helper inside it that starts from a
-    /// fresh `Cx` does not inherit the bit; this does, and it is what
-    /// [`Elaborator::emits_at_forms`] reads beside it
-    /// (`docs/intro-by-type-design.md` §2.3).
-    quote_depth: Cell<u32>,
-    /// Memo for the telescope walk in
-    /// [`Elaborator::call_defers_for_result_only`], keyed by the global's absolute
-    /// Ψ position. That test is asked at **every explicit argument of every
-    /// call**, and its answer depends only on the callee's declared type,
-    /// which never changes once the global is committed — so it is computed
-    /// once per declaration rather than once per argument. Nothing here is
-    /// semantic: dropping the memo changes only how long elaboration takes.
-    result_only_memo: RefCell<HashMap<u32, bool>>,
-    /// Bare named types from finished modules, lowered once
-    /// ([`Elaborator::lower_named`]); keyed by the declaration's address and
-    /// whether names are read as generated, holding the Ψ length the type
-    /// was lowered at (a hit is weakened past the globals committed since).
-    /// Nothing here is semantic.
-    pub(crate) named_type_memo: RefCell<HashMap<(usize, bool), (Rc<Inductive>, usize, (Type, Level))>>,
-    /// The oracle consulted at the kernel gate (`gate.rs`), if any. `None` —
-    /// the default, and what every test and the unflagged CLI use — means the
-    /// kernel runs on every declaration, exactly as it always has.
-    gate: Option<Rc<dyn gate::KernelGate>>,
-    /// The deferred kernel gate's worker pool
-    /// (`docs/parallel-kernel-gate-design.md`). One worker — the default — is
-    /// exactly today's serial behaviour, spawns no thread, and queues nothing.
-    /// Not shared by clones: a clone gets a fresh pool with the same worker
-    /// count, like the rest of the transient scratch state.
-    kernel_pool: pool::KernelPool,
-    /// The verdicts a discarded parallel pass earned, held for the serial
-    /// replay that follows it (`docs/parallel-kernel-gate-design.md` §5.2).
-    /// Empty everywhere else, and never inherited by a clone.
-    kernel_replay: pool::ReplaySlot,
+    /// Fields set for a dynamic extent and put back when it ends.
+    scope: DynamicScope,
+    /// Configuration a driver sets: gate oracle, fuel, lints, collectors.
+    policy: Policy,
+    /// Caches, none of them semantic.
+    memos: Memos,
 }
 
 impl Deref for Elaborator {
@@ -771,6 +650,48 @@ impl DerefMut for Elaborator {
     #[track_caller]
     fn deref_mut(&mut self) -> &mut Self::Target {
         stats::make_mut(&mut self.committed)
+    }
+}
+
+/// A recorded site that a kernel-located refusal turned out to be
+/// ([`Elaborator::kernel_refusal`]): reported as its own probe would have
+/// reported it, had the probe's budget reached the verdict.
+enum RecordedSite {
+    /// A written `refl`, with its two sides when both spell.
+    Refl { span: Span, sides: Option<(String, String)> },
+    /// A checking site, with its two types when both spell and differ.
+    Check { span: Span, types: Option<(String, String)> },
+}
+
+impl RecordedSite {
+    fn into_error(self, decl: &str, err: TypeError, with_op: impl Fn(String) -> String) -> ElabError {
+        match self {
+            RecordedSite::Check { span, types: Some((g, w)) } => ElabError::Elab {
+                msg: with_op(format!("this has type `{g}`, but `{w}` is expected here")),
+                span,
+            },
+            RecordedSite::Check { span, types: None } => ElabError::Kernel {
+                decl: decl.to_string(),
+                span,
+                err,
+                note: Some(with_op(
+                    "the type of this expression does not convert to the type expected here".to_string(),
+                )),
+                site: KernelSite::Recorded,
+            },
+            RecordedSite::Refl { span, sides } => ElabError::Kernel {
+                decl: decl.to_string(),
+                span,
+                err,
+                note: Some(with_op(match sides {
+                    Some((l, r)) => format!(
+                        "`refl` needs both sides to be definitionally equal, but `{l}` and `{r}` are not"
+                    ),
+                    None => "`refl` needs both sides to be definitionally equal, and these are not".to_string(),
+                })),
+                site: KernelSite::Recorded,
+            },
+        }
     }
 }
 
@@ -816,7 +737,11 @@ impl expr::StructuralTypeElab for Elaborator {
 
     fn type_endpoint_can_anchor(&self, cx: &Cx, expression: &Expr) -> bool {
         !self.is_checking_only(cx, expression)
-            && self.clone().elab_infer(cx, expression).is_ok()
+            && self.probe(|| self.elab_infer(cx, expression).is_ok())
+    }
+
+    fn type_endpoint_infers_by_fallback(&self, cx: &Cx, expression: &Expr) -> bool {
+        self.deferral_can_fall_back(cx, expression) && self.probe(|| self.elab_infer(cx, expression).is_ok())
     }
 
     fn type_endpoint_may_need_checking(&self, cx: &Cx, expression: &Expr) -> bool {
@@ -876,6 +801,9 @@ impl expr::UniverseElab for Elaborator {
             return Ok(Some(lowered));
         }
         if let Some(lowered) = self.try_indexed_ty(cx, expression, span)? {
+            return Ok(Some(lowered));
+        }
+        if let Some(lowered) = self.try_type_value_app(cx, expression, span)? {
             return Ok(Some(lowered));
         }
         self.try_valparam_ty(cx, expression, span)
@@ -948,6 +876,30 @@ impl expr::ExpectedTypeDiagnosticsElab for Elaborator {
     }
 }
 
+impl expr::UnitCheckingElab for Elaborator {
+    fn read_expected_type_within(&self, cx: &Cx, expected: &Type, span: Span) -> R<Option<Type>> {
+        // Budget first: a head the value machine reaches within it is read
+        // as before, through the registry-aware read, at no more than the
+        // budget again. Only a spent budget is "a verdict still to compute".
+        match self
+            .semantic_oracle()
+            .bounded(diagnostics::VERDICT_READ_STEPS)
+            .whnf_type(&cx.gamma, expected)
+        {
+            Ok(_) => self.whnf(cx, expected, span).map(Some),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn defer_unit_verdict(&self, cx: &Cx, expected: &Type, span: Span) {
+        self.attempt.trivial_uses.borrow_mut().push(attempt::TrivialUse {
+            span,
+            cx: Rc::new(cx.clone()),
+            expected: expected.clone(),
+        });
+    }
+}
+
 impl expr::RecursiveCheckingElab for Elaborator {
     fn check_expression(
         &self,
@@ -1005,6 +957,10 @@ impl statements::StatementElab for Elaborator {
 
     fn infer_statement_expression(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, expression)
+    }
+
+    fn infer_mut_call(&self, cx: &Cx, call: &Expr) -> R<(Term, Type, Level)> {
+        self.scoped_cell(|s| &s.mut_call_site, Some(call.span), || self.elab_infer(cx, call))
     }
 
     fn read_local(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
@@ -1081,6 +1037,12 @@ impl statements::BlockCheckingElab for Elaborator {
 }
 
 impl matching::MotiveSynthesisElab for Elaborator {
+    fn generalizes_an_index(&self, cx: &Cx, scrutinee_type: &Type) -> bool {
+        let var = |idx: &Term| matches!(idx, Term::Var(_));
+        self.iwf_of_at(cx, scrutinee_type).is_some_and(|(_, fam)| var(&fam.idx))
+            || self.indexed_of_at(cx, scrutinee_type).is_some_and(|(_, fam)| var(&fam.idx))
+    }
+
     fn read_motive_type(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
         self.whnf(cx, ty, span).ok()
     }
@@ -1116,7 +1078,7 @@ impl matching::MotiveSynthesisElab for Elaborator {
                 scrutinee_level,
             )
             .is_ok()
-            && typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, candidate, self.fuel)
+            && typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, candidate, self.policy.fuel)
                 .is_ok_and(|(ty, _)| {
                     oracle
                         .convert_type(&cx.gamma, Layer::Prog, &ty, scrutinee_type, scrutinee_level)
@@ -1129,11 +1091,11 @@ impl matching::MatchSpeculationState for Elaborator {
     type Mark = (usize, usize);
 
     fn mark_match_state(&self) -> Self::Mark {
-        (self.warnings.borrow().len(), self.attempt.goal_arena.mark())
+        (self.pass.warnings.borrow().len(), self.attempt.goal_arena.mark())
     }
 
     fn rollback_match_state(&self, mark: Self::Mark) {
-        self.warnings.borrow_mut().truncate(mark.0);
+        self.pass.warnings.borrow_mut().truncate(mark.0);
         self.attempt.goal_arena.rollback(mark.1);
     }
 
@@ -1153,6 +1115,27 @@ impl matching::ConstantMotiveElab for Elaborator {
 
     fn lower_if_condition(&self, cx: &Cx, condition: &Ty) -> R<(Type, Level)> {
         self.elab_ty(cx, condition)
+    }
+
+    fn lower_constant_convoy(
+        &self,
+        cx: &Cx,
+        form: MatchForm,
+        generated: bool,
+        h: &str,
+        arms: &[Arm],
+        scrutinee: Term,
+        scrutinee_type: &Type,
+        scrutinee_level: &Level,
+        motive: Type,
+        motive_level: Level,
+        result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        self.elab_convoy(
+            cx, form, generated, h, arms, scrutinee, scrutinee_type, scrutinee_level, motive,
+            &motive_level, result, span,
+        )
     }
 
     fn lower_constant_match(
@@ -1188,8 +1171,8 @@ impl application::ExplicitArgElab for Elaborator {
         self.whnf(cx, ty, span)
     }
 
-    fn emits_checked_applications(&self, cx: &Cx) -> bool {
-        self.emits_at_forms(cx)
+    fn emits_checked_applications(&self, _cx: &Cx) -> bool {
+        self.emits_at_forms()
     }
 
     fn respell_application_annotations(
@@ -1235,6 +1218,13 @@ impl application::ExplicitArgElab for Elaborator {
 }
 
 impl recursion::SelfCallElab for Elaborator {
+    fn note_recursion_on(&self, dec: &str) {
+        let mut decs = self.attempt.recursion_decs.borrow_mut();
+        if !decs.iter().any(|d| d == dec) {
+            decs.push(dec.to_string());
+        }
+    }
+
     fn infer_self_call_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, argument)
     }
@@ -1244,10 +1234,27 @@ impl recursion::SelfCallElab for Elaborator {
     }
 
     fn misplaced_recursion(&self, name: &str) -> Option<(usize, String)> {
-        match &*self.misplaced_recursion.borrow() {
+        match &*self.scope.misplaced_recursion.borrow() {
             Some((owner, dec, msg)) if owner == name => Some((*dec, msg.clone())),
             _ => None,
         }
+    }
+
+    fn apply_self_call_implicit(
+        &self,
+        cx: &Cx,
+        name: &str,
+        params: Rc<Vec<ParamMeta>>,
+        head: Term,
+        ty: Type,
+        level: Level,
+        args: &[Expr],
+        mask: &[bool],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        application::apply_implicit(
+            self, cx, name, params, true, 0, false, head, ty, level, args, mask, None, false, span,
+        )
     }
 }
 
@@ -1326,10 +1333,17 @@ impl application::ImplicitApplicationElab for Elaborator {
         // its carrier, and falls back to its own type (`Nat`, `Char`) when
         // nothing does: in `unsigned_le(9, b)` the width comes from `b`, so
         // `9` is a byte (docs/native-programs-read-like-programs-design.md S3).
-        let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Char(_));
+        let literal = matches!(&argument.kind, ExprKind::Num(_) | ExprKind::Scaled(_) | ExprKind::Char(_));
+        // A binding statement's continuation (`Bind::seq(e, λ #bindN => rest)`,
+        // docs/sequencing-surface-design.md §2.2) waits for the expected type:
+        // the rest of the block is checked at the carrier's `M(B)`, never
+        // inferred from its first token, so that `Pure(match … { … })` at the
+        // end of a block checks as it would without the bind.
+        let continuation = matches!(&argument.kind, ExprKind::Lam { binders, .. }
+            if binders.len() == 1 && binders[0].name.starts_with("#bind"));
         application::ArgumentClass {
-            checking_only: annotated_lambda || literal || self.is_checking_only(cx, argument),
-            fallback_infer: annotated_lambda || literal || self.deferral_can_fall_back(cx, argument),
+            checking_only: annotated_lambda || literal || continuation || self.is_checking_only(cx, argument),
+            fallback_infer: annotated_lambda || literal || continuation || self.deferral_can_fall_back(cx, argument),
         }
     }
 
@@ -1343,19 +1357,33 @@ impl application::ImplicitApplicationElab for Elaborator {
         self.infer_bare_polymorphic_argument(cx, argument, parameter, n, sols)
     }
 
-    fn infer_propagation_callback(
+    fn infer_lambda_at_known_domains(
         &self, cx: &Cx, argument: &Expr, parameter: &Type, n: u32, sols: &[Sol],
     ) -> Option<R<(Term, Type, Level)>> {
+        // A λ with an unannotated binder whose domain the call already knows
+        // is as inferable as an annotated one: `antidiag(+, n, λ i k => …)`
+        // inside a `∑` has `f: Nat → Nat → A`, so `i` and `k` are `Nat` before
+        // anything fixes `A`, and the body's type is what fixes it. Only the
+        // binders' domains have to be meta-free, read one Π at a time off the
+        // written parameter type; the codomain is the body's to teach. A
+        // domain that still waits on a meta, a binder past the written Π
+        // chain, or an implicit binder keeps the argument blocked.
         let ExprKind::Lam { binders,body } = &argument.kind else { return None; };
-        let [binder] = binders.as_slice() else { return None; };
-        if !binder.name.starts_with("#try") || binder.ty.is_some() || binder.implicit { return None; }
-        // Filter the private syntax before substituting any types: ordinary
-        // deferred source arguments pay no new type traversal here.
-        let Type::Pi { dom,dom_level,.. } = parameter else { return None; };
-        let dom = unification::zonked(dom,n,sols)?;
-        Some(self.expr_elab().infer_propagation_callback(self,cx,binder,body,&dom,dom_level))
+        if binders.iter().all(|b| b.ty.is_some()) || binders.iter().any(|b| b.implicit) { return None; }
+        let mut domains = Vec::with_capacity(binders.len());
+        let mut ty = parameter;
+        for binder in binders {
+            let Type::Pi { dom,dom_level,cod,.. } = ty else { return None; };
+            domains.push(match binder.ty {
+                Some(_) => None,
+                None => Some((zonked(dom,n,sols)?,dom_level.clone())),
+            });
+            ty = cod;
+        }
+        Some(self.expr_elab().infer_callback_from_domains(self,cx,binders,body,&domains))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn unify_application_argument_type(
         &self,
         cx: &Cx,
@@ -1363,13 +1391,18 @@ impl application::ImplicitApplicationElab for Elaborator {
         argument: &Type,
         n: u32,
         sols: &mut [Sol],
+        meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
-    ) {
-        self.unify_arg_ty(cx, parameter, argument, n, sols, span)
+    ) -> Vec<(usize, Rc<Term>)> {
+        self.unify_arg_ty(cx, parameter, argument, n, sols, meta_doms, guesses, span)
     }
 
-    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span) {
-        self.note_check_mismatch(cx, got, expected, level, span)
+    fn note_argument_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, level: &Level, span: Span, clash: Option<application::SlotClash>) {
+        if self.policy.owed_checks_forgotten {
+            return;
+        }
+        self.note_check_clash(cx, got, expected, level, span, clash)
     }
 
     fn solve_application_from_expected(
@@ -1380,9 +1413,10 @@ impl application::ImplicitApplicationElab for Elaborator {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
     ) -> R<()> {
-        self.solve_from_expected(cx, result, expected, n, sols, meta_doms, span)
+        self.solve_from_expected(cx, result, expected, n, sols, meta_doms, guesses, span)
     }
 
     fn resolve_application_obligation(
@@ -1432,6 +1466,17 @@ impl application::ImplicitApplicationElab for Elaborator {
         let prefer = written
             .zip(applied.as_ref())
             .and_then(|(w, applied)| self.solver_carrier_head(w, params, applied));
+        // A class over a type constructor shows the constructor the call
+        // solved, `Bind<List>`, not the parameter it was written with.
+        let display = written
+            .zip(prefer.as_deref())
+            .and_then(|(w, key)| {
+                // Spelled only once committed: a scratch-world spine's globals
+                // sit `n` places over.
+                let committed = obligation.applied.as_ref().and_then(|t| zonked_tm(t, n, sols));
+                self.kinded_goal_display(cx, w, params, key, committed.as_ref())
+            })
+            .unwrap_or(display);
         let mut trace = Vec::new();
         match self.resolve_goal(
             cx,
@@ -1573,7 +1618,42 @@ impl application::ImplicitApplicationElab for Elaborator {
             && let Some(class) = self.lookup_class(&reference.name)
             && !class.valparams.is_empty()
         {
-            return self.value_slot_refusal(&class, name, None, span);
+            return self.value_slot_refusal(&class, None, name, None, span);
+        }
+        // A class over a type constructor (issues/higher-kinded-classes.md):
+        // its carrier is a value implicit, so `<…>` cannot give it. Name it,
+        // and say what would have pinned it.
+        if let Some(solver) = params
+            .get(obligation.param)
+            .and_then(|parameter| parameter.solver.as_deref())
+            && let Some(reference) = self.class_ref_of_ty(solver)
+            && let Some(class) = self.lookup_class(&reference.name)
+            && class.is_kinded()
+            && let Some(carrier) = reference
+                .args
+                .iter()
+                .zip(&class.kinds)
+                .filter(|(_, k)| k.is_some())
+                .find_map(|(a, _)| match &a.kind {
+                    TyKind::Named { name, args } if args.is_empty() => params
+                        .iter()
+                        .find(|p| !p.is_type && p.name == *name)
+                        .map(|p| p.name.clone()),
+                    _ => None,
+                })
+        {
+            return ElabError::Elab {
+                msg: format!(
+                    "the goal of `{parameter}` (`{goal}`) needs the type constructor \
+                     `{carrier}`, which this call does not determine: an argument at \
+                     `{carrier}` applied (`{carrier}(Nat)`) pins it only when its type is a \
+                     declared generic type applied to arguments (`Option<Nat>`), so a \
+                     type with no such head leaves it open. Write it \
+                     (`{name}({carrier} := Option, …)`) or pass `{parameter}` explicitly \
+                     (`@{name}(…)`)"
+                ),
+                span,
+            };
         }
         ElabError::Elab {
             msg: format!(
@@ -1620,6 +1700,29 @@ fn slice_source(file: &heather_syntax::File, src: &str, idx: usize, plan: &ItemP
     }
 }
 
+/// The refusal of a declaration's own name used as a value. A declaration
+/// with no value parameters (a `def`, or a parameterless `fn`) has no
+/// recursive call to make at all (docs/value-definitions-design.md §2.1).
+fn self_name_refusal(selfref: &SelfRef, name: &str) -> String {
+    if selfref.params.len() == selfref.n_tyvars {
+        format!("`{name}` refers to itself, and a value (a `def`, or a `fn` without parameters) is not recursive")
+    } else {
+        format!("`{name}` can only be used here as a saturated recursive call")
+    }
+}
+
+/// Append to a refusal of a member's self-reference, written by its bare
+/// base name, the global that name would otherwise have meant
+/// (issues/self-reference-hides-same-named-global.md). `note` is
+/// [`Elaborator::self_shadow_note`]'s; errors other than a surface refusal
+/// pass through unchanged.
+fn with_self_shadow_note(e: ElabError, note: Option<&str>) -> ElabError {
+    match (e, note) {
+        (ElabError::Elab { msg, span }, Some(note)) => ElabError::Elab { msg: format!("{msg}\n{note}"), span },
+        (e, _) => e,
+    }
+}
+
 fn item_timing_name(item: &Item) -> String {
     match item {
         Item::Decl(decl) => decl.name.clone(),
@@ -1632,6 +1735,8 @@ fn item_timing_name(item: &Item) -> String {
             format!("impl {} for {}", implementation.op, implementation.repr)
         }
         Item::Import(import) => format!("import {}", import.module),
+        Item::Generate(g) => format!("generate {}", host::tactic_name(&g.generator)),
+        Item::Prefixed(p) => p.decl.name.clone(),
     }
 }
 
@@ -1681,6 +1786,7 @@ pub fn kernel_workers_from_spec(spec: &str) -> Option<usize> {
     spec.trim().parse::<usize>().ok().filter(|n| *n > 0)
 }
 
+
 /// The one shape an invisible difference almost always has, named so the
 /// reader does not have to know how a type is represented to act on it
 /// (issues/lgg-error-hides-the-implicit.md).
@@ -1699,43 +1805,11 @@ impl Elaborator {
     pub fn new() -> Self {
         Elaborator {
             committed: Rc::new(CommittedWorld::empty()),
-            module_journal: module_delta::JournalSlot::new(),
-            slice_plan: None,
-            resolution_scopes: RefCell::new(Vec::new()),
-            generated_depth: Cell::new(0),
-            expr_depth: Cell::new(0),
-            impl_provenance: None,
+            pass: ModulePass::new(),
             attempt: DeclAttempt::default(),
-            instance_scope: Vec::new(),
-            pending_derived: RefCell::new(Vec::new()),
-            warnings: RefCell::new(Vec::new()),
-            lint_profile: LintProfile::Default,
-            review_lints: false,
-            export_proofs: None,
-            misplaced_recursion: RefCell::new(None),
-            resolve_depth: Cell::new(0),
-            positivity: RefCell::new(None),
-            native_tactics: RefCell::new(HashMap::new()),
-            by_quoting: RefCell::new(None),
-            host_leaves: RefCell::new(None),
-            fuel: DEFAULT_FUEL,
-            value_metrics: None,
-            emission_findings: None,
-            omega_reports: RefCell::new(Vec::new()),
-            unfold_refusals: RefCell::new(std::collections::HashMap::new()),
-            container_decls: RefCell::new(Vec::new()),
-            container_at: Cell::new(0),
-            omega_failure_reports: RefCell::new(Vec::new()),
-            omega_depth: Cell::new(0),
-            ring_depth: Cell::new(0),
-            rule_citation: RefCell::new(None),
-            meta_pushed: RefCell::new(Vec::new()),
-            quote_depth: Cell::new(0),
-            result_only_memo: RefCell::new(HashMap::new()),
-            named_type_memo: RefCell::new(HashMap::new()),
-            gate: None,
-            kernel_pool: pool::KernelPool::default(),
-            kernel_replay: pool::ReplaySlot::default(),
+            scope: DynamicScope::default(),
+            policy: Policy::new(),
+            memos: Memos::default(),
         }
     }
 
@@ -1747,7 +1821,7 @@ impl Elaborator {
     /// `docs/cache-v1-design.md` §6 is where the argument for the one shipped
     /// implementation lives.
     pub fn set_gate(&mut self, gate: Rc<dyn gate::KernelGate>) {
-        self.gate = Some(gate);
+        self.policy.gate = Some(gate);
     }
 
     /// How many kernel worker threads a module's proof obligations are checked
@@ -1761,12 +1835,12 @@ impl Elaborator {
     /// join fails is discarded and re-run at width 1, so the width changes
     /// only how fast the answer arrives (§5.1).
     pub fn set_kernel_workers(&mut self, workers: usize) {
-        self.kernel_pool.set_workers(workers);
+        self.pass.kernel_pool.set_workers(workers);
     }
 
     /// The configured worker count.
     pub fn kernel_workers(&self) -> usize {
-        self.kernel_pool.workers()
+        self.pass.kernel_pool.workers()
     }
 
     /// A clone that checks at this elaborator's width.
@@ -1787,10 +1861,11 @@ impl Elaborator {
     /// `*self = snapshot`, the whole-elaborator undo a speculative declaration
     /// form uses — **keeping the live kernel gate**.
     ///
-    /// The pool is the one field a declaration may not restore. Its queue
+    /// The pool is the one field a declaration may not restore (with the
+    /// replay cursor and the journal, [`ModulePass::roll_back_to`]). Its queue
     /// holds the *module's* outstanding proof obligations, not this
     /// declaration's, and a clone's pool is inline and empty by construction
-    /// (`pool.rs`, the `Clone` note): assigning one over a live pool drops
+    /// (`ModulePass`'s `Clone`): assigning one over a live pool drops
     /// every queued verdict on the floor — the join that follows sees no
     /// outcomes, so a rejection already recorded by a worker is never
     /// reported and the serial fallback never runs — and silently leaves the
@@ -1803,22 +1878,16 @@ impl Elaborator {
     /// ordinary discard-and-replay path and the caller sees the serial
     /// answer, which is the contract.
     pub(crate) fn restore_from_clone(&mut self, snapshot: Self) {
-        let live = std::mem::replace(&mut self.kernel_pool, pool::KernelPool::inline());
-        // The replay cursor is the module's too, and for the same reason: it
-        // counts the gate sites this *pass* has reached, and a clone's is
-        // empty by construction. Restoring one over it would rewind the
-        // cursor to a declaration the replay has already passed, which costs
-        // the rest of the module's reuse (never a wrong verdict — a rewound
-        // cursor mismatches and stops — but the same silent, load-dependent
-        // shape the pool's note is about).
-        let replayed = std::mem::take(&mut self.kernel_replay);
-        // And the module journal: a clone carries only its lengths
-        // (`module_delta::JournalSlot`), so the live one is cut back to them.
-        let journal = self.module_journal.take();
-        *self = snapshot;
-        self.kernel_pool = live;
-        self.kernel_replay = replayed;
-        self.module_journal.restore(journal);
+        // Every group but the module pass is the snapshot's; the module pass
+        // decides field by field (`ModulePass::roll_back_to`). Destructured,
+        // so that a new group has to say which it is.
+        let Elaborator { committed, pass, attempt, scope, policy, memos } = snapshot;
+        self.committed = committed;
+        self.pass.roll_back_to(pass);
+        self.attempt = attempt;
+        self.scope = scope;
+        self.policy = policy;
+        self.memos = memos;
     }
 
     /// Wait for every queued proof obligation and report the first failure in
@@ -1839,7 +1908,7 @@ impl Elaborator {
     /// pass is the one the caller keeps.
     pub fn join_kernel_gate(&mut self) -> Option<ElabError> {
         let waited = std::time::Instant::now();
-        let outcomes = self.kernel_pool.join();
+        let outcomes = self.pass.kernel_pool.join();
         if outcomes.is_empty() {
             return None;
         }
@@ -1868,6 +1937,7 @@ impl Elaborator {
                         span: item.span,
                         err: *err,
                         note: None,
+                        site: KernelSite::Other,
                     },
                     None => ElabError::Elab {
                         msg: format!("the kernel worker checking `{}` panicked", item.name),
@@ -1884,10 +1954,10 @@ impl Elaborator {
             // declaration this failure names. Keeping them is what makes a
             // rejected module cost one kernel pass rather than two — which is
             // the dev loop's most common module.
-            self.kernel_replay.record(pool::Replay::record(&outcomes));
+            self.pass.kernel_replay.record(pool::Replay::record(&outcomes));
             return failure;
         }
-        if let Some(g) = self.gate.as_ref() {
+        if let Some(g) = self.policy.gate.as_ref() {
             for outcome in &outcomes {
                 let item = outcome.item.as_ref();
                 g.accepted(
@@ -1914,7 +1984,7 @@ impl Elaborator {
     /// queued them, once the module's slices are built
     /// (`ModuleJournal::deferred_unseals`).
     fn charge_deferred_unseals(&self, outcomes: &[pool::Outcome]) {
-        if let Some(journal) = self.module_journal.borrow_mut().as_mut() {
+        if let Some(journal) = self.pass.module_journal.borrow_mut().as_mut() {
             for outcome in outcomes.iter().filter(|o| !o.unsealed.is_empty()) {
                 journal.deferred_unseals.push((outcome.item.psi.bindings.len(), outcome.unsealed.clone()));
             }
@@ -1938,7 +2008,7 @@ impl Elaborator {
         unsealed: Vec<usize>,
     ) {
         stats::count(stats::Counter::DeclsGated);
-        self.kernel_pool.submit(pool::Deferred {
+        self.pass.kernel_pool.submit(pool::Deferred {
             name: name.to_string(),
             span,
             psi: Rc::clone(&self.psi.0),
@@ -1949,7 +2019,7 @@ impl Elaborator {
             opaque,
             layer,
             lands_in_psi,
-            fuel: self.fuel,
+            fuel: self.policy.fuel,
             unsealed,
             row: stats::current_item(),
         });
@@ -1960,33 +2030,35 @@ impl Elaborator {
     /// the `value-metrics` collector is an `Rc` this elaborator owns and the
     /// profiled checker entry points want, so enabling it pins the gate here.
     pub(crate) fn gate_is_inline(&self) -> bool {
-        self.kernel_pool.is_inline() || self.value_metrics.is_some()
+        self.pass.kernel_pool.is_inline() || self.policy.value_metrics.is_some()
     }
 
     /// Select project-local source conventions without changing what syntax
     /// the language accepts. Intended for drivers before they check a module.
     pub fn set_lint_profile(&mut self, profile: LintProfile) {
-        self.lint_profile = profile;
+        self.policy.lint_profile = profile;
     }
 
     /// Turn on the review-mode lints — today `redundant-match-motive`, whose
-    /// recognizer re-elaborates and kernel-checks every written motive. Off
-    /// by default; `heather check --review` sets it.
+    /// recognizer re-elaborates and kernel-checks every written motive, and
+    /// `recursion-meaning`, which states and gates one unfolding equation per
+    /// structurally recursive `fn` (`meaning.rs`). Off by default; `heather
+    /// check --review` sets it.
     pub fn set_review_lints(&mut self, on: bool) {
-        self.review_lints = on;
+        self.policy.review_lints = on;
     }
 
     /// Keep every theorem's proof from here on, for an exporter
     /// (`docs/export-fragment-design.md` §1). Off by default: an ordinary
     /// check drops a proof whose statement carries no data.
     pub fn keep_proofs_for_export(&mut self) {
-        self.export_proofs.get_or_insert_with(Default::default);
+        self.pass.export_proofs.get_or_insert_with(Default::default);
     }
 
     /// The proof of the theorem at absolute Ψ index `abs`, if
     /// [`Self::keep_proofs_for_export`] was on when it committed.
     pub fn export_proof(&self, abs: usize) -> Option<&Rc<Term>> {
-        let (stmt, proof) = self.export_proofs.as_ref()?.get(&abs)?;
+        let (stmt, proof) = self.pass.export_proofs.as_ref()?.get(&abs)?;
         match self.psi.bindings.get(abs)? {
             GlobalBinding::Tm { ty, body: None, .. } if ty == stmt => Some(proof),
             _ => None,
@@ -2024,7 +2096,7 @@ impl Elaborator {
         // needs to be able to read the collector this elaborator installed
         // (`docs/instrumentation-design.md` §3).
         stats::set_value_metrics_source(Some((*metrics).clone()));
-        self.value_metrics = Some(metrics);
+        self.policy.value_metrics = Some(metrics);
     }
 
     /// Reset the active collector without changing whether instrumentation is
@@ -2034,17 +2106,17 @@ impl Elaborator {
     /// (`ValueMetrics::conv_miss_report`). Empty unless the `value-metrics`
     /// feature is on and metrics were enabled.
     pub fn value_conv_miss_report(&self) -> Option<String> {
-        self.value_metrics.as_deref().map(ValueMetrics::conv_miss_report)
+        self.policy.value_metrics.as_deref().map(ValueMetrics::conv_miss_report)
     }
 
     pub fn reset_value_metrics(&self) {
-        if let Some(metrics) = &self.value_metrics {
+        if let Some(metrics) = &self.policy.value_metrics {
             metrics.reset();
         }
     }
 
     pub fn value_metrics(&self) -> Option<ValueMetricsSnapshot> {
-        self.value_metrics
+        self.policy.value_metrics
             .as_ref()
             .map(|metrics| metrics.snapshot())
     }
@@ -2068,29 +2140,51 @@ impl Elaborator {
     /// Each checked declaration is walked once more, so this is a debugging
     /// and test-time switch, not a default.
     pub fn enable_emission_walk(&mut self) {
-        self.emission_findings = Some(Rc::new(RefCell::new(Vec::new())));
+        self.policy.emission_findings = Some(Rc::new(RefCell::new(Vec::new())));
+    }
+
+    /// Re-open the gap `OwedChecks` closed (#168): an inferred argument's
+    /// comparison with its parameter is recorded by nobody, as before that
+    /// round. A **test-time switch** and nothing else — it exists so the
+    /// safety net under every such gap, the kernel's locator
+    /// ([`KernelSite::Unrecorded`], issues/elab-accepts-conjunction-for-equation.md),
+    /// can be tested against a real one rather than a constructed refusal.
+    #[doc(hidden)]
+    pub fn forget_owed_argument_checks(&mut self) {
+        self.policy.owed_checks_forgotten = true;
+    }
+
+    /// Lower every recursive `fn` structurally, without asking the planner
+    /// whether that means its source. Test-time only: it reproduces the
+    /// planner's past misses (issues/recursion-let-reads-changing-parameter.md,
+    /// the varied branch of #389) so the meaning check
+    /// (issues/recursion-meaning-check.md) can be tested against real
+    /// miscompiles rather than constructed ones.
+    #[doc(hidden)]
+    pub fn skip_recursion_plan(&mut self) {
+        self.policy.recursion_plan_skipped = true;
     }
 
     /// Drain emission-slot findings without disabling the walk.
     pub fn take_emission_findings(&self) -> Vec<EmissionFinding> {
-        self.emission_findings
+        self.policy.emission_findings
             .as_ref()
             .map_or_else(Vec::new, |f| f.borrow_mut().drain(..).collect())
     }
 
     pub(crate) fn record_omega_failure_report(&self, report: OmegaReport) {
-        self.omega_failure_reports.borrow_mut().push(report);
+        self.pass.omega_failure_reports.borrow_mut().push(report);
     }
 
     /// Drain audit reports for successfully reconstructed `omega` uses.
     pub fn take_omega_reports(&self) -> Vec<OmegaReport> {
-        self.omega_reports.borrow_mut().drain(..).collect()
+        self.pass.omega_reports.borrow_mut().drain(..).collect()
     }
 
     /// Drain structured reports for exhausted `omega` attempts. These survive
     /// the failed declaration's ordinary transactional rollback.
     pub fn take_omega_failure_reports(&self) -> Vec<OmegaReport> {
-        self.omega_failure_reports.borrow_mut().drain(..).collect()
+        self.pass.omega_failure_reports.borrow_mut().drain(..).collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2102,11 +2196,11 @@ impl Elaborator {
         ty: &Type,
         level: &Level,
     ) -> Result<(), TypeError> {
-        match self.value_metrics.as_deref() {
+        match self.policy.value_metrics.as_deref() {
             Some(metrics) => {
-                typing::check_type_profiled(psi, 0, layer, gamma, ty, level, self.fuel, metrics)
+                typing::check_type_profiled(psi, 0, layer, gamma, ty, level, self.policy.fuel, metrics)
             }
-            None => typing::check_type(psi, 0, layer, gamma, ty, level, self.fuel),
+            None => typing::check_type(psi, 0, layer, gamma, ty, level, self.policy.fuel),
         }
     }
 
@@ -2120,11 +2214,11 @@ impl Elaborator {
         ty: &Type,
         level: &Level,
     ) -> Result<(), TypeError> {
-        match self.value_metrics.as_deref() {
+        match self.policy.value_metrics.as_deref() {
             Some(metrics) => typing::check_term_profiled(
-                psi, 0, layer, gamma, term, ty, level, self.fuel, metrics,
+                psi, 0, layer, gamma, term, ty, level, self.policy.fuel, metrics,
             ),
-            None => typing::check_term(psi, 0, layer, gamma, term, ty, level, self.fuel),
+            None => typing::check_term(psi, 0, layer, gamma, term, ty, level, self.policy.fuel),
         }
     }
 
@@ -2210,7 +2304,7 @@ impl Elaborator {
                 in_group.insert(idx, g);
             }
         }
-        *self.container_decls.borrow_mut() = file
+        *self.pass.container_decls.borrow_mut() = file
             .items
             .iter()
             .enumerate()
@@ -2218,10 +2312,11 @@ impl Elaborator {
                 Item::Decl(d) => {
                     Some((d.name.clone(), d.decreases.is_some(), i))
                 }
+                Item::Prefixed(p) => Some((p.decl.name.clone(), false, i)),
                 _ => None,
             })
             .collect();
-        self.container_at.set(0);
+        self.pass.container_at.set(0);
         ItemPlan { groups, kinds, in_group }
     }
 
@@ -2234,7 +2329,7 @@ impl Elaborator {
         item: &Item,
         plan: &ItemPlan,
     ) -> R<()> {
-        self.container_at.set(idx);
+        self.pass.container_at.set(idx);
         match item {
             Item::Decl(d) => match plan.in_group.get(&idx) {
                 Some(&g) if plan.groups[g][0] == idx => {
@@ -2282,6 +2377,8 @@ impl Elaborator {
             Item::Designation(d) => stats::timed(stats::Timer::Lower, || self.elab_designation(d)),
             Item::Datarepr(d) => stats::timed(stats::Timer::Lower, || self.elab_datarepr(d)),
             Item::Impl(i) => stats::timed(stats::Timer::Lower, || self.elab_impl(i)),
+            Item::Generate(g) => self.elab_generate(g),
+            Item::Prefixed(p) => self.elab_prefixed(p),
             Item::Import(_) => Ok(()),
         }
     }
@@ -2299,7 +2396,7 @@ impl Elaborator {
         if self.gate_is_inline() {
             return self.elab_module_pass(module, src, &mut deferred_failed);
         }
-        self.kernel_replay.clear();
+        self.pass.kernel_replay.clear();
         let mark = self.module_pass_checkpoint();
         let parallel = self.elab_module_pass(module, src, &mut deferred_failed);
         if !deferred_failed {
@@ -2313,14 +2410,14 @@ impl Elaborator {
     /// afterwards. The pool is quiescent at both ends: the fallback is entered
     /// only after a join, and the inline pass queues nothing.
     fn serially<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let width = self.kernel_pool.workers();
-        self.kernel_pool.set_workers(1);
+        let width = self.pass.kernel_pool.workers();
+        self.pass.kernel_pool.set_workers(1);
         // The discarded pass's verdicts become answerable exactly here, for
         // exactly this pass (§5.2).
-        self.kernel_replay.arm();
+        self.pass.kernel_replay.arm();
         let out = f(self);
-        self.kernel_replay.finish();
-        self.kernel_pool.set_workers(width);
+        self.pass.kernel_replay.finish();
+        self.pass.kernel_pool.set_workers(width);
         out
     }
 
@@ -2338,7 +2435,7 @@ impl Elaborator {
         // regression in one is not a regression in the other
         // (`docs/instrumentation-design.md` §5).
         let file = stats::timed(stats::Timer::Parse, || parse_file(src))?;
-        let lint_source = lint::Source::new(src, self.lint_profile);
+        let lint_source = lint::Source::new(src, self.policy.lint_profile);
         self.enter_module(module, &file)?;
         self.slice_enter(module);
         let plan = self.begin_container(&file);
@@ -2371,17 +2468,17 @@ impl Elaborator {
                 }
                 continue;
             }
-            let warn_mark = self.warnings.borrow().len();
-            let omega_mark = self.omega_reports.borrow().len();
+            let warn_mark = self.pass.warnings.borrow().len();
+            let omega_mark = self.pass.omega_reports.borrow().len();
             let r = self.elab_item_at(&file, idx, item, &plan);
             // Canonical derived instances are minted **between** items, where
             // Ψ may grow (docs/traits-layer2-design.md §8). A failed item
             // mints nothing: its derivations are as speculative as the rest of
             // it.
             if r.is_err() {
-                self.pending_derived.borrow_mut().clear();
-                self.warnings.borrow_mut().truncate(warn_mark);
-                self.omega_reports.borrow_mut().truncate(omega_mark);
+                self.pass.pending_derived.borrow_mut().clear();
+                self.pass.warnings.borrow_mut().truncate(warn_mark);
+                self.pass.omega_reports.borrow_mut().truncate(omega_mark);
             } else {
                 self.mint_pending();
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
@@ -2395,8 +2492,8 @@ impl Elaborator {
                 metrics.set_current_item(None);
             }
             if r.is_err() {
-                self.container_decls.borrow_mut().clear();
-                if let Some(g) = self.gate.as_ref() {
+                self.pass.container_decls.borrow_mut().clear();
+                if let Some(g) = self.policy.gate.as_ref() {
                     g.abandon(&self.psi);
                 }
                 // Nothing may outlive the module with proofs in flight, the
@@ -2413,11 +2510,11 @@ impl Elaborator {
             // The early abort (§5.1): a queued proof has already failed, so
             // the rest of this pass is work the replay will do again. Stop
             // here and let the join report it.
-            if self.kernel_pool.poll_failed() {
+            if self.pass.kernel_pool.poll_failed() {
                 break;
             }
         }
-        self.container_decls.borrow_mut().clear();
+        self.pass.container_decls.borrow_mut().clear();
         // The join, before this returns and therefore before any caller can
         // publish an image, record a verdict, or write an executable.
         match self.join_kernel_gate() {
@@ -2533,7 +2630,26 @@ impl Elaborator {
                 }),
             }
         }
+        // The common prelude, implicitly, when it is already in this world:
+        // the modules it exports from are elaborated before it and so never
+        // import it, and every later module's closure holds it, as the
+        // loader and the image keys add it (issues/std-prelude-facade.md).
+        if module != COMMON_MODULE
+            && self.names.has_module(COMMON_MODULE)
+            && scope.imports.iter().all(|i| i.module != COMMON_MODULE)
+        {
+            scope.imports.push(ImportSpec {
+                module: COMMON_MODULE.to_string(),
+                listed: Vec::new(),
+                exported: Vec::new(),
+            });
+        }
         self.names.enter_scope(scope);
+        // The interface boundary is per module: the definitions this module
+        // declares are transparent in it, every other module's are withheld.
+        if !self.interfaces.is_empty() {
+            self.refresh_delta_psi();
+        }
         Ok(())
     }
 
@@ -2557,7 +2673,7 @@ impl Elaborator {
         // shape stopped it (docs/decreases-unfolding-design.md §3), since
         // "unknown name" is the wrong thing to say about an equation the
         // reader is right to expect.
-        if let Some(why) = self.unfold_refusals.borrow().get(name) {
+        if let Some(why) = self.pass.unfold_refusals.borrow().get(name) {
             // A reason that already names the document that explains it — a
             // group's, `docs/mutual-recursion-design.md` §6 — points there
             // instead.
@@ -2583,18 +2699,18 @@ impl Elaborator {
     }
 
     fn resolve_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> NameRes {
-        let scopes = self.resolution_scopes.borrow();
+        let scopes = self.scope.resolution_scopes.borrow();
         // Omega's generated certificate may explicitly name its library
         // dependencies. This overlay applies to this qualified lookup only:
         // it neither opens bare names nor changes the caller's saved imports.
-        if (self.omega_depth.get() > 0 || self.ring_depth.get() > 0)
+        if (self.scope.omega_depth.get() > 0 || self.scope.ring_depth.get() > 0)
             && let Some((module, base)) = split_qual(name)
-            && matches!(module, "omega" | "nat" | "int" | "logic" | "list")
+            && matches!(module, "omega" | "nat" | "int" | "logic" | "list" | "ring" | "linarith")
             && self.names.declares(module, base)
         {
             return NameRes::Found(module.to_string());
         }
-        if self.rule_citation.borrow().as_deref() == Some(name)
+        if self.scope.rule_citation.borrow().as_deref() == Some(name)
             && let Some((module, base)) = split_qual(name)
             && self.names.declares(module, base)
             && (self.names.module() == module || self.names.scope().imports_module(module))
@@ -2619,19 +2735,19 @@ impl Elaborator {
     ) -> Result<T, String> {
         let scope = self.names.module_scope(module)
             .ok_or_else(|| format!("unknown checked module `{module}`"))?;
-        self.resolution_scopes.borrow_mut().push(Rc::new(scope.clone()));
-        let _guard = ResolutionScope { stack: &self.resolution_scopes };
+        self.scope.resolution_scopes.borrow_mut().push(Rc::new(scope.clone()));
+        let _guard = ResolutionScope { stack: &self.scope.resolution_scopes };
         Ok(read(self))
     }
 
     /// Install the declaration scope for one read of stored inductive syntax.
     /// The guard restores the caller's scope on every return path.
     fn use_inductive_scope<'a>(&'a self, ind: &inductive::Inductive) -> ResolutionScope<'a> {
-        self.resolution_scopes
+        self.scope.resolution_scopes
             .borrow_mut()
             .push(Rc::clone(&ind.scope));
         ResolutionScope {
-            stack: &self.resolution_scopes,
+            stack: &self.scope.resolution_scopes,
         }
     }
 
@@ -2651,6 +2767,53 @@ impl Elaborator {
         self.key_of_kinds(name, names::ANY_KIND)
     }
 
+    /// [`recursion::elab_self_call`], with a refusal *of the call* — one at
+    /// the call itself or one naming the callee, not an error inside an
+    /// argument that happens to surface here — noted with the global the
+    /// written name hides ([`Self::self_shadow_note`]).
+    fn self_call_noted(&self, cx: &Cx, written: &str, args: &[Expr], explicit: bool, span: Span) -> R<(Term, Type, Level)> {
+        recursion::elab_self_call(self, cx, args, explicit, span).map_err(|e| {
+            let ElabError::Elab { msg, span: at } = &e else { return e };
+            let selfref = cx.selfref.as_ref().expect("a self-call has a self-reference");
+            if *at != span && !msg.contains(&format!("`{}`", selfref.name)) {
+                return e;
+            }
+            let note = self.self_shadow_note(selfref, written);
+            with_self_shadow_note(e, note.as_deref())
+        })
+    }
+
+    /// Inside a member `T::name`, the bare `name` is the member's own
+    /// self-reference, checked before any global, so a top-level `name` is
+    /// hidden there. When `written` is that bare spelling and a declaration
+    /// of the name does resolve outside the member, the note naming it and
+    /// the qualified spelling that reaches it
+    /// (issues/self-reference-hides-same-named-global.md). `None` for a
+    /// non-member, the qualified spelling, or a name nothing else declares.
+    fn self_shadow_note(&self, selfref: &SelfRef, written: &str) -> Option<String> {
+        if selfref.name == selfref.written_name || written != selfref.name {
+            return None;
+        }
+        let key = self.key_of(self.instance_alias(written))?;
+        if key == selfref.written_name || key.ends_with(&format!("::{}", selfref.written_name)) {
+            return None;
+        }
+        // The module-qualified spelling, offered only when it reaches the
+        // same declaration from here.
+        let reach = split_qual(&key)
+            .map(|(module, _)| qkey(module, written))
+            .filter(|spelling| self.key_of(spelling).as_deref() == Some(key.as_str()));
+        let member = &selfref.written_name;
+        let hides = format!(
+            "note: inside the member `{member}`, the bare name `{written}` is `{member}` itself \
+             (its self-reference), which hides the declaration `{key}`"
+        );
+        Some(match reach {
+            Some(spelling) => format!("{hides}; write `{spelling}` to reach it"),
+            None => hides,
+        })
+    }
+
     /// [`Self::key_of`] with the candidate set restricted by declaration kind.
     /// See [`Self::lookup_inductive`] for the one restricted caller and why
     /// the restriction is licensed there and nowhere else.
@@ -2658,13 +2821,30 @@ impl Elaborator {
         if self.access_refusal(name).is_some() {
             return None;
         }
+        // A registered instance's global, by its key: generated, unwritable
+        // (`#`), and reachable wherever its instance is, which is the whole
+        // run's closure (docs/module-dag-design.md §2) and not only the
+        // modules this one names. A child instance fills an inherited field
+        // from a parent registered in a module it never imported
+        // (`algebra`'s `CommMonoidRel<Nat>(RelId, add)` under `semiring`'s
+        // `CommSemiring<Nat>`).
+        if name.contains('#') && split_qual(name).is_some() && self.names.global(name).is_some() {
+            return Some(name.to_string());
+        }
         if let Some(k) = self.key_of_declared_kinds(name, kinds) {
             return Some(k);
         }
         // The alias, strictly as a fallback. Its target is resolved through
         // `key_of_declared` and not `key_of`, because the target's own name is
         // the one the surface refuses — that is what the alias is for.
-        self.key_of_declared_kinds(self.access_alias(name)?, kinds)
+        if let Some(target) = self.access_alias(name) {
+            return self.key_of_declared_kinds(target, kinds);
+        }
+        // A designed path under its module's name, `m::f::rec`: `m`'s own
+        // `f::rec`, as `m::f` is `m`'s `f`.
+        let (module, path) = name.split_once("::")?;
+        let target = self.access_alias(path)?;
+        self.key_of_declared_kinds(&format!("{module}::{target}"), kinds)
     }
 
     fn key_of_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> Option<String> {
@@ -2690,6 +2870,82 @@ impl Elaborator {
         self.names.global(&self.key_of(self.instance_alias(name))?)
     }
 
+    /// Inside a member of `T` (`fn T::f`), a bare name may name `T`'s other
+    /// members: `cong_cons` for `List::cong_cons` inside `List::append_assoc`
+    /// (docs/sections-design.md §6). The member joins the candidate set with
+    /// the same rank as every other reading, so when the bare name also
+    /// resolves on its own the two are ambiguous (`Err`, the message): a
+    /// precedence either way would let a library's growth reinterpret checked
+    /// text (docs/modules-design.md §8). Only a declared member counts, never
+    /// the constructor reading of `T::C`. It is consulted only where a written
+    /// expression enters elaboration ([`Self::owner_rewrite`]), so the
+    /// elaborator's own lookups of library names, and receiver dispatch's
+    /// ambient readings, are untouched.
+    fn owner_member(&self, name: &str) -> Result<Option<String>, String> {
+        let Some(owner) = self.scope.member_owner.as_deref() else { return Ok(None) };
+        if name.contains("::") || self.scope.instance_scope.iter().any(|(base, _)| base == name) {
+            return Ok(None);
+        }
+        let full = format!("{owner}::{name}");
+        let NameRes::Found(m) = self.resolve_declared(&full) else { return Ok(None) };
+        if !self.names.declares(&m, &full) {
+            return Ok(None);
+        }
+        match self.resolve_declared(name) {
+            NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => Ok(Some(full)),
+            NameRes::Found(other) => Err(format!(
+                "`{name}` is ambiguous here: inside a member of `{owner}` it can name \
+                 `{owner}::{name}` (`{m}`) or `{name}` (`{other}`). Write `{owner}::{name}` \
+                 for the member, or qualify the other (`{other}::{name}`) \
+                 (docs/sections-design.md §6)"
+            )),
+            NameRes::Ambiguous(origins) => Err(format!(
+                "`{name}` is ambiguous here: inside a member of `{owner}` it can name \
+                 `{owner}::{name}` (`{m}`), and it is also declared in {}. Qualify it \
+                 (docs/sections-design.md §6)",
+                origins.iter().map(|o| format!("`{o}`")).collect::<Vec<_>>().join(" and ")
+            )),
+        }
+    }
+
+    /// A bare written name, or the bare head of a written call, that names a
+    /// sibling member ([`Self::owner_member`]) is rewritten to its qualified
+    /// spelling before the expression is elaborated, so every route after it
+    /// (implicit masks, receivers, deferral) sees the declaration's own name.
+    /// Locals, aliases and the declaration's own name shadow it, as they
+    /// shadow every global.
+    fn owner_rewrite(&self, cx: &Cx, e: &Expr) -> R<Option<Expr>> {
+        if self.scope.member_owner.is_none() {
+            return Ok(None);
+        }
+        let (name, span) = match &e.kind {
+            ExprKind::Var(n) => (n, e.span),
+            ExprKind::App { head, .. } => match &head.kind {
+                ExprKind::Var(n) => (n, head.span),
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        if cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
+        {
+            return Ok(None);
+        }
+        let full = match self.owner_member(name) {
+            Ok(Some(full)) => full,
+            Ok(None) => return Ok(None),
+            Err(msg) => return err(msg, span),
+        };
+        let mut out = e.clone();
+        match &mut out.kind {
+            ExprKind::Var(n) => *n = full,
+            ExprKind::App { head, .. } => head.kind = ExprKind::Var(full),
+            _ => unreachable!(),
+        }
+        Ok(Some(out))
+    }
+
     /// Inside an `instance` block, an unqualified name that is an *earlier*
     /// member of this block names that member's global
     /// (docs/traits-layer1-design.md §4.2). A name rewrite and nothing more:
@@ -2701,11 +2957,11 @@ impl Elaborator {
     /// constructors and the self-reference all shadow it exactly as they
     /// shadow any global.
     fn instance_alias<'a>(&'a self, name: &'a str) -> &'a str {
-        if self.instance_scope.is_empty() {
+        if self.scope.instance_scope.is_empty() {
             return name;
         }
         match self
-            .instance_scope
+            .scope.instance_scope
             .iter()
             .rev()
             .find(|(base, _)| base == name)
@@ -2761,10 +3017,10 @@ impl Elaborator {
         // broken forward-references a name that *is* declared, further down.
         // "unknown" is true and unhelpful; say what would have grouped them.
         let later = self
-            .container_decls
+            .pass.container_decls
             .borrow()
             .iter()
-            .find(|(n, _, i)| n == name && *i > self.container_at.get())
+            .find(|(n, _, i)| n == name && *i > self.pass.container_at.get())
             .map(|(_, d, _)| *d);
         if matches!(res, NameRes::NotFound)
             && let Some(measured) = later
@@ -2854,7 +3110,7 @@ impl Elaborator {
     /// whether a file checked — a caller that never calls this sees exactly
     /// the behaviour it saw before warnings existed (§4).
     pub fn take_warnings(&mut self) -> Vec<Warning> {
-        std::mem::take(&mut self.warnings.borrow_mut())
+        std::mem::take(&mut self.pass.warnings.borrow_mut())
     }
 
     /// Raise a warning. Takes `&self`: the customers hold shared borrows.
@@ -2882,7 +3138,7 @@ impl Elaborator {
         if self.in_generated() {
             return;
         }
-        let mut warnings = self.warnings.borrow_mut();
+        let mut warnings = self.pass.warnings.borrow_mut();
         if warnings.iter().any(|w| w.lint == lint && w.span == span) {
             return;
         }
@@ -2896,7 +3152,7 @@ impl Elaborator {
 
     fn run_source_lints(&self, item: &Item, source: &lint::Source<'_>) {
         for warning in self
-            .warnings
+            .pass.warnings
             .borrow_mut()
             .iter_mut()
             .filter(|w| w.lint == Lint::RedundantMatchMotive)
@@ -2914,7 +3170,7 @@ impl Elaborator {
             // findings onto names in that body would pretend we had analyzed
             // code that cannot run.
             if finding.lint == Lint::UnusedPatternBinder
-                && self.warnings.borrow().iter().any(|w| {
+                && self.pass.warnings.borrow().iter().any(|w| {
                     w.lint == Lint::UnreachableMatchArm
                         && w.span.start <= finding.span.start
                         && finding.span.end <= w.span.end
@@ -2923,7 +3179,7 @@ impl Elaborator {
                 continue;
             }
             if !self.in_generated() {
-                self.warnings.borrow_mut().push(Warning {
+                self.pass.warnings.borrow_mut().push(Warning {
                     lint: finding.lint,
                     msg: finding.msg,
                     span: finding.span,
@@ -2947,7 +3203,7 @@ impl Elaborator {
         if self.gate_is_inline() {
             return self.check_module_pass(module, src, &mut deferred_failed);
         }
-        self.kernel_replay.clear();
+        self.pass.kernel_replay.clear();
         let mark = self.module_pass_checkpoint();
         let parallel = self.check_module_pass(module, src, &mut deferred_failed);
         if !deferred_failed {
@@ -2973,7 +3229,7 @@ impl Elaborator {
             Ok(f) => f,
             Err(e) => return vec![e.into()],
         };
-        let lint_source = lint::Source::new(src, self.lint_profile);
+        let lint_source = lint::Source::new(src, self.policy.lint_profile);
         if let Err(e) = self.enter_module(module, &file) {
             return vec![e];
         }
@@ -2981,7 +3237,7 @@ impl Elaborator {
         let plan = self.begin_container(&file);
         let mut errs = Vec::new();
         for (idx, item) in file.items.iter().enumerate() {
-            let warn_mark = self.warnings.borrow().len();
+            let warn_mark = self.pass.warnings.borrow().len();
             let name = item_timing_name(item);
             // The declaration scope, the same bracket as `elab_module_source`
             // — `heather check` is the primary command and had none
@@ -3026,10 +3282,10 @@ impl Elaborator {
             }
             drop(item_scope);
             if r.is_err() {
-                self.pending_derived.borrow_mut().clear();
+                self.pass.pending_derived.borrow_mut().clear();
                 // §4: a failed item's warnings are as speculative as the rest
                 // of it — it registers nothing, and it says nothing.
-                self.warnings.borrow_mut().truncate(warn_mark);
+                self.pass.warnings.borrow_mut().truncate(warn_mark);
             } else {
                 self.mint_pending();
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
@@ -3042,17 +3298,17 @@ impl Elaborator {
                 errs.push(e);
                 // The refused declaration's gate question is dead, and the
                 // next declaration lands at the same Ψ length.
-                if let Some(g) = self.gate.as_ref() {
+                if let Some(g) = self.policy.gate.as_ref() {
                     g.abandon(&self.psi);
                 }
             }
             // The early abort (§5.1): this pass is already doomed to be
             // replayed serially, so stop elaborating declarations for it.
-            if self.kernel_pool.poll_failed() {
+            if self.pass.kernel_pool.poll_failed() {
                 break;
             }
         }
-        self.container_decls.borrow_mut().clear();
+        self.pass.container_decls.borrow_mut().clear();
         // The join (`docs/parallel-kernel-gate-design.md` §5). This is the
         // path `check_module_delta` runs inside, so the semantic image, the
         // declaration cache and `heather check`'s verdict all sit behind it.
@@ -3114,7 +3370,7 @@ impl Elaborator {
     fn code_form_ty(&self, abs: usize, ctx: &LocalCtx, ty: Rc<Type>, level: &Level) -> Option<Rc<Type>> {
         if heather_kernel::subst::holds_checked_spelling_ty(&ty) {
             let world = self.prefix_world(abs);
-            typing::spell_checked_in_code_ty(&world, 0, Layer::Code, ctx, ty, level, self.fuel).ok()
+            typing::spell_checked_in_code_ty(&world, 0, Layer::Code, ctx, ty, level, self.policy.fuel).ok()
         } else {
             Some(ty)
         }
@@ -3256,7 +3512,7 @@ impl Elaborator {
         let len = self.psi.bindings.len() as u32;
         let abs = len
             .checked_add(self.global_padding())?
-            .checked_add(self.meta_pushed.borrow().len() as u32)?
+            .checked_add(self.scope.meta_pushed.borrow().len() as u32)?
             .checked_sub(var.0.checked_add(1)?)?;
         Some(abs as usize)
     }
@@ -3299,6 +3555,36 @@ impl Elaborator {
     /// `Elaborator` outlives a declaration (and an `elab_source` call), so a
     /// stale `goal_base` would silently corrupt the next one.
     fn elab_decl(&mut self, decl: &Decl) -> R<()> {
+        let owner = decl.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
+        self.elab_decl_as(decl, owner)
+    }
+
+    /// A declaration an `instance` synthesizes: its qualified name is the
+    /// instance's, not a member of a type or function, so its body names no
+    /// siblings (docs/sections-design.md §6).
+    pub(crate) fn elab_decl_unowned(&mut self, decl: &Decl) -> R<()> {
+        self.elab_decl_as(decl, None)
+    }
+
+    fn elab_decl_as(&mut self, decl: &Decl, owner: Option<String>) -> R<()> {
+        self.scoped(|s| &mut s.member_owner, owner, |me| me.elab_decl_owned(decl))
+    }
+
+    fn elab_decl_owned(&mut self, decl: &Decl) -> R<()> {
+        // `unfolding f, g`: the declaration sees through these interface
+        // definitions, its gate included (docs/interface-definitions-design.md §4).
+        if !decl.unfolding.is_empty() {
+            let keys = self.unfolding_keys(decl)?;
+            let mut inner = decl.clone();
+            inner.unfolding.clear();
+            self.scope.unfolded.extend(keys.iter().cloned());
+            self.refresh_delta_psi();
+            let out = self.elab_decl_owned(&inner);
+            let keep = self.scope.unfolded.len() - keys.len();
+            self.scope.unfolded.truncate(keep);
+            self.refresh_delta_psi();
+            return out;
+        }
         // A `meta fn` is a different declaration form: modal signature,
         // quotation body, `Layer::Meta` check, elaborator-side registration
         // (docs/in-language-map-design.md §3–4).
@@ -3313,10 +3599,33 @@ impl Elaborator {
             self.elab_decl_one(decl, None)?;
             return self.register_evidence(decl);
         }
+        // An `interface fn` is elaborated as the `fn` it is, then registered,
+        // with its unfolding equations beside it
+        // (docs/interface-definitions-design.md).
+        if decl.is_interface {
+            self.interface_shape(decl)?;
+            let mut plain = decl.clone();
+            plain.is_interface = false;
+            return self.session_transaction(|me| {
+                me.elab_decl_owned(&plain)?;
+                let equations = me.interface_equations(decl)?;
+                me.register_interface(decl, equations)
+            });
+        }
         // `decreases e` is not one declaration but a family of them
         // (docs/decreases-unfolding-design.md §2): the arm, the eliminator,
         // the declaration itself, and — for a `fn` whose body the walk of §3
         // handles — the unfolding companions.
+        // `for` loops lift into a named step over a fold, and the
+        // declaration is the family that results (crates/elab/src/loops.rs).
+        // `partial fn` is the family of crates/elab/src/partial.rs: its body
+        // over the carrier of its own calls, and `f` as `CoTree::rec` of it.
+        if decl.partial.is_some() {
+            return self.session_transaction(|me| me.elab_partial_decl(decl));
+        }
+        if loops::has_loop(decl) {
+            return self.session_transaction(|me| me.elab_loop_decl(decl));
+        }
         if decl.decreases.is_some() {
             return self.session_transaction(|me| me.elab_measure_decl(decl));
         }
@@ -3330,21 +3639,250 @@ impl Elaborator {
             heather_syntax::ast::TyKind::Named { name, .. }
                 if self.lookup_inductive(name).is_some_and(|i| i.codata));
         if decl.kind == DeclKind::Fn && !corecursive {
+            if self.policy.recursion_plan_skipped {
+                return self.elab_structural_fn(decl);
+            }
             let self_ref = recursion::SelfRef::of_decl(decl);
-            match recursion::plan(&self_ref, &decl.body) {
+            let types: Vec<Option<&Ty>> = decl
+                .tyvars
+                .iter()
+                .map(|_| None)
+                .chain(decl.params.iter().map(|p| Some(&p.ty)))
+                .collect();
+            let plan = recursion::plan(&self_ref, &types, &decl.body);
+            // Recursion at the top is the lowering of every structural
+            // recursion on an explicit `Nat` parameter
+            // (issues/recursion-at-top-nat-default.md); the plain lowering is
+            // the fallback where it does not elaborate. A `ByMeasure` plan
+            // keeps its route below, which tries the top first and keeps
+            // the `f_unfold` its clients cite.
+            if !matches!(plan, recursion::RecursionPlan::ByMeasure { .. })
+                && let Some(dec) = recursion::top_default_param(&self_ref, &decl.body)
+                && self.at_top_candidate(decl, dec)
+                && self.try_recursion_at_top(decl, dec, TopAttempt::Default)
+            {
+                return Ok(());
+            }
+            match plan {
                 recursion::RecursionPlan::Structural => {}
-                recursion::RecursionPlan::ByMeasure { dec, read, name } => {
-                    return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name);
+                recursion::RecursionPlan::ByMeasure { dec, read, name, from } => {
+                    // Recursion at the top means the source wherever it
+                    // elaborates, and unfolds by conversion; the measure is
+                    // the fallback (docs/recursion-at-the-top-design.md §4).
+                    if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
+                        return Ok(());
+                    }
+                    return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name, from);
                 }
+                // Refused only at a self-call lowered under a guard on
+                // `dec`, so the plain lowering goes first; its refusal is
+                // what recursion at the top answers.
                 recursion::RecursionPlan::Misplaced { dec, msg } => {
-                    *self.misplaced_recursion.borrow_mut() = Some((self_ref.name.clone(), dec, msg));
-                    let result = self.elab_decl_one(decl, None);
-                    *self.misplaced_recursion.borrow_mut() = None;
-                    return result;
+                    let misplaced = Some((self_ref.name.clone(), dec, msg.clone()));
+                    return self.elab_at_top_on_refusal(decl, Some(&msg), |me| {
+                        me.scoped(|s| s.misplaced_recursion.get_mut(), misplaced, |me| me.elab_decl_one(decl, None))
+                    });
                 }
             }
+            return self.elab_at_top_on_refusal(decl, None, |me| me.elab_structural_fn(decl));
+        }
+        if decl.kind == DeclKind::Theorem {
+            return self.elab_at_top_on_refusal(decl, None, |me| me.elab_decl_one(decl, None));
         }
         self.elab_decl_one(decl, None)
+    }
+
+    /// Can `decl` recurse at the top on parameter `dec` (an index into the
+    /// type parameters then the value parameters)? Slice 1 is an explicit
+    /// `Nat` parameter (docs/recursion-at-the-top-design.md §4).
+    fn at_top_candidate(&self, decl: &Decl, dec: usize) -> bool {
+        dec.checked_sub(decl.tyvars.len())
+            .and_then(|i| decl.params.get(i))
+            .is_some_and(|p| !p.implicit && matches!(p.ty.kind, TyKind::Nat))
+    }
+
+    /// Elaborate `decl` by `elaborate`; where that refuses a self-call (a
+    /// structural refusal: the call does not descend at the guard the
+    /// lowering chose), try each explicit `Nat` parameter at the top before
+    /// reporting it (docs/recursion-at-the-top-design.md §4, slice 1).
+    fn elab_at_top_on_refusal(
+        &mut self,
+        decl: &Decl,
+        misplaced: Option<&str>,
+        elaborate: impl FnOnce(&mut Self) -> R<()>,
+    ) -> R<()> {
+        let error = match elaborate(self) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let refused_call = matches!(&error, ElabError::Elab { msg, .. }
+            if msg.starts_with(&format!("recursive call to `{}`", recursion::SelfRef::of_decl(decl).name))
+                || Some(msg.as_str()) == misplaced);
+        if !refused_call {
+            return Err(error);
+        }
+        let first = decl.tyvars.len();
+        for dec in first..first + decl.params.len() {
+            if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
+                return Ok(());
+            }
+        }
+        Err(error)
+    }
+
+    /// One attempt at recursion at the top on `dec`: elaborated and gated
+    /// like any declaration, and on failure rolled back with everything it
+    /// raised, since the caller has another lowering (or the original
+    /// refusal) to fall back to.
+    ///
+    /// A [`TopAttempt::Fallback`] answers a refusal or replaces the measure
+    /// route: it is gated inline, as the meaning check is, since at a wider
+    /// pool a kernel refusal would fail the module's join instead of this
+    /// attempt, and on success `f_unfold` follows, the source equation the
+    /// measure route's clients cite. A [`TopAttempt::Default`] is every
+    /// ordinary Nat recursion, gated at the pool's width: the rare kernel
+    /// refusal fails the parallel pass, and the serial replay (width one)
+    /// falls back as the inline gate would, so the answer is the same at
+    /// every width.
+    fn try_recursion_at_top(&mut self, decl: &Decl, dec: usize, attempt: TopAttempt) -> bool {
+        let lowered = self.recursion_at_top_body(decl, dec);
+        let warn_mark = self.pass.warnings.borrow().len();
+        let inline = attempt == TopAttempt::Fallback;
+        let at = Some((dec, lowered.span, inline));
+        let width = inline.then(|| self.pass.kernel_pool.swap_width(1));
+        let r = self.session_transaction(|me| {
+            me.scoped(|s| &mut s.recursion_at_top_surface, Some(std::rc::Rc::new(decl.clone())), |me| {
+                me.scoped(|s| &mut s.recursion_at_top, at, |me| me.elab_decl_one(&lowered, None))
+            })
+        });
+        if let Some(width) = width {
+            self.pass.kernel_pool.swap_width(width);
+        }
+        if r.is_err() {
+            self.pass.warnings.borrow_mut().truncate(warn_mark);
+            stats::count(stats::Counter::RecursionAtTopFallbacks);
+            return false;
+        }
+        stats::count(stats::Counter::RecursionAtTop);
+        let decs = self.attempt.recursion_decs.borrow().clone();
+        if !inline {
+            if self.policy.review_lints && !decs.is_empty() {
+                self.review_recursion_meaning(decl, &decs);
+            }
+            return true;
+        }
+        // `f(x̄) = { body }`, by one split on the parameter: each side takes
+        // the same step, which is the lowering's whole claim (§3).
+        let param = &decl.params[dec - decl.tyvars.len()];
+        let proof = self.meaning_split(&param.name, &param.ty, 1, &mut 0, decl.span);
+        let mut unfold = meaning::meaning_decl(decl, proof);
+        unfold.name = measure::unfold_name(&decl.name);
+        if let Err(e) = self.elab_decl_one(&unfold, None) {
+            self.pass.unfold_refusals.borrow_mut().insert(
+                unfold.name.clone(),
+                format!("the generated `{}` was refused ({e})", unfold.name),
+            );
+        }
+        if self.policy.review_lints && !decs.is_empty() {
+            self.review_recursion_meaning(decl, &decs);
+        }
+        true
+    }
+
+    /// `decl` with its body under one `match` on parameter `dec`, each arm
+    /// rebinding the parameter's name to that arm's constructor term:
+    ///
+    /// ```text
+    /// match z { Zero => { let z = Zero; body }, Succ(z#pred) => { let z = Succ(z#pred); body } }
+    /// ```
+    ///
+    /// Elaborated under [`DynamicScope::recursion_at_top`], this `match` is
+    /// the recursion and every other explicit parameter is generalized, so
+    /// the body recomputes at each level with this level's values: a read of
+    /// `z` is this level's `z`, and a `match z` inside takes its arm, whose
+    /// predecessor is the guard's (docs/recursion-at-the-top-design.md §3).
+    fn recursion_at_top_body(&self, decl: &Decl, dec: usize) -> Decl {
+        let span = decl.span;
+        let z = decl.params[dec - decl.tyvars.len()].name.clone();
+        let pred = format!("{z}#pred");
+        let var = |name: &str| Expr { kind: ExprKind::Var(name.to_string()), span };
+        let arm = |ctor: &str, binders: Vec<heather_syntax::Pat>, value: Expr| {
+            let mut stmts = vec![heather_syntax::Stmt::Let { name: z.clone(), ty: None, expr: value, span, opaque: false }];
+            stmts.extend(decl.body.stmts.iter().cloned());
+            heather_syntax::Arm {
+                ctor: ctor.to_string(),
+                default: false,
+                binders,
+                body: Expr {
+                    kind: ExprKind::Block(Box::new(heather_syntax::Block {
+                        stmts,
+                        result: decl.body.result.clone(),
+                        ons: decl.body.ons.clone(),
+                        span: decl.body.span,
+                    })),
+                    span: decl.body.span,
+                },
+                span,
+            }
+        };
+        let succ = Expr {
+            kind: ExprKind::App {
+                head: Box::new(var("Succ")),
+                args: vec![var(&pred)],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let arms = vec![
+            arm("Zero", Vec::new(), var("Zero")),
+            arm("Succ", vec![heather_syntax::Pat::Var { name: pred.clone(), span }], succ),
+        ];
+        let mut lowered = decl.clone();
+        lowered.body = heather_syntax::Block {
+            stmts: Vec::new(),
+            result: Box::new(Expr {
+                kind: ExprKind::Match {
+                    form: MatchForm::Match,
+                    generated: true,
+                    scrut: Box::new(var(&z)),
+                    eqbind: None,
+                    motive: None,
+                    arms,
+                },
+                span,
+            }),
+            ons: Vec::new(),
+            span: decl.body.span,
+        };
+        lowered
+    }
+
+    /// The parameter a `match` at `span` recurses on, if it is the `match`
+    /// [`Self::recursion_at_top_body`] wrapped the declaration in.
+    pub(crate) fn top_guard(&self, span: Span) -> Option<usize> {
+        self.scope.recursion_at_top.filter(|&(_, at, _)| at == span).map(|(dec, _, _)| dec)
+    }
+
+    /// What recursion at the top generalizes: every explicit value
+    /// parameter but the one it recurses on, ascending.
+    fn top_positions(cx: &Cx, dec: usize) -> Vec<usize> {
+        let Some(s) = cx.selfref.as_ref() else { return Vec::new() };
+        (s.n_tyvars..s.params.len()).filter(|&p| p != dec && !s.params[p].1).collect()
+    }
+
+    /// A `fn` the planner lowers structurally. In review mode, also check
+    /// that the lowering means the source (issues/recursion-meaning-check.md);
+    /// only a `fn` whose self-calls were lowered under a guard has a
+    /// recursion to check.
+    fn elab_structural_fn(&mut self, decl: &Decl) -> R<()> {
+        self.elab_decl_one(decl, None)?;
+        let decs = self.attempt.recursion_decs.borrow().clone();
+        if self.policy.review_lints && !decs.is_empty() {
+            self.review_recursion_meaning(decl, &decs);
+        }
+        Ok(())
     }
 
     /// A `fn` whose recursive `match` reads its own parameter, lowered as if
@@ -3360,21 +3898,33 @@ impl Elaborator {
         dec: usize,
         read: Span,
         name: &str,
+        from: usize,
     ) -> R<()> {
         let fname = &self_ref.name;
         let param = &self_ref.params[dec].0;
-        let what = if name == param {
+        let source = &self_ref.params[from].0;
+        let what = if from != dec {
+            format!(
+                "`{name}`, bound from `{source}` above the recursive `match`, is read inside \
+                 it, and the recursive call passes `{source}` a different value \
+                 (issues/recursion-let-reads-changing-parameter.md)"
+            )
+        } else if name == param {
             format!("`{param}` is read inside its own recursive `match`")
         } else {
             format!("`{name}`, bound from `{param}` above the recursive `match`, is read inside it")
+        };
+        let keep = if from != dec {
+            format!("bind `{name}` inside each arm that reads it")
+        } else {
+            "name this level's value by its pattern (`Succ(k)`, `Cons(h, t)`)".to_string()
         };
         let refuse = |why: &str| {
             err(
                 format!(
                     "{what}: the structural lowering compiles the recursion at the `match`, \
                      so there it would be the value `{fname}` was first called with, not this \
-                     level's. {why} Or name this level's value by its pattern (`Succ(k)`, \
-                     `Cons(h, t)`) (issues/fn-recursion-means-the-function.md)"
+                     level's. {why} Or {keep} (issues/fn-recursion-means-the-function.md)"
                 ),
                 read,
             )
@@ -3422,27 +3972,44 @@ impl Elaborator {
             format!(
                 "{what}, so `{fname}` is compiled as if it had been declared `decreases`: it \
                  computes what it says, but at a symbolic argument it no longer unfolds by \
-                 conversion; cite `{fname}_unfold` for that, or name this level's value by \
-                 its pattern to keep the structural lowering \
-                 (issues/fn-recursion-means-the-function.md)"
+                 conversion; cite `{fname}_unfold` for that, or {keep} to keep the \
+                 structural lowering (issues/fn-recursion-means-the-function.md)"
             ),
             read,
         );
         let mut by_measure = decl.clone();
         by_measure.decreases = Some(measure);
-        self.session_transaction(|me| me.elab_measure_decl(&by_measure))
+        // The source wrote no `decreases`: a refusal that names it says why
+        // the declaration is under one, and what keeps it structural.
+        self.session_transaction(|me| me.elab_measure_decl(&by_measure)).map_err(|e| match e {
+            ElabError::Elab { msg, span } if msg.contains("under `decreases`") => ElabError::Elab {
+                msg: format!(
+                    "{msg}\n(`{fname}` is compiled as if declared `decreases` because {what}; \
+                     or {keep} to keep the structural lowering, \
+                     issues/fn-recursion-means-the-function.md)"
+                ),
+                span,
+            },
+            other => other,
+        })
     }
 
     /// One ordinary declaration, with `obligations` the measure-obligation
     /// table to reword errors through where this declaration was generated by
     /// [`measure`] (`None` for source declarations).
     fn elab_decl_one(&mut self, decl: &Decl, obligations: Option<&measure::Obligations>) -> R<()> {
-        let warn_mark = self.warnings.borrow().len();
+        // Constraints sharing a symbol at one carrier become one dictionary
+        // of a synthesized class, made here — between items, where Ψ may
+        // grow — before the declaration's own attempts begin
+        // (issues/constraints-sharing-indices.md).
+        let merged = self.merge_linked_constraints(decl)?;
+        let decl = merged.as_ref().unwrap_or(decl);
+        let warn_mark = self.pass.warnings.borrow().len();
         let mut reserved = 0;
         self.attempt.goal_arena.enable_restarts();
         let r = loop {
             self.attempt.prepare();
-            self.pending_derived.borrow_mut().clear();
+            self.pass.pending_derived.borrow_mut().clear();
             let r = self.check_decl(decl, reserved);
             let requested = self.attempt.goal_arena.take_requested_base();
             if requested <= reserved {
@@ -3452,7 +4019,7 @@ impl Elaborator {
             // kernel gate. Goal-capacity discovery is therefore speculative:
             // discard its diagnostics and goal arena, enlarge the stable Ψ
             // prefix, and elaborate the declaration again from its source.
-            self.warnings.borrow_mut().truncate(warn_mark);
+            self.pass.warnings.borrow_mut().truncate(warn_mark);
             self.attempt.clear_goals();
             reserved = reserved.max(requested);
         };
@@ -3489,11 +4056,57 @@ impl Elaborator {
         }
     }
 
+    /// A declaration whose body holds `for` loops: each loop's step and
+    /// state, then the declaration over folds (crates/elab/src/loops.rs).
+    /// Each part goes through [`Self::elab_decl`], so a step with loops of
+    /// its own is lowered the same way.
+    fn elab_loop_decl(&mut self, decl: &Decl) -> R<()> {
+        let family = loops::lower(decl, self)?;
+        for part in &family.parts {
+            match part {
+                loops::Part::State(d) => self.elab_inductive(d)?,
+                loops::Part::Decl(d) => self.elab_decl(d)?,
+            }
+        }
+        // §7.1: always attempted, and never a reason to refuse `f` — the
+        // generated statement is untrusted, so a refusal is recorded for a
+        // later `f_unfold` reference to report.
+        if let Err(e) = self.elab_decl_one(&family.unfold, None) {
+            self.pass.unfold_refusals.borrow_mut().insert(family.unfold.name.clone(), format!("the generated `{}` was refused ({e})", family.unfold.name));
+        }
+        // Designated last: the generated parts above are spelled with the
+        // minted names, which a designation takes out of the surface.
+        for (designed, minted) in &family.designations {
+            self.designate_access(designed, minted);
+        }
+        Ok(())
+    }
+
+    /// A `partial fn`: `f#body`, then `f` over `CoTree::rec`, then
+    /// `f_unfold` (crates/elab/src/partial.rs). Each part goes through
+    /// [`Self::elab_decl`], so a body with loops is lowered as any is.
+    fn elab_partial_decl(&mut self, decl: &Decl) -> R<()> {
+        let family = partial::lower(decl)?;
+        for part in &family.parts {
+            self.elab_decl(part)?;
+        }
+        if let Err(e) = self.elab_decl_one(&family.unfold, None) {
+            self.pass.unfold_refusals.borrow_mut().insert(family.unfold.name.clone(), format!("the generated `{}` was refused ({e})", family.unfold.name));
+        }
+        for (designed, minted) in &family.designations {
+            self.designate_access(designed, minted);
+        }
+        Ok(())
+    }
+
     /// `fn f(x̄) -> T decreases e { body }` is not one declaration but the
     /// family of `docs/decreases-unfolding-design.md` §2 — `f#body`, `f#rec`,
     /// `f` — elaborated in order. Each member is an ordinary declaration
     /// checked the ordinary way, so nothing the generator writes is trusted.
     fn elab_measure_decl(&mut self, decl: &Decl) -> R<()> {
+        // The lowering reads names by their last binding, so a `let m = m - 1`
+        // would shadow the measure's `m` (issues/decreases-shadowed-let.md).
+        let decl = &measure::deshadowed(decl);
         let measure = decl.decreases.clone().expect("a measure declaration");
         measure::check_shape(decl, &measure)?;
         // The wrapper spells `nat::Nat::Lt`, `nat::Nat::le_trans` and `nat::Nat::lt_succ_self`;
@@ -3525,11 +4138,31 @@ impl Elaborator {
         // calls, exactly as it was before this round, and the companions are
         // declined with the reason. An obligation that is genuinely unprovable
         // fails again there, with the message §2 of the measures doc pins.
-        let mut family = measure::lower(decl, &self_name, &measure, omega_available, self, true)?;
+        // A computed scrutinee's equation enters the lowering only where a
+        // lifted obligation reads it (design §13): lowered with every
+        // candidate bound, then again with just the ones the obligations
+        // quantify, so a body whose obligations never read one keeps the
+        // plain match it was written with.
+        let mut auto = measure::AutoEqs::All;
+        let mut family = measure::lower(decl, &self_name, &measure, omega_available, self, true, &auto)?;
+        if family.auto_candidates > 0 {
+            let mut used: Vec<usize> = family
+                .obligations
+                .iter()
+                .flat_map(|o| o.decl.params.iter().filter_map(|p| measure::auto_eq_index(&p.name)))
+                .collect();
+            used.sort_unstable();
+            used.dedup();
+            let all = used.len() == family.auto_candidates;
+            auto = measure::AutoEqs::Only(used);
+            if !all {
+                family = measure::lower(decl, &self_name, &measure, omega_available, self, true, &auto)?;
+            }
+        }
         let mut lifted = true;
         for part in &family.obligations {
             if let Err(why) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
-                self.unfold_refusals.borrow_mut().insert(
+                self.pass.unfold_refusals.borrow_mut().insert(
                     measure::unfold_name(&decl.name),
                     format!("the lifted `{}` was refused ({why})", part.decl.name),
                 );
@@ -3538,7 +4171,7 @@ impl Elaborator {
             }
         }
         if !lifted {
-            family = measure::lower(decl, &self_name, &measure, omega_available, self, false)?;
+            family = measure::lower(decl, &self_name, &measure, omega_available, self, false, &measure::AutoEqs::Off)?;
         }
         for part in &family.decls {
             self.elab_decl_one(&part.decl, Some(&part.obligations))?;
@@ -3554,24 +4187,32 @@ impl Elaborator {
         // term it got wrong must not take `f` down with it. The recorded
         // reason quotes the checker, so the case stays diagnosable.
         let unfold = measure::unfold_name(&decl.name);
-        if !lifted {
-            return Ok(());
-        }
-        match measure::companions(decl, &self_name, &measure, omega_available, self) {
-            Err(why) => {
-                self.unfold_refusals.borrow_mut().insert(unfold, why);
-            }
-            Ok(parts) => {
-                for part in parts {
-                    if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
-                        self.unfold_refusals
-                            .borrow_mut()
-                            .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
-                        break;
+        if lifted {
+            match measure::companions(decl, &self_name, &measure, omega_available, self, &auto) {
+                Err(why) => {
+                    self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
+                }
+                Ok(parts) => {
+                    for part in parts {
+                        if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
+                            self.pass.unfold_refusals
+                                .borrow_mut()
+                                .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
+                            break;
+                        }
                     }
                 }
             }
         }
+        // The recursor and its step have designed spellings, `f::rec` and
+        // `f::body`: `f` at a bound on its measure, and one step of it with
+        // its recursion any function, which a proof by induction on the
+        // bound states its claims about where no `f_unfold` exists
+        // (docs/decreases-unfolding-design.md §11). Designated last: the
+        // companions above are spelled with the minted names, which a
+        // designation takes out of the surface.
+        self.designate_access(&format!("{}::rec", decl.name), &measure::rec_name(&decl.name));
+        self.designate_access(&format!("{}::body", decl.name), &measure::body_name(&decl.name));
         Ok(())
     }
 
@@ -3582,6 +4223,10 @@ impl Elaborator {
     /// checked the ordinary way, so nothing the generator writes is trusted.
     fn elab_measure_group(&mut self, members: &[&Decl]) -> R<()> {
         let span = members[0].span;
+        // As `elab_measure_decl`: every name in a member's body means one binder.
+        let owned: Vec<Decl> = members.iter().map(|d| measure::deshadowed(d)).collect();
+        let members: Vec<&Decl> = owned.iter().collect();
+        let members = &members[..];
         let mut gm: Vec<measure::GroupMember<'_>> = Vec::new();
         for d in members {
             let measure = d.decreases.clone().expect("a measure declaration");
@@ -3630,7 +4275,7 @@ impl Elaborator {
         // Each member records the refusal on its own `f_unfold`, so a citation
         // reports the reason rather than an unknown name.
         for d in members {
-            self.unfold_refusals.borrow_mut().insert(
+            self.pass.unfold_refusals.borrow_mut().insert(
                 measure::unfold_name(&d.name),
                 format!(
                     "`{}` is a member of a mutual `decreases` group, whose unfolding \
@@ -3767,7 +4412,7 @@ impl Elaborator {
             self.psi.push(lemma);
         }
         let abs = self.psi.bindings.len() as u32;
-        if let (Some(kept), Some(proof), GlobalBinding::Tm { ty, .. }) = (&mut self.export_proofs, export_proof, &binding) {
+        if let (Some(kept), Some(proof), GlobalBinding::Tm { ty, .. }) = (&mut self.pass.export_proofs, export_proof, &binding) {
             kept.insert(abs as usize, (Rc::clone(ty), proof));
         }
         match sealed {
@@ -3827,6 +4472,24 @@ impl Elaborator {
         Ok(cx)
     }
 
+    /// A `def`'s value with no written type, inferred: its term, which is
+    /// the body, and its type, which is the statement
+    /// (docs/value-definitions-design.md §2.2). A value whose type inference
+    /// cannot find is refused with the spelling that fixes it.
+    fn infer_value(&self, cx: &Cx, decl: &Decl, e: &Expr) -> R<(Term, Type, Level)> {
+        self.elab_infer(cx, e).map_err(|error| match error {
+            ElabError::Elab { msg, span } if msg.contains("infer") => ElabError::Elab {
+                msg: format!(
+                    "{msg} (`{}` has no written type, so its value must infer one: write it \
+                     as `def {}: T = …;`)",
+                    decl.name, decl.name
+                ),
+                span,
+            },
+            other => other,
+        })
+    }
+
     fn check_decl(
         &mut self,
         decl: &Decl,
@@ -3834,7 +4497,10 @@ impl Elaborator {
     ) -> R<PendingDecl> {
         // Keep the writer's declaration, not the constraint-expanded working
         // copy: representation obligations later restate the surface API.
-        let surface = decl.clone();
+        let surface = match &self.scope.recursion_at_top_surface {
+            Some(written) if written.name == decl.name => (**written).clone(),
+            _ => decl.clone(),
+        };
         // The constraint binders' desugaring at an **indexed** class
         // (docs/operation-indexed-classes-design.md §4): the index binders in
         // front of the dictionary, or the dictionary floated past the
@@ -3991,7 +4657,7 @@ impl Elaborator {
         }
         let decl_type = stats::guard(stats::Timer::DeclType);
         let mut cx = Cx::empty();
-        cx.index_ambiguity = ambiguous;
+        cx.index_ambiguity = ambiguous.into();
         // The constraint slots' symbols, checked against each other on the way
         // in: §5.2's uniqueness rule runs over the symbol namespace by any mix
         // of slots and `as` (issues/binder-symbol-as-notation.md), and one loop
@@ -4107,8 +4773,25 @@ impl Elaborator {
         if has_implicit_mark(&decl.result) {
             return err(IMPLICIT_MARK_REFUSED, decl.result.span);
         }
-        let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
+        // `def x = e;` (docs/value-definitions-design.md §2.2): the type is
+        // `e`'s, so `e` is inferred once and is the body as well.
+        let inferred = match &decl.result.kind {
+            TyKind::TypeOf(e)
+                if decl.value
+                    && decl.body.stmts.is_empty()
+                    && decl.body.ons.is_empty()
+                    && decl.body.result.span == e.span =>
+            {
+                Some(self.infer_value(&cx, decl, e)?)
+            }
+            _ => None,
+        };
+        let (res_ty, res_lvl) = match &inferred {
+            Some((_, ty, level)) => (ty.clone(), level.clone()),
+            None => self.elab_ty(&cx, &decl.result)?,
+        };
         drop(decl_type);
+        *self.attempt.telescope.borrow_mut() = cx.names.clone();
         // The graph records what the checked proof/body references, not names
         // appearing only in its public statement (issues/axiom-provenance.md).
         self.attempt.direct_dependencies.borrow_mut().clear();
@@ -4126,6 +4809,9 @@ impl Elaborator {
         let body = if decl.kind == DeclKind::Axiom {
             self.solve_goals(&[], &decl.name)?;
             None
+        } else if let Some((term, _, _)) = inferred {
+            self.solve_goals(&decl.body.ons, &decl.name)?;
+            Some(term)
         } else {
             // A `decreases` declaration never reaches here: `elab_measure_decl`
             // has already replaced it by the family of `measure.rs`.
@@ -4246,7 +4932,7 @@ impl Elaborator {
 
         // The emission audit, on exactly the pair the kernel is about to be
         // handed (`emission_walk`; design §2.5). Off unless asked for.
-        if let Some(found) = self.emission_findings.as_ref() {
+        if let Some(found) = self.policy.emission_findings.as_ref() {
             let findings =
                 emission_walk::walk_decl(self, &decl.name, &stmt, term.as_ref());
             found.borrow_mut().extend(findings);
@@ -4270,7 +4956,9 @@ impl Elaborator {
             stats::time_kernel(|| {
                 self.kernel_check_type(&self.psi, Layer::Prog, &empty, &stmt, &stmt_lvl)
             })
-            .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
+            .map_err(|e| {
+                self.kernel_refusal(&decl.name, decl.span, e, &self.psi, Layer::Prog, &empty, None, &stmt, &stmt_lvl)
+            })?;
         }
 
         // A default's names resolve where the declaration was written, at
@@ -4329,7 +5017,7 @@ impl Elaborator {
             _ => None,
         };
         let export_proof = match (decl.kind, &term) {
-            (DeclKind::Theorem, Some(proof)) if self.export_proofs.is_some() => Some(Rc::new(proof.clone())),
+            (DeclKind::Theorem, Some(proof)) if self.pass.export_proofs.is_some() => Some(Rc::new(proof.clone())),
             _ => None,
         };
         let binding = GlobalBinding::Tm {
@@ -4343,7 +5031,7 @@ impl Elaborator {
             },
         };
         if decl.kind == DeclKind::Axiom
-            && let Some(gate) = self.gate.as_ref()
+            && let Some(gate) = self.policy.gate.as_ref()
         {
             gate.assumption(&self.psi, &decl.name, &binding);
         }
@@ -4387,8 +5075,21 @@ impl Elaborator {
         body: &Term,
         opaque: bool,
     ) -> R<()> {
+        // A declaration of a module that imports interface definitions is
+        // checked with their bodies withheld, as the elaborator's worlds are
+        // (docs/interface-definitions-design.md §3): the gate's conversion is
+        // where a proof's unfolding actually happens. Withholding only takes
+        // δ-steps away, so the gate never accepts more than it would without.
+        let gated;
+        let psi = match self.delta_psi.withheld.clone() {
+            Some(withheld) => {
+                gated = Rc::new(psi.withholding(Some(withheld)));
+                &gated
+            }
+            None => psi,
+        };
         let item = gate::GateItem { name, ctx, ty, level, body, opaque, layer: Layer::Code, lands_in_psi: true };
-        if self.gate.as_ref().is_some_and(|g| g.admits(psi, &item)) {
+        if self.policy.gate.as_ref().is_some_and(|g| g.admits(psi, &item)) {
             return Ok(());
         }
         // Whatever sealed proofs the statement or the body open are part of
@@ -4398,19 +5099,22 @@ impl Elaborator {
         // doing: every dependent needs it, and it is the cheap half
         // (`docs/parallel-kernel-gate-design.md` §2).
         stats::time_kernel(|| self.kernel_check_type(psi, Layer::Prog, ctx, ty, level))
-            .map_err(|e| self.kernel_error(name, span, e))?;
+            .map_err(|e| self.kernel_refusal(name, span, e, psi, Layer::Prog, ctx, None, ty, level))?;
         if self.gate_is_inline() {
             // A serial replay may already hold this exact obligation's
             // verdict, earned by a worker of the pass it replaces
             // (`docs/parallel-kernel-gate-design.md` §5.2). `None` — which is
             // every ordinary run — asks the kernel.
-            let verdict = match self.kernel_replay.reuse(psi.bindings.len(), self.fuel, &item) {
+            let verdict = match self.pass.kernel_replay.reuse(psi.bindings.len(), self.policy.fuel, &item) {
                 Some(verdict) => verdict,
                 None => stats::time_kernel(|| self.kernel_check_term(psi, Layer::Code, ctx, body, ty, level)),
             };
-            verdict.map_err(|e| self.kernel_error(name, span, e))?;
+            verdict.map_err(|e| {
+                let refusal = self.kernel_refusal(name, span, e, psi, Layer::Code, ctx, Some(body), ty, level);
+                self.withheld_note(refusal, psi, ty, Some(body))
+            })?;
             let unsealed = recording.finish();
-            if let Some(g) = self.gate.as_ref() {
+            if let Some(g) = self.policy.gate.as_ref() {
                 g.accepted(psi, &item, &unsealed);
             }
         } else {
@@ -4418,7 +5122,7 @@ impl Elaborator {
             // `accepted` travels with it and is replayed at the join.
             drop(item);
             stats::count(stats::Counter::DeclsGated);
-            self.kernel_pool.submit(pool::Deferred {
+            self.pass.kernel_pool.submit(pool::Deferred {
                 name: name.to_string(),
                 span,
                 psi: Rc::clone(psi),
@@ -4429,7 +5133,7 @@ impl Elaborator {
                 opaque,
                 layer: Layer::Code,
                 lands_in_psi: true,
-                fuel: self.fuel,
+                fuel: self.policy.fuel,
                 unsealed: recording.finish(),
                 row: stats::current_item(),
             });
@@ -4489,7 +5193,7 @@ impl Elaborator {
             // Its context is checked here too: a declaration's own gate never
             // sees a nonempty one.
             let at = Rc::new(world.clone());
-            stats::time_kernel(|| typing::check_local_ctx(&at, 0, Layer::Prog, &gamma, self.fuel))
+            stats::time_kernel(|| typing::check_local_ctx(&at, 0, Layer::Prog, &gamma, self.policy.fuel))
                 .map_err(|e| self.kernel_error(&format!("{name}#aux{j}"), span, e))?;
             self.gate_bodied(&at, &format!("{name}#aux{j}"), span, &gamma, &ty, &slot.level, &body, !slot.transparent)?;
             let binding = GlobalBinding::Tm {
@@ -4508,6 +5212,45 @@ impl Elaborator {
             }));
         }
         Ok((sigma, aux, Some(Rc::new(world))))
+    }
+
+    /// `cx` with every binder's type in the emission spelling
+    /// ([`Self::annotation_type`]), the context a lifted proof or a named
+    /// value is committed in. The kernel types the body's binders by the
+    /// spellings the declaration emitted (its statement's `Π` domains, its
+    /// `λ` annotations), and a slot reference `u^{id}` checks each of those
+    /// binders against the slot's own context: stored as the elaborator
+    /// keeps it, with a coded declaration inline, every reference converted
+    /// an inline copy of `X86Profile` or `Stack<M>` against its `El` name,
+    /// once per binder per tactic call (`omega`'s atom list is one such
+    /// reference per call). Respelled, the two are one syntax and the
+    /// conversion is the reflexivity shortcut.
+    pub(crate) fn emitted_cx(&self, cx: &Cx) -> Cx {
+        let n = cx.gamma.len();
+        let scope = self.psi.bindings.len();
+        let mut entries = Vec::with_capacity(n);
+        let mut changed = false;
+        for i in 0..n {
+            let entry = cx.gamma.entries.get(i).expect("a binder in range");
+            let key = (Rc::as_ptr(&entry.ty) as usize, i, scope);
+            let known = self.attempt.emitted_entries.borrow().get(&key).map(|(_, ty)| Rc::clone(ty));
+            let ty = match known {
+                Some(ty) => ty,
+                None => {
+                    let ty = self.emit_ty(&cx.prefix(i), &entry.ty, 0).map_or_else(|| Rc::clone(&entry.ty), Rc::new);
+                    self.attempt.emitted_entries.borrow_mut().insert(key, (Rc::clone(&entry.ty), Rc::clone(&ty)));
+                    ty
+                }
+            };
+            changed |= !Rc::ptr_eq(&ty, &entry.ty);
+            entries.push(heather_kernel::term::CtxEntry { ty, level: entry.level.clone() });
+        }
+        if !changed {
+            return cx.clone();
+        }
+        let mut out = cx.clone();
+        out.gamma = LocalCtx::from_vec(cx.gamma.base, entries);
+        out
     }
 
     // -- goals --------------------------------------------------------------
@@ -4618,7 +5361,7 @@ impl Elaborator {
     /// [`Self::delta_psi`] and goals still need no real binding for the rest
     /// of elaboration.
     pub(crate) fn goal_psi(&self) -> GlobalCtx {
-        self.attempt.goal_arena.world(&self.psi, &self.meta_pushed.borrow())
+        self.attempt.goal_arena.world(&self.psi, &self.scope.meta_pushed.borrow())
     }
 
     /// The substitution discharging the whole goal block: `entries[k]` is the
@@ -4632,13 +5375,28 @@ impl Elaborator {
     // -- types --------------------------------------------------------------
 
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
+        // A class over a type constructor, `Bind<Option>`, is its record
+        // applied to the constructor (issues/higher-kinded-classes.md).
+        if let Some(t) = self.kinded_class_ty(ty) {
+            return self.elab_ty(cx, &t);
+        }
         match &ty.kind {
+            // A generated declaration's type (`host::Leaves::Member`).
+            TyKind::Named { name, .. } if let Some(k) = host::leaf_index(name) => self.host_ty_leaf(cx, k, ty.span),
             // An expression in type position: infer it, require its type to be
             // a universe, and decode (docs/surface-universe.md §4). `El` is the
             // kernel's own decoding, so nothing here is a coercion — the term
             // *is* a code, and `El ⌜T⌝ ⇝ T` makes a written type and a decoded
             // one convertible rather than merely equal-looking.
             TyKind::OfExpr(e) => self.expr_elab().lower_expression_type(self, cx, e, ty.span),
+            // A `def`'s type, inferred from its value
+            // (docs/value-definitions-design.md §2.2). `check_decl` reads the
+            // value once for both; this is every other reading of the stored
+            // declaration.
+            TyKind::TypeOf(e) => {
+                let (_, ty, level) = self.elab_infer(cx, e)?;
+                Ok((ty, level))
+            }
             _ => self
                 .expr_elab()
                 .type_form(self, cx, ty)
@@ -4708,11 +5466,70 @@ impl Elaborator {
         skel: Option<&Skel>,
         capture_slots: bool,
     ) -> R<Term> {
-        let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
+        if let Some((input, discards)) = binding::generated(e) {
+            return self
+                .elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
+                .map_err(|error| self.restate_bind_error(cx, input, discards, error));
+        }
+        if binding::generated_loop(e) {
+            return self
+                .elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
+                .map_err(|error| self.restate_loop_error(cx, e, Some(expected), error));
+        }
+        self.elab_check_skel_slots_written(cx, e, expected, lvl, hint, skel, capture_slots)
+    }
+
+    /// [`Self::elab_check_skel_slots`], below the binding-statement restatement.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_check_skel_slots_written(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+        lvl: &Level,
+        hint: Option<(&str, &str)>,
+        skel: Option<&Skel>,
+        capture_slots: bool,
+    ) -> R<Term> {
+        let _depth = expr::ExprDepthGuard::enter(&self.scope.expr_depth, e.span)?;
+        // An arm body under a constant-motive probe (`matching::probe_arm_type`):
+        // inferred, and its type recorded when it lives outside the arm. An
+        // arm that names nothing lets the probe go on to the next one.
+        if let Some(probe) = cx.arm_type_probe.as_ref()
+            && *expected == matching::arm_probe_marker()
+        {
+            let probe = Rc::clone(probe);
+            let mut icx = cx.clone();
+            icx.arm_type_probe = None;
+            let found = self.elab_infer(&icx, e).ok().and_then(|(_, ty, level)| {
+                let extra = cx.gamma.len().checked_sub(probe.base)?;
+                let ty = matching::strengthen_past(&ty, &cx.gamma, extra)?;
+                let marked = matching::mentions_marker(&ty)
+                    || matching::mentions_marker(&Type::Unit { level: level.clone() });
+                (!marked).then_some((ty, level))
+            });
+            return match found {
+                Some(found) => {
+                    if let Ok(mut slot) = probe.found.lock() {
+                        *slot = Some(found);
+                    }
+                    err("a constant motive was found; the probe stops here", e.span)
+                }
+                None => Ok(Term::Zero),
+            };
+        }
+        self.refuse_value_call(cx, e)?;
         // A corecursive body's two positions, a node and a child
         // (docs/codata-elaborator-design.md §5.2).
         if let Some(site) = cx.corec.as_ref()
             && let Some(t) = self.corec_check(cx, site, e, expected, lvl)?
+        {
+            return Ok(t);
+        }
+        // A friend's body over a corecursive definition's free carrier
+        // (docs/codata-elaborator-design.md §5.5).
+        if let Some(mode) = cx.friend.as_ref()
+            && let Some(t) = self.friend_check(cx, mode, e, expected, lvl)?
         {
             return Ok(t);
         }
@@ -4733,8 +5550,7 @@ impl Elaborator {
             return Ok(t.clone());
         }
         if capture_slots && has_free_slots(e) {
-            let probe = self.clone();
-            match probe.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false) {
+            match self.probe(|| self.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false)) {
                 Ok(_) => {
                     // Every slot found a smaller function-typed checking
                     // position. Repeat on the real elaborator; the probe's
@@ -4753,11 +5569,10 @@ impl Elaborator {
                     for_each_free_slot(e, &mut |_, span| slots.push(span));
                     let mut nested = Vec::new();
                     for target in slots {
-                        let targeted = self.clone();
-                        targeted.attempt.slot_probe_target.set(Some(target));
-                        match targeted
-                            .elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false)
-                        {
+                        match self.probe(|| {
+                            self.attempt.slot_probe_target.set(Some(target));
+                            self.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false)
+                        }) {
                             Ok(_) => nested.push(target),
                             Err(ElabError::ArgSlotEscape { span }) if span == target => {}
                             Err(other) => return Err(other),
@@ -4773,16 +5588,16 @@ impl Elaborator {
             }
         }
         // A written motive in checking position has a mechanically testable
-        // redundancy criterion: clone the elaborator, remove just the motive,
+        // redundancy criterion: in a probe ([`Self::probe`]), remove just the motive,
         // and ask the ordinary goal-derived route to check the same match
-        // against the same expected type. The clone makes goals, warnings,
+        // against the same expected type. The probe makes goals, warnings,
         // fallback provenance, derived instances, and fuel bookkeeping
         // transactional; no declaration is duplicated — but the match is
         // elaborated twice and kernel-checked once more, paid in full when
         // the motive turns out to be required, which is every motive left
         // in a library that adopted the lint's findings. So it is a
         // review-mode lint (`set_review_lints`), not part of a check.
-        if self.review_lints
+        if self.policy.review_lints
             && let ExprKind::Match {
             generated: false,
             scrut,
@@ -4801,25 +5616,19 @@ impl Elaborator {
                 unreachable!()
             };
             *omitted_motive = None;
-            let probe = self.clone();
             // One probe per written motive: the matches nested under this
             // one are elaborated here with their motives kept and are probed
             // by the real pass below, once each, not once per enclosing
             // probe (`attempt.rs`).
-            probe.attempt.motive_redundancy_probe.set(true);
-            if let Ok(term) =
-                probe.elab_check_skel_slots(cx, &omitted, expected, lvl, hint, skel, capture_slots)
-                && probe
-                    .kernel_check_term(
-                        &probe.goal_psi(),
-                        Layer::Prog,
-                        &cx.gamma,
-                        &term,
-                        expected,
-                        lvl,
-                    )
-                    .is_ok()
-            {
+            let redundant = self.probe(|| {
+                self.attempt.motive_redundancy_probe.set(true);
+                self.elab_check_skel_slots(cx, &omitted, expected, lvl, hint, skel, capture_slots)
+                    .is_ok_and(|term| {
+                        self.kernel_check_term(&self.goal_psi(), Layer::Prog, &cx.gamma, &term, expected, lvl)
+                            .is_ok()
+                    })
+            });
+            if redundant {
                 self.emit_lint_with_fix(
                     Lint::RedundantMatchMotive,
                     format!(
@@ -4842,6 +5651,9 @@ impl Elaborator {
         // (docs/bare-symbol-checking-carrier-design.md §3.1). The expected type
         // is already in hand one line above the rewrite, and has been since the
         // operators round — nothing is plumbed from a call site.
+        if let Some(rewritten) = self.owner_rewrite(cx, e)? {
+            return self.elab_check_skel_slots(cx, &rewritten, expected, lvl, hint, skel, capture_slots);
+        }
         if let Some(rewritten) = self.op_rewrite(cx, e, Some(expected))? {
             return self.elab_check_skel_slots(
                 cx,
@@ -4921,6 +5733,7 @@ impl Elaborator {
                 // declaration, with `split_all` having reported success.
                 match goal_combinators::next_step(self, cx, expected, body, e.span) {
                     goal_combinators::Step::Refuted(expr)
+                    | goal_combinators::Step::Closed(expr)
                     | goal_combinators::Step::Intro(expr)
                     | goal_combinators::Step::Conjoin(expr) => {
                         self.elab_check_skel_slots(cx, &expr, expected, lvl, hint, skel, capture_slots)
@@ -4930,10 +5743,20 @@ impl Elaborator {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
                         let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
                         goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &goal, lvl, "case split's motive, at its scrutinee,", e.span)?;
-                        self.elab_convoy(
-                            cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
-                            scrut, &ty, &level, split.motive, lvl, &goal, e.span,
-                        )
+                        match split.dependent {
+                            None => self.elab_convoy(
+                                cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
+                                scrut, &ty, &level, split.motive, lvl, &goal, e.span,
+                            ),
+                            Some(dependent) => {
+                                let refl = Term::Refl { level: level.clone(), ty: Rc::new(ty.clone()), tm: Rc::new(scrut.clone()) };
+                                let at = dependent.inst_top_above(0, 1, &scrut).inst_top(0, &refl);
+                                goal_combinators::restates(self, cx, &at, &goal, lvl, "case split's motive, at its scrutinee and `refl`,", e.span)?;
+                                self.elab_convoy_dependent(
+                                    cx, &split.equation, &split.arms, scrut, &ty, &level, split.motive, dependent, lvl, &goal, e.span,
+                                )
+                            }
+                        }
                     }
                     goal_combinators::Step::Leaf(goal) => {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
@@ -5004,14 +5827,45 @@ impl Elaborator {
                 // in the matching lambdas, and the recursor is applied back to
                 // the parameters. Only here, in checking position — the goal
                 // is what there is to generalize.
+                //
+                // A local scrutinee refines the hypotheses that mention it the
+                // same way (issues/elab-match-refines-hypothesis-kernel-
+                // rejects.md): they join the generalized positions, so each
+                // arm sees them at its constructor.
+                // Only the `match` that is the recursion generalizes: a case
+                // split on a parameter every self-call passes unchanged
+                // leaves the enclosing guard standing (`guard_param`), and
+                // its arms' calls vary nothing of its own.
                 let dec = recursion::descends_on_param(cx, &scrut_t);
-                let positions = match dec {
-                    Some(dec) => self.varying_params(cx, arms, dec),
-                    None => Vec::new(),
+                let top = self.top_guard(e.span);
+                let guard = top.or_else(|| recursion::guard_param(cx, &scrut_t, arms));
+                let mut positions = match (top, guard) {
+                    // A default attempt generalizes what the calls vary, as
+                    // the plain lowering does: a parameter every call passes
+                    // unchanged keeps the step a fold over values, which the
+                    // kernel's run folds read (`eval/runs.rs`); generalizing
+                    // it made `addr(m, n)`'s step a fold over functions. Too
+                    // few positions refuse the call, and the plain lowering
+                    // answers. A fallback generalizes every parameter.
+                    (Some(dec), _) if self.scope.recursion_at_top.is_some_and(|(_, _, all)| all) => {
+                        Self::top_positions(cx, dec)
+                    }
+                    (Some(dec), _) => self.varying_params(cx, arms, dec),
+                    (None, Some(dec)) => self.varying_params(cx, arms, dec),
+                    (None, None) => Vec::new(),
                 };
-                if let Some(dec) = dec
-                    && !positions.is_empty()
-                {
+                // With `match h:` the convoy's equation is stated about the
+                // computed scrutinee itself, and an arm that passes `h` to a
+                // hypothesis needs that hypothesis about the same term, so
+                // neither is refined (design §5.1).
+                let refines = eqbind.is_none() || matches!(scrut_t, Term::Var(_));
+                for p in refines.then(|| self.refined_hypotheses(cx, arms, &scrut_t, dec, expected)).unwrap_or_default() {
+                    if !positions.contains(&p) {
+                        positions.push(p);
+                    }
+                }
+                positions.sort_unstable();
+                if !positions.is_empty() {
                     let (gen_ty, gen_lvl) =
                         self.generalize_expected(cx, &positions, expected, lvl);
                     let motive = matching::synthesize_motive(
@@ -5020,52 +5874,91 @@ impl Elaborator {
                     let arms = self.wrap_arms(cx, arms, &positions);
                     let positions = Rc::new(positions);
                     let mut gcx = cx.clone();
-                    gcx.generalized = Some(Rc::new(generalize::Generalization {
-                        dec,
-                        positions: Rc::clone(&positions),
-                        span: e.span,
-                    }));
-                    let elim = match eqbind {
+                    if let Some(dec) = guard {
+                        gcx.generalized = Some(Rc::new(generalize::Generalization {
+                            dec,
+                            positions: Rc::clone(&positions),
+                            span: e.span,
+                        }));
+                    }
+                    let run = |mcx: &Cx, eq: Option<&str>| match eq {
                         None => self.elab_match(
-                            &gcx,
+                            mcx,
                             *form,
                             *generated,
                             &arms,
-                            scrut_t,
+                            scrut_t.clone(),
                             &scrut_ty,
                             &scrut_lvl,
-                            motive,
-                            gen_lvl,
+                            motive.clone(),
+                            gen_lvl.clone(),
                             e.span,
-                        )?,
+                        ),
                         Some(h) => self.elab_convoy(
-                            &gcx, *form, *generated, h, &arms, scrut_t, &scrut_ty, &scrut_lvl,
-                            motive, &gen_lvl, &gen_ty, e.span,
-                        )?,
+                            mcx, *form, *generated, h, &arms, scrut_t.clone(), &scrut_ty,
+                            &scrut_lvl, motive.clone(), &gen_lvl, &gen_ty, e.span,
+                        ),
+                    };
+                    let elim = match eqbind {
+                        None => self.elab_match_pending(&gcx, &scrut_ty, &run)?,
+                        Some(h) => run(&gcx, Some(h))?,
                     };
                     return Ok(self.instantiate_generalized(cx, elim, gen_ty, &positions));
+                }
+                // An alias whose type is about the scrutinee rides along as a
+                // convoy, so each arm sees it at its constructor (design §7.2).
+                let dependents = if eqbind.is_none() {
+                    self.dependent_aliases(cx, arms, &scrut_t)
+                } else {
+                    Vec::new()
+                };
+                if !dependents.is_empty() {
+                    let (gen_ty, gen_lvl) = self.alias_generalized(&dependents, expected, lvl);
+                    let motive = matching::synthesize_motive(
+                        self, cx, &scrut_t, &scrut_ty, &scrut_lvl, &gen_ty, e.span,
+                    );
+                    let arms = self.wrap_alias_arms(arms, &dependents);
+                    let run = |mcx: &Cx, eq: Option<&str>| match eq {
+                        None => self.elab_match(
+                            mcx, *form, *generated, &arms, scrut_t.clone(), &scrut_ty, &scrut_lvl,
+                            motive.clone(), gen_lvl.clone(), e.span,
+                        ),
+                        Some(h) => self.elab_convoy(
+                            mcx, *form, *generated, h, &arms, scrut_t.clone(), &scrut_ty,
+                            &scrut_lvl, motive.clone(), &gen_lvl, &gen_ty, e.span,
+                        ),
+                    };
+                    let elim = match eqbind {
+                        None => self.elab_match_pending(cx, &scrut_ty, &run)?,
+                        Some(h) => run(cx, Some(h))?,
+                    };
+                    return Ok(self.instantiate_aliases(cx, elim, gen_ty, &dependents));
                 }
                 let motive = matching::synthesize_motive(
                     self, cx, &scrut_t, &scrut_ty, &scrut_lvl, expected, e.span,
                 );
-                let Some(h) = eqbind else {
-                    return self.elab_match(
-                        cx,
+                let run = |mcx: &Cx, eq: Option<&str>| match eq {
+                    None => self.elab_match(
+                        mcx,
                         *form,
                         *generated,
                         arms,
-                        scrut_t,
+                        scrut_t.clone(),
                         &scrut_ty,
                         &scrut_lvl,
-                        motive,
+                        motive.clone(),
                         lvl.clone(),
                         e.span,
-                    );
+                    ),
+                    Some(h) => self.elab_convoy(
+                        mcx, *form, *generated, h, arms, scrut_t.clone(), &scrut_ty, &scrut_lvl,
+                        motive.clone(), lvl, expected, e.span,
+                    ),
                 };
-                self.elab_convoy(
-                    cx, *form, *generated, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl,
-                    expected, e.span,
-                )
+                match eqbind {
+                    None => self.elab_match_pending(cx, &scrut_ty, &run),
+                    Some(h) => run(cx, Some(h)),
+                }
             }
             // `absurd(p)`: from an equation between distinct constructors,
             // anything — so it needs the expected type
@@ -5125,7 +6018,7 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                self.expr_elab().check_unit_form(self, cx, expected, e.span)
+                self.expr_elab().check_unit_form(self, cx, expected, lvl, e.span)
             }
             // `decide` — proof by reflection at a decided goal
             // (docs/reflection-through-decide-instances-design.md §4). Sugar
@@ -5234,6 +6127,32 @@ impl Elaborator {
                 }
                 self.elab_ring(cx, args, expected, lvl, e.span)
             }
+            // `linarith` proves a linear order goal at an ordered field from
+            // the facts, up to its `≈` (docs/linarith-design.md); `nlinarith`
+            // multiplies the facts too (docs/nonlinear-arithmetic-design.md).
+            ExprKind::Var(name)
+                if matches!(name.as_str(), "linarith" | "nlinarith")
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                self.elab_linarith(cx, &[], expected, lvl, e.span, name == "nlinarith")
+            }
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if let ExprKind::Var(name) = &head.kind
+                && matches!(name.as_str(), "linarith" | "nlinarith")
+                && !self.shadowed(cx, name)
+                && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                if !named.is_empty() {
+                    return err(format!("`{name}` takes its facts positionally"), e.span);
+                }
+                self.elab_linarith(cx, args, expected, lvl, e.span, name == "nlinarith")
+            }
             // `positivity` is `:= infer`'s proposition search run as a tactic,
             // with `omega` as the fallback at every subgoal the evidence rules
             // cannot close (docs/positivity-evidence-design.md §10).
@@ -5273,8 +6192,7 @@ impl Elaborator {
             ExprKind::Var(name)
                 if (name == "omega"
                     || name == "__omega_diseq_branch"
-                    || name == "__omega_connective_branch"
-                    || name == "__cutsat_linear_branch")
+                    || name == "__omega_connective_branch")
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
@@ -5311,7 +6229,7 @@ impl Elaborator {
                 if self.key_of("bitvec_omega::add_form").is_none() {
                     return err("`bv_omega` requires its lemmas; add `import bitvec_omega;`", e.span);
                 }
-                let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
+                let _certificate_scope = omega_cert::CertificateScope::enter(&self.scope.omega_depth);
                 let generate = |careful| {
                     bv_omega::generate(self, cx, expected, careful).map_err(|detail| ElabError::Elab {
                         msg: format!("`bv_omega` got stuck: {detail}"),
@@ -5325,14 +6243,14 @@ impl Elaborator {
                         span: e.span,
                     })
                 };
-                let mark = (self.warnings.borrow().len(), self.attempt.goal_arena.mark());
+                let mark = (self.pass.warnings.borrow().len(), self.attempt.goal_arena.mark());
                 let mut checked = self.generated_scope(|me| me.elab_check(cx, &parse(&generated.source)?, expected, lvl));
                 // The first proof is optimistic (a goal read off a word's
                 // fact, facts restated untried); where it is refused, the
                 // careful one is the answer, and its failure the diagnosis.
                 // The refused attempt's named atom lists go with it.
                 if checked.is_err() && generated.retry {
-                    self.warnings.borrow_mut().truncate(mark.0);
+                    self.pass.warnings.borrow_mut().truncate(mark.0);
                     self.attempt.goal_arena.rollback(mark.1);
                     generated = generate(true)?;
                     checked = self.generated_scope(|me| me.elab_check(cx, &parse(&generated.source)?, expected, lvl));
@@ -5345,7 +6263,7 @@ impl Elaborator {
                     Ok(term) => Ok(self
                         .attempt
                         .goal_arena
-                        .allocate_proved(cx, expected.clone(), lvl.clone(), term.clone(), e.span)
+                        .allocate_proved(&self.emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
                         .unwrap_or(term)),
                     Err(error) => {
                         // Name the side condition that failed, not only the goal
@@ -5394,12 +6312,21 @@ impl Elaborator {
             // `String`, and `CharLiteral` / `StringLiteral` at every other
             // carrier.
             ExprKind::Char(c) => self.elab_char_check(cx, *c, e, expected, lvl),
+            ExprKind::Scaled(lit) => self.elab_scaled_check(cx, lit, e, expected, lvl),
             ExprKind::Str(text) => self.elab_string_check(cx, text, e, expected, lvl),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
             // a readability aid and must be convertible with it
             // (docs/surface-function-types.md §5.2).
+            // A type constructor written as a λ abstracting a declaration's
+            // declared slot takes the canonical spelling the unifier learns
+            // (docs/lambda-carrier-instances-design.md §7.3).
+            ExprKind::Lam { binders, body }
+                if let Some(term) = self.check_slot_lambda(cx, binders, body, expected, e.span)? =>
+            {
+                Ok(term)
+            }
             ExprKind::Lam { binders, body } => self
                 .expr_elab()
                 .check_lambda(self, cx, binders, body, expected, lvl, skel, e.span),
@@ -5714,7 +6641,7 @@ impl Elaborator {
         let mut next = 0;
         for fact in facts {
             if let ExprKind::Var(name) = &fact.kind {
-                if cx.names.contains(name) || cx.aliases.iter().any(|alias| alias.name == *name) {
+                if cx.names.contains(name) || cx.aliases.iter_inner().any(|alias| alias.name == *name) {
                     continue;
                 }
             }
@@ -5722,7 +6649,7 @@ impl Elaborator {
             let name = loop {
                 let name = format!("__omega_fact_{next}");
                 next += 1;
-                if !inner.names.contains(&name) && !inner.aliases.iter().any(|alias| alias.name == name) {
+                if !inner.names.contains(&name) && !inner.aliases.iter_inner().any(|alias| alias.name == name) {
                     break name;
                 }
             };
@@ -5737,16 +6664,17 @@ impl Elaborator {
     /// writes a certificate and this checks it like any other source.
     /// `name` is `omega` or one of the certificate's own branch markers.
     fn elab_omega(&self, cx: &Cx, name: &str, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
-        if self.omega_depth.get() == 0 && self.key_of("omega::nat_le_of_not_not_le").is_none() {
+        if self.scope.omega_depth.get() == 0 && self.key_of("omega::nat_le_of_not_not_le").is_none() {
             return err(
                 "`omega` requires its certificate library; add `import omega;`",
                 span,
             );
         }
-        let outer_depth = self.omega_depth.get();
+        let outer_depth = self.scope.omega_depth.get();
+        let written_cx = cx;
         let source_cx = omega_cert::source_context(cx);
         let cx = source_cx.as_ref();
-        let _certificate_scope = omega_cert::CertificateScope::enter(&self.omega_depth);
+        let _certificate_scope = omega_cert::CertificateScope::enter(&self.scope.omega_depth);
         omega_cert::reset_phases();
         let reconstruct_guard = stats::guard(stats::Timer::OmegaReconstruct);
         let mut cert = omega_cert::reconstruct(
@@ -5755,11 +6683,16 @@ impl Elaborator {
             expected,
             name != "__omega_diseq_branch",
             name != "__omega_connective_branch",
-            name != "__cutsat_linear_branch",
+            true,
         )
-        .map_err(|detail| ElabError::Elab {
-            msg: format!("`omega` got stuck: {detail}"),
-            span: span,
+        .map_err(|detail| {
+            // Stuck: an arm equation not yet in scope might be the missing
+            // fact (docs/dependent-match-compiler-design.md §4.3.1).
+            self.want_match_equations(written_cx);
+            ElabError::Elab {
+                msg: format!("`omega` got stuck: {detail}"),
+                span: span,
+            }
         })?;
         let reconstruct_ns = reconstruct_guard.finish();
         let mut phases = omega_cert::phases();
@@ -5794,7 +6727,7 @@ impl Elaborator {
                 let term = self
                     .attempt
                     .goal_arena
-                    .allocate_transparent(cx, ty.clone(), level.clone(), atoms.clone());
+                    .allocate_transparent(&self.emitted_cx(cx), ty.clone(), level.clone(), atoms.clone());
                 let term = match term {
                     goals::Named::Slot(reference) => reference,
                     goals::Named::Inline => atoms,
@@ -5811,14 +6744,43 @@ impl Elaborator {
                     level,
                     skel: None,
                     spliced: None,
+                    shifted: Default::default(),
                 }));
                 named = inner;
                 &named
             }
             None => cx,
         };
+        // A guard round binds the guards it reads at their unfolding, and
+        // settles the facts it reads for the omegas inside it.
+        let guarded;
+        let guard_round = cert.guards.take();
+        let cx = match &guard_round {
+            Some(round) => {
+                let mut inner = cx.clone();
+                for alias in &round.aliases {
+                    inner.aliases.push(Rc::new(Alias {
+                        name: alias.name.clone(),
+                        depth: cx.names.len(),
+                        term: Rc::clone(&alias.term),
+                        ty: alias.ty.clone(),
+                        level: alias.level.clone(),
+                        skel: None,
+                        spliced: None,
+                        shifted: Default::default(),
+                    }));
+                }
+                self.scope.omega_settled_guards.borrow_mut().push(round.settles.clone());
+                guarded = inner;
+                &guarded
+            }
+            None => cx,
+        };
         let checked = self
             .generated_scope(|me| me.elab_check(cx, &cert.expr, expected, lvl));
+        if guard_round.is_some() {
+            self.scope.omega_settled_guards.borrow_mut().pop();
+        }
         phases.check_ns = check_guard.finish();
         let term = checked.map_err(|error| ElabError::Elab {
             msg: match &cert.atoms {
@@ -5828,7 +6790,7 @@ impl Elaborator {
             span: span,
         })?;
         cert.report.phases = phases;
-        self.omega_reports.borrow_mut().push(cert.report);
+        self.pass.omega_reports.borrow_mut().push(cert.report);
         Ok(term)
     }
 
@@ -5956,6 +6918,13 @@ impl Elaborator {
     /// two types that might yet convert is worse than no message. Only
     /// `NotConvertible`, which is the decided answer, is reported.
     fn note_check_mismatch(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span) {
+        self.note_check_clash(cx, got, expected, lvl, span, None)
+    }
+
+    /// [`Self::note_check_mismatch`] for an argument whose type disagreed
+    /// with an implicit already solved: the clash is said beside the
+    /// mismatch if the gate refuses (issues/unifier-checked-assignment.md).
+    fn note_check_clash(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span, clash: Option<application::SlotClash>) {
         // **Recording is not probing** (`issues/elab-diagnostic-probe-cost.md`).
         // The conversion below used to run here, on every checking site of
         // every declaration, to find out whether there was anything to say —
@@ -5974,10 +6943,11 @@ impl Elaborator {
         stats::count(stats::Counter::DiagCandidates);
         self.attempt.check_notes.borrow_mut().push(CheckNote {
             span,
-            cx: cx.clone(),
+            cx: Rc::new(cx.clone()),
             got: got.clone(),
             expected: expected.clone(),
             level: lvl.clone(),
+            clash,
         });
     }
 
@@ -6000,6 +6970,7 @@ impl Elaborator {
             got,
             expected,
             level,
+            clash,
         } = note;
         if self
             .goal_oracle()
@@ -6041,8 +7012,10 @@ impl Elaborator {
         let want_s = self.display_type_clean(cx, expected);
         let note = match (got_s, want_s) {
             (Some(g), Some(w)) if g != w => MismatchNote::Spelled(format!(
-                "this has type `{g}`, but `{w}` is expected here{}",
+                "this has type `{g}`, but `{w}` is expected here{}{}{}",
+                clash.as_ref().map(|c| self.slot_clash_note(cx, c)).unwrap_or_default(),
                 self.opaque_equation_note(cx, got, expected),
+                self.cast_help(cx, got, expected, *span),
             )),
             (Some(g), Some(_)) => MismatchNote::Located(format!(
                 "this has type `{g}` where a type that displays the same is expected; \
@@ -6063,6 +7036,65 @@ impl Elaborator {
             ),
         };
         Some((note, *span))
+    }
+
+    /// What an argument's [`application::SlotClash`] adds to its mismatch:
+    /// the implicit, what an earlier argument solved it to, and what this
+    /// one's type says. Each value is spelled as the type it decodes to when
+    /// the slot is a type, as a term otherwise; one that does not spell
+    /// leaves the clause out rather than show a raw node.
+    fn slot_clash_note(&self, cx: &Cx, clash: &application::SlotClash) -> String {
+        let show = |t: &Rc<Term>| match &clash.dom {
+            Some(Type::Ty(level)) => {
+                self.display_type_clean(cx, &Type::El { level: level.clone(), tm: Rc::clone(t) })
+            }
+            _ => self.spell_term_clean(cx, t),
+        };
+        let name = &clash.name;
+        let first = show(&clash.first);
+        if clash.guessed {
+            // A guess is the head with its leading arguments, the last one
+            // abstracted ([`unification::Guesses`]); the reader who meant
+            // another argument writes the λ.
+            let guess = first.or_else(|| self.spell_type_constructor(cx, clash)).map(|f| format!(" as `{f}`")).unwrap_or_default();
+            let later = match clash.later.as_ref().and_then(show) {
+                Some(later) => format!(", and this argument's type would make it `{later}`"),
+                None => String::new(),
+            };
+            return format!(
+                "; `{name}` was guessed{guess}{later}: no argument fixes it, so it took the type's \
+                 constructor with every argument but the last, and abstracted the last. If \
+                 another argument is the one that varies, give `{name}` as a λ \
+                 (`{name} := λ A => …`)"
+            );
+        }
+        match (first, clash.later.as_ref().and_then(show)) {
+            (Some(first), Some(later)) if first != later => format!(
+                "; `{name}` was inferred as `{first}` from an earlier argument, \
+                 and this argument's type would make it `{later}`"
+            ),
+            _ => format!("; `{name}` was inferred from an earlier argument, and this argument's type disagrees"),
+        }
+    }
+
+    /// A solution at a type-constructor slot (`M: Type → Type`), spelled
+    /// applied to a hole: `Pair2<Nat>` as `Pair2<Nat, ·>`, the argument it
+    /// abstracted shown where it goes. `None` for any other slot type, or a
+    /// solution that does not spell.
+    fn spell_type_constructor(&self, cx: &Cx, clash: &application::SlotClash) -> Option<String> {
+        let Some(Type::Pi { dom_level, cod_level, dom, cod }) = &clash.dom else { return None };
+        let (Type::Ty(_), Type::Ty(level)) = (&**dom, &**cod) else { return None };
+        let mut hole = cx.clone();
+        hole.push("·".to_string(), (**dom).clone(), dom_level.clone());
+        let tm = Term::App {
+            fun: Rc::new(clash.first.shift_local(1)),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::new(dom.shift_local(1)),
+            cod: Rc::new(cod.shift_local_above(1, 1)),
+            arg: Rc::new(Term::Var(LocalVar(0))),
+        };
+        self.display_type_clean(&hole, &Type::El { level: level.clone(), tm: Rc::new(tm) })
     }
 
     /// The first recorded checking mismatch that has something to say, probed
@@ -6156,7 +7188,7 @@ impl Elaborator {
         stats::count(stats::Counter::DiagCandidates);
         self.attempt.refl_notes.borrow_mut().push(ReflNote {
             span,
-            cx: cx.clone(),
+            cx: Rc::new(cx.clone()),
             lhs: lhs.clone(),
             rhs: rhs.clone(),
             ty: ty.clone(),
@@ -6181,7 +7213,7 @@ impl Elaborator {
         } = note;
         let oracle = oracle::SemanticOracle::in_world(
             self.goal_psi(),
-            self.fuel.min(diagnostics::REFL_NOTE_FUEL),
+            self.policy.fuel.min(diagnostics::REFL_NOTE_FUEL),
         );
         if oracle.convert_term(&cx.gamma, Layer::Prog, lhs, rhs, ty, level)
             != Err(ConvError::NotConvertible)
@@ -6221,7 +7253,7 @@ impl Elaborator {
     fn opaque_equation_note(&self, cx: &Cx, got: &Type, expected: &Type) -> String {
         let oracle = oracle::SemanticOracle::in_world(
             self.goal_psi(),
-            self.fuel.min(diagnostics::REFL_NOTE_FUEL),
+            self.policy.fuel.min(diagnostics::REFL_NOTE_FUEL),
         );
         let ends: Vec<&Term> = [got, expected]
             .into_iter()
@@ -6379,6 +7411,21 @@ impl Elaborator {
     /// other arm ignores it; inference stays inference, and this is a hint
     /// for one hook rather than a second checking mode.
     fn elab_infer_at(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        if let Some((input, discards)) = binding::generated(e) {
+            return self
+                .elab_infer_at_written(cx, e, expected)
+                .map_err(|error| self.restate_bind_error(cx, input, discards, error));
+        }
+        if binding::generated_loop(e) {
+            return self
+                .elab_infer_at_written(cx, e, expected)
+                .map_err(|error| self.restate_loop_error(cx, e, expected, error));
+        }
+        self.elab_infer_at_written(cx, e, expected)
+    }
+
+    /// [`Self::elab_infer_at`], below the binding-statement restatement.
+    fn elab_infer_at_written(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
         if let Some(receiver) = cx.dot_receiver.as_ref().and_then(|r| r.inference(cx, e)) {
             if let Some(result) = receiver.get() {
                 // A failed inference must still be allowed to check against
@@ -6397,7 +7444,35 @@ impl Elaborator {
         self.elab_infer_uncached(cx, e, expected)
     }
 
+    /// `x()` where `x` is a `def`: a value is used as `x`, so the empty call
+    /// is refused rather than read as the value
+    /// (docs/value-definitions-design.md §2.3). A call with arguments applies
+    /// a function-typed value and is not this.
+    fn refuse_value_call(&self, cx: &Cx, e: &Expr) -> R<()> {
+        let ExprKind::App { head, args, named, .. } = &e.kind else { return Ok(()) };
+        if !args.is_empty() || !named.is_empty() {
+            return Ok(());
+        }
+        let ExprKind::Var(name) = &head.kind else { return Ok(()) };
+        if cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
+            || cx.selfref.as_ref().is_some_and(|s| s.matches(name))
+        {
+            return Ok(());
+        }
+        let NameRes::Found(module) = self.resolve_name(name) else { return Ok(()) };
+        let base = name.strip_prefix(&format!("{module}::")).unwrap_or(name);
+        if self.names.is_value(&module, base) {
+            return err(
+                format!("`{name}` is a value (a `def`), not a function: write `{name}`, without `()`"),
+                e.span,
+            );
+        }
+        Ok(())
+    }
+
     fn elab_infer_uncached(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        self.refuse_value_call(cx, e)?;
         if let ExprKind::App { head, .. } = &e.kind {
             if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::BY_TACTIC) {
                 return err(
@@ -6420,8 +7495,142 @@ impl Elaborator {
                 e.span,
             );
         }
+        if let Some(condition) = lowered_condition(e) {
+            return self.elab_condition(cx, e, &condition, expected);
+        }
         let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
         Ok((self.reduced_decision(cx, e, term), ty, level))
+    }
+
+    /// An `if`'s (or a `while`'s) condition, which the parser lowered to
+    /// `decide_bit<c>()` (`decide<c>()` with an evidence binder) before any
+    /// type was known (issues/bool-conditions-and-literals.md). The
+    /// condition's type picks the reading:
+    ///
+    /// - a **proposition**: its `Decide` instance's bit, as always — this
+    ///   reading is tried first and is the whole cost when it succeeds;
+    /// - a **`Bool`**: the Bool itself. `decide_bit<b.IsTrue()>()` is `b` by
+    ///   the `IsTrue` instance's own `bit := b`, so `if b` is the match on `b`
+    ///   that the frontends and `rt` read, with nothing to unfold; with
+    ///   evidence (`if h: b`) it is `decide<b.IsTrue()>()`, so `h: b.IsTrue()`;
+    /// - a **connective mixing the two** (`b ∧ n = 0`, `(n = 0) && b`): the
+    ///   proposition with each `Bool` operand read as `b.IsTrue()`
+    ///   ([`Self::mixed_condition`]).
+    ///
+    /// A condition that is none of these is refused naming the readings; one
+    /// that does not elaborate as a term, or is a type, keeps the proposition
+    /// reading's own error.
+    fn elab_condition(&self, cx: &Cx, e: &Expr, c: &Condition, expected: Option<&Type>) -> R<(Term, Type, Level)> {
+        let as_proposition = matching::MatchRollback::new(self);
+        let proposition_error = match self.elab_infer_written(cx, e, expected) {
+            Ok((term, ty, level)) => {
+                as_proposition.commit();
+                return Ok((self.reduced_decision(cx, e, term), ty, level));
+            }
+            Err(error) => error,
+        };
+        drop(as_proposition);
+        let mut not_bool = None;
+        if let Some(condition) = &c.expr {
+            match self.condition_type(cx, condition, !c.evidence) {
+                ConditionType::Bool(term, bool_ty) => {
+                    if !c.evidence {
+                        return Ok((term, bool_ty, Level::Zero));
+                    }
+                    // The Bool read as the proposition its `IsTrue` instance decides.
+                    let span = condition.span;
+                    let is_true = Ty { kind: TyKind::OfExpr(Box::new(is_true_of(condition))), span };
+                    return self.elab_infer_written(cx, &decide_call(is_true, true, span), expected).map_err(|_| proposition_error);
+                }
+                ConditionType::Other(got) => not_bool = Some((got, condition.span)),
+                ConditionType::Unread => {}
+            }
+        }
+        if let Some(mixed) = self.mixed_condition(cx, c, expected) {
+            return mixed;
+        }
+        if let Some((got, span)) = not_bool {
+            return err(
+                format!(
+                    "a condition is a proposition, decided by its `Decide` instance, or a `Bool`; \
+                     this is a value of `{got}`"
+                ),
+                span,
+            );
+        }
+        Err(proposition_error)
+    }
+
+    /// What a condition's expression elaborates to: a `Bool` (the term and
+    /// the elaborated `Bool` type), a value of another type (spelled), or
+    /// nothing the `Bool` reading can use (no elaboration, or a type). Every
+    /// trace of the attempt is rolled back unless `keep` and it is a `Bool`.
+    fn condition_type(&self, cx: &Cx, condition: &Expr, keep: bool) -> ConditionType {
+        let attempt = matching::MatchRollback::new(self);
+        let bool_ty = Ty { kind: TyKind::Named { name: "bool::Bool".to_string(), args: Vec::new() }, span: condition.span };
+        let Ok((term, ty, _)) = self.elab_infer(cx, condition) else { return ConditionType::Unread };
+        let Ok((bool_ty, _)) = self.elab_ty(cx, &bool_ty) else { return ConditionType::Unread };
+        let Ok(head) = self.whnf(cx, &ty, condition.span) else { return ConditionType::Unread };
+        if matches!(head, Type::Ty(_)) {
+            return ConditionType::Unread;
+        }
+        if self.goal_oracle().convert_type(&cx.gamma, Layer::Prog, &head, &bool_ty, &Level::Zero).is_err() {
+            return ConditionType::Other(self.display_type_clean(cx, &ty).unwrap_or_else(|| "this type".into()));
+        }
+        if keep {
+            attempt.commit();
+        }
+        ConditionType::Bool(term, bool_ty)
+    }
+
+    /// A connective whose operands are not all of one kind
+    /// (issues/mixed-bool-prop-condition.md): the condition read on the
+    /// proposition side, each `Bool` operand as `b.IsTrue()`, so
+    /// `if b ∧ n = 0` decides `b.IsTrue() ∧ n = 0`, whose bit is
+    /// `b && n.same(0)` by the instances, and `if h: b ∧ n = 0` binds the
+    /// evidence of both. The proposition side is the one that keeps evidence
+    /// available. A `Bool` subtree is one operand (`(a && b).IsTrue()`), and
+    /// `&&`, `||` and `!` between a proposition and a `Bool` are read as
+    /// `∧`, `∨` and `¬`. `None` when the condition is no connective or no
+    /// operand is a `Bool`: the readings already tried own the error.
+    ///
+    /// `&&` binds tighter than `=`, so `b && n = 0` is `(b && n) = 0`, never
+    /// this reading; it is written `b ∧ n = 0` or `b && (n = 0)`.
+    fn mixed_condition(&self, cx: &Cx, c: &Condition, expected: Option<&Type>) -> Option<R<(Term, Type, Level)>> {
+        condition_connective(&c.ty)?;
+        let mut bools = 0;
+        let proposition = self.mixed_operand(cx, &c.ty, true, &mut bools);
+        if bools == 0 {
+            return None;
+        }
+        let call = decide_call(proposition, c.evidence, c.ty.span);
+        let attempt = matching::MatchRollback::new(self);
+        let read = self.elab_infer_written(cx, &call, expected);
+        if read.is_ok() {
+            attempt.commit();
+        }
+        Some(read.map(|(term, ty, level)| (self.reduced_decision(cx, &call, term), ty, level)))
+    }
+
+    /// One operand of [`Self::mixed_condition`], rebuilt: a `Bool` as its
+    /// `IsTrue`, a connective over its rebuilt operands, anything else as
+    /// written. `root` is the whole condition, already known not to be a
+    /// `Bool`.
+    fn mixed_operand(&self, cx: &Cx, ty: &Ty, root: bool, bools: &mut usize) -> Ty {
+        if !root
+            && let Some(operand) = condition_expression(ty)
+            && let ConditionType::Bool(..) = self.condition_type(cx, &operand, false)
+        {
+            *bools += 1;
+            return Ty { kind: TyKind::OfExpr(Box::new(is_true_of(&operand))), span: ty.span };
+        }
+        match condition_connective(ty) {
+            Some((name, operands)) => {
+                let operands = operands.iter().map(|o| self.mixed_operand(cx, o, false, bools)).collect();
+                rebuild_connective(name, operands, ty.span)
+            }
+            None => ty.clone(),
+        }
     }
 
     /// `decide_bit<P>()` at a resolved instance, read as the instance's own
@@ -6450,7 +7659,7 @@ impl Elaborator {
     /// operand, itself an instance's bit) read the same way.
     fn instance_bit(&self, cx: &Cx, term: &Term) -> Option<Term> {
         let oracle = self.goal_oracle();
-        for reduct in oracle.term_reducts(&cx.gamma, term, 32) {
+        for reduct in oracle.unfold(&cx.gamma, term, Unfold::InstanceBit) {
             if crate::spelling::is_inj(&reduct) {
                 return Some(reduct);
             }
@@ -6484,7 +7693,7 @@ impl Elaborator {
     }
 
     fn elab_infer_written(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<(Term, Type, Level)> {
-        let _depth = expr::ExprDepthGuard::enter(&self.expr_depth, e.span)?;
+        let _depth = expr::ExprDepthGuard::enter(&self.scope.expr_depth, e.span)?;
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
         // (docs/operators-onto-classes-design.md §4).
@@ -6497,6 +7706,9 @@ impl Elaborator {
         // which is the whole of what "a bare symbol has no carrier" still means
         // (docs/bare-symbol-checking-carrier-design.md §5).
         if let Some(rewritten) = self.op_rewrite(cx, e, None)? {
+            return self.elab_infer_at(cx, &rewritten, expected);
+        }
+        if let Some(rewritten) = self.owner_rewrite(cx, e)? {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         if let ExprKind::App {
@@ -6595,6 +7807,7 @@ impl Elaborator {
             // the block contributes no term of its own, because a `let` is an
             // alias.
             ExprKind::Char(c) => self.elab_char_infer(cx, *c, e),
+            ExprKind::Scaled(lit) => self.elab_scaled_infer(cx, lit, e),
             ExprKind::Str(text) => self.elab_string_infer(cx, text, e),
             ExprKind::Block(block) => statements::infer_block(self, cx, block),
             ExprKind::RecordUpdate { base, fields } => {
@@ -6930,7 +8143,7 @@ impl Elaborator {
                         "the termination guard reads *which position* decreases, so a                          self-call's arguments stay where the declaration put them",
                         named,
                     )?;
-                    return recursion::elab_self_call(self, cx, args, *explicit, e.span);
+                    return self.self_call_noted(cx, n, args, *explicit, e.span);
                 }
                 let (name, t, ty, lvl, mask) = self.elab_ty_app(cx, callee, tyargs, head.span)?;
                 let params = self.params_of(&name);
@@ -7240,7 +8453,7 @@ impl Elaborator {
                     return self.infer_ctor(cx, &ind, i, args, e.span);
                 }
                 if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
-                    return recursion::elab_self_call(self, cx, args, *explicit, e.span);
+                    return self.self_call_noted(cx, name, args, *explicit, e.span);
                 }
                 // A *value* head — a local, or an alias. With a skeleton it
                 // applies with skeleton-directed insertion
@@ -7254,7 +8467,7 @@ impl Elaborator {
                 // a same-named *global*'s mask or hint table, which is the
                 // §4.2 params-passed-not-recovered rule (a local `f` must
                 // not borrow a global `f`'s metadata).
-                if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name)
+                if cx.names.iter_inner().any(|n| n == name) || cx.aliases.iter_inner().any(|a| a.name == *name)
                 {
                     let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
                     let skel = self.value_skel(cx, name);
@@ -7512,10 +8725,10 @@ impl Elaborator {
                 motive: None,
                 scrut,
                 arms,
-                eqbind: None,
+                eqbind,
                 generated,
             } => {
-                if *form == MatchForm::If {
+                if *form == MatchForm::If && eqbind.is_none() {
                     match matching::infer_if_constant_motive(
                         self, cx, scrut, arms, *generated, e.span,
                     ) {
@@ -7524,8 +8737,8 @@ impl Elaborator {
                         matching::MotiveInference::Declined => {}
                     }
                 }
-                match matching::infer_match_constant_motive(
-                    self, cx, *form, scrut, arms, *generated, e.span,
+                match matching::infer_match_constant_motive_eq(
+                    self, cx, *form, scrut, arms, eqbind.as_deref(), *generated, e.span,
                 ) {
                     matching::MotiveInference::Accepted(result) => return Ok(result),
                     matching::MotiveInference::Failed(error) => return Err(error),
@@ -7673,6 +8886,67 @@ impl Elaborator {
         }
     }
 
+    /// A motive-less `match` with no equation binding, whose arms see the
+    /// equation `e = pattern` as **pending** (docs/dependent-match-compiler-
+    /// design.md §4.3): the arms elaborate without it, and a reader of
+    /// hypotheses that ran in them records that it wanted it. Only when the
+    /// arms then fail is the match elaborated again as its convoy, with the
+    /// equation bound under [`MATCH_EQ`]; a match that checks without the
+    /// equation keeps its term, so function bodies and every conversion
+    /// against a restated `match` are unchanged. If the convoy fails too, the
+    /// first error is the one reported.
+    ///
+    /// An indexed family has no homogeneous equation yet (§9), so there the
+    /// match is elaborated once, as before.
+    fn elab_match_pending(
+        &self,
+        cx: &Cx,
+        scrut_ty: &Type,
+        run: &dyn Fn(&Cx, Option<&str>) -> R<Term>,
+    ) -> R<Term> {
+        if self.iwf_of_at(cx, scrut_ty).is_some() || self.indexed_of_at(cx, scrut_ty).is_some() {
+            return run(cx, None);
+        }
+        let id = self.attempt.match_eq_next.get();
+        self.attempt.match_eq_next.set(id.wrapping_add(1));
+        let mark = matching::MatchSpeculationState::mark_match_state(self);
+        let mut pcx = cx.clone();
+        let mut pending = (*pcx.pending_eqs).clone();
+        pending.push(id);
+        pcx.pending_eqs = Rc::new(pending);
+        let first = run(&pcx, None);
+        let wanted = {
+            let mut wanted = self.attempt.match_eq_wanted.borrow_mut();
+            let had = wanted.contains(&id);
+            wanted.retain(|w| *w != id);
+            had
+        };
+        match first {
+            Err(error) if wanted => {
+                matching::MatchSpeculationState::rollback_match_state(self, mark);
+                run(cx, Some(MATCH_EQ)).map_err(|_| {
+                    matching::MatchSpeculationState::rollback_match_state(self, mark);
+                    error
+                })
+            }
+            other => other,
+        }
+    }
+
+    /// A reader of hypotheses (`omega`, `linarith`) is about to list them:
+    /// every pending match equation in scope is wanted (§4.3).
+    pub(crate) fn want_match_equations(&self, cx: &Cx) {
+        if cx.pending_eqs.is_empty() {
+            return;
+        }
+        let mut wanted = self.attempt.match_eq_wanted.borrow_mut();
+        for id in cx.pending_eqs.iter() {
+            if !wanted.contains(id) {
+                wanted.push(*id);
+            }
+        }
+    }
+
     /// `match h : e { … }` — the convoy, written for the user
     /// (docs/match-equation-split-design.md §3.3).
     ///
@@ -7706,25 +8980,44 @@ impl Elaborator {
         result: &Type,
         span: Span,
     ) -> R<Term> {
-        // §4: an indexed family's arms live at *different* indices, so `e = z`
-        // would relate two values at two types. Homogeneous `Id` cannot say
-        // that, and the thing that can is the family's inversion principle —
-        // a library device, not a syntax (issues/surface-existential.md).
-        if let Some(ind) = self
-            .iwf_of_at(cx, scrut_ty)
-            .map(|(ind, _)| ind)
-            .or_else(|| self.indexed_of_at(cx, scrut_ty).map(|(ind, _)| ind))
-        {
-            return err(
-                format!(
-                    "the equation binding is not available on the indexed family \
-                     `{}`: an arm's index varies with its constructor, so \
-                     `e = pat` would relate two values at different types. Case \
-                     on the index first, or state the equation you want as an \
-                     inversion lemma",
-                    ind.name
-                ),
-                span,
+        // An indexed family's arms live at *different* indices, so `e = z`
+        // would relate two values at two types. The index packed with the
+        // value is one type, `Σ(j: I). F(j)`, and that equation is the one
+        // bound (docs/dependent-match-compiler-design.md §9).
+        if let Some((ind, fam)) = self.iwf_of_at(cx, scrut_ty) {
+            let family = PackedFamily {
+                ity: fam.ity.clone(),
+                ilvl: fam.ilvl.clone(),
+                flvl: fam.lvl(),
+                idx: Rc::clone(&fam.idx),
+                at: &|i, k| fam.ty_at(i, k),
+                eliminate: &|acx: &Cx, arms: &[Arm], scrut: Term, motive: Type, level: Level| {
+                    self.elab_match_iwf(
+                        acx, form, &ind, &fam, arms, scrut, motive, level,
+                        iwf_family::IndexMotive::Plain, span,
+                    )
+                },
+            };
+            return self.elab_convoy_packed(
+                cx, form, generated, h, arms, scrut_t, scrut_ty, scrut_lvl, &family, motive, mlvl,
+                result, span,
+            );
+        }
+        if let Some((ind, fam)) = self.indexed_of_at(cx, scrut_ty) {
+            let (ity, ilvl) = self.index_type_of(cx, &ind, span)?;
+            let family = PackedFamily {
+                ity,
+                ilvl,
+                flvl: fam.level.clone(),
+                idx: Rc::clone(&fam.idx),
+                at: &|i, k| fam.el_at(i, k),
+                eliminate: &|acx: &Cx, arms: &[Arm], scrut: Term, motive: Type, level: Level| {
+                    self.elab_match_indexed(acx, form, &ind, &fam, arms, scrut, motive, level, span)
+                },
+            };
+            return self.elab_convoy_packed(
+                cx, form, generated, h, arms, scrut_t, scrut_ty, scrut_lvl, &family, motive, mlvl,
+                result, span,
             );
         }
         let plan = matching::plan_convoy(h, arms, &scrut_t, scrut_ty, scrut_lvl, &motive, mlvl);
@@ -7732,6 +9025,135 @@ impl Elaborator {
             cx,
             form,
             generated,
+            &plan.arms,
+            scrut_t.clone(),
+            scrut_ty,
+            scrut_lvl,
+            plan.motive,
+            plan.level,
+            span,
+        )?;
+        Ok(matching::finish_convoy(
+            elim, scrut_t, scrut_ty, scrut_lvl, mlvl, result,
+        ))
+    }
+
+    /// [`Self::elab_convoy`] on an indexed family (design §9): each arm takes
+    /// `h : ⟨i, e⟩ = ⟨idx(C, x̄), C(x̄)⟩` at `Σ(j: I). F(j)`, through the
+    /// two-binder motive `λ j z => Π(p: ⟨i, e⟩ = ⟨j, z⟩). M(j, z)`, applied to
+    /// `refl`. `M(j, z)` is the index generalized as route 1 does it; the
+    /// equation's left side is not, since it is the scrutinee's own.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_convoy_packed(
+        &self,
+        cx: &Cx,
+        form: MatchForm,
+        generated: bool,
+        h: &str,
+        arms: &[Arm],
+        scrut_t: Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+        fam: &PackedFamily<'_>,
+        motive: Type,
+        mlvl: &Level,
+        result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        let m2 = self.generalize_index(cx, &motive, &fam.idx);
+        let (ilvl, flvl) = (fam.ilvl.clone(), fam.flvl.clone());
+        let slvl = Level::join(ilvl.clone(), flvl.clone());
+        // `Σ(j: I). F(j)` and `⟨i, z⟩`, scoped `k` binders past Γ.
+        let sigma = |k: u32| Type::Sigma {
+            fst_level: ilvl.clone(),
+            snd_level: flvl.clone(),
+            fst: Rc::new(fam.ity.shift_local(k)),
+            snd: Rc::new((fam.at)(Term::Var(LocalVar(0)), k + 1)),
+        };
+        let pack = |k: u32, i: Term, z: Term| Term::Pair {
+            fst_level: ilvl.clone(),
+            snd_level: flvl.clone(),
+            fst_ty: Rc::new(fam.ity.shift_local(k)),
+            snd_ty: Rc::new((fam.at)(Term::Var(LocalVar(0)), k + 1)),
+            fst: Rc::new(i),
+            snd: Rc::new(z),
+        };
+        let here = pack(0, (*fam.idx).clone(), scrut_t.clone());
+        // Over `(Γ, j, z)`.
+        let equation = Type::Id {
+            level: slvl.clone(),
+            ty: Rc::new(sigma(2)),
+            lhs: Rc::new(here.shift_local(2)),
+            rhs: Rc::new(pack(2, Term::Var(LocalVar(1)), Term::Var(LocalVar(0)))),
+        };
+        let convoyed = Type::Pi {
+            dom_level: slvl.clone(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(equation),
+            cod: Rc::new(m2.shift_local(1)),
+        };
+        let clvl = Level::join(slvl.clone(), mlvl.clone());
+        let at_scrut = Type::Id {
+            level: slvl.clone(),
+            ty: Rc::new(sigma(0)),
+            lhs: Rc::new(here.clone()),
+            rhs: Rc::new(here.clone()),
+        };
+        let convoyed_here = Type::Pi {
+            dom_level: slvl.clone(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(at_scrut.clone()),
+            cod: Rc::new(result.shift_local(1)),
+        };
+        let plan = matching::plan_convoy(h, arms, &scrut_t, scrut_ty, scrut_lvl, &motive, mlvl);
+        let prepared = self.prepare_arms(
+            cx, form, generated, &plan.arms, &scrut_t, scrut_ty, scrut_lvl, &convoyed_here, false,
+            &clvl, span,
+        )?;
+        let (acx, arms) = match &prepared {
+            Some((c, a)) => (c, a.as_slice()),
+            None => (cx, plan.arms.as_slice()),
+        };
+        let elim = (fam.eliminate)(acx, arms, scrut_t, convoyed, clvl)?;
+        Ok(crate::spelling::checked_app(
+            Rc::new(elim),
+            slvl.clone(),
+            mlvl.clone(),
+            Rc::new(at_scrut),
+            Rc::new(result.shift_local(1)),
+            Rc::new(Term::Refl { level: slvl, ty: Rc::new(sigma(0)), tm: Rc::new(here) }),
+        ))
+    }
+
+    /// [`Self::elab_convoy`] at a motive that reads the equation as well:
+    /// `dependent` is scoped under the scrutinee's binder and then the
+    /// equation's, and `motive` is it with the equation unused, as the other
+    /// readers of a motive expect it. `split_all` builds one where a convoy
+    /// in the goal takes the case's equation for its own `refl`
+    /// (`goal_combinators::dependent_motive`).
+    #[allow(clippy::too_many_arguments)]
+    fn elab_convoy_dependent(
+        &self,
+        cx: &Cx,
+        h: &str,
+        arms: &[Arm],
+        scrut_t: Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+        motive: Type,
+        dependent: Type,
+        mlvl: &Level,
+        result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        let mut plan = matching::plan_convoy(h, arms, &scrut_t, scrut_ty, scrut_lvl, &motive, mlvl);
+        if let Type::Pi { cod, .. } = &mut plan.motive {
+            *cod = Rc::new(dependent);
+        }
+        let elim = self.elab_match(
+            cx,
+            heather_syntax::MatchForm::Match,
+            true,
             &plan.arms,
             scrut_t.clone(),
             scrut_ty,
@@ -7756,15 +9178,14 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         // At another expected carrier, use the ordinary class resolver. The
-        // class is optional at the language level: a program that has not
-        // imported the standard algebra module keeps the historical Nat-only
-        // mismatch below. Once `Numeral` is visible, however, a missing
+        // class is optional at the language level: a program whose closure
+        // does not hold the standard algebra module keeps the historical
+        // Nat-only mismatch below. Once `algebra::Numeral` is in the closure,
+        // however — read by identity, not by a name this module may not
+        // import (issues/numerals-without-algebra-import.md) — a missing
         // instance is the useful diagnosis and not a later Nat-vs-carrier
         // conversion error.
-        if let Some(class) = self.lookup_class("Numeral")
-            && class.params.len() == 1
-            && class.valparams.is_empty()
-            && let Some(ind) = self.lookup_inductive(&class.name).cloned()
+        if let Some((ind, named)) = self.literal_class_record(literals::NUMERAL)
             && let Some(field) = ind.field_index("ofNat")
         {
             let targs = [(expected.clone(), expected_level.clone())];
@@ -7774,29 +9195,36 @@ impl Elaborator {
                 .unwrap_or_else(|| "the expected type".to_string());
             let display = format!("Numeral<{carrier}>");
             let mut trace = Vec::new();
-            let Some(dict) =
-                self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
-            else {
-                return Err(ElabError::Resolution {
-                    goal: display,
-                    span,
-                    trace,
-                });
-            };
-            let (embed, embed_ty, embed_level) =
-                self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
-            let (out, _, _) = application::apply_explicit(
-                self,
-                cx,
-                Some("ofNat"),
-                Rc::new(Vec::new()),
-                0,
-                embed,
-                embed_ty,
-                embed_level,
-                std::slice::from_ref(e),
-            )?;
-            return Ok(self.reduced_embedding(cx, out));
+            match self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace) {
+                Some(dict) => {
+                    let (embed, embed_ty, embed_level) =
+                        self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
+                    let since = self.attempt.trivial_uses.borrow().len();
+                    let (out, _, _) = application::apply_explicit(
+                        self,
+                        cx,
+                        Some("ofNat"),
+                        Rc::new(Vec::new()),
+                        0,
+                        embed,
+                        embed_ty,
+                        embed_level,
+                        std::slice::from_ref(e),
+                    )?;
+                    self.settle_deferred_units(since)?;
+                    return Ok(self.reduced_embedding(cx, out));
+                }
+                None if named => {
+                    return Err(ElabError::Resolution {
+                        goal: display,
+                        span,
+                        trace,
+                    });
+                }
+                // Reached by identity only, and no instance: the `Nat`
+                // reading below, as before the class was reachable.
+                None => {}
+            }
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type
@@ -7851,6 +9279,14 @@ impl Elaborator {
             );
         };
 
+        // The carrier by its code, when it has one: a field's `List<Instr>`
+        // arrives as its inline lowering, and the goal and the two
+        // conversions below would otherwise compare that against the
+        // instance's code-spelled type by unfolding every code inside it —
+        // each element type's whole sum, and every sum its fields name, per
+        // literal (`issues/native-tool-test-cold-certificate-rail.md`, log).
+        let respelled = self.respell_ty(cx, expected);
+        let expected = respelled.as_ref().unwrap_or(expected);
         let length = inductive::nat_lit(elems.len());
         let targs = [(expected.clone(), expected_level.clone())];
         let vargs = [(length.clone(), Type::Nat, Level::Zero)];
@@ -7939,12 +9375,13 @@ impl Elaborator {
             Rc::new(expected.shift_local(1)),
             vector,
         );
-        Ok((*self.whnf_tm(cx, &converted, span)?).clone())
+        let value = (*self.whnf_tm(cx, &converted, span)?).clone();
+        Ok(self.collection_literal_spine(cx, value, elems.len()))
     }
 
     /// A local variable by absolute position (outermost first), as
     /// [`Self::resolve`] would return it.
-    fn local(&self, cx: &Cx, pos: usize) -> (Term, Type, Level) {
+    pub(crate) fn local(&self, cx: &Cx, pos: usize) -> (Term, Type, Level) {
         let idx = (cx.names.len() - 1 - pos) as u32;
         let entry = &cx.gamma.entries[pos];
         (
@@ -7987,17 +9424,24 @@ impl Elaborator {
     /// both spell travels the same way ([`MismatchNote::Located`]), when no
     /// `refl` note has more to say.
     fn kernel_error(&self, decl: &str, span: Span, e: TypeError) -> ElabError {
-        if e == TypeError::NotConvertible
-            && let Some((note, at)) = self.refused_decide()
+        // A head of the wrong former is the same disagreement met one step
+        // later: a proof of `same(x, y)` filled into a goal whose statement
+        // unfolds to a Π is refused where the goal is *applied*, as
+        // `HeadMismatch`, and the site that explains it is the checking note
+        // at the `on` (issues/elab-accepts-conjunction-for-equation.md).
+        let conversion = matches!(e, TypeError::NotConvertible | TypeError::HeadMismatch);
+        if conversion
+            && let Some((note, at)) = self.refused_decide().or_else(|| self.refused_trivial())
         {
             return ElabError::Kernel {
                 decl: decl.to_string(),
                 span: at,
                 err: e,
                 note: Some(note),
+                site: KernelSite::Recorded,
             };
         }
-        let mismatch = (e == TypeError::NotConvertible)
+        let mismatch = conversion
             .then(|| self.pending_mismatch())
             .flatten();
         let located = match mismatch {
@@ -8011,13 +9455,25 @@ impl Elaborator {
             Some((MismatchNote::Located(msg), at)) => Some((msg, at)),
             None => None,
         };
-        let refl = (e == TypeError::NotConvertible)
+        let refl = conversion
             .then(|| self.pending_refl_note())
             .flatten()
             .or(located);
         let (span, refl_note) = match refl {
             Some((msg, at)) => (at, Some(msg)),
             None => (span, None),
+        };
+        // A term the kernel cannot infer is the elaborator's too: every form
+        // it emits is meant to infer or to sit where it is checked, so a
+        // `NotInferable` names a route that placed a checked spelling in an
+        // inference position, and the locator below says which term
+        // (issues/kernel-refuses-inj-through-corecursive-reduct.md).
+        let site = if refl_note.is_some() {
+            KernelSite::Recorded
+        } else if conversion || matches!(e, TypeError::NotInferable) {
+            KernelSite::Unrecorded
+        } else {
+            KernelSite::Other
         };
         let note = match (refl_note, self.operator_fallback_note()) {
             (Some(refl), Some(op)) => Some(format!("{refl} (note: {op})")),
@@ -8029,15 +9485,203 @@ impl Elaborator {
             span,
             err: e,
             note,
+            site,
         }
+    }
+
+    /// [`Self::kernel_error`] for a refusal of `body` at `ty` (or of `ty`
+    /// itself, with no body) in `psi`; Γ: when no recorded site's probe
+    /// decides it, ask the kernel where it failed
+    /// (`issues/elab-accepts-conjunction-for-equation.md`).
+    ///
+    /// **Why the kernel, and why only here.** Every recorded site is a place
+    /// the elaborator *knew* it was trusting the gate. An unrecorded refusal
+    /// is one where it did not know — a route that placed a term without
+    /// comparing or recording — and no list of routes kept by hand closes
+    /// that class: the inferred-argument route (#168), the β-redex spelling
+    /// (#184) and the check fallback were each found by a bisection after a
+    /// bare `NotConvertible`. The kernel is the one place every placement
+    /// passes through, so it is the one that can always say where. It costs
+    /// one more check of the refused declaration, and runs on no other path.
+    ///
+    /// The located term is then looked for among the recorded sites, by
+    /// syntax: a site whose probe was only *inconclusive* (a `refl` whose
+    /// sides outran the note's small budget) is still the site, and the
+    /// kernel has now decided it, so the report moves there as if the probe
+    /// had. Only a refusal that matches no recorded site stays
+    /// [`KernelSite::Unrecorded`], at the declaration, naming the refused
+    /// term and its two types where they spell.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn kernel_refusal(
+        &self,
+        decl: &str,
+        span: Span,
+        e: TypeError,
+        psi: &GlobalCtx,
+        layer: Layer,
+        gamma: &LocalCtx,
+        body: Option<&Term>,
+        ty: &Type,
+        level: &Level,
+    ) -> ElabError {
+        let error = self.kernel_error(decl, span, e);
+        let ElabError::Kernel { site: KernelSite::Unrecorded, note: op_note, .. } = &error else {
+            return error;
+        };
+        let with_op = |said: String| match op_note {
+            Some(op) => format!("{said} (note: {op})"),
+            None => said,
+        };
+        let found = match body {
+            Some(body) => typing::locate_refusal(psi, 0, layer, gamma, body, ty, level, self.policy.fuel),
+            None => typing::locate_type_refusal(psi, 0, layer, gamma, ty, level, self.policy.fuel),
+        };
+        let said = match &found {
+            Some(found) if found.psi_len == psi.bindings.len() => {
+                if let Some(at) = self.recorded_site_of(psi, found) {
+                    return at.into_error(decl, e, with_op);
+                }
+                self.refused_site_note(found)
+            }
+            Some(_) => "no checking site recorded this refusal; the kernel refused a term \
+                        under a binder of the global context, which has no surface spelling"
+                .to_string(),
+            None => "no checking site recorded this refusal, and the kernel refused no \
+                     term check in it"
+                .to_string(),
+        };
+        ElabError::Kernel {
+            decl: decl.to_string(),
+            span,
+            err: e,
+            note: Some(with_op(said)),
+            site: KernelSite::Unrecorded,
+        }
+    }
+
+    /// The recorded site a located refusal is, if any: a written `refl` at
+    /// the same depth whose side converts with the refused `Refl`'s, or a
+    /// checking site at the same depth whose two types convert with the
+    /// refused check's. **By conversion, not syntax**: the kernel holds the
+    /// emitted spelling (the statement and every slot are respelled on their
+    /// way through the emission chokepoint), the note the elaborator's, and
+    /// the two differ in exactly the way conversion forgives. Budgeted like
+    /// the `refl` note; out of budget is no match. Only in a world with no
+    /// goal slots, where the two sides' global indices agree.
+    fn recorded_site_of(&self, psi: &GlobalCtx, found: &typing::RefusedSite) -> Option<RecordedSite> {
+        let world = self.goal_psi();
+        if world.bindings.len() != psi.bindings.len() {
+            return None;
+        }
+        let oracle = oracle::SemanticOracle::in_world(world, self.policy.fuel.min(diagnostics::REFL_NOTE_FUEL));
+        let gamma = &found.gamma;
+        let same_depth = |c: &Cx| c.gamma.base == gamma.base && c.gamma.entries.len() == gamma.entries.len();
+        if let Term::Refl { tm, .. } = &found.term {
+            let refls = self.attempt.refl_notes.borrow();
+            let site = refls.iter().find(|n| {
+                same_depth(&n.cx)
+                    && (n.lhs == **tm || oracle.convert_term(gamma, Layer::Prog, &n.lhs, tm, &n.ty, &n.level).is_ok())
+            });
+            if let Some(n) = site {
+                let sides = self.spell_term_clean(&n.cx, &n.lhs).zip(self.spell_term_clean(&n.cx, &n.rhs));
+                return Some(RecordedSite::Refl { span: n.span, sides });
+            }
+        }
+        let (Some(expected), Some(inferred)) = (&found.expected, &found.inferred) else {
+            return None;
+        };
+        let converts = |a: &Type, b: &Type, level: &Level| {
+            a == b || oracle.convert_type(gamma, Layer::Prog, a, b, level).is_ok()
+        };
+        let checks = self.attempt.check_notes.borrow();
+        let n = checks.iter().find(|n| {
+            same_depth(&n.cx) && converts(&n.expected, expected, &n.level) && converts(&n.got, inferred, &n.level)
+        })?;
+        let got = self.display_type_clean(&n.cx, &n.got);
+        let want = self.display_type_clean(&n.cx, &n.expected);
+        Some(RecordedSite::Check { span: n.span, types: got.zip(want).filter(|(g, w)| g != w) })
+    }
+
+    /// The located refusal, said: the term and the two types, each where it
+    /// spells in full ([`Self::spell_term_clean`], [`Self::display_type_clean`]:
+    /// a claim about a type the reader cannot check is worse than none).
+    fn refused_site_note(&self, found: &typing::RefusedSite) -> String {
+        let cx = self.refused_site_cx(found);
+        let term = cx.as_ref().and_then(|cx| self.spell_term_clean(cx, &found.term));
+        let spell = |ty: &Option<Type>| match (&cx, ty) {
+            (Some(cx), Some(ty)) => self.display_type_clean(cx, ty),
+            _ => None,
+        };
+        let (got, want) = (spell(&found.inferred), spell(&found.expected));
+        let what = match term {
+            Some(t) => format!("`{t}`"),
+            None => "a term with no surface spelling".to_string(),
+        };
+        let types = match (got, want) {
+            (Some(g), Some(w)) if g != w => format!(", which has type `{g}`, where `{w}` is expected"),
+            (Some(g), Some(_)) => format!(
+                ", which has type `{g}` where a type that displays the same is expected"
+            ),
+            (None, Some(w)) => format!(" where `{w}` is expected"),
+            (Some(g), None) => format!(", which has type `{g}`"),
+            (None, None) => String::new(),
+        };
+        format!(
+            "no checking site recorded this refusal: the kernel refused {what}{types} \
+             (an elaborator gap: issues/elab-accepts-conjunction-for-equation.md)"
+        )
+    }
+
+    /// Names for a located refusal's Γ, binder by binder: the name a
+    /// recorded site's context gave it, where that context shares Γ up to
+    /// it (those are the binders the source wrote, under the names it
+    /// wrote); else the declaration's parameter name at that position (the
+    /// kernel's outermost binders are the telescope, whose types the
+    /// statement respells, so they are matched by position); else a fresh
+    /// name, as the display names a binder the kernel does not name.
+    fn refused_site_cx(&self, found: &typing::RefusedSite) -> Option<Cx> {
+        let gamma = &found.gamma;
+        if !matches!(gamma.base, heather_kernel::term::CtxBase::Nil) {
+            return None;
+        }
+        let shared = |c: &Cx| -> usize {
+            if c.gamma.base != gamma.base {
+                return 0;
+            }
+            (0..c.gamma.entries.len().min(gamma.entries.len()))
+                .take_while(|&i| c.gamma.entries.get(i) == gamma.entries.get(i))
+                .count()
+        };
+        let checks = self.attempt.check_notes.borrow();
+        let refls = self.attempt.refl_notes.borrow();
+        let none = crate::spine::Binders::default();
+        let (k, written) = checks.iter().map(|n| &n.cx).chain(refls.iter().map(|n| &n.cx))
+            .map(|c| (shared(c), &c.names))
+            .max_by_key(|(k, _)| *k)
+            .unwrap_or((0, &none));
+        let telescope = self.attempt.telescope.borrow();
+        let mut cx = Cx::empty();
+        for i in 0..gamma.entries.len() {
+            let entry = gamma.entries.get(i)?;
+            let name = match (i < k).then(|| written.get(i)).flatten().or_else(|| telescope.get(i)) {
+                Some(name) => name.to_string(),
+                None => ["x", "y", "z", "a", "b", "c"]
+                    .iter()
+                    .map(|n| n.to_string())
+                    .chain((i..).map(|n| format!("x{n}")))
+                    .find(|n| !cx.names.contains(n))?,
+            };
+            cx.push(name, (*entry.ty).clone(), entry.level.clone());
+        }
+        Some(cx)
     }
 
     /// Is a bare `decide` something the writer bound, rather than the goal
     /// combinator? The library's own `bool::decide` is the one global that
     /// does not count (see the checking arm).
     fn decide_shadowed(&self, cx: &Cx) -> bool {
-        cx.names.iter().any(|n| n == "decide")
-            || cx.aliases.iter().any(|a| a.name == "decide")
+        cx.names.iter_inner().any(|n| n == "decide")
+            || cx.aliases.iter_inner().any(|a| a.name == "decide")
             || cx.selfref.as_ref().is_some_and(|s| s.matches("decide"))
             || self
                 .key_of("decide")
@@ -8117,7 +9761,7 @@ impl Elaborator {
         if uses.is_empty() {
             return None;
         }
-        let oracle = oracle::SemanticOracle::in_world(self.goal_psi(), self.fuel);
+        let oracle = oracle::SemanticOracle::in_world(self.goal_psi(), self.policy.fuel);
         let zero = inductive::nat_lit(0);
         uses.iter().find_map(|u| {
             (oracle.convert_term(&u.gamma, Layer::Prog, &u.index, &zero, &Type::Nat, &Level::Zero)
@@ -8132,6 +9776,37 @@ impl Elaborator {
                     u.span,
                 )
             })
+        })
+    }
+
+    /// After a `NotConvertible` at the gate: the first `trivial` left unread
+    /// ([`expr::UnitCheckingElab`]) whose expected type, reduced now under
+    /// the gate's own budget, is not `True`. [`Self::refused_decide`]'s
+    /// counterpart: the reduction runs only on the failure path, and an
+    /// inconclusive one stays silent.
+    fn refused_trivial(&self) -> Option<(String, Span)> {
+        let uses = self.attempt.trivial_uses.borrow();
+        if uses.is_empty() {
+            return None;
+        }
+        let oracle = oracle::SemanticOracle::in_world(self.goal_psi(), self.policy.fuel);
+        uses.iter().find_map(|u| {
+            let head = oracle.whnf_type(&u.cx.gamma, &u.expected).ok()?;
+            if matches!(head, Type::Unit { .. }) {
+                return None;
+            }
+            let goal = self.display_type(&u.cx, &u.expected);
+            let reduct = match self.display_type_clean(&u.cx, &head) {
+                Some(r) if r != goal => format!(", which reduces to `{r}`"),
+                _ => String::new(),
+            };
+            Some((
+                format!(
+                    "`trivial` proves `True`, but `{goal}` is expected here{reduct}: \
+                     the verdict is false, or not closed enough to compute"
+                ),
+                u.span,
+            ))
         })
     }
 
@@ -8170,8 +9845,8 @@ impl Elaborator {
     /// this: `member_head` asks `ambient_reading_survives`,
     /// docs/receiver-member-resolution-design.md §2.)
     fn shadowed(&self, cx: &Cx, name: &str) -> bool {
-        cx.names.iter().any(|n| n == name)
-            || cx.aliases.iter().any(|a| a.name == *name)
+        cx.names.iter_inner().any(|n| n == name)
+            || cx.aliases.iter_inner().any(|a| a.name == *name)
             || self.lookup_global(name).is_some()
             // The declaration's own name. It is not in `globals` until it is
             // checked, so without this a `fn map` could not recurse: its
@@ -8272,11 +9947,9 @@ impl Elaborator {
         // because `params_of` finds no global for a self-name and the arity
         // complaint below would otherwise deny a declaration the reader is
         // looking at (issues/recursive-self-call-type-arguments.md).
-        if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
-            return err(
-                format!("`{name}` can only be used here as a saturated recursive call"),
-                span,
-            );
+        if let Some(selfref) = cx.selfref.as_ref().filter(|s| s.matches(name)) {
+            let note = self.self_shadow_note(selfref, name);
+            return err(self_name_refusal(selfref, name), span).map_err(|e| with_self_shadow_note(e, note.as_deref()));
         }
         let params = self.params_of(name);
         let n_ty = params.iter().take_while(|p| p.is_type).count();
@@ -8410,6 +10083,9 @@ impl Elaborator {
                         .value_skel(cx, name)
                         .is_some_and(|s| s.leading_implicit() > 0)
             }
+            // A cast takes its target from the checking position, as a
+            // numeral does (docs/casting-design.md §5.2).
+            ExprKind::App { .. } if surface::is_cast(e) => true,
             ExprKind::App { .. } => match e.as_named() {
                 Some(("absurd", _, _)) => !self.shadowed(cx, "absurd"),
                 Some((name @ ("rel_cong" | "rel_derive"), _, false)) => !self.shadowed(cx, name) && self.ctor_here(cx, name).is_none(),
@@ -8490,7 +10166,7 @@ impl Elaborator {
         let (head, args) = spelling::app_spine(t);
         let oracle = self.semantic_oracle();
         let (mut ty, _) =
-            typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, head, self.fuel).ok()?;
+            typing::infer_term(oracle.world(), 0, Layer::Prog, &cx.gamma, head, self.policy.fuel).ok()?;
         let mut out = Vec::with_capacity(args.len());
         for a in args {
             // A syntactic Π is read as it stands, as the kernel's fast path
@@ -8518,20 +10194,81 @@ impl Elaborator {
         unification::canonical(&w).then_some(w)
     }
 
+    /// [`unification::U::next_head`]: `t`, in `cx`, unfolded to the first
+    /// reduct whose spine is headed by another global or local, or by a
+    /// former or constructor. A β-redex or an eliminator on the way is
+    /// stepped through, as a whnf would: a definition whose body is a
+    /// `match` on a constructor argument reaches the arm it selects. One
+    /// stuck on a neutral is no next head (`None`), and nor is a walk past
+    /// [`Unfold::NextHead`] head reducts or the oracle's fuel.
+    fn next_head(&self, cx: &Cx, t: &Term) -> Option<Term> {
+        let head = spelling::app_spine(t).0.clone();
+        self.semantic_oracle().unfold_to(&cx.gamma, t, Unfold::NextHead, |r| {
+            let exposed = match spelling::app_spine(&r).0 {
+                h @ (Term::GlobalTm { .. } | Term::Var(_)) => *h != head,
+                h => !unification::steps_through(h),
+            };
+            exposed.then_some(r)
+        })
+    }
+
     /// The unifier's context for a root attempt in `cx`: the scope, and
-    /// [`Self::spine_type_args`] for the `app@` nodes of a subject.
-    fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], span: Span) {
-        let type_args = |t: &Term, d: u32| self.spine_type_args(cx, t, d, span);
-        let canonical_head = |t: &Term, d: u32| self.canonical_head(cx, t, d);
-        let respell = |t: &Type| self.respell_ty(cx, t);
-        let u = unification::U {
-            gamma: &cx.gamma,
-            subject_metas: None,
-            type_args: &type_args,
-            canonical_head: &canonical_head,
-            respell: &respell,
+    /// [`Self::spine_type_args`] for the `app@` nodes of a subject. Every
+    /// solution is held to its slot's declared type in `doms` (the call's
+    /// scratch world; a slot past its end is not judged), and `true` means a
+    /// write was refused for not inhabiting it ([`SolutionCheck`]).
+    #[allow(clippy::too_many_arguments)]
+    fn unify_root(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, sols: &mut [Sol], doms: &[Type], span: Span) -> bool {
+        self.unify_checked(cx, pat, subj, n, 0, sols, doms, None, Guesses::Take, None, span)
+    }
+
+    /// Does the registered instance `global`'s **conclusion** — its type
+    /// past every parameter, each parameter a fresh slot — decidedly differ
+    /// from `goal` ([`unification::Clash`])? Instance search asks before it
+    /// builds the candidate (issues/instance-conclusion-matched-first.md):
+    /// building elaborates a reference at the goal, premises and all, and
+    /// then the kernel refuses it, which is the whole cost of a candidate
+    /// that could never have matched. A closed instance is its own
+    /// conclusion. `false` is "may match", always the answer when the
+    /// conclusion cannot be read (a universe-polymorphic instance's `UΠ`, a
+    /// binding out of reach) or the unifier could not decide.
+    pub(crate) fn conclusion_clashes(&self, cx: &Cx, global: &str, goal: &Type, span: Span) -> bool {
+        let Some(GlobalInfo { abs, .. }) = self.names.global(global) else { return false };
+        let Some(GlobalBinding::Tm { ty, .. }) = self.psi.bindings.get(*abs as usize) else { return false };
+        // The use-site type, as a reference to the global would carry it
+        // (`elab_var`): rescoped to the full Ψ, then out of the empty context
+        // it was declared in into this Γ.
+        let len = self.psi.bindings.len() as u32;
+        let meta_off = self.scope.meta_pushed.borrow().len() as u32;
+        let var = len - 1 - abs + self.global_padding() + meta_off;
+        let empty = LocalSubst {
+            tail: SubstTail::Empty { len: cx.gamma.entries.len() as u32, base: cx.gamma.base },
+            terms: vec![],
         };
-        unify_ty_root(&u, pat, subj, n, 0, sols);
+        let ty = ty.shift_global(var + 1).apply_local(&empty);
+        // One slot per leading binder, instantiated as an application's
+        // implicits are: the slots sit innermost, under the identity.
+        let mut n = 0u32;
+        let mut t = &ty;
+        while let Type::Pi { cod, .. } = t {
+            n += 1;
+            t = cod;
+        }
+        let mut doms = Vec::with_capacity(n as usize);
+        let mut conclusion = ty.shift_global(n);
+        for slot in 0..n {
+            let Type::Pi { dom, cod, .. } = conclusion else { return false };
+            doms.push((*dom).clone());
+            let meta = Term::GlobalTm { var: GlobalVar(slot), subst: LocalSubst::id(&cx.gamma) };
+            conclusion = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(meta)));
+        }
+        let pat = self.unspell_deep_now(&conclusion, n).unwrap_or(conclusion);
+        let subj = self.unspell_deep_now(goal, 0);
+        let subj = subj.as_ref().unwrap_or(goal);
+        let mut sols = vec![Sol::Unsolved; n as usize];
+        let clash = unification::Clash::default();
+        self.unify_checked(cx, &pat, subj, n, 0, &mut sols, &doms, None, Guesses::Take, Some(&clash), span);
+        clash.seen()
     }
 
     /// [`Self::unify_root`] for a subject `d` binders past `cx`: the
@@ -8539,18 +10276,53 @@ impl Elaborator {
     /// the `d` is not learned. The tactic host's holes, made in a scope
     /// enclosing the one a comparison happens in, are unified this way.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn unify_under(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol], span: Span) {
+    pub(crate) fn unify_under(&self, cx: &Cx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol], doms: &[Type], span: Span) -> bool {
+        self.unify_checked(cx, pat, subj, n, d, sols, doms, None, Guesses::Take, None, span)
+    }
+
+    /// The one root of the unifier: its context in `cx`, its writes held to
+    /// `doms` by a [`SolutionCheck`], `disagree` told of a later subject a
+    /// solved slot meets ([`unification::U::disagree`]), and its guesses
+    /// taken, postponed or recorded as `guesses` says.
+    #[allow(clippy::too_many_arguments)]
+    fn unify_checked(
+        &self,
+        cx: &Cx,
+        pat: &Type,
+        subj: &Type,
+        n: u32,
+        d: u32,
+        sols: &mut [Sol],
+        doms: &[Type],
+        disagree: Option<&dyn Fn(usize, &Term)>,
+        guesses: Guesses<'_>,
+        clash: Option<&unification::Clash>,
+        span: Span,
+    ) -> bool {
         let type_args = |t: &Term, e: u32| self.spine_type_args(cx, t, e, span);
         let canonical_head = |t: &Term, e: u32| self.canonical_head(cx, t, e);
         let respell = |t: &Type| self.respell_ty(cx, t);
+        let constructor = |t: &Type| self.constructor_spelling(cx, t, span);
+        let slot_view = |t: &Term| self.slot_view(t);
+        let check = SolutionCheck::new(self, cx, doms, n);
+        let admit = |i: usize, s: &Term, sols: &[Sol]| check.admit(i, s, sols);
+        let next_head = |t: &Term| self.next_head(cx, t);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
             type_args: &type_args,
             canonical_head: &canonical_head,
             respell: &respell,
+            constructor: &constructor,
+            slot_view: &slot_view,
+            admit: &admit,
+            disagree,
+            next_head: &next_head,
+            guesses,
+            clash,
         };
         unify_ty_root(&u, pat, subj, n, d, sols);
+        check.settle(sols)
     }
 
     /// Application with implicit-argument insertion
@@ -8578,33 +10350,39 @@ impl Elaborator {
     /// flavor for the zero-argument checking-position route.
     #[allow(clippy::too_many_arguments)]
     /// Read implicit solutions off an argument's type
-    /// (docs/argument-type-reduction-design.md): the syntactic read first,
-    /// and — only when it learned *nothing* — the same read against the
-    /// type's weak head normal form.
+    /// (docs/argument-type-reduction-design.md): one read, in which the
+    /// unifier itself unfolds the argument's type wherever it does not meet
+    /// the parameter's as it stands (the δ-lazy order,
+    /// issues/unifier-lazy-delta.md).
     ///
-    /// The retry is for an argument whose type is a **motive applied**. An
-    /// induction principle with a value-parameter motive (`int_ind`'s `P: Int
-    /// -> Type`) binds its hypothesis at `P(OfNat(k))`, which after `P` is
-    /// given is a β-redex `(λ (z: Int) => add(a, z) = add(z, a))(OfNat(k))` —
-    /// an `Id` that does not say so yet, so `cong_int(isucc, ih)` and
-    /// `sym(ih)` both refused (issues/motive-application-hides-hypothesis-
-    /// type.md). Reducing makes the evidence readable, and it is the same
-    /// sentence [`Self::solve_from_expected`] already applies to the *expected*
-    /// type one screen below.
+    /// There used to be a second read against the type's weak head normal
+    /// form, taken when the first learned *nothing*: for an argument whose
+    /// type is a **motive applied** (`P(OfNat(k))`, a β-redex
+    /// `(λ (z: Int) => add(a, z) = add(z, a))(OfNat(k))`,
+    /// issues/motive-application-hides-hypothesis-type.md), a field type read
+    /// through a projection, or a definition's body. The unifier's own step
+    /// reaches each of those, at the place the read stops meeting and only
+    /// while it has a slot to learn, so the retry is gone. The *expected*
+    /// type's whnf in [`Self::solve_from_expected`] stays: a higher-kinded
+    /// carrier (`?M(?B)` against `Tac<Nat>`) is matched by its spelling, not
+    /// by unfolding.
     ///
-    /// Three properties keep it from being a widening:
+    /// Every read is **held to the slots' declared types** (`meta_doms`):
+    /// a slot whose type is already known takes only a solution that
+    /// inhabits it ([`SolutionCheck`], at the unifier's one write), so a
+    /// read never records what the call could not keep.
+    /// When it refused something, the argument was written in other symbols —
+    /// `x ≈ y` at `Rat` against `a * d ≈ c * b` at `Int` — and the read
+    /// walks the type's first [`Unfold::IndexRead`] reducts,
+    /// stopping at the first declaration application that teaches something
+    /// that fits: `Dyadic::Le(a, b)` is `Rat::Le(a.rat(), b.rat())` one δ
+    /// step on (issues/index-inference-through-unfolding.md).
+    #[allow(clippy::too_many_arguments)]
     ///
-    ///  - **learn-only, twice.** [`unify_ty`] records into `Unsolved` slots and
-    ///    never fails, so the retry can add solutions and cannot retract or
-    ///    contradict one. A wrong solution is still a kernel rejection.
-    ///  - **no progress is the trigger**, not "something is still unsolved":
-    ///    an argument whose type taught anything at all takes exactly the path
-    ///    it took before this existed, so no call that already elaborated
-    ///    reaches the reduction.
-    ///  - **the reduction is opportunistic.** Out of fuel is not an error here:
-    ///    the honest outcome is the caller's own per-slot message about the
-    ///    implicit it could not infer, not a complaint about a type the writer
-    ///    never asked to reduce.
+    /// Returns the slots already solved that the argument's own type met
+    /// with another subject ([`application::SlotClash`]): read off the
+    /// first read only, since the reduct walk runs only when it learned
+    /// nothing.
     fn unify_arg_ty(
         &self,
         cx: &Cx,
@@ -8612,6 +10390,26 @@ impl Elaborator {
         arg_ty: &Type,
         n: u32,
         sols: &mut [Sol],
+        meta_doms: &[Type],
+        guesses: Guesses<'_>,
+        span: Span,
+    ) -> Vec<(usize, Rc<Term>)> {
+        let clashes = RefCell::new(Vec::new());
+        self.unify_arg_reads(cx, dom_orig, arg_ty, n, sols, meta_doms, &clashes, guesses, span);
+        clashes.into_inner()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn unify_arg_reads(
+        &self,
+        cx: &Cx,
+        dom_orig: &Type,
+        arg_ty: &Type,
+        n: u32,
+        sols: &mut [Sol],
+        meta_doms: &[Type],
+        clashes: &RefCell<Vec<(usize, Rc<Term>)>>,
+        guesses: Guesses<'_>,
         span: Span,
     ) {
         let learned = |sols: &[Sol]| sols.iter().filter(|s| s.solved().is_some()).count();
@@ -8629,15 +10427,39 @@ impl Elaborator {
         let dom = dom_inline.as_ref().unwrap_or(dom_orig);
         let arg_inline = self.unspell_deep_now(arg_ty, 0);
         let arg_ty = arg_inline.as_ref().unwrap_or(arg_ty);
-        self.unify_root(cx, dom, arg_ty, n, sols, span);
+        let unify_checked =
+            |sols: &mut [Sol], subject: &Type| -> bool { self.unify_checked(cx, dom, subject, n, 0, sols, meta_doms, None, guesses, None, span) };
+        let record = |slot: usize, later: &Term| clashes.borrow_mut().push((slot, Rc::new(later.clone())));
+        let rejected = self.unify_checked(cx, dom, arg_ty, n, 0, sols, meta_doms, Some(&record), guesses, None, span);
         if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
             return;
         }
-        if let Ok(head) = self.whnf(cx, arg_ty, span) {
-            let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            self.unify_root(cx, dom, &head, n, sols, span);
+        // An operation slot the syntactic read filled with a declaration of
+        // another type: `Rat::Same(x, y)` read as `?≈(?*(a, d), ?*(c, b))` at
+        // `Int` pairs `?≈` with `Rat::Same` (issues/index-inference-through-
+        // unfolding.md). The argument's type was written in its own symbols,
+        // and the parameter's are a step or two of unfolding away; read those
+        // reducts, nearest first, while they are still applications of a
+        // declaration, and stop at the first that teaches something that
+        // fits. Bounded, and only on this path, so no call that read cleanly
+        // ever steps.
+        if rejected
+            && let Type::El { level, tm } = arg_ty
+        {
+            let oracle = self.goal_oracle();
+            for reduct in oracle.unfold(&cx.gamma, tm, Unfold::IndexRead) {
+                if !unification::global_spine(&reduct) {
+                    continue;
+                }
+                let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
+                unify_checked(sols, &unfolded);
+                if learned(sols) != before {
+                    return;
+                }
+            }
         }
     }
+
 
     /// Expected-type-directed solving (docs/unifier-completeness-design.md
     /// §5): the expected type, consulted for the implicits an argument's type
@@ -8679,6 +10501,7 @@ impl Elaborator {
         n: u32,
         sols: &mut [Sol],
         meta_doms: &[Type],
+        guesses: Guesses<'_>,
         span: Span,
     ) -> R<()> {
         // The LGG trigger, read off the scratch-world result type.
@@ -8716,11 +10539,25 @@ impl Elaborator {
         let expected = inline_expected.as_ref().unwrap_or(expected);
         let Some((m, s_raw, t_raw)) = flex else {
             // Preserve named relations and operation applications before
-            // unfolding a transparent relation into its definition.
-            self.unify_root(cx, result_ty, expected, n, sols, span);
+            // unfolding a transparent relation into its definition. Held to
+            // the slots' types as an argument's read is: `x ≈ z` at `Rat`
+            // against `?≈(?*(a, f), ?*(e, b))` at `Int` pairs `?≈` with
+            // `Rat::Same` (issues/index-inference-through-unfolding.md).
+            self.unify_checked(cx, result_ty, expected, n, 0, sols, meta_doms, None, guesses, None, span);
+            // The expected type's weak head can teach only the metas the
+            // result type still mentions: unification records into the
+            // pattern's metas and nowhere else. Once it mentions none, the
+            // read would learn nothing, and at a closed verdict it is the
+            // verdict's whole evaluation, which the kernel is about to run
+            // again — `decide_yes(refl)` at `heavy(300).IsTrue()`, whose
+            // result `P` the line above has just solved
+            // (issues/closed-verdict-evaluated-twice.md).
+            if zonked(result_ty, n, sols).is_some() {
+                return Ok(());
+            }
             let head = self.whnf(cx, expected, span)?;
             let head = self.unspell_deep_now(&head, 0).unwrap_or(head);
-            self.unify_root(cx, result_ty, &head, n, sols, span);
+            self.unify_checked(cx, result_ty, &head, n, 0, sols, meta_doms, None, guesses, None, span);
             return Ok(());
         };
         // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`
@@ -8728,10 +10565,10 @@ impl Elaborator {
         // spines it heads). The pattern is in the scratch world and the
         // subject in the committed one, exactly as at an argument's domain.
         sols[m] = Sol::Withheld;
-        self.unify_root(cx, result_ty, expected, n, sols, span);
+        self.unify_root(cx, result_ty, expected, n, sols, meta_doms, span);
         let expected_head = self.whnf(cx, expected, span)?;
         let expected_head = self.unspell_deep_now(&expected_head, 0).unwrap_or(expected_head);
-        self.unify_root(cx, result_ty, &expected_head, n, sols, span);
+        self.unify_root(cx, result_ty, &expected_head, n, sols, meta_doms, span);
         sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are
         // substituted away: the witnesses are compared with `==`, and an
@@ -8821,22 +10658,25 @@ impl Elaborator {
                                 body: Rc::new(body.clone()),
                             };
                             let fl = Level::join(dom_level.clone(), cod_level.clone());
-                            typing::check_term(&self.goal_psi(), 0, Layer::Prog, &cx.gamma, &f, &dom_ty, &fl, self.fuel)
+                            typing::check_term(&self.goal_psi(), 0, Layer::Prog, &cx.gamma, &f, &dom_ty, &fl, self.policy.fuel)
                                 .is_ok()
                         };
-                        // `(a, b)`, scoped in `Γ, z`: `(s, t)` up to conversion
-                        // there. `z` is `?f`'s parameter, at the domain.
+                        // `(a, b)`, scoped in `Γ`: `(s, t)` up to conversion
+                        // there, at `?f`'s domain.
                         let oracle = self.goal_oracle();
-                        let mut zcx = cx.clone();
-                        zcx.push("#z".into(), (*dom).clone(), dom_level.clone());
-                        let (sz, tz, dz) = (s.shift_local(1), t.shift_local(1), dom.shift_local(1));
                         let witness = |a: &Term, b: &Term| {
                             let conv = |l: &Term, r: &Term| {
-                                oracle.convert_term(&zcx.gamma, Layer::Prog, l, r, &dz, &dom_level).is_ok()
+                                oracle.convert_term(&cx.gamma, Layer::Prog, l, r, &dom, &dom_level).is_ok()
                             };
-                            conv(a, &sz) && conv(b, &tz)
+                            conv(a, &s) && conv(b, &t)
                         };
-                        match lgg::lgg_body_up_to_conversion(&rx, &ry, &s, &t, &witness).ok().filter(|body| fits(body)) {
+                        let witness_fst = |a: &Term, b: &Term, s1: &Term, t1: &Term, ty: &Type, level: &Level| {
+                            let conv = |l: &Term, r: &Term| {
+                                oracle.convert_term(&cx.gamma, Layer::Prog, l, r, ty, level).is_ok()
+                            };
+                            conv(a, s1) && conv(b, t1)
+                        };
+                        match lgg::lgg_body_up_to_conversion(&rx, &ry, &s, &t, &witness, &witness_fst).ok().filter(|body| fits(body)) {
                             Some(body) => body,
                             None => {
                                 let msg = self.cong_mismatch(cx, &mismatch, expected, &s, &t);
@@ -9079,33 +10919,28 @@ impl Elaborator {
         // Locals and `let` aliases, innermost first. An alias bound at depth
         // `d` shadows every binder at position `< d` and is shadowed by the
         // rest, which is what compares the two here.
-        let local_pos = cx.names.iter().rposition(|n| n == name);
-        let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+        let local_pos = cx.names.lookup(name);
+        let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
         match (local_pos, alias) {
             (Some(pos), Some(a)) if a.depth <= pos => return Ok(self.local(cx, pos)),
             (_, Some(a)) => {
                 // Inlined at the use site, shifted across the binders pushed
                 // since it was bound (same as a `fn` definition's globals).
                 let by = (cx.names.len() - a.depth) as u32;
-                return Ok((
-                    if splice { a.splice(by) } else { a.term.shift_local(by) },
-                    a.ty.shift_local(by),
-                    a.level.clone(),
-                ));
+                let (term, ty) = if splice { a.splice(by) } else { a.at(by) };
+                return Ok((term, ty, a.level.clone()));
             }
             (Some(pos), None) => return Ok(self.local(cx, pos)),
             (None, None) => {}
         }
-        if let Some((ind, i)) = self.ctor_of(name) {
+        if let Some((ind, i)) = self.ctor_of(name).or_else(|| self.ctor_over_types(name)) {
             return self.infer_ctor(cx, &ind, i, &[] as &[Expr], span);
         }
         // The enclosing declaration's own name: only a saturated, guarded
         // *call* means anything (it is the induction hypothesis, not a value).
-        if cx.selfref.as_ref().is_some_and(|s| s.matches(name)) {
-            return err(
-                format!("`{name}` can only be used here as a saturated recursive call"),
-                span,
-            );
+        if let Some(selfref) = cx.selfref.as_ref().filter(|s| s.matches(name)) {
+            let note = self.self_shadow_note(selfref, name);
+            return err(self_name_refusal(selfref, name), span).map_err(|e| with_self_shadow_note(e, note.as_deref()));
         }
         let resolved_global = self
             .key_of(self.instance_alias(name))
@@ -9123,7 +10958,7 @@ impl Elaborator {
                 // index arithmetic is the only thing that ever stopped it.
                 // The two paddings never combine: goals are refused inside a
                 // `meta fn`.
-                let meta_off = self.meta_pushed.borrow().len() as u32;
+                let meta_off = self.scope.meta_pushed.borrow().len() as u32;
                 let var = GlobalVar(len - 1 - abs + self.global_padding() + meta_off);
                 let GlobalBinding::Tm { ty, level, .. } = &self.psi.bindings[*abs as usize] else {
                     unreachable!("global index points at a non-Trm binding");
@@ -9187,6 +11022,25 @@ impl Elaborator {
                         span,
                     );
                 }
+                // The proof-search tactics are checking forms too: met where
+                // nothing is expected, the name is not a missing import
+                // (`issues/checking-tactic-in-inference-position-diagnostic.md`).
+                if matches!(name, "omega" | "ring" | "linarith" | "nlinarith" | "bv_omega" | "positivity") {
+                    let call = if matches!(name, "bv_omega" | "positivity") {
+                        name.to_string()
+                    } else {
+                        format!("{name}(…)")
+                    };
+                    return err(
+                        format!(
+                            "`{name}` needs an expected type (it is checking-only, like `refl`): it \
+                             proves a goal, so it only means anything where one is known (a \
+                             `theorem` body, an annotated `let`, an argument)\n  hint: state what \
+                             it proves: `let k: (T) = {call};`"
+                        ),
+                        span,
+                    );
+                }
                 Err(self.name_miss(name, format!("unbound name `{name}`"), span))
             }
         }
@@ -9198,19 +11052,19 @@ impl Elaborator {
     /// any dynamic meta binders currently in scope.
     fn semantic_oracle(&self) -> oracle::SemanticOracle {
         if let Some(world) = self.attempt.goal_arena.delta_world(&self.delta_psi) {
-            return oracle::SemanticOracle::with_dynamic(&world, &self.meta_pushed.borrow(), self.fuel);
+            return oracle::SemanticOracle::with_dynamic(&world, &self.scope.meta_pushed.borrow(), self.policy.fuel);
         }
-        oracle::SemanticOracle::with_dynamic(&self.delta_psi, &self.meta_pushed.borrow(), self.fuel)
+        oracle::SemanticOracle::with_dynamic(&self.delta_psi, &self.scope.meta_pushed.borrow(), self.policy.fuel)
     }
 
     /// Semantic operations in the real goal-statement world.
     fn goal_oracle(&self) -> oracle::SemanticOracle {
-        oracle::SemanticOracle::in_world(self.goal_psi(), self.fuel)
+        oracle::SemanticOracle::in_world(self.goal_psi(), self.policy.fuel)
     }
 
     /// Semantic operations over committed Ψ, with no declaration padding.
     fn committed_oracle(&self) -> oracle::SemanticOracle {
-        oracle::SemanticOracle::in_world((*self.psi).clone(), self.fuel)
+        oracle::SemanticOracle::in_world((*self.psi).clone(), self.policy.fuel)
     }
 
     /// The capabilities currently admitted to expression elaboration.
@@ -9295,12 +11149,18 @@ impl Elaborator {
     /// goal block. Every site that renumbers a `GlobalVar` against the
     /// padding takes this; only `GoalArena::allocate`'s own
     /// `goal_base − 1 − k` does not.
-    /// Does `cx` emit the checked spellings (`docs/intro-by-type-design.md`
-    /// §4.1)? Everywhere but inside a quotation payload: the kernel refuses
-    /// them there (§2.3), and both the context bit and the elaborator's own
-    /// depth are asked, so no fresh `Cx` inside a payload can escape it.
-    pub(crate) fn emits_at_forms(&self, cx: &Cx) -> bool {
-        !cx.quoted && self.quote_depth.get() == 0
+    /// Does elaboration here emit the checked spellings
+    /// (`docs/intro-by-type-design.md` §4.1)? Everywhere but inside a
+    /// quotation payload: the kernel refuses them there (§2.3).
+    pub(crate) fn emits_at_forms(&self) -> bool {
+        !self.under_quotation()
+    }
+
+    /// Is a quotation payload elaborating above this point? Asked of the
+    /// elaborator's dynamic scope, never of a `Cx`: a helper inside a payload
+    /// that starts from a fresh `Cx` is still inside it.
+    pub(crate) fn under_quotation(&self) -> bool {
+        self.scope.quote_depth.get() > 0
     }
 
     pub(crate) fn global_padding(&self) -> u32 {
@@ -9310,8 +11170,15 @@ impl Elaborator {
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
     fn refresh_delta_psi(&mut self) {
         self.attempt.goal_arena.invalidate_delta_world();
+        // The interface boundary (`interfaces.rs`): the elaborator's worlds
+        // withhold other modules' interface definitions; `psi`, the gate's,
+        // never does.
+        let withheld = self.withheld_policy();
         if self.global_padding() == 0 {
-            self.delta_psi = self.psi.clone();
+            self.delta_psi = match withheld {
+                Some(w) => Shared::new(self.psi.withholding(Some(w))),
+                None => self.psi.clone(),
+            };
             return;
         }
         let placeholder = GlobalBinding::Tm {
@@ -9321,7 +11188,11 @@ impl Elaborator {
             level: Level::Zero,
             body: None,
         };
-        *self.delta_psi = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+        let padded = self.psi.extended(std::iter::repeat_n(placeholder, self.attempt.goal_arena.base() as usize));
+        *self.delta_psi = match withheld {
+            Some(w) => padded.withholding(Some(w)),
+            None => padded,
+        };
     }
 }
 
@@ -9451,4 +11322,31 @@ enum GroupKind {
     /// Declarations without a measure that call one another, one of them
     /// recursing over a mutual family (docs/mutual-inductive-design.md §6).
     Structural,
+}
+
+/// The reserved name of a match's anonymous equation once it is bound
+/// (docs/dependent-match-compiler-design.md §4.1). `__` names are the
+/// machinery's; a certificate may spell it, a user does not write it.
+pub(crate) const MATCH_EQ: &str = "__match_eq";
+
+/// An indexed family as [`Elaborator::elab_convoy_packed`] reads it: its index
+/// type, its levels, the family at an index, and its own eliminator at a
+/// two-binder motive.
+struct PackedFamily<'a> {
+    ity: Type,
+    ilvl: Level,
+    flvl: Level,
+    idx: Rc<Term>,
+    /// `F(i)`, scoped `k` binders past Γ, `i` scoped there too.
+    at: &'a dyn Fn(Term, u32) -> Type,
+    eliminate: &'a dyn Fn(&Cx, &[Arm], Term, Type, Level) -> R<Term>,
+}
+
+
+/// Why [`Elaborator::try_recursion_at_top`] runs: as the lowering of an
+/// ordinary Nat recursion, or in place of a refusal or the measure route.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TopAttempt {
+    Default,
+    Fallback,
 }

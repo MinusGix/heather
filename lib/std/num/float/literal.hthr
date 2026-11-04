@@ -1,0 +1,538 @@
+// Decimal and hex literals rounded into a format
+// (docs/floating-point-design.md §15).
+//
+// A literal is `mant · base^exp`: base 10 for a decimal spelling, base 2 for
+// a hex float. `Format::round_scaled` rounds it in a window of the format a
+// few binades wide around the value (window.hthr), placed by an estimate of
+// its binary exponent, so the division that finds the half-units and the
+// sticky bit works on numbers about `prec + c` bits wide past the scaling.
+// When the estimate misses (the window's conditions are checked, not
+// assumed), it rounds with `round_rat` instead; the result is the correct
+// rounding either way (`round_scaled_correct`).
+//
+// This is the exact half of Rust's `dec2flt` (Clinger's algorithm with big
+// integers), not its Eisel-Lemire fast path: that one needs a table of
+// 128-bit powers of ten and pays off once the rounding runs natively.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import linarith;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+import float;
+import round;
+import window;
+
+export rat::{Decimal, HexFloat, DecimalLiteral, HexLiteral};
+
+// ---------------------------------------------------------------------------
+// Past the largest float and the overflow threshold, every value rounds the
+// same way.
+
+theorem Finite::below_beyond({F: Format}, y, x: Rat, yx: y <= x, ex: F.Exceeds(y), f: Finite(F), b: Finite::Below(y, f)): Finite::Below(x, f) {
+    And(Rat::le_trans(b.left, yx), λ g _ => b.right(g, Rat::le_of_lt(ex(g))))
+}
+
+theorem Finite::nearest_beyond({F: Format}, y, x: Rat, yx: y <= x, ex: F.Exceeds(y), f: Finite(F), n: Finite::Nearest(y, f)): Finite::Nearest(x, f) {
+    let b = Finite::below_of_nearest(y, f, n, Rat::le_of_lt(ex(f)));
+    let fx: (f.val() <= x) = Rat::le_trans(b.left, yx);
+    λ g => Rat::dist_le_of_below(x, g.val(), f.val(), b.right(g, Rat::le_of_lt(ex(g))), fx)
+}
+
+// Below an `x` past every float, the nearest float is the greatest.
+theorem Finite::nearest_same_beyond({F: Format}, y, x: Rat, yx: y <= x, ex: F.Exceeds(y), f, g: Finite(F), n: Finite::Nearest(y, f),
+    ng: Finite::Nearest(x, g)): g.val() ≈ f.val()
+{
+    let bf = Finite::below_beyond(y, x, yx, ex, f, Finite::below_of_nearest(y, f, n, Rat::le_of_lt(ex(f))));
+    let gx: (g.val() <= x) = Rat::le_of_lt(Rat::lt_of_lt_of_le(ex(g), yx));
+    Finite::below_unique(x, g, f, Finite::below_of_nearest(x, g, ng, gx), bf)
+}
+
+theorem Format::not_exceeds_undercuts(self F: Format, x: Rat, ex: F.Exceeds(x), un: F.Undercuts(x)): False {
+    let z = Finite::zero(F, False);
+    Rat::lt_irrefl(x, Rat::lt_trans(un(z), ex(z)))
+}
+
+theorem Format::rounds_beyond(self F: Format, mode: Mode, y, x: Rat, yx: y <= x, ex: F.Exceeds(y),
+    ov: F.specials.has_inf().IsTrue() → F.ovf() <= y, r: Float(F), hr: RoundsTo(F, mode, y, r)): RoundsTo(F, mode, x, r)
+{
+    let exx: F.Exceeds(x) = F.exceeds_mono(y, x, yx, ex);
+    let fits = λ (fy: F.Fits(y)) => λ (has: F.specials.has_inf().IsTrue()) => false_elim<x.abs() < F.ovf()>(F.fits_not_over(y, fy, has, ov(has)));
+    let pos: (0 < y) = Rat::lt_of_le_of_lt(Rat::le_of_same(Rat::same_sym(Finite::zero_val(F))), ex(Finite::zero(F, False)));
+    match r as λ r0 => RoundsTo(F, mode, y, r0) → RoundsTo(F, mode, x, r0) {
+        Fin(f) => match mode {
+            NearestEven => λ h => And(And(Finite::nearest_beyond(y, x, yx, ex, f, h.left.left),
+                λ g ng => Inl(Finite::nearest_same_beyond(y, x, yx, ex, f, g, h.left.left, ng))), fits(h.right)),
+            NearestAway => λ h => And(And(Finite::nearest_beyond(y, x, yx, ex, f, h.left.left),
+                λ g ng => Rat::le_of_same(Rat::abs_respects(x := g.val(), x2 := f.val(), hx := Finite::nearest_same_beyond(y, x, yx, ex, f, g, h.left.left, ng)))),
+                fits(h.right)),
+            TowardPos => λ h => match h {
+                Inl(a) => false_elim(Finite::above_not_exceeds(y, f, a, ex)),
+                Inr(s) => Inr(And(s.left, And(Finite::below_beyond(y, x, yx, ex, f, s.right.left), exx))),
+            },
+            TowardNeg => λ h => match h {
+                Inl(b) => Inl(Finite::below_beyond(y, x, yx, ex, f, b)),
+                Inr(s) => false_elim(F.not_exceeds_undercuts(y, ex, s.right.right)),
+            },
+            TowardZero => λ h => And(λ _ => Finite::below_beyond(y, x, yx, ex, f, h.left(Rat::le_of_lt(pos))),
+                λ np => false_elim(Rat::lt_irrefl(0, Rat::lt_of_lt_of_le(pos, Rat::le_trans(yx, np))))),
+        },
+        Inf(n, has) => match mode {
+            NearestEven => match n {
+                False => λ (h: F.ovf() <= y) => Rat::le_trans(h, yx),
+                True => λ (h: y <= -F.ovf()) => false_elim(F.ovf_not_both(y, ov(has), h)),
+            },
+            NearestAway => match n {
+                False => λ (h: F.ovf() <= y) => Rat::le_trans(h, yx),
+                True => λ (h: y <= -F.ovf()) => false_elim(F.ovf_not_both(y, ov(has), h)),
+            },
+            TowardPos => match n {
+                False => λ _ => exx,
+                True => λ h => h,
+            },
+            TowardNeg => match n {
+                False => λ h => h,
+                True => λ (h: F.Undercuts(y)) => false_elim(F.not_exceeds_undercuts(y, ex, h)),
+            },
+            TowardZero => λ h => h,
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(hr)
+}
+
+// ---------------------------------------------------------------------------
+// Where the window goes.
+
+// `⌊e · lg / 2^16⌋`; with `lg ≈ 2^16 · log₂ base` it is about `⌊e · log₂ base⌋`.
+fn Int::scale_floor(self e: Int, lg: Nat) → Int {
+    match e { OfNat(k) => ((k * lg).shr(16)).int(), NegSucc(k) => -((Succ(k) * lg + 65535).shr(16)).int() }
+}
+
+// The window's width in binades past the first: three, or the whole format.
+fn Format::win_c(self F: Format) → Nat { F.span.min(3) }
+
+// `mant · base^exp` lies in `[2^E, 2^(E+2))` for `E` the mantissa's width
+// less one plus `⌊exp · log₂ base⌋`, so in `F`'s binade `E - emin` or the
+// next; the window starts one binade lower to cover an estimate that is one
+// short, and is clamped to the format.
+fn Format::win_j(self F: Format, lg, mant: Nat, exp: Int) → Nat {
+    ((mant.width().int() - 1 + exp.scale_floor(lg) - F.emin) - 1).pos_part().min(F.span - F.win_c())
+}
+
+// ---------------------------------------------------------------------------
+// The rounding.
+
+// The window's half-unit exponent, and the value over it as a fraction
+// `num / den`: `mant · base^exp / 2^g`.
+fn Format::sc_g(self F: Format, j, c: Nat) → Int { (F.window(j, c)).qmin() - 1 }
+
+fn Format::sc_num(self F: Format, base, mant: Nat, exp: Int, j, c: Nat) → Nat {
+    (mant * Nat::pow_sq(base, exp.pos_part())) * Nat::pow_sq(2, (F.sc_g(j, c)).neg_part())
+}
+
+fn Format::sc_den(self F: Format, base: Nat, exp: Int, j, c: Nat) → Nat {
+    Nat::pow_sq(base, exp.neg_part()) * Nat::pow_sq(2, (F.sc_g(j, c)).pos_part())
+}
+
+// Quotient bits enough to pass the window's overflow limit: `2^fuel` is
+// `top · 2^(c+1)`.
+fn Format::sc_fuel(self F: Format, c: Nat) → Nat { Succ(F.prec() + c) }
+
+fn Format::low_ok(self F: Format, j, h: Nat) → Option<j = 0 ∨ F.top() <= h> {
+    match j.le_dec(0) {
+        Inl(z) => Some(Inl(omega(z))),
+        Inr(_) => match F.top().le_dec(h) { Inl(t) => Some(Inr(t)), Inr(_) => None },
+    }
+}
+
+fn Format::high_ok(self F: Format, j, c, h: Nat) → Option<F.span <= j + c ∨ h < F.top() * Nat::pow(2, c)> {
+    match F.span.le_dec(j + c) {
+        Inl(t) => Some(Inl(t)),
+        Inr(_) => match Succ(h).le_dec(F.top() * Nat::pow(2, c)) { Inl(t) => Some(Inr(t)), Inr(_) => None },
+    }
+}
+
+fn Format::sc_pick(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c, h: Nat, st: Bool,
+    lo: Option<j = 0 ∨ F.top() <= h>, hi: Option<F.span <= j + c ∨ h < F.top() * Nat::pow(2, c)>) → Float(F)
+{
+    match lo {
+        None => F.round_rat(mode, Rat::scaled(base, bp, mant, exp)),
+        Some(_) => match hi {
+            None => F.round_rat(mode, Rat::scaled(base, bp, mant, exp)),
+            Some(_) => F.widen(j, c, (F.window(j, c)).round_h(mode, h, st), F.round_rat(mode, Rat::scaled(base, bp, mant, exp))),
+        },
+    }
+}
+
+fn Format::sc_quot(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat, s: nat::DivMod) → Float(F) {
+    match s {
+        MkDivMod(h, r) => {
+            F.sc_pick(mode, base, bp, mant, exp, j, c, h, match r { Zero => False, Succ(_) => True }, F.low_ok(j, h), F.high_ok(j, c, h))
+        },
+    }
+}
+
+// Past the window's overflow limit, which only the top window may be.
+fn Format::sc_over(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat, top: F.span <= j + c ∨ ¬(F.span <= j + c)) → Float(F) {
+    match top {
+        Inl(_) => F.widen(j, c, (F.window(j, c)).round_h(mode, Nat::pow_sq(2, F.sc_fuel(c)), False), F.round_rat(mode, Rat::scaled(base, bp, mant, exp))),
+        Inr(_) => F.round_rat(mode, Rat::scaled(base, bp, mant, exp)),
+    }
+}
+
+fn Format::sc_div(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat,
+    fits: Succ(F.sc_num(base, mant, exp, j, c)) <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c))
+        ∨ ¬(Succ(F.sc_num(base, mant, exp, j, c)) <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))) → Float(F)
+{
+    match fits {
+        Inl(_) => F.sc_quot(mode, base, bp, mant, exp, j, c, (F.sc_num(base, mant, exp, j, c)).ldiv_fuel(F.sc_den(base, exp, j, c), F.sc_fuel(c))),
+        Inr(_) => F.sc_over(mode, base, bp, mant, exp, j, c, F.span.le_dec(j + c)),
+    }
+}
+
+fn Format::sc_at(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat, jc: j + c <= F.span ∨ ¬(j + c <= F.span)) → Float(F) {
+    match jc {
+        Inl(_) => F.sc_div(mode, base, bp, mant, exp, j, c,
+            Succ(F.sc_num(base, mant, exp, j, c)).le_dec(F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))),
+        Inr(_) => F.round_rat(mode, Rat::scaled(base, bp, mant, exp)),
+    }
+}
+
+// `mant · base^exp` rounded into `F`; `lg ≈ 2^16 · log₂ base` places the
+// window and is not trusted.
+fn Format::round_scaled(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, lg, mant: Nat, exp: Int) → Float(F) {
+    F.sc_at(mode, base, bp, mant, exp, F.win_j(lg, mant, exp), F.win_c(), (F.win_j(lg, mant, exp) + F.win_c()).le_dec(F.span))
+}
+
+fn Format::round_decimal(self F: Format, mode: Mode, d: Decimal) → Float(F) { F.round_scaled(mode, 10, trivial, 217706, d.mant, d.exp) }
+
+// ---------------------------------------------------------------------------
+// Correctness.
+
+theorem Format::sc_num_eq(self F: Format, base, mant: Nat, exp: Int, j, c: Nat):
+    F.sc_num(base, mant, exp, j, c) = (mant * Nat::pow(base, exp.pos_part())) * (F.window(j, c)).rat_q()
+{
+    trans(Nat::cong(λ (v: Nat) => (mant * v) * Nat::pow_sq(2, (F.sc_g(j, c)).neg_part()), Nat::pow_sq_eq(base, exp.pos_part())),
+        Nat::cong(λ (v: Nat) => (mant * Nat::pow(base, exp.pos_part())) * v, Nat::pow_sq_eq(2, (F.sc_g(j, c)).neg_part())))
+}
+
+theorem Format::sc_den_eq(self F: Format, base: Nat, exp: Int, j, c: Nat):
+    F.sc_den(base, exp, j, c) = Nat::pow(base, exp.neg_part()) * (F.window(j, c)).rat_p()
+{
+    trans(Nat::cong(λ (v: Nat) => v * Nat::pow_sq(2, (F.sc_g(j, c)).pos_part()), Nat::pow_sq_eq(base, exp.neg_part())),
+        Nat::cong(λ (v: Nat) => Nat::pow(base, exp.neg_part()) * v, Nat::pow_sq_eq(2, (F.sc_g(j, c)).pos_part())))
+}
+
+theorem Format::sc_den_pos(self F: Format, base: Nat, bp: 1 <= base, exp: Int, j, c: Nat): 0 < F.sc_den(base, exp, j, c) {
+    let b0: (0 < base) = omega(bp);
+    let p1: (0 < Nat::pow(base, exp.neg_part())) = Nat::pow_pos(a := base, n := exp.neg_part());
+    let p2: (0 < (F.window(j, c)).rat_p()) = Nat::pow_pos(a := 2, n := ((F.window(j, c)).qmin() - 1).pos_part());
+    let m: (0 < Nat::pow(base, exp.neg_part()) * (F.window(j, c)).rat_p()) =
+        Nat::mul_pos(a := Nat::pow(base, exp.neg_part()), b := (F.window(j, c)).rat_p(), pa := p1, pb := p2);
+    j(sym(F.sc_den_eq(base, exp, j, c)), λ v _ => 0 < v, m)
+}
+
+// The quotient and remainder of `num / den` are the window's half-units and
+// sticky bit.
+theorem Format::sc_approx(self F: Format, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c, h, r: Nat,
+    parts: h * F.sc_den(base, exp, j, c) + r = F.sc_num(base, mant, exp, j, c), bound: r < F.sc_den(base, exp, j, c)):
+    (F.window(j, c)).Approx(Rat::scaled(base, bp, mant, exp), h, match r { Zero => False, Succ(_) => True })
+{
+    let W = F.window(j, c);
+    let x = Rat::scaled(base, bp, mant, exp);
+    let a = mant * Nat::pow(base, exp.pos_part());
+    let de = F.sc_den_eq(base, exp, j, c);
+    let p2: (h * (Nat::pow(base, exp.neg_part()) * W.rat_p()) + r = a * W.rat_q()) =
+        trans(sym(Nat::cong(λ (v: Nat) => h * v + r, de)), trans(parts, F.sc_num_eq(base, mant, exp, j, c)));
+    let b2: (r < Nat::pow(base, exp.neg_part()) * W.rat_p()) = j(de, λ v _ => r < v, bound);
+    W.approx_div(x, a, refl, h)(r, p2, b2)
+}
+
+// The window's least normal is `top` half-units; its top binade starts at
+// `top · 2^c`.
+theorem Format::win_lo_grid(self F: Format, j, c: Nat): (F.win_lo(j, c)).val() ≈ (F.window(j, c)).grid(F.top().int()) {
+    let w = F.win_lo(j, c);
+    let t = F.top_double();
+    let e: (w.H() = ((F.half() * Nat::pow(2, 0)) * 2).int()) = refl;
+    let p0: (Nat::pow(2, 0) = 1) = refl;
+    let r1: ((F.half() * 1) * 2 = F.half() * 2) = ring;
+    let r: ((F.half() * Nat::pow(2, 0)) * 2 = F.half() * 2) = trans(Nat::cong(λ (v: Nat) => (F.half() * v) * 2, p0), r1);
+    j(trans(e, Int::cong_ofnat(trans(r, sym(t)))), λ v _ => w.val() ≈ (F.window(j, c)).grid(v), w.val_grid())
+}
+
+theorem Format::win_hi_grid(self F: Format, j, c: Nat): (F.win_hi(j, c)).val() ≈ (F.window(j, c)).grid((F.top() * Nat::pow(2, c)).int()) {
+    let w = F.win_hi(j, c);
+    let t = F.top_double();
+    let e: (w.H() = ((F.half() * Nat::pow(2, c)) * 2).int()) = refl;
+    let r: ((F.half() * Nat::pow(2, c)) * 2 = (F.half() * 2) * Nat::pow(2, c)) = ring;
+    let r2: ((F.half() * 2) * Nat::pow(2, c) = F.top() * Nat::pow(2, c)) = Nat::cong(λ (v: Nat) => v * Nat::pow(2, c), sym(t));
+    j(trans(e, Int::cong_ofnat(trans(r, r2))), λ v _ => w.val() ≈ (F.window(j, c)).grid(v), w.val_grid())
+}
+
+theorem Format::sc_fuel_pow(self F: Format, c: Nat): Nat::pow_sq(2, F.sc_fuel(c)) = (F.top() * Nat::pow(2, c)) * 2 {
+    trans(Nat::pow_sq_eq(2, F.sc_fuel(c)), Nat::cong(λ (v: Nat) => v * 2, Nat::pow_add(2, F.prec(), c)))
+}
+
+theorem Format::sc_pick_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c, h: Nat, st: Bool,
+    jc: j + c <= F.span, a: (F.window(j, c)).Approx(Rat::scaled(base, bp, mant, exp), h, st),
+    lo: Option<j = 0 ∨ F.top() <= h>, hi: Option<F.span <= j + c ∨ h < F.top() * Nat::pow(2, c)>):
+    RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_pick(mode, base, bp, mant, exp, j, c, h, st, lo, hi))
+{
+    let W = F.window(j, c);
+    let x = Rat::scaled(base, bp, mant, exp);
+    let fb = F.round_rat_correct(mode, x);
+    match lo {
+        None => fb,
+        Some(pl) => match hi {
+            None => fb,
+            Some(ph) => {
+                let low: (j = 0 ∨ (F.win_lo(j, c)).val() <= x) = match pl {
+                    Inl(z) => Inl(z),
+                    Inr(t) => Inr(Rat::le_respects(Rat::same_sym(F.win_lo_grid(j, c)), x.same_refl(), W.cut_le(x, h, st, a, F.top().int(), omega(t)))),
+                };
+                let high: (j + c = F.span ∨ x < (F.win_hi(j, c)).val()) = match ph {
+                    Inl(t) => Inl(omega(t, jc)),
+                    Inr(t) => Inr(Rat::lt_respects(x.same_refl(), Rat::same_sym(F.win_hi_grid(j, c)),
+                        W.cut_gt(x, h, st, a, (F.top() * Nat::pow(2, c)).int(), omega(t)))),
+                };
+                let iw: F.InWindow(j, c, x) = And(jc, And(W.approx_nonneg(x, h, st, a), And(low, high)));
+                F.window_rounds(j, c, mode, x, iw, W.round_h(mode, h, st), F.round_rat(mode, x), W.round_h_correct(mode, x, h, st, a), fb)
+            },
+        },
+    }
+}
+
+theorem Format::sc_quot_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat, jc: j + c <= F.span,
+    s: nat::DivMod, spec: DivMod::Spec(F.sc_num(base, mant, exp, j, c), F.sc_den(base, exp, j, c), s)):
+    RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_quot(mode, base, bp, mant, exp, j, c, s))
+{
+    let N = F.sc_num(base, mant, exp, j, c);
+    let D = F.sc_den(base, exp, j, c);
+    let dp = F.sc_den_pos(base, bp, exp, j, c);
+    match s as λ s0 => DivMod::Spec(N, D, s0) → RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_quot(mode, base, bp, mant, exp, j, c, s0)) {
+        MkDivMod(h, r) => λ (sp: (h * D + r = N) ∧ (D <= 0 ∨ r < D)) => {
+            let bound: (r < D) = match sp.right { Inl(z) => omega(z, dp), Inr(lt) => lt };
+            F.sc_pick_ok(mode, base, bp, mant, exp, j, c, h, match r { Zero => False, Succ(_) => True }, jc,
+                F.sc_approx(base, bp, mant, exp, j, c, h, r, sp.left, bound), F.low_ok(j, h), F.high_ok(j, c, h))
+        },
+    }(spec)
+}
+
+// Past `2^fuel` half-units the top window rounds `x` as it rounds
+// `2^fuel` half-units, which is past its largest float and its overflow
+// threshold (`rounds_beyond`).
+theorem Format::sc_over_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat, jc: j + c <= F.span,
+    big: F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)) <= F.sc_num(base, mant, exp, j, c), top: F.span <= j + c ∨ ¬(F.span <= j + c)):
+    RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_over(mode, base, bp, mant, exp, j, c, top))
+{
+    let W = F.window(j, c);
+    let x = Rat::scaled(base, bp, mant, exp);
+    let fb = F.round_rat_correct(mode, x);
+    match top {
+        Inr(_) => fb,
+        Inl(tp) => {
+            let L = Nat::pow_sq(2, F.sc_fuel(c));
+            let P = Nat::pow(2, c);
+            let N = F.sc_num(base, mant, exp, j, c);
+            let D = F.sc_den(base, exp, j, c);
+            let dp = F.sc_den_pos(base, bp, exp, j, c);
+            let q = N.ldiv(D).quot();
+            let r = N.ldiv(D).rem();
+            let pa: (q * D + r = N) = N.ldiv_parts(D);
+            let rl: (r < D) = N.ldiv_rem_lt(D);
+            let a = F.sc_approx(base, bp, mant, exp, j, c, q, r, pa, rl);
+            let lc: (D * L = L * D) = Nat::mul_comm(D, L);
+            let sq: (Succ(q) * D = D + q * D) = q.mul_succ_left(D);
+            let lt: (L * D < Succ(q) * D) = omega(big, lc, sq, pa, rl);
+            let lq: (L < Succ(q)) = Nat::lt_of_mul_lt_mul_r(L, Succ(q), D, lt);
+            let st: Bool = match r { Zero => False, Succ(_) => True };
+            let yx: (W.grid(L.int()) <= x) = W.cut_le(x, q, st, a, L.int(), omega(lq));
+            let y = W.grid(L.int());
+            let ay: W.Approx(y, L, False) = y.same_refl();
+            let lp: (L = (F.top() * P) * 2) = F.sc_fuel_pow(c);
+            let tw: (W.top() = F.top()) = refl;
+            let mb = W.max_mag_bounds();
+            let m1: (Succ(W.max_mag()) * P <= W.top() * P) = Nat::mul_le_mono_r(P, Succ(W.max_mag()), W.top(), mb.right.left);
+            let l0: (W.limit_h() = Succ(W.max_mag()) * (P * 2)) = refl;
+            let lim: (W.limit_h() <= L) = linarith(lp, tw, m1, l0);
+            let o0: (W.ovf_h() = (W.top() + W.top() - 1) * P) = refl;
+            let o1: ((W.top() + W.top() - 1) * P <= (W.top() + W.top()) * P) = Nat::mul_le_mono_r(P, W.top() + W.top() - 1, W.top() + W.top(), (W.top() + W.top()).sub_le(1));
+            let ovl: (W.ovf_h() <= L) = linarith(o0, o1, tw, lp);
+            let hr0 = W.round_h_correct(mode, y, L, False, ay);
+            let ex = W.exceeds_over(y, L, False, ay, lim);
+            let ovy = λ (_: W.specials.has_inf().IsTrue()) => W.cut_le(y, L, False, ay, W.ovf_h().int(), omega(ovl));
+            let hr = W.rounds_beyond(mode, y, x, yx, ex, ovy, W.round_h(mode, L, False), hr0);
+            let pp: (0 < P) = Nat::pow_pos(a := 2, n := c);
+            let tm: (F.top() * 1 <= F.top() * P) = Nat::mul_le_mono_l(F.top(), 1, P, omega(pp));
+            let t1: (F.top() * 1 = F.top()) = ring;
+            let tl: (F.top() <= L) = omega(lp, tm, t1);
+            let lo: ((F.win_lo(j, c)).val() <= x) =
+                Rat::le_trans(Rat::le_respects(Rat::same_sym(F.win_lo_grid(j, c)), W.grid(L.int()).same_refl(), W.grid_le(F.top().int(), L.int(), omega(tl))), yx);
+            let iw: F.InWindow(j, c, x) = And(jc, And(W.approx_nonneg(x, q, st, a), And(Inr(lo), Inl(omega(jc, tp)))));
+            F.window_rounds(j, c, mode, x, iw, W.round_h(mode, L, False), F.round_rat(mode, x), hr, fb)
+        },
+    }
+}
+
+theorem Format::sc_div_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat, jc: j + c <= F.span,
+    fits: Succ(F.sc_num(base, mant, exp, j, c)) <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c))
+        ∨ ¬(Succ(F.sc_num(base, mant, exp, j, c)) <= F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))):
+    RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_div(mode, base, bp, mant, exp, j, c, fits))
+{
+    let N = F.sc_num(base, mant, exp, j, c);
+    let D = F.sc_den(base, exp, j, c);
+    let fuel = F.sc_fuel(c);
+    match fits {
+        Inl(lt) => {
+            let lt2: (N < D * Nat::pow(2, fuel)) = j(Nat::pow_sq_eq(2, fuel), λ v _ => Succ(N) <= D * v, lt);
+            F.sc_quot_ok(mode, base, bp, mant, exp, j, c, jc, N.ldiv_fuel(D, fuel), Nat::ldiv_fuel_bounded(fuel, N, D, lt2))
+        },
+        Inr(nl) => F.sc_over_ok(mode, base, bp, mant, exp, j, c, jc, omega(nl), F.span.le_dec(j + c)),
+    }
+}
+
+theorem Format::sc_at_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, mant: Nat, exp: Int, j, c: Nat,
+    jc: j + c <= F.span ∨ ¬(j + c <= F.span)): RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.sc_at(mode, base, bp, mant, exp, j, c, jc))
+{
+    match jc {
+        Inl(le) => F.sc_div_ok(mode, base, bp, mant, exp, j, c, le,
+            Succ(F.sc_num(base, mant, exp, j, c)).le_dec(F.sc_den(base, exp, j, c) * Nat::pow_sq(2, F.sc_fuel(c)))),
+        Inr(_) => F.round_rat_correct(mode, Rat::scaled(base, bp, mant, exp)),
+    }
+}
+
+// The rounding is correct for every format, mode, base and estimate.
+theorem Format::round_scaled_correct(self F: Format, mode: Mode, base: Nat, bp: 1 <= base, lg, mant: Nat, exp: Int):
+    RoundsTo(F, mode, Rat::scaled(base, bp, mant, exp), F.round_scaled(mode, base, bp, lg, mant, exp))
+{
+    F.sc_at_ok(mode, base, bp, mant, exp, F.win_j(lg, mant, exp), F.win_c(), (F.win_j(lg, mant, exp) + F.win_c()).le_dec(F.span))
+}
+
+theorem Format::round_decimal_correct(self F: Format, mode: Mode, d: Decimal): RoundsTo(F, mode, d.rat(), F.round_decimal(mode, d)) {
+    F.round_scaled_correct(mode, 10, trivial, 217706, d.mant, d.exp)
+}
+
+// ---------------------------------------------------------------------------
+// Exactness: whether a float's value is the literal's, decided by comparing
+// the two cross-multiplied numerators (`powers by squaring, so binary64's
+// 1075-bit scalings evaluate).
+
+// A finite float whose value is `x`.
+fn Float::Denotes({F: Format}, self r: Float(F), x: Rat) → Type { match r { Fin(f) => f.val() ≈ x, Inf(_, _) => False, NaN(_) => False } }
+
+// `±m · 2^q` against `mant · base^exp`, cross-multiplied.
+fn Rat::dy_lhs(m: Nat, q: Int, base: Nat, exp: Int) → Nat { (m * Nat::pow_sq(2, q.pos_part())) * Nat::pow_sq(base, exp.neg_part()) }
+
+fn Rat::dy_rhs(q: Int, base, mant: Nat, exp: Int) → Nat { (mant * Nat::pow_sq(base, exp.pos_part())) * Nat::pow_sq(2, q.neg_part()) }
+
+fn Rat::dy_exact(s: Bool, m: Nat, q: Int, base, mant: Nat, exp: Int) → Bool {
+    match s {
+        False => Rat::dy_lhs(m, q, base, exp).leb(Rat::dy_rhs(q, base, mant, exp))
+            && Rat::dy_rhs(q, base, mant, exp).leb(Rat::dy_lhs(m, q, base, exp)),
+        True => (Rat::dy_lhs(m, q, base, exp) + Rat::dy_rhs(q, base, mant, exp)).leb(0),
+    }
+}
+
+theorem Rat::dy_exact_reflects(s: Bool, m: Nat, q: Int, base: Nat, bp: 1 <= base, mant: Nat, exp: Int):
+    Reflects(Dyadic(match s { False => m.int(), True => -m.int() }, q).rat() ≈ Rat::scaled(base, bp, mant, exp), Rat::dy_exact(s, m, q, base, mant, exp))
+{
+    let X = Nat::pow(2, q.pos_part());
+    let Y = Nat::pow(2, q.neg_part());
+    let Pb = Nat::pow(base, exp.pos_part());
+    let Qb = Nat::pow(base, exp.neg_part());
+    let L = Rat::dy_lhs(m, q, base, exp);
+    let R = Rat::dy_rhs(q, base, mant, exp);
+    let lr: (L = (m * X) * Qb) = trans(Nat::cong(λ (v: Nat) => (m * v) * Nat::pow_sq(base, exp.neg_part()), Nat::pow_sq_eq(2, q.pos_part())),
+        Nat::cong(λ (v: Nat) => (m * X) * v, Nat::pow_sq_eq(base, exp.neg_part())));
+    let rr: (R = (mant * Pb) * Y) = trans(Nat::cong(λ (v: Nat) => (mant * v) * Nat::pow_sq(2, q.neg_part()), Nat::pow_sq_eq(base, exp.pos_part())),
+        Nat::cong(λ (v: Nat) => (mant * Pb) * v, Nat::pow_sq_eq(2, q.neg_part())));
+    match s {
+        False => reflects_iff(reflects_and(L.leb_reflects(R), R.leb_reflects(L)),
+            λ both => {
+                let e: ((m * X) * Qb = (mant * Pb) * Y) = omega(both, lr, rr);
+                Int::cong_ofnat(e)
+            },
+            λ (e: (m.int() * X.int()) * Qb.int() = (mant * Pb).int() * Y.int()) => {
+                let e2: (OfNat((m * X) * Qb) = OfNat((mant * Pb) * Y)) = e;
+                And(omega(e2, lr, rr), omega(e2, lr, rr))
+            }),
+        True => reflects_iff((L + R).leb_reflects(0),
+            λ z => {
+                let e: (-((m.int() * X.int()) * Qb.int()) = (mant * Pb).int() * Y.int()) = {
+                    let e2: (-OfNat((m * X) * Qb) = OfNat((mant * Pb) * Y)) = omega(z, lr, rr);
+                    e2
+                };
+                let n: (((-m.int()) * X.int()) * Qb.int() = -((m.int() * X.int()) * Qb.int())) = ring;
+                trans(n, e)
+            },
+            λ (e: ((-m.int()) * X.int()) * Qb.int() = (mant * Pb).int() * Y.int()) => {
+                let n: (((-m.int()) * X.int()) * Qb.int() = -((m.int() * X.int()) * Qb.int())) = ring;
+                let e2: (-OfNat((m * X) * Qb) = OfNat((mant * Pb) * Y)) = trans(sym(n), e);
+                omega(e2, lr, rr)
+            }),
+    }
+}
+
+// Whether `r` is a finite float whose value is `mant · base^exp`.
+fn Float::exact_scaled({F: Format}, self r: Float(F), base, mant: Nat, exp: Int) → Bool {
+    match r { Fin(f) => Rat::dy_exact(f.neg, f.mag, f.q(), base, mant, exp), Inf(_, _) => False, NaN(_) => False }
+}
+
+theorem Float::exact_scaled_reflects({F: Format}, r: Float(F), base: Nat, bp: 1 <= base, mant: Nat, exp: Int):
+    Reflects(r.Denotes(Rat::scaled(base, bp, mant, exp)), r.exact_scaled(base, mant, exp))
+{
+    match r {
+        Fin(f) => Rat::dy_exact_reflects(f.neg, f.mag, f.q(), base, bp, mant, exp),
+        Inf(_, _) => And(λ (no: bool::False = bool::True) => absurd(no), λ _ v => v),
+        NaN(_) => And(λ (no: bool::False = bool::True) => absurd(no), λ _ v => v),
+    }
+}
+
+// A hex float `mant · 2^exp`: the same rounding at base two, where the
+// binade estimate is exact.
+fn Format::round_hex(self F: Format, mode: Mode, mant: Nat, exp: Int) → Float(F) { F.round_scaled(mode, 2, trivial, 65536, mant, exp) }
+
+theorem Format::round_hex_correct(self F: Format, mode: Mode, mant: Nat, exp: Int): RoundsTo(F, mode, Rat::scaled(2, trivial, mant, exp), F.round_hex(mode, mant, exp)) {
+    F.round_scaled_correct(mode, 2, trivial, 65536, mant, exp)
+}
+
+// Whether a decimal's nearest-even rounding is the decimal itself: a
+// literal that is not draws the inexact-literal warning.
+fn Format::decimal_exact(self F: Format, d: Decimal) → Bool { (F.round_decimal(NearestEven, d)).exact_scaled(10, d.mant, d.exp) }
+
+theorem Format::decimal_exact_reflects(self F: Format, d: Decimal): Reflects((F.round_decimal(NearestEven, d)).Denotes(d.rat()), F.decimal_exact(d)) {
+    Float::exact_scaled_reflects(F.round_decimal(NearestEven, d), 10, trivial, d.mant, d.exp)
+}
+
+fn Format::hex_exact(self F: Format, mant: Nat, exp: Int) → Bool { (F.round_hex(NearestEven, mant, exp)).exact_scaled(2, mant, exp) }
+
+theorem Format::hex_exact_reflects(self F: Format, mant: Nat, exp: Int):
+    Reflects((F.round_hex(NearestEven, mant, exp)).Denotes(Rat::scaled(2, trivial, mant, exp)), F.hex_exact(mant, exp))
+{
+    Float::exact_scaled_reflects(F.round_hex(NearestEven, mant, exp), 2, trivial, mant, exp)
+}
+
+// ---------------------------------------------------------------------------
+// The literals at a float: a decimal rounds to nearest, ties to even, and is
+// inexact when the rounding is not its value; a hex float must be exact.
+
+instance(F: Format) DecimalLiteral<Float(F)> {
+    ofDecimal := λ (d: Decimal) => F.round_decimal(NearestEven, d),
+    exact := λ (d: Decimal) => F.decimal_exact(d),
+}
+
+instance(F: Format) HexLiteral<Float(F)> {
+    Ok := λ (h: HexFloat) => (F.hex_exact(h.mant, h.exp)).IsTrue(),
+    ofHex := λ (h: HexFloat) (_: (F.hex_exact(h.mant, h.exp)).IsTrue()) => F.round_hex(NearestEven, h.mant, h.exp),
+}

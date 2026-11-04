@@ -4,7 +4,7 @@ status: open
 labels: [proofs,solver,bitvec,x86,design,research]
 area: tactics
 created: 2026-09-24
-updated: 2026-09-24
+updated: 2026-10-25
 ---
 
 Build (or first cost) a **kerneltime decision procedure for bitvector goals
@@ -50,3 +50,7 @@ before a generator is worth writing.
   Assumed here: only that a checker is ordinary library code; no kernel
   case for it.
 - **[[decide-class]]** owns the `Decide` interface.
+
+## Log
+
+- 2026-10-25: Second customer, from `docs/multi-width-bitvector-survey.md` §5 (Bhat et al., OOPSLA 2026, `docs/3839511.pdf`). A multi-width claim bounded by a global width o (all widths below 65, say) reduces to one QF_BV query at width o by masks, instead of o^k queries, one per width assignment. The reduction's correctness (the paper's Lemma 4.2) is a structural induction that Heather can prove once, where the paper trusts an unverified translator. What remains is exactly this issue's decision. Rung B of [[bitvec-width-generic-decision]] (k-induction over transducers) also needs it. Benchmarks for the first round should include a wide, mask-heavy query.

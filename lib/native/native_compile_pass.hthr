@@ -1,0 +1,228 @@
+// The FunctionIR pass inside the compile (issues/function-ir-pass-in-heather.md):
+// a dataflow leaf is compiled as `function_ir_pass` leaves it, given what is
+// live after it (`Prog::computes_best`, native_compile), and this is why
+// that runs as the leaf does.
+//
+// The pass's theorem says the optimised nodes leave the buffers, and every
+// word live after the leaf, as the leaf does. A leaf's result is its run
+// settled into the environment's words (`Env::computes`), so the two
+// environments agree on the buffers, the command line and every live word
+// (`Env::computes_optimised`), and the claim between statements only reads
+// those (`Target::held_agree`). So the code compiled from the optimised
+// nodes, which goes on with its own environment, goes on as the leaf's
+// continuation does with the leaf's (`Target::goes_computes_best`). What the
+// optimised nodes need before them is checked to be no more than the leaf
+// did, and their writes against the homes as the leaf's were; neither is
+// proved of the pass, so a pass that ever needed more is a leaf compiled as
+// it is, not a refusal.
+import native_source;
+import native_compile;
+import native_compile_region;
+import native_compile_segments;
+import native_compile_bytes;
+import native_compile_homes;
+import native_compile_nodes;
+import native_compile_structured;
+import native_alloc;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_pass;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_byte_memory;
+import linux_trees;
+import linux_x86_64_byte_memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// A leaf's results in the environment
+
+// Settling keeps the buffers and the command line.
+theorem Env::settle_buffers(ports: List<Port>): (env: Env) → (after: Valuation()) →
+    (env.settle(after, ports).buffers = env.buffers) ∧ (env.settle(after, ports).args = env.args) {
+    match ports {
+        Nil => λ env after => ⟨refl, refl⟩,
+        Cons(port, rest) => λ env after => Env::settle_buffers(rest, Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers, env.args), after),
+    }
+}
+
+// A word after the results settle: as the last node writing it left it, at
+// its width, or as it was.
+theorem Env::settle_number(nodes: List<Node>): (env: Env) → (after: Valuation()) → (i: Nat) →
+    env.settle(after, nodes_write_ports(nodes)).number(i) = match nodes.last_width(i) { None => env.number(i), Some(w) => after(w, i).toNat() } {
+    match nodes {
+        Nil => λ env after i => refl,
+        Cons(node, rest) => λ env after i => {
+            let port = node_output(node);
+            let put = Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers, env.args);
+            let later = Env::settle_number(rest, put, after, i);
+            trans(later, match rest.last_width(i) as λ l => (match l as λ _ => Nat { None => put.number(i), Some(w) => after(w, i).toNat() }) =
+                    (match (match l as λ _ => Option<Nat> {
+                        Some(w) => Some(w),
+                        None => match i.matches(port.id) { True => Some(port.width), False => None },
+                    }) { None => env.number(i), Some(w) => after(w, i).toNat() }) {
+                Some(w) => refl,
+                None => match i.eq_dec(port.id) {
+                    Inl(e) => j(e, λ x _ => Env(env.words.put(x, after(port.width, x).toNat(), 0), env.buffers, env.args).number(i) = after(port.width, i).toNat(),
+                        Env::number_put(env.words, env.buffers, env.args, i, after(port.width, i).toNat())),
+                    Inr(ne) => Env::number_put_other(env.words, env.buffers, env.args, port.id, after(port.width, port.id).toNat(), i, ne),
+                },
+            })
+        },
+    }
+}
+
+// The leaf optimised leaves the environment as the leaf does where it is
+// read after: the buffers, the command line, and every word live after it.
+theorem Env::computes_optimised(self env: Env, nodes: List<Node>, out: List<Nat>):
+    (env.computes(nodes.optimised(out)).buffers = env.computes(nodes).buffers)
+        ∧ ((env.computes(nodes.optimised(out)).args = env.computes(nodes).args)
+        ∧ ((i: Nat) → Mem(i, out) → env.computes(nodes.optimised(out)).number(i) = env.computes(nodes).number(i))) {
+    let better = nodes.optimised(out);
+    let a = run_nodes(better, env.valuation(), env.buffers);
+    let b = run_nodes(nodes, env.valuation(), env.buffers);
+    let runs = nodes.optimised_runs(out, env.valuation(), env.buffers);
+    let kept_a = Env::settle_buffers(nodes_write_ports(better), Env(env.words, a.buffers, env.args), a.values);
+    let kept_b = Env::settle_buffers(nodes_write_ports(nodes), Env(env.words, b.buffers, env.args), b.values);
+    ⟨trans(kept_a.left, trans(runs.left, sym(kept_b.left))), ⟨trans(kept_a.right, sym(kept_b.right)), λ i m => {
+        let same = match nodes.last_width(i) as λ l =>
+                (match l as λ _ => Nat { None => Env(env.words, a.buffers, env.args).number(i), Some(w) => a.values(w, i).toNat() }) =
+                (match l { None => Env(env.words, b.buffers, env.args).number(i), Some(w) => b.values(w, i).toNat() }) {
+            None => refl,
+            Some(w) => cong_fn<BitVec(w), Nat>(λ x => x.toNat(), runs.right(i, m, w)),
+        };
+        trans(Env::settle_number(better, Env(env.words, a.buffers, env.args), a.values, i),
+            trans(j(sym(nodes.optimised_last(out, i, m)), λ l _ =>
+                    (match l as λ _ => Nat { None => Env(env.words, a.buffers, env.args).number(i), Some(w) => a.values(w, i).toNat() }) =
+                    (match nodes.last_width(i) { None => Env(env.words, b.buffers, env.args).number(i), Some(w) => b.values(w, i).toNat() }),
+                    same),
+                sym(Env::settle_number(nodes, Env(env.words, b.buffers, env.args), b.values, i))))
+    }⟩⟩
+}
+
+// ---------------------------------------------------------------------------
+// What a leaf leaves known
+
+// The facts settled: each word's number as the last node writing it left
+// it, the facts holding of the valuation the nodes ran to.
+theorem List::settled_knows(self facts: List<Fact>, nodes: List<Node>, env: Env, after: Valuation()):
+    facts.Hold(after) → env.settle(after, nodes_write_ports(nodes)).Knows(facts.settled(nodes)) {
+    match facts {
+        Nil => λ _ => trivial,
+        Cons(f, rest) => λ held => {
+            let later = rest.settled_knows(nodes, env, after, held.right);
+            let settled = env.settle(after, nodes_write_ports(nodes));
+            let number = Env::settle_number(nodes, env, after, f.id);
+            (match nodes.last_width(f.id) as λ l => settled.number(f.id) = (match l { None => env.number(f.id), Some(w) => after(w, f.id).toNat() }) →
+                    settled.Knows(match l {
+                        None => rest.settled(nodes),
+                        Some(w) => match Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) {
+                            True => Cons(f, rest.settled(nodes)),
+                            False => rest.settled(nodes),
+                        },
+                    }) {
+                None => λ _ => later,
+                Some(w) => λ at => match fits: Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) {
+                    True => {
+                        let both = Bool::is_true_and(Succ(f.value).leb(Nat::pow(2, w)), Succ(f.value).leb(Nat::pow(2, 64)), j(sym(fits), λ b _ => b.IsTrue(), trivial));
+                        let narrow: (f.value < Nat::pow(2, w)) = Succ(f.value).leb_sound(Nat::pow(2, w), both.left);
+                        let word: (f.value < Nat::pow(2, 64)) = Succ(f.value).leb_sound(Nat::pow(2, 64), both.right);
+                        let value: (after(w, f.id).toNat() = f.value) = trans(cong_fn<BitVec(w), Nat>(λ x => x.toNat(), held.left(w)),
+                            BitVec::toNat_ofNat(w, f.value, narrow));
+                        ⟨⟨trans(at, value), word⟩, later⟩
+                    },
+                    False => later,
+                },
+            })(number)
+        },
+    }
+}
+
+// What a leaf leaves known holds of the environment it leaves.
+theorem Env::computes_knows(self env: Env, nodes: List<Node>): env.computes(nodes).Knows(nodes.leaves_known()) {
+    let after = run_nodes(nodes, env.valuation(), env.buffers);
+    nodes.learned([]).settled_knows(nodes, Env(env.words, after.buffers, env.args), after.values,
+        nodes.learned_holds([], env.valuation(), env.buffers, trivial))
+}
+
+// ---------------------------------------------------------------------------
+// The claim between statements reads only what is live
+
+// Environments with the same buffers and command line and the same live
+// words are held alike.
+theorem Target::held_agree(self t: Target, live: List<Nat>, env, other: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    buffers: env.buffers = other.buffers, args: env.args = other.args, numbers: (i: Nat) → Mem(i, live) → env.number(i) = other.number(i)):
+    t.Held(live, other, g, m) {
+    let words = held.witness;
+    Exists(words, ⟨j(eq2(λ (b: Buffers()) (a: List<List<BitVec(8)>>) => Env(words, b, a), buffers, args), λ e _ => t.Placed(e, m), held.proof.left),
+        λ i mm => trans(held.proof.right(i, mm), numbers(i, mm))⟩)
+}
+
+// ---------------------------------------------------------------------------
+// The leaf compiled through the pass
+
+theorem Prog::within_computes_best(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, names: Nat, c: Compiled,
+    emitted: p.computes_best(layout, out, nodes, names) = Some(c)): p.Within(c.prog) {
+    let better = nodes.optimised(out);
+    (match (layout.homes.nodes_apart(better, out) && layout.homes.all_apart(nodes_writes(better), out))
+            && nodes_live_in(better, out).within(nodes_live_in(nodes, out)) as λ g =>
+            (match g as λ _ => Option<Compiled> {
+                False => p.computes(layout, out, nodes, names),
+                True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
+            }) = Some(c) → p.Within(c.prog) {
+        False => λ e => p.within_computes(layout, out, nodes, names, c, e),
+        True => (match at: p.computes(layout, out, better, names) {
+            None => λ e => p.within_computes(layout, out, nodes, names, c, e),
+            Some(d) => λ e => j(Option::some_inj(d, c, e), λ x _ => p.Within(x.prog), p.within_computes(layout, out, better, names, d, at)),
+        }),
+    })(emitted)
+}
+
+// The leaf compiled through the pass runs as the leaf: from where its code
+// starts, with what the leaf needs held, the tree goes on as it does after
+// the leaf's code with what is live after it held of the leaf's result.
+theorem Target::goes_computes_best(self t: Target, out: List<Nat>, env: Env, p: Prog, nodes: List<Node>, names: Nat, c: Compiled,
+    emitted: p.computes_best(t.layout(), out, nodes, names) = Some(c), within: c.prog.Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    checked: (t.homes.nodes_apart(nodes, out) && t.homes.all_apart(nodes_writes(nodes), out)).IsTrue(),
+    next: t.At(prog_len(c.prog), out, tree, env.computes(nodes))): t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
+    let layout = t.layout();
+    let better = nodes.optimised(out);
+    let guard = (t.homes.nodes_apart(better, out) && t.homes.all_apart(nodes_writes(better), out)) && nodes_live_in(better, out).within(nodes_live_in(nodes, out));
+    (match guard as λ g => guard = g →
+            (match g as λ _ => Option<Compiled> {
+                False => p.computes(layout, out, nodes, names),
+                True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(d) => Some(d) },
+            }) = Some(c) → t.At(prog_len(p), nodes_live_in(nodes, out), tree, env) {
+        False => λ _ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
+        True => λ passed => (match at: p.computes(layout, out, better, names) {
+            None => λ e => t.goes_computes(out, env, p, nodes, names, c, e, within, tree, checked, next),
+            Some(d) => λ e => {
+                let same: (d = c) = Option::some_inj(d, c, e);
+                let parts = Bool::is_true_and(t.homes.nodes_apart(better, out) && t.homes.all_apart(nodes_writes(better), out),
+                    nodes_live_in(better, out).within(nodes_live_in(nodes, out)), j(sym(passed), λ b _ => b.IsTrue(), trivial));
+                let agree = env.computes_optimised(nodes, out);
+                let held = λ (s: MachineState<X86Memory(t.r.profile)>) (h: t.Held(out, env.computes(better), s.gprs, s.memory)) =>
+                    t.held_agree(out, env.computes(better), env.computes(nodes), s.gprs, s.memory, h, agree.left, agree.right.left, agree.right.right);
+                let after: t.At(prog_len(d.prog), out, tree, env.computes(better)) = j(sym(same), λ x _ => t.At(prog_len(x.prog), out, tree, env.computes(better)),
+                    t.goes_weaken(prog_len(c.prog), tree,
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(out, env.computes(nodes), s.gprs, s.memory),
+                        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(out, env.computes(better), s.gprs, s.memory), next, held));
+                let ran = t.goes_computes(out, env, p, better, names, d, at, j(sym(same), λ x _ => x.prog.Within(t.program), within), tree, parts.left, after);
+                t.goes_weaken(prog_len(p), tree,
+                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(nodes_live_in(better, out), env, s.gprs, s.memory),
+                    λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(nodes_live_in(nodes, out), env, s.gprs, s.memory), ran,
+                    λ s h => t.held_sub(nodes_live_in(better, out), nodes_live_in(nodes, out), env, s.gprs, s.memory, h,
+                        nodes_live_in(better, out).within_mem(nodes_live_in(nodes, out), parts.right)))
+            },
+        }),
+    })(refl, emitted)
+}

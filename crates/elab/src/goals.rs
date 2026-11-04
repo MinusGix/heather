@@ -34,22 +34,65 @@ struct Goal {
     span: Span,
     origin: Option<(String, String)>,
     source: Option<GoalSource>,
-    solution: Option<Rc<Term>>,
     // Optional diagnostic spelling supplied from the original, unreduced type.
     // Never parsed or used for checking; the kernel goal remains `ty`.
     statement_spelling: Option<String>,
-    /// A tactic's proof lifted into a lemma of its own: solved when
-    /// allocated, never reported, and committed at the gate as a global in
-    /// its context rather than substituted in (`docs/bv-omega-design.md` §6).
-    proved: bool,
-    /// A value a tactic names instead of spelling it at every use
-    /// (`omega`'s atom list): solved when allocated, and a *definition* both
-    /// while the declaration elaborates and once lifted, so conversion sees
-    /// through it. Holds the value scoped in committed Ψ; its context and
-    /// type there are `psi_cx` and `psi_ty`.
-    transparent: Option<Transparent>,
+    state: GoalState,
 }
 
+impl Goal {
+    /// Only an open hole is solved: `named` refuses a second discharge and
+    /// `outstanding` lists only open slots, so a lifted slot never gets here.
+    fn solve(&mut self, term: Term) {
+        debug_assert!(self.state.is_open(), "goal `?{}` solved twice", self.name);
+        self.state = GoalState::Solved(Rc::new(term));
+    }
+}
+
+/// What a slot holds. The last two are *lifted*: solved when allocated,
+/// never reported, and committed at the gate as globals of their own
+/// (`GoalArena::lifted`) rather than substituted in.
+#[derive(Clone)]
+enum GoalState {
+    /// A hole still waiting for its solution, reported if it stays so.
+    Open,
+    /// A hole solved by an `on` clause or a goal oracle, substituted into
+    /// the declaration at the gate.
+    Solved(Rc<Term>),
+    /// A tactic's proof lifted into a lemma of its own
+    /// (`docs/bv-omega-design.md` §6).
+    Proved(Rc<Term>),
+    /// A value a tactic names instead of spelling it at every use
+    /// (`omega`'s atom list): a *definition* both while the declaration
+    /// elaborates and once lifted, so conversion sees through it. The term is
+    /// the value in the goal world; the [`Transparent`] holds it scoped in
+    /// committed Ψ.
+    Transparent(Rc<Term>, Transparent),
+}
+
+impl GoalState {
+    /// The slot's term, whichever way it was solved.
+    fn solution(&self) -> Option<&Rc<Term>> {
+        match self {
+            GoalState::Open => None,
+            GoalState::Solved(term) | GoalState::Proved(term) | GoalState::Transparent(term, _) => Some(term),
+        }
+    }
+
+    fn is_open(&self) -> bool {
+        matches!(self, GoalState::Open)
+    }
+
+    fn transparent(&self) -> Option<&Transparent> {
+        match self {
+            GoalState::Transparent(_, named) => Some(named),
+            _ => None,
+        }
+    }
+}
+
+/// A transparent slot's value scoped in committed Ψ, with its context and
+/// type there.
 #[derive(Clone)]
 struct Transparent {
     psi_cx: LocalCtx,
@@ -93,6 +136,31 @@ pub(super) struct GoalArena {
     /// on demand from the elaborator's padded Ψ and dropped whenever a slot
     /// or that Ψ changes (`Self::delta_world`).
     delta_world: RefCell<Option<GlobalCtx>>,
+    /// Each slot's binding as [`Self::world`] places it, for the slots
+    /// `0..len` with a goal: slot `k`'s depends only on goal `k`, which never
+    /// changes once pushed, so the cache grows with the goals and is cut back
+    /// with them. Without it every goal oracle shifted every transparent
+    /// slot's context, type and body again (a long `let` chain of `linarith`
+    /// steps paid that per step, `issues/library-gate-module-cold-rail.md`).
+    slot_bindings: RefCell<Vec<GlobalBinding>>,
+    /// While a [`GoalCheckpoint`] is open: each in-place change to a goal
+    /// that already existed (a solution, a statement spelling), with what it
+    /// overwrote, so [`Self::restore`] can put it back. Goals pushed after
+    /// the checkpoint need no entry — they are cut off whole.
+    undo: RefCell<Vec<(usize, GoalState, Option<String>)>>,
+    /// How many checkpoints are open; nothing is logged at zero.
+    checkpoints: Cell<u32>,
+}
+
+/// [`GoalArena::checkpoint`]'s answer: how many goals there were, how long
+/// the undo log was, and every cell's value.
+pub(super) struct GoalCheckpoint {
+    len: usize,
+    undo: usize,
+    promoted_seen: u32,
+    requested_base: u32,
+    restart_enabled: bool,
+    frozen: bool,
 }
 
 /// The one goal effect expression leaves may perform.
@@ -135,6 +203,8 @@ impl GoalArena {
         self.spans.get_mut().clear();
         self.frozen.set(false);
         self.delta_world.get_mut().take();
+        self.slot_bindings.get_mut().clear();
+        self.undo.get_mut().clear();
     }
 
     /// The elaborator's padded Ψ moved: the δ world is rebuilt from the new
@@ -187,13 +257,64 @@ impl GoalArena {
         self.entries.borrow().len()
     }
 
+    /// The rollback point of a speculative probe ([`crate::Elaborator::probe`]):
+    /// [`Self::mark`], plus everything else a probe holding `&self` can
+    /// change — a solution or spelling written into an existing goal, a
+    /// restart request, the freeze. Must be [`Self::restore`]d, innermost
+    /// first.
+    pub(super) fn checkpoint(&self) -> GoalCheckpoint {
+        self.checkpoints.set(self.checkpoints.get() + 1);
+        GoalCheckpoint {
+            len: self.mark(),
+            undo: self.undo.borrow().len(),
+            promoted_seen: self.promoted_seen.get(),
+            requested_base: self.requested_base.get(),
+            restart_enabled: self.restart_enabled.get(),
+            frozen: self.frozen.get(),
+        }
+    }
+
+    /// Put the arena back as it was at `checkpoint`. Whether the probe
+    /// allocated a goal, which frees its slot for another one.
+    pub(super) fn restore(&self, checkpoint: GoalCheckpoint) -> bool {
+        let undone: Vec<_> = self.undo.borrow_mut().drain(checkpoint.undo..).collect();
+        {
+            let mut entries = self.entries.borrow_mut();
+            for (index, state, spelling) in undone.into_iter().rev() {
+                if let Some(goal) = entries.get_mut(index) {
+                    goal.state = state;
+                    goal.statement_spelling = spelling;
+                }
+            }
+        }
+        let allocated = self.entries.borrow().len() > checkpoint.len;
+        if allocated {
+            self.rollback(checkpoint.len);
+        }
+        self.promoted_seen.set(checkpoint.promoted_seen);
+        self.requested_base.set(checkpoint.requested_base);
+        self.restart_enabled.set(checkpoint.restart_enabled);
+        self.frozen.set(checkpoint.frozen);
+        self.checkpoints.set(self.checkpoints.get() - 1);
+        allocated
+    }
+
+    /// Log goal `index`'s state and spelling before it is changed in place,
+    /// if a checkpoint is open.
+    fn log_change(&self, goal: &Goal, index: usize) {
+        if self.checkpoints.get() > 0 {
+            self.undo.borrow_mut().push((index, goal.state.clone(), goal.statement_spelling.clone()));
+        }
+    }
+
     /// Discard every goal allocated after `mark`, including its source key.
     pub(super) fn rollback(&self, mark: usize) {
         let mut entries = self.entries.borrow_mut();
-        if entries[mark.min(entries.len())..].iter().any(|goal| goal.transparent.is_some()) {
+        if entries[mark.min(entries.len())..].iter().any(|goal| goal.state.transparent().is_some()) {
             self.delta_world.borrow_mut().take();
         }
         entries.truncate(mark);
+        self.slot_bindings.borrow_mut().truncate(mark);
         self.spans.borrow_mut().retain(|_, index| *index < mark);
     }
 
@@ -285,10 +406,8 @@ impl GoalArena {
                     span,
                     origin,
                     source,
-                    solution: None,
                     statement_spelling: None,
-                    proved: false,
-                    transparent: None,
+                    state: GoalState::Open,
                 });
                 spans.insert(span_key, k);
                 k
@@ -312,7 +431,7 @@ impl GoalArena {
         let mut spans = self.spans.borrow_mut();
         let key = (span.start, span.end, Some("#proved".to_string()));
         let k = match spans.get(&key) {
-            Some(&k) if goals[k].proved && goals[k].cx.gamma == cx.gamma && goals[k].ty == ty => k,
+            Some(&k) if matches!(goals[k].state, GoalState::Proved(_)) && goals[k].cx.gamma == cx.gamma && goals[k].ty == ty => k,
             Some(_) => return None,
             None => {
                 let k = goals.len();
@@ -327,10 +446,8 @@ impl GoalArena {
                     span,
                     origin: None,
                     source: None,
-                    solution: Some(Rc::new(proof)),
                     statement_spelling: None,
-                    proved: true,
-                    transparent: None,
+                    state: GoalState::Proved(Rc::new(proof)),
                 });
                 spans.insert(key, k);
                 k
@@ -354,8 +471,7 @@ impl GoalArena {
         }
         let mut goals = self.entries.borrow_mut();
         if let Some(k) = goals.iter().position(|goal| {
-            goal.transparent.is_some()
-                && goal.solution.as_deref() == Some(&value)
+            matches!(&goal.state, GoalState::Transparent(named, _) if **named == value)
                 && goal.ty == ty
                 && goal.cx.gamma == cx.gamma
         }) {
@@ -388,10 +504,11 @@ impl GoalArena {
             span: Span { start: 0, end: 0 },
             origin: None,
             source: None,
-            solution: Some(Rc::new(value)),
             statement_spelling: None,
-            proved: false,
-            transparent: Some(Transparent { psi_cx, psi_ty: Rc::new(psi_ty), psi_body: Rc::new(psi_body) }),
+            state: GoalState::Transparent(
+                Rc::new(value),
+                Transparent { psi_cx, psi_ty: Rc::new(psi_ty), psi_body: Rc::new(psi_body) },
+            ),
         });
         self.delta_world.borrow_mut().take();
         Named::Slot(self.reference(k, &cx.gamma))
@@ -426,12 +543,12 @@ impl GoalArena {
             return Some(world.clone());
         }
         let goals = self.entries.borrow();
-        if goals.iter().all(|goal| goal.transparent.is_none()) {
+        if goals.iter().all(|goal| goal.state.transparent().is_none()) {
             return None;
         }
         let committed = padded.bindings.len() - self.base as usize;
         let world = padded.prefix(committed).extended((0..self.base as usize).map(|k| match goals.get(k) {
-            Some(Goal { transparent: Some(named), level, .. }) => self.definition(k, level, named),
+            Some(Goal { state: GoalState::Transparent(_, named), level, .. }) => self.definition(k, level, named),
             _ => padded.bindings[committed + k].clone(),
         }));
         *self.delta_world.borrow_mut() = Some(world.clone());
@@ -446,14 +563,20 @@ impl GoalArena {
             .borrow()
             .iter()
             .enumerate()
-            .filter(|(_, goal)| goal.proved || goal.transparent.is_some())
-            .map(|(slot, goal)| Lifted {
-                slot,
-                gamma: goal.cx.gamma.clone(),
-                ty: goal.ty.clone(),
-                level: goal.level.clone(),
-                body: goal.solution.clone().expect("a lifted slot is solved"),
-                transparent: goal.transparent.is_some(),
+            .filter_map(|(slot, goal)| {
+                let (body, transparent) = match &goal.state {
+                    GoalState::Proved(body) => (body, false),
+                    GoalState::Transparent(body, _) => (body, true),
+                    GoalState::Open | GoalState::Solved(_) => return None,
+                };
+                Some(Lifted {
+                    slot,
+                    gamma: goal.cx.gamma.clone(),
+                    ty: goal.ty.clone(),
+                    level: goal.level.clone(),
+                    body: body.clone(),
+                    transparent,
+                })
             })
             .collect()
     }
@@ -478,7 +601,7 @@ impl GoalArena {
                 span,
             );
         };
-        if goal.solution.is_some() {
+        if !goal.state.is_open() {
             return err(format!("goal `?{name}` is discharged twice"), span);
         }
         Ok((goal.cx.clone(), goal.ty.clone(), goal.level.clone()))
@@ -489,28 +612,33 @@ impl GoalArena {
             .borrow()
             .iter()
             .enumerate()
-            .filter(|(_, goal)| goal.solution.is_none())
+            .filter(|(_, goal)| goal.state.is_open())
             .map(|(index, goal)| (index, goal.cx.clone(), goal.ty.clone(), goal.level.clone()))
             .collect()
     }
 
     pub(super) fn solve_named(&self, name: &str, term: Term) {
         let mut goals = self.entries.borrow_mut();
-        let goal = goals
-            .iter_mut()
-            .find(|goal| goal.name == name)
+        let index = goals
+            .iter()
+            .position(|goal| goal.name == name)
             .expect("goal was selected before its solution was elaborated");
-        goal.solution = Some(Rc::new(term));
+        self.log_change(&goals[index], index);
+        goals[index].solve(term);
     }
 
     pub(super) fn solve(&self, index: usize, term: Term) {
-        self.entries.borrow_mut()[index].solution = Some(Rc::new(term));
+        let mut goals = self.entries.borrow_mut();
+        self.log_change(&goals[index], index);
+        goals[index].solve(term);
     }
 
     pub(super) fn set_statement_spelling(&self, span: Span, key: &str, spelling: String) {
         let spans = self.spans.borrow();
         if let Some(&index) = spans.get(&(span.start, span.end, Some(key.to_owned()))) {
-            self.entries.borrow_mut()[index].statement_spelling = Some(spelling);
+            let mut goals = self.entries.borrow_mut();
+            self.log_change(&goals[index], index);
+            goals[index].statement_spelling = Some(spelling);
         }
     }
 
@@ -518,7 +646,7 @@ impl GoalArena {
         self.entries
             .borrow()
             .iter()
-            .filter(|goal| goal.solution.is_none())
+            .filter(|goal| goal.state.is_open())
             .map(|goal| {
                 let statement = goal
                     .statement_spelling
@@ -529,10 +657,10 @@ impl GoalArena {
                     goal.cx.names.iter().zip(&goal.cx.gamma.entries).enumerate()
                 {
                     if !name.starts_with('#') {
-                        context.push((name.clone(), display(&goal.cx.prefix(i), &entry.ty)));
+                        context.push((name.to_string(), display(&goal.cx.prefix(i), &entry.ty)));
                     }
                 }
-                for alias in &goal.cx.aliases {
+                for alias in goal.cx.aliases.iter() {
                     context.push((
                         alias.name.clone(),
                         display(&goal.cx.prefix(alias.depth), &alias.ty),
@@ -561,17 +689,21 @@ impl GoalArena {
             return psi.clone();
         }
         let goals = self.entries.borrow();
-        psi.extended((0..self.base as usize).map(|k| match goals.get(k) {
-                Some(Goal { transparent: Some(named), level, .. }) => self.definition(k, level, named),
-                Some(goal) => GlobalBinding::Tm {
+        let mut slots = self.slot_bindings.borrow_mut();
+        for k in slots.len()..goals.len() {
+            let goal = &goals[k];
+            slots.push(match goal.state.transparent() {
+                Some(named) => self.definition(k, &goal.level, named),
+                None => GlobalBinding::Tm {
                     ctx: goal.cx.gamma.clone(),
                     layer: Layer::Code,
                     ty: Rc::new(goal.ty.clone()),
                     level: goal.level.clone(),
                     body: None,
                 },
-                None => placeholder(),
-            }))
+            });
+        }
+        psi.extended((0..self.base as usize).map(|k| slots.get(k).cloned().unwrap_or_else(placeholder)))
     }
 
     pub(super) fn substitution(&self) -> GlobalSubst {
@@ -581,7 +713,7 @@ impl GoalArena {
                 GlobalEntry::Tm(
                     goals
                         .get(k)
-                        .and_then(|goal| goal.solution.clone())
+                        .and_then(|goal| goal.state.solution().cloned())
                         .unwrap_or_else(|| Rc::new(Term::Zero)),
                 )
             })
@@ -687,5 +819,34 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn checkpoint_restores_solutions_allocations_and_cells() {
+        let mut arena = GoalArena::default();
+        arena.configure(3, 0);
+        let cx = Cx::empty();
+        let hole = |name: &str, start: usize| {
+            arena
+                .allocate(&cx, Some(name), None, Type::Nat, Level::Zero, Span { start, end: start + 1 }, None, None)
+                .unwrap()
+        };
+        hole("kept", 0);
+        let outer = arena.checkpoint();
+        arena.solve(0, Term::Zero);
+        hole("probed", 2);
+        let inner = arena.checkpoint();
+        arena.solve(1, Term::Zero);
+        arena.freeze();
+        assert!(!arena.restore(inner));
+        assert_eq!(arena.outstanding().len(), 1, "the inner solution is undone, the outer one stays");
+        assert!(arena.restore(outer));
+        assert_eq!(arena.mark(), 1);
+        assert_eq!(arena.outstanding().len(), 1, "the outer solution is undone");
+        assert!(arena.undo.borrow().is_empty());
+        assert_eq!(arena.checkpoints.get(), 0);
+        // Unfrozen, and the probed hole's source key is free again.
+        hole("again", 2);
+        assert_eq!(arena.mark(), 2);
     }
 }

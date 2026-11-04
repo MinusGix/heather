@@ -23,6 +23,8 @@ mod motives;
 mod motive_synth;
 #[path = "../ih_generalization.rs"]
 mod ih_generalization;
+#[path = "../match_refines_hypotheses.rs"]
+mod match_refines_hypotheses;
 #[path = "../decidable_if.rs"]
 mod decidable_if;
 #[path = "../decidable_equation_carrier.rs"]

@@ -9,7 +9,9 @@
 //!   the innermost step taken as written.
 //! - **synchronous**: a [`Val::NatSync`], which cancels its run against the
 //!   run it is applied to (`eval.rs`, the application case).
-//! - **opaque**: `None` — the ordinary one-step path.
+//! - **opaque**: `None` — the ordinary one-step path, after the
+//!   bit-transducer class is asked; **direct** (`ih` does not occur in the
+//!   step): `None` straight away, the one step being the whole fold.
 //!
 //! An affine result is a value shaped like the tree: successors on a
 //! projection of the base, or pairs of those. Projections and pairs carry
@@ -34,38 +36,64 @@ use super::{Eval, Frame, Res, Work};
 
 impl<'a, 'v> Eval<'a, 'v> {
     /// The fold of `e` (a `Nat` eliminator) over `head = Succ^program(tail)`
-    /// by its step's class; `None` takes the ordinary step.
+    /// by its step's class, or the ordinary step when the class has no
+    /// shortcut.
+    #[inline(never)]
     pub(super) fn fold_run(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         program: &Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
-    ) -> Res<Option<Work<'v>>> {
+    ) -> Res<Work<'v>> {
         let Elim::ElimNat { step, .. } = e else {
             unreachable!("fold_run is given a Nat eliminator")
         };
         let class = self.classify_step(step)?;
-        match &*class {
+        self.fold_by_class(head, program, tail, e, &class)
+    }
+
+    /// [`Eval::fold_run`] once the step is classified: kept apart so the
+    /// classification, which re-enters the machine, stands on a small frame
+    /// (docs/native-depth-budget-design.md §8).
+    #[inline(never)]
+    fn fold_by_class(
+        &mut self,
+        head: &'v Val<'v>,
+        program: &Rc<ContextProgram<()>>,
+        tail: &'v TmClo<'v>,
+        e: &Elim<'v>,
+        class: &FoldClass,
+    ) -> Res<Work<'v>> {
+        let Elim::ElimNat { step, .. } = e else {
+            unreachable!("fold_by_class is given a Nat eliminator")
+        };
+        let work = match class {
             // Not a `Nat` algebra — which is what every fold over a *width*
             // is, its step returning a function. The bit-transducer class
             // (`eval/transduce.rs`) is asked next, and `None` from it is the
             // ordinary one-step path as before.
             FoldClass::Opaque => self.fold_transduce(program, tail, e),
-            FoldClass::Sync { .. } => Ok(Some(Work::Val(Rc::new(Val::NatSync {
+            FoldClass::Direct => Ok(None),
+            FoldClass::Sync { .. } => Ok(Some(Work::Val(self.arena.val(Val::NatSync {
                 program: Rc::clone(program),
                 tail,
-                elim: Rc::new(e.clone()),
+                elim: self.arena.elim_cell(e.clone()),
             })))),
             FoldClass::Affine { tree, uniform } => {
                 self.fold_affine(head, program, tail, e, tree, *uniform)
             }
-        }
+        }?;
+        Ok(match work {
+            Some(work) => work,
+            None => self.nat_run_step(program, tail, step, e),
+        })
     }
 
+    #[inline(never)]
     fn fold_affine(
         &mut self,
-        head: &Rc<Val<'v>>,
+        head: &'v Val<'v>,
         program: &Rc<ContextProgram<()>>,
         tail: &'v TmClo<'v>,
         e: &Elim<'v>,
@@ -73,7 +101,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         uniform: bool,
     ) -> Res<Option<Work<'v>>> {
         let Elim::ElimNat { step, motive, .. } = e else { unreachable!() };
-        let fold_at_tail = self.arena.tm(TmClo::elim(tail, Rc::new(e.clone())));
+        let fold_at_tail = self.arena.tm(TmClo::elim(tail, self.arena.elim_cell(e.clone())));
         // What the iterate is applied to, its type's index, and how many
         // times the tree is applied.
         let (base, base_at, count) = if uniform {
@@ -81,7 +109,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         } else {
             let (_, rest) = ContextProgram::uncons(program);
             let inner = self.drive(Work::Apply(*step, vec![tail, fold_at_tail]))?;
-            (self.vclo(inner), self.vclo(Rc::new(Val::Succ(tail))), rest)
+            (self.vclo(inner), self.vclo(self.arena.val(Val::Succ(tail))), rest)
         };
         let Some(count) = count else {
             // One successor, peeled: the innermost step is the whole fold.
@@ -107,19 +135,19 @@ impl<'a, 'v> Eval<'a, 'v> {
         // A tuple, or a projection: annotate from the motive.
         let base_ty = self.apply_ty(motive, &[base_at])?;
         let base_ty = self.delta_whnf_ty(base_ty)?;
-        let scrut = self.vclo(Rc::clone(head));
+        let scrut = self.vclo(head);
         let out_ty = self.apply_ty(motive, &[scrut])?;
         let out_ty = self.delta_whnf_ty(out_ty)?;
         Ok(self.build(&iterated, base, &base_ty, out_ty)?.map(Work::Force))
     }
 
     /// `Succ^{inc}(Zero)`.
-    fn literal(&self, inc: &Increment) -> &'v TmClo<'v> {
-        let zero = self.vclo(Rc::new(Val::Zero));
+    pub(super) fn literal(&self, inc: &Increment) -> &'v TmClo<'v> {
+        let zero = self.vclo(self.arena.val(Val::Zero));
         match inc {
             None => zero,
             Some(program) => {
-                self.vclo(Rc::new(Val::NatRun { program: Rc::clone(program), tail: zero }))
+                self.vclo(self.arena.val(Val::NatRun { program: Rc::clone(program), tail: zero }))
             }
         }
     }
@@ -130,18 +158,18 @@ impl<'a, 'v> Eval<'a, 'v> {
         &mut self,
         tree: &AffineTree,
         base: &'v TmClo<'v>,
-        base_ty: &Rc<VTy<'v>>,
-        out_ty: Rc<VTy<'v>>,
+        base_ty: &'v VTy<'v>,
+        out_ty: &'v VTy<'v>,
     ) -> Res<Option<&'v TmClo<'v>>> {
         Ok(Some(match tree {
             AffineTree::Lit { inc } => self.literal(inc),
             AffineTree::Leaf { inc, path } => {
-                let Some(component) = self.project(base, Rc::clone(base_ty), path)? else {
+                let Some(component) = self.project(base, base_ty, path)? else {
                     return Ok(None);
                 };
                 match inc {
                     None => component,
-                    Some(program) => self.vclo(Rc::new(Val::NatRun {
+                    Some(program) => self.vclo(self.arena.val(Val::NatRun {
                         program: Rc::clone(program),
                         tail: component,
                     })),
@@ -164,7 +192,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 let Some(snd_v) = self.build(snd, base, base_ty, snd_out)? else {
                     return Ok(None);
                 };
-                self.vclo(Rc::new(Val::Pair {
+                self.vclo(self.arena.val(Val::Pair {
                     ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                     fst: fst_v,
                     snd: snd_v,
@@ -179,7 +207,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     fn project(
         &mut self,
         base: &'v TmClo<'v>,
-        base_ty: Rc<VTy<'v>>,
+        base_ty: &'v VTy<'v>,
         path: &[Proj],
     ) -> Res<Option<&'v TmClo<'v>>> {
         let mut cur = base;
@@ -199,7 +227,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let next_ty = match step {
                 Proj::Fst => self.force_ty(fst_ty)?,
                 Proj::Snd => {
-                    let fst_thunk = self.arena.tm(TmClo::elim(cur, Rc::new(fst_elim.clone())));
+                    let fst_thunk = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(fst_elim.clone())));
                     self.apply_ty(snd_ty, &[fst_thunk])?
                 }
             };
@@ -209,7 +237,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     ann: Some(SigAnn { fst_level, snd_level, fst_ty, snd_ty }),
                 },
             };
-            cur = self.arena.tm(TmClo::elim(cur, Rc::new(elim)));
+            cur = self.arena.tm(TmClo::elim(cur, self.arena.elim_cell(elim)));
             ty = self.delta_whnf_ty(next_ty)?;
         }
         Ok(Some(cur))

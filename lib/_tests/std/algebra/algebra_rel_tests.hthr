@@ -1,0 +1,102 @@
+// Probes of `rewrite` along a relation (docs/equation-rewrite-design.md §9)
+// at an open carrier, over the evidence `algebra_rel` and `relation_props`
+// state: `Respects2` for a binary operation, `PreservesRelation` for one
+// argument, `Reflexive` for an argument that stays, `Symmetric` for the
+// goal's right side, `Transitive`/`Trans` to compose. Evidence is a binder
+// here, so each probe says which piece the rewrite consumed; the Rat probes
+// (`rat_tests.hthr`) are the registered-instance side. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5). Refusals are checked by `heather check --expectations`.
+import logic; import nat; import relation; import relation_props; import algebra_rel;
+
+// A binary operation, with the other argument held by reflexivity.
+theorem binary<A: Equivalence(R)>(R: A → A → Type, op: A → A → A, x, y, z: A,
+    c: Respects2<A, A, A>(R, R, R, op), h: R(x, y), e: R(op(y, z), z)): R(op(x, z), z)
+{ rewrite(h, e) }
+
+// One argument through `PreservesRelation`, nested, so the outer step
+// consumes the inner one's proof.
+theorem unary<A: Equivalence(R)>(R: A → A → Type, f: A → A, x, y, z: A,
+    c: PreservesRelation(R, R, f), h: R(x, y), e: R(f(f(y)), z)): R(f(f(x)), z)
+{ rewrite(h, e) }
+
+// A change that is not in the last argument asks for the context as a `λ`.
+theorem first_argument<A: Equivalence(R)>(R: A → A → Type, k: A → Nat → A, n: Nat, x, y, z: A,
+    c: PreservesRelation(R, R, λ a => k(a, n)), h: R(x, y), e: R(k(y, n), z)): R(k(x, n), z)
+{ rewrite(h, e) }
+
+// The right side runs the other way, through `Symmetric`.
+theorem right_side<A: Equivalence(R)>(R: A → A → Type, op: A → A → A, x, y, z: A,
+    c: Respects2<A, A, A>(R, R, R, op), h: R(x, y), e: R(z, op(y, y))): R(z, op(x, x))
+{ rewrite(h, e) }
+
+// A goal relation other than the rewrite's composes through `Trans`, as a
+// `calc` chain mixing the two would.
+theorem mixed<A: Equivalence(R)>(R, S: A → A → Type, op: A → A → A, x, y, z: A,
+    c: Respects2<A, A, A>(R, R, R, op), left: Trans<A>(R, S, S), right: Trans<A>(S, R, S),
+    h: R(x, y), e: S(op(y, z), op(z, y))): S(op(x, z), op(z, x))
+{ rewrite(h, e) }
+
+// A let-shared goal: the chain is 2^8 paths to `x` and eight nodes, each
+// rewritten once.
+theorem shared<A: Equivalence(R)>(R: A → A → Type, op: A → A → A, x, y: A,
+    c: Respects2<A, A, A>(R, R, R, op), h: R(x, y)):
+    R({ let a = op(x, x); let b = op(a, a); let c = op(b, b); let d = op(c, c);
+        let e = op(d, d); let f = op(e, e); let g = op(f, f); op(g, g) },
+      { let a = op(y, y); let b = op(a, a); let c = op(b, b); let d = op(c, c);
+        let e = op(d, d); let f = op(e, e); let g = op(f, f); op(g, g) })
+{ rewrite(h, A.rel_refl({ let a = op(y, y); let b = op(a, a); let c = op(b, b); let d = op(c, c);
+    let e = op(d, d); let f = op(e, e); let g = op(f, f); op(g, g) })) }
+
+// Missing evidence is an obligation, as `rel_cong` leaves it: here the
+// operation's congruence, which nothing in scope proves until the block
+// discharges it.
+theorem obligation<A: Equivalence(R)>(R: A → A → Type, f: A → A, x, y, z: A,
+    supply: (u: A) → PreservesRelation(R, R, f), h: R(x, y), e: R(f(y), z)): R(f(x), z)
+{
+    rewrite(h, e)
+    on ?compatibility := supply(x);
+}
+
+// Left undischarged, the obligation is reported with its statement.
+// expect-error: ?compatibility : PreservesRelation
+theorem obligation_open<A: Equivalence(R)>(R: A → A → Type, f: A → A, x, y, z: A,
+    h: R(x, y), e: R(f(y), z)): R(f(x), z)
+{ rewrite(h, e) }
+
+// Without `Symmetric` evidence the right side cannot be closed, and the
+// rewrite does not invent it: the obligation is the symmetry.
+// expect-error: ?symmetry : Symmetric
+theorem no_symmetry<A: Transitive(R)>(R: A → A → Type, f: A → A, x, y, z: A,
+    c: PreservesRelation(R, R, f), h: R(x, y), e: R(z, f(y))): R(z, f(x))
+{ rewrite(h, e) }
+
+// Two arguments that are not the last two have no congruence to ask for.
+// expect-error: changes in 2 of its arguments
+theorem two_arguments<A: Equivalence(R)>(R: A → A → Type, k: A → Nat → A → A, n: Nat, x, y: A,
+    h: R(x, y), e: R(k(y, n, y), y)): R(k(x, n, x), y)
+{ rewrite(h, e) }
+
+// A function out of the carrier leaves it, and with no evidence naming the
+// relation at `Nat` the rewrite is refused (docs/equation-rewrite-design.md §11.4).
+// expect-error: no evidence about it names the relation its result changes by
+theorem leaves_the_carrier<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, back: Nat → A, x, y, z: A,
+    h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
+{ rewrite(h, e) }
+
+// Under a binder (§10): the body is rewritten below it, the two λs are
+// related by `Pointwise(R)`, and the consumer crosses that by its evidence.
+theorem under_binder<A: Equivalence(R)>(R: A → A → Type, F: (A → A) → A, f: A → A, x, y, w: A,
+    c: PreservesRelation(Pointwise<A, A>(R), R, F), cf: PreservesRelation(R, R, f), h: R(x, y), e: R(F(λ z => f(y)), w)):
+    R(F(λ z => f(x)), w)
+{ rewrite(h, e) }
+// Two binders of one λ, crossed by `Pointwise(Pointwise(R))`.
+theorem under_two_binders<A: Equivalence(R)>(R: A → A → Type, F: (A → A → A) → A, f: A → A, x, y, w: A,
+    c: PreservesRelation(Pointwise<A, A → A>(Pointwise<A, A>(R)), R, F), cf: PreservesRelation(R, R, f), h: R(x, y),
+    e: R(F(λ u v => f(y)), w)): R(F(λ u v => f(x)), w)
+{ rewrite(h, e) }
+// A λ changed beside another argument has no congruence to ask for.
+// expect-error: changes in 2 of its arguments, a λ among them
+theorem binder_and_argument<A: Equivalence(R)>(R: A → A → Type, G: (A → A) → A → A, f: A → A, x, y, w: A,
+    cf: PreservesRelation(R, R, f), h: R(x, y), e: R(G(λ z => f(y), y), w)): R(G(λ z => f(x), x), w)
+{ rewrite(h, e) }

@@ -361,8 +361,12 @@ fn a_stale_cache_is_discarded_out_loud() {
     let doctored: String = text
         .lines()
         .map(|l| {
-            if l.starts_with("kernel-semantics\t") {
-                format!("kernel-semantics\t{}\n", "0".repeat(64))
+            // This kernel's section, re-labelled as another kernel's.
+            if l.starts_with("kernel\t") {
+                let mut f: Vec<&str> = l.split('\t').collect();
+                let other = "0".repeat(64);
+                f[1] = &other;
+                format!("{}\n", f.join("\t"))
             } else {
                 format!("{l}\n")
             }
@@ -569,6 +573,9 @@ fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
     assert!(err.contains("refused as too large to store"), "{err}");
 
     // Populate, then probe. The `(only)` line is reserved, like `(cache)`.
+    // The second run replays and records the whole-replay verdict, so the
+    // baseline is the third: one that already finds it (`docs/module-dag-design.md` §13).
+    assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
     assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
     let cold = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
     let baseline = String::from_utf8_lossy(&cold.stdout).to_string();
@@ -592,4 +599,98 @@ fn only_elaborates_the_named_declarations_over_a_replayed_prefix() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--only named `good::nope` that no module of the closure declares"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An `--only` name may carry `::` itself: a member's owner is not a module.
+/// The module is the first segment, and only when the closure has one by
+/// that name; otherwise the whole name is the root's.
+#[test]
+fn only_reads_owner_qualified_names() {
+    let dir = cache_dir("only-owned");
+    let arg = dir.display().to_string();
+    assert_eq!(heather(&["check", "--cache-dir", &arg, "owned.hthr"]).status.code(), Some(0));
+    for name in ["Nat::twice_zero", "owned::Nat::twice_zero"] {
+        let out = heather(&["check", "--cache-dir", &arg, "--only", name, "owned.hthr"]);
+        assert_eq!(out.status.code(), Some(0), "{name}: {}", String::from_utf8_lossy(&out.stderr));
+        let line = String::from_utf8_lossy(&out.stdout);
+        assert!(line.contains("owned.hthr: ok (only) — 1 declaration elaborated for --only, "), "{name}: {line}");
+    }
+    let out = heather(&["check", "--cache-dir", &arg, "--only", "Nat::nope", "owned.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--only named `owned::Nat::nope` that no module of the closure declares"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn expectations_turn_named_refusals_into_a_green_check() {
+    let out = heather(&["check", "--expectations", "expect/met.hthr"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    // The green line counts what it leaned on, so it never reads like a file
+    // where every declaration checked.
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "expect/met.hthr: ok — 4 expected refusals matched\n");
+}
+
+#[test]
+fn without_expectations_a_refusal_file_fails_and_says_why() {
+    let out = heather(&["check", "expect/met.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("expect/met.hthr: 4 errors"), "{err}");
+    assert!(
+        err.contains("5 `// expect-error` directives here; `heather check --expectations` reads them"),
+        "{err}"
+    );
+}
+
+#[test]
+fn every_unmet_expectation_is_an_error_where_it_is() {
+    let out = heather(&["check", "--expectations", "expect/unmet.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    for (said, at) in [
+        ("this declaration checks, but `expect-error(kernel)` says it is refused", "unmet.hthr:3:1"),
+        ("not as `expect-error: something else entirely` says; the refusal was:", "unmet.hthr:6:45"),
+        ("(an incidental slip satisfies a directive only when a fragment names it)", "unmet.hthr:9:22"),
+        ("an expectation names its reason", "unmet.hthr:11:1"),
+        ("`typo` is not a refusal kind", "unmet.hthr:14:1"),
+        ("the kernel rejected `unmarked`", "unmet.hthr:17:41"),
+        ("not inside it", "unmet.hthr:20:5"),
+        ("no declaration follows this expectation", "unmet.hthr:24:1"),
+    ] {
+        let found = err.find(said).unwrap_or_else(|| panic!("missing `{said}`:\n{err}"));
+        // The first location after a message is its own.
+        let loc = err[found..].split("--> ").nth(1).unwrap_or("");
+        assert!(loc.starts_with(&format!("expect/{at}\n")), "`{said}` not at {at}:\n{err}");
+    }
+    assert!(err.contains("expect/unmet.hthr: 8 errors"), "{err}");
+}
+
+/// `HEATHER_CACHE_DIR` moves `heather check --cache`'s default store out of
+/// the working directory, so the checkouts of one repository (an agent's
+/// worktrees) can share it; unset, the store stays in `.heather/cache`.
+#[test]
+fn the_cache_dir_variable_moves_the_default_store() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("heather-cache-dir-{}-{nonce}", std::process::id()));
+    let work = root.join("work");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/good.hthr"), work.join("good.hthr")).unwrap();
+    let run = |shared: Option<&std::path::Path>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
+        cmd.current_dir(&work).args(["check", "--cache", "good.hthr"]).env_remove("HEATHER_CACHE_DIR");
+        if let Some(dir) = shared { cmd.env("HEATHER_CACHE_DIR", dir); }
+        let out = cmd.output().expect("run heather");
+        assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    };
+
+    run(Some(&shared));
+    assert!(shared.join("check").is_dir(), "no store under {}", shared.display());
+    assert!(!work.join(".heather").exists(), "the working directory got a store too");
+
+    run(None);
+    assert!(work.join(".heather/cache").is_dir());
+    std::fs::remove_dir_all(&root).ok();
 }

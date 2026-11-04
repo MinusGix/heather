@@ -1,0 +1,22 @@
+// The tools' fixed bytes (native_tools): ASCII text read a character at a
+// time, and an entry of cat's message table as its errno, its length and
+// the text. The tools themselves run as compiled code against GNU
+// (`crates/cli/tests/native_tools.rs`). This module also makes native_tools,
+// which no library module imports, a shared module of the library's world,
+// so the gate builds the image every `write-elf --world lib` of a tool
+// replays (issues/native-process-fixed-cost.md).
+import native_tools;
+import list;
+import bitvec;
+import string;
+import nat;
+
+// `yes`'s line, read from its codes and from its text: the same bytes.
+theorem yes_line_codes(): yes_line().map(λ (b: BitVec(8)) => b.toNat()) = [121, 101, 115, 44, 32, 104, 101, 97, 116, 104, 101, 114, 10] { refl }
+
+theorem yes_text_codes(): ascii_text("yes, heather\n").map(λ (b: BitVec(8)) => b.toNat()) = [121, 101, 115, 44, 32, 104, 101, 97, 116, 104, 101, 114, 10] { refl }
+
+// errno 0's entry, which a scan for an errno not in the table stops at: the
+// errno, the length of ": Unknown error\n", then that text.
+theorem cat_entry_unknown(): cat_entry(0, "Unknown error").map(λ (b: BitVec(8)) => b.toNat()) =
+    [0, 16, 58, 32, 85, 110, 107, 110, 111, 119, 110, 32, 101, 114, 114, 111, 114, 10] { refl }

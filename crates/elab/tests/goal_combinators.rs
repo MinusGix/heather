@@ -210,3 +210,53 @@ theorem and_commutes(a, b: Bool): (a && b) = (b && a) {
 "#,
     );
 }
+
+/// `match h: c { … }` whose arm hands its equation on: the convoy's motive
+/// and `refl` are about `c` itself, and only the match moves to the split's
+/// `z`, so the arm still receives an equation about `c`
+/// (issues/split-all-convoy-equation.md).
+const PICK: &str = r#"
+import bool;
+import logic;
+
+fn is_zero(n: Nat) → Bool { match n { Zero => True, Succ(_) => False } }
+
+fn pick(n: Nat, k: (is_zero(n) = False) → Nat, d: Nat) → Nat {
+    match h: is_zero(n) { True => d, False => k(h) }
+}
+"#;
+
+#[test]
+fn splits_a_convoy_whose_arm_uses_its_equation() {
+    // The `True` leaves are `d = d`, which the split itself closes: the
+    // written leaf is for the cases left open, and `same_at` proves only
+    // those.
+    check(&format!(
+        "{PICK}
+theorem pick_ext(n, d: Nat, k1, k2: (is_zero(n) = False) → Nat, same: (e: is_zero(n) = False) → k1(e) = k2(e)):
+    pick(n, k1, d) = pick(n, k2, d) {{
+    let same_at: ({{e: is_zero(n) = False}} → k1(e) = k2(e)) = same;
+    split_all;
+    all_goals {{ same_at }}
+}}
+"
+    ));
+}
+
+#[test]
+fn a_convoy_leaf_the_split_leaves_open_is_still_the_written_leafs() {
+    // Negative control: the `True` case is `d = Succ(d)` here, which no
+    // split closes, and the written leaf cannot prove it.
+    let source = format!(
+        "{PICK}
+theorem pick_wrong(n, d: Nat, k1, k2: (is_zero(n) = False) → Nat, same: (e: is_zero(n) = False) → k1(e) = k2(e)):
+    pick(n, k1, d) = pick(n, k2, Succ(d)) {{
+    let same_at: ({{e: is_zero(n) = False}} → k1(e) = k2(e)) = same;
+    split_all;
+    all_goals {{ same_at }}
+}}
+"
+    );
+    let error = elaborator().elab_module_source("probe", &source).expect_err("a false statement checked").render(&source);
+    assert!(error.contains("could not infer the implicit argument `e` of `same_at`"), "{error}");
+}

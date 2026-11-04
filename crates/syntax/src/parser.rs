@@ -2,8 +2,9 @@
 //!
 //! ```text
 //! file    := item*
-//! item    := decl | inductive | record | class | instance | assuming
+//! item    := decl | inductive | record | class | instance | assuming | section
 //! assuming := "assuming" requirement ("," requirement)* "{" item* "}"
+//! section := "section" typarams? requires? params? "{" (fn | theorem | section)* "}"
 //! requirement := (name ":")? type
 //! decl    := "fn" name tyvars? "(" params? ")" "->" type block
 //!          | "theorem" name tyvars? "(" params? ")" ":" type block
@@ -150,6 +151,8 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
         Parser {
             toks,
             pos: 0,
+            sections: Vec::new(),
+            section_typarams: Vec::new(),
             no_record_lit: false,
             no_eq: false,
             no_iff: false,
@@ -159,6 +162,12 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             record_facts: Vec::new(),
             propagation_count: 0,
             propagation_depth: 0,
+            elseless_if: false,
+            mut_params: Vec::new(),
+            pending_mut: None,
+            defer_binds: false,
+            mutables: Vec::new(),
+            range_header: false,
         };
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
@@ -180,12 +189,24 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             items.push(item);
         }
     }
-    Ok(File { items })
+    Ok(File { items, section_typarams: p.section_typarams })
+}
+
+/// One `section`'s head, split as [`Parser::splice_sections`] splices it.
+struct SectionHead {
+    tyvars: Vec<TyParam>,
+    solver: Vec<Param>,
+    written: Vec<Param>,
 }
 
 struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    /// The heads of the `section`s enclosing the current position, outermost
+    /// first ([`Parser::section_items`]).
+    sections: Vec<SectionHead>,
+    /// [`File::section_typarams`], as each section head is parsed.
+    section_typarams: Vec<(Span, Span, Span)>,
     /// The evidence rules a record's `Pos<A>` fields declare, emitted as the
     /// items after the record ([`Parser::record`]).
     record_facts: Vec<Decl>,
@@ -193,6 +214,31 @@ struct Parser {
     propagation_count: usize,
     /// Ordinary function/lambda bodies admit propagation; signatures do not.
     propagation_depth: usize,
+    /// The expression being parsed heads a block statement, so an `if` there
+    /// may omit its `else` (docs/sequencing-surface-design.md §4). Taken by
+    /// the `if` it reaches first, so nothing nested inherits it.
+    elseless_if: bool,
+    /// `mut x: T` and `mut self x: T` parameters of the parameter list just
+    /// read, by name, with whether each is the receiver
+    /// (docs/sequencing-surface-design.md §8.2). Taken by [`Parser::decl`].
+    mut_params: Vec<(String, bool)>,
+    /// The `mut` parameters the next block opened is the body of: it binds
+    /// each as a `let mut` local, and a `mut self` one is returned beside the
+    /// result. Taken by the first [`Parser::block_body`].
+    pending_mut: Option<Vec<(String, bool)>>,
+    /// The next block opened is the body of a `while` with no measure
+    /// (docs/sequencing-surface-design.md §18): its binds stay as markers
+    /// until the loop is lowered, because they run inside the loop's step,
+    /// after the locals it threads are known. Taken by the first
+    /// [`Parser::block_body`].
+    defer_binds: bool,
+    /// The `let mut` locals and `mut` parameters lexically in scope, innermost
+    /// last: a method call on one of them may update it, so the parser marks
+    /// it a candidate ([`crate::imperative::MUTCALL`]) for the scope that
+    /// declared the local to claim.
+    mutables: Vec<String>,
+    /// Parsing a `for` header, where `a..b` is a range (§5.2).
+    range_header: bool,
     /// Suppress the record literal `D { … }` (docs/surface-records.md §6.1).
     ///
     /// `{` after an expression is ambiguous exactly where a *block* follows
@@ -272,12 +318,15 @@ struct Parser {
 
 type R<T> = Result<T, ParseError>;
 
-/// The two speculating sites, as the `site` half of a [`Parser::spec_failed`]
-/// key. They must not share: the expression site additionally requires a `(`
-/// or a `>` where the type site does not, so the same position can fail for
-/// one and succeed for the other.
+/// The two speculating sites on a `<`, as the `site` half of a
+/// [`Parser::spec_failed`] key. They must not share: the expression site
+/// additionally requires a `(` or a `>` where the type site does not, so the
+/// same position can fail for one and succeed for the other.
 const SITE_EXPR_TYARGS: u8 = 1 << 4;
 const SITE_TY_NAMED: u8 = 1 << 5;
+/// The `[T; n]` branch of [`Parser::ty`]: a `[` whose element does not parse
+/// as a type followed by `;` is a list literal, read by the expression grammar.
+const SITE_TY_VEC: u8 = 1 << 6;
 
 /// A calc step's relation, ordered by strength: composing two steps yields
 /// the stronger (`=` < `≈` < `<=` < `<`), which is what the mixed lemmas
@@ -357,6 +406,39 @@ fn render_owner(e: &Expr) -> Option<String> {
 /// namespace of its own, so an operator expression is the ordinary
 /// [`ExprKind::App`] it has always been — only its head survives as what was
 /// written instead of as what it used to desugar to.
+/// A braced block that ends in a statement: the body of a statement form
+/// (docs/sequencing-surface-design.md §4).
+fn is_statement_body(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Block(b) if matches!(&b.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT)
+        || crate::imperative::ends_in_method_call(b))
+}
+
+/// `{}`, which elsewhere is an empty proof block (`ExprKind::AutoRefl`).
+fn is_empty_body(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Block(b) if b.stmts.is_empty() && matches!(b.result.kind, ExprKind::AutoRefl))
+}
+
+/// An `if`/`match` whose bodies are statement bodies: a statement. `{}` is
+/// a statement body beside one, so `None => {}` assigns nothing; an
+/// `if`/`match` of `{}` alone stays the proof it was.
+fn is_statement_form(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Match { arms, .. }
+        if arms.iter().any(|a| is_statement_body(&a.body))
+            && arms.iter().all(|a| is_statement_body(&a.body) || is_empty_body(&a.body)))
+}
+
+/// A statement after which a block may end with no result: an assignment
+/// or a statement form.
+fn is_imperative_statement(s: &Stmt) -> bool {
+    // `break`/`continue` are zero-argument markers; the rest carry one.
+    matches!(s, Stmt::Let { expr, .. } if matches!(&expr.kind, ExprKind::App { head, args, .. }
+        if matches!(&head.kind, ExprKind::Var(n)
+            if (!args.is_empty() && (n == crate::imperative::ASSIGN || n == crate::imperative::STMT
+                || n == crate::imperative::FOR || n == crate::imperative::RETURN
+                || (n == crate::imperative::MUTCALL && matches!(s, Stmt::Let { name, .. } if name.starts_with("#seq")))))
+                || (args.is_empty() && (n == crate::imperative::BREAK || n == crate::imperative::CONTINUE)))))
+}
+
 fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity }, span };
     Expr {
@@ -392,6 +474,10 @@ pub fn positivity_ty(name: &str, span: Span) -> Ty {
 /// The search a `fn f(…) → Pos<A>` body's positivity is proved by:
 /// `positivity`, with a failure that says how to prove it by hand
 /// (`on ?pos := …;`). Reserved like omega's own `__` branch markers.
+/// The prelude record a `mut self` method returns: its receiver after the
+/// call, and the call's value (docs/sequencing-surface-design.md §8.2).
+pub const MUTATED_RECORD: &str = "Mutated";
+
 pub const POS_RESULT: &str = "__pos_result";
 
 /// What fills a `Pos<A>` record field's fact when a construction leaves it
@@ -756,6 +842,13 @@ impl Parser {
     fn items(&mut self) -> R<Vec<Item>> {
         if self.at_kw("assuming") {
             self.assuming_items()
+        } else if self.at_kw("section") {
+            self.section_items()
+        } else if self.at_kw("partial")
+            && (matches!(self.nth(1), TokKind::LParen)
+                || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str())))
+        {
+            Ok(vec![Item::Decl(self.partial_decl()?)])
         } else {
             match self.item()? {
                 Item::Decl(mut d) => {
@@ -880,15 +973,256 @@ impl Parser {
             kind: DeclKind::Theorem,
             is_meta: false,
             is_evidence: true,
+            is_interface: false, partial: None,
+            value: false,
             elaborates: None,
             name: format!("{}::pos", d.name),
             tyvars: d.tyvars.clone(),
             params,
             result: positive(call),
             decreases: None,
+            unfolding: Vec::new(),
             body,
             span,
         }))
+    }
+
+    /// `section<A: C>(x: A, …) { fn … theorem … }` — a head written once for
+    /// a run of declarations (docs/sections-design.md §5). Surface-only, like
+    /// `assuming`: the head is pushed for the group's extent and
+    /// [`Parser::splice_sections`] prepends it to each member's own head as
+    /// the member is read, so the elaborator sees ordinary declarations.
+    fn section_items(&mut self) -> R<Vec<Item>> {
+        let start = self.bump().span; // `section`
+        let (tyvars, constraints) = self.typaram_list()?;
+        let mut solver = constraints;
+        solver.extend(self.requires_list()?);
+        let written =
+            if matches!(self.peek(), TokKind::LParen) { self.param_list(Vec::new())? } else { Vec::new() };
+        let head = start.join(self.toks[self.pos.saturating_sub(1)].span);
+        if tyvars.is_empty() && solver.is_empty() && written.is_empty() {
+            return Err(ParseError {
+                msg: "a section's head is what it writes once for its members: give it \
+                      type parameters `section<A> { … }`, parameters `section(x: A) { … }`, \
+                      or both (docs/sections-design.md §5.1)"
+                    .into(),
+                span: head,
+            });
+        }
+        if let Some(p) = written.iter().find(|p| p.is_self)
+            && let Some(outer) = self.sections.iter().flat_map(|s| &s.written).find(|q| q.is_self)
+        {
+            return Err(ParseError {
+                msg: format!(
+                    "a declaration has at most one `self`, and the enclosing section's `{}` \
+                     is already it",
+                    outer.name
+                ),
+                span: p.span,
+            });
+        }
+        self.check_section_names(
+            tyvars.iter().map(|t| (t.name.as_str(), t.span)).chain(
+                solver.iter().chain(&written).map(|p| (p.name.as_str(), p.span)),
+            ),
+            "an enclosing section",
+        )?;
+        if let (Some(first), Some(last)) = (tyvars.first(), tyvars.last()) {
+            self.section_typarams.push((head, first.span, last.span));
+        }
+        self.sections.push(SectionHead { tyvars, solver, written });
+        self.expect(&TokKind::LBrace, "`{` to open the section's declarations")?;
+        let mut items = Vec::new();
+        while !matches!(self.peek(), TokKind::RBrace) {
+            if self.at_eof() {
+                return Err(ParseError {
+                    msg: "expected `}` to close the section".into(),
+                    span: start.join(self.peek_span()),
+                });
+            }
+            for item in self.items()? {
+                let refuse = |what: &str, span: Span| {
+                    Err(ParseError {
+                        msg: format!(
+                            "{what} cannot be in a section: a section's head is spliced into \
+                             the head of each `fn` and `theorem` in it, and nothing else has \
+                             a head to splice into (docs/sections-design.md §5.2)"
+                        ),
+                        span,
+                    })
+                };
+                match &item {
+                    Item::Decl(d) if d.is_meta => return refuse("a `meta fn`", d.span),
+                    Item::Decl(d) if d.kind == DeclKind::Axiom => return refuse("an `axiom`", d.span),
+                    Item::Decl(_) => {}
+                    Item::Import(i) => return refuse("an `import`", i.span),
+                    Item::Inductive(i) => return refuse("an `inductive` or `record`", i.span),
+                    Item::Class(c) => return refuse("a `class`", c.span),
+                    Item::Instance(i) => return refuse("an `instance`", i.span),
+                    Item::Designation(d) => return refuse("a `designation`", d.span),
+                    Item::Datarepr(d) => return refuse("a `datarepr`", d.span),
+                    Item::Impl(i) => return refuse("an `impl`", i.span),
+                    Item::Generate(g) => {
+                        return Err(ParseError {
+                            msg: "a `generate` cannot be in a section yet: its generator runs at \
+                                  the module's empty context, and running it under the section's \
+                                  head is open (docs/host-elaboration-interface-design.md §19)"
+                                .into(),
+                            span: g.span,
+                        })
+                    }
+                    Item::Prefixed(p) => {
+                        return Err(ParseError {
+                            msg: "a prefixed declaration cannot be in a section yet: its \
+                                  generator runs at the module's empty context, as a \
+                                  `generate` does (docs/value-definitions-design.md §3)"
+                                .into(),
+                            span: p.span,
+                        })
+                    }
+                }
+                items.push(item);
+            }
+        }
+        self.bump(); // `}`
+        self.sections.pop();
+        Ok(items)
+    }
+
+    /// Refuse a binder that rebinds a name an enclosing section's head binds.
+    /// A repeated value parameter otherwise shadows the earlier one silently,
+    /// which inside a section would hide the head's binder from the member.
+    fn check_section_names<'a>(
+        &self,
+        names: impl Iterator<Item = (&'a str, Span)>,
+        whose: &str,
+    ) -> R<()> {
+        for (name, span) in names {
+            if name.starts_with('#') {
+                continue;
+            }
+            let bound = self.sections.iter().any(|s| {
+                s.tyvars.iter().any(|t| t.name == name)
+                    || s.solver.iter().chain(&s.written).any(|p| p.name == name)
+            });
+            if bound {
+                return Err(ParseError {
+                    msg: format!(
+                        "`{name}` is already bound by {whose}'s head: a section's binders \
+                         are every member's, so a member cannot rebind one (move the \
+                         declaration out of the section, or rename)"
+                    ),
+                    span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Prepend the enclosing sections' heads to a declaration's own
+    /// (docs/sections-design.md §5.2), outermost first: type parameters before
+    /// the member's, solver parameters before its solver parameters (the first
+    /// `leading` of `params`), written parameters before its written ones. The
+    /// result is the head the member would have if written out by hand.
+    ///
+    /// A section type parameter or `{}` implicit that nothing in the spliced
+    /// head determines is refused: no call could infer it. "Determines" is
+    /// read off the tokens of the head: a name written in an explicit
+    /// parameter's type or the result type, or in the type of a binder so
+    /// determined. That over-approximates (a name bound inside a type also
+    /// counts), so the check can miss a case, which then fails at the call as
+    /// it would without a section; it never refuses a member that could be
+    /// called.
+    fn splice_sections(
+        &self,
+        member: &str,
+        member_span: Span,
+        tyvars: Vec<TyParam>,
+        params: Vec<Param>,
+        leading: usize,
+        result: &Ty,
+    ) -> R<(Vec<TyParam>, Vec<Param>)> {
+        if self.sections.is_empty() {
+            return Ok((tyvars, params));
+        }
+        self.check_section_names(
+            tyvars.iter().map(|t| (t.name.as_str(), t.span)).chain(params.iter().map(|p| (p.name.as_str(), p.span))),
+            "the enclosing section",
+        )?;
+        if let Some(p) = params.iter().find(|p| p.is_self)
+            && let Some(outer) = self.sections.iter().flat_map(|s| &s.written).find(|q| q.is_self)
+        {
+            return Err(ParseError {
+                msg: format!(
+                    "a declaration has at most one `self`, and the enclosing section's `{}` \
+                     is already it",
+                    outer.name
+                ),
+                span: p.span,
+            });
+        }
+        let mut all_tyvars: Vec<TyParam> = self.sections.iter().flat_map(|s| s.tyvars.clone()).collect();
+        all_tyvars.extend(tyvars);
+        let mut own = params;
+        let own_written = own.split_off(leading.min(own.len()));
+        let mut all: Vec<Param> = self.sections.iter().flat_map(|s| s.solver.clone()).collect();
+        all.extend(own);
+        all.extend(self.sections.iter().flat_map(|s| s.written.clone()));
+        all.extend(own_written);
+
+        let mut determined = std::collections::HashSet::new();
+        self.idents_in(result.span, &mut determined);
+        for p in all.iter().filter(|p| !p.implicit) {
+            self.idents_in(p.ty.span, &mut determined);
+        }
+        let unification = |p: &Param| p.implicit && p.solver.is_none() && p.default.is_none();
+        loop {
+            let before = determined.len();
+            let reached: Vec<Span> = all
+                .iter()
+                .filter(|p| unification(p) && determined.contains(&p.name))
+                .map(|p| p.ty.span)
+                .collect();
+            for span in reached {
+                self.idents_in(span, &mut determined);
+            }
+            if determined.len() == before {
+                break;
+            }
+        }
+        let section_binder = |name: &str| {
+            self.sections.iter().any(|s| {
+                s.tyvars.iter().any(|t| t.name == name) || s.written.iter().any(|p| p.name == name && unification(p))
+            })
+        };
+        let undetermined = all_tyvars
+            .iter()
+            .map(|t| t.name.as_str())
+            .chain(all.iter().filter(|p| unification(p)).map(|p| p.name.as_str()))
+            .find(|n| section_binder(n) && !determined.contains(*n));
+        if let Some(n) = undetermined {
+            return Err(ParseError {
+                msg: format!(
+                    "`{member}` does not determine the section's `{n}`: nothing in its head \
+                     mentions it, so no call could infer it. Move `{member}` out of the \
+                     section, or mention `{n}` in its parameters or result \
+                     (docs/sections-design.md §4.1)"
+                ),
+                span: member_span,
+            });
+        }
+        Ok((all_tyvars, all))
+    }
+
+    /// Every identifier token inside `span` (the tokens are sorted by
+    /// position, so this is a binary search and a slice).
+    fn idents_in(&self, span: Span, out: &mut std::collections::HashSet<String>) {
+        let first = self.toks.partition_point(|t| t.span.start < span.start);
+        for t in self.toks[first..].iter().take_while(|t| t.span.end <= span.end) {
+            if let TokKind::Ident(n) = &t.kind {
+                out.insert(n.clone());
+            }
+        }
     }
 
     fn assuming_items(&mut self) -> R<Vec<Item>> {
@@ -997,6 +1331,14 @@ impl Parser {
                 msg: "an `import` cannot appear inside an `assuming` group".into(),
                 span: i.span,
             }),
+            Item::Generate(g) => Err(ParseError {
+                msg: "a `generate` cannot yet inherit an `assuming` telescope".into(),
+                span: g.span,
+            }),
+            Item::Prefixed(p) => Err(ParseError {
+                msg: "a prefixed declaration cannot yet inherit an `assuming` telescope".into(),
+                span: p.span,
+            }),
         }
     }
 
@@ -1033,22 +1375,125 @@ impl Parser {
         if self.at_kw("impl") {
             return Ok(Item::Impl(self.impl_decl()?));
         }
-        // Section variables and constraint bundles are the two ways round 2
-        // sketched of writing a constraint ONCE for many declarations. Neither
-        // is decided (issues/requires-placement-syntax.md, log 2026-08-07), and
-        // both are words a reader who met `<A: Monoid>` will reach for, so they
-        // are refused by name rather than by "expected `fn`".
-        if self.at_kw("section") || self.at_kw("given") || self.at_kw("context") {
+        // `generate g(args);` runs a generator and publishes what it builds
+        // (docs/host-elaboration-interface-design.md §19). Contextual like
+        // `by`: only when a name follows.
+        if self.at_kw("generate") && matches!(self.nth(1), TokKind::Ident(_)) {
+            let start = self.bump().span;
+            let generator = self.postfix()?;
+            let end = self.expect(&TokKind::Semi, "`;` to end the `generate`")?;
+            return Ok(Item::Generate(GenerateItem { generator, span: start.join(end) }));
+        }
+        // `given` section variables and `context` constraint bundles are the
+        // two other ways round 2 sketched of writing a constraint ONCE for many
+        // declarations. Neither is decided (issues/requires-placement-syntax.md;
+        // `section` heads are docs/sections-design.md), and both are words a
+        // reader who met `<A: Monoid>` will reach for, so they are refused by
+        // name rather than by "expected `fn`".
+        if self.at_kw("given") || self.at_kw("context") {
             let TokKind::Ident(w) = self.peek() else { unreachable!() };
             let w = w.clone();
             return self.err(&format!(
                 "`{w}` is not implemented: a constraint is written on the declaration \
-                 that needs it, inline as `<A: Monoid>` or as a `requires` binder. \
+                 that needs it, inline as `<A: Monoid>` or as a `requires` binder, or \
+                 once for a run of declarations in a `section<A: Monoid> {{ … }}` head. \
                  Section variables and named bundles are open design \
                  (issues/requires-placement-syntax.md)"
             ));
         }
+        // `runtime fn f(…)`, `runtime(owned) fn f(…)`, `regex def x = "…";` —
+        // a declaration under a prefix generator
+        // (docs/value-definitions-design.md §3). A name before a declaration
+        // keyword, or a name applied, is not otherwise an item, so this reads
+        // nothing that used to parse. The modifier keywords are matched first.
+        if let TokKind::Ident(w) = self.peek()
+            && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence" | "interface")
+            && (matches!(self.nth(1), TokKind::LParen)
+                || matches!(self.nth(1), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))
+                // `a b fn f`: two prefixes, read as one so it is refused as such.
+                || (matches!(self.nth(1), TokKind::Ident(_))
+                    && matches!(self.nth(2), TokKind::Ident(k) if DECL_WORDS.contains(&k.as_str()))))
+        {
+            return Ok(Item::Prefixed(self.prefixed()?));
+        }
         Ok(Item::Decl(self.decl()?))
+    }
+
+    /// `partial fn f(…) → B { … }` or `partial(E) fn …` ([`Decl::partial`],
+    /// docs/partial-functions-design.md §4). Contextual: `partial` is a word
+    /// only before `fn` or `(`, at an item's head.
+    fn partial_decl(&mut self) -> R<Decl> {
+        let start = self.bump().span;
+        let mut events = None;
+        if matches!(self.peek(), TokKind::LParen) {
+            self.bump();
+            events = Some(self.expr()?);
+            self.expect(&TokKind::RParen, "`)` to close `partial(E)`")?;
+        }
+        if !self.at_kw("fn") {
+            return self.err(
+                "`partial` marks a `fn`: a function that may not return. A theorem, a value \
+                 or an axiom has no run to diverge",
+            );
+        }
+        let mut d = self.decl()?;
+        if d.decreases.is_some() {
+            return Err(ParseError {
+                msg: "a `partial fn` has no measure: it may not return, which is what `partial` says. \
+                      Drop `partial` to prove it terminates with `decreases`"
+                    .into(),
+                span: d.span,
+            });
+        }
+        d.partial = Some(PartialSpec { events, span: start });
+        d.span = start.join(d.span);
+        Ok(d)
+    }
+
+    /// `P decl` or `P(args) decl` ([`Item::Prefixed`]). One prefix: a second
+    /// name before the declaration is refused, since composing generators is
+    /// open (issues/scoped-declaration-generators.md). The declaration under
+    /// it is a `fn`, a `theorem` or a `def`.
+    fn prefixed(&mut self) -> R<PrefixedItem> {
+        let start = self.peek_span();
+        let (name, name_span) = self.ident("a generator's name")?;
+        let mut generator = Expr { kind: ExprKind::Var(name.clone()), span: name_span };
+        if matches!(self.peek(), TokKind::LParen) {
+            self.bump();
+            let (args, named, close) = self.call_args()?;
+            generator = Expr {
+                kind: ExprKind::App { head: Box::new(generator), args, named, explicit: false, goal_oriented: false },
+                span: name_span.join(close),
+            };
+        }
+        if let TokKind::Ident(w) = self.peek()
+            && !matches!(w.as_str(), "fn" | "theorem" | "axiom" | "def" | "meta" | "evidence" | "interface")
+        {
+            let w = w.clone();
+            return self.err(&format!(
+                "one generator prefixes a declaration: `{name} {w} …` stacks two, and how \
+                 generators compose is open (issues/scoped-declaration-generators.md)"
+            ));
+        }
+        let decl = self.decl()?;
+        if decl.is_meta || decl.is_evidence || decl.kind == DeclKind::Axiom {
+            let what = if decl.is_meta {
+                "a `meta fn`"
+            } else if decl.is_evidence {
+                "an `evidence theorem`"
+            } else {
+                "an `axiom`"
+            };
+            return Err(ParseError {
+                msg: format!(
+                    "a generator prefixes a `fn`, a `theorem` or a `def`, not {what} \
+                     (docs/value-definitions-design.md §3)"
+                ),
+                span: start.join(decl.span),
+            });
+        }
+        let span = start.join(decl.span);
+        Ok(PrefixedItem { generator, decl, span })
     }
 
     /// `class C<A> extends P<A>, Q<A> { f: T, … }`
@@ -1058,7 +1503,7 @@ impl Parser {
         let start = self.peek_span();
         self.bump(); // `class`
         let (name, _) = self.ident("class name")?;
-        let params = self.tyvar_list()?;
+        let (params, kinds) = self.class_tyvar_list()?;
         // `class Monoid<A>(op: A -> A -> A)` — the index list, in the position
         // and with the grammar a `record` head already has
         // (docs/operation-indexed-classes-design.md §2.1: there is no second
@@ -1099,7 +1544,35 @@ impl Parser {
             self.bump();
         }
         let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
-        Ok(ClassDecl { name, params, valparams, extends, fields, span: start.join(end) })
+        Ok(ClassDecl { name, params, kinds, valparams, extends, fields, span: start.join(end) })
+    }
+
+    /// A class head's `<A, M: Type → Type>`: [`Self::tyvar_list`] plus an
+    /// optional **kind** per parameter (issues/higher-kinded-classes.md). A
+    /// kind is any type — what makes it a type constructor is the
+    /// elaborator's check — so the grammar is a parameter's own
+    /// `name: T`, and an unannotated name keeps meaning a type.
+    fn class_tyvar_list(&mut self) -> R<(Vec<String>, Vec<Option<Ty>>)> {
+        let mut params = Vec::new();
+        let mut kinds = Vec::new();
+        if matches!(self.peek(), TokKind::Lt) {
+            self.bump();
+            loop {
+                params.push(self.binder_ident("type parameter name")?.0);
+                kinds.push(if matches!(self.peek(), TokKind::Colon) {
+                    self.bump();
+                    Some(self.ty()?)
+                } else {
+                    None
+                });
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
+        }
+        Ok((params, kinds))
     }
 
     /// `Monoid<A>` — a class applied to its arguments. The brackets are
@@ -1729,6 +2202,7 @@ impl Parser {
         let (name, _) = self.ident("record name")?;
         let params = self.tyvar_list()?;
         let valparams = self.valparam_list(false)?;
+        let varies = self.varies_clause()?;
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();
         let mut facts = Vec::new();
@@ -1861,12 +2335,15 @@ impl Parser {
                 kind: DeclKind::Theorem,
                 is_meta: false,
                 is_evidence: true,
+                is_interface: false, partial: None,
+            value: false,
                 elaborates: None,
                 name: format!("{name}::{field}_positive"),
                 tyvars: params.iter().map(|p| TyParam { name: p.clone(), level: 0, span: fspan }).collect(),
                 params: rparams,
                 result: Ty { kind: TyKind::OfExpr(Box::new(stmt)), span: fspan },
                 decreases: None,
+                unfolding: Vec::new(),
                 body: Block { stmts: Vec::new(), result: Box::new(project(&fact)), ons: Vec::new(), span: fspan },
                 span: fspan,
             });
@@ -1876,6 +2353,7 @@ impl Parser {
             name,
             params,
             valparams,
+            varies,
             ctors: vec![ctor],
             is_record: true,
             is_codata: false,
@@ -1961,6 +2439,18 @@ impl Parser {
         Ok(params)
     }
 
+    /// `varies A` after a declaration's parameter lists, or nothing
+    /// (docs/lambda-carrier-instances-design.md §7.1). `varies` is contextual:
+    /// it is read only here, so it stays an ordinary identifier everywhere else.
+    fn varies_clause(&mut self) -> R<Option<(String, Span)>> {
+        if !self.at_kw("varies") {
+            return Ok(None);
+        }
+        self.bump();
+        let (name, span) = self.ident("the varying parameter's name after `varies`")?;
+        Ok(Some((name, span)))
+    }
+
     /// `<A, B>` after a declaration name, or nothing.
     fn tyvar_list(&mut self) -> R<Vec<String>> {
         let mut params = Vec::new();
@@ -1993,6 +2483,7 @@ impl Parser {
         // `record` form this round (docs/surface-value-parameters.md §6), and a
         // named rejection beats `expected `{`, found LParen`.
         let valparams = self.valparam_list(false)?;
+        let varies = self.varies_clause()?;
         // `: (n: Nat) -> Type` — an index telescope
         // (docs/inductive-indexed-lowering.md §2). Parsed with the ordinary
         // type grammar; its shape is the elaborator's to validate.
@@ -2046,6 +2537,7 @@ impl Parser {
             name,
             params,
             valparams,
+            varies,
             ctors,
             is_record: false,
             is_codata,
@@ -2080,75 +2572,11 @@ impl Parser {
         Ok(FieldDecl { name, ty, default, span })
     }
 
-    fn decl(&mut self) -> R<Decl> {
-        let propagation_start = self.propagation_count;
-        let start = self.peek_span();
-        // `meta fn` — a layer-m declaration (docs/in-language-map-design.md
-        // §3). Only `fn`: a theorem is an opaque Ψ-global, and meta
-        // definitions never reach Ψ, so `meta theorem` has no meaning.
-        let is_meta = self.eat_kw("meta");
-        // `evidence theorem` — contextual, like every keyword here: only the
-        // word directly before `theorem` is the modifier, so a field or
-        // binder named `evidence` elsewhere is untouched.
-        let is_evidence = !is_meta
-            && self.at_kw("evidence")
-            && matches!(self.nth(1), TokKind::Ident(s) if s == "theorem");
-        if is_evidence {
-            self.bump();
-        } else if self.at_kw("evidence")
-            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn" || s == "axiom" || s == "meta")
-        {
-            return self.err(
-                "`evidence` marks a `theorem`: a rule is a proof `:= infer` applies \
-                 (docs/positivity-evidence-design.md §6 A)",
-            );
-        }
-        let kind = if self.eat_kw("fn") {
-            DeclKind::Fn
-        } else if !is_meta && self.eat_kw("theorem") {
-            DeclKind::Theorem
-        } else if !is_meta && self.eat_kw("axiom") {
-            DeclKind::Axiom
-        } else if is_meta {
-            return self.err("`meta` marks a `fn`: write `meta fn name(…)`");
-        } else {
-            return self.err("expected `fn`, `theorem`, `axiom`, or `inductive`");
-        };
-        // A declaration head is the one *binding* position where a qualified
-        // name is legal: `fn List::nth(…)` attaches the declaration to a
-        // type's namespace (issues/type-owned-members-receiver-slice.md).
-        // Whether the qualifier really names a type is the elaborator's to
-        // check — the parser has no name tables — so all that happens here is
-        // that the `::` is let through, with the arity of the path fixed at
-        // one segment of qualifier.
-        let (name, name_span) = self.qual_ident("declaration name")?;
-        if name.matches("::").count() > 1 {
-            return Err(ParseError {
-                msg: format!(
-                    "`{name}` has more than one qualifier: a member is attached to \
-                     exactly one type, `Type::member`"
-                ),
-                span: name_span,
-            });
-        }
-        // `fn map<A, B>(…)` — type parameters (docs/surface-polymorphism.md
-        // §1). Unambiguous here: a declaration's name is always followed by
-        // `(` or `<`, and neither is an expression continuation. `<A: Type<1>>`
-        // annotates the universe the parameter ranges over
-        // (docs/surface-universe.md §2); `<A: Monoid>` constrains what it
-        // carries — one production, shared with the `instance` head.
-        let (tyvars, constraints) = self.typaram_list()?;
-        // `fn sum<A> requires m: Monoid<A> (xs: List<A>) -> A` — solver
-        // parameters, the class spelling (docs/traits-layer2-design.md §1).
-        // They are moved to the front of the parameter list, because they are
-        // what the later parameters' types mention; the same production the
-        // `instance` head uses, and the same desugaring. Inline constraints are
-        // those same parameters, and lead: `<A: Monoid> requires c: Cmp<A>`
-        // binds the monoid first.
-        let mut requires = constraints;
-        requires.extend(self.requires_list()?);
+    /// `(x: A, {n: Nat}, self s: S, h: P := infer, …)` — a declaration's
+    /// value-parameter list, appended to `params` (its solver parameters, which
+    /// lead). A section head reads the same list (docs/sections-design.md §5).
+    fn param_list(&mut self, mut params: Vec<Param>) -> R<Vec<Param>> {
         self.expect(&TokKind::LParen, "`(`")?;
-        let mut params = requires;
         while !matches!(self.peek(), TokKind::RParen) {
             // `{name: T}` marks an implicit parameter (filled by unification);
             // `name: T` is explicit.
@@ -2176,6 +2604,22 @@ impl Parser {
                 // names it, so a record method reads the Rust way; there is no
                 // third reading, which is what keeps a parameter merely named
                 // `self` from silently not being the subject.
+                // `mut x: T`, `mut self x: T` (docs/sequencing-surface-design.md
+                // §8.2): the body may reassign `x`, and a `mut self`
+                // receiver comes back out beside the result. Contextual: a
+                // parameter named `mut` is still `mut: T`.
+                let is_mut = self.at_kw("mut") && matches!(self.nth(1), TokKind::Ident(_));
+                let mut_sp = self.peek_span();
+                if is_mut {
+                    if implicit {
+                        return Err(ParseError {
+                            msg: "an implicit parameter cannot be `mut`: it has no argument slot \
+                                  to update".into(),
+                            span: mut_sp,
+                        });
+                    }
+                    self.bump();
+                }
                 let is_self = self.at_kw("self");
                 let self_sp = self.peek_span();
                 if is_self {
@@ -2224,6 +2668,9 @@ impl Parser {
                 // *same* symbol is the ordinary uniqueness rule, which the
                 // elaborator runs per spelling.
                 let symbol = self.binder_symbol(&pname)?;
+                if is_mut {
+                    self.mut_params.push((pname.clone(), is_self));
+                }
                 names.push((pname, psp, is_self, symbol));
                 if !(matches!(self.peek(), TokKind::Comma)
                     && matches!(self.nth(1), TokKind::Ident(_)))
@@ -2328,6 +2775,109 @@ impl Parser {
             self.bump();
         }
         self.expect(&TokKind::RParen, "`)`")?;
+        Ok(params)
+    }
+
+    fn decl(&mut self) -> R<Decl> {
+        let propagation_start = self.propagation_count;
+        let start = self.peek_span();
+        // `meta fn` — a layer-m declaration (docs/in-language-map-design.md
+        // §3). Only `fn`: a theorem is an opaque Ψ-global, and meta
+        // definitions never reach Ψ, so `meta theorem` has no meaning.
+        let is_meta = self.eat_kw("meta");
+        // `evidence theorem` — contextual, like every keyword here: only the
+        // word directly before `theorem` is the modifier, so a field or
+        // binder named `evidence` elsewhere is untouched.
+        let is_evidence = !is_meta
+            && self.at_kw("evidence")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "theorem");
+        if is_evidence {
+            self.bump();
+        } else if self.at_kw("evidence")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn" || s == "axiom" || s == "meta" || s == "def")
+        {
+            return self.err(
+                "`evidence` marks a `theorem`: a rule is a proof `:= infer` applies \
+                 (docs/positivity-evidence-design.md §6 A)",
+            );
+        }
+        // `interface fn` — an interface definition
+        // (docs/interface-definitions-design.md §1). Contextual: only the word
+        // directly before a declaration keyword is the modifier.
+        let is_interface = !is_meta
+            && !is_evidence
+            && self.at_kw("interface")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "fn");
+        if is_interface {
+            self.bump();
+        } else if !is_meta
+            && !is_evidence
+            && self.at_kw("interface")
+            && matches!(self.nth(1), TokKind::Ident(s) if s == "theorem" || s == "def" || s == "axiom" || s == "meta")
+        {
+            return self.err(
+                "`interface` marks a `fn`: a theorem is already opaque to its clients, and a \
+                 `def` or `axiom` has no arguments a call could leave open \
+                 (docs/interface-definitions-design.md §1)",
+            );
+        }
+        // `def name: T = e;` — a value definition
+        // (docs/value-definitions-design.md §2). Contextual like every
+        // keyword here: only `def` followed by a name, at an item's head.
+        if self.at_kw("def") && matches!(self.nth(1), TokKind::Ident(_)) {
+            if is_meta {
+                return self.err("`meta` marks a `fn`: a `def` is an ordinary value");
+            }
+            return self.value_decl(start, propagation_start);
+        }
+        let kind = if self.eat_kw("fn") {
+            DeclKind::Fn
+        } else if !is_meta && self.eat_kw("theorem") {
+            DeclKind::Theorem
+        } else if !is_meta && self.eat_kw("axiom") {
+            DeclKind::Axiom
+        } else if is_meta {
+            return self.err("`meta` marks a `fn`: write `meta fn name(…)`");
+        } else {
+            return self.err("expected `fn`, `theorem`, `def`, `axiom`, or `inductive`");
+        };
+        // A declaration head is the one *binding* position where a qualified
+        // name is legal: `fn List::nth(…)` attaches the declaration to a
+        // type's namespace (issues/type-owned-members-receiver-slice.md).
+        // Whether the qualifier really names a type is the elaborator's to
+        // check — the parser has no name tables — so all that happens here is
+        // that the `::` is let through, with the arity of the path fixed at
+        // one segment of qualifier.
+        let (name, name_span) = self.qual_ident("declaration name")?;
+        if name.matches("::").count() > 1 {
+            return Err(ParseError {
+                msg: format!(
+                    "`{name}` has more than one qualifier: a member is attached to \
+                     exactly one type, `Type::member`"
+                ),
+                span: name_span,
+            });
+        }
+        // `fn map<A, B>(…)` — type parameters (docs/surface-polymorphism.md
+        // §1). Unambiguous here: a declaration's name is always followed by
+        // `(` or `<`, and neither is an expression continuation. `<A: Type<1>>`
+        // annotates the universe the parameter ranges over
+        // (docs/surface-universe.md §2); `<A: Monoid>` constrains what it
+        // carries — one production, shared with the `instance` head.
+        let (tyvars, constraints) = self.typaram_list()?;
+        // `fn sum<A> requires m: Monoid<A> (xs: List<A>) -> A` — solver
+        // parameters, the class spelling (docs/traits-layer2-design.md §1).
+        // They are moved to the front of the parameter list, because they are
+        // what the later parameters' types mention; the same production the
+        // `instance` head uses, and the same desugaring. Inline constraints are
+        // those same parameters, and lead: `<A: Monoid> requires c: Cmp<A>`
+        // binds the monoid first.
+        let mut requires = constraints;
+        requires.extend(self.requires_list()?);
+        let leading = requires.len();
+        self.mut_params.clear();
+        let params = self.param_list(requires)?;
+        let mut_params = std::mem::take(&mut self.mut_params);
         // `for vec.map` — the elaboration slot this template fills
         // (docs/meta-def-registration-design.md §2.1). The parse point is
         // unambiguous: what follows a parameter list is `->` or `:`, never an
@@ -2363,7 +2913,23 @@ impl Parser {
         // The declaration's body block follows immediately, so a `{` here
         // opens it, not a record literal in the last endpoint of a
         // `theorem t: a = D { … }` (docs/surface-records.md §6.1).
-        let result = self.with_record_lit(true, |p| p.ty())?;
+        let mut result = self.with_record_lit(true, |p| p.ty())?;
+        // A `mut self` method returns its receiver beside its result
+        // (docs/sequencing-surface-design.md §8.2): `fn Io::read(mut self io:
+        // Io, …) → R` has kernel type `Io → … → Mutated<Io, R>`.
+        let mut_self = mut_params.iter().find(|(_, s)| *s).map(|(n, _)| n.clone());
+        if !mut_params.is_empty() && kind != DeclKind::Fn {
+            return Err(ParseError {
+                msg: "only a `fn` takes `mut` parameters: a theorem's parameters are not updated".into(),
+                span: result.span,
+            });
+        }
+        if let Some(receiver) = &mut_self {
+            let receiver_ty = params.iter().find(|p| &p.name == receiver).map(|p| p.ty.clone())
+                .expect("a `mut self` parameter is in the list");
+            let span = result.span;
+            result = Ty { kind: TyKind::Named { name: MUTATED_RECORD.into(), args: vec![receiver_ty, result] }, span };
+        }
         // `decreases e` — a termination measure, before the body. Contextual,
         // like `requires`: an identifier can never follow a complete result
         // type, so the word is unambiguous here. The body's `{` must not be
@@ -2373,6 +2939,20 @@ impl Parser {
         } else {
             None
         };
+        // `unfolding f, g` — see through these interface definitions in this
+        // declaration (docs/interface-definitions-design.md §4). Contextual,
+        // like `decreases`.
+        let mut unfolding = Vec::new();
+        if self.eat_kw("unfolding") {
+            loop {
+                let (name, _) = self.qual_ident("an interface definition's name")?;
+                unfolding.push(name);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+        }
         // The `given` clause — the constraint sentence written where its
         // subject is not a binder (`given List<A>: Monoid`) — is deliberately
         // NOT decided (issues/requires-placement-syntax.md, log 2026-08-07).
@@ -2404,7 +2984,9 @@ impl Parser {
         } else {
             let saved = self.propagation_depth;
             self.propagation_depth = usize::from(!is_meta && kind == DeclKind::Fn);
+            self.pending_mut = (!mut_params.is_empty()).then(|| mut_params.clone());
             let body = self.block();
+            self.pending_mut = None;
             self.propagation_depth = saved;
             body?
         };
@@ -2414,8 +2996,101 @@ impl Parser {
             crate::try_lower::block(body, &mut self.next_hygienic)?
         } else { body };
         crate::try_lower::validate_decrease_labels(&body, decreases.is_some())?;
+        crate::try_lower::reject_bind_in_type(&result)?;
+        for p in &params { crate::try_lower::reject_bind_in_type(&p.ty)?; }
+        let mut body = crate::imperative::lower_returns(body);
+        // A `mut self` method's `return e` leaves with its receiver as it
+        // stands there, `Mutated(x, e)`, as the body's own end does (§8.2).
+        if let Some(receiver) = &mut_self {
+            crate::imperative::return_receiver(&mut body, receiver, MUTATED_RECORD);
+        }
+        crate::imperative::reject_residue(&body)?;
+        let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, is_evidence, elaborates, name, tyvars, params, result, decreases, body, span })
+        Ok(Decl { kind, is_meta, is_evidence, is_interface, partial: None, value: false, elaborates, name, tyvars, params, result, decreases, unfolding, body, span })
+    }
+
+    /// `def name<A>: T = e;`, `def name = e;` (docs/value-definitions-design.md
+    /// §2). A value is a [`DeclKind::Fn`] with no written parameters and the
+    /// [`Decl::value`] flag; its body is the block `{ e }`. Without `: T` the
+    /// result is [`TyKind::TypeOf`] the value. Type parameters and inline
+    /// constraints are allowed (they are implicit, so the value is still used
+    /// bare); a written parameter list is refused with the two spellings it
+    /// could have meant.
+    fn value_decl(&mut self, start: Span, propagation_start: usize) -> R<Decl> {
+        self.bump(); // `def`
+        let (name, name_span) = self.qual_ident("definition name")?;
+        if name.matches("::").count() > 1 {
+            return Err(ParseError {
+                msg: format!(
+                    "`{name}` has more than one qualifier: a member is attached to \
+                     exactly one type, `Type::member`"
+                ),
+                span: name_span,
+            });
+        }
+        let (tyvars, constraints) = self.typaram_list()?;
+        if matches!(self.peek(), TokKind::LParen) {
+            return self.err(&format!(
+                "a `def` names a value and takes no parameters: write a function as \
+                 `fn {name}(…) -> T {{ … }}`, or a function-typed value as \
+                 `def {name}: A -> B = λ x => …;`"
+            ));
+        }
+        if self.at_kw("requires") {
+            return self.err(
+                "a `def` takes no `requires` list: constrain its type parameters inline \
+                 (`def unit<A: Monoid>: A = …;`)",
+            );
+        }
+        let leading = constraints.len();
+        let params = constraints;
+        // The annotation, and only the annotation, with a top-level `=`
+        // suppressed: `let`'s rule, so `def x: Nat = 5;` reads its value and
+        // an equation type is written in parentheses.
+        let annotated = if matches!(self.peek(), TokKind::Colon) {
+            self.bump();
+            Some(self.with_record_lit(true, |p| p.with_eq(true, |p| p.ty()))?)
+        } else {
+            None
+        };
+        if matches!(self.peek(), TokKind::LBrace) {
+            return self.err("a `def`'s value follows `=`: `def name: T = e;`");
+        }
+        self.expect_eq("`def` value")?;
+        let saved = self.propagation_depth;
+        self.propagation_depth = 1;
+        let value = self.expr();
+        self.propagation_depth = saved;
+        let value = value?;
+        let end = self.expect(&TokKind::Semi, "`;` to end the `def`")?;
+        let result = match annotated {
+            Some(t) => t,
+            None => Ty { kind: TyKind::TypeOf(Box::new(value.clone())), span: value.span },
+        };
+        let vspan = value.span;
+        let body = Block { stmts: Vec::new(), result: Box::new(value), ons: Vec::new(), span: vspan };
+        let body = if self.propagation_count != propagation_start {
+            crate::try_lower::reject_type(&result)?;
+            crate::try_lower::block(body, &mut self.next_hygienic)?
+        } else { body };
+        let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
+        Ok(Decl {
+            kind: DeclKind::Fn,
+            is_meta: false,
+            is_evidence: false,
+            is_interface: false, partial: None,
+            value: true,
+            elaborates: None,
+            name,
+            tyvars,
+            params,
+            result,
+            decreases: None,
+            unfolding: Vec::new(),
+            body,
+            span: start.join(end),
+        })
     }
 
     // -- blocks and statements ----------------------------------------------
@@ -2431,6 +3106,32 @@ impl Parser {
     }
 
     fn block_body(&mut self, open: Span) -> R<Block> {
+        let pending = self.pending_mut.take();
+        let defer = std::mem::take(&mut self.defer_binds);
+        let saved = self.mutables.len();
+        if let Some(ps) = &pending {
+            self.mutables.extend(ps.iter().map(|(n, _)| n.clone()));
+        }
+        let block = self.block_body_in(open, pending);
+        self.mutables.truncate(saved);
+        let block = crate::imperative::lower_block(block?, &mut self.next_hygienic)?;
+        if defer {
+            return Ok(block);
+        }
+        crate::try_lower::binds_in_block(block, &mut self.next_hygienic)
+    }
+
+    /// Is `e` a method call on a `let mut` local or `mut` parameter in
+    /// scope: one that may update its receiver (§8.2)?
+    fn mut_receiver(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Dot { recv, args: Some(_), .. }
+            if matches!(&recv.kind, ExprKind::Var(x) if self.mutables.contains(x)))
+    }
+
+    /// [`Self::block_body`] before its layer-2 statements and binds are
+    /// lowered: the statements, and a `mut` parameter list's bindings when
+    /// this is a function's body.
+    fn block_body_in(&mut self, open: Span, pending: Option<Vec<(String, bool)>>) -> R<Block> {
         let mut stmts = Vec::new();
         // `{}` — an empty proof block, whose result is the elaborator's one
         // speculative `refl` (issues/auto-refl-empty-block.md). Read here,
@@ -2448,8 +3149,64 @@ impl Parser {
                 span,
             });
         }
-        while self.at_stmt() {
-            stmts.push(self.let_stmt()?);
+        let parsed = self.block_statements(&mut stmts)?;
+        let mut block = self.block_tail(open, stmts, parsed)?;
+        // A result that updates its receiver is bound first, so the local
+        // is updated before the block ends (§8.2).
+        if self.mut_receiver(&block.result) {
+            let span = block.result.span;
+            let name = self.hygienic("tail");
+            let call = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
+            block.stmts.push(Stmt::Let {
+                name, ty: None, expr: crate::imperative::marked(crate::imperative::MUTCALL, call, span), span, opaque: false,
+            });
+        }
+        if let Some(ps) = pending {
+            // `mut x` is `let mut x = x;` at the body's head; a `mut self`
+            // receiver is returned beside the body's value,
+            // `Mutated(x, value)`.
+            let mut head: Vec<Stmt> = ps.iter().map(|(n, _)| {
+                let x = Expr { kind: ExprKind::Var(n.clone()), span: open };
+                Stmt::Let { name: n.clone(), ty: None, expr: crate::imperative::marked(crate::imperative::MUT, x, open), span: open, opaque: false }
+            }).collect();
+            head.append(&mut block.stmts);
+            block.stmts = head;
+            if let Some((receiver, _)) = ps.iter().find(|(_, s)| *s) {
+                let span = block.result.span;
+                let value = if crate::imperative::is_unit_result(&block.result) {
+                    Expr { kind: ExprKind::Var("trivial".into()), span }
+                } else {
+                    let name = self.hygienic("value");
+                    let value = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
+                    block.stmts.push(Stmt::Let { name: name.clone(), ty: None, expr: value, span, opaque: false });
+                    Expr { kind: ExprKind::Var(name), span }
+                };
+                let var = |n: &str| Expr { kind: ExprKind::Var(n.into()), span };
+                block.result = Box::new(Expr {
+                    kind: ExprKind::App { head: Box::new(var(MUTATED_RECORD)), args: vec![var(receiver), value], named: vec![], explicit: false, goal_oriented: false },
+                    span,
+                });
+            }
+        }
+        Ok(block)
+    }
+
+    /// [`Self::block_body`] after its statements: the result (`parsed` when
+    /// [`Self::block_statements`] already read it), its `on`s, and the `}`.
+    fn block_tail(&mut self, open: Span, stmts: Vec<Stmt>, parsed: Option<Expr>) -> R<Block> {
+        // A statement body ends in a statement and has no result
+        // (docs/sequencing-surface-design.md §4): `{ x := e }`, or `{}`.
+        if parsed.is_none()
+            && matches!(self.peek(), TokKind::RBrace)
+            && stmts.last().is_none_or(is_imperative_statement)
+        {
+            let close = self.expect(&TokKind::RBrace, "`}`")?;
+            return Ok(Block { stmts, result: Box::new(crate::imperative::unit(close)), ons: Vec::new(), span: open.join(close) });
+        }
+        if let Some(result) = parsed {
+            let ons = self.block_ons(Vec::new())?;
+            let close = self.expect(&TokKind::RBrace, "`}`")?;
+            return Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) });
         }
         // Goal combinators are statement-shaped: `split_all` replaces the
         // current goal by one goal per finite branch, then `all_goals` checks
@@ -2504,25 +3261,27 @@ impl Parser {
         if self.at_sequent_binders() {
             let (binders, start, turnstile) = self.sequent_binders()?;
             let mut body_stmts = Vec::new();
-            while self.at_stmt() {
-                body_stmts.push(self.let_stmt()?);
-            }
-            let (body_result, ons) = self.block_result_and_ons()?;
+            let parsed = self.block_statements(&mut body_stmts)?;
+            let (body_result, ons) = match parsed {
+                Some(result) => (result, self.block_ons(Vec::new())?),
+                None => self.block_result_and_ons()?,
+            };
             let close = self.expect(&TokKind::RBrace, "`}`")?;
             let body = if body_stmts.is_empty() {
                 body_result
             } else {
-                Expr {
-                    kind: ExprKind::Block(Box::new(Block {
+                let inner = crate::try_lower::binds_in_block(
+                    Block {
                         stmts: body_stmts,
                         result: Box::new(body_result),
                         // Goal discharges retain declaration-block scope and
                         // are therefore hoisted to the outer block below.
                         ons: Vec::new(),
                         span: turnstile.join(close),
-                    })),
-                    span: turnstile.join(close),
-                }
+                    },
+                    &mut self.next_hygienic,
+                )?;
+                Expr { kind: ExprKind::Block(Box::new(inner)), span: turnstile.join(close) }
             };
             let result = Expr {
                 kind: ExprKind::Lam { binders, body: Box::new(body) },
@@ -2547,12 +3306,18 @@ impl Parser {
         // `split e;` — the statement-position case split. It *is* the block's
         // result, so the statement list ends here and the `on Ctor(…)` arms
         // that follow are its arms (docs/match-equation-split-design.md §5).
-        let (result, mut ons) = if self.at_kw("split") {
+        let (result, ons) = if self.at_kw("split") {
             self.split_result()?
         } else {
             let result = self.expr()?;
             (result, Vec::new())
         };
+        let ons = self.block_ons(ons)?;
+        Ok((result, ons))
+    }
+
+    /// The `on` goal discharges after a block's result, appended to `ons`.
+    fn block_ons(&mut self, mut ons: Vec<OnStmt>) -> R<Vec<OnStmt>> {
         while self.at_kw("on") {
             let on = self.on_stmt()?;
             if let OnTarget::Ctor { ctor, .. } = &on.target {
@@ -2566,7 +3331,7 @@ impl Parser {
             }
             ons.push(on);
         }
-        Ok((result, ons))
+        Ok(ons)
     }
 
     /// `split (h :)? e; on C(x⃗) := b; …` — parsed here and **desugared here**,
@@ -2667,8 +3432,12 @@ impl Parser {
                 self.bump();
             }
             self.expect(&TokKind::RBrace, "`}` (`let` pattern)")?;
-            self.expect_eq("`let` pattern")?;
+            let bound = self.eat_bind_arrow();
+            if !bound {
+                self.expect_eq("`let` pattern")?;
+            }
             let expr = self.expr()?;
+            let expr = if bound { let span = expr.span; crate::try_lower::bind_marker(expr, span) } else { expr };
             let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
             return Ok(Stmt::LetRecord { fields, expr, span: start.join(end) });
         }
@@ -2682,7 +3451,13 @@ impl Parser {
             let end = self.expect(&TokKind::Semi, "`;` to end the `let code`")?;
             return Ok(Stmt::LetCode { name, expr, span: start.join(end) });
         }
-        let (name, _) = self.binder_ident("`let` binding name")?;
+        // `let mut x = e;` — a local `:=` may reassign (§4). `mut` is
+        // contextual: `let mut = e;` still binds a name `mut`.
+        let mutable = self.at_kw("mut") && matches!(self.nth(1), TokKind::Ident(_));
+        if mutable {
+            self.bump();
+        }
+        let (mut name, _) = self.binder_ident("`let` binding name")?;
         let ty = if matches!(self.peek(), TokKind::Colon) {
             self.bump();
             // The annotation, and only the annotation: the value is parsed
@@ -2692,10 +3467,333 @@ impl Parser {
         } else {
             None
         };
+        // `let x <- e;` — a binding statement (docs/sequencing-surface-design.md
+        // §3.1): the nested bind at the `let`'s right side, `let x = (<- e);`.
+        if self.eat_bind_arrow() {
+            let expr = self.expr()?;
+            let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
+            if name == "_" {
+                name = self.hygienic("seq");
+            }
+            let span = expr.span;
+            let expr = crate::try_lower::bind_marker(expr, span);
+            let expr = if mutable { crate::imperative::marked(crate::imperative::MUT, expr, span) } else { expr };
+            return Ok(Stmt::Let { name, ty, expr, span: start.join(end), opaque: false });
+        }
         self.expect_eq("`let` binding")?;
         let expr = self.expr()?;
         let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
+        let expr = if mutable {
+            let span = expr.span;
+            crate::imperative::marked(crate::imperative::MUT, expr, span)
+        } else if self.mut_receiver(&expr) {
+            // `let p = x.m(a);` on a mutable `x` (§8.2), annotated or not.
+            let span = expr.span;
+            crate::imperative::marked(crate::imperative::MUTCALL, expr, span)
+        } else {
+            expr
+        };
+        if mutable {
+            self.mutables.push(name.clone());
+        }
         Ok(Stmt::Let { name, ty, expr, span: start.join(end), opaque: false })
+    }
+
+    /// `<-` or `←` after a `let` binder: the statement binds.
+    fn eat_bind_arrow(&mut self) -> bool {
+        if matches!(self.peek(), TokKind::LArrow) {
+            self.bump();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// A block's statements, up to its result. `let`/`have` statements, and
+    /// expression statements `e;` (docs/sequencing-surface-design.md §3.1,
+    /// §4): an expression followed by `;` discards its result in the
+    /// block's carrier, so it is the binding statement `let _ <- e;` at a
+    /// private name. An expression followed by anything else is the block's
+    /// result, returned here already parsed. No block written before this
+    /// had an expression followed by `;`, so nothing that parsed changes
+    /// meaning. The forms the result position reads by its first token
+    /// (`split`, `split_all`, a sequent header, `on`, `}`) end the loop
+    /// unparsed.
+    /// `for x in e { body }` (docs/sequencing-surface-design.md §5.2): the
+    /// marker `\0for(e, λ x => body)` at a private name, for
+    /// [`crate::imperative`] to thread the `let mut` locals the body assigns
+    /// and the elaborator to lift into a named step over a fold.
+    fn for_stmt(&mut self) -> R<Stmt> {
+        let start = self.bump().span;
+        let (x, xspan) = self.binder_ident("`for` binder")?;
+        self.bump(); // `in`
+        let saved = std::mem::replace(&mut self.range_header, true);
+        let iter = self.with_record_lit(true, |p| p.expr());
+        self.range_header = saved;
+        let mut iter = iter?;
+        // `for i in a..b`: the range is `List::range_from(a, b - a)`, and
+        // `0..n` is `List::range(n)` (§5.2), written only here, so no
+        // `Range` type is needed yet.
+        if matches!(self.peek(), TokKind::Dot) && matches!(self.nth(1), TokKind::Dot) {
+            self.bump();
+            self.bump();
+            let hi = self.with_record_lit(true, |p| p.expr())?;
+            let span = iter.span.join(hi.span);
+            let app = |head: &str, args: Vec<Expr>| Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr { kind: ExprKind::Var(head.into()), span }),
+                    args,
+                    named: vec![],
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            };
+            iter = if matches!(&iter.kind, ExprKind::Num(n) if *n == Numeral::ZERO) {
+                app("List::range", vec![hi])
+            } else {
+                let len = op_call("-", OpFixity::Infix, vec![hi, iter.clone()], span);
+                app("List::range_from", vec![iter, len])
+            };
+        }
+        if !matches!(self.peek(), TokKind::LBrace) {
+            return self.err("a `for` body is a braced block of statements: `for x in xs { … }`");
+        }
+        self.loop_stmt(start, iter, x, xspan, "for")
+    }
+
+    /// `while c decreases m { body }` (docs/sequencing-surface-design.md
+    /// §5.3): the `for` marker over the header `\0while(decide_bit<c>(),
+    /// m)` and a private binder, so [`crate::imperative`] threads its state
+    /// as a `for`'s, and the elaborator lifts it into a recursive `f::run`
+    /// instead of a step over a fold.
+    ///
+    /// With no `decreases`, `while c { body }` is a loop in a block over a
+    /// carrier that iterates (§18): the header is `\0while(decide_bit<c>())`
+    /// alone, and the body's binds wait for the loop's lowering.
+    fn while_stmt(&mut self) -> R<Stmt> {
+        let start = self.bump().span;
+        let condition = self.with_record_lit(true, |p| p.expr())?;
+        let cspan = condition.span;
+        let measure = if self.eat_kw("decreases") {
+            Some(self.with_record_lit(true, |p| p.expr())?)
+        } else {
+            None
+        };
+        if !matches!(self.peek(), TokKind::LBrace) {
+            return self.err(if measure.is_some() {
+                "a `while` body is a braced block of statements: `while c decreases m { … }`"
+            } else {
+                "a `while` body is a braced block of statements: `while c { … }` (in a block over a \
+                 carrier that iterates) or `while c decreases m { … }`"
+            });
+        }
+        // The condition as a plain `if` decides it, so the step sees the
+        // same `decide_bit` match the measure obligation reads (§5.3).
+        let scrut = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp {
+                        head: Box::new(Expr { kind: ExprKind::Var("decide_bit".into()), span: cspan }),
+                        args: vec![expr_as_ty(&condition)],
+                    },
+                    span: cspan,
+                }),
+                args: vec![],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: cspan,
+        };
+        let mut header_args = vec![scrut];
+        header_args.extend(measure.clone());
+        let header = crate::imperative::call_marker(crate::imperative::WHILE, header_args, start.join(cspan));
+        let x = self.hygienic("while");
+        self.defer_binds = measure.is_none();
+        self.loop_stmt(start, header, x, start, "while")
+    }
+
+    /// The braced body of a `for` or `while`, and its marker.
+    fn loop_stmt(&mut self, start: Span, iter: Expr, x: String, xspan: Span, kw: &str) -> R<Stmt> {
+        let body = self.block()?;
+        if !matches!(&body.result.kind, ExprKind::Var(n) if n == crate::imperative::UNIT)
+            && !(body.stmts.is_empty() && matches!(body.result.kind, ExprKind::AutoRefl))
+        {
+            return Err(ParseError {
+                msg: format!("a `{kw}` body ends in a statement, not a value: it reassigns `let mut` locals, \
+                      so it has no result"),
+                span: body.result.span,
+            });
+        }
+        if matches!(self.peek(), TokKind::Semi) {
+            self.bump();
+        }
+        let span = start.join(body.span);
+        let body = Expr { span: body.span, kind: ExprKind::Block(Box::new(body)) };
+        let lam = Expr {
+            kind: ExprKind::Lam {
+                binders: vec![LamBinder { name: x, ty: None, implicit: false, span: xspan }],
+                body: Box::new(body),
+            },
+            span,
+        };
+        let marked = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr { kind: ExprKind::Var(crate::imperative::FOR.into()), span }),
+                args: vec![iter, lam],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let name = self.hygienic("for");
+        Ok(Stmt::Let { name, ty: None, expr: marked, span, opaque: false })
+    }
+
+    fn block_statements(&mut self, stmts: &mut Vec<Stmt>) -> R<Option<Expr>> {
+        loop {
+            if self.at_stmt() {
+                stmts.push(self.let_stmt()?);
+                continue;
+            }
+            if matches!(self.peek(), TokKind::RBrace | TokKind::Eof)
+                || self.at_kw("split")
+                || self.at_kw("split_all")
+                || self.at_kw("on")
+                || self.at_sequent_binders()
+            {
+                return Ok(None);
+            }
+            // `break;`, `continue;`, `return e;` (§4): statements of a
+            // loop body, lowered by the loop ([`crate::imperative`]).
+            if (self.at_kw("break") || self.at_kw("continue"))
+                && matches!(self.nth(1), TokKind::Semi | TokKind::RBrace)
+            {
+                let word = if self.at_kw("break") { crate::imperative::BREAK } else { crate::imperative::CONTINUE };
+                let span = self.bump().span;
+                if matches!(self.peek(), TokKind::Semi) { self.bump(); }
+                let name = self.hygienic("exit");
+                stmts.push(Stmt::Let {
+                    name,
+                    ty: None,
+                    expr: Expr {
+                        kind: ExprKind::App {
+                            head: Box::new(Expr { kind: ExprKind::Var(word.into()), span }),
+                            args: vec![], named: vec![], explicit: false, goal_oriented: false,
+                        },
+                        span,
+                    },
+                    span,
+                    opaque: false,
+                });
+                continue;
+            }
+            if self.at_kw("return") && !matches!(self.nth(1), TokKind::Semi | TokKind::RBrace) {
+                let start = self.bump().span;
+                let value = self.expr()?;
+                let end = if matches!(self.peek(), TokKind::RBrace) { value.span } else { self.expect(&TokKind::Semi, "`;` to end the `return`")? };
+                let span = start.join(end);
+                let name = self.hygienic("exit");
+                let vspan = value.span;
+                stmts.push(Stmt::Let {
+                    name,
+                    ty: None,
+                    expr: crate::imperative::marked(crate::imperative::RETURN, value, vspan),
+                    span,
+                    opaque: false,
+                });
+                continue;
+            }
+            // `for x in e { body }` (§5.2): a statement, needing no `;`.
+            if self.at_kw("for")
+                && matches!(self.nth(1), TokKind::Ident(_))
+                && matches!(self.nth(2), TokKind::Ident(w) if w == "in")
+            {
+                stmts.push(self.for_stmt()?);
+                continue;
+            }
+            // `while c decreases m { body }` (§5.3), a statement too.
+            if self.at_kw("while") && !matches!(self.nth(1), TokKind::Semi | TokKind::RBrace) {
+                stmts.push(self.while_stmt()?);
+                continue;
+            }
+            // A statement `if` may omit its `else` (§4): only here, at the
+            // head of a statement.
+            self.elseless_if = self.at_kw("if");
+            let expr = self.expr();
+            self.elseless_if = false;
+            let expr = expr?;
+            // `x := e` — reassign a `let mut` local (§4, §5.1). The `;` may
+            // be left off before the block's `}`, as a statement body's last
+            // assignment usually is.
+            if matches!(self.peek(), TokKind::ColonEq) {
+                let ExprKind::Var(name) = &expr.kind else {
+                    return Err(ParseError {
+                        msg: "only a local is assigned: write `x := e` (a field path, `x.f := e`, is not \
+                              supported yet)".into(),
+                        span: expr.span,
+                    });
+                };
+                let name = name.clone();
+                self.bump();
+                let value = self.expr()?;
+                let end = if matches!(self.peek(), TokKind::RBrace) {
+                    value.span
+                } else {
+                    self.expect(&TokKind::Semi, "`;` to end the assignment")?
+                };
+                let span = expr.span.join(end);
+                let marked = value.span;
+                stmts.push(Stmt::Let {
+                    name,
+                    ty: None,
+                    expr: crate::imperative::marked(crate::imperative::ASSIGN, value, marked),
+                    span,
+                    opaque: false,
+                });
+                continue;
+            }
+            // A statement `if`/`match`: a block-like form whose bodies are
+            // statements. It needs no `;`.
+            if is_statement_form(&expr) {
+                if matches!(self.peek(), TokKind::Semi) {
+                    self.bump();
+                }
+                let span = expr.span;
+                let name = self.hygienic("stmt");
+                stmts.push(Stmt::Let {
+                    name,
+                    ty: None,
+                    expr: crate::imperative::marked(crate::imperative::STMT, expr, span),
+                    span,
+                    opaque: false,
+                });
+                continue;
+            }
+            if !matches!(self.peek(), TokKind::Semi) {
+                return Ok(Some(expr));
+            }
+            let end = self.bump().span;
+            let span = expr.span.join(end);
+            let marked = expr.span;
+            let name = self.hygienic("seq");
+            // `x.m(a);` on a mutable `x` updates it (§8.2); any other
+            // expression statement is a bind.
+            let expr = if self.mut_receiver(&expr) {
+                crate::imperative::marked(crate::imperative::MUTCALL, expr, marked)
+            } else {
+                crate::try_lower::bind_marker(expr, marked)
+            };
+            stmts.push(Stmt::Let {
+                name,
+                ty: None,
+                expr,
+                span,
+                opaque: false,
+            });
+        }
     }
 
     /// A block statement starts here: `let`, or `have` followed by a name.
@@ -3016,12 +4114,27 @@ impl Parser {
             return Ok(Ty { kind: TyKind::Splice { name }, span: start.join(nsp) });
         }
         // `[T; n]` — a length-indexed vector (docs/container-fields.md §2.1).
-        if matches!(self.peek(), TokKind::LBracket) {
+        // A leading `[` in type position is also the list literal that opens
+        // an equality's left endpoint — `[1] ++ [2] = [1, 2]` is a statement
+        // — so the vector reading is speculative, like `D<A, B>` below: the
+        // element parses as a type, and only a `;` after it commits. Anything
+        // else rewinds to the expression grammar, whose `[` arm tells the two
+        // apart by the same first separator
+        // (issues/statement-leading-list-literal-parse.md).
+        if matches!(self.peek(), TokKind::LBracket) && !self.spec_seen_failing(self.pos, SITE_TY_VEC) {
+            let save = self.pos;
             let start = self.bump().span;
-            let elem = self.ty()?;
-            self.expect(&TokKind::Semi, "`;` (a vector type is `[T; n]`)")?;
+            let elem = match self.ty() {
+                Ok(elem) if matches!(self.peek(), TokKind::Semi) => elem,
+                _ => {
+                    self.spec_note_failure(save, SITE_TY_VEC);
+                    let lhs = self.with_iff(restricted, |p| p.expr())?;
+                    return Ok(expr_as_ty(&lhs));
+                }
+            };
+            self.bump(); // `;`
             let len = self.expr()?;
-            let end = self.expect(&TokKind::RBracket, "`]`")?;
+            let end = self.expect(&TokKind::RBracket, "`]` (a vector type is `[T; n]`)")?;
             return Ok(Ty {
                 kind: TyKind::Vec { elem: Box::new(elem), len: Box::new(len) },
                 span: start.join(end),
@@ -3123,6 +4236,17 @@ impl Parser {
     /// [`Self::ty`], where the arrow's sides are `ty_atom`s and `ty_atom`
     /// falls through to this function.
     fn expr(&mut self) -> R<Expr> {
+        // `<- e` — a nested bind (docs/sequencing-surface-design.md §3.2): at
+        // the head of an expression, so `f(<- e, y)`, `(<- e)` and
+        // `match <- e { … }` all read it. It takes the whole expression after
+        // it. The enclosing block or λ lowers it when it closes
+        // ([`crate::try_lower::binds_in_block`]).
+        if matches!(self.peek(), TokKind::LArrow) {
+            let start = self.bump().span;
+            let input = self.expr()?;
+            let span = start.join(input.span);
+            return Ok(crate::try_lower::bind_marker(input, span));
+        }
         // The codomain restriction is a rule about **this rung**, not about
         // everything below it: once the parse descends into a bracket, a `↔`
         // there cannot be the enclosing arrow's, so the restriction has
@@ -3410,6 +4534,7 @@ impl Parser {
             for binder in &binders { if let Some(t) = &binder.ty { crate::try_lower::reject_type(t)?; } }
             crate::try_lower::expression(body, &mut self.next_hygienic)?
         } else { body };
+        let body = crate::try_lower::binds_in_expression(body, &mut self.next_hygienic)?;
         Ok(Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span })
     }
 
@@ -3830,6 +4955,9 @@ impl Parser {
             // writes it has one — but a rung had to be chosen and this is the
             // one its shape asks for.
             TokKind::Bullet => Some(("∙", 7, 8)),
+            // `⊓` binds tighter than `⊔`, as `*` does `+`: the lattice's
+            // two operations read like the semiring's.
+            TokKind::Meet => Some(("⊓", 7, 8)),
             _ => None,
         }
     }
@@ -3850,6 +4978,7 @@ impl Parser {
             TokKind::PipePipe => Some("||"),
             TokKind::Bullet => Some("∙"),
             TokKind::Join => Some("⊔"),
+            TokKind::Meet => Some("⊓"),
             TokKind::Approx => Some("≈"),
             TokKind::LtEq => Some("<="),
             TokKind::Lt => Some("<"),
@@ -3908,12 +5037,76 @@ impl Parser {
         let symbol = match self.peek() {
             TokKind::Minus => "-",
             TokKind::Bang => "!",
+            // A cast, at `-`'s precedence (docs/casting-design.md §5.2):
+            // `↑n - 1` subtracts at the target, `↑(n - 1)` casts the
+            // difference.
+            TokKind::UpArrow => "↑",
+            TokKind::BigSum | TokKind::BigProd => return self.big_operator(),
             _ => return self.power(),
         };
         let start = self.bump().span;
         let inner = self.prefix()?;
         let span = start.join(inner.span);
         Ok(op_call(symbol, OpFixity::Prefix, vec![inner], span))
+    }
+
+    /// `∑ k < n, e` and `∏ k < n, e` — the big-operator binder
+    /// (issues/notation-extensibility.md; docs/analysis-foundations-design.md
+    /// §4). A **synonym**, as `∀` is: it desugars to the range sum
+    /// `MonoidRel::range(+, n, λ (k: Nat) => e)` (`*` for `∏`) of
+    /// std/big_operator, so a sum is that call and every law about range sums
+    /// applies to it unchanged. The operator is the bare symbol, so it means
+    /// whatever `+` or `*` means at the body's carrier, a constraint binder's
+    /// operation included.
+    ///
+    /// It sits at the **prefix** level, so it is an operand: `x + ∑ k < n, e`
+    /// and `x ≈ ∑ k < n, e` read as written. The body is an *arithmetic*
+    /// expression and runs right as far as one can, so `∑ k < n, f(k) + 1`
+    /// sums `f(k) + 1` (the mathematical reading; narrowing needs
+    /// parentheses) and `∑ k < n, f(k) ≈ s` compares the whole sum with `s`.
+    /// The bound is arithmetic too, and the index is a `Nat` below it.
+    fn big_operator(&mut self) -> R<Expr> {
+        let (glyph, symbol) = match self.peek() {
+            TokKind::BigProd => ("∏", "*"),
+            _ => ("∑", "+"),
+        };
+        let start = self.bump().span;
+        let (name, nsp) = self.ident("index name after a big operator")?;
+        if !matches!(self.peek(), TokKind::Lt) {
+            return self.err(format!(
+                "a big operator ranges below a bound: write `{glyph} {name} < n, e`, \
+                 which reads the indices `0, 1, …, n - 1`"
+            ));
+        }
+        self.bump();
+        let bound = self.expr_bp(0)?;
+        self.expect(&TokKind::Comma, "`,` between a big operator's bound and its body")?;
+        let body = self.expr_bp(0)?;
+        let span = start.join(body.span);
+        let lam = Expr {
+            kind: ExprKind::Lam {
+                binders: vec![LamBinder {
+                    name,
+                    ty: Some(Ty { kind: TyKind::Nat, span: nsp }),
+                    implicit: false,
+                    span: nsp,
+                }],
+                body: Box::new(body),
+            },
+            span,
+        };
+        let op = Expr { kind: ExprKind::OpSymbol { symbol: symbol.to_string(), fixity: OpFixity::Infix }, span: start };
+        let head = Expr { kind: ExprKind::Var("MonoidRel::range".to_string()), span: start };
+        Ok(Expr {
+            kind: ExprKind::App {
+                head: Box::new(head),
+                args: vec![op, bound, lam],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        })
     }
 
     /// `base ^ exponent` (docs/inverse-power-notation-design.md §2): above
@@ -4005,6 +5198,15 @@ impl Parser {
                         head: Box::new(Expr { kind: ExprKind::Var(crate::try_lower::TRY.into()), span: end }),
                         args: vec![e], named: Vec::new(), explicit: false, goal_oriented: false,
                     }, span };
+                }
+                // `a..b`: a range's `..` (a `for` header, §5.2), never a
+                // member access.
+                TokKind::Dot if matches!(self.nth(1), TokKind::Dot) => {
+                    if self.range_header { break; }
+                    return self.err(
+                        "`a..b` is a range only in a `for` header (`for i in a..b { … }`); elsewhere write \
+                         `List::range_from(a, b - a)`",
+                    );
                 }
                 TokKind::Dot => {
                     self.bump();
@@ -4505,6 +5707,10 @@ impl Parser {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Num(n), span: sp })
             }
+            TokKind::Scaled(s) => {
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::Scaled(s), span: sp })
+            }
             // One atom each, exactly as a numeral is one: the lexer has
             // already decided the payload, so there is no grammar here beyond
             // "a literal is an expression" (docs/string-char-design.md §3).
@@ -4614,6 +5820,7 @@ impl Parser {
             for binder in &binders { if let Some(t) = &binder.ty { crate::try_lower::reject_type(t)?; } }
             crate::try_lower::expression(body, &mut self.next_hygienic)?
         } else { body };
+        let body = crate::try_lower::binds_in_expression(body, &mut self.next_hygienic)?;
         Ok(Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span })
     }
 
@@ -4831,11 +6038,50 @@ impl Parser {
         // while relational expressions become decoded type expressions.
         let proposition = expr_as_ty(&condition);
 
+        let elseless = std::mem::take(&mut self.elseless_if);
         let yes = self.if_branch("the `if` branch")?;
-        if !self.eat_kw("else") {
+        let no = if self.eat_kw("else") {
+            if self.at_kw("if") {
+                // `else if c { … }`: the nested `if` is the `else` branch, and
+                // a statement's chain may end without an `else` too.
+                self.elseless_if = elseless;
+                let nested = self.if_expr();
+                self.elseless_if = false;
+                let nested = nested?;
+                let span = nested.span;
+                // Braced, as every branch is: a statement chain's tail is a
+                // statement body holding the nested statement form.
+                let block = if is_statement_form(&nested) {
+                    let name = self.hygienic("stmt");
+                    Block {
+                        stmts: vec![Stmt::Let {
+                            name,
+                            ty: None,
+                            expr: crate::imperative::marked(crate::imperative::STMT, nested, span),
+                            span,
+                            opaque: false,
+                        }],
+                        result: Box::new(crate::imperative::unit(Span { start: span.end, end: span.end })),
+                        ons: Vec::new(),
+                        span,
+                    }
+                } else {
+                    Block { stmts: Vec::new(), result: Box::new(nested), ons: Vec::new(), span }
+                };
+                Expr { kind: ExprKind::Block(Box::new(block)), span }
+            } else {
+                self.if_branch("the `else` branch")?
+            }
+        } else if elseless && is_statement_body(&yes) {
+            // A statement `if` with no `else` assigns nothing when `c` fails.
+            let span = Span { start: yes.span.end, end: yes.span.end };
+            Expr {
+                kind: ExprKind::Block(Box::new(Block { stmts: Vec::new(), result: Box::new(crate::imperative::unit(span)), ons: Vec::new(), span })),
+                span,
+            }
+        } else {
             return self.err("an `if` needs an `else { … }` branch");
-        }
-        let no = self.if_branch("the `else` branch")?;
+        };
 
         let ev_span = condition.span;
         let decide_head = Expr {
@@ -5701,6 +6947,58 @@ mod tests {
         }
     }
 
+    /// A statement (a declared type) may open with a list literal: the `[`
+    /// is the vector type `[T; n]` only when a `;` follows its element
+    /// (issues/statement-leading-list-literal-parse.md).
+    #[test]
+    fn statements_may_start_with_a_list_literal() {
+        for (stmt, lhs_len) in [
+            ("[1] ++ [2] = [1, 2]", None),
+            ("[] = xs", Some(0)),
+            ("[x] = xs", Some(1)),
+            ("[x, y,] = xs", Some(2)),
+            ("[[1]] = [[1]]", Some(1)),
+            ("[[Nat; 3]] = xs", Some(1)),
+        ] {
+            let src = format!("theorem t(xs: List<Nat>, h: {stmt}): {stmt} {{ h }}");
+            let f = parse_file(&src).unwrap_or_else(|e| panic!("{stmt}: {}", e.msg));
+            let d = only_decl(&f);
+            for ty in [&d.params[1].ty, &d.result] {
+                let TyKind::Eq(lhs, _) = &ty.kind else { panic!("{stmt}: expected an equality") };
+                match (lhs_len, &lhs.kind) {
+                    (Some(n), ExprKind::CollectionLit(elems)) => assert_eq!(elems.len(), n, "{stmt}"),
+                    (None, ExprKind::App { args, .. }) => {
+                        assert!(args.iter().all(|a| matches!(a.kind, ExprKind::CollectionLit(_))), "{stmt}")
+                    }
+                    (_, other) => panic!("{stmt}: unexpected left endpoint {other:?}"),
+                }
+            }
+        }
+        // `[T; n]` keeps its reading in the same positions.
+        for ty in ["[Nat; 3]", "[[A; n]; m]", "[A -> B; n]", "[List<A>; n]", "[Nat; 3] -> [Nat; 3]"] {
+            let src = format!("fn f(v: {ty}) -> {ty} {{ v }}");
+            let f = parse_file(&src).unwrap_or_else(|e| panic!("{ty}: {}", e.msg));
+            let d = only_decl(&f);
+            for t in [&d.params[0].ty, &d.result] {
+                let vec = match &t.kind {
+                    TyKind::Fn { dom, .. } => &dom.kind,
+                    k => k,
+                };
+                assert!(matches!(vec, TyKind::Vec { .. }), "{ty}");
+            }
+        }
+        // A malformed vector type past its `;` still reports as one, and a
+        // deep nest of literals is one attempt per bracket.
+        for (ty, token) in [("[A; n, m]", ","), ("[A; n; m]", ";")] {
+            let src = format!("fn f() -> {ty} {{ v }}");
+            let err = parse_file(&src).unwrap_err();
+            assert!(err.msg.contains("a vector type is `[T; n]`"), "{ty}: {}", err.msg);
+            assert_eq!(&src[err.span.start..err.span.end], token, "{ty}");
+        }
+        let deep = format!("{}1{} = x", "[".repeat(200), "]".repeat(200));
+        parse_file(&format!("theorem t(): {deep} {{ refl }}")).unwrap();
+    }
+
     #[test]
     fn malformed_vector_expressions_report_the_relevant_delimiter() {
         for (body, message, token) in [
@@ -5790,6 +7088,23 @@ mod tests {
         assert_eq!(as_call(&outer_args[0].kind).0, "!");
     }
 
+    /// `↑` binds as tightly as the other prefixes: `↑n - 1` casts `n`, and
+    /// the subtraction happens at the target (docs/casting-design.md §14).
+    #[test]
+    fn a_cast_is_a_prefix_symbol_binding_tighter_than_infix() {
+        let k = body("↑n - 1");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "-");
+        let (cast, cast_args, _) = as_call(&args[0].kind);
+        assert_eq!(cast, "↑");
+        assert_eq!(cast_args.len(), 1);
+        let ExprKind::App { head, .. } = &args[0].kind else { unreachable!() };
+        assert!(matches!(
+            head.kind,
+            ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. }
+        ));
+    }
+
     #[test]
     fn semantic_brackets_desugar_to_is_true() {
         let k = body("⟦!b⟧");
@@ -5855,6 +7170,23 @@ mod tests {
         let (_, args, _) = as_call(&k);
         assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "≈"));
         assert!(matches!(&args[1].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊔"));
+    }
+
+    #[test]
+    fn meet_binds_tighter_than_join() {
+        // `a ⊔ b ⊓ c ≈ d` is `(a ⊔ (b ⊓ c)) ≈ d`, and `⊓` is left-associative.
+        let k = body("a⊔b⊓c≈d");
+        let (_, args, _) = as_call(&k);
+        let (join, operands, _) = as_call(&args[0].kind);
+        assert_eq!(join, "⊔");
+        assert_eq!(as_call(&operands[1].kind).0, "⊓");
+        let k = body("a⊓b⊓c");
+        let (meet, operands, _) = as_call(&k);
+        assert_eq!(meet, "⊓");
+        assert_eq!(as_call(&operands[0].kind).0, "⊓");
+        let k = body("f(⊓)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊓"));
     }
 
     // -- binder symbols (issues/binder-symbol-as-notation.md) --------------
@@ -6058,6 +7390,9 @@ mod tests {
         assert_eq!(kinds("a ∧ b")[1], TokKind::Wedge);
         assert_eq!(kinds("a ∨ b")[1], TokKind::Vee);
         assert_eq!(kinds("∃ k")[0], TokKind::Exists);
+        assert_eq!(kinds("∑ k")[0], TokKind::BigSum);
+        assert_eq!(kinds("∏ k")[0], TokKind::BigProd);
+        assert_eq!(kinds("↑n")[0], TokKind::UpArrow);
         assert_eq!(kinds("∀ k")[0], TokKind::Forall);
         // `λ`, the other two-byte glyph, is unmoved.
         assert_eq!(kinds("λ x")[0], TokKind::Lambda);
@@ -6177,6 +7512,57 @@ mod tests {
         assert!(matches!(&head.kind, ExprKind::Var(n) if n == "Exists"));
         assert!(matches!(&targs[0].kind, TyKind::Nat));
         assert!(matches!(&args[0].kind, ExprKind::Lam { .. }));
+    }
+
+    /// `∑ k < n, e` is the range sum `MonoidRel::range(+, n, λ (k: Nat) => e)`
+    /// and `∏` the same at `*`: a synonym, as `∃` is.
+    #[test]
+    fn big_operators_desugar_to_the_range_sum() {
+        for (src, sym) in [("∑ k < n, f(k)", "+"), ("∏ k < n, f(k)", "*")] {
+            let k = body(src);
+            let (name, args, _) = as_call(&k);
+            assert_eq!(name, "MonoidRel::range");
+            assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == sym));
+            assert!(matches!(&args[1].kind, ExprKind::Var(n) if n == "n"));
+            let ExprKind::Lam { binders, body } = &args[2].kind else { panic!("expected the body's λ") };
+            assert_eq!(binders[0].name, "k");
+            assert!(matches!(binders[0].ty.as_ref().map(|t| &t.kind), Some(TyKind::Nat)));
+            assert_eq!(as_call(&body.kind).0, "f");
+        }
+    }
+
+    /// The big operator is an operand, its body an arithmetic expression that
+    /// runs right as far as one can: `x + ∑ …` adds a sum, `∑ k < n, f(k) + 1`
+    /// sums `f(k) + 1`, and a comparison after the body compares the sum.
+    #[test]
+    fn big_operator_body_stops_at_a_relation() {
+        let k = body("x + ∑ k < n, f(k)");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "+");
+        assert_eq!(as_call(&args[1].kind).0, "MonoidRel::range");
+        let k = body("∑ k < n, f(k) + 1");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "MonoidRel::range");
+        let ExprKind::Lam { body: summand, .. } = &args[2].kind else { panic!("expected the body's λ") };
+        assert_eq!(as_call(&summand.kind).0, "+");
+        let k = body("∑ k < n + 1, f(k) ≈ s");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "≈");
+        let (name, args, _) = as_call(&args[0].kind);
+        assert_eq!(name, "MonoidRel::range");
+        assert_eq!(as_call(&args[1].kind).0, "+");
+        let k = body("∑ i < m, ∑ j < n, f(i, j)");
+        let (_, args, _) = as_call(&k);
+        let ExprKind::Lam { body: summand, .. } = &args[2].kind else { panic!("expected the body's λ") };
+        assert_eq!(as_call(&summand.kind).0, "MonoidRel::range");
+    }
+
+    #[test]
+    fn big_operator_needs_a_bound() {
+        let e = parse_file("fn f(n: Nat) -> Nat { ∑ k <= n, k }").unwrap_err();
+        assert!(e.msg.contains("ranges below a bound"), "{}", e.msg);
+        let e = parse_file("fn f(n: Nat) -> Nat { ∑ k < n k }").unwrap_err();
+        assert!(e.msg.contains("between a big operator's bound and its body"), "{}", e.msg);
     }
 
     // -- the Boolean operators (issues/bool-operator-designations.md) -------
@@ -7480,6 +8866,34 @@ mod tests {
     }
 
     #[test]
+    fn a_section_head_splices_in_the_order_a_hand_written_head_has() {
+        // Type parameters, then solver parameters (the section's before the
+        // member's), then written parameters (likewise): exactly the head the
+        // member would have written out, `fn f<A: C, B: D>(x: A, y: B)`.
+        let f = parse_file(
+            "section<A: C>(x: A) { section(z: A) { fn f<B: D>(y: B) -> A { x } } }",
+        )
+        .unwrap();
+        let [Item::Decl(d)] = &f.items[..] else { panic!("expected one declaration") };
+        let tyvars: Vec<&str> = d.tyvars.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(tyvars, ["A", "B"]);
+        let origins: Vec<(bool, ParamOrigin)> =
+            d.params.iter().map(|p| (p.solver.is_some(), p.origin)).collect();
+        assert_eq!(
+            origins,
+            [
+                (true, ParamOrigin::InlineConstraint),
+                (true, ParamOrigin::InlineConstraint),
+                (false, ParamOrigin::Written),
+                (false, ParamOrigin::Written),
+                (false, ParamOrigin::Written),
+            ]
+        );
+        let written: Vec<&str> = d.params[2..].iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(written, ["x", "z", "y"]);
+    }
+
+    #[test]
     fn assuming_refuses_item_kinds_not_yet_generalized() {
         let e = parse_file("assuming Nat { inductive D { C } }").unwrap_err();
         assert!(e.msg.contains("inside `assuming` is not implemented yet"), "{}", e.msg);
@@ -7577,3 +8991,7 @@ mod tests {
         assert!(e.msg.contains("a `Pos<A>` field needs a name"), "{}", e.msg);
     }
 }
+
+/// The words a declaration (or its modifier) starts with: what may follow a
+/// prefix generator's name ([`Parser::prefixed`]).
+const DECL_WORDS: &[&str] = &["fn", "theorem", "def", "meta", "evidence", "axiom", "interface"];

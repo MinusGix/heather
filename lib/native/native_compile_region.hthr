@@ -1,0 +1,545 @@
+// Where a compiled program keeps the environment (issues/native-effect-source-compiler.md,
+// round S3.2): one data region of the byte model, its first `Source::words`
+// words the environment's words, each buffer after them at its capacity,
+// then the scratch range a read lands in, then the slot RSP is saved to.
+//
+// `Placed(env, m)` is the memory's half of the invariant between
+// statements (`Target::Held`, native_compile_homes, adds the registers
+// words live in): the region holds cells `v`, `v` keeps the environment
+// (`Layout::Keeps`), and the command line is at the saved RSP above the
+// region (`Target::Stacked`). Every store
+// the code makes, and every one Linux makes, lands in the region, which
+// nothing executes, so the program stays resident; and each moves `Keeps`
+// one way: a word stored to its slot keeps the environment with that word
+// set (`keeps_word`), anything written to the scratch range keeps it as it
+// was (`keeps_agree`), and a read's bytes copied to their buffer keep it
+// with that buffer filled (`keeps_fill`). No store reaches above the
+// region, so the command line stays where it was (`Target::kept_store`),
+// and none reaches the RSP slot.
+import native_source;
+import native_compile;
+import native_alloc;
+import native_compile_facts;
+import function_ir_eval;
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_byte_memory;
+import linux_x86_64_sim;
+import x86_64;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_byte_memory;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack;
+import x86_64_stack_runs;
+import native_compile_steps;
+import itree;
+import linux_trees;
+import memory;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Where a program runs: its code, its region, and the buffers' capacities
+
+record Target {
+    r: DataRegion,
+    words: Nat,
+    caps: List<Nat>,
+    // Each word's home (native_alloc), every register in the pool.
+    homes: Homes,
+    homed: homes.fits().IsTrue(),
+    fits: Layout::of(r.low, words, caps, homes).size() <= r.size,
+    program: Prog,
+    origin: BitVec(64),
+    laid: program.laid_out().IsTrue(),
+    // The command line the process was started with.
+    args: List<List<BitVec(8)>>,
+    // The procedures a call may name (docs/native-procedures-design.md).
+    procedures: List<Procedure>,
+    // The process's stack (§5): above the region and below the canonical
+    // boundary, its stores Linux's.
+    stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data),
+    stack_writes: stack.writes = linux_writes(r.profile.linux()),
+    stack_above: r.low.toNat() + r.size <= stack.low.toNat(),
+    stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
+    // The running activation: its frame at offset `index` of the stack,
+    // the words from there up (each call's return address and the words
+    // its caller saved, innermost first), and how many calls deeper it may
+    // go, each needing at most a word per word of the file and one more.
+    // `main`'s frame is the stack's top, with no words.
+    index: Nat,
+    frames: List<BitVec(64)>,
+    room: Nat,
+    framed: index + 8 * frames.len() <= stack.size,
+    roomy: room * (8 * (words + 1)) <= index,
+}
+
+fn Target::layout(self t: Target) → Layout { Layout::of(t.r.low, t.words, t.caps, t.homes).with_procedures(t.procedures) }
+fn Target::io(self t: Target) → LinuxIo<X86Memory(t.r.profile)> { t.r.profile.linux() }
+fn Target::site(self t: Target) → Site<X86Memory(t.r.profile)> { t.io().site(t.program, t.origin) }
+fn Target::writes(self t: Target) → ByteWrites<X86Memory(t.r.profile)> { linux_writes(t.io()) }
+
+theorem Target::code_fits(self t: Target): FillsFit(t.program, no_fills()) { t.program.laid_out_fits(t.laid) }
+
+// An address the code spells (`Layout::word_at`, `buffer_at`, `scratch_at`)
+// is the region's `next_rip` to it.
+theorem Target::at_rip(self t: Target, q: Nat, inside: q <= t.r.size): t.r.low.add_nat(q) = next_rip(t.r.low, q) {
+    let low = t.r.low.toNat();
+    let below: (q <= Nat::pow(2, 47)) = Nat::le_trans(q, low + t.r.size, Nat::pow(2, 47),
+        Nat::le_trans(q, low + q, low + t.r.size, low.le_add_r(q), low.add_le_mono_l(q, t.r.size, inside)), t.r.canonical);
+    BitVec::add_nat_iterate(64, t.r.low, q, Nat::le_trans(Succ(q), Succ(Nat::pow(2, 47)), Nat::pow(2, 64), below, canonical_below_top()))
+}
+
+// What a statement's code claims, over the region's profile.
+fn Target::Goes(self t: Target, at: Nat, tree: ITree<BitVec(64)>(Events::linux()), pre: MachineState<X86Memory(t.r.profile)> → Type) → Type {
+    t.site().Goes(t.io(), at, tree, pre)
+}
+
+// ---------------------------------------------------------------------------
+// The environment in the region's cells
+
+// The eight cells from `q`, low first, as the machine reads a word.
+fn word_in(v: Nat → BitVec(8), q: Nat) → BitVec(64) {
+    immediate_from_bytes(v(q), v(q + 1), v(q + 2), v(q + 3), v(q + 4), v(q + 5), v(q + 6), v(q + 7))
+}
+
+theorem word_in_agree(v, w: Nat → BitVec(8), q: Nat, same: (t: Nat) → t < 8 → v(q + t) = w(q + t)): word_in(v, q) = word_in(w, q) {
+    j(same(0, trivial), λ x _ => word_in(v, q) = immediate_from_bytes(x, w(q + 1), w(q + 2), w(q + 3), w(q + 4), w(q + 5), w(q + 6), w(q + 7)),
+    j(same(1, trivial), λ x _ => word_in(v, q) = immediate_from_bytes(v(q), x, w(q + 2), w(q + 3), w(q + 4), w(q + 5), w(q + 6), w(q + 7)),
+    j(same(2, trivial), λ x _ => word_in(v, q) = immediate_from_bytes(v(q), v(q + 1), x, w(q + 3), w(q + 4), w(q + 5), w(q + 6), w(q + 7)),
+    j(same(3, trivial), λ x _ => word_in(v, q) = immediate_from_bytes(v(q), v(q + 1), v(q + 2), x, w(q + 4), w(q + 5), w(q + 6), w(q + 7)),
+    j(same(4, trivial), λ x _ => word_in(v, q) = immediate_from_bytes(v(q), v(q + 1), v(q + 2), v(q + 3), x, w(q + 5), w(q + 6), w(q + 7)),
+    j(same(5, trivial), λ x _ => word_in(v, q) = immediate_from_bytes(v(q), v(q + 1), v(q + 2), v(q + 3), v(q + 4), x, w(q + 6), w(q + 7)),
+    j(same(6, trivial), λ x _ => word_in(v, q) = immediate_from_bytes(v(q), v(q + 1), v(q + 2), v(q + 3), v(q + 4), v(q + 5), x, w(q + 7)),
+    j(same(7, trivial), λ x _ => word_in(v, q) = immediate_from_bytes(v(q), v(q + 1), v(q + 2), v(q + 3), v(q + 4), v(q + 5), v(q + 6), x),
+        refl))))))))
+}
+
+// Each word in its slot, read as its number; each buffer its cells.
+fn Layout::Keeps(self layout: Layout, env: Env, v: Nat → BitVec(8)) → Type {
+    ((i: Nat) → i < layout.words → word_in(v, 8 * i).toNat() = env.number(i)) ∧
+    ((b, cap: Nat) → layout.capacities.nth(b) = Some(cap) → env.buffer(b) = cells_at(v, layout.buffer_offset(b), cap))
+}
+
+// The command line read only above the stack, which nothing the program
+// does writes.
+fn Target::argv(self t: Target) → ByteReadAccess<X86Memory(t.r.profile)> { t.r.profile.data().above(t.stack.low.toNat() + t.stack.size) }
+
+// The running frame's address.
+fn Target::frame(self t: Target) → BitVec(64) { t.stack.at(t.index) }
+
+// Where an offset of the stack is.
+theorem Target::stack_toNat(self t: Target, i: Nat, inside: i <= t.stack.size): t.stack.at(i).toNat() = t.stack.low.toNat() + i {
+    let top = canonical_below_top();
+    let fits: (t.stack.low.toNat() + i < Nat::pow(2, 64)) = omega(t.stack_canonical, inside, top);
+    BitVec::offset_toNat(64, t.stack.low, i, fits)
+}
+
+theorem Target::frame_toNat(self t: Target): t.frame().toNat() = t.stack.low.toNat() + t.index {
+    let inside: (t.index <= t.stack.size) = omega(t.framed);
+    t.stack_toNat(t.index, inside)
+}
+
+// Words of the stack in order from offset `i` up.
+fn Target::FramesAt(self t: Target, m: X86Memory(t.r.profile), words: List<BitVec(64)>) → Nat → Type {
+    match words {
+        Nil => λ _ => True,
+        Cons(word, rest) => λ i => (i + 8 <= t.stack.size) ∧
+            ((read_word(t.io().data, m, t.stack.at(i)) = Some(word)) ∧ t.FramesAt(m, rest, i + 8)),
+    }
+}
+
+// Words read alike at every offset from `i` up keep them.
+theorem Target::frames_kept(self t: Target, m, later: X86Memory(t.r.profile), i: Nat,
+    kept: (k: Nat) → i <= k → k + 8 <= t.stack.size → read_word(t.io().data, later, t.stack.at(k)) = read_word(t.io().data, m, t.stack.at(k)),
+    words: List<BitVec(64)>): (k: Nat) → i <= k → t.FramesAt(m, words, k) → t.FramesAt(later, words, k) {
+    match words {
+        Nil => λ k _ _ => trivial,
+        Cons(word, rest) => λ k above at => ⟨at.left, ⟨trans(kept(k, above, at.left), at.right.left),
+            t.frames_kept(m, later, i, kept, rest, k + 8, omega(above), at.right.right)⟩⟩,
+    }
+}
+
+// The activation in the region's two slots, and its frames from the frame
+// up.
+fn Target::Framing(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
+    (word_in(v, t.layout().frame_offset()) = t.frame()) ∧
+    ((word_in(v, t.layout().room_offset()).toNat() = t.room) ∧ t.FramesAt(m, t.frames, t.index))
+}
+
+// The command line at the RSP its slot holds, and the activation…
+fn Target::Stacking(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
+    ArgvAt(t.argv(), m, word_in(v, t.layout().stack_offset()), t.args) ∧ t.Framing(v, m)
+}
+
+// …and it is the environment's.
+fn Target::Stacked(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type {
+    (env.args = t.args) ∧ t.Stacking(v, m)
+}
+
+fn Target::Placed(self t: Target, env: Env, m: X86Memory(t.r.profile)) → Type {
+    Exists<Nat → BitVec(8)>(λ v => t.r.Holds(v, m) ∧ (t.layout().Keeps(env, v) ∧ t.Stacked(env, v, m)))
+}
+
+// The word in slot `i`, as the environment reads it.
+theorem Layout::keeps_word_at(self layout: Layout, env: Env, v: Nat → BitVec(8), keeps: layout.Keeps(env, v), i: Nat, inside: i < layout.words):
+    word_in(v, 8 * i) = env.word(i) {
+    trans(sym(BitVec::ofNat_toNat(64, word_in(v, 8 * i))), cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), keeps.left(i, inside)))
+}
+
+// A word's number fits it.
+theorem Layout::keeps_number_fits(self layout: Layout, env: Env, v: Nat → BitVec(8), keeps: layout.Keeps(env, v), i: Nat, inside: i < layout.words):
+    env.number(i) < Nat::pow(2, 64) {
+    j(keeps.left(i, inside), λ n _ => n < Nat::pow(2, 64), BitVec::toNat_lt_pow(64, word_in(v, 8 * i)))
+}
+
+// A buffer is its capacity long.
+theorem Layout::keeps_buffer_len(self layout: Layout, env: Env, v: Nat → BitVec(8), keeps: layout.Keeps(env, v), b, cap: Nat,
+    found: layout.capacities.nth(b) = Some(cap)): env.buffer(b).len() = cap {
+    trans(cong_fn<List<BitVec(8)>, Nat>(λ bytes => bytes.len(), keeps.right(b, cap, found)), cells_len(v, cap, layout.buffer_offset(b)))
+}
+
+// ---------------------------------------------------------------------------
+// The layout's ranges
+
+theorem Layout::word_below_buffers(self layout: Layout, i, t: Nat, inside: i < layout.words, short: t < 8): 8 * i + t < 8 * layout.words {
+    omega(inside, short)
+}
+
+theorem Layout::buffers_after_words(self layout: Layout, b: Nat): 8 * layout.words <= layout.buffer_offset(b) {
+    let after: (8 * layout.words <= 8 * layout.words + layout.capacities.take(b).total()) = omega();
+    after
+}
+
+theorem Layout::scratch_after_words(self layout: Layout): 8 * layout.words <= layout.scratch_offset() {
+    let after: (8 * layout.words <= 8 * layout.words + layout.capacities.total()) = omega();
+    after
+}
+
+theorem Layout::buffer_end(self layout: Layout, b, cap: Nat, found: layout.capacities.nth(b) = Some(cap)):
+    layout.buffer_offset(b) + cap <= layout.scratch_offset() {
+    let ends: ((8 * layout.words + layout.capacities.take(b).total()) + cap <= 8 * layout.words + layout.capacities.total()) =
+        omega(layout.capacities.total_take_nth(b, cap, found));
+    ends
+}
+
+theorem Layout::buffer_apart(self layout: Layout, b, cap, other: Nat, found: layout.capacities.nth(b) = Some(cap), below: b < other):
+    layout.buffer_offset(b) + cap <= layout.buffer_offset(other) {
+    let apart: ((8 * layout.words + layout.capacities.take(b).total()) + cap <= 8 * layout.words + layout.capacities.take(other).total()) =
+        omega(layout.capacities.total_take_apart(b, cap, other, found, below));
+    apart
+}
+
+// The scratch range is one byte longer than the largest buffer, so a path
+// and its NUL fit: the RSP slot starts past it.
+theorem Layout::scratch_below_stack(self layout: Layout): layout.scratch_offset() + layout.capacities.largest() <= layout.stack_offset() {
+    layout.scratch_offset().add_le_mono_l(layout.capacities.largest(), layout.capacities.largest() + 1, layout.capacities.largest().le_add_l(1))
+}
+
+theorem Layout::scratch_holds(self layout: Layout, b, cap: Nat, found: layout.capacities.nth(b) = Some(cap)):
+    layout.scratch_offset() + cap <= layout.stack_offset() {
+    let holds: (layout.scratch_offset() + cap <= layout.scratch_offset() + layout.capacities.largest()) =
+        omega(layout.capacities.largest_nth(b, cap, found));
+    Nat::le_trans(layout.scratch_offset() + cap, layout.scratch_offset() + layout.capacities.largest(), layout.stack_offset(), holds,
+        layout.scratch_below_stack())
+}
+
+// ---------------------------------------------------------------------------
+// Cells after a store
+
+theorem DataRegion::cells_outside(self r: DataRegion, v: Nat → BitVec(8), q: Nat, bytes: List<BitVec(8)>, p: Nat,
+    away: (p < q) ∨ (q + bytes.len() <= p)): r.buffer(v).set_span(q, bytes.to_vector()).cells(p) = v(p) {
+    r.buffer(v).get_set_span_outside(q, bytes.to_vector(), p, λ t below =>
+        Nat::space_laws().same_false(Nat::space(), q + t, p, λ same => match away {
+            Inl(under) => false_elim(omega(same, under)),
+            Inr(over) => false_elim(omega(same, below, over)),
+        }))
+}
+
+theorem DataRegion::cells_inside(self r: DataRegion, v: Nat → BitVec(8), q: Nat, bytes: List<BitVec(8)>, t: Nat, c: BitVec(8),
+    found: bytes.nth(t) = Some(c)): r.buffer(v).set_span(q, bytes.to_vector()).cells(q + t) = c {
+    r.buffer(v).get_set_span_list(Nat::space_laws(), q, bytes, t, c, found, Nat::space_distinct(q, bytes.len()))
+}
+
+// ---------------------------------------------------------------------------
+// The environment kept across a store
+
+// Cells that agree below the scratch range keep what they kept.
+theorem Layout::keeps_agree(self layout: Layout, env: Env, v, w: Nat → BitVec(8), keeps: layout.Keeps(env, v),
+    same: (p: Nat) → p < layout.scratch_offset() → w(p) = v(p)): layout.Keeps(env, w) {
+    ⟨λ i inside => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, 8 * i, λ t short =>
+            same(8 * i + t, omega(layout.word_below_buffers(i, t, inside, short), layout.scratch_after_words())))), keeps.left(i, inside)),
+     λ b cap found => {
+        let ends = layout.buffer_end(b, cap, found);
+        trans(keeps.right(b, cap, found), cells_agree(v, w, cap, layout.buffer_offset(b), λ i below => sym(same(layout.buffer_offset(b) + i, omega(ends, below)))))
+     }⟩
+}
+
+// A word stored to its slot keeps the environment with the word set.
+theorem Layout::keeps_word(self layout: Layout, r: DataRegion, env: Env, v: Nat → BitVec(8), keeps: layout.Keeps(env, v), i: Nat,
+    inside: i < layout.words, word: BitVec(64)):
+    layout.Keeps(env.set_word(i, word), r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells) {
+    let w = r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells;
+    let stored: (word_in(w, 8 * i) = word) = r.x86_word_stored(v, 8 * i, word);
+    ⟨λ k below => match k.eq_dec(i) {
+        Inl(here) => j(sym(here), λ n _ => word_in(w, 8 * n).toNat() = env.set_word(i, word).number(n),
+            trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), stored), sym(env.number_set_here(i, word)))),
+        Inr(other) => {
+            let kept: (word_in(w, 8 * k) = word_in(v, 8 * k)) = word_in_agree(w, v, 8 * k, λ t short =>
+                r.cells_outside(v, 8 * i, word_bytes(word), 8 * k + t, match k.lt_or_ge(i) {
+                    Inl(under) => Inl(omega(under, short)),
+                    Inr(over) => {
+                        let past: (8 * i + 8 <= 8 * k + t) = omega(over, other);
+                        Inr(past)
+                    },
+                }));
+            trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), kept), trans(keeps.left(k, below), sym(env.number_set_other(i, word, k, other))))
+        },
+     },
+     λ b cap found => trans(keeps.right(b, cap, found), cells_agree(v, w, cap, layout.buffer_offset(b), λ p below =>
+        sym(r.cells_outside(v, 8 * i, word_bytes(word), layout.buffer_offset(b) + p, {
+            let past: (8 * i + 8 <= layout.buffer_offset(b) + p) = omega(inside, layout.buffers_after_words(b));
+            Inr(past)
+        }))))⟩
+}
+
+// A read's bytes copied to the start of their buffer, the other cells as
+// they were: the environment with that buffer filled.
+theorem Layout::keeps_fill(self layout: Layout, env: Env, v, w: Nat → BitVec(8), keeps: layout.Keeps(env, v), buf, cap: Nat,
+    found: layout.capacities.nth(buf) = Some(cap), bytes: List<BitVec(8)>, short: bytes.len() <= cap,
+    same: (p: Nat) → ((p < layout.buffer_offset(buf)) ∨ (layout.buffer_offset(buf) + bytes.len() <= p)) → w(p) = v(p),
+    copied: (i: Nat) → (c: BitVec(8)) → bytes.nth(i) = Some(c) → w(layout.buffer_offset(buf) + i) = c):
+    layout.Keeps(env.set_buffer(buf, fill(env.buffer(buf), bytes)), w) {
+    let o = layout.buffer_offset(buf);
+    let n = bytes.len();
+    let ends = layout.buffer_end(buf, cap, found);
+    let words = λ (i: Nat) (inside: i < layout.words) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), word_in_agree(w, v, 8 * i, λ t below =>
+        same(8 * i + t, Inl(omega(layout.word_below_buffers(i, t, inside, below), layout.buffers_after_words(buf)))))), keeps.left(i, inside));
+    let old: (env.buffer(buf) = cells_at(v, o, cap)) = keeps.right(buf, cap, found);
+    let old_len: (env.buffer(buf).len() = cap) = layout.keeps_buffer_len(env, v, keeps, buf, cap, found);
+    let rest: (env.buffer(buf).drop(n) = cells_at(w, o + n, cap - n)) = trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x.drop(n), old),
+        trans(cells_drop(v, cap, o, n), sym(cells_agree(w, v, cap - n, o + n, λ i below => same(o + n + i, Inr(omega()))))));
+    let filled: (fill(env.buffer(buf), bytes) = cells_at(w, o, cap)) = trans(fill_short(env.buffer(buf), bytes, omega(short, old_len)),
+        trans(eq2(λ (x: List<BitVec(8)>) (y: List<BitVec(8)>) => x ++ y, sym(cells_of(w, bytes, o, copied)), rest),
+            sym(cells_split(w, n, o, cap, short))));
+    ⟨words, λ b c found_b => match b.eq_dec(buf) {
+        Inl(here) => {
+            let cap_same: (c = cap) = Option::some_inj(c, cap, trans(sym(found_b), j(sym(here), λ x _ => layout.capacities.nth(x) = Some(cap), found)));
+            j(sym(here), λ x _ => env.set_buffer(buf, fill(env.buffer(buf), bytes)).buffer(x) = cells_at(w, layout.buffer_offset(x), c),
+                trans(env.buffer_set_here(buf, fill(env.buffer(buf), bytes)), j(sym(cap_same), λ k _ => fill(env.buffer(buf), bytes) = cells_at(w, o, k), filled)))
+        },
+        Inr(other) => {
+            let o_b = layout.buffer_offset(b);
+            let away: ((i: Nat) → i < c → (o_b + i < o) ∨ (o + n <= o_b + i)) = λ i below => match b.lt_or_ge(buf) {
+                Inl(under) => Inl(omega(layout.buffer_apart(b, c, buf, found_b, under), below)),
+                Inr(over) => Inr(omega(layout.buffer_apart(buf, cap, b, found, omega(over, other)), short)),
+            };
+            trans(env.buffer_set_other(buf, fill(env.buffer(buf), bytes), b, other),
+                trans(keeps.right(b, c, found_b), cells_agree(v, w, c, layout.buffer_offset(b), λ i below =>
+                    sym(same(layout.buffer_offset(b) + i, away(i, below))))))
+        },
+    }⟩
+}
+
+// ---------------------------------------------------------------------------
+// The region in memory: reads, stores, and the code kept resident
+
+// The slot RSP is saved to ends inside the region…
+theorem Target::stack_fits(self t: Target): t.layout().stack_offset() + 8 <= t.r.size {
+    let slots: (t.layout().stack_offset() + 24 <= t.r.size) = t.fits;
+    omega(slots)
+}
+
+// …and the scratch range ends at it.
+theorem Target::scratch_room(self t: Target): t.layout().scratch_offset() + t.caps.largest() <= t.r.size {
+    Nat::le_trans(t.layout().scratch_offset() + t.caps.largest(), t.layout().stack_offset(), t.r.size, t.layout().scratch_below_stack(),
+        t.layout().stack_offset().le_of_add_le(8, t.r.size, t.stack_fits()))
+}
+
+theorem Target::scratch_fits(self t: Target): t.layout().scratch_offset() <= t.r.size {
+    t.layout().scratch_offset().le_of_add_le(t.caps.largest(), t.r.size, t.scratch_room())
+}
+
+theorem Target::slot_fits(self t: Target, i: Nat, inside: i < t.words): 8 * i + 8 <= t.r.size {
+    let words: (8 * i + 8 <= 8 * t.words) = t.layout().word_below_buffers(i, 7, inside, trivial);
+    Nat::le_trans(8 * i + 8, t.layout().scratch_offset(), t.r.size,
+        Nat::le_trans(8 * i + 8, 8 * t.words, t.layout().scratch_offset(), words, t.layout().scratch_after_words()), t.scratch_fits())
+}
+
+theorem Target::word_rip(self t: Target, i: Nat, inside: i < t.words): t.layout().word_at(i) = next_rip(t.r.low, 8 * i) {
+    t.at_rip(8 * i, (8 * i).le_of_add_le(8, t.r.size, t.slot_fits(i, inside)))
+}
+
+theorem Target::buffer_rip(self t: Target, b, cap: Nat, found: t.caps.nth(b) = Some(cap)):
+    t.layout().buffer_at(b) = next_rip(t.r.low, t.layout().buffer_offset(b)) {
+    let bo = t.layout().buffer_offset(b);
+    t.at_rip(bo, Nat::le_trans(bo, t.layout().scratch_offset(), t.r.size,
+        bo.le_of_add_le(cap, t.layout().scratch_offset(), t.layout().buffer_end(b, cap, found)), t.scratch_fits()))
+}
+
+theorem Target::scratch_rip(self t: Target): t.layout().scratch_at() = next_rip(t.r.low, t.layout().scratch_offset()) {
+    t.at_rip(t.layout().scratch_offset(), t.scratch_fits())
+}
+
+// The word in slot `i`, read at its address.
+theorem Target::read_slot(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), holds: t.r.Holds(v, m),
+    keeps: t.layout().Keeps(env, v), i: Nat, inside: i < t.words):
+    (t.layout().word_at(i).toNat() + 8 <= Nat::pow(2, 47)) ∧
+    (read_word(t.r.profile.data(), m, t.layout().word_at(i)) = Some(env.word(i))) {
+    let q = 8 * i;
+    let fits = t.slot_fits(i, inside);
+    let base = next_rip(t.r.low, q);
+    let o = λ (k: Nat) => t.r.profile.read(m, next_rip(base, k));
+    let g = λ (k: Nat) => t.r.buffer(v).get(q + k);
+    let b = λ (k: Nat) (short: k < 8) => t.r.buffer_read(v, m, holds, q, k, Nat::le_trans(Succ(q + k), q + 8, t.r.size, q.add_le_mono_l(Succ(k), 8, short), fits));
+    let read: (read_word(t.r.profile.data(), m, base) = Some(t.r.buffer(v).x86_word(q))) =
+        word_of_eight(o(0), o(1), o(2), o(3), o(4), o(5), o(6), o(7), g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7),
+            b(0, trivial), b(1, trivial), b(2, trivial), b(3, trivial), b(4, trivial), b(5, trivial), b(6, trivial), b(7, trivial));
+    let value = t.r.toNat_at(q, q.le_of_add_le(8, t.r.size, fits));
+    let low = t.r.low.toNat();
+    let ends: (low + (q + 8) <= Nat::pow(2, 47)) = Nat::le_trans(low + (q + 8), low + t.r.size, Nat::pow(2, 47),
+        low.add_le_mono_l(q + 8, t.r.size, fits), t.r.canonical);
+    j(sym(t.word_rip(i, inside)), λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(t.r.profile.data(), m, a) = Some(env.word(i))),
+        ⟨j(sym(value), λ x _ => x + 8 <= Nat::pow(2, 47), j(sym(low.add_assoc(q, 8)), λ x _ => x <= Nat::pow(2, 47), ends)),
+         trans(read, cong_fn<BitVec(64), Option<BitVec(64)>>(λ w => Some(w), t.layout().keeps_word_at(env, v, keeps, i, inside)))⟩)
+}
+
+// The cell at offset `q`, read at its address.
+theorem Target::read_cell(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile), holds: t.r.Holds(v, m), q: Nat,
+    inside: q < t.r.size): (next_rip(t.r.low, q).toNat() < Nat::pow(2, 47)) ∧ (t.r.profile.read(m, next_rip(t.r.low, q)) = Some(v(q))) {
+    let low = t.r.low.toNat();
+    let below: (low + q < Nat::pow(2, 47)) = Nat::le_trans(Succ(low + q), low + t.r.size, Nat::pow(2, 47),
+        low.add_le_mono_l(Succ(q), t.r.size, inside), t.r.canonical);
+    ⟨j(sym(t.r.toNat_at(q, Nat::le_of_lt(q, t.r.size, inside))), λ x _ => x < Nat::pow(2, 47), below), t.r.buffer_read(v, m, holds, q, 0, inside)⟩
+}
+
+// A store in the region keeps the code resident…
+theorem Target::store_resident(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,
+    fits: q + bytes.len() <= t.r.size, resident: t.site().Resident(m)):
+    t.site().Resident(t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
+    t.r.profile.store_keeps_code(m, next_rip(t.r.low, q), bytes, t.r.not_executed(m, q, bytes.len(), fits),
+        assemble(no_fills(), t.program, Nil), next_rip(t.origin, 0), resident)
+}
+
+// …and the region is writable.
+theorem Target::writable(self t: Target, m: X86Memory(t.r.profile), q, k: Nat, fits: q + k <= t.r.size):
+    t.io().writable(m, next_rip(t.r.low, q), k) {
+    t.r.allows(Perm::writes, refl, m, q, k, fits)
+}
+
+// ---------------------------------------------------------------------------
+// The command line kept
+
+// A store inside the region reads alike above any floor past the region…
+theorem Target::kept_above(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= t.r.size,
+    floor: Nat, high: t.r.low.toNat() + t.r.size <= floor):
+    ReadsKept(t.r.profile.data().above(floor), m, t.r.profile.data().above(floor), t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
+    let after = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
+    λ a byte got => {
+        let found = t.r.profile.data().above_read(floor, m, a, byte, got);
+        let outside: ((p: Nat) → p < bytes.len() → BitVec::space(64).same(next_rip(next_rip(t.r.low, q), p), a) = False) = λ p below =>
+            BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(next_rip(t.r.low, q), p), a, λ same => {
+                let value: (next_rip(next_rip(t.r.low, q), p).toNat() = t.r.low.toNat() + (q + p)) =
+                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), rip_compose(t.r.low, q, p)), t.r.toNat_at(q + p, omega(below, fits)));
+                let at: (a.toNat() = t.r.low.toNat() + (q + p)) = trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), sym(same)), value);
+                false_elim(omega(at, found.left, below, fits, high))
+            });
+        let read: (t.r.profile.read(after, a) = Some(byte)) =
+            trans(t.r.profile.read_agree(m, after.cells, a, t.r.profile.store_outside(m, next_rip(t.r.low, q), bytes, a, outside)), found.right);
+        let up: (floor.leb(a.toNat()) = True) = Nat::leb_true(floor, a.toNat(), found.left);
+        j(sym(up), λ b _ => (match b { True => t.r.profile.read(after, a), False => None<BitVec(8)> }) = Some(byte), read)
+    }
+}
+
+// …so the command line, above the stack…
+theorem Target::kept_store(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= t.r.size):
+    ReadsKept(t.argv(), m, t.argv(), t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
+    let high: (t.r.low.toNat() + t.r.size <= t.stack.low.toNat() + t.stack.size) = omega(t.stack_above);
+    t.kept_above(m, q, bytes, fits, t.stack.low.toNat() + t.stack.size, high)
+}
+
+// …and the stack's words, above the region.
+theorem Target::stack_read_store(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= t.r.size,
+    k: Nat, inside: k + 8 <= t.stack.size):
+    read_word(t.io().data, t.r.profile.store(m, next_rip(t.r.low, q), bytes), t.stack.at(k)) = read_word(t.io().data, m, t.stack.at(k)) {
+    let after = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
+    read_word_agree(t.io().data, after, m, t.stack.at(k), λ b short => {
+        let a = next_rip(t.stack.at(k), b);
+        let value: (a.toNat() = t.stack.low.toNat() + (k + b)) =
+            trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), rip_compose(t.stack.low, k, b)), t.stack_toNat(k + b, omega(inside, short)));
+        let outside: ((p: Nat) → p < bytes.len() → BitVec::space(64).same(next_rip(next_rip(t.r.low, q), p), a) = False) = λ p below =>
+            BitVec::space_laws(64).same_false(BitVec::space(64), next_rip(next_rip(t.r.low, q), p), a, λ same => {
+                let region: (next_rip(next_rip(t.r.low, q), p).toNat() = t.r.low.toNat() + (q + p)) =
+                    trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), rip_compose(t.r.low, q, p)), t.r.toNat_at(q + p, omega(below, fits)));
+                let here: (a.toNat() = t.r.low.toNat() + (q + p)) = trans(cong_fn<BitVec(64), Nat>(λ y => y.toNat(), sym(same)), region);
+                false_elim(omega(here, value, below, fits, t.stack_above))
+            });
+        t.r.profile.read_agree(m, after.cells, a, t.r.profile.store_outside(m, next_rip(t.r.low, q), bytes, a, outside))
+    })
+}
+
+theorem Target::frames_store(self t: Target, m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>, fits: q + bytes.len() <= t.r.size,
+    words: List<BitVec(64)>, i: Nat, at: t.FramesAt(m, words, i)): t.FramesAt(t.r.profile.store(m, next_rip(t.r.low, q), bytes), words, i) {
+    t.frames_kept(m, t.r.profile.store(m, next_rip(t.r.low, q), bytes), i, λ k _ inside => t.stack_read_store(m, q, bytes, fits, k, inside),
+        words, i, i.le_refl(), at)
+}
+
+// A word slot ends below the RSP slot.
+theorem Target::slot_below_stack(self t: Target, i: Nat, inside: i < t.words): 8 * i + 8 <= t.layout().stack_offset() {
+    let words: (8 * i + 8 <= 8 * t.words) = t.layout().word_below_buffers(i, 7, inside, trivial);
+    let after: (8 * t.words <= t.layout().scratch_offset()) = t.layout().scratch_after_words();
+    let below: (t.layout().scratch_offset() <= t.layout().stack_offset()) = t.layout().scratch_offset().le_add_l(t.caps.largest() + 1);
+    omega(words, after, below)
+}
+
+// A store below the RSP slot keeps the slot, and the command line above.
+theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,
+    fits: q + bytes.len() <= t.layout().stack_offset(), stacking: t.Stacking(v, m)):
+    t.Stacking(t.r.buffer(v).set_span(q, bytes.to_vector()).cells, t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
+    let so = t.layout().stack_offset();
+    let w = t.r.buffer(v).set_span(q, bytes.to_vector()).cells;
+    let size: (q + bytes.len() <= t.r.size) = omega(fits, t.stack_fits());
+    let after = t.r.profile.store(m, next_rip(t.r.low, q), bytes);
+    let kept = t.kept_store(m, q, bytes, size);
+    let slot: (word_in(w, so) = word_in(v, so)) = word_in_agree(w, v, so, λ k _ => t.r.cells_outside(v, q, bytes, so + k, Inr(omega(fits))));
+    let frame: (word_in(w, so + 8) = word_in(v, so + 8)) = word_in_agree(w, v, so + 8, λ k _ => t.r.cells_outside(v, q, bytes, so + 8 + k, Inr(omega(fits))));
+    let room: (word_in(w, so + 16) = word_in(v, so + 16)) = word_in_agree(w, v, so + 16, λ k _ => t.r.cells_outside(v, q, bytes, so + 16 + k, Inr(omega(fits))));
+    ⟨j(sym(slot), λ rsp _ => ArgvAt(t.argv(), after, rsp, t.args),
+        argv_at_kept(t.argv(), m, t.argv(), after, kept, word_in(v, so), t.args, stacking.left)),
+     ⟨trans(frame, stacking.right.left),
+      ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room), stacking.right.right.left),
+       t.frames_store(m, q, bytes, size, t.frames, t.index, stacking.right.right.right)⟩⟩⟩
+}
+
+theorem Target::stacked_store(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,
+    fits: q + bytes.len() <= t.layout().stack_offset(), stacked: t.Stacked(env, v, m)):
+    t.Stacked(env, t.r.buffer(v).set_span(q, bytes.to_vector()).cells, t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
+    ⟨stacked.left, t.stacking_store(v, m, q, bytes, fits, stacked.right)⟩
+}
+
+// A word stored to its slot: the environment with it set.
+theorem Target::placed_word(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), i: Nat,
+    inside: i < t.words, word: BitVec(64)):
+    t.Placed(env.set_word(i, word), t.r.profile.store(m, t.layout().word_at(i), word_bytes(word))) {
+    let v = placed.witness;
+    j(sym(t.word_rip(i, inside)), λ a _ => t.Placed(env.set_word(i, word), t.r.profile.store(m, a, word_bytes(word))),
+        Exists(t.r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells,
+            ⟨t.r.store_holds(v, m, placed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
+             ⟨t.layout().keeps_word(t.r, env, v, placed.proof.right.left, i, inside, word),
+              t.stacked_store(env, v, m, 8 * i, word_bytes(word), t.slot_below_stack(i, inside), placed.proof.right.right)⟩⟩))
+}
+
+// The environment is the same, so is where it is placed.
+theorem Target::placed_same(self t: Target, env, other: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), same: env = other):
+    t.Placed(other, m) {
+    j(same, λ e _ => t.Placed(e, m), placed)
+}

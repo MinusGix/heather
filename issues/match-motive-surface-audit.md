@@ -4,7 +4,7 @@ status: open
 labels: [frontend,syntax,elaboration,stdlib,ergonomics]
 area: language
 created: 2026-08-20
-updated: 2026-08-22
+updated: 2026-10-31
 ---
 
 The standard library currently contains 99 written motives of the form
@@ -69,3 +69,4 @@ on which part of the language one is in.
   to imperative return, a meaning Heather may need in programming-oriented
   function bodies. The recurring applied-function shape now has the focused
   lint owner [[lint-match-function-application]].
+- 2026-10-31: [[match-motive-sweep]] owns the next census (docs/dependent-match-compiler-design.md §1.2: 180 of 379 sampled written motives redundant under --review).

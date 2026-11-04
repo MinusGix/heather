@@ -1,0 +1,68 @@
+// Probes of `decreases` unfolding equations (docs/decreases-unfolding-design.md)
+// over body shapes the `while` lowering produces (docs/sequencing-surface-design.md
+// §5.3, §16). Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import omega; import int;
+
+// A recursive argument passed through a `let`, before the condition's
+// match: the unfolding's lifted obligation still reads the arm's equation
+// about the parameter behind the alias.
+fn alias_before(m: Nat, out: List<Nat>) → List<Nat> decreases m {
+    let m2 = m - 1;
+    match h: decide_bit<1 <= m>() { True => alias_before(m2, List::Cons(m, out)), False => out }
+}
+theorem alias_before_lit(): alias_before(3, List::Nil) = [1, 2, 3] { refl }
+theorem alias_before_unfolds(m: Nat, out: List<Nat>):
+    alias_before(m, out) = (match h: decide_bit<1 <= m>() { True => alias_before(m - 1, List::Cons(m, out)), False => out }) {
+    alias_before_unfold(m, out)
+}
+
+// The same through `let`s inside the arm.
+fn alias_inside(m: Nat, out: List<Nat>) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() {
+        True => { let o2 = List::Cons(m, out); let m2 = m - 1; alias_inside(m2, o2) },
+        False => out,
+    }
+}
+theorem alias_inside_unfolds(m: Nat, out: List<Nat>):
+    alias_inside(m, out) = (match h: decide_bit<1 <= m>() { True => alias_inside(m - 1, List::Cons(m, out)), False => out }) {
+    alias_inside_unfold(m, out)
+}
+
+// A `let` that rebinds the measured parameter: the measure's `m` is the
+// parameter, and the call's argument is the new binding
+// (issues/decreases-shadowed-let.md; the lowering deshadows the body first).
+fn shadowed(m: Nat, out: List<Nat>) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() { True => { let m = m - 1; shadowed(m, List::Cons(m, out)) }, False => out }
+}
+theorem shadowed_lit(): shadowed(3, List::Nil) = [0, 1, 2] { refl }
+theorem shadowed_unfolds(m: Nat, out: List<Nat>):
+    shadowed(m, out) = (match h: decide_bit<1 <= m>() { True => shadowed(m - 1, List::Cons(m - 1, out)), False => out }) {
+    shadowed_unfold(m, out)
+}
+
+// A binder the obligation needs, shadowed later, before the condition's
+// match: the site is lifted, so the unfolding exists.
+fn rebound(n: Nat, out: List<Nat>) → List<Nat> decreases n {
+    let m = n;
+    let m = m - 1;
+    match h: decide_bit<1 <= n>() { True => rebound(m, List::Cons(n, out)), False => out }
+}
+theorem rebound_lit(): rebound(3, List::Nil) = [1, 2, 3] { refl }
+theorem rebound_unfolds(n: Nat, out: List<Nat>):
+    rebound(n, out) = (match h: decide_bit<1 <= n>() { True => rebound(n - 1, List::Cons(n, out)), False => out }) {
+    rebound_unfold(n, out)
+}
+
+// An arm binder that shadows the measured parameter.
+fn shadowed_arm(m: Nat, out: List<Nat>) → List<Nat> decreases m {
+    match m { Zero => out, Succ(m) => shadowed_arm(m, List::Cons(m, out)) }
+}
+theorem shadowed_arm_lit(): shadowed_arm(3, List::Nil) = [0, 1, 2] { refl }
+
+// Negative control: a shadowing `let` that does not decrease is still
+// refused, at the call.
+// expect-error: this recursive call must decrease the measure, and `m__1 < m` was not proved
+fn shadowed_grows(m: Nat, out: List<Nat>) → List<Nat> decreases m {
+    match h: decide_bit<1 <= m>() { True => { let m = m + 1; shadowed_grows(m, List::Cons(m, out)) }, False => out }
+}

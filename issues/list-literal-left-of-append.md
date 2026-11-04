@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaborator,ergonomics]
 area: language
 created: 2026-10-04
-updated: 2026-10-21
+updated: 2026-10-29
 ---
 
 In an expression, `[x] ++ y` is refused: "`++` has no meaning here: no
@@ -33,11 +33,14 @@ or let the expected type `List<Nat>` seed the operator's carrier. Either
 needs a negative control: a literal on both sides with no expected type
 stays refused with the same diagnostic.
 
-In a type position `[x] ++ y = …` is a parse error instead (a vector type
-`[T; n]` is expected), which is a separate question for
-[[list-literal-syntax]].
+In a type position `[x] ++ y = …` was a parse error until
+[[statement-leading-list-literal-parse]]; it now parses and meets this
+same refusal.
 
 ## Log
 
 - 2026-10-20: Same refusal with a generic call on the left: `MonoidRel::fold(Nat::add, xs) + MonoidRel::fold(Nat::add, ys)` is refused ("`+` has no meaning here"), because the call's carrier is still a metavariable when `+` is resolved; `Nat::add(…, …)` or a `fn sum(xs: List<Nat>) → Nat` wrapper elaborates. Found writing docs/showcase/semiring_client.hthr.
 - 2026-10-21: A method call on a list literal has the same missing carrier: `[x, x].len()` is refused with "unbound name `len`", found writing the float-error tests (`[d1, d2, d3].prod_one_add()`; they spell `List::prod_one_add([…])`). A fix that gives a carrier-less literal its carrier from the method's owner, or from the expected type, should cover both.
+- 2026-10-26: A related masking, found 2026-10-26: when the left operand is an unbound name, the operator's refusal is reported instead of the unbound name. `fn Box::twice(self b: Box) → Nat { get(b) + get(b) }` (with `get` unbound) says "`+` has no meaning here: … `+` designates something at `Nat`"; `{ get(b) }` alone says "unbound name `get`". A fix that resolves the operator's carrier from the operand should surface the operand's own error first.
+- 2026-10-29: (proof-patterns audit, [[proof-patterns-audit-2026-10]]) Still refused on master 4f0ac27: `fn cons1(x: Nat, ys: List<Nat>) → List<Nat> { [x] ++ ys }` says "`++` has no meaning here … `++` designates something at `List`". The statement-position variant (`[1] ++ [2] = [1, 2]` does not even parse) is [[statement-leading-list-literal-parse]].
+- 2026-10-29: The type-position parse error is gone ([[statement-leading-list-literal-parse]] closed): `[1] ++ [2] = [1, 2]` as a statement now reaches this issue's carrier refusal, pinned by `literal_left_of_append` (an `expect-error`) in lib/_tests/std/data/list_tests.hthr. When this issue lands, that probe flips to a plain `refl` theorem.

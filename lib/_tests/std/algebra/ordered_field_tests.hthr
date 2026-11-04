@@ -5,8 +5,9 @@
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 // Moved from crates/elab/tests/lib_std_ordered_field.rs; the refusals that
 // need the checker stay there.
-import logic; import nat; import int; import omega; import relation_props;
+import logic; import nat; import int; import omega; import relation_props; import order;
 import algebra_rel; import semiring; import ordered_field; import rat; import creal;
+import relation; import big_operator; import dyadic;
 
 // Every layer resolves at both carriers, and each field is the carrier's own
 // operation, definitionally.
@@ -93,3 +94,194 @@ theorem field_mul_add_add<A: OrderedField(≈, <, <=, +, *)>(a, b, c, d: A): (a 
 theorem field_mul_comm<A: OrderedField(≈, <, <=, +, *)>(x, y: A): x * y ≈ y * x { A.commutative.comm(x, y) }
 theorem creal_neg_mul_neg(x, y: CReal): -x * -y ≈ x * y { Ring::neg_mul_neg(x, y) }
 theorem creal_interchange(a, b, c, d: CReal): (a * b) * (c * d) ≈ (a * c) * (b * d) { CommMonoidRel::interchange(≈, *, a, b, c, d) }
+
+// ---------------------------------------------------------------------------
+// Two constraints sharing `≈`, `+` and `*` at one carrier are one dictionary
+// (issues/constraints-sharing-indices.md, docs/operators-onto-classes-design.md
+// §17). `zero_lt_one` is `OrderedField`'s, over its `unit`; `of_int_one` is
+// `CommRingOfInt`'s, over its `multiplicative.unit`: they combine only if
+// both classes' `CommRing` is one.
+theorem both_one_pos<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>(x: A):
+    A.unit < A.of_int(OfNat(1))
+{
+    StrictOrder::lt_respects_r(A.unit, A.multiplicative.unit, A.of_int(OfNat(1)),
+        A.rel_sym(A.of_int(OfNat(1)), A.multiplicative.unit, A.of_int_one), A.zero_lt_one)
+}
+
+// Written in the other order it is the same dictionary, so the call passes it on.
+theorem both_one_pos_swapped<A: CommRingOfInt(≈, +, *) + OrderedField(≈, <, <=, +, *)>(x: A):
+    A.unit < A.of_int(OfNat(1))
+{
+    both_one_pos(x)
+}
+
+// One parent's lemmas apply through it.
+theorem both_of_nat_pos<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>(x: A, n: Nat):
+    A.unit < A.of_nat(Succ(n))
+{
+    OrderedField::of_nat_pos(x, n)
+}
+
+// At a concrete carrier the dictionary is assembled from the two instances.
+theorem both_at_rat(q: Rat): Rat::Lt(0, Rat::ofInt(OfNat(1))) { both_one_pos(q) }
+theorem both_at_creal(x: CReal): CReal::Lt(0, CReal::ofRat(Rat::ofInt(OfNat(1)))) { both_one_pos(x) }
+theorem both_at_rat_explicit(q: Rat): Rat::Lt(0, Rat::ofInt(OfNat(1))) { both_one_pos<Rat>(q) }
+
+// A section's constraint merges the same way.
+section<B: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)> {
+theorem both_in_section(x: B): B.unit < B.of_int(OfNat(1)) { both_one_pos(x) }
+}
+theorem both_in_section_at_rat(q: Rat): Rat::Lt(0, Rat::ofInt(OfNat(1))) { both_in_section(q) }
+
+// At two carriers the symbols name two things, which §5.1 still refuses.
+// expect-error: `≈` is already this declaration's body spelling
+theorem two_carriers<A: OrderedField(≈, <, <=, +, *), B: CommRingOfInt(≈, +, *)>(x: A, y: B): x ≈ x {
+    A.rel_refl(x)
+}
+
+// ---------------------------------------------------------------------------
+// The layers below the field (issues/ordered-algebra-api.md,
+// docs/ordered-algebra-design.md). `Nat` is an ordered semiring and `Int` and
+// `Dyadic` ordered rings; the fields are ordered rings too. A theorem stated
+// once at its weakest layer reads at each of them.
+
+fn nat_layers() → Nat {
+    let a = Nat::StrictOrder(RelId<Nat>, Nat::Lt, Nat::Le);
+    let m = Nat::OrderedAddMonoid(RelId<Nat>, Nat::Lt, Nat::Le, Nat::add);
+    let l = Nat::LocatedAddMonoid(RelId<Nat>, Nat::Lt, Nat::Le, Nat::add);
+    let s = Nat::OrderedSemiring(RelId<Nat>, Nat::Lt, Nat::Le, Nat::add, Nat::mul);
+    0
+}
+fn int_layers() → Nat {
+    let g = Int::LocatedAddGroup(RelId<Int>, Int::Lt, Int::Le, Int::add);
+    let s = Int::OrderedSemiring(RelId<Int>, Int::Lt, Int::Le, Int::add, Int::mul);
+    let r = Int::OrderedRing(RelId<Int>, Int::Lt, Int::Le, Int::add, Int::mul);
+    0
+}
+fn dyadic_layers() → Nat {
+    let m = Dyadic::LocatedAddMonoid(Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add);
+    let r = Dyadic::OrderedRing(Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add, Dyadic::mul);
+    0
+}
+fn field_rings() → Nat {
+    let q = Rat::OrderedRing(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul);
+    let x = CReal::OrderedSemiring(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul);
+    0
+}
+
+// The semiring's laws are the carriers' own monotone forms.
+theorem nat_one(): Nat::OrderedSemiring(RelId<Nat>, Nat::Lt, Nat::Le, Nat::add, Nat::mul).multiplicative.unit = 1 { refl }
+theorem int_inv(x: Int): Int::OrderedRing(RelId<Int>, Int::Lt, Int::Le, Int::add, Int::mul).inv(x) = -x { refl }
+
+// Monoid layers at `Nat`: translation both ways, and a sum termwise.
+theorem nat_add_lt_cancel(x, y, z: Nat, h: z + x < z + y): x < y { OrderedAddMonoid::add_lt_cancel_l(x, y, z, h) }
+theorem nat_add_le_mono(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a + c <= b + d { LocatedAddMonoid::add_le_mono(a, b, c, d, h1, h2) }
+theorem nat_range_le(n: Nat, f, g: Nat → Nat, h: (k: Nat) → k < n → f(k) <= g(k)): MonoidRel::range(Nat::add, n, f) <= MonoidRel::range(Nat::add, n, g) {
+    LocatedAddMonoid::range_le(n, f, g, h)
+}
+
+// Semiring layer at `Nat`, `Int`, `Dyadic` and the fields.
+theorem nat_mul_le_mul(a, b, c, d: Nat, h1: a <= b, h2: c <= d, ha: 0 <= a, hc: 0 <= c): a * c <= b * d {
+    OrderedSemiring::mul_le_mul(a, b, c, d, h1, h2, ha, hc)
+}
+theorem nat_pos_of_mul_pos(z, d: Nat, h: 0 < z * d): 0 < d { OrderedSemiring::pos_of_mul_pos_nonneg(z, d, trivial, h) }
+theorem int_mul_le_mono(x, y, z: Int, h: x <= y, hz: OfNat(0) <= z): z * x <= z * y { OrderedSemiring::mul_le_mono_l(x, y, z, h, hz) }
+theorem dyadic_mul_pos(x, y: Dyadic, hx: 0 < x, hy: 0 < y): 0 < x * y { OrderedSemiring::mul_pos(x, y, hx, hy) }
+theorem rat_mul_cancel(x, y, z: Rat, hz: 0 < z, h: x * z < y * z): x < y { OrderedSemiring::mul_lt_cancel_r(x, y, z, hz, h) }
+
+// Ring layer: the sign of a square, at a carrier with no field.
+theorem int_sq_nonneg(x: Int): OfNat(0) <= x * x { OrderedRing::sq_nonneg(x) }
+theorem dyadic_sq_nonneg(x: Dyadic): 0 <= x * x { OrderedRing::sq_nonneg(x) }
+theorem int_abs_add(x, y, e, d: Int, hx: AbsLe(x, e), hy: AbsLe(y, d)): AbsLe(x + y, e + d) { LocatedAddGroup::abs_le_add(x, y, e, d, hx, hy) }
+
+// Each layer's theorems one layer down are refused: a square's sign needs
+// negation, and `Nat` has none.
+// expect-error: needed for `OrderedRing<A>(≈, <, <=, +, *)`
+theorem sq_needs_a_ring<A: OrderedSemiring(≈, <, <=, +, *)>(x: A): A.unit <= x * x { OrderedRing::sq_nonneg(x) }
+
+// expect-error: OrderedRing
+theorem nat_has_no_ring(x: Nat): 0 <= x * x { OrderedRing::sq_nonneg(x) }
+
+// A sum's monotonicity needs locatedness, at the monoid as at the group.
+// expect-error: needed for `LocatedAddMonoid<A>(≈, <, <=, +)`
+theorem range_needs_located<A: OrderedAddMonoid(≈, <, <=, +)>(n: Nat, f, g: Nat → A, h: (k: Nat) → k < n → f(k) <= g(k)):
+    MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g)
+{
+    LocatedAddMonoid::range_le(n, f, g, h)
+}
+
+// The reciprocal is the field's: an ordered ring has none.
+// expect-error: of `OrderedField` at `A` is not pinned
+fn ring_has_no_recip<A: OrderedRing(≈, <, <=, +, *)>(x: A, h: ApartBy(<, x, A.unit)) → A { A.recip(x, h) }
+
+// A generic `calc` steps through `<`, `≈` and `≤` from the class alone
+// (docs/strict-order-presentation-design.md): a strict order's tagged views
+// give `<` transitivity and `≈` on either side of either order, and a
+// located one adds `≤` transitivity and the mixed `<`/`≤` pairs.
+section<A: StrictOrder(≈, <, <=)> {
+theorem strict_chain(w, x, y, z: A, h1: w ≈ x, h2: x < y, h3: y < z): w < z {
+    calc { w ≈ x := h1, < y := h2, < z := h3, }
+}
+theorem strict_le_same(x, y, z: A, h1: x <= y, h2: y ≈ z): x <= z {
+    calc { x <= y := h1, ≈ z := h2, }
+}
+}
+section<A: PseudoOrder(≈, <, <=)> {
+theorem located_chain(v, w, x, y, z: A, h1: v <= w, h2: w <= x, h3: x < y, h4: y ≈ z): v < z {
+    calc { v <= w := h1, <= x := h2, < y := h3, ≈ z := h4, }
+}
+}
+// The same chains at the carriers, through their instances.
+theorem rat_located_chain(v, w, x, y, z: Rat, h1: v <= w, h2: w <= x, h3: x < y, h4: y ≈ z): v < z {
+    located_chain(v, w, x, y, z, h1, h2, h3, h4)
+}
+theorem nat_located_chain(v, w, x, y, z: Nat, h1: v <= w, h2: w <= x, h3: x < y, h4: RelId(y, z)): v < z {
+    located_chain(v, w, x, y, z, h1, h2, h3, h4)
+}
+theorem int_strict_chain(w, x, y, z: Int, h1: RelId(w, x), h2: x < y, h3: y < z): w < z {
+    strict_chain(w, x, y, z, h1, h2, h3)
+}
+
+// Without locatedness `≤` is not known transitive, so a strict order alone
+// has no `<`/`≤` pair.
+section<A: StrictOrder(≈, <, <=)> {
+// expect-error: no instance for `Trans<A>
+theorem strict_mixed_refused(x, y, z: A, h1: x < y, h2: y <= z): x < z {
+    calc { x < y := h1, <= z := h2, }
+}
+}
+
+// ---------------------------------------------------------------------------
+// Cancellation (issues/cancellative-algebra-api.md). Addition cancels with no
+// side condition at every ordered additive monoid, `Nat` included; a factor
+// cancels when it is positive (any ordered semiring) or apart from zero (any
+// ordered ring).
+theorem nat_add_cancel(x, y, z: Nat, h: x + z = y + z): x = y { OrderedAddMonoid::add_cancel_r(x, y, z, h) }
+theorem nat_add_le_cancel(x, y, z: Nat, h: z + x <= z + y): x <= y { OrderedAddMonoid::add_le_cancel_l(x, y, z, h) }
+theorem rat_add_cancel(x, y, z: Rat, h: z + x ≈ z + y): x ≈ y { OrderedAddMonoid::add_cancel_l(x, y, z, h) }
+theorem nat_mul_cancel_pos(x, y, z: Nat, hz: 0 < z, h: z * x = z * y): x = y { OrderedSemiring::mul_cancel_pos_l(x, y, z, hz, h) }
+theorem dyadic_mul_cancel_pos(x, y, z: Dyadic, hz: 0 < z, h: x * z ≈ y * z): x ≈ y { OrderedSemiring::mul_cancel_pos_r(x, y, z, hz, h) }
+theorem int_mul_le_cancel(x, y, z: Int, hz: OfNat(0) < z, h: z * x <= z * y): x <= y { OrderedSemiring::mul_le_cancel_pos_l(x, y, z, hz, h) }
+theorem int_mul_cancel_neg(x, y: Int, h: NegSucc(2) * x = NegSucc(2) * y): x = y {
+    OrderedRing::mul_cancel_apart_l(x, y, NegSucc(2), Inl(Int::negsucc_lt_ofnat(2, 0)), h)
+}
+theorem creal_mul_cancel_apart(x, y, z: CReal, hz: ApartBy(CReal::Lt, z, 0), h: x * z ≈ y * z): x ≈ y {
+    OrderedRing::mul_cancel_apart_r(x, y, z, hz, h)
+}
+
+// The carriers' own nonzero forms, where deciding the sign turns `≠ 0` into
+// positive or apart.
+theorem nat_mul_cancel_ne(x, y, z: Nat, hz: ¬(z = 0), h: x * z = y * z): x = y { x.mul_cancel_r(y, z, hz, h) }
+theorem int_mul_cancel_ne(x, y, z: Int, hz: ¬(z = OfNat(0)), h: z * x = z * y): x = y { z.mul_cancel_l(x, y, hz, h) }
+
+// The customer: cross-multiplication equality is transitive through a
+// positive middle factor, which is `Rat::same_trans` at `Int`.
+theorem int_cross_trans(a, b, c, d, e, f: Int, hd: OfNat(0) < d, h1: a * d ≈ c * b, h2: c * f ≈ e * d): a * f ≈ e * b {
+    OrderedSemiring::cross_same_trans(a, b, c, d, e, f, hd, h1, h2)
+}
+
+// Without a side condition multiplication does not cancel: a zero factor
+// equates everything.
+theorem nat_mul_not_cancellative(): ¬((x, y, z: Nat) → z * x = z * y → x = y) {
+    λ h => omega(h(0, 1, 0, omega))
+}

@@ -1,12 +1,12 @@
 ---
 title: Complete kernel reconstruction for CutSat derivations
-status: open
+status: closed
 labels: [proofs,elaboration,arithmetic,solver]
 area: tactics
 milestone: [tac-arith]
 blocked-by: [arithmetic-certificate-dag-sharing]
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-10-28
 ---
 
 Extend the first simple-Cooper reconstruction slice to every supported CutSat
@@ -31,3 +31,6 @@ divisibility constraint and other deeper symbolic interactions.
   large reachable proof DAGs.
 - **[[cutsat-linear-integer-arithmetic]]** owns supported search semantics.
 
+## Log
+
+- 2026-10-28: Every CutSat derivation reconstructs (`crates/elab/src/cutsat_cert.rs`): Cooper with a carried divisibility, solve-div, dvd-drop, constant divisibility/diseq/bound conflicts and diseq splits, each through a named `omega.hthr` lemma. Kernel-gated positives and satisfiable mutations are in `lib/_tests/std/tactic/omega_tests.hthr` (Pugh, a generated system per rule). The certificate is one `have` per reachable node, so used-lemma and node reports describe the whole certificate. Closing.

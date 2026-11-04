@@ -1,0 +1,38 @@
+// Probes of `by norm_num()` at `CReal` (lib/std/tactic/norm_num.hthr over
+// lib/std/tactic/norm_num_real.hthr): sides read into `NumReal` trees,
+// decided at `Rat` and carried across `CReal::ofRat`. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import creal; import tactic; import norm_num; import norm_num_real;
+
+fn third() → CReal { CReal::ofRat(Rat(1, 3)) }
+
+// Numerals and defined constants are leaves up to unfolding.
+theorem zero_add_zero(): CReal::Same(0 + 0, 0) { by norm_num() }
+theorem one_add_one(): CReal::Same(1 + 1, 2) { by norm_num() }
+theorem thirds(): third() + third() + third() ≈ 1 { by norm_num() }
+theorem ofrat_sum(): CReal::ofRat(Rat(1, 2)) + CReal::ofRat(Rat::inv_succ(1)) ≈ 1 { by norm_num() }
+theorem sub_mul(): (third() - CReal::ofRat(Rat(1, 4))) * 12 ≈ 1 { by norm_num() }
+theorem neg_abs(): (-third()).abs() ≈ third() { by norm_num() }
+theorem npow_probe(): third().npow(3) * 27 ≈ 1 { by norm_num() }
+theorem pow_probe(): third() ^ 2 ≈ CReal::ofRat(Rat(1, 9)) { by norm_num() }
+// Inverses and negative powers carry the goal's own apartness proof.
+theorem inv_probe(): CReal::ofRat(4)⁻¹ ≈ CReal::ofRat(Rat(1, 4)) { by norm_num() }
+theorem neg_pow_probe(): CReal::ofRat(2) ^ (-2) ≈ CReal::ofRat(Rat(1, 4)) { by norm_num() }
+// An apartness the inverse needs, proved by `norm_num` too.
+theorem two_thirds_apart(): (third() + third()).Apart(0) { by norm_num() }
+theorem inv_sum(): (third() + third()).inv(h := two_thirds_apart()) ≈ CReal::ofRat(Rat(3, 2)) { by norm_num() }
+
+// Orders, apartness, and their negations.
+theorem lt_probe(): third() < CReal::ofRat(Rat(34, 100)) { by norm_num() }
+theorem le_probe(): third() * 3 <= 1 { by norm_num() }
+theorem apart_probe(): third().Apart(CReal::ofRat(Rat(33, 100))) { by norm_num() }
+theorem not_same(): ¬(third() ≈ CReal::ofRat(Rat(33, 100))) { by norm_num() }
+theorem not_lt(): ¬(third() * 3 < 1) { by norm_num() }
+theorem not_le(): ¬(CReal::ofRat(Rat(34, 100)) <= third()) { by norm_num() }
+theorem not_apart(): ¬((third() + third()).Apart(CReal::ofRat(Rat(2, 3)))) { by norm_num() }
+
+// expect-error: norm_num: the goal is false
+theorem false_same(): third() ≈ CReal::ofRat(Rat(33, 100)) { by norm_num() }
+// A real with no rational value is not read.
+// expect-error: norm_num: a side is not a closed real expression
+theorem open_side(x: CReal): x < x + 1 { by norm_num() }

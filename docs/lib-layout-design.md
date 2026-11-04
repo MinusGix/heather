@@ -113,6 +113,7 @@ lib/
       float/     float dyadic round error arith
     bitvec/      bitvec bitvec_nat bitvec_bytes byte
     algebra/     algebra algebra_rel semiring ordered_field order
+    analysis/    real_fn (functions on an ordered field and their derivatives)
     relation/    relation relation_props relation_function
     data/        list vector bounded_list tree certified_lookup
       set/       finite_set list_setoid list_finite_set tree_finite_set
@@ -121,7 +122,7 @@ lib/
     parser/      parser (the facade, moved in) parser_core parser_contracts …
     tactic/      tactic omega ring bitvec_omega relation_context
     itree/       itree itree_trace itree_sim itree_state coitree coitree_eutt
-                 coitree_bridge
+                 coitree_bridge coitree_rec
     machine/     memory location
     arch/
       x86_64/    unchanged (24 modules)

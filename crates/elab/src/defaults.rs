@@ -84,6 +84,7 @@ impl Elaborator {
                 level: arg.level.clone(),
                 skel: params[j].skel.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
         }
         let _scope = self.use_scope(&default.scope);
@@ -180,18 +181,17 @@ impl Elaborator {
         // transparent name), so it is judged in the padded world the
         // elaborator works in, before the attempt's slots are rolled back.
         let world = self.goal_psi();
-        stats::time_kernel(|| {
-            self.kernel_check_type(&world, Layer::Prog, &cx.gamma, ty, lvl)?;
-            self.kernel_check_term(&world, Layer::Code, &cx.gamma, &term, ty, lvl)
-        })
-        .map_err(|e| self.kernel_error(decl, default.span, e))
+        stats::time_kernel(|| self.kernel_check_type(&world, Layer::Prog, &cx.gamma, ty, lvl))
+            .map_err(|e| self.kernel_refusal(decl, default.span, e, &world, Layer::Prog, &cx.gamma, None, ty, lvl))?;
+        stats::time_kernel(|| self.kernel_check_term(&world, Layer::Code, &cx.gamma, &term, ty, lvl))
+            .map_err(|e| self.kernel_refusal(decl, default.span, e, &world, Layer::Code, &cx.gamma, Some(&term), ty, lvl))
     }
 
     /// Install a stored declaration scope for one read of stored syntax. The
     /// guard restores the caller's scope on every return path.
     pub(crate) fn use_scope<'a>(&'a self, scope: &Rc<crate::names::Scope>) -> ResolutionScope<'a> {
-        self.resolution_scopes.borrow_mut().push(Rc::clone(scope));
-        ResolutionScope { stack: &self.resolution_scopes }
+        self.scope.resolution_scopes.borrow_mut().push(Rc::clone(scope));
+        ResolutionScope { stack: &self.scope.resolution_scopes }
     }
 }
 
@@ -220,7 +220,7 @@ pub(crate) fn is_param_default(e: &Expr) -> bool {
 
 /// Is this default a **discharge**: a form whose meaning is the goal it is
 /// checked at, run at each call like `:= infer` (§9.7)? The tactics and the
-/// proof searches (`omega`, `positivity`, `ring`, `bv_omega`, `decide`,
+/// proof searches (`omega`, `positivity`, `ring`, `linarith`, `nlinarith`, `bv_omega`, `decide`,
 /// `rel_cong`/`rel_derive`, `rewrite`, `subst`, `by t`), `refl`, whose
 /// endpoints the kernel compares at the goal, and any default that contains
 /// a goal `?`, which it poses to the caller. Read off the head, so
@@ -229,8 +229,8 @@ pub(crate) fn is_param_default(e: &Expr) -> bool {
 /// A user declaration that shadows one of these names makes a default that
 /// names it a value no check here reaches; the call still checks it.
 pub(crate) fn is_discharge(e: &Expr) -> bool {
-    const SEARCHES: [&str; 7] = ["omega", "positivity", "ring", "bv_omega", "decide", "rel_derive", heather_syntax::POS_SEARCH];
-    const TACTICS: [&str; 7] = ["omega", "ring", "rewrite", "subst", "rel_cong", "rel_derive", heather_syntax::BY_TACTIC];
+    const SEARCHES: [&str; 9] = ["omega", "positivity", "ring", "linarith", "nlinarith", "bv_omega", "decide", "rel_derive", heather_syntax::POS_SEARCH];
+    const TACTICS: [&str; 9] = ["omega", "ring", "linarith", "nlinarith", "rewrite", "subst", "rel_cong", "rel_derive", heather_syntax::BY_TACTIC];
     surface::count_holes_expr(e) > 0
         || match &e.kind {
             ExprKind::Refl | ExprKind::AutoRefl | ExprKind::Hole(_) => true,

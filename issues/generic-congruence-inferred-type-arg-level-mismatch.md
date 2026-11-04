@@ -1,10 +1,10 @@
 ---
 title: A generic congruence whose type argument is inferred is rejected with LevelMismatch
-status: open
+status: closed
 labels: [frontend, elaboration, kernel, stdlib]
 area: language
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-10-31
 ---
 
 A polymorphic congruence applied with its type argument **inferred** produces a
@@ -51,3 +51,4 @@ test beside the other inference tests in `crates/elab/tests/implicit_args.rs`.
 - 2026-09-18: Filed from the `Char`/`String` rework. It cost one wrong
   diagnosis first: the failure was read as a level problem in `cong_fn`, and
   rewriting both congruences with `j` changed nothing.
+- 2026-10-31: 2026-10-31: No longer reproduces on master 8acf82a: `list_eq_dec` checks with `List::cong_tail(p)` both before and after the distinct-heads guard (issues/and-at-match-predicate-implicit-level-mismatch.md), so whatever fixed it landed earlier. The site now writes `cong_tail(p)`, and the library gate keeps it checked; no Rust test (docs/test-value-audit.md §5).

@@ -13,11 +13,12 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalSubst, Term, Type};
 use heather_syntax::{Expr, Item, parse_file};
 
+use crate::oracle::Unfold;
 use crate::arithmetic::{
     Affine, AtomId, AtomTable, Coeffs as AffineCoeffs, Domain, ReflectedConstraint, Relation,
 };
 use crate::cutsat::{
-    Derivation as CutDerivation, DerivedConstraint, Limits as CutLimits, Outcome as CutOutcome,
+    Limits as CutLimits, Outcome as CutOutcome,
     Problem as CutProblem,
 };
 use crate::omega::{Coeffs, Derivation, DerivationId, Interval, LinearExpr, Outcome, Problem, Z};
@@ -50,6 +51,25 @@ pub(crate) struct Certificate {
     /// binds it once, so the checker meets one list rather than one per row.
     /// `None` when `source` does not use the name.
     pub atoms: Option<String>,
+    /// A Bool-guard round's facts (`split_bool_guards`): what the caller
+    /// binds before checking, and the facts it settles while it does.
+    pub guards: Option<GuardRound>,
+}
+
+/// A fact the caller binds before checking a certificate: `term` (a fact
+/// already in scope) at `ty`, its guard's definition unfolded.
+pub(crate) struct GuardAlias {
+    pub name: String,
+    pub term: Rc<Term>,
+    pub ty: Type,
+    pub level: Level,
+}
+
+pub(crate) struct GuardRound {
+    pub aliases: Vec<GuardAlias>,
+    /// The names of the facts the round reads: no `omega` inside the
+    /// certificate reads them again.
+    pub settles: Vec<String>,
 }
 
 /// The name a certificate uses for its atom list (`Certificate::atoms`).
@@ -116,9 +136,9 @@ pub struct CutSatReport {
 /// inside [`reconstruct`]; `reconstruct_ns` and `check_ns` are stamped by the
 /// dispatcher in `lib.rs` around the whole reconstruction and around the
 /// checking of the generated certificate. `check_ns` is inclusive: a
-/// certificate that re-invokes `omega` (`le_of_not_lt(… ⊢ omega)`, every
-/// `__cutsat_linear_branch`) pays for those nested invocations inside it, so
-/// `depth` says which reports are inner ones.
+/// certificate that re-invokes `omega` (`le_of_not_lt(… ⊢ omega)`) pays for
+/// those nested invocations inside it, so `depth` says which reports are
+/// inner ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct OmegaPhases {
     pub depth: usize,
@@ -242,6 +262,7 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::normalize_scale_right",
         "omega::normalized_eq_value",
         "omega::normalized_le_upper",
+        "omega::normalized_ne_value",
         "omega::upper_combo",
         "omega::upper_neg_combo",
         "omega::upper_lower_combo",
@@ -249,12 +270,17 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::lower_upper_upper_combo",
         "omega::upper_of_eq",
         "omega::upper_to_negated_lower",
-        "omega::cut_dvd_elim",
-        "omega::cutsat_cooper_left",
-        "omega::cutsat_cooper_right",
-        "omega::cutsat_negative_remainder",
-        "omega::cutsat_with_eq",
-        "omega::cutsat_with_le",
+        "omega::below_succ",
+        "omega::cut_constant_diseq",
+        "omega::cut_constant_dvd",
+        "omega::cut_constant_upper",
+        "omega::cut_cooper_left",
+        "omega::cut_cooper_right",
+        "omega::cut_diseq",
+        "omega::cut_dvd_combo",
+        "omega::cut_dvd_drop",
+        "omega::cut_dvd_one",
+        "omega::cut_resolve",
     ];
     CANDIDATES
         .iter()
@@ -281,6 +307,11 @@ struct InitialAssumption {
     lower: Option<String>,
     upper: Option<String>,
     exact: Option<String>,
+    /// A `≠` fact: no bounds, and a proof of
+    /// `dot(row, atoms) + c ≠ 0` with `c = -interval`'s exact value. Only
+    /// CutSat reads it; such facts come after every bounded one, so Omega's
+    /// assumption indices are positions in the bounded prefix.
+    disequality: Option<String>,
 }
 
 fn reflected_atom_count(facts: &[InitialAssumption]) -> usize {
@@ -559,7 +590,7 @@ fn nat_divides_args<'a>(elab: &Elaborator, ty: &'a Type) -> Option<(&'a Rc<Term>
     Some((divisor, dividend))
 }
 
-fn negated_domain(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Type> {
+pub(crate) fn negated_domain(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Type> {
     if let Type::El { level, tm } = ty {
         let args = named_args(elab, tm, "logic::Not")?;
         let [domain] = args.as_slice() else {
@@ -590,9 +621,51 @@ fn reads_as_relation(elab: &Elaborator, cx: &Cx, ty: &Type) -> bool {
         || nat_equality_args(elab, cx, &decoded).is_some()
 }
 
-/// Reducts a defined proposition may take to reach a relation: the same
-/// bound the goal side unfolds under.
-const PROPOSITION_UNFOLD_STEPS: u64 = 64;
+/// An order at `Int` or `Nat` as written, not unfolded: whether it is at
+/// `Nat`, whether it is strict, and its two sides. `nlinarith` multiplies
+/// these (docs/nonlinear-arithmetic-design.md §4.4).
+/// A head β-redex is read through its contractum, as [`push_conjuncts`] does.
+pub(crate) fn integral_order(elab: &Elaborator, ty: &Type) -> Option<(bool, bool, Rc<Term>, Rc<Term>)> {
+    let contracted = crate::spelling::beta_head_ty(ty);
+    let ty = contracted.as_ref().unwrap_or(ty);
+    let found = |nat, strict, sides: Option<(&Rc<Term>, &Rc<Term>)>| sides.map(|(l, r)| (nat, strict, Rc::clone(l), Rc::clone(r)));
+    found(false, false, relation_args(elab, ty))
+        .or_else(|| found(false, true, strict_relation_args(elab, ty)))
+        .or_else(|| found(true, false, nat_relation_args(elab, ty)))
+        .or_else(|| found(true, true, nat_strict_relation_args(elab, ty)))
+}
+
+/// The two sides of a relation this frontend reflects, as `linarith` at
+/// `Int` and `Nat` reads them (docs/linarith-design.md §8): `<=`, `<` or `=`
+/// at either, its negation, or a defined proposition that unfolds to one;
+/// `true` for `Nat`. A head β-redex is read through its contractum, as
+/// [`push_conjuncts`] does.
+pub(crate) fn integral_sides(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(bool, Rc<Term>, Rc<Term>)> {
+    let contracted = crate::spelling::beta_head_ty(ty);
+    let ty = contracted.as_ref().unwrap_or(ty);
+    let stated = |ty: &Type| {
+        let decoded = crate::inductive::decoded(ty);
+        let int = relation_args(elab, ty)
+            .or_else(|| strict_relation_args(elab, ty))
+            .or_else(|| equality_args(elab, cx, &decoded));
+        let nat = || {
+            nat_relation_args(elab, ty)
+                .or_else(|| nat_strict_relation_args(elab, ty))
+                .or_else(|| nat_equality_args(elab, cx, &decoded))
+        };
+        match int {
+            Some((l, r)) => Some((false, Rc::clone(l), Rc::clone(r))),
+            None => nat().map(|(l, r)| (true, Rc::clone(l), Rc::clone(r))),
+        }
+    };
+    let relation = |ty: &Type| {
+        stated(ty).or_else(|| {
+            unfolded_proposition(elab, cx, ty, |ty| reads_as_relation(elab, cx, ty)).and_then(|ty| stated(&ty))
+        })
+    };
+    relation(ty).or_else(|| relation(&negated_domain(elab, cx, ty)?))
+}
+
 
 /// The relation a defined proposition unfolds to
 /// (issues/omega-unfolds-defined-propositions.md): `Rat::Le(x, y)` is
@@ -616,14 +689,12 @@ fn unfolded_proposition(
         return None;
     }
     let oracle = elab.goal_oracle();
-    for reduct in oracle.term_reducts(&cx.gamma, tm, PROPOSITION_UNFOLD_STEPS) {
+    let unfolded = oracle.unfold_to(&cx.gamma, tm, Unfold::Proposition, |reduct| {
         let unfolded = Type::El { level: level.clone(), tm: Rc::new(reduct) };
-        if reads(&unfolded) {
-            let decoded = crate::inductive::decoded(&unfolded);
-            return Some(crate::goal_combinators::simplify_goal(elab, cx, &decoded));
-        }
-    }
-    None
+        reads(&unfolded).then_some(unfolded)
+    })?;
+    let decoded = crate::inductive::decoded(&unfolded);
+    Some(crate::goal_combinators::simplify_goal(elab, cx, &decoded))
 }
 
 fn dot_args<'a>(elab: &Elaborator, tm: &'a Term) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
@@ -800,47 +871,97 @@ fn coefficient_source(source: &str) -> Option<Vec<Z>> {
 pub(crate) fn source_context(cx: &Cx) -> std::borrow::Cow<'_, Cx> {
     let shadowed: Vec<_> = cx.names.iter().enumerate().filter_map(|(pos, name)| {
         (!name.starts_with('#')
-            && (cx.names[pos + 1..].contains(name)
-                || cx.aliases.iter().any(|alias| alias.name == *name && alias.depth > pos)))
+            && (cx.names.iter().skip(pos + 1).any(|later| later == name)
+                || cx.aliases.iter_inner().any(|alias| alias.name == *name && alias.depth > pos)))
             .then_some(pos)
     }).collect();
     if shadowed.is_empty() {
         return std::borrow::Cow::Borrowed(cx);
     }
-    let mut used: std::collections::HashSet<_> = cx.names.iter().cloned()
-        .chain(cx.aliases.iter().map(|alias| alias.name.clone())).collect();
-    let mut named = cx.clone();
+    let mut used: std::collections::HashSet<String> = cx.names.iter().map(str::to_string)
+        .chain(cx.aliases.iter_inner().map(|alias| alias.name.clone())).collect();
+    let mut fresh = std::collections::HashMap::new();
     let mut next = 0;
     for pos in shadowed {
         loop {
             let name = format!("__omega_local_{next}");
             next += 1;
             if used.insert(name.clone()) {
-                named.names[pos] = name;
+                fresh.insert(pos, name);
                 break;
             }
         }
     }
+    let mut named = cx.clone();
+    let mut pos = 0;
+    named.names = cx.names.renamed(|name| {
+        let new = fresh.remove(&pos).unwrap_or_else(|| name.to_string());
+        pos += 1;
+        new
+    });
     std::borrow::Cow::Owned(named)
 }
 
 // Resolve each visible name once through the same binder/alias precedence as
 // ordinary expressions. Alias types are weakened to this context by resolve.
 // A hidden binder (`#ih`, a `match`'s induction hypothesis) is left out: a
-// certificate is source, and source cannot name it.
+// certificate is source, and source cannot name it. A conjunction is listed
+// as its conjuncts, at every depth, each named by its projection path
+// (`h.right.left`): a certificate cites only the ones it uses
+// (issues/omega-nested-conjunction-facts.md).
 pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
+    local_fact_entries(elab, cx).into_iter().map(|fact| (fact.name, fact.ty)).collect()
+}
+
+/// A fact `local_facts` lists, with its evidence and its type's level.
+struct LocalFact {
+    name: String,
+    term: Rc<Term>,
+    ty: Type,
+    level: Level,
+}
+
+fn local_fact_entries(elab: &Elaborator, cx: &Cx) -> Vec<LocalFact> {
     let mut seen = std::collections::HashSet::new();
-    cx.names
-        .iter()
-        .chain(cx.aliases.iter().map(|alias| &alias.name))
-        .filter(|name| !name.starts_with('#'))
-        .filter(|name| seen.insert((*name).clone()))
-        .filter_map(|name| {
-            elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 })
-                .ok()
-                .map(|(_, ty, _)| (name.clone(), ty))
-        })
-        .collect()
+    let mut facts = Vec::new();
+    for name in cx.names.iter().chain(cx.aliases.iter().map(|alias| alias.name.as_str())) {
+        if name.starts_with('#') || !seen.insert(name.to_string()) {
+            continue;
+        }
+        if let Ok((term, ty, level)) = elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 }) {
+            push_conjuncts(elab, cx, name.to_string(), Rc::new(term), ty, level, &mut facts);
+        }
+    }
+    facts
+}
+
+/// `name: ty`, or, when `ty` is `logic::And`, each side read through its
+/// projection, recursively. A head β-redex is contracted first, as the
+/// unifier does (`spelling::beta_head`): an `Exists`'s `.proof` is typed
+/// `(λ k => P(k))(e.witness)`, and read raw no relation is visible in it
+/// (issues/omega-redex-typed-fact-ignored.md).
+fn push_conjuncts(elab: &Elaborator, cx: &Cx, name: String, term: Rc<Term>, ty: Type, level: Level, out: &mut Vec<LocalFact>) {
+    let ty = crate::spelling::beta_head_ty(&ty).unwrap_or(ty);
+    if let Some(ind) = elab.display_tag_of(&ty)
+        && crate::goal_combinators::conjunction(&ind)
+    {
+        let sides: Option<Vec<_>> = ["left", "right"]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, field)| {
+                elab.project_field(cx, &ind, &ty, Rc::clone(&term), idx, heather_syntax::Span { start: 0, end: 0 })
+                    .ok()
+                    .map(|(side, side_ty, side_level)| (format!("{name}.{field}"), Rc::new(side), side_ty, side_level))
+            })
+            .collect();
+        if let Some(sides) = sides {
+            for (side_name, side, side_ty, side_level) in sides {
+                push_conjuncts(elab, cx, side_name, side, side_ty, side_level, out);
+            }
+            return;
+        }
+    }
+    out.push(LocalFact { name, term, ty, level });
 }
 
 fn reflect_assumption(
@@ -923,6 +1044,15 @@ fn affine_syntax(
                 right: Box::new(affine_syntax(elab, cx, right, atoms)?),
             });
         }
+    }
+    // A sum at a successor bound, as at `Nat`.
+    if let Some(peeled) = crate::range_sum::peel(elab, tm)
+        && crate::range_sum::op_is(elab, &peeled.op, "int::Int::add")
+    {
+        return Ok(AffineSyntax::Add {
+            left: Box::new(affine_syntax(elab, cx, &peeled.rest, atoms)?),
+            right: Box::new(affine_syntax(elab, cx, &peeled.last, atoms)?),
+        });
     }
     if let Some(args) = named_args(elab, tm, "int::Int::sub") {
         if let [left, right] = args.as_slice() {
@@ -1214,12 +1344,28 @@ fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> O
     if !is_field_read(elab, tm) {
         return None;
     }
-    let reduct = Rc::new(elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm).ok()?);
-    if matches!(&*reduct, Term::NatLit(_)) {
-        return Some(reduct);
+    // A read at closed arguments whose field computes past the budget has no
+    // weak head here; it is still read as put, below
+    // (issues/omega-closed-field-value-atomised.md).
+    if let Ok(reduct) = elab.goal_oracle().whnf_term_bounded(&cx.gamma, tm) {
+        let reduct = Rc::new(reduct);
+        if matches!(&*reduct, Term::NatLit(_)) {
+            return Some(reduct);
+        }
+        if let Some(shaped) = named_arithmetic_shape(elab, cx, &reduct, &[], depth) {
+            return Some(shaped);
+        }
     }
-    named_arithmetic_shape(elab, cx, &reduct, &[], depth)
-        .or_else(|| named_arithmetic_shape(elab, cx, &field_as_put(elab, cx, tm)?, &[], depth))
+    let field = field_as_put(elab, cx, tm)?;
+    named_arithmetic_shape(elab, cx, &field, &[], depth).or_else(|| {
+        // A field put as a plain atom (`P::of(n).pred` is `n`) is read as
+        // that atom, so that it meets the goal's other mentions of it; a
+        // stuck eliminator put there stays behind its projection
+        // (issues/omega-nested-projection-of-call.md).
+        let (head, _) = app_spine(&field);
+        (matches!(head, Term::Var(_) | Term::GlobalTm { .. }) && nat_term_source(elab, cx, &field).is_ok())
+            .then_some(field)
+    })
 }
 
 /// A field of a call that unfolds to a constructor, read as what was put
@@ -1227,8 +1373,17 @@ fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> O
 /// `x.den * y.den`. The weak head of the whole read would
 /// unfold that sum on into its recursor, so the receiver is unfolded only as
 /// far as the constructor and the field projected without δ, as
-/// `simplify_goal` does for a goal's fields.
+/// `simplify_goal` does for a goal's fields. A field that is itself a
+/// field of such a call (`Q::at(n).den.pred`, where `den` is put as
+/// `P::of(n)`) is read on, up to [`FIELD_NESTING_DEPTH`] receivers deep.
 fn field_as_put(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
+    field_as_put_within(elab, cx, tm, FIELD_NESTING_DEPTH)
+}
+
+/// The most receivers [`field_as_put`] unfolds for one read.
+const FIELD_NESTING_DEPTH: u32 = 8;
+
+fn field_as_put_within(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Option<Rc<Term>> {
     fn with_receiver(tm: &Rc<Term>, receiver: &Rc<Term>) -> Rc<Term> {
         let mut out = (**tm).clone();
         match &mut out {
@@ -1238,6 +1393,17 @@ fn field_as_put(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
             _ => return Rc::clone(receiver),
         }
         Rc::new(out)
+    }
+    // A read off a record constructed in place (a `decreases` measure at a
+    // self-call's argument, `CdState(s.m - 1, …).m`) is the component as
+    // put, by syntax: no receiver to unfold, and a weak head of the read
+    // would unfold the field's value on into its eliminator
+    // (issues/decreases-measure-record-field-unspelled.md).
+    if let Some(field) = crate::spelling::project_value(tm) {
+        if is_field_read(elab, field) {
+            return field_as_put_within(elab, cx, field, depth.checked_sub(1)?);
+        }
+        return Some(Rc::clone(field));
     }
     let named = elab.named_field_read(tm);
     let (_, receiver) = named.clone().unwrap_or_else(|| projection_path(tm));
@@ -1258,8 +1424,8 @@ fn field_as_put(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Option<Rc<Term>> {
         None => with_receiver(tm, &unfolded),
     };
     let field = Rc::new(oracle.bounded(64).whnf_term_opaque(&cx.gamma, &read).ok()?);
-    if crate::spelling::proj_of(&field).is_some() {
-        return None;
+    if is_field_read(elab, &field) {
+        return field_as_put_within(elab, cx, &field, depth.checked_sub(1)?);
     }
     Some(field)
 }
@@ -1494,6 +1660,21 @@ fn nat_affine_syntax_within(
             return Ok(AffineSyntax::Atom { index, source });
         }
     }
+    // A sum at a successor bound is its last term added on, by its
+    // definition (`crate::range_sum`); the certificate states the sum, which
+    // converts to the range as written.
+    if let Some(peeled) = crate::range_sum::peel(elab, tm)
+        && crate::range_sum::op_is(elab, &peeled.op, "nat::Nat::add")
+    {
+        let left_nat = nat_term_source(elab, cx, &peeled.rest)?;
+        let right_nat = nat_term_source(elab, cx, &peeled.last)?;
+        return Ok(AffineSyntax::NatAdd {
+            left_nat,
+            right_nat,
+            left: Box::new(nat_affine_syntax_within(elab, cx, &peeled.rest, atoms, depth)?),
+            right: Box::new(nat_affine_syntax_within(elab, cx, &peeled.last, atoms, depth)?),
+        });
+    }
     let source = format!("int::OfNat({nat_source})");
     // An atom already met under this spelling was already asked everything
     // below, and answered "atom".
@@ -1723,13 +1904,7 @@ fn recursive_field_candidates(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Vec<
         let fields = match &***arg {
             Term::Supf { shape, label, children, .. } => {
                 let Some(ind) = elab.display_tag_of(shape) else { continue };
-                let mut index = 0;
-                let mut cur = &**label;
-                while let Some((left, value)) = crate::spelling::inj_of(cur) {
-                    if left { break; }
-                    index += 1;
-                    cur = value;
-                }
+                let index = crate::spelling::inj_path(label, ind.ctors.len()).ctor;
                 let Some(ctor) = ind.ctors.get(index) else { continue };
                 if ctor.container().is_some() { continue; }
                 let Some(fields) = crate::spelling::tuple_fields(elab, cx, children, 0, ctor.arity(), 0) else {
@@ -2404,6 +2579,7 @@ fn reflect_stated_relation(
                 unfolded_proposition(elab, cx, &domain, |ty| reads_as_relation(elab, cx, ty))
                     .unwrap_or(domain)
             };
+            let decoded_domain = crate::inductive::decoded(&domain);
             if let Some((left, right)) = relation_args(elab, &domain) {
                 let left_source = int_term_source(elab, cx, left)?;
                 let right_source = int_term_source(elab, cx, right)?;
@@ -2469,6 +2645,28 @@ fn reflect_stated_relation(
                         "omega::nat_le_to_int({}, {}, omega::nat_le_of_not_lt({}, {}, {}))",
                         right_source, left_source, left_source, right_source, name,
                     ),
+                )
+            } else if let Some((left, right)) = equality_args(elab, cx, &domain)
+                .or_else(|| equality_args(elab, cx, &decoded_domain))
+            {
+                // A disequality goes to CutSat whole, in place of the two
+                // strict cases an up-front split would re-run Omega on.
+                (
+                    Domain::Int,
+                    affine_syntax(elab, cx, left, atoms)?,
+                    affine_syntax(elab, cx, right, atoms)?,
+                    Relation::Ne,
+                    name.to_string(),
+                )
+            } else if let Some((left, right)) = nat_equality_args(elab, cx, &domain)
+                .or_else(|| nat_equality_args(elab, cx, &decoded_domain))
+            {
+                (
+                    Domain::NatEmbedded,
+                    nat_affine_syntax(elab, cx, left, atoms)?,
+                    nat_affine_syntax(elab, cx, right, atoms)?,
+                    Relation::Ne,
+                    format!("int::Int::ofnat_ne({})", name),
                 )
             } else {
                 return Ok(None);
@@ -2675,6 +2873,7 @@ fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
     let atoms_literal = atom_list_source(&atoms);
     let atoms_source = ATOMS.to_string();
     let mut facts = Vec::with_capacity(relations.len());
+    let mut disequalities = Vec::new();
     for reflected in relations {
         let left = normalize_syntax(&reflected.lhs, &atoms_source)?;
         let right = normalize_syntax(&reflected.rhs, &atoms_source)?;
@@ -2731,6 +2930,7 @@ fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
                     equality,
                 )),
                 exact: Some(equality),
+                disequality: None,
             });
         } else if reflected.relation == Relation::Le {
             let proof = format!(
@@ -2753,6 +2953,30 @@ fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
                 lower: None,
                 upper: Some(proof),
                 exact: None,
+                disequality: None,
+            });
+        } else if reflected.relation == Relation::Ne {
+            let proof = format!(
+                "omega::normalized_ne_value({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                left.source,
+                right.source,
+                int(left.linear.constant),
+                int(right.linear.constant),
+                left.row_source,
+                right.row_source,
+                atoms_source,
+                left.proof,
+                right.proof,
+                reflected.evidence,
+            );
+            disequalities.push(InitialAssumption {
+                coeffs: linear.coeffs,
+                row_source,
+                interval: Interval::exact(upper),
+                lower: None,
+                upper: None,
+                exact: None,
+                disequality: Some(proof),
             });
         } else {
             return Err("Omega reflected a non-canonical affine relation".into());
@@ -2774,6 +2998,7 @@ fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
             )),
             upper: None,
             exact: None,
+            disequality: None,
         });
     }
     let atom_labels = atoms
@@ -2785,10 +3010,11 @@ fn reflect_collected(collected: Collected) -> Result<Reflection, String> {
         })
         .collect();
     let atom_sources = atoms.iter().map(|atom| atom.source.clone()).collect();
+    facts.extend(disequalities);
     Ok((facts, atoms_source, atom_labels, Some(atom_sources), Some(atoms_literal)))
 }
 
-fn int(value: Z) -> String {
+pub(crate) fn int(value: Z) -> String {
     int_ctor(value)
 }
 
@@ -2810,33 +3036,12 @@ fn literal_int_nonzero(value: Z) -> Result<String, String> {
 /// rows it is compared with (`basis`, `scale` of a parent) keep one entry per
 /// atom, and `dot` of a shorter row is not definitionally the same once a
 /// dropped atom is neutral (`0 * x` does not reduce).
-fn coeffs_source(coeffs: &Coeffs, atom_count: usize) -> String {
+pub(crate) fn coeffs_source(coeffs: &Coeffs, atom_count: usize) -> String {
     let values = coeffs.as_slice();
     (0..atom_count.max(values.len()))
         .rev()
         .fold("list::Nil".to_string(), |tail, index| {
             format!("list::Cons({}, {tail})", int(values.get(index).copied().unwrap_or(0)))
-        })
-}
-
-fn affine_source(affine: &Affine, atom_sources: &[String]) -> String {
-    affine
-        .coeffs
-        .as_slice()
-        .iter()
-        .enumerate()
-        .filter(|(_, coefficient)| **coefficient != 0)
-        .fold(int(affine.constant), |out, (index, coefficient)| {
-            let atom = atom_sources
-                .get(index)
-                .cloned()
-                .unwrap_or_else(|| format!("__cutsat_missing_atom_{index}"));
-            let term = if *coefficient == 1 {
-                atom
-            } else {
-                format!("int::Int::mul({}, {atom})", int(*coefficient))
-            };
-            format!("int::Int::add({out}, {term})")
         })
 }
 
@@ -2852,7 +3057,7 @@ fn int_ctor(value: Z) -> String {
 /// A natural constant as source: the numeral it is, at any size
 /// (docs/wide-numerals-design.md). Before numerals were unbounded, a value
 /// past a `u64` was spelled over its top word one byte at a time.
-fn nat_lit(value: Z) -> String {
+pub(crate) fn nat_lit(value: Z) -> String {
     debug_assert!(value >= 0, "a natural constant is nonnegative");
     value.to_string()
 }
@@ -2862,7 +3067,7 @@ fn nat_lit_value(source: &str) -> Option<Z> {
     source.parse::<Z>().ok().filter(|value| *value >= 0)
 }
 
-fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
+pub(crate) fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
     if lower >= upper {
         return Err(format!(
             "Omega cannot prove the false literal order {lower} < {upper}"
@@ -2904,13 +3109,20 @@ fn parent<'a>(
         .ok_or_else(|| format!("Omega certificate parent {id} was not reconstructed"))
 }
 
-fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+/// The first `≠` fact as a two-way split. `cutsat_read_equalities` skips
+/// equation disequalities: CutSat already had them (`Relation::Ne`).
+fn split_disequality(elab: &Elaborator, cx: &Cx, cutsat_read_equalities: bool) -> Result<Option<Certificate>, String> {
     for (name, ty) in local_facts(elab, cx) {
         let Some(domain) = negated_domain(elab, cx, &ty) else {
             continue;
         };
         let decoded = crate::inductive::decoded(&domain);
         let disequality = &name;
+        if cutsat_read_equalities
+            && (equality_args(elab, cx, &decoded).is_some() || nat_equality_args(elab, cx, &decoded).is_some())
+        {
+            continue;
+        }
         let (left, right, disequality, lemma) =
             if let Some((left, right)) = equality_args(elab, cx, &decoded) {
                 (
@@ -2954,6 +3166,7 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
         );
         return Ok(Some(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: OmegaReport {
@@ -2993,6 +3206,7 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
         };
         return Ok(Some(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: OmegaReport {
@@ -3017,450 +3231,461 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
     Ok(None)
 }
 
-#[derive(Clone)]
-struct CutDvdEvidence {
-    divisor: Z,
-    value: String,
-    proof: String,
-}
+/// The prefix of the facts a subtraction split binds: `__omega_sub{k}_case`
+/// (`b <= a` or `a < b`) and `__omega_sub{k}_eq` (`(a - b) + b = a` or
+/// `a - b = 0`), `k` counting the splits already around the goal.
+const SUB_CASE: &str = "__omega_sub";
 
-fn cut_parent_le<'a>(problem: &'a CutProblem, id: usize) -> Result<&'a Affine, String> {
-    match problem.derivations().conclusion(id) {
-        Some(DerivedConstraint::Le(affine)) => Ok(affine),
-        other => Err(format!(
-            "CutSat certificate expected inequality node {id}, got {other:?}"
-        )),
+/// Subtraction splits one goal may sit under: each doubles the branches, and
+/// a case equation whose subtraction no longer spells as it did when split
+/// would otherwise be split again forever.
+const SUB_SPLIT_LIMIT: usize = 6;
+
+/// The truncated subtractions `a - b` at `Nat` that `tm` reads through the
+/// arithmetic around them, outermost first; a binder's body is not entered.
+fn nat_subtractions<'a>(elab: &Elaborator, tm: &'a Rc<Term>, out: &mut Vec<&'a Rc<Term>>) {
+    if let Term::Succ(inner) = &**tm {
+        return nat_subtractions(elab, inner, out);
     }
-}
-
-fn open_cut_dvds(evidence: &[CutDvdEvidence], body: String, depth: usize) -> String {
-    evidence
-        .iter()
-        .enumerate()
-        .rev()
-        .fold(body, |body, (index, dvd)| {
-            format!(
-                "omega::cut_dvd_elim({}, {}, {}, (__cutsat_witness_{depth}_{index}: Int) __cutsat_dvd_eq_{depth}_{index} ⊢ {body})",
-                int(dvd.divisor), dvd.value, dvd.proof,
-            )
-        })
-}
-
-fn collect_cut_les(problem: &CutProblem, roots: &[usize]) -> Vec<usize> {
-    fn visit(problem: &CutProblem, id: usize, seen: &mut [bool]) {
-        if seen[id] {
-            return;
-        }
-        seen[id] = true;
-        for parent in problem.derivations().nodes()[id].parents() {
-            visit(problem, parent, seen);
+    if named_args(elab, tm, "nat::Nat::sub").is_some_and(|args| args.len() == 2) {
+        out.push(tm);
+    }
+    let (head, args) = app_spine(tm);
+    if matches!(head, Term::GlobalTm { .. }) {
+        for arg in args {
+            nat_subtractions(elab, arg, out);
         }
     }
-    let mut seen = vec![false; problem.derivations().nodes().len()];
-    for &root in roots {
-        visit(problem, root, &mut seen);
+}
+
+/// A truncated subtraction `a - b` a fact reads as an atom, split into its two
+/// cases by `omega::nat_sub_elim`, Lean's `omega`'s split: `b <= a` with
+/// `(a - b) + b = a`, or `a < b` with `a - b = 0`. Each branch is `omega`
+/// again with the case's two facts beside the rest, so the subtraction stays
+/// one atom that both now constrain. The fact nearest the goal is asked
+/// first; a subtraction a case equation already names is settled.
+fn split_nat_subtraction(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    if elab.key_of("omega::nat_sub_elim").is_none() {
+        return Ok(None);
     }
-    seen.into_iter()
-        .enumerate()
-        .filter_map(|(id, seen)| {
-            (seen
-                && matches!(
-                    problem.derivations().conclusion(id),
-                    Some(DerivedConstraint::Le(_))
+    let facts = local_facts(elab, cx);
+    let spelled_subtractions = |ty: &Type| {
+        let mut found = Vec::new();
+        if let Some((_, left, right)) = integral_sides(elab, cx, ty) {
+            let mut terms = Vec::new();
+            nat_subtractions(elab, &left, &mut terms);
+            nat_subtractions(elab, &right, &mut terms);
+            found.extend(terms.into_iter().filter_map(|tm| {
+                let args = named_args(elab, tm, "nat::Nat::sub")?;
+                Some((
+                    nat_term_source(elab, cx, tm).ok()?,
+                    nat_term_source(elab, cx, args[0]).ok()?,
+                    nat_term_source(elab, cx, args[1]).ok()?,
                 ))
-            .then_some(id)
-        })
-        .collect()
-}
-
-fn wrap_cut_les(
-    problem: &CutProblem,
-    roots: &[usize],
-    atom_sources: &[String],
-    le_evidence: &[Option<String>],
-    mut body: String,
-) -> Result<String, String> {
-    for id in collect_cut_les(problem, roots)
-        .into_iter()
-        .filter(|id| le_evidence.get(*id).is_none_or(Option::is_none))
-        .rev()
-    {
-        let Some(DerivedConstraint::Le(affine)) = problem.derivations().conclusion(id) else {
-            return Err(format!(
-                "CutSat inequality dependency {id} has no conclusion"
-            ));
+            }));
+        }
+        found
+    };
+    let case_equations: Vec<_> = facts
+        .iter()
+        .filter(|(name, _)| name.starts_with(SUB_CASE) && name.ends_with("_eq"))
+        .collect();
+    if case_equations.len() >= SUB_SPLIT_LIMIT {
+        return Ok(None);
+    }
+    let settled: std::collections::HashSet<String> = case_equations
+        .iter()
+        .filter_map(|(_, ty)| spelled_subtractions(ty).into_iter().next())
+        .map(|(source, _, _)| source)
+        .collect();
+    let k = case_equations.len();
+    for (_, ty) in facts.iter().rev() {
+        let Some((_, minuend, subtrahend)) =
+            spelled_subtractions(ty).into_iter().find(|(source, _, _)| !settled.contains(source))
+        else {
+            continue;
         };
-        let value = affine_source(affine, atom_sources);
-        body = format!(
-            "omega::cutsat_with_le({value}, __cutsat_linear_branch, (__cutsat_le_{id}: {value} <= int::OfNat(0)) ⊢ {body})"
+        let source = format!(
+            "omega::nat_sub_elim({minuend}, {subtrahend}, \
+             {SUB_CASE}{k}_case {SUB_CASE}{k}_eq ⊢ omega, \
+             {SUB_CASE}{k}_case {SUB_CASE}{k}_eq ⊢ omega)",
         );
+        return Ok(Some(Certificate {
+            atoms: None,
+            guards: None,
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("omega::nat_sub_elim", 1),
+        }));
     }
-    Ok(body)
+    Ok(None)
 }
 
-fn cut_le_name(id: usize) -> String {
-    format!("__cutsat_le_{id}")
+/// The names a Bool-guard round binds (`split_bool_guards`): its parts
+/// (`__omega_guard{k}_{i}`, read in the round, never again), the guards it
+/// leaves for the next round (`__omega_open{k}_{i}`), and the facts it binds
+/// at their definition's unfolding (`__omega_unfold{k}_{i}`).
+const GUARD_PART: &str = "__omega_guard";
+const GUARD_OPEN: &str = "__omega_open";
+const GUARD_UNFOLD: &str = "__omega_unfold";
+
+/// Guard rounds one goal may sit under: a round reads every guard in scope,
+/// so another is only for what it left open.
+const GUARD_ROUND_LIMIT: usize = 6;
+
+/// Branches one round's disjunctions may make, `||` proved true and `&&`
+/// proved false; a disjunction past them is left open for the next round,
+/// which only a branch that fails without it reaches.
+const GUARD_BRANCHES: usize = 8;
+
+/// One connective off a Bool guard (`b` in `b.IsTrue()`).
+enum GuardShape<'a> {
+    And(&'a Rc<Term>, &'a Rc<Term>),
+    Or(&'a Rc<Term>, &'a Rc<Term>),
+    Not(&'a Rc<Term>),
+    /// `n.leb(m)`, read as `n <= m`.
+    Leb,
+    /// A variable, a call or a field: the atom `omega::bit(b)`, unless a definition
+    /// unfolds it to a connective (`unfold_guard`).
+    Atom,
+    /// Anything else (a stuck `match`): not read.
+    Other,
 }
 
-fn cut_le_proof_name(id: usize, evidence: &[Option<String>]) -> String {
-    evidence
-        .get(id)
-        .and_then(Option::as_ref)
-        .cloned()
-        .unwrap_or_else(|| cut_le_name(id))
-}
-
-fn hoisted_cut_les(problem: &CutProblem, reachable: &[usize]) -> (Vec<usize>, Vec<Option<String>>) {
-    let mut is_reachable = vec![false; problem.derivations().nodes().len()];
-    for &id in reachable {
-        is_reachable[id] = true;
+fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
+    let args = |name| named_args(elab, b, name);
+    if let Some(args) = args("bool::Bool::and") && let [x, y] = args.as_slice() {
+        return GuardShape::And(x, y);
     }
-    let mut is_static = vec![false; problem.derivations().nodes().len()];
-    let mut canonical: Vec<(Affine, usize)> = Vec::new();
-    let mut roots = Vec::new();
-    let mut evidence = vec![None; problem.derivations().nodes().len()];
-    for (id, node) in problem.derivations().nodes().iter().enumerate() {
-        is_static[id] = match node {
-            CutDerivation::Assumption { .. } => true,
-            CutDerivation::RealProjection { lower, upper } => {
-                is_static[*lower] && is_static[*upper]
+    if let Some(args) = args("bool::Bool::or") && let [x, y] = args.as_slice() {
+        return GuardShape::Or(x, y);
+    }
+    if let Some(args) = args("bool::Bool::not") && let [x] = args.as_slice() {
+        return GuardShape::Not(x);
+    }
+    if args("nat::Nat::leb").is_some_and(|args| args.len() == 2) {
+        return GuardShape::Leb;
+    }
+    match app_spine(b).0 {
+        Term::GlobalTm { .. } | Term::Var(_) => GuardShape::Atom,
+        _ if is_field_read(elab, b) => GuardShape::Atom,
+        _ => GuardShape::Other,
+    }
+}
+
+/// Whether a guard has a connective or a comparison under its negations.
+fn guard_reads_by_structure(elab: &Elaborator, b: &Rc<Term>) -> bool {
+    match guard_shape(elab, b) {
+        GuardShape::Not(x) => guard_reads_by_structure(elab, x),
+        GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Leb => true,
+        GuardShape::Atom | GuardShape::Other => false,
+    }
+}
+
+/// `b` in a fact `b.IsTrue()`.
+fn is_true_arg<'a>(elab: &Elaborator, ty: &'a Type) -> Option<&'a Rc<Term>> {
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    let args = named_args(elab, tm, "bool::Bool::IsTrue")?;
+    let [b] = args.as_slice() else {
+        return None;
+    };
+    Some(b)
+}
+
+/// A guard whose head is a Bool definition, unfolded one reduct at a time to
+/// the first with a connective at its head (`F.canonical(mag, bexp)` through
+/// its `let`s to its `&&` chain), under any negations; `None` when it has one
+/// already or never reaches one. As §11 unfolds a defined proposition.
+fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
+    match guard_shape(elab, b) {
+        GuardShape::Not(x) => Some(with_arg_at(b, 0, &unfold_guard(elab, cx, x)?)),
+        GuardShape::Atom if head_is_global(b) && !is_ctor_value(b) => {
+            let oracle = elab.goal_oracle();
+            oracle.unfold(&cx.gamma, b, Unfold::Proposition).map(Rc::new).find(|reduct| {
+                matches!(
+                    guard_shape(elab, reduct),
+                    GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `(b, v)` for a fact `b = True` (`v`) or `b = False` at `Bool`: what a
+/// `match h: n.leb(m) { … }` arm binds, read as the guard `b.IsTrue()` or
+/// `(!b).IsTrue()` (issues/decreases-measure-record-field-unspelled.md).
+/// A side that is itself a literal is no guard.
+fn bool_equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(Rc<Term>, bool)> {
+    let decoded = crate::inductive::decoded(ty);
+    let Type::Id { ty, lhs, rhs, .. } = &*decoded else {
+        return None;
+    };
+    if elab.display_type(cx, ty) != "Bool" {
+        return None;
+    }
+    let literal = |t: &Term| match elab.spell_term_clean(cx, t).as_deref() {
+        Some("True") => Some(true),
+        Some("False") => Some(false),
+        _ => None,
+    };
+    if literal(lhs).is_some() {
+        return None;
+    }
+    Some((Rc::clone(lhs), literal(rhs)?))
+}
+
+/// A guard a round reads: `evidence` proves `term.IsTrue()` when `positive`
+/// and `(!term).IsTrue()` otherwise; `negated` evidence proves
+/// `¬term.IsTrue()` instead.
+#[derive(Clone)]
+struct GuardItem {
+    evidence: String,
+    term: Rc<Term>,
+    positive: bool,
+    negated: bool,
+    /// `evidence` is the equation `term = True` (`positive`) or
+    /// `term = False`, what a `match h: b { … }` arm binds.
+    equation: bool,
+}
+
+struct GuardEmitter<'a> {
+    elab: &'a Elaborator,
+    cx: &'a Cx,
+    round: usize,
+    fresh: usize,
+    rules: Vec<&'static str>,
+}
+
+impl GuardEmitter<'_> {
+    fn name(&mut self, prefix: &str) -> String {
+        let name = format!("{prefix}{}_{}", self.round, self.fresh);
+        self.fresh += 1;
+        name
+    }
+
+    fn rule(&mut self, rule: &'static str) -> &'static str {
+        if !self.rules.contains(&rule) {
+            self.rules.push(rule);
+        }
+        rule
+    }
+
+    fn item(evidence: &str, term: &Rc<Term>, positive: bool) -> GuardItem {
+        GuardItem { evidence: evidence.to_string(), term: Rc::clone(term), positive, negated: false, equation: false }
+    }
+
+    /// The guards in `items`, the first taken apart and the rest after it,
+    /// as one source term that ends in `omega` at every branch; at most
+    /// `budget` branches.
+    fn emit(&mut self, mut items: Vec<GuardItem>, budget: usize) -> String {
+        if items.is_empty() {
+            return "omega".to_string();
+        }
+        let item = items.remove(0);
+        let h = item.evidence.clone();
+        let then = |front: Vec<GuardItem>, rest: &[GuardItem]| front.into_iter().chain(rest.iter().cloned()).collect::<Vec<_>>();
+        if item.equation {
+            let x = self.name(GUARD_PART);
+            let body = self.emit(then(vec![Self::item(&x, &item.term, item.positive)], &items), budget);
+            let rule = if item.positive { "omega::guard_eq_true" } else { "omega::guard_eq_false" };
+            return format!("{}({h}, {x} ⊢ {body})", self.rule(rule));
+        }
+        if item.negated {
+            let x = self.name(GUARD_PART);
+            let body = self.emit(then(vec![Self::item(&x, &item.term, false)], &items), budget);
+            return format!("{}({h}, {x} ⊢ {body})", self.rule("omega::guard_negated"));
+        }
+        match (item.positive, guard_shape(self.elab, &item.term)) {
+            (true, GuardShape::And(a, b)) => {
+                let (x, y) = (self.name(GUARD_PART), self.name(GUARD_PART));
+                let body = self.emit(then(vec![Self::item(&x, a, true), Self::item(&y, b, true)], &items), budget);
+                format!("{}({h}, {x} {y} ⊢ {body})", self.rule("omega::guard_and"))
             }
-            _ => false,
-        };
-        if !is_reachable[id] || !is_static[id] {
+            (false, GuardShape::Or(a, b)) => {
+                let (x, y) = (self.name(GUARD_PART), self.name(GUARD_PART));
+                let body = self.emit(then(vec![Self::item(&x, a, false), Self::item(&y, b, false)], &items), budget);
+                format!("{}({h}, {x} {y} ⊢ {body})", self.rule("omega::guard_nor"))
+            }
+            (positive, GuardShape::Or(a, b) | GuardShape::And(a, b)) if budget >= 2 => {
+                let (x, y) = (self.name(GUARD_PART), self.name(GUARD_PART));
+                let left = self.emit(then(vec![Self::item(&x, a, positive)], &items), budget / 2);
+                let right = self.emit(then(vec![Self::item(&y, b, positive)], &items), budget / 2);
+                let rule = if positive { "omega::guard_or" } else { "omega::guard_nand" };
+                format!("{}({h}, {x} ⊢ {left}, {y} ⊢ {right})", self.rule(rule))
+            }
+            (true, GuardShape::Not(a)) => {
+                self.emit(then(vec![Self::item(&h, a, false)], &items), budget)
+            }
+            (false, GuardShape::Not(a)) => {
+                let x = self.name(GUARD_PART);
+                let body = self.emit(then(vec![Self::item(&x, a, true)], &items), budget);
+                format!("{}({h}, {x} ⊢ {body})", self.rule("omega::guard_not_not"))
+            }
+            (positive, GuardShape::Leb) => {
+                let x = self.name(GUARD_PART);
+                let body = self.emit(items, budget);
+                let rule = if positive { "omega::guard_leb" } else { "omega::guard_not_leb" };
+                format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
+            }
+            (positive, GuardShape::Atom) if unfold_guard(self.elab, self.cx, &item.term).is_none() => {
+                let x = self.name(GUARD_PART);
+                let body = self.emit(items, budget);
+                let rule = if positive { "omega::guard_bit" } else { "omega::guard_not_bit" };
+                format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
+            }
+            // A disjunction past the budget, or a definition to unfold: the
+            // next round reads it, where it is a fact in scope.
+            (_, GuardShape::Or(..) | GuardShape::And(..) | GuardShape::Atom) => {
+                let x = self.name(GUARD_OPEN);
+                let body = self.emit(items, budget);
+                format!("{}({h}, {x} ⊢ {body})", self.rule("omega::guard_open"))
+            }
+            (_, GuardShape::Other) => self.emit(items, budget),
+        }
+    }
+}
+
+/// The Bool guards among the facts, read by their structure
+/// (issues/omega-reads-bool-guards.md, design §17): a fact `b.IsTrue()` or
+/// `¬b.IsTrue()` is taken apart by the `omega::guard_*` rules, `&&` into
+/// both sides, `||` into two branches, `!` by its operand's opposite rule,
+/// `n.leb(m)` into `n <= m` (`!n.leb(m)` into `m < n`), and any other Bool
+/// into the atom `bit(b)`, `1` or `0`. A guard whose head is a definition is
+/// read at its unfolding, a fact bound beside the original
+/// (`GuardRound::aliases`). Every guard in scope is read in one round, ending
+/// in `omega` at each branch; the facts it reads are settled for the omegas
+/// inside it, and what it leaves open is the next round's. A round is
+/// written only when some guard has a connective or a comparison to read:
+/// a context of bare Bool atoms is left as it was.
+fn split_bool_guards(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    if elab.key_of("omega::guard_and").is_none() {
+        return Ok(None);
+    }
+    let (round, settled) = {
+        let rounds = elab.scope.omega_settled_guards.borrow();
+        let settled: std::collections::HashSet<String> = rounds.iter().flatten().cloned().collect();
+        (rounds.len(), settled)
+    };
+    if round >= GUARD_ROUND_LIMIT {
+        return Ok(None);
+    }
+    let mut items = Vec::new();
+    let mut aliases = Vec::new();
+    let mut settles = Vec::new();
+    let mut readable = false;
+    for fact in local_fact_entries(elab, cx) {
+        if fact.name.starts_with(GUARD_PART) || fact.name.starts_with(GUARD_UNFOLD) || settled.contains(&fact.name) {
             continue;
         }
-        let Some(DerivedConstraint::Le(affine)) = problem.derivations().conclusion(id) else {
-            continue;
-        };
-        let canonical_id = canonical
-            .iter()
-            .find_map(|(old, old_id)| (old == affine).then_some(*old_id))
-            .unwrap_or_else(|| {
-                canonical.push((affine.clone(), id));
-                roots.push(id);
-                id
-            });
-        evidence[id] = Some(cut_le_name(canonical_id));
-    }
-    (roots, evidence)
-}
-
-fn cut_nat_case_proof(split_id: usize, case: usize) -> String {
-    let mut proof = format!("__cutsat_nat_eq_{split_id}_{case}");
-    for index in (0..case).rev() {
-        proof = format!("trans(__cutsat_nat_eq_{split_id}_{index}, cong_nat(Succ, {proof}))");
-    }
-    proof
-}
-
-fn reconstruct_cut_node(
-    problem: &CutProblem,
-    id: usize,
-    atoms_source: &str,
-    atom_labels: &[String],
-    le_evidence: &[Option<String>],
-    dvd_evidence: &[Option<CutDvdEvidence>],
-    depth: usize,
-) -> Result<String, String> {
-    let node = problem
-        .derivations()
-        .nodes()
-        .get(id)
-        .ok_or_else(|| format!("CutSat certificate references absent node {id}"))?;
-    match node {
-        CutDerivation::ConstantInequality { constraint } => wrap_cut_les(
-            problem,
-            &[*constraint],
-            atom_labels,
-            le_evidence,
-            "__cutsat_linear_branch".into(),
-        ),
-        CutDerivation::ConstantDivisibility { constraint } => {
-            let dvd = dvd_evidence
-                .get(*constraint)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| {
-                    format!("CutSat constant divisibility node {constraint} has no evidence")
-                })?;
-            Ok(open_cut_dvds(
-                &[dvd.clone()],
-                "__cutsat_linear_branch".into(),
-                depth,
-            ))
-        }
-        CutDerivation::BoundDivisibilityConflict {
-            lower,
-            upper,
-            divisibility,
-            ..
-        } => {
-            let dvd = dvd_evidence
-                .get(*divisibility)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| {
-                    format!("CutSat bound conflict node {divisibility} has no evidence")
-                })?;
-            wrap_cut_les(
-                problem,
-                &[*lower, *upper],
-                atom_labels,
-                le_evidence,
-                open_cut_dvds(&[dvd.clone()], "__cutsat_linear_branch".into(), depth),
-            )
-        }
-        CutDerivation::DivisibilityConflict { left, right } => {
-            let left = dvd_evidence
-                .get(*left)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| format!("CutSat divisibility node {left} has no evidence"))?;
-            let right = dvd_evidence
-                .get(*right)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| format!("CutSat divisibility node {right} has no evidence"))?;
-            Ok(open_cut_dvds(
-                &[left.clone(), right.clone()],
-                "__cutsat_linear_branch".into(),
-                depth,
-            ))
-        }
-        CutDerivation::CombinedCongruenceBoundConflict {
-            lower,
-            upper,
-            divisibility,
-        } => {
-            let evidence = divisibility
-                .iter()
-                .map(|id| {
-                    dvd_evidence
-                        .get(*id)
-                        .and_then(Option::as_ref)
-                        .cloned()
-                        .ok_or_else(|| {
-                            format!("CutSat combined conflict node {id} has no evidence")
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            wrap_cut_les(
-                problem,
-                &[*lower, *upper],
-                atom_labels,
-                le_evidence,
-                open_cut_dvds(&evidence, "__cutsat_linear_branch".into(), depth),
-            )
-        }
-        CutDerivation::CooperCase { contradiction, .. } => reconstruct_cut_node(
-            problem,
-            *contradiction,
-            atoms_source,
-            atom_labels,
-            le_evidence,
-            dvd_evidence,
-            depth,
-        ),
-        CutDerivation::CooperExhausted { cases } => {
-            let Some(&first_case) = cases.first() else {
-                return Err("CutSat produced an empty Cooper split".into());
-            };
-            let CutDerivation::CooperCase {
-                inequality: first_cut,
-                divisibilities: first_dvds,
-                ..
-            } = &problem.derivations().nodes()[first_case]
-            else {
-                return Err("CutSat Cooper split does not point at case nodes".into());
-            };
-            if first_dvds.len() > 1 {
-                return Err("CutSat reconstruction does not yet replay Cooper with an existing divisibility constraint".into());
-            }
-            let CutDerivation::CooperInequality {
-                lower,
-                upper,
-                divisibility: None,
-                ..
-            } = &problem.derivations().nodes()[*first_cut]
-            else {
-                return Err("CutSat reconstruction currently expects a simple Cooper split".into());
-            };
-            let lower_affine = cut_parent_le(problem, *lower)?;
-            let upper_affine = cut_parent_le(problem, *upper)?;
-            let variable = lower_affine
-                .coeffs
-                .as_slice()
-                .iter()
-                .rposition(|coefficient| *coefficient != 0)
-                .ok_or("CutSat Cooper lower bound has no variable")?;
-            let a = lower_affine.coeffs.get(variable);
-            let b = upper_affine.coeffs.get(variable);
-            if a >= 0 || b <= 0 {
-                return Err("CutSat Cooper parents are not opposing bounds".into());
-            }
-            let left = a
-                .checked_abs()
-                .ok_or("CutSat coefficient magnitude overflowed")?
-                < b;
-            let selected = if left { a } else { b };
-            let selected_tail = if left { lower_affine } else { upper_affine };
-            let mut tail = selected_tail.clone();
-            tail.coeffs = tail.coeffs.with_coefficient(variable, 0);
-            let x = atom_labels
-                .get(variable)
-                .ok_or_else(|| format!("CutSat has no source for atom {variable}"))?;
-            let p = {
-                let mut p = lower_affine.clone();
-                p.coeffs = p.coeffs.with_coefficient(variable, 0);
-                affine_source(&p, atom_labels)
-            };
-            let q = {
-                let mut q = upper_affine.clone();
-                q.coeffs = q.coeffs.with_coefficient(variable, 0);
-                affine_source(&q, atom_labels)
-            };
-            let remainder_name = format!("__cutsat_remainder_{id}");
-            let k_name = format!("__cutsat_k_{id}");
-            let cut_name = format!("__cutsat_cut_{id}");
-            let dvd_name = format!("__cutsat_dvd_{id}");
-            let mut branches = Vec::with_capacity(cases.len());
-            let mut branch_bindings = Vec::with_capacity(cases.len());
-            for (case_index, &case_id) in cases.iter().enumerate() {
-                let CutDerivation::CooperCase {
-                    inequality,
-                    divisibilities,
-                    contradiction,
-                } = &problem.derivations().nodes()[case_id]
-                else {
-                    return Err("CutSat Cooper split contains a non-case root".into());
-                };
-                let CutDerivation::CooperInequality {
-                    lower: case_lower,
-                    upper: case_upper,
-                    divisibility: None,
-                    case,
-                } = &problem.derivations().nodes()[*inequality]
-                else {
-                    return Err("CutSat reconstruction found a non-simple Cooper case".into());
-                };
-                if *case_lower != *lower
-                    || *case_upper != *upper
-                    || *case != case_index as Z
-                    || divisibilities.len() > 1
-                {
-                    return Err(
-                        "CutSat Cooper cases are not a deterministic contiguous split".into(),
-                    );
-                }
-                let mut branch_evidence = dvd_evidence.to_vec();
-                let mut branch_le_evidence = le_evidence.to_vec();
-                branch_le_evidence[*inequality] = Some(cut_name.clone());
-                if let Some(&dvd_id) = divisibilities.first() {
-                    let value = format!(
-                        "int::Int::add({}, {remainder_name})",
-                        affine_source(&tail, atom_labels),
-                    );
-                    branch_evidence[dvd_id] = Some(CutDvdEvidence {
-                        divisor: selected,
-                        value,
-                        proof: dvd_name.clone(),
+        if let Some(b) = is_true_arg(elab, &fact.ty) {
+            let (evidence, b) = match unfold_guard(elab, cx, b) {
+                Some(unfolded) => {
+                    let Type::El { level, tm } = &fact.ty else { unreachable!() };
+                    let name = format!("{GUARD_UNFOLD}{round}_{}", aliases.len());
+                    aliases.push(GuardAlias {
+                        name: name.clone(),
+                        term: Rc::clone(&fact.term),
+                        ty: Type::El { level: level.clone(), tm: with_arg_at(tm, 0, &unfolded) },
+                        level: fact.level.clone(),
                     });
+                    (name, unfolded)
                 }
-                let branch = reconstruct_cut_node(
-                    problem,
-                    *contradiction,
-                    atoms_source,
-                    atom_labels,
-                    &branch_le_evidence,
-                    &branch_evidence,
-                    depth + 1,
-                )?;
-                let remainder_value = int(case_index as Z);
-                let remainder_proof = format!(
-                    "trans(__cutsat_int_eq_{id}, int::Int::cong_ofnat({}))",
-                    cut_nat_case_proof(id, case_index),
-                );
-                let close_name = format!("__cutsat_close_{id}_{case_index}");
-                branch_bindings.push(format!(
-                    "let {close_name}: ({remainder_name} = {remainder_value}) → logic::False = (__cutsat_remainder_value_{id}_{case_index}: {remainder_name} = {remainder_value}) ⊢ {branch};"
-                ));
-                branches.push(format!(
-                    "omega::cutsat_with_eq({remainder_name}, {remainder_value}, {remainder_proof}, {close_name})"
-                ));
-            }
-            let mut matched = "__cutsat_linear_branch".to_string();
-            for (case_index, branch) in branches.into_iter().enumerate().rev() {
-                let scrutinee = if case_index == 0 {
-                    k_name.clone()
-                } else {
-                    format!("__cutsat_rest_{id}_{}", case_index - 1)
-                };
-                let rest = format!("__cutsat_rest_{id}_{case_index}");
-                matched = format!(
-                    "match __cutsat_nat_eq_{id}_{case_index} : {scrutinee} {{ Zero => {branch}, Succ({rest}) => {matched}, }}"
-                );
-            }
-            matched = format!(
-                "match __cutsat_int_eq_{id} : {remainder_name} {{ int::NegSucc(__cutsat_negative_{id}) => omega::cutsat_negative_remainder({remainder_name}, __cutsat_negative_{id}, __cutsat_int_eq_{id}, __cutsat_nonnegative_{id}), int::OfNat({k_name}) => {matched}, }}"
-            );
-            matched = format!("{{ {} {matched} }}", branch_bindings.join(" "));
-            let lemma = if left {
-                "omega::cutsat_cooper_left"
-            } else {
-                "omega::cutsat_cooper_right"
+                None => (fact.name.clone(), Rc::clone(b)),
             };
-            let a_pred = a
-                .checked_abs()
-                .and_then(|value| value.checked_sub(1))
-                .ok_or("CutSat left coefficient predecessor overflowed")?;
-            let b_pred = b
-                .checked_sub(1)
-                .ok_or("CutSat right coefficient predecessor overflowed")?;
-            wrap_cut_les(
-                problem,
-                &[*lower, *upper],
-                atom_labels,
-                le_evidence,
-                format!(
-                    "{lemma}({a_pred}, {b_pred}, {x}, {p}, {q}, {}, {}, ({remainder_name}: Int) __cutsat_nonnegative_{id} __cutsat_bound_{id} {cut_name} {dvd_name} ⊢ {matched})",
-                    cut_le_proof_name(*lower, le_evidence),
-                    cut_le_proof_name(*upper, le_evidence),
-                ),
-            )
+            readable |= guard_reads_by_structure(elab, &b);
+            items.push(GuardItem { evidence, term: b, positive: true, negated: false, equation: false });
+            settles.push(fact.name);
+        } else if let Some(domain) = negated_domain(elab, cx, &fact.ty)
+            && let Some(b) = is_true_arg(elab, &domain)
+        {
+            readable |= guard_reads_by_structure(elab, b) || unfold_guard(elab, cx, b).is_some();
+            items.push(GuardItem { evidence: fact.name.clone(), term: Rc::clone(b), positive: false, negated: true, equation: false });
+            settles.push(fact.name);
+        } else if let Some((b, value)) = bool_equation(elab, cx, &fact.ty) {
+            readable |= guard_reads_by_structure(elab, &b) || unfold_guard(elab, cx, &b).is_some();
+            items.push(GuardItem { evidence: fact.name.clone(), term: b, positive: value, negated: false, equation: true });
+            settles.push(fact.name);
         }
-        unsupported => Err(format!(
-            "CutSat proof reconstruction does not yet support derivation {unsupported:?}"
-        )),
     }
+    // Bare atoms alone: one fact `r.IsTrue()` beside `¬r.IsTrue()` still
+    // meets as `bit(r)`; a single one has nothing to meet.
+    if !readable && items.len() < 2 {
+        return Ok(None);
+    }
+    let mut emitter = GuardEmitter { elab, cx, round, fresh: 0, rules: Vec::new() };
+    let source = emitter.emit(items, GUARD_BRANCHES);
+    let mut report = wrapper_report("omega::guard_and", 0);
+    report.used_lemmas = emitter.rules;
+    Ok(Some(Certificate {
+        atoms: None,
+        guards: Some(GuardRound { aliases, settles }),
+        expr: parse_generated_expr(&source)?,
+        source,
+        report,
+    }))
 }
 
+/// What CutSat said about a reflection Omega's real shadow left satisfiable.
+enum CutAnswer {
+    /// The certificate source, its reachable and total node counts, and the
+    /// search's stats.
+    Certificate(String, usize, usize, crate::cutsat::Stats),
+    /// An integer point satisfying every reflected fact, `≠` included.
+    Model(Vec<Z>),
+    /// A budget ran out.
+    Unknown,
+}
+
+/// CutSat over the facts Omega reflected, when Omega's real shadow left
+/// them satisfiable: each fact's bounds become `p <= 0` rows, and each `≠`
+/// fact a `p ≠ 0` row, whose proofs are the reflection's own; a
+/// contradiction comes back as CutSat's certificate (`cutsat_cert`).
 fn reconstruct_cutsat(
     reflected: &[InitialAssumption],
     atoms_source: &str,
-    atom_sources: &[String],
-) -> Result<Option<(String, usize, usize, crate::cutsat::Stats)>, String> {
+    atom_count: usize,
+) -> Result<CutAnswer, String> {
     let mut problem = CutProblem::new();
+    let mut proofs = Vec::new();
     for fact in reflected {
         let row = Affine {
             constant: 0,
             coeffs: AffineCoeffs::new(fact.coeffs.as_slice().to_vec()),
         };
-        if let Some(value) = fact
-            .interval
-            .lower
-            .filter(|value| fact.interval.upper == Some(*value))
-        {
+        if let Some(proof) = &fact.disequality {
+            let value = fact.interval.upper.ok_or("CutSat: a reflected disequality has no value")?;
             problem
-                .assume(row, Relation::Eq, Affine::constant(value))
+                .assume_ne(row.checked_sub(&Affine::constant(value)).map_err(|f| f.to_string())?, proofs.len())
                 .map_err(|failure| failure.to_string())?;
-        } else {
-            if let Some(lower) = fact.interval.lower {
-                problem
-                    .assume(Affine::constant(lower), Relation::Le, row.clone())
-                    .map_err(|failure| failure.to_string())?;
-            }
-            if let Some(upper) = fact.interval.upper {
-                problem
-                    .assume(row.clone(), Relation::Le, Affine::constant(upper))
-                    .map_err(|failure| failure.to_string())?;
-            }
+            proofs.push(proof.clone());
+            continue;
+        }
+        if let Some(upper) = fact.interval.upper {
+            let proof = fact
+                .upper
+                .clone()
+                .ok_or("CutSat: a reflected upper bound has no proof")?;
+            problem
+                .assume_le(row.checked_sub(&Affine::constant(upper)).map_err(|f| f.to_string())?, proofs.len())
+                .map_err(|failure| failure.to_string())?;
+            proofs.push(proof);
+        }
+        if let Some(lower) = fact.interval.lower {
+            let proof = fact
+                .lower
+                .as_ref()
+                .ok_or("CutSat: a reflected lower bound has no proof")?;
+            problem
+                .assume_le(Affine::constant(lower).checked_sub(&row).map_err(|f| f.to_string())?, proofs.len())
+                .map_err(|failure| failure.to_string())?;
+            proofs.push(format!(
+                "omega::lower_to_negated_upper({}, {atoms_source}, {}, {proof})",
+                fact.row_source,
+                int(lower),
+            ));
         }
     }
     let (problem, outcome) = timed(
@@ -3469,42 +3694,22 @@ fn reconstruct_cutsat(
         || problem.solve(CutLimits::default()),
     )
     .map_err(|failure| failure.to_string())?;
-    let CutOutcome::Contradiction {
-        root,
-        reachable,
-        stats,
-    } = outcome
-    else {
-        return Ok(None);
+    let (root, reachable, stats) = match outcome {
+        CutOutcome::Contradiction { root, reachable, stats } => (root, reachable, stats),
+        CutOutcome::Model { values, .. } => return Ok(CutAnswer::Model(values)),
+        CutOutcome::ResourceLimit { .. } => return Ok(CutAnswer::Unknown),
     };
     let render_started = std::time::Instant::now();
-    let (hoisted_roots, le_evidence) = hoisted_cut_les(&problem, &reachable);
-    let evidence = vec![None; problem.derivations().nodes().len()];
-    let body = reconstruct_cut_node(
-        &problem,
-        root,
-        atoms_source,
-        atom_sources,
-        &le_evidence,
-        &evidence,
-        0,
-    )?;
-    let source = wrap_cut_les(
-        &problem,
-        &hoisted_roots,
-        atom_sources,
-        &vec![None; problem.derivations().nodes().len()],
-        body,
-    )?;
+    let source = crate::cutsat_cert::certificate(problem.derivations(), root, &reachable, &proofs, atom_count, atoms_source)?;
     let render_ns = render_started.elapsed().as_nanos() as u64;
     crate::stats::add(crate::stats::Timer::OmegaRender, render_ns);
     add_phase(|p| &mut p.render_ns, render_ns);
-    Ok(Some((
+    Ok(CutAnswer::Certificate(
         source,
         reachable.len(),
         problem.derivations().nodes().len(),
         stats,
-    )))
+    ))
 }
 
 pub(crate) fn reconstruct(
@@ -3523,6 +3728,7 @@ pub(crate) fn reconstruct(
         let source = "logic::And(left := omega, right := omega)".to_string();
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("logic::And", 0),
@@ -3538,6 +3744,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_antisym", 0),
@@ -3550,6 +3757,7 @@ pub(crate) fn reconstruct(
         let source = format!("nat::Nat::le_antisym({}, 0, omega, omega)", remainder);
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("nat::Nat::le_antisym", 0),
@@ -3566,6 +3774,7 @@ pub(crate) fn reconstruct(
         let source = format!("int::Int::le_antisym({}, {}, omega, omega)", left, right);
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_antisym", 0),
@@ -3579,6 +3788,7 @@ pub(crate) fn reconstruct(
         let source = format!("nat::Nat::le_antisym({}, {}, omega, omega)", left, right);
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("nat::Nat::le_antisym", 0),
@@ -3593,6 +3803,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::lt_of_not_le", 0),
@@ -3611,6 +3822,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("int::Int::le_of_not_lt", 0),
@@ -3625,6 +3837,7 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("omega::nat_lt_of_not_not_lt", 0),
@@ -3639,9 +3852,24 @@ pub(crate) fn reconstruct(
         );
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr: parse_generated_expr(&source)?,
             source,
             report: wrapper_report("omega::nat_le_of_not_not_le", 0),
+        });
+    }
+    // A negated relation (`¬(a <= b)`, `a ≠ b`): assume it and refute the
+    // assumption, which the recursive invocation reads as a context fact.
+    if let Some(domain) = negated_domain(elab, cx, expected)
+        && (reads_as_relation(elab, cx, &domain) || is_true_arg(elab, &domain).is_some())
+    {
+        let source = "λ __omega_assumed => omega".to_string();
+        return Ok(Certificate {
+            atoms: None,
+            guards: None,
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("λ", 0),
         });
     }
     if elab.display_type(cx, expected) != "False" {
@@ -3652,11 +3880,12 @@ pub(crate) fn reconstruct(
         // would unfold `Le` itself into its recursor. `True` closes outright.
         if let Type::El { level, tm } = expected {
             let oracle = elab.goal_oracle();
-            for reduct in oracle.term_reducts(&cx.gamma, tm, 64) {
+            for reduct in oracle.unfold(&cx.gamma, tm, Unfold::Proposition) {
                 if matches!(&reduct, Term::TmUnit { .. }) {
                     let source = "trivial".to_string();
                     return Ok(Certificate {
                         atoms: None,
+                        guards: None,
                         expr: parse_generated_expr(&source)?,
                         source,
                         report: wrapper_report("trivial", 0),
@@ -3675,6 +3904,18 @@ pub(crate) fn reconstruct(
                     return reconstruct(elab, cx, &unfolded, allow_disequality_split, allow_connective_split, allow_cutsat);
                 }
             }
+        }
+        // A guard goal that does not compute to a verdict: assume its
+        // negation, which a guard round reads as a fact.
+        if is_true_arg(elab, expected).is_some() && elab.key_of("omega::guard_goal").is_some() {
+            let source = "omega::guard_goal(__omega_negated_goal ⊢ omega)".to_string();
+            return Ok(Certificate {
+                atoms: None,
+                guards: None,
+                expr: parse_generated_expr(&source)?,
+                source,
+                report: wrapper_report("omega::guard_goal", 0),
+            });
         }
         return Err(format!(
             "Omega currently expects `False` or an affine `Int`/`Nat` relation goal, got `{}`",
@@ -3719,7 +3960,10 @@ pub(crate) fn reconstruct(
                 }
             }
             let Some(first) = explicit.first() else {
-                if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx)? {
+                if let Some(certificate) = split_bool_guards(elab, cx)? {
+                    return Ok(certificate);
+                }
+                if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx, false)? {
                     return Ok(certificate);
                 }
                 if allow_connective_split && let Some(certificate) = split_connective(elab, cx)? {
@@ -3749,6 +3993,7 @@ pub(crate) fn reconstruct(
                     lower: fact.interval.lower.map(|_| fact.name.clone()),
                     upper: fact.interval.upper.map(|_| fact.name),
                     exact: None,
+                    disequality: None,
                 })
                 .collect();
             let atom_count = reflected_atom_count(&facts);
@@ -3794,7 +4039,7 @@ fn refute_spelled(
         .map(|fact| format!("{:?} {:?}", fact.coeffs, fact.interval))
         .collect::<Vec<_>>()
         .join(", ");
-    for fact in &reflected {
+    for fact in reflected.iter().filter(|fact| fact.disequality.is_none()) {
         problem
             .assume(fact.coeffs.as_slice().to_vec(), fact.interval)
             .map_err(|failure| failure.to_string())?;
@@ -3810,16 +4055,22 @@ fn refute_spelled(
         let Outcome::NoContradiction { residual, stats } = &outcome else {
             unreachable!()
         };
-        if allow_cutsat
-            && let Some(cut_atom_sources) = cut_atom_sources.as_deref()
-            && let Some((source, cut_reachable, cut_total, cut_stats)) =
-                reconstruct_cutsat(&reflected, &atoms_source, cut_atom_sources)?
-        {
+        let cut_answer = if allow_cutsat && cut_atom_sources.is_some() {
+            reconstruct_cutsat(&reflected, &atoms_source, atom_count)?
+        } else {
+            CutAnswer::Unknown
+        };
+        let cut_model = match &cut_answer {
+            CutAnswer::Model(values) => Some(values.clone()),
+            _ => None,
+        };
+        if let CutAnswer::Certificate(source, cut_reachable, cut_total, cut_stats) = cut_answer {
             let expr = parse_generated_expr(&source)
                 .map_err(|error| format!("{error}\n  generated CutSat source: {source}"))?;
             let used_lemmas = reconstruction_lemmas(&source);
             return Ok(Certificate {
                 atoms: None,
+                guards: None,
                 expr,
                 source,
                 report: OmegaReport {
@@ -3842,10 +4093,26 @@ fn refute_spelled(
                 },
             });
         }
-        if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx)? {
+        // Bool guards first, and only in the attempt that answers: a round
+        // reads every guard at once, and the splits below read its parts
+        // inside it.
+        if record_failure && let Some(certificate) = split_bool_guards(elab, cx)? {
+            return Ok(certificate);
+        }
+        // A CutSat model already satisfies every `=`/`≠` it was given, so
+        // splitting one of those would only re-find it; other disequality
+        // shapes (`¬(d ∣ e)`) still split.
+        if allow_disequality_split
+            && let Some(certificate) = split_disequality(elab, cx, cut_model.is_some())?
+        {
             return Ok(certificate);
         }
         if allow_connective_split && let Some(certificate) = split_connective(elab, cx)? {
+            return Ok(certificate);
+        }
+        // Last, so a goal that closes today closes as it did; and only in the
+        // attempt that answers, since its branches read every fact anyway.
+        if record_failure && let Some(certificate) = split_nat_subtraction(elab, cx)? {
             return Ok(certificate);
         }
         let local_types = local_facts(elab, cx)
@@ -3889,8 +4156,19 @@ fn refute_spelled(
                 phases: OmegaPhases::default(),
             });
         }
+        let model_display = cut_model
+            .map(|values| {
+                let point = atom_labels
+                    .iter()
+                    .zip(values.iter().chain(std::iter::repeat(&0)))
+                    .map(|(atom, value)| format!("{atom} = {value}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("; CutSat's integer model [{point}]")
+            })
+            .unwrap_or_default();
         return Err(format!(
-            "Omega's real shadow found no contradiction; atoms [{}]; residual [{residual_display}]; locals [{local_types}]; reflected [{reflected_debug}]",
+            "Omega's real shadow found no contradiction{model_display}; atoms [{}]; residual [{residual_display}]; locals [{local_types}]; reflected [{reflected_debug}]",
             atom_labels.join(", "),
         ));
     };
@@ -4856,6 +5134,7 @@ fn refute_spelled(
         let used_lemmas = reconstruction_lemmas(&source);
         return Ok(Certificate {
             atoms: None,
+            guards: None,
             expr,
             source,
             report: OmegaReport {
@@ -4926,6 +5205,7 @@ fn refute_spelled(
     let used_lemmas = reconstruction_lemmas(&source);
     Ok(Certificate {
         atoms: None,
+        guards: None,
         expr,
         source,
         report: OmegaReport {
@@ -5020,59 +5300,37 @@ mod tests {
     }
 
     #[test]
-    fn pugh_certificate_hoists_branch_invariant_inequalities() {
-        fn row(coefficients: &[Z]) -> Affine {
-            Affine {
-                constant: 0,
-                coeffs: AffineCoeffs::new(coefficients.to_vec()),
-            }
-        }
-
-        fn interval(problem: &mut CutProblem, coefficients: &[Z], lower: Z, upper: Z) {
-            let row = row(coefficients);
-            problem
-                .assume(Affine::constant(lower), Relation::Le, row.clone())
-                .unwrap();
-            problem
-                .assume(row, Relation::Le, Affine::constant(upper))
-                .unwrap();
-        }
-
+    fn pugh_certificate_writes_each_reachable_node_once() {
         let mut problem = CutProblem::new();
-        interval(&mut problem, &[11, 13], 27, 45);
-        interval(&mut problem, &[7, -9], -10, 4);
-        interval(&mut problem, &[1, 0], -16, 16);
-        interval(&mut problem, &[0, 1], -16, 16);
+        let mut proofs = Vec::new();
+        for (coefficients, lower, upper) in [
+            (vec![11, 13], 27, 45),
+            (vec![7, -9], -10, 4),
+            (vec![1, 0], -16, 16),
+            (vec![0, 1], -16, 16),
+        ] {
+            let row = Affine {
+                constant: 0,
+                coeffs: AffineCoeffs::new(coefficients),
+            };
+            problem
+                .assume_le(Affine::constant(lower).checked_sub(&row).unwrap(), proofs.len())
+                .unwrap();
+            proofs.push(format!("__pugh_{}", proofs.len()));
+            problem
+                .assume_le(row.checked_sub(&Affine::constant(upper)).unwrap(), proofs.len())
+                .unwrap();
+            proofs.push(format!("__pugh_{}", proofs.len()));
+        }
         let (problem, outcome) = problem.solve(CutLimits::default()).unwrap();
-        let CutOutcome::Contradiction {
-            root, reachable, ..
-        } = outcome
-        else {
+        let CutOutcome::Contradiction { root, reachable, .. } = outcome else {
             panic!("Pugh system did not contradict")
         };
-        let (hoisted_roots, le_evidence) = hoisted_cut_les(&problem, &reachable);
-        let body = reconstruct_cut_node(
-            &problem,
-            root,
-            "atoms(x, y)",
-            &["x".into(), "y".into()],
-            &le_evidence,
-            &vec![None; problem.derivations().nodes().len()],
-            0,
-        )
-        .unwrap();
-        let source = wrap_cut_les(
-            &problem,
-            &hoisted_roots,
-            &["x".into(), "y".into()],
-            &vec![None; problem.derivations().nodes().len()],
-            body,
-        )
-        .unwrap();
-        // Includes module-qualified dependency names in the generated source.
-        assert_eq!(source.len(), 18_193);
-        assert_eq!(source.matches("__cutsat_linear_branch").count(), 28);
-        assert_eq!(source.matches("omega::cutsat_with_le").count(), 9);
-        assert_eq!(source.matches("let __cutsat_close_").count(), 18);
+        let source = crate::cutsat_cert::certificate(problem.derivations(), root, &reachable, &proofs, 2, ATOMS)
+            .unwrap();
+        // One `have` per reachable node, and no nested `omega` to re-derive one.
+        assert_eq!(source.matches("have __cut_n").count(), reachable.len());
+        assert!(!source.contains("omega)") && !source.contains("⊢ omega"));
+        assert!(source.contains("omega::cut_cooper_"));
     }
 }

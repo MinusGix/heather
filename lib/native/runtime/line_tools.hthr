@@ -1,0 +1,246 @@
+// `tac` and `sort` as ordinary Heather over the `Io` capability: the first
+// customers whose data is recursive, a list of the input's lines
+// (issues/runtime-fn-arena-lists.md; docs/native-heap-arena-design.md §7).
+//
+// They are written in the shapes the default `runtime fn` setup lowers
+// (docs/runtime-fn-setups-design.md §7.4): `for` over a list, `let mut`
+// locals, statement `if` and `match`, and `mut self` calls on the world
+// (docs/effects-capabilities-design.md). A loop that goes round until the
+// input ends, or until every byte is sent, has no bound: it is a `while`
+// with no measure, so the function means `Io → Partial(Mutated<Io, R>)`,
+// the world threaded over the delay monad (design §4). Reading until the
+// end diverges at a world whose input never ends (`yes | tac`), and that is
+// what the meaning says; nothing is cut at a number of passes. The calls are the word-level ones
+// `rt_io` reflects (`Io::read_into` into a buffer the program keeps,
+// `Io::write_from` of a span), so the reads and writes here are the
+// machine's, results and errnos as words. No function here recurses, so
+// nothing needs procedures. A line is a `List<BitVec(8)>` and the input a
+// `List<List<BitVec(8)>>`, which the setup will lay out as arena cells
+// (`native_arena`): `Cons` is a cell written at the arena's top, `Nil` the
+// name 0, and a `for` over the list a walk down its cells. Every list here is
+// built by consing and never changed, which is the arena's write-once
+// discipline, so no lowering of these programs needs to update a cell.
+//
+// Until `runtime fn` lowers them (R6, then the arena cases of
+// `Tm::lower_sound`), the builder tools in `native_heap_tools` are what
+// `write-elf` compiles. `lib/_tests/native/runtime/line_tools_tests.hthr`
+// states what these write on GNU's test cases (lines across reads, blank
+// lines, a last line without a newline, lines alike, prefixes, bytes
+// compared unsigned, failing reads and writes), and reads the builder `tac`
+// against the same worlds where its source fits the kernel's fuel.
+//
+// What the meaning here leaves out is the arena's capacity. Running out of
+// arena is a defined exit of the lowered program ("memory exhausted", GNU's
+// failing status), not a value of the function: the lowering's theorem is
+// partial correctness with that exit as one of the outcomes
+// (docs/native-heap-arena-design.md §2), so the function is what the
+// program does whenever the input fits.
+
+import logic;
+import nat;
+import list;
+import option;
+import pair;
+import bool;
+import algebra;
+import bitvec;
+import linux_calls;
+import itree;
+import coitree;
+import linux_world;
+import native_source;
+import rt_io;
+
+fn newline() → BitVec(8) { 10 }
+
+// ---------------------------------------------------------------------------
+// Reading lines
+
+// The input read so far: the lines finished, the last first, and the line
+// still open. Each finished line is consed onto the ones before it, so the
+// list is the input's lines last first, which is the order an arena holds
+// them in (each cell names the one before it).
+record LineReader { done: List<List<BitVec(8)>>, open: List<BitVec(8)> }
+
+fn LineReader::empty() → LineReader { LineReader([], []) }
+
+// The reader after the bytes: each newline finishes the open line (with
+// the newline kept when `keep_newline`), every other byte joins it.
+fn LineReader::feed(self r: LineReader, bytes: List<BitVec(8)>, keep_newline: Bool) → LineReader {
+    let mut done = r.done;
+    let mut open = r.open;
+    for c in bytes {
+        if c.eq_bit(newline()) {
+            if keep_newline { open := open ++ [c] }
+            done := List::Cons(open, done);
+            open := []
+        } else {
+            open := open ++ [c]
+        }
+    }
+    LineReader(done, open)
+}
+
+// The lines, last first, once the input has ended: a last line with no
+// newline is a line too.
+fn LineReader::lines(self r: LineReader) → List<List<BitVec(8)>> {
+    match r.open { Nil => r.done, Cons(_, _) => List::Cons(r.open, r.done) }
+}
+
+// The lines of the bytes, last first: what reading them in any chunks gives.
+fn List::lines_last_first(self bytes: List<BitVec(8)>, keep_newline: Bool) → List<List<BitVec(8)>> {
+    LineReader::empty().feed(bytes, keep_newline).lines()
+}
+
+// Standard input read to its end into `buf`, at most `capacity` bytes at a
+// time, as lines, the last first; `None` if a read fails. A failed read stops
+// it, with the world as that read left it.
+fn Io::read_lines(io: Io, buf: List<BitVec(8)>, capacity: BitVec(64), keep_newline: Bool)
+    → Partial(Mutated<Io, Option<List<List<BitVec(8)>>>>)
+{
+    let mut io = io;
+    let mut r = LineReader::empty();
+    let mut held = buf;
+    let mut failed = False;
+    let mut going = True;
+    while going {
+        let got = io.read_into(Io::stdin(), held, capacity);
+        if got.result.signed_lt_bit(0) { failed := True; going := False } else {
+            if got.result.eq_bit(0) { going := False } else {
+                held := got.buf;
+                r := r.feed(span(got.buf, 0, got.result.toNat()), keep_newline)
+            }
+        }
+    }
+    let lines: Option<List<List<BitVec(8)>>> = if failed { None } else { Some(r.lines()) };
+    Pointed::ret(Mutated(io, lines))
+}
+
+// ---------------------------------------------------------------------------
+// Writing lines
+
+// Each buffer of `bufs` written to stdout in the list's order, a write at a
+// time, again for what is left of it until all of it is sent: whether every
+// write went. A failed write stops it with `False`. The lengths are the
+// buffers' length words.
+fn Io::write_lines(io: Io, bufs: List<List<BitVec(8)>>) → Partial(Mutated<Io, Bool>) {
+    let mut io = io;
+    let mut todo = bufs;
+    let mut bytes: List<BitVec(8)> = [];
+    let mut sent: BitVec(64) = 0;
+    let mut ok = True;
+    let mut going = True;
+    while going {
+        let len: BitVec(64) = BitVec::ofNat(bytes.len());
+        if sent.eq_bit(len) {
+            match todo {
+                Nil => { going := False },
+                Cons(next, rest) => { bytes := next; todo := rest; sent := 0 },
+            }
+        } else {
+            let wrote = io.write_from(Io::stdout(), bytes, sent, len.sub(sent));
+            if wrote.signed_lt_bit(0) { ok := False; going := False } else { sent := sent.add(wrote) }
+        }
+    }
+    Pointed::ret(Mutated(io, ok))
+}
+
+// ---------------------------------------------------------------------------
+// tac
+
+// GNU's `tac` over stdin: its lines, each with its newline, written last
+// first, and a last line without a newline written first and as it is
+// ("a\nb" gives "ba\n"). A failed read or write exits 1. Reading conses
+// each line onto the ones before it, so the list read is already the
+// output's order. `buf` is the read buffer, `capacity` the most one read
+// asks for.
+fn Io::tac(io: Io, buf: List<BitVec(8)>, capacity: BitVec(64)) → Partial(Mutated<Io, BitVec(64)>) {
+    let read <- Io::read_lines(io, buf, capacity, True);
+    match read.value {
+        None => { let failed: BitVec(64) = 1; Pointed::ret(Mutated(read.after, failed)) },
+        Some(lines) => {
+            let wrote <- Io::write_lines(read.after, lines);
+            let status: BitVec(64) = if wrote.value { 0 } else { 1 };
+            Pointed::ret(Mutated(wrote.after, status))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// sort
+
+// Whether one line comes before another in the C locale: its bytes,
+// compared unsigned, are less at the first place they differ, or it is a
+// proper prefix of the other.
+fn List::bytes_before(self a: List<BitVec(8)>, b: List<BitVec(8)>) → Bool {
+    let mut rest = b;
+    for x in a {
+        match rest {
+            Nil => { return False },
+            Cons(y, more) => {
+                if x.unsigned_lt_bit(y) { return True }
+                if y.unsigned_lt_bit(x) { return False }
+                rest := more
+            },
+        }
+    }
+    match rest { Nil => False, Cons(_, _) => True }
+}
+
+// A line and its place in the list (counted from 1), or the place 0 for
+// none. Lines alike are told apart by their places, so each is written once.
+record LinePick { at: Nat, line: List<BitVec(8)> }
+
+fn LinePick::none() → LinePick { LinePick(0, []) }
+
+// Whether `a` comes before `b`: by bytes, then by place.
+fn LinePick::before(self a: LinePick, b: LinePick) → Bool {
+    a.line.bytes_before(b.line).or(b.line.bytes_before(a.line).not().and(Succ(a.at).leb(b.at)))
+}
+
+// The line of `lines` that comes just before this one in the order (the
+// greatest of all, from none), or none before the first. One walk down the
+// list, keeping the best so far beside its place.
+fn LinePick::prev_in(self last: LinePick, lines: List<List<BitVec(8)>>) → LinePick {
+    let mut best = LinePick::none();
+    let mut at = 0;
+    for line in lines {
+        at := at + 1;
+        let here = LinePick(at, line);
+        let earlier = last.at.same(0).or(here.before(last));
+        let better = best.at.same(0).or(best.before(here));
+        if earlier && better { best := here }
+    }
+    best
+}
+
+// What sort writes: the lines in order, each followed by a newline, as the
+// buffers to write. As many walks as there are lines, each finding the line
+// just before the one found before it, so the greatest is found first and
+// consing puts the least at the front. Every cell is new and never changed,
+// which keeps the arena write-once.
+fn List::sorted_out(self lines: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
+    let mut out: List<List<BitVec(8)>> = [];
+    let mut last = LinePick::none();
+    for _ in lines {
+        let p = last.prev_in(lines);
+        out := List::Cons(p.line, List::Cons([newline()], out));
+        last := p
+    }
+    out
+}
+
+// GNU's `sort` over stdin in the C locale (`LC_ALL=C`): its lines, each
+// written with a newline (a last line without one gets one), in byte
+// order. A failed read or write exits 2, as GNU's does.
+fn Io::sort(io: Io, buf: List<BitVec(8)>, capacity: BitVec(64)) → Partial(Mutated<Io, BitVec(64)>) {
+    let read <- Io::read_lines(io, buf, capacity, False);
+    match read.value {
+        None => { let failed: BitVec(64) = 2; Pointed::ret(Mutated(read.after, failed)) },
+        Some(lines) => {
+            let wrote <- Io::write_lines(read.after, lines.sorted_out());
+            let status: BitVec(64) = if wrote.value { 0 } else { 2 };
+            Pointed::ret(Mutated(wrote.after, status))
+        },
+    }
+}

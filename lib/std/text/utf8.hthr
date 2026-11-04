@@ -498,8 +498,7 @@ theorem decode_char_encode_char(c: Char, rest: List<BitVec(8)>):
 theorem decode_step(w: Width, code: Nat, rest: List<BitVec(8)>):
         decode(encode_width(w, code) ++ rest)
             = push_char(decode_char(encode_width(w, code) ++ rest), decode(rest)) {
-    match w as λ x => decode(encode_width(x, code) ++ rest)
-            = push_char(decode_char(encode_width(x, code) ++ rest), decode(rest)) {
+    match w {
         W1 => refl,
         W2 => refl,
         W3 => refl,
@@ -720,8 +719,7 @@ theorem emit_spec(min, code: Nat, rest: List<BitVec(8)>): EmitSpec(min, code, re
     match min.leb(code) as λ x => (min.leb(code) = x) →
             EmitSpec(min, code, rest, emit_min(x, code, rest)) {
         False => λ _ => trivial,
-        True => λ e => match char::is_scalar(code).is_true_dec() as λ d =>
-                EmitSpec(min, code, rest, emit_dec(code, d, rest)) {
+        True => λ e => match char::is_scalar(code).is_true_dec() {
             Inr(_) => trivial,
             Inl(_) => And(rewrite(e, trivial), refl),
         },
@@ -1093,21 +1091,17 @@ theorem bounded_leaf3(k: Nat, ih: Bounded(k), b, c1, c2, c3: BitVec(8), rest4: L
 // around the next alias for the leaf's type to be that obligation verbatim.
 theorem strict_below(n: Nat): Bounded(n) {
     match n {
-        Zero => λ bytes => match bytes as λ l => l.len() <= 0 → Strict(l) {
+        Zero => λ bytes => match bytes {
             Nil => λ _ s p => strict_nil(s, p),
             Cons(_, _) => λ hl => false_elim(hl),
         },
-        Succ(k, ih) => λ bytes => match bytes as λ l => l.len() <= Succ(k) → Strict(l) {
+        Succ(k, ih) => λ bytes => match bytes {
             Nil => λ _ s p => strict_nil(s, p),
-            Cons(b, rest) => match rest as λ r =>
-                    Cons(b, r).len() <= Succ(k) → Strict(Cons(b, r)) {
+            Cons(b, rest) => match rest {
                 Nil => λ hl => bounded_leaf0(k, ih, b, hl),
-                Cons(c1, rest2) => match rest2 as λ r2 =>
-                        Cons(b, Cons(c1, r2)).len() <= Succ(k) → Strict(Cons(b, Cons(c1, r2))) {
+                Cons(c1, rest2) => match rest2 {
                     Nil => λ hl => bounded_leaf1(k, ih, b, c1, hl),
-                    Cons(c2, rest3) => match rest3 as λ r3 =>
-                            Cons(b, Cons(c1, Cons(c2, r3))).len() <= Succ(k)
-                            → Strict(Cons(b, Cons(c1, Cons(c2, r3)))) {
+                    Cons(c2, rest3) => match rest3 {
                         Nil => λ hl => bounded_leaf2(k, ih, b, c1, c2, hl),
                         Cons(c3, rest4) => λ hl => bounded_leaf3(k, ih, b, c1, c2, c3, rest4, hl),
                     },

@@ -64,10 +64,23 @@ pub struct OutOfFuel;
 /// a cost model — an answer given under it agrees with the answer the deeper
 /// stack gives. The value sits between what the deepest known good workload
 /// needs and what the 8 MiB rail (`RUST_MIN_STACK` in `scripts/test`)
-/// measurably holds — a narrower gap than it sounds, because a re-entry costs
-/// kilobytes of stack. Both ends are measured in the design doc, and moving
-/// this number without re-reading them will break one end or the other.
-pub const NATIVE_DEPTH_LIMIT: u32 = 1024;
+/// measurably holds. What a counted level costs is a property of the frames
+/// the recursion passes through, which are kept small on purpose (design
+/// §8: a function a counted recursion passes through is a dispatcher), so
+/// moving this number needs both the design doc's ends re-read and the
+/// `stack/eval-nested-scrutinee` probe re-run.
+pub const NATIVE_DEPTH_LIMIT: u32 = 2048;
+
+/// [`NATIVE_DEPTH_LIMIT`] for the small-step reducer's own account
+/// (`Frames`, docs/native-depth-budget-design.md §7).
+///
+/// Separate because the reducer's frame is separate: a counted step stands
+/// on `step_term_frame`, whose one match holds every rule's temporaries and
+/// costs several times what a counted evaluator or conversion level does
+/// since those were split (design §8). The reducer is not on the checking
+/// path's hot side — it spells, and it is the oracle's — so it keeps the
+/// bound its frame was measured at rather than holding the shared one back.
+pub const REDUCER_DEPTH_LIMIT: u32 = 1024;
 
 /// The native stack [`NATIVE_DEPTH_LIMIT`] was measured against, for a thread
 /// that runs the kernel. A thread with less aborts on a stack overflow where
@@ -189,6 +202,39 @@ impl<'a> Defs<'a> {
     /// type). `None` for a declaration, an out-of-scope index, or an opaque
     /// environment.
     pub(crate) fn body(&self, v: GlobalVar) -> Option<Rc<Term>> {
+        if self.withheld(v).is_some() {
+            return None;
+        }
+        self.body_of(v)
+    }
+
+    /// [`Defs::body`] whatever the interface boundary says: the body a
+    /// saturated closed call of a withheld definition unfolds to.
+    pub(crate) fn withheld_body(&self, v: GlobalVar) -> Option<Rc<Term>> {
+        self.withheld(v)?;
+        self.body_of(v)
+    }
+
+    /// The arity `v` is withheld at by this world's interface boundary
+    /// ([`crate::term::GlobalCtx::withheld`]), or `None` when it is not
+    /// withheld. A withheld definition is not a definition to [`Defs::body`],
+    /// [`Defs::body_unshifted`] or [`Defs::is_defined`]: it unfolds only
+    /// through [`Defs::withheld_body`] at a call of this many arguments none
+    /// of which reads a free local variable
+    /// (`docs/interface-definitions-design.md` §3).
+    pub fn withheld(&self, v: GlobalVar) -> Option<u32> {
+        let psi = self.psi?;
+        let w = psi.withheld.as_ref()?;
+        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        w.arity(i)
+    }
+
+    /// `v`'s absolute index in this world's Ψ.
+    pub(crate) fn absolute(&self, v: GlobalVar) -> Option<usize> {
+        self.psi?.bindings.len().checked_sub(1 + v.0 as usize)
+    }
+
+    fn body_of(&self, v: GlobalVar) -> Option<Rc<Term>> {
         let psi = self.psi?;
         let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
         let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
@@ -210,6 +256,14 @@ impl<'a> Defs<'a> {
     /// (`docs/lazy-global-offset-design.md`). `None` on the same three
     /// conditions as [`Defs::body`].
     pub(crate) fn body_unshifted(&self, v: GlobalVar) -> Option<&'a Rc<Term>> {
+        if self.withheld(v).is_some() {
+            return None;
+        }
+        self.withheld_body_unshifted(v)
+    }
+
+    /// [`Defs::body_unshifted`] whatever the interface boundary says.
+    pub(crate) fn withheld_body_unshifted(&self, v: GlobalVar) -> Option<&'a Rc<Term>> {
         let psi = self.psi?;
         let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
         let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
@@ -266,6 +320,9 @@ impl<'a> Defs<'a> {
     /// Whether `v` is a definition here — the head test the conversion
     /// heuristic keys on, without paying for the rescoped body.
     pub fn is_defined(&self, v: GlobalVar) -> bool {
+        if self.withheld(v).is_some() {
+            return false;
+        }
         let Some(psi) = self.psi else { return false };
         let Some(i) = psi.bindings.len().checked_sub(1 + v.0 as usize) else {
             return false;
@@ -346,7 +403,7 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Result<Opt
 /// it is blocked on first, so its recursion is as deep as the nesting of
 /// blocked heads, and fuel, which counts steps, never sees it: the first step
 /// of `x < pow(3, 5000)` stands on thousands of frames. Past
-/// [`NATIVE_DEPTH_LIMIT`] a step gives up; every `None` above it is then
+/// [`REDUCER_DEPTH_LIMIT`] a step gives up; every `None` above it is then
 /// discarded, and the step answers [`OutOfFuel`] rather than "no rule
 /// applies".
 #[derive(Default)]
@@ -358,7 +415,7 @@ struct Frames {
 impl Frames {
     fn enter(&self) -> bool {
         let depth = self.depth.get();
-        if depth >= NATIVE_DEPTH_LIMIT {
+        if depth >= REDUCER_DEPTH_LIMIT {
             self.exhausted.set(true);
             return false;
         }
@@ -622,7 +679,72 @@ fn unseal_spine(t: &Term, defs: Defs<'_>) -> Option<Term> {
     })
 }
 
+/// The withheld definition at the head of `t` when `t` is a call of it that
+/// may unfold: saturated (at least its arity of term arguments) and closed
+/// (those arguments read no free local variable). `docs/interface-definitions-design.md` §3; the value machine's
+/// rule is `Eval::glue_withheld`, and the two agree on every argument the
+/// value machine can classify.
+pub(crate) fn withheld_call(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
+    let mut args: Vec<&Rc<Term>> = Vec::new();
+    let mut cur = t;
+    let (var, _) = loop {
+        match cur {
+            Term::App { fun, arg, .. } | Term::AppAt { fun, arg } => {
+                args.push(arg);
+                cur = fun;
+            }
+            Term::UApp { fun, .. } | Term::CtxApp { fun, .. } | Term::TyApp { fun, .. } => cur = fun,
+            Term::GlobalTm { var, subst } => break (*var, subst),
+            _ => return None,
+        }
+    };
+    let arity = defs.withheld(var)? as usize;
+    if arity == 0 || args.len() < arity {
+        return None;
+    }
+    // `args` runs outermost first, so the call's own arguments are its last
+    // `arity` entries; any before them are applied to its result. A
+    // substitution tail is no sign of a variable (`eval/withheld.rs`).
+    let closed = args[args.len() - arity..].iter().all(|a| crate::bounds::term_local_use(a).bound == 0);
+    closed.then_some(var)
+}
+
+/// `t` with the head of its application spine, a withheld global at a call
+/// [`withheld_call`] accepts, replaced by its body.
+fn unfold_withheld(t: &Term, defs: Defs<'_>) -> Option<Term> {
+    let var = withheld_call(t, defs)?;
+    fn rebuild(t: &Term, defs: Defs<'_>, var: GlobalVar) -> Option<Term> {
+        Some(match t {
+            Term::GlobalTm { var: v, subst } if *v == var => {
+                crate::withheld::note(defs, var);
+                defs.withheld_body(var)?.apply_local(subst)
+            }
+            Term::App { fun, dom_level, cod_level, dom, cod, arg } => Term::App {
+                fun: Rc::new(rebuild(fun, defs, var)?),
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+                arg: Rc::clone(arg),
+            },
+            Term::AppAt { fun, arg } => Term::AppAt { fun: Rc::new(rebuild(fun, defs, var)?), arg: Rc::clone(arg) },
+            Term::UApp { fun, levels } => Term::UApp { fun: Rc::new(rebuild(fun, defs, var)?), levels: levels.clone() },
+            Term::CtxApp { fun, ctx } => Term::CtxApp { fun: Rc::new(rebuild(fun, defs, var)?), ctx: ctx.clone() },
+            Term::TyApp { fun, arg } => Term::TyApp { fun: Rc::new(rebuild(fun, defs, var)?), arg: Rc::clone(arg) },
+            _ => return None,
+        })
+    }
+    rebuild(t, defs, var)
+}
+
 fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Option<Term> {
+    // A saturated closed call of a withheld definition unfolds its head, as a
+    // definition's `u^δ` would; any other application of one stays stuck.
+    if matches!(t, Term::App { .. } | Term::AppAt { .. }) {
+        if let Some(next) = unfold_withheld(t, defs) {
+            return Some(next);
+        }
+    }
     match t {
         // δ: `u^δ ⇝ t[δ]` for a definition `u := t`. Opaque at layer c,
         // where `defs` is `Defs::opaque()` — see [`Defs`].
@@ -690,6 +812,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
             // component form). This is why the checked spellings need no
             // rule of their own in the recursor's β.
             Term::Pair { fst, .. } | Term::PairAt { fst, .. } => Some((**fst).clone()),
+            Term::VecLit { .. } => vec_lit_proj(pair, false),
             _ => step_scrut(pair, gamma, defs, frames).map(|p| Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -712,6 +835,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                 Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
                     Some((**(if second { snd } else { fst })).clone())
                 }
+                Term::VecLit { .. } => vec_lit_proj(pair, second),
                 // The checked projections carry no annotation at all (design
                 // §2.1), so there is nothing here but the receiver: a
                 // projection on a neutral pair is neutral, and exposing the
@@ -791,6 +915,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         // snd (pair a b) ⇝ b; else reduce the pair   (extension)
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { snd, .. } | Term::PairAt { snd, .. } => Some((**snd).clone()),
+            Term::VecLit { .. } => vec_lit_proj(pair, true),
             _ => step_scrut(pair, gamma, defs, frames).map(|p| Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -2909,6 +3034,25 @@ pub fn is_neutral_term(t: &Term) -> bool {
     }
 }
 
+/// `fst`/`snd` of a [`Term::VecLit`]: a component of its one-step view
+/// ([`crate::term::vec_lit_unfold`]), so a projection reads the literal
+/// exactly as it reads the pair chain it spells. A literal outside its
+/// range is ill-typed and stuck.
+fn vec_lit_proj(lit: &Term, second: bool) -> Option<Term> {
+    let Term::VecLit { level, elem, zero, one, width, bits } = lit else {
+        unreachable!("vec_lit_proj is given a vector literal")
+    };
+    if !crate::term::vec_lit_in_range(*width, *bits) {
+        return None;
+    }
+    let Term::Pair { fst, snd, .. } =
+        crate::term::vec_lit_unfold(level, elem, zero, one, *width, *bits)
+    else {
+        unreachable!("a vector literal unfolds to a pair")
+    };
+    Some((*if second { snd } else { fst }).clone())
+}
+
 /// Weak head normal terms `w` (Nf), including neutrals.
 pub fn is_whnf_term(t: &Term) -> bool {
     match t {
@@ -2942,6 +3086,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         // The checked spellings are introduction forms and are whnf exactly
         // as the forms they spell (docs/intro-by-type-design.md).
         | Term::PairAt { .. }
+        | Term::VecLit { .. }
         | Term::InlAt { .. }
         | Term::InrAt { .. }
         | Term::Sup { .. }

@@ -13,13 +13,25 @@
     `docs/module-interface-cutoff-design.md`). What it skips is the `SKIP`
     list in `scripts/test`.
   - A round's **final** verification, and any change touching `lib/`, the kit
-    or the generators, runs `scripts/test --pr`: every test, over the same
-    replayed images. The exact image policy (plain `scripts/test`, which
+    or the generators, runs `scripts/test --pr`: the test files its diff
+    from `origin/master` can affect (Cargo's dep-info, family members one
+    by one, every run-time reader of `lib/` on a `lib/` change; anything it
+    cannot place runs everything; `HEATHER_PR_AFFECTED=all` forces all, §2.2.1
+    of the design note), over the same replayed images, and the native x86
+    certificate gates (`crates/cli/tests/native*.rs`) shrink to one smoke
+    unless the diff touches what they check (`lib/native`, the machine/OS
+    models, `crates/cli/src/native`, the kernel; `HEATHER_PR_NATIVE=all`
+    forces them). The exact image policy (plain `scripts/test`, which
     re-elaborates every library module after a compiler edit) is the nightly
     master sentinel's lane; run it yourself only when the round changes the
     image format, the caches or the loader (`crates/cache`,
     `crates/cli/src/semantic.rs`). Why: `docs/testing-architecture-design.md`.
     Docs-only or issue-only changes need no suite at all.
+  - **`HEATHER_CACHE_DIR`** moves every suite and gate store (the semantic,
+    native and CLI image stores, `decl-cache`, and `heather check --cache`'s
+    default) out of `target/`, so worktrees of this repo can share them
+    (`issues/shared-cache-dir.md`). Never point two worktrees at one
+    `CARGO_TARGET_DIR`: Cargo's mtime freshness then runs the other's build.
   - `scripts/test --long` (own target dir) also runs every slow kernel
     self-check every time (`crates/kernel/src/checks.rs`; the default samples
     one in sixteen) — a sweep for rounds touching the kernel's traversals or
@@ -96,6 +108,12 @@
   the headline number is the scaling exponent, not the time.
   `docs/benchmarking.md` explains "regressed" and why the harness is
   first-party (the kernel has zero dependencies, dev-dependencies included).
+- **Cloud timings are the reference** (Minus, 2026-10-29): record and compare
+  on the cloud box, counters first (`docs/cloud-benchmarks.md`). To
+  hillclimb on a slow native or library cost, use **`scripts/bench-probes`**
+  (`--filter`, `--check`, `--save`; `--heavy` adds cold `write-elf`s): one
+  declaration (`--only`) or one fixed cost per case, from
+  `perf/bench/cases.tsv`, chosen from the ranked `perf/bench/targets.md`.
 - **What is slow right now: `scripts/perf report`** (`perf/README.md`), over
   the environment-keyed diary in `perf/snapshots/` (`snapshot` records,
   `serve` is the dashboard). Read it before choosing a perf target, so a round
@@ -126,14 +144,28 @@
   `docs/testing-generated-terms.md` — vary all four axes (literal *and*
   neutral scrutinee, an **open** element type, a *checking* position and not
   only computation, and a negative control); defects have hidden behind each.
+- **Compilation design starts from `docs/compilation-vision.md`**: the
+  settled principles (certificate logical, everything else operational;
+  untrusted search over checked witnesses; prove the generator, not the
+  copies; disciplines as libraries; opt-in, syntax-keyed `Compile(f)`) and
+  the picture (languages producing `Compile(f)`, facts as side-proofs the
+  compiler finds). A native, `runtime fn`, `Compile`, `datarepr` or pass
+  round reads it before designing, and extends it rather than re-deriving it.
+- **Writing proofs: `docs/proof-patterns.md`** has the rules rounds kept
+  rediscovering (closed verdicts as `b = True` by `refl`, never `refl`
+  between two computations, neutral parameters, stage theorems, what `omega`
+  cannot read yet), each with its reason and the issue that would retire it.
+  Correct it when a rule goes stale.
 - **Rust test or theorem: `docs/test-value-audit.md` §5.** If Heather can
   state a claim, write it in Heather. A library PR adds theorems to its module
   (a client would cite them) or probes to `lib/_tests` (mirrors `lib/`,
   `<subject>_tests` stems, never imported from outside), not a Rust test: the
   whole-library gate (`crates/cli/tests/library.rs`) checks every module. A
-  false mathematical claim is a `¬` theorem, not a refusal. A refusal test
-  names its reason (`support::assert_refused` with a `Refusal`); never a bare
-  `is_err()`.
+  false mathematical claim is a `¬` theorem, not a refusal. A refusal names
+  its reason: in Heather, a declaration under `// expect-error: <what the
+  error says>` (or `(kernel)`, `(mismatch)`), checked by `heather check
+  --expectations`, which the gate passes (§4.3); in Rust,
+  `support::assert_refused` with a `Refusal`. Never a bare `is_err()`.
 - **Areas and importance: `docs/roadmap.md`** owns the project's areas, their
   priority, the milestones effort goes toward; read it before choosing what
   a round works on. Every open issue carries `area:` (and `milestone:` when it

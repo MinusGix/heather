@@ -35,7 +35,7 @@ use heather_kernel::level::Level;
 #[cfg(debug_assertions)]
 use heather_kernel::reduce::Defs;
 use heather_kernel::subst::{local_bound, local_bound_ty};
-use heather_kernel::term::{nth, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
+use heather_kernel::term::{iwf_ih, nth, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
 use heather_kernel::value::program::ContextProgram;
 use heather_kernel::value::{Elim, Env, Head, TmClo, TyClo, VTail, VTy, Val};
 
@@ -148,13 +148,77 @@ impl<'v, 'g> Readback<'v, 'g> {
         })
     }
 
+    /// The constructor at the head of the term value `v`, its fields as
+    /// syntax ([`Self::head`] for terms: `SemanticOracle::whnf_term`).
+    /// `None` for anything that is not a constructor read back here.
+    ///
+    /// An annotated pair or injection declines: its value is the same
+    /// whether the syntax was the component form or the checked spelling
+    /// `pair@(T; a; b)` (`eval.rs`, the checked spellings), so the value does
+    /// not say which of the two the reducer's reduct carries. The
+    /// unannotated spelling has one source and reads back as itself. A
+    /// literal declines too: a run at the head stands for both `n` and
+    /// `Succ(…)`, and the reducer keeps whichever it met.
+    pub(crate) fn term_head(&mut self, v: &Val<'v>) -> Option<Term> {
+        Some(match v {
+            Val::Zero => Term::Zero,
+            Val::Triv { level } => Term::Triv { level: level.clone() },
+            Val::Succ(p) => Term::Succ(self.tm(p, 0)?),
+            Val::Refl { level, ty, tm } => Term::Refl { level: level.clone(), ty: self.ty(ty, 0)?, tm: self.tm(tm, 0)? },
+            Val::SRefl { level, ty, tm } => Term::SRefl { level: level.clone(), ty: self.ty(ty, 0)?, tm: self.tm(tm, 0)? },
+            Val::Squash { level, ty, tm } => Term::Squash { level: level.clone(), ty: self.ty(ty, 0)?, tm: self.tm(tm, 0)? },
+            Val::Pair { ann: None, fst, snd } => Term::PairAt { ty: None, fst: self.tm(fst, 0)?, snd: self.tm(snd, 0)? },
+            Val::Inl { ann: None, val } => Term::InlAt { ty: None, val: self.tm(val, 0)? },
+            Val::Inr { ann: None, val } => Term::InrAt { ty: None, val: self.tm(val, 0)? },
+            Val::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => Term::Sup {
+                shape_level: shape_level.clone(),
+                pos_level: pos_level.clone(),
+                shape_ty: self.ty(shape_ty, 0)?,
+                pos_ty: self.ty(pos_ty, 1)?,
+                label: self.tm(label, 0)?,
+                children: self.tm(children, 0)?,
+            },
+            Val::Supf { level, shape, arity, label, children } => Term::Supf {
+                level: level.clone(),
+                shape: self.ty(shape, 0)?,
+                arity: self.tm(arity, 1)?,
+                label: self.tm(label, 0)?,
+                children: self.tm(children, 0)?,
+            },
+            Val::Supi { sig, label, children } => Term::Supi {
+                sig: Rc::new(IWfSig {
+                    level: sig.level.clone(),
+                    idx_level: sig.idx_level.clone(),
+                    idx: self.ty(&sig.idx, 0)?,
+                    shape: self.ty(&sig.shape, 0)?,
+                    arity: self.tm(&sig.arity, 1)?,
+                    out: self.tm(&sig.out, 1)?,
+                    child: self.tm(&sig.child, 2)?,
+                }),
+                label: self.tm(label, 0)?,
+                children: self.tm(children, 0)?,
+            },
+            Val::Lam { dom_level, cod_level, dom, body } => Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: self.ty(dom, 0)?,
+                body: self.tm(body, 1)?,
+            },
+            _ => return None,
+        })
+    }
+
     /// A type closure under `k` pending local binders, as syntax over
     /// `Γ, k binders`.
     fn ty(&mut self, c: &'v TyClo<'v>, k: u32) -> Option<Rc<Type>> {
         match c {
             TyClo::Syn { env, body } => {
-                let sigma = self.subst(env, local_bound_ty(body).saturating_sub(k))?;
+                let used = local_bound_ty(body).saturating_sub(k);
+                let sigma = self.subst(env, used)?;
                 let body = shifted_ty(body, env);
+                if self.identity(&sigma, used) {
+                    return Some(body);
+                }
                 Some(Rc::new(under_ty(&body, k, &sigma)))
             }
             TyClo::El { level, tm } => Some(Rc::new(Type::El { level: (*level).clone(), tm: self.tm(tm, k)? })),
@@ -172,8 +236,12 @@ impl<'v, 'g> Readback<'v, 'g> {
     fn tm(&mut self, c: &'v TmClo<'v>, k: u32) -> Option<Rc<Term>> {
         match c {
             TmClo::Syn { env, body } => {
-                let sigma = self.subst(env, local_bound(body).saturating_sub(k))?;
+                let used = local_bound(body).saturating_sub(k);
+                let sigma = self.subst(env, used)?;
                 let body = shifted_tm(body, env);
+                if self.identity(&sigma, used) {
+                    return Some(body);
+                }
                 Some(Rc::new(under_tm(&body, k, &sigma)))
             }
             TmClo::Val(v) if k == 0 => Some(Rc::new(self.val(v)?)),
@@ -218,6 +286,7 @@ impl<'v, 'g> Readback<'v, 'g> {
             }
             Val::WfIh { elim, label, children } => self.wf_ih(elim, label, children),
             Val::WIh { elim, label, children } => self.w_ih(elim, label, children),
+            Val::IWfIh { elim, label, children } => self.iwf_ih(elim, label, children),
             // An `elim_W` β's induction hypothesis, when the machine built it
             // as a λ over the step's environment (`Eval::w_ih_lam`): its two
             // closures are the syntax the reducer's β substitutes, so it reads
@@ -421,6 +490,30 @@ impl<'v, 'g> Readback<'v, 'g> {
         })
     }
 
+    /// `elim_IWf`'s induction hypothesis, which the machine holds as a value
+    /// ([`Val::IWfIh`]): the λ the reducer's β builds around the recursive
+    /// call, from the kernel's one schema ([`iwf_ih`]) over the eliminator's
+    /// and the scrutinee's syntax.
+    fn iwf_ih(&mut self, e: &Elim<'v>, label: &'v TmClo<'v>, children: &'v TmClo<'v>) -> Option<Term> {
+        let Elim::ElimIWf { sig, motive_level, motive, step, .. } = e else {
+            return None;
+        };
+        let sig = Rc::new(IWfSig {
+            level: sig.level.clone(),
+            idx_level: sig.idx_level.clone(),
+            idx: self.ty(&sig.idx, 0)?,
+            shape: self.ty(&sig.shape, 0)?,
+            arity: self.tm(&sig.arity, 1)?,
+            out: self.tm(&sig.out, 1)?,
+            child: self.tm(&sig.child, 2)?,
+        });
+        let motive = self.ty(motive, 2)?;
+        let step = self.tm(step, 3)?;
+        let label = self.tm(label, 0)?;
+        let children = self.tm(children, 0)?;
+        Some(iwf_ih(&sig, motive_level, &motive, &step, &label, &children))
+    }
+
     /// The substitution an environment stands for: its entries, outermost
     /// first, as terms over Γ. Only the `used` innermost entries are read
     /// back — the body's free indices reach no further (`local_bound`) —
@@ -436,6 +529,25 @@ impl<'v, 'g> Readback<'v, 'g> {
             terms.push(if index < used { self.entry(entry)? } else { Rc::clone(&unused) });
         }
         Some(LocalSubst { tail: LocalSubst::id(self.gamma).tail, terms })
+    }
+
+    /// Whether `sigma`, built by [`Self::subst`] for a body whose free
+    /// variables are below `used`, sends that body to itself: the closure was
+    /// captured over Γ's own identity environment (one entry per entry of Γ,
+    /// so the body's global tails already have Γ's length) and every entry
+    /// the body can see reads back as its own variable. Applying it anyway
+    /// is the identity at the cost of a walk of the whole body: a closed
+    /// subtree that mentions a global is never skipped by its bounds (its
+    /// `u^δ` tail is rewritten unconditionally, `heather_kernel::bounds`), so
+    /// a collection literal's spine, whose children each hold the rest of
+    /// the literal's vector, read back in time quadratic in its length.
+    fn identity(&self, sigma: &LocalSubst, used: u32) -> bool {
+        let len = sigma.terms.len();
+        len == self.len as usize
+            && sigma.terms.iter().enumerate().all(|(p, t)| {
+                let index = (len - 1 - p) as u32;
+                index >= used || matches!(&**t, Term::Var(LocalVar(i)) if *i == index)
+            })
     }
 }
 
@@ -501,21 +613,7 @@ fn under_tm(body: &Rc<Term>, k: u32, sigma: &LocalSubst) -> Term {
 /// readback that respells is a defect here and fails loudly.
 #[cfg(debug_assertions)]
 pub(crate) fn verify(ty: &Type, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, read: &Type) {
-    use std::cell::Cell;
-    use heather_kernel::checks::{skip_verification, SkipVerification, SAMPLE_EVERY};
-    thread_local! {
-        static SAMPLE: Cell<u32> = const { Cell::new(0) };
-    }
-    let run = match skip_verification() {
-        SkipVerification::Off => false,
-        SkipVerification::Full => true,
-        SkipVerification::Sampled => SAMPLE.with(|n| {
-            let k = n.get().wrapping_add(1);
-            n.set(k);
-            k % SAMPLE_EVERY == 0
-        }),
-    };
-    if !run {
+    if !sampled() {
         return;
     }
     if let Ok(spelled) = heather_kernel::reduce::whnf_type_delta(ty, gamma, defs, fuel) {
@@ -523,6 +621,40 @@ pub(crate) fn verify(ty: &Type, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, rea
             spelled == *read,
             "readback respelled a weak head reduct\n  reducer: {spelled:?}\n  readback: {read:?}"
         );
+    }
+}
+
+/// [`verify`] for a term's constructor ([`Readback::term_head`]).
+#[cfg(debug_assertions)]
+pub(crate) fn verify_term(tm: &Term, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, read: &Term) {
+    if !sampled() {
+        return;
+    }
+    if let Ok(spelled) = heather_kernel::reduce::whnf_term_delta(tm, gamma, defs, fuel) {
+        assert!(
+            spelled == *read,
+            "readback respelled a weak head reduct\n  reducer: {spelled:?}\n  readback: {read:?}"
+        );
+    }
+}
+
+/// Whether this readback is one the debug check compares, at the kernel's
+/// slow-check rate; the two readbacks share one counter.
+#[cfg(debug_assertions)]
+fn sampled() -> bool {
+    use std::cell::Cell;
+    use heather_kernel::checks::{skip_verification, SkipVerification, SAMPLE_EVERY};
+    thread_local! {
+        static SAMPLE: Cell<u32> = const { Cell::new(0) };
+    }
+    match skip_verification() {
+        SkipVerification::Off => false,
+        SkipVerification::Full => true,
+        SkipVerification::Sampled => SAMPLE.with(|n| {
+            let k = n.get().wrapping_add(1);
+            n.set(k);
+            k % SAMPLE_EVERY == 0
+        }),
     }
 }
 
@@ -647,6 +779,91 @@ mod tests {
         let reducer = reduce::whnf_type_delta(&ty, &gamma, defs, FUEL).unwrap();
         assert!(matches!(read, Type::Pi { .. }));
         assert_eq!(read, reducer);
+    }
+
+    /// `elim_Nat(scrut; Nat; 0; m ih. Succ(ih))` in `Γ = x : Nat`.
+    fn nat_fold(scrut: Term) -> Term {
+        Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Zero),
+            step: Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0))))),
+            scrut: Rc::new(scrut),
+        }
+    }
+
+    /// A computed constructor reads back as the reducer's reduct, its field
+    /// the step's syntax with the step's environment substituted: the
+    /// pending fold at a local's and a constructor's predecessor. (Over a
+    /// literal the machine folds the whole run into a run, which declines.)
+    #[test]
+    fn a_computed_constructor_reads_back_as_the_reducers_reduct() {
+        let world = GlobalCtx::new(Vec::new());
+        let defs = Defs::transparent(&world);
+        let x = || Rc::new(Term::Var(LocalVar(0)));
+        for scrut in [Term::Succ(x()), Term::Succ(Rc::new(Term::Succ(x())))] {
+            let tm = nat_fold(scrut);
+            let arena = ValueArena::new();
+            let value = eval::whnf_value(&arena, &Rc::new(tm.clone()), &one_nat(), defs, FUEL).unwrap();
+            let read = Readback::new(&one_nat()).term_head(&value).expect("the field is a form read back here");
+            let reducer = reduce::whnf_term_delta(&tm, &one_nat(), defs, FUEL).unwrap();
+            assert!(matches!(read, Term::Succ(_)));
+            assert_eq!(read, reducer);
+        }
+    }
+
+    /// A tier-2 (W-lowered) recursion's constructor result, whose field holds
+    /// the `elim_W` β's induction hypothesis applied: the readback spells it
+    /// as the reducer does.
+    #[test]
+    fn a_constructor_over_an_elim_w_induction_hypothesis_reads_back_as_the_reducers() {
+        let mut el = crate::Elaborator::with_prelude().expect("prelude");
+        el.elab_source(
+            "inductive Tree { Leaf, Node(k: Nat -> Tree) }
+             fn sz(t: Tree) -> Nat { match t { Leaf => 0, Node(k) => Succ(sz(k(0))) } }
+             fn probe() -> Nat { sz(Node(λ n => Node(λ m => Leaf))) }",
+        )
+        .expect("the declarations elaborate");
+        let GlobalBinding::Tm { body: Some(body), .. } = el.psi.bindings.last().expect("a binding") else {
+            panic!("a `fn` is a term binding with a body")
+        };
+        let tm = body.shift_global(1);
+        let gamma = LocalCtx::nil();
+        let defs = Defs::transparent(&el.psi);
+        let arena = ValueArena::new();
+        let value = eval::whnf_value(&arena, &Rc::new(tm.clone()), &gamma, defs, FUEL).unwrap();
+        let read = Readback::new(&gamma).term_head(&value).expect("the ih is a form read back here");
+        let reducer = reduce::whnf_term_delta(&tm, &gamma, defs, FUEL).unwrap();
+        assert!(matches!(read, Term::Succ(_)));
+        assert_eq!(read, reducer);
+    }
+
+    /// An annotated pair's value does not say which spelling it came from,
+    /// so it declines and the caller keeps the reducer.
+    #[test]
+    fn an_annotated_pair_declines() {
+        let nat = || Rc::new(Type::Nat);
+        let pair = Term::Pair {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst_ty: nat(),
+            snd_ty: nat(),
+            fst: Rc::new(Term::Var(LocalVar(0))),
+            snd: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let redex = Term::App {
+            fun: Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: nat(), body: Rc::new(pair) }),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: nat(),
+            cod: Rc::new(Type::Sigma { fst_level: Level::Zero, snd_level: Level::Zero, fst: nat(), snd: nat() }),
+            arg: Rc::new(Term::Zero),
+        };
+        let world = GlobalCtx::new(Vec::new());
+        let arena = ValueArena::new();
+        let value = eval::whnf_value(&arena, &Rc::new(redex), &one_nat(), Defs::transparent(&world), FUEL).unwrap();
+        assert!(matches!(&*value, Val::Pair { ann: Some(_), .. }));
+        assert!(Readback::new(&one_nat()).term_head(&value).is_none());
     }
 
     /// A stuck head has no former to read: the caller keeps the reducer.

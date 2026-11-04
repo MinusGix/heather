@@ -39,7 +39,10 @@ fn check(row: &showcase::Showcase) -> (bool, String) {
     // fast lane's trade (`HEATHER_SEMANTIC_IMAGES=accept-stale`, set by
     // scripts/test) replays an image an earlier build wrote, as
     // crates/elab/tests/support does.
-    cmd.arg("--cache").arg("--cache-dir").arg(showcase::CLI_CHECK_IMAGES);
+    cmd.arg("--cache").arg("--cache-dir").arg(showcase::cli_check_images());
+    // Every library module is keyed by its own closure
+    // (`docs/module-dag-design.md`), so the row's closure replays the gate's
+    // images and only the row's own module is elaborated.
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }
@@ -59,9 +62,13 @@ const CLI_ROWS: &[&str] = &["calc_text", "contextual_rewrite_generated", "relati
     "itree_client", "itree_refinement_client", "memory_client"];
 
 fn check_row(name: &str) {
-    let rows = showcase::at_tier(Tier::Cli);
+    check_row_at(Tier::Cli, name);
+}
+
+fn check_row_at(tier: Tier, name: &str) {
+    let rows = showcase::at_tier(tier);
     let row = rows.iter().find(|r| r.name == name)
-        .unwrap_or_else(|| panic!("no CLI-tier showcase `{name}`; the manifest lost a row"));
+        .unwrap_or_else(|| panic!("no {tier:?}-tier showcase `{name}`; the manifest lost a row"));
     let (ok, output) = check(row);
     assert!(ok, "{} did not check:\n{output}", row.path.display());
     assert!(
@@ -208,4 +215,64 @@ fn cli_showcase_itree_refinement_client() {
 #[test]
 fn cli_showcase_memory_client() {
     check_row("memory_client");
+}
+
+/// The in-process rows (tiers `suite` and `test`), checked once more as
+/// `heather check` sees them. Their in-process tests feed hand-built closures
+/// to an elaborator, so nothing the loader adds reaches them — the common
+/// prelude above all — and `calc_parser` was refused by the CLI for a day
+/// while its in-process test stayed green
+/// (issues/showcase-calc-parser-refused-since-prelude.md). Under the exact
+/// image lane a changed compiler elaborates each of these from source.
+const IN_PROCESS_ROWS: &[(Tier, &str)] = &[
+    (Tier::Suite, "calc"), (Tier::Suite, "calc_parser"),
+    (Tier::Test, "parser_core"), (Tier::Test, "relational_generator_input"), (Tier::Test, "relational_proof"),
+    (Tier::Test, "mergeable"), (Tier::Test, "element_transport"), (Tier::Test, "lift_positive"),
+    (Tier::Test, "positive_subtype"), (Tier::Test, "positive_omega"), (Tier::Test, "witness_subtype"),
+    (Tier::Test, "finite_set_client"), (Tier::Test, "finite_set_list_client"), (Tier::Test, "finite_set_tree_client"),
+    (Tier::Test, "finite_set_backend_transfer"), (Tier::Test, "derive_set_functions"),
+    (Tier::Test, "derive_set_function_clients"), (Tier::Test, "linux_spec_client"),
+];
+
+#[test]
+fn in_process_rows_each_have_a_cli_test() {
+    let mut manifest: Vec<String> = [Tier::Suite, Tier::Test]
+        .into_iter()
+        .flat_map(|t| showcase::at_tier(t).into_iter().map(|r| r.name))
+        .collect();
+    manifest.sort();
+    let mut tested: Vec<String> = IN_PROCESS_ROWS.iter().map(|(_, n)| n.to_string()).collect();
+    tested.sort();
+    assert_eq!(manifest, tested, "the suite/test tiers and IN_PROCESS_ROWS disagree: give a new row its CLI test");
+}
+
+macro_rules! cli_check_of_in_process_rows {
+    ($($test:ident => $name:literal),* $(,)?) => {$(
+        #[test]
+        fn $test() {
+            let (tier, _) = IN_PROCESS_ROWS.iter().find(|(_, n)| *n == $name).expect("listed");
+            check_row_at(*tier, $name);
+        }
+    )*};
+}
+
+cli_check_of_in_process_rows! {
+    cli_check_calc => "calc",
+    cli_check_calc_parser => "calc_parser",
+    cli_check_parser_core => "parser_core",
+    cli_check_relational_generator_input => "relational_generator_input",
+    cli_check_relational_proof => "relational_proof",
+    cli_check_mergeable => "mergeable",
+    cli_check_element_transport => "element_transport",
+    cli_check_lift_positive => "lift_positive",
+    cli_check_positive_subtype => "positive_subtype",
+    cli_check_positive_omega => "positive_omega",
+    cli_check_witness_subtype => "witness_subtype",
+    cli_check_finite_set_client => "finite_set_client",
+    cli_check_finite_set_list_client => "finite_set_list_client",
+    cli_check_finite_set_tree_client => "finite_set_tree_client",
+    cli_check_finite_set_backend_transfer => "finite_set_backend_transfer",
+    cli_check_derive_set_functions => "derive_set_functions",
+    cli_check_derive_set_function_clients => "derive_set_function_clients",
+    cli_check_linux_spec_client => "linux_spec_client",
 }

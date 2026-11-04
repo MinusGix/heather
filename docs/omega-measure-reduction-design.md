@@ -489,3 +489,215 @@ unfolded spelling now meets the call. The negative controls are in
 `crates/elab/tests/omega_defined_propositions.rs`: a proposition stuck on a
 match is still skipped, a false claim through a defined fact is refused, and a
 stuck call stays an atom.
+
+## 12. Fields of fields, and fields put as atoms (2026-10-26)
+
+`issues/omega-nested-projection-of-call.md`. §11's `field_as_put` unfolded
+one receiver and gave up when the projected field was itself a projection,
+and the Nat side kept the field only on an arithmetic head. So
+`R::at(n).inner.den.pred` (each field put by a call) stayed one atom, and so
+did `P::of(n).pred`, whose field is put as the variable `n`: neither met the
+goal's `n`. Two changes, both in `crates/elab/src/omega_cert.rs`:
+
+- **A field that is again a field read is read on** (`field_as_put_within`),
+  up to `FIELD_NESTING_DEPTH` receivers, each unfolded only as far as its pair
+  and projected without δ, as before.
+- **On `Nat`, a field put as an atom is that atom** (`projection_reduct`): a
+  variable or an applied global that spells. A stuck eliminator put there
+  still leaves the projection an atom. `Int` already kept any field that
+  spells.
+
+§5's hazard is as in §11: every occurrence of such a field takes the same
+route, so no atom splits, and a field read off a neutral record (`q.den.pred`)
+is untouched. Probes and controls: `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 13. Conjunction facts at every depth (2026-10-29)
+
+`issues/omega-nested-conjunction-facts.md`. A context fact `h: P ∧ Q` was
+read only by the connective split, the fallback after reflection fails:
+`omega::and_elim_false` binds both sides and re-enters as
+`__omega_connective_branch`, which splits nothing further. So in
+`h: a < b ∧ (b < c ∧ c < 5)` the inner conjunction was never read.
+
+Now `local_facts` lists a conjunction as its conjuncts, recursively, each
+under its projection path (`h.left`, `h.right.left`, `h.right.right`), with
+the type `project_field` gives it. Every consumer of `local_facts` (Omega's
+reflection, the relevance layers, CutSat, the connective and disequality
+splits, `linarith`'s and `bv_omega`'s fact scans) sees the conjuncts as
+ordinary facts. The certificate is source, so a used conjunct is cited by its
+path and an unused one never reaches the kernel; a disjunction under a
+conjunction (`h.right: A ∨ B`) is split like a top-level one. The `And` arm of
+`split_connective` stays only for a fact whose projection declines.
+
+## 14. Fields at closed arguments (2026-10-30)
+
+`issues/omega-closed-field-value-atomised.md`. §10's `projection_reduct`
+asks first for the read's bounded weak head, keeping it on a numeral or an
+arithmetic shape. At a variable that head is stuck early and cheap; at
+closed arguments (`Lay::of(3).size`, every layout at a literal program) it
+evaluates the field itself, spends the budget, and the failure returned from
+the function before §11–§12's read-as-put route was tried. Every field of the
+call became its own atom, so `Lay::of(3).size` and `Lay::of(3).cap`, put as
+`lay(3)` and `lay(3) + 4`, shared nothing.
+
+A spent budget now skips only the shortcut. The field is then read as put:
+the receiver unfolded as far as its pair, the field projected without δ, so
+it is spelled and never evaluated, and its atoms are decided like any other
+subterm's. A cheap field still takes the shortcut and arrives as its numeral.
+A field put as an eliminator over the computation (`match lay(n) { … }`)
+stays behind its projection, as §12 left it; probes and that control are in
+`lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 15. Facts typed by a β-redex (2026-10-30)
+
+`issues/omega-redex-typed-fact-ignored.md`. An `Exists`'s `.proof` is typed
+`(λ k => P(k))(e.witness)`: the record's field type instantiated at the
+witness, with the redex left in place. The display contracts it (PR #184),
+so the report listed the fact as `a = add(e.witness, 2)`, but reflection
+looks for a relation at the type's head, found an application of a λ, and
+skipped the fact.
+
+`push_conjuncts` now contracts the head redexes of a fact's `El` type
+(`spelling::beta_head`, the unifier's contraction since PR #62) before the
+conjunction check, so every consumer of `local_facts` sees the contractum and
+a conjunction under the redex is split as in §13. Only the head is
+contracted: a redex inside a relation's side is an atom like any other
+subterm. The certificate still cites the fact by name; its declared type and
+the contractum are β-convertible, so the kernel pays one β-step.
+
+## 16. Truncated subtraction at Nat (2026-10-30)
+
+`issues/omega-nat-truncated-subtraction.md`. A Nat `a - b` was one atom, so
+`a - b + b = a` under `b <= a` had the model `a = b = 0, a - b = 1`, and every
+round fed `Nat::sub_add_cancel` by hand. It is now split as Lean's `omega`
+splits it: `omega::nat_sub_elim(a, b, …)` gives two branches, `b <= a` with
+`(a - b) + b = a` and `a < b` with `a - b = 0`, bound as
+`__omega_sub{k}_case` and `__omega_sub{k}_eq`, each closed by `omega` again.
+The subtraction stays one atom; both cases now constrain it, so a linear
+problem is enough in each. Nothing new is trusted: the split is a lemma in
+`omega.hthr` and the branches are ordinary certificates.
+
+`split_nat_subtraction` is the last fallback of the attempt that answers:
+after CutSat finds a model and after the disequality and connective splits,
+so a goal that closed before closes the same way, and not in a narrower
+relevance layer, whose failure only widens. It looks for subtractions on the
+sides of the relations `integral_sides` reads (stated, unfolded or negated,
+through `Succ` and applied globals, never under a binder), newest fact
+first, so the negated goal's subtractions are split before an old fact's.
+A subtraction is settled once a case equation in scope names it, compared by
+its spelling; the case equations are counted to name the next pair, and
+past six of them nothing more is split — each split doubles the branches,
+and a subtraction whose spelling did not round-trip would otherwise be split
+forever. A refused control's report names the case its model lives in
+(`__omega_sub0_case: Lt(a, b)` among the locals). Probes are in
+`lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 17. Bool guards (2026-10-30)
+
+`issues/omega-reads-bool-guards.md`. A fact `b.IsTrue()` was skipped
+whatever `b` was, so every client of a Bool-guarded field
+(`Finite::ok`, the x86 asm tables, FunctionIR evaluation) took the guard
+apart with `is_true_and`/`leb_sound` before omega could see it
+(`docs/bool-guard-reflection-design.md` §3.2).
+
+A **guard round** (`split_bool_guards` in `crates/elab/src/omega_cert.rs`)
+now reads every guard in scope by its structure, with one `omega::guard_*`
+rule (omega.hthr) per connective, each taking one connective off a guard
+proved true (`h: b.IsTrue()`) or proved false (`h: (!b).IsTrue()`):
+
+| guard | proved true | proved false |
+|---|---|---|
+| `a && b` | both (`guard_and`) | two cases, `!a` or `!b` (`guard_nand`) |
+| `a \|\| b` | two cases (`guard_or`) | both negated (`guard_nor`) |
+| `!a` | `a` proved false | `a` proved true (`guard_not_not`) |
+| `n.leb(m)` | `n <= m` (`guard_leb`) | `m < n` (`guard_not_leb`) |
+| any other Bool `r` | `bit(r) = 1` (`guard_bit`) | `bit(r) = 0` (`guard_not_bit`) |
+
+A fact `¬b.IsTrue()` is `b` proved false (`guard_negated`). The rules take
+the guard's operands as implicits, so the certificate spells nothing: the
+checker reads them off the evidence's type, and the parts reach the leaf
+`omega` as the original subterms. Every guard in scope is taken apart in one
+certificate, which ends in `omega` at each branch.
+
+- **Definitions.** A guard whose head is a Bool definition
+  (`F.canonical(mag, bexp)`) is unfolded one reduct at a time, as §11
+  unfolds a defined proposition, to the first reduct with a connective at its
+  head, through its `let`s. The unfolded statement is the type of an alias
+  (`__omega_unfold{k}_{i}`) the caller binds before checking, whose value is
+  the fact itself: the kernel converts the two where the rule uses it. An
+  alias rather than a written type, because the reduct need not spell
+  (`canonical`'s least-exponent test is a `match`), and rather than letting
+  the unifier find the reduct, because it does not: asked for
+  `(?a && ?b).IsTrue()` against `g(n, m).IsTrue()` it solved `?a := n`,
+  `?b := m` and left the kernel to refuse it.
+- **Atoms.** A Bool that is neither a connective nor a comparison, nor a
+  definition that unfolds to one (`F.specials.reserves_top()`, a variable),
+  is the atom `omega::bit(r)` (`1` when true, `0` when false): Nat
+  arithmetic, so `r` and `!r` meet as `bit(r) = 1` against `bit(r) = 0`
+  with no propositional atom kind and no case split per atom. The issue's
+  open question resolves that way. A stuck `match` inside a guard is not
+  read; its part is bound and left alone.
+- **Rounds and settling.** A round is the first fallback of the attempt
+  that answers, before the disequality, connective and subtraction splits,
+  so a goal that closed before closes as it did; it is written only when
+  some guard has a connective or a comparison to read (or two bare atoms
+  might meet). The facts it reads are settled for the omegas inside it (a
+  stack on the elaborator, `omega_settled_guards`, pushed while the
+  certificate is checked); the parts it binds are `__omega_guard{k}_{i}`,
+  never read again. What it leaves for the next round is bound as
+  `__omega_open{k}_{i}` (`guard_open`): a part that needs a definition
+  unfolded (an alias can only be made for a fact already in scope), and a
+  disjunction past the round's budget of `GUARD_BRANCHES` branches — each
+  `||` doubles the certificate's tail. A later round runs only where a
+  branch fails without it, at most `GUARD_ROUND_LIMIT` deep.
+- **Goals.** A goal `b.IsTrue()` that does not compute to a verdict is
+  refuted from its negation (`guard_goal`), which the round reads as a fact;
+  `¬b.IsTrue()` is assumed and refuted, as a negated relation is.
+
+`Format::canonical_elim` (`lib/std/num/float/float.hthr`) is now
+`omega(ok)` for its comparison conjuncts and `λ rt sp => omega(ok, rt, sp)`
+for the reserved-top implication, the disjunction staying a `reflects_elim`;
+`Finite::units_le_max` reads `g.ok` through `omega` instead of binding the
+elim. Probes for each connective, a definition at the top and inside a
+guard, a record's guard field, a guard goal, the next-round budget, and the
+controls (a false claim naming the guard's parts, a guard over `parity(n)`
+that no unfolding takes apart, a bare atom) are in
+`lib/_tests/std/tactic/omega_tests.hthr`. The library's hand-written
+decompositions in modules that do not import omega (the x86 asm tables,
+FunctionIR evaluation) are left as they are.
+
+## 18. Fields of a record constructed in place, and guards as equations (2026-10-31)
+
+`issues/decreases-measure-record-field-unspelled.md`. A `decreases s.m`
+measure at the self-call `f(CdState(s.m - 1, Cons(s.m, s.out)))` is the
+read `fst(snd(pair(…)))`: the field off a record *value*. Three gaps stood
+between it and the default `omega`, and the record-free control
+(`decreases m` over two parameters) shared the third:
+
+- **The speller had no case for it.** §10's `Speller::field_read` types its
+  receiver off a spine, and a pair is no spine; `projection_reduct` takes a
+  δ-transparent weak head, which goes past the field's value (`s.m - 1`)
+  into `sub`'s eliminator. `Speller::value_field_read` (display.rs) now
+  projects by syntax (`spelling::project_value`: every projection meets a
+  pair, no reduction): for reading the read is spelled as written,
+  `CdState(sub(s.m, 1), …).m`; for a source spelling it is the component
+  itself, which re-elaborates to a term the read converts to by Σ-β.
+- **`omega` reflected it as an atom with no spelling** — the same weak-head
+  overshoot in `projection_reduct`, and `field_as_put` declines a receiver
+  that is not a call. `field_as_put_within` now takes the syntactic
+  component first, so the read is reflected as `s.m - 1` and §16's split
+  applies.
+- **The arm's equation was not a fact.** `match h: Nat::leb(s.m, 0)` binds
+  `h: leb(s.m, 0) = False`, and §17's round read only `b.IsTrue()`. A Bool
+  equation `b = True`/`b = False` is now a guard proved true/false
+  (`guard_eq_true`/`guard_eq_false`, `bool_equation` in omega_cert.rs). For
+  the *lifted* obligation (`docs/termination-measures-design.md` §4) to see
+  it, `measure::arithmetic_fact` admits an arm equation at `True`/`False`
+  beside `<`/`<=` facts, so `measure_local_evidence` quantifies it; its
+  trial elaboration still decides whether the fact is used.
+
+The repro checks with no `on`, lifted. Its unfolding companion stays
+declined for §3 of the unfolding design's own reason (a `match` with an
+equation binding). Probes, the false-claim control included, are in
+`lib/_tests/std/tactic/omega_tests.hthr` (`guard_eq_*`,
+`field_of_constructed_record`, `count_down`).

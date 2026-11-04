@@ -394,6 +394,24 @@ that path.
 The first S3 round does not need this. Its first program is `cat`, whose
 buffer is touched only by calls (§10).
 
+**As built** (`issues/native-source-bytes.md`, 2026-10-26). The first byte
+nodes take a simpler road than the one above, which stays the target. A
+region's buffers are a `List<List<BitVec(8)>>` threaded beside the
+valuation by `StructuredRegion::run` (`lib/native/function_ir/function_ir_state.hthr`),
+not port values; `eval` is unchanged and is `run` from no buffers
+(`run_empty`). `BufferLoad(output, buffer, index)` reads a byte zero-extended,
+and `BufferStore(output, buffer, index, value)` stores a word's low byte and
+reads it back. An index past the buffer's end loads zero and stores nothing,
+so no `Faulted` outcome exists yet. Every buffer already lives in the data
+region under S3.2's `Target::Placed`, so the statement compiler compiles a
+byte node there, CMP-guarded against the capacity
+(`lib/native/native_compile_bytes.hthr`), with no footprint and no change to
+S4, which refuses the nodes. Initial bytes are stored at entry. A leaf with
+byte nodes in it compiles a node at a time, each result stored to its slot
+before the next node reads it, when every node works at width 64
+(`lib/native/native_compile_nodes.hthr`,
+`issues/native-compile-wider-leaves.md`).
+
 ---
 
 ## 7. The layer
@@ -534,6 +552,28 @@ Every obligation is over abstract inputs, so none of them grows with the
 program, which is the cost argument of the program-logic design (§6.3). The
 theorem is the `main` case at `K := λ o => Ret(status(o))`, from the
 loader's initial state, for every page, register file and flags.
+
+*As landed (S3.2, `lib/native/native_compile*.hthr`):* the shape above with
+three simplifications. The layout is fixed rather than threaded: every word
+has an eight-byte slot in one data region, each buffer a range after the
+words at its capacity, and a scratch range past them, so the invariant is
+the memory alone (`Target::Placed`: the region holds cells that keep the
+environment) and no register carries a value between statements. The
+construct lemmas are proved over the code's claim `Target::Goes` (every
+state at an offset, its code resident, meeting a condition, runs as a tree)
+with one rule per instruction form, not through `Wp`; a statement's claim is
+`Target::Runs`, the continuation form above with `Inv` as `Placed`. And a
+`Pure` leaf is a register-only dataflow region, so it enters by S4's
+`Region::lower_correct` with memory untouched and needed no footprint (§2.4
+stays open as `wp-proved-memory-contracts`, for leaves that spill or call).
+A read lands in the scratch range and is copied into its buffer only when it
+succeeds, since Linux may leave the range written after a failure. `Loop` is
+an induction on the loop's fuel, the body run with the test and a JMP back
+as its continuation. The theorem is `native_compile_correct`; cat compiled
+at the I/O image's page sends what it read (`cat_native_sends`,
+`native_cat_compiled.hthr`). Other region shapes, other calls and the code's
+shape are `native-compile-wider-leaves`, `native-compile-other-calls` and
+`native-compiled-code-shape`.
 
 ## 8. Per-program cost, and one gap
 

@@ -149,9 +149,12 @@ fn is_infix(tok: &Tok, roles: &HashMap<usize, TokenRole>) -> bool {
         | TokKind::Bullet
         | TokKind::Approx
         | TokKind::Join
+        | TokKind::Meet
         | TokKind::Wedge
         | TokKind::Vee
-        | TokKind::Iff => true,
+        | TokKind::Iff
+        // `let x <- e;`, and `(<- e)`, where the `(` keeps it tight on the left.
+        | TokKind::LArrow => true,
         // Comparison `<`; an argument-list `<` is a delimiter instead. When the
         // file did not parse, `delims` is empty and every `<` reads as infix —
         // so `Lt` is excluded there too, by `role_known`.
@@ -218,7 +221,7 @@ fn gap_between(a: &Tok, b: &Tok, roles: Option<&HashMap<usize, TokenRole>>) -> G
     if matches!(a.kind, Minus) && (!parsed || infix_minus(a)) {
         return if infix_minus(a) { Gap::Space } else { Gap::Keep };
     }
-    if matches!(a.kind, Neg | Minus | Bang | Dollar) && !declared(a) {
+    if matches!(a.kind, Neg | Minus | Bang | Dollar | UpArrow) && !declared(a) {
         return Gap::Tight;
     }
     // The postfix `⁻¹` hugs its operand, on the same terms.

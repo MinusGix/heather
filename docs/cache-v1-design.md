@@ -312,8 +312,10 @@ compiled in. It is deliberately conservative: a comment change in the kernel
 invalidates the cache. That is the right direction to err, and it makes
 "a changed kernel invalidates loudly" a property of the build rather than of
 someone remembering to bump a constant — which is the failure mode a
-hand-maintained epoch number has. A mismatch discards the entire file and says
-so.
+hand-maintained epoch number has. A reader believes only the entries its own
+kernel recorded and says so when there are none; since
+`issues/verdict-store-one-kernel.md` other kernels' entries stay in the file,
+in sections of their own (§8), rather than being discarded.
 
 What it should become: a fingerprint of the kernel's *semantics* rather than
 its text — the conversion rules, the strip discipline, the layer table — so
@@ -326,8 +328,10 @@ one value. Recorded, not built.
 
 - *Detectable*: a stale kernel (fingerprint), a bad format version, a
   truncated or bit-flipped file (a body checksum line), a malformed entry
-  (field count, hex shape). Any of these discards the whole file and forces a
-  full re-check, loudly.
+  (field count, hex shape). Any of these leaves the reader with no verdicts
+  and forces a full re-check, loudly (a stale kernel's section, and a damaged
+  section of another kernel, are not this reader's to believe or to keep
+  reading; §8).
 - *Not detectable*: a **forged** entry. Anyone who can write the cache file
   can compute the key of a declaration with a bogus proof and insert it, and
   can recompute the checksum while they are there. The checksum is integrity
@@ -378,15 +382,31 @@ cache: kernel semantics changed since these 134 entries were written — discard
 ## 8. On-disk format
 
 `.heather/cache/entries-v1.tsv`, one repo-local directory, tab-separated,
-inspectable with `cat`, and versioned:
+inspectable with `cat`, and versioned. Since format 4 the file holds one
+section per kernel that has written to it, most recently used first
+(`issues/verdict-store-one-kernel.md`):
 
 ```
-heather-cache	1
-kernel-semantics	<64 hex>
-checksum	<64 hex>
+heather-cache	4
+kernel	<64 hex fingerprint>	<last used, unix seconds>	<64 hex checksum>
 ok	<64 hex check key>	<64 hex interface hash>	<name>
 …
+kernel	<another kernel>	<last used>	<checksum>
+…
 ```
+
+Format 1–3 had one `kernel-semantics` and one `checksum` line for the whole
+file, so a reader with another kernel discarded every entry and its save
+overwrote them. That was free with one checkout; with several sharing a store
+through `HEATHER_CACHE_DIR` it made the store ping-pong between kernels. Now a
+reader believes only its own kernel's section and carries the others through
+its save verbatim; a section leaves when it is unused for
+`store::MAX_AGE_SECS` or falls outside the `store::MAX_KERNELS` most recently
+used, never because another kernel saved last. A run that only hit renews its
+section's stamp once a day (`store::REFRESH_SECS`) so a fully warm kernel does
+not age out. Trust is unchanged: a verdict is accepted only under the kernel
+that recorded it. A format-3 file is still read, as one unstamped section: its
+keys mean what they meant, and the bump changed only the shape.
 
 Four decisions in that shape:
 
@@ -403,8 +423,10 @@ Four decisions in that shape:
   by a version that understands it and skipped by one that does not. The
   format does not have to change to make room; it already has the room.
 
-The checksum covers the entry body and is checked on load. Writing is
-whole-file, at the end of a successful run.
+Each section's checksum covers its entry lines and is checked when that
+section is read, so another kernel's damaged section is that kernel's miss and
+is dropped by the next save, never this reader's. Writing is whole-file, at
+the end of a successful run.
 
 ## 9. One invariant the implementation added
 
@@ -584,6 +606,36 @@ them with `accepted`, and abandons its questions if the replay is rejected.
 A stored theorem has no proof to ask about and keeps its statement check.
 The trust is unchanged: rung 1 either way, and a body the store never saw
 still faces the kernel.
+
+**Statement verdicts (2026-10-29).** That kept statement check was, by
+2026-10-29, the whole of a warm native world's `image_recheck`: every
+theorem and opaque declaration of every replayed module re-checked on every
+load, with every verdict stored
+(`issues/native-process-fixed-cost.md`). Replay now asks
+`KernelGate::admits_statement` about a declaration without a body, and
+records a passed statement with `statement_accepted`. The key is a third
+family,
+
+```
+statement_key = SHA-256( "heather/statement/1\0" ++ interface )
+```
+
+which is enough because the interface renders the statement itself and
+every referent as its own interface: a statement check is type formation
+over those referents' types and the δ-visible bodies their interfaces carry,
+and nothing else. A statement check that opened a sealed proof keeps no
+verdict, by the rule `accepted` follows.
+
+**One gate, several Ψs (2026-10-29).** An elaborator and its forks share
+one gate, and `write-elf` asks it about the parent's Ψ and each fork's in
+turn. The prefix of interface hashes was reset whenever a shorter Ψ asked
+and trusted unread for a longer one, so each switch re-hashed the whole
+world, and a Ψ that diverged from the last one but was already longer than
+the hashed prefix would have inherited its hashes. The cache now keeps a
+`GlobalMark` of the Ψ its prefix was built along and keeps exactly the
+bindings the asking Ψ has in common with it (`GlobalBindings::common_prefix`:
+sealed chunks shared by pointer are common without a look, anything else is
+compared by `==`).
 
 The cold overhead deserves one honest caveat: 6.8% is an upper bound taken
 while the machine was busiest. A tighter paired loop later the same session

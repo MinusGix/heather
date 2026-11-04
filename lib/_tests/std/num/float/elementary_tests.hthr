@@ -1,0 +1,19 @@
+// Probes of exp, sin and cos at rationals (lib/std/num/float/elementary.hthr)
+// through `by intervals()`, which reads their heads as enclosed leaves
+// (`RBox`). Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import creal; import dyadic; import interval; import creal_interval; import series; import elementary; import tactic; import interval_tactic;
+
+theorem e_above_two(): CReal::ofRat(2) < CReal::exp_rat(1) { by intervals() }
+theorem e_below_three(): CReal::exp_rat(1) < 3 { by intervals() }
+// e = 2.71828…, three digits on each side.
+theorem e_above(): CReal::ofRat(Rat(2718, 1000)) < CReal::exp_rat(1) { by intervals() }
+// expect-error: intervals: the enclosures do not separate the two sides
+theorem e_not_below(): CReal::exp_rat(1) < CReal::ofRat(Rat(2718, 1000)) { by intervals() }
+theorem sin_one(): CReal::ofRat(Rat(84, 100)) < CReal::sin_rat(1) { by intervals() }
+theorem cos_one(): CReal::cos_rat(1) <= CReal::ofRat(Rat(55, 100)) { by intervals() }
+// A large numerator: `start` reads `⌊|a|⌋ + 1`, not the numerator.
+theorem exp_355_113(): CReal::ofRat(23) < CReal::exp_rat(Rat(355, 113)) { by intervals() }
+// Leaves under the checker's operations.
+theorem pythagoras_near(): CReal::sin_rat(1).npow(2) + CReal::cos_rat(1).npow(2) < CReal::ofRat(Rat(1001, 1000)) { by intervals() }
+theorem exp_apart(): CReal::exp_rat(Rat(-1, 2)).Apart(0) { by intervals() }

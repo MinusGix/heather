@@ -1,0 +1,59 @@
+// Probes of `lib/std/bitvec/sint.hthr`, signed words: closed values at the
+// edges of the range (the most negative value, -1, zero), a neutral width,
+// the operations whose meaning differs from the unsigned word's, and `¬`
+// theorems for the unsigned answer where it differs. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5).
+import bool; import logic; import nat; import int; import algebra; import bitvec; import sint;
+
+fn s8(k: i8) → i8 { k }
+fn s64(k: i64) → i64 { k }
+
+// `i8` is `SInt(8)`, and a neutral width spells the family applied.
+fn spelled(a: i8) → SInt(8) { a }
+fn neutral(n: Nat, a, b: i(n)) → SInt(n) { a * b + a - b }
+fn odd_width(a: i27) → i27 { -a }
+
+// Negative numerals, and the range's ends.
+theorem minus_one_bits(): s8(-1).bits = 255 { refl }
+theorem min_value(): s8(-128).toInt() = NegSucc(127) { refl }
+theorem max_value(): s8(127).toInt() = OfNat(127) { refl }
+theorem wraps(): s8(127) + 1 = -128 { refl }
+theorem neg_min(): -s8(-128) = -128 { refl }
+theorem overflow_seen(): s8(127).overflows_add(1) = True { refl }
+theorem no_overflow(): s8(-1).overflows_add(1) = False { refl }
+
+// Order is signed.
+theorem lt_signed(): decide_bit<s8(-1) < 0>() = True { refl }
+theorem lt_not_unsigned(): decide_bit<s8(0) < -1>() = False { refl }
+theorem le_refl_closed(): decide_bit<s8(-5) <= -5>() = True { refl }
+theorem eq_closed(): decide_bit<s8(-1) = -1>() = True { refl }
+theorem ne_closed(): decide_bit<s8(-1) = 1>() = False { refl }
+theorem min_max(): s8(-3).min(2) = -3 ∧ s8(-3).max(2) = 2 { And(refl, refl) }
+
+// Division truncates toward zero; the remainder takes the dividend's sign.
+theorem div_neg_pos(): s8(-7).div(2) = -3 { refl }
+theorem rem_neg_pos(): s8(-7).rem(2) = -1 { refl }
+theorem div_pos_neg(): s8(7).div(-2) = -3 { refl }
+theorem rem_pos_neg(): s8(7).rem(-2) = 1 { refl }
+theorem div_neg_neg(): s8(-7).div(-2) = 3 { refl }
+theorem rem_neg_neg(): s8(-7).rem(-2) = -1 { refl }
+theorem div_min_minus_one(): s8(-128).div(-1) = -128 { refl }
+theorem div_by_zero(): s8(5).div(0) = -1 ∧ s8(-5).div(0) = 1 ∧ s8(-5).rem(0) = -5 { And(refl, And(refl, refl)) }
+theorem div_not_floor(): decide_bit<s8(-7).div(2) = -4>() = False { refl }
+theorem div_machine_width(): s64(-9223372036854775807).div(10) = -922337203685477580 { refl }
+
+// Right shift copies the sign; the logical one does not.
+theorem shift_right_signed(): s8(-16).shift_right(2) = -4 { refl }
+theorem shift_right_logical(): s8(-16).logical_shift_right(2) = 60 { refl }
+theorem shift_left_wraps(): s8(64).shift_left(1) = -128 { refl }
+
+// Widening keeps the value; narrowing keeps the low bits.
+theorem extend_negative(): s8(-3).extend(8) = -3 { refl }
+theorem extend_value(): s8(-3).extend(8).toInt() = NegSucc(2) { refl }
+theorem truncate_low(): (@SInt::ofInt(16, NegSucc(299))).truncate(8, 8) = s8(-44) { refl }
+
+// The readings: `-1` signed is `255` unsigned, and the round trips.
+theorem readings(): s8(-1).as_unsigned().toNat() = 255 { refl }
+theorem round_trip(n: Nat, a: SInt(n)): a.as_unsigned().as_signed() = a { SInt::as_signed_as_unsigned(n, a) }
+theorem add_comm_open(n: Nat, a, b: i(n)): a + b = b + a { SInt::add_comm(n, a, b) }

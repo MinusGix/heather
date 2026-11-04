@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,recursion,design]
 area: language
 created: 2026-09-25
-updated: 2026-09-25
+updated: 2026-11-04
 ---
 
 Since 2026-09-25 the elaborator **refuses** a structurally recursive `fn`
@@ -90,3 +90,5 @@ in its own arm would still compute the wrong type.
   - **Mechanism:** one surface pass, `recursion::plan`, which is binder-aware and tracks which parameters every visible name depends on. `elab_decl` routes on its answer. The only elaborator state is one per-declaration slot (`misplaced_recursion`, keyed by the recursion name), read in `elab_self_call`. The `Cx` tail spine, the recursion scope, the name-resolution hook, the dispatcher hooks and the error-path substitution of the previous round are gone. `surface::for_each_child` factors `walk_expr`'s child iteration. `SelfRef::of_decl` is shared by the planner and the body.
   - **Tests:** `crates/elab/tests/recursion_meaning.rs` moved to the `omega` family, so it has the measure route: 10 tests, each accepted case pinned by what it computes.
   - **Remaining here:** make the off-result shapes legal (extend the §3 generator for a match holding a self-call in an argument or a `let` right-hand side, or step 2's per-constructor lowering), and measures for declared inductives other than `List` (a derived size). The type-valued `fn` gap noted above is closed, because the plan is syntactic and sees every `fn`.
+- 2026-11-02: Found a sibling miscompile this issue's refusals do not cover: a `let` above the recursive `match` bound from a parameter the self-call changes keeps the top call's value ([[recursion-let-reads-changing-parameter]]).
+- 2026-11-04: 2026-11-04: For `Nat`, the parameter read inside its arm (or through a `let`/`have` above the match) now lowers by recursion at the top ([[recursion-below-nat-fallback]]), which means the source and unfolds by conversion; the measure lowering is the fallback where that does not elaborate (calls two below, an implicit varied). `List` and the misplaced-match spellings at other types are unchanged.

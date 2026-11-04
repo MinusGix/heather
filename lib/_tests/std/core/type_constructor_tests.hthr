@@ -1,0 +1,166 @@
+// Probes of generic types as type constructors (issues/higher-kinded-classes.md):
+// a bare `Option` passed where `Type → Type` is expected, an implicit
+// `M: Type → Type` learned from an argument at `M(Nat)`, and a class whose
+// carrier is a type constructor, `class Bind<M: Type → Type>`, with
+// instances at `Option` and `Tac` that `:= infer` resolves.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import result; import list;
+import tactic;
+
+record Box(A: Type) { v: A }
+
+fn pick({M: Type → Type}, x: M(Nat)) → M(Nat) { x }
+fn pick_at(M: Type → Type, x: M(Nat)) → M(Nat) { x }
+fn pick_open({M: Type → Type}, {A: Type}, x: M(A)) → M(A) { x }
+fn pick2(M: Type → Type → Type, x: M(Nat, Bool)) → M(Nat, Bool) { x }
+
+// Piece 2: a bare generic name at a `Type → Type` position is the type
+// constructor, η-short (`Option#tycode_fn`) where the declaration has a code
+// function and a λ where it has none (`Tac`, a tier-2 lowering).
+theorem bare_option(): pick_at(Option, Some(3)) = Some(3) { refl }
+theorem bare_list(): pick_at(List, [1, 2]) = [1, 2] { refl }
+fn bare_box(x: Box(Nat)) → Box(Nat) { pick_at(Box, x) }
+fn bare_tac(t: Tac<Nat>) → Tac<Nat> { pick_at(Tac, t) }
+fn bare_result(r: Result<Nat, Bool>) → Result<Nat, Bool> { pick2(Result, r) }
+// A constructor fixing one argument is a λ the author writes.
+fn result_at_err(r: Result<Nat, Bool>) → Result<Nat, Bool> {
+    pick_at(λ (A: Type) => Result<A, Bool>, r)
+}
+
+// Piece 1: `?M(Nat) ≟ D<…, Nat>` takes the head with the leading arguments,
+// so the last argument is the one abstracted. At a literal and at a neutral
+// argument, and in a checking position.
+theorem infer_option(): pick(Some(3)) = Some(3) { refl }
+fn infer_option_neutral(x: Option<Nat>) → Option<Nat> { pick(x) }
+fn infer_box(x: Box(Nat)) → Box(Nat) { pick(x) }
+fn infer_list(xs: List<Nat>) → List<Nat> { pick(xs) }
+fn infer_tac(t: Tac<Nat>) → Tac<Nat> { pick(t) }
+theorem infer_tac_literal(): pick(Tac::Pure(4)) = Tac::Pure(4) { refl }
+// A declaration's declared slot (`inductive Result<A, E> varies A`) is the
+// argument abstracted, so `Result<Nat, Bool>` at `M(Nat)` is
+// `M := λ A => Result<A, Bool>` (docs/lambda-carrier-instances-design.md §7).
+// Literal, neutral, open, and in a checking position.
+theorem infer_result_slot(): pick(Result::Ok<Nat, Bool>(3)) = Ok(3) { refl }
+fn infer_result_neutral(r: Result<Nat, Bool>) → Result<Nat, Bool> { pick(r) }
+fn infer_result_open_error<E>(r: Result<Nat, E>) → Result<Nat, E> { pick(r) }
+fn infer_result_open<A, E>(r: Result<A, E>) → Result<A, E> { pick_open(r) }
+fn infer_result_in_let(r: Result<Nat, Bool>) → Result<Nat, Bool> {
+    let s: Result<Nat, Bool> = pick(r);
+    s
+}
+// With no `varies`, the last argument is the slot: `Pair2<Bool, Nat>` is
+// `M := Pair2<Bool>`, η-short.
+inductive Pair2<A, B> { Both(a: A, b: B) }
+fn infer_default_slot(p: Pair2<Bool, Nat>) → Pair2<Bool, Nat> { pick(p) }
+// That abstraction is a guess, and a guess is taken last
+// (issues/unifier-guesses-postponed.md): the expected type `PF(Nat)` forces
+// `M := PF`, which the argument's guess `M := Pair2<Nat, ·>` used to take
+// first. In a body, in a checking position, and at an open element type.
+fn PF(A: Type) → Type { Pair2<A, Bool> }
+fn guess_after_expected(p: Pair2<Nat, Bool>) → PF(Nat) { pick(p) }
+fn guess_after_expected_let(p: Pair2<Nat, Bool>) → PF(Nat) {
+    let q: PF(Nat) = pick(p);
+    q
+}
+fn guess_after_expected_open<A>(p: Pair2<A, Bool>) → PF(A) { pick_open(p) }
+fn infer_in_let(x: Option<Nat>) → Option<Nat> {
+    let y: Option<Nat> = pick(x);
+    y
+}
+// An open element type: both `M` and `A` are learned, under a binder the
+// subject's type mentions.
+fn infer_open<A>(x: Option<A>) → Option<A> { pick_open(x) }
+fn infer_open_tac<A>(t: Tac<A>) → Tac<A> { pick_open(t) }
+theorem infer_open_proof<A>(x: Option<A>): pick_open(x) = x { refl }
+
+// Piece 3: classes over a type constructor. `Bind` and `Pointed` are the
+// prelude's (the carrier protocol of binding statements,
+// docs/sequencing-surface-design.md §2), with their instances at `Option`
+// (option.hthr) and `Tac` (tactic.hthr).
+
+fn twice({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pointed<M> := infer) → M(Nat) {
+    b.bind(x, λ n => p.pure(n + n))
+}
+fn none_nat() → Option<Nat> { None }
+
+theorem twice_option(): twice(Some(3)) = Some(6) { refl }
+theorem twice_none(): twice(none_nat()) = none_nat() { refl }
+theorem twice_tac(): twice(Tac::Pure(4)) = Tac::Pure(8) { refl }
+// At a λ carrier (result.hthr's instances at `λ A => Result<A, E>`), and at a
+// partial application whose slot is the last argument.
+fn ok_nat(n: Nat) → Result<Nat, Bool> { Ok(n) }
+fn err_nat() → Result<Nat, Bool> { Err(True) }
+theorem twice_result(): twice(ok_nat(3)) = ok_nat(6) { refl }
+theorem twice_result_err(): twice(err_nat()) = err_nat() { refl }
+theorem twice_result_neutral(r: Result<Nat, Bool>): twice(r) = r.and_then(λ n => Ok(n + n)) { refl }
+fn twice_result_open<E>(r: Result<Nat, E>) → Result<Nat, E> { twice(r) }
+inductive Either2<E, A> { Left2(e: E), Right2(a: A) }
+fn Either2::and_then<E, A, B>(self x: Either2<E, A>, f: A → Either2<E, B>) → Either2<E, B> {
+    match x { Left2(e) => Left2(e), Right2(a) => f(a) }
+}
+instance<E> Bind<Either2<E>> { bind := λ {A} {B} x f => x.and_then(f) }
+instance<E> Pointed<Either2<E>> { pure := λ {A} a => Right2(a) }
+fn right_nat(n: Nat) → Either2<Bool, Nat> { Right2(n) }
+theorem twice_partial(): twice(right_nat(3)) = right_nat(6) { refl }
+// A partial application as a constructor value, η-short.
+theorem partial_value(): pick_at(Either2<Bool>, right_nat(2)) = right_nat(2) { refl }
+
+// Generic code over the class passes its dictionaries on by scope.
+fn four_times({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pointed<M> := infer) → M(Nat) {
+    twice(twice(x))
+}
+theorem four_times_option(): four_times(Some(1)) = Some(4) { refl }
+// At a neutral argument the instance still resolves and unfolds.
+theorem twice_option_neutral(x: Option<Nat>): twice(x) = x.and_then(λ n => Some(n + n)) { refl }
+
+// A class extending classes over a constructor, filled from the canonical
+// parents at the same constructor.
+class Monad<M: Type → Type> extends Bind<M>, Pointed<M> {}
+instance Monad<Option> {}
+fn twice_m({M: Type → Type}, x: M(Nat), m: Monad<M> := infer) → M(Nat) {
+    m.bind(x, λ n => m.pure(n + n))
+}
+theorem twice_m_option(): twice_m(Some(5)) = Some(10) { refl }
+
+// Refusals, each naming its reason.
+
+// expect-error: needs the type constructor `M`
+fn ambiguous_constructor() → Nat { twice(3) }
+
+// expect-error: no instance for `Bind<List>`
+fn no_instance_at_list(xs: List<Nat>) → List<Nat> { twice(xs) }
+
+// A carrier fixing an argument shows it, and the hole it abstracts.
+// expect-error: no instance for `Bind<Pair2<Bool, ·>>`
+fn no_instance_at_partial(p: Pair2<Bool, Nat>) → Pair2<Bool, Nat> { twice(p) }
+
+// expect-error: `Option` takes 1 type argument(s), but the expected type constructor provides 2
+fn too_few_arguments(x: Option<Nat>) → Nat { 0 + pick2(Option, x) }
+
+// expect-error: to fix others, write the constructor as a λ
+fn too_many_parameters(r: Result<Nat, Bool>) → Result<Nat, Bool> { pick_at(Result, r) }
+
+// The value type at the declared slot is not `Nat`: refused, not
+// re-abstracted at another argument.
+// expect-error: but `Result<Nat, Nat>` is expected here
+fn result_slot_mismatch(r: Result<Bool, Nat>) → Result<Bool, Nat> { pick(r) }
+
+// With nothing to force it, `M` is the guess, and the refusal names it.
+// expect-error: `M` was guessed as `Pair2<Nat, ·>`
+fn guess_named(p: Pair2<Nat, Bool>) → Pair2<Nat, Bool> { pick(p) }
+
+// expect-error: must provide 1 before its `Type`; it provides 2
+fn partial_wrong_arity(p: Pair2<Bool, Nat>) → Pair2<Bool, Nat> { pick2(Pair2<Bool>, p) }
+
+// An instance at a λ abstracting anything but the declared slot is refused:
+// no use site would ever select it.
+// expect-error: is unreachable: a use site learns `Result`'s constructor at its declared slot, `A`
+instance<A> Bind<λ (E: Type) => Result<A, E>> {
+    bind := λ {E} {F} r f => match r { Ok(a) => Ok(a), Err(e) => f(e) }
+}
+// expect-error: is unreachable
+instance Pointed<λ (A: Type) => List<List<A>>> { pure := λ {A} a => [[a]] }
+
+// expect-error: is not a universe: a type parameter takes a type
+fn not_a_type_constructor() → Type { (λ (F: Nat → Type) => F(0))(Option) }

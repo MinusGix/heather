@@ -169,6 +169,54 @@ fn existing_function_child_in_a_corecursive_step() {
     );
 }
 
+// §5.4 — constructors nested above a self-call: the carrier grows one
+// pending-node layer per extra constructor, and each layer's observation
+// computes by β under `out`, back to the definition itself after the last
+// (`tl(tl(pairs(n))) = pairs(…)` by `refl`). Literal and neutral seeds; two
+// and three layers; a nested node under a function child whose answer it
+// captures, and a `match` there with an existing tree in one arm (the
+// `echo` that `function_children_and_dependent_domains` writes with a phase
+// seed); an existing function child one layer down, and an answer captured
+// by the pending node as the next seed; and an open element type.
+#[test]
+fn nested_constructors_above_a_self_call() {
+    elab(&format!(
+        "{STREAM}
+         fn pairs(n: Nat) -> Stream {{ SCons(n, SCons(Succ(n), pairs(Succ(Succ(n))))) }}
+         fn triples(n: Nat) -> Stream {{ SCons(n, SCons(n, SCons(Succ(n), triples(Succ(n))))) }}
+         theorem pairs_lit(): nth(pairs(0), 5) = 5 {{ refl }}
+         theorem pairs_open(n: Nat): hd(tl(pairs(n))) = Succ(n) {{ refl }}
+         theorem pairs_back(n: Nat): tl(tl(pairs(n))) = pairs(Succ(Succ(n))) {{ refl }}
+         theorem triples_lit(): nth(triples(4), 4) = 5 {{ refl }}
+         theorem triples_back(n: Nat): tl(tl(tl(triples(n)))) = triples(Succ(n)) {{ refl }}
+         inductive Cmd {{ Ask, Say(v: Nat) }}
+         codata Tree {{ Ret(r: Nat), Tau(t: Tree), Vis(c: Cmd, k: Nat -> Tree) }}
+         fn echo(acc: Nat) -> Tree {{
+             Vis(Ask, λ n => match n {{ Zero => Ret(acc), Succ(_) => Tau(echo(add(n, acc))) }})
+         }}
+         fn answer(t: Tree, n: Nat) -> Tree {{ match t {{ Vis(_, k) => k(n), _ => t }} }}
+         fn tau_next(t: Tree) -> Tree {{ match t {{ Tau(u) => u, _ => t }} }}
+         fn ret_of(t: Tree) -> Nat {{ match t {{ Ret(r) => r, _ => 0 }} }}
+         theorem echo_lit(): tau_next(answer(echo(1), 2)) = echo(3) {{ refl }}
+         theorem echo_open(a: Nat, m: Nat): tau_next(answer(echo(a), Succ(m))) = echo(add(Succ(m), a)) {{ refl }}
+         theorem echo_stops(a: Nat): ret_of(answer(echo(a), 0)) = a {{ refl }}
+         fn chats(v: Nat) -> Tree {{ Vis(Say(v), λ f => Tau(Vis(Say(f), λ g => chats(add(g, v))))) }}
+         theorem chats_back(v: Nat, a: Nat, b: Nat): answer(tau_next(answer(chats(v), a)), b) = chats(add(b, v)) {{ refl }}
+         codata Two {{ Node(k: Nat -> Two, t: Two) }}
+         fn kid2(x: Two, n: Nat) -> Two {{ match x {{ Node(k, _) => k(n) }} }}
+         fn next2(x: Two) -> Two {{ match x {{ Node(_, t) => t }} }}
+         fn walk(k: Nat -> Two) -> Two {{ Node(k, Node(k, walk(k))) }}
+         theorem walk_k(k: Nat -> Two, n: Nat): kid2(next2(walk(k)), n) = k(n) {{ refl }}
+         theorem walk_back(k: Nat -> Two): next2(next2(walk(k))) = walk(k) {{ refl }}
+         codata Seq<A> {{ Cons(h: A, t: Seq<A>) }}
+         fn shd<A>(s: Seq<A>) -> A {{ match s {{ Cons(h, _) => h }} }}
+         fn stl<A>(s: Seq<A>) -> Seq<A> {{ match s {{ Cons(_, t) => t }} }}
+         fn alt<A>(a: A, b: A) -> Seq<A> {{ Cons(a, Cons(b, alt(a, b))) }}
+         theorem alt_open<A>(a: A, b: A): shd(stl(stl(stl(alt(a, b))))) = b {{ refl }}
+         theorem alt_back<A>(a: A, b: A): stl(stl(alt(a, b))) = alt(a, b) {{ refl }}"
+    ));
+}
+
 // The open element type: type parameters on the declaration and on a
 // corecursive function, with the arguments inferred from a codata argument.
 #[test]
@@ -324,12 +372,248 @@ fn self_call_under_an_observation_is_refused() {
     assert!(msg.contains("is not guarded"), "{msg}");
 }
 
+// A call inside a tree that is not one of the declaration's constructors
+// is corecursion *up to* that function, which only a friend takes (§5.5):
+// `tl` reads two layers of its argument's tree (the call's constructor and
+// its child), so it is not one, even where nested constructors above it
+// would be accepted.
 #[test]
-fn nested_guard_is_refused_with_its_issue() {
-    let msg = elab_err(&format!(
-        "{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, SCons(n, bad(n))) }}"
+fn self_call_inside_an_existing_tree_is_refused() {
+    let msg = elab_err(&format!("{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, tl(SCons(n, bad(n)))) }}"));
+    assert!(msg.contains("`tl` is not a friend of the corecursive `bad`"), "{msg}");
+    let msg = elab_err(&format!("{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, tl(bad(n))) }}"));
+    assert!(msg.contains("`tl` is not a friend of the corecursive `bad`"), "{msg}");
+    let msg = elab_err(&format!("{STREAM}\nfn bad(n: Nat) -> Stream {{ SCons(n, SCons(hd(bad(n)), bad(n))) }}"));
+    assert!(msg.contains("is not guarded"), "{msg}");
+}
+
+// §5.5 — corecursion up to friends. `sadd` reads one layer of each argument
+// and calls itself on their children; `smul` (the Hurwitz product of
+// formal power series, `(fg)' = f'g + fg'`) corecurses under it, and
+// `scale` takes a data argument beside its stream.
+const FRIENDS: &str = r#"
+fn mul(a: Nat, b: Nat) -> Nat { match a { Zero => 0, Succ(k) => add(b, mul(k, b)) } }
+fn sadd(s: Stream, t: Stream) -> Stream {
+    match s { SCons(a, s2) => match t { SCons(b, t2) => SCons(add(a, b), sadd(s2, t2)) } }
+}
+fn smul(f: Stream, g: Stream) -> Stream {
+    SCons(mul(hd(f), hd(g)), sadd(smul(tl(f), g), smul(f, tl(g))))
+}
+fn scale(c: Nat, s: Stream) -> Stream { match s { SCons(a, s2) => SCons(mul(c, a), scale(c, s2)) } }
+fn geo(n: Nat) -> Stream { SCons(1, scale(n, geo(n))) }
+"#;
+
+// Observations of a corecursion up to a friend compute by `refl` as far as
+// the friend's own unfolding does: at neutral streams, at literal ones (the
+// Hurwitz square of 1, 2, 3, … is 1, 4, 14, …), and with a fixed parameter
+// stored as the friend's data argument.
+#[test]
+fn corecursion_up_to_a_friend() {
+    elab(&format!(
+        "{STREAM}{FRIENDS}
+         theorem smul_hd(f: Stream, g: Stream): hd(smul(f, g)) = mul(hd(f), hd(g)) {{ refl }}
+         theorem smul_tl(f: Stream, g: Stream):
+             hd(tl(smul(f, g))) = add(mul(hd(tl(f)), hd(g)), mul(hd(f), hd(tl(g)))) {{ refl }}
+         theorem smul_1(): nth(smul(from(1), from(1)), 1) = 4 {{ refl }}
+         theorem smul_2(): nth(smul(from(1), from(1)), 2) = 14 {{ refl }}
+         theorem geo_3(): nth(geo(2), 3) = 8 {{ refl }}
+         theorem geo_open(n: Nat): hd(tl(geo(n))) = mul(n, 1) {{ refl }}"
     ));
-    assert!(msg.contains("issues/codata-nested-guards.md"), "{msg}");
+}
+
+// A friend whose output is an argument's own first node (`append` at the
+// end of its first list), on a codata type with a childless constructor,
+// with an existing tree and a corecursive call as its arguments.
+#[test]
+fn friend_returning_an_argument() {
+    elab(&format!(
+        "{STREAM}
+         codata CoList {{ CNil, CCons(h: Nat, t: CoList) }}
+         fn upto(n: Nat) -> CoList {{ match n {{ Zero => CNil, Succ(k) => CCons(n, upto(k)) }} }}
+         fn cnth(c: CoList, n: Nat) -> Nat {{
+             match n {{
+                 Zero => match c {{ CNil => 99, CCons(h, _) => h }},
+                 Succ(k) => match c {{ CNil => 99, CCons(_, t) => cnth(t, k) }}
+             }}
+         }}
+         fn app(a: CoList, b: CoList) -> CoList {{
+             match a {{ CNil => b, CCons(h, t) => CCons(h, app(t, b)) }}
+         }}
+         fn cyc(n: Nat) -> CoList {{ CCons(n, app(upto(n), cyc(n))) }}
+         theorem cyc_2(): cnth(cyc(2), 2) = 1 {{ refl }}
+         theorem cyc_3(): cnth(cyc(2), 3) = 2 {{ refl }}
+         theorem cyc_0(): cnth(cyc(0), 5) = 0 {{ refl }}
+         theorem cyc_open(n: Nat): cnth(cyc(Succ(n)), 1) = Succ(n) {{ refl }}"
+    ));
+}
+
+// A friend over function children: its codata argument's child is applied
+// under a λ and passed to itself; the definition corecurses under it in a
+// `match` arm inside a λ child, beside an existing tree in the other arm.
+// Observations read the friend returning its second argument.
+#[test]
+fn friend_over_function_children() {
+    elab(&format!(
+        "{STREAM}
+         codata Tr {{ Leaf(n: Nat), Node(k: Nat -> Tr) }}
+         fn graft(t: Tr, u: Tr) -> Tr {{
+             match t {{ Leaf(_) => u, Node(k) => Node(λ x => graft(k(x), u)) }}
+         }}
+         fn sprout(n: Nat) -> Tr {{
+             Node(λ m => match m {{ Zero => Leaf(n), Succ(j) => graft(Leaf(j), sprout(add(n, j))) }})
+         }}
+         fn at2(t: Tr, x: Nat, y: Nat) -> Nat {{
+             match t {{
+                 Leaf(n) => n,
+                 Node(k) => match k(x) {{
+                     Leaf(n) => n,
+                     Node(k2) => match k2(y) {{ Leaf(n) => n, Node(_) => 77 }}
+                 }}
+             }}
+         }}
+         theorem sprout_0(): at2(sprout(5), 0, 9) = 5 {{ refl }}
+         theorem sprout_lit(): at2(sprout(5), 3, 0) = 7 {{ refl }}
+         theorem sprout_open(n: Nat): at2(sprout(n), 3, 0) = add(n, 2) {{ refl }}
+         theorem sprout_deep(n: Nat): at2(sprout(n), 1, 1) = 77 {{ refl }}"
+    ));
+}
+
+// A friend declared in another module, replayed from its image: its body is
+// re-elaborated over the importer's carrier, under its own module's names.
+#[test]
+fn friend_from_an_imported_module() {
+    let dir = std::env::temp_dir().join(format!("heather-codata-friends-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let streams = format!(
+        "{STREAM}
+         fn sadd(s: Stream, t: Stream) -> Stream {{
+             match s {{ SCons(a, s2) => match t {{ SCons(b, t2) => SCons(add(a, b), sadd(s2, t2)) }} }}
+         }}"
+    );
+    let modules = &[("streams", streams.as_str())];
+    let _cold = support::semantic_test_base_at(modules, dir.clone());
+    let mut warm = support::semantic_test_base_at(modules, dir.clone());
+    let consumer = "import streams;
+         fn add(s: Stream, n: Nat) -> Stream { s }
+         fn tri(n: Nat) -> Stream { SCons(n, sadd(tri(Succ(n)), from(n))) }
+         theorem tri_1(): nth(tri(1), 1) = 3 { refl }
+         theorem tri_open(n: Nat): hd(tl(tri(n))) = streams::add(Succ(n), n) { refl }";
+    warm.elab_module_source("consumer", consumer)
+        .unwrap_or_else(|err| panic!("{}", err.render(consumer)));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// The controls: a wrong observation is refused by the kernel; a friend that
+// reads two layers (`skip`, which would make `f` unproductive) and one that
+// uses its argument as a tree are not friends; a corecursive call in a
+// friend's data argument, or nested constructors beside a friend, are
+// refused with their reasons.
+#[test]
+fn corecursion_up_to_controls() {
+    let msg = elab_err(&format!(
+        "{STREAM}{FRIENDS}\ntheorem wrong(f: Stream, g: Stream): hd(tl(smul(f, g))) = mul(hd(f), hd(g)) {{ refl }}"
+    ));
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    let skip = "fn skip(s: Stream) -> Stream { match s { SCons(a, s2) => SCons(a, skip(tl(s2))) } }";
+    let msg = elab_err(&format!("{STREAM}\n{skip}\nfn f(n: Nat) -> Stream {{ SCons(n, skip(f(n))) }}"));
+    assert!(msg.contains("`skip` is not a friend of the corecursive `f`"), "{msg}");
+    assert!(msg.contains("`s2`"), "{msg}");
+    let peek = "fn peek(s: Stream) -> Stream { SCons(hd(s), peek(s)) }";
+    let msg = elab_err(&format!("{STREAM}\n{peek}\nfn f(n: Nat) -> Stream {{ SCons(n, peek(f(n))) }}"));
+    assert!(msg.contains("`peek` is not a friend of the corecursive `f`"), "{msg}");
+    let msg = elab_err(&format!("{STREAM}{FRIENDS}\nfn f(n: Nat) -> Stream {{ SCons(n, scale(hd(f(n)), f(n))) }}"));
+    assert!(msg.contains("data argument of the friend `scale`"), "{msg}");
+}
+
+// Constructors nested above a call beside a friend, and a constructor with a
+// call inside a friend's argument: pending nodes of the free carrier
+// (docs/codata-elaborator-design.md §5.6), observed by `refl` at a neutral
+// and a literal seed.
+#[test]
+fn nested_constructors_beside_a_friend() {
+    elab(&format!(
+        "{STREAM}{FRIENDS}
+         fn twice(n: Nat) -> Stream {{ SCons(n, SCons(Succ(n), sadd(twice(n), twice(n)))) }}
+         fn lead(n: Nat) -> Stream {{ SCons(n, sadd(SCons(1, lead(n)), from(0))) }}
+         theorem twice_1(n: Nat): hd(tl(twice(n))) = Succ(n) {{ refl }}
+         theorem twice_2(n: Nat): hd(tl(tl(twice(n)))) = add(n, n) {{ refl }}
+         theorem twice_3(): nth(twice(1), 3) = 4 {{ refl }}
+         theorem lead_1(n: Nat): hd(tl(lead(n))) = add(1, 0) {{ refl }}
+         theorem lead_2(n: Nat): hd(tl(tl(lead(n)))) = add(n, 1) {{ refl }}"
+    ));
+}
+
+// A bind-shaped friend: its second argument is a function into the codata
+// type, and it reads one layer of that function's answer (`match h(n)`),
+// as `bind` on interaction trees does. A definition corecurses under it with
+// a λ whose body holds the corecursive call, at a function position of the
+// free carrier (docs/codata-elaborator-design.md §5.6).
+const DBIND: &str = r#"
+codata Dl { Now(n: Nat), Later(t: Dl) }
+fn dbind(t: Dl, h: Nat -> Dl) -> Dl {
+    match t {
+        Now(n) => match h(n) { Now(m) => Now(m), Later(u) => Later(u) },
+        Later(t2) => Later(dbind(t2, h))
+    }
+}
+fn obs(t: Dl, k: Nat) -> Nat {
+    match k {
+        Zero => match t { Now(n) => n, Later(_) => 99 },
+        Succ(j) => match t { Now(n) => n, Later(u) => obs(u, j) }
+    }
+}
+"#;
+
+#[test]
+fn bind_shaped_friend() {
+    elab(&format!(
+        "{STREAM}{DBIND}
+         fn count(n: Nat) -> Dl {{
+             Later(dbind(Now(n), λ m => match m {{ Zero => Now(7), Succ(j) => count(j) }}))
+         }}
+         fn wait(n: Nat) -> Dl {{ Later(dbind(Later(Now(n)), λ m => wait(Succ(m)))) }}
+         theorem count_0(): obs(count(0), 1) = 7 {{ refl }}
+         theorem count_2(): obs(count(2), 2) = 99 {{ refl }}
+         theorem count_3(): obs(count(2), 3) = 7 {{ refl }}
+         theorem count_open(n: Nat): obs(count(Succ(n)), 0) = 99 {{ refl }}
+         theorem wait_open(n: Nat): obs(wait(n), 5) = 99 {{ refl }}
+         fn dbind2(t: Dl, h: Nat -> Dl) -> Dl {{
+             match t {{ Now(n) => h(n), Later(t2) => Later(dbind2(t2, h)) }}
+         }}
+         fn count2(n: Nat) -> Dl {{
+             Later(dbind2(Now(n), λ m => match m {{ Zero => Now(7), Succ(j) => count2(j) }}))
+         }}
+         theorem count2_3(): obs(count2(2), 3) = 7 {{ refl }}
+         theorem count2_open(n: Nat): obs(count2(Succ(n)), 0) = 99 {{ refl }}"
+    ));
+}
+
+// The bind-shaped controls: a wrong observation is refused by the kernel,
+// and a friend that reads two layers of its function argument's answer is
+// not a friend.
+#[test]
+fn bind_shaped_friend_controls() {
+    let count = "fn count(n: Nat) -> Dl { Later(dbind(Now(n), λ m => match m { Zero => Now(7), Succ(j) => count(j) })) }";
+    let msg = elab_err(&format!("{STREAM}{DBIND}{count}\ntheorem wrong(): obs(count(2), 3) = 8 {{ refl }}"));
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    let deep = "fn deep(t: Dl, h: Nat -> Dl) -> Dl {
+        match t { Now(n) => match h(n) { Now(m) => Now(m), Later(u) => match u { Now(m) => Now(m), Later(w) => Later(w) } }, Later(t2) => Later(deep(t2, h)) }
+    }
+    fn f(n: Nat) -> Dl { Later(deep(Now(n), λ m => f(m))) }";
+    let msg = elab_err(&format!("{STREAM}{DBIND}{deep}"));
+    assert!(msg.contains("`deep` is not a friend of the corecursive `f`"), "{msg}");
+}
+
+// A nested layer's observation is computed, not guessed: a wrong one is
+// refused by the kernel, and the tree two layers down is not the seed one
+// layer down.
+#[test]
+fn nested_wrong_observation_is_refused() {
+    let pairs = "fn pairs(n: Nat) -> Stream { SCons(n, SCons(Succ(n), pairs(Succ(Succ(n))))) }";
+    let msg = elab_err(&format!("{STREAM}\n{pairs}\ntheorem wrong(n: Nat): hd(tl(pairs(n))) = n {{ refl }}"));
+    assert!(msg.contains("NotConvertible"), "{msg}");
+    let msg = elab_err(&format!("{STREAM}\n{pairs}\ntheorem wrong(n: Nat): tl(pairs(n)) = pairs(Succ(n)) {{ refl }}"));
+    assert!(msg.contains("NotConvertible"), "{msg}");
 }
 
 #[test]

@@ -733,7 +733,7 @@ impl Elaborator {
                 _ => unreachable!("the generator emits declarations, records and impls only"),
             };
             if let Err(e) = r {
-                self.pending_derived.borrow_mut().clear();
+                self.pass.pending_derived.borrow_mut().clear();
                 // The generated declaration is quoted. It is the *obligation*
                 // the writer owes — a repr's law, restated at their carrier —
                 // so without it the diagnostic names a field and shows
@@ -1422,6 +1422,7 @@ pub(crate) fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>)
         ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::ArgSlot(_)
@@ -1584,7 +1585,7 @@ pub(crate) fn mentions_free_ty(t: &Ty, names: &[String], bound: &mut Vec<String>
         | TyKind::TyCode { .. }
         | TyKind::Splice { .. } => false,
         TyKind::Eq(a, b) => mentions_free(a, names, bound) || mentions_free(b, names, bound),
-        TyKind::OfExpr(e) => mentions_free(e, names, bound),
+        TyKind::OfExpr(e) | TyKind::TypeOf(e) => mentions_free(e, names, bound),
         // A `Named`'s head is a *type* name; the statement's binders are
         // values, so only the arguments can mention one.
         TyKind::Named { args, .. } => args.iter().any(|a| mentions_free_ty(a, names, bound)),
@@ -2385,7 +2386,7 @@ impl Elaborator {
         // and the listing prints them all.
         // A route that wrote the whole declaration (`derive()`) owns every
         // field's provenance; otherwise it is per clause.
-        let route = self.impl_provenance;
+        let route = self.scope.impl_provenance;
         let mut obs = vec![obligation_row(
             &owner,
             &sch,
@@ -2513,7 +2514,7 @@ impl Elaborator {
             lit.join(", ")
         ));
         self.elab_generated(&src, &owner, d.span, &sp)?;
-        let provenance = self.impl_provenance.unwrap_or(provenance);
+        let provenance = self.scope.impl_provenance.unwrap_or(provenance);
         let repr = d.repr.clone();
         let op = d.op.clone();
         let entry = ImplEntry { global, provenance };
@@ -2553,10 +2554,9 @@ impl Elaborator {
         let owner = format!("impl {} for {}", d.op, d.repr);
         // The emission's `impl` block lands through the ordinary path below,
         // which is what records the registry entry; this says who wrote it.
-        self.impl_provenance = Some(Provenance::Derived);
-        let r = self.elab_generated(&em.text, &owner, d.span, &Splices::default());
-        self.impl_provenance = None;
-        r
+        self.scoped(|s| &mut s.impl_provenance, Some(Provenance::Derived), |me| {
+            me.elab_generated(&em.text, &owner, d.span, &Splices::default())
+        })
     }
 
     /// The `Impl` registered for `op` at repr `rp`, if any — the

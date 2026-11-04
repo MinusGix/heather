@@ -1,0 +1,51 @@
+// Probes of `lib/std/common.hthr`, the common prelude: this module imports
+// nothing, and every name below reaches it through the prelude — the core
+// types and their constructors, a type's methods through its export
+// (`xs.map`), the collection literal and `&&`/`!` (whose instance and
+// designations the elaborator names through the core modules, visible here
+// qualified only), a numeral at a carrier, and the logic connectives. Pinned
+// by `refl` where a value is computed; the last probe is the negative
+// control. Tests, not library: nothing outside lib/_tests imports this module.
+
+fn first<A>(xs: List<A>) → Option<A> { match xs { Nil => None, Cons(x, _) => Some(x) } }
+fn lit() → List<Nat> { [1, 2] }
+theorem first_lit(): first(lit()) = Some(1) { refl }
+
+fn bumped(xs: List<Nat>) → List<Nat> { xs.map(λ x => Succ(x)) }
+theorem bumped_lit(): bumped(lit()) = [2, 3] { refl }
+
+fn flags() → Bool { !False && True }
+theorem flags_true(): flags() = True { refl }
+
+fn second(p: Pair<Nat, Bool>) → Bool { p.snd }
+theorem second_pair(): second(Pair(1, True)) = True { refl }
+
+// An open element type: the constructors and the method at a neutral `A`.
+fn wrap<A>(xs: List<A>) → List<Option<A>> { xs.map(λ x => Some(x)) }
+theorem wrap_is<A>(a: A): wrap<A>([a]) = [Some(a)] { refl }
+
+// `+` at `Nat` is `nat`'s designation, reached qualified.
+fn dbl(x: Nat) → Nat { x + x }
+theorem dbl_two(): dbl(2) = 4 { refl }
+
+theorem double_negation_intro(p: Or<Nat, Nat>): Not(Not(Or<Nat, Nat>)) { λ h => h(p) }
+
+// The core modules are reachable qualified: `logic::not_not_intro` and
+// `nat::Nat::add_comm` without importing either.
+theorem dni_qualified(p: Bool): Not(Not(Bool)) { logic::not_not_intro(Bool, p) }
+theorem comm_qualified(a, b: Nat): nat::Nat::add(a, b) = nat::Nat::add(b, a) { nat::Nat::add_comm(a, b) }
+
+// But a core lemma is not a bare name here: the prelude lists types and
+// classes, not the core's theorems.
+// expect-error: unbound name
+theorem dni_bare(p: Bool): Not(Not(Bool)) { not_not_intro(Bool, p) }
+
+// A record family's index partially applied (`G(0)`) is first tried as the
+// record's constructor, whose field is no numeral's carrier. `Numeral` named
+// only by the prelude keeps the old fallback there, so the family reading
+// still wins (issues/showcase-calc-parser-refused-since-prelude.md).
+inductive Shape { Leaf, Node(child: Shape) }
+record Tagged(level: Nat, x: Nat) { shape: Shape, same: level = level }
+fn arity<A>(P: A → Type, a: A) → Nat { 0 }
+fn tagged_family() → Nat { arity(Tagged(0), 5) }
+theorem tagged_family_zero(): tagged_family() = 0 { refl }

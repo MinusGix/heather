@@ -1,0 +1,577 @@
+// Probes of local state in pure code (docs/sequencing-surface-design.md §4,
+// §5.1; issues/pure-imperative-statements.md): `let mut`, `x := e` and a
+// statement `if`/`match` that joins per variable, all lowered by the parser
+// to ordinary `let`s. Each form at literal and neutral inputs, at an open
+// element type, in checking position, and with the negative controls the
+// lowering refuses (the parse-time ones are in
+// crates/syntax/tests/imperative_statements.rs: a parse error refuses the
+// whole file). Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import list; import omega; import int;
+
+// Straight-line reassignment: each `:=` is a new alias checked at the
+// local's declared type.
+fn straight(n: Nat) → Nat {
+    let mut x = n;
+    x := x + 1;
+    x := x * 2;
+    x
+}
+theorem straight_lit(): straight(3) = 8 { refl }
+// Neutral: the lowered term is the chain of `let`s.
+theorem straight_unfolds(n: Nat): straight(n) = (n + 1) * 2 { refl }
+
+// An open element type: the local keeps the parameter's type.
+fn keep_last<A>(a, b: A, swap: Bool) → A {
+    let mut r = a;
+    if swap = True { r := b }
+    r
+}
+theorem keep_last_swapped(): keep_last(1, 2, True) = 2 { refl }
+theorem keep_last_kept(): keep_last(1, 2, False) = 1 { refl }
+theorem keep_last_open<A>(a, b: A): keep_last(a, b, True) = b { refl }
+
+// A statement `if` with an `else`, assigning two locals: one join each.
+fn order(a, b: Nat) → Nat {
+    let mut lo = a;
+    let mut hi = b;
+    if a <= b {
+        lo := a
+    } else {
+        lo := b;
+        hi := a
+    }
+    hi - lo
+}
+theorem order_swapped(): order(5, 2) = 3 { refl }
+theorem order_kept(): order(2, 5) = 3 { refl }
+
+// `else if` chains, ending without an `else`.
+fn grade(n: Nat) → Nat {
+    let mut g = 0;
+    if 90 <= n { g := 3 } else if 50 <= n { g := 2 } else if 10 <= n { g := 1 }
+    g
+}
+theorem grade_top(): grade(95) = 3 { refl }
+theorem grade_mid(): grade(60) = 2 { refl }
+theorem grade_low(): grade(20) = 1 { refl }
+theorem grade_none(): grade(5) = 0 { refl }
+
+// A statement `match` over a neutral scrutinee.
+fn bump(o: Option<Nat>) → Nat {
+    let mut total = 10;
+    match o {
+        Some(k) => { total := total + k },
+        None => {},
+    }
+    total
+}
+theorem bump_some(): bump(Some(5)) = 15 { refl }
+theorem bump_none(): bump(None) = 10 { refl }
+theorem bump_neutral(k: Nat): bump(Some(k)) = 10 + k { refl }
+
+// Nesting: an inner body declares its own `mut` and assigns an outer one.
+fn nested(c, d: Bool) → Nat {
+    let mut x = 1;
+    if c = True {
+        let mut y = 2;
+        if d = True { x := 10; y := 20 }
+        x := x + y
+    }
+    x
+}
+theorem nested_tt(): nested(True, True) = 30 { refl }
+theorem nested_tf(): nested(True, False) = 3 { refl }
+theorem nested_f(c: Bool): nested(False, c) = 1 { refl }
+
+// In checking position: the local's type comes from its first value, and a
+// later assignment is checked against it.
+fn checked(xs: List<Nat>) → List<Nat> {
+    let mut acc = xs;
+    acc := List::Cons(0, acc);
+    acc
+}
+theorem checked_lit(): checked([1]) = [0, 1] { refl }
+
+// An assignment does not change the local's type.
+// expect-error: is a constructor of `Bool`, which is not the expected type here
+fn retyped() → Nat {
+    let mut x = 1;
+    x := True;
+    0
+}
+
+// ---- `for` loops (§5.2): a named step over `List::foldl` ----
+
+// One local: the step is `sum::step(n, x)`, the local then the element.
+fn sum(xs: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs { n := n + x }
+    n
+}
+theorem sum_lit(): sum([1, 2, 3]) = 6 { refl }
+theorem sum_step(n, x: Nat): sum::step(n, x) = n + x { refl }
+// Neutral: the function is the fold of its step.
+theorem sum_is_fold(xs: List<Nat>): sum(xs) = xs.foldl(sum::step, 0) { refl }
+
+// An open element type.
+fn count<A>(xs: List<A>) → Nat {
+    let mut n = 0;
+    for x in xs { n := n + 1 }
+    n
+}
+theorem count_lit(): count<Bool>([True, False]) = 2 { refl }
+theorem count_open<A>(a: A, xs: List<A>): count(List::Cons(a, xs)) = xs.foldl(count::step, count::step(0, a)) { refl }
+
+// Several locals: the state is the record `f::State`, its fields the locals
+// in declaration order, and a statement `if` in the body.
+fn count_words(bytes: List<Nat>) → Nat {
+    let mut words = 0;
+    let mut inside = False;
+    for b in bytes {
+        if b = 32 {
+            inside := False
+        } else if !inside {
+            inside := True;
+            words := words + 1
+        }
+    }
+    words
+}
+theorem count_words_lit(): count_words([1, 2, 32, 32, 5, 32]) = 2 { refl }
+theorem count_words_space(s: count_words::State): count_words::step(s, 32).inside = False { refl }
+theorem count_words_space_keeps(s: count_words::State): count_words::step(s, 32).words = s.words { refl }
+theorem count_words_start(w: Nat):
+    count_words::step(count_words::State(w, False), 7).words = w + 1 { refl }
+
+// A capture: a local the body reads but does not assign is a parameter of
+// the step, before the state.
+fn scaled(xs: List<Nat>, k: Nat) → Nat {
+    let mut acc = 0;
+    let base = k * 2;
+    for x in xs { acc := acc + x * base }
+    acc
+}
+theorem scaled_lit(): scaled([1, 2], 3) = 18 { refl }
+theorem scaled_step(base, acc, x: Nat): scaled::step(base, acc, x) = acc + x * base { refl }
+
+// A loop under a statement `if`, assigning the function's local.
+fn sum_if(c: Bool, xs: List<Nat>) → Nat {
+    let mut n = 100;
+    if c = True {
+        n := 0;
+        for x in xs { n := n + x }
+    }
+    n
+}
+theorem sum_if_on(): sum_if(True, [4, 5]) = 9 { refl }
+theorem sum_if_off(xs: List<Nat>): sum_if(False, xs) = 100 { refl }
+
+// Nested loops: the inner loop is the outer step's, lowered the same way.
+fn pairs(xs, ys: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        for y in ys { n := n + x * y }
+    }
+    n
+}
+theorem pairs_lit(): pairs([1, 2], [3, 4]) = 21 { refl }
+
+// Iterating something that is not a `List` is refused at the loop.
+// expect-error: a `for` iterates a `List` for now
+fn not_a_list(n: Nat) → Nat {
+    let mut k = 0;
+    for x in n { k := k + 1 }
+    k
+}
+
+// `f_unfold` (§7.1): the function is its lowered body, for tactics that
+// treat `f(x̄)` as an atom.
+theorem sum_unfolds(xs: List<Nat>): sum(xs) = xs.foldl(λ (s: Nat) (x: Nat) => sum::step(s, x), 0) {
+    sum_unfold(xs)
+}
+
+// ---- Early exit (§5.2): the step returns `ForStep`, the loop is `for_in` ----
+
+// `break` in a statement `if`: the rest of the body is the `if`'s other arm.
+fn sum_until_zero(xs: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        if x = 0 { break }
+        n := n + x
+    }
+    n
+}
+theorem sum_until_zero_lit(): sum_until_zero([1, 2, 0, 5]) = 3 { refl }
+theorem sum_until_zero_all(): sum_until_zero([1, 2]) = 3 { refl }
+// The step's equations, at a literal and a neutral element.
+theorem sum_until_zero_stops(n: Nat): sum_until_zero::step(n, 0) = ForStep::Break(n) { refl }
+theorem sum_until_zero_goes(n, k: Nat): sum_until_zero::step(n, k + 1) = ForStep::Next(n + (k + 1)) { refl }
+// Neutral: the function reads the state out of the exit.
+theorem sum_until_zero_is(xs: List<Nat>):
+    sum_until_zero(xs) = (xs.for_in(sum_until_zero::step, 0)).state(0) { refl }
+
+// `continue` skips the rest of this element's body.
+fn sum_skipping_twos(xs: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        if x = 2 { continue }
+        n := n + x
+    }
+    n
+}
+theorem sum_skipping_twos_lit(): sum_skipping_twos([1, 2, 3, 2]) = 4 { refl }
+
+// `break` in a `match` arm, with two locals: the state record's fields.
+fn sum_to_none(xs: List<Option<Nat>>) → Nat {
+    let mut total = 0;
+    let mut count = 0;
+    for o in xs {
+        match o {
+            None => { break },
+            Some(k) => { total := total + k },
+        }
+        count := count + 1
+    }
+    total + count
+}
+theorem sum_to_none_lit(): sum_to_none([Some(3), Some(4), None, Some(100)]) = 9 { refl }
+
+// A nested loop's `break` is its own; the outer body goes on.
+fn inner_break(xs, ys: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        for y in ys { if y = 3 { break } n := n + y }
+        if x = 9 { continue }
+        n := n + x
+    }
+    n
+}
+theorem inner_break_lit(): inner_break([1, 9, 2], [1, 3, 5]) = 6 { refl }
+
+// `return` from a search with no state: the function's value is the
+// `Return`, and otherwise the rest of the body.
+fn find_big(xs: List<Nat>) → Nat {
+    for x in xs {
+        if 10 <= x { return x }
+    }
+    0
+}
+theorem find_big_lit(): find_big([1, 12, 30]) = 12 { refl }
+theorem find_big_none(): find_big([1, 2]) = 0 { refl }
+
+// `return` of a value computed from the state.
+fn index_of(xs: List<Nat>, t: Nat) → Option<Nat> {
+    let mut i = 0;
+    for x in xs {
+        if x = t { return Some(i) }
+        i := i + 1
+    }
+    None
+}
+theorem index_of_lit(): index_of([5, 6, 7], 7) = Some(2) { refl }
+theorem index_of_none(): index_of([5, 6], 9) = None { refl }
+
+// An open element type, and the rest of the body reading the state.
+fn first_or<A>(xs: List<A>, d: A) → A {
+    let mut seen = 0;
+    for x in xs {
+        seen := seen + 1;
+        return x
+    }
+    d
+}
+theorem first_or_lit(): first_or([7, 8], 0) = 7 { refl }
+theorem first_or_open<A>(a, d: A, xs: List<A>): first_or(List::Cons(a, xs), d) = a { refl }
+theorem first_or_nil<A>(d: A): first_or(List::Nil, d) = d { refl }
+
+fn doubled_unless_big(xs: List<Nat>) → Nat {
+    let mut n = 0;
+    for x in xs {
+        if 100 <= x { return 0 }
+        n := n + x
+    }
+    n * 2
+}
+theorem doubled_unless_big_lit(): doubled_unless_big([1, 2]) = 6 { refl }
+theorem doubled_unless_big_returns(): doubled_unless_big([1, 200, 2]) = 0 { refl }
+
+// ---- `while c decreases m { … }` (§5.3): a recursive `f::run` ----
+
+// Several locals: `f::run` takes them as separate parameters and returns
+// the state record; the measure obligation reads the condition from the
+// match's equation (`omega`, so this module imports `omega` and `int`).
+fn countdown(n: Nat) → List<Nat> {
+    let mut m = n;
+    let mut out: List<Nat> = List::Nil;
+    while 1 <= m decreases m {
+        out := List::Cons(m, out);
+        m := m - 1
+    }
+    out
+}
+theorem countdown_lit(): countdown(3) = [1, 2, 3] { refl }
+// Neutral: the function is its run from the initial state.
+theorem countdown_is(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { refl }
+theorem countdown_unfolds(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { countdown_unfold(n) }
+theorem countdown_stops(out: List<Nat>): countdown::run(0, out) = countdown::State(0, out) { refl }
+// The run's equation (§7.3), at a neutral state: one step under the
+// condition, the state itself otherwise.
+theorem countdown_run_unfolds(m: Nat, out: List<Nat>):
+    countdown::run(m, out) = (match h: decide_bit<1 <= m>() {
+        True => countdown::run(m - 1, List::Cons(m, out)),
+        False => countdown::State(m, out),
+    }) {
+    countdown::run_unfold(m, out)
+}
+
+// One local: the run returns it.
+fn drain(n: Nat) → Nat {
+    let mut i = n;
+    while 1 <= i decreases i { i := i - 1 }
+    i
+}
+theorem drain_lit(): drain(4) = 0 { refl }
+theorem drain_is(n: Nat): drain(n) = drain::run(n) { refl }
+
+// A capture, an open element type, a measure over two locals and a
+// statement `if` in the body.
+fn pad<A>(xs: List<A>, a: A, k: Nat) → List<A> {
+    let mut acc = xs;
+    let mut i = 0;
+    let twice = 3;
+    while i + 1 <= k decreases k - i {
+        if i = twice { acc := List::Cons(a, List::Cons(a, acc)) } else { acc := List::Cons(a, acc) }
+        i := i + 1
+    }
+    acc
+}
+theorem pad_lit(): pad([9], 0, 5) = [0, 0, 0, 0, 0, 0, 9] { refl }
+theorem pad_open<A>(a: A): pad(List::Nil, a, 1) = [a] { refl }
+
+// A body that does not decrease the measure is refused at its obligation.
+// expect-error: this recursive call must decrease the measure
+fn stuck(n: Nat) → Nat {
+    let mut m = n;
+    let mut k = 0;
+    while 1 <= m decreases m { k := k + 1 }
+    k
+}
+
+// ---- Ranges in a `for` header (§5.2) ----
+
+// `0..n` is `List::range(n)`, so the loop is a fold over it.
+fn triangle(n: Nat) → Nat {
+    let mut s = 0;
+    for i in 0..n { s := s + i }
+    s
+}
+theorem triangle_lit(): triangle(4) = 6 { refl }
+theorem triangle_is(n: Nat): triangle(n) = List::range(n).foldl(triangle::step, 0) { refl }
+
+// `a..b` is `List::range_from(a, b - a)`: empty when `b ≤ a`, and bounds
+// that are any expression.
+fn span_sum(a, b: Nat) → Nat {
+    let mut s = 0;
+    for i in a..b { s := s + i }
+    s
+}
+theorem span_sum_lit(): span_sum(3, 6) = 12 { refl }
+theorem span_sum_empty(): span_sum(6, 3) = 0 { refl }
+theorem span_sum_is(a, b: Nat): span_sum(a, b) = List::range_from(a, b - a).foldl(span_sum::step, 0) { refl }
+
+fn upto_len(xs: List<Nat>) → Nat {
+    let mut s = 0;
+    for i in 1..xs.len() { s := s + i }
+    s
+}
+theorem upto_len_lit(): upto_len([7, 7, 7]) = 3 { refl }
+
+// ---------------------------------------------------------------------------
+// `mut self` methods (§8.2): a call on a `let mut` local updates it
+
+record Counter { n: Nat, log: List<Nat> }
+
+// The kernel type returns the receiver beside the result:
+// `Counter → Nat → Mutated<Counter, Nat>`.
+fn Counter::tick(mut self c: Counter, by: Nat) → Nat {
+    c := Counter(c.n + by, Cons(by, c.log));
+    c.n
+}
+theorem tick_kernel(c: Counter): Counter::tick(c, 1).value = c.n + 1 { refl }
+theorem tick_after(c: Counter): Counter::tick(c, 1).after = Counter(c.n + 1, Cons(1, c.log)) { refl }
+
+// A `mut self` method calling another on its own receiver.
+fn Counter::bump(mut self c: Counter) → True { c.tick(1); }
+
+// `let a = c.tick(2);` binds the value and updates `c`; `c.tick(3);` is a
+// statement.
+fn run_counter(start: Nat) → Nat {
+    let mut c = Counter(start, []);
+    let a = c.tick(2);
+    c.tick(3);
+    c.bump();
+    a + c.n
+}
+theorem run_counter_lit(): run_counter(10) = 12 + 16 { refl }
+theorem run_counter_neutral(s: Nat): run_counter(s) = (s + 2) + (s + 2 + 3 + 1) { refl }
+
+// The receiver is loop state when a loop body calls on it.
+fn counted(xs: List<Nat>) → List<Nat> {
+    let mut c = Counter(0, []);
+    for x in xs { c.tick(x); }
+    c.log
+}
+theorem counted_lit(): counted([1, 2, 3]) = [3, 2, 1] { refl }
+
+// A statement `if` whose body is the call, with and without the `;`.
+fn branch_tick(b: Bool) → Nat {
+    let mut c = Counter(0, []);
+    if b { c.tick(5) }
+    if b { c.tick(1); }
+    c.n
+}
+theorem branch_tick_t(): branch_tick(True) = 6 { refl }
+theorem branch_tick_f(): branch_tick(False) = 0 { refl }
+
+// With an early exit.
+fn tick_until_zero(xs: List<Nat>) → Nat {
+    let mut c = Counter(0, []);
+    for x in xs {
+        if x = 0 { break }
+        c.tick(x);
+    }
+    c.n
+}
+theorem tick_until_zero_lit(): tick_until_zero([1, 2, 0, 5]) = 3 { refl }
+
+// `return` in a `mut self` method leaves with the receiver as the body has
+// threaded it so far: here after the ticks before the zero.
+fn Counter::tick_nonzero(mut self c: Counter, xs: List<Nat>) → Bool {
+    for x in xs {
+        if x = 0 { return Bool::False }
+        c.tick(x);
+    }
+    Bool::True
+}
+theorem tick_nonzero_stops(c: Counter): Counter::tick_nonzero(c, [1, 0, 5])
+    = Mutated(Counter(c.n + 1, Cons(1, c.log)), Bool::False) { refl }
+theorem tick_nonzero_runs(c: Counter): Counter::tick_nonzero(c, [2])
+    = Mutated(Counter(c.n + 2, Cons(2, c.log)), Bool::True) { refl }
+theorem tick_nonzero_lit(): Counter::tick_nonzero(Counter(0, []), [3, 4, 0]).after = Counter(7, [4, 3]) { refl }
+
+// A search that does not touch the receiver in its loop returns it as it
+// came in; the rest of the body runs only when the loop ends.
+fn Counter::tick_unless_zero(mut self c: Counter, xs: List<Nat>) → Nat {
+    for x in xs {
+        if x = 0 { return c.n }
+    }
+    c.tick(1)
+}
+theorem tick_unless_zero_found(c: Counter): Counter::tick_unless_zero(c, [5, 0]) = Mutated(c, c.n) { refl }
+theorem tick_unless_zero_not(c: Counter): Counter::tick_unless_zero(c, [5])
+    = Mutated(Counter(c.n + 1, Cons(1, c.log)), c.n + 1) { refl }
+
+// A `mut` parameter is a local copy; the call is the function's value.
+fn tick_tail(mut c: Counter) → Nat { c.tick(4) }
+theorem tick_tail_lit(): tick_tail(Counter(1, [])) = 5 { refl }
+
+// Called on a local that is not `mut`, the method is refused at the call:
+// nothing keeps the update. The qualified call is the record
+// (`tick_kernel`).
+// expect-error: `tick` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn tick_plain(d: Counter) → Nat { d.tick(1) }
+// expect-error: `tick` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn tick_plain_lambda(c: Counter) → Nat {
+    let g = λ (d: Counter) => d.tick(1);
+    0
+}
+
+// A `Bool` as a condition (issues/bool-conditions-and-literals.md): `if b`
+// is the match on `b` itself, `if !b` and `if a && b` the match on that
+// Bool, each at a literal and a neutral Bool, at an open result type.
+// A proposition condition keeps its decided reading (everything above).
+fn select<A>(b: Bool, x, y: A) → A { if b { x } else { y } }
+fn select_not<A>(b: Bool, x, y: A) → A { if !b { x } else { y } }
+fn select_and<A>(a, b: Bool, x, y: A) → A { if a && b { x } else { y } }
+fn select_or<A>(a, b: Bool, x, y: A) → A { if a || b { x } else { y } }
+theorem select_t(): select(True, 1, 2) = 1 { refl }
+theorem select_f(): select(False, 1, 2) = 2 { refl }
+theorem select_open<A>(b: Bool, x, y: A): select(b, x, y) = match b { True => x, False => y } { refl }
+theorem select_not_f(): select_not(False, 1, 2) = 1 { refl }
+theorem select_not_t(): select_not(True, 1, 2) = 2 { refl }
+theorem select_not_open<A>(b: Bool, x, y: A): select_not(b, x, y) = select(!b, x, y) { refl }
+theorem select_and_tt(): select_and(True, True, 1, 2) = 1 { refl }
+theorem select_and_f<A>(b: Bool, x, y: A): select_and(False, b, x, y) = y { refl }
+theorem select_and_open<A>(a, b: Bool, x, y: A): select_and(a, b, x, y) = select(a && b, x, y) { refl }
+theorem select_or_t<A>(b: Bool, x, y: A): select_or(True, b, x, y) = x { refl }
+
+// Checking position: the `if` takes its result type from the annotation.
+fn select_checked(b: Bool) → Nat { let n: Nat = if !b { 1 } else { 2 }; n }
+theorem select_checked_t(): select_checked(True) = 2 { refl }
+
+// With evidence, `h` is the proposition the Bool decides, `b.IsTrue()`.
+fn witnessed(b: Bool) → Nat { if h: b { let _w: b.IsTrue() = h; 1 } else { 0 } }
+theorem witnessed_t(): witnessed(True) = 1 { refl }
+theorem witnessed_f(): witnessed(False) = 0 { refl }
+
+// `False`/`True` with no type written are the `Bool` constructors in a term
+// position, `logic` imported or not; at a universe `False` is still the type.
+fn any_zero(xs: List<Nat>) → Bool {
+    let mut found = False;
+    for x in xs { if x = 0 { found := True } }
+    found
+}
+theorem any_zero_t(): any_zero([1, 0]) = True { refl }
+theorem any_zero_f(): any_zero([1, 2]) = False { refl }
+fn empty_type() → Type { let p: Type = False; p }
+theorem empty_type_is_false(): empty_type() = False { refl }
+
+// A condition that is neither a proposition nor a `Bool`.
+// expect-error: a condition is a proposition, decided by its `Decide` instance, or a `Bool`; this is a value of `Nat`
+fn nat_condition(n: Nat) → Nat { if n { 1 } else { 2 } }
+
+// A connective mixing a `Bool` with a proposition
+// (issues/mixed-bool-prop-condition.md): the condition is the proposition
+// with each `Bool` operand read as its `IsTrue`, so `b ∧ n = 0` decides
+// `b.IsTrue() ∧ n = 0`, whose bit is `b && n.same(0)`. `&&`, `||` and `!`
+// between a proposition and a `Bool` are `∧`, `∨` and `¬`.
+fn mixed_and<A>(b: Bool, n: Nat, x, y: A) → A { if b ∧ n = 0 { x } else { y } }
+fn mixed_or<A>(b: Bool, n: Nat, x, y: A) → A { if n = 0 ∨ !b { x } else { y } }
+fn mixed_amp<A>(b: Bool, n: Nat, x, y: A) → A { if (n = 0) && b { x } else { y } }
+fn mixed_not<A>(b: Bool, n: Nat, x, y: A) → A { if ¬(b ∧ n = 0) { x } else { y } }
+fn mixed_imp<A>(b: Bool, n: Nat, x, y: A) → A { if b → n = 0 { x } else { y } }
+// A Bool subtree is one operand: `(a || b).IsTrue() ∧ n = 0`.
+fn mixed_nested<A>(a, b: Bool, n: Nat, x, y: A) → A { if (a || b) ∧ n = 0 { x } else { y } }
+theorem mixed_and_tt(): mixed_and(True, 0, 1, 2) = 1 { refl }
+theorem mixed_and_tf(): mixed_and(True, 3, 1, 2) = 2 { refl }
+theorem mixed_and_f<A>(n: Nat, x, y: A): mixed_and(False, n, x, y) = y { refl }
+theorem mixed_and_open<A>(b: Bool, n: Nat, x, y: A): mixed_and(b, n, x, y) = select(b && n.same(0), x, y) { refl }
+theorem mixed_or_z<A>(b: Bool, x, y: A): mixed_or(b, 0, x, y) = x { refl }
+theorem mixed_or_f(): mixed_or(False, 4, 1, 2) = 1 { refl }
+theorem mixed_or_t(): mixed_or(True, 4, 1, 2) = 2 { refl }
+theorem mixed_amp_t(): mixed_amp(True, 0, 1, 2) = 1 { refl }
+theorem mixed_amp_f<A>(x, y: A): mixed_amp(False, 0, x, y) = y { refl }
+theorem mixed_not_t(): mixed_not(True, 0, 1, 2) = 2 { refl }
+theorem mixed_not_f<A>(n: Nat, x, y: A): mixed_not(False, n, x, y) = x { refl }
+theorem mixed_imp_f<A>(n: Nat, x, y: A): mixed_imp(False, n, x, y) = x { refl }
+theorem mixed_imp_t(): mixed_imp(True, 5, 1, 2) = 2 { refl }
+theorem mixed_nested_t<A>(b: Bool, x, y: A): mixed_nested(True, b, 0, x, y) = x { refl }
+theorem mixed_nested_f(): mixed_nested(False, False, 0, 1, 2) = 2 { refl }
+
+// Checking position, and evidence: `h` proves both operands.
+fn mixed_checked(b: Bool, n: Nat) → Nat { let r: Nat = if b ∧ n = 0 { 1 } else { 2 }; r }
+theorem mixed_checked_t(): mixed_checked(True, 0) = 1 { refl }
+fn mixed_witness(b: Bool, n: Nat) → Nat {
+    if h: b ∧ n = 0 { let _w: b.IsTrue() = h.left; let _z: (n = 0) = h.right; 1 } else { 0 }
+}
+theorem mixed_witness_t(): mixed_witness(True, 0) = 1 { refl }
+theorem mixed_witness_f(): mixed_witness(True, 1) = 0 { refl }
+
+// `&&` binds tighter than `=`, so `b && n = 0` is `(b && n) = 0`, never the
+// mixed reading: write `b ∧ n = 0` or `b && (n = 0)`.
+// expect-error: no instance for `Decide<b && n = 0>`
+fn bool_and_eq(b: Bool, n: Nat) → Nat { if b && n = 0 { 1 } else { 2 } }
+// An operand that is neither: no reading.
+// expect-error: unknown type `m`
+fn neither_operand(m, n: Nat) → Nat { if m ∧ n = 0 { 1 } else { 2 } }

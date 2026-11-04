@@ -1,5 +1,6 @@
 //! Implicit-application scratch state and state-free structural unification.
 
+use std::cell::{Cell, RefCell};
 use std::sync::Arc as Rc;
 
 use heather_kernel::level::Level;
@@ -165,6 +166,254 @@ pub(super) struct U<'a> {
     /// usual one (issues/instance-binder-occurrence-through-binder-types.md,
     /// issues/elaborator-canonical-type-spelling.md). `None` declines.
     pub(super) respell: &'a dyn Fn(&Type) -> Option<Type>,
+    /// A rigid subject type of a generic declaration that registered no code
+    /// function, spelled as its **constructor** applied to its type arguments
+    /// (`El(app(λ A. ⌜Tac<El A>⌝; ⌜Nat⌝))`,
+    /// [`crate::Elaborator::constructor_spelling`]): what [`Self::respell`]
+    /// cannot give, asked only by an applied meta's pattern
+    /// (issues/higher-kinded-classes.md). `None` declines.
+    pub(super) constructor: &'a dyn Fn(&Type) -> Option<Type>,
+    /// A re-spelled subject `El(app(D#tycode_fn^δ; ā))` read as the type
+    /// constructor at `D`'s declared slot and the argument there
+    /// ([`crate::Elaborator::slot_view`],
+    /// docs/lambda-carrier-instances-design.md §7.3 reader 2), asked only by
+    /// an applied meta of one argument. `None` declines, and the aligned
+    /// spine's head-plus-leading-arguments rule applies.
+    pub(super) slot_view: &'a dyn Fn(&Term) -> Option<(Term, Term)>,
+    /// Every write goes through [`assign`], and this is its one check
+    /// (docs/elaborator-principles-survey.md P1,
+    /// issues/unifier-checked-assignment.md): may `slot` take the solution,
+    /// given what the others hold now? The elaborator's answer holds it to
+    /// the slot's declared type ([`crate::Elaborator::solution_fits`]);
+    /// `false` leaves the slot open, which learn-only always permits.
+    pub(super) admit: &'a dyn Fn(usize, &Term, &[Sol]) -> bool,
+    /// Told when a slot already solved meets a subject that is not its
+    /// solution, syntactically: the first write won, and this is the later
+    /// one it was never compared with. Only told, never acted on: the two
+    /// may still convert, and the caller decides whether a refusal it is
+    /// about to report is this disagreement's downstream. `None` skips the
+    /// comparison (and the strengthening it needs).
+    pub(super) disagree: Option<&'a dyn Fn(usize, &Term)>,
+    /// A rigid subject term in `gamma` unfolded to its **next head**: the
+    /// first transparent reduct whose spine is headed by another global or
+    /// local, or is no application at all. What the δ-lazy order compares
+    /// next at a rigid head mismatch (docs/elaborator-principles-survey.md
+    /// P3, issues/unifier-lazy-delta.md). `None` when the subject does not
+    /// unfold, or not within the walk's budget.
+    pub(super) next_head: &'a dyn Fn(&Term) -> Option<Term>,
+    /// Whether the approximate rules may write now ([`Guesses`]).
+    pub(super) guesses: Guesses<'a>,
+    /// Told when the two sides are **decidedly different** ([`Clash`]).
+    /// `None` keeps the unifier silent about it, as every learning caller
+    /// does.
+    pub(super) clash: Option<&'a Clash>,
+}
+
+/// The unifier's one negative answer: the pattern and the subject meet,
+/// along a path of **injective** formers from the root, at two canonical
+/// forms that differ — two type formers (`Σ` against `Id`), two code formers,
+/// two numerals, `Zero` against `Succ`, `inl` against `inr`. No solution of
+/// the pattern's slots makes those equal, so no solution makes the roots
+/// equal: instance search drops a candidate whose conclusion clashes with
+/// the goal before building it (issues/instance-conclusion-matched-first.md).
+///
+/// Below an application's arguments, a projection's receiver or an
+/// eliminator, a difference decides nothing — `f(0)` and `f(1)` may well be
+/// equal — so a descent through one of those is counted in `opaque`, and a
+/// clash is recorded only at depth zero. A subject's reduct (the δ-lazy step,
+/// a canonical head) stands for the subject itself, so those steps are not
+/// opaque. A distinct-heads mismatch that does not unfold is not a clash
+/// either: the pattern's own head may unfold, and only the subject is ever
+/// unfolded here.
+#[derive(Default)]
+pub(crate) struct Clash {
+    seen: Cell<bool>,
+    opaque: Cell<u32>,
+}
+
+impl Clash {
+    /// Did the two sides clash?
+    pub(crate) fn seen(&self) -> bool {
+        self.seen.get()
+    }
+}
+
+/// Note a clash at the current position, if the path to it is injective.
+fn clash(u: &U<'_>) {
+    if let Some(c) = u.clash
+        && c.opaque.get() == 0
+    {
+        c.seen.set(true);
+    }
+}
+
+/// Run `f` below a non-injective position ([`Clash`]).
+fn opaquely<R>(u: &U<'_>, f: impl FnOnce() -> R) -> R {
+    if let Some(c) = u.clash {
+        c.opaque.set(c.opaque.get() + 1);
+        let r = f();
+        c.opaque.set(c.opaque.get() - 1);
+        r
+    } else {
+        f()
+    }
+}
+
+/// A type former that is its own normal form, by kind: two of different
+/// kinds are different types whatever their components. `El` (it decodes a
+/// code that may compute) and the global and modal formers are not.
+fn former_kind(t: &Type) -> Option<u8> {
+    Some(match t {
+        Type::Nat => 0,
+        Type::Pi { .. } => 1,
+        Type::Ty(_) => 2,
+        Type::Id { .. } => 3,
+        Type::SEq { .. } => 4,
+        Type::SEmpty { .. } => 5,
+        Type::Squash { .. } => 6,
+        Type::Sigma { .. } => 7,
+        Type::Unit { .. } => 8,
+        Type::Empty { .. } => 9,
+        Type::Sum { .. } => 10,
+        Type::Vec { .. } => 11,
+        Type::Fin { .. } => 12,
+        Type::Wf { .. } => 13,
+        Type::DVec { .. } => 14,
+        Type::IWf { .. } => 15,
+        Type::W { .. } => 16,
+        _ => return None,
+    })
+}
+
+/// A canonical term's constructor, by kind: a code former, or a natural
+/// number's `Zero`/`Succ` (a numeral is either, by its value). Two different
+/// kinds never convert.
+fn canonical_kind(t: &Term) -> Option<u8> {
+    Some(match t {
+        Term::Zero => 0,
+        Term::NatLit(k) if k.is_zero() => 0,
+        Term::Succ(_) | Term::NatLit(_) => 1,
+        Term::TmNat => 2,
+        Term::TmPi { .. } => 3,
+        Term::TmTy { .. } => 4,
+        Term::TmId { .. } => 5,
+        Term::TmSEq { .. } => 6,
+        Term::TmSEmpty { .. } => 7,
+        Term::TmSquash { .. } => 8,
+        Term::TmSigma { .. } => 9,
+        Term::TmUnit { .. } => 10,
+        Term::TmEmpty { .. } => 11,
+        Term::TmSum { .. } => 12,
+        Term::TmW { .. } => 13,
+        Term::TmVec { .. } => 14,
+        Term::TmFin { .. } => 15,
+        Term::TmWf { .. } => 16,
+        Term::TmDVec { .. } => 17,
+        Term::TmIWf { .. } => 18,
+        Term::TmM { .. } => 19,
+        _ => return None,
+    })
+}
+
+/// What the unifier does at one of its **guesses**: a rule that picks one
+/// solution among several the equation allows, rather than the one it
+/// forces (docs/elaborator-principles-survey.md P2,
+/// issues/unifier-guesses-postponed.md). There are two, both at an unsolved
+/// applied meta whose rigid subject spine is **longer** than the pattern's:
+/// `?M(Nat) ≟ Pair2<Nat, Bool>` learns `?M := Pair2<Nat>` (the head with its
+/// leading arguments, the last argument abstracted), though `λ A ⇒
+/// Pair2<A, Bool>` and `λ _ ⇒ Pair2<Nat, Bool>` solve it as well; and
+/// `?op(x, y) ≟ append<A>(x, y)` learns the type prefix the same way. The
+/// equal-length alignment, a meta at a declared slot ([`slot_pair`]) and
+/// every first-order rule are decided, and run in every mode.
+#[derive(Clone, Copy)]
+pub(crate) enum Guesses<'a> {
+    /// Guess where the rule applies, as every caller but an application's
+    /// own reads did before guesses were ordered.
+    Take,
+    /// Do not guess: leave the slot open and set the flag, so the caller can
+    /// take the guess **last**, once every forced solution the call has
+    /// (its other arguments, the expected type) is in.
+    Postpone(&'a Cell<bool>),
+    /// Guess, and record the slot guessed, so that a refusal downstream can
+    /// name the guess rather than only its consequence.
+    Record(&'a RefCell<Vec<usize>>),
+}
+
+impl Guesses<'_> {
+    /// May the guess at `slot` be taken now?
+    fn take(self, slot: usize) -> bool {
+        match self {
+            Guesses::Take => true,
+            Guesses::Postpone(postponed) => {
+                postponed.set(true);
+                false
+            }
+            Guesses::Record(guessed) => {
+                let mut guessed = guessed.borrow_mut();
+                if !guessed.contains(&slot) {
+                    guessed.push(slot);
+                }
+                true
+            }
+        }
+    }
+}
+
+/// Is `?M(p̄) ≟ C(ā)`, with `?M` the open slot `slot`, a guess: a subject
+/// spine longer than the pattern's, so that `?M` would take `C` with leading
+/// arguments the equation does not force ([`Guesses`])?
+fn guess_at(head: &Term, n: u32, pat: &Term, subj: &Term, sols: &[Sol]) -> Option<usize> {
+    let Term::GlobalTm { var, .. } = head else { return None };
+    (var.0 < n && matches!(sols[var.0 as usize], Sol::Unsolved) && spine_len(subj) > spine_len(pat))
+        .then_some(var.0 as usize)
+}
+
+/// The subject `s`, `d` binders past `gamma`, unfolded to its next head
+/// ([`U::next_head`]) and weakened back: the δ-lazy order's one step at a
+/// rigid head mismatch. Only the subject unfolds. It is committed-world and
+/// closed under `gamma` once strengthened; the pattern mentions this call's
+/// metas, which no world here declares. Learning from a reduct of the
+/// subject learns what conversion with the subject would: they convert.
+fn subject_unfolded(u: &U<'_>, s: &Term, d: u32) -> Option<Term> {
+    let s0 = u.subject_tm(s, d)?;
+    let w = (u.next_head)(&s0)?;
+    let w = match u.subject_metas {
+        Some((m, _)) => w.shift_global(m),
+        None => w,
+    };
+    Some(w.apply_local(&embed(u.gamma, d)))
+}
+
+/// The unifier's one write. An open slot takes `s` if [`U::admit`] lets
+/// it; a solved one is compared with `s` when a caller listens
+/// ([`U::disagree`]); a withheld one is never touched.
+fn assign(u: &U<'_>, slot: usize, s: Term, sols: &mut [Sol]) {
+    match &sols[slot] {
+        Sol::Unsolved => {
+            if (u.admit)(slot, &s, sols) {
+                sols[slot] = Sol::Solved(Rc::new(s));
+            }
+        }
+        Sol::Solved(t) => {
+            if let Some(disagree) = u.disagree
+                && **t != s
+            {
+                disagree(slot, &s);
+            }
+        }
+        Sol::Withheld => {}
+    }
+}
+
+/// Is a write to `slot` worth reading the subject for: open, or solved
+/// and compared.
+fn writable(u: &U<'_>, slot: usize, sols: &[Sol]) -> bool {
+    match &sols[slot] {
+        Sol::Unsolved => true,
+        Sol::Solved(_) => u.disagree.is_some(),
+        Sol::Withheld => false,
+    }
 }
 
 impl<'a> U<'a> {
@@ -184,11 +433,46 @@ impl<'a> U<'a> {
         }
     }
 
+    /// Are a pattern spine's head and a subject spine's head two **different
+    /// atoms** — distinct locals, distinct committed globals, or one of each?
+    /// Neither kind is a meta, so no solution makes them one: the spines are
+    /// different applications, and their arguments have nothing to pair. A
+    /// pattern's committed global sits `n` above its committed index, and a
+    /// partially known subject's `m` above its own; one of the subject's
+    /// metas (below `m`) is not an atom. Locals compare at the same depth on
+    /// both sides. Anything else (a projection, a λ, a meta) is not decided
+    /// here.
+    fn distinct_heads(&self, pat: &Term, subj: &Term, n: u32) -> bool {
+        let m = self.subject_metas.map_or(0, |(m, _)| m);
+        match (pat, subj) {
+            (Term::Var(a), Term::Var(b)) => a != b,
+            (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) => {
+                a.0 >= n && b.0 >= m && a.0 - n != b.0 - m
+            }
+            (Term::Var(_), Term::GlobalTm { var, .. }) => var.0 >= m,
+            (Term::GlobalTm { var, .. }, Term::Var(_)) => var.0 >= n,
+            _ => false,
+        }
+    }
+
     /// No head can be read: every `app@` spine is refused by
     /// [`matching_value_spine`], and nothing else changes.
     #[cfg(test)]
     pub(super) fn syntactic(gamma: &'a LocalCtx) -> Self {
-        U { gamma, subject_metas: None, type_args: &|_, _| None, canonical_head: &|_, _| None, respell: &|_| None }
+        U {
+            gamma,
+            subject_metas: None,
+            type_args: &|_, _| None,
+            canonical_head: &|_, _| None,
+            respell: &|_| None,
+            constructor: &|_| None,
+            slot_view: &|_| None,
+            admit: &|_, _, _| true,
+            disagree: None,
+            next_head: &|_| None,
+            guesses: Guesses::Take,
+            clash: None,
+        }
     }
 }
 
@@ -229,12 +513,12 @@ pub(super) fn unify_ty(
         // and by an instrumented full run, design §6.1); anything else — a
         // non-variable payload, and the today-unreachable permuted or
         // dropping renamings — is declined, which learn-only always permits.
-        if matches!(sols[var.0 as usize], Sol::Unsolved)
+        if writable(u, var.0 as usize, sols)
             && *subst == embed(u.gamma, d)
             && let Some(s) = u.subject_ty(subj, d)
             && let Some(c) = code::code_of(&s)
         {
-            sols[var.0 as usize] = Sol::Solved(Rc::new(c));
+            assign(u, var.0 as usize, c, sols);
         }
         return;
     }
@@ -245,7 +529,7 @@ pub(super) fn unify_ty(
     // pattern the codes meet in `unify_tm`, which contracts both sides.
     let contracted;
     let subj = match subj {
-        Type::El { level, tm } if !matches!(pat, Type::El { .. }) => match beta_head(tm) {
+        Type::El { level, tm } if !matches!(pat, Type::El { .. }) => match spelling::beta_head(tm) {
             Some(r) => {
                 contracted = Type::El { level: level.clone(), tm: Rc::new(r) };
                 &contracted
@@ -402,12 +686,33 @@ pub(super) fn unify_ty(
         // `gamma`, re-spelled there, weakened back.
         (Type::El { tm, .. }, s)
             if !matches!(s, Type::El { .. })
-                && committed_head(tm, n)
+                && (committed_head(tm, n) || flex_applied_head(tm, n))
                 && zonked_tm(tm, n, sols).is_none() =>
         {
-            if let Some(s0) = u.subject_ty(s, d)
-                && let Some(r @ Type::El { .. }) = (u.respell)(&s0)
+            let flex = !committed_head(tm, n);
+            let Some(s0) = u.subject_ty(s, d) else { return };
+            let respelled = (u.respell)(&s0);
+            if respelled.is_none()
+                && flex
+                && let Some(Type::El { tm: c, .. }) = (u.constructor)(&s0)
             {
+                let c = match u.subject_metas {
+                    Some((m, _)) => c.shift_global(m),
+                    None => (*c).clone(),
+                };
+                opaquely(u, || flex_spine(u, tm, &c.apply_local(&embed(u.gamma, d)), n, d, sols));
+                return;
+            }
+            // `?M(p)` against a declaration with a declared slot: `?M` is the
+            // constructor at that slot and `p` its argument there, rather than
+            // the head with the leading arguments.
+            if flex
+                && let Some(Type::El { tm: r, .. }) = &respelled
+                && opaquely(u, || slot_pair(u, tm, r, n, d, sols))
+            {
+                return;
+            }
+            if let Some(r @ Type::El { .. }) = respelled {
                 let r = match u.subject_metas {
                     Some((m, _)) => r.shift_global(m),
                     None => r,
@@ -415,10 +720,30 @@ pub(super) fn unify_ty(
                 unify_ty(u, pat, &r.apply_local(&embed(u.gamma, d)), n, d, sols);
             }
         }
+        // A former against `El` of a code a definition computes: the
+        // δ-lazy order's step at the type level. The subject's code unfolds
+        // to its next head, and the decoded result meets the pattern again
+        // (issues/unifier-lazy-delta.md) — a hypothesis `Lt(x, y)` against a
+        // domain spelled as the `Id` or `Π` its definition is.
+        (p, Type::El { level, tm })
+            if !matches!(p, Type::El { .. } | Type::Ty(_)) && reducible(tm) && zonked(pat, n, sols).is_none() =>
+        {
+            if let Some(r) = subject_unfolded(u, tm, d) {
+                let unfolded = Type::El { level: level.clone(), tm: Rc::new(r) };
+                unify_ty(u, pat, &unfolded, n, d, sols);
+            }
+        }
         // `Nat`/`Unit`/`Empty`/`Ty` and every mismatched pairing: nothing to
         // learn. A mismatch is not an error here — this function only ever
         // learns, and the kernel is what decides whether the call typechecks.
-        _ => {}
+        // Two formers of different kinds are told, though ([`Clash`]).
+        (p, s) => {
+            if let (Some(a), Some(b)) = (former_kind(p), former_kind(s))
+                && a != b
+            {
+                clash(u);
+            }
+        }
     }
 }
 
@@ -441,10 +766,17 @@ fn spine_len(mut t: &Term) -> usize {
 }
 
 /// The subject is in the committed world, so even global index zero is
-/// rigid: only the pattern uses indices below `n` as scratch metas.
+/// rigid: only the pattern uses indices below `n` as scratch metas. A field
+/// read off a rigid receiver is as rigid as the receiver: a class
+/// dictionary's `K.inv(x)` is `fst@(snd@(…(d)))(x)`, which a morphism's
+/// `?neg_b(map(x))` learns `?neg_b := K.inv` from
+/// (issues/cast-reading-through-local-morphism.md).
 fn rigid_head(mut t: &Term) -> bool {
     while let Some((fun, _)) = spelling::app_of(t) {
         t = fun;
+    }
+    while let Some((_, receiver)) = projection_of(t) {
+        t = receiver;
     }
     matches!(t, Term::Var(_) | Term::GlobalTm { .. })
 }
@@ -509,11 +841,11 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
     if let Term::GlobalTm { var, subst } = pat
         && var.0 < n
     {
-        if matches!(sols[var.0 as usize], Sol::Unsolved)
+        if writable(u, var.0 as usize, sols)
             && *subst == embed(u.gamma, d)
             && let Some(s) = u.subject_tm(subj, d)
         {
-            sols[var.0 as usize] = Sol::Solved(Rc::new(s));
+            assign(u, var.0 as usize, s, sols);
         }
         return;
     }
@@ -526,7 +858,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
     // one contracted against one not would stop meeting. Contracting head
     // λs is syntactic and needs no context, so it runs before any other
     // rule, on every pairing; a well-typed term's head redexes run out.
-    let (p, s) = (beta_head(pat), beta_head(subj));
+    let (p, s) = (spelling::beta_head(pat), spelling::beta_head(subj));
     if p.is_some() || s.is_some() {
         let pat = p.as_ref().unwrap_or(pat);
         let subj = s.as_ref().unwrap_or(subj);
@@ -564,6 +896,34 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             while let Some((fun, _)) = spelling::app_of(head) {
                 head = fun;
             }
+            // A head meta already solved to a λ — a constructor at a
+            // declared slot, `λ A. Result<A, E>` — is substituted and the
+            // redex contracted first: paired positionally, `?M(?B) ≟
+            // Result<Nat, Bool>` would teach `?B := Bool`, the argument the
+            // λ fixes (docs/lambda-carrier-instances-design.md §7.3).
+            if let Term::GlobalTm { var, .. } = head
+                && var.0 < n
+                && sols[var.0 as usize].solved().is_some_and(|t| matches!(&**t, Term::Lam { .. }))
+            {
+                let p2 = partially_zonked_tm(pat, n, sols, u.gamma);
+                if let Some(r) = spelling::beta_head(&p2) {
+                    return unify_tm(u, &r, subj, n, d, sols);
+                }
+            }
+            // `?M(p)` against a declaration's code spine with a declared
+            // slot: the constructor at that slot, not the aligned spine's
+            // head plus leading arguments
+            // (docs/lambda-carrier-instances-design.md §7.3 reader 2).
+            if let Term::GlobalTm { var, .. } = head
+                && var.0 < n
+                && sols[var.0 as usize].solved().is_none()
+                && spine_len(pat) == 1
+                && matches!(spine_head(s), Term::GlobalTm { .. })
+                && let Some(s0) = u.subject_tm(s, d)
+                && opaquely(u, || slot_pair(u, pat, &s0, n, d, sols))
+            {
+                return;
+            }
             //
             // Align the value spine against a rigid global or local head.
             // A leading type-only prefix may specialize a polymorphic
@@ -578,23 +938,45 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             {
                 return;
             }
+            // The aligned spine is a guess when the subject's is longer: the
+            // leading arguments `?M` takes are one choice among several
+            // ([`Guesses`]), so it waits while the caller postpones guesses.
+            if let Some(slot) = guess_at(head, n, pat, subj, sols)
+                && !u.guesses.take(slot)
+            {
+                return;
+            }
             // Two rigid spines of different lengths are never the same
             // application, so their arguments have nothing to pair: aligned
             // from the right, they pair a predicate's class indices with
             // whatever sits at the other's positions — `AbsLt(?A, ?≈, ?<,
             // ?≤, ?+, ?d, x, e)` against `-e < x ∧ x < e` taught `?+ :=
             // Rat::Lt`, and against `Close(x, y, e)`, every index one place
-            // over (issues/constrained-predicate-expected-type.md). Either
-            // side may still unfold to the other; that is a whnf's to find,
-            // and the callers' retries take it.
-            if rigid_atom(head, n)
-                && rigid_head(s)
-                && spine_len(p) != spine_len(s)
-            {
+            // over (issues/constrained-predicate-expected-type.md). Nor are
+            // two rigid spines with different heads, at any length:
+            // `Has2(B(lo, hi), ?x)` against `And<Nat, Nat>` paired the
+            // predicate's argument with the conjunction's second type and
+            // taught `?x := ⌜Nat⌝`, which the expected type would have
+            // solved as `x`
+            // (issues/and-at-match-predicate-implicit-level-mismatch.md).
+            //
+            // Either side may still unfold to the other, and that is the
+            // δ-lazy order's step, as in the kernel's conversion: a subject
+            // headed by a global unfolds to its next head and is compared
+            // again (issues/unifier-lazy-delta.md). `Bool::and(?a, ?b)`
+            // against `g(n, m)`, where `g`'s body is `n.leb(m) && !m.leb(n)`,
+            // learns `?a := n.leb(m)` rather than nothing
+            // (issues/unifier-spine-across-distinct-heads.md).
+            let mismatch = (rigid_atom(head, n) && rigid_head(s) && spine_len(p) != spine_len(s))
+                || u.distinct_heads(head, spine_head(s), n);
+            if mismatch {
+                unify_unfolded(u, pat, s, n, d, sols);
                 return;
             }
-            unify_tm(u, f1, f2, n, d, sols);
-            unify_tm(u, a1, a2, n, d, sols);
+            opaquely(u, || {
+                unify_tm(u, f1, f2, n, d, sols);
+                unify_tm(u, a1, a2, n, d, sols);
+            });
         }
         // Constructor values (issues/unify-through-constructor-values.md). An
         // inductive's constructor is a `supf`/`sup` node whose label is an
@@ -627,6 +1009,23 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             let (left2, v2) = injection_of(s).expect("an injection");
             if left1 == left2 {
                 unify_tm(u, v1, v2, n, d, sols);
+            } else {
+                clash(u);
+            }
+        }
+        // Projections, in either spelling on either side. A record type
+        // lowers inline to its fields' Σ tower, so a parameter the fields
+        // read through a projection reaches the unifier as `fst@(snd@(?x))`
+        // against `fst@(snd@(x))` — `U(x)` with `ok: x.k = v`
+        // (issues/implicit-from-record-parameter-type.md). Same component on
+        // both sides pairs the receivers. A projection is not injective, so
+        // `?x := x` is one solution, not the only one: learn-only, like the
+        // application congruence above, and the kernel judges the call.
+        (p, s) if projection_of(p).is_some() && projection_of(s).is_some() => {
+            let (first1, r1) = projection_of(p).expect("a projection");
+            let (first2, r2) = projection_of(s).expect("a projection");
+            if first1 == first2 {
+                opaquely(u, || unify_tm(u, r1, r2, n, d, sols));
             }
         }
         (Term::Lam { body: b1, .. }, Term::Lam { body: b2, .. }) => {
@@ -677,12 +1076,12 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
                 scrut: t2,
                 ..
             },
-        ) => {
+        ) => opaquely(u, || {
             unify_ty(u, m1, m2, n, d + 1, sols);
             unify_tm(u, b1, b2, n, d, sols);
             unify_tm(u, s1, s2, n, d + 2, sols);
             unify_tm(u, t1, t2, n, d, sols);
-        }
+        }),
         (
             Term::TmPi {
                 dom: a1, cod: b1, ..
@@ -804,34 +1203,70 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             unify_tm(u, a1, a2, n, d, sols);
             unify_tm(u, b1, b2, n, d, sols);
         }
-        _ => {}
+        // Any other pairing: the two do not meet as they stand, and the
+        // subject may still compute to something that does — a field type
+        // read through a projection, `fst(⟨λ b => BitVec(64), …⟩)`, or a
+        // definition's body. The δ-lazy order's step, as at a head mismatch.
+        _ => unify_unfolded(u, pat, subj, n, d, sols),
     }
 }
 
-/// `t` with the β-redexes at the head of its spine contracted, `(λx. b) s ⋯`
-/// to `b[s/x] ⋯`, until the head is no λ; `None` when there was none. Only
-/// the head: an argument's redexes are reached when the congruence gets to
-/// them.
-fn beta_head(t: &Term) -> Option<Term> {
-    let (fun, arg) = spelling::app_of(t)?;
-    let r = match &**fun {
-        Term::Lam { body, .. } => body.inst_top(0, arg),
-        _ => {
-            let fun = Rc::new(beta_head(fun)?);
-            match t {
-                Term::App { dom_level, cod_level, dom, cod, arg, .. } => Term::App {
-                    fun,
-                    dom_level: dom_level.clone(),
-                    cod_level: cod_level.clone(),
-                    dom: Rc::clone(dom),
-                    cod: Rc::clone(cod),
-                    arg: Rc::clone(arg),
-                },
-                _ => Term::AppAt { fun, arg: Rc::clone(arg) },
-            }
-        }
-    };
-    Some(beta_head(&r).unwrap_or(r))
+/// The δ-lazy order's step (issues/unifier-lazy-delta.md): when `pat` and
+/// `subj` do not meet as they stand, unfold the subject to its next head
+/// ([`U::next_head`]) and compare again. Only while the pattern still has an
+/// open slot to learn — otherwise there is nothing to read, and at a closed
+/// verdict the unfolding is the verdict's whole evaluation
+/// (issues/closed-verdict-evaluated-twice.md) — and only a subject that can
+/// step: one headed by a global, a β-redex or an eliminator. Each hop is a
+/// strict reduct, so the chain ends where the subject stops reducing.
+fn unify_unfolded(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
+    // Two canonical forms of different kinds: neither steps, so they are
+    // different values ([`Clash`]).
+    if let (Some(a), Some(b)) = (canonical_kind(pat), canonical_kind(subj))
+        && (a != b || matches!((pat, subj), (Term::NatLit(x), Term::NatLit(y)) if x != y))
+    {
+        clash(u);
+        return;
+    }
+    if !reducible(subj) || zonked_tm(pat, n, sols).is_some() {
+        return;
+    }
+    if let Some(r) = subject_unfolded(u, subj, d) {
+        unify_tm(u, pat, &r, n, d, sols);
+    }
+}
+
+/// Can `t` take a head step: its spine is headed by a global (δ), a λ (β)
+/// or an eliminator (ι, once its scrutinee is a constructor)?
+fn reducible(t: &Term) -> bool {
+    let h = spine_head(t);
+    matches!(h, Term::GlobalTm { .. }) || steps_through(h)
+}
+
+/// A spine head a walk to the next head keeps stepping through: a λ (the
+/// spine is a β-redex) or an eliminator, which reduces once its scrutinee
+/// is a constructor and is no head a pattern could meet before then.
+pub(crate) fn steps_through(h: &Term) -> bool {
+    matches!(
+        h,
+        Term::Lam { .. }
+            | Term::ElimNat { .. }
+            | Term::J { .. }
+            | Term::ElimSEmpty { .. }
+            | Term::ElimSquash { .. }
+            | Term::ElimEmpty { .. }
+            | Term::Fst { .. }
+            | Term::Snd { .. }
+            | Term::FstAt { .. }
+            | Term::SndAt { .. }
+            | Term::Case { .. }
+            | Term::ElimW { .. }
+            | Term::ElimWf { .. }
+            | Term::ElimIWf { .. }
+            | Term::Out { .. }
+            | Term::ElimCodeTy { .. }
+            | Term::ElimCodeTm { .. }
+    )
 }
 
 /// A form [`U::canonical_head`] can reduce a subject to.
@@ -856,6 +1291,91 @@ fn committed_head(mut t: &Term, n: u32) -> bool {
     matches!(t, Term::GlobalTm { var, .. } if var.0 >= n)
 }
 
+/// Is `t` a meta of this call **applied** to at least one argument —
+/// `?M(⌜Nat⌝)`, the type `M(Nat)` of a parameter over a type constructor
+/// `M: Type → Type` (issues/higher-kinded-classes.md, piece 1)? Its subject
+/// is re-spelled through the declaration's code like a committed head's, so
+/// `El(app(?M; ⌜Nat⌝))` meets `El(app(Option#tycode_fn^δ; ⌜Nat⌝))` and the
+/// application congruence's aligned-spine rule takes the first-order
+/// solution `?M := Option#tycode_fn^δ` (head plus leading type arguments,
+/// the last one abstracted — Lean's and Haskell's approximation).
+fn flex_applied_head(mut t: &Term, n: u32) -> bool {
+    let mut applied = false;
+    while let Some((fun, _)) = spelling::app_of(t) {
+        applied = true;
+        t = fun;
+    }
+    applied && matches!(t, Term::GlobalTm { var, .. } if var.0 < n)
+}
+
+/// An applied meta `?M(p̄)` against a rigid application `C(ā)` whose head
+/// is a **λ** — [`U::constructor`]'s spelling of a type with no registered
+/// code function. The application congruence cannot take this pair, because
+/// it contracts a β-redex head before anything else and the λ would vanish
+/// into its body; so the first-order rule is applied here directly: `?M`
+/// takes `C` with the leading arguments, and the last `|p̄|` arguments pair
+/// with the pattern's. Learn-only, like every rule here.
+fn flex_spine(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
+    let mut pargs = Vec::new();
+    let mut head = pat;
+    while let Some((fun, arg)) = spelling::app_of(head) {
+        pargs.push(arg);
+        head = fun;
+    }
+    // A longer subject spine is the head-with-leading-arguments guess
+    // ([`Guesses`]); an equal one pairs the λ with `?M` as it stands.
+    if let Some(slot) = guess_at(head, n, pat, subj, sols)
+        && !u.guesses.take(slot)
+    {
+        return;
+    }
+    let mut sargs = Vec::new();
+    let mut prefix = subj;
+    for _ in 0..pargs.len() {
+        let Some((fun, arg)) = spelling::app_of(prefix) else {
+            return;
+        };
+        sargs.push(arg);
+        prefix = fun;
+    }
+    unify_tm(u, head, prefix, n, d, sols);
+    for (p, a) in pargs.into_iter().zip(sargs) {
+        unify_tm(u, p, a, n, d, sols);
+    }
+}
+
+/// `?M(p) ≟ D<ā>` at `D`'s declared slot `s`: learn `?M` as the constructor
+/// at `s` and pair `p` with `a_s` ([`U::slot_view`]). `subj` is the subject's
+/// code spine already strengthened to `gamma` (and, under
+/// [`U::subject_metas`], in the committed world), as [`U::subject_tm`] and the
+/// re-spelling arm hand it over. `false`, learning nothing, when the pattern
+/// is not a meta applied to one argument or `D` declares no slot.
+fn slot_pair(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) -> bool {
+    let Some((pfun, parg)) = spelling::app_of(pat) else { return false };
+    if !matches!(&**pfun, Term::GlobalTm { var, .. } if var.0 < n) {
+        return false;
+    }
+    let Some((c, a)) = (u.slot_view)(subj) else { return false };
+    let lift = |t: Term| {
+        let t = match u.subject_metas {
+            Some((m, _)) => t.shift_global(m),
+            None => t,
+        };
+        t.apply_local(&embed(u.gamma, d))
+    };
+    unify_tm(u, pfun, &lift(c), n, d, sols);
+    unify_tm(u, parg, &lift(a), n, d, sols);
+    true
+}
+
+/// The head of an application spine (`t` itself when it is no application).
+fn spine_head(mut t: &Term) -> &Term {
+    while let Some((fun, _)) = spelling::app_of(t) {
+        t = fun;
+    }
+    t
+}
+
 /// Is the spine's head a global, the one head δ can unfold?
 fn global_head(mut t: &Term) -> bool {
     while let Some((fun, _)) = spelling::app_of(t) {
@@ -864,10 +1384,26 @@ fn global_head(mut t: &Term) -> bool {
     matches!(t, Term::GlobalTm { .. })
 }
 
+/// An application whose head is a global: a declaration applied, as an
+/// argument's type is before δ has contracted it into its body.
+pub(crate) fn global_spine(t: &Term) -> bool {
+    spelling::is_app(t) && global_head(t)
+}
+
 /// The two components of a pair in either spelling.
 fn pair_of(t: &Term) -> Option<(&Term, &Term)> {
     match t {
         Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => Some((fst, snd)),
+        _ => None,
+    }
+}
+
+/// Which component a projection takes (`true` for `fst`), and its
+/// receiver, in either spelling.
+fn projection_of(t: &Term) -> Option<(bool, &Term)> {
+    match t {
+        Term::Fst { pair, .. } | Term::FstAt { pair } => Some((true, pair)),
+        Term::Snd { pair, .. } | Term::SndAt { pair } => Some((false, pair)),
         _ => None,
     }
 }
@@ -924,6 +1460,18 @@ pub(super) fn partially_zonked(dom: &Type, n: u32, sols: &[Sol], gamma: &LocalCt
     // The substitution consumes n slots, so first weaken the identity region
     // by n. Its payloads already live in the retained scratch world.
     dom.shift_global_above(n, n).apply_global(&GlobalSubst { entries })
+}
+
+/// [`partially_zonked`] for a term: solved slots substituted, unsolved ones
+/// kept in the scratch world.
+fn partially_zonked_tm(t: &Term, n: u32, sols: &[Sol], gamma: &LocalCtx) -> Term {
+    let entries = (0..n).rev().map(|slot| GlobalEntry::Tm(Rc::new(
+        match sols[slot as usize].solved() {
+            Some(t) => t.shift_global(n),
+            None => Term::GlobalTm { var: heather_kernel::term::GlobalVar(slot), subst: LocalSubst::id(gamma) },
+        }
+    ))).collect();
+    t.shift_global_above(n, n).apply_global(&GlobalSubst { entries })
 }
 
 /// [`zonked`] for a *term* — same two-marker test, same guarantee: `Some`
@@ -1110,6 +1658,71 @@ mod tests {
         let mut withheld = [Sol::Withheld];
         unify_tm(&U::syntactic(&gamma), &pat, &subject, 1, 0, &mut withheld);
         assert!(matches!(withheld[0], Sol::Withheld));
+    }
+
+    #[test]
+    fn a_guess_waits_while_postponed_and_is_recorded_when_taken() {
+        let gamma = LocalCtx::nil();
+        let global = Term::GlobalTm { var: GlobalVar(0), subst: embed(&gamma, 0) };
+        let Type::El { tm, .. } = meta(&gamma) else {
+            unreachable!()
+        };
+        // `?0(0)` against `g<Nat>(0)`: the type prefix `g<Nat>` is a guess.
+        let pat = app((*tm).clone(), Type::Nat, Term::Zero);
+        let specialized = app(global.clone(), Type::Ty(Level::Zero), Term::TmNat);
+        let subject = app(specialized.clone(), Type::Nat, Term::Zero);
+        let postponed = Cell::new(false);
+        let u = U { guesses: Guesses::Postpone(&postponed), ..U::syntactic(&gamma) };
+        let mut solutions = [Sol::Unsolved];
+        unify_tm(&u, &pat, &subject, 1, 0, &mut solutions);
+        assert!(matches!(solutions[0], Sol::Unsolved));
+        assert!(postponed.get());
+
+        let guessed = RefCell::new(Vec::new());
+        let u = U { guesses: Guesses::Record(&guessed), ..U::syntactic(&gamma) };
+        unify_tm(&u, &pat, &subject, 1, 0, &mut solutions);
+        assert!(matches!(&solutions[0], Sol::Solved(t) if **t == specialized));
+        assert_eq!(*guessed.borrow(), vec![0]);
+
+        // `?0(0)` against `g(0)`: the equal-length alignment is decided, and
+        // runs while guesses wait.
+        let subject = app(global.clone(), Type::Nat, Term::Zero);
+        let postponed = Cell::new(false);
+        let u = U { guesses: Guesses::Postpone(&postponed), ..U::syntactic(&gamma) };
+        let mut solutions = [Sol::Unsolved];
+        unify_tm(&u, &pat, &subject, 1, 0, &mut solutions);
+        assert!(matches!(&solutions[0], Sol::Solved(t) if **t == global));
+        assert!(!postponed.get());
+    }
+
+    #[test]
+    fn a_clash_is_two_canonical_forms_on_an_injective_path() {
+        let gamma = LocalCtx::nil();
+        let clashes = |pat: &Term, subj: &Term| {
+            let c = Clash::default();
+            let u = U { clash: Some(&c), ..U::syntactic(&gamma) };
+            unify_tm(&u, pat, subj, 1, 0, &mut [Sol::Unsolved]);
+            c.seen()
+        };
+        let Type::El { tm: hole, .. } = meta(&gamma) else {
+            unreachable!()
+        };
+        let one = Term::Succ(Rc::new(Term::Zero));
+        // `Succ(?0)` against `0`, and two numerals: no solution meets them.
+        assert!(clashes(&Term::Succ(Rc::clone(&hole)), &Term::Zero));
+        assert!(clashes(&Term::NatLit(2u64.into()), &Term::NatLit(3u64.into())));
+        // `Succ(?0)` against `1` meets at `?0 := 0`.
+        assert!(!clashes(&Term::Succ(Rc::clone(&hole)), &one));
+        // Below an application's arguments a difference decides nothing:
+        // `g(0)` and `g(1)` may be equal.
+        let g = Term::GlobalTm { var: GlobalVar(1), subst: embed(&gamma, 0) };
+        let g_at = |a: Term| app(g.clone(), Type::Nat, a);
+        assert!(!clashes(&g_at(Term::Zero), &g_at(one.clone())));
+        // Two type formers of different kinds.
+        let c = Clash::default();
+        let u = U { clash: Some(&c), ..U::syntactic(&gamma) };
+        unify_ty(&u, &Type::Nat, &Type::Ty(Level::Zero), 0, 0, &mut []);
+        assert!(c.seen());
     }
 
     #[test]

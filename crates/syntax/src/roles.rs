@@ -87,6 +87,9 @@ fn walk<'a>(toks: &'a [Tok], file: &File) -> Walk<'a> {
     for it in &file.items {
         w.item(it);
     }
+    for &(head, first, last) in &file.section_typarams {
+        w.list_spanned("section-tyvars", head, first, last);
+    }
     w
 }
 
@@ -229,7 +232,8 @@ impl<'a> Walk<'a> {
                     self.ty(a);
                 }
             }
-            TyKind::Named { .. } | TyKind::Nat | TyKind::Ctx | TyKind::Splice { .. } => {}
+            // A `def`'s inferred type is its value, walked as its body.
+            TyKind::Named { .. } | TyKind::Nat | TyKind::Ctx | TyKind::Splice { .. } | TyKind::TypeOf(_) => {}
             TyKind::Univ { .. } => {
                 // `Type<n>` writes a numeral; `Type` alone writes nothing.
                 if let Some(open) = self.lt_in(t.span.start, t.span.end) {
@@ -270,6 +274,7 @@ impl<'a> Walk<'a> {
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
+            | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)
@@ -449,13 +454,11 @@ impl<'a> Walk<'a> {
     }
 
     fn decl(&mut self, d: &Decl) {
-        if !d.tyvars.is_empty() {
-            self.list_spanned(
-                "decl-tyvars",
-                d.span,
-                d.tyvars[0].span,
-                d.tyvars[d.tyvars.len() - 1].span,
-            );
+        // A section's type parameters lead a member's list but were written
+        // in the section's head, before the member (`walk` locates that list).
+        let own: Vec<&TyParam> = d.tyvars.iter().filter(|t| t.span.start >= d.span.start).collect();
+        if let (Some(first), Some(last)) = (own.first(), own.last()) {
+            self.list_spanned("decl-tyvars", d.span, first.span, last.span);
         }
         for p in &d.params {
             self.param(p);
@@ -470,6 +473,11 @@ impl<'a> Walk<'a> {
     fn item(&mut self, it: &Item) {
         match it {
             Item::Decl(d) => self.decl(d),
+            Item::Generate(g) => self.expr(&g.generator),
+            Item::Prefixed(p) => {
+                self.expr(&p.generator);
+                self.decl(&p.decl);
+            }
             Item::Inductive(i) => {
                 if !i.params.is_empty() {
                     self.list_bare("inductive-params", i.span, &i.name);
@@ -492,6 +500,9 @@ impl<'a> Walk<'a> {
             Item::Class(c) => {
                 if !c.params.is_empty() {
                     self.list_bare("class-params", c.span, &c.name);
+                }
+                for k in c.kinds.iter().flatten() {
+                    self.ty(k);
                 }
                 for p in &c.valparams {
                     self.param(p);

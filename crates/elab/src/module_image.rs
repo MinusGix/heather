@@ -7,7 +7,7 @@
 //! ordinary replay boundary validates and publishes them.
 
 use std::fmt;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc as Rc;
 
 use heather_kernel::layer::Layer;
@@ -33,8 +33,19 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x17";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x15";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x1f";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1c";
+
+/// The two encodings' versions, image then interface: what a module cache
+/// key covers, so a bump of either is a clean miss for every reader rather
+/// than a stored image whose header still answers for its key while its
+/// body no longer decodes (`issues/library-gate-native-tests-fresh-box-rail.md`).
+pub fn image_format() -> [u8; 16] {
+    let mut out = [0; 16];
+    out[..8].copy_from_slice(MAGIC);
+    out[8..].copy_from_slice(INTERFACE_MAGIC);
+    out
+}
 
 /// Hard limits applied before any decoded collection or string allocation.
 /// The loader may choose a smaller policy; these defaults are deliberately
@@ -121,12 +132,96 @@ struct Writer {
     /// its node budget, so a writer knows before publication whether the
     /// reader would refuse the image (`ModuleImageLimits::max_nodes`).
     nodes: u64,
+    share: Share,
 }
 
 impl Default for Writer {
     fn default() -> Self {
-        Self { bytes: Vec::new(), interface: false, nodes: 0 }
+        Self { bytes: Vec::new(), interface: false, nodes: 0, share: Share::default() }
     }
+}
+
+/// The writer's side of the image's node sharing. A term or type is written
+/// once; every later occurrence of an equal one is [`tag::SHARED`] and the
+/// index the reader gave the first ([`Reader::terms`]). Without it an image
+/// was a tree: the elaborator's terms share subterms freely (one `Arc` under
+/// many parents), and a module whose definitions are such DAGs wrote, and
+/// every replay decoded, each shared subterm once per path to it — the
+/// tactic modules' images were a hundred megabytes and took seconds and
+/// gigabytes to decode in every process that replayed them.
+///
+/// Equal means structurally equal, not the same allocation: each node gets
+/// a canonical number from its shallow encoding with its children as their
+/// numbers ([`Writer::canonical_term`]), so the bytes are a function of the
+/// terms alone. An interface hash or `same_proof` compares encodings made by
+/// different processes, whose terms share differently in memory, and must
+/// still see equal terms as equal bytes. Allocations are only a memo: a
+/// shared child is numbered once per encoding, which keeps the walk linear
+/// in the DAG. The memo holds each `Arc` it keys by, so an address is never
+/// reused for another node while the encoding runs.
+#[derive(Default)]
+struct Share {
+    /// Inside [`Writer::canonical_term`]: children are written as their
+    /// canonical numbers, the key of the node being numbered.
+    keying: bool,
+    term_at: KeyMap<*const Term, (Rc<Term>, u32)>,
+    type_at: KeyMap<*const Type, (Rc<Type>, u32)>,
+    term_keys: KeyMap<Box<[u8]>, u32>,
+    type_keys: KeyMap<Box<[u8]>, u32>,
+    /// Emptied key buffers, so numbering a node allocates only for a key
+    /// not seen before.
+    spare: Vec<Vec<u8>>,
+    /// By canonical number: the reader's index of the node once written.
+    term_written: Vec<Option<u32>>,
+    type_written: Vec<Option<u32>>,
+    terms: u32,
+    types: u32,
+}
+
+/// The writer's own allocations and its own shallow encodings are the keys,
+/// not input anyone chooses, so a multiply-mix replaces SipHash, which cost
+/// more than the encoding it keys (as `heather_kernel::value::PtrHasher`).
+#[derive(Default, Clone, Copy)]
+struct KeyHasher(u64);
+
+impl std::hash::Hasher for KeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.write_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
+        }
+        let mut last = [0_u8; 8];
+        last[..chunks.remainder().len()].copy_from_slice(chunks.remainder());
+        self.write_u64(u64::from_le_bytes(last));
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+}
+
+type KeyMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<KeyHasher>>;
+
+/// A position that holds a term (`T = Term`) or type: inline, or behind an
+/// `Arc` the writer may memoise by allocation. The reader treats both alike.
+trait Site<T> {
+    fn node(&self) -> &T;
+    fn shared(&self) -> Option<&Rc<T>>;
+}
+
+impl<T> Site<T> for T {
+    fn node(&self) -> &T { self }
+    fn shared(&self) -> Option<&Rc<T>> { None }
+}
+
+impl<T> Site<T> for Rc<T> {
+    fn node(&self) -> &T { self }
+    fn shared(&self) -> Option<&Rc<T>> { Some(self) }
 }
 
 impl Writer {
@@ -183,6 +278,63 @@ impl Writer {
             put(self, value);
         }
     }
+
+    /// The canonical number of a term: its node written shallowly, children
+    /// as their own numbers, looked up among the keys seen so far.
+    fn canonical_term(&mut self, site: &(impl Site<Term> + ?Sized)) -> u32 {
+        if let Some(rc) = site.shared() {
+            if let Some((_, n)) = self.share.term_at.get(&Rc::as_ptr(rc)) {
+                return *n;
+            }
+        }
+        let key = self.key(|w| put_term_node(w, site.node()));
+        let n = Self::number(&mut self.share.term_keys, &mut self.share.spare, key);
+        if let Some(rc) = site.shared() {
+            self.share.term_at.insert(Rc::as_ptr(rc), (rc.clone(), n));
+        }
+        n
+    }
+
+    /// [`Writer::canonical_term`] for a type.
+    fn canonical_type(&mut self, site: &(impl Site<Type> + ?Sized)) -> u32 {
+        if let Some(rc) = site.shared() {
+            if let Some((_, n)) = self.share.type_at.get(&Rc::as_ptr(rc)) {
+                return *n;
+            }
+        }
+        let key = self.key(|w| put_type_node(w, site.node()));
+        let n = Self::number(&mut self.share.type_keys, &mut self.share.spare, key);
+        if let Some(rc) = site.shared() {
+            self.share.type_at.insert(Rc::as_ptr(rc), (rc.clone(), n));
+        }
+        n
+    }
+
+    /// What `put` writes in keying mode, leaving the image and its node
+    /// count as they were.
+    fn key(&mut self, put: impl FnOnce(&mut Self)) -> Vec<u8> {
+        let bytes = std::mem::replace(&mut self.bytes, self.share.spare.pop().unwrap_or_default());
+        let (nodes, keying) = (self.nodes, std::mem::replace(&mut self.share.keying, true));
+        put(self);
+        self.nodes = nodes;
+        self.share.keying = keying;
+        std::mem::replace(&mut self.bytes, bytes)
+    }
+
+    /// The number of `key` among `keys`, a new one if it is new.
+    fn number(keys: &mut KeyMap<Box<[u8]>, u32>, spare: &mut Vec<Vec<u8>>, mut key: Vec<u8>) -> u32 {
+        let n = match keys.get(key.as_slice()) {
+            Some(&n) => n,
+            None => {
+                let n = keys.len() as u32;
+                keys.insert(key.as_slice().into(), n);
+                n
+            }
+        };
+        key.clear();
+        spare.push(key);
+        n
+    }
 }
 
 struct Reader<'a> {
@@ -195,6 +347,10 @@ struct Reader<'a> {
     /// at the position its text now has in the edited source
     /// (`docs/declaration-slice-replay-design.md` §4). Zero for an image.
     span_offset: i64,
+    /// Every term and type decoded so far, in the order their nodes ended:
+    /// what a [`tag::SHARED`] reference indexes ([`Share`]).
+    terms: Vec<Rc<Term>>,
+    types: Vec<Rc<Type>>,
     /// The lowest stack address a node was decoded at, for the frame-cost
     /// tests.
     #[cfg(test)]
@@ -213,6 +369,8 @@ impl<'a> Reader<'a> {
             nodes_left: limits.max_nodes,
             depth: 0,
             span_offset: 0,
+            terms: Vec::new(),
+            types: Vec::new(),
             #[cfg(test)]
             low_water: usize::MAX,
         })
@@ -333,14 +491,24 @@ impl<'a> Reader<'a> {
             Err(ModuleImageDecodeError::TrailingBytes)
         }
     }
+
+    /// The index after a [`tag::SHARED`] byte, if that is what comes next,
+    /// charged as one node like the reference the writer counted.
+    fn shared(&mut self) -> Result<Option<usize>, ModuleImageDecodeError> {
+        if self.bytes.get(self.at) != Some(&tag::SHARED) {
+            return Ok(None);
+        }
+        self.node(|r| {
+            r.at += 1;
+            Ok(Some(r.u32()? as usize))
+        })
+    }
 }
 
 mod tag {
-    pub const LEVEL_VAR: u8 = 0;
-    pub const LEVEL_ZERO: u8 = 1;
-    pub const LEVEL_SUCC: u8 = 2;
-    pub const LEVEL_MAX: u8 = 3;
+    // 0–3 were the tree spelling before levels were canonical.
     pub const LEVEL_OMEGA: u8 = 4;
+    pub const LEVEL_NF: u8 = 5;
 
     pub const LAYER_VAR: u8 = 0;
     pub const LAYER_CODE: u8 = 1;
@@ -355,35 +523,47 @@ mod tag {
     pub const BINDING_CTX: u8 = 0;
     pub const BINDING_TY: u8 = 1;
     pub const BINDING_TM: u8 = 2;
+
+    /// In a term's or type's place: a node written earlier ([`super::Share`]).
+    pub const SHARED: u8 = 0xff;
 }
 
+/// A level as its canonical parts: `ω`, or the optional constant and the
+/// `(ℓ, n)` terms. Decoding rebuilds through [`Level::of_parts`], so no image
+/// can produce a non-canonical level.
 fn put_level(w: &mut Writer, level: &Level) {
     w.nodes += 1;
-    match level {
-        Level::Var(var) => {
-            w.byte(tag::LEVEL_VAR);
-            w.u32(var.0);
+    let Some((konst, vars)) = level.parts() else { return w.byte(tag::LEVEL_OMEGA) };
+    w.byte(tag::LEVEL_NF);
+    match konst {
+        Some(k) => {
+            w.byte(1);
+            w.u64(k);
         }
-        Level::Zero => w.byte(tag::LEVEL_ZERO),
-        Level::Succ(level) => {
-            w.byte(tag::LEVEL_SUCC);
-            put_level(w, level);
-        }
-        Level::Max(left, right) => {
-            w.byte(tag::LEVEL_MAX);
-            put_level(w, left);
-            put_level(w, right);
-        }
-        Level::Omega => w.byte(tag::LEVEL_OMEGA),
+        None => w.byte(0),
+    }
+    w.len(vars.len());
+    for (var, n) in vars {
+        w.u32(var.0);
+        w.u64(n);
     }
 }
 
 fn get_level(r: &mut Reader<'_>) -> Result<Level, ModuleImageDecodeError> {
     r.node(|r| match r.byte()? {
-        tag::LEVEL_VAR => Ok(Level::Var(UnivVar(r.u32()?))),
-        tag::LEVEL_ZERO => Ok(Level::Zero),
-        tag::LEVEL_SUCC => Ok(Level::Succ(Rc::new(get_level(r)?))),
-        tag::LEVEL_MAX => Ok(Level::Max(Rc::new(get_level(r)?), Rc::new(get_level(r)?))),
+        tag::LEVEL_NF => {
+            let konst = match r.byte()? {
+                0 => None,
+                1 => Some(r.u64()?),
+                tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "level constant", tag }),
+            };
+            let len = r.len()?;
+            let mut vars = Vec::with_capacity(len);
+            for _ in 0..len {
+                vars.push((UnivVar(r.u32()?), r.u64()?));
+            }
+            Ok(Level::of_parts(konst, vars))
+        }
         tag::LEVEL_OMEGA => Ok(Level::Omega),
         tag => Err(ModuleImageDecodeError::InvalidTag { sort: "level", tag }),
     })
@@ -482,7 +662,25 @@ fn get_subst(r: &mut Reader<'_>) -> Result<LocalSubst, ModuleImageDecodeError> {
 // caller always knows which sort it is decoding, so tags stay compact while
 // every exhaustive match remains a compile-time schema tripwire.
 
-fn put_type(w: &mut Writer, ty: &Type) {
+fn put_type(w: &mut Writer, site: &(impl Site<Type> + ?Sized)) {
+    let n = w.canonical_type(site);
+    if w.share.keying {
+        return w.u32(n);
+    }
+    if let Some(&Some(at)) = w.share.type_written.get(n as usize) {
+        w.nodes += 1;
+        w.byte(tag::SHARED);
+        return w.u32(at);
+    }
+    put_type_node(w, site.node());
+    if w.share.type_written.len() <= n as usize {
+        w.share.type_written.resize(n as usize + 1, None);
+    }
+    w.share.type_written[n as usize] = Some(w.share.types);
+    w.share.types += 1;
+}
+
+fn put_type_node(w: &mut Writer, ty: &Type) {
     w.nodes += 1;
     match ty {
         Type::Nat => w.byte(0),
@@ -545,7 +743,19 @@ fn put_type(w: &mut Writer, ty: &Type) {
 // a level of term nesting cost 16 KiB (`DECODE_FRAME_BYTES`).
 #[inline(never)]
 fn term_rc(r: &mut Reader<'_>) -> Result<Rc<Term>, ModuleImageDecodeError> {
-    Ok(Rc::new(get_term(r)?))
+    if let Some(at) = r.shared()? {
+        return r.terms.get(at).cloned().ok_or(ModuleImageDecodeError::InvalidStructure("shared term index"));
+    }
+    let term = Rc::new(get_term_node(r)?);
+    r.terms.push(term.clone());
+    Ok(term)
+}
+
+/// A term in an inline position: a shared one is cloned out of its `Arc`,
+/// which copies one node.
+#[inline(never)]
+fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
+    Ok(Rc::unwrap_or_clone(term_rc(r)?))
 }
 
 /// An `IWf` signature, in the order tags 23 and 63 write it. Out of line
@@ -641,10 +851,21 @@ fn get_corec(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
 
 #[inline(never)]
 fn type_rc(r: &mut Reader<'_>) -> Result<Rc<Type>, ModuleImageDecodeError> {
-    Ok(Rc::new(get_type(r)?))
+    if let Some(at) = r.shared()? {
+        return r.types.get(at).cloned().ok_or(ModuleImageDecodeError::InvalidStructure("shared type index"));
+    }
+    let ty = Rc::new(get_type_node(r)?);
+    r.types.push(ty.clone());
+    Ok(ty)
 }
 
+/// [`get_term`] for a type.
+#[inline(never)]
 fn get_type(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
+    Ok(Rc::unwrap_or_clone(type_rc(r)?))
+}
+
+fn get_type_node(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
     r.node(|r| Ok(match r.byte()? {
         0 => Type::Nat,
         1 => Type::Pi { dom_level: get_level(r)?, cod_level: get_level(r)?, dom: type_rc(r)?, cod: type_rc(r)? },
@@ -675,7 +896,25 @@ fn get_type(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
     }))
 }
 
-fn put_term(w: &mut Writer, term: &Term) {
+fn put_term(w: &mut Writer, site: &(impl Site<Term> + ?Sized)) {
+    let n = w.canonical_term(site);
+    if w.share.keying {
+        return w.u32(n);
+    }
+    if let Some(&Some(at)) = w.share.term_written.get(n as usize) {
+        w.nodes += 1;
+        w.byte(tag::SHARED);
+        return w.u32(at);
+    }
+    put_term_node(w, site.node());
+    if w.share.term_written.len() <= n as usize {
+        w.share.term_written.resize(n as usize + 1, None);
+    }
+    w.share.term_written[n as usize] = Some(w.share.terms);
+    w.share.terms += 1;
+}
+
+fn put_term_node(w: &mut Writer, term: &Term) {
     w.nodes += 1;
     match term {
         Term::Var(var) => { w.byte(0); w.u32(var.0); }
@@ -843,10 +1082,15 @@ fn put_term(w: &mut Writer, term: &Term) {
         Term::InlAt { ty: None, val } => { w.byte(60); put_term(w, val); }
         Term::InrAt { ty: None, val } => { w.byte(61); put_term(w, val); }
         Term::AppAt { fun, arg } => { w.byte(62); put_term(w, fun); put_term(w, arg); }
+        // A packed vector literal (docs/bitvector-literal-entry-design.md
+        // §3): its two elements and its word, never the chain it spells.
+        Term::VecLit { level, elem, zero, one, width, bits } => {
+            w.byte(70); put_level(w, level); put_type(w, elem); put_term(w, zero); put_term(w, one); w.u32(*width); w.u64(*bits);
+        }
     }
 }
 
-fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
+fn get_term_node(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
     r.node(|r| Ok(match r.byte()? {
         0 => Term::Var(LocalVar(r.u32()?)),
         1 => Term::TmNat,
@@ -917,6 +1161,11 @@ fn get_term(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         67 => get_tm_m(r)?,
         68 => Term::TmDVec { level: get_level(r)?, len: term_rc(r)?, fam: term_rc(r)? },
         69 => get_tm_iwf(r)?,
+        70 => {
+            let (level, elem, zero, one) = (get_level(r)?, type_rc(r)?, term_rc(r)?, term_rc(r)?);
+            let (width, bits) = (r.u32()?, r.u64()?);
+            Term::VecLit { level, elem, zero, one, width, bits }
+        }
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))
 }
@@ -1086,6 +1335,7 @@ fn put_ty(w: &mut Writer, ty: &Ty) {
         TyKind::TyCode { ctx } => { w.byte(10); w.string(ctx); }
         TyKind::Code { ctx, ty } => { w.byte(11); w.string(ctx); put_ty(w, ty); }
         TyKind::Splice { name } => { w.byte(12); w.string(name); }
+        TyKind::TypeOf(expr) => { w.byte(13); put_expr(w, expr); }
     }
 }
 
@@ -1109,6 +1359,7 @@ fn get_ty(r: &mut Reader<'_>) -> Result<Ty, ModuleImageDecodeError> {
             10 => TyKind::TyCode { ctx: r.string()? },
             11 => TyKind::Code { ctx: r.string()?, ty: Box::new(get_ty(r)?) },
             12 => TyKind::Splice { name: r.string()? },
+            13 => TyKind::TypeOf(Box::new(get_expr(r)?)),
             tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "surface type", tag }),
         };
         Ok(Ty { kind, span })
@@ -1239,6 +1490,9 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
                 w.string(&field.name); put_expr(w, &field.expr); put_span(w, field.span);
             });
         }
+        ExprKind::Scaled(lit) => {
+            w.byte(26); w.numeral(&lit.mant); w.u64(lit.exp as u64); w.bool(lit.hex);
+        }
     }
 }
 
@@ -1303,6 +1557,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
                     name: r.string()?, expr: get_expr(r)?, span: get_span(r)?,
                 }))?,
             },
+            26 => ExprKind::Scaled(heather_syntax::ScaledLit { mant: r.numeral()?, exp: r.u64()? as i64, hex: r.bool()? }),
             tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "expression", tag }),
         };
         Ok(Expr { kind, span })
@@ -1407,9 +1662,17 @@ fn get_param(r: &mut Reader<'_>) -> Result<Param, ModuleImageDecodeError> {
 }
 
 fn put_decl(w: &mut Writer, decl: &Decl) {
-    w.byte(match decl.kind { DeclKind::Fn => 0, DeclKind::Theorem => 1, DeclKind::Axiom => 2 });
+    // A `def` is a `Fn` with the value flag, tagged 3: an image written
+    // before `def` existed never holds the tag, so it still decodes.
+    w.byte(match decl.kind {
+        DeclKind::Fn if decl.value => 3,
+        DeclKind::Fn => 0,
+        DeclKind::Theorem => 1,
+        DeclKind::Axiom => 2,
+    });
     w.bool(decl.is_meta);
     w.bool(decl.is_evidence);
+    w.bool(decl.is_interface);
     w.option(decl.elaborates.as_ref(), |w, slot| {
         w.string(&slot.family); w.string(&slot.name); put_span(w, slot.span);
     });
@@ -1417,6 +1680,7 @@ fn put_decl(w: &mut Writer, decl: &Decl) {
     w.vec(&decl.tyvars, |w, var| { w.string(&var.name); w.u64(var.level); put_span(w, var.span); });
     w.vec(&decl.params, put_param); put_ty(w, &decl.result);
     w.option(decl.decreases.as_ref(), put_expr);
+    w.vec(&decl.unfolding, |w, name| w.string(name));
     if w.interface && matches!(decl.kind, DeclKind::Theorem | DeclKind::Axiom) {
         // The checked kernel binding retains the statement and opacity bit.
         // The proof block is neither delta-visible nor re-lowered downstream.
@@ -1428,16 +1692,17 @@ fn put_decl(w: &mut Writer, decl: &Decl) {
 }
 
 fn get_decl(r: &mut Reader<'_>) -> Result<Decl, ModuleImageDecodeError> {
-    let kind = match r.byte()? {
-        0 => DeclKind::Fn, 1 => DeclKind::Theorem, 2 => DeclKind::Axiom,
+    let (kind, value) = match r.byte()? {
+        0 => (DeclKind::Fn, false), 1 => (DeclKind::Theorem, false), 2 => (DeclKind::Axiom, false),
+        3 => (DeclKind::Fn, true),
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "declaration kind", tag }),
     };
     Ok(Decl {
-        kind, is_meta: r.bool()?, is_evidence: r.bool()?, elaborates: r.option(|r| Ok(SlotPath {
+        kind, value, is_meta: r.bool()?, is_evidence: r.bool()?, is_interface: r.bool()?, partial: None, elaborates: r.option(|r| Ok(SlotPath {
             family: r.string()?, name: r.string()?, span: get_span(r)?,
         }))?, name: r.string()?, tyvars: r.vec(|r| Ok(TyParam {
             name: r.string()?, level: r.u64()?, span: get_span(r)?,
-        }))?, params: r.vec(get_param)?, result: get_ty(r)?, decreases: r.option(get_expr)?,
+        }))?, params: r.vec(get_param)?, result: get_ty(r)?, decreases: r.option(get_expr)?, unfolding: r.vec(Reader::string)?,
         body: get_block(r)?, span: get_span(r)?,
     })
 }
@@ -1539,6 +1804,10 @@ fn put_gen_def(w: &mut Writer, key: GenDef) {
         GenDef::MShape(tag) => { w.byte(16); w.u32(tag); }
         GenDef::MPos(tag) => { w.byte(17); w.u32(tag); }
         GenDef::MNext(tag) => { w.byte(18); w.u32(tag); }
+        GenDef::IArity(tag) => { w.byte(19); w.u32(tag); }
+        GenDef::IOut(tag) => { w.byte(20); w.u32(tag); }
+        GenDef::IChild(tag) => { w.byte(21); w.u32(tag); }
+        GenDef::IDnth(tag) => { w.byte(22); w.u32(tag); }
     }
 }
 
@@ -1554,6 +1823,8 @@ fn get_gen_def(r: &mut Reader<'_>) -> Result<GenDef, ModuleImageDecodeError> {
         13 => GenDef::SuffixCode(r.u32()?, r.usize()?),
         14 => GenDef::TyCodeFn(r.u32()?), 15 => GenDef::WCanon(r.u32()?),
         16 => GenDef::MShape(r.u32()?), 17 => GenDef::MPos(r.u32()?), 18 => GenDef::MNext(r.u32()?),
+        19 => GenDef::IArity(r.u32()?), 20 => GenDef::IOut(r.u32()?), 21 => GenDef::IChild(r.u32()?),
+        22 => GenDef::IDnth(r.u32()?),
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "generated definition", tag }),
     })
 }
@@ -1609,6 +1880,7 @@ fn put_inductive(w: &mut Writer, info: &Inductive) {
     w.nodes += 1;
     w.string(&info.name); put_scope(w, &info.scope); w.u32(info.tag);
     w.vec(&info.params, |w, name| w.string(name));
+    w.option(info.varies.as_ref(), |w, k| w.u32(*k as u32));
     w.vec(&info.valparams, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
     w.vec(&info.op_symbols, |w, (symbol, name)| { w.string(symbol); w.string(name); });
     w.vec(&info.ctors, put_ctor); w.bool(info.recursive); w.bool(info.is_record); w.bool(info.codata);
@@ -1630,6 +1902,7 @@ fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError
     r.node(|r| Ok(Inductive {
         name: r.string()?, scope: Rc::new(get_scope(r)?), tag: r.u32()?,
         params: r.vec(Reader::string)?,
+        varies: r.option(|r| Ok(r.u32()? as usize))?,
         valparams: r.vec(|r| Ok((r.string()?, get_ty(r)?)))?,
         op_symbols: r.vec(|r| Ok((r.string()?, r.string()?)))?,
         ctors: r.vec(get_ctor)?, recursive: r.bool()?, is_record: r.bool()?, codata: r.bool()?,
@@ -1670,14 +1943,16 @@ fn get_class_ref(r: &mut Reader<'_>) -> Result<ClassRef, ModuleImageDecodeError>
 }
 
 fn put_class(w: &mut Writer, info: &ClassInfo) {
-    w.string(&info.name); w.vec(&info.params, |w, s| w.string(s)); w.vec(&info.valparams, put_param);
+    w.string(&info.name); w.vec(&info.params, |w, s| w.string(s));
+    w.vec(&info.kinds, |w, k| w.option(k.as_ref(), put_ty)); w.vec(&info.valparams, put_param);
     w.vec(&info.fields, put_field_decl); w.vec(&info.ancestors, put_class_ref);
     w.vec(&info.owner, |w, owner| w.option(owner.as_ref(), |w, s| w.string(s)));
 }
 
 fn get_class(r: &mut Reader<'_>) -> Result<ClassInfo, ModuleImageDecodeError> {
     Ok(ClassInfo {
-        name: r.string()?, params: r.vec(Reader::string)?, valparams: r.vec(get_param)?,
+        name: r.string()?, params: r.vec(Reader::string)?, kinds: r.vec(|r| r.option(get_ty))?,
+        valparams: r.vec(get_param)?,
         fields: r.vec(get_field_decl)?, ancestors: r.vec(get_class_ref)?,
         owner: r.vec(|r| r.option(Reader::string))?,
     })
@@ -1864,6 +2139,10 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             w.byte(18); w.string(&rule.global); w.string(&rule.relation);
             w.vec(&rule.heads, |w, head| w.option(head.as_ref(), |w, head| w.string(head)));
         }
+        DeltaEvent::Interface { key, info } => {
+            w.byte(19); w.string(key); w.string(&info.module); w.u32(info.arity); w.string(&info.name);
+            w.vec(&info.equations, |w, eq| w.string(eq));
+        }
         DeltaEvent::Repr { key, name, info, monomorph, obligations } => {
             w.byte(11); w.option(key.0.as_ref(), |w, tag| w.u32(*tag)); w.string(&key.1);
             w.string(name); put_datarepr(w, info);
@@ -1887,7 +2166,7 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
         DeltaEvent::GenSpineCodes { tag, codes, at } => {
             w.byte(16); w.u32(*tag);
             w.vec(&codes.ctors, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
-            w.vec(&codes.tails, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
+            w.vec(&codes.nodes, |w, (ty, level)| { put_type(w, ty); put_level(w, level); });
             w.u32(*at);
         }
     }
@@ -1919,6 +2198,9 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         18 => DeltaEvent::Evidence(EvidenceRule {
             global: r.string()?, relation: r.string()?, heads: r.vec(|r| r.option(Reader::string))?,
         }),
+        19 => DeltaEvent::Interface { key: r.string()?, info: crate::interfaces::InterfaceInfo {
+            module: r.string()?, arity: r.u32()?, name: r.string()?, equations: r.vec(Reader::string)?,
+        } },
         11 => DeltaEvent::Repr {
             key: (r.option(Reader::u32)?, r.string()?), name: r.string()?, info: get_datarepr(r)?,
             monomorph: r.option(|r| Ok((r.u32()?, r.string()?)))?, obligations: r.vec(get_obligation)?,
@@ -1939,7 +2221,7 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         }, at: r.u32()? },
         16 => DeltaEvent::GenSpineCodes { tag: r.u32()?, codes: SpineCodes {
             ctors: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
-            tails: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
+            nodes: r.vec(|r| Ok((type_rc(r)?, get_level(r)?)))?,
         }, at: r.u32()? },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "module event", tag }),
     })
@@ -2047,7 +2329,7 @@ fn validate_delta(delta: &ModuleDelta) -> Result<(), ModuleImageDecodeError> {
                 if !spine_codes.insert(*tag) {
                     return Err(ModuleImageDecodeError::InvalidStructure("duplicate generated spine-code guard"));
                 }
-                if codes.ctors.len() < 2 || codes.tails.len() + 1 != codes.ctors.len() {
+                if codes.ctors.len() < 2 || codes.nodes.len() + 1 != codes.ctors.len() {
                     return Err(ModuleImageDecodeError::InvalidStructure("generated spine-code guard is not a spine"));
                 }
             }
@@ -2147,8 +2429,9 @@ pub(crate) fn encode_delta(delta: &ModuleDelta) -> Vec<u8> {
 /// them — the number a publisher compares against `max_nodes` before writing
 /// an image the reader would only decode up to the budget and refuse.
 /// The syntax nodes `ty` costs in an image, counted by the writer itself so
-/// the number is the one the decode budget charges — a tree size, not a DAG
-/// one. For `HEATHER_IMAGE_ATTRIBUTION` (`emission_walk::tally_decl`).
+/// the number is the one the decode budget charges: its distinct subterms,
+/// each repeat one more ([`Share`]). For `HEATHER_IMAGE_ATTRIBUTION`
+/// (`emission_walk::tally_decl`).
 pub(crate) fn type_image_nodes(ty: &Type) -> u64 {
     let mut w = Writer::default();
     put_type(&mut w, ty);
@@ -2205,7 +2488,13 @@ fn put_sealed(w: &mut Writer, (at, proof): &(usize, Rc<SealedProof>)) {
             w.bytes.extend_from_slice(&image.bytes);
             w.nodes += image.nodes;
         }
-        None => put_term(w, proof.term()),
+        // Its own sharing scope: the bytes are kept and decoded apart from
+        // the image ([`ImageProof::load`]), so they may not refer outside.
+        None => {
+            let outer = std::mem::take(&mut w.share);
+            put_term(w, proof.term());
+            w.share = outer;
+        }
     }
 }
 
@@ -2216,7 +2505,9 @@ fn put_sealed(w: &mut Writer, (at, proof): &(usize, Rc<SealedProof>)) {
 fn get_sealed(r: &mut Reader<'_>) -> Result<(usize, Rc<SealedProof>), ModuleImageDecodeError> {
     let at = r.usize()?;
     let (start, budget) = (r.at, r.nodes_left);
+    let outer = (std::mem::take(&mut r.terms), std::mem::take(&mut r.types));
     drop(get_term(r)?);
+    (r.terms, r.types) = outer;
     let image = ImageProof { bytes: r.bytes[start..r.at].into(), nodes: budget - r.nodes_left, limits: r.limits };
     Ok((at, Rc::new(SealedProof::lazy(image))))
 }
@@ -2258,7 +2549,8 @@ impl ProofSource for ImageProof {
 /// or equal terms. A proof kept as its encoding is compared as one — the
 /// other side is encoded, never this side decoded — so asking whether an
 /// unopened dependency proof changed leaves it unloaded. The encoding is
-/// a faithful tree serialisation, so equal bytes are equal terms.
+/// faithful and canonical ([`Share`]), so equal bytes are equal terms and
+/// equal terms equal bytes.
 pub(crate) fn same_proof(a: &Rc<SealedProof>, b: &Rc<SealedProof>) -> bool {
     if Rc::ptr_eq(a, b) {
         return true;
@@ -2522,6 +2814,86 @@ mod tests {
         }).unwrap().join().unwrap();
     }
 
+    /// The writer recurses through a term's children three frames a level
+    /// while it numbers them ([`Writer::canonical_term`]), on its caller's
+    /// stack. Every spine at the depth budget, the deepest a reader takes,
+    /// encodes on half the 8 MiB a main thread has.
+    #[test]
+    fn the_depth_budget_encodes_on_half_a_main_threads_stack() {
+        let limits = ModuleImageLimits::default();
+        std::thread::Builder::new().stack_size(4 << 20).spawn(move || {
+            assert!(!deep::spines(limits.max_depth - 1).is_empty());
+        }).unwrap().join().unwrap();
+    }
+
+    /// A term whose every level uses the one below twice: `2^levels` nodes
+    /// as a tree, `levels` as allocated.
+    fn doubling(levels: usize, share: bool) -> Rc<Term> {
+        match levels {
+            0 => Rc::new(Term::Zero),
+            _ if share => {
+                let t = doubling(levels - 1, true);
+                Rc::new(Term::AppAt { fun: t.clone(), arg: t })
+            }
+            _ => Rc::new(Term::AppAt { fun: doubling(levels - 1, false), arg: doubling(levels - 1, false) }),
+        }
+    }
+
+    fn encode(t: &Rc<Term>) -> (Vec<u8>, u64) {
+        let mut w = Writer::default();
+        put_term(&mut w, t);
+        (w.bytes, w.nodes)
+    }
+
+    fn decode(bytes: &[u8]) -> Rc<Term> {
+        let mut r = Reader::new(bytes, ModuleImageLimits::default()).unwrap();
+        let t = term_rc(&mut r).unwrap();
+        r.finish().unwrap();
+        t
+    }
+
+    /// A shared subterm is written once and read back as one allocation:
+    /// the image and its node charge grow with the DAG, not the tree.
+    #[test]
+    fn shared_subterms_are_written_once() {
+        let (bytes, nodes) = encode(&doubling(40, true));
+        assert!(nodes <= 2 * 41, "{nodes} nodes charged for 41 distinct ones");
+        assert!(bytes.len() < 41 * 16, "{} bytes for 41 distinct nodes", bytes.len());
+        let back = decode(&bytes);
+        let Term::AppAt { fun, arg } = &*back else { panic!("an application") };
+        assert!(Rc::ptr_eq(fun, arg), "the shared child decodes as one allocation");
+        assert_eq!(encode(&back).0, bytes);
+    }
+
+    /// Sharing is by equal structure, so the bytes do not depend on how the
+    /// writer's terms happened to share memory: an interface hash or
+    /// `same_proof` compares encodings made by different processes.
+    #[test]
+    fn the_encoding_does_not_depend_on_allocation() {
+        let shared = encode(&doubling(12, true));
+        assert_eq!(encode(&doubling(12, false)), shared);
+        // An inline position shares too: the second copy of `t` refers to the
+        // first.
+        let t = doubling(3, true);
+        let mut w = Writer::default();
+        put_term(&mut w, &*t);
+        put_term(&mut w, &Term::clone(&t));
+        let mut r = Reader::new(&w.bytes, ModuleImageLimits::default()).unwrap();
+        let (a, b) = (get_term(&mut r).unwrap(), get_term(&mut r).unwrap());
+        assert_eq!(r.terms.len(), 4, "four distinct nodes decoded, the copy by reference");
+        r.finish().unwrap();
+        assert!(a == *t && b == *t);
+    }
+
+    /// A reference past the nodes read so far is refused, not followed.
+    #[test]
+    fn a_shared_reference_must_point_backwards() {
+        let mut bytes = vec![tag::SHARED];
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        let mut r = Reader::new(&bytes, ModuleImageLimits::default()).unwrap();
+        assert_eq!(term_rc(&mut r), Err(ModuleImageDecodeError::InvalidStructure("shared term index")));
+    }
+
     fn ordinary_delta() -> (GlobalCtx, ModuleDelta) {
         let mut elaborator = Elaborator::new();
         let prefix = elaborator.psi().clone();
@@ -2533,7 +2905,9 @@ mod tests {
                  fn Box::get<A>(self b: Box<A>) -> A { match b { Wrap(x) => x } }\n\
                  theorem get_zero(): Wrap(0).get<Nat>() = 0 { refl }\n\
                  fn id(x: Nat) -> Nat { x }\n\
-                 theorem id_zero(): id(0) = 0 { refl }",
+                 theorem id_zero(): id(0) = 0 { refl }\n\
+                 def five: Nat = 5;\n\
+                 def six = Succ(five);",
                 identity,
             )
             .expect("build test delta");

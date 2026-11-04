@@ -10,7 +10,7 @@ usual: this document first, the implementing rounds against §10.
 
 Status: **§0 decided by Minus on 2026-10-21** (the request-tree model, with
 native tactics and certificate oracles as §8a describes). **Rounds 1, 2, 2½,
-2¾ and 3 landed**: §12–§16 record what building them changed.
+2¾, 3 and 4 landed**: §12–§16 and §19 record what building them changed.
 
 ---
 
@@ -447,7 +447,7 @@ the generalisation.
 | R2¾ (landed) | `Hole` with `Mark`/`Restore`, `GlobalRef` (`Lookup`, `Global`, `HGlobal`'s reference), `At` notes rendered by the host (§15) | `apply(trans, assumption())` closes `a = c`; a failed alternative's solutions are forgotten |
 | R3 (landed) | `tac-first-port`: `split_all` in Heather on the split requests `Cases`/`Constructor`/`Close` and `View`'s `HMatch`, with `reflexivity` as its leaf (§16) | it closes the same goals as the Rust one on the existing tests |
 | R3½ | `Oracle(name, input)` with one registered native procedure and a reflection-checked certificate (§8a) | a goal closes by native search plus a Heather check whose proof term is small |
-| R4 | publication (`heather-checked-construction-api`, retargeted): a `Publish(group)` request that checks a small declaration group and adds it only if every member passes the kernel | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
+| R4 (landed) | publication (`heather-checked-construction-api`, retargeted): a `generate g(args);` item running a `Tac<List<Decl>>`, requests `Assume`/`Ctors`/`AsType`/`Publish`, `Expr`'s `Blank`/`Pi`/`Equation`; the group is checked and published only if every member passes (§19) | a Heather generator publishes a lemma group in the caller's scope; a failing member publishes nothing |
 
 R1 tests follow `docs/testing-generated-terms.md`'s axes: a closed and a
 neutral hypothesis, an open element type, a checking position (the goal comes
@@ -730,3 +730,263 @@ Recorded after building it, as the inductive-tier designs do.
   (issues/tactic-strategy-step-cost.md). A `split_all` over two booleans
   makes a few hundred requests.
 
+
+## 17. A block's `let`s are the goal's locals (2026-10-27)
+
+- **What was missing.** `Goal` listed the goal's Γ, and a block `let` is not
+  in Γ: the elaborator keeps it as an alias and inlines its value at every
+  use (`context::Alias`). So a fact bound by `let step: (e <= t) = …;` was
+  no hypothesis to `assumption` or `mono`, which had to be handed it
+  (issues/tactic-goal-lists-block-lets.md).
+- **A `let` is a local with a value.** The run issues each `let` whose name
+  still means it at the goal (no later binder or `let` of that name; written,
+  not a `#` name) as a local, with handles to its value and its statement,
+  both scoped at the goal. `Goal` lists them between the binders they were
+  bound among, most recent first. Their ids follow the goal's binders and
+  precede every local the tactic opens or a split adds.
+- **`Local(x)` of a `let` is its value**, exactly what the name means in
+  source, so conversion sees through it: a goal in which the elaborator has
+  already inlined the `let` still matches. `Lam` refuses one (it bound
+  nothing to abstract).
+- **Splicing.** A `let` the returned `Expr` names outright is recorded as
+  spliced, since its value is then in the proof the kernel checks. One reached
+  only through a handle (an `Infer` of an `Expr` that named it) is not
+  recorded, and its block still hands its value to the kernel
+  (let-and-blocks-design §11): at worst a redundant check, never a missed one.
+
+## 18. What class carriers changed
+
+`issues/mono-class-laws.md`: a tactic working inside `section<A:
+OrderedField(≈, <, <=, +, *)>` (`mono`, `docs/monotonicity-tactic-design.md`
+§8). Two questions, and what each answer turned out to be.
+
+- **How `View` presents a dictionary's operations.** The class's index
+  operations (`+`, `<=`) are binders of the section, so `x + y` was already
+  `HLocal(+, [x, y])`. Its fields are not: `A.inv(x)` and `A.unit` are
+  projections out of the dictionary local, `fst(snd(…(d)))`, which the
+  speller reads as `d.inv` (`Speller::field_read`, the recogniser now shared
+  as `Elaborator::field_read_parts`) and `View` gave `HOther`. They are now
+  `HField(of, name, args)`: the record, the field's name and the arguments
+  the field is applied to. A field whose record registers a projection
+  definition stays that global's `HGlobal`, as before. The dictionary's own
+  type, a value-parameterized record, was `HOther` too (its arguments are not
+  recoverable from a constructor shape, so `display_targs` declines); it is
+  now `HGlobal(class, name, [carrier, index…])`, read by unifying the type with
+  the declaration's template `C#tycode_fn` at unknown arguments, read inline,
+  and required to convert back. Type arguments are type handles, value
+  arguments term handles.
+- **Whether `Match` fills a class lemma's dictionary.** It did not. A lemma
+  of a section is `Π A ≈ < <= + (c : OrderedAddGroup<A>(≈, <, <=, +)) x y z …`;
+  matching its conclusion `z + x <= z + y` determines `<=`, `+` and the
+  points, but neither the dictionary nor the indices the conclusion does not
+  mention (`≈`, `<`), and `apply` handed the dictionary to the premise
+  tactic, which cannot prove a class. `Match` now fills a parameter whose type
+  is a class the way a call fills its constraint argument
+  (`docs/operation-indexed-classes-design.md` §5): first from the
+  dictionaries in scope, the class's own binder or a descendant's at its
+  carrier and the index it passes up (the value-slot ladder's step 2), which
+  also solves the carrier and the indices by unifying the parameter's type
+  with that instantiation, the parameter being what resolution answers there
+  (an upcast from a descendant's binder); and when that does not match, plainly
+  as before, with a class parameter whose type the match has determined
+  resolved there (instances included). The candidates and resolution's
+  answers are computed once per `Match`, not per parameter count. Nothing
+  here is trusted: the conclusion still has to convert to the goal and the
+  application is checked. A lemma's parameter is the reference spelling
+  `El (app(C#tycode_fn; ā))` and the candidates are lowered inline, so the
+  parameter is read inline (`unspell_here_in` at the match's metavariables)
+  before the two unify.
+- **Rejected: an `Instance(ty)` request.** A tactic asking for a dictionary
+  would have to state the class's type first, and the indices it does not see
+  (`≈`, `<` behind a conclusion about `<=`) are exactly what it cannot state;
+  the call path already knows where they come from.
+
+## 19. What round 4 changed
+
+R4 (`issues/heather-checked-construction-api.md`): a Heather generator
+builds a small declaration group, and the elaborator checks every member and
+publishes all of them where the generator was invoked, or none.
+
+- **Invocation is an item, `generate g(args);`.** The proof-position
+  invocation is `by t`; a generator needs a module-level one. `generate` is a
+  contextual keyword (an item that starts with `generate` followed by a name),
+  so no library name is reserved. `g(args)` is elaborated at
+  `Tac<List<Decl>>` with quoting on, exactly as a tactic's arguments are; a
+  generator runs in the module's empty context, so the only terms it can quote
+  are closed ones, and a type's name in an `Expr` position (`Tm`, a
+  parameterless inductive) is quoted as that type. Inside a `section` or an
+  `assuming` block it is refused by the parser for now: the generator would
+  have to run under the head's binders, and nothing says yet how its
+  declarations would then inherit them.
+- **One request tree for both.** A generator is the same `Tac` as a tactic,
+  run by the same loop (`drive`) in generator mode: it has no goal (`Goal` is
+  refused, and its quoted handles start at 0), and it ends with
+  `Publish(decls)`, whose response type is `Never`, so nothing can follow it.
+  `host_generator(g)` is `g.bind(publish)`. A tactic that sends `Publish` is
+  refused at its `by`.
+- **Building declarations.** `Assume(ty, name, under)` introduces a local of
+  type `ty` in a new scope under `under`'s (or the root); a declaration's
+  parameters are such locals, each introduced under the one before it, and its
+  statement and body are `Expr`s in the last one's scope. `Decl(form, name,
+  params, result, body)` names them; a parameter is implicit when its `Param`
+  says so. The same `Assume` makes a binder the body abstracts with `Lam`
+  (introduced beside the parameters, not under them). `Expr` gains `Pi(x,
+  body)` for a function type over such a local, `Equation(lhs, rhs)` for an
+  identity type, and `Blank`, an argument the application's domain check
+  solves (a run-scoped hole, so a generator writes `cong(_, _, f, _, _, p)`
+  and lets unification find the implicit arguments). `AsType(e)` checks an
+  `Expr` as a type and answers its handle.
+- **Reading a type's shape.** `Ctors(ty)` answers each constructor of an
+  inductive type: its name, its fields (name and type), and the constructor as
+  a function of its fields. It reuses R3's skeleton technique: an anonymous
+  constructor (or `T::C`) with marker leaves is elaborated twice with
+  different placeholders, so a field whose type mentions an earlier field
+  comes back without a type rather than with one stated about a placeholder;
+  such a constructor has no function either. Codata and indexed families are
+  refused.
+- **Checked twice, published once.** When the run ends, each member is read
+  back in the run: its parameters must form the telescope above (a forged
+  local, a `let`, or a parameter that is not under the one before it is
+  refused), its statement and body are reified, the body's type must convert
+  to the statement there, and nothing may mention an unsolved hole. Then each
+  member is elaborated as the same declaration written in source: a surface
+  `theorem`/`fn` whose parameter types, result and body are marker leaves
+  (`Leaves::Member`) filled with the checked terms, so registration,
+  namespacing (`Tm::cong_App` is `Tm`'s member), the kernel gate and the
+  module image are exactly the source path's. All members are published in
+  one `session_transaction`: a member the elaborator refuses (a name already
+  declared, say) rolls back the ones before it, journal included. Errors name
+  the generator and the member.
+- **Names.** A member's name must be a declaration name (`::`-separated
+  identifiers). A parameter keeps its `Assume` name where that is a plain
+  identifier, else it is `x{k}`; the names are what named arguments see
+  (`Tm::cong_App(hf, ha, f1 := f)`).
+- **The customer: `congruences(T)`** (`lib/std/tactic/derive.hthr`), which
+  declares `T::cong_C({x1 … : X}, {x2 …}, x_eq: x1 = x2, …): C(x1, …) = C(x2,
+  …)` for each constructor with fields, proved one field at a time by `cong`
+  and joined by `trans`. Against the hand-written group it would replace
+  (`lib/kernel_model/kernel_reduction.hthr`'s `Tm::cong_lam` … `cong_pair`),
+  the statements are the same up to the names' case; `cong_proj` and
+  `cong_run` differ, since the hand-written ones hold their non-`Tm` field
+  fixed (`cong_proj(pr, p)`) where the generated one varies every field. The
+  library is not migrated in this round: the kernel model would import the
+  tactic protocol for five one-line lemmas, and its 46 call sites cite the
+  hand-written shapes.
+- **Cost.** As for tactics: evaluating the generator between requests
+  dominates, and each member then costs what the same declaration written in
+  source costs. A generator's output is not imaged separately; the module's
+  image holds the published declarations like any others.
+- **Left open.** A member citing an earlier member of its own group (they are
+  published only after the run, so `Lookup` cannot find them); `generate` in a
+  section or under `assuming`; `Ctors` at a parameterized type (quoting finds
+  only parameterless ones) or a dependent field; a field projection in
+  `Expr`; R3½'s oracles.
+
+## 20. Building an application one argument at a time (2026-10-31)
+
+Issue `generic-lemma-elaboration-cost`. `mono` at a class carrier cost
+seconds per call where its concrete twin cost a fraction of that, and most
+of it was `Infer`: a tactic that applies a law to holes for its leading
+parameters (`apply_slots`, `cast.hthr`'s `cast_holes` and `cast_slots`)
+asks for the type of each prefix, and the host re-read every prefix from the
+`Expr` — each `Infer` of `f(h1, …, hk)` re-reified `f(h1, …, h(k-1))`,
+re-zonked its type and re-substituted it. A morphism law has nineteen
+leading parameters over a record type the size of the morphism's laws, so
+the reads were quadratic in the spine over a large type.
+
+- **The host remembers its readings.** `Run::readings` keeps each reified
+  application with no `Blank` in it (a `Blank` is a new hole at every
+  reading), by scope and `Expr`, with the world it was made in (a hit is
+  shifted past the holes made since) and the trail's length then (a
+  `Restore` below it drops the reading, since the argument's domain check
+  may have relied on a solution it forgets). The prefix of the next `Infer`
+  is then a hit, and each request costs one argument's worth.
+- **`Holes(e, n)`** answers `e` applied to `n` new holes, one per leading
+  parameter, each at its parameter's type with the holes before it as the
+  earlier arguments, and records each prefix as a reading, so the tactic's
+  `infer` of `cast_apps(e, holes)` is a hit. It makes the holes first and
+  instantiates the spine once per hole, where `infer`, `open` and `hole`
+  per argument shifted and zonked the whole spine three times each.
+  `cast_holes`, `cast_targeted` and `cast_slots` are one request each now
+  (`cast_slots` unifies its presets with the first holes afterwards; the
+  later holes' types mention them, so nothing is read before they are set).
+- **`mono` reads the cast edges once per run** (`Mono.edges`, read where the
+  carrier has push lemmas): reading a morphism local checks a law at it,
+  and `mono` read every edge again at each leaf's push, order and fact
+  probe. `cast_premise_among` and `cast_from_among` take edges a caller
+  holds.
+
+What is left of a `mono` call at a class carrier is evaluating the tactic
+between requests and `apply`'s `Match`, the same as at a concrete carrier.
+
+## 21. Asking the resolver: `Synth` (2026-11-01)
+
+`Synth(goal: Handle) → Checked<Handle>` runs the search a `:= infer`
+parameter runs (`Elaborator::resolve_goal`) at the type the handle stands
+for, in the handle's scope: locals, the derived table, instances, and at a
+proposition computation and the evidence rules, search rules last. It is
+refused, with the search's trace as the reason, when nothing answers, and a
+refused search leaves nothing (`SearchMark`). The type must mention no
+unsolved hole: the search's trials are the elaborator's own and know
+nothing of a run's holes.
+
+Its first customer is facts on demand (`docs/facts-on-demand-design.md` §4):
+a generator that asks for a fact must hear "none" rather than fail, which
+neither `:= infer` nor a parameter default can say. `lib/std/tactic/fact_request.hthr`'s
+`request` is `Synth`, then the requester's budgeted fallbacks. A Heather
+tactic that wants instance search or the evidence rules (a `positivity`
+written in Heather, say) can use it the same way.
+
+## 22. A term's whole spine: `Spine` (2026-11-02)
+
+`Spine(h: Handle) → Checked<SpineInfo>` reads the term a handle stands for
+as a head applied to arguments, peeling the kernel's applications with
+nothing reduced: every argument in order, implicit ones and type arguments
+included, each with whether the function's type is dependent at it. `View`
+lists only the arguments a call writes, which is right for display; a
+tactic that compares or rebuilds applications needs the kernel's list. A
+type is refused, and a term that is no application is its own head.
+
+Its first customer is `grind` (`docs/grind-design.md` §3), whose graph
+nodes are the kernel's curried applications, with dependent arguments kept
+in the head.
+
+## 23. Saying something on success: `Say` (2026-11-02)
+
+`Say(msg: String, notes: List<Note>) → True` records a message and notes,
+rendered as `Fail` renders them, and the host reports what a run said as
+one `tactic-report` warning (`Lint::TacticReport`) at the `by`, once the
+run's result checks as the goal's proof. A run that fails reports only its
+failure, so a note can never contradict the outcome. Several `Say`s in one
+run are one warning, their texts in order (the warning channel keeps one
+warning of a lint per span).
+
+Before it, a tactic could only speak by failing. Its first customer is
+`grind_report` (`docs/grind-design.md` §9.4), which says which hints its
+proof cites, so the call can be narrowed: the used-subset report of
+[lemma-selection-and-search](../issues/lemma-selection-and-search.md) piece 3.
+A generator's run (`generate`) says nothing yet: its `Say`s are dropped.
+
+## 24. A value's fields: `Fields` (2026-11-02)
+
+`Fields(e: Expr) → Checked<Projected>` takes a term of a non-indexed
+inductive type with one constructor (a record, `∧`) apart into its fields:
+the type, as the reference `Lookup` answers for its name, and for each field
+its name (its position where it has none) and a handle to its projection,
+the term `e.name` elaborates to (`project_field`), whose type is the
+field's. The type is read as written, unspelled, or once in head normal
+form, so a definition whose value is a `∧` (`a.Same(b)`) is taken apart
+too. Refused for any other type, and for one with a field a later field's
+type mentions (`∃`'s `witness`, whose `proof` is a fact about the value
+rather than one of its own): that is the `Σ`'s second component depending
+on its binder.
+
+```heather
+record FieldProj { name: String, term: Handle }
+record Projected { ty: GlobalRef, fields: List<FieldProj> }
+```
+
+`Expr` has no projection form, and none is needed: a tactic cites a field by
+the handle. Its first customer is `grind`, which reads a conjunction or a
+record of equations as its fields (`docs/grind-design.md` §12); `omega`'s
+Rust `local_facts` does the same for `∧` alone, inside the elaborator.

@@ -1,0 +1,1936 @@
+// Error-free transformations (docs/floating-point-design.md §19).
+//
+// A floating-point operation is error-free when its exact result is itself
+// a float: then every mode rounds it to itself (`Format::exact_of_rounds`).
+// Everything here reduces to one representability fact. On the half-unit
+// grid a float `g` is `g.mag · 2^(g.bexp + 1)`, so a natural `h` that is a
+// multiple of `2^(g.bexp + 1)` and at most `g.H()` is `k · 2^(g.bexp + 1)`
+// with `k <= g.mag`, a significand that fits at `g`'s exponent: the
+// greatest float at or below it is exactly it (`Format::rep_below`).
+//
+// Sterbenz's lemma is that fact at the smaller of the two exponents: for
+// `y/2 <= x <= 2y` the difference is a multiple of the finer quantum and no
+// larger than the float that has it (`Finite::sterbenz`). The product error
+// needs the same fact on the product's grid, finer than any input's
+// (`Format::rep_fit`, `Finite::two_product`). Fast2Sum and TwoSum chain
+// Sterbenz with the nearest addition error (`Finite::add_error`), reading
+// each nearest rounding against one candidate float.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import linarith;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+import float;
+import round;
+import error;
+import arith;
+
+// ---------------------------------------------------------------------------
+// Exact results.
+
+// `o` is the finite float whose value is `v`.
+fn Float::Exact({F: Format}, self o: Float(F), v: Rat) → Type {
+    match o { Fin(r) => r.val() ≈ v, Inf(_, _) => False, NaN(_) => False }
+}
+
+// A value some float has rounds to that float in every mode.
+theorem Format::exact_of_rounds(self F: Format, mode: Mode, x: Rat, o: Float(F), f: Finite(F), e: f.val() ≈ x, hr: RoundsTo(F, mode, x, o)): o.Exact(x) {
+    let at = F.rounds_respects(mode, x, f.val(), Rat::same_sym(e), Float::Fin(f), F.rounds_exact(mode, f));
+    let same = F.rounds_unique(mode, x, o, Float::Fin(f), hr, at);
+    match o as λ o0 => Float::Same(o0, Float::Fin(f)) → o0.Exact(x) {
+        Fin(r) => λ s => Rat::same_trans(x := r.val(), y := f.val(), z := x, hxy := s, hyz := e),
+        Inf(_, _) => λ s => false_elim(s),
+        NaN(_) => λ s => false_elim(s),
+    }(same)
+}
+
+// So a value is a float exactly when rounding it to nearest returns it.
+theorem Format::round_rat_of_rep(self F: Format, mode: Mode, x: Rat, r: ∃ f: Finite(F), f.val() ≈ x): (F.round_rat(mode, x)).Exact(x) {
+    match r {
+        Exists(f, e) => F.exact_of_rounds(mode, x, F.round_rat(mode, x), f, e, F.round_rat_correct(mode, x)),
+    }
+}
+
+// The same at any correct rounding `o` of `x`, from a float with value `x`
+// (`exact_of_rounds` with the float still packed, so callers need not match
+// on the call that produced it).
+theorem Format::exact_of_rep(self F: Format, mode: Mode, x: Rat, o: Float(F), r: ∃ f: Finite(F), f.val() ≈ x, hr: RoundsTo(F, mode, x, o)): o.Exact(x) {
+    match r {
+        Exists(f, e) => F.exact_of_rounds(mode, x, o, f, e, hr),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Half-unit facts.
+
+// A nonnegative float's half-unit value is its units, doubled, whatever its
+// sign bit (a negative one is `-0`).
+theorem Finite::H_of_nonneg({F: Format}, g: Finite(F), nn: 0 <= g.H()): g.H() = (g.units() * 2).int() {
+    match g.neg.eq_dec(False) {
+        Inl(p) => Finite::H_pos(g, p),
+        Inr(n) => {
+            let t: (g.neg = True) = match g.neg as λ s => s ≠ False → s = True { False => λ no => false_elim(no(refl)), True => λ _ => refl }(n);
+            let e = Finite::H_neg(g, t);
+            omega
+        },
+    }
+}
+
+theorem Finite::H_of_neg({F: Format}, g: Finite(F)): (-g).H() = -g.H() {
+    match g {
+        Finite(n, m, b, ok) => match n as λ s => (-Finite(s, m, b, ok)).H() = -(Finite(s, m, b, ok)).H() {
+            False => refl,
+            True => {
+                let a: ((-Finite(True, m, b, ok)).H() = ((m * Nat::pow(2, b)) * 2).int()) = refl;
+                let c: ((Finite(True, m, b, ok)).H() = -((m * Nat::pow(2, b)) * 2).int()) = refl;
+                omega
+            },
+        },
+    }
+}
+
+// A float's units split at any exponent at or below its own.
+theorem Finite::units_split({F: Format}, g: Finite(F), b: Nat, le: b <= g.bexp): g.units() = (g.mag * Nat::pow(2, g.bexp - b)) * Nat::pow(2, b) {
+    let s: (g.bexp = (g.bexp - b) + b) = sym(Nat::sub_add_cancel(b, g.bexp, le));
+    let p: (Nat::pow(2, g.bexp) = Nat::pow(2, (g.bexp - b) + b)) = Nat::cong(λ (w: Nat) => Nat::pow(2, w), s);
+    let pa: (Nat::pow(2, (g.bexp - b) + b) = Nat::pow(2, g.bexp - b) * Nat::pow(2, b)) = Nat::pow_add(2, g.bexp - b, b);
+    let m: (g.mag * Nat::pow(2, g.bexp) = g.mag * (Nat::pow(2, g.bexp - b) * Nat::pow(2, b))) = Nat::cong(λ (w: Nat) => g.mag * w, trans(p, pa));
+    trans(m, sym(g.mag.mul_assoc(Nat::pow(2, g.bexp - b), Nat::pow(2, b))))
+}
+
+// A float's value read off its half-units.
+theorem Finite::val_of_H({F: Format}, f: Finite(F), D: Int, e: f.H() = D): f.val() ≈ F.grid(D) {
+    j(e, λ v _ => f.val() ≈ F.grid(v), f.val_grid())
+}
+
+// ---------------------------------------------------------------------------
+// Representability.
+
+// A cut that is a whole multiple of its own cell's spacing is the cell's
+// float.
+theorem Format::down_of_mult(self F: Format, h, n: Nat, below: h < F.limit_h(), hn: h = n * Nat::pow(2, Succ(F.e_of(h)))): (F.down(h)).H() = h.int() {
+    let P = Nat::pow(2, Succ(F.e_of(h)));
+    let m = F.m_of(h);
+    let fl = F.m_floor(h);
+    let fl1: (m * P <= h) = fl.left;
+    let fl2: (h < Succ(m) * P) = fl.right;
+    let pp: (0 < P) = Nat::pow_pos(a := 2, n := Succ(F.e_of(h)));
+    let sm: (Succ(m) * P = P + m * P) = m.mul_succ_left(P);
+    let sn: (Succ(n) * P = P + n * P) = n.mul_succ_left(P);
+    let up: (n < Succ(m)) = n.lt_of_mul_lt_mul_r(Succ(m), P, omega);
+    let lo: (m < Succ(n)) = m.lt_of_mul_lt_mul_r(Succ(n), P, omega);
+    let mn: (m = n) = omega;
+    let mp: (m * P = n * P) = Nat::cong(λ (w: Nat) => w * P, mn);
+    let d = F.down_H(h, below);
+    omega
+}
+
+// A cut below `top · 2^(c+1)` sits in a cell of exponent at most `c`: the
+// search stops at the first exponent where the significand fits.
+theorem Format::e_of_le(self F: Format, h, c: Nat, lt: h < F.top() * Nat::pow(2, Succ(c))): F.e_of(h) <= c {
+    let e = F.e_of(h);
+    match e.le_dec(c) {
+        Inl(le) => le,
+        Inr(gt) => match (F.e_of_spec(h)).right.left {
+            Inl(z) => false_elim(omega(z, gt)),
+            Inr(big) => {
+                let Pe = Nat::pow(2, e);
+                let Pc = Nat::pow(2, Succ(c));
+                let sh: (h.shr(e) * Pe <= h) = Nat::shr_mul_le(e, h);
+                let tb: (F.top() * Pe <= h.shr(e) * Pe) = Nat::mul_le_mono_r(Pe, F.top(), h.shr(e), big);
+                let pl: (Pc <= Pe) = Nat::pow_le_pow_r(2, Succ(c), e, omega, omega(gt));
+                let tl: (F.top() * Pc <= F.top() * Pe) = Nat::mul_le_mono_l(F.top(), Pc, Pe, pl);
+                false_elim(omega)
+            },
+        },
+    }
+}
+
+// A cut `k · 2^(b+1)` in a cell of exponent at most `b` is the cell's float:
+// the cell's spacing divides it.
+theorem Format::down_of_le(self F: Format, h, k, b: Nat, below: h < F.limit_h(), hk: h = k * Nat::pow(2, Succ(b)), eb: F.e_of(h) <= b): (F.down(h)).H() = h.int() {
+    let e = F.e_of(h);
+    let s: (Succ(b) = (b - e) + Succ(e)) = omega(Nat::sub_add_cancel(e, b, eb));
+    let p: (Nat::pow(2, Succ(b)) = Nat::pow(2, b - e) * Nat::pow(2, Succ(e))) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), s), Nat::pow_add(2, b - e, Succ(e)));
+    let hn: (h = (k * Nat::pow(2, b - e)) * Nat::pow(2, Succ(e))) = trans(hk, trans(Nat::cong(λ (w: Nat) => k * w, p), sym(k.mul_assoc(Nat::pow(2, b - e), Nat::pow(2, Succ(e))))));
+    F.down_of_mult(h, k * Nat::pow(2, b - e), below, hn)
+}
+
+// A cut `k · 2^(b+1)` with a significand `k` that fits is a float.
+theorem Format::down_exact(self F: Format, h, k, b: Nat, below: h < F.limit_h(), hk: h = k * Nat::pow(2, Succ(b)), fit: Succ(k) <= F.top()): (F.down(h)).H() = h.int() {
+    let Pb = Nat::pow(2, Succ(b));
+    let st: (Succ(k) * Pb <= F.top() * Pb) = Nat::mul_le_mono_r(Pb, Succ(k), F.top(), fit);
+    let sk: (Succ(k) * Pb = Pb + k * Pb) = k.mul_succ_left(Pb);
+    let pp: (0 < Pb) = Nat::pow_pos(a := 2, n := Succ(b));
+    F.down_of_le(h, k, b, below, hk, F.e_of_le(h, b, omega))
+}
+
+// A natural multiple of `2^(g.bexp + 1)` half-units no larger than a float
+// `g` in magnitude is a float.
+theorem Format::rep_below(self F: Format, g: Finite(F), h, k: Nat, hk: h = k * Nat::pow(2, Succ(g.bexp)), le: h <= g.units() * 2): (F.down(h)).H() = h.int() {
+    let gc = F.canonical_elim(g.mag, g.bexp, g.ok);
+    let fit0: (Succ(g.mag) <= F.top()) = gc.left;
+    let P = Nat::pow(2, Succ(g.bexp));
+    let u: (g.units() * 2 = g.mag * P) = g.mag.mul_assoc(Nat::pow(2, g.bexp), 2);
+    let pp: (0 < P) = Nat::pow_pos(a := 2, n := Succ(g.bexp));
+    let sm: (Succ(g.mag) * P = P + g.mag * P) = g.mag.mul_succ_left(P);
+    let kl: (k < Succ(g.mag)) = k.lt_of_mul_lt_mul_r(Succ(g.mag), P, omega);
+    let mx = Finite::units_le_max(g);
+    let mh = Finite::max_H(F);
+    let lim = F.max_H_lt_limit();
+    F.down_exact(h, k, g.bexp, omega, hk, omega)
+}
+
+// The difference of two multiples of `g`'s units, no larger than `g`, is a
+// float, at the half-unit value `X - Y` for `X = ua·2`, `Y = ub·2`.
+theorem Format::rep_diff(self F: Format, g: Finite(F), ua, ub, A, B: Nat, ha: ua = A * Nat::pow(2, g.bexp), hb: ub = B * Nat::pow(2, g.bexp),
+    ge: ub <= ua, room: ua <= ub + g.units(), ng: 0 <= g.H(), X, Y: Int, hx: X = (ua * 2).int(), hy: Y = (ub * 2).int()): ∃ f: Finite(F), f.H() = X - Y
+{
+    let Q = Nat::pow(2, g.bexp);
+    let qp: (0 < Q) = Nat::pow_pos(a := 2, n := g.bexp);
+    let sa: (Succ(A) * Q = Q + A * Q) = A.mul_succ_left(Q);
+    let ba: (B < Succ(A)) = B.lt_of_mul_lt_mul_r(Succ(A), Q, omega);
+    let K = A - B;
+    let ak: (A = K + B) = sym(Nat::sub_add_cancel(B, A, omega));
+    let dist: ((K + B) * Q = K * Q + B * Q) = ring;
+    let aq: (A * Q = (K + B) * Q) = Nat::cong(λ (w: Nat) => w * Q, ak);
+    let h = K * Nat::pow(2, Succ(g.bexp));
+    let pd: (Nat::pow(2, Succ(g.bexp)) = Q * 2) = refl;
+    let hq: (h = (K * Q) * 2) = trans(Nat::cong(λ (w: Nat) => K * w, pd), sym(K.mul_assoc(Q, 2)));
+    let d = F.rep_below(g, h, K, refl, omega);
+    Exists(F.down(h), omega)
+}
+
+// ---------------------------------------------------------------------------
+// Sterbenz's lemma.
+
+// The ordered case: `y <= x <= 2y`, both nonnegative.
+theorem Format::sterbenz_ge(self F: Format, x, y: Finite(F), nx: 0 <= x.H(), ny: 0 <= y.H(), ge: y.H() <= x.H(), hi: x.H() <= y.H() + y.H()):
+    ∃ f: Finite(F), f.H() = x.H() - y.H()
+{
+    let ex = Finite::H_of_nonneg(x, nx);
+    let ey = Finite::H_of_nonneg(y, ny);
+    match x.bexp.le_dec(y.bexp) {
+        Inl(xy) => {
+            let sx = Finite::units_split(x, x.bexp, x.bexp.le_refl());
+            let sy = Finite::units_split(y, x.bexp, xy);
+            F.rep_diff(x, x.units(), y.units(), x.mag * Nat::pow(2, x.bexp - x.bexp), y.mag * Nat::pow(2, y.bexp - x.bexp), sx, sy, omega, omega, nx, x.H(), y.H(), ex, ey)
+        },
+        Inr(yx) => {
+            let le: (y.bexp <= x.bexp) = omega(yx);
+            let sx = Finite::units_split(x, y.bexp, le);
+            let sy = Finite::units_split(y, y.bexp, y.bexp.le_refl());
+            F.rep_diff(y, x.units(), y.units(), x.mag * Nat::pow(2, x.bexp - y.bexp), y.mag * Nat::pow(2, y.bexp - y.bexp), sx, sy, omega, omega(yx), ny, x.H(), y.H(), ex, ey)
+        },
+    }
+}
+
+// Sterbenz at half-units: `y/2 <= x <= 2y` makes `x - y` a float.
+theorem Finite::sterbenz_H({F: Format}, x, y: Finite(F), lo: y.H() <= x.H() + x.H(), hi: x.H() <= y.H() + y.H()): ∃ f: Finite(F), f.H() = x.H() - y.H() {
+    match Int::le_dec(y.H(), x.H()) {
+        Inl(ge) => F.sterbenz_ge(x, y, omega, omega, ge, hi),
+        Inr(lt) => {
+            match F.sterbenz_ge(y, x, omega, omega, omega(lt), lo) {
+                Exists(f, fh) => { let n = Finite::H_of_neg(f); Exists(-f, omega(fh, n)) },
+            }
+        },
+    }
+}
+
+// A float at the half-unit difference of two others has their difference as
+// its value.
+theorem Finite::val_of_diff({F: Format}, x, y, f: Finite(F), fh: f.H() = x.H() - y.H()): f.val() ≈ x.val() - y.val() {
+    let s: (y.H() + f.H() = x.H()) = omega;
+    let sum: (F.grid(y.H()) + F.grid(f.H()) ≈ F.grid(x.H())) = j(s, λ v _ => F.grid(y.H()) + F.grid(f.H()) ≈ F.grid(v), F.grid_add(y.H(), f.H()));
+    let gf = f.val_grid();
+    let gx = x.val_grid();
+    let gy = y.val_grid();
+    Rat::le_antisymm(linarith(sum, gf, gx, gy), linarith(sum, gf, gx, gy))
+}
+
+// Twice a float's value, on the grid.
+theorem Finite::double_grid({F: Format}, x: Finite(F)): x.val() + x.val() ≈ F.grid(x.H() + x.H()) {
+    Rat::same_trans(Rat::add_respects(x.val_grid(), x.val_grid()), F.grid_add(x.H(), x.H()))
+}
+
+// Sterbenz's lemma: for `y/2 <= x <= 2y` the difference `x - y` is a float,
+// so subtraction is exact in every mode.
+theorem Finite::sterbenz_rep({F: Format}, x, y: Finite(F), lo: y.val() <= x.val() + x.val(), hi: x.val() <= y.val() + y.val()): ∃ f: Finite(F), f.val() ≈ x.val() - y.val() {
+    let l: (y.H() <= x.H() + x.H()) = F.le_of_grid_le(y.H(), x.H() + x.H(), Rat::le_respects(y.val_grid(), x.double_grid(), lo));
+    let h: (x.H() <= y.H() + y.H()) = F.le_of_grid_le(x.H(), y.H() + y.H(), Rat::le_respects(x.val_grid(), y.double_grid(), hi));
+    match Finite::sterbenz_H(x, y, l, h) {
+        Exists(f, fh) => Exists(f, Finite::val_of_diff(x, y, f, fh)),
+    }
+}
+
+theorem Finite::sterbenz({F: Format}, x, y: Finite(F), mode: Mode, lo: y.val() <= x.val() + x.val(), hi: x.val() <= y.val() + y.val()):
+    (x.sub(y, mode := mode)).Exact(x.val() - y.val())
+{
+    match Finite::sterbenz_rep(x, y, lo, hi) {
+        Exists(f, e) => F.exact_of_rounds(mode, x.val() - y.val(), x.sub(y, mode := mode), f, e, Finite::sub_correct(x, y, mode)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The grid of an exponent.
+
+// `z` half-units are a whole number of cells of a float with biased
+// exponent `c`: `±n · 2^(c+1)`.
+fn OnGrid(c: Nat, z: Int) → Type { ∃ n: Nat, z = (n * Nat::pow(2, Succ(c))).int() ∨ z = -(n * Nat::pow(2, Succ(c))).int() }
+
+theorem on_grid_zero(c: Nat): OnGrid(c, 0) {
+    let z: (0 * Nat::pow(2, Succ(c)) = 0) = Nat::mul_left_zero(Nat::pow(2, Succ(c)));
+    Exists(0, Inl(omega))
+}
+
+theorem on_grid_neg(c: Nat, z: Int, m: OnGrid(c, z)): OnGrid(c, -z) {
+    let P = Nat::pow(2, Succ(c));
+    match m {
+        Exists(n, e) => Exists(n, match e as λ _ => -z = (n * P).int() ∨ -z = -(n * P).int() { Inl(q) => Inr(omega(q)), Inr(q) => Inl(omega(q)) }),
+    }
+}
+
+theorem on_grid_diff(c, n1, n2: Nat): OnGrid(c, (n1 * Nat::pow(2, Succ(c))).int() - (n2 * Nat::pow(2, Succ(c))).int()) {
+    let P = Nat::pow(2, Succ(c));
+    match n2.le_dec(n1) {
+        Inl(le) => {
+            let a: (n1 = (n1 - n2) + n2) = sym(Nat::sub_add_cancel(n2, n1, le));
+            let d: (((n1 - n2) + n2) * P = (n1 - n2) * P + n2 * P) = ring;
+            let m: (n1 * P = ((n1 - n2) + n2) * P) = Nat::cong(λ (w: Nat) => w * P, a);
+            Exists(n1 - n2, Inl(omega))
+        },
+        Inr(gt) => {
+            let a: (n2 = (n2 - n1) + n1) = sym(Nat::sub_add_cancel(n1, n2, omega(gt)));
+            let d: (((n2 - n1) + n1) * P = (n2 - n1) * P + n1 * P) = ring;
+            let m: (n2 * P = ((n2 - n1) + n1) * P) = Nat::cong(λ (w: Nat) => w * P, a);
+            Exists(n2 - n1, Inr(omega))
+        },
+    }
+}
+
+theorem on_grid_add(c: Nat, z1, z2: Int, m1: OnGrid(c, z1), m2: OnGrid(c, z2)): OnGrid(c, z1 + z2) {
+    let P = Nat::pow(2, Succ(c));
+    match m1 {
+        Exists(n1, e1) => match m2 {
+            Exists(n2, e2) => {
+                let d: ((n1 + n2) * P = n1 * P + n2 * P) = ring;
+                match e1 {
+                    Inl(p1) => match e2 {
+                        Inl(p2) => Exists(n1 + n2, Inl(omega(p1, p2, d))),
+                        Inr(q2) => { let eq: ((n1 * P).int() - (n2 * P).int() = z1 + z2) = omega(p1, q2); j(eq, λ v _ => OnGrid(c, v), on_grid_diff(c, n1, n2)) },
+                    },
+                    Inr(q1) => match e2 {
+                        Inl(p2) => { let eq: ((n2 * P).int() - (n1 * P).int() = z1 + z2) = omega(q1, p2); j(eq, λ v _ => OnGrid(c, v), on_grid_diff(c, n2, n1)) },
+                        Inr(q2) => Exists(n1 + n2, Inr(omega(q1, q2, d))),
+                    },
+                }
+            },
+        },
+    }
+}
+
+theorem on_grid_sub(c: Nat, z1, z2: Int, m1: OnGrid(c, z1), m2: OnGrid(c, z2)): OnGrid(c, z1 - z2) {
+    let eq: (z1 + -z2 = z1 - z2) = omega;
+    j(eq, λ v _ => OnGrid(c, v), on_grid_add(c, z1, -z2, m1, on_grid_neg(c, z2, m2)))
+}
+
+theorem on_grid_nonneg(c: Nat, z: Int, m: OnGrid(c, z), nn: 0 <= z): ∃ n: Nat, z = (n * Nat::pow(2, Succ(c))).int() {
+    let P = Nat::pow(2, Succ(c));
+    match m {
+        Exists(n, e) => match e {
+            Inl(p) => Exists(n, p),
+            Inr(q) => { let zz: (0 * P = 0) = Nat::mul_left_zero(P); Exists(0, omega(q, nn, zz)) },
+        },
+    }
+}
+
+// A float is on the grid of every exponent at or below its own.
+theorem Finite::H_on_grid({F: Format}, f: Finite(F), c: Nat, le: c <= f.bexp): OnGrid(c, f.H()) {
+    let M = f.mag * Nat::pow(2, f.bexp - c);
+    let sp = Finite::units_split(f, c, le);
+    let u2: (f.units() * 2 = M * Nat::pow(2, Succ(c))) = trans(Nat::cong(λ (w: Nat) => w * 2, sp), M.mul_assoc(Nat::pow(2, c), 2));
+    match f.neg.eq_dec(False) {
+        Inl(p) => { let e = Finite::H_pos(f, p); Exists(M, Inl(omega(e, u2))) },
+        Inr(n) => {
+            let t: (f.neg = True) = match f.neg as λ s => s ≠ False → s = True { False => λ no => false_elim(no(refl)), True => λ _ => refl }(n);
+            let e = Finite::H_neg(f, t);
+            Exists(M, Inr(omega(e, u2)))
+        },
+    }
+}
+
+// On `g`'s grid and no larger than `g` in magnitude: a float.
+theorem Format::rep_on_grid(self F: Format, g: Finite(F), z: Int, m: OnGrid(g.bexp, z), hi: z <= (g.units() * 2).int(), lo: -(g.units() * 2).int() <= z):
+    ∃ f: Finite(F), f.H() = z
+{
+    let P = Nat::pow(2, Succ(g.bexp));
+    match Int::le_dec(0, z) {
+        Inl(nn) => match on_grid_nonneg(g.bexp, z, m, nn) {
+            Exists(k, ek) => { let d = F.rep_below(g, k * P, k, refl, omega(ek, hi)); Exists(F.down(k * P), omega(ek, d)) },
+        },
+        Inr(ng) => match on_grid_nonneg(g.bexp, -z, on_grid_neg(g.bexp, z, m), omega(ng)) {
+            Exists(k, ek) => {
+                let d = F.rep_below(g, k * P, k, refl, omega(ek, lo));
+                let n = Finite::H_of_neg(F.down(k * P));
+                Exists(-F.down(k * P), omega(ek, d, n))
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rounding keeps a grid.
+
+// A neighbour of a nonnegative on-grid value with a finer exponent than the
+// grid's is the value itself.
+theorem Format::nbr_on_grid(self F: Format, x: Rat, h, k, c: Nat, a: F.Approx(x, h, False), hk: h = k * Nat::pow(2, Succ(c)), cs: c <= F.span,
+    s: Finite(F), nb: Finite::Below(x, s) ∨ Finite::Above(x, s), fine: Succ(s.bexp) <= c): s.H() = h.int()
+{
+    let d = F.down(h);
+    let bd = F.down_is_below(x, h, False, a);
+    let ex: (x ≈ F.grid(h.int())) = a;
+    match nb {
+        Inl(bs) => {
+            let e = Finite::below_unique(x, s, d, bs, bd);
+            let sb: (s.bexp = d.bexp) = (Finite::parts_of_same(s, d, e, F.down_pos(h))).right;
+            let l1 = Finite::H_le_of_le(s, d, Rat::le_of_same(e));
+            let l2 = Finite::H_le_of_le(d, s, Rat::le_of_same(Rat::same_sym(e)));
+            match Succ(h).le_dec(F.limit_h()) {
+                Inl(below) => {
+                    let db: (d.bexp = F.e_of(h)) = (F.down_below(h, below)).right.right;
+                    let dd = F.down_of_le(h, k, c, below, hk, omega(sb, db, fine));
+                    omega(l1, l2, dd)
+                },
+                Inr(over) => {
+                    let mx = F.down_over(h, Nat::le_of_not_lt(h, F.limit_h(), over));
+                    let mb: (d.bexp = F.span) = j(sym(mx), λ y _ => y.bexp = F.span, refl);
+                    false_elim(omega(sb, mb, fine, cs))
+                },
+            }
+        },
+        Inr(ab) => {
+            let xs = Finite::x_le(s, x, h, False, a, ab.left);
+            let ob: (Nat::of_bit(False) = 0) = refl;
+            let gs = F.canonical_elim(s.mag, s.bexp, s.ok);
+            let ub = Finite::H_bounds(s);
+            let P = Nat::pow(2, Succ(s.bexp));
+            let u: (s.units() * 2 = s.mag * P) = s.mag.mul_assoc(Nat::pow(2, s.bexp), 2);
+            let st: (Succ(s.mag) * P <= F.top() * P) = Nat::mul_le_mono_r(P, Succ(s.mag), F.top(), gs.left);
+            let sm: (Succ(s.mag) * P = P + s.mag * P) = s.mag.mul_succ_left(P);
+            let pp: (0 < P) = Nat::pow_pos(a := 2, n := Succ(s.bexp));
+            let el = F.e_of_le(h, s.bexp, omega);
+            let mx = Finite::H_le_max(s);
+            let lim = F.max_H_lt_limit();
+            let below: (h < F.limit_h()) = omega;
+            let dd = F.down_of_le(h, k, c, below, hk, omega(el, fine));
+            let dv: (x ≈ d.val()) = Rat::same_trans(ex, Rat::same_sym(Finite::val_of_H(d, h.int(), dd)));
+            let le = ab.right(d, Rat::le_of_same(dv));
+            let l = Finite::H_le_of_le(s, d, le);
+            omega(xs, ob, l, dd)
+        },
+    }
+}
+
+// A neighbour of an on-grid value with a finer exponent than the grid's is
+// the value itself, at either sign.
+theorem Format::nbr_at(self F: Format, x: Rat, X: Int, ex: x ≈ F.grid(X), c: Nat, cs: c <= F.span, m: OnGrid(c, X),
+    s: Finite(F), nb: Finite::Below(x, s) ∨ Finite::Above(x, s), fine: Succ(s.bexp) <= c): s.H() = X
+{
+    let P = Nat::pow(2, Succ(c));
+    match Int::le_dec(0, X) {
+        Inl(nn) => match on_grid_nonneg(c, X, m, nn) {
+            Exists(k, ek) => {
+                let a: F.Approx(x, k * P, False) = j(ek, λ v _ => x ≈ F.grid(v), ex);
+                let r = F.nbr_on_grid(x, k * P, k, c, a, refl, cs, s, nb, fine);
+                omega(ek, r)
+            },
+        },
+        Inr(ng) => {
+            let gn: (-F.grid(X) ≈ F.grid(-X)) = Rat::same_sym(Dyadic(X, F.qmin() - 1).rat_neg());
+            let nx: (-x ≈ F.grid(-X)) = Rat::same_trans(Rat::neg_respects(ex), gn);
+            let back: (-(-x) ≈ x) = x.neg_neg();
+            let nb2: (Finite::Below(-x, -s) ∨ Finite::Above(-x, -s)) = match nb {
+                Inl(b) => Inr(Finite::below_neg(-x, s, Finite::below_respects(-(-x), x, back, s, b))),
+                Inr(b) => Inl(Finite::above_neg(-x, s, Finite::above_respects(-(-x), x, back, s, b))),
+            };
+            match on_grid_nonneg(c, -X, on_grid_neg(c, X, m), omega(ng)) {
+                Exists(k, ek) => {
+                    let a: F.Approx(-x, k * P, False) = j(ek, λ v _ => -x ≈ F.grid(v), nx);
+                    let r = F.nbr_on_grid(-x, k * P, k, c, a, refl, cs, -s, nb2, fine);
+                    let n = Finite::H_of_neg(s);
+                    omega(ek, r, n)
+                },
+            }
+        },
+    }
+}
+
+// Every neighbour of a value on the grid of a float's exponent is on that
+// grid: rounding never leaves a grid coarser than its own cell.
+theorem Format::nbr_grid(self F: Format, x: Rat, X: Int, ex: x ≈ F.grid(X), c: Nat, cs: c <= F.span, m: OnGrid(c, X),
+    s: Finite(F), nb: Finite::Below(x, s) ∨ Finite::Above(x, s)): OnGrid(c, s.H())
+{
+    match c.le_dec(s.bexp) {
+        Inl(le) => Finite::H_on_grid(s, c, le),
+        Inr(gt) => {
+            let same: (s.H() = X) = F.nbr_at(x, X, ex, c, cs, m, s, nb, omega(gt));
+            j(sym(same), λ v _ => OnGrid(c, v), m)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The error of a nearest addition is a float.
+
+theorem Format::grid_sub(self F: Format, m, n: Int): F.grid(m - n) ≈ F.grid(m) - F.grid(n) {
+    let s: (n + (m - n) = m) = omega;
+    let add: (F.grid(n) + F.grid(m - n) ≈ F.grid(m)) = j(s, λ v _ => F.grid(n) + F.grid(m - n) ≈ F.grid(v), F.grid_add(n, m - n));
+    Rat::le_antisymm(linarith(add), linarith(add))
+}
+
+// A nearest float `s` to `x` is no farther from it than any float `a`: at
+// half-units, `|s - X| <= U` for any `U` bounding `|a - X|`.
+theorem Finite::near_err_H({F: Format}, s, a: Finite(F), X: Int, x: Rat, ex: x ≈ F.grid(X), U: Int, ua: a.H() - X <= U, ub: X - a.H() <= U,
+    near: Finite::Nearest(x, s)): s.H() - X <= U ∧ X - s.H() <= U
+{
+    let dd: (s.dist(x) <= a.dist(x)) = near(a);
+    let ga = a.val_grid();
+    let gs = s.val_grid();
+    let s1 = F.grid_sub(a.H(), X);
+    let s2 = F.grid_sub(X, a.H());
+    let l1 = F.grid_le(a.H() - X, U, ua);
+    let l2 = F.grid_le(X - a.H(), U, ub);
+    let da: (a.dist(x) <= F.grid(U)) = Rat::abs_le(x := a.val() - x, y := F.grid(U), lower := linarith(ga, ex, s2, l2), upper := linarith(ga, ex, s1, l1));
+    let p1: (s.val() - x <= s.dist(x)) = (s.val() - x).le_abs();
+    let p2: (-(s.val() - x) <= s.dist(x)) = (s.val() - x).neg_le_abs();
+    let t1 = F.grid_sub(s.H(), X);
+    let t2 = F.grid_sub(X, s.H());
+    let q1: (F.grid(s.H() - X) <= F.grid(U)) = linarith(t1, gs, ex, p1, dd, da);
+    let q2: (F.grid(X - s.H()) <= F.grid(U)) = linarith(t2, gs, ex, p2, dd, da);
+    And(F.le_of_grid_le(s.H() - X, U, q1), F.le_of_grid_le(X - s.H(), U, q2))
+}
+
+// The error at the grid of `g`, the operand with the finer exponent.
+theorem Format::err_rep(self F: Format, g, a, b, s: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), nb: Finite::Below(x, s) ∨ Finite::Above(x, s),
+    ga: g.bexp <= a.bexp, gb: g.bexp <= b.bexp, hi: (a.H() + b.H()) - s.H() <= (g.units() * 2).int(), lo: -(g.units() * 2).int() <= (a.H() + b.H()) - s.H()):
+    ∃ f: Finite(F), f.H() = (a.H() + b.H()) - s.H()
+{
+    let c = g.bexp;
+    let gc = F.canonical_elim(g.mag, g.bexp, g.ok);
+    let mX = on_grid_add(c, a.H(), b.H(), Finite::H_on_grid(a, c, ga), Finite::H_on_grid(b, c, gb));
+    let mS = F.nbr_grid(x, a.H() + b.H(), ex, c, gc.right.left, mX, s, nb);
+    let mD = on_grid_sub(c, a.H() + b.H(), s.H(), mX, mS);
+    F.rep_on_grid(g, (a.H() + b.H()) - s.H(), mD, hi, lo)
+}
+
+theorem Finite::add_err_H({F: Format}, a, b, s: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), near: Finite::Nearest(x, s)):
+    ∃ f: Finite(F), f.H() = (a.H() + b.H()) - s.H()
+{
+    let X = a.H() + b.H();
+    let ba = Finite::H_bounds(a);
+    let bb = Finite::H_bounds(b);
+    let wa = Finite::near_err_H(s, a, X, x, ex, (b.units() * 2).int(), omega(bb), omega(bb), near);
+    let wb = Finite::near_err_H(s, b, X, x, ex, (a.units() * 2).int(), omega(ba), omega(ba), near);
+    let nb = Finite::nearest_faithful(x, s, near);
+    match a.bexp.le_dec(b.bexp) {
+        Inl(ab) => F.err_rep(a, a, b, s, x, ex, nb, a.bexp.le_refl(), ab, omega(wb), omega(wb)),
+        Inr(ba2) => F.err_rep(b, a, b, s, x, ex, nb, omega(ba2), b.bexp.le_refl(), omega(wa), omega(wa)),
+    }
+}
+
+// The rounding error of a nearest sum, `(a + b) - s`, is a float.
+theorem Finite::add_err_rep({F: Format}, a, b, s: Finite(F), near: Finite::Nearest(a.val() + b.val(), s)):
+    ∃ f: Finite(F), f.val() ≈ (a.val() + b.val()) - s.val()
+{
+    let ex: (a.val() + b.val() ≈ F.grid(a.H() + b.H())) = Rat::same_trans(Rat::add_respects(a.val_grid(), b.val_grid()), F.grid_add(a.H(), b.H()));
+    match Finite::add_err_H(a, b, s, a.val() + b.val(), ex, near) {
+        Exists(f, fh) => {
+            let gf = Finite::val_of_H(f, (a.H() + b.H()) - s.H(), fh);
+            let gd = F.grid_sub(a.H() + b.H(), s.H());
+            let gs = s.val_grid();
+            Exists(f, Rat::le_antisymm(linarith(gf, gd, gs, ex), linarith(gf, gd, gs, ex)))
+        },
+    }
+}
+
+// A correct rounding in a nearest mode is a nearest float.
+theorem Format::nearest_of_rounds(self F: Format, even: Bool, x: Rat, s: Finite(F), hr: RoundsTo(F, Mode::nearest(even), x, Float::Fin(s))): Finite::Nearest(x, s) {
+    match even as λ e => RoundsTo(F, Mode::nearest(e), x, Float::Fin(s)) → Finite::Nearest(x, s) {
+        True => λ h => h.left.left,
+        False => λ h => h.left.left,
+    }(hr)
+}
+
+// The error of a finite nearest addition is a float.
+theorem Finite::add_error({F: Format}, a, b, s: Finite(F), even: Bool, is: a.add(b, mode := Mode::nearest(even)) = Float::Fin(s)):
+    ∃ f: Finite(F), f.val() ≈ (a.val() + b.val()) - s.val()
+{
+    let hr = j(is, λ o _ => RoundsTo(F, Mode::nearest(even), a.val() + b.val(), o), Finite::add_correct(a, b, Mode::nearest(even)));
+    Finite::add_err_rep(a, b, s, F.nearest_of_rounds(even, a.val() + b.val(), s, hr))
+}
+
+// ---------------------------------------------------------------------------
+// Fast2Sum.
+
+// Twice a nonnegative float is a float, or above every float.
+theorem Format::double_or_over(self F: Format, a: Finite(F), na: 0 <= a.H()):
+    (∃ d: Finite(F), d.H() = a.H() + a.H()) ∨ ((g: Finite(F)) → g.H() < a.H() + a.H())
+{
+    let ea = Finite::H_of_nonneg(a, na);
+    let gc = F.canonical_elim(a.mag, a.bexp, a.ok);
+    let h = (a.units() * 2) * 2;
+    let u: (a.units() * 2 = a.mag * Nat::pow(2, Succ(a.bexp))) = a.mag.mul_assoc(Nat::pow(2, a.bexp), 2);
+    let hp: (h = a.mag * Nat::pow(2, Succ(Succ(a.bexp)))) = trans(Nat::cong(λ (w: Nat) => w * 2, u), a.mag.mul_assoc(Nat::pow(2, Succ(a.bexp)), 2));
+    match Succ(h).le_dec(F.limit_h()) {
+        Inl(below) => { let d = F.down_exact(h, a.mag, Succ(a.bexp), below, hp, gc.left); Inl(Exists(F.down(h), omega(d, ea))) },
+        Inr(over) => Inr(λ g => {
+            let le = Finite::H_le_max(g);
+            let lim = F.max_H_lt_limit();
+            let ov: (F.limit_h() <= h) = Nat::le_of_not_lt(h, F.limit_h(), over);
+            omega
+        }),
+    }
+}
+
+// Half a nonnegative float above the least binade is a float.
+theorem Format::half_float(self F: Format, a: Finite(F), na: 0 <= a.H(), nz: 1 <= a.bexp): ∃ d: Finite(F), d.H() + d.H() = a.H() {
+    let ea = Finite::H_of_nonneg(a, na);
+    let gc = F.canonical_elim(a.mag, a.bexp, a.ok);
+    let h = a.units();
+    let sb: (Succ(a.bexp - 1) = a.bexp) = omega(Nat::sub_add_cancel(1, a.bexp, nz));
+    let hk: (h = a.mag * Nat::pow(2, Succ(a.bexp - 1))) = Nat::cong(λ (w: Nat) => a.mag * Nat::pow(2, w), sym(sb));
+    let mx = Finite::units_le_max(a);
+    let mh = Finite::max_H(F);
+    let lim = F.max_H_lt_limit();
+    let d = F.down_exact(h, a.mag, a.bexp - 1, omega, hk, gc.left);
+    Exists(F.down(h), omega(d, ea))
+}
+
+// A nearest float to a value some float `f` has is at that value.
+theorem Finite::near_exact_H({F: Format}, s, f: Finite(F), X: Int, x: Rat, ex: x ≈ F.grid(X), fh: f.H() = X, near: Finite::Nearest(x, s)): s.H() = X {
+    let w = Finite::near_err_H(s, f, X, x, ex, 0, omega(fh), omega(fh), near);
+    let w1 = w.left;
+    let w2 = w.right;
+    omega
+}
+
+// Fast2Sum's first step at a nonnegative `a` with `|b| <= a`: `s - a` is a
+// float for the nearest `s` to `a + b`.
+theorem Format::f2s_pos(self F: Format, a, b, s: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), near: Finite::Nearest(x, s),
+    na: 0 <= a.H(), lb: -a.H() <= b.H(), ub: b.H() <= a.H()): ∃ f: Finite(F), f.H() = s.H() - a.H()
+{
+    let X = a.H() + b.H();
+    match Int::le_dec(0, b.H()) {
+        Inl(nb) => {
+            // Same signs: `a <= s <= 2a`, and Sterbenz.
+            let wa = Finite::near_err_H(s, a, X, x, ex, b.H(), omega(nb), omega, near);
+            let wa2 = wa.right;
+            let lo: (a.H() <= s.H()) = omega;
+            let hi: (s.H() <= a.H() + a.H()) = match F.double_or_over(a, na) {
+                Inl(dd) => match dd {
+                    Exists(d, dh) => {
+                        let wd = Finite::near_err_H(s, d, X, x, ex, a.H() - b.H(), omega(dh, ub), omega(dh, ub, nb), near);
+                        let wd1 = wd.left;
+                        omega(wd1, dh)
+                    },
+                },
+                Inr(all) => { let l = all(s); omega(l) },
+            };
+            F.sterbenz_ge(s, a, omega(lo, na), na, lo, hi)
+        },
+        Inr(neg) => {
+            // Opposite signs: `s <= a`.
+            let wa = Finite::near_err_H(s, a, X, x, ex, -b.H(), omega(neg), omega(neg), near);
+            let wa1 = wa.left;
+            let hi: (s.H() <= a.H()) = omega;
+            match Int::le_dec(a.H(), -(b.H() + b.H())) {
+                Inl(big) => {
+                    // `|b| >= a/2`: Sterbenz makes `a + b` a float, so `s - a = b`.
+                    let nbh = Finite::H_of_neg(b);
+                    match Finite::sterbenz_H(a, -b, omega(nbh, lb), omega(nbh, big)) {
+                        Exists(f, fh) => { let e = Finite::near_exact_H(s, f, X, x, ex, omega(fh, nbh), near); Exists(b, omega(e)) },
+                    }
+                },
+                Inr(small) => match a.bexp.le_dec(0) {
+                    Inl(z) => {
+                        // In the least binade every value between `0` and `a` on the
+                        // grid is a float, `a + b` among them.
+                        let ea = Finite::H_of_nonneg(a, na);
+                        let mX = on_grid_add(a.bexp, a.H(), b.H(), Finite::H_on_grid(a, a.bexp, a.bexp.le_refl()), Finite::H_on_grid(b, a.bexp, omega(z)));
+                        match F.rep_on_grid(a, X, mX, omega(ea, neg), omega(ea, lb)) {
+                            Exists(f, fh) => { let e = Finite::near_exact_H(s, f, X, x, ex, fh, near); Exists(b, omega(e)) },
+                        }
+                    },
+                    Inr(nz) => match F.half_float(a, na, omega(nz)) {
+                        // `a + b > a/2` and `a/2` is a float, so `s >= a/2`: Sterbenz.
+                        Exists(d, dh) => {
+                            let wd = Finite::near_err_H(s, d, X, x, ex, X - d.H(), omega(dh, small), omega, near);
+                            let wd2 = wd.right;
+                            let lo: (a.H() <= s.H() + s.H()) = omega(wd2, dh);
+                            Finite::sterbenz_H(s, a, lo, omega(hi, na))
+                        },
+                    },
+                },
+            }
+        },
+    }
+}
+
+// A float at `-z` from one at `z`.
+theorem Finite::neg_exists({F: Format}, z: Int, e: ∃ f: Finite(F), f.H() = z): ∃ f: Finite(F), f.H() = -z {
+    match e {
+        Exists(f, fh) => { let n = Finite::H_of_neg(f); Exists(-f, omega(fh, n)) },
+    }
+}
+
+// Fast2Sum's first step: for `|b| <= |a|` and `s` a nearest float to
+// `a + b`, `s - a` is a float.
+theorem Finite::fast_two_sum_H({F: Format}, a, b, s: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), near: Finite::Nearest(x, s),
+    le: b.val().abs() <= a.val().abs()): ∃ f: Finite(F), f.H() = s.H() - a.H()
+{
+    let ga = a.val_grid();
+    let gb = b.val_grid();
+    let gn: (-F.grid(b.H()) ≈ F.grid(-b.H())) = Rat::same_sym(Dyadic(b.H(), F.qmin() - 1).rat_neg());
+    let p1: (b.val() <= b.val().abs()) = b.val().le_abs();
+    let p2: (-b.val() <= b.val().abs()) = b.val().neg_le_abs();
+    match Int::le_dec(0, a.H()) {
+        Inl(na) => {
+            let av: (0 <= a.val()) = Finite::val_nonneg(a, na);
+            let aa = a.val().abs_of_nonneg(av);
+            let u1: (b.H() <= a.H()) = F.le_of_grid_le(b.H(), a.H(), linarith(ga, gb, p1, le, aa));
+            let u2: (-b.H() <= a.H()) = F.le_of_grid_le(-b.H(), a.H(), linarith(ga, gb, gn, p2, le, aa));
+            F.f2s_pos(a, b, s, x, ex, near, na, omega(u2), u1)
+        },
+        Inr(ng) => {
+            let g0 = F.grid_le(a.H(), 0, omega(ng));
+            let z0 = F.grid_zero();
+            let av: (a.val() <= 0) = linarith(ga, g0, z0);
+            let aa = a.val().abs_of_nonpos(av);
+            let gna: (-F.grid(a.H()) ≈ F.grid(-a.H())) = Rat::same_sym(Dyadic(a.H(), F.qmin() - 1).rat_neg());
+            let u1: (b.H() <= -a.H()) = F.le_of_grid_le(b.H(), -a.H(), linarith(ga, gb, gna, p1, le, aa));
+            let u2: (-b.H() <= -a.H()) = F.le_of_grid_le(-b.H(), -a.H(), linarith(ga, gb, gn, gna, p2, le, aa));
+            let ha = Finite::H_of_neg(a);
+            let hb = Finite::H_of_neg(b);
+            let hs = Finite::H_of_neg(s);
+            let X = a.H() + b.H();
+            let gx: (-F.grid(X) ≈ F.grid(-X)) = Rat::same_sym(Dyadic(X, F.qmin() - 1).rat_neg());
+            let sx: (-X = (-a).H() + (-b).H()) = omega(ha, hb);
+            let ex2: (-x ≈ F.grid((-a).H() + (-b).H())) = j(sx, λ v _ => -x ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(ex), gx));
+            let near2 = Finite::nearest_flip(x, s, near);
+            let eq: (-((-s).H() - (-a).H()) = s.H() - a.H()) = omega(ha, hs);
+            j(eq, λ v _ => ∃ f: Finite(F), f.H() = v, Finite::neg_exists((-s).H() - (-a).H(), F.f2s_pos(-a, -b, -s, -x, ex2, near2, omega(ha, ng), omega(ha, hb, u2), omega(ha, hb, u1))))
+        },
+    }
+}
+
+theorem Finite::fast_two_sum_rep({F: Format}, a, b, s: Finite(F), near: Finite::Nearest(a.val() + b.val(), s), le: b.val().abs() <= a.val().abs()):
+    ∃ f: Finite(F), f.val() ≈ s.val() - a.val()
+{
+    let ex: (a.val() + b.val() ≈ F.grid(a.H() + b.H())) = Rat::same_trans(Rat::add_respects(a.val_grid(), b.val_grid()), F.grid_add(a.H(), b.H()));
+    match Finite::fast_two_sum_H(a, b, s, a.val() + b.val(), ex, near, le) {
+        Exists(f, fh) => Exists(f, Finite::val_of_diff(s, a, f, fh)),
+    }
+}
+
+// Fast2Sum (Dekker): for `|b| <= |a|`, `s = ○(a + b)` in a nearest mode,
+// `z = s - a` and `t = b - z` in any modes, `z` is exact...
+theorem Finite::fast_two_sum({F: Format}, a, b, s: Finite(F), even: Bool, mode: Mode, le: b.val().abs() <= a.val().abs(),
+    hs: a.add(b, mode := Mode::nearest(even)) = Float::Fin(s)): (s.sub(a, mode := mode)).Exact(s.val() - a.val())
+{
+    let hr = j(hs, λ o _ => RoundsTo(F, Mode::nearest(even), a.val() + b.val(), o), Finite::add_correct(a, b, Mode::nearest(even)));
+    let near = F.nearest_of_rounds(even, a.val() + b.val(), s, hr);
+    match Finite::fast_two_sum_rep(a, b, s, near, le) {
+        Exists(f, e) => F.exact_of_rounds(mode, s.val() - a.val(), s.sub(a, mode := mode), f, e, Finite::sub_correct(s, a, mode)),
+    }
+}
+
+// ...and `t` is the rounding error of `s`, exactly.
+theorem Finite::fast_two_sum_err({F: Format}, a, b, s, z: Finite(F), even: Bool, mode: Mode,
+    hs: a.add(b, mode := Mode::nearest(even)) = Float::Fin(s), hz: z.val() ≈ s.val() - a.val()):
+    (b.sub(z, mode := mode)).Exact((a.val() + b.val()) - s.val())
+{
+    let e: ((a.val() + b.val()) - s.val() ≈ b.val() - z.val()) = Rat::le_antisymm(linarith(hz), linarith(hz));
+    let hr = F.rounds_respects(mode, (a.val() + b.val()) - s.val(), b.val() - z.val(), e, b.sub(z, mode := mode), Finite::sub_correct(b, z, mode));
+    match Finite::add_error(a, b, s, even, hs) {
+        Exists(f, fe) => F.exact_of_rounds(mode, (a.val() + b.val()) - s.val(), b.sub(z, mode := mode), f, fe, hr),
+    }
+}
+
+// Fast2Sum as an error-free transformation: `s + t = a + b` exactly.
+theorem Finite::fast_two_sum_exact({F: Format}, a, b, s, z, t: Finite(F), even: Bool, mode: Mode, le: b.val().abs() <= a.val().abs(),
+    hs: a.add(b, mode := Mode::nearest(even)) = Float::Fin(s), hz: s.sub(a, mode := mode) = Float::Fin(z), ht: b.sub(z, mode := mode) = Float::Fin(t)):
+    s.val() + t.val() ≈ a.val() + b.val()
+{
+    let ez: (z.val() ≈ s.val() - a.val()) = j(hz, λ o _ => o.Exact(s.val() - a.val()), Finite::fast_two_sum(a, b, s, even, mode, le, hs));
+    let et: (t.val() ≈ (a.val() + b.val()) - s.val()) = j(ht, λ o _ => o.Exact((a.val() + b.val()) - s.val()), Finite::fast_two_sum_err(a, b, s, z, even, mode, hs, ez));
+    Rat::le_antisymm(linarith(et), linarith(et))
+}
+
+// ---------------------------------------------------------------------------
+// TwoSum.
+
+// A nearest float is at or above every float at or below its target...
+theorem Finite::near_ge({F: Format}, s, d: Finite(F), X: Int, x: Rat, ex: x ≈ F.grid(X), le: d.H() <= X, near: Finite::Nearest(x, s)): d.H() <= s.H() {
+    let w = Finite::near_err_H(s, d, X, x, ex, X - d.H(), omega(le), omega, near);
+    let w2 = w.right;
+    omega(w2)
+}
+
+// ...and at or below every float at or above it.
+theorem Finite::near_le({F: Format}, s, d: Finite(F), X: Int, x: Rat, ex: x ≈ F.grid(X), le: X <= d.H(), near: Finite::Nearest(x, s)): s.H() <= d.H() {
+    let w = Finite::near_err_H(s, d, X, x, ex, d.H() - X, omega, omega(le), near);
+    let w1 = w.left;
+    omega(w1)
+}
+
+// TwoSum when `a + b` is itself a float: `s = a + b`, `a1 = a`, so
+// `s - a1 = b` and `a - a1 = 0`.
+theorem Finite::two_sum_on_float({F: Format}, a, b, s, a1, f: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), near: Finite::Nearest(x, s),
+    y: Rat, ey: y ≈ F.grid(s.H() - b.H()), neary: Finite::Nearest(y, a1), fh: f.H() = a.H() + b.H()):
+    (∃ f: Finite(F), f.H() = s.H() - a1.H()) ∧ (∃ f: Finite(F), f.H() = a.H() - a1.H())
+{
+    let e = Finite::near_exact_H(s, f, a.H() + b.H(), x, ex, fh, near);
+    let e1 = Finite::near_exact_H(a1, a, s.H() - b.H(), y, ey, omega(e), neary);
+    let z0: ((Finite::zero(F, False)).H() = 0) = refl;
+    And(Exists(b, omega(e1)), Exists(Finite::zero(F, False), omega(e1, z0)))
+}
+
+// TwoSum's middle steps at a nonnegative `a` with `|b| <= a`: for `s`
+// nearest to `a + b` and `a1` nearest to `s - b`, both `s - a1` and
+// `a - a1` are floats. Every case ends in Sterbenz's lemma or in a float
+// sum.
+theorem Format::two_sum_pos(self F: Format, a, b, s, a1: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), near: Finite::Nearest(x, s),
+    y: Rat, ey: y ≈ F.grid(s.H() - b.H()), neary: Finite::Nearest(y, a1),
+    na: 0 <= a.H(), lb: -a.H() <= b.H(), ub: b.H() <= a.H(), rhi: a.H() + b.H() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = s.H() - a1.H()) ∧ (∃ f: Finite(F), f.H() = a.H() - a1.H())
+{
+    let X = a.H() + b.H();
+    let Y = s.H() - b.H();
+    match Int::le_dec(0, b.H()) {
+        Inl(nb) => {
+            // Same signs: `a <= s <= 2a` and `2b <= s`, so `s/2 <= a1 <= s`.
+            let sa: (a.H() <= s.H()) = Finite::near_ge(s, a, X, x, ex, omega(nb), near);
+            let s2a: (s.H() <= a.H() + a.H()) = match F.double_or_over(a, na) {
+                Inl(dd) => match dd {
+                    Exists(d, dh) => { let l = Finite::near_le(s, d, X, x, ex, omega(dh, ub), near); omega(l, dh) },
+                },
+                Inr(all) => { let l = all(s); omega(l) },
+            };
+            let s2b: (b.H() + b.H() <= s.H()) = match F.double_or_over(b, nb) {
+                Inl(dd) => match dd {
+                    Exists(d, dh) => { let l = Finite::near_ge(s, d, X, x, ex, omega(dh, ub), near); omega(l, dh) },
+                },
+                // `2b` above every float would put `a + b` out of range.
+                Inr(all) => { let l = all(Finite::max_finite(F)); false_elim(omega(l, rhi, ub)) },
+            };
+            let a1s: (a1.H() <= s.H()) = Finite::near_le(a1, s, Y, y, ey, omega(nb), neary);
+            let a1b: (b.H() <= a1.H()) = Finite::near_ge(a1, b, Y, y, ey, omega(s2b), neary);
+            match s.bexp.le_dec(0) {
+                Inl(z) => {
+                    // In the least binade both differences are on `s`'s grid and
+                    // no larger than `s`.
+                    let es = Finite::H_of_nonneg(s, omega(sa, na));
+                    let ms = Finite::H_on_grid(s, s.bexp, s.bexp.le_refl());
+                    let m1 = Finite::H_on_grid(a1, s.bexp, omega(z));
+                    let ma = Finite::H_on_grid(a, s.bexp, omega(z));
+                    And(F.rep_on_grid(s, s.H() - a1.H(), on_grid_sub(s.bexp, s.H(), a1.H(), ms, m1), omega(es, a1b, nb), omega(es, a1s)),
+                        F.rep_on_grid(s, a.H() - a1.H(), on_grid_sub(s.bexp, a.H(), a1.H(), ma, m1), omega(es, sa, a1b, nb), omega(es, a1s, na)))
+                },
+                Inr(nz) => match F.half_float(s, omega(sa, na), omega(nz)) {
+                    Exists(d, dh) => {
+                        let a1d: (d.H() <= a1.H()) = Finite::near_ge(a1, d, Y, y, ey, omega(dh, s2b), neary);
+                        And(Finite::sterbenz_H(s, a1, omega(a1s, sa, na), omega(a1d, dh)),
+                            Finite::sterbenz_H(a, a1, omega(a1s, s2a), omega(sa, a1d, dh)))
+                    },
+                },
+            }
+        },
+        Inr(neg) => {
+            // Opposite signs: `s <= a`.
+            let sa: (s.H() <= a.H()) = Finite::near_le(s, a, X, x, ex, omega(neg), near);
+            match Int::le_dec(a.H(), -(b.H() + b.H())) {
+                Inl(big) => {
+                    // `|b| >= a/2`: Sterbenz makes `a + b` a float.
+                    let nbh = Finite::H_of_neg(b);
+                    match Finite::sterbenz_H(a, -b, omega(nbh, lb), omega(nbh, big)) {
+                        Exists(f, fh) => Finite::two_sum_on_float(a, b, s, a1, f, x, ex, near, y, ey, neary, omega(fh, nbh)),
+                    }
+                },
+                Inr(small) => match a.bexp.le_dec(0) {
+                    Inl(z) => {
+                        // In the least binade `a + b` is a float.
+                        let ea = Finite::H_of_nonneg(a, na);
+                        let mX = on_grid_add(a.bexp, a.H(), b.H(), Finite::H_on_grid(a, a.bexp, a.bexp.le_refl()), Finite::H_on_grid(b, a.bexp, omega(z)));
+                        match F.rep_on_grid(a, X, mX, omega(ea, neg), omega(ea, lb)) {
+                            Exists(f, fh) => Finite::two_sum_on_float(a, b, s, a1, f, x, ex, near, y, ey, neary, fh),
+                        }
+                    },
+                    Inr(nz) => match F.half_float(a, na, omega(nz)) {
+                        // `a/2 <= s <= a` and `s <= a1 <= 2s`: Sterbenz twice.
+                        Exists(d, dh) => {
+                            let sd: (d.H() <= s.H()) = Finite::near_ge(s, d, X, x, ex, omega(dh, small), near);
+                            let a1s: (s.H() <= a1.H()) = Finite::near_ge(a1, s, Y, y, ey, omega(neg), neary);
+                            let a12: (a1.H() <= s.H() + s.H()) = match F.double_or_over(s, omega(sd, dh, na)) {
+                                Inl(dd) => match dd {
+                                    Exists(e2, eh) => { let l = Finite::near_le(a1, e2, Y, y, ey, omega(eh, sd, dh, small), neary); omega(l, eh) },
+                                },
+                                Inr(all) => { let l = all(a1); omega(l) },
+                            };
+                            And(Finite::sterbenz_H(s, a1, a12, omega(a1s, sd, dh, na)),
+                                Finite::sterbenz_H(a, a1, omega(a12, sa), omega(dh, sd, a1s)))
+                        },
+                    },
+                },
+            }
+        },
+    }
+}
+
+// The pair of `two_sum_pos` at negated arguments, read back. A separate
+// theorem: matching on the projections of a let-bound call makes the
+// checker unfold the call.
+theorem Finite::two_sum_unflip({F: Format}, a, s, a1: Finite(F),
+    w: (∃ f: Finite(F), f.H() = (-s).H() - (-a1).H()) ∧ (∃ f: Finite(F), f.H() = (-a).H() - (-a1).H())):
+    (∃ f: Finite(F), f.H() = s.H() - a1.H()) ∧ (∃ f: Finite(F), f.H() = a.H() - a1.H())
+{
+    let ha = Finite::H_of_neg(a);
+    let hs = Finite::H_of_neg(s);
+    let h1 = Finite::H_of_neg(a1);
+    match w.left {
+        Exists(f1, f1h) => match w.right {
+            Exists(f2, f2h) => {
+                let n1 = Finite::H_of_neg(f1);
+                let n2 = Finite::H_of_neg(f2);
+                And(Exists(-f1, omega(f1h, n1, hs, h1)), Exists(-f2, omega(f2h, n2, ha, h1)))
+            },
+        },
+    }
+}
+
+// The negative side of `two_sum_pos`, by negating everything.
+theorem Format::two_sum_neg(self F: Format, a, b, s, a1: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), near: Finite::Nearest(x, s),
+    y: Rat, ey: y ≈ F.grid(s.H() - b.H()), neary: Finite::Nearest(y, a1),
+    ng: a.H() <= 0, u1: b.H() <= -a.H(), u2: -b.H() <= -a.H(), rlo: -(Finite::max_finite(F)).H() <= a.H() + b.H()):
+    (∃ f: Finite(F), f.H() = s.H() - a1.H()) ∧ (∃ f: Finite(F), f.H() = a.H() - a1.H())
+{
+    let ha = Finite::H_of_neg(a);
+    let hb = Finite::H_of_neg(b);
+    let hs = Finite::H_of_neg(s);
+    let h1 = Finite::H_of_neg(a1);
+    let X = a.H() + b.H();
+    let Y = s.H() - b.H();
+    let gx: (-F.grid(X) ≈ F.grid(-X)) = Rat::same_sym(Dyadic(X, F.qmin() - 1).rat_neg());
+    let gy: (-F.grid(Y) ≈ F.grid(-Y)) = Rat::same_sym(Dyadic(Y, F.qmin() - 1).rat_neg());
+    let sx: (-X = (-a).H() + (-b).H()) = omega(ha, hb);
+    let sy: (-Y = (-s).H() - (-b).H()) = omega(hs, hb);
+    let ex2: (-x ≈ F.grid((-a).H() + (-b).H())) = j(sx, λ v _ => -x ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(ex), gx));
+    let ey2: (-y ≈ F.grid((-s).H() - (-b).H())) = j(sy, λ v _ => -y ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(ey), gy));
+    let near2 = Finite::nearest_flip(x, s, near);
+    let neary2 = Finite::nearest_flip(y, a1, neary);
+    let M = (Finite::max_finite(F)).H();
+    let c1: (0 <= (-a).H()) = omega(ha, ng);
+    let c2: (-(-a).H() <= (-b).H()) = omega(ha, hb, u2);
+    let c3: ((-b).H() <= (-a).H()) = omega(ha, hb, u1);
+    let c4: ((-a).H() + (-b).H() <= M) = omega(ha, hb, rlo);
+    Finite::two_sum_unflip(a, s, a1, F.two_sum_pos(-a, -b, -s, -a1, -x, ex2, near2, -y, ey2, neary2, c1, c2, c3, c4))
+}
+
+// The same for `|b| <= |a|` at either sign of `a`.
+theorem Finite::two_sum_ge({F: Format}, a, b, s, a1: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), near: Finite::Nearest(x, s),
+    y: Rat, ey: y ≈ F.grid(s.H() - b.H()), neary: Finite::Nearest(y, a1), le: b.val().abs() <= a.val().abs(),
+    rlo: -(Finite::max_finite(F)).H() <= a.H() + b.H(), rhi: a.H() + b.H() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = s.H() - a1.H()) ∧ (∃ f: Finite(F), f.H() = a.H() - a1.H())
+{
+    let ga = a.val_grid();
+    let gb = b.val_grid();
+    let gn: (-F.grid(b.H()) ≈ F.grid(-b.H())) = Rat::same_sym(Dyadic(b.H(), F.qmin() - 1).rat_neg());
+    let p1: (b.val() <= b.val().abs()) = b.val().le_abs();
+    let p2: (-b.val() <= b.val().abs()) = b.val().neg_le_abs();
+    match Int::le_dec(0, a.H()) {
+        Inl(na) => {
+            let av: (0 <= a.val()) = Finite::val_nonneg(a, na);
+            let aa = a.val().abs_of_nonneg(av);
+            let u1: (b.H() <= a.H()) = F.le_of_grid_le(b.H(), a.H(), linarith(ga, gb, p1, le, aa));
+            let u2: (-b.H() <= a.H()) = F.le_of_grid_le(-b.H(), a.H(), linarith(ga, gb, gn, p2, le, aa));
+            F.two_sum_pos(a, b, s, a1, x, ex, near, y, ey, neary, na, omega(u2), u1, rhi)
+        },
+        Inr(ng) => {
+            let g0 = F.grid_le(a.H(), 0, omega(ng));
+            let z0 = F.grid_zero();
+            let av: (a.val() <= 0) = linarith(ga, g0, z0);
+            let aa = a.val().abs_of_nonpos(av);
+            let gna: (-F.grid(a.H()) ≈ F.grid(-a.H())) = Rat::same_sym(Dyadic(a.H(), F.qmin() - 1).rat_neg());
+            let u1: (b.H() <= -a.H()) = F.le_of_grid_le(b.H(), -a.H(), linarith(ga, gb, gna, p1, le, aa));
+            let u2: (-b.H() <= -a.H()) = F.le_of_grid_le(-b.H(), -a.H(), linarith(ga, gb, gn, gna, p2, le, aa));
+            F.two_sum_neg(a, b, s, a1, x, ex, near, y, ey, neary, omega(ng), u1, u2, rlo)
+        },
+    }
+}
+
+// TwoSum's middle steps for any `a` and `b`: when `|a| <= |b|` Fast2Sum on
+// `(b, a)` makes `s - b` a float, so `a1 = s - b`, `s - a1 = b` and
+// `a - a1` is the error of `s`.
+theorem Finite::two_sum_H({F: Format}, a, b, s, a1: Finite(F), x: Rat, ex: x ≈ F.grid(a.H() + b.H()), near: Finite::Nearest(x, s),
+    y: Rat, ey: y ≈ F.grid(s.H() - b.H()), neary: Finite::Nearest(y, a1),
+    rlo: -(Finite::max_finite(F)).H() <= a.H() + b.H(), rhi: a.H() + b.H() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = s.H() - a1.H()) ∧ (∃ f: Finite(F), f.H() = a.H() - a1.H())
+{
+    match (b.val().abs()).le_total(a.val().abs()) {
+        Inl(le) => Finite::two_sum_ge(a, b, s, a1, x, ex, near, y, ey, neary, le, rlo, rhi),
+        Inr(ge) => {
+            let sx: (a.H() + b.H() = b.H() + a.H()) = omega;
+            let ex2: (x ≈ F.grid(b.H() + a.H())) = j(sx, λ v _ => x ≈ F.grid(v), ex);
+            match Finite::fast_two_sum_H(b, a, s, x, ex2, near, ge) {
+                Exists(f, fh) => {
+                    let e1 = Finite::near_exact_H(a1, f, s.H() - b.H(), y, ey, fh, neary);
+                    match Finite::add_err_H(a, b, s, x, ex, near) {
+                        Exists(g, gh) => And(Exists(b, omega(e1)), Exists(g, omega(gh, e1))),
+                    }
+                },
+            }
+        },
+    }
+}
+
+// `db = b - b1 = a1 - (s - b)`, minus the error of `a1`, is a float.
+theorem Finite::two_sum_db({F: Format}, b, s, a1, b1: Finite(F), eb1: b1.val() ≈ s.val() - a1.val(),
+    e: ∃ g: Finite(F), g.H() = (s.H() + (-b).H()) - a1.H()): ∃ f: Finite(F), f.val() ≈ b.val() - b1.val()
+{
+    let nb = Finite::H_of_neg(b);
+    let gb = b.val_grid();
+    let gs = s.val_grid();
+    let g1 = a1.val_grid();
+    match e {
+        Exists(g, gh) => {
+            let hg = Finite::H_of_neg(g);
+            let D = (b.H() + a1.H()) - s.H();
+            let gv = Finite::val_of_H(-g, D, omega(gh, hg, nb));
+            let d1 = F.grid_sub(b.H() + a1.H(), s.H());
+            let d2 = F.grid_add(b.H(), a1.H());
+            Exists(-g, Rat::le_antisymm(linarith(gv, d1, d2, gb, g1, gs, eb1), linarith(gv, d1, d2, gb, g1, gs, eb1)))
+        },
+    }
+}
+
+// TwoSum's last four steps from the middle steps' pair (a separate theorem,
+// as for `two_sum_unflip`).
+theorem Finite::two_sum_tail({F: Format}, a, b, s, a1, b1, da, db: Finite(F), even: Bool, mode: Mode,
+    hs: a.add(b, mode := Mode::nearest(even)) = Float::Fin(s), neary: Finite::Nearest(s.val() - b.val(), a1),
+    hb: s.sub(a1, mode := mode) = Float::Fin(b1), hda: a.sub(a1, mode := mode) = Float::Fin(da), hdb: b.sub(b1, mode := mode) = Float::Fin(db),
+    w: (∃ f: Finite(F), f.H() = s.H() - a1.H()) ∧ (∃ f: Finite(F), f.H() = a.H() - a1.H())):
+    (da.add(db, mode := mode)).Exact((a.val() + b.val()) - s.val())
+{
+    let gb = b.val_grid();
+    let gs = s.val_grid();
+    let sb = F.grid_sub(s.H(), b.H());
+    let ey: (s.val() - b.val() ≈ F.grid(s.H() - b.H())) = Rat::le_antisymm(linarith(gs, gb, sb), linarith(gs, gb, sb));
+    match w.left {
+        Exists(f1, f1h) => match w.right {
+            Exists(f2, f2h) => {
+                // `b1 = s - a1` and `da = a - a1` exactly.
+                let eb1: (b1.val() ≈ s.val() - a1.val()) = j(hb, λ o _ => o.Exact(s.val() - a1.val()),
+                    F.exact_of_rounds(mode, s.val() - a1.val(), s.sub(a1, mode := mode), f1, Finite::val_of_diff(s, a1, f1, f1h), Finite::sub_correct(s, a1, mode)));
+                let eda: (da.val() ≈ a.val() - a1.val()) = j(hda, λ o _ => o.Exact(a.val() - a1.val()),
+                    F.exact_of_rounds(mode, a.val() - a1.val(), a.sub(a1, mode := mode), f2, Finite::val_of_diff(a, a1, f2, f2h), Finite::sub_correct(a, a1, mode)));
+                // `db = b - b1 = a1 - (s - b)`, minus the error of `a1`.
+                let nb = Finite::H_of_neg(b);
+                let sy: (s.H() - b.H() = s.H() + (-b).H()) = omega(nb);
+                let ey3: (s.val() - b.val() ≈ F.grid(s.H() + (-b).H())) = j(sy, λ v _ => s.val() - b.val() ≈ F.grid(v), ey);
+                let edb: (db.val() ≈ b.val() - b1.val()) = j(hdb, λ o _ => o.Exact(b.val() - b1.val()),
+                    F.exact_of_rep(mode, b.val() - b1.val(), b.sub(b1, mode := mode), Finite::two_sum_db(b, s, a1, b1, eb1, Finite::add_err_H(s, -b, a1, s.val() - b.val(), ey3, neary)),
+                        Finite::sub_correct(b, b1, mode)));
+                // `da + db = a + b - s`, the error of `s`, a float.
+                let e: ((a.val() + b.val()) - s.val() ≈ da.val() + db.val()) = Rat::le_antisymm(linarith(eda, edb, eb1), linarith(eda, edb, eb1));
+                let ht = F.rounds_respects(mode, (a.val() + b.val()) - s.val(), da.val() + db.val(), e, da.add(db, mode := mode), Finite::add_correct(da, db, mode));
+                F.exact_of_rep(mode, (a.val() + b.val()) - s.val(), da.add(db, mode := mode), Finite::add_error(a, b, s, even, hs), ht)
+            },
+        },
+    }
+}
+
+// TwoSum (Knuth, Møller): `s = ○(a + b)` and `a1 = ○(s - b)` in a nearest
+// mode, then `b1 = s - a1`, `da = a - a1`, `db = b - b1` and `t = da + db`
+// in any mode. With `a + b` in range, every step after `a1` is exact and
+// `t` is the rounding error of `s`. Unlike Fast2Sum it needs no ordering of
+// `|a|` and `|b|`.
+theorem Finite::two_sum({F: Format}, a, b, s, a1, b1, da, db: Finite(F), even: Bool, mode: Mode,
+    range: (a.val() + b.val()).abs() <= (Finite::max_finite(F)).val(),
+    hs: a.add(b, mode := Mode::nearest(even)) = Float::Fin(s), ha: s.sub(b, mode := Mode::nearest(even)) = Float::Fin(a1),
+    hb: s.sub(a1, mode := mode) = Float::Fin(b1), hda: a.sub(a1, mode := mode) = Float::Fin(da), hdb: b.sub(b1, mode := mode) = Float::Fin(db)):
+    (da.add(db, mode := mode)).Exact((a.val() + b.val()) - s.val())
+{
+    let hr = j(hs, λ o _ => RoundsTo(F, Mode::nearest(even), a.val() + b.val(), o), Finite::add_correct(a, b, Mode::nearest(even)));
+    let near = F.nearest_of_rounds(even, a.val() + b.val(), s, hr);
+    let hr1 = j(ha, λ o _ => RoundsTo(F, Mode::nearest(even), s.val() - b.val(), o), Finite::sub_correct(s, b, Mode::nearest(even)));
+    let neary = F.nearest_of_rounds(even, s.val() - b.val(), a1, hr1);
+    let ga = a.val_grid();
+    let gb = b.val_grid();
+    let gs = s.val_grid();
+    let ex: (a.val() + b.val() ≈ F.grid(a.H() + b.H())) = Rat::same_trans(Rat::add_respects(ga, gb), F.grid_add(a.H(), b.H()));
+    let sb = F.grid_sub(s.H(), b.H());
+    let ey: (s.val() - b.val() ≈ F.grid(s.H() - b.H())) = Rat::le_antisymm(linarith(gs, gb, sb), linarith(gs, gb, sb));
+    let M = (Finite::max_finite(F)).H();
+    let gm = (Finite::max_finite(F)).val_grid();
+    let gmn: (-F.grid(M) ≈ F.grid(-M)) = Rat::same_sym(Dyadic(M, F.qmin() - 1).rat_neg());
+    let q1: (a.val() + b.val() <= (a.val() + b.val()).abs()) = (a.val() + b.val()).le_abs();
+    let q2: (-(a.val() + b.val()) <= (a.val() + b.val()).abs()) = (a.val() + b.val()).neg_le_abs();
+    let rhi: (a.H() + b.H() <= M) = F.le_of_grid_le(a.H() + b.H(), M, linarith(ex, gm, q1, range));
+    let rlo: (-M <= a.H() + b.H()) = F.le_of_grid_le(-M, a.H() + b.H(), linarith(ex, gm, gmn, q2, range));
+    Finite::two_sum_tail(a, b, s, a1, b1, da, db, even, mode, hs, neary, hb, hda, hdb,
+        Finite::two_sum_H(a, b, s, a1, a.val() + b.val(), ex, near, s.val() - b.val(), ey, neary, rlo, rhi))
+}
+
+// TwoSum as an error-free transformation: `s + t = a + b` exactly.
+theorem Finite::two_sum_exact({F: Format}, a, b, s, a1, b1, da, db, t: Finite(F), even: Bool, mode: Mode,
+    range: (a.val() + b.val()).abs() <= (Finite::max_finite(F)).val(),
+    hs: a.add(b, mode := Mode::nearest(even)) = Float::Fin(s), ha: s.sub(b, mode := Mode::nearest(even)) = Float::Fin(a1),
+    hb: s.sub(a1, mode := mode) = Float::Fin(b1), hda: a.sub(a1, mode := mode) = Float::Fin(da), hdb: b.sub(b1, mode := mode) = Float::Fin(db),
+    ht: da.add(db, mode := mode) = Float::Fin(t)): s.val() + t.val() ≈ a.val() + b.val()
+{
+    let et: (t.val() ≈ (a.val() + b.val()) - s.val()) = j(ht, λ o _ => o.Exact((a.val() + b.val()) - s.val()),
+        Finite::two_sum(a, b, s, a1, b1, da, db, even, mode, range, hs, ha, hb, hda, hdb));
+    Rat::le_antisymm(linarith(et), linarith(et))
+}
+
+// ---------------------------------------------------------------------------
+// TwoProduct.
+
+// On the grid of exponent `c`, a value less than `top` cells from zero and
+// inside the limit is a float, whether or not any operand has exponent `c`.
+theorem Format::rep_fit(self F: Format, c: Nat, z: Int, m: OnGrid(c, z), hi: z < (F.top() * Nat::pow(2, Succ(c))).int(),
+    lo: -(F.top() * Nat::pow(2, Succ(c))).int() < z, lh: z < F.limit_h().int(), ll: -F.limit_h().int() < z): ∃ f: Finite(F), f.H() = z
+{
+    let P = Nat::pow(2, Succ(c));
+    match Int::le_dec(0, z) {
+        Inl(nn) => match on_grid_nonneg(c, z, m, nn) {
+            Exists(n, en) => {
+                let nt: (n < F.top()) = n.lt_of_mul_lt_mul_r(F.top(), P, omega(en, hi));
+                let d = F.down_exact(n * P, n, c, omega(en, lh), refl, omega(nt));
+                Exists(F.down(n * P), omega(d, en))
+            },
+        },
+        Inr(ng) => match on_grid_nonneg(c, -z, on_grid_neg(c, z, m), omega(ng)) {
+            Exists(n, en) => {
+                let nt: (n < F.top()) = n.lt_of_mul_lt_mul_r(F.top(), P, omega(en, lo));
+                let d = F.down_exact(n * P, n, c, omega(en, ll), refl, omega(nt));
+                let hn = Finite::H_of_neg(F.down(n * P));
+                Exists(-F.down(n * P), omega(d, en, hn))
+            },
+        },
+    }
+}
+
+// The error of a nearest rounding of a nonnegative value on the grid of
+// exponent `c`, with a significand below `top²` there, is a float: it is
+// on the grid (the cell is coarser, or the value is a float) and at most
+// half a cell, which is less than `top` grid steps.
+theorem Format::prod_err_pos(self F: Format, x: Rat, h, k, c: Nat, ex: x ≈ F.grid(h.int()), hk: h = k * Nat::pow(2, Succ(c)), kt: k < F.top() * F.top(),
+    range: x <= (Finite::max_finite(F)).val(), p: Finite(F), near: Finite::Nearest(x, p)): ∃ f: Finite(F), f.H() = h.int() - p.H()
+{
+    let a: F.Approx(x, h, False) = ex;
+    let gm = (Finite::max_finite(F)).val_grid();
+    let hm: (h.int() <= (Finite::max_finite(F)).H()) = F.le_of_grid_le(h.int(), (Finite::max_finite(F)).H(), linarith(ex, gm, range));
+    let lim = F.max_H_lt_limit();
+    let below: (h < F.limit_h()) = omega;
+    let e = F.e_of(h);
+    let P = Nat::pow(2, Succ(c));
+    match e.le_dec(c) {
+        Inl(ec) => {
+            let dd = F.down_of_le(h, k, c, below, hk, ec);
+            let pe = Finite::near_exact_H(p, F.down(h), h.int(), x, ex, dd, near);
+            let z: ((Finite::zero(F, False)).H() = 0) = refl;
+            Exists(Finite::zero(F, False), omega(pe, z))
+        },
+        Inr(ce) => {
+            let pk = F.e_of_spec(h);
+            let es: (e <= F.span) = pk.left;
+            let cs: (c <= F.span) = omega(es, ce);
+            let mX: OnGrid(c, h.int()) = Exists(k, Inl(Int::cong_ofnat(hk)));
+            let mP = F.nbr_grid(x, h.int(), ex, c, cs, mX, p, Finite::nearest_faithful(x, p, near));
+            let mD = on_grid_sub(c, h.int(), p.H(), mX, mP);
+            let Q = Nat::pow(2, e);
+            let be: ((F.down(h)).bexp = e) = (F.down_below(h, below)).right.right;
+            let ne: ((p.val() - x).abs() <= F.grid(Q.int())) = j(be, λ w _ => (p.val() - x).abs() <= F.grid(Nat::pow(2, w).int()),
+                F.nearest_err(x, h, False, a, below, range, p, near));
+            let q1: (p.val() - x <= (p.val() - x).abs()) = (p.val() - x).le_abs();
+            let q2: (-(p.val() - x) <= (p.val() - x).abs()) = (p.val() - x).neg_le_abs();
+            let gp = p.val_grid();
+            let s1 = F.grid_sub(p.H(), h.int());
+            let s2 = F.grid_sub(h.int(), p.H());
+            let u1: (p.H() - h.int() <= Q.int()) = F.le_of_grid_le(p.H() - h.int(), Q.int(), linarith(ex, gp, s1, q1, ne));
+            let u2: (h.int() - p.H() <= Q.int()) = F.le_of_grid_le(h.int() - p.H(), Q.int(), linarith(ex, gp, s2, q2, ne));
+            let big: (F.top() * Q <= h) = match pk.right.left {
+                Inl(z) => false_elim(omega(z, ce)),
+                Inr(b) => {
+                    let sh: (h.shr(e) * Q <= h) = Nat::shr_mul_le(e, h);
+                    let tb: (F.top() * Q <= h.shr(e) * Q) = Nat::mul_le_mono_r(Q, F.top(), h.shr(e), b);
+                    omega(sh, tb)
+                },
+            };
+            let pp: (0 < P) = Nat::pow_pos(a := 2, n := Succ(c));
+            let st: (Succ(k) * P <= (F.top() * F.top()) * P) = Nat::mul_le_mono_r(P, Succ(k), F.top() * F.top(), kt);
+            let sk: (Succ(k) * P = P + k * P) = k.mul_succ_left(P);
+            let r1: ((F.top() * F.top()) * P = (F.top() * P) * F.top()) = ring;
+            let r2: (F.top() * Q = Q * F.top()) = F.top().mul_comm(Q);
+            let ql: (Q < F.top() * P) = Q.lt_of_mul_lt_mul_r(F.top() * P, F.top(), omega(big, hk, st, sk, r1, r2));
+            let four = F.four_le_top();
+            let qt: (1 * Q <= F.top() * Q) = Nat::mul_le_mono_r(Q, 1, F.top(), omega(four));
+            let q1e: (1 * Q = Q) = Q.mul_left_one();
+            F.rep_fit(c, h.int() - p.H(), mD, omega(u2, ql), omega(u1, ql), omega(u2, big, below, qt, q1e), omega(u1, big, below, qt, q1e))
+        },
+    }
+}
+
+// A float's signed significand.
+theorem Finite::signed_cases({F: Format}, x: Finite(F)): x.signed() = x.mag.int() ∨ x.signed() = -x.mag.int() {
+    match x {
+        Finite(n, m, b, ok) => match n {
+            False => Inl(refl),
+            True => Inr(refl),
+        },
+    }
+}
+
+// The product of two signed significands, at a spacing: `±(m·n)` cells.
+theorem prod_cells(c, m, n: Nat, x, y: Int, hx: x = m.int() ∨ x = -m.int(), hy: y = n.int() ∨ y = -n.int()):
+    x * y * Nat::pow(2, Succ(c)).int() = ((m * n) * Nat::pow(2, Succ(c))).int() ∨ x * y * Nat::pow(2, Succ(c)).int() = -((m * n) * Nat::pow(2, Succ(c))).int()
+{
+    let P = Nat::pow(2, Succ(c));
+    let t: (m.int() * n.int() * P.int() = ((m * n) * P).int()) = refl;
+    let pos: ((-m.int()) * (-n.int()) * P.int() = m.int() * n.int() * P.int()) = ring;
+    let l: ((-m.int()) * n.int() * P.int() = -(m.int() * n.int() * P.int())) = ring;
+    let r: (m.int() * (-n.int()) * P.int() = -(m.int() * n.int() * P.int())) = ring;
+    match hx {
+        Inl(px) => match hy {
+            Inl(py) => Inl(rewrite(sym(px), sym(py), in := t)),
+            Inr(py) => Inr(rewrite(sym(px), sym(py), in := trans(r, Int::cong(λ (v: Int) => -v, t)))),
+        },
+        Inr(px) => match hy {
+            Inl(py) => Inr(rewrite(sym(px), sym(py), in := trans(l, Int::cong(λ (v: Int) => -v, t)))),
+            Inr(py) => Inl(rewrite(sym(px), sym(py), in := trans(pos, t))),
+        },
+    }
+}
+
+// The exact product on the half-unit grid, when its quantum `qa + qb` is
+// `c` above `qmin`.
+theorem Format::prod_grid(self F: Format, a, b: Finite(F), c: Nat, hc: a.q() + b.q() = F.qmin() + c.int()):
+    a.val() * b.val() ≈ F.grid(a.signed() * b.signed() * Nat::pow(2, Succ(c)).int())
+{
+    let rm: ((a.dyadic() * b.dyadic()).rat() ≈ a.val() * b.val()) = Dyadic::rat_mul(a.dyadic(), b.dyadic());
+    let al = Dyadic::align(a.signed() * b.signed(), F.qmin() - 1, Succ(c));
+    let ex: (F.qmin() - 1 + Succ(c).int() = a.q() + b.q()) = omega(hc);
+    let moved: (F.grid(a.signed() * b.signed() * Nat::pow(2, Succ(c)).int()) ≈ Dyadic(a.signed() * b.signed(), a.q() + b.q()).rat()) = rewrite(ex, in := al);
+    let pr: ((a.dyadic() * b.dyadic()).rat() ≈ Dyadic(a.signed() * b.signed(), a.q() + b.q()).rat()) = Rat::same_refl(Dyadic(a.signed() * b.signed(), a.q() + b.q()).rat());
+    Rat::same_trans(Rat::same_sym(rm), Rat::same_trans(pr, Rat::same_sym(moved)))
+}
+
+// `mul_err_H` past the sign of the product's cells (a separate theorem, as
+// for `two_sum_unflip`).
+theorem Finite::mul_err_cells({F: Format}, a, b, p: Finite(F), c: Nat, x: Rat, ex: x ≈ F.grid(a.signed() * b.signed() * Nat::pow(2, Succ(c)).int()),
+    range: x.abs() <= (Finite::max_finite(F)).val(), near: Finite::Nearest(x, p),
+    cells: a.signed() * b.signed() * Nat::pow(2, Succ(c)).int() = ((a.mag * b.mag) * Nat::pow(2, Succ(c))).int() ∨ a.signed() * b.signed() * Nat::pow(2, Succ(c)).int() = -((a.mag * b.mag) * Nat::pow(2, Succ(c))).int()):
+    ∃ f: Finite(F), f.H() = a.signed() * b.signed() * Nat::pow(2, Succ(c)).int() - p.H()
+{
+    let P = Nat::pow(2, Succ(c));
+    let X = a.signed() * b.signed() * P.int();
+    let k = a.mag * b.mag;
+    let ca = F.canonical_elim(a.mag, a.bexp, a.ok);
+    let cb = F.canonical_elim(b.mag, b.bexp, b.ok);
+    let sq: (Succ(a.mag) * Succ(b.mag) <= F.top() * F.top()) = Nat::mul_le_mono(Succ(a.mag), F.top(), Succ(b.mag), F.top(), ca.left, cb.left);
+    let ex2: (Succ(a.mag) * Succ(b.mag) = ((k + a.mag) + b.mag) + 1) = ring;
+    let kt: (k < F.top() * F.top()) = omega(sq, ex2);
+    let q1: (x <= x.abs()) = x.le_abs();
+    let q2: (-x <= x.abs()) = x.neg_le_abs();
+    match cells {
+        Inl(pos) => {
+            let ek: (x ≈ F.grid((k * P).int())) = j(pos, λ v _ => x ≈ F.grid(v), ex);
+            let eq: ((k * P).int() - p.H() = X - p.H()) = omega(pos);
+            j(eq, λ v _ => ∃ f: Finite(F), f.H() = v, F.prod_err_pos(x, k * P, k, c, ek, refl, kt, Rat::le_trans(q1, range), p, near))
+        },
+        Inr(neg) => {
+            let gx: (-F.grid(X) ≈ F.grid(-X)) = Rat::same_sym(Dyadic(X, F.qmin() - 1).rat_neg());
+            let mx: (-X = (k * P).int()) = omega(neg);
+            let ek: (-x ≈ F.grid((k * P).int())) = j(mx, λ v _ => -x ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(ex), gx));
+            let near2 = Finite::nearest_flip(x, p, near);
+            let hp = Finite::H_of_neg(p);
+            let eq: (-((k * P).int() - (-p).H()) = X - p.H()) = omega(hp, neg);
+            j(eq, λ v _ => ∃ f: Finite(F), f.H() = v, Finite::neg_exists((k * P).int() - (-p).H(), F.prod_err_pos(-x, k * P, k, c, ek, refl, kt, Rat::le_trans(q2, range), -p, near2)))
+        },
+    }
+}
+
+// The error of a nearest product off the subnormal grid, at half-units.
+theorem Finite::mul_err_H({F: Format}, a, b, p: Finite(F), c: Nat, x: Rat, ex: x ≈ F.grid(a.signed() * b.signed() * Nat::pow(2, Succ(c)).int()),
+    range: x.abs() <= (Finite::max_finite(F)).val(), near: Finite::Nearest(x, p)):
+    ∃ f: Finite(F), f.H() = a.signed() * b.signed() * Nat::pow(2, Succ(c)).int() - p.H()
+{
+    Finite::mul_err_cells(a, b, p, c, x, ex, range, near, prod_cells(c, a.mag, b.mag, a.signed(), b.signed(), Finite::signed_cases(a), Finite::signed_cases(b)))
+}
+
+// The error of a finite nearest product is a float, when the product's
+// quantum `qa + qb` is at least `qmin` (no underflow) and the product is
+// in range.
+theorem Finite::mul_error({F: Format}, a, b, p: Finite(F), even: Bool, c: Nat, hc: a.q() + b.q() = F.qmin() + c.int(),
+    range: (a.val() * b.val()).abs() <= (Finite::max_finite(F)).val(), is: a.mul(b, mode := Mode::nearest(even)) = Float::Fin(p)):
+    ∃ f: Finite(F), f.val() ≈ a.val() * b.val() - p.val()
+{
+    let hr = j(is, λ o _ => RoundsTo(F, Mode::nearest(even), a.val() * b.val(), o), Finite::mul_correct(a, b, Mode::nearest(even)));
+    let near = F.nearest_of_rounds(even, a.val() * b.val(), p, hr);
+    let ex = F.prod_grid(a, b, c, hc);
+    let X = a.signed() * b.signed() * Nat::pow(2, Succ(c)).int();
+    match Finite::mul_err_H(a, b, p, c, a.val() * b.val(), ex, range, near) {
+        Exists(f, fh) => {
+            let gf = Finite::val_of_H(f, X - p.H(), fh);
+            let gd = F.grid_sub(X, p.H());
+            let gp = p.val_grid();
+            Exists(f, Rat::le_antisymm(linarith(gf, gd, gp, ex), linarith(gf, gd, gp, ex)))
+        },
+    }
+}
+
+// TwoProduct: `p = ○(a·b)` in a nearest mode and `e = fma(a, b, -p)` in any
+// mode give `e = a·b - p` exactly...
+theorem Finite::two_product({F: Format}, a, b, p: Finite(F), even: Bool, mode: Mode, c: Nat, hc: a.q() + b.q() = F.qmin() + c.int(),
+    range: (a.val() * b.val()).abs() <= (Finite::max_finite(F)).val(), is: a.mul(b, mode := Mode::nearest(even)) = Float::Fin(p)):
+    (a.fma(b, -p, mode := mode)).Exact(a.val() * b.val() - p.val())
+{
+    let vn = Finite::val_neg(p);
+    let e: (a.val() * b.val() - p.val() ≈ a.val() * b.val() + (-p).val()) = Rat::le_antisymm(linarith(vn), linarith(vn));
+    let hr = F.rounds_respects(mode, a.val() * b.val() - p.val(), a.val() * b.val() + (-p).val(), e, a.fma(b, -p, mode := mode), Finite::fma_correct(a, b, -p, mode));
+    match Finite::mul_error(a, b, p, even, c, hc, range, is) {
+        Exists(f, fe) => F.exact_of_rounds(mode, a.val() * b.val() - p.val(), a.fma(b, -p, mode := mode), f, fe, hr),
+    }
+}
+
+// ...so `p + e = a·b`.
+theorem Finite::two_product_exact({F: Format}, a, b, p, e: Finite(F), even: Bool, mode: Mode, c: Nat, hc: a.q() + b.q() = F.qmin() + c.int(),
+    range: (a.val() * b.val()).abs() <= (Finite::max_finite(F)).val(), is: a.mul(b, mode := Mode::nearest(even)) = Float::Fin(p),
+    he: a.fma(b, -p, mode := mode) = Float::Fin(e)): p.val() + e.val() ≈ a.val() * b.val()
+{
+    let ee: (e.val() ≈ a.val() * b.val() - p.val()) = j(he, λ o _ => o.Exact(a.val() * b.val() - p.val()), Finite::two_product(a, b, p, even, mode, c, hc, range, is));
+    Rat::le_antisymm(linarith(ee), linarith(ee))
+}
+
+// ---------------------------------------------------------------------------
+// Veltkamp splitting.
+
+// A float at or above `half · 2^(k+1)` half-units has exponent at least `k`.
+theorem Finite::bexp_ge({F: Format}, f: Finite(F), k: Nat, ge: (F.half() * Nat::pow(2, Succ(k))).int() <= f.H()): k <= f.bexp {
+    let e = Finite::H_of_nonneg(f, omega(ge));
+    let B = Nat::pow(2, Succ(f.bexp));
+    let u: (f.units() * 2 = f.mag * B) = f.mag.mul_assoc(Nat::pow(2, f.bexp), 2);
+    let gc = F.canonical_elim(f.mag, f.bexp, f.ok);
+    match k.le_dec(f.bexp) as λ _ => k <= f.bexp {
+        Inl(le) => le,
+        Inr(gt) => {
+            let pk: (Nat::pow(2, Succ(Succ(f.bexp))) <= Nat::pow(2, Succ(k))) = Nat::pow_le_pow_r(2, Succ(Succ(f.bexp)), Succ(k), omega, omega(gt));
+            let st: (Succ(f.mag) * B <= F.top() * B) = Nat::mul_le_mono_r(B, Succ(f.mag), F.top(), gc.left);
+            let sk: (Succ(f.mag) * B = B + f.mag * B) = f.mag.mul_succ_left(B);
+            let r: ((F.half() * 2) * B = F.half() * (B * 2)) = ring;
+            let td: (F.top() = F.half() * 2) = F.top_double();
+            let hm: (F.half() * Nat::pow(2, Succ(Succ(f.bexp))) <= F.half() * Nat::pow(2, Succ(k))) = Nat::mul_le_mono_l(F.half(), Nat::pow(2, Succ(Succ(f.bexp))), Nat::pow(2, Succ(k)), pk);
+            let b2: (Nat::pow(2, Succ(Succ(f.bexp))) = B * 2) = refl;
+            let bp: (0 < B) = Nat::pow_pos(a := 2, n := Succ(f.bexp));
+            let tb: (F.top() * B = (F.half() * 2) * B) = Nat::cong(λ (w: Nat) => w * B, td);
+            let hb: (F.half() * Nat::pow(2, Succ(Succ(f.bexp))) = F.half() * (B * 2)) = Nat::cong(λ (w: Nat) => F.half() * w, b2);
+            false_elim(omega(e, u, st, sk, r, tb, hb, hm, bp, ge))
+        },
+    }
+}
+
+// A nearest float to a nonnegative grid value below `top · 2^(c+1)` is
+// within `2^c` half-units of it.
+theorem Format::near_err_at(self F: Format, x: Rat, h, c: Nat, ex: x ≈ F.grid(h.int()), lt: h < F.top() * Nat::pow(2, Succ(c)),
+    range: x <= (Finite::max_finite(F)).val(), p: Finite(F), near: Finite::Nearest(x, p)):
+    p.H() - h.int() <= Nat::pow(2, c).int() ∧ h.int() - p.H() <= Nat::pow(2, c).int()
+{
+    let a: F.Approx(x, h, False) = ex;
+    let gm = (Finite::max_finite(F)).val_grid();
+    let hm: (h.int() <= (Finite::max_finite(F)).H()) = F.le_of_grid_le(h.int(), (Finite::max_finite(F)).H(), linarith(ex, gm, range));
+    let lim = F.max_H_lt_limit();
+    let below: (h < F.limit_h()) = omega;
+    let e = F.e_of(h);
+    let ec: (e <= c) = F.e_of_le(h, c, lt);
+    let Q = Nat::pow(2, e);
+    let be: ((F.down(h)).bexp = e) = (F.down_below(h, below)).right.right;
+    let ne: ((p.val() - x).abs() <= F.grid(Q.int())) = j(be, λ w _ => (p.val() - x).abs() <= F.grid(Nat::pow(2, w).int()),
+        F.nearest_err(x, h, False, a, below, range, p, near));
+    let q1: (p.val() - x <= (p.val() - x).abs()) = (p.val() - x).le_abs();
+    let q2: (-(p.val() - x) <= (p.val() - x).abs()) = (p.val() - x).neg_le_abs();
+    let gp = p.val_grid();
+    let s1 = F.grid_sub(p.H(), h.int());
+    let s2 = F.grid_sub(h.int(), p.H());
+    let u1: (p.H() - h.int() <= Q.int()) = F.le_of_grid_le(p.H() - h.int(), Q.int(), linarith(ex, gp, s1, q1, ne));
+    let u2: (h.int() - p.H() <= Q.int()) = F.le_of_grid_le(h.int() - p.H(), Q.int(), linarith(ex, gp, s2, q2, ne));
+    let qc: (Q <= Nat::pow(2, c)) = Nat::pow_le_pow_r(2, e, c, omega, ec);
+    And(omega(u1, qc), omega(u2, qc))
+}
+
+// A nearest float to a value some float has is at that value (the float
+// still packed).
+theorem Finite::near_exact_rep({F: Format}, s: Finite(F), X: Int, x: Rat, ex: x ≈ F.grid(X), r: ∃ f: Finite(F), f.H() = X, near: Finite::Nearest(x, s)): s.H() = X {
+    match r as λ _ => s.H() = X {
+        Exists(f, fh) => Finite::near_exact_H(s, f, X, x, ex, fh, near),
+    }
+}
+
+// A value on the grid at or below the largest float's half-units is at most
+// its value.
+theorem Format::le_max_of_grid(self F: Format, x: Rat, X: Int, ex: x ≈ F.grid(X), le: X <= (Finite::max_finite(F)).H()): x <= (Finite::max_finite(F)).val() {
+    let gm = (Finite::max_finite(F)).val_grid();
+    linarith(ex, gm, F.grid_le(X, (Finite::max_finite(F)).H(), le))
+}
+
+// Veltkamp at a positive normal `x` (mantissa `m`, cell `P = 2^(c+1)`
+// half-units) and `S = 2^s`, in steps. `Q = S·P` is the coarse grid.
+// `g >= half · Q`: the float `half · Q` is at or below `(S + 1)·x`.
+theorem Format::vk_gq(self F: Format, x, g: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    normal: F.half() <= x.mag, range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H()
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let cxe: ((m * (S + 1)) * P = m * (S * P) + m * P) = ring;
+    let mq: (m * Q = m * (S * P)) = Nat::cong(λ (w: Nat) => m * w, qsp);
+    let hmq: (h * Q <= m * Q) = Nat::mul_le_mono_r(Q, h, m, normal);
+    let lim = F.max_H_lt_limit();
+    let td: (F.top() = h * 2) = F.top_double();
+    let hp: (0 < h) = Format::half_pos(F := F);
+    let below: (h * Q < F.limit_h()) = omega(hmq, cxe, mq, range, lim);
+    let fit: (Succ(h) <= F.top()) = omega(td, hp);
+    let fhq = F.down_exact(h * Q, h, c + s, below, refl, fit);
+    let gq0: ((F.down(h * Q)).H() <= g.H()) = Finite::near_ge(g, F.down(h * Q), ((m * (S + 1)) * P).int(), cx, ecx, omega(fhq, hmq, cxe, mq), ng);
+    omega(gq0, fhq)
+}
+
+// `|g - (S + 1)·x| <= Q`: the cut of `(S + 1)·x` is below `top · 2Q`.
+theorem Format::vk_gerr(self F: Format, x, g: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    s1: 1 <= s, range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    g.H() - ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= Nat::pow(2, Succ(x.bexp + s)).int()
+        ∧ ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() - g.H() <= Nat::pow(2, Succ(x.bexp + s)).int()
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let CX = (m * (S + 1)) * P;
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let qp: (0 < Q) = Nat::pow_pos(a := 2, n := Succ(c + s));
+    let s2a: (Nat::pow(2, 1) <= S) = Nat::pow_le_pow_r(2, 1, s, omega, s1);
+    let p21: (Nat::pow(2, 1) = 2) = refl;
+    let s2: (2 <= S) = omega(s2a, p21);
+    let gc = F.canonical_elim(m, c, x.ok);
+    let cxe: (CX = m * (S * P) + m * P) = ring;
+    let mq: (m * Q = m * (S * P)) = Nat::cong(λ (w: Nat) => m * w, qsp);
+    let mlt: (Succ(m) * Q <= F.top() * Q) = Nat::mul_le_mono_r(Q, Succ(m), F.top(), gc.left);
+    let msq: (Succ(m) * Q = Q + m * Q) = m.mul_succ_left(Q);
+    let twoP: (2 * P <= S * P) = Nat::mul_le_mono_r(P, 2, S, s2);
+    let twoPe: (2 * P = P + P) = ring;
+    let mPQ: (m * P <= m * Q) = Nat::mul_le_mono_l(m, P, Q, omega(twoP, twoPe, qsp));
+    let rg: (cx <= (Finite::max_finite(F)).val()) = F.le_max_of_grid(cx, CX.int(), ecx, range);
+    let pq: (Nat::pow(2, Succ(Succ(c + s))) = Q * 2) = refl;
+    let tq2a: (F.top() * (Q * 2) = F.top() * Q + F.top() * Q) = ring;
+    let tq2: (F.top() * Nat::pow(2, Succ(Succ(c + s))) = F.top() * Q + F.top() * Q) = trans(Nat::cong(λ (w: Nat) => F.top() * w, pq), tq2a);
+    F.near_err_at(cx, CX, Succ(c + s), ecx, omega(cxe, mq, mPQ, mlt, msq, tq2, qp), rg, g, ng)
+}
+
+// At `x = half · P`, `(S + 1)·x` is `R·(S + 1)` cells of the coarse grid
+// (`half = R·S`), a float, so `g` is it.
+theorem Format::vk_gexact(self F: Format, x, g: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    mE: x.mag = F.half(), s1: 1 <= s, sp: s <= F.frac, range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    g.H() = ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let CX = (m * (S + 1)) * P;
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let td: (F.top() = h * 2) = F.top_double();
+    let s2a: (Nat::pow(2, 1) <= S) = Nat::pow_le_pow_r(2, 1, s, omega, s1);
+    let p21: (Nat::pow(2, 1) = 2) = refl;
+    let s2: (2 <= S) = omega(s2a, p21);
+    let fs: ((F.frac - s) + s = F.frac) = Nat::sub_add_cancel(s, F.frac, sp);
+    let R = Nat::pow(2, F.frac - s);
+    let hr: (h = R * S) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(fs)), Nat::pow_add(2, F.frac - s, s));
+    let rp: (0 < R) = Nat::pow_pos(a := 2, n := F.frac - s);
+    let lim = F.max_H_lt_limit();
+    let c1: ((m * (S + 1)) * P = ((R * S) * (S + 1)) * P) = Nat::cong(λ (w: Nat) => (w * (S + 1)) * P, trans(mE, hr));
+    let r1: (((R * S) * (S + 1)) * P = (R * (S + 1)) * (S * P)) = ring;
+    let c2: ((R * (S + 1)) * Q = (R * (S + 1)) * (S * P)) = Nat::cong(λ (w: Nat) => (R * (S + 1)) * w, qsp);
+    let hk: (CX = (R * (S + 1)) * Q) = omega(c1, r1, c2);
+    let rs: (R * (S + 1) = R * S + R) = ring;
+    let r2: (R * 2 <= R * S) = Nat::mul_le_mono_l(R, 2, S, s2);
+    let nt: (Succ(R * (S + 1)) <= F.top()) = omega(rs, r2, hr, td, rp);
+    let bl: (CX < F.limit_h()) = omega(range, lim);
+    let fx = F.down_exact(CX, R * (S + 1), c + s, bl, hk, nt);
+    Finite::near_exact_H(g, F.down(CX), CX.int(), cx, ecx, fx, ng)
+}
+
+// `g - x >= half · Q`.
+theorem Format::vk_kq(self F: Format, x, g: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    xn: x.neg = False, normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H()
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let ux: (x.units() * 2 = m * P) = m.mul_assoc(Nat::pow(2, c), 2);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let cxe: ((m * (S + 1)) * P = m * (S * P) + m * P) = ring;
+    let mq: (m * Q = m * (S * P)) = Nat::cong(λ (w: Nat) => m * w, qsp);
+    match m.le_dec(h) as λ _ => (h * Q).int() <= g.H() - x.H() {
+        Inl(mh) => {
+            let mE: (m = h) = omega(mh, normal);
+            let gx = F.vk_gexact(x, g, s, cx, ecx, ng, mE, s1, sp, range);
+            let hm2: (m * Q = h * Q) = Nat::cong(λ (w: Nat) => w * Q, mE);
+            omega(gx, eX, ux, cxe, mq, hm2)
+        },
+        Inr(mh) => {
+            // `g >= (S + 1)·x - Q >= x + half · Q`.
+            let e2 = (F.vk_gerr(x, g, s, cx, ecx, ng, s1, range)).right;
+            let h1q: (Succ(h) * Q <= m * Q) = Nat::mul_le_mono_r(Q, Succ(h), m, omega(mh));
+            let hsq: (Succ(h) * Q = Q + h * Q) = h.mul_succ_left(Q);
+            omega(e2, eX, ux, cxe, mq, h1q, hsq)
+        },
+    }
+}
+
+// `x < half · Q`.
+theorem Format::vk_xq(self F: Format, x: Finite(F), s: Nat, xn: x.neg = False, s1: 1 <= s): x.H() < (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() {
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let td: (F.top() = h * 2) = F.top_double();
+    let pp: (0 < P) = Nat::pow_pos(a := 2, n := Succ(c));
+    let s2a: (Nat::pow(2, 1) <= S) = Nat::pow_le_pow_r(2, 1, s, omega, s1);
+    let p21: (Nat::pow(2, 1) = 2) = refl;
+    let s2: (2 <= S) = omega(s2a, p21);
+    let gc = F.canonical_elim(m, c, x.ok);
+    let ux: (x.units() * 2 = m * P) = m.mul_assoc(Nat::pow(2, c), 2);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let hq: (h * Q = h * (S * P)) = Nat::cong(λ (w: Nat) => h * w, qsp);
+    let mlp: (Succ(m) * P <= F.top() * P) = Nat::mul_le_mono_r(P, Succ(m), F.top(), gc.left);
+    let msp: (Succ(m) * P = P + m * P) = m.mul_succ_left(P);
+    let tp: (F.top() * P = (h * 2) * P) = Nat::cong(λ (w: Nat) => w * P, td);
+    let h2s: (h * 2 <= h * S) = Nat::mul_le_mono_l(h, 2, S, s2);
+    let h2p: ((h * 2) * P <= (h * S) * P) = Nat::mul_le_mono_r(P, h * 2, h * S, h2s);
+    let hsp: ((h * S) * P = h * (S * P)) = h.mul_assoc(S, P);
+    omega(eX, ux, mlp, msp, tp, h2p, hsp, hq, pp)
+}
+
+// The float `half · Q` from `g - x >= half · Q` (with `x >= 0`).
+theorem Format::vk_hq({F: Format}, x, g: Finite(F), s: Nat, xn: x.neg = False, kq: (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H()):
+    (F.down(F.half() * Nat::pow(2, Succ(x.bexp + s)))).H() = (F.half() * Nat::pow(2, Succ(x.bexp + s))).int()
+{
+    let h = F.half();
+    let Q = Nat::pow(2, Succ(x.bexp + s));
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let lim = F.max_H_lt_limit();
+    let mx = Finite::H_le_max(g);
+    let below: (h * Q < F.limit_h()) = omega(kq, mx, lim, eX);
+    let td: (F.top() = h * 2) = F.top_double();
+    let hp: (0 < h) = Format::half_pos(F := F);
+    F.down_exact(h * Q, h, x.bexp + s, below, refl, omega(td, hp))
+}
+
+// `d <= -half · Q`, so `d` is on the coarse grid.
+theorem Format::vk_db(self F: Format, x, g, d: Finite(F), s: Nat, dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, kq: (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H()): x.bexp + s <= d.bexp
+{
+    let h = F.half();
+    let Q = Nat::pow(2, Succ(x.bexp + s));
+    let Fq = F.down(h * Q);
+    let fhq: (Fq.H() = (h * Q).int()) = Format::vk_hq(x, g, s, xn, kq);
+    let nf = Finite::H_of_neg(Fq);
+    let dq: (d.H() <= (-Fq).H()) = Finite::near_le(d, -Fq, x.H() - g.H(), dx, edx, omega(nf, fhq, kq), nd);
+    let nd2 = Finite::H_of_neg(d);
+    let ndq: ((h * Q).int() <= (-d).H()) = omega(dq, nf, fhq, nd2);
+    Finite::bexp_ge(-d, x.bexp + s, ndq)
+}
+
+// `-d` is a nearest float to `g - x`.
+theorem Format::vk_flip(self F: Format, x, g, d: Finite(F), dx: Rat, edx: dx ≈ F.grid(x.H() - g.H())): -dx ≈ F.grid(g.H() - x.H()) {
+    let gk: (-F.grid(x.H() - g.H()) ≈ F.grid(-(x.H() - g.H()))) = Rat::same_sym(Dyadic(x.H() - g.H(), F.qmin() - 1).rat_neg());
+    let kk: (-(x.H() - g.H()) = g.H() - x.H()) = omega;
+    j(kk, λ v _ => -dx ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(edx), gk))
+}
+
+// `g/2 <= -d <= g`: Sterbenz makes `g + d` a float.
+theorem Format::vk_xh(self F: Format, x, g, d: Finite(F), s: Nat, dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, s1: 1 <= s, kq: (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H(),
+    xq: x.H() < (F.half() * Nat::pow(2, Succ(x.bexp + s))).int(), gb: x.bexp + s <= g.bexp):
+    ∃ f: Finite(F), f.H() = g.H() + d.H()
+{
+    let K = g.H() - x.H();
+    let edk = F.vk_flip(x, g, d, dx, edx);
+    let ndk = Finite::nearest_flip(dx, d, nd);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let up: ((-d).H() <= g.H()) = Finite::near_le(-d, g, K, -dx, edk, omega(eX), ndk);
+    let gn: (0 <= g.H()) = omega(kq, eX);
+    let lo: (g.H() <= (-d).H() + (-d).H()) = match F.half_float(g, gn, omega(gb, s1)) as λ _ => g.H() <= (-d).H() + (-d).H() {
+        Exists(D, dh) => {
+            let dk = Finite::near_ge(-d, D, K, -dx, edk, omega(dh, kq, xq, eX), ndk);
+            omega(dk, dh)
+        },
+    };
+    let nd2 = Finite::H_of_neg(d);
+    let xhe: (g.H() - (-d).H() = g.H() + d.H()) = omega(nd2);
+    j(xhe, λ v _ => ∃ f: Finite(F), f.H() = v, Finite::sterbenz_H(g, -d, omega(up, gn), lo))
+}
+
+// `|x - (g + d)| <= Q/2` from `-d` nearest to `g - x = Kn <= T = top · Q`
+// half-units (`Kn` and `T` as variables, so the case split does not
+// reduce them).
+theorem Format::vk_bound_at(self F: Format, x, g, d: Finite(F), s: Nat, dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, Kn, T: Nat, kn: Kn.int() = g.H() - x.H(), kt: Kn <= T, eT: T = F.half() * Nat::pow(2, Succ(Succ(x.bexp + s)))):
+    x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H())
+{
+    let E = Nat::pow(2, x.bexp + s);
+    let lim = F.max_H_lt_limit();
+    let mx = Finite::H_le_max(g);
+    let td: (F.top() = F.half() * 2) = F.top_double();
+    let hp: (0 < F.half()) = Format::half_pos(F := F);
+    let edk = F.vk_flip(x, g, d, dx, edx);
+    let ndk = Finite::nearest_flip(dx, d, nd);
+    let nd2 = Finite::H_of_neg(d);
+    let edk2: (-dx ≈ F.grid(Kn.int())) = j(sym(kn), λ v _ => -dx ≈ F.grid(v), edk);
+    let ep: (0 <= E.int()) = omega;
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    match Succ(Kn).le_dec(T) as λ _ => x.H() - (g.H() + d.H()) <= E.int() ∧ -E.int() <= x.H() - (g.H() + d.H()) {
+        Inl(lt) => {
+            let rk: (-dx <= (Finite::max_finite(F)).val()) = F.le_max_of_grid(-dx, Kn.int(), edk2, omega(kn, mx, eX));
+            let Q = Nat::pow(2, Succ(x.bexp + s));
+            let q2a: (F.top() * Q = (F.half() * 2) * Q) = Nat::cong(λ (w: Nat) => w * Q, td);
+            let q2b: ((F.half() * 2) * Q = F.half() * (Q * 2)) = ring;
+            let q2c: (F.half() * Nat::pow(2, Succ(Succ(x.bexp + s))) = F.half() * (Q * 2)) = Nat::cong(λ (w: Nat) => F.half() * w, refl);
+            let w = F.near_err_at(-dx, Kn, x.bexp + s, edk2, omega(lt, eT, q2a, q2b, q2c), rk, -d, ndk);
+            let w1 = w.left;
+            let w2 = w.right;
+            And(omega(w1, w2, kn, nd2), omega(w1, w2, kn, nd2))
+        },
+        Inr(ge) => {
+            // `g - x = top · Q` exactly: a float, so `-d` is it and the error is 0.
+            let hk: (Kn = F.half() * Nat::pow(2, Succ(Succ(x.bexp + s)))) = omega(ge, kt, eT);
+            let bl: (Kn < F.limit_h()) = omega(kn, mx, lim, eX);
+            let fk = F.down_exact(Kn, F.half(), Succ(x.bexp + s), bl, hk, omega(td, hp));
+            let ek = Finite::near_exact_H(-d, F.down(Kn), Kn.int(), -dx, edk2, fk, ndk);
+            And(omega(ek, kn, nd2, ep), omega(ek, kn, nd2, ep))
+        },
+    }
+}
+
+// The arithmetic of `vk_bound`'s `g - x <= top · Q`, over variables so
+// `omega` does not see the products' structure.
+theorem Format::vk_kt_arith(K, G, X, C, mSP, mP, mQ, Q, sQ, tQ: Nat, gH, xH: Int,
+    kn: K.int() = gH - xH, e1: gH - C.int() <= Q.int(), cxe: C = mSP + mP, mq: mQ = mSP,
+    eX: xH = X.int(), ux: X = mP, mlt: sQ <= tQ, msq: sQ = Q + mQ): K <= tQ
+{
+    omega(kn, e1, cxe, mq, eX, ux, mlt, msq)
+}
+
+theorem Format::vk_kn_arith(G, X, mP, hQ: Nat, gH, xH: Int, eg: gH = G.int(), eX: xH = X.int(), ux: X = mP,
+    kq: hQ.int() <= gH - xH): (G - mP).int() = gH - xH
+{
+    omega(eg, eX, ux, kq)
+}
+
+// `|x - (g + d)| <= Q/2`: `-d` is a nearest float to `g - x <= top · Q`.
+theorem Format::vk_bound(self F: Format, x, g, d: Finite(F), s: Nat, dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, kq: (F.half() * Nat::pow(2, Succ(x.bexp + s))).int() <= g.H() - x.H(),
+    e1: g.H() - ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= Nat::pow(2, Succ(x.bexp + s)).int()):
+    x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H())
+{
+    let c = x.bexp;
+    let m = x.mag;
+    let h = F.half();
+    let P = Nat::pow(2, Succ(c));
+    let S = Nat::pow(2, s);
+    let Q = Nat::pow(2, Succ(c + s));
+    let ex1: (s + Succ(c) = Succ(c + s)) = omega;
+    let qsp: (Q = S * P) = trans(Nat::cong(λ (w: Nat) => Nat::pow(2, w), sym(ex1)), Nat::pow_add(2, s, Succ(c)));
+    let td: (F.top() = h * 2) = F.top_double();
+    let gc = F.canonical_elim(m, c, x.ok);
+    let ux: (x.units() * 2 = m * P) = m.mul_assoc(Nat::pow(2, c), 2);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let cxe: ((m * (S + 1)) * P = m * (S * P) + m * P) = ring;
+    let mq: (m * Q = m * (S * P)) = Nat::cong(λ (w: Nat) => m * w, qsp);
+    let mlt: (Succ(m) * Q <= F.top() * Q) = Nat::mul_le_mono_r(Q, Succ(m), F.top(), gc.left);
+    let msq: (Succ(m) * Q = Q + m * Q) = m.mul_succ_left(Q);
+    let gn: (0 <= g.H()) = omega(kq, eX);
+    let eg = Finite::H_of_nonneg(g, gn);
+    let kn: ((g.units() * 2 - m * P).int() = g.H() - x.H()) = Format::vk_kn_arith(g.units() * 2, x.units() * 2, m * P,
+        h * Q, g.H(), x.H(), eg, eX, ux, kq);
+    let tq: (F.top() * Q = (h * 2) * Q) = Nat::cong(λ (w: Nat) => w * Q, td);
+    let r3: ((h * 2) * Q = h * (Q * 2)) = ring;
+    let pq2: (h * Nat::pow(2, Succ(Succ(c + s))) = h * (Q * 2)) = Nat::cong(λ (w: Nat) => h * w, refl);
+    let kt: (g.units() * 2 - m * P <= F.top() * Q) = Format::vk_kt_arith(g.units() * 2 - m * P, g.units() * 2, x.units() * 2,
+        (m * (S + 1)) * P, m * (S * P), m * P, m * Q, Q, Succ(m) * Q, F.top() * Q, g.H(), x.H(), kn, e1, cxe, mq, eX, ux, mlt, msq);
+    F.vk_bound_at(x, g, d, s, dx, edx, nd, xn, g.units() * 2 - m * P, F.top() * Q, kn, kt, trans(trans(tq, r3), sym(pq2)))
+}
+
+// Veltkamp at a positive normal `x`, at half-units: for `g` nearest to
+// `(S + 1)·x` and `d` nearest to `x - g`, `g + d` is a float on the grid
+// `s` exponents above `x`'s, and `x - (g + d)` is a float within half that
+// grid's spacing (the rounding error of `d`).
+theorem Format::veltkamp_pos(self F: Format, x, g, d: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()), ng: Finite::Nearest(cx, g),
+    dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    range: ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H())
+        ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H()))
+        ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))
+{
+    let gq = F.vk_gq(x, g, s, cx, ecx, ng, normal, range);
+    let gb: (x.bexp + s <= g.bexp) = Finite::bexp_ge(g, x.bexp + s, gq);
+    let kq = F.vk_kq(x, g, s, cx, ecx, ng, xn, normal, s1, sp, range);
+    let xq = F.vk_xq(x, s, xn, s1);
+    let db = F.vk_db(x, g, d, s, dx, edx, nd, xn, kq);
+    let e1 = (F.vk_gerr(x, g, s, cx, ecx, ng, s1, range)).left;
+    let ng2 = Finite::H_of_neg(g);
+    let xg: (x.H() - g.H() = x.H() + (-g).H()) = omega(ng2);
+    let edx2: (dx ≈ F.grid(x.H() + (-g).H())) = j(xg, λ v _ => dx ≈ F.grid(v), edx);
+    let xle: ((x.H() + (-g).H()) - d.H() = x.H() - (g.H() + d.H())) = omega(ng2);
+    And(F.vk_xh(x, g, d, s, dx, edx, nd, xn, s1, kq, xq, gb),
+        And(on_grid_add(x.bexp + s, g.H(), d.H(), Finite::H_on_grid(g, x.bexp + s, gb), Finite::H_on_grid(d, x.bexp + s, db)),
+            And(j(xle, λ v _ => ∃ f: Finite(F), f.H() = v, Finite::add_err_H(x, -g, d, dx, edx2, nd)),
+                F.vk_bound(x, g, d, s, dx, edx, nd, xn, kq, e1))))
+}
+
+// `(2^s + 1)·x` at half-units for a positive `x`: `m·(2^s + 1)·2^(c+1)`.
+theorem Format::vk_cxt(self F: Format, x: Finite(F), s: Nat, xn: x.neg = False):
+    (Nat::pow(2, s) + 1).int() * x.H() = ((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int()
+{
+    let m = x.mag;
+    let C = (Nat::pow(2, s) + 1);
+    let P = Nat::pow(2, Succ(x.bexp));
+    let ux: (x.units() * 2 = m * P) = m.mul_assoc(Nat::pow(2, x.bexp), 2);
+    let eX: (x.H() = (x.units() * 2).int()) = Finite::H_pos(x, xn);
+    let hx: (x.H() = (m * P).int()) = omega(eX, ux);
+    let r: (C * (m * P) = (m * C) * P) = ring;
+    let i1: ((C * (m * P)).int() = ((m * C) * P).int()) = Int::cong_of(λ (w: Nat) => w.int(), r);
+    let i2: ((C * (m * P)).int() = C.int() * (m * P).int()) = Nat::int_mul(C, m * P);
+    let ec: (C.int() * x.H() = C.int() * (m * P).int()) = Int::cong(λ (v: Int) => C.int() * v, hx);
+    trans(ec, trans(sym(i2), i1))
+}
+
+// `veltkamp_pos` with `(2^s + 1)·x` read off `x`'s half-units.
+theorem Format::veltkamp_posH(self F: Format, x, g, d: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid((Nat::pow(2, s) + 1).int() * x.H()), ng: Finite::Nearest(cx, g),
+    dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    xn: x.neg = False, normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    hi: (Nat::pow(2, s) + 1).int() * x.H() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H())
+        ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H()))
+        ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))
+{
+    let e = F.vk_cxt(x, s, xn);
+    let ecx2: (cx ≈ F.grid(((x.mag * (Nat::pow(2, s) + 1)) * Nat::pow(2, Succ(x.bexp))).int())) = j(e, λ v _ => cx ≈ F.grid(v), ecx);
+    F.veltkamp_pos(x, g, d, s, cx, ecx2, ng, dx, edx, nd, xn, normal, s1, sp, omega(e, hi))
+}
+
+// The facts of `veltkamp_posH` at `-x`, `-g`, `-d`, read back (a separate
+// theorem, as for `two_sum_unflip`).
+theorem Finite::vk_unflip({F: Format}, x, g, d: Finite(F), s: Nat,
+    w: (∃ f: Finite(F), f.H() = (-g).H() + (-d).H()) ∧ OnGrid(x.bexp + s, (-g).H() + (-d).H()) ∧ (∃ f: Finite(F), f.H() = (-x).H() - ((-g).H() + (-d).H())) ∧ ((-x).H() - ((-g).H() + (-d).H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= (-x).H() - ((-g).H() + (-d).H()))):
+    (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H())
+        ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H()))
+        ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))
+{
+    let hx = Finite::H_of_neg(x);
+    let hg = Finite::H_of_neg(g);
+    let hd = Finite::H_of_neg(d);
+    let e1: (-((-g).H() + (-d).H()) = g.H() + d.H()) = omega(hg, hd);
+    let e3: (-((-x).H() - ((-g).H() + (-d).H())) = x.H() - (g.H() + d.H())) = omega(hx, hg, hd);
+    let a1: (∃ f: Finite(F), f.H() = g.H() + d.H()) = j(e1, λ v _ => ∃ f: Finite(F), f.H() = v, Finite::neg_exists((-g).H() + (-d).H(), w.left));
+    let a2: OnGrid(x.bexp + s, g.H() + d.H()) = j(e1, λ v _ => OnGrid(x.bexp + s, v), on_grid_neg(x.bexp + s, (-g).H() + (-d).H(), w.right.left));
+    let a3: (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H())) = j(e3, λ v _ => ∃ f: Finite(F), f.H() = v,
+        Finite::neg_exists((-x).H() - ((-g).H() + (-d).H()), w.right.right.left));
+    let w4 = w.right.right.right;
+    let b1 = w4.left;
+    let b2 = w4.right;
+    And(a1, And(a2, And(a3, And(omega(b1, b2, hx, hg, hd), omega(b1, b2, hx, hg, hd)))))
+}
+
+// A float's sign bit is one of the two.
+theorem Finite::sign_cases({F: Format}, x: Finite(F)): x.neg = False ∨ x.neg = True {
+    match x as λ y => y.neg = False ∨ y.neg = True {
+        Finite(n, m, b, ok) => match n as λ t => (Finite(t, m, b, ok)).neg = False ∨ (Finite(t, m, b, ok)).neg = True {
+            False => Inl(refl),
+            True => Inr(refl),
+        },
+    }
+}
+
+// Veltkamp at a normal `x` of either sign, at half-units: a negative `x`
+// is `veltkamp_posH` at `-x`, `-g`, `-d`.
+theorem Format::veltkamp_H(self F: Format, x, g, d: Finite(F), s: Nat,
+    cx: Rat, ecx: cx ≈ F.grid((Nat::pow(2, s) + 1).int() * x.H()), ng: Finite::Nearest(cx, g),
+    dx: Rat, edx: dx ≈ F.grid(x.H() - g.H()), nd: Finite::Nearest(dx, d),
+    normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    lo: -(Finite::max_finite(F)).H() <= (Nat::pow(2, s) + 1).int() * x.H(), hi: (Nat::pow(2, s) + 1).int() * x.H() <= (Finite::max_finite(F)).H()):
+    (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H())
+        ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H()))
+        ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))
+{
+    match Finite::sign_cases(x) as λ _ => ((∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H()) ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H())) ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))) {
+        Inl(xn) => F.veltkamp_posH(x, g, d, s, cx, ecx, ng, dx, edx, nd, xn, normal, s1, sp, hi),
+        Inr(xt) => {
+            let C = (Nat::pow(2, s) + 1);
+            let yn: ((-x).neg = False) = j(sym(xt), λ b _ => !b = False, refl);
+            let hx = Finite::H_of_neg(x);
+            let hg = Finite::H_of_neg(g);
+            let X = C.int() * x.H();
+            let r: (C.int() * -x.H() = -X) = ring;
+            let r2: (C.int() * (-x).H() = C.int() * -x.H()) = Int::cong(λ (v: Int) => C.int() * v, hx);
+            let nx: (C.int() * (-x).H() = -X) = trans(r2, r);
+            let gx: (-F.grid(X) ≈ F.grid(-X)) = Rat::same_sym(Dyadic(X, F.qmin() - 1).rat_neg());
+            let ecx2: (-cx ≈ F.grid(C.int() * (-x).H())) = j(sym(nx), λ v _ => -cx ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(ecx), gx));
+            let D = x.H() - g.H();
+            let gd: (-F.grid(D) ≈ F.grid(-D)) = Rat::same_sym(Dyadic(D, F.qmin() - 1).rat_neg());
+            let sd: (-D = (-x).H() - (-g).H()) = omega(hx, hg);
+            let edx2: (-dx ≈ F.grid((-x).H() - (-g).H())) = j(sd, λ v _ => -dx ≈ F.grid(v), Rat::same_trans(Rat::neg_respects(edx), gd));
+            let ng2 = Finite::nearest_flip(cx, g, ng);
+            let nd2 = Finite::nearest_flip(dx, d, nd);
+            Finite::vk_unflip(x, g, d, s, F.veltkamp_posH(-x, -g, -d, s, -cx, ecx2, ng2, -dx, edx2, nd2, yn, normal, s1, sp, omega(nx, lo)))
+        },
+    }
+}
+
+// A sum in any mode that some float equals is that float, at half-units.
+theorem Finite::add_exact_H({F: Format}, a, b, r: Finite(F), mode: Mode, e: ∃ f: Finite(F), f.H() = a.H() + b.H(),
+    h: a.add(b, mode := mode) = Float::Fin(r)): r.H() = a.H() + b.H()
+{
+    let ga = a.val_grid();
+    let gb = b.val_grid();
+    let gr = r.val_grid();
+    let sab = F.grid_add(a.H(), b.H());
+    match e as λ _ => r.H() = a.H() + b.H() {
+        Exists(f, fh) => {
+            let v = Finite::val_of_H(f, a.H() + b.H(), fh);
+            let ev: (f.val() ≈ a.val() + b.val()) = Rat::le_antisymm(linarith(v, sab, ga, gb), linarith(v, sab, ga, gb));
+            let er: (r.val() ≈ a.val() + b.val()) = j(h, λ o _ => o.Exact(a.val() + b.val()),
+                F.exact_of_rounds(mode, a.val() + b.val(), a.add(b, mode := mode), f, ev, Finite::add_correct(a, b, mode)));
+            let u1 = F.le_of_grid_le(r.H(), a.H() + b.H(), linarith(er, gr, sab, ga, gb));
+            let u2 = F.le_of_grid_le(a.H() + b.H(), r.H(), linarith(er, gr, sab, ga, gb));
+            omega(u1, u2)
+        },
+    }
+}
+
+// The same for a difference.
+theorem Finite::sub_exact_H({F: Format}, a, b, r: Finite(F), mode: Mode, e: ∃ f: Finite(F), f.H() = a.H() - b.H(),
+    h: a.sub(b, mode := mode) = Float::Fin(r)): r.H() = a.H() - b.H()
+{
+    let ga = a.val_grid();
+    let gb = b.val_grid();
+    let gr = r.val_grid();
+    let sab = F.grid_sub(a.H(), b.H());
+    match e as λ _ => r.H() = a.H() - b.H() {
+        Exists(f, fh) => {
+            let er: (r.val() ≈ a.val() - b.val()) = j(h, λ o _ => o.Exact(a.val() - b.val()),
+                F.exact_of_rounds(mode, a.val() - b.val(), a.sub(b, mode := mode), f, Finite::val_of_diff(a, b, f, fh), Finite::sub_correct(a, b, mode)));
+            let u1 = F.le_of_grid_le(r.H(), a.H() - b.H(), linarith(er, gr, sab, ga, gb));
+            let u2 = F.le_of_grid_le(a.H() - b.H(), r.H(), linarith(er, gr, sab, ga, gb));
+            omega(u1, u2)
+        },
+    }
+}
+
+// Veltkamp's last two steps from the half-unit facts: `xh = g + d` and
+// `xl = x - xh` are exact in any mode.
+theorem Finite::veltkamp_tail({F: Format}, x, g, d, xh, xl: Finite(F), s: Nat, mode: Mode,
+    hh: g.add(d, mode := mode) = Float::Fin(xh), hl: x.sub(xh, mode := mode) = Float::Fin(xl),
+    w: (∃ f: Finite(F), f.H() = g.H() + d.H()) ∧ OnGrid(x.bexp + s, g.H() + d.H()) ∧ (∃ f: Finite(F), f.H() = x.H() - (g.H() + d.H())) ∧ (x.H() - (g.H() + d.H()) <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= x.H() - (g.H() + d.H()))):
+    xh.val() + xl.val() ≈ x.val() ∧ OnGrid(x.bexp + s, xh.H()) ∧ (xl.H() <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= xl.H())
+{
+    let w4 = w.right.right.right;
+    let b1 = w4.left;
+    let b2 = w4.right;
+    let eh: (xh.H() = g.H() + d.H()) = Finite::add_exact_H(g, d, xh, mode, w.left, hh);
+    let e3: (x.H() - (g.H() + d.H()) = x.H() - xh.H()) = omega(eh);
+    let r3: (∃ f: Finite(F), f.H() = x.H() - xh.H()) = j(e3, λ v _ => ∃ f: Finite(F), f.H() = v, w.right.right.left);
+    let el: (xl.H() = x.H() - xh.H()) = Finite::sub_exact_H(x, xh, xl, mode, r3, hl);
+    let gx = x.val_grid();
+    let gh = xh.val_grid();
+    let gl = xl.val_grid();
+    let sx = F.grid_sub(x.H(), xh.H());
+    let vl = Finite::val_of_H(xl, x.H() - xh.H(), el);
+    let og: OnGrid(x.bexp + s, xh.H()) = j(sym(eh), λ v _ => OnGrid(x.bexp + s, v), w.right.left);
+    And(Rat::le_antisymm(linarith(vl, sx, gx, gh), linarith(vl, sx, gx, gh)), And(og, And(omega(b1, el, eh), omega(b2, el, eh))))
+}
+
+// Veltkamp splitting (Veltkamp, Dekker): with `C = 2^s + 1` a float,
+// `1 <= s <= frac`, `g = ○(C·x)` and `d = ○(x - g)` in a nearest mode,
+// then `xh = g + d` and `xl = x - xh` in any mode, at a normal `x` with
+// `C·x` in range: `xh + xl = x` exactly, `xh` lies on the grid `s`
+// exponents above `x`'s (so it has at most `prec - s` significant bits),
+// and `|xl|` is at most half that grid's spacing (so it fits in `s` bits).
+theorem Finite::veltkamp({F: Format}, x, cf, g, d, xh, xl: Finite(F), s: Nat, even: Bool, mode: Mode,
+    cv: cf.val() ≈ Rat::ofInt((Nat::pow(2, s) + 1).int()), normal: F.half() <= x.mag, s1: 1 <= s, sp: s <= F.frac,
+    range: (cf.val() * x.val()).abs() <= (Finite::max_finite(F)).val(),
+    hg: cf.mul(x, mode := Mode::nearest(even)) = Float::Fin(g), hd: x.sub(g, mode := Mode::nearest(even)) = Float::Fin(d),
+    hh: g.add(d, mode := mode) = Float::Fin(xh), hl: x.sub(xh, mode := mode) = Float::Fin(xl)):
+    xh.val() + xl.val() ≈ x.val() ∧ OnGrid(x.bexp + s, xh.H()) ∧ (xl.H() <= Nat::pow(2, x.bexp + s).int() ∧ -Nat::pow(2, x.bexp + s).int() <= xl.H())
+{
+    let C = (Nat::pow(2, s) + 1);
+    let hr = j(hg, λ o _ => RoundsTo(F, Mode::nearest(even), cf.val() * x.val(), o), Finite::mul_correct(cf, x, Mode::nearest(even)));
+    let ng = F.nearest_of_rounds(even, cf.val() * x.val(), g, hr);
+    let hr1 = j(hd, λ o _ => RoundsTo(F, Mode::nearest(even), x.val() - g.val(), o), Finite::sub_correct(x, g, Mode::nearest(even)));
+    let nd = F.nearest_of_rounds(even, x.val() - g.val(), d, hr1);
+    let gx = x.val_grid();
+    let gg = g.val_grid();
+    let X = C.int() * x.H();
+    let ecx: (cf.val() * x.val() ≈ F.grid(X)) = Rat::same_trans(Rat::mul_respects(cv, gx), F.grid_scale(C, x.H()));
+    let xg = F.grid_sub(x.H(), g.H());
+    let edx: (x.val() - g.val() ≈ F.grid(x.H() - g.H())) = Rat::le_antisymm(linarith(gx, gg, xg), linarith(gx, gg, xg));
+    let M = (Finite::max_finite(F)).H();
+    let gm = (Finite::max_finite(F)).val_grid();
+    let gmn: (-F.grid(M) ≈ F.grid(-M)) = Rat::same_sym(Dyadic(M, F.qmin() - 1).rat_neg());
+    let q1: (cf.val() * x.val() <= (cf.val() * x.val()).abs()) = (cf.val() * x.val()).le_abs();
+    let q2: (-(cf.val() * x.val()) <= (cf.val() * x.val()).abs()) = (cf.val() * x.val()).neg_le_abs();
+    let hi: (X <= M) = F.le_of_grid_le(X, M, linarith(ecx, gm, q1, range));
+    let lo: (-M <= X) = F.le_of_grid_le(-M, X, linarith(ecx, gm, gmn, q2, range));
+    Finite::veltkamp_tail(x, g, d, xh, xl, s, mode, hh, hl,
+        F.veltkamp_H(x, g, d, s, cf.val() * x.val(), ecx, ng, x.val() - g.val(), edx, nd, normal, s1, sp, lo, hi))
+}

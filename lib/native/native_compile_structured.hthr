@@ -1,0 +1,1228 @@
+// A structured region compiled inside a leaf runs as its meaning
+// (issues/native-compile-wider-leaves.md).
+//
+// `StructuredRegion::code` (native_compile) lays a region out as its parts:
+// a leaf's nodes, a sequence's leaf then the rest, a composition's parts in
+// order, a conditional as a branch on its bit, and a loop as a counted loop
+// of leaves around its body. Each part's code runs as its part's meaning
+// (native_structured_meaning's `StructuredRegion::meaning`), the words it
+// needs live before it and those the rest needs live after it
+// (`Target::Computes`). That meaning is the region's run settled
+// (`StructuredRegion::compute_same`) wherever the region is scoped.
+//
+// A loop runs as its source's `loop_run`: at its head, with `m` passes left
+// in its count, the parameters holding the pass's state, every word the loop
+// never writes as it was, the code runs on to the end as the rest of the
+// passes do (`Target::loop_head`, by induction on `m`). Each pass is the
+// body's code, which runs as the body's meaning, and that is the body's run
+// from the pass's own valuation (`StructuredRegion::faithful` over
+// `Scope::pass`).
+import native_source;
+import native_structured;
+import native_structured_meaning;
+import native_compile;
+import native_compile_facts;
+import native_compile_region;
+import native_compile_steps;
+import native_compile_segments;
+import native_compile_leaf;
+import native_compile_bytes;
+import native_compile_nodes;
+import native_compile_homes;
+import native_alloc;
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_state;
+import linux_trees;
+import linux_x86_64_io;
+import linux_x86_64_sim;
+import itree;
+import x86_64;
+import x86_64_block;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_byte_memory;
+import linux_x86_64_byte_memory;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Moving between environments
+
+// Code that needs fewer words live runs where more are.
+theorem Target::at_sub(self t: Target, at: Nat, live, wider: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), env: Env,
+    sub: (i: Nat) → Mem(i, live) → Mem(i, wider), goes: t.At(at, live, tree, env)): t.At(at, wider, tree, env) {
+    t.goes_weaken(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, s.gprs, s.memory),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(wider, env, s.gprs, s.memory), goes,
+        λ s held => t.held_sub(live, wider, env, s.gprs, s.memory, held, sub))
+}
+
+// A JMP to a label ahead or behind, the live words held.
+theorem Target::at_jmp(self t: Target, before: Prog, n: Nat, within: then(before, Jmp(Succ(n))).Within(t.program),
+    label: Prog, item: Asm, label_within: Prog::At(label, Succ(n), item).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    live: List<Nat>, env: Env, goes: t.At(prog_len(label), live, tree, env)): t.At(prog_len(before), live, tree, env) {
+    t.io().goes_jmp(t.program, t.origin, t.code_fits(), within.witness, before, 0, Succ(n), within.proof, prog_len(label),
+        t.program.lands_jmp(t.laid, within.witness, before, 0, n, within.proof, label_within.witness, label, item, label_within.proof),
+        tree, λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m), goes)
+}
+
+// Two environments alike on the words `live`, their buffers and command line.
+fn Env::Like(self a: Env, b: Env, live: List<Nat>) → Type {
+    ((i: Nat) → Mem(i, live) → a.number(i) = b.number(i)) ∧ ((a.buffers = b.buffers) ∧ (a.args = b.args))
+}
+
+theorem Env::like_of_same(self a: Env, b: Env, live: List<Nat>, same: a.Same(b)): a.Like(b, live) { ⟨λ i _ => same.left(i), same.right⟩ }
+
+theorem Env::like_sym(self a: Env, b: Env, live: List<Nat>, like: a.Like(b, live)): b.Like(a, live) {
+    ⟨λ i m => sym(like.left(i, m)), ⟨sym(like.right.left), sym(like.right.right)⟩⟩
+}
+
+// What the code holds of an environment it holds of one alike on what is
+// live.
+theorem Target::held_like(self t: Target, live: List<Nat>, a, b: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, a, g, m),
+    like: a.Like(b, live)): t.Held(live, b, g, m) {
+    let words = held.witness;
+    let placed = j(eq2(λ (bufs: Buffers()) (args: List<List<BitVec(8)>>) => Env(words, bufs, args), like.right.left, like.right.right),
+        λ e _ => t.Placed(e, m), held.proof.left);
+    Exists(words, ⟨placed, λ i mi => trans(held.proof.right(i, mi), like.left(i, mi))⟩)
+}
+
+theorem Target::at_like(self t: Target, at: Nat, live: List<Nat>, tree: ITree<BitVec(64)>(Events::linux()), a, b: Env, like: b.Like(a, live),
+    goes: t.At(at, live, tree, a)): t.At(at, live, tree, b) {
+    t.goes_weaken(at, tree, λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, a, s.gprs, s.memory),
+        λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, b, s.gprs, s.memory), goes,
+        λ s held => t.held_like(live, b, a, s.gprs, s.memory, held, like))
+}
+
+// ---------------------------------------------------------------------------
+// A leaf
+
+theorem Homes::leaf_checked_sound(self homes: Homes, nodes: List<Node>, out, l: List<Nat>, got: homes.leaf_checked(nodes, out) = Some(l)):
+    (l = nodes_live_in(nodes, out)) ∧ (homes.nodes_apart(nodes, out) && homes.all_apart(nodes_writes(nodes), out)).IsTrue() {
+    (match homes.nodes_checked(nodes, out) as λ o => homes.nodes_checked(nodes, out) = o →
+            (match o { None => None, Some(live) => match homes.all_apart(nodes_writes(nodes), out) { False => None, True => Some(live) } }) = Some(l) →
+            (l = nodes_live_in(nodes, out)) ∧ (homes.nodes_apart(nodes, out) && homes.all_apart(nodes_writes(nodes), out)).IsTrue() {
+        None => λ _ none => absurd(none),
+        Some(live) => λ found => (match homes.all_apart(nodes_writes(nodes), out) as λ b => homes.all_apart(nodes_writes(nodes), out) = b →
+                (match b { False => None, True => Some(live) }) = Some(l) →
+                (l = nodes_live_in(nodes, out)) ∧ (homes.nodes_apart(nodes, out) && homes.all_apart(nodes_writes(nodes), out)).IsTrue() {
+            False => λ _ none => absurd(none),
+            True => λ apart same => {
+                let sound = homes.nodes_checked_sound(out, nodes, live, found);
+                ⟨trans(sym(Option::some_inj(live, l, same)), sound.left),
+                    Bool::is_true_and_intro(homes.nodes_apart(nodes, out), homes.all_apart(nodes_writes(nodes), out), sound.right,
+                        j(sym(apart), λ b _ => b.IsTrue(), trivial))⟩
+            },
+        })(refl),
+    })(refl, got)
+}
+
+// Scoped nodes are wide.
+theorem Scope::wide_of(nodes: List<Node>): (s, t: Scope) → s.nodes(nodes) = Some(t) → nodes_wide(nodes).IsTrue() {
+    match nodes {
+        Nil => λ s t _ => trivial,
+        Cons(node, rest) => λ s t => (match ok: node.wide() && s.all_defined(function_ir_eval::Node::reads(node)) {
+            False => λ none => absurd(none),
+            True => λ got => Bool::is_true_and_intro(node.wide(), nodes_wide(rest),
+                Bool::is_true_and(node.wide(), s.all_defined(function_ir_eval::Node::reads(node)), j(sym(ok), λ b _ => b.IsTrue(), trivial)).left,
+                Scope::wide_of(rest, s.put(node_output(node).id, s.clean(node)), t, got)),
+        }),
+    }
+}
+
+// A leaf's code runs as its nodes one at a time, from what they need live.
+theorem Target::leaf_goes(self t: Target, out: List<Nat>, nodes: List<Node>, p: Prog, names: Nat, c: Compiled,
+    emitted: p.computes(t.layout(), out, nodes, names) = Some(c), within: c.prog.Within(t.program), live: List<Nat>,
+    checked: t.homes.leaf_checked(nodes, out) = Some(live), wide: nodes_wide(nodes).IsTrue(), env: Env, tree: ITree<BitVec(64)>(Events::linux()),
+    next: t.At(prog_len(c.prog), out, tree, env.steps(nodes))): t.At(prog_len(p), live, tree, env) {
+    let sound = t.homes.leaf_checked_sound(nodes, out, live, checked);
+    j(sym(sound.left), λ l _ => t.At(prog_len(p), l, tree, env),
+        t.goes_computes(out, env, p, nodes, names, c, emitted, within, tree, sound.right,
+            j(sym(env.computes_steps(nodes, wide)), λ e _ => t.At(prog_len(c.prog), out, tree, e), next)))
+}
+
+// ---------------------------------------------------------------------------
+// What a region leaves as it was
+
+theorem Env::number_put_other(words: List<Nat>, buffers: Buffers(), args: List<List<BitVec(8)>>, id, k, x: Nat, ne: x ≠ id):
+    Env(words.put(id, k, 0), buffers, args).number(x) = Env(words, buffers, args).number(x) {
+    List::put_other(id, words, k, 0, x, ne)
+}
+
+// A node that touches no buffer puts its value at its port.
+theorem Env::computes_plain(self env: Env, node: Node, pure: node.pure().IsTrue()):
+    env.computes([node]) = Env(env.words.put(node_output(node).id, node.value(env.valuation())(node_output(node).width).toNat(), 0), env.buffers, env.args) {
+    let id = node_output(node).id;
+    let width = node_output(node).width;
+    j(sym(node.run_pure(env.valuation(), env.buffers, pure)), λ s _ =>
+            Env(env.words.put(id, s.values(width, id).toNat(), 0), s.buffers, env.args) =
+            Env(env.words.put(id, node.value(env.valuation())(width).toNat(), 0), env.buffers, env.args),
+        cong_fn<BitVec(width), Env>(λ x => Env(env.words.put(id, x.toNat(), 0), env.buffers, env.args),
+            Valuation::set_here(env.valuation(), id, node.value(env.valuation()), width)))
+}
+
+theorem Env::steps_frame(nodes: List<Node>): (env: Env) → (x: Nat) → absent(x, nodes_writes(nodes)).IsTrue() → env.steps(nodes).number(x) = env.number(x) {
+    match nodes {
+        Nil => λ env x _ => refl,
+        Cons(node, rest) => λ env x h => {
+            let parts = Bool::is_true_and(x.differs(node_output(node).id), absent(x, nodes_writes(rest)), h);
+            let r = node.run(env.valuation(), env.buffers);
+            trans(Env::steps_frame(rest, env.computes([node]), x, parts.right),
+                Env::number_put_other(env.words, r.buffers, env.args, node_output(node).id, r.values(node_output(node).width, node_output(node).id).toNat(), x,
+                    x.differs_ne(node_output(node).id, parts.left)))
+        },
+    }
+}
+
+theorem Env::steps_args(nodes: List<Node>): (env: Env) → env.steps(nodes).args = env.args {
+    match nodes { Nil => λ env => refl, Cons(node, rest) => λ env => Env::steps_args(rest, env.computes([node])) }
+}
+
+// A region's meaning writes only the words it touches, and keeps the
+// command line.
+theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Answers()): (env: Env) → (x: Nat) →
+    absent(x, region.touches()).IsTrue() → region.meaning(call, env).number(x) = env.number(x) {
+    match region {
+        Dataflow(body) => λ env x h => Env::steps_frame(body.nodes, env, x, h),
+        Sequence(prefix, continuation) => λ env x h => {
+            let parts = absent_append(x, nodes_writes(prefix.nodes), continuation.touches(), h);
+            trans(continuation.meaning_frame(call, env.steps(prefix.nodes), x, parts.right), Env::steps_frame(prefix.nodes, env, x, parts.left))
+        },
+        Compose(prefix, continuation) => λ env x h => {
+            let parts = absent_append(x, prefix.touches(), continuation.touches(), h);
+            trans(continuation.meaning_frame(call, prefix.meaning(call, env), x, parts.right), prefix.meaning_frame(call, env, x, parts.left))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ env x h => {
+            let parts = absent_append(x, when_true.touches(), when_false.touches(), h);
+            match env.bit(condition) {
+                False => when_false.meaning_frame(call, env, x, parts.right),
+                True => when_true.meaning_frame(call, env, x, parts.left),
+            }
+        },
+        Call(callee, arguments, result) => λ env x h => {
+            let after = Call(callee, arguments, result).run(call, env.valuation(), env.buffers);
+            Env::settle_frame([Port(result, 64)], Env(env.words, after.buffers, env.args), after.values, x, h)
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ env x h => {
+            let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
+            let after = r.run(call, env.valuation(), env.buffers);
+            let p1 = Bool::is_true_and(x.differs(count), absent(x, Cons(exhausted, parameters ++ (outputs ++ body.touches()))), h);
+            let p2 = Bool::is_true_and(x.differs(exhausted), absent(x, parameters ++ (outputs ++ body.touches())), p1.right);
+            let p3 = absent_append(x, parameters, outputs ++ body.touches(), p2.right);
+            let p4 = absent_append(x, outputs, body.touches(), p3.right);
+            let fresh: absent(x, port_ids(word_ports(outputs) ++ [Port(exhausted, 1)])).IsTrue() =
+                j(sym(trans(port_ids_append(word_ports(outputs), [Port(exhausted, 1)]),
+                        cong_fn<List<Nat>, List<Nat>>(λ l => l ++ [exhausted], word_port_ids(outputs)))), λ l _ => absent(x, l).IsTrue(),
+                    absent_append_intro(x, outputs, [exhausted], p4.left, Bool::is_true_and_intro(x.differs(exhausted), True, p2.left, trivial)));
+            Env::settle_frame(word_ports(outputs) ++ [Port(exhausted, 1)], Env(env.words, after.buffers, env.args), after.values, x, fresh)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Options taken apart
+//
+// Each takes the value apart into a continuation, so the value is a bound
+// name there and no type mentions the proof it came from.
+
+theorem Option::and_then_with<A, B, R>({o: Option<A>}, {f: A → Option<B>}, {c: B}, h: o.and_then(f) = Some(c),
+    k: (a: A) → o = Some(a) → f(a) = Some(c) → R): R {
+    match o {
+        None => absurd(h),
+        Some(a) => k(a, refl, h),
+    }
+}
+
+// The value is `w`, whatever it is.
+theorem Option::and_then_canon<A, B>({o: Option<A>}, {f: A → Option<B>}, {c: B}, h: o.and_then(f) = Some(c), w: A, same: (a: A) → o = Some(a) → a = w):
+    (o = Some(w)) ∧ (f(w) = Some(c)) {
+    Option::and_then_with(h, λ a got rest => {
+        let eq = same(a, got);
+        let r: (o = Some(w)) ∧ (f(w) = Some(c)) = ⟨j(eq, λ x _ => o = Some(x), got), j(eq, λ x _ => f(x) = Some(c), rest)⟩;
+        r
+    })
+}
+
+theorem Bool::guard_with<B, R>({b: Bool}, {o: Option<B>}, {c: B}, h: b.guard(o) = Some(c), k: b.IsTrue() → o = Some(c) → R): R {
+    match b {
+        False => absurd(h),
+        True => k(trivial, h),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the machine claim asks of a region
+
+// What the compile's region scope gives the claim: leaves wide, no call,
+// and each loop in counted form with its body scoped from its pass.
+fn StructuredRegion::Ok(self region: StructuredRegion) → Type {
+    match region {
+        Dataflow(body) => nodes_wide(body.nodes).IsTrue(),
+        Sequence(prefix, continuation) => nodes_wide(prefix.nodes).IsTrue() ∧ continuation.Ok(),
+        Compose(prefix, continuation) => prefix.Ok() ∧ continuation.Ok(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.Ok() ∧ when_false.Ok(),
+        Call(_, _, _) => False,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => body.Ok() ∧
+            (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
+            Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue())),
+    }
+}
+
+theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Scope) → region.scoped(s) = Some(t) → region.Ok() {
+    match region {
+        Dataflow(body) => λ s t scoped => Scope::wide_of(body.nodes, s, t, scoped),
+        Sequence(prefix, continuation) => λ s t scoped => {
+            let chain: (s.nodes(prefix.nodes).and_then(λ m => continuation.scoped(m)) = Some(t)) = scoped;
+            Option::and_then_with(chain, λ m got rest => {
+                let r: Sequence(prefix, continuation).Ok() = ⟨Scope::wide_of(prefix.nodes, s, m, got), continuation.ok_of_scoped(m, t, rest)⟩;
+                r
+            })
+        },
+        Compose(prefix, continuation) => λ s t scoped => {
+            let chain: (prefix.scoped(s).and_then(λ m => continuation.scoped(m)) = Some(t)) = scoped;
+            Option::and_then_with(chain, λ m got rest => {
+                let r: Compose(prefix, continuation).Ok() = ⟨prefix.ok_of_scoped(s, m, got), continuation.ok_of_scoped(m, t, rest)⟩;
+                r
+            })
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ s t => (match s.bit(condition) {
+            False => λ none => absurd(none),
+            True => λ scoped => {
+                let chain: (when_true.scoped(s).and_then(λ a => when_false.scoped(s).and_then(λ c => Some(a.join(c)))) = Some(t)) = scoped;
+                Option::and_then_with(chain, λ a yes rest => Option::and_then_with(rest, λ c no _ => {
+                    let r: when_true.Ok() ∧ when_false.Ok() = ⟨when_true.ok_of_scoped(s, a, yes), when_false.ok_of_scoped(s, c, no)⟩;
+                    r
+                }))
+            },
+        }),
+        Call(_, _, _) => λ s t none => absurd(none),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t => {
+            let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
+            let goal = body.Ok() ∧ (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
+                Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue()));
+            (match ok: (s.defined(bound) && s.all_defined(inputs)) && r.loop_shape() {
+                False => λ none => absurd(none),
+                True => λ scoped => {
+                    let parts = Bool::is_true_and(s.defined(bound) && s.all_defined(inputs), r.loop_shape(), j(sym(ok), λ b _ => b.IsTrue(), trivial));
+                    let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
+                    let chain: (body.scoped(Scope::pass(parameters, count)).and_then(λ bs => match bs.bit(exit) && bs.all_defined(next) as λ _ => Option<Scope> {
+                            False => None,
+                            True => Some(s.looped(outputs, exhausted)),
+                        }) = Some(t)) = scoped;
+                    Option::and_then_with(chain, λ bs got rest => {
+                        let bits: (bs.bit(exit) && bs.all_defined(next)).IsTrue() =
+                            (match bs.bit(exit) && bs.all_defined(next) as λ c =>
+                                    (match c as λ _ => Option<Scope> { False => None, True => Some(s.looped(outputs, exhausted)) }) = Some(t) → c.IsTrue() {
+                                False => λ none => absurd(none),
+                                True => λ _ => trivial,
+                            })(rest);
+                        let g: goal = ⟨body.ok_of_scoped(Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, bits⟩)⟩⟩;
+                        g
+                    })
+                },
+            })
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A loop's code taken apart
+
+// The pieces of a loop's code (`StructuredRegion::code`), each piece's words
+// live after it named by `set`, `done`, `stop`, `down` and `after`.
+record LoopCode(p: Prog, layout: Layout, out: List<Nat>, names: Nat, inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat,
+    body: StructuredRegion, exit: Nat, next, outputs: List<Nat>, exhausted: Nat, set, done, stop, down, after: List<Nat>, c: Compiled) {
+    fits: (layout.words_fit([exhausted, exit]) && loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches()))).IsTrue(),
+    e: Compiled,
+    e_is: p.computes(layout, set, loop_entry(bound, count, inputs, parameters), Succ(Succ(Succ(Succ(names))))) = Some(e),
+    z: Compiled,
+    z_is: e.prog.label(Succ(names)).computes(layout, Cons(exhausted, layout.homes.region_live(body, after).union(done)), loop_zero(count, exhausted), e.names) = Some(z),
+    b: Compiled,
+    b_is: body.code(z.prog.tests(layout, exhausted, Succ(Succ(names))).else_label(Succ(Succ(names)), Succ(Succ(Succ(Succ(names))))), layout, after, z.names) = Some(b),
+    m: Compiled,
+    m_is: b.prog.computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), b.names) = Some(m),
+    x: Compiled,
+    x_is: m.prog.tests(layout, exit, Succ(Succ(Succ(names)))).computes(layout, done, loop_stop(exhausted), m.names) = Some(x),
+    d: Compiled,
+    d_is: x.prog.else_label(Succ(Succ(Succ(names))), Succ(Succ(Succ(Succ(names))))).computes(layout, set, loop_down(count, exhausted), x.names) = Some(d),
+    c_is: then(d.prog, Jmp(Succ(names))).label(Succ(Succ(Succ(Succ(names))))).computes(layout, out, moves(outputs, parameters), d.names) = Some(c),
+}
+
+theorem StructuredRegion::loop_code(inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat,
+    next, outputs: List<Nat>, exhausted: Nat, p: Prog, layout: Layout, out: List<Nat>, names: Nat, c: Compiled,
+    emitted: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).code(p, layout, out, names) = Some(c)):
+    LoopCode(p, layout, out, names, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, layout.homes.loop_set(count),
+        nodes_live_in(moves(outputs, parameters), out), nodes_live_in(loop_stop(exhausted), nodes_live_in(moves(outputs, parameters), out)),
+        nodes_live_in(loop_down(count, exhausted), layout.homes.loop_set(count)),
+        nodes_live_in(moves(parameters, next), Cons(exit, nodes_live_in(loop_stop(exhausted), nodes_live_in(moves(outputs, parameters), out))
+            .union(nodes_live_in(loop_down(count, exhausted), layout.homes.loop_set(count))))), c) {
+    let homes = layout.homes;
+    let head = Succ(names);
+    let enter = Succ(head);
+    let again = Succ(enter);
+    let leave = Succ(again);
+    let set = homes.loop_set(count);
+    let done = nodes_live_in(moves(outputs, parameters), out);
+    let stop = nodes_live_in(loop_stop(exhausted), done);
+    let down = nodes_live_in(loop_down(count, exhausted), set);
+    let after = nodes_live_in(moves(parameters, next), Cons(exit, stop.union(down)));
+    let chain: ((layout.words_fit([exhausted, exit]) && loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches()))).guard(
+        p.computes(layout, set, loop_entry(bound, count, inputs, parameters), leave).and_then(λ e =>
+        e.prog.label(head).computes(layout, Cons(exhausted, homes.region_live(body, after).union(done)), loop_zero(count, exhausted), e.names).and_then(λ z =>
+        body.code(z.prog.tests(layout, exhausted, enter).else_label(enter, leave), layout, after, z.names).and_then(λ b =>
+        b.prog.computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), b.names).and_then(λ m =>
+        m.prog.tests(layout, exit, again).computes(layout, done, loop_stop(exhausted), m.names).and_then(λ x =>
+        x.prog.else_label(again, leave).computes(layout, set, loop_down(count, exhausted), x.names).and_then(λ d =>
+        then(d.prog, Jmp(head)).label(leave).computes(layout, out, moves(outputs, parameters), d.names)))))))) = Some(c)) = emitted;
+    Bool::guard_with(chain, λ fits h0 =>
+    Option::and_then_with(h0, λ e e_is h1 =>
+    Option::and_then_with(h1, λ z z_is h2 =>
+    Option::and_then_with(h2, λ b b_is h3 =>
+    Option::and_then_with(h3, λ m m_is h4 =>
+    Option::and_then_with(h4, λ x x_is h5 =>
+    Option::and_then_with(h5, λ d d_is h6 =>
+        LoopCode(fits, e, e_is, z, z_is, b, b_is, m, m_is, x, x_is, d, d_is, h6))))))))
+}
+
+// ---------------------------------------------------------------------------
+// Where each piece starts, inside what it builds
+
+theorem Prog::within_label(self p: Prog, name: Nat): p.Within(p.label(name)) { Exists(1, refl) }
+
+theorem Prog::within_tests(self p: Prog, layout: Layout, condition, else_name: Nat): p.Within(p.tests(layout, condition, else_name)) {
+    p.within_trans(p.bit_to(layout, condition, Rax), p.tests(layout, condition, else_name), p.within_bit_to(layout, condition, Rax), Exists(2, refl))
+}
+
+theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Layout): (p: Prog) → (out: List<Nat>) → (names: Nat) → (c: Compiled) →
+    region.code(p, layout, out, names) = Some(c) → p.Within(c.prog) {
+    match region {
+        Dataflow(body) => λ p out names c emitted => p.within_computes(layout, out, body.nodes, names, c, emitted),
+        Sequence(prefix, continuation) => λ p out names c emitted => {
+            let chain: (p.computes(layout, layout.homes.region_live(continuation, out), prefix.nodes, names).and_then(λ a =>
+                continuation.code(a.prog, layout, out, a.names)) = Some(c)) = emitted;
+            Option::and_then_with(chain, λ a first rest => p.within_trans(a.prog, c.prog,
+                p.within_computes(layout, layout.homes.region_live(continuation, out), prefix.nodes, names, a, first),
+                continuation.within_code(layout, a.prog, out, a.names, c, rest)))
+        },
+        Compose(prefix, continuation) => λ p out names c emitted => {
+            let chain: (prefix.code(p, layout, layout.homes.region_live(continuation, out), names).and_then(λ a =>
+                continuation.code(a.prog, layout, out, a.names)) = Some(c)) = emitted;
+            Option::and_then_with(chain, λ a first rest => p.within_trans(a.prog, c.prog,
+                prefix.within_code(layout, p, layout.homes.region_live(continuation, out), names, a, first),
+                continuation.within_code(layout, a.prog, out, a.names, c, rest)))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ p out names c emitted => {
+            let tested = p.tests(layout, condition, Succ(names));
+            let chain: (layout.word_fits(condition).guard(when_true.code(tested, layout, out, Succ(Succ(names))).and_then(λ y =>
+                when_false.code(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, y.names).and_then(λ n =>
+                Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names))))) = Some(c)) = emitted;
+            Bool::guard_with(chain, λ _ h0 => Option::and_then_with(h0, λ y y_is h1 => Option::and_then_with(h1, λ n n_is same => {
+                let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
+                let joined = n.prog.join_label(Succ(Succ(names)));
+                j(Option::some_inj(Compiled(joined, n.names), c, same), λ x _ => p.Within(x.prog),
+                    p.within_trans(tested, joined, p.within_tests(layout, condition, Succ(names)),
+                        tested.within_trans(y.prog, joined, when_true.within_code(layout, tested, out, Succ(Succ(names)), y, y_is),
+                            y.prog.within_trans(other, joined, Exists(2, refl),
+                                other.within_trans(n.prog, joined, when_false.within_code(layout, other, out, y.names, n, n_is),
+                                    n.prog.within_label(Succ(Succ(names))))))))
+            })))
+        },
+        Call(_, _, _) => λ p out names c none => absurd(none),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ p out names c emitted => {
+            let k = StructuredRegion::loop_code(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, layout, out, names, c, emitted);
+            let head = Succ(names);
+            let enter = Succ(head);
+            let again = Succ(enter);
+            let leave = Succ(again);
+            let hp = k.e.prog.label(head);
+            let zt = k.z.prog.tests(layout, exhausted, enter);
+            let zl = zt.else_label(enter, leave);
+            let mt = k.m.prog.tests(layout, exit, again);
+            let xl = k.x.prog.else_label(again, leave);
+            let dj = then(k.d.prog, Jmp(head)).label(leave);
+            let set = layout.homes.loop_set(count);
+            let done = nodes_live_in(moves(outputs, parameters), out);
+            let stop = nodes_live_in(loop_stop(exhausted), done);
+            let down = nodes_live_in(loop_down(count, exhausted), set);
+            let after = nodes_live_in(moves(parameters, next), Cons(exit, stop.union(down)));
+            p.within_trans(k.e.prog, c.prog, p.within_computes(layout, set, loop_entry(bound, count, inputs, parameters), leave, k.e, k.e_is),
+            k.e.prog.within_trans(hp, c.prog, k.e.prog.within_label(head),
+            hp.within_trans(k.z.prog, c.prog, hp.within_computes(layout, Cons(exhausted, layout.homes.region_live(body, after).union(done)), loop_zero(count, exhausted),
+                k.e.names, k.z, k.z_is),
+            k.z.prog.within_trans(zt, c.prog, k.z.prog.within_tests(layout, exhausted, enter),
+            zt.within_trans(zl, c.prog, Exists(2, refl),
+            zl.within_trans(k.b.prog, c.prog, body.within_code(layout, zl, after, k.z.names, k.b, k.b_is),
+            k.b.prog.within_trans(k.m.prog, c.prog, k.b.prog.within_computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), k.b.names, k.m, k.m_is),
+            k.m.prog.within_trans(mt, c.prog, k.m.prog.within_tests(layout, exit, again),
+            mt.within_trans(k.x.prog, c.prog, mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is),
+            k.x.prog.within_trans(xl, c.prog, Exists(2, refl),
+            xl.within_trans(k.d.prog, c.prog, xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is),
+            k.d.prog.within_trans(dj, c.prog, Exists(2, refl),
+                dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is)))))))))))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A loop's leaves, a node at a time
+
+theorem Env::plain_here(self env: Env, node: Node, pure: node.pure().IsTrue()):
+    env.computes([node]).number(node_output(node).id) = node.value(env.valuation())(node_output(node).width).toNat() {
+    trans(cong_fn<Env, Nat>(λ e => e.number(node_output(node).id), env.computes_plain(node, pure)),
+        Env::number_put(env.words, env.buffers, env.args, node_output(node).id, node.value(env.valuation())(node_output(node).width).toNat()))
+}
+
+theorem Env::plain_other(self env: Env, node: Node, pure: node.pure().IsTrue(), x: Nat, ne: x ≠ node_output(node).id):
+    env.computes([node]).number(x) = env.number(x) {
+    trans(cong_fn<Env, Nat>(λ e => e.number(x), env.computes_plain(node, pure)),
+        Env::number_put_other(env.words, env.buffers, env.args, node_output(node).id, node.value(env.valuation())(node_output(node).width).toNat(), x, ne))
+}
+
+theorem Env::plain_kept(self env: Env, node: Node, pure: node.pure().IsTrue()):
+    (env.computes([node]).buffers = env.buffers) ∧ (env.computes([node]).args = env.args) {
+    ⟨cong_fn<Env, Buffers()>(λ e => e.buffers, env.computes_plain(node, pure)),
+        cong_fn<Env, List<List<BitVec(8)>>>(λ e => e.args, env.computes_plain(node, pure))⟩
+}
+
+// Moves made one at a time, no target read by a later move and the targets
+// distinct: each target holds its source's word, as the targets bound to
+// the sources' words at once, and nothing else moves.
+theorem Env::steps_moves(to: List<Nat>): (from: List<Nat>) → moves_ordered(to, from).IsTrue() → distinct(to).IsTrue() → from.len() = to.len() →
+    (env: Env) →
+    ((x: Nat) → absent(x, to).IsTrue() → env.steps(moves(to, from)).number(x) = env.number(x)) ∧
+    (((x: Nat) → Mem(x, to) → env.steps(moves(to, from)).number(x) = Valuation::bind(env.valuation(), to, words_of(env.valuation(), from))(64, x).toNat()) ∧
+    ((env.steps(moves(to, from)).buffers = env.buffers) ∧ (env.steps(moves(to, from)).args = env.args))) {
+    match to {
+        Nil => λ from _ _ _ env => ⟨λ x _ => refl, ⟨λ x never => false_elim(never), ⟨refl, refl⟩⟩⟩,
+        Cons(t, ts) => λ from => match from {
+            Nil => λ _ _ (bad: 0 = Succ(ts.len())) => false_elim(ts.len().zero_ne_succ(bad)),
+            Cons(f, fs) => λ ordered apart (same: Succ(fs.len()) = Succ(ts.len())) env => {
+                let o = Bool::is_true_and(absent(t, fs), moves_ordered(ts, fs), ordered);
+                let a = Bool::is_true_and(absent(t, ts), distinct(ts), apart);
+                let len = Nat::succ_inj(fs.len(), ts.len(), same);
+                let node = Move(64, t, f);
+                let e1 = env.computes([node]);
+                let ih = Env::steps_moves(ts, fs, o.right, a.right, len, e1);
+                let r = e1.steps(moves(ts, fs));
+                let kept = env.plain_kept(node, trivial);
+                let fs_same: (words_of(e1.valuation(), fs) = words_of(env.valuation(), fs)) =
+                    words_agree(fs, env.valuation(), e1.valuation(), λ id m => cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n),
+                        env.plain_other(node, trivial, id, λ e => absent_mem(t, fs, o.left, id, m, sym(e)))));
+                let rest = Valuation::bind(env.valuation(), ts, words_of(env.valuation(), fs));
+                let word = word_value(env.valuation()(64, f));
+                ⟨λ x h => {
+                    let parts = Bool::is_true_and(x.differs(t), absent(x, ts), h);
+                    trans(ih.left(x, parts.right), env.plain_other(node, trivial, x, x.differs_ne(t, parts.left)))
+                },
+                ⟨λ x m => match x.eq_dec(t) {
+                    Inl(e) => j(sym(e), λ y _ => r.number(y) = Valuation::set(rest, t, word)(64, y).toNat(),
+                        trans(ih.left(t, a.left), trans(env.plain_here(node, trivial),
+                            sym(cong_fn(λ (w: BitVec(64)) => w.toNat(), Valuation::set_here(rest, t, word, 64)))))),
+                    Inr(ne) => {
+                        let mts: Mem(x, ts) = match m { Inl(eq) => false_elim(ne(eq)), Inr(later) => later };
+                        trans(ih.right.left(x, mts), trans(
+                            cong_fn(λ (ws: List<BitVec(64)>) => Valuation::bind(e1.valuation(), ts, ws)(64, x).toNat(), fs_same),
+                            trans(cong_fn(λ (w: BitVec(64)) => w.toNat(), Valuation::bind_bound(ts, words_of(env.valuation(), fs),
+                                    trans(words_of_len(env.valuation(), fs), len), e1.valuation(), env.valuation(), 64, x, mts)),
+                                sym(cong_fn(λ (w: BitVec(64)) => w.toNat(), Valuation::set_other(rest, t, word, 64, x, ne))))))
+                    },
+                },
+                ⟨trans(ih.right.right.left, kept.left), trans(ih.right.right.right, kept.right)⟩⟩⟩
+            },
+        },
+    }
+}
+
+// Bound at the ids to their own words, a valuation reads those words.
+theorem Valuation::bind_words_at(ids: List<Nat>): (u, v: Valuation()) → (x: Nat) → Mem(x, ids) → Valuation::bind(u, ids, words_of(v, ids))(64, x) = v(64, x) {
+    match ids {
+        Nil => λ u v x never => false_elim(never),
+        Cons(id, rest) => λ u v x m => {
+            let inner = Valuation::bind(u, rest, words_of(v, rest));
+            match x.eq_dec(id) as λ _ => Valuation::set(inner, id, word_value(v(64, id)))(64, x) = v(64, x) {
+                Inl(e) => j(sym(e), λ y _ => Valuation::set(inner, id, word_value(v(64, id)))(64, y) = v(64, y), Valuation::set_here(inner, id, word_value(v(64, id)), 64)),
+                Inr(ne) => trans(Valuation::set_other(inner, id, word_value(v(64, id)), 64, x, ne),
+                    Valuation::bind_words_at(rest, u, v, x, match m { Inl(e) => false_elim(ne(e)), Inr(later) => later })),
+            }
+        },
+    }
+}
+
+// After the moves the targets hold the sources' words.
+theorem Env::moves_words(to, from: List<Nat>, ordered: moves_ordered(to, from).IsTrue(), apart: distinct(to).IsTrue(), len: from.len() = to.len(), env: Env):
+    words_of(env.steps(moves(to, from)).valuation(), to) = words_of(env.valuation(), from) {
+    let moved = Env::steps_moves(to, from, ordered, apart, len, env);
+    let bound = Valuation::bind(env.valuation(), to, words_of(env.valuation(), from));
+    trans(words_agree(to, bound, env.steps(moves(to, from)).valuation(), λ id m =>
+            trans(cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), moved.right.left(id, m)), BitVec::ofNat_toNat(64, bound(64, id)))),
+        words_of_bind(env.valuation(), to, apart, words_of(env.valuation(), from), sym(trans(words_of_len(env.valuation(), from), len))))
+}
+
+// The zero test: `exhausted` is whether the count's word is zero.
+theorem Env::loop_zero_at(self env: Env, count, exhausted: Nat, apart: count ≠ exhausted):
+    (env.steps(loop_zero(count, exhausted)).number(exhausted) = bit_value(BitVec::ofNat(env.number(count), n := 64).eq_bit(BitVec::ofNat(0)), 64).toNat()) ∧
+    (((x: Nat) → x ≠ exhausted → env.steps(loop_zero(count, exhausted)).number(x) = env.number(x)) ∧
+    ((env.steps(loop_zero(count, exhausted)).buffers = env.buffers) ∧ (env.steps(loop_zero(count, exhausted)).args = env.args))) {
+    let n1 = Const(64, exhausted, 0);
+    let n2 = Equal(64, exhausted, count, exhausted);
+    let e1 = env.computes([n1]);
+    let k1 = env.plain_kept(n1, trivial);
+    let k2 = e1.plain_kept(n2, trivial);
+    let c1: (e1.number(count) = env.number(count)) = env.plain_other(n1, trivial, count, apart);
+    let z1: (e1.number(exhausted) = 0) = env.plain_here(n1, trivial);
+    ⟨trans(e1.plain_here(n2, trivial), eq2(λ (a: Nat) (b: Nat) => bit_value(BitVec::ofNat(a, n := 64).eq_bit(BitVec::ofNat(b, n := 64)), 64).toNat(), c1, z1)),
+        ⟨λ x ne => trans(e1.plain_other(n2, trivial, x, ne), env.plain_other(n1, trivial, x, ne)),
+            ⟨trans(k2.left, k1.left), trans(k2.right, k1.right)⟩⟩⟩
+}
+
+// Out by the exit: `exhausted` clear.
+theorem Env::loop_stop_at(self env: Env, exhausted: Nat):
+    (env.steps(loop_stop(exhausted)).number(exhausted) = 0) ∧ (((x: Nat) → x ≠ exhausted → env.steps(loop_stop(exhausted)).number(x) = env.number(x)) ∧
+    ((env.steps(loop_stop(exhausted)).buffers = env.buffers) ∧ (env.steps(loop_stop(exhausted)).args = env.args))) {
+    let n1 = Const(64, exhausted, 0);
+    let k1 = env.plain_kept(n1, trivial);
+    ⟨env.plain_here(n1, trivial), ⟨λ x ne => env.plain_other(n1, trivial, x, ne), k1⟩⟩
+}
+
+// The count less one, `exhausted` on the way.
+theorem Env::loop_down_at(self env: Env, count, exhausted: Nat, apart: count ≠ exhausted):
+    (env.steps(loop_down(count, exhausted)).number(count) = BitVec::ofNat(env.number(count), n := 64).sub(BitVec::ofNat(1)).toNat()) ∧
+    (((x: Nat) → x ≠ exhausted → x ≠ count → env.steps(loop_down(count, exhausted)).number(x) = env.number(x)) ∧
+    ((env.steps(loop_down(count, exhausted)).buffers = env.buffers) ∧ (env.steps(loop_down(count, exhausted)).args = env.args))) {
+    let n1 = Const(64, exhausted, 1);
+    let n2 = Sub(64, count, count, exhausted);
+    let e1 = env.computes([n1]);
+    let k1 = env.plain_kept(n1, trivial);
+    let k2 = e1.plain_kept(n2, trivial);
+    let c1: (e1.number(count) = env.number(count)) = env.plain_other(n1, trivial, count, apart);
+    let one: (e1.number(exhausted) = 1) = env.plain_here(n1, trivial);
+    ⟨trans(e1.plain_here(n2, trivial), eq2(λ (a: Nat) (b: Nat) => BitVec::ofNat(a, n := 64).sub(BitVec::ofNat(b, n := 64)).toNat(), c1, one)),
+        ⟨λ x ne nc => trans(e1.plain_other(n2, trivial, x, nc), env.plain_other(n1, trivial, x, ne)),
+            ⟨trans(k2.left, k1.left), trans(k2.right, k1.right)⟩⟩⟩
+}
+
+// A count of `Succ(k)` counted down is `k`; its word is not zero.
+theorem count_down(k: Nat, fits: Succ(k) < Nat::pow(2, 64)): BitVec::ofNat(Succ(k), n := 64).sub(BitVec::ofNat(1)).toNat() = k {
+    let w = BitVec::ofNat(Succ(k), n := 64);
+    let wv: (w.toNat() = Succ(k)) = BitVec::toNat_ofNat(64, Succ(k), fits);
+    let le: (BitVec::ofNat(1, n := 64).toNat() <= w.toNat()) = j(sym(wv), λ v _ => 1 <= v, trivial);
+    trans(trans(toNat_sub(64, w, BitVec::ofNat(1), le), cong_fn<Nat, Nat>(λ v => v - 1, wv)), Nat::sub_zero(k))
+}
+
+theorem count_nonzero(k: Nat, fits: Succ(k) < Nat::pow(2, 64)): BitVec::ofNat(Succ(k), n := 64).eq_bit(BitVec::ofNat(0)) = False {
+    BitVec::eq_bit_of_ne(64, BitVec::ofNat(Succ(k)), BitVec::ofNat(0), λ e => {
+        let v: (Succ(k) = 0) = trans(sym(BitVec::toNat_ofNat(64, Succ(k), fits)), cong_fn(λ (w: BitVec(64)) => w.toNat(), e));
+        absurd(v)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// What a loop's meaning holds
+
+fn Env::looped(self env: Env, e: LoopState, outputs: List<Nat>, exhausted: Nat) → Env {
+    Env(env.words, e.buffers, env.args).settle(Valuation::set(Valuation::bind(env.valuation(), outputs, e.end.state), exhausted, bit_value(e.end.exhausted)),
+        word_ports(outputs) ++ [Port(exhausted, 1)])
+}
+
+record Looped(env: Env, e: LoopState, outputs: List<Nat>, exhausted: Nat) {
+    buffers: env.looped(e, outputs, exhausted).buffers = e.buffers,
+    args: env.looped(e, outputs, exhausted).args = env.args,
+    bit: env.looped(e, outputs, exhausted).number(exhausted) = bit_value(e.end.exhausted, 1).toNat(),
+    outs: (x: Nat) → x ≠ exhausted → Mem(x, outputs) →
+        env.looped(e, outputs, exhausted).number(x) = Valuation::bind(env.valuation(), outputs, e.end.state)(64, x).toNat(),
+    others: (x: Nat) → x ≠ exhausted → absent(x, outputs).IsTrue() → env.looped(e, outputs, exhausted).number(x) = env.number(x),
+}
+
+theorem Env::looped_at(self env: Env, e: LoopState, outputs: List<Nat>, exhausted: Nat, apart: absent(exhausted, outputs).IsTrue()):
+    Looped(env, e, outputs, exhausted) {
+    let ports = word_ports(outputs) ++ [Port(exhausted, 1)];
+    let bound = Valuation::bind(env.valuation(), outputs, e.end.state);
+    let bv = bit_value(e.end.exhausted);
+    let v = Valuation::set(bound, exhausted, bv);
+    let base = Env(env.words, e.buffers, env.args);
+    let kept = Env::settle_kept(ports, base, v);
+    let ids_eq: (port_ids(ports) = outputs ++ [exhausted]) = trans(port_ids_append(word_ports(outputs), [Port(exhausted, 1)]),
+        cong_fn<List<Nat>, List<Nat>>(λ l => l ++ [exhausted], word_port_ids(outputs)));
+    let exhausted_mem: Mem(exhausted, port_ids(ports)) = j(sym(ids_eq), λ l _ => Mem(exhausted, l), outputs.mem_append_r([exhausted], exhausted, Inl(refl)));
+    let exhausted_widths = λ (port: Port) (mp: Mem(port, ports)) (named: port.id = exhausted) =>
+        match word_ports(outputs).mem_append([Port(exhausted, 1)], port, mp) as λ _ => port.width = 1 {
+            Inl(mw) => false_elim(absent_mem(exhausted, outputs, apart, exhausted, j(named, λ y _ => Mem(y, outputs), word_ports_mem(outputs, port, mw).left), refl)),
+            Inr(me) => match me { Inl(eq) => cong_fn<Port, Nat>(λ p => p.width, eq), Inr(never) => false_elim(never) },
+        };
+    Looped(kept.left, kept.right,
+        trans(Env::settle_width(ports, base, v, exhausted, 1, exhausted_widths, exhausted_mem), cong_fn(λ (x: BitVec(1)) => x.toNat(), Valuation::set_here(bound, exhausted, bv, 1))),
+        λ x ne mo => {
+            let widths = λ (port: Port) (mp: Mem(port, ports)) (named: port.id = x) =>
+                match word_ports(outputs).mem_append([Port(exhausted, 1)], port, mp) as λ _ => port.width = 64 {
+                    Inl(mw) => word_ports_mem(outputs, port, mw).right,
+                    Inr(me) => match me {
+                        Inl(eq) => false_elim(ne(trans(sym(named), cong_fn<Port, Nat>(λ p => p.id, eq)))),
+                        Inr(never) => false_elim(never),
+                    },
+                };
+            let mx: Mem(x, port_ids(ports)) = j(sym(ids_eq), λ l _ => Mem(x, l), outputs.mem_append_l([exhausted], x, mo));
+            trans(Env::settle_width(ports, base, v, x, 64, widths, mx), cong_fn(λ (y: BitVec(64)) => y.toNat(), Valuation::set_other(bound, exhausted, bv, 64, x, ne)))
+        },
+        λ x ne out_absent => {
+            let fresh: absent(x, port_ids(ports)).IsTrue() = j(sym(ids_eq), λ l _ => absent(x, l).IsTrue(),
+                absent_append_intro(x, outputs, [exhausted], out_absent, Bool::is_true_and_intro(x.differs(exhausted), True,
+                    (match x.eq_dec(exhausted) {
+                        Inl(eq) => false_elim(ne(eq)),
+                        Inr(_) => trivial,
+                    }), trivial)));
+            Env::settle_frame(ports, base, v, x, fresh)
+        })
+}
+
+// Every word live after a loop is its bit, an output, or one it never
+// writes.
+theorem loop_keeps_mem(out: List<Nat>, outputs: List<Nat>, exhausted: Nat, clobbered: List<Nat>): loop_keeps(out, outputs, exhausted, clobbered).IsTrue() →
+    (i: Nat) → Mem(i, out) → ((i.matches(exhausted) || outputs.holds(i)) || absent(i, clobbered)).IsTrue() {
+    match out {
+        Nil => λ _ i never => false_elim(never),
+        Cons(o, rest) => λ keeps i m => {
+            let parts = Bool::is_true_and((o.matches(exhausted) || outputs.holds(o)) || absent(o, clobbered), loop_keeps(rest, outputs, exhausted, clobbered), keeps);
+            match m {
+                Inl(e) => j(sym(e), λ y _ => ((y.matches(exhausted) || outputs.holds(y)) || absent(y, clobbered)).IsTrue(), parts.left),
+                Inr(later) => loop_keeps_mem(rest, outputs, exhausted, clobbered, parts.right, i, later),
+            }
+        },
+    }
+}
+
+theorem Bool::true_of(self b: Bool, h: b.IsTrue()): b = True { match b { False => false_elim(h), True => refl } }
+
+// A pass's own valuation agrees with an environment holding the pass's
+// state in the parameters and its count.
+theorem Env::pass_agrees(self env: Env, parameters: List<Nat>, count, m: Nat, state: List<BitVec(64)>, apart: absent(count, parameters).IsTrue(),
+    counted: env.number(count) = m, held: words_of(env.valuation(), parameters) = state):
+    Valuation::Agrees(pass_valuation(parameters, count, m, state), env, Scope::pass(parameters, count)) {
+    let base = Valuation::set(Valuation::zero(), count, word_value(BitVec::ofNat(m)));
+    let pv = Valuation::bind(base, parameters, state);
+    let len: (state.len() = parameters.len()) = trans(sym(cong_fn<List<BitVec(64)>, Nat>(λ l => l.len(), held)), words_of_len(env.valuation(), parameters));
+    let word_m: (BitVec::ofNat(m, n := 64) = env.word(count)) = cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), sym(counted));
+    λ x def => match Bool::is_true_or(parameters.holds(x), x.matches(count), def) {
+        Inl(held_x) => {
+            let mx = parameters.holds_mem(x, Bool::true_of(parameters.holds(x), held_x));
+            let w: (pv(64, x) = env.word(x)) = j(held, λ st _ => Valuation::bind(base, parameters, st)(64, x) = env.word(x),
+                Valuation::bind_words_at(parameters, base, env.valuation(), x, mx));
+            ⟨w, λ _ => trans(Valuation::bind_coherent(parameters, state, len, base, x, mx), cong_fn(λ (y: BitVec(64)) => y.head_bit(), w))⟩
+        },
+        Inr(is_count) => {
+            let eq = Nat::matches_eq(x, count, is_count);
+            let at = λ (w: Nat) => trans(Valuation::bind_frame(base, parameters, state, w, count, apart), Valuation::set_here(Valuation::zero(), count, word_value(BitVec::ofNat(m)), w));
+            j(sym(eq), λ y _ => (pv(64, y) = env.word(y)) ∧ (Bool::IsTrue(Bool::True) → pv(1, y).head_bit() = env.bit(y)),
+                ⟨trans(at(64), word_m), λ _ => trans(cong_fn(λ (y: BitVec(1)) => y.head_bit(), at(1)),
+                    trans(word_head(BitVec::ofNat(m)), cong_fn(λ (y: BitVec(64)) => y.head_bit(), word_m)))⟩)
+        },
+    }
+}
+
+theorem Exists::with<A, R>(P: A → Type, e: Exists<A>(P), k: (a: A) → P(a) → R): R { k(e.witness, e.proof) }
+
+theorem Nat::differs_of_ne(self a, b: Nat, ne: a ≠ b): a.differs(b).IsTrue() {
+    match a.eq_dec(b) {
+        Inl(eq) => false_elim(ne(eq)),
+        Inr(_) => trivial,
+    }
+}
+
+theorem moves_wide(to: List<Nat>): (from: List<Nat>) → nodes_wide(moves(to, from)).IsTrue() {
+    match to {
+        Nil => λ from => trivial,
+        Cons(t, ts) => λ from => match from {
+            Nil => trivial,
+            Cons(f, fs) => Bool::is_true_and_intro(Move(64, t, f).wide(), nodes_wide(moves(ts, fs)), trivial, moves_wide(ts, fs)),
+        },
+    }
+}
+
+// Ids whose numbers two environments share read the same words.
+theorem Env::words_kept(self a: Env, b: Env, ids: List<Nat>, same: (x: Nat) → Mem(x, ids) → b.number(x) = a.number(x)):
+    words_of(b.valuation(), ids) = words_of(a.valuation(), ids) {
+    words_agree(ids, a.valuation(), b.valuation(), λ x m => cong_fn<Nat, BitVec(64)>(λ v => BitVec::ofNat(v), same(x, m)))
+}
+
+theorem Homes::region_live_of(self homes: Homes, region: StructuredRegion, out, l: List<Nat>, got: homes.region_checked(region, out) = Some(l)):
+    l = homes.region_live(region, out) {
+    j(sym(got), λ o _ => l = match o { None => out, Some(x) => x }, refl)
+}
+
+// ---------------------------------------------------------------------------
+// A loop's checks taken apart
+
+record LoopChecked(homes: Homes, out: List<Nat>, inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
+    exit: Nat, next, outputs: List<Nat>, exhausted: Nat, set, done, stop, down, after, live: List<Nat>) {
+    done_ok: homes.leaf_checked(moves(outputs, parameters), out) = Some(done),
+    stop_ok: homes.leaf_checked(loop_stop(exhausted), done) = Some(stop),
+    down_ok: homes.leaf_checked(loop_down(count, exhausted), set) = Some(down),
+    after_ok: homes.leaf_checked(moves(parameters, next), Cons(exit, stop.union(down))) = Some(after),
+    body_ok: homes.region_checked(body, after) = Some(homes.region_live(body, after)),
+    head: List<Nat>,
+    head_ok: homes.leaf_checked(loop_zero(count, exhausted), Cons(exhausted, homes.region_live(body, after).union(done))) = Some(head),
+    closed: head.within(set).IsTrue(),
+    entry_ok: homes.leaf_checked(loop_entry(bound, count, inputs, parameters), set) = Some(live),
+}
+
+theorem Homes::loop_checked(self homes: Homes, inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat,
+    next, outputs: List<Nat>, exhausted: Nat, out, live: List<Nat>,
+    checked: homes.region_checked(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), out) = Some(live)):
+    LoopChecked(homes, out, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, homes.loop_set(count),
+        nodes_live_in(moves(outputs, parameters), out), nodes_live_in(loop_stop(exhausted), nodes_live_in(moves(outputs, parameters), out)),
+        nodes_live_in(loop_down(count, exhausted), homes.loop_set(count)),
+        nodes_live_in(moves(parameters, next), Cons(exit, nodes_live_in(loop_stop(exhausted), nodes_live_in(moves(outputs, parameters), out))
+            .union(nodes_live_in(loop_down(count, exhausted), homes.loop_set(count))))), live) {
+    let set = homes.loop_set(count);
+    let done = nodes_live_in(moves(outputs, parameters), out);
+    let stop = nodes_live_in(loop_stop(exhausted), done);
+    let down = nodes_live_in(loop_down(count, exhausted), set);
+    let after = nodes_live_in(moves(parameters, next), Cons(exit, stop.union(down)));
+    let chain: (homes.leaf_checked(moves(outputs, parameters), out).and_then(λ done =>
+        homes.leaf_checked(loop_stop(exhausted), done).and_then(λ stop =>
+        homes.leaf_checked(loop_down(count, exhausted), set).and_then(λ down =>
+        homes.leaf_checked(moves(parameters, next), Cons(exit, stop.union(down))).and_then(λ after =>
+        homes.region_checked(body, after).and_then(λ b =>
+        homes.leaf_checked(loop_zero(count, exhausted), Cons(exhausted, b.union(done))).and_then(λ head =>
+        homes.closed(head, set, loop_entry(bound, count, inputs, parameters)))))))) = Some(live)) = checked;
+    let c1 = Option::and_then_canon(chain, done, λ a got => homes.leaf_checked_sound(moves(outputs, parameters), out, a, got).left);
+    let c2 = Option::and_then_canon(c1.right, stop, λ a got => homes.leaf_checked_sound(loop_stop(exhausted), done, a, got).left);
+    let c3 = Option::and_then_canon(c2.right, down, λ a got => homes.leaf_checked_sound(loop_down(count, exhausted), set, a, got).left);
+    let c4 = Option::and_then_canon(c3.right, after, λ a got => homes.leaf_checked_sound(moves(parameters, next), Cons(exit, stop.union(down)), a, got).left);
+    let c5 = Option::and_then_canon(c4.right, homes.region_live(body, after), λ a got => homes.region_live_of(body, after, a, got));
+    Option::and_then_with(c5.right, λ head head_ok rest => {
+        let closing: (head.within(set).guard(homes.leaf_checked(loop_entry(bound, count, inputs, parameters), set)) = Some(live)) = rest;
+        Bool::guard_with(closing, λ closed entry_ok => LoopChecked(c1.left, c2.left, c3.left, c4.left, c5.left, head, head_ok, closed, entry_ok))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// A loop runs as its source's loop
+
+// The words outside `clobbered` as they were.
+fn Env::Kept(self now: Env, env: Env, clobbered: List<Nat>) → Type { (x: Nat) → absent(x, clobbered).IsTrue() → now.number(x) = env.number(x) }
+
+// Where a loop's passes end: the state in the parameters, the bit, the
+// buffers the passes left, every word the loop never writes as it was.
+fn Env::LoopEnds(self now: Env, env: Env, final: LoopState, parameters: List<Nat>, count, exhausted: Nat, body: StructuredRegion) → Type {
+    (now.buffers = final.buffers) ∧ ((now.args = env.args) ∧ ((words_of(now.valuation(), parameters) = final.end.state) ∧
+        ((now.number(exhausted) = bit_value(final.end.exhausted, 1).toNat()) ∧ now.Kept(env, Cons(count, Cons(exhausted, parameters ++ body.touches()))))))
+}
+
+record Clear(x: Nat, count, exhausted: Nat, parameters, touched: List<Nat>) {
+    not_count: x ≠ count,
+    not_exhausted: x ≠ exhausted,
+    not_parameter: absent(x, parameters).IsTrue(),
+    untouched: absent(x, touched).IsTrue(),
+}
+
+theorem clear_of(x, count, exhausted: Nat, parameters, touched: List<Nat>, h: absent(x, Cons(count, Cons(exhausted, parameters ++ touched))).IsTrue()):
+    Clear(x, count, exhausted, parameters, touched) {
+    let p1 = Bool::is_true_and(x.differs(count), absent(x, Cons(exhausted, parameters ++ touched)), h);
+    let p2 = Bool::is_true_and(x.differs(exhausted), absent(x, parameters ++ touched), p1.right);
+    let p3 = absent_append(x, parameters, touched, p2.right);
+    Clear(x.differs_ne(count, p1.left), x.differs_ne(exhausted, p2.left), p3.left, p3.right)
+}
+
+// The code from `p` to `q` runs as the region's meaning, from what it needs
+// live to what is live after it.
+fn Target::Computes(self t: Target, region: StructuredRegion, call: Answers(), live, out: List<Nat>, p, q: Prog) → Type {
+    (env: Env) → (tree: ITree<BitVec(64)>(Events::linux())) → t.At(prog_len(q), out, tree, region.meaning(call, env)) → t.At(prog_len(p), live, tree, env)
+}
+
+// At the loop's head with `m` passes left in its count, the parameters
+// holding the pass's state: the code runs on to where the passes end.
+theorem Target::loop_head(self t: Target, call: Answers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
+    exit: Nat, next, outputs: List<Nat>, exhausted: Nat, p: Prog, out: List<Nat>, names: Nat, c: Compiled, set, done, stop, down, after, live: List<Nat>,
+    k: LoopCode(p, t.layout(), out, names, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, set, done, stop, down, after, c),
+    h: LoopChecked(t.homes, out, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, set, done, stop, down, after, live),
+    within: c.prog.Within(t.program), shape: LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted),
+    bs: Scope, body_scoped: body.scoped(Scope::pass(parameters, count)) = Some(bs), bits: (bs.bit(exit) && bs.all_defined(next)).IsTrue(),
+    body_runs: t.Computes(body, call, t.homes.region_live(body, after), after,
+        k.z.prog.tests(t.layout(), exhausted, Succ(Succ(names))).else_label(Succ(Succ(names)), Succ(Succ(Succ(Succ(names))))), k.b.prog),
+    env: Env, tree: ITree<BitVec(64)>(Events::linux()), final: LoopState,
+    ends: (now: Env) → now.LoopEnds(env, final, parameters, count, exhausted, body) →
+        t.At(prog_len(then(k.d.prog, Jmp(Succ(names))).label(Succ(Succ(Succ(Succ(names)))))), done, tree, now), m: Nat):
+    (now: Env) → (state: List<BitVec(64)>) → m < Nat::pow(2, 64) → now.number(count) = m → words_of(now.valuation(), parameters) = state →
+    now.args = env.args → now.Kept(env, Cons(count, Cons(exhausted, parameters ++ body.touches()))) →
+    loop_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, count, exit, next, m, state, now.buffers) = final →
+    t.At(prog_len(k.e.prog), set, tree, now) {
+    let layout = t.layout();
+    let head = Succ(names);
+    let enter = Succ(head);
+    let again = Succ(enter);
+    let leave = Succ(again);
+    let hp = k.e.prog.label(head);
+    let zt = k.z.prog.tests(layout, exhausted, enter);
+    let zjump = then(zt, Jmp(leave));
+    let zl = zt.else_label(enter, leave);
+    let mt = k.m.prog.tests(layout, exit, again);
+    let xjump = then(k.x.prog, Jmp(leave));
+    let xl = k.x.prog.else_label(again, leave);
+    let djump = then(k.d.prog, Jmp(head));
+    let dj = djump.label(leave);
+    let zero_out = Cons(exhausted, t.homes.region_live(body, after).union(done));
+    let exit_out = Cons(exit, stop.union(down));
+    let w_dj: dj.Within(t.program) = dj.within_trans(c.prog, t.program, dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), within);
+    let w_djump: djump.Within(t.program) = djump.within_before(leave, Block([]), t.program, w_dj);
+    let w_d: k.d.prog.Within(t.program) = k.d.prog.within_before(0, Jmp(head), t.program, w_djump);
+    let w_xl: xl.Within(t.program) = xl.within_trans(k.d.prog, t.program, xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is), w_d);
+    let w_xjump: xjump.Within(t.program) = xjump.within_before(again, Block([]), t.program, w_xl);
+    let w_x: k.x.prog.Within(t.program) = k.x.prog.within_before(0, Jmp(leave), t.program, w_xjump);
+    let w_mt: mt.Within(t.program) = mt.within_trans(k.x.prog, t.program, mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is), w_x);
+    let w_m: k.m.prog.Within(t.program) = k.m.prog.within_trans(mt, t.program, k.m.prog.within_tests(layout, exit, again), w_mt);
+    let w_b: k.b.prog.Within(t.program) = k.b.prog.within_trans(k.m.prog, t.program,
+        k.b.prog.within_computes(layout, exit_out, moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
+    let w_zl: zl.Within(t.program) = zl.within_trans(k.b.prog, t.program, body.within_code(layout, zl, after, k.z.names, k.b, k.b_is), w_b);
+    let w_zjump: zjump.Within(t.program) = zjump.within_before(enter, Block([]), t.program, w_zl);
+    let w_zt: zt.Within(t.program) = zt.within_before(0, Jmp(leave), t.program, w_zjump);
+    let w_z: k.z.prog.Within(t.program) = k.z.prog.within_trans(zt, t.program, k.z.prog.within_tests(layout, exhausted, enter), w_zt);
+    let w_hp: hp.Within(t.program) = hp.within_trans(k.z.prog, t.program, hp.within_computes(layout, zero_out, loop_zero(count, exhausted), k.e.names, k.z, k.z_is), w_z);
+    let fit = Bool::is_true_and(layout.words_fit([exhausted, exit]), loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches())), k.fits);
+    let f1 = Bool::is_true_and(layout.word_fits(exhausted), layout.word_fits(exit) && True, fit.left);
+    let f2 = Bool::is_true_and(layout.word_fits(exit), True, f1.right);
+    let inside_exhausted = layout.word_inside(exhausted, f1.left);
+    let inside_exit = layout.word_inside(exit, f2.left);
+    let count_exhausted: (count ≠ exhausted) = count.differs_ne(exhausted, shape.count_exhausted);
+    let param_exhausted = λ (x: Nat) (mx: Mem(x, parameters)) => { let ne: (x ≠ exhausted) = λ e => absent_mem(exhausted, parameters, shape.exhausted_parameters, x, mx, sym(e)); ne };
+    let param_count = λ (x: Nat) (mx: Mem(x, parameters)) => { let ne: (x ≠ count) = λ e => absent_mem(count, parameters, shape.count_parameters, x, mx, sym(e)); ne };
+    let next_len: (next.len() = parameters.len()) = Nat::matches_eq(next.len(), parameters.len(), shape.next_len);
+    let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
+    let closed_sub = λ (i: Nat) (mi: Mem(i, h.head)) => h.head.within_mem(set, h.closed, i, mi);
+    let zero_leaf = λ (now: Env) (goes: t.At(prog_len(k.z.prog), zero_out, tree, now.steps(loop_zero(count, exhausted)))) =>
+        t.at_sub(prog_len(hp), h.head, set, tree, now, closed_sub,
+            t.leaf_goes(zero_out, loop_zero(count, exhausted), hp, k.e.names, k.z, k.z_is, w_z, h.head, h.head_ok, trivial, now, tree, goes));
+    match m {
+        Zero => λ now state fits counted held args kept run => {
+            let ez = now.steps(loop_zero(count, exhausted));
+            let za = now.loop_zero_at(count, exhausted, count_exhausted);
+            let one: (ez.number(exhausted) = 1) = trans(za.left,
+                cong_fn<Nat, Nat>(λ v => bit_value(BitVec::ofNat(v, n := 64).eq_bit(BitVec::ofNat(0)), 64).toNat(), counted));
+            let set_bit: (ez.bit(exhausted) = True) = cong_fn<Nat, Bool>(λ v => BitVec::ofNat(v, n := 64).head_bit(), one);
+            let run0: (LoopState(LoopEnd(state, True), now.buffers) = final) = run;
+            let ended: ez.LoopEnds(env, final, parameters, count, exhausted, body) =
+                ⟨trans(za.right.right.left, cong_fn<LoopState, Buffers()>(λ s => s.buffers, run0)),
+                ⟨trans(za.right.right.right, args),
+                ⟨trans(trans(now.words_kept(ez, parameters, λ x mx => za.right.left(x, param_exhausted(x, mx))), held),
+                    cong_fn<LoopState, List<BitVec(64)>>(λ s => s.end.state, run0)),
+                ⟨trans(one, cong_fn<LoopState, Nat>(λ s => bit_value(s.end.exhausted, 1).toNat(), run0)),
+                    λ x cl => trans(za.right.left(x, clear_of(x, count, exhausted, parameters, body.touches(), cl).not_exhausted), kept(x, cl))⟩⟩⟩⟩;
+            zero_leaf(now, t.goes_tests(zero_out, ez, k.z.prog, exhausted, head, inside_exhausted, Inl(refl), w_zt, w_zl.witness, zjump, Block([]), w_zl.proof, tree,
+                λ _ => t.at_jmp(zt, again, w_zjump, djump, Block([]), w_dj, tree, zero_out, ez,
+                    t.at_sub(prog_len(djump), done, zero_out, tree, ez, λ i mi => Inr(t.homes.region_live(body, after).union_right(done, i, mi)), ends(ez, ended))),
+                λ (clear: ez.bit(exhausted) = False) => absurd(trans(sym(set_bit), clear))))
+        },
+        Succ(k2) => λ now state fits counted held args kept run => {
+            let ez = now.steps(loop_zero(count, exhausted));
+            let za = now.loop_zero_at(count, exhausted, count_exhausted);
+            let zero_bit: (ez.number(exhausted) = 0) = trans(za.left, trans(
+                cong_fn<Nat, Nat>(λ v => bit_value(BitVec::ofNat(v, n := 64).eq_bit(BitVec::ofNat(0)), 64).toNat(), counted),
+                cong_fn<Bool, Nat>(λ b => bit_value(b, 64).toNat(), count_nonzero(k2, fits))));
+            let clear_bit: (ez.bit(exhausted) = False) = cong_fn<Nat, Bool>(λ v => BitVec::ofNat(v, n := 64).head_bit(), zero_bit);
+            let z_count: (ez.number(count) = Succ(k2)) = trans(za.right.left(count, count_exhausted), counted);
+            let z_held: (words_of(ez.valuation(), parameters) = state) =
+                trans(now.words_kept(ez, parameters, λ x mx => za.right.left(x, param_exhausted(x, mx))), held);
+            let z_kept = λ (x: Nat) (cl: absent(x, Cons(count, Cons(exhausted, parameters ++ body.touches()))).IsTrue()) =>
+                trans(za.right.left(x, clear_of(x, count, exhausted, parameters, body.touches(), cl).not_exhausted), kept(x, cl));
+            let pv = pass_valuation(parameters, count, Succ(k2), state);
+            let agree = ez.pass_agrees(parameters, count, Succ(k2), state, shape.count_parameters, z_count, z_held);
+            let mb = body.meaning(call, ez);
+            let fa = body.faithful(call, Scope::pass(parameters, count), bs, body_scoped, pv, ez, agree);
+            let run_s = body.run(call, pv, ez.buffers);
+            let after_next = words_of(run_s.values, next);
+            let run_z: (loop_run(step, parameters, count, exit, next, Succ(k2), state, ez.buffers) = final) =
+                j(sym(za.right.right.left), λ bb _ => loop_run(step, parameters, count, exit, next, Succ(k2), state, bb) = final, run);
+            let branch = λ (b: Bool) => match b as λ _ => LoopState {
+                False => loop_run(step, parameters, count, exit, next, k2, after_next, run_s.buffers),
+                True => LoopState(LoopEnd(after_next, False), run_s.buffers),
+            };
+            let run_b: (branch(run_s.values(1, exit).head_bit()) = final) = run_z;
+            let em = mb.steps(moves(parameters, next));
+            let moved = Env::steps_moves(parameters, next, shape.next_ordered, shape.parameters_distinct, next_len, mb);
+            let bp = Bool::is_true_and(bs.bit(exit), bs.all_defined(next), bits);
+            let bx = Bool::is_true_and(bs.defined(exit), !bs.loose(exit), bp.left);
+            let agrees_after = fa.right.right;
+            let exit_bit: (run_s.values(1, exit).head_bit() = em.bit(exit)) = trans(agrees_after(exit, bx.left).right(bx.right),
+                sym(cong_fn<Nat, Bool>(λ v => BitVec::ofNat(v, n := 64).head_bit(), moved.left(exit, shape.exit_parameters))));
+            let next_words: (after_next = words_of(mb.valuation(), next)) = words_agree(next, mb.valuation(), run_s.values,
+                λ id mi => agrees_after(id, bs.all_defined_mem(next, bp.right, id, mi)).left);
+            let m_state: (words_of(em.valuation(), parameters) = after_next) =
+                trans(Env::moves_words(parameters, next, shape.next_ordered, shape.parameters_distinct, next_len, mb), sym(next_words));
+            let mb_args: (mb.args = ez.args) = trans(sym(fa.right.left.right.right),
+                Env::settle_kept(body.written(call, pv, ez.buffers), Env(ez.words, run_s.buffers, ez.args), run_s.values).right);
+            let m_buffers: (em.buffers = run_s.buffers) = trans(moved.right.right.left, sym(fa.left));
+            let m_args: (em.args = env.args) = trans(moved.right.right.right, trans(mb_args, trans(za.right.right.right, args)));
+            let m_kept = λ (x: Nat) (cl: absent(x, Cons(count, Cons(exhausted, parameters ++ body.touches()))).IsTrue()) => {
+                let cx = clear_of(x, count, exhausted, parameters, body.touches(), cl);
+                let r: (em.number(x) = env.number(x)) = trans(moved.left(x, cx.not_parameter), trans(body.meaning_frame(call, ez, x, cx.untouched), z_kept(x, cl)));
+                r
+            };
+            let m_count: (em.number(count) = Succ(k2)) =
+                trans(moved.left(count, shape.count_parameters), trans(body.meaning_frame(call, ez, count, shape.count_body), z_count));
+            let x_leg = λ (set_exit: em.bit(exit) = True) => {
+                let ex = em.steps(loop_stop(exhausted));
+                let sa = em.loop_stop_at(exhausted);
+                let hb: (run_s.values(1, exit).head_bit() = True) = trans(exit_bit, set_exit);
+                let run_t: (LoopState(LoopEnd(after_next, False), run_s.buffers) = final) = j(hb, λ b _ => branch(b) = final, run_b);
+                let ended: ex.LoopEnds(env, final, parameters, count, exhausted, body) =
+                    ⟨trans(sa.right.right.left, trans(m_buffers, cong_fn<LoopState, Buffers()>(λ s => s.buffers, run_t))),
+                    ⟨trans(sa.right.right.right, m_args),
+                    ⟨trans(trans(em.words_kept(ex, parameters, λ x mx => sa.right.left(x, param_exhausted(x, mx))), m_state),
+                        cong_fn<LoopState, List<BitVec(64)>>(λ s => s.end.state, run_t)),
+                    ⟨trans(sa.left, cong_fn<LoopState, Nat>(λ s => bit_value(s.end.exhausted, 1).toNat(), run_t)),
+                        λ x cl => trans(sa.right.left(x, clear_of(x, count, exhausted, parameters, body.touches(), cl).not_exhausted), m_kept(x, cl))⟩⟩⟩⟩;
+                t.at_sub(prog_len(mt), stop, exit_out, tree, em, λ i mi => Inr(stop.union_left(down, i, mi)),
+                    t.leaf_goes(done, loop_stop(exhausted), mt, k.m.names, k.x, k.x_is, w_x, stop, h.stop_ok, trivial, em, tree,
+                        t.at_jmp(k.x.prog, again, w_xjump, djump, Block([]), w_dj, tree, done, ex, ends(ex, ended))))
+            };
+            let d_leg = λ (clear_exit: em.bit(exit) = False) => {
+                let ed = em.steps(loop_down(count, exhausted));
+                let da = em.loop_down_at(count, exhausted, count_exhausted);
+                let hb: (run_s.values(1, exit).head_bit() = False) = trans(exit_bit, clear_exit);
+                let run_f0: (loop_run(step, parameters, count, exit, next, k2, after_next, run_s.buffers) = final) = j(hb, λ b _ => branch(b) = final, run_b);
+                let d_buffers: (ed.buffers = run_s.buffers) = trans(da.right.right.left, m_buffers);
+                let run_f: (loop_run(step, parameters, count, exit, next, k2, after_next, ed.buffers) = final) =
+                    j(sym(d_buffers), λ bb _ => loop_run(step, parameters, count, exit, next, k2, after_next, bb) = final, run_f0);
+                let d_count: (ed.number(count) = k2) = trans(da.left,
+                    trans(cong_fn<Nat, Nat>(λ v => BitVec::ofNat(v, n := 64).sub(BitVec::ofNat(1)).toNat(), m_count), count_down(k2, fits)));
+                let d_held: (words_of(ed.valuation(), parameters) = after_next) =
+                    trans(em.words_kept(ed, parameters, λ x mx => da.right.left(x, param_exhausted(x, mx), param_count(x, mx))), m_state);
+                let d_kept = λ (x: Nat) (cl: absent(x, Cons(count, Cons(exhausted, parameters ++ body.touches()))).IsTrue()) => {
+                    let cx = clear_of(x, count, exhausted, parameters, body.touches(), cl);
+                    let r: (ed.number(x) = env.number(x)) = trans(da.right.left(x, cx.not_exhausted, cx.not_count), m_kept(x, cl));
+                    r
+                };
+                let rest = t.loop_head(call, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, out, names, c, set, done, stop, down, after, live,
+                    k, h, within, shape, bs, body_scoped, bits, body_runs, env, tree, final, ends,
+                    k2, ed, after_next, Nat::lt_trans(k2, Succ(k2), Nat::pow(2, 64), k2.lt_succ_self(), fits), d_count, d_held,
+                    trans(da.right.right.right, m_args), d_kept, run_f);
+                t.at_sub(prog_len(xl), down, exit_out, tree, em, λ i mi => Inr(stop.union_right(down, i, mi)),
+                    t.leaf_goes(set, loop_down(count, exhausted), xl, k.x.names, k.d, k.d_is, w_d, down, h.down_ok, trivial, em, tree,
+                        t.at_jmp(k.d.prog, names, w_djump, k.e.prog, Block([]), w_hp, tree, set, ed, rest)))
+            };
+            let m_leg = t.goes_tests(exit_out, em, k.m.prog, exit, enter, inside_exit, Inl(refl), w_mt, w_xl.witness, xjump, Block([]), w_xl.proof, tree, x_leg, d_leg);
+            let body_leg = body_runs(ez, tree, t.leaf_goes(exit_out, moves(parameters, next), k.b.prog, k.b.names, k.m, k.m_is, w_m, after, h.after_ok,
+                moves_wide(parameters, next), mb, tree, m_leg));
+            zero_leaf(now, t.goes_tests(zero_out, ez, k.z.prog, exhausted, head, inside_exhausted, Inl(refl), w_zt, w_zl.witness, zjump, Block([]), w_zl.proof, tree,
+                λ (set_bit: ez.bit(exhausted) = True) => absurd(trans(sym(set_bit), clear_bit)),
+                λ _ => t.at_sub(prog_len(zl), t.homes.region_live(body, after), zero_out, tree, ez,
+                    λ i mi => Inr(t.homes.region_live(body, after).union_left(done, i, mi)), body_leg)))
+        },
+    }
+}
+
+// A loop's code runs as its meaning: the entry sets the count and the
+// parameters, the head runs the passes, and the exit's moves leave the
+// outputs, the bit and every word the loop never writes as the meaning does.
+theorem Target::loop_goes(self t: Target, call: Answers(), inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, body: StructuredRegion,
+    exit: Nat, next, outputs: List<Nat>, exhausted: Nat, p: Prog, out: List<Nat>, names: Nat, c: Compiled, live: List<Nat>,
+    emitted: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).code(p, t.layout(), out, names) = Some(c),
+    within: c.prog.Within(t.program),
+    checked: t.homes.region_checked(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), out) = Some(live),
+    ok: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).Ok(),
+    body_runs: (q: Prog) → (o: List<Nat>) → (n: Nat) → (bc: Compiled) → body.code(q, t.layout(), o, n) = Some(bc) → bc.prog.Within(t.program) →
+        (l: List<Nat>) → t.homes.region_checked(body, o) = Some(l) → t.Computes(body, call, l, o, q, bc.prog)):
+    t.Computes(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), call, live, out, p, c.prog) {
+    let layout = t.layout();
+    let k = StructuredRegion::loop_code(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, layout, out, names, c, emitted);
+    let h = t.homes.loop_checked(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, out, live, checked);
+    let shape = ok.right.left;
+    let head = Succ(names);
+    let enter = Succ(head);
+    let again = Succ(enter);
+    let leave = Succ(again);
+    let set = t.homes.loop_set(count);
+    let done = nodes_live_in(moves(outputs, parameters), out);
+    let stop = nodes_live_in(loop_stop(exhausted), done);
+    let down = nodes_live_in(loop_down(count, exhausted), set);
+    let after = nodes_live_in(moves(parameters, next), Cons(exit, stop.union(down)));
+    let hp = k.e.prog.label(head);
+    let zt = k.z.prog.tests(layout, exhausted, enter);
+    let zl = zt.else_label(enter, leave);
+    let mt = k.m.prog.tests(layout, exit, again);
+    let xl = k.x.prog.else_label(again, leave);
+    let djump = then(k.d.prog, Jmp(head));
+    let dj = djump.label(leave);
+    let w_dj: dj.Within(t.program) = dj.within_trans(c.prog, t.program, dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), within);
+    let w_d: k.d.prog.Within(t.program) = k.d.prog.within_before(0, Jmp(head), t.program, djump.within_before(leave, Block([]), t.program, w_dj));
+    let w_xl: xl.Within(t.program) = xl.within_trans(k.d.prog, t.program, xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is), w_d);
+    let w_x: k.x.prog.Within(t.program) = k.x.prog.within_before(0, Jmp(leave), t.program, then(k.x.prog, Jmp(leave)).within_before(again, Block([]), t.program, w_xl));
+    let w_mt: mt.Within(t.program) = mt.within_trans(k.x.prog, t.program, mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is), w_x);
+    let w_m: k.m.prog.Within(t.program) = k.m.prog.within_trans(mt, t.program, k.m.prog.within_tests(layout, exit, again), w_mt);
+    let w_b: k.b.prog.Within(t.program) = k.b.prog.within_trans(k.m.prog, t.program,
+        k.b.prog.within_computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
+    let w_zl: zl.Within(t.program) = zl.within_trans(k.b.prog, t.program, body.within_code(layout, zl, after, k.z.names, k.b, k.b_is), w_b);
+    let w_zt: zt.Within(t.program) = zt.within_before(0, Jmp(leave), t.program, then(zt, Jmp(leave)).within_before(enter, Block([]), t.program, w_zl));
+    let w_z: k.z.prog.Within(t.program) = k.z.prog.within_trans(zt, t.program, k.z.prog.within_tests(layout, exhausted, enter), w_zt);
+    let w_hp: hp.Within(t.program) = hp.within_trans(k.z.prog, t.program,
+        hp.within_computes(layout, Cons(exhausted, t.homes.region_live(body, after).union(done)), loop_zero(count, exhausted), k.e.names, k.z, k.z_is), w_z);
+    let w_e: k.e.prog.Within(t.program) = k.e.prog.within_before(head, Block([]), t.program, w_hp);
+    let fit = Bool::is_true_and(layout.words_fit([exhausted, exit]), loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches())), k.fits);
+    let keeps = loop_keeps_mem(out, outputs, exhausted, Cons(count, parameters ++ body.touches()), fit.right);
+    let outputs_len: (outputs.len() = parameters.len()) = Nat::matches_eq(outputs.len(), parameters.len(), shape.outputs_len);
+    let inputs_len: (inputs.len() = parameters.len()) = Nat::matches_eq(inputs.len(), parameters.len(), shape.inputs_len);
+    let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
+    let body_go = body_runs(zl, after, k.z.names, k.b, k.b_is, w_b, t.homes.region_live(body, after), h.body_ok);
+    let passes = λ (bs: Scope) => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue();
+    λ env tree next_out => Exists::with(passes, ok.right.right, λ bs pr => {
+        let m0 = env.valuation()(64, bound).toNat();
+        let s0 = words_of(env.valuation(), inputs);
+        let final = loop_run(step, parameters, count, exit, next, m0, s0, env.buffers);
+        let looped = env.looped(final, outputs, exhausted);
+        let lp = env.looped_at(final, outputs, exhausted, shape.exhausted_outputs);
+        let ends = λ (now: Env) (le: now.LoopEnds(env, final, parameters, count, exhausted, body)) => {
+            let eo = now.steps(moves(outputs, parameters));
+            let os = Env::steps_moves(outputs, parameters, shape.outputs_ordered, shape.outputs_distinct, sym(outputs_len), now);
+            let state_len: (final.end.state.len() = outputs.len()) = trans(sym(cong_fn<List<BitVec(64)>, Nat>(λ l => l.len(), le.right.right.left)),
+                trans(words_of_len(now.valuation(), parameters), sym(outputs_len)));
+            let at_exhausted: (eo.number(exhausted) = looped.number(exhausted)) =
+                trans(os.left(exhausted, shape.exhausted_outputs), trans(le.right.right.right.left, sym(lp.bit)));
+            let at_output = λ (i: Nat) (ne: i ≠ exhausted) (mo: Mem(i, outputs)) => {
+                let r: (eo.number(i) = looped.number(i)) = trans(os.right.left(i, mo), trans(
+                    cong_fn<List<BitVec(64)>, Nat>(λ ws => Valuation::bind(now.valuation(), outputs, ws)(64, i).toNat(), le.right.right.left),
+                    trans(cong_fn<BitVec(64), Nat>(λ w => w.toNat(), Valuation::bind_bound(outputs, final.end.state, state_len, now.valuation(), env.valuation(), 64, i, mo)),
+                        sym(lp.outs(i, ne, mo)))));
+                r
+            };
+            let at_other = λ (i: Nat) (ne: i ≠ exhausted) (fresh: absent(i, outputs).IsTrue()) (cl: absent(i, Cons(count, parameters ++ body.touches())).IsTrue()) => {
+                let parts = Bool::is_true_and(i.differs(count), absent(i, parameters ++ body.touches()), cl);
+                let wide: absent(i, Cons(count, Cons(exhausted, parameters ++ body.touches()))).IsTrue() =
+                    Bool::is_true_and_intro(i.differs(count), i.differs(exhausted) && absent(i, parameters ++ body.touches()), parts.left,
+                        Bool::is_true_and_intro(i.differs(exhausted), absent(i, parameters ++ body.touches()), i.differs_of_ne(exhausted, ne), parts.right));
+                let r: (eo.number(i) = looped.number(i)) = trans(os.left(i, fresh), trans(le.right.right.right.right(i, wide), sym(lp.others(i, ne, fresh))));
+                r
+            };
+            let like: eo.Like(looped, out) = ⟨λ i mi => match i.eq_dec(exhausted) {
+                    Inl(e) => j(sym(e), λ y _ => eo.number(y) = looped.number(y), at_exhausted),
+                    Inr(ne) => match held_out: absent(i, outputs) {
+                        False => at_output(i, ne, outputs.holds_mem(i, cong_fn<Bool, Bool>(λ b => !b, held_out))),
+                        True => {
+                            let fresh_t: absent(i, outputs).IsTrue() = j(sym(held_out), λ b _ => b.IsTrue(), trivial);
+                            let cl = match Bool::is_true_or(i.matches(exhausted) || outputs.holds(i), absent(i, Cons(count, parameters ++ body.touches())), keeps(i, mi))
+                                    as λ _ => absent(i, Cons(count, parameters ++ body.touches())).IsTrue() {
+                                Inl(either) => match Bool::is_true_or(i.matches(exhausted), outputs.holds(i), either) {
+                                    Inl(same) => false_elim(ne(i.matches_eq(exhausted, same))),
+                                    Inr(holds) => false_elim(j(held_out, λ b _ => (!b).IsTrue(), holds)),
+                                },
+                                Inr(a) => a,
+                            };
+                            at_other(i, ne, fresh_t, cl)
+                        },
+                    },
+                },
+                ⟨trans(os.right.right.left, trans(le.left, sym(lp.buffers))), trans(os.right.right.right, trans(le.right.left, sym(lp.args)))⟩⟩;
+            t.leaf_goes(out, moves(outputs, parameters), dj, k.d.names, c, k.c_is, within, done, h.done_ok, moves_wide(outputs, parameters), now, tree,
+                t.at_like(prog_len(c.prog), out, tree, Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).meaning(call, env), eo, like, next_out))
+        };
+        let move = Move(64, count, bound);
+        let e0 = env.computes([move]);
+        let e1 = e0.steps(moves(parameters, inputs));
+        let entered = Env::steps_moves(parameters, inputs, shape.entry_ordered, shape.parameters_distinct, inputs_len, e0);
+        let k0 = env.plain_kept(move, trivial);
+        let input_count = λ (x: Nat) (mx: Mem(x, inputs)) => { let ne: (x ≠ count) = λ e => absent_mem(count, inputs, shape.count_inputs, x, mx, sym(e)); ne };
+        let counted0: (e1.number(count) = m0) = trans(entered.left(count, shape.count_parameters), env.plain_here(move, trivial));
+        let held0: (words_of(e1.valuation(), parameters) = s0) = trans(Env::moves_words(parameters, inputs, shape.entry_ordered, shape.parameters_distinct, inputs_len, e0),
+            env.words_kept(e0, inputs, λ x mx => env.plain_other(move, trivial, x, input_count(x, mx))));
+        let args0: (e1.args = env.args) = trans(entered.right.right.right, k0.right);
+        let buffers0: (e1.buffers = env.buffers) = trans(entered.right.right.left, k0.left);
+        let kept0 = λ (x: Nat) (cl: absent(x, Cons(count, Cons(exhausted, parameters ++ body.touches()))).IsTrue()) => {
+            let cx = clear_of(x, count, exhausted, parameters, body.touches(), cl);
+            let r: (e1.number(x) = env.number(x)) = trans(entered.left(x, cx.not_parameter), env.plain_other(move, trivial, x, cx.not_count));
+            r
+        };
+        let run0: (loop_run(step, parameters, count, exit, next, m0, s0, e1.buffers) = final) =
+            j(sym(buffers0), λ bb _ => loop_run(step, parameters, count, exit, next, m0, s0, bb) = final, refl);
+        t.leaf_goes(set, loop_entry(bound, count, inputs, parameters), p, leave, k.e, k.e_is, w_e, live, h.entry_ok,
+            Bool::is_true_and_intro(move.wide(), nodes_wide(moves(parameters, inputs)), trivial, moves_wide(parameters, inputs)), env, tree,
+            t.loop_head(call, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, out, names, c, set, done, stop, down, after, live,
+                k, h, within, shape, bs, pr.left, pr.right, body_go, env, tree, final, ends,
+                m0, e1, s0, BitVec::toNat_lt_pow(64, env.valuation()(64, bound)), counted0, held0, args0, kept0, run0))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Every region compiled runs as its meaning
+
+theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, call: Answers()): region.Ok() → (p: Prog) → (out: List<Nat>) → (names: Nat) →
+    (c: Compiled) → region.code(p, t.layout(), out, names) = Some(c) → c.prog.Within(t.program) → (live: List<Nat>) →
+    t.homes.region_checked(region, out) = Some(live) → t.Computes(region, call, live, out, p, c.prog) {
+    let layout = t.layout();
+    match region {
+        Dataflow(body) => λ ok p out names c emitted within live checked env tree next =>
+            t.leaf_goes(out, body.nodes, p, names, c, emitted, within, live, checked, ok, env, tree, next),
+        Sequence(prefix, continuation) => λ ok p out names c emitted within live checked => {
+            let mid = t.homes.region_live(continuation, out);
+            let chain: (p.computes(layout, mid, prefix.nodes, names).and_then(λ a => continuation.code(a.prog, layout, out, a.names)) = Some(c)) = emitted;
+            let checks: (t.homes.region_checked(continuation, out).and_then(λ m => t.homes.leaf_checked(prefix.nodes, m)) = Some(live)) = checked;
+            let cc = Option::and_then_canon(checks, mid, λ a got => t.homes.region_live_of(continuation, out, a, got));
+            Option::and_then_with(chain, λ a first rest => {
+                let runs = continuation.code_runs(t, call, ok.right, a.prog, out, a.names, c, rest, within, mid, cc.left);
+                let w_a = a.prog.within_trans(c.prog, t.program, continuation.within_code(layout, a.prog, out, a.names, c, rest), within);
+                let r: t.Computes(Sequence(prefix, continuation), call, live, out, p, c.prog) = λ env tree next =>
+                    t.leaf_goes(mid, prefix.nodes, p, names, a, first, w_a, live, cc.right, ok.left, env, tree, runs(env.steps(prefix.nodes), tree, next));
+                r
+            })
+        },
+        Compose(prefix, continuation) => λ ok p out names c emitted within live checked => {
+            let mid = t.homes.region_live(continuation, out);
+            let chain: (prefix.code(p, layout, mid, names).and_then(λ a => continuation.code(a.prog, layout, out, a.names)) = Some(c)) = emitted;
+            let checks: (t.homes.region_checked(continuation, out).and_then(λ m => t.homes.region_checked(prefix, m)) = Some(live)) = checked;
+            let cc = Option::and_then_canon(checks, mid, λ a got => t.homes.region_live_of(continuation, out, a, got));
+            Option::and_then_with(chain, λ a first rest => {
+                let runs = continuation.code_runs(t, call, ok.right, a.prog, out, a.names, c, rest, within, mid, cc.left);
+                let w_a = a.prog.within_trans(c.prog, t.program, continuation.within_code(layout, a.prog, out, a.names, c, rest), within);
+                let pre = prefix.code_runs(t, call, ok.left, p, mid, names, a, first, w_a, live, cc.right);
+                let r: t.Computes(Compose(prefix, continuation), call, live, out, p, c.prog) = λ env tree next =>
+                    pre(env, tree, runs(prefix.meaning(call, env), tree, next));
+                r
+            })
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ ok p out names c emitted within live checked => {
+            let region = Conditional(inputs, condition, arguments, outputs, when_true, when_false);
+            let tested = p.tests(layout, condition, Succ(names));
+            let chain: (layout.word_fits(condition).guard(when_true.code(tested, layout, out, Succ(Succ(names))).and_then(λ y =>
+                when_false.code(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, y.names).and_then(λ n =>
+                Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names))))) = Some(c)) = emitted;
+            let checks: (t.homes.region_checked(when_true, out).and_then(λ y => t.homes.region_checked(when_false, out).and_then(λ n =>
+                Some(Cons(condition, y.union(n))))) = Some(live)) = checked;
+            Option::and_then_with(checks, λ yl yl_is crest => Option::and_then_with(crest, λ nl nl_is same_live =>
+            Bool::guard_with(chain, λ fit h0 => Option::and_then_with(h0, λ y y_is h1 => Option::and_then_with(h1, λ nc n_is same => {
+                let other = y.prog.else_label(Succ(names), Succ(Succ(names)));
+                let joined = nc.prog.join_label(Succ(Succ(names)));
+                let jumped = then(y.prog, Jmp(Succ(Succ(names))));
+                let arms = Cons(condition, yl.union(nl));
+                let inside = layout.word_inside(condition, fit);
+                j(Option::some_inj(arms, live, same_live), λ l _ => t.Computes(region, call, l, out, p, c.prog),
+                j(Option::some_inj(Compiled(joined, nc.names), c, same), λ x _ => x.prog.Within(t.program) → t.Computes(region, call, arms, out, p, x.prog),
+                    λ (w_joined: joined.Within(t.program)) => {
+                        let w_no = nc.prog.within_before(Succ(Succ(names)), Block([]), t.program, w_joined);
+                        let w_other = other.within_trans(nc.prog, t.program, when_false.within_code(layout, other, out, y.names, nc, n_is), w_no);
+                        let w_jumped = jumped.within_before(Succ(names), Block([]), t.program, w_other);
+                        let w_yes = y.prog.within_before(0, Jmp(Succ(Succ(names))), t.program, w_jumped);
+                        let w_tested = tested.within_trans(y.prog, t.program, when_true.within_code(layout, tested, out, Succ(Succ(names)), y, y_is), w_yes);
+                        let run_yes = when_true.code_runs(t, call, ok.left, tested, out, Succ(Succ(names)), y, y_is, w_yes, yl, yl_is);
+                        let run_no = when_false.code_runs(t, call, ok.right, other, out, y.names, nc, n_is, w_no, nl, nl_is);
+                        let r: t.Computes(region, call, arms, out, p, joined) = λ env tree next => t.goes_tests(arms, env, p, condition, names, inside, Inl(refl),
+                            w_tested, w_other.witness, jumped, Block([]), w_other.proof, tree,
+                            λ (set: env.bit(condition) = True) => t.at_sub(prog_len(tested), yl, arms, tree, env, λ i m => Inr(yl.union_left(nl, i, m)),
+                                run_yes(env, tree, t.at_jmp(y.prog, Succ(names), w_jumped, nc.prog, Block([]), w_joined, tree, out, when_true.meaning(call, env),
+                                    j(set, λ bit _ => t.At(prog_len(nc.prog), out, tree,
+                                        match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next)))),
+                            λ (clear: env.bit(condition) = False) => t.at_sub(prog_len(jumped), nl, arms, tree, env, λ i m => Inr(yl.union_right(nl, i, m)),
+                                run_no(env, tree, j(clear, λ bit _ => t.At(prog_len(nc.prog), out, tree,
+                                    match bit { False => when_false.meaning(call, env), True => when_true.meaning(call, env) }), next))));
+                        r
+                    })(within))
+            })))))
+        },
+        Call(_, _, _) => λ ok => false_elim(ok),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok p out names c emitted within live checked =>
+            t.loop_goes(call, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, out, names, c, live, emitted, within, checked, ok,
+                body.code_runs(t, call, ok.left)),
+    }
+}

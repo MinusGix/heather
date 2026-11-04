@@ -73,6 +73,13 @@ pub(crate) trait StructuralTypeElab {
     fn type_endpoint_may_need_checking(&self, _cx: &Cx, _expression: &Expr) -> bool {
         false
     }
+    /// Whether this endpoint is a call deferred only for a result-only
+    /// implicit that nonetheless infers, so it has a carrier of its own and
+    /// a bare numeral on the other side should take it rather than give it
+    /// `Nat`. Probed in isolation, as [`Self::type_endpoint_can_anchor`] is.
+    fn type_endpoint_infers_by_fallback(&self, _cx: &Cx, _expression: &Expr) -> bool {
+        false
+    }
     fn check_type_endpoint(
         &self,
         cx: &Cx,
@@ -172,6 +179,28 @@ pub(crate) trait EqualityCheckingElab: ExpectedTypeElab {
 /// Diagnostic spelling for checking forms that inspect an expected type.
 pub(crate) trait ExpectedTypeDiagnosticsElab: ExpectedTypeElab {
     fn display_expected_type(&self, cx: &Cx, expected: &Type) -> String;
+}
+
+/// What `trivial` needs beyond reading its expected type: a *budgeted* read,
+/// and a way to leave a closed verdict to the gate
+/// (`issues/closed-verdict-evaluated-twice.md`).
+///
+/// `trivial` at `heavy(300).IsTrue()` is a verdict: the expected type is
+/// `True` exactly when `heavy(300)` computes to `True`. Reading it to its weak
+/// head in the elaborator runs that computation, and the kernel then runs it
+/// again to check `⟨⟩` against the statement — twice the cost of the same
+/// verdict written `heavy(300) = True` by `refl`, whose expected type is an
+/// `=` already. So the read is bounded, and past the bound the elaborator
+/// records and the gate decides, as `refl` already does.
+pub(crate) trait UnitCheckingElab: ExpectedTypeDiagnosticsElab {
+    /// The expected type's weak head within a small fixed step budget, or
+    /// `None` when the budget ran out before a head was reached.
+    fn read_expected_type_within(&self, cx: &Cx, expected: &Type, span: Span) -> R<Option<Type>>;
+
+    /// Record — never raise — that a `trivial` was emitted at an expected
+    /// type the elaborator did not reduce, so a gate refusal is reported at
+    /// it. The structural view has no gate to report from.
+    fn defer_unit_verdict(&self, _cx: &Cx, _expected: &Type, _span: Span) {}
 }
 
 /// Recursive checking required by checking-only indexed constructors.
@@ -358,10 +387,16 @@ impl<'a> ExprElab<'a> {
                 let numeral_flexible = expression_needs_numeral_carrier(lhs, |leaf| {
                     !elab.type_endpoint_can_anchor(cx, leaf)
                 });
+                // A right endpoint that is only a numeral anchors at its
+                // `Nat` default, which is no carrier at all: a left endpoint
+                // that infers by its fallback (`∑ k < n, f(k) = 3`) keeps
+                // the written order instead.
                 let checking_flexible = !numeral_flexible
                     && elab.type_endpoint_may_need_checking(cx, lhs)
                     && !elab.type_endpoint_can_anchor(cx, lhs)
-                    && elab.type_endpoint_can_anchor(cx, rhs);
+                    && elab.type_endpoint_can_anchor(cx, rhs)
+                    && !(expression_needs_numeral_carrier(rhs, |leaf| !elab.type_endpoint_can_anchor(cx, leaf))
+                        && elab.type_endpoint_infers_by_fallback(cx, lhs));
                 let flexible = numeral_flexible || checking_flexible;
                 let (lhs_t, rhs_t, endpoint_ty, level) = if flexible {
                     let (rhs_t, endpoint_ty, level) = elab.infer_type_endpoint(cx, rhs)?;
@@ -733,14 +768,26 @@ impl<'a> ExprElab<'a> {
 
     /// The canonical inhabitant of Unit/True. Name and constructor shadowing
     /// have already been decided by root orchestration.
+    ///
+    /// An expected type whose head the budgeted read does not reach is a
+    /// verdict still to compute (`b.IsTrue()` at a closed, expensive `b`):
+    /// `⟨⟩` at the expected type's own level is emitted unread, and the
+    /// kernel's check of it is the one evaluation
+    /// ([`UnitCheckingElab`]). `⟨⟩^l : Unit^l @ l`, so if the type does
+    /// reduce to a `Unit` it is the one at `level`.
     pub(crate) fn check_unit_form(
         &self,
-        elab: &impl ExpectedTypeDiagnosticsElab,
+        elab: &impl UnitCheckingElab,
         cx: &Cx,
         expected: &Type,
+        level: &Level,
         span: Span,
     ) -> R<Term> {
-        match elab.read_expected_type(cx, expected, span)? {
+        let Some(head) = elab.read_expected_type_within(cx, expected, span)? else {
+            elab.defer_unit_verdict(cx, expected, span);
+            return Ok(Term::Triv { level: level.clone() });
+        };
+        match head {
             Type::Unit { level } => Ok(Term::Triv { level }),
             _ => err(
                 format!(
@@ -947,15 +994,29 @@ impl<'a> ExprElab<'a> {
         ))
     }
 
-    /// Infer the result of a propagation callback from its already-known
-    /// input domain. The inferred Pi is subsequently unified and checked by
-    /// the same application machinery as every other argument.
-    pub(crate) fn infer_propagation_callback(
+    /// Infer a λ whose unannotated binders take the domains a call already
+    /// knows (`domains[i]`, `None` where binder `i` is annotated and lowers
+    /// its own), synthesizing the codomain from the body as [`Self::infer_lambda`]
+    /// does. The inferred Π is subsequently unified and checked by the same
+    /// application machinery as every other argument.
+    pub(crate) fn infer_callback_from_domains(
         &self, elab: &impl LambdaInferenceElab, cx: &Cx,
-        binder: &LamBinder, body: &Expr, dom: &Type, dom_level: &Level,
+        binders: &[LamBinder], body: &Expr, domains: &[Option<(Type, Level)>],
     ) -> R<(Term, Type, Level)> {
-        let inner = Self::extend_lambda_context(cx,binder,dom,dom_level,None);
-        let (body,cod,cod_level) = elab.infer_lambda_body(&inner,body)?;
+        let (Some((binder, rest)), Some((known, known_rest))) = (binders.split_first(), domains.split_first()) else {
+            return elab.infer_lambda_body(cx, body);
+        };
+        let (dom, dom_level, skel) = match (known, &binder.ty) {
+            (Some((dom, level)), _) => (dom.clone(), level.clone(), None),
+            (None, Some(annotation)) => {
+                let (dom, level) = elab.lower_lambda_annotation(cx, annotation)?;
+                (dom, level, skel_of_ty(annotation))
+            }
+            (None, None) => return err(format!("this lambda's binder `{}` needs a type annotation", binder.name), binder.span),
+        };
+        let (dom, dom_level) = (&dom, &dom_level);
+        let inner = Self::extend_lambda_context(cx,binder,dom,dom_level,skel);
+        let (body,cod,cod_level) = self.infer_callback_from_domains(elab,&inner,rest,body,known_rest)?;
         let dom_e = elab.emit_ty(cx,dom,0).unwrap_or_else(|| dom.clone());
         Ok((
             Term::Lam { dom_level:dom_level.clone(),cod_level:cod_level.clone(),dom:Rc::new(dom_e),body:Rc::new(body) },
@@ -1096,11 +1157,22 @@ impl<'a> ExprElab<'a> {
                 span,
             );
         }
-        let mut acc = Term::Triv {
-            level: level.clone(),
+        // Last to first, as the chain was always built: which element's
+        // error is reported first does not change.
+        let mut checked = Vec::with_capacity(elems.len());
+        for element in elems.iter().rev() {
+            checked.push(Rc::new(elab.check_expression(cx, element, &elem, &level)?));
+        }
+        checked.reverse();
+        // The longest tail that packs is written as one `VecLit`, and only
+        // what precedes it as pairs (docs/bitvector-literal-entry-design.md
+        // §3: the literal is the chain it spells, so the split is invisible).
+        let packed = self.packed_vec_tail(cx, &level, &elem, &checked);
+        let (mut acc, spelled) = match packed {
+            Some((lit, n)) => (lit, elems.len() - n),
+            None => (Term::Triv { level: level.clone() }, elems.len()),
         };
-        for (j, element) in elems.iter().enumerate().rev() {
-            let element = elab.check_expression(cx, element, &elem, &level)?;
+        for (j, element) in checked.into_iter().take(spelled).enumerate().rev() {
             acc = Term::Pair {
                 fst_level: level.clone(),
                 snd_level: level.clone(),
@@ -1110,11 +1182,65 @@ impl<'a> ExprElab<'a> {
                     elem: Rc::new(elem.shift_local(1)),
                     len: Rc::new(crate::inductive::nat_lit(elems.len() - 1 - j)),
                 }),
-                fst: Rc::new(element),
+                fst: element,
                 snd: Rc::new(acc),
             };
         }
         Ok(acc)
+    }
+
+    /// A vector literal's packable tail, as a [`Term::VecLit`] with how many
+    /// elements it holds: the last (up to) 64 elements, when they are closed
+    /// and at most two distinct terms, at an element type whose whnf is a
+    /// sum — the shape a two-constructor enumeration lowers to, and the only
+    /// one the evaluator can pack into a word. Anything else is left to the
+    /// pair chain, so no reader of other vectors sees a new spelling.
+    fn packed_vec_tail(
+        &self,
+        cx: &Cx,
+        level: &Level,
+        elem: &Rc<Type>,
+        checked: &[Rc<Term>],
+    ) -> Option<(Term, usize)> {
+        let n = checked.len().min(heather_kernel::term::VEC_LIT_WIDTH_CAP as usize);
+        if n < 2 {
+            return None;
+        }
+        let tail = &checked[checked.len() - n..];
+        let zero = Rc::clone(&tail[0]);
+        let mut one: Option<Rc<Term>> = None;
+        let mut bits = 0u64;
+        for (i, t) in tail.iter().enumerate() {
+            if Rc::ptr_eq(t, &zero) || **t == *zero {
+                continue;
+            }
+            match &one {
+                Some(o) if Rc::ptr_eq(t, o) || **t == **o => bits |= 1 << i,
+                Some(_) => return None,
+                None => {
+                    one = Some(Rc::clone(t));
+                    bits |= 1 << i;
+                }
+            }
+        }
+        let one = one.unwrap_or_else(|| Rc::clone(&zero));
+        if heather_kernel::subst::local_bound(&zero) != 0
+            || heather_kernel::subst::local_bound(&one) != 0
+        {
+            return None;
+        }
+        let Ok(Type::Sum { .. }) = self.semantic.whnf_type(&cx.gamma, elem) else {
+            return None;
+        };
+        let lit = Term::VecLit {
+            level: level.clone(),
+            elem: Rc::clone(elem),
+            zero,
+            one,
+            width: n as u32,
+            bits,
+        };
+        Some((lit, n))
     }
 }
 
@@ -1249,6 +1375,12 @@ mod tests {
     impl ExpectedTypeDiagnosticsElab for StructuralFake {
         fn display_expected_type(&self, _cx: &Cx, expected: &Type) -> String {
             format!("{expected:?}")
+        }
+    }
+
+    impl UnitCheckingElab for StructuralFake {
+        fn read_expected_type_within(&self, _cx: &Cx, expected: &Type, _span: Span) -> R<Option<Type>> {
+            Ok(Some(expected.clone()))
         }
     }
 
@@ -1650,6 +1782,7 @@ mod tests {
                 &fake,
                 &Cx::empty(),
                 &Type::Unit { level: Level::constant(2) },
+                &Level::constant(2),
                 SPAN,
             )
             .unwrap(),

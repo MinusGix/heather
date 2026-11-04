@@ -16,11 +16,37 @@ if h : P {
 }
 ```
 
-The condition is a type-level proposition `P`, not a `Bool`. There is no
-implicit `Bool`-to-proposition coercion; Boolean case analysis remains an
-ordinary constructor match. This keeps specification-level branching aligned
-with the existing `Decide<P>` abstraction instead of exposing its `P ∨ ¬P`
-representation at each call site.
+The condition is a type-level proposition `P`, decided by its `Decide<P>`
+instance. This keeps specification-level branching aligned with the existing
+`Decide<P>` abstraction instead of exposing its `P ∨ ¬P` representation at
+each call site.
+
+**A `Bool` condition** (2026-11-02, issues/bool-conditions-and-literals.md):
+`if b`, `if !b`, `if a && b` with Bool operands branch on that Bool. The
+parser cannot tell the two apart, so it lowers both the same way and the
+elaborator picks by the condition's type (`Elaborator::elab_condition`): the
+proposition reading is tried first, and only when it fails is the condition
+elaborated as a term; at `Bool` the scrutinee is that term itself, which is
+what `decide_bit<b.IsTrue()>()` is by the `IsTrue` instance's `bit := b`.
+With evidence, `if h: b` is `decide<b.IsTrue()>()`, so `h: b.IsTrue()`. A
+condition that is neither is refused naming both readings. This is not a
+`Bool`-to-proposition coercion in type positions generally: only the
+parser's lowered `if`/`while` call (its head carries the condition's span)
+takes it, and a written `decide_bit<b>()` still says `b` is not a type.
+
+**A connective mixing the two** (2026-11-03,
+issues/mixed-bool-prop-condition.md): when neither whole reading applies and
+the condition is a connective (`∧`, `∨`, `↔`, a non-dependent `→`, `¬`, or
+`&&`, `||`, `!` with a proposition operand), it is read on the proposition
+side with each `Bool` operand as `b.IsTrue()`
+(`Elaborator::mixed_condition`). `if b ∧ n = 0` decides
+`b.IsTrue() ∧ n = 0`, whose bit is `b && n.same(0)` by the instances, and
+`if h: b ∧ n = 0` gives `h: b.IsTrue() ∧ n = 0`. The proposition side was
+chosen because it keeps evidence available. A `Bool` subtree is one operand
+(`(a || b) ∧ n = 0` reads `(a || b).IsTrue()`), and the Boolean doubles
+between a proposition and a `Bool` mean the connective they decide. `&&`
+binds tighter than `=`, so `b && n = 0` is `(b && n) = 0` and never reaches
+this reading; write `b ∧ n = 0` or `b && (n = 0)`.
 
 `if` is a true grammar keyword and therefore cannot be used as a binding
 name. Both branches are braced blocks, so local `let` statements are available

@@ -566,11 +566,11 @@ roadmap's.
 | 1 | `float-values` | `Format`, the standard formats as values, `Finite(F)`, `Float(F)`, `Dyadic` with its ring and order, `val`, `≈`/`<` with `StrictOrder`, and the constants (`zero`, `min_subnormal`, `min_normal`, `max_finite`) canonical for every format. Landed; §10. |
 | 2 | `float-rounding` | Successor and predecessor with their spacing, `RoundsTo`, `round` on dyadics with sticky, `round_rat`, `round::correct`, uniqueness, the mode laws. Part A (the relation, the executable rounding and its correctness in every mode, sign symmetry) landed, §11; part B (successor/predecessor with spacing, uniqueness, bracketing, monotonicity, idempotence) landed, §12. The transfer lemma to any `OrderedField` moved to `float-reals`, its only customer. |
 | 3 | `float-error` | The standard model, absolute subnormal bounds, `ulp`, γ-composition. Landed; §13. |
-| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed except sqrt, §14; sqrt is [float-sqrt](../issues/float-sqrt.md). |
-| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. |
+| 4 | `float-arith` | Add/sub/mul/fma with value, zero-sign and special-value theorems; then div and sqrt by sticky quotients; format conversion. Landed, §14; sqrt §14.1. |
+| 5 | `float-eft` | Sterbenz, Fast2Sum, TwoSum, TwoProduct (by fma), Veltkamp; then Kahan summation. All landed, §19: Veltkamp at normal `x`, the recursive sum's `γ(n-1)` bound and Kahan's exact correction step; Kahan's whole-loop bound and subnormal Veltkamp are filed. |
 | later | `float-bits` | Encode/decode and the round trip, the OCP storage formats, NaN payload policies and flags. |
-| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. |
-| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. |
+| later | `float-reals` | Transfer to `CReal`, faithful rounding, `round_real` with apartness, `Placed`. Started: `RoundsToReal` and Ziv's search with fuel ([creal-transcendental-round.md](creal-transcendental-round.md)); the search ends from a real clear of the grid ([float-round-real-termination](../issues/float-round-real-termination.md), `round_real_apart`); the Padé gap for exp and log is [exp-log-grid-gap](../issues/exp-log-grid-gap.md). The operations, the square root, the error model at every real and the root of a real landed, §17; the ordered-field transfer is [float-reals-ordered-field](../issues/float-reals-ordered-field.md). |
+| later | `float-transcendental` | Correctly rounded `exp`/`log`: a `CReal` series plus a Padé apartness proof. Started: `exp_fin`/`log_fin` at finite floats, binary32 by evaluation ([creal-transcendental-round.md](creal-transcendental-round.md)); `Float::exp`/`Float::log` over every float with the §9.2 specials. |
 
 ML numerics on top (dot products, softmax, stochastic rounding) belong to
 the ML milestones that pull them, not here. The notation of §4.2 and §5.5
@@ -1002,3 +1002,845 @@ Observations:
 - `Fin(b)` in a position with no expected type resolves to another
   constructor named `Fin`; the special-value theorems write `Float::Fin`.
 
+
+### 14.1 Square root ([float-sqrt](../issues/float-sqrt.md))
+
+Landed 2026-10-31 in the same module, closing `float-arith`. The square root
+of a float is irrational in general, so it has no rational exact value to
+hand `RoundsTo`, and the issue offered two statements: `RoundsTo` at the
+reals (waits on `float-reals`), or a second relation `RoundsToSqrt` with
+every clause rewritten (duplicates `RoundsTo` and its laws). Neither was
+needed.
+
+**The statement: a cell, not a value.** Every clause of `RoundsTo` compares
+the exact value only with half-unit grid points: floats, midpoints of
+neighbouring floats (a float is two half-units, so their midpoint is a grid
+point), the overflow threshold `F.ovf()` and zero. So a correct rounding of
+`√x` is the same thing as a correct rounding of any rational on the same side
+of every grid point as `√x`. `Format::SqrtCell(x, y)` says `y` is such a
+rational, with each comparison against `√x` read as one against `x` through
+`Format::RootLe(m, x)` (`m ≤ 0 ∨ grid(m)² ≤ x`) and `RootLt` (`m < 0 ∨
+grid(m)² < x`):
+
+    (m: Int) → (grid(m) ≤ y ↔ RootLe(m, x)) ∧ (grid(m) < y ↔ RootLt(m, x))
+
+The value theorem is `Finite::sqrt_correct(a, mode, nan, nn: 0 ≤ a.val(),
+y, cell: F.SqrtCell(a.val(), y)): RoundsTo(F, mode, y, a.sqrt(…))`: one
+relation, all of `RoundsTo`'s laws (uniqueness, the error model) apply at any
+`y` in the cell. The cell is never empty (`Finite::sqrt_witness_cell`, a
+quarter-unit point when the root is inexact) and is exactly what the rounding
+reads: given the root's description `SqrtApprox(x, h, st)` (`Approx` with
+every bound squared), `SqrtCell(x, y) ↔ Approx(y, h, st)`
+(`Format::cell_iff_approx`). At the reals, `√x` lies in its own cell and
+the theorem transfers by the same argument (§17); at `Rat` the cell is the
+honest form. A test applies the theorem at a literal: binary16 `√2` rounds
+`1.414213563`.
+
+**The computation.** `√x` in half-units is the root of `x / 2^(2(qmin-1))
+= mag · 2^(bexp + 2 - qmin)`. Writing that as `N / 2^dn` (`sqrt_n`,
+`sqrt_dn`; the exponent's positive part scales `N` up), `h =
+isqrt(⌊N / 2^dn⌋)` and the root is exact when `h² · 2^dn = N`
+(`sqrt_h`, `sqrt_st`, proved as `Finite::sqrt_approx_mag`). Then
+`F.round_h(mode, h, st)` rounds it, as every other operation does
+(`Finite::sqrt_abs`, the root of the magnitude in every format).
+`Nat::isqrt` is in `nat.hthr`: the root `r` of `⌊n/4⌋` first, then `2r`
+or `2r + 1` by one comparison of `(2r + 1)²` with `n`, so a root of `b` bits
+costs `b` steps; `isqrt_spec` proves `IsRoot`, `r² ≤ n < (r + 1)²`, by hand
+like `ldiv`. Binary16 and binary32 roots evaluate by `refl`.
+
+**Signs and specials.** IEEE 754 §9.2 (§6.3 for the zero): `√-0 = -0`
+(`sqrt_neg_zero`), a negative nonzero is NaN (`sqrt_neg`), a nonnegative
+root carries `+` (`sqrt_sign`), `√+∞ = +∞`, `√-∞` is NaN and NaN propagates
+(`Float::sqrt_inf`, `sqrt_neg_inf`, `sqrt_nan`). Like division, `sqrt` takes
+the format's NaN evidence (default `trivial`); a format without NaN uses
+`sqrt_abs`.
+
+The standard model for a root (`|r - √x| ≤ u·√x`) needed `√x` as a
+value; it landed with the root at the reals, §17 (`Finite::sqrt_real`,
+`sqrt_real_relative`).
+
+## 15. Literals (`float-literal-entry`)
+
+Modules: `lib/std/num/float/window.hthr` (rounding in a window of a format)
+and `lib/std/num/float/literal.hthr` (rounding `mant · base^exp`, the
+exactness bit, the float instances); the literal types and classes are in
+`rat.hthr`. Probes are in `lib/_tests/std/num/float/literal_tests.hthr`;
+the inexact warning and the hex refusal are tested in
+`crates/elab/tests/lib_std_float.rs`; the lexer's cases are its own unit
+tests.
+
+**Surface.** A numeral with a point or an exponent is one token,
+`TokKind::Scaled`, holding `mant · base^exp`: `1.5` is `15 · 10^-1`, `1e-3`
+is `1 · 10^-3`, `0x1.8p3` is `0x18 · 2^-1`. A decimal point starts a
+fraction only with a digit after it, so `1.foo()` and `1..2` keep their
+meaning; a hex point only when hex digits and a `p` exponent follow, so
+`0xff.f()` stays a method call. A hex float needs its `p` exponent, as in C.
+The literal elaborates on the numeral's ladder, like the character and string
+literals: at `Decimal` (or `HexFloat`) it is the record of its parts, at any
+other carrier it resolves `DecimalLiteral` (`HexLiteral`), and in inference
+position it is the `Rat` it denotes. A program writing one imports `rat`.
+
+- `DecimalLiteral<A> { ofDecimal, exact }`. `Rat` holds every decimal
+  (`exact` is `True`); `Float(F)` rounds to nearest, ties to even
+  (`F.round_decimal(NearestEven, d)`), and its `exact` is `F.decimal_exact(d)`.
+  The elaborator asks the kernel's conversion whether the bit is
+  `Decimal::inexact()` (`False`), and if so raises the `inexact-literal`
+  warning. Overflow to an infinity counts as inexact.
+- `HexLiteral<A> { Ok, ofHex: (h) → Ok(h) → A }`. The elaborator passes
+  `trivial` as the proof, so a carrier's `Ok` decides acceptance:
+  `Float(F)`'s is `F.hex_exact(…).IsTrue()`, and a hex float with a bit past
+  the format's precision is refused with a message that says so.
+
+**Why a window.** `round_rat` works in half-units of `2^qmin`, which at
+binary64 means a numerator about 1075 bits wide, an exponent search over 2046
+binades, and an overflow limit `2^2046`. With the kernel's depth budget at
+2048 (PR #187) `pow(2, 1075)` evaluates, but `pow(2, 2046)` and a full-width
+`ldiv` (one nested call per numerator bit) still run out, so `round_rat`
+does not evaluate at binary64, and it would be slow if it did.
+`F.window(j, c)` is `F` cut down to `c + 1` binades from `emin + j`: the
+same precision and specials, `emin + j` for `emin`, `c` for `span`. Its
+floats are `F`'s floats of those binades with the exponent field lowered by
+`j` (`win_up`, `win_down`). `Format::window_rounds` proves that a correct
+rounding in the window, read back in `F` (`F.widen`), is a correct rounding
+in `F`, at every format and mode, when the value is `InWindow`: nonnegative,
+at or above the window's least normal unless `j = 0`, and below its top
+binade unless the window reaches `F`'s top. The proof places every float of
+`F` (`win_region`): below the window's least normal or from its top binade
+on, a float is on the far side of some window float, so it neither rounds
+the value nor beats one that does.
+
+**`round_scaled`.** For `x = mant · base^exp`, `win_j` estimates the binary
+exponent from the mantissa's width and `⌊exp · log₂ base⌋`, using
+`lg ≈ 2^16 · log₂ base` (217706 for ten, exact for two), and starts the
+window one binade below it, with `c = min(3, span)`. Then `x / 2^(qmin_W - 1)`
+is the fraction `num / den` (`sc_num`, `sc_den`, with powers by squaring),
+divided by `ldiv_fuel` with `prec + c + 1` quotient bits. The quotient and
+the remainder are the window's half-units and sticky bit (`sc_approx`,
+through `approx_div`). Each of the window's conditions is checked, not
+assumed:
+
+- the division fits the fuel (`num < den · 2^fuel`);
+- the low end: `j = 0` or `top ≤ h`;
+- the high end: the window reaches the top, or `h < top · 2^c`.
+
+When the estimate misses, the fallback is `F.round_rat`, which is correct
+but does not evaluate at binary64. Past the fuel in the top window the value
+is beyond the window's largest float and its overflow threshold, and
+`Format::rounds_beyond` says every such value rounds as `2^fuel` half-units
+does. So `1e400` is `∞` in constant work. `round_scaled_correct` holds for
+every format, mode, base and estimate, and the estimate only decides speed.
+
+**Exactness.** `Float::exact_scaled` compares `±mag · 2^q` and
+`mant · base^exp` by their cross-multiplied numerators, with powers by
+squaring. `Float::exact_scaled_reflects` proves the bit `Reflects` the value
+being exactly the literal (`Float::Denotes`), both ways.
+`F.decimal_exact` and `F.hex_exact` are this bit at the nearest-even
+rounding.
+
+**Costs.** These are shapes, not timings. A literal of ordinary magnitude
+works on numbers of about `prec + c` bits plus the scaling `base^|exp|`.
+The scaling dominates at extreme exponents: `1e-300`, the subnormals, and
+values near the overflow limit divide numbers of about a thousand bits, and
+`ldiv`'s halving of a wide numerator is the cost there.
+
+**What Rust does, and what this is not yet.** Rust's `dec2flt` tries
+Clinger's fast path (an exactly representable mantissa and power of ten
+in one floating multiplication), then Eisel-Lemire (a 128-bit product
+with a table of powers of five, falling back when the product is too close
+to a halfway point), then a big-integer slow path. `round_scaled` is the slow
+path's arithmetic placed so that every number stays narrow. Eisel-Lemire is
+an enclosure test with a fallback, the same shape as the window's checked
+conditions, and is the refinement to make once the rounding runs natively.
+
+Observations:
+
+- `Nat::is_zero` is gone (PR #185 stopped the Nat fold probe from
+  re-evaluating recursive arms), so the fuelled recursions (`ldiv_fuel`,
+  `pow_sq_fuel`, `Nat::width_fuel`) match `n` and name the successor
+  `Succ(k)`.
+- An inexact literal in a test draws the warning even when the test is
+  pinning the rounded value. There is no per-site allow yet.
+- The `rat` import is required because the elaborator names `rat::Decimal`;
+  a float client that forgets it is told to add it.
+- The printer and its round-trip theorem (Lemma 1, nine and seventeen
+  digits) are [[float-printer-round-trip]]: the reading half proved here,
+  `round_decimal_correct`, is what that theorem reads back through.
+
+## 16. Interval enclosures (`dyadic-interval-enclosures`)
+
+Modules: `lib/std/num/float/interval.hthr` (intervals, their arithmetic, the
+checker) and `lib/std/tactic/interval_tactic.hthr` (the tactic), on
+directed rounding and reciprocal bounds added to
+`lib/std/num/float/dyadic.hthr`; the arithmetic shift `Int::shr` is in
+`int.hthr`, `Nat::width` moved to `nat.hthr` from `literal.hthr`, and the
+reciprocal-order facts (`le_recip_of_mul_le`, `recip_le_recip`,
+`recip_neg`, `mul_le_mono_r_nonpos`) are in `rat.hthr`. Probes are in
+`lib/_tests/std/num/float/interval_tests.hthr`. The design follows
+CoqInterval's original arithmetic (`docs/coq-hardware-floats-survey.md`
+§6.1).
+
+**Rounding at a precision, on `Dyadic` itself.** `d.down(p)` shifts the
+mantissa right until `p` bits are left (`Int::shr` floors at either sign)
+and adds the shift to the exponent; `d.up(p)` is `-((-d).down(p))`. The
+issue sketched `Format::round_dyadic` with a wide format as the precision
+knob. That route carries a bounded exponent span and overflow to infinity
+or saturation, which an enclosure has no use for, and its proofs are a
+rounding relation's; the shift needs one lemma (`Int::shr_mul_le`) and is
+sound at every shift amount, so how many bits `Dyadic::cut` drops is a cost
+choice with no proof attached. A reciprocal of a positive `m · 2^e` is
+`⌊2^K / m⌋ · 2^(-e-K)` below and its successor above, with
+`K = p + width(m)`. The quotient is `Nat::pow2_div`: a loop that doubles a
+remainder and takes one quotient bit per step guesses it, starting at
+`2^(width(m) - 1)` so that it runs only the quotient's `p` bits, and two
+comparisons, `g·m <= 2^K < (g + 1)·m`, keep the guess or fall back to
+`ldiv`. Only `ldiv`'s two facts (`q·m + r = 2^K`, `r < m`) reach the
+proofs, so nothing about the loop is proved
+(issues/interval-evaluation-budget.md). `Interval::of_rat` takes the
+reciprocal of its positive denominator as one point (`recip_point`), one
+quotient for both bounds.
+
+**Intervals.** `inductive Interval { Bnd(lo, hi: Dyadic), Whole }`.
+`I.Has(x)` reads `lo <= x <= hi` at `Rat`, and `Whole` holds everything.
+Every operation is total: a reciprocal of an interval that may hold zero is
+`Whole`, and `Whole` absorbs every operation it meets. A pair with crossed
+bounds holds nothing, so every containment theorem holds of it vacuously,
+which is CoqInterval's reading and needs no well-formedness field. The
+operations are `neg` (exact), `add`/`sub` (bounds rounded outward), `mul`
+(the four corners' least and greatest, rounded outward; two intervals above
+zero skip the search, a sign read off the mantissas), `recip` (positive
+intervals reverse the bounds, negative ones are the positive case under
+negation), constants (`of_rat`: numerator times the denominator's
+reciprocal), and `pow` by squaring. Each has a containment theorem
+(`add_has`, `mul_has`, `recip_has`, `pow_has`, …).
+
+**The checker.** `IntervalExpr` names a rational expression (`ILit`,
+`IAdd`, `ISub`, `INeg`, `IMul`, `IRecip`, `IPow`). `IntervalExpr::eval`
+spells each node as the operation itself, so `a.eval() < b.eval()` converts
+to the goal written directly and nothing reduces the exact value.
+`lt_search` / `le_search` try a precision and double it on a miss, `tries`
+times; the verdict is a `Bool` proved `= True`, the evaluation route the
+library uses for closed facts (an `IsTrue` discharged by `trivial` runs out
+of the elaborator's fuel on the same goal), and `lt_of_search` /
+`le_of_search` turn it into the order.
+
+**The tactic.** Clients write `by intervals()` (or `intervals(p := …, tries
+:= …)`; 32 bits and four tries by default), from
+`lib/std/tactic/interval_tactic.hthr`. It is a `Tac<Expr>` in Heather: it
+views the goal as `Rat::Lt` or `Rat::Le` of two sides, reads each side by
+its heads (`Rat::add`, `sub`, `neg`, `mul`, `recip`, `npow`, compared by
+global identity) and makes any other subterm a literal, asks the elaborator
+whether the verdict is `True`, and returns `lt_of_search(l, r, p, tries,
+interval_verdict)`. The reader is untrusted: the proof is checked at the
+goal like any term. Asking for the verdict first is what lets a miss fail
+with the tactic's own reason ("the enclosures do not separate the two
+sides") rather than as a refused proof; a literal that does not compute (a
+variable) fails the same way. `Lookup` names functions and types but not
+constructors, so the tree is built through wrapper functions
+(`interval_lit`, `interval_add`, …) that unfold to the constructors. Probes
+are in `lib/_tests/std/tactic/interval_tactic_tests.hthr`, its refusals
+included; `(1 + 1/1000)^1000 < 2.719` goes through the tactic as it does by
+hand.
+
+**Enclosures of reals** (`interval-creal-enclosures`). Module
+`lib/std/num/float/creal_interval.hthr`, with the order facts it needs in
+`creal.hthr` (`neg_le`, `mul_le_mono_r_nonpos`, `le_by_sign`, and a real's
+distance to its terms, `le_term_add` / `term_sub_le`) and the termwise
+rearrangements behind them in `rat.hthr`. `I.HasReal(x)` is `I.Has` read at
+`CReal`, `lo <= x <= hi` with the bounds embedded by `CReal::ofRat`. Every
+operation keeps it (`add_has_real`, `mul_has_real`, `pow_has_real`, and
+`recip_has_real` at an apartness proof, below), by the corner arguments of the rational proofs with
+`CReal`'s monotonicity in place of `Rat`'s. The one step that does not carry
+over is the case split on the other factor's sign in a product: the
+rationals decide it and the reals never do. It is not needed: a `≤` between
+reals is a refutation (`¬(y < x)`), and inside one the excluded middle on
+`y < 0` is free, which is `CReal::le_by_sign`. A real is enclosed from its
+own terms: the n-th is within 1/(n+1) of it, so `x.enclose(n, p)` rounds
+`[x_n - 1/(n+1), x_n + 1/(n+1)]` outward (`Interval::span`), and
+`CReal::lt_of_enclose` decides `x < y` when two enclosures separate.
+`RealExpr` is the checker at `CReal`: `RRat(q)` leaves are enclosed exactly,
+as `IntervalExpr`'s are, and `RReal(x)` leaves from their terms at index `n`;
+`RealExpr::lt_search` reads twice as far out and one bit finer on a miss.
+The tactic reads goals at `CReal::Lt` / `CReal::Le` into it, with
+`CReal::ofRat(q)` an exact leaf and any other real a leaf read from its
+terms, and takes the starting index as `n := …` (1023 by default). It looks
+the `CReal` relations up only when the goal is not at `Rat`, so a client
+that never imports `creal` is unaffected. A real leaf costs one term at the
+index read; a real whose terms are expensive far out (a series summed to
+its index) wants a small starting `n` and more tries. Probes are in
+`lib/_tests/std/num/float/creal_interval_tests.hthr` and
+`lib/_tests/std/tactic/interval_tactic_real_tests.hthr`.
+
+**Reciprocals of reals** (`interval-creal-reciprocal`). `x.inv(h := h)` takes
+a proof that `x` is apart from zero, and a tree cannot carry a proof about
+its own value (that would be an inductive-recursive definition). So the
+node is `RInv(a, x, h)`: the tree `a` that encloses `x`, the real `x`, and
+`h` about `x`. `RealExpr::Wf` asks that each such `a` denote its `x`, and
+every theorem about a search takes the two sides' witnesses. A tree the
+tactic reads off a goal denotes `x` by conversion, since `eval` spells the
+operations, so its witness at an inverse is `CReal::same_refl(x)`; the
+tactic builds the witness beside the tree, through wrapper theorems
+(`interval_wf_add`, …, `interval_wf_inv`). A tree with no inverse is well
+formed by evaluation (`RealExpr::wf_plain`). The enclosure of `RInv(a, …)`
+is `a`'s reciprocal, and its containment (`Interval::recip_has_real`) is
+the rational proof at `CReal`: inversion reverses `≤` between positives
+(`CReal::inv_le_inv`, from `OrderedField::recip_lt_recip`), and a negative
+interval is the positive case under `CReal::inv_neg`. The value never reads
+the proof's gap, so an inverse whose apartness is a hypothesis is still
+enclosed, where a leaf's terms would be stuck. Apartness comes from
+enclosures as well: one that excludes zero shows its real apart from zero
+(`Interval::apart_of_excludes`), and `RealExpr::apart_of_search` proves
+`a.Apart(b)` by separating the two sides either way. The tactic proves
+`x.Apart(y)` goals at `CReal` with it, which is how `x.inv(h := by
+intervals())` is written.
+
+**Series and elementary functions** (`interval-elementary-functions`).
+Module `lib/std/num/float/series.hthr` sums a `Series`, given by its first
+term, the ratio of each term to the next, and a `start` past which every
+ratio is at most 1/2 in size. Past `start` the tail is dominated by a
+geometric one: with `err(N) = 2|t_N|`, the partial sums move by at most
+what the error falls by (`Series::tail`), and `j` more steps divide the
+error by `2^j` (`Series::decay`, written `1/(ones(j) + 1)` with
+`Nat::ones(j) = 2^j - 1`, so the bound needs no subtraction). The limit is
+the real whose n-th term is the partial sum `width(scale · (n+1) + n)`
+digits past `start` (`Series::index`, with `n <= ones(width n)` from
+`nat.hthr`), and it lies within `err(N)` of every partial sum past `start`
+(`Series::below`, `Series::above`), which is also how a series that stops
+is shown to sum exactly (`Series::same_of_exact`). Its enclosure needs none
+of the real's terms: the last term and the partial sum are carried as
+intervals by `Interval`'s containment at `Rat` (`Series::box`, each ratio
+rounded outward by `of_rat`), the sum is widened by twice the largest
+magnitude in the term's interval (`Interval::widen`), and summing stops once
+that magnitude is below `2^-p` (`Series::settle`, at most `4p` terms; any
+stopping point past `start` encloses the real, so the test is a heuristic
+with no proof). `lib/std/num/float/elementary.hthr` instantiates it:
+`CReal::exp_rat(a)`, `sin_rat`, `cos_rat` at rational arguments, with the
+ratios `a/(k+1)`, `-a²/((2k+2)(2k+3))`, `-a²/((2k+1)(2k+2))` and `start`
+from `c = ⌊|a|⌋ + 1` (`Rat::abs_ceil`; twice it for exp, once for sin and
+cos, where each step is two degrees). Containment is stated against these
+reals, which are the functions' definitions at rationals until
+`real-functions-and-derivatives` gives them at `CReal`; the three are exact
+at zero (`CReal::exp_rat_zero`, …). The checker reads such reals through a
+leaf of their own: `Enclosed` packs a real with enclosures at every index
+and precision and the proof that they contain it, and `RBox(b)` is that
+leaf, so `creal_interval` knows nothing of series. The tactic reads the
+heads `CReal::exp_rat`, `sin_rat`, `cos_rat` as `RBox(CReal::exp_box(q))`
+and so on when they resolve where it runs; `2 < exp(1) < 3`,
+`0.84 < sin(1)`, `23 < exp(355/113)` and `sin(1)² + cos(1)² < 1.001` go
+through `by intervals()` (`lib/_tests/std/num/float/elementary_tests.hthr`).
+A step costs the outward rounding of its ratio, a reciprocal at `p` bits,
+which dominates the product and the sum beside it; a series needs about
+`p` plus the size of its term at `start` in bits of steps.
+
+**Costs.** These are shapes. An operation at `p` bits costs its roundings,
+each about `p` halvings for the width and `p` for the shift, plus the
+exponent alignment of its comparisons. `Dyadic::le_dec` now compares
+mantissas aligned to the smaller exponent (`Dyadic::aligned`), so it
+computes one power of two, of the exponents' gap, where the rationals'
+cross products computed four, of the exponents themselves, and
+`Finite::le_dec` inherits it. With the direct product above zero, that cut
+an interval product by about an order of magnitude. A power costs
+`O(log n)` products.
+
+**What the checker does not do.** An equality is never decided (a third is
+never exact, so `3 · (1/3) <= 1` is refused at every precision; the probes
+pin the refusal). Products of an interval with itself are bounded as if
+independent, so a goal that needs the dependency (`x - x`) widens. Left:
+
+- argument reduction for `exp`, whose cost is otherwise linear in the
+  argument, and range reduction for `sin` and `cos` by π (halving landed,
+  below) ([[interval-log-and-reduction]]);
+- `exp(log q) ≈ q`, and log's laws ([[exp-log-inverse]]).
+
+exp, sin and cos are done at real arguments
+([[elementary-functions-at-reals]]):
+
+- **exp.** `exp(a + b) ≈ exp(a) · exp(b)` at rationals, as a Cauchy product
+  of the two series (`lib/std/num/float/exp_law.hthr`). `CReal::exp` is
+  `exp_rat` extended by its Lipschitz bound on bounded sets
+  (`lib/std/num/creal_lipschitz.hthr`). It comes with the law,
+  monotonicity, and a leaf `CReal::exp_real_box` that the tactic reads at
+  `CReal::exp(x)` (`lib/std/num/float/elementary_real.hthr`).
+- **sin and cos.** Their addition laws at rationals come from exp's
+  coefficient identity, signed by σ, γ (`lib/std/num/float/trig_law.hthr`).
+  The same extension carries them to the reals, with parity and
+  `sin² + cos² ≈ 1`. sin² + cos² = 1 at rationals bounds both by 1, so
+  their Lipschitz modulus is 2·exp_reach(1) whatever the argument
+  (`CReal::trig_lip`).
+- **The sin and cos leaves reduce the argument by halving.**
+  `sin_real_box` and `cos_real_box` scale x by 2^-k, k the width of x's
+  bound, so the reduced argument is below 1. They enclose sin and cos
+  there, at the argument's n-th term padded by the constant modulus, and
+  double back k times by the addition laws at y = y
+  (`TrigBox::double`, `CReal::trig_reduced_has`). No π is needed.
+  - A doubling at most quadruples a width, so the base reads 2k + 16 bits
+    finer, at 2k more bits of precision.
+  - The base argument is one product x·2^-k. Nested halvings cost more terms
+    than the checker affords.
+  - Each base series runs at the term trimmed of its trailing zero bits
+    (`Dyadic::trim`). A short argument read at 2^-n would otherwise pay for
+    n bits in every ratio.
+  - `sin(10)`, `cos(10)`, `sin(30)` and `cos(100)` close by `intervals()`.
+    `sin(1000)` does not close at the default precision.
+  - Range reduction by π stays open ([[interval-log-and-reduction]]). It
+    would shorten the doublings, not the base series.
+
+## 17. Floats at the reals (`float-reals`)
+
+Module: `lib/std/num/float/float_real.hthr`; the root lemmas it reads are in
+`rat.hthr` and `creal.hthr`, `u_le_one` and `max_finite_nonneg` in
+`error.hthr`. Probes are in `lib/_tests/std/num/float/float_real_tests.hthr`.
+Issue: [float-reals-sqrt-and-error](../issues/float-reals-sqrt-and-error.md).
+
+**The real of a float** is the image of its value, `Finite::real(f) =
+CReal::ofRat(f.val())`, and a correct rounding of a real is `RoundsToReal`
+(round_real.hthr). Every operation whose exact value is rational carries
+over with no new proof: the rational's image is the real value up to `≈`
+(`Format::rounds_real_of_same`), so `add_real`, `sub_real`, `mul_real`,
+`fma_real` and `convert_real` are one line each over the `Rat` theorems.
+
+**Square roots at the reals.** `CReal::IsSqrt(s, x)` says `s` is the
+nonnegative root of the rational `x` as the cut it makes: at or above every
+nonnegative rational whose square is at most `x`, at or below every one
+whose square is at least `x`. That is the form every comparison with a root
+reads, and `s * s ≈ x` with `0 ≤ s` gives it (`CReal::is_sqrt_of_sq`, by
+`CReal::le_of_sq_le`: `t < s` with `t ≥ 0` would make `t² ≤ ts < s²`).
+`CReal::sqrt_rat(q)` is `√|q|`: its terms are the rational roots from below
+at `n + 1` bits, `Rat::root_floor(q, n) = isqrt(⌊|q|·4^n⌋) / 2^n`, at most
+`√|q|` and within `2^-n` of it (`root_floor_spec`), which makes the sequence
+regular (`root_floor_regular`: each root from below lies under any other
+plus that one's precision, by `lt_of_sq_lt`). The floor is `Nat::ldiv`, so
+a term evaluates in steps per bit (`sqrt_two_term` is a `refl`); `isqrt` is
+already per bit. `CReal::sqrt_rat_is_sqrt` proves the cut from the terms,
+and `is_sqrt_exact` reads a rational root back (`√4 ≈ 2`).
+
+**The value theorem.** `Finite::sqrt_real(a, mode, nan, nn, s, root:
+s.IsSqrt(a.val())): RoundsToReal(F, mode, s, a.sqrt())`, and at the
+constructed root `Finite::sqrt_rounds_real`. The interval comes from the
+root's description `SqrtApprox(x, h, st)` (§14.1). An exact root is the grid
+point `g = grid(h)`, and the cut puts `s` at `g` from both sides. An inexact
+one has `g² < x < g'²` with `g' = grid(h + 1)`, and a rational strictly
+inside each gap still has its square on the right side of `x`: above `g`,
+`g + d/(2g + 1 + d)` with `d = x - g²` (`Rat::root_above`; its square
+exceeds `g²` by `δ(2g + δ) ≤ δ(2g + 1 + d) = d`), and below `g'`, Newton's
+step `(g'² + x)/(2g')` (`Rat::root_below`; its square exceeds `x` by
+`(hi - g')²`). Every rational between them is `Approx(q, h, True)`, so in
+the cell, so rounded by `sqrt_correct`. Nothing is decided about the real:
+the cases are on the float's sticky bit, a computed `Bool`.
+
+**The error model at the reals.** A rounding interval around a real `x`
+with `b ≤ x ≤ c` can be cut to lie in `[b, c]` without deciding anything
+about `x`: of two rationals below `x` the larger is. At a nonnegative
+`q` the bound `|r - q| ≤ u·q + e` is two affine inequalities
+(`Rat::sides_of_abs`), each monotone in `q` when `0 ≤ u ≤ 1`, so holding
+at both ends of the interval it holds at `x`. Since §18.2 this transfer is
+proved once over any ordered field (`Rat::err_in_nonneg`), and the theorems
+here are its readings at `CReal`, the sandwich restated with `CReal::abs_le`
+(`CReal::abs_of_sandwich`). This gives, at every nonnegative real:
+
+- `Format::real_error_nonneg`: `|r - x| ≤ u·x + η` in range (`x ≤ M`);
+- `Format::real_relative_nonneg`: `|r - x| ≤ u·x` in the normal range.
+
+For the root they are `Finite::sqrt_real_error` and `sqrt_real_relative`,
+whose ranges are stated at the float, `m² ≤ a.val() ≤ M²` (checkable by
+evaluation), and read at the root through the cut. This is the
+`|r - √x| ≤ u·√x` that §14.1 left for this round; at binary16, √2's
+standard model is a probe.
+
+### 17.1 The error model at a real of either sign
+
+Whether `x ≥ 0` cannot be decided, but each conclusion is a `≤`, a negation
+at `CReal`, so `CReal::le_by_sign` splits on the sign inside it. The
+nonpositive side needs no conjugate mode: the rounding interval is cut to
+`[-M, 0]` (or `[-M, -m]`), the rational bound at its ends is
+`|r - q| ≤ u·(-q) + η` (`Rat::sides_of_abs_nonpos`), and the two affine
+sides, now increasing in `q` with slopes `1 - u` and `1 + u`, hold in between
+(`Rat::err_in_nonpos`, §18.2). The pieces are joined by `|x| ≥ x` and
+`|x| ≥ -x` (`CReal::le_abs`, `neg_le_abs`):
+
+- `Format::real_error`: `|r - x| ≤ u·|x| + η` while `|x| ≤ M`;
+- `Format::real_relative`: `|r - x| ≤ u·|x|` while `m ≤ |x| ≤ M`.
+
+At -1/3 in binary16 both are probes.
+
+### 17.2 Roots squared, and unique
+
+A rational strictly between two apart reals (`CReal::rat_between`, from the
+gap `Lt` carries) decides every argument here. Two roots of one rational are
+the same real: a rational between them would have its square on one side of
+`x` and so be on the wrong side of one root (`CReal::is_sqrt_unique`). A
+root squares back, `s * s ≈ x` (`is_sqrt_sq`): if `x < s²`, a rational `r`
+between them is beaten by some root from above, `(f_n + 2^-n)² < r`
+(`Rat::root_floor_up`; the roots from below come within any `d` of `|q|` once
+`2^-n·(2|q| + 3) < d`), and the cut puts `s` under that root, so
+`s² < r < s²`; the other side is `Rat::root_floor_down` the same way. So
+`sqrt_rat(q)² ≈ |q|` (`CReal::sqrt_rat_sq`).
+
+### 17.3 The root of a real
+
+`√` is Hölder-½, `|√a - √b| ≤ √|a - b|`, which at rational roots from below
+is `Rat::lt_root_floor_add`: `p² ≤ |b| + d²` puts `p` under `b`'s root plus
+its precision plus `d`. So `CReal::sqrt(x)` takes as its n-th term the root
+of `x`'s term at `2(n + 2)` to `n + 2` bits: two such terms differ by at most
+`2^-(2m+4) + 2^-(2n+4) ≤ (2^-(m+2) + 2^-(n+2))²`, which moves their roots by
+`2^-(m+2) + 2^-(n+2)` plus a precision, a regular sequence. Like
+`sqrt_rat`, it is the root of `|x|`. `CReal::IsRoot(s, x)` is `IsSqrt` at a
+real argument; terms of `ofRat(p²) ≤ |x|` (by `bishop_of_le`) give
+`sqrt_is_root`, and the §17.2 argument with one more rational in between
+gives `is_root_sq`, so `√x·√x ≈ |x|` (`sqrt_sq`), `sqrt_respects`, and
+`sqrt_ofRat` (it is `sqrt_rat` at a rational, by uniqueness). At a float,
+`Finite::sqrt_rounds_root` is the value theorem at `a.real().sqrt()`. The
+customer is error analysis of compound expressions; `√(3² + 4²) ≈ 5` is a
+probe.
+
+**Left in `float-reals`.** Nothing since §18. The gap that would make
+Ziv's search end unconditionally for log is
+[log-grid-gap](../issues/log-grid-gap.md), under `float-transcendental`
+(exp's landed in [exp-log-grid-gap](../issues/exp-log-grid-gap.md)).
+
+## 18. Floats over any ordered field (`float-reals`)
+
+Modules: `lib/std/num/float/round_real.hthr` (the relation, faithful
+rounding) and `float_real.hthr` (the error model). Probes are in
+`lib/_tests/std/num/float/round_real_tests.hthr`, `float_real_tests.hthr`
+and `transcendental_tests.hthr`. Issue:
+[float-reals-ordered-field](../issues/float-reals-ordered-field.md).
+
+Every generic statement lives in a section over `K: OrderedField(≈, <, ≤,
++, *)` and a morphism `hom: OrderedRingHom<Rat, K>(map, …)`, the shape the
+interval enclosures use (§16, `docs/casting-design.md` §5.6). `Rat` reads
+them at `Rat::id_hom`, `CReal` at `CReal::ofRat_hom`.
+
+### 18.1 The relation
+
+A point `x` of `K` is read through the rationals around it. `P` holds
+around `x` (`Rat::Around(hom, x, P)`) when some rational interval `[lo, hi]`
+with `map(lo) ≤ x ≤ map(hi)` has `P` at each of its rationals. A correct
+rounding is `RoundsTo` around `x`:
+
+```heather
+fn Format::RoundsIn(self F: Format, mode: Mode, x: K, r: Float(F)) → Type {
+    Rat::Around(hom, x, λ q => RoundsTo(F, mode, q, r))
+}
+fn RoundsToReal(F, mode, x: CReal, r) → Type { F.RoundsIn(CReal::ofRat_hom(), mode, x, r) }
+```
+
+`RoundsToReal` is now this reading, not a second definition. At an image
+the relation is `RoundsTo` both ways (`rounds_in_of_rat`, by the point
+interval, and `rounds_in_rat`, the morphism reflecting `≤`), it respects
+`≈` (`rounds_in_respects`), and two roundings of one point agree
+(`rounds_in_unique`: two intervals around `x` share a rational,
+`Rat::around_meet`). The interval can be cut at a rational below `x` and
+one above it without deciding anything about `x` (`Rat::around_above`,
+`around_below`: of two rationals below `x` the larger is), and both its ends
+satisfy `P` (`Rat::around_ends`).
+
+**Why an interval, not §5.1's pointwise clauses.** §5.1 sketched
+`RoundsTo<K>` with its clauses read at `K` (`r.val ≤ x` and every finite
+`g ≤ x` below `r`, …). The two agree at a rational, and classically
+everywhere, but they differ in what a constructive proof can supply: the
+pointwise clauses at a real are negations about `x` that nothing computes,
+while the interval is what Ziv's search actually produces and what every
+transfer reads. The pointwise form also needs the clauses restated over
+`K` (the nearest modes compare distances, which needs an absolute value or
+a maximum at `K`); the interval form needs none of it, since every clause
+stays at `Rat`. Pointwise clauses from an interval are a lemma per mode if
+a customer appears.
+
+**`Placed` is not built** (§6). It was to be the hypothesis of
+`RoundsTo::exists`, which `F.OffGrid` (§12, `float-round-real-termination`)
+already serves for the reals at hand: a correct rounding computes from an
+enclosure clear of the grid, and faithful rounding (§18.3) needs nothing.
+A classical caller who wants `∃ r, RoundsIn(x, r)` at every `x` is the
+customer that would bring it back; none exists.
+
+### 18.2 The error model, once
+
+The rational bound `|r - q| ≤ u·|q| + η` (§13) is, at a nonnegative `q`,
+the two affine bounds `r ≤ (1 + u)·q + η` and `(1 - u)·q - η ≤ r`
+(`Rat::sides_of_abs`), with nonnegative slopes when `0 ≤ u ≤ 1`
+(`Rat::slopes_nonneg`). An affine bound with a nonnegative slope at a
+rational below `x` holds at `x` (`Rat::affine_up`: the morphism keeps `≤`,
+`+` and `*`, and `OrderedSemiring::mul_le_mono_l` moves the slope's product),
+and one at a rational above `x` holds below it (`Rat::affine_down`). Cut
+the interval around `x` to `[b, M]` and read the two sides at its ends:
+
+```heather
+theorem Rat::err_in_nonneg(x: K, P, R, u, e, b, M: Rat, …, h: Rat::Around(hom, x, P),
+    bound: (q: Rat) → b ≤ q → q ≤ M → P(q) → |R - q| ≤ u·|q| + e):
+    map(1 - u)·x + map(-e) ≤ map(R) ∧ map(R) ≤ map(1 + u)·x + map(e)
+```
+
+and `Rat::err_in_nonpos` with the slopes swapped on `[-M, c]`, `c ≤ 0`.
+The conclusions are sandwiches, because `K` has no absolute value; the
+standard model reads as written in the literature once one is there. The
+instances:
+
+- `Format::error_in_nonneg`/`_nonpos`: the model with underflow in range;
+- `Format::relative_in_nonneg`/`_nonpos`: `(1 - u)·x ≤ r ≤ (1 + u)·x` in the
+  normal range (the zero intercept dropped by `Rat::image_add_zero`);
+- `Format::faithful_error_in_nonneg`/`_nonpos`: a faithful rounding is
+  within the directed modes' `u` and `η`
+  (`Format::faithful_error_bound` at `Rat`, by cases on the neighbour).
+
+The `CReal` theorems of §17 are readings: the sandwich at
+`CReal::ofRat_hom`, restated as `|r - x| ≤ u·x + η` by `linarith` at
+`CReal` (`CReal::abs_of_sandwich`, `_nonpos`), with the sign split of §17.1
+on top. `CReal::err_between`, `err_between_nonpos`, `ofRat_le_max`,
+`le_ofRat_min` and `Format::rounds_real_cut` are gone. `Format::real_faithful_error`
+is new: `|r - x| ≤ u·|x| + η` at the directed `u`, `η` for any faithful
+rounding of a real in range. At `Rat` the sandwich is a probe (-1/3 in
+binary16 at `Rat::id_hom`).
+
+**The Rat proofs stay the base.** The rational error model (§13) is proved
+by grid arithmetic on half-unit counts, which only a carrier with a grid
+has; it is not restated over `K`. What was duplicated was the transfer
+(cut, both ends, monotone in between), and that is now proved once.
+
+### 18.3 Faithful rounding that always ends
+
+A faithful rounding of `q` rounds it down or up (`Format::Faithful`); at a
+point of `K` it is that around the point (`Format::FaithfulIn`,
+`FaithfulReal` at `CReal`). In the set reading of §5.5 it is `○ᶠx`.
+
+§6 proposed rounding an approximation within half the least gap to
+nearest. The shipped test is cheaper and reads any enclosure: round the top
+`hi` of a box down to `r` and the bottom `lo` up to `s`, and keep `r` when
+`r ≤ s` (`Format::faithful_box`, `Float::le_bool` deciding the order). Then
+`r` is faithful at every rational `q` of the box (`faithful_between`): it
+lies between `q`'s rounding down (`rounds_mono` at `q ≤ hi`) and its
+rounding up (`s ≤` that, at `lo ≤ q`, and `Float::le_trans`), and nothing
+lies strictly between those two (`Format::faithful_of_squeeze`, by
+`le_total` at `Rat` on the float's value, the infinities by their clauses).
+The test passes once the box is narrower than the least gap `2^qmin`
+(`Format::down_le_up`): if `s < r` as finite floats then `lo ≤ s`, `r ≤ hi`,
+and two floats are a whole number of gaps apart (`Finite::gap`, by
+`Finite::H_even`), so `hi - lo ≥ 2^qmin`; a saturated end is the extreme
+float, on the right side by its own clause. So the search
+(`faithful_enclosed`, `round_real`'s schedule as `faithful_real`) ends
+within `faithful_tries`, the narrowing's witness at `gap_bits` (`2^-gap_bits
+≤ 2^qmin`, `gap_bits_small`), and `Format::faithful_real_total(e, narrow)`
+needs no `Option` and no condition on the real: at a float, at a midpoint,
+at a transcendental. The box theorem `faithful_box_correct` is stated over
+`K`.
+
+In practice the test passes at about the precision Ziv's search needs,
+since its answer is the lower neighbour as soon as the box is inside one
+cell: probes return `exp(1)` faithfully at binary32 and binary64 over
+the series boxes at the cost of the correctly rounded probe, return 1 at 1
+and at the midpoint `1 + 2^-24` on the first box, where rounding down (at
+1) and to nearest (at the midpoint) never end (`one_down_open`,
+`mid_near_open`), and refute 1's successor as a faithful rounding of 1.
+
+## 19. Error-free transformations (`float-eft`)
+
+Round 5. Modules: `lib/std/num/float/eft.hthr` and (summation)
+`lib/std/num/float/summation.hthr`, tests beside them in
+`lib/_tests/std/num/float/eft_tests.hthr` and `summation_tests.hthr`. Issue
+[float-eft-sterbenz-fast2sum](../issues/float-eft-sterbenz-fast2sum.md);
+the rest of the milestone is
+[float-eft-two-sum](../issues/float-eft-two-sum.md),
+[float-eft-two-product](../issues/float-eft-two-product.md),
+[float-eft-veltkamp](../issues/float-eft-veltkamp.md) and
+[float-kahan-summation](../issues/float-kahan-summation.md).
+
+**Exactness is one statement.** `Float::Exact(o, v)` says `o` is the finite
+float whose value is `v`. Once some float has the value `v`, every mode
+rounds `v` to it (`Format::exact_of_rounds`, from `rounds_exact`,
+`rounds_respects` and uniqueness), so each transformation proves only that
+its exact result is a float and gets exactness at every mode from that.
+`round_rat_of_rep` is the same fact read the other way, which is how the
+negative controls refute representability by evaluating one rounding.
+
+**Representability is one lemma.** On the half-unit grid a float `g` is
+`g.mag · 2^(g.bexp + 1)`. A natural `h = k · 2^(g.bexp + 1)` with
+`h <= g.units() · 2` has `k <= g.mag`, so `k` fits at `g`'s exponent; then
+the cut's cell has exponent at most `g.bexp` (`Format::e_of_le`: below
+`top · 2^(c+1)` the search stops by `c`), the cell's spacing divides `h`,
+and the greatest float at or below `h` is exactly `h` (`down_of_le`,
+`down_of_mult`, `Format::rep_below`). The signed form is over
+`OnGrid(c, z)`, `z = ±n · 2^(c+1)` (closed under `+`, `-` and negation, and
+every float is on the grid of every exponent at or below its own,
+`Finite::H_on_grid`): `Format::rep_on_grid`. Neither form needs
+normalisation: the cut's search does it.
+
+**Sterbenz** (`Finite::sterbenz`). For `y <= 2x` and `x <= 2y` both are
+nonnegative, and `x - y` is on the grid of the operand with the smaller
+exponent and no larger than it: if `x >= y` and `y` is the finer one,
+`x - y <= y` is the hypothesis; if `x` is the finer one, `x - y <= x` is
+free. So there is no case on which exponent is larger and no lemma that
+exponents are monotone in the value. Subnormals need nothing extra.
+
+**Rounding keeps a coarser grid** (`Format::nbr_grid`). A neighbour `s` of a
+value `x` on the grid of exponent `c` is on that grid: when `s.bexp >= c`
+it is because `s` is a float; when `s.bexp < c` the cut of `|x|` is below
+`top · 2^(s.bexp + 1)`, so its cell's spacing divides it, `x` is a float and
+`s` is `x` (`nbr_on_grid`, the negative side through `-s`). This replaces
+the textbook appeal to "the exponent of `○(x)` is at least the exponent of
+the grid".
+
+**The nearest addition error** (`Finite::add_error`). For `s` nearest to
+`a + b`, `|a + b - s|` is at most `|b|` (the distance to the float `a`) and
+at most `|a|` (to `b`), so at most the operand with the finer exponent; the
+error is on that operand's grid by `nbr_grid`; `rep_on_grid` concludes. The
+distance bounds come from `Finite::Nearest` against a candidate float,
+read at half-units (`Finite::near_err_H`). The statement is false for the
+directed modes: rounding `1 + 2^-24` up at binary16 errs by `2^-10 -
+2^-24`, which has fourteen significant bits (`err_up_not_float`).
+
+**Fast2Sum** (`fast_two_sum`, `fast_two_sum_err`, `fast_two_sum_exact`), for
+`|b| <= |a|` and `s` a finite nearest rounding of `a + b`. At `a >= 0`
+(`Format::f2s_pos`; the other sign is the same through negation and
+`nearest_flip`):
+
+- `b >= 0`: `a <= s` (the float `a` is at distance `b`) and `s <= 2a` (the
+  float `2a` is at distance `a - b`, or `2a` is past every float,
+  `Format::double_or_over`), so Sterbenz.
+- `b < 0`: `s <= a`. If `2|b| >= a`, Sterbenz makes `a + b` a float, so
+  `s = a + b` and `s - a = b`. Otherwise `a + b > a/2`: in the least binade
+  every grid value from 0 to `a` is a float, `a + b` among them; above it
+  `a/2` is a float (`Format::half_float`) at distance `a + b - a/2`, so
+  `s >= a/2` and Sterbenz.
+
+Then `b - z` is `(a + b) - s`, the addition error. The subtractions may
+round in any mode, and no hypothesis excludes overflow beyond `s` being
+finite. The tests run it at binary16 (`1 + 3·2^-12` splits as `1 + 2^-10`
+and `-2^-12`) and refute both hypotheses' necessity on concrete values:
+Sterbenz's range (`1 - 3·2^-12` is a tie) and Fast2Sum's order (`2^-24 + 1`).
+
+**TwoProduct** (`Finite::two_product`, `two_product_exact`), round 5's
+second part with TwoSum ([float-eft-two-product](../issues/float-eft-two-product.md)).
+`p = ○(a·b)` in a nearest mode and `e = fma(a, b, -p)` in any mode give
+`e = a·b - p` exactly when the product's quantum `qa + qb` is `c >= 0`
+above `qmin` (`hc`) and `|a·b|` is at most the largest float (`range`).
+The exact product is `±(ma·mb)` cells of `2^(c+1)` half-units
+(`Format::prod_grid`, `prod_cells`), a grid no float need have, so the
+representability step is `Format::rep_fit`: a value on the grid of
+exponent `c` with fewer than `top` cells and inside the limit is a float,
+whatever the operands' exponents (it goes straight to `down_exact`). The
+error is on that grid (`nbr_grid` when the cut's exponent is above `c`; when
+it is at or below `c` the product is itself a float and the error is 0), and
+`round.hthr`'s `nearest_err` bounds it by the cut's spacing `2^e`; since
+`ma·mb < top²` and the product is at least `top · 2^e`, the spacing is below
+`top · 2^(c+1)`, so the error fits (`Format::prod_err_pos`). The tests
+split `(1 + 2^-10)²` into `1 + 2^-9` and `2^-20` (a subnormal), and refute
+the grid hypothesis on `(1025 · 2^-22)²`, whose error is below the subnormal
+grid.
+
+**TwoSum** (`Finite::two_sum`, `two_sum_exact`;
+[float-eft-two-sum](../issues/float-eft-two-sum.md)). `s = ○(a + b)` and
+`a1 = ○(s - b)` in a nearest mode, then `b1 = s - a1`, `da = a - a1`,
+`db = b - b1` and `t = da + db` in any mode, with no order between `|a|`
+and `|b|` and `|a + b|` at most the largest float. `Finite::two_sum_H`
+splits on the order:
+
+- `|a| <= |b|`: Fast2Sum on `(b, a)` makes `s - b` a float, so `a1 = s - b`,
+  `s - a1 = b` and `a - a1` is the error of `s`.
+- `|b| <= |a|`, `a >= 0` (`Format::two_sum_pos`; the other sign by
+  negation, `two_sum_neg`): with `b >= 0`, `a <= s <= 2a` and `2b <= s`
+  (the float `2b`, or `2b` past every float, which the range excludes), so
+  `s/2 <= a1 <= s`
+  and both `s - a1` and `a - a1` are Sterbenz differences (in the least
+  binade, grid values below `s`). With `b < 0` and `2|b| >= a`, or in the
+  least binade, `a + b` is a float, so `s = a + b`, `a1 = a`
+  (`two_sum_on_float`). Otherwise `a/2 <= s <= a` and `s <= a1 <= 2s`:
+  Sterbenz twice.
+
+Every case reads a nearest float against one candidate float
+(`Finite::near_ge`, `near_le`). Then `db = b - b1` is minus the error of
+`a1` (`add_err_H` at `s + (-b)`), and `da + db = (a + b) - s`, the error of
+`s`. The range hypothesis is the only overflow assumption and it is used
+once, in the `2b` step; each intermediate is assumed finite by its
+equation. The tests split `3·2^-12 + 1` (the order Fast2Sum refuses) and
+`2^-24 + 1`, and show an upward `s` breaks it: `da = 2^-24 - 2^-10` is not
+a float.
+
+**Veltkamp splitting** (`Finite::veltkamp`;
+[float-eft-veltkamp](../issues/float-eft-veltkamp.md)). With `C = 2^s + 1`
+a float (`cv`), `1 <= s <= frac`, `g = ○(C·x)` and `d = ○(x - g)` in a
+nearest mode, then `xh = g + d` and `xl = x - xh` in any mode, at a normal
+`x` (`half <= x.mag`) with `|C·x|` in range: `xh + xl = x` exactly, `xh` is
+on the grid `s` exponents above `x`'s (`OnGrid(x.bexp + s, xh.H())`, so at
+most `prec - s` significant bits), and `|xl|` is at most `2^(x.bexp + s)`
+half-units, half that grid's spacing (so `s` bits; the sign absorbs the
+missing one). "Representable on `k` bits" is stated as a grid and a bound
+rather than a new predicate: the grid is what Dekker's product reads.
+
+At half-units, for `x > 0` with `m = x.mag`, `c = x.bexp`,
+`Q = 2^(c+s+1)` (`Format::veltkamp_pos`):
+
+- `C·x = m·(S + 1)·2^(c+1) >= half·Q` (`vk_gq`), so `g >= half·Q` and
+  `g.bexp >= c + s` (`Finite::bexp_ge`).
+- `|g - C·x| <= Q` (`vk_gerr`: `C·x` is on the grid `c`, below `top·Q`).
+- `g - x >= half·Q` (`vk_kq`): at `m = half` the product
+  `half·(S + 1)·2^(c+1)` is a float (`vk_gexact`, through `down_exact`); above
+  it the error bound leaves room.
+- So `d <= -half·Q` and `d.bexp >= c + s` (`vk_db`); `g + d` is a float by
+  Sterbenz on `(g, -d)`, using `half_float(g)` (`vk_xh`), and on the grid
+  `c + s` as a sum of two floats there.
+- `x - (g + d)` is `d`'s rounding error (`add_err_H` at `x + (-g)`), and it
+  is at most `Q/2`: `-d` is nearest to `g - x <= top·Q` on the grid `c + s`
+  (`Format::near_err_at`), and at `g - x = top·Q` the target is itself a
+  float, so the error is 0 (`vk_bound_at`).
+
+A negative `x` is the same at `-x`, `-g`, `-d` (`Format::veltkamp_H`, read
+back by `Finite::vk_unflip`); `veltkamp_tail` makes the last two steps
+exact in any mode (`Finite::add_exact_H`, `sub_exact_H`). The tests split
+`1537·2^-10` at `s = 5` into `1.5` and `2^-10` (and its negation with
+upward tails), and show `d` rounded toward zero breaks the bound: `xl =
+-31·2^-10` against a half-spacing of `16·2^-10`. A subnormal `x` is not
+covered ([float-veltkamp-subnormal](../issues/float-veltkamp-subnormal.md)).
+
+**The recursive sum** (`Format::rec_sum_error`, in `summation.hthr`;
+[float-kahan-summation](../issues/float-kahan-summation.md)). Addition
+obeys Higham's standard model with no underflow term: below the least
+normal the sum of two floats is on the grid of exponent 0 and no larger
+than the least normal, so it is a float (`Finite::add_small_rep`, through
+`rep_on_grid`), and `|○(a + b) - (a + b)| <= u·|a + b|` holds everywhere in
+range, in every mode (`Finite::add_rel_error`). `List::RecSum(xs, mode, a,
+s)` says `s` is `○(… ○(a + x₁) … + xₙ)` with every exact partial sum in
+range; then `|s - ∑| <= γ(n)·∑|xᵢ|` over the `n + 1` summands
+(`rec_sum_of`, by induction with the accumulator generalized). Each step
+is one inequality (`Format::rec_sum_step`): with `G = γ(m)` for the rest
+and `u` for this step, `G·(|r| + T) + u·|X| <= (G + u + G·u)·|X| + G·T`,
+and `γ(m) + u + γ(m)·u <= γ(m + 1)` is `gamma_add` with `u <= γ(1)`. The
+products are named values so `linarith` reads them as monomials. The test
+sums `1 + 2^-11 + 2^-11` (two ties to even, error `2^-10`) and shows
+`γ(1)` would not cover it.
+
+**Kahan's step** (`Finite::kahan_step`). Kahan's correction
+`c' = (t - s) - y` is Fast2Sum with the last subtraction reversed: when
+`|y| <= |s|` and `t = ○(s + y)` in a nearest mode, `t - s` is exact
+(`fast_two_sum`), `c'` is minus `t`'s error (`add_error`, negated), and so
+`t - c' = s + y`, in any mode for the two subtractions. Out of order
+(`s = 3·2^-12`, `y = 1`) the test shows `t - s` rounds and the identity
+fails. The algorithm does not ensure the order, so the whole loop's
+`(2u + O(n·u²))·∑|xᵢ|` (Higham, Theorem 4.8) goes through the standard
+model on every step, not through this lemma; it is filed design-first as
+[float-kahan-bound](../issues/float-kahan-bound.md).
+
+Observations:
+
+- `omega` cannot see through a projection of an existential (`r.witness`):
+  it stops with "could not spell an integer expression". Matching the
+  existential with `Exists(f, fh)` binds a variable it can read.
+- Matching on a large theorem call's result (or on a projection of a
+  let bound to one) unfolds the proof in the elaborator and the kernel. The
+  sign flips (`two_sum_neg` through `two_sum_unflip`, `fast_two_sum_H` and
+  `mul_err_H` through `Finite::neg_exists` and `j`) and `two_sum`'s tail
+  are shaped around it ([[match-on-proof-call-cost]],
+  `docs/proof-patterns.md` §4).
+- `Rat::not_le_of_lt` needs both points named when its strict fact is
+  `trivial` (closed values carry no inferable shape).
+- The `Nat`/`Int` facts here are about the float grid (`OnGrid` is a
+  float's cell spacing), so they stay in the float module.
+- Veltkamp's first draft, one proof with a long `let` chain, cost about two
+  minutes and its error bound ran out of memory; split into lemmas that
+  take each fact as a parameter it is about a second a lemma. Two causes
+  besides length: an annotation that differs from the term's type by a
+  `down` (`(h·Q).int() <= g.H()` for a term at `(F.down(h·Q)).H()`) made
+  the checker evaluate `down`, and `omega` over `Nat` products whose
+  factors are `pow` terms re-read their structure. Restating the
+  arithmetic over variables (`vk_kt_arith`, `vk_kn_arith`) took
+  `vk_bound` from twenty seconds to a third of one.
+- A self-call that varies a parameter inside `∃` is refused for a
+  `Type`-valued `fn` (`RecSum`), so `List::RecSum_of` is curried by hand.

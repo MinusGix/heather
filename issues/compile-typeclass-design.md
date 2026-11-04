@@ -3,9 +3,8 @@ title: Design the Compile typeclass and certificate coupling
 status: open
 labels: [compiler, typeclass, design]
 area: heather-in-heather
-blocked-by: [ir-simulate-design]
 created: 2026-07-22
-updated: 2026-09-07
+updated: 2026-11-04
 ---
 
 The certifying-compilation contract: a function is compilable iff it has a
@@ -51,3 +50,10 @@ bespoke; revisit once the kernel exists.
 - 2026-08-13: Discussion (2026-08-13, showcase critique) on how the target reaches Compile. Keep the target as a PARAMETER/index rather than a bare Compile chosen by ambient platform conditions: cross-compilation needs instances for several targets held simultaneously, and artifact caches key on target. But the index should be a *description* — a record of target facts (word size, endianness, ISA features) — not a nominal tag, so one instance can be generic over "any 64-bit LE target" with conditional instances discriminating within the indexed form; that subsumes the conditional-instance reading and gives fn-level compile access to compile-time target facts (the trait-view raised in discussion: special features exposed at the IR level, variation by target). Derivation spelling agreed leaning: `instance Compile for f := derive_runtime_fn(f);` — an instance whose value a meta-function computes, no derive keyword; matches this issue and certifying-generator's eval(generate(box f)) guess. The lazy/eager split: the compiler's walk from main demands instances with a default deriving rule (annotate nothing), while marking a fn runtime_fn is an eager per-declaration assertion for error locality only.
 - 2026-08-14: Datarepr keying answered (docs/datarepr-design.md §4, RECOMMENDED): Repr keys on the spec inductive's elaborated declaration, Impl on (fn's .code identity, repr name) — the same intensional bargain as Compile, for the same cache-predictability reason; definitionally-equal-but-distinct types bridge only by explicit certified conversion Impls.
 - 2026-08-25: The first concrete native-target owner is [[x86-64-machine-model]]: it defines the canonical relational target contract and typed-instruction/encoding seam downstream of FunctionIR. This issue continues to own source-function-to-IR certificate packaging; it assumes only that a later lowering can target that separately reviewed machine relation.
+- 2026-10-28: Tracker tidy: dropped `blocked-by: [ir-simulate-design]`, closed since the 2026-08-01 round above. What stays open here is the class layer and the `CallCtx` descriptor. Context since: native code is now one compiler proved once (`docs/native-program-logic-design.md`, B2 retired the per-function path on 2026-10-24), so a per-function `Compile` instance is no longer how native programs get their certificates; whether this issue's remaining scope still has a customer is worth asking before a round picks it up.
+- 2026-10-31: 2026-10-31: Closed as superseded by `docs/runtime-fn-setups-design.md` §9.3. Nothing is left of the class layer: the published `f::runtime : Compiled(f)` record is the instance, keyed on `f`'s syntax by construction (re-reflected on every re-elaboration, pinned against the current `f`); resolution-from-main is the reflected program's explicit callee list; target indexing was struck on 2026-08-07; `CallCtx` specialization is a setup lowering's business if one wants it (N2).
+- 2026-10-31: 2026-10-31: Reopened and narrowed, same day (Minus asked about the class). The class stays: `docs/runtime-fn-setups-design.md` §9.3 makes `Compile(f)` an operation-indexed class keyed on the function (code plus its agreement with `f`). A setup's `runtime` generator publishes `instance Compile(f)`; a hand-written instance is accepted with no setup; a call finds its callee by instance search. Coherence is one instance per function, with the setup as content, not key. Still open here: `CallCtx` specialization and generic code (`where Compile(A::add)`). The superseded closing note above is wrong on the class layer.
+
+- 2026-11-04: `class Compile<F>(f: F)` exists (`lib/native/runtime/runtime.hthr`,
+  docs/runtime-fn-setups-design.md §16.8), and `runtime fn f` publishes its
+  instance; a use site finds it by search (`lib/_tests/native/runtime/runtime_tests.hthr`).

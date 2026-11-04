@@ -1,0 +1,261 @@
+// atanh's polynomials over an ordered field (issues/exp-log-inverse.md).
+//
+//     A_n(t) = Σ_{k<n} c_k·t^(2k+1),   G_n(t) = Σ_{k<n} t^(2k)
+//
+// with `c_k·(2k+1) = 1` given as a hypothesis on the coefficients, so the
+// statements read over any ordered field and `ring` never meets a
+// reciprocal of a numeral. The facts:
+//
+// - `A_n' = G_n` on a bounded domain (`DerivOn::atanh_poly`);
+// - `G_n(t)·(1 - t²) = 1 - t^(2n)` (`OrderedField::geom_sq_mul`);
+// - on `|t| <= r` with `2r <= 1`, the tail `|A_(m+j)(t) - A_m(t)|` is at
+//   most `r^m - r^(m+j)`: each term is below `r^(k+1)`, and `2r^(k+1) <=
+//   r^k` telescopes (`OrderedField::atanh_tail`);
+// - `r^n` falls below every positive `w` (`OrderedField::npow_small`), from
+//   `r^n·n <= 1` and the Archimedean property.
+//
+// The reals' atanh is these polynomials' limit
+// (lib/std/analysis/real_log.hthr).
+
+import logic;
+import nat;
+import int;
+import list;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import big_operator;
+import ring;
+import omega;
+import linarith;
+import real_fn;
+
+// Exponent arithmetic, outside the section, where `+` is `Nat`'s.
+theorem Nat::atanh_split(k: Nat): Succ(k + k) = Succ(k) + k { omega }
+theorem Nat::atanh_step(m: Nat): Succ(m) + Succ(m) = Succ(Succ(m + m)) { omega }
+theorem Nat::atanh_zero_add(n: Nat): 0 + n = n { omega }
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+fn OrderedField::atanh_poly(c: Nat → K, n: Nat, t: K) → K {
+    match n { Zero => K.unit, Succ(m) => OrderedField::atanh_poly(c, m, t) + c(m) * OrderedField::npow(t, Succ(m.add(m))) }
+}
+
+fn OrderedField::geom_sq_poly(n: Nat, t: K) → K {
+    match n { Zero => K.unit, Succ(m) => OrderedField::geom_sq_poly(m, t) + OrderedField::npow(t, m.add(m)) }
+}
+
+// Equal exponents give equal powers.
+theorem OrderedField::npow_index(t: K, a, b: Nat, e: a = b): OrderedField::npow(t, a) ≈ OrderedField::npow(t, b) {
+    j(e, λ v _ => OrderedField::npow(t, a) ≈ OrderedField::npow(t, v), K.rel_refl(OrderedField::npow(t, a)))
+}
+
+theorem DerivOn::atanh_poly(D: K → Type, R: K, hb: BoundedOn(D, λ x => x, R), c: Nat → K,
+    hc: (k: Nat) → c(k) * K.of_nat(Succ(k.add(k))) ≈ K.multiplicative.unit, n: Nat):
+    DerivOn(D, λ t => OrderedField::atanh_poly(c, n, t), λ t => OrderedField::geom_sq_poly(n, t))
+{
+    match n {
+        Zero => DerivOn::const(D, K.unit),
+        Succ(m) => {
+            let s = DerivOn::add(D, λ t => OrderedField::atanh_poly(c, m, t), λ t => OrderedField::geom_sq_poly(m, t),
+                λ t => c(m) * OrderedField::npow(t, Succ(m.add(m))), λ t => c(m) * OrderedField::npow_deriv(t, Succ(m.add(m))),
+                DerivOn::atanh_poly(D, R, hb, c, hc, m),
+                DerivOn::scale(D, c(m), λ t => OrderedField::npow(t, Succ(m.add(m))), λ t => OrderedField::npow_deriv(t, Succ(m.add(m))),
+                    DerivOn::pow(D, R, hb, Succ(m.add(m)))));
+            let one = hc(m);
+            DerivOn::congr(D, λ t => OrderedField::atanh_poly(c, m, t) + c(m) * OrderedField::npow(t, Succ(m.add(m))),
+                λ t => OrderedField::atanh_poly(c, Succ(m), t),
+                λ t => OrderedField::geom_sq_poly(m, t) + c(m) * OrderedField::npow_deriv(t, Succ(m.add(m))),
+                λ t => OrderedField::geom_sq_poly(Succ(m), t),
+                λ t dt => K.rel_refl(OrderedField::atanh_poly(c, Succ(m), t)),
+                λ t dt => {
+                    let k: (OrderedField::geom_sq_poly(m, t) + c(m) * (K.of_nat(Succ(m.add(m))) * OrderedField::npow(t, m.add(m)))
+                        ≈ OrderedField::geom_sq_poly(m, t) + OrderedField::npow(t, m.add(m))) = ring(one);
+                    k
+                },
+                s)
+        },
+    }
+}
+
+// The geometric identity, at the squares.
+theorem OrderedField::geom_sq_mul(n: Nat, t: K):
+    OrderedField::geom_sq_poly(n, t) * (K.multiplicative.unit + K.inv(t * t)) ≈ K.multiplicative.unit + K.inv(OrderedField::npow(t, n.add(n)))
+{
+    match n {
+        Zero => {
+            let k: (K.unit * (K.multiplicative.unit + K.inv(t * t)) ≈ K.multiplicative.unit + K.inv(K.multiplicative.unit)) = ring;
+            k
+        },
+        Succ(m) => {
+            let ih = OrderedField::geom_sq_mul(m, t);
+            let ix = OrderedField::npow_index(t, Succ(m).add(Succ(m)), Succ(Succ(m.add(m))), Nat::atanh_step(m));
+            let k1: ((OrderedField::geom_sq_poly(m, t) + OrderedField::npow(t, m.add(m))) * (K.multiplicative.unit + K.inv(t * t))
+                ≈ K.multiplicative.unit + K.inv(OrderedField::npow(t, m.add(m)) * t * t)) = ring(ih);
+            let k: (OrderedField::geom_sq_poly(Succ(m), t) * (K.multiplicative.unit + K.inv(t * t))
+                ≈ K.multiplicative.unit + K.inv(OrderedField::npow(t, Succ(Succ(m.add(m)))))) = k1;
+            linarith(k, ix)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Powers of a bound.
+
+theorem OrderedField::npow_abs_le(t, r: K, ht: AbsLe(t, r), n: Nat): AbsLe(OrderedField::npow(t, n), OrderedField::npow(r, n)) {
+    let hb: BoundedOn(λ (s: K) => AbsLe(s, r), λ x => x, r) = And(LocatedAddGroup::abs_le_nonneg(t, r, ht), λ s hs => hs);
+    (BoundedOn::pow(λ (s: K) => AbsLe(s, r), r, hb, n)).right(t, ht)
+}
+
+theorem OrderedField::npow_nonneg(r: K, p0: K.unit <= r, n: Nat): K.unit <= OrderedField::npow(r, n) {
+    match n {
+        Zero => {
+            let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+            StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o)
+        },
+        Succ(m) => OrderedSemiring::mul_nonneg(OrderedField::npow(r, m), r, OrderedField::npow_nonneg(r, p0, m), p0),
+    }
+}
+
+// Below one, a longer power is smaller.
+theorem OrderedField::npow_index_le(r: K, p0: K.unit <= r, r1: r <= K.multiplicative.unit, a, d: Nat):
+    OrderedField::npow(r, a.add(d)) <= OrderedField::npow(r, a)
+{
+    match d {
+        Zero => StrictOrder::le_refl(OrderedField::npow(r, a)),
+        Succ(i) => {
+            let ih = OrderedField::npow_index_le(r, p0, r1, a, i);
+            let le: (OrderedField::npow(r, a.add(i)) * r <= OrderedField::npow(r, a.add(i)) * K.multiplicative.unit) =
+                OrderedSemiring::mul_le_mono_l(r, K.multiplicative.unit, OrderedField::npow(r, a.add(i)), r1, OrderedField::npow_nonneg(r, p0, a.add(i)));
+            let u: (OrderedField::npow(r, a.add(Succ(i))) ≈ OrderedField::npow(r, a.add(i)) * r) = K.rel_refl(OrderedField::npow(r, a.add(i)) * r);
+            linarith(le, ih, u)
+        },
+    }
+}
+
+theorem OrderedField::npow_le_one(r: K, p0: K.unit <= r, r1: r <= K.multiplicative.unit, n: Nat): OrderedField::npow(r, n) <= K.multiplicative.unit {
+    let le = OrderedField::npow_index_le(r, p0, r1, 0, n);
+    let ix = OrderedField::npow_index(r, Nat::add(0, n), n, Nat::atanh_zero_add(n));
+    let o: (OrderedField::npow(r, Zero) ≈ K.multiplicative.unit) = K.rel_refl(K.multiplicative.unit);
+    linarith(le, ix, o)
+}
+
+// One term of atanh's series is below `r^(k+1)`.
+theorem OrderedField::atanh_term_le(c: Nat → K, hc1: (k: Nat) → AbsLe(c(k), K.multiplicative.unit), r, t: K, ht: AbsLe(t, r),
+    r1: r <= K.multiplicative.unit, k: Nat): AbsLe(c(k) * OrderedField::npow(t, Succ(k.add(k))), OrderedField::npow(r, Succ(k)))
+{
+    let p0 = LocatedAddGroup::abs_le_nonneg(t, r, ht);
+    let m = OrderedField::abs_le_mul(c(k), OrderedField::npow(t, Succ(k.add(k))), K.multiplicative.unit, OrderedField::npow(r, Succ(k.add(k))),
+        hc1(k), OrderedField::npow_abs_le(t, r, ht, Succ(k.add(k))));
+    let ix = OrderedField::npow_index(r, Succ(k.add(k)), Succ(k).add(k), Nat::atanh_split(k));
+    let le = OrderedField::npow_index_le(r, p0, r1, Succ(k), k);
+    LocatedAddGroup::abs_le_weaken(c(k) * OrderedField::npow(t, Succ(k.add(k))), c(k) * OrderedField::npow(t, Succ(k.add(k))),
+        K.multiplicative.unit * OrderedField::npow(r, Succ(k.add(k))), OrderedField::npow(r, Succ(k)), m,
+        K.rel_refl(c(k) * OrderedField::npow(t, Succ(k.add(k)))), linarith(ix, le))
+}
+
+// The tail from `m` to `m.add(j)`.
+theorem OrderedField::atanh_tail(c: Nat → K, hc1: (k: Nat) → AbsLe(c(k), K.multiplicative.unit), r, t: K, ht: AbsLe(t, r),
+    hr: r + r <= K.multiplicative.unit, m, j: Nat):
+    AbsLe(OrderedField::atanh_poly(c, m.add(j), t) + K.inv(OrderedField::atanh_poly(c, m, t)), OrderedField::npow(r, m) + K.inv(OrderedField::npow(r, m.add(j))))
+{
+    let p0 = LocatedAddGroup::abs_le_nonneg(t, r, ht);
+    match j {
+        Zero => LocatedAddGroup::abs_le_zero(OrderedField::atanh_poly(c, m, t) + K.inv(OrderedField::atanh_poly(c, m, t)),
+            OrderedField::npow(r, m) + K.inv(OrderedField::npow(r, m)), ring, StrictOrder::le_of_same(K.unit, OrderedField::npow(r, m) + K.inv(OrderedField::npow(r, m)), ring)),
+        Succ(i) => {
+            let ih = OrderedField::atanh_tail(c, hc1, r, t, ht, hr, m, i);
+            let r1: (r <= K.multiplicative.unit) = linarith(hr, p0);
+            let tm = OrderedField::atanh_term_le(c, hc1, r, t, ht, r1, m.add(i));
+            let gap: (K.unit <= OrderedField::npow(r, m.add(i)) * (K.multiplicative.unit + K.inv(r + r))) =
+                OrderedSemiring::mul_nonneg(OrderedField::npow(r, m.add(i)), K.multiplicative.unit + K.inv(r + r),
+                    OrderedField::npow_nonneg(r, p0, m.add(i)), linarith(hr));
+            let ua: (OrderedField::atanh_poly(c, m.add(Succ(i)), t) ≈ OrderedField::atanh_poly(c, m.add(i), t) + c(m.add(i)) * OrderedField::npow(t, Succ((m.add(i)).add(m.add(i))))) =
+                K.rel_refl(OrderedField::atanh_poly(c, m.add(Succ(i)), t));
+            let ur: (OrderedField::npow(r, m.add(Succ(i))) ≈ OrderedField::npow(r, m.add(i)) * r) = K.rel_refl(OrderedField::npow(r, m.add(i)) * r);
+            LocatedAddGroup::abs_le_sum2(OrderedField::atanh_poly(c, m.add(i), t) + K.inv(OrderedField::atanh_poly(c, m, t)),
+                c(m.add(i)) * OrderedField::npow(t, Succ((m.add(i)).add(m.add(i)))),
+                OrderedField::atanh_poly(c, m.add(Succ(i)), t) + K.inv(OrderedField::atanh_poly(c, m, t)),
+                OrderedField::npow(r, m) + K.inv(OrderedField::npow(r, m.add(i))), OrderedField::npow(r, m.add(i)) * r,
+                OrderedField::npow(r, m) + K.inv(OrderedField::npow(r, m.add(Succ(i)))), ih, tm, ring(ua), linarith(gap, ur))
+        },
+    }
+}
+
+// `r^n·n <= 1` for `2r <= 1`.
+theorem OrderedField::npow_mul_nat(r: K, p0: K.unit <= r, hr: r + r <= K.multiplicative.unit, n: Nat):
+    OrderedField::npow(r, n) * K.of_nat(n) <= K.multiplicative.unit
+{
+    match n {
+        Zero => {
+            let z = K.of_nat_zero;
+            let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+            let k: (K.multiplicative.unit * K.of_nat(Zero) ≈ K.unit) = ring(z);
+            let k2: (OrderedField::npow(r, Zero) * K.of_nat(Zero) ≈ K.unit) = k;
+            linarith(k2, o)
+        },
+        Succ(m) => {
+            let ih = OrderedField::npow_mul_nat(r, p0, hr, m);
+            let s = K.of_nat_succ(m);
+            let r1: (r <= K.multiplicative.unit) = linarith(hr, p0);
+            let one = OrderedField::npow_le_one(r, p0, r1, m);
+            let a: (r * (OrderedField::npow(r, m) * K.of_nat(m)) <= r * K.multiplicative.unit) =
+                OrderedSemiring::mul_le_mono_l(OrderedField::npow(r, m) * K.of_nat(m), K.multiplicative.unit, r, ih, p0);
+            let b: (r * OrderedField::npow(r, m) <= r * K.multiplicative.unit) =
+                OrderedSemiring::mul_le_mono_l(OrderedField::npow(r, m), K.multiplicative.unit, r, one, p0);
+            let k0: (OrderedField::npow(r, m) * r * K.of_nat(Succ(m)) ≈ r * (OrderedField::npow(r, m) * K.of_nat(m)) + r * OrderedField::npow(r, m)) = ring(s);
+            let k: (OrderedField::npow(r, Succ(m)) * K.of_nat(Succ(m)) ≈ r * (OrderedField::npow(r, m) * K.of_nat(m)) + r * OrderedField::npow(r, m)) = k0;
+            linarith(k, a, b, hr)
+        },
+    }
+}
+
+// Powers of `r <= 1/2` fall below every positive `w`.
+theorem OrderedField::npow_small(r: K, p0: K.unit <= r, hr: r + r <= K.multiplicative.unit, w: K, pw: K.unit < w):
+    ∃ n: Nat, OrderedField::npow(r, n) <= w
+{
+    let q = K.recip(w, Inr(pw));
+    let m: (w * q ≈ K.multiplicative.unit) = K.mul_recip(w, Inr(pw));
+    let n = K.archimedean(q);
+    let big: (w * q < w * K.of_nat(n.witness)) = OrderedSemiring::mul_lt_mono_l(q, K.of_nat(n.witness), w, n.proof, pw);
+    let pn = OrderedField::of_nat_nonneg(w, n.witness);
+    let le = OrderedField::npow_mul_nat(r, p0, hr, n.witness);
+    Exists(n.witness, K.le_of_not_lt(OrderedField::npow(r, n.witness), w, λ back => {
+        let up: (w * K.of_nat(n.witness) <= OrderedField::npow(r, n.witness) * K.of_nat(n.witness)) =
+            OrderedSemiring::mul_le_mono_r(w, OrderedField::npow(r, n.witness), K.of_nat(n.witness), StrictOrder::le_of_lt(w, OrderedField::npow(r, n.witness), back), pn);
+        let bad: (w * K.of_nat(n.witness) < w * K.of_nat(n.witness)) = linarith(big, m, up, le);
+        K.lt_irrefl(w * K.of_nat(n.witness), bad)
+    }))
+}
+
+// Powers and the polynomials respect `≈`.
+theorem OrderedField::npow_respects(x, y: K, h: x ≈ y, n: Nat): OrderedField::npow(x, n) ≈ OrderedField::npow(y, n) {
+    match n {
+        Zero => K.rel_refl(K.multiplicative.unit),
+        Succ(m) => {
+            let ih = OrderedField::npow_respects(x, y, h, m);
+            let k: (OrderedField::npow(x, m) * x ≈ OrderedField::npow(y, m) * y) = ring(ih, h);
+            k
+        },
+    }
+}
+
+theorem OrderedField::atanh_poly_respects(c: Nat → K, x, y: K, h: x ≈ y, n: Nat):
+    OrderedField::atanh_poly(c, n, x) ≈ OrderedField::atanh_poly(c, n, y)
+{
+    match n {
+        Zero => K.rel_refl(K.unit),
+        Succ(m) => {
+            let ih = OrderedField::atanh_poly_respects(c, x, y, h, m);
+            let p = OrderedField::npow_respects(x, y, h, Succ(m.add(m)));
+            let k: (OrderedField::atanh_poly(c, m, x) + c(m) * OrderedField::npow(x, Succ(m.add(m)))
+                ≈ OrderedField::atanh_poly(c, m, y) + c(m) * OrderedField::npow(y, Succ(m.add(m)))) = ring(ih, p);
+            k
+        },
+    }
+}
+
+}

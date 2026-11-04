@@ -1,0 +1,280 @@
+// Probes of `lib/std/algebra/big_operator.hthr` (issues/finite-sums-and-products.md)
+// and of the `∑`/`∏` binder that spells it: the range sum at `Nat` and `Int`
+// under identity, at `Rat` and `CReal` under `≈`, at an open carrier, and as
+// a product through a semiring's `multiplicative` tag. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5).
+import logic; import nat; import int; import list; import relation;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field;
+import big_operator; import rat; import creal;
+import omega; import ring; import linarith; import tactic; import mono; import norm_num; import norm_num_real;
+
+// Sums compute at literal bounds, at whatever carrier the body has.
+theorem nat_sum_four(): ∑ k < 4, k = 6 { refl }
+theorem nat_prod_four(): ∏ k < 4, k + 1 = 24 { refl }
+theorem int_sum_three(): ∑ k < 3, Int::sub(OfNat(k), OfNat(1)) = OfNat(0) { refl }
+theorem rat_sum_three(): ∑ k < 3, Rat::ofInt(OfNat(k + 1)) = 6 { refl }
+theorem rat_prod_three(): ∏ k < 3, Rat::ofInt(OfNat(k + 1)) = 6 { refl }
+theorem list_range_four(): List::range(4) = [0, 1, 2, 3] { refl }
+// A negative control: the sum is 6, so it is not 7.
+theorem nat_sum_not_seven(): ¬(∑ k < 4, k = 7) { λ h => absurd(h) }
+
+// The body runs right as far as an arithmetic expression does, and the sum
+// is an operand on either side of a relation.
+theorem body_extends(n: Nat, f: Nat → Rat): ∑ k < n, f(k) + f(n) ≈ ∑ k < n, (f(k) + f(n)) {
+    (∑ k < n, (f(k) + f(n))).same_refl()
+}
+theorem last_term(n: Nat, f: Nat → Rat): ∑ k < n + 1, f(k) ≈ (∑ k < n, f(k)) + f(n) { ((∑ k < n, f(k)) + f(n)).same_refl() }
+theorem sum_on_the_right(f: Nat → Rat): (0 + f(0)) + f(1) ≈ ∑ k < 2, f(k) { ((0 + f(0)) + f(1)).same_refl() }
+
+// At `Nat` the generic laws land as plain equations.
+theorem nat_split(m, n: Nat, f: Nat → Nat): ∑ k < m + n, f(k) = (∑ k < m, f(k)) + ∑ k < n, f(m + k) {
+    MonoidRel::range_add(+, m, n, f)
+}
+theorem nat_reverse(n: Nat, f: Nat → Nat): ∑ k < n, f(n - Succ(k)) = ∑ k < n, f(k) {
+    CommMonoidRel::range_reverse(≈, +, n, f)
+}
+
+// One theorem serves `∑` and `∏`: the split law at a semiring's product.
+theorem prod_split<A: Semiring(≈, +, *)>(m, n: Nat, f: Nat → A):
+    ∏ k < Nat::add(m, n), f(k) ≈ (∏ k < m, f(k)) * ∏ k < n, f(Nat::add(m, k))
+{
+    MonoidRel::range_add(*, m, n, f)
+}
+theorem prod_op<A: CommSemiring(≈, +, *)>(n: Nat, f, g: Nat → A): ∏ k < n, f(k) * g(k) ≈ (∏ k < n, f(k)) * ∏ k < n, g(k) {
+    CommMonoidRel::range_op(≈, *, n, f, g)
+}
+theorem rat_prod_shift(n: Nat, f: Nat → Rat): f(0) * ∏ k < n, f(Succ(k)) ≈ ∏ k < Succ(n), f(k) {
+    Rat::same_sym(MonoidRel::range_succ_l(*, n, f))
+}
+
+// Reindexing at an open commutative monoid: a swap of two adjacent indices.
+fn swap01(k: Nat) → Nat { match k { Zero => 1, Succ(j) => match j { Zero => 0, Succ(_) => k } } }
+theorem swap01_inv(k: Nat): swap01(swap01(k)) = k { match k { Zero => refl, Succ(j) => match j { Zero => refl, Succ(_) => refl } } }
+theorem swap01_below(n, k: Nat, hn: 2 <= n): k < n → swap01(k) < n {
+    match k { Zero => λ hk => hn, Succ(j) => match j { Zero => λ hk => Nat::le_trans(1, 2, n, trivial, hn), Succ(_) => λ hk => hk } }
+}
+theorem swapped<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A,
+    n: Nat, hn: 2 <= n, f: Nat → A):
+    MonoidRel::range(op, n, λ k => f(swap01(k))) ≈ MonoidRel::range(op, n, f)
+{
+    CommMonoidRel::range_perm(same, op, n, f, swap01, swap01,
+        λ k hk => swap01_below(n, k, hn, hk), λ k hk => swap01_below(n, k, hn, hk),
+        λ k hk => swap01_inv(k), λ k hk => swap01_inv(k))
+}
+
+// The Cauchy-product coefficient identity at `Rat`: the first `N`
+// coefficients of `a · b` sum to the triangle, at open sequences, and at
+// `a = b = (1, 2, 3, …)` both sides are 15 for `N = 3` (coefficients 1, 4, 10).
+// The antidiagonal's binders are unannotated: it is a bare `+` call too, so
+// nothing fixes its carrier before the λ, but `f: Nat → Nat → A` already
+// says `i` and `k` are `Nat`, and the body's type is the carrier.
+theorem rat_cauchy(N: Nat, a, b: Nat → Rat):
+    ∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)) ≈ ∑ i < N, a(i) * ∑ k < N - i, b(k)
+{
+    Semiring::range_cauchy(N, a, b)
+}
+fn up(k: Nat) → Rat { Rat::ofInt(OfNat(k + 1)) }
+theorem rat_cauchy_coefficients(): ∑ n < 3, MonoidRel::antidiag(+, n, λ i k => up(i) * up(k)) = 15 { refl }
+theorem rat_cauchy_three(): ∑ n < 3, MonoidRel::antidiag(+, n, λ i k => up(i) * up(k)) ≈ ∑ i < 3, up(i) * ∑ k < 3 - i, up(k) {
+    rat_cauchy(3, up, up)
+}
+
+// The same unannotated antidiagonal at `Nat`, where it is a plain number
+// in inference position (`fn`'s body is checked, the sum is not), at an open
+// semiring, and a negative control: the triangle `i·k` below 4 sums to 5.
+fn nat_triangle(N: Nat) → Nat { let t = ∑ n < N, MonoidRel::antidiag(+, n, λ i k => i * k); t }
+theorem nat_triangle_four(): nat_triangle(4) = 5 { refl }
+theorem nat_triangle_not_four(): ¬(nat_triangle(4) = 4) { λ h => absurd(h) }
+theorem open_cauchy<A: Semiring(≈, +, *)>(N: Nat, a, b: Nat → A):
+    ∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k)) ≈ ∑ i < N, a(i) * ∑ k < N - i, b(k)
+{
+    Semiring::range_cauchy(N, a, b)
+}
+
+// Order: a sum of nonnegative terms is nonnegative, and the triangle
+// inequality at `Rat`.
+theorem rat_nonneg(n: Nat, f: Nat → Rat, h: (k: Nat) → Nat::Lt(k, n) → 0 <= f(k)): 0 <= ∑ k < n, f(k) {
+    LocatedAddMonoid::range_nonneg(n, f, h)
+}
+theorem rat_triangle(n: Nat, f: Nat → Rat): (∑ k < n, f(k)).abs() <= ∑ k < n, f(k).abs() { Rat::sum_abs_le(n, f) }
+theorem creal_le(n: Nat, f, g: Nat → CReal, h: (k: Nat) → Nat::Lt(k, n) → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) {
+    LocatedAddMonoid::range_le(n, f, g, h)
+}
+
+// Distributivity at an open semiring, and the product of two sums.
+theorem factor<A: Semiring(≈, +, *)>(c: A, n: Nat, f: Nat → A): c * ∑ k < n, f(k) ≈ ∑ k < n, c * f(k) {
+    Semiring::mul_range_l(c, n, f)
+}
+theorem creal_rect(m, n: Nat, f, g: Nat → CReal): (∑ i < m, f(i)) * (∑ k < n, g(k)) ≈ ∑ i < m, ∑ k < n, f(i) * g(k) {
+    Semiring::range_mul_range(m, n, f, g)
+}
+
+// The tactics on sums (issues/tactics-and-big-operators.md). To `ring`,
+// `linarith` and `omega` a sum is an atom, unfolded only by its definition:
+// the empty sum is the unit, and a sum at a successor bound (or a small
+// numeral) is the sum below it with its last term added on.
+theorem ring_atom(n: Nat, f: Nat → Rat): (∑ k < n, f(k)) * 2 ≈ (∑ k < n, f(k)) + ∑ k < n, f(k) { ring }
+theorem ring_atom_nat(n: Nat, f: Nat → Nat): (∑ k < n, f(k)) * 2 = (∑ k < n, f(k)) + ∑ k < n, f(k) { ring }
+theorem ring_last(n: Nat, f: Nat → Rat): ∑ k < n + 1, f(k) ≈ f(n) + ∑ k < n, f(k) { ring }
+theorem ring_last_two(n: Nat, f: Nat → Int): ∑ k < n + 2, f(k) = f(n + 1) + f(n) + ∑ k < n, f(k) { ring }
+theorem ring_succ_prod(n: Nat, f: Nat → Rat): ∏ k < Succ(n), f(k) ≈ f(n) * ∏ k < n, f(k) { ring }
+theorem ring_numeral(f: Nat → CReal): ∑ k < 3, f(k) ≈ f(0) + f(1) + f(2) { ring }
+theorem ring_empty(f: Nat → Rat): ∏ k < 0, f(k) ≈ 1 { ring }
+// One step of an induction: the hypothesis about the sum below, and `ring`.
+theorem ring_gauss_step(n: Nat, h: (∑ k < n, Rat::ofInt(OfNat(k))) * 2 ≈ Rat::ofInt(OfNat(n)) * (Rat::ofInt(OfNat(n)) - 1)):
+    (∑ k < n + 1, Rat::ofInt(OfNat(k))) * 2 ≈ Rat::ofInt(OfNat(n)) * (Rat::ofInt(OfNat(n)) - 1) + 2 * Rat::ofInt(OfNat(n))
+{ ring(h) }
+// A negative control: the last term is not dropped.
+// expect-error: it is not an identity of commutative rings
+theorem ring_no_drop(n: Nat, f: Nat → Rat): ∑ k < n + 1, f(k) ≈ ∑ k < n, f(k) { ring }
+// At a class carrier the same two readings, at the section's own `+` and
+// `*` (issues/finite-difference-calculus.md: induction over a generic sum).
+section<R: CommRing(≈, +, *)> {
+theorem ring_class_empty(f: Nat → R): ∑ k < 0, f(k) ≈ R.unit { ring }
+theorem ring_class_last(n: Nat, f: Nat → R): ∑ k < Succ(n), f(k) ≈ f(n) + ∑ k < n, f(k) { ring }
+theorem ring_class_power(r: R, n: Nat): ∏ k < Nat::add(n, 1), r ≈ r * ∏ k < n, r { ring }
+// expect-error: it is not an identity of commutative rings
+theorem ring_class_no_drop(n: Nat, f: Nat → R): ∑ k < Succ(n), f(k) ≈ ∑ k < n, f(k) { ring }
+}
+theorem linarith_step(n: Nat, f: Nat → Rat, h: ∑ k < n, f(k) <= 1, hf: f(n) <= 2): ∑ k < n + 1, f(k) <= 3 { linarith }
+theorem omega_step(n: Nat, f: Nat → Nat, h: (∑ k < n, f(k)) <= n * 3, hf: f(n) <= 3): (∑ k < n + 1, f(k)) <= n * 3 + 3 { omega }
+theorem omega_int_step(n: Nat, f: Nat → Int, h: ∑ k < n, f(k) <= OfNat(3), hf: f(n) <= OfNat(2)): ∑ k < n + 1, f(k) <= OfNat(5) { omega }
+theorem omega_numeral(f: Nat → Nat, h: (k: Nat) → f(k) <= 2): ∑ k < 3, f(k) <= 6 { omega(h(0), h(1), h(2)) }
+
+// `mono` splits an order between two sums termwise, under the index's
+// binders, and proves a sum nonnegative from its terms.
+theorem mono_termwise(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) { by mono() }
+theorem mono_inside(n: Nat, f, g: Nat → Rat, c: Rat, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) + c <= ∑ k < n, g(k) + c { by mono() }
+theorem mono_factor(n: Nat, f: Nat → Rat, a, b: Rat, h: a <= b): ∑ k < n, f(k).abs() * a <= ∑ k < n, f(k).abs() * b { by mono() }
+theorem mono_nonneg(n: Nat, f: Nat → Rat): 0 <= ∑ k < n, f(k).abs() { by mono() }
+theorem mono_real(n: Nat, f, g: Nat → CReal, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) { by mono() }
+theorem mono_nat(n: Nat, f, g: Nat → Nat, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) { by mono() }
+theorem mono_int(n: Nat, f, g: Nat → Int, h: (k: Nat) → k < n → f(k) <= g(k)): ∑ k < n, f(k) <= ∑ k < n, g(k) { by mono() }
+theorem mono_class<A: OrderedField(≈, <, <=, +, *)>(n: Nat, f, g: Nat → A, c: A, h: (k: Nat) → Nat::Lt(k, n) → f(k) <= g(k)):
+    ∑ k < n, f(k) + c <= ∑ k < n, g(k) + c
+{ by mono() }
+theorem mono_class_nonneg<A: OrderedField(≈, <, <=, +, *)>(n: Nat, f: Nat → A, h: (k: Nat) → Nat::Lt(k, n) → A.unit <= f(k)): A.unit <= ∑ k < n, f(k) { by mono() }
+// A product is not monotone termwise without signs, and `mono` has no law
+// for one.
+// expect-error: no number of arguments makes the conclusion
+theorem mono_product(n: Nat, f, g: Nat → Rat, h: (k: Nat) → k < n → f(k) <= g(k)): ∏ k < n, f(k) <= ∏ k < n, g(k) { by mono() }
+
+// `norm_num` evaluates a closed sum: at `Rat` and below by computing it,
+// at `CReal` by reading it term by term.
+fn rup(k: Nat) → CReal { CReal::ofRat(up(k)) }
+theorem norm_num_nat(): ∑ k < 4, k * k = 14 { by norm_num() }
+theorem norm_num_rat(): ∑ k < 3, up(k) < 7 { by norm_num() }
+theorem norm_num_real(): ∑ k < 3, rup(k) ≈ 6 { by norm_num() }
+theorem norm_num_real_product(): ∏ k < 3, rup(k) ≈ 6 { by norm_num() }
+theorem norm_num_real_body(): ∑ k < 3, (rup(k) * rup(k) - 1) ≈ 11 { by norm_num() }
+theorem norm_num_real_empty(): ∑ k < 0, rup(k) ≈ 0 { by norm_num() }
+theorem norm_num_real_false(): ¬(∑ k < 3, rup(k) ≈ 7) { by norm_num() }
+
+// Setoid `rewrite` under the binder of `∑`/`∏` (docs/equation-rewrite-design.md
+// §10): the body is rewritten below the binder, the two λs are related
+// pointwise, and the sum crosses that relation by `MonoidRel::range_pointwise`.
+theorem rewrite_under_sum(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y, e: ∑ k < n, f(k) * y ≈ y): ∑ k < n, f(k) * x ≈ y { rewrite(h, e) }
+theorem rewrite_under_product(n: Nat, f: Nat → Rat): ∏ k < n, (f(k) + 0) ≈ ∏ k < n, f(k) { rewrite(Rat::add_zero, Rat::same_refl(∏ k < n, f(k))) }
+theorem rewrite_under_sum_hypothesis(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y, e: ∑ k < n, (f(k) + x) ≈ 0): ∑ k < n, (f(k) + y) ≈ 0 {
+    rewrite(h, in := e)
+}
+// An unapplied law is instantiated below the binder: `f(k) + 0` mentions `k`.
+// The instance is relative to the binder it mentions, so it is the same
+// instance under a second sum's own binder.
+theorem rewrite_law_under_sum(n: Nat, f: Nat → Rat, e: ∑ k < n, f(k) ≈ 0): ∑ k < n, (f(k) + 0) ≈ 0 { rewrite(Rat::add_zero, e) }
+theorem rewrite_law_under_two_sums(m, n: Nat, f: Nat → Rat): ∑ k < n, (f(k) + 0) + ∑ j < m, (f(j) + 0) ≈ ∑ k < n, f(k) + ∑ j < m, f(j) {
+    rewrite(Rat::add_zero, Rat::same_refl(∑ k < n, f(k) + ∑ j < m, f(j)))
+}
+// Nested sums, a triangular one whose inner bound mentions the outer index
+// (the inner sum's evidence is found below the outer binder), and the
+// antidiagonal's two binders, crossed at once by `antidiag_pointwise`.
+theorem rewrite_nested(m, n: Nat, f: Nat → Nat → Rat): ∑ i < m, ∑ k < n, (f(i, k) + 0) ≈ ∑ i < m, ∑ k < n, f(i, k) {
+    rewrite(Rat::add_zero, Rat::same_refl(∑ i < m, ∑ k < n, f(i, k)))
+}
+theorem rewrite_triangle(m: Nat, f: Nat → Nat → Rat): ∑ i < m, ∑ k < m - i, (f(i, k) + 0) ≈ ∑ i < m, ∑ k < m - i, f(i, k) {
+    rewrite(Rat::add_zero, Rat::same_refl(∑ i < m, ∑ k < m - i, f(i, k)))
+}
+theorem rewrite_antidiag(n: Nat, f: Nat → Rat):
+    MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * (f(k) + 0)) ≈ MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * f(k))
+{
+    rewrite(Rat::add_zero, Rat::same_refl(MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * f(k))))
+}
+// At an open semiring, through its `+` monoid, and a law of the class.
+theorem rewrite_under_open_sum<A: Semiring(≈, +, *)>(n: Nat, f, g: Nat → A, c: A):
+    ∑ k < n, c * (f(k) + g(k)) ≈ ∑ k < n, (c * f(k) + c * g(k))
+{
+    rewrite(A.distrib_l, A.rel_refl(∑ k < n, (c * f(k) + c * g(k))))
+}
+// A context that mentions the index has its evidence stated below the
+// binder; missing, it is an obligation over every index.
+theorem rewrite_bound_context(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h: x ≈ y,
+    c: (k: Nat) → PreservesRelation(Rat::Same, Rat::Same, g(k))): ∑ k < n, g(k, x) ≈ ∑ k < n, g(k, y)
+{
+    rewrite(h, Rat::same_refl(∑ k < n, g(k, y)))
+    on ?compatibility := c;
+}
+// expect-error: ?compatibility : (z: Nat) -> PreservesRelation(Same, Same, g(z))
+theorem rewrite_bound_context_open(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, g(k, x) ≈ ∑ k < n, g(k, y) {
+    rewrite(h, Rat::same_refl(∑ k < n, g(k, y)))
+}
+// A sum that leaves the carrier, as an argument of a `Nat`-valued count,
+// is refused when no evidence names the relation at `Nat`
+// (docs/equation-rewrite-design.md §11.4).
+// expect-error: from functions into `Rat` to `Nat`, and no evidence about it names the relation
+theorem rewrite_sum_leaves(n: Nat, x, y: Rat, h: x ≈ y, size: (Nat → Rat) → Nat, back: Nat → Rat, e: back(size(λ k => y)) ≈ 0):
+    back(size(λ k => x)) ≈ 0
+{ rewrite(h, e) }
+
+// `rel_cong` and `rel_derive` cross the same binders
+// (docs/equation-rewrite-design.md §10.6): two λs whose bodies differ are
+// walked below the binder to a pointwise proof, and their consumer crosses it
+// by the evidence `rewrite` asks for.
+theorem rel_cong_under_sum(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, f(k) * x ≈ ∑ k < n, f(k) * y { rel_cong(h) }
+theorem rel_cong_nested(m, n: Nat, f: Nat → Nat → Rat, x, y: Rat, h: x ≈ y):
+    ∑ i < m, ∑ k < n, f(i, k) * x ≈ ∑ i < m, ∑ k < n, f(i, k) * y
+{ rel_cong(h) }
+theorem rel_cong_triangle(m: Nat, f: Nat → Nat → Rat, x, y: Rat, h: x ≈ y):
+    ∑ i < m, ∑ k < m - i, f(i, k) * x ≈ ∑ i < m, ∑ k < m - i, f(i, k) * y
+{ rel_cong(h) }
+theorem rel_cong_antidiag(n: Nat, f: Nat → Rat, x, y: Rat, h: x ≈ y):
+    MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * f(k) * x) ≈ MonoidRel::antidiag(Rat::add, n, λ i k => f(i) * f(k) * y)
+{ rel_cong(h) }
+theorem rel_cong_open_sum<A: Semiring(≈, +, *)>(n: Nat, f: Nat → A, c, d: A, h: c ≈ d): ∑ k < n, c * f(k) + c ≈ ∑ k < n, d * f(k) + c { rel_cong(h) }
+theorem rel_cong_bound_context(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h: x ≈ y,
+    c: (k: Nat) → PreservesRelation(Rat::Same, Rat::Same, g(k))): ∑ k < n, g(k, x) ≈ ∑ k < n, g(k, y)
+{
+    rel_cong(h)
+    on ?compatibility := c;
+}
+// expect-error: ?compatibility : (z: Nat) -> PreservesRelation(Same, Same, g(z))
+theorem rel_cong_bound_context_open(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, g(k, x) ≈ ∑ k < n, g(k, y) { rel_cong(h) }
+// A negative control: the body changes in a way `h` does not explain.
+// expect-error: context mismatch
+theorem rel_cong_unexplained(n: Nat, f, g: Nat → Rat, x, y: Rat, h: x ≈ y): ∑ k < n, f(k) * x ≈ ∑ k < n, g(k) * y { rel_cong(h) }
+theorem rel_derive_sum(n: Nat, f: Nat → Rat): PreservesRelation(Rat::Same, Rat::Same, λ x => ∑ k < n, f(k) * x) { rel_derive }
+
+// A law stated in a class's section is instantiated unapplied: its left side
+// `c * ∑ k < n, f(k)` is headed by the class's `*`, an argument of the law,
+// so it is keyed by the sum; the dictionary is resolved, and the body pattern
+// `λ k. f(k)` is `f` (docs/equation-rewrite-design.md §6.1).
+theorem class_law_open<A: Semiring(≈, +, *)>(n: Nat, f: Nat → A, c: A, e: ∑ k < n, c * f(k) ≈ c): c * ∑ k < n, f(k) ≈ c {
+    rewrite(Semiring::mul_range_l, e)
+}
+theorem class_law_rat(n: Nat, f: Nat → Rat, c: Rat, e: ∑ k < n, c * f(k) ≈ c): c * ∑ k < n, f(k) ≈ c { rewrite(Semiring::mul_range_l, e) }
+// A body that is no η-redex binds `f` to the λ itself.
+theorem class_law_body(n: Nat, f: Nat → Rat, c: Rat, e: ∑ k < n, c * (f(k) + 1) ≈ 0): c * ∑ k < n, (f(k) + 1) ≈ 0 {
+    rewrite(Semiring::mul_range_l, e)
+}
+// Below a binder, where the law's arguments mention the index.
+theorem class_law_under_sum<A: Semiring(≈, +, *)>(m, n: Nat, f, g: Nat → A):
+    ∑ i < m, f(i) * ∑ k < n, g(k) ≈ ∑ i < m, ∑ k < n, f(i) * g(k)
+{
+    rewrite(Semiring::mul_range_l, A.rel_refl(∑ i < m, ∑ k < n, f(i) * g(k)))
+}
+// A negative control: `c + ∑ …` has the sum, but its operation is not the
+// semiring's `*`, so no dictionary resolves and nothing is an instance.
+// expect-error: is an instance of this relation's left side
+theorem class_law_wrong_operation<A: Semiring(≈, +, *)>(n: Nat, f: Nat → A, c: A, e: ∑ k < n, c * f(k) ≈ c): c + ∑ k < n, f(k) ≈ c {
+    rewrite(Semiring::mul_range_l, e)
+}

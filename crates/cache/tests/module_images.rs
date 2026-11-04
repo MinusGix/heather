@@ -164,6 +164,54 @@ fn published_image_round_trips_and_replays_against_the_supplied_prefix() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A format bump is a clean miss. The key covers both encodings' versions,
+/// and an image whose semantic section is of another version, found at its
+/// key anyway, is not counted as built by the planner's header read, so the
+/// planner and the load agree. Before, under the stale-accepting policy the
+/// planner counted such an image (its header still answered for the key)
+/// while every load rejected it, and the gate's build step left that
+/// module's whole upper closure to the one folder process that loaded it
+/// (`issues/library-gate-native-tests-fresh-box-rail.md`).
+#[test]
+fn an_image_of_another_format_is_never_counted_as_built() {
+    let format = heather_elab::image_format();
+    assert_eq!(&format[..6], b"HTHMOD");
+    assert_eq!(&format[8..14], b"HTHIFC");
+
+    let dir = temp("format");
+    let _ = std::fs::remove_dir_all(&dir);
+    let cache = ModuleImageCache::new(dir.clone());
+    let dependencies = ModuleDependencyIdentity::default();
+    let src = "fn value() -> Nat { 0 }";
+    let key = ModuleCacheKey::for_source("sample", src, &dependencies, LintProfile::Default);
+    let mut source = Elaborator::with_prelude().unwrap();
+    let prefix = source.psi().clone();
+    let delta = source.elab_module_delta("sample", src, dependencies).unwrap();
+    let other = SemanticsIdentity::of("an earlier elaborator", "and its kernel");
+    let interface = cache.publish_as(key, &delta, &[], other).unwrap();
+    assert_eq!(cache.recorded_interface(key, ImageFreshness::AcceptStale), Some(interface));
+
+    // The image an earlier encoding's writer left: the section's version
+    // byte one back, the checksum made whole again.
+    let path = cache.path(key);
+    let mut bytes = std::fs::read(&path).unwrap();
+    let section = bytes.windows(8).position(|w| w == &format[..8]).expect("the semantic section");
+    bytes[section + 7] -= 1;
+    let body = bytes.len() - 32;
+    let sum = heather_cache::sha256::sha256(&bytes[..body]);
+    bytes[body..].copy_from_slice(&sum);
+    std::fs::write(&path, bytes).unwrap();
+
+    assert!(matches!(
+        cache.load(key, prefix, src.len(), ImageFreshness::AcceptStale),
+        Err(ModuleCacheError::Decode(_))
+    ));
+    for freshness in [ImageFreshness::AcceptStale, ImageFreshness::Exact] {
+        assert_eq!(cache.recorded_interface(key, freshness), None);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn corruption_is_rejected_before_semantic_replay() {
     let dir = temp("corrupt");

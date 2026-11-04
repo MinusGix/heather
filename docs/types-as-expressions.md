@@ -316,5 +316,9 @@ pointer or by syntactic equality first.
   touched. Untested, so assume broken until someone tries it.
 - **`type` as a keyword.** Route 1 is now redundant and the issue closes
   without it.
+  (2026-11-03: a `def` at a universe now names its type and, unlike a
+  `fn` call, is expanded where it is read, so `u8` *is* `BitVec(8)` to every
+  head-keyed reader; width families `u27` likewise —
+  `docs/fixed-width-integers-design.md` §2.)
 - **Level-polymorphic abbreviations.** `Refines` at `Type<0>` and `Type<1>`
   are two declarations, as non-cumulativity requires (surface-universe §6).

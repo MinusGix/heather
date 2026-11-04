@@ -10,7 +10,7 @@
 
 [
   "import" "export" "inductive" "codata" "record" "class" "instance" "designation"
-  "datarepr" "impl" "fn" "theorem" "axiom" "meta" "evidence" "requires" "assuming" "extends" "decreases" "decreasing" "with"
+  "datarepr" "impl" "fn" "theorem" "axiom" "meta" "evidence" "requires" "assuming" "section" "generate" "def" "extends" "decreases" "decreasing" "with"
   "for" "at" "prefix" "postfix" "mk" "let" "have" "split" "on" "match" "if"
   "else" "as" "code" "calc" "self" "infer" "squash_ind" "by"
 ] @keyword
@@ -18,12 +18,12 @@
 (squash_type) @type.builtin
 
 [
-  "λ" "fun" "∀" "∃"
+  "λ" "fun" "∀" "∃" "∑" "∏"
 ] @keyword
 
 [
-  "+" "-" "++" "*" "<" "<=" "=" "≠" "&&" "||" "∙" "⊔" "≈" "^" "⁻¹"
-  "!" "¬" "∧" "∨" "↔" "<->" "→" "->" "=>" "⊢" "|-" ":=" "⟨" "⟩" "|" "⟦" "⟧"
+  "+" "-" "++" "*" "<" "<=" "=" "≠" "&&" "||" "∙" "⊔" "⊓" "≈" "^" "⁻¹"
+  "!" "¬" "↑" "∧" "∨" "↔" "<->" "→" "->" "=>" "⊢" "|-" ":=" "⟨" "⟩" "|" "⟦" "⟧"
 ] @operator
 
 ; Default names conservatively to variables. More specific, later patterns
@@ -50,6 +50,8 @@
 (function_declaration name: (qualified_identifier) @function)
 (theorem_declaration name: (qualified_identifier) @function)
 (axiom_declaration name: (qualified_identifier) @function)
+(value_declaration name: (qualified_identifier) @constant)
+(prefixed_declaration generator: (identifier) @function.macro)
 (designation_declaration value: (identifier) @function)
 (impl_declaration name: (identifier) @function)
 
@@ -59,6 +61,8 @@
 (parameter_name name: (identifier) @variable.parameter)
 (lambda_binder (identifier) @variable.parameter)
 (quantified_expression name: (identifier) @variable.parameter)
+(big_operator_expression name: (identifier) @variable.parameter)
+(declaration_big_operator_type name: (identifier) @variable.parameter)
 (field name: (identifier) @property)
 (record_field name: (identifier) @property)
 (named_argument name: (identifier) @property)

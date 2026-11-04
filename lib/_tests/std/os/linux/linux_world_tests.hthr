@@ -1,0 +1,347 @@
+// Probes of Linux as a capability (`linux_world`;
+// docs/effects-capabilities-design.md): `mut self` calls on a `let mut io`,
+// a program written over them, and its agreement with the hand-built
+// `Source` cat (`native_cat`) when both are read against the same world.
+// Literal and neutral worlds, a checking position, and the negative
+// controls the surface refuses. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import option;
+import bool;
+import bitvec;
+import itree;
+import coitree;
+import coitree_eutt;
+import coitree_rec;
+import coitree_bridge;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import relation;
+import relation_props;
+import algebra_rel;
+import native_source;
+import native_cat;
+import native_source_co;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// stdin: "hi" then "!" then the end of the input.
+fn piped() → Io { Io::of(World::piped([[b(104), b(105)], [b(33)]])) }
+
+// ---------------------------------------------------------------------------
+// Calls on a `let mut` capability
+
+// Two reads: the second sees the world the first left.
+record TwoReads { first: ReadResult, second: ReadResult, calls: Nat }
+fn two_reads(io: Io) → TwoReads {
+    let mut io = io;
+    let first = io.read(Io::stdin(), 8);
+    let second = io.read(Io::stdin(), 8);
+    TwoReads(first, second, io.past.len())
+}
+
+theorem two_reads_lit(): two_reads(piped()) = TwoReads(ReadBytes([b(104), b(105)]), ReadBytes([b(33)]), 2) { refl }
+
+// An annotated `let` holds the annotation to the answer, not the record,
+// and still updates `io`.
+fn two_reads_annotated(io: Io) → TwoReads {
+    let mut io = io;
+    let first: ReadResult = io.read(Io::stdin(), 8);
+    let second: ReadResult = io.read(Io::stdin(), 8);
+    TwoReads(first, second, io.past.len())
+}
+theorem two_reads_annotated_lit(): two_reads_annotated(piped()) = two_reads(piped()) { refl }
+theorem two_reads_annotated_neutral(io: Io): two_reads_annotated(io) = two_reads(io) { refl }
+
+// A read cut to the size asked for.
+theorem read_cut(): Io::read(piped(), Io::stdin(), 1).value = ReadBytes([b(104)]) { refl }
+
+// Neutral world: the answer is the world's, at the empty history, and the
+// call is recorded.
+theorem read_neutral(w: World(), n: Nat):
+    Io::read(Io::of(w), Io::stdin(), n).value = w([], ReadCmd(Io::stdin(), n)) { refl }
+theorem read_records(w: World(), n: Nat):
+    Io::read(Io::of(w), Io::stdin(), n).after.past = [Exchange(ReadCmd(Io::stdin(), n), w([], ReadCmd(Io::stdin(), n)))] { refl }
+
+// A statement call: `io.write(…);` discards the answer and keeps the world.
+fn greet(mut io: Io) → List<BitVec(8)> {
+    io.write(Io::stdout(), [b(104)]);
+    io.write(Io::stdout(), [b(105)]);
+    io.sent(Io::stdout())
+}
+theorem greet_lit(): greet(piped()) = [b(104), b(105)] { refl }
+
+// In checking position: the answer's type is the method's declared result.
+theorem write_checks(io: Io): Io::write(io, Io::stdout(), []).value = io.world(io.past, WriteCmd(Io::stdout(), [])) { refl }
+
+// ---------------------------------------------------------------------------
+// cat over the capability
+
+// GNU cat with no arguments: read stdin a buffer at a time and write each
+// chunk whole to stdout, until the end of the input (status 0) or a failed
+// read or write (status 1). The loop holds what is left to write of the
+// last read: with nothing left it reads, and otherwise it writes what is
+// left. It goes round until the input ends, so it has no bound, and means
+// a computation in `Partial` (docs/effects-capabilities-design.md §4).
+fn Io::cat(io: Io, capacity: Nat) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut status: BitVec(64) = BitVec::ofNat(0);
+    let mut left: List<BitVec(8)> = [];
+    let mut going = True;
+    while going {
+        if left.len() = 0 {
+            let r = io.read(Io::stdin(), capacity);
+            match r {
+                ReadFailed(_) => { status := BitVec::ofNat(1); going := False },
+                ReadBytes(bytes) => { if bytes.len() = 0 { going := False } else { left := bytes } },
+            }
+        } else {
+            let w = io.write(Io::stdout(), left);
+            match w {
+                Wrote(n) => { left := left.drop(n) },
+                WriteFailed(_) => { status := BitVec::ofNat(1); going := False },
+            }
+        }
+    }
+    Pointed::ret(Mutated(io, status))
+}
+
+// What cat ends with at the piped world, written out call by call: three
+// reads (the last at the end of the input), each chunk written whole after
+// its read, and status 0.
+fn cat_piped_end() → Mutated<Io, BitVec(64)> {
+    let mut io = piped();
+    io.read(Io::stdin(), 256);
+    io.write(Io::stdout(), [b(104), b(105)]);
+    io.read(Io::stdin(), 256);
+    io.write(Io::stdout(), [b(33)]);
+    io.read(Io::stdin(), 256);
+    Mutated(io, BitVec::ofNat(0))
+}
+
+theorem cat_returns(): Returns(Events::none(), Io::cat(piped(), 256), cat_piped_end()) { Returns(20, refl) }
+theorem cat_status(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::cat(piped(), 256), λ m => m.value), BitVec::ofNat(0)) {
+    Returns(20, refl)
+}
+theorem cat_copies(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), Io::cat(piped(), 256), λ m => m.after.sent(Io::stdout())),
+    [b(104), b(105), b(33)])
+{
+    Returns(20, refl)
+}
+// A buffer smaller than a chunk: the chunk is read in pieces of its size.
+theorem cat_small_buffer(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), Io::cat(piped(), 1), λ m => m.after.sent(Io::stdout())),
+    [b(104), b(33)])
+{
+    Returns(20, refl)
+}
+
+// A failing write: the world refuses every write.
+fn deaf() → World() {
+    λ past c => match c {
+        ReadCmd(_, _) => ReadBytes([b(1)]),
+        WriteCmd(_, _) => WriteFailed(5),
+        OpenCmd(_) => OpenFailed(2),
+        CloseCmd(_) => Closed,
+        StatCmd(_) => StatFailed(2),
+    }
+}
+theorem cat_write_fails(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::cat(Io::of(deaf()), 8), λ m => m.value), BitVec::ofNat(1)) {
+    Returns(20, refl)
+}
+
+// …after one read and one refused write.
+fn cat_deaf_end() → Mutated<Io, BitVec(64)> {
+    let mut io = Io::of(deaf());
+    io.read(Io::stdin(), 8);
+    io.write(Io::stdout(), [b(1)]);
+    Mutated(io, BitVec::ofNat(1))
+}
+
+// ---------------------------------------------------------------------------
+// The surface cat and the hand-built `Source` cat agree
+
+// Read against the same world, `native_cat`'s source (written statement by
+// statement in the effectful layer) and the capability program above make
+// the same calls with the same answers, in the same order, and exit with the
+// same status: their readings are equivalent up to silent steps, history
+// and all. The source is read with no fuel (`Source::tree_co`,
+// `native_source_co`), so its `Repeat` goes round for as long as its
+// again-bit says, as the surface loop does; the statement is
+// `Io::Reads(cat(256).tree_co([]), λ io => Io::cat(io, 256))` at one world.
+// The source's tree is what `write-elf` compiles, and its fuelled meaning
+// is inside this one (`Source::tree_co_refines`), so this is the agreement a
+// `runtime fn` setup will prove once (`Io::reads_bind`, `Io::reads_iter`)
+// checked here at a world.
+theorem cat_agrees_piped():
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([]), piped()), Io::cat(piped(), 256))
+{
+    ERet(30, 20, cat_piped_end(), refl, refl)
+}
+theorem cat_agrees_failing():
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(8).tree_co([]), Io::of(deaf())), Io::cat(Io::of(deaf()), 8))
+{
+    ERet(30, 20, cat_deaf_end(), refl, refl)
+}
+// The negative control: a different end, the status of a failure.
+// expect-error(kernel): the kernel rejected `cat_agrees_wrong`: NotConvertible
+theorem cat_agrees_wrong():
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([]), piped()), Io::cat(piped(), 256))
+{
+    ERet(30, 20, Mutated(cat_piped_end().after, BitVec::ofNat(1)), refl, refl)
+}
+
+// The fuelled reading still reaches the same end at enough fuel.
+theorem cat_agrees_fuelled(): Io::against(cat(256).tree([], 4), piped()) = Some(cat_piped_end()) { refl }
+
+// ---------------------------------------------------------------------------
+// A loop with no fuel, read up to taus (design §4)
+
+// One pass of cat as a tree: read a buffer; at the end of the input or a
+// failed call, stop with the status; otherwise write the chunk and go round.
+fn cat_pass(capacity: Nat, st: Nat) → CoTree<Step<Nat, BitVec(64)>>(Events::linux()) {
+    CVis(ReadCmd(Io::stdin(), capacity), λ (r: ReadResult) => match r {
+        ReadFailed(_) => CRet(Break(BitVec::ofNat(1))),
+        ReadBytes(bytes) => if bytes.len() = 0 { CRet(Break(BitVec::ofNat(0))) } else {
+            CVis(WriteCmd(Io::stdout(), bytes), λ (w: WriteResult) => match w {
+                Wrote(_) => CRet(Continue(st)),
+                WriteFailed(_) => CRet(Break(BitVec::ofNat(1))),
+            })
+        },
+    })
+}
+
+// cat with no fuel and no `passes`: it goes round for as long as the input
+// lasts.
+fn cat_co(capacity: Nat) → CoTree<BitVec(64)>(Events::linux()) {
+    CoTree::iter(Events::linux(), λ st => cat_pass(capacity, st), 0)
+}
+
+// Read against the piped world it returns, after one silent step per call
+// (three reads, two writes) and one per pass that goes round (two): the
+// count is the only number in sight, and it is the reading's, not a fuel
+// the program was given.
+theorem cat_co_status():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.value), BitVec::ofNat(0))
+{
+    Returns(7, refl)
+}
+theorem cat_co_copies():
+    Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.after.sent(Io::stdout())),
+        [b(104), b(105), b(33)])
+{
+    Returns(7, refl)
+}
+// A count larger than needed is harmless.
+theorem cat_co_late():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.value), BitVec::ofNat(0))
+{
+    Returns(30, refl)
+}
+// The same calls with the same answers as the surface cat, history and all.
+theorem cat_co_agrees(): Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat_co(256), piped()), Io::cat(piped(), 256)) {
+    ERet(7, 20, cat_piped_end(), refl, refl)
+}
+// A failing write stops it with status 1 after one read and one write.
+theorem cat_co_write_fails():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(8), Io::of(deaf())), λ m => m.value), BitVec::ofNat(1))
+{
+    Returns(2, refl)
+}
+
+// The negative controls: a count too small to reach the end, and a wrong
+// status.
+// expect-error(kernel): the kernel rejected `cat_co_short`: NotConvertible
+theorem cat_co_short():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.value), BitVec::ofNat(0))
+{
+    Returns(6, refl)
+}
+// expect-error(kernel): the kernel rejected `cat_co_wrong`: NotConvertible
+theorem cat_co_wrong():
+    Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::against_co(cat_co(256), piped()), λ m => m.value), BitVec::ofNat(1))
+{
+    Returns(7, refl)
+}
+
+// A fuelled probe carries over: the source cat at fuel 4 reads to the
+// surface cat's end, so its embedding returns it.
+theorem cat_agrees_piped_co():
+    Returns(Events::none(), Io::against_co(CoTree::of_tree(Events::linux(), cat(256).tree([], 4)), piped()), cat_piped_end())
+{
+    Io::against_returns(cat(256).tree([], 4), piped(), cat_piped_end(), cat_agrees_fuelled())
+}
+
+// The loop lemma at a neutral world, for a loop that never ends: `yes`
+// writes forever. Its pass reads as one capability write, so the loop reads
+// as that write iterated in `Partial`, at every world.
+fn yes_pass(st: Nat) → CoTree<Step<Nat, Nat>>(Events::linux()) {
+    CVis(WriteCmd(Io::stdout(), [b(121), b(10)]), λ (w: WriteResult) => CRet(Continue(st)))
+}
+fn yes_step(st: Nat, io: Io) → CoTree<Mutated<Io, Step<Nat, Nat>>>(Events::none()) {
+    CRet(Mutated(Io::write(io, Io::stdout(), [b(121), b(10)]).after, Continue(st)))
+}
+fn yes_pass_reads(st: Nat) → Io::Reads(yes_pass(st), λ io => yes_step(st, io)) {
+    λ io => ERet(1, 0, Mutated(Io::write(io, Io::stdout(), [b(121), b(10)]).after, Continue(st)), refl, refl)
+}
+fn yes_reads(st: Nat) → Io::Reads(CoTree::iter(Events::linux(), λ s => yes_pass(s), st), λ io => Io::iterate(λ s i => yes_step(s, i), st, io)) {
+    Io::reads_iter(λ s => yes_pass(s), λ s i => yes_step(s, i), λ s => yes_pass_reads(s), st)
+}
+// …and it never returns: at a literal world, no count reaches a result
+// within the depth probed.
+theorem yes_runs_on(): ¬Obs::Settled(Events::none(), CoTree::after(Events::none(), 40, Io::against_co(CoTree::iter(Events::linux(), λ s => yes_pass(s), 0), piped()))) {
+    λ s => s
+}
+
+// Rewriting inside a tree, through its reading (`Io::against_co_respects`).
+fn rewrite_in_reading(io: Io) →
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(CTau(cat_co(8)), io), Io::against_co(cat_co(8), io))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(Events::none(), Io::against_co(cat_co(8), io)))
+}
+
+// ---------------------------------------------------------------------------
+// Refusals
+
+// A statement call of a method that does not update its receiver discards
+// its value.
+fn Io::history(self io: Io) → Nat { io.past.len() }
+// expect-error: does not update `io` (`history` is not a `mut self` method), so this statement discards its value
+fn discards(mut io: Io) → Nat {
+    io.history();
+    0
+}
+
+// A `mut self` call through a λ cannot update the local outside it.
+// expect-error: `read` is a `mut self` method, so it updates its receiver, and `io` cannot be updated here
+fn through_lambda(mut io: Io) → Nat {
+    let f = λ (n: Nat) => { let r = io.read(Io::stdin(), n); r };
+    0
+}
+
+// A `mut self` call on a local that is not mutable is refused at the call:
+// it would give the `Mutated` record where the answer was meant, and leave
+// `io` as it was.
+// expect-error: `read` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn on_immutable_param(io: Io) → ReadResult {
+    let r = io.read(Io::stdin(), 8);
+    r
+}
+// expect-error: `read` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn on_immutable_let(w: World()) → Nat {
+    let io = Io::of(w);
+    let r = io.read(Io::stdin(), 8);
+    io.past.len()
+}
+
+// …and on a `let mut` local outside a statement, where nothing threads the
+// update either: as an argument, the call's record would be the argument.
+fn answer(r: ReadResult) → ReadResult { r }
+// expect-error: `read` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+fn as_argument(mut io: Io) → ReadResult {
+    let r = answer(io.read(Io::stdin(), 8));
+    r
+}

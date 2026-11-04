@@ -40,6 +40,20 @@
 //! reductions charge the ordinary fuel — they are the ones the fold's own
 //! first step would perform — so a probe never manufactures a verdict fuel
 //! would have refused.
+//!
+//! ## Steps that never read `ih`
+//!
+//! A step in which `ih` does not occur is not probed
+//! (`issues/kernel-fold-probe-evaluates-recursive-arms.md`): the fold's one
+//! ordinary step is then the whole fold at any run, so no class could do
+//! better, and the probes would only evaluate the step again. That is the
+//! shape of a `match` on a literal inside an enclosing recursion,
+//! `At(before, name) => match name { Zero => walk(before), Succ(_) => … }`,
+//! whose arms are the enclosing recursion's calls: probing it evaluated each
+//! level's call once per probe as well as once for the fold, exponentially
+//! in the walk's depth. The test is on syntax (`bounds::ignores_innermost`),
+//! but it decides only whether to probe, never a class's verdict: the
+//! ordinary step is the fold's definition.
 
 use std::sync::Arc as Rc;
 
@@ -64,31 +78,42 @@ impl<'a, 'v> Eval<'a, 'v> {
         if let Some(class) = self.arena.fold_class(step) {
             return Ok(class);
         }
+        // `ih` is the step's innermost binder (the module doc's last
+        // section).
+        if let Some((_, body)) = step.as_syn() {
+            if crate::bounds::ignores_innermost(body, 1) {
+                let class = Rc::new(FoldClass::Direct);
+                self.arena.cache_fold_class(step, Rc::clone(&class));
+                return Ok(class);
+            }
+        }
         let class = Rc::new(self.probe_step(step)?);
         self.arena.cache_fold_class(step, Rc::clone(&class));
         Ok(class)
     }
 
     fn probe_var(&self, level: u32) -> &'v TmClo<'v> {
-        self.vclo(Rc::new(Val::var(level)))
+        self.vclo(self.arena.val(Val::var(self.arena, level)))
     }
 
     /// `step k ih`, driven to its δ-transparent weak head value.
-    fn probe_apply(&mut self, step: &'v TmClo<'v>, k: &'v TmClo<'v>) -> Res<Rc<Val<'v>>> {
+    #[inline(never)]
+    fn probe_apply(&mut self, step: &'v TmClo<'v>, k: &'v TmClo<'v>) -> Res<&'v Val<'v>> {
         let ih = self.probe_var(PROBE_IH);
         let v = self.drive(Work::Apply(step, vec![k, ih]))?;
         self.delta_whnf(v)
     }
 
+    #[inline(never)]
     fn probe_step(&mut self, step: &'v TmClo<'v>) -> Res<FoldClass> {
         let value = self.probe_apply(step, self.probe_var(PROBE_K))?;
-        if let Val::Lam { .. } | Val::WfIh { .. } | Val::WIh { .. } = &*value {
+        if let Val::Lam { .. } | Val::WfIh { .. } | Val::WIh { .. } | Val::IWfIh { .. } = &*value {
             return self.probe_sync(value);
         }
         if let Some(tree) = self.read_affine(&value)? {
             return Ok(FoldClass::Affine { tree, uniform: true });
         }
-        let peeled = self.vclo(Rc::new(Val::Succ(self.probe_var(PROBE_X))));
+        let peeled = self.vclo(self.arena.val(Val::Succ(self.probe_var(PROBE_X))));
         let value = self.probe_apply(step, peeled)?;
         Ok(match self.read_affine(&value)? {
             Some(tree) => FoldClass::Affine { tree, uniform: false },
@@ -99,9 +124,10 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// The function-valued algebra applied to `Succ x`: synchronous when
     /// that is `Succ^q(ih x)`. The application's annotations are dummies —
     /// the result is read for its head and spine and never kept.
-    fn probe_sync(&mut self, fun: Rc<Val<'v>>) -> Res<FoldClass> {
+    #[inline(never)]
+    fn probe_sync(&mut self, fun: &'v Val<'v>) -> Res<FoldClass> {
         let nat = self.arena.ty(TyClo::new(Env::empty(), Rc::new(Type::Nat)));
-        let arg = self.vclo(Rc::new(Val::Succ(self.probe_var(PROBE_X))));
+        let arg = self.vclo(self.arena.val(Val::Succ(self.probe_var(PROBE_X))));
         let app = Elim::App {
             ann: Some(PiAnn {
                 dom_level: Level::Zero,
@@ -130,8 +156,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     /// Read a probe value as an affine tree; `None` is "not one".
-    fn read_affine(&mut self, value: &Rc<Val<'v>>) -> Res<Option<AffineTree>> {
-        if let Val::Pair { fst, snd, .. } = &**value {
+    #[inline(never)]
+    fn read_affine(&mut self, value: &'v Val<'v>) -> Res<Option<AffineTree>> {
+        if let Val::Pair { fst, snd, .. } = &*value {
             let fst = self.force(fst)?;
             let fst = self.delta_whnf(fst)?;
             let Some(fst) = self.read_affine(&fst)? else { return Ok(None) };
@@ -140,7 +167,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             let Some(snd) = self.read_affine(&snd)? else { return Ok(None) };
             return Ok(Some(AffineTree::Pair(Box::new(fst), Box::new(snd))));
         }
-        let (inc, tail) = self.strip_successors(Rc::clone(value))?;
+        let (inc, tail) = self.strip_successors(value)?;
         Ok(match &*tail {
             Val::Zero => Some(AffineTree::Lit { inc }),
             Val::Neutral(n) if matches!(n.head, Head::Var(PROBE_IH)) => {
@@ -152,7 +179,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// `Succ^q(t)` as `(q, t)`, with `t` forced past every successor and
     /// glued definition; `t` is whatever the successors sit on.
-    fn strip_successors(&mut self, value: Rc<Val<'v>>) -> Res<(Increment, Rc<Val<'v>>)> {
+    fn strip_successors(&mut self, value: &'v Val<'v>) -> Res<(Increment, &'v Val<'v>)> {
         let mut inc: Increment = None;
         let mut cur = value;
         loop {

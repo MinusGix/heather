@@ -184,10 +184,10 @@ fn asm_lands(labels: Nat → Nat, l: Prog, size, to: Nat) → Bool {
 }
 theorem asm_jump_lands(labels: Nat → Nat, l: Prog, size, to: Nat, same: asm_lands(labels, l, size, to) = True):
     JumpsForward(asm_at(l), size, asm_jump(labels, l), to) {
-    (match l as λ m => asm_lands(labels, m, size, to) = True → JumpsForward(asm_at(m), size, asm_jump(labels, m), to) {
-        Start => λ no => absurd_of(no, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
-        At(before, _, item) => λ yes => asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to, yes),
-    })(same)
+    match l {
+        Start => absurd_of(same, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
+        At(before, _, item) => asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to, same),
+    }
 }
 fn asm_item_lands_back(labels: Nat → Nat, here, size: Nat, item: Asm, to: Nat) → Bool {
     asm_same(here + size + asm_jump_of(labels, here, item).sign_extend(32).toNat(), to + Nat::pow(2, 64))
@@ -197,11 +197,10 @@ fn asm_lands_back_to(labels: Nat → Nat, l: Prog, size, to: Nat) → Bool {
 }
 theorem asm_jump_lands_back(labels: Nat → Nat, l: Prog, size, to: Nat, same: asm_lands_back_to(labels, l, size, to) = True):
     JumpsBack(asm_at(l), size, asm_jump(labels, l), to) {
-    (match l as λ m => asm_lands_back_to(labels, m, size, to) = True → JumpsBack(asm_at(m), size, asm_jump(labels, m), to) {
-        Start => λ no => absurd_of(no, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
-        At(before, _, item) => λ yes =>
-            asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to + Nat::pow(2, 64), yes),
-    })(same)
+    match l {
+        Start => absurd_of(same, λ (e: bool::False = bool::True) => j(e, λ x _ => x.IsTrue() → logic::False, λ u => u)(trivial)),
+        At(before, _, item) => asm_same_eq(prog_len(before) + size + asm_jump_of(labels, prog_len(before), item).sign_extend(32).toNat(), to + Nat::pow(2, 64), same),
+    }
 }
 
 // Label `l` found in `p`: the one as many items from its end as `l` is
@@ -223,47 +222,47 @@ fn FillsFit(p: Prog, fills: Nat → List<BitVec(8)>) → Type {
 }
 theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat, item: Asm, fits: FillsFit(At(before, name, item), fills)):
     FillsFit(before, fills) {
-    (match item as λ it => FillsFit(At(before, name, it), fills) → FillsFit(before, fills) {
-        Block(_) => λ f => f,
-        Code(_) => λ f => f,
-        Load(_) => λ f => f,
-        Store(_) => λ f => f,
-        LoadByte(_) => λ f => f,
-        StoreByte(_) => λ f => f,
-        Jcc(_, _) => λ f => f,
-        Jmp(_) => λ f => f,
-        Syscall => λ f => f,
-        Proved(_, _, _, _) => λ f => f,
-        CallTo(_) => λ f => f,
-        Ret => λ f => f,
-        Spill(_) => λ f => f,
-        Reload(_) => λ f => f,
-        Piece(_, _, _) => λ f => f,
-        Refer(_, _, _) => λ f => f,
-        Hole(_, _) => λ f => f.right,
-    })(fits)
+    match item {
+        Block(_) => fits,
+        Code(_) => fits,
+        Load(_) => fits,
+        Store(_) => fits,
+        LoadByte(_) => fits,
+        StoreByte(_) => fits,
+        Jcc(_, _) => fits,
+        Jmp(_) => fits,
+        Syscall => fits,
+        Proved(_, _, _, _) => fits,
+        CallTo(_) => fits,
+        Ret => fits,
+        Spill(_) => fits,
+        Reload(_) => fits,
+        Piece(_, _, _) => fits,
+        Refer(_, _, _) => fits,
+        Hole(_, _) => fits.right,
+    }
 }
 theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, before: Prog, name: Nat, item: Asm,
     fits: FillsFit(At(before, name, item), fills)): asm_bytes(fills, labels, here, item).len() = asm_len(item) {
-    (match item as λ it => FillsFit(At(before, name, it), fills) → asm_bytes(fills, labels, here, it).len() = asm_len(it) {
-        Block(instructions) => λ _ => block_length_is(instructions),
-        Code(_) => λ _ => refl,
-        Load(_) => λ _ => refl,
-        Store(_) => λ _ => refl,
-        LoadByte(_) => λ _ => refl,
-        StoreByte(_) => λ _ => refl,
-        Jcc(_, _) => λ _ => refl,
-        Jmp(_) => λ _ => refl,
-        Syscall => λ _ => refl,
-        Proved(_, _, _, measured) => λ _ => measured,
-        CallTo(_) => λ _ => refl,
-        Ret => λ _ => refl,
-        Spill(_) => λ _ => refl,
-        Reload(_) => λ _ => refl,
-        Piece(_, _, measured) => λ _ => measured,
-        Refer(_, _, measured) => λ _ => measured(labels, here),
-        Hole(_, _) => λ f => f.left,
-    })(fits)
+    match item {
+        Block(instructions) => block_length_is(instructions),
+        Code(_) => refl,
+        Load(_) => refl,
+        Store(_) => refl,
+        LoadByte(_) => refl,
+        StoreByte(_) => refl,
+        Jcc(_, _) => refl,
+        Jmp(_) => refl,
+        Syscall => refl,
+        Proved(_, _, _, measured) => measured,
+        CallTo(_) => refl,
+        Ret => refl,
+        Spill(_) => refl,
+        Reload(_) => refl,
+        Piece(_, _, measured) => measured,
+        Refer(_, _, measured) => measured(labels, here),
+        Hole(_, _) => fits.left,
+    }
 }
 theorem asm_len_step(code, bytes: List<BitVec(8)>, before, len: Nat, code_is: code.len() = before, bytes_is: bytes.len() = len):
     (code ++ bytes).len() = before + len {
@@ -284,8 +283,7 @@ theorem asm_resident_from<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64
     p: Prog): FillsFit(p, fills) → (last: List<BitVec(8)>) → CodeResident(fetch, memory, asm_code(fills, labels, p) ++ last, next_rip(origin, at)) →
     (k: Nat) → CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(p, k)), next_rip(origin, at + asm_at(asm_back(p, k)))) {
     match p {
-        Start => λ fits last resident k => match k as λ i => CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(Start, i)),
-                next_rip(origin, at + asm_at(asm_back(Start, i)))) {
+        Start => λ fits last resident k => match k {
             Zero => trivial,
             Succ(_) => trivial,
         },
@@ -296,8 +294,7 @@ theorem asm_resident_from<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64
             let parts = resident_split_at(fetch, memory, code, bytes ++ last, origin, at, moved);
             let fits_before = fills_fit_before(fills, before, name, item, fits);
             let here = rewrite(asm_code_len(fills, labels, before, fits_before), in := parts.right);
-            λ k => match k as λ i => CodeResident(fetch, memory, item_bytes(fills, labels, asm_back(At(before, name, item), i)),
-                    next_rip(origin, at + asm_at(asm_back(At(before, name, item), i)))) {
+            λ k => match k {
                 Zero => resident_split_at(fetch, memory, bytes, last, origin, at + prog_len(before), here).left,
                 Succ(i) => asm_resident_from(fetch, memory, origin, fills, labels, at, before, fits_before, bytes ++ last, moved, i),
             }
@@ -332,7 +329,7 @@ theorem asm_code_back(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, k: Na
     asm_code(fills, labels, p) = asm_code(fills, labels, asm_back(p, k)) ++ asm_code_after(fills, labels, p, k) {
     match k {
         Zero => λ p => sym(List::append_nil(asm_code(fills, labels, p))),
-        Succ(j) => λ p => match p as λ x => asm_code(fills, labels, x) = asm_code(fills, labels, asm_back(x, Succ(j))) ++ asm_code_after(fills, labels, x, Succ(j)) {
+        Succ(j) => λ p => match p {
             Start => refl,
             At(before, _, item) => {
                 let bytes = asm_bytes(fills, labels, prog_len(before), item);
@@ -345,7 +342,7 @@ theorem asm_code_back(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, k: Na
 theorem fills_fit_back(fills: Nat → List<BitVec(8)>, k: Nat): (p: Prog) → FillsFit(p, fills) → FillsFit(asm_back(p, k), fills) {
     match k {
         Zero => λ p fits => fits,
-        Succ(j) => λ p => match p as λ x => FillsFit(x, fills) → FillsFit(asm_back(x, Succ(j)), fills) {
+        Succ(j) => λ p => match p {
             Start => λ fits => fits,
             At(before, name, item) => λ fits => fills_fit_back(fills, j, before, fills_fit_before(fills, before, name, item, fits)),
         },
@@ -390,3 +387,69 @@ theorem asm_code_same(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, p: Pr
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A program as numbers, for a compiler to read back and state as a literal
+// (`compile-x86`, `write-elf`): every later statement about the code then
+// evaluates the literal, not the compile again (a declaration's fuel is its
+// own). Nothing proved reads these; the certificate's equation of the
+// compile with the literal is what checks the literal.
+
+fn ConditionCode::number(self cc: ConditionCode) → Nat {
+    match cc { O => 0, NO => 1, B => 2, AE => 3, E => 4, NE => 5, BE => 6, A => 7, S => 8, NS => 9, P => 10, NP => 11, L => 12, GE => 13, LE => 14, G => 15 }
+}
+
+// An instruction's tag, then its fields: registers by `Gpr::index` (a low
+// byte by its register's), immediates by value.
+fn Instruction::numbers(self instruction: Instruction) → List<Nat> {
+    match instruction {
+        MovRR(d, s) => [0, d.index(), s.index()],
+        MovRI(d, immediate) => [1, d.index(), immediate.toNat()],
+        AddRR(d, s) => [2, d.index(), s.index()],
+        SubRR(d, s) => [3, d.index(), s.index()],
+        AndRR(d, s) => [4, d.index(), s.index()],
+        OrRR(d, s) => [5, d.index(), s.index()],
+        XorRR(d, s) => [6, d.index(), s.index()],
+        CmpRR(l, r) => [7, l.index(), r.index()],
+        SetBelow(d) => [8, low_byte_gpr(d).index()],
+        SetLess(d) => [9, low_byte_gpr(d).index()],
+        SetEqual(d) => [10, low_byte_gpr(d).index()],
+        TestRR(l, r) => [11, l.index(), r.index()],
+        AddRI8(d, immediate) => [12, d.index(), immediate.toNat()],
+        AddRI32(d, immediate) => [13, d.index(), immediate.toNat()],
+    }
+}
+
+fn instructions_numbers(instructions: List<Instruction>) → List<Nat> {
+    match instructions { Nil => [], Cons(first, rest) => first.numbers() ++ instructions_numbers(rest) }
+}
+
+// An item's tag, then its fields; a block's instruction count before them.
+// The memory items and SYSCALL are `native_compile`'s; the items no compiler
+// emits are tag 7, which the readers refuse.
+fn Asm::numbers(self item: Asm) → List<Nat> {
+    match item {
+        Block(instructions) => Cons(0, Cons(instructions.len(), instructions_numbers(instructions))),
+        Jcc(cc, target) => [1, cc.number(), target],
+        Jmp(target) => [2, target],
+        CallTo(target) => [3, target],
+        Ret => [4],
+        Spill(store) => [5, store.source.index(), store.offset.toNat()],
+        Reload(load) => [6, load.destination.index(), load.offset.toNat()],
+        Load(load) => [8, load.destination.index(), load.base.index()],
+        Store(store) => [9, store.base.index(), store.source.index()],
+        LoadByte(load) => [10, load.destination.index(), load.base.index()],
+        StoreByte(store) => [11, store.base.index(), store.source.index()],
+        Syscall => [12],
+        Code(_) => [7], Proved(_, _, _, _) => [7], Piece(_, _, _) => [7], Refer(_, _, _) => [7], Hole(_, _) => [7],
+    }
+}
+
+// The items from the first, each its name and then itself. Read from the
+// last item back onto what follows it, as `asm_lens` is: a program is a left
+// spine, and appending each item after the numbers of the ones before would
+// copy those again at every item, quadratic in the program.
+fn Prog::numbers_onto(self p: Prog, after: List<Nat>) → List<Nat> {
+    match p { Start => after, At(before, name, item) => before.numbers_onto(Cons(name, item.numbers() ++ after)) }
+}
+fn Prog::numbers(self p: Prog) → List<Nat> { p.numbers_onto([]) }

@@ -1,5 +1,8 @@
 // A success value or an error. `?` propagates Err from a function or lambda.
-inductive Result<A, E> { Ok(value: A), Err(error: E) }
+// `varies A`: as a type constructor (a carrier of `Bind`, an implicit
+// `M: Type → Type` learned from a `Result<A, E>`), `Result` abstracts its
+// value type and fixes its error type (docs/lambda-carrier-instances-design.md §7).
+inductive Result<A, E> varies A { Ok(value: A), Err(error: E) }
 
 fn Result::map<A, B, E>(self r: Result<A, E>, f: A → B) → Result<B, E> {
     match r { Ok(value) => Ok(f(value)), Err(error) => Err(error) }
@@ -8,6 +11,11 @@ fn Result::map<A, B, E>(self r: Result<A, E>, f: A → B) → Result<B, E> {
 fn Result::and_then<A, B, E>(self r: Result<A, E>, f: A → Result<B, E>) → Result<B, E> {
     match r { Ok(value) => f(value), Err(error) => Err(error) }
 }
+
+// The binding-statement carrier: `let x <- r;` in a function returning a
+// `Result<_, E>` stops at the first `Err`.
+instance<E> Bind<λ (A: Type) => Result<A, E>> { bind := λ {A} {B} r f => r.and_then(f) }
+instance<E> Pointed<λ (A: Type) => Result<A, E>> { pure := λ {A} a => Ok(a) }
 
 fn Result::map_err<A, E, F>(self r: Result<A, E>, f: E → F) → Result<A, F> {
     match r { Ok(value) => Ok(value), Err(error) => Err(f(error)) }

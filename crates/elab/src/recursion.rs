@@ -20,6 +20,30 @@ pub(crate) trait SelfCallElab: ExplicitArgElab {
     fn self_call_application_params(&self, name: &str) -> Rc<Vec<ParamMeta>>;
     /// The declaration `name`'s [`RecursionPlan::Misplaced`], if it has one.
     fn misplaced_recursion(&self, name: &str) -> Option<(usize, String)>;
+    /// A self-call was lowered under a guard on the parameter named `dec`.
+    /// The meaning check reads which parameter the recursion descended on
+    /// (issues/recursion-meaning-check.md). By name: the declaration the
+    /// check restates is the written one, whose telescope a constraint
+    /// expansion or a section may have grown before elaboration.
+    fn note_recursion_on(&self, _dec: &str) {}
+    /// Apply the ih to the varied arguments, inferring the generalized
+    /// implicits the call leaves out (`mask[i]`: the ih's `i`th Π is one) by
+    /// the ordinary implicit-inserting application engine.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_self_call_implicit(
+        &self,
+        _cx: &Cx,
+        _name: &str,
+        _params: Rc<Vec<ParamMeta>>,
+        _head: Term,
+        _ty: Type,
+        _level: Level,
+        _args: &[Expr],
+        _mask: &[bool],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        err("internal: this elaborator cannot infer a self-call's implicits", span)
+    }
 }
 
 /// Is `scrut` (already elaborated) exactly one of the enclosing declaration's
@@ -34,16 +58,321 @@ pub(crate) fn descends_on_param(cx: &Cx, scrut: &Term) -> Option<usize> {
     (pos < s.params.len()).then_some(pos)
 }
 
+/// The parameter a `match` on `scrut` with these `arms` makes the recursion
+/// descend on: the scrutinee is one of the declaration's parameters
+/// ([`descends_on_param`]) and the `match` is the recursion — either no
+/// enclosing `match` is yet, or a self-call in its arms descends through it
+/// ([`descends_through`]). Inside the recursion, a `match` on a parameter
+/// that no self-call descends through is a case split, and the enclosing
+/// guard stands, exactly as it does under a `match` on a computed term
+/// (issues/recursion-guard-takes-nearest-parameter-match.md). [`plan`] reads
+/// a nested `match` the same way, so the two agree on which one is the
+/// recursion.
+///
+/// Not where the enclosing induction hypothesis's type mentions the split
+/// parameter (a theorem about it, unless the recursion generalizes it): the
+/// split refines the goal in each arm and not the ih, so the call would not
+/// fit. This `match` stays the recursion there, refused as before
+/// (issues/recursion-case-split-dependent-ih.md).
+///
+/// The outermost `match` on a parameter is a case split by the same reading
+/// when no self-call descends through it but one descends through a `match`
+/// on another parameter inside it ([`outer_case_split`]).
+pub(crate) fn guard_param<A: std::borrow::Borrow<heather_syntax::Arm>>(
+    cx: &Cx,
+    scrut: &Term,
+    arms: &[A],
+) -> Option<usize> {
+    let dec = descends_on_param(cx, scrut)?;
+    let s = cx.selfref.as_ref()?;
+    let Some(guard) = &cx.guard else {
+        return (!outer_case_split(s, arms, dec)).then_some(dec);
+    };
+    (descends_through(s, arms, dec) || guard.ih_mentions(dec)).then_some(dec)
+}
+
+/// Is a `match` on parameter `dec` with these `arms`, with no recursion
+/// around it, a case split: no self-call descends through it, and one does
+/// through a `match` on another parameter inside it
+/// (issues/recursion-outer-match-takes-guard-without-descent.md)? Then that
+/// inner `match` is the recursion. Where no inner `match` is either, this one
+/// stays the guard, so a lone `match n { Succ(k) => f(n) }` is still refused
+/// naming `k`. Every call a guard here could accept descends through it, so
+/// calling it a split only turns refusals into acceptances or other
+/// refusals.
+fn outer_case_split<A: std::borrow::Borrow<heather_syntax::Arm>>(
+    self_ref: &SelfRef,
+    arms: &[A],
+    dec: usize,
+) -> bool {
+    if descends_through(self_ref, arms, dec) {
+        return false;
+    }
+    let mut inner = false;
+    for arm in arms {
+        let arm = arm.borrow();
+        // A name the arm binds anywhere is not read as the parameter it
+        // shadows: such a `match` keeps this one the guard.
+        let mut bound = arm_names(arm);
+        crate::surface::walk_expr(&arm.body, &mut |e| match &e.kind {
+            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| bound.extend(arm_names(a))),
+            ExprKind::Lam { binders, .. } => bound.extend(binders.iter().map(|b| b.name.clone())),
+            ExprKind::Block(block) => {
+                for statement in &block.stmts {
+                    match statement {
+                        Stmt::Let { name, .. } => bound.push(name.clone()),
+                        Stmt::LetRecord { fields, .. } => {
+                            fields.iter().for_each(|f| pattern_names(&f.pat, &mut bound))
+                        }
+                        Stmt::LetCode { .. } => {}
+                    }
+                }
+            }
+            _ => {}
+        });
+        crate::surface::walk_expr(&arm.body, &mut |e| {
+            let ExprKind::Match { scrut, arms, .. } = &e.kind else { return };
+            let ExprKind::Var(name) = &scrut.kind else { return };
+            if bound.contains(name) {
+                return;
+            }
+            if let Some(p) = self_ref.params[self_ref.n_tyvars..]
+                .iter()
+                .position(|(own, _)| own == name)
+                .map(|p| p + self_ref.n_tyvars)
+                && p != dec
+                && descends_through(self_ref, arms, p)
+            {
+                inner = true;
+            }
+        });
+    }
+    inner
+}
+
+/// Does a self-call in `arms` pass, at parameter `dec`'s position, something
+/// built from a name the arm binds — a pattern variable, a binder below it,
+/// or a `let` computed from one? That is a call descending through this
+/// `match`; one passing `dec` itself, a literal or `Succ(dec)` (an
+/// accumulator) is not, and leaves the recursion to the enclosing `match`.
+/// Syntactic, like [`recurses_on`]. Every call a guard on this `match` could
+/// accept passes such a name (the guard's descendants are the arm's own
+/// binders), so a `match` this calls a case split had only refusals to give
+/// as the recursion.
+fn descends_through<A: std::borrow::Borrow<heather_syntax::Arm>>(
+    self_ref: &SelfRef,
+    arms: &[A],
+    dec: usize,
+) -> bool {
+    let mut found = false;
+    for arm in arms {
+        let arm = arm.borrow();
+        let mut scope = Vec::new();
+        bind_local(&mut scope, arm_names(arm));
+        self_calls(self_ref, &arm.body, &scope, &mut |args, explicit, scope| {
+            let slot = (self_ref.n_tyvars..self_ref.params.len())
+                .filter(|&p| explicit || !self_ref.params[p].1)
+                .position(|p| p == dec);
+            if let Some(slot) = slot
+                && let Some(arg) = args.get(slot)
+                && deps(arg, scope).contains(&ARM_LOCAL)
+            {
+                found = true;
+            }
+        });
+    }
+    found
+}
+
+/// The parameter recursion at the top takes for `body` by default: the one
+/// the body's outermost `match` on a parameter takes apart, when some
+/// self-call descends through it; the one the plain lowering's guard is.
+/// Another parameter would recurse too where the calls allow it, but it
+/// would change which arguments the function computes on (`drop(xs, n)`
+/// at `Nil` and a neutral `n`), which its clients' proofs read. `None`
+/// where no `match` qualifies or a parameter's name is rebound anywhere in
+/// the body: syntactic, and a sizing decision like [`recurses_on`], so a
+/// name it cannot place keeps the plain lowering.
+pub(crate) fn top_default_param(self_ref: &SelfRef, body: &heather_syntax::Block) -> Option<usize> {
+    let body = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
+    let mut bound: Vec<String> = Vec::new();
+    walk_with_types(&body, &mut |e| match &e.kind {
+        ExprKind::Match { arms, .. } => arms.iter().for_each(|a| bound.extend(arm_names(a))),
+        ExprKind::Lam { binders, .. } => bound.extend(binders.iter().map(|b| b.name.clone())),
+        ExprKind::Block(block) => {
+            for statement in &block.stmts {
+                match statement {
+                    Stmt::Let { name, .. } => bound.push(name.clone()),
+                    Stmt::LetRecord { fields, .. } => fields.iter().for_each(|f| pattern_names(&f.pat, &mut bound)),
+                    Stmt::LetCode { name, .. } => bound.push(name.clone()),
+                }
+            }
+        }
+        _ => {}
+    });
+    // The first `match` on a parameter decides: where no self-call descends
+    // through it, it is a case split around the recursion, and taking the
+    // inner parameter would move that split inside (`inner(0, n)` would stop
+    // reducing at an open `n`), so the plain lowering keeps it.
+    let mut first: Option<Option<usize>> = None;
+    walk_with_types(&body, &mut |e| {
+        if first.is_some() {
+            return;
+        }
+        let ExprKind::Match { scrut, arms, .. } = &e.kind else { return };
+        let ExprKind::Var(name) = &scrut.kind else { return };
+        let Some(dec) = (self_ref.n_tyvars..self_ref.params.len()).find(|&p| &self_ref.params[p].0 == name) else {
+            return;
+        };
+        first = Some(descends_through(self_ref, arms, dec).then_some(dec));
+    });
+    first.flatten().filter(|&dec| !bound.contains(&self_ref.params[dec].0))
+}
+
+/// The dependency [`descends_through`] tracks: bound inside the arm. Not a
+/// parameter position, so [`deps`]' other readers never see it.
+const ARM_LOCAL: usize = usize::MAX;
+
+fn bind_local(scope: &mut Vec<Bound>, names: impl IntoIterator<Item = String>) {
+    scope.extend(names.into_iter().filter(|n| n != "_").map(|name| Bound {
+        name,
+        deps: vec![ARM_LOCAL],
+        param: None,
+        stale: None,
+    }));
+}
+
+/// Every self-call in `e`, with the arguments in declaration order, whether
+/// it is `@`-marked, and the scope at it — binder-aware like [`reads`], with
+/// every `λ` binder arm-local, and a `let` or a nested `match`'s binder local
+/// when its value or scrutinee is.
+fn self_calls(
+    self_ref: &SelfRef,
+    e: &Expr,
+    scope: &[Bound],
+    out: &mut dyn FnMut(&[&Expr], bool, &[Bound]),
+) {
+    if let Some((args, explicit)) = surface_self_call(self_ref, e) {
+        out(&args, explicit, scope);
+    }
+    match &e.kind {
+        ExprKind::Lam { binders, body } => {
+            let mut inner = scope.to_vec();
+            bind_local(&mut inner, binders.iter().map(|b| b.name.clone()));
+            self_calls(self_ref, body, &inner, out);
+        }
+        ExprKind::Match { scrut, arms, .. } => {
+            self_calls(self_ref, scrut, scope, out);
+            // A nested `match`'s binders are pieces of its scrutinee: local
+            // when it reads a local (a predecessor's own predecessor), not
+            // when it is on another parameter or something built outside.
+            let deps = deps(scrut, scope);
+            for arm in arms {
+                let mut inner = scope.to_vec();
+                inner.extend(arm_names(arm).into_iter().filter(|n| n != "_").map(|name| Bound {
+                    name,
+                    deps: deps.clone(),
+                    param: None,
+                    stale: None,
+                }));
+                self_calls(self_ref, &arm.body, &inner, out);
+            }
+        }
+        ExprKind::Block(block) => {
+            let mut inner = scope.to_vec();
+            for statement in &block.stmts {
+                bind_statement(statement, &mut inner, &mut |e, scope| {
+                    self_calls(self_ref, e, scope, out)
+                });
+            }
+            self_calls(self_ref, &block.result, &inner, out);
+            block.ons.iter().for_each(|o| self_calls(self_ref, &o.expr, &inner, out));
+        }
+        _ => {
+            crate::surface::for_each_child(e, &mut |c| self_calls(self_ref, c, scope, out));
+            type_children(e, &mut |c| self_calls(self_ref, c, scope, out));
+        }
+    }
+}
+
+/// The expressions written inside `e`'s own types, which
+/// [`crate::surface::for_each_child`] does not enter: a `Type`-valued arm
+/// such as `n = n ∧ E(k)` is a type, and the self-call is inside it. The
+/// planner's readers must see such a call, or the `match` around it is not
+/// found to be a recursion and its arms' reads of the parameter go unchecked
+/// (issues/recursion-below-nat-fallback.md).
+fn type_children(e: &Expr, go: &mut dyn FnMut(&Expr)) {
+    match &e.kind {
+        ExprKind::TyLit(t) => ty_exprs(t, go),
+        ExprKind::TyApp { args, .. } => args.iter().for_each(|t| ty_exprs(t, go)),
+        _ => {}
+    }
+}
+
+/// The expressions a written type holds, in the places [`ty_reads`] reads.
+fn ty_exprs(t: &Ty, go: &mut dyn FnMut(&Expr)) {
+    match &t.kind {
+        TyKind::Nat | TyKind::Univ { .. } | TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
+        TyKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        TyKind::OfExpr(e) | TyKind::TypeOf(e) | TyKind::Fin(e) => go(e),
+        TyKind::Named { args, .. } => args.iter().for_each(|a| ty_exprs(a, go)),
+        TyKind::Fn { dom, cod, .. } => {
+            ty_exprs(dom, go);
+            ty_exprs(cod, go);
+        }
+        TyKind::Vec { elem, len } => {
+            ty_exprs(elem, go);
+            go(len);
+        }
+        TyKind::Squash(inner) | TyKind::Code { ty: inner, .. } => ty_exprs(inner, go),
+    }
+}
+
+/// [`crate::surface::walk_expr`], entering written types too
+/// ([`type_children`]).
+fn walk_with_types(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    f(e);
+    crate::surface::for_each_child(e, &mut |c| walk_with_types(c, f));
+    type_children(e, &mut |c| walk_with_types(c, f));
+}
+
+/// `cx` for the arms of a `match` that [`guard_param`] passed over as a case
+/// split on a parameter, recording it for [`elab_self_call`]'s refusal;
+/// `None` for every other `match`.
+pub(crate) fn case_split<A: std::borrow::Borrow<heather_syntax::Arm>>(
+    cx: &Cx,
+    scrut: &Term,
+    arms: &[A],
+) -> Option<Cx> {
+    let param = descends_on_param(cx, scrut)?;
+    let guard = cx.guard.as_ref()?;
+    if guard_param(cx, scrut, arms).is_some() {
+        return None;
+    }
+    let mut split = cx.clone();
+    let mut splits = (*cx.case_splits).clone();
+    splits.push((param, Rc::clone(guard)));
+    split.case_splits = Rc::new(splits);
+    Some(split)
+}
+
 /// Does a self-call in `arms` pass, at parameter `dec`'s position, anything
 /// but that parameter itself? That is what makes a `match` on `dec` the
 /// recursion rather than a branch on a parameter passed along unchanged
 /// (`match b { … f(k, b) … }` inside the recursion on `n`). Syntactic, so it
 /// answers the same on every speculative re-elaboration of the arms.
-pub(crate) fn recurses_on(self_ref: &SelfRef, arms: &[heather_syntax::Arm], dec: usize) -> bool {
+pub(crate) fn recurses_on<A: std::borrow::Borrow<heather_syntax::Arm>>(
+    self_ref: &SelfRef,
+    arms: &[A],
+    dec: usize,
+) -> bool {
     let own = &self_ref.params[dec].0;
     let mut found = false;
     for arm in arms {
-        crate::surface::walk_expr(&arm.body, &mut |e| {
+        walk_with_types(&arm.borrow().body, &mut |e| {
             let Some((args, explicit)) = surface_self_call(self_ref, e) else { return };
             // The written slots skip value implicits unless `@`-marked.
             let slot = (self_ref.n_tyvars..self_ref.params.len())
@@ -58,6 +387,76 @@ pub(crate) fn recurses_on(self_ref: &SelfRef, arms: &[heather_syntax::Arm], dec:
         });
     }
     found
+}
+
+/// The parameters other than `dec` whose value a self-call in `arms` changes:
+/// those it passes at anything but the parameter itself (the ones ih
+/// generalization quantifies, `generalize`, and indices an indexed `match`
+/// rebinds), and the value implicits generalization adds by dependency, which
+/// the call leaves out and so infers anew
+/// (issues/recursion-implicit-inferred-at-self-call.md). A parameter added
+/// only because its type mentions a varied one is passed as itself, so its
+/// value does not change and it is not listed. Syntactic, like
+/// [`recurses_on`]; `types[p]` is parameter `p`'s written type (`None` for a
+/// type parameter).
+fn varied_params(
+    self_ref: &SelfRef,
+    types: &[Option<&Ty>],
+    arms: &[heather_syntax::Arm],
+    dec: usize,
+) -> Vec<usize> {
+    let mut varied = Vec::new();
+    for arm in arms {
+        walk_with_types(&arm.body, &mut |e| {
+            let Some((args, explicit)) = surface_self_call(self_ref, e) else { return };
+            let positions = (self_ref.n_tyvars..self_ref.params.len())
+                .filter(|&p| explicit || !self_ref.params[p].1);
+            for (slot, position) in positions.enumerate() {
+                let Some(arg) = args.get(slot) else { break };
+                let own = &self_ref.params[position].0;
+                if position != dec
+                    && !matches!(&arg.kind, ExprKind::Var(v) if v == own)
+                    && !varied.contains(&position)
+                {
+                    varied.push(position);
+                }
+            }
+        });
+    }
+    // `generalize::varying_params`' dependency closure, by name.
+    let mentions = |p: usize, q: usize| {
+        q < p
+            && types
+                .get(p)
+                .copied()
+                .flatten()
+                .is_some_and(|t| crate::measure::mentions_ty(t, &self_ref.params[q].0))
+    };
+    let mut closure = varied.clone();
+    loop {
+        let before = closure.len();
+        for p in self_ref.n_tyvars..self_ref.params.len() {
+            if closure.contains(&p) || p == dec {
+                continue;
+            }
+            let forward = closure.iter().any(|&q| mentions(p, q));
+            let backward = self_ref.params[p].1
+                && !mentions(dec, p)
+                && closure.iter().any(|&q| mentions(q, p));
+            if forward || backward {
+                closure.push(p);
+            }
+        }
+        if closure.len() == before {
+            break;
+        }
+    }
+    for p in closure {
+        if self_ref.params[p].1 && !varied.contains(&p) {
+            varied.push(p);
+        }
+    }
+    varied
 }
 
 /// How a `fn` without `decreases` is lowered
@@ -75,9 +474,13 @@ pub(crate) enum RecursionPlan {
     Structural,
     /// A recursive `match` on parameter `dec` reads `dec`, or a name bound
     /// from it above the `match`, inside its arms (first at `read`, through
-    /// `name`). The structural lowering would see the top call's value there;
-    /// a measure on `dec` sees this level's, so that is the lowering.
-    ByMeasure { dec: usize, read: Span, name: String },
+    /// `name`, bound from parameter `from`). Or it reads a name bound above
+    /// it from a parameter `from` its self-calls pass a *different* value
+    /// (issues/recursion-let-reads-changing-parameter.md): the ih
+    /// generalizes `from` itself, but not a value computed from it outside
+    /// the `match`. The structural lowering would see the top call's value
+    /// there; a measure on `dec` sees this level's, so that is the lowering.
+    ByMeasure { dec: usize, read: Span, name: String, from: usize },
     /// A recursive `match` on `dec` is somewhere the structural lowering
     /// cannot put the recursion, and the measure lowering has no unfolding
     /// equation for (docs/decreases-unfolding-design.md §3). Refused with
@@ -88,12 +491,15 @@ pub(crate) enum RecursionPlan {
 }
 
 /// A name in scope during [`plan`]: the parameters its value depends on, and
-/// which parameter it *is*, if it is one.
+/// which parameter it *is*, if it is one. `stale`: inside a recursive
+/// `match`'s arms, the name was bound above the `match` from a parameter its
+/// self-calls vary, so it holds the top call's value (the varied parameter).
 #[derive(Clone)]
 struct Bound {
     name: String,
     deps: Vec<usize>,
     param: Option<usize>,
+    stale: Option<usize>,
 }
 
 fn lookup<'a>(scope: &'a [Bound], name: &str) -> Option<&'a Bound> {
@@ -105,6 +511,7 @@ fn bind_names(scope: &mut Vec<Bound>, names: impl IntoIterator<Item = String>) {
         name,
         deps: Vec::new(),
         param: None,
+        stale: None,
     }));
 }
 
@@ -153,7 +560,38 @@ fn reads(e: &Expr, scope: &[Bound], out: &mut dyn FnMut(&Bound, Span)) {
             reads(&block.result, &inner, out);
             block.ons.iter().for_each(|o| reads(&o.expr, &inner, out));
         }
+        // A type argument reads names too (`decide_bit<d = 0>()`), which
+        // `for_each_child` does not descend into.
+        ExprKind::TyApp { head, args } => {
+            reads(head, scope, out);
+            args.iter().for_each(|t| ty_reads(t, scope, out));
+        }
+        ExprKind::TyLit(t) => ty_reads(t, scope, out),
         _ => crate::surface::for_each_child(e, &mut |c| reads(c, scope, out)),
+    }
+}
+
+/// [`reads`] through the expressions inside a written type. A name a
+/// dependent arrow binds is not scoped, so reading one over-reports: the
+/// readers only ever refuse or reroute on a dependency, never accept on one.
+fn ty_reads(t: &Ty, scope: &[Bound], out: &mut dyn FnMut(&Bound, Span)) {
+    match &t.kind {
+        TyKind::Nat | TyKind::Univ { .. } | TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
+        TyKind::Eq(a, b) => {
+            reads(a, scope, out);
+            reads(b, scope, out);
+        }
+        TyKind::OfExpr(e) | TyKind::TypeOf(e) | TyKind::Fin(e) => reads(e, scope, out),
+        TyKind::Named { args, .. } => args.iter().for_each(|a| ty_reads(a, scope, out)),
+        TyKind::Fn { dom, cod, .. } => {
+            ty_reads(dom, scope, out);
+            ty_reads(cod, scope, out);
+        }
+        TyKind::Vec { elem, len } => {
+            ty_reads(elem, scope, out);
+            reads(len, scope, out);
+        }
+        TyKind::Squash(inner) | TyKind::Code { ty: inner, .. } => ty_reads(inner, scope, out),
     }
 }
 
@@ -180,7 +618,7 @@ fn bind_statement(
         Stmt::Let { name, expr, .. } => {
             visit(expr, scope);
             let deps = deps(expr, scope);
-            scope.push(Bound { name: name.clone(), deps, param: None });
+            scope.push(Bound { name: name.clone(), deps, param: None, stale: None });
         }
         Stmt::LetRecord { fields, expr, .. } => {
             visit(expr, scope);
@@ -191,6 +629,7 @@ fn bind_statement(
                 name,
                 deps: deps.clone(),
                 param: None,
+                stale: None,
             }));
         }
         Stmt::LetCode { .. } => {}
@@ -199,8 +638,13 @@ fn bind_statement(
 
 struct Planner<'a> {
     self_ref: &'a SelfRef,
+    types: &'a [Option<&'a Ty>],
     misplaced: Option<(usize, String)>,
-    read: Option<(usize, Span, String)>,
+    read: Option<(usize, Span, String, usize)>,
+    /// Inside a recursive `match`'s arms, where a nested `match` on a
+    /// parameter is the recursion only if a self-call descends through it
+    /// ([`guard_param`]).
+    inside: bool,
 }
 
 impl Planner<'_> {
@@ -226,8 +670,16 @@ impl Planner<'_> {
                     ExprKind::Var(name) => lookup(scope, name).and_then(|b| b.param),
                     _ => None,
                 };
+                let recursive = dec.is_some_and(|dec| {
+                    if self.inside {
+                        descends_through(self.self_ref, arms, dec)
+                    } else {
+                        recurses_on(self.self_ref, arms, dec)
+                            && !outer_case_split(self.self_ref, arms, dec)
+                    }
+                });
                 if let Some(dec) = dec
-                    && recurses_on(self.self_ref, arms, dec)
+                    && recursive
                 {
                     self.recursive_match(dec, arms, tail, scope, spine);
                 }
@@ -238,11 +690,14 @@ impl Planner<'_> {
                         spine.push(p);
                     }
                 }
+                let outer = self.inside;
+                self.inside |= recursive;
                 for arm in arms {
                     let mut inner = scope.to_vec();
                     bind_names(&mut inner, arm_names(arm));
                     self.walk(&arm.body, tail, &inner, &spine);
                 }
+                self.inside = outer;
             }
             ExprKind::Lam { binders, body } => {
                 let mut inner = scope.to_vec();
@@ -265,6 +720,10 @@ impl Planner<'_> {
         let param = &self.self_ref.params[dec].0;
         let why = "the recursion is compiled at the `match`, so a recursive call in its \
                    arms means the `match` alone at the smaller value";
+        // The parameters the self-calls change: the ih generalizes them, so a
+        // branch above the `match` that reads one is decided by the top
+        // call's value and skipped by every recursive one.
+        let varied = varied_params(self.self_ref, self.types, arms, dec);
         let refusal = if !tail {
             Some(format!(
                 "this recursive `match` on `{param}` is not the result of `{name}`: {why}, \
@@ -278,6 +737,15 @@ impl Planner<'_> {
                  `{param}`: {why}, so the branch is decided once, by the top call. Branch \
                  inside the arms instead (issues/fn-recursion-means-the-function.md)"
             ))
+        } else if let Some(&p) = spine.iter().find(|p| varied.contains(p)) {
+            let varied = &self.self_ref.params[p].0;
+            Some(format!(
+                "this recursive `match` on `{param}` sits under a branch that depends on \
+                 `{varied}`, which its recursive calls change, so the branch is decided \
+                 once, by the top call's `{varied}`, and the recursive calls skip it: \
+                 {why}. Branch inside the arms instead \
+                 (issues/recursion-branch-on-varied-parameter.md)"
+            ))
         } else {
             None
         };
@@ -285,12 +753,32 @@ impl Planner<'_> {
             self.misplaced.get_or_insert((dec, msg));
             return;
         }
+        // A name bound above the `match` from a parameter the self-calls
+        // vary is evaluated once, at the top call's value of it; the varied
+        // parameter itself is the ih's generalized binder, so reading *it*
+        // is this level's value (issues/recursion-let-reads-changing-parameter.md).
+        let above: Vec<Bound> = scope
+            .iter()
+            .map(|b| Bound {
+                stale: b
+                    .param
+                    .is_none()
+                    .then(|| b.deps.iter().copied().find(|p| varied.contains(p)))
+                    .flatten(),
+                ..b.clone()
+            })
+            .collect();
         for arm in arms {
-            let mut inner = scope.to_vec();
+            let mut inner = above.clone();
             bind_names(&mut inner, arm_names(arm));
             reads(&arm.body, &inner, &mut |b, span| {
-                if b.deps.contains(&dec) && self.read.is_none() {
-                    self.read = Some((dec, span, b.name.clone()));
+                if self.read.is_some() {
+                    return;
+                }
+                if b.deps.contains(&dec) {
+                    self.read = Some((dec, span, b.name.clone(), dec));
+                } else if let Some(from) = b.stale {
+                    self.read = Some((dec, span, b.name.clone(), from));
                 }
             });
         }
@@ -298,14 +786,19 @@ impl Planner<'_> {
 }
 
 /// Decide how a `fn` without `decreases` is lowered ([`RecursionPlan`]).
-pub(crate) fn plan(self_ref: &SelfRef, body: &heather_syntax::Block) -> RecursionPlan {
+/// `types[p]`: parameter `p`'s written type, `None` for a type parameter.
+pub(crate) fn plan(
+    self_ref: &SelfRef,
+    types: &[Option<&Ty>],
+    body: &heather_syntax::Block,
+) -> RecursionPlan {
     let scope: Vec<Bound> = self_ref
         .params
         .iter()
         .enumerate()
-        .map(|(i, (name, _))| Bound { name: name.clone(), deps: vec![i], param: Some(i) })
+        .map(|(i, (name, _))| Bound { name: name.clone(), deps: vec![i], param: Some(i), stale: None })
         .collect();
-    let mut planner = Planner { self_ref, misplaced: None, read: None };
+    let mut planner = Planner { self_ref, types, misplaced: None, read: None, inside: false };
     let body = Expr {
         kind: ExprKind::Block(Box::new(body.clone())),
         span: body.span,
@@ -313,7 +806,7 @@ pub(crate) fn plan(self_ref: &SelfRef, body: &heather_syntax::Block) -> Recursio
     planner.walk(&body, true, &scope, &[]);
     match (planner.misplaced, planner.read) {
         (Some((dec, msg)), _) => RecursionPlan::Misplaced { dec, msg },
-        (None, Some((dec, read, name))) => RecursionPlan::ByMeasure { dec, read, name },
+        (None, Some((dec, read, name, from))) => RecursionPlan::ByMeasure { dec, read, name, from },
         (None, None) => RecursionPlan::Structural,
     }
 }
@@ -430,6 +923,7 @@ pub(crate) fn elab_self_call(
             span,
         );
     }
+    elab.note_recursion_on(&self_ref.params[guard.dec].0);
     if args.len() < positions.len() {
         return err(
             format!(
@@ -442,10 +936,15 @@ pub(crate) fn elab_self_call(
     }
 
     let (args, spill) = args.split_at(positions.len());
-    // A generalized parameter that the call cannot pass — an implicit one at
-    // a call without `@` — has no argument to apply the ih to.
+    // A generalized parameter the call does not pass (an implicit one at a
+    // call without `@`) is inferred where the ih is applied, like an implicit
+    // at any call: from the varied arguments after it, whose types it is
+    // generalized for (issues/recursion-implicit-inferred-at-self-call.md).
+    // With no varied argument after it there is nothing to infer it from.
     if let Some(generalized) = &guard.generalized
-        && let Some(&missing) = generalized.iter().find(|p| !positions.contains(p))
+        && let Some(&missing) = generalized.iter().find(|&&p| {
+            !positions.contains(&p) && !generalized.iter().any(|&q| q > p && positions.contains(&q))
+        })
     {
         return err(
             format!(
@@ -464,10 +963,14 @@ pub(crate) fn elab_self_call(
     // Arguments at generalized positions, in position order: applied to the
     // ih below, and checked there against its Π domains.
     let mut varied: Vec<&Expr> = Vec::new();
+    // The decreasing argument first, the rest in position order: a swap
+    // would reverse the varied arguments between them when it is not the
+    // second (`f(a, b, n)` applied the ih to `b, a`;
+    // issues/recursion-varied-arguments-reversed.md).
     let order = {
         let mut order: Vec<usize> = (0..args.len()).collect();
         if let Some(decreasing) = positions.iter().position(|&position| position == guard.dec) {
-            order.swap(0, decreasing);
+            order[..=decreasing].rotate_right(1);
         }
         order
     };
@@ -579,7 +1082,7 @@ pub(crate) fn elab_self_call(
                     let usable = preds.len().min(comps.len());
                     let names: Vec<String> = preds[..usable]
                         .iter()
-                        .map(|predecessor| format!("`{}`", cx.names[*predecessor]))
+                        .map(|predecessor| format!("`{}`", &cx.names[*predecessor]))
                         .collect();
                     if usable == 1 {
                         (
@@ -620,7 +1123,7 @@ pub(crate) fn elab_self_call(
                      (docs/inductive-tier2-w-lowering.md §8)"
                         .to_string(),
                 ),
-                GuardKind::Wf { cov, .. } => match cov {
+                GuardKind::Wf { cov, shape, .. } => match cov {
                     // The window exists, so the rule is not "the immediate
                     // field": it is "within the chain the recursion carries".
                     Some(window) => {
@@ -645,24 +1148,72 @@ pub(crate) fn elab_self_call(
                     }
                     None => (
                         "one of the recursive fields bound by".to_string(),
-                        ". A deeper subterm is refused too, even though it is genuinely \
+                        match shape {
+                            // Chain-shaped, and the arms asked for nothing
+                            // deeper, so no window was built
+                            // (issues/descend-refusal-misreads-chain-shape.md).
+                            WfShape::Chain => ". The induction hypothesis this `match` binds is \
+                                 the value at each recursive field. This declaration is \
+                                 chain-shaped, so a deeper subterm is reachable too, but \
+                                 only one that a nested `match` on the recursive field \
+                                 binds: the recursion then carries a window of earlier \
+                                 values down the chain \
+                                 (docs/list-course-of-values-design.md §4). This argument \
+                                 is neither"
+                                .to_string(),
+                            WfShape::Branching => format!(
+                                "{} A window of earlier values exists for \
+                                 **chain-shaped** declarations — every constructor with at \
+                                 most one recursive field and no container \
+                                 (docs/list-course-of-values-design.md §1) — and this one \
+                                 is not: a branching constructor has no chain to walk, only \
+                                 a tree of children, and a container field is a group of \
+                                 children that a self-call maps over rather than descends \
+                                 into",
+                                ". A deeper subterm is refused too, even though it is genuinely \
                          smaller: the induction hypothesis this `match` binds is the \
                          value at each recursive field and at nothing else, so a call \
-                         anywhere else has no term to elaborate to. A window of earlier \
-                         values exists for **chain-shaped** declarations — every \
-                         constructor with at most one recursive field and no container \
-                         (docs/list-course-of-values-design.md §1) — and this one is \
-                         not: a branching constructor has no chain to walk, only a tree \
-                         of children, and a container field is a group of children that \
-                         a self-call maps over rather than descends into"
-                            .to_string(),
+                         anywhere else has no term to elaborate to."
+                            ),
+                            WfShape::NoWindowRoute => format!(
+                                "{} A window of earlier values is built only for a \
+                                 chain-shaped declaration without indices or function \
+                                 fields (docs/list-course-of-values-design.md §1), and this \
+                                 one is lowered by a route that carries none",
+                                ". A deeper subterm is refused too, even though it is genuinely \
+                         smaller: the induction hypothesis this `match` binds is the \
+                         value at each recursive field and at nothing else, so a call \
+                         anywhere else has no term to elaborate to."
+                            ),
+                        },
                     ),
                 },
+            };
+            // The case splits this call sits under were tried too: name
+            // them, or the refusal reads as if the nearest `match` had been
+            // ignored (issues/recursion-guard-takes-nearest-parameter-match.md).
+            let splits: Vec<String> = cx
+                .case_splits
+                .iter()
+                .filter(|(_, stood)| Rc::ptr_eq(stood, &guard))
+                .map(|(param, _)| format!("`{}`", self_ref.params[*param].0))
+                .collect();
+            let splits = if splits.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ". The `match` on {} inside it is not the recursion: every \
+                     recursive call in its arms passes {} along unchanged, so it is a \
+                     case split and the recursion stays the `match` on `{}`",
+                    splits.join(", "),
+                    if splits.len() == 1 { "it" } else { "them" },
+                    self_ref.params[guard.dec].0
+                )
             };
             err(
                 format!(
                     "recursive call to `{name}` must descend: argument `{}` has to be \
-                     {what} the enclosing `match`{why}",
+                     {what} the enclosing `match`{why}{splits}",
                     self_ref.params[position].0
                 ),
                 argument.span,
@@ -787,7 +1338,30 @@ pub(crate) fn elab_self_call(
             })
             .collect();
         let varied: Vec<Expr> = varied.into_iter().cloned().collect();
-        application::apply_explicit(elab, cx, Some(name), Rc::new(metas), 0, term, ty, level, &varied)?
+        let mask: Vec<bool> = generalized.iter().map(|p| !positions.contains(p)).collect();
+        if mask.iter().any(|&omitted| omitted) {
+            elab.apply_self_call_implicit(cx, name, Rc::new(metas), term, ty, level, &varied, &mask, span)
+                .map_err(|e| match e {
+                    crate::ElabError::Elab { msg, span } => crate::ElabError::Elab {
+                        msg: format!(
+                            "{msg}\n(the recursive call leaves out `{name}`'s implicit {}, which \
+                             the arguments it varies determine; pass it with \
+                             `@{name}(…)` if they do not)",
+                            generalized
+                                .iter()
+                                .zip(&mask)
+                                .filter(|(_, m)| **m)
+                                .map(|(&p, _)| format!("`{}`", self_ref.params[p].0))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        span,
+                    },
+                    other => other,
+                })?
+        } else {
+            application::apply_explicit(elab, cx, Some(name), Rc::new(metas), 0, term, ty, level, &varied)?
+        }
     };
     if spill.is_empty() {
         return Ok((term, ty, level));
@@ -921,6 +1495,30 @@ pub(crate) fn surface_self_call<'a>(
     }
 }
 
+impl Guard {
+    /// Does the type of any induction hypothesis this guard offers mention
+    /// parameter `param`? Each is scoped at the guard's depth, where the
+    /// parameter is the binder at absolute position `param`.
+    pub(crate) fn ih_mentions(&self, param: usize) -> bool {
+        let (depth, types): (usize, Vec<&Type>) = match &self.kind {
+            GuardKind::Nat { depth, comps, .. } => (*depth, comps.iter().collect()),
+            GuardKind::Wf { depth, children, cov, container, fn_children, .. } => (
+                *depth,
+                children
+                    .iter()
+                    .map(|(_, _, ty, _)| ty)
+                    .chain(cov.iter().flat_map(|c| c.comps.iter()))
+                    .chain(container.iter().map(|c| &c.ih_ty))
+                    .chain(fn_children.iter().map(|f| &f.ih_ty))
+                    .collect(),
+            ),
+        };
+        let Some(index) = depth.checked_sub(param + 1) else { return true };
+        let var = Term::Var(LocalVar(index as u32));
+        types.iter().any(|ty| ty.abstract_local(&var).is_some())
+    }
+}
+
 /// What a guarded self-call must look like inside a `match` arm, and what it
 /// lowers to (issues/match-recursion.md).
 pub(crate) struct Guard {
@@ -1008,6 +1606,13 @@ pub(crate) enum GuardKind {
         /// aliases are unchanged by the window, and only what a self-call at
         /// a **deeper** subterm lowers to is new.
         cov: Option<Rc<WfCov>>,
+        /// Why [`Self::Wf::cov`] could have been built, read only to explain
+        /// a refused self-call when it was not
+        /// (issues/descend-refusal-misreads-chain-shape.md): a missing
+        /// window means one thing for a chain-shaped declaration whose arms
+        /// asked for nothing deeper, and another for a declaration no window
+        /// is built for.
+        shape: WfShape,
         /// The arm's *container* field, if it has one
         /// (`docs/container-fields.md` §4.2). A container is a group of
         /// children rather than one, so a self-call over it maps rather than
@@ -1052,6 +1657,21 @@ pub(crate) struct FnChildIh {
 /// deeper inside the arm shifts it by the difference — except `motive`,
 /// `gamma` and `tail`, which travel as they were written so that a nested
 /// `match` can reindex them at *its* scrutinee.
+/// Whether a `Wf` recursion's declaration can carry a course-of-values
+/// window (`docs/list-course-of-values-design.md` §1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WfShape {
+    /// Chain-shaped, on the route that builds windows: one is built when the
+    /// arms make a self-call below the immediate child, through a nested
+    /// `match` on it.
+    Chain,
+    /// A constructor with more than one recursive field, or a container.
+    Branching,
+    /// A route that builds no window whatever the shape: an indexed family,
+    /// or a declaration with a recursive function field.
+    NoWindowRoute,
+}
+
 pub(crate) struct WfCov {
     /// The chain this arm makes available, outermost first: `chain[0]` is the
     /// arm's own child, `chain[1]` the child a nested `match chain[0]` binds,

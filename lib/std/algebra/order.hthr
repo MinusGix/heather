@@ -69,6 +69,20 @@ instance Trans<Int>(Int::Le, Int::Lt, Int::Lt) {
     rel_chain := Int::lt_of_le_of_lt,
 }
 
+// Identity, the setoid both carriers are ordered over (`RelId`), chains with
+// either order by transport. A strict order's class holds these pairs
+// (`StrictOrder`'s `same_lt` and its siblings, `ordered_field`), so a generic
+// `calc` mixes `≈` with `<` and `≤`; at `Nat` and `Int` they are filled from
+// here.
+instance Trans<Nat>(RelId<Nat>, Nat::Lt, Nat::Lt) { rel_chain := λ x y z h1 h2 => subst(sym(h1), h2) }
+instance Trans<Nat>(Nat::Lt, RelId<Nat>, Nat::Lt) { rel_chain := λ x y z h1 h2 => subst(h2, h1) }
+instance Trans<Nat>(RelId<Nat>, Nat::Le, Nat::Le) { rel_chain := λ x y z h1 h2 => subst(sym(h1), h2) }
+instance Trans<Nat>(Nat::Le, RelId<Nat>, Nat::Le) { rel_chain := λ x y z h1 h2 => subst(h2, h1) }
+instance Trans<Int>(RelId<Int>, Int::Lt, Int::Lt) { rel_chain := λ x y z h1 h2 => subst(sym(h1), h2) }
+instance Trans<Int>(Int::Lt, RelId<Int>, Int::Lt) { rel_chain := λ x y z h1 h2 => subst(h2, h1) }
+instance Trans<Int>(RelId<Int>, Int::Le, Int::Le) { rel_chain := λ x y z h1 h2 => subst(sym(h1), h2) }
+instance Trans<Int>(Int::Le, RelId<Int>, Int::Le) { rel_chain := λ x y z h1 h2 => subst(h2, h1) }
+
 // Componentwise products preserve preorders and partial orders. They do not
 // preserve linearity: `(a1,b2)` and `(a2,b1)` may be incomparable. Keeping the
 // constructor at the precise layer is the first forcing case for a hierarchy

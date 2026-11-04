@@ -121,35 +121,34 @@ theorem StackForm::executes_respects_defined<M>(self form: StackForm, data: Byte
     SameDefinedState<M>(after_left, after_right) {
     let gprs: (before_left.gprs = before_right.gprs) = SameDefinedState::gprs(same);
     let memory: (before_left.memory = before_right.memory) = SameDefinedState::memory(same);
-    (match form as λ f => f.Executes(data, writes, before_left, after_left) → f.Executes(data, writes, before_right, after_right) →
-            SameDefinedState<M>(after_left, after_right) {
-        SpillWord(store) => λ l r => trans(cong_fn(erase_af<M>, l.right.right),
+    match form {
+        SpillWord(store) => trans(cong_fn(erase_af<M>, left.right.right),
             trans(same_defined_respects(λ (s: MachineState<M>) => store.after(writes, s), λ _ => refl, before_left, before_right, same),
-                sym(cong_fn(erase_af<M>, r.right.right)))),
-        ReloadWord(load) => λ l r => {
+                sym(cong_fn(erase_af<M>, right.right.right)))),
+        ReloadWord(load) => {
             let read_same = trans(
                 cong_fn(λ (m: M) => read_word(data, m, stack_address(before_left.gprs, load.offset)), memory),
                 cong_fn(λ (g: Gprs) => read_word(data, before_right.memory, stack_address(g, load.offset)), gprs));
-            let word = Option::some_inj(l.right.witness, r.right.witness, trans(sym(l.right.proof.left), trans(read_same, r.right.proof.left)));
-            trans(cong_fn(erase_af<M>, l.right.proof.right),
-                trans(same_defined_respects(λ (s: MachineState<M>) => load.after(l.right.witness, s), λ _ => refl, before_left, before_right, same),
+            let word = Option::some_inj(left.right.witness, right.right.witness, trans(sym(left.right.proof.left), trans(read_same, right.right.proof.left)));
+            trans(cong_fn(erase_af<M>, left.right.proof.right),
+                trans(same_defined_respects(λ (s: MachineState<M>) => load.after(left.right.witness, s), λ _ => refl, before_left, before_right, same),
                     trans(cong_fn(λ (w: BitVec(64)) => erase_af(load.after(w, before_right)), word),
-                        sym(cong_fn(erase_af<M>, r.right.proof.right)))))
+                        sym(cong_fn(erase_af<M>, right.right.proof.right)))))
         },
-        CallNear(displacement) => λ l r => trans(cong_fn(erase_af<M>, l.right.right),
+        CallNear(displacement) => trans(cong_fn(erase_af<M>, left.right.right),
             trans(same_defined_respects(λ (s: MachineState<M>) => call_near_after(writes, displacement, s), λ _ => refl, before_left, before_right, same),
-                sym(cong_fn(erase_af<M>, r.right.right)))),
-        ReturnNear => λ l r => {
+                sym(cong_fn(erase_af<M>, right.right.right)))),
+        ReturnNear => {
             let read_same = trans(
                 cong_fn(λ (m: M) => read_word(data, m, read_gpr(Rsp, before_left.gprs)), memory),
                 cong_fn(λ (g: Gprs) => read_word(data, before_right.memory, read_gpr(Rsp, g)), gprs));
-            let word = Option::some_inj(l.right.witness, r.right.witness, trans(sym(l.right.proof.left), trans(read_same, r.right.proof.left)));
-            trans(cong_fn(erase_af<M>, l.right.proof.right),
-                trans(same_defined_respects(λ (s: MachineState<M>) => return_near_after(l.right.witness, s), λ _ => refl, before_left, before_right, same),
+            let word = Option::some_inj(left.right.witness, right.right.witness, trans(sym(left.right.proof.left), trans(read_same, right.right.proof.left)));
+            trans(cong_fn(erase_af<M>, left.right.proof.right),
+                trans(same_defined_respects(λ (s: MachineState<M>) => return_near_after(left.right.witness, s), λ _ => refl, before_left, before_right, same),
                     trans(cong_fn(λ (w: BitVec(64)) => erase_af(return_near_after(w, before_right)), word),
-                        sym(cong_fn(erase_af<M>, r.right.proof.right)))))
+                        sym(cong_fn(erase_af<M>, right.right.proof.right)))))
         },
-    })(left, right)
+    }
 }
 
 // Two stack steps by the same form, from related states, reach related

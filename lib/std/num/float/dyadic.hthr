@@ -36,9 +36,11 @@ import relation_props;
 import algebra;
 import algebra_rel;
 import order;
+import lattice;
 import ordered_field;
 import semiring;
 import rat;
+import morphism;
 export algebra::{Numeral};
 
 record Dyadic { mant: Int, exp: Int }
@@ -190,6 +192,32 @@ theorem Dyadic::rat_zero(): Dyadic::rat(0) ≈ 0 { Dyadic::rat_ofInt(0) }
 
 theorem Dyadic::rat_one(): Dyadic::rat(1) ≈ 1 { Dyadic::rat_ofInt(1) }
 
+// The dyadics inside the rationals, as a cast edge (docs/casting-design.md
+// §5.6): `Dyadic`'s order and `≈` are defined through `rat`, so preserving
+// and reflecting them is the identity.
+fn Dyadic::rat_hom() → OrderedRingHom<Dyadic, Rat>(Dyadic::rat,
+        Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add, Dyadic::mul, Dyadic::neg, 0, 1,
+        Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1) {
+    OrderedRingHom {
+        map_respects: λ x y h => h,
+        map_zero: Dyadic::rat_zero(),
+        map_one: Dyadic::rat_one(),
+        map_add: λ x y => x.rat_add(y),
+        map_mul: λ x y => x.rat_mul(y),
+        map_neg: λ x => x.rat_neg(),
+        map_le: λ x y h => h,
+        map_lt: λ x y h => h,
+        le_of_map: λ x y h => h,
+        lt_of_map: λ x y h => h,
+    }
+}
+
+// `Int → Dyadic` and `Dyadic → Rat`: `Int → Rat` stays the direct edge, one
+// step against two.
+instance Cast<Dyadic, Rat>(Dyadic::rat) { }
+
+instance Cast<Int, Dyadic>(Dyadic::ofInt) { }
+
 theorem Dyadic::add_comm(self a, b: Dyadic): a + b ≈ b + a {
     Dyadic::same_via(a.rat_add(b), a.rat().add_comm(b.rat()), b.rat_add(a))
 }
@@ -303,17 +331,21 @@ theorem Dyadic::lt_respects({a, a2, b, b2: Dyadic}, ha: a ≈ a2, hb: b ≈ b2, 
     Rat::lt_respects(x := a.rat(), x2 := a2.rat(), y := b.rat(), y2 := b2.rat(), hx := ha, hy := hb, h := h)
 }
 
+theorem Dyadic::le_respects({a, a2, b, b2: Dyadic}, ha: a ≈ a2, hb: b ≈ b2, h: a <= b): a2 <= b2 {
+    Rat::le_respects(x := a.rat(), x2 := a2.rat(), y := b.rat(), y2 := b2.rat(), hx := ha, hy := hb, h := h)
+}
+
 theorem Dyadic::same_of_not_lt({a, b: Dyadic}, h1: ¬(a < b), h2: ¬(b < a)): a ≈ b {
     Rat::same_of_not_lt(x := a.rat(), y := b.rat(), h1 := h1, h2 := h2)
 }
 
 theorem Dyadic::le_of_not_lt({a, b: Dyadic}, h: ¬(b < a)): a <= b { Rat::le_of_not_lt(x := a.rat(), y := b.rat(), h := h) }
 
+theorem Dyadic::lt_of_not_le({a, b: Dyadic}, h: ¬(b <= a)): a < b { Rat::lt_of_not_le(x := a.rat(), y := b.rat(), h := h) }
+
 theorem Dyadic::not_lt_of_le({a, b: Dyadic}, h: a <= b): ¬(b < a) { Rat::not_lt_of_le(x := a.rat(), y := b.rat(), h := h) }
 
 theorem Dyadic::lt_cotrans(self a, b, c: Dyadic, h: a < b): a < c ∨ c < b { a.rat().lt_cotrans(b.rat(), c.rat(), h) }
-
-fn Dyadic::le_dec(self a, b: Dyadic) → a <= b ∨ ¬(a <= b) { a.rat().le_dec(b.rat()) }
 
 // The relation kit `calc` and `relation_step` resolve against, as at `Rat`.
 
@@ -426,6 +458,39 @@ theorem Dyadic::mant_lt_of_lt(m, n, e: Int, h: Dyadic(m, e) < Dyadic(n, e)): m <
     }
 }
 
+// The order decided on mantissas aligned to the smaller exponent, as a sum
+// aligns them: `2^|a.exp - b.exp|` is the only power it computes, where the
+// rationals' cross products would compute both images' powers.
+theorem Dyadic::aligned(self a, b: Dyadic):
+    Dyadic(a.mant * Nat::pow(2, (a.exp - b.exp).pos_part()).int(), a.exp - (a.exp - b.exp).pos_part().int()) ≈ a
+    ∧ Dyadic(b.mant * Nat::pow(2, (a.exp - b.exp).neg_part()).int(), a.exp - (a.exp - b.exp).pos_part().int()) ≈ b
+{
+    let d = a.exp - b.exp;
+    let up = d.pos_part();
+    let down = d.neg_part();
+    let c = a.exp - up.int();
+    let pd = d.pos_sub_neg();
+    let ea: (c + up.int() = a.exp) = omega;
+    let eb: (c + down.int() = b.exp) = omega;
+    And(j(ea, λ v _ => Dyadic(a.mant * Nat::pow(2, up).int(), c) ≈ Dyadic(a.mant, v), Dyadic::align(a.mant, c, up)),
+        j(eb, λ v _ => Dyadic(b.mant * Nat::pow(2, down).int(), c) ≈ Dyadic(b.mant, v), Dyadic::align(b.mant, c, down)))
+}
+
+fn Dyadic::le_dec(self a, b: Dyadic) → a <= b ∨ ¬(a <= b) {
+    let d = a.exp - b.exp;
+    let c = a.exp - d.pos_part().int();
+    let x = a.mant * Nat::pow(2, d.pos_part()).int();
+    let y = b.mant * Nat::pow(2, d.neg_part()).int();
+    let al = a.aligned(b);
+    let X = Dyadic(x, c).rat();
+    let Y = Dyadic(y, c).rat();
+    match x.le_dec(y) {
+        Inl(le) => Inl(Rat::le_respects(x := X, x2 := a.rat(), y := Y, y2 := b.rat(), hx := al.left, hy := al.right, h := Dyadic::le_of_mant_le(x, y, c, le))),
+        Inr(no) => Inr(λ h => no(Dyadic::mant_le_of_le(x, y, c,
+            Rat::le_respects(x := a.rat(), x2 := X, y := b.rat(), y2 := Y, hx := Dyadic::same_sym(al.left), hy := Dyadic::same_sym(al.right), h := h)))),
+    }
+}
+
 // At one exponent the sum adds the mantissas.
 theorem Dyadic::rat_add_exp(m, n, e: Int): Dyadic(m, e).rat() + Dyadic(n, e).rat() ≈ Dyadic(m + n, e).rat() {
     let x = Dyadic(m, e).rat();
@@ -459,7 +524,7 @@ theorem Dyadic::mant_zero(self d: Dyadic, h: d ≈ 0): d.mant = 0 {
     let cross: ((d.mant * p) * OfNat(1) = OfNat(0) * q) = h;
     let eqn: (d.mant * p = OfNat(0)) = omega(cross, Int::zero_mul(q));
     match d.mant as λ m => m * p = OfNat(0) → m = OfNat(0) {
-        OfNat(n) => match n as λ k => OfNat(k) * p = OfNat(0) → OfNat(k) = OfNat(0) {
+        OfNat(n) => match n {
             Zero => λ _ => refl,
             Succ(k) => λ e => false_elim(omega(e, OfNat(Succ(k)).mul_pos(p, trivial, p_pos := pp))),
         },
@@ -474,4 +539,360 @@ fn Dyadic::sign_or(self d: Dyadic, z: Bool) → Bool {
 
 theorem Dyadic::sign_or_zero(self d: Dyadic, z: Bool, h: d ≈ 0): d.sign_or(z) = z {
     j(sym(d.mant_zero(h)), λ v _ => Dyadic(v, d.exp).sign_or(z) = z, refl)
+}
+
+// ---------------------------------------------------------------------------
+// Directed rounding at a precision (issues/dyadic-interval-enclosures.md).
+// `d.down(p)` keeps the top `p` bits of the mantissa and floors the rest
+// away; `d.up(p)` rounds toward `+∞` by negation. The exponent is unbounded,
+// so neither overflows, and both are exact when the mantissa already fits.
+// Soundness holds at every shift (`shr_le`), so how many bits `cut` drops is
+// a cost choice that needs no proof.
+
+fn Dyadic::cut(self d: Dyadic, p: Nat) → Nat { d.mant.natAbs().width() - p }
+
+fn Dyadic::shr(self d: Dyadic, k: Nat) → Dyadic { Dyadic(d.mant.shr(k), d.exp + k.int()) }
+
+fn Dyadic::down(self d: Dyadic, p: Nat) → Dyadic { d.shr(d.cut(p)) }
+
+fn Dyadic::up(self d: Dyadic, p: Nat) → Dyadic { -((-d).down(p)) }
+
+theorem Dyadic::shr_le(self d: Dyadic, k: Nat): d.shr(k) <= d {
+    let m = d.mant.shr(k);
+    Dyadic::le_trans(Dyadic::le_of_same(Dyadic::same_sym(Dyadic::align(m, d.exp, k))),
+        Dyadic::le_of_mant_le(m * Nat::pow(2, k).int(), d.mant, d.exp, d.mant.shr_mul_le(k)))
+}
+
+theorem Dyadic::neg_le({a, b: Dyadic}, h: a <= b): -b <= -a {
+    Rat::le_respects(Rat::same_sym(b.rat_neg()), Rat::same_sym(a.rat_neg()), Rat::neg_le(x := a.rat(), y := b.rat(), h := h))
+}
+
+theorem Dyadic::neg_neg(self a: Dyadic): -(-a) ≈ a {
+    Rat::same_trans((-a).rat_neg(), Rat::same_trans(Rat::neg_respects(x := (-a).rat(), x2 := -a.rat(), hx := a.rat_neg()), a.rat().neg_neg()))
+}
+
+theorem Dyadic::down_le(self d: Dyadic, p: Nat): d.down(p) <= d { d.shr_le(d.cut(p)) }
+
+theorem Dyadic::le_up(self d: Dyadic, p: Nat): d <= d.up(p) {
+    Dyadic::le_trans(Dyadic::le_of_same(Dyadic::same_sym(d.neg_neg())), Dyadic::neg_le((-d).down_le(p)))
+}
+
+// ---------------------------------------------------------------------------
+// Reciprocal bounds. A positive `m · 2^e` has reciprocal `2^K / m · 2^(-e-K)`
+// for any `K`; flooring the quotient gives a bound below and its successor
+// one above. `K = p + width(m)` leaves at least `p` bits in the quotient,
+// which is guessed one bit per step and checked (`Nat::pow2_div`): any
+// quotient with `ldiv`'s parts gives sound bounds.
+
+fn Dyadic::recip_cut(self d: Dyadic, p: Nat) → Nat { p + d.mant.natAbs().width() }
+
+fn Dyadic::recip_quot(self d: Dyadic, p: Nat) → Nat { Nat::pow2_div(d.recip_cut(p), d.mant.natAbs()).quot() }
+
+fn Dyadic::recip_down(self d: Dyadic, p: Nat) → Dyadic { Dyadic(d.recip_quot(p).int(), -d.exp - d.recip_cut(p).int()) }
+
+fn Dyadic::recip_up(self d: Dyadic, p: Nat) → Dyadic { Dyadic(Succ(d.recip_quot(p)).int(), -d.exp - d.recip_cut(p).int()) }
+
+// `c · 2^(-e-K)` times `m · 2^e` is `c·m / 2^K`.
+theorem Dyadic::recip_scale(c, m, e: Int, K: Nat): (Dyadic(c, -e - K.int()) * Dyadic(m, e)).rat() ≈ Rat((c * m) * 1, Nat::pow(2, K)) {
+    Dyadic::rat_split(c * m, (-e - K.int()) + e, 0, K, omega)
+}
+
+theorem Dyadic::pos_of_mant({m: Nat}, e: Int, hm: 0 < m): 0 < Dyadic(m.int(), e) {
+    Dyadic::lt_respects(Dyadic::zero_mant(e), Dyadic(m.int(), e).same_refl(), Dyadic::lt_of_mant_lt(0, m.int(), e, hm))
+}
+
+theorem Dyadic::rat_pos({d: Dyadic}, h: 0 < d): 0 < d.rat() { Rat::lt_respects(Dyadic::rat_zero(), d.rat().same_refl(), h) }
+
+theorem Dyadic::rat_nonneg({d: Dyadic}, h: 0 <= d): 0 <= d.rat() { Rat::le_respects(Dyadic::rat_zero(), d.rat().same_refl(), h) }
+
+// Negation turns a negative bound into a positive one.
+theorem Dyadic::neg_pos({d: Dyadic}, h: d < 0): 0 < -d {
+    Rat::lt_respects(Rat::same_sym(Dyadic::rat_neg(0)), Rat::same_sym(d.rat_neg()), Rat::neg_lt(x := d.rat(), y := Dyadic::rat(0), h := h))
+}
+
+// ---------------------------------------------------------------------------
+// The ordered ring (lib/std/algebra/ordered_field.hthr): translation and
+// positive factors keep and reflect `<`, each read off the rationals' law on
+// the images. `Dyadic` is no field (a reciprocal leaves it), so this is
+// where its order and arithmetic meet.
+
+theorem Dyadic::add_lt_mono_r(self a, b, c: Dyadic, h: a < b): a + c < b + c {
+    Rat::lt_respects(Rat::same_sym(a.rat_add(c)), Rat::same_sym(b.rat_add(c)), a.rat().add_lt_mono_r(b.rat(), c.rat(), h))
+}
+
+theorem Dyadic::lt_of_add_lt_add_r(self a, b, c: Dyadic, h: a + c < b + c): a < b {
+    a.rat().lt_of_add_lt_add_r(b.rat(), c.rat(), Rat::lt_respects(a.rat_add(c), b.rat_add(c), h))
+}
+
+theorem Dyadic::mul_lt_mono_l({a, b, c: Dyadic}, h: a < b, hc: 0 < c): c * a < c * b {
+    Rat::lt_respects(Rat::same_sym(c.rat_mul(a)), Rat::same_sym(c.rat_mul(b)), Rat::mul_lt_mono_l(h, Dyadic::rat_pos(hc)))
+}
+
+theorem Dyadic::lt_of_mul_lt_mul_l({a, b, c: Dyadic}, hc: 0 < c, h: c * a < c * b): a < b {
+    Rat::lt_of_mul_lt_mul_l(Dyadic::rat_pos(hc), Rat::lt_respects(c.rat_mul(a), c.rat_mul(b), h))
+}
+
+theorem Dyadic::zero_lt_one(): Dyadic::Lt(0, 1) {
+    Rat::lt_respects(Rat::same_sym(Dyadic::rat_zero()), Rat::same_sym(Dyadic::rat_one()), Rat::zero_lt_one())
+}
+
+instance OrderedAddGroup<Dyadic>(Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add) {
+    add_lt_mono_r := Dyadic::add_lt_mono_r,
+    add_lt_reflect_r := Dyadic::lt_of_add_lt_add_r,
+}
+
+instance LocatedAddGroup<Dyadic>(Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add) {}
+
+instance OrderedRing<Dyadic>(Dyadic::Same, Dyadic::Lt, Dyadic::Le, Dyadic::add, Dyadic::mul) {
+    zero_lt_one := Dyadic::zero_lt_one(),
+    mul_lt_l := λ a b c h hc => Dyadic::mul_lt_mono_l(h, hc),
+    mul_lt_reflect_l := λ a b c hc h => Dyadic::lt_of_mul_lt_mul_l(hc, h),
+}
+
+theorem Dyadic::recip_down_at(m: Nat, e: Int, p: Nat, hm: 0 < m):
+    Dyadic(m.int(), e).recip_down(p).rat() <= Dyadic(m.int(), e).rat().recip()
+{
+    let d = Dyadic(m.int(), e);
+    let K = p + m.width();
+    let q = Nat::pow2_div(K, m).quot();
+    let r = Nat::pow2_div(K, m).rem();
+    let parts: (q * m + r = Nat::pow(2, K)) = Nat::pow2_div_parts(K, m);
+    let lo = Dyadic(q.int(), -e - K.int());
+    let scale: ((lo * d).rat() ≈ Rat((q.int() * m.int()) * 1, Nat::pow(2, K))) = Dyadic::recip_scale(q.int(), m.int(), e, K);
+    let cross: ((q.int() * m.int()) * 1 * 1 <= 1 * Nat::pow(2, K).int()) = omega(parts, Nat::int_mul(q, m));
+    let one: (Rat((q.int() * m.int()) * 1, Nat::pow(2, K)) <= 1) = cross;
+    let prod: (lo.rat() * d.rat() <= 1) = Rat::le_trans(Rat::le_of_same(Rat::same_trans(Rat::same_sym(lo.rat_mul(d)), scale)), one);
+    Rat::le_recip_of_mul_le(Dyadic::rat_pos(Dyadic::pos_of_mant(e, hm)), prod)
+}
+
+theorem Dyadic::recip_up_at(m: Nat, e: Int, p: Nat, hm: 0 < m):
+    Dyadic(m.int(), e).rat().recip() <= Dyadic(m.int(), e).recip_up(p).rat()
+{
+    let d = Dyadic(m.int(), e);
+    let K = p + m.width();
+    let q = Nat::pow2_div(K, m).quot();
+    let r = Nat::pow2_div(K, m).rem();
+    let parts: (q * m + r = Nat::pow(2, K)) = Nat::pow2_div_parts(K, m);
+    let rem: (r < m) = Nat::pow2_div_rem_lt(K, m, d_pos := hm);
+    let hi = Dyadic(Succ(q).int(), -e - K.int());
+    let scale: ((hi * d).rat() ≈ Rat((Succ(q).int() * m.int()) * 1, Nat::pow(2, K))) = Dyadic::recip_scale(Succ(q).int(), m.int(), e, K);
+    let cross: (1 * Nat::pow(2, K).int() <= (Succ(q).int() * m.int()) * 1 * 1) = omega(parts, rem, Nat::int_mul(Succ(q), m), q.mul_succ_left(m));
+    let one: (1 <= Rat((Succ(q).int() * m.int()) * 1, Nat::pow(2, K))) = cross;
+    let prod: (1 <= hi.rat() * d.rat()) = Rat::le_trans(one, Rat::le_of_same(Rat::same_trans(Rat::same_sym(scale), hi.rat_mul(d))));
+    Rat::recip_le_of_one_le_mul(Dyadic::rat_pos(Dyadic::pos_of_mant(e, hm)), prod)
+}
+
+// A positive dyadic has a positive mantissa, so both bounds hold at every
+// positive `d`.
+theorem Dyadic::recip_bounds(self d: Dyadic, p: Nat, pos: 0 < d):
+    d.recip_down(p).rat() <= d.rat().recip() ∧ d.rat().recip() <= d.recip_up(p).rat()
+{
+    match d.mant as λ v => 0 < Dyadic(v, d.exp) →
+        Dyadic(v, d.exp).recip_down(p).rat() <= Dyadic(v, d.exp).rat().recip() ∧ Dyadic(v, d.exp).rat().recip() <= Dyadic(v, d.exp).recip_up(p).rat()
+    {
+        OfNat(n) => match n {
+            Zero => λ h => false_elim(Dyadic::lt_irrefl(0, Dyadic::lt_respects(Dyadic::same_refl(0), Dyadic::zero_mant(d.exp), h))),
+            Succ(j) => λ _ => And(Dyadic::recip_down_at(Succ(j), d.exp, p, trivial), Dyadic::recip_up_at(Succ(j), d.exp, p, trivial)),
+        },
+        NegSucc(j) => λ h => false_elim(Dyadic::lt_irrefl(0, Dyadic::lt_trans(h,
+            Dyadic::lt_respects(Dyadic(NegSucc(j), d.exp).same_refl(), Dyadic::zero_mant(d.exp), Dyadic::lt_of_mant_lt(NegSucc(j), 0, d.exp, Int::negsucc_lt_ofnat(j, 0)))))),
+    }(pos)
+}
+
+// ---------------------------------------------------------------------------
+// Least and greatest of two, and comparisons as verdicts.
+
+fn Dyadic::min(self a, b: Dyadic) → Dyadic { match a.le_dec(b) { Inl(_) => a, Inr(_) => b } }
+
+fn Dyadic::max(self a, b: Dyadic) → Dyadic { match a.le_dec(b) { Inl(_) => b, Inr(_) => a } }
+
+// The smaller is below anything either one is below.
+theorem Dyadic::min_le_of(self a, b: Dyadic, t: Rat, h: a.rat() <= t ∨ b.rat() <= t): a.min(b).rat() <= t {
+    match a.le_dec(b) as λ c => (match c { Inl(_) => a, Inr(_) => b }).rat() <= t {
+        Inl(ab) => match h { Inl(at) => at, Inr(bt) => Rat::le_trans(x := a.rat(), y := b.rat(), z := t, hxy := ab, hyz := bt) },
+        Inr(no) => match h { Inl(at) => Rat::le_trans(Rat::le_of_lt(Rat::lt_of_not_le(x := b.rat(), y := a.rat(), h := no)), at), Inr(bt) => bt },
+    }
+}
+
+theorem Dyadic::le_max_of(self a, b: Dyadic, t: Rat, h: t <= a.rat() ∨ t <= b.rat()): t <= a.max(b).rat() {
+    match a.le_dec(b) as λ c => t <= (match c { Inl(_) => b, Inr(_) => a }).rat() {
+        Inl(ab) => match h { Inl(at) => Rat::le_trans(x := t, y := a.rat(), z := b.rat(), hxy := at, hyz := ab), Inr(bt) => bt },
+        Inr(no) => match h { Inl(at) => at, Inr(bt) => Rat::le_trans(bt, Rat::le_of_lt(Rat::lt_of_not_le(x := b.rat(), y := a.rat(), h := no))) },
+    }
+}
+
+// The larger is above anything either one is above, and the smaller below
+// anything both are above: with the two above, `min` and `max` are a meet and
+// a join modulo `≈` (the `Lattice` instance below).
+theorem Dyadic::le_min_of(self a, b: Dyadic, t: Rat, ha: t <= a.rat(), hb: t <= b.rat()): t <= a.min(b).rat() {
+    match a.le_dec(b) as λ c => t <= (match c { Inl(_) => a, Inr(_) => b }).rat() {
+        Inl(_) => ha,
+        Inr(_) => hb,
+    }
+}
+
+theorem Dyadic::max_le_of(self a, b: Dyadic, t: Rat, ha: a.rat() <= t, hb: b.rat() <= t): a.max(b).rat() <= t {
+    match a.le_dec(b) as λ c => (match c { Inl(_) => b, Inr(_) => a }).rat() <= t {
+        Inl(_) => hb,
+        Inr(_) => ha,
+    }
+}
+
+instance PartialOrderRel<Dyadic>(Dyadic::Same, Dyadic::Le) {
+    le_antisymm := λ a b h1 h2 => Dyadic::same_of_not_lt(Dyadic::not_lt_of_le(h2), Dyadic::not_lt_of_le(h1)),
+}
+
+instance Lattice<Dyadic>(Dyadic::Same, Dyadic::Le, Dyadic::min, Dyadic::max) {
+    meet_le_l := λ a b => a.min_le_of(b, a.rat(), Inl(a.le_refl())),
+    meet_le_r := λ a b => a.min_le_of(b, b.rat(), Inr(b.le_refl())),
+    le_meet := λ a b c ha hb => a.le_min_of(b, c.rat(), ha, hb),
+    le_join_l := λ a b => a.le_max_of(b, a.rat(), Inl(a.le_refl())),
+    le_join_r := λ a b => a.le_max_of(b, b.rat(), Inr(b.le_refl())),
+    join_le := λ a b c ha hb => a.max_le_of(b, c.rat(), ha, hb),
+}
+
+fn Dyadic::lt_bool(self a, b: Dyadic) → Bool { match b.le_dec(a) { Inl(_) => False, Inr(_) => True } }
+
+fn Dyadic::le_bool(self a, b: Dyadic) → Bool { match a.le_dec(b) { Inl(_) => True, Inr(_) => False } }
+
+theorem Dyadic::lt_of_lt_bool(self a, b: Dyadic, h: a.lt_bool(b).IsTrue()): a < b {
+    match b.le_dec(a) as λ c => Bool::IsTrue(match c { Inl(_) => False, Inr(_) => True }) → a < b {
+        Inl(_) => λ no => false_elim(no),
+        Inr(no) => λ _ => Rat::lt_of_not_le(x := a.rat(), y := b.rat(), h := no),
+    }(h)
+}
+
+theorem Dyadic::le_of_le_bool(self a, b: Dyadic, h: a.le_bool(b).IsTrue()): a <= b {
+    match a.le_dec(b) as λ c => Bool::IsTrue(match c { Inl(_) => True, Inr(_) => False }) → a <= b {
+        Inl(yes) => λ _ => yes,
+        Inr(_) => λ no => false_elim(no),
+    }(h)
+}
+
+// The sign read off the mantissa, with no comparison.
+fn Dyadic::nonneg_dec(self d: Dyadic) → 0 <= d ∨ ¬(0 <= d) {
+    match d.mant {
+        OfNat(n) => Inl(Rat::le_respects(x := Dyadic(0, d.exp).rat(), x2 := Dyadic::rat(0), y := Dyadic(OfNat(n), d.exp).rat(), y2 := Dyadic(OfNat(n), d.exp).rat(),
+            hx := Dyadic::zero_mant(d.exp), hy := Rat::same_refl(Dyadic(OfNat(n), d.exp).rat()), h := Dyadic::le_of_mant_le(0, OfNat(n), d.exp, trivial))),
+        NegSucc(n) => Inr(λ h => Dyadic::not_lt_of_le(h, Dyadic::lt_respects(Dyadic(NegSucc(n), d.exp).same_refl(), Dyadic::zero_mant(d.exp),
+            Dyadic::lt_of_mant_lt(NegSucc(n), 0, d.exp, Int::negsucc_lt_ofnat(n, 0))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A rational floored to p bits: ⌊q · 2^p⌋ · 2^-p, within 2^-p of q. The real
+// numbers (std/creal) keep their terms dyadic with it, so a term's size is its
+// precision and not the history of the operations that made it.
+
+fn Dyadic::floor_rat(q: Rat, p: Nat) → Dyadic { Dyadic((q.num * Nat::pow(2, p).int()).div(q.den.int()), -p.int()) }
+
+theorem Dyadic::floor_rat_close(q: Rat, p: Nat): (Dyadic::floor_rat(q, p).rat() - q).abs() <= Rat::inv_pow2(p) {
+    let P = Nat::pow(2, p).int();
+    let D = q.den.int();
+    let N = q.num * P;
+    let d = N.div(D);
+    let m = N.mod(D);
+    let nz: (D ≠ OfNat(0)) = λ e => omega(q.den_pos, e);
+    let parts: (d * D + m = N) = Int::div_mul_add_mod(N, D);
+    let lo: (OfNat(0) <= m) = N.mod_nonneg(D, nz);
+    let hi: (m < D) = N.mod_lt_abs(D, nz);
+    let pnn: (OfNat(0) <= P) = trivial;
+    let parts2: ((d * D + m) * P = N * P) = rewrite(parts, refl);
+    let lo2: (OfNat(0) <= m * P) = m.mul_nonneg(P, lo, pnn);
+    let hi2: (m * P <= D * P) = m.mul_le_mono_r(D, P, m.le_of_lt(D, hi), pnn);
+    let r = Rat(d * Nat::pow(2, 0).int(), Nat::pow(2, p));
+    let at: (Dyadic::floor_rat(q, p).rat() ≈ r) = Dyadic::rat_split(d, -p.int(), 0, p, omega);
+    let c = Rat::inv_pow2(p);
+    let one: (Nat::pow(2, 0).int() = 1) = refl;
+    let dp: (OfNat(0) <= D * P) = D.mul_nonneg(P, trivial, pnn);
+    let rn: (r.num = d * Nat::pow(2, 0).int()) = refl;
+    let rd: (r.den.int() = P) = refl;
+    let sd: ((q + c).den.int() = D * P) = refl;
+    let sn: ((q + c).num = q.num * P + 1 * D) = refl;
+    let td: ((r + c).den.int() = P * P) = refl;
+    let tn: ((r + c).num = r.num * P + 1 * P) = refl;
+    let ea: (r.num * (q + c).den.int() + m * P = (q.num * P) * P) = ring(rn, one, sd, parts2);
+    let eb: ((q + c).num * r.den.int() = (q.num * P) * P + D * P) = ring(sn, rd);
+    let ec: (q.num * (r + c).den.int() = (q.num * P) * P) = ring(td);
+    let ed: ((r + c).num * q.den.int() + m * P = (q.num * P) * P + D * P) = ring(tn, rn, one, parts2);
+    let up: (r <= q + c) = omega(ea, eb, lo2, dp);
+    let down: (q <= r + c) = omega(ec, ed, hi2);
+    let close: ((r - q).abs() <= c) = Rat::dist_le_of_le_add(up, down);
+    Rat::le_respects(Rat::abs_respects(Rat::sub_respects(Rat::same_sym(at), q.same_refl())), Rat::inv_pow2(p).same_refl(), close)
+}
+
+// An integer floors to itself at every precision.
+theorem Dyadic::floor_rat_int(z: Int, p: Nat): Dyadic::floor_rat(Rat::ofInt(z), p).rat() ≈ Rat::ofInt(z) {
+    let P = Nat::pow(2, p).int();
+    let N = z * P;
+    let d = N.div(1);
+    let m = N.mod(1);
+    let nz: (OfNat(1) ≠ OfNat(0)) = λ e => omega(e);
+    let parts: (d * 1 + m = N) = Int::div_mul_add_mod(N, 1);
+    let lo: (OfNat(0) <= m) = N.mod_nonneg(1, nz);
+    let hi: (m < OfNat(1)) = N.mod_lt_abs(1, nz);
+    let zero: (m = 0) = omega(lo, hi);
+    let one: (Nat::pow(2, 0).int() = 1) = refl;
+    let r = Rat(d * Nat::pow(2, 0).int(), Nat::pow(2, p));
+    let at: (Dyadic::floor_rat(Rat::ofInt(z), p).rat() ≈ r) = Dyadic::rat_split(d, -p.int(), 0, p, omega);
+    let rd: (r.den.int() = P) = refl;
+    let exact: (r.num * Rat::ofInt(z).den.int() = Rat::ofInt(z).num * r.den.int()) = ring(parts, zero, one, rd);
+    Rat::same_trans(at, exact)
+}
+
+// The absolute value is exact: the mantissa's, at the same exponent.
+fn Dyadic::abs(self d: Dyadic) → Dyadic { Dyadic(d.mant.abs(), d.exp) }
+
+theorem Dyadic::rat_abs(self d: Dyadic): d.abs().rat() ≈ d.rat().abs() {
+    let P = Nat::pow(2, d.exp.pos_part()).int();
+    let e: ((d.mant * P).abs() = d.mant.abs() * P.abs()) = d.mant.abs_mul(P);
+    let num: (d.mant.abs() * P = (d.mant * P).abs()) = rewrite(e, refl);
+    d.abs().rat().same_of_parts(d.rat().abs(), num, refl)
+}
+
+// ---------------------------------------------------------------------------
+// Trimming: the same value with its mantissa's trailing zero bits moved into
+// the exponent. A term read at `2^-n` carries `n` such bits even when the
+// value is short (`5/8` read at `2^-57`), and a series evaluated at that
+// rational pays for every one of them in its ratios' numerators and
+// denominators; trimmed, it pays for the value's own bits.
+
+fn Dyadic::trim_nat(k, m: Nat, e: Int) → Dyadic {
+    match k {
+        Zero => Dyadic(OfNat(m), e),
+        Succ(j) => match m.even_dec() { Inl(_) => Dyadic::trim_nat(j, m.half(), e + OfNat(1)), Inr(_) => Dyadic(OfNat(m), e) },
+    }
+}
+
+theorem Dyadic::half_shift(m: Nat, e: Int, h: Nat::Even(m)): Dyadic(OfNat(m.half()), e + OfNat(1)) ≈ Dyadic(OfNat(m), e) {
+    let s = (Dyadic(OfNat(m.half()), e)).rat_shift_split(1);
+    let hh: (m.half() + m.half() = m) = m.half_add_half(h);
+    let q: (OfNat(m.half()) * Nat::pow(2, 1).int() = OfNat(m)) = omega(hh);
+    j(q, λ y _ => Dyadic(OfNat(m.half()), e + OfNat(1)) ≈ Dyadic(y, e), s)
+}
+
+theorem Dyadic::trim_nat_same(k: Nat): (m: Nat) → (e: Int) → Dyadic::trim_nat(k, m, e) ≈ Dyadic(OfNat(m), e) {
+    match k {
+        Zero => λ m e => Dyadic::same_refl(Dyadic(OfNat(m), e)),
+        Succ(j) => λ m e => match m.even_dec() as λ D => Dyadic::Same(match D { Inl(_) => Dyadic::trim_nat(j, m.half(), e + OfNat(1)), Inr(_) => Dyadic(OfNat(m), e) }, Dyadic(OfNat(m), e)) {
+            Inl(h) => Dyadic::same_trans(Dyadic::trim_nat_same(j, m.half(), e + OfNat(1)), Dyadic::half_shift(m, e, h)),
+            Inr(_) => Dyadic::same_refl(Dyadic(OfNat(m), e)),
+        },
+    }
+}
+
+fn Dyadic::trim(self d: Dyadic) → Dyadic {
+    match d.mant {
+        OfNat(m) => Dyadic::trim_nat(m.width(), m, d.exp),
+        NegSucc(m) => -Dyadic::trim_nat(Succ(m).width(), Succ(m), d.exp),
+    }
+}
+
+theorem Dyadic::trim_same(self d: Dyadic): d.trim() ≈ d {
+    match d {
+        Dyadic(a, e) => match a {
+            OfNat(m) => Dyadic::trim_nat_same(m.width(), m, e),
+            NegSucc(m) => Dyadic::neg_respects(Dyadic::trim_nat_same(Succ(m).width(), Succ(m), e)),
+        },
+    }
 }

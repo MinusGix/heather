@@ -14,6 +14,9 @@ import        ::= import module ;
 item          ::= fn name type-params? requires? params -> type decreases? block
                 | theorem name type-params? requires? params : type decreases? block
                 | axiom name type-params? requires? params : type ;
+                | def name type-params? (: type)? = expr ;
+                | generator args? (fn ... | theorem ... | def ...)
+                | generate generator args? ;
                 | inductive name type-params? value-params? index? { ctors }
                 | record name type-params? value-params? { fields }
                 | class name <params> value-params? extends? { fields }
@@ -26,6 +29,7 @@ item          ::= fn name type-params? requires? params -> type decreases? block
                 | impl operation for representation { clauses }
                 | impl operation for representation := route() ;
                 | assuming params { item* }
+                | section type-params? requires? params? { (fn | theorem | section)* }
 ```
 
 `fn` uses `->`; theorem-like statements use `:`. A declaration body is a
@@ -68,6 +72,7 @@ expr ::= name | qualified::name | numeral | character | string
        | f(args) | @f(args) | f<types> | receiver.field
        | receiver.method(args) | receiver[index]
        | λ binders => expr | fun binders => expr
+       | ∑ name < expr, expr | ∏ name < expr, expr
        | binders ⊢ expr | binders |- expr
        | apply callee; give expr; ... expr
        | · | ·₀ | ·₁ ...
@@ -109,7 +114,7 @@ Goal discharges occur after the block's result expression. In a `split`,
 
 ```text
 prefix:        -  ¬
-multiplicative: *  ∙
+multiplicative: *  ∙  ⊓
 additive:      +  -  ++  ⊔
 boolean:       &&  ||
 comparison:    <  <=  =  ≠

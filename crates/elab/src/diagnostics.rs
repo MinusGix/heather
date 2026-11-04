@@ -25,6 +25,8 @@ pub enum ElabError {
         span: Span,
         err: TypeError,
         note: Option<String>,
+        /// Whether a site the elaborator recorded explains the refusal.
+        site: KernelSite,
     },
     /// Goals raised in a block that no `on` statement discharged.
     UnsolvedGoals {
@@ -41,6 +43,32 @@ pub enum ElabError {
     ArgSlotEscape {
         span: Span,
     },
+}
+
+/// What said *where* a [`ElabError::Kernel`] refusal is
+/// (`issues/elab-accepts-conjunction-for-equation.md`).
+///
+/// The elaborator records, the gate decides: every place the elaborator puts
+/// a term at a type it did not itself compare records a candidate (a checking
+/// mismatch, an inferred argument's owed check, a written `refl`, a
+/// `decide`), and when the gate refuses, the first candidate that decides the
+/// refusal is where it is reported. A conversion refusal that no candidate
+/// decides is therefore never the user's mistake alone: some route compared
+/// nothing and recorded nothing. That is the class this tells apart, so a
+/// test can refuse to pin one ([`KernelSite::Unrecorded`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelSite {
+    /// A recorded site decided the refusal; the error's span is that site.
+    Recorded,
+    /// A conversion refusal (`NotConvertible`, `HeadMismatch`) of a
+    /// declaration's own body or statement that no recorded site decides.
+    /// The span is the declaration's; the kernel's locator names the term
+    /// it refused, and both types, in the note when they spell.
+    Unrecorded,
+    /// Not a claim this makes: another kind of refusal (fuel, levels, scope),
+    /// or a construction nothing records sites for (a generated definition,
+    /// a `meta fn`).
+    Other,
 }
 
 /// One entry of the unsolved-goal listing.
@@ -76,6 +104,12 @@ pub(crate) const DISPLAY_DECODE_STEPS: usize = 32;
 /// below the kernel's own budget: the note repeats work the gate is about to
 /// do, so it may only pay for the disagreements that are cheap to decide.
 pub(crate) const REFL_NOTE_FUEL: u64 = 1 << 12;
+
+/// The steps `trivial` may spend reading its expected type before leaving it
+/// to the gate (`issues/closed-verdict-evaluated-twice.md`): enough for any
+/// type that is `True` as written or one definition away, far below what a
+/// closed verdict over a computation costs, which the kernel then runs once.
+pub(crate) const VERDICT_READ_STEPS: u64 = 1 << 12;
 
 /// Maximum stuck positions considered during goal motive synthesis.
 pub(crate) const STUCK_CANDIDATES: u32 = 64;

@@ -4,9 +4,8 @@ status: open
 labels: [proofs,elaboration,arithmetic,solver]
 area: tactics
 milestone: [tac-arith]
-blocked-by: [omega-linear-arithmetic]
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-10-28
 ---
 
 Increase Omega's integer completeness beyond the real shadow by implementing
@@ -54,3 +53,4 @@ cheaply than invoking CutSat.
   observed rate does not justify making full grey-shadow enumeration the
   shared arithmetic architecture. Keep this issue open as a measured Omega
   specialization while pursuing model-based CutSat for completeness.
+- 2026-10-28: Tracker tidy: dropped `blocked-by: [omega-linear-arithmetic]`. That issue is closed (the affine solver and its certificates landed), so nothing blocks this one; its scope here is unchanged.

@@ -200,7 +200,7 @@ impl Elaborator {
         if ctor != cons {
             return;
         }
-        if self.warnings.borrow().iter().any(|warning| {
+        if self.pass.warnings.borrow().iter().any(|warning| {
             warning.lint == crate::Lint::ManualListConstruction
                 && warning.span.start <= expr.span.start
                 && expr.span.end <= warning.span.end
@@ -288,7 +288,7 @@ impl Elaborator {
                 );
             }
         }
-        let local = matches!(&base.kind, ExprKind::Var(name) if cx.names.iter().any(|n| n == name));
+        let local = matches!(&base.kind, ExprKind::Var(name) if cx.names.iter_inner().any(|n| n == name));
         let bound = "__with_base";
         let receiver = if local { base.clone() } else { Expr { kind: ExprKind::Var(bound.into()), span: base.span } };
         let written = decl
@@ -323,10 +323,45 @@ impl Elaborator {
     /// The constructor this name refers to *here* — `None` when it is not a
     /// constructor, or when a local binder or `let` alias shadows it.
     pub(super) fn ctor_here(&self, cx: &Cx, name: &str) -> Option<(Rc<Inductive>, usize)> {
-        if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name) {
+        if cx.names.iter_inner().any(|n| n == name) || cx.aliases.iter_inner().any(|a| a.name == *name) {
             return None;
         }
         self.ctor_of(name)
+    }
+
+    /// A bare name that is one constructor and otherwise only **type names**
+    /// — `False` with `bool` and `logic` both imported — read in a term
+    /// position as the constructor (issues/bool-conditions-and-literals.md).
+    ///
+    /// Unlike [`Self::ctor_here_expected`]'s route this is a *choice*, not a
+    /// shrink: in inference position the type reading would have checked too,
+    /// as a code. It is made because every position that wants the type has
+    /// already taken it before a constructor route runs: type position
+    /// filters to `Inductive` names (`names::resolve_kinds`), and checking at
+    /// a universe reads the expression as a type ahead of the constructor arms
+    /// (`elab_check_skel`). What is left is a term whose type is not a
+    /// universe, or not known yet, and there a type written as a value is the
+    /// rare reading — `let P: Type = False` still spells it. Two visible
+    /// constructors, or a function or value of the name, keep the ambiguity:
+    /// those are not settled by position.
+    pub(super) fn ctor_over_types(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
+        // On the miss path of every global name: one table probe first.
+        if name.contains("::") || !self.names.declares_any_as(name, &[NameKind::Ctor]) {
+            return None;
+        }
+        let only_ctors_and_types = {
+            let scopes = self.scope.resolution_scopes.borrow();
+            self.names.visible_entries_are(
+                scopes.last().map(Rc::as_ref),
+                name,
+                &[NameKind::Ctor, NameKind::Inductive],
+            )
+        };
+        if !only_ctors_and_types || !matches!(self.resolve_name(name), crate::names::NameRes::Ambiguous(_)) {
+            return None;
+        }
+        let key = self.key_of_kinds(name, &[NameKind::Ctor])?;
+        self.types.constructor(&key).map(|(i, k)| (Rc::clone(i), *k))
     }
 
     /// The declaration an expected type names, for the checking-position
@@ -426,7 +461,7 @@ impl Elaborator {
         if let Some(hit) = self.ctor_here(cx, name) {
             return Some(hit);
         }
-        if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name) {
+        if cx.names.iter_inner().any(|n| n == name) || cx.aliases.iter_inner().any(|a| a.name == *name) {
             return None;
         }
         if !self.only_ctors_visible(name) {
@@ -501,7 +536,7 @@ impl Elaborator {
         // type name has a universe type and cannot check there; dropping that
         // reading is therefore a shrink, while a `Global` or `Meta` may return
         // the expected type and must still make this route stand down.
-        let scopes = self.resolution_scopes.borrow();
+        let scopes = self.scope.resolution_scopes.borrow();
         self.names.visible_entries_are(
             scopes.last().map(Rc::as_ref),
             name,
@@ -821,6 +856,7 @@ impl Elaborator {
                 ty: ty.shift_local(1),
                 level: level.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
             if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
                 tcx.op_locals.push((sym.clone(), pname.clone()));
@@ -875,7 +911,7 @@ impl Elaborator {
                 Some(real) => self.elab_check(cx, arg.borrow(), &real, fst_level)?,
                 None => match self.elab_infer(cx, arg.borrow()) {
                     Ok((tm, ty, _)) => {
-                        self.unify_arg_ty(cx, fst, &ty, n, &mut sols, span);
+                        self.unify_arg_ty(cx, fst, &ty, n, &mut sols, &[], crate::unification::Guesses::Take, span);
                         tm
                     }
                     Err(e) => {

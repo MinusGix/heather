@@ -25,7 +25,8 @@
 //! read that verdict, and their `refl` pins have sides no display can spell —
 //! it moves the report to the `refl` and appends the two sides.
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, KernelSite};
+use heather_kernel::typing::TypeError;
 
 const LIST: &str = "
 inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
@@ -486,4 +487,115 @@ fn an_inferred_argument_of_the_right_type_is_accepted() {
          theorem good_field(a: Nat, h: 0 = a): Q(a) {{ let q = Q::MkQ(h); q }}\n\
          theorem good_open<A>(x, y: A, h: y = x): x = x {{ g(y, h) }}\n"
     ));
+}
+
+const REDEX: &str = "
+record And<P, Q> { left: P, right: Q }
+theorem weaken_like(pre, entry: Nat → Type, into: (s: Nat) → entry(s) → pre(s)): True { trivial }
+";
+
+/// A mismatch whose type has a β-redex in it
+/// (`issues/elab-accepts-mismatch-under-redex-head.md`). A `let`-bound λ at
+/// the head of an annotation, or a binder whose type is an instantiated λ
+/// parameter (`entry(s)` with `entry := λ s => P(s)`), leaves a redex in the
+/// type the note holds. The note was recorded and the gate refused at the
+/// right expression, but a redex has no surface spelling, so the report was
+/// the kernel's `NotConvertible` with one side unspelled. The display now
+/// spells a redex as its contractum, at the head and inside an argument, and
+/// through a curried spine.
+#[test]
+fn a_mismatch_under_a_redex_head_is_spelled_at_the_expression() {
+    let cases = [
+        (
+            "theorem bad(f: Nat → Nat, P: Nat → Type, n: Nat, h: P(n)): True { \
+             let post = λ (u: Nat) => P(u); let x: post(f(n)) = h; trivial }",
+            "h",
+            "`P(n)`, but `P(f(n))`",
+        ),
+        (
+            "theorem bad(f: Nat → Nat, P: Nat → Type, n: Nat, h: P(n)): True { \
+             let post = λ (u: Nat) (v: Nat) => P(v); let x: post(n, f(n)) = h; trivial }",
+            "h",
+            "`P(n)`, but `P(f(n))`",
+        ),
+        (
+            "theorem bad(f: Nat → Nat, P: Nat → Type, n: Nat, h: P(n) ∧ True): True { \
+             let post = λ (u: Nat) => P(u); let x: post(f(n)) ∧ True = h; trivial }",
+            "h",
+            "`And<P(n), True>`, but `And<P(f(n)), True>`",
+        ),
+        (
+            "theorem bad(f: Nat → Nat, P: Nat → Type, Q: Type, q: Q): True { \
+             weaken_like(λ (s: Nat) => P(f(s)) ∧ Q, λ (s: Nat) => P(s), λ s held => ⟨held, q⟩) }",
+            "held",
+            "`P(s)`, but `P(f(s))`",
+        ),
+    ];
+    for (case, at, types) in cases {
+        let src = format!("{REDEX}{case}\n");
+        let r = reject(&src);
+        let rendered = r.render(&src);
+        assert!(rendered.contains(&format!("this has type {types} is expected here")), "{case}\n{rendered}");
+        assert!(!rendered.contains("the kernel rejected"), "{case}\n{rendered}");
+        let ElabError::Elab { span, .. } = r else { panic!("{case}: expected an elaborator error: {r}") };
+        let start = src.rfind(case).unwrap() + case.find('{').unwrap();
+        assert!(span.start as usize > start, "{case}: reported outside the body\n{rendered}");
+        assert_eq!(&src[span.start as usize..span.end as usize], at, "{case}\n{rendered}");
+    }
+}
+
+/// **Control for the redex spelling.** The same shapes at the right type are
+/// accepted: the contraction is the display's, and checking never sees it.
+#[test]
+fn a_redex_head_of_the_right_type_is_accepted() {
+    ok(&format!("{REDEX}\
+        theorem good(f: Nat → Nat, P: Nat → Type, n: Nat, h: P(f(n))): True {{ \
+        let post = λ (u: Nat) => P(u); let x: post(f(n)) = h; trivial }}\n\
+        theorem good_binder(P: Nat → Type, Q: Type, q: Q): True {{ \
+        weaken_like(λ (s: Nat) => P(s) ∧ Q, λ (s: Nat) => P(s), λ s held => ⟨held, q⟩) }}\n"));
+}
+
+/// **The net under the class** (`issues/elab-accepts-conjunction-for-equation.md`).
+/// A refusal no recorded site explains is a route that placed a term without
+/// comparing or recording it; each one was found by bisecting a bare
+/// `NotConvertible`. The filed case is re-opened here as it stood before
+/// #168 — the inferred argument of `sym`/`trans` owing no check — and the
+/// kernel's locator must still name the refused term and both types, flag
+/// the refusal as unrecorded, and leave the verdict and the span the gate's.
+#[test]
+fn an_unrecorded_refusal_names_the_refused_term_and_both_types() {
+    const BOTH: &str = "record Both<P, Q> { l: P, r: Q }\n";
+    let cases = [
+        ("theorem bad4(a, b: Nat, p: Both<a = b, b = b>): b = a { sym(p) }", "theorem bad4("),
+        ("theorem bad2(a, b, c: Nat, p: Both<a = b, b = b>, q: b = c): a = c { trans(p, q) }", "theorem bad2("),
+    ];
+    for (case, head) in cases {
+        let src = format!("{BOTH}{case}\n");
+        let mut e = Elaborator::with_prelude().expect("prelude");
+        e.forget_owed_argument_checks();
+        let r = e.elab_source(&src).expect_err("refused");
+        let rendered = r.render(&src);
+        let ElabError::Kernel { span, err, site, .. } = &r else { panic!("{case}: expected the kernel's refusal: {rendered}") };
+        assert_eq!(*site, KernelSite::Unrecorded, "{case}\n{rendered}");
+        assert_eq!(*err, TypeError::NotConvertible, "{case}\n{rendered}");
+        assert!(src[span.start as usize..].starts_with(head), "{case}: the span stays the declaration's\n{rendered}");
+        assert!(
+            rendered.contains("no checking site recorded this refusal: the kernel refused `p`, \
+                               which has type `Both<a = b, b = b>`, where `a = b` is expected"),
+            "{case}\n{rendered}"
+        );
+    }
+}
+
+/// **Control for the net.** With the route recording, the same refusals are
+/// the elaborator's, at `p`, and nothing is called unrecorded.
+#[test]
+fn a_recorded_site_still_reports_at_the_argument() {
+    let src = "record Both<P, Q> { l: P, r: Q }\n\
+               theorem bad4(a, b: Nat, p: Both<a = b, b = b>): b = a { sym(p) }\n";
+    let r = reject(src);
+    let rendered = r.render(src);
+    let ElabError::Elab { span, .. } = &r else { panic!("expected the elaborator's report: {rendered}") };
+    assert_eq!(&src[span.start as usize..span.end as usize], "p", "{rendered}");
+    assert!(rendered.contains("this has type `Both<a = b, b = b>`, but `a = b` is expected here"), "{rendered}");
 }

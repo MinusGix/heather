@@ -31,8 +31,12 @@ impl Elaborator {
         carrier: &Type,
         clvl: &Level,
     ) -> Option<Vec<Expr>> {
-        let tkey = self.key_of(target)?;
-        for d in cx.dicts.iter().rev() {
+        // `target` is a written name or, for a class the dot sugars reached
+        // through a binder's ancestors and not by name, its key.
+        let tkey = self
+            .key_of(target)
+            .or_else(|| self.traits.class(target).map(|_| target.to_string()))?;
+        for d in cx.dicts.iter_inner() {
             let Some(dkey) = self.key_of(&d.class) else {
                 continue;
             };
@@ -51,21 +55,10 @@ impl Elaborator {
                 let Some(anc) = self.unqualified_ancestor(dinfo, &tkey) else {
                     continue;
                 };
-                // The ancestor's index is written in the child's own
-                // value-parameter names (layer 1's `extends` restriction), so
-                // instantiating it is the positional lookup.
-                anc.index
-                    .iter()
-                    .map(|a| match &a.kind {
-                        ExprKind::Var(n) => dinfo
-                            .valparams
-                            .iter()
-                            .position(|p| p.name == *n)
-                            .and_then(|i| d.index.get(i).cloned())
-                            .unwrap_or_else(|| a.clone()),
-                        _ => a.clone(),
-                    })
-                    .collect()
+                // The ancestor's index is written in the child's names, and
+                // may be computed from them (`RelId<A>` under `Monoid<A>(op)`):
+                // instantiated at this binder's carrier and index.
+                traits::ancestor_index_at(dinfo, std::slice::from_ref(&d.carrier), &d.index, anc)
             };
             // The carrier has to be *this* one: a second class binder at an
             // unrelated type is not an answer.
@@ -89,6 +82,7 @@ impl Elaborator {
     pub(crate) fn index_vargs(
         &self,
         cx: &Cx,
+        key: &str,
         info: &traits::ClassInfo,
         ind: &Inductive,
         targs: &[(Type, Level)],
@@ -99,11 +93,11 @@ impl Elaborator {
             return Ok(Some(Vec::new()));
         }
         let (carrier, clvl) = &targs[0];
-        let Some(index) = self.scope_index(cx, &info.name, carrier, clvl) else {
+        let Some(index) = self.scope_index(cx, key, carrier, clvl) else {
             // The carrier's head where it has one: at `Bool` the refusal lists
             // the two Bool structures and not every instance of the class.
             let head = self.carrier_of_ty(cx, carrier, span);
-            return Err(self.value_slot_refusal(info, subject, head.as_ref(), span));
+            return Err(self.value_slot_refusal(info, Some(key), subject, head.as_ref(), span));
         };
         match self.valparam_args(cx, ind, targs, &index, span) {
             Ok(v) => Ok(Some(v)),
@@ -340,8 +334,40 @@ impl Elaborator {
 
     /// The innermost dictionary in scope whose class is `tkey` or a descendant
     /// of it, with its index expressed **at that class**.
+    ///
+    /// A **merged** class (constraints sharing symbols at one carrier,
+    /// issues/constraints-sharing-indices.md) has no dictionary of its own in
+    /// a scope that holds its parents' — a section's `K: OrderedField(…)`
+    /// beside the `CommRingOfInt` a tactic put in scope — so its index is
+    /// read off theirs, each slot from the first parent that fills it.
     pub(crate) fn scope_dict_index(&self, cx: &Cx, tkey: &str) -> Option<Vec<Option<Expr>>> {
-        for d in cx.dicts.iter().rev() {
+        let own = self.scope_dict_index_own(cx, tkey);
+        if own.is_some() {
+            return own;
+        }
+        let class = self.traits.class(tkey)?;
+        if !class.name.contains('+') {
+            return None;
+        }
+        let parts: Vec<&str> = class.name.split('+').collect();
+        let bare = |n: &str| n.rsplit("::").next().unwrap_or(n).to_string();
+        let mut out: Vec<Option<Expr>> = vec![None; class.valparams.len()];
+        for a in class.ancestors.iter().filter(|a| a.path.is_empty() && parts.contains(&bare(&a.name).as_str())) {
+            let Some(akey) = self.key_of(&a.name) else { continue };
+            let Some(got) = self.scope_dict_index_own(cx, &akey) else { continue };
+            for (e, g) in a.index.iter().zip(got) {
+                let ExprKind::Var(nm) = &e.kind else { continue };
+                let Some(at) = class.valparams.iter().position(|v| v.name == *nm) else { continue };
+                if out[at].is_none() {
+                    out[at] = g;
+                }
+            }
+        }
+        out.iter().any(Option::is_some).then_some(out)
+    }
+
+    fn scope_dict_index_own(&self, cx: &Cx, tkey: &str) -> Option<Vec<Option<Expr>>> {
+        for d in cx.dicts.iter_inner() {
             let Some(dkey) = self.key_of(&d.class) else {
                 continue;
             };
@@ -352,18 +378,7 @@ impl Elaborator {
                 return Some(d.index.iter().cloned().map(Some).collect());
             }
             let at_binder = |anc: &heather_syntax::ClassRef| -> Vec<Expr> {
-                anc.index
-                    .iter()
-                    .map(|a| match &a.kind {
-                        ExprKind::Var(nm) => dinfo
-                            .valparams
-                            .iter()
-                            .position(|p| p.name == *nm)
-                            .and_then(|i| d.index.get(i).cloned())
-                            .unwrap_or_else(|| a.clone()),
-                        _ => a.clone(),
-                    })
-                    .collect()
+                traits::ancestor_index_at(dinfo, std::slice::from_ref(&d.carrier), &d.index, anc)
             };
             let fibers: Vec<Vec<Expr>> = dinfo
                 .ancestors
@@ -399,10 +414,36 @@ impl Elaborator {
     /// dictionary binder and every `.f` that is not one of its class's
     /// indices, so an ordinary field projection is untouched.
     pub(crate) fn index_of_dict(&self, cx: &Cx, dict: &str, name: &str) -> Option<Expr> {
-        let d = cx.dicts.iter().rev().find(|d| d.name == dict)?;
+        let d = cx.dicts.iter_inner().find(|d| d.name == dict)?;
         let info = self.lookup_class(&d.class)?;
         let k = info.valparams.iter().position(|p| p.name == name)?;
         d.index.get(k).cloned()
+    }
+
+    /// `owner` itself when this scope can name it; otherwise the nameable
+    /// class that reaches it as an ancestor and has no nameable ancestor
+    /// that also does — `Semigroup` for `Associative`, `Monoid` for
+    /// `MonoidRel` — first by key. `None` when nothing nameable reaches it.
+    fn nearest_nameable_descendant(&self, owner: &str) -> Option<(String, std::sync::Arc<traits::ClassInfo>)> {
+        let nameable = |key: &str, info: &traits::ClassInfo| self.key_of(&info.name).as_deref() == Some(key);
+        if let Some(info) = self.traits.class(owner)
+            && nameable(owner, info)
+        {
+            return None;
+        }
+        let reaches = |info: &traits::ClassInfo, target: &str| {
+            info.ancestors.iter().any(|a| self.key_of(&a.name).as_deref() == Some(target))
+        };
+        let mut found: Vec<(String, std::sync::Arc<traits::ClassInfo>)> = self
+            .traits
+            .classes_iter()
+            .filter(|(key, info)| nameable(key, info) && reaches(info, owner))
+            .map(|(key, info)| (key.clone(), std::sync::Arc::clone(info)))
+            .collect();
+        let keys: Vec<String> = found.iter().map(|(k, _)| k.clone()).collect();
+        found.retain(|(key, info)| !keys.iter().any(|other| other != key && reaches(info, other)));
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        found.into_iter().next()
     }
 
     /// The value-slot refusal (`docs/operation-indexed-classes-design.md` §5,
@@ -413,16 +454,26 @@ impl Elaborator {
     pub(crate) fn value_slot_refusal(
         &self,
         class: &traits::ClassInfo,
+        key: Option<&str>,
         subject: &str,
         head: Option<&Carrier>,
         span: Span,
     ) -> ElabError {
-        let Some(ckey) = self.key_of(&class.name) else {
+        let Some(owner) = self.key_of(&class.name).or_else(|| key.map(str::to_string)) else {
             return ElabError::Elab {
                 msg: format!("`{}` is not in scope", class.name),
                 span,
             };
         };
+        // A member whose owner the client cannot name (`assoc`, owned by
+        // `algebra_rel`'s `Associative`, read under `algebra`'s `Semigroup`)
+        // is reported at the nearest classes the client can name that reach
+        // it: those are the dictionaries the reader can write.
+        let (ckey, class) = match self.nearest_nameable_descendant(&owner) {
+            Some(found) => found,
+            None => (owner, std::sync::Arc::new(class.clone())),
+        };
+        let class = &*class;
         // Both registries key the carrier by its *resolved* declaration
         // (docs/instance-resolved-key-design.md §3), and the carrier read off
         // the lowered type carries that key beside its spelling, so this

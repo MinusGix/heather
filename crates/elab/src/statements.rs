@@ -16,7 +16,7 @@
 //! sides, a constructor's field types — to the gate. So a `let` no use
 //! spliced (`let p = P(2, refl); 0`) would be accepted however wrong its
 //! value. A block therefore ends by wrapping such a value around its result
-//! as a redex that discards it, `(λ _: T. rest)(v)`
+//! as a redex that discards it, `(λ _: T. λ b: B. b)(v)(rest)`
 //! ([`LetValue::discard_around`]); a value some use spliced is already
 //! checked there.
 
@@ -24,7 +24,7 @@ use std::sync::Arc as Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalSubst, Term, Type};
+use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Block, Expr, ExprKind, LamBinder, Pat, Span, Stmt, Ty};
 
 use crate::inductive::Inductive;
@@ -44,6 +44,13 @@ pub(crate) trait StatementElab {
     ) -> R<Term>;
 
     fn infer_statement_expression(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)>;
+
+    /// A marked method call `x.m(a)` ([`heather_syntax::MUTCALL`]), inferred
+    /// where its dot call may resolve to a `mut self` method: everywhere
+    /// else the elaborator refuses one, since nothing threads its receiver.
+    fn infer_mut_call(&self, cx: &Cx, call: &Expr) -> R<(Term, Type, Level)> {
+        self.infer_statement_expression(cx, call)
+    }
 
     /// A local or alias in scope, by name, read without recording a splice
     /// (`Elaborator::resolve_reading`): the right side of a renaming `let`.
@@ -113,6 +120,15 @@ pub(crate) fn elaborate<'s>(
     for (index, statement) in statements.iter().enumerate() {
         match statement {
             Stmt::Let { opaque: true, .. } => return Ok((cx, values, &statements[index..])),
+            Stmt::Let { name, ty: None, expr, span, .. } if let Some((call, claimed)) = method_on_mutable(expr) => {
+                values.extend(elaborate_mut_call(elab, &mut cx, name, call, claimed, *span)?);
+            }
+            // An annotated candidate the declaring block did not claim (it
+            // splits a claimed one through a private name): an ordinary
+            // `let`, where a `mut self` call is refused at the dot call.
+            Stmt::Let { name, ty: Some(ty), expr, .. } if let Some((call, _)) = method_on_mutable(expr) => {
+                values.extend(elaborate_let(elab, &mut cx, name, Some(ty), call)?);
+            }
             Stmt::Let { name, ty, expr, .. } => {
                 values.extend(elaborate_let(elab, &mut cx, name, ty.as_ref(), expr)?);
             }
@@ -129,6 +145,88 @@ pub(crate) fn elaborate<'s>(
         }
     }
     Ok((cx, values, &[]))
+}
+
+/// A method call on a mutable local (docs/sequencing-surface-design.md §8.2,
+/// [`heather_syntax::MUTCALL`]): the call, and whether the local's own block
+/// claimed it.
+fn method_on_mutable(e: &Expr) -> Option<(&Expr, bool)> {
+    let ExprKind::App { head, args, .. } = &e.kind else { return None };
+    let ExprKind::Var(n) = &head.kind else { return None };
+    let claimed = if n == heather_syntax::MUTATED { true } else if n == heather_syntax::MUTCALL { false } else { return None };
+    match args.as_slice() {
+        [call] => Some((call, claimed)),
+        _ => None,
+    }
+}
+
+/// `let p = x.m(a);` or the statement `x.m(a);` (at a `#seq` name) on a
+/// mutable `x`. A method returning `Mutated` (a `mut self` method) binds `p`
+/// to the value and `x` to the receiver after the call, both projections of
+/// the one call, so a use of either keeps it; any other method is an
+/// ordinary `let`.
+fn elaborate_mut_call(
+    elab: &impl StatementElab,
+    cx: &mut Cx,
+    name: &str,
+    call: &Expr,
+    claimed: bool,
+    span: Span,
+) -> R<Option<LetValue>> {
+    let ExprKind::Dot { recv, name: method, .. } = &call.kind else {
+        unreachable!("the parser marks method calls only")
+    };
+    let ExprKind::Var(receiver) = &recv.kind else { unreachable!("the parser marks calls on a local only") };
+    let statement = name.starts_with("#seq");
+    let (term, ty, level) = elab.infer_mut_call(cx, call)?;
+    let record = elab
+        .record_for_destructuring(cx, &ty, span)
+        .filter(|r| r.name == heather_syntax::MUTATED_RECORD);
+    let Some(record) = record else {
+        if statement {
+            return err(
+                format!(
+                    "`{receiver}.{method}(…)` does not update `{receiver}` (`{method}` is not a `mut self` \
+                     method), so this statement discards its value: bind it with `let`"
+                ),
+                span,
+            );
+        }
+        let value = LetValue::new(Rc::new(term), ty, level);
+        cx.aliases.push(Rc::new(value.alias(name.to_string(), cx.names.len(), None)));
+        return Ok(Some(value));
+    };
+    if !claimed {
+        return err(
+            format!(
+                "`{method}` is a `mut self` method, so it updates its receiver, and `{receiver}` cannot be \
+                 updated here: call it on a `let mut` local of this function's own blocks (not through a λ), \
+                 or call `{method}` by its qualified name for the `Mutated` record"
+            ),
+            span,
+        );
+    }
+    let whole = LetValue::new(Rc::new(term), ty.clone(), level);
+    let mut bind = |cx: &mut Cx, alias: &str, index: usize| -> R<()> {
+        let (term, ty, level) =
+            elab.project_destructured_field(cx, &record, &ty, Rc::clone(&whole.term), index, span)?;
+        cx.aliases.push(Rc::new(Alias {
+            spliced: Some(Rc::clone(&whole.spliced)),
+            skel: None,
+            name: alias.to_string(),
+            depth: cx.names.len(),
+            term: Rc::new(term),
+            ty,
+            level,
+            shifted: Default::default(),
+        }));
+        Ok(())
+    };
+    bind(cx, receiver, 0)?;
+    if !statement {
+        bind(cx, name, 1)?;
+    }
+    Ok(Some(whole))
 }
 
 /// A written `let`'s value (a record `let`'s whole right side), kept until
@@ -161,14 +259,22 @@ impl LetValue {
             level: self.level.clone(),
             skel,
             spliced: Some(Rc::clone(&self.spliced)),
+            shifted: Default::default(),
         }
     }
 
     /// `body`, of `body_type` at `body_level` in `cx`, the context the values
-    /// were bound in, with every value no use spliced wrapped around it as
-    /// `(λ _: T. body)(v)` — outermost first, so the redexes read in the order
-    /// the `let`s were written. The block's type is unchanged: the binder is
-    /// unused, so the codomain instantiated at `v` is `body_type` again.
+    /// were bound in, with every value no use spliced discarded around it as
+    /// `(λ _: T. λ b: B. b)(v)(body)` — outermost first, so the redexes read
+    /// in the order the `let`s were written. The block's type is unchanged:
+    /// the discarding function is the identity on `B` once `v` is given.
+    ///
+    /// Each value, its type and `body` stay at the block's own depth: only
+    /// `B` goes under the discarding binder, once for the whole block
+    /// ([`Discard`]). Wrapping as `(λ _: T. body)(v)` instead put the rest
+    /// of the block one binder deeper per value, so `k` unused proofs about
+    /// a shared chain shifted the body `k` times and handed the gate the
+    /// chain at `k` depths (`issues/discarded-let-values-nest-binders.md`).
     pub(crate) fn discard_around(
         elab: &impl StatementElab,
         cx: &Cx,
@@ -177,18 +283,70 @@ impl LetValue {
         body_type: &Type,
         body_level: &Level,
     ) -> Term {
-        values
+        let unused: Vec<LetValue> = values
             .into_iter()
-            .rev()
             .filter(|value| !value.spliced.load(Ordering::Relaxed))
-            .fold(body, |body, value| {
-                HaveValue {
-                    term: value.term,
-                    ty: Rc::new(elab.annotation(cx, &value.ty)),
-                    level: value.level,
-                }
-                .redex(body.shift_local(1), body_type.shift_local(1), body_level.clone())
-            })
+            .collect();
+        if unused.is_empty() {
+            return body;
+        }
+        let discard = Discard::new(elab, cx, body_type, body_level);
+        unused.into_iter().rev().fold(body, |body, value| discard.around(elab, cx, value, body))
+    }
+}
+
+/// What every discarding redex of one block shares: the block's type `B`
+/// and the identity on it under the discarded value's binder, built once so
+/// that each redex holds the same nodes.
+struct Discard {
+    level: Level,
+    /// `B`, as an annotation slot.
+    ty: Rc<Type>,
+    /// `B` under one binder: the codomain of `app(…; b: B. B↑)`.
+    ty_under: Rc<Type>,
+    /// `λ b: B↑. b`, under the discarded value's binder.
+    identity: Rc<Term>,
+    /// Its type there, `Π(b: B↑). B↑↑`.
+    identity_ty: Rc<Type>,
+}
+
+impl Discard {
+    fn new(elab: &impl StatementElab, cx: &Cx, body_type: &Type, body_level: &Level) -> Self {
+        let ty = elab.annotation(cx, body_type);
+        let ty_under = Rc::new(ty.shift_local(1));
+        let identity_ty = Rc::new(Type::Pi {
+            dom_level: body_level.clone(),
+            cod_level: body_level.clone(),
+            dom: Rc::clone(&ty_under),
+            cod: Rc::new(ty.shift_local(2)),
+        });
+        let identity = Rc::new(Term::Lam {
+            dom_level: body_level.clone(),
+            cod_level: body_level.clone(),
+            dom: Rc::clone(&ty_under),
+            body: Rc::new(Term::Var(LocalVar(0))),
+        });
+        Discard { level: body_level.clone(), ty: Rc::new(ty), ty_under, identity, identity_ty }
+    }
+
+    /// `app(app(λ(_: T). λ(b: B↑). b; v); body)`, both applications in the
+    /// kernel's annotated form ([`HaveValue::redex`]). `Π(b: B↑). B↑↑` has
+    /// level `l_B ⊔ l_B`, which is `l_B`.
+    fn around(&self, elab: &impl StatementElab, cx: &Cx, value: LetValue, body: Term) -> Term {
+        let keep = HaveValue {
+            term: value.term,
+            ty: Rc::new(elab.annotation(cx, &value.ty)),
+            level: value.level,
+        }
+        .redex_shared(Rc::clone(&self.identity), Rc::clone(&self.identity_ty), self.level.clone());
+        Term::App {
+            fun: Rc::new(keep),
+            dom_level: self.level.clone(),
+            cod_level: self.level.clone(),
+            dom: Rc::clone(&self.ty),
+            cod: Rc::clone(&self.ty_under),
+            arg: Rc::new(body),
+        }
     }
 }
 
@@ -306,17 +464,22 @@ impl HaveValue {
     /// application, not `AppAt`: the unannotated form infers its function,
     /// and a λ whose body only checks does not infer.
     fn redex(self, body: Term, body_type: Type, body_level: Level) -> Term {
+        self.redex_shared(Rc::new(body), Rc::new(body_type), body_level)
+    }
+
+    /// [`Self::redex`] over a body and type already shared.
+    fn redex_shared(self, body: Rc<Term>, body_type: Rc<Type>, body_level: Level) -> Term {
         Term::App {
             fun: Rc::new(Term::Lam {
                 dom_level: self.level.clone(),
                 cod_level: body_level.clone(),
                 dom: Rc::clone(&self.ty),
-                body: Rc::new(body),
+                body,
             }),
             dom_level: self.level,
             cod_level: body_level,
             dom: self.ty,
-            cod: Rc::new(body_type),
+            cod: body_type,
             arg: self.term,
         }
     }
@@ -371,6 +534,7 @@ fn elaborate_let(
             ty,
             level,
             spliced: splice,
+            shifted: Default::default(),
         }));
         return Ok(None);
     }
@@ -391,8 +555,8 @@ fn elaborate_let(
 /// the same name hides it.
 fn renamed(cx: &Cx, expression: &Expr) -> Option<Option<Rc<AtomicBool>>> {
     let ExprKind::Var(name) = &expression.kind else { return None };
-    let local = cx.names.iter().rposition(|n| n == name);
-    let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+    let local = cx.names.lookup(name);
+    let alias = cx.aliases.iter_inner().find(|a| a.name == *name);
     match (local, alias) {
         (Some(pos), Some(a)) if a.depth <= pos => Some(None),
         (_, Some(a)) => Some(a.spliced.clone()),
@@ -504,6 +668,7 @@ fn elaborate_record_let(
             term: Rc::new(term),
             ty,
             level,
+            shifted: Default::default(),
         }));
     }
     Ok(whole)
@@ -544,7 +709,7 @@ mod tests {
             let ExprKind::Var(name) = &expression.kind else {
                 panic!("the fixture checks an alias reference");
             };
-            assert!(cx.aliases.iter().any(|alias| alias.name == *name));
+            assert!(cx.aliases.iter_inner().any(|alias| alias.name == *name));
             self.checked.set(self.checked.get() + 1);
             Ok(Term::Zero)
         }

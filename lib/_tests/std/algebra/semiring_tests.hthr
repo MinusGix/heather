@@ -6,7 +6,7 @@
 // §4.5). Moved from crates/elab/tests/lib_std_semiring.rs; the refusals that
 // need the checker stay there.
 import logic; import nat; import int; import list; import relation;
-import relation_props; import algebra_rel; import semiring; import rat;
+import relation_props; import algebra_rel; import algebra; import semiring; import rat;
 
 fn nat_layers() → Nat {
     let a = Nat::CommSemiring(RelId, Nat::add, Nat::mul);
@@ -57,3 +57,62 @@ theorem sum_distribution<A: Semiring(≈, +, *)>(x: A, ys: List<A>): x ≈ x {
 
 // At `Rat` a ring law holds modulo `≈`.
 theorem rat_signs(x, y: Rat): -x * -y ≈ x * y { Ring::neg_mul_neg(x, y) }
+
+// ---------------------------------------------------------------------------
+// One theorem library (docs/relation-indexed-algebra-design.md): `algebra`'s
+// identity classes are `algebra_rel`'s at `RelId`, so a relational theorem is
+// spent at an identity structure and at an unreduced one alike.
+
+// The fold's append law at `Nat` under `+`, reached from the identity
+// `CommMonoid<Nat>(add)`'s registered parent, and at `Rat` modulo `Rat::Same`.
+theorem nat_fold_append(xs, ys: List<Nat>):
+    MonoidRel::fold(Nat::add, xs ++ ys) = MonoidRel::fold(Nat::add, xs) + MonoidRel::fold(Nat::add, ys)
+{
+    MonoidRel::fold_append(Nat::add, xs, ys)
+}
+theorem rat_fold_append(xs, ys: List<Rat>):
+    MonoidRel::fold(+, xs ++ ys) ≈ MonoidRel::fold(+, xs) + MonoidRel::fold(+, ys)
+{
+    MonoidRel::fold_append(+, xs, ys)
+}
+// The product, through the ring's tagged `multiplicative` view at `Rat`.
+theorem rat_fold_append_mul(xs, ys: List<Rat>):
+    MonoidRel::fold(*, xs ++ ys) ≈ MonoidRel::fold(*, xs) * MonoidRel::fold(*, ys)
+{
+    MonoidRel::fold_append(*, xs, ys)
+}
+
+// The identity fold is the relational one: `mconcat` unfolds to it, so the
+// relational law is a law about `sum`.
+theorem nat_sum_append(xs, ys: List<Nat>): (xs ++ ys).sum() = xs.sum() + ys.sum() {
+    MonoidRel::fold_append(Nat::add, xs, ys)
+}
+
+// A generic identity consumer reaches the relational theorem from its own
+// `Monoid(op)` binder: the binder proposes `RelId<A>` for the relation.
+theorem mconcat_append<A: Monoid(op)>(op as ∙: A → A → A, xs, ys: List<A>):
+    (xs ++ ys).mconcat(op) = xs.mconcat(op) ∙ ys.mconcat(op)
+{
+    MonoidRel::fold_append(op, xs, ys)
+}
+// …spent at three identity structures, one of them at an open carrier.
+theorem int_sum_append(xs, ys: List<Int>): (xs ++ ys).mconcat(Int::mul) = xs.mconcat(Int::mul) * ys.mconcat(Int::mul) {
+    mconcat_append(Int::mul, xs, ys)
+}
+theorem bool_all_append(xs, ys: List<Bool>): (xs ++ ys).all_of() = xs.all_of().and(ys.all_of()) {
+    mconcat_append(Bool::and, xs, ys)
+}
+theorem concat_append<B>(xss, yss: List<List<B>>): (xss ++ yss).concat() = xss.concat() ++ yss.concat() {
+    mconcat_append(List::append, xss, yss)
+}
+
+// Uniqueness of inverses, one proof: the identity name at `Int`, the
+// relational one at `Rat` modulo `≈`.
+theorem int_inv_unique(x, y: Int, h: x + y = OfNat(0)): y = -x { op_inv_unique(x, y, h) }
+theorem rat_inv_unique(x, y: Rat, h: x + y ≈ 0): y ≈ -x { GroupRel::inv_unique(+, x, y, h) }
+
+// The dictionary views: the identity structure's relational parent is the
+// registered relational instance, the very dictionary the ring holds.
+theorem nat_views_agree(): Nat::CommMonoid(Nat::add).unit = Nat::CommMonoidRel(RelId, Nat::add).unit { refl }
+theorem nat_ring_view(): Nat::CommSemiring(RelId, Nat::add, Nat::mul).multiplicative.unit = Nat::Monoid(Nat::mul).unit { refl }
+theorem int_group_view(x: Int): Int::Group(Int::add).inv(x) = Int::GroupRel(RelId, Int::add).inv(x) { refl }

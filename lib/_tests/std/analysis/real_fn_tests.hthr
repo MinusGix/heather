@@ -1,0 +1,146 @@
+// Probes of `lib/std/analysis/real_fn.hthr`: the generic rules read at
+// `Rat` and at `CReal`, on the concrete domain `|x| <= 1`, and a refutation
+// that keeps `DerivOn` from being vacuous. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import list; import relation_props; import order; import algebra_rel;
+import semiring; import ordered_field; import big_operator; import ring; import linarith;
+import rat; import creal; import real_fn;
+
+// The unit disc `|x| <= 1`, at any ordered field, and its identity bound.
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+fn Disc(x: K) → Type { AbsLe(x, K.multiplicative.unit) }
+
+fn Everywhere(x: K) → Type { True }
+
+theorem Disc::bounded(x: K): BoundedOn(Disc, λ (y: K) => y, K.multiplicative.unit) {
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    And(StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o), λ y dy => dy)
+}
+
+// The square maps the disc into itself.
+theorem Disc::maps_square(x: K): MapsTo(Disc, Disc, λ (y: K) => y * y) {
+    λ y dy => LocatedAddGroup::abs_le_weaken(y * y, y * y, K.multiplicative.unit * K.multiplicative.unit, K.multiplicative.unit,
+        OrderedField::abs_le_mul(y, y, K.multiplicative.unit, K.multiplicative.unit, dy, dy), K.rel_refl(y * y),
+        StrictOrder::le_of_same(K.multiplicative.unit * K.multiplicative.unit, K.multiplicative.unit, K.multiplicative.unit_l(K.multiplicative.unit)))
+}
+
+// `DerivOn` is not vacuous: the identity's derivative is not `0`. At `ε =
+// 1/2` the modulus `δ` would give `|δ - 0 - 0| <= δ/2`, so `δ <= δ/2`,
+// against `δ > 0`.
+theorem Disc::half_bound_absurd(d: K, pd: K.unit < d,
+    up: d + K.inv(K.unit) + K.inv(K.unit * (d + K.inv(K.unit))) <= OrderedField::half(K.multiplicative.unit) * d): False
+{
+    let ht = OrderedField::half_add(K.multiplicative.unit);
+    let s2: (OrderedField::half(K.multiplicative.unit) * d + OrderedField::half(K.multiplicative.unit) * d ≈ d) = ring(ht);
+    let bad: (d < d) = linarith(up, s2, pd);
+    K.lt_irrefl(d, bad)
+}
+
+theorem Disc::near_zero(d: K, pd: K.unit < d): AbsLe(d + K.inv(K.unit), d) {
+    LocatedAddGroup::abs_le_intro(d + K.inv(K.unit), d, linarith(pd), linarith(pd))
+}
+
+theorem Disc::id_deriv_not_zero(x: K): ¬(DerivOn(Everywhere, λ (y: K) => y, λ (y: K) => K.unit)) {
+    λ hd => {
+        let a = hd(OrderedField::half(K.multiplicative.unit), OrderedField::half_pos(K.multiplicative.unit, K.zero_lt_one));
+        let r = a.proof.right(K.unit, a.witness, a.witness, trivial, trivial, Disc::near_zero(a.witness, a.proof.left),
+            StrictOrder::le_refl(a.witness));
+        Disc::half_bound_absurd(a.witness, a.proof.left, r.right)
+    }
+}
+
+// Atoms that mention the class's own constants
+// (issues/ring-atom-mentions-class-constant.md): a function applied to
+// `K.multiplicative.unit`, the witness of an `∃` whose producer takes it,
+// and a range product, whose operation is the section's `*`.
+theorem class_constant_atom(d: K, s: OrderedField::half(K.multiplicative.unit) + OrderedField::half(K.multiplicative.unit) ≈ K.multiplicative.unit):
+    OrderedField::half(K.multiplicative.unit) * d + OrderedField::half(K.multiplicative.unit) * d ≈ d
+{ ring(s) }
+
+theorem class_constant_witness(d: K): K.unit < d → K.unit < d + d {
+    λ h => {
+        let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+        let b = OrderedField::below_both(OrderedField::half(K.multiplicative.unit), K.multiplicative.unit,
+            OrderedField::half_pos(K.multiplicative.unit, o), o);
+        let k: (b.witness * d + d * b.witness ≈ (b.witness + b.witness) * d) = ring;
+        linarith(h, b.proof.left)
+    }
+}
+
+theorem class_range_product(x: K, n: Nat): (∏ j < n, x) * x ≈ (∏ j < Succ(n), x) { ring }
+
+// expect-error: differ by
+theorem class_constant_atom_not_identity(d: K):
+    OrderedField::half(K.multiplicative.unit) * d + d ≈ d
+{ ring }
+
+}
+
+// The cube's derivative on the disc, at both carriers.
+theorem rat_cube(x: Rat): DerivOn(Disc, λ (y: Rat) => OrderedField::npow(y, 3), λ y => OrderedField::npow_deriv(y, 3)) {
+    DerivOn::pow(Disc, 1, Disc::bounded(x), 3)
+}
+theorem creal_cube(x: CReal): DerivOn(Disc, λ (y: CReal) => OrderedField::npow(y, 3), λ y => OrderedField::npow_deriv(y, 3)) {
+    DerivOn::pow(Disc, 1, Disc::bounded(x), 3)
+}
+
+// The derivative of `3x²` read as `3·(2·x)`: `npow_deriv` evaluates to the
+// textbook form.
+theorem rat_square_deriv_value(y: Rat): OrderedField::npow_deriv(y, 2) = Rat::OrderedField(Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul).of_nat(2) * (1 * y) { refl }
+
+// A polynomial, `1 + 2x + 3x²`, at the reals.
+theorem creal_poly(x: CReal): DerivOn(Disc, λ (y: CReal) => ∑ k < 3, CReal::ofRat(Rat::ofInt(OfNat(k + 1))) * OrderedField::npow(y, k),
+    λ y => ∑ k < 3, CReal::ofRat(Rat::ofInt(OfNat(k + 1))) * OrderedField::npow_deriv(y, k))
+{
+    DerivOn::poly(Disc, 1, Disc::bounded(x), 3, λ k => CReal::ofRat(Rat::ofInt(OfNat(k + 1))))
+}
+
+// The product and chain rules at the reals: `x·x`, then `(x·x)·(x·x)`, the
+// inner square mapping the disc into itself.
+fn creal_disc(x: CReal) → Type { AbsLe(x, 1) }
+
+theorem creal_square(x: CReal): DerivOn(creal_disc, λ (y: CReal) => y * y, λ (y: CReal) => 1 * y + y * 1) {
+    DerivOn::mul(creal_disc, λ (y: CReal) => y, λ (y: CReal) => 1, λ (y: CReal) => y, λ (y: CReal) => 1, 1, 1, 1 * 1 + 1, 1 * 1 + 1,
+        DerivOn::id(creal_disc), DerivOn::id(creal_disc), Disc::bounded(x), Disc::bounded(x),
+        BoundedOn::const(creal_disc, 1), BoundedOn::const(creal_disc, 1))
+}
+
+theorem creal_square_square(x: CReal): DerivOn(creal_disc, λ (y: CReal) => (y * y) * (y * y),
+    λ (y: CReal) => (1 * (y * y) + (y * y) * 1) * (1 * y + y * 1))
+{
+    let c = BoundedOn::const(creal_disc, 1);
+    let i = Disc::bounded(x);
+    let b = BoundedOn::add(creal_disc, λ (y: CReal) => 1 * y, λ (y: CReal) => y * 1, (1 * 1 + 1) * 1, 1 * (1 * 1 + 1),
+        BoundedOn::mul(creal_disc, λ (y: CReal) => 1, λ (y: CReal) => y, 1 * 1 + 1, 1, c, i),
+        BoundedOn::mul(creal_disc, λ (y: CReal) => y, λ (y: CReal) => 1, 1, 1 * 1 + 1, i, c));
+    DerivOn::chain(creal_disc, creal_disc, λ (y: CReal) => y * y, λ (y: CReal) => 1 * y + y * 1,
+        λ (y: CReal) => y * y, λ (y: CReal) => 1 * y + y * 1, (1 * 1 + 1) * 1 + 1 * (1 * 1 + 1), (1 * 1 + 1) * 1 + 1 * (1 * 1 + 1),
+        Disc::maps_square(x), creal_square(x), creal_square(x), b, b)
+}
+
+// Lipschitz bounds give uniform continuity, at the rationals.
+fn rat_disc(x: Rat) → Type { AbsLe(x, 1) }
+
+theorem rat_double_cont(x: Rat): UnifContOn(rat_disc, λ (y: Rat) => y + y) {
+    let id: LipschitzOn(rat_disc, λ (y: Rat) => y, 1) = And(Rat::le_of_lt(Rat::zero_lt_one()), λ a b h da db hab =>
+        LocatedAddGroup::abs_le_weaken(b - a, b - a, h, 1 * h, hab, (b - a).same_refl(), Rat::le_of_same(ring)));
+    LipschitzOn::unif_cont(rat_disc, λ (y: Rat) => y + y, 1 + 1, LipschitzOn::add(rat_disc, λ (y: Rat) => y, λ (y: Rat) => y, 1, 1, id, id))
+}
+
+// The mean value inequality at the reals: x·x on the disc, whose derivative
+// 1·y + y·1 is bounded there, is Lipschitz with that bound.
+theorem creal_square_lipschitz(x: CReal): LipschitzOn(creal_disc, λ (y: CReal) => y * y, (1 * 1 + 1) * 1 + 1 * (1 * 1 + 1)) {
+    let c = BoundedOn::const(creal_disc, 1);
+    let i = Disc::bounded(x);
+    let b = BoundedOn::add(creal_disc, λ (y: CReal) => 1 * y, λ (y: CReal) => y * 1, (1 * 1 + 1) * 1, 1 * (1 * 1 + 1),
+        BoundedOn::mul(creal_disc, λ (y: CReal) => 1, λ (y: CReal) => y, 1 * 1 + 1, 1, c, i),
+        BoundedOn::mul(creal_disc, λ (y: CReal) => y, λ (y: CReal) => 1, 1, 1 * 1 + 1, i, c));
+    DerivOn::lipschitz(creal_disc, λ (y: CReal) => y * y, λ (y: CReal) => 1 * y + y * 1, (1 * 1 + 1) * 1 + 1 * (1 * 1 + 1),
+        ConvexOn::within(-1, 1), creal_square(x), b)
+}
+
+// A zero derivative makes a function constant, at the rationals.
+theorem rat_const_of_zero(f: Rat → Rat, hd: DerivOn(rat_disc, f, λ (y: Rat) => 0), a, b: Rat, da: rat_disc(a), db: rat_disc(b)): f(a) ≈ f(b) {
+    DerivOn::const_of_zero(rat_disc, f, λ (y: Rat) => 0, ConvexOn::within(-1, 1), hd, λ y dy => Rat::same_refl(0), a, b, da, db)
+}

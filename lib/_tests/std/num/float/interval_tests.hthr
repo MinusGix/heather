@@ -1,0 +1,108 @@
+// Probes of `lib/std/num/float/interval.hthr` and of the directed rounding
+// and reciprocal bounds in `dyadic.hthr`: theorems that pin the operations
+// down at specific values and restate the contract at open ones. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import omega; import rat; import dyadic; import interval;
+
+// Rounding at a precision keeps the top bits and moves the rest into the
+// exponent: 7 at two bits is 6 below and 8 above, at either sign, and a
+// mantissa that fits is kept.
+theorem down_seven(): Dyadic(7, 0).down(2) = Dyadic(3, 1) { refl }
+theorem up_seven(): Dyadic(7, 0).up(2) = Dyadic(4, 1) { refl }
+theorem down_neg_seven(): Dyadic(-7, 0).down(2) = Dyadic(-4, 1) { refl }
+theorem up_neg_seven(): Dyadic(-7, 0).up(2) = Dyadic(-3, 1) { refl }
+theorem fits(): Dyadic(5, -3).down(8) = Dyadic(5, -3) { refl }
+theorem down_contract(d: Dyadic, p: Nat): d.down(p) <= d ∧ d <= d.up(p) { And(d.down_le(p), d.le_up(p)) }
+
+// The comparison aligns the exponents: equal values at different exponents
+// compare both ways.
+theorem le_across(): Dyadic(6, 0).le_bool(Dyadic(3, 1)) = True { refl }
+theorem not_lt_across(): Dyadic(6, 0).lt_bool(Dyadic(3, 1)) = False { refl }
+theorem lt_close(): Dyadic(3482986923, -31).lt_bool(Dyadic(3482986925, -31)) = True { refl }
+
+// A third at four bits past the divisor's width: 21/64 below, 22/64 above.
+theorem third_down(): Dyadic(3, 0).recip_down(4) = Dyadic(21, -6) { refl }
+theorem third_up(): Dyadic(3, 0).recip_up(4) = Dyadic(22, -6) { refl }
+
+// A constant is its numerator times its denominator's reciprocal, rounded
+// outward once more: a third at eight bits is [170, 171] · 2^-9.
+theorem third_at_8(): Interval::of_rat(Rat(1, 3), 8) = Bnd(Dyadic(170, -9), Dyadic(171, -9)) { refl }
+theorem of_rat_contract(q: Rat, p: Nat): Interval::of_rat(q, p).Has(q) { Interval::of_rat_has(q, p) }
+
+// A negative reciprocal is the positive one negated; around zero there is no
+// bound, and the whole line is the answer.
+theorem recip_neg_three(): Interval::point(Dyadic(-3, 0)).recip(4) = Bnd(Dyadic(-22, -6), Dyadic(-21, -6)) { refl }
+theorem recip_around_zero(): Bnd(Dyadic(-1, 0), Dyadic(1, 0)).recip(8) = Whole { refl }
+// At an open precision the sum is not closed, so outside its module
+// `Interval::add` (an interface definition) does not unfold: the arm
+// equation says what it is.
+theorem whole_absorbs(p: Nat): Whole.add(Interval::of_int(1), p) = Whole { Interval::add_unfold_Whole(Interval::of_int(1), p) }
+
+// Products: the corner search with a negative factor, and the direct form
+// when both are above zero. [-1, 2]·[3, 4] is [-4, 8].
+theorem mixed_product(): Bnd(Dyadic(-1, 0), Dyadic(2, 0)).mul(Bnd(Dyadic(3, 0), Dyadic(4, 0)), 8) = Bnd(Dyadic(-4, 0), Dyadic(8, 0)) { refl }
+theorem positive_product(): Bnd(Dyadic(1, 0), Dyadic(2, 0)).mul(Bnd(Dyadic(3, 0), Dyadic(4, 0)), 8) = Bnd(Dyadic(3, 0), Dyadic(8, 0)) { refl }
+
+// The interpretation is total: a pair with its bounds crossed holds nothing,
+// so containment of it is vacuous, and `Whole` holds everything.
+theorem crossed_empty(x: Rat): ¬(Bnd(Dyadic(1, 0), Dyadic(0, 0)).Has(x)) { λ h => Rat::le_trans(h.left, h.right) }
+theorem whole_has(x: Rat): Whole.Has(x) { trivial }
+theorem whole_below_nothing(J: Interval): Whole.below(J) = False { refl }
+
+// The checker. A goal written directly converts with its `IntervalExpr` form.
+fn third() → IntervalExpr { ILit(Rat(1, 3)) }
+fn compound_100() → IntervalExpr { IPow(IAdd(ILit(1), ILit(Rat(1, 100))), 100) }
+fn compound_1000() → IntervalExpr { IPow(IAdd(ILit(1), ILit(Rat(1, 1000))), 1000) }
+
+theorem two_thirds_lt_one(): Rat(1, 3) + Rat(1, 3) < 1 { IntervalExpr::lt_of_search(IAdd(third(), third()), ILit(1), 8, 1, refl) }
+theorem compound_100_lt_3(): Rat::npow(1 + Rat(1, 100), 100) < 3 { IntervalExpr::lt_of_search(compound_100(), ILit(3), 32, 1, refl) }
+theorem two_le_compound_100(): 2 <= Rat::npow(1 + Rat(1, 100), 100) { IntervalExpr::le_of_search(ILit(2), compound_100(), 32, 1, refl) }
+theorem compound_1000_lt_e(): Rat::npow(1 + Rat(1, 1000), 1000) < Rat(2719, 1000) { IntervalExpr::lt_of_search(compound_1000(), ILit(Rat(2719, 1000)), 32, 1, refl) }
+theorem e_lt_compound_1000(): Rat(2716, 1000) < Rat::npow(1 + Rat(1, 1000), 1000) { IntervalExpr::lt_of_search(ILit(Rat(2716, 1000)), compound_1000(), 32, 1, refl) }
+
+// The search refines: 333/1000 and a third are 1/3000 apart, which four bits
+// cannot separate and sixteen can.
+theorem refined(): Rat(333, 1000) < Rat(1, 3) { IntervalExpr::lt_of_search(ILit(Rat(333, 1000)), third(), 4, 3, refl) }
+// expect-error(kernel): the kernel rejected `unrefined`: NotConvertible
+theorem unrefined(): Rat(333, 1000) < Rat(1, 3) { IntervalExpr::lt_of_search(ILit(Rat(333, 1000)), third(), 4, 1, refl) }
+
+// The negative control: an equality is never decided by enclosures, since a
+// third is never exact, so `3 · (1/3) <= 1` is refused at every precision
+// although it is true.
+// expect-error(kernel): the kernel rejected `exact_third`: NotConvertible
+theorem exact_third(): Rat(1, 3) * 3 <= 1 { IntervalExpr::le_of_search(IMul(third(), ILit(3)), ILit(1), 8, 4, refl) }
+
+// The contract at an open expression and precision.
+theorem encloses(e: IntervalExpr, p: Nat): e.enclose(p).Has(e.eval()) { e.enclose_has(p) }
+
+// Interface definitions (docs/interface-definitions-design.md): `neg`,
+// `add`, `sub`, `mul` and `npow` are interface definitions of `interval`.
+// Here, outside that module, a call at closed arguments still computes (the
+// verdicts above, and `cube` below), but a call at an open argument is an
+// atom even when its scrutinee is a constructor. A goal over one is closed by
+// a generated equation, or by a proof that declares `unfolding`.
+// expect-error(kernel): `Interval::neg` is an interface definition of `interval`
+theorem neg_open_refl(lo, hi: Dyadic): Bnd(lo, hi).neg() = Bnd(-hi, -lo) { refl }
+theorem neg_open_cited(lo, hi: Dyadic): Bnd(lo, hi).neg() = Bnd(-hi, -lo) { Interval::neg_unfold_Bnd(lo, hi) }
+theorem neg_open_unfolding(lo, hi: Dyadic): Bnd(lo, hi).neg() = Bnd(-hi, -lo) unfolding Interval::neg { refl }
+
+// A checking position: a lemma's statement over the open call is not its
+// arm, and the arm equation moves it there.
+// expect-error(kernel): `Interval::neg` is an interface definition of `interval`
+theorem neg_has_open(lo, hi: Dyadic, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(-hi, -lo).Has(-x) { Interval::neg_has(Bnd(lo, hi), h) }
+theorem neg_has_cited(lo, hi: Dyadic, {x: Rat}, h: Bnd(lo, hi).Has(x)): Bnd(-hi, -lo).Has(-x) {
+    rewrite(Interval::neg_unfold_Bnd(lo, hi), in := Interval::neg_has(Bnd(lo, hi), h))
+}
+
+// A neutral scrutinee: `npow` recurses on its exponent, so it has no
+// whole-body `npow_unfold` (that is not `refl` at an open exponent), only
+// one equation per arm.
+// expect-error(kernel): `Interval::npow` is an interface definition of `interval`
+theorem npow_succ_refl(I: Interval, k, p: Nat): I.npow(Succ(k), p) = I.npow(k, p).mul(I, p) { refl }
+theorem npow_succ_cited(I: Interval, k, p: Nat): I.npow(Succ(k), p) = I.npow(k, p).mul(I, p) { Interval::npow_unfold_Succ(I, k, p) }
+theorem cube(): Interval::point(Dyadic(2, 0)).npow(3, 8) = Interval::point(Dyadic(8, 0)) { refl }
+
+// `unfolding` names interface definitions only.
+// expect-error: `Interval::point` is not an interface definition
+theorem point_unfolding(d: Dyadic): Interval::point(d) = Bnd(d, d) unfolding Interval::point { refl }

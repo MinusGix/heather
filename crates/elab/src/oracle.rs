@@ -161,7 +161,21 @@ impl SemanticOracle {
                 Ok(Val::TmEmpty { level }) => return Ok(Term::TmEmpty { level: level.clone() }),
                 Ok(Val::TmSEmpty { level }) => return Ok(Term::TmSEmpty { level: level.clone() }),
                 Err(OutOfFuel) => return Err(OutOfFuel),
-                Ok(_) => false,
+                // A constructor with fields: read its top layer off the
+                // value, as `whnf_type` reads a former's. A reduct through a
+                // family's transports (`J` along a stored-children equation,
+                // docs/iwf-infinitary-design.md §7) is a constructor whose
+                // fields the reducer would reach only by copying those
+                // transports' motives at every step
+                // (issues/elab-whnf-family-transport-cost.md).
+                Ok(canonical) => match Readback::new(gamma).term_head(canonical) {
+                    Some(read) => {
+                        #[cfg(debug_assertions)]
+                        crate::readback::verify_term(term, gamma, defs, self.fuel, &read);
+                        return Ok(read);
+                    }
+                    None => false,
+                },
             };
             if stuck {
                 let budget = self.fuel.min(STUCK_SPELLING_STEPS);
@@ -238,19 +252,31 @@ impl SemanticOracle {
         reduce::whnf_term(term, gamma, self.fuel)
     }
 
-    /// Successive transparent reducts, bounded by both oracle fuel and `limit`.
-    pub(crate) fn term_reducts<'a>(
-        &'a self,
-        gamma: &'a LocalCtx,
-        term: &Term,
-        limit: u64,
-    ) -> TermReducts<'a> {
+    /// The elaborator's one reduct walk (issues/one-unfold-to-primitive.md):
+    /// `term`'s successive transparent head reducts, `term` itself not
+    /// included, ending at its weak head normal form, at `walk`'s budget, or
+    /// at the oracle's fuel, whichever comes first. The site reads each
+    /// reduct for the head it wants and stops there; the budget is the one
+    /// thing that differs, and every one is named in [`Unfold`].
+    pub(crate) fn unfold<'a>(&'a self, gamma: &'a LocalCtx, term: &Term, walk: Unfold) -> TermReducts<'a> {
         TermReducts {
             oracle: self,
             gamma,
             current: term.clone(),
-            remaining: self.fuel.min(limit),
+            remaining: self.fuel.min(walk.steps()),
         }
+    }
+
+    /// [`Self::unfold`] read for the first reduct `read` answers: the walk
+    /// most sites are.
+    pub(crate) fn unfold_to<T>(
+        &self,
+        gamma: &LocalCtx,
+        term: &Term,
+        walk: Unfold,
+        read: impl FnMut(Term) -> Option<T>,
+    ) -> Option<T> {
+        self.unfold(gamma, term, walk).find_map(read)
     }
 
     pub(crate) fn convert_type(
@@ -337,6 +363,82 @@ fn term_head_may_compute(t: &Term) -> bool {
                 };
             }
         };
+    }
+}
+
+/// Every reduct walk the elaborator takes, by what it looks for, with its
+/// budget: the most head reducts it reads before it gives up
+/// (docs/elaborator-principles-survey.md §5). Each budget was set by its
+/// first customer, and a step is a δ step on a definition of any size or a
+/// single β step alike, so the numbers say how far each search was willing
+/// to go, not how much work it does. They are kept here, in one table, to be
+/// retired one at a time once a walk can stop at the head it wants by itself
+/// ([[unifier-lazy-delta]], issues/one-unfold-to-primitive.md step 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unfold {
+    /// A defined proposition reaching a goal `omega` reads (a relation, a
+    /// connective, a guard), and the goal side it is unfolded beside
+    /// (crates/elab/src/omega_cert.rs).
+    Proposition,
+    /// A goal headed by a definition no evidence rule is about, reaching one
+    /// some rule is about: `PowOk(x, -1)` unfolds to `x.Apart(0)` in a
+    /// handful (docs/inverse-power-notation-design.md §4).
+    RuleGoal,
+    /// A definition unfolded looking for the edge image it names
+    /// (`ring`'s `Reifier::wrapped_image`).
+    RingWrapper,
+    /// A committed term compared with one that has holes
+    /// (the tactic host's `same_tm`).
+    HoleComparison,
+    /// A scrutinee that is, or becomes, a comparison: `lowb(x) =
+    /// x.unsigned_lt_bit(10)` (goal_combinators' `comparison_of`).
+    Comparison,
+    /// A term reaching the match it is stuck on, or its co-occurrences
+    /// (goal_combinators' `stuck_scrutinee`, `co_occurrences`; each also
+    /// spends the caller's own budget).
+    StuckScrutinee,
+    /// A call reaching the match its definition makes on a constructor
+    /// argument (goal_combinators' `matched_at_constructor`).
+    MatchedArm,
+    /// An instance's bit operand reaching an injection or a call the source
+    /// names (`Elaborator::instance_bit`).
+    InstanceBit,
+    /// An argument's type read for implicits after a solution did not fit
+    /// its slot: a δ step and the β steps that apply the unfolded body,
+    /// twice over, and no whnf at large
+    /// (issues/index-inference-through-unfolding.md).
+    IndexRead,
+    /// A word before `bv_omega` takes it as a leaf: enough for a definition
+    /// that calls another, not enough to evaluate one.
+    WordShape,
+    /// One head step, which the relational walker re-enters after
+    /// (relational_context/proof.rs).
+    OneStep,
+    /// A literal's embedding reaching a global's call or a value
+    /// (`Elaborator::reduced_embedding`).
+    LiteralEmbedding,
+    /// A type code reaching the encoding of an inductive family it decodes
+    /// to (iwf_family.rs, indexed.rs).
+    FamilyEncoding,
+    /// A rigid subject at a head mismatch in the unifier, reaching its next
+    /// head: one δ step and the β steps that expose what the body is
+    /// headed by (issues/unifier-lazy-delta.md). A bound on one hop, not on
+    /// the chain: each hop is taken only at a mismatch.
+    NextHead,
+}
+
+impl Unfold {
+    /// The walk's budget, in head reducts.
+    pub(crate) fn steps(self) -> u64 {
+        match self {
+            Unfold::OneStep => 1,
+            Unfold::RingWrapper => 4,
+            Unfold::Comparison | Unfold::IndexRead => 8,
+            Unfold::HoleComparison | Unfold::MatchedArm | Unfold::WordShape => 16,
+            Unfold::InstanceBit | Unfold::LiteralEmbedding => 32,
+            Unfold::Proposition | Unfold::RuleGoal | Unfold::StuckScrutinee | Unfold::NextHead => 64,
+            Unfold::FamilyEncoding => 1024,
+        }
     }
 }
 

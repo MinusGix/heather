@@ -337,12 +337,6 @@ impl Replay {
 #[derive(Default)]
 pub(crate) struct ReplaySlot(std::cell::RefCell<Option<Replay>>);
 
-impl Clone for ReplaySlot {
-    fn clone(&self) -> Self {
-        ReplaySlot::default()
-    }
-}
-
 impl ReplaySlot {
     /// Keep a discarded pass's verdicts for the replay that follows.
     pub(crate) fn record(&self, replay: Option<Replay>) {
@@ -448,30 +442,24 @@ impl Default for KernelPool {
     }
 }
 
-/// A clone is an **inline** pool, never a second handle on the same queue.
-///
-/// Cloning an elaborator shares its committed world and nothing transient, so
-/// outstanding proof obligations stay with the original — that much is forced.
-/// Resetting the width to 1 as well is a judgment: a cloned elaborator is
-/// speculative or nested work (`relational_context`'s candidate search calls
-/// `environment.clone().elab_module_source(..)` once per candidate), and
-/// spawning and tearing down a pool per candidate would cost more than the
-/// handful of declarations inside one could possibly save. A driver that wants
-/// a clone to run wide says so with `set_kernel_workers`.
-impl Clone for KernelPool {
-    fn clone(&self) -> Self {
-        KernelPool::with_workers(1)
-    }
-}
-
 impl KernelPool {
     fn with_workers(workers: usize) -> Self {
         KernelPool { workers: workers.max(1), shared: None, handles: Vec::new(), next: 0 }
     }
 
-    /// An inline pool with nothing queued: a placeholder, for a caller that
-    /// has to move the live pool out of an elaborator for a moment
-    /// ([`crate::Elaborator::restore_from_clone`]).
+    /// An inline pool with nothing queued: what a clone of an elaborator gets
+    /// (`ModulePass`'s `Clone`), never a second handle on the same queue.
+    ///
+    /// Cloning an elaborator shares its committed world and nothing
+    /// transient, so outstanding proof obligations stay with the original —
+    /// that much is forced. Resetting the width to 1 as well is a judgment: a
+    /// cloned elaborator is speculative or nested work (`relational_context`'s
+    /// candidate search calls `environment.clone().elab_module_source(..)`
+    /// once per candidate), and spawning and tearing down a pool per
+    /// candidate would cost more than the handful of declarations inside one
+    /// could possibly save. A driver that wants a clone to run wide says so
+    /// with `set_kernel_workers`. `KernelPool` is deliberately not `Clone`, so
+    /// this is the only way to get a second one from a first.
     pub(crate) fn inline() -> Self {
         KernelPool::with_workers(1)
     }
@@ -488,6 +476,17 @@ impl KernelPool {
 
     pub(crate) fn workers(&self) -> usize {
         self.workers
+    }
+
+    /// Set the width for an **inline** stretch in the middle of a pass and
+    /// return the old one, leaving anything already queued where it is. At
+    /// width 1 the gate sites run the kernel themselves and never touch the
+    /// queue, so a caller that needs one verdict now — the meaning check,
+    /// whose statement is gated and rolled back (`meaning.rs`) — narrows to 1,
+    /// gates, and restores. Unlike [`Self::set_workers`], this is not a
+    /// quiescent-only operation, because nothing it runs is queued.
+    pub(crate) fn swap_width(&mut self, workers: usize) -> usize {
+        std::mem::replace(&mut self.workers, workers.max(1))
     }
 
     /// Whether a gate site should run the kernel itself rather than queue.

@@ -33,8 +33,7 @@
 //! (`tests/subst_laws.rs`, `shift_composition`), and they hold structurally,
 //! not merely up to some equivalence: at `by = 0` each mapper's variable case
 //! is `v ↦ v`, each `tail` case adds zero to a length or renumbers by zero,
-//! and `Level::shift(0, _)` is the identity because `Level::succ`/`max` are
-//! plain constructors that normalize nothing. The `_above` variants are the
+//! and `Level::shift(0, _)` returns its level unchanged. The `_above` variants are the
 //! same operation with a cutoff, and a cutoff only narrows *which* variables
 //! move, so at `by = 0` they are identities too. So the fast path cannot be
 //! distinguished from the traversal by any caller.
@@ -103,10 +102,49 @@
 //! binder count in `bounds.rs` that drifts from this file's dep table fails
 //! the test suite (300-seed substitution laws included) instead of silently
 //! producing a wrong term in release.
+//!
+//! ## Keeping a shared DAG shared
+//!
+//! A subterm reachable along two paths (a `let` alias's value used twice,
+//! `elab`'s `fan` shape in `issues/proof-let-substitution-cost.md`) is one
+//! allocation, and the traversal used to rebuild it once per path: a shared
+//! DAG of `k` links came back from a shift as a tree of `2^k` nodes, and so
+//! did everything downstream of it — the typing memo of
+//! `issues/kernel-typing-memo-on-node-identity.md` cannot share what the
+//! shift has already copied apart (`issues/subst-shared-node-memo.md`).
+//!
+//! So the pure operations memoize, **within one call**, the result for a
+//! node by its address and the traversal's [`Depths`] ([`NodeMemo`]). The
+//! result for a pure operation is a function of the subtree and the depths
+//! alone, so a hit is exactly what walking it again would build, and the
+//! second path gets the first path's `Rc`: the output is as shared as the
+//! input. The memo is consulted only for nodes whose `Rc::strong_count`
+//! is above one, since only those can be reached twice (the topmost node of
+//! any repeated region has two parents). The count is a filter, never part
+//! of the answer: a node counted shared that is visited once costs a table
+//! entry and changes nothing else, so the memo changes allocation and work,
+//! never syntax. Each entry holds a keep-alive clone of its key, so an
+//! address cannot be reused while the memo lives; the entries are dropped
+//! when the call returns (the emptied tables go back to a per-thread pool).
+//! A `Var` leaf is shared by construction ([`Term::var_rc`]), so it is
+//! mapped before the memo is asked, and enters it only when it became a
+//! payload: that is the one leaf result worth sharing across paths.
+//!
+//! Every mapper whose output depends on the node and depths alone opts in
+//! ([`Mapper::memo`]): the global and universe operations as much as the
+//! local ones, since one tree-walking pass anywhere loses the sharing for
+//! everything after it (`elab` rescopes each committed body with
+//! `shift_global_above` and `apply_global`). [`AbstractLocal`] does not:
+//! it numbers occurrences in traversal order, and a selected rewrite must
+//! see the `k`-th occurrence of a shared subterm as a different position
+//! from the first. Nor do [`ReindexGlobal`] (a caller's callback per
+//! variable), [`RootTerms`] and [`RebuildChecked`] (state per visit). Debug
+//! builds re-run the real traversal behind a sample of hits, as for skips.
 
 use std::sync::Arc as Rc;
 
 use crate::bounds;
+use crate::value::PtrMap;
 use crate::level::Level;
 use crate::term::{
     Branches, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
@@ -114,7 +152,7 @@ use crate::term::{
 };
 
 /// Binder depths for the three namespaces at the current traversal point.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Depths {
     pub univ: u32,
     pub global: u32,
@@ -170,6 +208,102 @@ impl GlobalSubst {
     }
 }
 
+/// The per-call memo of §Keeping a shared DAG shared: a shared node's
+/// result at the depths it was reached at, and whether it differs from the
+/// node (the change counter is replayed on a hit, so the parent shares or
+/// rebuilds exactly as it would have). The first `Rc` of each entry is the
+/// keep-alive for the address in its key.
+///
+/// The tables come from a per-thread pool ([`MEMO_POOL`]) and go back to it,
+/// emptied with their capacity kept, when the call ends: a traversal that
+/// memoizes anything otherwise grew both from empty, rehash by rehash, on
+/// every call (`issues/subst-per-call-allocations.md`). Emptying drops the
+/// keep-alives exactly when dropping the memo did, so no address outlives
+/// its call in a pooled table.
+struct NodeMemo {
+    terms: TermMemo,
+    types: TypeMemo,
+}
+
+type TermMemo = PtrMap<(usize, Depths), (Rc<Term>, Rc<Term>, bool)>;
+type TypeMemo = PtrMap<(usize, Depths), (Rc<Type>, Rc<Type>, bool)>;
+
+/// Tables kept per thread: enough for the nesting a traversal reaches (a
+/// payload lifted inside a substitution starts its own shifts), not one per
+/// call ever made.
+const MEMO_POOL_TABLES: usize = 8;
+
+/// The largest table the pool keeps. Emptying a table costs its capacity,
+/// not its length, so one huge call's table would tax every small call
+/// after it; past this it is freed, as before the pool.
+const MEMO_POOL_MAX_CAPACITY: usize = 1 << 12;
+
+thread_local! {
+    static MEMO_POOL: std::cell::RefCell<(Vec<TermMemo>, Vec<TypeMemo>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
+
+impl Default for NodeMemo {
+    fn default() -> NodeMemo {
+        // `try_with`: a traversal run from another thread-local's destructor
+        // gets fresh tables rather than a panic.
+        MEMO_POOL
+            .try_with(|pool| {
+                let mut pool = pool.borrow_mut();
+                NodeMemo {
+                    terms: pool.0.pop().unwrap_or_default(),
+                    types: pool.1.pop().unwrap_or_default(),
+                }
+            })
+            .unwrap_or_else(|_| NodeMemo { terms: PtrMap::default(), types: PtrMap::default() })
+    }
+}
+
+impl Drop for NodeMemo {
+    fn drop(&mut self) {
+        // Emptied before the pool is borrowed: dropping the keep-alives runs
+        // arbitrary `Drop`s, none of which may find the pool borrowed.
+        fn keep<K, V>(table: &mut PtrMap<K, V>) -> bool {
+            let cap = table.capacity();
+            if cap == 0 || cap > MEMO_POOL_MAX_CAPACITY {
+                return false;
+            }
+            // `clear` on an empty table still sweeps its control bytes.
+            if !table.is_empty() {
+                table.clear();
+            }
+            true
+        }
+        let keep_terms = keep(&mut self.terms);
+        let keep_types = keep(&mut self.types);
+        if !keep_terms && !keep_types {
+            return;
+        }
+        // Only emptied tables are moved in; a table the pool has no room for
+        // is handed back out and freed after the borrow ends.
+        let terms = keep_terms.then(|| std::mem::take(&mut self.terms));
+        let types = keep_types.then(|| std::mem::take(&mut self.types));
+        let _spare = MEMO_POOL.try_with(|pool| {
+            let mut pool = pool.borrow_mut();
+            let terms = match terms {
+                Some(t) if pool.0.len() < MEMO_POOL_TABLES => {
+                    pool.0.push(t);
+                    None
+                }
+                t => t,
+            };
+            let types = match types {
+                Some(t) if pool.1.len() < MEMO_POOL_TABLES => {
+                    pool.1.push(t);
+                    None
+                }
+                t => t,
+            };
+            (terms, types)
+        });
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Generic traversal
 // ---------------------------------------------------------------------------
@@ -182,10 +316,12 @@ trait Mapper {
     /// Name of the operation, for the change-reporting assertion only.
     const NAME: &'static str;
 
-    /// Bump `stats::shift_global_nodes` per node visited. Only the global
-    /// rescoping sets it: its cost is what the refl-theorem family pays and
-    /// no fuel counter sees (`issues/refl-theorem-step-cost.md`).
-    const COUNT_NODES: bool = false;
+    /// The counter bumped per node visited, if any: `shift_global_nodes`
+    /// for the global rescoping, whose cost is what the refl-theorem family
+    /// pays and no fuel counter sees (`issues/refl-theorem-step-cost.md`),
+    /// and `local_subst_nodes` for the local shift and substitutions, whose
+    /// node count is the claim §Keeping a shared DAG shared makes.
+    const COUNT_NODES: Option<fn(u64)> = None;
 
     /// Count of *effective* changes this mapper has made — see
     /// §Sharing unchanged subtrees. Every hook below that returns something
@@ -202,7 +338,7 @@ trait Mapper {
     }
 
     /// Report a mapped level, noting a change only if it really moved.
-    /// Levels are tiny trees (`Zero`/`Succ`/`Var`/`Max`), so `==` here is an
+    /// Levels are inline or one shared join, so `==` here is an
     /// exact test at leaf-ish cost — unlike comparing terms, which is the one
     /// thing this design must never do.
     fn mapped(&mut self, new: Level, old: &Level) -> Level {
@@ -259,6 +395,14 @@ trait Mapper {
     fn skip_tm(&mut self, _t: &Rc<Term>, _at: Depths) -> bool {
         false
     }
+
+    /// This call's shared-node memo, for a mapper whose result on a subtree
+    /// is a function of the subtree and the depths alone (§Keeping a shared
+    /// DAG shared). `None` — the default — never memoizes, which is right
+    /// for a mapper with any other state a visit reads or writes.
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        None
+    }
 }
 
 /// Reuse `orig` for a subtree the traversal did not change.
@@ -296,8 +440,8 @@ fn shared_tm<M: Mapper>(orig: &Rc<Term>, mapped: Term) -> Rc<Term> {
 }
 
 fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
-    if M::COUNT_NODES {
-        crate::stats::shift_global_nodes(1);
+    if let Some(count) = M::COUNT_NODES {
+        count(1);
     }
     if m.skip_ty(t, at) {
         // A skip claims the whole traversal is a no-op here. Verify the
@@ -317,13 +461,42 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
         }
         return Rc::clone(t);
     }
+    // §Keeping a shared DAG shared: a node only one parent holds cannot be
+    // reached twice, so only a shared one is looked up or recorded.
+    let key = (Rc::as_ptr(t) as usize, at);
+    let shared = Rc::strong_count(t) > 1 && m.memo().is_some();
+    if shared {
+        if let Some((_, out, changed)) = m.memo().and_then(|memo| memo.types.get(&key)) {
+            let (out, changed) = (Rc::clone(out), *changed);
+            crate::stats::subst_memo_hits(1);
+            #[cfg(debug_assertions)]
+            if crate::checks::verify_this_skip() {
+                let before = *m.changes();
+                let again = map_type(t, m, at);
+                assert!(
+                    (*m.changes() != before) == changed && again == *out,
+                    "{} memoized a shared node's result that walking it again does not build \
+                     (term output suppressed: see CLAUDE.md)",
+                    M::NAME
+                );
+                *m.changes() = before;
+            }
+            if changed {
+                m.note();
+            }
+            return out;
+        }
+    }
     let before = *m.changes();
     let mapped = map_type(t, m, at);
-    if *m.changes() == before {
-        shared_ty::<M>(t, mapped)
-    } else {
-        Rc::new(mapped)
+    let changed = *m.changes() != before;
+    let out = if changed { Rc::new(mapped) } else { shared_ty::<M>(t, mapped) };
+    if shared {
+        if let Some(memo) = m.memo() {
+            memo.types.insert(key, (Rc::clone(t), Rc::clone(&out), changed));
+        }
     }
+    out
 }
 
 /// An `IWf` signature (`docs/iwf-former-design.md` §1.2): `arity` and
@@ -369,8 +542,8 @@ fn sub_m_sig<M: Mapper>(sig: &Rc<MSig>, m: &mut M, at: Depths) -> Rc<MSig> {
 }
 
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
-    if M::COUNT_NODES {
-        crate::stats::shift_global_nodes(1);
+    if let Some(count) = M::COUNT_NODES {
+        count(1);
     }
     // Whole-node replacement, before anything else: a mapper that matches
     // *terms* has to see a node before its children are rebuilt, and its
@@ -378,7 +551,7 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     // does not even apply — the node really is different).
     if let Some(r) = m.pre_tm(t, at) {
         m.note();
-        return Rc::new(r);
+        return r.into_rc();
     }
     if m.skip_tm(t, at) {
         #[cfg(debug_assertions)]
@@ -394,13 +567,68 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
         }
         return Rc::clone(t);
     }
+    let key = (Rc::as_ptr(t) as usize, at);
+    // `Var` leaves are shared by construction (`Term::var_rc`), so their
+    // count says nothing about a second path, and mapping one costs less
+    // than a table probe. Mapped first, then: a variable that stays a
+    // variable is a shared leaf again, and only one that became a payload
+    // goes through the memo, so a payload reached along two paths is still
+    // one node (and counts the same hit it always did).
+    if let Term::Var(_) = **t {
+        let before = *m.changes();
+        let mapped = map_term(t, m, at);
+        if *m.changes() == before {
+            return shared_tm::<M>(t, mapped);
+        }
+        if let Term::Var(_) = mapped {
+            return mapped.into_rc();
+        }
+        if Rc::strong_count(t) == 1 {
+            return Rc::new(mapped);
+        }
+        let Some(memo) = m.memo() else { return Rc::new(mapped) };
+        if let Some((_, out, _)) = memo.terms.get(&key) {
+            crate::stats::subst_memo_hits(1);
+            return Rc::clone(out);
+        }
+        let out = Rc::new(mapped);
+        memo.terms.insert(key, (Rc::clone(t), Rc::clone(&out), true));
+        return out;
+    }
+    // As in `sub_ty`.
+    let shared = Rc::strong_count(t) > 1 && m.memo().is_some();
+    if shared {
+        if let Some((_, out, changed)) = m.memo().and_then(|memo| memo.terms.get(&key)) {
+            let (out, changed) = (Rc::clone(out), *changed);
+            crate::stats::subst_memo_hits(1);
+            #[cfg(debug_assertions)]
+            if crate::checks::verify_this_skip() {
+                let before = *m.changes();
+                let again = map_term(t, m, at);
+                assert!(
+                    (*m.changes() != before) == changed && again == *out,
+                    "{} memoized a shared node's result that walking it again does not build \
+                     (term output suppressed: see CLAUDE.md)",
+                    M::NAME
+                );
+                *m.changes() = before;
+            }
+            if changed {
+                m.note();
+            }
+            return out;
+        }
+    }
     let before = *m.changes();
     let mapped = map_term(t, m, at);
-    if *m.changes() == before {
-        shared_tm::<M>(t, mapped)
-    } else {
-        Rc::new(mapped)
+    let changed = *m.changes() != before;
+    let out = if changed { mapped.into_rc() } else { shared_tm::<M>(t, mapped) };
+    if shared {
+        if let Some(memo) = m.memo() {
+            memo.terms.insert(key, (Rc::clone(t), Rc::clone(&out), changed));
+        }
     }
+    out
 }
 
 /// The motive/branch bundles of the code recursors, shared on the same rule.
@@ -709,6 +937,14 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             snd_ty: sub_ty(snd_ty, m, at + dep(0, 0, 1)),
             fst: sub_tm(fst, m, at),
             snd: sub_tm(snd, m, at),
+        },
+        Term::VecLit { level, elem, zero, one, width, bits } => Term::VecLit {
+            level: m.level(level, at),
+            elem: sub_ty(elem, m, at),
+            zero: sub_tm(zero, m, at),
+            one: sub_tm(one, m, at),
+            width: *width,
+            bits: *bits,
         },
         Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => Term::Fst {
             fst_level: m.level(fst_level, at),
@@ -1072,11 +1308,13 @@ fn map_subst<M: Mapper>(s: &LocalSubst, m: &mut M, at: Depths) -> LocalSubst {
 struct ShiftLocal {
     by: u32,
     changes: u64,
+    memo: NodeMemo,
 }
 
 impl Mapper for ShiftLocal {
     const LOCAL_OP: bool = true;
     const NAME: &'static str = "shift_local";
+    const COUNT_NODES: Option<fn(u64)> = Some(crate::stats::local_subst_nodes);
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
@@ -1110,12 +1348,16 @@ impl Mapper for ShiftLocal {
     fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
         bounds::skip_term(t, at.local)
     }
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
+    }
 }
 
 /// Weaken the global context by `by` bindings.
 struct ShiftGlobal {
     by: u32,
     changes: u64,
+    memo: NodeMemo,
 }
 
 impl ShiftGlobal {
@@ -1132,10 +1374,14 @@ impl ShiftGlobal {
 impl Mapper for ShiftGlobal {
     const LOCAL_OP: bool = false;
     const NAME: &'static str = "shift_global";
-    const COUNT_NODES: bool = true;
+    const COUNT_NODES: Option<fn(u64)> = Some(crate::stats::shift_global_nodes);
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
     }
 
     fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
@@ -1277,7 +1523,7 @@ pub(crate) fn shift_global_tables(
     by: u32,
 ) -> (Motives, Branches) {
     let at = Depths::default();
-    let mut m = ShiftGlobal { by, changes: 0 };
+    let mut m = ShiftGlobal { by, changes: 0, memo: NodeMemo::default() };
     let mo = map_motives(motives, &mut m, at);
     let br = map_branches(branches, &mut m, at);
     (mo, br)
@@ -1287,6 +1533,7 @@ pub(crate) fn shift_global_tables(
 struct ShiftUniv {
     by: u32,
     changes: u64,
+    memo: NodeMemo,
 }
 
 impl Mapper for ShiftUniv {
@@ -1295,6 +1542,10 @@ impl Mapper for ShiftUniv {
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
     }
 
     fn level(&mut self, l: &Level, at: Depths) -> Level {
@@ -1306,40 +1557,12 @@ impl Mapper for ShiftUniv {
 // Substitutions
 // ---------------------------------------------------------------------------
 
-/// Rewrite every level to the canonical representative of its ≈-class.
-/// Not a substitution — a normalization, so that equality *modulo level
-/// equivalence* (the quotient DeLaM ch. 05's Static Code lemma takes) is
-/// plain `==` on the rewritten syntax. Depth-independent: normalization
-/// never renumbers a variable, so binders need no care.
-struct NormalizeLevels {
-    changes: u64,
-}
-
-impl Mapper for NormalizeLevels {
-    const LOCAL_OP: bool = false;
-    const NAME: &'static str = "normalize_levels";
-
-    fn changes(&mut self) -> &mut u64 {
-        &mut self.changes
-    }
-
-    fn level(&mut self, l: &Level, _at: Depths) -> Level {
-        // `0` and a bare `ℓ` are already their own canonical representatives,
-        // and they are almost every level a real term contains; taking them
-        // here skips a walk and a `BTreeMap` allocation apiece
-        // (issues/level-normalization-allocation.md).
-        if matches!(l, Level::Zero | Level::Var(_)) {
-            return l.clone();
-        }
-        self.mapped(l.normalize().canonical(), l)
-    }
-}
-
 /// Universe substitution `φ`: `phi[i]` replaces universe variable `i`
 /// (innermost = 0), scoped in the source universe context.
 struct SubstUniv<'a> {
     phi: &'a [Level],
     changes: u64,
+    memo: NodeMemo,
 }
 
 impl Mapper for SubstUniv<'_> {
@@ -1348,6 +1571,10 @@ impl Mapper for SubstUniv<'_> {
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
     }
 
     fn level(&mut self, l: &Level, at: Depths) -> Level {
@@ -1363,6 +1590,7 @@ impl Mapper for SubstUniv<'_> {
 struct InstUniv<'a> {
     phi: &'a [Level],
     changes: u64,
+    memo: NodeMemo,
 }
 
 impl Mapper for InstUniv<'_> {
@@ -1371,6 +1599,10 @@ impl Mapper for InstUniv<'_> {
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
     }
 
     fn level(&mut self, l: &Level, at: Depths) -> Level {
@@ -1383,11 +1615,19 @@ impl Mapper for InstUniv<'_> {
 struct SubstLocal<'a> {
     delta: &'a LocalSubst,
     changes: u64,
+    /// Each payload lifted to a binder depth, once per depth: a variable
+    /// that occurs many times under the same binders (a readback's
+    /// environment entry, `issues/elab-whnf-family-transport-cost.md`)
+    /// shares one lifted copy instead of rewalking the payload per
+    /// occurrence. Allocated at the first occurrence under a binder.
+    lifted: Option<std::collections::HashMap<(usize, Depths), Term>>,
+    memo: NodeMemo,
 }
 
 impl Mapper for SubstLocal<'_> {
     const LOCAL_OP: bool = true;
     const NAME: &'static str = "apply_local";
+    const COUNT_NODES: Option<fn(u64)> = Some(crate::stats::local_subst_nodes);
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
@@ -1407,10 +1647,18 @@ impl Mapper for SubstLocal<'_> {
         );
         // terms[0] substitutes the outermost entry; index from the innermost.
         let payload = &self.delta.terms[n - 1 - i];
-        let out = payload
-            .shift_local(at.local)
-            .shift_global(at.global)
-            .shift_univ(at.univ);
+        let out = if at == Depths::default() {
+            (**payload).clone()
+        } else if let Some(hit) = self.lifted.as_ref().and_then(|m| m.get(&(i, at))) {
+            hit.clone()
+        } else {
+            let out = payload
+                .shift_local(at.local)
+                .shift_global(at.global)
+                .shift_univ(at.univ);
+            self.lifted.get_or_insert_with(Default::default).insert((i, at), out.clone());
+            out
+        };
         // An *identity* substitution sends this variable to itself, and that
         // is common enough to be worth the O(1) test: `t[id]` should share all
         // of `t`, not rebuild it. Any other payload is a change.
@@ -1448,6 +1696,9 @@ impl Mapper for SubstLocal<'_> {
     fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
         bounds::skip_term(t, at.local)
     }
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
+    }
 }
 
 /// `t[s/x]` read `by` binders further out: `t` is scoped in `Γ, x`, the
@@ -1464,11 +1715,13 @@ struct InstTop<'a> {
     payload: &'a Term,
     by: u32,
     changes: u64,
+    memo: NodeMemo,
 }
 
 impl Mapper for InstTop<'_> {
     const LOCAL_OP: bool = true;
     const NAME: &'static str = "inst_top";
+    const COUNT_NODES: Option<fn(u64)> = Some(crate::stats::local_subst_nodes);
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
@@ -1510,6 +1763,9 @@ impl Mapper for InstTop<'_> {
     }
     fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
         bounds::skip_term(t, at.local)
+    }
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
     }
 }
 
@@ -1556,6 +1812,12 @@ struct AbstractLocal<'a> {
     /// Occurrences met, replaced or not — what a selection is numbered by.
     seen: u32,
     changes: u64,
+    /// The shared-node memo, when nothing is selected: then a node's result
+    /// is a function of the node and the depths, and a goal that shares a
+    /// subterm is abstracted once per depth, not once per path to it
+    /// (`docs/mengine-survey.md` §4.2). A selection numbers occurrences by
+    /// path, so it walks the tree.
+    memo: Option<NodeMemo>,
 }
 
 impl Mapper for AbstractLocal<'_> {
@@ -1564,6 +1826,10 @@ impl Mapper for AbstractLocal<'_> {
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        self.memo.as_mut()
     }
 
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
@@ -1614,6 +1880,9 @@ impl Mapper for AbstractLocal<'_> {
 struct RootTerms {
     out: Vec<Rc<Term>>,
     changes: u64,
+    /// Never changes anything, so its memo only records which shared nodes
+    /// were walked: a second path to one stops there.
+    memo: NodeMemo,
 }
 
 impl Mapper for RootTerms {
@@ -1624,8 +1893,14 @@ impl Mapper for RootTerms {
         &mut self.changes
     }
 
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
+    }
+
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
-        if at == Depths::default() {
+        // `pre_tm` runs before the memo is asked, so a shared node is
+        // listed only the first time it is met.
+        if at == Depths::default() && !self.memo.terms.contains_key(&(Rc::as_ptr(t) as usize, at)) {
             self.out.push(Rc::clone(t));
         }
         None
@@ -1636,6 +1911,7 @@ impl Mapper for RootTerms {
 struct SubstGlobal<'a> {
     sigma: &'a GlobalSubst,
     changes: u64,
+    memo: NodeMemo,
 }
 
 enum Resolved<'a> {
@@ -1677,6 +1953,10 @@ impl Mapper for SubstGlobal<'_> {
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
     }
 
     fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
@@ -1797,44 +2077,30 @@ macro_rules! ops {
         impl $ty {
             /// Apply a universe substitution `φ`.
             pub fn apply_univ(&self, phi: &[Level]) -> $ty {
-                $map(self, &mut SubstUniv { phi, changes: 0 }, Depths::default())
+                $map(self, &mut SubstUniv { phi, changes: 0, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// Instantiate the innermost `phi.len()` universe variables
             /// (`phi[0]` innermost), renumbering deeper variables down.
             pub fn inst_univ(&self, phi: &[Level]) -> $ty {
-                $map(self, &mut InstUniv { phi, changes: 0 }, Depths::default())
+                $map(self, &mut InstUniv { phi, changes: 0, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// Apply a local substitution `δ` (`self` scoped in δ's target).
             pub fn apply_local(&self, delta: &LocalSubst) -> $ty {
-                $map(self, &mut SubstLocal { delta, changes: 0 }, Depths::default())
+                $map(self, &mut SubstLocal { delta, changes: 0, lifted: None, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// Apply a global substitution `σ`.
             pub fn apply_global(&self, sigma: &GlobalSubst) -> $ty {
-                $map(self, &mut SubstGlobal { sigma, changes: 0 }, Depths::default())
-            }
-
-            /// Rewrite every level to the canonical representative of its
-            /// ≈-class, so that `a.normalize_levels() == b.normalize_levels()`
-            /// decides **syntactic equality modulo level equivalence**.
-            ///
-            /// That quotient is what DeLaM ch. 05's Static Code lemma
-            /// (`lem:dt:static`) states: at layers `v`/`c`, equivalence *is*
-            /// equality, "quotient over the equivalence of universe levels" —
-            /// the paper's own example being that `Ty (ℓ ⊔ ℓ')` and
-            /// `Ty (ℓ' ⊔ ℓ)` are equal **as code**. `conv.rs` uses this to
-            /// compare boxed code.
-            pub fn normalize_levels(&self) -> $ty {
-                $map(self, &mut NormalizeLevels { changes: 0 }, Depths::default())
+                $map(self, &mut SubstGlobal { sigma, changes: 0, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// `self[s/x]` weakened past `by` binders: `self` is scoped in
             /// `Γ, x`, `s` and the result in `Γ, Δ` with `|Δ| = by`. See
             /// [`InstTop`].
             pub fn inst_top(&self, by: u32, payload: &Term) -> $ty {
-                $map(self, &mut InstTop { payload, by, changes: 0 }, Depths::default())
+                $map(self, &mut InstTop { payload, by, changes: 0, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// [`Self::inst_top`] below `cutoff` binders that stay fixed:
@@ -1845,7 +2111,7 @@ macro_rules! ops {
             pub fn inst_top_above(&self, by: u32, cutoff: u32, payload: &Term) -> $ty {
                 $map(
                     self,
-                    &mut InstTop { payload, by, changes: 0 },
+                    &mut InstTop { payload, by, changes: 0, memo: NodeMemo::default() },
                     Depths { local: cutoff, ..Depths::default() },
                 )
             }
@@ -1855,7 +2121,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftLocal { by, changes: 0 }, Depths::default())
+                $map(self, &mut ShiftLocal { by, changes: 0, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// Weaken the local context by `by` entries between existing
@@ -1866,7 +2132,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftLocal { by, changes: 0 }, Depths { local: cutoff, ..Depths::default() })
+                $map(self, &mut ShiftLocal { by, changes: 0, memo: NodeMemo::default() }, Depths { local: cutoff, ..Depths::default() })
             }
 
             /// Weaken the global context by `by` bindings.
@@ -1874,7 +2140,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftGlobal { by, changes: 0 }, Depths::default())
+                $map(self, &mut ShiftGlobal { by, changes: 0, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// Weaken the universe context by `by` variables.
@@ -1882,7 +2148,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftUniv { by, changes: 0 }, Depths::default())
+                $map(self, &mut ShiftUniv { by, changes: 0, memo: NodeMemo::default() }, Depths::default())
             }
 
             /// Weaken the universe context by `by` variables *between*
@@ -1895,7 +2161,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftUniv { by, changes: 0 }, Depths { univ: cutoff, ..Depths::default() })
+                $map(self, &mut ShiftUniv { by, changes: 0, memo: NodeMemo::default() }, Depths { univ: cutoff, ..Depths::default() })
             }
 
             /// Weaken the global context by `by` bindings between existing
@@ -1905,7 +2171,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftGlobal { by, changes: 0 }, Depths { global: cutoff, ..Depths::default() })
+                $map(self, &mut ShiftGlobal { by, changes: 0, memo: NodeMemo::default() }, Depths { global: cutoff, ..Depths::default() })
             }
 
             /// Rename every free global variable through `map`, which sees
@@ -1998,6 +2264,7 @@ impl Type {
         let pats: Vec<(Term, Term)> = pats.iter().map(|p| (p.clone(), z.clone())).collect();
         let mut m = AbstractLocal {
             pats: &pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: Some(at), seen: 0, changes: 0,
+            memo: None,
         };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());
         ((m.hits > 0).then_some(out), m.seen)
@@ -2006,9 +2273,10 @@ impl Type {
     /// Every term node of `self` that sits under no binder of any of the
     /// three namespaces — so is scoped in `self`'s own context — in the order
     /// the traversal meets them (the order [`Self::abstract_local_at`]
-    /// numbers by), outermost first. A node's subterms follow it.
+    /// numbers by), outermost first. A node's subterms follow it. A shared
+    /// node is listed, and walked, once: where the traversal first meets it.
     pub fn root_terms(&self) -> Vec<Rc<Term>> {
-        let mut m = RootTerms { out: Vec::new(), changes: 0 };
+        let mut m = RootTerms { out: Vec::new(), changes: 0, memo: NodeMemo::default() };
         map_type(self, &mut m, Depths::default());
         m.out
     }
@@ -2016,6 +2284,7 @@ impl Type {
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {
         let mut m = AbstractLocal {
             pats, witness: Vec::new(), witness_under: Vec::new(), hits: 0, select: None, seen: 0, changes: 0,
+            memo: Some(NodeMemo::default()),
         };
         let out = map_type(&self.shift_local(1), &mut m, Depths::default());
         (m.hits > 0).then_some(out)
@@ -2024,18 +2293,18 @@ impl Type {
 
 impl LocalCtx {
     pub fn apply_univ(&self, phi: &[Level]) -> LocalCtx {
-        map_ctx(self, &mut SubstUniv { phi, changes: 0 }, Depths::default())
+        map_ctx(self, &mut SubstUniv { phi, changes: 0, memo: NodeMemo::default() }, Depths::default())
     }
 
     pub fn apply_global(&self, sigma: &GlobalSubst) -> LocalCtx {
-        map_ctx(self, &mut SubstGlobal { sigma, changes: 0 }, Depths::default())
+        map_ctx(self, &mut SubstGlobal { sigma, changes: 0, memo: NodeMemo::default() }, Depths::default())
     }
 
     pub fn shift_global(&self, by: u32) -> LocalCtx {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_ctx(self, &mut ShiftGlobal { by, changes: 0 }, Depths::default())
+        map_ctx(self, &mut ShiftGlobal { by, changes: 0, memo: NodeMemo::default() }, Depths::default())
     }
 
     /// [`Self::shift_global`] between existing bindings: the innermost
@@ -2044,14 +2313,14 @@ impl LocalCtx {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_ctx(self, &mut ShiftGlobal { by, changes: 0 }, Depths { global: cutoff, ..Depths::default() })
+        map_ctx(self, &mut ShiftGlobal { by, changes: 0, memo: NodeMemo::default() }, Depths { global: cutoff, ..Depths::default() })
     }
 
     pub fn shift_univ(&self, by: u32) -> LocalCtx {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_ctx(self, &mut ShiftUniv { by, changes: 0 }, Depths::default())
+        map_ctx(self, &mut ShiftUniv { by, changes: 0, memo: NodeMemo::default() }, Depths::default())
     }
 }
 
@@ -2063,9 +2332,9 @@ impl LocalSubst {
             CtxBase::Nil => SubstTail::Empty { len: m, base: CtxBase::Nil },
             CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
         };
-        let terms = (0..m)
-            .map(|j| Rc::new(Term::Var(LocalVar(m - 1 - j))))
-            .collect();
+        // Shared leaves: `|Γ|` refcount increments, not `|Γ|` allocations
+        // (`issues/subst-per-call-allocations.md`).
+        let terms = Term::var_rcs_descending(m);
         LocalSubst { tail, terms }
     }
 
@@ -2079,29 +2348,29 @@ impl LocalSubst {
 
     /// Composition `self ∘ other`: `t[self][other] == t[self.compose(other)]`.
     pub fn compose(&self, other: &LocalSubst) -> LocalSubst {
-        map_subst(self, &mut SubstLocal { delta: other, changes: 0 }, Depths::default())
+        map_subst(self, &mut SubstLocal { delta: other, changes: 0, lifted: None, memo: NodeMemo::default() }, Depths::default())
     }
 
     pub fn apply_univ(&self, phi: &[Level]) -> LocalSubst {
-        map_subst(self, &mut SubstUniv { phi, changes: 0 }, Depths::default())
+        map_subst(self, &mut SubstUniv { phi, changes: 0, memo: NodeMemo::default() }, Depths::default())
     }
 
     pub fn apply_global(&self, sigma: &GlobalSubst) -> LocalSubst {
-        map_subst(self, &mut SubstGlobal { sigma, changes: 0 }, Depths::default())
+        map_subst(self, &mut SubstGlobal { sigma, changes: 0, memo: NodeMemo::default() }, Depths::default())
     }
 
     pub fn shift_local(&self, by: u32) -> LocalSubst {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_subst(self, &mut ShiftLocal { by, changes: 0 }, Depths::default())
+        map_subst(self, &mut ShiftLocal { by, changes: 0, memo: NodeMemo::default() }, Depths::default())
     }
 
     pub fn shift_global(&self, by: u32) -> LocalSubst {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_subst(self, &mut ShiftGlobal { by, changes: 0 }, Depths::default())
+        map_subst(self, &mut ShiftGlobal { by, changes: 0, memo: NodeMemo::default() }, Depths::default())
     }
 }
 
@@ -2120,6 +2389,48 @@ mod tests {
 
     fn nil_ctx(n: u32) -> LocalCtx {
         LocalCtx::from_vec(CtxBase::Nil, (0..n).map(|_| nat_entry()).collect())
+    }
+
+    /// §Keeping a shared DAG shared: a chain whose every link holds the
+    /// previous one as both children is `k` nodes in memory and `2^k` as a
+    /// tree. A shift and a substitution each visit it in O(k) and return it
+    /// exactly as shared as it was.
+    #[test]
+    fn a_shared_chain_stays_shared_through_shift_and_substitution() {
+        const K: u32 = 24;
+        let nat = Rc::new(Type::Nat);
+        let mut t = rt(Term::Var(LocalVar(0)));
+        for _ in 0..K {
+            t = rt(Term::App {
+                fun: Rc::clone(&t),
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::clone(&nat),
+                cod: Rc::clone(&nat),
+                arg: t,
+            });
+        }
+        let gamma = nil_ctx(1);
+        let succ = |v: u32| Term::Succ(rt(Term::Var(LocalVar(v))));
+        let delta = LocalSubst::id(&gamma).extended(rt(succ(0)));
+        let ops: [(&str, &dyn Fn(&Term) -> Term, Term); 2] = [
+            ("shift_local", &|t: &Term| t.shift_local(1), Term::Var(LocalVar(1))),
+            ("apply_local", &|t: &Term| t.apply_local(&delta), succ(0)),
+        ];
+        for (name, op, leaf) in ops {
+            let before = crate::stats::snapshot();
+            let out = op(&t);
+            let d = crate::stats::snapshot().since(&before);
+            assert!(d.local_subst_nodes <= 8 * K as u64, "{name} visited {} nodes", d.local_subst_nodes);
+            assert!(d.subst_memo_hits >= K as u64 - 1, "{name} hit its memo {} times", d.subst_memo_hits);
+            let mut node: &Term = &out;
+            for _ in 0..K {
+                let Term::App { fun, arg, .. } = node else { panic!("{name} changed the chain's shape") };
+                assert!(Rc::ptr_eq(fun, arg), "{name} copied a shared child apart");
+                node = &**fun;
+            }
+            assert_eq!(*node, leaf, "{name} at the leaf");
+        }
     }
 
     #[test]
@@ -2333,6 +2644,19 @@ impl Mapper for RebuildChecked<'_> {
 
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
         use crate::typing::Spelled;
+        // A packed vector literal is a compact spelling too, and needs no
+        // recorded view: it carries its own annotations, so its chain is
+        // written out directly (`term::vec_lit_chain`).
+        if let Term::VecLit { level, elem, zero, one, width, bits } = &**t {
+            if !crate::term::vec_lit_in_range(*width, *bits) {
+                return None;
+            }
+            self.seen += 1;
+            self.replaced += 1;
+            let elem = sub_ty(elem, self, at);
+            let (zero, one) = (sub_tm(zero, self, at), sub_tm(one, self, at));
+            return Some(crate::term::vec_lit_chain(level, &elem, &zero, &one, *width, *bits));
+        }
         if !matches!(
             &**t,
             Term::PairAt { .. }

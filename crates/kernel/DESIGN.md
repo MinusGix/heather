@@ -19,8 +19,11 @@ applications. Concretely:
   (`Nat`, `Π`, `Ty l` as terms) decode via `El`. Non-cumulative; explicit
   levels on Π, λ, app.
 - Universe levels with variables, `⊔`, `ω`; equivalence decided by the
-  count/adjust map normalization (ch. 04 §universe-levels). `ω` is
-  checker-internal: never written in programs, only the type level of `ΠΠ`.
+  count/adjust map normalization (ch. 04 §universe-levels), and a `Level` *is*
+  that normal form: every constructor returns the canonical representative,
+  so `≈` is `==` (16 bytes, joins behind an `Rc`; `level.rs`,
+  `issues/kernel-compact-level.md`). `ω` is checker-internal: never written
+  in programs, only the type level of `ΠΠ`.
 - Universe polymorphism: `ΠΠ ℓ⃗. T` / `Λ ℓ⃗. t` / `t $ l⃗`, non-empty level
   vectors, layer m only.
 - Nat with its recursor; fully-annotated dependent functions
@@ -479,6 +482,29 @@ definition's spelling; the library's vectors sit inside a record, so a
 peeled argument is a `Vec` in a unit-like Σ-context and the class carries the
 projection path to it.
 
+A fold whose one argument is a `Nat` is the same machine with an infinite
+state (`docs/bitvector-literal-entry-design.md` §10.10). `bitvec::ofNat`
+recurses on the width carrying `x`, and its step is `cons(f(x), ih(g(x)))`;
+there is nothing to tabulate, so the class instead reads `f` and `g` off the
+probe value as **data**: each is the state variable under a spine of
+projections and `elim_Nat`s whose steps classify as affine trees (the `Nat`
+classes above — `odd_bit`'s and `half`'s course-of-values windows are
+permutations), with every fold's base, and a peeled fold's innermost step,
+read back as a closed pair of naturals and bits. At a closed state the word
+is then arithmetic — the orbit `x, g(x), g(g(x)), …` read through `f`, each
+iterate computed as `eval/runs.rs` would compute that fold, here as a walk
+of the tree's functional graph — and nothing is replayed. Adequacy is the
+substitution property with the state as a third probe variable: the probe
+value was reached with `k`, `ih` and `x` neutral and no case split stuck on
+any of them, so at every instantiation the step is the same eliminations
+applied to `v`; and since what was read out of them holds no closure, it is
+applied to `v` without substituting into one. Whatever does not read back
+closed — a base that mentions `x`, an opaque fold, an `ih` inside the bit —
+declines the class, and an open state at the call declines the firing: both
+fold exactly as before. The replay this replaced (run the step once per bit)
+was correct and no faster than the structural fold, which is why it was
+never landed.
+
 Conversion compares two vectors over such an element type by their words,
 before Σ-η, packing a structural side by the `fst`/`snd` η would have taken;
 a side that is two stuck spines is left to the neutral-first guard, and a
@@ -489,6 +515,38 @@ classify — an open `Fin` index, a recursion on a shift count, a state type
 above the cap — folds exactly as it does today, and what does not meet the
 criterion — an element type with a payload of its own, an open width, a chain
 that stops being a Σ — is compared exactly as it is today.
+
+**A vector literal is a term** (`Term::VecLit`,
+`issues/packed-vector-literal-term.md`, `docs/bitvector-literal-entry-design.md`
+§3, §6). `VecLit{ℓ, elem, zero, one, w, bits}` is a closed prefix of a `Vec`
+all of whose elements are one of two given terms, and it is `NatLit` one
+former over: notation for the right-nested Σ-chain `⟨e(b₀), ⟨e(b₁), … ⟨⟩⟩⟩`
+with `e(0) = zero` and `e(1) = one`, `1 ≤ w ≤ 64`, bit `i` the `i`th
+element. Its typing rule checks `elem` as a type and `zero` and `one`
+against it — three judgements, independent of the width — and nothing else:
+the rule contains no two-valued criterion and names no library type, so the
+term means the chain whatever `elem` is. Adequacy is that unfolding
+identity, and it has one owner, `term::vec_lit_unfold`: the chain's head
+pair with the `Vec` rule's own annotations and a `VecLit` one element
+shorter (or `⟨⟩` at width one). `reduce.rs`'s `Fst`/`Snd` arms, the
+evaluator's fallback, and the full chain (`vec_lit_chain`) are all built
+from it, so the literal and its chain are one step apart everywhere. What
+the term buys is entry: when `elem` meets the bit criterion and `zero`/`one`
+evaluate to its injections, the evaluator reads the whole literal into one
+`Val::BitRun`, the eager route the value domain cannot have at `Term::Pair`,
+available because the term carries the element type a pair does not. That
+entry charges one fuel unit, not one per bit: the width is capped at the
+word, and it is fewer than the chain's walk spent, which is the rule above.
+When the criterion declines (an open element type, an element with a payload
+of its own, an `elem` that is not two-valued) the literal evaluates to its
+head pair with the shorter literal behind it, one node per demanded bit.
+It is a compact spelling the code recursors cannot see whole, so like the
+checked spellings it is refused under `box` and in layer v, and the quote
+boundary and the exporter write out its chain (`RebuildChecked`). The
+elaborator emits one only for a vector literal whose elements are closed and
+at most two distinct terms over an element type that whnfs to a sum, packing
+the last 64 and keeping any prefix as pairs (`check_vec_lit`); everything
+else elaborates as before.
 
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
@@ -728,6 +786,20 @@ paper too).
   recomputation allocates fewer closures. The memo changes the fuel a query
   spends, never a verdict: it is a function of the closure alone, and only
   successes are remembered.
+  A closure whose body reads **no capture** is one value wherever it is
+  read, so the arena also keeps closed closures' values by their body and
+  global offset alone (`TmClo::closed_ident`; the environment's length too
+  when the body holds a substitution tail, which the length rewrites), and
+  the fold-class and transducer memos key a step or motive the same way
+  past its own binders (`TmClo::ident_under`). Both answer the same
+  question the closure key does, for every closure over that body: a
+  definition's unfolding closes its body's constants and its folds' steps
+  over each call's arguments afresh, and keyed by address they were
+  re-evaluated and re-probed once per call — on a native certificate piece
+  that was over a third of the evaluator's steps
+  (`issues/native-certificate-pieces-remaining-cost.md`). The test is the
+  bounds memo's footprint, the same reading conversion's closure identity
+  makes.
   Hot handles are kept compact: an environment closure captures only its
   persistent head and length, while whichever machine extends it supplies the
   already-owned query arena explicitly. Persistent cells remain two pointers.
@@ -804,6 +876,25 @@ paper too).
   for large linear candidate scans. Fuel is constant across a gate, and only
   a judgment already proved successful at that fuel is reused, so the memo
   changes work but not the kernel verdict.
+  The same gate keeps a **typing memo** on node identity
+  (`issues/kernel-typing-memo-on-node-identity.md`; `typing.rs` §The typing
+  memo): per term node and scope, an elimination's inferred type and the
+  expected types an intro form checked against, so a node reached along two
+  paths (a `let` alias used twice) is judged once per scope rather than once
+  per path. The scope is identities only: the node's allocation, Ψ's and Γ's
+  identity tokens, Γ's base, layer, universe count and the `box` bit, which
+  are everything a rule reads besides the node; each entry owns the node and
+  both tokens. A hit skips whole judgments, conversion queries and their
+  fuel included, so which lookups hit must be a function of the input, and
+  is by construction: entries are chosen
+  by node kind, never by reference count (the bounds memo's keep-alives
+  perturb counts), nothing is evicted, and failures are not cached. A
+  tail-free node that reads only Γ's innermost few entries, whose types stay
+  among them, is keyed by those entries instead of by Γ (a *strengthened*
+  scope): its judgment is the same under any Γ ending in them, which is what
+  lets an indexed family's index functions be judged once rather than once
+  per level of every case tree whose motive carries them
+  (`issues/indexed-family-recursion-gate-cost.md`).
 
 ## Representation
 

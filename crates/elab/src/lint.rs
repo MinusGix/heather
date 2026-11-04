@@ -49,6 +49,17 @@ pub enum Lint {
     /// A `fn`'s recursive `match` reads its own parameter, so the `fn` is
     /// compiled by measure (issues/fn-recursion-means-the-function.md).
     RecursionByMeasure,
+    /// A structural `fn` whose compiled definition does not unfold to its
+    /// source (issues/recursion-meaning-check.md). Review-mode only: its
+    /// recognizer states and gates one equation per recursive `fn`.
+    RecursionMeaning,
+    /// A decimal literal at a carrier that does not hold its value exactly
+    /// (`0.1` at a binary float), decided by the carrier's `DecimalLiteral`
+    /// instance (docs/floating-point-design.md §15).
+    InexactLiteral,
+    /// What a tactic says about a run that succeeded (`tactic::say`): an
+    /// account a reader acts on, such as the lemmas `grind_report` used.
+    TacticReport,
 }
 
 impl Lint {
@@ -65,6 +76,9 @@ impl Lint {
             Self::RedundantMatchMotive => "redundant-match-motive",
             Self::ManualListConstruction => "manual-list-construction",
             Self::RecursionByMeasure => "recursion-by-measure",
+            Self::RecursionMeaning => "recursion-meaning",
+            Self::InexactLiteral => "inexact-literal",
+            Self::TacticReport => "tactic-report",
         }
     }
 }
@@ -181,6 +195,11 @@ pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
             datarepr_body(&d.body, &mut out);
         }
         Item::Impl(i) => datarepr_body(&i.body, &mut out),
+        Item::Generate(g) => expr(&g.generator, &mut out),
+        Item::Prefixed(p) => {
+            expr(&p.generator, &mut out);
+            decl(&p.decl, &mut out);
+        }
         Item::Import(_) => {}
     }
     out
@@ -253,6 +272,8 @@ fn ty(t: &Ty, out: &mut Vec<Finding>) {
             expr(b, out);
         }
         TyKind::OfExpr(e) | TyKind::Fin(e) => expr(e, out),
+        // A `def`'s inferred type is its value, linted as its body.
+        TyKind::TypeOf(_) => {}
         TyKind::Named { args, .. } => args.iter().for_each(|a| ty(a, out)),
         TyKind::Squash(inner) => ty(inner, out),
         TyKind::Vec { elem, len } => {
@@ -280,6 +301,7 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         | ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
         | ExprKind::Char(_)
         | ExprKind::Str(_)
         | ExprKind::ArgSlot(_)
@@ -607,6 +629,7 @@ impl BinderUses {
                 self.expr(b);
             }
             TyKind::OfExpr(e) | TyKind::Fin(e) => self.expr(e),
+            TyKind::TypeOf(_) => {}
             TyKind::Named { args, .. } => args.iter().for_each(|a| self.ty(a)),
             TyKind::Squash(inner) => self.ty(inner),
             TyKind::Vec { elem, len } => {
@@ -667,6 +690,7 @@ impl BinderUses {
             ExprKind::OpSymbol { .. }
             | ExprKind::Univ { .. }
             | ExprKind::Num(_)
+            | ExprKind::Scaled(_)
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)
@@ -807,14 +831,5 @@ fn stdlib_unicode_spelling(item: &Item, source: &Source<'_>, out: &mut Vec<Findi
 }
 
 pub(crate) fn item_span(item: &Item) -> Span {
-    match item {
-        Item::Decl(x) => x.span,
-        Item::Inductive(x) => x.span,
-        Item::Class(x) => x.span,
-        Item::Instance(x) => x.span,
-        Item::Designation(x) => x.span,
-        Item::Datarepr(x) => x.span,
-        Item::Impl(x) => x.span,
-        Item::Import(x) => x.span,
-    }
+    item.span()
 }

@@ -1,0 +1,36 @@
+// Probes of `lib/kernel_model/kernel_whnf.hthr`, weak-head reduction with no
+// fuel: the same runs as the fuelled model's probes, at literal terms by a
+// count and `refl`, soundness used at a literal run, a term that loops
+// forever, and the negative controls. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import itree; import itree_trace; import coitree; import coitree_eutt;
+import coitree_rec; import kernel_reduction; import kernel_runs; import kernel_whnf;
+
+// `add`'s step, `λ k ih. Succ(ih)`, as in kernel_reduction_tests.
+fn add_step() → Tm { Lam(Lam(NSucc(Bv(0)))) }
+fn three() → Tm { NSucc(NSucc(NSucc(NZero))) }
+
+theorem beta(): CoTree::after(Events::none(), 10, Tm::whnf_co(App(Lam(Bv(0)), Fv(7)))) = ORet(Fv(7)) { refl }
+theorem add_at_three(): CoTree::after(Events::none(), 40, Tm::whnf_co(App(App(add_step(), three()), three()))) = ORet(NSucc(three())) { refl }
+theorem iota_zero(): CoTree::after(Events::none(), 20, Tm::whnf_co(NRec(Fv(1), Fv(2), NZero))) = ORet(Fv(1)) { refl }
+theorem stuck(): CoTree::after(Events::none(), 20, Tm::whnf_co(App(Fv(3), Fv(4)))) = ORet(App(Fv(3), Fv(4))) { refl }
+
+// Soundness at a literal run: the run's count is the only number, and it is
+// in the evidence, not in the statement.
+theorem beta_reduces(): App(Lam(Bv(0)), Fv(7)).Reduces(Fv(7)) {
+    Tm::whnf_co_sound(App(Lam(Bv(0)), Fv(7)), Fv(7), Returns(10, refl))
+}
+
+// `Ω` reduces to itself, so its run is still taking silent steps after any
+// count tried. (That it never returns needs an invariant saying a λ's only
+// reduct is itself; issues/partial-functions-coinductive.md.)
+fn omega_half() → Tm { Lam(App(Bv(0), Bv(0))) }
+theorem omega_runs_on(): ¬Obs::Settled(Events::none(), CoTree::after(Events::none(), 60, Tm::whnf_co(App(omega_half(), omega_half())))) {
+    λ settled => settled
+}
+
+// The negative controls: a wrong normal form, and a count too small to reach it.
+// expect-error(kernel): the kernel rejected `beta_wrong`: NotConvertible
+theorem beta_wrong(): CoTree::after(Events::none(), 10, Tm::whnf_co(App(Lam(Bv(0)), Fv(7)))) = ORet(Fv(8)) { refl }
+// expect-error(kernel): the kernel rejected `add_short`: NotConvertible
+theorem add_short(): CoTree::after(Events::none(), 2, Tm::whnf_co(App(App(add_step(), three()), three()))) = ORet(NSucc(three())) { refl }

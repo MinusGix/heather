@@ -1,0 +1,373 @@
+// cat and the tools past it (docs/native-real-programs-plan.md, rounds 1,
+// 5, 6, 7 and 9): `tr a-z A-Z`, `yes`, `head -c N`, `wc -l`, `echo` and
+// `yes STR` over the command line, `cat FILE…`, `wc [-clw]` and
+// `head -n N` over decimals (`native_decimal`), and `grep -F PATTERN` over
+// a procedure (docs/native-procedures-design.md), written with the builder
+// (`native_build`) and lowered to sources `heather write-elf` compiles.
+// `native_compile_correct` is the proof of every one, so none has a theorem
+// of its own (`write-elf`'s certificate states `<s>_elf_simulates` of the
+// source the tool lowers to).
+import native_build;
+import native_decimal;
+import native_source;
+import list;
+import bitvec;
+import string;
+import char;
+import bool;
+import nat;
+
+// ---------------------------------------------------------------------------
+// cat
+
+// `native_cat`'s cat, written with the builder. That one stays the cat the
+// spec proofs speak of (`native_cat_spec`), whose tree they read.
+fn cat_tool(capacity: Nat) → Tool {
+    buffer(capacity, λ buf => run(each_read(stdin(), buf, λ n => write_all(stdout(), buf, n.get()))))
+}
+
+fn cat_tool_256() → Tool { cat_tool(256) }
+
+// ---------------------------------------------------------------------------
+// tr a-z A-Z
+
+// The buffer's first `count` bytes, each raised where it is a lower-case
+// letter: one bounded loop over the index, a region the compiler takes
+// whole (issues/native-build-loop-regions.md).
+fn raise_bytes(buf: Buf, count: Val) → Calc {
+    count_up(count, [], λ i => fresh(buf.at(i.get()), λ c =>
+        only_if((c.get() - num(97)).below(num(26)), buf.store(i.get(), c.get() - num(32)))))
+}
+
+// Each byte read raised where it is a lower-case letter, then written.
+fn tr_upper(capacity: Nat) → Tool {
+    buffer(capacity, λ buf => run(each_read(stdin(), buf, λ n =>
+        compute(raise_bytes(buf, n.get())) ++ write_all(stdout(), buf, n.get()))))
+}
+
+fn tr_upper_tool() → Tool { tr_upper(256) }
+
+// ---------------------------------------------------------------------------
+// yes
+
+// The line, written again and again; a failed write exits 1.
+fn yes(line: List<BitVec(8)>) → Tool {
+    buffer_of(line, λ buf => run(do_while(write_all(stdout(), buf, buf.size()), num(1))))
+}
+
+// Bytes by their codes.
+fn ascii(codes: List<Nat>) → List<BitVec(8)> { codes.map(λ (code: Nat) => BitVec::ofNat(code)) }
+
+// "yes, heather\n".
+fn yes_line() → List<BitVec(8)> { ascii([121, 101, 115, 44, 32, 104, 101, 97, 116, 104, 101, 114, 10]) }
+
+fn yes_tool() → Tool { yes(yes_line()) }
+
+// ---------------------------------------------------------------------------
+// head -c N
+
+// The first `count` bytes of the input, or all of it if it is shorter.
+fn head_c(count, capacity: Nat) → Tool {
+    buffer(capacity, λ buf => run(local(num(count), λ left => local(num(0), λ n => do_while(
+        read(stdin(), buf, left.get(), n) ++ when(n.get().negative(), exit(num(1)))
+            ++ write_all(stdout(), buf, n.get()) ++ left.set(left.get() - n.get()),
+        n.get().and_also(left.get()))))))
+}
+
+fn head_c10_tool() → Tool { head_c(10, 256) }
+
+// ---------------------------------------------------------------------------
+// wc -l
+
+// The input's newlines counted, the count the exit status (Linux keeps its
+// low byte).
+fn wc_l(capacity: Nat) → Tool {
+    buffer(capacity, λ buf => run(local(num(0), λ lines =>
+        each_read(stdin(), buf, λ n => for_count(n.get(), λ i =>
+            when(buf.at(i.get()).equals(num(10)), lines.set(lines.get() + num(1)))))
+        ++ exit(lines.get()))))
+}
+
+fn wc_l_tool() → Tool { wc_l(256) }
+
+// ---------------------------------------------------------------------------
+// echo
+
+// The arguments past the program's name, a space between each, then a
+// newline: GNU's `echo` given no flags. An argument longer than the buffer
+// exits 1 where it would be written (the copy keeps only the buffer's
+// worth; issues/native-source-argv.md).
+fn echo(capacity: Nat) → Tool {
+    buffer(capacity, λ text => buffer_of([BitVec::ofNat(32)], λ space => buffer_of([BitVec::ofNat(10)], λ newline =>
+        run(local(num(1), λ k => local(num(0), λ len =>
+            arg(k.get(), text, len)
+            ++ loop_while(len.get().negative().not(),
+                when(num(capacity).below(len.get()), exit(num(1)))
+                ++ write_all(stdout(), text, len.get())
+                ++ k.set(k.get() + num(1))
+                ++ arg(k.get(), text, len)
+                ++ when(len.get().negative().not(), write_all(stdout(), space, num(1))))
+            ++ write_all(stdout(), newline, num(1))))))))
+}
+
+fn echo_tool() → Tool { echo(1024) }
+
+// ---------------------------------------------------------------------------
+// yes STR
+
+// The line of the arguments past the program's name, a space between each,
+// or `y` if there are none, written again and again: GNU's `yes`. A line
+// longer than the buffer exits 1 before anything is written; a failed write
+// exits 1.
+fn yes_args(capacity: Nat) → Tool {
+    buffer(capacity, λ text => buffer(capacity, λ line => run(
+        local(num(1), λ k => local(num(0), λ len => local(num(0), λ at =>
+            arg(k.get(), text, len)
+            ++ branch(len.get().negative(),
+                line.put(num(0), num(121)) ++ at.set(num(1)),
+                loop_while(len.get().negative().not(),
+                    when(num(capacity).below(at.get() + len.get() + num(1)), exit(num(1)))
+                    ++ for_count(len.get(), λ i => line.put(at.get() + i.get(), text.at(i.get())))
+                    ++ at.set(at.get() + len.get())
+                    ++ k.set(k.get() + num(1))
+                    ++ arg(k.get(), text, len)
+                    ++ when(len.get().negative().not(), line.put(at.get(), num(32)) ++ at.set(at.get() + num(1)))))
+            ++ line.put(at.get(), num(10)) ++ at.set(at.get() + num(1))
+            ++ do_while(write_all(stdout(), line, at.get()), num(1))))))))
+}
+
+fn yes_args_tool() → Tool { yes_args(1024) }
+
+// ---------------------------------------------------------------------------
+// cat FILE…
+
+// ASCII text's bytes, one per character (the code of each below 128).
+fn ascii_text(s: String) → List<BitVec(8)> { s.chars.map(λ (c: Char) => BitVec::ofNat(c.code)) }
+
+// One entry of cat's message table: the errno, the length of the text, and
+// the text ": MESSAGE\n".
+fn cat_entry(errno: Nat, message: String) → List<BitVec(8)> {
+    let text = ascii_text(": ") ++ ascii_text(message) ++ ascii_text("\n");
+    Cons(BitVec::ofNat(errno), Cons(BitVec::ofNat(text.len()), text))
+}
+
+// The diagnostics' buffer: "cat: write error" (its first five bytes are
+// "cat: "), then the errnos a cat may meet with glibc's message for each
+// (strerror in the C locale), then errno 0's entry, "Unknown error", which
+// a scan for an errno not in the table stops at. GNU adds the number there
+// (decimal output is round 9, issues/native-decimal-io.md). A buffer's
+// initial bytes are stored by the entry, a few kernel steps each, stated a
+// stretch at a time (issues/native-tool-certificate-budget.md).
+fn cat_table() → List<BitVec(8)> {
+    ascii_text("cat: write error") ++ cat_entry(2, "No such file or directory") ++ cat_entry(13, "Permission denied")
+        ++ cat_entry(21, "Is a directory") ++ cat_entry(20, "Not a directory") ++ cat_entry(36, "File name too long")
+        ++ cat_entry(40, "Too many levels of symbolic links") ++ cat_entry(5, "Input/output error") ++ cat_entry(28, "No space left on device")
+        ++ cat_entry(1, "Operation not permitted") ++ cat_entry(4, "Interrupted system call") ++ cat_entry(6, "No such device or address")
+        ++ cat_entry(9, "Bad file descriptor") ++ cat_entry(11, "Resource temporarily unavailable") ++ cat_entry(12, "Cannot allocate memory")
+        ++ cat_entry(14, "Bad address") ++ cat_entry(19, "No such device") ++ cat_entry(22, "Invalid argument")
+        ++ cat_entry(23, "Too many open files in system") ++ cat_entry(24, "Too many open files") ++ cat_entry(26, "Text file busy")
+        ++ cat_entry(27, "File too large") ++ cat_entry(30, "Read-only file system") ++ cat_entry(32, "Broken pipe")
+        ++ cat_entry(75, "Value too large for defined data type") ++ cat_entry(116, "Stale file handle") ++ cat_entry(122, "Disk quota exceeded")
+        ++ cat_entry(0, "Unknown error")
+}
+
+// Bytes of a buffer to stderr; a failed write exits 1.
+fn say(texts: Buf, from, len: Val) → Act { write_span(stderr(), texts, from, len, λ _ => exit(num(1))) }
+
+// GNU's `cat FILE…` given no options: each file in turn to stdout, `-` (or
+// no file at all) stdin. A file that does not open, or a read or close that
+// fails, says "cat: FILE: MESSAGE" on stderr and the exit status is 1, and
+// the next file goes on; a write that fails says "cat: write error:
+// MESSAGE" and exits 1. A name longer than its buffer exits 1. GNU's
+// options, its quoting of odd names, and its check that an input is not the
+// output (which needs fstat) are not here.
+//
+// The builder inlines what it calls, so each file's errno (`failed`, or
+// `refused` for a write) is kept and one report after the file says it,
+// its message found by a scan of the table: one copy of the code that
+// writes a diagnostic, whatever the table holds.
+fn cat_files(capacity, name_cap: Nat) → Tool {
+    buffer(capacity, λ data => buffer(name_cap, λ name => buffer_of(cat_table(), λ texts => run(
+        local(num(0), λ status => local(num(1), λ k => local(num(0), λ len => local(num(0), λ fd => local(num(0), λ n =>
+        local(num(0), λ closed => local(num(0), λ failed => local(num(0), λ refused => local(num(0), λ at =>
+            arg(k.get(), name, len)
+            ++ when(len.get().negative(), name.put(num(0), num(45)) ++ len.set(num(1)))
+            ++ loop_while(len.get().negative().not(),
+                when(num(name_cap).below(len.get()), exit(num(1)))
+                ++ failed.set(num(0))
+                ++ branch(len.get().equals(num(1)).and_also(name.at(num(0)).equals(num(45))), fd.set(num(0)), open(name, len.get(), fd))
+                ++ branch(fd.get().negative(), failed.set(num(0) - fd.get()),
+                    do_while(
+                        read(fd.get(), data, data.size(), n)
+                        ++ branch(n.get().negative(), failed.set(num(0) - n.get()),
+                            write_span(stdout(), data, num(0), n.get(), λ wrote => refused.set(num(0) - wrote.get()))),
+                        n.get().negative().not().and_also(n.get()).and_also(refused.get().not()))
+                    ++ when(fd.get().differs(num(0)), close(fd.get(), closed)
+                        ++ when(closed.get().negative().and_also(failed.get().or_else(refused.get()).not()), failed.set(num(0) - closed.get()))))
+                ++ when(failed.get().or_else(refused.get()),
+                    failed.set(failed.get() + refused.get())
+                    ++ at.set(num(5))
+                    ++ when(refused.get(), at.set(num(16)))
+                    ++ say(texts, num(0), at.get())
+                    ++ when(refused.get().not(), write_span(stderr(), name, num(0), len.get(), λ _ => exit(num(1))))
+                    ++ at.set(num(16))
+                    ++ loop_while(texts.at(at.get()).differs(failed.get()).and_also(texts.at(at.get())),
+                        at.set(at.get() + texts.at(at.get() + num(1)) + num(2)))
+                    ++ say(texts, at.get() + num(2), texts.at(at.get() + num(1)))
+                    ++ when(refused.get(), exit(num(1)))
+                    ++ status.set(num(1)))
+                ++ k.set(k.get() + num(1))
+                ++ arg(k.get(), name, len))
+            ++ exit(status.get()))))))))))))))
+}
+
+fn cat_files_tool() → Tool { cat_files(1024, 512) }
+
+// ---------------------------------------------------------------------------
+// wc [-clw]
+
+// The byte's being a space to `wc` in the C locale (`isspace`: tab,
+// newline, vertical tab, form feed, carriage return, space), and its being
+// printable and not a space (`isgraph`). A word is a run that starts at a
+// byte of the second kind and ends at one of the first; a byte of neither
+// kind (control bytes, the bytes past 126) neither starts nor ends one.
+fn Val::spacing(self c: Val) → Val { (c - num(9)).below(num(5)).or_else(c.equals(num(32))) }
+fn Val::graphic(self c: Val) → Val { (c - num(33)).below(num(94)) }
+
+// GNU's `wc` over stdin given flags among `-l`, `-w`, `-c` (each one
+// argument, or joined as `-lc`), or none for all three: the counts asked
+// for, lines then words then bytes, on one line. One count is printed as
+// it is; more are each right-aligned in seven columns and separated by a
+// space, as GNU pads them for an input it cannot size (a pipe). An
+// argument that is not such a flag exits 1; GNU's other options and its
+// files are not here.
+//
+// The three counts go through one copy of the formatter: `field` counts
+// the columns, `bit` is the flag of the one at hand.
+fn wc_counts(capacity: Nat) → Tool {
+    buffer(capacity, λ data => buffer(8, λ flag => buffer(64, λ out => run(
+        local(num(0), λ show => local(num(1), λ k => local(num(0), λ len =>
+            arg(k.get(), flag, len)
+            ++ loop_while(len.get().negative().not(),
+                when(num(8).below(len.get()).or_else(len.get().below(num(2))).or_else(flag.at(num(0)).differs(num(45))), exit(num(1)))
+                ++ for_count(len.get() - num(1), λ i => local(flag.at(i.get() + num(1)), λ c =>
+                    branch(c.get().equals(num(108)), show.set(show.get().bits_or(num(1))),
+                        branch(c.get().equals(num(119)), show.set(show.get().bits_or(num(2))),
+                            branch(c.get().equals(num(99)), show.set(show.get().bits_or(num(4))), exit(num(1)))))))
+                ++ k.set(k.get() + num(1))
+                ++ arg(k.get(), flag, len))
+            ++ when(show.get().not(), show.set(num(7)))
+            ++ local(num(0), λ lines => local(num(0), λ words => local(num(0), λ bytes => local(num(0), λ inword =>
+                each_read(stdin(), data, λ n => for_count(n.get(), λ i => local(data.at(i.get()), λ c =>
+                    when(c.get().equals(num(10)), lines.set(lines.get() + num(1)))
+                    ++ branch(c.get().spacing(), inword.set(num(0)),
+                        when(c.get().graphic().and_also(inword.get().not()), inword.set(num(1)) ++ words.set(words.get() + num(1))))))
+                    ++ bytes.set(bytes.get() + n.get()))
+                ++ local(num(7), λ width => local(num(0), λ at => local(num(1), λ bit => local(num(0), λ field => local(num(0), λ v =>
+                    when(show.get().equals(num(1)).or_else(show.get().equals(num(2))).or_else(show.get().equals(num(4))), width.set(num(1)))
+                    ++ loop_while(field.get().below(num(3)),
+                        branch(field.get().equals(num(0)), v.set(lines.get()), branch(field.get().equals(num(1)), v.set(words.get()), v.set(bytes.get())))
+                        ++ when(show.get().bits_and(bit.get()),
+                            when(at.get(), out.put(at.get(), num(32)) ++ at.set(at.get() + num(1)))
+                            ++ put_decimal_padded(out, at, v.get(), width.get()))
+                        ++ bit.set(bit.get() + bit.get())
+                        ++ field.set(field.get() + num(1)))
+                    ++ out.put(at.get(), num(10)) ++ at.set(at.get() + num(1))
+                    ++ write_all(stdout(), out, at.get())))))))))))))))))
+}
+
+fn wc_counts_tool() → Tool { wc_counts(1024) }
+
+// ---------------------------------------------------------------------------
+// head -n N
+
+// head's diagnostics: "head: invalid number of lines: '", then the closing
+// quote and a newline, then what GNU adds for a number past the largest
+// word.
+fn head_table() → List<BitVec(8)> {
+    ascii_text("head: invalid number of lines: '") ++ ascii_text("'\n") ++ ascii_text(": Value too large for defined data type\n")
+}
+
+// GNU's `head -n N` (or `-nN`, or no argument for ten) over stdin: the
+// input up to and including its `N`-th newline, or all of it if it has
+// fewer. `N` is digits only, up to the largest word: anything else, and a
+// number past the largest word, says GNU's error for it on stderr and
+// exits 1, so a form GNU takes and this does not (a leading `+` or `-`, a
+// multiplier suffix) is refused that way. A missing `N`, GNU's other
+// options (`-c`, files) and an argument longer than its buffer exit 1 with
+// nothing said.
+fn head_n(capacity: Nat) → Tool {
+    buffer(capacity, λ data => buffer(32, λ text => buffer_of(head_table(), λ texts => run(
+        local(num(10), λ count => local(num(0), λ len => local(num(0), λ start =>
+        local(num(0), λ value => local(num(0), λ end => local(num(0), λ overflow =>
+            arg(num(1), text, len)
+            ++ when(len.get().negative().not(),
+                when(len.get().below(num(2)).or_else(text.at(num(0)).differs(num(45))).or_else(text.at(num(1)).differs(num(110))), exit(num(1)))
+                ++ start.set(num(2))
+                ++ when(len.get().equals(num(2)),
+                    arg(num(2), text, len) ++ when(len.get().negative(), exit(num(1))) ++ start.set(num(0)))
+                ++ when(num(32).below(len.get()), exit(num(1)))
+                ++ parse_decimal(text, start.get(), len.get(), value, end, overflow)
+                ++ when(end.get().differs(len.get()).or_else(end.get().equals(start.get())).or_else(overflow.get()),
+                    say(texts, num(0), num(32))
+                    ++ write_span(stderr(), text, start.get(), len.get() - start.get(), λ _ => exit(num(1)))
+                    ++ branch(overflow.get().and_also(end.get().equals(len.get())).not(), say(texts, num(32), num(2)), say(texts, num(32), num(1)) ++ say(texts, num(34), num(40)))
+                    ++ exit(num(1)))
+                ++ count.set(value.get()))
+            ++ local(num(0), λ n => local(num(0), λ i => do_while(
+                when(count.get().not(), exit(num(0)))
+                ++ read(stdin(), data, data.size(), n) ++ when(n.get().negative(), exit(num(1)))
+                ++ i.set(num(0))
+                ++ loop_while(i.get().below(n.get()).and_also(count.get()),
+                    when(data.at(i.get()).equals(num(10)), count.set(count.get() - num(1)))
+                    ++ i.set(i.get() + num(1)))
+                ++ write_all(stdout(), data, i.get()),
+                n.get())))))))))))))
+}
+
+fn head_n_tool() → Tool { head_n(1024) }
+
+// ---------------------------------------------------------------------------
+// grep -F PATTERN
+
+// GNU's `grep -F PATTERN` over stdin in the C locale (`LC_ALL=C`): each
+// line that holds the pattern's bytes, compared exactly, written to stdout
+// with its newline (an empty pattern is in every line), and a last line
+// without a newline written with one; the exit status 0 if a line was
+// written, 1 if none, 2 with no pattern. A line longer than the line
+// buffer, a pattern longer than its buffer, a failed read and a failed
+// write exit 2. GNU's options, its file arguments, and a pattern holding a
+// newline (which GNU reads as two patterns) are not here.
+//
+// A line is tested and written by one procedure, `finish`, called where a
+// newline ends a line and where the input ends inside one: its code is
+// emitted once (docs/native-procedures-design.md).
+fn grep_f(capacity, line_cap, pat_cap: Nat) → Tool {
+    buffer(capacity, λ data => buffer(line_cap, λ line => buffer(pat_cap, λ pat => buffer_of([BitVec::ofNat(10)], λ newline =>
+    depth(1, proc(2, 1, λ p =>
+        // The line's first `len` bytes hold the pattern's `plen` at some
+        // `i`: the bytes from `i` agree while `j` counts them.
+        local(num(0), λ i => loop_while(p.result(0).get().not().and_also((i.get() + p.param(1).get()).below(p.param(0).get() + num(1))),
+            local(num(0), λ j => loop_while(j.get().below(p.param(1).get()).and_also(line.at(i.get() + j.get()).equals(pat.at(j.get()))),
+                    j.set(j.get() + num(1)))
+                ++ when(j.get().equals(p.param(1).get()), p.result(0).set(num(1))))
+            ++ i.set(i.get() + num(1))))
+        ++ when(p.result(0).get(),
+            write_span(stdout(), line, num(0), p.param(0).get(), λ _ => exit(num(2)))
+            ++ write_span(stdout(), newline, num(0), num(1), λ _ => exit(num(2)))),
+    λ finish => run(local(num(0), λ plen => local(num(0), λ any => local(num(0), λ len => local(num(0), λ found =>
+        arg(num(1), pat, plen)
+        ++ when(plen.get().negative(), exit(num(2)))
+        ++ when(num(pat_cap).below(plen.get()), exit(num(2)))
+        ++ local(num(0), λ n => do_while(
+            read(stdin(), data, data.size(), n)
+            ++ when(n.get().negative(), exit(num(2)))
+            ++ for_count(n.get(), λ k => local(data.at(k.get()), λ c => branch(c.get().equals(num(10)),
+                perform(finish, [len.get(), plen.get()], [found]) ++ any.set(any.get().or_else(found.get())) ++ len.set(num(0)),
+                when(len.get().equals(num(line_cap)), exit(num(2))) ++ line.put(len.get(), c.get()) ++ len.set(len.get() + num(1))))),
+            n.get()))
+        ++ when(len.get(), perform(finish, [len.get(), plen.get()], [found]) ++ any.set(any.get().or_else(found.get())))
+        ++ exit(num(1) - any.get()))))))))))))
+}
+
+fn grep_f_tool() → Tool { grep_f(256, 1024, 256) }

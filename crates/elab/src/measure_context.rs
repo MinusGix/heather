@@ -25,7 +25,10 @@ impl Elaborator {
             let Ok((expected, level)) = query.elab_ty(&cx, goal) else { continue; };
             let Ok((_, actual, _)) = query.elab_infer(&cx, &proof) else { continue; };
             if query.conv_types(&cx, &actual, &expected, &level) { return Some(proof); }
-            if arithmetic && facts.len() < 16
+            // A refinement's own `__dec_eq` is the rewrite's: obligations
+            // are stated at the refined measure already, and the companions
+            // bind those equations to `refl` at the leaf.
+            if arithmetic && facts.len() < 16 && !binder.name.starts_with("__dec_eq")
                 && measure::arithmetic_fact(binder.ty.as_ref().unwrap(), goal, scope)
             { facts.push(proof); }
         }

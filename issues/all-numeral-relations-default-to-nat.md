@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,notation,ergonomics]
 area: language
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-10-27
 ---
 
 A relation whose operands are all numerals has no carrier, so it elaborates
@@ -45,3 +45,7 @@ followed by a non-numeral one already works (the sibling-operand probe in
   field, a `let` annotation, a calc's expected type) passes its carrier down.
 - A calc chain's leading numeral endpoints take the carrier of the first
   non-numeral endpoint.
+
+## Log
+
+- 2026-10-27: Related, filed 2026-10-27: [[numeral-normalisation]] (norm_num at every numeric carrier) needs this issue's answer for which carrier a relation means.

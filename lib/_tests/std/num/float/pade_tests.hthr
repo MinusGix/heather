@@ -1,0 +1,35 @@
+// The Padé gap behind exp's total rounding (lib/std/num/float/pade.hthr,
+// issues/exp-log-grid-gap.md). Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import option; import omega; import rat; import creal; import dyadic; import float; import round; import interval; import creal_interval; import series; import elementary; import round_real; import arith; import pade; import transcendental;
+
+// The approximants by evaluation: P_2(1)/Q_2(1) = 19/7 = 2.714…, near e.
+theorem pade_two_at_one(): PadePair::at(1, 1).p1 ≈ 19 ∧ PadePair::at(1, 1).q1 ≈ 7 { And(refl, refl) }
+
+// Cleared at x = 1/2: q_2 e^(1/2) - p_2 with p_2 = 61, q_2 = 37 (61/37 = 1.6486…).
+theorem pade_ints_half(): PadeInts::at(1, 2, 1).p1 = 61 ∧ PadeInts::at(1, 2, 1).q1 = 37 { And(refl, refl) }
+
+// The Casoratian -2u(-u²)^n at u = 1, n = 3 is 2, never 0.
+theorem pade_cas_three(): PadeInts::at(1, 2, 3).cas() = 2 { refl }
+
+// expect-error(kernel): the kernel rejected `pade_ints_wrong`: NotConvertible
+theorem pade_ints_wrong(): PadeInts::at(1, 2, 1).p1 = 60 { refl }
+
+// exp(1/2) is off binary32's grid, so the search over it ends.
+theorem exp_half_off_grid(): binary32().OffGrid(CReal::exp_rat(Rat(1, 2))) {
+    binary32().exp_off_grid(Rat(1, 2), λ (z: Rat(1, 2) ≈ 0) => { let k: False = omega(z); k })
+}
+
+fn one32() → Finite(binary32()) { Finite(False, 8388608, 126, trivial) }
+
+// exp with no Option is the correct rounding at every finite float.
+theorem exp_total_one_32(): RoundsToReal(binary32(), NearestEven, CReal::exp_rat(one32().val()),
+    Float::exp_total(Float::Fin(one32()), mode := NearestEven))
+{
+    Float::exp_total_correct(one32(), NearestEven)
+}
+
+// The search with an Option ends at some try count, from the gap.
+theorem exp_one_search_ends(): ∃ tries: Nat, ∃ r: Float(binary32()), binary32().round_real(NearestEven, CReal::exp_rat(one32().val()).enclosed(), tries) = Some(r) {
+    binary32().exp_search_ends(NearestEven, one32(), Finite::val_ne_zero(one32(), 8388607, refl))
+}

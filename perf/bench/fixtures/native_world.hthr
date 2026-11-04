@@ -1,0 +1,7 @@
+// The native world and nothing else: a root that imports the tool library,
+// for scripts/bench-probes' `native/world-replay` case. Checked warm, every
+// module is an image hit, so the run is what any process over the native
+// world pays before its own work (image decode and recheck, the merkle walk).
+import native_tools;
+
+fn native_world_probe() → Nat { 0 }

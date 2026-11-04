@@ -4,7 +4,7 @@
 // §4.5). Moved from crates/elab/tests/lib_std_creal.rs; the refusals that
 // need the checker stay there.
 import logic; import bool; import nat; import list; import int; import algebra; import omega; import rat;
-import creal; import relation_props; import algebra_rel;
+import creal; import relation_props; import algebra_rel; import dyadic;
 
 // Instance resolution finds the equivalence, the strict and non-strict
 // orders' transitivity, and `+` and `*`'s compatibility with `≈`.
@@ -14,31 +14,50 @@ theorem resolved_cong(x, y, z: CReal, a: y ≈ z): x + y ≈ x + z { rel_cong(a)
 theorem resolved_mul_cong(x, y, z: CReal, a: y ≈ z): x * y ≈ x * z { rel_cong(a) }
 theorem resolved_le(x, y, z: CReal, a: x <= y, b: y <= z): x <= z { relation_step(CReal::Le, x, y, z, a, b) }
 
-// A constant sequence is regular; n ↦ n is not, since it moves by more than
-// 1/(m+1) + 1/(n+1).
-fn constant(q: Rat) → CReal { CReal(λ n => q, λ m n => CReal::const_regular(q, m, n)) }
-theorem identity_not_regular(): ¬((m, n: Nat) → (Rat::ofInt(OfNat(m)) - Rat::ofInt(OfNat(n))).abs() <= Rat::inv_succ(m) + Rat::inv_succ(n)) {
+// A constant dyadic sequence is regular; n ↦ n is not, since it moves by
+// more than 2^-m + 2^-n.
+fn exact(d: Dyadic) → CReal {
+    CReal(λ n => d, λ m n => Rat::le_trans(CReal::const_regular(d.rat(), m, n), Rat::add_le_mono(CReal::half_le(m), CReal::half_le(n))))
+}
+theorem identity_not_regular(): ¬((m, n: Nat) → (Rat::ofInt(OfNat(m)) - Rat::ofInt(OfNat(n))).abs() <= Rat::inv_pow2(m) + Rat::inv_pow2(n)) {
     λ h => omega(h(0, 3))
 }
 
-// `≈` is not identity: 1/2 and 2/4 embed as different sequences that are
-// the same real, and distinct rationals embed as distinct reals.
-theorem half_same(): CReal::ofRat(Rat(OfNat(1), 2)) ≈ CReal::ofRat(Rat(OfNat(2), 4)) { CReal::ofRat_respects(refl) }
-theorem half_not_equal(): ¬(CReal::ofRat(Rat(OfNat(1), 2)) = CReal::ofRat(Rat(OfNat(2), 4))) {
+// `≈` is not identity: 1/2 floored at each precision and the constant
+// dyadic 1/2 are different sequences of the same real (at index 1 the
+// floor is 2·2^-2), and distinct rationals embed as distinct reals. The
+// floor reads only a rational's value, so 1/2 and 2/4 have the same terms.
+fn half() → Rat { Rat(OfNat(1), 2) }
+theorem half_same(): CReal::ofRat(half()) ≈ CReal::ofRat(Rat(OfNat(2), 4)) { CReal::ofRat_respects(refl) }
+theorem half_terms(): CReal::ofRat(half()).seq(5) = CReal::ofRat(Rat(OfNat(2), 4)).seq(5) { refl }
+theorem half_exact(): CReal::ofRat(half()) ≈ exact(Dyadic(1, -1)) {
+    CReal::ofRat(half()).same_of_near_rat(exact(Dyadic(1, -1)), half(),
+        λ n => Rat::le_trans(CReal::ofRat_close(half(), n), CReal::half_le(n)),
+        λ n => Rat::le_trans(Rat::le_of_same(half().abs_sub_self()), Rat::inv_pow2_nonneg(n)))
+}
+theorem half_not_equal(): ¬(CReal::ofRat(half()) = exact(Dyadic(1, -1))) {
     λ h => {
-        let nums: (Int::OfNat(1) = Int::OfNat(2)) = cong_fn(λ (x: CReal) => x.seq(0).num, h);
-        omega(nums)
+        let mants: (Int::OfNat(2) = Int::OfNat(1)) = cong_fn(λ (x: CReal) => x.seq(1).mant, h);
+        omega(mants)
     }
 }
 theorem zero_not_one(): ¬(CReal::Same(0, 1)) { λ h => omega(CReal::ofRat_inj(h)) }
 
-// A sum reads its summands at index 2n+1, so `x + 0` is not `x` term by
-// term; it is only close from index 2k+1 on (`CReal::add_zero`).
-theorem sum_index(x, y: CReal, n: Nat): (x + y).seq(n) = x.seq(n + n + 1) + y.seq(n + n + 1) { refl }
+// Terms are dyadics within 2^-n, so the index counts bits: a third at index
+// 64 is its 65-bit floor, computed by evaluation, and so is a ninth's
+// product term, which reads its factors a few bits further out and rounds.
+theorem third_64(): CReal::ofRat(Rat(OfNat(1), 3)).seq(64) = Dyadic(OfNat(12297829382473034410), -65) { refl }
+theorem ninth_64(): (CReal::ofRat(Rat(OfNat(1), 3)) * CReal::ofRat(Rat(OfNat(1), 3))).seq(64).mant = OfNat(4099276460824344803) { refl }
 
-// A product reads both factors at an index that depends on their bounds.
-theorem product_index(x, y: CReal, n: Nat): (x * y).seq(n) = x.seq(x.mul_at(y, n)) * y.seq(x.mul_at(y, n)) { refl }
-theorem bound(): CReal::ofRat(Rat(-OfNat(7), 2)).bound() = 9 { refl }
+// A sum reads its summands at index n+1 and adds them exactly, so `x + 0`
+// is not `x` term by term; it is only close from index 2k+1 on
+// (`CReal::add_zero`).
+theorem sum_index(x, y: CReal, n: Nat): (x + y).seq(n) = x.seq(n + 1) + y.seq(n + 1) { refl }
+
+// A product reads both factors at an index that depends on their bounds'
+// bit width, and rounds their product to n+1 bits.
+theorem product_index(x, y: CReal, n: Nat): (x * y).seq(n) = Dyadic::floor_rat(x.at(x.mul_at(y, n)) * y.at(x.mul_at(y, n)), n + 1) { refl }
+theorem bound(): CReal::ofRat(Rat(-OfNat(7), 2)).bound() = 6 { refl }
 
 // `<` is strict, and `≤` is a refutation that carries no gap: 0 < 1, so
 // 1 ≤ 0 is refuted, and 0 < 0 fails.
@@ -53,35 +72,34 @@ theorem le_is_not_lt(): ¬((x: CReal) → x <= x → x < x) { λ h => CReal::lt_
 // The moduli and gaps are theorems whose statements carry data, so their
 // sealed proofs open where a projection is stuck on them and the witnesses
 // evaluate (`issues/theorem-witness-unfolding.md`). A product law's modulus
-// opens `mul_close`, which opens `same_close_far`: 1 · 1 has bound 3 on each
-// side, so the factors must be within 1/14, which regularity grants from
-// index 55 on.
+// opens `mul_close`, which opens `same_close_far`: 1 · 1 has bound 4 on each
+// side, so the factors must be within 1/36, which `same_close_far` grants
+// from index 143 on.
 theorem modulus(): (CReal::add_zero(0, 2)).witness = 5 { refl }
 theorem trans_start(x: CReal): (CReal::same_trans(x.same_refl(), x.same_refl(), 4)).witness = 0 { refl }
-theorem product_modulus(): (CReal::mul_comm(1, 1, 0)).witness = 55 { refl }
+theorem product_modulus(): (CReal::mul_comm(1, 1, 0)).witness = 143 { refl }
 
 // The inverse: zero has none (an apartness at zero is absurd), it reads past
 // the gap's start and far enough out to pay for the reciprocal's (k+1)², and
-// it computes: 1/1 has gap 1/2 (k = 1), 1⁻¹ reads 1, and the reciprocal of -2
-// reads -1/2.
-fn inv_one() → CReal {
-    let above: (0 + Rat::inv_succ(0) <= 1) = omega;
-    CReal::inv(1, h := Inr(Exists(0, Exists(0, λ n from => above))))
-}
+// it computes: 0 < 1 has the gap 1/8 from index 31 (`ofRat_lt` reads one
+// term far out, `lt_of_term`), 1⁻¹ reads 1 there, and the reciprocal of -2
+// reads -1/2, each floored to n+1 bits.
 theorem zero_absurd(h: CReal::Apart(0, 0)): False { CReal::apart_irrefl(0, h) }
-theorem inv_index(x: CReal, k, s: Nat, gap: x.Away(k, s), n: Nat): x.inv_gap(k, s, gap).seq(n) = x.seq(CReal::inv_at(k, s, n)).recip() { refl }
+theorem inv_index(x: CReal, k, s: Nat, gap: x.Away(k, s), n: Nat):
+    x.inv_gap(k, s, gap).seq(n) = Dyadic::floor_rat(x.at(CReal::inv_at(k, s, n)).recip(), n + 1) { refl }
 theorem one_apart(): CReal::Apart(1, 0) { Inr(zero_lt_one()) }
-theorem gap_size(): (CReal::away_of_apart(1, one_apart())).witness = 1 { refl }
-theorem inv_one_term(): CReal::inv(1, h := one_apart()).seq(3) = 1 { refl }
+theorem gap_size(): (CReal::away_of_apart(1, one_apart())).witness = 7 { refl }
+theorem gap_start(): (CReal::away_of_apart(1, one_apart())).proof.witness = 31 { refl }
+theorem inv_one_term(): CReal::inv(1, h := one_apart()).seq(3) = Dyadic(16, -4) { refl }
 theorem neg_two_apart(): CReal::ofRat(Rat(-OfNat(2), 1)).Apart(0) {
     let gap: (Rat(-OfNat(2), 1) < 0) = omega;
     Inl(CReal::ofRat_lt(gap))
 }
-theorem inv_neg_two_term(): CReal::ofRat(Rat(-OfNat(2), 1)).inv(h := neg_two_apart()).seq(5) = Rat(-OfNat(1), 2) { refl }
+theorem inv_neg_two_term(): CReal::ofRat(Rat(-OfNat(2), 1)).inv(h := neg_two_apart()).seq(5) = Dyadic(-32, -6) { refl }
 
 // Order and addition: the shifted gap is data, the same 1/(k+1) from the
 // same start, and it evaluates.
-theorem shifted(z: CReal): CReal::add_lt_mono_r(0, 1, z, zero_lt_one()).witness = 1 { refl }
+theorem shifted(z: CReal): CReal::add_lt_mono_r(0, 1, z, zero_lt_one()).witness = 7 { refl }
 
 // `x⁻¹` and `x ^ n` (docs/inverse-power-notation-design.md): the apartness
 // is searched from a local apartness or sign, or from an embedded
@@ -91,6 +109,41 @@ theorem from_negative(x: CReal, h: x < 0): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one()
 theorem square(x: CReal): x ^ 2 ≈ x * x { x.pow_two() }
 theorem embedded(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat(Rat(OfNat(2), 1)⁻¹) { CReal::ofRat_inv(Rat(OfNat(2), 1)) }
 
-// Order and multiplication: the product's gap is the product of the gaps,
-// as data. 0 < 1 has the gap 1/2, so 1 · 1 clears zero by 1/4 (k = 3).
-theorem squared(): CReal::mul_pos(zero_lt_one(), zero_lt_one()).witness = 3 { refl }
+// Order and multiplication: the product's gap comes from the product of the
+// gaps, as data. 0 < 1 has the gap 1/8, so 1 · 1 clears zero by 1/64
+// (m = 63) at one far term, and `lt_of_term` keeps a quarter of half of it
+// (k = 4m+3).
+theorem squared(): CReal::mul_pos(zero_lt_one(), zero_lt_one()).witness = 255 { refl }
+
+// Completeness. The diagonal limit's n-th term is the (n+1)-th term of the
+// (n+1)-th real, and `complete`'s witness opens to it, at an open sequence
+// as at a literal one.
+theorem lim_index(xs: Nat → CReal, h: CReal::Regular(xs), n: Nat): (CReal::lim(xs, h)).seq(n) = xs(n + 1).seq(n + 1) { refl }
+theorem complete_witness(xs: Nat → CReal, h: CReal::Regular(xs)): (CReal::complete(xs, h)).witness = CReal::lim(xs, h) { refl }
+theorem lim_term(): (CReal::lim(λ n => CReal::ofRat(half()), CReal::ofRat(half()).regular_const())).seq(3) = Dyadic(16, -5) { refl }
+
+// A real is the limit of its embedded terms, and so is any `≈` real; the
+// limit of a constant sequence is its value, at an open real.
+theorem lim_of_terms(x, y: CReal, h: x ≈ y): CReal::Limit(λ n => CReal::ofRat(x.at(n)), y) {
+    CReal::limit_respects(λ n => CReal::ofRat(x.at(n)).same_refl(), h, x.terms_converge())
+}
+theorem lim_const(x: CReal): CReal::lim(λ n => x, x.regular_const()) ≈ x {
+    CReal::limit_unique(CReal::lim_converges(λ n => x, x.regular_const()), x.limit_const())
+}
+
+// Negative controls: the naturals are not a regular sequence of reals, and
+// a sequence has no second limit.
+theorem naturals_not_regular(): ¬(CReal::Regular(λ n => CReal::ofRat(Rat::ofInt(OfNat(n))))) {
+    λ h => {
+        let le = CReal::le_of_ofRat_le(CReal::le_respects(CReal::dist_ofRat(Rat::ofInt(OfNat(0)), Rat::ofInt(OfNat(3))),
+            CReal::ofRat(Rat::inv_pow2(0) + Rat::inv_pow2(3)).same_refl(), h(0, 3)));
+        omega(le)
+    }
+}
+theorem zeros_not_to_one(): ¬(CReal::Limit(λ n => 0, 1)) { λ h => zero_not_one(CReal::limit_unique(CReal::limit_const(0), h)) }
+
+// Compression: a term at exponent -(n+1) whatever the real's was, one index
+// further out, and the same real. 1/3 + 1/3 reads the thirds at 2^-12
+// (exponent -13); compressed, its tenth term is ⌊2·2730/2^13 · 2^11⌋ / 2^11.
+theorem compress_two_thirds(): (CReal::ofRat(Rat(1, 3)) + CReal::ofRat(Rat(1, 3))).compress().seq(10) = Dyadic(OfNat(1365), -11) { refl }
+theorem compress_same_third(): CReal::ofRat(Rat(1, 3)).compress() ≈ CReal::ofRat(Rat(1, 3)) { CReal::ofRat(Rat(1, 3)).compress_same() }

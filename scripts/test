@@ -29,7 +29,18 @@
 # still elaborates unchanged library modules identically, which the nightly
 # master sentinel runs instead (docs/testing-architecture-design.md §2.1).
 # After an elab edit that check is most of the extra cost: every library
-# module re-elaborated.
+# module re-elaborated. Unfiltered, it also leaves out the native x86
+# certificate gates (crates/cli/tests/native*.rs, about half the suite's CPU,
+# all of it kernel-checking certificates cold on a fresh box) unless the
+# round's diff from origin/master touches what they check; one small tool
+# (`compiled_yes_runs_as_gnu_yes`) still goes through write-elf as a smoke,
+# and the sentinel runs the rest nightly (issues/pr-lane-cost-2026-10-29.md).
+# HEATHER_PR_NATIVE=all runs them anyway. Unfiltered, it also runs only
+# the test files the diff can affect (scripts/affected-targets.mjs:
+# Cargo's dep-info per binary and per family member, every test that reads
+# lib/ or spawns at run time, and everything when a changed path cannot be
+# placed; docs/testing-architecture-design.md §2.2.1).
+# HEATHER_PR_AFFECTED=all runs every one.
 # --long additionally runs every slow kernel self-check on every occasion
 # (crates/kernel/src/checks.rs) in its own target directory; not a gate,
 # a sweep to run when the kernel's traversals or bounds memo changed.
@@ -50,7 +61,7 @@ node scripts/check-tree-sitter-inventory.js
 # crates/elab declares its test targets instead of discovering them (family
 # binaries mount their member files by path), so check no file fell out.
 node scripts/check-elab-test-families.mjs
-node --test scripts/test-target-runner.test.mjs
+node --test scripts/test-target-runner.test.mjs scripts/affected-targets.test.mjs
 
 # The kernel's `value-metrics` feature is off in every test target — it is the
 # diagnostic build (`--timings`' value counters, the conv-miss sampler, the
@@ -61,6 +72,7 @@ node --test scripts/test-target-runner.test.mjs
 cargo check --quiet -p heather-kernel-lib --features value-metrics
 
 SKIP=()
+PR_BASE=
 TEST_ARGS=()
 CARGO_FLAGS=()
 TEST_LANE=full
@@ -91,12 +103,50 @@ if [[ "${1:-}" == --fast ]]; then
         --skip programs_with_calls_execute
         --skip programs_with_loops_execute
         --skip loop_sources_are_refused
+        --skip compiled_cat_runs_as_cat
+        --skip every_written_program_gets_its_theorem
+        --skip refused_programs_name_their_reason
+        --skip compiled_tr_runs_as_gnu_tr
+        --skip compiled_yes_runs_as_gnu_yes
+        --skip compiled_wc_prints_counts_as_gnu_wc
+        --skip compiled_head_takes_its_count_as_gnu_head
+        --skip compiled_decimals_round_trip_the_widest_words
         --skip source_to_native_binary)
 elif [[ "${1:-}" == --pr ]]; then
   shift
   TEST_LANE=pr
   export HEATHER_SEMANTIC_IMAGES=accept-stale
-  echo "pr lane: every test runs; semantic images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the master sentinel runs the exact policy"
+  echo "pr lane: the tests the diff can affect run; semantic images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the master sentinel runs the exact policy"
+  # The native certificate gates run when the round changed something they
+  # check: the native library and the machine/OS models it is proved over,
+  # write-elf, the kernel, or the gates themselves. No merge base with
+  # origin/master (a checkout without it) means run them.
+  native_paths='^(lib/native/|lib/_tests/native/|lib/std/machine/|lib/std/os/|crates/cli/src/native/|crates/cli/tests/native|crates/kernel/src/|crates/kernel-lib/)'
+  native_smoke=compiled_yes_runs_as_gnu_yes
+  # Unfiltered, the lane also runs only the test files the diff can affect
+  # (scripts/affected-targets.mjs, after the build below: Cargo's dep-info
+  # per binary and family member, plus every test that reads lib/ or spawns
+  # at run time). Anything it cannot place runs everything.
+  # HEATHER_PR_AFFECTED=all runs every test file.
+  if (( $# == 0 )) && [[ "${HEATHER_PR_AFFECTED:-}" != all ]]; then
+    PR_BASE=$(git merge-base HEAD origin/master 2>/dev/null) ||
+      echo "pr lane: no merge base with origin/master; every test file runs"
+  fi
+  if (( $# == 0 )) && [[ "${HEATHER_PR_NATIVE:-}" != all ]] &&
+     base=$(git merge-base HEAD origin/master 2>/dev/null); then
+    touched=$( { git diff --name-only "$base"; git ls-files --others --exclude-standard; } |
+               grep -E "$native_paths" | head -3 || true)
+    if [[ -z "$touched" ]]; then
+      while read -r name; do
+        [[ "$name" == "$native_smoke" ]] || SKIP+=(--skip "$name")
+      done < <(awk '/#\[test\]/ { t = 1; next }
+                    t && match($0, /fn [a-z_0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3); t = 0 }' \
+                 crates/cli/tests/native*.rs)
+      echo "pr lane: nothing the native certificate gates check changed since $(git rev-parse --short "$base"); running only $native_smoke of them (HEATHER_PR_NATIVE=all runs every one)"
+    else
+      echo "pr lane: native certificate gates run, since the round touches $(echo $touched | tr ' ' ',')"
+    fi
+  fi
 elif [[ "${1:-}" == --long ]]; then
   shift
   TEST_LANE=long
@@ -148,10 +198,13 @@ fi
 # §3.1.2), so its first suite replays library modules instead of elaborating
 # them all cold. Seconds, once; skipped when the stores exist or off-cloud.
 # Replay rechecks every image, so a seeded one can only be a miss. Never the
-# verdict store. HEATHER_NO_SEED=1 skips it.
+# verdict store. HEATHER_NO_SEED=1 skips it. The stores live in target/, or in
+# $HEATHER_CACHE_DIR when it is set (heather_cache::store_root).
+STORE_ROOT="${HEATHER_CACHE_DIR:-target}"
 if [[ "${CLAUDE_CODE_REMOTE:-}" == true && -z "${HEATHER_NO_SEED:-}" &&
-      ! -e target/semantic-test-images ]]; then
-  timeout 300 scripts/sentinel seed target && echo "seeded image stores from the master sentinel"
+      ! -e "$STORE_ROOT/semantic-test-images" ]]; then
+  mkdir -p "$STORE_ROOT"
+  timeout 300 scripts/sentinel seed "$STORE_ROOT" && echo "seeded image stores from the master sentinel"
 fi
 
 # Compile without limits (rustc is memory-hungry but trusted)...
@@ -159,6 +212,31 @@ compile_started=$SECONDS
 manifest=$(mktemp)
 cargo test --workspace "${CARGO_FLAGS[@]}" --no-run --quiet --message-format=json > "$manifest"
 compile_seconds=$((SECONDS - compile_started))
+
+# The pr lane's selection: the manifest keeps only the affected binaries,
+# `.members` names the family members to run, `.names` every selected
+# binary (for the warm-ups below), `.doc` the packages whose doc tests run.
+affected_names=
+if [[ -n "$PR_BASE" ]]; then
+  node scripts/affected-targets.mjs --manifest "$manifest" --base "$PR_BASE" --out "$manifest.affected"
+  mv "$manifest.affected" "$manifest"
+  affected_names=$(< "$manifest.affected.names")
+  if [[ -z "$affected_names" ]]; then
+    rm -f "$manifest" "$manifest".affected.*
+    printf '\n== suite: 0 passed, 0 failed, 0 ignored (no test can see this diff) ==\n'
+    exit 0
+  fi
+fi
+# Whether a warm-up's customers run: always, unless the pr lane's selection
+# left all of them out.
+selected() {
+  [[ -z "$PR_BASE" ]] && return 0
+  local name
+  for name in "$@"; do
+    grep -qx -- "$name" <<< "$affected_names" && return 0
+  done
+  return 1
+}
 
 # Expensive acceptance targets consume a semantic library prefix and then a
 # large freshly checked suffix. On a cold or invalidated cache each half fits
@@ -189,6 +267,28 @@ native_bin_warmup() {
   )
 }
 
+# The CLI image store (crates/cli/src/showcase.rs CLI_CHECK_IMAGES) that the
+# library gate, the showcase gate and native_cat.rs/native_tools.rs's
+# `write-elf` share. Every module is keyed by its own closure
+# (docs/module-dag-design.md), so `write-elf` replays what the gate built;
+# cold, it would have to build its closure itself, most of the library, which
+# no one process does under the rail. So the warmup is
+# the gate: one child per folder, three at a time, each well inside the
+# rail. In the stale lanes the gate replays with their trade, as `write-elf`
+# then does. Only a focused run of a native target warms it here: an
+# unfiltered run's parallel phase starts the gate first and holds those
+# targets until `heather check --unbuilt` finds lib/native's and
+# lib/_tests/native's closures built, or the gate has finished
+# (`PREREQUISITES` in run-test-targets.mjs), so the gate runs once, beside
+# the targets that do not read its store.
+cli_images_warmup() {
+  (
+    ulimit -v 6291456
+    ulimit -t 300
+    cargo test "${CARGO_FLAGS[@]}" -p heather-cli --test library -- --exact every_library_module_checks --format terse > /dev/null
+  ) || echo "cli image warmup did not finish; the library gate reports why"
+}
+
 native_warmup() {
   # Native certificates use a separate SemanticSession cache. Populate its
   # exact-build prefix before a child spends its budget on the generated
@@ -197,16 +297,23 @@ native_warmup() {
 }
 
 if (( $# == 0 )); then
-  semantic_warmup semantic_x86_warmup
-  semantic_warmup semantic_omega_warmup
+  # A warm-up builds images of a prefix; they need building only when the
+  # prefix or the compiler changed, which is when the pr lane's selection
+  # keeps the warm-up's own target (the same `.d` inputs, or for the CLI
+  # image store the library gate, which reads all of lib/).
+  selected semantic_x86_warmup && semantic_warmup semantic_x86_warmup
+  selected semantic_omega_warmup && semantic_warmup semantic_omega_warmup
   # The fast lane skips every native certificate gate, so it has no prefix
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
-    native_warmup
+    selected heather && native_warmup
   fi
 else
   if [[ "$requested" == *"--test native"* ]]; then
     native_warmup
+  fi
+  if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]]; then
+    cli_images_warmup
   fi
   whole_elab=false
   if { [[ "$requested" == *" -p heather-elab "* ]] ||
@@ -253,10 +360,13 @@ if (( $# == 0 )); then
   set +e
   runner_args=(--manifest "$manifest" --timings "target/test-target-timings-${TEST_LANE}.tsv"
                --jobs "${HEATHER_TEST_JOBS:-auto}" --keep-going)
+  if [[ -n "$PR_BASE" ]]; then
+    runner_args+=(--members "$manifest.affected.members" --doc-packages "$manifest.affected.doc")
+  fi
   node scripts/run-test-targets.mjs "${runner_args[@]}" -- "${LIBTEST_ARGS[@]:1}"
   status=$?
   set -e
-  rm -f "$manifest"
+  rm -f "$manifest" "$manifest".affected.*
   test_seconds=$((SECONDS - test_started))
   printf 'runner wall time: compile %ds + tests %ds = %ds total\n' \
     "$compile_seconds" "$test_seconds" "$((SECONDS - suite_started))"
@@ -287,7 +397,13 @@ rm -f "$manifest"
 # deeper than 2 MiB allows. 8 MiB is comfortable; the cap above still bounds
 # total address space.
 ulimit -v 6291456
-ulimit -t 300
+# The native write-elf gates take the runner's longer rail (CPU_RAIL_OVERRIDES
+# in run-test-targets.mjs, issues/native-sort-gate-rail.md) here too.
+if [[ "$requested" == *"--test native_cat"* ]] || [[ "$requested" == *"--test native_tools"* ]]; then
+  ulimit -t 900
+else
+  ulimit -t 300
+fi
 counts=$(mktemp)
 timings=$(mktemp)
 test_started=$SECONDS

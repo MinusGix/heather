@@ -31,7 +31,7 @@ pub struct LocalVar(pub u32);
 pub struct GlobalVar(pub u32);
 
 /// Types `S, T` (sort `Typ`).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub enum Type {
     /// `Nat`.
     Nat,
@@ -259,8 +259,73 @@ pub enum Type {
     },
 }
 
+/// How many local variable leaves each thread interns ([`Term::var_rc`]).
+/// Indices at or above it are allocated per call, as before: Γ is rarely
+/// that long, and a bound keeps a thread's table small.
+const INTERNED_LOCAL_VARS: u32 = 4096;
+
+thread_local! {
+    /// This thread's shared `Var(i)` leaves, grown on demand up to
+    /// [`INTERNED_LOCAL_VARS`]. Per thread so that the kernel workers do not
+    /// contend on one refcount per index; a leaf is an ordinary `Rc` and may
+    /// still move to another thread with the term holding it.
+    static LOCAL_VAR_LEAVES: std::cell::RefCell<Vec<Rc<Term>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Term {
+    /// A shared `Var(i)` leaf (`issues/subst-per-call-allocations.md`): an
+    /// interned `Rc` for an index below [`INTERNED_LOCAL_VARS`], a fresh
+    /// one above it. Sharing a leaf changes no syntax, only identity, and
+    /// identity is only ever read by memos that already key on the scope
+    /// (typing), answer leaves before their table (bounds), or skip leaves
+    /// (substitution, `subst.rs` §Keeping a shared DAG shared).
+    pub fn var_rc(i: u32) -> Rc<Term> {
+        if i >= INTERNED_LOCAL_VARS {
+            return Rc::new(Term::Var(LocalVar(i)));
+        }
+        LOCAL_VAR_LEAVES.with(|leaves| {
+            let mut leaves = leaves.borrow_mut();
+            Self::grow_var_leaves(&mut leaves, i + 1);
+            Rc::clone(&leaves[i as usize])
+        })
+    }
+
+    /// `[Var(m - 1), …, Var(0)]`: the payloads of `id(Γ)` for `|Γ| = m`,
+    /// one table borrow for all of them.
+    pub fn var_rcs_descending(m: u32) -> Vec<Rc<Term>> {
+        if m > INTERNED_LOCAL_VARS {
+            return (0..m).map(|j| Term::var_rc(m - 1 - j)).collect();
+        }
+        LOCAL_VAR_LEAVES.with(|leaves| {
+            let mut leaves = leaves.borrow_mut();
+            Self::grow_var_leaves(&mut leaves, m);
+            leaves[..m as usize].iter().rev().cloned().collect()
+        })
+    }
+
+    fn grow_var_leaves(leaves: &mut Vec<Rc<Term>>, len: u32) {
+        let have = leaves.len() as u32;
+        if have < len {
+            // Grow geometrically, so a context deepening one binder at a time
+            // does not come back here per binder.
+            let want = len.max(have * 2).max(64).min(INTERNED_LOCAL_VARS);
+            leaves.extend((have..want).map(|i| Rc::new(Term::Var(LocalVar(i)))));
+        }
+    }
+
+    /// `Rc::new(self)`, except that a `Var` leaf comes from the shared table
+    /// ([`Term::var_rc`]) instead of a fresh allocation.
+    #[inline]
+    pub fn into_rc(self) -> Rc<Term> {
+        match self {
+            Term::Var(LocalVar(i)) => Term::var_rc(i),
+            t => Rc::new(t),
+        }
+    }
+}
+
 /// Terms `s, t` (sort `Exp`).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub enum Term {
     /// Local variable `x`.
     Var(LocalVar),
@@ -501,6 +566,27 @@ pub enum Term {
         motive: Rc<Type>,
         case: Rc<Term>,
         scrut: Rc<Term>,
+    },
+
+    /// `[b₀, …, b_{w-1}]^l(T; zero, one)` — a closed prefix of a `Vec`
+    /// whose every element is one of two terms, held as a machine word
+    /// (`docs/bitvector-literal-entry-design.md` §3,
+    /// `issues/packed-vector-literal-term.md`). Observationally the
+    /// right-nested pair chain the `Vec` rule types, element `i` being `one`
+    /// when bit `i` of `bits` is set and `zero` otherwise, ending in `⟨⟩^l`:
+    /// exactly as [`Term::NatLit`] is `Succ^n(Zero)`, and with the same
+    /// one-step view ([`vec_lit_unfold`]). It names nothing — no element
+    /// type, no two-valued criterion — so its typing rule checks two
+    /// elements and not `w`; whether the *value* packs into a word is the
+    /// evaluator's question (`eval/bits.rs`), asked of the element type.
+    /// `1 ≤ width ≤ 64` and no bit at or above `width` is set.
+    VecLit {
+        level: Level,
+        elem: Rc<Type>,
+        zero: Rc<Term>,
+        one: Rc<Term>,
+        width: u32,
+        bits: u64,
     },
 
     // ---- dependent pairs (extension beyond DeLaM ch. 04) ----
@@ -919,7 +1005,7 @@ pub enum Term {
 /// - `tm_motive` = `(ℓ, g, U_T, x_t. M_Trm)`: under 1 universe variable, 2
 ///   global variables (`g : Ctx`, `U_T : Typ_p(g, ℓ)`), and 1 local variable
 ///   `x_t : □(g ⊢ U_T^id @ ℓ)`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct Motives {
     pub ty_motive: Rc<Type>,
     pub tm_motive: Rc<Type>,
@@ -932,7 +1018,7 @@ pub struct Motives {
 /// global variables (`g`, `U_…`, `u_…`) extend Ψ innermost-last in the order
 /// written in the paper, and recursive-call variables (`x_…`) extend Γ in the
 /// order written. The comment on each field lists that telescope.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct Branches {
     // -- branches for code of types (b_Typ) --
     /// `(g. t_Nat)` — globals: g.
@@ -1289,7 +1375,7 @@ pub enum CtxBase {
 ///
 /// `entries[0]` is the *outermost* binding; [`LocalVar`] 0 refers to the
 /// last entry. Each entry's type is scoped over the entries before it.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct LocalCtx {
     pub base: CtxBase,
     pub entries: CtxEntries,
@@ -1333,7 +1419,7 @@ impl LocalCtx {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct CtxEntry {
     pub ty: Rc<Type>,
     pub level: Level,
@@ -1425,6 +1511,12 @@ impl CtxEntries {
     /// An owning identity token for this persistent context spine.
     pub(crate) fn identity(&self) -> CtxEntriesIdentity {
         CtxEntriesIdentity(self.0.clone())
+    }
+
+    /// [`CtxEntries::identity`]'s address, without the token: 0 for the
+    /// empty spine. A key built from it must hold the token alongside.
+    pub(crate) fn identity_addr(&self) -> usize {
+        self.0.as_ref().map_or(0, |n| Rc::as_ptr(n) as usize)
     }
 
     /// `self, entry` — O(1), sharing `self`.
@@ -1590,9 +1682,11 @@ impl Default for CtxEntries {
 /// spine (the common case when conversion compares two scopes derived from
 /// one) settle in O(1), and a length mismatch settles in O(1) either way.
 /// `PartialEq` on `LocalCtx` is on the conversion path — boxed types compare
-/// their Γ (ch. 06).
-impl PartialEq for CtxEntries {
-    fn eq(&self, other: &CtxEntries) -> bool {
+/// their Γ (ch. 06). The entries' types compare inside the caller's
+/// comparison (`crate::syntax_eq`), so a type two entries share is compared
+/// once.
+impl crate::syntax_eq::SharedEq for CtxEntries {
+    fn shared_eq(&self, other: &CtxEntries, m: &mut crate::syntax_eq::PairMemo) -> bool {
         let mut a = self;
         let mut b = other;
         loop {
@@ -1602,7 +1696,7 @@ impl PartialEq for CtxEntries {
                     if Rc::ptr_eq(x, y) {
                         return true;
                     }
-                    if x.len != y.len || x.entry != y.entry {
+                    if x.len != y.len || !x.entry.shared_eq(&y.entry, m) {
                         return false;
                     }
                     a = &x.rest;
@@ -1621,7 +1715,7 @@ impl Eq for CtxEntries {}
 /// The tail is the paper's `·^k_{g?}` / `wk^k_g`; `terms[0]` substitutes the
 /// *outermost* entry of the target context Δ. The query operations δ̂ and δ̌
 /// (used by composition) read the tail's length and base.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct LocalSubst {
     pub tail: SubstTail,
     pub terms: Vec<Rc<Term>>,
@@ -1719,7 +1813,7 @@ impl GlobalBinding {
 /// compares it structurally, and it is only ever extended at declaration
 /// granularity. Appending to a shared context copies at most one bounded tail
 /// rather than the entire prefix.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct GlobalCtx {
     pub bindings: GlobalBindings,
     /// Sealed proofs: the bodies of opaque bindings that may be unsealed at
@@ -1729,6 +1823,82 @@ pub struct GlobalCtx {
     /// before the proof was kept; losing an entry only makes the theorem
     /// opaque again, never wrong.
     pub sealed: SealedProofs,
+    /// The elaborator's **interface boundary**
+    /// (`docs/interface-definitions-design.md` §3): definitions whose body
+    /// this world withholds at open arguments. `None` but in the
+    /// elaborator's worlds for a module that imports interface definitions,
+    /// and in the gate's Ψ for that module's declarations. Withholding only
+    /// removes δ-steps (a gluing unfolds the body ordinary δ would), so it
+    /// can make the kernel refuse more, never accept more. Like
+    /// [`GlobalCtx::sealed`] it is not part of any binding, so the
+    /// verdict cache mixes it into its check key (`crates/cache`).
+    pub withheld: Option<Rc<Withheld>>,
+}
+
+/// Ψ prints as it did before it had a boundary when it has none, so the
+/// printed form a world without interfaces hashes to is unchanged
+/// (`crates/elab/tests/determinism.rs`).
+impl std::fmt::Debug for GlobalCtx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("GlobalCtx");
+        s.field("bindings", &self.bindings).field("sealed", &self.sealed);
+        if let Some(w) = &self.withheld {
+            s.field("withheld", w);
+        }
+        s.finish()
+    }
+}
+
+/// Definitions a world withholds, by absolute Ψ index, each with its
+/// **arity**: the number of explicit term applications a call needs before
+/// the body may unfold (the declaration's parameters, type parameters
+/// included). A withheld definition is an opaque neutral until a call of it
+/// is saturated at arguments that read no free local variable; from there it
+/// unfolds as any definition does (`crate::reduce::Defs::withheld`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Withheld {
+    arity: std::collections::BTreeMap<usize, u32>,
+}
+
+impl Withheld {
+    pub fn new() -> Withheld {
+        Withheld::default()
+    }
+
+    /// Withhold the definition at absolute index `at` until `arity`
+    /// arguments are applied.
+    pub fn insert(&mut self, at: usize, arity: u32) {
+        self.arity.insert(at, arity);
+    }
+
+    /// The arity the binding at absolute index `at` is withheld at, if it is.
+    pub fn arity(&self, at: usize) -> Option<u32> {
+        self.arity.get(&at).copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.arity.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.arity.len()
+    }
+
+    /// Every entry, `(absolute index, arity)`, ascending: what a verdict
+    /// cache keys a check made under this boundary on.
+    pub fn entries(&self) -> impl Iterator<Item = (usize, u32)> + '_ {
+        self.arity.iter().map(|(at, arity)| (*at, *arity))
+    }
+
+    /// The same set without the entries in `released` (absolute indices):
+    /// what an `unfold f;` statement leaves withheld.
+    pub fn releasing(&self, released: &[usize]) -> Withheld {
+        let mut arity = self.arity.clone();
+        for at in released {
+            arity.remove(at);
+        }
+        Withheld { arity }
+    }
 }
 
 const SEALED_CHUNK: usize = 64;
@@ -1901,6 +2071,10 @@ struct GlobalChunk {
     bindings: Rc<Vec<GlobalBinding>>,
 }
 
+/// [`GlobalBindings::mark`]: what a Ψ held when the mark was taken.
+#[derive(Clone)]
+pub struct GlobalMark(GlobalBindings);
+
 /// Persistent outermost-first storage for Ψ.
 #[derive(Clone)]
 pub struct GlobalBindings {
@@ -2007,8 +2181,49 @@ impl GlobalBindings {
         Rc::clone(&self.identity)
     }
 
+    /// [`GlobalBindings::identity`]'s address, without the token. A key
+    /// built from it must hold the token alongside.
+    pub(crate) fn identity_addr(&self) -> usize {
+        Rc::as_ptr(&self.identity) as usize
+    }
+
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.identity, &other.identity)
+    }
+
+    /// A handle on the bindings `self` holds now, for a caller that keeps
+    /// something per binding and must later learn how much of it still
+    /// describes another Ψ ([`GlobalBindings::common_prefix`]): the verdict
+    /// cache's interface hashes, shared by an elaborator and its forks. It
+    /// holds the chunks by reference count and copies no binding; the next
+    /// push onto `self` copies the open tail (at most one chunk) once.
+    pub fn mark(&self) -> GlobalMark {
+        GlobalMark(self.clone())
+    }
+
+    /// How many leading bindings `self` has in common with the Ψ `mark` was
+    /// taken of. A sealed chunk both hold by pointer is common without a
+    /// look, so a fork, which shares every chunk its parent had sealed,
+    /// costs a pointer comparison per chunk and an `==` per tail binding;
+    /// any other binding is compared by `==`, so the answer is exact
+    /// whatever the sharing.
+    pub fn common_prefix(&self, mark: &GlobalMark) -> usize {
+        let other = &mark.0;
+        let n = self.len().min(other.len());
+        if self.same_identity(other) {
+            return n;
+        }
+        let mut i = 0;
+        for (a, b) in self.sealed.iter().zip(other.sealed.iter()) {
+            if i + GLOBAL_CHUNK > n || !Rc::ptr_eq(&a.bindings, &b.bindings) {
+                break;
+            }
+            i += GLOBAL_CHUNK;
+        }
+        while i < n && self.get(i) == other.get(i) {
+            i += 1;
+        }
+        i
     }
 
     fn push(&mut self, binding: GlobalBinding) {
@@ -2036,7 +2251,17 @@ impl GlobalBindings {
 impl GlobalCtx {
     /// Ψ from its bindings, outermost first.
     pub fn new(bindings: Vec<GlobalBinding>) -> GlobalCtx {
-        GlobalCtx { bindings: GlobalBindings::new(bindings), sealed: SealedProofs::default() }
+        GlobalCtx { bindings: GlobalBindings::new(bindings), sealed: SealedProofs::default(), withheld: None }
+    }
+
+    /// This world with `withheld` as its interface boundary (`None` lifts
+    /// it). The bindings get a fresh identity, so no memo keyed on Ψ's
+    /// identity (`typing.rs`'s scopes) answers across the two policies.
+    pub fn withholding(&self, withheld: Option<Rc<Withheld>>) -> GlobalCtx {
+        let mut world = self.clone();
+        world.withheld = withheld.filter(|w| !w.is_empty());
+        world.bindings.identity = Rc::new(());
+        world
     }
 
     /// Append one binding (copy-on-write if this Ψ is shared).
@@ -2099,7 +2324,7 @@ impl GlobalCtx {
 
     /// The first `n` bindings of Ψ, sharing its full chunks.
     pub fn prefix(&self, n: usize) -> GlobalCtx {
-        GlobalCtx { bindings: self.bindings.prefix(n), sealed: self.sealed.prefix(n) }
+        GlobalCtx { bindings: self.bindings.prefix(n), sealed: self.sealed.prefix(n), withheld: self.withheld.clone() }
     }
 
     /// Share the bounded append tail for an immutable semantic image.
@@ -2136,6 +2361,92 @@ pub fn is_nat_zero(t: &Term) -> bool {
 pub fn nat_lit_pred(n: &Numeral) -> Term {
     let pred = n.pred().expect("only a nonzero literal has a predecessor");
     if pred.is_zero() { Term::Zero } else { Term::NatLit(pred) }
+}
+
+/// The widest [`Term::VecLit`]: one machine word.
+pub const VEC_LIT_WIDTH_CAP: u32 = 64;
+
+/// Whether a [`Term::VecLit`]'s width and bits are in range: the typing
+/// rule's side condition, and what [`vec_lit_unfold`] relies on.
+pub fn vec_lit_in_range(width: u32, bits: u64) -> bool {
+    (1..=VEC_LIT_WIDTH_CAP).contains(&width) && (width == 64 || bits >> width == 0)
+}
+
+/// A [`Term::VecLit`]'s one-step view: the pair the `Vec` rule types at a
+/// successor length, `pair^{l,l}(_: T. Vec^l(T; w-1); e₀; rest)`, its tail
+/// the literal one element shorter, or `⟨⟩^l` at width one. These are the
+/// annotations an elaborated vector literal's chain carries
+/// (`check_vec_lit`), so a literal and its chain are the same term one step
+/// apart.
+pub fn vec_lit_unfold(
+    level: &Level,
+    elem: &Rc<Type>,
+    zero: &Rc<Term>,
+    one: &Rc<Term>,
+    width: u32,
+    bits: u64,
+) -> Term {
+    debug_assert!(vec_lit_in_range(width, bits));
+    let head = if bits & 1 == 0 { zero } else { one };
+    let rest = if width == 1 {
+        Term::Triv { level: level.clone() }
+    } else {
+        Term::VecLit {
+            level: level.clone(),
+            elem: Rc::clone(elem),
+            zero: Rc::clone(zero),
+            one: Rc::clone(one),
+            width: width - 1,
+            bits: bits >> 1,
+        }
+    };
+    let rest_len = if width == 1 { Term::Zero } else { Term::NatLit(u64::from(width - 1).into()) };
+    Term::Pair {
+        fst_level: level.clone(),
+        snd_level: level.clone(),
+        fst_ty: Rc::clone(elem),
+        snd_ty: Rc::new(Type::Vec {
+            level: level.clone(),
+            elem: Rc::new(elem.shift_local(1)),
+            len: Rc::new(rest_len),
+        }),
+        fst: Rc::clone(head),
+        snd: Rc::new(rest),
+    }
+}
+
+/// A [`Term::VecLit`] spelled out: the whole pair chain, for a reader that
+/// takes vectors apart by their components — a `box` payload's recursors,
+/// an export target. Each node is [`vec_lit_unfold`]'s, so the chain is the
+/// one the literal stands for.
+pub fn vec_lit_chain(
+    level: &Level,
+    elem: &Rc<Type>,
+    zero: &Rc<Term>,
+    one: &Rc<Term>,
+    width: u32,
+    bits: u64,
+) -> Term {
+    debug_assert!(vec_lit_in_range(width, bits));
+    let shifted = Rc::new(elem.shift_local(1));
+    let mut acc = Term::Triv { level: level.clone() };
+    for i in (0..width).rev() {
+        let rest = width - 1 - i;
+        let rest_len = if rest == 0 { Term::Zero } else { Term::NatLit(u64::from(rest).into()) };
+        acc = Term::Pair {
+            fst_level: level.clone(),
+            snd_level: level.clone(),
+            fst_ty: Rc::clone(elem),
+            snd_ty: Rc::new(Type::Vec {
+                level: level.clone(),
+                elem: Rc::clone(&shifted),
+                len: Rc::new(rest_len),
+            }),
+            fst: Rc::clone(if bits >> i & 1 == 0 { zero } else { one }),
+            snd: Rc::new(acc),
+        };
+    }
+    acc
 }
 
 // ---------------------------------------------------------------------------
@@ -2583,7 +2894,7 @@ pub fn dnth(level: &Level, len: &Rc<Term>, fam: &Rc<Type>, cs: Rc<Term>, idx: Rc
 /// [`Term::ElimIWf`] share it behind one pointer, and the schemas below are
 /// written over it. Its `Debug` is [`Type::IWf`]'s budgeted one, through
 /// `fmt.rs`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct IWfSig {
     pub level: Level,
     pub idx_level: Level,
@@ -2743,7 +3054,7 @@ pub fn iwf_ih(
 /// (see [`Type::M`]). [`Type::M`], [`Term::Corec`] and [`Term::Out`] share it
 /// behind one pointer. Its `Debug` is [`Type::M`]'s budgeted one, through
 /// `fmt.rs`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct MSig {
     pub level: Level,
     pub pos_level: Level,
@@ -3116,12 +3427,14 @@ mod size_tests {
     /// (`docs/native-depth-budget-design.md`), so a variant that outgrows the
     /// rest grows every frame of it: a flat `IWf` signature made a 1000-deep
     /// constructor value overflow the 8 MiB stack. A former with many
-    /// components keeps them behind one pointer (`IWfSig`).
+    /// components keeps them behind one pointer (`IWfSig`). The annotated
+    /// formers carry up to three `Level`s, two words each
+    /// (`issues/kernel-compact-level.md`).
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn syntax_nodes_stay_their_size() {
-        assert_eq!(std::mem::size_of::<Type>(), 72);
-        assert_eq!(std::mem::size_of::<Term>(), 128);
+        assert_eq!(std::mem::size_of::<Type>(), 56);
+        assert_eq!(std::mem::size_of::<Term>(), 104);
     }
 }
 

@@ -42,7 +42,11 @@ const MODULES: &[(&str, &str)] = &[
     ("option", OPTION),
     ("pair", PAIR),
     ("list", LIST),
+    ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
+    ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
+    ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
     ("algebra", ALGEBRA),
+    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
     ("int", INT),
     ("omega", OMEGA),
 ];
@@ -123,6 +127,21 @@ fn od(n: Nat) -> Nat decreases n { match n { Zero => 0, Succ(k) => ev(k) } }
 theorem ev4(): ev(4) = 1 { refl }
 theorem od4(): od(4) = 0 { refl }
 theorem ev7(): ev(7) = 0 { refl }
+"#);
+}
+
+/// Members of one type that call each other by their bare names
+/// (docs/sections-design.md §6) are the same group their qualified spellings
+/// make: the group is found by base name, and the sibling reading reaches the
+/// recursion inside it.
+#[test]
+fn members_calling_each_other_bare_are_one_group() {
+    ok(r#"
+fn Nat::ev(n: Nat) -> Nat decreases n { match n { Zero => 1, Succ(k) => od(k) } }
+fn Nat::od(n: Nat) -> Nat decreases n { match n { Zero => 0, Succ(k) => ev(k) } }
+
+theorem Nat::ev4(): ev(4) = 1 { refl }
+theorem od7(): Nat::od(7) = 1 { refl }
 "#);
 }
 

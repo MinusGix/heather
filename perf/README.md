@@ -9,8 +9,10 @@ environment); `scripts/perf serve` is the dashboard.
 
 Rules, so the diary keeps meaning something:
 
-- **A snapshot is keyed by its environment** (`env.source`: `local` is the
-  desktop, `furnace` the cloud box). Seconds are compared only within one
+- **A snapshot is keyed by its environment** (`env.source`: `cloud` is a
+  Claude Code cloud container, the reference since 2026-10-29,
+  `docs/cloud-benchmarks.md`; `local` is the desktop; `furnace` the older
+  cloud box). Seconds are compared only within one
   environment. Counts — conversion queries and misses, evaluator steps — are
   exact on one tree and are the cross-machine line.
 - **Attribution runs at kernel width one** (`env.kernel_workers`), where the
@@ -31,6 +33,15 @@ Rules, so the diary keeps meaning something:
   certificate's items are in the report beside the library's. Snapshots
   before burn B2 have `reused_callee.hthr` through `build-x86` in that place,
   the per-function certificate; the two rows are different workloads.
+
+## One slow thing at a time: `scripts/bench-probes`
+
+`perf/bench/` holds the probe suite (`docs/cloud-benchmarks.md` §3): cases
+that isolate one slow declaration or one fixed cost of the real library
+through the CLI the suite runs, their recorded cloud rows
+(`perf/bench/results.tsv`), and the ranked list of targets they were chosen
+from (`perf/bench/targets.md`). A snapshot says what is slow in a file; a
+probe is what a round hillclimbs on.
 
 ## Exploring one run: the dashboard's Explore section
 

@@ -414,11 +414,18 @@ fn item_symbols(source: &str, items: &[Item]) -> Vec<Value> {
         Item::Import(import) => {
             symbol(source, &format!("import {}", import.module), 2, import.span, Vec::new())
         }
+        Item::Generate(generate) => {
+            let written = source.get(generate.generator.span.start..generate.generator.span.end).unwrap_or("…");
+            symbol(source, &format!("generate {written}"), 12, generate.span, Vec::new())
+        }
+        Item::Prefixed(prefixed) => decl_symbol(source, &prefixed.decl),
     }).collect()
 }
 
 fn decl_symbol(source: &str, decl: &Decl) -> Value {
     let kind = match decl.kind {
+        // A `def` is a constant.
+        DeclKind::Fn if decl.value => 14,
         DeclKind::Fn | DeclKind::Theorem => 12,
         DeclKind::Axiom => 13,
     };

@@ -1,0 +1,84 @@
+// Probes of `lib/std/num/float/creal_interval.hthr`: enclosures of reals
+// from their terms, containment at `CReal`, and comparisons of reals decided
+// by evaluation. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import rat; import creal; import dyadic; import interval; import creal_interval;
+
+// Reals given by their sequences: a product reads its factors far out, so
+// its terms are not its factors' terms.
+fn third() → CReal { CReal::ofRat(Rat(1, 3)) }
+fn ninth() → CReal { third() * third() }
+
+// A real's enclosure is its term widened by the rate, exactly: at index 10
+// a third's term is 682 · 2^-11, so it is [680, 684] · 2^-11, the floor of
+// 1/3 at 11 bits less and plus 2^-10.
+theorem third_at_10(): third().enclose(10) = Bnd(Dyadic(680, -11), Dyadic(684, -11)) { refl }
+theorem enclose_contract(x: CReal, n: Nat): x.enclose(n).HasReal(x) { x.enclose_has(n) }
+
+// Two reals compared by their enclosures: a ninth is below an eighth once
+// the terms are read far enough out that 2^-n is under half the gap of
+// 1/72, and not at index 5.
+theorem ninth_lt_eighth(): ninth() < CReal::ofRat(Rat(1, 8)) { CReal::lt_of_enclose(ninth(), CReal::ofRat(Rat(1, 8)), 10, refl) }
+// expect-error(kernel): the kernel rejected `ninth_lt_eighth_near`: NotConvertible
+theorem ninth_lt_eighth_near(): ninth() < CReal::ofRat(Rat(1, 8)) { CReal::lt_of_enclose(ninth(), CReal::ofRat(Rat(1, 8)), 5, refl) }
+
+// The checker: rational leaves are exact, real leaves enclosed from their
+// terms; the search reads further out on a miss.
+theorem two_thirds_lt_one(): third() + third() < CReal::ofRat(1) {
+    RealExpr::lt_of_search(RAdd(RReal(third()), RReal(third())), RRat(1), 6, 16, 1, And(trivial, trivial), trivial, refl)
+}
+theorem refined(): ninth() < CReal::ofRat(Rat(1, 8)) { RealExpr::lt_of_search(RReal(ninth()), RRat(Rat(1, 8)), 5, 16, 6, trivial, trivial, refl) }
+// expect-error(kernel): the kernel rejected `unrefined`: NotConvertible
+theorem unrefined(): ninth() < CReal::ofRat(Rat(1, 8)) { RealExpr::lt_of_search(RReal(ninth()), RRat(Rat(1, 8)), 5, 16, 2, trivial, trivial, refl) }
+
+// Arithmetic over real leaves: (1 + 1/100)^100 < 3 with the step a real.
+fn step() → CReal { CReal::ofRat(Rat(1, 100)) }
+theorem compound_lt_3(): (CReal::ofRat(1) + step()).npow(100) < CReal::ofRat(3) {
+    RealExpr::lt_of_search(RPow(RAdd(RRat(1), RReal(step())), 100), RRat(3), 10, 32, 1, And(trivial, trivial), trivial, refl)
+}
+theorem le_neg_mul(): -(third() * CReal::ofRat(2)) <= CReal::ofRat(Rat(-1, 2)) {
+    RealExpr::le_of_search(RNeg(RMul(RReal(third()), RRat(2))), RRat(Rat(-1, 2)), 10, 16, 1, And(trivial, trivial), trivial, refl)
+}
+
+// The negative control: enclosures never decide an equality, so `x <= x` for
+// a real leaf is refused at every index although it is true.
+// expect-error(kernel): the kernel rejected `third_le_third`: NotConvertible
+theorem third_le_third(): third() <= third() { RealExpr::le_of_search(RReal(third()), RReal(third()), 10, 16, 4, trivial, trivial, refl) }
+
+// Containment at `CReal` through each operation, at open arguments.
+theorem mul_contract(I, J: Interval, p: Nat, x, y: CReal, hx: I.HasReal(x), hy: J.HasReal(y)): I.mul(J, p).HasReal(x * y) { Interval::mul_has_real(I, J, p, hx, hy) }
+theorem encloses(e: RealExpr, n, p: Nat, w: e.Wf()): e.enclose(n, p).HasReal(e.eval()) { e.enclose_has(n, p, w) }
+
+// Reciprocals. A twelfth, as a third less a quarter, is apart from zero by
+// its enclosure, and its inverse is enclosed through the tree: between 11
+// and 13, either sign. The tree names the real it inverts, and `Wf` asks that
+// it denote it, here by reflexivity.
+fn twelfth() → CReal { third() - CReal::ofRat(Rat(1, 4)) }
+fn twelfth_tree() → RealExpr { RSub(RReal(third()), RRat(Rat(1, 4))) }
+theorem twelfth_apart(): twelfth().Apart(0) { RealExpr::apart_of_search(twelfth_tree(), RRat(0), 10, 16, 1, And(trivial, trivial), trivial, refl) }
+theorem inv_twelfth_lt(): twelfth().inv(h := twelfth_apart()) < CReal::ofRat(13) {
+    RealExpr::lt_of_search(RInv(twelfth_tree(), twelfth(), twelfth_apart()), RRat(13), 10, 16, 1, And(twelfth().same_refl(), And(trivial, trivial)), trivial, refl)
+}
+theorem lt_inv_twelfth(): CReal::ofRat(11) < twelfth().inv(h := twelfth_apart()) {
+    RealExpr::lt_of_search(RRat(11), RInv(twelfth_tree(), twelfth(), twelfth_apart()), 10, 16, 1, trivial, And(twelfth().same_refl(), And(trivial, trivial)), refl)
+}
+theorem neg_twelfth_apart(): (-twelfth()).Apart(0) { RealExpr::apart_of_search(RNeg(twelfth_tree()), RRat(0), 10, 16, 1, And(trivial, trivial), trivial, refl) }
+theorem inv_neg_twelfth(): (-twelfth()).inv(h := neg_twelfth_apart()) < CReal::ofRat(-11) {
+    RealExpr::lt_of_search(RInv(RNeg(twelfth_tree()), -twelfth(), neg_twelfth_apart()), RRat(-11), 10, 16, 1, And((-twelfth()).same_refl(), And(trivial, trivial)), trivial, refl)
+}
+// Read at index 3 the twelfth's enclosure holds zero: no apartness, and the
+// reciprocal is the whole line.
+// expect-error(kernel): the kernel rejected `apart_near`: NotConvertible
+theorem apart_near(): twelfth().Apart(0) { RealExpr::apart_of_search(twelfth_tree(), RRat(0), 3, 16, 1, And(trivial, trivial), trivial, refl) }
+theorem whole_near(): RInv(twelfth_tree(), twelfth(), twelfth_apart()).enclose(3, 16) = Whole { refl }
+theorem plain_wf(): RAdd(RReal(third()), RPow(RRat(2), 3)).Wf() { RealExpr::wf_plain(RAdd(RReal(third()), RPow(RRat(2), 3)), refl) }
+theorem recip_contract(I: Interval, p: Nat, x: CReal, h: x.Apart(0), hx: I.HasReal(x)): I.recip(p).HasReal(x.inv(h := h)) { Interval::recip_has_real(I, p, h, hx) }
+
+// Containment is proved once over an ordered field and a morphism from
+// `Rat` (`Interval::HasIn`); `Has` and `HasReal` are its readings at the
+// identity and at `CReal::ofRat_hom`, by conversion, at a neutral interval
+// too.
+theorem has_reads_generic(I: Interval, x: Rat, h: I.Has(x)): I.HasIn(Rat::id_hom(), x) { h }
+theorem generic_reads_has(I: Interval, x: Rat, h: I.HasIn(Rat::id_hom(), x)): I.Has(x) { h }
+theorem has_real_reads_generic(I: Interval, x: CReal, h: I.HasReal(x)): I.HasIn(CReal::ofRat_hom(), x) { h }
+theorem generic_reads_has_real(I: Interval, x: CReal, h: I.HasIn(CReal::ofRat_hom(), x)): I.HasReal(x) { h }

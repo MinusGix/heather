@@ -231,17 +231,41 @@ the converse through `sym`. Each trace of `approx(n, t)` is one of some
 `Bisim::refines` is the same statement through `Same` approximations
 (`Bisim::approx`, `ITree::refines_of_same`).
 
-### 7.5 What is not here
+### 7.5 `bind` is a congruence
 
-- **A `bind` congruence up to eutt** (`t ≈ u` and `h1 ≈ h2` pointwise give
-  `bind(t, h1) ≈ bind(u, h2)`). It needs `after` through `bind`
-  (`after(k, bind(t, h))` from `after(k, t)`), and is the next law a handler
-  proof will want. `issues/coitree-eutt.md`.
-- **Up-to techniques** (a corecursive call under `trans` or `bind`). The
-  `codata` surface's guard is one constructor (codata §5); every proof here
-  is written so its self-calls sit directly under one.
+`Eutt::bind_cong`: `t ≈ u` and `h1(a) ≈ h2(a)` for every `a` give
+`bind(t, h1) ≈ bind(u, h2)`, corecursive on `t ≈ u` as `CoTree::bind_cong`
+is on `Bisim`. `bind_cong_l` and `bind_cong_r` fix one side.
 
-### 7.6 Cost
+- A silent step or a call carries over at the **same counts**:
+  `after(k, t) = o` with `o` not a leaf gives `after(k, bind(t, h)) =
+  Obs::bind(o, h)` (`CoTree::after_bind`, by induction on `k` with
+  `obs_bind_at`). A leaf reached early is excluded by `Obs::NotRet`: there the
+  remaining drops would spill into `h(r)`.
+- At a leaf the count is only an upper bound, so the counts do not shift
+  into `hh(r)`. The branch is an existing relation instead,
+  `bind(t, h1) ≈ h1(r) ≈ h2(r) ≈ bind(u, h2)` by `trans`, which the
+  corecursive surface takes as a whole node (codata §5.2).
+  `Eutt::bind_leaf` gives `bind(t, h) ≈ h(r)` from `after(k, t) = ORet(r)`,
+  by recursion on `k` (`peel_l` per tau).
+
+### 7.6 What is not here
+
+- **Up-to techniques beyond the two friends.** Since 2026-11-03 a proof
+  may call itself under `Eutt::up_to_bisim` (transitivity with strong
+  bisimilarity on both sides) and `Eutt::bind_up` (the congruence of
+  `bind`), the friends of `Eutt` at the end of `coitree_eutt.hthr` (codata
+  §5.6); the loop congruence is proved that way, as a probe beside §7.9's
+  direct `Eutt::iter_cong`, in `lib/_tests/std/itree/coitree_eutt_tests.hthr`.
+  `Eutt::trans` itself is not a friend and must not become one: up to
+  `≈`-transitivity is unsound
+  (`spin ≈ CTau(CRet(0))` would close as `ETau(0, 0, spin, CRet(0), refl,
+  refl, trans(self, tau_l(CRet(0))))`, which is false). The other proofs
+  here predate the friends and keep their self-calls under a constructor, or
+  (§7.9) avoid a self-call under `trans` by generalising the hypothesis to
+  a relation the step lands in.
+
+### 7.7 Cost
 
 Before the change in `docs/codata-named-signature-design.md` §8, a `match`
 on an `Eutt` bound each payload field to a projection annotated with every
@@ -251,7 +275,7 @@ product of the fields' dependencies. With checked projections the module is
 dominated by `trans`, `traces_vis` and the declaration itself, each in
 proportion to its size.
 
-### 7.7 Testing
+### 7.8 Testing
 
 `crates/elab/tests/lib_std_coitree_eutt.rs` (the `family_library` binary):
 
@@ -265,7 +289,62 @@ proportion to its size.
 - **negative controls**: a count too small to reach the leaf, and different
   leaves, are refused by conversion;
 - the bridge used at `CTau(CTau(t))` and at `bind(t, CRet)`, and a goal over
-  `Eutt` names it with its trees.
+  `Eutt` names it with its trees;
+- `bind_cong` at a literal tree with taus on both sides of the bind, at a
+  neutral tree through each side, into refinement, and a leaf continued at
+  another value refused (`lib/_tests/std/itree/coitree_eutt_tests.hthr`).
+
+### 7.9 Loops, recursion and readings up to taus
+
+`issues/eutt-iteration-and-io-reading.md` (2026-11-03). Every proof is
+direct corecursion; none waits on up-to coinduction.
+
+- **One tool for every function of trees.** `CoTree::after_map`: a function
+  `F` that is a function `Fo` of observations (`obs(F(t)) = Fo(obs(t))`) and
+  maps a silent step to a silent step takes `after(k, t) = o` to
+  `AfterIs(F(t), Fo(o))`, a count of its own and `after(m, F(t)) = Fo(o)`.
+  The count is `t`'s real number of drops, not `k`: a function that turns a
+  settled node into a silent step (a loop going round, a call being
+  answered) would otherwise spill the rest of `k` into what follows.
+  `iter_from`, `mrec` and `Io::against_co` are instances, each by `refl`.
+- **`Eutt::iter_from_cong`** (`iter_cong` at a start): pending passes
+  `t ≈ u` and bodies `hb(a): body1(a) ≈ body2(a)` give equivalent loops. A
+  `Continue(a)` leaf is one `CTau` on both sides to the next passes, which
+  `hb(a)` relates, so the self-call sits under `ETau`. `iter_from(body, t)`
+  is the loop resumed inside a pass; `iter(body, a)` is `iter_from(body,
+  body(a))` by `δ`.
+- **Unfolding.** `CoTree::iter_unfold` is a `Bisim`: `iter(body, a)` is
+  `bind(body(a), iter_next)` with `iter_next(Continue(a)) = CTau(iter(a))`.
+  `Eutt::iter_unfold` drops the tau (`iter_again`).
+- **Recursion.** `Eutt::mrec_cong`/`rec_cong` (pointwise-equivalent bodies,
+  equivalent pending trees). At a command of the pending tree the two sides'
+  step is classified once by `CoTree::mrec_step` (a `match c as …`), into
+  an inductive `MrecStep` the corecursive body matches on: a call is a
+  silent step to `bind(body(d), k)` on both sides, related by `bind_cong`;
+  a command of `E` is answered as `CTau(mrec(k(a)))`, which is
+  `mrec(CTau(k(a)))` by `δι`, so the children are runs again with no nested
+  constructor. `Eutt::mrec_bind`: running `bind(t, k)` is running `t` then
+  `mrec ∘ k`. Stated plainly it needs up to `trans` at a call, where the
+  bind reassociates (`bind_assoc` is only a `Bisim`); generalised over a
+  pending tree `p` with `Bisim(p, bind(q, k))` it is direct, the
+  reassociation landing in the hypothesis.
+- **`Returns::eutt`**: a return is seen through `Eutt` (`Eutt::to`), so specs
+  stated with `Returns` never mention it.
+- **The world's reading** (`lib/std/os/linux/linux_world_co.hthr`,
+  `docs/effects-capabilities-design.md` §4): `Io::against_co` answers each
+  `CVis` from the world as one `CTau`; `against_co_cong`, `against_co_bind`
+  (a `Bisim`), `Io::Reads` as `Eutt` at every world, `reads_ret`,
+  `reads_trigger`, `reads_bind`, and the loop lemma `reads_iter`. The loop
+  lemma's plain statement needs up to `trans` (the next pass's reading is
+  only equivalent to the step's); `Io::reads_loop` generalises it to "the
+  pass's reading is equivalent to the iteration's pending pass `u`" and
+  traces each silent step or return of the reading back to the pass
+  (`pass_tau`, `pass_ret`, by induction on the count).
+- **Rewriting.** `Eutt::iter_respects` and `Io::against_co_respects` are
+  the respect evidence `rewrite` along `Eutt` uses to reach inside a loop's
+  body and a tree under its reading (`docs/equation-rewrite-design.md`
+  §11). `Eutt::mrec_respects` is stated, but the rewrite does not find it
+  yet (`issues/eutt-rewrite-iteration-evidence.md`).
 
 ---
 
@@ -337,6 +416,32 @@ Both are written as the eutt bridge is (§7.4): one level at an observation
 type (`BindTracesAt`, `BindConvergesAt`), and `obs_bind_at` moving the
 bind's observation.
 
+### 8.3a Denotations, construct by construct (2026-11-04)
+
+§8.2's loop has a fixed finite body. A denotation given twice, once at a
+fuel and once with none (`native_source_co`'s `Stmt::denote_co` against
+`Stmt::denote`), has a loop body that is itself a denotation, using the same
+fuel as the loop. The bridge for it is a pair of relations, each closed
+under the constructors, `bind` and loops:
+
+- `ITree::Into(t, c)`: every trace of the finite `t` is one of `c` at some
+  depth. `into_bind` splits the bind's trace (`IsTrace::split_bind`,
+  `itree_trace`: a trace of `bind(t, h)` is a trace of `t` that has not
+  returned, or one that returned `r` followed by a trace of `h(r)`), finds
+  each part at a depth, and binds the approximations there
+  (`bind_converges`). `into_iter` is by induction on the fuel, one pass at a
+  time through `CoTree::iter_unfold`.
+- `CoTree::Onto(c, p)`: every trace of `c` at some depth is one of the
+  growing family `p` at some fuel. `onto_bind` splits the bound
+  approximations' trace (`bind_traces`) and raises the two fuels to their
+  sum (`fuel_monotone`). `onto_iter` is by induction on the depth, with the
+  rest of the loop after a pass found at every fuel from some on
+  (`IterRestAt`), and `ITree::iter_body_below` (a growing body grows a loop
+  at the same fuel) to meet the body's fuel.
+
+`IsTrace::bind_at` is `IsTrace::bind` asking for the continuation's trace
+only at the value the first trace returns, which a split supplies.
+
 ### 8.4 Testing
 
 `crates/elab/tests/lib_std_coitree_bridge.rs` (the `family_library`
@@ -345,3 +450,15 @@ and at `Cut`, by `refl`, and a wrong leaf refused; a literal loop that
 returns at fuel 3 and depth 5, carried across both ways and for an open
 body, with too little fuel and too little depth refused; an embedded `Cut`
 claiming nothing, and a bind's return carried from the bound programs.
+
+---
+
+## 9. Recursion
+
+`lib/std/itree/coitree_rec.hthr`: `CoTree::rec` runs a body whose calls to
+itself are events, as a loop over the pending tree. It is the fuel-free
+`ITree::rec`. With it come fixpoint induction, termination by a measure and
+`CoTree::get`, so a partial function can be specified with no fuel. The
+design is in `docs/partial-functions-design.md` (§8 says what was built).
+Not yet done: the refinement against `Program::rec`
+(`issues/coitree-rec-program-bridge.md`).

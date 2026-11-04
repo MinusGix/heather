@@ -64,12 +64,43 @@ pub(crate) struct WfDecl {
     pub shape: Rc<Type>,
     /// Under (Δ, x : S).
     pub arity: Rc<Term>,
-    /// The shape's `+` spine: node `j` is `P_j + R_j`, `R_{m-2} = P_{m-1}`.
-    pub spine: Vec<(Level, Level, Rc<Type>, Rc<Type>)>,
+    /// The shape's `+` nodes in preorder, `spine[0]` the whole shape: the
+    /// tree is read off the shape by evaluation, whatever its nesting
+    /// ([`SumNode`]).
+    pub spine: Vec<SumNode>,
     /// `(P_k, n_k)`: each summand and its literal arity.
     pub summands: Vec<(Rc<Type>, u64)>,
+    /// Each summand's injection path: the nodes crossed and whether each
+    /// takes its right side, outermost first.
+    pub paths: Vec<Vec<(usize, bool)>>,
     /// Ψ up to the declaration, which its own types unfold in.
     pub psi: GlobalCtx,
+}
+
+/// One `+` node of a shape: `L + R` at its two levels, and what each side is.
+#[derive(Clone)]
+pub struct SumNode {
+    pub lhs_level: Level,
+    pub rhs_level: Level,
+    pub lhs: Rc<Type>,
+    pub rhs: Rc<Type>,
+    pub sides: [Side; 2],
+    /// The nodes above this one, as [`WfDecl::paths`] records them.
+    pub path: Vec<(usize, bool)>,
+}
+
+/// A side of a [`SumNode`]: summand `k`, or node `j`.
+#[derive(Clone, Copy)]
+pub enum Side {
+    Summand(usize),
+    Node(usize),
+}
+
+/// A shape's `+` tree, by evaluation ([`WfDecl::summands_in`]).
+pub(crate) struct Summands {
+    pub(crate) nodes: Vec<SumNode>,
+    pub(crate) summands: Vec<Rc<Type>>,
+    pub(crate) paths: Vec<Vec<(usize, bool)>>,
 }
 
 impl WfDecl {
@@ -99,38 +130,32 @@ impl WfDecl {
         }
     }
 
-    /// `t : P_j + R_j`, the value at spine node `upto`, injected into the
-    /// whole shape; the annotations are weakened past `by` binders.
-    fn wrap(&self, upto: usize, mut t: Term, by: u32) -> Term {
-        for j in (0..upto).rev() {
-            let (ll, rl, l, r) = &self.spine[j];
-            t = Term::Inr {
-                lhs_level: ll.clone(),
-                rhs_level: rl.clone(),
-                lhs: Rc::new(l.shift_local(by)),
-                rhs: Rc::new(r.shift_local(by)),
-                val: Rc::new(t),
+    /// `t`, injected into the whole shape along `path` (outermost first);
+    /// the annotations are weakened past `by` binders.
+    fn wrap_path(&self, path: &[(usize, bool)], mut t: Term, by: u32) -> Term {
+        for &(j, right) in path.iter().rev() {
+            let node = &self.spine[j];
+            let (lhs_level, rhs_level) = (node.lhs_level.clone(), node.rhs_level.clone());
+            let (lhs, rhs) = (Rc::new(node.lhs.shift_local(by)), Rc::new(node.rhs.shift_local(by)));
+            let val = Rc::new(t);
+            t = if right {
+                Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
+            } else {
+                Term::Inl { lhs_level, rhs_level, lhs, rhs, val }
             };
         }
         t
     }
 
+    /// `t : L + R`, the value at spine node `j`, injected into the whole
+    /// shape; the annotations are weakened past `by` binders.
+    fn wrap(&self, j: usize, t: Term, by: u32) -> Term {
+        self.wrap_path(&self.spine[j].path, t, by)
+    }
+
     /// Summand `k`'s injection of `t : P_k` into the shape.
     fn inj(&self, k: usize, t: Term, by: u32) -> Term {
-        let m = self.spine.len() + 1;
-        if k + 1 < m {
-            let (ll, rl, l, r) = &self.spine[k];
-            let inl = Term::Inl {
-                lhs_level: ll.clone(),
-                rhs_level: rl.clone(),
-                lhs: Rc::new(l.shift_local(by)),
-                rhs: Rc::new(r.shift_local(by)),
-                val: Rc::new(t),
-            };
-            self.wrap(k, inl, by)
-        } else {
-            self.wrap(m - 1, t, by)
-        }
+        self.wrap_path(&self.paths[k], t, by)
     }
 }
 
@@ -259,29 +284,46 @@ impl Tr<'_> {
         }
     }
 
-    /// The shape's `+` spine and its summands, by evaluation.
-    fn summands_in(psi: &GlobalCtx, shape: &Type, depth: u32) -> Option<(Vec<(Level, Level, Rc<Type>, Rc<Type>)>, Vec<Rc<Type>>)> {
-        let (mut spine, mut summands) = (Vec::new(), Vec::new());
-        let mut cur = Self::whnf_in(psi, shape, depth)?;
-        loop {
-            match cur {
-                Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
-                    summands.push(Rc::clone(&lhs));
-                    spine.push((lhs_level, rhs_level, lhs, Rc::clone(&rhs)));
-                    cur = Self::whnf_in(psi, &rhs, depth)?;
-                }
-                last => {
-                    summands.push(Rc::new(last));
-                    return Some((spine, summands));
-                }
-            }
+    /// The shape's `+` tree and its summands, by evaluation: a side that
+    /// evaluates to a `+` is a node, any other side a summand (a payload
+    /// starts with its nominal tag, so it is never a sum). A right summand is
+    /// kept as evaluated, a left one as written.
+    fn summands_in(psi: &GlobalCtx, shape: &Type, depth: u32) -> Option<Summands> {
+        let mut out = Summands { nodes: Vec::new(), summands: Vec::new(), paths: Vec::new() };
+        let root = Self::whnf_in(psi, shape, depth)?;
+        // Preorder, the left side first, so the summands come out in
+        // declaration order and a node's children number after it.
+        fn walk(whnf: &dyn Fn(&Type) -> Option<Type>, cur: Type, written: Option<Rc<Type>>, path: Vec<(usize, bool)>, out: &mut Summands) -> Option<Side> {
+            let Type::Sum { lhs_level, rhs_level, lhs, rhs } = cur else {
+                out.summands.push(written.unwrap_or_else(|| Rc::new(cur)));
+                out.paths.push(path);
+                return Some(Side::Summand(out.summands.len() - 1));
+            };
+            let j = out.nodes.len();
+            out.nodes.push(SumNode {
+                lhs_level,
+                rhs_level,
+                lhs: Rc::clone(&lhs),
+                rhs: Rc::clone(&rhs),
+                sides: [Side::Summand(0); 2],
+                path: path.clone(),
+            });
+            let step = |right| path.iter().copied().chain([(j, right)]).collect::<Vec<_>>();
+            // A left side that does not evaluate is a summand, as written.
+            let lhs_whnf = whnf(&lhs).unwrap_or_else(|| (*lhs).clone());
+            let l = walk(whnf, lhs_whnf, Some(lhs), step(false), out)?;
+            let r = walk(whnf, whnf(&rhs)?, None, step(true), out)?;
+            out.nodes[j].sides = [l, r];
+            Some(Side::Node(j))
         }
+        walk(&|t| Self::whnf_in(psi, t, depth), root, None, Vec::new(), &mut out)?;
+        Some(out)
     }
 
     /// The nominal tag of a shape: the literal its first payload starts with.
     pub(crate) fn tag_in(psi: &GlobalCtx, shape: &Type, depth: u32) -> Option<u64> {
-        let (_, summands) = Self::summands_in(psi, shape, depth)?;
-        let Type::Sigma { fst, .. } = Self::whnf_in(psi, &summands[0], depth)? else { return None };
+        let tree = Self::summands_in(psi, shape, depth)?;
+        let Type::Sigma { fst, .. } = Self::whnf_in(psi, &tree.summands[0], depth)? else { return None };
         let Type::SEq { lhs, .. } = Self::whnf_in(psi, &fst, depth)? else { return None };
         Self::nat_in(psi, &lhs, depth)
     }
@@ -311,7 +353,7 @@ impl Tr<'_> {
         let shape = Rc::new(Type::El { level: level.clone(), tm: Rc::clone(shape) });
         let psi = self.psi;
         let np = params.len() as u32;
-        let Some((spine, summands)) = Self::summands_in(psi, &shape, np) else { return refuse("Wf shape does not evaluate to a sum") };
+        let Some(tree) = Self::summands_in(psi, &shape, np) else { return refuse("Wf shape does not evaluate to a sum") };
         let Some(tag) = Self::tag_in(psi, &shape, np) else { return refuse("Wf shape carries no nominal tag") };
         let mut d = WfDecl {
             abs: self.at,
@@ -323,11 +365,12 @@ impl Tr<'_> {
             level: level.clone(),
             shape,
             arity: Rc::clone(arity),
-            spine,
+            spine: tree.nodes,
             summands: Vec::new(),
+            paths: tree.paths,
             psi: psi.clone(),
         };
-        for (k, p) in summands.into_iter().enumerate() {
+        for (k, p) in tree.summands.into_iter().enumerate() {
             let at = d.arity.inst_top(1, &d.inj(k, Term::Var(LocalVar(0)), 1));
             let Some(n) = Self::nat_in(psi, &at, np + 1) else { return refuse("Wf arity depends on the payload") };
             d.summands.push((p, n));
@@ -531,9 +574,9 @@ impl Tr<'_> {
         };
         let mut out = vec![None; base.params.len()];
         if !out.is_empty() {
-            let Some((_, inst)) = Self::summands_in(self.psi, shape, depth) else { return refuse(WF) };
+            let Some(inst) = Self::summands_in(self.psi, shape, depth) else { return refuse(WF) };
             let mut fuel = 4096;
-            for ((tmpl, _), inst) in base.summands.iter().zip(&inst) {
+            for ((tmpl, _), inst) in base.summands.iter().zip(&inst.summands) {
                 self.bind_params(&base, tmpl, inst, None, 0, &mut out, &mut fuel);
             }
         }
@@ -682,11 +725,14 @@ impl Tr<'_> {
         Ok(Aux { name: d.supf_key(), ty: self.ty(&ty)?, body: Some(self.param_lams(d, body)?), inductive: None })
     }
 
-    /// The case at spine node `j`, in (Δ, a, cs, r_1 … r_j), on `a` at the
-    /// top and on `r_j` below it. Its value is `Π(cs : Vec(D; n)). D`.
+    /// The case at spine node `j`, in (Δ, a, cs, r_1 … r_t) for the `t`
+    /// nodes above it, on `a` at the root and on `r_t` below it. Its value is
+    /// `Π(cs : Vec(D; n)). D`.
     fn supf_chain(&self, d: &WfDecl, j: usize) -> R<Hx> {
-        let (ll, rl, l, r) = &d.spine[j];
-        let by = j as u32 + 2;
+        let node = &d.spine[j];
+        let (ll, rl, l, r) = (&node.lhs_level, &node.rhs_level, &node.lhs, &node.rhs);
+        let depth = node.path.len();
+        let by = depth as u32 + 2;
         let scrut = Hx::Var(if j == 0 { 1 } else { 0 });
         // Motive in (Δ, a, cs, r…, z).
         let zfull = d.wrap(j, Term::Var(LocalVar(0)), by + 1);
@@ -696,23 +742,26 @@ impl Tr<'_> {
             dom: Rc::new(Type::Vec { level: d.level.clone(), elem: Rc::new(d.wf_at(by + 1)), len: Rc::new(d.arity.inst_top(by + 1, &zfull)) }),
             cod: Rc::new(d.wf_at(by + 2)),
         };
-        let node = Type::Sum { lhs_level: ll.clone(), rhs_level: rl.clone(), lhs: Rc::new(l.shift_local(by)), rhs: Rc::new(r.shift_local(by)) };
+        let sum = Type::Sum { lhs_level: ll.clone(), rhs_level: rl.clone(), lhs: Rc::new(l.shift_local(by)), rhs: Rc::new(r.shift_local(by)) };
         let at = d.np() + by;
-        let motive = lam(self.ty_at(at, &node)?, self.ty_at(at + 1, &motive)?);
+        let motive = lam(self.ty_at(at, &sum)?, self.ty_at(at + 1, &motive)?);
         let (lt, rt) = (self.ty_at(at, &l.shift_local(by))?, self.ty_at(at, &r.shift_local(by))?);
         // A summand whose payload is a closed singleton has its arm at the
         // canonical element, under no binder (`caseL`/`caseR`/`caseLR`).
-        let last = j + 2 == d.summands.len();
-        let (cl, cr) = (self.canon_term(l), if last { self.canon_term(r) } else { None });
-        let left = match &cl {
-            Some(c) => self.supf_arm(d, j, j, Some(c.clone()))?,
-            None => lam(lt.clone(), self.supf_arm(d, j, j + 1, None)?),
+        let canon = |side: Side, t: &Type| match side {
+            Side::Summand(_) => self.canon_term(t),
+            Side::Node(_) => None,
         };
-        let right = match &cr {
-            Some(c) => self.supf_arm(d, j + 1, j, Some(c.clone()))?,
-            None if !last => lam(rt.clone(), self.supf_chain(d, j + 1)?),
-            None => lam(rt.clone(), self.supf_arm(d, j + 1, j + 1, None)?),
+        let (cl, cr) = (canon(node.sides[0], l), canon(node.sides[1], r));
+        let arm = |side: Side, c: &Option<Term>, t: &Hx| -> R<Hx> {
+            Ok(match (side, c) {
+                (Side::Summand(k), Some(c)) => self.supf_arm(d, k, depth, Some(c.clone()))?,
+                (Side::Summand(k), None) => lam(t.clone(), self.supf_arm(d, k, depth + 1, None)?),
+                (Side::Node(m), _) => lam(t.clone(), self.supf_chain(d, m)?),
+            })
         };
+        let left = arm(node.sides[0], &cl, &lt)?;
+        let right = arm(node.sides[1], &cr, &rt)?;
         let levels = [ll, rl, &d.level];
         let single = |t: &Type| -> R<(Hx, Hx)> { Ok((self.canon(t).expect("a singleton")?, self.eta(t).expect("a singleton")?)) };
         match (cl.is_some(), cr.is_some()) {

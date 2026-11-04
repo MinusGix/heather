@@ -28,7 +28,12 @@
 //! - **finite** — a value of a finitely enumerable type built from the bit,
 //!   the state and the recursive result: `is_zero_bits`, `xor_bits`;
 //! - **scaled** — a `Nat`-run endomorphism `ih ↦ q·ih + r`, which is
-//!   `AffineTree::Leaf` with a coefficient: `toNat`.
+//!   `AffineTree::Leaf` with a coefficient: `toNat`;
+//! - **`Nat` state** — not a machine at all: `cons(f(x), ih(g(x)))` over a
+//!   `Nat` argument, `ofNat`. The state has infinitely many values, so the
+//!   step is not tabulated; `f` and `g` are [`NatRead`]s, eliminations read
+//!   off the probe as closed data, and the word is computed from them
+//!   ([`Transducer::run_nat`]).
 //!
 //! The direction is fixed by the recursion: index 0 — the `Vec`'s head, the
 //! least significant bit — is the outermost step, which is the direction
@@ -39,7 +44,9 @@
 
 use std::sync::Arc as Rc;
 
-use super::algebra::{add_increments, Increment, Proj};
+use heather_numeral::Numeral;
+
+use super::algebra::{add_increments, AffineTree, Increment, Path, Proj};
 use super::program::ContextProgram;
 
 /// How many closed combinations of head bits and state one probe may
@@ -111,6 +118,244 @@ pub enum Output {
     /// `(q, r)` at combination `i`. `AffineTree::Leaf`'s increment with a
     /// coefficient (design §5).
     Scaled { maps: Vec<(Increment, Increment)> },
+    /// `cons(f(x), ih(g(x)))` over a `Nat` argument `x` — `bitvec::ofNat`'s
+    /// shape. `x` has infinitely many values, so there is no table: `f` and
+    /// `g` are [`NatRead`]s, chains of classified `Nat` folds read off the
+    /// probe as arithmetic, and the word is the bits of the orbit
+    /// `x, g(x), g(g(x)), …` under `f` ([`Transducer::run_nat`]).
+    NatState { bit: NatRead, next: NatRead },
+}
+
+/// A closed value of the shapes an affine fold's base and result take: a
+/// natural, a bit — an injection over a canonical unit-like payload, the
+/// criterion `eval/bits.rs` decides — or a pair of them.
+#[derive(Clone, Debug)]
+pub enum Datum {
+    Nat(Increment),
+    Bit(bool),
+    Pair(Rc<Datum>, Rc<Datum>),
+}
+
+impl Datum {
+    fn at(&self, path: &[Proj]) -> Option<&Datum> {
+        let mut cur = self;
+        for step in path {
+            let Datum::Pair(fst, snd) = cur else { return None };
+            cur = match step {
+                Proj::Fst => fst,
+                Proj::Snd => snd,
+            };
+        }
+        Some(cur)
+    }
+
+    /// `tree[ih := self]`. A successor on anything but a natural is
+    /// ill-typed and declines, as [`AffineTree::compose`] does.
+    fn under(&self, tree: &AffineTree) -> Option<Datum> {
+        Some(match tree {
+            AffineTree::Lit { inc } => Datum::Nat(inc.clone()),
+            AffineTree::Leaf { inc, path } => match (self.at(path)?, inc) {
+                (found, None) => found.clone(),
+                (Datum::Nat(n), Some(_)) => Datum::Nat(add_increments(inc, n)),
+                _ => return None,
+            },
+            AffineTree::Pair(fst, snd) => {
+                Datum::Pair(Rc::new(self.under(fst)?), Rc::new(self.under(snd)?))
+            }
+        })
+    }
+}
+
+impl Datum {
+    /// `tree^{|count|}[self]`. The general route is the tree's own power
+    /// ([`AffineTree::iterate`]) instantiated at `self`; when the count and
+    /// every increment fit a `u128`, [`Datum::iterated_small`] answers
+    /// without building the powers, which is what keeps a `Nat`-state word
+    /// at one pass of arithmetic per bit rather than `2·log₂ x`
+    /// compositions.
+    fn iterated(&self, tree: &AffineTree, count: &Rc<ContextProgram<()>>) -> Option<Datum> {
+        if let Some(done) = self.iterated_small(tree, count) {
+            return Some(done);
+        }
+        self.under(&tree.iterate(count)?)
+    }
+
+    /// The same value read off the tree as a **functional graph** on the
+    /// datum's leaf positions: one step sends position `i` to a literal, or
+    /// to the value at position `src(i)` plus `inc(i)`. After `c` steps,
+    /// position `i` holds `base[src^c(i)] + Σ_{t<c} inc(src^t(i))`, or the
+    /// literal the walk reaches first plus the increments before it. The
+    /// walk visits at most one position per leaf before it repeats one,
+    /// and a repeat is a cycle whose whole turns are skipped by one
+    /// multiplication — so this is `O(leaves)` whatever `c` is.
+    ///
+    /// `None` is "not this route": a tree whose shape is not the datum's
+    /// (a component copied whole into another place), a count or increment
+    /// past `u128`, or ill-typed input — the general route then decides.
+    /// The reference test checks it against [`AffineTree::iterate`].
+    fn iterated_small(&self, tree: &AffineTree, count: &Rc<ContextProgram<()>>) -> Option<Datum> {
+        enum Src {
+            Lit(u128),
+            From(usize, u128),
+        }
+        let c = count.len().as_u128()?;
+        let mut leaves: Vec<(Path, &Datum)> = Vec::new();
+        self.leaves(&mut Vec::new(), &mut leaves);
+        let mut srcs = Vec::with_capacity(leaves.len());
+        for (path, _) in &leaves {
+            srcs.push(match tree.at_exact(path)? {
+                AffineTree::Lit { inc } => Src::Lit(inc_count(inc)?),
+                AffineTree::Leaf { inc, path: from } => {
+                    let j = leaves.iter().position(|(p, _)| p == from)?;
+                    Src::From(j, inc_count(inc)?)
+                }
+                AffineTree::Pair(..) => return None,
+            });
+        }
+        // Each position's value after `c` steps: a base leaf and the
+        // increments above it, or a literal the walk met first plus those.
+        let mut out: Vec<Datum> = Vec::with_capacity(leaves.len());
+        for i in 0..leaves.len() {
+            let (mut cur, mut steps, mut acc) = (i, 0u128, 0u128);
+            let mut seen: Vec<Option<(u128, u128)>> = vec![None; leaves.len()];
+            let mut skipped = false;
+            let value = loop {
+                if steps == c {
+                    break match leaves[cur].1 {
+                        Datum::Nat(n) => Datum::Nat(nat_count(inc_count(n)?.checked_add(acc)?)),
+                        Datum::Bit(b) if acc == 0 => Datum::Bit(*b),
+                        _ => return None,
+                    };
+                }
+                match srcs[cur] {
+                    Src::Lit(n) => break Datum::Nat(nat_count(n.checked_add(acc)?)),
+                    Src::From(j, inc) => {
+                        if !skipped {
+                            if let Some((s0, a0)) = seen[cur] {
+                                // A cycle: skip its whole turns at once.
+                                let (period, gain) = (steps - s0, acc - a0);
+                                let turns = (c - steps) / period;
+                                steps += turns * period;
+                                acc = acc.checked_add(turns.checked_mul(gain)?)?;
+                                skipped = true;
+                                continue;
+                            }
+                            seen[cur] = Some((steps, acc));
+                        }
+                        acc = acc.checked_add(inc)?;
+                        cur = j;
+                        steps += 1;
+                    }
+                }
+            };
+            // A position's kind is the motive's, so a step cannot change it.
+            let same_kind = matches!(
+                (leaves[i].1, &value),
+                (Datum::Nat(_), Datum::Nat(_)) | (Datum::Bit(_), Datum::Bit(_))
+            );
+            if !same_kind {
+                return None;
+            }
+            out.push(value);
+        }
+        let mut next = out.into_iter();
+        self.rebuilt(&mut next)
+    }
+
+    fn leaves<'d>(&'d self, at: &mut Path, out: &mut Vec<(Path, &'d Datum)>) {
+        match self {
+            Datum::Pair(fst, snd) => {
+                at.push(Proj::Fst);
+                fst.leaves(at, out);
+                at.pop();
+                at.push(Proj::Snd);
+                snd.leaves(at, out);
+                at.pop();
+            }
+            leaf => out.push((at.clone(), leaf)),
+        }
+    }
+
+    /// `self`'s shape with its leaves taken from `next`, in [`Datum::leaves`]
+    /// order.
+    fn rebuilt(&self, next: &mut impl Iterator<Item = Datum>) -> Option<Datum> {
+        Some(match self {
+            Datum::Pair(fst, snd) => {
+                let a = fst.rebuilt(next)?;
+                let b = snd.rebuilt(next)?;
+                Datum::Pair(Rc::new(a), Rc::new(b))
+            }
+            _ => next.next()?,
+        })
+    }
+}
+
+/// `Succ^n` as an increment.
+fn nat_count(n: u128) -> Increment {
+    (n != 0).then(|| ContextProgram::of_count((), &Numeral::from_u128(n)))
+}
+
+/// An increment's count, when it fits a `u128`.
+fn inc_count(inc: &Increment) -> Option<u128> {
+    match inc {
+        None => Some(0),
+        Some(p) => p.len().as_u128(),
+    }
+}
+
+/// One elimination of a [`NatRead`]'s spine.
+#[derive(Clone, Debug)]
+pub enum ReadElim {
+    /// `elim_Nat` whose step classified as the affine `tree`
+    /// (`value/algebra.rs`), over the closed `base`. `first` is the
+    /// innermost step at `k = 0` applied to `base`, present exactly when
+    /// the class is not uniform — the step `eval/runs.rs` takes as written.
+    Fold { tree: AffineTree, uniform: bool, base: Datum, first: Option<Datum> },
+    Proj(Proj),
+}
+
+/// A function of a closed natural read off a probe value: the eliminations
+/// a neutral at the state variable carries, innermost first, under `outer`
+/// successors. Nothing in it is a closure, which is the point — it is
+/// applied to a closed state without substituting into anything
+/// (`eval/transduce.rs`, the `Nat`-state probe).
+#[derive(Clone, Debug)]
+pub struct NatRead {
+    pub elims: Vec<ReadElim>,
+    pub outer: Increment,
+}
+
+impl NatRead {
+    /// The value at `x`, which is `Succ^{x}(Zero)`.
+    pub fn apply(&self, x: &Increment) -> Option<Datum> {
+        let mut cur = Datum::Nat(x.clone());
+        for elim in &self.elims {
+            cur = match elim {
+                ReadElim::Proj(p) => cur.at(&[*p])?.clone(),
+                ReadElim::Fold { tree, uniform, base, first } => {
+                    let Datum::Nat(count) = &cur else { return None };
+                    // `eval/runs.rs`'s two cases at a zero tail: uniform is
+                    // `tree^c[base]`; peeled is `tree^{c-1}[s(0, base)]`.
+                    let (start, count) = match (count, uniform) {
+                        (None, _) => (base.clone(), None),
+                        (Some(c), true) => (base.clone(), Some(Rc::clone(c))),
+                        (Some(c), false) => {
+                            (first.clone()?, ContextProgram::uncons(c).1)
+                        }
+                    };
+                    match count {
+                        None => start,
+                        Some(c) => start.iterated(tree, &c)?,
+                    }
+                }
+            };
+        }
+        if self.outer.is_some() {
+            let Datum::Nat(n) = cur else { return None };
+            cur = Datum::Nat(add_increments(&self.outer, &n));
+        }
+        Some(cur)
+    }
 }
 
 /// A step tabulated over the closed combinations of its head bits and its
@@ -268,6 +513,22 @@ impl Transducer {
             acc = compose_affine(&maps[entry], &acc)?;
         }
         Some(acc)
+    }
+
+    /// **`Nat`-state**: the bits `f(x), f(g(x)), …` for `width` steps from
+    /// `x`, and the state after the last. `None` when a bit is not a bit or
+    /// a state not a natural — ill-typed input, declined.
+    pub fn run_nat(&self, width: u32, x: &Increment) -> Option<(u64, Increment)> {
+        let Output::NatState { bit, next } = &self.output else { return None };
+        let mut word = 0u64;
+        let mut state = x.clone();
+        for i in 0..width {
+            let Datum::Bit(b) = bit.apply(&state)? else { return None };
+            word |= u64::from(b) << i;
+            let Datum::Nat(n) = next.apply(&state)? else { return None };
+            state = n;
+        }
+        Some((word, state))
     }
 }
 
@@ -497,6 +758,86 @@ mod tests {
                 assert_eq!((count(&q), count(&r)), (1, 0));
             }
         }
+    }
+
+    /// A datum as `(is a bit, value)` per leaf, for comparing.
+    fn flat(d: &Datum, out: &mut Vec<(bool, u128)>) {
+        match d {
+            Datum::Pair(a, b) => {
+                flat(a, out);
+                flat(b, out);
+            }
+            Datum::Nat(n) => out.push((false, inc_count(n).expect("small"))),
+            Datum::Bit(b) => out.push((true, u128::from(*b))),
+        }
+    }
+
+    #[test]
+    fn the_functional_graph_route_is_the_trees_own_power() {
+        // Random windows of naturals and bits, random affine steps of the
+        // window's own shape, random counts small and large: the
+        // closed-form walk must agree with `AffineTree::iterate` and
+        // instantiation, which `value/algebra.rs` tests against one-step
+        // iteration.
+        let nat = |n: u64| Datum::Nat(nat_count(u128::from(n)));
+        let pair = |a: Datum, b: Datum| Datum::Pair(Rc::new(a), Rc::new(b));
+        let mut seed = 0x5eed_u64;
+        let shapes: Vec<Datum> = vec![
+            pair(nat(0), nat(0)),
+            pair(Datum::Bit(false), Datum::Bit(true)),
+            pair(nat(3), pair(nat(1), nat(4))),
+            pair(Datum::Bit(true), pair(nat(2), Datum::Bit(false))),
+        ];
+        let mut agreed = 0;
+        for _ in 0..400 {
+            let base = shapes[(lcg(&mut seed) % shapes.len() as u64) as usize].clone();
+            let mut leaves = Vec::new();
+            base.leaves(&mut Vec::new(), &mut leaves);
+            let kinds: Vec<(Path, bool)> =
+                leaves.iter().map(|(p, d)| (p.clone(), matches!(d, Datum::Bit(_)))).collect();
+            let inc = |seed: &mut u64| nat_count(u128::from(lcg(seed) % 3));
+            // A tree of the base's shape, each leaf a literal or a copy of a
+            // position of its own kind.
+            fn build(d: &Datum, at: &mut Path, kinds: &[(Path, bool)], seed: &mut u64,
+                     inc: &dyn Fn(&mut u64) -> Increment) -> AffineTree {
+                match d {
+                    Datum::Pair(a, b) => {
+                        at.push(Proj::Fst);
+                        let x = build(a, at, kinds, seed, inc);
+                        at.pop();
+                        at.push(Proj::Snd);
+                        let y = build(b, at, kinds, seed, inc);
+                        at.pop();
+                        AffineTree::Pair(Box::new(x), Box::new(y))
+                    }
+                    leaf => {
+                        let bit = matches!(leaf, Datum::Bit(_));
+                        if !bit && lcg(seed) % 4 == 0 {
+                            return AffineTree::Lit { inc: inc(seed) };
+                        }
+                        let same: Vec<&Path> =
+                            kinds.iter().filter(|(_, b)| *b == bit).map(|(p, _)| p).collect();
+                        let from = same[(lcg(seed) % same.len() as u64) as usize].clone();
+                        AffineTree::Leaf { inc: if bit { None } else { inc(seed) }, path: from }
+                    }
+                }
+            }
+            let tree = build(&base, &mut Vec::new(), &kinds, &mut seed, &inc);
+            let c = match lcg(&mut seed) % 3 {
+                0 => lcg(&mut seed) % 9 + 1,
+                1 => lcg(&mut seed) % 300 + 1,
+                _ => (lcg(&mut seed) << 20) | 1,
+            };
+            let count = ContextProgram::of_count((), &Numeral::from_u64(c));
+            let fast = base.iterated_small(&tree, &count).expect("small route");
+            let slow = base.under(&tree.iterate(&count).expect("iterates")).expect("instantiates");
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            flat(&fast, &mut a);
+            flat(&slow, &mut b);
+            assert_eq!(a, b, "tree {tree:?} at {c}");
+            agreed += 1;
+        }
+        assert_eq!(agreed, 400);
     }
 
     #[test]

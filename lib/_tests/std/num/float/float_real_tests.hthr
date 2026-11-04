@@ -1,0 +1,116 @@
+// Probes of `lib/std/num/float/float_real.hthr` and the square roots in
+// rat.hthr and creal.hthr: the theorems at literals, and a negative control.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import int; import omega; import rat; import creal;
+import dyadic; import float; import round; import error; import arith; import relation_props; import algebra_rel; import ordered_field;
+import window; import literal; import interval; import creal_interval; import round_real; import float_real;
+
+fn h16(neg: Bool, m, b: Nat, ok: binary16().canonical(m, b).IsTrue()) → Finite(binary16()) { Finite(neg, m, b, ok) }
+fn two16() → Finite(binary16()) { h16(False, 1024, 15, trivial) }
+fn four16() → Finite(binary16()) { h16(False, 1024, 16, trivial) }
+fn root_two16() → Finite(binary16()) { h16(False, 1448, 14, trivial) }
+fn root_two16_up() → Finite(binary16()) { h16(False, 1449, 14, trivial) }
+
+// The rational roots from below: √2 to 11 bits is 2896/2048 (2896² ≤ 2·4^11
+// < 2897²), and the real's 10th term is that root floored to 11 bits.
+theorem root_floor_two(): Rat::root_floor(2, 11) ≈ Rat(2896, 2048) { refl }
+theorem sqrt_two_term(): CReal::sqrt_rat(2).at(10) ≈ Rat(2896, 2048) { refl }
+// A perfect square's root is the rational root; the root is of |q|.
+theorem sqrt_four(): CReal::sqrt_rat(4) ≈ CReal::ofRat(2) { CReal::is_sqrt_exact(2, trivial, refl, CReal::sqrt_rat_is_sqrt(4)) }
+theorem sqrt_neg_four(): CReal::sqrt_rat(-4) ≈ CReal::ofRat(2) { CReal::is_sqrt_exact(2, trivial, refl, CReal::sqrt_rat_is_sqrt(-4)) }
+
+// The value theorem at the reals: binary16 √2 = 1448/1024 is the correct
+// rounding of the real √2 (inexact: strictly inside a cell), in nearest
+// and upward modes; √4 = 2 is exact.
+theorem root_two_real(): RoundsToReal(binary16(), NearestEven, CReal::sqrt_rat(two16().val()), two16().sqrt()) {
+    Finite::sqrt_rounds_real(two16(), NearestEven, trivial, trivial)
+}
+theorem root_two_real_up(): RoundsToReal(binary16(), TowardPos, CReal::sqrt_rat(two16().val()), two16().sqrt(mode := TowardPos)) {
+    Finite::sqrt_rounds_real(two16(), TowardPos, trivial, trivial)
+}
+theorem root_four_real(): RoundsToReal(binary16(), NearestEven, CReal::sqrt_rat(four16().val()), four16().sqrt()) {
+    Finite::sqrt_rounds_real(four16(), NearestEven, trivial, trivial)
+}
+
+// Negative control: the next float up is not a nearest rounding of √2, since
+// correct roundings of one real are the same float.
+theorem root_two_not_up(): ¬RoundsToReal(binary16(), NearestEven, CReal::sqrt_rat(two16().val()), Fin(root_two16_up())) {
+    λ h => {
+        let e: (root_two16().val() ≈ root_two16_up().val()) = (binary16()).rounds_real_unique(NearestEven, CReal::sqrt_rat(two16().val()), Fin(root_two16()), Fin(root_two16_up()),
+            Finite::sqrt_rounds_real(two16(), NearestEven, trivial, trivial), h);
+        let lt: (root_two16().val() < root_two16_up().val()) = trivial;
+        Rat::lt_irrefl(root_two16_up().val(), Rat::lt_respects(e, root_two16_up().val().same_refl(), lt))
+    }
+}
+
+// The standard model at the root: |r - √2| <= 2^-11·√2.
+theorem root_two_model(): (root_two16().real() - CReal::sqrt_rat(two16().val())).abs() <= CReal::ofRat((binary16()).u(NearestEven)) * CReal::sqrt_rat(two16().val()) {
+    Finite::sqrt_real_relative(two16(), NearestEven, trivial, trivial, CReal::sqrt_rat(two16().val()),
+        CReal::is_sqrt_respects(two16().val().abs_of_nonneg(trivial), CReal::sqrt_rat_is_sqrt(two16().val())), trivial, trivial, root_two16(), refl)
+}
+
+// The other operations at the reals: 2 + 2 rounds to 4.
+theorem add_real_two(): RoundsToReal(binary16(), NearestEven, two16().real() + two16().real(), two16().add(two16())) { Finite::add_real(two16(), two16(), NearestEven) }
+
+// The constructed root squares back, and roots are unique: √2·√2 = 2.
+theorem sqrt_two_sq(): CReal::sqrt_rat(2) * CReal::sqrt_rat(2) ≈ CReal::ofRat(2) { CReal::sqrt_rat_sq(2) }
+
+// The root of a real: its 10th term roots the real's 24th term to 12 bits
+// and floors to 11, the same 2896/2048 as `sqrt_rat`'s.
+theorem real_sqrt_two_term(): CReal::ofRat(2).sqrt().at(10) ≈ Rat(2896, 2048) { refl }
+// √(3² + 4²) = 5, through `≈` on the argument.
+theorem hypot_three_four(): (CReal::ofRat(3) * CReal::ofRat(3) + CReal::ofRat(4) * CReal::ofRat(4)).sqrt() ≈ CReal::ofRat(5) {
+    let sum: (CReal::ofRat(3) * CReal::ofRat(3) + CReal::ofRat(4) * CReal::ofRat(4) ≈ CReal::ofRat(25)) =
+        CReal::same_trans(CReal::add_respects(CReal::same_sym(CReal::ofRat_mul(3, 3)), CReal::same_sym(CReal::ofRat_mul(4, 4))), CReal::same_sym(CReal::ofRat_add(3 * 3, 4 * 4)));
+    CReal::same_trans(CReal::sqrt_respects(sum), CReal::same_trans(CReal::sqrt_ofRat(25), CReal::is_sqrt_exact(5, trivial, refl, CReal::sqrt_rat_is_sqrt(25))))
+}
+// Negative control: the root of -4 is 2, never -2 (a root is nonnegative).
+theorem sqrt_neg_four_not_neg(): ¬(CReal::ofRat(-4).sqrt() ≈ CReal::ofRat(-2)) {
+    λ e => {
+        let bad: (0 <= Rat::neg(2)) = CReal::le_of_ofRat_le(p := 0, q := -2, h := CReal::le_of_same_r(CReal::same_sym(e), CReal::ofRat(-4).sqrt_nonneg()));
+        omega(bad)
+    }
+}
+
+// The float root rounds the real root of the float's real.
+theorem root_two_real_root(): RoundsToReal(binary16(), NearestEven, two16().real().sqrt(), two16().sqrt()) {
+    Finite::sqrt_rounds_root(two16(), NearestEven, trivial, trivial)
+}
+
+// The error model at a negative real: -1/3 rounds at binary16 within
+// u·|x| + η, and in the normal range within u·|x|.
+fn third16() → Float(binary16()) { (binary16()).round_rat(NearestEven, Rat(-1, 3)) }
+fn third16_fin() → Finite(binary16()) { h16(True, 1365, 12, trivial) }
+theorem third16_is(): third16() = Fin(third16_fin()) { refl }
+theorem neg_third_error(): (third16_fin().real() - CReal::ofRat(Rat(-1, 3))).abs() <= CReal::ofRat((binary16()).u(NearestEven)) * CReal::ofRat(Rat(-1, 3)).abs() + CReal::ofRat((binary16()).eta(NearestEven)) {
+    let hr: RoundsToReal(binary16(), NearestEven, CReal::ofRat(Rat(-1, 3)), Fin(third16_fin())) =
+        (binary16()).rounds_real_of_rat(NearestEven, Rat(-1, 3), Fin(third16_fin()), j(third16_is(), λ v _ => RoundsTo(binary16(), NearestEven, Rat(-1, 3), v), (binary16()).round_rat_correct(NearestEven, Rat(-1, 3))));
+    (binary16()).real_error(NearestEven, CReal::ofRat(Rat(-1, 3)), third16_fin(), CReal::le_of_same_l(CReal::ofRat_abs(Rat(-1, 3)), CReal::ofRat_le(trivial)), hr)
+}
+theorem neg_third_relative(): (third16_fin().real() - CReal::ofRat(Rat(-1, 3))).abs() <= CReal::ofRat((binary16()).u(NearestEven)) * CReal::ofRat(Rat(-1, 3)).abs() {
+    let hr: RoundsToReal(binary16(), NearestEven, CReal::ofRat(Rat(-1, 3)), Fin(third16_fin())) =
+        (binary16()).rounds_real_of_rat(NearestEven, Rat(-1, 3), Fin(third16_fin()), j(third16_is(), λ v _ => RoundsTo(binary16(), NearestEven, Rat(-1, 3), v), (binary16()).round_rat_correct(NearestEven, Rat(-1, 3))));
+    let a = CReal::ofRat_abs(Rat(-1, 3));
+    (binary16()).real_relative(NearestEven, CReal::ofRat(Rat(-1, 3)), third16_fin(), CReal::le_of_same_r(a, CReal::ofRat_le(trivial)), CReal::le_of_same_l(a, CReal::ofRat_le(trivial)), hr)
+}
+
+// The model over any ordered field (§18.2), read at `Rat` and the identity:
+// -1/3's sandwich in binary16, from its rational rounding.
+theorem neg_third_sandwich_rat(): Rat::add(Rat::mul(Rat::add(1, (binary16()).u(NearestEven)), Rat(-1, 3)), Rat::neg((binary16()).eta(NearestEven))) <= third16_fin().val()
+    ∧ third16_fin().val() <= Rat::add(Rat::mul(Rat::sub(1, (binary16()).u(NearestEven)), Rat(-1, 3)), (binary16()).eta(NearestEven))
+{
+    let hq: RoundsTo(binary16(), NearestEven, Rat(-1, 3), Fin(third16_fin())) = j(third16_is(), λ v _ => RoundsTo(binary16(), NearestEven, Rat(-1, 3), v), (binary16()).round_rat_correct(NearestEven, Rat(-1, 3)));
+    let hr = Format::rounds_in_of_rat<Rat>(Rat::id_hom(), binary16(), NearestEven, Rat(-1, 3), Fin(third16_fin()), hq);
+    Format::error_in_nonpos(Rat::id_hom(), binary16(), NearestEven, Rat(-1, 3), third16_fin(), trivial, trivial, hr)
+}
+
+// A faithful rounding of a real carries the directed modes' model: 1/3
+// faithfully in binary32 (the down neighbour), within `2^-23·|x| + 2^-149`.
+fn third_real() → CReal { CReal::ofRat(Rat(1, 3)) }
+fn third32_down() → Finite(binary32()) { Finite(False, 11184810, 124, trivial) }
+theorem third_faithful(): (binary32()).faithful_real(third_real().enclosed(), 1) = Some(Fin(third32_down())) { refl }
+theorem third_faithful_error(): (third32_down().real() - third_real()).abs() <= CReal::ofRat((binary32()).u(TowardNeg)) * third_real().abs() + CReal::ofRat((binary32()).eta(TowardNeg)) {
+    let hr = (binary32()).faithful_real_correct(third_real().enclosed(), 1, Fin(third32_down()), third_faithful());
+    (binary32()).real_faithful_error(third_real(), third32_down(), CReal::le_of_same_l(CReal::ofRat_abs(Rat(1, 3)), CReal::ofRat_le(trivial)), hr)
+}

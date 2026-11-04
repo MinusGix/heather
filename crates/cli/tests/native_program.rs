@@ -99,6 +99,22 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 "#),
 ];
 
+// Loops bounded by a measure (issues/function-ir-loop-measure-recursion.md):
+// a `decreases` function compiled to a loop of at most its measure's
+// passes, the bound a parameter or computed first.
+const MEASURED: [Case; 2] = [
+    ("loop_measure", "triangle", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { for (uint64_t n = a & 1023; n != 0; --n) b += n; return b; }
+"#),
+    ("loop_climb", "climbing", r#"
+static uint64_t reference(uint64_t a, uint64_t b) {
+    uint64_t lo = a & 255, hi = b & 1023, acc = b;
+    for (; lo < hi; ++lo) acc = acc + acc + lo;
+    return acc ^ lo;
+}
+"#),
+];
+
 const CALLS: &[&str] = &["CallTo("];
 
 #[test]
@@ -113,6 +129,9 @@ fn programs_with_calls_execute_saved() { execute("saved", &SAVED, CALLS); }
 #[test]
 fn programs_with_loops_execute() { execute("loops", &LOOPS, &["Loop(", "loop_eval_agrees_from(", "_pass_cased("]); }
 
+#[test]
+fn programs_with_measured_loops_execute() { execute("measured", &MEASURED, &["Loop(", "loop_eval_agrees_measured(", "_body_tree(", "split_all;"]); }
+
 fn execute(group: &str, cases: &[Case], claims: &[&str]) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -122,7 +141,7 @@ fn execute(group: &str, cases: &[Case], claims: &[&str]) {
         let assembly = dir.join(format!("{file}.s"));
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .args(["compile-x86", &format!("examples/x86-native/{file}.hthr"), symbol, "-o"]).arg(&assembly)
-            .args(["--cache-dir", "target/native-test-images", "--kernel-workers", "1"])
+            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
             .output().unwrap();
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         assert!(String::from_utf8_lossy(&result.stdout).contains("certified program bytes"), "{file} took the verified lowering");
@@ -182,7 +201,7 @@ fn loop_sources_are_refused() {
         std::fs::write(dir.join(format!("{file}.hthr")), format!("import bitvec;\n{recursion}{body}")).unwrap();
         let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
             .arg("compile-x86").arg(dir.join(format!("{file}.hthr"))).args([file, "-o"]).arg(dir.join(format!("{file}.s")))
-            .args(["--cache-dir", "target/native-test-images", "--kernel-workers", "1"])
+            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
             .output().unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success() && stderr.contains(why), "{file}: {stderr}");

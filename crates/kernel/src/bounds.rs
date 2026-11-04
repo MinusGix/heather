@@ -37,12 +37,16 @@
 //!
 //! The memo key is the subtree's `Rc` address. Terms have no interior
 //! mutability (DESIGN.md §Representation), so a given allocation's contents
-//! never change; and each entry holds a strong `Rc` clone of its key, so the
-//! allocation cannot be freed and its address cannot be recycled while the
-//! entry lives. A hit therefore always describes exactly the queried term.
-//! The table is thread-local (terms are `Rc`, single-threaded by
-//! construction), fixed-size and direct-mapped; a colliding insert evicts,
-//! which costs only recomputation.
+//! never change while it is alive; and each entry holds a [`Weak`] reference
+//! to its key, which keeps the *allocation* from being freed — so its
+//! address cannot be recycled — while the entry lives, without keeping the
+//! contents (or the subtree below them) alive. Every query comes from a
+//! caller holding a strong `Rc` to the node, so an address match names a
+//! live allocation the entry was computed from, and a hit always describes
+//! exactly the queried term (the full argument is on `Slot`). The table is
+//! thread-local (terms are `Rc`, single-threaded by construction),
+//! fixed-size and direct-mapped; a colliding insert evicts, which costs only
+//! recomputation.
 //!
 //! ## How wrong bounds are caught
 //!
@@ -57,6 +61,7 @@
 
 use std::cell::RefCell;
 use std::sync::Arc as Rc;
+use std::sync::Weak;
 
 use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, Term, Type};
 
@@ -66,18 +71,24 @@ use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, Term, Type};
 pub(crate) struct LocalUse {
     pub bound: u32,
     pub has_tail: bool,
+    /// Bit `i` set when the free index `i` occurs, for `i < 64` (larger
+    /// indices are counted by `bound` alone). No substitution reads it: it
+    /// answers [`ignores_innermost`], a question about cost.
+    pub uses: u64,
 }
 
 impl LocalUse {
     const CLOSED: LocalUse = LocalUse {
         bound: 0,
         has_tail: false,
+        uses: 0,
     };
 
     fn join(self, o: LocalUse) -> LocalUse {
         LocalUse {
             bound: self.bound.max(o.bound),
             has_tail: self.has_tail || o.has_tail,
+            uses: self.uses | o.uses,
         }
     }
 
@@ -86,6 +97,7 @@ impl LocalUse {
     fn under(self, k: u32) -> LocalUse {
         LocalUse {
             bound: self.bound.saturating_sub(k),
+            uses: self.uses.checked_shr(k).unwrap_or(0),
             ..self
         }
     }
@@ -98,15 +110,29 @@ impl LocalUse {
 }
 
 /// The memo: two fixed-size direct-mapped caches, one per sort. A slot's
-/// keep-alive `Rc` doubles as its key (`Rc::as_ptr` compare), so key
-/// validity and entry liveness are one thing; a colliding insert evicts,
-/// which costs only recomputation (usually cheap — the evictee's children
-/// are still cached). Fixed size means no growth, no rehash, and no flush
-/// policy, and it bounds both table memory and how many dead subtrees the
-/// keep-alives can pin.
+/// key is a [`Weak`] reference to the node it describes (compared by
+/// address), which pins the node's *allocation* but not its contents; a
+/// colliding insert evicts, which costs only recomputation (usually cheap —
+/// the evictee's children are still cached). Fixed size means no growth, no
+/// rehash, and no flush policy, and it bounds table memory and how many dead
+/// allocations the keys can pin (one node each, never a subtree).
+///
+/// **Why the key is weak.** A strong keep-alive (the design until
+/// 2026-11-02) made the table the last owner of every dead subtree it had
+/// seen, so a colliding insert paid for the evictee's whole cascading free —
+/// cold memory, pinned since its last query — and the data-oriented survey
+/// found that eviction drop at about half of all samples under this file on
+/// cold library checks (`issues/bounds-metadata-taxes-one-shot-checking.md`).
+/// A weak key lets a dead term free where it dies, while still warm; the
+/// eviction is one decrement of a weak count and, at most, one block's
+/// deallocation. It also stops the table inflating `Rc::strong_count`,
+/// which the substitution memo and `syntax_eq` read as "reachable twice".
+///
+/// A slot also carries the two-stage marker, so a probe touches one cache
+/// line, not two parallel tables.
 ///
 /// Memoization is **two-stage**: a query's first miss stores only a marker
-/// (a bare address, no keep-alive), and the bounds are computed when the
+/// (a bare address, no reference), and the bounds are computed when the
 /// same address is queried again. This is what keeps the metadata from taxing one-shot terms — an
 /// elaborated declaration is built, checked once, and dropped, and paying a
 /// bounds walk plus a table entry per node there bought nothing (measured
@@ -118,13 +144,54 @@ impl LocalUse {
 /// computed then covers its whole subtree, because the recursive compute
 /// ([`Cache::term_use`]) stores unconditionally — stability propagates down.
 struct Cache {
-    terms: Vec<Option<(Rc<Term>, LocalUse)>>,
-    term_marks: Vec<usize>,
-    types: Vec<Option<(Rc<Type>, LocalUse)>>,
-    type_marks: Vec<usize>,
+    terms: Vec<Slot<Term>>,
+    types: Vec<Slot<Type>>,
 }
 
-/// log2 of the slot count per sort. 2^16 slots × 24 bytes × 2 sorts ≈ 3 MiB.
+/// One direct-mapped entry: the memoized answer under a weak key, and the
+/// two-stage marker, side by side so a probe reads one cache line.
+///
+/// Soundness of the weak key: a caller asks about a node it holds by a
+/// strong `Rc`, so the allocation is live; the key pins its own allocation,
+/// so no other node can occupy that address while the key lives. An address
+/// match therefore names the same allocation the answer was computed from,
+/// and an allocation's contents never change while any strong reference
+/// exists (no interior mutability, DESIGN.md §Representation) — nor can its
+/// strong count climb back from zero. So a hit always describes exactly the
+/// queried term. Contents dropped behind a key are never read: the key is
+/// only ever compared, never upgraded.
+#[repr(align(32))]
+struct Slot<T> {
+    key: Option<Weak<T>>,
+    used: LocalUse,
+    /// The two-stage marker: a bare address, or 0.
+    mark: usize,
+}
+
+impl<T> Slot<T> {
+    fn empty() -> Slot<T> {
+        Slot {
+            key: None,
+            used: LocalUse::CLOSED,
+            mark: 0,
+        }
+    }
+
+    /// The memoized answer, when the key is `t`'s own allocation.
+    fn hit(&self, t: &Rc<T>) -> Option<LocalUse> {
+        match &self.key {
+            Some(k) if std::ptr::eq(k.as_ptr(), Rc::as_ptr(t)) => Some(self.used),
+            _ => None,
+        }
+    }
+
+    fn store(&mut self, t: &Rc<T>, u: LocalUse) {
+        self.key = Some(Rc::downgrade(t));
+        self.used = u;
+    }
+}
+
+/// log2 of the slot count per sort. 2^16 slots × 32 bytes × 2 sorts = 4 MiB.
 const BITS: u32 = 16;
 
 fn slot(p: usize) -> usize {
@@ -135,10 +202,8 @@ fn slot(p: usize) -> usize {
 impl Cache {
     fn new() -> Cache {
         Cache {
-            terms: vec![None; 1 << BITS],
-            term_marks: vec![0; 1 << BITS],
-            types: vec![None; 1 << BITS],
-            type_marks: vec![0; 1 << BITS],
+            terms: (0..1 << BITS).map(|_| Slot::empty()).collect(),
+            types: (0..1 << BITS).map(|_| Slot::empty()).collect(),
         }
     }
 
@@ -148,6 +213,7 @@ impl Cache {
                 return LocalUse {
                     bound: v.0.saturating_add(1),
                     has_tail: false,
+                    uses: var_bit(v.0),
                 }
             }
             Term::TmNat
@@ -163,13 +229,11 @@ impl Cache {
             _ => {}
         }
         let i = slot(Rc::as_ptr(t) as usize);
-        if let Some((k, u)) = &self.terms[i] {
-            if Rc::ptr_eq(k, t) {
-                return *u;
-            }
+        if let Some(u) = self.terms[i].hit(t) {
+            return u;
         }
         let u = self.compute_term(t);
-        self.terms[i] = Some((Rc::clone(t), u));
+        self.terms[i].store(t, u);
         u
     }
 
@@ -182,15 +246,14 @@ impl Cache {
     fn term_query(&mut self, t: &Rc<Term>) -> Option<LocalUse> {
         let p = Rc::as_ptr(t) as usize;
         let i = slot(p);
-        if let Some((k, u)) = &self.terms[i] {
-            if Rc::ptr_eq(k, t) {
-                return Some(*u);
-            }
+        let s = &mut self.terms[i];
+        if let Some(u) = s.hit(t) {
+            return Some(u);
         }
-        if self.term_marks[i] == p {
+        if s.mark == p {
             Some(self.term_use(t))
         } else {
-            self.term_marks[i] = p;
+            s.mark = p;
             None
         }
     }
@@ -216,31 +279,33 @@ impl Cache {
             _ => {}
         }
         let i = slot(Rc::as_ptr(t) as usize);
-        if let Some((k, u)) = &self.types[i] {
-            if Rc::ptr_eq(k, t) {
-                return *u;
-            }
+        if let Some(u) = self.types[i].hit(t) {
+            return u;
         }
         let u = self.compute_type(t);
-        self.types[i] = Some((Rc::clone(t), u));
+        self.types[i].store(t, u);
         u
     }
 
     fn type_query(&mut self, t: &Rc<Type>) -> Option<LocalUse> {
         let p = Rc::as_ptr(t) as usize;
         let i = slot(p);
-        if let Some((k, u)) = &self.types[i] {
-            if Rc::ptr_eq(k, t) {
-                return Some(*u);
-            }
+        let s = &mut self.types[i];
+        if let Some(u) = s.hit(t) {
+            return Some(u);
         }
-        if self.type_marks[i] == p {
+        if s.mark == p {
             Some(self.type_use(t))
         } else {
-            self.type_marks[i] = p;
+            s.mark = p;
             None
         }
     }
+}
+
+/// Bit `i` of [`LocalUse::uses`].
+fn var_bit(i: u32) -> u64 {
+    1u64.checked_shl(i).unwrap_or(0)
 }
 
 thread_local! {
@@ -255,6 +320,83 @@ pub(crate) fn term_captures(t: &Rc<Term>) -> u32 {
 
 pub(crate) fn type_captures(t: &Rc<Type>) -> u32 {
     CACHE.with(|c| c.borrow_mut().type_use(t).bound)
+}
+
+/// `t`'s local footprint: its bound and whether a substitution tail shows
+/// in its local scope, for conversion's closure identity, which reads only
+/// the captures a body uses (`conv/dom/values.rs`).
+pub(crate) fn term_local_use(t: &Rc<Term>) -> LocalUse {
+    CACHE.with(|c| c.borrow_mut().term_use(t))
+}
+
+pub(crate) fn type_local_use(t: &Rc<Type>) -> LocalUse {
+    CACHE.with(|c| c.borrow_mut().type_use(t))
+}
+
+thread_local! {
+    /// The typing memo's own table (`typing.rs` §The typing memo), apart from
+    /// [`CACHE`]: the memo asks about every elimination it judges, and
+    /// answering into the substitutions' table would settle their two-stage
+    /// markers early, so which subtrees a substitution skips (and the
+    /// `local_subst_nodes` it counts) would depend on what was judged
+    /// before. The answers are the same pure function either way.
+    static SCOPE_CACHE: RefCell<Cache> = RefCell::new(Cache::new());
+}
+
+/// [`term_local_use`] for the typing memo's strengthened scope: a tail-free
+/// node of bound `k` is judged by Γ's innermost `k` entries alone.
+pub(crate) fn scope_term_use(t: &Rc<Term>) -> LocalUse {
+    SCOPE_CACHE.with(|c| c.borrow_mut().term_use(t))
+}
+
+pub(crate) fn scope_type_use(t: &Rc<Type>) -> LocalUse {
+    SCOPE_CACHE.with(|c| c.borrow_mut().type_use(t))
+}
+
+/// [`scope_type_use`] for a type the caller holds by reference: the node
+/// itself is walked, its children answered from the table.
+pub(crate) fn scope_type_ref_use(t: &Type) -> LocalUse {
+    SCOPE_CACHE.with(|c| c.borrow_mut().compute_type(t))
+}
+
+/// Whether a type is locally closed: no free local variable and no local
+/// substitution tail. The one reader that is not a traversal is the
+/// closed-type memo in `typing.rs` (`Tc::ty_check`), which judges a locally
+/// closed type once whatever Γ it occurs in — so a wrong answer here is a
+/// soundness bug there, as a wrong skip is in `subst.rs`. Always computed
+/// (never the two-stage marker), so the answer is a function of the type.
+pub(crate) fn type_locally_closed(t: &Rc<Type>) -> bool {
+    CACHE.with(|c| {
+        let u = c.borrow_mut().type_use(t);
+        u.bound == 0 && !u.has_tail
+    })
+}
+
+/// [`type_locally_closed`] for a type the caller holds by reference: the
+/// node itself is walked, its children answered from the table. Read by the
+/// closed-conversion memo (`Tc::conv_ty`), with the same stakes.
+pub(crate) fn type_ref_locally_closed(t: &Type) -> bool {
+    CACHE.with(|c| {
+        let u = c.borrow_mut().compute_type(t);
+        u.bound == 0 && !u.has_tail
+    })
+}
+
+/// [`type_locally_closed`] for an `IWf` signature, which `Tc::iwf_sig_wf`
+/// judges once whatever Γ it occurs in.
+pub(crate) fn iwf_sig_locally_closed(sig: &IWfSig) -> bool {
+    CACHE.with(|c| {
+        let u = c.borrow_mut().iwf_sig_use(sig);
+        u.bound == 0 && !u.has_tail
+    })
+}
+
+/// Whether evaluating `t` reads none of its innermost `n` (< 64) local
+/// variables: no free index below `n` occurs. A wrong answer costs time,
+/// never a verdict (`eval/probe.rs`, the one reader).
+pub(crate) fn ignores_innermost(t: &Rc<Term>, n: u32) -> bool {
+    debug_assert!(n < 64);
+    CACHE.with(|c| c.borrow_mut().term_use(t).uses & (var_bit(n) - 1) == 0)
 }
 
 /// Should a local-namespace operation at binder depth `d` skip this subtree?
@@ -320,6 +462,7 @@ impl Cache {
             LocalUse {
                 bound: 0,
                 has_tail: true,
+                uses: 0,
             },
             |a, t| a.join(self.term_use(t)),
         )
@@ -331,8 +474,8 @@ impl Cache {
     // (everything subst.rs routes through other_ty/other_tm/other_ctx) are
     // omitted entirely, matching `LOCAL_OP` scoping.
 
-    fn compute_type(&mut self, t: &Rc<Type>) -> LocalUse {
-        match &**t {
+    fn compute_type(&mut self, t: &Type) -> LocalUse {
+        match t {
             Type::Nat
             | Type::Ty(_)
             | Type::Unit { .. }
@@ -370,6 +513,7 @@ impl Cache {
             Term::Var(v) => LocalUse {
                 bound: v.0.saturating_add(1),
                 has_tail: false,
+                uses: var_bit(v.0),
             },
             Term::TmNat
             | Term::TmTy(_)
@@ -484,6 +628,10 @@ impl Cache {
                 .opt_type_use(ty)
                 .join(self.term_use(fst))
                 .join(self.term_use(snd)),
+            Term::VecLit { elem, zero, one, .. } => self
+                .type_use(elem)
+                .join(self.term_use(zero))
+                .join(self.term_use(one)),
             Term::InlAt { ty, val: t } | Term::InrAt { ty, val: t } => {
                 self.opt_type_use(ty).join(self.term_use(t))
             }
@@ -726,14 +874,16 @@ mod tests {
             term_use(&v(0)),
             LocalUse {
                 bound: 1,
-                has_tail: false
+                has_tail: false,
+                uses: 1
             }
         );
         assert_eq!(
             term_use(&v(4)),
             LocalUse {
                 bound: 5,
-                has_tail: false
+                has_tail: false,
+                uses: 1 << 4
             }
         );
         assert_eq!(term_use(&rt(Term::Zero)), LocalUse::CLOSED);
@@ -756,7 +906,8 @@ mod tests {
             term_use(&lam(v(1))),
             LocalUse {
                 bound: 1,
-                has_tail: false
+                has_tail: false,
+                uses: 1
             }
         );
 
@@ -775,7 +926,8 @@ mod tests {
             term_use(&elim(v(2))),
             LocalUse {
                 bound: 1,
-                has_tail: false
+                has_tail: false,
+                uses: 1
             }
         );
     }
@@ -794,9 +946,32 @@ mod tests {
             type_use(&wf(v(1))),
             LocalUse {
                 bound: 1,
-                has_tail: false
+                has_tail: false,
+                uses: 1
             }
         );
+    }
+
+    #[test]
+    fn uses_names_the_innermost_indices() {
+        // elim_Nat's step over `k, ih` reading an outer variable only:
+        // neither binder occurs, though `bound` counts past both.
+        let outer = rt(Term::Succ(v(2)));
+        assert!(term_use(&outer).bound == 3 && term_use(&outer).uses == 1 << 2);
+        assert!(ignores_innermost(&outer, 2));
+        // Reading `k` (index 1) but not `ih` (index 0).
+        let k_only = rt(Term::Succ(v(1)));
+        assert!(ignores_innermost(&k_only, 1) && !ignores_innermost(&k_only, 2));
+        // Under a binder the indices move down by one.
+        let lam = rt(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: v(1),
+        });
+        assert!(!ignores_innermost(&lam, 1));
+        // Past 64 an index is counted by `bound` alone.
+        assert_eq!(term_use(&v(70)).uses, 0);
     }
 
     #[test]
@@ -820,7 +995,8 @@ mod tests {
             term_use(&g),
             LocalUse {
                 bound: 3,
-                has_tail: true
+                has_tail: true,
+                uses: 1 << 2
             }
         );
     }
@@ -833,7 +1009,8 @@ mod tests {
             term_use(&t),
             LocalUse {
                 bound: 4,
-                has_tail: false
+                has_tail: false,
+                uses: 1 << 3
             }
         );
     }

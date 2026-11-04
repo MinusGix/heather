@@ -1,0 +1,160 @@
+// Probes of binding statements (docs/sequencing-surface-design.md §3,
+// issues/binding-statements.md): `let x <- e;`, `e;`, `(<- e)` and
+// `match <- e`, lowered by the parser to the prelude's `Bind::seq(e, λ x =>
+// rest)` and elaborated as any call is. Each form at a literal and a neutral
+// computation, at an open element type, in checking and inference position,
+// and at three carriers: `Option`, `Tac`, and a carrier only known through a
+// dictionary in scope. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import list; import pair;
+import tactic; import string; import result;
+
+// A chain of binds over `Option`: the carrier is the expected type's.
+fn add_opt(x, y: Option<Nat>) → Option<Nat> {
+    let a <- x;
+    let b <- y;
+    Some(a + b)
+}
+theorem add_opt_some(): add_opt(Some(2), Some(3)) = Some(5) { refl }
+theorem add_opt_none_left(y: Option<Nat>): add_opt(None, y) = None { refl }
+// A neutral computation: the lowered term is the hand-written chain.
+theorem add_opt_unfolds(x, y: Option<Nat>):
+    add_opt(x, y) = x.and_then(λ a => y.and_then(λ b => Some(a + b))) { refl }
+
+// Over `Result`, whose instances are at the λ carrier `λ A => Result<A, E>`
+// (docs/lambda-carrier-instances-design.md §7): the first `Err` stops the
+// chain. At a literal, at a neutral pair, and at an open error type.
+fn add_res(x, y: Result<Nat, Bool>) → Result<Nat, Bool> {
+    let a <- x;
+    let b <- y;
+    Ok(a + b)
+}
+theorem add_res_ok(): add_res(Ok(2), Ok(3)) = Ok(5) { refl }
+theorem add_res_err_left(y: Result<Nat, Bool>): add_res(Err(False), y) = Err(False) { refl }
+theorem add_res_unfolds(x, y: Result<Nat, Bool>):
+    add_res(x, y) = x.and_then(λ a => y.and_then(λ b => Ok(a + b))) { refl }
+fn add_res_open<E>(x, y: Result<Nat, E>) → Result<Nat, E> {
+    let a <- x;
+    Pointed::ret(a + (<- y))
+}
+
+// The binder annotated, and `←` for `<-`.
+fn annotated(x: Option<Nat>) → Option<Nat> {
+    let a: Nat ← x;
+    Pointed::ret(a + 1)
+}
+theorem annotated_some(): annotated(Some(2)) = Some(3) { refl }
+
+// Nested binds run in written order, left to right.
+fn nested(x, y: Option<Nat>) → Option<Pair<Nat, Nat>> { Some(Pair(<- x, <- y)) }
+theorem nested_some(): nested(Some(2), Some(3)) = Some(Pair(2, 3)) { refl }
+theorem nested_order(x, y: Option<Nat>):
+    nested(x, y) = x.and_then(λ a => y.and_then(λ b => Some(Pair(a, b)))) { refl }
+
+// A nested bind in a match arm runs in that arm only.
+fn arm_local(c: Bool, x: Option<Nat>) → Option<Nat> {
+    match c { True => Some(<- x), False => Some(0) }
+}
+theorem arm_local_untaken(): arm_local(False, None) = Some(0) { refl }
+theorem arm_local_taken(): arm_local(True, None) = None { refl }
+
+// `match <- e { … }` binds the scrutinee, also under a constructor.
+fn scrutinee(x: Option<Bool>) → Option<Nat> {
+    match <- x { True => Some(1), False => Some(0) }
+}
+theorem scrutinee_true(): scrutinee(Some(True)) = Some(1) { refl }
+fn scrutinee_under(x: Option<Bool>) → Option<Nat> {
+    Some(match <- x { True => 1, False => 0 })
+}
+theorem scrutinee_under_none(): scrutinee_under(None) = None { refl }
+
+// Record destructuring at the binder.
+fn destructured(p: Option<Pair<Nat, Nat>>) → Option<Nat> {
+    let { fst, snd } <- p;
+    Some(fst + snd)
+}
+theorem destructured_some(): destructured(Some(Pair(1, 2))) = Some(3) { refl }
+
+// An open element type.
+fn swap_open<A, B>(p: Option<A>, q: Option<B>) → Option<Pair<B, A>> {
+    let a <- p;
+    let b <- q;
+    Some(Pair(b, a))
+}
+fn none_of<A>() → Option<A> { None }
+theorem swap_open_none<A, B>(q: Option<B>): swap_open(none_of<A>(), q) = None { refl }
+
+// Inference position: a block in a `let` with no annotation, whose carrier
+// is its first bound expression's.
+fn inferred(x: Option<Nat>) → Option<Nat> {
+    let r = { let a <- x; Some(a + 1) };
+    r
+}
+theorem inferred_some(): inferred(Some(1)) = Some(2) { refl }
+
+// `Tac`: an expression statement discards a result, `let _ <-` too.
+fn tac_chain(t: Tac<Nat>) → Tac<Nat> {
+    let a <- t;
+    t;
+    let _ <- t;
+    let b <- t;
+    Pure(a + b)
+}
+theorem tac_chain_literal(): tac_chain(Pure(1)) = Pure(2) { refl }
+
+// A block in value position is a scope of its own, with its own carrier:
+// an `Option` block inside a `Tac` block.
+fn inner_carrier(t: Tac<Option<Nat>>) → Tac<Option<Nat>> {
+    let o <- t;
+    Pure({ let x <- o; Some(x + 1) })
+}
+theorem inner_carrier_literal(): inner_carrier(Pure(Some(1))) = Pure(Some(2)) { refl }
+
+// A λ body is a scope of its own.
+fn in_lambda(xs: List<Option<Nat>>) → List<Option<Nat>> { xs.map(λ o => Some((<- o) + 1)) }
+theorem in_lambda_literal(): in_lambda([Some(1), None]) = [Some(2), None] { refl }
+
+// A carrier known only through the dictionaries in scope.
+fn twice_generic({M: Type → Type}, x: M(Nat), b: Bind<M> := infer, p: Pointed<M> := infer) → M(Nat) {
+    let n <- x;
+    Pointed::ret(n + n)
+}
+theorem twice_generic_option(): twice_generic(Some(3)) = Some(6) { refl }
+theorem twice_generic_tac(): twice_generic(Tac::Pure(2)) = Tac::Pure(4) { refl }
+
+// The helpers over the classes.
+fn step_sum(s: Nat, x: Nat) → Option<Nat> { match x.same(0) { True => None, False => Some(s + x) } }
+fn nats(a, b, c: Nat) → List<Nat> { [a, b, c] }
+theorem for_m_sums(): nats(1, 2, 3).for_m(0, step_sum) = Some(6) { refl }
+theorem for_m_stops(): nats(1, 0, 3).for_m(0, step_sum) = None { refl }
+fn pred_opt(x: Nat) → Option<Nat> { match x { Zero => None, Succ(k) => Some(k) } }
+theorem traverse_all(): nats(1, 2, 3).traverse(pred_opt) = Some([0, 1, 2]) { refl }
+theorem traverse_fails(): nats(1, 0, 3).traverse(pred_opt) = None { refl }
+theorem or_fail_accepted(): Tac::Pure(Accepted(3)).or_fail("p: ") = Tac::Pure(3) { refl }
+
+// Refusals, each naming its reason.
+
+// expect-error: a statement here discards a pure value
+fn pure_statement(n: Nat) → Nat {
+    n;
+    n
+}
+
+// expect-error: to assign, write `x := e`
+fn equation_statement(n: Nat) → Nat {
+    n = n;
+    n
+}
+
+// expect-error: `List<Nat>` has no `Bind` instance: this block is not over a carrier
+fn no_instance(xs: List<Nat>) → List<Nat> {
+    let x <- xs;
+    [x]
+}
+
+// A computation on another carrier than the block's.
+// expect-error: this has type `List<Nat>`, but `Option<Nat>` is expected here
+fn other_carrier(x: Option<Nat>, xs: List<Nat>) → List<Nat> {
+    let a <- x;
+    xs
+}

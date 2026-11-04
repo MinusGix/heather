@@ -320,34 +320,84 @@ fn a_split_takes_the_equation_binder() {
        "#);
 }
 
-// -- §4: the indexed-family refusal ----------------------------------------
+// -- §4: the indexed family, by the packed equation -------------------------
 
-/// §4.1: not a deferral. On an indexed family an arm's index varies with its
-/// constructor, so `e = pat` would relate two values at different types, and
-/// homogeneous `Id` cannot say that. The message names the family and points
-/// at the inversion-lemma route.
+/// §4.1's refusal is retired (docs/dependent-match-compiler-design.md §9): on
+/// an indexed family `h` is the index packed with the value,
+/// `⟨n, xs⟩ = ⟨idx(C, x̄), C(x̄)⟩` at `Σ(j: I). F(j)`, which is one type, and
+/// `cong(h)` reads the index equation off it. Both lowerings of a family
+/// (`MN`-indexed and `Nat`-indexed), an open element type, a neutral
+/// scrutinee, a literal one, and a computation that still runs.
 #[test]
-fn the_equation_binding_is_refused_on_an_indexed_family() {
-    let msg = bad(
-        r#"
+fn the_equation_binding_on_an_indexed_family_is_the_packed_equation() {
+    ok(r#"
         inductive MN { MZ, MS(p: MN) }
         inductive VF<A> : (n: MN) -> Type {
             VFNil                            : VF<A>(MZ),
             VFCons(n: MN, x: A, xs: VF<A>(n)) : VF<A>(MS(n)),
         }
 
-        fn lenf(n: MN, xs: VF<Nat>(n)) -> MN {
+        fn lenf<A>(n: MN, xs: VF<A>(n)) -> MN {
             match h : xs {
                 VFNil => MZ,
-                VFCons(k, x, t) => k,
+                VFCons(k, x, t) => MS(k),
+            }
+        }
+        theorem lenf_is<A>(n: MN, xs: VF<A>(n)): lenf<A>(n, xs) = n {
+            match h : xs {
+                VFNil => refl,
+                VFCons(k, x, t) => refl,
+            }
+        }
+        theorem lenf_two(): lenf<Nat>(MS(MS(MZ)), VFCons(MS(MZ), 1, VFCons(MZ, 2, VFNil))) = MS(MS(MZ)) { refl }
+
+        fn index_of<A>(n: MN, xs: VF<A>(n)) -> MN {
+            match h : xs {
+                VFNil => { let e: (n = MZ) = cong(h); MZ },
+                VFCons(k, x, t) => { let e: (n = MS(k)) = cong(h); k },
+            }
+        }
+
+        inductive V<A> : (n: Nat) -> Type {
+            VNil : V<A>(0),
+            VCons(n: Nat, x: A, xs: V<A>(n)) : V<A>(Succ(n)),
+        }
+        fn vindex<A>(m: Nat, v: V<A>(m)) -> Nat {
+            match h : v {
+                VNil => { let e: (m = 0) = cong(h); 0 },
+                VCons(n, x, xs) => { let e: (m = Succ(n)) = cong(h); Succ(n) },
+            }
+        }
+        theorem vindex_one(): vindex<Nat>(1, VCons(0, 7, VNil)) = 1 { refl }
+        // An arm the index rules out is closed through the index equation.
+        fn hd<A>(n: Nat, v: V<A>(Succ(n))) -> A {
+            match h : v {
+                VNil => { let e: (Succ(n) = 0) = cong(h); absurd(e) },
+                VCons(k, x, xs) => x,
+            }
+        }
+        "#);
+}
+
+/// Negative control: the packed equation says what the arm's index is, and
+/// no more.
+#[test]
+fn the_packed_equation_gives_only_the_arms_index() {
+    let msg = bad(
+        r#"
+        inductive V<A> : (n: Nat) -> Type {
+            VNil : V<A>(0),
+            VCons(n: Nat, x: A, xs: V<A>(n)) : V<A>(Succ(n)),
+        }
+        fn wrong<A>(m: Nat, v: V<A>(m)) -> Nat {
+            match h : v {
+                VNil => { let e: (m = 1) = cong(h); 0 },
+                VCons(n, x, xs) => 0,
             }
         }
         "#,
     );
-    assert!(
-        msg.contains("indexed family") && msg.contains("inversion"),
-        "expected the §4 message, got: {msg}"
-    );
+    assert!(msg.contains("cannot generalize") || msg.contains("expected"), "got: {msg}");
 }
 
 // -- axis 4: the parser's negative controls --------------------------------
@@ -448,13 +498,13 @@ fn a_splits_diagnostics_name_split() {
 
     // Not just the form's name: the *spelling it suggests* is one a writer
     // who typed `split` can paste. `match e as λ z => T { … }` is not.
-    // Every arm binds, for the reason the `match` twin of this test records:
-    // a non-binding arm would now name the type and the `split` would
-    // elaborate.
+    // No arm infers, for the reason the `match` twin of this test records:
+    // an arm whose type is known would now name the motive and the `split`
+    // would elaborate.
     let m = bad(
         "inductive Two<A> { L(v: A), R(v: A) }
          fn f<A>(t: Two<A>) -> A {
-             let x = { split t; on L(v) := v; on R(v) := v; }; x }",
+             let x = { split t; on L(v) := λ y => y; on R(v) := λ y => y; }; x(t) }",
     );
     assert!(m.contains("`split` in inference position"), "got: {m}");
     assert!(m.contains("`split e as \u{3bb} z => T;`"), "got: {m}");
@@ -486,16 +536,19 @@ fn a_matchs_diagnostics_still_name_match() {
     let m = bad("inductive Void { }\nfn f(x: Void) -> Nat { match x { Zero => 0 } }");
     assert!(m.contains("so `match` takes no arms"), "got: {m}");
 
-    // Every arm binds, which is what keeps this in inference position's error
-    // path at all: since 2026-08-17 a motive-less `match` whose arms include a
-    // non-binding one takes its motive from that arm
-    // (`issues/match-arg-of-polymorphic-callee-needs-motive.md`), and the
-    // probe this test used to run — `match r { Stuck => d, … }` — now
-    // elaborates. The message is what is under test, not the refusal.
+    // No arm infers, which is what keeps this in inference position's error
+    // path at all: since 2026-08-17 a motive-less `match` takes its motive
+    // from a non-binding arm
+    // (`issues/match-arg-of-polymorphic-callee-needs-motive.md`), and since
+    // 2026-10-31 from any arm whose type lives outside its binders
+    // (docs/dependent-match-compiler-design.md §6.1), so the probes this test
+    // used to run — `match r { Stuck => d, … }`, then `L(v) => v` — now
+    // elaborate. An unannotated `λ` infers nothing. The message is what is
+    // under test, not the refusal.
     let m = bad(
         "inductive Two<A> { L(v: A), R(v: A) }
          fn f<A>(t: Two<A>) -> A {
-             let x = match t { L(v) => v, R(v) => v }; x }",
+             let x = match t { L(v) => λ y => y, R(v) => λ y => y }; x(t) }",
     );
     assert!(m.contains("`match` in inference position"), "got: {m}");
     assert!(m.contains("`match e as \u{3bb} z => T { … }`"), "got: {m}");

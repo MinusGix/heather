@@ -17,14 +17,44 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use heather_elab::LintProfile;
 use heather_syntax::{parse_file, Item};
 
 /// One module of the closure, ready to elaborate.
+#[derive(Clone)]
 pub struct Module {
     pub name: String,
     pub path: PathBuf,
     pub src: String,
 }
+
+impl Module {
+    /// The lints this module is checked under: [`LintProfile::Stdlib`] for a
+    /// file under `lib/std` (from the working directory), the default
+    /// otherwise. Heather's own library has a house style; accepting the
+    /// ASCII aliases is a language promise and warning about them is not.
+    /// Canonical paths make this depend on the actual `lib/std` tree rather
+    /// than a coincidental directory name.
+    ///
+    /// A property of the module, not of the root that pulled it in: the
+    /// profile is part of the module's image key, so a profile taken from the
+    /// root gave `nat` one image when `lib/std/num` was checked and another
+    /// when `lib/native` was, and neither process could use the other's
+    /// (`docs/library-world-design.md` §1).
+    pub fn lint_profile(&self) -> LintProfile {
+        let Ok(stdlib) = Path::new(STDLIB_DIR).canonicalize() else {
+            return LintProfile::Default;
+        };
+        match self.path.canonicalize() {
+            Ok(path) if path.starts_with(stdlib) => LintProfile::Stdlib,
+            _ => LintProfile::Default,
+        }
+    }
+}
+
+/// The standard library's folder, from the working directory: what
+/// [`Module::lint_profile`] reads as library code.
+pub const STDLIB_DIR: &str = "lib/std";
 
 /// A failure of the *run*, not of a file's contents: an unreadable file, an
 /// unresolvable import, a cycle. Every message names the paths it is about,
@@ -34,7 +64,7 @@ pub struct LoadError {
 }
 
 impl LoadError {
-    fn new(msg: impl Into<String>) -> Self {
+    pub(crate) fn new(msg: impl Into<String>) -> Self {
         LoadError { msg: msg.into() }
     }
 
@@ -69,9 +99,43 @@ pub fn load_providing(root: &Path, search: &[PathBuf], provided: &[&str]) -> Res
         done: HashMap::new(),
         stack: Vec::new(),
         out: Vec::new(),
+        imports: Vec::new(),
         by_name: HashMap::new(),
+        common: None,
     };
     w.visit(root)?;
+    Ok(w.out)
+}
+
+/// Load `root`'s closure, then the modules named by `extra` (resolved as
+/// imports of `root` would be) and theirs: a tool that writes modules of its
+/// own over the root (`write-elf`'s probes and certificate) imports them
+/// without the root's author having to. The root's closure keeps
+/// [`load`]'s order, so its images are the ones a `check` of it wrote.
+pub fn load_with(root: &Path, search: &[PathBuf], extra: &[&str]) -> Result<Vec<Module>, LoadError> {
+    load_after_with(&[], root, search, extra)
+}
+
+/// [`load_with`] after `first`'s closures, in [`load_many`]'s order: a world's
+/// prefix (`world.rs`), which keeps the images a `check --world` wrote.
+pub fn load_after_with(
+    first: &[&Path],
+    root: &Path,
+    search: &[PathBuf],
+    extra: &[&str],
+) -> Result<Vec<Module>, LoadError> {
+    let none = HashMap::new();
+    let roots: Vec<&Path> = first.iter().copied().chain([root]).collect();
+    let mut w = load_many_inner(&roots, search, &none)?;
+    let from = root
+        .canonicalize()
+        .map_err(|e| LoadError::at(format!("cannot read `{}`: {e}", root.display()), root))?;
+    for module in extra {
+        match w.resolve(module, &from) {
+            Ok(path) => w.visit(&path)?,
+            Err(Unresolved::Missing(e) | Unresolved::Refused(e)) => return Err(e),
+        }
+    }
     Ok(w.out)
 }
 
@@ -88,7 +152,7 @@ pub fn load_overlay(
         .map_err(|e| LoadError::at(format!("cannot read `{}`: {e}", root.display()), root))?;
     let mut overlays = HashMap::new();
     overlays.insert(root.clone(), source.to_string());
-    load_many_inner(&[root.as_path()], search, &overlays)
+    load_many_inner(&[root.as_path()], search, &overlays).map(|w| w.out)
 }
 
 /// Load several roots as one import closure.
@@ -98,14 +162,32 @@ pub fn load_overlay(
 /// neither duplicated. Roots retain their supplied order, modulo dependencies
 /// appearing before the root that needs them.
 pub fn load_many(roots: &[&Path], search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
-    load_many_inner(roots, search, &HashMap::new())
+    load_many_inner(roots, search, &HashMap::new()).map(|w| w.out)
 }
 
-fn load_many_inner(
+/// [`load_many`]'s modules with the import edges between them.
+pub struct Graph {
+    /// In [`load_many`]'s order.
+    pub modules: Vec<Module>,
+    /// Per module, the modules it imports (indices into `modules`), in the
+    /// order its source writes them.
+    pub imports: Vec<Vec<usize>>,
+}
+
+/// [`load_many`], keeping the import graph.
+pub fn load_graph(roots: &[&Path], search: &[PathBuf]) -> Result<Graph, LoadError> {
+    let none = HashMap::new();
+    let w = load_many_inner(roots, search, &none)?;
+    let at: HashMap<&str, usize> = w.out.iter().enumerate().map(|(i, m)| (m.name.as_str(), i)).collect();
+    let imports = w.imports.iter().map(|names| names.iter().map(|n| at[n.as_str()]).collect()).collect();
+    Ok(Graph { modules: w.out, imports })
+}
+
+fn load_many_inner<'a>(
     roots: &[&Path],
-    search: &[PathBuf],
-    overlays: &HashMap<PathBuf, String>,
-) -> Result<Vec<Module>, LoadError> {
+    search: &'a [PathBuf],
+    overlays: &'a HashMap<PathBuf, String>,
+) -> Result<Walk<'a>, LoadError> {
     let mut w = Walk {
         search,
         below: None,
@@ -114,12 +196,14 @@ fn load_many_inner(
         done: HashMap::new(),
         stack: Vec::new(),
         out: Vec::new(),
+        imports: Vec::new(),
         by_name: HashMap::new(),
+        common: None,
     };
     for root in roots {
         w.visit(root)?;
     }
-    Ok(w.out)
+    Ok(w)
 }
 
 struct Walk<'a> {
@@ -139,10 +223,17 @@ struct Walk<'a> {
     /// The DFS path, for the cycle report.
     stack: Vec<(PathBuf, String)>,
     out: Vec<Module>,
+    /// Per module of `out`, the names of the modules it imports.
+    imports: Vec<Vec<String>>,
     /// Module name → the file that claimed it. Two files with one stem are an
     /// error: names are how imports refer to each other, so a duplicate makes
     /// every reference to it ambiguous in a way qualification cannot fix.
     by_name: HashMap<String, PathBuf>,
+    /// The common prelude (`heather_elab::COMMON_MODULE`) and the names of
+    /// its closure, found on the first visit: `None` before it, `Some(None)`
+    /// when no search directory holds it. Every module outside the closure
+    /// imports it implicitly (issues/std-prelude-facade.md).
+    common: Option<Option<(PathBuf, std::collections::HashSet<String>)>>,
 }
 
 impl Walk<'_> {
@@ -204,6 +295,13 @@ impl Walk<'_> {
             }
             Err(_) => Vec::new(),
         };
+        let mut imports = imports;
+        if let Some((path, closure)) = self.common_prelude()?
+            && !closure.contains(&name)
+            && !imports.iter().any(|(m, _)| m == heather_elab::COMMON_MODULE)
+        {
+            imports.insert(0, (heather_elab::COMMON_MODULE.to_string(), path));
+        }
         self.stack.push((canon.clone(), name.clone()));
         for (_, dep) in &imports {
             self.visit(dep)?;
@@ -212,7 +310,42 @@ impl Walk<'_> {
         self.by_name.insert(name.clone(), canon.clone());
         self.done.insert(canon.clone(), name.clone());
         self.out.push(Module { name, path: canon, src });
+        self.imports.push(imports.into_iter().map(|(_, dep)| self.done[&dep.canonicalize().expect("visited")].clone()).collect());
         Ok(())
+    }
+
+    /// The common prelude's file and the names of its closure, found on the
+    /// `-L` search path (not beside a file: a run without the library on its
+    /// path has no prelude, even for a file that sits next to it), once per
+    /// walk. Its closure is read by a walk of its own, so a module inside it
+    /// is known before any of them is visited here; a module outside it gets
+    /// it as a first import.
+    fn common_prelude(&mut self) -> Result<Option<(PathBuf, std::collections::HashSet<String>)>, LoadError> {
+        if self.common.is_none() {
+            let found = match self.resolve(heather_elab::COMMON_MODULE, Path::new("")) {
+                Ok(path) => {
+                    let mut inner = Walk {
+                        search: self.search,
+                        below: self.below.clone(),
+                        overlays: self.overlays,
+                        provided: self.provided,
+                        done: HashMap::new(),
+                        stack: Vec::new(),
+                        out: Vec::new(),
+                        imports: Vec::new(),
+                        by_name: HashMap::new(),
+                        // Inside the prelude's own closure nothing imports it.
+                        common: Some(None),
+                    };
+                    inner.visit(&path)?;
+                    Some((path, inner.out.into_iter().map(|m| m.name).collect()))
+                }
+                Err(Unresolved::Missing(_)) => None,
+                Err(Unresolved::Refused(e)) => return Err(e),
+            };
+            self.common = Some(found);
+        }
+        Ok(self.common.clone().flatten())
     }
 
     /// `import m;` from `from`: the importing file's directory, then the `-L`

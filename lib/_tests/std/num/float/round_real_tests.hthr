@@ -1,0 +1,90 @@
+// Ziv's search ends (lib/std/num/float/round_real.hthr,
+// issues/float-round-real-termination.md): a real clear of the grid, read
+// through enclosures that narrow, rounds with no `Option`. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import option; import omega; import rat; import creal; import dyadic; import float; import round; import window; import literal; import interval; import creal_interval; import round_real;
+
+fn third() → CReal { CReal::ofRat(Rat(1, 3)) }
+
+// binary32's grid is m·2^-150, and 2^150 = 3h + 1: 1/3 is a third of a
+// half-unit above grid point h, so 2^-152 clear of both ends of cell h.
+fn third_h() → Int { 475749230901986627019428656483165045460915541 }
+
+theorem third_cell(): binary32().Cell(third(), third_h(), 152) {
+    And(CReal::ofRat_le(p := binary32().grid(third_h()) + Rat::inv_pow2(152), q := Rat(1, 3), h := trivial),
+        CReal::ofRat_le(p := Rat(1, 3), q := binary32().grid(third_h() + 1) - Rat::inv_pow2(152), h := trivial))
+}
+
+fn third_off() → binary32().OffGrid(third()) { Exists(third_h(), Exists(152, third_cell())) }
+
+fn third_narrows() → third().enclosed().Narrows(binary32().prec() + 16, binary32().prec() + 16, 16) { third().enclosed_narrows(16, omega, binary32().prec() + 16, binary32().prec() + 16) }
+
+// The total search computes 0x3EAAAAAB, in every mode its own neighbour.
+theorem third_near(): binary32().round_real_apart(NearestEven, third().enclosed(), third_narrows(), third_off()) = Fin(Finite(False, 11184811, 124, trivial)) { refl }
+theorem third_down(): binary32().round_real_apart(TowardNeg, third().enclosed(), third_narrows(), third_off()) = Fin(Finite(False, 11184810, 124, trivial)) { refl }
+theorem third_up(): binary32().round_real_apart(TowardPos, third().enclosed(), third_narrows(), third_off()) = Fin(Finite(False, 11184811, 124, trivial)) { refl }
+
+// What it means, with no hypothesis left over.
+theorem third_rounds(): RoundsToReal(binary32(), NearestEven, third(), binary32().round_real_apart(NearestEven, third().enclosed(), third_narrows(), third_off())) {
+    binary32().round_real_apart_correct(NearestEven, third().enclosed(), third_narrows(), third_off())
+}
+
+// The try count is the narrowing's witness for the gap, plus one: 152 + 2 + 1.
+theorem third_tries(): binary32().round_apart_tries(third().enclosed(), binary32().prec() + 16, binary32().prec() + 16, 16, third_narrows(), third_off()) = 155 { refl }
+
+// And `round_real`, given those tries, is `Some`.
+theorem third_some(): ∃ r: Float(binary32()), binary32().round_real(NearestEven, third().enclosed(), 155) = Some(r) {
+    binary32().round_real_ends(NearestEven, third().enclosed(), third_narrows(), third_off())
+}
+
+// A negative cell rounds through the conjugate mode.
+fn neg_third() → CReal { CReal::ofRat(Rat(-1, 3)) }
+
+theorem neg_third_cell(): binary32().Cell(neg_third(), -third_h() - 1, 152) {
+    And(CReal::ofRat_le(p := binary32().grid(-third_h() - 1) + Rat::inv_pow2(152), q := Rat(-1, 3), h := trivial),
+        CReal::ofRat_le(p := Rat(-1, 3), q := binary32().grid(-third_h() - 1 + 1) - Rat::inv_pow2(152), h := trivial))
+}
+
+fn neg_third_off() → binary32().OffGrid(neg_third()) { Exists(-third_h() - 1, Exists(152, neg_third_cell())) }
+
+theorem neg_third_down(): binary32().round_real_apart(TowardNeg, neg_third().enclosed(), neg_third().enclosed_narrows(16, omega, 40, 40), neg_third_off()) = Fin(Finite(True, 11184811, 124, trivial)) { refl }
+
+// ---------------------------------------------------------------------------
+// Faithful rounding ends where correct rounding cannot (§18.3).
+
+fn one_real() → CReal { CReal::ofRat(1) }
+fn one32() → Finite(binary32()) { Finite(False, 8388608, 126, trivial) }
+fn one32_up() → Finite(binary32()) { Finite(False, 8388609, 126, trivial) }
+
+// At 1, a float, the boxes `[1 - ε, 1 + ε]` round down to two different
+// floats at every width, so rounding down never ends; the faithful test
+// passes on the first box.
+theorem one_down_open(): binary32().round_real(TowardNeg, one_real().enclosed(), 4) = None { refl }
+theorem one_faithful(): binary32().faithful_real(one_real().enclosed(), 1) = Some(Fin(one32())) { refl }
+
+// What it means, and the total version, whose tries come from the
+// narrowing at the least gap.
+theorem one_faithful_holds(): FaithfulReal(binary32(), one_real(), Fin(one32())) {
+    binary32().faithful_real_correct(one_real().enclosed(), 1, Fin(one32()), one_faithful())
+}
+
+theorem one_faithful_total(): binary32().faithful_real_total(one_real().enclosed(), one_real().enclosed_narrows(16, omega, binary32().prec() + 16, binary32().prec() + 16)) = Fin(one32()) { refl }
+
+// The midpoint `1 + 2^-24` between 1 and its successor: nearest never
+// decides between them; the faithful answer is one of the two.
+fn mid_real() → CReal { CReal::ofRat(Rat(16777217, 16777216)) }
+theorem mid_near_open(): binary32().round_real(NearestEven, mid_real().enclosed(), 4) = None { refl }
+theorem mid_faithful(): binary32().faithful_real(mid_real().enclosed(), 1) = Some(Fin(one32())) { refl }
+
+// At a rational the relation is read at the rational: 1's successor is not
+// a faithful rounding of 1.
+theorem one_up_not_faithful(): ¬FaithfulReal(binary32(), one_real(), Fin(one32_up())) {
+    let down: RoundsTo(binary32(), TowardNeg, 1, Fin(one32())) = binary32().round_rat_correct(TowardNeg, 1);
+    let up: RoundsTo(binary32(), TowardPos, 1, Fin(one32())) = binary32().round_rat_correct(TowardPos, 1);
+    let gap: (one32().val() < one32_up().val()) = trivial;
+    λ h => match Rat::around_rat<CReal>(CReal::ofRat_hom(), 1, λ q => binary32().Faithful(q, Fin(one32_up())), h) {
+        Inl(d) => { let e: (one32_up().val() ≈ one32().val()) = binary32().rounds_unique(TowardNeg, 1, Fin(one32_up()), Fin(one32()), d, down); Rat::not_le_of_lt(gap, Rat::le_of_same(e)) },
+        Inr(u) => { let e: (one32_up().val() ≈ one32().val()) = binary32().rounds_unique(TowardPos, 1, Fin(one32_up()), Fin(one32()), u, up); Rat::not_le_of_lt(gap, Rat::le_of_same(e)) },
+    }
+}

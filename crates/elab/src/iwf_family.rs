@@ -32,11 +32,13 @@ use std::sync::Arc as Rc;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{
-    IWfSig, LocalCtx, LocalSubst, LocalVar, Term, Type, dvec_succ_parts, fin_next, iwf_fam,
-    iwf_step_telescope,
+    IWfSig, LocalCtx, LocalSubst, LocalVar, Term, Type, dnth, dvec_succ_parts, fin_next, inst_motive2,
+    iwf_children_ty, iwf_fam, iwf_step_telescope,
 };
 use heather_syntax::ast::{Arm, Expr, MatchForm, Span};
 
+use crate::oracle::Unfold;
+use crate::gendefs::GenDef;
 use crate::inductive::{Ctor, FieldKind, Inductive, Spine, inject, nat_lit, tag_value};
 use crate::recursion::{Guard, GuardKind};
 use crate::wf::fin_index;
@@ -174,16 +176,9 @@ impl Elaborator {
             return None;
         };
         let oracle = self.semantic_oracle();
-        for tm in oracle.term_reducts(&cx.gamma, tm, 1024) {
-            let cand = Type::El {
-                level: level.clone(),
-                tm: Rc::new(tm),
-            };
-            if let Some(r) = self.iwf_of(&cand) {
-                return Some(r);
-            }
-        }
-        None
+        oracle.unfold_to(&cx.gamma, tm, Unfold::FamilyEncoding, |tm| {
+            self.iwf_of(&Type::El { level: level.clone(), tm: Rc::new(tm) })
+        })
     }
 
     // -- the type -------------------------------------------------------------
@@ -206,6 +201,33 @@ impl Elaborator {
         Ok((sig.at(Rc::new(idx)), lvl))
     }
 
+    /// `fresh`, a family's shape (`index` false, keyed by the shape
+    /// declaration's tag) or index type (`index` true, by the family's), as
+    /// the allocation an earlier signature used when it is that same type.
+    ///
+    /// Each mention of a family lowers both afresh, and they are sums of one
+    /// summand per constructor (per member, for a mutual group's index), so
+    /// two occurrences of the family shared no node below the root: every
+    /// `D#iarity x` the kernel judged compared the shape at `x` with the
+    /// definition's domain node by node, and every conversion of two
+    /// instances walked both shapes in the value domain
+    /// (`issues/iwf-shape-spine-comb-depth.md`). The guard is a structural
+    /// `==`, the order of the lowering itself, so a hit is the same type in
+    /// the same scope and which copy stands is a matter of sharing only, as
+    /// for [`Self::share_registered_lowering`]. A miss (other arguments,
+    /// other globals) replaces the entry.
+    fn share_iwf_part(&self, tag: u32, index: bool, fresh: Type) -> Rc<Type> {
+        let mut memo = self.memos.iwf_part_memo.borrow_mut();
+        match memo.get(&(tag, index)) {
+            Some(kept) if **kept == fresh => Rc::clone(kept),
+            _ => {
+                let fresh = Rc::new(fresh);
+                memo.insert((tag, index), Rc::clone(&fresh));
+                fresh
+            }
+        }
+    }
+
     /// The family's signature at type arguments `args`, scoped in `cx`.
     pub(crate) fn iwf_sig(
         &self,
@@ -222,6 +244,13 @@ impl Elaborator {
         let n = ind.ctors.len();
         let (shape, l) = self.lower_instance(cx, shape_decl, args, &[], span)?;
         let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
+        let shape_rc = self.share_iwf_part(shape_decl.tag, false, shape);
+        let ity_rc = self.share_iwf_part(ind.tag, true, ity);
+        if let Some(sig) = self.iwf_sig_named(cx, ind, args, &shape_rc, &l, &ity_rc, &ilvl) {
+            return Ok(sig);
+        }
+        let shape = (*shape_rc).clone();
+        let ity = (*ity_rc).clone();
         let spine = self.spine(&shape, &l, n, span)?;
         let mut xcx = cx.clone();
         xcx.selfref = None;
@@ -236,8 +265,7 @@ impl Elaborator {
         let arity = self.idx_case_tree(
             &xcx,
             &spine,
-            n,
-            0,
+            spine.root(),
             Type::Nat,
             &Level::Zero,
             Rc::clone(&x),
@@ -247,13 +275,12 @@ impl Elaborator {
         // o(x): the written result index over the stored fields.
         let out_body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, _: &Type| -> R<Term> {
             let acx = self.decl_payload_cx(bcx, ind, &spine, k, value, d, span)?;
-            self.elab_check(&acx, res_expr(ind, k), &ity.shift_local(d), &ilvl)
+            self.elab_check(&acx, res_expr(ind, k), &ity.shift_local(d), &ilvl).map(index_value)
         };
         let out = self.idx_case_tree(
             &xcx,
             &spine,
-            n,
-            0,
+            spine.root(),
             ity.shift_local(2),
             &ilvl,
             Rc::clone(&x),
@@ -290,8 +317,7 @@ impl Elaborator {
         let tree = self.idx_case_tree(
             &xcx,
             &spine,
-            n,
-            0,
+            spine.root(),
             child_motive,
             &ilvl,
             x,
@@ -310,11 +336,206 @@ impl Elaborator {
         Ok(Rc::new(IWfSig {
             level: l,
             idx_level: ilvl,
-            idx: Rc::new(ity),
-            shape: Rc::new(shape),
+            idx: ity_rc,
+            shape: shape_rc,
             arity: Rc::new(arity),
             out: Rc::new(out),
             child: Rc::new(child),
+        }))
+    }
+
+    // -- the named signature (docs/iwf-named-signature-design.md) -----------
+
+    /// `D#iarity`, `D#iout` and `D#ichild` at declaration time: the inline
+    /// signature [`Self::iwf_sig`] builds over [`Self::tycode_fn_telescope`]'s
+    /// all-`Ty 0` telescope, its three index functions abstracted over the
+    /// telescope and their own binders. From then on every instance at that
+    /// profile is spelled with them (§2). Best-effort like every generated
+    /// definition: a refusal leaves the family inline.
+    pub(crate) fn register_iwf_sig(&mut self, ind: &Rc<Inductive>, span: Span) {
+        if ind.skel.is_none()
+            || ind.iwf_infinitary()
+            || !ind.valparams.is_empty()
+            || self.types.gdefs().abs_for(&GenDef::IArity(ind.tag)).is_some()
+        {
+            return;
+        }
+        let Some((cx, binders, targs, _)) = self.tycode_fn_telescope(ind, span) else {
+            return;
+        };
+        let Ok(sig) = self.iwf_sig(&cx, ind, &targs, span) else {
+            return;
+        };
+        let tel = self.emitted_tel(&binders);
+        let n = tel.len() as u32;
+        let tel_vars: Vec<Rc<Term>> = (0..n).map(|k| Rc::new(Term::Var(LocalVar(n - 1 - k)))).collect();
+        let (l, li) = (sig.level.clone(), sig.idx_level.clone());
+        let lvl = |a: &Level, b: &Level| Level::max(a.clone(), b.clone());
+        // n : Π(x : S). Nat.
+        let ar_stmt = Type::Pi {
+            dom_level: l.clone(),
+            cod_level: Level::Zero,
+            dom: Rc::clone(&sig.shape),
+            cod: Rc::new(Type::Nat),
+        };
+        let ar_body = Term::Lam {
+            dom_level: l.clone(),
+            cod_level: Level::Zero,
+            dom: Rc::clone(&sig.shape),
+            body: Rc::clone(&sig.arity),
+        };
+        if !self.push_m_def(GenDef::IArity(ind.tag), ind, &tel, ar_stmt, l.clone(), ar_body, span) {
+            return;
+        }
+        // Every push moves the globals the pieces built before it mention one
+        // further out (`register_m_sig`'s frame rule): one for the output
+        // index, two for the child index.
+        let tel1: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(1), l.clone())).collect();
+        let shape1 = Rc::new(sig.shape.shift_global(1));
+        let out_stmt = Type::Pi {
+            dom_level: l.clone(),
+            cod_level: li.clone(),
+            dom: Rc::clone(&shape1),
+            cod: Rc::new(sig.idx.shift_global(1).shift_local(1)),
+        };
+        let out_body = Term::Lam {
+            dom_level: l.clone(),
+            cod_level: li.clone(),
+            dom: shape1,
+            body: Rc::new(sig.out.shift_global(1)),
+        };
+        if !self.push_m_def(GenDef::IOut(ind.tag), ind, &tel1, out_stmt, lvl(&l, &li), out_body, span) {
+            return;
+        }
+        // `Fin(D#iarity ā x)` over `(tel, x)`, minted now.
+        let Some(aref) = self.m_ref_app(&cx, GenDef::IArity(ind.tag), &tel_vars, 1) else {
+            return;
+        };
+        let fin = Rc::new(Type::Fin { len: aref });
+        let tel2: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(2), l.clone())).collect();
+        let shape2 = Rc::new(sig.shape.shift_global(2));
+        let i2 = Rc::new(sig.idx.shift_global(2).shift_local(2));
+        let child_i = Type::Pi { dom_level: Level::Zero, cod_level: li.clone(), dom: Rc::clone(&fin), cod: i2 };
+        let child_stmt = Type::Pi {
+            dom_level: l.clone(),
+            cod_level: li.clone(),
+            dom: Rc::clone(&shape2),
+            cod: Rc::new(child_i),
+        };
+        let child_body = Term::Lam {
+            dom_level: l.clone(),
+            cod_level: li.clone(),
+            dom: shape2,
+            body: Rc::new(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: li.clone(),
+                dom: fin,
+                body: Rc::new(sig.child.shift_global(2)),
+            }),
+        };
+        if !self.push_m_def(GenDef::IChild(ind.tag), ind, &tel2, child_stmt, lvl(&l, &li), child_body, span) {
+            return;
+        }
+        // `dnth` over the children tuple, at the named signature built now: in
+        // `(tel, a, cs, i)`, as `iwf_step_telescope` spells it.
+        let Ok(nsig) = self.iwf_sig(&cx, ind, &targs, span) else {
+            return;
+        };
+        let fl = nsig.family_level();
+        let cs_ty = Rc::new(iwf_children_ty(&nsig.shift_local(1), &Term::Var(LocalVar(0))));
+        let fam = nsig.shift_local(4).at(Rc::new(nsig.child.shift_local_above(2, 1)));
+        let nth = dnth(
+            &fl,
+            &Rc::new(nsig.arity.shift_local(2)),
+            &Rc::new(fam),
+            Rc::new(Term::Var(LocalVar(1))),
+            Rc::new(Term::Var(LocalVar(0))),
+        );
+        let res = Rc::new(nsig.shift_local(3).at(Rc::new(nsig.child.shift_local_above(1, 1))));
+        let fin = Rc::new(Type::Fin { len: Rc::new(nsig.arity.shift_local(1)) });
+        let at_i = Type::Pi { dom_level: Level::Zero, cod_level: fl.clone(), dom: Rc::clone(&fin), cod: Rc::clone(&res) };
+        let at_cs = Type::Pi { dom_level: fl.clone(), cod_level: fl.clone(), dom: Rc::clone(&cs_ty), cod: Rc::new(at_i) };
+        let stmt = Type::Pi { dom_level: l.clone(), cod_level: fl.clone(), dom: Rc::clone(&nsig.shape), cod: Rc::new(at_cs) };
+        let body = Term::Lam {
+            dom_level: l.clone(),
+            cod_level: fl.clone(),
+            dom: Rc::clone(&nsig.shape),
+            body: Rc::new(Term::Lam {
+                dom_level: fl.clone(),
+                cod_level: fl.clone(),
+                dom: cs_ty,
+                body: Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: fl.clone(), dom: fin, body: Rc::new(nth) }),
+            }),
+        };
+        let tel3: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(3), l.clone())).collect();
+        let _ = self.push_m_def(GenDef::IDnth(ind.tag), ind, &tel3, stmt, lvl(&l, &fl), body, span);
+    }
+
+    /// [`iwf_step_telescope`] for a match in `cx`, with the ih type's `dnth`
+    /// spelled as the family's `D#idnth` when its signature is named: the
+    /// convoy repeats the telescope at every level of the case tree, and
+    /// inline `dnth` carries the children's family several times over.
+    fn iwf_match_telescope(&self, cx: &Cx, sig: &Rc<IWfSig>, mlvl: &Level, motive: &Type) -> (Type, Type, Type) {
+        let (cs_ty, ih_ty, st_ty) = iwf_step_telescope(sig, mlvl, motive);
+        let Some(nth) = self.iwf_named_dnth(cx, sig) else {
+            return (cs_ty, ih_ty, st_ty);
+        };
+        let ih_ty = Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: mlvl.clone(),
+            dom: Rc::new(Type::Fin { len: Rc::new(sig.arity.shift_local(1)) }),
+            cod: Rc::new(inst_motive2(motive, 3, &sig.child.shift_local_above(1, 1), &nth)),
+        };
+        (cs_ty, ih_ty, st_ty)
+    }
+
+    /// `D#idnth ā a cs i` in `(cx, a, cs, i)`, for a signature in `cx` whose
+    /// arity is `D#iarity ā x`.
+    fn iwf_named_dnth(&self, cx: &Cx, sig: &IWfSig) -> Option<Term> {
+        let (GenDef::IArity(tag), args) = self.gen_app_of(&sig.arity)? else {
+            return None;
+        };
+        let (last, tel) = args.split_last()?;
+        if !matches!(**last, Term::Var(LocalVar(0))) {
+            return None;
+        }
+        // The telescope's arguments, read out of the shape binder.
+        let tel: Vec<Rc<Term>> = tel.iter().map(|a| Rc::new(a.inst_top(0, &Term::Zero))).collect();
+        self.m_ref_app(cx, GenDef::IDnth(tag), &tel, 3).map(|t| (*t).clone())
+    }
+
+    /// The named signature of an instance (§2): `None` when the family
+    /// registered none, or the instance is not at the registered profile
+    /// (every type argument at `Ty 0` with a code); [`Self::iwf_sig`] then
+    /// spells it inline. The shape and the index type are the inline ones,
+    /// which the caller has built.
+    #[allow(clippy::too_many_arguments)]
+    fn iwf_sig_named(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        args: &[(Type, Level)],
+        shape: &Rc<Type>,
+        l: &Level,
+        ity: &Rc<Type>,
+        ilvl: &Level,
+    ) -> Option<Rc<IWfSig>> {
+        self.types.gdefs().abs_for(&GenDef::IChild(ind.tag))?;
+        if args.iter().any(|(_, l)| !l.equiv(&Level::Zero)) {
+            return None;
+        }
+        let mut tel = Vec::with_capacity(args.len());
+        for (a, _) in args {
+            tel.push(Rc::new(crate::code::code_of(a)?));
+        }
+        Some(Rc::new(IWfSig {
+            level: l.clone(),
+            idx_level: ilvl.clone(),
+            idx: Rc::clone(ity),
+            shape: Rc::clone(shape),
+            arity: self.m_ref_app(cx, GenDef::IArity(ind.tag), &tel, 1)?,
+            out: self.m_ref_app(cx, GenDef::IOut(ind.tag), &tel, 1)?,
+            child: self.m_ref_app(cx, GenDef::IChild(ind.tag), &tel, 2)?,
         }))
     }
 
@@ -374,6 +595,7 @@ impl Elaborator {
                     ty,
                     level,
                     spliced: None,
+                    shifted: Default::default(),
                 }));
             }
             p += 1;
@@ -410,7 +632,7 @@ impl Elaborator {
         };
         let mut lcx = cx.clone();
         lcx.push("#here".into(), unit.clone(), Level::Zero);
-        let case_l = self.elab_check(&lcx, exprs[t], &ity.shift_local(depth + 1), ilvl)?;
+        let case_l = index_value(self.elab_check(&lcx, exprs[t], &ity.shift_local(depth + 1), ilvl)?);
         let mut rcx = cx.clone();
         rcx.push("#later".into(), rest.clone(), Level::Zero);
         let case_r = self.fin_tree(&rcx, exprs, t + 1, ity, ilvl, depth + 1)?;
@@ -482,6 +704,7 @@ impl Elaborator {
                     ty: ty.clone(),
                     level: level.clone(),
                     spliced: None,
+                    shifted: Default::default(),
                 }));
             } else if crate::inductive::expr_mentions(e, &name) {
                 let (term, ty, level) = self.elab_infer(cx, args[k].borrow())?;
@@ -493,6 +716,7 @@ impl Elaborator {
                     ty,
                     level,
                     spliced: None,
+                    shifted: Default::default(),
                 }));
             }
         }
@@ -677,7 +901,7 @@ impl Elaborator {
         // The tuple's checked spelling, exactly as `build_fields_skel`'s
         // (`docs/intro-by-type-design.md` §4.1): no annotation, since every
         // layer is in checking position.
-        if self.emits_at_forms(cx) {
+        if self.emits_at_forms() {
             return Ok(Term::PairAt {
                 ty: None,
                 fst: value,
@@ -732,7 +956,7 @@ impl Elaborator {
         jcx.push("#z".into(), fam.ty_at(Term::Var(LocalVar(0)), 1), fam.lvl());
         let psi = self.goal_psi();
         let fits = |m: &Type| {
-            heather_kernel::typing::check_type(&psi, 0, Layer::Prog, &jcx.gamma, m, mlvl, self.fuel)
+            heather_kernel::typing::check_type(&psi, 0, Layer::Prog, &jcx.gamma, m, mlvl, self.policy.fuel)
                 .is_ok()
         };
         if let Some(inv) = self.iwf_inverted_motive(cx, ind, fam, motive, mlvl, span)?
@@ -1130,7 +1354,7 @@ impl Elaborator {
 
         let (shape, slvl) = fam.shape();
         let spine = self.spine(shape, slvl, n, span)?;
-        let dec = crate::recursion::descends_on_param(cx, &scrut);
+        let dec = crate::recursion::guard_param(cx, &scrut, arms);
         // The index a recursion may vary: the family's own when it is a
         // parameter, or a member's, under its member constructor
         // (docs/mutual-inductive-design.md §5).
@@ -1182,7 +1406,7 @@ impl Elaborator {
         let fl = sig.family_level();
         // The step telescope, `cs` in (Γ, a), `ih` in (Γ, a, cs), the step's
         // type in (Γ, a, cs, ih).
-        let (cs_ty, ih_ty, st_ty) = iwf_step_telescope(sig, &mlvl, &motive);
+        let (cs_ty, ih_ty, st_ty) = self.iwf_match_telescope(cx, sig, &mlvl, &motive);
         // The convoy's motive over (Γ, a, x): the three re-abstracted at `x`.
         let convoy = Type::Pi {
             dom_level: fl.clone(),
@@ -1203,8 +1427,7 @@ impl Elaborator {
         let tree = self.idx_case_tree(
             &acx,
             &spine,
-            n,
-            0,
+            spine.root(),
             convoy,
             &Level::max(fl.clone(), mlvl.clone()),
             Rc::new(Term::Var(LocalVar(0))),
@@ -1368,6 +1591,7 @@ impl Elaborator {
                 ty: sig_here.at(Rc::new(at.clone())),
                 level: fl.clone(),
                 spliced: None,
+                shifted: Default::default(),
             }));
             children.push((Rc::new(child), Rc::new(ih), ih_ty, mlvl.clone()));
             // Under a member constructor the varying index is the member's
@@ -1396,6 +1620,7 @@ impl Elaborator {
                             // An indexed family is not chain-shaped for the
                             // window's purposes.
                             cov: None,
+                            shape: crate::recursion::WfShape::NoWindowRoute,
                         },
                         rebind: env.idx_param.map(|p| (p, rebind)),
                         generalized: crate::generalize::guard_gen(&acx, dec, None),
@@ -1589,5 +1814,123 @@ fn rebuilt_goal(cx: &Cx, e: &Type, value: Option<&(Rc<Term>, Rc<Term>)>) -> Type
     match e.abstract_local_with(v, &r.shift_local(1)) {
         Some(t) => t.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero))),
         None => e.clone(),
+    }
+}
+
+/// A signature's index value — an arm of `o` or a leaf of `c` — without the
+/// annotation on its outermost injection or tuple. The arm is checked
+/// against the index type, so the annotation is a conversion the kernel pays
+/// at every occurrence of the signature; and it names the index type's code
+/// as a global, whose substitution records Γ's length, so a signature that
+/// keeps it is never locally closed and is rebuilt under every binder
+/// (`issues/mutual-group-recursion-gate-cost.md`).
+fn index_value(t: Term) -> Term {
+    match t {
+        Term::InlAt { ty: Some(_), val } => Term::InlAt { ty: None, val },
+        Term::InrAt { ty: Some(_), val } => Term::InrAt { ty: None, val },
+        Term::PairAt { ty: Some(_), fst, snd } => Term::PairAt { ty: None, fst, snd },
+        t => t,
+    }
+}
+
+#[cfg(test)]
+mod named_signature {
+    //! `docs/iwf-named-signature-design.md`: an `IWf`-route family at the
+    //! registered profile is spelled over `D#iarity`/`D#iout`/`D#ichild`, its
+    //! `match` over `D#idnth`, and an instance off the profile stays inline.
+    //! Each source also runs a `match` and a `refl` unfolding through the
+    //! kernel, so the references are checked where they are used.
+
+    use super::*;
+
+    const SPAN: Span = Span { start: 0, end: 0 };
+
+    const ADD: &str = "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }\n";
+
+    fn declared(src: &str, name: &str) -> (Elaborator, Rc<Inductive>) {
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(&format!("{ADD}{src}")).expect("the source elaborates and checks");
+        let ind = Rc::clone(el.types.inductive(&crate::names::qkey("main", name)).expect("declared"));
+        (el, ind)
+    }
+
+    fn registered(el: &Elaborator, ind: &Inductive) {
+        for key in [GenDef::IArity(ind.tag), GenDef::IOut(ind.tag), GenDef::IChild(ind.tag), GenDef::IDnth(ind.tag)] {
+            assert!(el.types.gdefs().abs_for(&key).is_some(), "`{}` registered", key.name(&ind.name));
+        }
+    }
+
+    /// Whether each index function of `sig` is the registered definition's
+    /// application, `None` per component when it is spelled inline.
+    fn heads(el: &Elaborator, sig: &IWfSig) -> [Option<GenDef>; 3] {
+        [&sig.arity, &sig.out, &sig.child].map(|t| el.gen_app_of(t).map(|(key, _)| key))
+    }
+
+    /// A family indexed by a *recursive* type: its index values are
+    /// constructor values whose `sup_f` slots name the index type's shape
+    /// and arity definitions. Registration builds them after the index
+    /// type's code was pushed in the same attempt, and the attempt's shared
+    /// annotations were once keyed without the Ψ scope, so they named every
+    /// global one too close and the kernel refused `V#iout`; the family then
+    /// silently stayed inline.
+    #[test]
+    fn a_family_indexed_by_a_recursive_type_is_named() {
+        let (el, v) = declared(
+            "inductive Ty { TNat, TArr(a: Ty, b: Ty) }
+             inductive V : (t: Ty) -> Type { A : V(TNat), C(a: Ty, v: V(a)) : V(TArr(a, a)) }
+             fn depth(t: Ty, v: V(t)) -> Nat { match v { A => 0, C(a, w) => Succ(depth(a, w)) } }
+             theorem depth_c(a: Ty, w: V(a)): depth(TArr(a, a), C(a, w)) = Succ(depth(a, w)) { refl }
+             theorem depth_closed(): depth(TArr(TNat, TNat), C(TNat, A)) = 1 { refl }",
+            "V",
+        );
+        registered(&el, &v);
+        let sig = el.iwf_sig(&Cx::empty(), &v, &[], SPAN).expect("signature");
+        let t = v.tag;
+        assert_eq!(heads(&el, &sig), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
+        let nth = el.iwf_named_dnth(&Cx::empty(), &sig).expect("the ih is spelled with `V#idnth`");
+        assert!(matches!(el.gen_app_of(&nth), Some((GenDef::IDnth(k), _)) if k == t));
+    }
+
+    /// A mutual group's family, the case the round was for: one `IWf` over
+    /// the generated member sum.
+    #[test]
+    fn a_mutual_group_family_is_named() {
+        let (el, fam) = declared(
+            "inductive M0 { L0, N0(a: M1, b: M0) }
+             inductive M1 { L1, N1(a: M2, b: M1) }
+             inductive M2 { L2, N2(a: M0, b: M2) }
+             fn size0(t: M0) -> Nat { match t { L0 => 1, N0(a, b) => add(size1(a), size0(b)) } }
+             fn size1(t: M1) -> Nat { match t { L1 => 1, N1(a, b) => add(size2(a), size1(b)) } }
+             fn size2(t: M2) -> Nat { match t { L2 => 1, N2(a, b) => add(size0(a), size2(b)) } }
+             theorem size_node(a: M1, b: M0): size0(N0(a, b)) = add(size1(a), size0(b)) { refl }",
+            &crate::mutual_family::family_name("M0"),
+        );
+        registered(&el, &fam);
+        let sig = el.iwf_sig(&Cx::empty(), &fam, &[], SPAN).expect("signature");
+        let t = fam.tag;
+        assert_eq!(heads(&el, &sig), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
+    }
+
+    /// A type parameter: the definitions abstract it, an instance at a
+    /// `Ty 0` argument applies them to its code, and one at `Type` itself
+    /// (`Ty 0`, a `Ty 1` argument) is off the profile and stays inline.
+    #[test]
+    fn a_parameter_at_the_profile_is_applied_and_one_off_it_stays_inline() {
+        let (el, p) = declared(
+            "inductive Ty { TNat, TArr(a: Ty, b: Ty) }
+             inductive P<X> : (t: Ty) -> Type { PA(x: X) : P<X>(TNat), PC(a: Ty, v: P<X>(a)) : P<X>(TArr(a, a)) }
+             fn count(t: Ty, v: P<Nat>(t)) -> Nat { match v { PA(x) => x, PC(a, w) => Succ(count(a, w)) } }
+             theorem count_closed(): count(TArr(TNat, TNat), PC(TNat, PA(3))) = 4 { refl }",
+            "P",
+        );
+        registered(&el, &p);
+        let t = p.tag;
+        let at_nat = el.iwf_sig(&Cx::empty(), &p, &[(Type::Nat, Level::Zero)], SPAN).expect("signature at Nat");
+        assert_eq!(heads(&el, &at_nat), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
+        let at_type = el
+            .iwf_sig(&Cx::empty(), &p, &[(Type::Ty(Level::Zero), Level::succ(Level::Zero))], SPAN)
+            .expect("signature at Type");
+        assert_eq!(heads(&el, &at_type), [None, None, None]);
+        assert!(el.iwf_named_dnth(&Cx::empty(), &at_type).is_none());
     }
 }

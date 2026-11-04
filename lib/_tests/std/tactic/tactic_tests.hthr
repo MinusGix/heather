@@ -1,0 +1,111 @@
+// Probes of the tactic host (`lib/std/tactic/tactic.hthr`,
+// `crates/elab/src/host.rs`, `docs/host-elaboration-interface-design.md`):
+// the `Goal` view, and at a class carrier how `View` presents a dictionary's
+// field reads and a dictionary's own type, and `apply` with a class's lemma,
+// whose dictionary `Match` finds in scope. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import char; import string; import tactic;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field;
+
+// A block's `let` is one of the goal's locals: a fact it binds is found by a
+// tactic that searches them, without being handed it
+// (issues/tactic-goal-lists-block-lets.md).
+theorem let_fact(n: Nat, h: n = 3): 3 = n {
+    let k: (3 = n) = sym(h);
+    by assumption()
+}
+
+// Bound before a binder the goal is under: its value and statement are
+// weakened past it.
+fn under_binder(n: Nat, h: n = 3) → Nat → 3 = n {
+    let k: (3 = n) = sym(h);
+    λ m => by assumption()
+}
+
+// One `let` built from another, both facts; the later one is the goal.
+theorem chained(n, m: Nat, h: n = m, e: m = 3): 3 = n {
+    let a: (n = 3) = trans(h, e);
+    let b: (3 = n) = sym(a);
+    by assumption()
+}
+
+// A `let` in an enclosing block, seen from an inner one.
+theorem nested_block(n: Nat, h: n = 3): 3 = n {
+    let k: (3 = n) = sym(h);
+    let z: Nat = { let w: Nat = 0; w };
+    { by assumption() }
+}
+
+// A `let` whose name a later `let` binds again is not in scope, so it is not
+// among the goal's locals either.
+// expect-error: no local's type is the goal
+theorem shadowed(n: Nat, h: n = 3): 3 = n {
+    let k: (3 = n) = sym(h);
+    let k: Nat = 0;
+    by assumption()
+}
+
+// `apply(name)` with the premises proved by hypotheses.
+fn use_law(name: String) → Tac<Expr> {
+    lookup(name).bind(λ c => match c { Refused(why) => fail(why, []), Accepted(g) => apply(Global(g), assumption()) })
+}
+
+fn same_name(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
+
+fn one_argument(args: List<Handle>) → Bool { match args { Cons(_, Nil) => True, _ => False } }
+
+// The goal's left side is the field `name` read off a record, applied to one
+// argument; then the goal is a hypothesis.
+fn left_is_field(name: String) → Tac<Expr> {
+    goal().bind(λ g => view(g.target).bind(λ v => match head_args(v) {
+        Cons(l, _) => view(l).bind(λ vl => match vl {
+            HField(_, n, args) => match same_name(n, name) && one_argument(args) { True => assumption(), False => fail("a different field read", []) },
+            _ => fail("not a field read", [At(Hd(l), Tried("the left side", "not a field read"))]),
+        }),
+        Nil => fail("no left side", []),
+    }))
+}
+
+// Some local's type is the class `name` at a carrier and `count` index
+// arguments; then the goal is a hypothesis.
+fn dictionary_among(name: String, count: Nat, ls: List<LocalInfo>) → Tac<Expr> {
+    match ls {
+        Nil => fail("no dictionary of the class in scope", []),
+        Cons(l, rest) => view(l.ty).bind(λ v => match v {
+            HGlobal(_, n, args) => match same_name(n, name) && args.len().same(Succ(count)) { True => assumption(), False => dictionary_among(name, count, rest) },
+            _ => dictionary_among(name, count, rest),
+        }),
+    }
+}
+
+fn dictionary_in_scope(name: String, count: Nat) → Tac<Expr> {
+    goal().bind(λ g => dictionary_among(name, count, g.locals))
+}
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+// A class's lemma at its own dictionary, at an ancestor's (an upcast), and
+// one whose conclusion reads a dictionary field.
+theorem field_law(x, y, z: A, h: x < y, hz: A.unit < z): z * x < z * y { by use_law("OrderedSemiring::mul_lt_mono_l") }
+theorem ancestor_law(x, y, z: A, h: x <= y): z + x <= z + y { by use_law("OrderedAddMonoid::add_le_mono_l") }
+theorem field_conclusion(x, y: A, h: x <= y): A.inv(y) <= A.inv(x) { by use_law("LocatedAddGroup::neg_le") }
+theorem zero_conclusion(x, y: A, hx: A.unit < x, hy: A.unit < y): A.unit < x + y { by use_law("OrderedAddMonoid::add_pos") }
+
+// `A.inv(x)` is a field read off the dictionary, applied to `x`; `A.unit` is
+// one applied to nothing.
+theorem inv_is_a_field(x, y: A, h: A.inv(x) <= y): A.inv(x) <= y { by left_is_field("inv") }
+// expect-error: a different field read
+theorem unit_takes_no_argument(y: A, h: A.unit <= y): A.unit <= y { by left_is_field("unit") }
+// expect-error: not a field read
+theorem a_local_is_not_a_field(x, y: A, h: x <= y): x <= y { by left_is_field("inv") }
+
+// The dictionary's type is the class at the carrier and its five indices.
+theorem dictionary_view(x: A, h: x <= x): x <= x { by dictionary_in_scope("OrderedField", 5) }
+}
+
+section<A: OrderedAddGroup(≈, <, <=, +)> {
+// A lemma of a stronger class finds no dictionary here: the conclusion's
+// `A.inv` names the dictionary in scope, which is of the weaker class
+// (issues/implicit-from-record-parameter-type.md: a projection teaches it).
+// expect-error: an argument of type `OrderedAddGroup<…>` where `LocatedAddGroup<…>` is expected
+theorem no_located_dictionary(x, y: A, h: x <= y): A.inv(y) <= A.inv(x) { by use_law("LocatedAddGroup::neg_le") }
+}

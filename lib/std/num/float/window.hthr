@@ -1,0 +1,578 @@
+// Rounding in a window of a format (docs/floating-point-design.md §15).
+//
+// A window of `F` keeps its precision and its specials and only `c + 1` of
+// its binades, from `emin + j` up: `F.window(j, c)`. Its floats are `F`'s
+// floats of those binades, read with the exponent field lowered by `j`
+// (`win_up`, `win_down`). Near a value the window holds, the two formats
+// have the same floats, so a correct rounding in the window is a correct
+// rounding in `F` (`Format::window_rounds`).
+//
+// That is what lets a rounding compute with numbers about `prec + c` bits
+// wide at any exponent. `F`'s own rounding works in half-units of `2^qmin`,
+// so at binary64 a value near one is a 1075-bit count, its exponent a search
+// over 2046 binades, and its overflow test a power of two past the
+// evaluator's depth budget (issues/nat-wide-evaluation.md). A window a few
+// binades wide around the value has none of that.
+//
+// The window is placed by two conditions on the value `x` (`InWindow`):
+// it starts at `F`'s least binade or at or below `x`, and it ends at `F`'s
+// top or above `x`'s binade. Below the window's least normal, and from its
+// top binade on, every float of `F` is on the far side of a window float
+// (`win_region`), so it neither rounds `x` nor beats one that does.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+import float;
+import round;
+
+fn Format::window(self F: Format, j, c: Nat) → Format { Format(F.frac, F.frac_ok, F.emin + j.int(), c, F.specials) }
+
+theorem Format::window_qmin(self F: Format, j, c: Nat): (F.window(j, c)).qmin() = F.qmin() + j.int() {
+    let wd: ((F.window(j, c)).qmin() = (F.emin + j.int()) - F.frac.int()) = refl;
+    let fd: (F.qmin() = F.emin - F.frac.int()) = refl;
+    omega
+}
+
+// The first float of binade `b`: `2^(prec - 1) · 2^(qmin + b)`.
+fn Finite::lead(F: Format, b: Nat, le: b <= F.span) → Finite(F) {
+    let h = F.two_le_half();
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    Finite(False, F.half(), b, F.canonical_intro(F.half(), b, omega, le, Inr(F.half().le_refl()), λ _ _ => omega))
+}
+
+// ---------------------------------------------------------------------------
+// The two readings of a float.
+
+// A window float as a float of `F`: the same sign and significand, `j`
+// binades up.
+fn Format::win_up(self F: Format, j, c: Nat, g: Finite(F.window(j, c)), ok: F.canonical(g.mag, g.bexp + j).IsTrue()) → Finite(F) {
+    Finite(g.neg, g.mag, g.bexp + j, ok)
+}
+
+// A float of `F` in the window's binades as a window float.
+fn Format::win_down(self F: Format, j, c: Nat, g: Finite(F), ok: (F.window(j, c)).canonical(g.mag, g.bexp - j).IsTrue()) → Finite(F.window(j, c)) {
+    Finite(g.neg, g.mag, g.bexp - j, ok)
+}
+
+theorem Format::win_up_val(self F: Format, j, c: Nat, g: Finite(F.window(j, c)), ok: F.canonical(g.mag, g.bexp + j).IsTrue()):
+    (F.win_up(j, c, g, ok)).val() ≈ g.val()
+{
+    let wq = F.window_qmin(j, c);
+    let e: (F.qmin() + (g.bexp + j).int() = (F.window(j, c)).qmin() + g.bexp.int()) = omega;
+    j(e, λ v _ => Dyadic(g.signed(), F.qmin() + (g.bexp + j).int()).rat() ≈ Dyadic(g.signed(), v).rat(),
+        Dyadic(g.signed(), F.qmin() + (g.bexp + j).int()).rat().same_refl())
+}
+
+theorem Format::win_down_val(self F: Format, j, c: Nat, g: Finite(F), jb: j <= g.bexp, ok: (F.window(j, c)).canonical(g.mag, g.bexp - j).IsTrue()):
+    (F.win_down(j, c, g, ok)).val() ≈ g.val()
+{
+    let wq = F.window_qmin(j, c);
+    let e: ((F.window(j, c)).qmin() + (g.bexp - j).int() = F.qmin() + g.bexp.int()) = omega;
+    j(e, λ v _ => Dyadic(g.signed(), (F.window(j, c)).qmin() + (g.bexp - j).int()).rat() ≈ Dyadic(g.signed(), v).rat(),
+        Dyadic(g.signed(), (F.window(j, c)).qmin() + (g.bexp - j).int()).rat().same_refl())
+}
+
+// A window float is a float of `F` unless it is one of the window's
+// subnormals above `F`'s least binade.
+theorem Format::win_up_ok(self F: Format, j, c: Nat, jc: j + c <= F.span, g: Finite(F.window(j, c)),
+    norm: j = 0 ∨ F.half() <= g.mag): F.canonical(g.mag, g.bexp + j).IsTrue()
+{
+    let w = (F.window(j, c)).canonical_elim(g.mag, g.bexp, g.ok);
+    let fits: (Succ(g.mag) <= F.top()) = w.left;
+    let wr: (g.bexp <= c) = w.right.left;
+    let wn: (g.bexp = 0 ∨ F.half() <= g.mag) = w.right.right.left;
+    let wf: (F.specials.reserves_top().IsTrue() → c <= g.bexp → Succ(Succ(g.mag)) <= F.top()) = w.right.right.right;
+    let range: (g.bexp + j <= F.span) = omega;
+    let normal: (g.bexp + j = 0 ∨ F.half() <= g.mag) = match norm {
+        Inr(le) => Inr(le),
+        Inl(jz) => match wn { Inl(bz) => Inl(omega(jz, bz)), Inr(le) => Inr(le) },
+    };
+    F.canonical_intro(g.mag, g.bexp + j, fits, range, normal, λ rt sp => wf(rt, omega))
+}
+
+// A float of `F` in the window's binades is a window float, unless it is
+// the pattern the window's top binade reserves where `F`'s does not.
+theorem Format::win_down_ok(self F: Format, j, c: Nat, g: Finite(F), jb: j <= g.bexp, inb: g.bexp <= j + c,
+    free: F.specials.reserves_top().IsTrue() → j + c <= g.bexp → Succ(Succ(g.mag)) <= F.top()):
+    (F.window(j, c)).canonical(g.mag, g.bexp - j).IsTrue()
+{
+    let f = F.canonical_elim(g.mag, g.bexp, g.ok);
+    let fits: (Succ(g.mag) <= F.top()) = f.left;
+    let fn: (g.bexp = 0 ∨ F.half() <= g.mag) = f.right.right.left;
+    let range: (g.bexp - j <= c) = omega;
+    let normal: (g.bexp - j = 0 ∨ F.half() <= g.mag) = match fn { Inl(z) => Inl(omega(z)), Inr(le) => Inr(le) };
+    let ws: ((F.window(j, c)).span = c) = refl;
+    (F.window(j, c)).canonical_intro(g.mag, g.bexp - j, fits, range, normal, λ rt sp => free(rt, omega))
+}
+
+// ---------------------------------------------------------------------------
+// Where the window sits.
+
+// The window's least normal and the first float of its top binade.
+fn Format::win_lo(self F: Format, j, c: Nat) → Finite(F.window(j, c)) { Finite::min_normal(F.window(j, c)) }
+
+fn Format::win_hi(self F: Format, j, c: Nat) → Finite(F.window(j, c)) { Finite::lead(F.window(j, c), c, c.le_refl()) }
+
+// `x` is nonnegative, the window starts at `F`'s least binade or at or below
+// `x`, and it ends at `F`'s top or above `x`'s binade.
+fn Format::InWindow(self F: Format, j, c: Nat, x: Rat) → Type {
+    j + c <= F.span ∧ 0 <= x ∧ (j = 0 ∨ (F.win_lo(j, c)).val() <= x) ∧ (j + c = F.span ∨ x < (F.win_hi(j, c)).val())
+}
+
+// The window's least normal and its top binade's first float, read in `F`.
+theorem Format::win_lo_ok(self F: Format, j, c: Nat, jc: j + c <= F.span): F.canonical((F.win_lo(j, c)).mag, (F.win_lo(j, c)).bexp + j).IsTrue() {
+    F.win_up_ok(j, c, jc, F.win_lo(j, c), Inr(F.half().le_refl()))
+}
+
+theorem Format::win_hi_ok(self F: Format, j, c: Nat, jc: j + c <= F.span): F.canonical((F.win_hi(j, c)).mag, (F.win_hi(j, c)).bexp + j).IsTrue() {
+    F.win_up_ok(j, c, jc, F.win_hi(j, c), Inr(F.half().le_refl()))
+}
+
+// A significand below `2^prec` at binade `b` is below the first float of any
+// higher binade `k`; a normal one at `b` is at least the first of any binade
+// up to `b`.
+theorem Format::units_lt_lead(self F: Format, m, b, k: Nat, fits: Succ(m) <= F.top(), lt: b < k): m * Nat::pow(2, b) < F.half() * Nat::pow(2, k) {
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    let p = Nat::pow(2, b);
+    let p1 = Nat::pow(2, Succ(b));
+    let pk = Nat::pow(2, k);
+    let fit: (Succ(m) * p <= F.top() * p) = Nat::mul_le_mono_r(p, Succ(m), F.top(), fits);
+    let unf: (Succ(m) * p = p + m * p) = m.mul_succ_left(p);
+    let pd: (p1 = p * 2) = refl;
+    let dbl: (F.top() * p = F.half() * p1) = ring(t, pd);
+    let mono: (p1 <= pk) = Nat::pow_le_pow_r(2, Succ(b), k, trivial, lt);
+    let up: (F.half() * p1 <= F.half() * pk) = F.half().mul_le_mono_l(p1, pk, mono);
+    let pp: (0 < p) = Nat::pow_pos(a := 2, n := b);
+    omega
+}
+
+theorem Format::lead_le_units(self F: Format, m, b, k: Nat, norm: F.half() <= m, le: k <= b): F.half() * Nat::pow(2, k) <= m * Nat::pow(2, b) {
+    let pk = Nat::pow(2, k);
+    let pb = Nat::pow(2, b);
+    let mono: (pk <= pb) = Nat::pow_le_pow_r(2, k, b, trivial, le);
+    let a: (F.half() * pk <= F.half() * pb) = F.half().mul_le_mono_l(pk, pb, mono);
+    let c: (F.half() * pb <= m * pb) = Nat::mul_le_mono_r(pb, F.half(), m, norm);
+    omega
+}
+
+// Two floats compare by their half-unit counts, which for a nonnegative
+// float are its units doubled.
+theorem Finite::le_of_units({F: Format}, g, h: Finite(F), gp: g.neg = False, hp: h.neg = False, le: g.units() <= h.units()): g.val() <= h.val() {
+    let gh = Finite::H_pos(g, gp);
+    let hh = Finite::H_pos(h, hp);
+    Finite::le_of_H_le(g, h, omega(gh, hh, le))
+}
+
+// A subnormal significand leaves room below the top.
+theorem Format::room_of_small(self F: Format, m: Nat, lt: m < F.half()): Succ(Succ(m)) <= F.top() {
+    let h2 = F.two_le_half();
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    omega
+}
+
+// A float at the least exponent with a subnormal significand is at most the
+// least normal.
+theorem Finite::le_min_normal_of_small({F: Format}, w: Finite(F), bz: w.bexp = 0, lt: w.mag < F.half()): w.val() <= (Finite::min_normal(F)).val() {
+    let b = Finite::H_bounds(w);
+    let p0: (Nat::pow(2, w.bexp) = 1) = j(sym(bz), λ v _ => Nat::pow(2, v) = 1, refl);
+    let u2: (w.units() = w.mag) = trans(Nat::cong(λ (v: Nat) => w.mag * v, p0), w.mag.add_left_zero());
+    let lh: ((Finite::min_normal(F)).H() = ((F.half() * Nat::pow(2, 0)) * 2).int()) = refl;
+    let lhh: ((F.half() * Nat::pow(2, 0)) = F.half()) = F.half().add_left_zero();
+    Finite::le_of_H_le(w, Finite::min_normal(F), omega(b.right, u2, lh, lhh, lt))
+}
+
+// Where a float of `F` sits relative to the window: it is a window float,
+// or it is at or below a window float at or below `x`, or at or above one at
+// or above `x`.
+fn Format::WinPlace(self F: Format, j, c: Nat, x: Rat, g: Finite(F)) → Type {
+    (∃ w: Finite(F.window(j, c)), w.val() ≈ g.val())
+        ∨ (∃ w: Finite(F.window(j, c)), g.val() <= w.val() ∧ w.val() <= x)
+        ∨ (∃ w: Finite(F.window(j, c)), x <= w.val() ∧ w.val() <= g.val())
+}
+
+theorem Format::win_low_place(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), g: Finite(F), pos: g.neg = False, lt: g.bexp < j):
+    F.WinPlace(j, c, x, g)
+{
+    let jc: (j + c <= F.span) = iw.left;
+    let lo: (j = 0 ∨ (F.win_lo(j, c)).val() <= x) = iw.right.right.left;
+    let lx: ((F.win_lo(j, c)).val() <= x) = match lo { Inl(z) => false_elim(omega(z, lt)), Inr(le) => le };
+    let ok = F.win_lo_ok(j, c, jc);
+    let lf = F.win_up(j, c, F.win_lo(j, c), ok);
+    let fc = F.canonical_elim(g.mag, g.bexp, g.ok);
+    let units = F.units_lt_lead(g.mag, g.bexp, j, fc.left, lt);
+    let z: (0 + j = j) = j.add_left_zero();
+    let lu: (lf.units() = F.half() * Nat::pow(2, j)) = j(sym(z), λ v _ => F.half() * Nat::pow(2, v) = F.half() * Nat::pow(2, j), refl);
+    let le: (g.val() <= lf.val()) = Finite::le_of_units(g, lf, pos, refl, j(sym(lu), λ v _ => g.units() <= v, Nat::le_of_lt(g.units(), F.half() * Nat::pow(2, j), units)));
+    Inr(Inl(Exists(F.win_lo(j, c), And(Rat::le_respects(g.val().same_refl(), F.win_up_val(j, c, F.win_lo(j, c), ok), le), lx))))
+}
+
+theorem Format::win_high_place(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), g: Finite(F), pos: g.neg = False,
+    not_top: ¬(j + c = F.span), norm: F.half() <= g.mag, ge: j + c <= g.bexp): F.WinPlace(j, c, x, g)
+{
+    let jc: (j + c <= F.span) = iw.left;
+    let hi: (j + c = F.span ∨ x < (F.win_hi(j, c)).val()) = iw.right.right.right;
+    let xh: (x < (F.win_hi(j, c)).val()) = match hi { Inl(t) => false_elim(not_top(t)), Inr(lt) => lt };
+    let ok = F.win_hi_ok(j, c, jc);
+    let hf = F.win_up(j, c, F.win_hi(j, c), ok);
+    let ge2: (c + j <= g.bexp) = j(j.add_comm(c), λ v _ => v <= g.bexp, ge);
+    let units = F.lead_le_units(g.mag, g.bexp, c + j, norm, ge2);
+    let le: (hf.val() <= g.val()) = Finite::le_of_units(hf, g, refl, pos, units);
+    Inr(Inr(Exists(F.win_hi(j, c), And(Rat::le_of_lt(xh), Rat::le_respects(F.win_up_val(j, c, F.win_hi(j, c), ok), g.val().same_refl(), le)))))
+}
+
+theorem Format::win_in_place(self F: Format, j, c: Nat, x: Rat, g: Finite(F), jb: j <= g.bexp, inb: g.bexp <= j + c,
+    free: F.specials.reserves_top().IsTrue() → j + c <= g.bexp → Succ(Succ(g.mag)) <= F.top()): F.WinPlace(j, c, x, g)
+{
+    let ok = F.win_down_ok(j, c, g, jb, inb, free);
+    Inl(Exists(F.win_down(j, c, g, ok), F.win_down_val(j, c, g, jb, ok)))
+}
+
+theorem Format::win_region(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), g: Finite(F)): F.WinPlace(j, c, x, g) {
+    let jc: (j + c <= F.span) = iw.left;
+    let nn: (0 <= x) = iw.right.left;
+    let fc = F.canonical_elim(g.mag, g.bexp, g.ok);
+    let range: (g.bexp <= F.span) = fc.right.left;
+    let fnorm: (g.bexp = 0 ∨ F.half() <= g.mag) = fc.right.right.left;
+    let ffree: (F.specials.reserves_top().IsTrue() → F.span <= g.bexp → Succ(Succ(g.mag)) <= F.top()) = fc.right.right.right;
+    match g.neg.eq_dec(True) {
+        Inl(ng) => {
+            let z = Finite::zero(F.window(j, c), False);
+            let zv: (z.val() ≈ 0) = Finite::zero_val(F.window(j, c));
+            Inr(Inl(Exists(z, And(Rat::le_respects(g.val().same_refl(), Rat::same_sym(zv), Finite::val_nonpos_of_neg(g, ng)),
+                Rat::le_respects(Rat::same_sym(zv), x.same_refl(), nn)))))
+        },
+        Inr(nt) => {
+            let pos: (g.neg = False) = match g.neg as λ b => b ≠ True → b = False { False => λ _ => refl, True => λ no => false_elim(no(refl)) }(nt);
+            match Succ(g.bexp).le_dec(j) {
+                Inl(lt) => F.win_low_place(j, c, x, iw, g, pos, lt),
+                Inr(nlt) => {
+                    let jb: (j <= g.bexp) = Nat::le_of_not_lt(g.bexp, j, nlt);
+                    match Succ(g.bexp).le_dec(j + c) {
+                        Inl(inner) => F.win_in_place(j, c, x, g, jb, Nat::le_of_lt(g.bexp, j + c, inner), λ _ at => false_elim(omega(inner, at))),
+                        Inr(outer) => {
+                            let ge: (j + c <= g.bexp) = Nat::le_of_not_lt(g.bexp, j + c, outer);
+                            match (j + c).eq_dec(F.span) {
+                                Inl(top) => F.win_in_place(j, c, x, g, jb, omega(top, range, ge), λ rt _ => ffree(rt, omega(top, ge))),
+                                Inr(not_top) => match F.half().le_dec(g.mag) {
+                                    Inl(norm) => F.win_high_place(j, c, x, iw, g, pos, not_top, norm, ge),
+                                    Inr(small) => {
+                                        let sub: (g.bexp = 0) = match fnorm { Inl(z) => z, Inr(le) => false_elim(small(le)) };
+                                        let room = F.room_of_small(g.mag, Nat::lt_of_not_le(g.mag, F.half(), small));
+                                        F.win_in_place(j, c, x, g, jb, omega(sub, ge), λ _ _ => room)
+                                    },
+                                },
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+// Every window float is a float of `F`, or sits at or below one at or below
+// `x`: the window's subnormals above `F`'s least binade are below its least
+// normal, which is a float of `F`.
+theorem Format::win_lift(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), w: Finite(F.window(j, c))):
+    (∃ g: Finite(F), g.val() ≈ w.val()) ∨ (∃ g: Finite(F), w.val() <= g.val() ∧ g.val() <= x)
+{
+    let jc: (j + c <= F.span) = iw.left;
+    let lo: (j = 0 ∨ (F.win_lo(j, c)).val() <= x) = iw.right.right.left;
+    match j.eq_dec(0) {
+        Inl(jz) => {
+            let ok = F.win_up_ok(j, c, jc, w, Inl(jz));
+            Inl(Exists(F.win_up(j, c, w, ok), F.win_up_val(j, c, w, ok)))
+        },
+        Inr(jnz) => match F.half().le_dec(w.mag) {
+            Inl(norm) => {
+                let ok = F.win_up_ok(j, c, jc, w, Inr(norm));
+                Inl(Exists(F.win_up(j, c, w, ok), F.win_up_val(j, c, w, ok)))
+            },
+            Inr(small) => {
+                let lx: ((F.win_lo(j, c)).val() <= x) = match lo { Inl(z) => false_elim(jnz(z)), Inr(le) => le };
+                let wc = (F.window(j, c)).canonical_elim(w.mag, w.bexp, w.ok);
+                let sub: (w.bexp = 0) = match wc.right.right.left { Inl(z) => z, Inr(le) => false_elim(small(le)) };
+                let le: (w.val() <= (F.win_lo(j, c)).val()) = Finite::le_min_normal_of_small(w, sub, Nat::lt_of_not_le(w.mag, F.half(), small));
+                let ok = F.win_lo_ok(j, c, jc);
+                let lf = F.win_up(j, c, F.win_lo(j, c), ok);
+                let lv = F.win_up_val(j, c, F.win_lo(j, c), ok);
+                Inr(Exists(lf, And(Rat::le_respects(w.val().same_refl(), Rat::same_sym(lv), le), Rat::le_respects(Rat::same_sym(lv), x.same_refl(), lx))))
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The window rounds as `F` does.
+
+// A window grid point is `F`'s, `j` binades finer.
+theorem Format::win_grid(self F: Format, j, c: Nat, n: Int): (F.window(j, c)).grid(n) ≈ F.grid(n * Nat::pow(2, j).int()) {
+    let wq = F.window_qmin(j, c);
+    let e: (F.qmin() - 1 + j.int() = (F.window(j, c)).qmin() - 1) = omega;
+    Dyadic::same_sym(j(e, λ v _ => Dyadic(n * Nat::pow(2, j).int(), F.qmin() - 1) ≈ Dyadic(n, v), Dyadic::align(n, F.qmin() - 1, j)))
+}
+
+// The window's overflow threshold is at most `F`'s, the same at the top,
+// positive, and above the window's top binade's first float.
+theorem Format::win_ovf_parts(self F: Format, j, c: Nat):
+    (F.window(j, c)).ovf() ≈ F.grid((((F.top() + F.top() - 1) * Nat::pow(2, c)) * Nat::pow(2, j)).int())
+{
+    let g = F.win_grid(j, c, ((F.top() + F.top() - 1) * Nat::pow(2, c)).int());
+    let m: (((F.top() + F.top() - 1) * Nat::pow(2, c)).int() * Nat::pow(2, j).int() = (((F.top() + F.top() - 1) * Nat::pow(2, c)) * Nat::pow(2, j)).int()) = refl;
+    j(m, λ v _ => (F.window(j, c)).ovf() ≈ F.grid(v), g)
+}
+
+theorem Format::win_ovf_le(self F: Format, j, c: Nat, jc: j + c <= F.span): (F.window(j, c)).ovf() <= F.ovf() {
+    let k = F.top() + F.top() - 1;
+    let pc = Nat::pow(2, c);
+    let pj = Nat::pow(2, j);
+    let pcj: (Nat::pow(2, c + j) = pc * pj) = Nat::pow_add(2, c, j);
+    let mono: (Nat::pow(2, c + j) <= Nat::pow(2, F.span)) = Nat::pow_le_pow_r(2, c + j, F.span, trivial, j(j.add_comm(c), λ v _ => v <= F.span, jc));
+    let sc: (k * Nat::pow(2, c + j) <= k * Nat::pow(2, F.span)) = k.mul_le_mono_l(Nat::pow(2, c + j), Nat::pow(2, F.span), mono);
+    let asc: ((k * pc) * pj = k * Nat::pow(2, c + j)) = trans(k.mul_assoc(pc, pj), Nat::cong(λ (v: Nat) => k * v, sym(pcj)));
+    let od: (F.ovf_h() = k * Nat::pow(2, F.span)) = refl;
+    let le: (((k * pc) * pj).int() <= F.ovf_h().int()) = omega(sc, asc, od);
+    Rat::le_respects(Rat::same_sym(F.win_ovf_parts(j, c)), F.ovf().same_refl(), F.grid_le(((k * pc) * pj).int(), F.ovf_h().int(), le))
+}
+
+theorem Format::win_ovf_top(self F: Format, j, c: Nat, top: j + c = F.span): F.ovf() <= (F.window(j, c)).ovf() {
+    let k = F.top() + F.top() - 1;
+    let pc = Nat::pow(2, c);
+    let pj = Nat::pow(2, j);
+    let pcj: (Nat::pow(2, c + j) = pc * pj) = Nat::pow_add(2, c, j);
+    let sp: (Nat::pow(2, F.span) = Nat::pow(2, c + j)) = Nat::cong(λ (v: Nat) => Nat::pow(2, v), trans(sym(top), j.add_comm(c)));
+    let asc: ((k * pc) * pj = k * Nat::pow(2, c + j)) = trans(k.mul_assoc(pc, pj), Nat::cong(λ (v: Nat) => k * v, sym(pcj)));
+    let e1: (k * Nat::pow(2, F.span) = k * Nat::pow(2, c + j)) = Nat::cong(λ (v: Nat) => k * v, sp);
+    let od: (F.ovf_h() = k * Nat::pow(2, F.span)) = refl;
+    let le: (F.ovf_h().int() <= ((k * pc) * pj).int()) = omega(e1, asc, od);
+    Rat::le_respects(F.ovf().same_refl(), Rat::same_sym(F.win_ovf_parts(j, c)), F.grid_le(F.ovf_h().int(), ((k * pc) * pj).int(), le))
+}
+
+theorem Format::win_ovf_pos(self F: Format, j, c: Nat): 0 < (F.window(j, c)).ovf() {
+    let W = F.window(j, c);
+    let f = F.four_le_top();
+    let p = Nat::pow_pos(a := 2, n := c);
+    let k: (1 <= F.top() + F.top() - 1) = omega(f);
+    let pos: (0 < W.ovf_h()) = Nat::mul_pos(a := F.top() + F.top() - 1, b := Nat::pow(2, c), pa := k, pb := p);
+    Rat::lt_respects(W.grid_zero(), W.ovf().same_refl(), W.grid_lt(0, W.ovf_h().int(), omega(pos)))
+}
+
+theorem Format::win_hi_le_ovf(self F: Format, j, c: Nat): (F.win_hi(j, c)).val() <= (F.window(j, c)).ovf() {
+    let W = F.window(j, c);
+    let f = F.four_le_top();
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    let hh: ((F.win_hi(j, c)).H() = ((F.half() * Nat::pow(2, c)) * 2).int()) = refl;
+    let pc = Nat::pow(2, c);
+    let m1: ((F.half() * pc) * 2 = F.top() * pc) = ring(t);
+    let m2: (F.top() * pc <= (F.top() + F.top() - 1) * pc) = Nat::mul_le_mono_r(pc, F.top(), F.top() + F.top() - 1, omega(f));
+    let od: (W.ovf_h() = (F.top() + F.top() - 1) * pc) = refl;
+    Rat::le_respects(Rat::same_sym((F.win_hi(j, c)).val_grid()), W.ovf().same_refl(), W.grid_le((F.win_hi(j, c)).H(), W.ovf_h().int(), omega(hh, m1, m2, od)))
+}
+
+// The order facts a rounding states carry from a window float `w` to a
+// float `f` of `F` with the same value. Each quantifies over `F`'s floats,
+// which `win_region` places against the window's.
+
+theorem Format::win_below(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), f: Finite(F), w: Finite(F.window(j, c)),
+    e: f.val() ≈ w.val(), b: Finite::Below(x, w)): Finite::Below(x, f)
+{
+    let ew = Rat::same_sym(e);
+    And(Rat::le_respects(ew, x.same_refl(), b.left), λ g gx => match F.win_region(j, c, x, iw, g) {
+        Inl(Exists(v, vg)) => Rat::le_respects(vg, ew, b.right(v, Rat::le_respects(Rat::same_sym(vg), x.same_refl(), gx))),
+        Inr(Inl(Exists(v, lw))) => Rat::le_respects(g.val().same_refl(), ew, Rat::le_trans(lw.left, b.right(v, lw.right))),
+        Inr(Inr(Exists(v, hw))) => {
+            let vx: (v.val() <= x) = Rat::le_trans(hw.right, gx);
+            Rat::le_respects(g.val().same_refl(), ew, Rat::le_trans(Rat::le_trans(gx, hw.left), b.right(v, vx)))
+        },
+    })
+}
+
+theorem Format::win_above(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), f: Finite(F), w: Finite(F.window(j, c)),
+    e: f.val() ≈ w.val(), a: Finite::Above(x, w)): Finite::Above(x, f)
+{
+    let ew = Rat::same_sym(e);
+    And(Rat::le_respects(x.same_refl(), ew, a.left), λ g xg => match F.win_region(j, c, x, iw, g) {
+        Inl(Exists(v, vg)) => Rat::le_respects(ew, vg, a.right(v, Rat::le_respects(x.same_refl(), Rat::same_sym(vg), xg))),
+        Inr(Inl(Exists(v, lw))) => {
+            let xv: (x <= v.val()) = Rat::le_trans(xg, lw.left);
+            Rat::le_respects(ew, g.val().same_refl(), Rat::le_trans(a.right(v, xv), Rat::le_trans(lw.right, xg)))
+        },
+        Inr(Inr(Exists(v, hw))) => Rat::le_respects(ew, g.val().same_refl(), Rat::le_trans(a.right(v, hw.left), hw.right)),
+    })
+}
+
+theorem Format::win_nearest(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), f: Finite(F), w: Finite(F.window(j, c)),
+    e: f.val() ≈ w.val(), n: Finite::Nearest(x, w)): Finite::Nearest(x, f)
+{
+    let fd: (f.dist(x) ≈ w.dist(x)) = Rat::abs_respects(x := f.val() - x, x2 := w.val() - x, hx := Rat::sub_respects(x := f.val(), x2 := w.val(), y := x, y2 := x, hx := e, hy := x.same_refl()));
+    λ g => Rat::le_respects(Rat::same_sym(fd), g.dist(x).same_refl(), match F.win_region(j, c, x, iw, g) {
+        Inl(Exists(v, vg)) => Rat::le_respects(w.dist(x).same_refl(),
+            Rat::abs_respects(x := v.val() - x, x2 := g.val() - x, hx := Rat::sub_respects(x := v.val(), x2 := g.val(), y := x, y2 := x, hx := vg, hy := x.same_refl())), n(v)),
+        Inr(Inl(Exists(v, lw))) => Rat::le_trans(n(v), x.dist_le_of_below(g.val(), v.val(), lw.left, lw.right)),
+        Inr(Inr(Exists(v, hw))) => Rat::le_trans(n(v), x.dist_le_of_above(g.val(), v.val(), hw.left, hw.right)),
+    })
+}
+
+// A nearest float of `F` is no farther than any window float.
+theorem Format::win_near_all(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), g: Finite(F), n: Finite::Nearest(x, g)):
+    (v: Finite(F.window(j, c))) → g.dist(x) <= v.dist(x)
+{
+    λ v => match F.win_lift(j, c, x, iw, v) {
+        Inl(Exists(h, hv)) => Rat::le_respects(g.dist(x).same_refl(),
+            Rat::abs_respects(x := h.val() - x, x2 := v.val() - x, hx := Rat::sub_respects(x := h.val(), x2 := v.val(), y := x, y2 := x, hx := hv, hy := x.same_refl())), n(h)),
+        Inr(Exists(h, vh)) => Rat::le_trans(n(h), x.dist_le_of_below(v.val(), h.val(), vh.left, vh.right)),
+    }
+}
+
+// A nearest float of `F` has the value of a nearest window float.
+theorem Format::win_nearest_down(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), g: Finite(F), n: Finite::Nearest(x, g)):
+    ∃ w: Finite(F.window(j, c)), Finite::Nearest(x, w) ∧ w.val() ≈ g.val()
+{
+    let all = F.win_near_all(j, c, x, iw, g, n);
+    let near_of = λ (v: Finite(F.window(j, c))) (d: v.dist(x) <= g.dist(x)) => λ (h: Finite(F.window(j, c))) => Rat::le_trans(d, all(h));
+    match F.win_region(j, c, x, iw, g) {
+        Inl(Exists(v, vg)) => {
+            let d: (v.dist(x) ≈ g.dist(x)) = Rat::abs_respects(x := v.val() - x, x2 := g.val() - x, hx := Rat::sub_respects(x := v.val(), x2 := g.val(), y := x, y2 := x, hx := vg, hy := x.same_refl()));
+            Exists(v, And(near_of(v, Rat::le_of_same(d)), vg))
+        },
+        Inr(Inl(Exists(v, lw))) => {
+            let gv: (g.val() ≈ v.val()) = x.same_of_dist_below(g.val(), v.val(), lw.left, lw.right, all(v));
+            Exists(v, And(near_of(v, x.dist_le_of_below(g.val(), v.val(), lw.left, lw.right)), Rat::same_sym(gv)))
+        },
+        Inr(Inr(Exists(v, hw))) => {
+            let gv: (g.val() ≈ v.val()) = x.same_of_dist_above(g.val(), v.val(), hw.left, hw.right, all(v));
+            Exists(v, And(near_of(v, x.dist_le_of_above(g.val(), v.val(), hw.left, hw.right)), Rat::same_sym(gv)))
+        },
+    }
+}
+
+theorem Format::win_exceeds(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), ex: (F.window(j, c)).Exceeds(x)): F.Exceeds(x) {
+    λ g => match F.win_region(j, c, x, iw, g) {
+        Inl(Exists(v, vg)) => Rat::lt_respects(vg, x.same_refl(), ex(v)),
+        Inr(Inl(Exists(v, lw))) => Rat::lt_of_le_of_lt(lw.left, ex(v)),
+        Inr(Inr(Exists(v, hw))) => false_elim(Rat::not_le_of_lt(x := v.val(), y := x, h := ex(v))(hw.left)),
+    }
+}
+
+theorem Format::win_undercuts(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), un: (F.window(j, c)).Undercuts(x)): F.Undercuts(x) {
+    λ g => match F.win_region(j, c, x, iw, g) {
+        Inl(Exists(v, vg)) => Rat::lt_respects(x.same_refl(), vg, un(v)),
+        Inr(Inl(Exists(v, lw))) => false_elim(Rat::not_le_of_lt(x := x, y := v.val(), h := un(v))(lw.right)),
+        Inr(Inr(Exists(v, hw))) => Rat::lt_of_lt_of_le(un(v), hw.right),
+    }
+}
+
+theorem Format::win_fits(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), fi: (F.window(j, c)).Fits(x)): F.Fits(x) {
+    λ has => Rat::lt_of_lt_of_le(fi(has), F.win_ovf_le(j, c, iw.left))
+}
+
+// A nearest rounding overflows in the window only where it does in `F`.
+theorem Format::win_ovf_reach(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), le: (F.window(j, c)).ovf() <= x): F.ovf() <= x {
+    match iw.right.right.right {
+        Inl(top) => Rat::le_trans(F.win_ovf_top(j, c, top), le),
+        Inr(lt) => false_elim(Rat::not_le_of_lt(x := x, y := (F.window(j, c)).ovf(), h := Rat::lt_of_lt_of_le(lt, F.win_hi_le_ovf(j, c)))(le)),
+    }
+}
+
+theorem Format::win_no_neg_ovf(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), le: x <= -(F.window(j, c)).ovf()): False {
+    let W = F.window(j, c);
+    let nz: Rat::Same(Rat::neg(0), 0) = omega;
+    let lt: (-W.ovf() < 0) = Rat::lt_respects((-W.ovf()).same_refl(), nz, Rat::neg_lt(x := 0, y := W.ovf(), h := F.win_ovf_pos(j, c)));
+    Rat::lt_irrefl(0, Rat::lt_of_le_of_lt(Rat::le_trans(iw.right.left, le), lt))
+}
+
+// A finite window rounding, read in `F`, is a rounding in `F`.
+theorem Format::window_rounds_fin(self F: Format, j, c: Nat, mode: Mode, x: Rat, iw: F.InWindow(j, c, x),
+    w: Finite(F.window(j, c)), ok: F.canonical(w.mag, w.bexp + j).IsTrue(), hr: RoundsTo(F.window(j, c), mode, x, Fin(w))):
+    RoundsTo(F, mode, x, Fin(F.win_up(j, c, w, ok)))
+{
+    let f = F.win_up(j, c, w, ok);
+    let e: (f.val() ≈ w.val()) = F.win_up_val(j, c, w, ok);
+    let ties = λ (all: (g: Finite(F.window(j, c))) → Finite::Nearest(x, g) → g.val() ≈ w.val() ∨ Nat::Even(w.mag)) (g: Finite(F)) (n: Finite::Nearest(x, g)) =>
+        match F.win_nearest_down(j, c, x, iw, g, n) as λ _ => g.val() ≈ f.val() ∨ Nat::Even(f.mag) {
+            Exists(v, nv) => match all(v, nv.left) {
+                Inl(s) => Inl(Rat::same_trans(Rat::same_sym(nv.right), Rat::same_trans(s, Rat::same_sym(e)))),
+                Inr(ev) => Inr(ev),
+            },
+        };
+    let away = λ (all: (g: Finite(F.window(j, c))) → Finite::Nearest(x, g) → g.val().abs() <= w.val().abs()) (g: Finite(F)) (n: Finite::Nearest(x, g)) =>
+        match F.win_nearest_down(j, c, x, iw, g, n) as λ _ => g.val().abs() <= f.val().abs() {
+            Exists(v, nv) => Rat::le_respects(Rat::abs_respects(x := v.val(), x2 := g.val(), hx := nv.right), Rat::abs_respects(x := w.val(), x2 := f.val(), hx := Rat::same_sym(e)),
+                all(v, nv.left)),
+        };
+    match mode as λ md => RoundsTo(F.window(j, c), md, x, Fin(w)) → RoundsTo(F, md, x, Fin(f)) {
+        NearestEven => λ h => And(And(F.win_nearest(j, c, x, iw, f, w, e, h.left.left), ties(h.left.right)), F.win_fits(j, c, x, iw, h.right)),
+        NearestAway => λ h => And(And(F.win_nearest(j, c, x, iw, f, w, e, h.left.left), away(h.left.right)), F.win_fits(j, c, x, iw, h.right)),
+        TowardPos => λ h => match h {
+            Inl(a) => Inl(F.win_above(j, c, x, iw, f, w, e, a)),
+            Inr(s) => Inr(And(s.left, And(F.win_below(j, c, x, iw, f, w, e, s.right.left), F.win_exceeds(j, c, x, iw, s.right.right)))),
+        },
+        TowardNeg => λ h => match h {
+            Inl(b) => Inl(F.win_below(j, c, x, iw, f, w, e, b)),
+            Inr(s) => Inr(And(s.left, And(F.win_above(j, c, x, iw, f, w, e, s.right.left), F.win_undercuts(j, c, x, iw, s.right.right)))),
+        },
+        TowardZero => λ h => And(λ nn => F.win_below(j, c, x, iw, f, w, e, h.left(nn)), λ np => F.win_above(j, c, x, iw, f, w, e, h.right(np))),
+    }(hr)
+}
+
+theorem Format::window_rounds_inf(self F: Format, j, c: Nat, mode: Mode, x: Rat, iw: F.InWindow(j, c, x),
+    n: Bool, has: F.specials.has_inf().IsTrue(), hr: RoundsTo(F.window(j, c), mode, x, Inf(n, has))): RoundsTo(F, mode, x, Inf(n, has))
+{
+    match mode as λ md => RoundsTo(F.window(j, c), md, x, Inf(n, has)) → RoundsTo(F, md, x, Inf(n, has)) {
+        NearestEven => match n {
+            False => λ h => F.win_ovf_reach(j, c, x, iw, h),
+            True => λ h => false_elim(F.win_no_neg_ovf(j, c, x, iw, h)),
+        },
+        NearestAway => match n {
+            False => λ h => F.win_ovf_reach(j, c, x, iw, h),
+            True => λ h => false_elim(F.win_no_neg_ovf(j, c, x, iw, h)),
+        },
+        TowardPos => match n {
+            False => λ h => F.win_exceeds(j, c, x, iw, h),
+            True => λ h => h,
+        },
+        TowardNeg => match n {
+            False => λ h => h,
+            True => λ h => F.win_undercuts(j, c, x, iw, h),
+        },
+        TowardZero => λ h => h,
+    }(hr)
+}
+
+// A window rounding read in `F`. A finite result that is not a float of `F`
+// (a window subnormal above `F`'s least binade, which a value in the window
+// never rounds to) gives `fb` instead, so the reading needs no proof.
+fn Format::widen(self F: Format, j, c: Nat, r: Float(F.window(j, c)), fb: Float(F)) → Float(F) {
+    match r {
+        Fin(w) => match F.canonical(w.mag, w.bexp + j).is_true_dec() { Inl(ok) => Fin(F.win_up(j, c, w, ok)), Inr(_) => fb },
+        Inf(n, has) => Inf(n, has),
+        NaN(has) => NaN(has),
+    }
+}
+
+theorem Format::window_rounds(self F: Format, j, c: Nat, mode: Mode, x: Rat, iw: F.InWindow(j, c, x),
+    r: Float(F.window(j, c)), fb: Float(F), hr: RoundsTo(F.window(j, c), mode, x, r), hf: RoundsTo(F, mode, x, fb)):
+    RoundsTo(F, mode, x, F.widen(j, c, r, fb))
+{
+    match r as λ r0 => RoundsTo(F.window(j, c), mode, x, r0) → RoundsTo(F, mode, x, F.widen(j, c, r0, fb)) {
+        Fin(w) => λ h => match F.canonical(w.mag, w.bexp + j).is_true_dec() {
+            Inl(ok) => F.window_rounds_fin(j, c, mode, x, iw, w, ok, h),
+            Inr(_) => hf,
+        },
+        Inf(n, has) => λ h => F.window_rounds_inf(j, c, mode, x, iw, n, has, h),
+        NaN(_) => λ no => false_elim(no),
+    }(hr)
+}

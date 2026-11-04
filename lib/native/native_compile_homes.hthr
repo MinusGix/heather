@@ -1,0 +1,695 @@
+// Where the environment's words are between statements, once each word has
+// a home (native_alloc; docs/native-register-allocation-design.md).
+//
+// The region still holds a file of words (`Target::Placed`), but only the
+// words in their slots are read from it; a word homed in a register is read
+// from that register, and its slot may hold anything. So the invariant
+// between statements (`Target::Held`) is over a set of live words: some file
+// of words is placed in the region with the environment's buffers and
+// command line, and every live word reads as the environment's from its
+// home (`Homes::Agrees`). A dead word is anywhere.
+//
+// The registers enter only through `home_values`, the home pool's six read
+// in order. A write to a register outside the pool leaves it as it was by
+// evaluation, so the scratch a statement uses (RAX, RBX, RCX, RDX, RSI, RDI,
+// R8, R9, R11, everything Linux's SYSCALL writes) passes `Held` along
+// unchanged, and only a write to a pool register needs a lemma: a home's
+// own write (`held_reg_set`), a register no word lives in
+// (`held_unused`), or code that keeps every register a word lives in
+// (`held_kept`).
+import native_source;
+import native_alloc;
+import native_compile;
+import native_compile_facts;
+import native_compile_region;
+import function_ir;
+import function_ir_eval;
+import linux_x86_64_byte_memory;
+import x86_64;
+import x86_64_kept;
+import x86_64_byte_memory;
+import x86_64_asm_runs;
+import x86_64_store;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Registers apart
+
+theorem Nat::same_comm(self n: Nat): (m: Nat) → n.same(m) = m.same(n) {
+    match n {
+        Zero => λ m => match m { Zero => refl, Succ(_) => refl },
+        Succ(_, ih) => λ m => match m { Zero => refl, Succ(l) => ih(l) },
+    }
+}
+
+theorem Nat::same_false(self n: Nat, m: Nat, ne: n ≠ m): n.same(m) = False {
+    match e: n.same(m) {
+        True => false_elim(ne(n.same_sound(m, e))),
+        False => refl,
+    }
+}
+
+theorem Nat::differs_of_ne(self a: Nat, b: Nat, ne: a ≠ b): a.differs(b) = True {
+    (match a.eq_dec(b) {
+        Inl(e) => false_elim(ne(e)),
+        Inr(_) => refl,
+    })
+}
+
+theorem Gpr::same_comm(self a: Gpr, b: Gpr): a.same(b) = b.same(a) { a.index().same_comm(b.index()) }
+
+theorem Bool::false_of_not(b: Bool, no: (!b).IsTrue()): b = False { not_true_false(b, no) }
+
+// A register other than the one written reads as it did.
+theorem read_gpr_other(register, query: Gpr, value: BitVec(64), g: Gprs, differ: register.same(query) = False):
+    read_gpr(query, write_gpr(register, value, g)) = read_gpr(query, g) {
+    j(sym(differ), λ b _ => (match b { False => g.at(query), True => value }) = g.at(query), refl)
+}
+
+// A register absent from a list is apart from its head, and from the rest.
+theorem Gpr::absent_head(self register: Gpr, other: Gpr, rest: List<Gpr>, absent: register.absent_from(Cons(other, rest)).IsTrue()):
+    other.same(register) = False {
+    let parts = Bool::is_true_and(!register.same(other), register.absent_from(rest), absent);
+    trans(other.same_comm(register), Bool::false_of_not(register.same(other), parts.left))
+}
+
+theorem Gpr::absent_rest(self register: Gpr, other: Gpr, rest: List<Gpr>, absent: register.absent_from(Cons(other, rest)).IsTrue()):
+    register.absent_from(rest).IsTrue() {
+    Bool::is_true_and(!register.same(other), register.absent_from(rest), absent).right
+}
+
+// ---------------------------------------------------------------------------
+// Sets of words as lists
+
+theorem List::mem_filter_of<A>(self xs: List<A>, p: A → Bool, a: A, keep: p(a) = True): Mem(a, xs) → Mem(a, xs.filter(p)) {
+    match xs {
+        Nil => λ never => never,
+        Cons(h, rest) => λ m => match dropped: p(h) {
+            True => match m { Inl(e) => Inl(e), Inr(later) => Inr(rest.mem_filter_of(p, a, keep, later)) },
+            False => match m {
+                Inl(e) => absurd(trans(sym(dropped), j(e, λ x _ => p(x) = True, keep))),
+                Inr(later) => rest.mem_filter_of(p, a, keep, later),
+            },
+        },
+    }
+}
+
+theorem List::union_left(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, a)): Mem(i, a.union(b)) {
+    a.mem_append_l(b.filter(λ (id: Nat) => absent(id, a)), i, m)
+}
+
+theorem List::union_right(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, b)): Mem(i, a.union(b)) {
+    match none: absent(i, a) {
+        True => a.mem_append_r(b.filter(λ (id: Nat) => absent(id, a)), i,
+            b.mem_filter_of(λ (id: Nat) => absent(id, a), i, none, m)),
+        False => a.union_left(b, i, absent_false_mem(i, a, none)),
+    }
+}
+
+// A word of `out` other than the one written is live before the write.
+theorem live_before_keeps(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat, m: Mem(i, out), ne: i ≠ written):
+    Mem(i, live_before(reads, written, out)) {
+    let apart: (absent(i, [written]) = True) = j(sym(i.differs_of_ne(written, ne)), λ b _ => Bool::and(b, True) = True, refl);
+    reads.union_right(out.minus([written]), i, out.mem_filter_of(λ (id: Nat) => absent(id, [written]), i, apart, m))
+}
+
+// What a step reads is live before it.
+theorem live_before_reads(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat, m: Mem(i, reads)): Mem(i, live_before(reads, written, out)) {
+    reads.union_left(out.minus([written]), i, m)
+}
+
+// ---------------------------------------------------------------------------
+// The one-pass check is the checks
+
+theorem Homes::nodes_checked_sound(self homes: Homes, out: List<Nat>, nodes: List<Node>): (l: List<Nat>) →
+    homes.nodes_checked(nodes, out) = Some(l) → (l = nodes_live_in(nodes, out)) ∧ homes.nodes_apart(nodes, out).IsTrue() {
+    match nodes {
+        Nil => λ l same => ⟨sym(Option::some_inj(out, l, same)), trivial⟩,
+        Cons(node, rest) => λ l => {
+            let id = node_output(node).id;
+            let reads = function_ir_eval::Node::reads(node);
+            (match got: homes.nodes_checked(rest, out) {
+                None => λ none => absurd(none),
+                Some(after) => {
+                    let inner = homes.nodes_checked_sound(out, rest, after, got);
+                    (match ok: homes.apart(id, after) {
+                        False => λ none => absurd(none),
+                        True => λ same => j(inner.left, λ a _ => (l = live_before(reads, id, a)) ∧ (homes.apart(id, a) && homes.nodes_apart(rest, out)).IsTrue(),
+                            ⟨sym(Option::some_inj(live_before(reads, id, after), l, same)),
+                             Bool::is_true_and_intro(homes.apart(id, after), homes.nodes_apart(rest, out), j(sym(ok), λ v _ => v.IsTrue(), trivial), inner.right)⟩),
+                    })
+                },
+            })
+        },
+    }
+}
+
+// What `Stmt::checked` finds is the set live before the statement, and the
+// checks hold.
+// A region's check finds what is live before it.
+theorem Homes::region_checked_sound(self homes: Homes, region: StructuredRegion, out, l: List<Nat>, got: homes.region_checked(region, out) = Some(l)):
+    (l = homes.region_live(region, out)) ∧ Bool::IsTrue(match homes.region_checked(region, out) { None => False, Some(_) => True }) {
+    ⟨j(sym(got), λ o _ => l = (match o { None => out, Some(live) => live }), refl),
+        j(sym(got), λ o _ => Bool::IsTrue(match o { None => False, Some(_) => True }), trivial)⟩
+}
+
+theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l: List<Nat>) →
+    s.checked(homes, out) = Some(l) → (l = s.live_in(homes, out)) ∧ s.checks(homes, out).IsTrue() {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => λ out l => (match got: homes.nodes_checked(body.nodes, out) {
+                None => λ none => absurd(none),
+                Some(live) => {
+                    let inner = homes.nodes_checked_sound(out, body.nodes, live, got);
+                    (match homes.all_apart(nodes_writes(body.nodes), out) as λ b => homes.all_apart(nodes_writes(body.nodes), out) = b →
+                            (match b { False => None, True => Some(live) }) = Some(l) →
+                            (l = nodes_live_in(body.nodes, out)) ∧ (homes.nodes_apart(body.nodes, out) && homes.all_apart(nodes_writes(body.nodes), out)).IsTrue() {
+                        False => λ _ none => absurd(none),
+                        True => λ ok same => ⟨trans(sym(Option::some_inj(live, l, same)), inner.left),
+                            Bool::is_true_and_intro(homes.nodes_apart(body.nodes, out), homes.all_apart(nodes_writes(body.nodes), out), inner.right,
+                                j(sym(ok), λ v _ => v.IsTrue(), trivial))⟩,
+                    })(refl)
+                },
+            }),
+            Sequence(a, b) => λ out l same => homes.region_checked_sound(Sequence(a, b), out, l, same),
+            Compose(a, b) => λ out l same => homes.region_checked_sound(Compose(a, b), out, l, same),
+            Conditional(a, b, c, d, e, f) => λ out l same => homes.region_checked_sound(Conditional(a, b, c, d, e, f), out, l, same),
+            Call(a, b, c) => λ out l same => homes.region_checked_sound(Call(a, b, c), out, l, same),
+            Loop(a, b, c, d, e, f, g, h, i) => λ out l same => homes.region_checked_sound(Loop(a, b, c, d, e, f, g, h, i), out, l, same),
+        },
+        Invoke(shape) => λ out l => (match homes.apart(shape.result(), out) as λ b => homes.apart(shape.result(), out) = b →
+                (match b { False => None, True => Some(live_before(shape.reads(), shape.result(), out)) }) = Some(l) →
+                (l = live_before(shape.reads(), shape.result(), out)) ∧ homes.apart(shape.result(), out).IsTrue() {
+            False => λ _ none => absurd(none),
+            True => λ ok same => ⟨sym(Option::some_inj(live_before(shape.reads(), shape.result(), out), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
+        })(refl),
+        Then(first, rest) => λ out l => (match got_rest: rest.checked(homes, out) {
+            None => λ none => absurd(none),
+            Some(mid) => λ got_first => {
+                let r = rest.checked_sound(homes, out, mid, got_rest);
+                let f = j(r.left, λ a _ => (l = first.live_in(homes, a)) ∧ first.checks(homes, a).IsTrue(), first.checked_sound(homes, mid, l, got_first));
+                ⟨f.left, Bool::is_true_and_intro(first.checks(homes, rest.live_in(homes, out)), rest.checks(homes, out), f.right, r.right)⟩
+            },
+        }),
+        Branch(condition, yes, no) => λ out l => (match got_yes: yes.checked(homes, out) {
+            None => λ none => absurd(none),
+            Some(y) => (match got_no: no.checked(homes, out) {
+                None => λ none => absurd(none),
+                Some(n) => λ same => {
+                    let ys = yes.checked_sound(homes, out, y, got_yes);
+                    let ns = no.checked_sound(homes, out, n, got_no);
+                    let e1 = j(ys.left, λ a _ => Cons(condition, y.union(n)) = Cons(condition, a.union(n)), refl);
+                    let e2 = j(ns.left, λ a _ => Cons(condition, y.union(n)) = Cons(condition, yes.live_in(homes, out).union(a)), e1);
+                    ⟨trans(sym(Option::some_inj(Cons(condition, y.union(n)), l, same)), e2),
+                     Bool::is_true_and_intro(yes.checks(homes, out), no.checks(homes, out), ys.right, ns.right)⟩
+                },
+            }),
+        }),
+        Repeat(body, again) => λ out l => {
+            let set = homes.loop_set(again);
+            let after = loop_after(again, set, out);
+            (match got: body.checked(homes, after) {
+                None => λ none => absurd(none),
+                Some(b) => {
+                    let bs = body.checked_sound(homes, after, b, got);
+                    (match b.within(set) as λ w => b.within(set) = w → (match w { False => None, True => Some(set) }) = Some(l) →
+                            (l = set) ∧ (body.live_in(homes, after).within(set) && body.checks(homes, after)).IsTrue() {
+                        False => λ _ none => absurd(none),
+                        True => λ inside same => ⟨sym(Option::some_inj(set, l, same)),
+                            Bool::is_true_and_intro(body.live_in(homes, after).within(set), body.checks(homes, after),
+                                j(bs.left, λ a _ => a.within(set).IsTrue(), j(sym(inside), λ v _ => v.IsTrue(), trivial)), bs.right)⟩,
+                    })(refl)
+                },
+            })
+        },
+        Exit(status) => λ out l same => ⟨sym(Option::some_inj([status], l, same)), trivial⟩,
+        Arg(index, _, len) => λ out l => (match homes.apart(len, out) as λ b => homes.apart(len, out) = b →
+                (match b { False => None, True => Some(live_before([index], len, out)) }) = Some(l) →
+                (l = live_before([index], len, out)) ∧ homes.apart(len, out).IsTrue() {
+            False => λ _ none => absurd(none),
+            True => λ ok same => ⟨sym(Option::some_inj(live_before([index], len, out), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
+        })(refl),
+        Perform(_, args, results) => λ out l => (match homes.all_apart(results, out) as λ b => homes.all_apart(results, out) = b →
+                (match b { False => None, True => Some(args.union(out.minus(results))) }) = Some(l) →
+                (l = args.union(out.minus(results))) ∧ homes.all_apart(results, out).IsTrue() {
+            False => λ _ none => absurd(none),
+            True => λ ok same => ⟨sym(Option::some_inj(args.union(out.minus(results)), l, same)), j(sym(ok), λ v _ => v.IsTrue(), trivial)⟩,
+        })(refl),
+    }
+}
+
+// What a compile's check of its homes gives the proof.
+theorem Source::allocation_sound(self src: Source, homes: Homes, ok: src.allocation_ok(homes).IsTrue()):
+    homes.fits().IsTrue() ∧ (homes.slotted(src.main.live_in(homes, [])).IsTrue() ∧ src.main.checks(homes, []).IsTrue()) {
+    let parts = Bool::is_true_and(homes.fits(), match src.main.checked(homes, []) { None => False, Some(live) => homes.slotted(live) }, ok);
+    ⟨parts.left, (match src.main.checked(homes, []) as λ o => src.main.checked(homes, []) = o →
+            Bool::IsTrue(match o { None => False, Some(live) => homes.slotted(live) }) →
+            homes.slotted(src.main.live_in(homes, [])).IsTrue() ∧ src.main.checks(homes, []).IsTrue() {
+        None => λ _ no => false_elim(no),
+        Some(live) => λ got slotted => {
+            let sound = src.main.checked_sound(homes, [], live, got);
+            ⟨j(sound.left, λ a _ => homes.slotted(a).IsTrue(), slotted), sound.right⟩
+        },
+    })(refl, parts.right)⟩
+}
+
+// ---------------------------------------------------------------------------
+// The homes, read off their list
+
+// A register home is in the pool.
+theorem List::home_in_pool(self of: List<Home>, loops: List<List<Nat>>): of.homes_fit().IsTrue() → (id, k: Nat) → Homes(of, loops).home(id) = InReg(k) → k < 6 {
+    match of {
+        Nil => λ _ id k at => absurd(at),
+        Cons(home, rest) => λ fit id => {
+            let parts = Bool::is_true_and(home.in_pool(), rest.homes_fit(), fit);
+            match id {
+                Zero => λ k at => Nat::leb_sound(Succ(k), 6, j(at, λ h _ => h.in_pool().IsTrue(), parts.left)),
+                Succ(i) => λ k at => rest.home_in_pool(loops, parts.right, i, k, at),
+            }
+        },
+    }
+}
+
+theorem Homes::in_pool(self homes: Homes, fits: homes.fits().IsTrue(), id, k: Nat, at: homes.home(id) = InReg(k)): k < 6 {
+    homes.of.home_in_pool(homes.loops, fits, id, k, at)
+}
+
+theorem Bool::or_true_l(self a: Bool, b: Bool, set: a = True): a || b = True { j(sym(set), λ x _ => (x || b) = True, refl) }
+
+theorem Bool::or_true_r(self a: Bool, b: Bool, set: b = True): a || b = True {
+    match a { False => set, True => refl }
+}
+
+// A register a word lives in is one the homes use.
+theorem List::home_used(self of: List<Home>, loops: List<List<Nat>>): (id, k: Nat) → Homes(of, loops).home(id) = InReg(k) → of.homes_use(home_register(k)) = True {
+    match of {
+        Nil => λ id k at => absurd(at),
+        Cons(home, rest) => λ id => match id {
+            Zero => λ k at => j(sym(at), λ h _ => (match h { InSlot => rest.homes_use(home_register(k)),
+                    InReg(r) => home_register(r).same(home_register(k)) || rest.homes_use(home_register(k)) }) = True,
+                home_register(k).same(home_register(k)).or_true_l(rest.homes_use(home_register(k)), home_register(k).index().same_self())),
+            Succ(i) => λ k at => {
+                let later = rest.home_used(loops, i, k, at);
+                match home {
+                    InSlot => later,
+                    InReg(r) => home_register(r).same(home_register(k)).or_true_r(rest.homes_use(home_register(k)), later),
+                }
+            },
+        },
+    }
+}
+
+theorem Homes::used(self homes: Homes, id, k: Nat, at: homes.home(id) = InReg(k)): homes.uses(home_register(k)) = True {
+    homes.of.home_used(homes.loops, id, k, at)
+}
+
+// A register outside the pool is no home's.
+theorem home_register_apart(x: Gpr, outside: x.absent_from(home_pool()).IsTrue(), k: Nat): home_register(k).same(x) = False {
+    let r13 = x.absent_rest(R12, [R13, R14, R15, Rbp, R10], outside);
+    let r14 = x.absent_rest(R13, [R14, R15, Rbp, R10], r13);
+    let r15 = x.absent_rest(R14, [R15, Rbp, R10], r14);
+    let rbp = x.absent_rest(R15, [Rbp, R10], r15);
+    let r10 = x.absent_rest(Rbp, [R10], rbp);
+    match k {
+        Zero => x.absent_head(R12, [R13, R14, R15, Rbp, R10], outside),
+        Succ(k1) => match k1 {
+            Zero => x.absent_head(R13, [R14, R15, Rbp, R10], r13),
+            Succ(k2) => match k2 {
+                Zero => x.absent_head(R14, [R15, Rbp, R10], r14),
+                Succ(k3) => match k3 {
+                    Zero => x.absent_head(R15, [Rbp, R10], r15),
+                    Succ(k4) => match k4 {
+                        Zero => x.absent_head(Rbp, [R10], rbp),
+                        Succ(k5) => match k5 {
+                            Zero => x.absent_head(R10, [], r10),
+                            Succ(_) => x.absent_head(R12, [R13, R14, R15, Rbp, R10], outside),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+theorem List::uses_outside(self of: List<Home>, x: Gpr, outside: x.absent_from(home_pool()).IsTrue()): of.homes_use(x) = False {
+    match of {
+        Nil => refl,
+        Cons(home, rest) => match home {
+            InSlot => rest.uses_outside(x, outside),
+            InReg(k) => j(sym(home_register_apart(x, outside, k)), λ b _ => (b || rest.homes_use(x)) = False, rest.uses_outside(x, outside)),
+        },
+    }
+}
+
+// So no word lives in a statement's scratch.
+theorem Homes::unused(self homes: Homes, x: Gpr, outside: x.absent_from(home_pool()).IsTrue()): homes.uses(x) = False {
+    homes.of.uses_outside(x, outside)
+}
+
+theorem home_register_mem(k: Nat): k < 6 → Mem(home_register(k), home_pool()) {
+    match k {
+        Zero => λ _ => Inl(refl),
+        Succ(k1) => match k1 {
+            Zero => λ _ => Inr(Inl(refl)),
+            Succ(k2) => match k2 {
+                Zero => λ _ => Inr(Inr(Inl(refl))),
+                Succ(k3) => match k3 {
+                    Zero => λ _ => Inr(Inr(Inr(Inl(refl)))),
+                    Succ(k4) => match k4 {
+                        Zero => λ _ => Inr(Inr(Inr(Inr(Inl(refl))))),
+                        Succ(k5) => match k5 {
+                            Zero => λ _ => Inr(Inr(Inr(Inr(Inr(Inl(refl)))))),
+                            Succ(_) => λ no => false_elim(no),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The pool's registers, read
+
+fn home_values(g: Gprs) → List<BitVec(64)> { home_pool().map(λ (register: Gpr) => read_gpr(register, g)) }
+
+theorem home_value(g: Gprs): (k: Nat) → k < 6 → home_values(g).get_or(k, BitVec::zero()) = read_gpr(home_register(k), g) {
+    λ k => match k {
+        Zero => λ _ => refl,
+        Succ(k1) => match k1 {
+            Zero => λ _ => refl,
+            Succ(k2) => match k2 {
+                Zero => λ _ => refl,
+                Succ(k3) => match k3 {
+                    Zero => λ _ => refl,
+                    Succ(k4) => match k4 {
+                        Zero => λ _ => refl,
+                        Succ(k5) => match k5 {
+                            Zero => λ _ => refl,
+                            Succ(_) => λ no => false_elim(no),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// A home register written: the pool's values with that one put.
+theorem home_values_write(w: BitVec(64), g: Gprs): (k: Nat) → k < 6 →
+    home_values(write_gpr(home_register(k), w, g)) = home_values(g).put(k, w, BitVec::zero()) {
+    λ k => match k {
+        Zero => λ _ => refl,
+        Succ(k1) => match k1 {
+            Zero => λ _ => refl,
+            Succ(k2) => match k2 {
+                Zero => λ _ => refl,
+                Succ(k3) => match k3 {
+                    Zero => λ _ => refl,
+                    Succ(k4) => match k4 {
+                        Zero => λ _ => refl,
+                        Succ(k5) => match k5 {
+                            Zero => λ _ => refl,
+                            Succ(_) => λ no => false_elim(no),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// A register kept by code that leaves every register of a filtered list.
+theorem kept_filter(pool: List<Gpr>, p: Gpr → Bool, before, after: Gprs, register: Gpr, chosen: p(register) = True):
+    Kept(pool.filter(p), before, after) → Mem(register, pool) → read_gpr(register, after) = read_gpr(register, before) {
+    match pool {
+        Nil => λ _ never => false_elim(never),
+        Cons(h, rest) => (match dropped: p(h) {
+            True => λ kept m => match m {
+                Inl(e) => j(sym(e), λ x _ => read_gpr(x, after) = read_gpr(x, before), kept.left),
+                Inr(later) => kept_filter(rest, p, before, after, register, chosen, kept.right, later),
+            },
+            False => λ kept m => match m {
+                Inl(e) => absurd(trans(sym(dropped), j(e, λ x _ => p(x) = True, chosen))),
+                Inr(later) => kept_filter(rest, p, before, after, register, chosen, kept, later),
+            },
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The invariant between statements
+
+// A word's number where its home holds it: its slot's entry in `words`, or
+// its register's among `values`.
+fn Homes::number(self homes: Homes, id: Nat, words: List<Nat>, values: List<BitVec(64)>) → Nat {
+    match homes.home(id) { InSlot => words.get_or(id, 0), InReg(k) => values.get_or(k, BitVec::zero()).toNat() }
+}
+
+// Every live word reads as the environment's from its home.
+fn Homes::Agrees(self homes: Homes, live: List<Nat>, env: Env, words: List<Nat>, values: List<BitVec(64)>) → Type {
+    (i: Nat) → Mem(i, live) → homes.number(i, words, values) = env.number(i)
+}
+
+fn Env::with_words(self env: Env, words: List<Nat>) → Env { Env(words, env.buffers, env.args) }
+
+// The region placed with the environment's buffers and command line and some
+// file of words, and every live word as the environment's in its home.
+fn Target::Held(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile)) → Type {
+    Exists<List<Nat>>(λ words => t.Placed(env.with_words(words), m) ∧ t.homes.Agrees(live, env, words, home_values(g)))
+}
+
+// Fewer words live.
+theorem Target::held_sub(self t: Target, live, wider: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(wider, env, g, m),
+    sub: (i: Nat) → Mem(i, live) → Mem(i, wider)): t.Held(live, env, g, m) {
+    Exists(held.witness, ⟨held.proof.left, λ i m2 => held.proof.right(i, sub(i, m2))⟩)
+}
+
+// The environment is the same.
+theorem Target::held_same(self t: Target, live: List<Nat>, env, other: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    same: env = other): t.Held(live, other, g, m) {
+    j(same, λ e _ => t.Held(live, e, g, m), held)
+}
+
+// The registers a word lives in read as they did.
+theorem Target::held_regs(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    same: (k: Nat) → k < 6 → t.homes.uses(home_register(k)) = True → read_gpr(home_register(k), g2) = read_gpr(home_register(k), g)):
+    t.Held(live, env, g2, m) {
+    let words = held.witness;
+    Exists(words, ⟨held.proof.left, λ i m2 => (match t.homes.home(i) as λ h => t.homes.home(i) = h →
+            (match h { InSlot => words.get_or(i, 0), InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat() }) = env.number(i) →
+            (match h { InSlot => words.get_or(i, 0), InReg(k) => home_values(g2).get_or(k, BitVec::zero()).toNat() }) = env.number(i) {
+        InSlot => λ _ agrees => agrees,
+        InReg(k) => λ at agrees => {
+            let inside = t.homes.in_pool(t.homed, i, k, at);
+            trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), trans(home_value(g2, k, inside),
+                trans(same(k, inside, t.homes.used(i, k, at)), sym(home_value(g, k, inside))))), agrees)
+        },
+    })(refl, held.proof.right(i, m2))⟩)
+}
+
+// A register no word lives in written.
+theorem Target::held_unused(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    register: Gpr, value: BitVec(64), unused: t.homes.uses(register) = False): t.Held(live, env, write_gpr(register, value, g), m) {
+    t.held_regs(live, env, g, write_gpr(register, value, g), m, held, λ k inside used =>
+        read_gpr_other(register, home_register(k), value, g, match e: register.same(home_register(k)) {
+            True => absurd(trans(sym(unused), trans(cong_fn<Gpr, Bool>(λ r => t.homes.uses(r), register.same_sound(home_register(k), e)), used))),
+            False => refl,
+        }))
+}
+
+// Code that keeps every register a word lives in.
+theorem Target::held_kept(self t: Target, live: List<Nat>, env: Env, g, g2: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    kept: Kept(t.homes.registers(), g, g2)): t.Held(live, env, g2, m) {
+    t.held_regs(live, env, g, g2, m, held, λ k inside used =>
+        kept_filter(home_pool(), λ (register: Gpr) => t.homes.uses(register), g, g2, home_register(k), used, kept, home_register_mem(k, inside)))
+}
+
+// Every live word in its slot: the region placed is held.
+theorem Homes::slotted_home(self homes: Homes, ids: List<Nat>): homes.slotted(ids).IsTrue() → (i: Nat) → Mem(i, ids) → homes.home(i) = InSlot {
+    match ids {
+        Nil => λ _ i never => false_elim(never),
+        Cons(id, rest) => (match at: homes.home(id) {
+            InSlot => λ slotted i m => match m {
+                Inl(e) => j(sym(e), λ x _ => homes.home(x) = InSlot, at),
+                Inr(later) => homes.slotted_home(rest, slotted, i, later),
+            },
+            InReg(_) => λ never => false_elim(never),
+        }),
+    }
+}
+
+theorem Env::with_own_words(self env: Env): env.with_words(env.words) = env { match env { Env(_, _, _) => refl } }
+
+theorem Target::held_placed(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), placed: t.Placed(env, m),
+    slotted: t.homes.slotted(live).IsTrue()): t.Held(live, env, g, m) {
+    Exists(env.words, ⟨t.placed_same(env, env.with_words(env.words), m, placed, sym(env.with_own_words())), λ i m2 =>
+        j(sym(t.homes.slotted_home(live, slotted, i, m2)), λ h _ => (match h {
+            InSlot => env.words.get_or(i, 0),
+            InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat(),
+        }) = env.number(i), refl)⟩)
+}
+
+// ---------------------------------------------------------------------------
+// A live word, read from its home
+
+// Its slot's word…
+theorem Target::held_slot_word(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    id: Nat, holds: Mem(id, live), slot: t.homes.home(id) = InSlot): env.with_words(held.witness).word(id) = env.word(id) {
+    let words = held.witness;
+    cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), j(slot, λ h _ => (match h {
+        InSlot => words.get_or(id, 0),
+        InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat(),
+    }) = env.number(id), held.proof.right(id, holds)))
+}
+
+// …or its register's.
+theorem Target::held_reg_word(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    id: Nat, holds: Mem(id, live), k: Nat, at: t.homes.home(id) = InReg(k)): read_gpr(home_register(k), g) = env.word(id) {
+    let words = held.witness;
+    let read = read_gpr(home_register(k), g);
+    let number: (read.toNat() = env.number(id)) = trans(sym(cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
+        home_value(g, k, t.homes.in_pool(t.homed, id, k, at)))), j(at, λ h _ => (match h {
+            InSlot => words.get_or(id, 0),
+            InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat(),
+        }) = env.number(id), held.proof.right(id, holds)));
+    trans(sym(BitVec::ofNat_toNat(64, read)), cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), number))
+}
+
+// A live word's number fits it.
+theorem Target::held_number(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
+    id: Nat, holds: Mem(id, live), inside: id < t.words): env.word(id).toNat() = env.number(id) {
+    let words = held.witness;
+    let agrees = held.proof.right(id, holds);
+    let fits: (env.number(id) < Nat::pow(2, 64)) = (match t.homes.home(id) as λ h => t.homes.home(id) = h →
+            (match h { InSlot => words.get_or(id, 0), InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat() }) = env.number(id) →
+            env.number(id) < Nat::pow(2, 64) {
+        InSlot => λ _ number => j(number, λ n _ => n < Nat::pow(2, 64),
+            t.layout().keeps_number_fits(env.with_words(words), held.proof.left.witness, held.proof.left.proof.right.left, id, inside)),
+        InReg(k) => λ _ number => j(number, λ n _ => n < Nat::pow(2, 64), BitVec::toNat_lt_pow(64, home_values(g).get_or(k, BitVec::zero()))),
+    })(refl, agrees);
+    BitVec::toNat_ofNat(64, env.number(id), fits)
+}
+
+// ---------------------------------------------------------------------------
+// A word written
+
+// Where it is dead after: nothing changes.
+theorem Target::held_dead(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
+    held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), dead: out.holds(id) = False):
+    t.Held(out, env.set_word(id, w), g, m) {
+    Exists(held.witness, ⟨held.proof.left, λ i m2 => {
+        let ne: (i ≠ id) = λ e => absurd(trans(sym(dead), out.mem_holds(id, j(e, λ x _ => Mem(x, out), m2))));
+        trans(held.proof.right(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))
+    }⟩)
+}
+
+// Another word's number where the written slot is put.
+theorem Homes::number_put_other(self homes: Homes, i, id: Nat, words: List<Nat>, k: Nat, values: List<BitVec(64)>, ne: i ≠ id):
+    homes.number(i, words.put(id, k, 0), values) = homes.number(i, words, values) {
+    (match homes.home(i) {
+        InSlot => List::put_other(id, words, k, 0, i, ne),
+        InReg(_) => refl,
+    })
+}
+
+// Into its slot: the slot's file entry set.
+theorem Target::held_slot_set(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
+    held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), slot: t.homes.home(id) = InSlot, inside: id < t.words):
+    t.Held(out, env.set_word(id, w), g, t.r.profile.store(m, t.layout().word_at(id), word_bytes(w))) {
+    let words = held.witness;
+    let words2 = words.put(id, w.toNat(), 0);
+    let values = home_values(g);
+    Exists(words2, ⟨t.placed_word(env.with_words(words), m, held.proof.left, id, inside, w), λ i m2 => match i.eq_dec(id) {
+        Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words2, values) = env.set_word(id, w).number(x),
+            j(sym(slot), λ h _ => (match h { InSlot => words2.get_or(id, 0), InReg(k) => values.get_or(k, BitVec::zero()).toNat() }) =
+                env.set_word(id, w).number(id),
+                trans(words2.get_or_some(id, 0, w.toNat(), List::put_here(id, words, w.toNat(), 0)), sym(env.number_set_here(id, w))))),
+        Inr(ne) => trans(t.homes.number_put_other(i, id, words, w.toNat(), values, ne),
+            trans(held.proof.right(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
+    }⟩)
+}
+
+// A word written into register `k` misses every other live word's.
+theorem Homes::misses_apart(self homes: Homes, id, k: Nat, out: List<Nat>): homes.misses(id, k, out).IsTrue() →
+    (i: Nat) → Mem(i, out) → i ≠ id → (r: Nat) → homes.home(i) = InReg(r) → r ≠ k {
+    match out {
+        Nil => λ _ i never => false_elim(never),
+        Cons(other, rest) => λ miss i m ne r at => {
+            let parts = Bool::is_true_and(other.same(id) || !homes.home(other).is_register(k), homes.misses(id, k, rest), miss);
+            match m {
+                Inl(e) => λ same => {
+                    let at_other: (homes.home(other) = InReg(r)) = j(e, λ x _ => homes.home(x) = InReg(r), at);
+                    let first: (other.same(id) || !homes.home(other).is_register(k)).IsTrue() = parts.left;
+                    let other_ne: (other.same(id) = False) = Nat::same_false(other, id, λ o => ne(trans(e, o)));
+                    let not_reg: (!homes.home(other).is_register(k)).IsTrue() = j(other_ne, λ b _ => (b || !homes.home(other).is_register(k)).IsTrue(), first);
+                    let reg_false: (homes.home(other).is_register(k) = False) = Bool::false_of_not(homes.home(other).is_register(k), not_reg);
+                    let at_k: (InReg(r).is_register(k) = False) = j(at_other, λ h _ => h.is_register(k) = False, reg_false);
+                    absurd(trans(sym(at_k), j(same, λ x _ => r.same(x) = True, r.same_self())))
+                },
+                Inr(later) => homes.misses_apart(id, k, rest, parts.right, i, later, ne, r, at),
+            }
+        },
+    }
+}
+
+theorem Homes::apart_misses(self homes: Homes, id, k: Nat, out: List<Nat>, apart: homes.apart(id, out).IsTrue(), at: homes.home(id) = InReg(k)):
+    homes.misses(id, k, out).IsTrue() {
+    j(at, λ h _ => (match h { InSlot => True, InReg(r) => homes.misses(id, r, out) }).IsTrue(), apart)
+}
+
+// What `apart` asks, as a proposition: where the word lives in a register,
+// no other word of `set` does.
+fn Homes::Apart(self homes: Homes, id: Nat, set: List<Nat>) → Type {
+    (k: Nat) → homes.home(id) = InReg(k) → (i: Nat) → Mem(i, set) → i ≠ id → (r: Nat) → homes.home(i) = InReg(r) → r ≠ k
+}
+
+theorem Homes::apart_sound(self homes: Homes, id: Nat, set: List<Nat>, apart: homes.apart(id, set).IsTrue()): homes.Apart(id, set) {
+    λ k at => homes.misses_apart(id, k, set, homes.apart_misses(id, k, set, apart, at))
+}
+
+// …and of any smaller set.
+theorem Homes::apart_within(self homes: Homes, id: Nat, set, smaller: List<Nat>, apart: homes.Apart(id, set),
+    within: (i: Nat) → Mem(i, smaller) → Mem(i, set)): homes.Apart(id, smaller) {
+    λ k at i m => apart(k, at, i, within(i, m))
+}
+
+// Into its register: the register set, and every other live word's register
+// apart from it.
+theorem Target::held_reg_set(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
+    held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), k: Nat, at: t.homes.home(id) = InReg(k),
+    apart: t.homes.Apart(id, out)): t.Held(out, env.set_word(id, w), write_gpr(home_register(k), w, g), m) {
+    let words = held.witness;
+    let inside = t.homes.in_pool(t.homed, id, k, at);
+    let values = home_values(g).put(k, w, BitVec::zero());
+    let written: (home_values(write_gpr(home_register(k), w, g)) = values) = home_values_write(w, g, k, inside);
+    let miss = apart(k, at);
+    let agrees: t.homes.Agrees(out, env.set_word(id, w), words, values) = λ i m2 => match i.eq_dec(id) {
+        Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words, values) = env.set_word(id, w).number(x),
+            j(sym(at), λ h _ => (match h { InSlot => words.get_or(id, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) =
+                env.set_word(id, w).number(id),
+                trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(k, BitVec::zero(), w,
+                    List::put_here(k, home_values(g), w, BitVec::zero()))), sym(env.number_set_here(id, w))))),
+        Inr(ne) => trans((match t.homes.home(i) as λ h => t.homes.home(i) = h →
+                (match h { InSlot => words.get_or(i, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) =
+                (match h { InSlot => words.get_or(i, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) {
+            InSlot => λ _ => refl,
+            InReg(r) => λ at_i => cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
+                List::put_other(k, home_values(g), w, BitVec::zero(), r, miss(i, m2, ne, r, at_i))),
+        })(refl), trans(held.proof.right(i, sub(i, m2, ne)), sym(env.number_set_other(id, w, i, ne)))),
+    };
+    j(sym(written), λ vs _ => Exists<List<Nat>>(λ ws => t.Placed(env.set_word(id, w).with_words(ws), m) ∧ t.homes.Agrees(out, env.set_word(id, w), ws, vs)),
+        Exists(words, ⟨held.proof.left, agrees⟩))
+}
+
+// What a write to a word's home leaves the rest of the registers: every one
+// no word lives in but RBX as it was.
+fn Target::Spares(self t: Target, g, g2: Gprs) → Type {
+    (x: Gpr) → t.homes.uses(x) = False → Rbx.same(x) = False → read_gpr(x, g2) = read_gpr(x, g)
+}

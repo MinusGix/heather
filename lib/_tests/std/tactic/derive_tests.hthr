@@ -1,0 +1,153 @@
+// Probes of `derive` (`lib/std/tactic/derive.hthr`) and of `generate` itself
+// (`crates/elab/src/host.rs`, docs/host-elaboration-interface-design.md
+// §19): the lemmas `generate congruences(T);` declares, used at their
+// statements, and the declarations a generator is refused for. Tests, not
+// library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+import derive;
+
+inductive Tm { Var(n: Nat), App(f: Tm, a: Tm), Lam(body: Tm), Hole }
+
+generate congruences(Tm);
+
+// Every field at once, implicit sides, one equation per field.
+theorem app_cong(f, g, a, b: Tm, hf: f = g, ha: a = b): Tm::App(f, a) = Tm::App(g, b) {
+    Tm::cong_App(hf, ha)
+}
+
+theorem lam_cong(a, b: Tm, h: a = b): Tm::Lam(a) = Tm::Lam(b) { Tm::cong_Lam(h) }
+
+// At a neutral field of another type.
+theorem var_cong(n, m: Nat, h: n = m): Tm::Var(n) = Tm::Var(m) { Tm::cong_Var(h) }
+
+// The sides are implicit parameters, named after the fields.
+theorem app_cong_named(f, g, a, b: Tm, hf: f = g, ha: a = b): Tm::App(f, a) = Tm::App(g, b) {
+    Tm::cong_App(hf, ha, f1 := f, a2 := b)
+}
+
+// A constructor without fields has nothing to state.
+// expect-error: neither an imported module nor a type or function in scope here with a member by that name
+theorem hole_cong(): Tm::Hole = Tm::Hole { Tm::cong_Hole() }
+
+// A record: one constructor, reached by its anonymous form.
+record Cell { tag: Nat, next: Tm }
+
+generate congruences(Cell);
+
+theorem cell_cong(a, b: Nat, s, t: Tm, h: a = b, k: s = t): Cell(a, s) = Cell(b, t) { Cell::cong_Cell(h, k) }
+
+// A function field: the constructor's congruence is still the plain one.
+inductive Rose { Leaf, Node(label: Nat, kids: Nat → Rose) }
+
+generate congruences(Rose);
+
+theorem node_cong(a, b: Nat, f, g: Nat → Rose, h: a = b, k: f = g): Rose::Node(a, f) = Rose::Node(b, g) {
+    Rose::cong_Node(h, k)
+}
+
+// Negative control: the lemma states equal sides, not any sides.
+// expect-error(mismatch)
+theorem app_cong_wrong(f, g, a, b: Tm, hf: f = g, ha: a = b): Tm::App(f, a) = Tm::App(b, g) {
+    Tm::cong_App(hf, ha)
+}
+
+// A second run declares the same names again, and publishes none of them.
+// expect-error: cong_Var
+generate congruences(Tm);
+
+// A field whose type mentions an earlier field has no plain congruence.
+inductive Sized { Sized(n: Nat, v: Fin(n)) }
+
+// expect-error: a field of `Sized` mentions an earlier field
+generate congruences(Sized);
+
+// Not a type.
+// expect-error: not a type
+generate congruences(Tm::Hole);
+
+// ---------------------------------------------------------------------------
+// What a generator is refused for.
+
+// Its declarations are checked: a body that proves something else.
+fn wrong_body(t: Expr) → Tac<List<Decl>> {
+    as_type(t).bind(λ c => checked_handle("not a type", c)).bind(λ h =>
+    assume_chain([Hyp(Hd(h), "a")], None).bind(λ xs => match xs {
+        Nil => fail("no parameter", []),
+        Cons(a, _) => Pure([Decl(AsTheorem, "same", [Param(a, False)], Equation(Local(a), Local(a)), NatLit(0))]),
+    }))
+}
+
+// expect-error: its body proves
+generate wrong_body(Tm);
+
+// Parameters are a telescope: each introduced under the one before.
+fn unchained(t: Expr) → Tac<List<Decl>> {
+    as_type(t).bind(λ c => checked_handle("not a type", c)).bind(λ h =>
+    assume_beside([Hyp(Hd(h), "a"), Hyp(Hd(h), "b")], None).bind(λ xs => Pure([
+        Decl(AsFunction, "second", explicit_params(xs), Hd(h), Local(LocalRef(0))),
+    ])))
+}
+
+// expect-error: is not introduced under the parameter before it
+generate unchained(Tm);
+
+// A generator has no goal.
+fn goal_seeker(t: Expr) → Tac<List<Decl>> { goal().bind(λ g => Pure([])) }
+
+// expect-error: a generator has no goal
+generate goal_seeker(Tm);
+
+// One refused member publishes none: `bad` reuses a name this module
+// declares, and `fine`, checked before it, is not declared either.
+fn one_bad(t: Expr) → Tac<List<Decl>> {
+    as_type(t).bind(λ c => checked_handle("not a type", c)).bind(λ h =>
+    assume_chain([Hyp(Hd(h), "a")], None).bind(λ xs => match xs {
+        Nil => fail("no parameter", []),
+        Cons(a, _) => Pure([
+            Decl(AsFunction, "fine", [Param(a, False)], Hd(h), Local(a)),
+            Decl(AsFunction, "app_cong", [Param(a, False)], Hd(h), Local(a)),
+        ]),
+    }))
+}
+
+// expect-error: the generated `app_cong` was refused
+generate one_bad(Tm);
+
+// expect-error: unbound name `fine`
+fn uses_fine(x: Tm) → Tm { fine(x) }
+
+// A tactic cannot publish: `by` has a goal to prove, not declarations.
+// expect-error: only `generate` publishes declarations
+theorem published(): 0 = 0 { by publish([]) }
+
+// A dependent binder in a parameter's type, and an application in the body:
+// `fn apply_tm(f: Tm → Tm, x: Tm) → Tm { f(x) }`, built by hand.
+fn first_ref(xs: List<LocalRef>) → LocalRef { match xs { Nil => LocalRef(0), Cons(x, _) => x } }
+
+fn applier(t: Expr) → Tac<List<Decl>> {
+    as_type(t).bind(λ c => checked_handle("not a type", c)).bind(λ h =>
+    assume_beside([Hyp(Hd(h), "z")], None).bind(λ zs =>
+    assume_chain([Hyp(Pi(first_ref(zs), Hd(h)), "f")], None).bind(λ fs =>
+    assume_chain([Hyp(Hd(h), "x")], last_ref(None, fs)).bind(λ xs => {
+        let f = first_ref(fs);
+        let x = first_ref(xs);
+        Pure([Decl(AsFunction, "apply_tm", explicit_params(fs) ++ explicit_params(xs), Hd(h), Expr::App(Local(f), Local(x)))])
+    }))))
+}
+
+generate applier(Tm);
+
+theorem apply_tm_is_application(x: Tm): apply_tm(λ y => Tm::Lam(y), x) = Tm::Lam(x) { refl }
+
+// A generator that publishes nothing is fine.
+fn nothing(t: Expr) → Tac<List<Decl>> { Pure([]) }
+
+generate nothing(Tm);

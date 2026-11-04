@@ -16,11 +16,9 @@ use std::sync::Arc as Rc;
 use heather_kernel::term::{Term, Type};
 
 use crate::omega_cert::{integer_source, local_facts, named_args, nat_term_source, parse_generated_expr};
+use crate::oracle::Unfold;
 use crate::{Cx, Elaborator};
 
-/// Head reducts a word may take before it is a leaf (§3): enough for a
-/// definition that calls another, not enough to evaluate one.
-const UNFOLD_STEPS: u64 = 16;
 
 pub(crate) struct Generated {
     /// The proof, as source.
@@ -337,12 +335,9 @@ impl<'a> Walk<'a> {
             return Shape::Leaf;
         }
         let oracle = self.elab.goal_oracle();
-        for reduct in oracle.term_reducts(&self.cx.gamma, word, UNFOLD_STEPS) {
-            if let Some(shape) = self.known(&Rc::new(reduct)) {
-                return shape;
-            }
-        }
-        Shape::Leaf
+        oracle
+            .unfold_to(&self.cx.gamma, word, Unfold::WordShape, |reduct| self.known(&Rc::new(reduct)))
+            .unwrap_or(Shape::Leaf)
     }
 
     fn known(&self, word: &Rc<Term>) -> Option<Shape> {
@@ -995,14 +990,14 @@ fn bridge_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<String> {
     // Type spellings include instantiated codes and inline lowerings. Let
     // the existing method inference recover the width in all those forms.
     let expr = parse_generated_expr(&format!("bitvec::BitVec::toNat({a})")).ok()?;
-    let mark = (elab.warnings.borrow().len(), elab.attempt.goal_arena.mark());
+    let mark = (elab.pass.warnings.borrow().len(), elab.attempt.goal_arena.mark());
     let inferred = elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok();
     let n = inferred.and_then(|(tm, _, _)| {
         let args = named_args(elab, &tm, "bitvec::BitVec::toNat")?;
         let [width, _] = args.as_slice() else { return None };
         elab.spell_term_source(cx, width)
     });
-    elab.warnings.borrow_mut().truncate(mark.0);
+    elab.pass.warnings.borrow_mut().truncate(mark.0);
     elab.attempt.goal_arena.rollback(mark.1);
     let n = n?;
     for (flipped, word, other) in [(false, &a, rhs), (true, &b, lhs)] {
@@ -1300,9 +1295,9 @@ fn comparison_value_bridge(walk: &mut Walk, i: usize) {
     let source = format!("{{ have __bv_value: ({statement}) = {proof}; __bv_value }}");
     let Ok(expr) = parse_generated_expr(&source) else { return };
     let elab = walk.elab;
-    let mark = (elab.warnings.borrow().len(), elab.attempt.goal_arena.mark());
+    let mark = (elab.pass.warnings.borrow().len(), elab.attempt.goal_arena.mark());
     let checked = elab.generated_scope(|me| me.elab_infer(walk.cx, &expr)).is_ok();
-    elab.warnings.borrow_mut().truncate(mark.0);
+    elab.pass.warnings.borrow_mut().truncate(mark.0);
     elab.attempt.goal_arena.rollback(mark.1);
     if checked {
         walk.bridges.push((format!("__bv_compare_value{}", walk.bridges.len()), statement, proof));
@@ -1314,9 +1309,9 @@ fn holds(elab: &Elaborator, cx: &Cx, walk: &Walk, o: &Obligation) -> bool {
     let source = format!("{{\n{}\nhave __bv_side: ({}) = omega;\n__bv_side\n}}", prelude(walk), o.statement);
     let Ok(expr) = parse_generated_expr(&source) else { return false };
     // A probe: its named atom lists are not the proof's.
-    let mark = (elab.warnings.borrow().len(), elab.attempt.goal_arena.mark());
+    let mark = (elab.pass.warnings.borrow().len(), elab.attempt.goal_arena.mark());
     let holds = elab.generated_scope(|me| me.elab_infer(cx, &expr)).is_ok();
-    elab.warnings.borrow_mut().truncate(mark.0);
+    elab.pass.warnings.borrow_mut().truncate(mark.0);
     elab.attempt.goal_arena.rollback(mark.1);
     holds
 }

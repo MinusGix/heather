@@ -21,8 +21,16 @@ scripts/bench --check                # compare against the recorded baseline; ex
 scripts/bench --save                 # record a new baseline
 scripts/bench --quick --filter nat   # iterate on a fixture (shapes only)
 scripts/bench --list                 # what is in the suite
-scripts/bench --stack-only           # only the stack probe (usable in a debug build)
+scripts/bench --stack-only           # only the stack probes (usable in a debug build)
 ```
+
+There are two stack probes. `stack/check-numeral` is the checking walk
+(`issues/numeral-stack-depth.md`); `stack/eval-nested-scrutinee` is the
+evaluator's value-nested chain, the recursion `NATIVE_DEPTH_LIMIT` counts
+(`docs/native-depth-budget-design.md` §8). The second runs on a smaller
+stack, because past the budget a run is refused rather than measured, and a
+probe that reaches the budget reports it as a cap (its per-level figure is
+then an upper bound).
 
 ## Attribution, which is not a gate
 
@@ -96,7 +104,7 @@ when the baseline's `host` and `profile` match.
 | a case is slower than baseline | ≥ 1.25× | measured run-to-run spread on the recording machine is ~1–4%; 1.25 tolerates a merely-busy machine, because a gate that cries wolf gets ignored |
 | a fitted slope drifted upward | > +0.35 | a 4-point fit over a 16× size range moves ±0.15 between runs; 0.35 catches linear → quadratic with margin |
 | a slope left its declared band | — | the band is a standing claim about the cost model, checked on every machine |
-| the stack probe lost depth | > 10% fewer levels | bisection is exact to one level; 10% is "not a one-frame rounding change" |
+| a stack probe lost depth | > 10% fewer levels | bisection is exact to one level; 10% is "not a one-frame rounding change" |
 
 Improvements ≥ 20% are printed too, as a hint to re-record — not a failure.
 
@@ -116,6 +124,8 @@ optimizations, only measurements (`issues/README.md` rule 3).
 `crates/kernel/benches/baseline.tsv`, tab-separated so it stays greppable and
 diffable, and parseable without a dependency. Rows are `env` (host, cpu,
 profile, rustc, commit), `case` (family, size, min ns), `slope`, and `stack`.
+It is recorded on the cloud box, the reference environment since 2026-10-29
+(`docs/cloud-benchmarks.md` §1); the same holds for the frontend suite's.
 Being in the tree is the point: a baseline that lives in CI artifacts is a
 baseline nobody compares against by hand.
 

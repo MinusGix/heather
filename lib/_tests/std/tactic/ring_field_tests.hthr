@@ -1,0 +1,72 @@
+// Probes of `ring` at a field (`lib/std/tactic/ring.hthr`,
+// docs/ring-normalization-design.md §9): reciprocals and casts read with
+// the facts that clear them. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+//
+// This module does not import `list`, on purpose: what `ring` generates must
+// resolve in a client that does not (the numeral check once wrote
+// `list::Nil`, and every numeral silently became an atom).
+import logic; import nat; import int; import omega; import ring;
+import relation_props; import semiring; import rat; import creal;
+
+// Clearing denominators (issues/field-simp.md): a reciprocal is an atom
+// read with the fact that clears it (`x⁻¹ * x ≈ 1`, `Rat::inv_succ_cancel`),
+// and the facts' multipliers are computed by eliminating the reciprocals, so
+// an identity of fields at `Rat` or `CReal` is `ring`'s. Apartness is the
+// one the reciprocal was written with; clearing owes nothing more.
+theorem rat_halves(x: Rat): x * Rat::inv_succ(1) + x * Rat::inv_succ(1) ≈ x { ring }
+theorem rat_thirds(x: Rat): x * Rat::inv_succ(2) * 3 ≈ x { ring }
+theorem rat_inv_succ_open(n: Nat, x: Rat): x * Rat::inv_succ(n) * (Rat::ofInt(OfNat(n)) + 1) ≈ x { ring }
+theorem rat_cancel(x: Rat, h: 0 < x): x * x⁻¹ ≈ 1 { ring }
+theorem rat_cancel_apart(x, y: Rat, h: x.Apart(0)): x * y * x⁻¹ ≈ y { ring }
+theorem rat_sum_of_inverses(x, y: Rat, hx: x.Apart(0), hy: y.Apart(0)): x⁻¹ + y⁻¹ ≈ (x + y) * (x * y)⁻¹ { ring }
+theorem rat_inv_of_product(x, y: Rat, hx: x.Apart(0), hy: y.Apart(0)): (x * y)⁻¹ ≈ x⁻¹ * y⁻¹ { ring }
+// A reciprocal inside a denominator is cleared after the one around it.
+theorem rat_inv_inv(x: Rat, h: x.Apart(0)): (x⁻¹)⁻¹ ≈ x { ring }
+theorem rat_halves_by_inverse(x: Rat): x * 2⁻¹ + x * 2⁻¹ ≈ x { ring }
+theorem creal_cancel(x: CReal, h: 0 < x): x⁻¹ * (x * x) ≈ x { ring }
+theorem creal_sum_of_inverses(x, y: CReal, hx: x.Apart(0), hy: y.Apart(0), hxy: (x * y).Apart(0)):
+    x⁻¹ + y⁻¹ ≈ (x + y) * (x * y)⁻¹
+{ ring }
+// A cast of a `Nat` sum, product or successor (`inv_succ`'s denominator
+// `n + 1` read at `Rat`) is pushed in by `RingExpr::of_nat_add` and its
+// kin, so `inv_succ` at an index computed from others clears too.
+theorem rat_halves_at_index(n: Nat): Rat::inv_succ(n + n + 1) + Rat::inv_succ(n + n + 1) ≈ Rat::inv_succ(n) { ring }
+theorem rat_inv_succ_product(k, l: Nat): Rat::inv_succ(k) * Rat::inv_succ(l) ≈ Rat::inv_succ(k * (l + 1) + l) { ring }
+theorem rat_cast_succ(n: Nat, x: Rat): x * Rat::ofInt(OfNat(Succ(n))) ≈ x * Rat::ofInt(OfNat(n)) + x { ring }
+theorem creal_cast(n: Nat, x: CReal): x * CReal::ofRat(Rat::ofInt(OfNat(n + 1))) ≈ x * CReal::ofRat(Rat::ofInt(OfNat(n))) + x { ring }
+// With hypotheses: they account for what clearing leaves.
+theorem rat_cleared_with(x, y, z: Rat, hy: y.Apart(0), h: x ≈ y * z): x * y⁻¹ ≈ z { ring(h) }
+theorem creal_cleared_with(x, y, z: CReal, hy: y.Apart(0), h: x * y⁻¹ ≈ z): x ≈ z * y { ring(h) }
+// A cast pushed through a sum is substituted in the hypotheses as in the
+// goal, wherever it is spelled (issues/ring-hypotheses-cast-spelling.md):
+// here the combination is `2·z − ofRat(x)·o`, the goal's casts of sums
+// read as sums of casts.
+theorem creal_cast_sum_with(x: Rat, X, S0, S1: CReal, z: X ≈ CReal::ofRat(1) + CReal::ofRat(x) * S0,
+    o: X ≈ CReal::ofRat(-1) + CReal::ofRat(2) * S0 + CReal::ofRat(x) * CReal::ofRat(x) * S1):
+    CReal::ofRat(2 - x) * X - CReal::ofRat(2 + x) ≈ CReal::ofRat(-(x * x) * x) * S1 { ring(z, o) }
+// The cast of a sum in a hypothesis, its parts in the goal.
+theorem creal_cast_sum_in_hyp(x, y: Rat, X, Y: CReal, h: X ≈ CReal::ofRat(x + y) * Y, k: Y ≈ CReal::ofRat(x)):
+    X ≈ CReal::ofRat(x) * CReal::ofRat(x) + CReal::ofRat(y) * CReal::ofRat(x) { ring(h, k) }
+
+// A non-identity of fields is named by what is left once both sides are
+// multiplied through, the monomial both share taken out.
+// expect-error: with both sides multiplied by `x * y` to clear the denominators, they differ by `y + x - 1`
+theorem rat_not_field_identity(x, y: Rat, hx: x.Apart(0), hy: y.Apart(0)): x⁻¹ + y⁻¹ ≈ (x * y)⁻¹ { ring }
+// A cast read through is still a ring identity's: 2n + 1 is not n + 1.
+// expect-error: not an identity of commutative rings
+theorem rat_cast_not_identity(n: Nat, e: Rat): e * Rat::ofInt(OfNat(n + n + 1)) ≈ e * Rat::ofInt(OfNat(Succ(n))) { ring }
+// expect-error: left once both sides are multiplied by `y`
+theorem rat_cleared_no_combination(x, y, z: Rat, hy: y.Apart(0), h: x ≈ z): x * y⁻¹ ≈ z { ring(h) }
+// A cast of a sum read through still needs the combination to exist.
+// expect-error: no combination of them
+theorem creal_cast_sum_no_combination(x: Rat, X, S0: CReal, z: X ≈ CReal::ofRat(1) + CReal::ofRat(x) * S0):
+    CReal::ofRat(2 - x) * X ≈ CReal::ofRat(2) * S0 { ring(z) }
+
+// Numerals are coefficients here too.
+theorem rat_numerals_unimported(x: Rat): (x + 1) * (x + 1) - 1 ≈ x * (x + 2) { ring }
+
+// An atom with no source spelling (a field read such as a real's term) is
+// named in the atom list by an alias bound to the term
+// (issues/ring-field-read-atom-spelling.md).
+theorem rat_term_atom(x: CReal, n: Nat): x.at(n) + 1 ≈ 1 + x.at(n) { ring }

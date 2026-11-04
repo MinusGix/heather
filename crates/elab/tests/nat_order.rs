@@ -33,6 +33,9 @@ fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = support::library(&[
         ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
         ("option", OPTION), ("pair", PAIR), ("list", LIST),
+        ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
+        ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
+        ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
         ("algebra", ALGEBRA),
     ]);
     if !extra.is_empty() {
@@ -188,27 +191,28 @@ theorem on_bools(): max_of(bool::False, bool::True) = bool::True { refl }
 theorem idempotent(n: Nat): max_of(n, n) = n { max_of_self(n) }");
 }
 
-/// Why `on_bools` above is qualified, pinned so the qualification is a
-/// *recorded* boundary rather than someone's stray habit. The
-/// `False`-coexistence rules (`issues/false-collides-with-bools-constructor.md`)
-/// are two shrinks: a **type** position never considers a constructor, and an
+/// The `False`-coexistence rules (`issues/false-collides-with-bools-constructor.md`)
+/// were two shrinks: a **type** position never considers a constructor, and an
 /// expected type that is a known inductive never considers a type name.
 /// `max_of(False, False)` is neither — the expected type is `A`, the class's
-/// carrier, and nothing in the call solves it — so both readings survive and
-/// the elaborator says so by name instead of guessing. Correct, and it only
-/// bites where `logic` and `bool` are imported into one file.
+/// carrier, and nothing in the call solves it — and was refused as ambiguous
+/// until a third rule (issues/bool-conditions-and-literals.md): a bare name
+/// that is one constructor and otherwise only type names is the constructor
+/// in a term position, since every position that wants the type has already
+/// taken it. So it is `bool`'s `False` and pins `A := Bool`. The control is a
+/// universe expected type, where `False` stays `logic`'s type.
 ///
-/// `max_of(False, True)` is *not* this case, in either order: a bare `False`
+/// `max_of(False, True)` was never this case, in either order: a bare `False`
 /// waits for the arguments after it
 /// (issues/nullary-ctor-argument-not-deferred.md), `True` names only `bool`'s
 /// constructor in a term position and pins `A := Bool`, and `False` is then
 /// checked at a known inductive — the second shrink.
 #[test]
-fn a_bare_false_at_an_unsolved_carrier_is_ambiguous() {
-    let e = bad("fn t() -> Nat { let x = max_of(False, False); 0 }");
-    assert!(e.contains("ambiguous") && e.contains("logic") && e.contains("bool"), "{e}");
-    ok("theorem t(): max_of(False, True) = True { refl }
-theorem u(): max_of(True, False) = True { refl }");
+fn a_bare_false_at_an_unsolved_carrier_is_the_constructor() {
+    ok("theorem s(): max_of(False, False) = False { refl }
+theorem t(): max_of(False, True) = True { refl }
+theorem u(): max_of(True, False) = True { refl }
+fn p() -> Type { let q: Type = False; q }");
 }
 
 /// The rename that is the content of §3: the hypothesis is the RELATION, not

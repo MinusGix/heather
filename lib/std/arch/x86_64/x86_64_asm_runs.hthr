@@ -37,7 +37,7 @@ theorem asm_back_start(k: Nat): asm_back(Start, k) = Start {
 theorem asm_back_back(k: Nat): (p: Prog) → (j: Nat) → asm_back(asm_back(p, k), j) = asm_back(p, j + k) {
     match k {
         Zero => λ p j => refl,
-        Succ(i) => λ p => match p as λ x => (j: Nat) → asm_back(asm_back(x, Succ(i)), j) = asm_back(x, j + Succ(i)) {
+        Succ(i) => λ p => match p {
             Start => λ j => asm_back_start(j),
             At(before, _, _) => λ j => asm_back_back(i, before, j),
         },
@@ -73,7 +73,7 @@ fn Prog::no_holes(self p: Prog) → Bool {
 theorem Prog::no_holes_fit(self p: Prog): p.no_holes().IsTrue() → FillsFit(p, no_fills()) {
     match p {
         Start => λ _ => trivial,
-        At(before, name, item) => match item as λ it => At(before, name, it).no_holes().IsTrue() → FillsFit(At(before, name, it), no_fills()) {
+        At(before, name, item) => match item {
             Block(_) => λ ok => before.no_holes_fit(ok),
             Code(_) => λ ok => before.no_holes_fit(ok),
             Load(_) => λ ok => before.no_holes_fit(ok),
@@ -100,12 +100,11 @@ fn Prog::lacks(self p: Prog, name: Nat) → Bool {
     match p { Start => True, At(before, m, _) => !(name.leb(m) && m.leb(name)) && before.lacks(name) }
 }
 
-// Every nonzero name names one label, so a jump to it lands there. The test
-// is on `name.is_zero()`, not a match on `name` (`Nat::is_zero` says why).
+// Every nonzero name names one label, so a jump to it lands there.
 fn Prog::names_unique(self p: Prog) → Bool {
     match p {
         Start => True,
-        At(before, name, _) => match name.is_zero() { True => before.names_unique(), False => before.lacks(name) && before.names_unique() },
+        At(before, name, _) => match name { Zero => before.names_unique(), Succ(_) => before.lacks(name) && before.names_unique() },
     }
 }
 
@@ -115,7 +114,7 @@ fn Prog::fresh_names(self p: Prog, k: Nat) → Bool {
         Zero => True,
         Succ(j) => match p {
             Start => True,
-            At(before, name, _) => match name.is_zero() { True => before.fresh_names(j), False => before.lacks(name) && before.fresh_names(j) },
+            At(before, name, _) => match name { Zero => before.fresh_names(j), Succ(_) => before.lacks(name) && before.fresh_names(j) },
         },
     }
 }
@@ -128,9 +127,7 @@ theorem names_unique_back(k: Nat): (p: Prog) → p.fresh_names(k).IsTrue() → a
         Zero => λ p _ rest => rest,
         Succ(j) => λ p => match p {
             Start => λ _ rest => rest,
-            At(before, name, item) => match name as λ nm =>
-                At(before, nm, item).fresh_names(Succ(j)).IsTrue() → asm_back(before, j).names_unique().IsTrue() →
-                At(before, nm, item).names_unique().IsTrue() {
+            At(before, name, item) => match name {
                 Zero => λ fresh rest => names_unique_back(j, before, fresh, rest),
                 Succ(n) => λ fresh rest => {
                     let parts = Bool::is_true_and(before.lacks(Succ(n)), before.fresh_names(j), fresh);
@@ -142,7 +139,7 @@ theorem names_unique_back(k: Nat): (p: Prog) → p.fresh_names(k).IsTrue() → a
 }
 
 theorem not_true_false(b: Bool, no: (!b).IsTrue()): b = False {
-    (match b as λ c => (!c).IsTrue() → c = False { False => λ _ => refl, True => λ absent => false_elim(absent) })(no)
+    match b { False => refl, True => false_elim(no) }
 }
 
 theorem lacks_label(name, k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) → p.lacks(name).IsTrue() →
@@ -153,8 +150,7 @@ theorem lacks_label(name, k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) →
                 j(at, λ x _ => x.lacks(name).IsTrue(), lacks));
             not_true_false(name.leb(n) && n.leb(name), here.left)
         },
-        Succ(i) => λ p => match p as λ x => (q: Prog) → (n: Nat) → (item: Asm) → x.lacks(name).IsTrue() →
-                asm_back(x, Succ(i)) = At(q, n, item) → (name.leb(n) && n.leb(name)) = False {
+        Succ(i) => λ p => match p {
             Start => λ q n item _ no => absurd(no),
             At(before, m, _) => λ q n item lacks at =>
                 lacks_label(name, i, before, q, n, item,
@@ -170,11 +166,9 @@ theorem label_target(k: Nat): (p, q: Prog) → (n: Nat) → (item: Asm) → p.na
     match k {
         Zero => λ p q n item _ at => j(sym(at), λ x _ => asm_target(x, Succ(n)) = prog_len(q),
             j(sym(n.leb_refl()), λ b _ => (match b && b { True => prog_len(q), False => asm_target(q, Succ(n)) }) = prog_len(q), refl)),
-        Succ(i) => λ p => match p as λ x => (q: Prog) → (n: Nat) → (item: Asm) → x.names_unique().IsTrue() →
-                asm_back(x, Succ(i)) = At(q, Succ(n), item) → asm_target(x, Succ(n)) = prog_len(q) {
+        Succ(i) => λ p => match p {
             Start => λ q n item _ no => absurd(no),
-            At(before, m, it) => λ q n item => match m as λ x => At(before, x, it).names_unique().IsTrue() →
-                    asm_back(before, i) = At(q, Succ(n), item) → asm_target(At(before, x, it), Succ(n)) = prog_len(q) {
+            At(before, m, it) => λ q n item => match m {
                 Zero => λ unique at => label_target(i, before, q, n, item, unique, at),
                 Succ(l) => λ unique at => {
                     let both = Bool::is_true_and(before.lacks(Succ(l)), before.names_unique(), unique);
@@ -214,9 +208,7 @@ theorem jcc_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat
             asm_lands_forward(prog_len(before), 6, asm_jump_of(labels, prog_len(before), Jcc(cc, target)), labels(target),
                 eq_true_of_is_true(item_lands(labels, prog_len(before), Jcc(cc, target)), here.left))
         },
-        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (cc: ConditionCode) → (target: Nat) →
-                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, Jcc(cc, target)) →
-                JumpsForward(prog_len(before), 6, asm_jump_of(labels, prog_len(before), Jcc(cc, target)), labels(target)) {
+        Succ(i) => λ p => match p {
             Start => λ before name cc target _ no => absurd(no),
             At(earlier, _, item) => λ before name cc target lands at =>
                 jcc_lands(labels, i, earlier, before, name, cc, target,
@@ -253,9 +245,7 @@ theorem call_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Na
                 Inr(yes) => Inr(asm_lands_back(prog_len(before), 5, displacement, labels(target), eq_true_of_is_true(behind, yes))),
             }
         },
-        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (target: Nat) →
-                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, CallTo(target)) →
-                NearLands(prog_len(before), asm_jump_of(labels, prog_len(before), CallTo(target)), labels(target)) {
+        Succ(i) => λ p => match p {
             Start => λ before name target _ no => absurd(no),
             At(earlier, _, item) => λ before name target lands at =>
                 call_lands(labels, i, earlier, before, name, target,
@@ -279,9 +269,7 @@ theorem jmp_lands(labels: Nat → Nat, k: Nat): (p, before: Prog) → (name: Nat
                 Inr(yes) => Inr(asm_lands_back(prog_len(before), 5, displacement, labels(target), eq_true_of_is_true(behind, yes))),
             }
         },
-        Succ(i) => λ p => match p as λ x => (before: Prog) → (name: Nat) → (target: Nat) →
-                jumps_land_in(labels, x).IsTrue() → asm_back(x, Succ(i)) = At(before, name, Jmp(target)) →
-                NearLands(prog_len(before), asm_jump_of(labels, prog_len(before), Jmp(target)), labels(target)) {
+        Succ(i) => λ p => match p {
             Start => λ before name target _ no => absurd(no),
             At(earlier, _, item) => λ before name target lands at =>
                 jmp_lands(labels, i, earlier, before, name, target,
@@ -603,8 +591,8 @@ theorem Site::runs_branch_on<M>(self site: Site<M>, fits: FillsFit(site.program,
         let entry = fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step));
         let kept = λ (b: Bool) (taken: test.taken(s.gprs) = b) =>
             j(sym(stepped.left), λ g _ => pre(g) ∧ test.taken(g) = b, ⟨holds, taken⟩);
-        (match test.taken(s.gprs) as λ z => test.taken(s.gprs) = z → site.Reaches(s, prog_len(no_end), post) {
-            False => λ nonzero => {
+        match nonzero: test.taken(s.gprs) {
+            False => {
                 let v_rip: (v.rip = next_rip(site.origin, prog_len(tested) + 6)) =
                     trans(near_if_not_taken_rip(test.cc(), displacement, u, trans(stepped.right, nonzero)),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, 6), u_rip),
@@ -617,14 +605,14 @@ theorem Site::runs_branch_on<M>(self site: Site<M>, fits: FillsFit(site.program,
                 site.reaches_after(s, v, prog_len(no_end), post, entry, refl,
                     site.reaches_after(v, w, prog_len(no_end), post, arm.proof.left, arm.proof.right.right.left, jumped))
             },
-            True => λ zero => {
+            True => {
                 let v_rip: (v.rip = next_rip(site.origin, prog_len(yes_end) + 5)) =
-                    trans(near_if_taken_rip(test.cc(), displacement, u, trans(stepped.right, zero)),
+                    trans(near_if_taken_rip(test.cc(), displacement, u, trans(stepped.right, nonzero)),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), u_rip),
                             jumps_forward(site.origin, prog_len(tested), 6, displacement, prog_len(yes_end) + 5, else_lands)));
-                site.reaches_after(s, v, prog_len(no_end), post, entry, refl, no(v, v_rip, resident, kept(True, zero)))
+                site.reaches_after(s, v, prog_len(no_end), post, entry, refl, no(v, v_rip, resident, kept(True, nonzero)))
             },
-        })(refl)
+        }
     }
 }
 

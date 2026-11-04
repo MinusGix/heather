@@ -1,0 +1,1169 @@
+// Correct rounding of a real number (docs/floating-point-design.md §6,
+// submilestone `float-reals`; docs/creal-transcendental-round.md).
+//
+// No finite approximation decides which side of a breakpoint a real lies on,
+// so rounding a real is not a function. What is always meaningful is the
+// relation, and what computes is the search that finds a witness for it.
+//
+// The relation, `RoundsToReal(F, mode, x, r)`: some rational interval around
+// `x` rounds to `r` throughout. It is stated once over any ordered field
+// with a morphism from `Rat` (`Format::RoundsIn`), and `RoundsToReal` is its
+// reading at `CReal`. A real that is not a breakpoint has such an
+// interval, since rounding is constant on the open cell between two
+// breakpoints, and a rational has the degenerate one (`rounds_real_of_rat`,
+// `rounds_real_rat`), so at `Rat` this is exactly `RoundsTo`. Any two
+// witnesses agree (`rounds_real_unique`): two intervals around one real
+// share a rational.
+//
+// The search is Ziv's: enclose `x` in a dyadic interval, round both ends,
+// and stop when they agree (`round_box`). Rounding is monotone, so every
+// rational between the ends rounds between the two roundings, and when they
+// agree it rounds to them (`Float::same_of_squeeze`, `rounds_of_same`). A
+// miss reads a finer enclosure (`round_enclosed`). The result carries no
+// side condition: it is `Some` only with its proof. The search ends when
+// `x` is clear of the rounding grid and its enclosures narrow
+// (`round_enclosed_ends`), and then `round_real_apart` needs no fuel and no
+// `Option`. For `exp` and `log` the gap is Padé's (issues/exp-log-grid-gap.md).
+//
+// A faithful rounding (one of the two neighbours) needs no gap: the search
+// for it ends whenever the enclosures narrow (`Format::faithful_real_total`).
+
+import logic;
+import bool;
+import nat;
+import int;
+import option;
+import omega;
+import linarith;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import morphism;
+import semiring;
+import rat;
+import creal;
+import dyadic;
+import float;
+import round;
+import window;
+import literal;
+import interval;
+import creal_interval;
+
+// ---------------------------------------------------------------------------
+// A correct rounding moves along floats of the same value.
+
+// Canonical floats of one value have one significand, whatever their signs.
+theorem Finite::mag_of_same_val({F: Format}, f, g: Finite(F), e: f.val() ≈ g.val()): f.mag = g.mag {
+    match g.neg.eq_dec(bool::False) {
+        Inl(p) => Finite::mag_of_same(f, g, e, p),
+        Inr(n) => {
+            let t: (g.neg = bool::True) = match g.neg as λ b => b ≠ bool::False → b = bool::True { False => λ no => false_elim(no(refl)), True => λ _ => refl }(n);
+            let np: ((-g).neg = bool::False) = j(sym(t), λ b _ => !b = bool::False, refl);
+            let ne: ((-f).val() ≈ (-g).val()) = Rat::same_trans(Finite::val_neg(f), Rat::same_trans(Rat::neg_respects(e), Rat::same_sym(Finite::val_neg(g))));
+            Finite::mag_of_same(-f, -g, ne, np)
+        },
+    }
+}
+
+theorem Finite::below_of_same({F: Format}, x: Rat, f, g: Finite(F), e: f.val() ≈ g.val(), b: Finite::Below(x, g)): Finite::Below(x, f) {
+    And(Rat::le_respects(Rat::same_sym(e), x.same_refl(), b.left), λ h hle => Rat::le_respects(h.val().same_refl(), Rat::same_sym(e), b.right(h, hle)))
+}
+
+theorem Finite::above_of_same({F: Format}, x: Rat, f, g: Finite(F), e: f.val() ≈ g.val(), a: Finite::Above(x, g)): Finite::Above(x, f) {
+    And(Rat::le_respects(x.same_refl(), Rat::same_sym(e), a.left), λ h hge => Rat::le_respects(Rat::same_sym(e), h.val().same_refl(), a.right(h, hge)))
+}
+
+theorem Finite::nearest_of_same({F: Format}, x: Rat, f, g: Finite(F), e: f.val() ≈ g.val(), n: Finite::Nearest(x, g)): Finite::Nearest(x, f) {
+    λ h => Rat::le_respects(Rat::same_sym(Finite::dist_respects(f, g, x, e)), h.dist(x).same_refl(), n(h))
+}
+
+theorem Format::rounds_of_same_fin(self F: Format, mode: Mode, x: Rat, f, g: Finite(F), e: f.val() ≈ g.val(), hg: RoundsTo(F, mode, x, Fin(g))): RoundsTo(F, mode, x, Fin(f)) {
+    let ge: (g.val() ≈ f.val()) = Rat::same_sym(e);
+    match mode as λ md => RoundsTo(F, md, x, Fin(g)) → RoundsTo(F, md, x, Fin(f)) {
+        NearestEven => λ (a: Finite::NearestEven(x, g) ∧ F.Fits(x)) => {
+            let m: (f.mag = g.mag) = Finite::mag_of_same_val(f, g, e);
+            And(And(Finite::nearest_of_same(x, f, g, e, a.left.left), λ h nh => match a.left.right(h, nh) {
+                Inl(s) => Inl(Rat::same_trans(s, ge)),
+                Inr(ev) => Inr(j(sym(m), λ v _ => Nat::Even(v), ev)),
+            }), a.right)
+        },
+        NearestAway => λ (a: Finite::NearestAway(x, g) ∧ F.Fits(x)) =>
+            And(And(Finite::nearest_of_same(x, f, g, e, a.left.left),
+                λ h nh => Rat::le_respects(h.val().abs().same_refl(), Rat::abs_respects(x := g.val(), x2 := f.val(), hx := ge), a.left.right(h, nh))), a.right),
+        TowardPos => λ (a: Finite::Above(x, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, g) ∧ F.Exceeds(x))) =>
+            match a {
+                Inl(ab) => Inl(Finite::above_of_same(x, f, g, e, ab)),
+                Inr(c) => Inr(And(c.left, And(Finite::below_of_same(x, f, g, e, c.right.left), c.right.right))),
+            },
+        TowardNeg => λ (a: Finite::Below(x, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(x, g) ∧ F.Undercuts(x))) =>
+            match a {
+                Inl(bl) => Inl(Finite::below_of_same(x, f, g, e, bl)),
+                Inr(c) => Inr(And(c.left, And(Finite::above_of_same(x, f, g, e, c.right.left), c.right.right))),
+            },
+        TowardZero => λ (a: (0 <= x → Finite::Below(x, g)) ∧ (x <= 0 → Finite::Above(x, g))) =>
+            And(λ nn => Finite::below_of_same(x, f, g, e, a.left(nn)), λ np => Finite::above_of_same(x, f, g, e, a.right(np))),
+    }(hg)
+}
+
+// `RoundsTo` is a property of the value up to `Float::Same`.
+theorem Format::rounds_of_same(self F: Format, mode: Mode, x: Rat, r, s: Float(F), e: Float::Same(r, s), h: RoundsTo(F, mode, x, s)): RoundsTo(F, mode, x, r) {
+    match r as λ r0 => Float::Same(r0, s) → RoundsTo(F, mode, x, r0) {
+        Fin(f) => λ e0 => match s as λ s0 => Float::Same(Float::Fin(f), s0) → RoundsTo(F, mode, x, s0) → RoundsTo(F, mode, x, Float::Fin(f)) {
+            Fin(g) => λ (ev: f.val() ≈ g.val()) hg => F.rounds_of_same_fin(mode, x, f, g, ev, hg),
+            Inf(_, _) => λ (no: False) _ => false_elim(no),
+            NaN(_) => λ (no: False) _ => false_elim(no),
+        }(e0, h),
+        Inf(n, hn) => λ e0 => match s as λ s0 => Float::Same(Float::Inf(n, hn), s0) → RoundsTo(F, mode, x, s0) → RoundsTo(F, mode, x, Float::Inf(n, hn)) {
+            Fin(_) => λ (no: False) _ => false_elim(no),
+            Inf(m, _) => λ (nm: n = m) hs => {
+                let at_n: RoundsTo(F, mode, x, Float::Inf(m, hn)) = hs;
+                j(sym(nm), λ v _ => RoundsTo(F, mode, x, Float::Inf(v, hn)), at_n)
+            },
+            NaN(_) => λ (no: False) _ => false_elim(no),
+        }(e0, h),
+        NaN(_) => λ (no: False) => false_elim(no),
+    }(e)
+}
+
+// Between two floats that agree, there is only their value.
+theorem Float::same_of_squeeze({F: Format}, r, s, t: Float(F), rt: Float::Same(r, t), rs: Float::Le(r, s), st: Float::Le(s, t)): Float::Same(r, s) {
+    match r as λ r0 => Float::Same(r0, t) → Float::Le(r0, s) → Float::Same(r0, s) {
+        Fin(f) => λ rt0 rs0 => match s as λ s0 => Float::Le(Float::Fin(f), s0) → Float::Le(s0, t) → Float::Same(Float::Fin(f), s0) {
+            Fin(g) => λ (a: f.val() <= g.val()) st0 => match t as λ t0 => Float::Same(Float::Fin(f), t0) → Float::Le(Float::Fin(g), t0) → f.val() ≈ g.val() {
+                Fin(h) => λ (e: f.val() ≈ h.val()) (b: g.val() <= h.val()) => Rat::le_antisymm(a, Rat::le_trans(b, Rat::le_of_same(Rat::same_sym(e)))),
+                Inf(_, _) => λ (no: False) _ => false_elim(no),
+                NaN(_) => λ (no: False) _ => false_elim(no),
+            }(rt0, st0),
+            Inf(m, hm) => λ (a: m = bool::False) st0 => match t as λ t0 => Float::Same(Float::Fin(f), t0) → Float::Le(Float::Inf(m, hm), t0) → Float::Same(Float::Fin(f), Float::Inf(m, hm)) {
+                Fin(_) => λ _ (b: m = bool::True) => absurd(trans(sym(a), b)),
+                Inf(_, _) => λ (no: False) _ => false_elim(no),
+                NaN(_) => λ (no: False) _ => false_elim(no),
+            }(rt0, st0),
+            NaN(_) => λ (no: False) _ => false_elim(no),
+        }(rs0, st),
+        Inf(n, hn) => λ rt0 rs0 => match t as λ t0 => Float::Same(Float::Inf(n, hn), t0) → Float::Le(s, t0) → Float::Same(Float::Inf(n, hn), s) {
+            Fin(_) => λ (no: False) _ => false_elim(no),
+            Inf(k, hk) => λ (e: n = k) st0 => match s as λ s0 => Float::Le(Float::Inf(n, hn), s0) → Float::Le(s0, Float::Inf(k, hk)) → Float::Same(Float::Inf(n, hn), s0) {
+                Fin(_) => λ (a: n = bool::True) (b: k = bool::False) => absurd(trans(trans(sym(b), sym(e)), a)),
+                Inf(m, _) => λ (a: n = bool::True ∨ m = bool::False) (b: m = bool::True ∨ k = bool::False) => match a {
+                    Inl(nt) => match b {
+                        Inl(mt) => trans(nt, sym(mt)),
+                        Inr(kf) => absurd(trans(trans(sym(kf), sym(e)), nt)),
+                    },
+                    Inr(mf) => match b {
+                        Inl(mt) => absurd(trans(sym(mf), mt)),
+                        Inr(kf) => trans(e, trans(kf, sym(mf))),
+                    },
+                },
+                NaN(_) => λ (no: False) _ => false_elim(no),
+            }(rs0, st0),
+            NaN(_) => λ (no: False) _ => false_elim(no),
+        }(rt0, st),
+        NaN(_) => λ (no: False) _ => false_elim(no),
+    }(rt, rs)
+}
+
+// Whether two roundings agree, decided: finite values compared as dyadics,
+// infinities by sign.
+fn Float::agree({F: Format}, self a, b: Float(F)) → Bool {
+    match a {
+        Fin(f) => match b { Fin(g) => f.dyadic().le_bool(g.dyadic()) && g.dyadic().le_bool(f.dyadic()), Inf(_, _) => False, NaN(_) => False },
+        Inf(n, _) => match b { Fin(_) => False, Inf(m, _) => match n { False => !m, True => m }, NaN(_) => False },
+        NaN(_) => False,
+    }
+}
+
+theorem Float::same_of_agree({F: Format}, a, b: Float(F), h: a.agree(b).IsTrue()): Float::Same(a, b) {
+    match a as λ a0 => a0.agree(b).IsTrue() → Float::Same(a0, b) {
+        Fin(f) => match b {
+            Fin(g) => λ k => {
+                let both = f.dyadic().le_bool(g.dyadic()).is_true_and(g.dyadic().le_bool(f.dyadic()), k);
+                Rat::le_antisymm(x := f.val(), y := g.val(), hxy := f.dyadic().le_of_le_bool(g.dyadic(), both.left), hyx := g.dyadic().le_of_le_bool(f.dyadic(), both.right))
+            },
+            Inf(_, _) => λ no => false_elim(no),
+            NaN(_) => λ no => false_elim(no),
+        },
+        Inf(n, hn) => match b {
+            Fin(_) => λ no => false_elim(no),
+            Inf(m, _) => match n {
+                False => match m { False => λ _ => refl, True => λ no => false_elim(no) },
+                True => match m { False => λ no => false_elim(no), True => λ _ => refl },
+            },
+            NaN(_) => λ no => false_elim(no),
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(h)
+}
+
+// ---------------------------------------------------------------------------
+// The relation over any ordered field (docs/floating-point-design.md §6,
+// §18).
+//
+// A point `x` of an ordered field `K` is read through the rationals that a
+// morphism `Rat → K` puts around it: `P` holds around `x` when some
+// rational interval whose images bracket `x` has `P` at each of its
+// rationals (`Rat::Around`). A correct rounding of `x` is `RoundsTo` around
+// it (`Format::RoundsIn`). At `Rat` and the identity that is `RoundsTo`
+// itself (`rounds_in_of_rat`, `rounds_in_rat`); at `CReal` and
+// `CReal::ofRat_hom` it is `RoundsToReal`.
+
+section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
+        hom: OrderedRingHom<Rat, K>(map, Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+            ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
+
+// `P` holds at every rational of an interval whose images bracket `x`.
+fn Rat::Around(x: K, P: Rat → Type) → Type {
+    ∃ lo: Rat, ∃ hi: Rat, map(lo) <= x ∧ x <= map(hi) ∧ ((q: Rat) → Rat::Le(lo, q) → Rat::Le(q, hi) → P(q))
+}
+
+// At an image the interval is the point, for a `P` that respects `≈`.
+theorem Rat::around_of_rat(q: Rat, P: Rat → Type, resp: (a, b: Rat) → Rat::Same(a, b) → P(b) → P(a), h: P(q)): Rat::Around(hom, map(q), P) {
+    Exists(q, Exists(q, And(StrictOrder::le_refl(map(q)), And(StrictOrder::le_refl(map(q)),
+        λ p (l: Rat::Le(q, p)) (u: Rat::Le(p, q)) => resp(p, q, Rat::le_antisymm(u, l), h)))))
+}
+
+// And at an image the point is in the interval: the morphism reflects `≤`.
+theorem Rat::around_rat(q: Rat, P: Rat → Type, h: Rat::Around(hom, map(q), P)): P(q) {
+    match h {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => w.right.right(q, hom.le_of_map(lo, q, w.left), hom.le_of_map(q, hi, w.right.left)),
+        },
+    }
+}
+
+theorem Rat::around_respects(x, y: K, e: x ≈ y, P: Rat → Type, h: Rat::Around(hom, x, P)): Rat::Around(hom, y, P) {
+    match h {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => Exists(lo, Exists(hi, And(StrictOrder::le_of_same_r(map(lo), x, y, K.rel_sym(x, y, e), w.left),
+                And(StrictOrder::le_of_same_l(y, x, map(hi), K.rel_sym(x, y, e), w.right.left), w.right.right)))),
+        },
+    }
+}
+
+theorem Rat::around_mono(x: K, P, Q: Rat → Type, f: (q: Rat) → P(q) → Q(q), h: Rat::Around(hom, x, P)): Rat::Around(hom, x, Q) {
+    match h {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => Exists(lo, Exists(hi, And(w.left, And(w.right.left, λ q l u => f(q, w.right.right(q, l, u)))))),
+        },
+    }
+}
+
+// The interval can be cut at a rational below `x`, and at one above,
+// without deciding anything about `x`: of two rationals below it the
+// larger is below it.
+theorem Rat::around_above(x: K, P: Rat → Type, b: Rat, hb: map(b) <= x, h: Rat::Around(hom, x, P)): Rat::Around(hom, x, λ q => Rat::Le(b, q) ∧ P(q)) {
+    match h {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => match Rat::le_total(lo, b) {
+                Inl(lb) => Exists(b, Exists(hi, And(hb, And(w.right.left, λ q (l: Rat::Le(b, q)) u => And(l, w.right.right(q, Rat::le_trans(lb, l), u)))))),
+                Inr(bl) => Exists(lo, Exists(hi, And(w.left, And(w.right.left, λ q (l: Rat::Le(lo, q)) u => And(Rat::le_trans(bl, l), w.right.right(q, l, u)))))),
+            },
+        },
+    }
+}
+
+theorem Rat::around_below(x: K, P: Rat → Type, c: Rat, hc: x <= map(c), h: Rat::Around(hom, x, P)): Rat::Around(hom, x, λ q => Rat::Le(q, c) ∧ P(q)) {
+    match h {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => match Rat::le_total(hi, c) {
+                Inl(hc0) => Exists(lo, Exists(hi, And(w.left, And(w.right.left, λ q l (u: Rat::Le(q, hi)) => And(Rat::le_trans(u, hc0), w.right.right(q, l, u)))))),
+                Inr(ch) => Exists(lo, Exists(c, And(w.left, And(hc, λ q l (u: Rat::Le(q, c)) => And(u, w.right.right(q, l, Rat::le_trans(u, ch))))))),
+            },
+        },
+    }
+}
+
+// Both ends of the interval are in it: `lo <= hi` because their images
+// bracket `x`.
+theorem Rat::around_ends(x: K, P: Rat → Type, h: Rat::Around(hom, x, P)): ∃ lo: Rat, ∃ hi: Rat, map(lo) <= x ∧ x <= map(hi) ∧ P(lo) ∧ P(hi) {
+    match h {
+        Exists(lo, rest) => match rest {
+            Exists(hi, w) => {
+                let lh: Rat::Le(lo, hi) = hom.le_of_map(lo, hi, PseudoOrder::le_trans(map(lo), x, map(hi), w.left, w.right.left));
+                Exists(lo, Exists(hi, And(w.left, And(w.right.left, And(w.right.right(lo, lo.le_refl(), lh), w.right.right(hi, lh, hi.le_refl()))))))
+            },
+        },
+    }
+}
+
+// Two intervals around one point share a rational: the larger lower end.
+theorem Rat::around_meet(x: K, P, Q: Rat → Type, hp: Rat::Around(hom, x, P), hq: Rat::Around(hom, x, Q)): ∃ q: Rat, P(q) ∧ Q(q) {
+    match hp {
+        Exists(a, ra) => match ra {
+            Exists(b, wp) => match hq {
+                Exists(c, rc) => match rc {
+                    Exists(d, wq) => {
+                        let ad: Rat::Le(a, d) = hom.le_of_map(a, d, PseudoOrder::le_trans(map(a), x, map(d), wp.left, wq.right.left));
+                        let cb: Rat::Le(c, b) = hom.le_of_map(c, b, PseudoOrder::le_trans(map(c), x, map(b), wq.left, wp.right.left));
+                        let ab: Rat::Le(a, b) = hom.le_of_map(a, b, PseudoOrder::le_trans(map(a), x, map(b), wp.left, wp.right.left));
+                        let cd: Rat::Le(c, d) = hom.le_of_map(c, d, PseudoOrder::le_trans(map(c), x, map(d), wq.left, wq.right.left));
+                        match Rat::le_total(a, c) {
+                            Inl(ac) => Exists(c, And(wp.right.right(c, ac, cb), wq.right.right(c, c.le_refl(), cd))),
+                            Inr(ca) => Exists(a, And(wp.right.right(a, a.le_refl(), ab), wq.right.right(a, ca, ad))),
+                        }
+                    },
+                },
+            },
+        },
+    }
+}
+
+// `r` is a correct rounding of `x`: every rational of an interval around
+// `x` rounds to `r`.
+fn Format::RoundsIn(self F: Format, mode: Mode, x: K, r: Float(F)) → Type { Rat::Around(hom, x, λ q => RoundsTo(F, mode, q, r)) }
+
+// At an image the relation is `RoundsTo`, both ways.
+theorem Format::rounds_in_of_rat(self F: Format, mode: Mode, q: Rat, r: Float(F), h: RoundsTo(F, mode, q, r)): F.RoundsIn(hom, mode, map(q), r) {
+    Rat::around_of_rat<K>(hom, q, λ p => RoundsTo(F, mode, p, r), λ a b e hb => F.rounds_respects(mode, a, b, e, r, hb), h)
+}
+
+theorem Format::rounds_in_rat(self F: Format, mode: Mode, q: Rat, r: Float(F), h: F.RoundsIn(hom, mode, map(q), r)): RoundsTo(F, mode, q, r) {
+    Rat::around_rat<K>(hom, q, λ p => RoundsTo(F, mode, p, r), h)
+}
+
+theorem Format::rounds_in_respects(self F: Format, mode: Mode, x, y: K, e: x ≈ y, r: Float(F), h: F.RoundsIn(hom, mode, x, r)): F.RoundsIn(hom, mode, y, r) {
+    Rat::around_respects(hom, x, y, e, λ q => RoundsTo(F, mode, q, r), h)
+}
+
+// Any two correct roundings of one point agree: their intervals share a
+// rational, whose rounding is unique.
+theorem Format::rounds_in_unique(self F: Format, mode: Mode, x: K, r, s: Float(F), hr: F.RoundsIn(hom, mode, x, r), hs: F.RoundsIn(hom, mode, x, s)): Float::Same(r, s) {
+    match Rat::around_meet(hom, x, λ q => RoundsTo(F, mode, q, r), λ q => RoundsTo(F, mode, q, s), hr, hs) {
+        Exists(q, both) => F.rounds_unique(mode, q, r, s, both.left, both.right),
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// The relation at `CReal`: `RoundsIn` at `CReal::ofRat_hom`.
+
+// `r` is a correct rounding of the real `x`: `x` lies in a rational interval
+// that rounds to `r` throughout.
+fn RoundsToReal(F: Format, mode: Mode, x: CReal, r: Float(F)) → Type { F.RoundsIn(CReal::ofRat_hom(), mode, x, r) }
+
+// At an embedded rational the relation is `RoundsTo`, both ways.
+theorem Format::rounds_real_of_rat(self F: Format, mode: Mode, q: Rat, r: Float(F), h: RoundsTo(F, mode, q, r)): RoundsToReal(F, mode, CReal::ofRat(q), r) {
+    Format::rounds_in_of_rat<CReal>(CReal::ofRat_hom(), F, mode, q, r, h)
+}
+
+theorem Format::rounds_real_rat(self F: Format, mode: Mode, q: Rat, r: Float(F), h: RoundsToReal(F, mode, CReal::ofRat(q), r)): RoundsTo(F, mode, q, r) {
+    Format::rounds_in_rat<CReal>(CReal::ofRat_hom(), F, mode, q, r, h)
+}
+
+theorem Format::rounds_real_respects(self F: Format, mode: Mode, {x, y: CReal}, e: x ≈ y, r: Float(F), h: RoundsToReal(F, mode, x, r)): RoundsToReal(F, mode, y, r) {
+    F.rounds_in_respects(CReal::ofRat_hom(), mode, x, y, e, r, h)
+}
+
+// Two intervals around one real share their larger lower end.
+theorem Format::rounds_real_unique(self F: Format, mode: Mode, x: CReal, r, s: Float(F), hr: RoundsToReal(F, mode, x, r), hs: RoundsToReal(F, mode, x, s)): Float::Same(r, s) {
+    F.rounds_in_unique(CReal::ofRat_hom(), mode, x, r, s, hr, hs)
+}
+
+// ---------------------------------------------------------------------------
+// Rounding a dyadic in a window of the format (literal.hthr's `round_hex`):
+// `round_dyadic` works in half-units of `2^qmin`, a 1075-bit count near one
+// at binary64, past the evaluator's budget; the window keeps the numbers
+// about `prec` bits wide. A negative dyadic rounds its magnitude under the
+// conjugate mode.
+
+fn Format::round_dyadic_win(self F: Format, mode: Mode, d: Dyadic) → Float(F) {
+    match d.mant { OfNat(m) => F.round_hex(mode, m, d.exp), NegSucc(m) => -F.round_hex(mode.conj(), Succ(m), d.exp) }
+}
+
+theorem Format::round_dyadic_win_correct(self F: Format, mode: Mode, d: Dyadic): RoundsTo(F, mode, d.rat(), F.round_dyadic_win(mode, d)) {
+    match d {
+        Dyadic(mant, exp) => match mant {
+            OfNat(m) => {
+                let e: (Dyadic(OfNat(m), exp).rat() ≈ Rat::scaled(2, trivial, m, exp)) = Rat::same_refl(Rat::scaled(2, trivial, m, exp));
+                F.rounds_respects(mode, Dyadic(OfNat(m), exp).rat(), Rat::scaled(2, trivial, m, exp), e, F.round_hex(mode, m, exp), F.round_hex_correct(mode, m, exp))
+            },
+            NegSucc(m) => {
+                let d0 = Dyadic(NegSucc(m), exp);
+                let flip: (Rat::scaled(2, trivial, Succ(m), exp) ≈ (-d0).rat()) = Rat::same_refl(Rat::scaled(2, trivial, Succ(m), exp));
+                let e: (-d0.rat() ≈ Rat::scaled(2, trivial, Succ(m), exp)) = Rat::same_sym(Rat::same_trans(flip, d0.rat_neg()));
+                F.rounds_neg(mode, d0.rat(), F.round_hex(mode.conj(), Succ(m), exp),
+                    F.rounds_respects(mode.conj(), -d0.rat(), Rat::scaled(2, trivial, Succ(m), exp), e, F.round_hex(mode.conj(), Succ(m), exp), F.round_hex_correct(mode.conj(), Succ(m), exp)))
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ziv's search.
+
+// Round both ends of an enclosure; when they agree, that is the rounding of
+// everything inside.
+fn Format::round_box(self F: Format, mode: Mode, I: Interval) → Option<Float(F)> {
+    match I {
+        Bnd(lo, hi) => match F.round_dyadic_win(mode, lo).agree(F.round_dyadic_win(mode, hi)) { True => Some(F.round_dyadic_win(mode, lo)), False => None },
+        Whole => None,
+    }
+}
+
+theorem Format::rounds_between(self F: Format, mode: Mode, lo, hi: Dyadic, agree: F.round_dyadic_win(mode, lo).agree(F.round_dyadic_win(mode, hi)).IsTrue(),
+    q: Rat, l: lo.rat() <= q, u: q <= hi.rat()): RoundsTo(F, mode, q, F.round_dyadic_win(mode, lo))
+{
+    let r = F.round_dyadic_win(mode, lo);
+    let t = F.round_dyadic_win(mode, hi);
+    let s = F.round_rat(mode, q);
+    let hs = F.round_rat_correct(mode, q);
+    let rs = F.rounds_mono(mode, lo.rat(), q, l, r, s, F.round_dyadic_win_correct(mode, lo), hs);
+    let st = F.rounds_mono(mode, q, hi.rat(), u, s, t, hs, F.round_dyadic_win_correct(mode, hi));
+    F.rounds_of_same(mode, q, r, s, Float::same_of_squeeze(r, s, t, Float::same_of_agree(r, t, agree), rs, st), hs)
+}
+
+theorem Format::round_box_bnd(self F: Format, mode: Mode, lo, hi: Dyadic, {x: CReal}, h: CReal::ofRat(lo.rat()) <= x ∧ x <= CReal::ofRat(hi.rat()),
+    r: Float(F), c: Bool, ce: F.round_dyadic_win(mode, lo).agree(F.round_dyadic_win(mode, hi)) = c,
+    is: (match c { True => Some(F.round_dyadic_win(mode, lo)), False => None }) = Some(r)): RoundsToReal(F, mode, x, r)
+{
+    match c as λ c0 => F.round_dyadic_win(mode, lo).agree(F.round_dyadic_win(mode, hi)) = c0 → (match c0 { True => Some(F.round_dyadic_win(mode, lo)), False => None }) = Some(r) → RoundsToReal(F, mode, x, r) {
+        True => λ ce0 e => {
+            let rr: (F.round_dyadic_win(mode, lo) = r) = Option::some_inj(F.round_dyadic_win(mode, lo), r, e);
+            let agree = Bool::is_true_of_eq(ce0);
+            Exists(lo.rat(), Exists(hi.rat(), And(h.left, And(h.right,
+                λ q l u => j(rr, λ v _ => RoundsTo(F, mode, q, v), F.rounds_between(mode, lo, hi, agree, q, l, u))))))
+        },
+        False => λ _ e => Option::none_ne_some(r, e, RoundsToReal(F, mode, x, r)),
+    }(ce, is)
+}
+
+theorem Format::round_box_correct(self F: Format, mode: Mode, I: Interval, {x: CReal}, hx: I.HasReal(x), r: Float(F), is: F.round_box(mode, I) = Some(r)): RoundsToReal(F, mode, x, r) {
+    match I as λ J => J.HasReal(x) → F.round_box(mode, J) = Some(r) → RoundsToReal(F, mode, x, r) {
+        Bnd(lo, hi) => λ h e => F.round_box_bnd(mode, lo, hi, h, r, F.round_dyadic_win(mode, lo).agree(F.round_dyadic_win(mode, hi)), refl, e),
+        Whole => λ _ e => Option::none_ne_some(r, e, RoundsToReal(F, mode, x, r)),
+    }(hx, is)
+}
+
+// Refine until the ends agree: index and precision both `step` further out
+// per try, `tries` times.
+fn Format::round_enclosed(self F: Format, mode: Mode, e: Enclosed, n, p, step, tries: Nat) → Option<Float(F)> {
+    match tries {
+        Zero => None,
+        Succ(t) => match F.round_box(mode, e.at(n, p)) { Some(r) => Some(r), None => F.round_enclosed(mode, e, n + step, p + step, step, t) },
+    }
+}
+
+theorem Format::round_enclosed_correct(self F: Format, mode: Mode, e: Enclosed, step, tries: Nat): (n, p: Nat) → (r: Float(F)) → F.round_enclosed(mode, e, n, p, step, tries) = Some(r) → RoundsToReal(F, mode, e.x, r) {
+    match tries {
+        Zero => λ n p r no => Option::none_ne_some(r, no, RoundsToReal(F, mode, e.x, r)),
+        Succ(t, ih) => λ n p r => match F.round_box(mode, e.at(n, p)) as λ o => F.round_box(mode, e.at(n, p)) = o →
+            (match o { Some(r0) => Some(r0), None => F.round_enclosed(mode, e, n + step, p + step, step, t) }) = Some(r) → RoundsToReal(F, mode, e.x, r)
+        {
+            Some(r0) => λ is (k: Some(r0) = Some(r)) =>
+                F.round_box_correct(mode, e.at(n, p), e.has(n, p), r, trans(is, k)),
+            None => λ _ k => ih(n + step, p + step, r, k),
+        }(refl),
+    }
+}
+
+// The search from the format's precision and sixteen guard bits, which
+// cover a series' cancellation at moderate arguments, sixteen bits further
+// per try.
+fn Format::round_real(self F: Format, mode: Mode, e: Enclosed, tries: Nat) → Option<Float(F)> {
+    F.round_enclosed(mode, e, F.prec() + 16, F.prec() + 16, 16, tries)
+}
+
+theorem Format::round_real_correct(self F: Format, mode: Mode, e: Enclosed, tries: Nat, r: Float(F), is: F.round_real(mode, e, tries) = Some(r)): RoundsToReal(F, mode, e.x, r) {
+    F.round_enclosed_correct(mode, e, 16, tries, F.prec() + 16, F.prec() + 16, r, is)
+}
+
+// ---------------------------------------------------------------------------
+// The search ends (issues/float-round-real-termination.md).
+//
+// Every breakpoint of every mode is a half-unit grid point: a float's value
+// is `F.grid(f.H())` (`Finite::val_grid`), the midpoint of two neighbours is
+// `F.grid(M)` (`mid_sum`), and the overflow threshold is `F.grid(F.ovf_h())`.
+// So rounding is constant on each open grid cell, and the constant is
+// `round_h` at the cell's index with the sticky bit set (`cell_rounds`). A
+// real `2^-k` clear of both ends of its cell (`Cell`) is enclosed inside the
+// cell by any enclosure narrower than `2^-k`; both ends of that enclosure
+// round alike (`round_box_cell`), and the search stops there or earlier.
+//
+// Being clear of the whole grid is stronger than being apart from the
+// breakpoints of one mode: it also asks for apartness from the grid points
+// no mode breaks at (the floats themselves, under a nearest mode). It is the
+// statement that needs no case per mode, and for the reals it is meant for
+// (exp and log at floats other than the exact cases, which are irrational)
+// it is equally true. The price is only in the bound: a real close to a grid
+// point that is not a breakpoint has a smaller `k`, so a larger try count,
+// while the search itself still stops as soon as the ends agree.
+
+// What every rational strictly inside grid cell `h` rounds to.
+fn Format::cell_round(self F: Format, mode: Mode, h: Int) → Float(F) {
+    match h { OfNat(n) => F.round_h(mode, n, True), NegSucc(n) => -F.round_h(mode.conj(), n, True) }
+}
+
+theorem Format::grid_neg(self F: Format, m: Int): -F.grid(m) ≈ F.grid(-m) { Rat::same_sym(Dyadic(m, F.qmin() - 1).rat_neg()) }
+
+theorem Format::cell_rounds(self F: Format, mode: Mode, h: Int, q: Rat, l: F.grid(h) < q, u: q < F.grid(h + 1)): RoundsTo(F, mode, q, F.cell_round(mode, h)) {
+    match h as λ h0 => F.grid(h0) < q → q < F.grid(h0 + 1) → RoundsTo(F, mode, q, F.cell_round(mode, h0)) {
+        OfNat(n) => λ l0 u0 => F.round_h_correct(mode, q, n, True, And(l0, u0)),
+        NegSucc(n) => λ l0 u0 => {
+            let top: (-F.grid(NegSucc(n) + 1) ≈ F.grid(-(NegSucc(n) + 1))) = F.grid_neg(NegSucc(n) + 1);
+            let bot: (-F.grid(NegSucc(n)) ≈ F.grid(-NegSucc(n))) = F.grid_neg(NegSucc(n));
+            let ns: (NegSucc(n) = -(n.int() + 1)) = refl;
+            let a: (F.grid(n.int()) <= F.grid(-(NegSucc(n) + 1))) = F.grid_le(n.int(), -(NegSucc(n) + 1), omega(ns));
+            let b: (F.grid(-NegSucc(n)) <= F.grid(n.int() + 1)) = F.grid_le(-NegSucc(n), n.int() + 1, omega(ns));
+            let inside: F.Approx(-q, n, True) = And(linarith(u0, top, a), linarith(l0, bot, b));
+            F.rounds_neg(mode, q, F.round_h(mode.conj(), n, True), F.round_h_correct(mode.conj(), -q, n, True, inside))
+        },
+    }(l, u)
+}
+
+theorem Dyadic::le_bool_of_le(self a, b: Dyadic, h: a <= b): a.le_bool(b).IsTrue() {
+    match a.le_dec(b) {
+        Inl(_) => trivial,
+        Inr(no) => false_elim(no(h)),
+    }
+}
+
+// Two floats of one value agree.
+theorem Float::agree_of_same({F: Format}, a, b: Float(F), h: Float::Same(a, b)): a.agree(b).IsTrue() {
+    match a as λ a0 => Float::Same(a0, b) → a0.agree(b).IsTrue() {
+        Fin(f) => match b {
+            Fin(g) => λ (e: f.val() ≈ g.val()) => f.dyadic().le_bool(g.dyadic()).is_true_and_intro(g.dyadic().le_bool(f.dyadic()),
+                f.dyadic().le_bool_of_le(g.dyadic(), Rat::le_of_same(e)), g.dyadic().le_bool_of_le(f.dyadic(), Rat::le_of_same(Rat::same_sym(e)))),
+            Inf(_, _) => λ no => false_elim(no),
+            NaN(_) => λ no => false_elim(no),
+        },
+        Inf(n, hn) => match b {
+            Fin(_) => λ no => false_elim(no),
+            Inf(m, _) => match n {
+                False => match m { False => λ _ => trivial, True => λ no => absurd(no) },
+                True => match m { False => λ no => absurd(sym(no)), True => λ _ => trivial },
+            },
+            NaN(_) => λ no => false_elim(no),
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(h)
+}
+
+// An enclosure inside one grid cell ends the search.
+theorem Format::round_box_cell(self F: Format, mode: Mode, h: Int, lo, hi: Dyadic,
+    l: F.grid(h) < lo.rat(), lu: lo.rat() < F.grid(h + 1), hl: F.grid(h) < hi.rat(), u: hi.rat() < F.grid(h + 1)):
+    F.round_box(mode, Bnd(lo, hi)) = Some(F.round_dyadic_win(mode, lo))
+{
+    let r = F.round_dyadic_win(mode, lo);
+    let t = F.round_dyadic_win(mode, hi);
+    let c = F.cell_round(mode, h);
+    let rc: Float::Same(r, c) = F.rounds_unique(mode, lo.rat(), r, c, F.round_dyadic_win_correct(mode, lo), F.cell_rounds(mode, h, lo.rat(), l, lu));
+    let hr: RoundsTo(F, mode, hi.rat(), r) = F.rounds_of_same(mode, hi.rat(), r, c, rc, F.cell_rounds(mode, h, hi.rat(), hl, u));
+    let rt: Float::Same(r, t) = F.rounds_unique(mode, hi.rat(), r, t, hr, F.round_dyadic_win_correct(mode, hi));
+    let ag: (r.agree(t) = True) = eq_true_of_is_true(r.agree(t), Float::agree_of_same(r, t, rt));
+    j(sym(ag), λ v _ => (match v { True => Some(r), False => None }) = Some(r), refl)
+}
+
+// `x` lies in grid cell `h`, at least `2^-k` clear of both its ends.
+fn Format::Cell(self F: Format, x: CReal, h: Int, k: Nat) → Type {
+    CReal::ofRat(F.grid(h) + Rat::inv_pow2(k)) <= x ∧ x <= CReal::ofRat(F.grid(h + 1) - Rat::inv_pow2(k))
+}
+
+// `x` is apart from every breakpoint of `F` in every mode, with the gap
+// stated: some cell holds it `2^-k` clear of both ends.
+fn Format::OffGrid(self F: Format, x: CReal) → Type { ∃ h: Int, ∃ k: Nat, F.Cell(x, h, k) }
+
+// A bounded enclosure narrower than `2^-k`.
+fn Interval::Narrow(self I: Interval, k: Nat) → Type {
+    match I { Bnd(lo, hi) => hi.rat() - lo.rat() < Rat::inv_pow2(k), Whole => False }
+}
+
+theorem Format::round_box_of_cell(self F: Format, mode: Mode, I: Interval, {x: CReal}, h: Int, k: Nat, c: F.Cell(x, h, k), hx: I.HasReal(x), w: I.Narrow(k)):
+    ∃ r: Float(F), F.round_box(mode, I) = Some(r)
+{
+    match I as λ J => J.HasReal(x) → J.Narrow(k) → ∃ r: Float(F), F.round_box(mode, J) = Some(r) {
+        Bnd(lo, hi) => λ (b: CReal::ofRat(lo.rat()) <= x ∧ x <= CReal::ofRat(hi.rat())) (w0: hi.rat() - lo.rat() < Rat::inv_pow2(k)) => {
+            let a: (F.grid(h) + Rat::inv_pow2(k) <= hi.rat()) = CReal::le_of_ofRat_le(p := F.grid(h) + Rat::inv_pow2(k), q := hi.rat(), h := CReal::le_trans(c.left, b.right));
+            let z: (lo.rat() <= F.grid(h + 1) - Rat::inv_pow2(k)) = CReal::le_of_ofRat_le(p := lo.rat(), q := F.grid(h + 1) - Rat::inv_pow2(k), h := CReal::le_trans(b.left, c.right));
+            let ep = Rat::inv_pow2_pos(k);
+            Exists(F.round_dyadic_win(mode, lo), F.round_box_cell(mode, h, lo, hi, linarith(a, w0), linarith(z, ep), linarith(a, ep), linarith(z, w0)))
+        },
+        Whole => λ _ (no: False) => false_elim(no),
+    }(hx, w)
+}
+
+// The enclosure `round_enclosed` reads at its try `t`.
+fn Enclosed::try_at(self e: Enclosed, n, p, step, t: Nat) → Interval {
+    match t { Zero => e.at(n, p), Succ(t0) => e.try_at(n + step, p + step, step, t0) }
+}
+
+theorem Enclosed::try_has(self e: Enclosed, step, t: Nat): (n, p: Nat) → e.try_at(n, p, step, t).HasReal(e.x) {
+    match t { Zero => λ n p => e.has(n, p), Succ(_, ih) => λ n p => ih(n + step, p + step) }
+}
+
+// The search's enclosures narrow: each width is reached at some try. (An
+// existence, so the try count computes from it.)
+fn Enclosed::Narrows(self e: Enclosed, n, p, step: Nat) → Type { (k: Nat) → ∃ t: Nat, e.try_at(n, p, step, t).Narrow(k) }
+
+// A try whose ends agree ends the search there or earlier.
+theorem Format::round_enclosed_some(self F: Format, mode: Mode, e: Enclosed, step, t: Nat): (n, p, tries: Nat) → t < tries →
+    (∃ r: Float(F), F.round_box(mode, e.try_at(n, p, step, t)) = Some(r)) → ∃ r: Float(F), F.round_enclosed(mode, e, n, p, step, tries) = Some(r)
+{
+    match t {
+        Zero => λ n p tries lt hit => match tries as λ tr => 0 < tr → ∃ r: Float(F), F.round_enclosed(mode, e, n, p, step, tr) = Some(r) {
+            Zero => λ no => false_elim(omega(no)),
+            Succ(tr1) => λ _ => j(sym(hit.proof), λ o _ => ∃ r: Float(F), (match o { Some(r0) => Some(r0), None => F.round_enclosed(mode, e, n + step, p + step, step, tr1) }) = Some(r),
+                Exists(hit.witness, refl)),
+        }(lt),
+        Succ(t0, ih) => λ n p tries lt hit => match tries as λ tr => Succ(t0) < tr → ∃ r: Float(F), F.round_enclosed(mode, e, n, p, step, tr) = Some(r) {
+            Zero => λ no => false_elim(omega(no)),
+            Succ(tr1) => λ lt1 => match F.round_box(mode, e.at(n, p)) as λ o => ∃ r: Float(F), (match o { Some(r0) => Some(r0), None => F.round_enclosed(mode, e, n + step, p + step, step, tr1) }) = Some(r) {
+                Some(r0) => Exists(r0, refl),
+                None => ih(n + step, p + step, tr1, omega(lt1), hit),
+            },
+        }(lt),
+    }
+}
+
+// Enough tries, computed from the gap and the narrowing.
+fn Format::round_apart_tries(self F: Format, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step), off: F.OffGrid(e.x)) → Nat {
+    Succ(narrow(off.proof.witness).witness)
+}
+
+theorem Format::round_enclosed_ends(self F: Format, mode: Mode, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step), off: F.OffGrid(e.x)):
+    ∃ r: Float(F), F.round_enclosed(mode, e, n, p, step, F.round_apart_tries(e, n, p, step, narrow, off)) = Some(r)
+{
+    let k = off.proof.witness;
+    let t = narrow(k).witness;
+    F.round_enclosed_some(mode, e, step, t, n, p, Succ(t), omega,
+        F.round_box_of_cell(mode, e.try_at(n, p, step, t), off.witness, k, off.proof.proof, e.try_has(step, t, n, p), narrow(k).proof))
+}
+
+// Ziv's search with no `Option`: a real clear of the grid, read through
+// enclosures that narrow, has a correct rounding, and this computes it.
+fn Format::round_apart_witness(self F: Format, mode: Mode, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step), off: F.OffGrid(e.x))
+    → ∃ r: Float(F), RoundsToReal(F, mode, e.x, r)
+{
+    let s = F.round_enclosed_ends(mode, e, n, p, step, narrow, off);
+    Exists(s.witness, F.round_enclosed_correct(mode, e, step, F.round_apart_tries(e, n, p, step, narrow, off))(n, p, s.witness, s.proof))
+}
+
+// `round_real`'s schedule, total.
+fn Format::round_real_apart(self F: Format, mode: Mode, e: Enclosed, narrow: e.Narrows(F.prec() + 16, F.prec() + 16, 16), off: F.OffGrid(e.x)) → Float(F) {
+    F.round_apart_witness(mode, e, F.prec() + 16, F.prec() + 16, 16, narrow, off).witness
+}
+
+theorem Format::round_real_apart_correct(self F: Format, mode: Mode, e: Enclosed, narrow: e.Narrows(F.prec() + 16, F.prec() + 16, 16), off: F.OffGrid(e.x)):
+    RoundsToReal(F, mode, e.x, F.round_real_apart(mode, e, narrow, off))
+{
+    F.round_apart_witness(mode, e, F.prec() + 16, F.prec() + 16, 16, narrow, off).proof
+}
+
+// And `round_real` itself is `Some` with those tries.
+theorem Format::round_real_ends(self F: Format, mode: Mode, e: Enclosed, narrow: e.Narrows(F.prec() + 16, F.prec() + 16, 16), off: F.OffGrid(e.x)):
+    ∃ r: Float(F), F.round_real(mode, e, F.round_apart_tries(e, F.prec() + 16, F.prec() + 16, 16, narrow, off)) = Some(r)
+{
+    F.round_enclosed_ends(mode, e, F.prec() + 16, F.prec() + 16, 16, narrow, off)
+}
+
+// ---------------------------------------------------------------------------
+// Enclosures that narrow.
+
+// An index at least `N` from try `t` on, when every step moves it.
+theorem Enclosed::try_narrow(self e: Enclosed, step: Nat, ps: 1 <= step, k, N: Nat, w: (n, p: Nat) → N <= n → e.at(n, p).Narrow(k), t: Nat):
+    (m, q: Nat) → N <= m + t → e.try_at(m, q, step, t).Narrow(k)
+{
+    match t {
+        Zero => λ m q le => w(m, q, omega(le)),
+        Succ(_, ih) => λ m q le => ih(m + step, q + step, omega(le, ps)),
+    }
+}
+
+// Narrow from some index on, whatever the precision, so narrow along any
+// schedule that moves the index.
+theorem Enclosed::narrows_of(self e: Enclosed, step: Nat, ps: 1 <= step, w: (k: Nat) → ∃ N: Nat, (n, p: Nat) → N <= n → e.at(n, p).Narrow(k), n, p: Nat): e.Narrows(n, p, step) {
+    λ k => Exists(w(k).witness, e.try_narrow(step, ps, k, w(k).witness, w(k).proof, w(k).witness, n, p, omega))
+}
+
+// A real's own enclosures `x.seq(n) ± 2^-n`, whose width is `2^(1-n)`.
+fn CReal::enclosed(self x: CReal) → Enclosed { Enclosed(x, λ n _ => x.enclose(n), λ n _ => x.enclose_has(n)) }
+
+theorem CReal::enclose_narrow(self x: CReal, k, n: Nat, le: k + 2 <= n): x.enclose(n).Narrow(k) {
+    let r = CReal::radius(n);
+    let lo: ((x.seq(n) - r).rat() ≈ x.at(n) - Rat::inv_pow2(n)) = Rat::same_trans(x.seq(n).rat_sub(r), Rat::sub_respects(x.at(n).same_refl(), CReal::radius_rat(n)));
+    let hi: ((x.seq(n) + r).rat() ≈ x.at(n) + Rat::inv_pow2(n)) = Rat::same_trans(x.seq(n).rat_add(r), Rat::add_respects(x.at(n).same_refl(), CReal::radius_rat(n)));
+    let small = Rat::inv_pow2_antitone(k + 2, n, le);
+    let h2 = Rat::inv_pow2_half(k + 1);
+    let h1 = Rat::inv_pow2_half(k);
+    let pos = Rat::inv_pow2_pos(k + 2);
+    let w: ((x.seq(n) + r).rat() - (x.seq(n) - r).rat() < Rat::inv_pow2(k)) = linarith(lo, hi, small, h2, h1, pos);
+    w
+}
+
+theorem CReal::enclosed_narrows(self x: CReal, step: Nat, ps: 1 <= step, n, p: Nat): x.enclosed().Narrows(n, p, step) {
+    x.enclosed().narrows_of(step, ps, λ k => Exists(k + 2, λ m _ le => x.enclose_narrow(k, m, le)), n, p)
+}
+
+// ---------------------------------------------------------------------------
+// Every rational lies in a closed grid cell, and apart from every grid point
+// by one distance is off the grid.
+
+theorem Format::approx_between(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st)): F.grid(h.int()) <= x ∧ x <= F.grid(h.int() + 1) {
+    match st as λ s => F.Approx(x, h, s) → F.grid(h.int()) <= x ∧ x <= F.grid(h.int() + 1) {
+        False => λ (e: x ≈ F.grid(h.int())) => And(Rat::le_of_same(Rat::same_sym(e)),
+            Rat::le_trans(Rat::le_of_same(e), F.grid_le(h.int(), h.int() + 1, omega))),
+        True => λ (b: F.grid(h.int()) < x ∧ x < F.grid(h.int() + 1)) => And(Rat::le_of_lt(b.left), Rat::le_of_lt(b.right)),
+    }(a)
+}
+
+// Every rational lies in some closed grid cell.
+theorem Format::grid_floor(self F: Format, y: Rat): ∃ H: Int, F.grid(H) <= y ∧ y <= F.grid(H + 1) {
+    let h = F.rat_h(y);
+    let ab = F.approx_between(y.abs(), h, F.rat_st(y), F.rat_approx(y));
+    match Rat::le_total(0, y) {
+        Inl(nn) => {
+            let e: (y.abs() ≈ y) = y.abs_of_nonneg(nn);
+            let lo: (F.grid(h.int()) <= y) = linarith(e, ab.left);
+            let hi: (y <= F.grid(h.int() + 1)) = linarith(e, ab.right);
+            Exists(h.int(), And(lo, hi))
+        },
+        Inr(np) => {
+            let e: (y.abs() ≈ -y) = Rat::same_trans(Rat::same_sym(y.abs_neg()), (-y).abs_of_nonneg(linarith(np)));
+            let top: (-F.grid(h.int() + 1) ≈ F.grid(-(h.int() + 1))) = F.grid_neg(h.int() + 1);
+            let bot: (-F.grid(h.int()) ≈ F.grid(-h.int())) = F.grid_neg(h.int());
+            let up: (F.grid(-h.int()) <= F.grid(-(h.int() + 1) + 1)) = F.grid_le(-h.int(), -(h.int() + 1) + 1, omega);
+            let lo: (F.grid(-(h.int() + 1)) <= y) = linarith(e, ab.right, top);
+            let hi: (y <= F.grid(-(h.int() + 1) + 1)) = linarith(e, ab.left, bot, up);
+            Exists(-(h.int() + 1), And(lo, hi))
+        },
+    }
+}
+
+theorem Format::off_grid_of_apart(self F: Format, X: CReal, dd: Rat, hdd: 0 < dd,
+    ap: (m: Int) → X - CReal::ofRat(F.grid(m)) <= CReal::ofRat(-dd) ∨ CReal::ofRat(dd) <= X - CReal::ofRat(F.grid(m))):
+    F.OffGrid(X)
+{
+    match dd.archimedean_inv_pow2(hdd) {
+        Exists(k, small) => {
+            let y = X.at(k + 3);
+            let up: (X <= CReal::ofRat(y + Rat::inv_pow2(k + 3))) = X.le_term_add(k + 3);
+            let dn: (CReal::ofRat(y - Rat::inv_pow2(k + 3)) <= X) = X.term_sub_le(k + 3);
+            let q1: (Rat::inv_pow2(k + 1) + Rat::inv_pow2(k + 1) ≈ Rat::inv_pow2(k)) = Rat::inv_pow2_half(k);
+            let q2: (Rat::inv_pow2(k + 2) + Rat::inv_pow2(k + 2) ≈ Rat::inv_pow2(k + 1)) = Rat::inv_pow2_half(k + 1);
+            let q3: (Rat::inv_pow2(k + 3) + Rat::inv_pow2(k + 3) ≈ Rat::inv_pow2(k + 2)) = Rat::inv_pow2_half(k + 2);
+            let p3: (0 < Rat::inv_pow2(k + 3)) = Rat::inv_pow2_pos(k + 3);
+            let gap0: (Rat::inv_pow2(k + 1) + Rat::inv_pow2(k + 3) < dd) = linarith(small, q1, q2, q3, p3);
+            let gap1: (Rat::inv_pow2(k + 3) < dd) = linarith(small, q1, q2, q3, p3);
+            let ip = Rat::inv_pow2(k + 1);
+            let p2 = p3;
+            match F.grid_floor(y) {
+                Exists(H, c) => {
+                    let gl = F.grid(H);
+                    let gh = F.grid(H + 1);
+                    let L0 = CReal::ofRat_le(c.left);
+                    let H0 = CReal::ofRat_le(c.right);
+                    let G0 = CReal::ofRat_lt(gap0);
+                    let G1 = CReal::ofRat_lt(gap1);
+                    let lo: (CReal::ofRat(gl + ip) <= X) = match ap(H) {
+                        Inl(bad) => {
+                            let k0: False = linarith(bad, dn, L0, G1);
+                            false_elim(k0)
+                        },
+                        Inr(good) => linarith(good, G0, CReal::ofRat_lt(p2)),
+                    };
+                    let hi: (X <= CReal::ofRat(gh - ip)) = match ap(H + 1) {
+                        Inl(good) => linarith(good, G0, CReal::ofRat_lt(p2)),
+                        Inr(bad) => {
+                            let k0: False = linarith(bad, up, H0, G1);
+                            false_elim(k0)
+                        },
+                    };
+                    Exists(H, Exists(k + 1, And(lo, hi)))
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Faithful rounding (docs/floating-point-design.md §5.4, §6, §18.3).
+//
+// A faithful rounding of `q` is one of its two neighbours: rounded down or
+// rounded up. At a real it always computes, with no breakpoint to clear.
+// Enclose the real in `[lo, hi]`; round `hi` down to `r` and `lo` up to `s`.
+// When `r <= s`, `r` is a neighbour of every rational between them: one at
+// or above `r` is at most `hi`, so rounds down to `r`; one below `r` is at
+// least `lo`, so every float above it is at least `s >= r`, and it rounds up
+// to `r` (`Format::faithful_between`). The test passes as soon as the
+// enclosure is narrower than the format's least gap `2^qmin`, since two
+// floats `s < r` would lie in `[lo, hi]` that far apart
+// (`Format::down_le_up`), so a real whose enclosures narrow always has one
+// (`Format::faithful_real_total`), at a float, a midpoint or anywhere else.
+
+// `r` rounds `q` down or up.
+fn Format::Faithful(self F: Format, q: Rat, r: Float(F)) → Type { RoundsTo(F, TowardNeg, q, r) ∨ RoundsTo(F, TowardPos, q, r) }
+
+// Every finite float at or below `q` is at or below its rounding down, and
+// every one at or above `q` at or above its rounding up.
+theorem Format::le_of_down(self F: Format, q: Rat, d: Float(F), hd: RoundsTo(F, TowardNeg, q, d), g: Finite(F), gq: g.val() <= q): Float::Le(Float::Fin(g), d) {
+    match d as λ d0 => RoundsTo(F, TowardNeg, q, d0) → Float::Le(Float::Fin(g), d0) {
+        Fin(f) => λ (h: Finite::Below(q, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(q, f) ∧ F.Undercuts(q))) => match h {
+            Inl(b) => b.right(g, gq),
+            Inr(w) => false_elim(Rat::not_lt_of_le(gq, w.right.right(g))),
+        },
+        Inf(n, hn) => match n {
+            False => λ no => false_elim(no),
+            True => λ (u: F.Undercuts(q)) => false_elim(Rat::not_lt_of_le(gq, u(g))),
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(hd)
+}
+
+theorem Format::le_of_up(self F: Format, q: Rat, u: Float(F), hu: RoundsTo(F, TowardPos, q, u), g: Finite(F), qg: q <= g.val()): Float::Le(u, Float::Fin(g)) {
+    match u as λ u0 => RoundsTo(F, TowardPos, q, u0) → Float::Le(u0, Float::Fin(g)) {
+        Fin(f) => λ (h: Finite::Above(q, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(q, f) ∧ F.Exceeds(q))) => match h {
+            Inl(a) => a.right(g, qg),
+            Inr(w) => false_elim(Rat::not_lt_of_le(qg, w.right.right(g))),
+        },
+        Inf(n, hn) => match n {
+            False => λ (e: F.Exceeds(q)) => false_elim(Rat::not_lt_of_le(qg, e(g))),
+            True => λ no => false_elim(no),
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(hu)
+}
+
+// A rounding is at or below `+∞` and at or above `-∞`.
+theorem Format::rounds_le_top(self F: Format, mode: Mode, q: Rat, a: Float(F), ha: RoundsTo(F, mode, q, a), hn: F.specials.has_inf().IsTrue()): Float::Le(a, Float::Inf(False, hn)) {
+    match a as λ a0 => RoundsTo(F, mode, q, a0) → Float::Le(a0, Float::Inf(False, hn)) {
+        Fin(_) => λ _ => refl,
+        Inf(_, _) => λ _ => Inr(refl),
+        NaN(_) => λ no => false_elim(no),
+    }(ha)
+}
+
+theorem Format::bot_le_rounds(self F: Format, mode: Mode, q: Rat, a: Float(F), ha: RoundsTo(F, mode, q, a), hn: F.specials.has_inf().IsTrue()): Float::Le(Float::Inf(True, hn), a) {
+    match a as λ a0 => RoundsTo(F, mode, q, a0) → Float::Le(Float::Inf(True, hn), a0) {
+        Fin(_) => λ _ => refl,
+        Inf(_, _) => λ _ => Inl(refl),
+        NaN(_) => λ no => false_elim(no),
+    }(ha)
+}
+
+theorem Float::not_le_nan({F: Format}, a: Float(F), h: F.specials.has_nan().IsTrue(), l: Float::Le(a, Float::NaN(h))): False {
+    match a as λ a0 => Float::Le(a0, Float::NaN(h)) → False { Fin(_) => λ no => no, Inf(_, _) => λ no => no, NaN(_) => λ no => no }(l)
+}
+
+theorem Float::le_trans({F: Format}, a, b, c: Float(F), ab: Float::Le(a, b), bc: Float::Le(b, c)): Float::Le(a, c) {
+    match a as λ a0 => Float::Le(a0, b) → Float::Le(b, c) → Float::Le(a0, c) {
+        Fin(f) => match b {
+            Fin(g) => λ (fg: f.val() <= g.val()) => match c {
+                Fin(h) => λ (gh: g.val() <= h.val()) => Rat::le_trans(fg, gh),
+                Inf(_, _) => λ m => m,
+                NaN(_) => λ no => false_elim(no),
+            },
+            Inf(n, hn) => λ (nf: n = bool::False) => match c {
+                Fin(_) => λ (nt: n = bool::True) => absurd(trans(sym(nf), nt)),
+                Inf(m, _) => λ (w: n = bool::True ∨ m = bool::False) => match w { Inl(nt) => absurd(trans(sym(nf), nt)), Inr(mf) => mf },
+                NaN(_) => λ no => false_elim(no),
+            },
+            NaN(_) => λ no => false_elim(no),
+        },
+        Inf(k, hk) => match b {
+            Fin(g) => λ (kt: k = bool::True) => match c {
+                Fin(_) => λ _ => kt,
+                Inf(_, _) => λ _ => Inl(kt),
+                NaN(_) => λ no => false_elim(no),
+            },
+            Inf(n, hn) => λ (w1: k = bool::True ∨ n = bool::False) => match c {
+                Fin(_) => λ (nt: n = bool::True) => match w1 { Inl(kt) => kt, Inr(nf) => absurd(trans(sym(nf), nt)) },
+                Inf(m, _) => λ (w2: n = bool::True ∨ m = bool::False) => match w1 {
+                    Inl(kt) => Inl(kt),
+                    Inr(nf) => match w2 { Inl(nt) => absurd(trans(sym(nf), nt)), Inr(mf) => Inr(mf) },
+                },
+                NaN(_) => λ no => false_elim(no),
+            },
+            NaN(_) => λ no => false_elim(no),
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(ab, bc)
+}
+
+// Nothing lies strictly between a rational's two neighbours: a float
+// between its rounding down and its rounding up is one of them.
+theorem Format::faithful_of_squeeze(self F: Format, q: Rat, t, d, u: Float(F), hd: RoundsTo(F, TowardNeg, q, d), hu: RoundsTo(F, TowardPos, q, u),
+    dt: Float::Le(d, t), tu: Float::Le(t, u)): F.Faithful(q, t)
+{
+    match t as λ t0 => Float::Le(d, t0) → Float::Le(t0, u) → F.Faithful(q, t0) {
+        Fin(g) => λ dt0 tu0 => match Rat::le_total(g.val(), q) {
+            Inl(gq) => Inl(F.rounds_of_same(TowardNeg, q, Float::Fin(g), d,
+                Float::same_of_squeeze(Float::Fin(g), d, Float::Fin(g), g.val().same_refl(), F.le_of_down(q, d, hd, g, gq), dt0), hd)),
+            Inr(qg) => Inr(F.rounds_of_same(TowardPos, q, Float::Fin(g), u,
+                Float::same_of_squeeze(Float::Fin(g), u, Float::Fin(g), g.val().same_refl(), tu0, F.le_of_up(q, u, hu, g, qg)), hu)),
+        },
+        Inf(n, hn) => match n {
+            False => λ _ tu0 => Inr(F.rounds_of_same(TowardPos, q, Float::Inf(False, hn), u,
+                Float::same_of_squeeze(Float::Inf(False, hn), u, Float::Inf(False, hn), refl, tu0, F.rounds_le_top(TowardPos, q, u, hu, hn)), hu)),
+            True => λ dt0 _ => Inl(F.rounds_of_same(TowardNeg, q, Float::Inf(True, hn), d,
+                Float::same_of_squeeze(Float::Inf(True, hn), d, Float::Inf(True, hn), refl, F.bot_le_rounds(TowardNeg, q, d, hd, hn), dt0), hd)),
+        },
+        NaN(h) => λ dt0 _ => false_elim(Float::not_le_nan(d, h, dt0)),
+    }(dt, tu)
+}
+
+// Whether one rounding is at or below another, decided.
+fn Float::le_bool({F: Format}, self a, b: Float(F)) → Bool {
+    match a {
+        Fin(f) => match b { Fin(g) => f.dyadic().le_bool(g.dyadic()), Inf(m, _) => !m, NaN(_) => False },
+        Inf(n, _) => match b { Fin(_) => n, Inf(m, _) => n || !m, NaN(_) => False },
+        NaN(_) => False,
+    }
+}
+
+theorem Float::le_of_le_bool({F: Format}, a, b: Float(F), h: a.le_bool(b).IsTrue()): Float::Le(a, b) {
+    match a as λ a0 => a0.le_bool(b).IsTrue() → Float::Le(a0, b) {
+        Fin(f) => match b {
+            Fin(g) => λ k => f.dyadic().le_of_le_bool(g.dyadic(), k),
+            Inf(m, _) => match m { False => λ _ => refl, True => λ no => false_elim(no) },
+            NaN(_) => λ no => false_elim(no),
+        },
+        Inf(n, hn) => match b {
+            Fin(_) => match n { False => λ no => false_elim(no), True => λ _ => refl },
+            Inf(m, _) => match n {
+                True => λ _ => Inl(refl),
+                False => match m { False => λ _ => Inr(refl), True => λ no => false_elim(no) },
+            },
+            NaN(_) => λ no => false_elim(no),
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(h)
+}
+
+theorem Float::le_bool_of_le({F: Format}, a, b: Float(F), h: Float::Le(a, b)): a.le_bool(b).IsTrue() {
+    match a as λ a0 => Float::Le(a0, b) → a0.le_bool(b).IsTrue() {
+        Fin(f) => match b {
+            Fin(g) => λ (le: f.val() <= g.val()) => f.dyadic().le_bool_of_le(g.dyadic(), le),
+            Inf(m, _) => match m { False => λ _ => trivial, True => λ no => absurd(no) },
+            NaN(_) => λ no => false_elim(no),
+        },
+        Inf(n, hn) => match b {
+            Fin(_) => match n { False => λ no => absurd(sym(no)), True => λ _ => trivial },
+            Inf(m, _) => match n {
+                True => λ _ => trivial,
+                False => match m {
+                    False => λ _ => trivial,
+                    True => λ (w: bool::False = bool::True ∨ bool::True = bool::False) => match w { Inl(no) => absurd(sym(no)), Inr(no) => absurd(no) },
+                },
+            },
+            NaN(_) => λ no => false_elim(no),
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(h)
+}
+
+// The box test: round the top down, the bottom up, and keep the first when
+// it is at or below the second.
+fn Format::faithful_box(self F: Format, I: Interval) → Option<Float(F)> {
+    match I {
+        Bnd(lo, hi) => match F.round_dyadic_win(TowardNeg, hi).le_bool(F.round_dyadic_win(TowardPos, lo)) { True => Some(F.round_dyadic_win(TowardNeg, hi)), False => None },
+        Whole => None,
+    }
+}
+
+// When the test passes, the top's rounding down is faithful at every
+// rational of the box.
+theorem Format::faithful_between(self F: Format, lo, hi: Dyadic, ok: F.round_dyadic_win(TowardNeg, hi).le_bool(F.round_dyadic_win(TowardPos, lo)).IsTrue(),
+    q: Rat, l: lo.rat() <= q, u: q <= hi.rat()): F.Faithful(q, F.round_dyadic_win(TowardNeg, hi))
+{
+    let r = F.round_dyadic_win(TowardNeg, hi);
+    let s = F.round_dyadic_win(TowardPos, lo);
+    let d = F.round_rat(TowardNeg, q);
+    let v = F.round_rat(TowardPos, q);
+    let hd = F.round_rat_correct(TowardNeg, q);
+    let hv = F.round_rat_correct(TowardPos, q);
+    let dr = F.rounds_mono(TowardNeg, q, hi.rat(), u, d, r, hd, F.round_dyadic_win_correct(TowardNeg, hi));
+    let sv = F.rounds_mono(TowardPos, lo.rat(), q, l, s, v, F.round_dyadic_win_correct(TowardPos, lo), hv);
+    F.faithful_of_squeeze(q, r, d, v, hd, hv, dr, Float::le_trans(r, s, v, Float::le_of_le_bool(r, s, ok), sv))
+}
+
+// Two finite floats are a whole number of least gaps apart: half-unit
+// counts are even.
+theorem Finite::H_even({F: Format}, self f: Finite(F)): ∃ a: Int, f.H() = a + a {
+    match f.neg as λ b => f.neg = b → ∃ a: Int, f.H() = a + a {
+        False => λ s => Exists(f.units().int(), trans(Finite::H_pos(f, s), omega)),
+        True => λ s => Exists(-f.units().int(), trans(Finite::H_neg(f, s), omega)),
+    }(refl)
+}
+
+theorem Finite::gap({F: Format}, f, g: Finite(F), lt: g.H() < f.H()): g.val() + F.grid(2) <= f.val() {
+    match g.H_even() {
+        Exists(_, eb) => match f.H_even() {
+            Exists(_, ea) => {
+                let step: (g.H() + 2 <= f.H()) = omega(lt, ea, eb);
+                let at: (F.grid(g.H()) + F.grid(2) <= F.grid(f.H())) = Rat::le_respects(Rat::same_sym(F.grid_add(g.H(), 2)), (F.grid(f.H())).same_refl(), F.grid_le(g.H() + 2, f.H(), step));
+                Rat::le_respects(Rat::add_respects(Rat::same_sym(g.val_grid()), (F.grid(2)).same_refl()), Rat::same_sym(f.val_grid()), at)
+            },
+        },
+    }
+}
+
+// A box narrower than the least gap passes: two floats with `s < r`, `s`
+// rounding `lo` up and `r` rounding `hi` down, would both lie in it a gap
+// apart. Outside the finite range a saturated end is the extreme float,
+// which is on the right side by its own clause.
+theorem Format::down_le_up(self F: Format, lo, hi: Rat, w: hi - lo < F.grid(2), r, s: Float(F), hr: RoundsTo(F, TowardNeg, hi, r), hs: RoundsTo(F, TowardPos, lo, s)): Float::Le(r, s) {
+    match s as λ s0 => RoundsTo(F, TowardPos, lo, s0) → Float::Le(r, s0) {
+        Fin(g) => λ (hs0: Finite::Above(lo, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(lo, g) ∧ F.Exceeds(lo))) =>
+            match r as λ r0 => RoundsTo(F, TowardNeg, hi, r0) → Float::Le(r0, Float::Fin(g)) {
+                Fin(f) => λ (hr0: Finite::Below(hi, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(hi, f) ∧ F.Undercuts(hi))) => match hr0 {
+                    Inl(bh) => match hs0 {
+                        Inl(al) => {
+                            let fh: (f.val() <= hi) = bh.left;
+                            let lg: (lo <= g.val()) = al.left;
+                            let no_gap: ¬(g.H() < f.H()) = λ lt => {
+                                let gp = Finite::gap(f, g, lt);
+                                let k0: False = linarith(gp, fh, lg, w);
+                                k0
+                            };
+                            Finite::le_of_H_le(f, g, omega(no_gap))
+                        },
+                        Inr(sat) => sat.right.left.right(f, Rat::le_of_lt(sat.right.right(f))),
+                    },
+                    Inr(sat) => sat.right.left.right(g, Rat::le_of_lt(sat.right.right(g))),
+                },
+                Inf(n, hn) => match n {
+                    False => λ no => false_elim(no),
+                    True => λ _ => refl,
+                },
+                NaN(_) => λ no => false_elim(no),
+            }(hr),
+        Inf(m, hm) => match m {
+            False => λ _ => F.rounds_le_top(TowardNeg, hi, r, hr, hm),
+            True => λ no => false_elim(no),
+        },
+        NaN(_) => λ no => false_elim(no),
+    }(hs)
+}
+
+// The least gap in bits: `2^-gap_bits <= 2^qmin`.
+fn Format::gap_bits(self F: Format) → Nat { (F.qmin() - 1).neg_part() }
+
+theorem Format::gap_bits_small(self F: Format): Rat::inv_pow2(F.gap_bits()) <= F.grid(2) {
+    let P = Nat::pow(2, (F.qmin() - 1).pos_part());
+    let D = Nat::pow(2, F.gap_bits());
+    let pp: (0 < P) = Nat::pow_pos(a := 2, n := (F.qmin() - 1).pos_part());
+    let dp: (0 < D) = Nat::pow_pos(a := 2, n := F.gap_bits());
+    let m: (OfNat(1) * D.int() <= (OfNat(2) * P.int()) * D.int()) = Int::mul_le_mono_r(OfNat(1), OfNat(2) * P.int(), D.int(), omega(pp), omega(dp));
+    m
+}
+
+theorem Format::faithful_box_some(self F: Format, I: Interval, w: I.Narrow(F.gap_bits())): ∃ r: Float(F), F.faithful_box(I) = Some(r) {
+    match I as λ J => J.Narrow(F.gap_bits()) → ∃ r: Float(F), F.faithful_box(J) = Some(r) {
+        Bnd(lo, hi) => λ (w0: hi.rat() - lo.rat() < Rat::inv_pow2(F.gap_bits())) => {
+            let r = F.round_dyadic_win(TowardNeg, hi);
+            let s = F.round_dyadic_win(TowardPos, lo);
+            let small = F.gap_bits_small();
+            let le = F.down_le_up(lo.rat(), hi.rat(), Rat::lt_of_lt_of_le(w0, small), r, s, F.round_dyadic_win_correct(TowardNeg, hi), F.round_dyadic_win_correct(TowardPos, lo));
+            let ok: (r.le_bool(s) = True) = eq_true_of_is_true(r.le_bool(s), Float::le_bool_of_le(r, s, le));
+            Exists(r, j(sym(ok), λ v _ => (match v { True => Some(r), False => None }) = Some(r), refl))
+        },
+        Whole => λ (no: False) => false_elim(no),
+    }(w)
+}
+
+// Refine until the box test passes: index and precision both `step`
+// further out per try, `tries` times.
+fn Format::faithful_enclosed(self F: Format, e: Enclosed, n, p, step, tries: Nat) → Option<Float(F)> {
+    match tries {
+        Zero => None,
+        Succ(t) => match F.faithful_box(e.at(n, p)) { Some(r) => Some(r), None => F.faithful_enclosed(e, n + step, p + step, step, t) },
+    }
+}
+
+// `round_real`'s schedule.
+fn Format::faithful_real(self F: Format, e: Enclosed, tries: Nat) → Option<Float(F)> { F.faithful_enclosed(e, F.prec() + 16, F.prec() + 16, 16, tries) }
+
+// A try whose box passes ends the search there or earlier.
+theorem Format::faithful_enclosed_some(self F: Format, e: Enclosed, step, t: Nat): (n, p, tries: Nat) → t < tries →
+    (∃ r: Float(F), F.faithful_box(e.try_at(n, p, step, t)) = Some(r)) → ∃ r: Float(F), F.faithful_enclosed(e, n, p, step, tries) = Some(r)
+{
+    match t {
+        Zero => λ n p tries lt hit => match tries as λ tr => 0 < tr → ∃ r: Float(F), F.faithful_enclosed(e, n, p, step, tr) = Some(r) {
+            Zero => λ no => false_elim(omega(no)),
+            Succ(tr1) => λ _ => j(sym(hit.proof), λ o _ => ∃ r: Float(F), (match o { Some(r0) => Some(r0), None => F.faithful_enclosed(e, n + step, p + step, step, tr1) }) = Some(r),
+                Exists(hit.witness, refl)),
+        }(lt),
+        Succ(t0, ih) => λ n p tries lt hit => match tries as λ tr => Succ(t0) < tr → ∃ r: Float(F), F.faithful_enclosed(e, n, p, step, tr) = Some(r) {
+            Zero => λ no => false_elim(omega(no)),
+            Succ(tr1) => λ lt1 => match F.faithful_box(e.at(n, p)) as λ o => ∃ r: Float(F), (match o { Some(r0) => Some(r0), None => F.faithful_enclosed(e, n + step, p + step, step, tr1) }) = Some(r) {
+                Some(r0) => Exists(r0, refl),
+                None => ih(n + step, p + step, tr1, omega(lt1), hit),
+            },
+        }(lt),
+    }
+}
+
+// Enough tries, from the narrowing at the least gap.
+fn Format::faithful_tries(self F: Format, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step)) → Nat { Succ(narrow(F.gap_bits()).witness) }
+
+theorem Format::faithful_enclosed_ends(self F: Format, e: Enclosed, n, p, step: Nat, narrow: e.Narrows(n, p, step)):
+    ∃ r: Float(F), F.faithful_enclosed(e, n, p, step, F.faithful_tries(e, n, p, step, narrow)) = Some(r)
+{
+    let t = narrow(F.gap_bits()).witness;
+    F.faithful_enclosed_some(e, step, t, n, p, Succ(t), omega, F.faithful_box_some(e.try_at(n, p, step, t), narrow(F.gap_bits()).proof))
+}
+
+// Over any ordered field: a passing box around `x` gives a faithful
+// rounding of `x`.
+section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
+        hom: OrderedRingHom<Rat, K>(map, Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+            ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
+
+// `r` is a faithful rounding of `x`: of every rational of an interval
+// around it.
+fn Format::FaithfulIn(self F: Format, x: K, r: Float(F)) → Type { Rat::Around(hom, x, λ q => F.Faithful(q, r)) }
+
+theorem Format::faithful_box_correct(self F: Format, I: Interval, x: K, hx: I.HasIn(hom, x), r: Float(F), is: F.faithful_box(I) = Some(r)): F.FaithfulIn(hom, x, r) {
+    match I as λ J => J.HasIn(hom, x) → F.faithful_box(J) = Some(r) → F.FaithfulIn(hom, x, r) {
+        Bnd(lo, hi) => λ (h: map(lo.rat()) <= x ∧ x <= map(hi.rat())) =>
+            match F.round_dyadic_win(TowardNeg, hi).le_bool(F.round_dyadic_win(TowardPos, lo)) as λ c => F.round_dyadic_win(TowardNeg, hi).le_bool(F.round_dyadic_win(TowardPos, lo)) = c →
+                (match c { True => Some(F.round_dyadic_win(TowardNeg, hi)), False => None }) = Some(r) → F.FaithfulIn(hom, x, r)
+            {
+                True => λ ce e => {
+                    let rr: (F.round_dyadic_win(TowardNeg, hi) = r) = Option::some_inj(F.round_dyadic_win(TowardNeg, hi), r, e);
+                    let ok = Bool::is_true_of_eq(ce);
+                    Exists(lo.rat(), Exists(hi.rat(), And(h.left, And(h.right,
+                        λ q l u => j(rr, λ v _ => F.Faithful(q, v), F.faithful_between(lo, hi, ok, q, l, u))))))
+                },
+                False => λ _ e => Option::none_ne_some(r, e, F.FaithfulIn(hom, x, r)),
+            }(refl),
+        Whole => λ _ e => Option::none_ne_some(r, e, F.FaithfulIn(hom, x, r)),
+    }(hx, is)
+}
+
+}
+
+// At `CReal`.
+fn FaithfulReal(F: Format, x: CReal, r: Float(F)) → Type { F.FaithfulIn(CReal::ofRat_hom(), x, r) }
+
+theorem Format::faithful_enclosed_correct(self F: Format, e: Enclosed, step, tries: Nat): (n, p: Nat) → (r: Float(F)) → F.faithful_enclosed(e, n, p, step, tries) = Some(r) → FaithfulReal(F, e.x, r) {
+    match tries {
+        Zero => λ n p r no => Option::none_ne_some(r, no, FaithfulReal(F, e.x, r)),
+        Succ(t, ih) => λ n p r => match F.faithful_box(e.at(n, p)) as λ o => F.faithful_box(e.at(n, p)) = o →
+            (match o { Some(r0) => Some(r0), None => F.faithful_enclosed(e, n + step, p + step, step, t) }) = Some(r) → FaithfulReal(F, e.x, r)
+        {
+            Some(r0) => λ is (k: Some(r0) = Some(r)) => Format::faithful_box_correct(CReal::ofRat_hom(), F, e.at(n, p), e.x, e.has(n, p), r, trans(is, k)),
+            None => λ _ k => ih(n + step, p + step, r, k),
+        }(refl),
+    }
+}
+
+theorem Format::faithful_real_correct(self F: Format, e: Enclosed, tries: Nat, r: Float(F), is: F.faithful_real(e, tries) = Some(r)): FaithfulReal(F, e.x, r) {
+    F.faithful_enclosed_correct(e, 16, tries)(F.prec() + 16, F.prec() + 16, r, is)
+}
+
+// Faithful rounding with no `Option` and no condition on the real: its
+// enclosures narrow, so the search ends within `faithful_tries`.
+fn Format::faithful_witness(self F: Format, e: Enclosed, narrow: e.Narrows(F.prec() + 16, F.prec() + 16, 16)) → ∃ r: Float(F), FaithfulReal(F, e.x, r) {
+    let s = F.faithful_enclosed_ends(e, F.prec() + 16, F.prec() + 16, 16, narrow);
+    Exists(s.witness, F.faithful_enclosed_correct(e, 16, F.faithful_tries(e, F.prec() + 16, F.prec() + 16, 16, narrow))(F.prec() + 16, F.prec() + 16, s.witness, s.proof))
+}
+
+fn Format::faithful_real_total(self F: Format, e: Enclosed, narrow: e.Narrows(F.prec() + 16, F.prec() + 16, 16)) → Float(F) { F.faithful_witness(e, narrow).witness }
+
+theorem Format::faithful_real_total_correct(self F: Format, e: Enclosed, narrow: e.Narrows(F.prec() + 16, F.prec() + 16, 16)): FaithfulReal(F, e.x, F.faithful_real_total(e, narrow)) {
+    F.faithful_witness(e, narrow).proof
+}

@@ -1,0 +1,342 @@
+// Regular expressions over Unicode scalar values: the term type, its
+// meaning, a parser for the usual string spelling, and the `regex` prefix
+// generator, so that
+//
+//     regex def is_hex = "[0-9a-f]+";
+//
+// declares `is_hex: String → Bool` as the meaning of the parsed term, by
+// definition, and `is_hex::term: Regex` as the term
+// (docs/value-definitions-design.md §4, docs/compilation-vision.md §3.3 and
+// §6.1: a definitional frontend, so the name and the term's meaning are tied
+// at no cost). The compiler half of the language (a DFA and its soundness
+// once) is later work.
+//
+// The meaning is Brzozowski's: a string is accepted when the derivative of
+// the expression by its characters, in order, accepts the empty string.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+
+// `NoMatch` accepts nothing and `Eps` only the empty string; `Range(lo, hi)`
+// accepts one character whose code is in `lo ..= hi`.
+inductive Regex {
+    NoMatch,
+    Eps,
+    Range(lo: Nat, hi: Nat),
+    Seq(a: Regex, b: Regex),
+    Alt(a: Regex, b: Regex),
+    Star(r: Regex),
+}
+
+// Does `r` accept the empty string?
+fn Regex::nullable(self r: Regex) → Bool {
+    match r {
+        NoMatch => False,
+        Eps => True,
+        Range(_, _) => False,
+        Seq(a, b) => a.nullable() && b.nullable(),
+        Alt(a, b) => a.nullable() || b.nullable(),
+        Star(_) => True,
+    }
+}
+
+// What `r` accepts after the character `c`.
+fn Regex::deriv(self r: Regex, c: Nat) → Regex {
+    match r {
+        NoMatch => NoMatch,
+        Eps => NoMatch,
+        Range(lo, hi) => match lo.leb(c) && c.leb(hi) { True => Eps, False => NoMatch },
+        Seq(a, b) => match a.nullable() {
+            True => Alt(Seq(a.deriv(c), b), b.deriv(c)),
+            False => Seq(a.deriv(c), b),
+        },
+        Alt(a, b) => Alt(a.deriv(c), b.deriv(c)),
+        Star(s) => Seq(s.deriv(c), Star(s)),
+    }
+}
+
+// The meaning: does `r` accept the codes `cs`?
+fn Regex::matches(self r: Regex, cs: List<Nat>) → Bool {
+    cs.foldl(λ q c => q.deriv(c), r).nullable()
+}
+
+// The meaning at a string, by its scalar values.
+fn Regex::accepts(self r: Regex, s: String) → Bool {
+    r.matches(s.chars.map(λ c => c.code))
+}
+
+// ---------------------------------------------------------------------------
+// The spelling: alternation `|`, juxtaposition, the postfix `*`, `+` and `?`,
+// parentheses, classes `[a-z_]` of single characters and ranges, and `\c`
+// for a character that would otherwise mean something. Every other
+// character stands for itself.
+
+record Parsed { re: Regex, rest: List<Nat> }
+
+// `(`, `)`, `*`, `+`, `?`, `[`, `\`, `]`, `|`.
+fn regex_special(c: Nat) → Bool {
+    c.same(40) || c.same(41) || c.same(42) || c.same(43) || c.same(63)
+        || c.same(91) || c.same(92) || c.same(93) || c.same(124)
+}
+
+fn regex_or(acc: Regex, r: Regex) → Regex { match acc { NoMatch => r, _ => Alt(acc, r) } }
+
+fn regex_then(acc: Regex, r: Regex) → Regex { match acc { Eps => r, _ => Seq(acc, r) } }
+
+// The rest of a class item after its first character `c`: `-e` makes it the
+// range `c ..= e`, unless `e` is the class's closing `]`.
+record ClassEnd { hi: Nat, rest: List<Nat> }
+
+fn class_range_end(cs: List<Nat>) → Option<ClassEnd> {
+    match cs {
+        Nil => None,
+        Cons(d, rest) => match d.same(45) {
+            False => None,
+            True => match rest {
+                Nil => None,
+                Cons(e, rest2) => match e.same(93) { True => None, False => Some(ClassEnd(e, rest2)) },
+            },
+        },
+    }
+}
+
+// A class's items up to its `]`, as one alternation.
+fn class_items(fuel: Nat, cs: List<Nat>, acc: Regex) → Option<Parsed> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match cs {
+            Nil => None,
+            Cons(c, rest) => match c.same(93) {
+                True => Some(Parsed(acc, rest)),
+                False => match class_range_end(rest) {
+                    Some(e) => class_items(f, e.rest, regex_or(acc, Range(c, e.hi))),
+                    None => class_items(f, rest, regex_or(acc, Range(c, c))),
+                },
+            },
+        },
+    }
+}
+
+// One atom; `sub` parses the alternation inside a parenthesis.
+fn regex_atom(sub: List<Nat> → Option<Parsed>, fuel: Nat, cs: List<Nat>) → Option<Parsed> {
+    match cs {
+        Nil => None,
+        Cons(c, rest) => match c.same(40) {
+            True => match sub(rest) {
+                None => None,
+                Some(p) => match p.rest {
+                    Nil => None,
+                    Cons(d, rest2) => match d.same(41) { True => Some(Parsed(p.re, rest2)), False => None },
+                },
+            },
+            False => match c.same(91) {
+                True => class_items(fuel, rest, NoMatch),
+                False => match c.same(92) {
+                    True => match rest {
+                        Nil => None,
+                        Cons(d, rest2) => Some(Parsed(Range(d, d), rest2)),
+                    },
+                    False => match regex_special(c) {
+                        True => None,
+                        False => Some(Parsed(Range(c, c), rest)),
+                    },
+                },
+            },
+        },
+    }
+}
+
+// The postfix operators after an atom.
+fn regex_postfix(fuel: Nat, p: Parsed) → Parsed {
+    match fuel {
+        Zero => p,
+        Succ(f) => match p.rest {
+            Nil => p,
+            Cons(c, rest) => match c.same(42) {
+                True => regex_postfix(f, Parsed(Star(p.re), rest)),
+                False => match c.same(43) {
+                    True => regex_postfix(f, Parsed(Seq(p.re, Star(p.re)), rest)),
+                    False => match c.same(63) {
+                        True => regex_postfix(f, Parsed(Alt(Eps, p.re), rest)),
+                        False => p,
+                    },
+                },
+            },
+        },
+    }
+}
+
+// Does a sequence end here: at the end, a `|` or a `)`?
+fn regex_seq_ends(cs: List<Nat>) → Bool {
+    match cs { Nil => True, Cons(c, _) => c.same(124) || c.same(41) }
+}
+
+// Atoms with their postfix operators, joined, up to the sequence's end.
+fn regex_seq(sub: List<Nat> → Option<Parsed>, fuel: Nat, cs: List<Nat>, acc: Regex) → Option<Parsed> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match regex_seq_ends(cs) {
+            True => Some(Parsed(acc, cs)),
+            False => match regex_atom(sub, Succ(f), cs) {
+                None => None,
+                Some(a) => {
+                    let b = regex_postfix(Succ(f), a);
+                    regex_seq(sub, f, b.rest, regex_then(acc, b.re))
+                },
+            },
+        },
+    }
+}
+
+// The alternatives after the first, `| seq` at a time.
+fn regex_alts(sub: List<Nat> → Option<Parsed>, fuel: Nat, p: Parsed) → Option<Parsed> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match p.rest {
+            Nil => Some(p),
+            Cons(c, rest) => match c.same(124) {
+                True => match regex_seq(sub, Succ(f), rest, Eps) {
+                    None => None,
+                    Some(q) => regex_alts(sub, f, Parsed(Alt(p.re, q.re), q.rest)),
+                },
+                False => Some(p),
+            },
+        },
+    }
+}
+
+// An alternation, with `fuel` bounding the nesting of parentheses.
+fn regex_alt(fuel: Nat, cs: List<Nat>) → Option<Parsed> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match regex_seq(λ ds => regex_alt(f, ds), Succ(f), cs, Eps) {
+            None => None,
+            Some(p) => regex_alts(λ ds => regex_alt(f, ds), Succ(f), p),
+        },
+    }
+}
+
+// The expression a string spells, or `None` when it spells none (an
+// unclosed group or class, a stray `)` or postfix operator, a trailing `\`).
+fn Regex::parse(s: String) → Option<Regex> {
+    let cs = s.chars.map(λ c => c.code);
+    match regex_alt(Succ(cs.len()), cs) {
+        None => None,
+        Some(p) => match p.rest { Nil => Some(p.re), Cons(_, _) => None },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The generator. `regex def name = "…";` hands it the declaration's name and
+// its value; it parses the value and declares
+//
+//     def name: String → Bool = Regex::accepts(<term>)
+//     def name::term: Regex = <term>
+//
+// so `name` is the term's meaning by definition, and `name::term` the term a
+// compiler for the language would read.
+
+// The type, its constructors and the meaning, as the generator's run sees
+// them.
+record RegexRefs {
+    ty: Expr,
+    no_match: Expr,
+    eps: Expr,
+    range: Expr,
+    seq: Expr,
+    alt: Expr,
+    star: Expr,
+    accepts: Expr,
+}
+
+fn regex_found(name: String, c: Checked<GlobalRef>) → Tac<GlobalRef> {
+    match c {
+        Accepted(g) => Pure(g),
+        Refused(why) => fail("regex: `" ++ name ++ "` is not in scope (`import regex;`): " ++ why, []),
+    }
+}
+
+fn regex_ref(name: String) → Tac<GlobalRef> { regex_found(name, <- lookup(name)) }
+
+// The constructor at position `i`, as a function of its fields.
+fn regex_ctor(cs: List<CtorInfo>, i: Nat) → Tac<Expr> {
+    match cs.drop(i) {
+        Nil => fail("regex: `Regex` has fewer constructors than the generator reads", []),
+        Cons(c, _) => match c.ctor {
+            None => fail("regex: `Regex::" ++ c.name ++ "` has no constructor function", []),
+            Some(h) => Pure(Hd(h)),
+        },
+    }
+}
+
+fn regex_shape(c: Checked<List<CtorInfo>>) → Tac<List<CtorInfo>> {
+    match c {
+        Accepted(cs) => Pure(cs),
+        Refused(why) => fail("regex: " ++ why, []),
+    }
+}
+
+fn regex_typed(c: Checked<Handle>) → Tac<Handle> {
+    match c {
+        Accepted(h) => Pure(h),
+        Refused(why) => fail("regex: the meaning does not typecheck: " ++ why, []),
+    }
+}
+
+// The type `Regex`, read off the meaning's domain.
+fn regex_domain(v: Head) → Tac<Handle> {
+    match v {
+        HPi(dom) => Pure(dom),
+        _ => fail("regex: `Regex::accepts` is not a function of a `Regex`", []),
+    }
+}
+
+fn regex_refs() → Tac<RegexRefs> {
+    let accepts <- regex_ref("Regex::accepts");
+    let f <- regex_typed(<- infer(Global(accepts)));
+    let h <- regex_domain(<- view(f));
+    let cs <- regex_shape(<- ctors(h));
+    let no_match <- regex_ctor(cs, 0);
+    let eps <- regex_ctor(cs, 1);
+    let range <- regex_ctor(cs, 2);
+    let seq <- regex_ctor(cs, 3);
+    let alt <- regex_ctor(cs, 4);
+    let star <- regex_ctor(cs, 5);
+    Pure(RegexRefs(Hd(h), no_match, eps, range, seq, alt, star, Global(accepts)))
+}
+
+// The term `r` as an `Expr`.
+fn Regex::expr(self r: Regex, k: RegexRefs) → Expr {
+    match r {
+        NoMatch => k.no_match,
+        Eps => k.eps,
+        Range(lo, hi) => Expr::App(Expr::App(k.range, NatLit(lo)), NatLit(hi)),
+        Seq(a, b) => Expr::App(Expr::App(k.seq, a.expr(k)), b.expr(k)),
+        Alt(a, b) => Expr::App(Expr::App(k.alt, a.expr(k)), b.expr(k)),
+        Star(s) => Expr::App(k.star, s.expr(k)),
+    }
+}
+
+fn regex_decls(name: String, k: RegexRefs, r: Regex) → Tac<List<Decl>> {
+    let term = r.expr(k);
+    let meaning = Expr::App(k.accepts, term);
+    let ty <- regex_typed(<- infer(meaning));
+    Pure([
+        Decl(AsValue, name, [], Hd(ty), meaning),
+        Decl(AsValue, name ++ "::term", [], k.ty, term),
+    ])
+}
+
+// The prefix generator: `regex def name = "…";`.
+fn regex(name: String, source: String) → Tac<List<Decl>> {
+    match Regex::parse(source) {
+        None => fail("regex: `" ++ source ++ "` is not a regular expression (an unclosed `(` or `[`, a stray `)` or postfix operator, or a trailing backslash)", []),
+        Some(r) => regex_decls(name, <- regex_refs(), r),
+    }
+}

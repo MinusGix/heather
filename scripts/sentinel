@@ -15,8 +15,9 @@ image store, a cold verdict store, a cold target directory.
 suite was INCOMPLETE (a binary died; the bisect still runs on what failed).
 
 Green: the image stores this run built are published as one commit on the
-orphan branch `claude/sentinel-images` (`images.tgz` + `manifest.json`: the
-commit, the date, the suite line, per-target CPU). A fresh session seeds its
+orphan branch `claude/sentinel-images` (`images.tgz`, in parts under
+GitHub's file limit, + `manifest.json`: the commit, the date, the suite
+line, per-target CPU). A fresh session seeds its
 stores from it (scripts/session-start); replay rechecks every image with the
 reader's kernel, so a seeded image can only ever be a miss, never a wrong
 answer. The verdict store is not published: a vouched verdict skips the
@@ -50,10 +51,17 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "target" / "sentinel"
 BRANCH = "claude/sentinel-images"
 STORES = ["semantic-test-images", "native-test-images", "cli-check-images"]
+# Where the suite keeps those stores: target/, or $HEATHER_CACHE_DIR when it is
+# set (heather_cache::store_root; a relative value is taken from the root).
+STORE_ROOT = ROOT / (os.environ.get("HEATHER_CACHE_DIR") or "target")
 # A target is reported as grown when its CPU rose by this factor and by at
 # least this many seconds over the last green run's.
 GROWTH_FACTOR = 1.25
 GROWTH_FLOOR_S = 10.0
+# GitHub refuses a pushed file over 100 MB, and the compressed stores passed
+# 89 MB by 2026-10-26, so the archive is published in parts below that
+# (`images.tgz.000`, `.001`, …) and seed() joins them.
+PART_BYTES = 90 * 1000 * 1000
 
 
 def git(*args, check=True, capture=True):
@@ -145,16 +153,21 @@ def publish(head, line, cpu):
         tmp = Path(tmp)
         with tarfile.open(tmp / "images.tgz", "w:gz") as tar:
             for store in STORES:
-                if (ROOT / "target" / store).is_dir():
-                    tar.add(ROOT / "target" / store, arcname=store)
+                if (STORE_ROOT / store).is_dir():
+                    tar.add(STORE_ROOT / store, arcname=store)
         manifest = {"commit": head, "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "suite": line, "target_cpu": cpu}
         (tmp / "manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
+        names = ["manifest.json"]
+        with open(tmp / "images.tgz", "rb") as archive:
+            while part := archive.read(PART_BYTES):
+                names.append(f"images.tgz.{len(names) - 1:03d}")
+                (tmp / names[-1]).write_bytes(part)
         env = dict(os.environ, GIT_INDEX_FILE=str(tmp / "index"))
         def g(*args, **kw):
             return subprocess.run(["git", *args], cwd=ROOT, env=env, check=True,
                                   stdout=subprocess.PIPE, text=True, **kw).stdout.strip()
-        blobs = [(name, g("hash-object", "-w", str(tmp / name))) for name in ("images.tgz", "manifest.json")]
+        blobs = [(name, g("hash-object", "-w", str(tmp / name))) for name in names]
         for name, blob in blobs:
             g("update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
         tree = g("write-tree")
@@ -300,7 +313,7 @@ def run():
         ok = publish(head, line, cpu)
         report.append("Green. Image stores published to `claude/sentinel-images`." if ok
                       else "Green, but publishing the image stores failed (see the session log).")
-        changed = drifted(before, image_headers(ROOT / "target"))
+        changed = drifted(before, image_headers(STORE_ROOT))
         if before:
             report += ["", f"Library images whose elaboration changed since the last green run: {len(changed)}"
                        + (f" ({', '.join(changed[:20])}{', …' if len(changed) > 20 else ''})." if changed else ".")
@@ -343,14 +356,25 @@ def seed(dest, fetched=False):
     if not fetched and subprocess.run(["git", "fetch", "--quiet", "--depth=1", "origin", BRANCH],
                                       cwd=ROOT, stderr=subprocess.DEVNULL).returncode != 0:
         return 1
-    blob = subprocess.run(["git", "show", "FETCH_HEAD:images.tgz"], cwd=ROOT, stdout=subprocess.PIPE)
-    if blob.returncode != 0:
+    # One `images.tgz`, or (since the stores outgrew GitHub's file limit) its
+    # parts `images.tgz.NNN` in order.
+    listed = subprocess.run(["git", "ls-tree", "--name-only", "FETCH_HEAD"], cwd=ROOT,
+                            stdout=subprocess.PIPE, text=True)
+    if listed.returncode != 0:
+        return 1
+    parts = sorted(n for n in listed.stdout.split() if re.fullmatch(r"images\.tgz(\.\d{3})?", n))
+    if not parts:
         return 1
     dest.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".sentinel-seed-", dir=dest))
     try:
         archive = stage / "images.tgz"
-        archive.write_bytes(blob.stdout)
+        with open(archive, "wb") as out:
+            for part in parts:
+                blob = subprocess.run(["git", "show", f"FETCH_HEAD:{part}"], cwd=ROOT, stdout=subprocess.PIPE)
+                if blob.returncode != 0:
+                    return 1
+                out.write(blob.stdout)
         with tarfile.open(archive) as tar:
             tar.extractall(stage, filter="data")
         for store in STORES:

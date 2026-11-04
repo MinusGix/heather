@@ -21,6 +21,9 @@ import nat;
 import itree;
 import itree_trace;
 import coitree;
+import relation;
+import relation_props;
+import algebra_rel;
 
 // ---------------------------------------------------------------------------
 // Dropping silent steps
@@ -167,10 +170,10 @@ fn Eutt::peel_l<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), u: CoTree<R>(E),
     h: CoTree::after(E, k, t) = OTau(s), e: Eutt<R>(E, s, u)) → Eutt<R>(E, t, u)
 {
     match e {
-        ERet(nl, nr, r, hs, hu) => ERet(Succ(nl + k), nr, r, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu),
-        ETau(nl, nr, s2, u2, hs, hu, n) => ETau(Succ(nl + k), nr, s2, u2, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, n),
+        ERet(nl, nr, r, hs, hu) => ERet(Succ(nl + k), nr, r, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu),
+        ETau(nl, nr, s2, u2, hs, hu, n) => ETau(Succ(nl + k), nr, s2, u2, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, n),
         EVis(nl, nr, c, k1, k2, hs, hu, n) =>
-            EVis(Succ(nl + k), nr, c, k1, k2, trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, λ a => n(a)),
+            EVis(Succ(nl + k), nr, c, k1, k2, prelude::trans(CoTree::after_join(E, k, nl, t, s, h), hs), hu, λ a => n(a)),
     }
 }
 
@@ -197,8 +200,8 @@ fn Eutt::drop1_tau<R>(E: Events, t: CoTree<R>(E), s: CoTree<R>(E), u: CoTree<R>(
 {
     match nl {
         Zero => λ (ht: CoTree::obs(E, t) = OTau(t2)) =>
-            Eutt::peel_r(E, s, u, u2, nr, hu, j(inj(trans(sym(ht), h0)), λ y q => Eutt<R>(E, y, u2), n)),
-        Succ(k) => λ ht => ETau(k, nr, t2, u2, trans(sym(CoTree::after_succ(E, k, t, s, h0)), ht), hu, n),
+            Eutt::peel_r(E, s, u, u2, nr, hu, j(inj(prelude::trans(prelude::sym(ht), h0)), λ y q => Eutt<R>(E, y, u2), n)),
+        Succ(k) => λ ht => ETau(k, nr, t2, u2, prelude::trans(prelude::sym(CoTree::after_succ(E, k, t, s, h0)), ht), hu, n),
     }
 }
 
@@ -260,12 +263,12 @@ theorem Eutt::to0<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Eutt<R>(E, 
 {
     match b {
         ERet(nl, nr, r, hu, hv) =>
-            j(trans(sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
+            j(prelude::trans(prelude::sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
                 EuttRetAt(nr, hv)),
         ETau(nl, nr, u2, v2, hu, hv, n) =>
-            false_elim(j(trans(sym(CoTree::after_settled(E, nl, u, o, h, so)), hu), λ y q => Obs::Settled(E, y), so)),
+            false_elim(j(prelude::trans(prelude::sym(CoTree::after_settled(E, nl, u, o, h, so)), hu), λ y q => Obs::Settled(E, y), so)),
         EVis(nl, nr, c, k1, k2, hu, hv, n) =>
-            j(trans(sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
+            j(prelude::trans(prelude::sym(hu), CoTree::after_settled(E, nl, u, o, h, so)), λ y q => Obs::EuttTo(E, y, v),
                 EuttVisAt(nr, k2, hv, n)),
     }
 }
@@ -277,9 +280,9 @@ theorem Eutt::to<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Eutt<R>(E, u
     match n {
         Zero => λ (h: CoTree::obs(E, u) = o) => Eutt::to0(E, u, v, b, o, so, h),
         Succ(m) => match h0: CoTree::obs(E, u) {
-            ORet(r) => λ h => Eutt::to0(E, u, v, b, o, so, trans(h0, h)),
+            ORet(r) => λ h => Eutt::to0(E, u, v, b, o, so, prelude::trans(h0, h)),
             OTau(u1) => λ h => Eutt::to(E, u1, v, Eutt::drop1(E, u, u1, v, h0, b), o, so, m, h),
-            OVis(c, k) => λ h => Eutt::to0(E, u, v, b, o, so, trans(h0, h)),
+            OVis(c, k) => λ h => Eutt::to0(E, u, v, b, o, so, prelude::trans(h0, h)),
         },
     }
 }
@@ -355,7 +358,7 @@ theorem Eutt::traces_ret<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt
     let w: EuttRetAt<R>(E, u, r) = Eutt::to0(E, t, u, e, ORet(r), trivial, h0);
     match it {
         Stopped(at) => CoTree::converges_nil(E, u, tr, at),
-        Returned(at) => j(sym(at), λ y q => Converges<R>(E, λ k => CoTree::approx(E, k, u), y),
+        Returned(at) => j(prelude::sym(at), λ y q => Converges<R>(E, λ k => CoTree::approx(E, k, u), y),
             CoTree::converges_after(E, u, ORet(r), TRet(r), Converges(Succ(Zero), Returned(refl)), w.m, w.at)),
     }
 }
@@ -375,11 +378,11 @@ theorem Eutt::traces_vis<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt
     let w: EuttVisAt<R>(E, u, c, k) = Eutt::to0(E, t, u, e, OVis(c, k), trivial, h0);
     match it {
         Prefix(at) => CoTree::converges_nil(E, u, tr, at),
-        Pending(at) => j(sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
+        Pending(at) => j(prelude::sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
             CoTree::converges_after(E, u, OVis(c, w.k2), TCall(c), Converges(Succ(Zero), Pending(refl)), w.m, w.at)),
         Answered(a, rest, at, sub) => {
             let c1: Converges<R>(E, λ k3 => CoTree::approx(E, k3, w.k2(a)), rest) = ih(k(a), w.k2(a), w.next(a), rest, sub);
-            j(sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
+            j(prelude::sym(at), λ y q => Converges<R>(E, λ k3 => CoTree::approx(E, k3, u), y),
                 CoTree::converges_after(E, u, OVis(c, w.k2), TAns(c, a, rest),
                     Converges(Succ(c1.n), Answered(a, rest, refl, c1.h)), w.m, w.at))
         },
@@ -432,4 +435,450 @@ theorem Bisim::refines<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), b: Bisim<
     Program::refines_of_families(E, CoTree::program(E, t), CoTree::program(E, u),
         ITree::refines_of_same(E, λ n => CoTree::approx(E, n, t), λ n => CoTree::approx(E, n, u),
             λ n => Bisim::approx(E, n, t, u, b)))
+}
+
+// ---------------------------------------------------------------------------
+// `bind` is a congruence up to taus
+
+// An observation that is not a leaf: `bind` passes it through.
+fn Obs::NotRet<R>(E: Events, o: Obs<R>(E)) → Type {
+    match o { ORet(_) => False, OTau(_) => True, OVis(_, _) => True }
+}
+
+// Dropping `k` steps off `bind(t, h)` drops them off `t`, until `t` reaches a
+// silent step or a call: the leaves are where `h` takes over.
+theorem CoTree::after_bind<A, B>(E: Events, h: A → CoTree<B>(E), o: Obs<A>(E), nr: Obs::NotRet(E, o), k: Nat,
+    t: CoTree<A>(E)): CoTree::after(E, k, t) = o → CoTree::after(E, k, CoTree::bind(E, t, h)) = Obs::bind(E, o, h)
+{
+    match k {
+        Zero => λ (e: CoTree::obs(E, t) = o) => CoTree::obs_bind_at(E, t, h, o, e),
+        Succ(k2) => match h0: CoTree::obs(E, t) {
+            ORet(_) => λ e => false_elim(j(prelude::sym(e), λ y q => Obs::NotRet(E, y), nr)),
+            OTau(s) => λ e => prelude::trans(
+                CoTree::after_succ(E, k2, CoTree::bind(E, t, h), CoTree::bind(E, s, h), CoTree::obs_bind_at(E, t, h, OTau(s), h0)),
+                CoTree::after_bind(E, h, o, nr, k2, s, e)),
+            OVis(c, k1) => λ e =>
+                j(e, λ y q => CoTree::after(E, Succ(k2), CoTree::bind(E, t, h)) = Obs::bind(E, y, h),
+                    CoTree::after_settled(E, Succ(k2), CoTree::bind(E, t, h), OVis(c, λ a => CoTree::bind(E, k1(a), h)),
+                        CoTree::obs_bind_at(E, t, h, OVis(c, k1), h0), trivial)),
+        },
+    }
+}
+
+// A tree that returns `r` after `k` drops, continued with `h`, is `h(r)` up to
+// the drops.
+fn Eutt::bind_leaf<A, B>(E: Events, h: A → CoTree<B>(E), r: A, k: Nat, t: CoTree<A>(E)) →
+    CoTree::after(E, k, t) = ORet(r) → Eutt<B>(E, CoTree::bind(E, t, h), h(r))
+{
+    match k {
+        Zero => λ (e: CoTree::obs(E, t) = ORet(r)) =>
+            Eutt::of_bisim(E, CoTree::bind(E, t, h), h(r), Bisim::of_obs(E, CoTree::bind(E, t, h), h(r),
+                CoTree::obs_bind_at(E, t, h, ORet(r), e))),
+        Succ(k2) => match h0: CoTree::obs(E, t) {
+            ORet(_) => λ e =>
+                Eutt::of_bisim(E, CoTree::bind(E, t, h), h(r), Bisim::of_obs(E, CoTree::bind(E, t, h), h(r),
+                    CoTree::obs_bind_at(E, t, h, ORet(r), prelude::trans(h0, e)))),
+            OTau(s) => λ e => Eutt::peel_l(E, CoTree::bind(E, t, h), CoTree::bind(E, s, h), h(r), Zero,
+                CoTree::obs_bind_at(E, t, h, OTau(s), h0), Eutt::bind_leaf(E, h, r, k2, s, e)),
+            OVis(_, _) => λ e => absurd(e),
+        },
+    }
+}
+
+// `t ≈ u` and `h1(a) ≈ h2(a)` for every `a` give `bind(t, h1) ≈ bind(u, h2)`.
+// A silent step or a call carries over through `bind` at the same counts
+// (`after_bind`); at a leaf `r` the result is the existing relation
+// `bind(t, h1) ≈ h1(r) ≈ h2(r) ≈ bind(u, h2)`.
+fn Eutt::bind_cong<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), h1: A → CoTree<B>(E), h2: A → CoTree<B>(E),
+    e: Eutt<A>(E, t, u), hh: (a: A) → Eutt<B>(E, h1(a), h2(a))) →
+    Eutt<B>(E, CoTree::bind(E, t, h1), CoTree::bind(E, u, h2))
+{
+    match e {
+        ERet(nl, nr, r, ht, hu) =>
+            Eutt::trans(E, CoTree::bind(E, t, h1), h1(r), CoTree::bind(E, u, h2), Eutt::bind_leaf(E, h1, r, nl, t, ht),
+                Eutt::trans(E, h1(r), h2(r), CoTree::bind(E, u, h2), hh(r),
+                    Eutt::sym(E, CoTree::bind(E, u, h2), h2(r), Eutt::bind_leaf(E, h2, r, nr, u, hu)))),
+        ETau(nl, nr, t2, u2, ht, hu, n) => ETau(nl, nr, CoTree::bind(E, t2, h1), CoTree::bind(E, u2, h2),
+            CoTree::after_bind(E, h1, OTau(t2), trivial, nl, t, ht), CoTree::after_bind(E, h2, OTau(u2), trivial, nr, u, hu),
+            Eutt::bind_cong(E, t2, u2, h1, h2, n, hh)),
+        EVis(nl, nr, c, k1, k2, ht, hu, n) => EVis(nl, nr, c, λ a => CoTree::bind(E, k1(a), h1), λ a => CoTree::bind(E, k2(a), h2),
+            CoTree::after_bind(E, h1, OVis(c, k1), trivial, nl, t, ht), CoTree::after_bind(E, h2, OVis(c, k2), trivial, nr, u, hu),
+            λ a => Eutt::bind_cong(E, k1(a), k2(a), h1, h2, n(a), hh)),
+    }
+}
+
+// The congruence on each side alone.
+fn Eutt::bind_cong_l<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), h: A → CoTree<B>(E), e: Eutt<A>(E, t, u)) →
+    Eutt<B>(E, CoTree::bind(E, t, h), CoTree::bind(E, u, h))
+{
+    Eutt::bind_cong(E, t, u, h, h, e, λ a => Eutt::refl(E, h(a)))
+}
+
+fn Eutt::bind_cong_r<A, B>(E: Events, t: CoTree<A>(E), h1: A → CoTree<B>(E), h2: A → CoTree<B>(E),
+    hh: (a: A) → Eutt<B>(E, h1(a), h2(a))) → Eutt<B>(E, CoTree::bind(E, t, h1), CoTree::bind(E, t, h2))
+{
+    Eutt::bind_cong(E, t, t, h1, h2, Eutt::refl(E, t), hh)
+}
+
+// ---------------------------------------------------------------------------
+// Following silent steps through a function of trees
+
+// `t` observes `o` after `m` drops. `after`'s own count is only a bound on
+// the drops taken; this one is what a function that stops early needs.
+record AfterIs<R>(E: Events, t: CoTree<R>(E), o: Obs<R>(E)) {
+    m: Nat,
+    at: CoTree::after(E, m, t) = o,
+}
+
+// A function of trees that is a function `Fo` of their observations, and
+// turns a silent step into a silent step: where `t` observes `o` after `k`
+// drops, `F(t)` observes `Fo(o)` after as many drops as `t` really took.
+// The loops (`iter_from`), recursion (`mrec`) and readings against a world
+// (`Io::against_co`) are such functions, so their congruences need only
+// what each does at a settled observation.
+theorem CoTree::after_map<A, B>(E1: Events, E2: Events, F: CoTree<A>(E1) → CoTree<B>(E2), Fo: Obs<A>(E1) → Obs<B>(E2),
+    hF: (t: CoTree<A>(E1)) → CoTree::obs(E2, F(t)) = Fo(CoTree::obs(E1, t)),
+    hT: (s: CoTree<A>(E1)) → Fo(OTau(s)) = OTau(F(s)), o: Obs<A>(E1), k: Nat):
+    (t: CoTree<A>(E1)) → CoTree::after(E1, k, t) = o → AfterIs<B>(E2, F(t), Fo(o))
+{
+    match k {
+        Zero => λ t (e: CoTree::obs(E1, t) = o) =>
+            AfterIs(Zero, prelude::trans(hF(t), j(e, λ y q => Fo(CoTree::obs(E1, t)) = Fo(y), refl))),
+        Succ(k2) => λ t => match h0: CoTree::obs(E1, t) {
+            ORet(_) => λ e => AfterIs(Zero, prelude::trans(hF(t), j(prelude::trans(h0, e), λ y q => Fo(CoTree::obs(E1, t)) = Fo(y), refl))),
+            OTau(s) => λ e => {
+                let w: AfterIs<B>(E2, F(s), Fo(o)) = CoTree::after_map(E1, E2, F, Fo, hF, hT, o, k2, s, e);
+                let ht: (CoTree::obs(E2, F(t)) = OTau(F(s))) =
+                    prelude::trans(hF(t), prelude::trans(j(h0, λ y q => Fo(CoTree::obs(E1, t)) = Fo(y), refl), hT(s)));
+                AfterIs(Succ(w.m), prelude::trans(CoTree::after_succ(E2, w.m, F(t), F(s), ht), w.at))
+            },
+            OVis(_, _) => λ e => AfterIs(Zero, prelude::trans(hF(t), j(prelude::trans(h0, e), λ y q => Fo(CoTree::obs(E1, t)) = Fo(y), refl))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops up to taus
+
+// Where the pending pass observes `o` after `k` drops, the loop observes
+// one step of the loop at `o`.
+theorem CoTree::iter_after<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), o: Obs<Step<A, B>>(E), k: Nat,
+    t: CoTree<Step<A, B>>(E), e: CoTree::after(E, k, t) = o): AfterIs<B>(E, CoTree::iter_from(E, body, t), Obs::iter(E, body, o))
+{
+    CoTree::after_map(E, E, λ s => CoTree::iter_from(E, body, s), λ p => Obs::iter(E, body, p), λ s => refl, λ s => refl, o, k, t, e)
+}
+
+// Equivalent pending passes and pointwise equivalent bodies give equivalent
+// loops. A silent step or a call of the pass is one of the loop; a pass
+// that returns `Continue(a)` on both sides is one `CTau` on both, before
+// the next passes, which `hb(a)` relates, so the corecursion is direct.
+fn Eutt::iter_from_cong<A, B>(E: Events, body1: A → CoTree<Step<A, B>>(E), body2: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → Eutt<Step<A, B>>(E, body1(a), body2(a)), t: CoTree<Step<A, B>>(E), u: CoTree<Step<A, B>>(E),
+    e: Eutt<Step<A, B>>(E, t, u)) → Eutt<B>(E, CoTree::iter_from(E, body1, t), CoTree::iter_from(E, body2, u))
+{
+    match e {
+        ERet(nl, nr, x, ht, hu) => {
+            let w1: AfterIs<B>(E, CoTree::iter_from(E, body1, t), Obs::iter(E, body1, ORet(x))) =
+                CoTree::iter_after(E, body1, ORet(x), nl, t, ht);
+            let w2: AfterIs<B>(E, CoTree::iter_from(E, body2, u), Obs::iter(E, body2, ORet(x))) =
+                CoTree::iter_after(E, body2, ORet(x), nr, u, hu);
+            match hx: x {
+                Continue(a2) => ETau(w1.m, w2.m, CoTree::iter_from(E, body1, body1(a2)), CoTree::iter_from(E, body2, body2(a2)),
+                    j(hx, λ y q => CoTree::after(E, w1.m, CoTree::iter_from(E, body1, t)) = Obs::iter(E, body1, ORet(y)), w1.at),
+                    j(hx, λ y q => CoTree::after(E, w2.m, CoTree::iter_from(E, body2, u)) = Obs::iter(E, body2, ORet(y)), w2.at),
+                    Eutt::iter_from_cong(E, body1, body2, hb, body1(a2), body2(a2), hb(a2))),
+                Break(b) => ERet(w1.m, w2.m, b,
+                    j(hx, λ y q => CoTree::after(E, w1.m, CoTree::iter_from(E, body1, t)) = Obs::iter(E, body1, ORet(y)), w1.at),
+                    j(hx, λ y q => CoTree::after(E, w2.m, CoTree::iter_from(E, body2, u)) = Obs::iter(E, body2, ORet(y)), w2.at)),
+            }
+        },
+        ETau(nl, nr, t2, u2, ht, hu, n) => {
+            let w1: AfterIs<B>(E, CoTree::iter_from(E, body1, t), Obs::iter(E, body1, OTau(t2))) =
+                CoTree::iter_after(E, body1, OTau(t2), nl, t, ht);
+            let w2: AfterIs<B>(E, CoTree::iter_from(E, body2, u), Obs::iter(E, body2, OTau(u2))) =
+                CoTree::iter_after(E, body2, OTau(u2), nr, u, hu);
+            ETau(w1.m, w2.m, CoTree::iter_from(E, body1, t2), CoTree::iter_from(E, body2, u2), w1.at, w2.at,
+                Eutt::iter_from_cong(E, body1, body2, hb, t2, u2, n))
+        },
+        EVis(nl, nr, c, k1, k2, ht, hu, n) => {
+            let w1: AfterIs<B>(E, CoTree::iter_from(E, body1, t), Obs::iter(E, body1, OVis(c, k1))) =
+                CoTree::iter_after(E, body1, OVis(c, k1), nl, t, ht);
+            let w2: AfterIs<B>(E, CoTree::iter_from(E, body2, u), Obs::iter(E, body2, OVis(c, k2))) =
+                CoTree::iter_after(E, body2, OVis(c, k2), nr, u, hu);
+            EVis(w1.m, w2.m, c, λ a => CoTree::iter_from(E, body1, k1(a)), λ a => CoTree::iter_from(E, body2, k2(a)), w1.at, w2.at,
+                λ a => Eutt::iter_from_cong(E, body1, body2, hb, k1(a), k2(a), n(a)))
+        },
+    }
+}
+
+// Bodies equivalent at every state give equivalent loops.
+fn Eutt::iter_cong<A, B>(E: Events, body1: A → CoTree<Step<A, B>>(E), body2: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → Eutt<Step<A, B>>(E, body1(a), body2(a)), a: A) → Eutt<B>(E, CoTree::iter(E, body1, a), CoTree::iter(E, body2, a))
+{
+    Eutt::iter_from_cong(E, body1, body2, hb, body1(a), body2(a), hb(a))
+}
+
+// What the loop goes on with when a pass returns, the silent step dropped.
+fn CoTree::iter_again<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), x: Step<A, B>) → CoTree<B>(E) {
+    match x {
+        Continue(a) => CoTree::iter(E, body, a),
+        Break(b) => CRet(b),
+    }
+}
+
+fn Eutt::iter_next_again<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), x: Step<A, B>) →
+    Eutt<B>(E, CoTree::iter_next(E, body, x), CoTree::iter_again(E, body, x))
+{
+    match x {
+        Continue(a) => Eutt::tau_l(E, CoTree::iter(E, body, a)),
+        Break(b) => Eutt::refl(E, CRet(b)),
+    }
+}
+
+// The loop is its body followed by the loop again, up to taus
+// (`CoTree::iter_unfold` is the same step for step, with the `CTau`).
+fn Eutt::iter_unfold<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), a: A) →
+    Eutt<B>(E, CoTree::iter(E, body, a), CoTree::bind(E, body(a), λ x => CoTree::iter_again(E, body, x)))
+{
+    Eutt::trans(E, CoTree::iter(E, body, a), CoTree::bind(E, body(a), λ x => CoTree::iter_next(E, body, x)),
+        CoTree::bind(E, body(a), λ x => CoTree::iter_again(E, body, x)),
+        Eutt::of_bisim(E, CoTree::iter(E, body, a), CoTree::bind(E, body(a), λ x => CoTree::iter_next(E, body, x)),
+            CoTree::iter_unfold(E, body, a)),
+        Eutt::bind_cong_r(E, body(a), λ x => CoTree::iter_next(E, body, x), λ x => CoTree::iter_again(E, body, x),
+            λ x => Eutt::iter_next_again(E, body, x)))
+}
+
+// ---------------------------------------------------------------------------
+// Rewriting along `Eutt`
+
+// `Eutt` is an equivalence, so a relation `rewrite(h, e)` with `h : Eutt(t, u)`
+// rewrites inside an `Eutt` goal and chains each side's step into it
+// (docs/equation-rewrite-design.md §9, §11).
+//
+// `Eutt<R>(E)` is a codata family, which an expression cannot apply to fewer
+// than its indices; `Eutt::Rel` names it as a relation, and converts with
+// the relation a rewrite reads off a goal `Eutt<R>(E, t, u)`.
+fn Eutt::Rel<R>(E: Events) → CoTree<R>(E) → CoTree<R>(E) → Type { λ t u => Eutt<R>(E, t, u) }
+
+instance<R>(E: Events) Equivalence<CoTree<R>(E)>(Eutt::Rel<R>(E)) {
+    rel_refl := λ t => Eutt::refl(E, t),
+    rel_sym := λ t u e => Eutt::sym(E, t, u, e),
+    rel_trans := λ t u v a b => Eutt::trans(E, t, u, v, a, b),
+}
+
+// A silent step and a call respect `Eutt`: what a rewrite crosses `CTau`
+// and a call's continuation by.
+fn Eutt::tau_cong<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), e: Eutt<R>(E, t, u)) → Eutt<R>(E, CTau(t), CTau(u)) {
+    Eutt::trans(E, CTau(t), t, CTau(u), Eutt::tau_l(E, t), Eutt::trans(E, t, u, CTau(u), e, Eutt::tau_r(E, u)))
+}
+
+fn Eutt::vis_cong<R>(E: Events, c: E.Cmd, k1: E.Resp(c) → CoTree<R>(E), k2: E.Resp(c) → CoTree<R>(E),
+    n: (a: E.Resp(c)) → Eutt<R>(E, k1(a), k2(a))) → Eutt<R>(E, CVis(c, k1), CVis(c, k2))
+{
+    EVis(0, 0, c, k1, k2, refl, refl, n)
+}
+
+// The respect evidence a relation rewrite resolves (§10.2, §11): every
+// parameter in braces, outside any section, the context written as a λ.
+evidence theorem Eutt::bind_respects_k<A, B>({E: Events}, {t: CoTree<A>(E)}):
+    PreservesRelation(Pointwise<A, CoTree<B>(E)>(Eutt::Rel<B>(E)), Eutt::Rel<B>(E), λ h => CoTree::bind(E, t, h))
+{
+    λ h1 h2 hh => Eutt::bind_cong_r(E, t, h1, h2, hh)
+}
+
+evidence theorem Eutt::bind_respects_t<A, B>({E: Events}, {h: A → CoTree<B>(E)}):
+    PreservesRelation(Eutt::Rel<A>(E), Eutt::Rel<B>(E), λ t => CoTree::bind(E, t, h))
+{
+    λ t u e => Eutt::bind_cong_l(E, t, u, h, e)
+}
+
+evidence theorem Eutt::tau_respects<R>({E: Events}): PreservesRelation(Eutt::Rel<R>(E), Eutt::Rel<R>(E), λ t => CTau(t)) {
+    λ t u e => Eutt::tau_cong(E, t, u, e)
+}
+
+evidence theorem Eutt::vis_respects<R>({E: Events}, {c: E.Cmd}):
+    PreservesRelation(Pointwise<E.Resp(c), CoTree<R>(E)>(Eutt::Rel<R>(E)), Eutt::Rel<R>(E), λ k => CVis(c, k))
+{
+    λ k1 k2 n => Eutt::vis_cong(E, c, k1, k2, n)
+}
+
+evidence theorem Eutt::map_respects<A, B>({E: Events}, {f: A → B}):
+    PreservesRelation(Eutt::Rel<A>(E), Eutt::Rel<B>(E), λ t => CoTree::map(E, t, f))
+{
+    λ t u e => Eutt::bind_cong_l(E, t, u, λ r => CRet(f(r)), e)
+}
+
+// A loop over its body, pointwise (`Eutt::iter_cong`): a rewrite reaches
+// into every pass.
+evidence theorem Eutt::iter_respects<A, B>({E: Events}, {a: A}):
+    PreservesRelation(Pointwise<A, CoTree<Step<A, B>>(E)>(Eutt::Rel<Step<A, B>>(E)), Eutt::Rel<B>(E), λ body => CoTree::iter(E, body, a))
+{
+    λ b1 b2 hb => Eutt::iter_cong(E, b1, b2, hb, a)
+}
+
+// ---------------------------------------------------------------------------
+// Up-to lemmas: friends of `Eutt`
+//
+// Each lemma below reads one constructor of its relation arguments and calls
+// itself on their children, so it is a *friend* of `Eutt`
+// (docs/codata-elaborator-design.md §5.6): a corecursive proof may call
+// itself under it, which is coinduction up to that lemma. `Eutt::trans`
+// itself is no friend and must not be one (`spin ≈ CTau(CRet(0))` would
+// close as `ETau(0, 0, spin, CRet(0), refl, refl, trans(self, tau_l))`,
+// which is false), but transitivity
+// with strong bisimilarity on either side is (`Eutt::up_to_bisim`), and so is
+// the congruence of `bind` (`Eutt::bind_up`).
+
+// What a bisimilarity from a tree that observes `o` says about the other
+// tree's observation `w`: the same constructor, children bisimilar.
+record TauAt<R>(E: Events, s: CoTree<R>(E), w: Obs<R>(E)) {
+    v2: CoTree<R>(E),
+    at: w = OTau(v2),
+    next: Bisim<R>(E, s, v2),
+}
+
+record VisAt<R>(E: Events, c: E.Cmd, k: E.Resp(c) → CoTree<R>(E), w: Obs<R>(E)) {
+    k2: E.Resp(c) → CoTree<R>(E),
+    at: w = OVis(c, k2),
+    next: (a: E.Resp(c)) → Bisim<R>(E, k(a), k2(a)),
+}
+
+fn Obs::BisimAt<R>(E: Events, o: Obs<R>(E), w: Obs<R>(E)) → Type {
+    match o {
+        ORet(r) => w = ORet(r),
+        OTau(s) => TauAt<R>(E, s, w),
+        OVis(c, k) => VisAt<R>(E, c, k, w),
+    }
+}
+
+// [`Bisim::step`]'s record, at the other tree's observation.
+theorem Obs::bisim_at_obs<R>(E: Events, o: Obs<R>(E), v: CoTree<R>(E)):
+    Obs::BisimTo(E, o, v) → Obs::BisimAt(E, o, CoTree::obs(E, v))
+{
+    match o {
+        ORet(_) => λ w => w,
+        OTau(s) => λ (w: TauTo<R>(E, s, v)) => TauAt(w.v2, w.at, w.next),
+        OVis(c, k) => λ (w: VisTo<R>(E, c, k, v)) => VisAt(w.k2, w.at, w.next),
+    }
+}
+
+// Bisimilar trees drop their silent steps in lockstep: what one observes
+// after `n` drops, the other observes after `n` too, up to bisimilar
+// children. By recursion on `n`, reading `b` one step at a time.
+theorem Bisim::after<R>(E: Events, u: CoTree<R>(E), v: CoTree<R>(E), b: Bisim<R>(E, u, v), n: Nat):
+    (o: Obs<R>(E)) → CoTree::after(E, n, u) = o → Obs::BisimAt(E, o, CoTree::after(E, n, v))
+{
+    match n {
+        Zero => λ o (h: CoTree::obs(E, u) = o) =>
+            j(h, λ y q => Obs::BisimAt(E, y, CoTree::obs(E, v)), Obs::bisim_at_obs(E, CoTree::obs(E, u), v, Bisim::step(E, u, v, b))),
+        Succ(m) => match h0: CoTree::obs(E, u) {
+            ORet(r) => λ o h => {
+                let w: (CoTree::obs(E, v) = ORet(r)) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
+                let e: (o = ORet(r)) = prelude::trans(prelude::sym(h), CoTree::after_settled(E, Succ(m), u, ORet(r), h0, trivial));
+                j(prelude::sym(e), λ y q => Obs::BisimAt(E, y, CoTree::after(E, Succ(m), v)), CoTree::after_settled(E, Succ(m), v, ORet(r), w, trivial))
+            },
+            OTau(u2) => λ o h => {
+                let w: TauTo<R>(E, u2, v) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
+                j(prelude::sym(CoTree::after_succ(E, m, v, w.v2, w.at)), λ y q => Obs::BisimAt(E, o, y),
+                    Bisim::after(E, u2, w.v2, w.next, m, o, prelude::trans(prelude::sym(CoTree::after_succ(E, m, u, u2, h0)), h)))
+            },
+            OVis(c, k) => λ o h => {
+                let w: VisTo<R>(E, c, k, v) = j(h0, λ y q => Obs::BisimTo(E, y, v), Bisim::step(E, u, v, b));
+                let p: VisAt<R>(E, c, k, CoTree::after(E, Succ(m), v)) =
+                    VisAt(w.k2, CoTree::after_settled(E, Succ(m), v, OVis(c, w.k2), w.at, trivial), w.next);
+                let e: (o = OVis(c, k)) = prelude::trans(prelude::sym(h), CoTree::after_settled(E, Succ(m), u, OVis(c, k), h0, trivial));
+                j(prelude::sym(e), λ y q => Obs::BisimAt(E, y, CoTree::after(E, Succ(m), v)), p)
+            },
+        },
+    }
+}
+
+// Equivalence up to taus up to bisimilarity on both sides: `t ~ t' ≈ u' ~ u`
+// gives `t ≈ u` at the middle relation's counts. A friend of `Eutt`: it
+// reads one constructor of `e` and calls itself on its children.
+fn Eutt::up_to_bisim<R>(E: Events, t: CoTree<R>(E), t2: CoTree<R>(E), u2: CoTree<R>(E), u: CoTree<R>(E),
+    bt: Bisim<R>(E, t2, t), e: Eutt<R>(E, t2, u2), bu: Bisim<R>(E, u2, u)) → Eutt<R>(E, t, u)
+{
+    match e {
+        ERet(nl, nr, r, ht, hu) =>
+            ERet(nl, nr, r, Bisim::after(E, t2, t, bt, nl, ORet(r), ht), Bisim::after(E, u2, u, bu, nr, ORet(r), hu)),
+        ETau(nl, nr, t3, u3, ht, hu, n) => {
+            let wt: TauAt<R>(E, t3, CoTree::after(E, nl, t)) = Bisim::after(E, t2, t, bt, nl, OTau(t3), ht);
+            let wu: TauAt<R>(E, u3, CoTree::after(E, nr, u)) = Bisim::after(E, u2, u, bu, nr, OTau(u3), hu);
+            ETau(nl, nr, wt.v2, wu.v2, wt.at, wu.at, Eutt::up_to_bisim(E, wt.v2, t3, u3, wu.v2, wt.next, n, wu.next))
+        },
+        EVis(nl, nr, c, k1, k2, ht, hu, n) => {
+            let wt: VisAt<R>(E, c, k1, CoTree::after(E, nl, t)) = Bisim::after(E, t2, t, bt, nl, OVis(c, k1), ht);
+            let wu: VisAt<R>(E, c, k2, CoTree::after(E, nr, u)) = Bisim::after(E, u2, u, bu, nr, OVis(c, k2), hu);
+            EVis(nl, nr, c, wt.k2, wu.k2, wt.at, wu.at,
+                λ a => Eutt::up_to_bisim(E, wt.k2(a), k1(a), k2(a), wu.k2(a), wt.next(a), n(a), wu.next(a)))
+        },
+    }
+}
+
+// A tree that returns `r` after some drops reaches it after exactly `j`, and
+// `bind` then continues with `h(r)` with no drops of its own: dropping
+// `m + j` from the bind is dropping `m` from `h(r)`. [`Eutt::bind_leaf`]
+// gives the same up to taus; a friend needs the counts.
+record BindRetAt<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E), r: A) {
+    j: Nat,
+    at: (m: Nat) → CoTree::after(E, m + j, CoTree::bind(E, t, h)) = CoTree::after(E, m, h(r)),
+}
+
+theorem CoTree::after_same_obs<R>(E: Events, m: Nat, x: CoTree<R>(E), y: CoTree<R>(E), e: CoTree::obs(E, x) = CoTree::obs(E, y)):
+    CoTree::after(E, m, x) = CoTree::after(E, m, y)
+{
+    j(e, λ z q => CoTree::after_obs(E, m, CoTree::obs(E, x)) = CoTree::after_obs(E, m, z), refl)
+}
+
+theorem CoTree::bind_ret_at<A, B>(E: Events, h: A → CoTree<B>(E), r: A, k: Nat, t: CoTree<A>(E)):
+    CoTree::after(E, k, t) = ORet(r) → BindRetAt<A, B>(E, t, h, r)
+{
+    match k {
+        Zero => λ (e: CoTree::obs(E, t) = ORet(r)) =>
+            BindRetAt(Zero, λ m => CoTree::after_same_obs(E, m, CoTree::bind(E, t, h), h(r), CoTree::obs_bind_at(E, t, h, ORet(r), e))),
+        Succ(k2) => match h0: CoTree::obs(E, t) {
+            ORet(_) => λ e =>
+                BindRetAt(Zero, λ m => CoTree::after_same_obs(E, m, CoTree::bind(E, t, h), h(r),
+                    CoTree::obs_bind_at(E, t, h, ORet(r), prelude::trans(h0, e)))),
+            OTau(s) => λ e => {
+                let w: BindRetAt<A, B>(E, s, h, r) = CoTree::bind_ret_at(E, h, r, k2, s, e);
+                BindRetAt(Succ(w.j), λ m => prelude::trans(
+                    CoTree::after_succ(E, m + w.j, CoTree::bind(E, t, h), CoTree::bind(E, s, h), CoTree::obs_bind_at(E, t, h, OTau(s), h0)),
+                    w.at(m)))
+            },
+            OVis(_, _) => λ e => absurd(e),
+        },
+    }
+}
+
+// `bind` is a congruence up to taus, as a friend of `Eutt`: it reads one
+// constructor of `hh(r)` at a leaf (where [`Eutt::bind_cong`] composes with
+// `trans` instead) and calls itself on `e`'s children, so a proof may call
+// itself inside the continuations' relation, which is coinduction up to
+// `bind`. `e` is a relation at another result type, read as data.
+fn Eutt::bind_up<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), h1: A → CoTree<B>(E), h2: A → CoTree<B>(E),
+    e: Eutt<A>(E, t, u), hh: (a: A) → Eutt<B>(E, h1(a), h2(a))) →
+    Eutt<B>(E, CoTree::bind(E, t, h1), CoTree::bind(E, u, h2))
+{
+    match e {
+        ERet(nl, nr, r, ht, hu) => {
+            let w1: BindRetAt<A, B>(E, t, h1, r) = CoTree::bind_ret_at(E, h1, r, nl, t, ht);
+            let w2: BindRetAt<A, B>(E, u, h2, r) = CoTree::bind_ret_at(E, h2, r, nr, u, hu);
+            match hh(r) {
+                ERet(ml, mr, s, a1, a2) =>
+                    ERet(ml + w1.j, mr + w2.j, s, prelude::trans(w1.at(ml), a1), prelude::trans(w2.at(mr), a2)),
+                ETau(ml, mr, x, y, a1, a2, nx) =>
+                    ETau(ml + w1.j, mr + w2.j, x, y, prelude::trans(w1.at(ml), a1), prelude::trans(w2.at(mr), a2), nx),
+                EVis(ml, mr, c, k1, k2, a1, a2, nx) =>
+                    EVis(ml + w1.j, mr + w2.j, c, k1, k2, prelude::trans(w1.at(ml), a1), prelude::trans(w2.at(mr), a2), nx),
+            }
+        },
+        ETau(nl, nr, t2, u2, ht, hu, n) => ETau(nl, nr, CoTree::bind(E, t2, h1), CoTree::bind(E, u2, h2),
+            CoTree::after_bind(E, h1, OTau(t2), trivial, nl, t, ht), CoTree::after_bind(E, h2, OTau(u2), trivial, nr, u, hu),
+            Eutt::bind_up(E, t2, u2, h1, h2, n, hh)),
+        EVis(nl, nr, c, k1, k2, ht, hu, n) => EVis(nl, nr, c, λ a => CoTree::bind(E, k1(a), h1), λ a => CoTree::bind(E, k2(a), h2),
+            CoTree::after_bind(E, h1, OVis(c, k1), trivial, nl, t, ht), CoTree::after_bind(E, h2, OVis(c, k2), trivial, nr, u, hu),
+            λ a => Eutt::bind_up(E, k1(a), k2(a), h1, h2, n(a), hh)),
+    }
 }

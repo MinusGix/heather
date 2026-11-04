@@ -1,0 +1,154 @@
+// A small language of checked buffer reads, the first customer of facts on
+// demand (docs/facts-on-demand-design.md, docs/compilation-vision.md §6.2).
+//
+// A program reads one buffer of `len` words at a list of index expressions
+// over its arguments, and sums what it read. Every read is checked: an index
+// at or past `len` traps, and the program's result is `None`. The compiler
+// below drops a read's check where it is handed a proof that the read is in
+// bounds for every argument list the program accepts, and keeps it
+// elsewhere. Which reads get a proof, and how, is not the compiler's
+// business: it is proved once (`Compiled::runs`), for any facts, and the
+// facts are found on demand by whoever compiles
+// (lib/lang/facts/in_bounds.hthr, lib/lang/facts/read_facts.hthr).
+import list;
+import nat;
+import logic;
+import bool;
+import option;
+
+// ---------------------------------------------------------------------------
+// Index expressions over the arguments
+
+// A word of a list, zero past its end.
+fn word_at(xs: List<Nat>, k: Nat) → Nat { xs.nth(k).unwrap_or(0) }
+
+inductive Ix {
+    Const(n: Nat),
+    Arg(k: Nat),
+    Add(a: Ix, b: Ix),
+    // Truncated: a `Sub` at or below zero is zero.
+    Sub(a: Ix, b: Ix),
+    // The smaller of the index and a constant: a clamped index.
+    Clamp(a: Ix, hi: Nat),
+}
+
+fn Ix::eval(self e: Ix, args: List<Nat>) → Nat {
+    match e {
+        Const(n) => n,
+        Arg(k) => word_at(args, k),
+        Add(a, b) => a.eval(args) + b.eval(args),
+        Sub(a, b) => a.eval(args) - b.eval(args),
+        Clamp(a, hi) => a.eval(args).min(hi),
+    }
+}
+
+// The arguments a program accepts: each at most its bound, and every
+// argument past the bounds zero (its bound, read past the end, is zero).
+fn Within(args: List<Nat>, bounds: List<Nat>) → Type { (k: Nat) → word_at(args, k) <= word_at(bounds, k) }
+
+// The fact a dropped check needs: at every argument list the program
+// accepts, the index is below the buffer's length. A fact about one read of
+// the code, stated as mathematics about its index (Q2 of the vision note).
+fn InBounds(len: Nat, bounds: List<Nat>, e: Ix) → Type { (args: List<Nat>) → Within(args, bounds) → e.eval(args) < len }
+
+// ---------------------------------------------------------------------------
+// Programs, checked and compiled
+
+record Prog { len: Nat, bounds: List<Nat>, reads: List<Ix> }
+
+// One checked read: the word, or a trap.
+fn read_checked(xs: List<Nat>, len: Nat, i: Nat) → Option<Nat> {
+    match Succ(i).leb(len) { True => Some(word_at(xs, i)), False => None }
+}
+
+fn sum_reads(xs: List<Nat>, len: Nat, args: List<Nat>, reads: List<Ix>) → Option<Nat> {
+    match reads {
+        Nil => Some(0),
+        Cons(e, rest) => read_checked(xs, len, e.eval(args)).and_then(λ v => sum_reads(xs, len, args, rest).map(λ s => v + s)),
+    }
+}
+
+// What a program means: every read checked.
+fn Prog::run(self p: Prog, xs: List<Nat>, args: List<Nat>) → Option<Nat> { sum_reads(xs, p.len, args, p.reads) }
+
+// A read with, perhaps, the fact that it is in bounds: what the compiler is
+// handed for each read.
+record Site(len: Nat, bounds: List<Nat>) { ix: Ix, fact: Option<InBounds(len, bounds, ix)> }
+
+fn erase(len: Nat, bounds: List<Nat>, sites: List<Site(len, bounds)>) → List<Ix> {
+    match sites { Nil => Nil, Cons(s, rest) => Cons(s.ix, erase(len, bounds, rest)) }
+}
+
+// A compiled read: checked, or a plain load.
+inductive Read { Checked(ix: Ix), Unchecked(ix: Ix) }
+
+fn Site::compile({len: Nat}, {bounds: List<Nat>}, self s: Site(len, bounds)) → Read {
+    match s.fact { None => Checked(s.ix), Some(_) => Unchecked(s.ix) }
+}
+
+fn compile_sites(len: Nat, bounds: List<Nat>, sites: List<Site(len, bounds)>) → List<Read> {
+    match sites { Nil => Nil, Cons(s, rest) => Cons(s.compile(), compile_sites(len, bounds, rest)) }
+}
+
+fn Read::run(self r: Read, xs: List<Nat>, len: Nat, args: List<Nat>) → Option<Nat> {
+    match r { Checked(e) => read_checked(xs, len, e.eval(args)), Unchecked(e) => Some(word_at(xs, e.eval(args))) }
+}
+
+fn run_compiled(xs: List<Nat>, len: Nat, args: List<Nat>, code: List<Read>) → Option<Nat> {
+    match code {
+        Nil => Some(0),
+        Cons(r, rest) => r.run(xs, len, args).and_then(λ v => run_compiled(xs, len, args, rest).map(λ s => v + s)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The compiler is proved once
+
+// An in-bounds read's check passes.
+theorem read_checked_in(xs: List<Nat>, len, i: Nat, h: i < len): read_checked(xs, len, i) = Some(word_at(xs, i)) {
+    j(sym(Succ(i).leb_true(len, h)), λ b _ => (match b { True => Some(word_at(xs, i)), False => None }) = Some(word_at(xs, i)), refl)
+}
+
+// A compiled site reads what its checked read reads, wherever the arguments
+// are accepted.
+theorem Site::compile_runs({len: Nat}, {bounds: List<Nat>}, self s: Site(len, bounds), xs, args: List<Nat>, w: Within(args, bounds)):
+    s.compile().run(xs, len, args) = read_checked(xs, len, s.ix.eval(args))
+{
+    (match s.fact {
+        None => refl,
+        Some(fact) => sym(read_checked_in(xs, len, s.ix.eval(args), fact(args, w))),
+    })
+}
+
+theorem compile_sites_runs(len: Nat, bounds: List<Nat>, xs, args: List<Nat>, w: Within(args, bounds), sites: List<Site(len, bounds)>):
+    run_compiled(xs, len, args, compile_sites(len, bounds, sites)) = sum_reads(xs, len, args, erase(len, bounds, sites))
+{
+    match sites {
+        Nil => refl,
+        Cons(s, rest) => j(sym(s.compile_runs(xs, args, w)), λ o _ => o.and_then(λ v => run_compiled(xs, len, args, compile_sites(len, bounds, rest)).map(λ t => v + t))
+                = read_checked(xs, len, s.ix.eval(args)).and_then(λ v => sum_reads(xs, len, args, erase(len, bounds, rest)).map(λ t => v + t)),
+            j(compile_sites_runs(len, bounds, xs, args, w, rest), λ r _ => read_checked(xs, len, s.ix.eval(args)).and_then(λ v => run_compiled(xs, len, args, compile_sites(len, bounds, rest)).map(λ t => v + t))
+                = read_checked(xs, len, s.ix.eval(args)).and_then(λ v => r.map(λ t => v + t)), refl)),
+    }
+}
+
+// A program compiled: each read with the fact found for it, if any, and the
+// pin that the reads are the program's own, checked when it is built.
+record Compiled(p: Prog) { sites: List<Site(p.len, p.bounds)>, same: erase(p.len, p.bounds, sites) = p.reads }
+
+fn Compiled::code({p: Prog}, self c: Compiled(p)) → List<Read> { compile_sites(p.len, p.bounds, c.sites) }
+
+// How many checks compiling kept.
+fn Read::checks(self r: Read) → Nat { match r { Checked(_) => 1, Unchecked(_) => 0 } }
+
+fn checks_in(code: List<Read>) → Nat { match code { Nil => 0, Cons(r, rest) => r.checks() + checks_in(rest) } }
+
+// The theorem the compiler stands on: whatever facts were found, the
+// compiled code computes what the program means, at every argument list it
+// accepts (a trap included).
+theorem Compiled::runs({p: Prog}, self c: Compiled(p), xs, args: List<Nat>, w: Within(args, p.bounds)):
+    run_compiled(xs, p.len, args, c.code()) = p.run(xs, args)
+{
+    j(c.same, λ rs _ => run_compiled(xs, p.len, args, c.code()) = sum_reads(xs, p.len, args, rs),
+        compile_sites_runs(p.len, p.bounds, xs, args, w, c.sites))
+}

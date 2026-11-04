@@ -1,0 +1,276 @@
+// exp′ = exp at the reals (issues/real-functions-and-derivatives.md): exp is
+// its own uniform derivative (`DerivOn`, real_fn.hthr) on every domain where
+// it is bounded.
+//
+// The one estimate is second order: |exp(h) - 1 - h| <= C·k² for |h| <= k
+// <= 1/2, with C = `CReal::exp_reach(1)`. At a rational `d` it is the series
+// from its third term, dominated by d²·exp(D)'s terms
+// (`Series::exp_drop2_dominated`, after exp_law's first-order
+// `exp_drop_dominated`), and at a real `h` it is read at `h`'s terms and the
+// gap closed by a slack, as exp's other laws are (`CReal::exp_sub_lin`).
+// Then exp(y) - exp(x) - exp(x)·(y - x) is exp(x)·(exp(y - x) - 1 - (y - x))
+// by `exp_add`, at most B·C·h² for |y - x| <= h, which is below ε·h once h
+// is.
+
+import logic;
+import bool;
+import nat;
+import int;
+import relation;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import big_operator;
+import creal;
+import creal_lipschitz;
+import series;
+import elementary;
+import exp_law;
+import elementary_real;
+import real_fn;
+import omega;
+import tactic;
+import linarith;
+import ring;
+
+// exp(d) - 1 - d is the series from its third term, whose k-th term
+// d^(k+2)/(k+2)! is at most d²·D^k/k! in size.
+theorem Series::exp_drop2_dominated(d, D: Rat, hd: d.abs() <= D, k: Nat):
+    ((Series::exp(d)).drop(2)).term(k).abs() <= (d.abs() * d.abs()) * Series::exp(D).term(k)
+{
+    let s = (Series::exp(d)).drop(2);
+    let sq: (0 <= d * d) = OrderedRing::sq_nonneg(d);
+    let dd: ((d * d).abs() ≈ d.abs() * d.abs()) = d.abs_mul(d);
+    let dd2: ((d * d).abs() ≈ d * d) = (d * d).abs_of_nonneg(sq);
+    match k {
+        Zero => {
+            let t = s.term(0);
+            let c: (t ≈ (1 * (d * Rat::inv_succ(0))) * (d * Rat::inv_succ(1))) = Rat::same_refl(t);
+            let i0: (Rat::inv_succ(0) ≈ 1) = omega;
+            let h1: (0 < Rat::inv_succ(1)) = Rat::inv_succ_pos(1);
+            let i1: (Rat::inv_succ(1) <= 1) = omega;
+            let tt: (t ≈ (d * d) * Rat::inv_succ(1)) = ring(c, i0);
+            let tn: (0 <= (d * d) * Rat::inv_succ(1)) = Rat::mul_nonneg(sq, Rat::le_of_lt(h1));
+            let tle: ((d * d) * Rat::inv_succ(1) <= (d * d) * 1) = Rat::mul_le_mono_l(i1, sq);
+            let ta: (t.abs() ≈ t) = t.abs_of_nonneg(linarith(tt, tn));
+            let r: (t.abs() <= (d.abs() * d.abs()) * 1) = linarith(ta, tt, tle, dd, dd2);
+            r
+        },
+        Succ(i) => {
+            let ih = Series::exp_drop2_dominated(d, D, hd, i);
+            let f = Rat::inv_succ(2 + i);
+            let hf: (0 <= f) = Rat::le_of_lt(Rat::inv_succ_pos(2 + i));
+            let g = Rat::inv_succ(i);
+            let fg: (f <= g) = Rat::inv_succ_antitone(i, 2 + i, omega);
+            let step: (d.abs() * f <= D * g) = Rat::mul_le_mul(hd, fg, d.abs_nonneg(), hf);
+            let t = s.term(i);
+            let r: ((t * (d * f)).abs() <= (d.abs() * d.abs()) * (Series::exp(D).term(i) * (D * g))) = calc {
+                (t * (d * f)).abs() ≈ t.abs() * (d * f).abs() := t.abs_mul(d * f),
+                ≈ t.abs() * (d.abs() * f) := Rat::mul_respects(t.abs().same_refl(), Rat::same_trans(d.abs_mul(f), Rat::mul_respects(d.abs().same_refl(), f.abs_of_nonneg(hf)))),
+                <= ((d.abs() * d.abs()) * Series::exp(D).term(i)) * (D * g) := Rat::mul_le_mul(ih, step, t.abs_nonneg(), Rat::mul_nonneg(d.abs_nonneg(), hf)),
+                ≈ (d.abs() * d.abs()) * (Series::exp(D).term(i) * (D * g)) := ring,
+            };
+            r
+        },
+    }
+}
+
+// The second-order bound at a rational: |exp(d) - 1 - d| <= d²·exp_reach(D).
+theorem CReal::exp_rat_sub_lin(d, D: Rat, hd: d.abs() <= D):
+    CReal::ofRat(-((d.abs() * d.abs()) * CReal::exp_reach(D))) <= CReal::exp_rat(d) - 1 - CReal::ofRat(d)
+        ∧ CReal::exp_rat(d) - 1 - CReal::ofRat(d) <= CReal::ofRat((d.abs() * d.abs()) * CReal::exp_reach(D))
+{
+    let e = Series::exp(d);
+    let s = e.drop(2);
+    let E = Series::exp(D);
+    let hD: (0 <= D) = Rat::le_trans(d.abs_nonneg(), hd);
+    let C = d.abs() * d.abs();
+    let hC: (0 <= C) = Rat::mul_nonneg(d.abs_nonneg(), d.abs_nonneg());
+    let n = s.start + E.start;
+    let dom = s.real_dominated(E, C, hC, λ k => Series::exp_drop2_dominated(d, D, hd, k), n, omega, Series::exp_term_nonneg(D, hD, n));
+    let up: (E.sum(n) + E.err(n) <= CReal::exp_reach(D)) = E.bound_after(E.start, E.start.le_refl(), n, omega);
+    let sc: (C * (E.sum(n) + E.err(n)) <= C * CReal::exp_reach(D)) = Rat::mul_le_mono_l(up, hC);
+    let lo: (-(C * CReal::exp_reach(D)) <= -(C * (E.sum(n) + E.err(n)))) = linarith(sc);
+    let i0: (Rat::inv_succ(0) ≈ 1) = omega;
+    let two0: (e.sum(2) ≈ (0 + 1) + 1 * (d * Rat::inv_succ(0))) = Rat::same_refl(e.sum(2));
+    let two: (e.sum(2) ≈ 1 + d) = ring(two0, i0);
+    let whole: (CReal::exp_rat(d) ≈ CReal::ofRat(e.sum(2)) + s.real()) = e.drop_real(2);
+    let o: (CReal::ofRat(e.sum(2)) ≈ 1 + CReal::ofRat(d)) = CReal::same_trans(CReal::ofRat_respects(two), CReal::ofRat_add(1, d));
+    let x = CReal::exp_rat(d);
+    let r: (x - 1 - CReal::ofRat(d) ≈ s.real()) = linarith(whole, o);
+    And(linarith(CReal::ofRat_le(lo), dom.left, r), linarith(CReal::ofRat_le(sc), dom.right, r))
+}
+
+// The second-order bound at a real, within a slack: |h| <= k <= 1/2 gives
+// exp(h) - 1 - h within C·k² + 2^-m, with C = exp_reach(1). `h` is read at
+// its j-th term `p`, `g = 2^-j` away, with j large enough that the gaps
+// (exp's Lipschitz bound `L·g`, the term's own `g`, and `C·2g` from
+// widening `k` to `k + g`) sum below 2^-m.
+theorem CReal::exp_sub_lin_near(h, k: CReal, hk: AbsLe(h, k), k2: k + k <= 1, m: Nat):
+    -(CReal::ofRat(CReal::exp_reach(1)) * (k * k)) <= CReal::exp(h) - 1 - h + CReal::ofRat(Rat::inv_pow2(m))
+        ∧ CReal::exp(h) - 1 - h <= CReal::ofRat(CReal::exp_reach(1)) * (k * k) + CReal::ofRat(Rat::inv_pow2(m))
+{
+    let B = h.bound_rat() + 2;
+    let L = CReal::exp_lip(B);
+    let hL = CReal::exp_lip_nonneg(B);
+    let Cc = CReal::exp_reach(1);
+    let hC: (0 <= Cc) = CReal::exp_reach_nonneg(1, omega);
+    let rb = h.bound_rat_nonneg();
+    let hx = λ (i: Nat) => {
+        let r: (h.at(i).abs() <= B) = linarith(h.bound_le(i), rb);
+        r
+    };
+    let W = L + Cc + Cc + 1;
+    let hW: (0 <= W) = linarith(hL, hC);
+    let j0 = m + W.abs_ceil().width();
+    let j = j0 + 1;
+    let g = Rat::inv_pow2(j);
+    let p = h.at(j);
+    let g0: (0 <= g) = Rat::inv_pow2_nonneg(j);
+    let gh: (g + g ≈ Rat::inv_pow2(j0)) = Rat::inv_pow2_half(j0);
+    let g1: (g + g <= 1) = linarith(gh, Rat::inv_pow2_le_one(j0));
+    let sc: (W * g <= Rat::inv_pow2(m)) = RatLip::scaled(W, hW, m, j, omega);
+    let hl: (CReal::ofRat(p - g) <= h) = h.term_sub_le(j);
+    let hh: (h <= CReal::ofRat(p + g)) = h.le_term_add(j);
+    let kl: (-k <= h) = hk.left;
+    let kr: (h <= k) = hk.right;
+    let G = CReal::ofRat(g);
+    let P = CReal::ofRat(p);
+    let A = CReal::ofRat(Cc);
+    let sl: (P - G <= h) = linarith(hl, CReal::ofRat_sub(p, g));
+    let sh: (h <= P + G) = linarith(hh, CReal::ofRat_add(p, g));
+    let G0: (0 <= G) = CReal::ofRat_le(g0);
+    let G1: (G + G <= 1) = linarith(CReal::ofRat_le(g1), CReal::ofRat_add(g, g));
+    let A0: (0 <= A) = CReal::ofRat_le(hC);
+    let pu: (P <= CReal::ofRat(1)) = linarith(sl, kr, k2, G1);
+    let pd: (CReal::ofRat(-1) <= P) = linarith(sh, kl, k2, G1, CReal::ofRat_neg(1));
+    let ap: (p.abs() <= 1) = Rat::abs_le(linarith(CReal::le_of_ofRat_le(pd)), CReal::le_of_ofRat_le(pu));
+    let rat = CReal::exp_rat_sub_lin(p, 1, ap);
+    let dev = CReal::exp_dev(h, p, g, B, hx, hx(j), hl, hh);
+    let sq: (0 <= p * p) = OrderedRing::sq_nonneg(p);
+    let pp: (p.abs() * p.abs() ≈ p * p) = Rat::same_trans(Rat::same_sym(p.abs_mul(p)), (p * p).abs_of_nonneg(sq));
+    let e1: (CReal::ofRat((p.abs() * p.abs()) * Cc) ≈ A * (P * P)) =
+        CReal::same_trans(CReal::ofRat_respects(ring(pp)), CReal::same_trans(CReal::ofRat_mul(Cc, p * p),
+            CReal::mul_respects(CReal::same_refl(A), CReal::ofRat_mul(p, p))));
+    let e2: (CReal::ofRat(-((p.abs() * p.abs()) * Cc)) ≈ -(A * (P * P))) =
+        CReal::same_trans(CReal::ofRat_neg((p.abs() * p.abs()) * Cc), CReal::neg_respects(e1));
+    let wl: (-(k + G) <= P) = linarith(sh, kl);
+    let wr: (P <= k + G) = linarith(sl, kr);
+    let wide: AbsLe(P, k + G) = LocatedAddGroup::abs_le_intro(P, k + G, wl, wr);
+    let f1: (P * P <= (k + G) * (k + G)) = (OrderedField::abs_le_mul(P, P, k + G, k + G, wide, wide)).right;
+    let k0: (0 <= k) = LocatedAddGroup::abs_le_nonneg(h, k, hk);
+    let f2: ((k + k) * G <= 1 * G) = OrderedSemiring::mul_le_mono_r(k + k, 1, G, k2, G0);
+    let f3: (G * G <= G * 1) = OrderedSemiring::mul_le_mono_l(G, 1, G, linarith(G1, G0), G0);
+    let f4: (A * (P * P) <= A * (k * k + G + G)) = OrderedSemiring::mul_le_mono_l(P * P, k * k + G + G, A, linarith(f1, f2, f3), A0);
+    let f5: (0 <= A * (P * P)) = OrderedSemiring::mul_nonneg(A, P * P, A0, OrderedRing::sq_nonneg(P));
+    let slack: (CReal::ofRat(L * g) + A * (G + G) + G <= CReal::ofRat(Rat::inv_pow2(m))) = {
+        let w: (L * g + Cc * (g + g) + g <= Rat::inv_pow2(m)) = linarith(sc);
+        let c: (CReal::ofRat(L * g + Cc * (g + g) + g) ≈ CReal::ofRat(L * g) + A * (G + G) + G) =
+            CReal::same_trans(CReal::ofRat_add(L * g + Cc * (g + g), g),
+                CReal::add_respects(CReal::same_trans(CReal::ofRat_add(L * g, Cc * (g + g)),
+                    CReal::add_respects(CReal::same_refl(CReal::ofRat(L * g)),
+                        CReal::same_trans(CReal::ofRat_mul(Cc, g + g), CReal::mul_respects(CReal::same_refl(A), CReal::ofRat_add(g, g))))),
+                    CReal::same_refl(G)));
+        linarith(CReal::ofRat_le(w), c)
+    };
+    let lg0: (0 <= CReal::ofRat(L * g)) = CReal::ofRat_le(Rat::mul_nonneg(hL, g0));
+    let dl: (-CReal::ofRat(L * g) <= CReal::exp(h) - CReal::exp_rat(p)) = linarith(dev.left, CReal::ofRat_neg(L * g));
+    let lo: (-(A * (k * k)) <= CReal::exp(h) - 1 - h + CReal::ofRat(Rat::inv_pow2(m))) =
+        linarith(dl, rat.left, e2, f4, sh, slack, f5);
+    let hi: (CReal::exp(h) - 1 - h <= A * (k * k) + CReal::ofRat(Rat::inv_pow2(m))) =
+        linarith(dev.right, rat.right, e1, f4, sl, slack);
+    And(lo, hi)
+}
+
+// The second-order bound at a real: |h| <= k <= 1/2 gives
+// |exp(h) - 1 - h| <= C·k².
+theorem CReal::exp_sub_lin(h, k: CReal, hk: AbsLe(h, k), k2: k + k <= 1):
+    AbsLe(CReal::exp(h) - 1 - h, CReal::ofRat(CReal::exp_reach(1)) * (k * k))
+{
+    let lo: (-(CReal::ofRat(CReal::exp_reach(1)) * (k * k)) <= CReal::exp(h) - 1 - h) = CReal::le_of_slack(λ m => {
+        let n = CReal::exp_sub_lin_near(h, k, hk, k2, m);
+        n.left
+    });
+    let hi: (CReal::exp(h) - 1 - h <= CReal::ofRat(CReal::exp_reach(1)) * (k * k)) = CReal::le_of_slack(λ m => {
+        let n = CReal::exp_sub_lin_near(h, k, hk, k2, m);
+        n.right
+    });
+    LocatedAddGroup::abs_le_intro(CReal::exp(h) - 1 - h, CReal::ofRat(CReal::exp_reach(1)) * (k * k), lo, hi)
+}
+
+// The derivative's pointwise estimate: exp(y) - exp(x) - exp(x)·(y - x) is
+// exp(x)·(exp(y - x) - 1 - (y - x)), at most B·(C·h²), which `(B·C)·h <= ε`
+// puts below ε·h.
+theorem CReal::exp_deriv_step(x, y, h, e, e2, B: CReal, hxy: AbsLe(y + -x, h), h2: h + h <= 1, he: h <= e2,
+    bx: AbsLe(CReal::exp(x), B), b0: 0 <= B, small: B * CReal::ofRat(CReal::exp_reach(1)) * e2 <= e):
+    AbsLe(CReal::exp(y) + -CReal::exp(x) + -(CReal::exp(x) * (y + -x)), e * h)
+{
+    let A = CReal::ofRat(CReal::exp_reach(1));
+    let A0: (0 <= A) = CReal::ofRat_le(CReal::exp_reach_nonneg(1, omega));
+    let q = CReal::exp_sub_lin(y + -x, h, hxy, h2);
+    let ea: (CReal::exp(x + (y + -x)) ≈ CReal::exp(x) * CReal::exp(y + -x)) = CReal::exp_add(x, y + -x);
+    let ey: (CReal::exp(x + (y + -x)) ≈ CReal::exp(y)) = CReal::exp_respects(ring);
+    let m = OrderedField::abs_le_mul(CReal::exp(x), CReal::exp(y + -x) - 1 - (y + -x), B, A * (h * h), bx, q);
+    let hn: (0 <= h) = LocatedAddGroup::abs_le_nonneg(y + -x, h, hxy);
+    let ba: (0 <= B * A) = OrderedSemiring::mul_nonneg(B, A, b0, A0);
+    let s1: (B * A * h <= B * A * e2) = OrderedSemiring::mul_le_mono_l(h, e2, B * A, he, ba);
+    let s2: (B * A * h * h <= e * h) = OrderedSemiring::mul_le_mono_r(B * A * h, e, h, linarith(s1, small), hn);
+    let r: (CReal::exp(x) * (CReal::exp(y + -x) - 1 - (y + -x)) ≈ CReal::exp(y) + -CReal::exp(x) + -(CReal::exp(x) * (y + -x))) =
+        ring(ea, ey);
+    LocatedAddGroup::abs_le_weaken(CReal::exp(x) * (CReal::exp(y + -x) - 1 - (y + -x)),
+        CReal::exp(y) + -CReal::exp(x) + -(CReal::exp(x) * (y + -x)), B * (A * (h * h)), e * h, m, r, linarith(s2))
+}
+
+// exp is its own uniform derivative on any domain where it is bounded.
+theorem CReal::exp_deriv(D: CReal → Type, B: CReal, hb: BoundedOn(D, λ (x: CReal) => CReal::exp(x), B)):
+    DerivOn(D, λ (x: CReal) => CReal::exp(x), λ (x: CReal) => CReal::exp(x))
+{
+    λ e pe => {
+        let A = CReal::ofRat(CReal::exp_reach(1));
+        let A0: (0 <= A) = CReal::ofRat_le(CReal::exp_reach_nonneg(1, omega));
+        let s = OrderedField::shrink(B * A, e, OrderedSemiring::mul_nonneg(B, A, hb.left, A0), pe);
+        let hq: (0 < Rat::inv_succ(1)) = Rat::inv_succ_pos(1);
+        let hp: (CReal::ofRat(0) < CReal::ofRat(Rat::inv_succ(1))) = CReal::ofRat_lt(hq);
+        let hf0: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
+        let hf: (CReal::ofRat(Rat::inv_succ(1)) + CReal::ofRat(Rat::inv_succ(1)) ≈ 1) =
+            CReal::same_trans(CReal::same_sym(CReal::ofRat_add(Rat::inv_succ(1), Rat::inv_succ(1))), CReal::ofRat_respects(hf0));
+        let d = OrderedField::below_both(s.witness, CReal::ofRat(Rat::inv_succ(1)), s.proof.left, hp);
+        Exists(d.witness, And(d.proof.left, λ x y h dx dy hxy hd => {
+            let hh: (h + h <= 1) = linarith(hd, d.proof.right.right, hf);
+            CReal::exp_deriv_step(x, y, h, e, s.witness, B, hxy, hh, PseudoOrder::le_trans(h, d.witness, s.witness, hd, d.proof.right.left),
+                hb.right(x, dx), hb.left, s.proof.right)
+        }))
+    }
+}
+
+// On a closed interval exp is bounded by its value at the right end
+// (positive, and increasing), so it is its own derivative there, and
+// `exp(b)`-Lipschitz by the mean value inequality.
+theorem CReal::exp_bounded_within(a, b: CReal):
+    BoundedOn(λ (x: CReal) => Within(<=, a, x, b), λ (x: CReal) => CReal::exp(x), CReal::exp(b))
+{
+    let pb: (0 < CReal::exp(b)) = CReal::exp_pos(b);
+    And(CReal::le_of_lt(pb), λ x dx => {
+        let px: (0 < CReal::exp(x)) = CReal::exp_pos(x);
+        let up: (CReal::exp(x) <= CReal::exp(b)) = CReal::exp_le(dx.right);
+        let lo: (-CReal::exp(b) <= CReal::exp(x)) = linarith(px, pb);
+        LocatedAddGroup::abs_le_intro(CReal::exp(x), CReal::exp(b), lo, up)
+    })
+}
+
+theorem CReal::exp_deriv_within(a, b: CReal):
+    DerivOn(λ (x: CReal) => Within(<=, a, x, b), λ (x: CReal) => CReal::exp(x), λ (x: CReal) => CReal::exp(x))
+{
+    CReal::exp_deriv(λ (x: CReal) => Within(<=, a, x, b), CReal::exp(b), CReal::exp_bounded_within(a, b))
+}
+
+theorem CReal::exp_lipschitz_within(a, b: CReal):
+    LipschitzOn(λ (x: CReal) => Within(<=, a, x, b), λ (x: CReal) => CReal::exp(x), CReal::exp(b))
+{
+    DerivOn::lipschitz(λ (x: CReal) => Within(<=, a, x, b), λ (x: CReal) => CReal::exp(x), λ (x: CReal) => CReal::exp(x), CReal::exp(b),
+        ConvexOn::within(a, b), CReal::exp_deriv_within(a, b), CReal::exp_bounded_within(a, b))
+}

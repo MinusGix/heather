@@ -2,7 +2,7 @@
 // program that sets up a stack in the frame, calls a function that spills a
 // register to a frame slot, reloads it into another and returns, then exits
 // with what came back. The program's view of the frame
-// (`DataRegion::program_view` over `DataRegion::io_frame`) is its stack: the
+// (`DataRegion::program_view` over `io_frame`, the second page of an eight-KiB segment) is its stack: the
 // CALL's return address and the slot are words of it. The function is
 // proved by `Wp` against its contract (`call_returns`, through
 // `Callee::returns_by`); the program is proved by `Wp` with that contract at
@@ -31,6 +31,23 @@ import logic;
 import nat;
 import omega;
 
+// The frame: the profile's second page, its segment eight KiB.
+fn io_frame() → DataRegion {
+    DataRegion(profile := X86Profile::io(8192), low := BitVec::ofNat(0x411000), size := 4096,
+        canonical := Nat::leb_sound(BitVec::ofNat(0x411000, n := 64).toNat() + 4096, Nat::pow(2, 47), trivial),
+        data := λ perms relied i inside => {
+            let top: (0x412000 <= Nat::pow(2, 64)) = Nat::leb_sound(0x412000, Nat::pow(2, 64), trivial);
+            let a = next_rip(BitVec::ofNat(0x411000), i);
+            let b = next_rip(BitVec::ofNat(0x410000), 4096 + i);
+            let va: (a.toNat() = 0x411000 + i) = BitVec::ofNat_offset_toNat(64, 0x411000, i, omega(inside, top));
+            let vb: (b.toNat() = 0x410000 + (4096 + i)) = BitVec::ofNat_offset_toNat(64, 0x410000, 4096 + i, omega(inside, top));
+            let place: (0x410000 + (4096 + i) = 0x411000 + i) = omega;
+            let same: (b = a) = trans(sym(BitVec::ofNat_toNat(64, b)),
+                trans(cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), trans(vb, trans(place, sym(va)))), BitVec::ofNat_toNat(64, a)));
+            j(same, λ x _ => perms(x) = Perm::data(), relied(4096 + i, omega(inside)))
+        })
+}
+
 // The stack's top: 256 bytes into the frame.
 fn call_low() → BitVec(64) { BitVec::ofNat(0x411000) }
 fn call_top() → BitVec(64) { next_rip(call_low(), 0x100) }
@@ -54,21 +71,21 @@ fn call_prog() → Prog {
 fn call_labels() → Nat → Nat { asm_labels(call_prog()) }
 fn no_contracts() → Nat → Contract { λ _ => Contract(λ _ => True, λ _ _ => True) }
 fn call_code() → List<BitVec(8)> { asm_code(no_fills(), call_labels(), call_prog()) }
-fn call_view(origin: BitVec(64)) → View<X86Memory(X86Profile::io()), Nat → BitVec(8)> {
-    DataRegion::io_frame().program_view(call_code(), next_rip(origin, 0))
+fn call_view(origin: BitVec(64)) → View<X86Memory(X86Profile::io(8192)), Nat → BitVec(8)> {
+    io_frame().program_view(call_code(), next_rip(origin, 0))
 }
-theorem call_sound(origin: BitVec(64)): ViewSound<X86Memory(X86Profile::io()), Nat → BitVec(8)>(X86Profile::io().linux(), call_view(origin)) {
-    DataRegion::io_frame().program_view_sound(call_code(), next_rip(origin, 0))
+theorem call_sound(origin: BitVec(64)): ViewSound<X86Memory(X86Profile::io(8192)), Nat → BitVec(8)>(X86Profile::io(8192).linux(), call_view(origin)) {
+    io_frame().program_view_sound(call_code(), next_rip(origin, 0))
 }
-fn call_frame(frame: Nat → BitVec(8)) → Memory<Nat, BitVec(8)> { DataRegion::io_frame().buffer(frame) }
+fn call_frame(frame: Nat → BitVec(8)) → Memory<Nat, BitVec(8)> { io_frame().buffer(frame) }
 
 // The function's contract: entered with the stack pointer at the frame's
 // word 0xF8 and the return address there, it returns with RDI what RBX was.
-fn call_callee() → Callee<X86Memory(X86Profile::io()), Nat → BitVec(8)> {
+fn call_callee() → Callee<X86Memory(X86Profile::io(8192)), Nat → BitVec(8)> {
     Callee(λ ret frame s => (read_gpr(Rsp, s.gprs) = next_rip(call_low(), 0xF8)) ∧ (call_frame(frame).x86_word(0xF8) = ret),
         λ ret frame s w e => read_gpr(Rdi, e.gprs) = read_gpr(Rbx, s.gprs))
 }
-fn call_callees() → Nat → Callee<X86Memory(X86Profile::io()), Nat → BitVec(8)> { λ _ => call_callee() }
+fn call_callees() → Nat → Callee<X86Memory(X86Profile::io(8192)), Nat → BitVec(8)> { λ _ => call_callee() }
 
 theorem call_reach(): wp_reach(call_labels(), call_prog(), 3).IsTrue() { trivial }
 theorem call_main_reach(): wp_reach(call_labels(), call_main(), 4).IsTrue() { trivial }
@@ -98,10 +115,10 @@ theorem call_kept(frame: Nat → BitVec(8), x: BitVec(64)):
 
 // The function returns by its contract.
 theorem call_returns(origin: BitVec(64)):
-    call_callee().Returns(X86Profile::io().linux(), call_view(origin), next_rip(origin, call_labels()(1))) {
-    call_callee().returns_by(X86Profile::io().linux(), call_view(origin), call_sound(origin), origin, no_fills(), call_labels(), no_contracts(), call_callees(),
+    call_callee().Returns(X86Profile::io(8192).linux(), call_view(origin), next_rip(origin, call_labels()(1))) {
+    call_callee().returns_by(X86Profile::io(8192).linux(), call_view(origin), call_sound(origin), origin, no_fills(), call_labels(), no_contracts(), call_callees(),
         call_prog(), 3, trivial, Nil,
-        λ v m h => j(sym(List::append_nil(call_code())), λ c _ => CodeResident(X86Profile::io().fetch(), m, c, next_rip(origin, 0)), h.right),
+        λ v m h => j(sym(List::append_nil(call_code())), λ c _ => CodeResident(X86Profile::io(8192).fetch(), m, c, next_rip(origin, 0)), h.right),
         call_reach(), ⟨trivial, ⟨trivial, ⟨trivial, trivial⟩⟩⟩,
         λ ret frame s holds pre t => {
             let x = read_gpr(Rbx, s.gprs);
@@ -110,23 +127,23 @@ theorem call_returns(origin: BitVec(64)):
                 Exists(0x100, ⟨call_slot_word_room(), ⟨slot,
                     Exists(0xF8, ⟨call_word_room(), ⟨pre.left, λ after same => j(sym(same),
                         λ a _ => wp_returned(call_callee(), ret, frame, s, False, t, call_frame(frame).set_span(0x100, word_bytes(x).to_vector()).cells, a),
-                        ⟨trans(call_kept(frame, x), pre.right), DataRegion::io_frame().x86_word_stored(frame, 0x100, x)⟩)⟩⟩)⟩⟩)⟩⟩)
+                        ⟨trans(call_kept(frame, x), pre.right), io_frame().x86_word_stored(frame, 0x100, x)⟩)⟩⟩)⟩⟩)⟩⟩)
         })
 }
 
 // From the start, the program calls the function and exits 0.
-theorem call_runs(origin: BitVec(64), frame: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io())>,
+theorem call_runs(origin: BitVec(64), frame: Nat → BitVec(8), state: MachineState<X86Memory(X86Profile::io(8192))>,
     rip: state.rip = next_rip(origin, 0),
-    holds: call_view(origin).Holds(frame, state.memory)): Sim(X86Profile::io().linux(), Ret(BitVec::ofNat(0)), state) {
+    holds: call_view(origin).Holds(frame, state.memory)): Sim(X86Profile::io(8192).linux(), Ret(BitVec::ofNat(0)), state) {
     let ret = next_rip(origin, prog_len(asm_back(call_main(), 3)) + 5);
-    wp_sound(X86Profile::io().linux(), call_view(origin), call_sound(origin), origin, no_fills(), call_labels(), no_contracts(), call_callees(),
+    wp_sound(X86Profile::io(8192).linux(), call_view(origin), call_sound(origin), origin, no_fills(), call_labels(), no_contracts(), call_callees(),
         call_main(), 4, λ _ _ _ _ => False, trivial, asm_code_after(no_fills(), call_labels(), call_prog(), 3) ++ Nil,
-        λ v m h => wp_code_at(X86Profile::io().fetch(), m, origin, no_fills(), call_labels(), call_prog(), 3, Nil,
-            j(sym(List::append_nil(call_code())), λ c _ => CodeResident(X86Profile::io().fetch(), m, c, next_rip(origin, 0)), h.right)),
+        λ v m h => wp_code_at(X86Profile::io(8192).fetch(), m, origin, no_fills(), call_labels(), call_prog(), 3, Nil,
+            j(sym(List::append_nil(call_code())), λ c _ => CodeResident(X86Profile::io(8192).fetch(), m, c, next_rip(origin, 0)), h.right)),
         call_main_reach(), ⟨trivial, ⟨trivial, ⟨call_returns(origin), ⟨trivial, trivial⟩⟩⟩⟩,
         λ _ _ _ _ never _ => false_elim(never),
         Ret(BitVec::ofNat(0)), frame, state, rip, holds,
         Exists(0xF8, ⟨call_room(ret), ⟨push_at(call_low(), 0xF8),
-            ⟨⟨push_at(call_low(), 0xF8), DataRegion::io_frame().x86_word_stored(frame, 0xF8, ret)⟩,
+            ⟨⟨push_at(call_low(), 0xF8), io_frame().x86_word_stored(frame, 0xF8, ret)⟩,
              λ w after returned => ⟨refl, returned⟩⟩⟩⟩))
 }

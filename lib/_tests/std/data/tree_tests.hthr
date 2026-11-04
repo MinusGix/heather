@@ -6,7 +6,7 @@
 // mirror moves leaves. Tests, not library: nothing outside lib/_tests imports
 // this module (docs/test-value-audit.md §4.5). Moved from
 // crates/elab/tests/lib_std_tree.rs; the refusals stay there.
-import list; import nat; import tree; import logic; import omega;
+import list; import nat; import tree; import logic; import omega; import option;
 
 fn leaves_alg<A>() → TreeAlg<A, List<A>> { TreeAlg<A, List<A>> { leaf: λ (a: A) => [a], node: List::append } }
 fn leaf_count_alg<A>() → TreeAlg<A, Nat> { TreeAlg<A, Nat> { leaf: λ (a: A) => 1, node: Nat::add } }
@@ -37,5 +37,21 @@ theorem mirror_moves(): ¬(tree_mirror(sample()) = sample()) {
     λ h => {
         let s: (5 = 2) = cong_fn(λ (t: Tree<Nat>) => tree_fold(leftmost(), t), h);
         omega(s)
+    }
+}
+
+// A deep pattern at the second of two children: the motive rebuilds the
+// children tuple around `z` at position one (docs/dependent-match-compiler-
+// design.md §7.1), and `h` is the clause equation.
+theorem deep_right_child<A>(): (t: Tree<A>) → Option<A> {
+    λ t => match h: t {
+        Node(l, Leaf(v)) => { let k: (t = Node(l, Leaf(v))) = h; Some(v) },
+        _ => None
+    }
+}
+theorem deep_left_child<A>(P: Tree<A> → Type): (t: Tree<A>) → P(t) → Option<A> {
+    λ t => λ p => match t {
+        Node(Leaf(v), r) => { let q: P(Node(Leaf(v), r)) = p; Some(v) },
+        _ => None
     }
 }

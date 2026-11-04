@@ -52,7 +52,7 @@ impl Elaborator {
     /// the identifier half is the parameter-list checks that were already
     /// there, unchanged.
     pub(crate) fn check_symbol_free(
-        installed: &[(String, String)],
+        installed: &crate::spine::Spine<(String, String)>,
         sym: &str,
         span: Span,
     ) -> R<()> {
@@ -106,7 +106,7 @@ impl Elaborator {
         //    before any type is looked at: inside `<A: Monoid(+)>` the `+` is
         //    the bound index and nothing else, at every carrier.
         if fixity == OpFixity::Infix
-            && let Some((_, n)) = cx.op_locals.iter().rev().find(|(s, _)| s == sym)
+            && let Some((_, n)) = cx.op_locals.iter_inner().find(|(s, _)| s == sym)
         {
             return Ok(n.clone());
         }
@@ -181,8 +181,8 @@ impl Elaborator {
         if let Some(fb) = fb
             && (self.lookup_global(fb).is_some()
                 || self.ctor_of(fb).is_some()
-                || cx.names.iter().any(|n| n == fb)
-                || cx.aliases.iter().any(|a| a.name == fb))
+                || cx.names.iter_inner().any(|n| n == fb)
+                || cx.aliases.iter_inner().any(|a| a.name == fb))
         {
             if let Some((head, from)) = &uncovered_carrier {
                 let note = format!(
@@ -271,26 +271,50 @@ impl Elaborator {
     /// of length d, where the syntax search costs d. It is a **proposal, never a
     /// decision**: a leaf that does not infer, or a head with no entry, falls
     /// through to the fallback rung, so a mis-probe costs a rung and never a
-    /// wrong term. Each probe runs on a clone so goals and diagnostics cannot
-    /// leak from a failed candidate, including an indirect checking-only call.
+    /// wrong term. Each probe is an [`Elaborator::probe`], so goals and
+    /// diagnostics cannot leak from a failed candidate, including an indirect
+    /// checking-only call.
     fn op_carrier_head(&self, cx: &Cx, args: &[Expr], span: Span) -> Option<Carrier> {
         let mut carrier = None;
         let leaf = operator_carrier_leaf(args.first()?, |leaf| {
             if self.is_checking_only(cx, leaf) {
                 return true;
             }
-            let probe = self.clone();
-            let Ok((_, ty, _)) = probe.elab_infer(cx, leaf) else {
+            let Some(found) = self.probe(|| {
+                let (_, ty, _) = self.elab_infer(cx, leaf).ok()?;
+                Some(self.carrier_of_ty(cx, &ty, span))
+            }) else {
                 return true;
             };
-            carrier = probe.carrier_of_ty(cx, &ty, span);
+            carrier = found;
             false
         });
         if matches!(leaf.kind, ExprKind::Num(_)) {
-            self.carrier_of_ty(cx, &Type::Nat, span)
-        } else {
-            carrier
+            return self.carrier_of_ty(cx, &Type::Nat, span);
         }
+        if carrier.is_some() {
+            return carrier;
+        }
+        // No leaf infers outright. A call deferred only for a **result-only
+        // implicit** can still infer ([`Self::deferral_can_fall_back`]), and
+        // its type is then the operand's carrier: `MonoidRel::range(+, n, f)`
+        // (the `∑` binder's desugaring) holds its relation index only in its
+        // dictionary, yet infers to `f`'s codomain. Second, so an operand that
+        // infers outright still decides first.
+        operator_carrier_leaf(args.first()?, |leaf| {
+            if !self.deferral_can_fall_back(cx, leaf) {
+                return true;
+            }
+            let Some(found) = self.probe(|| {
+                let (_, ty, _) = self.elab_infer(cx, leaf).ok()?;
+                Some(self.carrier_of_ty(cx, &ty, span))
+            }) else {
+                return true;
+            };
+            carrier = found;
+            carrier.is_none()
+        });
+        carrier
     }
 
     /// The head of the carrier a **checking position** is asking for — rung
@@ -330,6 +354,9 @@ impl Elaborator {
     /// `expected` is the checking position's type where there is one, and
     /// `None` at the two inference sites.
     pub(crate) fn op_rewrite(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<Option<Expr>> {
+        if let Some(cast) = self.cast_rewrite(cx, e, expected)? {
+            return Ok(Some(cast));
+        }
         let (sym, args, explicit, goal_oriented) = match &e.kind {
             ExprKind::OpSymbol { symbol, fixity } => ((symbol, fixity), None, false, false),
             ExprKind::App {
@@ -397,7 +424,7 @@ impl Elaborator {
     /// teaches the call its carrier — so a program written before this round
     /// could start refusing. With it, such a file runs byte-identical code.
     pub(crate) fn symbol_needs_a_carrier(&self, cx: &Cx, sym: &str, fixity: OpFixity) -> bool {
-        (fixity != OpFixity::Infix || !cx.op_locals.iter().any(|(s, _)| s == sym))
+        (fixity != OpFixity::Infix || !cx.op_locals.iter_inner().any(|(s, _)| s == sym))
             && self.traits.has_designation_for(fixity, sym)
     }
 }

@@ -18,6 +18,10 @@ const PREC = {
   POSTFIX: 12,
 };
 
+// Words that introduce a special form only before their fixed follower
+// (`contextual_identifier` below); elsewhere they are names.
+const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with'];
+
 module.exports = grammar({
   name: 'heather',
 
@@ -62,6 +66,10 @@ module.exports = grammar({
       $.datarepr_declaration,
       $.impl_declaration,
       $.assuming_declaration,
+      $.section_declaration,
+      $.generate_declaration,
+      $.value_declaration,
+      $.prefixed_declaration,
     ),
 
     import_declaration: $ => seq(
@@ -76,12 +84,15 @@ module.exports = grammar({
     ),
 
     function_declaration: $ => seq(
-      optional('meta'), 'fn', field('name', $._qualified_name),
+      // `partial fn`, `partial(E) fn`: a function that may not return
+      // (docs/partial-functions-design.md §4).
+      optional(choice('meta', 'interface', seq('partial', optional(seq('(', field('events', $._head_expression), ')'))))),
+      'fn', field('name', $._qualified_name),
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       optional(seq('for', $.slot_path)),
       choice('->', '→'), field('return_type', $._declaration_type),
-      optional($.decreases_clause), field('body', $.block),
+      optional($.decreases_clause), optional($.unfolding_clause), field('body', $.block),
     ),
 
     theorem_declaration: $ => seq(
@@ -89,7 +100,7 @@ module.exports = grammar({
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       ':', field('return_type', $._declaration_type),
-      optional($.decreases_clause), field('body', $.block),
+      optional($.decreases_clause), optional($.unfolding_clause), field('body', $.block),
     ),
 
     axiom_declaration: $ => seq(
@@ -101,14 +112,19 @@ module.exports = grammar({
 
     inductive_declaration: $ => seq(
       choice('inductive', 'codata'), field('name', $.identifier), optional($.type_parameters),
-      optional($.value_parameters), optional(seq(':', field('index', $._expression))),
+      optional($.value_parameters), optional($.varies_clause),
+      optional(seq(':', field('index', $._expression))),
       field('body', $.constructor_list),
     ),
 
     record_declaration: $ => seq(
       'record', field('name', $.identifier), optional($.type_parameters),
-      optional($.value_parameters), field('body', $.field_list),
+      optional($.value_parameters), optional($.varies_clause), field('body', $.field_list),
     ),
+
+    // `varies A`: the parameter a type constructor over the declaration
+    // abstracts (docs/lambda-carrier-instances-design.md §7.1).
+    varies_clause: $ => seq('varies', field('parameter', $.identifier)),
 
     class_declaration: $ => seq(
       'class', field('name', $.identifier), optional($.type_parameters),
@@ -144,9 +160,35 @@ module.exports = grammar({
       choice(seq(':=', field('value', $._expression), optional(';')), $.repr_clause_block),
     ),
 
+    // `def five: Nat = 5;`, `def six = Succ(five);` — a value definition
+    // (docs/value-definitions-design.md §2). The annotation stops at `=`, as
+    // a `let`'s does.
+    value_declaration: $ => seq(
+      'def', field('name', $._qualified_name), optional($.type_parameters),
+      optional(seq(':', field('type', $._annotation_type))), '=', field('value', $._expression), ';',
+    ),
+
+    // `runtime fn f(…)`, `regex def is_hex = "…";` — a declaration under a
+    // prefix generator (docs/value-definitions-design.md §3).
+    prefixed_declaration: $ => seq(
+      field('generator', $.identifier), optional(field('arguments', $.argument_list)),
+      field('declaration', choice($.function_declaration, $.theorem_declaration, $.value_declaration)),
+    ),
+
+    // `generate congruences(Tm);` — a generator's declarations, published
+    // here (docs/host-elaboration-interface-design.md §19).
+    generate_declaration: $ => seq('generate', field('generator', $._expression), ';'),
+
     assuming_declaration: $ => seq(
       'assuming', commaSep1($.assumption),
       field('body', seq('{', repeat($._item), '}')),
+    ),
+    // `section<A: C>(x: A) { fn … theorem … }` — a head spliced into every
+    // member's (docs/sections-design.md).
+    section_declaration: $ => seq(
+      'section', optional($.type_parameters), optional($.requires_clause),
+      optional(field('parameters', $.parameter_list)),
+      field('body', seq('{', repeat(choice($.function_declaration, $.theorem_declaration, $.section_declaration)), '}')),
     ),
     assumption: $ => choice(
       seq(field('name', $.identifier), ':', field('type', $._declaration_type)),
@@ -165,6 +207,10 @@ module.exports = grammar({
     // The measure is read with the declaration-type sub-grammar, which is the
     // expression grammar minus the forms that would swallow the body's `{`.
     decreases_clause: $ => seq('decreases', $._declaration_type),
+    // `unfolding f, g`: the interface definitions whose bodies this
+    // declaration may read at open arguments
+    // (docs/interface-definitions-design.md §4).
+    unfolding_clause: $ => seq('unfolding', commaSep1($._qualified_name)),
     requirement: $ => choice(
       field('class', $.requirement_class_reference),
       seq(field('name', $.identifier), ':', field('class', $.requirement_class_reference)),
@@ -185,7 +231,10 @@ module.exports = grammar({
       commaSep1($.parameter_name), ':', field('type', $._expression),
       optional(seq(':=', choice('infer', field('default', $._expression)))),
     ),
-    parameter_name: $ => seq(optional('self'), field('name', $.identifier), optional(seq('as', $.operator))),
+    // A binder's name is a plain identifier even when it is a contextual
+    // word: after `(` in a type, `(j: Nat) →` could still begin `j(…)`, so
+    // the lexer reads the word and the name has to accept it.
+    parameter_name: $ => seq(optional('self'), field('name', choice($.identifier, ...contextualWords($))), optional(seq('as', $.operator))),
     binder_group: $ => seq('(', commaSep1($.parameter_run), ')'),
     implicit_binder_group: $ => seq('{', commaSep1($.parameter_run), '}'),
 
@@ -227,20 +276,45 @@ module.exports = grammar({
 
     block: $ => choice(
       seq('{', '}'),
-      seq('{', repeat(choice($.let_statement, $.have_statement)), choice(
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)), choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
       ), '}'),
+      // A statement body ends in a statement and has no result
+      // (docs/sequencing-surface-design.md §4).
+      seq('{', repeat(choice($.let_statement, $.have_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
+        choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form,
+          'break', 'continue', seq('return', field('value', $._expression))), '}'),
     ),
+    // `let x = e;`, and the binding statement `let x <- e;` (`←` too,
+    // docs/sequencing-surface-design.md §3.1).
     let_statement: $ => seq(
-      'let', choice(field('name', $.identifier), $.destructure_pattern),
-      optional(seq(':', field('type', $._expression))), '=', field('value', $._expression), ';',
+      'let', optional('mut'), choice(field('name', $.identifier), $.destructure_pattern),
+      optional(seq(':', field('type', $._annotation_type))), choice('=', '<-', '←'), field('value', $._expression), ';',
     ),
+    // `x := e;` reassigns a `let mut` local (§4).
+    assignment_statement: $ => seq(field('name', $.identifier), ':=', field('value', $._expression), ';'),
+    // A statement `if`/`match`: its bodies are statements, and it needs no
+    // `;` (§5.1).
+    statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement, $.while_statement),
+    // `for x in xs { body }` (§5.2): `in` is contextual.
+    // `a..b` is a range, written only in a `for` header.
+    for_statement: $ => seq('for', field('binder', $.identifier), 'in', field('iterable', $._head_expression),
+      optional(seq('..', field('end', $._head_expression))), field('body', $.block)),
+    // `while c decreases m { body }` (§5.3): a recursive function over the
+    // locals the body assigns, `m` its measure.
+    // With no `decreases`, a loop of a carrier that iterates (docs/sequencing-surface-design.md §18).
+    while_statement: $ => seq('while', field('condition', $._head_expression), optional(seq('decreases', field('measure', $._head_expression))), field('body', $.block)),
+    // `break;`, `continue;`, `return e;` in a `for` body (§5.2): contextual
+    // words, statements only before `;` or `}`.
+    exit_statement: $ => choice(seq('break', ';'), seq('continue', ';'), seq('return', field('value', $._expression), ';')),
+    // `e;` discards a computation's result in a block over a carrier.
+    expression_statement: $ => seq(field('value', $._expression), ';'),
     // `have x = e;` binds opaquely (docs/have-design.md): one name, never a
     // pattern. `have` stays a contextual word, so `have(x)` is still a call.
     have_statement: $ => seq(
       'have', field('name', $.identifier),
-      optional(seq(':', field('type', $._expression))), '=', field('value', $._expression), ';',
+      optional(seq(':', field('type', $._annotation_type))), '=', field('value', $._expression), ';',
     ),
     destructure_pattern: $ => seq(
       '{', commaSep1(choice($.identifier, $.named_destructure_field)), optional(','), '}',
@@ -269,6 +343,7 @@ module.exports = grammar({
       $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
       $.anonymous_constructor_expression,
       $.boolean_reflection_expression,
+      $.explicit_call_expression,
       $.head_call_expression, $.head_member_expression, $.head_type_application,
       $.head_index_expression,
       $.head_propagation_expression,
@@ -283,7 +358,7 @@ module.exports = grammar({
     head_index_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('value', $._head_expression), '[', field('index', $._expression), ']',
     )),
-    head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._head_expression)),
+    head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._head_expression)),
     head_binary_expression: $ => choice(
       ...headBinary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...headBinary($, ['∨'], PREC.OR, 'right'),
@@ -292,7 +367,7 @@ module.exports = grammar({
       ...headBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...headBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...headBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...headBinary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...headBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...headBinary($, ['^'], PREC.POWER, 'right'),
     ),
 
@@ -305,6 +380,7 @@ module.exports = grammar({
       $.declaration_function_type,
       $.declaration_binary_type,
       $.declaration_quantified_type,
+      $.declaration_big_operator_type,
       $.declaration_prefix_type,
       $.match_expression,
     ),
@@ -322,12 +398,13 @@ module.exports = grammar({
       $.vector_expression,
       $.squash_type,
       $.boolean_reflection_expression,
-      seq('(', $._declaration_type, ')'),
+      seq('(', $._expression, ')'),
       $.declaration_type_application,
       $.declaration_call_type,
       $.declaration_member_type,
       $.declaration_index_type,
       $.declaration_inverse_type,
+      $.explicit_call_expression,
     ),
     declaration_type_application: $ => prec.dynamic(4, prec.left(PREC.POSTFIX, seq(
       field('value', $._type_atom), $.type_arguments,
@@ -353,13 +430,52 @@ module.exports = grammar({
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...typeBinary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...typeBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...typeBinary($, ['^'], PREC.POWER, 'right'),
     ),
     declaration_quantified_type: $ => prec.right(seq(
       choice('∀', '∃'), $.identifier, ':', $._declaration_type, ',', $._declaration_type,
     )),
-    declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._declaration_type)),
+    declaration_big_operator_type: $ => prec.right(PREC.BOOL_OR, seq(
+      choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._declaration_type),
+      ',', field('body', $._declaration_type),
+    )),
+    declaration_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._declaration_type)),
+
+    // A `let`/`have` annotation runs up to the binder's `=`, so, as in the
+    // compiler (parser.rs `no_eq`), it is a declaration type without the
+    // comparison rung; a parenthesis is the escape hatch. Read as a plain
+    // expression, `let p: A → Type = λ …` gave the codomain the binder's `=`.
+    _annotation_type: $ => choice(
+      $._type_atom,
+      alias($.annotation_function_type, $.declaration_function_type),
+      alias($.annotation_binary_type, $.declaration_binary_type),
+      alias($.annotation_quantified_type, $.declaration_quantified_type),
+      alias($.annotation_big_operator_type, $.declaration_big_operator_type),
+      alias($.annotation_prefix_type, $.declaration_prefix_type),
+      $.match_expression,
+    ),
+    annotation_function_type: $ => prec.right(PREC.ARROW, seq(
+      choice($.binder_group, $.implicit_binder_group, $._type_atom), choice('->', '→'), $._annotation_type,
+    )),
+    annotation_binary_type: $ => choice(
+      ...typeBinary($, ['↔', '<->'], PREC.IFF, 'right', $._annotation_type),
+      ...typeBinary($, ['∨'], PREC.OR, 'right', $._annotation_type),
+      ...typeBinary($, ['∧'], PREC.AND, 'right', $._annotation_type),
+      ...typeBinary($, ['||'], PREC.BOOL_OR, 'left', $._annotation_type),
+      ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left', $._annotation_type),
+      ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left', $._annotation_type),
+      ...typeBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left', $._annotation_type),
+      ...typeBinary($, ['^'], PREC.POWER, 'right', $._annotation_type),
+    ),
+    annotation_quantified_type: $ => prec.right(seq(
+      choice('∀', '∃'), $.identifier, ':', $._declaration_type, ',', $._annotation_type,
+    )),
+    annotation_big_operator_type: $ => prec.right(PREC.BOOL_OR, seq(
+      choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._annotation_type),
+      ',', field('body', $._annotation_type),
+    )),
+    annotation_prefix_type: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._annotation_type)),
 
     _expression: $ => choice(
       $.identifier,
@@ -381,6 +497,7 @@ module.exports = grammar({
       $.block_expression,
       $.lambda_expression,
       $.quantified_expression,
+      $.big_operator_expression,
       $.sequent_expression,
       $.if_expression,
       $.if_let_expression,
@@ -405,6 +522,7 @@ module.exports = grammar({
       $.inverse_expression,
       $.type_application_expression,
       $.prefix_expression,
+      $.bind_expression,
       $.binary_expression,
       $.function_type,
     ),
@@ -437,12 +555,19 @@ module.exports = grammar({
       choice('∀', '∃'), field('name', $.identifier), ':', field('type', $._expression),
       ',', field('body', $._expression),
     )),
+    // `∑ k < n, e`: the body runs over arithmetic and stops at a relation,
+    // as in the compiler, so its precedence sits just above COMPARE.
+    big_operator_expression: $ => prec.right(PREC.BOOL_OR, seq(
+      choice('∑', '∏'), field('name', $.identifier), '<', field('bound', $._expression),
+      ',', field('body', $._expression),
+    )),
     sequent_expression: $ => prec.right(seq(repeat1($.lambda_binder), choice('⊢', '|-'), $._expression)),
 
     if_expression: $ => prec.right(seq(
       'if', optional(seq(field('evidence', $.identifier), ':')),
       field('condition', $._head_expression), field('consequence', $.block),
-      'else', field('alternative', $.block),
+      // A statement `if` may omit its `else`, and chains with `else if`.
+      optional(seq('else', field('alternative', choice($.block, $.if_expression)))),
     )),
     if_let_expression: $ => prec.right(seq(
       'if', 'let', optional(seq(field('evidence', $.identifier), ':')),
@@ -548,7 +673,9 @@ module.exports = grammar({
     function_type: $ => prec.right(PREC.ARROW, seq(
       choice($.binder_group, $.implicit_binder_group, $._expression), choice('->', '→'), $._expression,
     )),
-    prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬'), $._expression)),
+    prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '¬', '↑'), $._expression)),
+    // `<- e`, a nested bind: it takes the whole expression after it.
+    bind_expression: $ => prec.right(0, seq(choice('<-', '←'), field('value', $._expression))),
     binary_expression: $ => choice(
       ...binary($, ['↔', '<->'], PREC.IFF, 'right'),
       ...binary($, ['∨'], PREC.OR, 'right'),
@@ -559,31 +686,28 @@ module.exports = grammar({
       ...binary($, ['||'], PREC.BOOL_OR, 'left'),
       ...binary($, ['&&'], PREC.BOOL_AND, 'left'),
       ...binary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...binary($, ['*', '∙'], PREC.MUL, 'left'),
+      ...binary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
       ...binary($, ['^'], PREC.POWER, 'right'),
     ),
 
-    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '≈', '<=', '<', '^', '⁻¹'),
+    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '⊓', '≈', '<=', '<', '^', '⁻¹'),
     // These words introduce a special form only with their fixed follower in
     // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.
-    contextual_identifier: $ => choice(
-      alias('j', $.identifier),
-      alias('code', $.identifier),
-      alias('calc', $.identifier),
-      alias('apply', $.identifier),
-      alias('give', $.identifier),
-      alias('refl', $.identifier),
-      alias('by', $.identifier),
-      alias('have', $.identifier),
-      alias('with', $.identifier),
-    ),
+    contextual_identifier: $ => choice(...contextualWords($)),
     // Keep plain and namespace-qualified names lexically disjoint. Declaration
     // name positions alias either spelling to the stable qualified-name node.
     _qualified_name: $ => alias(choice($.identifier, $.qualified_identifier), $.qualified_identifier),
     qualified_identifier: _ => token(/[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+/),
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
-    number: _ => token(/0x[0-9A-Fa-f][0-9A-Fa-f_]*|0o[0-7][0-7_]*|0b[01][01_]*|[0-9][0-9_]*/),
+    // A decimal point starts a fraction only before a digit (`1.foo` and
+    // `1..2` keep their meaning), and a hex point only when a `p` exponent
+    // follows (`0xff.f()` stays a method call): crates/syntax/src/lexer.rs.
+    number: _ => token(choice(
+      /0x[0-9A-Fa-f][0-9A-Fa-f_]*((\.[0-9A-Fa-f][0-9A-Fa-f_]*)?[pP][+-]?[0-9][0-9_]*)?/,
+      /0o[0-7][0-7_]*|0b[01][01_]*/,
+      /[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?/,
+    )),
     // Match the lexer's closed escape set; scalar-value validation stays in
     // the compiler. Tokens keep spaces and comment markers inside literals.
     character: _ => token(seq("'", choice(/[^'\\\r\n]/, /\\[ntr\\'"0]/, /\\u\{[0-9A-Fa-f]+\}/), "'")),
@@ -593,6 +717,10 @@ module.exports = grammar({
     comment: _ => token(seq('//', /[^\n]*/)),
   },
 });
+
+function contextualWords($) {
+  return CONTEXTUAL_WORDS.map(word => alias(word, $.identifier));
+}
 
 function commaSep(rule, separator = ',') {
   return optional(commaSep1(rule, separator));
@@ -609,10 +737,10 @@ function binary($, operators, precedence, associativity) {
   )));
 }
 
-function typeBinary($, operators, precedence, associativity) {
+function typeBinary($, operators, precedence, associativity, operand = $._declaration_type) {
   const wrap = associativity === 'right' ? prec.right : prec.left;
   return operators.map(operator => wrap(precedence, seq(
-    field('left', $._declaration_type), field('operator', operator), field('right', $._declaration_type),
+    field('left', operand), field('operator', operator), field('right', operand),
   )));
 }
 

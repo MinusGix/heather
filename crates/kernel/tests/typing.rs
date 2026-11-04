@@ -23,7 +23,7 @@ use heather_kernel::term::{
 };
 use heather_kernel::typing::{
     check_global_ctx, check_global_ctx_extension, check_local_ctx, check_local_subst, check_term,
-    check_type, infer_term, infer_type, TypeError,
+    check_type, infer_term, infer_type, locate_refusal, TypeError,
 };
 
 const FUEL: u64 = 100_000;
@@ -151,6 +151,35 @@ fn application_and_beta_conversion() {
         check_closed(Layer::Prog, &t, &nat_to_nat(), &Level::Zero).unwrap_err(),
         TypeError::NotConvertible
     );
+}
+
+/// The locator names the innermost failing check, scoped where it ran
+/// (`issues/elab-accepts-conjunction-for-equation.md`): the variable under
+/// the λ, not the λ, with both types; and nothing for a check that passes.
+#[test]
+fn locate_refusal_names_the_innermost_failing_check() {
+    let unit = Type::Unit { level: Level::Zero };
+    let to_unit = Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: rty(Type::Nat), cod: rty(unit.clone()) };
+    let id = lam(v(0));
+    let psi = GlobalCtx::default();
+    assert_eq!(check_closed(Layer::Prog, &id, &to_unit, &Level::Zero).unwrap_err(), TypeError::NotConvertible);
+    let found = locate_refusal(&psi, 0, Layer::Prog, &nil_ctx(), &id, &to_unit, &Level::Zero, FUEL)
+        .expect("a refused check is located");
+    assert!(found.term == v(0), "the refused term is the variable, not the λ around it");
+    assert_eq!(found.gamma.entries.len(), 1, "scoped under the λ's binder");
+    assert!(found.expected == Some(unit) && found.inferred == Some(Type::Nat));
+    assert_eq!(found.err, TypeError::NotConvertible);
+
+    // A λ where a `Nat` is expected fails before any conversion: located,
+    // with no inferred type.
+    let bad_arg = app(lam(v(0)), lam(v(0)));
+    let found = locate_refusal(&psi, 0, Layer::Prog, &nil_ctx(), &bad_arg, &Type::Nat, &Level::Zero, FUEL)
+        .expect("located");
+    assert!(found.term == lam(v(0)) && found.expected == Some(Type::Nat) && found.inferred.is_none());
+    assert_eq!(found.err, TypeError::HeadMismatch);
+
+    // The negative control: a check that holds locates nothing.
+    assert!(locate_refusal(&psi, 0, Layer::Prog, &nil_ctx(), &id, &nat_to_nat(), &Level::Zero, FUEL).is_none());
 }
 
 #[test]
@@ -2185,6 +2214,65 @@ fn checked_spellings_infer_their_annotation() {
         check_closed(Layer::Prog, &mk(Rc::clone(&good)), &sum_at, &Level::Zero).unwrap();
         check_closed(Layer::Prog, &mk(good), &sum, &Level::Zero).unwrap();
         assert!(check_closed(Layer::Prog, &mk(bad), &sum_at, &Level::Zero).is_err());
+    }
+}
+
+/// A chain of unannotated injections is checked as one spine, its layers
+/// viewed in one arena (`Tc::injection_at_spine`,
+/// `issues/wide-inductive-constructor-mention-cost.md`) — and still layer by
+/// layer: every depth of `Nat + (Unit + (Nat + Unit))` takes its own
+/// summand's inhabitant and refuses the neighbouring one, against the code
+/// and against the syntax, and a chain one layer past the last `+` is
+/// refused. The summands alternate so that a layer read one off in either
+/// direction is caught.
+#[test]
+fn an_injection_chain_checks_every_layer() {
+    let z = Level::Zero;
+    let tm_sum = |lhs: Term, rhs: Term| Term::TmSum {
+        lhs_level: z.clone(),
+        rhs_level: z.clone(),
+        lhs: rt(lhs),
+        rhs: rt(rhs),
+    };
+    let unit = || Term::TmUnit { level: Level::Zero };
+    let code = tm_sum(Term::TmNat, tm_sum(unit(), tm_sum(Term::TmNat, unit())));
+    let coded = Type::El { level: z.clone(), tm: rt(code) };
+    let ty_sum = |lhs: Type, rhs: Type| Type::Sum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(lhs),
+        rhs: rty(rhs),
+    };
+    let unit_ty = || Type::Unit { level: Level::Zero };
+    let syntax = ty_sum(Type::Nat, ty_sum(unit_ty(), ty_sum(Type::Nat, unit_ty())));
+    let zero = || rt(Term::Zero);
+    let triv = || rt(Term::Triv { level: Level::Zero });
+    // `inr@ʲ(inl@(v))`, or `inr@ʲ(v)` for the last summand.
+    let chain = |depth: usize, last: bool, v: Rc<Term>| {
+        let mut t = if last { v } else { rt(Term::InlAt { ty: None, val: v }) };
+        for _ in 0..depth {
+            t = rt(Term::InrAt { ty: None, val: t });
+        }
+        t
+    };
+    // (depth, last summand?, its inhabitant, the neighbour's)
+    let cases = [
+        (0, false, zero(), triv()),
+        (1, false, triv(), zero()),
+        (2, false, zero(), triv()),
+        (3, true, triv(), zero()),
+    ];
+    for expected in [&coded, &syntax] {
+        for (depth, last, good, bad) in cases.clone() {
+            check_closed(Layer::Prog, &chain(depth, last, good), expected, &z).unwrap();
+            assert!(
+                check_closed(Layer::Prog, &chain(depth, last, bad), expected, &z).is_err(),
+                "depth {depth}: the neighbouring summand's inhabitant must be refused"
+            );
+        }
+        // Past the last `+`: `Unit` is not a sum.
+        let over = chain(4, true, triv());
+        assert!(check_closed(Layer::Prog, &over, expected, &z).is_err());
     }
 }
 

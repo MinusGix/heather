@@ -3,6 +3,7 @@
 use std::sync::Arc as Rc;
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::borrow::Cow;
 
@@ -11,25 +12,31 @@ use heather_kernel::term::{CtxEntry, LocalCtx, Term, Type};
 use heather_syntax::{Expr, ExprKind, Ty};
 
 use crate::recursion::{Guard, SelfRef};
+use crate::spine::{Binders, Spine};
 use crate::{R, Skel, quote};
 
 /// Elaboration context: kernel Γ plus the parallel name list
 /// (`names[j]` names `gamma.entries[j]`, outermost first).
+///
+/// Every per-binder column is a persistent [`Spine`] (or [`Binders`]), as Γ's
+/// own entries are, so a clone, which every probe, retry and diagnostic takes,
+/// is a handful of refcount bumps rather than a copy of every name
+/// (issues/elab-cx-persistent-binders.md).
 #[derive(Clone)]
 pub(crate) struct Cx {
     /// One enclosing dot call's chain, shared by lookup and its cloned
     /// desugared argument. Only source dots are keyed by span: desugaring
     /// builds applications, so generated nodes cannot alias this key.
     pub(crate) dot_receiver: Option<Rc<DotReceivers>>,
-    pub(crate) names: Vec<String>,
+    /// Parallel to `gamma.entries`: each binder's written name and the
+    /// implicitness skeleton of its *written* type, where it had one
+    /// (docs/implicit-binders-design.md §3.1; [`Binders::skel`]). Maintained
+    /// by [`Cx::push`] (defaulting the skeleton to `None`) and
+    /// [`Cx::push_skel`] — one push path, so the two cannot desync. Nothing
+    /// in a skeleton is subject to substitution or shifting (§3.2), so
+    /// entries are never updated.
+    pub(crate) names: Binders,
     pub(crate) gamma: LocalCtx,
-    /// Parallel to `names`/`gamma.entries`: the implicitness skeleton of the
-    /// binder's *written* type, where it had one
-    /// (docs/implicit-binders-design.md §3.1). Maintained by [`Cx::push`]
-    /// (defaulting `None`) and [`Cx::push_skel`] — one push path, so the
-    /// vectors cannot desync. Nothing in a skeleton is subject to
-    /// substitution or shifting (§3.2), so entries are never updated.
-    pub(crate) skels: Vec<Option<Rc<Skel>>>,
     /// The declaration being elaborated, once its telescope is in scope.
     pub(crate) selfref: Option<Rc<SelfRef>>,
     /// Set inside a `Succ(k)` arm; `None` outside every such arm, where a
@@ -42,11 +49,11 @@ pub(crate) struct Cx {
     pub(crate) generalized: Option<Rc<crate::generalize::Generalization>>,
     /// `let` bindings in scope, outermost first. Not kernel binders: an alias
     /// is inlined at each use, so `Γ` is unchanged.
-    pub(crate) aliases: Vec<Rc<Alias>>,
+    pub(crate) aliases: Spine<Rc<Alias>>,
     /// An `inductive`'s type parameters, while its field types are being
     /// lowered at an instantiation. Empty everywhere else: type parameters are
     /// monomorphized, so they never survive into a kernel term.
-    pub(crate) tyvars: Vec<TyVar>,
+    pub(crate) tyvars: Spine<TyVar>,
     /// Class dictionaries in scope, outermost first, **as written**
     /// (docs/operation-indexed-classes-design.md §5, ladder step 2). A value
     /// index is never searched for; where it is not already ground it comes
@@ -54,12 +61,12 @@ pub(crate) struct Cx {
     /// pins it, and that index is a surface expression valid in this very
     /// context. Empty for every declaration with no class binder, which is what
     /// keeps the whole mechanism off code that has nothing to do with classes.
-    pub(crate) dicts: Vec<Rc<DictBinder>>,
+    pub(crate) dicts: Spine<Rc<DictBinder>>,
     /// Index names that a *repeated* constraint left bound to nothing
     /// (`docs/operation-indexed-classes-design.md` §5.2), with the refusal
     /// each one owes. Consulted only where the answer would otherwise have
     /// been "unbound name".
-    pub(crate) index_ambiguity: Vec<(String, String)>,
+    pub(crate) index_ambiguity: Spine<(String, String)>,
     /// Operator symbols a constraint binder **installed**, as (symbol, the
     /// index binder's generated name) — the first rung of a symbol's
     /// resolution (docs/operators-onto-classes-design.md §4, §5).
@@ -70,47 +77,57 @@ pub(crate) struct Cx {
     /// operator. Later entries shadow earlier ones. Empty for every
     /// declaration that names no symbol, which is every declaration written
     /// before this round.
-    pub(crate) op_locals: Vec<(String, String)>,
+    pub(crate) op_locals: Spine<(String, String)>,
     /// The meta-layer binder environment, present exactly while a `meta fn`'s
     /// body — or a quote payload inside it — elaborates
     /// (docs/in-language-map-design.md §5). `None` everywhere else, which is
     /// what keeps the entire quotation machinery inert for ordinary code.
     pub(crate) meta: Option<Rc<quote::MetaEnv>>,
-    /// Set while a **quotation payload** elaborates (`quote.rs`'s `pcx`), and
-    /// nowhere else. The checked spellings of
-    /// `docs/intro-by-type-design.md` §2.3 may not appear inside a `box`: the
-    /// code grammar, `code_eq` and the 60 recursor branches range over that
-    /// payload, and `tm_pair`'s branch telescope types its field
-    /// sub-structures by `U_S`/`U_T`, which a collapsed annotation cannot
-    /// state (§2.2). The design spelled this restriction as "layers p and m",
-    /// which does not transcribe: Heather checks **every** declaration body at
-    /// `Layer::Code` (`lib.rs` ~3637, and `DESIGN.md`'s δ-layer-preservation
-    /// argument is why), so a layer predicate is constantly false. "Under a
-    /// quotation" is the property §2.2 actually needs.
-    pub(crate) quoted: bool,
     /// Set while a **corecursive** body elaborates (docs/codata-elaborator-design.md
     /// §5): the definition's step and child types, which a checking position
     /// at either of them is elaborated against by `Elaborator::corec_check`.
     /// `None` everywhere else, which keeps the hook inert.
     pub(crate) corec: Option<Rc<crate::codata::CorecSite>>,
+    /// Set while a **friend**'s body is re-elaborated over a corecursive
+    /// definition's free carrier (docs/codata-elaborator-design.md §5.5):
+    /// its codata arguments are nodes of that carrier, read by
+    /// `Elaborator::friend_check`. `None` everywhere else.
+    pub(crate) friend: Option<Rc<crate::codata::FriendMode>>,
     /// The codata type of the innermost `match` on codata, while its arms
     /// elaborate — only so an unguarded self-call there can say that codata
     /// has no structural order (docs/codata-elaborator-design.md §4).
     pub(crate) codata_match: Option<Rc<str>>,
+    /// The `match`es on a parameter, inside the recursion, that were passed
+    /// over as case splits (`recursion::guard_param`), each with the guard
+    /// that stood through it — only so a self-call that descends neither can
+    /// name every `match` it was checked against. Empty outside them.
+    pub(crate) case_splits: Rc<Vec<(usize, Rc<crate::recursion::Guard>)>>,
+    /// The enclosing matches whose arm equation is pending: in scope for the
+    /// readers of hypotheses, not yet in Γ
+    /// (docs/dependent-match-compiler-design.md §4.3). A reader records the
+    /// identities here as wanted, and a match whose arms then fail is
+    /// elaborated again as its convoy. Empty outside every match.
+    pub(crate) pending_eqs: Rc<Vec<u32>>,
+    /// Set while a motive-less `match` probes its arms for a constant motive
+    /// (`matching::probe_arm_type`, docs/dependent-match-compiler-design.md
+    /// §6): an arm body checked against the probe's marker type is inferred
+    /// instead, and its type recorded if it lives outside the arm.
+    pub(crate) arm_type_probe: Option<Rc<crate::matching::ArmTypeProbe>>,
 }
 
 type ReceiverInference = OnceCell<R<(Term, Type, Level)>>;
 
 pub(crate) struct DotReceivers {
     gamma: LocalCtx,
-    aliases: Vec<Rc<Alias>>,
+    aliases: Spine<Rc<Alias>>,
     inferred: RefCell<BTreeMap<(usize, usize), Rc<ReceiverInference>>>,
 }
 
 impl DotReceivers {
     fn matches(&self, cx: &Cx) -> bool {
         cx.gamma == self.gamma && cx.aliases.len() == self.aliases.len()
-            && cx.aliases.iter().zip(&self.aliases).all(|(a, b)| Rc::ptr_eq(a, b))
+            && (cx.aliases.ptr_eq(&self.aliases)
+                || cx.aliases.iter_inner().zip(self.aliases.iter_inner()).all(|(a, b)| Rc::ptr_eq(a, b)))
     }
 
     pub(crate) fn inference(&self, cx: &Cx, e: &Expr) -> Option<Rc<ReceiverInference>> {
@@ -173,18 +190,42 @@ pub(crate) struct Alias {
     /// alias is not a kernel binder and the elaborator leaves conversions (a
     /// `refl`, a constructor's field types) to the kernel's gate.
     pub(crate) spliced: Option<Rc<AtomicBool>>,
+    /// The value and type at each depth a use has shifted them to so far.
+    /// Every use at one depth gets the same shifted value, so a later alias
+    /// built from two uses of this one holds one copy, not two: without it,
+    /// a chain of lets each bound one binder deeper and using the previous
+    /// twice doubled per link (`issues/subst-shared-node-memo.md`). The
+    /// shift itself keeps a shared value's own sharing
+    /// (`heather_kernel::subst`, §Keeping a shared DAG shared).
+    pub(crate) shifted: Mutex<Vec<(u32, Term, Type)>>,
 }
 
 impl Alias {
-    /// The value at a use `by` binders past the binding, recorded as having
-    /// reached the term being built. Only a use whose result goes into that
-    /// term may call this: recording a value the term never contains would
-    /// let a `let` the kernel never saw pass unchecked.
-    pub(crate) fn splice(&self, by: u32) -> Term {
+    /// The value and type at a use `by` binders past the binding, the value
+    /// recorded as having reached the term being built. Only a use whose
+    /// result goes into that term may call this: recording a value the term
+    /// never contains would let a `let` the kernel never saw pass unchecked.
+    pub(crate) fn splice(&self, by: u32) -> (Term, Type) {
         if let Some(spliced) = &self.spliced {
             spliced.store(true, Ordering::Relaxed);
         }
-        self.term.shift_local(by)
+        self.at(by)
+    }
+
+    /// The value and type at a use `by` binders past the binding, for
+    /// reading. Shifted once per depth (see [`Alias::shifted`]); a clone of
+    /// either is a clone of its root node.
+    pub(crate) fn at(&self, by: u32) -> (Term, Type) {
+        if by == 0 {
+            return ((*self.term).clone(), self.ty.clone());
+        }
+        let mut shifted = self.shifted.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, term, ty)) = shifted.iter().find(|(at, _, _)| *at == by) {
+            return (term.clone(), ty.clone());
+        }
+        let (term, ty) = (self.term.shift_local(by), self.ty.shift_local(by));
+        shifted.push((by, term.clone(), ty.clone()));
+        (term, ty)
     }
 }
 
@@ -192,21 +233,23 @@ impl Cx {
     pub(crate) fn empty() -> Cx {
         Cx {
             dot_receiver: None,
-            names: vec![],
+            names: Binders::default(),
             gamma: LocalCtx::nil(),
-            skels: vec![],
             selfref: None,
             guard: None,
             generalized: None,
-            aliases: vec![],
-            tyvars: vec![],
-            dicts: vec![],
-            index_ambiguity: vec![],
-            op_locals: vec![],
+            aliases: Spine::new(),
+            tyvars: Spine::new(),
+            dicts: Spine::new(),
+            index_ambiguity: Spine::new(),
+            op_locals: Spine::new(),
             meta: None,
-            quoted: false,
             corec: None,
+            friend: None,
             codata_match: None,
+            case_splits: Rc::new(Vec::new()),
+            pending_eqs: Rc::new(Vec::new()),
+            arm_type_probe: None,
         }
     }
 
@@ -236,9 +279,8 @@ impl Cx {
         };
         Cx {
             dot_receiver: None,
-            names: self.names.iter().map(|n| hide(n)).collect(),
+            names: self.names.renamed(hide),
             gamma: self.gamma.clone(),
-            skels: self.skels.clone(),
             selfref: None,
             guard: None,
             generalized: None,
@@ -254,6 +296,7 @@ impl Cx {
                         ty: a.ty.clone(),
                         level: a.level.clone(),
                         skel: a.skel.clone(),
+                        shifted: Default::default(),
                     })
                 })
                 .collect(),
@@ -262,13 +305,16 @@ impl Cx {
                 .iter()
                 .map(|t| TyVar { name: hide(&t.name), ..t.clone() })
                 .collect(),
-            dicts: vec![],
-            index_ambiguity: vec![],
-            op_locals: vec![],
+            dicts: Spine::new(),
+            index_ambiguity: Spine::new(),
+            op_locals: Spine::new(),
             meta: None,
-            quoted: self.quoted,
             corec: None,
+            friend: None,
             codata_match: None,
+            case_splits: Rc::new(Vec::new()),
+            pending_eqs: Rc::new(Vec::new()),
+            arm_type_probe: None,
         }
     }
 
@@ -313,7 +359,6 @@ impl Cx {
         out.dot_receiver = None;
         out.names.truncate(n);
         out.gamma.entries = self.gamma.entries.prefix(n);
-        out.skels.truncate(n);
         out
     }
 
@@ -328,12 +373,11 @@ impl Cx {
         skel: Option<Rc<Skel>>,
     ) {
         self.dot_receiver = None;
-        self.names.push(name);
+        self.names.push(name, skel);
         self.gamma.entries.push(CtxEntry {
             ty: Rc::new(ty),
             level,
         });
-        self.skels.push(skel);
     }
 }
 
@@ -388,6 +432,7 @@ mod tests {
             name: "x".into(), depth: 1, term: Rc::new(Term::Zero),
             ty: Type::Nat, level: Level::Zero, skel: None,
             spliced: None,
+            shifted: Default::default(),
         }));
         assert!(receivers.inference(&changed, &recv).is_none());
         changed = scoped.clone();
@@ -403,7 +448,6 @@ mod tests {
         cx.push("y".into(), Type::Nat, Level::Zero);
 
         assert_eq!(cx.names.len(), cx.gamma.entries.len());
-        assert_eq!(cx.skels.len(), cx.gamma.entries.len());
     }
 
     #[test]
@@ -416,7 +460,6 @@ mod tests {
         let prefix = cx.prefix(1);
         assert_eq!(prefix.names, ["x"]);
         assert_eq!(prefix.gamma.entries.len(), 1);
-        assert_eq!(prefix.skels.len(), 1);
-        assert_eq!(prefix.op_locals, [("+".into(), "#plus".into())]);
+        assert_eq!(prefix.op_locals, [(String::from("+"), String::from("#plus"))]);
     }
 }

@@ -197,7 +197,9 @@ disagree about what an atom is (to omega a product of two variables is an
 atom, to `ring` it is a monomial) and because
 [omega-unfolds-defined-propositions](../issues/omega-unfolds-defined-propositions.md)
 is changing omega's reflection now. Reading `ring`-normalized products as
-omega atoms is a later integration, not a prerequisite.
+omega atoms is a later integration, not a prerequisite. It was built
+(2026-10-28) as `linarith` at `Int` and `Nat`
+([linarith-design](linarith-design.md) §8): the tactic writes these lets.
 
 ## 7. Not in this round
 
@@ -206,12 +208,166 @@ omega atoms is a later integration, not a prerequisite.
   ring-normalized atoms: [ring-inequalities](../issues/ring-inequalities.md).
   The regular-Cauchy estimates the reals need are inequalities, so this is
   the next step toward them.
-- **`ring` modulo a setoid.** A goal `x * (y + z) ≈ x * y + x * z` at `Rat`
-  is proved here through its cross-multiplication, which is the
-  representation. Normalizing at `Rat` itself, modulo `≈`, needs the
-  normalizer over a commutative-ring structure indexed by a relation, which is
-  [semiring-ring-structure-api](../issues/semiring-ring-structure-api.md)'s
-  interface plus `Respects2`; noted there.
+- **`ring` modulo a setoid.** Built later: §8.
 - **Powers, `Nat` subtraction, `OfNat(x + y)` inside an `Int` goal, mixed
   `Nat`/`Int` hypotheses, rational multipliers.** Each is an atom or a
   refusal today; none has a client yet.
+
+## 8. Modulo a relation
+
+Added 2026-10-27 by [ring-modulo-a-relation](../issues/ring-modulo-a-relation.md).
+A `≈` goal at a carrier with a `CommRingOfInt` instance — `Rat` and `CReal`
+today — is normalized at that carrier:
+
+```heather
+theorem square(x, y: Rat): (x + y) * (x + y) ≈ x * x + 2 * x * y + y * y { ring }
+theorem respects(x, x2, y: CReal, h: x ≈ x2): x * y + y ≈ (x2 + 1) * y { ring(h) }
+```
+
+**The interface.** `CommRingOfInt<A>(≈, +, *)` (lib/std/algebra/semiring.hthr)
+is `CommRing` plus `of_int: Int → A` with the ring homomorphism's four laws
+(zero, one, sum, product). Every commutative ring has the integers in it; the
+embedding is a field so that a carrier keeps its own (`Rat::ofInt`, a rational
+numeral embedded at `CReal`), which is what makes a coefficient read back as
+the carrier's numeral, as `of_nat` does in `OrderedField`.
+
+**The library.** The syntax, the normal form, `norm` and the comparison
+lemmas are the `Int` path's, unchanged: coefficients are still `Int` and the
+certificate's `refl` is the same evaluation. What is restated in a
+`section<A: CommRingOfInt(≈, +, *)>` is the meaning — `RingExpr::eval_rel`,
+`RingPoly::eval_rel` — and the soundness proof, over the ring's layers:
+`rel_cong` through the `+`/`*` `Respects2` the layers carry, `inv_respects`,
+`CommMonoidRel::interchange` for the rearrangements, `GroupRel::inv_unique`
+for negation, and `of_int`'s laws for the coefficient arithmetic (negation is
+derived from them, `of_int_neg`). Subtraction evaluates as `a + A.inv(b)`,
+which is what `Rat::sub` and `CReal::sub` unfold to, so the certificate's
+`eval_rel` converts to the goal's spelling. The certificate is
+
+```text
+ring::RingExpr::sound_rel<C>(__ring_atoms, ⟦lhs⟧, ⟦rhs⟧, refl)
+ring::RingExpr::sound_with_rel<C>(__ring_atoms, ⟦lhs⟧, ⟦rhs⟧, D, HD, refl)
+```
+
+with the carrier written: the generic lemmas take only the atom list and
+syntax, and an expected type `x ≈ y` pins the relation but not the
+operations, so the carrier fixes the ring through its designations.
+
+**The tactic.** A goal is read this way when it is the designated `≈` at its
+carrier, the carrier has a `CommRingOfInt` instance in scope, and every
+hypothesis is the same carrier's `≈`. The operations are the carrier's
+designations (`+`, `*`, infix and prefix `-`); anything else is an atom,
+compared as at `Int`; a field read is not looked through, since a value of
+the carrier is not a computation the normal form wants. A numeral is the
+integer its spelling ends in, confirmed by converting the term to what
+`RConst` of that integer evaluates to, so a term that only spells like one is
+an atom. The multiplier search is the `Int` one: hypotheses are combined with
+integer polynomial multipliers, which is valid in any commutative ring.
+
+**The fallback.** When this reading fails and the goal's `≈` unfolds to an
+`Int` equation (`Rat`, not `CReal`), the cross-multiplied reading of §1 is
+tried, and its certificate is used if it succeeds; if both fail the error is
+the relation reading's, which is stated in the goal's terms. So the rational
+laws proved with facts about the representation (`ring(hx, hy,
+x.den_add(y), …)`) are unchanged, and so are the laws stated before the
+`CommRingOfInt<Rat>` instance, which is registered right after `CommRing<Rat>`:
+`Rat`'s own ring laws cannot be proved by a normalizer that assumes them.
+
+**Cost shape.** The atoms are the carrier's values, not their numerators and
+denominators, so a certificate's normalization runs over fewer atoms and
+lower degree than the cross-multiplied one for the same identity; the
+conversion that reads `eval_rel` back unfolds the instance dictionary's
+projections once per operation node. The `Int` and `Nat` certificates are
+unchanged.
+
+
+## 9. Clearing denominators
+
+Added 2026-10-27 by [field-simp](../issues/field-simp.md). At a `≈` carrier
+`ring` proves identities of fields, not only of rings:
+
+```heather
+theorem halves(x: Rat): x * Rat::inv_succ(1) + x * Rat::inv_succ(1) ≈ x { ring }
+theorem sum(x, y: CReal, hx: x.Apart(0), hy: y.Apart(0), hxy: (x * y).Apart(0)):
+    x⁻¹ + y⁻¹ ≈ (x + y) * (x * y)⁻¹
+{ ring }
+theorem half_at(n: Nat): Rat::inv_succ(n + n + 1) + Rat::inv_succ(n + n + 1) ≈ Rat::inv_succ(n) { ring }
+```
+
+The issue asked for a `field_simp` step in front of `ring`. It is not a
+separate step: clearing is part of how `ring` reads a field goal, so there is
+no new surface and nothing to chain.
+
+**A reciprocal is an atom with a fact.** `x⁻¹` (the carrier's designated
+postfix `⁻¹`) is an atom `r`, read together with the lemma that sits beside
+the operation, `<op>_mul`: `x⁻¹ * x ≈ 1` (`Rat::inv_mul`, `CReal::inv_mul`).
+`Rat::inv_succ(n)` is read with `Rat::inv_succ_cancel`:
+`inv_succ(n) * (Rat::ofInt(OfNat(n)) + 1) ≈ 1`. Each fact is a polynomial
+`r·d − 1 = 0`, and the certificate cites it the way it cites a written
+hypothesis (`sound_with_rel`, `hyp_rel`), so the soundness proof of §8 is all
+there is. Apartness is the one `x⁻¹` was elaborated with (its `h := infer`
+found it when the goal was written), so clearing owes no side condition; the
+issue's "discharge from `Pos` binders, numerals and hypotheses" is the
+evidence search that already ran. A reciprocal whose fact cannot be written
+stays a plain atom.
+
+**The multipliers are computed, not searched for.** With `H = r·d − 1` and
+`P = Σ pₐ·rᵃ` (the `pₐ` free of `r`, `K` the top power):
+
+```text
+dᴷ·P = Σ pₐ·dᴷ⁻ᵃ·(rd)ᵃ = P′ + H·M      P′ = Σ pₐ·dᴷ⁻ᵃ,  M = Σ pₐ·dᴷ⁻ᵃ·Sₐ,  Sₐ = Σ_{t<a} (rd)ᵗ
+P = rᴷ·P′ + H·(rᴷ·M − S_K·P)
+```
+
+so `P` is a combination of the facts exactly when the cleared `P′` is.
+Eliminating every reciprocal, the last met first (a reciprocal inside
+another's denominator is met first, so it is still there to eliminate when the
+outer one's `d` brings it in), leaves a polynomial free of them that is zero
+exactly when the goal is an identity of fields at those denominators. A true
+identity is never missed, unlike §4's bounded search, and no multiplier has a
+fraction. Written hypotheses are searched for against what clearing leaves,
+each with the definitions below substituted the same way first (so a
+hypothesis spelling `ofRat(x)` meets a goal spelling `ofRat(2 - x)`; the
+substitution's multipliers are given back to the definitions' rows, and a
+reciprocal in a hypothesis stays an atom there,
+issues/ring-hypotheses-cast-spelling.md); failing that, every row is searched
+together. The Rust side checks its own
+combination before writing it.
+
+**Casts.** `inv_succ(n + n + 1)`'s denominator is `Rat::ofInt(OfNat(n + n +
+1))`, which no ring identity relates to `ofInt(OfNat(n))`. A cast of a `Nat`
+sum, product or successor is therefore an atom `c` read with a definition
+`c ≈ e` that pushes the embedding one level in — `RingExpr::of_nat_add`,
+`of_nat_mul`, `of_nat_succ`, stated once in the `CommRingOfInt` section of
+`ring.hthr` — and `e`'s casts are read the same way down to atoms and
+numerals. A definition is eliminated by substitution
+(`cᵃ − eᵃ = (c − e)·Σ_{t<a} cᵗ·eᵃ⁻¹⁻ᵗ`). A cast is recognized by its spelling,
+`…OfNat(e)…` with only closing parentheses after it, and confirmed by
+converting the atom to the lemma's left side (`of_int` at the same `e`), so
+the same reading serves `CReal::ofRat(Rat::ofInt(OfNat(e)))`.
+
+**Refusals.** A goal that is not an identity is named by what clearing leaves,
+with both it and the product of the denominators divided by the largest
+monomial they share: `x⁻¹ + y⁻¹ ≈ (x * y)⁻¹` reports that, multiplied by
+`x * y`, the sides differ by `y + x - 1`. The product is the denominators'
+product, not their least common multiple; only the message would change.
+
+**Where it is used.** `CReal`'s regularity proofs carried calc chains of
+`inv_succ_half` and `add_respects` / `add_add_add_comm` rearrangements; five
+of them are now one `ring` step each. `Rat::inv_succ_mul` and
+`Rat::inv_succ_half` themselves are now `ring`'s too
+(`lib/_tests/std/tactic/ring_field_tests.hthr`), though they keep their proofs:
+they are stated before `CommRingOfInt<Rat>`.
+
+**Not in this round.**
+
+- The inequality form (positive denominators preserve `≤`), the consumer
+  being [linarith-ordered-fields](../issues/linarith-ordered-fields.md).
+- Reciprocals at a generic `OrderedField` (`A.recip(x, h)`): the relation
+  reading needs a concrete carrier with a `CommRingOfInt` instance.
+- `Rat::recip` (total) and `x ^ n`: atoms. The first needs a searched
+  apartness to state its fact; the second a power reading.
+- A field read such as `x.seq(n)` inside the goal did not spell as source,
+  which refused the whole reading; the `CReal` proofs above apply `ring`
+  under `add_respects` for that reason. Since `linarith`'s round such an
+  atom is named in the atom list by an alias bound to its term
+  (docs/linarith-design.md §4).

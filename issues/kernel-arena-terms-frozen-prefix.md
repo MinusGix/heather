@@ -4,7 +4,7 @@ status: open
 labels: [kernel,representation,performance,parallelism,design,conversion,evaluator]
 area: kernel
 created: 2026-09-11
-updated: 2026-09-13
+updated: 2026-11-02
 ---
 
 Evaluate replacing the kernel's `Rc`-owned term trees with arena-indexed terms over a frozen prefix, so that (a) the value-domain and term allocation constant goes away at the representation level rather than one pool at a time, and (b) independent declarations of one module can be kernel-checked in parallel without atomic reference counts.
@@ -73,3 +73,6 @@ TRIGGER for taking the term rewrite: after the slice and K1 land, a profile attr
 BEFORE COLUMN, this box, this tree (note section 2): certificate warm, release --features value-metrics, W=1 — wall 42.66 s, user 42.17 s, peak RSS 928.4 MB; certificate module total 36.89 s, kernel_gate 26.66 s over 3 476 items; 16.07 M eval steps, 237 888 conv misses, 6.62 M shortcut hits. term_cache 11 728 592 lookups / 1 374 944 hits; type_cache 12 748 766 / 163 309. Lookups-minus-hits = 22 938 105 Rc<Val>/Rc<VTy> heap allocations for ONE certificate build — the five-node module's 1.94 M is the same quantity an order of magnitude down, so the slice's before column should be the certificate, not that module. scripts/bench --save fresh on the same instance; every slope inside its band (nat/step-once 157 ns, step-into-closed-body 175 ns, add-normalize@1024 240.94 us slope 1.00, mul-normalize@48 483.45 us slope 1.95, conv/computed-numeral@512 403.37 us, check/generated-terms@200 5.12 ms, stack 1 530 levels).
 
 SURPRISE, filed not exploited: the type memo answers 1.3% of its lookups (163 k of 12.7 M) — every other lookup pays a probe, a force, an allocation and an insert. [[type-value-memo-hit-rate]]; its four rates should be recorded before the arena slice makes the counter stop meaning "allocations".
+- 2026-10-30: The design pass's prototype slice landed (arena-resident Val/VTy/VNeutral plus the value-domain Elim cells): kernel gate −18 to −23% on the cloud box, peak RSS unchanged. Before/after in [[value-cache-memo-in-arena]] (closed).
+- 2026-11-02: Trigger check from the data-oriented survey (2026-11-02, `docs/data-oriented-survey.md` §8). In cold gdb-sampled checks, 32–42% of samples have an allocator frame on top. Most of that is elaborator-side copying of non-term data ([[elab-probe-clone-copies-attempt]], [[elab-cx-persistent-binders]]), so the ≥15% Term/Type trigger has not fired. Re-read it once those two land. [[kernel-compact-level]] (Term 128 → ~80 B) and [[subst-per-call-allocations]] are the representation-preserving steps that shrink the term share without the rewrite.
+- 2026-11-02: 2026-11-02: [[kernel-compact-level]] landed: a 16-byte canonical Level, Term 128 → 104 B, Type 72 → 56 B; cold calc_parser max RSS −10%, gate −6.8% (perf ab). The 8-byte step, which needs an interned join table, is [[kernel-level-eight-bytes]]. An arena would give it that table for free.

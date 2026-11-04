@@ -144,6 +144,14 @@ fn pos_sugar_angle_brackets_are_delimiters() {
 }
 
 #[test]
+fn a_bind_arrow_is_spaced_and_hugs_its_paren() {
+    check(
+        "fn f(x: M) -> M { let a<-x; g(( <-x), a) }",
+        "fn f(x: M) -> M { let a <- x; g((<- x), a) }",
+    );
+}
+
+#[test]
 fn projections_and_qualified_names_stay_tight() {
     check("fn f(p: Pair) -> Nat { p . fst }", "fn f(p: Pair) -> Nat { p.fst }");
     check("import nat::{le_refl, le_trans};", "import nat::{le_refl, le_trans};");
@@ -154,6 +162,7 @@ fn projections_and_qualified_names_stay_tight() {
 fn prefix_negation_is_written_tight() {
     check("theorem t(P: Type): ¬ P { p }", "theorem t(P: Type): ¬P { p }");
     check("fn f(b: Bool) -> Bool { ! b }", "fn f(b: Bool) -> Bool { !b }");
+    check("fn f(n: Nat) -> Rat { ↑ n - 1 }", "fn f(n: Nat) -> Rat { ↑n - 1 }");
 }
 
 /// `-` is both: subtraction where the parse puts it between two operands,

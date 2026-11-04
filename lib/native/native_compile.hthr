@@ -1,0 +1,1472 @@
+// The effectful source compiled to x86-64 by a Heather function
+// (docs/native-effect-source-design.md §7.4; issues/native-effect-source-compiler.md,
+// round S3.2). `native_compile_correct` proves it once.
+//
+// Every word of the environment has a slot of eight bytes in one data
+// region, word `i` at offset `8 i`, as many as the source declares
+// (`Source::words`). Each buffer has a
+// range after the words, at its capacity, and past them all a scratch range
+// one byte longer than the largest buffer (room for a path and its NUL).
+// Between statements each live word is in its home (native_alloc): its
+// slot, or the register of the home pool the allocator gave it, which no
+// statement's code uses for anything else; a word nothing reads later is
+// anywhere (`Target::Held`, native_compile_homes). A statement loads what it reads from its home and
+// puts what it writes in the word's home, where the word is live after it
+// (`Prog::word_to`, `word_from`); RBX carries a slot's address, or a home
+// register's word, on the way. The homes and each loop's set come with the
+// compile (`Source::compile(low, homes)`), which checks them first
+// (`Source::allocation_ok`), so an allocator is never trusted.
+//
+// - A `Compute` leaf is first optimised by the FunctionIR pass
+//   (function_ir_pass: constants folded, nodes nothing reads dropped, given
+//   what is live after it; `Prog::computes_best`, native_compile_pass), and
+//   compiled as it is where what the pass leaves does not pass the leaf's
+//   checks or compile. A leaf goes through S4 whole where S4 takes it: all
+//   pure, its values fitting the registers no word lives in. It loads its inputs (the
+//   ids its nodes read and do not write), runs S4's `Region::lower` over
+//   them, and puts each node's result in its home, zero-extended from its
+//   width as `Env::settle` keeps it. Any other leaf whose nodes all work at
+//   width 64 compiles a node at a time, each result put before the next
+//   node reads it: a pure node through S4 as a region of its own, a byte
+//   node by its own code.
+// - A structured region compiles where it is scoped from every word
+//   (native_structured: its nodes wide, each word read written before it,
+//   each branch on a word's low bit, each loop in counted form), its parts
+//   memory-resident as leaves are (`StructuredRegion::code`): a sequence's
+//   leaf then the rest, a composition's parts in order, a conditional as a
+//   branch on its bit with a JMP over the second arm, and a loop as a
+//   counted loop of leaves around its body (the count and the parameters
+//   moved in, a zero test at the head, the body, the next state moved into
+//   the parameters, a test of the exit bit, the count less one and a JMP
+//   back; the outputs moved out at the end). A call region is refused: the
+//   builder inlines.
+// - A byte node compares its index with its buffer's capacity (CMP and a
+//   JAE past the access), and loads or stores the byte at the buffer's
+//   address plus the index; a store then reads the byte back as a load
+//   does.
+// - A call clamps its length (and a write its offset) to its buffer, as the
+//   source does, then makes the SYSCALL and puts RAX in the result word's
+//   home. A read lands in the scratch range and is copied into its buffer
+//   only when it succeeds: Linux may leave anything in the range after a
+//   failed read (`LinuxLeaves`), and the source says the buffer is as it
+//   was. An open copies its path into the scratch range up to its clamped
+//   length or its NUL, ends it with a NUL, and asks openat(AT_FDCWD,
+//   scratch, O_RDONLY); a close asks close(fd). Stats are refused.
+// - `Branch` tests its bit (the word's low bit, masked) and JEs to its
+//   second arm; `Repeat` runs its body from a label, tests `again`, JEs out
+//   and JMPs back; `Exit` makes the exit call with its word. Running off the
+//   end of `main` exits 0.
+// - `Arg` reads argc and argv from the initial stack Linux built, through
+//   the RSP saved at entry in a slot past the scratch range. Past argc it
+//   puts minus one in the length word; otherwise it copies the argument's
+//   bytes up to its NUL into the buffer, as many as it holds, and puts the
+//   whole length (native_compile_args).
+// - At entry RSP is saved, then each buffer's initial bytes are stored, a
+//   byte at a time, as many as it holds.
+//
+// Any id at or past the source's words is refused. The program is checked once,
+// by evaluation, for its layout (`Prog::laid_out`).
+import native_source;
+import native_alloc;
+import native_structured;
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_state;
+import function_ir_pass;
+import x86_64;
+import x86_64_block;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_kept;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// The layout
+
+fn List::total(self sizes: List<Nat>) → Nat {
+    match sizes { Nil => 0, Cons(size, rest) => size + rest.total() }
+}
+
+fn List::largest(self sizes: List<Nat>) → Nat {
+    match sizes { Nil => 0, Cons(size, rest) => size.max(rest.largest()) }
+}
+
+// Where the region starts, how many words it has slots for, each buffer's
+// capacity, and each word's home
+// (native_alloc). An address in the
+// region is a ripple add from its start (`add_nat`), so a program's bytes
+// evaluate however far into the region it reaches; the proofs read it as
+// `next_rip`, the region's spelling, through `Target::at_rip`
+// (issues/native-compile-address-depth.md).
+//
+// The leaf pool and the registers words live in (`taken`) are fields that
+// `Layout::of` computes from the homes once: every leaf reads them several
+// times, and recomputing the two filters there dominated the compile's
+// evaluation (issues/native-leaf-pool-per-leaf.md).
+// The procedures are the table a call names (docs/native-procedures-design.md).
+record Layout { low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes, pool: List<Gpr>, taken: List<Gpr>,
+    procedures: List<Procedure> := [] }
+
+fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
+    Layout(layout.low, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures)
+}
+
+// Word `id` has a slot.
+fn Layout::word_fits(self layout: Layout, id: Nat) → Bool { Succ(id).leb(layout.words) }
+
+fn Layout::words_fit(self layout: Layout, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(id, rest) => layout.word_fits(id) && layout.words_fit(rest) }
+}
+
+fn Layout::word_offset(self layout: Layout, id: Nat) → Nat { 8 * id }
+fn Layout::word_at(self layout: Layout, id: Nat) → BitVec(64) { layout.low.add_nat(layout.word_offset(id)) }
+fn Layout::buffer_offset(self layout: Layout, buf: Nat) → Nat { 8 * layout.words + layout.capacities.take(buf).total() }
+fn Layout::buffer_at(self layout: Layout, buf: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf)) }
+fn Layout::byte_at(self layout: Layout, buf, i: Nat) → BitVec(64) { layout.low.add_nat(layout.buffer_offset(buf) + i) }
+fn Layout::scratch_offset(self layout: Layout) → Nat { 8 * layout.words + layout.capacities.total() }
+fn Layout::scratch_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.scratch_offset()) }
+fn Layout::stack_offset(self layout: Layout) → Nat { layout.scratch_offset() + (layout.capacities.largest() + 1) }
+fn Layout::stack_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.stack_offset()) }
+// The running activation's frame address, and how many calls deeper it may
+// go (docs/native-procedures-design.md §4.1).
+fn Layout::frame_offset(self layout: Layout) → Nat { layout.stack_offset() + 8 }
+fn Layout::frame_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.frame_offset()) }
+fn Layout::room_offset(self layout: Layout) → Nat { layout.stack_offset() + 16 }
+fn Layout::room_at(self layout: Layout) → BitVec(64) { layout.low.add_nat(layout.room_offset()) }
+fn Layout::size(self layout: Layout) → Nat { layout.stack_offset() + 24 }
+
+// ---------------------------------------------------------------------------
+// Words in and out of their slots
+
+// The word in `register`: loaded from its slot, RBX the slot's address, or
+// moved from its home register through RBX, so RBX is written either way.
+fn Prog::word_to(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
+    match layout.homes.home(id) {
+        InSlot => then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Load(WordLoad(register, Rbx))),
+        InReg(k) => then(p, Block([MovRR(Rbx, home_register(k)), MovRR(register, Rbx)])),
+    }
+}
+
+// Words known to hold numbers where a statement starts: what the leaf
+// before it left in them (`List::leaves_known`). A statement that reads a
+// known word into a register for a call or an exit puts the number there
+// as an immediate, so the word need not be live before it.
+fn Env::Knows(self env: Env, known: List<Fact>) → Type {
+    match known { Nil => True, Cons(f, rest) => ((env.number(f.id) = f.value) ∧ (f.value < Nat::pow(2, 64))) ∧ env.Knows(rest) }
+}
+
+// The ids of `ids` not known.
+fn List::unknown(self known: List<Fact>, ids: List<Nat>) → List<Nat> {
+    match ids {
+        Nil => Nil,
+        Cons(i, rest) => match known.known(i) { None => Cons(i, known.unknown(rest)), Some(_) => known.unknown(rest) },
+    }
+}
+
+// The word in `register`: its number as an immediate where it is known,
+// through RBX as `word_to` moves a home register's, otherwise from its
+// home.
+fn Prog::known_to(self p: Prog, layout: Layout, known: List<Fact>, id: Nat, register: Gpr) → Prog {
+    match known.known(id) {
+        None => p.word_to(layout, id, register),
+        Some(v) => then(p, Block([MovRI(Rbx, BitVec::ofNat(v)), MovRR(register, Rbx)])),
+    }
+}
+
+// Of the facts a leaf's folding learns, those about a word the leaf writes
+// whose number fits the width it last writes it at, and a word: the number
+// it settles in the environment.
+fn List::settled(self facts: List<Fact>, nodes: List<Node>) → List<Fact> {
+    match facts {
+        Nil => Nil,
+        Cons(f, rest) => match nodes.last_width(f.id) {
+            None => rest.settled(nodes),
+            Some(w) => match Succ(f.value).leb(Nat::pow(2, w)) && Succ(f.value).leb(Nat::pow(2, 64)) {
+                True => Cons(f, rest.settled(nodes)),
+                False => rest.settled(nodes),
+            },
+        },
+    }
+}
+
+fn List::leaves_known(self nodes: List<Node>) → List<Fact> { nodes.learned([]).settled(nodes) }
+
+// The word's low bit in `register`, zero-extended.
+fn Prog::bit_to(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
+    then(p.word_to(layout, id, register), Block([MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)]))
+}
+
+// `register` stored to the word's slot.
+fn Prog::word_store(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
+    then(then(p, Block([MovRI(Rbx, layout.word_at(id))])), Store(WordStore(Rbx, register)))
+}
+
+// `register` put in the word's home, where the word is live after (`out`).
+fn Prog::word_from(self p: Prog, layout: Layout, out: List<Nat>, id: Nat, register: Gpr) → Prog {
+    match out.holds(id) {
+        False => p,
+        True => match layout.homes.home(id) {
+            InSlot => p.word_store(layout, id, register),
+            InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+        },
+    }
+}
+
+// A port read into a register as S4 holds it: a word as itself, a bit
+// zero-extended.
+fn Prog::port_to(self p: Prog, layout: Layout, port: Port, register: Gpr) → Option<Prog> {
+    match layout.word_fits(port.id) {
+        False => None,
+        True => match Kind::of_width(port.width) {
+            None => None,
+            Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)) },
+        },
+    }
+}
+
+fn Prog::ports_to(self p: Prog, layout: Layout, ports: List<Port>, registers: List<Gpr>) → Option<Prog> {
+    match ports {
+        Nil => Some(p),
+        Cons(port, rest) => match registers {
+            Nil => None,
+            Cons(register, later) => match p.port_to(layout, port, register) {
+                None => None,
+                Some(q) => q.ports_to(layout, rest, later),
+            },
+        },
+    }
+}
+
+// Each port's register put in the home of its word, in order, those live
+// after (`out`).
+fn Prog::ports_from(self p: Prog, layout: Layout, out: List<Nat>, ports: List<Port>, words: List<Nat>, registers: List<Gpr>) → Option<Prog> {
+    match ports {
+        Nil => match words { Nil => Some(p), Cons(_, _) => None },
+        Cons(port, rest) => match registers {
+            Nil => None,
+            Cons(register, later) => match words {
+                Nil => None,
+                Cons(word, others) => match layout.word_fits(word) {
+                    False => None,
+                    True => p.word_from(layout, out, word, register).ports_from(layout, out, rest, others, later),
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A dataflow leaf
+
+fn Node::read_ports(self node: Node) → List<Port> {
+    match node {
+        Const(_, _, _) => [],
+        Move(width, _, source) => [Port(source, width)],
+        Add(width, _, left, right) => [Port(left, width), Port(right, width)],
+        Sub(width, _, left, right) => [Port(left, width), Port(right, width)],
+        BitAnd(width, _, left, right) => [Port(left, width), Port(right, width)],
+        BitOr(width, _, left, right) => [Port(left, width), Port(right, width)],
+        BitXor(width, _, left, right) => [Port(left, width), Port(right, width)],
+        ShiftLeft(width, _, value, _) => [Port(value, width)],
+        LogicalShiftRight(width, _, value, _) => [Port(value, width)],
+        ArithmeticShiftRight(width, _, value, _) => [Port(value, width)],
+        UnsignedLessThan(width, _, left, right) => [Port(left, width), Port(right, width)],
+        SignedLessThan(width, _, left, right) => [Port(left, width), Port(right, width)],
+        Equal(width, _, left, right) => [Port(left, width), Port(right, width)],
+        BufferLoad(_, _, index) => [Port(index, 64)],
+        BufferStore(_, _, index, value) => [Port(index, 64), Port(value, 64)],
+    }
+}
+
+// The ports the nodes read that none of them writes: the leaf's inputs.
+fn ports_outside(ports: List<Port>, written: List<Nat>) → List<Port> {
+    match ports {
+        Nil => [],
+        Cons(port, rest) => match absent(port.id, written) {
+            False => ports_outside(rest, written),
+            True => Cons(port, ports_outside(rest, written)),
+        },
+    }
+}
+
+fn nodes_read_ports(nodes: List<Node>) → List<Port> {
+    match nodes { Nil => [], Cons(node, rest) => node.read_ports() ++ nodes_read_ports(rest) }
+}
+
+fn nodes_inputs(nodes: List<Node>) → List<Port> { ports_outside(nodes_read_ports(nodes), nodes_writes(nodes)) }
+
+// Every input absent from what the nodes write: how the theorem reads it.
+fn ports_absent(ports: List<Port>, written: List<Nat>) → Bool {
+    match ports { Nil => True, Cons(port, rest) => absent(port.id, written) && ports_absent(rest, written) }
+}
+
+// The registers a leaf may use: every one but RBX and RSP.
+fn register_pool() → List<Gpr> { [Rax, Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11, R12, R13, R14, R15, Rbp] }
+
+// Those no word lives in, in order: its inputs', then one per node.
+fn Homes::leaf_pool(self homes: Homes) → List<Gpr> { register_pool().filter(λ (register: Gpr) => !homes.uses(register)) }
+
+// A layout with its pools computed from its homes.
+fn Layout::of(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes) → Layout { Layout(low, words, capacities, homes, homes.leaf_pool(), homes.registers()) }
+fn Layout::leaf_pool(self layout: Layout) → List<Gpr> { layout.pool }
+theorem Layout::of_pool(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes):
+    Layout::of(low, words, capacities, homes).leaf_pool() = register_pool().filter(λ (register: Gpr) => !homes.uses(register)) { refl }
+theorem Layout::of_taken(low: BitVec(64), words: Nat, capacities: List<Nat>, homes: Homes): Layout::of(low, words, capacities, homes).taken = homes.registers() { refl }
+
+// No register twice.
+fn Gpr::absent_from(self register: Gpr, registers: List<Gpr>) → Bool {
+    match registers { Nil => True, Cons(other, rest) => !register.same(other) && register.absent_from(rest) }
+}
+fn gprs_distinct(registers: List<Gpr>) → Bool {
+    match registers { Nil => True, Cons(register, rest) => register.absent_from(rest) && gprs_distinct(rest) }
+}
+
+// The registers no word may live in: a leaf this pool holds is taken whole
+// whatever the homes.
+fn scratch_pool() → List<Gpr> { register_pool().filter(λ (register: Gpr) => register.absent_from(home_pool())) }
+
+fn place_into(registers: List<Gpr>) → List<Place> { registers.map(λ register => Into(register)) }
+
+// The leaf as a region of S4: its inputs and its nodes' results as ports.
+fn leaf_region(nodes: List<Node>) → Region { Region(Ports(nodes_inputs(nodes)), nodes, Ports(nodes_write_ports(nodes))) }
+
+// What the leaf asks of its nodes before it is lowered: S3.0's evaluation
+// order holds, no input is written, and its registers are distinct and
+// miss RBX.
+fn leaf_checks(nodes: List<Node>, inputs, outputs: List<Gpr>) → Bool {
+    nodes_evaluable(nodes) && (ports_absent(nodes_inputs(nodes), nodes_writes(nodes)) &&
+        (gprs_distinct(Cons(Rbx, inputs)) && Rbx.absent_from(outputs)))
+}
+
+fn Layout::leaf_inputs(self layout: Layout, nodes: List<Node>) → List<Gpr> { layout.leaf_pool().take(nodes_inputs(nodes).len()) }
+fn Layout::leaf_outputs(self layout: Layout, nodes: List<Node>) → List<Gpr> { layout.leaf_pool().drop(nodes_inputs(nodes).len()).take(nodes.len()) }
+
+// The leaf's code, which must leave every register a word lives in.
+fn Prog::leaf_lowered(self loaded: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, words: List<Nat>, code: Option<List<Instruction>>) → Option<Prog> {
+    match code {
+        None => None,
+        Some(instructions) => match leaves_all(instructions, layout.taken) {
+            False => None,
+            True => then(loaded, Block(instructions)).ports_from(layout, out, nodes_write_ports(nodes), words, layout.leaf_outputs(nodes)),
+        },
+    }
+}
+
+// The leaf through S4, each node's result put in the home of its word in
+// `words`, where that word is live after (`out`).
+fn Prog::leaf_into(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, words: List<Nat>) → Option<Prog> {
+    match leaf_checks(nodes, layout.leaf_inputs(nodes), layout.leaf_outputs(nodes)) {
+        False => None,
+        True => match p.ports_to(layout, nodes_inputs(nodes), layout.leaf_inputs(nodes)) {
+            None => None,
+            Some(loaded) => loaded.leaf_lowered(layout, out, nodes, words,
+                leaf_region(nodes).lower(layout.leaf_inputs(nodes), layout.leaf_outputs(nodes), place_into(layout.leaf_outputs(nodes)))),
+        },
+    }
+}
+
+// Each result put in its own word's home.
+fn Prog::leaf(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>) → Option<Prog> { p.leaf_into(layout, out, nodes, nodes_writes(nodes)) }
+
+// ---------------------------------------------------------------------------
+// Calls
+
+// What a program builds, and the next label name it may use.
+record Compiled { prog: Prog, names: Nat }
+
+// A label, an empty block named `name`.
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+
+// `value` clamped to `bound`, unsigned: unless it is below, the bound.
+fn Prog::clamp(self p: Prog, value, bound: Gpr, skip: Nat) → Prog {
+    then(then(then(p, Block([CmpRR(value, bound)])), Jcc(B, skip)), Block([MovRR(value, bound)])).label(skip)
+}
+
+// The copy's counter and its two walks set, and its loop's label.
+fn Prog::copy_head(self p: Prog, layout: Layout, buf: Nat, head: Nat) → Prog {
+    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.scratch_at()), MovRI(Rdi, layout.buffer_at(buf))])).label(head)
+}
+
+// The `count` bytes in RAX copied from the scratch range to the buffer's: R8
+// counts up to RAX, RSI and RDI walk the two ranges, RDX carries each byte.
+fn Prog::copy_in(self p: Prog, layout: Layout, buf: Nat, head, done: Nat) → Prog {
+    let set = p.copy_head(layout, buf, head);
+    let tested = then(then(set, Block([CmpRR(R8, Rax)])), Jcc(E, done));
+    let moved = then(then(tested, LoadByte(ByteLoad(Rdx, Rsi))), StoreByte(ByteStore(Rdi, Rdx)));
+    then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
+}
+
+// After the read: the bytes copied in unless it failed (RAX negative), then
+// the result put in its word's home.
+fn Prog::read_back(self asked: Prog, layout: Layout, out: List<Nat>, buf, result, names: Nat) → Prog {
+    let tested = then(then(asked, Block([TestRR(Rax, Rax)])), Jcc(S, Succ(Succ(Succ(names)))));
+    tested.copy_in(layout, buf, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names)))).word_from(layout, out, result, Rax)
+}
+
+// read(fd, scratch, min(len, capacity)); the result stored; on success the
+// bytes copied into the buffer.
+fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
+    let clamped = then(p.known_to(layout, known, len, Rdx), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rdx, R9, Succ(names));
+    let asked = then(then(clamped, Block([MovRI(Rsi, layout.scratch_at()), MovRI(Rax, BitVec::ofNat(0))])).known_to(layout, known, fd, Rdi), Syscall);
+    Compiled(asked.read_back(layout, out, buf, result, names), Succ(Succ(Succ(names))))
+}
+
+// write(fd, buffer + min(from, capacity), min(len, capacity - that)); the
+// result stored.
+fn Prog::writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
+    let start = then(p.known_to(layout, known, from, R8), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(R8, R9, Succ(names));
+    let room = then(start, Block([SubRR(R9, R8)])).known_to(layout, known, len, Rdx).clamp(Rdx, R9, Succ(Succ(names)));
+    let asked = then(then(room, Block([MovRI(Rsi, layout.buffer_at(buf)), AddRR(Rsi, R8), MovRI(Rax, BitVec::ofNat(1))])).known_to(layout, known, fd, Rdi), Syscall);
+    Compiled(asked.word_from(layout, out, result, Rax), Succ(Succ(names)))
+}
+
+// close(fd); the result put in its word's home.
+fn Prog::closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat) → Prog {
+    then(then(p, Block([MovRI(Rax, BitVec::ofNat(3))])).known_to(layout, known, fd, Rdi), Syscall).word_from(layout, out, result, Rax)
+}
+
+// The path copy's counter and its two walks set, and its loop's label.
+fn Prog::path_head(self p: Prog, layout: Layout, buf, head: Nat) → Prog {
+    then(p, Block([MovRI(R8, BitVec::ofNat(0)), MovRI(Rsi, layout.buffer_at(buf)), MovRI(Rdi, layout.scratch_at())])).label(head)
+}
+
+// The path's bytes copied from its buffer to the scratch range, up to the
+// count in RCX or its first NUL, out to `done` at either: R8 counts, RSI
+// and RDI walk the two ranges, RDX carries each byte.
+fn Prog::path_copy(self p: Prog, layout: Layout, buf, head, done: Nat) → Prog {
+    let set = p.path_head(layout, buf, head);
+    let counted = then(then(set, Block([CmpRR(R8, Rcx)])), Jcc(E, done));
+    let tested = then(then(then(counted, LoadByte(ByteLoad(Rdx, Rsi))), Block([TestRR(Rdx, Rdx)])), Jcc(E, done));
+    let moved = then(tested, StoreByte(ByteStore(Rdi, Rdx)));
+    then(then(moved, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
+}
+
+// AT_FDCWD, minus 100 as a word (`at_fdcwd`, linux_x86_64_io).
+fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
+
+// openat(AT_FDCWD, scratch, O_RDONLY) of the path, its first min(len,
+// capacity) bytes up to its NUL copied to the scratch range and a NUL put
+// after them (RDI is past them); the result put in its word's home.
+fn Prog::opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
+    let clamped = then(p.known_to(layout, known, len, Rcx), Block([MovRI(R9, BitVec::ofNat(capacity))])).clamp(Rcx, R9, Succ(names));
+    let copied = clamped.path_copy(layout, path, Succ(Succ(names)), Succ(Succ(Succ(names)))).label(Succ(Succ(Succ(names))));
+    let ended = then(then(copied, Block([MovRI(Rdx, BitVec::ofNat(0))])), StoreByte(ByteStore(Rdi, Rdx)));
+    let asking: List<Instruction> = [MovRI(Rax, BitVec::ofNat(257)), MovRI(Rdi, fdcwd_word()), MovRI(Rsi, layout.scratch_at()), MovRI(Rdx, BitVec::ofNat(0))];
+    Compiled(then(then(ended, Block(asking)), Syscall).word_from(layout, out, result, Rax), Succ(Succ(Succ(names))))
+}
+
+fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
+    match shape {
+        Reads(fd, buf, len, result) => match layout.words_fit([fd, len, result]) {
+            False => None,
+            True => match layout.capacities.nth(buf) {
+                None => None,
+                Some(capacity) => Some(p.reads(layout, known, out, fd, buf, len, result, capacity, names)),
+            },
+        },
+        Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
+            False => None,
+            True => match layout.capacities.nth(buf) {
+                None => None,
+                Some(capacity) => Some(p.writes(layout, known, out, fd, buf, from, len, result, capacity, names)),
+            },
+        },
+        Opens(path, len, result) => match layout.words_fit([len, result]) {
+            False => None,
+            True => match layout.capacities.nth(path) {
+                None => None,
+                Some(capacity) => Some(p.opens(layout, known, out, path, len, result, capacity, names)),
+            },
+        },
+        Closes(fd, result) => match layout.words_fit([fd, result]) {
+            False => None,
+            True => Some(Compiled(p.closes(layout, known, out, fd, result), names)),
+        },
+        StatsPath(_, _, _, _) => None,
+        StatsFd(_, _, _) => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The command line
+
+// RSP as the process starts, saved to the slot past the scratch range: the
+// command line is above it (`ArgvAt`), and no statement keeps a register.
+// It is `main`'s frame too, saved to the frame slot, and `depth` calls are
+// room left (docs/native-procedures-design.md §4.1).
+fn Prog::saves_rsp(self p: Prog, layout: Layout, depth: Nat) → Prog {
+    let saved = then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Store(WordStore(Rbx, Rsp)));
+    let framed = then(then(saved, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
+    then(then(framed, Block([MovRI(Rbx, layout.room_at()), MovRI(Rax, BitVec::ofNat(depth))])), Store(WordStore(Rbx, Rax)))
+}
+
+// RDX the saved RSP, R9 argc, RCX the index; past argc a JAE to `past`.
+fn Prog::arg_count(self p: Prog, layout: Layout, index, past: Nat) → Prog {
+    let loaded = then(then(then(p, Block([MovRI(Rbx, layout.stack_at())])), Load(WordLoad(Rdx, Rbx))), Load(WordLoad(R9, Rdx)));
+    then(then(loaded.word_to(layout, index, Rcx), Block([CmpRR(Rcx, R9)])), Jcc(AE, past))
+}
+
+// RSI argv[index], read at RSP + 8 (index + 1); R8 the count from zero, R9
+// the capacity, RDI the buffer.
+fn Prog::arg_pointer(self p: Prog, layout: Layout, buf, cap, head: Nat) → Prog {
+    let slot = then(p, Block([MovRR(Rbx, Rcx), AddRR(Rbx, Rbx), AddRR(Rbx, Rbx), AddRR(Rbx, Rbx), AddRR(Rbx, Rdx), AddRI8(Rbx, BitVec::ofNat(8))]));
+    then(then(slot, Load(WordLoad(Rsi, Rbx))), Block([MovRI(R8, BitVec::ofNat(0)), MovRI(R9, BitVec::ofNat(cap)), MovRI(Rdi, layout.buffer_at(buf))])).label(head)
+}
+
+// The string's bytes up to its NUL: RDX each, stored at RDI while R8 is
+// below the capacity, RSI, RDI and R8 stepped, a JMP back to `head`.
+fn Prog::arg_copy(self p: Prog, head, done, skip: Nat) → Prog {
+    let tested = then(then(then(p, LoadByte(ByteLoad(Rdx, Rsi))), Block([TestRR(Rdx, Rdx)])), Jcc(E, done));
+    let stored = then(then(then(tested, Block([CmpRR(R8, R9)])), Jcc(AE, skip)), StoreByte(ByteStore(Rdi, Rdx))).label(skip);
+    then(then(stored, Block([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))])), Jmp(head))
+}
+
+// Argument `index` copied into buffer `buf`, its length or minus one into
+// word `len`: the count tested, the string copied, then the length (R8, or
+// minus one from `past`) stored at `out`.
+fn Prog::args(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, cap, names: Nat) → Compiled {
+    let head = Succ(names);
+    let skip = Succ(head);
+    let done = Succ(skip);
+    let past = Succ(done);
+    let after = Succ(past);
+    let copied = p.arg_count(layout, index, past).arg_pointer(layout, buf, cap, head).arg_copy(head, done, skip);
+    let found = then(then(copied.label(done), Block([MovRR(Rax, R8)])), Jmp(after));
+    let missing = then(found.label(past), Block([MovRI(Rax, missing_word())])).label(after);
+    Compiled(missing.word_from(layout, out, len, Rax), after)
+}
+
+fn Prog::arg(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, names: Nat) → Option<Compiled> {
+    match layout.words_fit([index, len]) {
+        False => None,
+        True => match layout.capacities.nth(buf) {
+            None => None,
+            Some(cap) => Some(p.args(layout, out, index, buf, len, cap, names)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A byte node
+
+// RAX the byte at the word `index` of buffer `buf`, zero-extended, or zero
+// where the index is not below the capacity `cap`: RCX the index, RDX the
+// capacity, RBX the byte's address.
+fn Prog::byte_to(self p: Prog, layout: Layout, buf, index, cap, skip: Nat) → Prog {
+    let tested = then(then(p.word_to(layout, index, Rcx), Block([MovRI(Rdx, BitVec::ofNat(cap)), MovRI(Rax, BitVec::ofNat(0)), CmpRR(Rcx, Rdx)])),
+        Jcc(AE, skip));
+    then(then(tested, Block([MovRI(Rbx, layout.buffer_at(buf)), AddRR(Rbx, Rcx)])), LoadByte(ByteLoad(Rax, Rbx))).label(skip)
+}
+
+// The word `value`'s low byte stored at the word `index` of buffer `buf`,
+// where the index is below the capacity `cap`.
+fn Prog::byte_from(self p: Prog, layout: Layout, buf, index, value, cap, skip: Nat) → Prog {
+    let tested = then(then(p.word_to(layout, index, Rcx), Block([MovRI(Rdx, BitVec::ofNat(cap)), CmpRR(Rcx, Rdx)])), Jcc(AE, skip));
+    then(then(tested.word_to(layout, value, Rax), Block([MovRI(Rbx, layout.buffer_at(buf)), AddRR(Rbx, Rcx)])), StoreByte(ByteStore(Rbx, Rax))).label(skip)
+}
+
+fn Prog::loads(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, cap, names: Nat) → Prog {
+    p.byte_to(layout, buf, index, cap, Succ(names)).word_from(layout, out, output, Rax)
+}
+
+fn Prog::stores(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, value, cap, names: Nat) → Prog {
+    p.byte_from(layout, buf, index, value, cap, Succ(names)).loads(layout, out, output, buf, index, cap, Succ(names))
+}
+
+fn Prog::byte_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, names: Nat) → Option<Compiled> {
+    match node {
+        BufferLoad(output, buf, index) => match layout.words_fit([output, index]) {
+            False => None,
+            True => match layout.capacities.nth(buf) {
+                None => None,
+                Some(cap) => Some(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names))),
+            },
+        },
+        BufferStore(output, buf, index, value) => match layout.words_fit([output, index, value]) {
+            False => None,
+            True => match layout.capacities.nth(buf) {
+                None => None,
+                Some(cap) => Some(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names)))),
+            },
+        },
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A leaf a node at a time
+
+// A leaf S4 does not take compiles a node at a time, memory-resident: each
+// node loads its operands from their slots, computes, and stores its result
+// to its slot before the next node runs. So no register is held across
+// nodes, a leaf may be as long as it likes, byte nodes mix with the rest,
+// and a node may read what an earlier one wrote, or its own output
+// (`Add(64, x, x, y)`). That is the leaf's meaning only when a word read
+// back from its slot is the word the region would have read: the slot keeps
+// a result at its port's width, the region keeps it at every width. So every
+// node works at width 64 (`Node::wide`; a comparison still writes a bit,
+// which reads back at 64 as the region reads it).
+
+// The node with its result written to `output` instead.
+fn Node::renamed(self node: Node, output: Nat) → Node {
+    match node {
+        Const(width, _, value) => Const(width, output, value),
+        Move(width, _, source) => Move(width, output, source),
+        Add(width, _, left, right) => Add(width, output, left, right),
+        Sub(width, _, left, right) => Sub(width, output, left, right),
+        BitAnd(width, _, left, right) => BitAnd(width, output, left, right),
+        BitOr(width, _, left, right) => BitOr(width, output, left, right),
+        BitXor(width, _, left, right) => BitXor(width, output, left, right),
+        ShiftLeft(width, _, value, amount) => ShiftLeft(width, output, value, amount),
+        LogicalShiftRight(width, _, value, amount) => LogicalShiftRight(width, output, value, amount),
+        ArithmeticShiftRight(width, _, value, amount) => ArithmeticShiftRight(width, output, value, amount),
+        UnsignedLessThan(width, _, left, right) => UnsignedLessThan(width, output, left, right),
+        SignedLessThan(width, _, left, right) => SignedLessThan(width, output, left, right),
+        Equal(width, _, left, right) => Equal(width, output, left, right),
+        BufferLoad(_, buffer, index) => BufferLoad(output, buffer, index),
+        BufferStore(_, buffer, index, value) => BufferStore(output, buffer, index, value),
+    }
+}
+
+// An id the node does not read: past their sum.
+fn Node::spare(self node: Node) → Nat { Succ(List::total(function_ir_eval::Node::reads(node))) }
+
+// A node other than a byte node, alone through S4: a region of that one
+// node with its result renamed to an id it does not read, so the region
+// reads every operand as it was, the node's own output too, and the result
+// stored to the node's slot.
+fn Prog::node_alone(self p: Prog, layout: Layout, out: List<Nat>, node: Node) → Option<Prog> {
+    p.leaf_into(layout, out, [node.renamed(node.spare())], [node_output(node).id])
+}
+
+// A node, `out` live after it.
+fn Prog::one_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, names: Nat) → Option<Compiled> {
+    match node.pure() {
+        True => match p.node_alone(layout, out, node) { None => None, Some(q) => Some(Compiled(q, names)) },
+        False => p.byte_node(layout, out, node, names),
+    }
+}
+
+// Each node, with what is live after it (`nodes_live_in` of the rest).
+fn Prog::each_node(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, names: Nat) → Option<Compiled> {
+    match nodes {
+        Nil => Some(Compiled(p, names)),
+        Cons(node, rest) => match p.one_node(layout, nodes_live_in(rest, out), node, names) {
+            None => None,
+            Some(c) => c.prog.each_node(layout, out, rest, c.names),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A leaf
+
+// All pure, through S4 whole.
+fn Prog::pure_leaf(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>) → Option<Prog> {
+    match nodes_pure(nodes) { True => p.leaf(layout, out, nodes), False => None }
+}
+
+// A dataflow leaf: through S4 whole where it takes it, its values held in
+// registers; otherwise a node at a time, if every node is wide.
+fn Prog::computes(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, names: Nat) → Option<Compiled> {
+    match p.pure_leaf(layout, out, nodes) {
+        Some(q) => Some(Compiled(q, names)),
+        None => match nodes_wide(nodes) { True => p.each_node(layout, out, nodes, names), False => None },
+    }
+}
+
+// A statement's leaf, through the FunctionIR pass first (function_ir_pass:
+// constants folded, dead nodes dropped, given what is live after the leaf),
+// where what the pass leaves passes the checks the leaf did and needs no
+// word the leaf did not (native_compile_pass); otherwise, or where it does
+// not compile, the leaf as it is.
+fn Prog::computes_best(self p: Prog, layout: Layout, out: List<Nat>, nodes: List<Node>, names: Nat) → Option<Compiled> {
+    let better = nodes.optimised(out);
+    match (layout.homes.nodes_apart(better, out) && layout.homes.all_apart(nodes_writes(better), out))
+        && nodes_live_in(better, out).within(nodes_live_in(nodes, out)) {
+        False => p.computes(layout, out, nodes, names),
+        True => match p.computes(layout, out, better, names) { None => p.computes(layout, out, nodes, names), Some(c) => Some(c) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Initial bytes
+
+// Byte `c` stored at index `i` of buffer `buf`.
+fn Prog::byte_init(self p: Prog, layout: Layout, buf, i: Nat, c: BitVec(8)) → Prog {
+    then(then(p, Block([MovRI(Rbx, layout.byte_at(buf, i)), MovRI(Rax, byte_word(c))])), StoreByte(ByteStore(Rbx, Rax)))
+}
+
+// The bytes stored from index `i` of buffer `buf`, while there is room.
+fn Prog::bytes_init(self p: Prog, layout: Layout, bytes: List<BitVec(8)>, room, buf, i: Nat) → Prog {
+    match bytes {
+        Nil => p,
+        Cons(c, rest) => match room { Zero => p, Succ(r) => p.byte_init(layout, buf, i, c).bytes_init(layout, rest, r, buf, Succ(i)) },
+    }
+}
+
+fn Prog::inits(self p: Prog, layout: Layout, buffers: List<Buffer>, buf: Nat) → Prog {
+    match buffers {
+        Nil => p,
+        Cons(b, rest) => p.bytes_init(layout, b.initial, b.capacity, buf, 0).inits(layout, rest, Succ(buf)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statements
+
+// exit(status).
+fn Prog::exits(self p: Prog, layout: Layout, known: List<Fact>, status: Nat) → Prog {
+    then(then(p.known_to(layout, known, status, Rdi), Block([MovRI(Rax, BitVec::ofNat(60))])), Syscall)
+}
+
+// The bit in RAX, tested; a JE to `else_name`.
+fn Prog::tests(self p: Prog, layout: Layout, condition: Nat, else_name: Nat) → Prog {
+    p.bit_to(layout, condition, Rax).branch_label(Rax, else_name)
+}
+
+// ---------------------------------------------------------------------------
+// Calls (docs/native-procedures-design.md §4)
+
+// The argument and result registers, in order.
+fn call_registers() → List<Gpr> { [Rdi, Rsi, Rdx, Rcx, R8, R9] }
+
+// Procedure `index`'s label, and the shared exit of a call too deep: the
+// labels below `main`'s own (§4.2).
+fn Layout::procedure_label(self layout: Layout, index: Nat) → Nat { Succ(index) }
+fn Layout::deep_label(self layout: Layout) → Nat { Succ(layout.procedures.len()) }
+
+// RSP down a word, through RBX, and up one.
+fn rsp_down() → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8)), SubRR(Rsp, Rbx)] }
+fn rsp_up() → Instruction { AddRI8(Rsp, BitVec::ofNat(8)) }
+
+// Each word into its register, in order.
+fn Prog::words_to(self p: Prog, layout: Layout, ids: List<Nat>, registers: List<Gpr>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => match registers { Nil => p, Cons(register, more) => p.word_to(layout, id, register).words_to(layout, rest, more) },
+    }
+}
+
+// Each register into its word's home, `out` live after them all: each word
+// with `out` but the words still to come live after it.
+fn Prog::words_from(self p: Prog, layout: Layout, out: List<Nat>, ids: List<Nat>, registers: List<Gpr>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => match registers {
+            Nil => p,
+            Cons(register, more) => p.word_from(layout, out.minus(rest), id, register).words_from(layout, out, rest, more),
+        },
+    }
+}
+
+// `register` put in the word's home, whether or not it is live.
+fn Prog::word_home(self p: Prog, layout: Layout, id: Nat, register: Gpr) → Prog {
+    match layout.homes.home(id) {
+        InSlot => p.word_store(layout, id, register),
+        InReg(k) => then(p, Block([MovRR(home_register(k), register)])),
+    }
+}
+
+// Each word pushed from its home, through RAX…
+fn Prog::pushes(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => then(then(p.word_to(layout, id, Rax), Block(rsp_down())), Spill(StackStore(Rax, BitVec::ofNat(0)))).pushes(layout, rest),
+    }
+}
+
+// …and each popped back into its home, the last pushed first.
+fn Prog::pops(self p: Prog, layout: Layout, ids: List<Nat>) → Prog {
+    match ids {
+        Nil => p,
+        Cons(id, rest) => then(then(p, Reload(StackLoad(Rax, BitVec::ofNat(0)))), Block([rsp_up()])).word_home(layout, id, Rax).pops(layout, rest),
+    }
+}
+
+// A call's way in: no room left, the shared exit; otherwise one less room
+// and RSP the frame…
+fn Prog::call_enters(self p: Prog, layout: Layout) → Prog {
+    let room = then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))).branch_label(Rax, layout.deep_label());
+    let less = then(then(room, Block([MovRI(Rbx, BitVec::ofNat(1)), SubRR(Rax, Rbx), MovRI(Rbx, layout.room_at())])), Store(WordStore(Rbx, Rax)));
+    then(then(less, Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx)))
+}
+
+// …and out: the frame and the room as they were.
+fn Prog::call_leaves(self p: Prog, layout: Layout) → Prog {
+    let back = then(then(p, Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)));
+    then(then(then(then(back, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(Rax, Rbx))), Block([AddRI8(Rax, BitVec::ofNat(1))])),
+        Store(WordStore(Rbx, Rax)))
+}
+
+// A call of procedure `index`, `out` live after it: in, the words needed
+// after it pushed, the arguments in their registers, the CALL; then the
+// saved words popped, out, and the results put in their homes.
+fn Prog::performs(self p: Prog, layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) → Prog {
+    let saved = out.minus(results);
+    let passed = p.call_enters(layout).pushes(layout, saved).words_to(layout, args, call_registers());
+    then(passed, CallTo(layout.procedure_label(index))).pops(layout, saved.rev()).call_leaves(layout).words_from(layout, out, results, call_registers())
+}
+
+fn Nat::same_as(self n: Nat, m: Nat) → Bool { n.leb(m) && m.leb(n) }
+
+// Each word apart from what is live after it in `words_from`.
+fn Homes::moves_apart(self homes: Homes, out, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(id, rest) => homes.apart(id, out.minus(rest)) && homes.moves_apart(out, rest) }
+}
+
+// What a call needs to be emitted: its procedure, as many arguments and
+// results as it takes, at most six of each, and every word it names and
+// saves in the file, at most a word per word of the file saved.
+fn Layout::call_fits(self layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>) → Bool {
+    match layout.procedures.nth(index) {
+        None => False,
+        Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
+            (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
+            (out.minus(results).len().leb(layout.words) && layout.homes.moves_apart(out, results)))))),
+    }
+}
+
+// A structured region (native_structured), `out` live after it: a leaf
+// as `computes`; a sequence's leaf then the rest, a composition's parts in
+// order, each with what the rest needs live after it; a conditional as a
+// `Branch`; a loop as a counted loop of leaves. A loop's labels: its head,
+// where its body starts, where it counts down, and its end. At the head a
+// leaf puts in `exhausted` whether the count is out, and the loop leaves
+// when it is; the body runs; the parameters are moved from `next`; the exit
+// bit tested, the loop leaves with `exhausted` clear when it is set, and
+// otherwise puts one in `exhausted`, takes it from the count and goes back
+// to the head. At the end the outputs are moved from the parameters.
+fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout, out: List<Nat>, names: Nat) → Option<Compiled> {
+    let homes = layout.homes;
+    match region {
+        Dataflow(body) => p.computes(layout, out, body.nodes, names),
+        Sequence(prefix, continuation) => p.computes(layout, homes.region_live(continuation, out), prefix.nodes, names).and_then(λ a =>
+            continuation.code(a.prog, layout, out, a.names)),
+        Compose(prefix, continuation) => prefix.code(p, layout, homes.region_live(continuation, out), names).and_then(λ a =>
+            continuation.code(a.prog, layout, out, a.names)),
+        Conditional(_, condition, _, _, when_true, when_false) => layout.word_fits(condition).guard(
+            when_true.code(p.tests(layout, condition, Succ(names)), layout, out, Succ(Succ(names))).and_then(λ y =>
+            when_false.code(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, y.names).and_then(λ n =>
+            Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names))))),
+        Call(_, _, _) => None,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
+            let head = Succ(names);
+            let enter = Succ(head);
+            let again = Succ(enter);
+            let leave = Succ(again);
+            let set = homes.loop_set(count);
+            let done = nodes_live_in(moves(outputs, parameters), out);
+            let stop = nodes_live_in(loop_stop(exhausted), done);
+            let down = nodes_live_in(loop_down(count, exhausted), set);
+            let after = nodes_live_in(moves(parameters, next), Cons(exit, stop.union(down)));
+            (layout.words_fit([exhausted, exit]) && loop_keeps(out, outputs, exhausted, Cons(count, parameters ++ body.touches()))).guard(
+                p.computes(layout, set, loop_entry(bound, count, inputs, parameters), leave).and_then(λ e =>
+                e.prog.label(head).computes(layout, Cons(exhausted, homes.region_live(body, after).union(done)), loop_zero(count, exhausted), e.names).and_then(λ z =>
+                body.code(z.prog.tests(layout, exhausted, enter).else_label(enter, leave), layout, after, z.names).and_then(λ b =>
+                b.prog.computes(layout, Cons(exit, stop.union(down)), moves(parameters, next), b.names).and_then(λ m =>
+                m.prog.tests(layout, exit, again).computes(layout, done, loop_stop(exhausted), m.names).and_then(λ x =>
+                x.prog.else_label(again, leave).computes(layout, set, loop_down(count, exhausted), x.names).and_then(λ d =>
+                then(d.prog, Jmp(head)).label(leave).computes(layout, out, moves(outputs, parameters), d.names))))))))
+        },
+    }
+}
+
+// A statement that reads known words as immediates: a call, or an exit.
+fn Stmt::takes_known(self s: Stmt) → Bool {
+    match s { Invoke(_) => True, Exit(_) => True, Compute(_) => False, Then(_, _) => False, Branch(_, _, _) => False, Repeat(_, _) => False, Arg(_, _, _) => False, Perform(_, _, _) => False }
+}
+
+// …or one that starts with one.
+fn Stmt::reads_known(self s: Stmt) → Bool {
+    match s { Then(first, _) => first.takes_known(), Invoke(_) => True, Exit(_) => True, Compute(_) => False, Branch(_, _, _) => False, Repeat(_, _) => False, Arg(_, _, _) => False, Perform(_, _, _) => False }
+}
+
+// Live before the statement, given what is live after it, where the words
+// `known` holds are known as it starts: a call or an exit at its start needs
+// none of them live.
+fn Stmt::live_head(self s: Stmt, homes: Homes, known: List<Fact>, out: List<Nat>) → List<Nat> {
+    match s {
+        Invoke(shape) => live_before(known.unknown(shape.reads()), shape.result(), out),
+        Exit(status) => known.unknown([status]),
+        Then(first, rest) => match first.takes_known() {
+            True => first.live_head(homes, known, rest.live_in(homes, out)),
+            False => Then(first, rest).live_in(homes, out),
+        },
+        Compute(region) => Compute(region).live_in(homes, out),
+        Branch(c, y, n) => Branch(c, y, n).live_in(homes, out),
+        Repeat(b, a) => Repeat(b, a).live_in(homes, out),
+        Arg(i, b, l) => Arg(i, b, l).live_in(homes, out),
+        Perform(f, a, r) => Perform(f, a, r).live_in(homes, out),
+    }
+}
+
+// …and where nothing is known, as `live_in` says.
+fn Stmt::live_with(self s: Stmt, homes: Homes, known: List<Fact>, out: List<Nat>) → List<Nat> {
+    match known { Nil => s.live_in(homes, out), Cons(_, _) => s.live_head(homes, known, out) }
+}
+
+// What a leaf leaves known for the statement after it (`rest`), where that
+// reads known words, and the leaf compiled with only what that then needs
+// live after it passes the checks the leaf did and needs no word it did not.
+fn Stmt::pair_known(self first: Stmt, rest: Stmt, homes: Homes, out: List<Nat>) → List<Fact> {
+    match first {
+        Compute(region) => match region {
+            Dataflow(body) => match rest.reads_known() {
+                False => Nil,
+                True => {
+                    let known = body.nodes.leaves_known();
+                    let before = rest.live_with(homes, known, out);
+                    match (homes.nodes_apart(body.nodes, before) && homes.all_apart(nodes_writes(body.nodes), before))
+                        && nodes_live_in(body.nodes, before).within(nodes_live_in(body.nodes, rest.live_in(homes, out))) {
+                        False => Nil,
+                        True => known,
+                    }
+                },
+            },
+            Sequence(_, _) => Nil,
+            Compose(_, _) => Nil,
+            Conditional(_, _, _, _, _, _) => Nil,
+            Call(_, _, _) => Nil,
+            Loop(_, _, _, _, _, _, _, _, _) => Nil,
+        },
+        Invoke(_) => Nil,
+        Then(_, _) => Nil,
+        Branch(_, _, _) => Nil,
+        Repeat(_, _) => Nil,
+        Exit(_) => Nil,
+        Arg(_, _, _) => Nil,
+        Perform(_, _, _) => Nil,
+    }
+}
+
+// In a `Then`: what the first part knows as it starts (what the sequence
+// does, where it reads known words), and what it leaves known for the rest.
+fn Stmt::first_known(self first: Stmt, known: List<Fact>) → List<Fact> { match first.takes_known() { True => known, False => Nil } }
+fn Stmt::carried(self first: Stmt, rest: Stmt, homes: Homes, out: List<Nat>) → List<Fact> {
+    match first.takes_known() { True => Nil, False => first.pair_known(rest, homes, out) }
+}
+
+// The statement, `out` live after it, the words `known` holds known as it
+// starts.
+fn Stmt::emits(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, known: List<Fact>, names: Nat) → Option<Compiled> {
+    match s {
+        Compute(region) => match region {
+            Dataflow(body) => p.computes_best(layout, out, body.nodes, names),
+            _ => match region.scopes() { False => None, True => region.code(p, layout, out, names) },
+        },
+        Invoke(shape) => p.call(layout, known, out, shape, names),
+        Then(first, rest) => {
+            let carried = first.carried(rest, layout.homes, out);
+            match first.emits(p, layout, rest.live_with(layout.homes, carried, out), first.first_known(known), names) {
+                None => None,
+                Some(c) => rest.emits(c.prog, layout, out, carried, c.names),
+            }
+        },
+        Branch(condition, yes, no) => match layout.word_fits(condition) {
+            False => None,
+            True => match yes.emits(p.tests(layout, condition, Succ(names)), layout, out, Nil, Succ(Succ(names))) {
+                None => None,
+                Some(y) => match no.emits(y.prog.else_label(Succ(names), Succ(Succ(names))), layout, out, Nil, y.names) {
+                    None => None,
+                    Some(n) => Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names)),
+                },
+            },
+        },
+        Repeat(body, again) => match layout.word_fits(again) {
+            False => None,
+            True => match body.emits(p.label(Succ(names)), layout, Repeat(body, again).loop_out(layout.homes, out), Nil, Succ(Succ(names))) {
+                None => None,
+                Some(b) => Some(Compiled(then(b.prog.tests(layout, again, Succ(Succ(names))), Jmp(Succ(names))).label(Succ(Succ(names))), b.names)),
+            },
+        },
+        Exit(status) => match layout.word_fits(status) {
+            False => None,
+            True => Some(Compiled(p.exits(layout, known, status), names)),
+        },
+        Arg(index, buf, len) => p.arg(layout, out, index, buf, len, names),
+        Perform(index, args, results) => layout.call_fits(out, index, args, results).guard(Some(Compiled(p.performs(layout, out, index, args, results), names))),
+    }
+}
+
+// The statement, `out` live after it, nothing known.
+fn Stmt::emit(self s: Stmt, p: Prog, layout: Layout, out: List<Nat>, names: Nat) → Option<Compiled> { s.emits(p, layout, out, Nil, names) }
+
+// The program: the initial bytes, `main`, then exit 0, checked for its
+// homes and its layout.
+fn Source::layout(self src: Source, low: BitVec(64), homes: Homes) → Layout { Layout::of(low, src.words, src.capacities(), homes).with_procedures(src.procedures) }
+
+fn Source::entry(self src: Source, low: BitVec(64), homes: Homes) → Prog {
+    Start.saves_rsp(src.layout(low, homes), src.depth).inits(src.layout(low, homes), src.buffers, 0)
+}
+
+fn Prog::finish(self p: Prog) → Option<Prog> {
+    let whole = then(then(p, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
+    match whole.laid_out() { False => None, True => Some(whole) }
+}
+
+// Procedure `index` (docs/native-procedures-design.md §4.2), checked
+// first (§4.3): its body's homes with its results live after it, its body
+// reading only its parameters, each parameter apart from what is live after
+// it, and every word it names in the file. At its label RSP, at the return
+// address, is its frame; the arguments go to its parameters' homes, the
+// body runs, the results go to their registers, RSP is its frame again,
+// and it returns.
+fn Procedure::fits(self proc: Procedure, layout: Layout) → Bool {
+    let entry = proc.body.live_in(layout.homes, proc.results);
+    match proc.body.checked(layout.homes, proc.results) {
+        None => False,
+        Some(_) => entry.within(proc.params) && (layout.homes.moves_apart(entry, proc.params) &&
+            (layout.words_fit(proc.params ++ proc.results) && (proc.params.len().leb(6) && proc.results.len().leb(6)))),
+    }
+}
+
+// Its way in: the label, the frame stored, the arguments into the
+// parameters' homes…
+fn Procedure::entry_code(self proc: Procedure, p: Prog, layout: Layout, index: Nat) → Prog {
+    then(then(p.label(layout.procedure_label(index)), Block([MovRI(Rbx, layout.frame_at())])), Store(WordStore(Rbx, Rsp)))
+        .words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers())
+}
+
+// …and out, after its body: the results into their registers, RSP the
+// frame, and RET.
+fn Procedure::exit_code(self proc: Procedure, p: Prog, layout: Layout) → Prog {
+    then(then(then(p.words_to(layout, proc.results, call_registers()), Block([MovRI(Rbx, layout.frame_at())])), Load(WordLoad(Rsp, Rbx))), Ret)
+}
+
+fn Procedure::code(self proc: Procedure, p: Prog, layout: Layout, index, names: Nat) → Option<Compiled> {
+    match proc.fits(layout) {
+        False => None,
+        True => match proc.body.emit(proc.entry_code(p, layout, index), layout, proc.results, names) {
+            None => None,
+            Some(b) => Some(Compiled(proc.exit_code(b.prog, layout), b.names)),
+        },
+    }
+}
+
+// The procedures from `index` on, each after the last.
+fn List::procedures_code(self procs: List<Procedure>, p: Prog, layout: Layout, index, names: Nat) → Option<Compiled> {
+    match procs {
+        Nil => Some(Compiled(p, names)),
+        Cons(proc, rest) => match proc.code(p, layout, index, names) { None => None, Some(c) => rest.procedures_code(c.prog, layout, Succ(index), c.names) },
+    }
+}
+
+// The exit of a call past the depth.
+fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
+    then(then(p.label(layout.deep_label()), Block([MovRI(Rdi, call_depth_status()), MovRI(Rax, BitVec::ofNat(60))])), Syscall)
+}
+
+// A source with procedures: `main` naming its labels past theirs and the
+// shared exit's, then exit 0, each procedure, and the shared exit.
+fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
+    let layout = src.layout(low, homes);
+    match src.main.emit(src.entry(low, homes), layout, [], layout.deep_label()) {
+        None => None,
+        Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
+                layout, 0, c.names) {
+            None => None,
+            Some(d) => {
+                let whole = d.prog.deep_exit(layout);
+                match whole.laid_out() { False => None, True => Some(whole) }
+            },
+        },
+    }
+}
+
+fn Source::compile(self src: Source, low: BitVec(64), homes: Homes) → Option<Prog> {
+    match src.allocation_ok(homes) {
+        False => None,
+        True => match src.procedures {
+            Nil => match src.main.emit(src.entry(low, homes), src.layout(low, homes), [], 0) { None => None, Some(c) => c.prog.finish() },
+            Cons(_, _) => src.compile_calls(low, homes),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Why a source is refused
+
+// What `write-elf` says when `Source::compile` is `None`: the first statement
+// the compile refuses, in source order, and why. Nothing proves it agrees
+// with the compile, so it is only a message; at a statement it asks the
+// compile's own pieces (`Prog::leaf`, `Prog::call`, `Layout::word_fits`) and names
+// the reason only when they refuse.
+//
+// A refusal is `[at, kind, reason, first, second]`: `at` numbers every
+// statement but `Then` from 1, in source order (a `Branch` or `Repeat`
+// before its arms); `kind` is 0 a computation, 1 a call, 2 a branch, 3 a
+// loop, 4 an exit, 5 the program as a whole, 6 an argument, 7 a call of a
+// procedure; the reasons, with what
+// `first` and `second` hold:
+//
+//   0  a structured region the compiler does not take
+//      (native_structured: a node not at width 64 or reading a word not
+//      written before it, a branch on a bit that may not be its word's low
+//      bit, a loop not in counted form, or a call): its kind (1 Sequence,
+//      2 Compose, 3 Conditional, 4 Call, 5 Loop)
+//   1  a leaf needs more registers than the pool holds (needed, the pool:
+//      the registers no word lives in)
+//   2  a leaf's nodes are not in evaluation order
+//   3  a leaf writes one of its own inputs
+//   4  a word past the slots (the word, the slots)
+//   5  an input neither a word nor a bit (its width)
+//   6  S4's lowering refused the leaf
+//   7  a call the compiler does not make (4 stat of a path, 5 stat of a
+//      descriptor)
+//   8  a buffer the source does not have (the buffer, how many it has)
+//   9  the program's labels did not lay out
+//  12  the words' homes fail the allocation's check (`Source::allocation_ok`)
+//  10  a leaf S4 does not take whole, with a node not at width 64 (its
+//      position in the leaf, from 1)
+//  11  S4's lowering refused a node alone (its position in the leaf)
+//  13  a loop whose words live after it are ones it moves or counts with,
+//      or whose leaves do not compile
+//  14  a call that does not fit (`Layout::call_fits`: no such procedure,
+//      other counts of arguments or results than it takes, more than six,
+//      a word past the slots, more saved words than slots, or a result
+//      not apart from what is live after it) (the procedure)
+//  15  a procedure that does not compile (`Procedure::code`) (its index)
+//
+// Reasons 1, 2, 3 and 6 come only from an all-pure leaf with a node not at
+// width 64: one with every node wide compiles a node at a time.
+//
+// `Nil` when the compile succeeds.
+inductive CompileScan { Passed(next: Nat), Refused(why: List<Nat>) }
+
+fn CompileScan::of(at, kind: Nat, why: List<Nat>) → CompileScan {
+    match why { Nil => Passed(Succ(at)), Cons(reason, details) => Refused(Cons(at, Cons(kind, Cons(reason, details)))) }
+}
+
+// The first id at or past the slots.
+fn ids_refusal(layout: Layout, ids: List<Nat>) → List<Nat> {
+    match ids {
+        Nil => [],
+        Cons(id, rest) => match layout.word_fits(id) { False => [4, id, layout.words], True => ids_refusal(layout, rest) },
+    }
+}
+
+// The first input at or past the slots, or neither a word nor a bit.
+fn inputs_refusal(layout: Layout, ports: List<Port>) → List<Nat> {
+    match ports {
+        Nil => [],
+        Cons(port, rest) => match layout.word_fits(port.id) {
+            False => [4, port.id, layout.words],
+            True => match Kind::of_width(port.width) { None => [5, port.width, 0], Some(_) => inputs_refusal(layout, rest) },
+        },
+    }
+}
+
+fn outputs_refusal(layout: Layout, ports: List<Port>) → List<Nat> {
+    match ports {
+        Nil => [],
+        Cons(port, rest) => match layout.word_fits(port.id) { False => [4, port.id, layout.words], True => outputs_refusal(layout, rest) },
+    }
+}
+
+fn leaf_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
+    let needed = nodes_inputs(nodes).len() + nodes.len();
+    match Start.leaf(layout, [], nodes) {
+        Some(_) => [],
+        None => match needed.leb(layout.leaf_pool().len()) {
+            False => [1, needed, layout.leaf_pool().len()],
+            True => match nodes_evaluable(nodes) {
+                False => [2, 0, 0],
+                True => match ports_absent(nodes_inputs(nodes), nodes_writes(nodes)) {
+                    False => [3, 0, 0],
+                    True => match inputs_refusal(layout, nodes_inputs(nodes)) {
+                        Cons(reason, details) => Cons(reason, details),
+                        Nil => match outputs_refusal(layout, nodes_write_ports(nodes)) {
+                            Cons(reason, details) => Cons(reason, details),
+                            Nil => [6, 0, 0],
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn buffer_refusal(layout: Layout, ids: List<Nat>, buf: Nat) → List<Nat> {
+    match ids_refusal(layout, ids) {
+        Cons(reason, details) => Cons(reason, details),
+        Nil => match layout.capacities.nth(buf) { None => [8, buf, layout.capacities.len()], Some(_) => [] },
+    }
+}
+
+// The first node not at width 64, counted from `at`.
+fn narrow_refusal(nodes: List<Node>, at: Nat) → List<Nat> {
+    match nodes {
+        Nil => [],
+        Cons(node, rest) => match node.wide() { False => [10, at, 0], True => narrow_refusal(rest, Succ(at)) },
+    }
+}
+
+// Why a node does not compile alone (`Prog::one_node`), at position `at`.
+fn node_refusal(layout: Layout, node: Node, at: Nat) → List<Nat> {
+    match node {
+        BufferLoad(output, buf, index) => buffer_refusal(layout, [output, index], buf),
+        BufferStore(output, buf, index, value) => buffer_refusal(layout, [output, index, value], buf),
+        _ => match inputs_refusal(layout, node.read_ports()) {
+            Cons(reason, details) => Cons(reason, details),
+            Nil => match ids_refusal(layout, [node_output(node).id]) { Cons(reason, details) => Cons(reason, details), Nil => [11, at, 0] },
+        },
+    }
+}
+
+// The first node, counted from `at`, that does not compile alone.
+fn nodes_refusal(layout: Layout, nodes: List<Node>, at: Nat) → List<Nat> {
+    match nodes {
+        Nil => [],
+        Cons(node, rest) => match Start.one_node(layout, [], node, 0) {
+            Some(_) => nodes_refusal(layout, rest, Succ(at)),
+            None => node_refusal(layout, node, at),
+        },
+    }
+}
+
+// A leaf S4 does not take whole compiles a node at a time when every node
+// is wide; so a refused leaf names the node that stopped it, or, when it is
+// all pure and not all wide, why S4 did not take it whole.
+fn computes_refusal(layout: Layout, nodes: List<Node>) → List<Nat> {
+    match Start.computes(layout, [], nodes, 0) {
+        Some(_) => [],
+        None => match nodes_wide(nodes) {
+            True => nodes_refusal(layout, nodes, 1),
+            False => match nodes_pure(nodes) { True => leaf_refusal(layout, nodes), False => narrow_refusal(nodes, 1) },
+        },
+    }
+}
+
+fn StructuredRegion::kind(self region: StructuredRegion) → Nat {
+    match region {
+        Dataflow(_) => 0,
+        Sequence(_, _) => 1,
+        Compose(_, _) => 2,
+        Conditional(_, _, _, _, _, _) => 3,
+        Call(_, _, _) => 4,
+        Loop(_, _, _, _, _, _, _, _, _) => 5,
+    }
+}
+
+// A structured region the compiler does not take names its kind; one whose
+// parts do not compile, the first leaf that does not, else 13.
+// The first leaf of a region that does not compile alone.
+fn parts_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => computes_refusal(layout, body.nodes),
+        Sequence(prefix, continuation) => match computes_refusal(layout, prefix.nodes) {
+            Nil => parts_refusal(layout, continuation),
+            Cons(reason, details) => Cons(reason, details),
+        },
+        Compose(prefix, continuation) => match parts_refusal(layout, prefix) {
+            Nil => parts_refusal(layout, continuation),
+            Cons(reason, details) => Cons(reason, details),
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match ids_refusal(layout, [condition]) {
+            Nil => match parts_refusal(layout, when_true) {
+                Nil => parts_refusal(layout, when_false),
+                Cons(reason, details) => Cons(reason, details),
+            },
+            Cons(reason, details) => Cons(reason, details),
+        },
+        Call(_, _, _) => [0, 4, 0],
+        Loop(_, _, _, _, body, exit, _, _, exhausted) => match ids_refusal(layout, [exhausted, exit]) {
+            Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
+            Cons(reason, details) => Cons(reason, details),
+        },
+    }
+}
+
+fn region_refusal(layout: Layout, region: StructuredRegion, out: List<Nat>) → List<Nat> {
+    match region {
+        Dataflow(body) => computes_refusal(layout, body.nodes),
+        _ => match region.scopes() {
+            False => [0, region.kind(), 0],
+            True => match region.code(Start, layout, out, 0) { Some(_) => [], None => parts_refusal(layout, region) },
+        },
+    }
+}
+
+fn call_refusal(layout: Layout, shape: CallShape) → List<Nat> {
+    match shape {
+        Reads(fd, buf, len, result) => buffer_refusal(layout, [fd, len, result], buf),
+        Writes(fd, buf, from, len, result) => buffer_refusal(layout, [fd, from, len, result], buf),
+        Opens(path, len, result) => buffer_refusal(layout, [len, result], path),
+        Closes(fd, result) => ids_refusal(layout, [fd, result]),
+        StatsPath(_, _, _, _) => [7, 4, 0],
+        StatsFd(_, _, _) => [7, 5, 0],
+    }
+}
+
+// `out` is what is live after the statement, as `Stmt::emit` has it: a
+// region's code depends on it.
+fn Stmt::scan(self s: Stmt, layout: Layout, out: List<Nat>, at: Nat) → CompileScan {
+    match s {
+        Compute(region) => CompileScan::of(at, 0, region_refusal(layout, region, out)),
+        Invoke(shape) => CompileScan::of(at, 1, call_refusal(layout, shape)),
+        Then(first, rest) => match first.scan(layout, rest.live_in(layout.homes, out), at) {
+            Passed(next) => rest.scan(layout, out, next),
+            Refused(why) => Refused(why),
+        },
+        Branch(condition, yes, no) => match CompileScan::of(at, 2, ids_refusal(layout, [condition])) {
+            Passed(next) => match yes.scan(layout, out, next) { Passed(after) => no.scan(layout, out, after), Refused(why) => Refused(why) },
+            Refused(why) => Refused(why),
+        },
+        Repeat(body, again) => match CompileScan::of(at, 3, ids_refusal(layout, [again])) {
+            Passed(next) => body.scan(layout, Repeat(body, again).loop_out(layout.homes, out), next),
+            Refused(why) => Refused(why),
+        },
+        Exit(status) => CompileScan::of(at, 4, ids_refusal(layout, [status])),
+        Arg(index, buf, len) => CompileScan::of(at, 6, buffer_refusal(layout, [index, len], buf)),
+        Perform(procedure, args, results) => CompileScan::of(at, 7,
+            match layout.call_fits(out, procedure, args, results) { False => [14, procedure, 0], True => [] }),
+    }
+}
+
+// The first procedure from `index` on that does not compile alone.
+fn List::procedures_refusal(self procs: List<Procedure>, layout: Layout, index: Nat) → List<Nat> {
+    match procs {
+        Nil => [],
+        Cons(proc, rest) => match proc.code(Start, layout, index, 0) { None => [15, index, 0], Some(_) => rest.procedures_refusal(layout, Succ(index)) },
+    }
+}
+
+fn Source::refusal(self src: Source, low: BitVec(64), homes: Homes) → List<Nat> {
+    match src.main.scan(src.layout(low, homes), [], 1) {
+        Refused(why) => why,
+        Passed(_) => match src.allocation_ok(homes) {
+            False => [0, 5, 12, 0, 0],
+            True => match src.procedures.procedures_refusal(src.layout(low, homes), 0) {
+                Cons(reason, details) => Cons(0, Cons(5, Cons(reason, details))),
+                Nil => match src.compile(low, homes) { None => [0, 5, 9, 0, 0], Some(_) => [] },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reading a program back a part at a time (`heather write-elf`)
+
+// The statement tree in preorder, three numbers a node: its kind (0 a leaf,
+// 1 a `Then`, 2 a `Repeat`, 3 a `Branch`, its children after it), the label
+// name it starts at, and the one its first child starts at, or, for a leaf,
+// the one after it. Consed on as they are met, so the list is the preorder
+// reversed and nothing is appended. No leaf is emitted here, so the read
+// holds the tree's numbers and none of its code: the reader lowers one part
+// at a time (crates/cli/src/native/emission.rs), and nothing is proved of
+// this.
+record Shape { names: Nat, numbers: List<Nat> }
+
+fn Shape::node(self m: Shape, kind, after: Nat) → Shape { Shape(after, Cons(after, Cons(m.names, Cons(kind, m.numbers)))) }
+
+// The label names after a leaf that emits: a call takes them as
+// `Prog::call` does, each byte node of a leaf as `Prog::byte_node` (a leaf
+// of one, or a wide leaf compiled a node at a time), a pure node none. Counted without emitting, since emitting every leaf here
+// held the whole program's code in one read
+// (issues/write-elf-build-constants.md). A count that ever disagrees with
+// the emission is a part whose statement the kernel refuses, and the reader
+// says so first; a leaf that does not emit is refused whatever it counts.
+fn Node::names_after(self node: Node, names: Nat) → Nat {
+    match node { BufferLoad(_, _, _) => Succ(names), BufferStore(_, _, _, _) => Succ(Succ(names)), _ => names }
+}
+
+fn List::names_after(self nodes: List<Node>, names: Nat) → Nat {
+    match nodes { Nil => names, Cons(node, rest) => rest.names_after(node.names_after(names)) }
+}
+
+// A region's: a conditional takes two, a loop four, then their parts.
+fn StructuredRegion::names_after(self region: StructuredRegion, names: Nat) → Nat {
+    match region {
+        Dataflow(body) => body.nodes.names_after(names),
+        Sequence(prefix, continuation) => continuation.names_after(prefix.nodes.names_after(names)),
+        Compose(prefix, continuation) => continuation.names_after(prefix.names_after(names)),
+        Conditional(_, _, _, _, when_true, when_false) => when_false.names_after(when_true.names_after(Succ(Succ(names)))),
+        Call(_, _, _) => names,
+        Loop(_, _, _, _, body, _, _, _, _) => body.names_after(Succ(Succ(Succ(Succ(names))))),
+    }
+}
+
+fn Stmt::leaf_names(self s: Stmt, names: Nat) → Nat {
+    match s {
+        Compute(region) => region.names_after(names),
+        Invoke(shape) => match shape {
+            Reads(_, _, _, _) => Succ(Succ(Succ(names))),
+            Writes(_, _, _, _, _) => Succ(Succ(names)),
+            Opens(_, _, _) => Succ(Succ(Succ(names))),
+            _ => names,
+        },
+        Arg(_, _, _) => Succ(Succ(Succ(Succ(Succ(names))))),
+        _ => names,
+    }
+}
+
+fn Stmt::leaf_shape(self s: Stmt, m: Shape) → Shape { m.node(0, s.leaf_names(m.names)) }
+
+fn Stmt::shape(self s: Stmt, m: Shape) → Shape {
+    match s {
+        Then(first, rest) => rest.shape(first.shape(m.node(1, m.names))),
+        Repeat(body, _) => body.shape(m.node(2, Succ(Succ(m.names)))),
+        Branch(_, yes, no) => no.shape(yes.shape(m.node(3, Succ(Succ(m.names))))),
+        Compute(region) => Compute(region).leaf_shape(m),
+        Invoke(shape) => Invoke(shape).leaf_shape(m),
+        Exit(code) => Exit(code).leaf_shape(m),
+        Arg(index, buf, len) => Arg(index, buf, len).leaf_shape(m),
+        Perform(procedure, args, results) => Perform(procedure, args, results).leaf_shape(m),
+    }
+}
+
+// The label name `main` is emitted from: 0, or past the procedures' and
+// the shared exit's with procedures (`Source::compile_calls`).
+fn Source::main_names(self src: Source) → Nat { match src.procedures { Nil => 0, Cons(_, _) => Succ(src.procedures.len()) } }
+
+fn Source::shape(self src: Source) → List<Nat> { src.main.shape(Shape(src.main_names(), [])).numbers }
+
+// The label name after `main`, as the shape counts it.
+fn Source::main_end_names(self src: Source) → Nat { src.main.shape(Shape(src.main_names(), [])).names }
+
+// A program as a reader takes it: how many numbers its items are, the items
+// (`Prog::numbers`), then their lengths.
+fn List::reading_of(self numbers: List<Nat>, lens: List<Nat>) → List<Nat> { Cons(numbers.len(), numbers ++ lens) }
+fn Prog::reading(self p: Prog) → List<Nat> { p.numbers().reading_of(asm_lens(p)) }
+
+// A part's emission at `Start`, which `emit` never looks into, read: the
+// label name after it, then its program's reading; nothing if it does not
+// emit.
+fn Stmt::emission_reading(self s: Stmt, layout: Layout, out: List<Nat>, known: List<Fact>, names: Nat) → List<Nat> {
+    match s.emits(Start, layout, out, known, names) { None => [], Some(c) => Cons(c.names, c.prog.reading()) }
+}
+
+// Procedure `i`, or a stand-in past the last.
+fn List::procedure_or(self procs: List<Procedure>, i: Nat) → Procedure { procs.drop(i).head_or(Procedure([], [], Exit(0))) }
+
+// Each procedure's body's shape (`Source::shape`), its count of numbers
+// first, the label names running on from `names`, the end of `main`'s.
+fn List::procedures_shapes(self procs: List<Procedure>, names: Nat) → List<Nat> {
+    match procs {
+        Nil => [],
+        Cons(proc, rest) => {
+            let m = proc.body.shape(Shape(names, []));
+            Cons(m.numbers.len(), List::append(m.numbers, rest.procedures_shapes(m.names)))
+        },
+    }
+}
+
+// A statement's parts, by position, for stating a piece of the tree by its
+// parent's (`Stmt::emits_then_of` and its siblings, native_compile_correct):
+// a `Then`'s two statements, a `Branch`'s two arms, a `Repeat`'s body on the
+// left; and the word a `Branch` or `Repeat` tests. A leaf is its own parts.
+fn Stmt::is_then(self s: Stmt) → Bool { match s { Then(_, _) => True, Compute(_) => False, Invoke(_) => False, Branch(_, _, _) => False, Repeat(_, _) => False, Exit(_) => False, Arg(_, _, _) => False, Perform(_, _, _) => False } }
+fn Stmt::is_branch(self s: Stmt) → Bool { match s { Branch(_, _, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Repeat(_, _) => False, Exit(_) => False, Arg(_, _, _) => False, Perform(_, _, _) => False } }
+fn Stmt::is_repeat(self s: Stmt) → Bool { match s { Repeat(_, _) => True, Compute(_) => False, Invoke(_) => False, Then(_, _) => False, Branch(_, _, _) => False, Exit(_) => False, Arg(_, _, _) => False, Perform(_, _, _) => False } }
+fn Stmt::left(self s: Stmt) → Stmt { match s { Then(first, _) => first, Branch(_, yes, _) => yes, Repeat(body, _) => body, Compute(_) => s, Invoke(_) => s, Exit(_) => s, Arg(_, _, _) => s, Perform(_, _, _) => s } }
+fn Stmt::right(self s: Stmt) → Stmt { match s { Then(_, rest) => rest, Branch(_, _, no) => no, Repeat(_, _) => s, Compute(_) => s, Invoke(_) => s, Exit(_) => s, Arg(_, _, _) => s, Perform(_, _, _) => s } }
+fn Stmt::word(self s: Stmt) → Nat { match s { Branch(condition, _, _) => condition, Repeat(_, again) => again, Then(_, _) => 0, Compute(_) => 0, Invoke(_) => 0, Exit(_) => 0, Arg(_, _, _) => 0, Perform(_, _, _) => 0 } }
