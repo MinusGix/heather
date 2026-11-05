@@ -55,46 +55,8 @@ theorem compiled_returns<M>(functions: List<Function>, placement: List<Place>, p
 }
 
 // ---------------------------------------------------------------------------
-// A function at a time. The compiler proves each function of a program
-// against a `sources` that answers every call with the callee's source
-// function, so no function's proof unfolds another's: a callee that decides
-// a connective, or runs a loop, is one call in its caller's conversion. The
-// program's own answers, each function's evaluation, are then those sources
-// by induction along the program (`program_eval_sources`).
-
-// Every function of the program, its calls answered by `sources`, returns
-// `sources` at its own index.
-fn program_sourced(functions: List<Function>, sources: Answers()) → Type {
-    match functions {
-        Nil => True,
-        Cons(last, earlier) =>
-            ((words: List<BitVec(64)>) → words.len() = last.parameters.len() → last.eval(sources, words) = sources(earlier.len(), words))
-            ∧ program_sourced(earlier, sources),
-    }
-}
-
-theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(functions).IsTrue(), sources: Answers(),
-    sourced: program_sourced(functions, sources)):
-    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
-        program_eval(functions, f, words) = sources(f, words) {
-    match functions {
-        Nil => λ f words never => false_elim(never),
-        Cons(last, earlier) => λ f words => {
-            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
-            let ih = program_eval_sources(earlier, parts.right, sources, sourced.right);
-            (match f.eq_dec(earlier.len()) as λ d =>
-                arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
-                    words.len()).IsTrue() →
-                (match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }) =
-                    sources(f, words) {
-                Inl(e) => λ fits => trans(last.eval_answers(sources, program_eval(earlier), program_arity(earlier), ih, parts.left, words),
-                    j(sym(e), λ g _ => last.eval(sources, words) = sources(g, words),
-                        sourced.left(words, sym(last.parameters.len().matches_eq(words.len(), fits))))),
-                Inr(_) => λ fits => ih(f, words, fits),
-            })
-        },
-    }
-}
+// A function at a time: `program_sourced` and `program_eval_sources` live in
+// `function_ir_eval.hthr`, beside the evaluator they are about.
 
 // What holds of every list of `n` words, stated at `n` open words.
 fn Spread(n: Nat) → (List<BitVec(64)> → Type) → Type {

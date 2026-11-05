@@ -744,7 +744,7 @@ theorem StructuredRegion::eval_holds_in(self region: StructuredRegion, callees: 
 // calls it makes: from valuations that agree, with calls answered alike, a
 // region evaluates alike. This is what lets a program's functions be proved
 // one at a time, each call answered by its callee's meaning rather than its
-// evaluation (`function_ir_compile::program_eval_sources`).
+// evaluation (`program_eval_sources`, below).
 
 // `other` agrees with `values` at every width and id.
 fn Valuation::Same(values, other: Valuation()) → Type { (w: Nat) → (id: Nat) → other(w, id) = values(w, id) }
@@ -958,6 +958,132 @@ fn program_evaluable(functions: List<Function>) → Bool {
     match functions {
         Nil => True,
         Cons(last, earlier) => last.evaluable(program_arity(earlier)) && program_evaluable(earlier),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Linking: a function written against a numbering of its own callees, put
+// into a program that numbers them differently, has its calls renamed. It
+// evaluates as before, each call answered at its new name
+// (docs/runtime-fn-setups-design.md §16.9).
+
+fn StructuredRegion::relabel(self region: StructuredRegion, links: Nat → Nat) → StructuredRegion {
+    match region {
+        Dataflow(body) => Dataflow(body),
+        Sequence(prefix, continuation) => Sequence(prefix, continuation.relabel(links)),
+        Compose(prefix, continuation) => Compose(prefix.relabel(links), continuation.relabel(links)),
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) =>
+            Conditional(inputs, condition, arguments, outputs, when_true.relabel(links), when_false.relabel(links)),
+        Call(callee, arguments, result) => Call(links(callee), arguments, result),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            Loop(inputs, bound, parameters, count, body.relabel(links), exit, next, outputs, exhausted),
+    }
+}
+
+fn Function::relabel(self function: Function, links: Nat → Nat) → Function {
+    Function(function.parameters, function.body.relabel(links), function.result)
+}
+
+// Calls answered at their renamed functions.
+fn Answers::relabel(call: Answers(), links: Nat → Nat) → Answers() { λ f words => call(links(f), words) }
+
+theorem StructuredRegion::relabel_eval(self region: StructuredRegion, call: Answers(), links: Nat → Nat):
+    (values, others: Valuation()) → Valuation::Same(values, others) →
+    Valuation::Same(region.eval(Answers::relabel(call, links), values), region.relabel(links).eval(call, others)) {
+    match region {
+        Dataflow(body) => λ values others same => eval_nodes_same(body.nodes, values, others, same),
+        Sequence(prefix, continuation) => λ values others same =>
+            continuation.relabel_eval(call, links, prefix.eval(values), prefix.eval(others), eval_nodes_same(prefix.nodes, values, others, same)),
+        Compose(prefix, continuation) => λ values others same =>
+            continuation.relabel_eval(call, links, prefix.eval(Answers::relabel(call, links), values), prefix.relabel(links).eval(call, others),
+                prefix.relabel_eval(call, links, values, others, same)),
+        Conditional(_, condition, _, _, when_true, when_false) => λ values others same => λ w id => {
+            let bit: (values(1, condition).head_bit() = others(1, condition).head_bit()) =
+                sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(1, condition)));
+            let aligned = match values(1, condition).head_bit() as λ b =>
+                (match b { False => when_false.relabel(links).eval(call, others)(w, id), True => when_true.relabel(links).eval(call, others)(w, id) }) =
+                (match b {
+                    False => when_false.eval(Answers::relabel(call, links), values)(w, id),
+                    True => when_true.eval(Answers::relabel(call, links), values)(w, id),
+                }) {
+                False => when_false.relabel_eval(call, links, values, others, same, w, id),
+                True => when_true.relabel_eval(call, links, values, others, same, w, id),
+            };
+            j(bit, λ b _ => (match b { False => when_false.relabel(links).eval(call, others)(w, id), True => when_true.relabel(links).eval(call, others)(w, id) }) =
+                (match values(1, condition).head_bit() {
+                    False => when_false.eval(Answers::relabel(call, links), values)(w, id),
+                    True => when_true.eval(Answers::relabel(call, links), values)(w, id),
+                }), aligned)
+        },
+        Call(callee, arguments, result) => λ values others same => {
+            let read: (words_of(others, arguments) = words_of(values, arguments)) = words_agree(arguments, values, others, λ id _ => same(64, id));
+            Valuation::set_same(values, others, same, result, word_value(call(links(callee), words_of(values, arguments))),
+                word_value(call(links(callee), words_of(others, arguments))),
+                λ w => cong_fn(λ (ws: List<BitVec(64)>) => word_value(call(links(callee), ws), w), read))
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values others same => {
+            let step = λ (pass: Valuation()) => body.eval(Answers::relabel(call, links), pass);
+            let other_step = λ (pass: Valuation()) => body.relabel(links).eval(call, pass);
+            let end = loop_eval(step, parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs));
+            let ran: (loop_eval(other_step, parameters, count, exit, next, others(64, bound).toNat(), words_of(others, inputs)) = end) =
+                trans(loop_eval_same(step, other_step, λ v => body.relabel_eval(call, links, v, v, λ w id => refl),
+                        parameters, count, exit, next, others(64, bound).toNat(), words_of(others, inputs)),
+                    eq2(λ (n: Nat) (s: List<BitVec(64)>) => loop_eval(step, parameters, count, exit, next, n, s),
+                        cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64, bound)), words_agree(inputs, values, others, λ id _ => same(64, id))));
+            j(sym(ran), λ e _ => Valuation::Same(Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)),
+                    Valuation::set(Valuation::bind(others, outputs, e.state), exhausted, bit_value(e.exhausted))),
+                Valuation::set_same(Valuation::bind(values, outputs, end.state), Valuation::bind(others, outputs, end.state),
+                    Valuation::bind_same(values, others, same, outputs, end.state), exhausted, bit_value(end.exhausted), bit_value(end.exhausted),
+                    λ w => refl))
+        },
+    }
+}
+
+theorem Function::relabel_eval(self function: Function, call: Answers(), links: Nat → Nat, arguments: List<BitVec(64)>):
+    function.relabel(links).eval(call, arguments) = function.eval(Answers::relabel(call, links), arguments) {
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    function.body.relabel_eval(call, links, bound, bound, λ w id => refl, 64, function.result)
+}
+
+// ---------------------------------------------------------------------------
+// A function at a time. The compiler proves each function of a program
+// against a `sources` that answers every call with the callee's source
+// function, so no function's proof unfolds another's: a callee that decides
+// a connective, or runs a loop, is one call in its caller's conversion. The
+// program's own answers, each function's evaluation, are then those sources
+// by induction along the program (`program_eval_sources`).
+
+// Every function of the program, its calls answered by `sources`, returns
+// `sources` at its own index.
+fn program_sourced(functions: List<Function>, sources: Answers()) → Type {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) =>
+            ((words: List<BitVec(64)>) → words.len() = last.parameters.len() → last.eval(sources, words) = sources(earlier.len(), words))
+            ∧ program_sourced(earlier, sources),
+    }
+}
+
+theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(functions).IsTrue(), sources: Answers(),
+    sourced: program_sourced(functions, sources)):
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
+        program_eval(functions, f, words) = sources(f, words) {
+    match functions {
+        Nil => λ f words never => false_elim(never),
+        Cons(last, earlier) => λ f words => {
+            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
+            let ih = program_eval_sources(earlier, parts.right, sources, sourced.right);
+            (match f.eq_dec(earlier.len()) as λ d =>
+                arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
+                    words.len()).IsTrue() →
+                (match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }) =
+                    sources(f, words) {
+                Inl(e) => λ fits => trans(last.eval_answers(sources, program_eval(earlier), program_arity(earlier), ih, parts.left, words),
+                    j(sym(e), λ g _ => last.eval(sources, words) = sources(g, words),
+                        sourced.left(words, sym(last.parameters.len().matches_eq(words.len(), fits))))),
+                Inr(_) => λ fits => ih(f, words, fits),
+            })
+        },
     }
 }
 

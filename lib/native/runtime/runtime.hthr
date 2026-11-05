@@ -18,15 +18,20 @@
 //   | `f::judged`   | `Fun::judge(f::rt, f::world) = Ok`, by evaluation         |
 //   | `f::reflects` | `f::rt.meaning(f::world)(xs…) = f(xs…)`, by conversion    |
 //   | `f::code`     | the FunctionIR function the default setup lowers it to   |
-//   | `f::agrees`   | called with every function of the table answered with    |
-//   |               | its meaning, `f::code` answers `f`                        |
-//   | `f::compile`  | the `Compile(f)` instance holding all of that            |
+//   | `f::compile`  | the `Compile(f)` instance: the code, and its agreement   |
+//   |               | with `f` wherever the table's functions are answered     |
+//   |               | with their meanings                                      |
+//   | `f::program`  | the FunctionIR program of `f` and every runtime fn it    |
+//   |               | reaches, callees first, `f` last, each from its instance |
+//   | `f::agrees`   | `program_eval(f::program, last, [xs…]) = f(xs…)`          |
 //
-// Nothing in the group is a proof about `f` written for `f`: `f::agrees` is
-// `Fun::lower_sound` (`rt_lower.hthr`, proved once over `rt`) read at the
-// reflection, and it lands on `f` because the reflection's meaning converts
-// to `f` (the pin). A wrong reflection is refused by the kernel as a failed
-// conversion, never compiled to a wrong program.
+// Nothing in the group is a proof about `f` written for `f`. The instance's
+// agreement is `Fun::lower_sound` (`rt_lower.hthr`, proved once over `rt`)
+// read at the reflection, and it lands on `f` because the reflection's
+// meaning converts to `f` (the pin). A wrong reflection is refused by the
+// kernel as a failed conversion, never compiled to a wrong program.
+// `f::agrees` links the instances (design §16.9): `Compile::part` for each,
+// then `program_eval_sources`.
 //
 // A group's members cannot cite each other yet
 // (issues/generate-group-internal-references.md), so each spells the
@@ -170,7 +175,7 @@ theorem Setup::code_answers(s: Setup, f: Fun, w: World, ok: s.lowered(f, w).IsTr
 // The code answers its calls by index into `world`'s table, so its
 // agreement assumes every function of the table is answered with its
 // meaning (`Tm::CallsAgree`): a program built from the callees' own
-// instances discharges that (the program wrapper, issues/runtime-fn-default-setup.md).
+// instances discharges that (`Compile::part`, below).
 // `typed` is `refl` at every instance: it is what lets the class state the
 // agreement about `f` itself while `f`'s type is any `F`.
 
@@ -210,6 +215,172 @@ fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, typed: Itself(F) = Itsel
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
         j(sym(pinned), λ g _ => Ty::Answers(w.tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs)),
             Setup::code_answers(s, rt, w, ok, call, agree)))
+}
+
+// ---------------------------------------------------------------------------
+// Linking (design §16.9): one FunctionIR program from instances. An
+// instance's code answers its calls by index into its own table, and its
+// agreement assumes each entry answered with its meaning
+// (`Tm::CallsAgree`). A program numbers the functions its own way, callees
+// first: each instance's code is put in with its calls renamed to the
+// program's numbering (`Function::relabel`), and every call of the program
+// is answered by the uncurried meaning of the function it names, which is
+// what each function, so renamed, returns (`Compile::part`). Then
+// `program_eval_sources` makes the program's evaluation those meanings, so
+// the agreement assumes nothing. A function is answered only by functions
+// below it, which `program_evaluable` checks by evaluation; no function's
+// proof unfolds another's code.
+
+// A curried meaning on a word list: each word cast to its parameter's code
+// (zero past the list's end, as `Ty::extend` reads), the result cast to a
+// word.
+fn Ty::uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → List<BitVec(64)> → BitVec(64) {
+    match ps {
+        Nil => λ v ws => Ty::cast(tys, r, Word(64), v),
+        Cons(p, rest) => λ v ws => match ws {
+            Nil => Ty::uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, BitVec::zero())), Nil),
+            Cons(x, more) => Ty::uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), more),
+        },
+    }
+}
+
+// A curried meaning answers like its uncurried form.
+theorem Ty::answers_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) →
+    Ty::Answers(tys, ps, r, v, λ ws => Ty::uncurry(tys, ps, r, v, ws)) {
+    match ps {
+        Nil => λ v => refl,
+        Cons(p, rest) => λ v => λ x => Ty::answers_uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x))),
+    }
+}
+
+// What answers like a meaning is its uncurried form, on as many words as
+// parameters.
+theorem Ty::answers_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → BitVec(64)) →
+    Ty::Answers(tys, ps, r, v, ans) → (words: List<BitVec(64)>) → words.len() = ps.len() → ans(words) = Ty::uncurry(tys, ps, r, v, words) {
+    match ps {
+        Nil => λ v ans held words => match words as λ ws => ws.len() = 0 → ans(ws) = Ty::uncurry(tys, Nil, r, v, ws) {
+            Nil => λ _ => held,
+            Cons(_, more) => λ (bad: Succ(more.len()) = 0) => false_elim(more.len().succ_ne_zero(bad)),
+        },
+        Cons(p, rest) => λ v ans held words => match words as λ ws => ws.len() = Succ(rest.len()) → ans(ws) = Ty::uncurry(tys, Cons(p, rest), r, v, ws) {
+            Nil => λ (bad: 0 = Succ(rest.len())) => false_elim(rest.len().zero_ne_succ(bad)),
+            Cons(x, more) => λ (same: Succ(more.len()) = Succ(rest.len())) =>
+                Ty::answers_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x), more,
+                    Nat::succ_inj(more.len(), rest.len(), same)),
+        },
+    }
+}
+
+// The word function at index `k` of a list of them, zero past its end.
+fn link_source(srcs: List<List<BitVec(64)> → BitVec(64)>, k: Nat) → List<BitVec(64)> → BitVec(64) {
+    match srcs.nth(k) { None => λ _ => BitVec::zero(), Some(s) => s }
+}
+
+// Calls answered by a list of word functions.
+fn link_sources(srcs: List<List<BitVec(64)> → BitVec(64)>) → Answers() { λ k words => link_source(srcs, k, words) }
+
+// A table's renaming: entry `k` is the program's `links[k]`.
+fn link_at(links: List<Nat>) → Nat → Nat { λ k => match links.nth(k) { None => 0, Some(n) => n } }
+
+fn link_both<P, Q>(p: P, q: Q) → P ∧ Q { ⟨p, q⟩ }
+
+// A table's meanings, uncurried.
+fn Sig::uncurried(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs) → List<List<BitVec(64)> → BitVec(64)> {
+    match sigs {
+        Nil => λ _ => Nil,
+        Cons(s, rest) => λ cs => Cons(λ ws => Ty::uncurry(tys, s.params, s.result, cs.fst, ws), Sig::uncurried(tys, rest, cs.snd)),
+    }
+}
+
+// How many words a table's entry takes.
+fn Sig::arity(sigs: List<Sig>, k: Nat) → Option<Nat> {
+    match sigs { Nil => None, Cons(s, rest) => match k { Zero => Some(s.params.len()), Succ(i) => Sig::arity(rest, i) } }
+}
+
+fn World::uncurried(self w: World) → List<List<BitVec(64)> → BitVec(64)> { Sig::uncurried(w.tys, w.sigs, w.callees) }
+
+fn World::arity(self w: World) → Nat → Option<Nat> { λ k => Sig::arity(w.sigs, k) }
+
+theorem Sig::uncurried_answers(tys: Nat → RecInfo, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (f: Nat) → Sig::at(sigs, f).Words() →
+    Ty::Answers(tys, Sig::at(sigs, f).params, Sig::at(sigs, f).result, Sig::get(tys, sigs, cs, f), λ ws => link_sources(Sig::uncurried(tys, sigs, cs), f, ws)) {
+    match sigs {
+        Nil => λ cs f ok => Ty::bit_ne_word(64, ok.right,
+            Ty::Answers(tys, Sig::at([], f).params, Sig::at([], f).result, Sig::get(tys, [], cs, f), λ ws => link_sources(Sig::uncurried(tys, [], cs), f, ws))),
+        Cons(s, rest) => λ cs f => match f as λ g => Sig::at(Cons(s, rest), g).Words() →
+            Ty::Answers(tys, Sig::at(Cons(s, rest), g).params, Sig::at(Cons(s, rest), g).result, Sig::get(tys, Cons(s, rest), cs, g),
+                λ ws => link_sources(Sig::uncurried(tys, Cons(s, rest), cs), g, ws)) {
+            Zero => λ _ => Ty::answers_uncurry(tys, s.params, s.result, cs.fst),
+            Succ(k) => λ ok => Sig::uncurried_answers(tys, rest, cs.snd, k, ok),
+        },
+    }
+}
+
+// A world's calls are answered by its own meanings, uncurried: what an
+// instance's agreement is read at when its code is linked.
+theorem World::calls_agree_own(self w: World): Tm::CallsAgree(w, link_sources(w.uncurried())) {
+    λ f ok => Sig::uncurried_answers(w.tys, w.sigs, w.callees, f, ok)
+}
+
+// Where the program's word functions, read through a table's renaming, are
+// the table's own meanings (checked once per function, by conversion), the
+// renamed calls are answered alike wherever a call fits the table.
+theorem Sig::links_agree(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → BitVec(64)>, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) →
+    (links: List<Nat>) → links.map(λ (n: Nat) => link_source(srcs, n)) = Sig::uncurried(tys, sigs, cs) →
+    (k: Nat) → (words: List<BitVec(64)>) → arity_fits(Sig::arity(sigs, k), words.len()).IsTrue() →
+    Answers::relabel(link_sources(srcs), link_at(links), k, words) = link_sources(Sig::uncurried(tys, sigs, cs), k, words) {
+    match sigs {
+        Nil => λ cs links linked k words never => false_elim(never),
+        Cons(s, rest) => λ cs links => match links as λ ls => ls.map(λ (n: Nat) => link_source(srcs, n)) = Sig::uncurried(tys, Cons(s, rest), cs) →
+            (k: Nat) → (words: List<BitVec(64)>) → arity_fits(Sig::arity(Cons(s, rest), k), words.len()).IsTrue() →
+            Answers::relabel(link_sources(srcs), link_at(ls), k, words) = link_sources(Sig::uncurried(tys, Cons(s, rest), cs), k, words) {
+            Nil => λ linked => false_elim(List::nil_ne_cons(Sig::uncurried(tys, rest, cs.snd),
+                λ (ws: List<BitVec(64)>) => Ty::uncurry(tys, s.params, s.result, cs.fst, ws), linked)),
+            Cons(l, ls) => λ linked k => {
+                let heads = cong_fn(λ (fs: List<List<BitVec(64)> → BitVec(64)>) => fs.head_or(λ (_: List<BitVec(64)>) => BitVec::zero()), linked);
+                let tails = cong_fn(λ (fs: List<List<BitVec(64)> → BitVec(64)>) => fs.tail(), linked);
+                match k as λ i => (words: List<BitVec(64)>) → arity_fits(Sig::arity(Cons(s, rest), i), words.len()).IsTrue() →
+                    Answers::relabel(link_sources(srcs), link_at(Cons(l, ls)), i, words) = link_sources(Sig::uncurried(tys, Cons(s, rest), cs), i, words) {
+                    Zero => λ words _ => cong_fn(λ (g: List<BitVec(64)> → BitVec(64)) => g(words), heads),
+                    Succ(i) => λ words fits => Sig::links_agree(tys, srcs, rest, cs.snd, ls, tails, i, words, fits),
+                }
+            },
+        },
+    }
+}
+
+// An instance's function as a word function: its meaning, uncurried.
+fn Compile::uncurried<F>(f: F, c: Compile<F>(f)) → List<BitVec(64)> → BitVec(64) {
+    λ ws => Ty::uncurry(c.world.tys, c.reflected.params, c.reflected.result,
+        retype(Ty::Arrows(c.world.tys, c.reflected.params, c.reflected.result), c.typed, f), ws)
+}
+
+// An instance's code in a program: its calls renamed by `links`.
+fn Compile::linked<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { c.code.relabel(link_at(links)) }
+
+// An instance's table of meanings, uncurried: what `links` must name.
+fn Compile::table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> → BitVec(64)> { c.world.uncurried() }
+
+// An instance's code, linked into a program whose calls `srcs` answers,
+// returns its function's meaning: where `links` names, for each entry of
+// its table, a function of the program answered by that entry's meaning
+// (`linked`, by conversion), its code is evaluable against its table
+// (`ok`), and it takes its function's parameters (`params`), both by
+// evaluation. This is one conjunct of `program_sourced`.
+theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>,
+    linked: links.map(λ (n: Nat) => link_source(srcs, n)) = c.world.uncurried(),
+    ok: c.code.evaluable(c.world.arity()).IsTrue(), params: c.code.parameters.len().matches(c.reflected.params.len()).IsTrue()):
+    (words: List<BitVec(64)>) → words.len() = Compile::linked(f, c, links).parameters.len() →
+    Compile::linked(f, c, links).eval(link_sources(srcs), words) = Compile::uncurried(f, c, words) {
+    λ words n => {
+        let own = link_sources(c.world.uncurried());
+        let meaning = retype(Ty::Arrows(c.world.tys, c.reflected.params, c.reflected.result), c.typed, f);
+        let answered = Ty::answers_at(c.world.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(own, xs),
+            c.agrees(own, c.world.calls_agree_own()), words, trans(n, c.code.parameters.len().matches_eq(c.reflected.params.len(), params)));
+        trans(c.code.relabel_eval(link_sources(srcs), link_at(links), words),
+            trans(c.code.eval_answers(own, Answers::relabel(link_sources(srcs), link_at(links)), c.world.arity(),
+                λ k ws fits => Sig::links_agree(c.world.tys, srcs, c.world.sigs, c.world.callees, links, linked, k, ws, fits), ok, words),
+                answered))
+    }
 }
 
 // A table of meanings that answers every call with a default: what the
@@ -268,9 +439,11 @@ def runtime_w_nats: List<Nat> = [];
 def runtime_w_sigs: List<Sig> = [];
 def runtime_w_words: List<BitVec(64)> = [];
 def runtime_w_word: BitVec(64) = BitVec::ofNat(0);
+def runtime_w_srcs: List<List<BitVec(64)> → BitVec(64)> = [];
+def runtime_w_functions: List<Function> = [];
 
 record RtTypes { ty: Handle, tm: Handle, op: Handle, fun_t: Handle, sig: Handle, world: Handle, verdict: Handle, function: Handle,
-    tys: Handle, nats: Handle, sigs: Handle, words: Handle, word: Handle }
+    tys: Handle, nats: Handle, sigs: Handle, words: Handle, word: Handle, srcs: Handle, functions: Handle }
 
 fn runtime_type_of(name: String) → Tac<Handle> {
     runtime_ref(name).bind(λ g => infer(Global(g)).or_fail("runtime: `" ++ name ++ "`: "))
@@ -281,7 +454,7 @@ fn runtime_type_handles() → Tac<RtTypes> {
         <- runtime_type_of("runtime_w_fun"), <- runtime_type_of("runtime_w_sig"), <- runtime_type_of("runtime_w_world"),
         <- runtime_type_of("runtime_w_verdict"), <- runtime_type_of("runtime_w_function"), <- runtime_type_of("runtime_w_tys"),
         <- runtime_type_of("runtime_w_nats"), <- runtime_type_of("runtime_w_sigs"), <- runtime_type_of("runtime_w_words"),
-        <- runtime_type_of("runtime_w_word")))
+        <- runtime_type_of("runtime_w_word"), <- runtime_type_of("runtime_w_srcs"), <- runtime_type_of("runtime_w_functions")))
 }
 
 fn runtime_at(es: List<Expr>, i: Nat) → Expr { es.nth(i).unwrap_or(Blank) }
@@ -392,9 +565,102 @@ fn runtime_locals(xs: List<LocalRef>) → List<Expr> { xs.map(λ x => Local(x)) 
 fn runtime_params_of(xs: List<LocalRef>) → List<Param> { xs.map(λ x => Param(x, False)) }
 
 // ---------------------------------------------------------------------------
+// The program a runtime fn is compiled in: it and every runtime fn it calls,
+// directly or not, callees first (a depth-first walk of the tables, each
+// function once), each with its table as its own generator read it.
+
+record Linking { order: List<Nat>, names: List<String>, tables: List<List<Nat>> }
+
+// A function whose callees are still being placed.
+record LinkFrame { g: Nat, name: String, table: List<Nat>, pending: List<Nat> }
+
+// A runtime fn's table: itself, then the runtime fns it calls, as the
+// reflector numbers them (what its own `g::world` lists).
+fn runtime_table(k: Known, g: Nat) → Tac<List<Nat>> {
+    rt_reflect_one(4096, Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io), g).bind(λ r => Pure(r.snd))
+}
+
+fn runtime_self<A>(a: A) → a = a { refl }
+
+// A global's name, spelled as the elaborator spells a call of it.
+fn runtime_name_of(g: Nat) → Tac<String> {
+    let same <- runtime_global("runtime_self");
+    let t <- infer(ap(same, [Blank, Global(GlobalRef(g))])).or_fail("runtime: a callee: ");
+    let v <- view(t);
+    match v {
+        HEq(lhs, _) => view(lhs).bind(λ h => match h {
+            HGlobal(_, n, _) => Pure(n),
+            _ => runtime_fail("a callee that is not a global"),
+        }),
+        _ => runtime_fail("a callee's name"),
+    }
+}
+
+fn runtime_link(fuel: Nat, k: Known, stack: List<LinkFrame>, l: Linking) → Tac<Linking> {
+    match fuel {
+        Zero => runtime_fail("a program of more functions than the linker places"),
+        Succ(more) => match stack {
+            Nil => Pure(l),
+            Cons(fr, rest) => match fr.pending {
+                Nil => runtime_link(more, k, rest, Linking(l.order ++ [fr.g], l.names ++ [fr.name], l.tables ++ [fr.table])),
+                Cons(c, cs) => {
+                    let later = Cons(LinkFrame(fr.g, fr.name, fr.table, cs), rest);
+                    match Known::index(l.order, c, 0) {
+                        Some(_) => runtime_link(more, k, later, l),
+                        None => runtime_table(k, c).bind(λ t => runtime_name_of(c).bind(λ n =>
+                            runtime_link(more, k, Cons(LinkFrame(c, n, t, t.drop(1)), later), l))),
+                    }
+                },
+            },
+        },
+    }
+}
+
+// Each function of the program as `(f, its instance)`: a callee's is its
+// published `g::compile`, the function's own is `own`, which is being
+// published beside it.
+fn runtime_instances(order: List<Nat>, names: List<String>, root: Nat, own: Expr) → Tac<List<Pair<Expr, Expr>>> {
+    match order {
+        Nil => Pure([]),
+        Cons(g, rest) => {
+            let name = names.head_or("");
+            let here: Tac<Expr> = match g.same(root) { True => Pure(own), False => runtime_global(name ++ "::compile") };
+            here.bind(λ c => runtime_instances(rest, names.drop(1), root, own).bind(λ ps => Pure(Cons(Pair(Global(GlobalRef(g)), c), ps))))
+        },
+    }
+}
+
+fn runtime_links(order: List<Nat>, table: List<Nat>) → List<Nat> { table.map(λ h => Known::index(order, h, 0).unwrap_or(0)) }
+
+// The program (the last function first, as `program_eval` reads it), the
+// word functions answering its calls, and the proof each function returns
+// its own (`program_sourced`).
+record Linked { program: Expr, srcs: Expr, sourced: Expr }
+
+fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>) → Tac<Linked> {
+    let srcs_ctors <- runtime_ctors_at(ts.srcs);
+    let fn_ctors <- runtime_ctors_at(ts.functions);
+    let uncurried <- runtime_global("Compile::uncurried");
+    let linked <- runtime_global("Compile::linked");
+    let table <- runtime_global("Compile::table");
+    let part <- runtime_global("Compile::part");
+    let both <- runtime_global("link_both");
+    let rfl <- runtime_global("tactic::rfl");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let links = l.tables.map(λ t => q.nat_list(runtime_links(l.order, t)));
+    let srcs = RtQ::seq(srcs_ctors, insts.map(λ p => ap(uncurried, [Blank, p.fst, p.snd])));
+    let at = λ (i: Nat) => Pair(insts.nth(i).unwrap_or(Pair(Blank, Blank)), runtime_at(links, i));
+    let indices = List::range(insts.len()).rev();
+    let codes = indices.map(λ i => ap(linked, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, (at(i)).snd]));
+    let parts = indices.map(λ i => ap(part, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, srcs, (at(i)).snd,
+        ap(rfl, [Blank, ap(table, [Blank, (at(i)).fst.fst, (at(i)).fst.snd])]), Hd(trivial_h), Hd(trivial_h)]));
+    Pure(Linked(RtQ::seq(fn_ctors, codes), srcs, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
+}
+
+// ---------------------------------------------------------------------------
 // The generator: `runtime fn f(…) → … { … }`.
 
-fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>) → Tac<List<Decl>> {
+fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, l: Linking) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     // `refl` at a closed term, its type given: checked against a statement
@@ -412,25 +678,28 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let judge <- runtime_global("Fun::judge");
     let meaning <- runtime_global("Fun::meaning");
     let code_of <- runtime_global("Setup::code");
-    let eval <- runtime_global("Function::eval");
-    let answers <- runtime_global("Setup::code_answers");
     let compile <- runtime_global("Setup::compile");
-    let answers_t <- runtime_global("Answers");
-    let calls_agree <- runtime_global("Tm::CallsAgree");
+    let program_eval <- runtime_global("program_eval");
+    let eval_sources <- runtime_global("program_eval_sources");
+    let sources <- runtime_global("link_sources");
     let word_list <- runtime_ctors_at(ts.words);
     let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let rt_e = Fun::quote(rfun, q);
     let world_e = ap(world_of, [no_records, RtQ::seq(q.sigs, sigs.map(λ s => Sig::quote(s, q))), callees]);
     let code_e = ap(code_of, [setup, rt_e, world_e]);
-    // `f::reflects` and `f::agrees` quantify over the parameters.
-    let xs <- runtime_params(ts.word, rfun.params, None, 0);
-    let call <- assume(answers_t, "call", None).or_fail("runtime: ");
-    let agree <- assume(ap(calls_agree, [world_e, Local(call.ref)]), "agree", Some(call.ref)).or_fail("runtime: ");
-    let ys <- runtime_params(ts.word, rfun.params, Some(agree.ref), 0);
-    let at_ys = runtime_locals(ys);
     let instance_e = ap(compile, [Blank, Global(f), setup, rt_e, world_e, ap(typed_refl, [Blank, Global(f)]), ap(rfl, [Blank, Global(f)]),
         Hd(trivial_h)]);
     let instance_t <- infer(instance_e).or_fail("runtime: `" ++ name ++ "`'s instance: ");
+    // The program: this function and every runtime fn it reaches, each
+    // callee's code from its own instance.
+    let insts <- runtime_instances(l.order, l.names, f.id, instance_e);
+    let linked <- runtime_linked(q, ts, l, insts);
+    let root = NatLit(l.order.len() - 1);
+    // `f::reflects` and `f::agrees` quantify over the parameters.
+    let xs <- runtime_params(ts.word, rfun.params, None, 0);
+    let ys <- runtime_params(ts.word, rfun.params, None, 0);
+    let at_ys = runtime_locals(ys);
+    let words_e = RtQ::seq(word_list, at_ys);
     Pure([
         Decl(AsValue, name ++ "::rt", [], Hd(ts.fun_t), rt_e),
         Decl(AsValue, name ++ "::world", [], Hd(ts.world), world_e),
@@ -440,10 +709,11 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
             ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))])),
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
-        Decl(AsTheorem, name ++ "::agrees", Cons(Param(call.ref, False), Cons(Param(agree.ref, False), runtime_params_of(ys))),
-            Equation(ap(eval, [code_e, Local(call.ref), RtQ::seq(word_list, at_ys)]), ap(Global(f), at_ys)),
-            ap(ap(answers, [setup, rt_e, world_e, Hd(trivial_h), Local(call.ref), Local(agree.ref)]), at_ys)),
         Decl(AsInstance("Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e),
+        Decl(AsValue, name ++ "::program", [], Hd(ts.functions), linked.program),
+        Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys),
+            Equation(ap(program_eval, [linked.program, root, words_e]), ap(Global(f), at_ys)),
+            ap(eval_sources, [linked.program, Hd(trivial_h), ap(sources, [linked.srcs]), linked.sourced, root, words_e, Hd(trivial_h)])),
     ])
 }
 
@@ -459,7 +729,8 @@ fn runtime(name: String) → Tac<List<Decl>> {
         Refused(why) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
         Ok => match Setup::lowers(Fun::lower(rfun, world)) {
             False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
-            True => runtime_publish(name, f, rfun, sigs, reflected.snd),
+            True => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1))], Linking([], [], [])).bind(λ l =>
+                runtime_publish(name, f, rfun, sigs, reflected.snd, l)),
         },
     }
 }

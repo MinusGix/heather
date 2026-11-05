@@ -231,8 +231,9 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         }
     }
     let prefix = format!("{symbol}_native");
-    let program = verified::reflect(&elab, &format!("{root_name}::{symbol}"))?;
+    let source_name = format!("{root_name}::{symbol}");
     if program_only {
+        let program = verified::reflect(&elab, &source_name)?;
         // The program and its agreement, a module checked as any other
         // before it is written. Untrusted, as every generated text is: the
         // kernel checks that the program evaluates to the function.
@@ -262,10 +263,26 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         println!("{}: `{symbol}` as a FunctionIR program of {} functions, its agreement checked", output.display(), program.functions.len());
         return Ok(());
     }
+    // A function runs only when it is marked: `runtime fn f` publishes its
+    // program and the program's agreement (from its `Compile` instance and
+    // its callees', docs/runtime-fn-setups-design.md §16.9). The Rust
+    // reflector stays only for what the default setup does not compile yet,
+    // loops and tests through `Bool` helpers; anything else unmarked is
+    // refused, naming the marker.
+    let shape = if elab.qualified_global(&format!("{source_name}::compile")).is_some() {
+        verified::runtime_shape(&elab, &prefix, &root_name, &source_name)?
+    } else {
+        let program = verified::reflect(&elab, &source_name)?;
+        if !program.functions.iter().any(|function| function.looped.is_some() || function.helped) {
+            return Err(format!("`{symbol}` is not a runtime fn: mark it `runtime fn {symbol}`, and the functions it calls, with `import runtime;` \
+                (docs/runtime-fn-setups-design.md §16.9)"));
+        }
+        verified::Shape::reflected(&prefix, &program)
+    };
     // A program in the fragment that the lowering then refuses is a defect
     // of the lowering or its planner, never a reason to certify it another
     // way.
-    let compiled = verified::compile(&elab, &prefix, &format!("{prefix}_certificate"), &program)
+    let compiled = verified::compile(&elab, &prefix, &format!("{prefix}_certificate"), &shape)
         .map_err(|why| format!("verified lowering: {why}"))?;
     let proof = compiled.text;
     eprintln!("checking the lowering, source agreement, bytes and return certificate in {}", unchecked.display());

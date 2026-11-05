@@ -1,8 +1,8 @@
 // Probes of `runtime fn` (lib/native/runtime/runtime.hthr): the generator
 // reflects each function, judges it under the default setup, and publishes
-// its reflection, the pin, its FunctionIR code, the code's agreement with the
-// function and its `Compile` instance, with no proof written for any of them
-// here. A function a runtime fn calls must be one too; a refusal names its
+// its reflection, the pin, its FunctionIR code, its `Compile` instance, and
+// the program it runs in with that program's agreement with the function,
+// with no proof written for any of them here. A function a runtime fn calls must be one too; a refusal names its
 // reason and publishes nothing. Tests, not library: nothing imports this
 // module.
 
@@ -42,10 +42,19 @@ theorem caller_table(): caller::world.sigs = [Sig([Word(64), Word(64)], Word(64)
 
 theorem caller_pinned(a, b: BitVec(64)): caller::rt.meaning(caller::world)(a, b) = caller(a, b) { caller::reflects(a, b) }
 
-// The code answers `caller` wherever its table's functions are answered by
-// their meanings (FunctionIR's `Call` of entry 1 is `leaf`).
+// The program: `leaf` (function 0, from its own instance) and `caller`
+// (function 1, its call of entry 1 of its table renamed to function 0). It
+// computes `caller`, assuming nothing.
+theorem caller_program(): caller::program.len() = 2 { refl }
+
+theorem caller_runs(a, b: BitVec(64)): program_eval(caller::program, 1, [a, b]) = caller(a, b) { caller::agrees(a, b) }
+
+theorem leaf_runs(a, b: BitVec(64)): program_eval(leaf::program, 0, [a, b]) = leaf(a, b) { leaf::agrees(a, b) }
+
+// The instance's own agreement is the composable one: the code answers
+// `caller` wherever its table's functions are answered by their meanings.
 theorem caller_compiled(call: Answers(), agree: Tm::CallsAgree(caller::world, call), a, b: BitVec(64)):
-    caller::code.eval(call, [a, b]) = caller(a, b) { caller::agrees(call, agree, a, b) }
+    caller::code.eval(call, [a, b]) = caller(a, b) { caller::compile.agrees(call, agree, a, b) }
 
 // The instance is found by search, keyed on the function.
 fn code_of<F>(f: F, c: Compile<F>(f) := infer) → Function { c.code }
@@ -73,8 +82,7 @@ runtime fn choose(a, b: BitVec(64)) → BitVec(64) {
     }
 }
 
-theorem choose_compiled(call: Answers(), agree: Tm::CallsAgree(choose::world, call), a, b: BitVec(64)):
-    choose::code.eval(call, [a, b]) = choose(a, b) { choose::agrees(call, agree, a, b) }
+theorem choose_runs(a, b: BitVec(64)): program_eval(choose::program, 0, [a, b]) = choose(a, b) { choose::agrees(a, b) }
 
 // ---------------------------------------------------------------------------
 // Shared values and two calls of one callee (examples/x86-native/sharing.hthr).
@@ -89,8 +97,45 @@ runtime fn scaller(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
     shared.add(shared).add(first.add(first.add(second)))
 }
 
-// One table entry for `sleaf`, however often it is called.
+// One table entry for `sleaf`, however often it is called, and one function
+// of the program.
 theorem scaller_table(): scaller::world.sigs.len() = 2 { refl }
+
+theorem scaller_runs(a, b: BitVec(64)): program_eval(scaller::program, 1, [a, b]) = scaller(a, b) { scaller::agrees(a, b) }
+
+// ---------------------------------------------------------------------------
+// Three levels, a callee reached twice (examples/x86-native/levels.hthr):
+// the program places each function once, callees first, and each
+// function's table is renamed into it.
+
+runtime fn twist(a, b: BitVec(64)) → BitVec(64) { a.sub(b).bxor(b) }
+
+runtime fn middle(a, b: BitVec(64)) → BitVec(64) {
+    match a.unsigned_lt_bit(b) {
+        False => twist(b, a),
+        True => twist(a, b).add(a),
+    }
+}
+
+runtime fn top(a, b: BitVec(64)) → BitVec(64) {
+    let m = middle(b, a);
+    middle(m, a.add(b)).bor(twist(a, m))
+}
+
+// `top`'s table is itself, `middle`, `twist`; the program is `twist`,
+// `middle`, `top`.
+theorem top_table(): top::world.sigs.len() = 3 { refl }
+
+theorem top_program(): top::program.len() = 3 { refl }
+
+theorem top_runs(a, b: BitVec(64)): program_eval(top::program, 2, [a, b]) = top(a, b) { top::agrees(a, b) }
+
+// The renaming is the whole of linking: a code evaluated with its calls
+// renamed is the code with each call answered at the new name.
+theorem relabel_is_answering(c: Function, call: Answers(), xs: List<BitVec(64)>):
+    c.relabel(link_at([2, 0, 1])).eval(call, xs) = c.eval(Answers::relabel(call, link_at([2, 0, 1])), xs) {
+    c.relabel_eval(call, link_at([2, 0, 1]), xs)
+}
 
 // ---------------------------------------------------------------------------
 // A `match h:` convoy: the equation is erased, and the pin still converts.
@@ -99,8 +144,7 @@ runtime fn safe_pred(n: BitVec(64)) → BitVec(64) {
     match h: n.eq_bit(BitVec::ofNat(0)) { True => n, False => n.sub(BitVec::ofNat(1)) }
 }
 
-theorem safe_pred_compiled(call: Answers(), agree: Tm::CallsAgree(safe_pred::world, call), n: BitVec(64)):
-    safe_pred::code.eval(call, [n]) = safe_pred(n) { safe_pred::agrees(call, agree, n) }
+theorem safe_pred_runs(n: BitVec(64)): program_eval(safe_pred::program, 0, [n]) = safe_pred(n) { safe_pred::agrees(n) }
 
 // ---------------------------------------------------------------------------
 // Refusals. Each names its reason, and the function under the prefix is not

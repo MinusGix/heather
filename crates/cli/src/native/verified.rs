@@ -34,16 +34,89 @@ pub(super) fn reflect(elab: &Elaborator, source: &str) -> Result<function_ir_sou
     function_ir_source::reflect_program(elab, source).map_err(|e| e.to_string())
 }
 
-pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &function_ir_source::ReflectedProgram)
-    -> Result<Compiled, String>
-{
-    let root = &program.functions[program.root];
+/// What the certificate is about: a FunctionIR program, its functions
+/// `{prefix}_fn{k}()` and lists `{prefix}_first_{k}()` defined, its
+/// function `root` the exported one, and the theorem `{prefix}_agrees` that
+/// it evaluates to the source function (`answer`, over `a0, a1, …`).
+pub(super) struct Shape {
+    pub functions: usize,
+    pub root: usize,
+    pub arity: usize,
+    /// Imports and the program's definitions.
+    pub definitions: String,
+    /// `{prefix}_evaluable` and `{prefix}_agrees`.
+    pub agreement: String,
+    pub answer: String,
+}
+
+impl Shape {
+    /// The Rust reflector's program, its agreement generated here.
+    pub fn reflected(prefix: &str, program: &function_ir_source::ReflectedProgram) -> Shape {
+        let root = &program.functions[program.root];
+        let mut definitions = owner_imports(program);
+        definitions.push_str(&program_text(prefix, program));
+        Shape {
+            functions: program.functions.len(),
+            root: program.root,
+            arity: root.arity,
+            definitions,
+            agreement: agreement_text(prefix, program),
+            answer: root.answer(&arguments(root.arity)),
+        }
+    }
+
+    /// A `runtime fn`'s program, as its generator published it
+    /// (`{source}::program`, its last function `source`, the others the
+    /// runtime fns it reaches) with its agreement (`{source}::agrees`, from
+    /// the functions' `Compile` instances, docs/runtime-fn-setups-design.md
+    /// §16.9): nothing about the program is proved here.
+    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize) -> Shape {
+        let parameters = arguments(arity);
+        let answer = format!("{source}({})", parameters.join(", "));
+        let mut definitions = format!("import {owner};\nimport runtime;\n");
+        definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
+fn {prefix}_program() → List<Function> {{ {source}::program }}
+"));
+        for k in 0..functions {
+            definitions.push_str(&format!("fn {prefix}_first_{k}() → List<Function> {{ {prefix}_program().drop({}) }}
+fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::code_of(None), Cons(function, _) => function }} }}
+", functions - 1 - k));
+        }
+        let typed = typed(&parameters);
+        let agreement = format!("theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{ trivial }}
+
+// The program's function {f} evaluates to the source function: the
+// generator's theorem, from each function's `Compile` instance.
+theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]) = {answer} {{
+    {source}::agrees({list})
+}}
+", f = functions - 1, list = parameters.join(", "));
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer }
+    }
+}
+
+/// A `runtime fn`'s [`Shape`]: how many functions its published program
+/// has and how many words the function takes, read off the published
+/// values.
+pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source: &str) -> Result<Shape, String> {
+    let probe = format!("{prefix}_shape");
+    let text = format!("import {owner};\nimport runtime;\nimport rt;\nimport list;\nimport function_ir;\n
+fn {prefix}_shape() → List<Nat> {{ [{source}::program.len(), {source}::rt.params.len()] }}\n");
+    let mut fork = elab.fork();
+    fork.elab_module_source(&probe, &text).map_err(|e| e.render(&text))?;
+    match function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_shape")).map_err(|e| e.to_string())?[..] {
+        [_, arity] if arity > 6 => Err(format!("`{source}` takes {arity} words: compile-x86 passes at most six, in registers")),
+        [functions, arity] if functions >= 1 => Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize)),
+        _ => Err(format!("`{source}::program` did not read back")),
+    }
+}
+
+pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
     let f = program.root;
     let mut definitions = String::new();
     for name in IMPORTS { definitions.push_str(&format!("import {name};\n")); }
-    definitions.push_str(&owner_imports(program));
-    definitions.push_str(&program_text(prefix, program));
-    let m = program.functions.len();
+    definitions.push_str(&program.definitions);
+    let m = program.functions;
     // Evaluated on a fork, which only defines: the certificate's statements
     // are the session's to check.
     let probe = format!("{module}_probe");
@@ -103,11 +176,11 @@ fn {prefix}_entry() → Nat {{ asm_labels({prefix}_code())({}) }}
         return Err("the functions' emissions do not make the code".into());
     }
 
-    let agreement = agreement_text(prefix, program);
-    let parameters = arguments(root.arity);
+    let agreement = &program.agreement;
+    let parameters = arguments(program.arity);
     let typed = typed(&parameters);
     let list = format!("[{}]", parameters.join(", "));
-    let call = root.answer(&parameters);
+    let call = &program.answer;
     let mut text = definitions;
     // The code is stated as the literal the lowering computes, a function at
     // a time, each function's emission its own statement from the literal

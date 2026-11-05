@@ -21,13 +21,18 @@ fn source_nested_conditionals_execute() {
         for claim in ["_lowers()", "_agrees(", "_bytes()", "_entry_at()", "_returns<M>", "compiled_returns<M>("] {
             assert!(certificate.contains(claim), "missing {claim}: {}", String::from_utf8_lossy(&result.stderr));
         }
-        // Every function agrees through the decision tree it compiles,
-        // spelled in source operations. A test through a Bool helper or a
-        // connective makes that tree the source by `split_all`; a
-        // comparison-only tree is the source by `refl`.
-        let decides = matches!(name, "composed" | "either" | "calls_either");
-        assert!(certificate.contains("_expands("), "{name}: expansion route");
-        assert_eq!(certificate.contains("split_all"), decides, "{name}: case analysis only where a test decides");
+        // A runtime fn's program and agreement are its generator's, from
+        // the `Compile` instances (docs/runtime-fn-setups-design.md §16.9).
+        // The three whose tests call the Bool helper `unequal` are not
+        // runtime fns yet: they agree through the decision tree the Rust
+        // reflector compiles, spelled in source operations, made the source
+        // by `split_all`.
+        let reflected = matches!(name, "composed" | "either" | "calls_either");
+        if reflected {
+            assert!(certificate.contains("_expands(") && certificate.contains("split_all"), "{name}: expansion route");
+        } else {
+            assert!(certificate.contains(&format!("branches::{name}::agrees(")) && !certificate.contains("_expands("), "{name}: its Compile route");
+        }
         assert!(certificate.contains(&format!("branches::{name}(")));
         assert!(!certificate.contains("StructuredArtifact"), "no per-function artifact");
         // A comparison only the branch reads is a CMP and a Jcc on its

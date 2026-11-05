@@ -1,10 +1,19 @@
 import bitvec;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
 
-fn leaf(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
+runtime fn leaf(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
     left.sub(right)
 }
 
-fn caller(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
+runtime fn caller(left: BitVec(64), right: BitVec(64)) -> BitVec(64) {
     let saved = left.bor(right);
     let first = leaf(right, left);
     let second = leaf(first.add(right), BitVec::ofNat(3));

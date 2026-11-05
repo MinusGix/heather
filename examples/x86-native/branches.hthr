@@ -1,6 +1,21 @@
 import bitvec;
 import bool;
-fn nested_true(a, b: BitVec(64)) → BitVec(64) {
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// Each function is a runtime fn, compiled by the default setup through its
+// `Compile` instance, except the three whose tests call the `Bool` helper
+// `unequal`: the default setup compiles functions of words to a word, so
+// those stay on the Rust reflector until it does
+// (docs/runtime-fn-setups-design.md §16.9).
+runtime fn nested_true(a, b: BitVec(64)) → BitVec(64) {
     match a.unsigned_lt_bit(b) {
         False => a.sub(b),
         True => match b.unsigned_lt_bit(BitVec::ofNat(10)) {
@@ -9,7 +24,7 @@ fn nested_true(a, b: BitVec(64)) → BitVec(64) {
         },
     }
 }
-fn nested_false(a, b: BitVec(64)) → BitVec(64) {
+runtime fn nested_false(a, b: BitVec(64)) → BitVec(64) {
     match a.unsigned_lt_bit(b) {
         False => match a.unsigned_lt_bit(BitVec::ofNat(10)) {
             False => b.sub(a),
@@ -32,7 +47,7 @@ fn composed(a, b: BitVec(64)) → BitVec(64) {
 }
 // A comparison against a constant that only the branch reads: CMP and a
 // Jcc on its flags, no bit materialised.
-fn unsigned_threshold(a, b: BitVec(64)) → BitVec(64) {
+runtime fn unsigned_threshold(a, b: BitVec(64)) → BitVec(64) {
     match a.unsigned_lt_bit(BitVec::ofNat(4294967296)) {
         False => a.sub(b),
         True => a.add(b),
@@ -40,7 +55,7 @@ fn unsigned_threshold(a, b: BitVec(64)) → BitVec(64) {
 }
 // The constant the comparison loads is the one the false arm takes away:
 // the arm reads the comparison's register instead of loading it again.
-fn take_threshold(a, b: BitVec(64)) → BitVec(64) {
+runtime fn take_threshold(a, b: BitVec(64)) → BitVec(64) {
     match a.unsigned_lt_bit(BitVec::ofNat(4294967296)) {
         False => a.sub(BitVec::ofNat(4294967296)).add(b),
         True => a.add(b),
@@ -49,17 +64,17 @@ fn take_threshold(a, b: BitVec(64)) → BitVec(64) {
 // A step that keeps its state below the threshold, applied twice: the outer
 // step's state is the inner one's result, dead after it, so the arm that
 // returns it unchanged is empty.
-fn keep_below(a, b: BitVec(64)) → BitVec(64) {
+runtime fn keep_below(a, b: BitVec(64)) → BitVec(64) {
     match a.unsigned_lt_bit(BitVec::ofNat(4294967296)) {
         True => a,
         False => a.sub(BitVec::ofNat(4294967296)).add(b),
     }
 }
-fn keep_twice(a, b: BitVec(64)) → BitVec(64) { keep_below(keep_below(a, b), b) }
+runtime fn keep_twice(a, b: BitVec(64)) → BitVec(64) { keep_below(keep_below(a, b), b) }
 // Constants an ADD takes as an immediate the processor sign-extends: 16 and
 // -1 as imm8, 65536 as imm32; 2^31, which an imm32 would read as negative,
 // is loaded.
-fn nudged(a, b: BitVec(64)) → BitVec(64) {
+runtime fn nudged(a, b: BitVec(64)) → BitVec(64) {
     match a.unsigned_lt_bit(b) {
         True => a.add(BitVec::ofNat(16)).add(b.add(BitVec::ofNat(18446744073709551615))),
         False => a.add(BitVec::ofNat(65536)).add(BitVec::ofNat(2147483648)),

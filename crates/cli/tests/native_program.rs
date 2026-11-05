@@ -11,7 +11,7 @@ type Case = (&'static str, &'static str, &'static str);
 // Three levels, a call in each arm of a branch, arguments swapped; values
 // live across two calls of a two-argument leaf; one call.
 const LEVELS: [Case; 3] = [
-    ("program", "program", r#"
+    ("levels", "program", r#"
 static uint64_t twist(uint64_t a, uint64_t b) { return (a - b) ^ b; }
 static uint64_t middle(uint64_t a, uint64_t b) { return a < b ? twist(a, b) + a : twist(b, a); }
 static uint64_t reference(uint64_t a, uint64_t b) { uint64_t m = middle(b, a); return middle(m, a + b) | twist(a, m); }

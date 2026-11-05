@@ -1,0 +1,30 @@
+import bitvec;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// Three levels of calls, a call in each arm of a branch, and arguments
+// passed swapped: `compile-x86 levels.hthr program` exports the whole program the
+// verified lowering compiles (examples/x86-native/README.md).
+
+runtime fn twist(a, b: BitVec(64)) → BitVec(64) {
+    a.sub(b).bxor(b)
+}
+
+runtime fn middle(a, b: BitVec(64)) → BitVec(64) {
+    match a.unsigned_lt_bit(b) {
+        False => twist(b, a),
+        True => twist(a, b).add(a),
+    }
+}
+
+runtime fn program(a, b: BitVec(64)) → BitVec(64) {
+    let m = middle(b, a);
+    middle(m, a.add(b)).bor(twist(a, m))
+}
