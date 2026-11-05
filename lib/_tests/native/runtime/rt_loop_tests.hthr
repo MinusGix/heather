@@ -1,0 +1,111 @@
+// Probes of `rt_loop` (docs/runtime-fn-setups-design.md §16.10): a fuel
+// recursion and a measured one, each lowered to a loop, their agreement read
+// off the once-proved theorems with the hypotheses discharged as the
+// generator does: the fuel equations by `refl`, `Guarded` from the
+// function's own `ext` and `irrel`.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import rt;
+import function_ir;
+import function_ir_eval;
+import rt_lower;
+import rt_loop;
+
+fn rt_loop_lowers(r: Option<Function>) → Bool { match r { None => False, Some(_) => True } }
+
+// ---------------------------------------------------------------------------
+// A fuel recursion (examples/x86-native/loop_triangle.hthr).
+
+fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
+    match fuel {
+        Zero => acc,
+        Succ(k) => match n.eq_bit(BitVec::ofNat(0)) {
+            False => sum_down(k, n.sub(BitVec::ofNat(1)), acc.add(n)),
+            True => acc,
+        },
+    }
+}
+
+// The `Succ` arm over `[k, acc, n, fuel]`.
+fn sum_down_succ() → Tm {
+    Let(Lit(Word(64), 0), Let(Prim(Eq(64), [3, 0]),
+        If(0, Var(3), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [5, 0]), Let(Prim(Add(64), [5, 6]), Call(0, [5, 1, 0])))))))
+}
+
+fn sum_down_world() → World { World(RecInfo::none, [Sig([Count, Word(64), Word(64)], Word(64))], Pair(sum_down, trivial)) }
+
+theorem sum_down_lowers(): rt_loop_lowers(Fun::lower_fuel(Word(64), [Word(64)], Var(0), sum_down_succ(), sum_down_world())) = True { refl }
+
+theorem sum_down_loops(): Fun::FuelHolds([Word(64), Word(64)], sum_down_world(), λ n => sum_down(n),
+    Fun::lower_fuel(Word(64), [Word(64)], Var(0), sum_down_succ(), sum_down_world())) {
+    Fun::fuel_sound(Word(64), [Word(64)], Var(0), sum_down_succ(), sum_down_world(), λ n => sum_down(n),
+        λ x1 x2 => refl, λ r x1 x2 => refl)
+}
+
+// A wrong step is refused: `+` read as `-`.
+fn sum_down_wrong() → Tm {
+    Let(Lit(Word(64), 0), Let(Prim(Eq(64), [3, 0]),
+        If(0, Var(3), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [5, 0]), Let(Prim(Sub(64), [5, 6]), Call(0, [5, 1, 0])))))))
+}
+
+// expect-error(kernel): NotConvertible
+theorem sum_down_wrong_step(): (r: Nat) → Fun::FuelStep([Word(64), Word(64)], sum_down_wrong(), sum_down_world(), λ n => sum_down(n), r) {
+    λ r x1 x2 => refl
+}
+
+// ---------------------------------------------------------------------------
+// A measured recursion (examples/x86-native/loop_measure.hthr).
+
+fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+// The body as written, over `[acc, n]`.
+fn count_down_body() → Tm {
+    Let(Lit(Word(64), 0), Let(Prim(Eq(64), [2, 0]),
+        IfEq(0, Var(2), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [4, 0]), Let(Prim(Add(64), [4, 5]), Call(0, [1, 0])))))))
+}
+
+fn count_down_world() → World { World(RecInfo::none, [Sig([Word(64), Word(64)], Word(64))], Pair(count_down, trivial)) }
+
+fn count_down_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat() }
+
+theorem count_down_lowers(): rt_loop_lowers(Fun::lower_measured(Word(64), [Word(64)], count_down_body(), count_down_world())) = True { refl }
+
+// The body with its recursion answered by `again` is the recursor's step
+// with an ih that drops its proof.
+theorem count_down_step(n, acc: BitVec(64), again: List<BitVec(64)> → BitVec(64)):
+    count_down_body().tail_sem(count_down_world(), 0, again, [Word(64), Word(64)], Pair(acc, Pair(n, trivial))) =
+        count_down::body(n.toNat(), λ (y1: BitVec(64)) (y2: BitVec(64)) _ => again([y1, y2]), n, acc, nat::Nat::lt_succ_self(n.toNat())) { refl }
+
+// `Guarded`, from `count_down::ext` and `count_down::irrel`: the generator's
+// proof, written out.
+theorem count_down_guarded(): Fun::Guarded([Word(64), Word(64)], count_down_body(), count_down_world(), count_down, count_down_measure) {
+    λ n acc again hyp => sym(count_down::ext(n.toNat(), n.toNat(),
+        λ (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.toNat(), n.toNat())) => count_down::rec(n.toNat(), y1, y2, p),
+        λ (y1: BitVec(64)) (y2: BitVec(64)) _ => again([y1, y2]),
+        λ y1 y2 p q => trans(count_down::irrel(n.toNat(), Succ(y1.toNat()), y1, y2, p, nat::Nat::lt_succ_self(y1.toNat())),
+            sym(hyp([y1, y2], refl, p))),
+        n, acc, nat::Nat::lt_succ_self(n.toNat()), nat::Nat::lt_succ_self(n.toNat())))
+}
+
+theorem count_down_bounded(): Fun::Bounded([Word(64), Word(64)], count_down_measure) {
+    λ n acc => BitVec::toNat_lt_pow(64, n)
+}
+
+theorem count_down_loops(): Fun::MeasuredHolds([Word(64), Word(64)], count_down_world(), count_down,
+    Fun::lower_measured(Word(64), [Word(64)], count_down_body(), count_down_world())) {
+    Fun::measured_sound(Word(64), [Word(64)], count_down_body(), count_down_world(), count_down, count_down_measure,
+        count_down_bounded(), count_down_guarded())
+}
