@@ -19,6 +19,8 @@ import relation_props;
 import linux_calls;
 import linux_trees;
 import linux_world;
+import tactic;
+import grind;
 
 // ---------------------------------------------------------------------------
 // The coinductive reading
@@ -260,7 +262,7 @@ theorem Io::pass_tau<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
 {
     match n {
         Zero => λ t io x2 e => match h0: CoTree::obs(Events::linux(), t) {
-            ORet(x) => absurd(prelude::trans(prelude::sym(Io::pass_reading_at(t, io, ORet(x), h0)), e)),
+            ORet(x) => by grind_with([Io::pass_reading_at(t, io, ORet(x), h0)]),
             OTau(s) => PassTau(s, io, 0, prelude::sym(inj(prelude::trans(prelude::sym(Io::pass_reading_at(t, io, OTau(s), h0)), e))),
                 Io::loop_reading_at(body, t, io, OTau(s), h0)),
             OVis(c, k) => PassTau(k(Io::call(io, c).value), Io::call(io, c).after, 0,
@@ -268,8 +270,8 @@ theorem Io::pass_tau<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
                 Io::loop_reading_at(body, t, io, OVis(c, k), h0)),
         },
         Succ(n2) => λ t io x2 e => match h0: CoTree::obs(Events::linux(), t) {
-            ORet(x) => absurd(prelude::trans(prelude::sym(CoTree::after_settled(Events::none(), Succ(n2), Io::pass_reading(t, io),
-                ORet(Io::shift(Mutated(io, x))), Io::pass_reading_at(t, io, ORet(x), h0), trivial)), e)),
+            ORet(x) => by grind_with([CoTree::after_settled(Events::none(), Succ(n2), Io::pass_reading(t, io),
+                ORet(Io::shift(Mutated(io, x))), Io::pass_reading_at(t, io, ORet(x), h0), trivial)]),
             OTau(s) => {
                 let w: PassTau<A, B>(body, s, io, x2) = Io::pass_tau(body, n2, s, io, x2,
                     prelude::trans(prelude::sym(CoTree::after_succ(Events::none(), n2, Io::pass_reading(t, io), Io::pass_reading(s, io),
@@ -299,15 +301,15 @@ theorem Io::pass_ret<A, B>(body: A → CoTree<Step<A, B>>(Events::linux()), n: N
     match n {
         Zero => λ t io r e => match h0: CoTree::obs(Events::linux(), t) {
             ORet(x) => PassRet(x, io, 0,
-                prelude::sym(inj(prelude::trans(prelude::sym(Io::pass_reading_at(t, io, ORet(x), h0)), e))),
+                by grind_with([Io::pass_reading_at(t, io, ORet(x), h0)]),
                 Io::loop_reading_at(body, t, io, ORet(x), h0)),
-            OTau(s) => absurd(prelude::trans(prelude::sym(Io::pass_reading_at(t, io, OTau(s), h0)), e)),
-            OVis(c, k) => absurd(prelude::trans(prelude::sym(Io::pass_reading_at(t, io, OVis(c, k), h0)), e)),
+            OTau(s) => by grind_with([Io::pass_reading_at(t, io, OTau(s), h0)]),
+            OVis(c, k) => by grind_with([Io::pass_reading_at(t, io, OVis(c, k), h0)]),
         },
         Succ(n2) => λ t io r e => match h0: CoTree::obs(Events::linux(), t) {
             ORet(x) => PassRet(x, io, 0,
-                prelude::sym(inj(prelude::trans(prelude::sym(CoTree::after_settled(Events::none(), Succ(n2), Io::pass_reading(t, io),
-                    ORet(Io::shift(Mutated(io, x))), Io::pass_reading_at(t, io, ORet(x), h0), trivial)), e))),
+                by grind_with([CoTree::after_settled(Events::none(), Succ(n2), Io::pass_reading(t, io),
+                    ORet(Io::shift(Mutated(io, x))), Io::pass_reading_at(t, io, ORet(x), h0), trivial)]),
                 Io::loop_reading_at(body, t, io, ORet(x), h0)),
             OTau(s) => {
                 let w: PassRet<A, B>(body, s, io, r) = Io::pass_ret(body, n2, s, io, r,

@@ -398,6 +398,12 @@ pub enum Request {
     Spine(u64),
     /// The fields of a one-constructor value.
     Fields(RExpr),
+    /// The equation between field `k` of the two sides of a proof of an
+    /// equation between one constructor's values (`inj`).
+    Inj(RExpr, u64),
+    /// A proof of the type a handle holds, from a proof of an equation
+    /// between two different constructors' values (`absurd`).
+    Absurd(RExpr, u64),
     /// What a run says about itself, rendered like `Fail`'s message and
     /// notes, and reported only if the run succeeds.
     Say(String, Vec<NoteView>),
@@ -930,6 +936,16 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             27 => {
                 let mut budget = READ_BUDGET;
                 Ok(Step::Ask(Request::Fields(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
+            }
+            28 => {
+                let mut budget = READ_BUDGET;
+                let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Inj(e, self.nat_of("host_hole_count", vec![tree])?)))
+            }
+            29 => {
+                let mut budget = READ_BUDGET;
+                let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Absurd(e, self.nat_of("host_handle", vec![tree])?)))
             }
             other => Err(format!("a request tree with tag {other}")),
         }
@@ -1773,6 +1789,8 @@ impl Elaborator {
                 Request::Synth(h) => Answer::Handle(refusable(self.synth_request(run, h, span))?),
                 Request::Spine(h) => Answer::Spine(refusable(self.spine_request(run, h))?),
                 Request::Fields(e) => Answer::Fields(refusable(self.fields_request(run, &e))?),
+                Request::Inj(e, k) => Answer::Handle(refusable(self.inj_request(run, &e, k, span))?),
+                Request::Absurd(e, goal) => Answer::Handle(refusable(self.absurd_request(run, &e, goal, span))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2249,7 +2267,7 @@ impl Elaborator {
     }
 
     /// `Spine(h)`: the term `h` stands for as a head applied to arguments,
-    /// read off the kernel's applications with nothing reduced: every
+    /// read off the kernel's applications with nothing reduced but a head β-redex: every
     /// argument, implicit ones included, in order, each with whether the
     /// function's type at it is dependent (its codomain mentions it, as a
     /// type argument's does). A term that is no application is its own head
@@ -2260,7 +2278,11 @@ impl Elaborator {
         let (at, held) = run.held(h)?;
         let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a term"))) };
         let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
-        let t = Rc::new(t);
+        // A β-redex at the head is read as its contractum, as `View` shows
+        // it: an instantiated λ (`(λ s => f(w, s))(x)`, which a `cong_fn` or
+        // a lemma's function argument leaves in a type) is the call `f(w, x)`
+        // (docs/grind-design.md §14.3).
+        let t = Rc::new(crate::spelling::beta_head(&t).unwrap_or(t));
         let mut spine = Vec::new();
         let mut head = &t;
         loop {
@@ -2365,6 +2387,57 @@ impl Elaborator {
         Ok((run.global_ref(GlobalKey::Type(ind.tag)), out))
     }
 
+    /// `Inj(e, k)`: `inj(e, k)`, the equation between the `k`th fields of
+    /// the two sides of `e`, a proof of an equation between values of one
+    /// constructor (as the sides compute). Refused where the surface `inj`
+    /// is: different constructors, a field whose type depends on an earlier
+    /// one, a container or a codata child field
+    /// (docs/host-elaboration-interface-design.md §25).
+    fn inj_request(&self, run: &mut Run, e: &RExpr, k: u64, span: Span) -> Result<u64, Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
+            run.restore(mark);
+            return Err(Fault::Ill("it mentions a hole nothing has solved".into()));
+        };
+        let cx = run.cx(at)?;
+        let (p, pty, plevel) = self
+            .inj_of_term(&cx, k as usize, t, &ty, span)
+            .map_err(|e| Fault::Ill(elab_message(e)))?;
+        Ok(run.issue(at, Held::Term(p, pty, plevel)))
+    }
+
+    /// `Absurd(e, goal)`: `absurd(e)` at the type `goal` holds, from `e`, a
+    /// proof of an equation between values of two different constructors
+    /// (as the sides compute). Refused where the surface `absurd` is: one
+    /// constructor on both sides, or sides that are no constructors'
+    /// (docs/host-elaboration-interface-design.md §25).
+    fn absurd_request(&self, run: &mut Run, e: &RExpr, goal: u64, span: Span) -> Result<u64, Fault> {
+        let gs = run.held(goal)?.0;
+        let at = run.join(run.scope_of(e)?, gs)?;
+        let mark = run.trail.len();
+        let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        // The goal is read after the proof: reifying it may make holes,
+        // which a type read before would not be shifted past.
+        let (gty, glevel) = match run.held(goal)? {
+            (_, Held::Type(t, l)) => (t, l),
+            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {goal} stands for a term, not a type"))),
+        };
+        let unsolved = || Fault::Ill("it mentions a hole nothing has solved".into());
+        let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
+            run.restore(mark);
+            return Err(unsolved());
+        };
+        let expected = run.lift(gs, at, |k| gty.shift_local(k))?;
+        let expected = run.committed_ty(&expected).ok_or_else(unsolved)?;
+        let cx = run.cx(at)?;
+        let p = self
+            .absurd_of_term(&cx, t, &ty, &expected, &glevel, span)
+            .map_err(|e| Fault::Ill(elab_message(e)))?;
+        Ok(run.issue(at, Held::Term(p, expected, glevel)))
+    }
+
     /// A name, elaborated where the `by` is. Elaboration may leave notes and
     /// dependencies behind; a failed one is rolled back.
     fn resolve_request(&self, run: &mut Run, name: &str, span: Span) -> Result<u64, String> {
@@ -2402,6 +2475,7 @@ impl Elaborator {
             "Nat" => GlobalKey::Builtin("Nat"),
             "Succ" => GlobalKey::Builtin("Succ"),
             "True" => GlobalKey::Builtin("True"),
+            "False" => GlobalKey::Builtin("False"),
             _ => match self.lookup_inductive(name) {
                 Some(ind) => GlobalKey::Type(ind.tag),
                 None => match self.key_of(name).and_then(|key| self.global_abs(&key)) {
@@ -2683,7 +2757,15 @@ impl Elaborator {
             let p = run.issue(at, Held::Term((**p).clone(), Type::Nat, Level::Zero));
             return HeadView::Global(run.global_ref(GlobalKey::Builtin("Succ")), "Succ".into(), vec![p]);
         }
-        if let Term::Case { scrut, .. } | Term::ElimNat { scrut, .. } = crate::goal_combinators::head_match(t) {
+        // A `match` applied to arguments (a match whose motive is a function
+        // type, as a codata observation's is) is stuck on the same scrutinee.
+        let mut base = crate::goal_combinators::head_match(t);
+        while let Term::AppAt { fun, .. } = base
+            && matches!(crate::goal_combinators::head_match(fun), Term::Case { .. } | Term::AppAt { .. })
+        {
+            base = crate::goal_combinators::head_match(fun);
+        }
+        if let Term::Case { scrut, .. } | Term::ElimNat { scrut, .. } = base {
             return match self.kernel_type(run, at, scrut) {
                 Some((ty, level)) => HeadView::Match(run.issue_shared(at, scrut, ty, level)),
                 None => HeadView::Other,
@@ -2755,7 +2837,11 @@ impl Elaborator {
             }
             Held::Term(t, ty, l) => {
                 let (t, ty) = (run.committed_tm(&t).ok_or_else(unsolved)?, run.committed_ty(&ty).ok_or_else(unsolved)?);
-                Held::Term(self.goal_oracle().whnf_term(&gamma, &t).map_err(out_of_fuel)?, ty, l)
+                // Projections of a reduct's pairs are read off, as `inj` and
+                // `absurd` read a computed side: a constructor value built
+                // through the checked spelling is a `View`'s `HCtor` only then.
+                let w = self.goal_oracle().whnf_term(&gamma, &t).map_err(out_of_fuel)?;
+                Held::Term((*crate::spelling::contract_projections(&Rc::new(w))).clone(), ty, l)
             }
         };
         Ok(run.issue(at, reduced))

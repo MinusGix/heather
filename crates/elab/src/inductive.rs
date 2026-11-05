@@ -6240,7 +6240,13 @@ impl Elaborator {
     /// on top of this because `Nat` is a kernel type rather than a declared
     /// inductive (issues/absurd-at-nat-numerals.md).
     fn equation(&self, cx: &Cx, e: &Expr, who: &str) -> R<Equation> {
-        let (proof, sty, level, lhs, rhs) = self.equation_as_written(cx, e, who)?;
+        let written = self.equation_as_written(cx, e, who)?;
+        self.reduced_equation(cx, written, e.span)
+    }
+
+    /// [`Self::equation`] from an equation already read off a proof.
+    fn reduced_equation(&self, cx: &Cx, written: Equation, span: Span) -> R<Equation> {
+        let (proof, sty, level, lhs, rhs) = written;
         // A constructor equation may be reached by computation. No-confusion
         // is about the reduced endpoints rather than their source spelling.
         // A reduct through the checked spelling (a codata `match`, whose arm
@@ -6249,8 +6255,8 @@ impl Elaborator {
         // endpoints and every field read off them are emitted, so they are
         // read off here (issues/kernel-refuses-inj-through-corecursive-reduct.md).
         let (lhs, rhs) = (
-            crate::spelling::contract_projections(&self.whnf_tm(cx, &lhs, e.span)?),
-            crate::spelling::contract_projections(&self.whnf_tm(cx, &rhs, e.span)?),
+            crate::spelling::contract_projections(&self.whnf_tm(cx, &lhs, span)?),
+            crate::spelling::contract_projections(&self.whnf_tm(cx, &rhs, span)?),
         );
         Ok((proof, sty, level, lhs, rhs))
     }
@@ -6258,19 +6264,24 @@ impl Elaborator {
     /// [`Self::equation`] with the endpoints as the proof's type spells them.
     fn equation_as_written(&self, cx: &Cx, e: &Expr, who: &str) -> R<Equation> {
         let (proof, proof_ty, _) = self.elab_infer(cx, e)?;
+        self.equation_of(cx, proof, &proof_ty, who, e.span)
+    }
+
+    /// [`Self::equation_as_written`] of an elaborated proof and its type.
+    fn equation_of(&self, cx: &Cx, proof: Term, proof_ty: &Type, who: &str, span: Span) -> R<Equation> {
         let Type::Id {
             level,
             ty,
             lhs,
             rhs,
-        } = self.whnf(cx, &proof_ty, e.span)?
+        } = self.whnf(cx, proof_ty, span)?
         else {
             return err(
                 format!("`{who}` needs a proof of an `=` between constructors"),
-                e.span,
+                span,
             );
         };
-        let sty = self.whnf(cx, &ty, e.span)?;
+        let sty = self.whnf(cx, &ty, span)?;
         Ok((proof, sty, level, lhs, rhs))
     }
 
@@ -6533,6 +6544,33 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let written = self.equation_as_written(cx, arg, "absurd")?;
+        self.absurd_at(cx, written, expected, expected_lvl, arg.span, span)
+    }
+
+    /// [`Self::build_absurd`] of an elaborated proof of type `proof_ty`: a
+    /// tactic's (`Absurd`, docs/host-elaboration-interface-design.md §25).
+    pub(crate) fn absurd_of_term(
+        &self,
+        cx: &Cx,
+        proof: Term,
+        proof_ty: &Type,
+        expected: &Type,
+        expected_lvl: &Level,
+        span: Span,
+    ) -> R<Term> {
+        let written = self.equation_of(cx, proof, proof_ty, "absurd", span)?;
+        self.absurd_at(cx, written, expected, expected_lvl, span, span)
+    }
+
+    fn absurd_at(
+        &self,
+        cx: &Cx,
+        written: Equation,
+        expected: &Type,
+        expected_lvl: &Level,
+        arg_span: Span,
+        span: Span,
+    ) -> R<Term> {
         // An `IWf`-route family, either form: its tag is in the label, under
         // the family's own eliminator (docs/iwf-infinitary-design.md §13).
         if let Some((ind, fam)) = self.iwf_of_at(cx, &written.1) {
@@ -6540,7 +6578,7 @@ impl Elaborator {
         }
         if matches!(written.1, Type::Nat) {
             let (proof, _, _, lhs, rhs) = written;
-            let (lhs, rhs) = (self.whnf_tm(cx, &lhs, arg.span)?, self.whnf_tm(cx, &rhs, arg.span)?);
+            let (lhs, rhs) = (self.whnf_tm(cx, &lhs, arg_span)?, self.whnf_tm(cx, &rhs, arg_span)?);
             return self.build_nat_absurd(cx, proof, lhs, rhs, expected, expected_lvl, span);
         }
         // The two constructors are all `absurd` needs of the sides, so they
@@ -6560,9 +6598,9 @@ impl Elaborator {
             }
             None => {
                 let (proof, sty, level, lhs, rhs) = written;
-                let reduced = (proof, sty, level, self.whnf_tm(cx, &lhs, arg.span)?, self.whnf_tm(cx, &rhs, arg.span)?);
+                let reduced = (proof, sty, level, self.whnf_tm(cx, &lhs, arg_span)?, self.whnf_tm(cx, &rhs, arg_span)?);
                 let (proof, ind, sty, slvl, lhs, rhs, (i, _), (j, _)) =
-                    self.declared_equation(cx, reduced, "absurd", false, arg.span)?;
+                    self.declared_equation(cx, reduced, "absurd", false, arg_span)?;
                 (proof, ind, sty, slvl, lhs, rhs, i, j)
             }
         };
@@ -6643,11 +6681,37 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let equation = self.equation(cx, arg, "inj")?;
+        self.inj_at(cx, k, equation, arg.span, span)
+    }
+
+    /// [`Self::build_inj`] of an elaborated proof of type `proof_ty`: a
+    /// tactic's (`Inj`, docs/host-elaboration-interface-design.md §25).
+    pub(crate) fn inj_of_term(
+        &self,
+        cx: &Cx,
+        k: usize,
+        proof: Term,
+        proof_ty: &Type,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let written = self.equation_of(cx, proof, proof_ty, "inj", span)?;
+        let equation = self.reduced_equation(cx, written, span)?;
+        self.inj_at(cx, k, equation, span, span)
+    }
+
+    fn inj_at(
+        &self,
+        cx: &Cx,
+        k: usize,
+        equation: Equation,
+        arg_span: Span,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
         if let Some((ind, fam)) = self.iwf_of_at(cx, &equation.1) {
             return self.fam_inj(cx, &ind, &fam, k, equation, span);
         }
         let (proof, ind, sty, slvl, lhs, rhs, (i, la), (j, rb)) =
-            self.declared_equation(cx, equation, "inj", true, arg.span)?;
+            self.declared_equation(cx, equation, "inj", true, arg_span)?;
         if i != j {
             return err(
                 format!(

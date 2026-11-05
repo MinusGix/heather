@@ -34,6 +34,8 @@ import nat;
 import int;
 import option;
 import omega;
+import tactic;
+import grind;
 import linarith;
 import relation_props;
 import algebra;
@@ -138,7 +140,7 @@ theorem Float::same_of_squeeze({F: Format}, r, s, t: Float(F), rt: Float::Same(r
                 NaN(_) => λ (no: False) _ => false_elim(no),
             }(rt0, st0),
             Inf(m, hm) => λ (a: m = bool::False) st0 => match t as λ t0 => Float::Same(Float::Fin(f), t0) → Float::Le(Float::Inf(m, hm), t0) → Float::Same(Float::Fin(f), Float::Inf(m, hm)) {
-                Fin(_) => λ _ (b: m = bool::True) => absurd(trans(sym(a), b)),
+                Fin(_) => λ _ (b: m = bool::True) => by grind(),
                 Inf(_, _) => λ (no: False) _ => false_elim(no),
                 NaN(_) => λ (no: False) _ => false_elim(no),
             }(rt0, st0),
@@ -147,14 +149,14 @@ theorem Float::same_of_squeeze({F: Format}, r, s, t: Float(F), rt: Float::Same(r
         Inf(n, hn) => λ rt0 rs0 => match t as λ t0 => Float::Same(Float::Inf(n, hn), t0) → Float::Le(s, t0) → Float::Same(Float::Inf(n, hn), s) {
             Fin(_) => λ (no: False) _ => false_elim(no),
             Inf(k, hk) => λ (e: n = k) st0 => match s as λ s0 => Float::Le(Float::Inf(n, hn), s0) → Float::Le(s0, Float::Inf(k, hk)) → Float::Same(Float::Inf(n, hn), s0) {
-                Fin(_) => λ (a: n = bool::True) (b: k = bool::False) => absurd(trans(trans(sym(b), sym(e)), a)),
+                Fin(_) => λ (a: n = bool::True) (b: k = bool::False) => by grind(),
                 Inf(m, _) => λ (a: n = bool::True ∨ m = bool::False) (b: m = bool::True ∨ k = bool::False) => match a {
                     Inl(nt) => match b {
                         Inl(mt) => trans(nt, sym(mt)),
-                        Inr(kf) => absurd(trans(trans(sym(kf), sym(e)), nt)),
+                        Inr(kf) => by grind(),
                     },
                     Inr(mf) => match b {
-                        Inl(mt) => absurd(trans(sym(mf), mt)),
+                        Inl(mt) => by grind(),
                         Inr(kf) => trans(e, trans(kf, sym(mf))),
                     },
                 },
@@ -856,8 +858,8 @@ theorem Float::le_trans({F: Format}, a, b, c: Float(F), ab: Float::Le(a, b), bc:
                 NaN(_) => λ no => false_elim(no),
             },
             Inf(n, hn) => λ (nf: n = bool::False) => match c {
-                Fin(_) => λ (nt: n = bool::True) => absurd(trans(sym(nf), nt)),
-                Inf(m, _) => λ (w: n = bool::True ∨ m = bool::False) => match w { Inl(nt) => absurd(trans(sym(nf), nt)), Inr(mf) => mf },
+                Fin(_) => λ (nt: n = bool::True) => by grind(),
+                Inf(m, _) => λ (w: n = bool::True ∨ m = bool::False) => match w { Inl(nt) => by grind(), Inr(mf) => mf },
                 NaN(_) => λ no => false_elim(no),
             },
             NaN(_) => λ no => false_elim(no),
@@ -869,10 +871,10 @@ theorem Float::le_trans({F: Format}, a, b, c: Float(F), ab: Float::Le(a, b), bc:
                 NaN(_) => λ no => false_elim(no),
             },
             Inf(n, hn) => λ (w1: k = bool::True ∨ n = bool::False) => match c {
-                Fin(_) => λ (nt: n = bool::True) => match w1 { Inl(kt) => kt, Inr(nf) => absurd(trans(sym(nf), nt)) },
+                Fin(_) => λ (nt: n = bool::True) => match w1 { Inl(kt) => kt, Inr(nf) => by grind() },
                 Inf(m, _) => λ (w2: n = bool::True ∨ m = bool::False) => match w1 {
                     Inl(kt) => Inl(kt),
-                    Inr(nf) => match w2 { Inl(nt) => absurd(trans(sym(nf), nt)), Inr(mf) => Inr(mf) },
+                    Inr(nf) => match w2 { Inl(nt) => by grind(), Inr(mf) => Inr(mf) },
                 },
                 NaN(_) => λ no => false_elim(no),
             },
