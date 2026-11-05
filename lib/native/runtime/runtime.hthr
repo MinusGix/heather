@@ -105,6 +105,7 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>) → Verdict {
             },
         },
         Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
+        Case(_, _, _) => Refused("a `match` on a `Nat` that is not a loop's fuel: only a fuel recursion's top `match` is lowered"),
     }
 }
 
@@ -474,6 +475,7 @@ fn Ty::quote(self t: Ty, q: RtQ) → Expr {
         Bytes(c) => ap(runtime_at(q.ty, 2), [NatLit(c)]),
         Lines => runtime_at(q.ty, 3),
         Named(i) => ap(runtime_at(q.ty, 4), [NatLit(i)]),
+        Count => runtime_at(q.ty, 5),
     }
 }
 
@@ -484,7 +486,7 @@ fn RtQ::nat_list(self q: RtQ, ns: List<Nat>) → Expr { RtQ::seq(q.nats, ns.map(
 fn Op::quote(self o: Op, q: RtQ) → Expr {
     let c = runtime_at(q.op, o.code().fst);
     match o {
-        Conj => c, Disj => c, Neg => c,
+        Conj => c, Disj => c, Neg => c, ToNat => c,
         Zext(w, extra) => ap(c, [NatLit(w), NatLit(extra)]),
         _ => ap(c, [NatLit(o.code().snd.fst)]),
     }
@@ -502,6 +504,7 @@ fn Tm::quote(self t: Tm, q: RtQ) → Expr {
         Field(i, k, of) => ap(runtime_at(q.tm, 7), [NatLit(i), NatLit(k), NatLit(of)]),
         Call(f, args) => ap(runtime_at(q.tm, 8), [NatLit(f), q.nat_list(args)]),
         Fold(over, init, step) => ap(runtime_at(q.tm, 9), [NatLit(over), NatLit(init), NatLit(step)]),
+        Case(c, zero, succ) => ap(runtime_at(q.tm, 10), [NatLit(c), zero.quote(q), succ.quote(q)]),
     }
 }
 
