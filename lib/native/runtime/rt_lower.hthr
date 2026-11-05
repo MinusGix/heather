@@ -45,7 +45,10 @@
 // `Function::eval` to the curried meaning. `Fold`, `zero_extend` and the
 // byte primitives lower to `None`, so the theorem holds of them vacuously
 // until their case is written (issues/runtime-default-setup-soundness.md
-// says what each waits on).
+// says what each waits on). `Case`, a fuel's `match`, lowers to `None` here
+// too: a fuel recursion's body is one, and `rt_loop.hthr` lowers that
+// function as a loop. `ToNat` is free: a count is held as the word it is
+// the `toNat` of.
 
 import logic;
 import bool;
