@@ -1,0 +1,3 @@
+import logic; import bool; import nat; import list; import option; import tactic; import grind;
+theorem dq_pi(f: Nat → Nat, a, b: Nat, h: f(a) = f(b) → False, e: a = b): False { by grind() }
+theorem dq_not(f: Nat → Nat, a, b: Nat, h: f(a) ≠ f(b), e: a = b): False { by grind() }

@@ -1,0 +1,3 @@
+import x86_64; import logic; import tactic; import grind;
+theorem e1<M>(a, b: MachineState<M>, h: a = b): erase_af(a) = erase_af(b) { by grind() }
+theorem e2<M>(a, b: MachineState<M>, h: a = b): SameDefinedState<M>(a, b) { by grind() }

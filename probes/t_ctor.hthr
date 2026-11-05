@@ -1,0 +1,9 @@
+import logic; import bool; import nat; import list; import option; import tactic; import grind;
+
+theorem inj_cons(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): a = b { by grind() }
+theorem inj_tail(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): as = bs { by grind() }
+theorem disjoint_nil<P>(x: Nat, xs: List<Nat>, h: (Nil<Nat> = Cons(x, xs))): P { by grind() }
+theorem diseq_cong(f: Nat → Nat, a, b: Nat, h: f(a) ≠ f(b)): a ≠ b { by grind() }
+theorem read_same(r: Nat → Option<Nat>, x, l, m: Nat, h1: r(x) = Some(l), h2: r(x) = Some(m)): l = m { by grind() }
+theorem bool_squeeze(n: Bool, h1: n = True, h2: n = False): False { by grind() }
+theorem bool_squeeze_eq(n: Bool, a, b: Nat, h1: n = True, h2: n = False): a = b { by grind() }

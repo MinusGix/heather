@@ -1,0 +1,9 @@
+import logic; import bool; import nat; import list; import option; import tactic; import grind;
+// expect-error: not in one class
+theorem n_inj(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): as = Nil { by grind() }
+// expect-error: no contradiction
+theorem n_disj(n: Bool, h: n = True): False { by grind() }
+// expect-error: no contradiction
+theorem n_diseq(f: Nat → Nat, a, b: Nat, h: f(a) ≠ f(b)): False { by grind() }
+// expect-error: no contradiction
+theorem n_same_ctor<A>(x, y: A, h: Some(x) = Some(y)): False { by grind() }

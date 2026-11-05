@@ -2414,13 +2414,16 @@ impl Elaborator {
     /// constructor on both sides, or sides that are no constructors'
     /// (docs/host-elaboration-interface-design.md §25).
     fn absurd_request(&self, run: &mut Run, e: &RExpr, goal: u64, span: Span) -> Result<u64, Fault> {
-        let (gs, gty, glevel) = match run.held(goal)? {
-            (s, Held::Type(t, l)) => (s, t, l),
-            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {goal} stands for a term, not a type"))),
-        };
+        let gs = run.held(goal)?.0;
         let at = run.join(run.scope_of(e)?, gs)?;
         let mark = run.trail.len();
         let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        // The goal is read after the proof: reifying it may make holes,
+        // which a type read before would not be shifted past.
+        let (gty, glevel) = match run.held(goal)? {
+            (_, Held::Type(t, l)) => (t, l),
+            (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {goal} stands for a term, not a type"))),
+        };
         let unsolved = || Fault::Ill("it mentions a hole nothing has solved".into());
         let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
             run.restore(mark);

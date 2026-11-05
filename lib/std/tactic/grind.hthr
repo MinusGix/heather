@@ -2140,19 +2140,34 @@ fn saturate(rounds: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, gt: 
 // locals in order.
 record Opening { target: Handle, sides: Option<Pair<Handle, Handle>>, opened: List<LocalInfo> }
 
+// Is `v` written as a function type, or as `Not(P)` (`a ≠ b`)? Only those
+// are opened: a definition whose value is a function type (an order `Le`
+// defined as one) is the goal as written, and a `λ` over its unfolded
+// binders is not checked against it.
+fn opens(v: Head) → Bool {
+    match v {
+        HPi(_) => True,
+        HGlobal(_, name, args) => chars_same(name.chars, "Not".chars).and(args.len().same(1)),
+        _ => False,
+    }
+}
+
 fn open_goal(fuel: Nat, ty: Handle, opened: List<LocalInfo>) → Tac<Opening> {
     sides_of(ty).bind(λ o => match o {
         Some(p) => Pure(Opening(ty, Some(p), opened)),
         None => match fuel {
             Zero => Pure(Opening(ty, None, opened)),
-            Succ(f) => whnf(ty).bind(λ c => match c {
-                Refused(_) => Pure(Opening(ty, None, opened)),
-                Accepted(w) => view(w).bind(λ v => match v {
-                    HPi(_) => open(w, "h").bind(λ oc => match oc {
-                        Refused(_) => Pure(Opening(ty, None, opened)),
-                        Accepted(op) => open_goal(f, op.body, opened ++ [op.local]),
+            Succ(f) => view(ty).bind(λ v0 => match opens(v0) {
+                False => Pure(Opening(ty, None, opened)),
+                True => whnf(ty).bind(λ c => match c {
+                    Refused(_) => Pure(Opening(ty, None, opened)),
+                    Accepted(w) => view(w).bind(λ v => match v {
+                        HPi(_) => open(w, "h").bind(λ oc => match oc {
+                            Refused(_) => Pure(Opening(ty, None, opened)),
+                            Accepted(op) => open_goal(f, op.body, opened ++ [op.local]),
+                        }),
+                        _ => Pure(Opening(ty, None, opened)),
                     }),
-                    _ => Pure(Opening(ty, None, opened)),
                 }),
             }),
         },

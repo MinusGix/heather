@@ -1,0 +1,6 @@
+import logic; import bool; import nat; import list; import option; import tactic; import grind;
+theorem succ_cong(a, b: Nat, h: a = b): Succ(a) = Succ(b) { by grind() }
+theorem succ_inj2(a, b: Nat, h: Succ(a) = Succ(b)): a = b { by grind() }
+theorem succ_zero(a: Nat, h: Succ(a) = 0): False { by grind() }
+theorem succ_lemma(f: Nat → Nat, k: (n: Nat) → f(Succ(n)) = n, a, b: Nat, h: b = Succ(a)): f(b) = a { by grind() }
+theorem succ_lit(f: Nat → Nat, a: Nat, h: a = 2): f(Succ(a)) = f(3) { by grind() }

@@ -20,6 +20,8 @@ import list;
 import logic;
 import nat;
 import option;
+import tactic;
+import grind;
 
 // ---------------------------------------------------------------------------
 // A run, as it happened: at each syscall, one answer and one choice of what
@@ -148,7 +150,7 @@ theorem lists_read_alike(source: Nat → Option<BitVec(8)>, left: List<BitVec(8)
             Nil => λ length _ _ => false_elim(Nat::succ_ne_zero(xs.len(), length)),
             Cons(y, ys) => λ length first second =>
                 List::cons_eq(xs, ys, x, y,
-                    Option::some_inj(x, y, trans(sym(first(Zero, x, refl)), second(Zero, y, refl))),
+                    by grind_with([first(Zero, x, refl), second(Zero, y, refl)]),
                     lists_read_alike(λ i => source(Succ(i)), xs, ys, Nat::succ_inj(xs.len(), ys.len(), length),
                         λ i byte found => first(Succ(i), byte, found), λ i byte found => second(Succ(i), byte, found))),
         },

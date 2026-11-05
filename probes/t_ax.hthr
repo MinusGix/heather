@@ -1,0 +1,25 @@
+import logic; import bool; import nat; import list; import option; import tactic; import grind;
+
+theorem lit_inj(b: Nat, as, bs: List<Nat>, h: Cons(1, as) = Cons(b, bs)): b = 1 { by grind() }
+theorem open_inj<A>(a, b: A, as, bs: List<A>, h: Cons(a, as) = Cons(b, bs)): as = bs { by grind() }
+theorem check_inj<A>(f: A → Nat, a, b: A, h: Some(a) = Some(b)): f(b) = f(a) {
+    let p: (f(a) = f(b)) = by grind();
+    sym(p)
+}
+inductive Tri { One(n: Nat), Two(n: Nat, m: Nat), Three }
+theorem tri_inj(a, b, c, d: Nat, h: Two(a, b) = Two(c, d)): b = d { by grind() }
+theorem tri_disj(a, b: Nat, t: Tri, h1: t = Two(a, b), h2: t = Three): a = b { by grind() }
+theorem tri_disj_one<P>(a, b, c: Nat, h: One(a) = Two(b, c)): P { by grind() }
+record Pt { x: Nat, y: Nat }
+theorem pt_inj(a, b, c, d: Nat, h: Pt(a, b) = Pt(c, d)): b = d { by grind() }
+record Pinned { here: Nat, there: Nat, same: here = there }
+theorem pinned_inj(a, b, c, d: Nat, s: a = b, t: c = d, h: Pinned(a, b, s) = Pinned(c, d, t)): a = c { by grind() }
+theorem nested_inj(a, b: Nat, h: Some(Cons(a, Nil)) = Some(Cons(b, Nil))): a = b { by grind() }
+theorem lit_disj(n: Nat, h1: n = 3, h2: n = 4): False { by grind() }
+theorem succ_inj(a, b: Nat, h: Succ(a) = Succ(b)): a = b { by grind() }
+theorem succ_zero(a: Nat, h: Succ(a) = 0): False { by grind() }
+theorem forall_goal(f: Nat → Nat, k: (n: Nat) → f(n) = n): (m: Nat) → f(f(m)) = m { by grind() }
+theorem reported(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): a = b { by grind_report([], []) }
+theorem lemma_inj(r: Nat → Option<Nat>, k: (x: Nat) → r(x) = r(Succ(x)), x, l, m: Nat, h1: r(x) = Some(l), h2: r(Succ(x)) = Some(m)): l = m { by grind() }
+theorem diseq_hint(a, b: Nat, f: Nat → Nat, h: f(a) ≠ f(b), e: a = b): 0 = 1 { by grind() }
+theorem diseq_goal_ctor<A>(x: A): Some(x) ≠ None { by grind() }
