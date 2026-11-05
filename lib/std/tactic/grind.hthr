@@ -79,8 +79,15 @@ theorem congr_fun<A, B>({f: A → B}, {g: A → B}, {a: A}, hf: f = g): f(a) = g
     j(hf, λ h q => f(a) = h(a), refl)
 }
 
-// Any equation from a contradiction, its sides given.
+// Any equation from a contradiction, its sides given; anything from one;
+// and the successor's injectivity. grind's own, so that a module using
+// grind need not import the modules that state them (a law is resolved
+// where the `by` is).
 theorem exfalso<A>(x: A, y: A, h: False): x = y { false_elim(h) }
+
+theorem elim_false<P>(h: False): P { false_elim(h) }
+
+theorem succ_inj(n: Nat, m: Nat, h: Succ(n) = Succ(m)): n = m { Nat::succ_inj(n, m, h) }
 
 // ---------------------------------------------------------------------------
 // The graph: an e-graph of the library (`lib/std/data/egraph.hthr`) over
@@ -1528,7 +1535,7 @@ fn law(name: String) → Tac<GlobalRef> { lookup(name).or_fail("grind: `" ++ nam
 fn grind_laws() → Tac<GrindLaws> {
     law("trans").bind(λ t => law("sym").bind(λ s => law("cong").bind(λ c =>
     law("grind::congr").bind(λ cr => law("grind::congr_fun").bind(λ cf => law("tactic::rfl").bind(λ r => law("grind::defn").bind(λ d =>
-    law("False").bind(λ f => law("false_elim").bind(λ fe => law("grind::exfalso").bind(λ ex => law("Nat::succ_inj").bind(λ si =>
+    law("False").bind(λ f => law("grind::elim_false").bind(λ fe => law("grind::exfalso").bind(λ ex => law("grind::succ_inj").bind(λ si =>
     Pure(GrindLaws(t, s, c, cr, cf, r, d, f, fe, ex, si)))))))))))))
 }
 
@@ -1793,7 +1800,7 @@ fn inject_fields(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, xs: List
     }
 }
 
-// `Succ(x)` and `Succ(y)` of one class: `x = y` by `Nat::succ_inj` of `pf`,
+// `Succ(x)` and `Succ(y)` of one class: `x = y` by `grind::succ_inj` of `pf`,
 // their equation (the kernel's `Nat` is no declared inductive, so `Inj`
 // does not take it apart).
 fn inject_succ(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, xs: List<Nat>, ys: List<Nat>) → Facts {
@@ -2056,7 +2063,7 @@ fn proved(report: Bool, l: GrindLaws, fs: Facts, lhs: Nat, rhs: Nat) → Tac<Exp
 // The goal from a contradiction: `absurd`'s proof is of it; a
 // disequality's is of `False`, which is the goal, or `exfalso` takes to an
 // equation goal (its sides spelled: under the binders the goal opened, the
-// proof is inferred, not checked), or `false_elim` to any other.
+// proof is inferred, not checked), or `elim_false` to any other.
 fn by_contra(report: Bool, l: GrindLaws, fs: Facts, gt: GoalAt, c: Contra) → Tac<Expr> {
     is_false(l.fals, gt.target).bind(λ f => finish_with(report, fs, names_once(c.uses, []), match c.of_false {
         False => c.proof,

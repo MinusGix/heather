@@ -2267,7 +2267,7 @@ impl Elaborator {
     }
 
     /// `Spine(h)`: the term `h` stands for as a head applied to arguments,
-    /// read off the kernel's applications with nothing reduced: every
+    /// read off the kernel's applications with nothing reduced but a head β-redex: every
     /// argument, implicit ones included, in order, each with whether the
     /// function's type at it is dependent (its codomain mentions it, as a
     /// type argument's does). A term that is no application is its own head
@@ -2278,7 +2278,11 @@ impl Elaborator {
         let (at, held) = run.held(h)?;
         let Held::Term(t, ..) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a term"))) };
         let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
-        let t = Rc::new(t);
+        // A β-redex at the head is read as its contractum, as `View` shows
+        // it: an instantiated λ (`(λ s => f(w, s))(x)`, which a `cong_fn` or
+        // a lemma's function argument leaves in a type) is the call `f(w, x)`
+        // (docs/grind-design.md §14.3).
+        let t = Rc::new(crate::spelling::beta_head(&t).unwrap_or(t));
         let mut spine = Vec::new();
         let mut head = &t;
         loop {
