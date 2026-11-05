@@ -78,3 +78,4 @@ diagnosing is the right behaviour.
   before this; the issue exists so that the *shared* fix has somewhere to
   live, and so the claim "these should be lifted together" is tracked rather
   than asserted in a doc comment.
+- 2026-11-05: gardener: cites a file it shares with [[parametric-type-families]] (`docs/inductive-tier0-lowering.md`).

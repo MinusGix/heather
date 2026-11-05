@@ -47,3 +47,7 @@ over relations, so predicativity is no obstacle.
 **Not given by the technique:** normalisation, canonicity, consistency,
 decidability of conversion, inversion for neutrals. Those keep the port
 assessment's limit and its reflection schema.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[kernel-model]] (`docs/definitional-inversion-survey.md`).

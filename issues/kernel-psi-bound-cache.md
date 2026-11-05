@@ -24,3 +24,7 @@ Kernel change: run `scripts/bench --check` (the cache exists for performance, `d
 ## Related
 
 Filed together from the implicit-state-machines survey (`docs/implicit-state-machines-survey.md`, 2026-11-02, ranked there): [[elab-field-lifetimes-explicit]], [[module-pass-state-machine]], [[decl-attempt-lifecycle]], [[goal-slot-state-enum]], [[kernel-checker-mode-enum]].
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`crates/kernel/src/reduce.rs`); [[elab-emits-normal-form-of-matched-type-argument]] (`docs/conversion-query-arena-pooling-design.md`); [[reducer-step-frame-size]] (`crates/kernel/src/reduce.rs`).

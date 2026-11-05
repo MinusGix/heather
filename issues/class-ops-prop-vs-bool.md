@@ -79,3 +79,4 @@ Open sub-questions, recorded not answered:
   `if P` asks for `Decide<P>`, with `Compile<P>` an additional runtime concern
   rather than a source-typing prerequisite — and owns evidence binding,
   dependent branches, and diagnostics.
+- 2026-11-05: gardener: cites a file it shares with [[quantifier-notation-in-type-arguments]] (`docs/nat-order-design.md`).

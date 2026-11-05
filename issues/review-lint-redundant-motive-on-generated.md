@@ -18,3 +18,7 @@ The lint judges motives the measure lowering wrote, not motives in the source. I
 
 ## Done when
 The lint fires only on motives written in the source. Measure-lowered and generated matches are excluded, and a probe pins it.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[omega-guard-reads-nat-match]] (`lib/_tests/std/tactic/omega_tests.hthr`).

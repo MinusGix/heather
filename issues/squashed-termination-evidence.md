@@ -123,3 +123,4 @@ The propositional β is where the design meets Heather's equality.
 - 2026-10-26: Filed from reading the FSCD 2026 and LICS 2026 papers (both
   PDFs added to `docs/`). Records the gap, the literature's design and where
   it meets Heather's relevant `Id`. No round scheduled.
+- 2026-11-05: gardener: cites a file it shares with [[implicit-logical-assumptions]] (`docs/LIPIcs.LICS.2026.41.pdf`); [[lean-translation-fragment]] (`docs/axiom-provenance-design.md`).

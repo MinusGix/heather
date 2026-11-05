@@ -18,6 +18,11 @@ INDEX = ISSUES / "INDEX.md"
 
 STATUSES = ["open", "blocked", "closed"]
 
+# `milestone: [none]` spells "intentionally unplaced": a decision that the
+# issue serves no milestone, as opposed to nobody having placed it yet
+# (docs/agent-policy.md §7). It stands alone in the list.
+UNPLACED = "none"
+
 # The areas and milestones an issue's `area:`/`milestone:` may name, and their
 # importance order, live in two tables of the roadmap (docs/roadmap.md owns
 # them; this script only reads them).
@@ -304,15 +309,20 @@ def cmd_index(args):
         print(text, end="")
 
 
-def cmd_log(args):
-    entry = as_log_entry(read_prose(args.text, args.body_file, "entry", default_stdin=True))
-    path = find(args.slug)
+def append_log(path: Path, entry: str):
+    """Append a rendered entry under the issue's `## Log`, creating it."""
     text = path.read_text().rstrip("\n")
     if "\n## Log" not in text:
         text += "\n\n## Log"
     sep = "\n\n" if text.endswith("## Log") else "\n"
     text += sep + entry
     path.write_text(text + "\n")
+
+
+def cmd_log(args):
+    entry = as_log_entry(read_prose(args.text, args.body_file, "entry", default_stdin=True))
+    path = find(args.slug)
+    append_log(path, entry)
     set_field(path, "updated", today())
     print(f"{path.stem}: logged")
     print_backlinks(path.stem, "Assumes something about this — re-read before moving on:")
@@ -328,7 +338,9 @@ def cmd_tag(args):
     if args.area is not None and args.area not in {a["area"] for a in areas}:
         sys.exit(f"error: unknown area '{args.area}' (see docs/roadmap.md)")
     ms = parse_list(args.milestone or "")
-    unknown = [x for x in ms if x not in {m["milestone"] for m in milestones}]
+    if UNPLACED in ms and len(ms) > 1:
+        sys.exit(f"error: milestone '{UNPLACED}' (intentionally unplaced) stands alone")
+    unknown = [x for x in ms if x not in {m["milestone"] for m in milestones} | {UNPLACED}]
     if unknown:
         sys.exit(f"error: unknown milestone(s) {', '.join(unknown)} (see docs/roadmap.md)")
     for slug in args.slugs:
@@ -348,16 +360,24 @@ def cmd_areas(_args):
     issues = load_all()
     live = lambda m: m["status"] != "closed"
     wname = max([len(a["area"]) for a in areas] + [9])
-    print(f"{'pri':>4}  {'area':<{wname}}  {'tier':<9} open  closed")
+    # unplaced: open, no milestone yet (awaiting a placement); none: open and
+    # deliberately serving no milestone (`milestone: [none]`).
+    print(f"{'pri':>4}  {'area':<{wname}}  {'tier':<9} open  unplaced  none  closed")
     for a in areas:
         ms = [m for m in issues if m["area"] == a["area"]]
-        print(f"{a['rank']:>4}  {a['area']:<{wname}}  {a['tier']:<9} {sum(map(live, ms)):>4}  {len(ms) - sum(map(live, ms)):>6}")
+        op = [m for m in ms if live(m)]
+        unplaced = sum(1 for m in op if not m["milestone"])
+        none = sum(1 for m in op if m["milestone"] == [UNPLACED])
+        print(f"{a['rank']:>4}  {a['area']:<{wname}}  {a['tier']:<9} {len(op):>4}  {unplaced:>8}  {none:>4}  {len(ms) - len(op):>6}")
         mine = [x for x in milestones if x["area"] == a["area"]]
         for mi in [x for x in mine if not x["parent"]] + [x for x in mine if x["parent"] and x["parent"] not in {y["milestone"] for y in mine}]:
             for depth, x in [(0, mi)] + [(1, c) for c in mine if c["parent"] == mi["milestone"]]:
                 serving = sorted(m["slug"] for m in issues if x["milestone"] in m["milestone"] and live(m))
                 print(f"{'':>4}    {'  ' * depth}- {x['milestone']} ({x['status']}): {len(serving)} open"
                       + (f": {', '.join(serving)}" if serving else ""))
+    op = [m for m in issues if live(m)]
+    print(f"\n{len(op)} open: {sum(1 for m in op if not m['milestone'])} unplaced, "
+          f"{sum(1 for m in op if m['milestone'] == [UNPLACED])} intentionally unplaced (milestone: [{UNPLACED}])")
     untagged = [m for m in issues if not m["area"] and live(m)]
     if untagged:
         print(f"\n{len(untagged)} open issue(s) with no area: scripts/issue list --area none --status open")
@@ -396,8 +416,10 @@ def cmd_check(_args):
             problems.append(f"{m['slug']}: unknown status '{m['status']}'")
         if m["area"] and m["area"] not in area_names:
             problems.append(f"{m['slug']}: unknown area '{m['area']}' (docs/roadmap.md)")
+        if UNPLACED in m["milestone"] and len(m["milestone"]) > 1:
+            problems.append(f"{m['slug']}: milestone '{UNPLACED}' (intentionally unplaced) must stand alone")
         for x in m["milestone"]:
-            if x not in milestone_names:
+            if x not in milestone_names and x != UNPLACED:
                 problems.append(f"{m['slug']}: unknown milestone '{x}' (docs/roadmap.md)")
     by_ms = {mi["milestone"]: mi for mi in milestones}
     for mi in milestones:
@@ -410,20 +432,10 @@ def cmd_check(_args):
     # Warnings, not errors: judgement calls the README's ownership rules ask
     # for, which were both live in the tracker on 2026-07-27.
     warnings = []
-    linked = set()
-    for m in issues:
-        linked |= set(re.findall(r"\[\[([^\]]+)\]\]", m["body"])) | set(m["blocked-by"])
-    # The roadmap is a finder too: an issue it links is not unfindable.
-    if ROADMAP.exists():
-        linked |= set(re.findall(r"issues/([a-z0-9-]+)\.md", ROADMAP.read_text()))
-    for m in issues:
-        if m["status"] != "open":
-            continue
-        entries = re.findall(r"^- \d{4}-\d\d-\d\d: .*", m["body"], re.M)
-        if entries and re.search(r"\b(LANDED|DONE|COMPLETE|IMPLEMENTED)\b", entries[-1]):
-            warnings.append(f"{m['slug']}: open, but its last log entry says it landed (README rule 3)")
-        if m["slug"] not in linked:
-            warnings.append(f"{m['slug']}: open and nothing links to it — unfindable (README rule 1)")
+    for m in landed_but_open(issues):
+        warnings.append(f"{m['slug']}: open, but its last log entry says it landed (README rule 3)")
+    for m in unlinked(issues):
+        warnings.append(f"{m['slug']}: open and nothing links to it — unfindable (README rule 1)")
 
     untagged = [m for m in issues if m["status"] != "closed" and not m["area"]]
     if untagged:
@@ -437,6 +449,173 @@ def cmd_check(_args):
         sys.exit(1)
     print(f"ok: {len(issues)} issues, no dangling links"
           + (f" ({len(warnings)} warning(s))" if warnings else ""))
+
+
+# ---------------------------------------------------------------- garden
+#
+# The deterministic half of the tracker gardener (docs/agent-policy.md §7,
+# [[tracker-gardener]]). It reports; `--apply` performs only what §7 lets the
+# gardener do on its own (links, a single-fit area), and every proposal
+# (closing, milestones, `wanted`) is left to a person or a thread.
+
+WIKI = re.compile(r"\[\[([^\]]+)\]\]")
+LOG_ENTRY = re.compile(r"^- \d{4}-\d\d-\d\d: .*", re.M)
+LANDED_WORDS = re.compile(r"\b(landed|done|closed|merged|complete|implemented)\b", re.I)
+# A repository path an issue cites, in its body or `code:`; stops at `:line`.
+CITED = re.compile(r"(?<![\w/.-])((?:crates|lib|docs|scripts|perf|probes)/[A-Za-z0-9_./-]*[A-Za-z0-9_])")
+GARDENER = "gardener"
+
+
+def last_log_entry(m):
+    """The last log entry a person or a round wrote: the gardener's own link
+    lines say nothing about the issue's progress, and cite file names that
+    would match the landed words (`docs/closed-…`)."""
+    entries = [e for e in LOG_ENTRY.findall(m["body"]) if not e[14:].startswith(f"{GARDENER}:")]
+    return entries[-1] if entries else ""
+
+
+def landed_but_open(issues):
+    """README rule 3's hand check: open issues whose last log entry says the
+    work landed (or is done, closed, merged). A candidate list for a reader:
+    "done" also matches "not done yet"."""
+    return [m for m in issues if m["status"] == "open" and LANDED_WORDS.search(last_log_entry(m))]
+
+
+def unlinked(issues):
+    """README rule 1's hand check: open issues no issue links to (body
+    `[[…]]` or `blocked-by`) and the roadmap does not name."""
+    linked = set()
+    for m in issues:
+        linked |= {x for x in WIKI.findall(m["body"]) if x != m["slug"]} | set(m["blocked-by"])
+    if ROADMAP.exists():
+        linked |= set(re.findall(r"issues/([a-z0-9-]+)\.md", ROADMAP.read_text()))
+    return [m for m in issues if m["status"] == "open" and m["slug"] not in linked]
+
+
+def cited_files(m):
+    """Files (not directories) the issue cites in `code:` or its body."""
+    text = m.get("code", "") + "\n" + m["body"]
+    return {p.rstrip(".") for p in CITED.findall(text) if "." in p.rstrip(".").rsplit("/", 1)[-1]}
+
+
+def links_between(a, b):
+    return (f"[[{b['slug']}]]" in a["body"] or f"[[{a['slug']}]]" in b["body"]
+            or a["slug"] in b["blocked-by"] or b["slug"] in a["blocked-by"])
+
+
+def link_candidates(issues, max_sharers):
+    """{(a, b): [files]} for open issues a < b that cite a common file and do
+    not link each other. A file cited by more than `max_sharers` open issues
+    is a hotspot (the elaborator core, the roadmap), not evidence of a
+    relation, and is skipped."""
+    open_ = {m["slug"]: m for m in issues if m["status"] == "open"}
+    by_file = {}
+    for m in open_.values():
+        for f in cited_files(m):
+            by_file.setdefault(f, set()).add(m["slug"])
+    pairs = {}
+    for f, slugs in sorted(by_file.items()):
+        if not 2 <= len(slugs) <= max_sharers:
+            continue
+        slugs = sorted(slugs)
+        for i, a in enumerate(slugs):
+            for b in slugs[i + 1:]:
+                if not links_between(open_[a], open_[b]):
+                    pairs.setdefault((a, b), []).append(f)
+    return pairs
+
+
+def lane_footprints():
+    """[(area, regex)] from the roadmap's Parallel lanes table, for lanes that
+    name exactly one area (in backticks, or as the lane's name). Only the
+    backticked paths before a `;` count: what follows is commentary
+    ("shared with `language`", "reads … at most in comments")."""
+    if not ROADMAP.exists():
+        return []
+    text = ROADMAP.read_text()
+    m = re.search(r"^\| lane \| main footprint \|\n\|[-| ]+\|\n((?:\|.*\n)+)", text, re.M)
+    if not m:
+        return []
+    names = {a["area"] for a in load_roadmap()[0]}
+    out = []
+    for line in m.group(1).splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        lane, foot = cells[0], cells[1]
+        named = [x for x in re.findall(r"`([^`]+)`", lane) if x in names]
+        if not named and "," not in lane:
+            slug = lane.strip().lower().replace(" ", "-")
+            named = [slug] if slug in names else []
+        if len(named) != 1:
+            continue
+        for pat in re.findall(r"`([^`]+)`", foot.split(";")[0]):
+            rx = re.escape(pat).replace(r"\*", "[^/]*")
+            rx = re.sub(r"\\\{(.*?)\\\}", lambda g: "(?:" + g.group(1).replace(",", "|") + ")", rx)
+            rx = ("^" if "/" in pat else "(?:^|/)") + rx + ("" if pat.endswith(("/", "*")) else "$")
+            out.append((named[0], re.compile(rx)))
+    return out
+
+
+def single_fit_area(m, lanes):
+    """The one area whose lanes cover every code file (`crates/`, `lib/`)
+    the issue cites, or None when none or several fit, or a file falls
+    outside every lane."""
+    files = [f for f in cited_files(m) if f.startswith(("crates/", "lib/"))]
+    if not files:
+        return None
+    fits = set()
+    for f in files:
+        hit = {area for area, rx in lanes if rx.search(f)}
+        if len(hit) != 1:
+            return None
+        fits |= hit
+    return fits.pop() if len(fits) == 1 else None
+
+
+def cmd_garden(args):
+    issues = load_all()
+    by_slug = {m["slug"]: m for m in issues}
+    landed = landed_but_open(issues)
+    orphans = unlinked(issues)
+    pairs = link_candidates(issues, args.max_sharers)
+    lanes = lane_footprints()
+    areas = {m["slug"]: a for m in issues
+             if m["status"] == "open" and not m["area"] and (a := single_fit_area(m, lanes))}
+
+    def section(title, rows):
+        print(f"## {title} ({len(rows)})\n")
+        for r in rows:
+            print(f"- {r}")
+        print()
+
+    section("Open, last log says landed (README rule 3: close, or file residue first)",
+            [f"{m['slug']}: {last_log_entry(m)[2:][:160]}" for m in landed])
+    section("Open, nothing links to it (README rule 1)", [m["slug"] for m in orphans])
+    section(f"Candidate links: open issues citing a common file (≤{args.max_sharers} citers)",
+            [f"[[{a}]] ↔ [[{b}]]: " + ", ".join(f"`{f}`" for f in fs) for (a, b), fs in sorted(pairs.items())])
+    section("Single-fit area for an open issue with none (roadmap Parallel lanes)",
+            [f"{s}: {a}" for s, a in sorted(areas.items())])
+
+    if not args.apply:
+        print("dry run: `scripts/issue garden --apply` adds the links and areas above, "
+              "one log line per touched issue, `updated:` left alone")
+        return
+
+    # One entry per touched issue, whatever it gained.
+    notes = {}
+    for (a, b), fs in sorted(pairs.items()):
+        files = ", ".join(f"`{f}`" for f in fs)
+        notes.setdefault(a, []).append(f"[[{b}]] ({files})")
+        notes.setdefault(b, []).append(f"[[{a}]] ({files})")
+    entries = {s: f"{GARDENER}: cites a file it shares with " + "; ".join(xs) + "." for s, xs in notes.items()}
+    for s, area in areas.items():
+        set_field(by_slug[s]["path"], "area", area)
+        line = f"area set to `{area}`: every code file it cites is in that lane's footprint."
+        entries[s] = entries[s] + " " + line[0].upper() + line[1:] if s in entries else f"{GARDENER}: {line}"
+    for s, text in sorted(entries.items()):
+        append_log(by_slug[s]["path"], f"- {today()}: {text}")
+    print(f"applied: {len(pairs)} link(s), {len(areas)} area(s); logged on {len(entries)} issue(s)")
 
 
 WEB = Path(__file__).resolve().parent / "issue-web.html"
@@ -591,6 +770,13 @@ def main():
 
     sp = sub.add_parser("check", help="lint: dangling links/blocked-by")
     sp.set_defaults(fn=cmd_check)
+
+    sp = sub.add_parser("garden", help="tracker gardener checks: landed-but-open, unlinked, candidate links, single-fit areas")
+    sp.add_argument("--apply", action="store_true",
+                    help="add the candidate links and single-fit areas (one log line per issue; updated: untouched)")
+    sp.add_argument("--max-sharers", type=int, default=3, metavar="N",
+                    help="ignore files cited by more than N open issues (hotspots); default 3")
+    sp.set_defaults(fn=cmd_garden)
 
     sp = sub.add_parser("serve", help="read-only web viewer (list, areas, link graph)")
     sp.add_argument("--port", type=int, default=8765)

@@ -62,4 +62,4 @@ declined with its reason.
   more than an order of magnitude, with the query, miss and step counts
   falling in proportion; `scripts/perf ab` numbers are on the PR. Counts
   move by design here (the terms are smaller); verdicts do not.
-
+- 2026-11-05: gardener: cites a file it shares with [[kernel-coinductive-types]] (`docs/itree-core-round.md`).

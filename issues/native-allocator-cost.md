@@ -49,3 +49,4 @@ certificate states the check over the emission's parts
   `native_tools.rs` builds `tr` that way. The first scope item is done, and
   the check by parts landed with [[native-tool-certificate-budget]]; the
   better choices are what is left.
+- 2026-11-05: gardener: cites a file it shares with [[native-procedures-write-elf-capacity]] (`lib/native/native_alloc.hthr`).

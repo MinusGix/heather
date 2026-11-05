@@ -27,3 +27,5 @@ terms. heather-coq's `probes/IwfLowering2.v` checked this case (`allTail`
 at `List a`) in the formalization's rules, so no kernel change is expected.
 
 ## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[indexed-families]] (`docs/iwf-former-design.md`).

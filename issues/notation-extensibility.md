@@ -356,3 +356,4 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   the carrier (docs/unifier-completeness-design.md, amendment 2026-10-27).
   `∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k))` checks at
   `Rat`, `Nat` and an open semiring with no binder annotations.
+- 2026-11-05: gardener: cites a file it shares with [[integer-operator-symbols]] (`crates/syntax/src/lexer.rs`); [[self-hosted-lexer]] (`crates/syntax/src/lexer.rs`).

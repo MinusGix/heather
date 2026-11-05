@@ -81,3 +81,7 @@ guessing which malformed encodings the kernel would happen to reject.
   generator's *own* precondition needs an observer: `gen_wt_term` produced an
   ill-typed term at 1 in 3000 and the only check on that was 300 cases on one
   seed stream.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[guard-matches-self-calls-by-term]] (`docs/inductive-tier1-wf-lowering.md`); [[nested-inductives-container-fields]] (`docs/inductive-tier1-wf-lowering.md`).

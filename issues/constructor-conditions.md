@@ -47,3 +47,7 @@ terms would see the normal-form carrier and explicit normalisation).
 - **[[setoid-roadmap-and-resumption]]** owns the paused setoid area.
   Assumed here: only that setoids remain the route for quotients without
   normal forms (Cauchy reals and the like), so this does not replace them.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[interval-paths-for-funext]] (`docs/no-uip-model.md`).

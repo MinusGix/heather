@@ -70,3 +70,4 @@ integration round. The other slices have their own issues:
   Still open here: `Fold` and measured recursion in the lowering, then deleting
   `crates/elab/src/function_ir_source/`; `Bool` helpers; `heather reflect` from
   instances; callees by instance search.
+- 2026-11-05: gardener: cites a file it shares with [[compile-typeclass-design]] (`lib/_tests/native/runtime/runtime_tests.hthr`).

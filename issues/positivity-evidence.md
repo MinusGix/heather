@@ -53,3 +53,4 @@ listed in the note's §8; this issue closes when they are filed.
 - 2026-10-12: 2026-10-12: Round 2 landed: parameter defaults `h: 0 < n := omega` and `:= positivity` run at the call over the caller's hypotheses ([[named-arguments]], docs/named-arguments-design.md §9.6).
 - 2026-10-13: 2026-10-13: Round 4 landed: [[pos-binder-sugar]] (parameters, results with `f::pos`, record fields; note §11).
 - 2026-10-14: Round 5 landed: [[retire-shifted-pos]] (design §14).
+- 2026-11-05: gardener: cites a file it shares with [[pos-sugar-library-adoption]] (`docs/positivity-evidence-design.md`); [[setoid-roadmap-and-resumption]] (`lib/std/pos.hthr`).

@@ -29,3 +29,7 @@ themselves, and it grows with every part a tool adds.
 
 `bytes_#_#` grows at a visibly smaller constant per pass on the 8/16/32
 pass cat scratch tools, or is gone, with the ELF bytes unchanged.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[native-procedures-write-elf-capacity]] (`crates/cli/src/native/emission.rs`).

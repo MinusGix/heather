@@ -959,3 +959,4 @@ tests included.
   longer refused; `given` and `context` still are. Still open here: the `given`
   clause, named bundles (sections-design §7 records when to look again), the
   `_` carrier slot, `as m` naming, and the requires-removal decision.
+- 2026-11-05: gardener: cites a file it shares with [[generate-in-sections]] (`crates/syntax/src/parser.rs`); [[parallel-checking-and-caching]] (`crates/cache/tests/end_to_end.rs`); [[record-value-param-symbol]] (`crates/syntax/src/parser.rs`); [[type-owned-namespaces]] (`docs/sections-design.md`).

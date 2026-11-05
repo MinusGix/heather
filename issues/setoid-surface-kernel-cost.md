@@ -48,3 +48,7 @@ ordinary `rel_cong`/`calc` use with nothing to search.
   extra is the occurrence conversion and the gate checking `app@` spines),
   well under the generated-source overhead this issue measured. rel_cong's
   own cost is unchanged.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[x86-64-machine-model]] (`lib/std/arch/x86_64/x86_64.hthr`).

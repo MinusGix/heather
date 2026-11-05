@@ -24,3 +24,7 @@ compiled natively. This is the second half of what
 ## What it assumes from elsewhere
 
 - **[[native-compiled-procedures]]** and **[[native-heap-arena]]**: the compiler is code with procedures and lists.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[kernel-failed-conversion-cost]] (`crates/cli/src/native/elf.rs`); [[native-procedures-write-elf-capacity]] (`crates/cli/src/native/elf.rs`).

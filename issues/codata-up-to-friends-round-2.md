@@ -98,3 +98,4 @@ Left (each refused with its reason):
   its data arguments; the call writes them.
 
 Found on the way, not a friends gap: [[corec-match-on-index-term]].
+- 2026-11-05: gardener: cites a file it shares with [[coitree-rec-program-bridge]] (`docs/coitree-design.md`); [[kernel-coinductive-types]] (`docs/codata-elaborator-design.md`); [[partial-functions-coinductive]] (`docs/coitree-design.md`).

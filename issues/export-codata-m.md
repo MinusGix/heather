@@ -37,3 +37,7 @@ be:
 
 The first thing to find out is which uses in `coitree` need `corec`'s β
 definitionally, since that decides between the first two options.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[kernel-coinductive-types]] (`crates/kernel/tests/m.rs`).

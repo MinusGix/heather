@@ -58,3 +58,4 @@ round.
   and `InBounds` end to end (of four reads, three checks dropped by the
   range analysis, the range analysis and the exhaustive check; the fourth,
   a real out-of-bounds read, kept).
+- 2026-11-05: gardener: cites a file it shares with [[regex-dfa-compiler]] (`docs/compilation-vision.md`).

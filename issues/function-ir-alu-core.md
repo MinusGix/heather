@@ -76,4 +76,4 @@ allocation details.
 a `Move` reads its source at the wider width, which says nothing of the
 narrow value. A zero-extend (and truncate) node with its equation would let
 `Tm::lower_sound` cover it like the other primitives.
-
+- 2026-11-05: gardener: cites a file it shares with [[runtime-default-setup-soundness]] (`lib/native/runtime/rt_lower.hthr`).

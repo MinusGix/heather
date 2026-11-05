@@ -41,3 +41,7 @@ sketched against current `lib/`.
 - **[[memory-bound-certificates]]** owns the space model. Assumed here: only
   that it meters by an explicit budget, which is a cost effect.
 - **[[effects-direction]]** owns how effects are denoted at all.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[linux-syscall-trace-model]] (`docs/interaction-trees-fit.md`); [[polynomial-functor-interfaces]] (`docs/interaction-trees-fit.md`).

@@ -130,3 +130,4 @@ scratch (205 s). The detached build seems to have died with the hook.
   [[sentinel-images-not-published]]), and the native certificate gates are
   now ~45 % of the suite; what the PR lane should run is
   [[pr-lane-cost-2026-10-29]].
+- 2026-11-05: gardener: cites a file it shares with [[image-store-identity-overwrite]] (`crates/cache/src/module_image.rs`); [[perf-instrumentation-consolidation]] (`crates/cli/src/semantic.rs`); [[warm-replay-relocate-cost]] (`crates/cli/src/semantic.rs`).

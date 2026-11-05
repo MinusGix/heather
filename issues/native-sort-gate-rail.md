@@ -29,3 +29,4 @@ in `scripts/run-test-targets.mjs`, and the focused path in `scripts/test`).
 This issue stays open for the other half: make sort's and tac's certificates
 cheaper, then drop the override. Under the override `scripts/test -p
 heather-cli --test native_tools` passes 14/14.
+- 2026-11-05: gardener: cites a file it shares with [[native-tool-test-cold-certificate-rail]] (`crates/cli/tests/native_tools.rs`); [[runtime-fn-arena-lists]] (`crates/cli/tests/native_tools.rs`).

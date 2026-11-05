@@ -27,3 +27,7 @@ splits on whether `C·x` is itself subnormal: then `g = C·x` exactly when
 it fits, and `d = x - g = -S·x`, `xh = x` and `xl = 0` might follow by
 direct computation. Low priority: Dekker's product, the customer, already
 excludes underflow.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[match-on-proof-call-cost]] (`lib/std/num/float/eft.hthr`).

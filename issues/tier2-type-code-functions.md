@@ -45,4 +45,4 @@ comparison are recorded here.
   own declarations roughly double their gate counters (`mono_with` 10.7k →
   100k steps) and the run's total seconds rise by a few percent. Landing the
   code function should return the ported modules to their old counts.
-
+- 2026-11-05: gardener: cites a file it shares with [[parametric-type-families]] (`docs/higher-kinded-classes-design.md`).

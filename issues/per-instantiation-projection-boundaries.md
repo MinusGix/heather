@@ -70,3 +70,4 @@ checking, literal computation and false-equality controls. These cases pass
 with modest evaluator-step growth; the measurement table lives in
 [[call-run-checked-theorem-cost]]. No receiver-policy change follows from
 this bounded probe, and the larger native scaling workloads remain required.
+- 2026-11-05: gardener: cites a file it shares with [[relational-algebra-normalization]] (`docs/showcase/finite_set_client.hthr`); [[setoid-auto-lifting]] (`docs/showcase/finite_set_client.hthr`).

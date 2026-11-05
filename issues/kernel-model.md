@@ -65,3 +65,4 @@ ladder: `docs/kernel-model-design.md`.
   relation, rung 4's strategy changes can be proved sound against the
   declarative rules inside Heather. Owned by
   `definitional-inversion-domain-model`.
+- 2026-11-05: gardener: cites a file it shares with [[bitvec-width-generic-decision]] (`docs/kernel-model-design.md`); [[definitional-inversion-domain-model]] (`docs/definitional-inversion-survey.md`); [[generator-ctors-open-types]] (`lib/kernel_model/kernel_reduction.hthr`).

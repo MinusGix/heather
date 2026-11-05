@@ -46,3 +46,7 @@ constant-time come later and separately.
 - Multiplication and division in FunctionIR and the x86 model
   ([[std-nat-multiplication]], [[nat-div-mod-lemma-kit]]) are where the
   variable-time instructions arrive.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[native-compiled-code-shape]] (`docs/zeroization-survey.md`); [[ownership-discipline-over-code]] (`docs/constant-time-survey.md`).

@@ -25,3 +25,7 @@ to inline it.
 
 A runtime fn taking and returning a `WcState`-shaped record is called from
 two sites and its code is emitted once.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[function-ir-verified-lowering]] (`lib/native/function_ir/function_ir.hthr`).

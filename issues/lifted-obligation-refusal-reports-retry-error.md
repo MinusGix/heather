@@ -27,3 +27,7 @@ when both attempts fail the diagnostic should prefer it, or show both.
 ## When
 Triggered: the next `decreases` refusal a writer reports as pointing at nothing
 they wrote, or the next round in `elab_measure_decl`.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[omega-guard-reads-nat-match]] (`docs/omega-measure-reduction-design.md`).

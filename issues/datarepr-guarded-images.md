@@ -36,3 +36,7 @@ are theorems today (`ArenaRef::cons_abs` takes the bound as a hypothesis).
 `native_arena`'s representation is a `datarepr` declaration whose `Cons`
 image is guarded by the arena's limit, and a negative control (an unguarded
 `Cons_inv` for it) is refused with its reason.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[datarepr-separation]] (`crates/elab/src/datarepr.rs`); [[native-arena-cell-codecs]] (`lib/native/native_arena.hthr`); [[runtime-fn-arena-lists]] (`lib/native/native_arena.hthr`).

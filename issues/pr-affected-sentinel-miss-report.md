@@ -15,3 +15,7 @@ failing target to a merge, it should also run `scripts/affected-targets.mjs
 selected. A "not selected" is a selector bug to fix (an input the selector
 does not see), and the count of them over time is the data §2.3 of
 docs/testing-architecture-design.md asked for before trusting the lane.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[pr-affected-runtime-readers]] (`scripts/affected-targets.mjs`).

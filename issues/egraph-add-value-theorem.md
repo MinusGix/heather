@@ -19,3 +19,7 @@ Wanted: `node_among`'s soundness (a found index holds a node whose operator
 
 ## What it assumes from elsewhere
 - **[[egraph-library]]** owns the graph and its `Agrees` invariant.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[egraph-ematch-soundness]] (`lib/std/data/egraph.hthr`); [[egraph-setoid-path-algebra]] (`lib/std/data/egraph.hthr`).

@@ -38,3 +38,7 @@ Measure with `--timings` on a warm store by hand (`scripts/perf ab`'s warm
 mode starts from a fresh store and never reaches the vouched run); the
 column is `image_relocate_ns`, which since this issue was filed covers the
 composition moves as well as the early cutoff's.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[mono-failure-under-upcast-cost]] (`lib/_tests/std/tactic/mono_tests.hthr`); [[nested-goal-discharge]] (`crates/kernel/src/subst.rs`); [[perf-instrumentation-consolidation]] (`crates/cli/src/semantic.rs`); [[testing-architecture]] (`crates/cli/src/semantic.rs`).

@@ -20,3 +20,7 @@ What does a **code-native** sharing construct look like: one whose recursor bran
 
 ## What it assumes from elsewhere
 - **[[elab-emits-normal-form-of-matched-type-argument]]** owns the computing-layer fix. Assumed here: only that payloads keep the component forms, with the quote-boundary translation ⌊·⌋ (design §2.3, amended) as the single place that produces them from pasted-in checked spellings. A code-sharing former would be what that translator targets.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[generators-in-the-language]] (`crates/kernel/src/rec.rs`); [[metatheory-lemma-sweep]] (`docs/ch05-06-lemma-audit.md`).

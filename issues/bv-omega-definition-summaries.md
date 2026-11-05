@@ -59,3 +59,7 @@ Questions to settle first:
 - **[[bv-omega-check-cost]]** owns the per-call costs (omega context width,
   generalised words, facts shared between calls). Assumed here: only that a
   summary's instantiation costs less than the unfolding it replaces.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[certifying-arithmetic-proof-automation]] (`docs/bv-omega-design.md`).

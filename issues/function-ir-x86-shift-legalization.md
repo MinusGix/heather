@@ -43,3 +43,4 @@ appears.
 ## Log
 
 - 2026-10-28: Tracker tidy: dropped `blocked-by: [function-ir-x86-constants]`, which is closed (immediates and variable-length layout landed). The scope still stands: the verified lowering refuses the three shift nodes (`Region::lower`, `lib/native/function_ir/function_ir_lower.hthr`, `ShiftLeft(_, _, _, _) => None`), and `Asm` has no shift instruction forms yet, so the legalization rule and the SHL/SHR/SAR forms both land against the verified lowering rather than the per-function path B2 retired.
+- 2026-11-05: gardener: cites a file it shares with [[function-ir-verified-lowering]] (`lib/native/function_ir/function_ir_lower.hthr`).

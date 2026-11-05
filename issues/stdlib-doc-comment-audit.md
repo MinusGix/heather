@@ -56,3 +56,4 @@ Heather does not yet extract documentation mechanically.
   roles are written in `docs/stdlib-style.md`. Full suite: 1,980 passed, 0
   failed. This issue remains open for the deeper declaration-by-declaration
   pass, with Tree still intentionally deferred to [[tree-library-public-shape]].
+- 2026-11-05: gardener: cites a file it shares with [[stdlib-surface-style-lint]] (`docs/stdlib-style.md`).

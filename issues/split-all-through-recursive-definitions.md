@@ -28,3 +28,7 @@ gate is unchanged.
 
 Acceptance: `count_lines_fold`'s Cons case is
 `{ let same = …; let more = …; split_all; all_goals { omega } }`.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[split-all-revise-hypotheses]] (`docs/goal-combinators.md`); [[tactic-composition-ergonomics]] (`docs/goal-combinators.md`).

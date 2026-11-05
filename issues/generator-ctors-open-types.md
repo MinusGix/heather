@@ -36,3 +36,4 @@ axis is not exercised by a generator yet.
 ## Log
 
 - 2026-10-31: `tac-host-interface` is marked done in docs/roadmap.md (its "done when" is met), so this issue no longer serves it; it stays open in area `tactics` with no milestone.
+- 2026-11-05: gardener: cites a file it shares with [[kernel-model]] (`lib/kernel_model/kernel_reduction.hthr`).

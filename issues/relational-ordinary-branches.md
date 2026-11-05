@@ -21,3 +21,7 @@ This is same-choice Boolean support; differently chosen branches belong to [[rel
 ## Scheduling
 
 Captured for a future concrete driver; not scheduled by this filing. See [[setoid-roadmap-and-resumption]].
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[relational-derivation-diagnostics]] (`docs/showcase/derive_set_functions.hthr`).

@@ -21,3 +21,7 @@ Customer: `union_interchange` and `extend_stable` in `docs/showcase/finite_set_c
 ## Scheduling
 
 Captured for a future concrete driver; not scheduled by this filing. See [[setoid-roadmap-and-resumption]].
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[per-instantiation-projection-boundaries]] (`docs/showcase/finite_set_client.hthr`).

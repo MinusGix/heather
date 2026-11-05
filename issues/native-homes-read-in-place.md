@@ -20,3 +20,7 @@ and save both, if S4's placement accepts a register it must not write.
 - S4 leaf inputs placed in their home registers when the leaf does not
   write them.
 - Sizes for cat, tr, yes and echo after.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[native-compile-stat]] (`lib/native/native_compile.hthr`); [[native-compiled-code-shape]] (`lib/native/native_compile.hthr`).

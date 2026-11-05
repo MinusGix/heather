@@ -479,3 +479,4 @@ types and constructors. Profiles, file scope, section-level type parameters,
   for irrelevant axioms that hold in a set model. For a classical profile, it
   argues for stating providers squashed whenever a squashed statement serves the
   consumer.
+- 2026-11-05: gardener: cites a file it shares with [[squashed-termination-evidence]] (`docs/LIPIcs.LICS.2026.41.pdf`).

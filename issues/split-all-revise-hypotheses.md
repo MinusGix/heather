@@ -28,3 +28,4 @@ Related: [[split-all-reduce-defined-heads]].
 ## Log
 
 - 2026-10-31: 2026-10-31: slice 2 of dependent-match-compiler refines hypotheses at a computed scrutinee in the elaborator's motive-less match, but split_all's Cases (host.rs cases_request) builds its own motive from the goal alone, so this stays open. The fix is to generalize the about-the-scrutinee locals there the way refined_by_occurrence selects them, every one (a tactic leaf may read any).
+- 2026-11-05: gardener: cites a file it shares with [[literal-classes-need-importing]] (`docs/native-programs-read-like-programs-design.md`); [[split-all-through-recursive-definitions]] (`docs/goal-combinators.md`); [[tactic-composition-ergonomics]] (`docs/goal-combinators.md`).

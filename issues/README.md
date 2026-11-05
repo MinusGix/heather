@@ -16,7 +16,8 @@ status: open          # open | blocked | closed
 thread: T1            # optional; work thread (see THREADS section below if/when we add one)
 labels: [kernel, ir]  # optional
 area: kernel          # one area from docs/roadmap.md; every open issue has one
-milestone: [hih-memory]   # optional; roadmap milestones this issue serves
+milestone: [hih-memory]   # optional; roadmap milestones this issue serves;
+                          # [none] = intentionally unplaced
 blocked-by: [other-slug]  # optional; slugs of blocking issues
 code: crates/kernel/src/term.rs:120 @ 980b47e  # optional; path:line @ commit
 created: 2026-07-22
@@ -33,6 +34,9 @@ Link related issues as [[other-slug]].
   topics); a milestone is a result the issue helps reach, possibly in another
   area (`inductive-compiler` is `language` work serving `it-library`). Give a
   new issue its area when filing it.
+- **`milestone: [none]`** records a decision that an issue serves no
+  milestone. It stands alone in the list; `areas` counts such issues apart
+  from the *unplaced* ones, which nobody has placed yet.
 - Code references are `path:line @ shorthash` — resolve with `git show <hash>:<path>`.
 - History of an issue: `git log --follow issues/<slug>.md`.
 - Closing keeps the file (set `status: closed`); it stays greppable.
@@ -68,8 +72,10 @@ point at an existing issue, or record that a *decision* owes nothing) and then
 close. Both [[surface-records]] and [[surface-universe]] had landed in full and
 stayed open for exactly this reason.
 
-Two checks worth running by hand, since `scripts/issue check` does not:
-open issues whose last log says LANDED/DONE, and open issues nothing links to.
+The two checks these rules ask for are `scripts/issue garden`: open issues
+whose last log entry says landed, done, closed or merged (close them, filing
+residue first), and open issues nothing links to. `check` repeats both as
+warnings.
 
 ## CLI
 
@@ -87,6 +93,7 @@ scripts/issue log <slug> --body-file entry.md              # same, named file
 scripts/issue log <slug> "note"                            # short entries only
 scripts/issue threads                                      # per-thread status counts
 scripts/issue check                                        # lint links/blocked-by
+scripts/issue garden [--apply] [--max-sharers N]           # gardener checks; --apply links
 scripts/issue index [-o PATH]                              # markdown index by status, to stdout
 scripts/issue serve [--port 8765] [--open]                 # read-only web viewer
 scripts/issue export <dir>                                 # the same viewer as static files
@@ -104,6 +111,16 @@ and selection state lives in the URL hash, so a view can be bookmarked.
 `api/issues`, `api/stamp`, fetched by relative path) for a static host.
 
 Mutating commands (`new`, `close`, `reopen`, `log`) update `updated:`.
+
+**`garden`** is the deterministic half of the tracker gardener
+(`docs/agent-policy.md` §7, [[tracker-gardener]]). It lists landed-but-open
+issues, unlinked issues, candidate links (open issues that cite a common
+file, skipping files more than `--max-sharers` open issues cite) and a
+single-fit `area:` for open issues with none (every `crates/`/`lib/` file it
+cites in one area's lane footprint, `docs/roadmap.md` Parallel lanes).
+`--apply` performs the links and areas only, as one `gardener:` log line per
+touched issue, leaving `updated:` alone like `tag`. Closing, milestones and
+`wanted` are proposals, never applied by the script.
 
 **There is no committed index.** `index` prints the one-line-per-issue
 overview (grouped by status, with thread, labels and blockers) to stdout, for

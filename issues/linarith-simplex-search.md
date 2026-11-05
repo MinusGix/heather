@@ -32,3 +32,7 @@ No customer yet. The first `nlinarith` refusal at the row bound is one.
 
 - **[[nlinarith-products-of-facts]]** owns the product rows. Assumed here:
   only that they are rows like any other.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[interval-variable-boxes]] (`docs/nonlinear-arithmetic-design.md`); [[sos-certificate-oracle]] (`docs/nonlinear-arithmetic-design.md`).

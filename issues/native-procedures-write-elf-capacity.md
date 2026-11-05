@@ -19,3 +19,7 @@ Residue of [[native-compiled-procedures]] (closed 2026-11-01): what `heather wri
 ## Done when
 
 A builder tool with procedures goes through the part-wise lowering, the Rust allocator gives a source with procedures the fork's homes (checked by `HEATHER_ELF_ALLOCATOR=both` in a test), and a procedure's check is stated over its body's parts.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[kernel-failed-conversion-cost]] (`crates/cli/src/native/elf.rs`); [[native-allocator-cost]] (`lib/native/native_alloc.hthr`); [[native-certificate-fork-byte-reads]] (`crates/cli/src/native/emission.rs`); [[self-hosted-compiler]] (`crates/cli/src/native/elf.rs`).

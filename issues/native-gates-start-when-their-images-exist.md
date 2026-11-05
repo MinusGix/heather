@@ -71,3 +71,4 @@ only earlier.
   now builds the native folders' closures first (`--build-first`), and they
   are built by about 99 s with the step's length unchanged
   ([[native-closure-builds-first]]).
+- 2026-11-05: gardener: cites a file it shares with [[early-cutoff-registry-and-order-granularity]] (`crates/cli/tests/library.rs`); [[pr-lane-prelude-change-images]] (`crates/cli/tests/library.rs`).

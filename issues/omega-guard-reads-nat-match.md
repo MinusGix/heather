@@ -35,3 +35,7 @@ Acceptance: `omega(f.ok, nz)` gives `F.half() <= f.mag` from
 `nz: 0 < f.bexp`; `canonical_elim`'s third conjunct is `omega`-provable as
 an `∨` goal or the clients above drop their `match c.right.right.left`; a
 probe and a control in `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[frontend-roadmap]] (`docs/omega-measure-reduction-design.md`); [[lifted-obligation-refusal-reports-retry-error]] (`docs/omega-measure-reduction-design.md`); [[review-lint-redundant-motive-on-generated]] (`lib/_tests/std/tactic/omega_tests.hthr`).

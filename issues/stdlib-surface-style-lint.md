@@ -144,3 +144,4 @@ rewrite that would change which later argument participates in inference.
   remaining executable chains in Nat/Int; all three now use one argument list.
   This issue remains open for provenance-aware designated-operator spelling.
 - 2026-09-16: [[heather-formatter]] takes the whitespace half (the tight-comma spelling in lib/std/parser, 1,741 of the library's 1,790 occurrences). It decides nothing about which spelling is idiomatic, which stays here.
+- 2026-11-05: gardener: cites a file it shares with [[stdlib-doc-comment-audit]] (`docs/stdlib-style.md`).

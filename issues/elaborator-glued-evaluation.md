@@ -32,3 +32,7 @@ atoms syntactically: in the sequencing design's probe P2, `omega` treated
 
 A design note decided by Minus, with the first slice filed. The note states
 which open spelling issues it retires.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[elab-emits-normal-form-of-matched-type-argument]] (`docs/nbe-conversion-design.md`).

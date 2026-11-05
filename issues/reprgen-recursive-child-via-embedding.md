@@ -129,3 +129,7 @@ theorem pred_raw_refines(r: Bin, h: bin_canon(r)): bin_abs(pred_raw(r)) = pred(b
   v1 images are total, so the embedding exists.
 - **[[repr-fold-via-abs-default]]** generated `N_emb`/`N_emb_abs`/`N_emb_inv`.
   Assumed here: only that they exist, under those names, at a defaulted fold.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[datatype-container-algebras]] (`docs/proof-repair-algebra-survey.md`); [[parallel-checking-and-caching]] (`crates/elab/tests/support/mod.rs`); [[suite-tests-reelaborate-library-modules]] (`crates/elab/tests/support/mod.rs`).

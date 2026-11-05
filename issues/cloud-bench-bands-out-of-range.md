@@ -39,3 +39,7 @@ regression. `rewrite/fa` sits within run-to-run noise of its edge.
 
 A cloud `scripts/bench --check` and `scripts/bench-frontend --check` pass on
 their bands, or each family left outside has a written reason.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[parallel-checking-and-caching]] (`docs/frontend-benchmarking.md`); [[prelude-clone-cost-grew]] (`docs/frontend-benchmarking.md`).

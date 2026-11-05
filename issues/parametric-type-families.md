@@ -56,3 +56,4 @@ patches or this round's first step).
 ## Log
 
 - 2026-10-31: [[higher-kinded-classes]] landed without this round: pieces 1–2 did not need <A> as kernel families, because tier-0/1 generic declarations already register D#tycode_fn : Π(A : Ty 0). Ty l, which is the constructor value, and the unifier's ?M(A) ≟ Option<A> is first-order against its respelling. This round no longer gates it; what remains of the case is the cost side (per-use substitution, trial-by-kernel-check resolution, level profiles other than all-Ty 0). docs/higher-kinded-classes-design.md §6.
+- 2026-11-05: gardener: cites a file it shares with [[dependent-field-injectivity]] (`docs/inductive-tier0-lowering.md`); [[inductive-compiler]] (`docs/inductive-tier0-lowering.md`); [[tier2-type-code-functions]] (`docs/higher-kinded-classes-design.md`).

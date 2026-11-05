@@ -33,3 +33,4 @@ section, and a client's failing `mono` costs what it did.
 - 2026-11-02: Filed from the ordered-algebra round. Probe: a scratch module
   with `section<A: OrderedField(≈, <, <=, +, *)> { theorem t(a, b, c: A, h: a <= b): a * c <= b * c { by mono() } }`
   needs more than 8 GiB of address space; at `OrderedSemiring` it fits in 1 GiB.
+- 2026-11-05: gardener: cites a file it shares with [[warm-replay-relocate-cost]] (`lib/_tests/std/tactic/mono_tests.hthr`).

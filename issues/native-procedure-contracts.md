@@ -64,3 +64,4 @@ This issue records that shape so the procedures round starts from it.
 
 - 2026-10-31: docs/native-procedures-design.md §5 takes the derived-contract part: a procedure's claim is Stmt::emit_runs at the callee's Target (its frames on the caller's, one less depth), proved for every procedure at once by induction on the call depth (the linking theorem, depth for Löb). No per-slot footprint is needed for it: the callee's words are its own by the meaning (restored), buffers shared. The footprint, the relational frame for Proved contracts and the two controls stay here.
 - 2026-11-01: The meaning now makes the callee's words its own outright (it starts from zero, only its results and buffers come back) and the caller saves its live words, so the derived contract still needs no footprint.
+- 2026-11-05: gardener: cites a file it shares with [[native-register-moves-and-convention]] (`docs/native-procedures-design.md`).

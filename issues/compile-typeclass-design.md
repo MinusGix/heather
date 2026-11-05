@@ -57,3 +57,4 @@ bespoke; revisit once the kernel exists.
 - 2026-11-04: `class Compile<F>(f: F)` exists (`lib/native/runtime/runtime.hthr`,
   docs/runtime-fn-setups-design.md §16.8), and `runtime fn f` publishes its
   instance; a use site finds it by search (`lib/_tests/native/runtime/runtime_tests.hthr`).
+- 2026-11-05: gardener: cites a file it shares with [[runtime-fn-default-setup]] (`lib/_tests/native/runtime/runtime_tests.hthr`); [[surface-syntax]] (`docs/sketches/surface-v1.md`).

@@ -89,3 +89,4 @@ that does not exist.
   environment-local and not a property of the change; the fills-per-occurrence
   reasoning above stands, but the +2.8 % should not be quoted as its evidence.
 - 2026-10-25: From docs/segmap-survey.md §2: candidate 1 stays a weight-0 thinning (a constant offset, composing by addition), which is all a lazy signature read needs. A cutoff (invariant (I) of the lazy-offset design) would need a weight-1 offset, i.e. northeast c then north k; but the boxed sites materialize for trap 2 (boxes compare by ==), not for lack of a cutoff, so a richer offset type alone would not make them lazy.
+- 2026-11-05: gardener: cites a file it shares with [[env-lookup-depth]] (`docs/segmap-survey.md`); [[open-payload-shift-copies]] (`docs/segmap-survey.md`); [[perf-dashboard]] (`perf/README.md`).

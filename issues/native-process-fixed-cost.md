@@ -111,3 +111,4 @@ those cases.
     building process lands a theorem would remove it; that touches what the
     cache vouches for, so it is its own round.
 - 2026-10-31: 2026-10-31: hih-tools closed (docs/compiler-milestones-proposal.md §8). Retagged nh-effects: [[effects-uniqueness-surface]] rewrites the tools, which must check under the suite's rail.
+- 2026-11-05: gardener: cites a file it shares with [[dependency-policy]] (`docs/cache-v1-design.md`); [[parallel-checking-and-caching]] (`docs/cache-v1-design.md`).

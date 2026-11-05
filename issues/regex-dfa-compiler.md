@@ -24,3 +24,7 @@ The `regex` language (`lib/std/text/regex.hthr`, docs/value-definitions-design.m
 ## Done when
 
 `regex def is_hex = "[0-9a-f]+";` publishes a `Compile(is_hex)` instance whose code is the DFA runner over `is_hex::term().dfa()`, cited by a `runtime fn` that calls `is_hex`.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[facts-on-demand]] (`docs/compilation-vision.md`).

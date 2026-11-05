@@ -97,3 +97,4 @@ Here `omega_check` also sheds half a second, and correctly: that bracket wraps `
   stable enough to write down, and what was moving was the tree under two
   recorded tables, not a column.
 - 2026-09-17: 2026-09-17: a standing consumer of the --timings tables: [[perf-dashboard]] summarizes the run, module and heaviest item rows of a corpus of files into perf/snapshots/ and reads them back with deltas. Residue it exposed on first use: at width > 1 the run row's kernel_gate_ns is the main thread's share only, so the snapshot attributes at width one and records the default-width wall separately.
+- 2026-11-05: gardener: cites a file it shares with [[elab-emits-normal-form-of-matched-type-argument]] (`crates/kernel/src/stats.rs`, `lib/std/tactic/omega.hthr`); [[shard-long-unit-test-binaries]] (`crates/cli/src/main.rs`); [[testing-architecture]] (`crates/cli/src/semantic.rs`); [[warm-replay-relocate-cost]] (`crates/cli/src/semantic.rs`).

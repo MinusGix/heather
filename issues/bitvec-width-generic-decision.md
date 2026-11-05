@@ -70,3 +70,7 @@ the real entry point.
   should be defined once where both can import it.
 - **[[function-ir-narrow-arithmetic]]** owns the narrow-width lowering
   rules. They are a customer: each rule is a fragment law.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[kernel-model]] (`docs/kernel-model-design.md`).

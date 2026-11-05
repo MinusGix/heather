@@ -14,3 +14,7 @@ Lever: the runner already shards `family_*` binaries by module (docs/elab-test-f
 Danger: per-test shards change that binary's per-process state (a test relying on another's warm cache in the same process would run cold); the rails are per shard, which is stricter, not looser.
 
 Trigger: the full lane's wall matters more than it does today, or this target grows.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[perf-instrumentation-consolidation]] (`crates/cli/src/main.rs`).

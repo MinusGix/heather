@@ -33,3 +33,7 @@ Two shapes to cost:
 
 Either way the derived decision must still *reduce* (it is a `fn`, not a
 `theorem`), or `decide` at a closed fact stops being `refl`.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[decidable-relations-and-comparison]] (`docs/reflection-through-decide-instances-design.md`); [[resolution-candidate-fan-out]] (`docs/reflection-through-decide-instances-design.md`); [[sequence-parser-source]] (`lib/std/text/char.hthr`).

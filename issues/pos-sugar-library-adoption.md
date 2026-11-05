@@ -42,3 +42,4 @@ suite.
   variable, so the sugar does not apply. Left open for `elf64_command`'s
   `n: Nat, nonzero: 0 < n` binders, held back while the native triples work
   rewrites that file; migrate them once it lands.
+- 2026-11-05: gardener: cites a file it shares with [[native-proven-formatting-api]] (`lib/elf64_format_width.hthr`); [[positive-refinement-type]] (`docs/positivity-evidence-design.md`); [[positivity-evidence]] (`docs/positivity-evidence-design.md`).

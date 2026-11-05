@@ -21,3 +21,7 @@ Customer: remove the stability premise from `conditional_compatible` in `docs/sh
 ## Scheduling
 
 Captured for a future concrete driver; not scheduled by this filing. See [[setoid-roadmap-and-resumption]].
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[relational-ordinary-branches]] (`docs/showcase/derive_set_functions.hthr`).

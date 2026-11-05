@@ -21,3 +21,4 @@ should choose between squashed and relevant fields.
 ## Log
 
 - 2026-10-10: Filed from [[positivity-evidence]].
+- 2026-11-05: gardener: cites a file it shares with [[pos-sugar-library-adoption]] (`docs/positivity-evidence-design.md`).

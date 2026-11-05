@@ -38,3 +38,7 @@ The reflector reads a `match` on a `List<BitVec(8)>` and on a
 `List<List<BitVec(8)>>` into the case node, each pinned by `refl` in
 `lib/_tests/native/runtime/rt_tests.hthr`. A match on an unsupported
 inductive still refuses, and the refusal names the type.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[elaborated-let-sharing-lost]] (`lib/native/runtime/rt_reflect.hthr`); [[runtime-body-reflection-requests]] (`lib/native/runtime/rt_reflect.hthr`).

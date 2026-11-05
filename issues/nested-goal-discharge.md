@@ -55,3 +55,7 @@ Also the natural spelling of docs/sketches/surface-v3.md §2's goal-merging
 idiom: today the strong goal must be introduced with a `let`
 (`let strong: P = ?g;`), which works and is tested, but discharging one goal
 *from* another directly is the shape the sketch reaches for.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[lsp-from-the-meta-layer]] (`docs/sketches/surface-v3.md`); [[surface-syntax]] (`docs/sketches/surface-v3.md`); [[warm-replay-relocate-cost]] (`crates/kernel/src/subst.rs`).
