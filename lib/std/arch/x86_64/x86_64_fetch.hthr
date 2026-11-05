@@ -9,6 +9,8 @@ import option;
 import list;
 import logic;
 import relation;
+import tactic;
+import grind;
 
 record FetchAccess<M> {
     read_byte: M → BitVec(64) → Option<BitVec(8)>,
@@ -111,9 +113,7 @@ theorem readable_head_same<M>(access: FetchAccess<M>, memory: M, start: BitVec(6
     left, right: BitVec(8), left_tail, right_tail: List<BitVec(8)>,
     first: ReadableBytes(access, memory, Cons(left, left_tail), start),
     second: ReadableBytes(access, memory, Cons(right, right_tail), start)):
-    left = right {
-    Option::some_inj(left, right, trans(sym(first.right.left), second.right.left))
-}
+    left = right { by grind() }
 
 // Memory comes from the same before-state used by ExecuteAt. Fetch failure,
 // unsupported decoding, and architectural execution outcomes remain distinct.
@@ -236,16 +236,7 @@ theorem fetched_bytes_same_length<M>(access: FetchAccess<M>, memory: M,
     length: left.len() = right.len()): left = right {
     let first = fetched_result(access, memory, InstructionBytes(start, left), left_read);
     let second = fetched_result(access, memory, InstructionBytes(start, right), right_read);
-    let equal_fetches: (FetchedBytes(left) = FetchedBytes(right)) =
-        trans(sym(first),
-            trans(cong_fn(λ count => fetch_instruction_bytes(access, memory, count, start), length), second));
-    Option::some_inj(left, right,
-        cong_fn(λ result => match result {
-            FetchedBytes(bytes) => Some(bytes),
-            FetchDenied(_) => None<List<BitVec(8)>>,
-            FetchMissing(_) => None<List<BitVec(8)>>,
-            FetchAddressWrap => None<List<BitVec(8)>>,
-        }, equal_fetches))
+    by grind()
 }
 
 theorem fetched_bytes_same_length_related<M>(access: FetchAccess<M>,
@@ -259,18 +250,5 @@ theorem fetched_bytes_same_length_related<M>(access: FetchAccess<M>,
         InstructionBytes(before_left.rip, left), left_read);
     let second = fetched_result(access, before_right.memory,
         InstructionBytes(before_right.rip, right), right_read);
-    let same_fetch = trans(
-        cong_fn(λ (memory: M) => fetch_instruction_bytes(access, memory, left.len(), before_left.rip),
-            SameDefinedState::memory(same)),
-        trans(cong_fn(λ (start: BitVec(64)) => fetch_instruction_bytes(access, before_right.memory,
-                left.len(), start), SameDefinedState::rip(same)),
-            cong_fn(λ (count: Nat) => fetch_instruction_bytes(access, before_right.memory,
-                count, before_right.rip), length)));
-    Option::some_inj(left, right,
-        cong_fn(λ result => match result {
-            FetchedBytes(bytes) => Some(bytes),
-            FetchDenied(_) => None<List<BitVec(8)>>,
-            FetchMissing(_) => None<List<BitVec(8)>>,
-            FetchAddressWrap => None<List<BitVec(8)>>,
-        }, trans(sym(first), trans(same_fetch, second))))
+    by grind_with([SameDefinedState::memory(same), SameDefinedState::rip(same)])
 }

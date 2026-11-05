@@ -463,8 +463,10 @@ fn whole(h: Handle, t: Tac<Interned>) → Tac<Interned> { t.bind(λ r => Pure(In
 
 fn then(t: Tac<Interned>, k: Interned → Tac<Interned>) → Tac<Interned> { t.bind(k) }
 
-// A term, or the arguments still to apply to node `at`.
-inductive Intern { ITerm(h: Handle), IArgs(at: Nat, args: List<SpineArg>) }
+// A term; a term read by its spine, which, when `reduce`, is put in head
+// normal form if it would otherwise be an atom compared only by `Defeq`
+// (§14.3); or the arguments still to apply to node `at`.
+inductive Intern { ITerm(h: Handle), ISpine(h: Handle, reduce: Bool), IArgs(at: Nat, args: List<SpineArg>) }
 
 // A constructor value's function, when `Ctors` builds one.
 fn ctor_fn(cs: List<CtorInfo>, i: Nat) → Option<Handle> {
@@ -499,13 +501,23 @@ fn intern(fuel: Nat, g: Graph, t: Intern) → Tac<Interned> {
     match fuel {
         Zero => fail("grind: a term nests deeper than the reader's fuel", []),
         Succ(f) => match t {
-            ITerm(h) => whole(h, spine(h).bind(λ c => match c {
+            ITerm(h) => whole(h, intern(f, g, ISpine(h, True))),
+            ISpine(h, reduce) => spine(h).bind(λ c => match c {
                 Accepted(sp) => match sp.args {
                     Cons(_, _) => view(sp.head).bind(λ v => atom(g, sp.head, atom_key(v))).bind(λ hd => intern(f, hd.g, IArgs(hd.node, sp.args))),
                     Nil => view(h).bind(λ v => match succ_node(g, v) {
                         Some(sp) => intern(f, g, IArgs(sp.fst, [SpineArg(sp.snd, False)])),
                         None => match leaf_of(v) {
-                            LAtom(key) => atom(g, h, key),
+                            LAtom(key) => match key {
+                                KOther => match reduce {
+                                    False => atom(g, h, KOther),
+                                    True => whnf(h).bind(λ w => match w {
+                                        Refused(_) => atom(g, h, KOther),
+                                        Accepted(wh) => intern(f, g, ISpine(wh, False)),
+                                    }),
+                                },
+                                _ => atom(g, h, key),
+                            },
                             LCtor(ty, i, fields) => ctor_leaf(g, h, ty, i).bind(λ o => match o {
                                 None => atom(g, h, KOther),
                                 Some(fnode) => intern(f, fnode.g, IArgs(fnode.node, field_args(fields))),
@@ -514,7 +526,7 @@ fn intern(fuel: Nat, g: Graph, t: Intern) → Tac<Interned> {
                     }),
                 },
                 Refused(_) => atom(g, h, KOther),
-            })),
+            }),
             IArgs(at, args) => match args {
                 Nil => Pure(Interned(g, at)),
                 Cons(a, rest) => then(match a.dependent {
