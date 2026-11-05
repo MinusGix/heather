@@ -467,7 +467,10 @@ GARDENER = "gardener"
 
 
 def last_log_entry(m):
-    entries = LOG_ENTRY.findall(m["body"])
+    """The last log entry a person or a round wrote: the gardener's own link
+    lines say nothing about the issue's progress, and cite file names that
+    would match the landed words (`docs/closed-…`)."""
+    entries = [e for e in LOG_ENTRY.findall(m["body"]) if not e[14:].startswith(f"{GARDENER}:")]
     return entries[-1] if entries else ""
 
 
