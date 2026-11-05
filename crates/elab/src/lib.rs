@@ -4193,13 +4193,23 @@ impl Elaborator {
                     self.pass.unfold_refusals.borrow_mut().insert(unfold, why);
                 }
                 Ok(parts) => {
+                    let mut built = true;
                     for part in parts {
                         if let Err(e) = self.elab_decl_one(&part.decl, Some(&part.obligations)) {
                             self.pass.unfold_refusals
                                 .borrow_mut()
                                 .insert(unfold, format!("the generated `{}` was refused ({e})", part.decl.name));
+                            built = false;
                             break;
                         }
+                    }
+                    // `f::ext` (the step's extensionality in its recursion)
+                    // and `f::irrel` (the recursor's bound irrelevance) are
+                    // what a `runtime fn`'s measured loop is proved from
+                    // (docs/runtime-fn-setups-design.md §16.10).
+                    if built {
+                        self.designate_access(&format!("{}::ext", decl.name), &measure::ext_name(&decl.name));
+                        self.designate_access(&format!("{}::irrel", decl.name), &measure::irrel_name(&decl.name));
                     }
                 }
             }
