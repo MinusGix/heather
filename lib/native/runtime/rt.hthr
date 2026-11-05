@@ -55,12 +55,15 @@ inductive Ty {
     Lines,
     // The record of the type table's entry `i`.
     Named(i: Nat),
+    // `Nat` held in a 64-bit word, as `w.toNat()`: a loop's fuel (design
+    // §7.2: a `Nat` is accepted only where a bound is structural).
+    Count,
 }
 
 // A record field's type, read without the table: a record's fields are
 // flat, and a `Named` field (refused by every judgment) means `True`.
 fn Ty::Flat(self t: Ty) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True }
+    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True, Count => Nat }
 }
 
 // A tuple of flat fields, `True`-terminated.
@@ -69,7 +72,7 @@ fn Ty::Flats(ts: List<Ty>) → Type {
 }
 
 fn Ty::flat_default(self t: Ty) → t.Flat() {
-    match t { Word(_) => BitVec::ofNat(0), Bit => False, Bytes(_) => Nil, Lines => Nil, Named(_) => trivial }
+    match t { Word(_) => BitVec::ofNat(0), Bit => False, Bytes(_) => Nil, Lines => Nil, Named(_) => trivial, Count => 0 }
 }
 
 fn Ty::flats_default(ts: List<Ty>) → Ty::Flats(ts) {
@@ -92,7 +95,7 @@ fn Ty::at(ts: List<Ty>, i: Nat) → Ty {
 }
 
 fn Ty::sem(self t: Ty, tys: Nat → RecInfo) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys(i).T }
+    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys(i).T, Count => Nat }
 }
 
 // Every type is inhabited, so a meaning is total: an ill-typed node (which
@@ -104,27 +107,28 @@ fn Ty::default(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) {
         Bytes(_) => Nil,
         Lines => Nil,
         Named(i) => tys(i).mk(Ty::flats_default(tys(i).fields)),
+        Count => 0,
     }
 }
 
 fn Ty::to_flat(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → t.Flat() {
-    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial }
+    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial, Count => λ v => v }
 }
 
 fn Ty::of_flat(self t: Ty, tys: Nat → RecInfo) → t.Flat() → t.sem(tys) {
-    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys) }
+    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys), Count => λ v => v }
 }
 
 // The code of a list's elements: a byte for a byte buffer, a byte string
 // for a list of lines (`Bit`, which nothing folds, for the rest).
 fn Ty::elem(self t: Ty) → Ty {
-    match t { Word(_) => Bit, Bit => Bit, Bytes(_) => Word(8), Lines => Bytes(0), Named(_) => Bit }
+    match t { Word(_) => Bit, Bit => Bit, Bytes(_) => Word(8), Lines => Bytes(0), Named(_) => Bit, Count => Bit }
 }
 
 // A list's elements, at their code (empty for a code that is no list): at
 // a closed code, the value itself.
 fn Ty::items(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → List<t.elem().sem(tys)> {
-    match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, Bytes(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil }
+    match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, Bytes(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil, Count => λ _ => Nil }
 }
 
 // The equation between two codes, as data: at two closed codes it
@@ -146,6 +150,7 @@ fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
             Named(k) => match i.equation(k) { Inl(e) => Inl(j(e, λ x _ => Named(i) = Named(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
+        Count => match b { Count => Inl(refl), _ => Inr(trivial) },
     }
 }
 
@@ -224,6 +229,8 @@ inductive Op {
     // meaning (`ArenaRef::extend_abs`). `Nil` is a literal (`Lit(Lines, 0)`,
     // the name 0).
     ConsLine(cap: Nat),
+    // `w.toNat()` of a 64-bit word: a loop's fuel, held in the word itself.
+    ToNat,
 }
 
 fn Op::params(self o: Op) → List<Ty> {
@@ -235,6 +242,7 @@ fn Op::params(self o: Op) → List<Ty> {
         Zext(w, _) => [Word(w)],
         Get(c) => [Bytes(c), Word(64)], Set(c) => [Bytes(c), Word(64), Word(8)],
         ConsLine(c) => [Bytes(c), Lines],
+        ToNat => [Word(64)],
     }
 }
 
@@ -246,6 +254,7 @@ fn Op::result(self o: Op) → Ty {
         Zext(w, extra) => Word(extra + w),
         Get(_) => Word(8), Set(c) => Bytes(c),
         ConsLine(_) => Lines,
+        ToNat => Count,
     }
 }
 
@@ -266,6 +275,7 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Get(_) => λ (xs: List<BitVec(8)>) (i: BitVec(64)) => xs.byte_at(i),
         Set(_) => λ (xs: List<BitVec(8)>) (i: BitVec(64)) (v: BitVec(8)) => xs.with_byte(i, v),
         ConsLine(_) => λ (x: List<BitVec(8)>) (xs: List<List<BitVec(8)>>) => Cons(x, xs),
+        ToNat => λ (x: BitVec(64)) => x.toNat(),
     }
 }
 
@@ -297,6 +307,10 @@ inductive Tm {
     // function of the program, the state at the step's result code, the
     // element at the list's element code (R3's loop shape).
     Fold(over: Nat, init: Nat, step: Nat),
+    // `match` on a `Count` variable: `zero`, or `succ` with the predecessor
+    // as variable 0. A fuel recursion's body is one at the top, matching its
+    // fuel (design §7.4).
+    Case(c: Nat, zero: Tm, succ: Tm),
 }
 
 record Sig { params: List<Ty>, result: Ty }
@@ -373,6 +387,7 @@ fn Tm::lit(t: Ty, n: Nat, tys: Nat → RecInfo) → t.sem(tys) {
         Bytes(_) => Nil,
         Lines => Nil,
         Named(i) => Named(i).default(tys),
+        Count => n,
     }
 }
 
@@ -389,6 +404,7 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Field(i, k, _) => Ty::at(w.tys(i).fields, k),
         Call(f, _) => Sig::at(w.sigs, f).result,
         Fold(_, _, step) => Sig::at(w.sigs, step).result,
+        Case(_, zero, _) => zero.ty(w, g),
     }
 }
 
@@ -434,6 +450,10 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
             List::foldl(Ty::at(g, over).items(w.tys, Env::get(w.tys, g, env, over)),
                 Tm::step(w, Ty::at(g, over).elem(), step),
                 Ty::cast(w.tys, Ty::at(g, init), Sig::at(w.sigs, step).result, Env::get(w.tys, g, env, init))),
+        Case(c, zero, succ) => λ g env => match Ty::cast(w.tys, Ty::at(g, c), Count, Env::get(w.tys, g, env, c)) {
+            Zero => zero.sem(w, g, env),
+            Succ(k) => Ty::cast(w.tys, succ.ty(w, Cons(Count, g)), zero.ty(w, g), succ.sem(w, Cons(Count, g), Pair(k, env))),
+        },
     }
 }
 
@@ -458,6 +478,7 @@ fn Ty::same(self a: Ty, b: Ty) → Bool {
         Bytes(c) => match b { Bytes(d) => c.same(d), _ => False },
         Lines => match b { Lines => True, _ => False },
         Named(i) => match b { Named(k) => i.same(k), _ => False },
+        Count => match b { Count => True, _ => False },
     }
 }
 
@@ -485,6 +506,7 @@ fn Op::code(self o: Op) → Pair<Nat, Pair<Nat, Nat>> {
         Zext(w, extra) => Pair(11, Pair(w, extra)),
         Get(c) => Pair(12, Pair(c, 0)), Set(c) => Pair(13, Pair(c, 0)),
         ConsLine(c) => Pair(14, Pair(c, 0)),
+        ToNat => Pair(15, Pair(0, 0)),
     }
 }
 
@@ -507,6 +529,7 @@ fn Tm::same(self t: Tm) → Tm → Bool {
             Fold(over2, init2, step2) => over.same(over2).and(init.same(init2)).and(step.same(step2)),
             _ => False,
         },
+        Case(c, zero, succ) => λ u => match u { Case(c2, zero2, succ2) => c.same(c2).and(zero.same(zero2)).and(succ.same(succ2)), _ => False },
     }
 }
 

@@ -725,7 +725,7 @@ fn rt_nats(ns: List<Nat>) → String {
 }
 
 fn Ty::show(self t: Ty) → String {
-    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", Bytes(c) => "Bytes(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")" }
+    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", Bytes(c) => "Bytes(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")", Count => "Count" }
 }
 
 fn Ty::shows(ts: List<Ty>) → String {
@@ -748,6 +748,7 @@ fn Tm::show(self t: Tm) → String {
         Field(i, k, of) => "Field(" ++ rt_nat(i) ++ ", " ++ rt_nat(k) ++ ", " ++ rt_nat(of) ++ ")",
         Call(f, args) => "Call(" ++ rt_nat(f) ++ ", [" ++ rt_nats(args) ++ "])",
         Fold(over, init, step) => "Fold(" ++ rt_nat(over) ++ ", " ++ rt_nat(init) ++ ", " ++ rt_nat(step) ++ ")",
+        Case(c, zero, succ) => "Case(" ++ rt_nat(c) ++ ", " ++ zero.show() ++ ", " ++ succ.show() ++ ")",
     }
 }
 
