@@ -49,7 +49,7 @@ import rt;
 
 // Whether a value of the code may hold a buffer. A list of lines holds
 // none: its cells are copies, written once and never in place.
-fn Ty::holds_bytes(self t: Ty) → Bool { match t { Word(_) => False, Bit => False, Bytes(_) => True, Lines => False, Named(_) => True } }
+fn Ty::holds_bytes(self t: Ty) → Bool { match t { Word(_) => False, Bit => False, Bytes(_) => True, Lines => False, Named(_) => True, Count => False } }
 
 fn Nat::among(self n: Nat, xs: List<Nat>) → Bool {
     match xs { Nil => False, Cons(x, rest) => n.same(x) || n.among(rest) }
@@ -95,6 +95,7 @@ fn Tm::share(self t: Tm, sigs: List<Sig>, d: Nat, g: List<Share>) → Share {
         Field(_, _, of) => Share(Share::at(g, of).ids, True),
         Call(f, args) => Share(Cons(d, Share::ids_of(g, args)), Sig::at(sigs, f).result.holds_bytes()),
         Fold(_, init, step) => Share(Cons(d, Share::at(g, init).ids), Sig::at(sigs, step).result.holds_bytes()),
+        Case(_, zero, succ) => Share::join(zero.share(sigs, d, g), succ.share(sigs, Succ(d), Cons(Share([d], False), g))),
     }
 }
 
@@ -131,6 +132,7 @@ fn Tm::reads(self t: Tm, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
         Field(_, _, of) => Tm::hit(of, d, bound, ls),
         Call(_, args) => Tm::hits(args, d, bound, ls),
         Fold(over, init, _) => Tm::hit(over, d, bound, ls) || Tm::hit(init, d, bound, ls),
+        Case(c, zero, succ) => Tm::hit(c, d, bound, ls) || zero.reads(d, bound, ls) || succ.reads(Succ(d), bound, ls),
     }
 }
 
@@ -200,6 +202,7 @@ fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: Lis
         // being folded.
         Fold(over, init, step) => [Pass(step, Share::moves(g, ks, Share::bufs_of(g, [init]))
             && !Nat::meets(Share::flat(Share::bufs_of(g, [init])), Share::at(g, over).ids))],
+        Case(_, zero, succ) => zero.uses(sigs, n, d, g, ks) ++ succ.uses(sigs, n, Succ(d), Cons(Share([d], False), g), ks),
     }
 }
 

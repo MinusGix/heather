@@ -1156,3 +1156,73 @@ reflector's deletion; `Bool`-returning helpers (a call of a non-word
 signature); `heather reflect` from instances; callees by instance search
 rather than by `g::compile`'s name; and the imports a module using
 `runtime` must write (`runtime-generator-imports`).
+
+### 16.10 R5d round 3: loops, proved once (2026-11-05)
+
+`lib/native/runtime/rt_loop.hthr` lowers §7.4's two recursions to one
+FunctionIR `Loop` each and proves each lowering once. Nothing about a loop
+is proved per program; what a program supplies is two or three equations
+the generator states and proves by conversion or from the function's own
+companions. `lib/_tests/native/runtime/rt_loop_tests.hthr` instantiates
+both theorems at `loop_triangle.hthr`'s `sum_down` and `loop_measure.hthr`'s
+`count_down`, and a step whose `+` is read as `-` is refused. What the
+round settled:
+
+- **`rt` gains a `Nat`, held in a word.** `Ty::Count` means `Nat` and holds
+  as `values(64, port).toNat() = n`, so a count is always below `2^64` and a
+  callee that reads its fuel as `b.toNat()` reads what the caller held.
+  `Op::ToNat` makes one from a word at no cost (the word's port is the
+  count's). `Tm::Case(c, zero, succ)` is a `match` on a count, its
+  predecessor variable 0 in `succ`; the plain lowering refuses it, and a
+  fuel recursion's body is one at the top. `Lit` at `Count` is refused (the
+  encoding would need the literal below `2^64`).
+- **A pass is the body in tail mode** (`Tm::lower_tail`). Every leaf either
+  goes round (the flag word 0, a self-call's arguments moved to the loop's
+  `next` ports) or leaves (the value moved to the first of them, the flag
+  1); a branch names the flag and `next` as its outputs, so the x86 planner
+  joins them in one register each. `Tm::tail_sound` states what a pass
+  leaves for the loop for *any* continuation: `Tm::tail_sem`, the body with
+  each self-call (entry 0, past its first `skip` arguments) answered by the
+  continuation and every other result read as a word. Leaves are lowered by
+  `Tm::lower` and proved by `Tm::lower_sound`, so a pass's primitives,
+  calls, records and branches are the plain lowering's.
+- **Fuel** (`Fun::lower_fuel`, `Fun::fuel_sound`): the loop's bound is the
+  fuel's word, its state the words, and each pass first takes the
+  predecessor as a word (`count - 1`), so the `Succ` arm's context (the
+  predecessor, the words, the fuel at the count) holds as the plain
+  lowering's invariant needs; the fuel arguments of the self-call are the
+  loop's own count. The proof is `loop_eval_agrees` with each pass told its
+  count is below the bound (`Fun::loop_agrees_below`): a count held as a
+  word must be below `2^64`. What the function supplies is `Fun::FuelZero`
+  and `Fun::FuelStep`, the two equations of its structural recursion,
+  `λ x… => refl` each (§16.3's conversion, with #428's lowering at the
+  top: `h(Succ(r), x…)` unfolds to the arm with `h(r, …)` at its calls).
+- **Measured** (`Fun::lower_measured`, `Fun::measured_sound`): the loop is
+  given `2^64 - 1` passes, a constant, and its state is the words; no
+  measure is computed at run time. The passes cannot run out first, which
+  the proof gets from `Fun::Guarded`: the body as written, its recursion
+  answered by anything that agrees with the function where the measure is
+  smaller, is the function. That is `loop_eval_agrees_measured` with the
+  continuation in for "anything", and the exhausted branch (the body once
+  more, its recursion answered by a junk word) is `Guarded` with nothing to
+  agree on, since the measure is below one there. `Fun::Bounded` (the
+  measure below `2^64`) is `BitVec::toNat_lt_pow`.
+- **`Guarded` is the function's `ext` and `irrel`.** The body's tail meaning
+  converts with `f::body` at an ih that drops its proof (`count_down_step`,
+  `refl`), so `Guarded` is `f::ext` (the step's congruence in its ih, which
+  the elaborator already generates for `f_unfold`) with the agreement it
+  asks for from `f::irrel` and the hypothesis: three applications, no split,
+  no tactic. The two companions now have designed spellings, `f::ext` and
+  `f::irrel`, beside `f::rec` and `f::body`.
+
+Left for the next round, in order: the `Setup` and `Compile` plumbing
+(`Fun::lower` dispatching to the loops, with `Fun::LowerHolds` taking the
+function's equations as a hypothesis the generator discharges); a
+signature's `Count` parameters in calls (`Ty::Answers` reading a word as
+`toNat` there, so a caller passes `w.toNat()`); the reflector reading a
+fuel recursion's top `match` (the host's `Arms` on a `Nat` eliminator) and
+a measured function's body as written (`f_unfold`'s right-hand side, with
+`decreases w.toNat()` read for its measure); then `compile-x86` on the loop
+examples and `crates/elab/src/function_ir_source/` deleted. `Bool` helpers
+are separate: a call whose result is a `Bit` needs a word on the call's
+edge (a branch on the bit to `0`/`1`, read back by a comparison).

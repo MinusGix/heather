@@ -5,7 +5,7 @@ labels: [native,compiler,metaprogramming]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 Round R5 of `docs/compiler-milestones-proposal.md` (§4.2 N1, §7): the `runtime fn` generator and the default
@@ -71,3 +71,21 @@ integration round. The other slices have their own issues:
   `crates/elab/src/function_ir_source/`; `Bool` helpers; `heather reflect` from
   instances; callees by instance search.
 - 2026-11-05: gardener: cites a file it shares with [[compile-typeclass-design]] (`lib/_tests/native/runtime/runtime_tests.hthr`).
+- 2026-11-05 (round 3): loops in the lowering, proved once (design §16.10).
+  `rt` gains `Ty::Count` (a `Nat` held in a word, as its `toNat`),
+  `Op::ToNat` and `Tm::Case` (a `match` on a count).
+  `lib/native/runtime/rt_loop.hthr`: a pass is the body in tail mode
+  (`Tm::tail_sound`), a fuel recursion is a `Loop` bounded by its fuel
+  (`Fun::fuel_sound`, from its two structural equations, `refl` each), a
+  measured one a `Loop` of `2^64 - 1` passes (`Fun::measured_sound`, from
+  `Fun::Guarded`, which is the function's `f::ext` and `f::irrel`; both now
+  spelled). Probes: `lib/_tests/native/runtime/rt_loop_tests.hthr`
+  (`sum_down`, `count_down`, a wrong step refused). Not yet wired: the loops
+  are not in `Fun::lower`/`Setup`, the reflector does not read a fuel
+  `match` or a measured body, calls do not pass a `Count`, so `compile-x86`
+  still sends loop programs to the Rust reflector. Still open here, in
+  order: that plumbing (§16.10's last paragraph), `compile-x86` on the loop
+  examples and deleting `crates/elab/src/function_ir_source/`; `Bool`
+  helpers; `heather reflect` from instances; callees by instance search.
+  `Fold` over buffers is not on this path (no x86 example folds a buffer)
+  and still waits on buffers in `StructuredRegion::eval` (§16.6).
