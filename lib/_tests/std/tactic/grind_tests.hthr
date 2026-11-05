@@ -145,6 +145,52 @@ theorem conj_checking(f: Nat → Nat, a, b: Nat, k: (a = b) ∧ True): f(b) = f(
     sym(p)
 }
 
+// Constructors and disequalities (issues/grind-constructor-facts.md): two
+// values of one constructor in one class give their fields' equations
+// (injectivity); two different constructors, or both sides of a
+// disequality, are a contradiction, which proves any goal. The issue's
+// three: a field of a list equation, `Nil = Cons(…)` proving anything, and
+// a disequality through a congruence (the goal `a ≠ b` opened). Then a
+// literal field, an open element type, a checking position, a
+// three-constructor type (its middle constructor's fields, and it against
+// the last), a record, nested constructors, two values reached through a
+// chain (the shape of `x86_64_fetch`'s `readable_head_same`), through a
+// lemma's instance, `Bool` and literal contradictions, a disequality and a
+// contradiction proving an equation goal, a goal under a binder, and `Nat`'s
+// successor: congruence, injectivity, `Succ(a) ≠ 0`, and in a lemma's
+// pattern.
+theorem inj_head(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): a = b { by grind() }
+theorem inj_tail(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): as = bs { by grind() }
+theorem disjoint_any<P>(x: Nat, xs: List<Nat>, h: (Nil<Nat> = Cons(x, xs))): P { by grind() }
+theorem diseq_cong(f: Nat → Nat, a, b: Nat, h: f(a) ≠ f(b)): a ≠ b { by grind() }
+theorem inj_literal(b: Nat, as, bs: List<Nat>, h: Cons(1, as) = Cons(b, bs)): b = 1 { by grind() }
+theorem inj_open<A>(a, b: A, as, bs: List<A>, h: Cons(a, as) = Cons(b, bs)): as = bs { by grind() }
+theorem inj_checking<A>(f: A → Nat, a, b: A, h: Some(a) = Some(b)): f(b) = f(a) {
+    let p: (f(a) = f(b)) = by grind();
+    sym(p)
+}
+inductive Tri { One(n: Nat), Two(n: Nat, m: Nat), Three }
+theorem tri_inj(a, b, c, d: Nat, h: Two(a, b) = Two(c, d)): b = d { by grind() }
+theorem tri_disjoint(a, b: Nat, t: Tri, h1: t = Two(a, b), h2: t = Three): a = b { by grind() }
+theorem tri_disjoint_one<P>(a, b, c: Nat, h: One(a) = Two(b, c)): P { by grind() }
+record Pt { x: Nat, y: Nat }
+theorem record_inj(a, b, c, d: Nat, h: Pt(a, b) = Pt(c, d)): b = d { by grind() }
+theorem inj_nested(a, b: Nat, xs: List<Nat>, h: Some(Cons(a, xs)) = Some(Cons(b, xs))): a = b { by grind() }
+theorem read_twice(r: Nat → Option<Nat>, x, l, m: Nat, h1: r(x) = Some(l), h2: r(x) = Some(m)): l = m { by grind() }
+theorem inj_by_lemma(r: Nat → Option<Nat>, k: (x: Nat) → r(x) = r(Succ(x)), x, l, m: Nat, h1: r(x) = Some(l), h2: r(Succ(x)) = Some(m)): l = m { by grind() }
+theorem bool_squeeze(n: Bool, h1: n = True, h2: n = False): False { by grind() }
+theorem literal_squeeze(n: Nat, h1: n = 3, h2: n = 4): False { by grind() }
+theorem squeeze_equation(n: Bool, a, b: Nat, h1: n = True, h2: n = False): a = b { by grind() }
+theorem diseq_equation(a, b: Nat, f: Nat → Nat, h: f(a) ≠ f(b), e: a = b): 0 = 1 { by grind() }
+theorem goal_ctors<A>(x: A): Some(x) ≠ None { by grind() }
+theorem goal_binder(f: Nat → Nat, k: (n: Nat) → f(n) = n): (m: Nat) → f(f(m)) = m { by grind() }
+theorem succ_cong(a, b: Nat, h: a = b): Succ(a) = Succ(b) { by grind() }
+theorem succ_inj(a, b: Nat, h: Succ(a) = Succ(b)): a = b { by grind() }
+theorem succ_zero(a: Nat, h: Succ(a) = 0): False { by grind() }
+theorem succ_pattern(f: Nat → Nat, k: (n: Nat) → f(Succ(n)) = n, a, b: Nat, h: b = Succ(a)): f(b) = a { by grind() }
+// The report names the local the field equation came from.
+theorem inj_reported(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): a = b { by grind_report([], []) }
+
 // The two sides in different classes: the failure is the graph.
 // expect-error: grind: the two sides are not in one class
 theorem not_closed(f: Nat → Nat, a, b: Nat, h: f(a) = b): f(b) = a { by grind() }
@@ -168,9 +214,28 @@ theorem keeps_growing(f, g: Nat → Nat, k: (n: Nat) → f(n) = f(g(n)), a: Nat)
 // A congruence is not injectivity: `f(a) = f(b)` says nothing of `a` and `b`.
 // expect-error: grind: the two sides are not in one class
 theorem not_injective(f: Nat → Nat, a, b: Nat, h: f(a) = f(b)): a = b { by grind() }
-// Only equations are goals.
-// expect-error: grind: the goal is not an equation
+// A goal that is no equation is proved only from a contradiction.
+// expect-error: grind: the goal is not an equation, and the facts hold no contradiction
 theorem not_equation(a, b: Nat, h: a = b): a <= b { by grind() }
+// Injectivity gives the fields' equations and no more; one constructor on
+// both sides, one side of a `Bool`, and a disequality whose sides stay apart
+// are no contradiction.
+// expect-error: grind: the two sides are not in one class
+theorem inj_only_fields(a, b: Nat, as, bs: List<Nat>, h: Cons(a, as) = Cons(b, bs)): as = Nil { by grind() }
+// expect-error: no contradiction
+theorem one_ctor_no_contradiction<A>(x, y: A, h: Some(x) = Some(y)): False { by grind() }
+// expect-error: no contradiction
+theorem one_side_no_contradiction(n: Bool, h: n = True): False { by grind() }
+// expect-error: no contradiction
+theorem diseq_apart(f: Nat → Nat, a, b: Nat, h: f(a) ≠ f(b)): False { by grind() }
+// Not yet: a successor against a literal (`Succ(a)` with `a = 2` is `3` by
+// computation, which the graph does not see), and a constructor whose field
+// a later field's type mentions (its value is read as an atom).
+// expect-error: grind: the two sides are not in one class
+theorem succ_literal_unread(f: Nat → Nat, a: Nat, h: a = 2): f(Succ(a)) = f(3) { by grind() }
+record Tied { lo: Nat, hi: Nat, same: lo = hi }
+// expect-error: grind: the two sides are not in one class
+theorem dependent_ctor_unread(a, b, c, d: Nat, s: a = b, t: c = d, h: Tied(a, b, s) = Tied(c, d, t)): a = c { by grind() }
 // A hint that is no equation is kept for the premises, and closes nothing
 // by itself.
 // expect-error: hint 0: not an equation: kept for the premises

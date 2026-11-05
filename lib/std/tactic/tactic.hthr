@@ -295,6 +295,15 @@ inductive Req {
     // projection (`Projected`). Refused for any other type, and for one with
     // a field a later field's type mentions (`∃`).
     Fields(e: Expr),
+    // `inj(e, k)`: from `e`, a proof of an equation between two values of
+    // one constructor (as they compute), the equation between their `k`th
+    // fields. Refused where the surface `inj` is (different constructors, a
+    // field whose type depends on an earlier one).
+    Inj(e: Expr, k: Nat),
+    // `absurd(e)` at the type `goal`: from `e`, a proof of an equation
+    // between two different constructors' values, a proof of `goal`.
+    // Refused where the surface `absurd` is (one constructor on both sides).
+    Absurd(e: Expr, goal: Handle),
 }
 
 inductive Never {}
@@ -330,6 +339,8 @@ fn Resp(r: Req) → Type {
         Spine(_) => Checked<SpineInfo>,
         Say(_, _) => True,
         Fields(_) => Checked<Projected>,
+        Inj(_, _) => Checked<Handle>,
+        Absurd(_, _) => Checked<Handle>,
     }
 }
 
@@ -402,6 +413,8 @@ fn synth(goal: Handle) → Tac<Checked<Handle>> { Ask(Synth(goal), λ c => Pure(
 fn spine(h: Handle) → Tac<Checked<SpineInfo>> { Ask(Spine(h), λ c => Pure(c)) }
 fn say(msg: String, notes: List<Note>) → Tac<True> { Ask(Say(msg, notes), λ u => Pure(u)) }
 fn fields(e: Expr) → Tac<Checked<Projected>> { Ask(Fields(e), λ c => Pure(c)) }
+fn inj_field(e: Expr, k: Nat) → Tac<Checked<Handle>> { Ask(Inj(e, k), λ c => Pure(c)) }
+fn absurd_at(e: Expr, goal: Handle) → Tac<Checked<Handle>> { Ask(Absurd(e, goal), λ c => Pure(c)) }
 
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
@@ -461,6 +474,8 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Spine(_) => match a { ASpine(c) => Fits(c), _ => Mismatch },
         Say(_, _) => match a { AUnit => Fits(trivial), _ => Mismatch },
         Fields(_) => match a { AFields(c) => Fits(c), _ => Mismatch },
+        Inj(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Absurd(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -817,7 +832,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
 // 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`. 26: `Say`.
-// 27: `Fields`.
+// 27: `Fields`. 28: `Inj`. 29: `Absurd`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -849,6 +864,8 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Spine(_) => 25,
             Say(_, _) => 26,
             Fields(_) => 27,
+            Inj(_, _) => 28,
+            Absurd(_, _) => 29,
         },
     }
 }
@@ -868,6 +885,8 @@ fn host_lhs(t: Tac<Expr>) → Expr {
             AsType(e) => e,
             Holes(e, _) => e,
             Fields(e) => e,
+            Inj(e, _) => e,
+            Absurd(e, _) => e,
             _ => NatLit(0),
         },
     }
@@ -898,6 +917,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Arms(h) => h.id,
             Synth(goal) => goal.id,
             Spine(h) => h.id,
+            Absurd(_, goal) => goal.id,
             _ => 0,
         },
     }
@@ -908,9 +928,9 @@ fn host_mark(t: Tac<Expr>) → Nat {
     match t { Pure(_) => 0, Ask(r, _) => match r { Restore(m) => m, _ => 0 } }
 }
 
-// How many holes `Holes` asks for.
+// How many holes `Holes` asks for, and which field `Inj` asks about.
 fn host_hole_count(t: Tac<Expr>) → Nat {
-    match t { Pure(_) => 0, Ask(r, _) => match r { Holes(_, n) => n, _ => 0 } }
+    match t { Pure(_) => 0, Ask(r, _) => match r { Holes(_, n) => n, Inj(_, k) => k, _ => 0 } }
 }
 
 // `Close`'s split.
