@@ -28,3 +28,7 @@ worth stating once here rather than per client.
   the `eq_op` the closure is given.
 - **[[rewrite-setoid-relations]]** owns the `Proper` lemma registry.
   Assumed here: only that a lemma can be found per operator.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[egraph-add-value-theorem]] (`lib/std/data/egraph.hthr`); [[egraph-ematch-soundness]] (`lib/std/data/egraph.hthr`).

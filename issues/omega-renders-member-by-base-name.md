@@ -28,3 +28,4 @@ qualified (`List::len`) and skip or abstract unspellable context entries.
 ## Log
 
 - 2026-09-05: Half fixed (2026-09-05, mutual-recursion round): Elaborator::spell_term_source spells a global qualified wherever its base name does not resolve back to it, and omega_cert's reconstruction uses it; a context entry reflect_assumption cannot spell is skipped rather than aborting the goal. Test: omega_cases reconstructs_over_a_member_atom_spelled_qualified. The 'â' rendering could not be reproduced once obligations are lifted; stays open until a repro or a decision closes it.
+- 2026-11-05: gardener: cites a file it shares with [[fn-recursion-means-the-function]] (`docs/termination-measures-design.md`).

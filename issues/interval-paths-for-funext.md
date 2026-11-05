@@ -59,3 +59,7 @@ cannot take a setoid, or bisimulation-to-equality for coinductive trees
   contexts are groupoids and `Ty 0` is sets and bijections.
 - **`docs/export-fragment-design.md`** owns the export lens. Assumed here:
   only that each definitional rule needs a target realisation.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[constructor-conditions]] (`docs/no-uip-model.md`); [[indexed-families]] (`docs/sprop-design.md`).

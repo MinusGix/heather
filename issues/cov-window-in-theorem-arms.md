@@ -55,3 +55,7 @@ the arm and the nested `match`; both are in `wf_chain_convoy` / `WfConvoy`
 - **[[list-course-of-values-recursion]]** owns the window and its convoy.
   Assumed here: only that the convoy's codomain is built from the enclosing
   recursion's motive (its design §7.3).
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[wf-nested-match-motive-synthesis-kernel-refusal]] (`docs/list-course-of-values-design.md`).

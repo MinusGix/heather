@@ -29,3 +29,7 @@ Only non-tail recursion at run time needs it: a tail-recursive `partial`
 function is `CoTree::iter`, which the bridge already covers, and non-tail
 native recursion needs a call stack (`nh-heap`). Take it with the first
 native customer of non-tail partial recursion.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/coitree-design.md`).

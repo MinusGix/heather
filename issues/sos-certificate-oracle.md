@@ -35,3 +35,7 @@ long enough that finding it by hand is the work.
 - **[[nlinarith-products-of-facts]]** owns the certificate and the hint
   spelling. Assumed here: a hint `sq_nonneg(t)` and a product
   `mul_nonneg(h₁, h₂)` are facts that `nlinarith` takes.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[interval-variable-boxes]] (`docs/nonlinear-arithmetic-design.md`); [[linarith-simplex-search]] (`docs/nonlinear-arithmetic-design.md`).

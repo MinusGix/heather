@@ -40,3 +40,4 @@ The argument, once that law exists:
 - 2026-10-31: exp at real arguments is monotone and Lipschitz on bounded sets now (`CReal::exp_le`, `CReal::exp_lt`, `CReal::exp_dev`, lib/std/num/float/elementary_real.hthr), so the second bullet's half is done. Still blocked on `exp(log q) ≈ q`: [[elementary-functions-at-reals]] says why it is not cheap.
 - 2026-11-01: Blocked on [[exp-log-inverse]] now; exp's monotonicity and Lipschitz bound at real arguments are done.
 - 2026-11-01: Unblocked: `CReal::exp_log_rat(q, pos): exp(log_rat(q, pos)) ≈ ofRat(q)` is in lib/std/analysis/real_log.hthr ([[exp-log-inverse]]).
+- 2026-11-05: gardener: cites a file it shares with [[real-functions-and-derivatives]] (`lib/std/analysis/real_log.hthr`).

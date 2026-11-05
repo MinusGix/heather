@@ -153,3 +153,4 @@ The datum for the ranking function: the feature the library ranked was not the f
   [[decidable-equation-carrier]] supplied carrier-keyed equality instances.
   The historical sequencing entries above remain the record of why L3 did
   not wait for either.
+- 2026-11-05: gardener: cites a file it shares with [[decidable-relations-and-comparison]] (`docs/decide-class-design.md`); [[prelude-clone-cost-grew]] (`lib/std/core/logic.hthr`); [[traits]] (`lib/lang/list_algos.hthr`).

@@ -31,3 +31,7 @@ question is its spelling and its relation to binders:
 - `CReal::lt_respects` (or a probe shaped like it) closes with a narrowed
   call at about the cost of the call without the unrelated `Rat` facts in
   scope.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[theorem-witness-unfolding]] (`docs/regular-cauchy-reals-round.md`).

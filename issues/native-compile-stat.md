@@ -26,3 +26,7 @@ needs stat, so it carries no milestone of that line.
   does (`goes_read_back_ok`/`_failed`).
 - The first customer is GNU `cat`'s check that an input is not its output,
   or `wc`'s column width (plan §7).
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[native-compiled-code-shape]] (`lib/native/native_compile.hthr`); [[native-homes-read-in-place]] (`lib/native/native_compile.hthr`).

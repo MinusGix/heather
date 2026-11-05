@@ -18,3 +18,7 @@ Not urgent: the reducer spells and is the oracle's; the checking path's depth is
 ## What it assumes from elsewhere
 
 - **[[eval-native-frame-size]]** owns the measurements and the rule; assumed here only that the reducer frame is the one counted frame it did not split.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`crates/kernel/src/reduce.rs`); [[kernel-psi-bound-cache]] (`crates/kernel/src/reduce.rs`).

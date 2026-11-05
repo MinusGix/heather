@@ -30,3 +30,7 @@ edges are the local morphism's (`mono` reads them).
 
 Wanted when a generic proof carries a cast fact by name rather than by
 `mono`; none does yet.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[cast-carrier-reader]] (`lib/std/tactic/cast.hthr`).

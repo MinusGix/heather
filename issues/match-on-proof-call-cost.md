@@ -45,3 +45,4 @@ their step counts should match the restructured ones.
 ## Log
 
 - 2026-11-01: Projections reach it too: `DerivOn::chain` and `DerivOn::mul` (real_fn.hthr) built their result over `ad.witness` for `ad = below_both(au.witness, ..)`, `au = below_both(..)`, and the kernel normalised the nested witnesses with their proofs (8.3M and 8.9M steps). Handing the `let`-bound results to a `*_close` theorem as parameters cut them to 0.92M and 1.07M ([[library-gate-module-cold-rail]]). Next candidates, by step count and not yet checked for this shape: `real_exp`'s `CReal::exp_sub_lin_near` (19M steps) and `elementary_real`'s `CReal::trig_add_at` (11.5M).
+- 2026-11-05: gardener: cites a file it shares with [[float-veltkamp-subnormal]] (`lib/std/num/float/eft.hthr`); [[floating-point-formalization]] (`lib/std/num/float/eft.hthr`).

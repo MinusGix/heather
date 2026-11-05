@@ -33,3 +33,7 @@ does for other stale ones.
 
 A prelude-only change passes `scripts/test --pr`, with the library gate's
 children replaying (or the build step building) every module.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[early-cutoff-registry-and-order-granularity]] (`crates/cli/tests/library.rs`); [[native-gates-start-when-their-images-exist]] (`crates/cli/tests/library.rs`).

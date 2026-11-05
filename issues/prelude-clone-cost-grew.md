@@ -21,3 +21,4 @@ So: (1) re-check what a clone actually copies now (is 23x explained by the prelu
   clone a prelude rather than build one. Assumed here: only that the rule's
   justification is the build/clone ratio.
 - 2026-09-11: 2026-09-11: docs/frontend-benchmarking.md's fixture-rule paragraph no longer quotes the 90 us / 108 ns figures (it now states the shape claim and points here); the dated baseline table further down still carries the 2026-08-05 row by design, labelled as a recorded baseline. The re-measure of corpus/prelude against the current elaborator, and the decision whether the generated families' clone rule still holds at the narrowed ratio, remain this issue's open items.
+- 2026-11-05: gardener: cites a file it shares with [[cloud-bench-bands-out-of-range]] (`docs/frontend-benchmarking.md`); [[parallel-checking-and-caching]] (`docs/frontend-benchmarking.md`); [[std-api-waves]] (`lib/std/core/logic.hthr`).

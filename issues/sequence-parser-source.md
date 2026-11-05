@@ -172,3 +172,4 @@ scannerless calculator demonstrates.
   or the CLI first, beyond the misleading message. The record axis of
   [[elaborator-canonical-type-spelling]] is the single root cause of all four
   symptoms and is the next round.
+- 2026-11-05: gardener: cites a file it shares with [[derive-decide-instances]] (`lib/std/text/char.hthr`); [[elab-emits-normal-form-of-matched-type-argument]] (`probes/str/p10.hthr`).

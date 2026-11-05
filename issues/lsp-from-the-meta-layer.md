@@ -101,3 +101,4 @@ keystroke.
   delta, implicitly expand profiles through the real resolver, down-rank but
   never hide unmet candidates, and make axiom-backed `using` an explicit
   provenance-bearing editor action.
+- 2026-11-05: gardener: cites a file it shares with [[nested-goal-discharge]] (`docs/sketches/surface-v3.md`).

@@ -53,3 +53,7 @@ As of filing, the first half is met (shipped; `lib/std` uses named calls at
   only that §6 marked the form provisional on this exact condition.
 - **[[named-arguments]]** owns the successor spelling. Assumed here: only that
   a record constructor is nameable by field, which it is.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[numeral-stack-depth]] (`docs/surface-records.md`).

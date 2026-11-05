@@ -46,3 +46,7 @@ pre/postconditions more compositionally than the current records.
 
 - **[[interaction-trees-container-model]]** owns the event container.
   Assumed here: only its `Cmd`/`Resp` shape.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[cost-aware-semantics]] (`docs/interaction-trees-fit.md`).

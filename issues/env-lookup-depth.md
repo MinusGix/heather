@@ -39,3 +39,7 @@ delta is no result.
 Trigger: lookups of more than a few dozen steps as a visible share of a real
 workload's evaluation. Until then this waits, like any enabling issue with no
 puller.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[signature-rescope-multiplicity]] (`docs/segmap-survey.md`); [[type-value-memo-hit-rate]] (`crates/kernel/src/value.rs`).

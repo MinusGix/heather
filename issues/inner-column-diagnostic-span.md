@@ -69,3 +69,7 @@ not answerable by reading.
 - **[[nested-match-patterns]]** owns the pattern compiler and the generated
   level. Assumed here: that the generated level stays generated — the fix is a
   span carried into it, not a source-level rewrite of what the user wrote.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[frontend-roadmap]] (`docs/nested-match-patterns-design.md`).

@@ -36,3 +36,4 @@ gate column per item is the one that moved.
 ## Log
 
 - 2026-10-31: Data point from exp-log-grid-gap (2026-10-31): the Padé three-term relation between series terms, stated as one field identity with x and six reciprocal atoms (inv_succ of linear forms in n, k), ran out of the kernel's fuel. The same relation, factored as exp's term times x-free weights and with the reciprocals bound by let (atoms to ring), checks well inside it. The cost grew with the number of distinct reciprocal atoms the normalizer clears together, not with the polynomial degree.
+- 2026-11-05: gardener: cites a file it shares with [[class-inherited-field-implementations]] (`lib/std/num/rat.hthr`); [[setoid-roadmap-and-resumption]] (`lib/std/num/rat.hthr`).

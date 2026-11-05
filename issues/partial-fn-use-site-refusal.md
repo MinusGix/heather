@@ -30,3 +30,7 @@ The displayed type should also read `Partial(Nat)`
 The probe above is refused with the named reason, under `expect-error` in
 `lib/_tests/std/itree/partial_fn_tests.hthr`, for a partial function from
 the same module and from an imported one.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[partial-fn-tail-iter]] (`lib/_tests/std/itree/partial_fn_tests.hthr`).

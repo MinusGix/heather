@@ -31,3 +31,7 @@ current master:
 
 The library gate stays unconditional on `lib/` changes: it is the gate for
 the library.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[pr-affected-sentinel-miss-report]] (`scripts/affected-targets.mjs`).

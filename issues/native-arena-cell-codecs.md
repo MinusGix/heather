@@ -25,3 +25,7 @@ that holds something else (docs/native-heap-arena-design.md §4.2):
 
 Both have `abs`, `inv` and the extension and image laws proved in
 `native_arena`, and a builder tool over each (a word list, a tree) runs.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[datarepr-guarded-images]] (`lib/native/native_arena.hthr`); [[runtime-fn-arena-lists]] (`lib/native/native_arena.hthr`).

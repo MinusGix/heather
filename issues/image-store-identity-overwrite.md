@@ -29,3 +29,5 @@ and eviction treats each identity's images like any other. The `.latest` and
   several checkouts may share it.
 
 ## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[testing-architecture]] (`crates/cache/src/module_image.rs`).

@@ -67,3 +67,7 @@ lowering ever cached, interned, or normalized types.
 
 Cross-cutting note: option 3 touches the same structure as
 [[nested-goal-discharge]]'s view of what a goal's context should show.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[nested-inductives-container-fields]] (`docs/inductive-tier1-wf-lowering.md`); [[surface-declaration-generator]] (`docs/inductive-tier1-wf-lowering.md`).

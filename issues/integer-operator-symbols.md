@@ -19,3 +19,7 @@ SInt(n)` is the arithmetic shift. Questions: `/` beside `//` comments; `&`/`|`
 beside `&&`/`||` and the `⟨a |⟩` injection; whether `/` at `Nat`/`Int`/`Rat`
 gets a designation in the same round (`Rat` has `⁻¹`, `Nat::div` exists); and
 the tree-sitter inventory (new lexer symbols must be added there).
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[notation-extensibility]] (`crates/syntax/src/lexer.rs`); [[self-hosted-lexer]] (`crates/syntax/src/lexer.rs`).

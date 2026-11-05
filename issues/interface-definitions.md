@@ -34,4 +34,4 @@ The migrated module checks with fewer conversion steps, and one rule in `docs/pr
   `scripts/perf ab --source-patch` over `creal_interval` (3 cold samples) shows conversion counters flat (`conv_misses` +0.0%, `eval_delta_steps` +0.0%) and seconds inside the spread. The interval clients already reasoned through the `*_has` lemmas, so this migration saved nothing and cost nothing. The "fewer conversion steps" criterion is therefore not met by this module. The next candidate is a module whose clients convert at open arguments (the x86-64 layout lemmas).
 
   Early cutoff does not use the boundary yet (design §8): filed `interface-body-early-cutoff`.
-
+- 2026-11-05: gardener: cites a file it shares with [[interface-body-early-cutoff]] (`docs/interface-definitions-design.md`).

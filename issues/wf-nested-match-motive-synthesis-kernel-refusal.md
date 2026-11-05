@@ -74,3 +74,7 @@ with `strict_below`'s four `as` motives deleted.
 - **[[list-course-of-values-recursion]]** owns the rebuilt-constructor
   spelling (§7.4). Assumed here: only that it is applied on the window path
   and not on the plain one.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[cov-window-in-theorem-arms]] (`docs/list-course-of-values-design.md`); [[string-char-spec-types]] (`lib/std/text/utf8.hthr`).

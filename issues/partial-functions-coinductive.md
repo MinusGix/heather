@@ -65,3 +65,4 @@ formatter is not a customer: its fuel is a termination witness, which
   world mean `Io → Partial<Mutated<Io, R>>` (`docs/effects-capabilities-design.md` §4).
 - 2026-11-03: Round 2 built ([[partial-fn-surface]], closed): `partial fn` and `while` with no measure; docs/partial-functions-design.md §9. The tail case to `CoTree::iter` is [[partial-fn-tail-iter]], which round 3 (partial `runtime fn` loops) wants.
 - 2026-11-04: Round 3's customer half done ([[effectful-loops-without-passes]], closed): `Io::tac`, `Io::sort`, `Io::cat` and `Io::write_all` are `while` loops with no measure, meaning `Io → Partial(Mutated<Io, R>)`, and a `Source`'s `Repeat` has a fuel-free denotation (`native_source_co`). Still left for partial `runtime fn` loops: the setup lowering them (R6) and [[partial-fn-tail-iter]].
+- 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/coitree-design.md`).

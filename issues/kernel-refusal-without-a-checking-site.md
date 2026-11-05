@@ -22,3 +22,7 @@ so weigh it against keeping the kernel un-fancy until it is verified. A
 report-only path that
 re-runs conversion after a refusal would keep the checking path untouched.
 Not urgent: no instance is known today that the site notes miss.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[kernel-coinductive-types]] (`crates/kernel/src/fmt.rs`).

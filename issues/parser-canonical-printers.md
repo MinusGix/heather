@@ -30,3 +30,7 @@ Acceptance: a checked open round-trip theorem, no unchecked axiom, explicit supp
 ## Design notes
 
 See `docs/parser-canonical-printers-design.md` for the proposed contracts, including source-context dependence and boundary counterexamples. This remains design work, not an implemented printer API.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[float-printer-round-trip]] (`docs/parser-canonical-printers-design.md`).

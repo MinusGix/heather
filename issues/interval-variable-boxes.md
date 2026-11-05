@@ -40,3 +40,7 @@ sign facts come from `by intervals()`).
 - **[[dyadic-interval-enclosures]]** (closed) owns the enclosures and the
   verdict lemmas. Assumed here: `lt_of_search`/`le_of_search` and their
   vacuous reading of crossed bounds.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[linarith-simplex-search]] (`docs/nonlinear-arithmetic-design.md`); [[sos-certificate-oracle]] (`docs/nonlinear-arithmetic-design.md`).

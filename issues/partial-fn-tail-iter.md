@@ -33,3 +33,7 @@ needs the matching rule first:
 A tail-only `partial fn` lowers to `CoTree::iter`, its result is proved by
 the new rule in `lib/_tests/std/itree/partial_fn_tests.hthr`, and `search`
 there runs at a literal by `refl` as today.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[partial-fn-use-site-refusal]] (`lib/_tests/std/itree/partial_fn_tests.hthr`).

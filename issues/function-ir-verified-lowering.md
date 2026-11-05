@@ -394,3 +394,7 @@ costs a refusal, never a wrong program.
      hand, like round 3's.
    - The old per-function loop path (`function_ir_loop`) is untouched;
      moving its examples onto this route is part of B2.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[function-ir-multi-word-calls]] (`lib/native/function_ir/function_ir.hthr`); [[function-ir-x86-shift-legalization]] (`lib/native/function_ir/function_ir_lower.hthr`).

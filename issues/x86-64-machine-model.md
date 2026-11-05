@@ -183,3 +183,4 @@ access; it does not claim x86 memory is total.
 - 2026-09-11: From [[x86-direct-bitfield-decoder]] (closed 2026-09-11 as perf-done): the residual obligation is exhaustive agreement between the direct bitfield decoder and the reference decoder on reference *failures* and malformed byte classes (all 256 REX/ModRM pairs). Owned here now.
 
 - 2026-10-21: The verified lowering's instruction list, ordered by first consumer, is [[verified-lowering-instruction-coverage]]; each form it needs starts as a step rule here.
+- 2026-11-05: gardener: cites a file it shares with [[setoid-surface-kernel-cost]] (`lib/std/arch/x86_64/x86_64.hthr`).

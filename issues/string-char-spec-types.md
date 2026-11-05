@@ -64,3 +64,4 @@ separate `Utf8` spec type with the encode/decode iso in a later round.
   `push_step` to be stated at `emit` rather than at `decode_char`.
 - 2026-09-18: Round 2 landed 2026-09-18: `lib/std/text/utf8.hthr` with theorems 1–6; the strictness theorem is [[utf8-encode-decode-strictness]]; the fuel-shaped decoder is [[list-course-of-values-recursion]]; conversion finding [[utf8-decode-conversion-blowup]].
 - 2026-09-18: Theorem 7 closed 2026-09-18 ([[utf8-encode-decode-strictness]]), and theorem 8 with it: `Utf8` and `String` are mutually inverse presentations. docs/string-char-design.md §5.6.
+- 2026-11-05: gardener: cites a file it shares with [[wf-nested-match-motive-synthesis-kernel-refusal]] (`lib/std/text/utf8.hthr`).

@@ -26,3 +26,4 @@ Acceptance should cover Boolean branching, `Nat`/`Int` comparison, generic
 - 2026-09-02: Filed so decidability is an optional capability, never an order
   axiom.
 - 2026-09-09: 2026-09-09: Instance precedence for the case that exists is settled by [[reflection-through-decide-instances]]: candidates keyed at the goal carrier's own head are tried first, so a BitVec-headed Decide<signed_lt(n, a, b)> is built before int::Le::Decide, which also fits by unfolding (docs/reflection-through-decide-instances-design.md §3, docs/decide-class-design.md §6). DecidableRel/Cmp factoring remains this issue's.
+- 2026-11-05: gardener: cites a file it shares with [[derive-decide-instances]] (`docs/reflection-through-decide-instances-design.md`); [[resolution-candidate-fan-out]] (`docs/reflection-through-decide-instances-design.md`); [[std-api-waves]] (`docs/decide-class-design.md`).

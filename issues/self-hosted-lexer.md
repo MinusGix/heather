@@ -25,3 +25,7 @@ Heather, compiled natively. This is the first half of what
 ## What it assumes from elsewhere
 
 - **[[effects-uniqueness-surface]]** owns the I/O surface, and **[[runtime-fn-default-setup]]** owns the pure fragment.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[integer-operator-symbols]] (`crates/syntax/src/lexer.rs`); [[notation-extensibility]] (`crates/syntax/src/lexer.rs`).

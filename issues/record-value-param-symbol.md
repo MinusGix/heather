@@ -37,3 +37,7 @@ negative controls of the op-as round apply unchanged.
 - **[[binder-symbol-as-notation]]** (closed) owns the as-device and its
   scope/uniqueness rules. Assumed here: only that a class head's installation
   path is the one records would reuse.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[generate-in-sections]] (`crates/syntax/src/parser.rs`); [[requires-placement-syntax]] (`crates/syntax/src/parser.rs`).

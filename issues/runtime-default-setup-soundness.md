@@ -95,3 +95,4 @@ being `Fun::lower_sound`), `Fun::judge` with reasons, and the `Compile` class
 landed in `lib/native/runtime/runtime.hthr` with the generator
 ([[runtime-fn-default-setup]], design §16.8). The open items here are
 unchanged: the program wrapper, `Fold` and the byte primitives, `zero_extend`.
+- 2026-11-05: gardener: cites a file it shares with [[function-ir-alu-core]] (`lib/native/runtime/rt_lower.hthr`).

@@ -40,3 +40,4 @@ scrubs.
 ## Log
 
 - 2026-10-30: Minus attached *High-assurance zeroization* (TCHES 2024), which is now read in full, in `docs/zeroization-survey.md` §8.1. Jasmin's machine-checked theorem is one-run: invalid memory is unchanged or zero. The design adopts that keep-or-zero form for `Canonical`. What Heather would add: registers and flags inside the theorem, the non-interference step proved rather than argued, and a source obligation on kept words.
+- 2026-11-05: gardener: cites a file it shares with [[ownership-discipline-over-code]] (`docs/constant-time-survey.md`).

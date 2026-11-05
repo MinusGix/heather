@@ -75,3 +75,4 @@ library, and each reflection is a few hundred requests.
 
 Note for merging: the facts-on-demand round appends `Synth` to `Req` as
 tag 22 too; whichever lands second renumbers.
+- 2026-11-05: gardener: cites a file it shares with [[host-elaboration-interface]] (`lib/std/tactic/tactic.hthr`); [[runtime-reflect-list-match]] (`lib/native/runtime/rt_reflect.hthr`).

@@ -58,3 +58,7 @@ time. Answer this first, or at least record the four rates before that lands.
 
 Trigger: the next round that touches the value memo, `value-cache-memo-in-arena`
 first of all.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[dependency-policy]] (`docs/benchmarking.md`); [[env-lookup-depth]] (`crates/kernel/src/value.rs`); [[perf-tracking-consistent-environment]] (`docs/benchmarking.md`).

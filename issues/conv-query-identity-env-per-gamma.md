@@ -52,3 +52,7 @@ on `inductive/isa-roundtrip`), measured with `scripts/perf ab`.
 - **[[env-lookup-depth]]** owns `value::Env`'s representation. Assumed here:
   only that a query's root environment is still the materialized identity
   spine.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`crates/kernel/src/conv.rs`); [[indexed-families]] (`crates/kernel/src/conv.rs`).

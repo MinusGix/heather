@@ -29,3 +29,4 @@ scope), so the refusal is the gap, not a design choice.
 
 - 2026-10-31: `tac-host-interface` is marked done in docs/roadmap.md (its "done when" is met), so this issue no longer serves it; it stays open in area `tactics` with no milestone.
 - 2026-11-01: Declaration prefixes (`P fn f`, [[declaration-prefix-generators]]) are refused in sections and under `assuming` for the same reason; lifting this lifts both.
+- 2026-11-05: gardener: cites a file it shares with [[record-value-param-symbol]] (`crates/syntax/src/parser.rs`); [[requires-placement-syntax]] (`crates/syntax/src/parser.rs`).

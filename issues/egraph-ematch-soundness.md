@@ -28,3 +28,7 @@ the soundness section, given `g.Agrees(den, interp)`:
 
 Completeness (every instance found) is not wanted: grind's report only
 lists what was matched.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[egraph-add-value-theorem]] (`lib/std/data/egraph.hthr`); [[egraph-setoid-path-algebra]] (`lib/std/data/egraph.hthr`).

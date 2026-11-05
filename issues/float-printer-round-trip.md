@@ -35,3 +35,7 @@ for binary64 are corollaries; the shortest round-tripping output
 
 `Float::digits` and the renderer exist, Lemma 1 is proved for every `Format`
 in `lib/std/num/float/`, and the 9/17-digit corollaries are stated.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[parser-canonical-printers]] (`docs/parser-canonical-printers-design.md`).

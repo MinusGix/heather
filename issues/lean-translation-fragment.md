@@ -26,3 +26,7 @@ any code:
    (`docs/axiom-provenance-design.md`).
 3. What formal model of Lean the translator is stated over, and what part
    of the translation is trusted.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[squashed-termination-evidence]] (`docs/axiom-provenance-design.md`).

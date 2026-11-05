@@ -33,3 +33,4 @@ The §8 probe replays the consumer after the `Zero`-arm edit, and a closed
 ## Log
 
 - 2026-11-02: Filed from the interface-definitions build.
+- 2026-11-05: gardener: cites a file it shares with [[interface-definitions]] (`docs/interface-definitions-design.md`).

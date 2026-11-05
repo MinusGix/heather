@@ -42,3 +42,7 @@ let's value into the block (a `Term` cloned per occurrence rather than its
 (the probe is in the reflector's test module's history; a `lib/_tests` probe
 can count handles), and the reflector's value numbering becomes a fallback
 rather than the mechanism.
+
+## Log
+
+- 2026-11-05: gardener: cites a file it shares with [[runtime-reflect-list-match]] (`lib/native/runtime/rt_reflect.hthr`).
