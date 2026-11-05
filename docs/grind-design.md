@@ -205,7 +205,7 @@ proof reconstruction.
 | R2 (done, §9) | e-matching ([grind-e-matching](../issues/grind-e-matching.md)): equations under binders, from the locals and a hint list, instantiated by matching their patterns against the graph's terms modulo the classes; the used hints reported on success | `grind_using(["List::append_assoc", "List::append_nil"], [])` closes an append tower with no instance written, and `grind_report` says which it used |
 | R2½ (done, §11) | premises ([grind-lemma-premises](../issues/grind-lemma-premises.md)): a binder no side binds and nothing depends on is proved at the instance, by the graph, a local or hint, or `Synth` | an order premise by a local and an equation premise by the graph close, and the report names an unproved premise |
 | R2¾ (done, §13) | definitional equalities ([grind-definitional-equalities](../issues/grind-definitional-equalities.md)): a pattern's argument matched up to `Defeq`, its free binder drawn from the graph; both sides of a lemma as patterns | `Int::neg_add`'s `Succ` step closes by `grind_using` with the four lemmas its `calc` cites |
-| R3 | constructor facts and disequalities ([grind-constructor-facts](../issues/grind-constructor-facts.md)): injectivity, disjointness, `≠` hypotheses, `False` goals | `Cons(a, as) = Cons(b, bs)` gives `a = b`, and `Nil = Cons(x, xs)` closes any goal |
+| R3 (done, §14) | constructor facts and disequalities ([grind-constructor-facts](../issues/grind-constructor-facts.md)): injectivity, disjointness, `≠` hypotheses, `False` goals | `Cons(a, as) = Cons(b, bs)` gives `a = b`, and `Nil = Cons(x, xs)` closes any goal |
 | R4 | case splits and theories ([grind-splits-and-theories](../issues/grind-splits-and-theories.md)): split on a `match` scrutinee in the graph (`split_all`'s `Cases`), and exchange equalities with `omega`/`ring` | a goal needing a `Bool` case split and a linear fact closes, and the failure is the decision tree |
 
 The graph's pure half is now a generic library (§8).
@@ -721,5 +721,156 @@ needs was added is not asked again
 ([grind-near-match-new-terms](../issues/grind-near-match-new-terms.md)).
 Probes: `near_two`, `near_two_checking`, `near_two_closed`, `near_type`,
 `near_drawn` and the negative control `near_two_refused` in
+`lib/_tests/std/tactic/grind_tests.hthr`.
+
+## 14. Constructors and disequalities (round 3, 2026-11-05)
+
+Issue: [grind-constructor-facts](../issues/grind-constructor-facts.md). The
+sweep (§10) counted about 35 `Option::some_inj(…, trans(sym(a), b))` sites
+and about 35 `absurd(trans(…))` sites outside `lib/native`: an equation
+chain ending in injectivity or in disjointness, which congruence alone
+cannot finish.
+
+### 14.1 What the graph adds
+
+After each closing (`ctor_closed`), every class holding two or more
+constructor values is looked at pairwise, its first value against each
+other one, each pair once (`CState.done`):
+
+- **One constructor** (`Cons(a, as)`, `Cons(b, bs)`): each field pair not
+  already in one class gets an edge whose proof is `Inj(pf, k)`, `pf` the
+  explanation of the two values' equation. The edge cites what `pf` cites,
+  so `grind_report` still names the hint the field came from. The graph is
+  closed again while that adds edges (at most 16 times per round).
+- **Two constructors** of one type, two different literals, or a literal
+  and a successor: `Absurd(pf, goal)`, a proof of the goal itself. The host
+  decides; the graph only proposes (`3` and `Succ(n)` are no
+  contradiction, and the host says so).
+- **A disequality** read from a fact (`h: a ≠ b`, `h: a = b → False`, also
+  once in head normal form, so `Not(a = b)`) is kept with its sides' nodes;
+  when they meet, `h(pf)` proves `False`, which `exfalso` (an equation goal)
+  or `elim_false` (any other) takes to the goal.
+
+A constructor value is what `View` calls `HCtor`: its constructor function
+(from `Ctors`) applied to its fields, so congruence and injectivity read the
+same nodes. `Nat` is the kernel's, not a declared inductive, so its
+successor is the graph's first atom, `grind::succ_fn`, keyed `KSucc` by the
+reference `Lookup("Succ")` answers; `Succ(n)` is that atom applied to `n`,
+lemma patterns read it the same way, and `Succ(x) = Succ(y)` gives `x = y`
+by `grind::succ_inj` (not `Inj`, which takes declared inductives apart).
+
+The laws a proof cites are grind's own (`grind::exfalso`,
+`grind::elim_false`, `grind::succ_inj`): a law is resolved where the `by`
+is, and a module using grind need not import `nat` or `logic`'s names.
+
+### 14.2 Goals
+
+The goal no longer has to be an equation. Its binders are opened first
+(`open_goal`), but only where it is written as a function type or as
+`Not(P)` (so `a ≠ b` is `a = b → False` under one binder, and `(m: Nat) →
+f(f(m)) = m` under one): a definition whose value is a function type (an
+order's `Le`) is the goal as written, because a `λ` over its unfolded
+binders is not checked against it. The proof is the λ over the opened
+binders. A goal that is then no equation (`False`, `P`, `a <= b`) is proved
+only from a contradiction, and its failure says so: "the goal is not an
+equation, and the facts hold no contradiction", with the classes and a "to
+close it" line naming the two shapes a contradiction takes.
+
+The host side builds `inj` and `absurd` exactly as the surface forms do
+(`Inj`, `Absurd`, host design §25), so a refusal is the surface's (a field a
+later field's type mentions, sides that are no constructors' values): such
+a pair is left alone, and the graph stays as it was.
+
+### 14.3 Reading terms through definitions
+
+Two things the first conversions needed (`x86_64_fetch`,
+`x86_64_data_read`, `x86_64_stack`):
+
+- `Spine` reads a head β-redex as its contractum, as `View` shows it: a
+  `cong_fn` or a lemma's function argument leaves `(λ s => f(w, s))(x)` in
+  a type, which is the call `f(w, x)`.
+- A leaf that would be an atom compared only by `Defeq` (`KOther`) is put
+  in head normal form first and read again (`ISpine(h, reduce)`), so a
+  definition whose value is a constructor's is read as that value.
+
+### 14.4 A side's head normal form
+
+`linux_world_co`'s `Io::pass_tau`/`Io::pass_ret` close their `absurd` and
+`inj` steps through computation: `after(none, 0, X)` is `obs(none, X)`, and
+`obs(none, pass_reading_obs(ORet(x), io))` is `ORet(…)`. Read as written,
+neither side shows a constructor, and the two spellings of one stuck
+observation never meet.
+
+So each side of a fact read is remembered (`CState.unreduced`), and **once
+the graph as written proves nothing** (no lemmas, or no new instance) its
+head normal form is asked for (`Whnf`), and the round is run again:
+
+- a **constructor's value** (or a literal, or `Succ(n)`) is read as a node
+  joined to the side by `grind::defn` (`refl`: one by computation);
+- a **stuck form** (a `match` on a neutral scrutinee, or a form `View`
+  names no further, as a codata observation's) is never a node: it is
+  compared by `Defeq` with the stuck forms read before, and a side whose
+  form is one of theirs is joined to that side by `grind::defn` between the
+  two sides as written.
+
+Why lazily: reading every side's head normal form up front put
+`x86_64_data_read`'s record-heavy states over the evaluation's fuel, and a
+proof that closes as written should cost what it did. Why stuck forms are
+not nodes: their spelling (a case on an `M` value, pairs built through the
+checked spelling) is no term the kernel infers, and a proof whose
+explanation passed through one was refused (`NotInferable`). For the same
+reason injectivity and disjointness are asked about the **sides as
+written** (`source_of`), never a reduct: the host computes them anyway.
+
+The host gained two small things for this (host design §25): `Whnf` reads
+off projections of pairs in its answer (`contract_projections`, as `inj`
+and `absurd` do), so a constructor value built through the checked spelling
+is a `View`'s `HCtor`; and `View` calls a `match` applied to arguments (a
+codata observation's motive is a function type) `HMatch` of its scrutinee.
+
+Not done
+([grind-reduct-fields](../issues/grind-reduct-fields.md)): a field of a
+reduct is the reduct's spelling of it, not the term the goal writes
+(`obs(E, CTau(t))`'s field is not `t` as an atom, and
+`Io::pass_tau`'s `OTau`/`OVis` arms want `x2 = pass_reading(s, io)`), so
+those stay by hand.
+
+### 14.5 Conversions, and what importing grind costs
+
+By `grind()`/`grind_with`: `round_real`'s `Float::same_of_squeeze` and
+`Float::le_trans` disjointness arms (`absurd(trans(sym(a), b))` over `Bool`
+locals), and `linux_world_co`'s six `pass_reading_at` steps in
+`Io::pass_tau`/`Io::pass_ret` (§14.4).
+
+Minus decided (2026-11-05) that any std module grind's own imports allow
+may import it, `int` and `memory` included (`nat` and `list` are below
+grind). The round converted more (`x86_64_fetch`, `x86_64_data_read`,
+`x86_64_stack`, `x86_64_byte_memory`, `linux_x86_64_io`,
+`linux_x86_64_determinism`, `round`, `x86_64`, `int`) and took those back,
+for a cost the decision did not price in: `compile-x86`'s bundled proof
+library (`crates/cli/src/native/support.rs`) and the Rust tests' module
+lists (`tests/support/read_loop.rs`, the x86 prefix, `lib_std_float.rs`,
+some forty lists holding `int`) are closures written by hand, so each list
+holding an importer must hold grind's closure too (`char`, `string`,
+`tactic`, `derive`, `egraph`, `grind`). Cold, that closure's elaboration
+(dominated by `grind` itself, then `tactic`) is a large share of a test's
+CPU rail, and it put `native::tests::the_bundled_library_checks` over its
+CPU rail (killed, signal 9) on the first run after a compiler change. Until
+the lists stop being hand-written or grind's own elaboration gets cheaper
+([grind-closure-cost](../issues/grind-closure-cost.md)), modules on those
+lists keep their hand proofs; the conversions are one-line edits to
+replay.
+
+Also left by hand, for reasons of their own: `memory`'s `set_set_comm`
+clash (the hint's `m.space.same(y, z)` and the local's are atoms `Defeq`
+keeps apart, through the laws' dictionary), `x86_64_asm_table`'s name
+clashes (importing `tactic` there shadows the table's `At` with `Note`'s),
+`x86_64`'s `canonical_bytes_unique` (a field read through a projection of a
+computed record), `linux_x86_64_determinism`'s `c_strings_alike` (a
+hypothesis read through a match the branch only partly refines),
+`Io::pass_tau`'s `OTau`/`OVis` arms (§14.4), and `fn` decision procedures
+(`BitVec::unsigned_lt_dec`), whose bodies conversion unfolds.
+
+Probes: the constructor block and its negative controls in
 `lib/_tests/std/tactic/grind_tests.hthr`.
 

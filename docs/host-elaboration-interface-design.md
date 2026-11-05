@@ -990,3 +990,33 @@ record Projected { ty: GlobalRef, fields: List<FieldProj> }
 the handle. Its first customer is `grind`, which reads a conjunction or a
 record of equations as its fields (`docs/grind-design.md` §12); `omega`'s
 Rust `local_facts` does the same for `∧` alone, inside the elaborator.
+
+## 25. Injectivity and disjointness: `Inj`, `Absurd` (2026-11-05)
+
+`Inj(e: Expr, k: Nat) → Checked<Handle>` is `inj(e, k)`: from `e`, a proof
+of an equation between two values of one constructor (as the sides
+compute), the equation between their `k`th fields. `Absurd(e: Expr, goal:
+Handle) → Checked<Handle>` is `absurd(e)` at the type `goal` holds, from a
+proof of an equation between two different constructors' values. Both run
+the surface forms' builders on an elaborated proof (`inj_of_term`,
+`absurd_of_term` in `inductive.rs`, split out of `build_inj`/`build_absurd`
+so the two share every refusal: different constructors for `inj`, one for
+`absurd`, a field whose type an earlier field's mentions, sides that are no
+constructors' values). `Absurd` reads the goal handle after reifying `e`:
+reifying may make holes, which a type read before would not be shifted
+past (the cause of a wrong-type result in `round_real`'s first
+conversion). Tags 28 and 29. Their customer is `grind` (grind design §14).
+
+Two answers changed with them:
+
+- `Whnf` of a term reads off projections of pairs in its answer
+  (`spelling::contract_projections`, what `inj` and `absurd` do to a
+  computed side), so a constructor value reached through the checked
+  spelling is shown by `View` as the `HCtor` it is.
+- `View` calls a `match` applied to arguments (a codata observation, whose
+  motive is a function type) `HMatch` of its scrutinee, as it does a bare
+  one: it is stuck on the same scrutinee.
+
+`Lookup("False")` answers the kernel's empty type, as `Lookup("True")`
+answers its unit.
+

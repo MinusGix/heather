@@ -5,7 +5,7 @@ labels: [tooling,elaboration,metaprogramming,design]
 area: tactics
 milestone: [tac-general]
 created: 2026-08-05
-updated: 2026-11-02
+updated: 2026-11-05
 ---
 
 From the 2026-08-05 riff under [[ai-facing-tooling]]: the plan to
@@ -46,3 +46,4 @@ e-graph never enters the trusted story.
 - 2026-11-02: Round 1 (`docs/grind-design.md`): `lib/std/tactic/grind.hthr`, written in Heather on the host interface. `grind()` / `grind_with([e, …])` prove an equation by congruence closure over the goal's equations and hints given at their instances; the proof is the explanation path (`trans`/`sym`/`cong`/`grind::congr`/`grind::congr_fun`), checked by the kernel at the `by`. Terms are read by a new host request `Spine` (every argument, with dependence; dependent arguments stay in the head); constructor values through `Ctors`' function. The failure is the graph: each side's class, every class with its members, what was read and what was not, and the one equation that would close it. Probes in `lib/_tests/std/tactic/grind_tests.hthr`, including the two hand-built steps of `Format::down_of_le`. Next rounds filed: [[grind-e-matching]] (with the used-hint report), [[grind-constructor-facts]], [[grind-splits-and-theories]].
 - 2026-11-02: Round 2 (e-matching, [[grind-e-matching]]) landed in PR #358: lemmas by name or as locals/hints instantiated by matching, and `grind_report`'s used-hint report through the new `Say` request.
 - 2026-11-02: 2026-11-02: premises round done (grind-lemma-premises, docs/grind-design.md §11): binders no side binds are proved at the instance by the graph, a local or non-equation hint (Defeq), or Synth; commit_chain branches now use grind_using (set_set_comm closes too, kept by hand to keep grind out of the memory model).
+- 2026-11-05: Round 3 (constructor facts, [[grind-constructor-facts]]) done: injectivity, disjointness, disequalities, non-equation goals, Succ, side reducts; grind may now be imported by any std module its own imports allow (Minus, 2026-11-05), int and memory included; in practice modules on hand-written closure lists wait on [[grind-closure-cost]].
