@@ -4,7 +4,7 @@ status: open
 labels: [tooling,meta,tracker]
 area: infrastructure
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-05
 ---
 
 `docs/agent-policy.md` §7 owns what the gardener may do on its own and what
@@ -53,3 +53,7 @@ person reads that by hand, so the tracker has to tie itself together.
 
 The unplaced count is falling batch by batch, and the README's two hand
 checks are no longer by hand.
+
+## Log
+
+- 2026-11-05: `scripts/issue garden [--apply] [--max-sharers N]` in: the README's two checks (landed-but-open now matches landed/done/closed/merged/complete/implemented case-insensitively: 80 on 2026-11-05, where `check`'s old upper-case match found 0), unlinked issues, candidate links by shared cited file (182 pairs at ≤3 citers, applied as one `gardener:` log line on each of 192 issues), single-fit `area:` from the roadmap's lane footprints (0 today: every open issue has an area). `milestone: [none]` accepted by `check`/`tag`, counted apart by `areas`. Not yet: duplicate flagging and clustering (a thread over `index`, as planned), stale area notes (waits on [[area-notes-and-roadmap-map]]), the digest and nightly scheduling. Landed-but-open batches go to Minus next.
