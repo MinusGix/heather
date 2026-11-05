@@ -1,0 +1,54 @@
+import bitvec;
+import bool;
+
+fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
+    match fuel {
+        Zero => acc,
+        Succ(k) => match n.eq_bit(BitVec::ofNat(0)) {
+            False => sum_down(k, n.sub(BitVec::ofNat(1)), acc.add(n)),
+            True => acc,
+        },
+    }
+}
+
+fn shift_add(fuel: Nat, a, mask, acc, b: BitVec(64)) → BitVec(64) {
+    match fuel {
+        Zero => acc,
+        Succ(k) => match mask.eq_bit(BitVec::ofNat(0)) {
+            True => acc,
+            False => match b.band(mask).eq_bit(BitVec::ofNat(0)) {
+                True => shift_add(k, a.add(a), mask.add(mask), acc, b),
+                False => shift_add(k, a.add(a), mask.add(mask), acc.add(a), b),
+            },
+        },
+    }
+}
+
+// Is the step a λ over the ih, generalized over all words?
+fn sd_step(k: Nat, ih: BitVec(64) → BitVec(64) → BitVec(64), n, acc: BitVec(64)) → BitVec(64) {
+    match n.eq_bit(BitVec::ofNat(0)) { False => ih(n.sub(BitVec::ofNat(1)), acc.add(n)), True => acc }
+}
+
+fn sd_rec(fuel: Nat) → BitVec(64) → BitVec(64) → BitVec(64) {
+    match fuel { Zero => λ n acc => acc, Succ(k) => λ n acc => sd_step(k, sd_rec(k), n, acc) }
+}
+
+theorem sd_succ(k: Nat, n, acc: BitVec(64)): sum_down(Succ(k), n, acc) =
+    match n.eq_bit(BitVec::ofNat(0)) { False => sum_down(k, n.sub(BitVec::ofNat(1)), acc.add(n)), True => acc } { refl }
+
+theorem sd_conv(fuel: Nat, n, acc: BitVec(64)): sum_down(fuel, n, acc) = sd_rec(fuel)(n, acc) { refl }
+
+// shift_add: b invariant; ih over a, mask, acc only?
+fn sa_rec(fuel: Nat, b: BitVec(64)) → BitVec(64) → BitVec(64) → BitVec(64) → BitVec(64) {
+    match fuel {
+        Zero => λ a mask acc => acc,
+        Succ(k) => λ a mask acc => match mask.eq_bit(BitVec::ofNat(0)) {
+            True => acc,
+            False => match b.band(mask).eq_bit(BitVec::ofNat(0)) {
+                True => sa_rec(k, b)(a.add(a), mask.add(mask), acc),
+                False => sa_rec(k, b)(a.add(a), mask.add(mask), acc.add(a)),
+            },
+        },
+    }
+}
+theorem sa_conv(fuel: Nat, a, mask, acc, b: BitVec(64)): shift_add(fuel, a, mask, acc, b) = sa_rec(fuel, b)(a, mask, acc) { refl }

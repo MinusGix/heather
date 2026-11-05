@@ -1,0 +1,9 @@
+import logic;
+import nat;
+import bitvec;
+theorem big_lt(): 18446744073709551615 < Nat::pow(2, 64) { trivial }
+theorem big_succ(): Succ(18446744073709551615) = Nat::pow(2, 64) { refl }
+theorem big_word(): BitVec::ofNat(18446744073709551615, n := 64).toNat() = 18446744073709551615 { BitVec::toNat_ofNat(64, 18446744073709551615, big_lt()) }
+theorem word_lt(x: BitVec(64)): x.toNat() < Succ(BitVec::ofNat(18446744073709551615, n := 64).toNat()) {
+    j(sym(trans(cong_fn(λ (n: Nat) => Succ(n), big_word()), big_succ())), λ b _ => x.toNat() < b, BitVec::toNat_lt_pow(64, x))
+}
