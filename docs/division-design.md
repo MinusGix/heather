@@ -1,7 +1,8 @@
 # Division: `a / b` at a searched nonzero divisor
 
-Status: landed at `Rat` and `CReal` (issues/rat-division-symbol.md). Builds
-on docs/inverse-power-notation-design.md, whose decision this extends.
+Status: landed at `Rat` and `CReal` (issues/rat-division-symbol.md) and over
+the ordered-field classes (issues/ordered-field-division-symbol.md, §6).
+Builds on docs/inverse-power-notation-design.md, whose decision this extends.
 
 ## 1. The decision
 
@@ -128,14 +129,61 @@ At `Rat`: `div`, `div_eq_mul_inv`, `div_any_proof`, `div_mul_cancel`,
 `apart_div`. Probes: `lib/_tests/std/num/{rat,creal}_tests.hthr`,
 `lib/_tests/std/tactic/{ring_field,linarith}_tests.hthr`.
 
-## 6. Other fields
+## 6. Over the ordered-field classes
 
-The generic ordered-field classes have `recip(x, h)` but no `/` or `⁻¹`
-symbol: a section over `A: OrderedField(…)` writes `x * A.recip(x, h)`.
-The mechanism here (a searched `Apart` premise, sign rules, an arithmetic
-search rule) is not `Rat`'s: every rule above is stated over `Rat`'s or
-`CReal`'s laws and would read the same over `OrderedField`'s. Stating it once
-there is issues/ordered-field-division-symbol.md.
+`lib/std/algebra/field_division.hthr` states the same once, inside
+`section<A: OrderedField(≈, <, <=, +, *)>`:
+
+```heather
+fn OrderedField::Invertible(self x: A) → Type { ApartBy(<, x, A.unit) }
+fn OrderedField::inv(self x: A, h: x.Invertible() := infer) → A { A.recip(x, h) }
+fn OrderedField::div(self a, b: A, h: b.Invertible() := infer) → A { a * A.recip(b, h) }
+designation postfix ⁻¹ at OrderedField := OrderedField::inv
+designation / at OrderedField := OrderedField::div
+```
+
+- **A designation at a class.** A section's operand at its type parameter
+  `K` has no nominal carrier, so rung 2 of the operator ladder
+  (docs/operators-onto-classes-design.md §4) finds nothing. Rung 2b then
+  takes the designation at the class of a dictionary in scope, innermost
+  first (`designated_at_scope_class` in `crates/elab/src/dispatch/operator.rs`).
+  The operation is emitted bare, as every designated one is, so its own
+  dictionary is resolved at the operand's carrier. A carrier's own
+  designation always wins: `Rat` keeps `Rat::div`.
+- **Rules in a class section.** An evidence rule stated in the section has
+  the section's dictionary as a premise. It is a class goal, which the
+  instance registry answers under its own decrease check, so it is exempt
+  from Paterson's condition (`register_evidence`). The rule's operations
+  are its own binders, so `positive_mul`'s `x * y` would unify with a goal's
+  `c + d`. A first-order pre-match (`rule_clashes`) skips a rule whose binder
+  would have to be two different locals, or whose applied binder meets a
+  bare local; anything it cannot read, it leaves to the trial.
+- **Sign predicates generic in the relation.** `PositiveBy(lt, le, zero,
+  x)`, `NegativeBy`, `NonNegBy`, like `ApartBy`. The relation is a local in
+  a section, and a rule needs a global head to be keyed. Both relations are
+  arguments so that a nonnegative premise mentions nothing its positive
+  conclusion does not. `Invertible(x)` carries the section's whole index,
+  so a sign premise is smaller than it.
+- **Rules at the field.** Every rule is stated at `OrderedField`, not at the
+  weakest class it needs (the convention for theorems): a rule at
+  `OrderedSemiring` applied in a field section builds the parent dictionary
+  as a record at every application, and the search proposes and checks many.
+  That cost about twenty times as much on the probes.
+- **Arithmetic last.** `invertible_by_nlinarith`/`_neg` and, at the leaves,
+  `positive_add_by_nlinarith`, `negative_add_by_nlinarith` (subtraction is
+  `x + K.inv(y)` there) and `nonneg_by_linarith`. A tactic default runs in a
+  context with the caller's locals renamed out of reach; it now keeps the
+  dictionaries over type parameters and the symbols their constraints
+  installed (`Cx::hygienic`), which `linarith` needs to spell `K.unit`.
+  `invertible_above_zero` sorts before `invertible_below_zero`, so a positive
+  divisor does not first pay a failing `nlinarith`.
+- **Tactics.** `ring` and `linarith` read `OrderedField::inv` and `div` at a
+  class carrier as at `Rat` (`class_carrier` in `crates/elab/src/ring.rs`).
+
+A carrier reads the generic laws through its instance by unfolding:
+`OrderedField::div_mul_cancel(a, b, h := Inr(hb))` proves `a / b * b ≈ a` at
+`Rat`. The carriers' own copies stay (issues/carrier-division-through-class.md).
+Probes: `lib/_tests/std/algebra/field_division_tests.hthr`.
 
 ## 7. Left open
 
@@ -146,4 +194,9 @@ tried). Still open:
 
 - issues/all-numeral-relations-default-to-nat.md: `1 / 2` with no expected
   carrier is `Nat` division, `0`.
-- issues/ordered-field-division-symbol.md: `/` over the generic classes.
+- issues/carrier-division-through-class.md: `Rat`'s and `CReal`'s `/` as
+  the class's, retiring their copies.
+- issues/class-carrier-division-gaps.md: a sign goal written with `<` at a
+  class carrier, numerals there, and the trace's spelling.
+- issues/ring-reciprocal-of-searched-proof.md: `ring` reads no fact for a
+  reciprocal whose apartness the search built through a rule.

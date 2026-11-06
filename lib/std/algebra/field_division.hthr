@@ -1,0 +1,385 @@
+// Division over the ordered-field classes: `x⁻¹` and `a / b` inside a
+// section over `OrderedField(≈, <, <=, +, *)`, at a searched apartness from
+// zero, with the laws and the sign rules stated once
+// (docs/division-design.md §6, issues/ordered-field-division-symbol.md).
+//
+// The decision is `Rat`'s and `CReal`'s: no junk value. `x⁻¹` is
+// `OrderedField::inv(x, h)`, the dictionary's `recip` at `h:
+// x.Invertible() := infer`, and `a / b` is `a * b⁻¹` at the same proof. The
+// symbols reach a section through a designation at the class: inside
+// `section<K: OrderedField(…)>` an operand at `K` has no designation of its
+// own, so the one at the class of the dictionary in scope is used.
+//
+// The search for `x.Invertible()` reads, in order: a local (`ApartBy`, or
+// a sign through `PositiveBy`/`NegativeBy`, each converting from the `<` a
+// local states), the sign rules below, which carry a sign through `+`, `*`,
+// negation, `⁻¹` and `/`, and last `nlinarith` over the caller's
+// hypotheses. The sign predicates are generic in the relation, like
+// `ApartBy`, so a rule's premise is smaller than its conclusion
+// (Paterson's condition, docs/traits-layer2-design.md §6); a sign goal
+// written with `<` itself has a local relation for a head and no rule can be
+// keyed on it, so a defaulted premise asks for `PositiveBy(<, <=, K.unit, e)`.
+//
+// The rules are stated at `OrderedField`, not at the weakest class each
+// needs (the convention for theorems): a rule at `OrderedSemiring` applied in
+// a field section would assemble the parent dictionary as a record at every
+// application, and the search proposes and checks many.
+
+import logic;
+import nat;
+import int;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import ring;
+import omega;
+import linarith;
+
+// ---------------------------------------------------------------------------
+// Signs, generic in the relation.
+
+fn PositiveBy<A>(lt, le: A → A → Type, zero, x: A) → Type { lt(zero, x) }
+
+fn NegativeBy<A>(lt, le: A → A → Type, zero, x: A) → Type { lt(x, zero) }
+
+fn NonNegBy<A>(lt, le: A → A → Type, zero, x: A) → Type { le(zero, x) }
+
+// ---------------------------------------------------------------------------
+// Sums.
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+evidence theorem OrderedField::positive_add({x, y: A}, hx: PositiveBy(<, <=, A.unit, x) := infer,
+    hy: PositiveBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x + y)
+{
+    OrderedAddMonoid::add_pos(x, y, hx, hy)
+}
+
+evidence theorem OrderedField::negative_add({x, y: A}, hx: NegativeBy(<, <=, A.unit, x) := infer,
+    hy: NegativeBy(<, <=, A.unit, y) := infer): NegativeBy(<, <=, A.unit, x + y)
+{
+    StrictOrder::lt_respects_r(x + y, A.unit + A.unit, A.unit, A.unit_r(A.unit), OrderedAddMonoid::add_lt_mono(x, A.unit, y, A.unit, hx, hy))
+}
+
+}
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+evidence theorem OrderedField::positive_add_nonneg({x, y: A}, hx: PositiveBy(<, <=, A.unit, x) := infer,
+    hy: NonNegBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x + y)
+{
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddMonoid::add_lt_le_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
+evidence theorem OrderedField::positive_nonneg_add({x, y: A}, hx: NonNegBy(<, <=, A.unit, x) := infer,
+    hy: PositiveBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x + y)
+{
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddMonoid::add_le_lt_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
+evidence theorem OrderedField::nonneg_add({x, y: A}, hx: NonNegBy(<, <=, A.unit, x) := infer,
+    hy: NonNegBy(<, <=, A.unit, y) := infer): NonNegBy(<, <=, A.unit, x + y)
+{
+    LocatedAddMonoid::add_nonneg(x, y, hx, hy)
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Negation.
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+evidence theorem OrderedField::positive_neg({x: A}, hx: NegativeBy(<, <=, A.unit, x) := infer):
+    PositiveBy(<, <=, A.unit, A.inv(x))
+{
+    OrderedAddGroup::neg_pos(x, hx)
+}
+
+evidence theorem OrderedField::negative_neg({x: A}, hx: PositiveBy(<, <=, A.unit, x) := infer):
+    NegativeBy(<, <=, A.unit, A.inv(x))
+{
+    StrictOrder::lt_respects_r(A.inv(x), A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(x), OrderedAddGroup::neg_lt(A.unit, x, hx))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Products.
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+evidence theorem OrderedField::positive_mul({x, y: A}, hx: PositiveBy(<, <=, A.unit, x) := infer,
+    hy: PositiveBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x * y)
+{
+    OrderedSemiring::mul_pos(x, y, hx, hy)
+}
+
+evidence theorem OrderedField::nonneg_mul({x, y: A}, hx: NonNegBy(<, <=, A.unit, x) := infer,
+    hy: NonNegBy(<, <=, A.unit, y) := infer): NonNegBy(<, <=, A.unit, x * y)
+{
+    OrderedSemiring::mul_nonneg(x, y, hx, hy)
+}
+
+// One is positive, so `a / 1` needs nothing.
+evidence theorem OrderedField::positive_one(): PositiveBy(<, <=, A.unit, A.multiplicative.unit) { A.zero_lt_one }
+
+}
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+evidence theorem OrderedField::positive_mul_neg({x, y: A}, hx: NegativeBy(<, <=, A.unit, x) := infer,
+    hy: NegativeBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x * y)
+{
+    StrictOrder::lt_respects_r(A.unit, A.inv(x) * A.inv(y), x * y, Ring::neg_mul_neg(x, y),
+        OrderedSemiring::mul_pos(A.inv(x), A.inv(y), OrderedAddGroup::neg_pos(x, hx), OrderedAddGroup::neg_pos(y, hy)))
+}
+
+evidence theorem OrderedField::negative_mul_l({x, y: A}, hx: NegativeBy(<, <=, A.unit, x) := infer,
+    hy: PositiveBy(<, <=, A.unit, y) := infer): NegativeBy(<, <=, A.unit, x * y)
+{
+    let p: (A.unit < A.inv(x * y)) = StrictOrder::lt_respects_r(A.unit, A.inv(x) * y, A.inv(x * y), Ring::neg_mul(x, y),
+        OrderedSemiring::mul_pos(A.inv(x), y, OrderedAddGroup::neg_pos(x, hx), hy));
+    OrderedAddGroup::neg_of_neg_pos(x * y, p)
+}
+
+evidence theorem OrderedField::negative_mul_r({x, y: A}, hx: PositiveBy(<, <=, A.unit, x) := infer,
+    hy: NegativeBy(<, <=, A.unit, y) := infer): NegativeBy(<, <=, A.unit, x * y)
+{
+    let p: (A.unit < A.inv(x * y)) = StrictOrder::lt_respects_r(A.unit, x * A.inv(y), A.inv(x * y), Ring::mul_neg(x, y),
+        OrderedSemiring::mul_pos(x, A.inv(y), hx, OrderedAddGroup::neg_pos(y, hy)));
+    OrderedAddGroup::neg_of_neg_pos(x * y, p)
+}
+
+evidence theorem OrderedField::nonneg_mul_self({x: A}): NonNegBy(<, <=, A.unit, x * x) { OrderedRing::sq_nonneg(x) }
+
+}
+
+// ---------------------------------------------------------------------------
+// The inverse and the quotient.
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+// Apartness from zero: what a reciprocal asks for. A predicate of its own,
+// not `ApartBy(<, x, A.unit)` written out, so the rules below are about one
+// global and a sign premise is smaller than it; a local `ApartBy` converts.
+fn OrderedField::Invertible(self x: A) → Type { ApartBy(<, x, A.unit) }
+
+fn OrderedField::inv(self x: A, h: x.Invertible() := infer) → A { A.recip(x, h) }
+
+fn OrderedField::div(self a, b: A, h: b.Invertible() := infer) → A { a * A.recip(b, h) }
+
+}
+
+designation postfix ⁻¹ at OrderedField := OrderedField::inv
+designation / at OrderedField := OrderedField::div
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+evidence theorem OrderedField::invertible_above_zero({x: A}, h: PositiveBy(<, <=, A.unit, x) := infer): x.Invertible() { Inr(h) }
+evidence theorem OrderedField::invertible_below_zero({x: A}, h: NegativeBy(<, <=, A.unit, x) := infer): x.Invertible() { Inl(h) }
+
+// The value does not depend on the proof.
+theorem OrderedField::inv_any_proof(x: A, h, h2: x.Invertible()): OrderedField::inv(x, h := h) ≈ OrderedField::inv(x, h := h2) {
+    OrderedField::recip_respects(x, x, h, h2, A.rel_refl(x))
+}
+
+theorem OrderedField::div_eq_mul_inv(a, b: A, h: b.Invertible() := infer): a / b ≈ a * b⁻¹ {
+    A.rel_refl(a / b)
+}
+
+theorem OrderedField::mul_inv(x: A, h: x.Invertible() := infer): x * x⁻¹ ≈ A.multiplicative.unit {
+    A.mul_recip(x, h)
+}
+
+theorem OrderedField::inv_mul(x: A, h: x.Invertible() := infer): x⁻¹ * x ≈ A.multiplicative.unit {
+    OrderedField::recip_mul(x, h)
+}
+
+theorem OrderedField::inv_respects(x, x2: A, h: x.Invertible() := infer, h2: x2.Invertible() := infer,
+    hx: x ≈ x2): x⁻¹ ≈ x2⁻¹
+{
+    OrderedField::recip_respects(x, x2, h, h2, hx)
+}
+
+theorem OrderedField::div_any_proof(a, b: A, h, h2: b.Invertible()): OrderedField::div(a, b, h := h) ≈ OrderedField::div(a, b, h := h2) {
+    OrderedSemiring::mul_respects(a, a, A.recip(b, h), A.recip(b, h2), A.rel_refl(a), OrderedField::recip_respects(b, b, h, h2, A.rel_refl(b)))
+}
+
+theorem OrderedField::div_respects(a, a2, b, b2: A, h: b.Invertible() := infer, h2: b2.Invertible() := infer,
+    ha: a ≈ a2, hb: b ≈ b2): a / b ≈ a2 / b2
+{
+    OrderedSemiring::mul_respects(a, a2, A.recip(b, h), A.recip(b2, h2), ha, OrderedField::recip_respects(b, b2, h, h2, hb))
+}
+
+theorem OrderedField::div_mul_cancel(a, b: A, h: b.Invertible() := infer): a / b * b ≈ a {
+    let u = A.recip(b, h);
+    calc {
+        (a * u) * b ≈ a * (u * b) := A.multiplicative.assoc(a, u, b),
+        ≈ a * A.multiplicative.unit := OrderedSemiring::mul_respects(a, a, u * b, A.multiplicative.unit, A.rel_refl(a), OrderedField::recip_mul(b, h)),
+        ≈ a := A.multiplicative.unit_r(a),
+    }
+}
+
+theorem OrderedField::mul_div_cancel(a, b: A, h: b.Invertible() := infer): a * b / b ≈ a {
+    let u = A.recip(b, h);
+    calc {
+        (a * b) * u ≈ a * (b * u) := A.multiplicative.assoc(a, b, u),
+        ≈ a * A.multiplicative.unit := OrderedSemiring::mul_respects(a, a, b * u, A.multiplicative.unit, A.rel_refl(a), A.mul_recip(b, h)),
+        ≈ a := A.multiplicative.unit_r(a),
+    }
+}
+
+theorem OrderedField::div_self(b: A, h: b.Invertible() := infer): b / b ≈ A.multiplicative.unit {
+    A.mul_recip(b, h)
+}
+
+theorem OrderedField::one_div(b: A, h: b.Invertible() := infer): A.multiplicative.unit / b ≈ b⁻¹ {
+    A.multiplicative.unit_l(A.recip(b, h))
+}
+
+theorem OrderedField::zero_div(b: A, h: b.Invertible() := infer): A.unit / b ≈ A.unit {
+    A.zero_mul(A.recip(b, h))
+}
+
+theorem OrderedField::mul_div_assoc(a, b, c: A, h: c.Invertible() := infer): a * b / c ≈ a * (b / c) {
+    A.multiplicative.assoc(a, b, A.recip(c, h))
+}
+
+theorem OrderedField::add_div(a, b, c: A, h: c.Invertible() := infer): (a + b) / c ≈ a / c + b / c {
+    A.distrib_r(a, b, A.recip(c, h))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Signs and apartness through `⁻¹` and `/`.
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+evidence theorem OrderedField::positive_inv({x: A}, {h: x.Invertible()}, hx: PositiveBy(<, <=, A.unit, x) := infer):
+    PositiveBy(<, <=, A.unit, OrderedField::inv(x, h := h))
+{
+    OrderedField::recip_pos(x, h, hx)
+}
+
+evidence theorem OrderedField::negative_inv({x: A}, {h: x.Invertible()}, hx: NegativeBy(<, <=, A.unit, x) := infer):
+    NegativeBy(<, <=, A.unit, OrderedField::inv(x, h := h))
+{
+    OrderedField::recip_neg(x, h, hx)
+}
+
+evidence theorem OrderedField::positive_div({a, b: A}, {h: b.Invertible()}, ha: PositiveBy(<, <=, A.unit, a) := infer,
+    hb: PositiveBy(<, <=, A.unit, b) := infer): PositiveBy(<, <=, A.unit, OrderedField::div(a, b, h := h))
+{
+    OrderedSemiring::mul_pos(a, A.recip(b, h), ha, OrderedField::recip_pos(b, h, hb))
+}
+
+// A product of numbers apart from zero is apart from zero, whatever their
+// signs.
+evidence theorem OrderedField::invertible_mul({x, y: A}, hx: x.Invertible() := infer, hy: y.Invertible() := infer):
+    (x * y).Invertible()
+{
+    match hx {
+        Inl(nx) => match hy {
+            Inl(ny) => Inr(OrderedField::positive_mul_neg(x := x, y := y, hx := nx, hy := ny)),
+            Inr(py) => Inl(OrderedField::negative_mul_l(x := x, y := y, hx := nx, hy := py)),
+        },
+        Inr(px) => match hy {
+            Inl(ny) => Inl(OrderedField::negative_mul_r(x := x, y := y, hx := px, hy := ny)),
+            Inr(py) => Inr(OrderedSemiring::mul_pos(x, y, px, py)),
+        },
+    }
+}
+
+// The side is a parameter of its own so that the case split does not
+// rewrite the proof the reciprocal is taken at.
+theorem OrderedField::invertible_recip(x: A, h: x.Invertible(), side: x.Invertible()): A.recip(x, h).Invertible() {
+    match side {
+        Inl(n) => Inl(OrderedField::recip_neg(x, h, n)),
+        Inr(p) => Inr(OrderedField::recip_pos(x, h, p)),
+    }
+}
+
+evidence theorem OrderedField::invertible_inv({x: A}, {h: x.Invertible()}): OrderedField::inv(x, h := h).Invertible() {
+    OrderedField::invertible_recip(x, h, h)
+}
+
+evidence theorem OrderedField::invertible_div({a, b: A}, {h: b.Invertible()}, ha: a.Invertible() := infer):
+    OrderedField::div(a, b, h := h).Invertible()
+{
+    OrderedField::invertible_mul(x := a, y := A.recip(b, h), hx := ha, hy := OrderedField::invertible_recip(b, h, h))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Arithmetic, last (docs/division-design.md §2 step 4): search rules, tried
+// after every plain rule failed and never inside an arithmetic tactic's own
+// run. `nlinarith` reads the caller's hypotheses. At the sign rules' leaves a
+// sum (subtraction is a sum with a negation here) is `nlinarith`'s, and a
+// nonnegative `linarith`'s.
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+evidence theorem OrderedField::positive_add_by_nlinarith({x, y: A}, h: A.unit < x + y := nlinarith):
+    PositiveBy(<, <=, A.unit, x + y) { h }
+evidence theorem OrderedField::negative_add_by_nlinarith({x, y: A}, h: x + y < A.unit := nlinarith):
+    NegativeBy(<, <=, A.unit, x + y) { h }
+evidence theorem OrderedField::nonneg_by_linarith({x: A}, h: A.unit <= x := linarith): NonNegBy(<, <=, A.unit, x) { h }
+
+evidence theorem OrderedField::invertible_by_nlinarith({x: A}, h: A.unit < x := nlinarith): x.Invertible() { Inr(h) }
+evidence theorem OrderedField::invertible_by_nlinarith_neg({x: A}, h: x < A.unit := nlinarith): x.Invertible() { Inl(h) }
+
+}
+
+// ---------------------------------------------------------------------------
+// More laws.
+
+section<A: OrderedField(≈, <, <=, +, *)> {
+
+theorem OrderedField::inv_inv(x: A, h: x.Invertible() := infer): x⁻¹⁻¹ ≈ x {
+    OrderedField::recip_recip(x, h, OrderedField::invertible_inv(x := x, h := h))
+}
+
+theorem OrderedField::inv_mul_distrib(x, y: A, hx: x.Invertible() := infer, hy: y.Invertible() := infer):
+    (x * y)⁻¹ ≈ x⁻¹ * y⁻¹
+{
+    let u = A.recip(x, hx);
+    let v = A.recip(y, hy);
+    let hu: (x * u ≈ A.multiplicative.unit) = A.mul_recip(x, hx);
+    let hv: (y * v ≈ A.multiplicative.unit) = A.mul_recip(y, hy);
+    let prod: ((x * y) * (u * v) ≈ (x * u) * (y * v)) = ring;
+    let one: ((x * u) * (y * v) ≈ A.multiplicative.unit) = A.rel_trans((x * u) * (y * v), A.multiplicative.unit * A.multiplicative.unit, A.multiplicative.unit,
+        OrderedSemiring::mul_respects(x * u, A.multiplicative.unit, y * v, A.multiplicative.unit, hu, hv), A.multiplicative.unit_l(A.multiplicative.unit));
+    A.rel_sym(u * v, A.recip(x * y, OrderedField::invertible_mul(x := x, y := y, hx := hx, hy := hy)),
+        OrderedField::recip_unique(x * y, OrderedField::invertible_mul(x := x, y := y, hx := hx, hy := hy), u * v, A.rel_trans((x * y) * (u * v), (x * u) * (y * v), A.multiplicative.unit, prod, one)))
+}
+
+theorem OrderedField::div_mul_div(a, b, c, d: A, hb: b.Invertible() := infer, hd: d.Invertible() := infer):
+    a / b * (c / d) ≈ a * c / (b * d)
+{
+    let u = A.recip(b, hb);
+    let v = A.recip(d, hd);
+    let w = OrderedField::inv(b * d);
+    let parts: (w ≈ u * v) = OrderedField::inv_mul_distrib(b, d, hx := hb, hy := hd);
+    let re: ((a * u) * (c * v) ≈ (a * c) * (u * v)) = ring;
+    A.rel_trans((a * u) * (c * v), (a * c) * (u * v), (a * c) * w, re,
+        OrderedSemiring::mul_respects(a * c, a * c, u * v, w, A.rel_refl(a * c), A.rel_sym(w, u * v, parts)))
+}
+
+theorem OrderedField::neg_div(a, b: A, h: b.Invertible() := infer): A.inv(a) / b ≈ A.inv(a / b) {
+    Ring::neg_mul(a, A.recip(b, h))
+}
+
+theorem OrderedField::sub_div(a, b, c: A, h: c.Invertible() := infer): (a + A.inv(b)) / c ≈ a / c + A.inv(b / c) {
+    A.rel_trans((a + A.inv(b)) * A.recip(c, h), a * A.recip(c, h) + A.inv(b) * A.recip(c, h), a * A.recip(c, h) + A.inv(b * A.recip(c, h)),
+        A.distrib_r(a, A.inv(b), A.recip(c, h)),
+        OrderedAddMonoid::add_respects(a * A.recip(c, h), a * A.recip(c, h), A.inv(b) * A.recip(c, h), A.inv(b * A.recip(c, h)),
+            A.rel_refl(a * A.recip(c, h)), Ring::neg_mul(b, A.recip(c, h))))
+}
+
+}
