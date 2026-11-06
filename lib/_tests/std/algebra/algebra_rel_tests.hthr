@@ -100,3 +100,34 @@ theorem under_two_binders<A: Equivalence(R)>(R: A → A → Type, F: (A → A �
 theorem binder_and_argument<A: Equivalence(R)>(R: A → A → Type, G: (A → A) → A → A, f: A → A, x, y, w: A,
     cf: PreservesRelation(R, R, f), h: R(x, y), e: R(G(λ z => f(y), y), w)): R(G(λ z => f(x), x), w)
 { rewrite(h, e) }
+
+// Inside a codata constructor (§11.5): the children are the arguments, each
+// crossed by `PreservesRelation` about the context `λ z. C(…, z, …)`; a
+// function child changes pointwise. Plain and function children, in any
+// position, and an indexed declaration.
+codata Two { Leaf(n: Nat), Node(l: Two, r: Two), Br(f: Nat → Two, t: Two) }
+theorem ctor_last_child(S: Two → Two → Type, tr: Transitive<Two>(S), c: PreservesRelation(S, S, λ z => Node(Leaf(0), z)),
+    a, b: Two, h: S(a, b), u: Two, e: S(Node(Leaf(0), b), u)): S(Node(Leaf(0), a), u)
+{ rewrite(h, e) }
+theorem ctor_first_child(S: Two → Two → Type, tr: Transitive<Two>(S), c: PreservesRelation(S, S, λ z => Node(z, Leaf(1))),
+    a, b: Two, h: S(a, b), u: Two, e: S(Node(b, Leaf(1)), u)): S(Node(a, Leaf(1)), u)
+{ rewrite(h, e) }
+theorem ctor_beside_function(S: Two → Two → Type, tr: Transitive<Two>(S), g: Nat → Two, c: PreservesRelation(S, S, λ z => Br(g, z)),
+    a, b: Two, h: S(a, b), u: Two, e: S(Br(g, b), u)): S(Br(g, a), u)
+{ rewrite(h, e) }
+theorem ctor_function_child(S: Two → Two → Type, tr: Transitive<Two>(S), t: Two,
+    c: PreservesRelation(Pointwise<Nat, Two>(S), S, λ f => Br(f, t)),
+    a, b: Two, h: S(a, b), u: Two, e: S(Br(λ n => b, t), u)): S(Br(λ n => a, t), u)
+{ rewrite(h, e) }
+codata Keep: (n: Nat) → Type { K(at: Nat, next: Keep(n)), KF(g: Nat → Keep(n)) }
+theorem ctor_indexed(m: Nat, S: Keep(m) → Keep(m) → Type, tr: Transitive<Keep(m)>(S), c: PreservesRelation(S, S, λ z => K(3, z)),
+    a, b: Keep(m), h: S(a, b), u: Keep(m), e: S(K(3, b), u)): S(K(3, a), u)
+{ rewrite(h, e) }
+theorem ctor_indexed_function(m: Nat, S: Keep(m) → Keep(m) → Type, tr: Transitive<Keep(m)>(S),
+    c: PreservesRelation(Pointwise<Nat, Keep(m)>(S), S, λ g => KF(g)),
+    a, b: Keep(m), h: S(a, b), u: Keep(m), e: S(KF(λ i => b), u)): S(KF(λ i => a), u)
+{ rewrite(h, e) }
+// Two changed children have no one context to ask about.
+// expect-error: changes in 2 of its children
+theorem ctor_both_children(S: Two → Two → Type, tr: Transitive<Two>(S), a, b: Two, h: S(a, b), u: Two, e: S(Node(b, b), u)): S(Node(a, a), u)
+{ rewrite(h, e) }
