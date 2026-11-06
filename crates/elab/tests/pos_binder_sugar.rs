@@ -83,9 +83,9 @@ fn caller(k: Pos<Nat>) -> Nat { halve(k) + halve(k * k) }
 #[test]
 fn a_parameter_without_evidence_is_refused_at_the_call() {
     let e = bad("theorem zero(): 0 < 0 { uses(0) }\n");
-    assert!(e.contains("no instance for `Lt(0, 0)`"), "{e}");
+    assert!(e.contains("no instance for `0 < 0`"), "{e}");
     let e = bad("theorem open(k: Nat): 0 < k { uses(k) }\n");
-    assert!(e.contains("no instance for `Lt(0, k)`"), "{e}");
+    assert!(e.contains("no instance for `0 < k`"), "{e}");
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn a_result_fact_rests_on_the_arguments_evidence() {
     let e = bad("fn sq(n: Pos<Nat>) -> Pos<Nat> { n * n }
 theorem open(k: Nat): 0 < sq(k) { uses(sq(k)) }
 ");
-    assert!(e.contains("no instance for `Lt(0, k)`"), "{e}");
+    assert!(e.contains("no instance for `0 < k`"), "{e}");
 }
 
 #[test]
@@ -201,7 +201,7 @@ theorem premise(k: Nat, h: 0 < k): 0 < k.sq() { uses(k.sq()) }
     let e = bad("fn Nat::sq(self n: Pos<Nat>) -> Pos<Nat> { n * n }
 theorem open(k: Nat): 0 < k.sq() { uses(k.sq()) }
 ");
-    assert!(e.contains("no instance for `Lt(0, k)`"), "{e}");
+    assert!(e.contains("no instance for `0 < k`"), "{e}");
     // The restated body is searched as a plain function's is.
     let e = bad("fn Nat::ident(self n: Nat) -> Pos<Nat> { n }\n");
     assert!(e.contains("`positivity` could not prove `Lt(0, n)`"), "{e}");
@@ -291,7 +291,7 @@ theorem stated(f: Frac): 0 < f.den {{ let h: (0 < f.den) = Frac::den_positive();
 #[test]
 fn a_field_without_evidence_is_refused_at_the_construction() {
     let e = bad(&format!("{FRAC}fn zero() -> Frac {{ Frac(1, 0) }}\n"));
-    assert!(e.contains("no evidence for `Lt(0, 0)`"), "{e}");
+    assert!(e.contains("no evidence for `0 < 0`"), "{e}");
     let e = bad(&format!("{FRAC}fn open(k: Nat) -> Frac {{ Frac(1, k) }}\n"));
     assert!(e.contains("no evidence for"), "{e}");
 }
@@ -310,7 +310,7 @@ theorem stated<A>(b: Box<A>): 0 < b.n { let h: (0 < b.n) = Box::n_positive(); h 
     let e = bad("record Box<A> { a: A, n: Pos<Nat> }
 fn zero<A>(x: A) -> Box<A> { Box(x, 0) }
 ");
-    assert!(e.contains("no evidence for `Lt(0, 0)`"), "{e}");
+    assert!(e.contains("no evidence for `0 < 0`"), "{e}");
 }
 
 #[test]
@@ -331,7 +331,7 @@ theorem open<A>(j: Nat, s: Slot<A>(j)): 0 < s.len * 2 { uses(s.len * 2) }
     let e = bad("record Window(k: Nat) { len: Pos<Nat>, fits: len <= k }
 fn zero(j: Nat, h: 0 <= j) -> Window(j) { Window(0, h) }
 ");
-    assert!(e.contains("no evidence for `Lt(0, 0)`"), "{e}");
+    assert!(e.contains("no evidence for `0 < 0`"), "{e}");
 }
 
 #[test]
@@ -366,7 +366,7 @@ fn unchecked() -> Nat {{ let s = Square(3); match s {{ Square(n, _) => n, Dot =>
 #[test]
 fn a_constructor_field_without_evidence_is_refused() {
     let e = bad(&format!("{SHAPE}fn zero() -> Shape {{ Square(0) }}\n"));
-    assert!(e.contains("no evidence for `Lt(0, 0)`"), "{e}");
+    assert!(e.contains("no evidence for `0 < 0`"), "{e}");
     let e = bad(&format!("{SHAPE}fn open(k: Nat) -> Shape {{ Square(k) }}\n"));
     assert!(e.contains("no evidence for"), "{e}");
 }
@@ -382,7 +382,7 @@ fn area(s: Shape) -> Nat {{ match s {{ Square(n, _) => half(n * n), Dot => 0 }} 
     let e = bad(&format!("{SHAPE}fn half(n: Pos<Nat>) -> Nat {{ n.div(2) }}
 fn area(s: Shape, k: Nat) -> Nat {{ match s {{ Square(n, _) => half(k), Dot => 0 }} }}
 "));
-    assert!(e.contains("no instance for `Lt(0, k)`"), "{e}");
+    assert!(e.contains("no instance for `0 < k`"), "{e}");
 }
 
 #[test]

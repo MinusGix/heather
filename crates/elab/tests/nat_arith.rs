@@ -124,7 +124,7 @@ fn the_positive_divisor_hypothesis_is_load_bearing() {
     // `divisor: Pos<Nat>`: with no `0 < d` in scope the search refuses, and
     // naming a proof that is not one is refused too.
     let e = bad("theorem t(n, d: Nat): n.mod(d) < d { n.mod_lt(d) }");
-    assert!(e.contains("no instance for `Lt(0, d)`"), "{e}");
+    assert!(e.contains("no instance for `0 < d`"), "{e}");
     bad("theorem t(n, d: Nat): n.mod(d) < d { n.mod_lt(d, divisor_pos := trivial) }");
 }
 

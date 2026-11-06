@@ -423,6 +423,21 @@ impl Traits {
         out
     }
 
+    /// The table read backwards: every symbol that designates `op` at the
+    /// carrier `carrier_key`, both resolved keys — what a display that spells
+    /// a resolved operation back as its symbol has to find exactly one of
+    /// (issues/diagnostic-operator-resugaring.md).
+    pub(crate) fn symbols_designating(&self, op: &str, carrier_key: &str) -> Vec<(OpFixity, String)> {
+        let mut out: Vec<_> = self
+            .designations
+            .iter()
+            .filter(|((_, _, carrier), info)| carrier == carrier_key && info.op == op)
+            .map(|((fixity, symbol, _), _)| (*fixity, symbol.clone()))
+            .collect();
+        out.sort_by(|a, b| (a.0 as u8, &a.1).cmp(&(b.0 as u8, &b.1)));
+        out
+    }
+
     pub(crate) fn designations_for(&self, fixity: OpFixity, symbol: &str) -> Vec<(String, String)> {
         let mut out: Vec<_> = self
             .designations

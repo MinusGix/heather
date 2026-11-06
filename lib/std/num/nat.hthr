@@ -1414,6 +1414,9 @@ theorem Nat::add_lt_of_lt_sub(self a, b, c: Nat, h: b < c - a): a + b < c {
 // ---------------------------------------------------------------------------
 
 fn Nat::pow(self a: Nat, b: Nat) → Nat { match b { Zero => 1, Succ(k) => a.pow(k) * a } }
+// `a ^ b`, the spelling a diagnostic shows a power by
+// (issues/diagnostic-operator-resugaring.md).
+designation ^ at Nat := Nat::pow
 
 theorem Nat::pow_zero(self a: Nat): a.pow(0) = 1 { refl }
 theorem Nat::pow_one(self a: Nat): a.pow(1) = a { a.mul_left_one() }

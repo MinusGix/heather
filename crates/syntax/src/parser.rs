@@ -453,6 +453,44 @@ fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
     }
 }
 
+/// Where an operator symbol sits in the expression grammar: the parser's own
+/// precedence, for a printer that spells a resolved operation back as the
+/// symbol (issues/diagnostic-operator-resugaring.md) and has to parenthesize
+/// what it prints exactly as this parser would read it — by this table, not a
+/// second one (issues/notation-extensibility.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorForm {
+    /// An infix rung, as its left and right binding powers
+    /// (`Parser::infix_op`): `a op b` folds `op` while its left power is at
+    /// least the minimum, and parses the right operand at the right power.
+    Infix(u8, u8),
+    /// The comparison level, `<=`, `<` and `≈` beside `=`: below every infix
+    /// rung, non-associative (`Parser::comparison`).
+    Comparison,
+    /// `^`: the base a postfix expression, the exponent a prefix one, so it
+    /// is right-associative and binds tighter than a prefix operator
+    /// (`Parser::power`).
+    Power,
+    /// `-x`, `!b`, `↑n`: the operand a prefix expression (`Parser::prefix`).
+    Prefix,
+    /// `x⁻¹`: the operand a postfix expression (`Parser::postfix`).
+    Postfix,
+}
+
+/// The [`OperatorForm`] of `sym` at `fixity`, or `None` for a symbol the
+/// grammar does not read at that fixity.
+pub fn operator_form(sym: &str, fixity: OpFixity) -> Option<OperatorForm> {
+    match fixity {
+        OpFixity::Infix => match sym {
+            "<=" | "<" | "≈" => Some(OperatorForm::Comparison),
+            "^" => Some(OperatorForm::Power),
+            _ => Parser::infix_binding(sym).map(|(l, r)| OperatorForm::Infix(l, r)),
+        },
+        OpFixity::Prefix => matches!(sym, "-" | "!" | "↑").then_some(OperatorForm::Prefix),
+        OpFixity::Postfix => (sym == "⁻¹").then_some(OperatorForm::Postfix),
+    }
+}
+
 /// The carrier of `Pos<A>` written as a binder's type: the sugar
 /// (docs/positivity-evidence-design.md §6 B) is recognised by name, as
 /// `Squash<A>` is, so `Pos` with one type argument is reserved there.
@@ -4952,16 +4990,24 @@ impl Parser {
     /// comparison rung is below all of them: `a & m = 0` is `(a & m) = 0`.
     /// `/` and `%` share `*`'s rung, left-associative.
     fn infix_op(tok: &TokKind) -> Option<(&'static str, u8, u8)> {
-        match tok {
-            TokKind::PipePipe => Some(("||", 1, 2)),
-            TokKind::AmpAmp => Some(("&&", 3, 4)),
-            TokKind::Pipe => Some(("|", 5, 6)),
-            TokKind::Amp => Some(("&", 7, 8)),
-            TokKind::Shl => Some(("<<", 9, 10)),
-            TokKind::Shr => Some((">>", 9, 10)),
-            TokKind::Plus => Some(("+", 11, 12)),
-            TokKind::Minus => Some(("-", 11, 12)),
-            TokKind::Join => Some(("⊔", 11, 12)),
+        let sym = Self::op_symbol(tok)?;
+        let (l, r) = Self::infix_binding(sym)?;
+        Some((sym, l, r))
+    }
+
+    /// [`Self::infix_op`]'s binding powers, by the symbol a token spells: the
+    /// one table, read by the parser and by [`operator_form`].
+    fn infix_binding(sym: &str) -> Option<(u8, u8)> {
+        match sym {
+            "||" => Some((1, 2)),
+            "&&" => Some((3, 4)),
+            "|" => Some((5, 6)),
+            "&" => Some((7, 8)),
+            "<<" => Some((9, 10)),
+            ">>" => Some((9, 10)),
+            "+" => Some((11, 12)),
+            "-" => Some((11, 12)),
+            "⊔" => Some((11, 12)),
             // `++` is RIGHT-associative (`left_bp > right_bp`), unlike its
             // rung-mates: fixity is proof-relevant here. `a ++ (b ++ c)` is
             // the shape `append`'s recursion unfolds against and the shape
@@ -4969,20 +5015,20 @@ impl Parser {
             // `a` twice and meets no lemma head-on. `::`-style list notation,
             // when it lands, is right-associative by necessity, so the list
             // family reads uniformly (docs/showcase/README.md, friction 2).
-            TokKind::PlusPlus => Some(("++", 12, 11)),
-            TokKind::Star => Some(("*", 13, 14)),
-            TokKind::Slash => Some(("/", 13, 14)),
-            TokKind::Percent => Some(("%", 13, 14)),
+            "++" => Some((12, 11)),
+            "*" => Some((13, 14)),
+            "/" => Some((13, 14)),
+            "%" => Some((13, 14)),
             // `∙` sits on the multiplicative rung, which is where
             // issues/notation-extensibility.md's precedence-by-class scheme
             // puts a dot-shaped operator (`× ⊗ ∘ ∩`). Nothing in the library
             // mixes it with `+` — it is the *generic* operation, so a file that
             // writes it has one — but a rung had to be chosen and this is the
             // one its shape asks for.
-            TokKind::Bullet => Some(("∙", 13, 14)),
+            "∙" => Some((13, 14)),
             // `⊓` binds tighter than `⊔`, as `*` does `+`: the lattice's
             // two operations read like the semiring's.
-            TokKind::Meet => Some(("⊓", 13, 14)),
+            "⊓" => Some((13, 14)),
             _ => None,
         }
     }

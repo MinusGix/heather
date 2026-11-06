@@ -376,8 +376,8 @@ theorem prec(p: Nat, q: Nat, r: Nat, h: Or<And<nat::Nat::Le(p, q), nat::Nat::Le(
     );
     assert!(
         err.contains(
-            "this has type `And<And<Le(p, q), Le(q, r)>, Le(p, r)>`, but \
-             `And<Le(p, q), And<Le(q, r), Le(p, r)>>` is expected here"
+            "this has type `And<And<p <= q, q <= r>, p <= r>`, but \
+             `And<p <= q, And<q <= r, p <= r>>` is expected here"
         ),
         "got: {err}"
     );

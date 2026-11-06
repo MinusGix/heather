@@ -138,7 +138,7 @@ fn cancellation_is_only_by_a_positive() {
     refused(
         "int_cancel_zero",
         "theorem bad(x, y: Int, h: x * OfNat(0) = y * OfNat(0)): x = y { x.mul_cancel_pos_r(y, OfNat(0), h) }",
-        Refusal::Says("no instance for `Lt(OfNat(0), OfNat(0))`"),
+        Refusal::Says("no instance for `OfNat(0) < OfNat(0)`"),
     );
 }
 

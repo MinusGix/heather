@@ -218,7 +218,7 @@ theorem sub_checking(a, b, c: Nat, h: a <= b): (b - a) + c + a = b + c {
 }
 // Control: without `b <= a`, the case `a < b` has a model, and the refusal
 // names the case it came from.
-// expect-error: __omega_sub0_case: Lt(a, b), __omega_sub0_eq: sub(a, b) = 0
+// expect-error: __omega_sub0_case: a < b, __omega_sub0_eq: a - b = 0
 theorem sub_add_cancel_truncated(a, b: Nat): a - b + b = a { omega }
 
 // An integer's `x.toNat()` is split the same way: `0 <= x` with
@@ -282,7 +282,7 @@ theorem guard_eq_same(n: Nat, h: (!n.same(0)) = True): 1 <= n { omega }
 theorem guard_eq_in_arm(n: Nat): n - 1 <= n {
     match h: n.leb(0) { True => omega, False => omega }
 }
-// expect-error: __omega_guard0_1: Lt(m, n)
+// expect-error: __omega_guard0_1: m < n
 theorem guard_eq_false_claim(n, m: Nat, h: n.leb(m) = False): n < m { omega }
 // A field read off a record constructed in place is the field as put, and a
 // `decreases` measure over a field is that read at the self-call's argument
@@ -342,7 +342,7 @@ theorem guard_goal_negated(n: Nat, h: 5 <= n): ¬(n.leb(4)).IsTrue() { omega }
 // Controls. A false claim through a guard is refused, naming the guard's
 // parts; a guard over a Bool function no unfolding takes apart is skipped,
 // and the refusal lists it; a bare atom has nothing to meet.
-// expect-error: __omega_guard0_2: Le(n, m), __omega_guard0_3: Le(m, 5)
+// expect-error: __omega_guard0_2: n <= m, __omega_guard0_3: m <= 5
 theorem guard_false_claim(n, m: Nat, h: (n.leb(m) && m.leb(5)).IsTrue()): n <= 4 { omega }
 fn parity(n: Nat) → Bool { match n { Zero => True, Succ(k) => !parity(k) } }
 // expect-error: h: IsTrue(parity(n))

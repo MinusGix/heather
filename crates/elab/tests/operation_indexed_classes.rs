@@ -151,7 +151,7 @@ theorem nope(x: Bool): x.or(True) = x { law(x) }
     // the message names the two types rather than the declaration. Assert the
     // substance (see `lib_algebra.rs`'s twin).
     assert!(
-        e.contains(".unit") && e.contains("or(x, True) = x"),
+        e.contains(".unit") && e.contains("x || True = x"),
         "the wrong unit must be refused, naming both sides: {e}"
     );
 }
