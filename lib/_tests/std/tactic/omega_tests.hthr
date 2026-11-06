@@ -221,6 +221,16 @@ theorem sub_checking(a, b, c: Nat, h: a <= b): (b - a) + c + a = b + c {
 // expect-error: __omega_sub0_case: Lt(a, b), __omega_sub0_eq: sub(a, b) = 0
 theorem sub_add_cancel_truncated(a, b: Nat): a - b + b = a { omega }
 
+// An integer's `x.toNat()` is split the same way: `0 <= x` with
+// `OfNat(x.toNat()) = x`, or `x < 0` with `x.toNat() = 0`.
+theorem to_nat_of_nonneg(x: Int, h: OfNat(0) <= x): OfNat(x.toNat()) = x { omega }
+theorem to_nat_of_neg(x: Int, h: x < OfNat(0)): x.toNat() = 0 { omega }
+theorem to_nat_pred_lt(x: Int, h: OfNat(1) <= x): (x - OfNat(1)).toNat() < x.toNat() { omega }
+theorem to_nat_in_fact(x: Int, n: Nat, h: x.toNat() = n + 2): OfNat(2) <= x { omega }
+// Control: at `x <= 0` both reads are `0`, so nothing decreases.
+// expect-error: __omega_tonat
+theorem to_nat_pred_lt_unguarded(x: Int): (x - OfNat(1)).toNat() < x.toNat() { omega }
+
 // `omega` is a checking form: where nothing is expected it says so and how
 // to state the goal, not "unbound name"
 // (issues/checking-tactic-in-inference-position-diagnostic.md).
@@ -246,6 +256,13 @@ theorem guard_not_same(n: Nat, h: (!n.same(0)).IsTrue()): n - 1 < n { omega }
 // `!n.same(m)` is only `n ≠ m`: it bounds nothing alone.
 // expect-error: `omega` got stuck
 theorem guard_not_same_alone(n, m: Nat, h: (!n.same(m)).IsTrue()): n < m { omega }
+// The same comparisons at `Int`.
+theorem guard_int_leb(x, y: Int, h: x.leb(y).IsTrue()): x < y + OfNat(1) { omega }
+theorem guard_int_not_leb(x, y: Int, h: (!x.leb(y)).IsTrue()): y < x { omega }
+theorem guard_int_same(x: Int, h: (x.same(OfNat(3)) && OfNat(0).leb(x)).IsTrue()): x <= OfNat(3) { omega }
+theorem guard_int_eq_not_same(x: Int, h: (!x.same(OfNat(0))) = True, l: OfNat(0) <= x): OfNat(1) <= x { omega }
+// expect-error: `omega` got stuck
+theorem guard_int_not_same_alone(x, y: Int, h: (!x.same(y)).IsTrue()): x < y { omega }
 theorem guard_atom(r: Bool, n: Nat, h: (!(r && n.leb(3))).IsTrue(), rt: r.IsTrue()): 3 < n { omega }
 // As a negation, as a fact argument, and as a record's field.
 theorem guard_negated(n: Nat, h: ¬(n.leb(4)).IsTrue()): 5 <= n { omega }

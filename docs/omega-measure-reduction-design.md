@@ -612,6 +612,8 @@ proved true (`h: b.IsTrue()`) or proved false (`h: (!b).IsTrue()`):
 | `!a` | `a` proved false | `a` proved true (`guard_not_not`) |
 | `n.leb(m)` | `n <= m` (`guard_leb`) | `m < n` (`guard_not_leb`) |
 | `n.same(m)` | `n = m` (`guard_same`) | `n ≠ m` (`guard_not_same`) |
+| `a.leb(b)` at `Int` | `a <= b` (`guard_int_leb`) | `b < a` (`guard_int_not_leb`) |
+| `a.same(b)` at `Int` | `a = b` (`guard_int_same`) | `a ≠ b` (`guard_int_not_same`) |
 | any other Bool `r` | `bit(r) = 1` (`guard_bit`) | `bit(r) = 0` (`guard_not_bit`) |
 
 A fact `¬b.IsTrue()` is `b` proved false (`guard_negated`). The rules take
@@ -702,3 +704,22 @@ declined for §3 of the unfolding design's own reason (a `match` with an
 equation binding). Probes, the false-claim control included, are in
 `lib/_tests/std/tactic/omega_tests.hthr` (`guard_eq_*`,
 `field_of_constructed_record`, `count_down`).
+
+## 19. Comparisons and measures at Int (2026-11-06)
+
+`issues/while-bool-condition-measure.md` and its Int follow-up. A `while`
+over a Bool condition binds `c = True`, which §18 already reads; what a
+loop over `Nat::same` or an `Int` comparison lacked was the comparison
+itself, read as the atom `bit(c)`. §17's table gains `n.same(m)` and the
+`Int` `leb`/`same` rows, each a lemma in `omega.hthr`.
+
+An `Int` loop's measure is a Nat, usually `x.toNat()`, and that read was
+an opaque atom. It is now split as §16 splits `a - b`:
+`omega::int_to_nat_elim(x, …)` gives `0 <= x` with `OfNat(x.toNat()) = x`,
+or `x < 0` with `x.toNat() = 0`, bound as `__omega_tonat{k}_case`/`_eq`.
+`split_int_to_nat` runs right after `split_nat_subtraction`, under the
+same settle-by-spelling rule and the same limit of six; its search enters
+an `Int` constructor's payload, so a case equation `OfNat(x.toNat()) = x`
+settles the read it names. Probes: `guard_int_*` and `to_nat_*` in
+`lib/_tests/std/tactic/omega_tests.hthr`, `idrain`/`iclimb` in
+`lib/_tests/std/core/imperative_statements_tests.hthr`.
