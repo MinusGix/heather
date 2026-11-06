@@ -4,7 +4,7 @@ status: open
 labels: [tooling,frontend,design,metaprogramming]
 area: tactics
 created: 2026-08-05
-updated: 2026-11-02
+updated: 2026-11-06
 ---
 
 From the 2026-08-05 riff under [[ai-facing-tooling]]. Not scheduled —
@@ -95,3 +95,4 @@ source theorem rather than occupy an equal-ranked slot.
   already grep for lemmas. Suggested first slice: name search and pattern
   search over module images, `--json`, no ranking yet.
 - 2026-11-02: Piece 3's used-subset report exists for grind: `grind_report(names, hints)` says which hints and named lemmas the proof cites and which it does not, as a `tactic-report` warning (the `Say` host request, docs/host-elaboration-interface-design.md §23; [[grind-e-matching]]).
+- 2026-11-06: The used subset must be closed under what the search stood on, not only what the proof cites: a hint can be needed without being cited (a *lurking* hint, Axolocl, CAV 2025). `grind_report` now says so ("not cited, but needed to find it", [[grind-report-lurking-hints]], docs/grind-design.md §9.6); a minimizer should keep those, or re-run the narrowed call before committing it. Over-supply has a cost of its own: one more lemma can exhaust a call's fuel ([[grind-unrelated-lemma-fuel]]).
