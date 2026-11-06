@@ -974,11 +974,12 @@ Local state, statement forms and `for` over lists. What departs from §4–§7:
    loops under a `match` arm that binds. A `for` iterates a `List` only.
    A loop inside a statement `if` that assigns several locals is copied
    into each join, and so lifted once per copy.
-9. **Step facts by `split_all; omega` over a nested `if` are refused by the
-   kernel**, a bug that hand-written functions of the same shape show too
-   (`issues/split-all-nested-if-omega-kernel-refusal.md`). Facts by `refl`
-   at a neutral state work (the probes in
-   `lib/_tests/std/core/imperative_statements_tests.hthr`).
+9. **Step facts are `split_all; all_goals { omega }`** over the step's
+   nested `if` (`count_words_step_at_most_one` in
+   `lib/_tests/std/core/imperative_statements_tests.hthr`), and facts by
+   `refl` at a neutral state work too. A condition on a Bool equation
+   (`if s.inside = False`) was refused by the kernel until 2026-11-06
+   (`issues/split-all-nested-if-omega-kernel-refusal.md`).
 
 ## 15. Early exit as built (2026-11-02)
 

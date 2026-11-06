@@ -345,6 +345,20 @@ fn dependent_motive(motive: &Type) -> Option<Type> {
     motive.abstract_local_with_all(&pairs)
 }
 
+/// `reduct` with a blocker found below it abstracted: its position becomes
+/// the blocker's replacement, and every other occurrence of the scrutinee
+/// becomes `z` as well. Replacing the position alone left the scrutinee
+/// standing wherever else the reduct spells it — in the type arguments an
+/// unfolded call carries (`or_bit<s.inside = False, …>(eq_dec(s.inside,
+/// False))` once `decide_bit` unfolds) — so the motive's own subterms
+/// disagreed about their types under `z`, and the kernel refused the split
+/// that the motive's instance at the scrutinee had passed
+/// (issues/split-all-nested-if-omega-kernel-refusal.md).
+fn lifted(reduct: &Term, found: &Blocked) -> Option<Rc<Term>> {
+    let pairs = [(found.original.clone(), (*found.replacement).clone())];
+    Some(payload(abstract_scrutinee(&term_type(Rc::new(reduct.clone())), &found.scrutinee, &pairs)?))
+}
+
 /// Inspect transparent heads, projections and application arguments, but never
 /// enter a recursor's motives or branches: those are not the current goal's
 /// blockers. A shared step budget bounds speculative unfolding. Every
@@ -399,7 +413,7 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
             _ if reduct != *term => {
                 for arg in crate::spelling::app_spine(&reduct).1 {
                     if let Some(found) = stuck_scrutinee(elab, cx, arg, budget) {
-                        let replacement = payload(term_type(Rc::new(reduct.clone())).abstract_local_with(&found.original, &found.replacement)?);
+                        let replacement = lifted(&reduct, &found)?;
                         return Some(Blocked { original: term.clone(), replacement, ..found });
                     }
                 }
@@ -407,16 +421,13 @@ fn stuck_scrutinee(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32) ->
             }
             _ => continue,
         };
-        let abstracted = |original: &Term, replacement: &Rc<Term>| {
-            Some(payload(term_type(Rc::new(reduct.clone())).abstract_local_with(original, replacement)?))
-        };
         // Deeper first: a comparison whose operand is itself a stuck match
         // (`eq_bit(64, match c { … }, 1)`) is split after that match, so the
         // comparison is cased on at each operand it actually has. Cased on
         // first, the inner split would then decide it, leaving one of its
         // cases a goal no run reaches.
         if let Some(found) = stuck_scrutinee(elab, cx, scrut, budget) {
-            return Some(Blocked { original: term.clone(), replacement: abstracted(&found.original, &found.replacement)?, ..found });
+            return Some(Blocked { original: term.clone(), replacement: lifted(&reduct, &found)?, ..found });
         }
         if let Some(inductive) = &domain
             && let Some(comparison) = comparison_of(elab, cx, scrut)
@@ -689,6 +700,31 @@ pub(crate) fn restates(elab: &Elaborator, cx: &Cx, ty: &Type, goal: &Type, level
     }
 }
 
+/// Fail unless `motive`, scoped in `Γ, z` with `z` of the scrutinee's type,
+/// is a type there. [`restates`] checks the motive at the scrutinee; this
+/// checks it at every `z`. A motive that abstracted the scrutinee at some of
+/// its occurrences and not at others (a term at `z` where its annotation
+/// still says the scrutinee) restates the goal at the scrutinee itself and
+/// is still no type, which the kernel then reported as a refusal of the
+/// whole declaration with no site (issues/split-all-nested-if-omega-kernel-
+/// refusal.md). Out of fuel, the kernel decides.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn motive_is_a_type(elab: &Elaborator, cx: &Cx, motive: &Type, goal: &Type, scrut: &Term, ty: &Type, scrut_level: &Level, level: &Level, span: Span) -> crate::R<()> {
+    let mut zcx = cx.clone();
+    zcx.push("z".to_string(), ty.clone(), scrut_level.clone());
+    match elab.kernel_check_type(&elab.goal_psi(), heather_kernel::layer::Layer::Prog, &zcx.gamma, motive, level) {
+        Ok(()) | Err(heather_kernel::typing::TypeError::OutOfFuel) => Ok(()),
+        Err(_) => crate::err(
+            format!(
+                "internal error: `split_all`'s case split on `{}` abstracts it from the goal `{}` into a motive that is not a type: some occurrence of it was left in place (please report this)",
+                elab.spell_term_source(cx, scrut).unwrap_or_else(|| "its scrutinee".to_string()),
+                elab.display_type(cx, goal),
+            ),
+            span,
+        ),
+    }
+}
+
 /// A `refl` leaf, checked where it stands. Everywhere else `refl` is a note
 /// for the gate, not a check; under `split_all` that let a leaf the split
 /// left unprovable read as a finished split until the kernel rejected the
@@ -895,6 +931,25 @@ pub(crate) fn simplify_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Type
                         {
                             return term(elab, cx, &reduced, budget);
                         }
+                    }
+                }
+                // A scrutinee a split decided through a definition: an
+                // `if` on `i = False` matches on `decide_bit`'s bit, which
+                // is `or_bit(eq_dec(i, False))` and stays a call once `i` is
+                // a constructor, because its value (`Inl(refl)`) is evidence
+                // no source spells. It computes to a constructor all the
+                // same, and the match takes that arm: the arm is the goal's,
+                // the scrutinee's value is not
+                // (issues/split-all-nested-if-omega-kernel-refusal.md).
+                if let Term::Case { scrut, .. } = &mut output
+                    && let Ok(whnf) = elab.goal_oracle().bounded(64).whnf_term(&cx.gamma, scrut)
+                    && crate::spelling::is_inj(&whnf)
+                {
+                    *scrut = Rc::new(whnf);
+                    if let Ok(reduced) = elab.goal_oracle().bounded(64).whnf_term_opaque(&cx.gamma, &output)
+                        && reduced != output
+                    {
+                        return term(elab, cx, &reduced, budget);
                     }
                 }
             }
