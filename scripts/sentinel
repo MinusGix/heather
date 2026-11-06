@@ -95,6 +95,22 @@ def suite_line(output):
     return m[-1].group(0) if m else "== suite: no summary line =="
 
 
+def processes_near_rail(output):
+    """The runner's `== processes past …` section: one row per process that
+    came near its own CPU rail (scripts/run-test-targets.mjs), the margin a
+    target's summed CPU cannot show."""
+    lines = output.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("== processes past "):
+            rows = []
+            for row in lines[i + 1:]:
+                if not row.strip() or row.startswith("=="):
+                    break
+                rows.append(row.strip())
+            return line, rows
+    return None, []
+
+
 def target_cpu():
     """Per-target CPU-s from the newest run in the full lane's history."""
     path = ROOT / "target" / "test-target-timings-full.tsv"
@@ -338,6 +354,16 @@ def run():
             report += ["", f"The last green run ({previous['commit'][:12]}) is not an ancestor of this commit; no bisect."]
         else:
             report += ["", "No earlier green run on record; no bisect."]
+    heading, near = processes_near_rail(output)
+    if near:
+        report += ["", heading.strip("= ") + ":", ""] + [f"- `{row}`" for row in near]
+        if any(f" {t}: " in f" {row}" for t in failing for row in near):
+            # A process killed at its rail over a cold store leaves the images
+            # it finished behind, so the bisect's next probe of the same
+            # library replays them and passes: the first merge probed takes
+            # the blame (issues/master-red-2026-11-06.md).
+            report += ["", "A failing target with a process at its rail bisects to whichever merge was probed first "
+                       "over a cold store; check that the blamed merge can reach the target before trusting it."]
     if previous is not None:
         report += [""] + audit_report(previous["commit"])
     (OUT / "report.md").write_text("\n".join(report) + "\n")

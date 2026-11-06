@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CPU_MARKER, binaryOf, collect, completionMessage, cpuRail, familyShards, jobBounds, limitedCommand, listingArgs, orderTargets, parseArtifacts, parseCpu, parseResults, parseTestTimes, PREREQUISITES, probeArgs, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
+import { CPU_MARKER, ProcessSampler, binaryOf, collect, completionMessage, cpuRail, familyShards, jobBounds, limitedCommand, listingArgs, orderTargets, parseArtifacts, parseCpu, parseProcStat, parseResults, parseTestTimes, PREREQUISITES, probeArgs, processesNearRail, runTargets, shardTestName, targetIncomplete, targetOutcome, timedLibtestArgs } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -299,4 +299,77 @@ test("the native write-elf gates run under their own CPU rail, every other targe
   assert.match(run.output, /^900$/m);
   const plain = await collect(limitedCommand("bash", ["-c", "ulimit -t"]));
   assert.match(plain.output, /^300$/m);
+});
+
+test("a /proc stat line is read after the command name, whatever the name holds", () => {
+  const fields = (ppid, utime, stime, start) =>
+    `S ${ppid} 1 1 0 -1 4194304 100 0 0 0 ${utime} ${stime} 0 0 20 0 1 0 ${start} 1000 10`;
+  assert.deepEqual(parseProcStat(`4242 (heather) ${fields(17, 2500, 120, 9001)}`),
+    { ppid: 17, ticks: 2620, start: "9001" });
+  assert.deepEqual(parseProcStat(`7 (a) (b c)) ${fields(3, 1, 2, 5)}`), { ppid: 3, ticks: 3, start: "5" });
+  assert.equal(parseProcStat("garbage"), null);
+});
+
+test("the sampler keeps each process below a root by its own CPU, not its children's", () => {
+  const proc = mkdtempSync(join(tmpdir(), "heather-proc-"));
+  const put = (pid, name, ppid, ticks, start, argv) => {
+    mkdirSync(join(proc, String(pid)), { recursive: true });
+    writeFileSync(join(proc, String(pid), "stat"),
+      `${pid} (${name}) S ${ppid} 1 1 0 -1 0 0 0 0 0 ${ticks} 0 0 0 20 0 1 0 ${start} 1000 10`);
+    writeFileSync(join(proc, String(pid), "cmdline"), argv.join("\0") + "\0");
+  };
+  try {
+    const sampler = new ProcessSampler({ proc, intervalMs: 60_000 });
+    sampler.enabled = true;
+    sampler.ticks = 100;
+    put(10, "bash", 1, 1, 1, ["bash", "-c", "wrapper"]);
+    put(11, "native_branches", 10, 200, 2, ["/t/native_branches-abc", "--format", "terse"]);
+    put(12, "heather", 11, 25000, 3, ["/t/heather", "compile-x86", "examples/x86-native/branches.hthr", "nested_true", "-o", "x.s"]);
+    put(20, "other", 1, 99999, 4, ["other"]);
+    sampler.watch(10);
+    // The child exits and its pid comes back as a different, cheap process:
+    // both are kept, each with its own reading.
+    rmSync(join(proc, "12"), { recursive: true });
+    put(12, "heather", 11, 300, 7, ["/t/heather", "compile-x86", "examples/x86-native/branches.hthr", "nested_false"]);
+    sampler.sample();
+    const seen = sampler.stop(10);
+    assert.equal(sampler.timer, null, "the last stop clears the timer");
+    assert.deepEqual(seen.map((p) => [p.command, p.cpu, p.root]), [
+      ["heather compile-x86 examples/x86-native/branches.hthr nested_true -o", 250, false],
+      ["heather compile-x86 examples/x86-native/branches.hthr nested_false", 3, false],
+      ["native_branches-abc --format terse", 2, false],
+      ["bash -c wrapper", 0.01, true],
+    ]);
+    const run = { target: { name: "native_branches", label: "crates/cli/tests/native_branches.rs" }, processes: seen,
+      code: 0, signal: null, wall: 1, cpu: 255, result: { resultLines: 1, passed: 1, failed: 0, ignored: 0 }, output: "ok\n" };
+    assert.deepEqual(processesNearRail(run).map((p) => [p.cpu, p.rail]), [[250, 300]]);
+    assert.match(completionMessage(run, 1, 1), /\n  \| process at 83% of its 300 s CPU rail: 250.0 CPU-s, heather compile-x86 .*nested_true/);
+    // native_tools' children run under its 900 s rail, so 250 is no warning there.
+    assert.deepEqual(processesNearRail({ ...run, target: { name: "native_tools" } }), []);
+  } finally {
+    rmSync(proc, { recursive: true, force: true });
+  }
+});
+
+test("a target's spawned child is sampled as a process of its own", { skip: process.platform !== "linux" }, async () => {
+  const summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s";
+  const targets = [{ label: "spawns.rs", name: "spawns", executable: "bash", args: ["-c",
+    'bash -c "end=\\$((SECONDS + 2)); while (( SECONDS < end )); do :; done" busy-child; printf "%s\\n" "$1"', "spawns", summary] }];
+  const write = process.stdout.write;
+  let runs;
+  try {
+    // Only the runner's own lines: the test reporter writes here too.
+    process.stdout.write = function(chunk, ...args) {
+      return /^\[(start|done )/.test(chunk.toString()) ? true : write.call(this, chunk, ...args);
+    };
+    runs = await runTargets(targets, 1, [], true, {}, null, 10, new ProcessSampler({ intervalMs: 100 }));
+  } finally {
+    process.stdout.write = write;
+  }
+  const [run] = runs;
+  assert.match(run.output, /test result: ok/);
+  const child = run.processes.find((p) => !p.root && p.command.includes("SECONDS"));
+  assert.ok(child && child.cpu >= 0.8, JSON.stringify(run.processes));
+  assert.ok(run.processes.some((p) => p.root), "the wrapper itself is the root");
+  assert.ok(run.cpu >= child.cpu - 0.2, "the target's sum covers its child");
 });

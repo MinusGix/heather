@@ -33,6 +33,128 @@ pub fn reflect(args: &[String]) -> ExitCode {
     report(compile(args, true))
 }
 
+/// `warm-native`: check the modules `compile-x86` would check for the given
+/// sources, the sources themselves included, through the same bundled prefix
+/// and into the same stores, and nothing else: no certificate. The order is
+/// every source's imports first (each module after its own), then the
+/// sources. `--through M` stops after module `M`, so a caller can build a
+/// long closure one module per process, each replaying the ones before it
+/// under its own CPU rail; `--list` prints that order and `--unbuilt` the
+/// modules in it that have no image in the store yet (read from the image
+/// headers, `BuildPlan`), one per line, checking nothing.
+///
+/// Why it exists: a test's first `compile-x86` child over a cold store builds
+/// its source and the whole closure under it before its certificate, under
+/// one rail. Since the `runtime fn` examples import the generator's closure
+/// and run the generator for every function, that is past the rail
+/// (issues/master-red-2026-11-06.md), so `scripts/test` warms the store with
+/// this first.
+pub fn warm(args: &[String]) -> ExitCode {
+    report(warm_closure(args))
+}
+
+fn warm_closure(args: &[String]) -> Result<(), String> {
+    let mut files = Vec::new();
+    let mut cache = None;
+    let mut through = None;
+    let mut list = false;
+    let mut unbuilt = false;
+    let mut kernel_workers = None;
+    let mut search = vec![PathBuf::from("lib/std"), PathBuf::from("lib")];
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-L" => {
+                let value = PathBuf::from(args.next().ok_or("-L needs a path")?);
+                if !search.contains(&value) { search.push(value); }
+            }
+            "--cache-dir" => cache = Some(PathBuf::from(args.next().ok_or("--cache-dir needs a path")?)),
+            "--through" => through = Some(args.next().ok_or("--through needs a module name")?.clone()),
+            "--list" => list = true,
+            "--unbuilt" => unbuilt = true,
+            "--kernel-workers" => {
+                let value = args.next().ok_or("--kernel-workers needs a count")?;
+                kernel_workers = Some(value.parse::<usize>().ok().filter(|&n| n > 0)
+                    .ok_or("--kernel-workers needs a positive integer")?);
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown option `{arg}`")),
+            _ => files.push(PathBuf::from(arg)),
+        }
+    }
+    if files.is_empty() || (!list && cache.is_none()) {
+        return Err("usage: heather warm-native <file.hthr>... --cache-dir <dir> [--through <module> | --unbuilt] [-L <dir>]... [--kernel-workers <n>]\n\
+                    \x20      heather warm-native <file.hthr>... --list [-L <dir>]...".into());
+    }
+    // Every file's imports in load order, each module at its first
+    // appearance (which follows its own imports), the bundled modules left to
+    // the prefix below; then the files themselves. Imports before every root,
+    // so `--through` an import never checks a root.
+    let bundled: Vec<&str> = SUPPORT.iter().map(|(name, _)| *name).collect();
+    let mut closure: Vec<loader::Module> = Vec::new();
+    let mut roots: Vec<loader::Module> = Vec::new();
+    for file in &files {
+        let mut sources = loader::load_providing(file, &search, &bundled).map_err(|e| e.msg)?;
+        roots.extend(sources.pop());
+        for module in sources {
+            if bundled.contains(&module.name.as_str()) || closure.iter().any(|m| m.name == module.name) { continue; }
+            closure.push(module);
+        }
+    }
+    for root in roots {
+        if !closure.iter().any(|m| m.name == root.name) { closure.push(root); }
+    }
+    if let Some(name) = &through {
+        if !closure.iter().any(|m| &m.name == name) {
+            return Err(format!("`{name}` is not in the closure of {}", files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", ")));
+        }
+    }
+    if list {
+        for module in &closure { println!("{}", module.name); }
+        return Ok(());
+    }
+    if unbuilt {
+        // The bundled prefix as `compile-x86` checks it, then the rest: a
+        // key chains through its imports' interface hashes.
+        let mut modules: Vec<loader::Module> = SUPPORT.iter().map(|&(name, src)| loader::Module {
+            name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
+        }).collect();
+        modules.extend(closure.iter().cloned());
+        let plan = heather_cli::semantic::BuildPlan::new(cache.unwrap(), heather_cache::module_image::ImageFreshness::Exact, modules);
+        for (i, m) in plan.modules().iter().enumerate() {
+            if plan.state(i) != heather_cli::semantic::BuildState::Built && !bundled.contains(&m.name.as_str()) {
+                println!("{}", m.name);
+            }
+        }
+        return Ok(());
+    }
+    let mut elab = Elaborator::with_prelude().map_err(|e| format!("prelude: {e}"))?;
+    elab.set_kernel_workers(
+        kernel_workers.or_else(heather_elab::kernel_workers_from_env).unwrap_or(heather_elab::DEFAULT_KERNEL_WORKERS),
+    );
+    // Both halves of the cache, as `compile-x86` opens them, so what is
+    // written here is what its replay finds and vouches for.
+    let dir = cache.unwrap();
+    let (store, rejected) = heather_cache::Cache::open(dir.clone());
+    if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
+        eprintln!("{msg}");
+    }
+    let store = Rc::new(store);
+    elab.set_gate(Rc::clone(&store) as Rc<dyn heather_elab::gate::KernelGate>);
+    let mut session = SemanticSession::new(Some(dir));
+    for &(name, src) in SUPPORT {
+        check_module(&mut elab, &mut session, &loader::Module {
+            name: name.into(), path: PathBuf::from(format!("{name}.hthr")), src: src.into(),
+        })?;
+    }
+    for module in &closure {
+        check_file(&mut elab, &mut session, module)?;
+        if through.as_deref() == Some(module.name.as_str()) { break; }
+    }
+    // The verdicts too: without them the next replay re-checks every
+    // declaration in the kernel, which is most of what warming saves.
+    store.save().map_err(|err| format!("cache: could not write verdicts: {err}"))
+}
+
 /// `write-elf` (`native/elf.rs`).
 pub fn write_elf(args: &[String]) -> ExitCode {
     report(elf::write(args))
