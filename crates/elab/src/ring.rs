@@ -83,6 +83,9 @@ struct RelCarrier {
     neg: Option<Op>,
     /// The postfix `⁻¹`, read as a reciprocal (`Reifier::reciprocal`).
     inv: Option<Op>,
+    /// `/`, read as a product with the divisor's reciprocal
+    /// (`Reifier::quotient`).
+    div: Option<Op>,
     /// At a class carrier, its integers (`ClassInts`); `None` at a carrier
     /// with a `CommRingOfInt` instance.
     class: Option<ClassInts>,
@@ -398,6 +401,7 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
         mul: op("*", OpFixity::Infix),
         neg: op("-", OpFixity::Prefix),
         inv: op("⁻¹", OpFixity::Postfix),
+        div: op("/", OpFixity::Infix),
         class: None,
     })
 }
@@ -432,6 +436,7 @@ fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCar
         mul: Some(Op::Term(mul)),
         neg: neg.map(Op::Term),
         inv: None,
+        div: None,
         class: Some(ClassInts { ints: Rc::new(ints), ty, level, zero, one }),
     })
 }
@@ -602,7 +607,8 @@ impl<'a> FieldReading<'a> {
                     let expr = parse_expr(&source).ok()?;
                     let (term, ty, level) = reifier.elab.generated_scope(|me| me.elab_infer(reifier.cx, &expr)).ok()?;
                     Some((term, ty, level, source))
-                });
+                })
+                .or_else(|| reifier.numeral_reciprocal_positive(term, &den, ops));
             self.reciprocals.push(Reciprocal { atom: fact.atom, den, positive });
         }
     }
@@ -907,6 +913,11 @@ impl Reifier<'_> {
             let inner = Rc::clone(inner);
             return Ok(Syn::Neg(Box::new(self.reify_within(&inner, depth)?)));
         }
+        if let Some((a, r)) = self.quotient(tm, ops) {
+            let a = self.reify_within(&a, depth)?;
+            let r = self.reify_within(&r, depth)?;
+            return Ok(Syn::Mul(Box::new(a), Box::new(r)));
+        }
         if !self.in_fact
             && let Some(atom) = self.reciprocal(tm, ops, depth)?
         {
@@ -987,6 +998,56 @@ impl Reifier<'_> {
         let rest = self.reify_within(&peeled.rest, depth)?;
         let last = self.reify_within(&peeled.last, depth)?;
         Ok(Some(if sum { Syn::Add(Box::new(rest), Box::new(last)) } else { Syn::Mul(Box::new(rest), Box::new(last)) }))
+    }
+
+    /// A quotient `a / b` is `a * b⁻¹` at the same apartness proof
+    /// (`Rat::div_eq_mul_inv`, by unfolding): its dividend, and the divisor's
+    /// reciprocal, which is then read as every `x⁻¹` is, with its fact. The
+    /// reciprocal is written out and elaborated, so the certificate names
+    /// `b⁻¹` and its kernel check unfolds `/` once. A carrier whose `/` takes
+    /// no proof (`Nat`, `Int`, the bit vectors) has no `≈` reading here; a
+    /// quotient whose parts do not spell stays an atom.
+    fn quotient(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<(Rc<Term>, Rc<Term>)> {
+        let div = ops.div.as_ref()?.global()?;
+        let inv = ops.inv.as_ref()?.global()?;
+        if !matches!(ops.div, Some(Op::Global(_))) {
+            return None;
+        }
+        let args = named_args(self.elab, tm, div)?;
+        let [a, b, h] = args.as_slice() else {
+            return None;
+        };
+        let b = self.elab.spell_term_source(self.cx, b)?;
+        let h = self.elab.spell_term_source(self.cx, h)?;
+        let expr = parse_expr(&format!("{inv}({b}, h := {h})")).ok()?;
+        let (r, _, _) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
+        Some((Rc::clone(a), Rc::new(r)))
+    }
+
+    /// `0 < r` for a reciprocal `r = d⁻¹` of a positive numeral `d` (`a / 2`
+    /// is `a * 2⁻¹`), from the carrier's sign rule beside its `⁻¹`,
+    /// `<inv>`'s module's `positive_inv`, whose `d.Positive()` the search
+    /// proves. Only a numeral: a neutral denominator's positivity is a fact
+    /// the rows already hold or do not, and a search per reciprocal would be
+    /// paid by every reading.
+    fn numeral_reciprocal_positive(&self, r: &Rc<Term>, den: &Rc<Term>, ops: &RelCarrier) -> Option<(Term, Type, Level, String)> {
+        if self.rel_numeral(den, ops)? <= 0 {
+            return None;
+        }
+        let inv = ops.inv.as_ref()?.global()?;
+        let rule = format!("{}positive_inv", inv.strip_suffix("inv")?);
+        self.elab.key_of(&rule)?;
+        let args = named_args(self.elab, r, inv)?;
+        let [_, h] = args.as_slice() else {
+            return None;
+        };
+        let h = self.elab.spell_term_source(self.cx, h)?;
+        let r = self.elab.spell_term_source(self.cx, r)?;
+        // The rule concludes `r.Positive()`; the rows read `0 < r`.
+        let source = format!("{{ let __pos: (0 < {r}) = {rule}(h := {h}); __pos }}");
+        let expr = parse_expr(&source).ok()?;
+        let (term, ty, level) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
+        Some((term, ty, level, source))
     }
 
     /// A reciprocal is an atom `r` like any other, read together with the

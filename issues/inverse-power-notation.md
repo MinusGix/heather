@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,mathematics,reals,syntax]
 area: mathematics
 created: 2026-10-18
-updated: 2026-10-19
+updated: 2026-11-06
 ---
 
 Write `x⁻¹` and `x ^ n` the way Lean does, with `x ^ (-1)` agreeing with
@@ -25,12 +25,10 @@ docs/inverse-power-notation-design.md.
 
 ## Left
 
-- `¬(x ≈ 0)` does not give `x⁻¹` at `Rat` by search (`apart_of_nonzero` is
-  not a rule; its premise is not smaller).
-- No `apart_mul` at `CReal` until [[creal-mul-order]].
 - Integer-exponent laws: `pow_add` over `Int`, `(x * y) ^ n`, `(x ^ m) ^ n`.
 - State `inv`/`pow` once in [[constructive-ordered-field-interface]].
 
 ## Log
 
 - 2026-10-19: `inv` is now stated once ([[constructive-ordered-field-interface]]: `OrderedField.inv` at apartness, `inv_unique`/`inv_respects` generic). A generic `pow` is not; it stays here.
+- 2026-11-06: The division round (docs/division-design.md) closed two of the leftovers: `apart_of_nonzero` is a rule over a one-place `x.Nonzero()`, so a local `¬(x ≈ 0)` gives `x⁻¹` at `Rat`, and `CReal` has `apart_mul`, `apart_inv`, `apart_div`. Integer-exponent laws remain.

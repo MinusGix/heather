@@ -109,6 +109,21 @@ theorem from_negative(x: CReal, h: x < 0): x ^ (-1) ≈ x⁻¹ { x.pow_neg_one()
 theorem square(x: CReal): x ^ 2 ≈ x * x { x.pow_two() }
 theorem embedded(): CReal::ofRat(Rat(OfNat(2), 1))⁻¹ ≈ CReal::ofRat(Rat(OfNat(2), 1)⁻¹) { CReal::ofRat_inv(Rat(OfNat(2), 1)) }
 
+// `a / b` (docs/division-design.md): the same searched apartness.
+theorem div_is_mul_inv(a, b: CReal, h: 0 < b): a / b = a * b⁻¹ { refl }
+theorem div_cancels(a, b: CReal, h: b.Apart(0)): (a / b) * b ≈ a { a.div_mul_cancel(b) }
+theorem div_self_negative(b: CReal, h: b < 0): b / b ≈ 1 { b.div_self() }
+fn div_of_sum(a, b, c: CReal, hb: 0 < b, hc: 0 < c) → CReal { a / (b + c) }
+fn div_of_product(a, b, c: CReal, hb: 0 < b, hc: 0 < c) → CReal { a / (b * c) }
+fn div_of_mixed_product(a, b, c: CReal, hb: b < 0, hc: 0 < c) → CReal { a / (b * c) }
+fn div_of_quotient(a, b, c: CReal, hb: b.Apart(0), hc: c < 0) → CReal { a / (b / c) }
+fn div_of_inverse(a, b: CReal, hb: b < 0) → CReal { a / b⁻¹ }
+fn div_of_square(a, b: CReal) → CReal { a / (b * b + 1) }
+fn div_of_gap(a, b, c: CReal, h: b < c) → CReal { a / (c - b) }
+fn div_of_literal(a: CReal) → CReal { a / 2 }
+// expect-error: no instance for `Apart(b, ofRat(ofInt(OfNat(0))))`
+fn div_unknown(a, b: CReal) → CReal { a / b }
+
 // Order and multiplication: the product's gap comes from the product of the
 // gaps, as data. 0 < 1 has the gap 1/8, so 1 · 1 clears zero by 1/64
 // (m = 63) at one far term, and `lt_of_term` keeps a quarter of half of it
