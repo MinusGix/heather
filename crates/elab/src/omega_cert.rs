@@ -676,7 +676,7 @@ pub(crate) fn integral_sides(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<(b
 /// goal's are. Only an applied global that is not a type former is asked: a
 /// local `x: Rat` or `l: List<Int>` is data, and asking it would cost every
 /// call a reduction per binder.
-fn unfolded_proposition(
+pub(crate) fn unfolded_proposition(
     elab: &Elaborator,
     cx: &Cx,
     ty: &Type,
@@ -914,14 +914,14 @@ pub(crate) fn local_facts(elab: &Elaborator, cx: &Cx) -> Vec<(String, Type)> {
 }
 
 /// A fact `local_facts` lists, with its evidence and its type's level.
-struct LocalFact {
-    name: String,
-    term: Rc<Term>,
-    ty: Type,
-    level: Level,
+pub(crate) struct LocalFact {
+    pub(crate) name: String,
+    pub(crate) term: Rc<Term>,
+    pub(crate) ty: Type,
+    pub(crate) level: Level,
 }
 
-fn local_fact_entries(elab: &Elaborator, cx: &Cx) -> Vec<LocalFact> {
+pub(crate) fn local_fact_entries(elab: &Elaborator, cx: &Cx) -> Vec<LocalFact> {
     let mut seen = std::collections::HashSet::new();
     let mut facts = Vec::new();
     for name in cx.names.iter().chain(cx.aliases.iter().map(|alias| alias.name.as_str())) {

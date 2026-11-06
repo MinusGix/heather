@@ -1,11 +1,11 @@
 ---
 title: linarith's refusal at a class carrier spells the goal with the elaborator's placeholders
-status: open
+status: closed
 labels: [tactics,diagnostics,ergonomics]
 area: tactics
 milestone: [tac-arith]
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-06
 ---
 
 At a section's class carrier (`section<K: OrderedField(≈, <, <=, +, *)>`),
@@ -25,3 +25,7 @@ Shape of a fix: display the goal the way other error paths at a class
 carrier do, resugaring an operator variable to its designation and the
 constraint placeholder to `K` ([[diagnostic-operator-resugaring]]).
 Found in the round that closed [[ring-atom-mentions-class-constant]].
+
+## Log
+
+- 2026-11-06: - 2026-11-06: Fixed with [[linarith-conjunctions]]: a refusal at a class carrier reads its operator placeholders back (`resugar`, `#op<=@0_2(a, b)` is `a <= b`) and `#constraintN` as the carrier; probe `class_refusal_spelled` in lib/_tests/std/tactic/linarith_tests.hthr. A side of an unfolded `AbsLe` whose `-e` is a projection of the parent dictionary is not spelled at all: the refusal names it as a side of the goal as written.

@@ -198,6 +198,130 @@ impl Reading {
     }
 }
 
+/// A spelling with a class carrier's operator placeholders written back as
+/// the operators they stand for: `#op+@0_3(a, b)` is `a + b`
+/// (`traits::op_index_binder`), parenthesised by the surface's precedence;
+/// with `carrier`, its dictionary placeholder `#constraint0` is the
+/// carrier's name, as in `K.unit`
+/// (issues/class-carrier-diagnostics-spell-placeholders.md).
+fn resugar(spelled: &str, carrier: Option<&str>) -> String {
+    fn prec(sym: &str) -> u8 {
+        match sym {
+            "*" | "/" | "%" => 7,
+            "+" | "-" => 6,
+            "<" | "<=" | "≈" | "=" | ">" | ">=" => 4,
+            _ => 5,
+        }
+    }
+    // A spelling with its placeholders written back, and the precedence of
+    // its operator when the whole of it is one placeholder's application.
+    fn walk(s: &str) -> (String, Option<u8>) {
+        let mut out = String::new();
+        let mut whole = None;
+        let mut rest = s;
+        while let Some(at) = rest.find("#op") {
+            let after = &rest[at + 3..];
+            let Some(open) = after.find('(') else { break };
+            let Some(sym) = crate::traits::op_index_symbol(&rest[at..at + 3 + open]) else { break };
+            let body = &after[open + 1..];
+            // The balanced argument list, cut at its one top-level comma.
+            let (mut depth, mut cuts, mut close) = (0usize, Vec::new(), None);
+            for (i, c) in body.char_indices() {
+                match c {
+                    '(' | '[' => depth += 1,
+                    ')' | ']' if depth == 0 => {
+                        close = Some(i);
+                        break;
+                    }
+                    ')' | ']' => depth -= 1,
+                    ',' if depth == 0 => cuts.push(i),
+                    _ => {}
+                }
+            }
+            let (Some(close), &[cut]) = (close, cuts.as_slice()) else { break };
+            let p = prec(sym);
+            let (left, lp) = walk(body[..cut].trim());
+            let (right, rp) = walk(body[cut + 1..close].trim());
+            let left = if lp.is_some_and(|q| q < p) { format!("({left})") } else { left };
+            let right = if rp.is_some_and(|q| q <= p) { format!("({right})") } else { right };
+            whole = (out.is_empty() && at == 0 && body[close + 1..].is_empty()).then_some(p);
+            out.push_str(&rest[..at]);
+            out.push_str(&format!("{left} {sym} {right}"));
+            rest = &body[close + 1..];
+        }
+        out.push_str(rest);
+        (out, whole)
+    }
+    let (out, _) = walk(spelled);
+    match carrier {
+        Some(name) => {
+            let mut fixed = String::new();
+            let mut tail = out.as_str();
+            while let Some(at) = tail.find("#constraint") {
+                fixed.push_str(&tail[..at]);
+                let digits = tail[at + 11..].chars().take_while(|c| c.is_ascii_digit()).count();
+                fixed.push_str(name);
+                tail = &tail[at + 11 + digits..];
+            }
+            fixed.push_str(tail);
+            fixed
+        }
+        None => out,
+    }
+}
+
+fn is_conjunction(elab: &Elaborator, ty: &Type) -> bool {
+    elab.display_tag_of(ty).is_some_and(|ind| crate::goal_combinators::conjunction(&ind))
+}
+
+/// `ty` itself when it is a conjunction, or the first unfolding of its
+/// head that is one (`AbsLe(z, e)` is `Within(<=, -e, z, e)`, which is
+/// `-e <= z ∧ z <= e`), unless `ty` already reads as a relation
+/// (docs/linarith-design.md §9).
+fn conjunction_of(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
+    let contracted = crate::spelling::beta_head_ty(ty);
+    let ty = contracted.as_ref().unwrap_or(ty);
+    if is_conjunction(elab, ty) {
+        return Some(ty.clone());
+    }
+    if Reading::of(elab, cx, ty, span).is_some() {
+        return None;
+    }
+    crate::omega_cert::unfolded_proposition(elab, cx, ty, |t| is_conjunction(elab, t) || Reading::of(elab, cx, t, span).is_some())
+        .filter(|t| is_conjunction(elab, t))
+}
+
+/// A fact's parts: the fact itself, or, when it is a conjunction or a
+/// definition that unfolds to one (`conjunction_of`), each side through its
+/// projection, recursively, named as the author would write it (`h.left`).
+/// A part that is no relation is kept too; `add_fact` declines it.
+#[allow(clippy::too_many_arguments)]
+fn fact_parts(elab: &Elaborator, cx: &Cx, name: String, term: Term, ty: Type, level: Level, span: Span, out: &mut Vec<(String, Term, Type, Level)>) {
+    if let Some(conj) = conjunction_of(elab, cx, &ty, span)
+        && let Some(ind) = elab.display_tag_of(&conj)
+    {
+        let term = Rc::new(term);
+        let sides: Option<Vec<_>> = ["left", "right"]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, field)| {
+                elab.project_field(cx, &ind, &conj, Rc::clone(&term), idx, span)
+                    .ok()
+                    .map(|(side, side_ty, side_level)| (format!("{name}.{field}"), side, side_ty, side_level))
+            })
+            .collect();
+        if let Some(sides) = sides {
+            for (side_name, side, side_ty, side_level) in sides {
+                fact_parts(elab, cx, side_name, side, side_ty, side_level, span, out);
+            }
+            return;
+        }
+        out.push((name, (*term).clone(), ty, level));
+        return;
+    }
+    out.push((name, term, ty, level));
+}
+
 /// One row of the problem: `hi − lo ≥ 0` (or `> 0`), with the lemma that
 /// proves it from its fact, applied to `args` and the fact.
 #[derive(Clone)]
@@ -1440,9 +1564,25 @@ impl Elaborator {
         if self.key_of("linarith::lin_finish_le").is_none() {
             return Err(err(format!("`{tactic}` requires its certificate library; add `import linarith;`")));
         }
+        // A conjunction goal, or a definition that unfolds to one
+        // (`AbsLe(z, e)`), is proved side by side, each side by the same
+        // call (docs/linarith-design.md §9).
+        if let Some(conj) = conjunction_of(self, cx, goal, span) {
+            return self.linarith_conjunction(cx, hyps, goal, &conj, lvl, span, nonlinear);
+        }
+        // Each written fact, split into its conjuncts (`fact_parts`).
         let mut written = Vec::new();
-        for hyp in hyps {
-            written.push(self.elab_infer(cx, hyp)?);
+        let mut written_parts: Vec<(usize, String, Term, Type, Level)> = Vec::new();
+        for (i, hyp) in hyps.iter().enumerate() {
+            let (term, ty, level) = self.elab_infer(cx, hyp)?;
+            let name = match &hyp.kind {
+                heather_syntax::ExprKind::Var(name) => name.clone(),
+                _ => format!("hypothesis {}", i + 1),
+            };
+            let mut parts = Vec::new();
+            fact_parts(self, cx, name, term.clone(), ty.clone(), level.clone(), span, &mut parts);
+            written_parts.extend(parts.into_iter().map(|(name, term, ty, level)| (i, name, term, ty, level)));
+            written.push((term, ty, level));
         }
         // The reading and the certificate name `ring`'s and this library's
         // lemmas, which a client that imports only `linarith` does not see
@@ -1482,22 +1622,22 @@ impl Elaborator {
         } else if integral(goal) {
             true
         } else {
-            let mut facts: Vec<&Type> = written.iter().map(|(_, ty, _)| ty).collect();
+            let mut facts: Vec<&Type> = written_parts.iter().map(|part| &part.3).collect();
             if facts.is_empty() {
                 facts = context.iter().map(|(_, ty)| ty).collect();
             }
             facts.into_iter().find_map(|ty| if at_field(ty) { Some(false) } else { integral(ty).then_some(true) }).unwrap_or(false)
         };
         if route {
-            return self.linarith_integral(cx, hyps, &written, &context, goal, lvl, span, nonlinear);
+            return self.linarith_integral(cx, &written_parts, &context, goal, lvl, span, nonlinear);
         }
         let carrier = goal_reading
             .as_ref()
             .map(|r| (Rc::clone(&r.stated().carrier), r.stated().level.clone()))
             .or_else(|| {
-                written
+                written_parts
                     .iter()
-                    .map(|(_, ty, _)| ty)
+                    .map(|part| &part.3)
                     .chain(context.iter().map(|(_, ty)| ty))
                     .filter_map(|ty| Reading::of(self, cx, ty, span))
                     .map(|r| (Rc::clone(&r.stated().carrier), r.stated().level.clone()))
@@ -1556,23 +1696,27 @@ impl Elaborator {
             }
             _ => Goal::Absurd,
         };
-        for (i, (term, ty, level)) in written.iter().enumerate() {
+        // A written fact must give at least one row; a conjunct that is no
+        // relation at this carrier is passed over, as a context fact is.
+        let mut read_any = vec![false; written.len()];
+        for (i, name, term, ty, level) in written_parts.iter().cloned() {
             let fact = Fact {
                 alias: format!("__lin_h{}", problem.facts.len()),
-                term: term.clone(),
-                ty: ty.clone(),
-                level: level.clone(),
-                shown: written_name(i),
+                term,
+                ty,
+                level,
+                shown: name,
                 written: Some(i),
                 bound: false,
             };
-            if !problem.add_fact(self, cx, fact, span) {
-                return Err(err(format!(
-                    "`linarith` combines `<`, `<=`, `≈` and `¬(x < y)` facts at `{carrier_shown}`; `{}` is `{}`",
-                    written_name(i),
-                    spell(ty)
-                )));
-            }
+            read_any[i] |= problem.add_fact(self, cx, fact, span);
+        }
+        if let Some(i) = read_any.iter().position(|read| !read) {
+            return Err(err(format!(
+                "`linarith` combines `<`, `<=`, `≈` and `¬(x < y)` facts at `{carrier_shown}`, and conjunctions of them; `{}` is `{}`",
+                written_name(i),
+                spell(&written[i].1)
+            )));
         }
         problem.add_denominators(self, cx, span);
         // The written facts first; failing that, every fact in context too.
@@ -1580,10 +1724,14 @@ impl Elaborator {
         let mut found = prove(&mut problem).map_err(err)?;
         if found.is_none() {
             let before = problem.facts.len();
-            for (name, _) in &context {
-                let Ok((term, ty, level)) = self.resolve_reading(cx, name, span) else {
-                    continue;
-                };
+            // The context's facts with their evidence, conjunctions split
+            // (a projection is no name `resolve_reading` resolves), and
+            // definitions that unfold to conjunctions split too.
+            let mut parts = Vec::new();
+            for entry in crate::omega_cert::local_fact_entries(self, cx) {
+                fact_parts(self, cx, entry.name, (*entry.term).clone(), entry.ty, entry.level, span, &mut parts);
+            }
+            for (name, term, ty, level) in parts {
                 // A written fact is already a row.
                 if problem.facts.iter().any(|f| f.term == term) {
                     continue;
@@ -1593,7 +1741,7 @@ impl Elaborator {
                     term,
                     ty,
                     level,
-                    shown: name.clone(),
+                    shown: name,
                     written: None,
                     bound: false,
                 };
@@ -1613,7 +1761,7 @@ impl Elaborator {
             // cross-multiplication) may follow there with products as
             // monomials, as `ring` falls back to the unfolded equation.
             if integral(goal)
-                && let Ok(proof) = self.linarith_integral(cx, hyps, &written, &context, goal, lvl, span, nonlinear)
+                && let Ok(proof) = self.linarith_integral(cx, &written_parts, &context, goal, lvl, span, nonlinear)
             {
                 return Ok(proof);
             }
@@ -1663,8 +1811,9 @@ impl Elaborator {
                 format!(" (products and other non-linear terms are atoms{hint})")
             };
             return Err(err(format!(
-                "`{tactic}` could not prove `{shown_goal}`: no nonnegative combination of the facts{negation} \
+                "`{tactic}` could not prove `{}`: no nonnegative combination of the facts{negation} \
                  is a contradiction over `{carrier_shown}`{products}; the facts read as [{}]{goal_read}",
+                resugar(&shown_goal, class_field.as_ref().map(|_| carrier_shown.as_str())),
                 read.join(", ")
             )));
         };
@@ -1723,6 +1872,59 @@ impl Elaborator {
 }
 
 impl Elaborator {
+    /// A conjunction goal (`conj`, `goal` itself or what its head unfolds
+    /// to), each side proved by the call that met it, and paired. A side the
+    /// call cannot prove is named as a side of the goal as written, whose
+    /// spelling the unfolded side may not have (a class carrier's `-e` is a
+    /// projection of its parent's dictionary there).
+    #[allow(clippy::too_many_arguments)]
+    fn linarith_conjunction(&self, cx: &Cx, hyps: &[Expr], goal: &Type, conj: &Type, lvl: &Level, span: Span, nonlinear: bool) -> R<Term> {
+        let tactic = if nonlinear { "nlinarith" } else { "linarith" };
+        let err = |msg: String| ElabError::Elab { msg, span };
+        let sides = self
+            .display_tag_of(conj)
+            .and_then(|ind| self.display_targs(cx, conj, &ind, 0))
+            .filter(|sides| sides.len() == 2)
+            .ok_or_else(|| err(format!("`{tactic}` could not read the two sides of the conjunction it was asked to prove")))?;
+        let shown = resugar(&self.spell_type_clean(cx, goal).unwrap_or_else(|| self.display_type(cx, goal)), None);
+        let prefix = format!("`{tactic}` could not prove `");
+        let mut inner = cx.clone();
+        let depth = cx.names.len();
+        for ((side_ty, side_level), which) in sides.into_iter().zip(["left", "right"]) {
+            let proof = self.elab_linarith(cx, hyps, &side_ty, &side_level, span, nonlinear).map_err(|e| match e {
+                ElabError::Elab { msg, span } if msg.starts_with(&prefix) => {
+                    let rest = &msg[prefix.len()..];
+                    let (side_shown, rest) = rest.split_once('`').unwrap_or(("", rest));
+                    // The side's own spelling, unless it shows the
+                    // elaborator's placeholders.
+                    let side_shown = resugar(side_shown, None);
+                    let side_shown = if side_shown.is_empty() || side_shown.contains('#') || side_shown.contains('@') {
+                        String::new()
+                    } else {
+                        format!(" `{side_shown}`")
+                    };
+                    ElabError::Elab { msg: format!("`{tactic}` could not prove the {which} side{side_shown} of `{shown}`{rest}"), span }
+                }
+                e => e,
+            })?;
+            inner.aliases.push(Rc::new(Alias {
+                name: format!("__lin_and_{which}"),
+                depth,
+                term: Rc::new(proof),
+                ty: side_ty,
+                level: side_level,
+                skel: None,
+                spliced: None,
+                shifted: Default::default(),
+            }));
+        }
+        let expr = parse_expr("logic::And(left := __lin_and_left, right := __lin_and_right)")
+            .map_err(|detail| err(format!("`{tactic}` could not write its conjunction: {detail}")))?;
+        self.generated_scope(|me| me.elab_check(&inner, &expr, conj, lvl))
+    }
+}
+
+impl Elaborator {
     /// `linarith` at `Int` and `Nat` (design §8): every side of the goal
     /// and of the facts read by `ring`'s reifier, each side that multiplies
     /// stated equal to its normal form over monomials, and `omega` given
@@ -1735,8 +1937,7 @@ impl Elaborator {
     fn linarith_integral(
         &self,
         cx: &Cx,
-        hyps: &[Expr],
-        written: &[(Term, Type, Level)],
+        written: &[(usize, String, Term, Type, Level)],
         context: &[(String, Type)],
         goal: &Type,
         lvl: &Level,
@@ -1766,24 +1967,35 @@ impl Elaborator {
         if nonlinear {
             problem.refute = problem.refutation(self, cx, goal);
         }
-        for (i, (term, ty, level)) in written.iter().enumerate() {
-            let shown = match &hyps[i].kind {
-                heather_syntax::ExprKind::Var(name) => name.clone(),
-                _ => format!("hypothesis {}", i + 1),
-            };
+        // Each written fact's conjuncts (`fact_parts`); a fact must give at
+        // least one that reads.
+        let mut unread: Vec<(usize, &str, &Type)> = Vec::new();
+        for (k, (i, shown, term, ty, level)) in written.iter().enumerate() {
             if !problem.sides_of(self, cx, ty) {
-                return Err(err(format!(
-                    "`linarith` at `Int` and `Nat` combines `<`, `<=` and `=` facts there, and their negations; \
-                     `{shown}` is `{}`",
-                    spell(ty)
-                )));
+                unread.push((*i, shown, ty));
+                continue;
             }
-            let alias = format!("__lin_h{i}");
+            let alias = format!("__lin_h{k}");
             problem.definition(self, cx, ty, &alias);
             if nonlinear && let Some(order) = problem.order_of(self, cx, ty, &alias) {
                 problem.orders.push(order);
             }
-            problem.facts.push(Fact { alias, term: term.clone(), ty: ty.clone(), level: level.clone(), shown, written: Some(i), bound: false });
+            problem.facts.push(Fact {
+                alias,
+                term: term.clone(),
+                ty: ty.clone(),
+                level: level.clone(),
+                shown: shown.clone(),
+                written: Some(*i),
+                bound: false,
+            });
+        }
+        if let Some((_, shown, ty)) = unread.iter().find(|(i, _, _)| !problem.facts.iter().any(|f| f.written == Some(*i))) {
+            return Err(err(format!(
+                "`linarith` at `Int` and `Nat` combines `<`, `<=` and `=` facts there, their negations, and conjunctions of \
+                 them; `{shown}` is `{}`",
+                spell(ty)
+            )));
         }
         let attempt = |problem: &Integral| -> Result<Term, (ElabError, String)> {
             let source = problem.source().map_err(|e| (err(e), String::new()))?;
@@ -1833,7 +2045,7 @@ impl Elaborator {
                 // few; a written one is already an order.
                 if nonlinear
                     && problem.orders.len() < MAX_PRODUCT_ROWS
-                    && !written.iter().any(|(_, wty, _)| wty == ty)
+                    && !written.iter().any(|(_, _, _, wty, _)| wty == ty)
                     && let Some(order) = problem.order_of(self, cx, ty, name)
                 {
                     problem.orders.push(order);
@@ -1872,6 +2084,16 @@ mod tests {
         let mut origin = vec![0; n];
         origin[index] = 1;
         FmRow { coeffs: map, constant, strict, origin }
+    }
+
+    #[test]
+    fn placeholders_read_back_as_operators() {
+        let spelled = "#op<=@0_2(#constraint0.unit, #op+@0_3(#op*@0_4(d, d), #constraint0.unit))";
+        assert_eq!(super::resugar(spelled, Some("K")), "K.unit <= d * d + K.unit");
+        assert_eq!(super::resugar("#op*@0_4(#op+@0_3(a, b), c)", None), "(a + b) * c");
+        assert_eq!(super::resugar("#op+@0_3(a, #op+@0_3(b, c))", None), "a + (b + c)");
+        assert_eq!(super::resugar("AbsLe(z, #op+@0_3(e, z))", None), "AbsLe(z, e + z)");
+        assert_eq!(super::resugar("f(x, y) <= g(#op+@0_3(x, y))", None), "f(x, y) <= g(x + y)");
     }
 
     #[test]
