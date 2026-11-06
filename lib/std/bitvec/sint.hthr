@@ -175,3 +175,32 @@ theorem SInt::add_sub_cancel(n: Nat, a, b: SInt(n)): (a + b) - b = a {
 // The unsigned and signed readings are inverse: neither moves a bit.
 theorem SInt::as_signed_as_unsigned(n: Nat, a: SInt(n)): a.as_unsigned().as_signed() = a { refl }
 theorem SInt::as_unsigned_as_signed(n: Nat, x: BitVec(n)): x.as_signed().as_unsigned() = x { refl }
+
+// Truncating division's laws (`BitVec::sdiv_srem_toInt` and its neighbours,
+// lib/std/bitvec/bitvec_div.hthr): `a = (a / d)·d + a % d` away from a zero
+// divisor and `MIN / -1`, `|a % d| < |d|`, and the remainder takes the
+// dividend's sign.
+theorem SInt::bits_ne_zero(n: Nat, d: SInt(n), nonzero: d ≠ SInt::zero()): d.bits ≠ BitVec::zero() {
+    λ (same: d.bits = BitVec::zero()) => nonzero(cong(same, f := λ (x: BitVec(n)) => SInt(x)))
+}
+
+theorem SInt::div_rem_toInt(k: Nat, a, d: SInt(Succ(k)), nonzero: d ≠ SInt::zero(),
+        away: ¬(a.toInt() = -OfNat(Nat::pow(2, k)) ∧ d.toInt() = -OfNat(1))):
+    a.toInt() = (a / d).toInt() * d.toInt() + (a % d).toInt()
+{
+    BitVec::sdiv_srem_toInt(k, a.bits, d.bits, SInt::bits_ne_zero(Succ(k), d, nonzero), away)
+}
+
+theorem SInt::rem_natAbs_lt(k: Nat, a, d: SInt(Succ(k)), nonzero: d ≠ SInt::zero()):
+    (a % d).toInt().natAbs() < d.toInt().natAbs()
+{
+    BitVec::srem_natAbs_lt(k, a.bits, d.bits, SInt::bits_ne_zero(Succ(k), d, nonzero))
+}
+
+theorem SInt::rem_nonneg(k: Nat, a, d: SInt(Succ(k)), nonneg: OfNat(0) <= a.toInt()): OfNat(0) <= (a % d).toInt() {
+    BitVec::srem_nonneg(k, a.bits, d.bits, nonneg)
+}
+
+theorem SInt::rem_nonpos(k: Nat, a, d: SInt(Succ(k)), negative: a.toInt() < OfNat(0)): (a % d).toInt() <= OfNat(0) {
+    BitVec::srem_nonpos(k, a.bits, d.bits, negative)
+}

@@ -124,6 +124,32 @@ is SMT-LIB's `bvsdiv`/`bvsrem` read off the magnitudes: truncation toward zero
 0` instead; either is a total convention, and SMT-LIB's is the one a solver
 and a bit-blasted certificate already agree on.
 
+### 4.2 The laws
+
+Proved at an open width (`issues/bitvec-division-laws.md`, closed
+2026-11-06). The long division keeps `DivMod::Spec` of the dividend bits read
+so far, the same two-field invariant `Nat::ldiv` keeps (`a = q·d + r`, and
+`r < d` unless `d` is zero): each step is one binary digit,
+`DivMod::digit_keep` or `DivMod::digit_take` in `lib/std/num/nat.hthr`, by
+the comparison's verdict. The remainder held one bit wider never loses its
+top bit to `init` because it is at most the dividend read so far, below `2^n`;
+that bound, not a bound on the divisor, is the step's only side condition, so
+one induction covers division by zero too. `BitVec::udivrem_spec` is the
+result at every width and divisor; `udiv_urem_toNat`, `urem_lt`, `udiv_zero`
+(all ones, by induction: every comparison against zero fails) and
+`urem_zero` are its corollaries.
+
+Signed, a word of width `k + 1` reads as `Int::of_sign(sign, magnitude)`
+(`BitVec::toInt_of_sign`), and `sdiv`/`srem` negate the magnitudes' quotient
+and remainder by the same rule, so `Int::of_sign_mul_add` carries the
+unsigned law over whenever both results fit the signed range. The remainder
+always fits (`srem_toInt`, at every divisor). The quotient fits unless it is
+`2^k`, which needs a dividend of magnitude `2^k` (only `MIN`) and a divisor of
+magnitude one; `MIN / 1` is fine, so the one exclusion is `MIN / -1`, stated
+as a hypothesis on the readings (`sdiv_srem_toInt`, with `srem_natAbs_lt`,
+`srem_nonneg`, `srem_nonpos`; `SInt::div_rem_toInt` and friends carry them
+to `i64`). These are what a verified lowering of `DIV`/`IDIV` cites.
+
 ### 4.1 Operator symbols
 
 `a / b`, `a % b`, `a << k`, `a >> k`, `a & b` and `a | b` are designation
@@ -160,9 +186,7 @@ at.
 - ~~**Operator symbols.**~~ Done 2026-11-06 (§4.1). `/` at `Rat` is open:
   `⁻¹` there asks for apartness, and whether `a / b` should too, or read the
   total `recip`, is a choice of its own.
-- **Division laws.** The Euclidean characterization of `udivrem` (`a = q·d +
-  r`, `r < d` for `d ≠ 0`) is unproved; the probes are closed values.
-  `issues/bitvec-division-laws.md`.
+- ~~**Division laws.**~~ Done 2026-11-06 (§4.2).
 - **Native lowering of `SInt`.** The native frontend reads `BitVec` words;
   an `SInt` field is one record level above them.
   `issues/sint-native-lowering.md`.
