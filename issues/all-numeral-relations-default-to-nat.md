@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,notation,ergonomics]
 area: language
 created: 2026-10-20
-updated: 2026-10-27
+updated: 2026-11-06
 ---
 
 A relation whose operands are all numerals has no carrier, so it elaborates
@@ -49,3 +49,7 @@ followed by a non-numeral one already works (the sibling-operand probe in
 ## Log
 
 - 2026-10-27: Related, filed 2026-10-27: [[numeral-normalisation]] (norm_num at every numeric carrier) needs this issue's answer for which carrier a relation means.
+- 2026-11-06: The same default reaches terms now that `/` is designated at
+  `Rat` (docs/division-design.md): `1 / 2` with no expected carrier is
+  `Nat` division, `0`, silently; `let x: Rat = 1 / 2` is ½. A refusal or a
+  warning at an all-numeral `/` whose `Nat` value truncates would catch it.

@@ -48,6 +48,50 @@ theorem precedence(x: Rat): -x ^ 2 = -(x ^ 2) { refl }
 theorem any_proof(x: Rat, h, h2: x.Apart(0)): x.inv(h := h) = x.inv(h := h2) { refl }
 theorem checked(x: Rat, h: 0 < x): 1 ≈ x * x⁻¹ { Rat::same_sym(x.mul_inv()) }
 
+// `a / b` (docs/division-design.md) asks for `b.Apart(0)` as `b⁻¹` does. The
+// search reads a local apartness, sign or `¬(b ≈ 0)`; a closed divisor by
+// computation; the sign rules through sums, products, quotients, inverses,
+// powers, squares and absolute values; and last `nlinarith` over the
+// hypotheses. Neutral and literal divisors, and refusals at a divisor with
+// nothing known, at 0, and at a structural `¬(b = 0)`.
+theorem div_is_mul_inv(a, b: Rat, h: 0 < b): a / b = a * b⁻¹ { refl }
+theorem div_cancels(a, b: Rat, h: b.Apart(0)): (a / b) * b ≈ a { a.div_mul_cancel(b) }
+theorem div_from_nonzero(a, b: Rat, h: ¬(b ≈ 0)): (a * b) / b ≈ a { a.mul_div_cancel(b) }
+theorem div_from_negative(b: Rat, h: b < 0): b / b ≈ 1 { b.div_self() }
+fn div_half() → Rat { 1 / 2 }
+theorem div_half_value(): div_half() ≈ Rat(OfNat(1), 2) { refl }
+theorem div_closed_divisor(): Rat::Same(3 / (4 - 1), 1) { refl }
+theorem div_negative_literal(): Rat::Same(1 / (-2), Rat(-OfNat(1), 2)) { refl }
+fn div_of_sum(a, b, c: Rat, hb: 0 < b, hc: 0 < c) → Rat { a / (b + c) }
+fn div_of_mixed_product(a, b, c: Rat, hb: b < 0, hc: 0 < c) → Rat { a / (b * c) }
+fn div_of_quotient(a, b, c: Rat, hb: 0 < b, hc: c < 0) → Rat { a / (b / c) }
+fn div_of_inverse_sum(a, b: Rat, hb: 0 < b) → Rat { a / (b⁻¹ + 1) }
+fn div_of_power(a, b: Rat, hb: 0 < b) → Rat { a / (b ^ 3 + 1) }
+fn div_of_square(a, b: Rat) → Rat { a / (b ^ 2 + 1) }
+fn div_of_self_product(a, b, c: Rat, hc: 0 < c) → Rat { a / (b * b + c) }
+fn div_of_abs(a, b: Rat) → Rat { a / (b.abs() + 1) }
+fn div_of_gap(a, b, c: Rat, h: b < c) → Rat { a / (c - b) }
+fn div_of_negative_gap(a, b, c: Rat, h: b < c) → Rat { a / (b - c) }
+fn div_of_bound(a, b: Rat, h: 1 <= b) → Rat { a / b }
+fn div_of_shifted(a, b: Rat, h: b < -1) → Rat { a / (b + 1) }
+fn div_of_product_bound(a, b, c: Rat, hb: 1 < b, hc: 1 < c) → Rat { a / (b * c - 1) }
+fn div_of_gap_product(a, b, c, d: Rat, h: b < c, hd: 0 < d) → Rat { a / ((c - b) * d) }
+theorem div_laws(a, c, b: Rat, h: 0 < b): (a + c) / b ≈ a / b + c / b ∧ (a * c) / b ≈ a * (c / b) {
+    And(a.add_div(c, b), a.mul_div_assoc(c, b))
+}
+theorem div_products(a, b, c, d: Rat, hb: 0 < b, hd: d.Apart(0)): (a / b) * (c / d) ≈ (a * c) / (b * d) { a.div_mul_div(b, c, d) }
+// expect-error: no instance for `Apart(b, ofInt(OfNat(0)))`
+fn div_unknown(a, b: Rat) → Rat { a / b }
+// expect-error: no instance for `Apart(ofInt(OfNat(0)), ofInt(OfNat(0)))`
+fn div_zero(a: Rat) → Rat { a / 0 }
+// `=` at `Rat` is the pair's: `Rat(0, 2)` is not `Rat(0, 1)` but is ≈ 0.
+// expect-error: no instance for `Apart(b, ofInt(OfNat(0)))`
+fn div_structural_ne(a, b: Rat, h: ¬(b = 0)) → Rat { a / b }
+// The sign rules do not run arithmetic at their leaves: `c - b` is positive
+// by `nlinarith` only as a whole divisor (issues/apart-search-arith-leaves.md).
+// expect-error: no instance for `Apart(add(sub(c, b), abs(e)), ofInt(OfNat(0)))`
+fn div_arith_leaf(a, b, c, e: Rat, h: b < c) → Rat { a / ((c - b) + e.abs()) }
+
 // A denominator carries its positivity: a local fact or a product of
 // denominators is found, and the fact reads back through `den_positive`.
 fn local(k: Nat, h: 0 < k) → Rat { Rat(OfNat(1), k) }

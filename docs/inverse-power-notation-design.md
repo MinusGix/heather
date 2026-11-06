@@ -107,11 +107,11 @@ without unfolding, which the prefilter never does. This is what keeps
 
 ## 6. Left open
 
-- `¬(x ≈ 0)` in scope does not give `x⁻¹` at `Rat`: `apart_of_nonzero` is a
-  theorem, not a rule, because its premise is not smaller than its
-  conclusion by the termination measure.
-- `CReal` has no rule for products, so `(x * y)⁻¹` there needs its apartness
-  written out (`issues/creal-mul-order.md`).
+- ~~`¬(x ≈ 0)` in scope does not give `x⁻¹` at `Rat`~~: since the division
+  round (docs/division-design.md) `apart_of_nonzero` is a rule over a
+  one-place `x.Nonzero()`, which a local `¬(x ≈ 0)` converts to.
+- ~~`CReal` has no rule for products~~: it has `apart_mul`, `apart_inv` and
+  `apart_div` since the same round.
 - Integer-exponent laws beyond the unification (`pow_add` over `Int`,
   `(x * y) ^ n`) are not stated yet.
 - A shared ordered-field interface would state `inv` and `pow` once
