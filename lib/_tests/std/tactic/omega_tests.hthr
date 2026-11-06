@@ -218,7 +218,7 @@ theorem sub_checking(a, b, c: Nat, h: a <= b): (b - a) + c + a = b + c {
 }
 // Control: without `b <= a`, the case `a < b` has a model, and the refusal
 // names the case it came from.
-// expect-error: __omega_sub0_case: Lt(a, b), __omega_sub0_eq: sub(a, b) = 0
+// expect-error: __omega_sub0_case: a < b, __omega_sub0_eq: a - b = 0
 theorem sub_add_cancel_truncated(a, b: Nat): a - b + b = a { omega }
 
 // An integer's `x.toNat()` is split the same way: `0 <= x` with
@@ -282,7 +282,7 @@ theorem guard_eq_same(n: Nat, h: (!n.same(0)) = True): 1 <= n { omega }
 theorem guard_eq_in_arm(n: Nat): n - 1 <= n {
     match h: n.leb(0) { True => omega, False => omega }
 }
-// expect-error: __omega_guard0_1: Lt(m, n)
+// expect-error: __omega_guard0_1: m < n
 theorem guard_eq_false_claim(n, m: Nat, h: n.leb(m) = False): n < m { omega }
 // A field read off a record constructed in place is the field as put, and a
 // `decreases` measure over a field is that read at the self-call's argument
@@ -342,7 +342,7 @@ theorem guard_goal_negated(n: Nat, h: 5 <= n): ¬(n.leb(4)).IsTrue() { omega }
 // Controls. A false claim through a guard is refused, naming the guard's
 // parts; a guard over a Bool function no unfolding takes apart is skipped,
 // and the refusal lists it; a bare atom has nothing to meet.
-// expect-error: __omega_guard0_2: Le(n, m), __omega_guard0_3: Le(m, 5)
+// expect-error: __omega_guard0_2: n <= m, __omega_guard0_3: m <= 5
 theorem guard_false_claim(n, m: Nat, h: (n.leb(m) && m.leb(5)).IsTrue()): n <= 4 { omega }
 fn parity(n: Nat) → Bool { match n { Zero => True, Succ(k) => !parity(k) } }
 // expect-error: h: IsTrue(parity(n))
@@ -354,4 +354,32 @@ theorem guard_bare_atom(r: Bool, n: Nat, h: r.IsTrue()): n = 0 { omega }
 // expect-error: `omega` got stuck
 theorem guard_unnamed_false(a, b: Nat): a.leb(b) = False {
     match a.leb(b) { True => { let no: False = omega; match no {} }, False => refl }
+}
+
+// `split_all` over a step that is a nested `if` on two different
+// propositions, then `omega` at each case: the for-loop step shape
+// (docs/sequencing-surface-design.md §7.2,
+// issues/split-all-nested-if-omega-kernel-refusal.md). The Bool equation's
+// decision unfolds to a call whose type arguments spell the field, and the
+// case split's motive abstracts the field there too; with the state as
+// parameters, the decided `if` selects its arm before the leaf reads it.
+record WordState { words: Nat, inside: Bool }
+fn word_step(s: WordState, b: Nat) → WordState {
+    if b = 32 { WordState(s.words, False) } else { if s.inside = False { WordState(s.words + 1, True) } else { s } }
+}
+theorem word_step_counts_at_most_one(s: WordState, b: Nat): word_step(s, b).words <= s.words + 1 {
+    split_all; all_goals { omega }
+}
+// One `if` on the Bool field alone.
+fn word_enter(s: WordState) → WordState {
+    if s.inside = False { WordState(s.words + 1, True) } else { s }
+}
+theorem word_enter_counts_at_most_one(s: WordState): word_enter(s).words <= s.words + 1 {
+    split_all; all_goals { omega }
+}
+fn word_step_flat(w: Nat, i: Bool, b: Nat) → Nat {
+    if b = 32 { w } else { if i = False { w + 1 } else { w } }
+}
+theorem word_step_flat_counts_at_most_one(w: Nat, i: Bool, b: Nat): word_step_flat(w, i, b) <= w + 1 {
+    split_all; all_goals { omega }
 }

@@ -8,7 +8,7 @@ widened by Minus on 2026-11-02 from "a name for `BitVec(8)`" to "write any
 
 ```heather
 fn checksum(xs: List<u8>) → u8 { … }          // u8 is BitVec(8)
-fn mean(a, b: i64) → i64 { (a + b).div(2) }   // i64 is SInt(64): signed div
+fn mean(a, b: i64) → i64 { (a + b) / 2 }      // i64 is SInt(64): signed div
 fn field(x: u27) → u32 { x.zero_extend(5) }   // any width
 fn at(n: Nat, a: i(n)) → i(n) { -a }          // an open width
 ```
@@ -43,10 +43,13 @@ that and closes the two gaps that made `def u8: Type = BitVec(8);` refuse:
 
 ### 2.1 The cost of eager expansion
 
-Diagnostics print `BitVec(8)` where the program wrote `u8`. That is the
-same trade `let`-bound type aliases already make, and it is the honest
-spelling of the type. Respelling by the name written is display work
-(`issues/type-name-display-respelling.md`).
+Nothing after expansion can tell `u8` from `BitVec(8)`, so a diagnostic
+would print `BitVec(8)` where the program wrote `u8`. The display gets the
+name back from a table filled at each expansion: it spells an instance by
+the most recently written name that still means it (`u8`, `i(n)`, a
+program's own `def Byte: Type = BitVec(8)`), and the family covers widths
+not written that way (`BitVec(16)` reads `u16` once `u` has been written).
+`docs/surface-type-display-design.md` §5.1.
 
 ### 2.2 Width families: `u27`
 
@@ -121,6 +124,51 @@ is SMT-LIB's `bvsdiv`/`bvsrem` read off the magnitudes: truncation toward zero
 0` instead; either is a total convention, and SMT-LIB's is the one a solver
 and a bit-blasted certificate already agree on.
 
+### 4.2 The laws
+
+Proved at an open width (`issues/bitvec-division-laws.md`, closed
+2026-11-06). The long division keeps `DivMod::Spec` of the dividend bits read
+so far, the same two-field invariant `Nat::ldiv` keeps (`a = q·d + r`, and
+`r < d` unless `d` is zero): each step is one binary digit,
+`DivMod::digit_keep` or `DivMod::digit_take` in `lib/std/num/nat.hthr`, by
+the comparison's verdict. The remainder held one bit wider never loses its
+top bit to `init` because it is at most the dividend read so far, below `2^n`;
+that bound, not a bound on the divisor, is the step's only side condition, so
+one induction covers division by zero too. `BitVec::udivrem_spec` is the
+result at every width and divisor; `udiv_urem_toNat`, `urem_lt`, `udiv_zero`
+(all ones, by induction: every comparison against zero fails) and
+`urem_zero` are its corollaries.
+
+Signed, a word of width `k + 1` reads as `Int::of_sign(sign, magnitude)`
+(`BitVec::toInt_of_sign`), and `sdiv`/`srem` negate the magnitudes' quotient
+and remainder by the same rule, so `Int::of_sign_mul_add` carries the
+unsigned law over whenever both results fit the signed range. The remainder
+always fits (`srem_toInt`, at every divisor). The quotient fits unless it is
+`2^k`, which needs a dividend of magnitude `2^k` (only `MIN`) and a divisor of
+magnitude one; `MIN / 1` is fine, so the one exclusion is `MIN / -1`, stated
+as a hypothesis on the readings (`sdiv_srem_toInt`, with `srem_natAbs_lt`,
+`srem_nonneg`, `srem_nonpos`; `SInt::div_rem_toInt` and friends carry them
+to `i64`). These are what a verified lowering of `DIV`/`IDIV` cites.
+
+### 4.1 Operator symbols
+
+`a / b`, `a % b`, `a << k`, `a >> k`, `a & b` and `a | b` are designation
+slots like `+` (issues/integer-operator-symbols.md, 2026-11-06), so each
+reads what its carrier designates: at `BitVec(n)` the unsigned `udiv`/`urem`
+and the zero-filling shift, at `SInt(n)` the truncating `div`/`rem` and the
+arithmetic shift, at `Nat` and `Int` `div`/`mod` (Euclidean at `Int`, as
+Lean's are). The rungs are Rust's: `|` below `&` below the shifts below `+`,
+with `/` and `%` beside `*`; the comparison rung sits under all of them, so
+`a & m = 0` is `(a & m) = 0` without Rust's C-inherited trap. A shift's
+count is a `Nat`, and the carrier probes read only a shift's left operand, so
+`(1 << k) + a` takes its carrier from `a`.
+
+Three lexical choices: `//` is still a comment (as in Rust, `a // b` is `a`);
+`|` against `⟩` is the left injection, so `⟨a | b |⟩` injects `a | b`; and
+`>>` is a shift only with a space (or `(`, `,`) before it, because a tight
+`>>` is two closers of nested type arguments, `List<List<A>>`. Xor keeps its
+method (`bxor`): `^` is power.
+
 ## 5. Byte classes
 
 `lib/std/bitvec/byte.hthr` gains the C locale's `<ctype.h>` classes as
@@ -135,12 +183,11 @@ at.
 
 - ~~The decision for Minus~~ Decided (Minus, 2026-11-03): `u8` stays
   `BitVec(8)`; only signed words are a record (§3).
-- **Operator symbols.** `/`, `%`, `<<`, `>>`, `&`, `|` do not lex today;
-  division and shifts are methods. `issues/integer-operator-symbols.md`.
-- **Division laws.** The Euclidean characterization of `udivrem` (`a = q·d +
-  r`, `r < d` for `d ≠ 0`) is unproved; the probes are closed values.
-  `issues/bitvec-division-laws.md`.
+- ~~**Operator symbols.**~~ Done 2026-11-06 (§4.1). `/` at `Rat` is open:
+  `⁻¹` there asks for apartness, and whether `a / b` should too, or read the
+  total `recip`, is a choice of its own.
+- ~~**Division laws.**~~ Done 2026-11-06 (§4.2).
 - **Native lowering of `SInt`.** The native frontend reads `BitVec` words;
   an `SInt` field is one record level above them.
   `issues/sint-native-lowering.md`.
-- **Display.** `issues/type-name-display-respelling.md` (§2.1).
+- ~~**Display.**~~ Done: §2.1, `issues/type-name-display-respelling.md`.

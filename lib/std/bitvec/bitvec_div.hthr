@@ -13,9 +13,13 @@
 // SMT-LIB's `bvsdiv`/`bvsrem`, read off the magnitudes, so `MIN / -1` wraps
 // to `MIN` and nothing traps.
 import bool;
+import logic;
+import nat;
 import int;
 import pair;
 import bitvec;
+import bitvec_nat;
+import bitvec_signed;
 
 // One step of long division: bring the next dividend bit `b` down into the
 // remainder and subtract the divisor when it fits. The remainder is held one
@@ -55,6 +59,197 @@ fn BitVec::udiv({n: Nat}, self a, d: BitVec(n)) → BitVec(n) { a.udivrem(d).fst
 
 fn BitVec::urem({n: Nat}, self a, d: BitVec(n)) → BitVec(n) { a.udivrem(d).snd }
 
+// ---------------------------------------------------------------------------
+// The Euclidean laws of unsigned division (issues/bitvec-division-laws.md).
+// The long division keeps `DivMod::Spec` (lib/std/num/nat.hthr) of the
+// dividend bits read so far: `a = q·d + r` and `r < d` unless `d` is zero,
+// one digit at a time (`DivMod::digit_keep`, `DivMod::digit_take`). The
+// remainder held one bit wider never loses its top bit because it is at most
+// the dividend read so far, which is below `2^n`.
+
+// `init` drops a top bit that is zero below `2^n`.
+theorem BitVec::init_toNat(n: Nat): (x: BitVec(Succ(n))) → x.toNat() < Nat::pow(2, n) → x.init().toNat() = x.toNat() {
+    match n {
+        Zero => λ x => match x.head_bit() as λ h => Nat::of_bit(h) + 0 < 1 → 0 = Nat::of_bit(h) + 0 {
+            False => λ _ => refl,
+            True => λ over => false_elim(over),
+        },
+        Succ(k, ih) => λ x small => {
+            let t = x.tail_bits();
+            let sum: (Nat::of_bit(x.head_bit()) + t.toNat().twice() < Nat::twice(Nat::pow(2, k))) =
+                rewrite(sym(BitVec::pow_two_succ_twice(k)), small);
+            Nat::cong(λ (v: Nat) => Nat::of_bit(x.head_bit()) + v.twice(),
+                ih(t, Nat::lt_of_bit_twice_lt(x.head_bit(), t.toNat(), Nat::pow(2, k), sum)))
+        },
+    }
+}
+
+// A zero pushed in at the top changes nothing.
+theorem BitVec::snoc_false_toNat(n: Nat): (x: BitVec(n)) → x.snoc(False).toNat() = x.toNat() {
+    match n {
+        Zero => λ x => refl,
+        Succ(_, ih) => λ x => Nat::cong(λ (v: Nat) => Nat::of_bit(x.head_bit()) + v.twice(), ih(x.tail_bits())),
+    }
+}
+
+// The step's two arms, by the comparison's verdict.
+theorem BitVec::division_step_keep(n, m: Nat, d: BitVec(Succ(n)), b: Bool,
+        high: Pair<BitVec(m), BitVec(Succ(n))>,
+        below: (high.snd.init().cons_bit(b)).unsigned_lt_bit(d) = True):
+    BitVec::division_step(d, b, high) = Pair(high.fst.cons_bit(False), high.snd.init().cons_bit(b))
+{
+    let r = high.snd.init().cons_bit(b);
+    j(sym(below), λ v _ => (match v as λ _ => Pair<BitVec(Succ(m)), BitVec(Succ(n))> {
+            True => Pair(high.fst.cons_bit(False), r),
+            False => Pair(high.fst.cons_bit(True), r.sub(d)),
+        }) = Pair(high.fst.cons_bit(False), r), refl)
+}
+
+theorem BitVec::division_step_take(n, m: Nat, d: BitVec(Succ(n)), b: Bool,
+        high: Pair<BitVec(m), BitVec(Succ(n))>,
+        fits: (high.snd.init().cons_bit(b)).unsigned_lt_bit(d) = False):
+    BitVec::division_step(d, b, high) = Pair(high.fst.cons_bit(True), (high.snd.init().cons_bit(b)).sub(d))
+{
+    let r = high.snd.init().cons_bit(b);
+    j(sym(fits), λ v _ => (match v as λ _ => Pair<BitVec(Succ(m)), BitVec(Succ(n))> {
+            True => Pair(high.fst.cons_bit(False), r),
+            False => Pair(high.fst.cons_bit(True), r.sub(d)),
+        }) = Pair(high.fst.cons_bit(True), r.sub(d)), refl)
+}
+
+// One step keeps the specification, given the dividend read so far is
+// below `2^n`, so the remainder's top bit is zero.
+theorem BitVec::division_step_spec(n, m: Nat, d: BitVec(Succ(n)), b: Bool,
+        high: Pair<BitVec(m), BitVec(Succ(n))>, a: Nat,
+        sp: DivMod::Spec(a, d.toNat(), MkDivMod(high.fst.toNat(), high.snd.toNat())),
+        small: a < Nat::pow(2, n)):
+    DivMod::Spec(Nat::of_bit(b) + a.twice(), d.toNat(),
+        MkDivMod(BitVec::division_step(d, b, high).fst.toNat(), BitVec::division_step(d, b, high).snd.toNat()))
+{
+    let q = high.fst;
+    let s = high.snd;
+    let r = s.init().cons_bit(b);
+    let big = d.toNat();
+    let below: (s.toNat() < Nat::pow(2, n)) =
+        Nat::le_trans(Succ(s.toNat()), Succ(a), Nat::pow(2, n), DivMod::rem_le(a, big, q.toNat(), s.toNat(), sp), small);
+    let value: (r.toNat() = Nat::of_bit(b) + s.toNat().twice()) =
+        Nat::cong(λ (v: Nat) => Nat::of_bit(b) + v.twice(), BitVec::init_toNat(n, s, below));
+    let order: (r.unsigned_lt_bit(d) = Succ(r.toNat()).leb(big)) = unsigned_lt_nat(Succ(n), r, d);
+    match yes: r.unsigned_lt_bit(d) {
+        True => {
+            let lt: (r.toNat() < big) = Nat::le_of_leb(Succ(r.toNat()), big, trans(sym(order), yes));
+            let kept: (DivMod::Spec(Nat::of_bit(b) + a.twice(), big, MkDivMod(0 + q.toNat().twice(), r.toNat()))) =
+                rewrite(value, DivMod::digit_keep(a, big, q.toNat(), s.toNat(), b, sp, rewrite(sym(value), lt)));
+            j(sym(BitVec::division_step_keep(n, m, d, b, high, yes)),
+                λ p _ => DivMod::Spec(Nat::of_bit(b) + a.twice(), big, MkDivMod(p.fst.toNat(), p.snd.toNat())), kept)
+        },
+        False => {
+            let ge: (big <= r.toNat()) = Nat::le_of_not_lt(r.toNat(), big,
+                λ (lt: r.toNat() < big) => absurd(trans(sym(yes), trans(order, Nat::leb_true(Succ(r.toNat()), big, lt)))));
+            let rest: (r.sub(d).toNat() = r.toNat() - big) = toNat_sub(Succ(n), r, d, ge);
+            let taken: (DivMod::Spec(Nat::of_bit(b) + a.twice(), big, MkDivMod(1 + q.toNat().twice(), r.sub(d).toNat()))) =
+                rewrite(rest, rewrite(value, DivMod::digit_take(a, big, q.toNat(), s.toNat(), b, sp, rewrite(sym(value), ge))));
+            j(sym(BitVec::division_step_take(n, m, d, b, high, yes)),
+                λ p _ => DivMod::Spec(Nat::of_bit(b) + a.twice(), big, MkDivMod(p.fst.toNat(), p.snd.toNat())), taken)
+        },
+    }
+}
+
+// The whole long division, by induction on the dividend's width.
+theorem BitVec::long_division_spec(n: Nat, d: BitVec(Succ(n)), m: Nat): (a: BitVec(m)) →
+        a.toNat() < Nat::pow(2, n) →
+        DivMod::Spec(a.toNat(), d.toNat(),
+            MkDivMod(BitVec::long_division(d, m, a).fst.toNat(), BitVec::long_division(d, m, a).snd.toNat()))
+{
+    match m {
+        Zero => λ a _ => rewrite(BitVec::zero_toNat(Succ(n)), DivMod::spec_zero(d.toNat())),
+        Succ(k, ih) => λ a small => {
+            let t = a.tail_bits();
+            let t_small: (t.toNat() < Nat::pow(2, n)) =
+                Nat::le_trans(Succ(t.toNat()), Succ(a.toNat()), Nat::pow(2, n), Nat::le_of_bit_twice(a.head_bit(), t.toNat()), small);
+            BitVec::division_step_spec(n, k, d, a.head_bit(), BitVec::long_division(d, k, t), t.toNat(),
+                ih(t, t_small), t_small)
+        },
+    }
+}
+
+// `udivrem` meets the specification at every width and divisor, zero
+// included: `a = q·d + r`, and `r < d` unless `d` is zero.
+theorem BitVec::udivrem_spec(n: Nat, a, d: BitVec(n)):
+    DivMod::Spec(a.toNat(), d.toNat(), MkDivMod(a.udiv(d).toNat(), a.urem(d).toNat()))
+{
+    let wide = d.snoc(False);
+    let qr = BitVec::long_division(wide, n, a);
+    let sp: (DivMod::Spec(a.toNat(), wide.toNat(), MkDivMod(qr.fst.toNat(), qr.snd.toNat()))) =
+        BitVec::long_division_spec(n, wide, n, a, BitVec::toNat_lt_pow(n, a));
+    let below: (qr.snd.toNat() < Nat::pow(2, n)) =
+        Nat::le_trans(Succ(qr.snd.toNat()), Succ(a.toNat()), Nat::pow(2, n),
+            DivMod::rem_le(a.toNat(), wide.toNat(), qr.fst.toNat(), qr.snd.toNat(), sp), BitVec::toNat_lt_pow(n, a));
+    rewrite(BitVec::init_toNat(n, qr.snd, below), rewrite(sym(BitVec::snoc_false_toNat(n, d)), sp))
+}
+
+// `a = (a / d)·d + a % d`, at an open width and any divisor.
+theorem BitVec::udiv_urem_toNat(n: Nat, a, d: BitVec(n)):
+    a.toNat() = a.udiv(d).toNat() * d.toNat() + a.urem(d).toNat()
+{
+    sym(BitVec::udivrem_spec(n, a, d).left)
+}
+
+// A word that is not zero reads as a positive count.
+theorem BitVec::toNat_pos(n: Nat, x: BitVec(n), nonzero: x ≠ BitVec::zero()): 0 < x.toNat() {
+    match x.toNat() as λ v => (x.toNat() = v) → 0 < v {
+        Zero => λ (z: x.toNat() = 0) => false_elim(nonzero(trans(sym(BitVec::ofNat_toNat(n, x)),
+            trans(@cong(λ (v: Nat) => BitVec::ofNat(v, n := n), x.toNat(), 0, z), BitVec::ofNat_zero(n))))),
+        Succ(_) => λ _ => trivial,
+    }(refl)
+}
+
+// The remainder is below a divisor that is not zero.
+theorem BitVec::urem_lt(n: Nat, a, d: BitVec(n), nonzero: d ≠ BitVec::zero()): a.urem(d).toNat() < d.toNat() {
+    DivMod::rem_lt(a.toNat(), d.toNat(), a.udiv(d).toNat(), a.urem(d).toNat(), BitVec::udivrem_spec(n, a, d),
+        BitVec::toNat_pos(n, d, nonzero))
+}
+
+// By zero the remainder is the dividend: SMT-LIB's `bvurem`.
+theorem BitVec::urem_zero(n: Nat, a: BitVec(n)): a.urem(BitVec::zero()) = a {
+    let r = a.urem(BitVec::zero());
+    let sp = BitVec::udivrem_spec(n, a, BitVec::zero());
+    let value: (r.toNat() = a.toNat()) = DivMod::rem_of_zero_divisor(a.toNat(), a.udiv(BitVec::zero()).toNat(), r.toNat(),
+        rewrite(sym(BitVec::zero_toNat(n)), sp));
+    trans(sym(BitVec::ofNat_toNat(n, r)),
+        trans(@cong(λ (v: Nat) => BitVec::ofNat(v, n := n), r.toNat(), a.toNat(), value), BitVec::ofNat_toNat(n, a)))
+}
+
+// By zero every step's comparison fails, so every quotient digit is one.
+theorem BitVec::long_division_by_zero(n: Nat, d: BitVec(Succ(n)), zero: d.toNat() = 0, m: Nat): (a: BitVec(m)) →
+        BitVec::long_division(d, m, a).fst = BitVec::all_ones()
+{
+    match m {
+        Zero => λ a => refl,
+        Succ(k, ih) => λ a => {
+            let t = a.tail_bits();
+            let high = BitVec::long_division(d, k, t);
+            let r = high.snd.init().cons_bit(a.head_bit());
+            let fails: (r.unsigned_lt_bit(d) = False) =
+                trans(unsigned_lt_nat(Succ(n), r, d), j(sym(zero), λ v _ => Succ(r.toNat()).leb(v) = False, refl));
+            trans(@cong(λ (p: Pair<BitVec(Succ(k)), BitVec(Succ(n))>) => p.fst, BitVec::division_step(d, a.head_bit(), high),
+                    Pair(high.fst.cons_bit(True), r.sub(d)), BitVec::division_step_take(n, k, d, a.head_bit(), high, fails)),
+                BitVec::cons_bit_cong(k, refl, ih(t)))
+        },
+    }
+}
+
+// By zero the quotient is all ones: SMT-LIB's `bvudiv`.
+theorem BitVec::udiv_zero(n: Nat, a: BitVec(n)): a.udiv(BitVec::zero()) = BitVec::all_ones() {
+    BitVec::long_division_by_zero(n, BitVec::zero(n := n).snoc(False),
+        trans(BitVec::snoc_false_toNat(n, BitVec::zero()), BitVec::zero_toNat(n)), n, a)
+}
+
+// `a / b` and `a % b` at an unsigned word; at a signed one they are
+// `SInt::div`'s truncating pair (lib/std/bitvec/sint.hthr).
+designation / at BitVec(n) := BitVec::udiv
+designation % at BitVec(n) := BitVec::urem
+
 // The two's-complement magnitude: `x` when its sign bit is clear, `-x`
 // otherwise. At the most negative value `-x` is `x` again, whose unsigned
 // reading is that value's magnitude, so the signed operations below need no
@@ -74,6 +269,277 @@ fn BitVec::sdiv({n: Nat}, self a, d: BitVec(n)) → BitVec(n) {
 fn BitVec::srem({n: Nat}, self a, d: BitVec(n)) → BitVec(n) {
     let r = a.magnitude().urem(d.magnitude());
     match a.sign_bit() { True => r.neg(), False => r }
+}
+
+// ---------------------------------------------------------------------------
+// The signed laws (issues/bitvec-division-laws.md). A word of width
+// `Succ(k)` reads as `Int::of_sign(sign, magnitude)` (`toInt_of_sign`), and
+// `sdiv`/`srem` negate the magnitudes' quotient and remainder by the same
+// rule, so `Int::of_sign_mul_add` carries the unsigned law over. The one
+// exception is `MIN / -1`, whose quotient `2^k` has no signed word.
+
+// Negation reads as the complement to `2^n` of a word that is not zero.
+theorem BitVec::neg_toNat(n: Nat, x: BitVec(n), positive: 0 < x.toNat()): x.neg().toNat() = Nat::pow(2, n) - x.toNat() {
+    let a = x.toNat();
+    let w = Nat::pow(2, n);
+    let fits: (a <= w) = Nat::le_of_lt(a, w, BitVec::toNat_lt_pow(n, x));
+    let lt: (w - a < w) = w.sub_lt_of_pos(a, positive, fits);
+    let c = BitVec::ofNat(w - a, n := n);
+    let start: (BitVec::zero(n := n).iterate_increment(w - a) = c) = BitVec::zero_iterate_increment(n, w - a, lt);
+    let wraps: (c.add(x) = BitVec::zero()) =
+        trans(sym(BitVec::iter_add_eq_add(n, c, x)),
+        trans(BitVec::cong_iterate_increment(n, a, sym(start)),
+        trans(BitVec::iterate_increment_compose(n, BitVec::zero(), w - a, a),
+        trans(BitVec::cong_iterate_increment_count(n, BitVec::zero(), a.sub_add_cancel(w, fits)),
+            BitVec::zero_iterate_period(n)))));
+    let same: (BitVec::zero(n := n).sub(x) = c) = j(wraps, λ y _ => y.sub(x) = c, BitVec::add_sub_cancel(n, c, x));
+    trans(@cong(λ (y: BitVec(n)) => y.toNat(), x.neg(), c, same), BitVec::toNat_ofNat(n, w - a, lt))
+}
+
+// Zero negates to zero.
+theorem BitVec::neg_toNat_zero(n: Nat, x: BitVec(n), zero: x.toNat() = 0): x.neg().toNat() = 0 {
+    let back: (x = BitVec::zero()) = trans(sym(BitVec::ofNat_toNat(n, x)),
+        trans(@cong(λ (v: Nat) => BitVec::ofNat(v, n := n), x.toNat(), 0, zero), BitVec::ofNat_zero(n)));
+    let z = BitVec::zero(n := n);
+    trans(@cong(λ (y: BitVec(n)) => y.neg().toNat(), x, z, back),
+        trans(@cong(λ (y: BitVec(n)) => y.toNat(), z.sub(z), z, BitVec::sub_zero(n, z)), BitVec::zero_toNat(n)))
+}
+
+// Below `2^k` the sign bit is clear: the word reads as itself and is its
+// own magnitude.
+theorem BitVec::toInt_small(k: Nat, x: BitVec(Succ(k)), small: x.toNat() < Nat::pow(2, k)): x.toInt() = OfNat(x.toNat()) {
+    j(sym(BitVec::sign_bit_small(k, x, small)), λ s _ => (match s as λ _ => Int {
+        False => OfNat(x.toNat()),
+        True => OfNat(x.toNat()).sub(OfNat(Nat::pow(2, Succ(k)))),
+    }) = OfNat(x.toNat()), refl)
+}
+
+theorem BitVec::magnitude_small(k: Nat, x: BitVec(Succ(k)), small: x.toNat() < Nat::pow(2, k)): x.magnitude() = x {
+    j(sym(BitVec::sign_bit_small(k, x, small)), λ s _ => (match s as λ _ => BitVec(Succ(k)) {
+        True => x.neg(),
+        False => x,
+    }) = x, refl)
+}
+
+// From `2^k` up it is set: the word reads `2^(k+1)` below itself, and its
+// magnitude is its negation.
+theorem BitVec::toInt_large(k: Nat, x: BitVec(Succ(k)), large: Nat::pow(2, k) <= x.toNat()):
+    x.toInt() = -OfNat(Nat::pow(2, Succ(k)) - x.toNat())
+{
+    let w = Nat::pow(2, Succ(k));
+    j(sym(BitVec::sign_bit_large(k, x, large)), λ s _ => (match s as λ _ => Int {
+        False => OfNat(x.toNat()),
+        True => OfNat(x.toNat()).sub(OfNat(w)),
+    }) = -OfNat(w - x.toNat()), Int::ofNat_sub_of_le(x.toNat(), w, Nat::le_of_lt(x.toNat(), w, BitVec::toNat_lt_pow(Succ(k), x))))
+}
+
+theorem BitVec::magnitude_large(k: Nat, x: BitVec(Succ(k)), large: Nat::pow(2, k) <= x.toNat()): x.magnitude() = x.neg() {
+    j(sym(BitVec::sign_bit_large(k, x, large)), λ s _ => (match s as λ _ => BitVec(Succ(k)) {
+        True => x.neg(),
+        False => x,
+    }) = x.neg(), refl)
+}
+
+// The top half is above zero, and `2^(k+1)` less a word is positive.
+theorem BitVec::large_positive(k: Nat, x: BitVec(Succ(k)), large: Nat::pow(2, k) <= x.toNat()): 0 < x.toNat() {
+    Nat::le_trans(1, Nat::pow(2, k), x.toNat(), Nat::one_le_pow(2, k, trivial), large)
+}
+
+theorem BitVec::complement_positive(n: Nat, x: BitVec(n)): 0 < Nat::pow(2, n) - x.toNat() {
+    Nat::le_sub_of_add_le(1, x.toNat(), Nat::pow(2, n), BitVec::toNat_lt_pow(n, x))
+}
+
+// A word reads as its sign and its magnitude.
+theorem BitVec::toInt_of_sign(k: Nat, x: BitVec(Succ(k))): x.toInt() = Int::of_sign(x.sign_bit(), x.magnitude().toNat()) {
+    match x.toNat().lt_or_ge(Nat::pow(2, k)) {
+        Inl(small) => rewrite(BitVec::sign_bit_small(k, x, small),
+            rewrite(BitVec::magnitude_small(k, x, small), BitVec::toInt_small(k, x, small))),
+        Inr(large) => rewrite(BitVec::sign_bit_large(k, x, large),
+            rewrite(BitVec::magnitude_large(k, x, large),
+                rewrite(BitVec::neg_toNat(Succ(k), x, BitVec::large_positive(k, x, large)), BitVec::toInt_large(k, x, large)))),
+    }
+}
+
+// The magnitude is at most `2^k`, and reaches it only for a negative word
+// (the most negative one).
+theorem BitVec::magnitude_fits(k: Nat, x: BitVec(Succ(k))):
+    x.magnitude().toNat() < Nat::pow(2, k) ∨ (x.sign_bit() = True ∧ x.magnitude().toNat() <= Nat::pow(2, k))
+{
+    let p = Nat::pow(2, k);
+    match x.toNat().lt_or_ge(p) {
+        Inl(small) => Inl(rewrite(BitVec::magnitude_small(k, x, small), small)),
+        Inr(large) => {
+            let pw: (Nat::pow(2, Succ(k)) = p + p) = trans(BitVec::pow_two_succ_twice(k), Nat::twice_add_self(p));
+            let bound: (Nat::pow(2, Succ(k)) - x.toNat() <= p) =
+                Nat::sub_le_of_le_add(Nat::pow(2, Succ(k)), x.toNat(), p, rewrite(pw, p.add_le_mono_l(p, x.toNat(), large)));
+            Inr(And(BitVec::sign_bit_large(k, x, large), rewrite(BitVec::magnitude_large(k, x, large),
+                rewrite(BitVec::neg_toNat(Succ(k), x, BitVec::large_positive(k, x, large)), bound))))
+        },
+    }
+}
+
+// Only zero has magnitude zero.
+theorem BitVec::magnitude_pos(k: Nat, x: BitVec(Succ(k)), nonzero: x ≠ BitVec::zero()): 0 < x.magnitude().toNat() {
+    match x.toNat().lt_or_ge(Nat::pow(2, k)) {
+        Inl(small) => rewrite(BitVec::magnitude_small(k, x, small), BitVec::toNat_pos(Succ(k), x, nonzero)),
+        Inr(large) => rewrite(BitVec::magnitude_large(k, x, large),
+            rewrite(BitVec::neg_toNat(Succ(k), x, BitVec::large_positive(k, x, large)), BitVec::complement_positive(Succ(k), x))),
+    }
+}
+
+// Negating a count of at most `2^k` reads as the negated count; at `2^k`
+// itself that is the most negative word.
+theorem BitVec::toInt_neg_le(k: Nat, x: BitVec(Succ(k)), le: x.toNat() <= Nat::pow(2, k)): x.neg().toInt() = -OfNat(x.toNat()) {
+    let p = Nat::pow(2, k);
+    let w = Nat::pow(2, Succ(k));
+    let a = x.toNat();
+    match Nat::lt_or_ge(0, a) {
+        Inl(positive) => {
+            let value: (x.neg().toNat() = w - a) = BitVec::neg_toNat(Succ(k), x, positive);
+            let pw: (w = p + p) = trans(BitVec::pow_two_succ_twice(k), Nat::twice_add_self(p));
+            let large: (p <= x.neg().toNat()) = rewrite(value,
+                Nat::le_sub_of_add_le(p, a, w, rewrite(pw, Nat::add_le_mono(a, p, p, p, le, p.le_refl()))));
+            let back: (w - x.neg().toNat() = a) =
+                trans(Nat::cong(λ (v: Nat) => w - v, value), w.sub_sub_self(a, Nat::le_of_lt(a, w, BitVec::toNat_lt_pow(Succ(k), x))));
+            trans(BitVec::toInt_large(k, x.neg(), large), Int::cong(λ (y: Int) => -y, Int::cong_ofnat(back)))
+        },
+        Inr(none) => {
+            let zero: (a = 0) = Nat::le_antisym(a, 0, none, trivial);
+            let negz: (x.neg().toNat() = 0) = BitVec::neg_toNat_zero(Succ(k), x, zero);
+            let small: (x.neg().toNat() < p) = rewrite(negz, Nat::one_le_pow(2, k, trivial));
+            rewrite(zero, trans(BitVec::toInt_small(k, x.neg(), small), Int::cong_ofnat(negz)))
+        },
+    }
+}
+
+// A count negated when `negative`, as `sdiv` and `srem` build their results,
+// reads as `Int::of_sign` when it fits the signed range.
+theorem BitVec::toInt_negate_when(k: Nat, negative: Bool, x: BitVec(Succ(k))):
+    (x.toNat() < Nat::pow(2, k) ∨ (negative = True ∧ x.toNat() <= Nat::pow(2, k))) →
+    (match negative as λ _ => BitVec(Succ(k)) { True => x.neg(), False => x }).toInt() = Int::of_sign(negative, x.toNat())
+{
+    match negative {
+        True => λ fits => BitVec::toInt_neg_le(k, x, match fits {
+            Inl(small) => Nat::le_of_lt(x.toNat(), Nat::pow(2, k), small),
+            Inr(both) => both.right,
+        }),
+        False => λ fits => match fits {
+            Inl(small) => BitVec::toInt_small(k, x, small),
+            Inr(both) => absurd(both.left),
+        },
+    }
+}
+
+// The remainder takes the dividend's sign and the magnitudes' remainder, at
+// every divisor, zero included.
+theorem BitVec::srem_toInt(k: Nat, a, d: BitVec(Succ(k))):
+    a.srem(d).toInt() = Int::of_sign(a.sign_bit(), a.magnitude().urem(d.magnitude()).toNat())
+{
+    let p = Nat::pow(2, k);
+    let ma = a.magnitude();
+    let md = d.magnitude();
+    let r = ma.urem(md);
+    let r_le: (r.toNat() <= ma.toNat()) =
+        DivMod::rem_le(ma.toNat(), md.toNat(), ma.udiv(md).toNat(), r.toNat(), BitVec::udivrem_spec(Succ(k), ma, md));
+    let fits: (r.toNat() < p ∨ (a.sign_bit() = True ∧ r.toNat() <= p)) = match BitVec::magnitude_fits(k, a) {
+        Inl(small) => Inl(Nat::le_trans(Succ(r.toNat()), Succ(ma.toNat()), p, r_le, small)),
+        Inr(both) => Inr(And(both.left, Nat::le_trans(r.toNat(), ma.toNat(), p, r_le, both.right))),
+    };
+    BitVec::toInt_negate_when(k, a.sign_bit(), r, fits)
+}
+
+// The quotient's count fits the signed range away from `MIN / -1`: it is at
+// most the dividend's magnitude, and reaches `2^k` only for `MIN / ±1`.
+theorem BitVec::sdiv_fits(k: Nat, a, d: BitVec(Succ(k)), nonzero: d ≠ BitVec::zero(),
+        away: ¬(a.toInt() = -OfNat(Nat::pow(2, k)) ∧ d.toInt() = -OfNat(1))):
+    a.magnitude().udiv(d.magnitude()).toNat() < Nat::pow(2, k)
+        ∨ (a.sign_bit().xor(d.sign_bit()) = True ∧ a.magnitude().udiv(d.magnitude()).toNat() <= Nat::pow(2, k))
+{
+    let p = Nat::pow(2, k);
+    let ma = a.magnitude();
+    let md = d.magnitude();
+    let q = ma.udiv(md);
+    let sp = BitVec::udivrem_spec(Succ(k), ma, md);
+    let positive: (0 < md.toNat()) = BitVec::magnitude_pos(k, d, nonzero);
+    let q_le: (q.toNat() <= ma.toNat()) = DivMod::quot_le(ma.toNat(), md.toNat(), q.toNat(), ma.urem(md).toNat(), sp, positive);
+    match BitVec::magnitude_fits(k, a) {
+        Inl(small) => Inl(Nat::le_trans(Succ(q.toNat()), Succ(ma.toNat()), p, q_le, small)),
+        Inr(both) => match q.toNat().lt_or_ge(p) {
+            Inl(lt) => Inl(lt),
+            Inr(ge) => {
+                let q_fits: (q.toNat() <= p) = Nat::le_trans(q.toNat(), ma.toNat(), p, q_le, both.right);
+                let ma_eq: (ma.toNat() = p) = Nat::le_antisym(ma.toNat(), p, both.right, Nat::le_trans(p, q.toNat(), ma.toNat(), ge, q_le));
+                let q_pos: (0 < q.toNat()) = Nat::le_trans(1, p, q.toNat(), Nat::one_le_pow(2, k, trivial), ge);
+                let one: (md.toNat() <= 1) = DivMod::divisor_le_one(ma.toNat(), md.toNat(), q.toNat(), ma.urem(md).toNat(), sp,
+                    Nat::le_trans(ma.toNat(), p, q.toNat(), both.right, ge), q_pos);
+                let md_eq: (md.toNat() = 1) = Nat::le_antisym(md.toNat(), 1, one, positive);
+                match same: d.sign_bit() {
+                    False => Inr(And(rewrite(both.left, refl), q_fits)),
+                    True => {
+                        let a_min: (a.toInt() = -OfNat(p)) = trans(BitVec::toInt_of_sign(k, a),
+                            rewrite(both.left, Int::cong(λ (y: Int) => -y, Int::cong_ofnat(ma_eq))));
+                        let d_neg: (d.toInt() = -OfNat(1)) = trans(BitVec::toInt_of_sign(k, d),
+                            rewrite(same, Int::cong(λ (y: Int) => -y, Int::cong_ofnat(md_eq))));
+                        false_elim(away(And(a_min, d_neg)))
+                    },
+                }
+            },
+        },
+    }
+}
+
+// The quotient is the magnitudes' quotient, negated when the signs differ.
+theorem BitVec::sdiv_toInt(k: Nat, a, d: BitVec(Succ(k)), nonzero: d ≠ BitVec::zero(),
+        away: ¬(a.toInt() = -OfNat(Nat::pow(2, k)) ∧ d.toInt() = -OfNat(1))):
+    a.sdiv(d).toInt() = Int::of_sign(a.sign_bit().xor(d.sign_bit()), a.magnitude().udiv(d.magnitude()).toNat())
+{
+    BitVec::toInt_negate_when(k, a.sign_bit().xor(d.sign_bit()), a.magnitude().udiv(d.magnitude()),
+        BitVec::sdiv_fits(k, a, d, nonzero, away))
+}
+
+// `a = (a / d)·d + a % d` read signed, away from a zero divisor and `MIN / -1`.
+theorem BitVec::sdiv_srem_toInt(k: Nat, a, d: BitVec(Succ(k)), nonzero: d ≠ BitVec::zero(),
+        away: ¬(a.toInt() = -OfNat(Nat::pow(2, k)) ∧ d.toInt() = -OfNat(1))):
+    a.toInt() = a.sdiv(d).toInt() * d.toInt() + a.srem(d).toInt()
+{
+    let ma = a.magnitude();
+    let md = d.magnitude();
+    rewrite(BitVec::sdiv_toInt(k, a, d, nonzero, away), rewrite(BitVec::srem_toInt(k, a, d),
+        rewrite(BitVec::toInt_of_sign(k, d), rewrite(BitVec::toInt_of_sign(k, a),
+            Int::of_sign_mul_add(a.sign_bit(), d.sign_bit(), ma.udiv(md).toNat(), md.toNat(), ma.urem(md).toNat(), ma.toNat(),
+                BitVec::udivrem_spec(Succ(k), ma, md).left)))))
+}
+
+// `|a % d| < |d|` away from a zero divisor.
+theorem BitVec::srem_natAbs_lt(k: Nat, a, d: BitVec(Succ(k)), nonzero: d ≠ BitVec::zero()):
+    a.srem(d).toInt().natAbs() < d.toInt().natAbs()
+{
+    let ma = a.magnitude();
+    let md = d.magnitude();
+    let r = ma.urem(md);
+    rewrite(BitVec::srem_toInt(k, a, d), rewrite(BitVec::toInt_of_sign(k, d),
+        rewrite(Int::natAbs_of_sign(a.sign_bit(), r.toNat()), rewrite(Int::natAbs_of_sign(d.sign_bit(), md.toNat()),
+            DivMod::rem_lt(ma.toNat(), md.toNat(), ma.udiv(md).toNat(), r.toNat(), BitVec::udivrem_spec(Succ(k), ma, md),
+                BitVec::magnitude_pos(k, d, nonzero))))))
+}
+
+// The remainder has the dividend's sign: at least zero for a dividend at
+// least zero, at most zero for a negative one.
+theorem BitVec::srem_nonneg(k: Nat, a, d: BitVec(Succ(k)), nonneg: OfNat(0) <= a.toInt()): OfNat(0) <= a.srem(d).toInt() {
+    match a.toNat().lt_or_ge(Nat::pow(2, k)) {
+        Inl(small) => rewrite(BitVec::srem_toInt(k, a, d), rewrite(BitVec::sign_bit_small(k, a, small), trivial)),
+        Inr(large) => false_elim(Int::not_lt_of_ge(OfNat(0), a.toInt(), nonneg,
+            rewrite(BitVec::toInt_large(k, a, large), Int::neg_ofNat_lt_zero(Nat::pow(2, Succ(k)) - a.toNat(),
+                BitVec::complement_positive(Succ(k), a))))),
+    }
+}
+
+theorem BitVec::srem_nonpos(k: Nat, a, d: BitVec(Succ(k)), negative: a.toInt() < OfNat(0)): a.srem(d).toInt() <= OfNat(0) {
+    match a.toNat().lt_or_ge(Nat::pow(2, k)) {
+        Inl(small) => false_elim(Int::not_lt_of_ge(OfNat(0), a.toInt(), rewrite(BitVec::toInt_small(k, a, small), trivial), negative)),
+        Inr(large) => rewrite(BitVec::srem_toInt(k, a, d), rewrite(BitVec::sign_bit_large(k, a, large),
+            Int::neg_ofNat_le_zero(a.magnitude().urem(d.magnitude()).toNat()))),
+    }
 }
 
 // The low `n` bits of an integer in two's complement: `-(k + 1)` is the

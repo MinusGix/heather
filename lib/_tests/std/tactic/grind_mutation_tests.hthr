@@ -1,0 +1,17 @@
+// Mutation controls (docs/grind-design.md §9.6): goals of grind_tests with
+// their lemmas reordered or beside lemmas they do not need. grind visits
+// nodes in order under per-round budgets, so closing again is not
+// automatic: a proof that survives these is one a growing library is less
+// likely to break (the robustness check of Axolocl, CAV 2025). A module of
+// its own so that grind_tests stays under its CPU rail. One mutation does
+// not close yet: `neg_add_succ` with `Int::add_comm` added runs out of fuel
+// (issues/grind-unrelated-lemma-fuel.md).
+import logic; import bool; import nat; import list; import option; import char; import string; import tactic; import int; import grind;
+
+theorem tower_nil_reordered<A>(a, b, c: List<A>): ((a ++ []) ++ b) ++ c = a ++ (b ++ c) { by grind_using(["List::append_nil", "List::append_assoc"], []) }
+theorem tower_lens_unrelated<A>(a, b, c: List<A>): ((a ++ b) ++ c).len() = a.len() + (b.len() + c.len()) { by grind_using(["Int::add_comm", "Nat::add_assoc", "List::append_nil", "List::len_append"], []) }
+theorem regroup_reordered(a, b, c: Int): (a + b) + c = b + (c + a) { by grind_using(["Int::add_comm", "Int::add_assoc"], []) }
+theorem regroup_unrelated(a, b, c: Int): (a + b) + c = b + (c + a) { by grind_using(["List::append_assoc", "Int::add_assoc", "List::append_nil", "Int::add_comm"], []) }
+theorem neg_add_succ_reordered(a: Int, k: Nat, ih: -(a + OfNat(k)) = -a + -OfNat(k)): -(a + OfNat(Succ(k))) = -a + NegSucc(k) {
+    by grind_using(["Int::ipred_negOfNat", "Int::add_ipred", "Int::neg_isucc", "Int::add_isucc"], [])
+}

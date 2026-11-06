@@ -107,7 +107,7 @@ fn a_wrong_law_is_refused() {
             le_of_not_lt := λ x y h => Rat::le_of_not_lt(h),
             not_lt_of_le := λ x y h => Rat::not_lt_of_le(h),
         }",
-        Refusal::Says("Not(Le(x, x))"),
+        Refusal::Says("Not(x <= x)"),
     );
     // `≤` is not `<`: `le_refl` at an expected `x < x` reads `<` into its
     // order slot, and no `StrictOrder` has `<` there.

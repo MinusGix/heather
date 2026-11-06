@@ -1,0 +1,713 @@
+// Sequences over an ordered field: convergence, the Cauchy condition, the
+// algebra and order of limits, and continuity carrying limits
+// (issues/real-completeness-interfaces.md; docs/sequences-and-completeness.md).
+//
+// Everything is stated once over a section's `K: OrderedField(≈, <, <=, +,
+// *)`, as in real_fn, so it reads at `Rat` and at `CReal` alike
+// (lib/_tests/std/analysis/sequence_tests.hthr). A sequence is a plain
+// `Nat → K`. Its predicates carry their moduli as data: a proof of
+// `Converges(xs, l)` is a function from a positive `ε` to an index `N` past
+// which every term is within `ε` of `l`, and that index is what a client
+// computes with, never an existence it cannot open.
+//
+// - `Converges(xs, l)`: each `ε > 0` has an `N` with `|xs(n) - l| <= ε` for
+//   every `n >= N`.
+// - `CauchySeq(xs)`: each `ε > 0` has an `N` with `|xs(m) - xs(n)| <= ε` for
+//   every `m, n >= N`.
+//
+// Nothing is decided, as in real_fn: a bound is `AbsLe`, the larger of two
+// indices is `Nat::max` (indices are naturals, which compare), and the
+// smaller of two positive tolerances is never taken; each part of a sum gets
+// its share of `ε` (`OrderedField::half`, `shrink`).
+//
+// Limits are unique up to `≈` and respect it; they add, negate, scale and
+// multiply, keep `≤`, and squeeze. A convergent sequence is Cauchy. A
+// uniformly continuous function carries a limit inside its domain to the
+// limit of the images (`UnifContOn::converges`), which is continuity read
+// through sequences.
+//
+// The converse of `Converges::cauchy` is the capability that separates the
+// carriers: every Cauchy sequence converges at `CReal` and not at `Rat`
+// (`CauchyComplete` below, and docs/sequences-and-completeness.md for the
+// other completeness notions it is kept apart from).
+
+import logic;
+import nat;
+import int;
+import list;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import big_operator;
+import ring;
+import omega;
+import linarith;
+import real_fn;
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+fn Converges(xs: Nat → K, l: K) → Type {
+    (e: K) → K.unit < e → ∃ N: Nat, (n: Nat) → Nat::Le(N, n) → AbsLe(xs(n) + K.inv(l), e)
+}
+
+fn CauchySeq(xs: Nat → K) → Type {
+    (e: K) → K.unit < e → ∃ N: Nat, (m, n: Nat) → Nat::Le(N, m) → Nat::Le(N, n) → AbsLe(xs(m) + K.inv(xs(n)), e)
+}
+
+// ---------------------------------------------------------------------------
+// Limits.
+
+theorem Converges::const(c: K): Converges(λ (n: Nat) => c, c) {
+    λ e pe => {
+        let z: (c + K.inv(c) ≈ K.unit) = ring;
+        Exists(Zero, λ n from => LocatedAddGroup::abs_le_zero(c + K.inv(c), e, z, StrictOrder::le_of_lt(K.unit, e, pe)))
+    }
+}
+
+// A limit moves along `≈`, termwise and at the limit.
+theorem Converges::respects(xs, ys: Nat → K, l, l2: K, hs: (n: Nat) → xs(n) ≈ ys(n), hl: l ≈ l2, h: Converges(xs, l)):
+    Converges(ys, l2)
+{
+    λ e pe => {
+        let a = h(e, pe);
+        Exists(a.witness, λ n from => {
+            let b = a.proof(n, from);
+            let s = hs(n);
+            LocatedAddGroup::abs_le_intro(ys(n) + K.inv(l2), e, linarith(b.left, s, hl), linarith(b.right, s, hl))
+        })
+    }
+}
+
+// A limit is unique: two limits are within every `2ε` of each other.
+theorem Converges::unique(xs: Nat → K, a, b: K, ha: Converges(xs, a), hb: Converges(xs, b)): a ≈ b {
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let w = K.multiplicative.unit + K.multiplicative.unit;
+    let pw: (K.unit <= w) = linarith(o);
+    let z: AbsLe(b + K.inv(a), K.unit) = OrderedField::abs_le_of_forall_pos(b + K.inv(a), K.unit, w, pw, λ e pe => {
+        let p = ha(e, pe);
+        let q = hb(e, pe);
+        let n = p.witness.max(q.witness);
+        let u = p.proof(n, p.witness.le_max_l(q.witness));
+        let v = q.proof(n, p.witness.le_max_r(q.witness));
+        let ul: (K.inv(e) <= xs(n) + K.inv(a)) = u.left;
+        let ur: (xs(n) + K.inv(a) <= e) = u.right;
+        let vl: (K.inv(e) <= xs(n) + K.inv(b)) = v.left;
+        let vr: (xs(n) + K.inv(b) <= e) = v.right;
+        LocatedAddGroup::abs_le_intro(b + K.inv(a), K.unit + e * w, linarith(ur, vl), linarith(ul, vr))
+    });
+    let zl: (K.inv(K.unit) <= b + K.inv(a)) = z.left;
+    let zr: (b + K.inv(a) <= K.unit) = z.right;
+    StrictOrder::le_antisymm(a, b, linarith(zl), linarith(zr))
+}
+
+theorem Converges::add(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Converges(ys, b)):
+    Converges(λ (n: Nat) => xs(n) + ys(n), a + b)
+{
+    λ e pe => {
+        let h = OrderedField::half(e);
+        let ph = OrderedField::half_pos(e, pe);
+        let hh = OrderedField::half_add(e);
+        let p = hx(h, ph);
+        let q = hy(h, ph);
+        let N = p.witness.max(q.witness);
+        Exists(N, λ n from => {
+            let u = p.proof(n, p.witness.le_trans(N, n, p.witness.le_max_l(q.witness), from));
+            let v = q.proof(n, q.witness.le_trans(N, n, p.witness.le_max_r(q.witness), from));
+            LocatedAddGroup::abs_le_sum2(xs(n) + K.inv(a), ys(n) + K.inv(b), (xs(n) + ys(n)) + K.inv(a + b), h, h, e, u, v, ring,
+                StrictOrder::le_of_same(h + h, e, hh))
+        })
+    }
+}
+
+theorem Converges::neg(xs: Nat → K, a: K, hx: Converges(xs, a)): Converges(λ (n: Nat) => K.inv(xs(n)), K.inv(a)) {
+    λ e pe => {
+        let p = hx(e, pe);
+        Exists(p.witness, λ n from => {
+            let u = p.proof(n, from);
+            let ul: (K.inv(e) <= xs(n) + K.inv(a)) = u.left;
+            let ur: (xs(n) + K.inv(a) <= e) = u.right;
+            LocatedAddGroup::abs_le_intro(K.inv(xs(n)) + K.inv(K.inv(a)), e, linarith(ur), linarith(ul))
+        })
+    }
+}
+
+theorem Converges::sub(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Converges(ys, b)):
+    Converges(λ (n: Nat) => xs(n) + K.inv(ys(n)), a + K.inv(b))
+{
+    Converges::add(xs, λ (n: Nat) => K.inv(ys(n)), a, K.inv(b), hx, Converges::neg(ys, b, hy))
+}
+
+// A constant multiple: `|c·x - c·a| <= (c² + 1)·|x - a|`, and the tolerance
+// is shrunk by `c² + 1`.
+theorem Converges::scale(c: K, xs: Nat → K, a: K, hx: Converges(xs, a)): Converges(λ (n: Nat) => c * xs(n), c * a) {
+    λ e pe => {
+        let B = c * c + K.multiplicative.unit;
+        let hc: AbsLe(c, B) = OrderedField::abs_le_sq_succ(c);
+        let s = OrderedField::shrink(B, e, LocatedAddGroup::abs_le_nonneg(c, B, hc), pe);
+        let p = hx(s.witness, s.proof.left);
+        Exists(p.witness, λ n from => {
+            let m: AbsLe(c * (xs(n) + K.inv(a)), B * s.witness) =
+                OrderedField::abs_le_mul(c, xs(n) + K.inv(a), B, s.witness, hc, p.proof(n, from));
+            LocatedAddGroup::abs_le_weaken(c * (xs(n) + K.inv(a)), c * xs(n) + K.inv(c * a), B * s.witness, e, m, ring, s.proof.right)
+        })
+    }
+}
+
+// A convergent sequence is eventually within 1 of its limit, so bounded
+// there by `a² + 2`.
+theorem Converges::eventually_bounded(xs: Nat → K, a: K, hx: Converges(xs, a)):
+    ∃ N: Nat, (n: Nat) → Nat::Le(N, n) → AbsLe(xs(n), (a * a + K.multiplicative.unit) + K.multiplicative.unit)
+{
+    let p = hx(K.multiplicative.unit, K.zero_lt_one);
+    Exists(p.witness, λ n from => {
+        let u: AbsLe(xs(n) + K.inv(a), K.multiplicative.unit) = p.proof(n, from);
+        let ha: AbsLe(a, a * a + K.multiplicative.unit) = OrderedField::abs_le_sq_succ(a);
+        LocatedAddGroup::abs_le_sum2(xs(n) + K.inv(a), a, xs(n), K.multiplicative.unit, a * a + K.multiplicative.unit,
+            (a * a + K.multiplicative.unit) + K.multiplicative.unit, u, ha, ring,
+            StrictOrder::le_of_same(K.multiplicative.unit + (a * a + K.multiplicative.unit), (a * a + K.multiplicative.unit) + K.multiplicative.unit, ring))
+    })
+}
+
+// The product: `x·y - a·b = x·(y - b) + b·(x - a)`, with `x` bounded by
+// `A` past the first index and `b` by `b² + 1`; each part gets half of `ε`.
+theorem Converges::mul(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Converges(ys, b)):
+    Converges(λ (n: Nat) => xs(n) * ys(n), a * b)
+{
+    λ e pe => {
+        let h = OrderedField::half(e);
+        let ph = OrderedField::half_pos(e, pe);
+        let hh = OrderedField::half_add(e);
+        let A = (a * a + K.multiplicative.unit) + K.multiplicative.unit;
+        let B = b * b + K.multiplicative.unit;
+        let hb: AbsLe(b, B) = OrderedField::abs_le_sq_succ(b);
+        let bx = Converges::eventually_bounded(xs, a, hx);
+        let sa = OrderedField::shrink(A, h, linarith(OrderedRing::sq_nonneg(a), K.zero_lt_one), ph);
+        let sb = OrderedField::shrink(B, h, LocatedAddGroup::abs_le_nonneg(b, B, hb), ph);
+        let q = hy(sa.witness, sa.proof.left);
+        let p = hx(sb.witness, sb.proof.left);
+        let N = bx.witness.max(q.witness).max(p.witness);
+        Exists(N, λ n from => {
+            let n1: Nat::Le(bx.witness.max(q.witness), n) = bx.witness.max(q.witness).le_trans(N, n, bx.witness.max(q.witness).le_max_l(p.witness), from);
+            let at_b: Nat::Le(bx.witness, n) = bx.witness.le_trans(bx.witness.max(q.witness), n, bx.witness.le_max_l(q.witness), n1);
+            let at_q: Nat::Le(q.witness, n) = q.witness.le_trans(bx.witness.max(q.witness), n, bx.witness.le_max_r(q.witness), n1);
+            let at_p: Nat::Le(p.witness, n) = p.witness.le_trans(N, n, bx.witness.max(q.witness).le_max_r(p.witness), from);
+            let u: AbsLe(xs(n) * (ys(n) + K.inv(b)), A * sa.witness) =
+                OrderedField::abs_le_mul(xs(n), ys(n) + K.inv(b), A, sa.witness, bx.proof(n, at_b), q.proof(n, at_q));
+            let v: AbsLe(b * (xs(n) + K.inv(a)), B * sb.witness) =
+                OrderedField::abs_le_mul(b, xs(n) + K.inv(a), B, sb.witness, hb, p.proof(n, at_p));
+            let ua: (A * sa.witness <= h) = sa.proof.right;
+            let vb: (B * sb.witness <= h) = sb.proof.right;
+            LocatedAddGroup::abs_le_sum2(xs(n) * (ys(n) + K.inv(b)), b * (xs(n) + K.inv(a)), xs(n) * ys(n) + K.inv(a * b),
+                A * sa.witness, B * sb.witness, e, u, v, ring, linarith(ua, vb, hh))
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Limits and the order.
+
+// Termwise `≤` passes to the limits: `a <= b + 2ε` for every `ε`.
+theorem Converges::le(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Converges(ys, b), h: (n: Nat) → xs(n) <= ys(n)): a <= b {
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let w = K.multiplicative.unit + K.multiplicative.unit;
+    let pw: (K.unit <= w) = linarith(o);
+    OrderedField::le_of_forall_pos(a, b, w, pw, λ e pe => {
+        let p = hx(e, pe);
+        let q = hy(e, pe);
+        let n = p.witness.max(q.witness);
+        let ul: (K.inv(e) <= xs(n) + K.inv(a)) = p.proof(n, p.witness.le_max_l(q.witness)).left;
+        let vr: (ys(n) + K.inv(b) <= e) = q.proof(n, p.witness.le_max_r(q.witness)).right;
+        let t: (xs(n) <= ys(n)) = h(n);
+        linarith(ul, vr, t)
+    })
+}
+
+// A sequence trapped between two with the same limit has that limit.
+theorem Converges::squeeze(xs, ys, zs: Nat → K, l: K, hx: Converges(xs, l), hz: Converges(zs, l),
+    lo: (n: Nat) → xs(n) <= ys(n), hi: (n: Nat) → ys(n) <= zs(n)): Converges(ys, l)
+{
+    λ e pe => {
+        let p = hx(e, pe);
+        let q = hz(e, pe);
+        let N = p.witness.max(q.witness);
+        Exists(N, λ n from => {
+            let ul: (K.inv(e) <= xs(n) + K.inv(l)) = p.proof(n, p.witness.le_trans(N, n, p.witness.le_max_l(q.witness), from)).left;
+            let vr: (zs(n) + K.inv(l) <= e) = q.proof(n, q.witness.le_trans(N, n, p.witness.le_max_r(q.witness), from)).right;
+            let a: (xs(n) <= ys(n)) = lo(n);
+            let b: (ys(n) <= zs(n)) = hi(n);
+            LocatedAddGroup::abs_le_intro(ys(n) + K.inv(l), e, linarith(ul, a), linarith(vr, b))
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cauchy sequences.
+
+// A convergent sequence is Cauchy: two late terms are each within `ε/2` of
+// the limit.
+theorem Converges::cauchy(xs: Nat → K, a: K, hx: Converges(xs, a)): CauchySeq(xs) {
+    λ e pe => {
+        let h = OrderedField::half(e);
+        let hh = OrderedField::half_add(e);
+        let p = hx(h, OrderedField::half_pos(e, pe));
+        Exists(p.witness, λ m n fm fk => {
+            let u = p.proof(m, fm);
+            let v = p.proof(n, fk);
+            let ul: (K.inv(h) <= xs(m) + K.inv(a)) = u.left;
+            let ur: (xs(m) + K.inv(a) <= h) = u.right;
+            let vl: (K.inv(h) <= xs(n) + K.inv(a)) = v.left;
+            let vr: (xs(n) + K.inv(a) <= h) = v.right;
+            LocatedAddGroup::abs_le_intro(xs(m) + K.inv(xs(n)), e, linarith(ul, vr, hh), linarith(ur, vl, hh))
+        })
+    }
+}
+
+// A Cauchy sequence converges to any point it keeps returning near: if
+// past every index some term is within every `ε` of `l`, every late term is
+// (within `ε/2` of that term, which is within `ε/2` of `l`).
+theorem CauchySeq::converges_of_cluster(xs: Nat → K, l: K, hc: CauchySeq(xs),
+    near: (e: K) → K.unit < e → (N: Nat) → ∃ k: Nat, Nat::Le(N, k) ∧ AbsLe(xs(k) + K.inv(l), e)): Converges(xs, l)
+{
+    λ e pe => {
+        let h = OrderedField::half(e);
+        let ph = OrderedField::half_pos(e, pe);
+        let hh = OrderedField::half_add(e);
+        let c = hc(h, ph);
+        Exists(c.witness, λ n from => {
+            let k = near(h, ph, c.witness);
+            let u = c.proof(n, k.witness, from, k.proof.left);
+            let v = k.proof.right;
+            let ul: (K.inv(h) <= xs(n) + K.inv(xs(k.witness))) = u.left;
+            let ur: (xs(n) + K.inv(xs(k.witness)) <= h) = u.right;
+            let vl: (K.inv(h) <= xs(k.witness) + K.inv(l)) = v.left;
+            let vr: (xs(k.witness) + K.inv(l) <= h) = v.right;
+            LocatedAddGroup::abs_le_intro(xs(n) + K.inv(l), e, linarith(ul, vl, hh), linarith(ur, vr, hh))
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Continuity through sequences.
+
+// A uniformly continuous function carries a limit inside its domain to the
+// limit of the images: `f`'s modulus at `ε` is the tolerance asked of the
+// sequence.
+theorem UnifContOn::converges(D: K → Type, f: K → K, xs: Nat → K, l: K, hf: UnifContOn(D, f),
+    dx: (n: Nat) → D(xs(n)), dl: D(l), hx: Converges(xs, l)): Converges(λ (n: Nat) => f(xs(n)), f(l))
+{
+    λ e pe => {
+        let m = hf(e, pe);
+        let p = hx(m.witness, m.proof.left);
+        Exists(p.witness, λ n from => m.proof.right(l, xs(n), dl, dx(n), p.proof(n, from)))
+    }
+}
+
+theorem LipschitzOn::converges(D: K → Type, f: K → K, L: K, xs: Nat → K, l: K, hf: LipschitzOn(D, f, L),
+    dx: (n: Nat) → D(xs(n)), dl: D(l), hx: Converges(xs, l)): Converges(λ (n: Nat) => f(xs(n)), f(l))
+{
+    UnifContOn::converges(D, f, xs, l, LipschitzOn::unif_cont(D, f, L, hf), dx, dl, hx)
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Cauchy completeness, as a capability.
+//
+// An ordered field is Cauchy complete when every Cauchy sequence, with its
+// modulus, converges to a limit given as data. The field is spelled out
+// (`CauchySeq` and `Converges` unfolded) because a class body cannot name
+// the section's predicates; `CauchyComplete::limit` and `::converges` read
+// it back in their terms. `CReal` inhabits it (real_complete.hthr, from
+// `CReal::complete`); `Rat` does not (the rational square-root sequence of
+// 2 is Cauchy). It is one of several completeness notions kept apart on
+// purpose (docs/sequences-and-completeness.md): it asks for no supremum and
+// no choice, since the modulus comes with the sequence.
+class CauchyComplete<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
+    add as +: A → A → A, mul as *: A → A → A)
+    extends OrderedField<A>(same, lt, le, add, mul)
+{
+    cauchy_limit: (xs: Nat → A) →
+        ((e: A) → unit < e → ∃ N: Nat, (m, n: Nat) → Nat::Le(N, m) → Nat::Le(N, n) →
+            inv(e) <= xs(m) + inv(xs(n)) ∧ xs(m) + inv(xs(n)) <= e) →
+        ∃ l: A, ((e: A) → unit < e → ∃ N: Nat, (n: Nat) → Nat::Le(N, n) → inv(e) <= xs(n) + inv(l) ∧ xs(n) + inv(l) <= e),
+}
+
+section<K: CauchyComplete(≈, <, <=, +, *)> {
+
+fn CauchyComplete::limit(xs: Nat → K, hc: CauchySeq(xs)) → K { K.cauchy_limit(xs, hc).witness }
+
+theorem CauchyComplete::converges(xs: Nat → K, hc: CauchySeq(xs)): Converges(xs, CauchyComplete::limit(xs, hc)) {
+    K.cauchy_limit(xs, hc).proof
+}
+
+// The limit is the one every convergent presentation names.
+theorem CauchyComplete::limit_unique(xs: Nat → K, hc: CauchySeq(xs), l: K, hl: Converges(xs, l)): CauchyComplete::limit(xs, hc) ≈ l {
+    Converges::unique(xs, CauchyComplete::limit(xs, hc), l, CauchyComplete::converges(xs, hc), hl)
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Powers below one shrink to zero, and contractions.
+//
+// A contraction is a map with `|f(y) - f(x)| <= c·|y - x|` for a fixed
+// `0 <= c < 1`, stated, as `LipschitzOn` is, over a bound `h` of `|y - x|`.
+// Its orbit `x, f(x), f(f(x)), …` moves by at most `cⁿ·D` at step `n`, where
+// `D` bounds the first step, so its tail past `n` stays within `cⁿ·D/(1 -
+// c)`: by induction on the tail's length `k`, the exact bound is
+// `cⁿ·D·(1 - cᵏ)/(1 - c)`, whose step is the identity `cⁿ⁺ᵏ·D + cⁿ·D·(1 -
+// cᵏ)/(1 - c) = cⁿ·D·(1 - cᵏ⁺¹)/(1 - c)` and needs no geometric sum.
+// `cⁿ` falls below any `ε` by Bernoulli's inequality, `cⁿ·(1 + n·(1 - c))
+// <= 1`, and the Archimedean property. So the orbit is Cauchy, and in a
+// Cauchy-complete field its limit is a fixed point, the only one
+// (`Contraction::fixed_point`, `::fixed_unique`).
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+// The power's two equations, as facts `linarith` can read.
+theorem OrderedField::npow_zero(c: K): OrderedField::npow(c, Zero) ≈ K.multiplicative.unit {
+    K.rel_refl(K.multiplicative.unit)
+}
+
+theorem OrderedField::npow_succ(c: K, n: Nat): OrderedField::npow(c, Succ(n)) ≈ OrderedField::npow(c, n) * c {
+    K.rel_refl(OrderedField::npow(c, n) * c)
+}
+
+theorem OrderedField::npow_nonneg(c: K, hc: K.unit <= c, n: Nat): K.unit <= OrderedField::npow(c, n) {
+    match n {
+        Zero => {
+            let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+            StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o)
+        },
+        Succ(m) => OrderedSemiring::mul_nonneg(OrderedField::npow(c, m), c, OrderedField::npow_nonneg(c, hc, m), hc),
+    }
+}
+
+theorem OrderedField::npow_le_one(c: K, hc: K.unit <= c, h1: c <= K.multiplicative.unit, n: Nat): OrderedField::npow(c, n) <= K.multiplicative.unit {
+    match n {
+        Zero => StrictOrder::le_refl(K.multiplicative.unit),
+        Succ(m) => {
+            let p = OrderedField::npow(c, m);
+            let le: (p * c <= K.multiplicative.unit * K.multiplicative.unit) = OrderedSemiring::mul_le_mul(p, K.multiplicative.unit, c, K.multiplicative.unit,
+                OrderedField::npow_le_one(c, hc, h1, m), h1, OrderedField::npow_nonneg(c, hc, m), hc);
+            let one: (K.multiplicative.unit * K.multiplicative.unit ≈ K.multiplicative.unit) = ring;
+            let ps = OrderedField::npow_succ(c, m);
+            linarith(le, one, ps)
+        },
+    }
+}
+
+theorem OrderedField::npow_add(c: K, n, k: Nat): OrderedField::npow(c, n.add(k)) ≈ OrderedField::npow(c, n) * OrderedField::npow(c, k) {
+    match k {
+        Zero => {
+            let r: (OrderedField::npow(c, n) ≈ OrderedField::npow(c, n) * K.multiplicative.unit) = ring;
+            r
+        },
+        Succ(j) => {
+            let ih: (OrderedField::npow(c, n.add(j)) ≈ OrderedField::npow(c, n) * OrderedField::npow(c, j)) = OrderedField::npow_add(c, n, j);
+            let s: (OrderedField::npow(c, n.add(j)) * c ≈ (OrderedField::npow(c, n) * OrderedField::npow(c, j)) * c) =
+                OrderedSemiring::mul_respects(OrderedField::npow(c, n.add(j)), OrderedField::npow(c, n) * OrderedField::npow(c, j), c, c, ih, K.rel_refl(c));
+            let r: (OrderedField::npow(c, n.add(j)) * c ≈ OrderedField::npow(c, n) * (OrderedField::npow(c, j) * c)) = ring(s);
+            r
+        },
+    }
+}
+
+// Powers below one fall: `c^n <= c^N` once `n >= N`.
+theorem OrderedField::npow_antitone(c: K, hc: K.unit <= c, h1: c <= K.multiplicative.unit, N, n: Nat, h: Nat::Le(N, n)):
+    OrderedField::npow(c, n) <= OrderedField::npow(c, N)
+{
+    let k = n.sub(N);
+    let a: (OrderedField::npow(c, N.add(k)) ≈ OrderedField::npow(c, N) * OrderedField::npow(c, k)) = OrderedField::npow_add(c, N, k);
+    let b: (OrderedField::npow(c, N) * OrderedField::npow(c, k) <= OrderedField::npow(c, N) * K.multiplicative.unit) =
+        OrderedSemiring::mul_le_mono_l(OrderedField::npow(c, k), K.multiplicative.unit, OrderedField::npow(c, N),
+            OrderedField::npow_le_one(c, hc, h1, k), OrderedField::npow_nonneg(c, hc, N));
+    let one: (OrderedField::npow(c, N) * K.multiplicative.unit ≈ OrderedField::npow(c, N)) = ring;
+    let at: (OrderedField::npow(c, N.add(k)) <= OrderedField::npow(c, N)) = linarith(a, b, one);
+    rewrite(sym(N.le_add(n, h)), at)
+}
+
+// Bernoulli's inequality, divided through: `cⁿ·(1 + n·(1 - c)) <= 1`.
+theorem OrderedField::npow_bernoulli(c: K, hc: K.unit <= c, h1: c <= K.multiplicative.unit, n: Nat):
+    OrderedField::npow(c, n) * (K.multiplicative.unit + K.of_nat(n) * (K.multiplicative.unit + K.inv(c))) <= K.multiplicative.unit
+{
+    match n {
+        Zero => {
+            let z: (K.of_nat(Zero) ≈ K.unit) = K.of_nat_zero;
+            let q = K.multiplicative.unit + K.inv(c);
+            let zq: (K.of_nat(Zero) * q ≈ K.unit * q) = OrderedSemiring::mul_respects(K.of_nat(Zero), K.unit, q, q, z, K.rel_refl(q));
+            let r: (K.multiplicative.unit * (K.multiplicative.unit + K.of_nat(Zero) * q) ≈ K.multiplicative.unit + K.of_nat(Zero) * q) = ring;
+            let u: (K.unit * q ≈ K.unit) = ring;
+            let g: (K.multiplicative.unit * (K.multiplicative.unit + K.of_nat(Zero) * q) <= K.multiplicative.unit) = linarith(zq, r, u);
+            g
+        },
+        Succ(m) => {
+            let t = OrderedField::npow(c, m);
+            let q = K.multiplicative.unit + K.inv(c);
+            let o = K.of_nat(m);
+            let o1 = K.of_nat(Succ(m));
+            let ih: (t * (K.multiplicative.unit + o * q) <= K.multiplicative.unit) = OrderedField::npow_bernoulli(c, hc, h1, m);
+            let pt: (K.unit <= t) = OrderedField::npow_nonneg(c, hc, m);
+            let t1: (t <= K.multiplicative.unit) = OrderedField::npow_le_one(c, hc, h1, m);
+            let pq: (K.unit <= q) = linarith(h1);
+            let eq: ((t * c * q) * o1 ≈ (t * c * q) * (o + K.multiplicative.unit)) =
+                OrderedSemiring::mul_respects(t * c * q, t * c * q, o1, o + K.multiplicative.unit, K.rel_refl(t * c * q), K.of_nat_succ(m));
+            let p1: (K.unit <= c * (K.multiplicative.unit + K.inv(t * (K.multiplicative.unit + o * q)))) =
+                OrderedSemiring::mul_nonneg(c, K.multiplicative.unit + K.inv(t * (K.multiplicative.unit + o * q)), hc, linarith(ih));
+            let p2: (K.unit <= (c * q) * (K.multiplicative.unit + K.inv(t))) =
+                OrderedSemiring::mul_nonneg(c * q, K.multiplicative.unit + K.inv(t), OrderedSemiring::mul_nonneg(c, q, hc, pq), linarith(t1));
+            let p3: (K.unit <= q * q) = OrderedRing::sq_nonneg(q);
+            let goal: ((t * c) * (K.multiplicative.unit + o1 * q) <= K.multiplicative.unit) = linarith(eq, p1, p2, p3);
+            goal
+        },
+    }
+}
+
+// `cⁿ` falls below any `ε > 0` for `0 <= c < 1`: past an `N` with `N·(1 -
+// c)·ε > 1`, Bernoulli gives `cᴺ·N·(1 - c) <= 1 < ε·N·(1 - c)`.
+theorem OrderedField::npow_small_close(c: K, hc: K.unit <= c, h1: c < K.multiplicative.unit, e: K, pe: K.unit < e,
+    pqe: K.unit < (K.multiplicative.unit + K.inv(c)) * e, N: Nat,
+    big: K.recip((K.multiplicative.unit + K.inv(c)) * e, Inr(pqe)) < K.of_nat(N)): OrderedField::npow(c, N) <= e
+{
+    let q = K.multiplicative.unit + K.inv(c);
+    let r = K.recip(q * e, Inr(pqe));
+    let o = K.of_nat(N);
+    let rq: ((q * e) * r ≈ K.multiplicative.unit) = K.mul_recip(q * e, Inr(pqe));
+    let m: ((q * e) * r < (q * e) * o) = OrderedSemiring::mul_lt_mono_l(r, o, q * e, big, pqe);
+    let t = OrderedField::npow(c, N);
+    let b: (t * (K.multiplicative.unit + o * q) <= K.multiplicative.unit) =
+        OrderedField::npow_bernoulli(c, hc, StrictOrder::le_of_lt(c, K.multiplicative.unit, h1), N);
+    let pt: (K.unit <= t) = OrderedField::npow_nonneg(c, hc, N);
+    let poq: (K.unit < e * (o * q)) = linarith(m, rq);
+    let z: (K.unit < o * q) = OrderedSemiring::pos_of_mul_pos_nonneg(e, o * q, StrictOrder::le_of_lt(K.unit, e, pe), poq);
+    let tz: (t * (o * q) <= e * (o * q)) = linarith(b, pt, m, rq);
+    OrderedSemiring::mul_le_cancel_pos_r(t, e, o * q, z, tz)
+}
+
+theorem OrderedField::npow_small(c: K, hc: K.unit <= c, h1: c < K.multiplicative.unit, e: K, pe: K.unit < e):
+    ∃ N: Nat, (n: Nat) → Nat::Le(N, n) → OrderedField::npow(c, n) <= e
+{
+    let pq: (K.unit < K.multiplicative.unit + K.inv(c)) = linarith(h1);
+    let pqe: (K.unit < (K.multiplicative.unit + K.inv(c)) * e) = OrderedSemiring::mul_pos(K.multiplicative.unit + K.inv(c), e, pq, pe);
+    let a = K.archimedean(K.recip((K.multiplicative.unit + K.inv(c)) * e, Inr(pqe)));
+    let at: (OrderedField::npow(c, a.witness) <= e) = OrderedField::npow_small_close(c, hc, h1, e, pe, pqe, a.witness, a.proof);
+    Exists(a.witness, λ n from => PseudoOrder::le_trans(OrderedField::npow(c, n), OrderedField::npow(c, a.witness), e,
+        OrderedField::npow_antitone(c, hc, StrictOrder::le_of_lt(c, K.multiplicative.unit, h1), a.witness, n, from), at))
+}
+
+fn Contraction(f: K → K, c: K) → Type {
+    K.unit <= c ∧ (c < K.multiplicative.unit ∧ ((x, y, h: K) → AbsLe(y + K.inv(x), h) → AbsLe(f(y) + K.inv(f(x)), c * h)))
+}
+
+fn Contraction::orbit(f: K → K, x: K, n: Nat) → K {
+    match n { Zero => x, Succ(m) => f(Contraction::orbit(f, x, m)) }
+}
+
+// An affine map `x ↦ c·x + d` with `0 <= c < 1` is a contraction.
+theorem Contraction::affine(c, d: K, hc: K.unit <= c, h1: c < K.multiplicative.unit): Contraction(λ (x: K) => c * x + d, c) {
+    And(hc, And(h1, λ x y h hxy => {
+        let pc: AbsLe(c, c) = LocatedAddGroup::abs_le_intro(c, c, linarith(hc), StrictOrder::le_refl(c));
+        LocatedAddGroup::abs_le_weaken(c * (y + K.inv(x)), (c * y + d) + K.inv(c * x + d), c * h, c * h,
+            OrderedField::abs_le_mul(c, y + K.inv(x), c, h, pc, hxy), ring, StrictOrder::le_refl(c * h))
+    }))
+}
+
+// The `n`-th step of the orbit is within `cⁿ·D`.
+theorem Contraction::step(f: K → K, c: K, hf: Contraction(f, c), x, D: K, hD: AbsLe(f(x) + K.inv(x), D), n: Nat):
+    AbsLe(Contraction::orbit(f, x, Succ(n)) + K.inv(Contraction::orbit(f, x, n)), OrderedField::npow(c, n) * D)
+{
+    match n {
+        Zero => {
+            let r: (D ≈ K.multiplicative.unit * D) = ring;
+            LocatedAddGroup::abs_le_weaken(f(x) + K.inv(x), f(x) + K.inv(x), D, K.multiplicative.unit * D, hD, K.rel_refl(f(x) + K.inv(x)),
+                StrictOrder::le_of_same(D, K.multiplicative.unit * D, r))
+        },
+        Succ(m) => {
+            let a = Contraction::orbit(f, x, m);
+            let b = Contraction::orbit(f, x, Succ(m));
+            let ih: AbsLe(b + K.inv(a), OrderedField::npow(c, m) * D) = Contraction::step(f, c, hf, x, D, hD, m);
+            let k: AbsLe(f(b) + K.inv(f(a)), c * (OrderedField::npow(c, m) * D)) = hf.right.right(a, b, OrderedField::npow(c, m) * D, ih);
+            let r: (c * (OrderedField::npow(c, m) * D) ≈ (OrderedField::npow(c, m) * c) * D) = ring;
+            LocatedAddGroup::abs_le_weaken(f(b) + K.inv(f(a)), f(b) + K.inv(f(a)), c * (OrderedField::npow(c, m) * D), (OrderedField::npow(c, m) * c) * D,
+                k, K.rel_refl(f(b) + K.inv(f(a))), StrictOrder::le_of_same(c * (OrderedField::npow(c, m) * D), (OrderedField::npow(c, m) * c) * D, r))
+        },
+    }
+}
+
+// The orbit's tail past `n`, `k` steps long, is within `cⁿ·D·(1 - cᵏ)·R`,
+// for `R` the reciprocal of `1 - c`.
+theorem Contraction::tail(f: K → K, c: K, hf: Contraction(f, c), x, D: K, hD: AbsLe(f(x) + K.inv(x), D),
+    R: K, hR: (K.multiplicative.unit + K.inv(c)) * R ≈ K.multiplicative.unit, n, k: Nat):
+    AbsLe(Contraction::orbit(f, x, n.add(k)) + K.inv(Contraction::orbit(f, x, n)),
+        OrderedField::npow(c, n) * D * ((K.multiplicative.unit + K.inv(OrderedField::npow(c, k))) * R))
+{
+    match k {
+        Zero => {
+            let a = Contraction::orbit(f, x, n);
+            let z: (a + K.inv(a) ≈ K.unit) = ring;
+            let zb: (K.unit ≈ OrderedField::npow(c, n) * D * ((K.multiplicative.unit + K.inv(K.multiplicative.unit)) * R)) = ring;
+            LocatedAddGroup::abs_le_zero(a + K.inv(a), OrderedField::npow(c, n) * D * ((K.multiplicative.unit + K.inv(K.multiplicative.unit)) * R), z,
+                StrictOrder::le_of_same(K.unit, OrderedField::npow(c, n) * D * ((K.multiplicative.unit + K.inv(K.multiplicative.unit)) * R), zb))
+        },
+        Succ(j) => {
+            let cn = OrderedField::npow(c, n);
+            let cj = OrderedField::npow(c, j);
+            let a = Contraction::orbit(f, x, n);
+            let b = Contraction::orbit(f, x, n.add(j));
+            let s: AbsLe(f(b) + K.inv(b), OrderedField::npow(c, n.add(j)) * D) = Contraction::step(f, c, hf, x, D, hD, n.add(j));
+            let ih: AbsLe(b + K.inv(a), cn * D * ((K.multiplicative.unit + K.inv(cj)) * R)) = Contraction::tail(f, c, hf, x, D, hD, R, hR, n, j);
+            let pa: (OrderedField::npow(c, n.add(j)) * D ≈ (cn * cj) * D) =
+                OrderedSemiring::mul_respects(OrderedField::npow(c, n.add(j)), cn * cj, D, D, OrderedField::npow_add(c, n, j), K.rel_refl(D));
+            let h3: ((cn * cj * D) * ((K.multiplicative.unit + K.inv(c)) * R) ≈ (cn * cj * D) * K.multiplicative.unit) =
+                OrderedSemiring::mul_respects(cn * cj * D, cn * cj * D, (K.multiplicative.unit + K.inv(c)) * R, K.multiplicative.unit, K.rel_refl(cn * cj * D), hR);
+            let le: (OrderedField::npow(c, n.add(j)) * D + cn * D * ((K.multiplicative.unit + K.inv(cj)) * R)
+                <= cn * D * ((K.multiplicative.unit + K.inv(cj * c)) * R)) = linarith(pa, h3);
+            LocatedAddGroup::abs_le_sum2(f(b) + K.inv(b), b + K.inv(a), f(b) + K.inv(a), OrderedField::npow(c, n.add(j)) * D,
+                cn * D * ((K.multiplicative.unit + K.inv(cj)) * R), cn * D * ((K.multiplicative.unit + K.inv(cj * c)) * R), s, ih, ring, le)
+        },
+    }
+}
+
+// Every later point of the orbit is within `cⁿ·D·R` of the `n`-th.
+theorem Contraction::close(f: K → K, c: K, hf: Contraction(f, c), x, D: K, hD: AbsLe(f(x) + K.inv(x), D),
+    R: K, hR: (K.multiplicative.unit + K.inv(c)) * R ≈ K.multiplicative.unit, pR: K.unit <= R, n, m: Nat, h: Nat::Le(n, m)):
+    AbsLe(Contraction::orbit(f, x, m) + K.inv(Contraction::orbit(f, x, n)), OrderedField::npow(c, n) * D * R)
+{
+    let k = m.sub(n);
+    let cn = OrderedField::npow(c, n);
+    let ck = OrderedField::npow(c, k);
+    let t: AbsLe(Contraction::orbit(f, x, n.add(k)) + K.inv(Contraction::orbit(f, x, n)), cn * D * ((K.multiplicative.unit + K.inv(ck)) * R)) =
+        Contraction::tail(f, c, hf, x, D, hD, R, hR, n, k);
+    let pD: (K.unit <= D) = LocatedAddGroup::abs_le_nonneg(f(x) + K.inv(x), D, hD);
+    let pcn: (K.unit <= cn) = OrderedField::npow_nonneg(c, hf.left, n);
+    let pck: (K.unit <= ck) = OrderedField::npow_nonneg(c, hf.left, k);
+    let prod: (K.unit <= ((cn * D) * ck) * R) = OrderedSemiring::mul_nonneg((cn * D) * ck, R,
+        OrderedSemiring::mul_nonneg(cn * D, ck, OrderedSemiring::mul_nonneg(cn, D, pcn, pD), pck), pR);
+    let at: AbsLe(Contraction::orbit(f, x, n.add(k)) + K.inv(Contraction::orbit(f, x, n)), cn * D * R) =
+        LocatedAddGroup::abs_le_weaken(Contraction::orbit(f, x, n.add(k)) + K.inv(Contraction::orbit(f, x, n)),
+            Contraction::orbit(f, x, n.add(k)) + K.inv(Contraction::orbit(f, x, n)), cn * D * ((K.multiplicative.unit + K.inv(ck)) * R), cn * D * R, t,
+            K.rel_refl(Contraction::orbit(f, x, n.add(k)) + K.inv(Contraction::orbit(f, x, n))), linarith(prod));
+    rewrite(sym(n.le_add(m, h)), at)
+}
+
+// The orbit is Cauchy: two points past `N` are each within `cᴺ·D·R` of the
+// `N`-th, and `cᴺ·D·R <= ε/2` once `cᴺ <= e2` with `D·R·e2 <= ε/2`. The
+// estimate is a theorem of its own over plain parameters, so the kernel
+// never normalises the chained witnesses that produce them
+// (docs/proof-patterns.md, `*_close` helpers).
+theorem Contraction::cauchy_close(f: K → K, c: K, hf: Contraction(f, c), x, D: K, hD: AbsLe(f(x) + K.inv(x), D),
+    R: K, hR: (K.multiplicative.unit + K.inv(c)) * R ≈ K.multiplicative.unit, pR: K.unit <= R,
+    e, h, e2: K, hh: h + h ≈ e, sb: (D * R) * e2 <= h, N: Nat, le: OrderedField::npow(c, N) <= e2, m, n: Nat, fm: Nat::Le(N, m), fk: Nat::Le(N, n)):
+    AbsLe(Contraction::orbit(f, x, m) + K.inv(Contraction::orbit(f, x, n)), e)
+{
+    let cN = OrderedField::npow(c, N);
+    let pD: (K.unit <= D) = LocatedAddGroup::abs_le_nonneg(f(x) + K.inv(x), D, hD);
+    let lb: (cN * (D * R) <= e2 * (D * R)) = OrderedSemiring::mul_le_mono_r(cN, e2, D * R, le, OrderedSemiring::mul_nonneg(D, R, pD, pR));
+    let a: AbsLe(Contraction::orbit(f, x, m) + K.inv(Contraction::orbit(f, x, N)), cN * D * R) = Contraction::close(f, c, hf, x, D, hD, R, hR, pR, N, m, fm);
+    let b: AbsLe(Contraction::orbit(f, x, n) + K.inv(Contraction::orbit(f, x, N)), cN * D * R) = Contraction::close(f, c, hf, x, D, hD, R, hR, pR, N, n, fk);
+    let al: (K.inv(cN * D * R) <= Contraction::orbit(f, x, m) + K.inv(Contraction::orbit(f, x, N))) = a.left;
+    let ar: (Contraction::orbit(f, x, m) + K.inv(Contraction::orbit(f, x, N)) <= cN * D * R) = a.right;
+    let bl: (K.inv(cN * D * R) <= Contraction::orbit(f, x, n) + K.inv(Contraction::orbit(f, x, N))) = b.left;
+    let br: (Contraction::orbit(f, x, n) + K.inv(Contraction::orbit(f, x, N)) <= cN * D * R) = b.right;
+    LocatedAddGroup::abs_le_intro(Contraction::orbit(f, x, m) + K.inv(Contraction::orbit(f, x, n)), e,
+        linarith(al, br, lb, sb, hh), linarith(ar, bl, lb, sb, hh))
+}
+
+theorem Contraction::cauchy(f: K → K, c: K, hf: Contraction(f, c), x: K): CauchySeq(λ (n: Nat) => Contraction::orbit(f, x, n)) {
+    let D = (f(x) + K.inv(x)) * (f(x) + K.inv(x)) + K.multiplicative.unit;
+    let hD: AbsLe(f(x) + K.inv(x), D) = OrderedField::abs_le_sq_succ(f(x) + K.inv(x));
+    let pD: (K.unit <= D) = LocatedAddGroup::abs_le_nonneg(f(x) + K.inv(x), D, hD);
+    let pq: (K.unit < K.multiplicative.unit + K.inv(c)) = linarith(hf.right.left);
+    let R = K.recip(K.multiplicative.unit + K.inv(c), Inr(pq));
+    let hR: ((K.multiplicative.unit + K.inv(c)) * R ≈ K.multiplicative.unit) = K.mul_recip(K.multiplicative.unit + K.inv(c), Inr(pq));
+    let pR: (K.unit <= R) = StrictOrder::le_of_lt(K.unit, R, OrderedField::recip_pos(K.multiplicative.unit + K.inv(c), Inr(pq), pq));
+    λ e pe => {
+        let s = OrderedField::shrink(D * R, OrderedField::half(e), OrderedSemiring::mul_nonneg(D, R, pD, pR), OrderedField::half_pos(e, pe));
+        let small = OrderedField::npow_small(c, hf.left, hf.right.left, s.witness, s.proof.left);
+        Exists(small.witness, λ m n fm fk => Contraction::cauchy_close(f, c, hf, x, D, hD, R, hR, pR, e, OrderedField::half(e), s.witness,
+            OrderedField::half_add(e), s.proof.right, small.witness, small.proof(small.witness, small.witness.le_refl()), m, n, fm, fk))
+    }
+}
+
+// A contraction has at most one fixed point: their distance `z` is within
+// `cⁿ` of any bound on it, for every `n`.
+theorem Contraction::shrinks(f: K → K, c: K, hf: Contraction(f, c), p, q: K, hp: f(p) ≈ p, hq: f(q) ≈ q, b: K,
+    hb: AbsLe(q + K.inv(p), b), n: Nat): AbsLe(q + K.inv(p), OrderedField::npow(c, n) * b)
+{
+    match n {
+        Zero => {
+            let r: (b ≈ K.multiplicative.unit * b) = ring;
+            LocatedAddGroup::abs_le_weaken(q + K.inv(p), q + K.inv(p), b, K.multiplicative.unit * b, hb, K.rel_refl(q + K.inv(p)),
+                StrictOrder::le_of_same(b, K.multiplicative.unit * b, r))
+        },
+        Succ(m) => {
+            let ih: AbsLe(q + K.inv(p), OrderedField::npow(c, m) * b) = Contraction::shrinks(f, c, hf, p, q, hp, hq, b, hb, m);
+            let k: AbsLe(f(q) + K.inv(f(p)), c * (OrderedField::npow(c, m) * b)) = hf.right.right(p, q, OrderedField::npow(c, m) * b, ih);
+            let r: (c * (OrderedField::npow(c, m) * b) ≈ (OrderedField::npow(c, m) * c) * b) = ring;
+            LocatedAddGroup::abs_le_weaken(f(q) + K.inv(f(p)), q + K.inv(p), c * (OrderedField::npow(c, m) * b), (OrderedField::npow(c, m) * c) * b,
+                k, linarith(hp, hq), StrictOrder::le_of_same(c * (OrderedField::npow(c, m) * b), (OrderedField::npow(c, m) * c) * b, r))
+        },
+    }
+}
+
+theorem Contraction::fixed_unique_close(f: K → K, c: K, hf: Contraction(f, c), p, q: K, hp: f(p) ≈ p, hq: f(q) ≈ q, b: K,
+    hb: AbsLe(q + K.inv(p), b), pb: K.unit <= b, e, e2: K, sb: b * e2 <= e, N: Nat, le: OrderedField::npow(c, N) <= e2):
+    AbsLe(q + K.inv(p), K.unit + e * K.multiplicative.unit)
+{
+    let cN = OrderedField::npow(c, N);
+    let lb: (cN * b <= e2 * b) = OrderedSemiring::mul_le_mono_r(cN, e2, b, le, pb);
+    let t: AbsLe(q + K.inv(p), cN * b) = Contraction::shrinks(f, c, hf, p, q, hp, hq, b, hb, N);
+    let tl: (K.inv(cN * b) <= q + K.inv(p)) = t.left;
+    let tr: (q + K.inv(p) <= cN * b) = t.right;
+    LocatedAddGroup::abs_le_intro(q + K.inv(p), K.unit + e * K.multiplicative.unit, linarith(tl, lb, sb), linarith(tr, lb, sb))
+}
+
+theorem Contraction::fixed_unique(f: K → K, c: K, hf: Contraction(f, c), p, q: K, hp: f(p) ≈ p, hq: f(q) ≈ q): p ≈ q {
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let b = (q + K.inv(p)) * (q + K.inv(p)) + K.multiplicative.unit;
+    let hb: AbsLe(q + K.inv(p), b) = OrderedField::abs_le_sq_succ(q + K.inv(p));
+    let pb: (K.unit <= b) = LocatedAddGroup::abs_le_nonneg(q + K.inv(p), b, hb);
+    let z: AbsLe(q + K.inv(p), K.unit) = OrderedField::abs_le_of_forall_pos(q + K.inv(p), K.unit, K.multiplicative.unit,
+        StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o), λ e pe => {
+            let s = OrderedField::shrink(b, e, pb, pe);
+            let small = OrderedField::npow_small(c, hf.left, hf.right.left, s.witness, s.proof.left);
+            Contraction::fixed_unique_close(f, c, hf, p, q, hp, hq, b, hb, pb, e, s.witness, s.proof.right, small.witness,
+                small.proof(small.witness, small.witness.le_refl()))
+        });
+    let zl: (K.inv(K.unit) <= q + K.inv(p)) = z.left;
+    let zr: (q + K.inv(p) <= K.unit) = z.right;
+    StrictOrder::le_antisymm(p, q, linarith(zl), linarith(zr))
+}
+
+}
+
+// The contraction mapping theorem: in a Cauchy-complete field a contraction
+// has a fixed point, the limit of every orbit.
+section<K: CauchyComplete(≈, <, <=, +, *)> {
+
+theorem Contraction::fixed_point(f: K → K, c: K, hf: Contraction(f, c), x: K):
+    ∃ p: K, f(p) ≈ p ∧ Converges(λ (n: Nat) => Contraction::orbit(f, x, n), p)
+{
+    let cs = Contraction::cauchy(f, c, hf, x);
+    let l = CauchyComplete::limit(λ (n: Nat) => Contraction::orbit(f, x, n), cs);
+    let hl: Converges(λ (n: Nat) => Contraction::orbit(f, x, n), l) = CauchyComplete::converges(λ (n: Nat) => Contraction::orbit(f, x, n), cs);
+    let images: Converges(λ (n: Nat) => f(Contraction::orbit(f, x, n)), f(l)) = λ e pe => {
+        let s = OrderedField::shrink(c, e, hf.left, pe);
+        let p = hl(s.witness, s.proof.left);
+        Exists(p.witness, λ n from => {
+            let k: AbsLe(f(Contraction::orbit(f, x, n)) + K.inv(f(l)), c * s.witness) = hf.right.right(l, Contraction::orbit(f, x, n), s.witness, p.proof(n, from));
+            LocatedAddGroup::abs_le_weaken(f(Contraction::orbit(f, x, n)) + K.inv(f(l)), f(Contraction::orbit(f, x, n)) + K.inv(f(l)), c * s.witness, e,
+                k, K.rel_refl(f(Contraction::orbit(f, x, n)) + K.inv(f(l))), s.proof.right)
+        })
+    };
+    let shifted: Converges(λ (n: Nat) => f(Contraction::orbit(f, x, n)), l) = λ e pe => {
+        let p = hl(e, pe);
+        Exists(p.witness, λ n from => p.proof(Succ(n), p.witness.le_succ_r(n, from)))
+    };
+    Exists(l, And(Converges::unique(λ (n: Nat) => f(Contraction::orbit(f, x, n)), f(l), l, images, shifted), hl))
+}
+
+}

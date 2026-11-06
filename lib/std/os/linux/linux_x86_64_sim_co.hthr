@@ -1,0 +1,361 @@
+// The machine meets a coinductive tree (issues/linux-sim-divergence.md;
+// docs/kernel-coinduction-design.md §6.1).
+//
+// `Sim` (`linux_x86_64_sim`) is partial correctness: a tree cut at every
+// fuel along a run, such as a loop that goes round silently forever, is
+// simulated by any machine, one that exits included. So its converse
+// (`sim_run_of`) stops where the tree is cut. `LinuxSimCo(t)(s)` relates a
+// coinductive tree, which is never cut, to the machine, one node at a time:
+// the machine steps to the exit a return asks, or to the syscall a call
+// asks and from every way Linux may answer and resume it the relation holds
+// again, or it takes at least one step for a silent step of the tree. Like
+// `Eutt`, each node may first drop finitely many of the tree's silent steps
+// for free (`CoTree::after`), and the machine's steps between nodes are
+// finite (`LinuxSteps`). What it rules out is the tree going round silently
+// forever while the machine stands still: every silent step past the
+// finitely many dropped ones costs the machine a step.
+//
+// It is `Sim` at every depth (`LinuxSimCo::sim_program`), and its converse
+// is exact: every run of the machine, with answers Linux may give, is the
+// events of a whole trace the tree produces (`LinuxSimCo::run_produced`).
+// A machine that simulates a tree that never returns has no run at all
+// (`LinuxSimCo::spin_no_run`): divergence meets divergence.
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_determinism;
+import linux_x86_64_sim;
+import linux_trees;
+import itree;
+import itree_trace;
+import coitree;
+import coitree_eutt;
+import coitree_bridge;
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// One way Linux may answer `c` and resume: the answer, as it may give it,
+// what it leaves in a failed call's buffer, RCX and R11.
+record LinuxResumption(c: LinuxCmd<Nat>) {
+    a: c.Resp(),
+    answers: c.Answers(a),
+    junk: List<BitVec(8)>,
+    leaves: LinuxLeaves(c, a, junk),
+    rcx: BitVec(64),
+    r11: BitVec(64),
+}
+
+codata LinuxSimCo<M>(io: LinuxIo<M>): (t: CoTree<BitVec(64)>(Events::linux())) → (s: MachineState<M>) → Type {
+    SimExits(drop: Nat, status: BitVec(64), ht: CoTree::after(Events::linux(), drop, t) = ORet(status),
+        at: MachineState<M>, steps: LinuxSteps(io, s, at), syscall: LinuxSyscallAt(io, at), exits: LinuxExits(at, status)),
+    SimSteps(drop: Nat, t2: CoTree<BitVec(64)>(Events::linux()), ht: CoTree::after(Events::linux(), drop, t) = OTau(t2),
+        s2: MachineState<M>, plus: LinuxPlus(io, s, s2), next: LinuxSimCo<M>(io, t2, s2)),
+    SimCalls(drop: Nat, c: LinuxCmd<Nat>, k: c.Resp() → CoTree<BitVec(64)>(Events::linux()),
+        ht: CoTree::after(Events::linux(), drop, t) = OVis(c, k),
+        at: MachineState<M>, steps: LinuxSteps(io, s, at), syscall: LinuxSyscallAt(io, at), requests: LinuxRequests(io, at, c),
+        next: (r: LinuxResumption(c)) → LinuxSimCo<M>(io, k(r.a), linux_answered(io, at, c, r.a, r.junk, r.rcx, r.r11))),
+}
+
+// Steps before the relation are part of it.
+fn LinuxSimCo::back<M>(io: LinuxIo<M>, t: CoTree<BitVec(64)>(Events::linux()), before, after: MachineState<M>,
+    steps: LinuxSteps(io, before, after), sim: LinuxSimCo<M>(io, t, after)) → LinuxSimCo<M>(io, t, before) {
+    match sim {
+        SimExits(d, status, ht, at, more, syscall, exits) =>
+            SimExits(d, status, ht, at, linux_steps_trans(io, before, after, at, steps, more), syscall, exits),
+        SimSteps(d, t2, ht, s2, plus, next) =>
+            SimSteps(d, t2, ht, s2, linux_plus_back(io, steps.witness, before, after, s2, steps.proof, plus), next),
+        SimCalls(d, c, k, ht, at, more, syscall, requests, next) =>
+            SimCalls(d, c, k, ht, at, linux_steps_trans(io, before, after, at, steps, more), syscall, requests, next),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dropped silent steps, one at a time
+
+// Dropping `d` silent steps to reach `o`: the root is `o` already, or a
+// silent step past which `d - 1` reach it.
+theorem CoTree::after_step<R>(E: Events, d: Nat, t: CoTree<R>(E), o: Obs<R>(E), ht: CoTree::after(E, d, t) = o):
+    (CoTree::obs(E, t) = o) ∨
+    Exists<Nat>(λ d2 => Exists<CoTree<R>(E)>(λ u => (CoTree::obs(E, t) = OTau(u)) ∧ (CoTree::after(E, d2, u) = o))) {
+    match d {
+        Zero => Inl(ht),
+        Succ(d2) => match h: CoTree::obs(E, t) {
+            ORet(r) => Inl(trans(sym(CoTree::after_settled(E, Succ(d2), t, ORet(r), h, trivial)), ht)),
+            OTau(u) => Inr(Exists(d2, Exists(u, ⟨refl, trans(sym(CoTree::after_succ(E, d2, t, u, h)), ht)⟩))),
+            OVis(c, k) => Inl(trans(sym(CoTree::after_settled(E, Succ(d2), t, OVis(c, k), h, trivial)), ht)),
+        },
+    }
+}
+
+// A trace of what the tree observes after the drops is one of the tree, at
+// that much more depth.
+theorem CoTree::after_traces<R>(E: Events, d: Nat): (t: CoTree<R>(E)) → (o: Obs<R>(E)) →
+    CoTree::after(E, d, t) = o → (m: Nat) → (tr: Trace<R>(E)) → IsTrace(E, CoTree::approx_obs(E, m, o), tr) →
+    IsTrace(E, CoTree::approx(E, m + d, t), tr) {
+    match d {
+        Zero => λ t o ht m tr it => j(sym(ht), λ y _ => IsTrace(E, CoTree::approx_obs(E, m, y), tr), it),
+        Succ(d2) => λ t o ht m tr it => {
+            let settled = λ (root: CoTree::obs(E, t) = o) =>
+                IsTrace::up(E, λ n => CoTree::approx(E, n, t), CoTree::approx_grows(E, t), m, Succ(d2), tr,
+                    j(sym(root), λ y _ => IsTrace(E, CoTree::approx_obs(E, m, y), tr), it));
+            (match CoTree::obs(E, t) as λ o2 => CoTree::obs(E, t) = o2 → IsTrace(E, CoTree::approx(E, m + Succ(d2), t), tr) {
+                ORet(r) => λ h => settled(trans(h, trans(sym(CoTree::after_settled(E, Succ(d2), t, ORet(r), h, trivial)), ht))),
+                OTau(u) => λ h => {
+                    let deeper: IsTrace(E, CoTree::approx(E, m + d2, u), tr) = CoTree::after_traces(E, d2, u, o,
+                        trans(sym(CoTree::after_succ(E, d2, t, u, h)), ht), m, tr, it);
+                    j(sym(h), λ y _ => IsTrace(E, CoTree::approx_obs(E, Succ(m + d2), y), tr), deeper)
+                },
+                OVis(c, k) => λ h => settled(trans(h, trans(sym(CoTree::after_settled(E, Succ(d2), t, OVis(c, k), h, trivial)), ht))),
+            })(refl)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// It is `Sim` at every depth
+
+theorem LinuxSimCo::sim_node<M>(io: LinuxIo<M>, m: Nat,
+    below: (u: CoTree<BitVec(64)>(Events::linux())) → (s2: MachineState<M>) → LinuxSimCo<M>(io, u, s2) →
+        Sim(io, CoTree::approx(Events::linux(), m, u), s2),
+    t: CoTree<BitVec(64)>(Events::linux()), s: MachineState<M>, o: Obs<BitVec(64)>(Events::linux()),
+    root: CoTree::obs(Events::linux(), t) = o, at_root: Sim(io, CoTree::approx_obs(Events::linux(), Succ(m), o), s)):
+    Sim(io, CoTree::approx(Events::linux(), Succ(m), t), s) {
+    j(sym(root), λ y _ => Sim(io, CoTree::approx_obs(Events::linux(), Succ(m), y), s), at_root)
+}
+
+// One level: the node the relation names, after its drops; a dropped
+// silent step is the same relation one node down, at the depth below.
+theorem LinuxSimCo::sim_succ<M>(io: LinuxIo<M>, m: Nat,
+    below: (u: CoTree<BitVec(64)>(Events::linux())) → (s2: MachineState<M>) → LinuxSimCo<M>(io, u, s2) →
+        Sim(io, CoTree::approx(Events::linux(), m, u), s2),
+    t: CoTree<BitVec(64)>(Events::linux()), s: MachineState<M>, sim: LinuxSimCo<M>(io, t, s)):
+    Sim(io, CoTree::approx(Events::linux(), Succ(m), t), s) {
+    match sim {
+        SimExits(d, status, ht, at, steps, syscall, exits) => match CoTree::after_step(Events::linux(), d, t, ORet(status), ht) {
+            Inl(root) => LinuxSimCo::sim_node(io, m, below, t, s, ORet(status), root, sim_ret(io, status, s, at, steps, syscall, exits)),
+            Inr(dropped) => LinuxSimCo::sim_node(io, m, below, t, s, OTau(dropped.proof.witness), dropped.proof.proof.left,
+                sim_tau(io, CoTree::approx(Events::linux(), m, dropped.proof.witness), s,
+                    below(dropped.proof.witness, s, SimExits(dropped.witness, status, dropped.proof.proof.right, at, steps, syscall, exits)))),
+        },
+        SimSteps(d, t2, ht, s2, plus, next) => match CoTree::after_step(Events::linux(), d, t, OTau(t2), ht) {
+            Inl(root) => LinuxSimCo::sim_node(io, m, below, t, s, OTau(t2), root,
+                sim_tau(io, CoTree::approx(Events::linux(), m, t2), s,
+                    sim_back(io, CoTree::approx(Events::linux(), m, t2), s, s2,
+                        linux_steps_cons(io, s, plus.witness, s2, plus.proof.left, plus.proof.right), below(t2, s2, next)))),
+            Inr(dropped) => LinuxSimCo::sim_node(io, m, below, t, s, OTau(dropped.proof.witness), dropped.proof.proof.left,
+                sim_tau(io, CoTree::approx(Events::linux(), m, dropped.proof.witness), s,
+                    below(dropped.proof.witness, s, SimSteps(dropped.witness, t2, dropped.proof.proof.right, s2, plus, next)))),
+        },
+        SimCalls(d, c, k, ht, at, steps, syscall, requests, next) => match CoTree::after_step(Events::linux(), d, t, OVis(c, k), ht) {
+            Inl(root) => LinuxSimCo::sim_node(io, m, below, t, s, OVis(c, k), root,
+                sim_vis(io, c, λ a => CoTree::approx(Events::linux(), m, k(a)), s, at, steps, syscall, requests,
+                    λ a answers junk leaves rcx r11 =>
+                        below(k(a), linux_answered(io, at, c, a, junk, rcx, r11), next(LinuxResumption(a, answers, junk, leaves, rcx, r11))))),
+            Inr(dropped) => LinuxSimCo::sim_node(io, m, below, t, s, OTau(dropped.proof.witness), dropped.proof.proof.left,
+                sim_tau(io, CoTree::approx(Events::linux(), m, dropped.proof.witness), s,
+                    below(dropped.proof.witness, s,
+                        SimCalls(dropped.witness, c, k, dropped.proof.proof.right, at, steps, syscall, requests, next)))),
+        },
+    }
+}
+
+theorem LinuxSimCo::sim_at<M>(io: LinuxIo<M>, n: Nat): (t: CoTree<BitVec(64)>(Events::linux())) → (s: MachineState<M>) →
+    LinuxSimCo<M>(io, t, s) → Sim(io, CoTree::approx(Events::linux(), n, t), s) {
+    match n {
+        Zero => λ t s sim => sim_cut(io, s),
+        Succ(m) => λ t s sim => LinuxSimCo::sim_succ(io, m, λ u s2 h => LinuxSimCo::sim_at(io, m, u, s2, h), t, s, sim),
+    }
+}
+
+// A machine that simulates a coinductive tree simulates its program.
+theorem LinuxSimCo::sim_program<M>(io: LinuxIo<M>, t: CoTree<BitVec(64)>(Events::linux()), s: MachineState<M>,
+    sim: LinuxSimCo<M>(io, t, s)): SimProgram(io, CoTree::program(Events::linux(), t), s) {
+    λ n => LinuxSimCo::sim_at(io, n, t, s, sim)
+}
+
+// ---------------------------------------------------------------------------
+// The converse: every run is a returned trace the tree produces
+
+fn ProducedRun(t: CoTree<BitVec(64)>(Events::linux()), run: List<LinuxEvent>) → Type {
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr =>
+        Program::Produces(Events::linux(), CoTree::program(Events::linux(), t), tr) ∧
+        (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run)))
+}
+
+// What the tree produces after its drops, it produces.
+theorem LinuxSimCo::produced_after(t: CoTree<BitVec(64)>(Events::linux()), d: Nat, o: Obs<BitVec(64)>(Events::linux()),
+    ht: CoTree::after(Events::linux(), d, t) = o, tr: Trace<BitVec(64)>(Events::linux()), m: Nat,
+    it: IsTrace(Events::linux(), CoTree::approx_obs(Events::linux(), m, o), tr)):
+    Program::Produces(Events::linux(), CoTree::program(Events::linux(), t), tr) {
+    Converges(m + d, CoTree::after_traces(Events::linux(), d, t, o, ht, m, tr, it))
+}
+
+// At an exit: the run's syscall is the exit, with the tree's status.
+theorem LinuxSimCo::exit_meets<M>(io: LinuxIo<M>, t: CoTree<BitVec(64)>(Events::linux()), d: Nat, status: BitVec(64),
+    ht: CoTree::after(Events::linux(), d, t) = ORet(status), more: List<LinuxEvent>, at, ran_at: MachineState<M>,
+    same: SameDefinedState<M>(at, ran_at), exits: LinuxExits(at, status), event: LinuxEvent):
+    RunAt(io, event, more, ran_at) → ProducedRun(t, Cons(event, more)) {
+    match event {
+        ExitEvent(status2) => λ ran => {
+            let statuses: (status = status2) =
+                trans(sym(exits.right), trans(register_related(Rdi, at, ran_at, same), ran.left.right));
+            Exists(TRet(status), ⟨LinuxSimCo::produced_after(t, d, ORet(status), ht, TRet(status), 1, Returned(refl)),
+                ⟨trivial, List::cons_eq(Nil, more, ExitEvent(status), ExitEvent(status2),
+                    cong_fn(λ (s: BitVec(64)) => ExitEvent(s), statuses), sym(ran.right))⟩⟩)
+        },
+        CallEvent(c, _) => λ ran => false_elim(exits_not_asks(io, at, ran_at, same, status, c, exits, ran.left)),
+    }
+}
+
+// At a call answered: the rest of the run is produced by the branch the
+// answer picks, from where Linux resumed both sides.
+theorem LinuxSimCo::answered_meets<M>(io: LinuxIo<M>, t: CoTree<BitVec(64)>(Events::linux()), d: Nat, c: LinuxCmd<Nat>,
+    k: c.Resp() → CoTree<BitVec(64)>(Events::linux()), ht: CoTree::after(Events::linux(), d, t) = OVis(c, k),
+    at, ran_at: MachineState<M>, same: SameDefinedState<M>(at, ran_at),
+    next: (r: LinuxResumption(c)) → LinuxSimCo<M>(io, k(r.a), linux_answered(io, at, c, r.a, r.junk, r.rcx, r.r11)),
+    more: List<LinuxEvent>,
+    outer: (u: CoTree<BitVec(64)>(Events::linux())) → (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
+        LinuxSimCo<M>(io, u, left) → LinuxRun(io, more, right) → LinuxEventsValid(more) → ProducedRun(u, more),
+    b: c.Resp(), resumed: LinuxResumed(io, ran_at, c, b, LinuxRun(io, more)),
+    valid: LinuxEventsValid(Cons(CallEvent(c, b), more))): ProducedRun(t, Cons(CallEvent(c, b), more)) {
+    let junk = resumed.witness;
+    let rcx = resumed.proof.right.witness;
+    let r11 = resumed.proof.right.proof.witness;
+    let rest = outer(k(b), linux_answered(io, at, c, b, junk, rcx, r11), linux_answered(io, ran_at, c, b, junk, rcx, r11),
+        linux_answered_respects<M>(io, c, b, junk, rcx, r11, at, ran_at, same),
+        next(LinuxResumption(b, valid.left, junk, resumed.proof.left, rcx, r11)), resumed.proof.right.proof.proof, valid.right);
+    let tr = rest.witness;
+    let deep: IsTrace(Events::linux(), CoTree::approx_obs<BitVec(64)>(Events::linux(), Succ(rest.proof.left.n), OVis(c, k)), TAns(c, b, tr)) =
+        Answered(b, tr, refl, rest.proof.left.h);
+    Exists(TAns(c, b, tr), ⟨LinuxSimCo::produced_after(t, d, OVis(c, k), ht, TAns(c, b, tr), Succ(rest.proof.left.n), deep),
+        ⟨rest.proof.right.left, cong_fn(λ (events: List<LinuxEvent>) => Cons(CallEvent(c, b), events), rest.proof.right.right)⟩⟩)
+}
+
+// At a call: the run's syscall asks the tree's call, never an exit.
+theorem LinuxSimCo::call_meets<M>(io: LinuxIo<M>, t: CoTree<BitVec(64)>(Events::linux()), d: Nat, c: LinuxCmd<Nat>,
+    k: c.Resp() → CoTree<BitVec(64)>(Events::linux()), ht: CoTree::after(Events::linux(), d, t) = OVis(c, k),
+    at, ran_at: MachineState<M>, same: SameDefinedState<M>(at, ran_at), asks: LinuxAsks(io, at, c),
+    next: (r: LinuxResumption(c)) → LinuxSimCo<M>(io, k(r.a), linux_answered(io, at, c, r.a, r.junk, r.rcx, r.r11)),
+    more: List<LinuxEvent>,
+    outer: (u: CoTree<BitVec(64)>(Events::linux())) → (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
+        LinuxSimCo<M>(io, u, left) → LinuxRun(io, more, right) → LinuxEventsValid(more) → ProducedRun(u, more),
+    event: LinuxEvent): RunAt(io, event, more, ran_at) → LinuxEventsValid(Cons(event, more)) → ProducedRun(t, Cons(event, more)) {
+    match event {
+        ExitEvent(status) => λ ran _ => false_elim(exits_not_asks(io, ran_at, at, sym(same), status, c, ran.left, asks)),
+        CallEvent(d2, b) => λ ran valid =>
+            j(asks_meet(io, at, ran_at, same, c, d2, asks, ran.left),
+                λ x _ => (b: x.Resp()) → RunAt(io, CallEvent(x, b), more, ran_at) → LinuxEventsValid(Cons(CallEvent(x, b), more)) →
+                    ProducedRun(t, Cons(CallEvent(x, b), more)),
+                λ b2 ran2 valid2 => LinuxSimCo::answered_meets(io, t, d, c, k, ht, at, ran_at, same, next, more, outer, b2,
+                    ran2.right, valid2))(b, ran, valid),
+    }
+}
+
+// One segment of the run, up to its next syscall `k` steps on. A silent
+// step of the tree costs the machine a step, so the segment's steps bound
+// how many the tree takes before it meets the syscall (`below`).
+theorem LinuxSimCo::segment_node<M>(io: LinuxIo<M>, event: LinuxEvent, more: List<LinuxEvent>,
+    outer: (u: CoTree<BitVec(64)>(Events::linux())) → (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
+        LinuxSimCo<M>(io, u, left) → LinuxRun(io, more, right) → LinuxEventsValid(more) → ProducedRun(u, more),
+    at: MachineState<M>, syscall: LinuxSyscallAt(io, at), ran: RunAt(io, event, more, at),
+    valid: LinuxEventsValid(Cons(event, more)), k: Nat,
+    below: (m: Nat) → m < k → (u: CoTree<BitVec(64)>(Events::linux())) → (left, right: MachineState<M>) →
+        SameDefinedState<M>(left, right) → LinuxSimCo<M>(io, u, left) → LinuxStepsN(io, m, right, at) →
+        ProducedRun(u, Cons(event, more)),
+    t: CoTree<BitVec(64)>(Events::linux()), left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    sim: LinuxSimCo<M>(io, t, left), steps: LinuxStepsN(io, k, right, at)): ProducedRun(t, Cons(event, more)) {
+    match sim {
+        SimExits(d, status, ht, claim_at, claim_steps, claim_syscall, exits) => {
+            let meet = linux_steps_meet(io, claim_steps.witness, k, left, right, claim_at, at, same, claim_steps.proof, steps,
+                claim_syscall, syscall);
+            LinuxSimCo::exit_meets(io, t, d, status, ht, more, claim_at, at, meet, exits, event, ran)
+        },
+        SimSteps(d, t2, ht, s2, plus, next) => {
+            let taken = plus.proof.right.witness;
+            let moved: LinuxStepsN(io, Succ(taken), left, s2) = Exists(plus.witness, ⟨plus.proof.left, plus.proof.right.proof⟩);
+            let peeled = linux_steps_peel(io, Succ(taken), k, left, right, s2, at, same, moved, steps, syscall);
+            let m = peeled.proof.right.witness;
+            let counted: (m + Succ(taken) = k) = peeled.proof.right.proof.right;
+            let shorter: (m < k) = j(counted, λ y _ => m < y, m.le_add_l(taken));
+            let rest = below(m, shorter, t2, s2, peeled.witness, peeled.proof.left, next, peeled.proof.right.proof.left);
+            let tr = rest.witness;
+            let deep: IsTrace(Events::linux(), CoTree::approx_obs<BitVec(64)>(Events::linux(), Succ(rest.proof.left.n), OTau(t2)), tr) =
+                rest.proof.left.h;
+            Exists(tr, ⟨LinuxSimCo::produced_after(t, d, OTau(t2), ht, tr, Succ(rest.proof.left.n), deep), rest.proof.right⟩)
+        },
+        SimCalls(d, c, kk, ht, claim_at, claim_steps, claim_syscall, requests, next) => {
+            let meet = linux_steps_meet(io, claim_steps.witness, k, left, right, claim_at, at, same, claim_steps.proof, steps,
+                claim_syscall, syscall);
+            LinuxSimCo::call_meets(io, t, d, c, kk, ht, claim_at, at, meet, requests.left, next, more, outer, event, ran, valid)
+        },
+    }
+}
+
+theorem LinuxSimCo::segment<M>(io: LinuxIo<M>, event: LinuxEvent, more: List<LinuxEvent>,
+    outer: (u: CoTree<BitVec(64)>(Events::linux())) → (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
+        LinuxSimCo<M>(io, u, left) → LinuxRun(io, more, right) → LinuxEventsValid(more) → ProducedRun(u, more),
+    at: MachineState<M>, syscall: LinuxSyscallAt(io, at), ran: RunAt(io, event, more, at),
+    valid: LinuxEventsValid(Cons(event, more)), fuel: Nat): (k: Nat) → k <= fuel →
+    (t: CoTree<BitVec(64)>(Events::linux())) → (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
+    LinuxSimCo<M>(io, t, left) → LinuxStepsN(io, k, right, at) → ProducedRun(t, Cons(event, more)) {
+    match fuel {
+        Zero => λ k bound t left right same sim steps => LinuxSimCo::segment_node(io, event, more, outer, at, syscall, ran, valid, k,
+            λ m (shorter: m < k) => false_elim(Nat::lt_of_lt_of_le(m, k, Zero, shorter, bound)), t, left, right, same, sim, steps),
+        Succ(f) => λ k bound t left right same sim steps => LinuxSimCo::segment_node(io, event, more, outer, at, syscall, ran, valid, k,
+            λ m (shorter: m < k) => LinuxSimCo::segment(io, event, more, outer, at, syscall, ran, valid, f, m,
+                Nat::lt_of_lt_of_le(m, k, Succ(f), shorter, bound)), t, left, right, same, sim, steps),
+    }
+}
+
+theorem LinuxSimCo::run_related<M>(io: LinuxIo<M>, run: List<LinuxEvent>): (t: CoTree<BitVec(64)>(Events::linux())) →
+    (left, right: MachineState<M>) → SameDefinedState<M>(left, right) → LinuxSimCo<M>(io, t, left) →
+    LinuxRun(io, run, right) → LinuxEventsValid(run) → ProducedRun(t, run) {
+    match run {
+        Nil => λ t left right same sim never _ => false_elim(never),
+        Cons(event, more) => λ t left right same sim ran valid =>
+            LinuxSimCo::segment(io, event, more,
+                λ u l r s h again again_valid => LinuxSimCo::run_related(io, more, u, l, r, s, h, again, again_valid),
+                ran.witness, ran.proof.right.left, run_at(io, event, more, right, ran), valid,
+                ran.proof.left.witness, ran.proof.left.witness, Nat::le_refl(ran.proof.left.witness),
+                t, left, right, same, sim, ran.proof.left.proof),
+    }
+}
+
+// Every run of a machine that simulates a coinductive tree, with answers
+// Linux may give, is the events of a whole trace the tree produces.
+theorem LinuxSimCo::run_produced<M>(io: LinuxIo<M>, t: CoTree<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: LinuxSimCo<M>(io, t, state), run: List<LinuxEvent>, ran: LinuxRun(io, run, state), valid: LinuxEventsValid(run)):
+    ProducedRun(t, run) {
+    LinuxSimCo::run_related(io, run, t, state, state, refl, sim, ran, valid)
+}
+
+// …and every claimed run.
+theorem LinuxSimCo::linux_runs_produced<M>(io: LinuxIo<M>, t: CoTree<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: LinuxSimCo<M>(io, t, state), events: List<LinuxEvent>, runs: LinuxRuns(io, events, state)): ProducedRun(t, events) {
+    LinuxSimCo::run_produced(io, t, state, sim, events, claim_is_run(io, events, state, runs),
+        linux_runs_valid(io, events, state, runs))
+}
+
+// A tree that never returns, along any answers, meets only a machine that
+// never finishes: `spin` has no returned trace, so its machine has no run.
+theorem LinuxSimCo::spin_no_run<M>(io: LinuxIo<M>, state: MachineState<M>,
+    sim: LinuxSimCo<M>(io, CoTree::spin<BitVec(64)>(Events::linux()), state), run: List<LinuxEvent>,
+    ran: LinuxRun(io, run, state), valid: LinuxEventsValid(run)): False {
+    let produced = LinuxSimCo::run_produced(io, CoTree::spin<BitVec(64)>(Events::linux()), state, sim, run, ran, valid);
+    let ended: (produced.witness = TEnd) = CutTrace::ended<BitVec(64)>(Events::linux(), produced.witness,
+        CoTree::spin_cut(Events::linux(), produced.proof.left.n, produced.witness, produced.proof.left.h));
+    j(ended, λ y _ => Trace::Returns(Events::linux(), y), produced.proof.right.left)
+}
+
+// A machine that goes round forever, at least one step a time, simulates the
+// tree that goes round silently forever: the relation is coinductive, the
+// round is an invariant.
+fn LinuxSimCo::forever<M>(io: LinuxIo<M>, round: MachineState<M> → Type,
+    again: (s: MachineState<M>) → round(s) → Exists<MachineState<M>>(λ s2 => LinuxPlus(io, s, s2) ∧ round(s2)),
+    s: MachineState<M>, held: round(s)) → LinuxSimCo<M>(io, CoTree::spin<BitVec(64)>(Events::linux()), s) {
+    let next = again(s, held);
+    SimSteps(0, CoTree::spin<BitVec(64)>(Events::linux()), refl, next.witness, next.proof.left,
+        LinuxSimCo::forever(io, round, again, next.witness, next.proof.right))
+}

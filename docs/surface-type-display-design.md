@@ -190,6 +190,82 @@ and `global_name_at(abs)` is the existing reverse lookup. Two guards:
   recognized by `tag_of`. Recursive constructor values and `Wf` types use the
   parallel exact lookup for `D#shape`; other generated definitions fall back.
 
+### 5.1 Type names the program wrote
+
+A `def` at a universe and a width family are expanded where they are read
+(`docs/fixed-width-integers-design.md` §2), so the type a diagnostic holds is
+`BitVec(8)` whichever of `u8`, `Byte` or `BitVec(8)` the program wrote. The
+expansion is a pure function of the definition, so the name is recovered by
+a table, not by unfolding anything (`Memos::type_names`,
+`issues/type-name-display-respelling.md`):
+
+- **Filled where the name is expanded** (`lower_type_value`,
+  `try_type_value_app`), and read off the definition's *body*, once per name:
+  `D#tycode_fn` applied to closed value arguments (`def Byte: Type =
+  BitVec(8)`), `D#tycode`, or `λ n. D#tycode_fn(n)` for a declaration with
+  one value parameter and no type parameters (`def u: Nat → Type = BitVec`,
+  a family), each possibly through another `def` that is one (`def Word: Type
+  = u(16)`). Any other body is not recorded and its expansion keeps the
+  honest spelling: the display matches the instance it already recovers
+  (§4) against the entry's tag and arguments, and never reduces to do it.
+- **Read at an instance**, the inline lowering (§4, with its recovered value
+  arguments) or its code `D#tycode_fn(ā)` (a type argument): an exact entry
+  is its name; a family is `u16` at a numeral width and `u(e)` at any other.
+  `u16` is spelled only where it would read back as the family (no `def
+  u16` of its own).
+- **The most recently written name wins.** Inside a declaration that is the
+  one the declaration wrote, which is the spelling a reader of that
+  declaration expects; `fn f(x: Byte, y: u8)` shows `u8` for both, since a
+  type carries no record of which binder wrote what.
+- **Only where the name still means it**: resolving to the same `def`, and
+  not hidden by a local or alias in scope at the node. Otherwise the next
+  name, or the declaration's own.
+- **Reader flavours only.** The source flavours (`qualified`,
+  `annotations`) keep the declaration's name, so a generated annotation is
+  what it was.
+
+Probes: `lib/_tests/std/bitvec/type_names_tests.hthr`.
+
+### 5.2 Operators the program would have written
+
+Elaboration resolves `a + b` to `Nat::add(a, b)` through the designation
+table (docs/operators-onto-classes-design.md §4), so a diagnostic holds the
+call and nothing of the symbol. The display reads it back the way §5.1 reads
+a type name back, by a lookup and never by reducing
+(`Speller::op_form`, issues/diagnostic-operator-resugaring.md):
+
+- **The table read backwards at the carrier.** The call's head key and the
+  carrier of its first explicit operand select every `(fixity, symbol)` whose
+  designation at that carrier is this operation
+  (`Traits::symbols_designating`). The carrier is the operand's type as the
+  callee declares it, read off the binding's telescope — a type parameter
+  there is the type argument the call passed — so `pick(a, b)` is `a ⊔ b`
+  at a carrier that designates `pick` and `pick(x, y)` at one that does not.
+  The global's name is never consulted.
+- **Only an exact inverse.** Exactly one symbol of the call's arity
+  (two infix operands, one prefix or postfix); no parameter the named call
+  would write by name (a defaulted one has no place in the notation); the
+  call fully applied. A partial application,
+  an over-application, two symbols for one operation, or an undesignated
+  operation keeps the named call.
+- **Rung 1 wins.** Inside `<A: Monoid(+)>` a written `+` is the constraint
+  binder's operation at every carrier, so a `+` designation cannot spell
+  anything there; the binder's own applications, `#op+@0_1(x, x)`, spell as
+  `x + x` while that binder is the innermost for its symbol.
+- **Parenthesized by the parser's table.** `heather_syntax::operator_form`
+  exports the grammar's levels (`Parser::infix_op`'s binding powers, the
+  comparison level, `^`, prefix and postfix), and an operand is wrapped
+  exactly where the parser would read the unwrapped text differently: an
+  infix left operand whose right power is not above the parent's left power,
+  an infix right operand whose left power is below the parent's right power,
+  a comparison inside another, anything but a postfix form under `^`'s base
+  or a receiver. `a - (b - c)`, `(xs ++ ys) ++ zs`, `-(a + b)`, `(-x) ^ k`.
+- **Reader flavours only**, as in §5.1: a source flavour's output is
+  re-parsed and decided on (omega's atoms, generated annotations), so it
+  keeps the named call. Nothing elaboration keys on reads this spelling.
+
+Probes: `lib/_tests/std/num/operator_display_tests.hthr`.
+
 ## 6. Testing
 
 The axes of `docs/testing-generated-terms.md` apply, and two of them are the

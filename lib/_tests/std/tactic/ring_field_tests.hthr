@@ -21,6 +21,20 @@ theorem rat_cancel(x: Rat, h: 0 < x): x * x⁻¹ ≈ 1 { ring }
 theorem rat_cancel_apart(x, y: Rat, h: x.Apart(0)): x * y * x⁻¹ ≈ y { ring }
 theorem rat_sum_of_inverses(x, y: Rat, hx: x.Apart(0), hy: y.Apart(0)): x⁻¹ + y⁻¹ ≈ (x + y) * (x * y)⁻¹ { ring }
 theorem rat_inv_of_product(x, y: Rat, hx: x.Apart(0), hy: y.Apart(0)): (x * y)⁻¹ ≈ x⁻¹ * y⁻¹ { ring }
+// `a / b` is read as `a * b⁻¹` at the same apartness (docs/division-design.md):
+// a neutral and a numeral divisor, at `Rat` and `CReal`.
+theorem rat_div_sum(a, b, c: Rat, h: 0 < c): a / c + b / c ≈ (a + b) / c { ring }
+theorem rat_div_cancel(a, b: Rat, h: b.Apart(0)): (a / b) * b ≈ a { ring }
+theorem rat_div_numerals(a: Rat): a / 4 + a / 4 ≈ a / 2 { ring }
+theorem rat_div_of_div(a, b, c: Rat, hb: 0 < b, hc: 0 < c): a / (b / c) ≈ a * c / b { ring }
+theorem creal_div_double(a, b: CReal, h: 0 < b): (a + a) / b ≈ 2 * (a / b) { ring }
+// `x ^ n` at a literal exponent is the product it computes to, and at a
+// negative one the power of the reciprocal (issues/ring-reads-integer-powers.md).
+theorem rat_square(b: Rat): b ^ 2 ≈ b * b { ring }
+theorem rat_binomial(a, b: Rat): (a + b) ^ 2 ≈ a ^ 2 + 2 * a * b + b ^ 2 { ring }
+theorem rat_negative_power(b: Rat, h: 0 < b): b ^ (-2) * b ^ 2 ≈ 1 { ring }
+theorem rat_power_minus_one(b: Rat, h: b.Apart(0)): b ^ (-1) ≈ b⁻¹ { ring }
+theorem creal_square(b: CReal): b ^ 2 ≈ b * b { ring }
 // A reciprocal inside a denominator is cleared after the one around it.
 theorem rat_inv_inv(x: Rat, h: x.Apart(0)): (x⁻¹)⁻¹ ≈ x { ring }
 theorem rat_halves_by_inverse(x: Rat): x * 2⁻¹ + x * 2⁻¹ ≈ x { ring }

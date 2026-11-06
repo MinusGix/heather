@@ -39,3 +39,9 @@ theorem all_upto(): Walk::upto(64).all() = True { refl }
 theorem small_fives(): Walk::named(64, 5).small() = True { refl }
 theorem not_small(): Walk::upto(64).small() = False { refl }
 theorem count_upto(): Walk::upto(64).count() = 63 { refl }
+
+// `/` and `%` at `Nat` (issues/integer-operator-symbols.md), by zero too.
+theorem div_symbols(): 17 / 5 = 3 ∧ 17 % 5 = 2 ∧ 17 / 0 = 0 ∧ 17 % 0 = 17 {
+    And(refl, And(refl, And(refl, refl)))
+}
+theorem div_symbols_open(a, b: Nat): a / b = a.div(b) ∧ a % b = a.mod(b) { And(refl, refl) }

@@ -671,10 +671,8 @@ spelling), and any other form once the variables it mentions are bound, as
 written. So `Eutt::tau_l` and `Eutt::bind_ret_l`, whose left sides hold
 constructors, instantiate unapplied.
 
-The walk does not go *into* a constructor: an occurrence inside `CTau(…)` or
-a call's continuation is refused, as §9.3 refuses any form that is no
-application (`issues/rewrite-setoid-codata-constructors.md`).
-`Eutt::tau_respects` and `Eutt::vis_respects` are stated for when it does.
+The walk also goes *into* a constructor, reading it as a node whose
+arguments are its children (§11.5).
 
 ### 11.3 The evidence
 
@@ -685,7 +683,7 @@ In `coitree_eutt.hthr`, every rule as §10.2 writes them:
 | `bind(t, ·)`, the continuation | `Eutt::bind_respects_k` (pointwise) | `bind_cong_r` |
 | `bind(·, h)`, the tree | `Eutt::bind_respects_t` | `bind_cong_l` |
 | `map(·, f)` | `Eutt::map_respects` | `bind_cong_l` |
-| `CTau(·)`, `CVis(c, ·)` | `Eutt::tau_respects`, `Eutt::vis_respects` | `tau_cong`, `vis_cong` |
+| `CTau(·)`, `CVis(c, ·)` | `Eutt::tau_respects`, `Eutt::vis_respects` | `tau_cong`, `vis_cong` (§11.5) |
 
 A client imports `relation_props` and `algebra_rel`, which the rewrite states
 its evidence in (§9.4). A function with no rule leaves `?compatibility` with
@@ -715,3 +713,51 @@ follow-up (`issues/rewrite-setoid-heterogeneous-sources.md`): hypotheses in
 scope as a source of `S`, a fallback to `=` at the target, two changed
 arguments arriving at different relations.
 
+### 11.5 Inside a constructor
+
+`issues/rewrite-setoid-codata-constructors.md`, 2026-11-06. A constructor's
+children sit inside its `corec`'s step (`λp. inr(t)`, under the step's two
+binders and the position's), not on an application spine, so §9.3's walk met
+`CTau(bind(bind(t, f), g))` as a form that is no application and refused it.
+Now a constructor is read as a node (`CtorNode`,
+`crates/elab/src/codata/node.rs`):
+
+```heather
+fn rewrite_assoc_under_tau<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E)) →
+    Eutt<C>(E, CTau(CoTree::bind(E, CoTree::bind(E, t, f), g)), CTau(CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g))))
+{
+    rewrite(Eutt::bind_assoc, Eutt::refl(E, CTau(CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g)))))
+}
+```
+
+- **The children.** The step's children function is the case tree
+  [`MParts::kids_lam`] builds: one leaf per child, in position order, each
+  the child shifted past every binder above it (under `inr` unindexed; the
+  indexed `in` keeps its node in the seed, docs/codata-indexed-design.md §4).
+  A leaf that mentions none of those binders is a plain child, given back
+  scoped where the constructor is; one that applies a term to the case's
+  own binder is a function child, and the child is that function — a λ as
+  written, so a continuation `λ r => CTau(h(r))` is walked as §10 walks any
+  λ and changes pointwise. Anything else is not read as a constructor, and
+  stays the opaque form it was. `read_ctor` still gives children back as
+  stand-ins; its callers compare labels and payloads only.
+- **The step.** The children are walked as arguments; an unchanged node
+  stays as it is. One changed child is crossed by `PreservesRelation` about
+  the context `λ z. C(…, z, …)` — always a λ, as rules write a constructor
+  context (`Eutt::tau_respects`'s `λ t => CTau(t)`, `Eutt::vis_respects`'s
+  `λ k => CVis(c, k)` over `Pointwise`) — and that context is the node with
+  the child's leaf replaced by the binder, so it is the corec the rule's λ
+  elaborates to, and resolution answers it as §10.2's. The node rebuilt is
+  the same replacement with the new child. A child at another type (an
+  indexed child at another index) leaves the carrier as §11.4 says.
+- **What it refuses.** Two changed children have no one context to ask
+  about, as two changed arguments outside `Respects2`'s position have none
+  (§9.3). The label's payload (`a` in `CRet(a)`) is not walked: an
+  occurrence there is refused by name rather than left behind.
+
+`algebra_rel_tests.hthr` probes plain and function children in each
+position and an indexed declaration, over evidence given as hypotheses;
+`coitree_eutt_tests.hthr` the `Eutt` laws under `CTau`, `CVis` and a
+`bind`'s continuation.
+
+[`MParts::kids_lam`]: ../crates/elab/src/codata.rs

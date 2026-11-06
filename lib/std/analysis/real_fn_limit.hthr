@@ -51,7 +51,7 @@ theorem ConvexOn::near(D: K → Type, hD: ConvexOn(D), x, h: K): ConvexOn(λ (s:
     λ a b z da db az zb => {
         let la: (K.inv(h) <= a + K.inv(x)) = da.right.left;
         let rb: (b + K.inv(x) <= h) = db.right.right;
-        And(hD(a, b, z, da.left, db.left, az, zb), LocatedAddGroup::abs_le_intro(z + K.inv(x), h, linarith(la, az), linarith(rb, zb)))
+        And(hD(a, b, z, da.left, db.left, az, zb), linarith(la, az, rb, zb))
     }
 }
 
@@ -82,7 +82,7 @@ theorem DerivOn::of_approx_step(D: K → Type, f, g, p, q: K → K, e, w, x, y, 
             let al: (K.inv(w) <= g(s) + K.inv(q(s))) = a.left;
             let bl: (K.inv(e) <= g(s) + K.inv(g(x))) = b.left;
             let dl: (K.inv(w) <= g(x) + K.inv(q(x))) = d.left;
-            LocatedAddGroup::abs_le_intro(q(s) + c * K.multiplicative.unit, M, linarith(a.right, bl, dl), linarith(al, b.right, d.right))
+            linarith(a.right, bl, dl, al, b.right, d.right)
         });
     let ex: E(x) = And(dx, LocatedAddGroup::abs_le_zero(x + K.inv(x), h, ring, hn));
     let ey: E(y) = And(dy, hxy);
@@ -97,9 +97,7 @@ theorem DerivOn::of_approx_step(D: K → Type, f, g, p, q: K → K, e, w, x, y, 
     let fxl: (K.inv(w) <= f(x) + K.inv(p(x))) = fx.left;
     let m = OrderedField::abs_le_mul(g(x) + K.inv(q(x)), y + K.inv(x), w, h, cg(x, dx), hxy);
     let ml: (K.inv(w * h) <= (g(x) + K.inv(q(x))) * (y + K.inv(x))) = m.left;
-    LocatedAddGroup::abs_le_intro(f(y) + K.inv(f(x)) + K.inv(g(x) * (y + K.inv(x))),
-        e * h + w * (h + h + h + K.multiplicative.unit + K.multiplicative.unit),
-        linarith(rl, fyl, fx.right, m.right), linarith(rr, fy.right, fxl, ml))
+    linarith(rl, fyl, fx.right, m.right, rr, fy.right, fxl, ml)
 }
 
 // The derivative of a uniform limit: `F(n) → f` and `G(n) → g` uniformly on
@@ -118,7 +116,7 @@ theorem DerivOn::of_approx(D: K → Type, f, g: K → K, F, G: Nat → K → K, 
             let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
             let near = λ (s: K) (ds: D(s)) (hs: AbsLe(s + K.inv(x), h)) => {
                 let l: (K.inv(h) <= s + K.inv(x)) = hs.left;
-                a.proof.right(x, s, dx, ds, LocatedAddGroup::abs_le_intro(s + K.inv(x), a.witness, linarith(l, hh), linarith(hs.right, hh)))
+                a.proof.right(x, s, dx, ds, linarith(l, hh, hs.right))
             };
             OrderedField::abs_le_of_forall_pos(f(y) + K.inv(f(x)) + K.inv(g(x) * (y + K.inv(x))), e * h,
                 h + h + h + K.multiplicative.unit + K.multiplicative.unit, linarith(hn, o), λ w pw => {
@@ -136,7 +134,7 @@ theorem DerivOn::of_approx(D: K → Type, f, g: K → K, F, G: Nat → K → K, 
 // A negated term has the same bound.
 theorem LocatedAddGroup::abs_le_neg(z, e: K, hz: AbsLe(z, e)): AbsLe(K.inv(z), e) {
     let l: (K.inv(e) <= z) = hz.left;
-    LocatedAddGroup::abs_le_intro(K.inv(z), e, linarith(hz.right), linarith(l))
+    linarith(hz.right, l)
 }
 
 // The estimate. `R` is `u`'s remainder, `L` its increment's bound; `C` is

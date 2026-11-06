@@ -580,6 +580,12 @@ pub(crate) struct Memos {
     /// …and a spine's components, read together so a sum keeps pointing at
     /// its sides ([`Elaborator::with_spine`]).
     pub(crate) guard_spine_reads: RefCell<HashMap<u32, (u32, SubstTail, Rc<Type>, Rc<gendefs::SpineCodes>)>>,
+    /// The type names the program has written (`u8`, `i(n)`, its own `def
+    /// Byte: Type = …`), least recently written first, each with the
+    /// instance it expands to ([`Elaborator::record_type_name`]). Read only
+    /// by the display, which respells an instance by the name
+    /// (issues/type-name-display-respelling.md). Nothing here is semantic.
+    pub(crate) type_names: RefCell<Vec<display::TypeName>>,
 }
 
 impl Memos {
@@ -597,9 +603,13 @@ impl Memos {
             guard_reads: _,
             guard_slot_formers: _,
             guard_spine_reads: _,
+            // Holds the Ψ position of each name's definition: a rollback can
+            // put another `def` of the same name there.
+            type_names,
         } = self;
         result_only_memo.borrow_mut().clear();
         named_type_memo.borrow_mut().clear();
+        type_names.borrow_mut().clear();
     }
 }
 

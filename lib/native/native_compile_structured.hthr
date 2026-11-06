@@ -37,6 +37,7 @@ import function_ir_state;
 import linux_trees;
 import linux_x86_64_io;
 import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
 import itree;
 import x86_64;
 import x86_64_block;
@@ -68,6 +69,16 @@ theorem Target::at_jmp(self t: Target, before: Prog, n: Nat, within: then(before
     label: Prog, item: Asm, label_within: Prog::At(label, Succ(n), item).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     live: List<Nat>, env: Env, goes: t.At(prog_len(label), live, tree, env)): t.At(prog_len(before), live, tree, env) {
     t.io().goes_jmp(t.program, t.origin, t.code_fits(), within.witness, before, 0, Succ(n), within.proof, prog_len(label),
+        t.program.lands_jmp(t.laid, within.witness, before, 0, n, within.proof, label_within.witness, label, item, label_within.proof),
+        tree, λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m), goes)
+}
+
+// A JMP back to a loop's head: the step pays for the silent step before
+// the loop's next round.
+theorem Target::at_jmp_tau(self t: Target, before: Prog, n: Nat, within: then(before, Jmp(Succ(n))).Within(t.program),
+    label: Prog, item: Asm, label_within: Prog::At(label, Succ(n), item).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    live: List<Nat>, env: Env, goes: t.At(prog_len(label), live, tree, env)): t.At(prog_len(before), live, Tau(tree), env) {
+    t.io().goes_jmp_tau(t.program, t.origin, t.code_fits(), within.witness, before, 0, Succ(n), within.proof, prog_len(label),
         t.program.lands_jmp(t.laid, within.witness, before, 0, n, within.proof, label_within.witness, label, item, label_within.proof),
         tree, λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m), goes)
 }

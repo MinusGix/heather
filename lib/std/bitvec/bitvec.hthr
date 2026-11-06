@@ -1271,6 +1271,13 @@ designation + at BitVec(n) := BitVec::add
 designation - at BitVec(n) := BitVec::sub
 designation * at BitVec(n) := BitVec::mul
 designation prefix - at BitVec(n) := BitVec::neg
+// Bits and shifts, read as Rust reads them at `u8`: `>>` is the zero-filling
+// shift, and a shift's count is a `Nat` (issues/integer-operator-symbols.md).
+// Division and remainder are `bitvec_div`'s.
+designation & at BitVec(n) := BitVec::band
+designation | at BitVec(n) := BitVec::bor
+designation << at BitVec(n) := BitVec::shift_left
+designation >> at BitVec(n) := BitVec::shift_right
 instance(n: Nat) Numeral<BitVec(n)> { ofNat := λ (k: Nat) => BitVec::ofNat(k) }
 
 theorem BitVec::decrement_increment_step(n: Nat, b: Bool, x: BitVec(n),
@@ -1908,12 +1915,7 @@ theorem BitVec::ofNat_toNat(n: Nat): (x: BitVec(n)) → BitVec::ofNat(x.toNat())
 // A bit under twice a bounded number stays under twice the bound: the
 // successor the bit may add is absorbed by doubling the strict inequality.
 theorem BitVec::bit_twice_lt(b: Bool, m, p: Nat, h: m < p): Nat::of_bit(b) + Nat::twice(m) < Nat::twice(p) {
-    match b {
-        False => rewrite(Nat::add_left_zero(Nat::twice(m)),
-            Nat::twice_lt_twice_iff(m, p).mpr(h)),
-        True => rewrite(BitVec::one_add(Nat::twice(m)),
-            Nat::twice_le_twice_iff(Succ(m), p).mpr(h)),
-    }
+    Nat::of_bit_twice_lt(b, m, p, h)
 }
 
 // A vector's value is below `2^n` at width `n`: the range test a decoder

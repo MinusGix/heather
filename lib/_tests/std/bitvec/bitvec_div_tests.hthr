@@ -23,3 +23,36 @@ theorem sdiv_differs(): decide_bit<b(249).sdiv(2) = b(249).udiv(2)>() = False { 
 theorem magnitude_min(): b(128).magnitude() = 128 { refl }
 
 theorem of_int(): b(BitVec::ofInt(NegSucc(0))) = 255 ∧ b(BitVec::ofInt(NegSucc(127))) = 128 { And(refl, refl) }
+
+// The operator symbols at an unsigned word
+// (issues/integer-operator-symbols.md): `/` and `%` are `udiv`/`urem`, and
+// `>>` fills with zeros, where `SInt`'s copies the sign.
+theorem div_symbols(): b(200) / 7 = 28 ∧ b(200) % 7 = 4 { And(refl, refl) }
+theorem shift_symbols(): b(240) >> 2 = 60 ∧ b(64) << 2 = 0 { And(refl, refl) }
+theorem bit_symbols(): b(240) & 60 = 48 ∧ b(240) | 15 = 255 { And(refl, refl) }
+theorem symbols_are_methods(n: Nat, x, y: BitVec(n), k: Nat):
+    x / y = x.udiv(y) ∧ x % y = x.urem(y) ∧ x >> k = x.shift_right(k) ∧ x << k = x.shift_left(k)
+        ∧ x & y = x.band(y) ∧ x | y = x.bor(y)
+{
+    And(refl, And(refl, And(refl, And(refl, And(refl, refl)))))
+}
+
+// The laws (issues/bitvec-division-laws.md), proved at an open width in the
+// library, cited at a machine width.
+theorem udiv_law_u64(a, d: u64): a.toNat() = a.udiv(d).toNat() * d.toNat() + a.urem(d).toNat() {
+    BitVec::udiv_urem_toNat(64, a, d)
+}
+theorem urem_lt_u8(a, d: u8, nonzero: d ≠ BitVec::zero()): (a % d).toNat() < d.toNat() { BitVec::urem_lt(8, a, d, nonzero) }
+theorem by_zero_u64(a: u64): a / BitVec::zero() = BitVec::all_ones() ∧ a % BitVec::zero() = a {
+    And(BitVec::udiv_zero(64, a), BitVec::urem_zero(64, a))
+}
+theorem sdiv_law_u8(a, d: u8, nonzero: d ≠ BitVec::zero(),
+        away: ¬(a.toInt() = -OfNat(Nat::pow(2, 7)) ∧ d.toInt() = -OfNat(1))):
+    a.toInt() = a.sdiv(d).toInt() * d.toInt() + a.srem(d).toInt()
+{
+    BitVec::sdiv_srem_toInt(7, a, d, nonzero, away)
+}
+
+// The excluded case is real: `MIN / -1` wraps to `MIN`, whose reading is not
+// the quotient `2^7`.
+theorem min_by_minus_one(): b(128).sdiv(255) = 128 ∧ b(128).toInt() = -OfNat(128) { And(refl, refl) }

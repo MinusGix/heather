@@ -67,7 +67,28 @@ pub enum TokKind {
     /// the first / second constructor of a binary sum.
     LAngle,    // ⟨
     RAngle,    // ⟩
-    Pipe,      // | (only meaningful inside anonymous constructor syntax)
+    /// `|` — bitwise or (issues/integer-operator-symbols.md), and inside
+    /// `⟨…⟩` the binary-sum injection mark (`⟨a |⟩`, `⟨| b⟩`). The parser
+    /// tells the two apart: a `|` directly before `⟩` closes an injection
+    /// and is never read as an operator.
+    Pipe,      // |
+    /// `&` — bitwise and (issues/integer-operator-symbols.md). `&&` is
+    /// matched first, so a doubled ampersand is still the Boolean operator.
+    Amp,       // &
+    /// `/` — division. `//` is matched first and is a line comment, so
+    /// `a // b` is `a` followed by a comment, exactly as in Rust.
+    Slash,     // /
+    Percent,   // %
+    /// `<<` — left shift. Always one token: no type-argument list can begin
+    /// with `<`, so two adjacent `<` have no other reading.
+    Shl,       // <<
+    /// `>>` — right shift, but **only when a space (or `(`, `,`, or the start
+    /// of the file) comes before it**. A nested type-argument list closes as
+    /// `List<List<A>>`, two `Gt`s hugging the argument, and that spelling is
+    /// untouched: `>` is still never an operator by itself, and a tight `>>`
+    /// is still two closers. `a >> b` is the shift; `a>>b` does not parse
+    /// (issues/integer-operator-symbols.md).
+    Shr,       // >>
     /// Function/implication arrow. `→` is the preferred mathematical
     /// spelling; `->` remains an ASCII alias and produces the same token.
     Arrow,     // → or ->
@@ -75,13 +96,12 @@ pub enum TokKind {
     /// `⊢` / `|-` — the turnstile of a contextual type `Code(g |- T)` and a
     /// checking-position sequent binder `x ⊢ body`. Both spellings become one
     /// token, so downstream syntax cannot assign them different semantics.
-    /// A bare `|` stays a lex error except inside anonymous constructor
-    /// delimiters, where it marks a binary-sum injection.
+    /// `|-` is matched before a bare `|`, so `a |-b` is a turnstile: write
+    /// `a | -b` for the bitwise or of a negation.
     Turnstile, // ⊢ or |-
     /// `&&` and `||` — the Boolean operator spellings
-    /// (issues/bool-operator-designations.md). Two-byte; the bare `&` and `|`
-    /// stay lex errors outside `⟨…⟩`; doubling is what keeps them
-    /// unambiguous there.
+    /// (issues/bool-operator-designations.md). Two-byte, so they are matched
+    /// before the bitwise `&` and `|`.
     AmpAmp,    // &&
     PipePipe,  // ||
     /// `∥` (U+2225, PARALLEL TO), the delimiter in `∥A∥`.
@@ -473,7 +493,6 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
     let bytes = src.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0;
-    let mut anonymous_depth = 0usize;
     while i < bytes.len() {
         let c = bytes[i];
         // whitespace
@@ -632,11 +651,6 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             _ => None,
         };
         if let Some(kind) = three_kind {
-            match kind {
-                TokKind::LAngle => anonymous_depth += 1,
-                TokKind::RAngle => anonymous_depth = anonymous_depth.saturating_sub(1),
-                _ => {}
-            }
             toks.push(Tok { kind, span: Span { start, end: start + 3 } });
             i += 3;
             continue;
@@ -649,12 +663,6 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             return Err(LexError {
                 msg: "unexpected character '!' in `!=`; write `≠` for inequality".into(),
                 span: Span { start, end: start + 2 },
-            });
-        }
-        if c == b'|' && two != "||" && two != "|-" && anonymous_depth == 0 {
-            return Err(LexError {
-                msg: "unexpected character '|'".into(),
-                span: Span { start, end: start + 1 },
             });
         }
         // `·`, U+00B7 MIDDLE DOT, is deliberately distinct from `∙`, the
@@ -715,6 +723,12 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "<-" => (TokKind::LArrow, 2),
             ":=" => (TokKind::ColonEq, 2),
             "::" => (TokKind::ColonColon, 2),
+            "<<" => (TokKind::Shl, 2),
+            // `>>` is a shift only after a space, `(`, `,` or the start of
+            // the file; anywhere else it is two closers (see [`TokKind::Shr`]).
+            ">>" if start == 0 || matches!(bytes[start - 1], b'(' | b',') || bytes[start - 1].is_ascii_whitespace() => {
+                (TokKind::Shr, 2)
+            }
             _ => match c {
                 b'(' => (TokKind::LParen, 1),
                 b')' => (TokKind::RParen, 1),
@@ -723,6 +737,9 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'[' => (TokKind::LBracket, 1),
                 b']' => (TokKind::RBracket, 1),
                 b'|' => (TokKind::Pipe, 1),
+                b'&' => (TokKind::Amp, 1),
+                b'/' => (TokKind::Slash, 1),
+                b'%' => (TokKind::Percent, 1),
                 b',' => (TokKind::Comma, 1),
                 b':' => (TokKind::Colon, 1),
                 b';' => (TokKind::Semi, 1),
@@ -775,6 +792,21 @@ mod tests {
 
     fn kinds(src: &str) -> Vec<TokKind> {
         lex(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)).into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn integer_operator_symbols_lex() {
+        use TokKind::*;
+        assert_eq!(kinds("a / b % c & d | e << f"), [
+            Ident("a".into()), Slash, Ident("b".into()), Percent, Ident("c".into()), Amp,
+            Ident("d".into()), Pipe, Ident("e".into()), Shl, Ident("f".into()), Eof,
+        ]);
+        // `>>` is a shift after a space, `(` or `,`, and two closers when tight.
+        assert_eq!(kinds("a >> b"), [Ident("a".into()), Shr, Ident("b".into()), Eof]);
+        assert_eq!(kinds("(>>)"), [LParen, Shr, RParen, Eof]);
+        assert_eq!(kinds("A>>"), [Ident("A".into()), Gt, Gt, Eof]);
+        // The doubles and the comment are matched first.
+        assert_eq!(kinds("&& || // c"), [AmpAmp, PipePipe, Eof]);
     }
 
     #[test]

@@ -99,6 +99,22 @@ theorem near_refused<A>(f, g: List<A> → Nat, a, b: A, k: (ys: List<A>) → f(C
 // `List::append_assoc`, and not `List::append_nil`.
 theorem reported<A>(a, b, c: List<A>): (a ++ b) ++ c = a ++ (b ++ c) { by grind_report(["List::append_assoc", "List::append_nil"], []) }
 
+// A lurking hint (docs/grind-design.md §9.6): `lurk_one` says nothing about
+// `c` or `lurk_two`, and the proof does not cite it, but it is the only
+// thing that puts the term `1` in the graph, which the near match of
+// `lurk_sc(?b)` against `lurk_two()` needs as its solution. The report says
+// "not cited, but needed to find it: lurk_one", and the narrowed call fails.
+fn lurk_sc(n: Nat) → Nat { Succ(n) }
+fn lurk_two() → Nat { 2 }
+theorem lurk_one(): Nat::add(1, 0) = 1 { refl }
+theorem lurk_reported(c: Nat → Nat, k: (b: Nat) → c(lurk_sc(b)) = 0): c(lurk_two()) = 0 { by grind_report(["lurk_one", "List::append_nil"], []) }
+// expect-error: grind: the two sides are not in one class
+theorem lurk_narrowed(c: Nat → Nat, k: (b: Nat) → c(lurk_sc(b)) = 0): c(lurk_two()) = 0 { by grind_report([], []) }
+
+// The lurking hint's goal with its hints reordered and one it does not need
+// (the other mutation controls are in grind_mutation_tests).
+theorem lurk_reordered(c: Nat → Nat, k: (b: Nat) → c(lurk_sc(b)) = 0): c(lurk_two()) = 0 { by grind_using(["List::append_nil", "lurk_one"], []) }
+
 // Lemmas with premises (issues/grind-lemma-premises.md): the binders no
 // side binds are proved at each instance. An order premise by a local; an
 // equation premise by the graph, where no local is it (`p(a)` is `p(b)` only

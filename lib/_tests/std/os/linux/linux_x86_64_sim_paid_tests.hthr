@@ -1,0 +1,71 @@
+// Probes of `SimPaid` (`linux_x86_64_sim_paid`; issues/native-compile-co-sim.md).
+// The silent loop every machine `Sim`s (linux_x86_64_sim_tests) is met by
+// no machine that pays for its silent steps and finishes: its cuts lie as
+// deep as its fuel, so a paid run never reaches one, and the loop has no
+// trace that returns. Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_determinism;
+import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
+import linux_trees;
+import itree;
+import itree_trace;
+import itree_deep;
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// A cut lies no silent steps deep.
+theorem cut_not_deep(deep: ITree::Deep<BitVec(64)>(Events::linux(), Cut, 1)): False {
+    Nat::succ_ne_zero(0, deep)
+}
+
+// The loop that only goes round, over Linux's calls.
+fn spin_body(u: True) → ITree<Step<True, BitVec(64)>>(Events::linux()) { Ret(Continue(u)) }
+fn spin() → Program<BitVec(64)>(Events::linux()) { Program::iter<True, BitVec(64)>(Events::linux(), λ u => spin_body(u), trivial) }
+
+theorem spin_traces_end(n: Nat): (tr: Trace<BitVec(64)>(Events::linux())) →
+    IsTrace(Events::linux(), spin().at(n), tr) → tr = TEnd {
+    match n {
+        Zero => λ tr w => CutTrace::ended(Events::linux(), tr, w),
+        Succ(m) => λ tr it => spin_traces_end(m, tr, it),
+    }
+}
+
+// At fuel `d` its cuts lie `d` deep, at a neutral fuel.
+theorem spin_deepens(): Program::Deepens(Events::linux(), spin()) {
+    λ d => Exists(d, ITree::deep_iter<True, BitVec(64)>(Events::linux(), d, λ u => spin_body(u), trivial, λ x => trivial))
+}
+
+// A machine that pays for its silent steps has no run: the run would be a
+// returned trace of the loop, and the loop returns nothing.
+theorem spin_paid_no_run<M>(io: LinuxIo<M>, state: MachineState<M>, sim: SimPaidProgram(io, spin(), state),
+    run: List<LinuxEvent>, ran: LinuxRun(io, run, state), valid: LinuxEventsValid(run)): False {
+    let produced = Program::paid_run_produces(io, spin(), state, sim, spin_deepens(), run, ran, valid);
+    let ended = spin_traces_end(produced.proof.left.n, produced.witness, produced.proof.left.h);
+    j(ended, λ y _ => Trace::Returns(Events::linux(), y), produced.proof.right.left)
+}
+
+// Paying is still simulating.
+theorem paid_simulates<M>(io: LinuxIo<M>, state: MachineState<M>, sim: SimPaidProgram(io, spin(), state)):
+    SimProgram(io, spin(), state) {
+    Program::sim_of_paid(io, spin(), state, sim)
+}
+
+// …and a machine that goes round forever, at least one step a round, does
+// pay for it, at every fuel: the round is an invariant.
+theorem spin_paid_forever<M>(io: LinuxIo<M>, round: MachineState<M> → Type,
+    again: (s: MachineState<M>) → round(s) → Exists<MachineState<M>>(λ s2 => LinuxPlus(io, s, s2) ∧ round(s2)), n: Nat):
+    (s: MachineState<M>) → round(s) → SimPaid(io, spin().at(n), s) {
+    match n {
+        Zero => λ s held => trivial,
+        Succ(m) => λ s held => {
+            let next = again(s, held);
+            paid_tau(io, spin().at(m), s, next.witness, next.proof.left, spin_paid_forever(io, round, again, m, next.witness, next.proof.right))
+        },
+    }
+}

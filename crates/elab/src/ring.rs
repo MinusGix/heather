@@ -83,6 +83,12 @@ struct RelCarrier {
     neg: Option<Op>,
     /// The postfix `⁻¹`, read as a reciprocal (`Reifier::reciprocal`).
     inv: Option<Op>,
+    /// `/`, read as a product with the divisor's reciprocal
+    /// (`Reifier::quotient`).
+    div: Option<Op>,
+    /// `^` at an integer exponent, read at a literal exponent as the product
+    /// it computes to (`Reifier::literal_power`).
+    pow: Option<Op>,
     /// At a class carrier, its integers (`ClassInts`); `None` at a carrier
     /// with a `CommRingOfInt` instance.
     class: Option<ClassInts>,
@@ -398,6 +404,8 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
         mul: op("*", OpFixity::Infix),
         neg: op("-", OpFixity::Prefix),
         inv: op("⁻¹", OpFixity::Postfix),
+        div: op("/", OpFixity::Infix),
+        pow: op("^", OpFixity::Infix),
         class: None,
     })
 }
@@ -408,8 +416,8 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
 /// arguments, `K` and its `≈`, `+` and `*`, are the operations as the
 /// section binds them (the dictionary's type is structural, its indices
 /// substituted away). `K.unit`, `K.multiplicative.unit` and `K.inv` are read as a
-/// statement spells them. `K` has no `-` or `⁻¹` designation, so a
-/// difference is written `x + K.inv(y)` and a reciprocal is an atom.
+/// statement spells them. `K` has no `-` designation, so a difference is
+/// written `x + K.inv(y)`; `⁻¹` and `/` are the class's (`field_division`).
 fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCarrier> {
     elab.key_of("semiring::CommRing::with_ints")?;
     let source = elab.spell_type_clean(cx, carrier_ty)?;
@@ -424,6 +432,17 @@ fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCar
     };
     let field = |name: &str| infer(&format!("{source}.{name}")).map(|(term, _, _)| Rc::new(term));
     let (zero, one, neg) = (field("unit")?, field("multiplicative.unit")?, field("inv"));
+    // An ordered field's `⁻¹` and `/` (`field_division`), applied to the
+    // class's type, indices and dictionary before their operands: read as
+    // at a carrier that designates them, with `OrderedField::inv_mul` as a
+    // reciprocal's fact. Only where the module is loaded; a ring that is no
+    // field never spells them.
+    let generic = |name: &str| {
+        let key = elab.key_of(name)?;
+        let operands = if name.ends_with("::div") { 3 } else { 2 };
+        let prefix = elab.names.global(&key)?.params.len().checked_sub(operands)?;
+        Some(Op::GlobalAfter(key, prefix))
+    };
     Some(RelCarrier {
         source,
         same: Op::Term(same),
@@ -431,7 +450,9 @@ fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCar
         sub: None,
         mul: Some(Op::Term(mul)),
         neg: neg.map(Op::Term),
-        inv: None,
+        inv: generic("field_division::OrderedField::inv"),
+        div: generic("field_division::OrderedField::div"),
+        pow: None,
         class: Some(ClassInts { ints: Rc::new(ints), ty, level, zero, one }),
     })
 }
@@ -602,7 +623,8 @@ impl<'a> FieldReading<'a> {
                     let expr = parse_expr(&source).ok()?;
                     let (term, ty, level) = reifier.elab.generated_scope(|me| me.elab_infer(reifier.cx, &expr)).ok()?;
                     Some((term, ty, level, source))
-                });
+                })
+                .or_else(|| reifier.numeral_reciprocal_positive(term, &den, ops));
             self.reciprocals.push(Reciprocal { atom: fact.atom, den, positive });
         }
     }
@@ -907,6 +929,19 @@ impl Reifier<'_> {
             let inner = Rc::clone(inner);
             return Ok(Syn::Neg(Box::new(self.reify_within(&inner, depth)?)));
         }
+        if let Some((base, k)) = self.literal_power(tm, ops) {
+            let base = self.reify_within(&base, depth)?;
+            let mut product = Syn::Const(1);
+            for _ in 0..k {
+                product = Syn::Mul(Box::new(product), Box::new(base.clone()));
+            }
+            return Ok(product);
+        }
+        if let Some((a, r)) = self.quotient(tm, ops) {
+            let a = self.reify_within(&a, depth)?;
+            let r = self.reify_within(&r, depth)?;
+            return Ok(Syn::Mul(Box::new(a), Box::new(r)));
+        }
         if !self.in_fact
             && let Some(atom) = self.reciprocal(tm, ops, depth)?
         {
@@ -989,6 +1024,82 @@ impl Reifier<'_> {
         Ok(Some(if sum { Syn::Add(Box::new(rest), Box::new(last)) } else { Syn::Mul(Box::new(rest), Box::new(last)) }))
     }
 
+    /// A power `x ^ n` at a literal exponent is the product `npow` computes
+    /// it to, `1 * x * … * x` (`pow_ofNat` is `refl`, and `npow` multiplies
+    /// on the right), so the certificate's check unfolds it rather than
+    /// reading a lemma; at a negative literal `NegSucc(k)` the base is the
+    /// reciprocal `x⁻¹` at the power's proof (`pow_negSucc` is `refl`), read
+    /// with its fact as every `x⁻¹` is. The base and the exponent count are
+    /// returned; an exponent past `MAX_POWER`, or one that is not a literal,
+    /// leaves the power an atom.
+    fn literal_power(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<(Rc<Term>, u32)> {
+        let Some(Op::Global(pow)) = &ops.pow else {
+            return None;
+        };
+        let args = named_args(self.elab, tm, pow)?;
+        let [x, n, h] = args.as_slice() else {
+            return None;
+        };
+        let exponent = int_literal(&self.elab.spell_term_source(self.cx, n)?)?;
+        if exponent >= 0 {
+            let k = u32::try_from(exponent).ok().filter(|k| *k <= MAX_POWER)?;
+            return Some((Rc::clone(x), k));
+        }
+        let k = u32::try_from(-exponent).ok().filter(|k| *k <= MAX_POWER)?;
+        let inv = ops.inv.as_ref()?.global()?;
+        let x = self.elab.spell_term_source(self.cx, x)?;
+        let h = self.elab.spell_term_source(self.cx, h)?;
+        let expr = parse_expr(&format!("{inv}({x}, h := {h})")).ok()?;
+        let (r, _, _) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
+        Some((Rc::new(r), k))
+    }
+
+    /// A quotient `a / b` is `a * b⁻¹` at the same apartness proof
+    /// (`Rat::div_eq_mul_inv`, by unfolding): its dividend, and the divisor's
+    /// reciprocal, which is then read as every `x⁻¹` is, with its fact. The
+    /// reciprocal is written out and elaborated, so the certificate names
+    /// `b⁻¹` and its kernel check unfolds `/` once. A carrier whose `/` takes
+    /// no proof (`Nat`, `Int`, the bit vectors) has no `≈` reading here; a
+    /// quotient whose parts do not spell stays an atom.
+    fn quotient(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<(Rc<Term>, Rc<Term>)> {
+        let inv = ops.inv.as_ref()?.global()?;
+        let args = ops.div.as_ref()?.args(self.elab, tm)?;
+        let [a, b, h] = args.as_slice() else {
+            return None;
+        };
+        let b = self.elab.spell_term_source(self.cx, b)?;
+        let h = self.elab.spell_term_source(self.cx, h)?;
+        let expr = parse_expr(&format!("{inv}({b}, h := {h})")).ok()?;
+        let (r, _, _) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
+        Some((Rc::clone(a), Rc::new(r)))
+    }
+
+    /// `0 < r` for a reciprocal `r = d⁻¹` of a positive numeral `d` (`a / 2`
+    /// is `a * 2⁻¹`), from the carrier's sign rule beside its `⁻¹`,
+    /// `<inv>`'s module's `positive_inv`, whose `d.Positive()` the search
+    /// proves. Only a numeral: a neutral denominator's positivity is a fact
+    /// the rows already hold or do not, and a search per reciprocal would be
+    /// paid by every reading.
+    fn numeral_reciprocal_positive(&self, r: &Rc<Term>, den: &Rc<Term>, ops: &RelCarrier) -> Option<(Term, Type, Level, String)> {
+        if self.rel_numeral(den, ops)? <= 0 {
+            return None;
+        }
+        let inv = ops.inv.as_ref()?.global()?;
+        let rule = format!("{}positive_inv", inv.strip_suffix("inv")?);
+        self.elab.key_of(&rule)?;
+        let args = named_args(self.elab, r, inv)?;
+        let [_, h] = args.as_slice() else {
+            return None;
+        };
+        let h = self.elab.spell_term_source(self.cx, h)?;
+        let r = self.elab.spell_term_source(self.cx, r)?;
+        // The rule concludes `r.Positive()`; the rows read `0 < r`.
+        let source = format!("{{ let __pos: (0 < {r}) = {rule}(h := {h}); __pos }}");
+        let expr = parse_expr(&source).ok()?;
+        let (term, ty, level) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
+        Some((term, ty, level, source))
+    }
+
     /// A reciprocal is an atom `r` like any other, read together with the
     /// library's fact `r·d ≈ 1`: `x⁻¹` (the carrier's postfix `⁻¹`, whose
     /// fact is the lemma beside it, `<op>_mul`: `x⁻¹ * x ≈ 1`) and
@@ -998,8 +1109,9 @@ impl Reifier<'_> {
     /// condition. A reciprocal whose fact cannot be written stays a plain
     /// atom.
     fn reciprocal(&mut self, tm: &Rc<Term>, ops: &RelCarrier, depth: u32) -> Result<Option<usize>, String> {
-        let (lemma, den, args) = if let Some(op) = ops.inv.as_ref().and_then(Op::global)
-            && let Some(args) = named_args(self.elab, tm, op)
+        let (lemma, den, args) = if let Some(inv) = ops.inv.as_ref()
+            && let Some(op) = inv.global()
+            && let Some(args) = inv.args(self.elab, tm)
             && let [x, h] = args.as_slice()
         {
             (format!("{op}_mul"), Some(Rc::clone(x)), vec![(None, Rc::clone(x)), (Some("h"), Rc::clone(h))])
@@ -1457,6 +1569,34 @@ impl Reifier<'_> {
 /// The integer a spelling ends in, as an `Int` constructor's argument with
 /// only closing parentheses after it: `f(OfNat(2))` is 2, `f(NegSucc(1))` is
 /// −2.
+/// The largest literal exponent `ring` multiplies out.
+const MAX_POWER: u32 = 16;
+
+/// An `Int` literal as a term spells it: `OfNat(2)`, `NegSucc(1)` (that is
+/// -2), `neg(OfNat(2))`, with or without a path, or a plain numeral.
+fn int_literal(source: &str) -> Option<Z> {
+    let source = source.trim();
+    let digits = |s: &str| s.parse::<Z>().ok();
+    // `-2` is `Int::neg(OfNat(2))` until it computes.
+    if let Some(at) = source.find("neg(")
+        && (at == 0 || source[..at].ends_with("::"))
+        && !source[..at].contains('(')
+        && let Some(inner) = source[at + "neg(".len()..].strip_suffix(')')
+    {
+        return int_literal(inner).map(|n| -n);
+    }
+    for (ctor, negative) in [("OfNat(", false), ("NegSucc(", true)] {
+        if let Some(at) = source.find(ctor)
+            && (at == 0 || source[..at].ends_with("::"))
+            && let Some(inner) = source[at + ctor.len()..].strip_suffix(')')
+        {
+            let n = digits(inner)?;
+            return Some(if negative { -(n + 1) } else { n });
+        }
+    }
+    digits(source)
+}
+
 fn trailing_integer(source: &str) -> Option<Z> {
     let body = source.trim_end_matches(')');
     let closed = source.len() - body.len();

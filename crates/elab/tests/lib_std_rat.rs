@@ -101,14 +101,16 @@ fn rel_cong_checks_its_context() {
 }
 
 /// The inverse has no value at 0: no apartness proof exists, so the search
-/// for one fails, at a literal zero, at an unknown `x`, and from `¬(x ≈ 0)`,
-/// which is not apartness until it is converted.
+/// for one fails, at a literal zero, at an unknown `x`, and from `¬(x = 0)`,
+/// which at the pair's equality does not say `x` is not ≈ 0 (`Rat(0, 2)`).
+/// `¬(x ≈ 0)` is read, through `Rat::apart_of_nonzero`
+/// (docs/division-design.md).
 #[test]
 fn an_inverse_needs_apartness() {
     let cases = [
         "fn bad() → Rat { Rat::inv(0) }",
         "fn bad(x: Rat) → Rat { x⁻¹ }",
-        "fn bad(x: Rat, h: ¬(x ≈ 0)) → Rat { x⁻¹ }",
+        "fn bad(x: Rat, h: ¬(x = 0)) → Rat { x⁻¹ }",
     ];
     for (i, case) in cases.iter().enumerate() {
         refused(&format!("rat_inverse_{i}"), case, Refusal::Says("no instance for `Apart("));
@@ -136,7 +138,7 @@ fn cancellation_is_only_by_a_positive() {
     refused(
         "int_cancel_zero",
         "theorem bad(x, y: Int, h: x * OfNat(0) = y * OfNat(0)): x = y { x.mul_cancel_pos_r(y, OfNat(0), h) }",
-        Refusal::Says("no instance for `Lt(OfNat(0), OfNat(0))`"),
+        Refusal::Says("no instance for `OfNat(0) < OfNat(0)`"),
     );
 }
 

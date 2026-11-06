@@ -17,6 +17,7 @@ const SPEC: &str = include_str!("../../../lib/native/native_cat_spec.hthr");
 const PREFIX: &[(&str, &str)] = &[
     ("itree", include_str!("../../../lib/std/itree/itree.hthr")),
     ("itree_trace", include_str!("../../../lib/std/itree/itree_trace.hthr")),
+    ("itree_deep", include_str!("../../../lib/std/itree/itree_deep.hthr")),
     ("linux_trees", include_str!("../../../lib/std/os/linux/linux_trees.hthr")),
     ("itree_sim", include_str!("../../../lib/std/itree/itree_sim.hthr")),
     ("linux_trees_sim", include_str!("../../../lib/std/os/linux/linux_trees_sim.hthr")),

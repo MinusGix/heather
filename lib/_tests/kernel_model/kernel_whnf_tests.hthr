@@ -34,3 +34,11 @@ theorem omega_runs_on(): ¬Obs::Settled(Events::none(), CoTree::after(Events::no
 theorem beta_wrong(): CoTree::after(Events::none(), 10, Tm::whnf_co(App(Lam(Bv(0)), Fv(7)))) = ORet(Fv(8)) { refl }
 // expect-error(kernel): the kernel rejected `add_short`: NotConvertible
 theorem add_short(): CoTree::after(Events::none(), 2, Tm::whnf_co(App(App(add_step(), three()), three()))) = ORet(NSucc(three())) { refl }
+
+// A call used where its result is expected is refused naming the function,
+// imported as it is here (issues/partial-fn-use-site-refusal.md), written as
+// a call or as a method.
+// expect-error: `Tm::whnf_co` is partial, so a call to it is a computation that may not return: this one has type `Partial(Tm)`, but `Tm` is expected here
+fn whnf_now(t: Tm) → Tm { Tm::whnf_co(t) }
+// expect-error: `Tm::whnf_co` is partial, so a call to it is a computation that may not return: this one has type `Partial(Tm)`, but `Tm` is expected here
+fn whnf_dot(t: Tm) → Tm { t.whnf_co() }

@@ -143,6 +143,10 @@ theorem count_words_space(s: count_words::State): count_words::step(s, 32).insid
 theorem count_words_space_keeps(s: count_words::State): count_words::step(s, 32).words = s.words { refl }
 theorem count_words_start(w: Nat):
     count_words::step(count_words::State(w, False), 7).words = w + 1 { refl }
+// The step fact over the step's nested `if`, by cases (§14 item 9).
+theorem count_words_step_at_most_one(s: count_words::State, b: Nat): count_words::step(s, b).words <= s.words + 1 {
+    split_all; all_goals { omega }
+}
 
 // A capture: a local the body reads but does not assign is a parameter of
 // the step, before the state.

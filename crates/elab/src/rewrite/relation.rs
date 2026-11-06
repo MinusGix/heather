@@ -19,7 +19,9 @@
 //! Below a λ the body is rewritten one binder down and the two λs are related
 //! pointwise, `Pointwise(R)`; the λ's consumer crosses that by
 //! `PreservesRelation(Pointwise(R), R, …)` evidence, as `∑` does by
-//! `MonoidRel::range_pointwise` (§10).
+//! `MonoidRel::range_pointwise` (§10). A codata constructor is a node whose
+//! arguments are its children, crossed by evidence about `λ z. C(…, z, …)`
+//! (§11.5).
 //!
 //! The proof is kernel terms (`app@` spines over the evidence), not source
 //! text, and nothing in it is trusted: the declaration gate checks it.
@@ -251,6 +253,13 @@ impl GoalNodes {
             self.scopes.push((scope, Rc::clone(dom), dom_level.clone()));
             let inner = self.scopes.len();
             self.walk(body, inner, seen);
+            return;
+        }
+        // A constructor's children, as written (§11.5).
+        if let Some(node) = crate::codata::CtorNode::read(t) {
+            for child in &node.children {
+                self.walk(&child.term, scope, seen);
+            }
             return;
         }
         let (head, args) = crate::spelling::app_spine(t);
@@ -780,6 +789,9 @@ impl<'a> RelationRewrite<'a> {
         if let Term::Lam { dom_level, cod_level, dom, body } = &**t {
             return self.lambda(t, dom_level, cod_level, dom, body);
         }
+        if let Some(node) = crate::codata::CtorNode::read(t) {
+            return self.constructor(t, node);
+        }
         let (head, args) = crate::spelling::app_spine(t);
         if args.is_empty() || matches!(head, Term::Lam { .. }) {
             return self.opaque(t);
@@ -942,7 +954,76 @@ impl<'a> RelationRewrite<'a> {
                 span: self.span,
             });
         };
-        let Node::Changed { term: x2, proof: hx, over, rel } = &nodes[i] else { unreachable!() };
+        let partial = (!nodes[i].pointwise() && i == last).then(|| prefix(t, 1));
+        self.crossing(t, args[i], &nodes[i], term, partial, &|rw, dom, dom_level, cod_level| {
+            rw.context(t, i, dom, dom_level, cod_level)
+        })
+    }
+
+    /// A codata constructor (§11.5): its children walked as the arguments
+    /// they were written as, and one that changed crossed by the context
+    /// `λ z. C(…, z, …)` — `λ k. CVis(c, k)` for a function child, which
+    /// changed pointwise — as `Eutt::tau_respects` and `Eutt::vis_respects`
+    /// state it.
+    fn constructor(&mut self, t: &Rc<Term>, node: crate::codata::CtorNode) -> R<Node> {
+        // The label's payload is not walked: an occurrence there would be
+        // left behind.
+        if let Some((lhs, ..)) = self.pattern()
+            && (Type::El { level: Level::Zero, tm: Rc::clone(&node.label) }).abstract_local(&lhs).is_some()
+        {
+            return Err(ElabError::Elab {
+                msg: format!(
+                    "`rewrite`: the left side{} occurs in a payload field of the constructor{}; a \
+                     relation rewrite goes into a constructor's children only",
+                    self.shown(&lhs),
+                    self.shown(t),
+                ),
+                span: self.span,
+            });
+        }
+        let nodes = node.children.iter().map(|c| self.term(&c.term)).collect::<R<Vec<_>>>()?;
+        let changed: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].changed()).collect();
+        let [r] = changed[..] else {
+            if changed.is_empty() {
+                return Ok(Node::Same);
+            }
+            return Err(ElabError::Elab {
+                msg: format!(
+                    "`rewrite`: the constructor{} changes in {} of its children; a relation \
+                     rewrite crosses a constructor by one child's evidence (`PreservesRelation`)",
+                    self.shown(t),
+                    changed.len(),
+                ),
+                span: self.span,
+            });
+        };
+        let Node::Changed { term: new, .. } = &nodes[r] else { unreachable!() };
+        let rebuilt = crate::codata::CtorNode::replaced(t, r, new).expect("read as a constructor above");
+        // The context is `λ z. t` with child `r` the binder, as a rule
+        // writes it, also for a constructor's only child.
+        self.crossing(t, &node.children[r].term, &nodes[r], Rc::new(rebuilt), None, &|_, dom, dom_level, cod_level| {
+            let body = crate::codata::CtorNode::replaced(&t.shift_local(1), r, &Rc::new(Term::Var(LocalVar(0))))
+                .expect("read as a constructor above");
+            Rc::new(Term::Lam { dom_level, cod_level, dom, body: Rc::new(body) })
+        })
+    }
+
+    /// The step for node `t` whose one argument `arg` changed as `node`
+    /// says, `term` being `t` rebuilt: evidence about its context, which is
+    /// `partial` (the partial application, for a last argument that is not
+    /// a λ) or `lam(dom, dom_level, cod_level)`, the context as a λ over
+    /// the argument's type.
+    #[allow(clippy::type_complexity)]
+    fn crossing(
+        &mut self,
+        t: &Rc<Term>,
+        arg: &Rc<Term>,
+        node: &Node,
+        term: Rc<Term>,
+        partial: Option<Rc<Term>>,
+        lam: &dyn Fn(&Self, Rc<Type>, Level, Level) -> Rc<Term>,
+    ) -> R<Node> {
+        let Node::Changed { term: x2, proof: hx, over, rel } = node else { unreachable!("crossed only when changed") };
         let input = rel.clone();
         // The argument's carrier: `R`'s, or that of the relation a context
         // below carried it to.
@@ -960,10 +1041,12 @@ impl<'a> RelationRewrite<'a> {
             let (fun, flevel) = self.function_type(over, &carrier, &level);
             (Shape::Pointwise(Rc::clone(over)), Rc::new(fun), flevel)
         };
-        let unary = over.is_empty() && i == last;
-        let context = if unary { prefix(t, 1) } else { self.context(t, i, Rc::clone(&dom), dom_level.clone(), level.clone()) };
+        let unary = partial.is_some();
+        let mut context = match partial {
+            Some(p) => p,
+            None => lam(self, Rc::clone(&dom), dom_level.clone(), level.clone()),
+        };
         let mut found = self.lookup_here(&shape, input.as_ref(), &context, None)?;
-        let mut context = context;
         let mut target = None;
         if matches!(found, Lookup::Untyped) {
             // The context leaves the carrier (`bind(t, h)` at another result
@@ -971,7 +1054,7 @@ impl<'a> RelationRewrite<'a> {
             // names at the type it maps into (§11.4).
             if let Some((d, d_level)) = self.result_type(t) {
                 if !unary {
-                    context = self.context(t, i, Rc::clone(&dom), dom_level.clone(), d_level.clone());
+                    context = lam(self, Rc::clone(&dom), dom_level.clone(), d_level.clone());
                 }
                 let at = (d, d_level);
                 found = self.lookup_here(&shape, input.as_ref(), &context, Some(&at))?;
@@ -1003,7 +1086,7 @@ impl<'a> RelationRewrite<'a> {
             });
         }
         let (preserves, out) = self.discharge_here(&shape, input.as_ref(), &context, target.as_ref())?;
-        Ok(Node::related_by(term, apply(preserves, [Rc::clone(args[i]), Rc::clone(x2), Rc::clone(hx)]), out))
+        Ok(Node::related_by(term, apply(preserves, [Rc::clone(arg), Rc::clone(x2), Rc::clone(hx)]), out))
     }
 
     /// The type of node `t` and its level, scoped in the rewrite's context:

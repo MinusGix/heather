@@ -510,6 +510,10 @@ fn Nat::mod(self n: Nat, divisor: Nat) → Nat {
     match n.divmod(divisor) { MkDivMod(_, remainder) => remainder }
 }
 
+// Floor division and its remainder, with `n / 0 = 0` and `n % 0 = n`.
+designation / at Nat := Nat::div
+designation % at Nat := Nat::mod
+
 // The computation above maintains both Euclidean facts in one state.  The
 // second field records either the zero-divisor convention (`divisor <= 0`) or
 // the strict remainder bound.
@@ -818,6 +822,20 @@ fn Nat::Divides(self divisor, n: Nat) → Type { n.mod(divisor) = 0 }
 fn Nat::pred(self n: Nat) → Nat { match n { Zero => 0, Succ(k) => k } }
 
 theorem Nat::succ_inj(n, m: Nat, h: Succ(n) = Succ(m)): n = m { Nat::cong(Nat::pred, h) }
+
+theorem Nat::pred_le(self n: Nat): n.pred() <= n {
+    match n { Zero => trivial, Succ(k) => k.le_succ_r(k, k.le_refl()) }
+}
+
+theorem Nat::pred_mono(self e: Nat): (d: Nat) → e <= d → e.pred() <= d.pred() {
+    match e {
+        Zero => λ d _ => trivial,
+        Succ(_) => λ d => match d {
+            Zero => λ never => false_elim(never),
+            Succ(_) => λ le => le,
+        },
+    }
+}
 
 // `IsSucc(Succ k)` is `True` and `IsSucc(0)` is `False`, so the constructors
 // are told apart by a type rather than by a generated no-confusion lemma.
@@ -1367,6 +1385,26 @@ theorem Nat::sub_zero_of_le(self m: Nat): (n: Nat) → m <= n → m - n = 0 {
 
 // Clamping to a bound and then counting what is left of it: the same as
 // not clamping.
+// Subtraction against an addition, in the two directions a bound needs.
+theorem Nat::sub_sub_self(self n, m: Nat, h: m <= n): n - (n - m) = m {
+    let k = n - m;
+    let whole: (n = m + k) = sym(trans(m.add_comm(k), m.sub_add_cancel(n, h)));
+    trans(Nat::cong(λ (y: Nat) => y - k, whole), m.add_sub_cancel(k))
+}
+
+theorem Nat::sub_le_of_le_add(self n, m, k: Nat, h: n <= k + m): n - m <= k {
+    match n.lt_or_ge(m) {
+        Inl(lt) => j(sym(n.sub_zero_of_le(m, Nat::le_of_lt(n, m, lt))), λ y _ => y <= k, trivial),
+        Inr(ge) => m.le_of_add_le_add_r(n - m, k, j(sym(m.sub_add_cancel(n, ge)), λ y _ => y <= k + m, h)),
+    }
+}
+
+theorem Nat::le_sub_of_add_le(self k, m, n: Nat, h: m + k <= n): k <= n - m {
+    let fits: (m <= n) = Nat::le_trans(m, m + k, n, m.le_add_l(k), h);
+    m.le_of_add_le_add_r(k, n - m,
+        j(sym(m.sub_add_cancel(n, fits)), λ y _ => k + m <= y, j(m.add_comm(k), λ y _ => y <= n, h)))
+}
+
 theorem Nat::sub_min(c, f: Nat): c - f.min(c) = c - f {
     match f.le_total(c) {
         Inl(below) => Nat::cong(λ (x: Nat) => c - x, Nat::min_eq_l(f, c, below)),
@@ -1396,6 +1434,9 @@ theorem Nat::add_lt_of_lt_sub(self a, b, c: Nat, h: b < c - a): a + b < c {
 // ---------------------------------------------------------------------------
 
 fn Nat::pow(self a: Nat, b: Nat) → Nat { match b { Zero => 1, Succ(k) => a.pow(k) * a } }
+// `a ^ b`, the spelling a diagnostic shows a power by
+// (issues/diagnostic-operator-resugaring.md).
+designation ^ at Nat := Nat::pow
 
 theorem Nat::pow_zero(self a: Nat): a.pow(0) = 1 { refl }
 theorem Nat::pow_one(self a: Nat): a.pow(1) = a { a.mul_left_one() }
@@ -1900,6 +1941,116 @@ theorem Nat::ldiv_pick_spec(n, d, q, r: Nat, c: d <= r ∨ ¬(d <= r), parts: (q
         Inr(nle) => And(trans(Nat::cong(λ (x: Nat) => x + r, dbl), parts),
             match bound { Inl(zero) => Inl(zero), Inr(_) => Inr(Nat::lt_of_not_le(r, d, nle)) }),
     }
+}
+
+// Long division one binary digit at a time, read off a word
+// (`BitVec::division_step`, lib/std/bitvec/bitvec_div.hthr): the dividend
+// gains a low bit `b` and doubles, the trial remainder is `2·r + b`, and the
+// quotient gains a digit, one exactly when the divisor fits under the trial
+// remainder. Stated over `Nat::of_bit` and `twice`, a word's own reading of a
+// bit pushed in at the low end.
+
+// A bit under twice a bounded number stays under twice the bound.
+theorem Nat::of_bit_twice_lt(b: Bool, m, p: Nat, h: m < p): Nat::of_bit(b) + m.twice() < p.twice() {
+    match b {
+        False => rewrite(m.twice().add_left_zero(), Nat::twice_lt_twice_iff(m, p).mpr(h)),
+        True => rewrite(trans(Nat::add_succ_left(0, m.twice()), Nat::cong_succ(m.twice().add_left_zero())),
+            Nat::twice_le_twice_iff(Succ(m), p).mpr(h)),
+    }
+}
+
+// And back: a bit pushed in below a doubled number is under a doubled bound
+// only when the number is under the bound.
+theorem Nat::lt_of_bit_twice_lt(b: Bool, m, p: Nat, h: Nat::of_bit(b) + m.twice() < p.twice()): m < p {
+    let low: (m.twice() <= Nat::of_bit(b) + m.twice()) = Nat::le_add_r(Nat::of_bit(b), m.twice());
+    Nat::twice_lt_twice_iff(m, p).mp(Nat::le_trans(Succ(m.twice()), Succ(Nat::of_bit(b) + m.twice()), p.twice(), low, h))
+}
+
+// A number is at most a bit pushed in below it.
+theorem Nat::le_of_bit_twice(b: Bool, m: Nat): m <= Nat::of_bit(b) + m.twice() {
+    Nat::le_trans(m, m.twice(), Nat::of_bit(b) + m.twice(),
+        rewrite(m.twice_add_self(), m.le_add_l(m)), Nat::le_add_r(Nat::of_bit(b), m.twice()))
+}
+
+// Nothing divided by anything is nothing, remainder nothing.
+theorem DivMod::spec_zero(d: Nat): DivMod::Spec(0, d, MkDivMod(0, 0)) {
+    And(d.mul_left_zero(), match d { Zero => Inl(trivial), Succ(_) => Inr(trivial) })
+}
+
+// The remainder is at most the dividend, whatever the divisor.
+theorem DivMod::rem_le(n, d, q, r: Nat, sp: DivMod::Spec(n, d, MkDivMod(q, r))): r <= n {
+    rewrite(sym(sp.left), Nat::le_add_r(q * d, r))
+}
+
+// Away from a zero divisor the remainder is below it.
+theorem DivMod::rem_lt(n, d, q, r: Nat, sp: DivMod::Spec(n, d, MkDivMod(q, r)), positive: 0 < d): r < d {
+    match sp.right {
+        Inl(zero) => false_elim(Nat::le_trans(1, d, 0, positive, zero)),
+        Inr(lt) => lt,
+    }
+}
+
+// By zero the remainder is the dividend.
+theorem DivMod::rem_of_zero_divisor(n, q, r: Nat, sp: DivMod::Spec(n, 0, MkDivMod(q, r))): r = n {
+    trans(sym(r.add_left_zero()), sp.left)
+}
+
+// Away from a zero divisor the quotient is at most the dividend.
+theorem DivMod::quot_le(n, d, q, r: Nat, sp: DivMod::Spec(n, d, MkDivMod(q, r)), positive: 0 < d): q <= n {
+    let scaled: (q <= q * d) = j(q.add_left_zero(), λ y _ => y <= q * d, q.mul_le_mono_l(1, d, positive));
+    Nat::le_trans(q, q * d, n, scaled, rewrite(sym(sp.left), Nat::le_add_l(q * d, r)))
+}
+
+// A positive quotient as large as the dividend leaves the divisor at most one.
+theorem DivMod::divisor_le_one(n, d, q, r: Nat, sp: DivMod::Spec(n, d, MkDivMod(q, r)), small: n <= q, positive: 0 < q): d <= 1 {
+    let below: (q * d <= q) = Nat::le_trans(q * d, n, q, rewrite(sym(sp.left), Nat::le_add_l(q * d, r)), small);
+    let twice: (Succ(q) <= q * 2) = j(sym(q.mul_two()), λ y _ => Succ(q) <= y, q.add_le_mono_l(1, q, positive));
+    Nat::lt_of_mul_lt_mul_l(q, d, 2, Nat::le_trans(Succ(q * d), Succ(q), q * 2, below, twice))
+}
+
+// The digit's arithmetic: doubling `q·d + r = a` and pushing a bit in.
+theorem DivMod::digit_parts(a, d, q, r: Nat, b: Bool, parts: q * d + r = a):
+    (q * d + q * d) + (Nat::of_bit(b) + r.twice()) = Nat::of_bit(b) + a.twice()
+{
+    let c = Nat::of_bit(b);
+    let p = q * d;
+    calc {
+        (p + p) + (c + r.twice())
+            = (c + r.twice()) + (p + p) := (p + p).add_comm(c + r.twice()),
+            = c + (r.twice() + (p + p)) := c.add_assoc(r.twice(), p + p),
+            = c + ((p + p) + r.twice()) := Nat::cong(λ (x: Nat) => c + x, r.twice().add_comm(p + p)),
+            = c + (p.twice() + r.twice()) := Nat::cong(λ (x: Nat) => c + (x + r.twice()), sym(p.twice_add_self())),
+            = c + (p + r).twice() := Nat::cong(λ (x: Nat) => c + x, sym(p.twice_add(r))),
+            = c + a.twice() := Nat::cong(λ (x: Nat) => c + x.twice(), parts),
+    }
+}
+
+// The digit is zero: the divisor does not fit under the trial remainder.
+theorem DivMod::digit_keep(a, d, q, r: Nat, b: Bool, sp: DivMod::Spec(a, d, MkDivMod(q, r)),
+        lt: Nat::of_bit(b) + r.twice() < d):
+    DivMod::Spec(Nat::of_bit(b) + a.twice(), d, MkDivMod(0 + q.twice(), Nat::of_bit(b) + r.twice()))
+{
+    let doubled: ((0 + q.twice()) * d = q * d + q * d) =
+        trans(Nat::cong(λ (x: Nat) => x * d, trans(q.twice().add_left_zero(), q.twice_add_self())), q.add_mul_distr(q, d));
+    And(trans(Nat::cong(λ (x: Nat) => x + (Nat::of_bit(b) + r.twice()), doubled), DivMod::digit_parts(a, d, q, r, b, sp.left)),
+        Inr(lt))
+}
+
+// The digit is one: the divisor fits, and is taken off.
+theorem DivMod::digit_take(a, d, q, r: Nat, b: Bool, sp: DivMod::Spec(a, d, MkDivMod(q, r)),
+        fits: d <= Nat::of_bit(b) + r.twice()):
+    DivMod::Spec(Nat::of_bit(b) + a.twice(), d, MkDivMod(1 + q.twice(), (Nat::of_bit(b) + r.twice()) - d))
+{
+    let t = Nat::of_bit(b) + r.twice();
+    let bound: (d <= 0 ∨ t < d + d) = match sp.right {
+        Inl(zero) => Inl(zero),
+        Inr(lt) => Inr(rewrite(sym(d.twice_add_self()), Nat::of_bit_twice_lt(b, r, d, lt))),
+    };
+    let picked: (DivMod::Spec(Nat::of_bit(b) + a.twice(), d, MkDivMod(Succ(q * 2), t - d))) =
+        Nat::ldiv_pick_spec(Nat::of_bit(b) + a.twice(), d, q, t, Inl(fits), DivMod::digit_parts(a, d, q, r, b, sp.left), bound);
+    let digit: (Succ(q * 2) = 1 + q.twice()) =
+        sym(trans(Nat::add_succ_left(0, q.twice()), Nat::cong_succ(trans(q.twice().add_left_zero(), trans(q.twice_add_self(), sym(q.mul_two()))))));
+    j(digit, λ y _ => DivMod::Spec(Nat::of_bit(b) + a.twice(), d, MkDivMod(y, t - d)), picked)
 }
 
 theorem Nat::ldiv_step_spec(n, d: Nat, s: DivMod, h: DivMod::Spec(n.half(), d, s)): DivMod::Spec(n, d, Nat::ldiv_step(n, d, s)) {

@@ -1561,7 +1561,11 @@ theorem Rat::nonzero_of_apart({x: Rat}, h: x.Apart(0)): ¬(x ≈ 0) {
     }
 }
 
-theorem Rat::apart_of_nonzero({x: Rat}, h: ¬(x ≈ 0)): x.Apart(0) {
+// `¬(x ≈ 0)` as a one-place premise, so a local one is read by conversion,
+// as a local `0 < x` is read as `x.Positive()`.
+fn Rat::Nonzero(self x: Rat) → Type { ¬(x ≈ 0) }
+
+evidence theorem Rat::apart_of_nonzero({x: Rat}, h: x.Nonzero() := infer): x.Apart(0) {
     match x.lt_trichotomy(0) {
         Inl(lt) => Inl(lt),
         Inr(rest) => match rest {
@@ -1743,7 +1747,7 @@ theorem Rat::npow_le_mono({x, y: Rat}, n: Nat, h: x <= y, hx: 0 <= x): x.npow(n)
 
 // An inverse is apart from zero: were it ≈ 0, x · x⁻¹ would be ≈ 0, not 1.
 evidence theorem Rat::apart_inv({x: Rat}, {h: x.Apart(0)}): x.inv(h := h).Apart(0) {
-    Rat::apart_of_nonzero(λ zero => {
+    Rat::apart_of_nonzero(h := λ zero => {
         let bad: Rat::Same(1, 0) = calc {
             1 ≈ x * x⁻¹ := Rat::same_sym(x.mul_inv()),
             ≈ x * 0 := Rat::mul_respects(x.same_refl(), zero),
@@ -2128,6 +2132,240 @@ theorem Rat::neg_gap({a, b, g: Rat}, h: a + g <= b): -b + g <= -a { linarith(h) 
 theorem Rat::le_add_shift({a, q, e, r, f: Rat}, d: a <= q + (e + r), s: e <= f): a <= (q + r) + f { linarith(d, s) }
 
 theorem Rat::sub_le_shift({a, q, e, r, f: Rat}, d: q <= a + (r + e), s: e <= f): q - r <= a + f { linarith(d, s) }
+
+// ---------------------------------------------------------------------------
+// Division (docs/division-design.md). `a / b` is `a * b⁻¹` and asks what `b⁻¹`
+// asks, `b.Apart(0)`, searched at the call. There is no junk `a / 0`: the
+// total reciprocal stays `Rat::recip`. What the search reads, cheapest first:
+//
+// - a local `b.Apart(0)`, `0 < b`, `b < 0` or `¬(b ≈ 0)` (by conversion to
+//   the one-place predicates below);
+// - a closed divisor, by computation (`1 / 2`, `a / (3 - 1)`);
+// - the sign rules below, through sums, products, quotients, inverses,
+//   powers, negations, squares and absolute values;
+// - last, `nlinarith` over the caller's hypotheses (`a / (c - b)` with
+//   `b < c` in scope, `a / (1 + b * b)`), as a search rule: it runs only
+//   when every rule above has failed, so a divisor a local or a rule
+//   answers never pays for it.
+//
+// `¬(b = 0)` is not enough and is not read: `=` at `Rat` is the pair's
+// equality, and `Rat(0, 2)` is not `Rat(0, 1)`.
+
+fn Rat::div(self a, b: Rat, h: b.Apart(0) := infer) → Rat { a * b.inv(h := h) }
+
+designation / at Rat := Rat::div
+
+theorem Rat::div_eq_mul_inv(self a, b: Rat, h: b.Apart(0) := infer): a / b = a * b⁻¹ { refl }
+
+// The value never reads the proof.
+theorem Rat::div_any_proof(self a, b: Rat, h, h2: b.Apart(0)): a.div(b, h := h) = a.div(b, h := h2) { refl }
+
+theorem Rat::div_mul_cancel(self a, b: Rat, h: b.Apart(0) := infer): (a / b) * b ≈ a {
+    calc {
+        (a / b) * b ≈ a * (b⁻¹ * b) := a.mul_assoc(b⁻¹, b),
+        ≈ a * 1 := Rat::mul_respects(a.same_refl(), b.inv_mul()),
+        ≈ a := a.mul_one(),
+    }
+}
+
+theorem Rat::mul_div_cancel(self a, b: Rat, h: b.Apart(0) := infer): (a * b) / b ≈ a {
+    calc {
+        (a * b) / b ≈ a * (b * b⁻¹) := a.mul_assoc(b, b⁻¹),
+        ≈ a * 1 := Rat::mul_respects(a.same_refl(), b.mul_inv()),
+        ≈ a := a.mul_one(),
+    }
+}
+
+theorem Rat::div_self(self b: Rat, h: b.Apart(0) := infer): b / b ≈ 1 { b.mul_inv() }
+
+theorem Rat::div_one(self a: Rat): a / 1 ≈ a { a.mul_one() }
+
+theorem Rat::one_div(self b: Rat, h: b.Apart(0) := infer): 1 / b ≈ b⁻¹ { b⁻¹.one_mul() }
+
+theorem Rat::zero_div(self b: Rat, h: b.Apart(0) := infer): 0 / b ≈ 0 { b⁻¹.zero_mul() }
+
+theorem Rat::div_respects({a, a2, b, b2: Rat}, ha: a ≈ a2, hb: b ≈ b2, h: b.Apart(0) := infer, h2: b2.Apart(0) := infer):
+    a / b ≈ a2 / b2
+{
+    Rat::mul_respects(ha, Rat::inv_respects(hb))
+}
+
+theorem Rat::add_div(self a, c, b: Rat, h: b.Apart(0) := infer): (a + c) / b ≈ a / b + c / b { a.add_mul_distr(c, b⁻¹) }
+
+theorem Rat::sub_div(self a, c, b: Rat, h: b.Apart(0) := infer): (a - c) / b ≈ a / b - c / b {
+    let e: ((a - c) * b⁻¹ ≈ a * b⁻¹ - c * b⁻¹) = ring;
+    e
+}
+
+theorem Rat::mul_div_assoc(self a, c, b: Rat, h: b.Apart(0) := infer): (a * c) / b ≈ a * (c / b) { a.mul_assoc(c, b⁻¹) }
+
+// The inverse of a product is the product of the inverses.
+theorem Rat::inv_mul_distrib(self x, y: Rat, hx: x.Apart(0) := infer, hy: y.Apart(0) := infer): (x * y)⁻¹ ≈ x⁻¹ * y⁻¹ {
+    let i = x⁻¹;
+    let j = y⁻¹;
+    let unit = calc {
+        (x * y) * (i * j) ≈ (x * i) * (y * j) := ring,
+        ≈ 1 := Rat::same_trans(Rat::mul_respects(x.mul_inv(), y.mul_inv()), Rat::mul_one(1)),
+    };
+    Rat::same_sym(Rat::inv_unique(unit))
+}
+
+theorem Rat::div_mul_div(self a, b, c, d: Rat, hb: b.Apart(0) := infer, hd: d.Apart(0) := infer):
+    (a / b) * (c / d) ≈ (a * c) / (b * d)
+{
+    calc {
+        (a / b) * (c / d) ≈ (a * c) * (b⁻¹ * d⁻¹) := { let e: ((a * b⁻¹) * (c * d⁻¹) ≈ (a * c) * (b⁻¹ * d⁻¹)) = ring; e },
+        ≈ (a * c) / (b * d) := Rat::mul_respects((a * c).same_refl(), Rat::same_sym(b.inv_mul_distrib(d))),
+    }
+}
+
+// A quotient is apart from zero when its numerator is.
+evidence theorem Rat::apart_div({a, b: Rat}, {h: b.Apart(0)}, ha: a.Apart(0) := infer): a.div(b, h := h).Apart(0) {
+    Rat::apart_mul(hx := ha, hy := Rat::apart_inv())
+}
+
+// Signs through the operations. `NonNeg` is the third one-place predicate:
+// it is what a square, an absolute value, or a sum of them is, and a sum is
+// positive when one side is positive and the other nonnegative. A positive
+// local is not read as nonnegative (that rule's premise would be no smaller
+// than its conclusion), so a positive plus a positive has its own rule.
+fn Rat::NonNeg(self x: Rat) → Type { 0 <= x }
+
+evidence theorem Rat::positive_add({x, y: Rat}, hx: x.Positive() := infer, hy: y.Positive() := infer): (x + y).Positive() {
+    Rat::add_pos(hx, hy)
+}
+
+evidence theorem Rat::positive_add_nonneg({x, y: Rat}, hx: x.Positive() := infer, hy: y.NonNeg() := infer): (x + y).Positive() {
+    let px: (0 < x) = hx;
+    let py: (0 <= y) = hy;
+    let r: (0 < x + y) = linarith(px, py);
+    r
+}
+
+evidence theorem Rat::positive_nonneg_add({x, y: Rat}, hx: x.NonNeg() := infer, hy: y.Positive() := infer): (x + y).Positive() {
+    let px: (0 <= x) = hx;
+    let py: (0 < y) = hy;
+    let r: (0 < x + y) = linarith(px, py);
+    r
+}
+
+evidence theorem Rat::positive_mul({x, y: Rat}, hx: x.Positive() := infer, hy: y.Positive() := infer): (x * y).Positive() {
+    Rat::mul_pos(hx, hy)
+}
+
+evidence theorem Rat::positive_mul_neg({x, y: Rat}, hx: x.Negative() := infer, hy: y.Negative() := infer): (x * y).Positive() {
+    let nx: (x < 0) = hx;
+    let ny: (y < 0) = hy;
+    let p = Rat::mul_pos(x := -x, y := -y, hx := linarith(nx), hy := linarith(ny));
+    let e: ((-x) * (-y) ≈ x * y) = ring;
+    let r: (0 < x * y) = linarith(p, e);
+    r
+}
+
+evidence theorem Rat::positive_inv({x: Rat}, {h: x.Apart(0)}, hx: x.Positive() := infer): x.inv(h := h).Positive() {
+    OrderedField::recip_pos(x, h, hx)
+}
+
+evidence theorem Rat::positive_div({a, b: Rat}, {h: b.Apart(0)}, ha: a.Positive() := infer, hb: b.Positive() := infer):
+    a.div(b, h := h).Positive()
+{
+    Rat::mul_pos(ha, Rat::positive_inv(h := h, hx := hb))
+}
+
+evidence theorem Rat::positive_npow({x: Rat}, {n: Nat}, hx: x.Positive() := infer): x.npow(n).Positive() {
+    Rat::npow_pos(n, hx)
+}
+
+theorem Rat::positive_pow_parts(x: Rat, n: Int, hx: x.Positive()): (hn: x.PowOk(n)) → 0 < Rat::pow_parts(x, n, hn) {
+    match n {
+        OfNat(m) => λ _ => Rat::npow_pos(m, hx),
+        NegSucc(k) => λ hn => Rat::npow_pos(Succ(k), Rat::positive_inv(h := hn, hx := hx)),
+    }
+}
+
+evidence theorem Rat::positive_pow({x: Rat}, {n: Int}, {hn: x.PowOk(n)}, hx: x.Positive() := infer): x.pow(n, h := hn).Positive() {
+    Rat::positive_pow_parts(x, n, hx, hn)
+}
+
+evidence theorem Rat::positive_neg({x: Rat}, hx: x.Negative() := infer): (-x).Positive() {
+    let nx: (x < 0) = hx;
+    let r: (0 < -x) = linarith(nx);
+    r
+}
+
+evidence theorem Rat::negative_neg({x: Rat}, hx: x.Positive() := infer): (-x).Negative() {
+    let px: (0 < x) = hx;
+    let r: (-x < 0) = linarith(px);
+    r
+}
+
+evidence theorem Rat::negative_add({x, y: Rat}, hx: x.Negative() := infer, hy: y.Negative() := infer): (x + y).Negative() {
+    let nx: (x < 0) = hx;
+    let ny: (y < 0) = hy;
+    let r: (x + y < 0) = linarith(nx, ny);
+    r
+}
+
+evidence theorem Rat::negative_mul_l({x, y: Rat}, hx: x.Negative() := infer, hy: y.Positive() := infer): (x * y).Negative() {
+    let p = Rat::mul_pos(x := -x, y := y, hx := Rat::positive_neg(hx := hx), hy := hy);
+    let e: ((-x) * y ≈ -(x * y)) = ring;
+    let r: (x * y < 0) = linarith(p, e);
+    r
+}
+
+evidence theorem Rat::negative_mul_r({x, y: Rat}, hx: x.Positive() := infer, hy: y.Negative() := infer): (x * y).Negative() {
+    let p = Rat::mul_pos(x := x, y := -y, hx := hx, hy := Rat::positive_neg(hx := hy));
+    let e: (x * (-y) ≈ -(x * y)) = ring;
+    let r: (x * y < 0) = linarith(p, e);
+    r
+}
+
+evidence theorem Rat::negative_inv({x: Rat}, {h: x.Apart(0)}, hx: x.Negative() := infer): x.inv(h := h).Negative() {
+    OrderedField::recip_neg(x, h, hx)
+}
+
+evidence theorem Rat::nonneg_add({x, y: Rat}, hx: x.NonNeg() := infer, hy: y.NonNeg() := infer): (x + y).NonNeg() {
+    Rat::add_nonneg(hx, hy)
+}
+
+evidence theorem Rat::nonneg_mul({x, y: Rat}, hx: x.NonNeg() := infer, hy: y.NonNeg() := infer): (x * y).NonNeg() {
+    Rat::mul_nonneg(hx, hy)
+}
+
+evidence theorem Rat::nonneg_mul_self({x: Rat}): (x * x).NonNeg() { x.sq_nonneg() }
+
+evidence theorem Rat::nonneg_sq({x: Rat}, {h: x.PowOk(2)}): x.pow(2, h := h).NonNeg() {
+    Rat::le_respects(Rat::same_refl(0), Rat::same_sym(x.pow_two()), x.sq_nonneg())
+}
+
+evidence theorem Rat::nonneg_abs({x: Rat}): x.abs().NonNeg() { x.abs_nonneg() }
+
+// A written sign goal is the one-place predicate's: `0 < e` is
+// `e.Positive()`, so `positivity` and `h: 0 < e := infer` reach the sign
+// rules. These pass Paterson's condition in this direction (the premise has
+// fewer symbols), which the converse did not.
+evidence theorem Rat::lt_of_positive({x: Rat}, h: x.Positive() := infer): 0 < x { h }
+evidence theorem Rat::lt_of_negative({x: Rat}, h: x.Negative() := infer): x < 0 { h }
+evidence theorem Rat::le_of_nonneg({x: Rat}, h: x.NonNeg() := infer): 0 <= x { h }
+
+// Arithmetic at the leaves of the sign rules: a sum or a difference whose
+// sign no rule gives is `nlinarith`'s over the caller's hypotheses, so
+// `(c - b) + e.abs()` at `b < c` is positive. Keyed by `+` and `-`, so a
+// local never runs them; search rules, so they run after every plain rule.
+// A nonnegative is also a positive one `linarith` reads from a local, the
+// step the rules cannot take (`Positive ⇒ NonNeg` is not smaller).
+evidence theorem Rat::positive_add_by_nlinarith({x, y: Rat}, h: 0 < x + y := nlinarith): (x + y).Positive() { h }
+evidence theorem Rat::positive_sub_by_nlinarith({x, y: Rat}, h: 0 < x - y := nlinarith): (x - y).Positive() { h }
+evidence theorem Rat::negative_add_by_nlinarith({x, y: Rat}, h: x + y < 0 := nlinarith): (x + y).Negative() { h }
+evidence theorem Rat::negative_sub_by_nlinarith({x, y: Rat}, h: x - y < 0 := nlinarith): (x - y).Negative() { h }
+evidence theorem Rat::nonneg_by_linarith({x: Rat}, h: 0 <= x := linarith): x.NonNeg() { h }
+
+// The arithmetic fallback, tried after every rule about `Apart`: a sign
+// `nlinarith` proves from the caller's hypotheses. A search rule
+// (docs/facts-on-demand-design.md §3), so a divisor or an inverse that a
+// local or a rule answers never runs it.
+evidence theorem Rat::apart_by_nlinarith_neg({x: Rat}, h: x < 0 := nlinarith): x.Apart(0) { Inl(h) }
+evidence theorem Rat::apart_by_nlinarith({x: Rat}, h: 0 < x := nlinarith): x.Apart(0) { Inr(h) }
 
 // ---------------------------------------------------------------------------
 // Finite sums (std/big_operator).

@@ -184,7 +184,8 @@ these functions, and an honest type is what makes them stateable.
 4. **Refusals, each with its reason:** a `partial fn` whose body never calls
    itself (it should be a plain `fn`); a self-call outside a bind position;
    using `f(x)` where a `B` is expected ("`f` is partial: bind it with `<-`,
-   or use `Partial::get` with a termination proof").
+   or use `Partial::get` with a termination proof"; built with `CoTree::get`,
+   §9 item 11).
 
 ### 4.3 What proofs see
 
@@ -424,13 +425,13 @@ scrutinee (`big(n)`) needs that scrutinee as a parameter of a helper
    A → CoTree<B>(E)`. An `E` command is issued in the body with
    `CoTree::trigger(Events::sum(Events::calls(A, B), E), Inr(c))` today; a
    `trigger` that injects on its own is a small follow-up.
-7. **Every call goes through `CoTree::rec`, tail calls included.** §4.2's
+7. **Every call went through `CoTree::rec`, tail calls included.** §4.2's
    tail case (one `CoTree::iter` of a pass) is what a native loop wants,
-   but proving a result through it needs an iteration invariant rule the
-   library does not have, while `rec_sound` covers every body. Split out:
-   `issues/partial-fn-tail-iter.md`. A `while` with no measure *is* an
-   `iter` (`docs/sequencing-surface-design.md` §18), so loops already have
-   the native shape.
+   but proving a result through it needed an iteration invariant rule the
+   library did not have, while `rec_sound` covers every body. Split out:
+   `issues/partial-fn-tail-iter.md`, built in §10. A `while` with no
+   measure *is* an `iter` (`docs/sequencing-surface-design.md` §18), so
+   loops already had the native shape.
 8. **Proof patterns.** A bound call's safety is the new
    `CoTree::safe_call_bind` (the continuation safe at every answer within
    `P(d)`). Conversion does not identify a body with a hand-written step
@@ -443,7 +444,72 @@ scrutinee (`big(n)`) needs that scrutinee as a parameter of a helper
    evaluator reads, and `Tm::whnf_co_sound` is `rec_sound` over
    `Tm::whnf_co::body` with `Tm::whnf_co_body_safe`. `Tm::step_co` and its
    helpers stay as the spelled-out arms the safety proof cites.
-10. **Not built:** calling a partial function where a `B` is expected is a
-   plain type mismatch, not §4.2's named refusal
-   (`issues/partial-fn-use-site-refusal.md`); mutual `partial` functions;
-   `Partial::get`'s alias (`CoTree::get` works on `Partial` as is).
+10. **Not built:** mutual `partial` functions; `Partial::get`'s alias
+   (`CoTree::get` works on `Partial` as is).
+11. **The use-site refusal** (§4.2, `issues/partial-fn-use-site-refusal.md`).
+   A call to a partial function where a `B` is expected is refused by the
+   gate, as any mismatch is, and the recorded checking site keeps the call's
+   head; on refusal, a head that is a partial function (the global `f#body`
+   designated `f::body` with no `f::rec` beside it, which a measure's family
+   has: read from the module's names, so an imported function counts) turns
+   the message into "`f` is partial, so a call to it is a computation that
+   may not return: this one has type `Partial(B)`, but `B` is expected here;
+   bind it with `let r <- f(…);` inside a computation, or use `CoTree::get`
+   with a termination proof". The call's type shows as `Partial(B)` when it
+   is `CoTree<B>(none)` (the general respelling is
+   `issues/type-name-display-respelling.md`). A mismatch between two
+   computations (`Partial(Nat)` where `Partial(Bool)` is expected) keeps the
+   ordinary message. `crates/elab/src/partial.rs`, `is_partial_fn` and
+   `partial_use_note`.
+
+## 10. The tail case as built (2026-11-06)
+
+`issues/partial-fn-tail-iter.md`, §4.2 item 2. Probes:
+`lib/_tests/std/itree/partial_fn_tests.hthr`.
+
+1. **The rule first.** `CoTree::iter_sound` (`coitree_rec.hthr`): an
+   invariant `I` on states and `Q` on results; if from every state within
+   `I` the pass returns only `Continue(a2)` with `I(a2)` and `Break(b)` with
+   `Q(b)` (`Step::Within(I, Q, x)`, read off `Returns(E, body(a), x)`),
+   then `Returns(E, iter(body, a), b) → Q(b)` for `I(a)`. The proof is
+   `iter_safe`, an induction on the count with the rest of the current pass
+   as an observation, the shape `mrec_safe` has: each pass spends the
+   `CTau` `iter` guards it with. The hypothesis is stated on `Returns` of
+   the pass, as the issue put it, not on a `Safe`-style step predicate:
+   a pass has no calls to answer, and a literal pass is read with
+   `Returns::ret` (a return returns only its value). The Eutt route the
+   issue offered (rec of a tail body ≈ iter of its pass, then `rec_sound`)
+   was not needed.
+2. **The lowering picks the shape.** `crates/elab/src/partial.rs` first
+   walks the body as round 2 does, so every refusal is unchanged. When it
+   met no bound call (`let r <- f(e);`), every self-call is a tail call,
+   and a second walk writes the body as a pass:
+   `fn f#body(x: A) → CoTree<Step<A, B>>(E)`, a tail self-call `f(e)` is
+   `CRet(Continue(e))`, a tail `Pointed::ret(v)` or `CRet(v)` is the same
+   call at `Break(v)`, and any other tail leaf `t` is
+   `CoTree::map<B, Step<A, B>>(E, t, λ v => Break(v))`; then
+   `fn f(x̄) → Partial(B) { CoTree::iter(E, λ (a: A) => f#body(a), ⟨x̄⟩) }`
+   and `f_unfold` by `refl`. Tail positions are round 2's: a block's
+   result, a `match` arm, a bind's continuation and a measureless `while`'s
+   rest when the bind or loop is itself in tail position. A tail body the
+   second walk cannot place (a bind whose continuation is not a `λ`, a
+   `match` with a written motive) is lowered through `rec` as before, which
+   has the same meaning.
+3. **What a proof sees changes with the shape.** `f::body` of a tail-only
+   function is a pass, read with `iter_sound`; of any other, a body over
+   its calls, read with `rec_sound`. A function's shape is visible in its
+   source (does any self-call sit under a `<-`), and `f_unfold` names it.
+4. **Events are spelled at `E` in a pass.** A pass is a computation over `E`
+   itself (it answers no calls), so a tail-only `partial(E) fn` issues
+   `CoTree::trigger(E, c)`; a body with a bound call issues
+   `CoTree::trigger(Events::sum(Events::calls(A, B), E), Inr(c))`, as in
+   round 2. Adding a bound call to a function therefore changes how its
+   commands are written. A `trigger` that injects on its own (§9 item 6's
+   follow-up) would make the two spell the same, and is now the more
+   useful of the two directions: `issues/partial-fn-event-spelling.md`.
+   For the same reason, a pass may bind another `partial fn`'s call (a
+   `Partial(X)` is a `CoTree<X>(none)`, a pass's own carrier when `E` is
+   `none`), which a body over its calls cannot without a `translate`.
+5. **Native.** A tail-only `partial fn` is now `CoTree::iter` of a pass,
+   §4.4's shape; carrying it to `Program::iter` and the native `Repeat` is
+   round 3 (partial `runtime fn` loops), which this unblocks.

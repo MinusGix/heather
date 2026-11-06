@@ -647,3 +647,30 @@ measurement noise of a 45-second workload. So: cold overhead is now
 **single-digit percent and near the noise floor**, against v1's reproducible
 +16%. "Approximately free" is the right description; a number with two
 significant figures is not available on this machine today.
+
+### 12.5 Node digests (2026-11-06)
+
+The walk of §12.1 was a tree walk, and the elaborator shares terms as a
+DAG: a let chain, or a tier-2 type's `W` encoding repeated through a
+tactic's monadic code, made a declaration's stream as large as its tree
+(`issues/image-tree-walks-let-shared-terms.md`). A fifth piece now joins
+the four of §12.1: a **node digest**, the tag `0x1f` followed by the
+SHA-256 of `heather/node/1\0` and a term's or type's encoding. A node whose
+encoding reaches 512 bytes is written into its parent's as its digest, and
+the walk memoizes each digest by the node's address, so a node shared in
+memory is walked once per declaration.
+
+Whether a node is a digest is a function of its content (the length of its
+own encoding, digests below it included), never of how it was shared, so
+equal declarations still hash alike however they were built
+(`tests/merkle.rs::a_shared_term_is_walked_once_and_hashes_as_its_tree`).
+The framing stays prefix-free: the tag fixes the 32 bytes that follow, and
+a digest stands for its preimage up to collision resistance, as a referent
+hash already does. The domains bumped (`iface/4`, `check/4`,
+`axiom-iface/3`, `statement/3`) because the scheme changed; every stored
+verdict and module identity is new once.
+
+Bytes of an open node stay in the staging buffer until the node closes,
+because they may yet become its digest; the buffer is flushed only between
+top-level pieces. Hashing cost is the shared size of the declaration, at
+most 33 bytes more per digest.

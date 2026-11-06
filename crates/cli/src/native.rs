@@ -502,6 +502,14 @@ fn program_assembly(symbol: &str, bytes: &[u8], entry: usize) -> String {
 // tests share (`target/native-test-images`): `scripts/test`'s native warm-up
 // runs this alone, so the `compile-x86` children replay the library instead
 // of each elaborating it. Every replayed declaration is still kernel-checked.
+//
+// The gate is a verdict store with no file behind it: every declaration
+// still faces the kernel once in this process, and a module's image moved
+// into another module's world (where two import chains meet, such as grind's
+// and the x86 model's) is vouched for by the verdicts this process recorded,
+// as `warm-native` and `compile-x86` are by theirs. Without it each such
+// world rechecked the whole of the moved chain in the kernel
+// (`issues/grind-closure-cost.md`).
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,6 +517,8 @@ mod tests {
     #[test]
     fn the_bundled_library_checks() {
         let mut elab = Elaborator::with_prelude().unwrap();
+        let verdicts = heather_cache::Cache::over(heather_cache::store::Store::empty(PathBuf::from("unused")));
+        elab.set_gate(Rc::new(verdicts) as Rc<dyn heather_elab::gate::KernelGate>);
         let mut session = SemanticSession::new(Some(heather_cli::showcase::native_test_images()));
         for &(name, src) in SUPPORT {
             check_module(&mut elab, &mut session, &loader::Module {

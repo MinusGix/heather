@@ -287,7 +287,7 @@ Issue: [grind-e-matching](../issues/grind-e-matching.md).
 | `grind()` | the goal's locals |
 | `grind_with(hints)` | the locals, and the facts the terms `hints` prove |
 | `grind_using(names, hints)` | the above, and the lemmas `names` names, resolved where the `by` is (`"List::append_assoc"`) |
-| `grind_report(names, hints)` | `grind_using`, and on success a `tactic-report` warning naming the hints and lemmas the proof cites and the ones it does not |
+| `grind_report(names, hints)` | `grind_using`, and on success a `tactic-report` warning naming the hints and lemmas the proof cites, the ones it does not cite but whose terms the search needed (§9.6), and the ones it does not use |
 
 Any fact whose statement is an equation under binders, a local
 (`k: (n: Nat) → f(n) = n`), a hint or a named lemma, is a **lemma**. Before
@@ -383,7 +383,8 @@ warning: `by grind_report(…)`: grind: the proof uses List::append_assoc; not u
 The used names come from the same explanation the proof does, folded
 through a second path algebra (`cited_alg`, the names of the given facts
 along the path), so the report is exactly what the proof term cites. Locals
-the proof cites are named separately ("and the locals k, h").
+the proof cites are named separately ("and the locals k, h"). A hint the
+proof does not cite can still be one the search needed (§9.6).
 
 ### 9.5 Found on the way
 
@@ -393,6 +394,62 @@ closed graph above `match rounds` and found the same instances every round.
 The elaborator accepts the shape and computes the wrong function
 ([recursion-let-reads-changing-parameter](../issues/recursion-let-reads-changing-parameter.md));
 `saturate` now matches on `rounds` first.
+
+### 9.6 Hints the search needed: lurking facts (2026-11-06)
+
+Issue: [grind-report-lurking-hints](../issues/grind-report-lurking-hints.md).
+What the proof cites (§9.4) is not all a narrowed call needs. A near match
+draws its free binder from the graph's terms, or finds a hole's solution
+among its nodes (§13.1, §13.4). That term may be in the graph only because
+some hint put it there, and the proof cites the matched lemma, not the hint
+that supplied the term. Probe `lurk_reported`: `lurk_one: 1 + 0 = 1` is the
+only source of the node `1`, which `lurk_sc(?b) ≡ lurk_two()` needs as `?b`.
+The proof cites only the local `k`, and without `lurk_one` the goal fails
+(`lurk_narrowed`).
+
+This is the *lurking axiom* of Gopinathan et al., "Accelerating Automated
+Program Verifiers by Automatic Proof Localization" (CAV 2025): an SMT axiom
+outside the UNSAT core whose instances made the ground terms that triggered
+a core axiom. They find them by walking Z3's instantiation graph back from
+each core axiom. grind keeps the same walk as it goes:
+
+- **Per node, what brought it** (`GInfo.by`). The goal's terms: nothing. A
+  fact's terms, as read: the fact's name. An instance's new terms: the
+  lemma, the names its premises cite, and what brought the nodes it stands
+  on (the nodes it was matched at, the node a near match met, the older
+  nodes its sides are made of, its premises' paths). So `by` is already
+  closed: nothing walks back later. A side's reduct inherits its side's.
+- **Per edge, what it stands on** (`Fact.found`): for an instance, the
+  above plus its sides' `by`; for a reduct's or injectivity's edge, its
+  endpoints' and the path that justified it.
+- **Per proof**, `found_alg`: a second path algebra beside `cited_alg`,
+  collecting each edge's `found` and the `by` of the nodes every congruence
+  and reflexivity step is at.
+
+The report then splits the hints three ways:
+
+```
+warning: `by grind_report(…)`: grind: the proof uses none of the hints, and the locals k; not cited, but needed to find it: lurk_one; not used: List::append_nil
+```
+
+"Needed to find it" over-approximates in one direction only: a hint whose
+terms the search stood on is named even if another term would have done.
+A hint named "not used" can be dropped. Read facts are the exception that
+needs no tracking: a fact's terms are interned by its own reading, so a fact
+read earlier never makes a later one work. Only search does.
+
+Cost: one name list per node and per edge, built as instances are added,
+and one more explanation of the proof's path, by `found_alg`, which only the
+report reads.
+
+**Mutation controls.** The paper also measures whether a localized proof
+survives renamings and reorderings, as a stand-in for a project evolving.
+grind is deterministic, but it visits nodes in order under per-round
+budgets, so the same question applies: `grind_mutation_tests` re-proves
+goals of `grind_tests` with their lemmas reversed or beside lemmas they do
+not need. All close except one: `neg_add_succ` with `Int::add_comm` added
+runs out of evaluation fuel, on master too
+([grind-unrelated-lemma-fuel](../issues/grind-unrelated-lemma-fuel.md)).
 
 ## 10. The library sweep (2026-11-02)
 
@@ -931,3 +988,17 @@ closure). What would let them in: a cheaper closure still
 ([tier2-constructor-value-cost](../issues/tier2-constructor-value-cost.md)),
 and a recheck that a merge of two chains does not repeat
 ([lib-closure-markers](../issues/lib-closure-markers.md) records both).
+
+**Where the sixfold went (later the same day).** Most of it was not grind.
+The bundled check's session had no verdict store, so each world where two
+import chains meet kernel-rechecked the moved chain; with an in-memory store
+(every declaration still faces the kernel once) that went, but the store's
+one Merkle prefix then re-hashed everything past the common part at every
+switch between the process's world and a module's canonical world. The
+store now keeps the prefixes of the last few worlds, image relocation
+memoizes shared nodes, and the Merkle walk hashes a large node as a digest
+walked once (`docs/cache-v1-design.md` §12.5). With the conversions
+replayed the cold check went from about 216 s to about 120 s; master's own
+stayed at about 35 s. What is left of the difference is the closure's own
+elaboration (`grind` about 42 s, `tactic` about 23 s), which is
+[tier2-constructor-value-cost](../issues/tier2-constructor-value-cost.md).

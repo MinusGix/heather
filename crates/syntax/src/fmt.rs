@@ -135,6 +135,11 @@ fn is_infix(tok: &Tok, roles: &HashMap<usize, TokenRole>) -> bool {
         TokKind::Plus
         | TokKind::PlusPlus
         | TokKind::Star
+        | TokKind::Slash
+        | TokKind::Percent
+        | TokKind::Amp
+        | TokKind::Shl
+        | TokKind::Shr
         | TokKind::Caret
         | TokKind::LtEq
         | TokKind::Arrow

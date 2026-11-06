@@ -58,6 +58,17 @@ theorem creal_den_context(a, b, d: CReal, hd: 0 < d, h: a <= b * d): a * d⁻¹ 
 theorem rat_den_same(a, b, d: Rat, hd: 0 < d, h: a ≈ b * d): a * d⁻¹ ≈ b { linarith(hd, h) }
 theorem rat_two_dens(a, b, d, e: Rat, hd: 0 < d, he: 0 < e, h: a * d⁻¹ <= b * e⁻¹): a * e <= b * d { linarith(hd, he, h) }
 theorem rat_den_sum(a, b, d: Rat, hd: 0 < d + 1, h: a * (d + 1)⁻¹ <= b): a <= b * d + b { linarith(hd, h) }
+// A quotient is a product with the divisor's reciprocal, and a numeral
+// divisor is positive by its sign rule, so `a / 2` is cleared with no fact
+// about it (docs/division-design.md).
+theorem rat_half_below(a: Rat, h: 0 < a): a / 2 < a { linarith }
+theorem rat_midpoint(a, b: Rat, h: a < b): a < (a + b) / 2 ∧ (a + b) / 2 < b { And(linarith, linarith) }
+theorem rat_third(a: Rat, h: a <= 6): a / 3 < 3 { linarith }
+theorem rat_div_neutral(a, b: Rat, hb: 0 < b, h: a < 1): a / b < 1 / b { linarith }
+theorem creal_half_below(a: CReal, h: 0 < a): a / 2 < a { linarith }
+// A power at a literal exponent is a square `nlinarith` sees.
+theorem rat_power_square_pos(b: Rat): 0 < b ^ 2 + 1 { nlinarith }
+theorem rat_power_am_gm(a, b: Rat): 2 * a * b <= a ^ 2 + b ^ 2 { nlinarith(Rat::sq_nonneg(a - b)) }
 theorem rat_den_absurd(a, d: Rat, hd: 0 < d, h1: 1 < a * d⁻¹, h2: a <= d): False { linarith(hd, h1, h2) }
 // A positive reciprocal has a positive denominator; `Rat::inv_succ(n)` is
 // positive by construction (`Rat::inv_succ_pos`), with no fact written.
@@ -216,4 +227,33 @@ theorem class_parent_predicate(z, e: K, h: AbsLe(z, e)): K.unit <= e { linarith(
 theorem class_parent_close(x, y, e: K, h: Close(x, y, e)): y < x + e { linarith(h.left) }
 // expect-error: `linarith` could not prove
 theorem class_parent_not_entailed(z, e: K, h: AbsLe(z, e)): K.unit < e { linarith(h.left, h.right) }
+// A refusal spells the goal as written, not the section's placeholders
+// (issues/class-carrier-diagnostics-spell-placeholders.md).
+// expect-error: `linarith` could not prove `K.unit <= d * d + K.unit`
+theorem class_refusal_spelled(d: K): K.unit <= d * d + K.unit { linarith }
+}
+
+// Conjunctions (docs/linarith-design.md §9): a fact that is one, or a
+// definition that unfolds to one, gives each side as a row, written or in
+// context; a goal that is one is proved side by side.
+theorem conj_written(x, y: Rat, h: 0 <= x ∧ x <= y): 0 <= y { linarith(h) }
+theorem conj_context(x, y: CReal, h: 0 <= x ∧ x <= y): 0 <= y { linarith }
+theorem conj_nested(x, y, z: Rat, h: (x <= y ∧ y <= z) ∧ z <= 1): x <= 1 { linarith(h) }
+theorem conj_contradictory(x: Rat, h: 1 <= x ∧ x <= 0): False { linarith(h) }
+theorem conj_goal(x: Rat, h: 0 < x): 0 < x + x ∧ x <= x + x { linarith(h) }
+// A side that is no relation at the carrier is passed over.
+theorem conj_mixed(x: Rat, n: Nat, h: n = 2 ∧ x <= 1): x < 2 { linarith(h) }
+// At `Int` and `Nat`, each side is a fact `omega` is given.
+theorem conj_nat(n, m: Nat, h: n <= m ∧ m <= 3): n <= 3 { linarith(h) }
+// expect-error: `linarith` combines
+theorem conj_unread(x: Rat, n: Nat, h: n = 2 ∧ n = 3): x < 2 { linarith(h) }
+section<K: OrderedField(≈, <, <=, +, *)> {
+theorem conj_abs_le(z, e: K, h: AbsLe(z, e)): K.unit <= e { linarith(h) }
+theorem conj_abs_le_context(z, e: K, h: AbsLe(z, e)): K.unit <= e { linarith }
+theorem conj_close(x, y, e: K, h: Close(x, y, e)): y < x + e { linarith(h) }
+theorem conj_abs_le_goal(z, e, d: K, h: AbsLe(z, e), hd: K.unit <= d): AbsLe(z, e + d) { linarith }
+theorem conj_abs_lt_goal(z, e: K, h: AbsLe(z, e)): AbsLt(z + z, e + e + e + K.multiplicative.unit) { linarith(h) }
+// The side that fails is named, as a side of the goal as written.
+// expect-error: `linarith` could not prove the left side of `AbsLe(z, e + z)`
+theorem conj_abs_le_goal_not_entailed(z, e: K, h: AbsLe(z, e)): AbsLe(z, e + z) { linarith(h) }
 }

@@ -195,6 +195,42 @@ fn rewrite_in_loop(E: Events, n: Nat) →
     rewrite(Eutt::tau_l, Eutt::refl(E, CoTree::iter(E, λ a => down(E, a), n)))
 }
 
+// Inside a constructor (docs/equation-rewrite-design.md §11.5): the walk
+// goes into `CTau(·)`'s child and `CVis(c, ·)`'s continuation, and crosses
+// back by `Eutt::tau_respects` and `Eutt::vis_respects`.
+fn rewrite_assoc_under_tau<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E)) →
+    Eutt<C>(E, CTau(CoTree::bind(E, CoTree::bind(E, t, f), g)), CTau(CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g))))
+{
+    rewrite(Eutt::bind_assoc, Eutt::refl(E, CTau(CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g)))))
+}
+fn rewrite_assoc_under_tau_applied<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<B>(E), g: B → CoTree<C>(E)) →
+    Eutt<C>(E, CTau(CoTree::bind(E, CoTree::bind(E, t, f), g)), CTau(CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g))))
+{
+    rewrite(Eutt::bind_assoc(E, t, f, g), Eutt::refl(E, CTau(CoTree::bind(E, t, λ x => CoTree::bind(E, f(x), g)))))
+}
+// Two constructors deep, and every occurrence: the right side's
+// `CTau(CTau(t))` loses one too, so what is left is `tau_l` once more.
+fn rewrite_tau_under_taus<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, CTau(CTau(CTau(t))), CTau(CTau(t))) {
+    rewrite(Eutt::tau_l(E, t), Eutt::tau_l(E, CTau(t)))
+}
+fn rewrite_tau_under_taus_hypothesis<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E),
+    e: Eutt<R>(E, CTau(CTau(CTau(t))), u)) → Eutt<R>(E, CTau(CTau(t)), u)
+{
+    rewrite(Eutt::tau_l(E, t), in := e)
+}
+// A continuation changes pointwise.
+fn rewrite_under_vis<R>(E: Events, c: E.Cmd, k: E.Resp(c) → CoTree<R>(E)) →
+    Eutt<R>(E, CVis(c, λ x => CTau(k(x))), CVis(c, k))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(E, CVis(c, λ x => k(x))))
+}
+// A continuation inside a constructor inside a `bind`'s continuation.
+fn rewrite_vis_under_bind<A, B>(E: Events, s: CoTree<A>(E), c: E.Cmd, h: A → E.Resp(c) → CoTree<B>(E)) →
+    Eutt<B>(E, CoTree::bind(E, s, λ y => CVis(c, λ r => CTau(h(y, r)))), CoTree::bind(E, s, λ y => CVis(c, λ r => h(y, r))))
+{
+    rewrite(Eutt::tau_l, Eutt::refl(E, CoTree::bind(E, s, λ y => CVis(c, λ r => h(y, r)))))
+}
+
 // Coinduction up to the friends of `Eutt` (`Eutt::up_to_bisim`,
 // `Eutt::bind_up`): the loop congruence again, here by calling itself
 // inside the continuation's relation of the unfolded loop

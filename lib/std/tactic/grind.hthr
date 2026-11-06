@@ -123,12 +123,16 @@ inductive GQ { QKey(key: AtomKey), QApp, QDep(v: Nat) }
 
 // An equation given: its proof, its name for the report, and the names the
 // proofs of its premises cite (a lemma's instance; `[]` for any other).
-record Fact { proof: Expr, name: String, uses: List<String> }
+record Fact { proof: Expr, name: String, uses: List<String>, found: List<String> }
 
-// Beside each node: the term as a tactic cites it, and whether it is a term
+// Beside each node: the term as a tactic cites it, whether it is a term
 // the equations or the goal mention (a partial application inside one is
-// not, and is left out of the report).
-record GInfo { expr: Expr, whole: Bool }
+// not, and is left out of the report), and the facts that brought it into
+// the graph (`by`: none for the goal's terms; the fact's name for a term a
+// fact read mentions; for a term an instance brought, the lemma, what its
+// premises cite and, closed under this, what brought the terms it matched,
+// docs/grind-design.md §9.6).
+record GInfo { expr: Expr, whole: Bool, by: List<String> }
 
 // An atom: how it is compared, its handle, and its node.
 record AtomEntry { key: AtomKey, h: Handle, node: Nat }
@@ -200,7 +204,7 @@ record GrindLaws { trans: GlobalRef, sym: GlobalRef, cong: GlobalRef, congr: Glo
 // that side (`a` the reduct's node, `b` the side's); and the sides whose
 // head normal forms are stuck; and the sides read whose head normal
 // forms are not read yet (they are, once the graph as written proves nothing).
-record Contra { proof: Expr, uses: List<String>, of_false: Bool }
+record Contra { proof: Expr, uses: List<String>, found: List<String>, of_false: Bool }
 
 // A term and its node: a side of an equation read (`h` as written), or a
 // side's stuck head normal form (`h` that form) beside the side's node.
@@ -235,16 +239,40 @@ fn expr_at(g: Graph, i: Nat) → Expr {
     match g.info.nth(i) { Some(n) => n.expr, None => NatLit(0) }
 }
 
+// What brought node `i` into the graph, and nodes `ns`.
+fn prov(g: Graph, i: Nat) → List<String> {
+    match g.info.nth(i) { Some(n) => n.by, None => [] }
+}
+
+fn provs(g: Graph, ns: List<Nat>) → List<String> { concat_map(ns, λ n => prov(g, n)) }
+
+// The nodes `from` on, marked as brought by `by`.
+fn stamped(g: Graph, from: Nat, by: List<String>) → Graph {
+    Graph(g.eg, g.info.take(from) ++ g.info.drop(from).map(λ n => GInfo(n.expr, n.whole, by)), g.atoms)
+}
+
+// The nodes a node is made of: its children, and a dependent argument,
+// which is part of its operator.
+fn node_parts(n: ENode<GOp>) → List<Nat> {
+    match n.op { GDepOp(a) => Cons(a, n.kids), _ => n.kids }
+}
+
+// What brought the nodes older than `from` that the nodes `ns` (those from
+// `from` on) are made of.
+fn older_parts(g: Graph, from: Nat, ns: List<ENode<GOp>>) → List<String> {
+    concat_map(ns, λ n => provs(g, node_parts(n).filter(λ k => from.leb(k).not())))
+}
+
 // Mark node `i` as the term `h`, mentioned whole: the report and the proof
 // cite it by `h`, as it was written, rather than by the node's structure.
 fn mark_whole(g: Graph, i: Nat, h: Handle) → Graph {
-    Graph(g.eg, g.info.update(i, λ n => GInfo(Hd(h), True)), g.atoms)
+    Graph(g.eg, g.info.update(i, λ n => GInfo(Hd(h), True, n.by)), g.atoms)
 }
 
 // The graph after an `add`: a new node gets its information.
 fn with_added(g: Graph, a: Added<GOp, Fact>, e: Expr) → Interned {
     match a.id.same(g.info.len()) {
-        True => Interned(Graph(a.g, g.info ++ [GInfo(e, False)], g.atoms), a.id),
+        True => Interned(Graph(a.g, g.info ++ [GInfo(e, False, [])], g.atoms), a.id),
         False => Interned(Graph(a.g, g.info, g.atoms), a.id),
     }
 }
@@ -260,7 +288,7 @@ fn app_node(g: Graph, f: Nat, a: Nat, dependent: Bool) → Interned {
 
 fn new_atom(g: Graph, h: Handle, key: AtomKey) → Interned {
     let a = g.eg.fresh(GAtomOp(g.atoms.len()), []);
-    Interned(Graph(a.g, g.info ++ [GInfo(Hd(h), False)], g.atoms ++ [AtomEntry(key, h, a.id)]), a.id)
+    Interned(Graph(a.g, g.info ++ [GInfo(Hd(h), False, [])], g.atoms ++ [AtomEntry(key, h, a.id)]), a.id)
 }
 
 // The graph a run starts from: `succ_fn` (handle `sh`) its first atom, for
@@ -959,11 +987,11 @@ fn with_reduct(acc: Facts, h: Handle, n: Nat) → Tac<Facts> {
             Refused(_) => pure(acc),
             Accepted(w) => view(w).bind(λ v => match ctor_form(acc.cf.succ, v) {
                 True => read_term(acc.g, w).bind(λ r => {
-                    let g = r.g;
+                    let g = stamped(r.g, acc.g.info.len(), prov(acc.g, n));
                     let cf = acc.cf;
                     match g.eg.same_class(n, r.node) {
                         True => pure(with_graph(acc, g)),
-                        False => Pure(with_cf(with_graph(acc, Graph(g.eg.union(n, r.node, Fact(defn_of(cf.laws, expr_at(g, n), expr_at(g, r.node)), "", [])), g.info, g.atoms)),
+                        False => Pure(with_cf(with_graph(acc, Graph(g.eg.union(n, r.node, Fact(defn_of(cf.laws, expr_at(g, n), expr_at(g, r.node)), "", [], provs(g, [n, r.node]))), g.info, g.atoms)),
                             CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, cf.contra, cf.sources ++ [Node2(r.node, n)], cf.stuck, cf.unreduced))),
                     }
                 }),
@@ -977,7 +1005,7 @@ fn with_reduct(acc: Facts, h: Handle, n: Nat) → Tac<Facts> {
                             None => kept,
                             Some(m) => match g.eg.same_class(n, m) {
                                 True => kept,
-                                False => with_graph(kept, Graph(g.eg.union(n, m, Fact(defn_of(cf.laws, expr_at(g, n), expr_at(g, m)), "", [])), g.info, g.atoms)),
+                                False => with_graph(kept, Graph(g.eg.union(n, m, Fact(defn_of(cf.laws, expr_at(g, n), expr_at(g, m)), "", [], provs(g, [n, m]))), g.info, g.atoms)),
                             },
                         })
                     }),
@@ -1013,7 +1041,7 @@ fn read_one(acc: Facts, proof: Expr, name: String, ty: Handle) → Tac<Option<Fa
             False => read_diseq(acc, proof, name, ty),
         }),
         Some(p) => read_term(acc.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => {
-            let read = Facts(Graph(y.g.eg.union(x.node, y.node, Fact(proof, name, [])), y.g.info, y.g.atoms), acc.read ++ [Tried(name, "read as an equation")], acc.skipped, acc.lemmas, acc.seen, acc.offered, acc.locals, acc.givens, acc.pending, acc.cf);
+            let read = Facts(Graph(y.g.eg.union(x.node, y.node, Fact(proof, name, [], [])), y.g.info, y.g.atoms), acc.read ++ [Tried(name, "read as an equation")], acc.skipped, acc.lemmas, acc.seen, acc.offered, acc.locals, acc.givens, acc.pending, acc.cf);
             let cf = read.cf;
             pure(Some(with_cf(read, CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, cf.contra, cf.sources, cf.stuck, cf.unreduced ++ [SideAt(p.fst, x.node), SideAt(p.snd, y.node)]))))
         })),
@@ -1115,7 +1143,7 @@ fn read_leaves(acc: Facts, ls: List<Given>) → Tac<Facts> {
 // A fact none of whose fields reads as anything is read as nothing: for a
 // local, named only in the report's last line (a hint that is no equation
 // has a line of its own).
-fn read_fact(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) → Tac<Facts> {
+fn read_fact_as(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) → Tac<Facts> {
     read_one(acc, proof, name, ty).bind(λ o => match o {
         Some(a) => pure(a),
         None => expand(Given(proof, name, ty)).bind(λ e => match e {
@@ -1127,6 +1155,11 @@ fn read_fact(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) →
                 }))),
         }),
     })
+}
+
+// `read_fact_as`, the terms it brought marked as the fact's.
+fn read_fact(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) → Tac<Facts> {
+    read_fact_as(acc, proof, name, ty, local).bind(λ a => pure(with_graph(a, stamped(a.g, acc.g.info.len(), [name]))))
 }
 
 fn read_locals(acc: Facts, ls: List<LocalInfo>) → Tac<Facts> {
@@ -1654,6 +1687,18 @@ fn cited_alg() → PathAlg<Fact, List<String>> {
     PathAlg(λ _ => [], λ f _ => Cons(f.name, f.uses), λ _ _ ks => concat_map(ks, λ k => k.proof), λ p q => p ++ q)
 }
 
+// What brought the terms a path stands on (§9.6): each edge's `found`, and
+// what brought the nodes a congruence or reflexivity step is at. With the
+// cited names, these are the facts the search needed; one found but not
+// cited is a lurking fact, which a narrowed call must keep.
+fn found_alg(g: Graph) → PathAlg<Fact, List<String>> {
+    PathAlg(λ n => prov(g, n), λ f _ => f.found, λ u v ks => prov(g, u) ++ prov(g, v) ++ concat_map(ks, λ k => k.proof), λ p q => p ++ q)
+}
+
+fn found_between(g: Graph, a: Nat, b: Nat) → List<String> {
+    match g.eg.explain(found_alg(g), a, b) { None => [], Some(ns) => ns }
+}
+
 fn chars_same(xs: List<Char>, ys: List<Char>) → Bool {
     match xs {
         Nil => match ys { Nil => True, Cons(_, _) => False },
@@ -1691,23 +1736,26 @@ fn lemma_notes(ls: List<Lemma>) → List<Note> {
 }
 
 // What `grind_report` says: the hints and named lemmas the proof cites,
-// the locals it cites, and the hints it does not, so the call can be
-// narrowed to the ones it used.
-fn say_used(fs: Facts, used0: List<String>) → Tac<True> {
+// the locals it cites, the hints it does not cite but whose instances
+// brought terms the search matched (§9.6), and the hints it does not use at
+// all, so the call can be narrowed to the cited and the needed ones.
+fn say_used(fs: Facts, used0: List<String>, found: List<String>) → Tac<True> {
     let used = used0.filter(λ n => match n.chars { Nil => False, Cons(_, _) => True });
     let cited = fs.offered.filter(λ n => name_in(used, n));
-    let unused = fs.offered.filter(λ n => name_in(used, n).not());
+    let needed = fs.offered.filter(λ n => name_in(used, n).not().and(name_in(found, n)));
+    let unused = fs.offered.filter(λ n => name_in(used, n).not().and(name_in(found, n).not()));
     let locals = used.filter(λ n => name_in(fs.offered, n).not());
     let hints: String = match cited { Nil => "none of the hints", Cons(_, _) => names_line(cited) };
     let rest: String = match locals { Nil => "", Cons(_, _) => ", and the locals " ++ names_line(locals) };
+    let lurk: String = match needed { Nil => "", Cons(_, _) => "; not cited, but needed to find it: " ++ names_line(needed) };
     let not: String = match unused { Nil => "", Cons(_, _) => "; not used: " ++ names_line(unused) };
-    say("grind: the proof uses " ++ hints ++ rest ++ not, [])
+    say("grind: the proof uses " ++ hints ++ rest ++ lurk ++ not, [])
 }
 
-fn finish_with(report: Bool, fs: Facts, used: List<String>, p: Expr) → Tac<Expr> {
+fn finish_with(report: Bool, fs: Facts, used: List<String>, found: List<String>, p: Expr) → Tac<Expr> {
     match report {
         False => pure(p),
-        True => Tac::bind(say_used(fs, used), λ _ => pure(p)),
+        True => Tac::bind(say_used(fs, used, found), λ _ => pure(p)),
     }
 }
 
@@ -1889,20 +1937,20 @@ fn cited_between(g: Graph, a: Nat, b: Nat) → List<String> {
 // The field equations of two values of one constructor, field `k` on, by
 // `Inj` of `pf`, their equation, each added as an edge citing what `pf`
 // cites. A field already in its partner's class is not asked about.
-fn inject_fields(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, xs: List<Nat>, ys: List<Nat>, k: Nat) → Tac<Facts> {
+fn inject_fields(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, found: List<String>, xs: List<Nat>, ys: List<Nat>, k: Nat) → Tac<Facts> {
     match xs {
         Nil => pure(fs),
         Cons(x, xr) => match ys {
             Nil => pure(fs),
             Cons(y, yr) => match fs.g.eg.same_class(x, y) {
-                True => inject_fields(l, fs, pf, uses, xr, yr, Succ(k)),
+                True => inject_fields(l, fs, pf, uses, found, xr, yr, Succ(k)),
                 False => inj_field(pf, k).bind(λ c => match c {
-                    Refused(_) => inject_fields(l, fs, pf, uses, xr, yr, Succ(k)),
+                    Refused(_) => inject_fields(l, fs, pf, uses, found, xr, yr, Succ(k)),
                     Accepted(h) => {
                         let g = fs.g;
                         let cf = fs.cf;
-                        let g2 = Graph(g.eg.union(x, y, Fact(cast_of(l, expr_at(g, x), expr_at(g, y), Hd(h)), "", uses)), g.info, g.atoms);
-                        inject_fields(l, with_cf(with_graph(fs, g2), CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, Succ(cf.injected), cf.contra, cf.sources, cf.stuck, cf.unreduced)), pf, uses, xr, yr, Succ(k))
+                        let g2 = Graph(g.eg.union(x, y, Fact(cast_of(l, expr_at(g, x), expr_at(g, y), Hd(h)), "", uses, found)), g.info, g.atoms);
+                        inject_fields(l, with_cf(with_graph(fs, g2), CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, Succ(cf.injected), cf.contra, cf.sources, cf.stuck, cf.unreduced)), pf, uses, found, xr, yr, Succ(k))
                     },
                 }),
             },
@@ -1913,7 +1961,7 @@ fn inject_fields(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, xs: List
 // `Succ(x)` and `Succ(y)` of one class: `x = y` by `grind::succ_inj` of `pf`,
 // their equation (the kernel's `Nat` is no declared inductive, so `Inj`
 // does not take it apart).
-fn inject_succ(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, xs: List<Nat>, ys: List<Nat>) → Facts {
+fn inject_succ(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, found: List<String>, xs: List<Nat>, ys: List<Nat>) → Facts {
     match xs {
         Nil => fs,
         Cons(x, _) => match ys {
@@ -1923,7 +1971,7 @@ fn inject_succ(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, xs: List<N
                 False => {
                     let g = fs.g;
                     let cf = fs.cf;
-                    let g2 = Graph(g.eg.union(x, y, Fact(apps(Global(l.succ_inj), [expr_at(g, x), expr_at(g, y), pf]), "", uses)), g.info, g.atoms);
+                    let g2 = Graph(g.eg.union(x, y, Fact(apps(Global(l.succ_inj), [expr_at(g, x), expr_at(g, y), pf]), "", uses, found)), g.info, g.atoms);
                     with_cf(with_graph(fs, g2), CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, Succ(cf.injected), cf.contra, cf.sources, cf.stuck, cf.unreduced))
                 },
             },
@@ -1948,10 +1996,11 @@ fn ctor_pair(l: GrindLaws, fs: Facts, p: CPair) → Tac<Facts> {
         None => pure(fs1),
         Some(pf) => {
             let uses = cited_between(fs1.g, p.a.node, p.b.node);
+            let found = found_between(fs1.g, p.a.node, p.b.node);
             match one_ctor(p.a, p.b) {
                 True => match p.a.key {
-                    KSucc(_) => pure(inject_succ(l, fs1, pf, uses, p.a.fields, p.b.fields)),
-                    _ => inject_fields(l, fs1, pf, uses, p.a.fields, p.b.fields, 0),
+                    KSucc(_) => pure(inject_succ(l, fs1, pf, uses, found, p.a.fields, p.b.fields)),
+                    _ => inject_fields(l, fs1, pf, uses, found, p.a.fields, p.b.fields, 0),
                 },
                 False => match two_ctors(p.a, p.b) {
                     False => pure(fs1),
@@ -1959,7 +2008,7 @@ fn ctor_pair(l: GrindLaws, fs: Facts, p: CPair) → Tac<Facts> {
                         Refused(_) => pure(fs1),
                         Accepted(h) => {
                             let cf = fs1.cf;
-                            pure(with_cf(fs1, CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, Some(Contra(Hd(h), uses, False)), cf.sources, cf.stuck, cf.unreduced)))
+                            pure(with_cf(fs1, CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, Some(Contra(Hd(h), uses, found, False)), cf.sources, cf.stuck, cf.unreduced)))
                         },
                     }),
                 },
@@ -1986,7 +2035,7 @@ fn diseq_contra(l: GrindLaws, g: Graph, ds: List<Diseq>) → Option<Contra> {
             False => diseq_contra(l, g, rest),
             True => match g.eg.explain(proof_alg(l, g), d.sides.a, d.sides.b) {
                 None => diseq_contra(l, g, rest),
-                Some(pf) => Some(Contra(App(d.proof, cast_of(l, Hd(d.lhs), Hd(d.rhs), pf)), Cons(d.name, cited_between(g, d.sides.a, d.sides.b)), True)),
+                Some(pf) => Some(Contra(App(d.proof, cast_of(l, Hd(d.lhs), Hd(d.rhs), pf)), Cons(d.name, cited_between(g, d.sides.a, d.sides.b)), found_between(g, d.sides.a, d.sides.b), True)),
             },
         },
     }
@@ -2042,21 +2091,22 @@ fn ctor_closed(l: GrindLaws, fs0: Facts, fuel: Nat) → Tac<Facts> {
 // rules). Nothing is trusted: the instance is `infer`red, and the kernel
 // checks the proof it ends up in.
 
-// A premise's proof, the names it cites, and the facts after reading it.
-record Premised { fs: Facts, proof: Option<Expr>, uses: List<String> }
+// A premise's proof, the names it cites, what brought the terms its proof
+// stands on, and the facts after reading it.
+record Premised { fs: Facts, proof: Option<Expr>, uses: List<String>, found: List<String> }
 
 fn by_graph(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
     sides_of(ty).bind(λ o => match o {
-        None => pure(Premised(fs, None, [])),
+        None => pure(Premised(fs, None, [], [])),
         Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => {
             on_closed(closed(with_graph(fs, y.g)), λ c => {
                 let cx = class_of(c.g, x.node);
                 let cy = class_of(c.g, y.node);
                 settled(cx + cy, match cx.same(cy) {
-                    False => pure(Premised(c, None, [])),
+                    False => pure(Premised(c, None, [], [])),
                     True => match c.g.eg.explain(proof_alg(l, c.g), x.node, y.node) {
-                        None => pure(Premised(c, None, [])),
-                        Some(pf) => pure(Premised(c, Some(pf), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns })),
+                        None => pure(Premised(c, None, [], [])),
+                        Some(pf) => pure(Premised(c, Some(pf), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns }, found_between(c.g, x.node, y.node))),
                     },
                 })
             })
@@ -2078,10 +2128,10 @@ fn prove_premise(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
     on_premised(by_graph(l, fs, ty), λ pg => match pg.proof {
         Some(_) => pure(pg),
         None => by_local(ty, pg.fs.locals.map(λ lo => Given(Local(lo.ref), lo.name, lo.ty)) ++ pg.fs.givens).bind(λ ol => match ol {
-            Some(gv) => pure(Premised(pg.fs, Some(gv.proof), [gv.name])),
+            Some(gv) => pure(Premised(pg.fs, Some(gv.proof), [gv.name], [])),
             None => synth(ty).bind(λ c => match c {
-                Accepted(h) => pure(Premised(pg.fs, Some(Hd(h)), [])),
-                Refused(_) => pure(Premised(pg.fs, None, [])),
+                Accepted(h) => pure(Premised(pg.fs, Some(Hd(h)), [], [])),
+                Refused(_) => pure(Premised(pg.fs, None, [], [])),
             }),
         }),
     })
@@ -2103,7 +2153,7 @@ fn pi_domain(ty: Handle) → Tac<Option<Handle>> {
 // What instantiating gives: the instance's proof and the names its
 // premises' proofs cite; a premise not proved, by a note that says which;
 // or nothing, where the match is ill-typed (through a wildcard).
-inductive Built { BProof(proof: Expr, uses: List<String>), BMiss(note: Note), BDrop }
+inductive Built { BProof(proof: Expr, uses: List<String>, found: List<String>), BMiss(note: Note), BDrop }
 
 record Building { fs: Facts, b: Built }
 
@@ -2111,18 +2161,18 @@ fn premise_name(name: String, k: Nat) → String { name ++ ", premise " ++ decim
 
 // `pr` applied to the rest of an instance's arguments: a matched node's
 // term, or a premise's proof (the `k`th premise next).
-fn build(l: GrindLaws, fs: Facts, name: String, pr: Expr, uses: List<String>, as: List<Option<Nat>>, k: Nat) → Tac<Building> {
+fn build(l: GrindLaws, fs: Facts, name: String, pr: Expr, uses: List<String>, found: List<String>, as: List<Option<Nat>>, k: Nat) → Tac<Building> {
     match as {
-        Nil => pure(Building(fs, BProof(pr, uses))),
+        Nil => pure(Building(fs, BProof(pr, uses, found))),
         Cons(o, rest) => match o {
-            Some(n) => build(l, fs, name, App(pr, expr_at(fs.g, n)), uses, rest, k),
+            Some(n) => build(l, fs, name, App(pr, expr_at(fs.g, n)), uses, found, rest, k),
             None => infer(pr).bind(λ c => match c {
                 Refused(_) => pure(Building(fs, BDrop)),
                 Accepted(ty) => pi_domain(ty).bind(λ od => match od {
                     None => pure(Building(fs, BDrop)),
                     Some(dom) => prove_premise(l, fs, dom).bind(λ pm => match pm.proof {
                         None => pure(Building(pm.fs, BMiss(At(Hd(dom), Tried(premise_name(name, k), "not proved: its sides are not in one class, no local or hint is it, and the instance search finds none"))))),
-                        Some(pp) => build(l, pm.fs, name, App(pr, pp), uses ++ pm.uses, rest, Succ(k)),
+                        Some(pp) => build(l, pm.fs, name, App(pr, pp), uses ++ pm.uses, found ++ pm.found, rest, Succ(k)),
                     }),
                 }),
             }),
@@ -2137,12 +2187,12 @@ fn is_def(o: Option<DefAt>) → Bool { match o { Some(_) => True, None => False 
 // The definitional edge of an instance a near match found: from the node
 // the path leads to under the instance's side (`left` or `right`) to the
 // node the item met, by `defn`, which the kernel checks by computation.
-fn with_definition(l: GrindLaws, g: Graph, i: Inst, name: String, left: Nat, right: Nat) → Graph {
+fn with_definition(l: GrindLaws, g: Graph, i: Inst, name: String, found: List<String>, left: Nat, right: Nat) → Graph {
     match i.def {
         None => g,
         Some(d) => match walk(g.eg, match d.left { True => left, False => right }, d.path) {
             None => g,
-            Some(m) => Graph(g.eg.union(m, d.node, Fact(defn_of(l, expr_at(g, m), expr_at(g, d.node)), name, [])), g.info, g.atoms),
+            Some(m) => Graph(g.eg.union(m, d.node, Fact(defn_of(l, expr_at(g, m), expr_at(g, d.node)), name, [], found)), g.info, g.atoms),
         },
     }
 }
@@ -2152,12 +2202,23 @@ fn on_built(l: GrindLaws, bd: Building, i: Inst, lm: Lemma) → Tac<Facts> {
     match bd.b {
         BDrop => pure(fs),
         BMiss(n) => pure(with_pending(fs, fs.pending ++ [Pend(i, n)])),
-        BProof(pr, uses) => infer(pr).bind(λ c => match c {
+        BProof(pr, uses, pfound) => infer(pr).bind(λ c => match c {
             Refused(_) => pure(fs),
             Accepted(ty) => sides_of(ty).bind(λ o => match o {
                 None => pure(fs),
-                Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
-                    pure(Facts(with_definition(l, Graph(y.g.eg.union(x.node, y.node, Fact(pr, lm.name, uses)), y.g.info, y.g.atoms), i, lm.name, x.node, y.node), fs.read, fs.skipped, fs.lemmas.update(i.lemma, λ m => bump_added(m, is_def(i.def))), fs.seen, fs.offered, fs.locals, fs.givens, fs.pending, fs.cf)))),
+                Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => {
+                    // What the instance stands on (§9.6): the nodes it was
+                    // matched at, the node a near match met, the older nodes
+                    // its sides are made of, and its premises' terms. The
+                    // terms it brings are marked as brought by all that and
+                    // the lemma.
+                    let old = fs.g.info.len();
+                    let at = concat_map(i.args, λ a => opt_list(a)) ++ match i.def { Some(d) => [d.node], None => [] };
+                    let found = names_once(provs(fs.g, at) ++ older_parts(y.g, old, y.g.eg.nodes.drop(old)) ++ pfound, []);
+                    let g1 = stamped(y.g, old, names_once(Cons(lm.name, uses ++ found), []));
+                    let ef = names_once(found ++ provs(g1, [x.node, y.node]), []);
+                    pure(Facts(with_definition(l, Graph(g1.eg.union(x.node, y.node, Fact(pr, lm.name, uses, ef)), g1.info, g1.atoms), i, lm.name, ef, x.node, y.node), fs.read, fs.skipped, fs.lemmas.update(i.lemma, λ m => bump_added(m, is_def(i.def))), fs.seen, fs.offered, fs.locals, fs.givens, fs.pending, fs.cf))
+                })),
             }),
         }),
     }
@@ -2168,7 +2229,7 @@ fn add_insts(l: GrindLaws, fs: Facts, is: List<Inst>) → Tac<Facts> {
         Nil => pure(fs),
         Cons(i, rest) => match fs.lemmas.nth(i.lemma) {
             None => add_insts(l, fs, rest),
-            Some(lm) => build(l, fs, lm.name, lm.proof, [], i.args, 0).bind(λ bd => on_built(l, bd, i, lm)).bind(λ f2 => add_insts(l, f2, rest)),
+            Some(lm) => build(l, fs, lm.name, lm.proof, [], [], i.args, 0).bind(λ bd => on_built(l, bd, i, lm)).bind(λ f2 => add_insts(l, f2, rest)),
         },
     }
 }
@@ -2177,7 +2238,7 @@ fn add_insts(l: GrindLaws, fs: Facts, is: List<Inst>) → Tac<Facts> {
 fn proved(report: Bool, l: GrindLaws, fs: Facts, lhs: Nat, rhs: Nat) → Tac<Expr> {
     match fs.g.eg.explain(proof_alg(l, fs.g), lhs, rhs) {
         None => fail("grind: the two sides are in one class, but no path between them was found", []),
-        Some(p) => finish_with(report, fs, names_once(match fs.g.eg.explain(cited_alg(), lhs, rhs) { None => [], Some(ns) => ns }, []), p),
+        Some(p) => finish_with(report, fs, names_once(match fs.g.eg.explain(cited_alg(), lhs, rhs) { None => [], Some(ns) => ns }, []), found_between(fs.g, lhs, rhs), p),
     }
 }
 
@@ -2186,7 +2247,7 @@ fn proved(report: Bool, l: GrindLaws, fs: Facts, lhs: Nat, rhs: Nat) → Tac<Exp
 // equation goal (its sides spelled: under the binders the goal opened, the
 // proof is inferred, not checked), or `elim_false` to any other.
 fn by_contra(report: Bool, l: GrindLaws, fs: Facts, gt: GoalAt, c: Contra) → Tac<Expr> {
-    is_false(l.fals, gt.target).bind(λ f => finish_with(report, fs, names_once(c.uses, []), match c.of_false {
+    is_false(l.fals, gt.target).bind(λ f => finish_with(report, fs, names_once(c.uses, []), c.found, match c.of_false {
         False => c.proof,
         True => match f {
             True => c.proof,

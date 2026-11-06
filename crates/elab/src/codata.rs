@@ -38,7 +38,9 @@ use crate::recursion::{SelfRef, surface_self_call};
 use crate::spelling::checked_app;
 use crate::{Alias, Cx, Elaborator, R, embed, err};
 
+mod node;
 mod upto;
+pub(crate) use node::CtorNode;
 pub(crate) use upto::{Free, FriendMode};
 
 fn var(i: u32) -> Rc<Term> {
@@ -2669,20 +2671,63 @@ impl Elaborator {
                 }));
             }
         }
-        if !at(&step_here, &site.step_level) {
-            return Ok(None);
-        }
+        // The step position: at the body's own index, or at an index a
+        // `match` has refined — a scrutinee the index mentions is replaced
+        // in the arm's expected type, so the arm's node sits at the index
+        // with the arm's pattern for it (the match's motive carries it back).
+        let refined = if at(&step_here, &site.step_level) {
+            None
+        } else {
+            match self.step_index(cx, &p, &carrier, expected, &site.step_level, e.span) {
+                Some(idx) => Some(p.reindexed(0, idx)),
+                None => return Ok(None),
+            }
+        };
         if control {
             return Ok(None);
         }
+        let p = refined.as_ref().unwrap_or(&p);
         // A node: a constructor of the declaration itself.
         if let Some((i, args)) = self.codata_ctor_app(cx, &site.ind, e) {
-            return Ok(Some(self.corec_node(cx, &p, &site.ind, &carrier, i, &args, e.span)?));
+            return Ok(Some(self.corec_node(cx, p, &site.ind, &carrier, i, &args, e.span)?));
         }
         // Anything else is a tree that already exists, and the node is its
         // first one: `(λo. ⟨fst o, λq. inr(snd o q)⟩) (out t)`.
         let t = Rc::new(self.elab_check(cx, e, &p.d_at(0), &p.lw)?);
-        Ok(Some(self.observe_node(&p, 0, &carrier, &site.step_level, t)))
+        Ok(Some(self.observe_node(p, 0, &carrier, &site.step_level, t)))
+    }
+
+    /// The index `idx` at which `expected` (in `cx`, `p`'s context) is the
+    /// step type over `carrier`, `F(C)(idx)`, when it is not the body's own:
+    /// an arm of a `match` on a term the index mentions sees the step type
+    /// with that term replaced by the arm's pattern. Read off the named
+    /// shape's index argument, `El(D#mshape ā idx)`, and held to the whole
+    /// step type by conversion. `None` for anything else, and for an inline
+    /// signature (no named shape to read the index from).
+    fn step_index(&self, cx: &Cx, p: &MParts, carrier: &Carrier, expected: &Type, lvl: &Level, span: Span) -> Option<Rc<Term>> {
+        if !p.indexed {
+            return None;
+        }
+        let Some(Type::Sigma { fst, .. }) = self.whnf(cx, expected, span).ok() else {
+            return None;
+        };
+        let shape_args = |t: &Type| -> Option<(GenDef, Vec<Rc<Term>>)> {
+            match &*decoded(t) {
+                Type::El { tm, .. } => self.gen_app_of(tm),
+                _ => None,
+            }
+        };
+        let (own_key, own) = shape_args(&p.shape_at(0))?;
+        if !matches!(own_key, GenDef::MShape(_)) {
+            return None;
+        }
+        let (key, mut args) = shape_args(&fst)?;
+        if key != own_key || args.len() != own.len() || args[..args.len() - 1] != own[..own.len() - 1] {
+            return None;
+        }
+        let idx = args.pop()?;
+        let want = self.node_ty_at(p, 0, &idx, carrier);
+        self.conv_types(cx, expected, &want, lvl).then_some(idx)
     }
 
     /// The node of an existing tree `t` (scoped at depth `k`) at the step

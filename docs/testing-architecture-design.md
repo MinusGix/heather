@@ -47,8 +47,9 @@ thread):
   `tactic_*` targets each build `tactic`, both `function_ir_lower_*` targets
   build `x86_64_stack_runs`. They start together, all miss the empty image
   store, and none waits for another. `scripts/test` already works around
-  this by hand for two prefixes (`semantic_x86_warmup`,
-  `semantic_omega_warmup`); nothing covers the rest. The kernel gate also
+  this by hand for three prefixes (`semantic_x86_warmup`,
+  `semantic_omega_warmup`, and `semantic_parser_warmup`, which builds the
+  parser/showcase prefix one slice per process); nothing covers the rest. The kernel gate also
   runs on everything, because the verdict store starts empty.
 - **After an elab edit (the usual PR),** every image is stale under `Exact`,
   so every library module is re-elaborated once (the floor, with the kernel

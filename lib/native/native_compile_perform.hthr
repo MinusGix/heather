@@ -24,6 +24,7 @@ import linux_trees;
 import linux_x86_64_io;
 import linux_x86_64_byte_memory;
 import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
 import itree;
 import x86_64;
 import x86_64_block;
@@ -805,7 +806,7 @@ theorem Env::like_set_same(self env: Env, id: Nat, w: BitVec(64), value: w.toNat
 
 theorem Target::goes_deep(self t: Target, dp: Prog, within: dp.deep_exit(t.layout()).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
     pre: MachineState<X86Memory(t.r.profile)> → Type,
-    exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, call_depth_status()) → Sim(t.io(), tree, s)):
+    exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, call_depth_status()) → SimPaid(t.io(), tree, s)):
     t.Goes(prog_len(dp), tree, pre) {
     let set_list: List<Instruction> = [MovRI(Rdi, call_depth_status()), MovRI(Rax, BitVec::ofNat(60))];
     let lab = dp.label(t.layout().deep_label());
@@ -1335,7 +1336,7 @@ theorem Target::goes_callee_return(self t: Target, after: Env, b: Prog, results:
     framed0: t.index + 8 * Nil<BitVec(64)>.len() <= t.stack.size,
     back: (s: MachineState<X86Memory(t.r.profile)>) → s.rip = ret → t.site().Resident(s.memory) →
         t.activation(t.index, Nil, t.room, framed0, t.roomy).Held(Nil, after, s.gprs, s.memory) → read_gpr(Rsp, s.gprs) = t.stack.at(t.index + 8) →
-        t.FramesAt(s.memory, rest, t.index + 8) → s.gprs.Holding(call_registers(), after.words_at(results)) → Sim(t.io(), tree, s)):
+        t.FramesAt(s.memory, rest, t.index + 8) → s.gprs.Holding(call_registers(), after.words_at(results)) → SimPaid(t.io(), tree, s)):
     t.At(prog_len(b), results, tree, after) {
     let layout = t.layout();
     let so = layout.stack_offset();

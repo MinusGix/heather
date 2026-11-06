@@ -623,3 +623,43 @@ fn the_walk_is_a_function_of_the_tree_not_of_its_sharing() {
     assert_eq!(a, term_hash(&p, 1, &with_sharing), "not deterministic");
     assert_eq!(a, term_hash(&p, 1, &without), "sharing leaked into the hash");
 }
+
+/// `σ(x, x)` nested `depth` times over `0`, each level's two children one
+/// shared node (`shared`) or two separately built trees.
+fn doubling(depth: u32, shared: bool) -> Rc<Term> {
+    let mut t = Rc::new(Term::Zero);
+    for _ in 0..depth {
+        let (fst, snd) = if shared { (Rc::clone(&t), Rc::clone(&t)) } else { (Rc::new((*t).clone()), deep_copy(&t)) };
+        t = Rc::new(Term::TmSigma { fst_level: Level::Zero, snd_level: Level::Zero, fst, snd });
+    }
+    t
+}
+
+/// The same tree with no node shared.
+fn deep_copy(t: &Term) -> Rc<Term> {
+    Rc::new(match t {
+        Term::TmSigma { fst_level, snd_level, fst, snd } => Term::TmSigma {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst: deep_copy(fst),
+            snd: deep_copy(snd),
+        },
+        other => other.clone(),
+    })
+}
+
+/// Large nodes are hashed as digests, and a node shared in memory is walked
+/// once (`issues/image-tree-walks-let-shared-terms.md`): a term whose tree
+/// has 2⁶⁴ leaves hashes, and whether a node is a digest is decided by its
+/// content, so a tree built with no sharing at all hashes as the shared one
+/// does, past the digest threshold as below it.
+#[test]
+fn a_shared_term_is_walked_once_and_hashes_as_its_tree() {
+    let p = prefix(1);
+    assert!(term_hash(&p, 1, &doubling(64, true)).is_some());
+    for depth in [3, 6, 9, 12] {
+        let shared = term_hash(&p, 1, &doubling(depth, true));
+        assert_eq!(shared, term_hash(&p, 1, &doubling(depth, false)), "sharing leaked into the hash at depth {depth}");
+        assert_ne!(shared, term_hash(&p, 1, &doubling(depth + 1, true)));
+    }
+}

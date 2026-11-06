@@ -8,6 +8,7 @@
 import native_compile_steps;
 import linux_x86_64_io;
 import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
 import linux_trees;
 import itree;
 import x86_64;
@@ -75,7 +76,7 @@ theorem LinuxIo::goes_callto<M>(self io: LinuxIo<M>, program: Prog, origin: BitV
             j(sym(pushed), λ a _ => read_word(io.data, stack.writes.store(s.memory, a, word_bytes(ret)), stack.at(i)) = Some(ret),
                 stack.stored(s.memory, i, space, ret));
         let ret_is: (ret = next_rip(origin, prog_len(before) + 5)) = site.rip_after(s, prog_len(before), 5, here);
-        sim_back(io, t, s, u, io.steps_of_stack(stack, writes, s, u, call),
+        paid_back(io, t, s, u, io.steps_of_stack(stack, writes, s, u, call),
             callee(s, holds, u, u_rip, u_resident,
                 ⟨refl, ⟨u_rsp, j(ret_is, λ r _ => read_word(io.data, u.memory, stack.at(i)) = Some(r), u_ret)⟩⟩))
     }
@@ -90,7 +91,7 @@ theorem LinuxIo::goes_ret<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(
     t: ITree<BitVec(64)>(Events::linux()), pre: MachineState<M> → Type, index: MachineState<M> → Nat, ret: MachineState<M> → BitVec(64),
     top: (s: MachineState<M>) → pre(s) → (read_gpr(Rsp, s.gprs) = stack.at(index(s))) ∧ ((index(s) + 8 <= stack.size) ∧
         (read_word(io.data, s.memory, stack.at(index(s))) = Some(ret(s)))),
-    back: (s: MachineState<M>) → pre(s) → io.site(program, origin).Resident(s.memory) → Sim(io, t, return_near_after(ret(s), s))):
+    back: (s: MachineState<M>) → pre(s) → io.site(program, origin).Resident(s.memory) → SimPaid(io, t, return_near_after(ret(s), s))):
     io.site(program, origin).Goes(io, prog_len(before), t, pre) {
     let site = io.site(program, origin);
     λ s here resident holds => {
@@ -101,7 +102,7 @@ theorem LinuxIo::goes_ret<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(
              Exists(ret(s), ⟨j(sym(found.left), λ a _ => read_word(io.data, s.memory, a) = Some(ret(s)), found.right.right), refl⟩)⟩;
         let step = stack_step_machine(io.fetch, io.data, stack.writes, ReturnNear, s, r,
             site.item_fetched(fits, s, resident, k, before, name, Ret, at, here), executes);
-        sim_back(io, t, s, r, io.steps_of_stack(stack, writes, s, r, step),
+        paid_back(io, t, s, r, io.steps_of_stack(stack, writes, s, r, step),
             back(s, holds, resident))
     }
 }

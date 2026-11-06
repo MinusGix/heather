@@ -129,6 +129,32 @@ theorem linux_steps_meet<M>(io: LinuxIo<M>, n: Nat): (m: Nat) → (left, right, 
     }
 }
 
+// Runs from related states pass through related states: a run of `taken`
+// steps from one side is matched on the other, which still has the rest of
+// its steps to its syscall to go.
+theorem linux_steps_peel<M>(io: LinuxIo<M>, taken: Nat): (k: Nat) → (left, right, mid, at: MachineState<M>) →
+    SameDefinedState<M>(left, right) → LinuxStepsN(io, taken, left, mid) → LinuxStepsN(io, k, right, at) →
+    LinuxSyscallAt(io, at) →
+    Exists<MachineState<M>>(λ r => SameDefinedState<M>(mid, r) ∧ Exists<Nat>(λ m => LinuxStepsN(io, m, r, at) ∧ (m + taken = k))) {
+    match taken {
+        Zero => λ k left right mid at same here there call =>
+            Exists(right, ⟨j(here, λ state _ => SameDefinedState<M>(state, right), same), Exists(k, ⟨there, refl⟩)⟩),
+        Succ(taken2) => λ k => match k {
+            Zero => λ left right mid at same here there call =>
+                false_elim(syscall_excludes_step(io.fetch, io.data, linux_writes(io), right, left, here.witness, sym(same),
+                    j(sym(there), λ state _ => LinuxSyscallAt(io, state), call), here.proof.left)),
+            Succ(k2) => λ left right mid at same here there call => {
+                let rest = linux_steps_peel(io, taken2, k2, here.witness, there.witness, mid, at,
+                    step_respects_defined(io.fetch, io.data, linux_writes(io), left, right, here.witness, there.witness,
+                        same, here.proof.left, there.proof.left),
+                    here.proof.right, there.proof.right, call);
+                Exists(rest.witness, ⟨rest.proof.left, Exists(rest.proof.right.witness, ⟨rest.proof.right.proof.left,
+                    cong_fn(λ (x: Nat) => Succ(x), rest.proof.right.proof.right)⟩)⟩)
+            },
+        },
+    }
+}
+
 theorem register_related<M>(register: Gpr, left, right: MachineState<M>, same: SameDefinedState<M>(left, right)):
     read_gpr(register, left.gprs) = read_gpr(register, right.gprs) {
     cong_fn(λ (gprs: Gprs) => read_gpr(register, gprs), SameDefinedState::gprs(same))

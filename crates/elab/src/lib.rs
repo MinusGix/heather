@@ -661,6 +661,9 @@ enum RecordedSite {
     Refl { span: Span, sides: Option<(String, String)> },
     /// A checking site, with its two types when both spell and differ.
     Check { span: Span, types: Option<(String, String)> },
+    /// A checking site with a message of its own: a `partial fn`'s call
+    /// where its result is expected ([`Elaborator::partial_use_note`]).
+    Named { span: Span, msg: String },
 }
 
 impl RecordedSite {
@@ -670,6 +673,7 @@ impl RecordedSite {
                 msg: with_op(format!("this has type `{g}`, but `{w}` is expected here")),
                 span,
             },
+            RecordedSite::Named { span, msg } => ElabError::Elab { msg: with_op(msg), span },
             RecordedSite::Check { span, types: None } => ElabError::Kernel {
                 decl: decl.to_string(),
                 span,
@@ -1501,18 +1505,28 @@ impl application::ImplicitApplicationElab for Elaborator {
             // the goal was is the search's own verdict, its outermost
             // `no-class` record (a class goal arrives in spellings the
             // display path cannot classify).
-            None => Err(ElabError::Resolution {
-                goal: if trace.first().is_some_and(|top| {
+            // The trace's own first `goal:` line is the same goal, written
+            // as the parameter declared it (`b.Apart`, a rule's `x.Positive`
+            // before its `x` was solved); it takes the spelled goal too. A
+            // nested search's lines were spelled where its own refusal was
+            // made, so each goal is spelled once.
+            None => {
+                let mut trace = trace;
+                let spelled = if trace.first().is_some_and(|top| {
                     trace.iter().any(|l| l.key == "no-class" && l.depth == top.depth)
-                }) && let Some(spelled) = self.spell_type_clean(cx, &goal)
-                {
-                    spelled
+                }) {
+                    self.spell_type_clean(cx, &goal)
                 } else {
-                    display
-                },
-                span,
-                trace,
-            }),
+                    None
+                };
+                if let Some(spelled) = &spelled
+                    && let Some(top) = trace.first_mut()
+                    && top.key == "goal"
+                {
+                    top.value = spelled.clone();
+                }
+                Err(ElabError::Resolution { goal: spelled.unwrap_or(display), span, trace })
+            }
         }
     }
 
@@ -2866,7 +2880,7 @@ impl Elaborator {
         }
     }
 
-    fn lookup_global(&self, name: &str) -> Option<&GlobalInfo> {
+    pub(crate) fn lookup_global(&self, name: &str) -> Option<&GlobalInfo> {
         self.names.global(&self.key_of(self.instance_alias(name))?)
     }
 
@@ -5753,6 +5767,7 @@ impl Elaborator {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
                         let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
                         goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &goal, lvl, "case split's motive, at its scrutinee,", e.span)?;
+                        goal_combinators::motive_is_a_type(self, cx, &split.motive, split.dependent.as_ref(), &goal, &scrut, &ty, &level, lvl, e.span)?;
                         match split.dependent {
                             None => self.elab_convoy(
                                 cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
@@ -6632,7 +6647,7 @@ impl Elaborator {
                 // of the suite itself (the issue's 2026-08-17 log), so the
                 // cheap variants the issue proposed — leaves only, whnf'd types
                 // only — buy nothing worth the narrowing.
-                self.note_check_mismatch(cx, &got, &head, lvl, e.span);
+                self.note_check_expr(cx, e, &got, &head, lvl);
                 Ok(t)
             }
         }
@@ -6935,6 +6950,36 @@ impl Elaborator {
     /// with an implicit already solved: the clash is said beside the
     /// mismatch if the gate refuses (issues/unifier-checked-assignment.md).
     fn note_check_clash(&self, cx: &Cx, got: &Type, expected: &Type, lvl: &Level, span: Span, clash: Option<application::SlotClash>) {
+        self.note_check_candidate(cx, got, expected, lvl, span, clash, None)
+    }
+
+    /// [`Self::note_check_mismatch`] for a written expression `e`. A call's
+    /// head is kept, and read only if the gate refuses: a call to a `partial
+    /// fn` is then refused naming the function rather than only the two
+    /// types (issues/partial-fn-use-site-refusal.md).
+    fn note_check_expr(&self, cx: &Cx, e: &Expr, got: &Type, expected: &Type, lvl: &Level) {
+        let head = match &e.kind {
+            ExprKind::App { head, .. } => match &head.kind {
+                ExprKind::Var(name) => Some(name),
+                _ => None,
+            },
+            _ => None,
+        };
+        self.note_check_candidate(cx, got, expected, lvl, e.span, None, head.filter(|_| got != expected).cloned())
+    }
+
+    /// The candidate itself, with the two optional additions to its message.
+    #[allow(clippy::too_many_arguments)]
+    fn note_check_candidate(
+        &self,
+        cx: &Cx,
+        got: &Type,
+        expected: &Type,
+        lvl: &Level,
+        span: Span,
+        clash: Option<application::SlotClash>,
+        partial: Option<String>,
+    ) {
         // **Recording is not probing** (`issues/elab-diagnostic-probe-cost.md`).
         // The conversion below used to run here, on every checking site of
         // every declaration, to find out whether there was anything to say —
@@ -6958,6 +7003,7 @@ impl Elaborator {
             expected: expected.clone(),
             level: lvl.clone(),
             clash,
+            partial,
         });
     }
 
@@ -6981,6 +7027,7 @@ impl Elaborator {
             expected,
             level,
             clash,
+            partial,
         } = note;
         if self
             .goal_oracle()
@@ -7016,6 +7063,11 @@ impl Elaborator {
         // member is what the reader wrote the call to, so it is named
         // (issues/width-specific-method-on-other-width.md).
         if let Some(msg) = self.member_receiver_note(cx, *span, got, expected) {
+            return Some((MismatchNote::Spelled(msg), *span));
+        }
+        // A `partial fn`'s call where its result is expected: the function
+        // is named, with the ways out (docs/partial-functions-design.md §4.2).
+        if let Some(msg) = partial.as_ref().and_then(|f| self.partial_use_note(cx, f, got, expected)) {
             return Some((MismatchNote::Spelled(msg), *span));
         }
         let got_s = self.display_type_clean(cx, got);
@@ -9607,6 +9659,9 @@ impl Elaborator {
         let n = checks.iter().find(|n| {
             same_depth(&n.cx) && converts(&n.expected, expected, &n.level) && converts(&n.got, inferred, &n.level)
         })?;
+        if let Some(msg) = n.partial.as_ref().and_then(|f| self.partial_use_note(&n.cx, f, &n.got, &n.expected)) {
+            return Some(RecordedSite::Named { span: n.span, msg });
+        }
         let got = self.display_type_clean(&n.cx, &n.got);
         let want = self.display_type_clean(&n.cx, &n.expected);
         Some(RecordedSite::Check { span: n.span, types: got.zip(want).filter(|(g, w)| g != w) })

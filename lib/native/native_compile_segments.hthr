@@ -22,6 +22,7 @@ import linux_trees;
 import linux_x86_64_io;
 import linux_x86_64_byte_memory;
 import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
 import itree;
 import x86_64;
 import x86_64_block;
@@ -652,7 +653,7 @@ theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, c
 // exit(status), every exit with the word meeting the tree.
 theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, known: List<Fact>, status: Nat, inside: status < t.words, holds: env.Reads(known, live, status),
     within: p.exits(t.layout(), known, status).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
-    exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, env.word(status)) → Sim(t.io(), tree, s)):
+    exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, env.word(status)) → SimPaid(t.io(), tree, s)):
     t.At(prog_len(p), live, tree, env) {
     let word = p.known_to(t.layout(), known, status, Rdi);
     let set = then(word, Block([MovRI(Rax, BitVec::ofNat(60))]));
@@ -675,7 +676,7 @@ theorem Target::goes_exits(self t: Target, live: List<Nat>, env: Env, p: Prog, k
 theorem Target::goes_finish(self t: Target, p: Prog,
     within: then(then(p, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall).Within(t.program),
     tree: ITree<BitVec(64)>(Events::linux()), pre: MachineState<X86Memory(t.r.profile)> → Type,
-    exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, BitVec::ofNat(0)) → Sim(t.io(), tree, s)):
+    exits: (s: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), s) → LinuxExits(s, BitVec::ofNat(0)) → SimPaid(t.io(), tree, s)):
     t.Goes(prog_len(p), tree, pre) {
     let set = then(p, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))]));
     let called = t.io().goes_exit(t.program, t.origin, t.code_fits(), within.witness, set, 0, within.proof, tree, BitVec::ofNat(0), exits);

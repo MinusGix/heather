@@ -894,3 +894,107 @@ runtime(owned) fn f(n: Nat) -> Nat { n }
       (identifier)
       (block
         (identifier)))))
+
+==================
+Integer operator symbols
+==================
+
+fn f(a, b: u8) -> u8 { a / b % 3 + (a & b | a << 2) }
+fn g(x: i64) -> Partial<Mutated<Io, i64>> { x >> 1 }
+designation >> at SInt(n) := SInt::shift_right
+fn h(a: Nat) -> Nat { fold(/, a) }
+fn k(e: Either<Nat, Nat>) -> Either<Nat, Nat> { ⟨e |⟩ }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (binary_expression
+        (binary_expression
+          (binary_expression
+            (identifier)
+            (identifier))
+          (number))
+        (parenthesized_expression
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (identifier))
+            (binary_expression
+              (identifier)
+              (number)))))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (declaration_type_application
+      (identifier)
+      (type_arguments
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (identifier)
+            (identifier)))))
+    (block
+      (binary_expression
+        (identifier)
+        (shift_right)
+        (number))))
+  (designation_declaration
+    (operator
+      (shift_right))
+    (call_expression
+      (identifier)
+      (argument_list
+        (identifier)))
+    (qualified_identifier))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (call_expression
+        (identifier)
+        (argument_list
+          (operator)
+          (identifier)))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (identifier)
+              (identifier))))))
+    (declaration_type_application
+      (identifier)
+      (type_arguments
+        (identifier)
+        (identifier)))
+    (block
+      (anonymous_constructor_expression
+        (identifier)))))

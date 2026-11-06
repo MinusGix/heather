@@ -173,3 +173,10 @@ theorem d_bool_computes(): decide_pick<bool::Bool::Le(True, False), Nat>(7, 9) =
 fn k_nat(m, n: Nat) -> Decide<nat::Nat::Le(m, n)> { nat::Nat::Le::Decide() }
 fn k_int(a, b: Int) -> Decide<int::Int::Le(a, b)> { int::Int::Le::Decide() }
 fn k_bool(p, q: Bool) -> Decide<bool::Bool::Le(p, q)> { bool::Bool::Le::Decide() }
+
+// `/` and `%` are the Euclidean pair (issues/integer-operator-symbols.md),
+// and `a / b * b + a % b` is `((a / b) * b) + (a % b)`.
+theorem div_symbols(): NegSucc(6) / OfNat(3) = NegSucc(2) ∧ NegSucc(6) % OfNat(3) = OfNat(2) {
+    And(refl, refl)
+}
+theorem symbols_reconstruct(a, b: Int): a / b * b + a % b = a { int::Int::div_mul_add_mod(a, b) }

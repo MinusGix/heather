@@ -3,7 +3,7 @@
 // stopped early, and the cut side of `RunOf` is not vacuous: a loop that
 // goes round silently is simulated by every machine, exits included, and at
 // every fuel it is cut before every run. That is the divergence gap
-// issues/linux-sim-divergence.md closes. Tests, not library: nothing outside
+// issues/linux-sim-divergence.md closes (`linux_x86_64_sim_co`). Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import linux_calls;
 import linux_x86_64_io;

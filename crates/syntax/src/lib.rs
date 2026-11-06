@@ -18,7 +18,7 @@ mod try_lower;
 mod imperative;
 
 pub use ast::*;
-pub use parser::{class_ty, parse_file, pos_carrier, ParseError, BY_TACTIC, MUTATED_RECORD, POS_RESULT, POS_SEARCH};
+pub use parser::{class_ty, operator_form, parse_file, pos_carrier, OperatorForm, ParseError, BY_TACTIC, MUTATED_RECORD, POS_RESULT, POS_SEARCH};
 pub use fmt::format_source;
 pub use roles::{argument_lists, token_roles, ArgumentLists, Delims, TokenRole};
 

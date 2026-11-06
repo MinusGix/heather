@@ -184,8 +184,21 @@ struct Inner {
     /// a second Ψ-landing question at one length kills the first: only one
     /// declaration can be waiting to land at a position.
     open: BTreeMap<usize, Vec<OpenQuestion>>,
+    /// Prefixes of other Ψs this gate was asked about lately, most recent
+    /// last, each with the mark of the Ψ it describes in full. A process
+    /// checking a module DAG asks in turn about its own world and about each
+    /// module's canonical world (`docs/module-dag-design.md` §6), which share
+    /// a prefix and then differ; with one prefix every switch re-hashed
+    /// everything past the shared part, which once a large chain (grind's)
+    /// sat in one world and not the other was seconds per module
+    /// (`issues/grind-closure-cost.md`). `sync` takes whichever of these
+    /// and the current one shares the most with the asking Ψ.
+    worlds: Vec<(heather_kernel::term::GlobalMark, Vec<Option<Hash>>)>,
     counts: Counts,
 }
+
+/// How many other Ψs' prefixes [`Inner::worlds`] keeps.
+const KEPT_WORLDS: usize = 8;
 
 struct OpenQuestion {
     name: String,
@@ -224,6 +237,7 @@ impl Cache {
                 statement: None,
                 mark: None,
                 open: BTreeMap::new(),
+                worlds: Vec::new(),
                 counts: Counts::default(),
             }),
         }
@@ -291,6 +305,7 @@ impl Cache {
         inner.statement = None;
         inner.mark = None;
         inner.open.clear();
+        inner.worlds.clear();
     }
 }
 
@@ -313,10 +328,38 @@ impl Inner {
         // `issues/native-process-fixed-cost.md`), and a fork that had grown
         // past a sibling's bindings without asking would have hashed against
         // the sibling's.
-        let common = match &self.mark {
+        let mut common = match &self.mark {
             Some(mark) => psi.bindings.common_prefix(mark).min(self.prefix.len()),
             None => 0,
         };
+        if common < self.prefix.len() {
+            // Another Ψ: resume the kept prefix that shares the most with it,
+            // and keep this one for the switch back.
+            let best = self
+                .worlds
+                .iter()
+                .enumerate()
+                .map(|(k, (mark, prefix))| (k, psi.bindings.common_prefix(mark).min(prefix.len())))
+                .max_by_key(|&(_, c)| c)
+                .filter(|&(_, c)| c > common);
+            let current = self.mark.take().map(|mark| (mark, std::mem::take(&mut self.prefix)));
+            if let Some((k, c)) = best {
+                let (mark, prefix) = self.worlds.remove(k);
+                self.mark = Some(mark);
+                self.prefix = prefix;
+                common = c;
+            }
+            if let Some((mark, prefix)) = current {
+                if best.is_none() {
+                    self.prefix = prefix.clone();
+                    self.mark = Some(mark.clone());
+                }
+                self.worlds.push((mark, prefix));
+                if self.worlds.len() > KEPT_WORLDS {
+                    self.worlds.remove(0);
+                }
+            }
+        }
         if common < self.prefix.len() {
             self.prefix.truncate(common);
             self.pending = None;

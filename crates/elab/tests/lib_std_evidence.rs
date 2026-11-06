@@ -41,7 +41,7 @@ fn bad(src: &str, says: &str) -> String {
 fn a_goal_that_computes_to_false_is_not() {
     // The goal is shown as this call instantiated it, not as the callee's
     // written `0 < n`, and not decoded to `False`.
-    let e = bad("theorem zero(): 0 < 0 { uses(0) }\n", "no instance for `Lt(0, 0)`");
+    let e = bad("theorem zero(): 0 < 0 { uses(0) }\n", "no instance for `0 < 0`");
     assert!(e.contains("no-rule"), "{e}");
 }
 
@@ -49,7 +49,7 @@ fn a_goal_that_computes_to_false_is_not() {
 
 #[test]
 fn a_rule_whose_premise_fails_is_not_taken() {
-    let e = bad("theorem half(a, b: Nat, pa: 0 < a): 0 < a * b { uses(a * b) }\n", "no instance for `Lt(0, mul(a, b))`");
+    let e = bad("theorem half(a, b: Nat, pa: 0 < a): 0 < a * b { uses(a * b) }\n", "no instance for `0 < a * b`");
     assert!(e.contains("candidate: nat::Nat::mul_pos"), "{e}");
 }
 

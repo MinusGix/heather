@@ -110,7 +110,8 @@ add something after it: `(∑ k < n, f(k)) + f(n)`.
 
 ## Precedence summary
 
-From tighter to looser among value operators: prefix `-`; `*`, `∙` and `⊓`; `+`,
-`-`, `++`, and `⊔`; `&&`; `||`; comparisons. `++` is right-associative;
+From tighter to looser among value operators: prefix `-`; `*`, `/`, `%`, `∙`
+and `⊓`; `+`, `-`, `++`, and `⊔`; `<<` and `>>`; `&`; `|`; `&&`; `||`;
+comparisons. `++` is right-associative;
 ordinary arithmetic operators are left-associative. `<`, `<=`, `=`, and `≠`
 form a single non-associative comparison level and cannot be chained.

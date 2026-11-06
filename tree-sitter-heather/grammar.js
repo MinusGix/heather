@@ -10,12 +10,16 @@ const PREC = {
   COMPARE: 5,
   BOOL_OR: 6,
   BOOL_AND: 7,
-  ADD: 8,
-  MUL: 9,
-  PREFIX: 10,
+  // Bitwise and shift rungs, in Rust's order (issues/integer-operator-symbols.md).
+  BIT_OR: 8,
+  BIT_AND: 9,
+  SHIFT: 10,
+  ADD: 11,
+  MUL: 12,
+  PREFIX: 13,
   // `-x ^ 2` is `-(x ^ 2)` and `x⁻¹ ^ 2` is `(x⁻¹) ^ 2`, as in the compiler.
-  POWER: 11,
-  POSTFIX: 12,
+  POWER: 14,
+  POSTFIX: 15,
 };
 
 // Words that introduce a special form only before their fixed follower
@@ -26,6 +30,12 @@ module.exports = grammar({
   name: 'heather',
 
   extras: $ => [/\s/, $.comment],
+
+  // `>>` is a right shift only with whitespace before it, as in the
+  // compiler's lexer (`TokKind::Shr`); a tight `>>` closes two type-argument
+  // lists (`List<List<A>>`). Only an external scanner sees the whitespace
+  // before a token (src/scanner.c).
+  externals: $ => [$.shift_right],
 
   word: $ => $.identifier,
 
@@ -47,6 +57,10 @@ module.exports = grammar({
     [$.j_expression, $.contextual_identifier],
     [$.refl_expression, $.contextual_identifier],
     [$.requirement_class_reference],
+    // A block's trailing `if`/`match` is both a statement and the block's
+    // value; `statement_form`'s dynamic precedence picks the value, as the
+    // compiler does.
+    [$.statement_form, $._expression],
   ],
 
   rules: {
@@ -295,8 +309,10 @@ module.exports = grammar({
     // `x := e;` reassigns a `let mut` local (§4).
     assignment_statement: $ => seq(field('name', $.identifier), ':=', field('value', $._expression), ';'),
     // A statement `if`/`match`: its bodies are statements, and it needs no
-    // `;` (§5.1).
-    statement_form: $ => choice($.if_expression, $.match_expression, $.for_statement, $.while_statement),
+    // `;` (§5.1). A block's *last* `if`/`match` reads both ways; the
+    // compiler takes it as the block's value, so the statement reading loses
+    // the tie (the `conflicts` entry above).
+    statement_form: $ => prec.dynamic(-1, choice($.if_expression, $.match_expression, $.for_statement, $.while_statement)),
     // `for x in xs { body }` (§5.2): `in` is contextual.
     // `a..b` is a range, written only in a `for` header.
     for_statement: $ => seq('for', field('binder', $.identifier), 'in', field('iterable', $._head_expression),
@@ -366,8 +382,11 @@ module.exports = grammar({
       ...headBinary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
       ...headBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...headBinary($, ['&&'], PREC.BOOL_AND, 'left'),
+      ...headBinary($, ['|'], PREC.BIT_OR, 'left'),
+      ...headBinary($, ['&'], PREC.BIT_AND, 'left'),
+      ...headBinary($, ['<<', $.shift_right], PREC.SHIFT, 'left'),
       ...headBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...headBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
+      ...headBinary($, ['*', '/', '%', '∙', '⊓'], PREC.MUL, 'left'),
       ...headBinary($, ['^'], PREC.POWER, 'right'),
     ),
 
@@ -429,8 +448,11 @@ module.exports = grammar({
       ...typeBinary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left'),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left'),
+      ...typeBinary($, ['|'], PREC.BIT_OR, 'left'),
+      ...typeBinary($, ['&'], PREC.BIT_AND, 'left'),
+      ...typeBinary($, ['<<', $.shift_right], PREC.SHIFT, 'left'),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...typeBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
+      ...typeBinary($, ['*', '/', '%', '∙', '⊓'], PREC.MUL, 'left'),
       ...typeBinary($, ['^'], PREC.POWER, 'right'),
     ),
     declaration_quantified_type: $ => prec.right(seq(
@@ -464,8 +486,11 @@ module.exports = grammar({
       ...typeBinary($, ['∧'], PREC.AND, 'right', $._annotation_type),
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left', $._annotation_type),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left', $._annotation_type),
+      ...typeBinary($, ['|'], PREC.BIT_OR, 'left', $._annotation_type),
+      ...typeBinary($, ['&'], PREC.BIT_AND, 'left', $._annotation_type),
+      ...typeBinary($, ['<<', $.shift_right], PREC.SHIFT, 'left', $._annotation_type),
       ...typeBinary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left', $._annotation_type),
-      ...typeBinary($, ['*', '∙', '⊓'], PREC.MUL, 'left', $._annotation_type),
+      ...typeBinary($, ['*', '/', '%', '∙', '⊓'], PREC.MUL, 'left', $._annotation_type),
       ...typeBinary($, ['^'], PREC.POWER, 'right', $._annotation_type),
     ),
     annotation_quantified_type: $ => prec.right(seq(
@@ -685,12 +710,21 @@ module.exports = grammar({
       ...binary($, ['=', '≠', '≈', '<=', '<'], PREC.COMPARE, 'left'),
       ...binary($, ['||'], PREC.BOOL_OR, 'left'),
       ...binary($, ['&&'], PREC.BOOL_AND, 'left'),
+      ...binary($, ['|'], PREC.BIT_OR, 'left'),
+      ...binary($, ['&'], PREC.BIT_AND, 'left'),
+      ...binary($, ['<<', $.shift_right], PREC.SHIFT, 'left'),
       ...binary($, ['+', '-', '++', '⊔'], PREC.ADD, 'left'),
-      ...binary($, ['*', '∙', '⊓'], PREC.MUL, 'left'),
+      ...binary($, ['*', '/', '%', '∙', '⊓'], PREC.MUL, 'left'),
       ...binary($, ['^'], PREC.POWER, 'right'),
     ),
 
-    operator: _ => choice('+', '-', '!', '++', '*', '&&', '||', '∙', '⊔', '⊓', '≈', '<=', '<', '^', '⁻¹'),
+    operator: $ => choice(
+      '+', '-', '!', '++', '*', '/', '%', '&', '|', '<<', $.shift_right, '&&', '||', '∙', '⊔', '⊓',
+      '≈', '<=', '<', '^', '⁻¹',
+      // `Monoid(>>)`: after `(` or `,` the lexer reads `>>` as the symbol too.
+      alias(seq('>', token.immediate('>')), '>>'),
+    ),
+
     // These words introduce a special form only with their fixed follower in
     // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.

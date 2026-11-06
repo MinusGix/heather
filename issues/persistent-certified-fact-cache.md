@@ -4,7 +4,7 @@ status: open
 labels: [proofs,elaboration,arithmetic,caching,design]
 area: tactics
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-11-06
 ---
 
 Let untrusted solvers opportunistically persist useful proved sequents across
@@ -90,3 +90,6 @@ parallel representation.
 - **[[omega-performance-telemetry]]** owns arithmetic measurements that can
   trigger the first implementation slice.
 
+## Log
+
+- 2026-11-06: From the Axolocl (CAV 2025) evaluation: for searched facts, also worth persisting is which producer answered each request (the request's *essence*), tried first on the next build. A budgeted search that an unrelated library addition pushes past its budget then still finds the same fact, so generated code does not change silently with library growth. A stale record costs one failed check. Only worth building once searched facts (docs/facts-on-demand-design.md §3–4) are common.

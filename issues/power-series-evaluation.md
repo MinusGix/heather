@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,analysis,reals]
 area: mathematics
 milestone: [math-reals]
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-11-06
 ---
 
 Layer E of `docs/analysis-foundations-design.md` (§8): series as range sums
@@ -32,3 +32,7 @@ The first divergent-expansion customer after this is
 - **[[asymptotic-relations]]**: `Tendsto` at `n → ∞`.
 - **[[elementary-functions-at-reals]]** owns the elementary functions' API;
   this issue supplies the route to their laws.
+
+## Log
+
+- 2026-11-06: 2026-11-06: `Converges`/`CauchySeq` with moduli, the limit algebra, and `CauchyComplete` with its CReal instance are in lib/std/analysis/sequence.hthr and real_complete.hthr (docs/sequences-and-completeness.md). Series (partial sums, Summable, geometric, comparison) are the missing layer before evaluation.

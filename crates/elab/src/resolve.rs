@@ -239,6 +239,23 @@ impl Elaborator {
         };
         let concl = Measure::of(conclusion, binders);
         for (at, dom) in &premises {
+            // A dictionary premise (a rule stated in a section over a class,
+            // `<A: OrderedField(…)>`) is a class goal: the instance registry
+            // answers it, under the instances' own decrease check, and no
+            // evidence rule is about a class, so it cannot lead back into
+            // this rule set (docs/division-design.md §6).
+            let written_class = params
+                .get(*at as usize)
+                .and_then(|p| p.solver.as_deref())
+                .and_then(written_head)
+                .is_some_and(|name| self.key_of(name).is_some_and(|k| self.traits.has_class(&k)));
+            if written_class
+                || self.tag_of(dom).is_some_and(|ind| {
+                    self.traits.has_class(&crate::names::qkey(&ind.scope.module, &ind.name))
+                })
+            {
+                continue;
+            }
             let premise = Measure::of(dom, *at);
             if !premise.smaller_than(&concl) {
                 let name = params.get(*at as usize).map_or("?", |p| p.name.as_str());
@@ -736,6 +753,7 @@ impl Elaborator {
                     && rule.heads.iter().zip(&heads).all(|(r, g)| heads_may_agree(r.as_deref(), g.as_deref()))
             })
             .map(|rule| rule.global.clone())
+            .filter(|g| !self.rule_clashes(g, goal))
             .collect();
         // A **search rule** (docs/facts-on-demand-design.md §3) is a rule
         // with a premise that runs a tactic, `h: P := omega`: a producer that
@@ -743,7 +761,16 @@ impl Elaborator {
         // order, and the search rules after them, so a goal a cheap producer
         // answers never pays for a search.
         let (mut rules, search): (Vec<_>, Vec<_>) = rules.into_iter().partition(|g| !self.is_search_rule(g));
-        rules.extend(search);
+        // Inside an arithmetic tactic's own run (`linarith`, `ring`,
+        // `omega` reading and checking their certificates) no search rule
+        // runs: its tactic would start another such run, whose reading can
+        // meet the same goal again (a reciprocal's apartness, read while
+        // `nlinarith` reads the context that mentions it), and the nesting
+        // is bounded only by the depth cap, exponentially. Plain rules still
+        // answer there (docs/division-design.md §3).
+        if self.scope.ring_depth.get() == 0 && self.scope.omega_depth.get() == 0 {
+            rules.extend(search);
+        }
         if rules.is_empty() {
             tr.push(line(
                 depth,
@@ -944,6 +971,43 @@ impl Elaborator {
             };
         }
         self.elab_check(cx, &e, goal, lvl)
+    }
+
+    /// Can the rule's conclusion be told apart from the goal without trying
+    /// it? Read as a first-order pattern, its binders matched against the
+    /// goal's arguments along application spines: a binder the match would
+    /// have to set to two different locals cannot fit, since two locals are
+    /// never convertible. That is what tells a rule stated over a class,
+    /// whose operations are its own binders, from a goal at another
+    /// operation: `OrderedField::invertible_mul`'s conclusion
+    /// `Invertible(…, *, …, x * y)` against `Invertible(…, *, …, c + d)`
+    /// would set its `*` binder to the goal's `*` and its `+` both. An
+    /// applied binder against a bare local cannot fit either (a first-order
+    /// match has nothing to put there). Anything else (a global, a
+    /// projection) says nothing, so a rule is skipped only when it fails.
+    fn rule_clashes(&self, global: &str, goal: &Type) -> bool {
+        let Some(info) = self.names.global(global) else {
+            return false;
+        };
+        let Some(GlobalBinding::Tm { ty, .. }) = self.psi.bindings.get(info.abs as usize) else {
+            return false;
+        };
+        let mut binders = 0u32;
+        let mut cur: &Type = ty;
+        while let Type::Pi { cod, .. } = cur {
+            binders += 1;
+            cur = cod;
+        }
+        let rule_args = proposition_args(cur);
+        let goal_args = proposition_args(goal);
+        if rule_args.len() != goal_args.len() {
+            return false;
+        }
+        let mut assigned: Vec<(u32, u32)> = Vec::new();
+        rule_args
+            .iter()
+            .zip(&goal_args)
+            .any(|(r, g)| pattern_clashes(r, g, binders, &mut assigned))
     }
 
     /// Does the global have a defaulted parameter: is it, as an evidence
@@ -1388,6 +1452,57 @@ impl Elaborator {
         self.semantic_commit_derived(derived);
         self.refresh_delta_psi();
     }
+}
+
+/// The name a written solver type is headed by: `OrderedField` in a
+/// section's constraint binder `OrderedField(A)(≈, <, …)`.
+fn written_head(ty: &heather_syntax::Ty) -> Option<&str> {
+    fn expr_head(e: &Expr) -> Option<&str> {
+        match &e.kind {
+            ExprKind::Var(name) => Some(name),
+            ExprKind::App { head, .. } | ExprKind::TyApp { head, .. } => expr_head(head),
+            _ => None,
+        }
+    }
+    match &ty.kind {
+        TyKind::Named { name, .. } => Some(name),
+        TyKind::OfExpr(e) => expr_head(e),
+        _ => None,
+    }
+}
+
+/// [`Elaborator::rule_clashes`]'s match of one rule argument against one
+/// goal argument. `assigned` holds the binders already set to a goal local,
+/// as (binder, local index).
+fn pattern_clashes(rule: &Term, goal: &Term, binders: u32, assigned: &mut Vec<(u32, u32)>) -> bool {
+    let (rh, rargs) = crate::spelling::app_spine(rule);
+    let Term::Var(rv) = rh else {
+        return false;
+    };
+    if rv.0 >= binders {
+        return false;
+    }
+    let (gh, gargs) = crate::spelling::app_spine(goal);
+    // An applied binder (a class operation, `x + y`) against a bare local:
+    // only a higher-order solution would fit, and the rule's operation is
+    // pinned by its dictionary.
+    if !rargs.is_empty() && gargs.is_empty() && matches!(gh, Term::Var(_)) {
+        return true;
+    }
+    if !rargs.is_empty() && rargs.len() != gargs.len() {
+        return false;
+    }
+    let target = if rargs.is_empty() { goal } else { gh };
+    if let Term::Var(gv) = target {
+        match assigned.iter().find(|(b, _)| *b == rv.0) {
+            Some((_, prev)) if *prev != gv.0 => return true,
+            Some(_) => {}
+            None => assigned.push((rv.0, gv.0)),
+        }
+    } else if !rargs.is_empty() {
+        return false;
+    }
+    rargs.iter().zip(&gargs).any(|(r, g)| pattern_clashes(r, g, binders, assigned))
 }
 
 /// A qualified key without its module, for a trace line: `Nat::Lt`.

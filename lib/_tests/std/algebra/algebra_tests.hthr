@@ -142,7 +142,7 @@ theorem at_or(x: Bool): x.or(False) = x { op_unit_of_comm(x) }
 // stated goal: the instance's type mentions the registered unit and the
 // stated one is the wrong literal.
 // expect-error(mismatch): .unit
-// expect-error: or(x, True) = x
+// expect-error: x || True = x
 theorem at_or_wrong_unit(x: Bool): x.or(True) = x { op_unit_of_comm(x) }
 
 // ---------------------------------------------------------------------------
