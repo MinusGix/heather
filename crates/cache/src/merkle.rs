@@ -105,10 +105,20 @@ pub type Hash = [u8; 32];
 ///
 /// **Bumped again with canonical levels** (`issues/kernel-compact-level.md`):
 /// a level is now hashed as its normal form, not as a `1+`/`⊔` tree.
-const DOMAIN_IFACE: &[u8] = b"heather/iface/3\0";
-const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/2\0";
-const DOMAIN_CHECK: &[u8] = b"heather/check/3\0";
-const DOMAIN_STATEMENT: &[u8] = b"heather/statement/2\0";
+///
+/// **Bumped again with node digests** (`issues/image-tree-walks-let-shared-terms.md`):
+/// a large term or type is hashed as the digest of its encoding.
+const DOMAIN_IFACE: &[u8] = b"heather/iface/4\0";
+const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/3\0";
+const DOMAIN_CHECK: &[u8] = b"heather/check/4\0";
+const DOMAIN_STATEMENT: &[u8] = b"heather/statement/3\0";
+/// The domain of a node digest's preimage (`Walk::term`, `Walk::ty`).
+const DOMAIN_NODE: &[u8] = b"heather/node/1\0";
+
+/// A term or type whose encoding reaches this many bytes is written into its
+/// parent's as a node digest (`tag::DIGEST` and the SHA-256 of
+/// [`DOMAIN_NODE`] followed by the encoding) instead of inline.
+const DIGEST_AT: usize = 512;
 
 /// The interface hashes of a Ψ prefix, in binding order.
 ///
@@ -260,6 +270,9 @@ mod tag {
     pub const E_TMDVEC: u8 = 0x82;
     pub const E_TMIWF: u8 = 0x83;
     pub const E_VECLIT: u8 = 0x84;
+
+    // A node digest, in place of a term's or a type's encoding.
+    pub const DIGEST: u8 = 0x1f;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -279,6 +292,44 @@ struct Walk<'a> {
     /// Set when a reference failed to resolve. The result is then discarded
     /// entirely: no key is produced at all.
     poisoned: bool,
+    /// Open term/type nodes. While one is open its bytes may yet be replaced
+    /// by its digest, so they stay in `buf`.
+    open: u32,
+    /// The digest of each node this walk wrote as one, by address (terms and
+    /// types apart). A node's encoding is a function of its content and of
+    /// `prefix`/`len`, which are fixed for the walk, so a shared node's
+    /// second occurrence is its digest without walking it again.
+    terms: std::collections::HashMap<usize, Hash, BuildAddr>,
+    types: std::collections::HashMap<usize, Hash, BuildAddr>,
+}
+
+/// Addresses hash as themselves, mixed: the node memos are looked up at
+/// every node.
+#[derive(Default, Clone, Copy)]
+struct BuildAddr;
+
+#[derive(Default)]
+struct AddrHasher(u64);
+
+impl std::hash::Hasher for AddrHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ *b as u64).wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.0 = (n as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(26);
+    }
+}
+
+impl std::hash::BuildHasher for BuildAddr {
+    type Hasher = AddrHasher;
+    fn build_hasher(&self) -> AddrHasher {
+        AddrHasher(0)
+    }
 }
 
 /// Staging capacity: two SHA-256 blocks' worth of headroom over the flush
@@ -293,9 +344,54 @@ impl<'a> Walk<'a> {
             prefix,
             len,
             poisoned: false,
+            open: 0,
+            terms: Default::default(),
+            types: Default::default(),
         };
         w.buf.extend_from_slice(domain);
         w
+    }
+
+    /// Write `node` through `walk`, or as its digest when its encoding is
+    /// [`DIGEST_AT`] bytes or more. Whether a node is a digest depends only
+    /// on its content, never on how the elaborator shared it, so equal
+    /// declarations hash alike however they were built. The scheme stays
+    /// prefix-free: `DIGEST` is followed by exactly 32 bytes, and a digest
+    /// stands for its preimage up to SHA-256's collision resistance, as a
+    /// referent hash does. What it buys is the walk's cost: a node shared
+    /// in memory is walked once per declaration, not once per occurrence
+    /// (`issues/image-tree-walks-let-shared-terms.md`).
+    #[inline]
+    fn node<T>(&mut self, node: &T, types: bool, walk: impl FnOnce(&mut Self, &T)) {
+        let addr = node as *const T as usize;
+        let memo = if types { &self.types } else { &self.terms };
+        if !memo.is_empty() {
+            if let Some(h) = memo.get(&addr).copied() {
+                self.digest(&h);
+                return;
+            }
+        }
+        let start = self.buf.len();
+        self.open += 1;
+        walk(self, node);
+        self.open -= 1;
+        if self.buf.len() - start >= DIGEST_AT {
+            let mut hasher = Sha256::new();
+            hasher.update(DOMAIN_NODE);
+            hasher.update(&self.buf[start..]);
+            let h = hasher.finish();
+            self.buf.truncate(start);
+            if types { &mut self.types } else { &mut self.terms }.insert(addr, h);
+            self.digest(&h);
+        }
+    }
+
+    fn digest(&mut self, h: &Hash) {
+        self.buf.push(tag::DIGEST);
+        self.buf.extend_from_slice(h);
+        if self.buf.len() >= FLUSH_AT {
+            self.flush();
+        }
     }
 
     #[inline]
@@ -343,6 +439,10 @@ impl<'a> Walk<'a> {
     }
 
     fn flush(&mut self) {
+        // An open node's bytes may still become its digest.
+        if self.open > 0 {
+            return;
+        }
         self.hasher.update(&self.buf);
         self.buf.clear();
     }
@@ -488,6 +588,10 @@ impl<'a> Walk<'a> {
     }
 
     fn ty(&mut self, t: &Type) {
+        self.node(t, true, Self::ty_node)
+    }
+
+    fn ty_node(&mut self, t: &Type) {
         match t {
             Type::Nat => self.tag(tag::T_NAT),
             Type::Pi { dom_level, cod_level, dom, cod } => {
@@ -630,6 +734,10 @@ impl<'a> Walk<'a> {
     }
 
     fn term(&mut self, t: &Term) {
+        self.node(t, false, Self::term_node)
+    }
+
+    fn term_node(&mut self, t: &Term) {
         match t {
             Term::Var(v) => {
                 self.tag(tag::E_VAR);

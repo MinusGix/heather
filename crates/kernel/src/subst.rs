@@ -1428,6 +1428,12 @@ struct ReindexGlobal<'a> {
     map: &'a mut dyn FnMut(u32) -> Option<u32>,
     failed: bool,
     changes: u64,
+    /// Shared nodes are moved once, as `shift_global` does: a moved module
+    /// image (`ModuleDelta::relocate`) was a tree walk over terms the
+    /// elaborator shares as a DAG, which a tier-2 type's `W` encoding
+    /// makes large (`issues/grind-closure-cost.md`). Sound because `map`
+    /// answers by position alone, so a node at one depth moves one way.
+    memo: NodeMemo,
 }
 
 impl ReindexGlobal<'_> {
@@ -1457,6 +1463,10 @@ impl Mapper for ReindexGlobal<'_> {
 
     fn changes(&mut self) -> &mut u64 {
         &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
     }
 
     fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
@@ -1493,7 +1503,7 @@ impl GlobalBinding {
     /// [`Type::reindex_global`] over a whole binding: its context, statement
     /// and body share one global scope (the binding's prefix of Ψ).
     pub fn reindex_global(&self, map: &mut dyn FnMut(u32) -> Option<u32>) -> Option<GlobalBinding> {
-        let mut m = ReindexGlobal { map, failed: false, changes: 0 };
+        let mut m = ReindexGlobal { map, failed: false, changes: 0, memo: NodeMemo::default() };
         let at = Depths::default();
         let out = match self {
             GlobalBinding::Ctx => GlobalBinding::Ctx,
@@ -2178,7 +2188,7 @@ macro_rules! ops {
             /// and returns indices counted from outside the term; `None` when
             /// the map refused one. See [`ReindexGlobal`].
             pub fn reindex_global(&self, map: &mut dyn FnMut(u32) -> Option<u32>) -> Option<$ty> {
-                let mut m = ReindexGlobal { map, failed: false, changes: 0 };
+                let mut m = ReindexGlobal { map, failed: false, changes: 0, memo: NodeMemo::default() };
                 let out = $map(self, &mut m, Depths::default());
                 (!m.failed).then_some(out)
             }

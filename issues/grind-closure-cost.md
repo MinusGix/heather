@@ -70,3 +70,12 @@ grind_with([e])`.
   ([[tier2-constructor-value-cost]]). The lists past these four are
   [[lib-closure-markers]]. Not looked at: the second cost (itree in scope slowing every
   grind call), now [[grind-scope-size-cost]].
+- 2026-11-06: The merge recheck and most of the rest were overhead, not
+  grind (docs/grind-design.md §14.6, "Where the sixfold went"): no verdict
+  store in the bundled session (now an in-memory one), one Merkle prefix
+  re-hashed at every world switch (now the last few are kept), and tree
+  walks over shared terms in relocation and the Merkle walk (now memoized;
+  [[image-tree-walks-let-shared-terms]] done). With the conversions, cold
+  216 s → about 120 s against master's 35 s. Left: the closure's own
+  elaboration, [[tier2-constructor-value-cost]]. The conversions are still
+  out pending Minus's call.
