@@ -137,17 +137,17 @@ theorem LocatedAddGroup::abs_le_intro(x, e: K, l: K.inv(e) <= x, r: x <= e): Abs
 
 // A bound is nonnegative: `-e <= z <= e`.
 theorem LocatedAddGroup::abs_le_nonneg(z, e: K, hz: AbsLe(z, e)): K.unit <= e {
-    linarith(hz.left, hz.right)
+    linarith(hz)
 }
 
 // Anything `≈ 0` is below a nonnegative bound.
 theorem LocatedAddGroup::abs_le_zero(z, e: K, hz: z ≈ K.unit, he: K.unit <= e): AbsLe(z, e) {
-    LocatedAddGroup::abs_le_intro(z, e, linarith(hz, he), linarith(hz, he))
+    linarith(hz, he)
 }
 
 // A bound moves along `≈` in the bounded term and up in the bound.
 theorem LocatedAddGroup::abs_le_weaken(z, z2, e, e2: K, h: AbsLe(z, e), hz: z ≈ z2, he: e <= e2): AbsLe(z2, e2) {
-    LocatedAddGroup::abs_le_intro(z2, e2, linarith(h.left, hz, he), linarith(h.right, hz, he))
+    linarith(h, hz, he)
 }
 
 // The triangle inequality, for a term that is a sum of two (three) bounded
@@ -155,20 +155,19 @@ theorem LocatedAddGroup::abs_le_weaken(z, z2, e, e2: K, h: AbsLe(z, e), hz: z �
 theorem LocatedAddGroup::abs_le_sum2(a, b, r, x, y, c: K, ha: AbsLe(a, x), hb: AbsLe(b, y), hr: r ≈ a + b,
     hc: x + y <= c): AbsLe(r, c)
 {
-    LocatedAddGroup::abs_le_intro(r, c, linarith(ha.left, hb.left, hr, hc), linarith(ha.right, hb.right, hr, hc))
+    linarith(ha, hb, hr, hc)
 }
 
 theorem LocatedAddGroup::abs_le_sum3(a, b, c, r, x, y, z, w: K, ha: AbsLe(a, x), hb: AbsLe(b, y), hc: AbsLe(c, z),
     hr: r ≈ a + b + c, hw: x + y + z <= w): AbsLe(r, w)
 {
-    LocatedAddGroup::abs_le_intro(r, w, linarith(ha.left, hb.left, hc.left, hr, hw), linarith(ha.right, hb.right, hc.right, hr, hw))
+    linarith(ha, hb, hc, hr, hw)
 }
 
 // Bounds multiply, with no sign split: the four products `(x ± a)(y ± b)`
 // are nonnegative.
 theorem OrderedField::abs_le_mul(a, b, x, y: K, ha: AbsLe(a, x), hb: AbsLe(b, y)): AbsLe(a * b, x * y) {
-    LocatedAddGroup::abs_le_intro(a * b, x * y, nlinarith(ha.left, ha.right, hb.left, hb.right),
-        nlinarith(ha.left, ha.right, hb.left, hb.right))
+    nlinarith(ha, hb)
 }
 
 // Every element has a bound, computed from it: `|c| <= c² + 1`, from
@@ -178,7 +177,7 @@ theorem OrderedField::abs_le_sq_succ(c: K): AbsLe(c, c * c + K.multiplicative.un
     let s1: (K.unit <= (c + K.inv(K.multiplicative.unit)) * (c + K.inv(K.multiplicative.unit))) =
         OrderedRing::sq_nonneg(c + K.inv(K.multiplicative.unit));
     let s2: (K.unit <= (c + K.multiplicative.unit) * (c + K.multiplicative.unit)) = OrderedRing::sq_nonneg(c + K.multiplicative.unit);
-    LocatedAddGroup::abs_le_intro(c, c * c + K.multiplicative.unit, linarith(s, s2), linarith(s, s1))
+    linarith(s, s2, s1)
 }
 
 // ---------------------------------------------------------------------------
@@ -761,7 +760,7 @@ theorem DerivOn::mvi_steps(D: K → Type, f: K → K, L, d: K, hD: ConvexOn(D), 
                     let xz: (x <= x + s) = linarith(ps);
                     let zy: (x + s <= y) = linarith(far);
                     let dz = hD(x, y, x + s, dx, dy, xz, zy);
-                    let near: AbsLe((x + s) + K.inv(x), s) = LocatedAddGroup::abs_le_intro((x + s) + K.inv(x), s, linarith(ps), linarith(ps));
+                    let near: AbsLe((x + s) + K.inv(x), s) = linarith(ps);
                     let first = loc(x, x + s, s, dx, dz, near, StrictOrder::le_of_lt(s, d, sd));
                     let left: (y + K.inv(x + s) <= K.of_nat(m) * s) = linarith(span, w);
                     let rest = DerivOn::mvi_steps(D, f, L, d, hD, pd, loc, m, x + s, y, dz, dy, zy, left);
@@ -844,7 +843,7 @@ theorem DerivOn::lipschitz(D: K → Type, f, g: K → K, M: K, hD: ConvexOn(D), 
                 let r = DerivOn::mvi(D, f, g, M, hD, hd, hb, y, x, dy, dx, StrictOrder::le_of_lt(y, x, yx));
                 let rl: (K.inv(M * (x + K.inv(y))) <= f(x) + K.inv(f(y))) = r.left;
                 let le: (M * (x + K.inv(y)) <= M * h) = OrderedSemiring::mul_le_mono_l(x + K.inv(y), h, M, linarith(l), hb.left);
-                LocatedAddGroup::abs_le_intro(f(y) + K.inv(f(x)), M * h, linarith(r.right, le), linarith(rl, le))
+                linarith(r.right, le, rl)
             },
             λ xy => {
                 let r = DerivOn::mvi(D, f, g, M, hD, hd, hb, x, y, dx, dy, xy);
