@@ -2,8 +2,11 @@
 // (docs/partial-functions-design.md §4, docs/sequencing-surface-design.md
 // §18, issues/partial-fn-surface.md). A partial function runs at literals by
 // a count and `refl` (tail calls, bound calls, several parameters, an open
-// element type, events); its result is proved by fixpoint induction over
-// `f::body`, and its divergence by the same rule; `f_unfold` is the
+// element type, events). A body whose every self-call is a tail call is a
+// loop, `CoTree::iter` of a pass (issues/partial-fn-tail-iter.md), and its
+// result and its divergence are proved by the invariant rule
+// `CoTree::iter_sound`; a body with a bound call is `CoTree::rec`, and its
+// result is proved by fixpoint induction over `f::body`. `f_unfold` is the
 // definition. A `while` with no measure runs in `Partial` and in
 // `CoTree<_>(E)`, with a bind in its body and several locals, and is refused
 // in a carrier that cannot iterate and in pure code. `CoTree` itself is a
@@ -42,7 +45,8 @@ theorem chain_partial_lit(): CoTree::after(Events::none(), 0, chain_partial(CRet
 
 // ---------------------------------------------------------------------------
 // `partial fn`: an unbounded search, a tail call. Its type is
-// `Nat → Partial(Nat)`.
+// `Nat → Partial(Nat)`, and it is a loop: its body is one pass, `Continue`
+// at the call and `Break` at the return.
 
 fn big(m: Nat) → Bool { 50.leb(m * m) }
 
@@ -53,12 +57,13 @@ partial fn search(n: Nat) → Nat {
 theorem search_0(): CoTree::after(Events::none(), 40, search(0)) = ORet(8) { refl }
 theorem search_0_returns(): Returns(Events::none(), search(0), 8) { Returns(40, refl) }
 theorem search_9(): CoTree::after(Events::none(), 0, search(9)) = ORet(9) { refl }
-// The definition, by name: `CoTree::rec` of the body over the calls.
-theorem search_is(n: Nat): search(n) = CoTree::rec(Events::calls(Nat, Nat), Events::none(), search::body, n) {
+// The definition, by name: `CoTree::iter` of the pass.
+theorem search_is(n: Nat): search(n) = CoTree::iter(Events::none(), search::body, n) {
     search_unfold(n)
 }
-// The body at a call: the self-call is a call event.
-theorem search_body_call(): search::body(0) = CVis(Inl(1), λ r => CRet(r)) { refl }
+// The pass at a call goes round again, and at a return stops.
+theorem search_body_call(): search::body(0) = CRet(Continue(1)) { refl }
+theorem search_body_stop(): search::body(9) = CRet(Break(9)) { refl }
 
 // The negative controls: a wrong value, and a count too small to reach it.
 // expect-error(kernel): the kernel rejected `search_wrong`: NotConvertible
@@ -66,28 +71,85 @@ theorem search_wrong(): CoTree::after(Events::none(), 40, search(0)) = ORet(7) {
 // expect-error(kernel): the kernel rejected `search_short`: NotConvertible
 theorem search_short(): CoTree::after(Events::none(), 3, search(0)) = ORet(8) { refl }
 
-// A proof cases on what the body matches on. `search`'s body matches on a
-// computed `big(n)`, which a proof can only case on through a helper taking
-// it as a parameter (docs/proof-patterns.md); `tri` below matches on its
-// parameter, and its result is proved by fixpoint induction.
+// Its result, by the invariant rule: whatever it returns is big. The pass
+// keeps `I` (here nothing) on the states it goes round with and `Q` on the
+// value it stops with. A proof cases on what the pass matches on; `big(n)`
+// is computed, so the case split is on a helper that takes it as a
+// parameter, and the pass is that helper at `big(n)` by conversion
+// (docs/proof-patterns.md §4).
+fn search_at(n: Nat, b: Bool) → CoTree<Step<Nat, Nat>>(Events::none()) {
+    match b { True => CRet(Break(n)), False => CRet(Continue(Succ(n))) }
+}
+theorem search_pass_at(n: Nat, b: Bool): big(n) = b → (x: Step<Nat, Nat>) → Returns(Events::none(), search_at(n, b), x) →
+    Step::Within(λ _ => True, λ r => big(r) = True, x)
+{
+    match b {
+        True => λ c x h => Returns::ret(Events::none(), Break(n), x, h, λ y => Step::Within(λ _ => True, λ r => big(r) = True, y), c),
+        False => λ c x h => Returns::ret(Events::none(), Continue(Succ(n)), x, h, λ y => Step::Within(λ _ => True, λ r => big(r) = True, y), trivial),
+    }
+}
+theorem search_pass(n: Nat, x: Step<Nat, Nat>, h: Returns(Events::none(), search::body(n), x)):
+    Step::Within(λ _ => True, λ r => big(r) = True, x)
+{
+    search_pass_at(n, big(n), refl, x, h)
+}
+theorem search_returns_big(n: Nat, r: Nat, h: Returns(Events::none(), search(n), r)): big(r) = True {
+    CoTree::iter_sound(Events::none(), search::body, λ _ => True, λ r2 => big(r2) = True, λ a _ x h2 => search_pass(a, x, h2),
+        n, trivial, r, h)
+}
+
+// The negative control: the rule proves no false result. `search` stops,
+// so its pass does not keep `False` on what it stops with.
+// expect-error(mismatch)
+theorem search_never(n: Nat, r: Nat, h: Returns(Events::none(), search(n), r)): False {
+    CoTree::iter_sound(Events::none(), search::body, λ _ => True, λ _ => False, λ a _ x h2 => search_pass(a, x, h2),
+        n, trivial, r, h)
+}
+
+// Two parameters and a neutral invariant: the state is the pair, and the
+// sum `n + acc` is what every pass keeps.
+partial fn walk(n: Nat, acc: Nat) → Nat {
+    match n { Zero => Pointed::ret(acc), Succ(m) => walk(m, acc + 1) }
+}
+theorem walk_3(): CoTree::after(Events::none(), 10, walk(3, 4)) = ORet(7) { refl }
+theorem walk_pass(k: Nat, s: Mutated<Nat, Nat>): s.after + s.value = k → (x: Step<Mutated<Nat, Nat>, Nat>) →
+    Returns(Events::none(), walk::body(s), x) → Step::Within(λ s2 => s2.after + s2.value = k, λ r => r = k, x)
+{
+    match s {
+        Mutated(n, acc) => match n {
+            Zero => λ i x h => Returns::ret(Events::none(), Break(acc), x, h,
+                λ y => Step::Within(λ s2 => s2.after + s2.value = k, λ r => r = k, y), omega(i)),
+            Succ(m) => λ i x h => Returns::ret(Events::none(), Continue(Mutated(m, acc + 1)), x, h,
+                λ y => Step::Within(λ s2 => s2.after + s2.value = k, λ r => r = k, y), omega(i)),
+        },
+    }
+}
+theorem walk_sum(n: Nat, acc: Nat, r: Nat, h: Returns(Events::none(), walk(n, acc), r)): r = n + acc {
+    CoTree::iter_sound(Events::none(), walk::body, λ s => s.after + s.value = n + acc, λ r2 => r2 = n + acc,
+        λ s i x h2 => walk_pass(n + acc, s, i, x, h2), Mutated(n, acc), refl, r, h)
+}
 
 // Divergence by the same rule: a function that only calls itself returns
-// nothing, because `False` is an invariant its body keeps.
+// nothing, because its pass never stops, so `False` is a result invariant
+// it keeps.
 partial fn again(n: Nat) → Nat { again(n) }
 
 theorem again_never(n: Nat, r: Nat, h: Returns(Events::none(), again(n), r)): False {
-    CoTree::rec_sound(Events::calls(Nat, Nat), Events::none(), again::body, λ _ _ => False,
-        λ d => CoTree::safe_call<Nat>(Events::calls(Nat, Nat), Events::none(), λ _ _ => False, λ _ => False, d, λ r2 => CRet(r2),
-            λ r2 f => false_elim(f)), n, r, h)
+    CoTree::iter_sound(Events::none(), again::body, λ _ => True, λ _ => False,
+        λ a _ x h2 => Returns::ret(Events::none(), Continue(a), x, h2, λ y => Step::Within(λ _ => True, λ _ => False, y), trivial),
+        n, trivial, r, h)
 }
 
 // ---------------------------------------------------------------------------
-// A bound call, not in tail position: `n + (n - 1) + … + 0`.
+// A bound call, not in tail position: `n + (n - 1) + … + 0`. The call waits
+// for its answer, so the function is `CoTree::rec` of its body over its
+// calls, and its result is proved by fixpoint induction.
 
 partial fn tri(n: Nat) → Nat {
     match n { Zero => Pointed::ret(0), Succ(m) => { let r <- tri(m); Pointed::ret(n + r) } }
 }
 theorem tri_4(): CoTree::after(Events::none(), 40, tri(4)) = ORet(10) { refl }
+theorem tri_is(n: Nat): tri(n) = CoTree::rec(Events::calls(Nat, Nat), Events::none(), tri::body, n) { tri_unfold(n) }
 // A bound call's safety: `CoTree::safe_call_bind`, the continuation safe at
 // every answer.
 theorem tri_body_safe(n: Nat): CoTree::Safe<Nat>(Events::calls(Nat, Nat), Events::none(), λ d r => d <= r, tri::body(n), λ r => n <= r) {
@@ -116,17 +178,46 @@ partial fn last<A>(x: A, xs: List<A>) → A {
 }
 theorem last_lit(): CoTree::after(Events::none(), 10, last(0, [1, 2, 3])) = ORet(3) { refl }
 
-// With events: `partial(E) fn` passes `E`'s commands through and answers
-// its own calls. Each round asks for a number and stops at zero.
+// A pass that stops with a computation, not a value: the computation's
+// value is the `Break`.
+partial fn to_three(n: Nat) → Nat {
+    match n { Zero => three(Events::none()), Succ(m) => to_three(m) }
+}
+theorem to_three_lit(): CoTree::after(Events::none(), 10, to_three(2)) = ORet(3) { refl }
+
+// A pass may bind another partial function's call: `Partial(Nat)` is the
+// pass's own carrier.
+partial fn search_twice(n: Nat) → Nat {
+    let r <- search(n);
+    match r.leb(n) { True => Pointed::ret(r), False => search_twice(r) }
+}
+theorem search_twice_lit(): CoTree::after(Events::none(), 80, search_twice(0)) = ORet(8) { refl }
+
+// With events: `partial(E) fn` passes `E`'s commands through. Each round
+// asks for a number and stops at zero. A loop's pass is a computation over
+// `E` itself, so it issues `E`'s commands as they are.
 fn Events::ask() → Events { Events(True, λ _ => Nat) }
 
 partial(Events::ask()) fn total(acc: Nat) → Nat {
-    let n <- CoTree::trigger(Events::sum(Events::calls(Nat, Nat), Events::ask()), Inr(trivial));
+    let n <- CoTree::trigger(Events::ask(), trivial);
     match n { Zero => Pointed::ret(acc), Succ(_) => total(acc + n) }
 }
 // The run stops at its first question, a command of `ask`'s own events:
 // it is settled there, not taking silent steps.
 theorem total_asks(): Obs::Settled(Events::ask(), CoTree::after(Events::ask(), 5, total(0))) { trivial }
+// A body with a bound call answers its own calls among `E`'s commands, so
+// it issues `E`'s injected into the sum.
+partial(Events::ask()) fn asks(k: Nat) → Nat {
+    match k {
+        Zero => Pointed::ret(0),
+        Succ(m) => {
+            let n <- CoTree::trigger(Events::sum(Events::calls(Nat, Nat), Events::ask()), Inr(trivial));
+            let r <- asks(m);
+            Pointed::ret(n + r)
+        },
+    }
+}
+theorem asks_asks(): Obs::Settled(Events::ask(), CoTree::after(Events::ask(), 5, asks(2))) { trivial }
 
 // The refusals, each with its reason.
 // expect-error: `never` never calls itself, so it always returns: write it as a plain `fn`
@@ -188,6 +279,14 @@ partial fn halve_all(n: Nat) → Nat {
     match m { Zero => Pointed::ret(0), Succ(_) => { let r <- halve_all(m - 1); Pointed::ret(r + 1) } }
 }
 theorem halve_all_lit(): CoTree::after(Events::none(), 40, halve_all(9)) = ORet(1) { refl }
+// A tail call after the loop: the loop is a pass's first part.
+partial fn halve_down(n: Nat) → Nat {
+    let mut m = n;
+    while 2 <= m { m := m.half() }
+    match m { Zero => Pointed::ret(0), Succ(_) => halve_down(m - 1) }
+}
+theorem halve_down_lit(): CoTree::after(Events::none(), 40, halve_down(9)) = ORet(0) { refl }
+theorem halve_down_is(n: Nat): halve_down(n) = CoTree::iter(Events::none(), halve_down::body, n) { halve_down_unfold(n) }
 
 // The negative controls: a carrier with no `Iterate` instance, and pure code.
 // expect-error: a `while` with no measure may go round forever, so it runs only in a block over a carrier that can iterate
