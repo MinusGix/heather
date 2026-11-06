@@ -153,7 +153,18 @@ positions (with nesting, at each layer of the carrier):
   `Zero => zeros()` is one observation of an existing tree; `match` and
   blocks fall through to the ordinary elaborator, whose branches come back
   to the hook at the same position (`smap`'s `match s { SCons(h, t) =>
-  SCons(Succ(h), smap(t)) }`).
+  SCons(Succ(h), smap(t)) }`). Indexed, a `match` on a term the index
+  mentions (`fn v(n) → Bisim(sp(n), sp(n)) { match n { … } }`) hands
+  each arm the step type at the *refined* index, `F(C)(idx[n := Zero])`:
+  `step_index` reads that index off the named shape's last argument
+  (`El(D#mshape ā idx)`), holds the whole step type to it by conversion,
+  and the arm's node is built from `MParts::reindexed` there, the match's
+  motive carrying it back to the body's index (2026-11-06,
+  issues/corec-match-on-index-term.md; before, the arm fell through to
+  the ordinary constructor path and was refused as "not the expected
+  type"). An inline signature (a type argument above `Ty 0`) has no named
+  shape to read, and still falls through
+  (issues/corec-match-on-index-term-inline-sig.md).
 - **at the child type** `X + ⟦D⟧`: a self-call becomes `inl(seed)`, the
   carrier tuple of its varying arguments; anything else is an existing tree,
   `inr(e)`. A function child is a λ whose body is at the child type, or an

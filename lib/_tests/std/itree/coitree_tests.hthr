@@ -122,3 +122,30 @@ theorem inj_corec_tau_ret_refused<R>(E: Events, ans: (c: E.Cmd) → E.Resp(c), s
 {
     inj(e)
 }
+
+// A corecursive proof matching a term its result index mentions
+// (issues/corec-match-on-index-term.md): the index names `sp(E, n)` and the
+// body matches `n`, so each arm's node sits at the refined index.
+fn sp(E: Events, n: Nat) → CoTree<Nat>(E) { match n { Zero => CRet(0), Succ(m) => CTau(sp(E, m)) } }
+fn sp_self(E: Events, n: Nat) → Bisim<Nat>(E, sp(E, n), sp(E, n)) {
+    match n { Zero => BRet(0, refl, refl), Succ(m) => BTau(sp(E, m), sp(E, m), refl, refl, sp_self(E, m)) }
+}
+
+// The same through an observation: the index is the loop over `obs(t)` and
+// the body matches `h: obs(t)` — no helper hiding the scrutinee
+// (`CoTree::iter_from`) is needed.
+fn iter_self<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), t: CoTree<Step<A, B>>(E)) →
+    Bisim<B>(E, CoTree::iter_obs(E, body, CoTree::obs(E, t)), CoTree::iter_obs(E, body, CoTree::obs(E, t)))
+{
+    match h: CoTree::obs(E, t) {
+        ORet(x) => match x {
+            Continue(a) => BTau(CoTree::iter_obs(E, body, CoTree::obs(E, body(a))), CoTree::iter_obs(E, body, CoTree::obs(E, body(a))),
+                refl, refl, iter_self(E, body, body(a))),
+            Break(b) => BRet(b, refl, refl),
+        },
+        OTau(s) => BTau(CoTree::iter_obs(E, body, CoTree::obs(E, s)), CoTree::iter_obs(E, body, CoTree::obs(E, s)),
+            refl, refl, iter_self(E, body, s)),
+        OVis(c, k) => BVis(c, λ a => CoTree::iter_obs(E, body, CoTree::obs(E, k(a))), λ a => CoTree::iter_obs(E, body, CoTree::obs(E, k(a))),
+            refl, refl, λ a => iter_self(E, body, k(a))),
+    }
+}

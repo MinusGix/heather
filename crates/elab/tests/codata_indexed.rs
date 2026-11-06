@@ -200,6 +200,38 @@ fn nested_constructors_in_checking_positions() {
     ));
 }
 
+// A body matching a term its result index mentions
+// (issues/corec-match-on-index-term.md): each arm's step type sits at the
+// index the arm's pattern refines it to, so the arm's equation field is
+// checked there (`0 = Zero`, `Succ(m) = Succ(m)`), and the match's motive
+// carries the node back to the body's own index. Observed at a literal
+// argument (through both arms) and at an open one; a compound scrutinee
+// (`pred(n)`, which the index mentions) refines the same way; and the
+// coinduction hypothesis still lands at the child's index inside an arm.
+#[test]
+fn corecursion_matching_a_term_its_index_mentions() {
+    elab(
+        "codata Count : (n: Nat) -> Type { Tick(at: Nat, ok: at = n, next: Count(Succ(n))) }
+         fn here(n: Nat, c: Count(n)) -> Nat { match c { Tick(a, _, _) => a } }
+         fn later(n: Nat, c: Count(n)) -> Count(Succ(n)) { match c { Tick(_, _, k) => k } }
+         fn by_cases(n: Nat) -> Count(n) {
+             match n { Zero => Tick(0, refl, by_cases(1)), Succ(m) => Tick(Succ(m), refl, by_cases(Succ(Succ(m)))) }
+         }
+         theorem lit0(): here(0, by_cases(0)) = 0 { refl }
+         theorem lit(): here(3, later(2, later(1, later(0, by_cases(0))))) = 3 { refl }
+         theorem open(m: Nat): here(Succ(Succ(m)), later(Succ(m), by_cases(Succ(m)))) = Succ(Succ(m)) { refl }
+         fn pred(n: Nat) -> Nat { match n { Zero => 0, Succ(m) => m } }
+         fn at_pred(n: Nat) -> Count(pred(n)) {
+             match pred(n) { Zero => Tick(0, refl, by_cases(1)), Succ(m) => Tick(Succ(m), refl, by_cases(Succ(Succ(m)))) }
+         }
+         theorem pred_lit(): here(2, at_pred(3)) = 2 { refl }
+         fn nested(n: Nat) -> Count(n) {
+             match n { Zero => Tick(0, refl, Tick(1, refl, nested(2))), Succ(m) => Tick(Succ(m), refl, nested(Succ(Succ(m)))) }
+         }
+         theorem nested_lit(): here(2, later(1, later(0, nested(0)))) = 2 { refl }",
+    );
+}
+
 // -- negative controls -------------------------------------------------------
 
 // The coinduction hypothesis is used only at the index it was stated at.
@@ -222,6 +254,27 @@ fn a_use_needs_its_index() {
     assert!(msg.contains("needs its index"), "{msg}");
     let msg = elab_err(&format!("{STREAM}\nfn f(s: Stream, b: SBisim(s)) -> Nat {{ 0 }}"));
     assert!(msg.contains("index argument(s)"), "{msg}");
+}
+
+// An arm's node is checked at its refined index, not the body's: a field
+// true only at the body's index (`n = n`) is refused in an arm where the
+// index is `Zero`, and so is a field true at neither (`Succ(m) = m`).
+#[test]
+fn refined_arm_indices_are_held() {
+    let count = "codata Count : (n: Nat) -> Type { Tick(at: Nat, ok: at = n, next: Count(Succ(n))) }";
+    let msg = elab_err(&format!(
+        "{count}\nfn bad(n: Nat) -> Count(n) {{ match n {{ Zero => Tick(1, refl, bad(1)), Succ(m) => Tick(Succ(m), refl, bad(Succ(Succ(m)))) }} }}"
+    ));
+    assert!(msg.contains("are not"), "{msg}");
+    let msg = elab_err(&format!(
+        "{count}\nfn bad(n: Nat) -> Count(n) {{ match n {{ Zero => Tick(0, refl, bad(1)), Succ(m) => Tick(m, refl, bad(Succ(Succ(m)))) }} }}"
+    ));
+    assert!(msg.contains("are not"), "{msg}");
+    // The self-call in an arm is still held to the child's index.
+    let msg = elab_err(&format!(
+        "{count}\nfn bad(n: Nat) -> Count(n) {{ match n {{ Zero => Tick(0, refl, bad(0)), Succ(m) => Tick(Succ(m), refl, bad(Succ(Succ(m)))) }} }}"
+    ));
+    assert!(msg.contains("result index must be the child's"), "{msg}");
 }
 
 // A nested call is the coinduction hypothesis too: only at its child's
