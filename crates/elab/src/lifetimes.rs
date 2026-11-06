@@ -505,6 +505,13 @@ pub(crate) struct Policy {
     /// item, which is a cost no ordinary check should pay to say nothing
     /// (`issues/lint-redundant-match-motive.md`, 2026-09-17).
     pub(crate) review_lints: bool,
+    /// Every structurally recursive `fn` is checked to unfold to its source,
+    /// and refused where it does not (`meaning.rs`,
+    /// issues/recursion-meaning-check.md). Off by default until its cost
+    /// comes down (it re-gates every recursive body; the tactic library's
+    /// `let v <- …; match v` bodies pay most, issues/tier2-type-code-functions.md);
+    /// `heather check --meaning-check` sets it ([`Elaborator::set_meaning_check`]).
+    pub(crate) meaning_check: bool,
     /// Tactics implemented in Rust, available as `by name`
     /// ([`Elaborator::register_native_tactic`], docs/host-elaboration-interface-design.md §8a).
     pub(crate) native_tactics: RefCell<HashMap<String, fn() -> Box<dyn host::NativeTactic>>>,
@@ -533,6 +540,7 @@ impl Policy {
             fuel: DEFAULT_FUEL,
             lint_profile: LintProfile::Default,
             review_lints: false,
+            meaning_check: false,
             native_tactics: RefCell::new(HashMap::new()),
             value_metrics: None,
             emission_findings: None,

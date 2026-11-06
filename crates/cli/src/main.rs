@@ -102,7 +102,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--expectations] [--build-jobs <n> [--build-only] [--build-first <dir>]... [--build-times <file.tsv>]] [--unbuilt] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--accept-stale-images] [--deny-axioms] [--review] [--meaning-check] [--expectations] [--build-jobs <n> [--build-only] [--build-first <dir>]... [--build-times <file.tsv>]] [--unbuilt] [--world <dir>] [--timings <file.tsv>] [--kernel-workers <n>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file.hthr>...\n\
                      \x20      heather axioms <target> [-L <dir>]... [--cache] [--cache-dir <dir>] [--json] <file-or-dir>...\n\
                      \x20      heather fmt [--check] <file-or-dir>...\n\
@@ -132,6 +132,12 @@ struct Opts {
     /// `--review`: the review-mode lints too (a second elaboration per
     /// written match motive), off for an ordinary check.
     review: bool,
+    /// `--meaning-check`: refuse a structurally recursive `fn` whose compiled
+    /// definition does not unfold to its source
+    /// (issues/recursion-meaning-check.md). Off for an ordinary check until
+    /// its cost comes down; it checks only what this run elaborates, so a
+    /// module replayed from `--cache` is not checked again.
+    meaning_check: bool,
     /// `--only a,b,mod::c`: elaborate and kernel-check exactly these
     /// declarations over a replayed prefix, publish nothing, and label the
     /// run so its numbers cannot pass for a whole-run's
@@ -199,6 +205,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         json: false,
         deny_axioms: false,
         review: false,
+        meaning_check: false,
         only: None,
         timings: stats::Dest::from_env(),
         images: ImageFreshness::Exact,
@@ -259,6 +266,10 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         }
         if a == "--review" {
             opts.review = true;
+            continue;
+        }
+        if a == "--meaning-check" {
+            opts.meaning_check = true;
             continue;
         }
         if let Some(rest) = a.strip_prefix("--world") {
@@ -425,6 +436,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             }
         };
         elab.set_review_lints(opts.review);
+        elab.set_meaning_check(opts.meaning_check);
         elab.set_kernel_workers(
             opts.kernel_workers
                 .or_else(heather_elab::kernel_workers_from_env)

@@ -2055,11 +2055,20 @@ impl Elaborator {
 
     /// Turn on the review-mode lints — today `redundant-match-motive`, whose
     /// recognizer re-elaborates and kernel-checks every written motive, and
-    /// `recursion-meaning`, which states and gates one unfolding equation per
-    /// structurally recursive `fn` (`meaning.rs`). Off by default; `heather
-    /// check --review` sets it.
+    /// `recursion-meaning`, which reports a structurally recursive `fn` whose
+    /// meaning check could not be settled (`meaning.rs`). Off by default;
+    /// `heather check --review` sets it.
     pub fn set_review_lints(&mut self, on: bool) {
         self.policy.review_lints = on;
+    }
+
+    /// Check every structurally recursive `fn` against its source and refuse
+    /// one whose compiled definition does not unfold to it (`meaning.rs`,
+    /// issues/recursion-meaning-check.md). Off by default, where review mode
+    /// still runs the check and reports a difference as a lint; `heather
+    /// check --meaning-check` sets it.
+    pub fn set_meaning_check(&mut self, on: bool) {
+        self.policy.meaning_check = on;
     }
 
     /// Keep every theorem's proof from here on, for an exporter
@@ -2461,7 +2470,7 @@ impl Elaborator {
             // conversion miss the kernel records until the item ends is
             // charged to this declaration. A no-op without `value-metrics`.
             #[cfg(feature = "value-metrics")]
-            if let Some(metrics) = &self.value_metrics {
+            if let Some(metrics) = &self.policy.value_metrics {
                 metrics.set_current_item(Some(Rc::from(name.as_str())));
             }
             let slice_source = slice_source(&file, src, idx, &plan);
@@ -2502,7 +2511,7 @@ impl Elaborator {
                 }
             }
             #[cfg(feature = "value-metrics")]
-            if let Some(metrics) = &self.value_metrics {
+            if let Some(metrics) = &self.policy.value_metrics {
                 metrics.set_current_item(None);
             }
             if r.is_err() {
@@ -3261,7 +3270,7 @@ impl Elaborator {
             // `value-metrics`, and free without `--timings`.
             let item_scope = stats::scope(stats::ScopeKind::Item, module, &name);
             #[cfg(feature = "value-metrics")]
-            if let Some(metrics) = &self.value_metrics {
+            if let Some(metrics) = &self.policy.value_metrics {
                 metrics.set_current_item(Some(Rc::from(name.as_str())));
             }
             // A slice of the previous delta stands in for the item when its
@@ -3284,14 +3293,14 @@ impl Elaborator {
                     self.slice_end(mark, slice_source, slice_start, true, unsealing.finish());
                 }
                 #[cfg(feature = "value-metrics")]
-                if let Some(metrics) = &self.value_metrics {
+                if let Some(metrics) = &self.policy.value_metrics {
                     metrics.set_current_item(None);
                 }
                 continue;
             }
             let r = self.elab_item_at(&file, idx, item, &plan);
             #[cfg(feature = "value-metrics")]
-            if let Some(metrics) = &self.value_metrics {
+            if let Some(metrics) = &self.policy.value_metrics {
                 metrics.set_current_item(None);
             }
             drop(item_scope);
@@ -3675,7 +3684,7 @@ impl Elaborator {
                 && self.at_top_candidate(decl, dec)
                 && self.try_recursion_at_top(decl, dec, TopAttempt::Default)
             {
-                return Ok(());
+                return self.check_recursion_meaning(decl);
             }
             match plan {
                 recursion::RecursionPlan::Structural => {}
@@ -3684,7 +3693,7 @@ impl Elaborator {
                     // elaborates, and unfolds by conversion; the measure is
                     // the fallback (docs/recursion-at-the-top-design.md §4).
                     if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
-                        return Ok(());
+                        return self.check_recursion_meaning(decl);
                     }
                     return self.elab_recursion_by_measure(decl, &self_ref, dec, read, &name, from);
                 }
@@ -3738,7 +3747,7 @@ impl Elaborator {
         let first = decl.tyvars.len();
         for dec in first..first + decl.params.len() {
             if self.at_top_candidate(decl, dec) && self.try_recursion_at_top(decl, dec, TopAttempt::Fallback) {
-                return Ok(());
+                return self.check_recursion_meaning(decl);
             }
         }
         Err(error)
@@ -3778,11 +3787,11 @@ impl Elaborator {
             return false;
         }
         stats::count(stats::Counter::RecursionAtTop);
-        let decs = self.attempt.recursion_decs.borrow().clone();
+        // The meaning check (issues/recursion-meaning-check.md) is the
+        // caller's: an attempt that succeeded is the definition, and a
+        // refusal of its equation is the declaration's error, not a reason
+        // to try another lowering under the same name.
         if !inline {
-            if self.policy.review_lints && !decs.is_empty() {
-                self.review_recursion_meaning(decl, &decs);
-            }
             return true;
         }
         // `f(x̄) = { body }`, by one split on the parameter: each side takes
@@ -3796,9 +3805,6 @@ impl Elaborator {
                 unfold.name.clone(),
                 format!("the generated `{}` was refused ({e})", unfold.name),
             );
-        }
-        if self.policy.review_lints && !decs.is_empty() {
-            self.review_recursion_meaning(decl, &decs);
         }
         true
     }
@@ -3886,17 +3892,11 @@ impl Elaborator {
         (s.n_tyvars..s.params.len()).filter(|&p| p != dec && !s.params[p].1).collect()
     }
 
-    /// A `fn` the planner lowers structurally. In review mode, also check
-    /// that the lowering means the source (issues/recursion-meaning-check.md);
-    /// only a `fn` whose self-calls were lowered under a guard has a
-    /// recursion to check.
+    /// A `fn` the planner lowers structurally, then checked to mean its
+    /// source (issues/recursion-meaning-check.md).
     fn elab_structural_fn(&mut self, decl: &Decl) -> R<()> {
         self.elab_decl_one(decl, None)?;
-        let decs = self.attempt.recursion_decs.borrow().clone();
-        if self.policy.review_lints && !decs.is_empty() {
-            self.review_recursion_meaning(decl, &decs);
-        }
-        Ok(())
+        self.check_recursion_meaning(decl)
     }
 
     /// A `fn` whose recursive `match` reads its own parameter, lowered as if

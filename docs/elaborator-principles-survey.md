@@ -339,7 +339,8 @@ for either.
    Highest value per cost: it is the only class of bug that reaches users as
    a wrong answer. Cost: one conversion per constructor per recursive
    definition at the gate. Risk: false refusals; report mode first. No
-   unifier change.
+   unifier change. *Status (2026-11-06):* a refusal at the declaration for
+   "does not unfold"; an unsettled check refuses nothing (`meaning.rs`).
 2. **P1 checked assignment** (`unifier-checked-assignment`). Small: one
    `assign` used by every write, with #387's check moved inside it and
    generalised to every slot whose type is meta-free, plus agreement

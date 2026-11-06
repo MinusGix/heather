@@ -4,7 +4,7 @@ status: open
 labels: [recursion,elaboration,soundness-of-meaning]
 area: language
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-06
 ---
 
 Structural recursion is compiled at a surface `match`, and when the planner
@@ -78,3 +78,41 @@ conversion.
   - Not stated (2): `Stmt::weights` (its body calls a local helper,
     `bump_all`, that the restated body cannot see) and `Scope::nodes` (the
     recursed parameter's type is not one the split can name).
+- 2026-11-06: Step 2: a refusal. Re-ran the whole-library report on master
+  (after recursion at the top, #416/#428): still no definition differs;
+  `attempt_from` now settles, so nine were undecided.
+  - The two "not stated" (`Stmt::weights`, `Scope::nodes`) were the check's
+    own bug: the restatement rewrites a member's base name to its qualified
+    name, and both have a parameter of that name (`weights`, `nodes`), which
+    was rewritten too. A parameter now shadows the base name
+    (`qualified_source`); both hold.
+  - The seven out of fuel are cost, not refusals (both mono ones hold at 16×
+    the conversion budget): a `match` on a value bound by `let v <- …`
+    checks every arm against `Bind::seq`'s β-redex carrier, which
+    [[tier2-type-code-functions]] owns (measured there).
+
+  With the check on (`heather check --meaning-check`,
+  `Elaborator::set_meaning_check`), it runs on every structurally recursive
+  `fn` (at the top, structural, and the at-top fallbacks), and a
+  `NotConvertible` refusal of `f#meaning` is the declaration's error, located
+  at it. An unsettled check (out of fuel, not stated) refuses nothing; review
+  mode reports it as the `recursion-meaning` lint. With the check off, review
+  mode reports a difference as the lint, as before. The two negative
+  controls are now refusals (`crates/elab/tests/recursion_meaning_check.rs`).
+
+  **Off by default, for cost.** `scripts/perf ab` (cold, calc_parser
+  showcase, check on vs master): every counter moves, the kernel gate
+  roughly triples and the wall time roughly doubles. Nearly all of it is
+  checks that *hold*: `grind`/`tactic` metaprograms (`first_of_among`,
+  `apply_holes`, `grind::build`, …) whose bodies are `let v <- …; match v`
+  chains, each arm checked against `Bind::seq`'s β-redex carrier
+  ([[tier2-type-code-functions]]), paid once more by the restated body and
+  once per pair of arms the conversion compares. Next: land
+  [[tier2-type-code-functions]], re-measure, and flip the default if the
+  check's share is then small; until then a library lane with
+  `--meaning-check` is the protection. Step 2's other acceptance (the
+  library passes in refusal mode) is recorded below.
+
+  **Library in refusal mode:** `heather check --meaning-check --expectations
+  lib` passes (every expected refusal matched, no definition refused), so
+  step 2's acceptance holds; the open part is the default.

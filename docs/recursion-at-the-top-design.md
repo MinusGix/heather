@@ -44,9 +44,9 @@ once, at the top call. Four families of rules follow from that one choice:
   (guard-matches-self-calls-by-term, open).
 
 Each rule is a patch on the consequences of compiling at the match.
-recursion-meaning-check's review mode (`heather check --review`,
-`crates/elab/src/meaning.rs`) now tells us when a patch is wrong; it does not
-remove the rules.
+recursion-meaning-check (`crates/elab/src/meaning.rs`; review mode at the
+time, a refusal at the declaration since 2026-11-06) now tells us when a
+patch is wrong; it does not remove the rules.
 
 ## 2. The shadowing readings (the issue's probes)
 

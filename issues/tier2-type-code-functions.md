@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,inductives,performance]
 area: language
 created: 2026-10-31
-updated: 2026-11-01
+updated: 2026-11-06
 ---
 
 Tier-2 declarations (lowered on `W` with a leaf predicate, such as `Tac`)
@@ -46,3 +46,16 @@ comparison are recorded here.
   100k steps) and the run's total seconds rise by a few percent. Landing the
   code function should return the ported modules to their old counts.
 - 2026-11-05: gardener: cites a file it shares with [[parametric-type-families]] (`docs/higher-kinded-classes-design.md`).
+- 2026-11-06: The same β-redex is why seven tactic metaprograms' meaning
+  checks ([[recursion-meaning-check]]) run out of fuel (`mono_prove`,
+  `mono_class_carrier`, `solutions`, `rt_go`, `Act::traced`,
+  `norm_num_reify`, `interval_reify`). It is paid per **arm**: a `match` on
+  a bound value inside `Bind::seq`'s continuation has the motive `M(B)`,
+  and each of its arms is checked against it. Probe, an 11-constructor
+  `Head` match under `let v <- view(h);` with no recursion: ~140k gate steps,
+  against ~30k for the same code written `view(h).bind(λ v => …)`;
+  ascribing the `match` `: Tac<Nat>` halves it. The meaning check gates the
+  body a second time and compares the arms pairwise, so a recursive
+  function with a few such matches crosses the default conversion budget
+  (`mono_prove` holds at 16× the budget). Landing the code function should
+  let those seven settle.
