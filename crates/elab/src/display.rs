@@ -44,6 +44,7 @@ use crate::diagnostics::DISPLAY_DECODE_STEPS;
 use crate::gendefs::GenDef;
 use crate::unification::Sol;
 use crate::{Cx, Elaborator, ParamMeta, dress_true, show_level};
+use heather_syntax::{OpFixity, OperatorForm};
 
 /// Nodes the walk may visit. Generous next to `fmt.rs`'s 512, because a
 /// spelled node is a handful of characters where a raw one is a record.
@@ -720,12 +721,14 @@ impl Speller<'_> {
             Type::Ty(l) => format!("Type<{}>", show_level(l)),
             Type::El { tm, .. } => self.tm(tm, d),
             Type::Id { lhs, rhs, .. } => {
-                format!("{} = {}", self.tm(lhs, d), self.tm(rhs, d))
+                let side = |t: &Term| self.operand_at(t, d, Form::comparand);
+                format!("{} = {}", side(lhs), side(rhs))
             }
             // No surface form exists for strict equality; the glyph is
             // display-only and deliberately not `=`.
             Type::SEq { lhs, rhs, .. } => {
-                format!("{} ≡ {}", self.tm(lhs, d), self.tm(rhs, d))
+                let side = |t: &Term| self.operand_at(t, d, Form::comparand);
+                format!("{} ≡ {}", side(lhs), side(rhs))
             }
             Type::Squash { ty, .. } => format!("∥{}∥", self.ty(ty, d + 1)),
             Type::Vec { elem, len, .. } => {
@@ -838,7 +841,8 @@ impl Speller<'_> {
             Term::TmTy(level) => format!("Type<{}>", show_level(level)),
             Term::TmId { ty, lhs, rhs, .. } => {
                 let _ = ty;
-                format!("{} = {}", self.tm(lhs, d + 1), self.tm(rhs, d + 1))
+                let side = |t: &Term| self.operand(t, d, Form::comparand);
+                format!("{} = {}", side(lhs), side(rhs))
             }
             Term::TmVec { elem, len, .. } => {
                 format!("[{}; {}]", self.tm(elem, d + 1), self.tm(len, d + 1))
@@ -1140,8 +1144,9 @@ impl Speller<'_> {
         }
         let (pair, name) = self.el.field_read_parts(self.cx, t)?;
         let shown = self.tm(pair, d + 1);
-        Some(if matches!(&**pair, Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
-            || crate::spelling::proj_of(pair).is_some()
+        Some(if (matches!(&**pair, Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
+            || crate::spelling::proj_of(pair).is_some())
+            && self.form(pair).bare_receiver()
         {
             format!("{shown}.{name}")
         } else {
@@ -1251,6 +1256,9 @@ impl Speller<'_> {
     }
 
     fn call(&self, t: &Term, d: u32) -> String {
+        if let Some(op) = self.op_form(t) {
+            return self.operator(&op, d);
+        }
         let (head, args) = match self.call_parts(t) {
             Some(parts) => parts,
             // A β-redex has no surface spelling, and its contractum is the
@@ -1271,7 +1279,9 @@ impl Speller<'_> {
             CallHead::Field(name) => {
                 let receiver = args[0];
                 let shown = self.tm(receiver, d + 1);
-                return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. }) {
+                return if matches!(receiver.as_ref(), Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
+                    && self.form(receiver).bare_receiver()
+                {
                     format!("{shown}.{name}")
                 } else {
                     format!("({shown}).{name}")
@@ -1308,6 +1318,221 @@ impl Speller<'_> {
         } else {
             format!("{name}({})", shown.join(", "))
         }
+    }
+
+    // -- operators ----------------------------------------------------------
+
+    /// The operator `t` is written with, when it is a resolved operation the
+    /// program could have written as one here
+    /// (issues/diagnostic-operator-resugaring.md). Elaboration resolves `a +
+    /// b` to `Nat::add(a, b)`, and the display reads that back only where the
+    /// inverse is exact: the designation table, read backwards at the
+    /// operand's carrier, names exactly one symbol of the call's arity, and
+    /// no constraint binder for that symbol is in scope to take it instead
+    /// (rung 1 of the resolver, `dispatch/operator.rs`). Anything else — an
+    /// undesignated operation, a partial or over-application, a call with a
+    /// named argument the notation cannot carry, two symbols for one
+    /// operation — keeps its named call.
+    ///
+    /// The carrier is the operand's type as the callee declares it, not the
+    /// global's name: `RelId(a, b)` is `a ≈ b` at `Nat`, where `≈`
+    /// designates it, and a named call at a carrier where nothing does.
+    ///
+    /// For a reader only. The source flavours' output is re-parsed and fed to
+    /// decisions (`omega`'s atoms, generated annotations), and what they emit
+    /// stays what it was: nothing elaboration keys on reads this spelling.
+    fn op_form<'t>(&self, t: &'t Term) -> Option<OpForm<'t>> {
+        if self.qualified || self.annotations {
+            return None;
+        }
+        let (head, args) = self.call_parts(t)?;
+        match head {
+            CallHead::Global(_, shown) => {
+                if shown.len() != args.len() {
+                    return None;
+                }
+                let mut operands = Vec::new();
+                let mut first = None;
+                for (i, (s, a)) in shown.iter().zip(&args).enumerate() {
+                    match s {
+                        Shown::Explicit => {
+                            first.get_or_insert(i);
+                            operands.push(*a);
+                        }
+                        Shown::Hidden | Shown::Type(false) => {}
+                        Shown::Named(_) | Shown::Type(true) => return None,
+                    }
+                }
+                let (spine_head, _) = crate::spelling::app_spine(t);
+                let Term::GlobalTm { var, .. } = spine_head else { return None };
+                let abs = self.el.global_abs_of(*var)?;
+                let op = self.el.global_qualified_name_at(abs)?;
+                let carrier = self.operand_carrier(abs, first?, &args)?;
+                let mut found = self.el.traits.symbols_designating(&op, &carrier).into_iter().filter(|(fixity, sym)| {
+                    let arity = if *fixity == OpFixity::Infix { 2 } else { 1 };
+                    arity == operands.len() && heather_syntax::operator_form(sym, *fixity).is_some()
+                });
+                let (fixity, symbol) = found.next()?;
+                if found.next().is_some() {
+                    return None;
+                }
+                // Rung 1: inside `<A: Monoid(+)>` the written `+` is the bound
+                // index at every carrier, so it cannot spell this.
+                if fixity == OpFixity::Infix && self.cx.op_locals.iter_inner().any(|(s, _)| *s == symbol) {
+                    return None;
+                }
+                let form = heather_syntax::operator_form(&symbol, fixity)?;
+                Some(OpForm { symbol, fixity, form, operands })
+            }
+            // A constraint binder's operation, `#op<=@0_2(a, b)`: the symbol
+            // that names it, while that symbol still resolves to it here.
+            CallHead::Local(i) => {
+                let name = self.var(i)?;
+                let symbol = crate::traits::op_index_symbol(&name)?.to_string();
+                let innermost = self.cx.op_locals.iter_inner().find(|(s, _)| *s == symbol)?;
+                if innermost.1 != name || args.len() != 2 {
+                    return None;
+                }
+                let form = heather_syntax::operator_form(&symbol, OpFixity::Infix)?;
+                Some(OpForm { symbol, fixity: OpFixity::Infix, form, operands: args })
+            }
+            CallHead::Field(_) => None,
+        }
+    }
+
+    /// The key of the carrier the callee at `abs` declares its explicit
+    /// parameter `first` at — what the resolver would have read off the
+    /// operand. A type parameter there is the type argument the call passed.
+    /// Read off the declared telescope and the call's own arguments, never
+    /// by reducing.
+    fn operand_carrier(&self, abs: usize, first: usize, args: &[&Rc<Term>]) -> Option<String> {
+        let Some(heather_kernel::term::GlobalBinding::Tm { ty, .. }) = self.el.psi.bindings.get(abs) else {
+            return None;
+        };
+        let mut ty: &Type = ty;
+        while let Type::UPi { body, .. } = ty {
+            ty = body;
+        }
+        for _ in 0..first {
+            let Type::Pi { cod, .. } = ty else { return None };
+            ty = cod;
+        }
+        let Type::Pi { dom, .. } = ty else { return None };
+        if let Type::El { tm, .. } = &**dom
+            && let Term::Var(LocalVar(k)) = **tm
+        {
+            let p = first.checked_sub(k as usize + 1)?;
+            let code = Type::El { level: crate::Level::Zero, tm: Rc::clone(args.get(p)?) };
+            return self.carrier_key(&code);
+        }
+        // The binding's type is scoped in the Ψ prefix before it; the
+        // registry lookups below read a global as the display's scope does.
+        let here = self.el.placeholder_base();
+        self.carrier_key(&dom.shift_global(here.checked_sub(abs as u32)?))
+    }
+
+    /// The designation key of a type's carrier, structurally: `Nat`, or the
+    /// declaration an instance or a code names.
+    fn carrier_key(&self, ty: &Type) -> Option<String> {
+        if matches!(ty, Type::Nat) {
+            return Some("Nat".to_string());
+        }
+        if let Type::El { tm, .. } = ty {
+            if matches!(**tm, Term::TmNat) {
+                return Some("Nat".to_string());
+            }
+            let tag = match self.el.gen_app_of(tm) {
+                Some((GenDef::TyCodeFn(tag) | GenDef::TyCode(tag), _)) => Some(tag),
+                _ => match &**tm {
+                    Term::GlobalTm { var, .. } => match self.el.gen_def_of(*var) {
+                        Some(GenDef::TyCode(tag)) => Some(tag),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            };
+            if let Some(ind) = tag.and_then(|tag| self.el.types.by_tag(tag)) {
+                return Some(crate::names::qkey(&ind.scope.module, &ind.name));
+            }
+        }
+        let inline = self.el.unspell_here(ty);
+        let ind = self.el.tag_of(inline.as_ref().unwrap_or(ty))?;
+        Some(crate::names::qkey(&ind.scope.module, &ind.name))
+    }
+
+    /// `op` spelled with its symbol, each operand parenthesized exactly where
+    /// the parser would otherwise read it differently.
+    fn operator(&self, op: &OpForm, d: u32) -> String {
+        let sym = &op.symbol;
+        match (op.form, op.operands.as_slice()) {
+            (OperatorForm::Infix(l, r), [a, b]) => format!(
+                "{} {sym} {}",
+                self.operand(a, d, |f| f.left_of(l)),
+                self.operand(b, d, |f| f.right_of(r)),
+            ),
+            (OperatorForm::Comparison, [a, b]) => {
+                format!("{} {sym} {}", self.operand(a, d, Form::comparand), self.operand(b, d, Form::comparand))
+            }
+            (OperatorForm::Power, [a, b]) => format!(
+                "{} ^ {}",
+                self.operand(a, d, |f| f.at_most(Form::Postfix)),
+                self.operand(b, d, |f| f.at_most(Form::Prefix)),
+            ),
+            (OperatorForm::Prefix, [a]) => format!("{sym}{}", self.operand(a, d, |f| f.at_most(Form::Prefix))),
+            (OperatorForm::Postfix, [a]) => format!("{}{sym}", self.operand(a, d, |f| f.at_most(Form::Postfix))),
+            // `op_form` matched arity to fixity; nothing else reaches here.
+            _ => self.raw_tm(op.operands[0]),
+        }
+    }
+
+    /// An operand one level down, in parentheses unless `fits` its form.
+    fn operand(&self, t: &Term, d: u32, fits: impl Fn(Form) -> bool) -> String {
+        self.operand_at(t, d + 1, fits)
+    }
+
+    fn operand_at(&self, t: &Term, d: u32, fits: impl Fn(Form) -> bool) -> String {
+        let shown = self.tm(t, d);
+        let mut form = self.form(t);
+        // A spelling the walk did not build as an operator but that reads as
+        // one, a negative literal: `(-1) ^ n`.
+        if form == Form::Atom && shown.starts_with('-') {
+            form = Form::Prefix;
+        }
+        if fits(form) { shown } else { format!("({shown})") }
+    }
+
+    /// Where `t`'s spelling sits in the grammar. Classifies without spelling,
+    /// along the routes [`Self::tm`] takes to a non-atomic form.
+    fn form(&self, t: &Term) -> Form {
+        let mut t = std::borrow::Cow::Borrowed(t);
+        // A β-redex spells as its contractum (`call`); a few steps suffice
+        // for any the display holds, and an exhausted count says "loosest",
+        // which only adds parentheses.
+        for _ in 0..8 {
+            if let Some(op) = self.op_form(&t) {
+                return match op.form {
+                    OperatorForm::Infix(l, r) => Form::Infix(l, r),
+                    OperatorForm::Comparison => Form::Comparison,
+                    OperatorForm::Power => Form::Power,
+                    OperatorForm::Prefix => Form::Prefix,
+                    OperatorForm::Postfix => Form::Postfix,
+                };
+            }
+            match &*t {
+                Term::Lam { .. } => return Form::Binder,
+                Term::TmId { .. } => return Form::Comparison,
+                Term::App { .. } | Term::AppAt { .. }
+                    if !self.qualified && !self.annotations && self.call_parts(&t).is_none() =>
+                {
+                    match crate::spelling::beta_head(&t) {
+                        Some(r) => t = std::borrow::Cow::Owned(r),
+                        None => return Form::Atom,
+                    }
+                }
+                _ => return Form::Atom,
+            }
+        }
+        Form::Binder
     }
 
     // -- names --------------------------------------------------------------
@@ -1401,6 +1626,82 @@ pub(crate) enum Shown {
     Named(String),
     /// A leading type parameter; `true` when the call does not determine it.
     Type(bool),
+}
+
+/// A call [`Speller::op_form`] spells as an operator.
+struct OpForm<'t> {
+    symbol: String,
+    fixity: OpFixity,
+    form: OperatorForm,
+    operands: Vec<&'t Rc<Term>>,
+}
+
+/// How a spelled term sits in the expression grammar, for deciding whether
+/// it needs parentheses as an operand: the parser's own levels
+/// ([`heather_syntax::OperatorForm`]), plus an atom and a binder form.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Form {
+    /// A call, a name, a literal, anything delimited.
+    Atom,
+    Postfix,
+    Power,
+    Prefix,
+    /// An infix rung, as its left and right binding powers.
+    Infix(u8, u8),
+    /// `a = b`, `a <= b`: non-associative, below every infix rung.
+    Comparison,
+    /// `λ x => …`, which runs as far right as it can.
+    Binder,
+}
+
+impl Form {
+    /// Tightness among the forms an operand position takes whole.
+    fn rank(self) -> u8 {
+        match self {
+            Form::Atom => 0,
+            Form::Postfix => 1,
+            Form::Power => 2,
+            Form::Prefix => 3,
+            Form::Infix(..) => 4,
+            Form::Comparison => 5,
+            Form::Binder => 6,
+        }
+    }
+
+    /// No looser than `bound` (an operand position that takes `bound`'s
+    /// level whole).
+    fn at_most(self, bound: Form) -> bool {
+        self.rank() <= bound.rank()
+    }
+
+    /// The left operand of an infix rung that folds at left power `l`: an
+    /// infix child stays together when its right operand stops before the
+    /// parent's symbol.
+    fn left_of(self, l: u8) -> bool {
+        match self {
+            Form::Infix(_, cr) => l < cr,
+            f => f.at_most(Form::Prefix),
+        }
+    }
+
+    /// The right operand of an infix rung parsed at right power `r`: an infix
+    /// child stays together when its own symbol folds at that power.
+    fn right_of(self, r: u8) -> bool {
+        match self {
+            Form::Infix(cl, _) => cl >= r,
+            f => f.at_most(Form::Prefix),
+        }
+    }
+
+    /// A side of `=` or of a comparison: anything below the comparison level.
+    fn comparand(self) -> bool {
+        self.at_most(Form::Infix(0, 0))
+    }
+
+    /// A receiver `r.f` takes without parentheses.
+    fn bare_receiver(self) -> bool {
+        self.at_most(Form::Postfix)
+    }
 }
 
 impl Elaborator {

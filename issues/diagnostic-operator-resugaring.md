@@ -1,10 +1,10 @@
 ---
 title: "Render resolved operations with their operator notation in diagnostics"
-status: open
+status: closed
 labels: [frontend,diagnostics,notation,ergonomics]
 area: language
 created: 2026-08-20
-updated: 2026-11-02
+updated: 2026-11-06
 ---
 
 Kernel-term diagnostics currently recover a global application as a named call:
@@ -61,3 +61,6 @@ the printer must not invent notation that a user could not write.
   operator nodes; this issue owns the harder kernel-to-surface inverse.
 - 2026-09-15: 2026-09-15: a second customer for the resugaring pass: [[wrong-dictionary-field-refusal-names-projection]] — a named projection reference now appears in a wrong-field refusal where the declaration's name used to.
 - 2026-11-02: grind's failure report is a customer: it spells `-(a + OfNat(k).isucc())` as `neg(add(a, isucc(OfNat(k))))` ([[grind-library-sweep]]).
+- 2026-11-06: Done (branch `claude/project-thread-ucbw04`). The speller reads the designation table backwards (`Traits::symbols_designating`) at the carrier of the call's first explicit operand, as the callee's telescope declares it (a type parameter there is the type argument the call passed), and spells the call with the one symbol of its arity that designates it there; anything else keeps the named call. A constraint binder for the symbol in scope blocks a designation's spelling, and the binder's own applications (`#op+@0_1(x, x)`) spell as `x + x`. Operands are parenthesized by the parser's own table, now exported as `heather_syntax::operator_form` (`infix_op` reads the same `infix_binding`), so there is no second precedence policy. Reader flavours only: the source flavours (omega's atoms, generated annotations) are unchanged. `designation ^ at Nat := Nat::pow` gives `pow` its writable `^`. Design: docs/surface-type-display-design.md §5.2; probes: lib/_tests/std/num/operator_display_tests.hthr (rungs, associativity, `^` under prefix `-`, Bool, `++`, a carrier-selected designation and its undesignated control, partial application, a bound and a shadowed symbol).
+
+  Not done here, owned elsewhere: Int and Rat numerals still spell as their constructors (`OfNat(2)`, `ofInt(OfNat(0))`), filed as [[diagnostic-numeral-literal-spelling]]; the opaque projection name in a wrong-unit refusal stays with [[wrong-dictionary-field-refusal-names-projection]].

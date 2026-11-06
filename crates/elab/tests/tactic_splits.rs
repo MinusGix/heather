@@ -130,7 +130,7 @@ fn close_checks_its_proofs() {
          }
          theorem t(b: Bool, q: (True && True) = True): (b && True) = b { by swapped(q) }",
     );
-    assert!(msg.contains("proof proves `and(True, True) = True`, not its goal `and(False, True) = False`"), "{msg}");
+    assert!(msg.contains("proof proves `True && True = True`, not its goal `False && True = False`"), "{msg}");
 }
 
 

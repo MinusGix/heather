@@ -1,0 +1,84 @@
+// A diagnostic spells a resolved operation with the operator the program
+// would have written (issues/diagnostic-operator-resugaring.md): `a + b`,
+// not `add(a, b)`, wherever the designation table read backwards at the
+// operand's carrier names exactly one symbol, parenthesized by the parser's
+// own precedence. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import int; import algebra;
+import relation; import semiring; import rat;
+
+// The headline: arithmetic at Nat, by its rungs.
+// expect-error: this has type `a + b * c = c`, but `Bool` is expected here
+fn nat_rungs(a, b, c: Nat, h: a + b * c = c) → Bool { h }
+
+// expect-error: this has type `(a + b) * c = c`, but `Bool` is expected here
+fn nat_parenthesized(a, b, c: Nat, h: (a + b) * c = c) → Bool { h }
+
+// Left-associative: the right operand of `-` keeps its parentheses, the left
+// does not need them.
+// expect-error: this has type `a - b - c = a - (b - c)`, but `Bool` is expected here
+fn nat_left_assoc(a, b, c: Nat, h: a - b - c = a - (b - c)) → Bool { h }
+
+// `^` at Nat is a writable spelling now, so the display uses it;
+// right-associative, and tighter than `*`.
+// expect-error: this has type `a ^ b ^ c = (a ^ b) ^ c * a`, but `Bool` is expected here
+fn nat_power(a, b, c: Nat, h: a ^ b ^ c = (a ^ b) ^ c * a) → Bool { h }
+
+theorem nat_power_is_pow(a, b: Nat): a ^ b = a.pow(b) { refl }
+
+// A comparison, with arithmetic sides.
+// expect-error: this has type `a + 1 <= b * 2`, but `Bool` is expected here
+fn nat_comparison(a, b: Nat, h: a + 1 <= b * 2) → Bool { h }
+
+// Prefix negation at Int: the operand of a prefix operator is parenthesized
+// unless it is itself prefix or tighter.
+// expect-error: this has type `-(a + b) = -a + b`, but `Bool` is expected here
+fn int_negation(a, b: Int, h: -(a + b) = -a + b) → Bool { h }
+
+// `^` binds tighter than prefix `-`: `-x ^ 2` is `-(x ^ 2)`.
+// expect-error: this has type `-x ^ k = (-x) ^ k`, but `Bool` is expected here
+fn rat_power_under_negation(x: Rat, k: Int, p: x.PowOk(k), q: (-x).PowOk(k), h: -x ^ k = (-x) ^ k) → Bool { h }
+
+// Bool's operators, `!` over a conjunction.
+// expect-error: this has type `!(x && y) = !x || !y`, but `Bool` is expected here
+fn bool_operators(x, y: Bool, h: !(x && y) = !x || !y) → Bool { h }
+
+// `++` is right-associative: its left operand is the one that needs them.
+// expect-error: this has type `xs ++ ys ++ zs = (xs ++ ys) ++ zs`, but `Bool` is expected here
+fn list_append(xs, ys, zs: List<Nat>, h: xs ++ (ys ++ zs) = (xs ++ ys) ++ zs) → Bool { h }
+
+// The carrier decides, not the operation's name: `⊔` designates `pick` at
+// `Nat`, and nothing designates it at `Bool`, which keeps the named call.
+fn pick<A>(a, b: A) → A { a }
+designation ⊔ at Nat := pick
+
+// expect-error: this has type `a ⊔ b = a`, but `Bool` is expected here
+fn designated_at_nat(a, b: Nat, h: pick(a, b) = a) → Bool { h }
+
+// expect-error: this has type `pick(x, y) = x`, but `Bool` is expected here
+fn undesignated_at_bool(x, y: Bool, h: pick(x, y) = x) → Bool { h }
+
+// One symbol at two carriers, each its own operation.
+// expect-error: this has type `int(a + b) = x + y`, but `Bool` is expected here
+fn two_carriers(a, b: Nat, x, y: Int, h: Nat::add(a, b).int() = Int::add(x, y)) → Bool { h }
+
+// An operation nothing designates keeps its name.
+fn plus(a, b: Nat) → Nat { a + b }
+// expect-error: this has type `plus(a, b) = a`, but `Bool` is expected here
+fn undesignated(a, b: Nat, h: plus(a, b) = a) → Bool { h }
+
+// A partial application is no operator application.
+// expect-error: this has type `add(a) = add(b)`, but `Bool` is expected here
+fn partially_applied(a, b: Nat, h: Nat::add(a) = Nat::add(b)) → Bool { h }
+
+// Under a constraint that names `+`, the written `+` is the bound operation at
+// every carrier: it spells that operation, and Nat's addition keeps its name.
+// expect-error: this has type `x + x = x`, but `Bool` is expected here
+fn bound_symbol<A: Monoid(+)>(x: A, h: x + x = x) → Bool { h }
+
+// expect-error: this has type `add(a, b) = a`, but `Bool` is expected here
+fn shadowed_symbol<A: Monoid(+)>(x: A, a, b: Nat, h: Nat::add(a, b) = a) → Bool { h }
+
+// An operator inside a call's arguments needs no parentheses.
+// expect-error: this has type `len(xs ++ ys) = 0`, but `Bool` is expected here
+fn receiver(xs, ys: List<Nat>, h: (xs ++ ys).len() = 0) → Bool { h }

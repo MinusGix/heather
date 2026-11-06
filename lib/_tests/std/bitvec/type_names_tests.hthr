@@ -31,7 +31,7 @@ fn unwritten_width(x: BitVec(16)) → Bool { x }
 
 // A width the display would have to compute stays as it is: the display
 // never reduces.
-// expect-error: this has type `u(add(8, 8))`, but `Bool` is expected here
+// expect-error: this has type `u(8 + 8)`, but `Bool` is expected here
 fn computed_width(x: u8) → Bool { x.zero_extend(8) }
 
 // Inside a type argument, and on the expected side.

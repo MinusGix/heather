@@ -245,7 +245,7 @@ fn a_wrong_by_hand_discharge_is_refused_at_the_refined_statement() {
         }
         "#,
     );
-    assert!(msg.contains("Lt(k, Succ(k))"), "{msg}");
+    assert!(msg.contains("k < Succ(k)"), "{msg}");
 }
 
 #[test]
