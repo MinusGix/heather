@@ -214,6 +214,141 @@ theorem stat_targets_related<M>(io: LinuxIo<M>, left, right: MachineState<M>, sa
 }
 
 // ---------------------------------------------------------------------------
+// Without an answer to compare: the call two related states ask is one call,
+// and a state that asks a call is not one that exits. RAX names the kind of
+// call (`rax_kind`, a closed comparison per number), so calls of different
+// kinds, and an exit, are told apart by evaluation.
+
+// The descriptor two related states name is one.
+theorem descriptors_related<M>(left, right: MachineState<M>, same: SameDefinedState<M>(left, right), fd, fd2: BitVec(64),
+    here: read_gpr(Rdi, left.gprs) = fd, there: read_gpr(Rdi, right.gprs) = fd2): fd = fd2 {
+    trans(sym(here), trans(register_related(Rdi, left, right, same), there))
+}
+
+fn LinuxCmd::kind<Size>(self c: LinuxCmd<Size>) → Nat {
+    match c { ReadCmd(_, _) => 0, WriteCmd(_, _) => 1, OpenCmd(_) => 2, CloseCmd(_) => 3, StatCmd(_) => 4 }
+}
+
+// The kind of call a syscall number asks: read, write, openat, close,
+// newfstatat or fstat; 5 for anything else, exit among it.
+fn rax_kind(rax: BitVec(64)) → Nat {
+    match rax.eq_bit(BitVec::ofNat(0)) {
+        True => 0,
+        False => match rax.eq_bit(BitVec::ofNat(1)) {
+            True => 1,
+            False => match rax.eq_bit(BitVec::ofNat(257)) {
+                True => 2,
+                False => match rax.eq_bit(BitVec::ofNat(3)) {
+                    True => 3,
+                    False => match rax.eq_bit(BitVec::ofNat(262)) {
+                        True => 4,
+                        False => match rax.eq_bit(BitVec::ofNat(5)) { True => 4, False => 5 },
+                    },
+                },
+            },
+        },
+    }
+}
+
+theorem stat_kind<M>(io: LinuxIo<M>, at: MachineState<M>, target: StatTarget):
+    StatAsked(io, at, target) → rax_kind(read_gpr(Rax, at.gprs)) = 4 {
+    match target {
+        StatPath(_) => λ asked => cong_fn(λ (word: BitVec(64)) => rax_kind(word), asked.left),
+        StatFd(_) => λ asked => cong_fn(λ (word: BitVec(64)) => rax_kind(word), asked.left),
+    }
+}
+
+theorem asks_kind<M>(io: LinuxIo<M>, at: MachineState<M>, c: LinuxCmd<Nat>):
+    LinuxAsks(io, at, c) → rax_kind(read_gpr(Rax, at.gprs)) = c.kind() {
+    match c {
+        ReadCmd(_, _) => λ asks => cong_fn(λ (word: BitVec(64)) => rax_kind(word), asks.left),
+        WriteCmd(_, _) => λ asks => cong_fn(λ (word: BitVec(64)) => rax_kind(word), asks.left),
+        OpenCmd(_) => λ asks => cong_fn(λ (word: BitVec(64)) => rax_kind(word), asks.left),
+        CloseCmd(_) => λ asks => cong_fn(λ (word: BitVec(64)) => rax_kind(word), asks.left),
+        StatCmd(target) => λ asks => stat_kind(io, at, target, asks),
+    }
+}
+
+theorem kinds_related<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    c, d: LinuxCmd<Nat>, here: LinuxAsks(io, left, c), there: LinuxAsks(io, right, d)): c.kind() = d.kind() {
+    trans(sym(asks_kind(io, left, c, here)),
+        trans(cong_fn(λ (word: BitVec(64)) => rax_kind(word), register_related(Rax, left, right, same)),
+            asks_kind(io, right, d, there)))
+}
+
+theorem kind_not_exit(c: LinuxCmd<Nat>): c.kind() = 5 → False {
+    match c {
+        ReadCmd(_, _) => λ e => absurd(e), WriteCmd(_, _) => λ e => absurd(e), OpenCmd(_) => λ e => absurd(e),
+        CloseCmd(_) => λ e => absurd(e), StatCmd(_) => λ e => absurd(e),
+    }
+}
+
+// A state that exits does not ask a call of a related one.
+theorem exits_not_asks<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    status: BitVec(64), c: LinuxCmd<Nat>, exits: LinuxExits(left, status), asks: LinuxAsks(io, right, c)): False {
+    kind_not_exit(c, trans(sym(asks_kind(io, right, c, asks)),
+        trans(cong_fn(λ (word: BitVec(64)) => rax_kind(word), sym(register_related(Rax, left, right, same))),
+            cong_fn(λ (word: BitVec(64)) => rax_kind(word), exits.left))))
+}
+
+theorem asks_of_kind<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    c: LinuxCmd<Nat>): (d: LinuxCmd<Nat>) → c.kind() = d.kind() → LinuxAsks(io, left, c) → LinuxAsks(io, right, d) → c = d {
+    match c {
+        ReadCmd(fd, max) => λ d => match d {
+            ReadCmd(fd2, max2) => λ _ here there => {
+                let fds: (fd = fd2) = descriptors_related(left, right, same, fd, fd2, here.right.left, there.right.left);
+                let maxes: (max = max2) = trans(sym(here.right.right),
+                    trans(cong_fn(λ (word: BitVec(64)) => word.toNat(), register_related(Rdx, left, right, same)), there.right.right));
+                trans(@cong<BitVec(64), LinuxCmd<Nat>>(λ f => ReadCmd(f, max), fd, fd2, fds),
+                    @cong<Nat, LinuxCmd<Nat>>(λ m => ReadCmd(fd2, m), max, max2, maxes))
+            },
+            _ => λ kinds _ _ => absurd(kinds),
+        },
+        WriteCmd(fd, bytes) => λ d => match d {
+            WriteCmd(fd2, bytes2) => λ _ here there => {
+                let fds: (fd = fd2) = descriptors_related(left, right, same, fd, fd2, here.right.left, there.right.left);
+                let length: (bytes.len() = bytes2.len()) = trans(sym(here.right.right.left),
+                    trans(cong_fn(λ (word: BitVec(64)) => word.toNat(), register_related(Rdx, left, right, same)),
+                        there.right.right.left));
+                let sends: LinuxWritesFrom(io, left.memory, read_gpr(Rsi, left.gprs), bytes2) =
+                    j(sym(register_related(Rsi, left, right, same)), λ buffer _ => LinuxWritesFrom(io, left.memory, buffer, bytes2),
+                        j(sym(SameDefinedState::memory(same)), λ memory _ => LinuxWritesFrom(io, memory, read_gpr(Rsi, right.gprs), bytes2),
+                            there.right.right.right));
+                let sent: (bytes = bytes2) = writes_from_unique(io, left.memory, read_gpr(Rsi, left.gprs), bytes, bytes2,
+                    length, here.right.right.right, sends);
+                trans(@cong<BitVec(64), LinuxCmd<Nat>>(λ f => WriteCmd(f, bytes), fd, fd2, fds),
+                    @cong<List<BitVec(8)>, LinuxCmd<Nat>>(λ b => WriteCmd(fd2, b), bytes, bytes2, sent))
+            },
+            _ => λ kinds _ _ => absurd(kinds),
+        },
+        OpenCmd(path) => λ d => match d {
+            OpenCmd(path2) => λ _ here there =>
+                @cong<List<BitVec(8)>, LinuxCmd<Nat>>(λ p => OpenCmd(p), path, path2,
+                    paths_related(io, left, right, same, path, path2, here.right.right.right, there.right.right.right)),
+            _ => λ kinds _ _ => absurd(kinds),
+        },
+        CloseCmd(fd) => λ d => match d {
+            CloseCmd(fd2) => λ _ here there =>
+                @cong<BitVec(64), LinuxCmd<Nat>>(λ f => CloseCmd(f), fd, fd2,
+                    descriptors_related(left, right, same, fd, fd2, here.right, there.right)),
+            _ => λ kinds _ _ => absurd(kinds),
+        },
+        StatCmd(target) => λ d => match d {
+            StatCmd(target2) => λ _ here there =>
+                @cong<StatTarget, LinuxCmd<Nat>>(λ t => StatCmd(t), target, target2,
+                    stat_targets_related(io, left, right, same, target, target2, here, there)),
+            _ => λ kinds _ _ => absurd(kinds),
+        },
+    }
+}
+
+// The call two related states ask is one call.
+theorem asks_meet<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
+    c, d: LinuxCmd<Nat>, here: LinuxAsks(io, left, c), there: LinuxAsks(io, right, d)): c = d {
+    asks_of_kind(io, left, right, same, c, d, kinds_related(io, left, right, same, c, d, here, there), here, there)
+}
+
+// ---------------------------------------------------------------------------
 // One syscall. The claim's side of an event, as `LinuxRuns` spells it.
 
 fn ClaimAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: MachineState<M>) → Type {
@@ -258,12 +393,6 @@ theorem call_resume<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, a: c.Resp(), rest, more
     tails(linux_answered(io, left, c, a, junk, rcx, r11), linux_answered(io, right, c, a, junk, rcx, r11),
         linux_answered_respects<M>(io, c, a, junk, rcx, r11)(left, right, same),
         claimed(junk, ran.proof.left, rcx, r11), ran.proof.right.proof.proof)
-}
-
-// The descriptor two related states name is one.
-theorem descriptors_related<M>(left, right: MachineState<M>, same: SameDefinedState<M>(left, right), fd, fd2: BitVec(64),
-    here: read_gpr(Rdi, left.gprs) = fd, there: read_gpr(Rdi, right.gprs) = fd2): fd = fd2 {
-    trans(sym(here), trans(register_related(Rdi, left, right, same), there))
 }
 
 // The call two related states ask is one call, and with the same answer one

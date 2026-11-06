@@ -94,6 +94,35 @@ fn IsTrace<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E)) → Type {
     }
 }
 
+// A trace that ends where the tree is cut: every call on the way answered,
+// and the tree at a `Cut`, not a prefix stopped early. A fuelled tree meets
+// it where its fuel ran out; it is a trace (`IsTrace::of_cut`).
+record AnsweredTrace<R>(E: Events, c: E.Cmd, tr: Trace<R>(E), S: E.Resp(c) → Trace<R>(E) → Type) {
+    a: E.Resp(c),
+    rest: Trace<R>(E),
+    at: tr = TAns(c, a, rest),
+    sub: S(a, rest),
+}
+
+fn IsCutTrace<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E)) → Type {
+    match t {
+        Ret(_) => False,
+        Tau(s) => IsCutTrace(E, s, tr),
+        Vis(c, k) => AnsweredTrace<R>(E, c, tr, λ a rest => IsCutTrace(E, k(a), rest)),
+        Cut => tr = TEnd,
+    }
+}
+
+theorem IsTrace::of_cut<R>(E: Events, t: ITree<R>(E), tr: Trace<R>(E)): IsCutTrace(E, t, tr) → IsTrace(E, t, tr) {
+    match t {
+        Ret(_) => λ never => false_elim(never),
+        Tau(s) => λ cut => IsTrace::of_cut(E, s, tr, cut),
+        Vis(c, k) => λ (cut: AnsweredTrace<R>(E, c, tr, λ a rest => IsCutTrace(E, k(a), rest))) =>
+            Answered(cut.a, cut.rest, cut.at, IsTrace::of_cut(E, k(cut.a), cut.rest, cut.sub)),
+        Cut => λ at => Ended(at),
+    }
+}
+
 // A trace's length: how many answers it records. A program logic measures
 // a loop by it (linux_x86_64_wp's `loop_at`).
 fn Trace::len<R>(E: Events, tr: Trace<R>(E)) → Nat {
