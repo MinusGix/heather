@@ -184,7 +184,8 @@ these functions, and an honest type is what makes them stateable.
 4. **Refusals, each with its reason:** a `partial fn` whose body never calls
    itself (it should be a plain `fn`); a self-call outside a bind position;
    using `f(x)` where a `B` is expected ("`f` is partial: bind it with `<-`,
-   or use `Partial::get` with a termination proof").
+   or use `Partial::get` with a termination proof"; built with `CoTree::get`,
+   §9 item 11).
 
 ### 4.3 What proofs see
 
@@ -443,7 +444,20 @@ scrutinee (`big(n)`) needs that scrutinee as a parameter of a helper
    evaluator reads, and `Tm::whnf_co_sound` is `rec_sound` over
    `Tm::whnf_co::body` with `Tm::whnf_co_body_safe`. `Tm::step_co` and its
    helpers stay as the spelled-out arms the safety proof cites.
-10. **Not built:** calling a partial function where a `B` is expected is a
-   plain type mismatch, not §4.2's named refusal
-   (`issues/partial-fn-use-site-refusal.md`); mutual `partial` functions;
-   `Partial::get`'s alias (`CoTree::get` works on `Partial` as is).
+10. **Not built:** mutual `partial` functions; `Partial::get`'s alias
+   (`CoTree::get` works on `Partial` as is).
+11. **The use-site refusal** (§4.2, `issues/partial-fn-use-site-refusal.md`).
+   A call to a partial function where a `B` is expected is refused by the
+   gate, as any mismatch is, and the recorded checking site keeps the call's
+   head; on refusal, a head that is a partial function (the global `f#body`
+   designated `f::body` with no `f::rec` beside it, which a measure's family
+   has: read from the module's names, so an imported function counts) turns
+   the message into "`f` is partial, so a call to it is a computation that
+   may not return: this one has type `Partial(B)`, but `B` is expected here;
+   bind it with `let r <- f(…);` inside a computation, or use `CoTree::get`
+   with a termination proof". The call's type shows as `Partial(B)` when it
+   is `CoTree<B>(none)` (the general respelling is
+   `issues/type-name-display-respelling.md`). A mismatch between two
+   computations (`Partial(Nat)` where `Partial(Bool)` is expected) keeps the
+   ordinary message. `crates/elab/src/partial.rs`, `is_partial_fn` and
+   `partial_use_note`.
