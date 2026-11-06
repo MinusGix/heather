@@ -645,6 +645,20 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// loop is still needed — an application spine over a glued head is
     /// left glued by the replay — and it terminates because every round
     /// unfolds at least the innermost definition.
+    /// [`Eval::delta_step`] run **transparently**, as [`Eval::delta_whnf`]'s
+    /// steps are: a single step that looks ahead (conversion's
+    /// `meet_on_the_way`) must force a glued unfolding to the value the
+    /// transparent run would, because the forced thunk is memoized in the
+    /// value and that run reads it afterwards. Forced opaquely, it holds an
+    /// eliminator stuck on a glued scrutinee that the run then cannot step,
+    /// and conversion answers `NotConvertible` on a convertible pair.
+    pub fn delta_step_transparent(&mut self, v: &'v Val<'v>) -> Res<&'v Val<'v>> {
+        let saved = std::mem::replace(&mut self.transparent, true);
+        let out = self.delta_step(v);
+        self.transparent = saved;
+        out
+    }
+
     pub fn delta_whnf(&mut self, mut v: &'v Val<'v>) -> Res<&'v Val<'v>> {
         let saved = std::mem::replace(&mut self.transparent, true);
         let out = loop {

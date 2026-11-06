@@ -476,6 +476,12 @@ pub(super) trait Dom<'v>: Sized {
     /// newly exposed same-head spine before unfolding further.
     fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> R<Self::Ty>;
     fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> R<Self::Tm>;
+    /// [`Dom::delta_tm`] as one step of [`Dom::delta_whnf_tm`] takes it: a
+    /// look-ahead before that run must leave behind what the run itself
+    /// would (the value domain memoizes forced unfoldings).
+    fn delta_tm_ahead(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> R<Self::Tm> {
+        Self::delta_tm(cv, env, w)
+    }
     /// Unfold a term's defined heads until none remains: the δ-transparent
     /// weak head normal form. Exactly the unfoldings that iterating
     /// [`Dom::delta_tm`] performs, and the same fuel; the value domain

@@ -103,7 +103,6 @@ fn Known::is_ih(self k: Known, x: LocalRef) → Bool {
     match k.recursion { None => False, Some(sc) => x.id.same(sc.ih) }
 }
 
-
 fn Known::prim(ps: List<PrimEntry>, g: Nat) → Option<Prim> {
     match ps { Nil => None, Cons(p, rest) => match p.g.same(g) { True => Some(p.p), False => Known::prim(rest, g) } }
 }
