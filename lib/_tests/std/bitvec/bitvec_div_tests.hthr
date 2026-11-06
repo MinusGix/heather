@@ -23,3 +23,16 @@ theorem sdiv_differs(): decide_bit<b(249).sdiv(2) = b(249).udiv(2)>() = False { 
 theorem magnitude_min(): b(128).magnitude() = 128 { refl }
 
 theorem of_int(): b(BitVec::ofInt(NegSucc(0))) = 255 ∧ b(BitVec::ofInt(NegSucc(127))) = 128 { And(refl, refl) }
+
+// The operator symbols at an unsigned word
+// (issues/integer-operator-symbols.md): `/` and `%` are `udiv`/`urem`, and
+// `>>` fills with zeros, where `SInt`'s copies the sign.
+theorem div_symbols(): b(200) / 7 = 28 ∧ b(200) % 7 = 4 { And(refl, refl) }
+theorem shift_symbols(): b(240) >> 2 = 60 ∧ b(64) << 2 = 0 { And(refl, refl) }
+theorem bit_symbols(): b(240) & 60 = 48 ∧ b(240) | 15 = 255 { And(refl, refl) }
+theorem symbols_are_methods(n: Nat, x, y: BitVec(n), k: Nat):
+    x / y = x.udiv(y) ∧ x % y = x.urem(y) ∧ x >> k = x.shift_right(k) ∧ x << k = x.shift_left(k)
+        ∧ x & y = x.band(y) ∧ x | y = x.bor(y)
+{
+    And(refl, And(refl, And(refl, And(refl, And(refl, refl)))))
+}

@@ -55,6 +55,11 @@ fn BitVec::udiv({n: Nat}, self a, d: BitVec(n)) → BitVec(n) { a.udivrem(d).fst
 
 fn BitVec::urem({n: Nat}, self a, d: BitVec(n)) → BitVec(n) { a.udivrem(d).snd }
 
+// `a / b` and `a % b` at an unsigned word; at a signed one they are
+// `SInt::div`'s truncating pair (lib/std/bitvec/sint.hthr).
+designation / at BitVec(n) := BitVec::udiv
+designation % at BitVec(n) := BitVec::urem
+
 // The two's-complement magnitude: `x` when its sign bit is clear, `-x`
 // otherwise. At the most negative value `-x` is `x` again, whose unsigned
 // reading is that value's magnitude, so the signed operations below need no

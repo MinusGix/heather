@@ -8,6 +8,13 @@ use heather_syntax::{Decl, Expr, ExprKind, LamBinder, OnTarget, OpFixity, Span, 
 
 use crate::{ElabError, R, err};
 
+/// `<<` and `>>`: the operators whose right operand is a count rather than a
+/// second value at the carrier (issues/integer-operator-symbols.md), so the
+/// carrier probes read their left operand alone.
+pub(crate) fn is_shift(symbol: &str) -> bool {
+    matches!(symbol, "<<" | ">>")
+}
+
 /// The first non-numeral, inference-capable leaf of an operator expression.
 /// Otherwise prefer its first numeral, or its first checking-only leaf if
 /// there are no numerals. The caller classifies checking-only expressions;
@@ -26,11 +33,15 @@ pub(crate) fn operator_carrier_leaf(
     let mut first_leaf = None;
     loop {
         if let ExprKind::App { head, args, .. } = &leaf.kind
-            && matches!(head.kind, ExprKind::OpSymbol { .. })
+            && let ExprKind::OpSymbol { symbol, .. } = &head.kind
             && !is_cast(leaf)
             && let Some(first) = args.first()
         {
-            pending.extend(args[1..].iter().rev());
+            // A shift's count is not at the carrier (`x << 2` shifts a word
+            // by a `Nat`), so only its left operand can name it.
+            if !is_shift(symbol) {
+                pending.extend(args[1..].iter().rev());
+            }
             leaf = first;
             continue;
         }

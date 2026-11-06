@@ -480,6 +480,12 @@ fn Int::mod(self dividend: Int, divisor: Int) → Int {
     match dividend.divmod(divisor) { MkIntDivMod(_, remainder) => remainder }
 }
 
+// Euclidean, as Lean's `Int` `/` and `%` are: the remainder is never
+// negative (`-7 / 2 = -4`, `-7 % 2 = 1`). `SInt`'s `/` truncates instead, as
+// Rust's `i64` does.
+designation / at Int := Int::div
+designation % at Int := Int::mod
+
 fn Int::natAbs(self a: Int) → Nat {
     match a { OfNat(n) => n, NegSucc(n) => Succ(n) }
 }

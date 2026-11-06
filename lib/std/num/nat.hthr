@@ -510,6 +510,10 @@ fn Nat::mod(self n: Nat, divisor: Nat) → Nat {
     match n.divmod(divisor) { MkDivMod(_, remainder) => remainder }
 }
 
+// Floor division and its remainder, with `n / 0 = 0` and `n % 0 = n`.
+designation / at Nat := Nat::div
+designation % at Nat := Nat::mod
+
 // The computation above maintains both Euclidean facts in one state.  The
 // second field records either the zero-divisor convention (`divisor <= 0`) or
 // the strict remainder bound.

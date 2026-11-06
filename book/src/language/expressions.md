@@ -105,8 +105,11 @@ legacy global-call fallback remains available. Vector indexing requires a
 
 ## Operators
 
-The lexer recognizes prefix `-` and infix `*`, `+`, `-`, `++`, `∙`, `⊔`, `⊓`,
-`&&`, `||`, `<`, `<=`, and `≈`. Their meaning is resolved from a local binder
+The lexer recognizes prefix `-` and infix `*`, `/`, `%`, `+`, `-`, `++`, `∙`,
+`⊔`, `⊓`, `<<`, `>>`, `&`, `|`, `&&`, `||`, `<`, `<=`, and `≈`. At the
+integer types `/`, `%`, the shifts and the bitwise operators read as Rust's
+(`>>` is arithmetic at a signed word); a right shift needs a space before it,
+since a tight `>>` closes two type-argument lists. Their meaning is resolved from a local binder
 symbol, a carrier-specific `designation`, or a built-in fallback where one
 exists.
 

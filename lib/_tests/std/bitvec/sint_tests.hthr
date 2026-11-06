@@ -57,3 +57,19 @@ theorem truncate_low(): (@SInt::ofInt(16, NegSucc(299))).truncate(8, 8) = s8(-44
 theorem readings(): s8(-1).as_unsigned().toNat() = 255 { refl }
 theorem round_trip(n: Nat, a: SInt(n)): a.as_unsigned().as_signed() = a { SInt::as_signed_as_unsigned(n, a) }
 theorem add_comm_open(n: Nat, a, b: i(n)): a + b = b + a { SInt::add_comm(n, a, b) }
+
+// The operator symbols read as Rust's at `i8`
+// (issues/integer-operator-symbols.md): `/` and `%` truncate, `>>` copies
+// the sign, and the rungs are Rust's, `|` below `&` below the shifts below
+// `+`. A shift's count is a `Nat`, and it never names the carrier.
+theorem div_symbols(): s8(-7) / 2 = -3 ∧ s8(-7) % 2 = -1 { And(refl, refl) }
+theorem shift_symbols(): s8(-16) >> 2 = -4 ∧ s8(64) << 1 = -128 { And(refl, refl) }
+theorem bit_symbols(): s8(-16) & 12 = 0 ∧ s8(-16) | 3 = -13 { And(refl, refl) }
+theorem bit_rungs(): s8(4) | 1 & 2 = 4 ∧ s8(1) + 1 << 2 = 8 { And(refl, refl) }
+theorem symbols_are_methods(n: Nat, a, b: SInt(n), k: Nat):
+    a / b = a.div(b) ∧ a % b = a.rem(b) ∧ a >> k = a.shift_right(k) ∧ a << k = a.shift_left(k)
+        ∧ a & b = a.band(b) ∧ a | b = a.bor(b)
+{
+    And(refl, And(refl, And(refl, And(refl, And(refl, refl)))))
+}
+fn shifted_sum(n, k: Nat, a: SInt(n)) → SInt(n) { (1 << k) + a }

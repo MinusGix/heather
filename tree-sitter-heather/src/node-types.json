@@ -24,6 +24,10 @@
         "named": true
       },
       {
+        "type": "bind_expression",
+        "named": true
+      },
+      {
         "type": "block_expression",
         "named": true
       },
@@ -413,6 +417,32 @@
     }
   },
   {
+    "type": "assignment_statement",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "assuming_declaration",
     "named": true,
     "fields": {
@@ -673,6 +703,14 @@
         "required": true,
         "types": [
           {
+            "type": "%",
+            "named": false
+          },
+          {
+            "type": "&",
+            "named": false
+          },
+          {
             "type": "&&",
             "named": false
           },
@@ -693,11 +731,19 @@
             "named": false
           },
           {
+            "type": "/",
+            "named": false
+          },
+          {
             "type": "<",
             "named": false
           },
           {
             "type": "<->",
+            "named": false
+          },
+          {
+            "type": "<<",
             "named": false
           },
           {
@@ -710,6 +756,14 @@
           },
           {
             "type": "^",
+            "named": false
+          },
+          {
+            "type": "shift_right",
+            "named": true
+          },
+          {
+            "type": "|",
             "named": false
           },
           {
@@ -741,12 +795,32 @@
             "named": false
           },
           {
+            "type": "⊓",
+            "named": false
+          },
+          {
             "type": "⊔",
             "named": false
           }
         ]
       },
       "right": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "bind_expression",
+    "named": true,
+    "fields": {
+      "value": {
         "multiple": false,
         "required": true,
         "types": [
@@ -777,7 +851,27 @@
     "type": "block",
     "named": true,
     "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
       "result": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
         "multiple": false,
         "required": false,
         "types": [
@@ -792,6 +886,18 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "assignment_statement",
+          "named": true
+        },
+        {
+          "type": "exit_statement",
+          "named": true
+        },
+        {
+          "type": "expression_statement",
+          "named": true
+        },
         {
           "type": "goal_combinators",
           "named": true
@@ -810,6 +916,10 @@
         },
         {
           "type": "split_statement",
+          "named": true
+        },
+        {
+          "type": "statement_form",
           "named": true
         }
       ]
@@ -1386,6 +1496,14 @@
         "required": true,
         "types": [
           {
+            "type": "%",
+            "named": false
+          },
+          {
+            "type": "&",
+            "named": false
+          },
+          {
             "type": "&&",
             "named": false
           },
@@ -1406,11 +1524,19 @@
             "named": false
           },
           {
+            "type": "/",
+            "named": false
+          },
+          {
             "type": "<",
             "named": false
           },
           {
             "type": "<->",
+            "named": false
+          },
+          {
+            "type": "<<",
             "named": false
           },
           {
@@ -1423,6 +1549,14 @@
           },
           {
             "type": "^",
+            "named": false
+          },
+          {
+            "type": "shift_right",
+            "named": true
+          },
+          {
+            "type": "|",
             "named": false
           },
           {
@@ -1451,6 +1585,10 @@
           },
           {
             "type": "≠",
+            "named": false
+          },
+          {
+            "type": "⊓",
             "named": false
           },
           {
@@ -2109,6 +2247,22 @@
     }
   },
   {
+    "type": "exit_statement",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "explicit_call_expression",
     "named": true,
     "fields": {},
@@ -2151,6 +2305,22 @@
         "types": [
           {
             "type": "qualified_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "expression_statement",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
             "named": true
           }
         ]
@@ -2224,6 +2394,236 @@
     }
   },
   {
+    "type": "for_statement",
+    "named": true,
+    "fields": {
+      "binder": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "end": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
+            "type": "argument_slot",
+            "named": true
+          },
+          {
+            "type": "boolean_reflection_expression",
+            "named": true
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_binary_expression",
+            "named": true
+          },
+          {
+            "type": "head_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
+            "type": "head_inverse_expression",
+            "named": true
+          },
+          {
+            "type": "head_member_expression",
+            "named": true
+          },
+          {
+            "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
+            "type": "head_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          }
+        ]
+      },
+      "iterable": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
+            "type": "argument_slot",
+            "named": true
+          },
+          {
+            "type": "boolean_reflection_expression",
+            "named": true
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_binary_expression",
+            "named": true
+          },
+          {
+            "type": "head_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
+            "type": "head_inverse_expression",
+            "named": true
+          },
+          {
+            "type": "head_member_expression",
+            "named": true
+          },
+          {
+            "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
+            "type": "head_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "function_declaration",
     "named": true,
     "fields": {
@@ -2233,6 +2633,108 @@
         "types": [
           {
             "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "events": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
+            "type": "argument_slot",
+            "named": true
+          },
+          {
+            "type": "boolean_reflection_expression",
+            "named": true
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_binary_expression",
+            "named": true
+          },
+          {
+            "type": "head_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
+            "type": "head_inverse_expression",
+            "named": true
+          },
+          {
+            "type": "head_member_expression",
+            "named": true
+          },
+          {
+            "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
+            "type": "head_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
             "named": true
           }
         ]
@@ -2334,6 +2836,10 @@
         },
         {
           "type": "type_parameters",
+          "named": true
+        },
+        {
+          "type": "unfolding_clause",
           "named": true
         }
       ]
@@ -2608,6 +3114,14 @@
         "required": true,
         "types": [
           {
+            "type": "%",
+            "named": false
+          },
+          {
+            "type": "&",
+            "named": false
+          },
+          {
             "type": "&&",
             "named": false
           },
@@ -2628,11 +3142,19 @@
             "named": false
           },
           {
+            "type": "/",
+            "named": false
+          },
+          {
             "type": "<",
             "named": false
           },
           {
             "type": "<->",
+            "named": false
+          },
+          {
+            "type": "<<",
             "named": false
           },
           {
@@ -2645,6 +3167,14 @@
           },
           {
             "type": "^",
+            "named": false
+          },
+          {
+            "type": "shift_right",
+            "named": true
+          },
+          {
+            "type": "|",
             "named": false
           },
           {
@@ -2673,6 +3203,10 @@
           },
           {
             "type": "≠",
+            "named": false
+          },
+          {
+            "type": "⊓",
             "named": false
           },
           {
@@ -3435,10 +3969,14 @@
     "fields": {
       "alternative": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "block",
+            "named": true
+          },
+          {
+            "type": "if_expression",
             "named": true
           }
         ]
@@ -3873,6 +4411,10 @@
         },
         {
           "type": "value_parameters",
+          "named": true
+        },
+        {
+          "type": "varies_clause",
           "named": true
         }
       ]
@@ -4791,7 +5333,17 @@
   {
     "type": "operator",
     "named": true,
-    "fields": {}
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "shift_right",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "parameter",
@@ -5102,6 +5654,10 @@
         },
         {
           "type": "value_parameters",
+          "named": true
+        },
+        {
+          "type": "varies_clause",
           "named": true
         }
       ]
@@ -5579,6 +6135,33 @@
     }
   },
   {
+    "type": "statement_form",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "for_statement",
+          "named": true
+        },
+        {
+          "type": "if_expression",
+          "named": true
+        },
+        {
+          "type": "match_expression",
+          "named": true
+        },
+        {
+          "type": "while_statement",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "theorem_declaration",
     "named": true,
     "fields": {
@@ -5686,6 +6269,10 @@
         {
           "type": "type_parameters",
           "named": true
+        },
+        {
+          "type": "unfolding_clause",
+          "named": true
         }
       ]
     }
@@ -5775,6 +6362,21 @@
       "types": [
         {
           "type": "type_parameter",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "unfolding_clause",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "qualified_identifier",
           "named": true
         }
       ]
@@ -5905,6 +6507,22 @@
     }
   },
   {
+    "type": "varies_clause",
+    "named": true,
+    "fields": {
+      "parameter": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "vector_expression",
     "named": true,
     "fields": {},
@@ -5946,11 +6564,239 @@
     }
   },
   {
+    "type": "while_statement",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "condition": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
+            "type": "argument_slot",
+            "named": true
+          },
+          {
+            "type": "boolean_reflection_expression",
+            "named": true
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_binary_expression",
+            "named": true
+          },
+          {
+            "type": "head_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
+            "type": "head_inverse_expression",
+            "named": true
+          },
+          {
+            "type": "head_member_expression",
+            "named": true
+          },
+          {
+            "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
+            "type": "head_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          }
+        ]
+      },
+      "measure": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
+            "type": "argument_slot",
+            "named": true
+          },
+          {
+            "type": "boolean_reflection_expression",
+            "named": true
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_binary_expression",
+            "named": true
+          },
+          {
+            "type": "head_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
+            "type": "head_inverse_expression",
+            "named": true
+          },
+          {
+            "type": "head_member_expression",
+            "named": true
+          },
+          {
+            "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
+            "type": "head_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "!",
     "named": false
   },
   {
     "type": "$",
+    "named": false
+  },
+  {
+    "type": "%",
+    "named": false
+  },
+  {
+    "type": "&",
     "named": false
   },
   {
@@ -5994,6 +6840,14 @@
     "named": false
   },
   {
+    "type": "..",
+    "named": false
+  },
+  {
+    "type": "/",
+    "named": false
+  },
+  {
     "type": ":",
     "named": false
   },
@@ -6014,7 +6868,15 @@
     "named": false
   },
   {
+    "type": "<-",
+    "named": false
+  },
+  {
     "type": "<->",
+    "named": false
+  },
+  {
+    "type": "<<",
     "named": false
   },
   {
@@ -6031,6 +6893,10 @@
   },
   {
     "type": ">",
+    "named": false
+  },
+  {
+    "type": ">>",
     "named": false
   },
   {
@@ -6106,6 +6972,10 @@
     "named": false
   },
   {
+    "type": "break",
+    "named": false
+  },
+  {
     "type": "by",
     "named": false
   },
@@ -6133,6 +7003,10 @@
     "type": "comment",
     "named": true,
     "extra": true
+  },
+  {
+    "type": "continue",
+    "named": false
   },
   {
     "type": "datarepr",
@@ -6215,6 +7089,10 @@
     "named": false
   },
   {
+    "type": "in",
+    "named": false
+  },
+  {
     "type": "inductive",
     "named": false
   },
@@ -6224,6 +7102,10 @@
   },
   {
     "type": "instance",
+    "named": false
+  },
+  {
+    "type": "interface",
     "named": false
   },
   {
@@ -6247,11 +7129,19 @@
     "named": false
   },
   {
+    "type": "mut",
+    "named": false
+  },
+  {
     "type": "number",
     "named": true
   },
   {
     "type": "on",
+    "named": false
+  },
+  {
+    "type": "partial",
     "named": false
   },
   {
@@ -6275,12 +7165,20 @@
     "named": false
   },
   {
+    "type": "return",
+    "named": false
+  },
+  {
     "type": "section",
     "named": false
   },
   {
     "type": "self",
     "named": false
+  },
+  {
+    "type": "shift_right",
+    "named": true
   },
   {
     "type": "split",
@@ -6300,6 +7198,18 @@
   },
   {
     "type": "theorem",
+    "named": false
+  },
+  {
+    "type": "unfolding",
+    "named": false
+  },
+  {
+    "type": "varies",
+    "named": false
+  },
+  {
+    "type": "while",
     "named": false
   },
   {
@@ -6336,6 +7246,10 @@
   },
   {
     "type": "⁻¹",
+    "named": false
+  },
+  {
+    "type": "←",
     "named": false
   },
   {
@@ -6388,6 +7302,10 @@
   },
   {
     "type": "≠",
+    "named": false
+  },
+  {
+    "type": "⊓",
     "named": false
   },
   {

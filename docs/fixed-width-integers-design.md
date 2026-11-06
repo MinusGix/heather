@@ -8,7 +8,7 @@ widened by Minus on 2026-11-02 from "a name for `BitVec(8)`" to "write any
 
 ```heather
 fn checksum(xs: List<u8>) → u8 { … }          // u8 is BitVec(8)
-fn mean(a, b: i64) → i64 { (a + b).div(2) }   // i64 is SInt(64): signed div
+fn mean(a, b: i64) → i64 { (a + b) / 2 }      // i64 is SInt(64): signed div
 fn field(x: u27) → u32 { x.zero_extend(5) }   // any width
 fn at(n: Nat, a: i(n)) → i(n) { -a }          // an open width
 ```
@@ -121,6 +121,25 @@ is SMT-LIB's `bvsdiv`/`bvsrem` read off the magnitudes: truncation toward zero
 0` instead; either is a total convention, and SMT-LIB's is the one a solver
 and a bit-blasted certificate already agree on.
 
+### 4.1 Operator symbols
+
+`a / b`, `a % b`, `a << k`, `a >> k`, `a & b` and `a | b` are designation
+slots like `+` (issues/integer-operator-symbols.md, 2026-11-06), so each
+reads what its carrier designates: at `BitVec(n)` the unsigned `udiv`/`urem`
+and the zero-filling shift, at `SInt(n)` the truncating `div`/`rem` and the
+arithmetic shift, at `Nat` and `Int` `div`/`mod` (Euclidean at `Int`, as
+Lean's are). The rungs are Rust's: `|` below `&` below the shifts below `+`,
+with `/` and `%` beside `*`; the comparison rung sits under all of them, so
+`a & m = 0` is `(a & m) = 0` without Rust's C-inherited trap. A shift's
+count is a `Nat`, and the carrier probes read only a shift's left operand, so
+`(1 << k) + a` takes its carrier from `a`.
+
+Three lexical choices: `//` is still a comment (as in Rust, `a // b` is `a`);
+`|` against `⟩` is the left injection, so `⟨a | b |⟩` injects `a | b`; and
+`>>` is a shift only with a space (or `(`, `,`) before it, because a tight
+`>>` is two closers of nested type arguments, `List<List<A>>`. Xor keeps its
+method (`bxor`): `^` is power.
+
 ## 5. Byte classes
 
 `lib/std/bitvec/byte.hthr` gains the C locale's `<ctype.h>` classes as
@@ -135,8 +154,9 @@ at.
 
 - ~~The decision for Minus~~ Decided (Minus, 2026-11-03): `u8` stays
   `BitVec(8)`; only signed words are a record (§3).
-- **Operator symbols.** `/`, `%`, `<<`, `>>`, `&`, `|` do not lex today;
-  division and shifts are methods. `issues/integer-operator-symbols.md`.
+- ~~**Operator symbols.**~~ Done 2026-11-06 (§4.1). `/` at `Rat` is open:
+  `⁻¹` there asks for apartness, and whether `a / b` should too, or read the
+  total `recip`, is a choice of its own.
 - **Division laws.** The Euclidean characterization of `udivrem` (`a = q·d +
   r`, `r < d` for `d ≠ 0`) is unproved; the probes are closed values.
   `issues/bitvec-division-laws.md`.
