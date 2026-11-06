@@ -1,6 +1,6 @@
 ---
 title: Prove compiled programs simulate their source's fuel-free tree
-status: open
+status: closed
 labels: [native,semantics,proofs,coinduction]
 area: heather-in-heather
 milestone: [hih-pl-spec]
@@ -39,3 +39,7 @@ that never ends compiles to a machine that never ends.
 
 - **[[linux-sim-divergence]]** owns `LinuxSimCo` and its converse. Assumed
   here: only that a `LinuxSimCo` proof is a `SimProgram` proof.
+
+## Log
+
+- 2026-11-06: Done by the fuelled route instead of the coinductive one (the question was put to Minus on the thread's decision card; the fuelled route kept the compiler's proofs inductive). `SimPaid` (`lib/std/os/linux/linux_x86_64_sim_paid.hthr`) is `Sim` read one constructor at a time with every `Tau` costing the machine at least one step; it is a `Sim` (`sim_of_paid`), and its converse is exact when the tree's cuts lie deeper than the run takes steps (`paid_run_whole`). `ITree::Deep` (`lib/std/itree/itree_deep.hthr`) is that depth, kept by bind and put at fuel `n` by every loop (`deep_iter`); a source's cuts lie as deep as its fuel (`Source::deepens`). The compiler's `Site::Goes` now claims `SimPaid`, and a loop's `JMP` back pays its `Tau` (`goes_jmp_tau`, `Target::at_jmp_tau`). `Source::elf_runs_exact`: every run of the process `write-elf` describes, with answers Linux may give, is the events of a whole trace the source produces; a source that never returns compiles to a process with no run (probe `spin_paid_no_run`). `elf_simulates`/`elf_file_simulates` keep their `SimProgram` statements through `Program::sim_of_paid`, so the certificate is unchanged. `LinuxSimCo` stays as the coinductive statement over `Source::tree_co`; nothing needs it now.
