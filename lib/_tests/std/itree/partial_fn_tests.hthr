@@ -137,6 +137,15 @@ partial fn inside(n: Nat) → Nat { match n { Zero => Pointed::ret(0), Succ(m) =
 partial fn passed(n: Nat) → Nat { let f = passed; Pointed::ret(n) }
 // expect-error: cannot depend on each other yet
 partial fn dep(n: Nat, v: [Bool; n]) → Nat { dep(n, v) }
+// A call used where its result is expected, from outside the function
+// (an imported one: kernel_whnf_tests). The ordinary mismatch between two
+// computations is not this refusal.
+// expect-error: `search` is partial, so a call to it is a computation that may not return: this one has type `Partial(Nat)`, but `Nat` is expected here; bind it with `let r <- search(…);`
+fn search_now(n: Nat) → Nat { search(n) }
+// expect-error: `search` is partial, so a call to it is a computation that may not return: this one has type `Partial(Nat)`, but `Nat` is expected here
+fn search_big(n: Nat) → Bool { big(search(n)) }
+// expect-error: this has type `CoTree<Nat>(none)`, but `CoTree<Bool>(none)` is expected here
+fn search_tree(n: Nat) → Partial(Bool) { search(n) }
 
 // ---------------------------------------------------------------------------
 // `while` with no measure, in a carrier that iterates: one `Iterate::then`

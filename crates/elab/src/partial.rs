@@ -28,10 +28,20 @@
 //!
 //! Nothing here is trusted: each part is an ordinary declaration checked
 //! the ordinary way.
+//!
+//! A call used where `B` is expected (`fn g(n: Nat) → Nat { f(n) }`) is
+//! refused by the gate as a mismatch between `Partial(B)` and `B`; the
+//! elaborator records the call's head, and when the gate refuses and the
+//! head is a partial function ([`Elaborator::is_partial_fn`]) the refusal
+//! names it ([`Elaborator::partial_use_note`], §4.2's refusal).
 
 use heather_syntax::{Block, Decl, DeclKind, Expr, ExprKind, LamBinder, Param, ParamOrigin, Span, Stmt, Ty, TyKind};
 
-use crate::{R, err};
+use std::sync::Arc as Rc;
+
+use heather_kernel::term::Type;
+
+use crate::{Cx, Elaborator, R, err};
 
 pub(crate) struct Family {
     pub(crate) parts: Vec<Decl>,
@@ -406,4 +416,69 @@ pub(crate) fn lower(decl: &Decl) -> R<Family> {
         span,
     };
     Ok(Family { parts: vec![body_decl, wrapper], unfold, designations: vec![(designed, minted)] })
+}
+
+impl Elaborator {
+    /// Whether `name`, the head of a call written in `cx`, is a `partial
+    /// fn`. Partial is read off what the lowering left, which a module image
+    /// carries, so an imported function is recognised as a local one is: the
+    /// global `f#body`, designated `f::body`. A measure's family
+    /// (`docs/decreases-unfolding-design.md` §11) designates `f::body` too,
+    /// but always beside `f::rec`, which a partial function never has.
+    pub(crate) fn is_partial_fn(&self, cx: &Cx, name: &str) -> bool {
+        if cx.names.contains(name) || cx.aliases.iter_inner().any(|alias| alias.name == *name) {
+            return false;
+        }
+        let Some(key) = self.key_of(name) else { return false };
+        let base = key.split_once("::").map_or(key.as_str(), |(_, base)| base);
+        let minted = format!("{base}#body");
+        self.names.global(&format!("{key}#body")).is_some()
+            && self.access_alias(&format!("{base}::body")) == Some(minted.as_str())
+            && self.access_alias(&format!("{base}::rec")).is_none()
+    }
+
+    /// The refusal of a call to `f` where something other than a
+    /// computation is expected (docs/partial-functions-design.md §4.2): `f`
+    /// is named, with the two ways out. `None` when `f` is not a `partial
+    /// fn`, when the call's type is not a `CoTree` or the expected one is (a
+    /// mismatch between two computations is the ordinary one), or when either
+    /// type does not spell.
+    pub(crate) fn partial_use_note(&self, cx: &Cx, f: &str, got: &Type, expected: &Type) -> Option<String> {
+        if !self.is_partial_fn(cx, f) {
+            return None;
+        }
+        let tree = |ty: &Type| {
+            crate::goal_combinators::type_inductive(self, cx, ty).is_some_and(|i| i.codata && i.name == "CoTree")
+        };
+        if !tree(got) || tree(expected) {
+            return None;
+        }
+        let g = self.partial_display(cx, got)?;
+        let w = self.display_type_clean(cx, expected)?;
+        Some(format!(
+            "`{f}` is partial, so a call to it is a computation that may not return: this one has \
+             type `{g}`, but `{w}` is expected here; bind it with `let r <- {f}(…);` inside a \
+             computation, or use `CoTree::get` with a termination proof"
+        ))
+    }
+
+    /// A call's type as `Partial(B)` when it is `CoTree<B>(none)`, the
+    /// type a `partial fn` without events was declared with (`Partial` is
+    /// a `def`, expanded where it is read: issues/type-name-display-respelling.md).
+    /// Otherwise its ordinary display.
+    fn partial_display(&self, cx: &Cx, got: &Type) -> Option<String> {
+        let shown = self.display_type_clean(cx, got)?;
+        let result = || {
+            let decoded = crate::inductive::decoded(got);
+            let Type::M { sig, index } = &*decoded else { return None };
+            let Type::El { tm, .. } = sig.shape_at(index) else { return None };
+            let (crate::gendefs::GenDef::MShape(_), args) = self.gen_app_of(&tm)? else { return None };
+            let b = Type::El { level: heather_kernel::level::Level::Zero, tm: Rc::clone(args.first()?) };
+            self.display_type_clean(cx, &b)
+        };
+        Some(match result() {
+            Some(b) if shown == format!("CoTree<{b}>(none)") => format!("Partial({b})"),
+            _ => shown,
+        })
+    }
 }
