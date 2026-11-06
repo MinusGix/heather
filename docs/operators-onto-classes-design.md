@@ -166,6 +166,14 @@ same spilling, the same diagnostics. Three rungs, in order:
 > and the expected type's first domain has one (amended 2026-08-11, §16). Where
 > the table has an entry at (symbol, head): the designated global.
 >
+> **(2b) The designation at a class** (amended 2026-11-06,
+> docs/division-design.md §6). When rung 2 found no head at all (the operand
+> is at a section's type parameter), the designation at the class of a
+> dictionary in scope, innermost first: `designation postfix ⁻¹ at
+> OrderedField := OrderedField::inv` gives `x⁻¹` its meaning inside
+> `section<K: OrderedField(…)>`. The designated operation is generic and
+> emitted bare, so its own dictionary is found at the operand's carrier.
+>
 > **(3) The symbol's fallback name.** `+`→`add`, `*`→`mul`, `<=`→`Le`,
 > `<`→`lt`, resolved by `Elaborator::resolve` exactly as the parser's
 > `named_call` made it resolve before this round. This rung is the growth

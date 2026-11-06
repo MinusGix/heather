@@ -18,7 +18,7 @@
 // `ApartBy`, so a rule's premise is smaller than its conclusion
 // (Paterson's condition, docs/traits-layer2-design.md §6); a sign goal
 // written with `<` itself has a local relation for a head and no rule can be
-// keyed on it, so a defaulted premise asks for `PositiveBy(<, K.unit, e)`.
+// keyed on it, so a defaulted premise asks for `PositiveBy(<, <=, K.unit, e)`.
 //
 // The rules are stated at `OrderedField`, not at the weakest class each
 // needs (the convention for theorems): a rule at `OrderedSemiring` applied in
