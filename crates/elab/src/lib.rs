@@ -2870,7 +2870,7 @@ impl Elaborator {
         }
     }
 
-    fn lookup_global(&self, name: &str) -> Option<&GlobalInfo> {
+    pub(crate) fn lookup_global(&self, name: &str) -> Option<&GlobalInfo> {
         self.names.global(&self.key_of(self.instance_alias(name))?)
     }
 

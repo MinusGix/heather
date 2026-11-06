@@ -43,10 +43,13 @@ that and closes the two gaps that made `def u8: Type = BitVec(8);` refuse:
 
 ### 2.1 The cost of eager expansion
 
-Diagnostics print `BitVec(8)` where the program wrote `u8`. That is the
-same trade `let`-bound type aliases already make, and it is the honest
-spelling of the type. Respelling by the name written is display work
-(`issues/type-name-display-respelling.md`).
+Nothing after expansion can tell `u8` from `BitVec(8)`, so a diagnostic
+would print `BitVec(8)` where the program wrote `u8`. The display gets the
+name back from a table filled at each expansion: it spells an instance by
+the most recently written name that still means it (`u8`, `i(n)`, a
+program's own `def Byte: Type = BitVec(8)`), and the family covers widths
+not written that way (`BitVec(16)` reads `u16` once `u` has been written).
+`docs/surface-type-display-design.md` §5.1.
 
 ### 2.2 Width families: `u27`
 
@@ -163,4 +166,4 @@ at.
 - **Native lowering of `SInt`.** The native frontend reads `BitVec` words;
   an `SInt` field is one record level above them.
   `issues/sint-native-lowering.md`.
-- **Display.** `issues/type-name-display-respelling.md` (§2.1).
+- ~~**Display.**~~ Done: §2.1, `issues/type-name-display-respelling.md`.

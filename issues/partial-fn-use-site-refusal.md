@@ -47,3 +47,4 @@ the same module and from an imported one.
   call and as a method) in `lib/_tests/kernel_model/kernel_whnf_tests.hthr`,
   which already imports it, rather than growing `partial_fn_tests`' closure
   by the kernel model. docs/partial-functions-design.md §9 item 11.
+- 2026-11-06: type-name-display-respelling closed without respelling `Partial` in general display (the named refusal above spells it itself): Partial takes a type and is codata, filed as [[type-name-respelling-type-arguments]].
