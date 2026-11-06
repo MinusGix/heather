@@ -874,3 +874,60 @@ hypothesis read through a match the branch only partly refines),
 Probes: the constructor block and its negative controls in
 `lib/_tests/std/tactic/grind_tests.hthr`.
 
+### 14.6 Cheaper to import (2026-11-06)
+
+Both, in [grind-closure-cost](../issues/grind-closure-cost.md)'s round.
+
+**Where the closure's time went.** Cold, at width one, `grind` and `tactic`
+were nearly all of the closure, and half of each was the kernel gate. The
+gate's cost was `Tac` values written as constructors: `Tac` is lowered on
+`W` (docs/inductive-tier2-w-lowering.md), and `Pure(a)` or `Ask(r, k)` in an
+expression spells the encoding's annotations into the term, which the gate
+checks at every occurrence (a probe's `Pure(1)` was about 20k kernel steps;
+the same body through a one-line function about 2.7k). A wildcard arm of a
+`match` is one copy per constructor it covers, so a `Tac` value under `_` on
+`Head` (12 constructors) or `Req` (29) was paid that many times: `sides_of`,
+`pi_domain` and `attempt_from` were a third of the gate between them.
+
+**The rule.** Tactics build values through calls declared once in
+`tactic.hthr`: `pure(a)`, `ask(r)` (the request helpers are `ask(View(h))`
+and so on) and `ask_then(r, k)`; the constructors stay free in patterns. A
+view is read by a plain function (`eq_sides`, `pi_dom`, `failure_of`) and the
+tactic matches the `Option`, not the view. `pure(match …)` is a `match` in
+inference position, so those few stay `Pure(match …)`. Every module that
+imports `tactic` was rewritten to the rule; modules that also import
+`rt_io` (whose `ETm` has a `Pure` of its own) were left alone.
+[tier2-constructor-value-cost](../issues/tier2-constructor-value-cost.md)
+is the elaborator fix that would make the rule unnecessary.
+
+The cold elaboration of grind's closure (release, width one) fell from about
+two and a half minutes to just over one: `grind` by about three fifths,
+`tactic` by half, `derive` by two fifths.
+
+**The lists.** A Rust module list marked `// lib-closure: <roots>… [minus
+<roots>…]` is written by `scripts/lib-closures --fix` from the imports, in
+the loader's order, and `crates/cli/tests/lib_closures.rs` holds every marked
+list to the CLI's loader. The bundled proof library
+(`crates/cli/src/native/support.rs`), the x86 prefix, the read loop and
+`lib_std_float`'s list are marked, so an import added to a module on them is
+one command, not an edit per list.
+
+**Conversions, measured and left out.** With the closure halved, the round
+replayed the conversions on the bundled path (`x86_64_fetch`'s
+`readable_head_same`, `x86_64_data_read`'s four load-sameness steps,
+`x86_64_stack`'s two word reads) and timed
+`native::tests::the_bundled_library_checks` cold, through `scripts/test` at
+width one with no seeded stores: it passed, but at about 216 s of its 300 s
+rail against master's 36 s. Its own `--timings` rows say where: grind's
+closure about 105 s (`grind` 65, `tactic` 33, `derive` 6), then about 33 s
+of `image_recheck` at each of `x86_64_fetch` and `x86_64_data_read`, the
+modules where grind's chain meets the x86 chain (the session has no verdict
+store there, so the relocated images are kernel-checked again); the grind
+calls themselves are a few seconds. That is a sixfold cold cost on the path
+every native test's first `compile-x86` builds, for seven one-line proofs, so
+the conversions stay out (`round` and `linux_x86_64_determinism`'s
+conversions, which also check, likewise: their test lists would pay the same
+closure). What would let them in: a cheaper closure still
+([tier2-constructor-value-cost](../issues/tier2-constructor-value-cost.md)),
+and a recheck that a merge of two chains does not repeat
+([lib-closure-markers](../issues/lib-closure-markers.md) records both).

@@ -40,7 +40,7 @@ theorem too_big(k: Nat, hk: k < 8): Fits(k, 4) { asks(k, 4) }
 // `request`, from a tactic: the found proof, or a fallback, or `None`.
 fn found_or(fallback: Tac<Expr>) → Tac<Expr> {
     goal().bind(λ g => request_in(g, [fallback], 16).bind(λ o => match o {
-        Some(e) => Pure(e),
+        Some(e) => pure(e),
         None => fail("no evidence, and no fallback proved it", []),
     }))
 }
@@ -67,7 +67,7 @@ theorem sees_locals(k: Nat, hk: 2 = k): 2 = k { by found_or(sym_of_local()) }
 
 // A fallback's answer is checked at the goal before it counts: a proof of
 // something else is no answer.
-fn wrong() → Tac<Expr> { lookup("closed").bind(λ c => match c { Accepted(g) => Pure(Global(g)), Refused(why) => fail(why, []) }) }
+fn wrong() → Tac<Expr> { lookup("closed").bind(λ c => match c { Accepted(g) => pure(Global(g)), Refused(why) => fail(why, []) }) }
 
 // expect-error: no evidence, and no fallback proved it
 theorem checked_answer(k: Nat): k = k { by found_or(wrong()) }

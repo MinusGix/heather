@@ -156,6 +156,16 @@
   between two computations, neutral parameters, stage theorems, what `omega`
   cannot read yet), each with its reason and the issue that would retire it.
   Correct it when a rule goes stale.
+- **Module lists in Rust are closures, not hand edits**: a list of
+  `("name", include_str!(…))` library modules is marked `// lib-closure:
+  <roots>… [minus <roots>…]` and written by `scripts/lib-closures --fix`
+  from the imports; `crates/cli/tests/lib_closures.rs` holds marked lists to
+  the loader. After adding an `import` to a listed module, run the script.
+- **Tactics build `Tac` values through calls**: `pure(a)`, `ask(r)`,
+  `ask_then(r, k)`, never `Pure(…)`/`Ask(…)` as a value (patterns are
+  free). A written tier-2 constructor re-spells `Tac`'s `W` encoding for the
+  kernel at every occurrence and every wildcard copy (docs/grind-design.md
+  §14.6, issues/tier2-constructor-value-cost.md).
 - **Rust test or theorem: `docs/test-value-audit.md` §5.** If Heather can
   state a claim, write it in Heather. A library PR adds theorems to its module
   (a client would cite them) or probes to `lib/_tests` (mirrors `lib/`,

@@ -26,7 +26,7 @@ import unique;
 fn fail_writes<A>(why: String) → Tac<A> { fail("plan_writes: " ++ why, []) }
 
 fn writes_global(name: String) → Tac<Expr> {
-    lookup(name).bind(λ c => match c { Accepted(g) => Pure(Global(g)), Refused(why) => fail_writes(why) })
+    lookup(name).bind(λ c => match c { Accepted(g) => pure(Global(g)), Refused(why) => fail_writes(why) })
 }
 
 fn writes_apps(f: Expr, args: List<Expr>) → Expr {
@@ -38,7 +38,7 @@ fn writes_apps(f: Expr, args: List<Expr>) → Expr {
 fn write_count_from(count: Expr, i: Nat, fuel: Nat) → Tac<Nat> {
     match fuel {
         Zero => fail_writes("more writes than the walk allows"),
-        Succ(f) => defeq(count, NatLit(i)).bind(λ same => match same { True => Pure(i), False => write_count_from(count, Succ(i), f) }),
+        Succ(f) => defeq(count, NatLit(i)).bind(λ same => match same { True => pure(i), False => write_count_from(count, Succ(i), f) }),
     }
 }
 
@@ -58,12 +58,12 @@ record WriteGlobals { unique: Expr, check: Expr, triv: Expr, found: Expr, copied
 fn write_globals() → Tac<WriteGlobals> {
     writes_global("Unique").bind(λ a => writes_global("Unique::by_check").bind(λ b => writes_global("write_facts_true").bind(λ c =>
     writes_global("write_found").bind(λ d => writes_global("write_copied").bind(λ e => writes_global("write_sites_cons").bind(λ f =>
-    writes_global("write_sites_nil").bind(λ g => Pure(WriteGlobals(a, b, c, d, e, f, g)))))))))
+    writes_global("write_sites_nil").bind(λ g => pure(WriteGlobals(a, b, c, d, e, f, g)))))))))
 }
 
 // The planner's own fallback: this write's verdict, by evaluation.
 fn writes_fallbacks(gs: WriteGlobals, p, f, k: Expr, fallback: Bool) → List<Tac<Expr>> {
-    match fallback { True => [Pure(writes_apps(gs.check, [p, f, k, gs.triv]))], False => [] }
+    match fallback { True => [pure(writes_apps(gs.check, [p, f, k, gs.triv]))], False => [] }
 }
 
 // One write, with its fact if one is found. The program is left as written:
@@ -82,9 +82,9 @@ fn write_site_for(gs: WriteGlobals, p, f: Expr, k: Nat, fallback: Bool) → Tac<
 // Writes `k` to `k + n` of the function.
 fn write_sites_for(gs: WriteGlobals, p, f: Expr, k: Nat, n: Nat, fallback: Bool) → Tac<Expr> {
     match n {
-        Zero => Pure(writes_apps(gs.nil, [p, f])),
+        Zero => pure(writes_apps(gs.nil, [p, f])),
         Succ(m) => write_site_for(gs, p, f, k, fallback).bind(λ s =>
-            write_sites_for(gs, p, f, Succ(k), m, fallback).bind(λ ss => Pure(writes_apps(gs.cons, [p, f, s, ss])))),
+            write_sites_for(gs, p, f, Succ(k), m, fallback).bind(λ ss => pure(writes_apps(gs.cons, [p, f, s, ss])))),
     }
 }
 

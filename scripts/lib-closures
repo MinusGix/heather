@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Regenerate the module lists Rust code writes out by hand from lib/'s imports.
+
+A Rust test (or `compile-x86`'s bundled proof library) that elaborates library
+modules without the loader lists them itself, as `("name",
+include_str!("…/name.hthr"))` entries in import order. That list is a computed
+fact: the import closure of the modules the list is for. Written out by hand,
+every new `import` in a listed module meant editing every list holding it
+(issues/grind-closure-cost.md). A list marked
+
+    // lib-closure: <root>… [minus <root>…]
+    pub const NAME: &[(&str, &str)] = &[
+        …
+    ];
+
+is the closure of the roots, minus the closure of the roots after `minus`
+(the prefix a layered list stands on), in the loader's order: dependencies
+first, each module's imports in the order it writes them, the common
+prelude's ahead of them where the loader adds it. The entries between
+`&[` and `];` are this script's to write.
+
+    scripts/lib-closures            # list the stale lists; exit 1 if any
+    scripts/lib-closures --fix      # rewrite them in place
+    scripts/lib-closures --show ROOT… [minus ROOT…]   # print a closure
+
+Imports are read with a line pattern, not the parser; `cargo test -p
+heather-cli --test lib_closures` checks every marked list against the CLI's
+own loader, so the two cannot drift apart silently. The common prelude
+itself is never listed: a list is checked module by module, each with its
+explicit imports. Stdlib only, like `scripts/lib-paths`.
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+MARK = re.compile(r"^\s*// lib-closure:\s*(.*?)\s*$")
+# `import m;`, and `export m::{…};`, which imports `m` too.
+IMPORT = re.compile(r"^(?:import\s+([A-Za-z_][A-Za-z0-9_]*)\s*;|export\s+([A-Za-z_][A-Za-z0-9_]*)\s*::)", re.M)
+# The elaborator's own prelude is never a file.
+PRELUDE = "prelude"
+# The common prelude: the loader makes it the first import of every module
+# outside its own closure, so its imports come first in every closure. It is
+# never listed (a list's modules are checked with their explicit imports).
+COMMON = "common"
+
+
+def library_files():
+    where = {}
+    for dirpath, dirnames, filenames in os.walk(ROOT / "lib"):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for f in filenames:
+            if f.endswith(".hthr"):
+                where.setdefault(f[: -len(".hthr")], []).append(Path(dirpath, f))
+    return where
+
+
+class Library:
+    def __init__(self):
+        self.where = library_files()
+        self.imports_of = {}
+
+    def path(self, name):
+        files = self.where.get(name, [])
+        if len(files) != 1:
+            what = "no file" if not files else "two files (" + ", ".join(str(f.relative_to(ROOT)) for f in files) + ")"
+            raise SystemExit(f"lib-closures: module `{name}` has {what} under lib/")
+        return files[0]
+
+    def explicit(self, name):
+        if name not in self.imports_of:
+            src = self.path(name).read_text()
+            self.imports_of[name] = [a or b for a, b in IMPORT.findall(src) if (a or b) != PRELUDE]
+        return self.imports_of[name]
+
+    def imports(self, name):
+        """As the loader reads them: the common prelude first where it applies."""
+        if not hasattr(self, "common_closure"):
+            self.common_closure = set()
+            if self.where.get(COMMON):
+                self.common_closure = set(self.walk([COMMON], self.explicit))
+        im = self.explicit(name)
+        if self.common_closure and name not in self.common_closure and COMMON not in im:
+            im = [COMMON] + im
+        return im
+
+    def closure(self, roots, minus=()):
+        """The loader's order, less the closure of `minus` and the common prelude."""
+        skip = set(self.walk(minus, self.imports)) | {COMMON}
+        return [n for n in self.walk(roots, self.imports) if n not in skip]
+
+    def walk(self, roots, imports):
+        """Post-order DFS, each module's imports in written order."""
+        done = set()
+        out = []
+
+        def visit(name, stack):
+            if name in done:
+                return
+            if name in stack:
+                raise SystemExit("lib-closures: import cycle: " + " -> ".join(stack[stack.index(name):] + [name]))
+            for dep in imports(name):
+                visit(dep, stack + [name])
+            done.add(name)
+            out.append(name)
+
+        for r in roots:
+            visit(r, [])
+        return out
+
+
+def parse_spec(words):
+    if "minus" in words:
+        i = words.index("minus")
+        return words[:i], words[i + 1:]
+    return words, []
+
+
+def tracked_rust():
+    out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--", "*.rs"], capture_output=True, check=True)
+    return [ROOT / rel for rel in out.stdout.decode().split("\0") if rel]
+
+
+def lists_in(text):
+    """(spec words, first entry line, end line) per marked list."""
+    lines = text.split("\n")
+    found = []
+    for i, line in enumerate(lines):
+        m = MARK.match(line)
+        if not m:
+            continue
+        j = i + 1
+        if j >= len(lines) or not lines[j].rstrip().endswith("&["):
+            raise SystemExit(f"lib-closures: a `// lib-closure:` line must sit right above a `… = &[` line (line {i + 1})")
+        k = j + 1
+        while k < len(lines) and lines[k].strip() != "];":
+            k += 1
+        if k == len(lines):
+            raise SystemExit(f"lib-closures: no `];` closes the list marked on line {i + 1}")
+        found.append((m.group(1).split(), j + 1, k))
+    return lines, found
+
+
+def entries(lib, file, spec, indent):
+    roots, minus = parse_spec(spec)
+    out = []
+    for name in lib.closure(roots, minus):
+        rel = os.path.relpath(lib.path(name), file.parent)
+        out.append(f'{indent}("{name}", include_str!("{rel}")),')
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--fix", action="store_true", help="rewrite the stale lists in place")
+    ap.add_argument("--show", nargs="+", metavar="ROOT", help="print the closure of ROOT… [minus ROOT…]")
+    args = ap.parse_args()
+    lib = Library()
+    if args.show:
+        roots, minus = parse_spec(args.show)
+        print(" ".join(lib.closure(roots, minus)))
+        return 0
+    stale = []
+    for file in tracked_rust():
+        text = file.read_text()
+        if "// lib-closure:" not in text:
+            continue
+        lines, found = lists_in(text)
+        changed = False
+        for spec, start, end in reversed(found):
+            body = lines[start:end]
+            indent = re.match(r"\s*", body[0]).group(0) if body else re.match(r"\s*", lines[start - 1]).group(0) + "    "
+            want = entries(lib, file, spec, indent)
+            if body != want:
+                stale.append(f"{file.relative_to(ROOT)}:{start}: lib-closure: {' '.join(spec)}")
+                lines[start:end] = want
+                changed = True
+        if changed and args.fix:
+            file.write_text("\n".join(lines))
+    for s in stale:
+        print(("rewrote " if args.fix else "stale ") + s)
+    return 0 if args.fix or not stale else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

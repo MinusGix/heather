@@ -406,16 +406,16 @@ fn runtime_ref(name: String) → Tac<GlobalRef> {
     lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (`import runtime;` and the modules `runtime` imports): ")
 }
 
-fn runtime_global(name: String) → Tac<Expr> { runtime_ref(name).bind(λ g => Pure(Global(g))) }
+fn runtime_global(name: String) → Tac<Expr> { runtime_ref(name).bind(λ g => pure(Global(g))) }
 
 fn ap(f: Expr, args: List<Expr>) → Expr { args.foldl(λ acc a => App(acc, a), f) }
 
 fn runtime_ctor_exprs(cs: List<CtorInfo>) → Tac<List<Expr>> {
     match cs {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(c, rest) => match c.ctor {
             None => runtime_fail("`" ++ c.name ++ "` has no constructor function"),
-            Some(h) => runtime_ctor_exprs(rest).bind(λ es => Pure(Cons(Hd(h), es))),
+            Some(h) => runtime_ctor_exprs(rest).bind(λ es => pure(Cons(Hd(h), es))),
         },
     }
 }
@@ -521,7 +521,7 @@ fn runtime_quoting(ts: RtTypes) → Tac<RtQ> {
     let sig_list <- runtime_ctors_at(ts.sigs);
     let funs <- runtime_ctors_at(ts.fun_t);
     let sigs <- runtime_ctors_at(ts.sig);
-    Pure(RtQ(tys, tms, ops, ty_list, nat_list, sig_list, runtime_at(funs, 0), runtime_at(sigs, 0)))
+    pure(RtQ(tys, tms, ops, ty_list, nat_list, sig_list, runtime_at(funs, 0), runtime_at(sigs, 0)))
 }
 
 // A pair, its types left to the elaborator: what the generator spells a
@@ -540,16 +540,16 @@ fn runtime_sig_from(fuel: Nat, k: Known, t: Handle, ps: List<Ty>) → Tac<Sig> {
         Succ(f) => view(t).bind(λ v => match v {
             HPi(dom) => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
                 runtime_sig_from(f, k, o.body, ps ++ [p]))),
-            _ => k.ty(t).bind(λ r => Pure(Sig(ps, r))),
+            _ => k.ty(t).bind(λ r => pure(Sig(ps, r))),
         }),
     }
 }
 
 fn runtime_sigs(k: Known, gs: List<Nat>) → Tac<List<Sig>> {
     match gs {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(g, rest) => infer(Global(GlobalRef(g))).or_fail("runtime: a callee's type: ").bind(λ t =>
-            runtime_sig_from(64, k, t, []).bind(λ s => runtime_sigs(k, rest).bind(λ ss => Pure(Cons(s, ss))))),
+            runtime_sig_from(64, k, t, []).bind(λ s => runtime_sigs(k, rest).bind(λ ss => pure(Cons(s, ss))))),
     }
 }
 
@@ -557,9 +557,9 @@ fn runtime_sigs(k: Known, gs: List<Nat>) → Tac<List<Sig>> {
 // under the one before: words, as the judgment checked.
 fn runtime_params(word: Handle, ps: List<Ty>, under: Option<LocalRef>, i: Nat) → Tac<List<LocalRef>> {
     match ps {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(_, rest) => assume(Hd(word), "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
-            runtime_params(word, rest, Some(x.ref), Succ(i)).bind(λ more => Pure(Cons(x.ref, more)))),
+            runtime_params(word, rest, Some(x.ref), Succ(i)).bind(λ more => pure(Cons(x.ref, more)))),
     }
 }
 
@@ -580,7 +580,7 @@ record LinkFrame { g: Nat, name: String, table: List<Nat>, pending: List<Nat> }
 // A runtime fn's table: itself, then the runtime fns it calls, as the
 // reflector numbers them (what its own `g::world` lists).
 fn runtime_table(k: Known, g: Nat) → Tac<List<Nat>> {
-    rt_reflect_one(4096, Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io), g).bind(λ r => Pure(r.snd))
+    rt_reflect_one(4096, Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io), g).bind(λ r => pure(r.snd))
 }
 
 fn runtime_self<A>(a: A) → a = a { refl }
@@ -592,7 +592,7 @@ fn runtime_name_of(g: Nat) → Tac<String> {
     let v <- view(t);
     match v {
         HEq(lhs, _) => view(lhs).bind(λ h => match h {
-            HGlobal(_, n, _) => Pure(n),
+            HGlobal(_, n, _) => pure(n),
             _ => runtime_fail("a callee that is not a global"),
         }),
         _ => runtime_fail("a callee's name"),
@@ -603,7 +603,7 @@ fn runtime_link(fuel: Nat, k: Known, stack: List<LinkFrame>, l: Linking) → Tac
     match fuel {
         Zero => runtime_fail("a program of more functions than the linker places"),
         Succ(more) => match stack {
-            Nil => Pure(l),
+            Nil => pure(l),
             Cons(fr, rest) => match fr.pending {
                 Nil => runtime_link(more, k, rest, Linking(l.order ++ [fr.g], l.names ++ [fr.name], l.tables ++ [fr.table])),
                 Cons(c, cs) => {
@@ -624,11 +624,11 @@ fn runtime_link(fuel: Nat, k: Known, stack: List<LinkFrame>, l: Linking) → Tac
 // published beside it.
 fn runtime_instances(order: List<Nat>, names: List<String>, root: Nat, own: Expr) → Tac<List<Pair<Expr, Expr>>> {
     match order {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(g, rest) => {
             let name = names.head_or("");
-            let here: Tac<Expr> = match g.same(root) { True => Pure(own), False => runtime_global(name ++ "::compile") };
-            here.bind(λ c => runtime_instances(rest, names.drop(1), root, own).bind(λ ps => Pure(Cons(Pair(Global(GlobalRef(g)), c), ps))))
+            let here: Tac<Expr> = match g.same(root) { True => pure(own), False => runtime_global(name ++ "::compile") };
+            here.bind(λ c => runtime_instances(rest, names.drop(1), root, own).bind(λ ps => pure(Cons(Pair(Global(GlobalRef(g)), c), ps))))
         },
     }
 }
@@ -657,7 +657,7 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let codes = indices.map(λ i => ap(linked, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, (at(i)).snd]));
     let parts = indices.map(λ i => ap(part, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, srcs, (at(i)).snd,
         ap(rfl, [Blank, ap(table, [Blank, (at(i)).fst.fst, (at(i)).fst.snd])]), Hd(trivial_h), Hd(trivial_h)]));
-    Pure(Linked(RtQ::seq(fn_ctors, codes), srcs, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
+    pure(Linked(RtQ::seq(fn_ctors, codes), srcs, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
 }
 
 // ---------------------------------------------------------------------------

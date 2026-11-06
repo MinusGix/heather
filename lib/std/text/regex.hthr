@@ -257,7 +257,7 @@ record RegexRefs {
 
 fn regex_found(name: String, c: Checked<GlobalRef>) → Tac<GlobalRef> {
     match c {
-        Accepted(g) => Pure(g),
+        Accepted(g) => pure(g),
         Refused(why) => fail("regex: `" ++ name ++ "` is not in scope (`import regex;`): " ++ why, []),
     }
 }
@@ -270,21 +270,21 @@ fn regex_ctor(cs: List<CtorInfo>, i: Nat) → Tac<Expr> {
         Nil => fail("regex: `Regex` has fewer constructors than the generator reads", []),
         Cons(c, _) => match c.ctor {
             None => fail("regex: `Regex::" ++ c.name ++ "` has no constructor function", []),
-            Some(h) => Pure(Hd(h)),
+            Some(h) => pure(Hd(h)),
         },
     }
 }
 
 fn regex_shape(c: Checked<List<CtorInfo>>) → Tac<List<CtorInfo>> {
     match c {
-        Accepted(cs) => Pure(cs),
+        Accepted(cs) => pure(cs),
         Refused(why) => fail("regex: " ++ why, []),
     }
 }
 
 fn regex_typed(c: Checked<Handle>) → Tac<Handle> {
     match c {
-        Accepted(h) => Pure(h),
+        Accepted(h) => pure(h),
         Refused(why) => fail("regex: the meaning does not typecheck: " ++ why, []),
     }
 }
@@ -292,7 +292,7 @@ fn regex_typed(c: Checked<Handle>) → Tac<Handle> {
 // The type `Regex`, read off the meaning's domain.
 fn regex_domain(v: Head) → Tac<Handle> {
     match v {
-        HPi(dom) => Pure(dom),
+        HPi(dom) => pure(dom),
         _ => fail("regex: `Regex::accepts` is not a function of a `Regex`", []),
     }
 }
@@ -308,7 +308,7 @@ fn regex_refs() → Tac<RegexRefs> {
     let seq <- regex_ctor(cs, 3);
     let alt <- regex_ctor(cs, 4);
     let star <- regex_ctor(cs, 5);
-    Pure(RegexRefs(Hd(h), no_match, eps, range, seq, alt, star, Global(accepts)))
+    pure(RegexRefs(Hd(h), no_match, eps, range, seq, alt, star, Global(accepts)))
 }
 
 // The term `r` as an `Expr`.
