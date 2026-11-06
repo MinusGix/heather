@@ -709,9 +709,28 @@ pub(crate) fn restates(elab: &Elaborator, cx: &Cx, ty: &Type, goal: &Type, level
 /// whole declaration with no site (issues/split-all-nested-if-omega-kernel-
 /// refusal.md). Out of fuel, the kernel decides.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn motive_is_a_type(elab: &Elaborator, cx: &Cx, motive: &Type, goal: &Type, scrut: &Term, ty: &Type, scrut_level: &Level, level: &Level, span: Span) -> crate::R<()> {
+pub(crate) fn motive_is_a_type(elab: &Elaborator, cx: &Cx, motive: &Type, dependent: Option<&Type>, goal: &Type, scrut: &Term, ty: &Type, scrut_level: &Level, level: &Level, span: Span) -> crate::R<()> {
     let mut zcx = cx.clone();
     zcx.push("z".to_string(), ty.clone(), scrut_level.clone());
+    // A motive with convoys is a type only under the case's equation
+    // `q : scrut = z` as well (`dependent_motive`): the convoys' `refl`
+    // is at the scrutinee, and `q` is what moves them to `z`.
+    let motive = match dependent {
+        Some(dependent) => {
+            zcx.push(
+                "q".to_string(),
+                Type::Id {
+                    level: scrut_level.clone(),
+                    ty: Rc::new(ty.shift_local(1)),
+                    lhs: Rc::new(scrut.shift_local(1)),
+                    rhs: Rc::new(Term::Var(heather_kernel::term::LocalVar(0))),
+                },
+                scrut_level.clone(),
+            );
+            dependent
+        }
+        None => motive,
+    };
     match elab.kernel_check_type(&elab.goal_psi(), heather_kernel::layer::Layer::Prog, &zcx.gamma, motive, level) {
         Ok(()) | Err(heather_kernel::typing::TypeError::OutOfFuel) => Ok(()),
         Err(_) => crate::err(

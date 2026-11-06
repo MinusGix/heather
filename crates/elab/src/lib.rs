@@ -5757,7 +5757,7 @@ impl Elaborator {
                         goal_combinators::restates(self, cx, &goal, expected, lvl, "simplified goal", e.span)?;
                         let (scrut, ty, level) = self.elab_infer(cx, &split.scrut)?;
                         goal_combinators::restates(self, cx, &split.motive.inst_top(0, &scrut), &goal, lvl, "case split's motive, at its scrutinee,", e.span)?;
-                        goal_combinators::motive_is_a_type(self, cx, &split.motive, &goal, &scrut, &ty, &level, lvl, e.span)?;
+                        goal_combinators::motive_is_a_type(self, cx, &split.motive, split.dependent.as_ref(), &goal, &scrut, &ty, &level, lvl, e.span)?;
                         match split.dependent {
                             None => self.elab_convoy(
                                 cx, heather_syntax::MatchForm::Match, true, &split.equation, &split.arms,
