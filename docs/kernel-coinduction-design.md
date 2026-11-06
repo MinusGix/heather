@@ -368,6 +368,12 @@ one needs this design:
 The first is enough for "exactly these traces"; the second is the
 statement a compiler correctness theorem wants to end with.
 
+Both landed in one judgment (2026-11-06): `LinuxSimCo`
+(`lib/std/os/linux/linux_x86_64_sim_co.hthr`) is coinductive over
+`CoTree` and makes a `Tau` it does not drop cost the machine a step, with
+the exact converse and `spin` meeting only a machine that never finishes.
+The compiler proving it is `issues/native-compile-co-sim.md`.
+
 ---
 
 ## 7. Costs and risks

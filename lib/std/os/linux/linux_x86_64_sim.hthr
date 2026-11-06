@@ -262,7 +262,8 @@ theorem sim_run_sends<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), 
 // The cut is all `Sim` can say: it is partial correctness, so a tree that
 // is cut at every fuel along a run (a loop that goes round silently
 // forever) is simulated by a machine that goes on and exits. Ruling that
-// out is a statement about divergence (issues/linux-sim-divergence.md).
+// out is a statement about divergence: `linux_x86_64_sim_co`'s `LinuxSimCo`
+// (issues/linux-sim-divergence.md).
 
 // The answers of a run are ones Linux may give.
 fn LinuxEvent::Valid(self event: LinuxEvent) → Type {
