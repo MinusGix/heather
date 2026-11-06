@@ -370,6 +370,25 @@ fn climb(i0, j: Nat) → Nat {
 theorem climb_lit(): climb(2, 5) = 5 { refl }
 theorem climb_past(): climb(7, 5) = 7 { refl }
 
+// The same over `Int`: `Int::leb`/`Int::same` conditions, and a measure
+// `x.toNat()` that omega splits at `0 <= x`.
+fn idrain(n: Int) → Nat {
+    let mut k = n;
+    let mut steps = 0;
+    while OfNat(1).leb(k) decreases k.toNat() { k := k - OfNat(1); steps := steps + 1 }
+    steps
+}
+theorem idrain_lit(): idrain(OfNat(4)) = 4 { refl }
+theorem idrain_negative(): idrain(NegSucc(3)) = 0 { refl }
+fn iclimb(lo, hi: Int) → Nat {
+    let mut i = lo;
+    let mut n = 0;
+    while !i.same(hi) && i.leb(hi) decreases (hi - i).toNat() { i := i + OfNat(1); n := n + 1 }
+    n
+}
+theorem iclimb_lit(): iclimb(NegSucc(2), OfNat(2)) = 5 { refl }
+theorem iclimb_past(): iclimb(OfNat(3), OfNat(1)) = 0 { refl }
+
 // The guard alone does not make a non-decreasing body decrease.
 // expect-error: this recursive call must decrease the measure
 fn drain_bool_stuck(n: Nat) → Nat {

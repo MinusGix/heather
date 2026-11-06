@@ -3321,6 +3321,87 @@ fn split_nat_subtraction(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificat
     Ok(None)
 }
 
+/// The case facts an `Int::toNat` split binds (`__omega_tonat{k}_case`,
+/// `__omega_tonat{k}_eq`).
+const TO_NAT_CASE: &str = "__omega_tonat";
+
+/// The `x.toNat()` reads in `tm`, outermost first, through any application
+/// and an Int constructor's payload (`OfNat(x.toNat())`); a binder's body is
+/// not entered.
+fn int_to_nats<'a>(elab: &Elaborator, tm: &'a Rc<Term>, out: &mut Vec<&'a Rc<Term>>) {
+    if let Term::Succ(inner) = &**tm {
+        return int_to_nats(elab, inner, out);
+    }
+    if let Some((_, inner)) = int_ctor_payload(elab, tm) {
+        return int_to_nats(elab, inner, out);
+    }
+    if named_args(elab, tm, "int::Int::toNat").is_some_and(|args| args.len() == 1) {
+        out.push(tm);
+    }
+    let (head, args) = app_spine(tm);
+    if !matches!(head, Term::Lam { .. }) {
+        for arg in args {
+            int_to_nats(elab, arg, out);
+        }
+    }
+}
+
+/// An `x.toNat()` a fact reads as an atom, split into its two cases by
+/// `omega::int_to_nat_elim`, as `split_nat_subtraction` splits `a - b`:
+/// `0 <= x` with `OfNat(x.toNat()) = x`, or `x < 0` with `x.toNat() = 0`.
+/// Each branch is `omega` again, so the read stays one Nat atom that the
+/// case ties to the integer `x`. A read a case equation names is settled.
+fn split_int_to_nat(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    if elab.key_of("omega::int_to_nat_elim").is_none() {
+        return Ok(None);
+    }
+    let facts = local_facts(elab, cx);
+    let spelled_reads = |ty: &Type| {
+        let mut found = Vec::new();
+        if let Some((_, left, right)) = integral_sides(elab, cx, ty) {
+            let mut terms = Vec::new();
+            int_to_nats(elab, &left, &mut terms);
+            int_to_nats(elab, &right, &mut terms);
+            found.extend(terms.into_iter().filter_map(|tm| {
+                let args = named_args(elab, tm, "int::Int::toNat")?;
+                Some((nat_term_source(elab, cx, tm).ok()?, int_term_source(elab, cx, args[0]).ok()?))
+            }));
+        }
+        found
+    };
+    let case_equations: Vec<_> = facts
+        .iter()
+        .filter(|(name, _)| name.starts_with(TO_NAT_CASE) && name.ends_with("_eq"))
+        .collect();
+    if case_equations.len() >= SUB_SPLIT_LIMIT {
+        return Ok(None);
+    }
+    let settled: std::collections::HashSet<String> = case_equations
+        .iter()
+        .filter_map(|(_, ty)| spelled_reads(ty).into_iter().next())
+        .map(|(source, _)| source)
+        .collect();
+    let k = case_equations.len();
+    for (_, ty) in facts.iter().rev() {
+        let Some((_, x)) = spelled_reads(ty).into_iter().find(|(source, _)| !settled.contains(source)) else {
+            continue;
+        };
+        let source = format!(
+            "omega::int_to_nat_elim({x}, \
+             {TO_NAT_CASE}{k}_case {TO_NAT_CASE}{k}_eq ⊢ omega, \
+             {TO_NAT_CASE}{k}_case {TO_NAT_CASE}{k}_eq ⊢ omega)",
+        );
+        return Ok(Some(Certificate {
+            atoms: None,
+            guards: None,
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("omega::int_to_nat_elim", 1),
+        }));
+    }
+    Ok(None)
+}
+
 /// The names a Bool-guard round binds (`split_bool_guards`): its parts
 /// (`__omega_guard{k}_{i}`, read in the round, never again), the guards it
 /// leaves for the next round (`__omega_open{k}_{i}`), and the facts it binds
@@ -3343,10 +3424,11 @@ enum GuardShape<'a> {
     And(&'a Rc<Term>, &'a Rc<Term>),
     Or(&'a Rc<Term>, &'a Rc<Term>),
     Not(&'a Rc<Term>),
-    /// `n.leb(m)`, read as `n <= m`.
-    Leb,
-    /// `n.same(m)`, read as `n = m` (`!n.same(m)` as `n ≠ m`).
-    Same,
+    /// `n.leb(m)`, read as `n <= m`, at `Nat` or (`true`) `Int`.
+    Leb(bool),
+    /// `n.same(m)`, read as `n = m` (`!n.same(m)` as `n ≠ m`), at `Nat` or
+    /// (`true`) `Int`.
+    Same(bool),
     /// A variable, a call or a field: the atom `omega::bit(b)`, unless a definition
     /// unfolds it to a connective (`unfold_guard`).
     Atom,
@@ -3365,11 +3447,13 @@ fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
     if let Some(args) = args("bool::Bool::not") && let [x] = args.as_slice() {
         return GuardShape::Not(x);
     }
-    if args("nat::Nat::leb").is_some_and(|args| args.len() == 2) {
-        return GuardShape::Leb;
-    }
-    if args("nat::Nat::same").is_some_and(|args| args.len() == 2) {
-        return GuardShape::Same;
+    for (int, leb, same) in [(false, "nat::Nat::leb", "nat::Nat::same"), (true, "int::Int::leb", "int::Int::same")] {
+        if args(leb).is_some_and(|args| args.len() == 2) {
+            return GuardShape::Leb(int);
+        }
+        if args(same).is_some_and(|args| args.len() == 2) {
+            return GuardShape::Same(int);
+        }
     }
     match app_spine(b).0 {
         Term::GlobalTm { .. } | Term::Var(_) => GuardShape::Atom,
@@ -3382,7 +3466,7 @@ fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
 fn guard_reads_by_structure(elab: &Elaborator, b: &Rc<Term>) -> bool {
     match guard_shape(elab, b) {
         GuardShape::Not(x) => guard_reads_by_structure(elab, x),
-        GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Leb | GuardShape::Same => true,
+        GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Leb(_) | GuardShape::Same(_) => true,
         GuardShape::Atom | GuardShape::Other => false,
     }
 }
@@ -3411,7 +3495,7 @@ fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
             oracle.unfold(&cx.gamma, b, Unfold::Proposition).map(Rc::new).find(|reduct| {
                 matches!(
                     guard_shape(elab, reduct),
-                    GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb | GuardShape::Same
+                    GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb(_) | GuardShape::Same(_)
                 )
             })
         }
@@ -3529,16 +3613,26 @@ impl GuardEmitter<'_> {
                 let body = self.emit(then(vec![Self::item(&x, a, true)], &items), budget);
                 format!("{}({h}, {x} ⊢ {body})", self.rule("omega::guard_not_not"))
             }
-            (positive, GuardShape::Leb) => {
+            (positive, GuardShape::Leb(int)) => {
                 let x = self.name(GUARD_PART);
                 let body = self.emit(items, budget);
-                let rule = if positive { "omega::guard_leb" } else { "omega::guard_not_leb" };
+                let rule = match (int, positive) {
+                    (false, true) => "omega::guard_leb",
+                    (false, false) => "omega::guard_not_leb",
+                    (true, true) => "omega::guard_int_leb",
+                    (true, false) => "omega::guard_int_not_leb",
+                };
                 format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
             }
-            (positive, GuardShape::Same) => {
+            (positive, GuardShape::Same(int)) => {
                 let x = self.name(GUARD_PART);
                 let body = self.emit(items, budget);
-                let rule = if positive { "omega::guard_same" } else { "omega::guard_not_same" };
+                let rule = match (int, positive) {
+                    (false, true) => "omega::guard_same",
+                    (false, false) => "omega::guard_not_same",
+                    (true, true) => "omega::guard_int_same",
+                    (true, false) => "omega::guard_int_not_same",
+                };
                 format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
             }
             (positive, GuardShape::Atom) if unfold_guard(self.elab, self.cx, &item.term).is_none() => {
@@ -3564,7 +3658,8 @@ impl GuardEmitter<'_> {
 /// `¬b.IsTrue()` is taken apart by the `omega::guard_*` rules, `&&` into
 /// both sides, `||` into two branches, `!` by its operand's opposite rule,
 /// `n.leb(m)` into `n <= m` (`!n.leb(m)` into `m < n`), `n.same(m)` into
-/// `n = m` (`!n.same(m)` into `n ≠ m`), and any other Bool into the atom
+/// `n = m` (`!n.same(m)` into `n ≠ m`), at `Nat` and at `Int`, and any
+/// other Bool into the atom
 /// `bit(b)`, `1` or `0`. A guard whose head is a definition is
 /// read at its unfolding, a fact bound beside the original
 /// (`GuardRound::aliases`). Every guard in scope is read in one round, ending
@@ -4125,6 +4220,9 @@ fn refute_spelled(
         // Last, so a goal that closes today closes as it did; and only in the
         // attempt that answers, since its branches read every fact anyway.
         if record_failure && let Some(certificate) = split_nat_subtraction(elab, cx)? {
+            return Ok(certificate);
+        }
+        if record_failure && let Some(certificate) = split_int_to_nat(elab, cx)? {
             return Ok(certificate);
         }
         let local_types = local_facts(elab, cx)

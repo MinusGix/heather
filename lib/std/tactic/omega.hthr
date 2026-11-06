@@ -950,14 +950,27 @@ theorem nat_sub_elim(a, b: Nat,
     }
 }
 
+// An integer's `toNat`, the same way: `0 <= x` with `OfNat(x.toNat()) = x`,
+// or `x < 0` with `x.toNat() = 0`. A `decreases x.toNat()` over an `Int`
+// local is read through it.
+theorem int_to_nat_elim(x: Int,
+    left: OfNat(0) <= x → OfNat(x.toNat()) = x → False,
+    right: x < OfNat(0) → x.toNat() = 0 → False): False
+{
+    match x as λ y => (OfNat(0) <= y → OfNat(y.toNat()) = y → False) → (y < OfNat(0) → y.toNat() = 0 → False) → False {
+        OfNat(_) => λ l _ => l(trivial, refl),
+        NegSucc(n) => λ _ r => r(Int::negsucc_lt_ofnat(n, 0), refl),
+    }(left, right)
+}
+
 // ---------------------------------------------------------------------------
 // Bool guards (issues/omega-reads-bool-guards.md, design §17). A fact
 // `b.IsTrue()` is read by `b`'s structure: each rule takes one connective
 // off a guard proved true (`h: b.IsTrue()`) or proved false
 // (`h: (!b).IsTrue()`) and hands its parts to the rest of the certificate. A
 // comparison bit becomes its relation (`n.leb(m)` is `n <= m`,
-// `n.same(m)` is `n = m`); any other Bool is the atom `bit(b)`,
-// so `r` and `!r` meet as `bit(r) = 1` against `bit(r) = 0`. The guard's
+// `n.same(m)` is `n = m`, at `Nat` and `Int`); any other Bool is the atom
+// `bit(b)`, so `r` and `!r` meet as `bit(r) = 1` against `bit(r) = 0`. The guard's
 // operands are implicit: the checker reads them off `h`'s type.
 
 fn bit(b: Bool) → Nat { match b { False => 0, True => 1 } }
@@ -1002,6 +1015,23 @@ theorem guard_same({n, m: Nat}, h: n.same(m).IsTrue(), k: n = m → False): Fals
 
 theorem guard_not_same({n, m: Nat}, h: (!n.same(m)).IsTrue(), k: n ≠ m → False): False {
     k(λ e => n.same(m).is_true_not(h, Bool::is_true_of_eq(j(e, λ x _ => n.same(x) = True, n.same_self()))))
+}
+
+// The same comparisons at `Int`.
+theorem guard_int_leb({a, b: Int}, h: a.leb(b).IsTrue(), k: a <= b → False): False { k(a.le_of_leb(b, eq_true_of_is_true(a.leb(b), h))) }
+
+theorem guard_int_not_leb({a, b: Int}, h: (!a.leb(b)).IsTrue(), k: b < a → False): False {
+    let not_le = match a.leb(b) as λ x => (!x).IsTrue() → a.leb(b) = x → ¬(a <= b) {
+        False => λ _ e => a.not_le_of_leb(b, e),
+        True => λ g _ _ => g,
+    }(h, refl);
+    k(b.lt_of_not_le(a, not_le))
+}
+
+theorem guard_int_same({a, b: Int}, h: a.same(b).IsTrue(), k: a = b → False): False { k(a.same_sound(b, eq_true_of_is_true(a.same(b), h))) }
+
+theorem guard_int_not_same({a, b: Int}, h: (!a.same(b)).IsTrue(), k: a ≠ b → False): False {
+    k(λ e => a.same(b).is_true_not(h, Bool::is_true_of_eq(j(e, λ c _ => a.same(c) = True, a.same_self()))))
 }
 
 theorem guard_bit({b: Bool}, h: b.IsTrue(), k: bit(b) = 1 → False): False {
