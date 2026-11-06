@@ -38,7 +38,9 @@ use crate::recursion::{SelfRef, surface_self_call};
 use crate::spelling::checked_app;
 use crate::{Alias, Cx, Elaborator, R, embed, err};
 
+mod node;
 mod upto;
+pub(crate) use node::CtorNode;
 pub(crate) use upto::{Free, FriendMode};
 
 fn var(i: u32) -> Rc<Term> {

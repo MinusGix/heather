@@ -73,3 +73,12 @@ theorem symbols_are_methods(n: Nat, a, b: SInt(n), k: Nat):
     And(refl, And(refl, And(refl, And(refl, And(refl, refl)))))
 }
 fn shifted_sum(n, k: Nat, a: SInt(n)) → SInt(n) { (1 << k) + a }
+
+// Truncating division's law, cited at a machine width
+// (issues/bitvec-division-laws.md).
+theorem div_rem_law_i64(a, d: i64, nonzero: d ≠ SInt::zero(),
+        away: ¬(a.toInt() = -OfNat(Nat::pow(2, 63)) ∧ d.toInt() = -OfNat(1))):
+    a.toInt() = (a / d).toInt() * d.toInt() + (a % d).toInt()
+{
+    SInt::div_rem_toInt(63, a, d, nonzero, away)
+}
