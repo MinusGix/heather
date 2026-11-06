@@ -20,6 +20,9 @@
 // - partial correctness by fixpoint induction (`rec_sound`): an invariant the
 //   body keeps, assuming every call it makes answers within it, holds of
 //   every value a call returns;
+// - partial correctness of a loop (`iter_sound`): an invariant on states
+//   each pass keeps, and one on results each pass that stops meets. A
+//   `partial fn` whose self-calls are all tail calls is such a loop;
 // - a bisimilar pending tree returns the same values (`mrec_bisim`), and a
 //   finished computation followed by its continuation returns what the
 //   continuation does (`mrec_bind`);
@@ -308,6 +311,62 @@ theorem CoTree::rec_sound(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Re
     h: Returns(E, CoTree::rec(D, E, body, d), r)): P(d, r)
 {
     CoTree::mrec_safe(D, E, body, P, hb, P(d), r, h.count, CoTree::obs(Events::sum(D, E), body(d)), hb(d), h.at)
+}
+
+// ---------------------------------------------------------------------------
+// Partial correctness of a loop
+
+// A pass's outcome within an invariant `I` on states and `Q` on results.
+fn Step::Within<A, B>(I: A → Type, Q: B → Type, x: Step<A, B>) → Type {
+    match x { Continue(a) => I(a), Break(b) => Q(b) }
+}
+
+// A tree that is one return returns only that value, read through any
+// property.
+theorem Returns::ret<R>(E: Events, v: R, x: R, h: Returns(E, CRet(v), x), P: R → Type, p: P(v)): P(x) {
+    Obs::ret_same(E, CoTree::after(E, h.count, CRet(v)), v, x, CoTree::after_obs_ret(E, h.count, v), h.at, P, p)
+}
+
+// The invariant rule, at the rest of a pass observed as `o`: when every pass
+// from a state within `I` returns within `I` and `Q`, and every return of
+// the rest of this pass does too, every value the loop returns is within
+// `Q`. By induction on the count of silent steps, which each pass spends at
+// least one of.
+theorem CoTree::iter_safe<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), I: A → Type, Q: B → Type,
+    hb: (a: A) → I(a) → (x: Step<A, B>) → Returns(E, body(a), x) → Step::Within(I, Q, x), b: B, n: Nat):
+    (o: Obs<Step<A, B>>(E)) → ((m: Nat) → (x: Step<A, B>) → CoTree::after_obs(E, m, o) = ORet(x) → Step::Within(I, Q, x)) →
+    CoTree::after_obs(E, n, Obs::iter(E, body, o)) = ORet(b) → Q(b)
+{
+    match n {
+        Zero => λ o => match o {
+            ORet(x) => match x {
+                Continue(_) => λ s e => absurd(e),
+                Break(b2) => λ s e => j(e, λ y _ => Obs::RetIs(E, y, Q), s(0, Break(b2), refl)),
+            },
+            OTau(_) => λ s e => absurd(e),
+            OVis(_, _) => λ s e => absurd(e),
+        },
+        Succ(_, ih) => λ o => match o {
+            ORet(x) => match x {
+                Continue(a) => λ s e => ih(CoTree::obs(E, body(a)),
+                    λ m x2 e2 => hb(a, s(0, Continue(a), refl), x2, Returns(m, e2)), e),
+                Break(b2) => λ s e => j(e, λ y _ => Obs::RetIs(E, y, Q), s(0, Break(b2), refl)),
+            },
+            OTau(t) => λ s e => ih(CoTree::obs(E, t), λ m x2 e2 => s(Succ(m), x2, e2), e),
+            OVis(_, _) => λ s e => absurd(e),
+        },
+    }
+}
+
+// Partial correctness of a loop (`while` with no measure, a tail-recursive
+// `partial fn`): if the body, from a state within `I`, returns only
+// `Continue(a2)` with `I(a2)` and `Break(b)` with `Q(b)`, then a loop started
+// within `I` returns only values within `Q`. `rec_sound`'s rule for `iter`.
+theorem CoTree::iter_sound<A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), I: A → Type, Q: B → Type,
+    hb: (a: A) → I(a) → (x: Step<A, B>) → Returns(E, body(a), x) → Step::Within(I, Q, x), a: A, ia: I(a), b: B,
+    h: Returns(E, CoTree::iter(E, body, a), b)): Q(b)
+{
+    CoTree::iter_safe(E, body, I, Q, hb, b, h.count, CoTree::obs(E, body(a)), λ m x e => hb(a, ia, x, Returns(m, e)), h.at)
 }
 
 // ---------------------------------------------------------------------------

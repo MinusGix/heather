@@ -4,7 +4,7 @@ status: open
 labels: [design,termination,coinduction,native]
 area: language
 created: 2026-10-31
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 Item 5, part 2, of the fundamental-improvements memo of 2026-10-31 (Claude Doc, https://claude.ai/artifact/Y2Jo9y9Mgd52QdguvaL43s): a function that may not terminate says `partial`
@@ -66,3 +66,4 @@ formatter is not a customer: its fuel is a termination witness, which
 - 2026-11-03: Round 2 built ([[partial-fn-surface]], closed): `partial fn` and `while` with no measure; docs/partial-functions-design.md §9. The tail case to `CoTree::iter` is [[partial-fn-tail-iter]], which round 3 (partial `runtime fn` loops) wants.
 - 2026-11-04: Round 3's customer half done ([[effectful-loops-without-passes]], closed): `Io::tac`, `Io::sort`, `Io::cat` and `Io::write_all` are `while` loops with no measure, meaning `Io → Partial(Mutated<Io, R>)`, and a `Source`'s `Repeat` has a fuel-free denotation (`native_source_co`). Still left for partial `runtime fn` loops: the setup lowering them (R6) and [[partial-fn-tail-iter]].
 - 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/coitree-design.md`).
+- 2026-11-06: [[partial-fn-tail-iter]] done: a tail-only `partial fn` is `CoTree::iter` of a pass, proved with `CoTree::iter_sound` (docs/partial-functions-design.md §10). Left for partial `runtime fn` loops: the setup lowering them (R6).

@@ -21,10 +21,24 @@
 //! `A → CoTree<B>(E)`; without it `E` is `Events::none()` and the result is
 //! `Partial(B)`.
 //!
-//! Every call goes through `CoTree::rec`, tail calls included: a tail-only
-//! body could be one `CoTree::iter` instead (§4.2's tail case), which is
-//! what a native loop wants, but its proofs need an iteration invariant rule
-//! the library does not have yet (issues/partial-fn-tail-iter.md).
+//! **The tail case** (§4.2, issues/partial-fn-tail-iter.md). When every
+//! self-call is in tail position, no call waits for an answer, and `f` is a
+//! loop: one `CoTree::iter` of a pass over the argument, the shape a native
+//! loop has. The body is then a pass,
+//!
+//! ```text
+//! fn f#body(x: A) → CoTree<Step<A, B>>(E) { body[f(e) := CRet(Continue(e)), leaf v := Break(v)] }
+//! fn f(x: A) → Partial(B) { CoTree::iter(E, λ (x: A) => f#body(x), x) }
+//! ```
+//!
+//! each tail self-call a `Continue` of its argument and each other tail leaf
+//! the same computation with its value wrapped in `Break`: `Pointed::ret(v)`
+//! and `CRet(v)` directly, anything else through `CoTree::map`. A proof
+//! reads it with `CoTree::iter_sound`, an invariant on states the pass keeps.
+//! A body with a bound call (`let r <- f(e);`) goes through `CoTree::rec`
+//! as above, and so does a tail body this walk cannot place (a bind whose
+//! continuation is not a `λ`, a `match` with a written motive), which still
+//! has `rec`'s meaning.
 //!
 //! Nothing here is trusted: each part is an ordinary declaration checked
 //! the ordinary way.
@@ -127,6 +141,21 @@ struct Calls<'a> {
     head: Expr,
     events: Expr,
     found: usize,
+    /// Self-calls bound with `let r <- f(e);`: any makes the body general.
+    bound: usize,
+    /// The tail case's walk (module docs): a tail self-call is `Continue`,
+    /// a tail leaf `Break`. Only run on a body the general walk accepted
+    /// with no bound call.
+    iter: Option<Iter>,
+}
+
+/// What the tail case's walk needs, and whether it met a shape it cannot
+/// place (then the body is lowered the general way).
+struct Iter {
+    /// `CoTree::map<B, Step<A, B>>`, `E`.
+    map: Expr,
+    events: Expr,
+    unplaced: bool,
 }
 
 impl Calls<'_> {
@@ -145,7 +174,45 @@ impl Calls<'_> {
             out.push(self.rewrite(a, false)?);
         }
         self.found += 1;
+        if self.iter.is_some() {
+            let next = call(var("Continue", span), vec![bundle(out, span)], span);
+            return Ok(call(var("CRet", span), vec![next], span));
+        }
         Ok(call(self.head.clone(), vec![self.events.clone(), bundle(out, span)], span))
+    }
+
+    /// A tail leaf of the tail case: the same computation, its value a
+    /// `Break`.
+    fn leaf(&self, e: Expr) -> Expr {
+        let span = e.span;
+        let Some(it) = &self.iter else { return e };
+        match e.kind {
+            ExprKind::App { head, mut args, named, explicit: false, goal_oriented }
+                if named.is_empty()
+                    && args.len() == 1
+                    && matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::POINTED_RET || n == "CRet") =>
+            {
+                let v = args.pop().expect("one argument");
+                let v = call(var("Break", span), vec![v], span);
+                Expr { kind: ExprKind::App { head, args: vec![v], named, explicit: false, goal_oriented }, span }
+            }
+            kind => {
+                let brk = Expr {
+                    kind: ExprKind::Lam {
+                        binders: vec![LamBinder { name: "#v".into(), ty: None, implicit: false, span }],
+                        body: Box::new(call(var("Break", span), vec![var("#v", span)], span)),
+                    },
+                    span,
+                };
+                call(it.map.clone(), vec![it.events.clone(), Expr { kind, span }, brk], span)
+            }
+        }
+    }
+
+    fn unplaced(&mut self) {
+        if let Some(it) = &mut self.iter {
+            it.unplaced = true;
+        }
     }
 
     /// Rewrite every self-call in `e`, which is in tail position when `tail`.
@@ -182,6 +249,7 @@ impl Calls<'_> {
                 let m = args.pop().expect("a bound expression");
                 let m = match m.kind {
                     ExprKind::App { head: h, args: a, named: na, .. } if self.is_self(&h) && na.is_empty() => {
+                        self.bound += 1;
                         self.call_event(a, m.span)?
                     }
                     kind => self.rewrite(Expr { kind, span: m.span }, false)?,
@@ -218,6 +286,9 @@ impl Calls<'_> {
                 Ok(Expr { kind: ExprKind::Block(b), span })
             }
             ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
+                if tail && motive.is_some() {
+                    self.unplaced();
+                }
                 let scrut = Box::new(self.rewrite(*scrut, false)?);
                 let mut out = Vec::with_capacity(arms.len());
                 for mut arm in arms {
@@ -241,6 +312,7 @@ impl Calls<'_> {
                 });
                 match failed {
                     Some(error) => Err(error),
+                    None if tail => Ok(self.leaf(e)),
                     None => Ok(e),
                 }
             }
@@ -254,7 +326,12 @@ impl Calls<'_> {
             ExprKind::Lam { binders, body } => {
                 Ok(Expr { kind: ExprKind::Lam { binders, body: Box::new(self.rewrite(*body, tail)?) }, span })
             }
-            kind => self.rewrite(Expr { kind, span }, false),
+            kind => {
+                if tail {
+                    self.unplaced();
+                }
+                self.rewrite(Expr { kind, span }, false)
+            }
         }
     }
 }
@@ -310,14 +387,34 @@ pub(crate) fn lower(decl: &Decl) -> R<Family> {
         },
         events: events.clone(),
         found: 0,
+        bound: 0,
+        iter: None,
     };
     let whole = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span: decl.body.span };
-    let rewritten = rewriter.rewrite(whole, true)?;
+    let mut rewritten = rewriter.rewrite(whole.clone(), true)?;
     if rewriter.found == 0 {
         return err(
             format!("`{}` never calls itself, so it always returns: write it as a plain `fn`", decl.name),
             spec.span,
         );
+    }
+    // The tail case: no call waits for an answer, so `f` is a loop.
+    let step_ty = named_ty("Step", vec![a.clone(), b.clone()], span);
+    let mut tail_only = false;
+    if rewriter.bound == 0 {
+        rewriter.iter = Some(Iter {
+            map: Expr {
+                kind: ExprKind::TyApp { head: Box::new(var("CoTree::map", span)), args: vec![b.clone(), step_ty.clone()] },
+                span,
+            },
+            events: events.clone(),
+            unplaced: false,
+        });
+        let pass = rewriter.rewrite(whole, true)?;
+        if !rewriter.iter.as_ref().is_some_and(|it| it.unplaced) {
+            rewritten = pass;
+            tail_only = true;
+        }
     }
     let ExprKind::Block(body) = rewritten.kind else { unreachable!("a block rewrites to a block") };
     let mut body = *body;
@@ -342,13 +439,14 @@ pub(crate) fn lower(decl: &Decl) -> R<Family> {
         name: minted.clone(),
         tyvars: decl.tyvars.clone(),
         params: body_params,
-        result: cotree_ty(&b, sum, span),
+        result: if tail_only { cotree_ty(&step_ty, events.clone(), span) } else { cotree_ty(&b, sum, span) },
         decreases: None,
         unfolding: decl.unfolding.clone(),
         body,
         span,
     };
-    // `CoTree::rec(Events::calls(A, B), E, λ (a: A) => f#body(a), ⟨x̄⟩)`.
+    // `CoTree::rec(Events::calls(A, B), E, λ (a: A) => f#body(a), ⟨x̄⟩)`, or
+    // `CoTree::iter(E, λ (a: A) => f#body(a), ⟨x̄⟩)` in the tail case.
     let mut body_head = var(&minted, span);
     if !tyargs.is_empty() {
         body_head = Expr { kind: ExprKind::TyApp { head: Box::new(body_head), args: tyargs.clone() }, span };
@@ -361,7 +459,11 @@ pub(crate) fn lower(decl: &Decl) -> R<Family> {
         span,
     };
     let argument = bundle(names.iter().map(|n| var(n, span)).collect(), span);
-    let rec = call(var("CoTree::rec", span), vec![calls, events, step, argument], span);
+    let rec = if tail_only {
+        call(var("CoTree::iter", span), vec![events, step, argument], span)
+    } else {
+        call(var("CoTree::rec", span), vec![calls, events, step, argument], span)
+    };
     let result = match &spec.events {
         None => of_expr(call(var("Partial", span), vec![ty_lit(&b)], span)),
         Some(e) => cotree_ty(&b, e.clone(), span),

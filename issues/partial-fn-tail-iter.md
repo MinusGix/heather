@@ -1,11 +1,11 @@
 ---
 title: partial fn: lower a tail-only body to CoTree::iter, with an iteration invariant rule
-status: open
+status: closed
 labels: [termination,coinduction,sequencing]
 area: language
 milestone: [lang-sequencing,nh-effects]
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-06
 ---
 
 A `partial fn` whose every self-call is in tail position could be one
@@ -37,3 +37,4 @@ there runs at a literal by `refl` as today.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[partial-fn-use-site-refusal]] (`lib/_tests/std/itree/partial_fn_tests.hthr`).
+- 2026-11-06: Built (thread "Lower tail-recursive partial fns to iteration"); docs/partial-functions-design.md §10. `CoTree::iter_sound` (+ `iter_safe`, `Step::Within`, `Returns::ret`) in coitree_rec.hthr: an induction on the count, with the pass's hypothesis stated on `Returns` of the pass; the Eutt route was not needed. crates/elab/src/partial.rs lowers a body with no bound self-call to `f#body: A → CoTree<Step<A, B>>(E)` (a tail call is `CRet(Continue(e))`, a tail leaf its `Break`) and `f = CoTree::iter(E, f#body, x)`; a body with a bound call stays `rec`. Done-when: `search` lowers to `iter` (`search_is`), `search_returns_big` and `walk_sum` are `iter_sound`, `search_0` is still `refl` (partial_fn_tests.hthr). A tail-only `partial(E) fn` now issues `E`'s commands at `E`; making a body with a bound call spell them the same is [[partial-fn-event-spelling]].
