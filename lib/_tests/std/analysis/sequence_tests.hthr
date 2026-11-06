@@ -1,0 +1,73 @@
+// Probes of `lib/std/analysis/sequence.hthr` and `real_complete.hthr`: the
+// generic limit rules read at `Rat` and at `CReal`, a refutation that keeps
+// `Converges` from being vacuous, the contraction mapping theorem at the
+// reals, and its refusal at the rationals, which are not Cauchy complete.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import list; import relation; import relation_props; import order; import algebra_rel;
+import semiring; import ordered_field; import big_operator; import ring; import omega; import linarith;
+import rat; import creal; import real_fn; import sequence; import real_complete;
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+// `Converges` is not vacuous: the zero sequence does not converge to 1, or
+// its two limits would be the same.
+theorem zero_not_to_one(x: K): ¬(Converges(λ (n: Nat) => K.unit, K.multiplicative.unit)) {
+    λ h => {
+        let s: (K.unit ≈ K.multiplicative.unit) = Converges::unique(λ (n: Nat) => K.unit, K.unit, K.multiplicative.unit, Converges::const(K.unit), h);
+        let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+        let bad: (K.unit < K.unit) = linarith(o, s);
+        K.lt_irrefl(K.unit, bad)
+    }
+}
+
+// Limits compose: `(xₙ + yₙ)·xₙ → (a + b)·a`.
+theorem compose_limits(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Converges(ys, b)):
+    Converges(λ (n: Nat) => (xs(n) + ys(n)) * xs(n), (a + b) * a)
+{
+    Converges::mul(λ (n: Nat) => xs(n) + ys(n), xs, a + b, a, Converges::add(xs, ys, a, b, hx, hy), hx)
+}
+
+// The orbit of a contraction is Cauchy at any ordered field.
+theorem orbit_cauchy(c, d: K, hc: K.unit <= c, h1: c < K.multiplicative.unit, x: K):
+    CauchySeq(λ (n: Nat) => Contraction::orbit(λ (y: K) => c * y + d, x, n))
+{
+    Contraction::cauchy(λ (y: K) => c * y + d, c, Contraction::affine(c, d, hc, h1), x)
+}
+
+}
+
+theorem half_lt_one(): Rat::inv_pow2(1) < 1 { omega }
+
+theorem half_two_fixed(): CReal::ofRat(Rat::inv_pow2(1)) * 2 + 1 ≈ 2 {
+    let h: (CReal::ofRat(Rat::inv_pow2(1)) + CReal::ofRat(Rat::inv_pow2(1)) ≈ CReal::ofRat(Rat::inv_pow2(0))) =
+        CReal::same_trans(CReal::same_sym(CReal::ofRat_add(Rat::inv_pow2(1), Rat::inv_pow2(1))), CReal::ofRat_respects(Rat::inv_pow2_half(0)));
+    let one: (CReal::ofRat(Rat::inv_pow2(0)) ≈ 1) = CReal::ofRat_respects(omega);
+    linarith(h, one)
+}
+
+// At the rationals: an orbit of `x ↦ x/2 + 1` is Cauchy.
+theorem rat_orbit_cauchy(x: Rat): CauchySeq(λ (n: Nat) => Contraction::orbit(λ (y: Rat) => Rat::inv_pow2(1) * y + 1, x, n)) {
+    orbit_cauchy(Rat::inv_pow2(1), 1, Rat::le_of_lt(Rat::inv_pow2_pos(1)), half_lt_one(), x)
+}
+
+// At the reals every orbit converges, to the map's fixed point, which is
+// 2 and no other.
+theorem creal_half_contraction(): Contraction(λ (y: CReal) => CReal::ofRat(Rat::inv_pow2(1)) * y + 1, CReal::ofRat(Rat::inv_pow2(1))) {
+    Contraction::affine(CReal::ofRat(Rat::inv_pow2(1)), 1, CReal::ofRat_le(Rat::le_of_lt(Rat::inv_pow2_pos(1))), CReal::ofRat_lt(half_lt_one()))
+}
+
+theorem creal_fixed_point_is_two(x: CReal): ∃ p: CReal, p ≈ 2 ∧ Converges(λ (n: Nat) => Contraction::orbit(λ (y: CReal) => CReal::ofRat(Rat::inv_pow2(1)) * y + 1, x, n), p) {
+    let h = creal_half_contraction();
+    let fp = Contraction::fixed_point(λ (y: CReal) => CReal::ofRat(Rat::inv_pow2(1)) * y + 1, CReal::ofRat(Rat::inv_pow2(1)), h, x);
+    let two: (CReal::ofRat(Rat::inv_pow2(1)) * 2 + 1 ≈ 2) = half_two_fixed();
+    Exists(fp.witness, And(Contraction::fixed_unique(λ (y: CReal) => CReal::ofRat(Rat::inv_pow2(1)) * y + 1, CReal::ofRat(Rat::inv_pow2(1)), h,
+        fp.witness, 2, fp.proof.left, two), fp.proof.right))
+}
+
+// The rationals have no `CauchyComplete` instance, so the contraction mapping
+// theorem is refused there although the orbit is Cauchy.
+// expect-error: no instance for `CauchyComplete
+theorem rat_fixed_point_refused(x: Rat): ∃ p: Rat, Rat::inv_pow2(1) * p + 1 ≈ p ∧ Converges(λ (n: Nat) => Contraction::orbit(λ (y: Rat) => Rat::inv_pow2(1) * y + 1, x, n), p) {
+    Contraction::fixed_point(λ (y: Rat) => Rat::inv_pow2(1) * y + 1, Rat::inv_pow2(1), Contraction::affine(Rat::inv_pow2(1), 1, Rat::le_of_lt(Rat::inv_pow2_pos(1)), half_lt_one()), x)
+}

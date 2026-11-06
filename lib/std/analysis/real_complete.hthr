@@ -1,0 +1,133 @@
+// `CReal` is Cauchy complete (lib/std/analysis/sequence.hthr's
+// `CauchyComplete`; docs/sequences-and-completeness.md).
+//
+// `CReal::complete` takes sequences at the reals' own rate, `|x_m - x_n| <=
+// 2^-m + 2^-n`. A Cauchy sequence in the generic sense comes with a modulus
+// instead, an index `N(ε)` for each tolerance, and is brought to that rate
+// by reading it at `N(2^-k)`: two such terms `N(2^-m)`, `N(2^-n)` are both
+// past the smaller of the two indices, so within that index's tolerance,
+// which is below `2^-m + 2^-n`. The regular sequence's diagonal limit is the
+// limit of the whole sequence: a term past `N(2^-(k+1))` is within
+// `2^-(k+1)` of the term read there, which is within `2^-(k+1)` of the
+// limit, and `2^-k` is below any positive tolerance for some `k`.
+//
+// Nothing is chosen: the limit is `CReal::lim` of a sequence built from the
+// modulus, and its terms evaluate.
+
+import logic;
+import nat;
+import int;
+import list;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import big_operator;
+import ring;
+import omega;
+import linarith;
+import rat;
+import creal;
+import real_fn;
+import sequence;
+
+// A positive real is above some `2^-k`: above some `1/(k+1)` from its terms
+// on (`pos_gap`), and `2^-k <= 1/(k+1)`.
+theorem CReal::pow2_below({e: CReal}, pe: 0 < e): ∃ k: Nat, CReal::ofRat(Rat::inv_pow2(k)) <= e {
+    let g = CReal::pos_gap(pe);
+    let k = g.witness;
+    let s = g.proof;
+    let below: (CReal::ofRat(Rat::inv_succ(k)) <= e) = CReal::ofRat_le_of_close(Rat::inv_succ(k),
+        λ j => Exists(s.witness, λ n from => {
+            let a: (Rat::inv_succ(k) <= e.at(n)) = s.proof(n, from);
+            let b: (0 < Rat::inv_succ(j)) = Rat::inv_succ_pos(j);
+            let c: (Rat::inv_succ(k) <= e.at(n) + Rat::inv_succ(j)) = linarith(a, b);
+            c
+        }));
+    Exists(k, CReal::le_trans(CReal::ofRat_le(Rat::inv_pow2_le_inv_succ(k)), below))
+}
+
+theorem CReal::ofRat_pow2_pos(k: Nat): 0 < CReal::ofRat(Rat::inv_pow2(k)) {
+    CReal::ofRat_lt(Rat::inv_pow2_pos(k))
+}
+
+// The index past which a Cauchy sequence stays within `2^-k`.
+fn CReal::cauchy_index(xs: Nat → CReal, hc: CauchySeq(xs), k: Nat) → Nat {
+    hc(CReal::ofRat(Rat::inv_pow2(k)), CReal::ofRat_pow2_pos(k)).witness
+}
+
+theorem CReal::cauchy_index_spec(xs: Nat → CReal, hc: CauchySeq(xs), k, m, n: Nat,
+    hm: Nat::Le(CReal::cauchy_index(xs, hc, k), m), hn: Nat::Le(CReal::cauchy_index(xs, hc, k), n)):
+    AbsLe(xs(m) + -xs(n), CReal::ofRat(Rat::inv_pow2(k)))
+{
+    hc(CReal::ofRat(Rat::inv_pow2(k)), CReal::ofRat_pow2_pos(k)).proof(m, n, hm, hn)
+}
+
+// The sequence read at the modulus, at the reals' own rate.
+fn CReal::cauchy_regular_seq(xs: Nat → CReal, hc: CauchySeq(xs)) → Nat → CReal {
+    λ k => xs(CReal::cauchy_index(xs, hc, k))
+}
+
+theorem CReal::cauchy_regular(xs: Nat → CReal, hc: CauchySeq(xs)): CReal::Regular(CReal::cauchy_regular_seq(xs, hc)) {
+    λ m n => {
+        let a = CReal::cauchy_index(xs, hc, m);
+        let b = CReal::cauchy_index(xs, hc, n);
+        let pm: (0 <= CReal::ofRat(Rat::inv_pow2(m))) = CReal::le_of_lt(CReal::ofRat_pow2_pos(m));
+        let pn: (0 <= CReal::ofRat(Rat::inv_pow2(n))) = CReal::le_of_lt(CReal::ofRat_pow2_pos(n));
+        let s: (CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n)) ≈ CReal::ofRat(Rat::inv_pow2(m)) + CReal::ofRat(Rat::inv_pow2(n))) =
+            CReal::ofRat_add(Rat::inv_pow2(m), Rat::inv_pow2(n));
+        match a.le_total(b) {
+            Inl(ab) => {
+                let h: AbsLe(xs(a) + -xs(b), CReal::ofRat(Rat::inv_pow2(m))) = CReal::cauchy_index_spec(xs, hc, m, a, b, a.le_refl(), ab);
+                let hl: (-CReal::ofRat(Rat::inv_pow2(m)) <= xs(a) + -xs(b)) = h.left;
+                let hr: (xs(a) + -xs(b) <= CReal::ofRat(Rat::inv_pow2(m))) = h.right;
+                let lo: (-CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n)) <= xs(a) + -xs(b)) = linarith(hl, pn, s);
+                let hi: (xs(a) + -xs(b) <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = linarith(hr, pn, s);
+                CReal::abs_le(lo, hi)
+            },
+            Inr(ba) => {
+                let h: AbsLe(xs(a) + -xs(b), CReal::ofRat(Rat::inv_pow2(n))) = CReal::cauchy_index_spec(xs, hc, n, a, b, ba, b.le_refl());
+                let hl: (-CReal::ofRat(Rat::inv_pow2(n)) <= xs(a) + -xs(b)) = h.left;
+                let hr: (xs(a) + -xs(b) <= CReal::ofRat(Rat::inv_pow2(n))) = h.right;
+                let lo: (-CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n)) <= xs(a) + -xs(b)) = linarith(hl, pm, s);
+                let hi: (xs(a) + -xs(b) <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = linarith(hr, pm, s);
+                CReal::abs_le(lo, hi)
+            },
+        }
+    }
+}
+
+// Every Cauchy sequence of reals converges, to the diagonal limit of the
+// sequence read at its modulus.
+theorem CReal::cauchy_complete(xs: Nat → CReal, hc: CauchySeq(xs)): ∃ l: CReal, Converges(xs, l) {
+    let ys = CReal::cauchy_regular_seq(xs, hc);
+    let reg = CReal::cauchy_regular(xs, hc);
+    let y = CReal::lim(ys, reg);
+    let lim: CReal::Limit(ys, y) = CReal::lim_converges(ys, reg);
+    Exists(y, λ e pe => {
+        let g = CReal::pow2_below(pe);
+        let k = g.witness;
+        let j = k + 1;
+        let small: (CReal::ofRat(Rat::inv_pow2(k)) <= e) = g.proof;
+        let halves: (CReal::ofRat(Rat::inv_pow2(j)) + CReal::ofRat(Rat::inv_pow2(j)) ≈ CReal::ofRat(Rat::inv_pow2(k))) =
+            CReal::same_trans(CReal::same_sym(CReal::ofRat_add(Rat::inv_pow2(j), Rat::inv_pow2(j))), CReal::ofRat_respects(Rat::inv_pow2_half(k)));
+        let at = CReal::cauchy_index(xs, hc, j);
+        Exists(at, λ n from => {
+            let h: AbsLe(xs(n) + -xs(at), CReal::ofRat(Rat::inv_pow2(j))) = CReal::cauchy_index_spec(xs, hc, j, n, at, from, at.le_refl());
+            let hl: (-CReal::ofRat(Rat::inv_pow2(j)) <= xs(n) + -xs(at)) = h.left;
+            let hr: (xs(n) + -xs(at) <= CReal::ofRat(Rat::inv_pow2(j))) = h.right;
+            let d: ((xs(at) - y).abs() <= CReal::ofRat(Rat::inv_pow2(j))) = lim(j);
+            let u: (xs(at) - y <= (xs(at) - y).abs()) = (xs(at) - y).le_abs();
+            let v: (-(xs(at) - y) <= (xs(at) - y).abs()) = (xs(at) - y).neg_le_abs();
+            let lo: (-e <= xs(n) + -y) = linarith(hl, d, u, v, halves, small);
+            let hi: (xs(n) + -y <= e) = linarith(hr, d, u, v, halves, small);
+            LocatedAddGroup::abs_le_intro(xs(n) + -y, e, lo, hi)
+        })
+    })
+}
+
+instance CauchyComplete<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {
+    cauchy_limit := CReal::cauchy_complete,
+}
