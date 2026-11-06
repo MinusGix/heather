@@ -213,15 +213,22 @@ fn Tm::lower_again(flag: Nat, nexts: List<Nat>, next: Nat, qs: List<Nat>) → Op
         .and_then(λ _ => Some(Lowered(Tm::again_region(flag, nexts, qs), flag, next)))
 }
 
-// Leaving: the value moved to the first of `nexts`, then the flag 1.
-fn Tm::leave_region(l: Lowered, flag, n0: Nat) → StructuredRegion {
-    Compose(l.region, nodes_region([Move(64, n0, l.result), Const(64, flag, 1)]))
+// Leaving: the value moved to the first of `nexts`, then the flag 1, then
+// the value copied to the rest of `nexts`, which nothing reads: a branch's
+// arms both write every one of `nexts`, so the native lowering finds them
+// held in a register wherever the pass ends (`File::meet` keeps only what
+// both arms hold).
+fn Tm::copies(ns: List<Nat>, n0: Nat) → List<Nat> { ns.map(λ _ => n0) }
+
+fn Tm::leave_region(l: Lowered, flag, n0: Nat, rest: List<Nat>) → StructuredRegion {
+    Compose(l.region, nodes_region(Cons(Move(64, n0, l.result), Cons(Const(64, flag, 1), Tm::moves_to(rest, Tm::copies(rest, n0))))))
 }
 
 fn Tm::leave_at(flag: Nat, nexts: List<Nat>, l: Lowered) → Option<Lowered> {
     match nexts {
         Nil => None,
-        Cons(n0, _) => Tm::check_true(flag.differs(n0)).and_then(λ _ => Some(Lowered(Tm::leave_region(l, flag, n0), flag, l.next))),
+        Cons(n0, rest) => Tm::check_true(distinct(Cons(flag, Cons(n0, rest))))
+            .and_then(λ _ => Some(Lowered(Tm::leave_region(l, flag, n0, rest), flag, l.next))),
     }
 }
 
@@ -322,18 +329,26 @@ theorem Tm::lower_leaf_sound(t: Tm, w: World, skip, flag: Nat, nexts: List<Nat>,
             Option::and_then_elim(P, trivial, Tm::lower(t, w, g, ports, next),
                 λ l => t.ty(w, g).check(Word(64)).and_then(λ _ => Tm::leave_at(flag, ns, l)), λ l lowered =>
             Option::and_then_elim(P, trivial, t.ty(w, g).check(Word(64)), λ _ => Tm::leave_at(flag, ns, l), λ e _ =>
-            Option::and_then_elim(P, trivial, Tm::check_true(flag.differs(n0)),
-                λ _ => Some(Lowered(Tm::leave_region(l, flag, n0), flag, l.next)), λ apart _ =>
+            Option::and_then_elim(P, trivial, Tm::check_true(distinct(Cons(flag, Cons(n0, rest)))),
+                λ _ => Some(Lowered(Tm::leave_region(l, flag, n0, rest), flag, l.next)), λ apart _ =>
                 λ call agree values env held below => {
                     let ran = j(lowered, λ r _ => Tm::LowerHolds(t, w, g, ports, next, r), Tm::lower_sound(t, w, g, ports, next))(
                         call, agree, values, env, held, below);
+                    let p1 = Bool::is_true_and(absent(flag, Cons(n0, rest)), distinct(Cons(n0, rest)), apart);
+                    let pf = Bool::is_true_and(flag.differs(n0), absent(flag, rest), p1.left);
+                    let pn = Bool::is_true_and(absent(n0, rest), distinct(rest), p1.right);
                     let mid = l.region.eval(call, values);
                     let moved = Valuation::set(mid, n0, λ wd => mid(wd, l.result));
-                    let after = Valuation::set(moved, flag, λ wd => BitVec::ofNat(1));
-                    let at_flag: (after(64, flag) = BitVec::ofNat(1)) = Valuation::set_here(moved, flag, λ wd => BitVec::ofNat(1), 64);
+                    let flagged = Valuation::set(moved, flag, λ wd => BitVec::ofNat(1));
+                    let copies = Tm::moves_to(rest, Tm::copies(rest, n0));
+                    let after = eval_nodes(copies, flagged);
+                    let at_flag: (after(64, flag) = BitVec::ofNat(1)) = trans(
+                        eval_nodes_frame(copies, flagged, 64, flag, Tm::moves_to_writes(rest, Tm::copies(rest, n0), flag, pf.right)),
+                        Valuation::set_here(moved, flag, λ wd => BitVec::ofNat(1), 64));
                     let at_n0: (after(64, n0) = mid(64, l.result)) = trans(
-                        Valuation::set_other(moved, flag, λ wd => BitVec::ofNat(1), 64, n0, λ same => Nat::differs_ne(flag, n0, apart, sym(same))),
-                        Valuation::set_here(mid, n0, λ wd => mid(wd, l.result), 64));
+                        eval_nodes_frame(copies, flagged, 64, n0, Tm::moves_to_writes(rest, Tm::copies(rest, n0), n0, pn.left)), trans(
+                        Valuation::set_other(moved, flag, λ wd => BitVec::ofNat(1), 64, n0, λ same => Nat::differs_ne(flag, n0, pf.left, sym(same))),
+                        Valuation::set_here(mid, n0, λ wd => mid(wd, l.result), 64)));
                     let value: (mid(64, l.result) = Tm::leaf(t, w, g, env)) =
                         Ty::cast_holds(w.tys, mid, l.result, t.ty(w, g), Word(64), e, t.sem(w, g, env), ran.right.right.right);
                     ⟨ran.left, λ again => trans(
@@ -1142,4 +1157,126 @@ theorem Fun::measured_sound(w0: Ty, wrest: List<Ty>, body: Tm, w: World, h: Ty::
                 values1(64, bnd).toNat(), st0, trans(len0, sym(Fun::ids_len(ws, Succ(bnd)))), start);
             trans(agreed, cong_fn(λ (l: List<BitVec(64)>) => Ty::uncurry(tys, ws, Word(64), h, l), read))
         })))
+}
+
+// ---------------------------------------------------------------------------
+// The default setup's lowering, by the function's shape (design §16.11): a
+// fuel recursion and a measured one are loops, everything else the plain
+// lowering. What a lowering promises depends on the shape too: the plain
+// one, the function's meaning; a loop, any function that satisfies its
+// recursion's equations, which the generator proves for the function
+// itself (`Fun::fuel_sound`, `Fun::measured_sound`).
+
+inductive RtShape {
+    Plain,
+    // `h(fuel: Nat, w0, wrest…) → BitVec(64)`, its body the fuel's `match`.
+    Fuel(w0: Ty, wrest: List<Ty>, zero: Tm, succ: Tm),
+    // `h(w0, wrest…) → BitVec(64)` calling itself: a `decreases` function's
+    // body as written.
+    Measured(w0: Ty, wrest: List<Ty>, body: Tm),
+}
+
+// Whether a term calls the function itself (entry 0).
+fn Tm::calls_self(self t: Tm) → Bool {
+    match t {
+        Let(e, body) => e.calls_self() || body.calls_self(),
+        If(_, yes, no) => yes.calls_self() || no.calls_self(),
+        IfEq(_, yes, no) => yes.calls_self() || no.calls_self(),
+        Call(f, _) => match f { Zero => True, Succ(_) => False },
+        Case(_, zero, succ) => zero.calls_self() || succ.calls_self(),
+        _ => False,
+    }
+}
+
+fn Fun::shape_words(p: Ty, rest: List<Ty>, body: Tm) → RtShape {
+    match p {
+        Count => match rest {
+            Nil => Plain,
+            Cons(w0, wrest) => match body { Case(_, zero, succ) => Fuel(w0, wrest, zero, succ), _ => Plain },
+        },
+        _ => match body.calls_self() { True => Measured(p, rest, body), False => Plain },
+    }
+}
+
+fn Fun::shape(self f: Fun) → RtShape {
+    match f.result.same(Word(64)) {
+        False => Plain,
+        True => match f.params { Nil => Plain, Cons(p, rest) => Fun::shape_words(p, rest, f.body) },
+    }
+}
+
+fn Fun::lower_at(self f: Fun, w: World, s: RtShape) → Option<Function> {
+    match s {
+        Plain => f.lower(w),
+        Fuel(w0, wrest, zero, succ) => Fun::lower_fuel(w0, wrest, zero, succ, w),
+        Measured(w0, wrest, body) => Fun::lower_measured(w0, wrest, body, w),
+    }
+}
+
+// The default setup's lowering.
+fn Fun::lower_any(self f: Fun, w: World) → Option<Function> { f.lower_at(w, f.shape()) }
+
+// What a lowering of the shape promises. A loop's promise is about any `h`
+// that satisfies its equations; the generator gives the function itself.
+fn Fun::HoldsAt(self f: Fun, w: World, s: RtShape, r: Option<Function>) → Type {
+    match s {
+        Plain => f.LowerHolds(w, r),
+        Fuel(w0, wrest, zero, succ) => (h: Nat → Ty::Arrows(w.tys, Cons(w0, wrest), Word(64))) →
+            Fun::FuelZero(Cons(w0, wrest), zero, w, h) → ((n: Nat) → Fun::FuelStep(Cons(w0, wrest), succ, w, h, n)) →
+            Fun::FuelHolds(Cons(w0, wrest), w, h, r),
+        Measured(w0, wrest, body) => (h: Ty::Arrows(w.tys, Cons(w0, wrest), Word(64))) → (m: List<BitVec(64)> → Nat) →
+            Fun::Bounded(Cons(w0, wrest), m) → Fun::Guarded(Cons(w0, wrest), body, w, h, m) → Fun::MeasuredHolds(Cons(w0, wrest), w, h, r),
+    }
+}
+
+fn Fun::Holds(self f: Fun, w: World, r: Option<Function>) → Type { f.HoldsAt(w, f.shape(), r) }
+
+// The default setup's soundness, proved once: the plain lowering's and the
+// two loops'.
+theorem Fun::lower_any_sound(self f: Fun, w: World): f.Holds(w, f.lower_any(w)) {
+    match f.shape() as λ s => f.HoldsAt(w, s, f.lower_at(w, s)) {
+        Plain => f.lower_sound(w),
+        Fuel(w0, wrest, zero, succ) => λ h z st => Fun::fuel_sound(w0, wrest, zero, succ, w, h, z, st),
+        Measured(w0, wrest, body) => λ h m b g => Fun::measured_sound(w0, wrest, body, w, h, m, b, g),
+    }
+}
+
+// What answers like an uncurried meaning on as many words as parameters
+// answers like the meaning (the converse of `Ty::answers_at`).
+theorem Ty::answers_of_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → BitVec(64)) →
+    ((xs: List<BitVec(64)>) → xs.len() = ps.len() → ans(xs) = Ty::uncurry(tys, ps, r, v, xs)) → Ty::Answers(tys, ps, r, v, ans) {
+    match ps {
+        Nil => λ v ans h => h(Nil, refl),
+        Cons(p, rest) => λ v ans h => λ x => Ty::answers_of_uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
+            λ ws len => h(Cons(x, ws), cong_fn(λ (n: Nat) => Succ(n), len))),
+    }
+}
+
+// A fuel loop's code answers like the function, its fuel read off its word
+// as `toNat` (how a count crosses a call).
+theorem Fun::fuel_answers(ws: List<Ty>, w: World, h: Nat → Ty::Arrows(w.tys, ws, Word(64)), r: Option<Function>,
+    lowered: (match r { None => False, Some(_) => True }).IsTrue(), held: Fun::FuelHolds(ws, w, h, r)):
+    (call: Answers()) → Tm::CallsAgree(w, call) →
+    Ty::Answers(w.tys, Cons(Count, ws), Word(64), h, λ xs => (match r { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs)) {
+    match r as λ o => (match o { None => False, Some(_) => True }).IsTrue() → Fun::FuelHolds(ws, w, h, o) →
+        (call: Answers()) → Tm::CallsAgree(w, call) →
+        Ty::Answers(w.tys, Cons(Count, ws), Word(64), h, λ xs => (match o { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs)) {
+        None => λ never _ => false_elim(never),
+        Some(code) => λ _ holds call agree => λ b => Ty::answers_of_uncurry(w.tys, ws, Word(64), h(b.toNat()), λ xs => code.eval(call, Cons(b, xs)),
+            λ xs len => holds(call, agree, b, xs, len)),
+    }(lowered, held)
+}
+
+// A measured loop's code answers like the function.
+theorem Fun::measured_answers(ws: List<Ty>, w: World, h: Ty::Arrows(w.tys, ws, Word(64)), r: Option<Function>,
+    lowered: (match r { None => False, Some(_) => True }).IsTrue(), held: Fun::MeasuredHolds(ws, w, h, r)):
+    (call: Answers()) → Tm::CallsAgree(w, call) →
+    Ty::Answers(w.tys, ws, Word(64), h, λ xs => (match r { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs)) {
+    match r as λ o => (match o { None => False, Some(_) => True }).IsTrue() → Fun::MeasuredHolds(ws, w, h, o) →
+        (call: Answers()) → Tm::CallsAgree(w, call) →
+        Ty::Answers(w.tys, ws, Word(64), h, λ xs => (match o { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs)) {
+        None => λ never _ => false_elim(never),
+        Some(code) => λ _ holds call agree => Ty::answers_of_uncurry(w.tys, ws, Word(64), h, λ xs => code.eval(call, xs),
+            λ xs len => holds(call, agree, xs, len)),
+    }(lowered, held)
 }

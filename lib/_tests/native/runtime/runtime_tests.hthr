@@ -164,9 +164,49 @@ runtime fn is_small(a: BitVec(64)) → Bool { a.unsigned_lt_bit(BitVec::ofNat(8)
 // expect-error: a parameter that is not a 64-bit word
 runtime fn sum_bytes(xs: List<BitVec(8)>, start: BitVec(64)) → BitVec(64) { start }
 
-// `decreases` recursion reads through the generated recursor, which the
-// reflector does not read yet (docs/runtime-fn-setups-design.md §16.3).
-// expect-error: `count_down#rec` is generated (a `decreases` function's recursion)
+// A loop's recursion read as a value, not passed on as the result: the
+// loop lowering has no pass for work after the recursion returns.
+// expect-error: cannot be a runtime fn
+runtime fn after(fuel: Nat, n: BitVec(64)) → BitVec(64) {
+    match fuel { Zero => n, Succ(k) => after(k, n.add(n)).add(n) }
+}
+
+// A `decreases` recursion on a count: only a fuel, the first parameter, is
+// matched as a `Nat`.
+// expect-error: a `match` on a `Nat` that is not the fuel
+runtime fn halve(n: BitVec(64), d: Nat) → BitVec(64) decreases d {
+    match d { Zero => n, Succ(e) => halve(n.add(n), e) }
+    on ?dec1 := Nat::lt_succ_self(e);
+}
+
+// ---------------------------------------------------------------------------
+// Loops (docs/runtime-fn-setups-design.md §16.11): a recursion on a fuel and
+// a `decreases` recursion on a word's `toNat` lower to loops, their
+// instances resting on their equations (`refl` per word for a fuel; the
+// generated `f::ext` and `f::irrel` for a measure), and link as any callee.
+
+runtime fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
+    match fuel {
+        Zero => acc,
+        Succ(k) => match n.eq_bit(BitVec::ofNat(0)) {
+            False => sum_down(k, n.sub(BitVec::ofNat(1)), acc.add(n)),
+            True => acc,
+        },
+    }
+}
+
+// The reflection is #431's hand-written step (`rt_loop_tests`'s
+// `sum_down_succ`), the fuel `Count` and its `match` a `Case`.
+theorem sum_down_rt_is(): sum_down::rt = Fun([Count, Word(64), Word(64)], Word(64), Case(2, Var(0),
+    Let(Lit(Word(64), 0), Let(Prim(Eq(64), [3, 0]),
+        If(0, Var(3), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [5, 0]), Let(Prim(Add(64), [5, 6]), Call(0, [5, 1, 0]))))))))) { refl }
+
+// A count crosses a call held in a word: the program reads its first
+// argument's `toNat`.
+theorem sum_down_runs(r, n, acc: BitVec(64)): program_eval(sum_down::program, 0, [r, n, acc]) = sum_down(r.toNat(), n, acc) {
+    sum_down::agrees(r, n, acc)
+}
+
 runtime fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
     match h: n.eq_bit(BitVec::ofNat(0)) {
         True => acc,
@@ -174,3 +214,13 @@ runtime fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
     }
     on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
 }
+
+theorem count_down_runs(n, acc: BitVec(64)): program_eval(count_down::program, 0, [n, acc]) = count_down(n, acc) { count_down::agrees(n, acc) }
+
+// Both loops called, one with a count computed from a word.
+runtime fn both_loops(n: BitVec(64)) → BitVec(64) { count_down(n, sum_down(n.toNat(), n, BitVec::ofNat(0))) }
+
+theorem both_loops_runs(n: BitVec(64)): program_eval(both_loops::program, 2, [n]) = both_loops(n) { both_loops::agrees(n) }
+
+theorem both_loops_compiled(call: Answers(), agree: Tm::CallsAgree(both_loops::world, call), n: BitVec(64)):
+    both_loops::code.eval(call, [n]) = both_loops(n) { both_loops::compile.agrees(call, agree, n) }

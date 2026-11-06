@@ -271,7 +271,10 @@ inductive Req {
     // can memoise on handles (docs/runtime-fn-setups-design.md §3.2).
     Body(g: GlobalRef),
     // The `match` a handle stands for, with its arms (`MatchInfo`); refused
-    // for anything else, and for a match this host does not present yet.
+    // for anything else, and for a match this host does not present yet. A
+    // recursion on a `Nat` (its eliminator applied to arguments, which
+    // `View` shows as no head) presents as its `Zero` and `Succ` arms, the
+    // `Succ` arm under the predecessor and the recursion's result.
     Arms(h: Handle),
     // A term of the type `goal` stands for, found by the search `:= infer`
     // runs (docs/traits-layer2-design.md, docs/facts-on-demand-design.md):

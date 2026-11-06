@@ -44,7 +44,7 @@ import rt;
 
 // A primitive global: a word operation (by `Op::code`'s number), a `Bool`
 // connective, a literal, an extension, `foldl`, or a byte read or write.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -63,6 +63,16 @@ record CallRes { pos: Nat, method: Nat, call: Handle, value: Option<Nat>, fields
 // in order.
 record IoKnown { world: Nat, methods: List<Nat>, calls: List<CallRes> }
 
+// A recursion the walk is inside (design §16.11): a fuel recursion's `Succ`
+// arm, or a measured function's step (`f::body`). `ih` is the local the
+// recursion is called through, and a call of it is a call of the function
+// itself (entry 0) on `head` (a fuel recursion's predecessor) and then the
+// words: each word parameter's level (`slots`), those the recursion varies
+// (`varied`, in the order the call passes them) replaced by the call's
+// arguments. A measured step's call passes a proof after the words, which
+// nothing reads.
+record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> }
+
 record Known {
     prims: List<PrimEntry>,
     // The program's functions, in order: a `Call`'s index.
@@ -78,7 +88,21 @@ record Known {
     list: Nat,
     // The world of an effectful body; `None` for pure code.
     io: Option<IoKnown>,
+    // `Nat`, a loop's fuel (`Count`).
+    nat: Nat,
+    // The recursion the walk is inside, if any.
+    recursion: Option<SelfCall>,
 }
+
+fn Known::within(self k: Known, sc: SelfCall) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc))
+}
+
+// Whether a local is the recursion's.
+fn Known::is_ih(self k: Known, x: LocalRef) → Bool {
+    match k.recursion { None => False, Some(sc) => x.id.same(sc.ih) }
+}
+
 
 fn Known::prim(ps: List<PrimEntry>, g: Nat) → Option<Prim> {
     match ps { Nil => None, Cons(p, rest) => match p.g.same(g) { True => Some(p.p), False => Known::prim(rest, g) } }
@@ -86,6 +110,12 @@ fn Known::prim(ps: List<PrimEntry>, g: Nat) → Option<Prim> {
 
 fn Known::index(gs: List<Nat>, g: Nat, i: Nat) → Option<Nat> {
     match gs { Nil => None, Cons(x, rest) => match x.same(g) { True => Some(i), False => Known::index(rest, g, Succ(i)) } }
+}
+
+// A call of the recursion: its first `varied` arguments' levels in place of
+// the varied words.
+fn SelfCall::call_args(self sc: SelfCall, ls: List<Nat>) → List<Nat> {
+    sc.head ++ sc.slots.map(λ l => match Known::index(sc.varied, l, 0) { None => l, Some(j) => ls.nth(j).unwrap_or(l) })
 }
 
 fn Known::rec(rs: List<RecEntry>, g: Nat, i: Nat) → Option<Nat> {
@@ -193,7 +223,9 @@ fn Known::is_bytes(self k: Known, h: Handle) → Tac<Bool> {
 
 fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
     view(h).bind(λ v => match v {
-        HGlobal(g, name, args) => match g.id.same(k.bitvec) {
+        HGlobal(g, name, args) => match g.id.same(k.nat) {
+          True => pure(Count),
+          False => match g.id.same(k.bitvec) {
             True => match args {
                 Cons(w, _) => rt_literal(w).bind(λ n => pure(Word(n))),
                 Nil => rt_refuse("`BitVec` without its width"),
@@ -219,6 +251,7 @@ fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
                     },
                 },
             },
+          },
         },
         _ => rt_refuse("a type with no runtime layout under the reflected fragment"),
     })
@@ -509,21 +542,80 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
     }
 }
 
+// A local: a variable bound so far, else refused with why.
+fn rt_local(k: Known, st: RSt, h: Handle, operand: Bool, x: LocalRef, args: List<Handle>) → Tac<Pair<RSt, Tm>> {
+    match args {
+        Nil => match rt_assoc(st.locals, x.id) {
+            Some(l) => pure(st.finish(h, operand, Var(l))),
+            None => match k.is_world(x) {
+                True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
+                False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
+            },
+        },
+        Cons(_, _) => rt_refuse("a local applied to arguments (a function value)"),
+    }
+}
+
+// An arm's λs over the words a `Nat` eliminator's motive generalizes, each
+// read as the variable at its level (the words the match is applied to).
+fn rt_bind_words(fuel: Nat, st: RSt, b: Handle, levels: List<Nat>) → Tac<Pair<RSt, Handle>> {
+    match levels {
+        Nil => pure(Pair(st, b)),
+        Cons(l, rest) => match fuel {
+            Zero => rt_refuse("more words than the reflector's fuel"),
+            Succ(f) => open(b, "w").bind(λ c => rt_accepted("a fuel arm's word", c)).bind(λ o =>
+                rt_bind_words(f, RSt(st.depth, st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, l), st.locals), st.funs), o.body, rest)),
+        },
+    }
+}
+
+fn rt_arm_handle(m: MatchInfo, i: Nat) → Tac<Handle> {
+    match m.arms.nth(i) { None => rt_refuse("a match without its arms"), Some(a) => pure(a.body) }
+}
+
+// A fuel recursion's body (design §16.11): the kernel's `Nat` eliminator on
+// the first parameter, at the top, the words it varies applied. `Case`
+// with the `Zero` arm and the `Succ` arm, whose recursion is a call of the
+// function itself on the predecessor and the words.
+fn rt_fuel_match(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, m: MatchInfo,
+    go: Known → RSt → Handle → Bool → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    match operand {
+        True => rt_refuse("a `match` on a `Nat` used as a value: only a fuel recursion's body is its fuel's `match`"),
+        False => go(k, st, m.scrut, True).bind(λ rc => match RSt::level(rc.snd).same(0) {
+            False => rt_refuse("a `match` on a `Nat` that is not the fuel, the first parameter"),
+            True => RSt::operands(λ s a => go(k, s, a, True), rc.fst, m.args).bind(λ ra => {
+                let st0 = ra.fst;
+                let fresh = RSt(st0.depth, [], st0.memo, st0.handles, st0.locals, st0.funs);
+                rt_arm_handle(m, 0).bind(λ zh => rt_bind_words(f, fresh, zh, ra.snd).bind(λ zb =>
+                go(k, zb.fst, zb.snd, False).bind(λ rz =>
+                rt_arm_handle(m, 1).bind(λ sh => open(sh, "k").bind(λ c1 => rt_accepted("the `Succ` arm", c1)).bind(λ ok =>
+                open(ok.body, "ih").bind(λ c2 => rt_accepted("the recursion", c2)).bind(λ oih => {
+                    let at_k = RSt(Succ(st0.depth), [], st0.memo, st0.handles, Cons(Pair(ok.local.ref.id, st0.depth), st0.locals), rz.fst.funs);
+                    let sc = SelfCall(oih.local.ref.id, [st0.depth], List::range(st0.depth).drop(1), ra.snd);
+                    rt_bind_words(f, at_k, oih.body, ra.snd).bind(λ sb =>
+                    go(k.within(sc), sb.fst, sb.snd, False).bind(λ rs =>
+                    pure(Pair(st0.with_funs(rs.fst.funs),
+                        Case(st0.index(0), RSt::wrap(rz.fst.lets, rz.snd), RSt::wrap(rs.fst.lets, rs.snd))))))
+                }))))))
+            }),
+        }),
+    }
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
         Succ(f) => match (match operand { True => rt_assoc(st.handles, h.id), False => None }) {
             Some(l) => pure(Pair(st, Var(l))),
             None => Tac::bind<Head, Pair<RSt, Tm>>(view(h), λ v => match v {
-                HLocal(x, args) => match args {
-                    Nil => match rt_assoc(st.locals, x.id) {
-                        Some(l) => pure(st.finish(h, operand, Var(l))),
-                        None => match k.is_world(x) {
-                            True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
-                            False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
-                        },
+                HLocal(x, args) => match k.recursion {
+                    Some(sc) => match x.id.same(sc.ih) {
+                        True => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args.take(sc.varied.len())).bind(λ r =>
+                            pure(r.fst.finish(h, operand, Call(0, sc.call_args(r.snd))))),
+                        False => rt_local(k, st, h, operand, x, args),
                     },
-                    Cons(_, _) => rt_refuse("a local applied to arguments (a function value)"),
+                    None => rt_local(k, st, h, operand, x, args),
                 },
                 HGlobal(g, name, args) => match Known::prim(k.prims, g.id) {
                     Some(p) => match p {
@@ -551,6 +643,16 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 Nil => rt_refuse("`zero_extend` without its operand"),
                             }),
                             Nil => rt_refuse("`zero_extend` without its width"),
+                        },
+                        PToNat => match args {
+                            Cons(x, _) => k.ty_of(x).bind(λ t => match t {
+                                Word(w) => match w.same(64) {
+                                    True => rt_go(f, k, st, x, True).bind(λ r => pure(r.fst.finish(h, operand, Prim(ToNat, [RSt::level(r.snd)])))),
+                                    False => rt_refuse("`toNat` of a word that is not 64 bits: a count is held in a 64-bit word"),
+                                },
+                                _ => rt_refuse("`toNat` of something other than a word"),
+                            }),
+                            Nil => rt_refuse("`toNat` without its operand"),
                         },
                         PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
                         PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
@@ -620,15 +722,24 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             rt_arm(m, 1).bind(λ yes_h => rt_arm(m, 0).bind(λ no_h =>
                             rt_go(f, k, RSt(rc.fst.depth, [], rc.fst.memo, rc.fst.handles, rc.fst.locals, rc.fst.funs), yes_h, False).bind(λ ry =>
                             rt_go(f, k, RSt(rc.fst.depth, [], rc.fst.memo, rc.fst.handles, rc.fst.locals, ry.fst.funs), no_h, False).bind(λ rn =>
-                            Pure(rc.fst.with_funs(rn.fst.funs).finish(h, operand, match m.args {
+                            pure(rc.fst.with_funs(rn.fst.funs).finish(h, operand, match m.args {
                                 Nil => If(RSt::level(rc.snd), RSt::wrap(ry.fst.lets, ry.snd), RSt::wrap(rn.fst.lets, rn.snd)),
                                 Cons(_, _) => IfEq(RSt::level(rc.snd), RSt::wrap(ry.fst.lets, ry.snd), RSt::wrap(rn.fst.lets, rn.snd)),
                             }))))))),
+                        Count => rt_fuel_match(f, k, st, h, operand, m, λ k2 s a o => rt_go(f, k2, s, a, o)),
                         _ => rt_refuse("a `match` on something other than a `Bool` (enums are not reflected yet)"),
                     })),
                 HLit(_) => rt_refuse("a `Nat` numeral is not runtime data under the reflected fragment"),
                 HLam(_) => rt_refuse("a function value is not runtime data under the reflected fragment"),
-                _ => rt_refuse("a form the reflected fragment does not have"),
+                // A fuel recursion's `Nat` eliminator applied to the words it
+                // varies, which `View` does not present as a `match`.
+                _ => arms(h).bind(λ c => match c {
+                    Accepted(m) => k.ty_of(m.scrut).bind(λ st_ty => match st_ty {
+                        Count => rt_fuel_match(f, k, st, h, operand, m, λ k2 s a o => rt_go(f, k2, s, a, o)),
+                        _ => rt_refuse("a form the reflected fragment does not have"),
+                    }),
+                    Refused(_) => rt_refuse("a form the reflected fragment does not have"),
+                }),
             }),
         },
     }
@@ -660,6 +771,47 @@ fn rt_reflect_one(fuel: Nat, k: Known, g: Nat) → Tac<Pair<Fun, List<Nat>>> {
     pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))))))
 }
 
+// How many parameters a function type takes.
+fn rt_arity(fuel: Nat, t: Handle) → Tac<Nat> {
+    match fuel {
+        Zero => rt_refuse("more parameters than the reflector's fuel"),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(_) => open(t, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => rt_arity(f, o.body).bind(λ n => pure(Succ(n)))),
+            _ => pure(0),
+        }),
+    }
+}
+
+// The first `n` parameters, as `rt_params` reads them.
+fn rt_params_n(n: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
+    match n {
+        Zero => pure(Pair(Pair(st, tys), b)),
+        Succ(m) => view(b).bind(λ v => match v {
+            HLam(dom) => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
+                rt_params_n(m, k, RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
+                    tys ++ [t], o.body))),
+            _ => rt_refuse("a step with fewer parameters than its function"),
+        }),
+    }
+}
+
+// A function that `decreases` (design §16.11), read from its step `f::body`
+// (`step`): `λ k g x… h => …`, its words `x…`, its recursion `g(y…, p)` a
+// call of the function itself on `y…`. The bound `k` and the proofs are
+// read by nothing.
+fn rt_reflect_measured(fuel: Nat, k: Known, g: Nat, step: Nat) → Tac<Pair<Fun, List<Nat>>> {
+    let n <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c)).bind(λ t => rt_arity(fuel, t));
+    let b <- body(GlobalRef(step)).bind(λ c => rt_accepted("its step's body", c));
+    let o1 <- open(b, "k").bind(λ c => rt_accepted("its step's bound", c));
+    let o2 <- open(o1.body, "g").bind(λ c => rt_accepted("its step's recursion", c));
+    let sc = SelfCall(o2.local.ref.id, [], List::range(n), List::range(n));
+    let p <- rt_params_n(n, k, RSt(0, [], [], [], [], k.funs), [], o2.body);
+    let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
+    let result <- k.ty_of(o3.body);
+    let r <- rt_go(fuel, k.within(sc), p.fst.fst, o3.body, False);
+    pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))
+}
+
 fn rt_reflect_fun(fuel: Nat, k: Known, g: Nat) → Tac<Fun> { rt_reflect_one(fuel, k, g).bind(λ r => pure(r.fst)) }
 
 fn rt_reflect_funs(fuel: Nat, k: Known, gs: List<Nat>) → Tac<List<Fun>> {
@@ -677,7 +829,7 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
      Pair("BitVec::unsigned_lt_bit", PWord(6)), Pair("BitVec::signed_lt_bit", PWord(7)),
      Pair("Bool::and", PConj), Pair("Bool::or", PDisj), Pair("Bool::not", PNeg),
      Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("List::foldl", PFoldl),
-     Pair("List::byte_at", PGet), Pair("List::with_byte", PSet)]
+     Pair("List::byte_at", PGet), Pair("List::with_byte", PSet), Pair("BitVec::toNat", PToNat)]
 }
 
 fn rt_prims(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
@@ -703,7 +855,8 @@ fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<K
     rt_global("BitVec").bind(λ bv =>
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
-    pure(Known(ps, gs, rs, discover, bv, bo, li, None))))))))
+    rt_global("Nat").bind(λ na =>
+    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None)))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }

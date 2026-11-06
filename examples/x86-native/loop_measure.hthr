@@ -1,12 +1,21 @@
 import bitvec;
 import bitvec_nat;
 import nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
 
 // A loop bounded by a measure: `count_down` recurses on `n` itself, its
 // termination by `decreases n.toNat()`, and compiles to a loop of at most
 // `n` passes (examples/x86-native/README.md).
 
-fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+runtime fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
     match h: n.eq_bit(BitVec::ofNat(0)) {
         True => acc,
         False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)),
@@ -14,6 +23,6 @@ fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
     on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
 }
 
-fn triangle(a, b: BitVec(64)) → BitVec(64) {
+runtime fn triangle(a, b: BitVec(64)) → BitVec(64) {
     count_down(a.band(BitVec::ofNat(1023)), b)
 }

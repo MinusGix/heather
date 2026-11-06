@@ -3,12 +3,21 @@ import bitvec_omega;
 import logic;
 import nat;
 import omega;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
 
 // A loop bounded by a measure the function computes first: `climb` stops
 // when `lo` reaches `hi`, its termination by `decreases hi.sub(lo).toNat()`,
 // so its loop's bound is the word `hi.sub(lo)` (examples/x86-native/README.md).
 
-fn climb(lo, hi, acc: BitVec(64)) → BitVec(64) decreases hi.sub(lo).toNat() {
+runtime fn climb(lo, hi, acc: BitVec(64)) → BitVec(64) decreases hi.sub(lo).toNat() {
     match h: lo.unsigned_lt_bit(hi) {
         False => acc.bxor(lo),
         True => climb(lo.add(BitVec::ofNat(1)), hi, acc.add(acc).add(lo)),
@@ -19,6 +28,6 @@ fn climb(lo, hi, acc: BitVec(64)) → BitVec(64) decreases hi.sub(lo).toNat() {
     };
 }
 
-fn climbing(a, b: BitVec(64)) → BitVec(64) {
+runtime fn climbing(a, b: BitVec(64)) → BitVec(64) {
     climb(a.band(BitVec::ofNat(255)), b.band(BitVec::ofNat(1023)), b)
 }

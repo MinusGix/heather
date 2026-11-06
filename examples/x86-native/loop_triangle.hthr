@@ -1,10 +1,19 @@
 import bitvec;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
 
 // A loop that runs out: `sum_down` recurses on its fuel, and `triangle`
 // gives it as many passes as `n`, so the passes run out as `n` reaches
 // zero and the fuel's `Zero` arm answers (examples/x86-native/README.md).
 
-fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
+runtime fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
     match fuel {
         Zero => acc,
         Succ(k) => match n.eq_bit(BitVec::ofNat(0)) {
@@ -14,7 +23,7 @@ fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
     }
 }
 
-fn triangle(a, b: BitVec(64)) → BitVec(64) {
+runtime fn triangle(a, b: BitVec(64)) → BitVec(64) {
     let n = a.band(BitVec::ofNat(1023));
     sum_down(n.toNat(), n, b)
 }

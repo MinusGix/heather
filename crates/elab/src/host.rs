@@ -2244,6 +2244,29 @@ impl Elaborator {
             head = fun;
         }
         spine.reverse();
+        // A `match` on a `Nat` that recurses (a fuel recursion's top match,
+        // docs/runtime-fn-setups-design.md §16.11) is the kernel's `Nat`
+        // eliminator, applied to the words its motive generalizes (`View`
+        // shows that application as `HOther`): `Zero`'s arm is its base as it
+        // is (it takes no payload), `Succ`'s a λ over the predecessor and
+        // then the recursion's result, and the arguments are the words.
+        if let Term::ElimNat { level, motive, base, step, scrut } = head {
+            let (sty, slevel) = self.kernel_type(run, at, scrut).ok_or_else(|| Fault::Ill("its scrutinee has no type".into()))?;
+            let s = run.issue_shared(at, scrut, sty, slevel);
+            let (bty, blevel) = self.kernel_type(run, at, base).ok_or_else(|| Fault::Ill("its `Zero` arm has no type".into()))?;
+            let zero = run.issue(at, Held::Term((**base).clone(), bty, blevel));
+            let inner = Term::Lam { dom_level: level.clone(), cod_level: level.clone(), dom: Rc::clone(motive), body: Rc::clone(step) };
+            let lam = Term::Lam { dom_level: Level::Zero, cod_level: level.clone(), dom: Rc::new(Type::Nat), body: Rc::new(inner) };
+            let (aty, alevel) = self.kernel_type(run, at, &lam)
+                .ok_or_else(|| Fault::Ill("the `Succ` arm does not type as a function of the predecessor and the recursion".into()))?;
+            let succ = run.issue(at, Held::Term(lam, aty, alevel));
+            let mut args = Vec::with_capacity(spine.len());
+            for a in spine {
+                let (aty, alevel) = self.kernel_type(run, at, a).ok_or_else(|| Fault::Ill("an argument has no type".into()))?;
+                args.push(run.issue_shared(at, a, aty, alevel));
+            }
+            return Ok(ArmsView { scrut: s, arms: vec![("Zero".into(), zero), ("Succ".into(), succ)], args });
+        }
         let Term::Case { lhs, rhs, lhs_level, rhs_level, motive_level, case_l, case_r, scrut, .. } = head else {
             return Err(Fault::Ill("it is not a `match`".into()));
         };

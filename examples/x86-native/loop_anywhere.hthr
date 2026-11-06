@@ -1,11 +1,20 @@
 import bitvec;
 import bool;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
 
 // Loops anywhere (examples/x86-native/README.md): each fuelled recursion is
 // its own native function, so a loop may sit under a branch, be followed by
 // more work, run in a called function, or run inside another loop's pass.
 
-fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
+runtime fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
     match fuel {
         Zero => acc,
         Succ(k) => match n.eq_bit(BitVec::ofNat(0)) {
@@ -15,12 +24,12 @@ fn sum_down(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
     }
 }
 
-fn stir(x, y: BitVec(64)) → BitVec(64) {
+runtime fn stir(x, y: BitVec(64)) → BitVec(64) {
     x.add(y).bxor(x.sub(y))
 }
 
 // At most a hundred passes, whatever the words.
-fn settling(fuel: Nat, x, y: BitVec(64)) → BitVec(64) {
+runtime fn settling(fuel: Nat, x, y: BitVec(64)) → BitVec(64) {
     match fuel {
         Zero => x.bxor(y),
         Succ(k) => match x.band(BitVec::ofNat(7)).eq_bit(BitVec::ofNat(0)) {
@@ -31,13 +40,13 @@ fn settling(fuel: Nat, x, y: BitVec(64)) → BitVec(64) {
 }
 
 // A loop in a called function.
-fn triangle(a: BitVec(64)) → BitVec(64) {
+runtime fn triangle(a: BitVec(64)) → BitVec(64) {
     let n = a.band(BitVec::ofNat(255));
     sum_down(n.toNat(), n, BitVec::ofNat(0))
 }
 
 // A loop in a loop's pass: each pass sums a triangle.
-fn nested(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
+runtime fn nested(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
     match fuel {
         Zero => acc,
         Succ(k) => match n.eq_bit(BitVec::ofNat(0)) {
@@ -48,14 +57,14 @@ fn nested(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {
 }
 
 // A function that decides through a connective, called below.
-fn either(a, b: BitVec(64)) → BitVec(64) {
+runtime fn either(a, b: BitVec(64)) → BitVec(64) {
     match a.unsigned_lt_bit(b) || a.eq_bit(BitVec::ofNat(5)) {
         True => a,
         False => b,
     }
 }
 
-fn anywhere(a, b: BitVec(64)) → BitVec(64) {
+runtime fn anywhere(a, b: BitVec(64)) → BitVec(64) {
     let m = a.band(BitVec::ofNat(63));
     match a.unsigned_lt_bit(b) {
         // Under a branch, two loops, each followed by more work.
