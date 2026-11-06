@@ -433,6 +433,9 @@ pub(super) struct CheckNote {
     pub(super) level: Level,
     /// An implicit the argument's type disagreed about, for the message.
     pub(super) clash: Option<crate::application::SlotClash>,
+    /// The head of the checked call, as written, read for the message only
+    /// if it names a `partial fn` (docs/partial-functions-design.md §4.2).
+    pub(super) partial: Option<String>,
 }
 
 /// One written `refl` and the equation it claimed, for the same deferred
