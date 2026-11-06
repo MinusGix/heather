@@ -1443,6 +1443,68 @@ theorem Int::abs_mul(self a, b: Int): (a * b).abs() = a.abs() * b.abs() { Int::c
 theorem Int::abs_neg(self a: Int): (-a).abs() = a.abs() { Int::cong_ofnat(a.natAbs_neg()) }
 
 // ---------------------------------------------------------------------------
+// Sign and magnitude: the integer a sign bit and a count name, which is how a
+// two's-complement word reads (`BitVec::toInt_of_sign`,
+// lib/std/bitvec/bitvec_div.hthr) and how truncating division assembles its
+// quotient and remainder from the magnitudes' Euclidean division.
+
+fn Int::of_sign(negative: Bool, magnitude: Nat) → Int {
+    match negative { False => OfNat(magnitude), True => -OfNat(magnitude) }
+}
+
+theorem Int::natAbs_of_sign(negative: Bool, m: Nat): Int::of_sign(negative, m).natAbs() = m {
+    match negative { False => refl, True => Int::natAbs_neg(OfNat(m)) }
+}
+
+// A smaller count less a larger is the negated difference.
+theorem Int::ofNat_sub_of_le(m, n: Nat, h: m <= n): OfNat(m) - OfNat(n) = -OfNat(n - m) {
+    let k = n - m;
+    let parts: (OfNat(n) = OfNat(k) + OfNat(m)) = Int::cong_ofnat(sym(m.sub_add_cancel(n, h)));
+    calc {
+        OfNat(m) + -OfNat(n)
+            = OfNat(m) + -(OfNat(k) + OfNat(m)) := Int::cong(λ (x: Int) => OfNat(m) + -x, parts),
+            = OfNat(m) + (-OfNat(k) + -OfNat(m)) := Int::cong(λ (x: Int) => OfNat(m) + x, Int::neg_add(OfNat(k), OfNat(m))),
+            = (-OfNat(k) + -OfNat(m)) + OfNat(m) := Int::add_comm(OfNat(m), -OfNat(k) + -OfNat(m)),
+            = -OfNat(k) := Int::add_neg_cancel_l(-OfNat(k), OfNat(m)),
+    }
+}
+
+theorem Int::neg_ofNat_lt_zero(m: Nat, positive: 0 < m): -OfNat(m) < OfNat(0) {
+    match m as λ v => 0 < v → -OfNat(v) < OfNat(0) {
+        Zero => λ bad => false_elim(bad),
+        Succ(j) => λ _ => Int::negsucc_lt_ofnat(j, 0),
+    }(positive)
+}
+
+theorem Int::neg_ofNat_le_zero(m: Nat): -OfNat(m) <= OfNat(0) {
+    match m { Zero => trivial, Succ(j) => Int::le_of_lt(NegSucc(j), OfNat(0), Int::negsucc_lt_ofnat(j, 0)) }
+}
+
+// Truncating division read off the magnitudes' Euclidean division
+// `q·d + r = a`: the quotient is negative when the signs differ, the
+// remainder takes the dividend's sign, and `a = q·d + r` holds signed.
+theorem Int::of_sign_mul_add(sa, sd: Bool, q, d, r, a: Nat, parts: q * d + r = a):
+    Int::of_sign(sa, a) = Int::of_sign(sa.xor(sd), q) * Int::of_sign(sd, d) + Int::of_sign(sa, r)
+{
+    let base: (OfNat(q) * OfNat(d) + OfNat(r) = OfNat(a)) = Int::cong_ofnat(parts);
+    let x = OfNat(q) * OfNat(d);
+    let negated: (-x + -OfNat(r) = -OfNat(a)) = trans(sym(Int::neg_add(x, OfNat(r))), Int::cong(λ (y: Int) => -y, base));
+    match sa {
+        False => match sd {
+            False => sym(base),
+            True => sym(trans(Int::cong(λ (y: Int) => y + OfNat(r),
+                    trans(Int::mul_neg_l(OfNat(q), -OfNat(d)),
+                        trans(Int::cong(λ (y: Int) => -y, Int::mul_neg_r(OfNat(q), OfNat(d))), Int::neg_neg(x)))),
+                base)),
+        },
+        True => match sd {
+            False => sym(trans(Int::cong(λ (y: Int) => y + -OfNat(r), Int::mul_neg_l(OfNat(q), OfNat(d))), negated)),
+            True => sym(trans(Int::cong(λ (y: Int) => y + -OfNat(r), Int::mul_neg_r(OfNat(q), OfNat(d))), negated)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The identity structures (`algebra`), each `algebra_rel`'s at `RelId`. The
 // setoid lives here, before them, so the order structures (`order`,
 // `lattice`) and the ring (`semiring`) over `RelId<Int>` all find this one
