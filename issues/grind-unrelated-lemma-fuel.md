@@ -1,6 +1,6 @@
 ---
 title: Keep grind's proofs closing when a commutative lemma is added beside their hints
-status: open
+status: closed
 labels: [tactics, grind, robustness]
 area: tactics
 milestone: [tac-general]
@@ -52,3 +52,26 @@ report rather than the evaluator's fuel error, and it joins
 
 - **[[grind-scope-size-cost]]** owns a call's cost growing with imports.
   Assumed here: nothing; this is growth with the hint list, measured apart.
+
+## Log
+
+- 2026-11-06: Done, and the cause was not grind's. The failure is the
+  evaluator's native-depth rail, not fuel (the run's largest force used a
+  sixth of its fuel; at a 1000× fuel budget it failed the same way at the
+  same request). The sides do meet after the extra rounds; the run dies
+  reading the result. Any tactic that answers more than about 2,000
+  requests under a `bind` did: `spin(2200).bind(λ e => pure(e))` failed and
+  `spin(1900)` passed. `add_comm` only pushed grind past that (2,699
+  requests; `grind_run` wraps `saturate` in `.bind(λ p => pure(lams(…)))`).
+  Mechanism: a tier-2 `match` reads a function child through the alias
+  `k := λy. ⟨f' y, c y⟩`, so the proof of an inner run's `n`-th tree is the
+  `(n-1)`-th's applied, a chain the host's `pin` never touches (it pins the
+  outermost tree only, [[tactic-run-continuation-chain]]), forced whole by the
+  final `Pure`'s `J`: 2,047 nested `app@(x2; x0)` re-entries. Fixed in the
+  evaluator: an elimination whose head is a variable bound to a closure waits
+  on the heap frame stack (`Eval::await_bound`) instead of re-entering
+  `drive`, docs/native-depth-budget-design.md §9. The probe closes and joined
+  `grind_mutation_tests`; `long_runs` (crates/elab/tests/tactic_host.rs) runs
+  3,000 requests under a bind; `a_chain_through_variable_heads_needs_no_native_depth`
+  (eval_differential.rs) pins the kernel side. Found with temporary request,
+  force-depth and drive-stack tracing in the host and evaluator (not kept).

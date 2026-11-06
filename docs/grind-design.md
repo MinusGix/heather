@@ -447,9 +447,15 @@ survives renamings and reorderings, as a stand-in for a project evolving.
 grind is deterministic, but it visits nodes in order under per-round
 budgets, so the same question applies: `grind_mutation_tests` re-proves
 goals of `grind_tests` with their lemmas reversed or beside lemmas they do
-not need. All close except one: `neg_add_succ` with `Int::add_comm` added
-runs out of evaluation fuel, on master too
-([grind-unrelated-lemma-fuel](../issues/grind-unrelated-lemma-fuel.md)).
+not need. All close. The last to, `neg_add_succ` with `Int::add_comm`
+added, failed with "ran out of fuel or nesting depth" until 2026-11-06. It
+was depth, and not grind's: the extra lemma takes the run past about 2,000
+host requests, and any run that long under a `bind` died reading its result
+(docs/native-depth-budget-design.md §9,
+[grind-unrelated-lemma-fuel](../issues/grind-unrelated-lemma-fuel.md)).
+A grind call's request count is still a cost worth watching (each round's
+matching and closing is split into one evaluation per `settled` piece), but
+no longer a cliff.
 
 ## 10. The library sweep (2026-11-02)
 

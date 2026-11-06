@@ -422,13 +422,22 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// where its depth is the syntax's and the rewriter's own — *except* when
     /// a value nests scrutinees, which is why each re-entry is counted
     /// against [`NATIVE_DEPTH_LIMIT`] (docs/native-depth-budget-design.md).
+    /// A head that is a bound variable, the commonest way a value nests, is
+    /// the exception's exception: it is forced on this loop with the
+    /// elimination waiting on the heap ([`Eval::await_bound`], §9).
     fn drive(&mut self, start: Work<'v>) -> Res<&'v Val<'v>> {
+        let floor = self.frames.len();
+        self.drive_above(start, floor)
+    }
+
+    /// [`Eval::drive`] with the frames above `floor` already its own.
+    fn drive_above(&mut self, start: Work<'v>, floor: usize) -> Res<&'v Val<'v>> {
         if self.depth >= NATIVE_DEPTH_LIMIT {
+            self.frames.truncate(floor);
             return Err(OutOfFuel);
         }
         self.depth += 1;
         self.drives += 1;
-        let floor = self.frames.len();
         let out = self.drive_from(start, floor);
         self.depth -= 1;
         // An error unwinds whatever this drive had pending; a thunk that
@@ -1224,8 +1233,18 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// `Rc` just to start the machine cost 1.3× on `nat/check-numeral`, whose
     /// every conversion is one `Nat ≈ Nat`.
     pub fn eval_tm_ref(&mut self, t: &Term, env: &Env<'v>) -> Res<&'v Val<'v>> {
-        let w = self.step_eval(t, env)?;
-        self.drive(w)
+        // The first step may leave its elimination waiting on the frame
+        // stack ([`Eval::await_bound`]), so the drive's floor is taken
+        // before it.
+        let floor = self.frames.len();
+        let w = match self.step_eval(t, env) {
+            Ok(w) => w,
+            Err(e) => {
+                self.frames.truncate(floor);
+                return Err(e);
+            }
+        };
+        self.drive_above(w, floor)
     }
 
     /// The pair a projection eliminates. When it is an application of a
@@ -1284,6 +1303,9 @@ impl<'a, 'v> Eval<'a, 'v> {
             | Term::UApp { fun, .. }
             | Term::CtxApp { fun, .. }
             | Term::TyApp { fun, .. } => {
+                if let Some(w) = self.await_bound(fun, t, env) {
+                    return Ok(w);
+                }
                 let f = self.eval_tm(fun, env)?;
                 return Ok(Work::Elim(f, self.elim_of(t, env)));
             }
@@ -1291,6 +1313,9 @@ impl<'a, 'v> Eval<'a, 'v> {
             | Term::Snd { pair, .. }
             | Term::FstAt { pair }
             | Term::SndAt { pair } => {
+                if let Some(w) = self.await_bound(pair, t, env) {
+                    return Ok(w);
+                }
                 let p = self.eval_projected(pair, env)?;
                 return Ok(Work::Elim(p, self.elim_of(t, env)));
             }
@@ -1306,10 +1331,16 @@ impl<'a, 'v> Eval<'a, 'v> {
             | Term::LetBoxTy { scrut, .. }
             | Term::LetBoxTm { scrut, .. }
             | Term::ElimCodeTy { scrut, .. } => {
+                if let Some(w) = self.await_bound(scrut, t, env) {
+                    return Ok(w);
+                }
                 let s = self.eval_tm(scrut, env)?;
                 return Ok(Work::Elim(s, self.elim_of(t, env)));
             }
             Term::J { proof, .. } => {
+                if let Some(w) = self.await_bound(proof, t, env) {
+                    return Ok(w);
+                }
                 let p = self.eval_tm(proof, env)?;
                 return Ok(Work::Elim(p, self.elim_of(t, env)));
             }
@@ -1318,6 +1349,31 @@ impl<'a, 'v> Eval<'a, 'v> {
             _ => return self.step_intro(t, env),
         };
         Ok(Work::Val(self.arena.val(v)))
+    }
+
+    /// An elimination `t` whose head (an application's function, a
+    /// projection's pair, a scrutinee, `J`'s proof) is a variable bound to a
+    /// closure: the head is forced on this machine's own loop, with the
+    /// elimination waiting for it in a [`Frame::Owned`], instead of by a
+    /// nested [`Eval::drive`].
+    ///
+    /// A chain of such heads is a chain in the *value*, not the syntax: each
+    /// variable stands for a thunk whose body eliminates the next one
+    /// (docs/native-depth-budget-design.md §1). The commonest is a tier-2
+    /// value's proof read through a run of `match` aliases, `c y` with `c`
+    /// the previous alias's `c y` (docs/inductive-tier2-w-lowering.md §7),
+    /// one link per request a tactic answers under a `bind`
+    /// (issues/grind-unrelated-lemma-fuel.md). Forced natively, every link
+    /// re-entered `drive` and the chain was capped at `NATIVE_DEPTH_LIMIT`
+    /// links; waiting on the heap, its depth is the frame stack's. A head
+    /// that is any other term still recurses natively, where its depth is
+    /// the syntax's.
+    fn await_bound(&mut self, head: &Rc<Term>, t: &Term, env: &Env<'v>) -> Option<Work<'v>> {
+        let Term::Var(x) = &**head else { return None };
+        let Lookup::Bound(c) = env.lookup(x.0) else { return None };
+        let e = self.elim_of(t, env);
+        self.frames.push(Frame::Owned(e));
+        Some(Work::Force(c))
     }
 
     /// [`Eval::step_eval`] at a former that is not an elimination.
