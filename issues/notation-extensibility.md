@@ -4,7 +4,7 @@ status: open
 labels: [frontend, syntax, design]
 area: language
 created: 2026-07-24
-updated: 2026-10-27
+updated: 2026-11-06
 ---
 
 [[surface-syntax]] states the position as "a **fixed grammar** of common
@@ -357,3 +357,4 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   `∑ n < N, MonoidRel::antidiag(+, n, λ i k => a(i) * b(k))` checks at
   `Rat`, `Nat` and an open semiring with no binder annotations.
 - 2026-11-05: gardener: cites a file it shares with [[integer-operator-symbols]] (`crates/syntax/src/lexer.rs`); [[self-hosted-lexer]] (`crates/syntax/src/lexer.rs`).
+- 2026-11-06: Six more curated symbols via [[integer-operator-symbols]]: `/ % << >> & |`, on the same lexer/binding-power/op-symbol/designation recipe. New wrinkle for any extension mechanism to absorb: `>>` is the first token whose lexing depends on what precedes it (a shift only after a space, `(` or `,`, so `List<List<A>>` keeps two closers), and the tree-sitter grammar needed an external scanner for it.

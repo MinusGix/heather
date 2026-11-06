@@ -1271,6 +1271,13 @@ designation + at BitVec(n) := BitVec::add
 designation - at BitVec(n) := BitVec::sub
 designation * at BitVec(n) := BitVec::mul
 designation prefix - at BitVec(n) := BitVec::neg
+// Bits and shifts, read as Rust reads them at `u8`: `>>` is the zero-filling
+// shift, and a shift's count is a `Nat` (issues/integer-operator-symbols.md).
+// Division and remainder are `bitvec_div`'s.
+designation & at BitVec(n) := BitVec::band
+designation | at BitVec(n) := BitVec::bor
+designation << at BitVec(n) := BitVec::shift_left
+designation >> at BitVec(n) := BitVec::shift_right
 instance(n: Nat) Numeral<BitVec(n)> { ofNat := λ (k: Nat) => BitVec::ofNat(k) }
 
 theorem BitVec::decrement_increment_step(n: Nat, b: Bool, x: BitVec(n),

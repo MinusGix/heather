@@ -10,7 +10,8 @@ use heather_syntax::{Expr, ExprKind, OpFixity, Span};
 
 use super::Carrier;
 use crate::surface::{
-    expression_left_leaf_is_numeral, expression_needs_numeral_carrier, operator_carrier_leaf,
+    expression_left_leaf_is_numeral, expression_needs_numeral_carrier, is_shift,
+    operator_carrier_leaf,
 };
 use crate::{Cx, Elaborator, OperatorFallbackUse, R, err, traits};
 
@@ -133,7 +134,10 @@ impl Elaborator {
             } else {
                 None
             };
-            let sibling_for_numeral = if flexible_left && expected_for_numeral.is_none() {
+            let sibling_for_numeral = if flexible_left
+                && expected_for_numeral.is_none()
+                && !is_shift(sym)
+            {
                 args.iter()
                     .skip(1)
                     .filter(|arg| !expression_needs_numeral_carrier(arg, |leaf| {

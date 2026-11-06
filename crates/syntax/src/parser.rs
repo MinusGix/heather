@@ -704,6 +704,17 @@ impl Parser {
         //
         // Cheap and precise: no scanning, no guessing which `<`, just the
         // reading that a stray `>` can have.
+        if matches!(self.peek(), TokKind::Gt)
+            && !matches!(kind, TokKind::Gt)
+            && matches!(self.nth(1), TokKind::Gt)
+            && self.tight(self.pos + 1)
+        {
+            return self.err(format!(
+                "expected {what}, found `>>` written tight against what precedes it, which \
+                 reads as two closers of type-argument lists. A right shift is written with \
+                 a space before it: `a >> b`, not `a>>b`"
+            ));
+        }
         if matches!(self.peek(), TokKind::Gt) && !matches!(kind, TokKind::Gt) {
             return self.err(format!(
                 "expected {what}, found `>` — `>` is not an operator and only ever closes a \
@@ -814,7 +825,8 @@ impl Parser {
                 msg: format!(
                     "`{name} as …` installs an operator SYMBOL as this binder's body \
                      spelling, and `as` can only install one that already lexes: the \
-                     curated table is `+`, `++`, `*`, `^`, `&&`, `||`, `∙`, `⊔`, `≈`, `<=`, `<` \
+                     curated table is `+`, `-`, `++`, `*`, `/`, `%`, `^`, `&`, `|`, `<<`, \
+                     `>>`, `&&`, `||`, `∙`, `⊔`, `⊓`, `≈`, `<=`, `<` \
                      (issues/notation-extensibility.md owns the lexicon)"
                 ),
                 span: asp.join(self.peek_span()),
@@ -4932,13 +4944,24 @@ impl Parser {
     /// statements want the arithmetic reading: `x && True = x` is
     /// `(x && True) = x`, exactly as `x + A.unit = x` already relies on
     /// (issues/bool-operator-designations.md).
+    ///
+    /// The bitwise and shift rungs (issues/integer-operator-symbols.md) sit
+    /// between `&&` and `+` in Rust's order: `|` loosest, then `&`, then
+    /// `<<`/`>>`, so `a & b << 1` is `a & (b << 1)` and `x + y << 2` is
+    /// `(x + y) << 2`. Rust's C-inherited trap does not exist here, since the
+    /// comparison rung is below all of them: `a & m = 0` is `(a & m) = 0`.
+    /// `/` and `%` share `*`'s rung, left-associative.
     fn infix_op(tok: &TokKind) -> Option<(&'static str, u8, u8)> {
         match tok {
             TokKind::PipePipe => Some(("||", 1, 2)),
             TokKind::AmpAmp => Some(("&&", 3, 4)),
-            TokKind::Plus => Some(("+", 5, 6)),
-            TokKind::Minus => Some(("-", 5, 6)),
-            TokKind::Join => Some(("⊔", 5, 6)),
+            TokKind::Pipe => Some(("|", 5, 6)),
+            TokKind::Amp => Some(("&", 7, 8)),
+            TokKind::Shl => Some(("<<", 9, 10)),
+            TokKind::Shr => Some((">>", 9, 10)),
+            TokKind::Plus => Some(("+", 11, 12)),
+            TokKind::Minus => Some(("-", 11, 12)),
+            TokKind::Join => Some(("⊔", 11, 12)),
             // `++` is RIGHT-associative (`left_bp > right_bp`), unlike its
             // rung-mates: fixity is proof-relevant here. `a ++ (b ++ c)` is
             // the shape `append`'s recursion unfolds against and the shape
@@ -4946,18 +4969,20 @@ impl Parser {
             // `a` twice and meets no lemma head-on. `::`-style list notation,
             // when it lands, is right-associative by necessity, so the list
             // family reads uniformly (docs/showcase/README.md, friction 2).
-            TokKind::PlusPlus => Some(("++", 6, 5)),
-            TokKind::Star => Some(("*", 7, 8)),
+            TokKind::PlusPlus => Some(("++", 12, 11)),
+            TokKind::Star => Some(("*", 13, 14)),
+            TokKind::Slash => Some(("/", 13, 14)),
+            TokKind::Percent => Some(("%", 13, 14)),
             // `∙` sits on the multiplicative rung, which is where
             // issues/notation-extensibility.md's precedence-by-class scheme
             // puts a dot-shaped operator (`× ⊗ ∘ ∩`). Nothing in the library
             // mixes it with `+` — it is the *generic* operation, so a file that
             // writes it has one — but a rung had to be chosen and this is the
             // one its shape asks for.
-            TokKind::Bullet => Some(("∙", 7, 8)),
+            TokKind::Bullet => Some(("∙", 13, 14)),
             // `⊓` binds tighter than `⊔`, as `*` does `+`: the lattice's
             // two operations read like the semiring's.
-            TokKind::Meet => Some(("⊓", 7, 8)),
+            TokKind::Meet => Some(("⊓", 13, 14)),
             _ => None,
         }
     }
@@ -4973,6 +4998,12 @@ impl Parser {
             TokKind::Minus => Some("-"),
             TokKind::PlusPlus => Some("++"),
             TokKind::Star => Some("*"),
+            TokKind::Slash => Some("/"),
+            TokKind::Percent => Some("%"),
+            TokKind::Amp => Some("&"),
+            TokKind::Pipe => Some("|"),
+            TokKind::Shl => Some("<<"),
+            TokKind::Shr => Some(">>"),
             TokKind::Caret => Some("^"),
             TokKind::AmpAmp => Some("&&"),
             TokKind::PipePipe => Some("||"),
@@ -5014,6 +5045,12 @@ impl Parser {
         let mut lhs = self.prefix()?;
         while let Some((sym, l_bp, r_bp)) = Self::infix_op(self.peek()) {
             if l_bp < min_bp {
+                break;
+            }
+            // `⟨a |⟩`: a `|` against the closing `⟩` marks the left
+            // injection ([`Self::anonymous_constructor_expr`]), and is no
+            // bitwise or with a missing operand.
+            if matches!(self.peek(), TokKind::Pipe) && matches!(self.nth(1), TokKind::RAngle) {
                 break;
             }
             self.bump();
@@ -7189,6 +7226,76 @@ mod tests {
         assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "⊓"));
     }
 
+    // -- integer operator symbols (issues/integer-operator-symbols.md) ----
+
+    #[test]
+    fn integer_operators_take_rusts_rungs() {
+        // `/` and `%` share `*`'s rung, left-associative.
+        let k = body("a / b % c * d");
+        let (mul, operands, _) = as_call(&k);
+        assert_eq!(mul, "*");
+        let (rem, operands, _) = as_call(&operands[0].kind);
+        assert_eq!(rem, "%");
+        assert_eq!(as_call(&operands[0].kind).0, "/");
+        // `|` below `&` below the shifts below `+`, all above `&&`.
+        let k = body("a | b & c << d + e && f");
+        let (and, operands, _) = as_call(&k);
+        assert_eq!(and, "&&");
+        let (or, operands, _) = as_call(&operands[0].kind);
+        assert_eq!(or, "|");
+        let (band, operands, _) = as_call(&operands[1].kind);
+        assert_eq!(band, "&");
+        let (shl, operands, _) = as_call(&operands[1].kind);
+        assert_eq!(shl, "<<");
+        assert_eq!(as_call(&operands[1].kind).0, "+");
+        // And above the comparison rung: `a & m = 0` is `(a & m) = 0`.
+        let ExprKind::Eq(lhs, _) = body("a & m = 0") else { panic!("not an equation") };
+        assert_eq!(as_call(&lhs.kind).0, "&");
+    }
+
+    #[test]
+    fn a_spaced_double_gt_shifts_and_a_tight_one_closes_two_lists() {
+        let k = body("a >> b >> c");
+        let (shr, operands, _) = as_call(&k);
+        assert_eq!(shr, ">>");
+        assert_eq!(as_call(&operands[0].kind).0, ">>");
+        // Nested type arguments are unchanged.
+        let src = "fn f(x: List<List<Nat>>) -> List<List<Nat>> { id<List<List<Nat>>>(x) }";
+        parse_file(src).unwrap();
+        // `a>>b` is two closers, and the refusal says how to write the shift.
+        let src = "fn f(n: Nat) -> Nat { n>>1 }";
+        let e = parse_file(src).unwrap_err();
+        assert!(e.msg.contains("`a >> b`"), "{}", e.msg);
+        // After `(` or `,` the bare symbol is a designation reference.
+        let k = body("f(>>, <<)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol { symbol, .. } if symbol == ">>"));
+        assert!(matches!(&args[1].kind, ExprKind::OpSymbol { symbol, .. } if symbol == "<<"));
+    }
+
+    #[test]
+    fn integer_operators_designate_and_keep_their_neighbours() {
+        let src = "designation >> at SInt(n) := SInt::shift_right\n\
+                   designation << at SInt(n) := SInt::shift_left\n\
+                   designation / at Nat := Nat::div\n\
+                   designation | at Nat := Nat::bor\n";
+        let file = parse_file(src).unwrap();
+        let symbols: Vec<_> = file
+            .items
+            .iter()
+            .map(|it| match it {
+                Item::Designation(d) => d.symbol.as_str(),
+                _ => panic!("not a designation"),
+            })
+            .collect();
+        assert_eq!(symbols, [">>", "<<", "/", "|"]);
+        // `//` is still a comment, and `⟨a |⟩` still the left injection.
+        assert!(matches!(body("a // b\n"), ExprKind::Var(ref n) if n == "a"));
+        let ExprKind::App { head, args, .. } = body("⟨a | b |⟩") else { panic!("not a call") };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == ANON_CTOR_LEFT));
+        assert_eq!(as_call(&args[0].kind).0, "|");
+    }
+
     // -- binder symbols (issues/binder-symbol-as-notation.md) --------------
 
     #[test]
@@ -7612,13 +7719,12 @@ mod tests {
     }
 
     #[test]
-    fn bare_single_amp_and_pipe_stay_lex_errors() {
-        // The single characters are deliberately unclaimed (`|` is reserved
-        // against a future or-pattern); only the doubled spellings lex.
-        for src in ["fn f() -> Bool { a & b }", "fn f() -> Bool { a | b }"] {
-            let e = parse_file(src).unwrap_err();
-            assert!(e.msg.contains("unexpected character"), "{src}: {}", e.msg);
-        }
+    fn a_bare_pipe_in_a_pattern_stays_unclaimed() {
+        // `&` and `|` are the bitwise operators in an *expression*
+        // (issues/integer-operator-symbols.md); in a pattern `|` is still
+        // reserved against a future or-pattern, as Rust has both.
+        let e = parse_file("fn f(n: Nat) -> Nat { match n { Zero | Succ(_) => 0 } }").unwrap_err();
+        assert!(e.msg.contains("Pipe"), "{}", e.msg);
     }
 
     // -- the comparison level (issues/comparison-operators.md) --------------

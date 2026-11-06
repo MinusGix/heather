@@ -114,8 +114,10 @@ Goal discharges occur after the block's result expression. In a `split`,
 
 ```text
 prefix:        -  ¬
-multiplicative: *  ∙  ⊓
+multiplicative: *  /  %  ∙  ⊓
 additive:      +  -  ++  ⊔
+shift:         <<  >>
+bitwise:       &  |
 boolean:       &&  ||
 comparison:    <  <=  =  ≠
 relation:      ≈
@@ -128,3 +130,5 @@ qualification: ::
 
 `==` is deliberately rejected; equality is `=`. There is no `!=` alias for
 `≠`, and `>`/`>=` are not comparison operators. Comments start with `//`.
+A right shift is written with a space before it, `a >> b`: a tight `>>`
+closes two type-argument lists (`List<List<A>>`).
