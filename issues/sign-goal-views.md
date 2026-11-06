@@ -1,6 +1,6 @@
 ---
 title: Read a written 0 < e through the one-place sign predicates
-status: open
+status: closed
 labels: [proofs,solver,arithmetic]
 area: tactics
 milestone: [tac-arith]
@@ -26,3 +26,7 @@ no-rule: the converse of the unfolding step that turns `x.PowOk(n)` into
 `x.Apart(0)` (docs/inverse-power-notation-design.md §4). A view is
 Paterson-free because it is a conversion, not a rule. `Nat`'s rules are
 about `Nat::Lt` directly, so this is the fields' gap.
+
+## Log
+
+- 2026-11-06: Done without a view mechanism: the rules `lt_of_positive`, `lt_of_negative`, `le_of_nonneg` (from the one-place predicate to the written relation) pass Paterson's condition in that direction, so `positivity` at `0 < a / b` and `h: 0 < e := infer` reach the sign rules (probes in rat_tests).

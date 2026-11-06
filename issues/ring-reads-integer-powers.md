@@ -1,6 +1,6 @@
 ---
 title: Read x ^ n at a literal exponent in ring and nlinarith
-status: open
+status: closed
 labels: [proofs,solver,arithmetic]
 area: tactics
 milestone: [tac-arith]
@@ -24,3 +24,7 @@ miss it. Wanted: at a literal `OfNat(k)` exponent, read `x ^ OfNat(k)` as
 `npow` is `1 * x * … * x`), and at a negative literal as the power of
 `x⁻¹` with its reciprocal fact. `nlinarith`'s squares
 (`FieldReading::squares`) should then record `x ^ 2`'s base.
+
+## Log
+
+- 2026-11-06: Done: `Reifier::literal_power` reads `x ^ k` at a literal exponent (up to 16) as `1 * x * … * x`, and at a negative literal as the power of `x⁻¹` at the power's proof; `nlinarith` sees `x ^ 2` as a square (probes in ring_field_tests and linarith_tests).

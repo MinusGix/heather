@@ -2340,6 +2340,26 @@ evidence theorem Rat::nonneg_sq({x: Rat}, {h: x.PowOk(2)}): x.pow(2, h := h).Non
 
 evidence theorem Rat::nonneg_abs({x: Rat}): x.abs().NonNeg() { x.abs_nonneg() }
 
+// A written sign goal is the one-place predicate's: `0 < e` is
+// `e.Positive()`, so `positivity` and `h: 0 < e := infer` reach the sign
+// rules. These pass Paterson's condition in this direction (the premise has
+// fewer symbols), which the converse did not.
+evidence theorem Rat::lt_of_positive({x: Rat}, h: x.Positive() := infer): 0 < x { h }
+evidence theorem Rat::lt_of_negative({x: Rat}, h: x.Negative() := infer): x < 0 { h }
+evidence theorem Rat::le_of_nonneg({x: Rat}, h: x.NonNeg() := infer): 0 <= x { h }
+
+// Arithmetic at the leaves of the sign rules: a sum or a difference whose
+// sign no rule gives is `nlinarith`'s over the caller's hypotheses, so
+// `(c - b) + e.abs()` at `b < c` is positive. Keyed by `+` and `-`, so a
+// local never runs them; search rules, so they run after every plain rule.
+// A nonnegative is also a positive one `linarith` reads from a local, the
+// step the rules cannot take (`Positive ⇒ NonNeg` is not smaller).
+evidence theorem Rat::positive_add_by_nlinarith({x, y: Rat}, h: 0 < x + y := nlinarith): (x + y).Positive() { h }
+evidence theorem Rat::positive_sub_by_nlinarith({x, y: Rat}, h: 0 < x - y := nlinarith): (x - y).Positive() { h }
+evidence theorem Rat::negative_add_by_nlinarith({x, y: Rat}, h: x + y < 0 := nlinarith): (x + y).Negative() { h }
+evidence theorem Rat::negative_sub_by_nlinarith({x, y: Rat}, h: x - y < 0 := nlinarith): (x - y).Negative() { h }
+evidence theorem Rat::nonneg_by_linarith({x: Rat}, h: 0 <= x := linarith): x.NonNeg() { h }
+
 // The arithmetic fallback, tried after every rule about `Apart`: a sign
 // `nlinarith` proves from the caller's hypotheses. A search rule
 // (docs/facts-on-demand-design.md §3), so a divisor or an inverse that a

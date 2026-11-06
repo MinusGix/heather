@@ -1,6 +1,6 @@
 ---
 title: Let arithmetic reach the leaves of the sign rules
-status: open
+status: closed
 labels: [proofs,solver,arithmetic,mathematics]
 area: tactics
 milestone: [tac-arith]
@@ -41,3 +41,7 @@ pay a failing `nlinarith` at `x.Negative()`. Ways out:
   `NonNeg` facts the rules can prove about its atoms (`0 <= e.abs()`).
 
 The third is the cheapest and would also cover the `NonNeg` gap.
+
+## Log
+
+- 2026-11-06: Done (docs/division-design.md §2–3): search rules `positive_add_by_nlinarith`, `positive_sub_by_nlinarith` and the negative pair, keyed by `+`/`-` so a local never runs them, and `nonneg_by_linarith`, which reads a positive local as nonnegative. `div_arith_leaf` is now a passing probe. Search rules are skipped inside an arithmetic tactic's own run, which this needed: nested `nlinarith` runs blew `rat_den_sum` past its rail.

@@ -39,7 +39,11 @@ The search is `:= infer`'s (docs/facts-on-demand-design.md §2), at the goal
    `/`, `⁻¹`, `npow`, `^` and prefix `-`; `NonNeg` through `+`, `*`, `x * x`,
    `x ^ 2` and `abs`; a positive plus a nonnegative is positive. So
    `a / (b ^ 2 + 1)`, `a / (b.abs() + 1)` and `a / (b⁻¹ + 1)` at `0 < b`
-   need nothing written. `apart_mul`, `apart_inv`, `apart_div` carry
+   need nothing written. At the rules' leaves, a sum or difference no rule
+   signs is `nlinarith`'s (`positive_add_by_nlinarith`, `…_sub_…`, and the
+   negative pair: search rules keyed by `+`/`-`, so a local never runs
+   them), and a nonnegative is `linarith`'s (`nonneg_by_linarith`, which
+   reads a positive local): `a / ((c - b) + e.abs())` at `b < c`. `apart_mul`, `apart_inv`, `apart_div` carry
    apartness itself through products, inverses and quotients of numbers
    whose sign is unknown.
 4. **`nlinarith`, last.** Two search rules (§3 of the facts-on-demand note),
@@ -73,8 +77,19 @@ give an embedded rational its sign, so numerals are found.
   `NonNeg`.
 - **No `Positive ⇒ NonNeg` rule.** Its premise would be the same size as its
   conclusion. A positive plus a positive therefore has its own rule
-  (`positive_add`) beside `positive_add_nonneg` and `positive_nonneg_add`;
-  what is still missed is in issues/apart-search-arith-leaves.md.
+  (`positive_add`) beside `positive_add_nonneg` and `positive_nonneg_add`,
+  and `nonneg_by_linarith` (a search rule, not measured) reads a positive
+  local as nonnegative.
+- **Written sign goals.** `lt_of_positive`, `lt_of_negative`, `le_of_nonneg`
+  go the other way, from the one-place predicate to `0 < x`; that direction
+  passes Paterson's condition, so a goal `0 < a / b` (`positivity`, a
+  `h: 0 < e := infer` parameter) reaches every sign rule.
+- **No search rule inside an arithmetic tactic.** While `linarith`, `ring`
+  or `omega` reads or checks (`ring_depth`/`omega_depth` above zero), the
+  search skips search rules: their tactics would start nested runs whose
+  reading meets the same goals (a reciprocal's apartness in a context
+  `nlinarith` reads), bounded only by the depth cap. Without the guard
+  `rat_den_sum` in the `linarith` probes ran past its CPU rail.
 - **Arithmetic only at `Apart`.** Putting the `nlinarith` search rule at
   `Positive`/`Negative` instead would let it reach the leaves of the sign
   rules, but every successful `x⁻¹` at a positive local would first fail
@@ -82,13 +97,18 @@ give an embedded rational its sign, so numerals are found.
   (`apart_of_negative` sorts before `apart_of_positive`). At `Apart`, search
   rules come after all plain rules, so the common case is unchanged.
 
-## 4. The tactics read `/`
+## 4. The tactics read `/` and `^`
 
 - **`ring`** reads `a / b` as `a * b⁻¹` at the same proof (`Reifier::quotient`
   in `crates/elab/src/ring.rs`): the reciprocal is written out, elaborated,
   and read as every `x⁻¹` is, with its fact `x⁻¹ * x ≈ 1`, so field identities
   with quotients are `ring`'s (`a / c + b / c ≈ (a + b) / c`,
   `a / 4 + a / 4 ≈ a / 2`). The certificate's kernel check unfolds `/` once.
+- **`ring`** reads `x ^ n` at a literal exponent as the product `npow`
+  computes, `1 * x * … * x` (up to `MAX_POWER`), and at a negative literal
+  as that power of `x⁻¹` at the power's proof (`Reifier::literal_power`), so
+  `(a + b) ^ 2 ≈ a ^ 2 + 2 * a * b + b ^ 2` and `b ^ (-2) * b ^ 2 ≈ 1` are
+  `ring`'s, and `nlinarith` sees `x ^ 2` as the square it is.
 - **`linarith`** clears a reciprocal whose denominator some fact shows
   positive. A numeral denominator has no such fact in scope, so the reading
   now builds `0 < d⁻¹` for a positive numeral `d` from the carrier's
@@ -119,14 +139,11 @@ there is issues/ordered-field-division-symbol.md.
 
 ## 7. Left open
 
-- issues/apart-search-arith-leaves.md: arithmetic does not reach the sign
-  rules' leaves, and a positive local is not read as nonnegative.
-- issues/sign-goal-views.md: `positivity` at a written `0 < a / b` does not
-  reach the `Positive` rules.
-- issues/ring-reads-integer-powers.md: `ring` and `nlinarith` read `x ^ 2`
-  as an atom.
-- issues/search-trace-goal-display.md: a failed search's trace names its
-  goals by the parameter's spelling (`b.Apart`, `x.Positive`).
+The first round left four gaps that the second closed
+(apart-search-arith-leaves, sign-goal-views, ring-reads-integer-powers,
+search-trace-goal-display; a failed search's trace now spells each goal it
+tried). Still open:
+
 - issues/all-numeral-relations-default-to-nat.md: `1 / 2` with no expected
   carrier is `Nat` division, `0`.
 - issues/ordered-field-division-symbol.md: `/` over the generic classes.

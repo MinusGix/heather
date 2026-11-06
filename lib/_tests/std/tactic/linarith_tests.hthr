@@ -66,6 +66,9 @@ theorem rat_midpoint(a, b: Rat, h: a < b): a < (a + b) / 2 ∧ (a + b) / 2 < b {
 theorem rat_third(a: Rat, h: a <= 6): a / 3 < 3 { linarith }
 theorem rat_div_neutral(a, b: Rat, hb: 0 < b, h: a < 1): a / b < 1 / b { linarith }
 theorem creal_half_below(a: CReal, h: 0 < a): a / 2 < a { linarith }
+// A power at a literal exponent is a square `nlinarith` sees.
+theorem rat_power_square_pos(b: Rat): 0 < b ^ 2 + 1 { nlinarith }
+theorem rat_power_am_gm(a, b: Rat): 2 * a * b <= a ^ 2 + b ^ 2 { nlinarith(Rat::sq_nonneg(a - b)) }
 theorem rat_den_absurd(a, d: Rat, hd: 0 < d, h1: 1 < a * d⁻¹, h2: a <= d): False { linarith(hd, h1, h2) }
 // A positive reciprocal has a positive denominator; `Rat::inv_succ(n)` is
 // positive by construction (`Rat::inv_succ_pos`), with no fact written.
