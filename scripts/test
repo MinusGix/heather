@@ -119,9 +119,10 @@ elif [[ "${1:-}" == --pr ]]; then
   echo "pr lane: the tests the diff can affect run; semantic images from other builds are replayed (kernel-rechecked, or vouched for by target/decl-cache); the master sentinel runs the exact policy"
   # The native certificate gates run when the round changed something they
   # check: the native library and the machine/OS models it is proved over,
-  # write-elf, the kernel, or the gates themselves. No merge base with
+  # write-elf (`crates/cli/src/native.rs` and the module under it), the
+  # kernel, or the gates themselves. No merge base with
   # origin/master (a checkout without it) means run them.
-  native_paths='^(lib/native/|lib/_tests/native/|lib/std/machine/|lib/std/os/|crates/cli/src/native/|crates/cli/tests/native|crates/kernel/src/|crates/kernel-lib/)'
+  native_paths='^(lib/native/|lib/_tests/native/|lib/std/machine/|lib/std/os/|crates/cli/src/native(/|\.rs$)|crates/cli/tests/native|crates/kernel/src/|crates/kernel-lib/)'
   native_smoke=compiled_yes_runs_as_gnu_yes
   # Unfiltered, the lane also runs only the test files the diff can affect
   # (scripts/affected-targets.mjs, after the build below: Cargo's dep-info
@@ -258,6 +259,22 @@ semantic_warmup() {
   )
 }
 
+# The prefix `family_logic`'s parser_library and showcase_calculator replay
+# (the omega prefix, grind's closure, the parser library, the showcase). Cold,
+# each of them built it and then ran its own tests under one rail, and
+# parser_library died at it under the suite's load
+# (issues/elab-showcase-members-cold-rail.md). Built here a slice per
+# process, each replaying the slices before it; a warm store costs four
+# quick replays.
+parser_warmup() {
+  local stage
+  for stage in stage_1_omega_prefix_is_ready stage_2_grind_prefix_is_ready \
+               stage_3_parser_library_is_ready stage_4_showcase_is_ready; do
+    semantic_warmup semantic_parser_warmup --exact "$stage" > /dev/null ||
+      { echo "parser warmup stopped at $stage; parser_library and showcase_calculator report why"; return 0; }
+  done
+}
+
 # One test of the heather binary's native module, alone in a bounded process.
 native_bin_warmup() {
   (
@@ -351,6 +368,7 @@ if (( $# == 0 )); then
   # image store the library gate, which reads all of lib/).
   selected semantic_x86_warmup && semantic_warmup semantic_x86_warmup
   selected semantic_omega_warmup && semantic_warmup semantic_omega_warmup
+  if selected semantic_parser_warmup; then parser_warmup; fi
   # The fast lane skips every native certificate gate, so it has no prefix
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
@@ -389,6 +407,10 @@ else
      [[ "$requested" == *"--test decreases_unfolding"* ]] ||
      [[ "$requested" =~ --test[=\ ]family_omega\  ]]; then
     semantic_warmup semantic_omega_warmup
+  fi
+  # family_logic's parser_library and showcase_calculator.
+  if $whole_elab || [[ "$requested" =~ --test[=\ ]family_logic\  ]]; then
+    parser_warmup
   fi
 fi
 

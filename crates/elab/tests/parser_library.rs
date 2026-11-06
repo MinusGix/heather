@@ -2,38 +2,13 @@
 use heather_elab::{Elaborator, SemanticImage};
 use std::sync::OnceLock;
 use crate::support;
-const MODULES: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
-    ("option", include_str!("../../../lib/std/core/option.hthr")),
-    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
-    ("list", include_str!("../../../lib/std/data/list.hthr")),
-    ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
-    ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
-    ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
-    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
-    ("int", include_str!("../../../lib/std/num/int.hthr")),
-    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
-    ("result", include_str!("../../../lib/std/core/result.hthr")),
-    // grind's closure: `parser_diagnostics::commit_chain` is proved by it.
-    ("char", include_str!("../../../lib/std/text/char.hthr")),
-    ("string", include_str!("../../../lib/std/text/string.hthr")),
-    ("tactic", include_str!("../../../lib/std/tactic/tactic.hthr")),
-    ("derive", include_str!("../../../lib/std/tactic/derive.hthr")),
-    ("egraph", include_str!("../../../lib/std/data/egraph.hthr")),
-    ("grind", include_str!("../../../lib/std/tactic/grind.hthr")),
-];
-
 /// Standard library and parser library alike come back as replayed semantic
 /// images (`support::parser::MODULES` is the same list the calculator
 /// showcase replays, so the two binaries share one store). Before 2026-09-17
 /// the parser modules were re-elaborated from source here on every run: the
 /// binary took 19.3 s alone at width one, and 1.35 s warm after.
 fn base() -> Elaborator {
-    let modules: Vec<(&str, &str)> = MODULES.iter().chain(support::parser::MODULES).copied().collect();
-    support::semantic_test_base_with(&modules, |e| e.set_kernel_workers(1))
+    support::semantic_test_base_with(&support::parser::library_prefix(), |e| e.set_kernel_workers(1))
 }
 
 #[test]
