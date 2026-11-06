@@ -45,3 +45,28 @@ This looks like an audit-harness error rather than a library result.
 One failing target, so one apparent cause; the logs name no cause beyond the
 failed `compile-x86` invocation and the CPU-rail figure above.
 The "INCOMPLETE" status was reported with only one failure; no further target death is named in the log.
+
+## Log
+
+**2026-11-06.** Cause measured: a cold store, not a regression of #430.
+#429 made every function in `examples/x86-native/branches.hthr` but three a
+`runtime fn`, which needs the module to import `tactic`, `char`, `string`,
+`rt`, `rt_lower`, `function_ir`, `function_ir_eval` and `runtime`
+([[runtime-generator-imports]]); #431 grew `runtime.hthr` again. The test's
+nine `compile-x86` children share the `native-test-images` store, and
+`scripts/test`'s `native_warmup` warms only the bundled proof library in it,
+so on a fresh store the first child elaborates that whole closure under its
+own 300 s rail. Cloud box, dev binary, width one, an empty `--cache-dir`:
+`compile-x86 … nested_true` costs 364 CPU-s (359 user + 5 sys) and passes
+under a loosened rail; `nested_false` right after it, over the store the
+first one wrote, costs 43 CPU-s. (The empty store also lacked the bundled
+prefix the suite's warmup provides, so the suite's first child pays less
+than 364, but on the sentinel's box it reached the rail.)
+
+The bisect's blame on #430 is an ordering artefact: its first probe (#430)
+ran cold and died, writing images of the same `lib/` that #429 has, so the
+second probe (#429) replayed them and passed. A rail kill bisects to
+whichever merge is probed first over a cold store.
+
+The PR lane did not skip this: #429 and #431 touch `lib/native`, so every
+native gate ran on them, but over stores their own rounds had already warmed.
