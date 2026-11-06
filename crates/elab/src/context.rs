@@ -256,8 +256,10 @@ impl Cx {
     /// This context with every local **renamed out of reach**: the binders
     /// and aliases keep their types, positions and order, but each is renamed
     /// to a reserved `__caller_<name>` spelling (a hidden `#` binder stays
-    /// hidden), and the name-keyed scaffolding — dictionaries, operator
-    /// symbols, the self-reference — is dropped. The new names are still
+    /// hidden), and the self-reference is dropped. Dictionaries over a type
+    /// parameter and the operator symbols their constraints installed stay,
+    /// under the reserved spellings, so a tactic at a class carrier can
+    /// still spell the carrier's constants and relations. The new names are still
     /// *source*, which is what lets a tactic that reconstructs a certificate
     /// as source (`omega`) cite a hypothesis; the `__` prefix is the same
     /// reserved spelling `omega`'s own renaming uses
@@ -305,9 +307,41 @@ impl Cx {
                 .iter()
                 .map(|t| TyVar { name: hide(&t.name), ..t.clone() })
                 .collect(),
-            dicts: Spine::new(),
+            // A dictionary over a type parameter stays, under the parameter's
+            // reserved spelling: a tactic default at a class carrier
+            // (`h: K.unit < x := nlinarith` in `section<K: OrderedField(…)>`)
+            // spells the carrier's constants as `__caller_K.unit`, which only
+            // the dictionary can answer. Nothing the default's writer can
+            // spell reaches it.
+            dicts: self
+                .dicts
+                .iter()
+                .map(|d| {
+                    let mut d = (**d).clone();
+                    let local = |n: &str| self.tyvars.iter().any(|t| t.name == n) || self.names.iter().any(|b| b == n);
+                    if let heather_syntax::TyKind::Named { name, .. } = &mut d.carrier.kind
+                        && local(name)
+                    {
+                        *name = hide(name);
+                    }
+                    for e in &mut d.index {
+                        if let ExprKind::Var(name) = &mut e.kind
+                            && local(name)
+                        {
+                            *name = hide(name);
+                        }
+                    }
+                    if !d.name.starts_with('#') {
+                        d.name = hide(&d.name);
+                    }
+                    Rc::new(d)
+                })
+                .collect(),
             index_ambiguity: Spine::new(),
-            op_locals: Spine::new(),
+            // The symbols a constraint binder installed name its hidden
+            // index binders (`#op≈@0_0`), so they stay too: a certificate
+            // generated at a class carrier is written with `≈` and `<`.
+            op_locals: self.op_locals.clone(),
             meta: None,
             corec: None,
             friend: None,

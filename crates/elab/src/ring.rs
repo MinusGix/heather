@@ -416,8 +416,8 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
 /// arguments, `K` and its `≈`, `+` and `*`, are the operations as the
 /// section binds them (the dictionary's type is structural, its indices
 /// substituted away). `K.unit`, `K.multiplicative.unit` and `K.inv` are read as a
-/// statement spells them. `K` has no `-` or `⁻¹` designation, so a
-/// difference is written `x + K.inv(y)` and a reciprocal is an atom.
+/// statement spells them. `K` has no `-` designation, so a difference is
+/// written `x + K.inv(y)`; `⁻¹` and `/` are the class's (`field_division`).
 fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCarrier> {
     elab.key_of("semiring::CommRing::with_ints")?;
     let source = elab.spell_type_clean(cx, carrier_ty)?;
@@ -432,6 +432,17 @@ fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCar
     };
     let field = |name: &str| infer(&format!("{source}.{name}")).map(|(term, _, _)| Rc::new(term));
     let (zero, one, neg) = (field("unit")?, field("multiplicative.unit")?, field("inv"));
+    // An ordered field's `⁻¹` and `/` (`field_division`), applied to the
+    // class's type, indices and dictionary before their operands: read as
+    // at a carrier that designates them, with `OrderedField::inv_mul` as a
+    // reciprocal's fact. Only where the module is loaded; a ring that is no
+    // field never spells them.
+    let generic = |name: &str| {
+        let key = elab.key_of(name)?;
+        let operands = if name.ends_with("::div") { 3 } else { 2 };
+        let prefix = elab.names.global(&key)?.params.len().checked_sub(operands)?;
+        Some(Op::GlobalAfter(key, prefix))
+    };
     Some(RelCarrier {
         source,
         same: Op::Term(same),
@@ -439,8 +450,8 @@ fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCar
         sub: None,
         mul: Some(Op::Term(mul)),
         neg: neg.map(Op::Term),
-        inv: None,
-        div: None,
+        inv: generic("field_division::OrderedField::inv"),
+        div: generic("field_division::OrderedField::div"),
         pow: None,
         class: Some(ClassInts { ints: Rc::new(ints), ty, level, zero, one }),
     })
@@ -1051,12 +1062,8 @@ impl Reifier<'_> {
     /// no proof (`Nat`, `Int`, the bit vectors) has no `≈` reading here; a
     /// quotient whose parts do not spell stays an atom.
     fn quotient(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<(Rc<Term>, Rc<Term>)> {
-        let div = ops.div.as_ref()?.global()?;
         let inv = ops.inv.as_ref()?.global()?;
-        if !matches!(ops.div, Some(Op::Global(_))) {
-            return None;
-        }
-        let args = named_args(self.elab, tm, div)?;
+        let args = ops.div.as_ref()?.args(self.elab, tm)?;
         let [a, b, h] = args.as_slice() else {
             return None;
         };
@@ -1102,8 +1109,9 @@ impl Reifier<'_> {
     /// condition. A reciprocal whose fact cannot be written stays a plain
     /// atom.
     fn reciprocal(&mut self, tm: &Rc<Term>, ops: &RelCarrier, depth: u32) -> Result<Option<usize>, String> {
-        let (lemma, den, args) = if let Some(op) = ops.inv.as_ref().and_then(Op::global)
-            && let Some(args) = named_args(self.elab, tm, op)
+        let (lemma, den, args) = if let Some(inv) = ops.inv.as_ref()
+            && let Some(op) = inv.global()
+            && let Some(args) = inv.args(self.elab, tm)
             && let [x, h] = args.as_slice()
         {
             (format!("{op}_mul"), Some(Rc::clone(x)), vec![(None, Rc::clone(x)), (Some("h"), Rc::clone(h))])

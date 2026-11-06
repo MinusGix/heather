@@ -173,6 +173,17 @@ impl Elaborator {
                     return Ok(op);
                 }
                 uncovered_carrier = Some((head, from));
+            } else if !args.is_empty()
+                && let Some(op) = self.designated_at_scope_class(cx, sym, fixity)
+            {
+                // 2b. No nominal carrier — the operand is at a section's type
+                //     parameter — so the designation is the one at the class
+                //     of a dictionary in scope (`designation postfix ⁻¹ at
+                //     OrderedField := OrderedField::inv`). The operation is
+                //     emitted bare like any designated one, so its own
+                //     dictionary is resolved at the operand's carrier
+                //     (docs/division-design.md §6).
+                return Ok(op);
             }
         }
         // 3. The symbol's fallback name, resolved as it always was. `&&`,
@@ -262,6 +273,28 @@ impl Elaborator {
             ),
             span,
         )
+    }
+
+    /// Rung 2b: the operation `sym` designates at the class of a dictionary
+    /// in scope, innermost first. Only asked when the operand has no nominal
+    /// carrier, so a carrier's own designation always wins; a scope with no
+    /// class dictionary pays one tag read per binder.
+    fn designated_at_scope_class(&self, cx: &Cx, sym: &str, fixity: OpFixity) -> Option<String> {
+        for pos in (0..cx.names.len()).rev() {
+            let (_, ty, _) = self.local(cx, pos);
+            let Some(ind) = self.tag_of(&ty) else { continue };
+            if !ind.is_record {
+                continue;
+            }
+            let ckey = crate::names::qkey(&ind.scope.module, &ind.name);
+            if !self.traits.has_class(&ckey) {
+                continue;
+            }
+            if let Some(op) = self.designated(sym, fixity, &ckey) {
+                return Some(op);
+            }
+        }
+        None
     }
 
     /// The head of the carrier an operator application is at — rung 2's probe

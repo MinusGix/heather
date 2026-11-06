@@ -1,0 +1,62 @@
+// Probes of `lib/std/algebra/field_division.hthr`: `x⁻¹` and `a / b` inside
+// a section over an ordered field, each divisor's apartness found with
+// nothing written (docs/division-design.md §6). Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import relation; import order; import algebra_rel; import semiring;
+import ordered_field; import field_division; import rat; import ring; import linarith;
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+// A local, up to conversion: a sign or the apartness itself.
+theorem inv_at_positive(x: K, hx: K.unit < x): x * x⁻¹ ≈ K.multiplicative.unit { OrderedField::mul_inv(x) }
+theorem inv_at_negative(x: K, hx: x < K.unit): x * x⁻¹ ≈ K.multiplicative.unit { OrderedField::mul_inv(x) }
+theorem inv_at_apart(x: K, hx: ApartBy(<, x, K.unit)): x * x⁻¹ ≈ K.multiplicative.unit { OrderedField::mul_inv(x) }
+
+// The sign rules: sums, products, negation, inverses and quotients of
+// numbers with a known sign, squares, and one.
+fn div_square_plus_one(a, b: K) → K { a / (b * b + K.multiplicative.unit) }
+fn div_sum(a, b, c: K, hb: K.unit < b, hc: K.unit < c) → K { a / (b + c) }
+fn div_negation(a, b: K, hb: K.unit < b) → K { a / K.inv(b) }
+fn div_inverse_plus_one(a, b: K, hb: K.unit < b) → K { a / (b⁻¹ + K.multiplicative.unit) }
+fn div_product(a, b, c: K, hb: b < K.unit, hc: K.unit < c) → K { a / (b * c) }
+fn div_quotient(a, b, c: K, hb: b < K.unit, hc: K.unit < c) → K { a / (b / c) }
+fn div_one(a: K) → K { a / K.multiplicative.unit }
+fn inv_inv(a: K, ha: a < K.unit) → K { a⁻¹⁻¹ }
+
+// `nlinarith` at the leaves, over the caller's hypotheses: a gap (`c - b`
+// is `c + K.inv(b)` here), on either side of zero, a product of numbers
+// above one, and a gap plus a nonnegative.
+fn div_gap(a, b, c: K, h: b < c) → K { a / (c + K.inv(b)) }
+fn div_gap_negative(a, b, c: K, h: b < c) → K { a / (b + K.inv(c)) }
+fn div_product_above_one(a, b, c: K, hb: K.multiplicative.unit < b, hc: K.multiplicative.unit < c) → K {
+    a / (b * c + K.inv(K.multiplicative.unit))
+}
+fn div_gap_plus_nonneg(a, b, c, e: K, h: b < c, he: K.unit <= e) → K { a / ((c + K.inv(b)) + e) }
+
+// Nothing known about the divisor, and the divisor zero, are refused.
+// expect-error: no instance for `Invertible(b)`
+fn div_unknown(a, b: K) → K { a / b }
+// expect-error: no instance for `Invertible(
+fn div_zero(a: K) → K { a / K.unit }
+
+// The laws, at searched proofs.
+theorem div_cancel_at_gap(a, b, c: K, h: b < c): a / (c + K.inv(b)) * (c + K.inv(b)) ≈ a {
+    OrderedField::div_mul_cancel(a, c + K.inv(b))
+}
+theorem halves(a, b: K, hb: K.unit < b): a / b + a / b ≈ (a + a) / b {
+    K.rel_sym((a + a) / b, a / b + a / b, OrderedField::add_div(a, a, b))
+}
+
+// `ring` reads `a / b` as `a * b⁻¹` and `b⁻¹` with its fact `b⁻¹ * b ≈ 1`,
+// and `linarith` clears a reciprocal whose denominator a fact signs.
+theorem ring_sum_of_quotients(a, b, c: K, hc: K.unit < c): a / c + b / c ≈ (a + b) / c { ring }
+theorem ring_cancel(a, c: K, hc: c < K.unit): a / c * c ≈ a { ring }
+theorem linarith_quotient_positive(a, c: K, hc: K.unit < c, ha: K.unit < a): K.unit < a / c { linarith }
+
+}
+
+// A carrier reads the generic laws through its instance: at `Rat`, the
+// class's quotient is `Rat`'s own `/` by unfolding.
+theorem rat_reads_div_mul_cancel(a, b: Rat, hb: Rat::Lt(0, b)): a / b * b ≈ a {
+    OrderedField::div_mul_cancel(a, b, h := Inr(hb))
+}
