@@ -819,6 +819,20 @@ fn Nat::pred(self n: Nat) → Nat { match n { Zero => 0, Succ(k) => k } }
 
 theorem Nat::succ_inj(n, m: Nat, h: Succ(n) = Succ(m)): n = m { Nat::cong(Nat::pred, h) }
 
+theorem Nat::pred_le(self n: Nat): n.pred() <= n {
+    match n { Zero => trivial, Succ(k) => k.le_succ_r(k, k.le_refl()) }
+}
+
+theorem Nat::pred_mono(self e: Nat): (d: Nat) → e <= d → e.pred() <= d.pred() {
+    match e {
+        Zero => λ d _ => trivial,
+        Succ(_) => λ d => match d {
+            Zero => λ never => false_elim(never),
+            Succ(_) => λ le => le,
+        },
+    }
+}
+
 // `IsSucc(Succ k)` is `True` and `IsSucc(0)` is `False`, so the constructors
 // are told apart by a type rather than by a generated no-confusion lemma.
 fn Nat::IsSucc(self n: Nat) → Type { match n { Zero => False, Succ(_) => True } }

@@ -48,6 +48,7 @@ import linux_calls;
 import linux_trees;
 import itree;
 import itree_trace;
+import itree_deep;
 import bitvec;
 import bool;
 import list;
@@ -523,4 +524,72 @@ fn Source::denote(self src: Source, args: List<List<BitVec(8)>>) → Program<Bit
         src.main.grows(program_eval(src.functions), src.performs(program_eval(src.functions), n, src.depth),
             src.performs(program_eval(src.functions), Succ(n), src.depth), src.performs_grows(program_eval(src.functions), n, src.depth),
             n, src.start(args)), λ flow => refl))
+}
+
+// ---------------------------------------------------------------------------
+// Deep cuts (issues/native-compile-co-sim.md): the only cuts are loops' at
+// fuel `n`, each round behind a silent step, so at fuel `n` every cut lies
+// `n` silent steps deep. A run that pays for silent steps
+// (`linux_x86_64_sim_paid`) and takes fewer steps than the fuel never meets
+// one.
+
+theorem Stmt::deep(self s: Stmt, call: Answers(), perform: Performs(), n: Nat,
+    calls: (procedure: Nat) → (args, results: List<Nat>) → (env: Env) → ITree::Deep(Events::linux(), perform(procedure, args, results, env), n)):
+    (env: Env) → ITree::Deep(Events::linux(), s.denote(call, perform, n, env), n) {
+    match s {
+        Compute(_) => λ env => trivial,
+        Invoke(_) => λ env => λ a => trivial,
+        Then(first, rest) => λ env => ITree::deep_bind<Flow, Flow>(Events::linux(), first.denote(call, perform, n, env),
+            λ flow => match flow { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) },
+            n, first.deep(call, perform, n, calls, env),
+            λ flow => match flow as λ f => ITree::Deep(Events::linux(), match f as λ _ => ITree<Flow>(Events::linux()) {
+                    Onward(next) => rest.denote(call, perform, n, next),
+                    Exited(status) => Ret(Exited(status)),
+                }, n) {
+                Onward(next) => rest.deep(call, perform, n, calls, next),
+                Exited(_) => trivial,
+            }),
+        Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b =>
+                ITree::Deep(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) {
+                    True => yes.denote(call, perform, n, env),
+                    False => no.denote(call, perform, n, env),
+                }, n) {
+            True => yes.deep(call, perform, n, calls, env),
+            False => no.deep(call, perform, n, calls, env),
+        },
+        Repeat(body, again) => λ env => ITree::deep_iter<Env, Flow>(Events::linux(), n,
+            λ e => ITree::map(Events::linux(), body.denote(call, perform, n, e), λ flow => flow.pass(again)), env,
+            λ e => ITree::deep_map<Flow, Step<Env, Flow>>(Events::linux(), body.denote(call, perform, n, e), λ flow => flow.pass(again), n,
+                body.deep(call, perform, n, calls, e))),
+        Exit(_) => λ env => trivial,
+        Arg(_, _, _) => λ env => trivial,
+        Perform(procedure, args, results) => λ env => calls(procedure, args, results, env),
+    }
+}
+
+// Every call's tree, at every depth.
+theorem Source::performs_deep(self src: Source, call: Answers(), n: Nat, depth: Nat):
+    (procedure: Nat) → (args, results: List<Nat>) → (env: Env) →
+    ITree::Deep(Events::linux(), src.performs(call, n, depth)(procedure, args, results, env), n) {
+    match depth {
+        Zero => λ procedure args results env => trivial,
+        Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) as λ o =>
+                ITree::Deep(Events::linux(), match o as λ _ => ITree<Flow>(Events::linux()) {
+                    None => Ret(Onward(env)),
+                    Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                        λ flow => proc.leave(env, results, flow)),
+                }, n) {
+            None => trivial,
+            Some(proc) => ITree::deep_map<Flow, Flow>(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                λ flow => proc.leave(env, results, flow), n,
+                proc.body.deep(call, src.performs(call, n, d), n, src.performs_deep(call, n, d), proc.enter(env, args))),
+        },
+    }
+}
+
+// The program deepens: at fuel `d` its cuts lie `d` deep.
+theorem Source::deepens(self src: Source, args: List<List<BitVec(8)>>): Program::Deepens(Events::linux(), src.denote(args)) {
+    λ d => Exists(d, ITree::deep_map<Flow, BitVec(64)>(Events::linux(), src.main_tree(args, d), λ flow => flow.status(), d,
+        src.main.deep(program_eval(src.functions), src.performs(program_eval(src.functions), d, src.depth), d,
+            src.performs_deep(program_eval(src.functions), d, src.depth), src.start(args))))
 }

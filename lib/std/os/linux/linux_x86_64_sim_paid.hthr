@@ -1,0 +1,347 @@
+// The machine meets a fuelled tree, paying for its silent steps
+// (issues/native-compile-co-sim.md).
+//
+// `Sim` (`linux_x86_64_sim`) is partial correctness: it reads a tree's
+// traces, which do not see silent steps, so a tree that goes round silently
+// until it is cut is simulated by any machine, one that exits included, and
+// its converse (`sim_run_of`) stops where the tree is cut. `SimPaid(t)(s)`
+// reads the tree one constructor at a time instead, and makes the machine
+// take at least one step for each silent step (`LinuxPlus`): it is `Sim`
+// with every `Tau` paid. It is a `Sim` (`sim_of_paid`), and it is what a
+// compiler proves when each round of a loop runs at least one instruction.
+//
+// Paid steps make depth count. A run of the machine takes finitely many
+// steps; if the tree's cuts lie deeper than that (`ITree::Deep`), the run
+// pays its way past every silent step without reaching a cut, so it is
+// exactly the events of a whole trace of the tree (`paid_run_whole`). A
+// program whose fuel puts its cuts as deep as asked (`Program::Deepens`, so
+// every source loop: `ITree::deep_iter`) has every run exact: each is the
+// events of a whole trace the program produces
+// (`Program::paid_run_produces`). That is the converse `Sim` alone cannot
+// give, at the cost of no coinduction: the trees stay fuelled, and the
+// compiler's proofs stay inductive.
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_determinism;
+import linux_x86_64_sim;
+import linux_trees;
+import itree;
+import itree_trace;
+import itree_deep;
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+fn SimPaid<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux())) → MachineState<M> → Type {
+    match t {
+        Ret(status) => λ state => Exists<MachineState<M>>(λ at =>
+            LinuxSteps(io, state, at) ∧ (LinuxSyscallAt(io, at) ∧ LinuxExits(at, status))),
+        Tau(u) => λ state => Exists<MachineState<M>>(λ next => LinuxPlus(io, state, next) ∧ SimPaid(io, u, next)),
+        Vis(c, k) => λ state => Exists<MachineState<M>>(λ at =>
+            LinuxSteps(io, state, at) ∧ (LinuxSyscallAt(io, at) ∧ (LinuxRequests(io, at, c) ∧
+            ((a: c.Resp()) → c.Answers(a) → LinuxResumes(io, at, c, a, SimPaid(io, k(a))))))),
+        Cut => λ state => True,
+    }
+}
+
+// A program meets its spec at every fuel, paying for its silent steps.
+fn SimPaidProgram<M>(io: LinuxIo<M>, p: Program<BitVec(64)>(Events::linux())) → MachineState<M> → Type {
+    λ state => (n: Nat) → SimPaid(io, p.at(n), state)
+}
+
+// ---------------------------------------------------------------------------
+// The rules
+
+theorem paid_back<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux())): (before, after: MachineState<M>) →
+    LinuxSteps(io, before, after) → SimPaid(io, t, after) → SimPaid(io, t, before) {
+    match t {
+        Ret(_) => λ before after steps sim => Exists(sim.witness,
+            ⟨linux_steps_trans(io, before, after, sim.witness, steps, sim.proof.left), sim.proof.right⟩),
+        Tau(_) => λ before after steps sim => Exists(sim.witness,
+            ⟨linux_plus_back(io, steps.witness, before, after, sim.witness, steps.proof, sim.proof.left), sim.proof.right⟩),
+        Vis(_, _) => λ before after steps sim => Exists(sim.witness,
+            ⟨linux_steps_trans(io, before, after, sim.witness, steps, sim.proof.left), sim.proof.right⟩),
+        Cut => λ before after steps sim => trivial,
+    }
+}
+
+theorem paid_cut<M>(io: LinuxIo<M>, state: MachineState<M>): SimPaid<M>(io, Cut, state) { trivial }
+
+// A silent step, paid by at least one of the machine's.
+theorem paid_tau<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), state, next: MachineState<M>,
+    plus: LinuxPlus(io, state, next), sim: SimPaid(io, t, next)): SimPaid<M>(io, Tau(t), state) {
+    Exists(next, ⟨plus, sim⟩)
+}
+
+// …by exactly one.
+theorem paid_tau_step<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), state, next: MachineState<M>,
+    step: LinuxStep(io, state, next), sim: SimPaid(io, t, next)): SimPaid<M>(io, Tau(t), state) {
+    paid_tau(io, t, state, next, Exists(next, ⟨step, Exists(Zero, refl)⟩), sim)
+}
+
+theorem paid_ret<M>(io: LinuxIo<M>, status: BitVec(64), state, at: MachineState<M>,
+    steps: LinuxSteps(io, state, at), syscall: LinuxSyscallAt(io, at), exits: LinuxExits(at, status)):
+    SimPaid<M>(io, Ret(status), state) {
+    Exists(at, ⟨steps, ⟨syscall, exits⟩⟩)
+}
+
+theorem paid_vis<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    state, at: MachineState<M>, steps: LinuxSteps(io, state, at), syscall: LinuxSyscallAt(io, at),
+    requests: LinuxRequests(io, at, c),
+    answers: (a: c.Resp()) → c.Answers(a) → LinuxResumes(io, at, c, a, SimPaid(io, k(a)))):
+    SimPaid<M>(io, Vis(c, k), state) {
+    Exists(at, ⟨steps, ⟨syscall, ⟨requests, answers⟩⟩⟩)
+}
+
+// The same tree, constructor for constructor.
+theorem paid_of_same<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux())): (u: ITree<BitVec(64)>(Events::linux())) →
+    ITree::Same(Events::linux(), t, u) → (state: MachineState<M>) → SimPaid(io, u, state) → SimPaid(io, t, state) {
+    match t {
+        Ret(status) => λ u (same: u = Ret(status)) state sim => j(same, λ y _ => SimPaid(io, y, state), sim),
+        Tau(s) => λ u (same: SameTau<BitVec(64)>(Events::linux(), u, λ v => ITree::Same(Events::linux(), s, v))) state sim => {
+            let moved: SimPaid(io, Tau(same.t), state) = j(same.at, λ y _ => SimPaid(io, y, state), sim);
+            Exists(moved.witness, ⟨moved.proof.left, paid_of_same(io, s, same.t, same.sub, moved.witness, moved.proof.right)⟩)
+        },
+        Vis(c, k) => λ u (same: SameVis<BitVec(64)>(Events::linux(), c, u, λ a v => ITree::Same(Events::linux(), k(a), v))) state sim => {
+            let moved: SimPaid(io, Vis(c, same.k), state) = j(same.at, λ y _ => SimPaid(io, y, state), sim);
+            Exists(moved.witness, ⟨moved.proof.left, ⟨moved.proof.right.left, ⟨moved.proof.right.right.left,
+                λ a answers => linux_resumes_mono(io, moved.witness, c, a, SimPaid(io, same.k(a)), SimPaid(io, k(a)),
+                    λ resumed claim => paid_of_same(io, k(a), same.k(a), same.sub(a), resumed, claim),
+                    moved.proof.right.right.right(a, answers))⟩⟩⟩)
+        },
+        Cut => λ u same state sim => trivial,
+    }
+}
+
+// Paid or not, it is a `Sim`.
+theorem sim_of_paid<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux())): (state: MachineState<M>) →
+    SimPaid(io, t, state) → Sim(io, t, state) {
+    match t {
+        Ret(status) => λ state sim => sim_ret(io, status, state, sim.witness, sim.proof.left, sim.proof.right.left,
+            sim.proof.right.right),
+        Tau(u) => λ state sim => sim_tau(io, u, state, sim_back(io, u, state, sim.witness,
+            linux_steps_cons(io, state, sim.proof.left.witness, sim.witness, sim.proof.left.proof.left, sim.proof.left.proof.right),
+            sim_of_paid(io, u, sim.witness, sim.proof.right))),
+        Vis(c, k) => λ state sim => sim_vis(io, c, k, state, sim.witness, sim.proof.left, sim.proof.right.left,
+            sim.proof.right.right.left,
+            λ a answers => linux_resumes_mono(io, sim.witness, c, a, SimPaid(io, k(a)), Sim(io, k(a)),
+                λ resumed claim => sim_of_paid(io, k(a), resumed, claim), sim.proof.right.right.right(a, answers))),
+        Cut => λ state sim => sim_cut(io, state),
+    }
+}
+
+theorem Program::sim_of_paid<M>(io: LinuxIo<M>, p: Program<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: SimPaidProgram(io, p, state)): SimProgram(io, p, state) {
+    λ n => linux_x86_64_sim_paid::sim_of_paid(io, p.at(n), state, sim(n))
+}
+
+// ---------------------------------------------------------------------------
+// A run, with how many steps it takes in all: the steps to each syscall,
+// summed over its segments.
+
+fn LinuxRunTakes<M>(io: LinuxIo<M>, events: List<LinuxEvent>) → Nat → MachineState<M> → Type {
+    match events {
+        Nil => λ total state => False,
+        Cons(event, rest) => λ total state => Exists<Nat>(λ k => Exists<Nat>(λ more => (k + more = total) ∧
+            Exists<MachineState<M>>(λ at => LinuxStepsN(io, k, state, at) ∧ (LinuxSyscallAt(io, at) ∧
+            match event as λ _ => Type {
+                CallEvent(c, a) => LinuxAsks(io, at, c) ∧ LinuxResumed(io, at, c, a, LinuxRunTakes(io, rest, more)),
+                ExitEvent(status) => LinuxExits(at, status) ∧ (rest = Nil),
+            })))),
+    }
+}
+
+// One syscall of it, and the rest of the run taking `more` steps.
+fn RunTakesAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, more: Nat, at: MachineState<M>) → Type {
+    match event {
+        CallEvent(c, a) => LinuxAsks(io, at, c) ∧ LinuxResumed(io, at, c, a, LinuxRunTakes(io, rest, more)),
+        ExitEvent(status) => LinuxExits(at, status) ∧ (rest = Nil),
+    }
+}
+
+// Every run takes some number of steps.
+theorem linux_run_takes<M>(io: LinuxIo<M>, events: List<LinuxEvent>): (state: MachineState<M>) →
+    LinuxRun(io, events, state) → Exists<Nat>(λ total => LinuxRunTakes(io, events, total, state)) {
+    match events {
+        Nil => λ state never => false_elim(never),
+        Cons(event, rest) => match event {
+            CallEvent(c, a) => λ state ran => {
+                let at = ran.witness;
+                let k = ran.proof.left.witness;
+                let resumed = ran.proof.right.right.right;
+                let junk = resumed.witness;
+                let rcx = resumed.proof.right.witness;
+                let r11 = resumed.proof.right.proof.witness;
+                let later = linux_run_takes(io, rest, linux_answered(io, at, c, a, junk, rcx, r11), resumed.proof.right.proof.proof);
+                Exists(k + later.witness, Exists(k, Exists(later.witness, ⟨refl, Exists(at, ⟨ran.proof.left.proof,
+                    ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, Exists(junk, ⟨resumed.proof.left,
+                        Exists(rcx, Exists(r11, later.proof))⟩)⟩⟩⟩)⟩)))
+            },
+            ExitEvent(_) => λ state ran => Exists(ran.proof.left.witness, Exists(ran.proof.left.witness, Exists(0, ⟨refl,
+                Exists(ran.witness, ⟨ran.proof.left.proof, ran.proof.right⟩)⟩))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The converse, exact under deep cuts: walk a run against the tree. At each
+// node the tree's claim and the run meet as in `sim_run_of`; at a silent
+// step the claim's paid steps are a prefix of the run's segment
+// (`linux_steps_peel`), so the steps left to go shrink by one at least while
+// the depth asked shrinks by one. A cut would need depth zero, and the walk
+// keeps the depth above the steps left.
+
+// The run is the events of a whole trace of the tree.
+fn RunWhole(t: ITree<BitVec(64)>(Events::linux()), run: List<LinuxEvent>) → Type {
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr =>
+        IsTrace(Events::linux(), t, tr) ∧ (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run)))
+}
+
+// What the walk carries past one segment: the rest of the run, from any
+// related states, is a whole trace of whatever tree is claimed there, as
+// deep as the steps left.
+fn PaidRest<M>(io: LinuxIo<M>, rest: List<LinuxEvent>, more: Nat) → Type {
+    (u: ITree<BitVec(64)>(Events::linux())) → (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
+        SimPaid(io, u, left) → LinuxRunTakes(io, rest, more, right) → LinuxEventsValid(rest) →
+        ITree::Deep(Events::linux(), u, Succ(more)) → RunWhole(u, rest)
+}
+
+// At a return: the run's syscall is the exit, with the tree's status.
+theorem paid_exit_meets<M>(io: LinuxIo<M>, status: BitVec(64), more: Nat, rest: List<LinuxEvent>, at, ran_at: MachineState<M>,
+    same: SameDefinedState<M>(at, ran_at), exits: LinuxExits(at, status), event: LinuxEvent):
+    RunTakesAt(io, event, rest, more, ran_at) → RunWhole(Ret(status), Cons(event, rest)) {
+    match event {
+        ExitEvent(status2) => λ ran => {
+            let statuses: (status = status2) =
+                trans(sym(exits.right), trans(register_related(Rdi, at, ran_at, same), ran.left.right));
+            Exists(TRet(status), ⟨Returned(refl), ⟨trivial, List::cons_eq(Nil, rest, ExitEvent(status), ExitEvent(status2),
+                cong_fn(λ (s: BitVec(64)) => ExitEvent(s), statuses), sym(ran.right))⟩⟩)
+        },
+        CallEvent(c, _) => λ ran => false_elim(exits_not_asks(io, at, ran_at, same, status, c, exits, ran.left)),
+    }
+}
+
+// At a call answered as the tree asks: the rest of the run is a whole trace
+// of the branch the answer picks, from where Linux resumed both sides.
+theorem paid_answered<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    at, ran_at: MachineState<M>, same: SameDefinedState<M>(at, ran_at),
+    answers: (a: c.Resp()) → c.Answers(a) → LinuxResumes(io, at, c, a, SimPaid(io, k(a))),
+    rest: List<LinuxEvent>, more: Nat, outer: PaidRest(io, rest, more), deep: (a: c.Resp()) → ITree::Deep(Events::linux(), k(a), Succ(more)),
+    b: c.Resp(), resumed: LinuxResumed(io, ran_at, c, b, LinuxRunTakes(io, rest, more)),
+    valid: LinuxEventsValid(Cons(CallEvent(c, b), rest))): RunWhole(Vis(c, k), Cons(CallEvent(c, b), rest)) {
+    let junk = resumed.witness;
+    let rcx = resumed.proof.right.witness;
+    let r11 = resumed.proof.right.proof.witness;
+    let whole = outer(k(b), linux_answered(io, at, c, b, junk, rcx, r11), linux_answered(io, ran_at, c, b, junk, rcx, r11),
+        linux_answered_respects<M>(io, c, b, junk, rcx, r11, at, ran_at, same),
+        answers(b, valid.left, junk, resumed.proof.left, rcx, r11), resumed.proof.right.proof.proof, valid.right, deep(b));
+    Exists(TAns(c, b, whole.witness), ⟨Answered(b, whole.witness, refl, whole.proof.left), ⟨whole.proof.right.left,
+        cong_fn(λ (events: List<LinuxEvent>) => Cons(CallEvent(c, b), events), whole.proof.right.right)⟩⟩)
+}
+
+// At a call: the run's syscall asks the tree's call, never an exit.
+theorem paid_call_meets<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    at, ran_at: MachineState<M>, same: SameDefinedState<M>(at, ran_at), asks: LinuxAsks(io, at, c),
+    answers: (a: c.Resp()) → c.Answers(a) → LinuxResumes(io, at, c, a, SimPaid(io, k(a))),
+    rest: List<LinuxEvent>, more: Nat, outer: PaidRest(io, rest, more), deep: (a: c.Resp()) → ITree::Deep(Events::linux(), k(a), Succ(more)),
+    event: LinuxEvent): RunTakesAt(io, event, rest, more, ran_at) → LinuxEventsValid(Cons(event, rest)) →
+    RunWhole(Vis(c, k), Cons(event, rest)) {
+    match event {
+        ExitEvent(status) => λ ran _ => false_elim(exits_not_asks(io, ran_at, at, sym(same), status, c, ran.left, asks)),
+        CallEvent(d2, b) => λ ran valid =>
+            j(asks_meet(io, at, ran_at, same, c, d2, asks, ran.left),
+                λ x _ => (b: x.Resp()) → RunTakesAt(io, CallEvent(x, b), rest, more, ran_at) →
+                    LinuxEventsValid(Cons(CallEvent(x, b), rest)) → RunWhole(Vis(c, k), Cons(CallEvent(x, b), rest)),
+                λ b2 ran2 valid2 => paid_answered(io, c, k, at, ran_at, same, answers, rest, more, outer, deep, b2,
+                    ran2.right, valid2))(b, ran, valid),
+    }
+}
+
+// Steps left after paying for a silent step: fewer by one at least.
+theorem paid_fewer(m, taken, k, more: Nat, counted: m + Succ(taken) = k): Succ(m + more) <= k + more {
+    let first: (Succ(m) <= k) = j(counted, λ y _ => Succ(m) <= y, m.le_add_l(taken));
+    j(m.add_succ_left(more), λ y _ => y <= k + more, more.add_le_mono_r(Succ(m), k, first))
+}
+
+// One segment of the run, `k` steps to its syscall, the rest taking `more`.
+theorem paid_segment<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, more: Nat, outer: PaidRest(io, rest, more),
+    at: MachineState<M>, syscall: LinuxSyscallAt(io, at), ran: RunTakesAt(io, event, rest, more, at),
+    valid: LinuxEventsValid(Cons(event, rest)), t: ITree<BitVec(64)>(Events::linux())): (k: Nat) → (left, right: MachineState<M>) →
+    SameDefinedState<M>(left, right) → SimPaid(io, t, left) → LinuxStepsN(io, k, right, at) →
+    ITree::Deep(Events::linux(), t, Succ(k + more)) → RunWhole(t, Cons(event, rest)) {
+    match t {
+        Ret(status) => λ k left right same sim steps deep => {
+            let meet = linux_steps_meet(io, sim.proof.left.witness, k, left, right, sim.witness, at, same, sim.proof.left.proof, steps,
+                sim.proof.right.left, syscall);
+            paid_exit_meets(io, status, more, rest, sim.witness, at, meet, sim.proof.right.right, event, ran)
+        },
+        Tau(u) => λ k left right same sim steps deep => {
+            let plus = sim.proof.left;
+            let taken = plus.proof.right.witness;
+            let moved: LinuxStepsN(io, Succ(taken), left, sim.witness) = Exists(plus.witness, ⟨plus.proof.left, plus.proof.right.proof⟩);
+            let peeled = linux_steps_peel(io, Succ(taken), k, left, right, sim.witness, at, same, moved, steps, syscall);
+            let m = peeled.proof.right.witness;
+            paid_segment(io, event, rest, more, outer, at, syscall, ran, valid, u, m, sim.witness, peeled.witness, peeled.proof.left,
+                sim.proof.right, peeled.proof.right.proof.left,
+                ITree::deep_mono(Events::linux(), u, k + more, Succ(m + more),
+                    paid_fewer(m, taken, k, more, peeled.proof.right.proof.right), deep))
+        },
+        Vis(c, kk) => λ k left right same sim steps deep => {
+            let meet = linux_steps_meet(io, sim.proof.left.witness, k, left, right, sim.witness, at, same, sim.proof.left.proof, steps,
+                sim.proof.right.left, syscall);
+            paid_call_meets(io, c, kk, sim.witness, at, meet, sim.proof.right.right.left.left, sim.proof.right.right.right,
+                rest, more, outer,
+                λ a => ITree::deep_mono(Events::linux(), kk(a), Succ(k + more), Succ(more), k.le_add_r(more), deep(a)),
+                event, ran, valid)
+        },
+        Cut => λ k left right same sim steps (deep: Succ(k + more) = 0) => false_elim((k + more).succ_ne_zero(deep)),
+    }
+}
+
+theorem paid_run_related<M>(io: LinuxIo<M>, run: List<LinuxEvent>): (total: Nat) → PaidRest(io, run, total) {
+    match run {
+        Nil => λ total u left right same sim never _ _ => false_elim(never),
+        Cons(event, rest) => λ total u left right same sim ran valid deep => {
+            let k = ran.witness;
+            let more = ran.proof.witness;
+            let segment = ran.proof.proof.right;
+            paid_segment(io, event, rest, more, paid_run_related(io, rest, more), segment.witness, segment.proof.right.left,
+                segment.proof.right.right, valid, u, k, left, right, same, sim, segment.proof.left,
+                j(sym(ran.proof.proof.left), λ y _ => ITree::Deep(Events::linux(), u, Succ(y)), deep))
+        },
+    }
+}
+
+// Every run of a machine that simulates a tree paying for its silent steps,
+// with answers Linux may give, where the tree's cuts lie deeper than the run
+// takes steps, is the events of a whole trace of the tree.
+theorem paid_run_whole<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: SimPaid(io, t, state), run: List<LinuxEvent>, total: Nat, ran: LinuxRunTakes(io, run, total, state),
+    valid: LinuxEventsValid(run), deep: ITree::Deep(Events::linux(), t, Succ(total))): RunWhole(t, run) {
+    paid_run_related(io, run, total, t, state, state, refl, sim, ran, valid, deep)
+}
+
+// For a program that deepens, every run is exact: the events of a whole
+// trace the program produces.
+theorem Program::paid_run_produces<M>(io: LinuxIo<M>, p: Program<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: SimPaidProgram(io, p, state), deepens: Program::Deepens(Events::linux(), p),
+    run: List<LinuxEvent>, ran: LinuxRun(io, run, state), valid: LinuxEventsValid(run)):
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => Program::Produces(Events::linux(), p, tr) ∧
+        (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run))) {
+    let takes = linux_run_takes(io, run, state, ran);
+    let fuel = deepens(Succ(takes.witness));
+    let whole = paid_run_whole(io, p.at(fuel.witness), state, sim(fuel.witness), run, takes.witness, takes.proof, valid, fuel.proof);
+    Exists(whole.witness, ⟨Converges(fuel.witness, whole.proof.left), whole.proof.right⟩)
+}
+
+// …and every claimed run.
+theorem Program::paid_linux_runs_produce<M>(io: LinuxIo<M>, p: Program<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: SimPaidProgram(io, p, state), deepens: Program::Deepens(Events::linux(), p),
+    events: List<LinuxEvent>, runs: LinuxRuns(io, events, state)):
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => Program::Produces(Events::linux(), p, tr) ∧
+        (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = events))) {
+    Program::paid_run_produces(io, p, state, sim, deepens, events, claim_is_run(io, events, state, runs),
+        linux_runs_valid(io, events, state, runs))
+}
