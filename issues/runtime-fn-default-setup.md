@@ -100,7 +100,8 @@ integration round. The other slices have their own issues:
   `loop_*` examples are runtime fns and `compile-x86` compiles them through
   their instances; the Rust reflector's loop code is deleted (an unmarked
   loop is refused, naming the marker). Probes:
-  `lib/_tests/native/runtime/runtime_tests.hthr`'s loop section. Still open
+  `lib/_tests/native/runtime/runtime_loop_tests.hthr`. Still open
   here: `Bool` helpers (then the rest of `function_ir_source/`), `heather
   reflect` from instances, callees by instance search, a `decreases` measure
   that is not a word's `toNat`.
+  The generator's cost per linked function is [[runtime-generator-link-cost]].

@@ -1269,7 +1269,7 @@ tests through `Bool` helpers and `heather reflect`. What the round settled:
   words as `Call(0, …)` with the fuel's predecessor first. A measured
   function is reflected from `f::body` (found by `lookup`), its ih applied
   to the words and a proof read as `Call(0, words)`. `sum_down` reflects to
-  §16.10's hand-written step exactly (`runtime_tests`'s `sum_down_rt_is`).
+  §16.10's hand-written step exactly (`runtime_loop_tests`'s `sum_down_rt_is`).
 - **A leaving pass writes every `next` word.** §16.10's pass moved a
   leaving value to the first `next` port only; the evaluator does not care,
   but the x86 emission meets a branch's two register files and keeps only
@@ -1306,4 +1306,6 @@ tests through `Bool` helpers and `heather reflect`. What the round settled:
 Left: `Bool`-returning helpers (`branches.hthr`'s `unequal` callers still
 use the Rust reflector), `heather reflect` from instances, `Fold` in the
 lowering, and a `decreases` measure that is not a word's `toNat` (a count
-parameter matched below the top is refused by the reflector today).
+parameter matched below the top is refused by the reflector today). The generator's cost grows with the functions a
+program links ([[runtime-generator-link-cost]]): `loop_anywhere` was cut to
+five functions to stay well inside the native gate's rail.

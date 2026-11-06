@@ -81,20 +81,15 @@ static uint64_t sum_down(uint64_t fuel, uint64_t n, uint64_t acc) {
     for (; fuel != 0; --fuel) { if (n == 0) return acc; acc += n; n -= 1; }
     return acc;
 }
-static uint64_t settling(unsigned fuel, uint64_t x, uint64_t y) {
-    for (; fuel != 0; --fuel) { if ((x & 7) == 0) return x; x = (x + y) ^ (x - y); y += 1; }
-    return x ^ y;
-}
 static uint64_t triangle(uint64_t a) { uint64_t n = a & 255; return sum_down(n, n, 0); }
 static uint64_t nested(uint64_t fuel, uint64_t n, uint64_t acc) {
     for (; fuel != 0; --fuel) { if (n == 0) return acc; acc += triangle(n); n -= 1; }
     return acc;
 }
-static uint64_t either(uint64_t a, uint64_t b) { return a < b || a == 5 ? a : b; }
 static uint64_t reference(uint64_t a, uint64_t b) {
     uint64_t m = a & 63;
-    if (a < b) { uint64_t t = sum_down(m, m, b); return settling(100, t, a) + t + triangle(b); }
-    return either(nested(m, m, b), a);
+    if (a < b) { uint64_t t = sum_down(m, m, b); return t + triangle(b + t); }
+    return nested(m, m, b) ^ a;
 }
 "#),
 ];
