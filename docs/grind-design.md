@@ -931,3 +931,17 @@ closure). What would let them in: a cheaper closure still
 ([tier2-constructor-value-cost](../issues/tier2-constructor-value-cost.md)),
 and a recheck that a merge of two chains does not repeat
 ([lib-closure-markers](../issues/lib-closure-markers.md) records both).
+
+**Where the sixfold went (later the same day).** Most of it was not grind.
+The bundled check's session had no verdict store, so each world where two
+import chains meet kernel-rechecked the moved chain; with an in-memory store
+(every declaration still faces the kernel once) that went, but the store's
+one Merkle prefix then re-hashed everything past the common part at every
+switch between the process's world and a module's canonical world. The
+store now keeps the prefixes of the last few worlds, image relocation
+memoizes shared nodes, and the Merkle walk hashes a large node as a digest
+walked once (`docs/cache-v1-design.md` §12.5). With the conversions
+replayed the cold check went from about 216 s to about 120 s; master's own
+stayed at about 35 s. What is left of the difference is the closure's own
+elaboration (`grind` about 42 s, `tactic` about 23 s), which is
+[tier2-constructor-value-cost](../issues/tier2-constructor-value-cost.md).
