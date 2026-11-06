@@ -86,6 +86,9 @@ struct RelCarrier {
     /// `/`, read as a product with the divisor's reciprocal
     /// (`Reifier::quotient`).
     div: Option<Op>,
+    /// `^` at an integer exponent, read at a literal exponent as the product
+    /// it computes to (`Reifier::literal_power`).
+    pow: Option<Op>,
     /// At a class carrier, its integers (`ClassInts`); `None` at a carrier
     /// with a `CommRingOfInt` instance.
     class: Option<ClassInts>,
@@ -402,6 +405,7 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
         neg: op("-", OpFixity::Prefix),
         inv: op("⁻¹", OpFixity::Postfix),
         div: op("/", OpFixity::Infix),
+        pow: op("^", OpFixity::Infix),
         class: None,
     })
 }
@@ -437,6 +441,7 @@ fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCar
         neg: neg.map(Op::Term),
         inv: None,
         div: None,
+        pow: None,
         class: Some(ClassInts { ints: Rc::new(ints), ty, level, zero, one }),
     })
 }
@@ -913,6 +918,14 @@ impl Reifier<'_> {
             let inner = Rc::clone(inner);
             return Ok(Syn::Neg(Box::new(self.reify_within(&inner, depth)?)));
         }
+        if let Some((base, k)) = self.literal_power(tm, ops) {
+            let base = self.reify_within(&base, depth)?;
+            let mut product = Syn::Const(1);
+            for _ in 0..k {
+                product = Syn::Mul(Box::new(product), Box::new(base.clone()));
+            }
+            return Ok(product);
+        }
         if let Some((a, r)) = self.quotient(tm, ops) {
             let a = self.reify_within(&a, depth)?;
             let r = self.reify_within(&r, depth)?;
@@ -998,6 +1011,36 @@ impl Reifier<'_> {
         let rest = self.reify_within(&peeled.rest, depth)?;
         let last = self.reify_within(&peeled.last, depth)?;
         Ok(Some(if sum { Syn::Add(Box::new(rest), Box::new(last)) } else { Syn::Mul(Box::new(rest), Box::new(last)) }))
+    }
+
+    /// A power `x ^ n` at a literal exponent is the product `npow` computes
+    /// it to, `1 * x * … * x` (`pow_ofNat` is `refl`, and `npow` multiplies
+    /// on the right), so the certificate's check unfolds it rather than
+    /// reading a lemma; at a negative literal `NegSucc(k)` the base is the
+    /// reciprocal `x⁻¹` at the power's proof (`pow_negSucc` is `refl`), read
+    /// with its fact as every `x⁻¹` is. The base and the exponent count are
+    /// returned; an exponent past `MAX_POWER`, or one that is not a literal,
+    /// leaves the power an atom.
+    fn literal_power(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<(Rc<Term>, u32)> {
+        let Some(Op::Global(pow)) = &ops.pow else {
+            return None;
+        };
+        let args = named_args(self.elab, tm, pow)?;
+        let [x, n, h] = args.as_slice() else {
+            return None;
+        };
+        let exponent = int_literal(&self.elab.spell_term_source(self.cx, n)?)?;
+        if exponent >= 0 {
+            let k = u32::try_from(exponent).ok().filter(|k| *k <= MAX_POWER)?;
+            return Some((Rc::clone(x), k));
+        }
+        let k = u32::try_from(-exponent).ok().filter(|k| *k <= MAX_POWER)?;
+        let inv = ops.inv.as_ref()?.global()?;
+        let x = self.elab.spell_term_source(self.cx, x)?;
+        let h = self.elab.spell_term_source(self.cx, h)?;
+        let expr = parse_expr(&format!("{inv}({x}, h := {h})")).ok()?;
+        let (r, _, _) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
+        Some((Rc::new(r), k))
     }
 
     /// A quotient `a / b` is `a * b⁻¹` at the same apartness proof
@@ -1518,6 +1561,34 @@ impl Reifier<'_> {
 /// The integer a spelling ends in, as an `Int` constructor's argument with
 /// only closing parentheses after it: `f(OfNat(2))` is 2, `f(NegSucc(1))` is
 /// −2.
+/// The largest literal exponent `ring` multiplies out.
+const MAX_POWER: u32 = 16;
+
+/// An `Int` literal as a term spells it: `OfNat(2)`, `NegSucc(1)` (that is
+/// -2), `neg(OfNat(2))`, with or without a path, or a plain numeral.
+fn int_literal(source: &str) -> Option<Z> {
+    let source = source.trim();
+    let digits = |s: &str| s.parse::<Z>().ok();
+    // `-2` is `Int::neg(OfNat(2))` until it computes.
+    if let Some(at) = source.find("neg(")
+        && (at == 0 || source[..at].ends_with("::"))
+        && !source[..at].contains('(')
+        && let Some(inner) = source[at + "neg(".len()..].strip_suffix(')')
+    {
+        return int_literal(inner).map(|n| -n);
+    }
+    for (ctor, negative) in [("OfNat(", false), ("NegSucc(", true)] {
+        if let Some(at) = source.find(ctor)
+            && (at == 0 || source[..at].ends_with("::"))
+            && let Some(inner) = source[at + ctor.len()..].strip_suffix(')')
+        {
+            let n = digits(inner)?;
+            return Some(if negative { -(n + 1) } else { n });
+        }
+    }
+    digits(source)
+}
+
 fn trailing_integer(source: &str) -> Option<Z> {
     let body = source.trim_end_matches(')');
     let closed = source.len() - body.len();

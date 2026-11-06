@@ -87,10 +87,18 @@ fn div_zero(a: Rat) → Rat { a / 0 }
 // `=` at `Rat` is the pair's: `Rat(0, 2)` is not `Rat(0, 1)` but is ≈ 0.
 // expect-error: no instance for `Apart(b, ofInt(OfNat(0)))`
 fn div_structural_ne(a, b: Rat, h: ¬(b = 0)) → Rat { a / b }
-// The sign rules do not run arithmetic at their leaves: `c - b` is positive
-// by `nlinarith` only as a whole divisor (issues/apart-search-arith-leaves.md).
-// expect-error: no instance for `Apart(add(sub(c, b), abs(e)), ofInt(OfNat(0)))`
+// Arithmetic at the sign rules' leaves: `c - b` is positive by `nlinarith`
+// inside the sum, and a positive local is nonnegative by `linarith`.
 fn div_arith_leaf(a, b, c, e: Rat, h: b < c) → Rat { a / ((c - b) + e.abs()) }
+fn div_positive_as_nonneg(a, x, y: Rat, hx: 0 < x, hy: 0 <= y) → Rat { a / (x * y + x) }
+// A product of unknowns is not apart from zero.
+// expect-error: no instance for `Apart(mul(b, b), ofInt(OfNat(0)))`
+fn div_square_unknown(a, b: Rat) → Rat { a / (b * b) }
+// A written sign goal reaches the sign rules (`lt_of_positive`).
+theorem positivity_of_quotient(a, b: Rat, ha: 0 < a, hb: 0 < b): 0 < a / b { positivity }
+theorem positivity_of_square_sum(a, b: Rat, hb: 0 < b): 0 <= a * a + b { positivity }
+fn wants_positive(x: Rat, h: 0 < x := infer) → Rat { x }
+fn passes_positive(b: Rat, hb: 0 < b) → Rat { wants_positive(b * b + b) }
 
 // A denominator carries its positivity: a local fact or a product of
 // denominators is found, and the fact reads back through `den_positive`.

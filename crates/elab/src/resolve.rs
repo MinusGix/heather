@@ -743,7 +743,16 @@ impl Elaborator {
         // order, and the search rules after them, so a goal a cheap producer
         // answers never pays for a search.
         let (mut rules, search): (Vec<_>, Vec<_>) = rules.into_iter().partition(|g| !self.is_search_rule(g));
-        rules.extend(search);
+        // Inside an arithmetic tactic's own run (`linarith`, `ring`,
+        // `omega` reading and checking their certificates) no search rule
+        // runs: its tactic would start another such run, whose reading can
+        // meet the same goal again (a reciprocal's apartness, read while
+        // `nlinarith` reads the context that mentions it), and the nesting
+        // is bounded only by the depth cap, exponentially. Plain rules still
+        // answer there (docs/division-design.md §3).
+        if self.scope.ring_depth.get() == 0 && self.scope.omega_depth.get() == 0 {
+            rules.extend(search);
+        }
         if rules.is_empty() {
             tr.push(line(
                 depth,

@@ -1505,18 +1505,28 @@ impl application::ImplicitApplicationElab for Elaborator {
             // the goal was is the search's own verdict, its outermost
             // `no-class` record (a class goal arrives in spellings the
             // display path cannot classify).
-            None => Err(ElabError::Resolution {
-                goal: if trace.first().is_some_and(|top| {
+            // The trace's own first `goal:` line is the same goal, written
+            // as the parameter declared it (`b.Apart`, a rule's `x.Positive`
+            // before its `x` was solved); it takes the spelled goal too. A
+            // nested search's lines were spelled where its own refusal was
+            // made, so each goal is spelled once.
+            None => {
+                let mut trace = trace;
+                let spelled = if trace.first().is_some_and(|top| {
                     trace.iter().any(|l| l.key == "no-class" && l.depth == top.depth)
-                }) && let Some(spelled) = self.spell_type_clean(cx, &goal)
-                {
-                    spelled
+                }) {
+                    self.spell_type_clean(cx, &goal)
                 } else {
-                    display
-                },
-                span,
-                trace,
-            }),
+                    None
+                };
+                if let Some(spelled) = &spelled
+                    && let Some(top) = trace.first_mut()
+                    && top.key == "goal"
+                {
+                    top.value = spelled.clone();
+                }
+                Err(ElabError::Resolution { goal: spelled.unwrap_or(display), span, trace })
+            }
         }
     }
 
