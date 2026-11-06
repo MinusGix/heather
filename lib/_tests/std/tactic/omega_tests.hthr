@@ -232,7 +232,8 @@ theorem let_bare_omega_unannotated(a: Nat, h: a < 3): a < 4 { let k = omega; k }
 
 // A Bool guard `b.IsTrue()` is read by its structure: `&&` as both sides,
 // `||` as two cases, `!` as its operand's opposite, `n.leb(m)` as `n <= m`,
-// and any other Bool `r` as the atom `bit(r)`, so `r` meets `!r`
+// `n.same(m)` as `n = m`, and any other Bool `r` as the atom `bit(r)`, so
+// `r` meets `!r`
 // (issues/omega-reads-bool-guards.md, §17 of the design).
 theorem guard_and(n, m: Nat, h: (n.leb(m) && m.leb(5)).IsTrue()): n <= 5 { omega }
 theorem guard_or(n: Nat, h: (n.leb(2) || 7.leb(n)).IsTrue(), k: 3 <= n): 7 <= n { omega }
@@ -240,6 +241,11 @@ theorem guard_not_leb(n, m: Nat, h: (!n.leb(m)).IsTrue()): m < n { omega }
 theorem guard_not_and(n, m: Nat, h: (!(n.leb(m) && m.leb(n))).IsTrue()): n ≠ m { omega }
 theorem guard_not_or(n, m: Nat, h: (!(n.leb(m) || m.leb(3))).IsTrue()): 4 < n { omega }
 theorem guard_not_not(n: Nat, h: (!(!n.leb(3))).IsTrue()): n < 4 { omega }
+theorem guard_same(n, m: Nat, h: (n.same(m) && m.leb(4)).IsTrue()): n <= 4 { omega }
+theorem guard_not_same(n: Nat, h: (!n.same(0)).IsTrue()): n - 1 < n { omega }
+// `!n.same(m)` is only `n ≠ m`: it bounds nothing alone.
+// expect-error: `omega` got stuck
+theorem guard_not_same_alone(n, m: Nat, h: (!n.same(m)).IsTrue()): n < m { omega }
 theorem guard_atom(r: Bool, n: Nat, h: (!(r && n.leb(3))).IsTrue(), rt: r.IsTrue()): 3 < n { omega }
 // As a negation, as a fact argument, and as a record's field.
 theorem guard_negated(n: Nat, h: ¬(n.leb(4)).IsTrue()): 5 <= n { omega }
@@ -255,6 +261,7 @@ theorem guard_bool_field(g: Gate, h: (!(g.open && g.at.leb(3))).IsTrue(), o: g.o
 // the guard it states (issues/decreases-measure-record-field-unspelled.md).
 theorem guard_eq_false(n, m: Nat, h: n.leb(m) = False): m < n { omega }
 theorem guard_eq_true(n: Nat, h: (n.leb(3) && 1.leb(n)) = True): n ≠ 0 { omega }
+theorem guard_eq_same(n: Nat, h: (!n.same(0)) = True): 1 <= n { omega }
 theorem guard_eq_in_arm(n: Nat): n - 1 <= n {
     match h: n.leb(0) { True => omega, False => omega }
 }

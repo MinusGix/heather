@@ -3345,6 +3345,8 @@ enum GuardShape<'a> {
     Not(&'a Rc<Term>),
     /// `n.leb(m)`, read as `n <= m`.
     Leb,
+    /// `n.same(m)`, read as `n = m` (`!n.same(m)` as `n ≠ m`).
+    Same,
     /// A variable, a call or a field: the atom `omega::bit(b)`, unless a definition
     /// unfolds it to a connective (`unfold_guard`).
     Atom,
@@ -3366,6 +3368,9 @@ fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
     if args("nat::Nat::leb").is_some_and(|args| args.len() == 2) {
         return GuardShape::Leb;
     }
+    if args("nat::Nat::same").is_some_and(|args| args.len() == 2) {
+        return GuardShape::Same;
+    }
     match app_spine(b).0 {
         Term::GlobalTm { .. } | Term::Var(_) => GuardShape::Atom,
         _ if is_field_read(elab, b) => GuardShape::Atom,
@@ -3377,7 +3382,7 @@ fn guard_shape<'a>(elab: &Elaborator, b: &'a Rc<Term>) -> GuardShape<'a> {
 fn guard_reads_by_structure(elab: &Elaborator, b: &Rc<Term>) -> bool {
     match guard_shape(elab, b) {
         GuardShape::Not(x) => guard_reads_by_structure(elab, x),
-        GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Leb => true,
+        GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Leb | GuardShape::Same => true,
         GuardShape::Atom | GuardShape::Other => false,
     }
 }
@@ -3406,7 +3411,7 @@ fn unfold_guard(elab: &Elaborator, cx: &Cx, b: &Rc<Term>) -> Option<Rc<Term>> {
             oracle.unfold(&cx.gamma, b, Unfold::Proposition).map(Rc::new).find(|reduct| {
                 matches!(
                     guard_shape(elab, reduct),
-                    GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb
+                    GuardShape::And(..) | GuardShape::Or(..) | GuardShape::Not(_) | GuardShape::Leb | GuardShape::Same
                 )
             })
         }
@@ -3530,6 +3535,12 @@ impl GuardEmitter<'_> {
                 let rule = if positive { "omega::guard_leb" } else { "omega::guard_not_leb" };
                 format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
             }
+            (positive, GuardShape::Same) => {
+                let x = self.name(GUARD_PART);
+                let body = self.emit(items, budget);
+                let rule = if positive { "omega::guard_same" } else { "omega::guard_not_same" };
+                format!("{}({h}, {x} ⊢ {body})", self.rule(rule))
+            }
             (positive, GuardShape::Atom) if unfold_guard(self.elab, self.cx, &item.term).is_none() => {
                 let x = self.name(GUARD_PART);
                 let body = self.emit(items, budget);
@@ -3552,8 +3563,9 @@ impl GuardEmitter<'_> {
 /// (issues/omega-reads-bool-guards.md, design §17): a fact `b.IsTrue()` or
 /// `¬b.IsTrue()` is taken apart by the `omega::guard_*` rules, `&&` into
 /// both sides, `||` into two branches, `!` by its operand's opposite rule,
-/// `n.leb(m)` into `n <= m` (`!n.leb(m)` into `m < n`), and any other Bool
-/// into the atom `bit(b)`, `1` or `0`. A guard whose head is a definition is
+/// `n.leb(m)` into `n <= m` (`!n.leb(m)` into `m < n`), `n.same(m)` into
+/// `n = m` (`!n.same(m)` into `n ≠ m`), and any other Bool into the atom
+/// `bit(b)`, `1` or `0`. A guard whose head is a definition is
 /// read at its unfolding, a fact bound beside the original
 /// (`GuardRound::aliases`). Every guard in scope is read in one round, ending
 /// in `omega` at each branch; the facts it reads are settled for the omegas

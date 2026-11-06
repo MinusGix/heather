@@ -611,6 +611,7 @@ proved true (`h: b.IsTrue()`) or proved false (`h: (!b).IsTrue()`):
 | `a \|\| b` | two cases (`guard_or`) | both negated (`guard_nor`) |
 | `!a` | `a` proved false | `a` proved true (`guard_not_not`) |
 | `n.leb(m)` | `n <= m` (`guard_leb`) | `m < n` (`guard_not_leb`) |
+| `n.same(m)` | `n = m` (`guard_same`) | `n ≠ m` (`guard_not_same`) |
 | any other Bool `r` | `bit(r) = 1` (`guard_bit`) | `bit(r) = 0` (`guard_not_bit`) |
 
 A fact `¬b.IsTrue()` is `b` proved false (`guard_negated`). The rules take
