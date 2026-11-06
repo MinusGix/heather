@@ -349,6 +349,35 @@ fn pad<A>(xs: List<A>, a: A, k: Nat) → List<A> {
 theorem pad_lit(): pad([9], 0, 5) = [0, 0, 0, 0, 0, 0, 9] { refl }
 theorem pad_open<A>(a: A): pad(List::Nil, a, 1) = [a] { refl }
 
+// A Bool condition (issues/while-bool-condition-measure.md): the loop's
+// equation is `!k.same(0) = True`, which omega's guard round reads as
+// `k ≠ 0`, so `k - 1 < k` needs no `on ?dec := …`.
+fn drain_bool(n: Nat) → Nat {
+    let mut k = n;
+    let mut steps = 0;
+    while !k.same(0) decreases k { k := k - 1; steps := steps + 1 }
+    steps
+}
+theorem drain_bool_lit(): drain_bool(3) = 3 { refl }
+theorem drain_bool_zero(): drain_bool(0) = 0 { refl }
+// A positive `same` and a conjunction: `i.same(j)` is false in the loop,
+// read as `i ≠ j` beside `i <= j`.
+fn climb(i0, j: Nat) → Nat {
+    let mut i = i0;
+    while !i.same(j) && i.leb(j) decreases j - i { i := i + 1 }
+    i
+}
+theorem climb_lit(): climb(2, 5) = 5 { refl }
+theorem climb_past(): climb(7, 5) = 7 { refl }
+
+// The guard alone does not make a non-decreasing body decrease.
+// expect-error: this recursive call must decrease the measure
+fn drain_bool_stuck(n: Nat) → Nat {
+    let mut k = n;
+    while !k.same(0) decreases k { k := k + 0 }
+    k
+}
+
 // A body that does not decrease the measure is refused at its obligation.
 // expect-error: this recursive call must decrease the measure
 fn stuck(n: Nat) → Nat {

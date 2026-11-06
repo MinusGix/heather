@@ -955,7 +955,8 @@ theorem nat_sub_elim(a, b: Nat,
 // `b.IsTrue()` is read by `b`'s structure: each rule takes one connective
 // off a guard proved true (`h: b.IsTrue()`) or proved false
 // (`h: (!b).IsTrue()`) and hands its parts to the rest of the certificate. A
-// comparison bit becomes its relation; any other Bool is the atom `bit(b)`,
+// comparison bit becomes its relation (`n.leb(m)` is `n <= m`,
+// `n.same(m)` is `n = m`); any other Bool is the atom `bit(b)`,
 // so `r` and `!r` meet as `bit(r) = 1` against `bit(r) = 0`. The guard's
 // operands are implicit: the checker reads them off `h`'s type.
 
@@ -995,6 +996,12 @@ theorem guard_leb({n, m: Nat}, h: n.leb(m).IsTrue(), k: n <= m → False): False
 
 theorem guard_not_leb({n, m: Nat}, h: (!n.leb(m)).IsTrue(), k: m < n → False): False {
     k(nat_lt_of_not_le(n, m, λ le => n.leb(m).is_true_not(h, n.leb_complete(m, le))))
+}
+
+theorem guard_same({n, m: Nat}, h: n.same(m).IsTrue(), k: n = m → False): False { k(n.same_sound(m, eq_true_of_is_true(n.same(m), h))) }
+
+theorem guard_not_same({n, m: Nat}, h: (!n.same(m)).IsTrue(), k: n ≠ m → False): False {
+    k(λ e => n.same(m).is_true_not(h, Bool::is_true_of_eq(j(e, λ x _ => n.same(x) = True, n.same_self()))))
 }
 
 theorem guard_bit({b: Bool}, h: b.IsTrue(), k: bit(b) = 1 → False): False {
