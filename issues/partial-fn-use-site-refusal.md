@@ -5,7 +5,7 @@ labels: [diagnostics,sequencing]
 area: language
 milestone: [lang-sequencing]
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-06
 ---
 
 Calling a `partial fn` where its result type is expected is a plain type
@@ -34,3 +34,4 @@ the same module and from an imported one.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[partial-fn-tail-iter]] (`lib/_tests/std/itree/partial_fn_tests.hthr`).
+- 2026-11-06: type-name-display-respelling closed without the Partial(Nat) half: Partial takes a type and is codata, filed as [[type-name-respelling-type-arguments]].

@@ -190,6 +190,42 @@ and `global_name_at(abs)` is the existing reverse lookup. Two guards:
   recognized by `tag_of`. Recursive constructor values and `Wf` types use the
   parallel exact lookup for `D#shape`; other generated definitions fall back.
 
+### 5.1 Type names the program wrote
+
+A `def` at a universe and a width family are expanded where they are read
+(`docs/fixed-width-integers-design.md` §2), so the type a diagnostic holds is
+`BitVec(8)` whichever of `u8`, `Byte` or `BitVec(8)` the program wrote. The
+expansion is a pure function of the definition, so the name is recovered by
+a table, not by unfolding anything (`Memos::type_names`,
+`issues/type-name-display-respelling.md`):
+
+- **Filled where the name is expanded** (`lower_type_value`,
+  `try_type_value_app`), and read off the definition's *body*, once per name:
+  `D#tycode_fn` applied to closed value arguments (`def Byte: Type =
+  BitVec(8)`), `D#tycode`, or `λ n. D#tycode_fn(n)` for a declaration with
+  one value parameter and no type parameters (`def u: Nat → Type = BitVec`,
+  a family), each possibly through another `def` that is one (`def Word: Type
+  = u(16)`). Any other body is not recorded and its expansion keeps the
+  honest spelling: the display matches the instance it already recovers
+  (§4) against the entry's tag and arguments, and never reduces to do it.
+- **Read at an instance**, the inline lowering (§4, with its recovered value
+  arguments) or its code `D#tycode_fn(ā)` (a type argument): an exact entry
+  is its name; a family is `u16` at a numeral width and `u(e)` at any other.
+  `u16` is spelled only where it would read back as the family (no `def
+  u16` of its own).
+- **The most recently written name wins.** Inside a declaration that is the
+  one the declaration wrote, which is the spelling a reader of that
+  declaration expects; `fn f(x: Byte, y: u8)` shows `u8` for both, since a
+  type carries no record of which binder wrote what.
+- **Only where the name still means it**: resolving to the same `def`, and
+  not hidden by a local or alias in scope at the node. Otherwise the next
+  name, or the declaration's own.
+- **Reader flavours only.** The source flavours (`qualified`,
+  `annotations`) keep the declaration's name, so a generated annotation is
+  what it was.
+
+Probes: `lib/_tests/std/bitvec/type_names_tests.hthr`.
+
 ## 6. Testing
 
 The axes of `docs/testing-generated-terms.md` apply, and two of them are the

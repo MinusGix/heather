@@ -1836,7 +1836,16 @@ impl Elaborator {
         } else {
             return Ok(None);
         };
-        self.expand_type_value(cx, &expression, name, span).map(Some)
+        let out = self.expand_type_value(cx, &expression, name, span)?;
+        // Expanded, the name is gone; the display gets it back from here.
+        if let Some(def) = self.global_value(name).filter(|_| !self.shadowed_locally(cx, name)) {
+            self.record_type_name(name, &def);
+        } else if let Some((family, _)) = split_width(name)
+            && let Some(def) = self.global_value(family)
+        {
+            self.record_type_name(family, &def);
+        }
+        Ok(Some(out))
     }
 
     /// `u(n)` written applied in type position, `u` a global `def`: the
@@ -1846,10 +1855,12 @@ impl Elaborator {
     pub(crate) fn try_type_value_app(&self, cx: &Cx, e: &Expr, span: Span) -> R<Option<(Type, Level)>> {
         let ExprKind::App { head, .. } = &e.kind else { return Ok(None) };
         let ExprKind::Var(name) = &head.kind else { return Ok(None) };
-        if self.shadowed_locally(cx, name) || self.global_value(name).is_none() {
+        let Some(def) = self.global_value(name).filter(|_| !self.shadowed_locally(cx, name)) else {
             return Ok(None);
-        }
-        self.expand_type_value(cx, e, name, span).map(Some)
+        };
+        let out = self.expand_type_value(cx, e, name, span)?;
+        self.record_type_name(name, &def);
+        Ok(Some(out))
     }
 
     /// Elaborate `expression`, a `def` or a `def` applied, and expand the
@@ -1879,7 +1890,7 @@ impl Elaborator {
 
     /// The module-qualified spelling of the global `def` `name`, when it is
     /// one.
-    fn global_value(&self, name: &str) -> Option<String> {
+    pub(crate) fn global_value(&self, name: &str) -> Option<String> {
         let crate::names::NameRes::Found(module) = self.resolve_name(name) else { return None };
         let base = name.strip_prefix(&format!("{module}::")).unwrap_or(name);
         self.names.is_value(&module, base).then(|| format!("{module}::{base}"))
