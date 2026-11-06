@@ -1,11 +1,11 @@
 ---
 title: A machine that simulates a Linux tree makes only that tree's traces
-status: open
+status: closed
 labels: [native,semantics,proofs]
 area: heather-in-heather
 milestone: [hih-pl-spec]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-11-06
 ---
 
 `Sim(t)(s)` (`lib/std/os/linux/linux_x86_64_sim.hthr`) says every Linux-valid trace of `t`
@@ -41,3 +41,20 @@ tree is the events of some returned trace of the tree.
   `Tau`s, so this changes `Sim`'s definition (a step-wise reading beside
   `RunsAs`), not only `sim_tau`. The coinductive `Sim` stays the statement the compiler
   theorem should end with, after the kernel round.
+- 2026-11-06: 2026-11-06: Done, as the Shape's "prefix of a trace up to a cut" option.
+  `sim_run_of` (`lib/std/os/linux/linux_x86_64_sim.hthr`): every run of a
+  machine that `Sim`s a tree, with answers Linux may give, is `RunOf` the
+  tree: the events of a whole trace of it, or a prefix of them ending where
+  the tree is cut (`IsCutTrace`, new in `lib/std/itree/itree_trace.hthr`: a
+  trace that reached a `Cut`, not a prefix stopped early). The walk
+  (`sim_related_run`) recurses on the tree and carries `SimRelated`: each
+  trace's claim holds from some state related to the run's, because claim and
+  run meet only up to `SameDefinedState` and each trace past an answer is
+  met at a state of its own. New in the determinism module: `asks_meet` (the
+  call two related states ask is one call, without an answer to compare) and
+  `exits_not_asks`, both through `rax_kind`, a closed classification of
+  RAX. Program forms: `Program::sim_run_at`, `Program::sim_linux_runs_at`
+  (from `LinuxRuns`, whose answers are valid, `linux_runs_valid`), and
+  `Program::sim_run_produces` (exact where the tree is not cut along the
+  run). Probes in `lib/_tests/std/os/linux/linux_x86_64_sim_tests.hthr`
+  show the cut side is needed. Divergence went to [[linux-sim-divergence]].

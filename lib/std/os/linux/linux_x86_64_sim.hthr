@@ -11,7 +11,9 @@
 // (`runs_as_linux_runs`, `linux_runs_runs_as`). `Sim(t)` is the claim of
 // every trace of `t` Linux may produce: the history of answers is the
 // trace's. With determinism, a run with the answers of a whole trace of `t`
-// produced exactly that trace's events (`sim_every_run`).
+// produced exactly that trace's events (`sim_every_run`). Conversely, every
+// run of the machine is the tree's, up to where the tree is cut
+// (`sim_run_of`, at the end).
 //
 // At a cut a tree has only the empty trace, so `Sim` says nothing past it: a
 // program's claim is `Sim` at every fuel (`SimProgram`), which covers every
@@ -246,4 +248,243 @@ theorem sim_run_sends<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), 
     fd: BitVec(64)): sent_to(fd, run) = Trace::sent<Nat, BitVec(64)>(fd, tr) {
     trans(cong_fn(λ (events: List<LinuxEvent>) => sent_to(fd, events),
         sim_every_run(io, t, state, sim, tr, it, valid, returns, run, ran, responses)), Trace::sent_events(fd, tr))
+}
+
+// ---------------------------------------------------------------------------
+// The converse (issues/linux-sim-every-machine-run.md): a machine that
+// simulates a tree makes only the tree's traces. Walk a run against the
+// tree: at each syscall the tree's claim and the run meet
+// (`linux_steps_meet`), the call the run asks is the tree's (`asks_meet`),
+// and the run's answer, one Linux may give, picks the tree's branch. So the
+// run is the events of a whole trace of the tree, or the tree is cut after
+// a prefix of them (`RunOf`, `sim_run_of`).
+//
+// The cut is all `Sim` can say: it is partial correctness, so a tree that
+// is cut at every fuel along a run (a loop that goes round silently
+// forever) is simulated by a machine that goes on and exits. Ruling that
+// out is a statement about divergence (issues/linux-sim-divergence.md).
+
+// The answers of a run are ones Linux may give.
+fn LinuxEvent::Valid(self event: LinuxEvent) → Type {
+    match event { CallEvent(c, a) => c.Answers(a), ExitEvent(_) => True }
+}
+fn LinuxEventsValid(events: List<LinuxEvent>) → Type {
+    match events { Nil => True, Cons(event, rest) => event.Valid() ∧ LinuxEventsValid(rest) }
+}
+
+// A claimed run's answers are: `LinuxAnswered` asks it of each.
+theorem claim_valid<M>(io: LinuxIo<M>, rest: List<LinuxEvent>, at: MachineState<M>,
+    next: (state: MachineState<M>) → LinuxRuns(io, rest, state) → LinuxEventsValid(rest), event: LinuxEvent):
+    ClaimAt(io, event, rest, at) → LinuxEventsValid(Cons(event, rest)) {
+    let zero: BitVec(64) = BitVec::zero();
+    match event {
+        CallEvent(c, a) => λ claimed => ⟨claimed.right.left, next(linux_answered(io, at, c, a, Nil, zero, zero),
+            claimed.right.right(Nil, linux_leaves_nil(c, a), zero, zero))⟩,
+        ExitEvent(_) => λ claimed => ⟨trivial, j(sym(claimed.right), λ y _ => LinuxEventsValid(y), trivial)⟩,
+    }
+}
+
+theorem linux_runs_valid<M>(io: LinuxIo<M>, events: List<LinuxEvent>): (state: MachineState<M>) →
+    LinuxRuns(io, events, state) → LinuxEventsValid(events) {
+    match events {
+        Nil => λ state never => false_elim(never),
+        Cons(event, rest) => λ state claimed => claim_valid(io, rest, claimed.witness,
+            λ next_state next_claim => linux_runs_valid(io, rest, next_state, next_claim), event,
+            claim_at(io, event, rest, state, claimed)),
+    }
+}
+
+// What the walk carries: each trace's claim holds from some state related to
+// the run's. A step of the run and of the claim meet only up to
+// `SameDefinedState`, and after an answer each trace's claim may be met at a
+// state of its own.
+fn SimRelated<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), right: MachineState<M>) → Type {
+    (tr: Trace<BitVec(64)>(Events::linux())) → IsTrace(Events::linux(), t, tr) → Trace::LinuxValid(tr) →
+        Exists<MachineState<M>>(λ left => SameDefinedState<M>(left, right) ∧ RunsAs(io, tr, left))
+}
+
+theorem sim_related<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: Sim(io, t, state)): SimRelated(io, t, state) {
+    λ tr it valid => Exists(state, ⟨refl, sim(tr, it, valid)⟩)
+}
+
+// A run of a tree: the events of a whole trace of it, or a prefix of them
+// that ends where the tree is cut.
+fn RunAlong(t: ITree<BitVec(64)>(Events::linux()), tr: Trace<BitVec(64)>(Events::linux()), run: List<LinuxEvent>) → Type {
+    (IsTrace(Events::linux(), t, tr) ∧ (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run))) ∨
+    (IsCutTrace(Events::linux(), t, tr) ∧ Exists<List<LinuxEvent>>(λ more => Trace::linux_events(tr).append(more) = run))
+}
+fn RunOf(t: ITree<BitVec(64)>(Events::linux()), run: List<LinuxEvent>) → Type {
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => RunAlong(t, tr, run))
+}
+
+theorem run_along_answered(c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()), a: c.Resp(),
+    tr: Trace<BitVec(64)>(Events::linux()), more: List<LinuxEvent>, along: RunAlong(k(a), tr, more)):
+    RunAlong(Vis(c, k), TAns(c, a, tr), Cons(CallEvent(c, a), more)) {
+    match along {
+        Inl(whole) => Inl(⟨Answered(a, tr, refl, whole.left), ⟨whole.right.left,
+            cong_fn(λ (events: List<LinuxEvent>) => Cons(CallEvent(c, a), events), whole.right.right)⟩⟩),
+        Inr(cut) => Inr(⟨AnsweredTrace(a, tr, refl, cut.left), Exists(cut.right.witness,
+            cong_fn(λ (events: List<LinuxEvent>) => Cons(CallEvent(c, a), events), cut.right.proof))⟩),
+    }
+}
+
+theorem run_of_answered(c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()), a: c.Resp(),
+    more: List<LinuxEvent>, h: RunOf(k(a), more)): RunOf(Vis(c, k), Cons(CallEvent(c, a), more)) {
+    Exists(TAns(c, a, h.witness), run_along_answered(c, k, a, h.witness, more, h.proof))
+}
+
+// At a return: the run's syscall is the exit, with the tree's status.
+theorem ret_meets<M>(io: LinuxIo<M>, status: BitVec(64), more: List<LinuxEvent>, at, ran_at: MachineState<M>,
+    same: SameDefinedState<M>(at, ran_at), exits: LinuxExits(at, status), event: LinuxEvent):
+    RunAt(io, event, more, ran_at) → RunOf(Ret(status), Cons(event, more)) {
+    match event {
+        ExitEvent(status2) => λ ran => {
+            let statuses: (status = status2) =
+                trans(sym(exits.right), trans(register_related(Rdi, at, ran_at, same), ran.left.right));
+            Exists(TRet(status), Inl(⟨Returned(refl), ⟨trivial, List::cons_eq(Nil, more, ExitEvent(status), ExitEvent(status2),
+                cong_fn(λ (s: BitVec(64)) => ExitEvent(s), statuses), sym(ran.right))⟩⟩))
+        },
+        CallEvent(c, _) => λ ran => false_elim(exits_not_asks(io, at, ran_at, same, status, c, exits, ran.left)),
+    }
+}
+
+theorem sim_ret_run<M>(io: LinuxIo<M>, status: BitVec(64), right: MachineState<M>, sim: SimRelated(io, Ret(status), right),
+    run: List<LinuxEvent>): LinuxRun(io, run, right) → RunOf(Ret(status), run) {
+    match run {
+        Nil => λ never => false_elim(never),
+        Cons(event, more) => λ ran => {
+            let claim = sim(TRet(status), Returned(refl), trivial);
+            let runs = claim.proof.right;
+            let meet = linux_steps_meet(io, runs.proof.left.witness, ran.proof.left.witness, claim.witness, right,
+                runs.witness, ran.witness, claim.proof.left, runs.proof.left.proof, ran.proof.left.proof,
+                runs.proof.right.left, ran.proof.right.left);
+            ret_meets(io, status, more, runs.witness, ran.witness, meet, runs.proof.right.right, event,
+                run_at(io, event, more, right, ran))
+        },
+    }
+}
+
+// At a call answered as the tree asks: every trace past the answer is
+// claimed from a state related to where Linux resumed the run.
+theorem answered_meets<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    right: MachineState<M>, sim: SimRelated(io, Vis(c, k), right),
+    next: (a: c.Resp()) → (more: List<LinuxEvent>) → (resumed: MachineState<M>) → SimRelated(io, k(a), resumed) →
+        LinuxRun(io, more, resumed) → LinuxEventsValid(more) → RunOf(k(a), more),
+    more: List<LinuxEvent>, at: MachineState<M>, steps: LinuxSteps(io, right, at), syscall: LinuxSyscallAt(io, at),
+    b: c.Resp(), resumed: LinuxResumed(io, at, c, b, LinuxRun(io, more)),
+    valid: LinuxEventsValid(Cons(CallEvent(c, b), more))): RunOf(Vis(c, k), Cons(CallEvent(c, b), more)) {
+    let junk = resumed.witness;
+    let rcx = resumed.proof.right.witness;
+    let r11 = resumed.proof.right.proof.witness;
+    let related: SimRelated(io, k(b), linux_answered(io, at, c, b, junk, rcx, r11)) = λ rest it rest_valid => {
+        let claim = sim(TAns(c, b, rest), Answered(b, rest, refl, it), ⟨valid.left, rest_valid⟩);
+        let runs = claim.proof.right;
+        let meet = linux_steps_meet(io, runs.proof.left.witness, steps.witness, claim.witness, right, runs.witness, at,
+            claim.proof.left, runs.proof.left.proof, steps.proof, runs.proof.right.left, syscall);
+        Exists(linux_answered(io, runs.witness, c, b, junk, rcx, r11),
+            ⟨linux_answered_respects<M>(io, c, b, junk, rcx, r11, runs.witness, at, meet),
+                runs.proof.right.right.right.right(junk, resumed.proof.left, rcx, r11)⟩)
+    };
+    run_of_answered(c, k, b, more, next(b, more, linux_answered(io, at, c, b, junk, rcx, r11), related,
+        resumed.proof.right.proof.proof, valid.right))
+}
+
+// At a call: the run's syscall asks the tree's call, never an exit.
+theorem vis_meets<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    right: MachineState<M>, sim: SimRelated(io, Vis(c, k), right),
+    next: (a: c.Resp()) → (more: List<LinuxEvent>) → (resumed: MachineState<M>) → SimRelated(io, k(a), resumed) →
+        LinuxRun(io, more, resumed) → LinuxEventsValid(more) → RunOf(k(a), more),
+    more: List<LinuxEvent>, at: MachineState<M>, steps: LinuxSteps(io, right, at), syscall: LinuxSyscallAt(io, at),
+    claim_at: MachineState<M>, same: SameDefinedState<M>(claim_at, at), asks: LinuxAsks(io, claim_at, c),
+    event: LinuxEvent): RunAt(io, event, more, at) → LinuxEventsValid(Cons(event, more)) → RunOf(Vis(c, k), Cons(event, more)) {
+    match event {
+        ExitEvent(status) => λ ran _ => false_elim(exits_not_asks(io, at, claim_at, sym(same), status, c, ran.left, asks)),
+        CallEvent(d, b) => λ ran valid =>
+            j(asks_meet(io, claim_at, at, same, c, d, asks, ran.left),
+                λ x _ => (b: x.Resp()) → RunAt(io, CallEvent(x, b), more, at) → LinuxEventsValid(Cons(CallEvent(x, b), more)) →
+                    RunOf(Vis(c, k), Cons(CallEvent(x, b), more)),
+                λ b2 ran2 valid2 => answered_meets(io, c, k, right, sim, next, more, at, steps, syscall, b2, ran2.right, valid2))(b, ran, valid),
+    }
+}
+
+theorem sim_vis_run<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    right: MachineState<M>, sim: SimRelated(io, Vis(c, k), right),
+    next: (a: c.Resp()) → (more: List<LinuxEvent>) → (resumed: MachineState<M>) → SimRelated(io, k(a), resumed) →
+        LinuxRun(io, more, resumed) → LinuxEventsValid(more) → RunOf(k(a), more),
+    run: List<LinuxEvent>): LinuxRun(io, run, right) → LinuxEventsValid(run) → RunOf(Vis(c, k), run) {
+    match run {
+        Nil => λ never _ => false_elim(never),
+        Cons(event, more) => λ ran valid => {
+            let claim = sim(TCall(c), Pending(refl), trivial);
+            let runs = claim.proof.right;
+            let meet = linux_steps_meet(io, runs.proof.left.witness, ran.proof.left.witness, claim.witness, right,
+                runs.witness, ran.witness, claim.proof.left, runs.proof.left.proof, ran.proof.left.proof,
+                runs.proof.right.left, ran.proof.right.left);
+            vis_meets(io, c, k, right, sim, next, more, ran.witness, ran.proof.left, ran.proof.right.left,
+                runs.witness, meet, runs.proof.right.right.left, event, run_at(io, event, more, right, ran), valid)
+        },
+    }
+}
+
+theorem sim_related_run<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux())): (run: List<LinuxEvent>) →
+    (right: MachineState<M>) → SimRelated(io, t, right) → LinuxRun(io, run, right) → LinuxEventsValid(run) → RunOf(t, run) {
+    match t {
+        Ret(status) => λ run right sim ran _ => sim_ret_run(io, status, right, sim, run, ran),
+        Tau(s) => λ run right sim ran valid => sim_related_run(io, s, run, right, sim, ran, valid),
+        Vis(c, k) => λ run right sim ran valid => sim_vis_run(io, c, k, right, sim,
+            λ a more resumed related again again_valid => sim_related_run(io, k(a), more, resumed, related, again, again_valid),
+            run, ran, valid),
+        Cut => λ run right sim ran valid => Exists(TEnd, Inr(⟨refl, Exists(run, refl)⟩)),
+    }
+}
+
+// Every run of a machine that simulates a tree, with answers Linux may give,
+// is the tree's: the events of a whole trace, or a prefix of them up to a cut.
+theorem sim_run_of<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: Sim(io, t, state), run: List<LinuxEvent>, ran: LinuxRun(io, run, state), valid: LinuxEventsValid(run)):
+    RunOf(t, run) {
+    sim_related_run(io, t, run, state, sim_related(io, t, state, sim), ran, valid)
+}
+
+// …at every fuel of a program.
+theorem Program::sim_run_at<M>(io: LinuxIo<M>, p: Program<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: SimProgram(io, p, state), run: List<LinuxEvent>, ran: LinuxRun(io, run, state), valid: LinuxEventsValid(run),
+    n: Nat): RunOf(p.at(n), run) {
+    sim_run_of(io, p.at(n), state, sim(n), run, ran, valid)
+}
+
+// …and every claimed run, as `LinuxRuns` states one: its answers are ones
+// Linux may give, and it is a run.
+theorem Program::sim_linux_runs_at<M>(io: LinuxIo<M>, p: Program<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: SimProgram(io, p, state), events: List<LinuxEvent>, runs: LinuxRuns(io, events, state), n: Nat):
+    RunOf(p.at(n), events) {
+    Program::sim_run_at(io, p, state, sim, events, claim_is_run(io, events, state, runs),
+        linux_runs_valid(io, events, state, runs), n)
+}
+
+// Where the tree is not cut along the run, the run is exactly a whole trace's
+// events: one the program produces.
+fn CutBefore(t: ITree<BitVec(64)>(Events::linux()), run: List<LinuxEvent>) → Type {
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => IsCutTrace(Events::linux(), t, tr) ∧
+        Exists<List<LinuxEvent>>(λ more => Trace::linux_events(tr).append(more) = run))
+}
+
+theorem run_along_whole(t: ITree<BitVec(64)>(Events::linux()), tr: Trace<BitVec(64)>(Events::linux()),
+    run: List<LinuxEvent>, along: RunAlong(t, tr, run), uncut: Not(CutBefore(t, run))):
+    IsTrace(Events::linux(), t, tr) ∧ (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run)) {
+    match along {
+        Inl(whole) => whole,
+        Inr(cut) => false_elim(uncut(Exists(tr, cut))),
+    }
+}
+
+theorem Program::sim_run_produces<M>(io: LinuxIo<M>, p: Program<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: SimProgram(io, p, state), run: List<LinuxEvent>, ran: LinuxRun(io, run, state), valid: LinuxEventsValid(run),
+    n: Nat, uncut: Not(CutBefore(p.at(n), run))):
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => Program::Produces(Events::linux(), p, tr) ∧
+        (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run))) {
+    let found = Program::sim_run_at(io, p, state, sim, run, ran, valid, n);
+    let whole = run_along_whole(p.at(n), found.witness, run, found.proof, uncut);
+    Exists(found.witness, ⟨Converges(n, whole.left), whole.right⟩)
 }

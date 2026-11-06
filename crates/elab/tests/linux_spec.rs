@@ -100,6 +100,9 @@ const KIT: &[&str] = &[
     "RunsAs", "Sim", "SimProgram", "SimNext", "runs_as_back", "sim_back", "sim_cut", "sim_tau", "sim_ret", "sim_vis",
     "sim_of_next", "sim_of_traces", "sim_of_below", "sim_of_same", "Program::sim_produces", "Program::sim_refines",
     "runs_as_linux_runs", "linux_runs_runs_as", "sim_linux_runs", "sim_every_run", "sim_run_sends",
+    // Its converse: a run is the tree's, up to a cut.
+    "IsCutTrace", "IsTrace::of_cut", "asks_meet", "exits_not_asks", "linux_runs_valid", "SimRelated", "RunOf",
+    "sim_related_run", "sim_run_of", "Program::sim_run_at", "Program::sim_linux_runs_at", "Program::sim_run_produces",
     // A filter's spec.
     "filter_pass", "filter_tree", "filter_spec", "tr_spec", "filter_sends", "filter_spec_sends", "tr_sends",
     "filter_implementation_sends",

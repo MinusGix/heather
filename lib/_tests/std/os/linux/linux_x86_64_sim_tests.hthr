@@ -1,0 +1,70 @@
+// Probes of `Sim`'s converse (`linux_x86_64_sim`'s `sim_run_of`;
+// issues/linux-sim-every-machine-run.md). A cut trace is not a prefix
+// stopped early, and the cut side of `RunOf` is not vacuous: a loop that
+// goes round silently is simulated by every machine, exits included, and at
+// every fuel it is cut before every run. That is the divergence gap
+// issues/linux-sim-divergence.md closes. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_sim;
+import linux_trees;
+import itree;
+import itree_trace;
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// A return is never cut, and a call is cut only past an answer: the empty
+// prefix of a `Vis` is a trace of it but not a cut trace.
+theorem ret_never_cut(status: BitVec(64), tr: Trace<BitVec(64)>(Events::linux()),
+    cut: IsCutTrace(Events::linux(), Ret(status), tr)): False {
+    cut
+}
+
+theorem vis_prefix_not_cut(c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux()),
+    cut: IsCutTrace(Events::linux(), Vis(c, k), TEnd)): False {
+    let answered: AnsweredTrace<BitVec(64)>(Events::linux(), c, TEnd, λ a rest => IsCutTrace(Events::linux(), k(a), rest)) = cut;
+    absurd(answered.at)
+}
+
+theorem vis_prefix_is_trace(c: LinuxCmd<Nat>, k: c.Resp() → ITree<BitVec(64)>(Events::linux())):
+    IsTrace(Events::linux(), Vis(c, k), TEnd) {
+    Prefix(refl)
+}
+
+// A return's run is its exit.
+theorem ret_run(status: BitVec(64)): RunOf(Ret(status), [ExitEvent(status)]) {
+    Exists(TRet(status), Inl(⟨Returned(refl), ⟨trivial, refl⟩⟩))
+}
+
+// The loop that only goes round, over Linux's calls.
+fn spin_body(u: True) → ITree<Step<True, BitVec(64)>>(Events::linux()) { Ret(Continue(u)) }
+fn spin() → Program<BitVec(64)>(Events::linux()) { Program::iter<True, BitVec(64)>(Events::linux(), λ u => spin_body(u), trivial) }
+
+theorem spin_traces_end(n: Nat): (tr: Trace<BitVec(64)>(Events::linux())) →
+    IsTrace(Events::linux(), spin().at(n), tr) → tr = TEnd {
+    match n {
+        Zero => λ tr w => CutTrace::ended(Events::linux(), tr, w),
+        Succ(m) => λ tr it => spin_traces_end(m, tr, it),
+    }
+}
+
+// Every machine simulates it, at every fuel…
+theorem spin_simulated<M>(io: LinuxIo<M>, state: MachineState<M>): SimProgram(io, spin(), state) {
+    λ n tr it valid => j(sym(spin_traces_end(n, tr, it)), λ y _ => RunsAs(io, y, state), trivial)
+}
+
+// …and at every fuel it is cut before any run, so `RunOf` says nothing more.
+theorem spin_cut(n: Nat): IsCutTrace(Events::linux(), spin().at(n), TEnd) {
+    match n {
+        Zero => refl,
+        Succ(m) => spin_cut(m),
+    }
+}
+
+theorem spin_cut_before(n: Nat, run: List<LinuxEvent>): CutBefore(spin().at(n), run) {
+    Exists(TEnd, ⟨spin_cut(n), Exists(run, refl)⟩)
+}
