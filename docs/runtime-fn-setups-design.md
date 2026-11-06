@@ -1275,7 +1275,21 @@ tests through `Bool` helpers and `heather reflect`. What the round settled:
   but the x86 emission meets a branch's two register files and keeps only
   what both arms hold, so the other words were lost and the loop's exit
   refused. A leaf now copies the value to the rest too (`Tm::leave_region`),
-  which nothing reads.
+  which nothing reads. Both arms also write the flag *last*
+  (`Tm::again_region` moves the arguments first): the planner gives each arm
+  the join's registers (`pick_targets`) only where they are free, and with
+  the flag first an arm going round could find its register still holding
+  a source, put the flag elsewhere and the next word in the flag's place,
+  which the meet dropped (`loop_climb`).
+- **A caller's pin meets its callee before unfolding it.** The pin is
+  `meaning(rt, world)(x⃗) = f(x⃗)` by conversion, and `world` holds the
+  callees themselves. The kernel's δ-lazy loop unfolded the newer head
+  first, so it unfolded `f`'s callee on the right before the left reached
+  it through `world`, and a callee given a closed count (`loop_multiply`'s
+  65, `loop_anywhere`'s 100) then unrolled on both sides into a tree with
+  two recursive arms per pass. Conversion now remembers the spines it
+  stepped past and meets the other side there
+  (`issues/conversion-meet-past-newer-head.md`, `crates/kernel/DESIGN.md`).
 - **Generated instances are held as solved holes.** A loop's instance
   abstracts locals the generator opened, and a host `Lam` reifies only at
   the scope its local was opened in, so the instance cannot be repeated
