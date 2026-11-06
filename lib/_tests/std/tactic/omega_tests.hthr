@@ -355,3 +355,31 @@ theorem guard_bare_atom(r: Bool, n: Nat, h: r.IsTrue()): n = 0 { omega }
 theorem guard_unnamed_false(a, b: Nat): a.leb(b) = False {
     match a.leb(b) { True => { let no: False = omega; match no {} }, False => refl }
 }
+
+// `split_all` over a step that is a nested `if` on two different
+// propositions, then `omega` at each case: the for-loop step shape
+// (docs/sequencing-surface-design.md §7.2,
+// issues/split-all-nested-if-omega-kernel-refusal.md). The Bool equation's
+// decision unfolds to a call whose type arguments spell the field, and the
+// case split's motive abstracts the field there too; with the state as
+// parameters, the decided `if` selects its arm before the leaf reads it.
+record WordState { words: Nat, inside: Bool }
+fn word_step(s: WordState, b: Nat) → WordState {
+    if b = 32 { WordState(s.words, False) } else { if s.inside = False { WordState(s.words + 1, True) } else { s } }
+}
+theorem word_step_counts_at_most_one(s: WordState, b: Nat): word_step(s, b).words <= s.words + 1 {
+    split_all; all_goals { omega }
+}
+// One `if` on the Bool field alone.
+fn word_enter(s: WordState) → WordState {
+    if s.inside = False { WordState(s.words + 1, True) } else { s }
+}
+theorem word_enter_counts_at_most_one(s: WordState): word_enter(s).words <= s.words + 1 {
+    split_all; all_goals { omega }
+}
+fn word_step_flat(w: Nat, i: Bool, b: Nat) → Nat {
+    if b = 32 { w } else { if i = False { w + 1 } else { w } }
+}
+theorem word_step_flat_counts_at_most_one(w: Nat, i: Bool, b: Nat): word_step_flat(w, i, b) <= w + 1 {
+    split_all; all_goals { omega }
+}
