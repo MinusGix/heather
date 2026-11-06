@@ -166,7 +166,7 @@ theorem used(i: Nat): 0 < fact(i) * 2 { uses(fact(i) * 2) }
 #[test]
 fn a_result_the_search_cannot_prove_is_refused_with_the_way_out() {
     let e = bad("fn ident(n: Nat) -> Pos<Nat> { n }\n");
-    assert!(e.contains("`positivity` could not prove `Lt(0, n)`"), "{e}");
+    assert!(e.contains("`positivity` could not prove `0 < n`"), "{e}");
     assert!(e.contains("`on ?pos := …;`"), "{e}");
     // A recursion restated is a case split the search cannot read.
     let e = bad("fn up(n: Nat) -> Pos<Nat> { match n { Zero => 1, Succ(k) => up(k) + 1 } }\n");
@@ -204,7 +204,7 @@ theorem open(k: Nat): 0 < k.sq() { uses(k.sq()) }
     assert!(e.contains("no instance for `0 < k`"), "{e}");
     // The restated body is searched as a plain function's is.
     let e = bad("fn Nat::ident(self n: Nat) -> Pos<Nat> { n }\n");
-    assert!(e.contains("`positivity` could not prove `Lt(0, n)`"), "{e}");
+    assert!(e.contains("`positivity` could not prove `0 < n`"), "{e}");
 }
 
 #[test]
