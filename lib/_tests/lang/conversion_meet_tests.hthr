@@ -10,8 +10,12 @@ import bool;
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
 
-// Older than `walk`: reaches it only through its argument.
-fn apply_to(g: Nat → BitVec(64) → BitVec(64), n: Nat, x: BitVec(64)) → BitVec(64) { g(n, x) }
+// Older than `walk`: reaches it only through its argument, and spells the
+// arguments its own way (as `meaning` reads them from an environment), so
+// the two sides' trees agree only by unfolding, not by sharing.
+fn word_of(x: BitVec(64)) → BitVec(64) { x }
+fn count_of(n: Nat) → Nat { n }
+fn apply_to(g: Nat → BitVec(64) → BitVec(64), n: Nat, x: BitVec(64)) → BitVec(64) { g(count_of(n), word_of(x)) }
 
 fn walk(fuel: Nat, x: BitVec(64)) → BitVec(64) {
     match fuel {
