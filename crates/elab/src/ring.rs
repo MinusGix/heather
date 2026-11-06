@@ -73,7 +73,7 @@ enum Carrier {
 
 /// A `≈` carrier's spelling and its operations. A missing one is an
 /// operation the reifier leaves to atoms.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 struct RelCarrier {
     source: String,
     same: Op,
@@ -122,7 +122,7 @@ impl Op {
                     head = fun;
                 }
                 args.reverse();
-                same_dictionary_read(head, op).then_some(args)
+                same_dictionary_read(elab, head, op).then_some(args)
             }
         }
     }
@@ -143,7 +143,7 @@ impl Op {
             Op::GlobalAfter(name, prefix) => {
                 crate::omega_cert::named_args(elab, op, name).is_some_and(|args| args.len() == *prefix)
             }
-            Op::Term(term) => same_dictionary_read(op, term),
+            Op::Term(term) => same_dictionary_read(elab, op, term),
         }
     }
 }
@@ -154,7 +154,12 @@ impl Op {
 /// off the parent dictionary, which at `K` is a record built from `K`'s own
 /// fields: `fst(snd(…(pair(…))))`, whose component, read by syntax alone, is
 /// the field `K.inv` is (issues/ring-atom-mentions-class-constant.md).
-fn same_dictionary_read(tm: &Term, want: &Term) -> bool {
+///
+/// At a class carrier the parent dictionary is usually not written out but
+/// an open derivation's global applied to the section's prefix
+/// (docs/traits-layer2-design.md §8.1); its record is read by unfolding that
+/// one global, a bounded number of times, and then as above.
+fn same_dictionary_read(elab: &Elaborator, tm: &Term, want: &Term) -> bool {
     if *tm == *want {
         return true;
     }
@@ -164,7 +169,34 @@ fn same_dictionary_read(tm: &Term, want: &Term) -> bool {
         cur = component;
         read = true;
     }
-    read && crate::spelling::same_projection(cur, want)
+    if read && crate::spelling::same_projection(cur, want) {
+        return true;
+    }
+    let mut now = Rc::new(tm.clone());
+    for _ in 0..8 {
+        let Some(next) = unfold_open_base(elab, &now) else { return false };
+        let next = crate::spelling::contract_projections(&Rc::new(next));
+        if *next == *want || crate::spelling::same_projection(&next, want) {
+            return true;
+        }
+        now = next;
+    }
+    false
+}
+
+/// `tm`, a projection chain, with the open derivation at its base unfolded
+/// ([`Elaborator::unfold_open_app`]); `None` when its base is none.
+fn unfold_open_base(elab: &Elaborator, tm: &Term) -> Option<Term> {
+    let Some((_, pair)) = crate::spelling::proj_of(tm) else {
+        return elab.unfold_open_app(tm);
+    };
+    let inner = Rc::new(unfold_open_base(elab, pair)?);
+    let mut out = tm.clone();
+    match &mut out {
+        Term::Fst { pair, .. } | Term::FstAt { pair, .. } | Term::Snd { pair, .. } | Term::SndAt { pair, .. } => *pair = inner,
+        _ => return None,
+    }
+    Some(out)
 }
 
 /// A class carrier's integers (docs/casting-design.md §16): a type
@@ -176,7 +208,7 @@ fn same_dictionary_read(tm: &Term, want: &Term) -> bool {
 /// certificate is elaborated as [`CLASS_INTS`], which instance search finds
 /// in scope; a constant is that map's image, and `0`, `1` are the
 /// dictionary's own `K.unit` and `K.multiplicative.unit` by computation.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 struct ClassInts {
     ints: Rc<Term>,
     ty: Type,
@@ -419,6 +451,10 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
 /// statement spells them. `K` has no `-` designation, so a difference is
 /// written `x + K.inv(y)`; `⁻¹` and `/` are the class's (`field_division`).
 fn class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCarrier> {
+    elab.scope_memo(cx, carrier_ty, "ring::class_carrier", || read_class_carrier(elab, cx, carrier_ty))
+}
+
+fn read_class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<RelCarrier> {
     elab.key_of("semiring::CommRing::with_ints")?;
     let source = elab.spell_type_clean(cx, carrier_ty)?;
     let infer = |written: &str| {
@@ -1436,10 +1472,10 @@ impl Reifier<'_> {
     /// writes for its coefficients).
     fn rel_numeral(&self, tm: &Rc<Term>, ops: &RelCarrier) -> Option<Z> {
         if let Some(ints) = &ops.class {
-            if same_dictionary_read(tm, &ints.zero) {
+            if same_dictionary_read(self.elab, tm, &ints.zero) {
                 return Some(0);
             }
-            if same_dictionary_read(tm, &ints.one) {
+            if same_dictionary_read(self.elab, tm, &ints.one) {
                 return Some(1);
             }
         }

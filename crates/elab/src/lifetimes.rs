@@ -37,6 +37,10 @@
 
 use super::*;
 
+/// One queued derivation: goal, level, Ψ length at capture, carrier head,
+/// and an open derivation's value (see [`ModulePass::pending_derived`]).
+pub(crate) type PendingDerived = (Type, Level, u32, Option<String>, Option<Term>);
+
 /// State one *module pass* owns: what the deferred kernel gate has in flight,
 /// the item loop's position, and the diagnostics and reports the pass has
 /// accumulated (`docs/parallel-kernel-gate-design.md` §5).
@@ -95,7 +99,12 @@ pub(crate) struct ModulePass {
     /// the item is rolled back, the queue drained, the item elaborated again
     /// (§8). Empty for every program that resolves nothing, which is what
     /// keeps the whole mechanism free.
-    pub(crate) pending_derived: RefCell<Vec<(Type, Level, u32, Option<String>)>>,
+    ///
+    /// The fifth slot is an **open** derivation's value
+    /// ([`Elaborator::record_open`]): the type is then a Π over the context
+    /// prefix the answer lived in, and the mint abstracts this term over the
+    /// same binders instead of re-running the search.
+    pub(crate) pending_derived: RefCell<Vec<PendingDerived>>,
     /// `f_unfold` names the `decreases` walk declined to generate, and why
     /// (`docs/decreases-unfolding-design.md` §3): a reference to one reports
     /// the body shape that stopped the walk rather than an unknown name.
@@ -586,6 +595,27 @@ pub(crate) struct Memos {
     /// by the display, which respells an instance by the name
     /// (issues/type-name-display-respelling.md). Nothing here is semantic.
     pub(crate) type_names: RefCell<Vec<display::TypeName>>,
+    /// A tactic's reading of a class carrier, by the scope it was read in
+    /// ([`Elaborator::scope_memo`]): `linarith`'s ordered field and `ring`'s
+    /// ring, each elaborated from generated source, which a run reads at
+    /// every fact and every `ring` step it checks. Keyed by the Ψ length, the
+    /// goal padding, Γ and the carrier, and by the very `let` and dictionary
+    /// spines in scope, which can bring another dictionary for the same
+    /// carrier. Nothing here is semantic.
+    pub(crate) scope_memo: RefCell<Vec<ScopeMemo>>,
+}
+
+/// One [`Memos::scope_memo`] entry.
+#[derive(Clone)]
+pub(crate) struct ScopeMemo {
+    pub(crate) which: &'static str,
+    pub(crate) psi: u32,
+    pub(crate) pad: u32,
+    pub(crate) gamma: LocalCtx,
+    pub(crate) aliases: crate::spine::Spine<Rc<Alias>>,
+    pub(crate) dicts: crate::spine::Spine<Rc<crate::context::DictBinder>>,
+    pub(crate) carrier: Type,
+    pub(crate) value: Rc<dyn std::any::Any + Send + Sync>,
 }
 
 impl Memos {
@@ -606,7 +636,11 @@ impl Memos {
             // Holds the Ψ position of each name's definition: a rollback can
             // put another `def` of the same name there.
             type_names,
+            // Keyed by the Ψ length, but a rollback can rebuild Ψ to the
+            // same length with other declarations.
+            scope_memo,
         } = self;
+        scope_memo.borrow_mut().clear();
         result_only_memo.borrow_mut().clear();
         named_type_memo.borrow_mut().clear();
         type_names.borrow_mut().clear();

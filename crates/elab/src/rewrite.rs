@@ -532,6 +532,14 @@ impl Elaborator {
             let t = eta(t).map_or_else(|| Rc::clone(t), Rc::new);
             return self.match_spine(cx, &g, &t, k, binds, deferred);
         }
+        // A class carrier's parent dictionary, minted over the law's own
+        // parameters (docs/traits-layer2-design.md §8.1), is what a written
+        // record was before: compared by conversion once the dictionaries
+        // are bound, not spine by spine against the goal's instance.
+        if self.is_open_app(pat) {
+            deferred.push((pat.clone(), Rc::clone(t)));
+            return true;
+        }
         match (crate::spelling::app_of(pat), crate::spelling::app_of(t)) {
             (Some((pf, pa)), Some((tf, ta))) => {
                 let (tf, ta) = (Rc::clone(tf), Rc::clone(ta));

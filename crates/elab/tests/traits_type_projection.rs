@@ -464,3 +464,39 @@ fn wrong<S, A> requires d: Swapped<S, A> (s: S) → A { S.send(s) }
 "#);
     assert!(wrong_carrier.contains("type parameters"), "{wrong_carrier}");
 }
+
+// -- open derivations (docs/traits-layer2-design.md §8.1) -------------------
+
+#[test]
+fn an_upcast_at_an_open_carrier_is_minted_once_over_its_prefix() {
+    // `sem_twice` wants a `Sem<A>` value and the scope has a `Mon<A>`, so the
+    // first caller answers it by upcast and the item after it reads the
+    // minted global. Both callers are used at `Z` in a checking position, so
+    // the application the second one holds must mean the same dictionary.
+    let e = ok(&format!(
+        "{P}
+fn sem_twice<A> requires s: Sem<A> (x: A) -> A {{ s.sop(x, x) }}
+fn mon1<A: Mon>(x: A) -> A {{ sem_twice(x) }}
+fn mon2<A: Mon>(x: A) -> A {{ sem_twice(x) }}
+theorem agree(z: Z): mon1(z) = mon2(z) {{ refl }}
+"
+    ));
+    let open = e.open_derivations();
+    assert_eq!(open.len(), 1, "expected one open derivation, got {open:?}");
+    // Not a canonical (closed) derivation: that table stays as it was.
+    assert!(e.derived_instances().is_empty(), "{:?}", e.derived_instances());
+}
+
+#[test]
+fn an_exact_dictionary_in_scope_is_not_an_open_derivation() {
+    // The negative control: the scope has a `Sem<A>` itself, so step 1
+    // answers and nothing is upcast or minted.
+    let e = ok(&format!(
+        "{P}
+fn sem_twice<A> requires s: Sem<A> (x: A) -> A {{ s.sop(x, x) }}
+fn sem1<A: Sem>(x: A) -> A {{ sem_twice(x) }}
+fn sem2<A: Sem>(x: A) -> A {{ sem_twice(x) }}
+"
+    ));
+    assert!(e.open_derivations().is_empty(), "{:?}", e.open_derivations());
+}

@@ -108,6 +108,7 @@ fn stated(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Stated> {
 /// binds them. The certificate gets the dictionary in scope
 /// (`Elaborator::class_dictionary_scope`) and spells `K`'s constants and
 /// negation through it (`Spell`).
+#[derive(Clone)]
 struct ClassField {
     ints: Rc<Term>,
     ty: Type,
@@ -122,6 +123,10 @@ const CLASS_FIELD: &str = "__lin_ints";
 
 impl ClassField {
     fn of(elab: &Elaborator, cx: &Cx, carrier: &Type) -> Option<ClassField> {
+        elab.scope_memo(cx, carrier, "linarith::ClassField", || ClassField::read(elab, cx, carrier))
+    }
+
+    fn read(elab: &Elaborator, cx: &Cx, carrier: &Type) -> Option<ClassField> {
         elab.key_of("ordered_field::OrderedField::with_ints")?;
         let source = elab.spell_type_clean(cx, carrier)?;
         let expr = parse_expr(&format!("ordered_field::OrderedField::with_ints<{source}>()")).ok()?;

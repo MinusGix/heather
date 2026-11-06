@@ -168,7 +168,10 @@ designation / at OrderedField := OrderedField::div
   weakest class it needs (the convention for theorems): a rule at
   `OrderedSemiring` applied in a field section builds the parent dictionary
   as a record at every application, and the search proposes and checks many.
-  That cost about twenty times as much on the probes.
+  That cost about twenty times as much on the probes. Since open derivations
+  (docs/traits-layer2-design.md §8.1) an upcast is an application after its
+  first item, so moving the rules down is now
+  issues/sign-rules-at-weakest-class.md.
 - **Arithmetic last.** `invertible_by_nlinarith`/`_neg` and, at the leaves,
   `positive_add_by_nlinarith`, `negative_add_by_nlinarith` (subtraction is
   `x + K.inv(y)` there) and `nonneg_by_linarith`. A tactic default runs in a

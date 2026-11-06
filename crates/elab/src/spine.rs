@@ -59,6 +59,15 @@ impl<T> Spine<T> {
         Spine(None)
     }
 
+    /// Are the two the same spine — one allocation, not merely equal items?
+    pub(crate) fn same(&self, other: &Spine<T>) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.0.as_ref().map_or(0, |n| n.len as usize)
     }

@@ -73,6 +73,53 @@ fn heads_may_agree(a: Option<&str>, b: Option<&str>) -> bool {
     }
 }
 
+/// The head an **open** derivation is filed under ([`Elaborator::record_open`]):
+/// this prefix and the goal class's key. A lookup compares only the entries
+/// of its own class, and the closed table's lookups none of them.
+const OPEN_HEAD: &str = "#open:";
+
+pub(crate) fn is_open_head(head: Option<&str>) -> bool {
+    head.is_some_and(|h| h.starts_with(OPEN_HEAD))
+}
+
+/// `t`, read out of the goal world into the committed Ψ: its committed
+/// globals renumbered down past the `pad` goals, or `None` if it mentions a
+/// goal (the test [`Elaborator::record_joined`] makes of a type).
+fn below_goals_ty(t: &Type, pad: u32) -> Option<Type> {
+    if pad == 0 {
+        return Some(t.clone());
+    }
+    let down = t.apply_global(&goal_markers(pad));
+    (down.shift_global(pad) == *t).then_some(down)
+}
+
+/// [`below_goals_ty`] for a term.
+fn below_goals_tm(t: &Term, pad: u32) -> Option<Term> {
+    if pad == 0 {
+        return Some(t.clone());
+    }
+    let down = t.apply_global(&goal_markers(pad));
+    (down.shift_global(pad) == *t).then_some(down)
+}
+
+fn goal_markers(pad: u32) -> heather_kernel::subst::GlobalSubst {
+    heather_kernel::subst::GlobalSubst {
+        entries: (0..pad).map(|_| heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::Zero))).collect(),
+    }
+}
+
+/// The binders an open derivation's type abstracts, outermost first, and
+/// what is left under them.
+fn open_telescope(ty: &Type) -> (Vec<&Rc<Type>>, &Type) {
+    let mut doms = Vec::new();
+    let mut cur = ty;
+    while let Type::Pi { dom, cod, .. } = cur {
+        doms.push(dom);
+        cur = cod;
+    }
+    (doms, cur)
+}
+
 fn line(depth: usize, key: &'static str, value: impl Into<String>) -> TraceLine {
     TraceLine {
         depth,
@@ -393,8 +440,19 @@ impl Elaborator {
         //     exact pass, because an exactly-typed value in scope is the one
         //     the writer named; before the registry, because this is still a
         //     scope answer and not a derivation.
+        // 1a. An open derivation minted by an earlier item: the same upcast
+        //     or merged-class assembly at the same context prefix, reached
+        //     as an application of its global (`Self::record_open`).
+        if let Some((t, who, src)) = self.open_hit(cx, goal, lvl) {
+            tr.push(line(depth, "local", who));
+            if let Some(src) = src {
+                *up = Some(src);
+            }
+            return Some(t);
+        }
         if let Some((t, who, src)) = self.scope_upcast(cx, goal, lvl, span) {
             tr.push(line(depth, "local", who));
+            self.record_open(cx, goal, lvl, &t);
             *up = Some(src);
             return Some(t);
         }
@@ -664,6 +722,7 @@ impl Elaborator {
             return None;
         }
         self.record_joined(cx, spelled, lvl, prefer);
+        self.record_open(cx, goal, lvl, &t);
         Some(t)
     }
 
@@ -1216,7 +1275,7 @@ impl Elaborator {
             .traits
             .derived()
             .iter()
-            .filter(|d| heads_may_agree(d.head.as_deref(), prefer))
+            .filter(|d| !is_open_head(d.head.as_deref()) && heads_may_agree(d.head.as_deref(), prefer))
             .find(|d| self.derived_conv(cx, &d.ty.shift_global(now - d.at), goal, &d.level))?;
         Some(self.derived_ref(cx, d.abs))
     }
@@ -1233,7 +1292,7 @@ impl Elaborator {
             .traits
             .derived()
             .iter()
-            .filter(|d| heads_may_agree(d.head.as_deref(), prefer))
+            .filter(|d| !is_open_head(d.head.as_deref()) && heads_may_agree(d.head.as_deref(), prefer))
             .find(|d| {
                 let ty = d.ty.shift_global(now - d.at);
                 let ty = if pad == 0 { ty } else { weaken_global_below(&ty, pad) };
@@ -1272,12 +1331,277 @@ impl Elaborator {
             return;
         }
         let mut pending = self.pass.pending_derived.borrow_mut();
-        if pending.iter().any(|(t, l, _, head)| {
-            heads_may_agree(head.as_deref(), prefer) && self.derived_conv(&Cx::empty(), t, &closed, l)
+        if pending.iter().any(|(t, l, _, head, open)| {
+            open.is_none() && heads_may_agree(head.as_deref(), prefer) && self.derived_conv(&Cx::empty(), t, &closed, l)
         }) {
             return;
         }
-        pending.push((closed, lvl.clone(), self.psi.bindings.len() as u32, prefer.map(str::to_string)));
+        pending.push((closed, lvl.clone(), self.psi.bindings.len() as u32, prefer.map(str::to_string), None));
+    }
+
+    /// `f`'s answer at this scope and carrier, from [`Memos::scope_memo`]
+    /// when the same scope asked before. For a tactic's reading of a class
+    /// carrier that it elaborates from generated source; only an answer is
+    /// kept, and the memo holds the last few scopes.
+    ///
+    /// [`Memos::scope_memo`]: crate::lifetimes::Memos::scope_memo
+    pub(crate) fn scope_memo<T: Clone + Send + Sync + 'static>(
+        &self,
+        cx: &Cx,
+        carrier: &Type,
+        which: &'static str,
+        f: impl FnOnce() -> Option<T>,
+    ) -> Option<T> {
+        const KEEP: usize = 8;
+        let psi = self.psi.bindings.len() as u32;
+        let pad = self.global_padding();
+        let hit = self.memos.scope_memo.borrow().iter().find_map(|m| {
+            (m.which == which
+                && m.psi == psi
+                && m.pad == pad
+                && m.aliases.same(&cx.aliases)
+                && m.dicts.same(&cx.dicts)
+                && m.gamma == cx.gamma
+                && m.carrier == *carrier)
+                .then(|| m.value.downcast_ref::<T>().cloned())
+                .flatten()
+        });
+        if hit.is_some() {
+            return hit;
+        }
+        let value = f()?;
+        let mut memo = self.memos.scope_memo.borrow_mut();
+        if memo.len() >= KEEP {
+            memo.remove(0);
+        }
+        memo.push(crate::lifetimes::ScopeMemo {
+            which,
+            psi,
+            pad,
+            gamma: cx.gamma.clone(),
+            aliases: cx.aliases.clone(),
+            dicts: cx.dicts.clone(),
+            carrier: carrier.clone(),
+            value: Rc::new(value.clone()),
+        });
+        Some(value)
+    }
+
+    /// Queue an **open** derivation: a class dictionary found at a class
+    /// carrier, by upcast from a dictionary in scope (step 1b) or by a merged
+    /// class's assembly (step 2b). Neither is closed, so the canonical table
+    /// cannot take it; but both are built from the context's *prefix* alone
+    /// (the section's carrier, its operations, its dictionary), and every
+    /// item of that section repeats them. So the answer is abstracted over
+    /// the shortest prefix of Γ that its goal and its value live in, and
+    /// minted between items as one global of type `Π prefix. goal`; a later
+    /// item with the same prefix reads it as that global applied to its own
+    /// prefix variables ([`Self::open_hit`]). An assembled record is dozens of
+    /// fields of projections, checked by the kernel at each use and carried
+    /// in the proof term at each use; the application is a few nodes.
+    ///
+    /// The value is stored rather than re-searched, because a merged class's
+    /// parents can come out of a `let` in scope (a tactic's certificate
+    /// binds the integers it needs) that an empty context would not have.
+    /// The mint checks it in the empty context; a failure costs sharing,
+    /// never correctness.
+    fn record_open(&self, cx: &Cx, goal: &Type, lvl: &Level, term: &Term) {
+        if self.under_quotation() || !matches!(cx.gamma.base, heather_kernel::term::CtxBase::Nil) {
+            return;
+        }
+        if matches!(goal, Type::Pi { .. }) {
+            return; // the telescope must end at the goal (`open_telescope`)
+        }
+        let Some(ind) = self.tag_of(goal) else { return };
+        let head = format!("{OPEN_HEAD}{}", crate::names::qkey(&ind.scope.module, &ind.name));
+        let n = cx.gamma.entries.len() as u32;
+        let prefix = |m: u32| {
+            LocalCtx::from_vec(
+                heather_kernel::term::CtxBase::Nil,
+                (0..m as usize).map(|i| cx.gamma.entries[i].clone()).collect(),
+            )
+        };
+        let fits = |m: u32| {
+            let pre = prefix(m);
+            let ty = crate::unification::strengthen_ty(&pre, goal, n - m)?;
+            let tm = crate::unification::strengthen_tm(&pre, term, n - m)?;
+            Some((ty, tm))
+        };
+        // The shortest prefix: strengthening is monotone in its length.
+        let (mut lo, mut hi) = (0u32, n);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if fits(mid).is_some() {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        let m = lo;
+        if m == 0 {
+            return; // closed: the canonical table's business
+        }
+        let Some((ty, tm)) = fits(m) else { return };
+        let pad = self.global_padding();
+        let (Some(ty), Some(tm)) = (below_goals_ty(&ty, pad), below_goals_tm(&tm, pad)) else {
+            return;
+        };
+        let mut binders = Vec::with_capacity(m as usize);
+        for i in 0..m as usize {
+            let e = &cx.gamma.entries[i];
+            let Some(t) = below_goals_ty(&e.ty, pad) else { return };
+            binders.push((Rc::new(t), e.level.clone()));
+        }
+        let (mut ty, mut tm, mut level) = (ty, tm, lvl.clone());
+        for (dom, dom_level) in binders.into_iter().rev() {
+            tm = Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: level.clone(),
+                dom: Rc::clone(&dom),
+                body: Rc::new(tm),
+            };
+            ty = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(ty) };
+            level = Level::join(dom_level, level);
+        }
+        let mut pending = self.pass.pending_derived.borrow_mut();
+        if pending.iter().any(|(t, _, _, h, open)| open.is_some() && h.as_deref() == Some(head.as_str()) && *t == ty) {
+            return;
+        }
+        pending.push((ty, level, self.psi.bindings.len() as u32, Some(head), Some(tm)));
+    }
+
+    /// Step 1a: a minted open derivation ([`Self::record_open`]) whose
+    /// telescope is a prefix of Γ and whose goal, under it, is this one —
+    /// the innermost such prefix, as step 1b takes the innermost dictionary.
+    /// When the prefix ends in a dictionary of a descendant class, that is
+    /// the answer's provenance, as step 1b reports it.
+    fn open_hit(&self, cx: &Cx, goal: &Type, lvl: &Level) -> Option<(Term, String, Option<(Term, Type)>)> {
+        if self.under_quotation() || !matches!(cx.gamma.base, heather_kernel::term::CtxBase::Nil) {
+            return None;
+        }
+        let ind = self.tag_of(goal)?;
+        if !ind.is_record {
+            return None;
+        }
+        let ckey = crate::names::qkey(&ind.scope.module, &ind.name);
+        let head = format!("{OPEN_HEAD}{ckey}");
+        let n = cx.gamma.entries.len() as u32;
+        let now = self.psi.bindings.len() as u32;
+        let pad = self.global_padding();
+        let mut best: Option<(u32, u32)> = None;
+        for d in self.traits.derived().iter().filter(|d| d.head.as_deref() == Some(head.as_str())) {
+            let ty = d.ty.shift_global(now - d.at);
+            let ty = if pad == 0 { ty } else { weaken_global_below(&ty, pad) };
+            let (doms, cod) = open_telescope(&ty);
+            let m = doms.len() as u32;
+            if m == 0 || m > n || best.is_some_and(|(_, b)| b >= m) {
+                continue;
+            }
+            if !doms.iter().enumerate().all(|(i, dom)| *cx.gamma.entries[i].ty == ***dom) {
+                continue;
+            }
+            if self.derived_conv(cx, &cod.shift_local(n - m), goal, lvl) {
+                best = Some((d.abs, m));
+            }
+        }
+        let (abs, m) = best?;
+        let mut t = self.derived_ref(cx, abs);
+        for i in 0..m {
+            t = Term::AppAt { fun: Rc::new(t), arg: Rc::new(Term::Var(heather_kernel::term::LocalVar(n - 1 - i))) };
+        }
+        let pos = (m - 1) as usize;
+        let (dict, dict_ty, _) = self.local(cx, pos);
+        let src = self
+            .tag_of(&dict_ty)
+            .filter(|dind| dind.name != ind.name)
+            .and_then(|dind| self.traits.class(&crate::names::qkey(&dind.scope.module, &dind.name)))
+            .filter(|dinfo| dinfo.ancestors.iter().any(|a| self.key_of(&a.name).as_deref() == Some(ckey.as_str())))
+            .map(|_| (dict, dict_ty));
+        let who = format!("{} (derived `{}` over the context's first {m})", &cx.names[pos], ind.name);
+        Some((t, who, src))
+    }
+
+    /// Is `t` an open derivation applied to its prefix ([`Self::open_hit`]):
+    /// a dictionary built from its arguments, which a structural matcher
+    /// should compare by conversion rather than spine by spine?
+    pub(crate) fn is_open_app(&self, t: &Term) -> bool {
+        let Term::GlobalTm { var, .. } = crate::spelling::app_spine(t).0 else { return false };
+        let Some(abs) = self.global_abs_of(*var) else { return false };
+        self.traits.derived().iter().any(|d| d.abs as usize == abs && is_open_head(d.head.as_deref()))
+    }
+
+    /// `t` when it is an open derivation applied to its prefix
+    /// ([`Self::open_hit`]): the minted body instantiated at the arguments,
+    /// i.e. the record the derivation assembled, read where `t` stands. For a
+    /// syntactic reader of dictionary fields (`ring`'s atoms), which a
+    /// reference hides behind a δ step; `None` for anything else.
+    pub(crate) fn unfold_open_app(&self, t: &Term) -> Option<Term> {
+        let (head, args) = crate::spelling::app_spine(t);
+        let Term::GlobalTm { var, subst } = head else { return None };
+        let abs = self.global_abs_of(*var)? as u32;
+        if !self.traits.derived().iter().any(|d| d.abs == abs && is_open_head(d.head.as_deref())) {
+            return None;
+        }
+        let (_, body) = self.global_body_at(abs as usize)?;
+        // Scoped in its prefix of Ψ; rescoped as `resolve` rescopes a
+        // global's type, by the reference's own distance.
+        let mut inner: Term = body.shift_global(var.0 + 1);
+        let mut m = 0;
+        while let Term::Lam { body, .. } = inner {
+            inner = (*body).clone();
+            m += 1;
+        }
+        if m != args.len() {
+            return None;
+        }
+        let delta = LocalSubst {
+            tail: SubstTail::Empty { len: subst.source_len(), base: subst.source_base() },
+            terms: args.iter().map(|a| Rc::clone(a)).collect(),
+        };
+        Some(inner.apply_local(&delta))
+    }
+
+    /// Mint one open derivation ([`Self::record_open`]): `ty` is the closed
+    /// `Π prefix. goal` and `body` the λ over the same binders.
+    fn mint_open(&mut self, ty: &Type, lvl: &Level, body: &Term, head: Option<&str>) {
+        let now = self.psi.bindings.len() as u32;
+        if self
+            .traits
+            .derived()
+            .iter()
+            .any(|d| d.head.as_deref() == head && d.ty.shift_global(now - d.at) == *ty)
+        {
+            return;
+        }
+        if !self.type_is_closed(ty, lvl) {
+            return;
+        }
+        let ok = stats::time_kernel(|| {
+            typing::check_term(&self.psi, 0, Layer::Code, &LocalCtx::nil(), body, ty, lvl, self.policy.fuel).is_ok()
+        });
+        if !ok {
+            return;
+        }
+        let abs = self.psi.bindings.len() as u32;
+        self.psi.push(GlobalBinding::Tm {
+            ctx: LocalCtx::nil(),
+            layer: Layer::Code,
+            ty: Rc::new(ty.clone()),
+            level: lvl.clone(),
+            // A `fn`, as a closed derivation is: a field is read off it by
+            // unfolding.
+            body: Some(Rc::new(body.clone())),
+        });
+        let derived = DerivedInst {
+            name: format!("#open{}", self.traits.derived().len()),
+            abs,
+            ty: ty.clone(),
+            level: lvl.clone(),
+            at: abs,
+            head: head.map(str::to_string),
+        };
+        self.semantic_commit_derived(derived);
+        self.refresh_delta_psi();
     }
 
     /// `u^δ` for a minted global, the same construction [`Elaborator::resolve`]
@@ -1323,8 +1647,9 @@ impl Elaborator {
             return;
         }
         let mut pending = self.pass.pending_derived.borrow_mut();
-        if pending.iter().any(|(t, l, _, head)| {
-            heads_may_agree(head.as_deref(), prefer)
+        if pending.iter().any(|(t, l, _, head, open)| {
+            open.is_none()
+                && heads_may_agree(head.as_deref(), prefer)
                 && self.derived_conv(&Cx::empty(), t, goal, l)
         }) {
             return;
@@ -1337,6 +1662,7 @@ impl Elaborator {
             lvl.clone(),
             self.psi.bindings.len() as u32,
             prefer.map(str::to_string),
+            None,
         ));
     }
 
@@ -1377,17 +1703,20 @@ impl Elaborator {
         // mint either registers a table entry (and the goal that produced it
         // now hits) or fails and is dropped.
         for _ in 0..MAX_DEPTH {
-            let pending: Vec<(Type, Level, u32, Option<String>)> =
+            let pending: Vec<crate::lifetimes::PendingDerived> =
                 std::mem::take(&mut self.pass.pending_derived.borrow_mut());
             if pending.is_empty() {
                 return;
             }
-            for (goal, lvl, at, prefer) in pending {
+            for (goal, lvl, at, prefer, open) in pending {
                 // The item pushed its own globals after this goal was
                 // captured, so every `GlobalVar` in it now points that much
                 // further out.
                 let grew = self.psi.bindings.len() as u32 - at;
-                self.mint_one(&goal.shift_global(grew), &lvl, prefer.as_deref());
+                match open {
+                    None => self.mint_one(&goal.shift_global(grew), &lvl, prefer.as_deref()),
+                    Some(body) => self.mint_open(&goal.shift_global(grew), &lvl, &body.shift_global(grew), prefer.as_deref()),
+                }
             }
         }
         self.pass.pending_derived.borrow_mut().clear();
