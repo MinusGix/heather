@@ -399,6 +399,20 @@ so the decoder rendezvous is untouched; a memo written transparently can
 later answer an opaque single step with more than one step, which can
 only cost a rendezvous, never a verdict.
 
+A fifth (2026-11-06, `issues/conversion-meet-past-newer-head.md`): **a side
+may arrive at a head the other side was advanced past.** The newer-head
+step assumes the older side cannot reduce to the newer head, which holds of
+bodies but not of arguments: `meaning(rt, world)(x⃗)` reaches the callee
+`world` carries. Unfolding the callee on the other side first, and then the
+callee's recursion at a closed count on both, unrolled two-armed passes
+into trees no lower meet shortcuts. `Conv::tm_w` now keeps, per side, the
+last few spines it stepped past a head the other did not share
+(`Passed`), and compares a side against a remembered spine whenever its
+head arrives at that one; a side unfolding toward a headless other side
+single-steps a bounded number of heads looking for one before the
+transparent run (`Conv::meet_on_the_way`). The same unfoldings and fuel
+otherwise; a remembered spine is tried once.
+
 **Acceleration policy** (`issues/kernel-acceleration-policy.md`). Three
 kinds of acceleration are distinguished, and only the first two grow:
 *representation changes with an adequacy argument* (saturated runs — the

@@ -436,7 +436,7 @@ pub(super) trait Dom<'v>: Sized {
     /// A **type** in weak head normal form.
     type Ty;
     /// A **term** in weak head normal form.
-    type Tm;
+    type Tm: Clone;
     /// A type sub-structure of a value, possibly under one binder of the
     /// former that carries it. Reaching its head is [`Dom::whnf_ty`].
     type TyC: Clone;
