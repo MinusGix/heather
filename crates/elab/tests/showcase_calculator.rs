@@ -4,35 +4,6 @@ use heather_elab::Elaborator;
 
 use crate::support;
 
-const STD: &[(&str, &str)] = &[
-    ("logic", include_str!("../../../lib/std/core/logic.hthr")),
-    ("bool", include_str!("../../../lib/std/core/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
-    ("option", include_str!("../../../lib/std/core/option.hthr")),
-    ("pair", include_str!("../../../lib/std/core/pair.hthr")),
-    ("list", include_str!("../../../lib/std/data/list.hthr")),
-    ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
-    ("relation_props", include_str!("../../../lib/std/relation/relation_props.hthr")),
-    ("algebra_rel", include_str!("../../../lib/std/algebra/algebra_rel.hthr")),
-    ("algebra", include_str!("../../../lib/std/algebra/algebra.hthr")),
-    ("morphism", include_str!("../../../lib/std/algebra/morphism.hthr")),
-    ("int", include_str!("../../../lib/std/num/int.hthr")),
-    ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
-    ("result", include_str!("../../../lib/std/core/result.hthr")),
-    // grind's closure: `parser_diagnostics::commit_chain` is proved by it.
-    ("char", include_str!("../../../lib/std/text/char.hthr")),
-    ("string", include_str!("../../../lib/std/text/string.hthr")),
-    ("tactic", include_str!("../../../lib/std/tactic/tactic.hthr")),
-    ("derive", include_str!("../../../lib/std/tactic/derive.hthr")),
-    ("egraph", include_str!("../../../lib/std/data/egraph.hthr")),
-    ("grind", include_str!("../../../lib/std/tactic/grind.hthr")),
-];
-
-const SHOWCASE: &[(&str, &str)] = &[
-    ("calc", include_str!("../../../docs/showcase/calc.hthr")),
-    ("calc_parser", include_str!("../../../docs/showcase/calc_parser.hthr")),
-];
-
 /// The whole checked-in prefix — standard library, parser library, the two
 /// showcase modules — as replayed semantic images. Until 2026-09-17 only the
 /// standard library was an image; the parser library and the showcase went
@@ -45,18 +16,12 @@ const SHOWCASE: &[(&str, &str)] = &[
 /// is `NoGate` on return, so the probe modules and controls below face the
 /// kernel on every run.
 fn base() -> Elaborator {
-    let modules: Vec<(&str, &str)> = STD
-        .iter()
-        .chain(support::parser::MODULES)
-        .chain(SHOWCASE)
-        .copied()
-        .collect();
     // The proof-carrying grammar is a large checked artifact; keep its gate
     // serial within the per-process memory rail, on the cold run too.
-    support::semantic_test_base_with(&modules, |e| e.set_kernel_workers(1))
+    support::semantic_test_base_with(&support::parser::showcase_prefix(), |e| e.set_kernel_workers(1))
 }
 
-/// The `SHOWCASE` array above and the manifest's `suite` tier are the same
+/// `support::parser::SHOWCASE` and the manifest's `suite` tier are the same
 /// list written twice — this is the assertion that keeps them so. A showcase
 /// added here without a manifest row, or promoted to `suite` in the manifest
 /// without being added here, is the drift `issues/showcase-harness.md` was
@@ -68,11 +33,11 @@ fn the_suite_tier_of_the_manifest_is_exactly_this_prefix() {
         .map(|s| s.name.clone())
         .collect();
     declared.sort();
-    let mut here: Vec<String> = SHOWCASE.iter().map(|(name, _)| (*name).to_string()).collect();
+    let mut here: Vec<String> = support::parser::SHOWCASE.iter().map(|(name, _)| (*name).to_string()).collect();
     here.sort();
     assert_eq!(
         declared, here,
-        "docs/showcase/showcases.tsv's `suite` tier and this file's SHOWCASE array disagree"
+        "docs/showcase/showcases.tsv's `suite` tier and support::parser::SHOWCASE disagree"
     );
 }
 

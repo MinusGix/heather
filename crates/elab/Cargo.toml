@@ -110,3 +110,6 @@ path = "tests/semantic_x86_warmup.rs"
 
 [lints]
 workspace = true
+[[test]]
+name = "semantic_parser_warmup"
+path = "tests/semantic_parser_warmup.rs"
