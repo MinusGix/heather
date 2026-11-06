@@ -96,6 +96,7 @@ fn main() -> ExitCode {
         Some((cmd, rest)) if cmd == "fmt" => fmt::run(rest),
         Some((cmd, rest)) if cmd == "compile-x86" => native::run(rest),
         Some((cmd, rest)) if cmd == "reflect" => native::reflect(rest),
+        Some((cmd, rest)) if cmd == "warm-native" => native::warm(rest),
         Some((cmd, rest)) if cmd == "write-elf" => native::write_elf(rest),
         _ => usage(),
     }
@@ -107,6 +108,7 @@ const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <
                      \x20      heather fmt [--check] <file-or-dir>...\n\
                      \x20      heather compile-x86 <file.hthr> <function> -o <output.s> [-L <dir>]... [--cache-dir <dir>] [--timings <file.tsv>] [--kernel-workers <n>]\n\
                      \x20      heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--kernel-workers <n>]\n\
+                     \x20      heather warm-native <file.hthr>... (--cache-dir <dir> [--through <module> | --unbuilt] | --list) [-L <dir>]... [--kernel-workers <n>]\n\
                      \x20      heather write-elf <file.hthr> <program> -o <output> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--world <dir>]";
 
 fn usage() -> ExitCode {

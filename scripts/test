@@ -142,6 +142,7 @@ elif [[ "${1:-}" == --pr ]]; then
       done < <(awk '/#\[test\]/ { t = 1; next }
                     t && match($0, /fn [a-z_0-9]+/) { print substr($0, RSTART + 3, RLENGTH - 3); t = 0 }' \
                  crates/cli/tests/native*.rs)
+      native_gates_skipped=true
       echo "pr lane: nothing the native certificate gates check changed since $(git rev-parse --short "$base"); running only $native_smoke of them (HEATHER_PR_NATIVE=all runs every one)"
     else
       echo "pr lane: native certificate gates run, since the round touches $(echo $touched | tr ' ' ',')"
@@ -289,11 +290,58 @@ cli_images_warmup() {
   ) || echo "cli image warmup did not finish; the library gate reports why"
 }
 
+# The x86-native examples and the modules they import beyond the bundled
+# library: the `runtime fn` generator's closure (rt, rt_lower, runtime, …),
+# which every example marked `runtime fn` imports
+# (issues/runtime-generator-imports.md). The tests' `compile-x86` children
+# share one store, so over a cold one a test's first child built that
+# closure, then its example (the generator runs for every function), then
+# its certificate, all under its one rail: branches' first child cost 328
+# CPU-s on a cloud box against 43 for the next, the 2026-11-06 master red
+# (issues/master-red-2026-11-06.md). Built here first, only what has no
+# image (`warm-native --unbuilt` reads the headers, so a warm store costs
+# one quick probe): the shared imports one module per process
+# (`--through`), each replaying the ones before it, then each example in a
+# process of its own, three at a time. Each process holds one module, the
+# largest (branches) about half the rail.
+native_closure_warmup() {
+  local heather module unbuilt store="$STORE_ROOT/native-test-images"
+  local examples=(examples/x86-native/*.hthr) roots=()
+  heather=$(node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    import { binaryOf } from "./scripts/run-test-targets.mjs";
+    console.log(binaryOf(readFileSync(process.argv[1], "utf8"), "heather") ?? "");' "$manifest")
+  if [[ -z "$heather" ]]; then
+    echo "native warmup: no heather binary in the build; the native tests build their modules themselves"
+    return 0
+  fi
+  unbuilt=$("$heather" warm-native "${examples[@]}" --unbuilt --cache-dir "$store") || return 0
+  for module in $unbuilt; do
+    if [[ -f "examples/x86-native/$module.hthr" ]]; then
+      roots+=("examples/x86-native/$module.hthr")
+      continue
+    fi
+    (
+      ulimit -v 6291456
+      ulimit -t 300
+      HEATHER_KERNEL_WORKERS=1 "$heather" warm-native "${examples[@]}" \
+        --through "$module" --cache-dir "$store" > /dev/null
+    ) || { echo "native warmup stopped at \`$module\`; the native tests report why"; return 0; }
+  done
+  (( ${#roots[@]} )) || return 0
+  printf '%s\n' "${roots[@]}" | xargs -P 3 -I{} bash -c '
+    ( ulimit -v 6291456; ulimit -t 300
+      HEATHER_KERNEL_WORKERS=1 "$0" warm-native "$1" --cache-dir "$2" > /dev/null ) ||
+      echo "native warmup: $1 did not check; its test reports why"' "$heather" {} "$store"
+}
+
 native_warmup() {
   # Native certificates use a separate SemanticSession cache. Populate its
   # exact-build prefix before a child spends its budget on the generated
   # certificate; replay still kernel-checks every cached declaration.
   native_bin_warmup the_bundled_library_checks
+  # Only when the native gates run: the pr lane's smoke reads another store.
+  [[ -n "${native_gates_skipped:-}" ]] || native_closure_warmup
 }
 
 if (( $# == 0 )); then
@@ -306,7 +354,7 @@ if (( $# == 0 )); then
   # The fast lane skips every native certificate gate, so it has no prefix
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
-    selected heather && native_warmup
+    selected heather native native_program native_branches && native_warmup
   fi
 else
   if [[ "$requested" == *"--test native"* ]]; then

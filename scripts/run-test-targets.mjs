@@ -5,9 +5,9 @@
 // scheduling, buffered output, and exact result accounting.
 
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { dirname, normalize, resolve } from "node:path";
+import { basename, dirname, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Per-child address-space cap (`ulimit -v`): the machine-protection rail.
@@ -372,6 +372,9 @@ export function completionMessage(run, completed, total) {
     }
   }
   if (run.truncated) lines.push(`  | output truncated after ${OUTPUT_LIMIT} bytes`);
+  for (const p of processesNearRail(run).slice(0, 3)) {
+    lines.push(`  | process at ${Math.round(100 * p.cpu / p.rail)}% of its ${p.rail} s CPU rail: ${p.cpu.toFixed(1)} CPU-s, ${p.command}`);
+  }
   return lines.join("\n") + "\n";
 }
 
@@ -430,6 +433,118 @@ export function limitedCommand(command, args, env = {}, rail = CPU_RAIL_SECONDS)
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+// Per-process CPU (issues/test-cpu-rail-child-accounting.md). `ulimit -t`
+// is a rail on each process: every `heather` a test spawns inherits its own
+// copy, so a target's CPU (the wrapper's `time`, summed over its children)
+// says nothing about how close one child came to being killed. native_tools
+// reports thousands of CPU-s as a target and is never killed as one, while
+// one `write-elf` child per test sits at its own rail; the 2026-11-03,
+// 2026-11-04 and 2026-11-06 master reds were each such a child, unreported
+// until it died. So the runner samples /proc: every process below a target's
+// wrapper, its own user+sys (all its threads, not its children: what its
+// rail counts), keeping each one's last reading. Sampled, so a process that
+// lives under one interval can be missed and the last interval before an
+// exit is not counted; the processes this is for live for minutes. Linux
+// only: elsewhere nothing is sampled and nothing is reported.
+export const PROCESS_WARN_FRACTION = 0.6;
+const PROCESS_SAMPLE_MS = 2000;
+
+// One /proc/<pid>/stat line: the parent, the start time (a pid is reused,
+// pid and start are not), and user+sys in clock ticks. The command name sits
+// in parentheses and may hold spaces or parentheses itself, so the fields
+// are read after the last `)`.
+export function parseProcStat(text) {
+  const close = text.lastIndexOf(")");
+  if (close < 0) return null;
+  const fields = text.slice(close + 2).trim().split(/\s+/);
+  // After the name: state(3) ppid(4) … utime(14) stime(15) … starttime(22).
+  if (fields.length < 20) return null;
+  return { ppid: Number(fields[1]), ticks: Number(fields[11]) + Number(fields[12]), start: fields[19] };
+}
+
+// A process's command, short: its program's file name and its first
+// arguments, so `heather compile-x86 examples/x86-native/branches.hthr
+// nested_true` reads as that.
+export function shortCommand(argv, limit = 120) {
+  if (!argv.length) return "?";
+  const text = [basename(argv[0]), ...argv.slice(1, 5)].join(" ");
+  return text.length > limit ? text.slice(0, limit - 1) + "…" : text;
+}
+
+function clockTicks() {
+  try { return Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim()) || 100; } catch { return 100; }
+}
+
+export class ProcessSampler {
+  constructor({ proc = "/proc", intervalMs = PROCESS_SAMPLE_MS } = {}) {
+    this.proc = proc;
+    this.intervalMs = intervalMs;
+    this.enabled = process.platform === "linux";
+    this.ticks = this.enabled ? clockTicks() : 100;
+    this.roots = new Map(); // root pid -> Map(key -> { pid, command, cpu, root })
+    this.timer = null;
+  }
+
+  watch(pid) {
+    if (!this.enabled || !pid) return;
+    this.roots.set(pid, new Map());
+    if (!this.timer) {
+      this.timer = setInterval(() => this.sample(), this.intervalMs);
+      this.timer.unref();
+    }
+    this.sample();
+  }
+
+  // The processes seen below `pid` (and `pid` itself), busiest first, each
+  // `{ command, cpu }` in seconds; the root is marked `root: true`.
+  stop(pid) {
+    const seen = this.roots.get(pid);
+    this.roots.delete(pid);
+    if (!this.roots.size && this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (!seen) return [];
+    return [...seen.values()].sort((a, b) => b.cpu - a.cpu);
+  }
+
+  sample() {
+    if (!this.roots.size) return;
+    const stats = new Map();
+    let entries;
+    try { entries = readdirSync(this.proc); } catch { return; }
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      let stat;
+      try { stat = parseProcStat(readFileSync(`${this.proc}/${entry}/stat`, "utf8")); } catch { continue; }
+      if (stat) stats.set(Number(entry), stat);
+    }
+    const children = new Map();
+    for (const [pid, { ppid }] of stats) children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+    for (const [root, seen] of this.roots) {
+      const queue = [root];
+      while (queue.length) {
+        const pid = queue.pop();
+        const stat = stats.get(pid);
+        if (!stat) continue;
+        queue.push(...(children.get(pid) ?? []));
+        const key = `${pid}:${stat.start}`;
+        let entry = seen.get(key);
+        if (!entry) {
+          let argv = [];
+          try { argv = readFileSync(`${this.proc}/${pid}/cmdline`, "utf8").split("\0").filter(Boolean); } catch {}
+          entry = { pid, command: shortCommand(argv), cpu: 0, root: pid === root };
+          seen.set(key, entry);
+        }
+        entry.cpu = Math.max(entry.cpu, stat.ticks / this.ticks);
+      }
+    }
+  }
+}
+
+// The processes of a run past `fraction` of the rail each one had.
+export function processesNearRail(run, fraction = PROCESS_WARN_FRACTION) {
+  const rail = cpuRail(run.target.name);
+  return (run.processes ?? []).filter((p) => p.cpu >= fraction * rail).map((p) => ({ ...p, rail }));
 }
 
 export function collect(child) {
@@ -494,7 +609,7 @@ function readOwnCgroupValue(name) {
 // `ready(prerequisite)` resolves to whether its readers may start before it
 // finishes (`probe` over the manifest's `heather`; none, they never do),
 // asked every `probeSeconds`.
-export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}, ready = null, probeSeconds = PROBE_SECONDS) {
+export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv = {}, ready = null, probeSeconds = PROBE_SECONDS, sampler = new ProcessSampler()) {
   const pending = [...targets];
   const completed = [];
   const finished = new Set();
@@ -547,7 +662,9 @@ export async function runTargets(targets, jobs, libtestArgs, keepGoing, extraEnv
         const command = TEST_TIMES
           ? limitedCommand(target.executable, timedLibtestArgs(args), { RUSTC_BOOTSTRAP: "1", ...extraEnv }, cpuRail(target.name))
           : limitedCommand(target.executable, args, extraEnv, cpuRail(target.name));
+        sampler.watch(command.pid);
         collect(command).then((run) => {
+          run.processes = sampler.stop(command.pid);
           run.wall = Number(process.hrtime.bigint() - started) / 1e9;
           run.target = target;
           ({ cpu: run.cpu, output: run.output } = parseCpu(run.output));
@@ -661,7 +778,7 @@ async function main() {
     console.log("\n== doc tests: none selected ==");
   }
   timingRows.sort((a, b) => b[0] - a[0]);
-  console.log(`\n== slowest test targets (reported test time; CPU = user+sys against the ${CPU_RAIL_SECONDS} s rail) ==`);
+  console.log(`\n== slowest test targets (reported test time; CPU = user+sys of the target and all its children, summed, against the ${CPU_RAIL_SECONDS} s per-process rail) ==`);
   const visible = timingRows.filter(([seconds]) => seconds >= 1).slice(0, 20);
   if (!visible.length) console.log("  (no target took at least 1 second)");
   const cpuCell = (cpu) => cpu === null || cpu === undefined
@@ -674,8 +791,18 @@ async function main() {
   // named, every run, so its drift has a history before it becomes a kill.
   const nearRail = timingRows.filter(([, , cpu]) => cpu !== null && cpu !== undefined && cpu >= CPU_WARN_FRACTION * CPU_RAIL_SECONDS);
   if (nearRail.length) {
-    console.log(`== targets past ${Math.round(100 * CPU_WARN_FRACTION)}% of the CPU rail ==`);
+    console.log(`== targets whose summed CPU is past ${Math.round(100 * CPU_WARN_FRACTION)}% of one process's rail (a sum, not a margin: see the processes section) ==`);
     for (const [, label, cpu] of nearRail) console.log(`${cpu.toFixed(1).padStart(8)} CPU-s ${Math.round(100 * cpu / CPU_RAIL_SECONDS).toString().padStart(3)}%  ${label}`);
+  }
+  // What the rail actually kills: one process past its own share, whatever
+  // its target sums to (issues/test-cpu-rail-child-accounting.md).
+  const busy = runs.flatMap((run) => processesNearRail(run).map((p) => ({ ...p, label: run.target.label })))
+    .sort((a, b) => b.cpu / b.rail - a.cpu / a.rail);
+  if (busy.length) {
+    console.log(`== processes past ${Math.round(100 * PROCESS_WARN_FRACTION)}% of their own CPU rail (each process has its own; sampled every ${PROCESS_SAMPLE_MS / 1000} s) ==`);
+    for (const p of busy) {
+      console.log(`${p.cpu.toFixed(1).padStart(8)} CPU-s ${Math.round(100 * p.cpu / p.rail).toString().padStart(3)}% of ${p.rail} s  ${p.label}: ${p.command}`);
+    }
   }
   const runId = new Date().toISOString();
   if (declsDir) writeFileSync(`${declsDir}/run.txt`, `${runId}\n`);

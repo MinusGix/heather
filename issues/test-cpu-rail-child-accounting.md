@@ -1,10 +1,10 @@
 ---
 title: Distinguish aggregate child CPU from per-process test rails
-status: open
+status: closed
 labels: [tests,tooling]
 area: infrastructure
 created: 2026-09-20
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 ## Scope
@@ -39,3 +39,16 @@ reds had no warning: native_tools reports 2932 CPU-s as a target, always far
 `write-elf` child per test sits at 100% of its own rail
 ([[native-sort-gate-rail]], [[master-red-2026-11-04]]). The library gate's
 heaviest module children sit at 40–50%.
+
+**2026-11-06.** Done. `scripts/run-test-targets.mjs` samples /proc every
+2 s (`ProcessSampler`): every process below a target's wrapper, keyed by pid
+and start time, at its own user+sys, which is what its rail counts. A
+process past 60% of the rail it inherited is named on its target's `[done]`
+line and in a `== processes past 60% of their own CPU rail ==` section at
+the end of the run, which `scripts/sentinel` copies into its report. The
+aggregate sections now say they are sums. Sampled, so a process shorter than
+one interval can be missed and the last interval before an exit is not
+counted; the processes this is for live for minutes. Covered by
+`scripts/test-target-runner.test.mjs` (a fake /proc tree with a reused pid,
+and a live target whose spawned child burns CPU). Found on
+[[master-red-2026-11-06]], whose killed child no section named.
