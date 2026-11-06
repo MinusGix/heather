@@ -1,0 +1,47 @@
+// Probes of the coinductive simulation (`linux_x86_64_sim_co`;
+// issues/linux-sim-divergence.md). Divergence meets divergence: a machine
+// that goes round forever simulates `spin`, and a machine with a run, one
+// that exits included, does not, where the finite `Sim` holds of every
+// machine at `spin` (`linux_x86_64_sim_tests`' `spin_simulated`). Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import linux_calls;
+import linux_x86_64_io;
+import linux_x86_64_determinism;
+import linux_x86_64_sim;
+import linux_x86_64_sim_co;
+import linux_trees;
+import itree;
+import itree_trace;
+import coitree;
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// A round of at least one step forever: `spin` is simulated, and no run of
+// the machine exists.
+theorem forever_runs_nothing<M>(io: LinuxIo<M>, round: MachineState<M> → Type,
+    again: (s: MachineState<M>) → round(s) → Exists<MachineState<M>>(λ s2 => LinuxPlus(io, s, s2) ∧ round(s2)),
+    s: MachineState<M>, held: round(s), run: List<LinuxEvent>, ran: LinuxRun(io, run, s), valid: LinuxEventsValid(run)): False {
+    LinuxSimCo::spin_no_run(io, s, LinuxSimCo::forever(io, round, again, s, held), run, ran, valid)
+}
+
+// A machine that exits does not simulate `spin`, though `Sim` says it does
+// at every fuel.
+theorem exit_not_spin<M>(io: LinuxIo<M>, s, at: MachineState<M>, steps: LinuxSteps(io, s, at),
+    syscall: LinuxSyscallAt(io, at), status: BitVec(64), exits: LinuxExits(at, status),
+    sim: LinuxSimCo<M>(io, CoTree::spin<BitVec(64)>(Events::linux()), s)): False {
+    let ran: LinuxRun(io, [ExitEvent(status)], s) = Exists(at, ⟨steps, ⟨syscall, ⟨exits, refl⟩⟩⟩);
+    LinuxSimCo::spin_no_run(io, s, sim, [ExitEvent(status)], ran, ⟨trivial, trivial⟩)
+}
+
+// A return is simulated by the exit it asks, and its one run is that exit.
+theorem ret_run<M>(io: LinuxIo<M>, s, at: MachineState<M>, steps: LinuxSteps(io, s, at),
+    syscall: LinuxSyscallAt(io, at), status: BitVec(64), exits: LinuxExits(at, status)):
+    ProducedRun(CRet(status), [ExitEvent(status)]) {
+    let sim: LinuxSimCo<M>(io, CRet(status), s) = SimExits(0, status, refl, at, steps, syscall, exits);
+    LinuxSimCo::run_produced(io, CRet(status), s, sim, [ExitEvent(status)], Exists(at, ⟨steps, ⟨syscall, ⟨exits, refl⟩⟩⟩),
+        ⟨trivial, trivial⟩)
+}
