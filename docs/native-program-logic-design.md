@@ -261,6 +261,15 @@ The compiler's theorem is `Sim(io_linux(), denote(p))(io_initial(file(p), page,
 gprs, flags))` for every page, registers and flags, with `file(p)` the ELF of
 `compile(p)`.
 
+Since 2026-11-06 the compiler proves `SimPaid` (`linux_x86_64_sim_paid`),
+which reads the tree a constructor at a time and makes each `Tau` cost the
+machine a step; it is a `Sim` (`sim_of_paid`), and because a source's cuts
+lie as deep as its fuel (`Source::deepens`) its converse is exact: every
+run of the compiled program is a whole trace the source produces
+(`Source::elf_runs_exact`; issues/native-compile-co-sim.md). So liveness is
+no longer lost for compiled programs: a source that never returns compiles
+to a process with no run.
+
 ## 6. The program logic: target-side tools
 
 The compiler proof needs, for each source construct, a lemma "the code this

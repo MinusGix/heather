@@ -7,8 +7,10 @@
 // memory forms (a word or a byte loaded or stored) and the conditional jump
 // that falls through or lands ahead. `Site::Goes` is what a statement's
 // code claims: every state at an offset that meets a condition runs as the
-// tree (`Sim`). A run before it is part of it (`goes_after`), a jump picks
-// one of two (`goes_jcc`, `goes_jmp`), and a SYSCALL is where the tree's
+// tree, paying for its silent steps (`SimPaid`, linux_x86_64_sim_paid). A
+// run before it is part of it (`goes_after`), a jump picks one of two
+// (`goes_jcc`, `goes_jmp`), a loop's JMP back pays for the silent step
+// before its next round (`goes_jmp_tau`), and a SYSCALL is where the tree's
 // next move is read: a call answered every way Linux may answer it
 // (`goes_call`), or the exit (`goes_exit`).
 //
@@ -18,6 +20,7 @@
 import linux_calls;
 import linux_x86_64_io;
 import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
 import linux_trees;
 import itree;
 import x86_64;
@@ -195,7 +198,7 @@ theorem Site::moves_jcc<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fill
 // the tree
 
 fn Site::Goes<M>(self site: Site<M>, io: LinuxIo<M>, at: Nat, t: ITree<BitVec(64)>(Events::linux()), pre: MachineState<M> → Type) → Type {
-    (s: MachineState<M>) → s.rip = next_rip(site.origin, at) → site.Resident(s.memory) → pre(s) → Sim(io, t, s)
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, at) → site.Resident(s.memory) → pre(s) → SimPaid(io, t, s)
 }
 
 theorem Site::goes_weaken<M>(self site: Site<M>, io: LinuxIo<M>, at: Nat, t: ITree<BitVec(64)>(Events::linux()), pre, entry: MachineState<M> → Type,
@@ -206,7 +209,7 @@ theorem Site::goes_weaken<M>(self site: Site<M>, io: LinuxIo<M>, at: Nat, t: ITr
 // A tree the same as one the code runs as.
 theorem Site::goes_same<M>(self site: Site<M>, io: LinuxIo<M>, at: Nat, t, u: ITree<BitVec(64)>(Events::linux()), pre: MachineState<M> → Type,
     same: ITree::Same(Events::linux(), t, u), goes: site.Goes(io, at, u, pre)): site.Goes(io, at, t, pre) {
-    λ s here resident holds => sim_of_same(io, t, u, same, s, goes(s, here, resident, holds))
+    λ s here resident holds => paid_of_same(io, t, u, same, s, goes(s, here, resident, holds))
 }
 
 // A straight run, then what goes from where it ends.
@@ -216,7 +219,7 @@ theorem LinuxIo::goes_after<M>(self io: LinuxIo<M>, program: Prog, origin: BitVe
     goes: io.site(program, origin).Goes(io, to, t, between)): io.site(program, origin).Goes(io, from, t, pre) {
     λ s here resident holds => {
         let arrived = moves(s, here, resident, holds);
-        sim_back(io, t, s, arrived.witness, linux_steps_of_machine(io, s, arrived.witness, arrived.proof.left),
+        paid_back(io, t, s, arrived.witness, linux_steps_of_machine(io, s, arrived.witness, arrived.proof.left),
             goes(arrived.witness, arrived.proof.right.left, arrived.proof.right.right.left, arrived.proof.right.right.right))
     }
 }
@@ -238,7 +241,7 @@ theorem LinuxIo::goes_jcc<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(
         let u = execute_near_control(control, s);
         let jumped = linux_steps_of_fetched(io, s, u, fetched_steps_one(io.fetch, io.data, s, u,
             Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), refl⟩)));
-        sim_back(io, t, s, u, jumped,
+        paid_back(io, t, s, u, jumped,
             match yes: condition_holds(cc, s.flags) {
                 True => taken(u,
                     trans(near_if_taken_rip(cc, displacement, s, yes),
@@ -265,7 +268,29 @@ theorem LinuxIo::goes_jmp<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(
         let u = execute_near_control(control, s);
         let jumped = linux_steps_of_fetched(io, s, u, fetched_steps_one(io.fetch, io.data, s, u,
             Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jmp(target), at, here), refl⟩)));
-        sim_back(io, t, s, u, jumped, goes(u,
+        paid_back(io, t, s, u, jumped, goes(u,
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, displacement), here),
+                near_lands_target(origin, prog_len(before), displacement, landing, lands)),
+            resident, holds))
+    }
+}
+
+// A JMP that pays for a silent step of the tree: a loop going round
+// (`linux_x86_64_sim_paid`).
+theorem LinuxIo::goes_jmp_tau<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), fits: FillsFit(program, no_fills()), k: Nat,
+    before: Prog, name: Nat, target: Nat, at: asm_back(program, k) = At(before, name, Jmp(target)),
+    landing: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(program), prog_len(before), Jmp(target)), landing),
+    t: ITree<BitVec(64)>(Events::linux()), pre: Gprs → Flags → M → Type,
+    goes: io.site(program, origin).Goes(io, landing, t, λ (u: MachineState<M>) => pre(u.gprs, u.flags, u.memory))):
+    io.site(program, origin).Goes(io, prog_len(before), Tau(t), λ (s: MachineState<M>) => pre(s.gprs, s.flags, s.memory)) {
+    let site = io.site(program, origin);
+    λ s here resident holds => {
+        let displacement = asm_jump_of(asm_labels(program), prog_len(before), Jmp(target));
+        let control = JumpNear(displacement);
+        let u = execute_near_control(control, s);
+        let jumped: LinuxStep(io, s, u) =
+            Inl(Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jmp(target), at, here), refl⟩));
+        paid_tau_step(io, t, s, u, jumped, goes(u,
             trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, displacement), here),
                 near_lands_target(origin, prog_len(before), displacement, landing, lands)),
             resident, holds))
@@ -283,7 +308,7 @@ theorem LinuxIo::goes_call<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec
         (io.site(program, origin).Resident(s.memory) → (a: c.Resp()) → c.Answers(a) → LinuxResumes(io, s, c, a, λ (u: MachineState<M>) =>
             io.site(program, origin).Resident(u.memory) ∧ after(a, u)))) {
     let site = io.site(program, origin);
-    λ s here resident holds => sim_vis(io, c, next, s, s, Exists(Zero, refl),
+    λ s here resident holds => paid_vis(io, c, next, s, s, Exists(Zero, refl),
         site.item_fetched(fits, s, resident, k, before, name, Syscall, at, here), holds.left,
         λ a answers junk leaves rcx r11 => {
             let resumed = holds.right(resident, a, answers, junk, leaves, rcx, r11);
@@ -297,7 +322,7 @@ theorem LinuxIo::goes_call<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec
 // tree.
 theorem LinuxIo::goes_exit<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), fits: FillsFit(program, no_fills()), k: Nat,
     before: Prog, name: Nat, at: asm_back(program, k) = At(before, name, Syscall), t: ITree<BitVec(64)>(Events::linux()), status: BitVec(64),
-    exits: (s: MachineState<M>) → LinuxSyscallAt(io, s) → LinuxExits(s, status) → Sim(io, t, s)):
+    exits: (s: MachineState<M>) → LinuxSyscallAt(io, s) → LinuxExits(s, status) → SimPaid(io, t, s)):
     io.site(program, origin).Goes(io, prog_len(before), t, λ (s: MachineState<M>) => LinuxExits(s, status)) {
     λ s here resident holds => exits(s, io.site(program, origin).item_fetched(fits, s, resident, k, before, name, Syscall, at, here), holds)
 }

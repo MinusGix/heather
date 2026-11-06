@@ -36,21 +36,6 @@ import list;
 import logic;
 import nat;
 
-// At least one step.
-fn LinuxPlus<M>(io: LinuxIo<M>, before, after: MachineState<M>) → Type {
-    Exists<MachineState<M>>(λ middle => LinuxStep(io, before, middle) ∧ LinuxSteps(io, middle, after))
-}
-
-theorem linux_plus_back<M>(io: LinuxIo<M>, n: Nat): (before, middle, after: MachineState<M>) →
-    LinuxStepsN(io, n, before, middle) → LinuxPlus(io, middle, after) → LinuxPlus(io, before, after) {
-    match n {
-        Zero => λ before middle after first plus => j(sym(first), λ start _ => LinuxPlus(io, start, after), plus),
-        Succ(_) => λ before middle after first plus => Exists(first.witness, ⟨first.proof.left,
-            linux_steps_n_append(io, _, first.witness, middle, after, first.proof.right,
-                linux_steps_cons(io, middle, plus.witness, after, plus.proof.left, plus.proof.right))⟩),
-    }
-}
-
 // One way Linux may answer `c` and resume: the answer, as it may give it,
 // what it leaves in a failed call's buffer, RCX and R11.
 record LinuxResumption(c: LinuxCmd<Nat>) {

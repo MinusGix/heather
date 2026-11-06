@@ -37,6 +37,13 @@ import linux_x86_64_io;
 import linux_x86_64_byte_memory;
 import linux_x86_64_image;
 import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
+import linux_x86_64_determinism;
+import linux_calls;
+import linux_trees;
+import itree;
+import itree_trace;
+import itree_deep;
 import x86_64;
 import x86_64_asm;
 import x86_64_asm_runs;
@@ -52,8 +59,9 @@ import omega;
 
 // The process Linux makes of a 232-byte header and the program's bytes,
 // with a data segment of `size`, at its entry with the command line `args`
-// on its stack, simulates the source run with `args`.
-theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+// on its stack, simulates the source run with `args`, paying for its
+// silent steps (`SimPaid`).
+theorem Source::elf_simulates_paid(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
     compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
     short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
     header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
@@ -61,7 +69,7 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
     loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
     deep: src.depth * (8 * (src.words + 1)) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
+    SimPaidProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
     let x = X86Profile::process(size, top, depth);
     let stack = DataRegion::process_stack(size, top, depth, placed).stack();
     let low = io_stack_low_toNat(size, top, depth, placed);
@@ -83,6 +91,40 @@ theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_da
         stack, refl, omega(floor, low, placed.above), omega(low, placed.above, placed.canonical),
         DataRegion::process_stack_entry(size, top, depth, placed, s.gprs, rsp), deep, args,
         argv_at_kept(data.above(top), s.memory, data.above(stack.low.toNat() + stack.size), s.memory, above, read_gpr(Rsp, s.gprs), args, argv))
+}
+
+// …so it simulates it.
+theorem Source::elf_simulates(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
+    header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
+    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
+    deep: src.depth * (8 * (src.words + 1)) <= depth,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
+    SimProgram(X86Profile::process(size, top, depth).linux(), src.denote(args), s) {
+    Program::sim_of_paid(X86Profile::process(size, top, depth).linux(), src.denote(args), s, src.elf_simulates_paid(size, within, program, homes, compiled, fits, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv))
+}
+
+// …and every run of it, with answers Linux may give, is exactly a run of
+// the source: the events of a whole trace the source produces with `args`.
+// Its loops' silent steps are paid for, and at fuel `n` its cuts lie `n`
+// deep (`Source::deepens`), so no run reaches one
+// (`Program::paid_run_produces`).
+theorem Source::elf_runs_exact(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes,
+    compiled: src.compile(io_data_low(), homes) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
+    short: 232 + assemble(no_fills(), program, Nil).len() <= 65536,
+    header: List<BitVec(8)>, long: header.len() = 232, top, depth: Nat, placed: StackPlaced(size, top, depth),
+    s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
+    loaded: s.memory.LoadedFrom(size, header ++ assemble(no_fills(), program, Nil)),
+    deep: src.depth * (8 * (src.words + 1)) <= depth,
+    args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
+    run: List<LinuxEvent>, ran: LinuxRun(X86Profile::process(size, top, depth).linux(), run, s),
+    valid: LinuxEventsValid(run)):
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => Program::Produces(Events::linux(), src.denote(args), tr) ∧
+        (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run))) {
+    Program::paid_run_produces(X86Profile::process(size, top, depth).linux(), src.denote(args), s,
+        src.elf_simulates_paid(size, within, program, homes, compiled, fits, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv), src.deepens(args), run, ran, valid)
 }
 
 // The same, of the file `write-elf` writes: the I/O profile's ELF of the

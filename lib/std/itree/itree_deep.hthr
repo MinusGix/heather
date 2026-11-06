@@ -1,0 +1,90 @@
+// How deep a fuelled tree's cuts lie (issues/native-compile-co-sim.md).
+//
+// A tree cut at fuel claims nothing past its cuts, so a run that reaches one
+// is the tree's only up to it. `ITree::Deep(t, d)` says every cut of `t`
+// lies below at least `d` silent steps, along every path: a run that pays
+// for each silent step and takes fewer than `d` steps in all never meets a
+// cut (`linux_x86_64_sim_paid`'s `paid_run_whole`). A loop at fuel `n` puts
+// a silent step before each round, so its cuts lie `n` deep
+// (`ITree::deep_iter`), and sequencing keeps the depth (`ITree::deep_bind`).
+// A program deepens when some fuel puts its cuts as deep as asked
+// (`Program::Deepens`).
+import itree;
+import itree_trace;
+import logic;
+import nat;
+
+fn ITree::Deep<R>(E: Events, t: ITree<R>(E), d: Nat) → Type {
+    match t {
+        Ret(_) => True,
+        Tau(u) => ITree::Deep(E, u, d.pred()),
+        Vis(c, k) => (a: E.Resp(c)) → ITree::Deep(E, k(a), d),
+        Cut => d = 0,
+    }
+}
+
+// Every tree's cuts lie at least no steps deep.
+theorem ITree::deep_zero<R>(E: Events, t: ITree<R>(E)): ITree::Deep(E, t, 0) {
+    match t {
+        Ret(_) => trivial,
+        Tau(u) => ITree::deep_zero(E, u),
+        Vis(_, k) => λ a => ITree::deep_zero(E, k(a)),
+        Cut => refl,
+    }
+}
+
+// Cuts as deep as `d` are as deep as anything less.
+theorem ITree::deep_mono<R>(E: Events, t: ITree<R>(E)): (d, e: Nat) → e <= d → ITree::Deep(E, t, d) → ITree::Deep(E, t, e) {
+    match t {
+        Ret(_) => λ d e le deep => trivial,
+        Tau(u) => λ d e le deep => ITree::deep_mono(E, u, d.pred(), e.pred(), e.pred_mono(d, le), deep),
+        Vis(_, k) => λ d e le deep => λ a => ITree::deep_mono(E, k(a), d, e, le, deep(a)),
+        Cut => λ d e le (deep: d = 0) => (match e as λ x => x <= d → x = 0 {
+            Zero => λ _ => refl,
+            Succ(e2) => λ (bad: Succ(e2) <= d) => false_elim(j(deep, λ y _ => Succ(e2) <= y, bad)),
+        })(le),
+    }
+}
+
+// Sequencing: the first tree's cuts, and each continuation's.
+theorem ITree::deep_bind<A, B>(E: Events, t: ITree<A>(E), h: A → ITree<B>(E)): (d: Nat) → ITree::Deep(E, t, d) →
+    ((r: A) → ITree::Deep(E, h(r), d)) → ITree::Deep(E, ITree::bind(E, t, h), d) {
+    match t {
+        Ret(r) => λ d _ after => after(r),
+        Tau(u) => λ d deep after => ITree::deep_bind(E, u, h, d.pred(), deep,
+            λ r => ITree::deep_mono(E, h(r), d, d.pred(), d.pred_le(), after(r))),
+        Vis(_, k) => λ d deep after => λ a => ITree::deep_bind(E, k(a), h, d, deep(a), after),
+        Cut => λ d deep _ => deep,
+    }
+}
+
+theorem ITree::deep_map<A, B>(E: Events, t: ITree<A>(E), f: A → B, d: Nat, deep: ITree::Deep(E, t, d)):
+    ITree::Deep(E, ITree::map(E, t, f), d) {
+    ITree::deep_bind<A, B>(E, t, λ r => Ret(f(r)), d, deep, λ r => trivial)
+}
+
+// A loop at fuel `n`: a silent step before each round, so its cuts lie `n`
+// deep where its body's do.
+theorem ITree::deep_iter<A, B>(E: Events, n: Nat, body: A → ITree<Step<A, B>>(E)): (a: A) →
+    ((x: A) → ITree::Deep(E, body(x), n)) → ITree::Deep(E, ITree::iter(E, n, body, a), n) {
+    match n {
+        Zero => λ a _ => refl,
+        Succ(m) => λ a deep => ITree::deep_bind<Step<A, B>, B>(E, body(a), λ x => match x {
+                Continue(a2) => Tau(ITree::iter(E, m, body, a2)),
+                Break(b) => Ret(b),
+            }, Succ(m), deep(a),
+            λ x => match x as λ y => ITree::Deep(E, match y as λ _ => ITree<B>(E) {
+                    Continue(a2) => Tau(ITree::iter(E, m, body, a2)),
+                    Break(b) => Ret(b),
+                }, Succ(m)) {
+                Continue(a2) => ITree::deep_iter(E, m, body, a2,
+                    λ x2 => ITree::deep_mono(E, body(x2), Succ(m), m, m.le_succ_r(m, m.le_refl()), deep(x2))),
+                Break(_) => trivial,
+            }),
+    }
+}
+
+// A program deepens: for every depth, some fuel puts its cuts that deep.
+fn Program::Deepens<R>(E: Events, p: Program<R>(E)) → Type {
+    (d: Nat) → Exists<Nat>(λ n => ITree::Deep(E, p.at(n), d))
+}

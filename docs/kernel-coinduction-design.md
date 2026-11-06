@@ -372,7 +372,13 @@ Both landed in one judgment (2026-11-06): `LinuxSimCo`
 (`lib/std/os/linux/linux_x86_64_sim_co.hthr`) is coinductive over
 `CoTree` and makes a `Tau` it does not drop cost the machine a step, with
 the exact converse and `spin` meeting only a machine that never finishes.
-The compiler proving it is `issues/native-compile-co-sim.md`.
+The compiler took the first route instead (issues/native-compile-co-sim.md,
+2026-11-06): `SimPaid` (`linux_x86_64_sim_paid.hthr`) is the step-wise
+`Sim` with every `Tau` paid, over the fuelled tree, and a source's cuts lie
+as deep as its fuel (`ITree::Deep`, `Source::deepens`), so every run of a
+compiled program is a whole trace the source produces
+(`Source::elf_runs_exact`). The compiler's proofs stay inductive; the loop's
+`Tau` is paid by its `JMP` back.
 
 ---
 

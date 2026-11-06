@@ -41,6 +41,7 @@ import function_ir_lower;
 import linux_trees;
 import linux_x86_64_io;
 import linux_x86_64_sim;
+import linux_x86_64_sim_paid;
 import itree;
 import x86_64;
 import x86_64_stack;
@@ -279,7 +280,7 @@ theorem Stmt::emit_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: Li
 // Every exit, with its status, meets the continuation's tree there.
 fn Target::Exiting(self t: Target, k: Flow → ITree<BitVec(64)>(Events::linux())) → Type {
     (status: BitVec(64)) → (u: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), u) → LinuxExits(u, status) →
-        Sim(t.io(), k(Exited(status)), u)
+        SimPaid(t.io(), k(Exited(status)), u)
 }
 
 // The code from `p` to `q` runs as the statement, then `k`: wherever `k`
@@ -444,7 +445,7 @@ theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Answer
     let widen = λ (i: Nat) (m2: Mem(i, set)) => { let w: Mem(i, after_set) = Inr(set.union_left(out, i, m2)); w };
     let outer = λ (i: Nat) (m2: Mem(i, out)) => { let w: Mem(i, after_set) = Inr(set.union_right(out, i, m2)); w };
     match m {
-        Zero => λ env => λ s here resident held => sim_cut(t.io(), s),
+        Zero => λ env => λ s here resident held => paid_cut(t.io(), s),
         Succ(m2) => λ env => {
             let rest = λ (x: Step<Env, Flow>) => match x as λ _ => ITree<Flow>(Events::linux()) {
                 Continue(a2) => Tau(ITree::iter(Events::linux(), m2, f, a2)),
@@ -463,11 +464,11 @@ theorem Target::goes_repeat(self t: Target, body: Stmt, again: Nat, call: Answer
                 k2(Onward(after)),
                 λ (bit_set: after.bit(again) = True) => j(sym(bit_set), λ bit _ => t.At(prog_len(tested), after_set,
                         after_pass(match bit { True => Continue(after), False => Break(Onward(after)) }), after),
-                    t.at_jmp(tested, names, w_jumped, p, Block([]), head_within, Tau(ITree::bind(Events::linux(), ITree::iter(Events::linux(), m2, f, after), k)),
+                    t.at_jmp_tau(tested, names, w_jumped, p, Block([]), head_within, ITree::bind(Events::linux(), ITree::iter(Events::linux(), m2, f, after), k),
                         after_set, after,
-                        λ s here resident held => sim_tau(t.io(), ITree::bind(Events::linux(), ITree::iter(Events::linux(), m2, f, after), k), s,
+                        λ s here resident held =>
                             t.goes_repeat(body, again, call, perform, n, p, names, b, out, set, inside, within, head_within, closed, runs, k, exits, next, m2, after,
-                                s, here, resident, t.held_sub(set, after_set, after, s.gprs, s.memory, held, widen))))),
+                                s, here, resident, t.held_sub(set, after_set, after, s.gprs, s.memory, held, widen)))),
                 λ (clear: after.bit(again) = False) => j(sym(clear), λ bit _ => t.At(prog_len(jumped), after_set,
                         after_pass(match bit { True => Continue(after), False => Break(Onward(after)) }), after),
                     t.at_sub(prog_len(jumped), out, after_set, k(Onward(after)), after, outer, next(after))));
@@ -1325,14 +1326,14 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
     top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(r.profile.linux(), src.denote(args), s) {
+    SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_eval(src.functions);
     let layout = src.layout(r.low, homes);
     let entry = src.entry(r.low, homes);
     (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {
             False => None,
             True => match src.main.emit(entry, layout, [], 0) { None => None, Some(c) => c.prog.finish() },
-        }) = Some(program) → SimProgram(r.profile.linux(), src.denote(args), s) {
+        }) = Some(program) → SimPaidProgram(r.profile.linux(), src.denote(args), s) {
         False => λ _ none => absurd(none),
         True => λ allocated => {
             let ok = src.allocation_sound(homes, j(sym(allocated), λ v _ => v.IsTrue(), trivial));
@@ -1344,7 +1345,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                     (match laid: whole.laid_out() {
                         False => λ none => absurd(none),
                         True => λ same => (j(Option::some_inj(whole, program, same),
-                            λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimProgram(r.profile.linux(), src.denote(args), s),
+                            λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimPaidProgram(r.profile.linux(), src.denote(args), s),
                             λ at_whole => {
                                 let framed: (stack.size + 8 * 0 <= stack.size) = omega();
                                 let t = Target(r, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
@@ -1361,10 +1362,10 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, fi
                                     cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)
                                 };
                                 let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
-                                    sim_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
+                                    paid_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
                                 let after = λ (end: Env) => t.goes_finish(c.prog, whole.within_self(), Ret(BitVec::zero()),
                                     λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
-                                    λ u at exited => sim_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
+                                    λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
                                 let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
                                 λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
                                     t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
@@ -1931,7 +1932,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
     top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(r.profile.linux(), src.denote(args), s) {
+    SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let call = program_eval(src.functions);
     let layout = src.layout(r.low, homes);
     let entry = src.entry(r.low, homes);
@@ -1960,10 +1961,10 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, f
         cong_fn<Nat, Option<Nat>>(λ x => t.caps.nth(x), shifted)
     };
     let exits: t.Exiting(λ (flow: Flow) => Ret(flow.status())) = λ status u at exited =>
-        sim_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
+        paid_ret(t.io(), status, u, u, Exists(Zero, refl), at, exited);
     let after = λ (end: Env) => t.goes_finish(c.prog, w_whole, Ret(BitVec::zero()),
         λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held([], end, u.gprs, u.memory),
-        λ u at exited => sim_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
+        λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
     let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
     λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
         t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
@@ -1984,12 +1985,12 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, fits: L
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
     top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.depth * (8 * (src.words + 1)) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimProgram(r.profile.linux(), src.denote(args), s) {
+    SimPaidProgram(r.profile.linux(), src.denote(args), s) {
     let bare: Option<Prog> = match src.main.emit(src.entry(r.low, homes), src.layout(r.low, homes), [], 0) { None => None, Some(c) => c.prog.finish() };
     (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {
             False => None,
             True => match src.procedures { Nil => bare, Cons(_, _) => src.compile_calls(r.low, homes) },
-        }) = Some(program) → SimProgram(r.profile.linux(), src.denote(args), s) {
+        }) = Some(program) → SimPaidProgram(r.profile.linux(), src.denote(args), s) {
         False => λ _ none => absurd(none),
         True => λ allocated => (match none: src.procedures {
             Nil => λ _ => native_compile_correct_bare(src, r, homes, fits, program, compiled, none, origin, s, here, resident, zero,
