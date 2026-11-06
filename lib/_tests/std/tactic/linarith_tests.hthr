@@ -227,4 +227,33 @@ theorem class_parent_predicate(z, e: K, h: AbsLe(z, e)): K.unit <= e { linarith(
 theorem class_parent_close(x, y, e: K, h: Close(x, y, e)): y < x + e { linarith(h.left) }
 // expect-error: `linarith` could not prove
 theorem class_parent_not_entailed(z, e: K, h: AbsLe(z, e)): K.unit < e { linarith(h.left, h.right) }
+// A refusal spells the goal as written, not the section's placeholders
+// (issues/class-carrier-diagnostics-spell-placeholders.md).
+// expect-error: `linarith` could not prove `K.unit <= d * d + K.unit`
+theorem class_refusal_spelled(d: K): K.unit <= d * d + K.unit { linarith }
+}
+
+// Conjunctions (docs/linarith-design.md §9): a fact that is one, or a
+// definition that unfolds to one, gives each side as a row, written or in
+// context; a goal that is one is proved side by side.
+theorem conj_written(x, y: Rat, h: 0 <= x ∧ x <= y): 0 <= y { linarith(h) }
+theorem conj_context(x, y: CReal, h: 0 <= x ∧ x <= y): 0 <= y { linarith }
+theorem conj_nested(x, y, z: Rat, h: (x <= y ∧ y <= z) ∧ z <= 1): x <= 1 { linarith(h) }
+theorem conj_contradictory(x: Rat, h: 1 <= x ∧ x <= 0): False { linarith(h) }
+theorem conj_goal(x: Rat, h: 0 < x): 0 < x + x ∧ x <= x + x { linarith(h) }
+// A side that is no relation at the carrier is passed over.
+theorem conj_mixed(x: Rat, n: Nat, h: n = 2 ∧ x <= 1): x < 2 { linarith(h) }
+// At `Int` and `Nat`, each side is a fact `omega` is given.
+theorem conj_nat(n, m: Nat, h: n <= m ∧ m <= 3): n <= 3 { linarith(h) }
+// expect-error: `linarith` combines
+theorem conj_unread(x: Rat, n: Nat, h: n = 2 ∧ n = 3): x < 2 { linarith(h) }
+section<K: OrderedField(≈, <, <=, +, *)> {
+theorem conj_abs_le(z, e: K, h: AbsLe(z, e)): K.unit <= e { linarith(h) }
+theorem conj_abs_le_context(z, e: K, h: AbsLe(z, e)): K.unit <= e { linarith }
+theorem conj_close(x, y, e: K, h: Close(x, y, e)): y < x + e { linarith(h) }
+theorem conj_abs_le_goal(z, e, d: K, h: AbsLe(z, e), hd: K.unit <= d): AbsLe(z, e + d) { linarith }
+theorem conj_abs_lt_goal(z, e: K, h: AbsLe(z, e)): AbsLt(z + z, e + e + e + K.multiplicative.unit) { linarith(h) }
+// The side that fails is named, as a side of the goal as written.
+// expect-error: `linarith` could not prove the left side of `AbsLe(z, e + z)`
+theorem conj_abs_le_goal_not_entailed(z, e: K, h: AbsLe(z, e)): AbsLe(z, e + z) { linarith(h) }
 }

@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,analysis,design]
 area: mathematics
 milestone: [math-reals]
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-11-06
 ---
 
 Axis 2 of `docs/analysis-foundations-design.md` (§3.2): smallness as a
@@ -39,3 +39,7 @@ Scope:
 - **[[asymptotic-relations]]**: approaches and the Landau closure lemmas.
 - **[[formal-power-series]]**: the `ε`-adic instance.
 - **[[finite-linear-algebra]]**: vectors and matrices for the module form.
+
+## Log
+
+- 2026-11-06: 2026-11-06: The contraction mapping theorem over a Cauchy-complete ordered field landed (`Contraction::fixed_point`, `fixed_unique` in lib/std/analysis/sequence.hthr; docs/sequences-and-completeness.md). It is stated for a contraction of the whole field. The local form that Newton's lemma needs is a contraction on a domain closed under limits. Its rate (`cⁿ·D/(1-c)` past step n, `Contraction::close`) is already explicit.

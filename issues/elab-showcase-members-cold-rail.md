@@ -1,6 +1,6 @@
 ---
 title: parser_library and showcase_calculator reach the CPU rail from a seeded store
-status: open
+status: closed
 labels: [testing,sentinel,performance]
 area: infrastructure
 created: 2026-11-06
@@ -33,3 +33,27 @@ before the parallel phase (as `semantic_warmup` does for the x86 and omega
 families), or split the member so no one process carries the cold prefix and
 the showcase together ([[integration-test-prefix-reelaboration]] owns the
 longer-term fixture). Not a raised rail.
+
+## Resolution (2026-11-06)
+
+`semantic_parser_warmup` (crates/elab/tests) builds the prefix the two
+members replay, one slice per process, before the parallel phase:
+`scripts/test`'s `parser_warmup` runs its four stages with `--exact`, each
+under the warmup's own 6 GiB / 300 s rails, each replaying the slices
+before it (images are keyed by a module's source and closure, not by the
+list that loaded it). The stages: the omega prefix, grind's closure, the
+parser library, the showcase. It runs whenever its target is selected
+(unfiltered), or for a focused `--test family_logic` or whole-elab run.
+The three lists the members and the warmup share now live once, in
+`support::parser` (`STD`, `MODULES`, `SHOWCASE`).
+
+Cold, on a fresh cloud box at width one: the stages cost about 4, 59, 4
+and 2 CPU-s (grind's closure dominates), and the members after them about
+1 CPU-s each, against the 170–300 they spent building it themselves. This
+box's cold prefix was cheaper than the reports above; the point is that
+neither member's rail carries it any more, and no stage is near its own.
+
+The same round fixed the `--pr` lane's native path filter, which matched
+`crates/cli/src/native/` but not `crates/cli/src/native.rs` (where #435's
+`warm-native` lives), so a diff touching only `native.rs` ran just the
+smoke.

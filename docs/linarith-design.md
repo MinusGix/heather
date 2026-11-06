@@ -277,3 +277,58 @@ degree-two products would be new rows), and atoms that do not spell, which
 degree, plus `omega` over the facts and those equations; the monomials are
 atoms to it, so its problem is the size the hand-written version had.
 
+
+## 9. Conjunctions, and the definitions that unfold to them
+
+Date: 2026-11-06. Owner: [linarith-conjunctions](../issues/linarith-conjunctions.md).
+
+```heather
+section<K: OrderedField(≈, <, <=, +, *)> {
+theorem LocatedAddGroup::abs_le_nonneg(z, e: K, hz: AbsLe(z, e)): K.unit <= e { linarith(hz) }
+theorem LocatedAddGroup::abs_le_sum2(a, b, r, x, y, c: K, ha: AbsLe(a, x), hb: AbsLe(b, y),
+    hr: r ≈ a + b, hc: x + y <= c): AbsLe(r, c) { linarith(ha, hb, hr, hc) }
+}
+```
+
+The analysis library states its bounds as predicates — `AbsLe(z, e)` is
+`Within(<=, -e, z, e)`, which is `-e <= z ∧ z <= e`; `AbsLt`, `Close` and
+`Between` alike — and before this round `linarith` read neither a
+conjunction nor a definition of one. Every client split them by hand:
+`linarith(hz.left, hz.right)` for a fact, and
+`abs_le_intro(z, e, linarith(…), linarith(…))` for a goal, each side handed
+its own half of every fact.
+
+**Facts.** A fact whose type is a conjunction, or whose head unfolds to one
+(the first reduct that is a conjunction or a relation, as `omega` unfolds a
+defined proposition, `omega_cert::unfolded_proposition`), gives each side
+through its projection, recursively, named `h.left`/`h.right` in a refusal.
+That holds for written facts, at the field route and at `Int`/`Nat` (where
+each side is a fact `omega` is given), and for the context's: the context
+pass now reads `local_fact_entries`' evidence directly, since a projection
+is no name `resolve_reading` resolves (the context's literal conjunctions
+had been dropped silently). A side that is no relation at the carrier is
+passed over, as a context fact is; a written fact none of whose sides reads
+is still a refusal.
+
+**Goals.** A goal that is a conjunction, or unfolds to one, is proved side
+by side, each side by the same call with the same facts, and paired with
+`logic::And`. The sides are the conjunction's type arguments
+(`display_targs`), so a refusal names the side as a side of the goal as
+written — "could not prove the left side of `AbsLe(z, e + z)`" — rather than
+spelling the unfolded side, whose `-e` at a class carrier is a projection of
+the parent class's dictionary.
+
+**Refusals at a class carrier** spell the goal with its operators and its
+carrier, `K.unit <= d * d + K.unit`, not the section's placeholders
+`#op<=@0_2(#constraint0.unit, …)` (`resugar`, which reads an operator
+binder's symbol back off its generated name, `traits::op_index_symbol`).
+
+**Cost.** A split fact is two rows where one hand-picked half was one: the
+library sweep that dropped `abs_le_intro` hands both sides every fact, so
+the elimination sees more rows per call. Unfolding is tried only for a
+fact that reads as neither, with a global head, and stops at the first
+reduct that reads.
+
+**Not here.** `Rat::abs` and `CReal::abs` as functions (`|t|` read as an
+atom with `±t <= |t|`, and `|t| <= e` proved through `Rat::abs_le`); `∨`
+facts (a case split per disjunction); `↔`.
