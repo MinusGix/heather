@@ -127,7 +127,7 @@ fn Known::word_op(op: Nat, w: Nat) → Op {
 fn rt_refuse<A>(why: String) → Tac<A> { fail("rt: " ++ why, []) }
 
 fn rt_accepted<A>(what: String, c: Checked<A>) → Tac<A> {
-    match c { Accepted(a) => Pure(a), Refused(why) => rt_refuse(what ++ ": " ++ why) }
+    match c { Accepted(a) => pure(a), Refused(why) => rt_refuse(what ++ ": " ++ why) }
 }
 
 // A generated global (`f#rec`, a `decreases` function's recursor): its name
@@ -145,11 +145,11 @@ fn rt_unknown<A>(name: String) → Tac<A> {
 }
 
 fn rt_global(name: String) → Tac<Nat> {
-    lookup(name).bind(λ c => rt_accepted("`" ++ name ++ "`", c)).bind(λ g => Pure(g.id))
+    lookup(name).bind(λ c => rt_accepted("`" ++ name ++ "`", c)).bind(λ g => pure(g.id))
 }
 
 fn rt_globals(names: List<String>) → Tac<List<Nat>> {
-    match names { Nil => Pure([]), Cons(n, rest) => rt_global(n).bind(λ g => rt_globals(rest).bind(λ gs => Pure(Cons(g, gs)))) }
+    match names { Nil => pure([]), Cons(n, rest) => rt_global(n).bind(λ g => rt_globals(rest).bind(λ gs => pure(Cons(g, gs)))) }
 }
 
 fn rt_assoc(xs: List<Pair<Nat, Nat>>, k: Nat) → Option<Nat> {
@@ -161,7 +161,7 @@ fn rt_memo(xs: List<Pair<Tm, Nat>>, t: Tm) → Option<Nat> {
 }
 
 fn rt_literal(h: Handle) → Tac<Nat> {
-    view(h).bind(λ v => match v { HLit(n) => Pure(n), _ => rt_refuse("expected a numeral") })
+    view(h).bind(λ v => match v { HLit(n) => pure(n), _ => rt_refuse("expected a numeral") })
 }
 
 // ---------------------------------------------------------------------------
@@ -172,10 +172,10 @@ fn Known::is_byte(self k: Known, h: Handle) → Tac<Bool> {
     let v <- view(h);
     match v {
         HGlobal(g, _, args) => match g.id.same(k.bitvec) {
-            True => match args { Cons(w, _) => { let n <- rt_literal(w); Pure(n.same(8)) }, Nil => Pure(False) },
-            False => Pure(False),
+            True => match args { Cons(w, _) => { let n <- rt_literal(w); pure(n.same(8)) }, Nil => pure(False) },
+            False => pure(False),
         },
-        _ => Pure(False),
+        _ => pure(False),
     }
 }
 
@@ -184,10 +184,10 @@ fn Known::is_bytes(self k: Known, h: Handle) → Tac<Bool> {
     let v <- view(h);
     match v {
         HGlobal(g, _, args) => match g.id.same(k.list) {
-            True => match args { Cons(a, _) => k.is_byte(a), Nil => Pure(False) },
-            False => Pure(False),
+            True => match args { Cons(a, _) => k.is_byte(a), Nil => pure(False) },
+            False => pure(False),
         },
-        _ => Pure(False),
+        _ => pure(False),
     }
 }
 
@@ -195,26 +195,26 @@ fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
     view(h).bind(λ v => match v {
         HGlobal(g, name, args) => match g.id.same(k.bitvec) {
             True => match args {
-                Cons(w, _) => rt_literal(w).bind(λ n => Pure(Word(n))),
+                Cons(w, _) => rt_literal(w).bind(λ n => pure(Word(n))),
                 Nil => rt_refuse("`BitVec` without its width"),
             },
             False => match g.id.same(k.boolean) {
-                True => Pure(Bit),
+                True => pure(Bit),
                 False => match g.id.same(k.list) {
                     // A list of bytes is a byte buffer, its capacity the
                     // setup's to choose; a list of those is a list of lines.
                     True => match args {
                         Cons(a, _) => k.is_byte(a).bind(λ byte => match byte {
-                            True => Pure(Bytes(0)),
+                            True => pure(Bytes(0)),
                             False => k.is_bytes(a).bind(λ bytes => match bytes {
-                                True => Pure(Lines),
+                                True => pure(Lines),
                                 False => rt_refuse("a list of these has no runtime layout under the reflected fragment"),
                             }),
                         }),
                         Nil => rt_refuse("`List` without its element type"),
                     },
                     False => match Known::rec(k.recs, g.id, 0) {
-                        Some(i) => Pure(Named(i)),
+                        Some(i) => pure(Named(i)),
                         None => rt_refuse("`" ++ name ++ "` has no runtime layout under the reflected fragment"),
                     },
                 },
@@ -289,8 +289,8 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
 // Each operand reflected as a variable, left to right: their levels.
 fn RSt::operands(step: RSt → Handle → Tac<Pair<RSt, Tm>>, st: RSt, hs: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
     match hs {
-        Nil => Pure(Pair(st, [])),
-        Cons(h, rest) => step(st, h).bind(λ r => RSt::operands(step, r.fst, rest).bind(λ s => Pure(Pair(s.fst, Cons(RSt::level(r.snd), s.snd))))),
+        Nil => pure(Pair(st, [])),
+        Cons(h, rest) => step(st, h).bind(λ r => RSt::operands(step, r.fst, rest).bind(λ s => pure(Pair(s.fst, Cons(RSt::level(r.snd), s.snd))))),
     }
 }
 
@@ -309,7 +309,7 @@ fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name
         Named(ri) => infer(Hd(r)).bind(λ c => rt_accepted("a record's type", c)).bind(λ rty =>
             ctors(rty).bind(λ cc => rt_accepted("a record's constructor", cc)).bind(λ cs => match cs {
                 Cons(c, _) => match Known::field(rt_field_names(c.fields), name, 0) {
-                    Some(pos) => step(st, r).bind(λ rr => Pure(rr.fst.finish(h, operand, Field(ri, pos, RSt::level(rr.snd))))),
+                    Some(pos) => step(st, r).bind(λ rr => pure(rr.fst.finish(h, operand, Field(ri, pos, RSt::level(rr.snd))))),
                     None => rt_refuse("`" ++ name ++ "` is not a field of a record the program reads"),
                 },
                 Nil => rt_refuse("a record with no constructor"),
@@ -321,8 +321,8 @@ fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name
 fn rt_arm_body(m: MatchInfo, a: ArmInfo) → Tac<Handle> {
     open(a.body, "payload").bind(λ c => rt_accepted("a match arm", c)).bind(λ o =>
         match m.args {
-            Nil => Pure(o.body),
-            Cons(_, _) => open(o.body, "equation").bind(λ c2 => rt_accepted("a `match h:` arm", c2)).bind(λ o2 => Pure(o2.body)),
+            Nil => pure(o.body),
+            Cons(_, _) => open(o.body, "equation").bind(λ c2 => rt_accepted("a `match h:` arm", c2)).bind(λ o2 => pure(o2.body)),
         })
 }
 
@@ -338,7 +338,7 @@ fn rt_bytes_op(k: Known, st: RSt, h: Handle, operand: Bool, name: String, args: 
     match args {
         Nil => rt_refuse("`" ++ name ++ "` without its buffer"),
         Cons(xs, _) => k.ty_of(xs).bind(λ t => match t {
-            Bytes(c) => RSt::operands(step, st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(op(c), r.snd)))),
+            Bytes(c) => RSt::operands(step, st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(op(c), r.snd)))),
             _ => rt_refuse("`" ++ name ++ "` of something other than a byte buffer"),
         }),
     }
@@ -350,12 +350,12 @@ fn rt_bytes_op(k: Known, st: RSt, h: Handle, operand: Bool, name: String, args: 
 // generator does). `None` for anything else.
 fn rt_callee(k: Known, st: RSt, g: GlobalRef, name: String) → Tac<Option<Pair<RSt, Nat>>> {
     match Known::index(st.funs, g.id, 0) {
-        Some(i) => Pure(Some(Pair(st, i))),
+        Some(i) => pure(Some(Pair(st, i))),
         None => match k.discover {
-            False => Pure(None),
+            False => pure(None),
             True => lookup(name ++ "::rt").bind(λ c => match c {
-                Accepted(_) => Pure(Some(Pair(st.with_funs(st.funs ++ [g.id]), st.funs.len()))),
-                Refused(_) => Pure(None),
+                Accepted(_) => pure(Some(Pair(st.with_funs(st.funs ++ [g.id]), st.funs.len()))),
+                Refused(_) => pure(None),
             }),
         },
     }
@@ -371,12 +371,12 @@ fn rt_constant(k: Known, g: GlobalRef, name: String) → Tac<Handle> {
         Accepted(b) => view(b).bind(λ v => match v {
             HGlobal(bg, _, args) => match Known::prim(k.prims, bg.id) {
                 Some(p) => match p {
-                    POfNat => match args { Cons(n, _) => view(n).bind(λ nv => match nv { HLit(_) => Pure(b), _ => rt_refuse(refused) }), Nil => rt_refuse(refused) },
+                    POfNat => match args { Cons(n, _) => view(n).bind(λ nv => match nv { HLit(_) => pure(b), _ => rt_refuse(refused) }), Nil => rt_refuse(refused) },
                     _ => rt_refuse(refused),
                 },
                 None => rt_refuse(refused),
             },
-            HCtor(ty, _, _, fields) => match ty.id.same(k.boolean) { True => Pure(b), False => rt_refuse(refused) },
+            HCtor(ty, _, _, fields) => match ty.id.same(k.boolean) { True => pure(b), False => rt_refuse(refused) },
             _ => rt_refuse(refused),
         }),
     })
@@ -406,14 +406,14 @@ fn rt_world_calls(fuel: Nat, io: IoKnown, w: Handle) → Tac<List<Handle>> {
         Zero => rt_refuse("the world's chain of calls is longer than the reflector's fuel"),
         Succ(f) => view(w).bind(λ v => match v {
             HLocal(x, _) => match x.id.same(io.world) {
-                True => Pure([]),
+                True => pure([]),
                 False => rt_refuse("a world that is not the capability `io`"),
             },
             HField(c, name, _) => match Known::str_same(name, "after") {
                 True => view(c).bind(λ cv => match cv {
                     HGlobal(g, cname, args) => match io.is_method(g) {
                         True => match args {
-                            Cons(prev, _) => rt_world_calls(f, io, prev).bind(λ cs => Pure(cs ++ [c])),
+                            Cons(prev, _) => rt_world_calls(f, io, prev).bind(λ cs => pure(cs ++ [c])),
                             Nil => rt_refuse("`" ++ cname ++ "` without its world"),
                         },
                         False => rt_refuse("`" ++ cname ++ "` is not a call on Linux the reflector knows (`Io::read_into`, `Io::write_from`, `Io::open_path`, `Io::close_fd`)"),
@@ -442,7 +442,7 @@ fn rt_answer_field(fs: List<Pair<String, Nat>>, name: String) → Option<Nat> {
 
 // Whether `r` is a call on Linux.
 fn rt_call_of(io: IoKnown, r: Handle) → Tac<Bool> {
-    view(r).bind(λ v => match v { HGlobal(g, _, _) => Pure(io.is_method(g)), _ => Pure(False) })
+    view(r).bind(λ v => match v { HGlobal(g, _, _) => pure(io.is_method(g)), _ => pure(False) })
 }
 
 // The call a read of an answer names, among the calls made so far: the
@@ -451,14 +451,14 @@ fn rt_call_of(io: IoKnown, r: Handle) → Tac<Bool> {
 // whose world after is dropped) is another program, refused here.
 fn rt_answer(fuel: Nat, io: IoKnown, c: Handle) → Tac<CallRes> {
     match rt_call_by_handle(io.calls, c.id) {
-        Some(a) => Pure(a),
+        Some(a) => pure(a),
         None => view(c).bind(λ v => match v {
             HGlobal(g, name, args) => match args {
                 Cons(w, _) => rt_world_calls(fuel, io, w).bind(λ before =>
                     match rt_call_at(io.calls, before.len()) {
                         Some(a) => match a.method.same(g.id) {
                             True => defeq(Hd(c), Hd(a.call)).bind(λ same => match same {
-                                True => Pure(a),
+                                True => pure(a),
                                 False => rt_refuse("`" ++ name ++ "` answers a call the body does not thread its world through (a copy of `io`, or a call whose world after is dropped)"),
                             }),
                             False => rt_refuse("`" ++ name ++ "` answers a call the body does not thread its world through (a copy of `io`, or a call whose world after is dropped)"),
@@ -484,7 +484,7 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
             True => match Known::str_same(name, "after") {
                 True => rt_refuse("the world after a call used as a value: it is threaded on to the next call, never runtime data"),
                 False => rt_answer(f, io, r).bind(λ a => match a.value {
-                    Some(l) => Pure(st.finish(h, operand, Var(l))),
+                    Some(l) => pure(st.finish(h, operand, Var(l))),
                     None => rt_refuse("a call's whole answer used as one value: read its fields"),
                 }),
             },
@@ -496,7 +496,7 @@ fn rt_read(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name:
                 HField(c, inner, _) => match Known::str_same(inner, "value") {
                     True => rt_call_of(io, c).bind(λ called => match called {
                         True => rt_answer(f, io, c).bind(λ a => match rt_answer_field(a.fields, name) {
-                            Some(l) => Pure(st.finish(h, operand, Var(l))),
+                            Some(l) => pure(st.finish(h, operand, Var(l))),
                             None => rt_refuse("`" ++ name ++ "` is not a field of the call's answer"),
                         }),
                         False => rt_field(f, k, st, h, operand, r, name, step),
@@ -513,11 +513,11 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
         Succ(f) => match (match operand { True => rt_assoc(st.handles, h.id), False => None }) {
-            Some(l) => Pure(Pair(st, Var(l))),
+            Some(l) => pure(Pair(st, Var(l))),
             None => Tac::bind<Head, Pair<RSt, Tm>>(view(h), λ v => match v {
                 HLocal(x, args) => match args {
                     Nil => match rt_assoc(st.locals, x.id) {
-                        Some(l) => Pure(st.finish(h, operand, Var(l))),
+                        Some(l) => pure(st.finish(h, operand, Var(l))),
                         None => match k.is_world(x) {
                             True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
                             False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
@@ -531,21 +531,21 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             match args {
                                 Nil => rt_refuse("`" ++ name ++ "` without its operands"),
                                 Cons(a0, _) => k.ty_of(a0).bind(λ t => match t {
-                                    Word(w) => Pure(r.fst.finish(h, operand, Prim(Known::word_op(op, w), r.snd))),
+                                    Word(w) => pure(r.fst.finish(h, operand, Prim(Known::word_op(op, w), r.snd))),
                                     _ => rt_refuse("`" ++ name ++ "` on something other than a word"),
                                 }),
                             }),
-                        PConj => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(Conj, r.snd)))),
-                        PDisj => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(Disj, r.snd)))),
-                        PNeg => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => Pure(r.fst.finish(h, operand, Prim(Neg, r.snd)))),
+                        PConj => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(Conj, r.snd)))),
+                        PDisj => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(Disj, r.snd)))),
+                        PNeg => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(Neg, r.snd)))),
                         POfNat => match args {
-                            Cons(n, _) => rt_literal(n).bind(λ value => k.ty_of(h).bind(λ t => Pure(st.finish(h, operand, Lit(t, value))))),
+                            Cons(n, _) => rt_literal(n).bind(λ value => k.ty_of(h).bind(λ t => pure(st.finish(h, operand, Lit(t, value))))),
                             Nil => rt_refuse("`BitVec::ofNat` without its numeral"),
                         },
                         PZext => match args {
                             Cons(extra, rest) => rt_literal(extra).bind(λ e => match rest {
                                 Cons(x, _) => k.ty_of(x).bind(λ t => match t {
-                                    Word(w) => rt_go(f, k, st, x, True).bind(λ r => Pure(r.fst.finish(h, operand, Prim(Zext(w, e), [RSt::level(r.snd)])))),
+                                    Word(w) => rt_go(f, k, st, x, True).bind(λ r => pure(r.fst.finish(h, operand, Prim(Zext(w, e), [RSt::level(r.snd)])))),
                                     _ => rt_refuse("`zero_extend` of something other than a word"),
                                 }),
                                 Nil => rt_refuse("`zero_extend` without its operand"),
@@ -560,7 +560,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                     Cons(init, _) => view(step).bind(λ sv => match sv {
                                         HGlobal(sg, sname, _) => rt_callee(k, st, sg, sname).bind(λ found => match found {
                                             Some(si) => rt_go(f, k, si.fst, over, True).bind(λ r1 => rt_go(f, k, r1.fst, init, True).bind(λ r2 =>
-                                                Pure(r2.fst.finish(h, operand, Fold(RSt::level(r1.snd), RSt::level(r2.snd), si.snd))))),
+                                                pure(r2.fst.finish(h, operand, Fold(RSt::level(r1.snd), RSt::level(r2.snd), si.snd))))),
                                             None => rt_refuse("a fold's step `" ++ sname ++ "` is not a function of the program: mark it `runtime fn`"),
                                         }),
                                         _ => rt_refuse("a fold's step must be a named function of the program"),
@@ -573,7 +573,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         },
                     },
                     None => rt_callee(k, st, g, name).bind(λ found => match found {
-                        Some(si) => RSt::operands(λ s a => rt_go(f, k, s, a, True), si.fst, args).bind(λ r => Pure(r.fst.finish(h, operand, Call(si.snd, r.snd)))),
+                        Some(si) => RSt::operands(λ s a => rt_go(f, k, s, a, True), si.fst, args).bind(λ r => pure(r.fst.finish(h, operand, Call(si.snd, r.snd)))),
                         None => match args {
                             Cons(r, rest) => match rest {
                                 Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
@@ -588,17 +588,17 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                     Cons(_, _) => rt_refuse("a field applied to arguments (a function value)"),
                 },
                 HCtor(ty, i, name, fields) => match ty.id.same(k.boolean) {
-                    True => Pure(st.finish(h, operand, Lit(Bit, i))),
+                    True => pure(st.finish(h, operand, Lit(Bit, i))),
                     False => match ty.id.same(k.list) {
                         True => k.ty_of(h).bind(λ lt => match i {
                             // `Nil`: the empty buffer, or the name 0.
-                            Zero => Pure(st.finish(h, operand, Lit(lt, 0))),
+                            Zero => pure(st.finish(h, operand, Lit(lt, 0))),
                             Succ(_) => match lt {
                                 Lines => match fields.rev() {
                                     Cons(tl, more) => match more {
                                         Cons(hd, _) => k.ty_of(hd).bind(λ ht => match ht {
                                             Bytes(c) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, [hd, tl]).bind(λ r =>
-                                                Pure(r.fst.finish(h, operand, Prim(ConsLine(c), r.snd)))),
+                                                pure(r.fst.finish(h, operand, Prim(ConsLine(c), r.snd)))),
                                             _ => rt_refuse("a line that is not a byte buffer"),
                                         }),
                                         Nil => rt_refuse("`Cons` without its head"),
@@ -609,7 +609,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             },
                         }),
                         False => match Known::rec(k.recs, ty.id, 0) {
-                        Some(ri) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => Pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
+                        Some(ri) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
                         None => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
                         },
                     },
@@ -645,7 +645,7 @@ fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pai
             HLam(dom) => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
                 rt_params(f, k, RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
                     tys ++ [t], o.body))),
-            _ => Pure(Pair(Pair(st, tys), b)),
+            _ => pure(Pair(Pair(st, tys), b)),
         }),
     }
 }
@@ -657,15 +657,15 @@ fn rt_reflect_one(fuel: Nat, k: Known, g: Nat) → Tac<Pair<Fun, List<Nat>>> {
     rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b).bind(λ p =>
     k.ty_of(p.snd).bind(λ result =>
     rt_go(fuel, k, p.fst.fst, p.snd, False).bind(λ r =>
-    Pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))))))
+    pure(Pair(Fun(p.fst.snd, result, RSt::wrap(r.fst.lets, r.snd)), r.fst.funs))))))
 }
 
-fn rt_reflect_fun(fuel: Nat, k: Known, g: Nat) → Tac<Fun> { rt_reflect_one(fuel, k, g).bind(λ r => Pure(r.fst)) }
+fn rt_reflect_fun(fuel: Nat, k: Known, g: Nat) → Tac<Fun> { rt_reflect_one(fuel, k, g).bind(λ r => pure(r.fst)) }
 
 fn rt_reflect_funs(fuel: Nat, k: Known, gs: List<Nat>) → Tac<List<Fun>> {
     match gs {
-        Nil => Pure([]),
-        Cons(g, rest) => rt_reflect_fun(fuel, k, g).bind(λ f => rt_reflect_funs(fuel, k, rest).bind(λ fs => Pure(Cons(f, fs)))),
+        Nil => pure([]),
+        Cons(g, rest) => rt_reflect_fun(fuel, k, g).bind(λ f => rt_reflect_funs(fuel, k, rest).bind(λ fs => pure(Cons(f, fs)))),
     }
 }
 
@@ -682,15 +682,15 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
 
 fn rt_prims(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
     match ps {
-        Nil => Pure([]),
-        Cons(p, rest) => rt_global(p.fst).bind(λ g => rt_prims(rest).bind(λ es => Pure(Cons(PrimEntry(g, p.snd), es)))),
+        Nil => pure([]),
+        Cons(p, rest) => rt_global(p.fst).bind(λ g => rt_prims(rest).bind(λ es => pure(Cons(PrimEntry(g, p.snd), es)))),
     }
 }
 
 fn rt_recs(names: List<String>) → Tac<List<RecEntry>> {
     match names {
-        Nil => Pure([]),
-        Cons(n, rest) => rt_global(n).bind(λ g => rt_recs(rest).bind(λ es => Pure(Cons(RecEntry(g), es)))),
+        Nil => pure([]),
+        Cons(n, rest) => rt_global(n).bind(λ g => rt_recs(rest).bind(λ es => pure(Cons(RecEntry(g), es)))),
     }
 }
 
@@ -703,7 +703,7 @@ fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<K
     rt_global("BitVec").bind(λ bv =>
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
-    Pure(Known(ps, gs, rs, discover, bv, bo, li, None))))))))
+    pure(Known(ps, gs, rs, discover, bv, bo, li, None))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }
@@ -762,7 +762,7 @@ fn Fun::show(self f: Fun) → String { "Fun([" ++ Ty::shows(f.params) ++ "], " +
 fn rt_compare(got: List<Fun>, expected: List<Fun>) → Tac<Expr> {
     match got {
         Nil => match expected {
-            Nil => resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => Pure(Hd(h))),
+            Nil => resolve("trivial").bind(λ c => rt_accepted("`trivial`", c)).bind(λ h => pure(Hd(h))),
             Cons(_, _) => rt_refuse("fewer functions reflected than expected"),
         },
         Cons(g, rest) => match expected {

@@ -16,14 +16,14 @@ import tactic;
 
 fn accepted_ref(name: String, c: Checked<GlobalRef>) → Tac<GlobalRef> {
     match c {
-        Accepted(g) => Pure(g),
+        Accepted(g) => pure(g),
         Refused(why) => fail("`" ++ name ++ "`: " ++ why, []),
     }
 }
 
 fn accepted_handle(c: Checked<Handle>) → Tac<Handle> {
     match c {
-        Accepted(h) => Pure(h),
+        Accepted(h) => pure(h),
         Refused(why) => fail(why, []),
     }
 }
@@ -64,7 +64,7 @@ theorem double_two(): double(2) = 4 {}
 // `x = v * k`, a rewrite whose generator computes on the value.
 fn scaled(name: String, v: Nat, k: Nat) → Tac<List<Decl>> {
     infer(NatLit(0)).bind(λ c => accepted_handle(c)).bind(λ nat =>
-    Pure([Decl(AsValue, name, [], Hd(nat), NatLit(v * k))]))
+    pure([Decl(AsValue, name, [], Hd(nat), NatLit(v * k))]))
 }
 
 scaled(3) def nine = 3;
@@ -94,7 +94,7 @@ not_a_generator fn plain(n: Nat) → Nat { n }
 theorem plain_used(): plain(1) = 1 {}
 
 // A rewrite must declare the name it rewrites.
-fn forgetful(name: String, v: Nat) → Tac<List<Decl>> { Pure([]) }
+fn forgetful(name: String, v: Nat) → Tac<List<Decl>> { pure([]) }
 
 // expect-error: the generator did not declare `kept`
 forgetful def kept = 3;
@@ -113,7 +113,7 @@ fn param_value(name: String) → Tac<List<Decl>> {
     infer(NatLit(0)).bind(λ c => accepted_handle(c)).bind(λ nat =>
     assume(Hd(nat), "n", None).bind(λ c => match c {
         Refused(why) => fail(why, []),
-        Accepted(n) => Pure([Decl(AsValue, name ++ "::v", [Param(n.ref, False)], Hd(nat), Local(n.ref))]),
+        Accepted(n) => pure([Decl(AsValue, name ++ "::v", [Param(n.ref, False)], Hd(nat), Local(n.ref))]),
     }))
 }
 

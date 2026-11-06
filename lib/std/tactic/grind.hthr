@@ -447,9 +447,9 @@ fn atom_key(v: Head) → AtomKey {
 // The first of `ask` that `Defeq` finds is `h`.
 fn atom_among(g: Graph, h: Handle, ask: List<Nat>) → Tac<Option<Nat>> {
     match ask {
-        Nil => Pure(None),
+        Nil => pure(None),
         Cons(i, rest) => defeq(Hd(h), expr_at(g, i)).bind(λ same => match same {
-            True => Pure(Some(i)),
+            True => pure(Some(i)),
             False => atom_among(g, h, rest),
         }),
     }
@@ -459,10 +459,10 @@ fn atom_among(g: Graph, h: Handle, ask: List<Nat>) → Tac<Option<Nat>> {
 fn atom(g: Graph, h: Handle, key: AtomKey) → Tac<Interned> {
     let s = atom_search(g.atoms, key, h, []);
     match s.found {
-        Some(i) => Pure(Interned(g, i)),
+        Some(i) => pure(Interned(g, i)),
         None => atom_among(g, h, s.ask).bind(λ o => match o {
-            Some(i) => Pure(Interned(g, i)),
-            None => Pure(new_atom(g, h, key)),
+            Some(i) => pure(Interned(g, i)),
+            None => pure(new_atom(g, h, key)),
         }),
     }
 }
@@ -473,7 +473,7 @@ fn field_args(hs: List<Handle>) → List<SpineArg> {
 }
 
 // A term read, marked as one the equations or the goal mention.
-fn whole(h: Handle, t: Tac<Interned>) → Tac<Interned> { t.bind(λ r => Pure(Interned(mark_whole(r.g, r.node, h), r.node))) }
+fn whole(h: Handle, t: Tac<Interned>) → Tac<Interned> { t.bind(λ r => pure(Interned(mark_whole(r.g, r.node, h), r.node))) }
 
 fn then(t: Tac<Interned>, k: Interned → Tac<Interned>) → Tac<Interned> { t.bind(k) }
 
@@ -500,12 +500,12 @@ fn leaf_of(v: Head) → Leaf {
 
 fn ctor_leaf(g: Graph, h: Handle, ty: Nat, i: Nat) → Tac<Option<Interned>> {
     infer(Hd(h)).bind(λ c => match c {
-        Refused(_) => Pure(None),
+        Refused(_) => pure(None),
         Accepted(t) => ctors(t).bind(λ cs => match cs {
-            Refused(_) => Pure(None),
+            Refused(_) => pure(None),
             Accepted(infos) => match ctor_fn(infos, i) {
-                None => Pure(None),
-                Some(fh) => atom(g, fh, KCtor(ty, i)).bind(λ a => Pure(Some(a))),
+                None => pure(None),
+                Some(fh) => atom(g, fh, KCtor(ty, i)).bind(λ a => pure(Some(a))),
             },
         }),
     })
@@ -542,7 +542,7 @@ fn intern(fuel: Nat, g: Graph, t: Intern) → Tac<Interned> {
                 Refused(_) => atom(g, h, KOther),
             }),
             IArgs(at, args) => match args {
-                Nil => Pure(Interned(g, at)),
+                Nil => pure(Interned(g, at)),
                 Cons(a, rest) => then(match a.dependent {
                     True => view(a.arg).bind(λ v => atom(g, a.arg, atom_key(v))),
                     False => intern(f, g, ITerm(a.arg)),
@@ -560,28 +560,33 @@ fn read_term(g: Graph, h: Handle) → Tac<Interned> { intern(4096, g, ITerm(h)) 
 // Is `ty` an equation under binders (`(n: Nat) → f(n) = n`)?
 fn concludes_equation(fuel: Nat, ty: Handle) → Tac<Bool> {
     match fuel {
-        Zero => Pure(False),
+        Zero => pure(False),
         Succ(f) => view(ty).bind(λ v => match v {
-            HEq(_, _) => Pure(True),
+            HEq(_, _) => pure(True),
             HPi(_) => open(ty, "_").bind(λ c => match c {
-                Refused(_) => Pure(False),
+                Refused(_) => pure(False),
                 Accepted(o) => concludes_equation(f, o.body),
             }),
-            _ => Pure(False),
+            _ => pure(False),
         }),
     }
 }
 
+// An equation's two sides, from its view. Tactics match on what a plain
+// function of a `Head` returns rather than on the `Head`: a wildcard arm is
+// one copy per constructor it covers, and each copy of a `Tac` value is
+// checked again.
+fn eq_sides(v: Head) → Option<Pair<Handle, Handle>> {
+    match v { HEq(l, r) => Some(Pair(l, r)), _ => None }
+}
+
 // The two sides of an equation, as written or once in head normal form.
 fn sides_of(ty: Handle) → Tac<Option<Pair<Handle, Handle>>> {
-    view(ty).bind(λ v => match v {
-        HEq(l, r) => Pure(Some(Pair(l, r))),
-        _ => whnf(ty).bind(λ c => match c {
-            Refused(_) => Pure(None),
-            Accepted(w) => view(w).bind(λ wv => match wv {
-                HEq(l, r) => Pure(Some(Pair(l, r))),
-                _ => Pure(None),
-            }),
+    view(ty).bind(λ v => match eq_sides(v) {
+        Some(p) => pure(Some(p)),
+        None => whnf(ty).bind(λ c => match c {
+            Refused(_) => pure(None),
+            Accepted(w) => view(w).bind(λ wv => pure(eq_sides(wv))),
         }),
     })
 }
@@ -678,27 +683,27 @@ fn pat_then(t: Tac<PB>, k: PB → Tac<PB>) → Tac<PB> { t.bind(k) }
 
 fn pat_read(fuel: Nat, sc: Nat, binders: List<Nat>, b: PB, t: PRead) → Tac<PB> {
     match fuel {
-        Zero => Pure(pb_wild(b)),
+        Zero => pure(pb_wild(b)),
         Succ(f) => match t {
             PTerm(h) => pat_then(spine(h).bind(λ c => match c {
-                Refused(_) => Pure(pb_wild(b)),
+                Refused(_) => pure(pb_wild(b)),
                 Accepted(sp) => match sp.args {
                     Cons(_, _) => view(sp.head).bind(λ v => pat_read(f, sc, binders, pat_leaf(b, binders, v), PArgs(sp.args))),
                     Nil => view(h).bind(λ v => match v {
                         HCtor(ty, i, _, fields) => match fields {
-                            Nil => Pure(pb_key(b, KCtor(ty.id, i))),
+                            Nil => pure(pb_key(b, KCtor(ty.id, i))),
                             Cons(_, _) => pat_read(f, sc, binders, pb_key(b, KCtor(ty.id, i)), PArgs(field_args(fields))),
                         },
                         HGlobal(r, _, args) => match r.id.same(sc).and(args.len().same(1)) {
                             True => pat_read(f, sc, binders, pb_key(b, KSucc(sc)), PArgs(field_args(args))),
-                            False => Pure(pat_leaf(b, binders, v)),
+                            False => pure(pat_leaf(b, binders, v)),
                         },
-                        _ => Pure(pat_leaf(b, binders, v)),
+                        _ => pure(pat_leaf(b, binders, v)),
                     }),
                 },
-            }), λ x => Pure(pb_term(x, h))),
+            }), λ x => pure(pb_term(x, h))),
             PArgs(args) => match args {
-                Nil => Pure(b),
+                Nil => pure(b),
                 Cons(a, rest) => {
                     let hd = b.at;
                     match a.dependent {
@@ -756,13 +761,13 @@ record Tele { ids: List<Nat>, deps: List<Bool>, body: Handle, refs: List<LocalRe
 
 fn open_binders(fuel: Nat, ty: Handle, ids: List<Nat>, deps: List<Bool>, refs: List<LocalRef>) → Tac<Tele> {
     match fuel {
-        Zero => Pure(Tele(ids, deps, ty, refs)),
+        Zero => pure(Tele(ids, deps, ty, refs)),
         Succ(f) => view(ty).bind(λ v => match v {
             HPi(_) => open(ty, "x").bind(λ c => match c {
-                Refused(_) => Pure(Tele(ids, deps, ty, refs)),
+                Refused(_) => pure(Tele(ids, deps, ty, refs)),
                 Accepted(o) => open_binders(f, o.body, ids ++ [o.local.ref.id], deps ++ [o.dependent], refs ++ [o.local.ref]),
             }),
-            _ => Pure(Tele(ids, deps, ty, refs)),
+            _ => pure(Tele(ids, deps, ty, refs)),
         }),
     }
 }
@@ -812,7 +817,7 @@ fn lemma_at(name: String, proof: Expr, t: Tele, b: PB, ps: List<LPat>) → Lemma
 // its premises. `None` when neither side is a pattern.
 fn lemma_of(sc: Nat, name: String, proof: Expr, ty: Handle) → Tac<Option<Lemma>> {
     open_binders(64, ty, [], [], []).bind(λ t => sides_of(t.body).bind(λ o => match o {
-        None => Pure(None),
+        None => pure(None),
         Some(p) => read_pattern(sc, t.ids, p.fst).bind(λ lb => read_pattern(sc, t.ids, p.snd).bind(λ rb => Pure(match usable(lb, t.deps) {
             True => match usable(rb, t.deps) {
                 True => Some(lemma_at(name, proof, t, lb, [lpat_of(lb, True), lpat_of(rb, False)])),
@@ -857,10 +862,10 @@ fn is_false_view(fals: GlobalRef, v: Head) → Bool {
 // `Not(P)` exposes its codomain as a code)?
 fn is_false(fals: GlobalRef, h: Handle) → Tac<Bool> {
     view(h).bind(λ v => match is_false_view(fals, v) {
-        True => Pure(True),
+        True => pure(True),
         False => whnf(h).bind(λ c => match c {
-            Refused(_) => Pure(False),
-            Accepted(w) => view(w).bind(λ wv => Pure(is_false_view(fals, wv))),
+            Refused(_) => pure(False),
+            Accepted(w) => view(w).bind(λ wv => pure(is_false_view(fals, wv))),
         }),
     })
 }
@@ -869,19 +874,19 @@ fn is_false(fals: GlobalRef, h: Handle) → Tac<Bool> {
 // or once in head normal form (`a ≠ b`, `Not(a = b)`).
 fn negated(fals: GlobalRef, ty: Handle) → Tac<Option<Pair<Handle, Handle>>> {
     whnf(ty).bind(λ c => match c {
-        Refused(_) => Pure(None),
+        Refused(_) => pure(None),
         Accepted(w) => view(w).bind(λ v => match v {
             HPi(d) => sides_of(d).bind(λ o => match o {
-                None => Pure(None),
+                None => pure(None),
                 Some(p) => open(w, "_").bind(λ oc => match oc {
-                    Refused(_) => Pure(None),
+                    Refused(_) => pure(None),
                     Accepted(op) => match op.dependent {
-                        True => Pure(None),
+                        True => pure(None),
                         False => is_false(fals, op.body).bind(λ f => Pure(match f { True => Some(p), False => None })),
                     },
                 }),
             }),
-            _ => Pure(None),
+            _ => pure(None),
         }),
     })
 }
@@ -890,7 +895,7 @@ fn negated(fals: GlobalRef, ty: Handle) → Tac<Option<Pair<Handle, Handle>>> {
 // class it separates are a contradiction. `None` for any other statement.
 fn read_diseq(acc: Facts, proof: Expr, name: String, ty: Handle) → Tac<Option<Facts>> {
     negated(acc.cf.laws.fals, ty).bind(λ o => match o {
-        None => Pure(None),
+        None => pure(None),
         Some(p) => read_term(acc.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => {
             let cf = acc.cf;
             let d = Diseq(proof, name, p.fst, p.snd, Node2(x.node, y.node));
@@ -932,9 +937,9 @@ fn told(v: Head) → Bool {
 // The side of the first of `ss` whose stuck form `Defeq` finds is `w`.
 fn stuck_among(g: Graph, w: Handle, ss: List<SideAt>) → Tac<Option<Nat>> {
     match ss {
-        Nil => Pure(None),
+        Nil => pure(None),
         Cons(st, rest) => defeq(Hd(w), Hd(st.h)).bind(λ same => match same {
-            True => Pure(Some(st.node)),
+            True => pure(Some(st.node)),
             False => stuck_among(g, w, rest),
         }),
     }
@@ -949,21 +954,21 @@ fn stuck_among(g: Graph, w: Handle, ss: List<SideAt>) → Tac<Option<Nat>> {
 // may mention, docs/grind-design.md §14.4).
 fn with_reduct(acc: Facts, h: Handle, n: Nat) → Tac<Facts> {
     view(h).bind(λ v0 => match told(v0) {
-        True => Pure(acc),
+        True => pure(acc),
         False => whnf(h).bind(λ c => match c {
-            Refused(_) => Pure(acc),
+            Refused(_) => pure(acc),
             Accepted(w) => view(w).bind(λ v => match ctor_form(acc.cf.succ, v) {
                 True => read_term(acc.g, w).bind(λ r => {
                     let g = r.g;
                     let cf = acc.cf;
                     match g.eg.same_class(n, r.node) {
-                        True => Pure(with_graph(acc, g)),
+                        True => pure(with_graph(acc, g)),
                         False => Pure(with_cf(with_graph(acc, Graph(g.eg.union(n, r.node, Fact(defn_of(cf.laws, expr_at(g, n), expr_at(g, r.node)), "", [])), g.info, g.atoms)),
                             CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, cf.contra, cf.sources ++ [Node2(r.node, n)], cf.stuck, cf.unreduced))),
                     }
                 }),
                 False => match stuck_form(v) {
-                    False => Pure(acc),
+                    False => pure(acc),
                     True => stuck_among(acc.g, w, acc.cf.stuck).bind(λ o => {
                         let cf = acc.cf;
                         let kept = with_cf(acc, CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, cf.contra, cf.sources, cf.stuck ++ [SideAt(w, n)], cf.unreduced));
@@ -985,7 +990,7 @@ fn with_reduct(acc: Facts, h: Handle, n: Nat) → Tac<Facts> {
 // Every side not reduced yet, beside its head normal form.
 fn with_reducts(acc: Facts, ss: List<SideAt>) → Tac<Facts> {
     match ss {
-        Nil => Pure(acc),
+        Nil => pure(acc),
         Cons(sd, rest) => with_reduct(acc, sd.h, sd.node).bind(λ a => with_reducts(a, rest)),
     }
 }
@@ -1002,15 +1007,15 @@ fn read_one(acc: Facts, proof: Expr, name: String, ty: Handle) → Tac<Option<Fa
     sides_of(ty).bind(λ o => match o {
         None => concludes_equation(64, ty).bind(λ q => match q {
             True => lemma_of(acc.cf.succ, name, proof, ty).bind(λ ol => match ol {
-                None => Pure(Some(facts_note(acc, Tried(name, "an equation under binders, not instantiated: neither side mentions every binder the rest of the statement depends on")))),
-                Some(lm) => Pure(Some(Facts(acc.g, acc.read ++ [Tried(name, lemma_read(lm))], acc.skipped, acc.lemmas ++ [lm], acc.seen, acc.offered, acc.locals, acc.givens, acc.pending, acc.cf))),
+                None => pure(Some(facts_note(acc, Tried(name, "an equation under binders, not instantiated: neither side mentions every binder the rest of the statement depends on")))),
+                Some(lm) => pure(Some(Facts(acc.g, acc.read ++ [Tried(name, lemma_read(lm))], acc.skipped, acc.lemmas ++ [lm], acc.seen, acc.offered, acc.locals, acc.givens, acc.pending, acc.cf))),
             }),
             False => read_diseq(acc, proof, name, ty),
         }),
         Some(p) => read_term(acc.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => {
             let read = Facts(Graph(y.g.eg.union(x.node, y.node, Fact(proof, name, [])), y.g.info, y.g.atoms), acc.read ++ [Tried(name, "read as an equation")], acc.skipped, acc.lemmas, acc.seen, acc.offered, acc.locals, acc.givens, acc.pending, acc.cf);
             let cf = read.cf;
-            Pure(Some(with_cf(read, CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, cf.contra, cf.sources, cf.stuck, cf.unreduced ++ [SideAt(p.fst, x.node), SideAt(p.snd, y.node)]))))
+            pure(Some(with_cf(read, CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, cf.contra, cf.sources, cf.stuck, cf.unreduced ++ [SideAt(p.fst, x.node), SideAt(p.snd, y.node)]))))
         })),
     })
 }
@@ -1027,7 +1032,7 @@ fn not_read(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) → 
 
 fn field_facts(name: String, fs: List<FieldProj>) → Tac<List<Given>> {
     match fs {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(f, rest) => infer(Hd(f.term)).bind(λ c => field_facts(name, rest).bind(λ gs => Pure(match c {
             Refused(_) => gs,
             Accepted(ty) => Cons(Given(Hd(f.term), name ++ "." ++ f.name, ty), gs),
@@ -1038,8 +1043,8 @@ fn field_facts(name: String, fs: List<FieldProj>) → Tac<List<Given>> {
 // Is `r` the type `Iff` names where the `by` is?
 fn is_iff(r: GlobalRef) → Tac<Bool> {
     lookup("Iff").bind(λ c => match c {
-        Accepted(i) => Pure(i.id.same(r.id)),
-        Refused(_) => Pure(False),
+        Accepted(i) => pure(i.id.same(r.id)),
+        Refused(_) => pure(False),
     })
 }
 
@@ -1051,10 +1056,10 @@ fn is_iff(r: GlobalRef) → Tac<Bool> {
 // refuses `∃`, whose proof is about its witness.
 fn expand(g: Given) → Tac<Option<List<Given>>> {
     fields(g.proof).bind(λ c => match c {
-        Refused(_) => Pure(None),
+        Refused(_) => pure(None),
         Accepted(p) => is_iff(p.ty).bind(λ iff => match iff {
-            True => Pure(None),
-            False => field_facts(g.name, p.fields).bind(λ gs => Pure(Some(gs))),
+            True => pure(None),
+            False => field_facts(g.name, p.fields).bind(λ gs => pure(Some(gs))),
         }),
     })
 }
@@ -1063,7 +1068,7 @@ fn expand(g: Given) → Tac<Option<List<Given>>> {
 // under binders?
 fn reads_alone(ty: Handle) → Tac<Bool> {
     sides_of(ty).bind(λ o => match o {
-        Some(_) => Pure(True),
+        Some(_) => pure(True),
         None => concludes_equation(64, ty),
     })
 }
@@ -1078,9 +1083,9 @@ fn grind_field_fuel() → Nat { 4096 }
 // expanded.
 fn leaves(fuel: Nat, todo: List<Pair<Nat, Given>>, out: List<Given>) → Tac<List<Given>> {
     match fuel {
-        Zero => Pure(out ++ todo.map(λ p => p.snd)),
+        Zero => pure(out ++ todo.map(λ p => p.snd)),
         Succ(f) => match todo {
-            Nil => Pure(out),
+            Nil => pure(out),
             Cons(p, rest) => match p.fst {
                 Zero => leaves(f, rest, out ++ [p.snd]),
                 Succ(d) => reads_alone(p.snd.ty).bind(λ alone => match alone {
@@ -1099,7 +1104,7 @@ fn leaves(fuel: Nat, todo: List<Pair<Nat, Given>>, out: List<Given>) → Tac<Lis
 // with no line of its own.
 fn read_leaves(acc: Facts, ls: List<Given>) → Tac<Facts> {
     match ls {
-        Nil => Pure(acc),
+        Nil => pure(acc),
         Cons(l, rest) => read_one(acc, l.proof, l.name, l.ty).bind(λ o => read_leaves(match o { Some(a) => a, None => with_givens(acc, acc.givens ++ [l]) }, rest)),
     }
 }
@@ -1112,9 +1117,9 @@ fn read_leaves(acc: Facts, ls: List<Given>) → Tac<Facts> {
 // has a line of its own).
 fn read_fact(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) → Tac<Facts> {
     read_one(acc, proof, name, ty).bind(λ o => match o {
-        Some(a) => Pure(a),
+        Some(a) => pure(a),
         None => expand(Given(proof, name, ty)).bind(λ e => match e {
-            None => Pure(not_read(acc, proof, name, ty, local)),
+            None => pure(not_read(acc, proof, name, ty, local)),
             Some(gs) => leaves(grind_field_fuel(), gs.map(λ x => Pair(grind_field_depth(), x)), []).bind(λ ls => read_leaves(acc, ls).bind(λ a =>
                 Pure(match a.read.len().same(acc.read.len()) {
                     True => not_read(with_givens(acc, a.givens), proof, name, ty, local),
@@ -1126,7 +1131,7 @@ fn read_fact(acc: Facts, proof: Expr, name: String, ty: Handle, local: Bool) →
 
 fn read_locals(acc: Facts, ls: List<LocalInfo>) → Tac<Facts> {
     match ls {
-        Nil => Pure(acc),
+        Nil => pure(acc),
         Cons(l, rest) => read_fact(acc, Local(l.ref), l.name, l.ty, True).bind(λ a => read_locals(a, rest)),
     }
 }
@@ -1135,7 +1140,7 @@ fn offer(acc: Facts, name: String) → Facts { Facts(acc.g, acc.read, acc.skippe
 
 fn read_hints(acc: Facts, hs: List<Expr>, k: Nat) → Tac<Facts> {
     match hs {
-        Nil => Pure(acc),
+        Nil => pure(acc),
         Cons(e, rest) => {
             let name = "hint " ++ decimal_name(Succ(k), k);
             infer(e).bind(λ c => match c {
@@ -1149,7 +1154,7 @@ fn read_hints(acc: Facts, hs: List<Expr>, k: Nat) → Tac<Facts> {
 // Lemmas by name, resolved where the `by` is.
 fn read_names(acc: Facts, ns: List<String>) → Tac<Facts> {
     match ns {
-        Nil => Pure(acc),
+        Nil => pure(acc),
         Cons(n, rest) => resolve(n).bind(λ c => match c {
             Refused(why) => fail("grind: `" ++ n ++ "` does not resolve: " ++ why, []),
             Accepted(h) => infer(Hd(h)).bind(λ t => match t {
@@ -1259,7 +1264,7 @@ record PatFound { insts: List<Inst>, matched: Nat, nears: List<Near> }
 // most `cap`), its matches, and its near matches, each once.
 fn root_insts(g: Graph, table: List<List<Nat>>, k: Nat, n: Nat, lp: LPat, j: Nat, roots: List<Nat>, seen: List<Inst>, cap: Nat, acc: PatFound) → Tac<PatFound> {
     match roots {
-        Nil => Pure(acc),
+        Nil => pure(acc),
         Cons(r, rest) => {
             let ms = g.eg.ematch_loose_at(λ q op s => gq_test(g, q, op, s), λ i => flag_at(lp.slack, i), table, lp.pat, r);
             let strict = strict_of(ms);
@@ -1274,10 +1279,10 @@ fn on_pat<A>(t: Tac<PatFound>, k: PatFound → Tac<A>) → Tac<A> { t.bind(k) }
 
 fn pats_insts(g: Graph, table: List<List<Nat>>, k: Nat, n: Nat, ps: List<LPat>, j: Nat, seen: List<Inst>, cap: Nat) → Tac<PatFound> {
     match ps {
-        Nil => Pure(PatFound([], 0, [])),
+        Nil => pure(PatFound([], 0, [])),
         Cons(lp, rest) => on_pat(root_insts(g, table, k, n, lp, j, List::range(g.eg.size()), seen, cap, PatFound([], 0, [])), λ here =>
             on_pat(pats_insts(g, table, k, n, rest, Succ(j), seen ++ here.insts, cap.sub(here.insts.len())), λ tail =>
-                Pure(PatFound(here.insts ++ tail.insts, here.matched + tail.matched, here.nears ++ tail.nears)))),
+                pure(PatFound(here.insts ++ tail.insts, here.matched + tail.matched, here.nears ++ tail.nears)))),
     }
 }
 
@@ -1287,10 +1292,10 @@ fn with_tried(lm: Lemma, t: NearTried) → Lemma { Lemma(lm.name, lm.proof, lm.b
 
 fn round_insts(g: Graph, table: List<List<Nat>>, ls: List<Lemma>, k: Nat, seen: List<Inst>, cap: Nat) → Tac<Found> {
     match ls {
-        Nil => Pure(Found([], [], [])),
+        Nil => pure(Found([], [], [])),
         Cons(lm, rest) => pats_insts(g, table, k, lm.binders, lm.pats, 0, seen, cap).bind(λ pf =>
             round_insts(g, table, rest, Succ(k), seen ++ pf.insts, cap.sub(pf.insts.len())).bind(λ tail =>
-                Pure(Found(pf.insts ++ tail.insts, Cons(with_matched(lm, pf.matched), tail.lemmas), pf.nears ++ tail.nears)))),
+                pure(Found(pf.insts ++ tail.insts, Cons(with_matched(lm, pf.matched), tail.lemmas), pf.nears ++ tail.nears)))),
     }
 }
 
@@ -1392,7 +1397,7 @@ fn sub_instance(g: Graph, lm: Lemma, h: Handle, s: Subst, u: Nat, c: Expr) → E
 // `Defeq`, its solutions forgotten: the question is asked, not answered by
 // solving a hole the item's premises left.
 fn defeq_undone(a: Expr, b: Expr) → Tac<Bool> {
-    mark().bind(λ m => defeq(a, b).bind(λ same => restore(m).bind(λ _ => Pure(same))))
+    mark().bind(λ m => defeq(a, b).bind(λ same => restore(m).bind(λ _ => pure(same))))
 }
 
 // The first of the candidates `cs` at which the item is the node, the
@@ -1401,11 +1406,11 @@ record Pick { found: Option<Nat>, left: Nat, upto: Nat }
 
 fn pick_candidate(g: Graph, lm: Lemma, h: Handle, s: Subst, u: Nat, target: Expr, cs: List<Nat>, budget: Nat, upto: Nat) → Tac<Pick> {
     match cs {
-        Nil => Pure(Pick(None, budget, upto)),
+        Nil => pure(Pick(None, budget, upto)),
         Cons(c, rest) => match budget {
-            Zero => Pure(Pick(None, 0, c)),
+            Zero => pure(Pick(None, 0, c)),
             Succ(b) => defeq_undone(sub_instance(g, lm, h, s, u, expr_at(g, c)), target).bind(λ same => match same {
-                True => Pure(Pick(Some(c), b, Succ(c))),
+                True => pure(Pick(Some(c), b, Succ(c))),
                 False => pick_candidate(g, lm, h, s, u, target, rest, b, Succ(c)),
             }),
         },
@@ -1459,11 +1464,11 @@ record Solved { node: Option<Nat>, left: Nat }
 
 fn node_of(g: Graph, x: Handle, cs: List<Nat>, budget: Nat) → Tac<Solved> {
     match cs {
-        Nil => Pure(Solved(None, budget)),
+        Nil => pure(Solved(None, budget)),
         Cons(c, rest) => match budget {
-            Zero => Pure(Solved(None, 0)),
+            Zero => pure(Solved(None, 0)),
             Succ(b) => defeq_undone(Hd(x), expr_at(g, c)).bind(λ same => match same {
-                True => Pure(Solved(Some(c), b)),
+                True => pure(Solved(Some(c), b)),
                 False => node_of(g, x, rest, b),
             }),
         },
@@ -1477,13 +1482,13 @@ record Solutions { args: Option<List<Option<Nat>>>, left: Nat }
 
 fn solutions(g: Graph, hs: List<Handle>, free: List<Nat>, cs: List<Nat>, args: List<Option<Nat>>, budget: Nat) → Tac<Solutions> {
     match free {
-        Nil => Pure(Solutions(Some(args), budget)),
+        Nil => pure(Solutions(Some(args), budget)),
         Cons(u, rest) => match hs.nth(u) {
-            None => Pure(Solutions(None, budget)),
+            None => pure(Solutions(None, budget)),
             Some(x) => view(x).bind(λ v => match v {
-                HHole => Pure(Solutions(None, budget)),
+                HHole => pure(Solutions(None, budget)),
                 _ => node_of(g, x, cs, budget).bind(λ sv => match sv.node {
-                    None => Pure(Solutions(None, sv.left)),
+                    None => pure(Solutions(None, sv.left)),
                     Some(c) => solutions(g, hs, rest, cs, args.update(u, λ _ => Some(c)), sv.left),
                 }),
             }),
@@ -1500,16 +1505,16 @@ fn solutions(g: Graph, hs: List<Handle>, free: List<Nat>, cs: List<Nat>, args: L
 // definitional edge stands for.
 fn by_holes(g: Graph, lm: Lemma, h: Handle, s: Subst, args: List<Option<Nat>>, free: List<Nat>, target: Expr, budget: Nat) → Tac<Solutions> {
     match budget {
-        Zero => Pure(Solutions(None, 0)),
+        Zero => pure(Solutions(None, 0)),
         Succ(b) => mark().bind(λ m => holes(lm.proof, lm.binders).bind(λ c => match c {
-            Refused(_) => restore(m).bind(λ _ => Pure(Solutions(None, Succ(b)))),
+            Refused(_) => restore(m).bind(λ _ => pure(Solutions(None, Succ(b)))),
             Accepted(hs) => defeq(apps(lams(lm.refs, Hd(h)), List::range(lm.binders).map(λ i => hole_arg(g, s, hs, i))), target).bind(λ same => match same {
-                False => restore(m).bind(λ _ => Pure(Solutions(None, b))),
+                False => restore(m).bind(λ _ => pure(Solutions(None, b))),
                 True => solutions(g, hs, free, solution_candidates(g), args, b).bind(λ sol => restore(m).bind(λ _ => match sol.args {
-                    None => Pure(sol),
+                    None => pure(sol),
                     Some(a) => match sol.left {
-                        Zero => Pure(Solutions(None, 0)),
-                        Succ(b2) => defeq_undone(inst_expr(g, lm, h, a), target).bind(λ ok => Pure(Solutions(match ok { True => Some(a), False => None }, b2))),
+                        Zero => pure(Solutions(None, 0)),
+                        Succ(b2) => defeq_undone(inst_expr(g, lm, h, a), target).bind(λ ok => pure(Solutions(match ok { True => Some(a), False => None }, b2))),
                     },
                 })),
             }),
@@ -1546,7 +1551,7 @@ fn draw_one(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat>,
     let cs = List::range(g.info.len()).filter(λ c => from.leb(c).and(is_whole(g, c)));
     let tried = λ (upto: Nat) => with_tried(lm, NearTried(nr.pat, item, node, args, upto, asked));
     match cs {
-        Nil => Pure(Resolved(None, match asked { True => tried(from), False => lm }, budget)),
+        Nil => pure(Resolved(None, match asked { True => tried(from), False => lm }, budget)),
         Cons(_, _) => pick_candidate(g, lm, h, nr.s, u, expr_at(g, node), cs, budget, g.info.len()).bind(λ pk =>
             Pure(Resolved(match pk.found {
                 None => None,
@@ -1563,7 +1568,7 @@ fn resolve_at(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat
     let free = vars.filter(λ v => Succ(v).leb(lm.binders).and(match nr.s.get(v) { None => True, Some(_) => False }));
     let before = tried_at(lm.tried, nr.pat, item, node, args);
     let from = upto_of(before);
-    let skip: Tac<Resolved> = Pure(Resolved(None, lm, budget));
+    let skip: Tac<Resolved> = pure(Resolved(None, lm, budget));
     let target = expr_at(g, node);
     match free {
         Nil => match from {
@@ -1571,7 +1576,7 @@ fn resolve_at(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat
             Zero => match budget {
                 Zero => skip,
                 Succ(b) => defeq_undone(sub_instance(g, lm, h, nr.s, lm.binders, Blank), target).bind(λ same =>
-                    Pure(Resolved(match same { True => near_inst(nr, lp, path, args), False => None }, with_tried(lm, NearTried(nr.pat, item, node, args, 1, False)), b))),
+                    pure(Resolved(match same { True => near_inst(nr, lp, path, args), False => None }, with_tried(lm, NearTried(nr.pat, item, node, args, 1, False)), b))),
             },
         },
         Cons(u, more) => {
@@ -1579,13 +1584,13 @@ fn resolve_at(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat
             match asked_of(before) {
                 True => match one { True => draw_one(g, lm, nr, lp, h, path, u, from, True, budget), False => skip },
                 False => by_holes(g, lm, h, nr.s, args, free, target, budget).bind(λ sol => match sol.args {
-                    Some(a) => Pure(Resolved(near_inst(nr, lp, path, a), with_tried(lm, NearTried(nr.pat, item, node, args, from, True)), sol.left)),
+                    Some(a) => pure(Resolved(near_inst(nr, lp, path, a), with_tried(lm, NearTried(nr.pat, item, node, args, from, True)), sol.left)),
                     // Out of budget: asked again next round.
                     None => match sol.left {
                         Zero => skip,
                         Succ(_) => match one {
                             True => draw_one(g, lm, nr, lp, h, path, u, from, True, sol.left),
-                            False => Pure(Resolved(None, with_tried(lm, NearTried(nr.pat, item, node, args, from, True)), sol.left)),
+                            False => pure(Resolved(None, with_tried(lm, NearTried(nr.pat, item, node, args, from, True)), sol.left)),
                         },
                     },
                 }),
@@ -1598,11 +1603,11 @@ fn opt_handle(o: Option<Option<Handle>>) → Option<Handle> { match o { Some(x) 
 
 fn resolve_near(g: Graph, lm: Lemma, nr: Near, seen: List<Inst>, budget: Nat) → Tac<Resolved> {
     match lm.pats.nth(nr.pat) {
-        None => Pure(Resolved(None, lm, budget)),
+        None => pure(Resolved(None, lm, budget)),
         Some(lp) => match opt_handle(lp.terms.nth(nr.slack.item)) {
-            None => Pure(Resolved(None, lm, budget)),
+            None => pure(Resolved(None, lm, budget)),
             Some(h) => match path_to(lp.pat.items, Succ(lp.pat.items.len()), [Pair(lp.pat.root, [])], nr.slack.item) {
-                None => Pure(Resolved(None, lm, budget)),
+                None => pure(Resolved(None, lm, budget)),
                 Some(path) => resolve_at(g, lm, nr, lp, h, path, seen, budget),
             },
         },
@@ -1615,9 +1620,9 @@ fn on_resolved<A>(t: Tac<Resolved>, k: Resolved → Tac<A>) → Tac<A> { t.bind(
 // found, and the lemmas with what was tried.
 fn resolve_nears(g: Graph, ls: List<Lemma>, ns: List<Near>, seen: List<Inst>, budget: Nat, out: List<Inst>) → Tac<Found> {
     match ns {
-        Nil => Pure(Found(out, ls, [])),
+        Nil => pure(Found(out, ls, [])),
         Cons(nr, rest) => match budget {
-            Zero => Pure(Found(out, ls, [])),
+            Zero => pure(Found(out, ls, [])),
             Succ(b) => match ls.nth(nr.lemma) {
                 None => resolve_nears(g, ls, rest, seen, Succ(b), out),
                 Some(lm) => on_resolved(settled(rest.len(), resolve_near(g, lm, nr, seen, Succ(b))), λ r => {
@@ -1641,7 +1646,7 @@ fn grind_laws() → Tac<GrindLaws> {
     law("trans").bind(λ t => law("sym").bind(λ s => law("cong").bind(λ c =>
     law("grind::congr").bind(λ cr => law("grind::congr_fun").bind(λ cf => law("tactic::rfl").bind(λ r => law("grind::defn").bind(λ d =>
     law("False").bind(λ f => law("grind::elim_false").bind(λ fe => law("grind::exfalso").bind(λ ex => law("grind::succ_inj").bind(λ si =>
-    Pure(GrindLaws(t, s, c, cr, cf, r, d, f, fe, ex, si)))))))))))))
+    pure(GrindLaws(t, s, c, cr, cf, r, d, f, fe, ex, si)))))))))))))
 }
 
 // The names of the facts a path cites, by the same explanation the proof is.
@@ -1701,8 +1706,8 @@ fn say_used(fs: Facts, used0: List<String>) → Tac<True> {
 
 fn finish_with(report: Bool, fs: Facts, used: List<String>, p: Expr) → Tac<Expr> {
     match report {
-        False => Pure(p),
-        True => Tac::bind(say_used(fs, used), λ _ => Pure(p)),
+        False => pure(p),
+        True => Tac::bind(say_used(fs, used), λ _ => pure(p)),
     }
 }
 
@@ -1754,16 +1759,16 @@ fn stuck(g: Graph, fs: Facts, gt: GoalAt, why: String) → Tac<Expr> {
 // together.
 fn close_passes(eg: EGraph<GOp, Fact>, fuel: Nat) → Tac<EGraph<GOp, Fact>> {
     match fuel {
-        Zero => Pure(eg),
+        Zero => pure(eg),
         Succ(f) => {
             let g2 = eg.congruence_pass(gop_same, sigs_from(eg, eg.nodes, 0), []);
-            settled(g2.edges.len(), match g2.edges.len().same(eg.edges.len()) { True => Pure(g2), False => close_passes(g2, f) })
+            settled(g2.edges.len(), match g2.edges.len().same(eg.edges.len()) { True => pure(g2), False => close_passes(g2, f) })
         },
     }
 }
 
 fn closed(fs: Facts) → Tac<Facts> {
-    close_passes(fs.g.eg, Succ(fs.g.eg.size())).bind(λ eg => Pure(with_graph(fs, Graph(eg, fs.g.info, fs.g.atoms))))
+    close_passes(fs.g.eg, Succ(fs.g.eg.size())).bind(λ eg => pure(with_graph(fs, Graph(eg, fs.g.info, fs.g.atoms))))
 }
 
 fn on_closed<A>(t: Tac<Facts>, k: Facts → Tac<A>) → Tac<A> { t.bind(k) }
@@ -1886,9 +1891,9 @@ fn cited_between(g: Graph, a: Nat, b: Nat) → List<String> {
 // cites. A field already in its partner's class is not asked about.
 fn inject_fields(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, xs: List<Nat>, ys: List<Nat>, k: Nat) → Tac<Facts> {
     match xs {
-        Nil => Pure(fs),
+        Nil => pure(fs),
         Cons(x, xr) => match ys {
-            Nil => Pure(fs),
+            Nil => pure(fs),
             Cons(y, yr) => match fs.g.eg.same_class(x, y) {
                 True => inject_fields(l, fs, pf, uses, xr, yr, Succ(k)),
                 False => inj_field(pf, k).bind(λ c => match c {
@@ -1940,21 +1945,21 @@ fn source_of(ss: List<Node2>, n: Nat) → Nat {
 fn ctor_pair(l: GrindLaws, fs: Facts, p: CPair) → Tac<Facts> {
     let fs1 = with_cf(fs, with_done(fs.cf, p));
     match fs1.g.eg.explain(proof_alg(l, fs1.g), source_of(fs1.cf.sources, p.a.node), source_of(fs1.cf.sources, p.b.node)) {
-        None => Pure(fs1),
+        None => pure(fs1),
         Some(pf) => {
             let uses = cited_between(fs1.g, p.a.node, p.b.node);
             match one_ctor(p.a, p.b) {
                 True => match p.a.key {
-                    KSucc(_) => Pure(inject_succ(l, fs1, pf, uses, p.a.fields, p.b.fields)),
+                    KSucc(_) => pure(inject_succ(l, fs1, pf, uses, p.a.fields, p.b.fields)),
                     _ => inject_fields(l, fs1, pf, uses, p.a.fields, p.b.fields, 0),
                 },
                 False => match two_ctors(p.a, p.b) {
-                    False => Pure(fs1),
+                    False => pure(fs1),
                     True => absurd_at(pf, fs1.cf.target).bind(λ c => match c {
-                        Refused(_) => Pure(fs1),
+                        Refused(_) => pure(fs1),
                         Accepted(h) => {
                             let cf = fs1.cf;
-                            Pure(with_cf(fs1, CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, Some(Contra(Hd(h), uses, False)), cf.sources, cf.stuck, cf.unreduced)))
+                            pure(with_cf(fs1, CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected, Some(Contra(Hd(h), uses, False)), cf.sources, cf.stuck, cf.unreduced)))
                         },
                     }),
                 },
@@ -1965,9 +1970,9 @@ fn ctor_pair(l: GrindLaws, fs: Facts, p: CPair) → Tac<Facts> {
 
 fn ctor_pairs(l: GrindLaws, fs: Facts, ps: List<CPair>) → Tac<Facts> {
     match ps {
-        Nil => Pure(fs),
+        Nil => pure(fs),
         Cons(p, rest) => match fs.cf.contra {
-            Some(_) => Pure(fs),
+            Some(_) => pure(fs),
             None => ctor_pair(l, fs, p).bind(λ f2 => ctor_pairs(l, f2, rest)),
         },
     }
@@ -2009,13 +2014,13 @@ fn ctor_closed(l: GrindLaws, fs0: Facts, fuel: Nat) → Tac<Facts> {
     on_closed(closed(fs0), λ fs => {
         let ps = table_pairs(fs.g, fs.g.eg.class_table(), fs.cf.done);
         settled(ps.len(), match ps {
-            Nil => Pure(with_diseq_contra(l, fs)),
+            Nil => pure(with_diseq_contra(l, fs)),
             Cons(_, _) => ctor_pairs(l, fs, ps).bind(λ f2 => match fuel {
-                Zero => Pure(with_diseq_contra(l, f2)),
+                Zero => pure(with_diseq_contra(l, f2)),
                 Succ(f) => match f2.cf.contra {
-                    Some(_) => Pure(f2),
+                    Some(_) => pure(f2),
                     None => match f2.g.eg.edges.len().same(fs.g.eg.edges.len()) {
-                        True => Pure(with_diseq_contra(l, f2)),
+                        True => pure(with_diseq_contra(l, f2)),
                         False => ctor_closed(l, f2, f),
                     },
                 },
@@ -2042,16 +2047,16 @@ record Premised { fs: Facts, proof: Option<Expr>, uses: List<String> }
 
 fn by_graph(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
     sides_of(ty).bind(λ o => match o {
-        None => Pure(Premised(fs, None, [])),
+        None => pure(Premised(fs, None, [])),
         Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => {
             on_closed(closed(with_graph(fs, y.g)), λ c => {
                 let cx = class_of(c.g, x.node);
                 let cy = class_of(c.g, y.node);
                 settled(cx + cy, match cx.same(cy) {
-                    False => Pure(Premised(c, None, [])),
+                    False => pure(Premised(c, None, [])),
                     True => match c.g.eg.explain(proof_alg(l, c.g), x.node, y.node) {
-                        None => Pure(Premised(c, None, [])),
-                        Some(pf) => Pure(Premised(c, Some(pf), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns })),
+                        None => pure(Premised(c, None, [])),
+                        Some(pf) => pure(Premised(c, Some(pf), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns })),
                     },
                 })
             })
@@ -2061,8 +2066,8 @@ fn by_graph(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
 
 fn by_local(ty: Handle, ls: List<Given>) → Tac<Option<Given>> {
     match ls {
-        Nil => Pure(None),
-        Cons(lo, rest) => defeq(Hd(ty), Hd(lo.ty)).bind(λ same => match same { True => Pure(Some(lo)), False => by_local(ty, rest) }),
+        Nil => pure(None),
+        Cons(lo, rest) => defeq(Hd(ty), Hd(lo.ty)).bind(λ same => match same { True => pure(Some(lo)), False => by_local(ty, rest) }),
     }
 }
 
@@ -2071,24 +2076,26 @@ fn on_premised(t: Tac<Premised>, k: Premised → Tac<Premised>) → Tac<Premised
 // The premise `ty`: by the graph, by a local, or by `Synth`.
 fn prove_premise(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
     on_premised(by_graph(l, fs, ty), λ pg => match pg.proof {
-        Some(_) => Pure(pg),
+        Some(_) => pure(pg),
         None => by_local(ty, pg.fs.locals.map(λ lo => Given(Local(lo.ref), lo.name, lo.ty)) ++ pg.fs.givens).bind(λ ol => match ol {
-            Some(gv) => Pure(Premised(pg.fs, Some(gv.proof), [gv.name])),
+            Some(gv) => pure(Premised(pg.fs, Some(gv.proof), [gv.name])),
             None => synth(ty).bind(λ c => match c {
-                Accepted(h) => Pure(Premised(pg.fs, Some(Hd(h)), [])),
-                Refused(_) => Pure(Premised(pg.fs, None, [])),
+                Accepted(h) => pure(Premised(pg.fs, Some(Hd(h)), [])),
+                Refused(_) => pure(Premised(pg.fs, None, [])),
             }),
         }),
     })
 }
 
+fn pi_dom(v: Head) → Option<Handle> { match v { HPi(d) => Some(d), _ => None } }
+
 // The domain of a function type, as written or once in head normal form.
 fn pi_domain(ty: Handle) → Tac<Option<Handle>> {
-    view(ty).bind(λ v => match v {
-        HPi(d) => Pure(Some(d)),
-        _ => whnf(ty).bind(λ c => match c {
-            Refused(_) => Pure(None),
-            Accepted(w) => view(w).bind(λ wv => match wv { HPi(d) => Pure(Some(d)), _ => Pure(None) }),
+    view(ty).bind(λ v => match pi_dom(v) {
+        Some(d) => pure(Some(d)),
+        None => whnf(ty).bind(λ c => match c {
+            Refused(_) => pure(None),
+            Accepted(w) => view(w).bind(λ wv => pure(pi_dom(wv))),
         }),
     })
 }
@@ -2106,15 +2113,15 @@ fn premise_name(name: String, k: Nat) → String { name ++ ", premise " ++ decim
 // term, or a premise's proof (the `k`th premise next).
 fn build(l: GrindLaws, fs: Facts, name: String, pr: Expr, uses: List<String>, as: List<Option<Nat>>, k: Nat) → Tac<Building> {
     match as {
-        Nil => Pure(Building(fs, BProof(pr, uses))),
+        Nil => pure(Building(fs, BProof(pr, uses))),
         Cons(o, rest) => match o {
             Some(n) => build(l, fs, name, App(pr, expr_at(fs.g, n)), uses, rest, k),
             None => infer(pr).bind(λ c => match c {
-                Refused(_) => Pure(Building(fs, BDrop)),
+                Refused(_) => pure(Building(fs, BDrop)),
                 Accepted(ty) => pi_domain(ty).bind(λ od => match od {
-                    None => Pure(Building(fs, BDrop)),
+                    None => pure(Building(fs, BDrop)),
                     Some(dom) => prove_premise(l, fs, dom).bind(λ pm => match pm.proof {
-                        None => Pure(Building(pm.fs, BMiss(At(Hd(dom), Tried(premise_name(name, k), "not proved: its sides are not in one class, no local or hint is it, and the instance search finds none"))))),
+                        None => pure(Building(pm.fs, BMiss(At(Hd(dom), Tried(premise_name(name, k), "not proved: its sides are not in one class, no local or hint is it, and the instance search finds none"))))),
                         Some(pp) => build(l, pm.fs, name, App(pr, pp), uses ++ pm.uses, rest, Succ(k)),
                     }),
                 }),
@@ -2143,14 +2150,14 @@ fn with_definition(l: GrindLaws, g: Graph, i: Inst, name: String, left: Nat, rig
 fn on_built(l: GrindLaws, bd: Building, i: Inst, lm: Lemma) → Tac<Facts> {
     let fs = bd.fs;
     match bd.b {
-        BDrop => Pure(fs),
-        BMiss(n) => Pure(with_pending(fs, fs.pending ++ [Pend(i, n)])),
+        BDrop => pure(fs),
+        BMiss(n) => pure(with_pending(fs, fs.pending ++ [Pend(i, n)])),
         BProof(pr, uses) => infer(pr).bind(λ c => match c {
-            Refused(_) => Pure(fs),
+            Refused(_) => pure(fs),
             Accepted(ty) => sides_of(ty).bind(λ o => match o {
-                None => Pure(fs),
+                None => pure(fs),
                 Some(p) => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
-                    Pure(Facts(with_definition(l, Graph(y.g.eg.union(x.node, y.node, Fact(pr, lm.name, uses)), y.g.info, y.g.atoms), i, lm.name, x.node, y.node), fs.read, fs.skipped, fs.lemmas.update(i.lemma, λ m => bump_added(m, is_def(i.def))), fs.seen, fs.offered, fs.locals, fs.givens, fs.pending, fs.cf)))),
+                    pure(Facts(with_definition(l, Graph(y.g.eg.union(x.node, y.node, Fact(pr, lm.name, uses)), y.g.info, y.g.atoms), i, lm.name, x.node, y.node), fs.read, fs.skipped, fs.lemmas.update(i.lemma, λ m => bump_added(m, is_def(i.def))), fs.seen, fs.offered, fs.locals, fs.givens, fs.pending, fs.cf)))),
             }),
         }),
     }
@@ -2158,7 +2165,7 @@ fn on_built(l: GrindLaws, bd: Building, i: Inst, lm: Lemma) → Tac<Facts> {
 
 fn add_insts(l: GrindLaws, fs: Facts, is: List<Inst>) → Tac<Facts> {
     match is {
-        Nil => Pure(fs),
+        Nil => pure(fs),
         Cons(i, rest) => match fs.lemmas.nth(i.lemma) {
             None => add_insts(l, fs, rest),
             Some(lm) => build(l, fs, lm.name, lm.proof, [], i.args, 0).bind(λ bd => on_built(l, bd, i, lm)).bind(λ f2 => add_insts(l, f2, rest)),
@@ -2278,19 +2285,19 @@ fn opens(v: Head) → Bool {
 
 fn open_goal(fuel: Nat, ty: Handle, opened: List<LocalInfo>) → Tac<Opening> {
     sides_of(ty).bind(λ o => match o {
-        Some(p) => Pure(Opening(ty, Some(p), opened)),
+        Some(p) => pure(Opening(ty, Some(p), opened)),
         None => match fuel {
-            Zero => Pure(Opening(ty, None, opened)),
+            Zero => pure(Opening(ty, None, opened)),
             Succ(f) => view(ty).bind(λ v0 => match opens(v0) {
-                False => Pure(Opening(ty, None, opened)),
+                False => pure(Opening(ty, None, opened)),
                 True => whnf(ty).bind(λ c => match c {
-                    Refused(_) => Pure(Opening(ty, None, opened)),
+                    Refused(_) => pure(Opening(ty, None, opened)),
                     Accepted(w) => view(w).bind(λ v => match v {
                         HPi(_) => open(w, "h").bind(λ oc => match oc {
-                            Refused(_) => Pure(Opening(ty, None, opened)),
+                            Refused(_) => pure(Opening(ty, None, opened)),
                             Accepted(op) => open_goal(f, op.body, opened ++ [op.local]),
                         }),
-                        _ => Pure(Opening(ty, None, opened)),
+                        _ => pure(Opening(ty, None, opened)),
                     }),
                 }),
             }),
@@ -2303,8 +2310,8 @@ record GoalRead { g: Graph, sides: Option<Node2> }
 
 fn read_goal(g: Graph, o: Option<Pair<Handle, Handle>>) → Tac<GoalRead> {
     match o {
-        None => Pure(GoalRead(g, None)),
-        Some(p) => read_term(g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => Pure(GoalRead(y.g, Some(Node2(x.node, y.node)))))),
+        None => pure(GoalRead(g, None)),
+        Some(p) => read_term(g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y => pure(GoalRead(y.g, Some(Node2(x.node, y.node)))))),
     }
 }
 
@@ -2319,7 +2326,7 @@ fn grind_run(names: List<String>, hints: List<Expr>, report: Bool) → Tac<Expr>
             let gt = GoalAt(gr.sides, og.target, og.opened.map(λ lo => lo.ref));
             read_locals(Facts(gr.g, [], [], [], [], [], locals, [], [], cstate_empty(l, sr.id, og.target)), locals).bind(λ fs => read_hints(fs, hints, 0).bind(λ fs2 =>
             read_names(fs2, names).bind(λ fs3 =>
-            saturate(grind_rounds(), 0, report, l, fs3, gt).bind(λ p => Pure(lams(gt.intros, p))))))
+            saturate(grind_rounds(), 0, report, l, fs3, gt).bind(λ p => pure(lams(gt.intros, p))))))
         })),
     }))))
 }

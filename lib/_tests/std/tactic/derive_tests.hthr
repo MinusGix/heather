@@ -81,7 +81,7 @@ fn wrong_body(t: Expr) → Tac<List<Decl>> {
     as_type(t).bind(λ c => checked_handle("not a type", c)).bind(λ h =>
     assume_chain([Hyp(Hd(h), "a")], None).bind(λ xs => match xs {
         Nil => fail("no parameter", []),
-        Cons(a, _) => Pure([Decl(AsTheorem, "same", [Param(a, False)], Equation(Local(a), Local(a)), NatLit(0))]),
+        Cons(a, _) => pure([Decl(AsTheorem, "same", [Param(a, False)], Equation(Local(a), Local(a)), NatLit(0))]),
     }))
 }
 
@@ -100,7 +100,7 @@ fn unchained(t: Expr) → Tac<List<Decl>> {
 generate unchained(Tm);
 
 // A generator has no goal.
-fn goal_seeker(t: Expr) → Tac<List<Decl>> { goal().bind(λ g => Pure([])) }
+fn goal_seeker(t: Expr) → Tac<List<Decl>> { goal().bind(λ g => pure([])) }
 
 // expect-error: a generator has no goal
 generate goal_seeker(Tm);
@@ -139,7 +139,7 @@ fn applier(t: Expr) → Tac<List<Decl>> {
     assume_chain([Hyp(Hd(h), "x")], last_ref(None, fs)).bind(λ xs => {
         let f = first_ref(fs);
         let x = first_ref(xs);
-        Pure([Decl(AsFunction, "apply_tm", explicit_params(fs) ++ explicit_params(xs), Hd(h), Expr::App(Local(f), Local(x)))])
+        pure([Decl(AsFunction, "apply_tm", explicit_params(fs) ++ explicit_params(xs), Hd(h), Expr::App(Local(f), Local(x)))])
     }))))
 }
 
@@ -148,6 +148,6 @@ generate applier(Tm);
 theorem apply_tm_is_application(x: Tm): apply_tm(λ y => Tm::Lam(y), x) = Tm::Lam(x) { refl }
 
 // A generator that publishes nothing is fine.
-fn nothing(t: Expr) → Tac<List<Decl>> { Pure([]) }
+fn nothing(t: Expr) → Tac<List<Decl>> { pure([]) }
 
 generate nothing(Tm);

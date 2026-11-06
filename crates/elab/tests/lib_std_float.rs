@@ -19,11 +19,12 @@ use heather_elab::{Elaborator, SemanticImage};
 
 use crate::support::{self, Refusal};
 
+// lib-closure: error arith window literal
 const MODULES: &[(&str, &str)] = &[
     ("logic", include_str!("../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../lib/std/core/bool.hthr")),
-    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
     ("option", include_str!("../../../lib/std/core/option.hthr")),
+    ("nat", include_str!("../../../lib/std/num/nat.hthr")),
     ("pair", include_str!("../../../lib/std/core/pair.hthr")),
     ("list", include_str!("../../../lib/std/data/list.hthr")),
     ("relation", include_str!("../../../lib/std/relation/relation.hthr")),
@@ -34,13 +35,13 @@ const MODULES: &[(&str, &str)] = &[
     ("int", include_str!("../../../lib/std/num/int.hthr")),
     ("omega", include_str!("../../../lib/std/tactic/omega.hthr")),
     ("order", include_str!("../../../lib/std/algebra/order.hthr")),
-    ("lattice", include_str!("../../../lib/std/algebra/lattice.hthr")),
     ("semiring", include_str!("../../../lib/std/algebra/semiring.hthr")),
     ("ring", include_str!("../../../lib/std/tactic/ring.hthr")),
     ("ordered_field", include_str!("../../../lib/std/algebra/ordered_field.hthr")),
-    ("big_operator", include_str!("../../../lib/std/algebra/big_operator.hthr")),
     ("linarith", include_str!("../../../lib/std/tactic/linarith.hthr")),
+    ("big_operator", include_str!("../../../lib/std/algebra/big_operator.hthr")),
     ("rat", include_str!("../../../lib/std/num/rat.hthr")),
+    ("lattice", include_str!("../../../lib/std/algebra/lattice.hthr")),
     ("dyadic", include_str!("../../../lib/std/num/float/dyadic.hthr")),
     ("float", include_str!("../../../lib/std/num/float/float.hthr")),
     ("round", include_str!("../../../lib/std/num/float/round.hthr")),

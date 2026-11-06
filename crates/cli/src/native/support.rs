@@ -1,11 +1,14 @@
 // The proof library bundled into `compile-x86`: the verified lowering's
 // theorem, `function_ir_compile`, and everything it imports, in import
-// order (issues/function-ir-verified-lowering.md, round 4).
+// order (issues/function-ir-verified-lowering.md, round 4). Generated from
+// the imports: edit the roots on the marker, then run `scripts/lib-closures
+// --fix` (issues/grind-closure-cost.md).
+// lib-closure: function_ir_compile
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../../lib/std/core/bool.hthr")),
-    ("nat", include_str!("../../../../lib/std/num/nat.hthr")),
     ("option", include_str!("../../../../lib/std/core/option.hthr")),
+    ("nat", include_str!("../../../../lib/std/num/nat.hthr")),
     ("pair", include_str!("../../../../lib/std/core/pair.hthr")),
     ("list", include_str!("../../../../lib/std/data/list.hthr")),
     ("relation", include_str!("../../../../lib/std/relation/relation.hthr")),

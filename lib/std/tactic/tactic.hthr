@@ -346,6 +346,20 @@ fn Resp(r: Req) → Type {
 
 inductive Tac<A> { Pure(a: A), Ask(r: Req, k: Resp(r) → Tac<A>) }
 
+// `Pure(a)` and `Ask(r, k)` as values, through calls. `Tac` is lowered on
+// `W` (docs/inductive-tier2-w-lowering.md), and a constructor written out
+// spells that encoding's annotations into the term, which the kernel gate
+// checks again at every occurrence: thousands of steps each, multiplied by
+// every arm a wildcard covers. A call is checked once, here, so tactics
+// write `pure(a)` and the request helpers below, never the constructor as a
+// value (patterns are free). issues/tier2-constructor-value-cost.md would
+// make the two the same price.
+fn pure<A>(a: A) → Tac<A> { Pure(a) }
+
+fn ask(r: Req) → Tac<Resp(r)> { Ask(r, λ x => Pure(x)) }
+
+fn ask_then<A>(r: Req, k: Resp(r) → Tac<A>) → Tac<A> { Ask(r, k) }
+
 fn Tac::bind<A, B>(self t: Tac<A>, f: A → Tac<B>) → Tac<B> {
     match t { Pure(a) => f(a), Ask(r, k) => Ask(r, λ x => k(x).bind(f)) }
 }
@@ -353,11 +367,11 @@ fn Tac::bind<A, B>(self t: Tac<A>, f: A → Tac<B>) → Tac<B> {
 // `Tac` is a carrier of binding statements (docs/sequencing-surface-design.md
 // §2.3): `let g <- goal();` is `goal().bind(λ g => …)`.
 instance Bind<Tac> { bind := Tac::bind }
-instance Pointed<Tac> { pure := λ {A} a => Pure(a) }
+instance Pointed<Tac> { pure := λ {A} a => pure(a) }
 
-fn goal() → Tac<GoalInfo> { Ask(Goal, λ g => Pure(g)) }
+fn goal() → Tac<GoalInfo> { ask(Goal) }
 
-fn defeq(a: Expr, b: Expr) → Tac<Bool> { Ask(Defeq(a, b), λ same => Pure(same)) }
+fn defeq(a: Expr, b: Expr) → Tac<Bool> { ask(Defeq(a, b)) }
 
 fn fail<A>(msg: String, notes: List<Note>) → Tac<A> {
     Ask(Fail(msg, notes), λ never => match never {})
@@ -367,54 +381,54 @@ fn fail<A>(msg: String, notes: List<Note>) → Tac<A> {
 // the `Refused(why) => fail(prefix ++ why, [])` match as one call, so that
 // `let h <- infer(e).or_fail("mono: ");` reads as a statement.
 fn Tac::or_fail<A>(self t: Tac<Checked<A>>, prefix: String) → Tac<A> {
-    t.bind(λ c => match c { Accepted(a) => Pure(a), Refused(why) => fail(prefix ++ why, []) })
+    t.bind(λ c => match c { Accepted(a) => pure(a), Refused(why) => fail(prefix ++ why, []) })
 }
 
-fn infer(e: Expr) → Tac<Checked<Handle>> { Ask(Infer(e), λ c => Pure(c)) }
+fn infer(e: Expr) → Tac<Checked<Handle>> { ask(Infer(e)) }
 
-fn open(h: Handle, name: String) → Tac<Checked<Opened>> { Ask(Open(h, name), λ c => Pure(c)) }
+fn open(h: Handle, name: String) → Tac<Checked<Opened>> { ask(Open(h, name)) }
 
-fn resolve(name: String) → Tac<Checked<Handle>> { Ask(Resolve(name), λ c => Pure(c)) }
+fn resolve(name: String) → Tac<Checked<Handle>> { ask(Resolve(name)) }
 
-fn view(h: Handle) → Tac<Head> { Ask(View(h), λ v => Pure(v)) }
+fn view(h: Handle) → Tac<Head> { ask(View(h)) }
 
-fn whnf(h: Handle) → Tac<Checked<Handle>> { Ask(Whnf(h), λ c => Pure(c)) }
+fn whnf(h: Handle) → Tac<Checked<Handle>> { ask(Whnf(h)) }
 
-fn match_conclusion(ty: Handle, target: Handle) → Tac<Checked<List<Option<Handle>>>> { Ask(Match(ty, target), λ c => Pure(c)) }
+fn match_conclusion(ty: Handle, target: Handle) → Tac<Checked<List<Option<Handle>>>> { ask(Match(ty, target)) }
 
-fn hole(ty: Handle) → Tac<Checked<Handle>> { Ask(Hole(ty), λ c => Pure(c)) }
+fn hole(ty: Handle) → Tac<Checked<Handle>> { ask(Hole(ty)) }
 
-fn mark() → Tac<Nat> { Ask(Mark, λ m => Pure(m)) }
+fn mark() → Tac<Nat> { ask(Mark) }
 
-fn restore(m: Nat) → Tac<True> { Ask(Restore(m), λ u => Pure(u)) }
+fn restore(m: Nat) → Tac<True> { ask(Restore(m)) }
 
-fn lookup(name: String) → Tac<Checked<GlobalRef>> { Ask(Lookup(name), λ c => Pure(c)) }
+fn lookup(name: String) → Tac<Checked<GlobalRef>> { ask(Lookup(name)) }
 
-fn cases(e: Expr, goal: Handle) → Tac<Checked<Split>> { Ask(Cases(e, goal), λ c => Pure(c)) }
+fn cases(e: Expr, goal: Handle) → Tac<Checked<Split>> { ask(Cases(e, goal)) }
 
-fn constructor(goal: Handle) → Tac<Checked<Split>> { Ask(Constructor(goal), λ c => Pure(c)) }
+fn constructor(goal: Handle) → Tac<Checked<Split>> { ask(Constructor(goal)) }
 
-fn close(id: Nat, proofs: List<Expr>) → Tac<Checked<Handle>> { Ask(Close(id, proofs), λ c => Pure(c)) }
+fn close(id: Nat, proofs: List<Expr>) → Tac<Checked<Handle>> { ask(Close(id, proofs)) }
 
 fn assume(ty: Expr, name: String, under: Option<LocalRef>) → Tac<Checked<LocalInfo>> {
-    Ask(Assume(ty, name, under), λ c => Pure(c))
+    ask(Assume(ty, name, under))
 }
 
-fn ctors(ty: Handle) → Tac<Checked<List<CtorInfo>>> { Ask(Ctors(ty), λ c => Pure(c)) }
+fn ctors(ty: Handle) → Tac<Checked<List<CtorInfo>>> { ask(Ctors(ty)) }
 
-fn as_type(e: Expr) → Tac<Checked<Handle>> { Ask(AsType(e), λ c => Pure(c)) }
+fn as_type(e: Expr) → Tac<Checked<Handle>> { ask(AsType(e)) }
 
-fn holes(e: Expr, n: Nat) → Tac<Checked<List<Handle>>> { Ask(Holes(e, n), λ c => Pure(c)) }
+fn holes(e: Expr, n: Nat) → Tac<Checked<List<Handle>>> { ask(Holes(e, n)) }
 
-fn body(g: GlobalRef) → Tac<Checked<Handle>> { Ask(Body(g), λ c => Pure(c)) }
+fn body(g: GlobalRef) → Tac<Checked<Handle>> { ask(Body(g)) }
 
-fn arms(h: Handle) → Tac<Checked<MatchInfo>> { Ask(Arms(h), λ c => Pure(c)) }
-fn synth(goal: Handle) → Tac<Checked<Handle>> { Ask(Synth(goal), λ c => Pure(c)) }
-fn spine(h: Handle) → Tac<Checked<SpineInfo>> { Ask(Spine(h), λ c => Pure(c)) }
-fn say(msg: String, notes: List<Note>) → Tac<True> { Ask(Say(msg, notes), λ u => Pure(u)) }
-fn fields(e: Expr) → Tac<Checked<Projected>> { Ask(Fields(e), λ c => Pure(c)) }
-fn inj_field(e: Expr, k: Nat) → Tac<Checked<Handle>> { Ask(Inj(e, k), λ c => Pure(c)) }
-fn absurd_at(e: Expr, goal: Handle) → Tac<Checked<Handle>> { Ask(Absurd(e, goal), λ c => Pure(c)) }
+fn arms(h: Handle) → Tac<Checked<MatchInfo>> { ask(Arms(h)) }
+fn synth(goal: Handle) → Tac<Checked<Handle>> { ask(Synth(goal)) }
+fn spine(h: Handle) → Tac<Checked<SpineInfo>> { ask(Spine(h)) }
+fn say(msg: String, notes: List<Note>) → Tac<True> { ask(Say(msg, notes)) }
+fn fields(e: Expr) → Tac<Checked<Projected>> { ask(Fields(e)) }
+fn inj_field(e: Expr, k: Nat) → Tac<Checked<Handle>> { ask(Inj(e, k)) }
+fn absurd_at(e: Expr, goal: Handle) → Tac<Checked<Handle>> { ask(Absurd(e, goal)) }
 
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
@@ -491,22 +505,30 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
 // subgoal, such as the body of a binder it opened.
 fn focus<A>(g: GoalInfo, t: Tac<A>) → Tac<A> {
     match t {
-        Pure(a) => Pure(a),
+        Pure(a) => pure(a),
         Ask(r, k) => match fit(r, AGoal(g)) {
             Fits(x) => focus(g, k(x)),
-            Mismatch => Ask(r, λ x => focus(g, k(x))),
+            Mismatch => ask_then(r, λ x => focus(g, k(x))),
         },
     }
 }
 
 inductive Outcome<A> { Done(a: A), Failed(msg: String, notes: List<Note>) }
 
+// A `Fail` request's outcome; `None` for every other request. Read by a
+// plain function so that `attempt_from` matches an `Option`, not each of
+// `Req`'s constructors with a copy of its `Tac` value (`eq_sides` in grind
+// says why that costs).
+fn failure_of<A>(r: Req) → Option<Outcome<A>> {
+    match r { Fail(msg, notes) => Some(Failed(msg, notes)), _ => None }
+}
+
 fn attempt_from<A>(m: Nat, t: Tac<A>) → Tac<Outcome<A>> {
     match t {
-        Pure(a) => Pure(Done(a)),
-        Ask(r, k) => match r {
-            Fail(msg, notes) => restore(m).bind(λ _ => Pure(Failed(msg, notes))),
-            _ => Ask(r, λ x => attempt_from(m, k(x))),
+        Pure(a) => pure(Done(a)),
+        Ask(r, k) => match failure_of<A>(r) {
+            Some(o) => restore(m).bind(λ _ => pure(o)),
+            None => ask_then(r, λ x => attempt_from(m, k(x))),
         },
     }
 }
@@ -524,7 +546,7 @@ fn first_of_among<A>(ts: List<Tac<A>>, tried: List<Note>) → Tac<A> {
     match ts {
         Nil => fail("no alternative succeeded", tried),
         Cons(t, rest) => attempt(t).bind(λ o => match o {
-            Done(a) => Pure(a),
+            Done(a) => pure(a),
             Failed(msg, notes) => first_of_among(rest, (tried ++ [Tried("an alternative", msg)]) ++ under_all(notes)),
         }),
     }
@@ -543,7 +565,7 @@ fn assumption_among(target: Handle, ls: List<LocalInfo>, tried: List<Note>) → 
     match ls {
         Nil => fail("no local's type is the goal", tried),
         Cons(l, rest) => defeq(Hd(l.ty), Hd(target)).bind(λ same => match same {
-            True => Pure(Local(l.ref)),
+            True => pure(Local(l.ref)),
             False => assumption_among(target, rest, tried ++ [Tried(l.name, "its type is not the goal")]),
         }),
     }
@@ -558,7 +580,7 @@ fn exact(e: Expr) → Tac<Expr> {
     goal().bind(λ g => infer(e).bind(λ c => match c {
         Refused(why) => fail("exact: " ++ why, []),
         Accepted(ty) => defeq(Hd(ty), Hd(g.target)).bind(λ same => match same {
-            True => Pure(e),
+            True => pure(e),
             False => fail("exact: the term's type is not the goal", []),
         }),
     }))
@@ -570,7 +592,7 @@ fn exact(e: Expr) → Tac<Expr> {
 fn intro_as(name: String, t: Tac<Expr>) → Tac<Expr> {
     goal().bind(λ g => open(g.target, name).bind(λ c => match c {
         Refused(why) => fail("intro: " ++ why, []),
-        Accepted(o) => focus(GoalInfo(o.body, Cons(o.local, g.locals)), t).bind(λ e => Pure(Lam(o.local.ref, e))),
+        Accepted(o) => focus(GoalInfo(o.body, Cons(o.local, g.locals)), t).bind(λ e => pure(Lam(o.local.ref, e))),
     }))
 }
 
@@ -581,7 +603,7 @@ fn intro(t: Tac<Expr>) → Tac<Expr> { intro_as("x", t) }
 // unsolved is proved by `premise` at its type, and the proof is its solution.
 fn apply_holes(holes: List<Handle>, e: Expr, locals: List<LocalInfo>, premise: Tac<Expr>) → Tac<Expr> {
     match holes {
-        Nil => Pure(e),
+        Nil => pure(e),
         Cons(h, rest) => view(h).bind(λ v => match v {
             HHole => infer(Hd(h)).bind(λ c => match c {
                 Refused(why) => fail("apply: " ++ why, []),
@@ -601,15 +623,15 @@ record Argument { a: Expr, holes: List<Handle> }
 // The argument for one slot of a match, at the function type `ty`.
 fn argument(s: Option<Handle>, ty: Handle, locals: List<LocalInfo>, premise: Tac<Expr>) → Tac<Argument> {
     match s {
-        Some(h) => Pure(Argument(Hd(h), [])),
+        Some(h) => pure(Argument(Hd(h), [])),
         None => open(ty, "_").bind(λ c => match c {
             Refused(why) => fail("apply: " ++ why, []),
             Accepted(o) => match o.dependent {
                 True => hole(o.local.ty).bind(λ c2 => match c2 {
                     Refused(why) => fail("apply: " ++ why, []),
-                    Accepted(h) => Pure(Argument(Hd(h), [h])),
+                    Accepted(h) => pure(Argument(Hd(h), [h])),
                 }),
-                False => focus(GoalInfo(o.local.ty, locals), premise).bind(λ a => Pure(Argument(a, []))),
+                False => focus(GoalInfo(o.local.ty, locals), premise).bind(λ a => pure(Argument(a, []))),
             },
         }),
     }
@@ -648,7 +670,7 @@ fn apply(f: Expr, premise: Tac<Expr>) → Tac<Expr> {
 
 // A handle's head normal form, or the handle itself where it has none.
 fn whnf_or(h: Handle) → Tac<Handle> {
-    whnf(h).bind(λ c => match c { Accepted(w) => Pure(w), Refused(_) => Pure(h) })
+    whnf(h).bind(λ c => match c { Accepted(w) => pure(w), Refused(_) => pure(h) })
 }
 
 // `x = x`, for `reflexivity` to apply: a run's result is an `Expr`, and
@@ -682,9 +704,9 @@ fn reflexivity() → Tac<Expr> {
 // `locals`.
 fn prove_branches(bs: List<Branch>, locals: List<LocalInfo>, t: Tac<Expr>) → Tac<List<Expr>> {
     match bs {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(b, rest) => focus(GoalInfo(b.goal, b.locals ++ locals), t).bind(λ p =>
-            prove_branches(rest, locals, t).bind(λ ps => Pure(Cons(p, ps)))),
+            prove_branches(rest, locals, t).bind(λ ps => pure(Cons(p, ps)))),
     }
 }
 
@@ -692,7 +714,7 @@ fn prove_branches(bs: List<Branch>, locals: List<LocalInfo>, t: Tac<Expr>) → T
 fn close_by(s: Split, locals: List<LocalInfo>, t: Tac<Expr>) → Tac<Expr> {
     prove_branches(s.branches, locals, t).bind(λ ps => close(s.id, ps).bind(λ c => match c {
         Refused(why) => fail("close: " ++ why, []),
-        Accepted(h) => Pure(Hd(h)),
+        Accepted(h) => pure(Hd(h)),
     }))
 }
 
@@ -736,9 +758,9 @@ fn split_locals(ls: List<LocalInfo>, t: Tac<Expr>) → Tac<Expr> {
 // The first blocker `blocker` finds among `hs`.
 fn blocker_among(hs: List<Handle>, blocker: Handle → Tac<Option<Handle>>) → Tac<Option<Handle>> {
     match hs {
-        Nil => Pure(None),
+        Nil => pure(None),
         Cons(h, rest) => blocker(h).bind(λ o => match o {
-            Some(x) => Pure(Some(x)),
+            Some(x) => pure(Some(x)),
             None => blocker_among(rest, blocker),
         }),
     }
@@ -754,17 +776,17 @@ fn head_args(v: Head) → List<Handle> {
 // blocker comes before it, so the deepest one is split first.
 fn blocker(fuel: Nat, t: Handle) → Tac<Option<Handle>> {
     match fuel {
-        Zero => Pure(None),
+        Zero => pure(None),
         Succ(f) => view(t).bind(λ v => blocker_among(head_args(v), λ h => blocker(f, h)).bind(λ inside => match inside {
-            Some(x) => Pure(Some(x)),
+            Some(x) => pure(Some(x)),
             None => whnf(t).bind(λ c => match c {
-                Refused(_) => Pure(None),
+                Refused(_) => pure(None),
                 Accepted(w) => view(w).bind(λ wv => match wv {
                     HMatch(s) => blocker(f, s).bind(λ o => match o {
-                        Some(x) => Pure(Some(x)),
-                        None => Pure(Some(s)),
+                        Some(x) => pure(Some(x)),
+                        None => pure(Some(s)),
                     }),
-                    _ => Pure(None),
+                    _ => pure(None),
                 }),
             }),
         })),
@@ -783,7 +805,7 @@ fn split_step(fuel: Nat, leaf: Tac<Expr>) → Tac<Expr> {
                 HPi(_) => open(g.target, "x").bind(λ o => match o {
                     Refused(_) => leaf,
                     Accepted(op) => focus(GoalInfo(op.body, Cons(op.local, g.locals)), split_locals([op.local], split_step(f, leaf)))
-                        .bind(λ e => Pure(Lam(op.local.ref, e))),
+                        .bind(λ e => pure(Lam(op.local.ref, e))),
                 }),
                 HGlobal(r, _, _) => lookup("And").bind(λ a => match a {
                     Refused(_) => leaf,
@@ -1098,8 +1120,8 @@ fn note_expr(n: Note) → Expr { match n { At(e, _) => e, _ => NatLit(0) } }
 // kind leaves the tree as it is, which the host reports as its own error.
 fn host_resume(t: Tac<Expr>, a: Answer) → Tac<Expr> {
     match t {
-        Pure(e) => Pure(e),
-        Ask(r, k) => match fit(r, a) { Mismatch => Ask(r, k), Fits(x) => k(x) },
+        Pure(e) => pure(e),
+        Ask(r, k) => match fit(r, a) { Mismatch => ask_then(r, k), Fits(x) => k(x) },
     }
 }
 

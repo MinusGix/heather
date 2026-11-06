@@ -98,17 +98,17 @@ fn tac_chain(t: Tac<Nat>) → Tac<Nat> {
     t;
     let _ <- t;
     let b <- t;
-    Pure(a + b)
+    pure(a + b)
 }
-theorem tac_chain_literal(): tac_chain(Pure(1)) = Pure(2) { refl }
+theorem tac_chain_literal(): tac_chain(pure(1)) = pure(2) { refl }
 
 // A block in value position is a scope of its own, with its own carrier:
 // an `Option` block inside a `Tac` block.
 fn inner_carrier(t: Tac<Option<Nat>>) → Tac<Option<Nat>> {
     let o <- t;
-    Pure({ let x <- o; Some(x + 1) })
+    pure({ let x <- o; Some(x + 1) })
 }
-theorem inner_carrier_literal(): inner_carrier(Pure(Some(1))) = Pure(Some(2)) { refl }
+theorem inner_carrier_literal(): inner_carrier(pure(Some(1))) = pure(Some(2)) { refl }
 
 // A λ body is a scope of its own.
 fn in_lambda(xs: List<Option<Nat>>) → List<Option<Nat>> { xs.map(λ o => Some((<- o) + 1)) }

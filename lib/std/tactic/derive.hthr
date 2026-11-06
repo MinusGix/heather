@@ -85,7 +85,7 @@ fn eq_hyps(names: List<String>, xs: List<LocalRef>, ys: List<LocalRef>) → List
 fn assumed(c: Checked<LocalInfo>) → Tac<LocalRef> {
     match c {
         Refused(why) => fail("congruences: " ++ why, []),
-        Accepted(l) => Pure(l.ref),
+        Accepted(l) => pure(l.ref),
     }
 }
 
@@ -93,9 +93,9 @@ fn assumed(c: Checked<LocalInfo>) → Tac<LocalRef> {
 // `under`.
 fn assume_chain(hs: List<Hyp>, under: Option<LocalRef>) → Tac<List<LocalRef>> {
     match hs {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(h, rest) => assume(h.ty, h.name, under).bind(λ c => assumed(c)).bind(λ x =>
-            assume_chain(rest, Some(x)).bind(λ xs => Pure(Cons(x, xs)))),
+            assume_chain(rest, Some(x)).bind(λ xs => pure(Cons(x, xs)))),
     }
 }
 
@@ -103,9 +103,9 @@ fn assume_chain(hs: List<Hyp>, under: Option<LocalRef>) → Tac<List<LocalRef>> 
 // lambdas, not parameters.
 fn assume_beside(hs: List<Hyp>, under: Option<LocalRef>) → Tac<List<LocalRef>> {
     match hs {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(h, rest) => assume(h.ty, h.name, under).bind(λ c => assumed(c)).bind(λ x =>
-            assume_beside(rest, under).bind(λ xs => Pure(Cons(x, xs)))),
+            assume_beside(rest, under).bind(λ xs => pure(Cons(x, xs)))),
     }
 }
 
@@ -188,18 +188,18 @@ fn congruence(laws: Laws, name: String, fs: Fields, c: Expr) → Tac<Decl> {
         let stmt = Equation(apps(c, xe), apps(c, ye));
         let body = chain(laws.trans, steps(laws.cong, c, xe, ye, 0, zs, ps));
         let params = implicit_params(xs) ++ implicit_params(ys) ++ explicit_params(ps);
-        Pure(Decl(AsTheorem, laws.ty ++ "::cong_" ++ name, params, stmt, body))
+        pure(Decl(AsTheorem, laws.ty ++ "::cong_" ++ name, params, stmt, body))
     }))))
 }
 
 fn congruence_of(laws: Laws, info: CtorInfo) → Tac<List<Decl>> {
     match info.fields {
-        Nil => Pure([]),
+        Nil => pure([]),
         Cons(_, _) => match fields_from(info.fields, 0) {
             None => fail("congruences: a field of `" ++ info.name ++ "` mentions an earlier field", []),
             Some(fs) => match info.ctor {
                 None => fail("congruences: `" ++ info.name ++ "` is not a function of its fields", []),
-                Some(c) => congruence(laws, info.name, fs, Hd(c)).bind(λ d => Pure([d])),
+                Some(c) => congruence(laws, info.name, fs, Hd(c)).bind(λ d => pure([d])),
             },
         },
     }
@@ -207,21 +207,21 @@ fn congruence_of(laws: Laws, info: CtorInfo) → Tac<List<Decl>> {
 
 fn congruences_of(laws: Laws, cs: List<CtorInfo>) → Tac<List<Decl>> {
     match cs {
-        Nil => Pure([]),
-        Cons(c, rest) => congruence_of(laws, c).bind(λ ds => congruences_of(laws, rest).bind(λ es => Pure(ds ++ es))),
+        Nil => pure([]),
+        Cons(c, rest) => congruence_of(laws, c).bind(λ ds => congruences_of(laws, rest).bind(λ es => pure(ds ++ es))),
     }
 }
 
 fn global_named(name: String) → Tac<GlobalRef> {
     lookup(name).bind(λ c => match c {
         Refused(why) => fail("congruences: `" ++ name ++ "`: " ++ why, []),
-        Accepted(g) => Pure(g),
+        Accepted(g) => pure(g),
     })
 }
 
 fn type_named(h: Handle) → Tac<String> {
     view(h).bind(λ v => match v {
-        HGlobal(_, name, _) => Pure(name),
+        HGlobal(_, name, _) => pure(name),
         _ => fail("congruences: the type is not a named inductive", []),
     })
 }
@@ -229,14 +229,14 @@ fn type_named(h: Handle) → Tac<String> {
 fn checked_handle(what: String, c: Checked<Handle>) → Tac<Handle> {
     match c {
         Refused(why) => fail("congruences: " ++ what ++ ": " ++ why, []),
-        Accepted(h) => Pure(h),
+        Accepted(h) => pure(h),
     }
 }
 
 fn checked_ctors(c: Checked<List<CtorInfo>>) → Tac<List<CtorInfo>> {
     match c {
         Refused(why) => fail("congruences: " ++ why, []),
-        Accepted(cs) => Pure(cs),
+        Accepted(cs) => pure(cs),
     }
 }
 
