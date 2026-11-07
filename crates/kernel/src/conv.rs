@@ -874,6 +874,13 @@ struct Conv<'v, D: Dom<'v>> {
     /// How many comparisons have ever been queued: a [`Conv::tm`] whose
     /// subtree queued one does not memoize its (not yet complete) `true`.
     deferred_pushed: u64,
+    /// The depth the queue is being drained at: comparisons are queued
+    /// [`crate::term::SPINE_ITERATE_AT`] frames above it. A drain inside a
+    /// δ-attempt runs at the attempt's depth, and a threshold counted from
+    /// zero there would queue each popped comparison straight back.
+    defer_base: u32,
+    /// Whether a drain at depth zero is running ([`Conv::settle_at_top`]).
+    draining_at_top: bool,
     _dom: PhantomData<(&'v (), D)>,
 }
 
@@ -883,7 +890,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // the same δ stage (`reduce::Defs::sealed_body`).
         let has_defs = !psi.sealed.is_empty()
             || psi.bindings.iter().any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, deferred: Vec::new(), deferred_pushed: 0, _dom: PhantomData }
+        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, deferred: Vec::new(), deferred_pushed: 0, defer_base: 0, draining_at_top: false, _dom: PhantomData }
     }
 
     fn spend(&mut self) -> R {
@@ -953,14 +960,21 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     #[cold]
     #[inline(never)]
     fn drain_deferred(&mut self, mark: usize) -> R {
+        let base = std::mem::replace(&mut self.defer_base, self.depth);
+        let at_top = self.draining_at_top;
+        self.draining_at_top = at_top || self.depth == 0;
+        let mut verdict = Ok(());
         while self.deferred.len() > mark {
             let (env, a, b, ty, l) = self.deferred.pop().expect("longer than the mark");
             if let Err(e) = self.tm(&env, &a, &b, &ty, &l) {
                 self.deferred.truncate(mark);
-                return Err(e);
+                verdict = Err(e);
+                break;
             }
         }
-        Ok(())
+        self.defer_base = base;
+        self.draining_at_top = at_top;
+        verdict
     }
 
     /// Queue a comparison met too deep to descend into.
@@ -975,7 +989,10 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// A comparison back at depth zero settles the queue: drained after a
     /// success, dropped after a failure.
     fn settle_at_top(&mut self, result: R) -> R {
-        if self.depth != 0 || self.deferred.is_empty() {
+        // A drain at depth zero is already taking the queue: a comparison
+        // it popped returning there leaves the rest to that loop, which
+        // keeps the drain one native frame instead of one per item.
+        if self.depth != 0 || self.deferred.is_empty() || self.draining_at_top {
             return result;
         }
         match result {
@@ -1538,7 +1555,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 return if verdict { Ok(()) } else { Err(ConvError::NotConvertible) };
             }
         }
-        if self.depth >= crate::term::SPINE_ITERATE_AT {
+        if self.depth >= self.defer_base + crate::term::SPINE_ITERATE_AT {
             return self.defer_tm(env, a, b, ty, l);
         }
         let pushed = self.deferred_pushed;

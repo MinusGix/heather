@@ -126,7 +126,15 @@ care:
   its own: it records the queue length, drains what it queued before it
   counts as a success, and truncates back to the mark when it fails, so a
   failed attempt's premises are never judged against the comparison that
-  follows it.
+  follows it. The attempt drains at its own depth, which may itself be past
+  the threshold, so the threshold counts from the depth the queue is being
+  drained at (`defer_base`); counted from zero, every popped comparison was
+  queued straight back until the fuel ran out (the library gate's
+  `x86_64_block` found this).
+- **One drain at a time.** A comparison popped by the depth-zero drain
+  returns to depth zero itself; it leaves the queue to the running drain
+  (`draining_at_top`) instead of starting a nested one, so draining a long
+  chain stays one native frame.
 - **Memo.** A comparison whose subtree queued anything does not memoize its
   `true` (`deferred_pushed` counts pushes; `tm` and `tm_nat_tail` compare
   the count before and after). A `false` is always the subtree's own
