@@ -496,7 +496,7 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
                         let after = out.minus(others);
                         let narrow = λ (i: Nat) (m: Mem(i, after)) => out.mem_filter(i, λ (id: Nat) => absent(id, others), m);
                         let sub = λ (i: Nat) (m: Mem(i, after)) (ne: i ≠ word) => out.mem_filter_of(λ (id: Nat) => absent(id, Cons(word, others)), i,
-                            trans(cong_fn<Bool, Bool>(λ b => b && absent(i, others), i.differs_of_ne(word, ne)),
+                            trans(cong_fn<Bool, Bool>(λ b => b && absent(i, others), i.differs_eq_of_ne(word, ne)),
                                 out.mem_filter_holds(i, λ (id: Nat) => absent(id, others), m)), narrow(i, m));
                         let q_rest = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(after, settled, g, m) ∧ PortsAt(values, rest, later, g);
                         let head = t.goes_word_into(live, out, after, env, p, word, register, inside, Rbx.absent_first(register, later, rbx), narrow, sub,
