@@ -38,7 +38,7 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc as Rc;
 
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
-use heather_kernel::term::{CtxBase, GlobalVar, LocalSubst, LocalVar, SubstTail, Term, Type};
+use heather_kernel::term::{CtxBase, GlobalBinding, GlobalVar, LocalSubst, LocalVar, SubstTail, Term, Type};
 
 use crate::diagnostics::DISPLAY_DECODE_STEPS;
 use crate::gendefs::GenDef;
@@ -97,6 +97,66 @@ impl Elaborator {
     /// display-only placeholder globals start.
     pub(crate) fn placeholder_base(&self) -> u32 {
         self.psi.bindings.len() as u32 + self.global_padding() + self.scope.meta_pushed.borrow().len() as u32
+    }
+
+    /// What a numeral elaborates to at each carrier a closed `Numeral`
+    /// instance embeds it into, over the literal as local `0`, scoped where
+    /// the display reads (docs/carrier-directed-numerals-design.md): the
+    /// body of the instance's `ofNat` field, which is what
+    /// [`Self::reduced_embedding`] leaves of a literal at that carrier —
+    /// `Rat::ofInt(OfNat(n))` at `Rat`, and at `Int`, whose field is the
+    /// constructor `OfNat`, that constructor's value. Read off the
+    /// definitions; nothing is reduced. A parameterized instance (`BitVec(n)`)
+    /// and a field that is no λ after its definitions contribute nothing,
+    /// and `Nat`'s identity embedding is the display's own numeral.
+    pub(crate) fn numeral_templates(&self) -> Vec<Term> {
+        let here = self.placeholder_base();
+        let definition = |abs: usize| -> Option<Term> {
+            let Some(GlobalBinding::Tm { body: Some(body), .. }) = self.psi.bindings.get(abs) else {
+                return None;
+            };
+            Some(body.shift_global(here.checked_sub(abs as u32)?))
+        };
+        let class = crate::literals::NUMERAL;
+        let mut out = Vec::new();
+        for (head, index) in self.traits.instances_of_class(class) {
+            let Some(info) = self.traits.instance(&crate::traits::instance_key(class, &head, &index)) else {
+                continue;
+            };
+            if info.parameterized {
+                continue;
+            }
+            let Some(abs) = self.names.global(&info.global).map(|g| g.abs as usize) else {
+                continue;
+            };
+            // A name stands for its definition; the dictionary is the
+            // class record's value, the tag then `(ofNat, ⟨⟩)`.
+            let unfolded = |t: Term| match t {
+                Term::GlobalTm { var, ref subst } if subst.terms.is_empty() => {
+                    self.global_abs_of(var).and_then(definition)
+                }
+                t => Some(t),
+            };
+            let entry = |t: Term, first: bool| match unfolded(t)? {
+                Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => {
+                    Some((*if first { fst } else { snd }).clone())
+                }
+                _ => None,
+            };
+            let Some(field) = definition(abs)
+                .and_then(|dict| entry(dict, false))
+                .and_then(|rest| entry(rest, true))
+                .and_then(|field| unfolded(field).and_then(unfolded))
+            else {
+                continue;
+            };
+            let Term::Lam { body, .. } = field else { continue };
+            // `Nat`'s identity embedding is the display's own numeral.
+            if !matches!(*body, Term::Var(_)) {
+                out.push((*body).clone());
+            }
+        }
+        out
     }
 
     /// A type mentioning placeholder globals (from [`Self::placeholder_base`]
@@ -217,6 +277,7 @@ impl Elaborator {
             qualified: false,
             annotations: false,
             rough: None,
+            numerals: std::cell::OnceCell::new(),
         }
     }
 }
@@ -343,6 +404,9 @@ struct Speller<'a> {
     annotations: bool,
     /// Presentation-only scratch placeholders; this mode elides raw nodes.
     rough: Option<&'a [(GlobalVar, String)]>,
+    /// [`Elaborator::numeral_templates`], read the first time the walk meets
+    /// a term that could be a numeral.
+    numerals: std::cell::OnceCell<Vec<Term>>,
 }
 
 impl Speller<'_> {
@@ -807,6 +871,10 @@ impl Speller<'_> {
         if let Some(k) = crate::inductive::nat_numeral(t) {
             return k.to_string();
         }
+        // `2` at `Int`, not `OfNat(2)`; `0` at `Rat`, not `ofInt(OfNat(0))`.
+        if let Some(k) = self.carrier_numeral(t) {
+            return k;
+        }
         // `'h'`, not `ofNat(104, decide_yes(refl))`.
         if let Some(c) = self.char_literal(t) {
             let mut out = String::from("'");
@@ -1100,6 +1168,48 @@ impl Speller<'_> {
                 _ => return None,
             }
         }
+    }
+
+    /// The numeral `t` is at a carrier other than `Nat`: exactly when `t` is
+    /// what that numeral elaborates to there, the carrier's `Numeral`
+    /// embedding at it (docs/carrier-directed-numerals-design.md), read
+    /// backwards — `OfNat(2)` at `Int`, `ofInt(OfNat(0))` at `Rat`
+    /// (issues/diagnostic-numeral-literal-spelling.md). Read off the
+    /// instance's own field, never by reducing `t`: a term that only
+    /// computes to one (`NegSucc(2)`, `OfNat(1 + 1)`) keeps its spelling,
+    /// and so does a carrier no instance embeds numerals into. A negative
+    /// numeral needs nothing here: `-3` is the negation of `3`, which the
+    /// operator display already writes as the prefix form it is.
+    ///
+    /// For a reader only, as [`Self::op_form`] is.
+    fn carrier_numeral(&self, t: &Term) -> Option<String> {
+        if self.qualified || self.annotations {
+            return None;
+        }
+        let (head, _) = crate::spelling::app_spine(t);
+        if matches!(head, Term::Var(_) | Term::Zero | Term::Succ(_) | Term::NatLit(_) | Term::Lam { .. }) {
+            return None;
+        }
+        let templates = self.numerals.get_or_init(|| self.el.numeral_templates());
+        templates.iter().find_map(|body| {
+            let (template_head, _) = crate::spelling::app_spine(body);
+            let same_head = match (template_head, head) {
+                (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) => a == b,
+                (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
+            };
+            if !same_head {
+                return None;
+            }
+            // The body at a hole no term contains, in `t`'s scope: the
+            // literal's position is then where the two first differ, and
+            // the whole term must be the body at that literal. (Far out of
+            // any scope, yet with room to be weakened under a binder.)
+            let scope = self.names.borrow().len() as u32;
+            let hole = Term::Var(LocalVar(u32::MAX / 2));
+            let (_, literal) = crate::lgg::first_difference(&body.inst_top(scope, &hole), t)?.at?;
+            let k = crate::inductive::nat_numeral(&literal)?;
+            (body.inst_top(scope, &literal) == *t).then(|| k.to_string())
+        })
     }
 
     /// The character a `char::ofNat(code, bool::decide_yes(…))` call

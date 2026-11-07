@@ -266,6 +266,30 @@ a type name back, by a lookup and never by reducing
 
 Probes: `lib/_tests/std/num/operator_display_tests.hthr`.
 
+### 5.3 Numerals at other carriers
+
+A numeral checked at a carrier other than `Nat` elaborates to that carrier's
+`Numeral` embedding at the natural literal, reduced as far as the field's
+body (docs/carrier-directed-numerals-design.md, `reduced_embedding`):
+`OfNat(2)` at `Int`, `Rat::ofInt(OfNat(0))` at `Rat`. The display reads the
+instance table backwards the way §5.2 reads the designation table
+(`Speller::carrier_numeral`, issues/diagnostic-numeral-literal-spelling.md):
+
+- **The template is the instance's own field.** For each closed `Numeral`
+  instance, the body of its `ofNat` field's λ, read off the dictionary's
+  definition (through the names it is behind) with the literal as the bound
+  variable (`Elaborator::numeral_templates`). Nothing is reduced, and a
+  parameterized instance (`BitVec(n)`) contributes no template.
+- **Only an exact inverse.** A term spells as the numeral `k` exactly when it
+  is the template at the literal `k` in the term's own scope; the literal's
+  position is found as the template's first difference from the term
+  (`lgg::first_difference`), and the whole is then compared. A term that
+  only *computes* to a numeral's form (`NegSucc(2)`, `OfNat(1 + 1)`), an
+  embedding of a variable, and a carrier with no instance keep their
+  spelling. A negative numeral is the negation of one, so `-3` is §5.2's
+  prefix form over the numeral `3`.
+- **Reader flavours only**, as above.
+
 ## 6. Testing
 
 The axes of `docs/testing-generated-terms.md` apply, and two of them are the

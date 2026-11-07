@@ -121,7 +121,7 @@ fn div_of_inverse(a, b: CReal, hb: b < 0) → CReal { a / b⁻¹ }
 fn div_of_square(a, b: CReal) → CReal { a / (b * b + 1) }
 fn div_of_gap(a, b, c: CReal, h: b < c) → CReal { a / (c - b) }
 fn div_of_literal(a: CReal) → CReal { a / 2 }
-// expect-error: no instance for `Apart(b, ofRat(ofInt(OfNat(0))))`
+// expect-error: no instance for `Apart(b, 0)`
 fn div_unknown(a, b: CReal) → CReal { a / b }
 
 // Order and multiplication: the product's gap comes from the product of the

@@ -82,3 +82,39 @@ fn shadowed_symbol<A: Monoid(+)>(x: A, a, b: Nat, h: Nat::add(a, b) = a) → Boo
 // An operator inside a call's arguments needs no parentheses.
 // expect-error: this has type `len(xs ++ ys) = 0`, but `Bool` is expected here
 fn receiver(xs, ys: List<Nat>, h: (xs ++ ys).len() = 0) → Bool { h }
+
+// A numeral at a carrier other than `Nat` reads as the numeral, wherever the
+// term is exactly what that numeral elaborates to there — the carrier's
+// `Numeral` embedding at it (issues/diagnostic-numeral-literal-spelling.md):
+// `2` at `Int`, not `OfNat(2)`; `0` at `Rat`, not `ofInt(OfNat(0))`.
+// expect-error: this has type `x + 1 = 2 * x`, but `Bool` is expected here
+fn int_numerals(x: Int, h: x + 1 = 2 * x) → Bool { h }
+
+// The exponent of `^` at `Rat` is an `Int`.
+// expect-error: this has type `x ^ 2 = x`, but `Bool` is expected here
+fn rat_power_numeral(x: Rat, p: x.PowOk(2), h: x ^ 2 = x) → Bool { h }
+
+// expect-error: no instance for `Apart(b * b, 0)`
+fn rat_zero_numeral(a, b: Rat) → Rat { a / (b * b) }
+
+// A negative numeral is the negation of one, spelled as the prefix form it
+// is, and parenthesized like one.
+// expect-error: this has type `x ^ -1 = -1 * x`, but `Bool` is expected here
+fn negative_numerals(x: Rat, p: x.PowOk(-1), h: x ^ -1 = (-1) * x) → Bool { h }
+
+// Only the numeral's own elaboration: a constructor value the negation
+// computes to, an embedding of a computation or of a variable, and a
+// numeral's embedding written at a carrier with no `Numeral` instance all
+// keep their spelling.
+// expect-error: this has type `x = NegSucc(2)`, but `Bool` is expected here
+fn computed_negative(x: Int, h: x = NegSucc(2)) → Bool { h }
+
+// expect-error: this has type `x = OfNat(1 + 1)`, but `Bool` is expected here
+fn embedded_computation(x: Int, h: x = OfNat(1 + 1)) → Bool { h }
+
+// expect-error: this has type `x = OfNat(n)`, but `Bool` is expected here
+fn embedded_variable(n: Nat, x: Int, h: x = OfNat(n)) → Bool { h }
+
+inductive Tally { Marks(Nat), Blank }
+// expect-error: this has type `t = Marks(3)`, but `Bool` is expected here
+fn no_numeral_route(t: Tally, h: t = Marks(3)) → Bool { h }
