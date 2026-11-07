@@ -332,13 +332,16 @@ enum Node {
 
 /// A relation a node changed by other than the rewrite's own `R`, with its
 /// carrier, both scoped in the rewrite's context, and the level of an
-/// application `rel(x, y)`.
+/// application `rel(x, y)`. `identity` when it is `RelId` at its carrier (up
+/// to conversion): every context preserves it, and a chain meets it as an
+/// `=` step (§11.6).
 #[derive(PartialEq)]
 pub(super) struct Rel {
     head: Rc<Term>,
     carrier: Rc<Type>,
     level: Level,
     holds: Level,
+    identity: bool,
 }
 
 /// The binders' types and levels a pointwise relation ranges over,
@@ -682,8 +685,10 @@ impl<'a> RelationRewrite<'a> {
             Plan::Relation { relation, carrier, level, left, right } => {
                 // Each side's relation: `R`, or what a context that left
                 // `R`'s carrier named, at the goal's carrier either way.
-                let by = |side: &Side| side.rel.as_ref().map_or_else(|| Rc::clone(&self.relation), |r| Rc::clone(&r.head));
-                let (rl, rr) = (by(left), by(right));
+                let by = |side: &Side| {
+                    side.rel.as_ref().map_or_else(|| (Rc::clone(&self.relation), false), |r| (Rc::clone(&r.head), r.identity))
+                };
+                let ((rl, il), (rr, ir)) = (by(left), by(right));
                 let at = (carrier, level);
                 let mut acc = input;
                 match polarity {
@@ -691,12 +696,12 @@ impl<'a> RelationRewrite<'a> {
                     // right side, then `R(l, l')` the left.
                     Polarity::Backward => {
                         if let Some(pr) = &right.proof {
-                            let back = self.symmetric(pr, &right.from, &right.to, &rr, at)?;
-                            let chain = self.chain(relation, &rr, relation, at)?;
+                            let back = self.symmetric(pr, &right.from, &right.to, &rr, ir, at)?;
+                            let chain = self.chain((relation, false), (&rr, ir), relation, at)?;
                             acc = apply(up(&chain), [up(&left.to), up(&right.to), up(&right.from), acc, up(&back)]);
                         }
                         if let Some(pl) = &left.proof {
-                            let chain = self.chain(&rl, relation, relation, at)?;
+                            let chain = self.chain((&rl, il), (relation, false), relation, at)?;
                             acc = apply(up(&chain), [up(&left.from), up(&left.to), up(&right.from), up(pl), acc]);
                         }
                     }
@@ -704,12 +709,12 @@ impl<'a> RelationRewrite<'a> {
                     // side, then `R(r, r')` the right.
                     Polarity::Forward => {
                         if let Some(pl) = &left.proof {
-                            let back = self.symmetric(pl, &left.from, &left.to, &rl, at)?;
-                            let chain = self.chain(&rl, relation, relation, at)?;
+                            let back = self.symmetric(pl, &left.from, &left.to, &rl, il, at)?;
+                            let chain = self.chain((&rl, il), (relation, false), relation, at)?;
                             acc = apply(up(&chain), [up(&left.to), up(&left.from), up(&right.from), up(&back), acc]);
                         }
                         if let Some(pr) = &right.proof {
-                            let chain = self.chain(relation, &rr, relation, at)?;
+                            let chain = self.chain((relation, false), (&rr, ir), relation, at)?;
                             acc = apply(up(&chain), [up(&left.to), up(&right.from), up(&right.to), acc, up(pr)]);
                         }
                     }
@@ -942,10 +947,32 @@ impl<'a> RelationRewrite<'a> {
                 return Ok(Node::related(term, apply(respects, [x, x2, hx, y, y2, hy])));
             }
         }
+        // The last two arguments changed by other relations than `R`, or
+        // into a result outside `R`'s carrier: `Respects2` over the
+        // relations each changed by, the result's named as a context's is
+        // (§11.6).
+        if n >= 2 && changed == [n - 2, last] && !pointwise
+            && let Some(node) = self.binary_across(t, args, nodes, &term)?
+        {
+            return Ok(node);
+        }
         let [i] = changed[..] else {
+            // Each changed argument's relation, when one is not `R`.
+            let by = if own {
+                String::new()
+            } else {
+                let shown: Vec<String> = changed
+                    .iter()
+                    .map(|&i| {
+                        let r = nodes[i].rel().map_or(&self.relation, |r| &r.head);
+                        self.e.spell_term_clean(self.original, r).map_or_else(|| "?".into(), |s| format!("`{s}`"))
+                    })
+                    .collect();
+                format!(" (by {})", shown.join(" and "))
+            };
             return Err(ElabError::Elab {
                 msg: format!(
-                    "`rewrite`:{} changes in {} of its arguments{}; a relation rewrite has \
+                    "`rewrite`:{} changes in {} of its arguments{}{by}; a relation rewrite has \
                      congruence over one argument (`PreservesRelation`) or over the last two \
                      (`Respects2`)",
                     self.shown(t),
@@ -959,6 +986,101 @@ impl<'a> RelationRewrite<'a> {
         self.crossing(t, args[i], &nodes[i], term, partial, &|rw, dom, dom_level, cod_level| {
             rw.context(t, i, dom, dom_level, cod_level)
         })
+    }
+
+    /// The step for node `t` whose last two arguments both changed, by
+    /// relations not both `R` or into a result type other than `R`'s
+    /// carrier: `Respects2<A, B, D>(RA, RB, S, op)` over the relations the
+    /// two changed by, `S` the first of the rewrite's own relation (when `D`
+    /// is its carrier), either argument's (when `D` is that one's carrier),
+    /// and `RelId<D>` that resolves; `RelId<D>` from both arguments changed
+    /// by `=` holds for every operation. `None` when `op` is not typed so.
+    fn binary_across(&mut self, t: &Rc<Term>, args: &[&Rc<Term>], nodes: &[Node], term: &Rc<Term>) -> R<Option<Node>> {
+        let n = args.len();
+        let Some(target) = self.result_type(t) else { return Ok(None) };
+        let (ra, rb) = (nodes[n - 2].rel().cloned(), nodes[n - 1].rel().cloned());
+        let op = prefix(t, 2);
+        let found = self.scoped(&Shape::Binary, &op, |rw, _, op| rw.respects_across(ra.as_ref(), rb.as_ref(), op, &target), |found, d| {
+            found.map(|(ev, rel)| (Rc::new(ev.shift_local(d)), rel))
+        })?;
+        let Some((respects, rel)) = found else { return Ok(None) };
+        let (x, x2, hx) = self.side(args[n - 2], &nodes[n - 2])?;
+        let (y, y2, hy) = self.side(args[n - 1], &nodes[n - 1])?;
+        Ok(Some(Node::related_by(Rc::clone(term), apply(respects, [x, x2, hx, y, y2, hy]), rel)))
+    }
+
+    /// [`Self::binary_across`]'s evidence for `op` (scoped where `cx` is):
+    /// the `respects2` field, and the relation the result changes by.
+    fn respects_across(
+        &mut self,
+        ra: Option<&Rc<Rel>>,
+        rb: Option<&Rc<Rel>>,
+        op: &Rc<Term>,
+        (target, target_level): &(Rc<Type>, Level),
+    ) -> R<Option<(Rc<Term>, Option<Rc<Rel>>)>> {
+        // Each argument's carrier, its spelling, its relation's, and whether
+        // that relation is `RelId`.
+        let mut spelled = Vec::new();
+        for r in [ra, rb] {
+            let (carrier, level, head, identity) = match r {
+                Some(r) => (Rc::clone(&r.carrier), r.level.clone(), Rc::clone(&r.head), r.identity),
+                None => (Rc::clone(&self.carrier), self.level.clone(), Rc::clone(&self.relation), false),
+            };
+            let c = self.carrier_named(&carrier, &level);
+            let name = self.relation_alias_at(&head, &c, &carrier)?;
+            spelled.push((carrier, head, c, name, identity));
+        }
+        let [(ca, ha, a, sa, ia), (cb, hb, b, sb, ib)] = &spelled[..] else { unreachable!("two arguments") };
+        let out = self.carrier_named(target, target_level);
+        let (op_ty, op_level) = self.statement(&format!("{a} → {b} → {out}"))?;
+        if !self.checks(op, &op_ty, &op_level) {
+            return Ok(None);
+        }
+        let opn = self.alias(Rc::clone(op), op_ty, op_level);
+        // Candidates for the result's relation, scoped where `cx` is.
+        let here = |rw: &Self, r: &Rc<Term>| if rw.deep { Rc::new(r.shift_local(rw.depth())) } else { Rc::clone(r) };
+        let mut candidates: Vec<Rc<Term>> = Vec::new();
+        let both_identity = *ia && *ib;
+        if both_identity {
+            candidates.push(self.relid_here(&out)?);
+        }
+        if **target == *self.carrier {
+            candidates.push(here(self, &self.relation));
+        }
+        for (carrier, head) in [(ca, ha), (cb, hb)] {
+            if carrier == target {
+                candidates.push(here(self, head));
+            }
+        }
+        if candidates.is_empty() {
+            candidates.push(self.relid_here(&out)?);
+        }
+        let mut first = None;
+        let mut seen: Vec<Rc<Term>> = Vec::new();
+        for candidate in candidates {
+            if seen.contains(&candidate) {
+                continue;
+            }
+            seen.push(Rc::clone(&candidate));
+            let Some((root, rel)) = self.candidate_rel(&candidate, target, target_level, &out)? else { continue };
+            let s = self.relation_alias_at(&root, &out, target)?;
+            let (ty, level) = self.statement(&format!("algebra_rel::Respects2<{a}, {b}, {out}>({sa}, {sb}, {s}, {opn})"))?;
+            let out_identity = rel.as_ref().is_some_and(|r| r.identity);
+            let dict = match self.resolve(&ty, &level) {
+                Some(dict) => Some((dict, ty.clone(), level.clone())),
+                None if both_identity && out_identity => {
+                    Some(self.expr(&format!("algebra_rel::relid_respects2({opn})"))?)
+                }
+                None => None,
+            };
+            if let Some((dict, ty, level)) = dict {
+                return Ok(Some((self.project(dict, ty, level, "respects2")?, rel)));
+            }
+            first.get_or_insert((ty, level, rel));
+        }
+        let Some((ty, level, rel)) = first else { return Ok(None) };
+        let goal = self.obligation_here(ty.clone(), level.clone(), "compatibility")?;
+        Ok(Some((self.project(goal, ty, level, "respects2")?, rel)))
     }
 
     /// A codata constructor (§11.5): its children walked as the arguments
@@ -1246,11 +1368,13 @@ impl<'a> RelationRewrite<'a> {
             Shape::Unary | Shape::Pointwise(_) => format!("{argument} → {out}"),
         };
         let (op_ty, op_level) = self.statement(&operation)?;
+        // An argument changed by `=` crosses every context (§11.6).
+        let identity = matches!(shape, Shape::Unary) && input.is_some_and(|r| r.identity);
         let found = if !self.checks(context, &op_ty, &op_level) {
             Lookup::Untyped
         } else if let Some((d, l)) = target {
             let op = self.alias(Rc::clone(context), op_ty, op_level);
-            self.leaving(&input_text, &op, context, d, l, &out)?
+            self.leaving(&input_text, identity, &op, context, d, l, &out)?
         } else {
             let op = self.alias(Rc::clone(context), op_ty, op_level);
             let statement = match shape {
@@ -1258,7 +1382,11 @@ impl<'a> RelationRewrite<'a> {
                 Shape::Binary => format!("algebra_rel::Respects2<{c}, {c}, {c}>({rel}, {rel}, {rel}, {op})"),
             };
             let (ty, level) = self.statement(&statement)?;
-            match self.resolve(&ty, &level) {
+            let ev = match shape {
+                Shape::Binary => self.resolve(&ty, &level),
+                Shape::Unary | Shape::Pointwise(_) => self.preserves(&ty, &level, identity, identity, &rel, &c, &op)?,
+            };
+            match ev {
                 Some(ev) => Lookup::Found(self.applicable(shape, ev, ty, level)?, input.cloned()),
                 None => Lookup::Missing(ty, level, input.cloned()),
             }
@@ -1268,56 +1396,153 @@ impl<'a> RelationRewrite<'a> {
     }
 
     /// The evidence for a context `op` that maps the argument's carrier
-    /// into `target` (spelled `out`): each relation `S` at `target` that an
-    /// evidence rule about `op` names, in turn, with `PreservesRelation(input,
-    /// S, op)` resolved; the first relation's statement as the obligation when
-    /// none resolves, and `Untyped` when no rule names one.
+    /// into `target` (spelled `out`): each relation `S` at `target` that a
+    /// hypothesis in scope or an evidence rule about `op` names, then the
+    /// rewrite's own relation when `target` is its carrier, and `RelId` at
+    /// `target` when nothing named one (§11.6) — in turn, with
+    /// `PreservesRelation(input, S, op)` resolved; the first relation's
+    /// statement as the obligation when none resolves. `identity` when the
+    /// argument changed by `=`, which every context preserves into a
+    /// reflexive relation.
     #[allow(clippy::too_many_arguments)]
     fn leaving(
         &mut self,
         input: &str,
+        identity: bool,
         op: &str,
         context: &Rc<Term>,
         target: &Rc<Type>,
         target_level: &Level,
         out: &str,
     ) -> R<Lookup> {
+        let mut candidates = self.named_relations(context);
+        if **target == *self.carrier {
+            let own = if self.deep { Rc::new(self.relation.shift_local(self.depth())) } else { Rc::clone(&self.relation) };
+            if !candidates.contains(&own) {
+                candidates.push(own);
+            }
+        }
+        if candidates.is_empty() {
+            candidates.push(self.relid_here(out)?);
+        }
         let mut first = None;
-        for candidate in self.named_relations(context) {
-            // A relation found below binders is kept for the node's parents,
-            // so it must not mention them.
-            let Some(root) = (if self.deep {
-                crate::strengthen_tm(&self.original.gamma, &candidate, self.depth()).map(Rc::new)
-            } else {
-                Some(Rc::clone(&candidate))
-            }) else {
-                continue;
-            };
-            let Some(holds) = self.relation_level(&candidate) else { continue };
-            let carrier = Rc::clone(target);
-            let Ok(s) = self.relation_alias_at(&root, out, &carrier) else { continue };
+        for candidate in candidates {
+            let Some((root, rel)) = self.candidate_rel(&candidate, target, target_level, out)? else { continue };
+            let s = self.relation_alias_at(&root, out, target)?;
             let (ty, level) = self.statement(&format!("relation_props::PreservesRelation({input}, {s}, {op})"))?;
-            let rel = Rc::new(Rel { head: root, carrier, level: target_level.clone(), holds });
-            if let Some(ev) = self.resolve(&ty, &level) {
-                return Ok(Lookup::Found(Rc::new(ev), Some(rel)));
+            let out_identity = rel.as_ref().is_some_and(|r| r.identity);
+            if let Some(ev) = self.preserves(&ty, &level, identity, out_identity, &s, out, op)? {
+                return Ok(Lookup::Found(Rc::new(ev), rel));
             }
             first.get_or_insert((ty, level, rel));
         }
-        Ok(first.map_or(Lookup::Untyped, |(ty, level, rel)| Lookup::Missing(ty, level, Some(rel))))
+        Ok(first.map_or(Lookup::Untyped, |(ty, level, rel)| Lookup::Missing(ty, level, rel)))
     }
 
-    /// The relations evidence rules about `PreservesRelation` name for the
-    /// result of `context` (their `S` in `PreservesRelation(R, S, f)`), each
-    /// rule's `f` matched against `context` and `S` instantiated by the
-    /// match, scoped where `cx` is. A rule whose `S` the match leaves open
-    /// names none.
+    /// A relation `candidate` at `target` (spelled `out`), scoped where `cx`
+    /// is, as a node keeps it: scoped in the rewrite's context, `None` for
+    /// the rewrite's own relation. `None` altogether when it mentions a
+    /// binder the walk is below (a node's parents are above it) or is no
+    /// relation on `target`.
+    fn candidate_rel(
+        &mut self,
+        candidate: &Rc<Term>,
+        target: &Rc<Type>,
+        target_level: &Level,
+        out: &str,
+    ) -> R<Option<(Rc<Term>, Option<Rc<Rel>>)>> {
+        let Some(root) = (if self.deep {
+            crate::strengthen_tm(&self.original.gamma, candidate, self.depth()).map(Rc::new)
+        } else {
+            Some(Rc::clone(candidate))
+        }) else {
+            return Ok(None);
+        };
+        if **target == *self.carrier && self.same_relation(&root, &self.relation) {
+            return Ok(Some((root, None)));
+        }
+        let Some(holds) = self.relation_level(candidate) else { return Ok(None) };
+        if self.relation_alias_at(&root, out, target).is_err() {
+            return Ok(None);
+        }
+        let identity = self.is_identity_here(candidate, out)?;
+        let rel = Rel { head: Rc::clone(&root), carrier: Rc::clone(target), level: target_level.clone(), holds, identity };
+        Ok(Some((root, Some(Rc::new(rel)))))
+    }
+
+    /// `PreservesRelation(input, S, op)` (`ty`): resolved, or, for an
+    /// argument changed by `=` (`identity`), every function's — into `=`
+    /// itself, or into `S` (spelled `s`, at `out`) by its reflexivity.
+    #[allow(clippy::too_many_arguments)]
+    fn preserves(
+        &mut self,
+        ty: &Type,
+        level: &Level,
+        identity: bool,
+        out_identity: bool,
+        s: &str,
+        out: &str,
+        op: &str,
+    ) -> R<Option<Term>> {
+        if let Some(ev) = self.resolve(ty, level) {
+            return Ok(Some(ev));
+        }
+        if !identity {
+            return Ok(None);
+        }
+        if out_identity {
+            return self.expr(&format!("relation_props::preserves_relid_relid({op})")).map(|(t, ..)| Some(t));
+        }
+        let (rty, rlevel) = self.statement(&format!("relation_props::Reflexive<{out}>({s})"))?;
+        let Some(dict) = self.resolve(&rty, &rlevel) else { return Ok(None) };
+        let r = self.alias(Rc::new(dict), rty, rlevel);
+        self.expr(&format!("relation_props::preserves_relid({s}, {op}, {r})")).map(|(t, ..)| Some(t))
+    }
+
+    /// `RelId` at the carrier spelled `c`, scoped where `cx` is, as the λ a
+    /// relation argument spells it.
+    fn relid_here(&self, c: &str) -> R<Rc<Term>> {
+        self.expr(&format!("relation::RelId<{c}>")).map(|(t, ..)| Rc::new(t))
+    }
+
+    /// Is relation `r` at the carrier spelled `c`, scoped where `cx` is,
+    /// `RelId` there?
+    fn is_identity_here(&self, r: &Rc<Term>, c: &str) -> R<bool> {
+        let id = self.relid_here(c)?;
+        Ok(self.e.terms_convert(&self.cx, r, &id))
+    }
+
+    /// The relations evidence about `PreservesRelation` names for the result
+    /// of `context` (their `S` in `PreservesRelation(R, S, f)`), scoped where
+    /// `cx` is: first the hypotheses in scope whose `f` converts to
+    /// `context`, then the evidence rules, each rule's `f` matched against
+    /// `context` and `S` instantiated by the match. A rule whose `S` the
+    /// match leaves open names none.
     fn named_relations(&mut self, context: &Rc<Term>) -> Vec<Rc<Term>> {
         let Some(info) = self.e.names.global(&crate::names::qkey("relation_props", "PreservesRelation")) else {
             return Vec::new();
         };
-        let Some(key) = self.e.names.global_name_at(info.abs).map(str::to_string) else { return Vec::new() };
-        let rules: Vec<String> = self.e.traits.evidence_rules(&key).iter().map(|r| r.global.clone()).collect();
+        let abs = info.abs as usize;
         let mut out: Vec<Rc<Term>> = Vec::new();
+        // Hypotheses: `p : PreservesRelation(R, S, f)` as written, each
+        // entry's type scoped over the entries before it.
+        let n = self.cx.gamma.len();
+        for (i, entry) in self.cx.gamma.entries.iter().enumerate() {
+            let Type::El { tm, .. } = &*entry.ty else { continue };
+            let (head, args) = crate::spelling::app_spine(tm);
+            let Term::GlobalTm { var, .. } = head else { continue };
+            if self.e.global_abs_of(*var) != Some(abs) {
+                continue;
+            }
+            let [.., _, s, f] = args.as_slice() else { continue };
+            let by = (n - i) as u32;
+            let (s, f) = (s.shift_local(by), f.shift_local(by));
+            if (f == **context || self.e.terms_convert(&self.cx, &f, context)) && !out.iter().any(|o| **o == s) {
+                out.push(Rc::new(s));
+            }
+        }
+        let Some(key) = self.e.names.global_name_at(info.abs).map(str::to_string) else { return out };
+        let rules: Vec<String> = self.e.traits.evidence_rules(&key).iter().map(|r| r.global.clone()).collect();
         for g in rules {
             let e = Expr { kind: heather_syntax::ExprKind::Var(g), span: self.span };
             let Ok((_, ty, _)) = self.e.generated_scope(|el| el.elab_infer(&self.cx, &e)) else { continue };
@@ -1432,15 +1657,42 @@ impl<'a> RelationRewrite<'a> {
     }
 
     /// `R(y, x)` from `p : R(x, y)`, `R` at `carrier`.
-    fn symmetric(&mut self, p: &Rc<Term>, x: &Rc<Term>, y: &Rc<Term>, r: &Rc<Term>, carrier: (&Rc<Type>, &Level)) -> R<Rc<Term>> {
-        let sym = self.class_field("Symmetric", &[Rc::clone(r)], "rel_sym", "symmetry", carrier)?;
+    /// `identity` when `R` is `RelId`, whose symmetry is `relid_equivalence`'s.
+    fn symmetric(
+        &mut self,
+        p: &Rc<Term>,
+        x: &Rc<Term>,
+        y: &Rc<Term>,
+        r: &Rc<Term>,
+        identity: bool,
+        carrier: (&Rc<Type>, &Level),
+    ) -> R<Rc<Term>> {
+        let sym = if identity {
+            self.identity_field("relid_equivalence", |c, _| format!("relation_props::relid_equivalence<{c}>()"), r, "rel_sym", carrier)?
+        } else {
+            self.class_field("Symmetric", &[Rc::clone(r)], "rel_sym", "symmetry", carrier)?
+        };
         Ok(apply(sym, [Rc::clone(x), Rc::clone(y), Rc::clone(p)]))
     }
 
     /// The step that chains `first(x, y)` and `second(y, z)` into
     /// `goal(x, z)`: `Transitive`'s when all three are one relation, else
-    /// `Trans`'s, the classes `calc` chains with.
-    fn chain(&mut self, first: &Rc<Term>, second: &Rc<Term>, goal: &Rc<Term>, carrier: (&Rc<Type>, &Level)) -> R<Rc<Term>> {
+    /// `Trans`'s, the classes `calc` chains with. A step by `RelId` (each
+    /// relation comes with whether it is) is the `=` step `calc` transports
+    /// along, as `Trans` dictionaries (`trans_relid_l`/`_r`).
+    fn chain(
+        &mut self,
+        (first, first_id): (&Rc<Term>, bool),
+        (second, second_id): (&Rc<Term>, bool),
+        goal: &Rc<Term>,
+        carrier: (&Rc<Type>, &Level),
+    ) -> R<Rc<Term>> {
+        if first_id {
+            return self.identity_field("trans_relid_l", |c, g| format!("relation_props::trans_relid_l<{c}>({g})"), goal, "rel_chain", carrier);
+        }
+        if second_id {
+            return self.identity_field("trans_relid_r", |c, g| format!("relation_props::trans_relid_r<{c}>({g})"), goal, "rel_chain", carrier);
+        }
         if self.same_relation(first, goal) && self.same_relation(second, goal) {
             self.class_field("Transitive", &[Rc::clone(goal)], "rel_trans", "transitivity", carrier)
         } else {
@@ -1480,6 +1732,29 @@ impl<'a> RelationRewrite<'a> {
         };
         let projected = self.project(dict, ty, level, field)?;
         self.fields.push((class, relations.to_vec(), Rc::clone(&projected)));
+        Ok(projected)
+    }
+
+    /// `field` of the dictionary `text(c, r)` builds for relation `r` at
+    /// `carrier` (spelled `c`, `r` by its alias), once: what stands in for a
+    /// class every `RelId` step has.
+    fn identity_field(
+        &mut self,
+        what: &'static str,
+        text: impl Fn(&str, &str) -> String,
+        r: &Rc<Term>,
+        field: &str,
+        (carrier, level): (&Rc<Type>, &Level),
+    ) -> R<Rc<Term>> {
+        let key = [Rc::clone(r)];
+        if let Some((_, _, t)) = self.fields.iter().find(|(c, rs, _)| *c == what && rs.as_slice() == key) {
+            return Ok(Rc::clone(t));
+        }
+        let c = self.carrier_named(carrier, level);
+        let name = self.relation_alias_at(r, &c, carrier)?;
+        let (dict, ty, level) = self.expr(&text(&c, &name))?;
+        let projected = self.project(dict, ty, level, field)?;
+        self.fields.push((what, key.to_vec(), Rc::clone(&projected)));
         Ok(projected)
     }
 
@@ -1526,11 +1801,15 @@ impl<'a> RelationRewrite<'a> {
     /// `dict.field`, elaborated as written.
     fn project(&mut self, dict: Term, ty: Type, level: Level, field: &str) -> R<Rc<Term>> {
         let name = self.alias(Rc::new(dict), ty, level);
-        let source = format!("fn generated() -> Type {{ {name}.{field} }}");
+        self.expr(&format!("{name}.{field}")).map(|(t, ..)| Rc::new(t))
+    }
+
+    /// An expression written as text in `cx`, inferred.
+    fn expr(&self, text: &str) -> R<(Term, Type, Level)> {
+        let source = format!("fn generated() -> Type {{ {text} }}");
         let mut file = parse_file(&source).map_err(|e| ElabError::Elab { msg: e.msg, span: self.span })?;
         let Some(Item::Decl(d)) = file.items.pop() else { unreachable!("one declaration") };
-        let (term, _, _) = self.e.generated_scope(|e| e.elab_infer(&self.cx, &d.body.result))?;
-        Ok(Rc::new(term))
+        self.e.generated_scope(|e| e.elab_infer(&self.cx, &d.body.result))
     }
 
     // ---------------------------------------------------------------------

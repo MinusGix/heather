@@ -140,8 +140,10 @@ fn search_then(n: Nat) → Eutt<Nat>(Events::none(),
 
 // Rewriting inside a pending tree, through the run: `Eutt::mrec_respects`
 // is stated, but the rewrite does not find it for a run whose calls are
-// `Events::sum(…)` (issues/eutt-rewrite-iteration-evidence.md).
-// expect-error: no evidence about it names the relation its result changes by
+// `Events::sum(…)` (issues/eutt-rewrite-iteration-evidence.md), so the result
+// falls back to `=` (docs/equation-rewrite-design.md §11.6), which the run
+// does not preserve.
+// expect-error: ?compatibility : PreservesRelation(λ (x: CoTree<Nat>(sum(calls(Nat, Nat), none))) => λ (y: CoTree<Nat>(sum(calls(Nat, Nat), none))) => Eutt<Nat>(sum(calls(Nat, Nat), none), x, y), RelId, mrec(calls(Nat, Nat), none, search_body))
 fn rewrite_in_run(n: Nat) →
     Eutt<Nat>(Events::none(), CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, CTau(search_body(n))),
         CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n)))

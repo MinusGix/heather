@@ -30,6 +30,13 @@ theorem respects2_relid<A>(op: A → A → A):
     λ x x2 hx y y2 hy => j(hx, λ w q => op(x, y) = op(w, y2), j(hy, λ w q => op(x, y) = op(x, w), refl))
 }
 
+// Every operation respects identity, at any three carriers: the
+// `Respects2` a relation rewrite crosses a binary context by when both its
+// arguments changed by `=` (docs/equation-rewrite-design.md §11.6).
+fn relid_respects2<A, B, C>(op: A → B → C) → Respects2<A, B, C>(RelId<A>, RelId<B>, RelId<C>, op) {
+    Respects2(λ x x2 hx y y2 hy => j(hx, λ w q => op(x, y) = op(w, y2), j(hy, λ w q => op(x, y) = op(x, w), refl)))
+}
+
 class Associative<A>(same: A → A → Type, op: A → A → A) {
     assoc: (x, y, z: A) → same(op(op(x, y), z), op(x, op(y, z))),
 }
