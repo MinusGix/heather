@@ -1,0 +1,616 @@
+// Uniformly continuous functions on a closed interval: bounded, with a
+// located image and so (in an order-complete field) a supremum, and the
+// approximate intermediate value theorem (issues/located-sup-consumers.md;
+// docs/sequences-and-completeness.md §5).
+//
+// The interval is `I = λ x => Within(<=, a, x, b)` with `a <= b`, and `f` is
+// `UnifContOn(I, f)` (real_fn.hthr). Every proof here is one walk: from a
+// point `x` of the interval, cotransitivity places the remaining length
+// `b - x` against `δ/2 < δ` (`δ` the modulus at the `ε` the proof chose).
+// Below `δ`, every point of `[x, b]` is within `δ` of `x`, so `x` alone
+// speaks for the rest of the interval; above `δ/2`, the walk steps to
+// `x + δ/2`, which is still in the interval. The number of steps is bounded
+// by the Archimedean property (`OrderedField::archimedean_mul` at `b - a`),
+// and the walk is an induction on it. Nothing is decided: there is no floor
+// placing a point on a grid, and where a proof needs to know whether a point
+// `y` is before or after the step `z`, the goal is a `≤`, which
+// `StrictOrder::le_by_cases` may split on.
+//
+// - `UnifContOn::bounded`: `f` is bounded on `I`. The walk at `ε = 1` puts
+//   every `f(x)` within `n + 1` of `f(a)`. This is the bound real_fn.hthr's
+//   product and chain rules take as a hypothesis.
+// - `UnifContOn::located`: the image `{f(x) | x ∈ I}` is upper located. For
+//   `p < q`, with `h = (q - p)/2`, cotransitivity at each point of the walk
+//   says `p < f(x)` (an element of the image above `p`, and the walk stops)
+//   or `f(x) < p + h`, which bounds `f` by `q` within `δ` of `x`.
+// - `UnifContOn::sup`: in an `OrderComplete` field the image has a
+//   supremum (supremum.hthr), read with its approximation as data.
+// - `UnifContOn::ivt_approx`: with `f(a) <= 0 <= f(b)`, every `ε > 0` has a
+//   point of `I` with `|f(x)| <= ε`. Cotransitivity at each point of the walk
+//   says `-ε < f(x)` (then `|f(x)| <= ε`, since the walk keeps `f(x) <= ε/2`)
+//   or `f(x) < -ε/2`, and then the next point has `f <= 0`; the walk cannot
+//   reach `b` this way, since `f(b) >= 0`. No completeness is spent. An exact
+//   root needs more than continuity constructively (the note's §5).
+
+import logic;
+import nat;
+import int;
+import list;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import big_operator;
+import ring;
+import omega;
+import linarith;
+import real_fn;
+import sequence;
+import supremum;
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+// The image of `D` under `f`, as a set: `y` is a value `f` takes on `D`.
+fn ImageOn(D: K → Type, f: K → K, y: K) → Type { ∃ x: K, D(x) ∧ f(x) ≈ y }
+
+// `n·(δ/2)` at `n = 0` is no length at all.
+theorem OrderedField::of_nat_zero_mul(x: K): K.of_nat(Zero) * x ≈ K.unit {
+    let z0: (K.of_nat(Zero) ≈ K.unit) = K.of_nat_zero;
+    ring(z0)
+}
+
+// The step `x + s` from a point of `[a, b]` at least `s` short of `b` is in
+// `[a, b]`, with one step fewer left to `b`.
+theorem Within::step(a, b, x, s: K, m: Nat, dx: Within(<=, a, x, b), ps: K.unit < s, far: s < b + K.inv(x),
+    span: b + K.inv(x) <= K.of_nat(Succ(m)) * s): Within(<=, a, x + s, b) ∧ b + K.inv(x + s) <= K.of_nat(m) * s
+{
+    let su: (K.of_nat(Succ(m)) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
+    let w: (K.of_nat(Succ(m)) * s ≈ K.of_nat(m) * s + s) = ring(su);
+    let ax: (a <= x) = dx.left;
+    And(And(linarith(ax, ps), linarith(far)), linarith(span, w))
+}
+
+// ---------------------------------------------------------------------------
+// Bounded.
+
+// The chain of steps for a modulus `δ` at `ε` on a convex domain: points at
+// most `n` half-steps apart have values within `(n + 1)·ε`.
+theorem UnifContOn::steps(D: K → Type, f: K → K, hD: ConvexOn(D), e, d: K, pd: K.unit < d,
+    md: (x, y: K) → D(x) → D(y) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), e), n: Nat):
+    (x, y: K) → D(x) → D(y) → x <= y → y + K.inv(x) <= K.of_nat(n) * OrderedField::half(d) →
+        AbsLe(f(y) + K.inv(f(x)), K.of_nat(Succ(n)) * e)
+{
+    match n {
+        Zero => λ x y dx dy xy span => {
+            let s = OrderedField::half(d);
+            let w: (K.of_nat(Zero) * s ≈ K.unit) = OrderedField::of_nat_zero_mul(s);
+            let r = md(x, y, dx, dy, linarith(xy, span, w, pd));
+            let su: (K.of_nat(Succ(Zero)) ≈ K.of_nat(Zero) + K.multiplicative.unit) = K.of_nat_succ(Zero);
+            let z0: (K.of_nat(Zero) ≈ K.unit) = K.of_nat_zero;
+            LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), e, K.of_nat(Succ(Zero)) * e, r,
+                K.rel_refl(f(y) + K.inv(f(x))), StrictOrder::le_of_same(e, K.of_nat(Succ(Zero)) * e, ring(su, z0)))
+        },
+        Succ(m) => λ x y dx dy xy span => {
+            let s = OrderedField::half(d);
+            let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
+            let sd: (s < d) = OrderedField::half_lt(d, pd);
+            let su: (K.of_nat(Succ(Succ(m))) ≈ K.of_nat(Succ(m)) + K.multiplicative.unit) = K.of_nat_succ(Succ(m));
+            let w: (K.of_nat(Succ(Succ(m))) * e ≈ K.of_nat(Succ(m)) * e + e) = ring(su);
+            match K.rel_cotrans(s, d, y + K.inv(x), sd) {
+                Inr(close) => {
+                    let r = md(x, y, dx, dy, linarith(xy, close));
+                    let pe: (K.unit <= e) = LocatedAddGroup::abs_le_nonneg(f(y) + K.inv(f(x)), e, r);
+                    let nn: (K.unit <= K.of_nat(Succ(m)) * e) = OrderedSemiring::mul_nonneg(K.of_nat(Succ(m)), e, OrderedField::of_nat_nonneg(e, Succ(m)), pe);
+                    LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), e, K.of_nat(Succ(Succ(m))) * e, r,
+                        K.rel_refl(f(y) + K.inv(f(x))), linarith(nn, w))
+                },
+                Inl(far) => {
+                    let sm: (K.of_nat(Succ(m)) ≈ K.of_nat(m) + K.multiplicative.unit) = K.of_nat_succ(m);
+                    let ws: (K.of_nat(Succ(m)) * s ≈ K.of_nat(m) * s + s) = ring(sm);
+                    let xz: (x <= x + s) = linarith(ps);
+                    let zy: (x + s <= y) = linarith(far);
+                    let dz = hD(x, y, x + s, dx, dy, xz, zy);
+                    let first = md(x, x + s, dx, dz, linarith(ps, sd));
+                    let left: (y + K.inv(x + s) <= K.of_nat(m) * s) = linarith(span, ws);
+                    let rest = UnifContOn::steps(D, f, hD, e, d, pd, md, m, x + s, y, dz, dy, zy, left);
+                    LocatedAddGroup::abs_le_sum2(f(y) + K.inv(f(x + s)), f(x + s) + K.inv(f(x)), f(y) + K.inv(f(x)),
+                        K.of_nat(Succ(m)) * e, e, K.of_nat(Succ(Succ(m))) * e, rest, first, ring, linarith(w))
+                },
+            }
+        },
+    }
+}
+
+// The bound, over plain parameters: the walk from `a` at `ε = 1` with `n`
+// half-steps, and `|f(a)| <= f(a)² + 1`.
+theorem UnifContOn::bounded_close(a, b: K, ab: a <= b, f: K → K, d: K, pd: K.unit < d,
+    md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), K.multiplicative.unit),
+    n: Nat, hn: b + K.inv(a) <= K.of_nat(n) * OrderedField::half(d)):
+    BoundedOn(λ (x: K) => Within(<=, a, x, b), f, f(a) * f(a) + K.multiplicative.unit + K.of_nat(Succ(n)) * K.multiplicative.unit)
+{
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let c = f(a) * f(a) + K.multiplicative.unit;
+    let fa: AbsLe(f(a), c) = OrderedField::abs_le_sq_succ(f(a));
+    let pc: (K.unit <= c) = LocatedAddGroup::abs_le_nonneg(f(a), c, fa);
+    let nn: (K.unit <= K.of_nat(Succ(n)) * K.multiplicative.unit) = OrderedSemiring::mul_nonneg(K.of_nat(Succ(n)), K.multiplicative.unit,
+        OrderedField::of_nat_nonneg(a, Succ(n)), StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o));
+    let da: Within(<=, a, a, b) = And(StrictOrder::le_refl(a), ab);
+    And(linarith(pc, nn), λ x dx => {
+        let ax: (a <= x) = dx.left;
+        let xb: (x <= b) = dx.right;
+        let r = UnifContOn::steps(λ (y: K) => Within(<=, a, y, b), f, ConvexOn::within(a, b), K.multiplicative.unit, d, pd, md, n,
+            a, x, da, dx, ax, linarith(xb, hn));
+        LocatedAddGroup::abs_le_sum2(f(x) + K.inv(f(a)), f(a), f(x), K.of_nat(Succ(n)) * K.multiplicative.unit, c,
+            c + K.of_nat(Succ(n)) * K.multiplicative.unit, r, fa, ring, linarith)
+    })
+}
+
+// A uniformly continuous function on a closed interval is bounded there.
+theorem UnifContOn::bounded(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f)):
+    ∃ M: K, BoundedOn(λ (x: K) => Within(<=, a, x, b), f, M)
+{
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let mo = hf(K.multiplicative.unit, o);
+    let n = OrderedField::archimedean_mul(b + K.inv(a), OrderedField::half(mo.witness), OrderedField::half_pos(mo.witness, mo.proof.left));
+    Exists(f(a) * f(a) + K.multiplicative.unit + K.of_nat(Succ(n.witness)) * K.multiplicative.unit,
+        UnifContOn::bounded_close(a, b, ab, f, mo.witness, mo.proof.left, mo.proof.right, n.witness, n.proof))
+}
+
+// ---------------------------------------------------------------------------
+// The image is upper located.
+
+// Within `δ` of a point where `f(x) < p + h`, `f` is at most `p + 2h`.
+theorem UnifContOn::near_below(a, b: K, f: K → K, p, q, h, d: K, hq: p + h + h ≈ q,
+    md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), h),
+    x, y: K, dx: Within(<=, a, x, b), dy: Within(<=, a, y, b), near: AbsLe(y + K.inv(x), d), below: f(x) < p + h): f(y) <= q
+{
+    let r = md(x, y, dx, dy, near);
+    let up: (f(y) + K.inv(f(x)) <= h) = r.right;
+    linarith(up, below, hq)
+}
+
+// The walk from `x` with `n` half-steps left to `b`: either `f <= q` on
+// `[x, b]`, or the image has an element above `p`.
+theorem UnifContOn::located_steps(a, b: K, f: K → K, p, q, h, d: K, ph: K.unit < h, hq: p + h + h ≈ q, pd: K.unit < d,
+    md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), h), n: Nat):
+    (x: K) → Within(<=, a, x, b) → b + K.inv(x) <= K.of_nat(n) * OrderedField::half(d) →
+        ((y: K) → Within(<=, a, y, b) → x <= y → f(y) <= q) ∨ (∃ y: K, ImageOn(λ (z: K) => Within(<=, a, z, b), f, y) ∧ p < y)
+{
+    let s = OrderedField::half(d);
+    let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
+    let sd: (s < d) = OrderedField::half_lt(d, pd);
+    let pm: (p < p + h) = linarith(ph);
+    match n {
+        Zero => λ x dx span => match K.rel_cotrans(p, p + h, f(x), pm) {
+            Inl(above) => Inr(Exists(f(x), And(Exists(x, And(dx, K.rel_refl(f(x)))), above))),
+            Inr(below) => {
+                let w: (K.of_nat(Zero) * s ≈ K.unit) = OrderedField::of_nat_zero_mul(s);
+                Inl(λ y dy xy => {
+                    let yb: (y <= b) = dy.right;
+                    UnifContOn::near_below(a, b, f, p, q, h, d, hq, md, x, y, dx, dy, linarith(xy, yb, span, w, pd), below)
+                })
+            },
+        },
+        Succ(m) => λ x dx span => match K.rel_cotrans(p, p + h, f(x), pm) {
+            Inl(above) => Inr(Exists(f(x), And(Exists(x, And(dx, K.rel_refl(f(x)))), above))),
+            Inr(below) => match K.rel_cotrans(s, d, b + K.inv(x), sd) {
+                Inr(close) => Inl(λ y dy xy => {
+                    let yb: (y <= b) = dy.right;
+                    UnifContOn::near_below(a, b, f, p, q, h, d, hq, md, x, y, dx, dy, linarith(xy, yb, close), below)
+                }),
+                Inl(far) => {
+                    let st = Within::step(a, b, x, s, m, dx, ps, far, span);
+                    let rest = UnifContOn::located_steps(a, b, f, p, q, h, d, ph, hq, pd, md, m);
+                    match rest(x + s, st.left, st.right) {
+                        Inr(found) => Inr(found),
+                        Inl(ub) => Inl(λ y dy xy => StrictOrder::le_by_cases(f(y), q, y, x + s,
+                            λ yz => UnifContOn::near_below(a, b, f, p, q, h, d, hq, md, x, y, dx, dy, linarith(xy, yz, sd), below),
+                            λ zy => ub(y, dy, zy))),
+                    }
+                },
+            },
+        },
+    }
+}
+
+// The image of a uniformly continuous function on a closed interval is
+// upper located.
+theorem UnifContOn::located(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f)):
+    UpperLocated(λ (y: K) => ImageOn(λ (x: K) => Within(<=, a, x, b), f, y))
+{
+    λ p q pq => {
+        let g: (K.unit < q + K.inv(p)) = linarith(pq);
+        let h = OrderedField::half(q + K.inv(p));
+        let ph: (K.unit < h) = OrderedField::half_pos(q + K.inv(p), g);
+        let hh: (h + h ≈ q + K.inv(p)) = OrderedField::half_add(q + K.inv(p));
+        let hq: (p + h + h ≈ q) = ring(hh);
+        let mo = hf(h, ph);
+        let n = OrderedField::archimedean_mul(b + K.inv(a), OrderedField::half(mo.witness), OrderedField::half_pos(mo.witness, mo.proof.left));
+        let da: Within(<=, a, a, b) = And(StrictOrder::le_refl(a), ab);
+        let walk = UnifContOn::located_steps(a, b, f, p, q, h, mo.witness, ph, hq, mo.proof.left, mo.proof.right, n.witness);
+        match walk(a, da, n.proof) {
+            Inr(found) => Inr(found),
+            Inl(ub) => Inl(λ y sy => {
+                let ex: ImageOn(λ (x: K) => Within(<=, a, x, b), f, y) = sy;
+                let dx: Within(<=, a, ex.witness, b) = ex.proof.left;
+                let le: (f(ex.witness) <= q) = ub(ex.witness, dx, dx.left);
+                let eq: (f(ex.witness) ≈ y) = ex.proof.right;
+                linarith(le, eq)
+            }),
+        }
+    }
+}
+
+theorem UnifContOn::image_inhabited(a, b: K, ab: a <= b, f: K → K): ∃ y: K, ImageOn(λ (x: K) => Within(<=, a, x, b), f, y) {
+    Exists(f(a), Exists(a, And(And(StrictOrder::le_refl(a), ab), K.rel_refl(f(a)))))
+}
+
+theorem UnifContOn::image_bounded(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f)):
+    ∃ M: K, UpperBound(λ (y: K) => ImageOn(λ (x: K) => Within(<=, a, x, b), f, y), M)
+{
+    let bd = UnifContOn::bounded(a, b, ab, f, hf);
+    Exists(bd.witness, λ y sy => {
+        let ex: ImageOn(λ (x: K) => Within(<=, a, x, b), f, y) = sy;
+        let r: AbsLe(f(ex.witness), bd.witness) = bd.proof.right(ex.witness, ex.proof.left);
+        let eq: (f(ex.witness) ≈ y) = ex.proof.right;
+        linarith(r, eq)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The approximate intermediate value theorem.
+
+// The walk from `x` with `f(x) <= ε/2` and `n` half-steps left to `b`
+// finds a point with `|f| <= ε`: where `f(x) < -ε/2` the step keeps
+// `f <= 0`, and `b` itself is out of reach of that case, as `f(b) >= 0`.
+theorem UnifContOn::ivt_steps(a, b: K, f: K → K, e, h, d: K, ph: K.unit < h, he: h + h ≈ e, pd: K.unit < d,
+    md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), h),
+    db: Within(<=, a, b, b), fb: K.unit <= f(b), n: Nat):
+    (x: K) → Within(<=, a, x, b) → f(x) <= h → b + K.inv(x) <= K.of_nat(n) * OrderedField::half(d) →
+        ∃ y: K, Within(<=, a, y, b) ∧ AbsLe(f(y), e)
+{
+    let s = OrderedField::half(d);
+    let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
+    let sd: (s < d) = OrderedField::half_lt(d, pd);
+    let lt: (K.inv(e) < K.inv(h)) = linarith(ph, he);
+    match n {
+        Zero => λ x dx fx span => match K.rel_cotrans(K.inv(e), K.inv(h), f(x), lt) {
+            Inl(lo) => Exists(x, And(dx, linarith(lo, fx, ph, he))),
+            Inr(neg) => {
+                let xb: (x <= b) = dx.right;
+                let w: (K.of_nat(Zero) * s ≈ K.unit) = OrderedField::of_nat_zero_mul(s);
+                let r = md(x, b, dx, db, linarith(xb, span, w, pd));
+                let up: (f(b) + K.inv(f(x)) <= h) = r.right;
+                Exists(x, And(dx, linarith(up, neg, fb)))
+            },
+        },
+        Succ(m) => λ x dx fx span => match K.rel_cotrans(K.inv(e), K.inv(h), f(x), lt) {
+            Inl(lo) => Exists(x, And(dx, linarith(lo, fx, ph, he))),
+            Inr(neg) => match K.rel_cotrans(s, d, b + K.inv(x), sd) {
+                Inr(close) => {
+                    let xb: (x <= b) = dx.right;
+                    let r = md(x, b, dx, db, linarith(xb, close));
+                    let up: (f(b) + K.inv(f(x)) <= h) = r.right;
+                    Exists(x, And(dx, linarith(up, neg, fb)))
+                },
+                Inl(far) => {
+                    let st = Within::step(a, b, x, s, m, dx, ps, far, span);
+                    let r = md(x, x + s, dx, st.left, linarith(ps, sd));
+                    let up: (f(x + s) + K.inv(f(x)) <= h) = r.right;
+                    let fz: (f(x + s) <= h) = linarith(up, neg, ph);
+                    let rest = UnifContOn::ivt_steps(a, b, f, e, h, d, ph, he, pd, md, db, fb, m);
+                    rest(x + s, st.left, fz, st.right)
+                },
+            },
+        },
+    }
+}
+
+// The intermediate value theorem, approximately: a uniformly continuous
+// function with `f(a) <= 0 <= f(b)` comes within any `ε` of zero on
+// `[a, b]`.
+theorem UnifContOn::ivt_approx(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f),
+    fa: f(a) <= K.unit, fb: K.unit <= f(b), e: K, pe: K.unit < e): ∃ x: K, Within(<=, a, x, b) ∧ AbsLe(f(x), e)
+{
+    let h = OrderedField::half(e);
+    let ph: (K.unit < h) = OrderedField::half_pos(e, pe);
+    let he: (h + h ≈ e) = OrderedField::half_add(e);
+    let mo = hf(h, ph);
+    let n = OrderedField::archimedean_mul(b + K.inv(a), OrderedField::half(mo.witness), OrderedField::half_pos(mo.witness, mo.proof.left));
+    let da: Within(<=, a, a, b) = And(StrictOrder::le_refl(a), ab);
+    let db: Within(<=, a, b, b) = And(ab, StrictOrder::le_refl(b));
+    let walk = UnifContOn::ivt_steps(a, b, f, e, h, mo.witness, ph, he, mo.proof.left, mo.proof.right, db, fb, n.witness);
+    walk(a, da, linarith(fa, ph), n.proof)
+}
+
+// ---------------------------------------------------------------------------
+// The exact intermediate value theorem, for a strictly increasing function.
+//
+// A bisection like supremum.hthr's: stage `n` is `[l, r]` inside `[a, b]`
+// with `f(l) <= 0 <= f(r)`, `l < r` and width `cⁿ·w`. One step cuts at
+// `l + d < r - d` with `d = t·(r - l)`; `f` is strictly increasing, so
+// `f(l + d) < f(r - d)`, and cotransitivity places `0` against them: keep
+// `[l + d, r]` when `f(l + d) < 0`, `[l, r - d]` when `0 < f(r - d)`. No
+// nesting is needed: any stage's lower end is below any stage's upper end,
+// since `f(r') < f(l)` would put `f(l) <= 0 <= f(r')` out of order.
+
+// Strictly increasing on a domain.
+fn StrictMonoOn(D: K → Type, f: K → K) → Type { (x, y: K) → D(x) → D(y) → x < y → f(x) < f(y) }
+
+// Stage `n` of the root bisection at rate `c` from width `w`.
+fn RootStage(a, b: K, f: K → K, c, w: K, n: Nat, l, r: K) → Type {
+    (Within(<=, a, l, b) ∧ Within(<=, a, r, b)) ∧
+        ((f(l) <= K.unit ∧ K.unit <= f(r)) ∧ (l < r ∧ r + K.inv(l) ≈ OrderedField::npow(c, n) * w))
+}
+
+// Any stage's lower end is below any stage's upper end.
+theorem RootStage::le(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), c, w: K, m, n: Nat, l, r, l2, r2: K,
+    hm: RootStage(a, b, f, c, w, m, l, r), hn: RootStage(a, b, f, c, w, n, l2, r2)): l <= r2
+{
+    K.le_of_not_lt(l, r2, λ back => {
+        let lt: (f(r2) < f(l)) = inc(r2, l, hn.left.right, hm.left.left, back);
+        let fl: (f(l) <= K.unit) = hm.right.left.left;
+        let fr: (K.unit <= f(r2)) = hn.right.left.right;
+        K.lt_irrefl(f(l), linarith(lt, fl, fr))
+    })
+}
+
+// One step: either way the width falls by `1 - t`.
+theorem RootStage::step(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r: K, h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r)):
+    ∃ l2: K, ∃ r2: K, RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Succ(n), l2, r2)
+{
+    let c = K.multiplicative.unit + K.inv(t);
+    let d = t * (r + K.inv(l));
+    let dl: Within(<=, a, l, b) = h.left.left;
+    let dr: Within(<=, a, r, b) = h.left.right;
+    let al: (a <= l) = dl.left;
+    let rb: (r <= b) = dr.right;
+    let lr: (l < r) = h.right.right.left;
+    let pw: (K.unit < r + K.inv(l)) = linarith(lr);
+    let pd: (K.unit < d) = OrderedSemiring::mul_pos(t, r + K.inv(l), ht, pw);
+    let p2: (K.unit < K.multiplicative.unit + K.inv(t + t)) = linarith(ht2);
+    let gap: (K.unit < (r + K.inv(l)) * (K.multiplicative.unit + K.inv(t + t))) =
+        OrderedSemiring::mul_pos(r + K.inv(l), K.multiplicative.unit + K.inv(t + t), pw, p2);
+    let lt: (l + d < r + K.inv(d)) = linarith(gap);
+    let dl2: Within(<=, a, l + d, b) = And(linarith(al, pd), linarith(lt, pd, rb));
+    let dr2: Within(<=, a, r + K.inv(d), b) = And(linarith(al, lt, pd), linarith(rb, pd));
+    let hw: (r + K.inv(l) ≈ OrderedField::npow(c, n) * w) = h.right.right.right;
+    let hwc: ((r + K.inv(l)) * c ≈ (OrderedField::npow(c, n) * w) * c) =
+        OrderedSemiring::mul_respects(r + K.inv(l), OrderedField::npow(c, n) * w, c, c, hw, K.rel_refl(c));
+    let ps: (OrderedField::npow(c, Succ(n)) * w ≈ (OrderedField::npow(c, n) * c) * w) =
+        OrderedSemiring::mul_respects(OrderedField::npow(c, Succ(n)), OrderedField::npow(c, n) * c, w, w, OrderedField::npow_succ(c, n), K.rel_refl(w));
+    match K.rel_cotrans(f(l + d), f(r + K.inv(d)), K.unit, inc(l + d, r + K.inv(d), dl2, dr2, lt)) {
+        Inl(neg) => {
+            let fl: (f(l + d) <= K.unit) = linarith(neg);
+            let width: (r + K.inv(l + d) ≈ OrderedField::npow(c, Succ(n)) * w) = ring(hwc, ps);
+            Exists(l + d, Exists(r, And(And(dl2, dr), And(And(fl, h.right.left.right), And(linarith(lt, pd), width)))))
+        },
+        Inr(pos) => {
+            let fr: (K.unit <= f(r + K.inv(d))) = linarith(pos);
+            let width: ((r + K.inv(d)) + K.inv(l) ≈ OrderedField::npow(c, Succ(n)) * w) = ring(hwc, ps);
+            Exists(l, Exists(r + K.inv(d), And(And(dl, dr2), And(And(h.right.left.left, fr), And(linarith(lt, pd), width)))))
+        },
+    }
+}
+
+// The stages, by recursion over the cotransitivity disjunction.
+fn RootStage::run(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0), n: Nat) →
+    ∃ l: K, ∃ r: K, RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r)
+{
+    match n {
+        Zero => Exists(l0, Exists(r0, h0)),
+        Succ(m) => {
+            let p = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, m);
+            RootStage::step(a, b, f, inc, t, ht, ht2, w, m, p.witness, p.proof.witness, p.proof.proof)
+        },
+    }
+}
+
+// The stages' lower ends, which converge to the root.
+fn RootStage::lower(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0)) → Nat → K
+{
+    λ (n: Nat) => RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n).witness
+}
+
+// A stage past `N` is narrower than `ε` once `cᴺ <= e2` with `w·e2 <= ε`.
+theorem RootStage::width_close(a, b: K, f: K → K, c, w: K, hc0: K.unit <= c, hc1: c <= K.multiplicative.unit, pw: K.unit <= w,
+    e, e2: K, sb: w * e2 <= e, N: Nat, le: OrderedField::npow(c, N) <= e2, n: Nat, from: Nat::Le(N, n), l, r: K,
+    hn: RootStage(a, b, f, c, w, n, l, r)): r + K.inv(l) <= e
+{
+    let cn = OrderedField::npow(c, n);
+    let at: (cn <= OrderedField::npow(c, N)) = OrderedField::npow_antitone(c, hc0, hc1, N, n, from);
+    let m: (cn * w <= e2 * w) = OrderedSemiring::mul_le_mono_r(cn, e2, w, PseudoOrder::le_trans(cn, OrderedField::npow(c, N), e2, at, le), pw);
+    let hw: (r + K.inv(l) ≈ cn * w) = hn.right.right.right;
+    linarith(m, hw, sb)
+}
+
+// Two lower ends past `N` are within `ε`: each is below the other's upper
+// end, which is within `ε` of it.
+theorem RootStage::cauchy_close(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), c, w: K,
+    hc0: K.unit <= c, hc1: c <= K.multiplicative.unit, pw: K.unit <= w, e, e2: K, sb: w * e2 <= e, N: Nat,
+    le: OrderedField::npow(c, N) <= e2, m, n: Nat, fm: Nat::Le(N, m), fk: Nat::Le(N, n), l, r, l2, r2: K,
+    hm: RootStage(a, b, f, c, w, m, l, r), hn: RootStage(a, b, f, c, w, n, l2, r2)): AbsLe(l + K.inv(l2), e)
+{
+    let wm: (r + K.inv(l) <= e) = RootStage::width_close(a, b, f, c, w, hc0, hc1, pw, e, e2, sb, N, le, m, fm, l, r, hm);
+    let wn: (r2 + K.inv(l2) <= e) = RootStage::width_close(a, b, f, c, w, hc0, hc1, pw, e, e2, sb, N, le, n, fk, l2, r2, hn);
+    let l1: (l <= r2) = RootStage::le(a, b, f, inc, c, w, m, n, l, r, l2, r2, hm, hn);
+    let l2r: (l2 <= r) = RootStage::le(a, b, f, inc, c, w, n, m, l2, r2, l, r, hn, hm);
+    LocatedAddGroup::abs_le_intro(l + K.inv(l2), e, linarith(wm, l2r), linarith(wn, l1))
+}
+
+// The lower ends are Cauchy, with the widths' modulus.
+theorem RootStage::cauchy(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w: K, pw: K.unit <= w, l0, r0: K,
+    h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0)):
+    CauchySeq(RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0))
+{
+    let c = K.multiplicative.unit + K.inv(t);
+    let hc0: (K.unit <= c) = linarith(ht2, ht);
+    let hc1: (c < K.multiplicative.unit) = linarith(ht);
+    let hc1le: (c <= K.multiplicative.unit) = StrictOrder::le_of_lt(c, K.multiplicative.unit, hc1);
+    λ e pe => {
+        let sh = OrderedField::shrink(w, e, pw, pe);
+        let small = OrderedField::npow_small(c, hc0, hc1, sh.witness, sh.proof.left);
+        Exists(small.witness, λ m n fm fk => {
+            let pm = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, m);
+            let pn = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n);
+            RootStage::cauchy_close(a, b, f, inc, c, w, hc0, hc1le, pw, e, sh.witness, sh.proof.right, small.witness,
+                small.proof(small.witness, small.witness.le_refl()), m, n, fm, fk,
+                pm.witness, pm.proof.witness, pn.witness, pn.proof.witness, pm.proof.proof, pn.proof.proof)
+        })
+    }
+}
+
+// A limit of the lower ends is in `[a, b]`: every lower end is.
+theorem RootStage::limit_within(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0), z: K,
+    conv: Converges(RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0), z)): Within(<=, a, z, b)
+{
+    let lo = RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0);
+    And(Converges::le(λ (n: Nat) => a, lo, a, z, Converges::const(a), conv, λ n => {
+            let st = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n);
+            let dl: Within(<=, a, st.witness, b) = st.proof.proof.left.left;
+            dl.left
+        }),
+        Converges::le(lo, λ (n: Nat) => b, z, b, conv, Converges::const(b), λ n => {
+            let st = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n);
+            let dl: Within(<=, a, st.witness, b) = st.proof.proof.left.left;
+            dl.right
+        }))
+}
+
+// At a limit `z` of the lower ends, `f(z) <= 0`: within the modulus at
+// `ε` of a lower end, where `f <= 0`, `f(z) <= ε`.
+theorem RootStage::limit_nonpos(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f),
+    hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0), z: K,
+    conv: Converges(RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0), z), dz: Within(<=, a, z, b)): f(z) <= K.unit
+{
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    OrderedField::le_of_forall_pos(f(z), K.unit, K.multiplicative.unit, StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o), λ e pe => {
+        let mo = hf(e, pe);
+        let p = conv(mo.witness, mo.proof.left);
+        let st = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, p.witness);
+        let near: AbsLe(st.witness + K.inv(z), mo.witness) = p.proof(p.witness, p.witness.le_refl());
+        let r = mo.proof.right(st.witness, z, st.proof.proof.left.left, dz, linarith(near));
+        let up: (f(z) + K.inv(f(st.witness)) <= e) = r.right;
+        let fl: (f(st.witness) <= K.unit) = st.proof.proof.right.left.left;
+        linarith(up, fl)
+    })
+}
+
+// A stage narrower than `δ/2` whose lower end is within `δ/2` of `z` has
+// its upper end, where `f >= 0`, within `δ` of `z`, so `f(z) >= -ε`. Over
+// plain parameters, so the kernel never normalises the witnesses that
+// produce them.
+theorem RootStage::nonneg_close(a, b: K, f: K → K, c, w, e, d, h: K, hh: h + h ≈ d,
+    md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), e),
+    z: K, dz: Within(<=, a, z, b), n: Nat, l, r: K, hn: RootStage(a, b, f, c, w, n, l, r), narrow: r + K.inv(l) <= h,
+    near: AbsLe(l + K.inv(z), h)): K.inv(f(z)) <= K.unit + e * K.multiplicative.unit
+{
+    let lr: (l < r) = hn.right.right.left;
+    let rz = md(z, r, dz, hn.left.right, linarith(narrow, near, hh, lr));
+    let lo: (K.inv(e) <= f(r) + K.inv(f(z))) = rz.left;
+    let fr: (K.unit <= f(r)) = hn.right.left.right;
+    linarith(lo, fr)
+}
+
+// At a limit `z` of the lower ends, `0 <= f(z)`: a late stage's upper end,
+// where `f >= 0`, is within the modulus at `ε` of `z`.
+theorem RootStage::limit_nonneg(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f),
+    hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w: K, pw: K.unit <= w, l0, r0: K,
+    h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0), z: K,
+    conv: Converges(RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0), z), dz: Within(<=, a, z, b)): K.unit <= f(z)
+{
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let c = K.multiplicative.unit + K.inv(t);
+    let hc0: (K.unit <= c) = linarith(ht2, ht);
+    let hc1: (c < K.multiplicative.unit) = linarith(ht);
+    let hc1le: (c <= K.multiplicative.unit) = StrictOrder::le_of_lt(c, K.multiplicative.unit, hc1);
+    let back: (K.inv(f(z)) <= K.unit) = OrderedField::le_of_forall_pos(K.inv(f(z)), K.unit, K.multiplicative.unit,
+        StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o), λ e pe => {
+        let mo = hf(e, pe);
+        let h = OrderedField::half(mo.witness);
+        let ph: (K.unit < h) = OrderedField::half_pos(mo.witness, mo.proof.left);
+        let p = conv(h, ph);
+        let sh = OrderedField::shrink(w, h, pw, ph);
+        let small = OrderedField::npow_small(c, hc0, hc1, sh.witness, sh.proof.left);
+        let n = p.witness.max(small.witness);
+        let st = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n);
+        let narrow: (st.proof.witness + K.inv(st.witness) <= h) = RootStage::width_close(a, b, f, c, w, hc0, hc1le, pw, h, sh.witness,
+            sh.proof.right, small.witness, small.proof(small.witness, small.witness.le_refl()), n, p.witness.le_max_r(small.witness),
+            st.witness, st.proof.witness, st.proof.proof);
+        RootStage::nonneg_close(a, b, f, c, w, e, mo.witness, h, OrderedField::half_add(mo.witness), mo.proof.right, z, dz, n,
+            st.witness, st.proof.witness, st.proof.proof, narrow, p.proof(n, p.witness.le_max_l(small.witness)))
+    });
+    linarith(back)
+}
+
+// The first stage is `[a, b]` itself, with width `w = b - a`.
+theorem RootStage::start(a, b: K, f: K → K, c: K, ab: a < b, fa: f(a) <= K.unit, fb: K.unit <= f(b)):
+    RootStage(a, b, f, c, b + K.inv(a), Zero, a, b)
+{
+    let w = b + K.inv(a);
+    let z: (OrderedField::npow(c, Zero) * w ≈ K.multiplicative.unit * w) =
+        OrderedSemiring::mul_respects(OrderedField::npow(c, Zero), K.multiplicative.unit, w, w, OrderedField::npow_zero(c), K.rel_refl(w));
+    let w0: (w ≈ OrderedField::npow(c, Zero) * w) = ring(z);
+    let le: (a <= b) = StrictOrder::le_of_lt(a, b, ab);
+    And(And(And(StrictOrder::le_refl(a), le), And(le, StrictOrder::le_refl(b))), And(And(fa, fb), And(ab, w0)))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// The supremum, in an order-complete field.
+
+section<K: OrderComplete(≈, <, <=, +, *)> {
+
+// A uniformly continuous function on a closed interval has a supremum
+// there: the image is inhabited, bounded and upper located.
+theorem UnifContOn::sup(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f)):
+    ∃ s: K, IsSup(λ (y: K) => ImageOn(λ (x: K) => Within(<=, a, x, b), f, y), s)
+{
+    let inh = UnifContOn::image_inhabited(a, b, ab, f);
+    let bdd = UnifContOn::image_bounded(a, b, ab, f, hf);
+    let loc = UnifContOn::located(a, b, ab, f, hf);
+    Exists(OrderComplete::sup(λ (y: K) => ImageOn(λ (x: K) => Within(<=, a, x, b), f, y), inh, bdd, loc),
+        OrderComplete::is_sup(λ (y: K) => ImageOn(λ (x: K) => Within(<=, a, x, b), f, y), inh, bdd, loc))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// The exact root, in a Cauchy-complete field.
+
+section<K: CauchyComplete(≈, <, <=, +, *)> {
+
+// The intermediate value theorem for a strictly increasing, uniformly
+// continuous function with `f(a) <= 0 <= f(b)` on `a < b`: a root in
+// `[a, b]`, the limit of the bisection's lower ends.
+theorem UnifContOn::ivt(a, b: K, ab: a < b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f),
+    inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), fa: f(a) <= K.unit, fb: K.unit <= f(b)):
+    ∃ z: K, Within(<=, a, z, b) ∧ f(z) ≈ K.unit
+{
+    let q = Bisection::quarter(a);
+    let t = q.witness;
+    let c = K.multiplicative.unit + K.inv(t);
+    let w = b + K.inv(a);
+    let pw: (K.unit <= w) = linarith(ab);
+    let h0: RootStage(a, b, f, c, w, Zero, a, b) = RootStage::start(a, b, f, c, ab, fa, fb);
+    let cs = RootStage::cauchy(a, b, f, inc, t, q.proof.left, q.proof.right, w, pw, a, b, h0);
+    let lo = RootStage::lower(a, b, f, inc, t, q.proof.left, q.proof.right, w, a, b, h0);
+    let z = CauchyComplete::limit(lo, cs);
+    let conv: Converges(lo, z) = CauchyComplete::converges(lo, cs);
+    let dz: Within(<=, a, z, b) = RootStage::limit_within(a, b, f, inc, t, q.proof.left, q.proof.right, w, a, b, h0, z, conv);
+    let np: (f(z) <= K.unit) = RootStage::limit_nonpos(a, b, f, inc, hf, t, q.proof.left, q.proof.right, w, a, b, h0, z, conv, dz);
+    let nn: (K.unit <= f(z)) = RootStage::limit_nonneg(a, b, f, inc, hf, t, q.proof.left, q.proof.right, w, pw, a, b, h0, z, conv, dz);
+    Exists(z, And(dz, StrictOrder::le_antisymm(f(z), K.unit, np, nn)))
+}
+
+}

@@ -1,0 +1,91 @@
+// Probes of `lib/std/analysis/closed_interval.hthr`: `x² - c` on `[0, b]`
+// over any ordered field (Lipschitz, so uniformly continuous, and strictly
+// increasing), read at the reals as the existence of `√2` and a supremum of
+// the identity on `[0, 1]`, and at the rationals as the approximate
+// intermediate value theorem, which needs no completeness, beside the exact
+// one, refused there. Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import list; import relation; import relation_props; import order; import algebra_rel;
+import semiring; import ordered_field; import big_operator; import ring; import omega; import linarith;
+import rat; import creal; import real_fn; import sequence; import supremum; import real_complete; import closed_interval;
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+// `x² - c` on `[0, b]` is Lipschitz with constant `2b`:
+// `y² - x² = (y + x)(y - x)` and `|y + x| <= 2b`.
+theorem sq_lipschitz(b, c: K, pb: K.unit <= b):
+    LipschitzOn(λ (x: K) => Within(<=, K.unit, x, b), λ (x: K) => x * x + K.inv(c), b + b)
+{
+    And(linarith(pb), λ x y h dx dy hxy => {
+        let s: AbsLe(y + x, b + b) = linarith(dx, dy);
+        let m = OrderedField::abs_le_mul(y + x, y + K.inv(x), b + b, h, s, hxy);
+        LocatedAddGroup::abs_le_weaken((y + x) * (y + K.inv(x)), (y * y + K.inv(c)) + K.inv(x * x + K.inv(c)), (b + b) * h, (b + b) * h,
+            m, ring, StrictOrder::le_refl((b + b) * h))
+    })
+}
+
+theorem sq_cont(b, c: K, pb: K.unit <= b): UnifContOn(λ (x: K) => Within(<=, K.unit, x, b), λ (x: K) => x * x + K.inv(c)) {
+    LipschitzOn::unif_cont(λ (x: K) => Within(<=, K.unit, x, b), λ (x: K) => x * x + K.inv(c), b + b, sq_lipschitz(b, c, pb))
+}
+
+// Strictly increasing on `[0, b]`: `y² - x² = (y - x)² + 2x(y - x)`.
+theorem sq_mono(b, c: K): StrictMonoOn(λ (x: K) => Within(<=, K.unit, x, b), λ (x: K) => x * x + K.inv(c)) {
+    λ x y dx dy xy => {
+        let x0: (K.unit <= x) = dx.left;
+        let p1: (K.unit <= x * (y + K.inv(x))) = OrderedSemiring::mul_nonneg(x, y + K.inv(x), x0, linarith(xy));
+        let p2: (K.unit < (y + K.inv(x)) * (y + K.inv(x))) = OrderedSemiring::mul_pos(y + K.inv(x), y + K.inv(x), linarith(xy), linarith(xy));
+        let sq: (x * x < y * y) = linarith(p1, p2);
+        let lt: (x * x + K.inv(c) < y * y + K.inv(c)) = linarith(sq);
+        lt
+    }
+}
+
+// The identity on `[a, b]` takes `b`, and `b` bounds it.
+theorem id_sup(a, b: K, ab: a <= b): IsSup(λ (y: K) => ImageOn(λ (x: K) => Within(<=, a, x, b), λ (x: K) => x, y), b) {
+    And(λ y sy => {
+        let ex: ImageOn(λ (x: K) => Within(<=, a, x, b), λ (x: K) => x, y) = sy;
+        let dx: Within(<=, a, ex.witness, b) = ex.proof.left;
+        let eq: (ex.witness ≈ y) = ex.proof.right;
+        linarith(dx, eq)
+    }, λ e pe => Exists(b, And(Exists(b, And(And(ab, StrictOrder::le_refl(b)), K.rel_refl(b))), linarith(pe))))
+}
+
+}
+
+// `√2` exists at the reals: `x² - 2` changes sign on `[0, 2]`.
+theorem creal_sqrt_two(x: CReal): ∃ z: CReal, Within(<=, 0, z, 2) ∧ z * z + -2 ≈ 0 {
+    let pb: CReal::Le(0, 2) = linarith;
+    let fa: CReal::Le(0 * 0 + -2, 0) = linarith;
+    let fb: CReal::Le(0, 2 * 2 + -2) = linarith;
+    UnifContOn::ivt(0, 2, linarith, λ (y: CReal) => y * y + -2, sq_cont(2, 2, pb), sq_mono(2, 2), fa, fb)
+}
+
+// The supremum of the identity on `[0, 1]`, found by the capability, is `1`.
+theorem creal_id_sup(x: CReal): ∃ s: CReal, IsSup(λ (y: CReal) => ImageOn(λ (z: CReal) => Within(<=, 0, z, 1), λ (z: CReal) => z, y), s) ∧ s ≈ 1 {
+    let le: CReal::Le(0, 1) = linarith;
+    let id_cont: UnifContOn(λ (z: CReal) => Within(<=, 0, z, 1), λ (z: CReal) => z) =
+        LipschitzOn::unif_cont(λ (z: CReal) => Within(<=, 0, z, 1), λ (z: CReal) => z, 1, And(le, λ a b h da db hab =>
+            LocatedAddGroup::abs_le_weaken(b - a, b - a, h, 1 * h, hab, CReal::same_refl(b - a), linarith)));
+    let s = UnifContOn::sup(0, 1, le, λ (z: CReal) => z, id_cont);
+    Exists(s.witness, And(s.proof, IsSup::unique(λ (y: CReal) => ImageOn(λ (z: CReal) => Within(<=, 0, z, 1), λ (z: CReal) => z, y),
+        s.witness, 1, s.proof, id_sup(0, 1, le))))
+}
+
+// The rationals have points where `x² - 2` is within any `ε` of `0`: the
+// approximate theorem spends no completeness.
+theorem rat_sqrt_two_approx(e: Rat, pe: 0 < e): ∃ z: Rat, Within(<=, 0, z, 2) ∧ AbsLe(z * z + -2, e) {
+    let pb: Rat::Le(0, 2) = linarith;
+    let fa: Rat::Le(0 * 0 + -2, 0) = linarith;
+    let fb: Rat::Le(0, 2 * 2 + -2) = linarith;
+    UnifContOn::ivt_approx(0, 2, pb, λ (y: Rat) => y * y + -2, sq_cont(2, 2, pb), fa, fb, e, pe)
+}
+
+// The exact theorem needs a Cauchy-complete field, which the rationals are
+// not.
+// expect-error: no instance for `CauchyComplete
+theorem rat_sqrt_two_refused(x: Rat): ∃ z: Rat, Within(<=, 0, z, 2) ∧ z * z + -2 ≈ 0 {
+    let pb: Rat::Le(0, 2) = linarith;
+    let fa: Rat::Le(0 * 0 + -2, 0) = linarith;
+    let fb: Rat::Le(0, 2 * 2 + -2) = linarith;
+    UnifContOn::ivt(0, 2, linarith, λ (y: Rat) => y * y + -2, sq_cont(2, 2, pb), sq_mono(2, 2), fa, fb)
+}

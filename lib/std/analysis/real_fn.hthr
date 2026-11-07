@@ -40,7 +40,8 @@
 // The product and chain rules take bounds on the functions and derivatives
 // involved as hypotheses rather than deriving them: on an unbounded domain
 // they need not exist, and on a closed interval they are a separate theorem
-// (a uniformly continuous function on a compact set is bounded).
+// (a uniformly continuous function on a closed interval is bounded,
+// `UnifContOn::bounded` in closed_interval.hthr).
 //
 // The bound lemmas at the top (`OrderedField::half`, `below_both`, `shrink`,
 // `LocatedAddGroup::abs_le_mul`, …) are facts about an ordered field and

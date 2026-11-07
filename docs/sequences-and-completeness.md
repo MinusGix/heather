@@ -145,10 +145,10 @@ How they connect:
   `l·l ≈ 2` (`Converges::mul`, `Converges::le` against `root_floor_spec`),
   and `num² = 2·den²` has no solution with `den > 0`. That last fact is
   descent over `Nat`, and the parity lemmas are in `nat.hthr`.
-- **Consumers of located suprema**: the supremum of a uniformly continuous
-  function on a closed interval, which would make `BoundedOn` a theorem
-  there, and the intermediate value theorem with a located sign change
-  ([located-sup-consumers](../issues/located-sup-consumers.md)).
+- **The exact intermediate value theorem for a locally non-constant
+  function**, the general constructive form, beside the strictly increasing
+  one §5 proves
+  ([ivt-locally-nonconstant](../issues/ivt-locally-nonconstant.md)).
 - **Series**: partial sums, `Summable`, the geometric series and comparison
   with a tail modulus. These come before
   [power-series-evaluation](../issues/power-series-evaluation.md), and the
@@ -228,3 +228,71 @@ Proof-engineering notes:
   ([merged-call-through-upcast-panics](../issues/merged-call-through-upcast-panics.md)).
   Bind the result with `let` and apply it.
 
+## 5. Functions on a closed interval
+
+`lib/std/analysis/closed_interval.hthr` (issue
+[located-sup-consumers](../issues/located-sup-consumers.md)), the consumers
+§4 named. The interval is `I = λ x => Within(<=, a, x, b)` with `a <= b`,
+and `f` is `UnifContOn(I, f)` (real_fn.hthr).
+
+**One walk.** Every proof here walks from a point `x` of the interval
+towards `b`. Cotransitivity places the length `b - x` left against
+`δ/2 < δ`, `δ` the modulus at the `ε` the proof chose. Below `δ`, every
+point of `[x, b]` is within `δ` of `x`, so `x` speaks for the rest of the
+interval; above `δ/2`, the walk steps to `x + δ/2`, which is still inside
+(`Within::step`). The Archimedean property bounds the number of steps
+(`OrderedField::archimedean_mul` at `b - a`), and the walk is an induction
+on it. So there is no grid and no floor placing a point on it: where a proof
+needs to know whether a point `y` lies before or after the step, the goal is
+a `≤`, which `StrictOrder::le_by_cases` splits on without a decision. The
+issue had sketched a grid with a covering lemma; the walk is that grid read
+one point at a time, and the covering lemma becomes the `≤` split.
+
+- **Bounded** (`UnifContOn::bounded`). The walk at `ε = 1`
+  (`UnifContOn::steps`, over any convex domain) puts every `f(x)` within
+  `n + 1` of `f(a)`, and `|f(a)| <= f(a)² + 1`. This is the bound the product
+  and chain rules of real_fn.hthr take as a hypothesis.
+- **The image is upper located** (`UnifContOn::located`), as the set
+  `ImageOn(I, f, y)`: some `x ∈ I` has `f(x) ≈ y`. For `p < q` with
+  `h = (q - p)/2`, cotransitivity at each point of the walk says `p < f(x)`,
+  an element of the image above `p` that stops the walk, or `f(x) < p + h`,
+  which bounds `f` by `q` within `δ` of `x` (`UnifContOn::located_steps`).
+- **The supremum** (`UnifContOn::sup`): in an `OrderComplete` field the
+  image, inhabited and bounded, has one, with its approximation as data. A
+  maximum, a point where `f` attains it, is not claimed: constructively it
+  exists only under further hypotheses.
+- **The approximate intermediate value theorem** (`UnifContOn::ivt_approx`).
+  With `f(a) <= 0 <= f(b)`, every `ε > 0` has a point of `I` with
+  `|f(x)| <= ε`. The walk keeps `f(x) <= ε/2`, and cotransitivity at each
+  point says `-ε < f(x)` (so `|f(x)| <= ε`, found) or `f(x) < -ε/2`, and then
+  `f` at the next point is `<= 0`. The walk cannot end that way, since within
+  `δ` of `b` the second case would put `f(b) < 0`. It spends no completeness:
+  the probe `rat_sqrt_two_approx` reads it at `Rat`.
+
+**The exact theorem, and its hypothesis.** An exact root needs more than
+continuity constructively: for a function that lingers at `0` the root
+depends on the sign of an undecided real. The round names *strictly
+increasing* first (`StrictMonoOn(I, f)`: `x < y` gives `f(x) < f(y)`), the
+textbook constructive form, and proves `UnifContOn::ivt` in a
+`CauchyComplete` field for `a < b`. It is a bisection like §4's: stage `n`
+(`RootStage`) is `[l, r] ⊆ [a, b]` with `f(l) <= 0 <= f(r)`, `l < r` and
+width `cⁿ·w`. One step cuts at `l + d < r - d` (`d = t·(r - l)`, `t = 1/4`),
+where `f(l + d) < f(r - d)`, and cotransitivity places `0` between them:
+keep `[l + d, r]` or `[l, r - d]`. Strictness also gives the nesting §4 got
+from its witnesses: `f(r') < f(l)` would put `f(l) <= 0 <= f(r')` out of
+order, so every lower end is below every upper end (`RootStage::le`) and the
+lower ends are Cauchy. Their limit `z` is in `[a, b]`, and continuity at a
+late stage gives `f(z) <= ε` from the lower end and `f(z) >= -ε` from the
+upper one. The probe `creal_sqrt_two` finds `√2` this way; at `Rat` the same
+call is refused for want of the `CauchyComplete` instance
+(`rat_sqrt_two_refused`).
+
+The general form, for a *locally non-constant* function (every interval has
+a point where `f` is apart from any given value), and a root in an
+`OrderComplete` field as an infimum, are left to
+[ivt-locally-nonconstant](../issues/ivt-locally-nonconstant.md).
+
+Proof-engineering note: `RootStage::limit_nonneg` first stated the final
+estimate inline, and its kernel check was an order of magnitude past the
+rest of the module; the estimate moved into `RootStage::nonneg_close`, over
+plain parameters, as §4's `*_close` lemmas did.
