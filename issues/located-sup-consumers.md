@@ -1,6 +1,6 @@
 ---
 title: Use located suprema for extrema of uniformly continuous functions and the IVT
-status: open
+status: closed
 labels: [stdlib,mathematics,reals,order]
 area: mathematics
 milestone: [math-reals]
@@ -36,3 +36,13 @@ docs/sequences-and-completeness.md §3, §4.
 ## Log
 
 - 2026-11-07: Filed from the located-suprema round.
+- 2026-11-07: Done in lib/std/analysis/closed_interval.hthr
+  (docs/sequences-and-completeness.md §5). One walk from `a` towards `b`,
+  stepping `δ/2` while cotransitivity says `b - x > δ/2`, replaces the grid
+  and its covering lemma; a point before or after a step is split by
+  `StrictOrder::le_by_cases`, since the goals are `≤`. `UnifContOn::bounded`,
+  `::located` (the image as `ImageOn`), `::sup` (OrderComplete),
+  `::ivt_approx` (no completeness, read at `Rat`). The exact theorem names
+  strict increase first (`StrictMonoOn`, `UnifContOn::ivt`, a bisection in a
+  CauchyComplete field; `√2` at CReal in the probes). The locally
+  non-constant form is [[ivt-locally-nonconstant]].
