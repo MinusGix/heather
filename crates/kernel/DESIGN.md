@@ -594,8 +594,10 @@ predecessor), and `term::spine_child` names it. Past `SPINE_ITERATE_AT`
 frames, the bounds cache warms the spine bottom-up and substitution
 rebuilds it in a loop over a heap path; the checker and conversion queue
 the premise they meet that deep instead of descending (premises of a yes/no
-judgment are a conjunction, so their order is free), and the frame that
-returns to depth zero judges the queue before it answers. A speculative
+judgment are a conjunction), with every later premise of the same context
+queued behind it, and the frame that returns to depth zero judges the queue
+as a stack in the recursive walk's own order (order changes no verdict, but
+a conjunction stops at its first failure, so it changes the cost). A speculative
 δ-attempt drains its own queued premises before it counts as a success and
 drops them when it fails; a `true` recorded while premises are queued is
 memoized provisionally and taken back with them (conversion), and a refused

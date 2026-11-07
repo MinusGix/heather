@@ -85,13 +85,28 @@ is discounted when counting sharers).
 ### 3.3 Typing (`typing.rs`)
 
 The checker answers yes or no, and a rule's premises are a conjunction, so
-the order they are judged in is free. A `tm_check` met
-[`SPINE_ITERATE_AT`] open checks deep is not descended into: it is pushed on
-`Tc::deferred` with its environment and expected type, and counted as
-passing for now. The outermost check (depth zero) drains the queue before
-it answers: it pops each item and judges it from depth one, and an item may
-queue more, which the same loop takes. A long list's spine is therefore
-checked as a sequence of 128-deep slices, at constant native depth.
+the verdict does not depend on the order they are judged in. A `tm_check`
+met [`SPINE_ITERATE_AT`] open checks deep is not descended into: it is
+pushed on `Tc::deferred` with its environment and expected type, and
+counted as passing for now. The outermost check (depth zero) drains the
+queue before it answers: it pops each item and judges it from depth one,
+and an item may queue more, which the same loop takes. A long list's spine
+is therefore checked as a sequence of 128-deep slices, at constant native
+depth.
+
+**Order.** The verdict is order-free, the *cost* is not: a conjunction
+stops at its first failure, so judging an expensive premise before a cheap
+failing one can turn a refusal into running out of fuel. The first version
+queued only the deep premise and went on with its ancestors' later
+siblings at once, and the library gate caught exactly that (an expected
+`NotConvertible` in `rt_loop_tests` became `OutOfFuel`). So once anything
+is queued in a context — the root check, or one popped check being judged —
+every later check in that context is queued too (`defer_floor` is the
+queue's length when the context began), and the queue is a stack in walk
+order: when a popped check finishes, the checks it queued are reversed onto
+the top, so its first premise is judged next, before its later siblings.
+The premises are judged in exactly the recursive walk's order; only the
+native frames are gone.
 
 What keeps this sound:
 
@@ -116,6 +131,11 @@ threshold (after the identity and memo shortcuts, which answer without
 descending) queues the comparison on `Conv::deferred`. Three points needed
 care:
 
+- **Order** is kept exactly as in §3.3: `Conv::defer_floor` marks the
+  context (the root, a popped comparison, a δ-attempt), every comparison
+  after the first queued one in it is queued too (the Nat tail loop
+  included), and the drain reverses each finished comparison's own queued
+  premises onto the top of the stack.
 - **Settling.** Every frame that returns the depth to zero — `Conv::tm`,
   `Conv::ty`, and the Nat tail loop `tm_nat_tail`, the only three that take
   a depth slot — drains the queue after success and drops it after a

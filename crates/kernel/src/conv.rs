@@ -895,6 +895,16 @@ struct Conv<'v, D: Dom<'v>> {
     defer_base: u32,
     /// Whether a drain at depth zero is running ([`Conv::settle_at_top`]).
     draining_at_top: bool,
+    /// The queue's length when the current context began — the root, a
+    /// popped comparison being judged, or a δ-attempt. Once anything is
+    /// queued past it, every later comparison in the context is queued too,
+    /// so the queue holds them in the order they were met, and the drain
+    /// judges each one's own queued premises before the next: the order is
+    /// the recursive walk's exactly (docs/deep-term-walks-design.md §3.4).
+    /// The order matters to the cost: a conjunction stops at its first
+    /// failure, and judging a cheap failing premise after an expensive one
+    /// can turn a refusal into running out of fuel.
+    defer_floor: usize,
     _dom: PhantomData<(&'v (), D)>,
 }
 
@@ -904,7 +914,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // the same δ stage (`reduce::Defs::sealed_body`).
         let has_defs = !psi.sealed.is_empty()
             || psi.bindings.iter().any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, deferred: Vec::new(), deferred_pushed: 0, provisional: Vec::new(), attempts_open: 0, defer_base: 0, draining_at_top: false, _dom: PhantomData }
+        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, deferred: Vec::new(), deferred_pushed: 0, provisional: Vec::new(), attempts_open: 0, defer_base: 0, draining_at_top: false, defer_floor: 0, _dom: PhantomData }
     }
 
     fn spend(&mut self) -> R {
@@ -956,9 +966,11 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // fails ([`Conv::deferred`]).
         let mark = self.deferred.len();
         let provisional = self.provisional.len();
+        let floor = std::mem::replace(&mut self.defer_floor, mark);
         self.attempts_open += 1;
         let tried = attempt(self).and_then(|v| self.drain_deferred(mark).map(|()| v));
         self.attempts_open -= 1;
+        self.defer_floor = floor;
         if tried.is_err() {
             self.deferred.truncate(mark);
             self.take_back_provisional(provisional);
@@ -1000,15 +1012,24 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         let base = std::mem::replace(&mut self.defer_base, self.depth);
         let at_top = self.draining_at_top;
         self.draining_at_top = at_top || self.depth == 0;
+        let floor = self.defer_floor;
         let mut verdict = Ok(());
+        // A stack in walk order: each comparison's own queued premises are
+        // reversed onto the top as it finishes, so the first of them is
+        // popped next, ahead of its later siblings.
+        self.deferred[mark..].reverse();
         while self.deferred.len() > mark {
             let (env, a, b, ty, l) = self.deferred.pop().expect("longer than the mark");
+            let start = self.deferred.len();
+            self.defer_floor = start;
             if let Err(e) = self.tm(&env, &a, &b, &ty, &l) {
                 self.deferred.truncate(mark);
                 verdict = Err(e);
                 break;
             }
+            self.deferred[start..].reverse();
         }
+        self.defer_floor = floor;
         self.defer_base = base;
         self.draining_at_top = at_top;
         verdict
@@ -1593,7 +1614,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 return if verdict { Ok(()) } else { Err(ConvError::NotConvertible) };
             }
         }
-        if self.depth >= self.defer_base + crate::term::SPINE_ITERATE_AT {
+        if self.depth >= self.defer_base + crate::term::SPINE_ITERATE_AT || self.deferred.len() > self.defer_floor {
             return self.defer_tm(env, a, b, ty, l);
         }
         let pushed = self.deferred_pushed;
@@ -1819,6 +1840,12 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     if let Some(&verdict) = self.memo.get(key) {
                         return if verdict { Ok(()) } else { Err(NC) };
                     }
+                }
+                // Something earlier in this context was queued: the
+                // residual comparison waits its turn behind it.
+                if self.deferred.len() > self.defer_floor {
+                    let ty = D::nat(env);
+                    return self.defer_tm(env, &a, &b, &ty, &Level::Zero);
                 }
                 if !entered {
                     self.descend()?;
