@@ -257,6 +257,11 @@ inductive Op {
     ConsLine(cap: Nat),
     // `w.toNat()` of a 64-bit word: a loop's fuel, held in the word itself.
     ToNat,
+    // `x.truncate(n, extra)` of a `BitVec(extra + n)`: its low `n` bits.
+    Trunc(n: Nat, extra: Nat),
+    // `x.shift_left(k)`, `x.shift_right(k)` and `x.arithmetic_shift_right(k)`
+    // of a `BitVec(w)`, by a literal count.
+    Shl(w: Nat, k: Nat), Lshr(w: Nat, k: Nat), Ashr(w: Nat, k: Nat),
 }
 
 fn Op::params(self o: Op) → List<Ty> {
@@ -269,6 +274,8 @@ fn Op::params(self o: Op) → List<Ty> {
         Get(c) => [Bytes(c), Word(64)], Set(c) => [Bytes(c), Word(64), Word(8)],
         ConsLine(c) => [Bytes(c), Lines],
         ToNat => [Word(64)],
+        Trunc(n, extra) => [Word(extra + n)],
+        Shl(w, _) => [Word(w)], Lshr(w, _) => [Word(w)], Ashr(w, _) => [Word(w)],
     }
 }
 
@@ -281,6 +288,8 @@ fn Op::result(self o: Op) → Ty {
         Get(_) => Word(8), Set(c) => Bytes(c),
         ConsLine(_) => Lines,
         ToNat => Count,
+        Trunc(n, _) => Word(n),
+        Shl(w, _) => Word(w), Lshr(w, _) => Word(w), Ashr(w, _) => Word(w),
     }
 }
 
@@ -302,6 +311,10 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Set(_) => λ (xs: List<BitVec(8)>) (i: BitVec(64)) (v: BitVec(8)) => xs.with_byte(i, v),
         ConsLine(_) => λ (x: List<BitVec(8)>) (xs: List<List<BitVec(8)>>) => Cons(x, xs),
         ToNat => λ (x: BitVec(64)) => x.toNat(),
+        Trunc(n, extra) => λ (x: BitVec(extra + n)) => x.truncate(n, extra),
+        Shl(w, k) => λ (x: BitVec(w)) => x.shift_left(k),
+        Lshr(w, k) => λ (x: BitVec(w)) => x.shift_right(k),
+        Ashr(w, k) => λ (x: BitVec(w)) => x.arithmetic_shift_right(k),
     }
 }
 
@@ -533,6 +546,8 @@ fn Op::code(self o: Op) → Pair<Nat, Pair<Nat, Nat>> {
         Get(c) => Pair(12, Pair(c, 0)), Set(c) => Pair(13, Pair(c, 0)),
         ConsLine(c) => Pair(14, Pair(c, 0)),
         ToNat => Pair(15, Pair(0, 0)),
+        Trunc(n, extra) => Pair(16, Pair(n, extra)),
+        Shl(w, k) => Pair(17, Pair(w, k)), Lshr(w, k) => Pair(18, Pair(w, k)), Ashr(w, k) => Pair(19, Pair(w, k)),
     }
 }
 

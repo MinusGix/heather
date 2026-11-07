@@ -1309,3 +1309,48 @@ lowering, and a `decreases` measure that is not a word's `toNat` (a count
 parameter matched below the top is refused by the reflector today). The generator's cost grows with the functions a
 program links ([[runtime-generator-link-cost]]): `loop_anywhere` was cut to
 five functions to stay well inside the native gate's rail.
+
+### 16.12 R5b round 4: widths and shifts (2026-11-07)
+
+The word half of §7.1's primitive table is now in `Tm::lower_sound`:
+`zero_extend`, `truncate` and the three shifts by a literal count. The byte
+half (`Get`, `Set`, `Fold`) is left for the buffer round below. What the
+round settled:
+
+- **One node resizes both ways.** FunctionIR gains `Resize(from, to,
+  output, source)`, whose value at every width is
+  `BitVec::ofNat(values(from, source).toNat())`. At the output's width that
+  is the zero extension when `to` is wider and the low bits when it is
+  narrower (`BitVec::ofNat_toNat_zero_extend` and `_truncate`, by
+  `ofNat_toNat`'s recursion on the width), so one equation covers both, and
+  no case of the theorem compares two widths. A `Move` at the wider width
+  could not do it: it reads the source *at* that width, which is unrelated
+  to the source's value at its own (the negative control in
+  `rt_lower_tests`, `wrong_zext_node_sound`, is exactly that lowering, and
+  the kernel refuses its proof).
+- **`rt` gains `Trunc(n, extra)` and `Shl`/`Lshr`/`Ashr(w, k)`.** A shift's
+  count is part of the op, as FunctionIR's shift count is an immediate. The
+  three shifts lower to FunctionIR's existing shift nodes and are proved by
+  one lemma (`Tm::word1_node_sound`); `Zext` and `Trunc` lower to a `Resize`
+  and are proved by `Tm::resize_node_sound`, whose only premise per op is
+  that op's `ofNat ∘ toNat` law.
+- **The reflector reads them, `<<` included**, and a width written as a sum
+  (`zero_extend`'s `BitVec(extra + n)` as the type of a later operand) is
+  read as its numeral by peeling successors off its head normal forms
+  (`rt_number`). Before, `x.truncate(8, 56).zero_extend(56).add(x)` failed
+  with "expected a numeral" on the `add`'s operand type.
+- **No back end emits `Resize` or a shift yet.** S4 refuses both (it keeps
+  only 64- and 1-bit values in registers, and shifts wait on
+  `function-ir-x86-shift-legalization`), and the memory-resident leaf
+  compiler treats `Resize` as never wide, so a program using them gets a
+  refusal from `compile-x86`, not wrong code. The theorem is about the
+  lowering, so this does not hold the case back.
+
+Left for N1: the byte primitives and `Fold`. `StructuredRegion::eval` reads
+every buffer as empty, so their cases need the theorem restated over
+`function_ir_state`'s `run`: a `Bytes` variable held as a buffer of the
+file, the plain cases carried over by `run_pure` (a region without byte
+nodes runs as it evaluates), and an in-place `Set` justified by the old
+buffer's variable being dead after it (`Unique`). A fold's step takes a
+`Word(8)` element across a call, which wants a 64-bit word on the edge: a
+`Resize(8, 64)` there now that the node exists.

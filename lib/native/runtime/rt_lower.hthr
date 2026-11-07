@@ -40,9 +40,10 @@
 //
 // The cases: variables, literals, `Let`, `If` and `IfEq` (the convoy is
 // erased, the same branch), the primitives FunctionIR has a node for (word
-// `+ - & | ^`, `== <u <s` as a bit, `&& || !` on bits), `Make` and `Field`,
+// `+ - & | ^`, `== <u <s` as a bit, `&& || !` on bits, shifts by a literal,
+// and `zero_extend` and `truncate` as one `Resize`), `Make` and `Field`,
 // and calls at a signature of words; then `Fun::lower_sound`, from
-// `Function::eval` to the curried meaning. `Fold`, `zero_extend` and the
+// `Function::eval` to the curried meaning. `Fold` and the
 // byte primitives lower to `None`, so the theorem holds of them vacuously
 // until their case is written (issues/runtime-default-setup-soundness.md
 // says what each waits on). `Case`, a fuel's `match`, lowers to `None` here
@@ -759,6 +760,8 @@ fn Tm::prim2(op: Op, g: List<Ty>, next, a, b, pa, pb: Nat) → Option<Lowered> {
         // and an exit when it is full (issues/runtime-fn-arena-lists.md).
         ConsLine(_) => None,
         ToNat => None,
+        Trunc(_, _) => None,
+        Shl(_, _) => None, Lshr(_, _) => None, Ashr(_, _) => None,
     }
 }
 
@@ -767,12 +770,21 @@ fn Tm::neg_lowered(next, pa: Nat) → Lowered {
     Lowered(nodes_region([Const(1, next, 1), BitXor(1, Succ(next), pa, next)]), Succ(next), Succ(Succ(next)))
 }
 
-// The primitive table's unary operations. `zero_extend` has no node yet
-// (a `Move` reads the source at the wider width, not its value), nor do the
-// byte reads and writes, which need buffers (`Fold`'s round).
+// A unary node on a variable of the code `t`, once it is at `t`.
+fn Tm::unary(g: List<Ty>, a: Nat, t: Ty, l: Lowered) → Option<Lowered> { Ty::at(g, a).check(t).and_then(λ _ => Some(l)) }
+
+// The primitive table's unary operations. A zero extension and a
+// truncation are one `Resize` (both are `ofNat(x.toNat())` at the result's
+// width); a shift by a literal is FunctionIR's immediate shift. The byte
+// reads and writes need buffers (`Fold`'s round).
 fn Tm::prim1(op: Op, g: List<Ty>, next, a, pa: Nat) → Option<Lowered> {
     match op {
         Neg => Ty::at(g, a).check(Bit).and_then(λ _ => Some(Tm::neg_lowered(next, pa))),
+        Zext(width, extra) => Tm::unary(g, a, Word(width), Tm::one_node(Resize(width, extra + width, next, pa), next)),
+        Trunc(n, extra) => Tm::unary(g, a, Word(extra + n), Tm::one_node(Resize(extra + n, n, next, pa), next)),
+        Shl(width, k) => Tm::unary(g, a, Word(width), Tm::one_node(ShiftLeft(width, next, pa, k), next)),
+        Lshr(width, k) => Tm::unary(g, a, Word(width), Tm::one_node(LogicalShiftRight(width, next, pa, k), next)),
+        Ashr(width, k) => Tm::unary(g, a, Word(width), Tm::one_node(ArithmeticShiftRight(width, next, pa, k), next)),
         // A count is held as the word it is the `toNat` of: no code.
         ToNat => Ty::at(g, a).check(Word(64)).and_then(λ _ => Some(Lowered(nodes_region(Nil), pa, next))),
         _ => None,
@@ -1049,6 +1061,47 @@ theorem Tm::bit_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, b, 
     }
 }
 
+// One word node on one operand of the code `Word(width)`, its value at
+// every width that width's operation (an immediate shift).
+theorem Tm::word1_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, pa: Nat, at_a: port_at(ports, a) = Some(pa), width: Nat,
+    op: (wd: Nat) → BitVec(wd) → BitVec(wd), ea: Ty::at(g, a) = Word(width)):
+    (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
+    EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+    (next <= Succ(next)) ∧ ((next < Succ(next)) ∧ (Keeps(values, Valuation::set(values, next, λ wd => op(wd, values(wd, pa))), next) ∧
+        Word(width).Holds(w.tys, Valuation::set(values, next, λ wd => op(wd, values(wd, pa))), next,
+            op(width, Ty::cast(w.tys, Ty::at(g, a), Word(width), Env::get(w.tys, g, env, a)))))) {
+    λ call agree values env held below => Tm::set_sound(w.tys, values, next, Word(width), trivial, λ wd => op(wd, values(wd, pa)),
+        op(width, Ty::cast(w.tys, Ty::at(g, a), Word(width), Env::get(w.tys, g, env, a))),
+        trans(Valuation::set_here(values, next, λ wd => op(wd, values(wd, pa)), width),
+            cong_fn(op(width), Tm::operand(w, g, ports, values, env, held, a, pa, at_a, Word(width), ea))))
+}
+
+// One `Resize` from `Word(from)` to `Word(to)`: its value is the operand's
+// number at the result's width, which is the operation `f` (`law`: a zero
+// extension or a truncation).
+theorem Tm::resize_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, pa: Nat, at_a: port_at(ports, a) = Some(pa), from, to: Nat,
+    f: BitVec(from) → BitVec(to), law: (x: BitVec(from)) → BitVec::ofNat(x.toNat(), n := to) = f(x), ea: Ty::at(g, a) = Word(from)):
+    (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
+    EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+    (next <= Succ(next)) ∧ ((next < Succ(next)) ∧ (Keeps(values, Valuation::set(values, next, λ wd => BitVec::ofNat(values(from, pa).toNat())), next) ∧
+        Word(to).Holds(w.tys, Valuation::set(values, next, λ wd => BitVec::ofNat(values(from, pa).toNat())), next,
+            f(Ty::cast(w.tys, Ty::at(g, a), Word(from), Env::get(w.tys, g, env, a)))))) {
+    λ call agree values env held below => {
+        let x = Ty::cast(w.tys, Ty::at(g, a), Word(from), Env::get(w.tys, g, env, a));
+        Tm::set_sound(w.tys, values, next, Word(to), trivial, λ wd => BitVec::ofNat(values(from, pa).toNat()), f(x),
+            trans(Valuation::set_here(values, next, λ wd => BitVec::ofNat(values(from, pa).toNat()), to),
+                trans(cong_fn(λ (y: BitVec(from)) => BitVec::ofNat(y.toNat(), n := to),
+                        Tm::operand(w, g, ports, values, env, held, a, pa, at_a, Word(from), ea)),
+                    law(x))))
+    }
+}
+
+// A check of the operand's code, then the leaf.
+theorem Tm::unary_sound(P: Option<Lowered> → Type, none: P(None), g: List<Ty>, a: Nat, t: Ty, l: Lowered,
+    leaf: Ty::at(g, a) = t → P(Some(l))): P(Tm::unary(g, a, t, l)) {
+    Option::and_then_elim(P, none, Ty::at(g, a).check(t), λ _ => Some(l), λ ea _ => leaf(ea))
+}
+
 // A check of both operands' codes, then the leaf.
 theorem Tm::binary_sound(P: Option<Lowered> → Type, none: P(None), g: List<Ty>, a, b: Nat, t: Ty, l: Lowered,
     leaf: Ty::at(g, a) = t → Ty::at(g, b) = t → P(Some(l))): P(Tm::binary(g, a, b, t, l)) {
@@ -1114,6 +1167,8 @@ theorem Tm::prim2_sound(op: Op, w: World, g: List<Ty>, ports: List<Nat>, next, a
         Set(_) => trivial,
         ConsLine(_) => trivial,
         ToNat => trivial,
+        Trunc(_, _) => trivial,
+        Shl(_, _) => trivial, Lshr(_, _) => trivial, Ashr(_, _) => trivial,
     }
 }
 
@@ -1149,6 +1204,23 @@ theorem Tm::prim1_sound(op: Op, w: World, g: List<Ty>, ports: List<Nat>, next, a
             λ call agree values env held below =>
                 ⟨next.le_refl(), ⟨Ty::below_cast(w.tys, Ty::at(g, a), Word(64), ea, pa, next, below_at(w.tys, g, ports, next, below, a, pa, at_a)),
                     ⟨λ wd id _ => refl, cong_fn(λ (x: BitVec(64)) => x.toNat(), Tm::operand(w, g, ports, values, env, held, a, pa, at_a, Word(64), ea))⟩⟩⟩),
+        Zext(width, extra) => Tm::unary_sound(λ r => Tm::LowerHolds(Prim(Zext(width, extra), [a]), w, g, ports, next, r), trivial, g, a, Word(width),
+            Tm::one_node(Resize(width, extra + width, next, pa), next), λ ea =>
+            Tm::resize_node_sound(w, g, ports, next, a, pa, at_a, width, extra + width, λ x => x.zero_extend(extra),
+                BitVec::ofNat_toNat_zero_extend(width, extra), ea)),
+        Trunc(n, extra) => Tm::unary_sound(λ r => Tm::LowerHolds(Prim(Trunc(n, extra), [a]), w, g, ports, next, r), trivial, g, a, Word(extra + n),
+            Tm::one_node(Resize(extra + n, n, next, pa), next), λ ea =>
+            Tm::resize_node_sound(w, g, ports, next, a, pa, at_a, extra + n, n, λ x => x.truncate(n, extra),
+                BitVec::ofNat_toNat_truncate(n, extra), ea)),
+        Shl(width, k) => Tm::unary_sound(λ r => Tm::LowerHolds(Prim(Shl(width, k), [a]), w, g, ports, next, r), trivial, g, a, Word(width),
+            Tm::one_node(ShiftLeft(width, next, pa, k), next), λ ea =>
+            Tm::word1_node_sound(w, g, ports, next, a, pa, at_a, width, λ wd x => x.shift_left(k), ea)),
+        Lshr(width, k) => Tm::unary_sound(λ r => Tm::LowerHolds(Prim(Lshr(width, k), [a]), w, g, ports, next, r), trivial, g, a, Word(width),
+            Tm::one_node(LogicalShiftRight(width, next, pa, k), next), λ ea =>
+            Tm::word1_node_sound(w, g, ports, next, a, pa, at_a, width, λ wd x => x.shift_right(k), ea)),
+        Ashr(width, k) => Tm::unary_sound(λ r => Tm::LowerHolds(Prim(Ashr(width, k), [a]), w, g, ports, next, r), trivial, g, a, Word(width),
+            Tm::one_node(ArithmeticShiftRight(width, next, pa, k), next), λ ea =>
+            Tm::word1_node_sound(w, g, ports, next, a, pa, at_a, width, λ wd x => x.arithmetic_shift_right(k), ea)),
         _ => trivial,
     }
 }

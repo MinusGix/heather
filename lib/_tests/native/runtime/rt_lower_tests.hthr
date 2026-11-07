@@ -250,8 +250,9 @@ theorem safe_pred_compiled(call: Answers(), agree: Tm::CallsAgree(safe_pred_worl
 // ---------------------------------------------------------------------------
 // Refusals of round 2.
 
-// `zero_extend` has no node yet.
-theorem zext_refused(): Tm::lower(Prim(Zext(32, 32), [0]), no_records_world(), [Word(32)], [0], 1) = None { refl }
+// An operand of the wrong width is refused: a `zero_extend` of a 32-bit
+// word given a 64-bit one.
+theorem zext_width_refused(): Tm::lower(Prim(Zext(32, 32), [0]), no_records_world(), [Word(64)], [0], 1) = None { refl }
 
 // A call at a signature that is not all words.
 fn bit_callee_world() → World { World(RecInfo::none, [Sig([Bit], Word(64))], Pair(λ (b: Bool) => BitVec::ofNat(0), trivial)) }
@@ -383,4 +384,81 @@ theorem wc_step_not_swapped(s: WcState, nl, space: Bool, call: Answers(), values
     wc_step_lowered(Tm::lower(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5), s, nl, space, call, values,
         held_lines, held_words, held_inside, held_nl, held_space,
         Tm::lower_sound(wc_step_body(), wc_world(), wc_context(), [4, 3, 0], 5))
+}
+
+// ---------------------------------------------------------------------------
+// Round 4: widths and shifts. `zero_extend` and `truncate` lower to one
+// `Resize` node each (its value is the operand's number at the result's
+// width, `BitVec::ofNat_toNat_zero_extend` and `_truncate`), a shift by a
+// literal to FunctionIR's immediate shift.
+
+// What a lowering's region leaves at its result port at width `wd`, or
+// zero where the lowering refused.
+fn Lowered::at(o: Option<Lowered>, call: Answers(), values: Valuation(), wd: Nat) → BitVec(wd) {
+    match o { None => BitVec::ofNat(0), Some(c) => c.region.eval(call, values)(wd, c.result) }
+}
+
+// A byte widened to a word.
+fn widen(b: BitVec(8)) → BitVec(64) { b.zero_extend(56) }
+
+theorem widen_agrees(b: BitVec(8), call: Answers(), values: Valuation(), held_b: values(8, 0) = b):
+    Lowered::word(Tm::lower(Prim(Zext(8, 56), [0]), no_records_world(), [Word(8)], [0], 1), call, values) = widen(b) {
+    Tm::lower_sound(Prim(Zext(8, 56), [0]), no_records_world(), [Word(8)], [0], 1, call, Tm::calls_agree_none(RecInfo::none, call), values,
+        Pair(b, trivial), ⟨held_b, trivial⟩, ⟨Nat::lt_succ_self(0), trivial⟩).right.right.right
+}
+
+// A word's low byte.
+fn low(x: BitVec(64)) → BitVec(8) { x.truncate(8, 56) }
+
+theorem low_agrees(x: BitVec(64), call: Answers(), values: Valuation(), held_x: values(64, 0) = x):
+    Lowered::at(Tm::lower(Prim(Trunc(8, 56), [0]), no_records_world(), [Word(64)], [0], 1), call, values, 8) = low(x) {
+    Tm::lower_sound(Prim(Trunc(8, 56), [0]), no_records_world(), [Word(64)], [0], 1, call, Tm::calls_agree_none(RecInfo::none, call), values,
+        Pair(x, trivial), ⟨held_x, trivial⟩, ⟨Nat::lt_succ_self(0), trivial⟩).right.right.right
+}
+
+// All of them in one body: the low byte widened back, plus the word shifted
+// left, against its top bits shifted down arithmetically and logically.
+fn spread(x: BitVec(64)) → BitVec(64) {
+    let b = x.truncate(8, 56);
+    let y = b.zero_extend(56);
+    let s = x.shift_left(3);
+    let t = y.add(s);
+    let u = x.arithmetic_shift_right(60);
+    let v = x.shift_right(7);
+    t.bxor(u).bor(v)
+}
+
+fn spread_body() → Tm {
+    Let(Prim(Trunc(8, 56), [0]), Let(Prim(Zext(8, 56), [0]), Let(Prim(Shl(64, 3), [2]), Let(Prim(Add(64), [1, 0]),
+        Let(Prim(Ashr(64, 60), [4]), Let(Prim(Lshr(64, 7), [5]), Let(Prim(Bxor(64), [2, 1]), Prim(Bor(64), [0, 1]))))))))
+}
+
+theorem spread_agrees(x: BitVec(64), call: Answers(), values: Valuation(), held_x: values(64, 0) = x):
+    Lowered::word(Tm::lower(spread_body(), no_records_world(), [Word(64)], [0], 1), call, values) = spread(x) {
+    Tm::lower_sound(spread_body(), no_records_world(), [Word(64)], [0], 1, call, Tm::calls_agree_none(RecInfo::none, call), values,
+        Pair(x, trivial), ⟨held_x, trivial⟩, ⟨Nat::lt_succ_self(0), trivial⟩).right.right.right
+}
+
+// A wrong claim: the byte widened is not its sign extension.
+// expect-error(kernel): the kernel rejected `widen_not_signed`: NotConvertible
+theorem widen_not_signed(b: BitVec(8), call: Answers(), values: Valuation(), held_b: values(8, 0) = b):
+    Lowered::word(Tm::lower(Prim(Zext(8, 56), [0]), no_records_world(), [Word(8)], [0], 1), call, values) = b.sign_extend(56) {
+    Tm::lower_sound(Prim(Zext(8, 56), [0]), no_records_world(), [Word(8)], [0], 1, call, Tm::calls_agree_none(RecInfo::none, call), values,
+        Pair(b, trivial), ⟨held_b, trivial⟩, ⟨Nat::lt_succ_self(0), trivial⟩).right.right.right
+}
+
+// The negative control on the lowering: a `zero_extend` lowered to a
+// `Move` at the wider width (which reads the source at that width, not its
+// value) fails the `Zext` case's proof, the right lowering's proof word for
+// word but for the node.
+fn wrong_zext_node(next, width, extra, pa: Nat) → Option<Lowered> {
+    Some(Lowered(nodes_region([Move(extra + width, next, pa)]), next, Succ(next)))
+}
+
+// expect-error(kernel): the kernel rejected `wrong_zext_node_sound`: NotConvertible
+theorem wrong_zext_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, width, extra, a, pa: Nat,
+    at_a: port_at(ports, a) = Some(pa), ea: Ty::at(g, a) = Word(width)):
+    Tm::LowerHolds(Prim(Zext(width, extra), [a]), w, g, ports, next, wrong_zext_node(next, width, extra, pa)) {
+    Tm::resize_node_sound(w, g, ports, next, a, pa, at_a, width, extra + width, λ x => x.zero_extend(extra),
+        BitVec::ofNat_toNat_zero_extend(width, extra), ea)
 }

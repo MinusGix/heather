@@ -1295,6 +1295,8 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
         // Registers only: a buffer is memory.
         BufferLoad(_, _, _) => None,
         BufferStore(_, _, _, _) => None,
+        // No width but 64 and 1 has registers here yet.
+        Resize(_, _, _, _) => None,
     }
 }
 
@@ -1351,6 +1353,7 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
             file.compare_keeps<M>(values, Same, destination, output, left, right)),
         BufferLoad(_, _, _) => trivial,
         BufferStore(_, _, _, _) => trivial,
+        Resize(_, _, _, _) => trivial,
     }
 }
 
@@ -1411,6 +1414,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
             file.know_keeps<M>(values, Compared(output, Same, left, right))),
         BufferLoad(_, _, _) => trivial,
         BufferStore(_, _, _, _) => trivial,
+        Resize(_, _, _, _) => trivial,
     }
 }
 
@@ -1801,6 +1805,7 @@ fn Node::reads(self node: Node) → List<Nat> {
         Equal(_, _, left, right) => [left, right],
         BufferLoad(_, _, index) => [index],
         BufferStore(_, _, index, value) => [index, value],
+        Resize(_, _, _, source) => [source],
     }
 }
 

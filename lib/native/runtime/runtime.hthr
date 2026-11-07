@@ -83,7 +83,6 @@ fn Sig::is_words(self s: Sig) → Bool { Ty::all_held(s.params).and(s.result.is_
 
 fn Op::judge(self o: Op) → Verdict {
     match o {
-        Zext(_, _) => Refused("`zero_extend` has no FunctionIR node yet (issues/function-ir-alu-core.md)"),
         Get(_) => Refused("a byte read: byte buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
         Set(_) => Refused("a byte write: byte buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
         ConsLine(_) => Refused("a list of lines: arena lists are not lowered by the default setup yet"),
@@ -603,6 +602,10 @@ fn Op::quote(self o: Op, q: RtQ) → Expr {
     match o {
         Conj => c, Disj => c, Neg => c, ToNat => c,
         Zext(w, extra) => ap(c, [NatLit(w), NatLit(extra)]),
+        Trunc(n, extra) => ap(c, [NatLit(n), NatLit(extra)]),
+        Shl(w, k) => ap(c, [NatLit(w), NatLit(k)]),
+        Lshr(w, k) => ap(c, [NatLit(w), NatLit(k)]),
+        Ashr(w, k) => ap(c, [NatLit(w), NatLit(k)]),
         _ => ap(c, [NatLit(o.code().snd.fst)]),
     }
 }

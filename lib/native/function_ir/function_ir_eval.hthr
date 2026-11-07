@@ -267,6 +267,7 @@ fn Node::reads(self node: Node) → List<Nat> {
         Equal(_, _, left, right) => [left, right],
         BufferLoad(_, _, index) => [index],
         BufferStore(_, _, index, value) => [index, value],
+        Resize(_, _, _, source) => [source],
     }
 }
 
@@ -292,6 +293,7 @@ fn Node::value(self node: Node, values: Valuation()) → (w: Nat) → BitVec(w) 
         Equal(width, _, left, right) => bit_value(values(width, left).eq_bit(values(width, right))),
         BufferLoad(_, buffer, index) => load_value(Nil, buffer, index, values),
         BufferStore(_, buffer, index, _) => load_value(Nil, buffer, index, values),
+        Resize(from, _, _, source) => λ w => BitVec::ofNat(values(from, source).toNat()),
     }
 }
 
@@ -335,6 +337,8 @@ theorem Node::holds_of(self node: Node, values, after: Valuation()):
                 kept(width, left, Inl(refl)), kept(width, right, Inr(Inl(refl)))))))),
         BufferLoad(_, _, _) => λ at_output kept => trivial,
         BufferStore(_, _, _, _) => λ at_output kept => trivial,
+        Resize(from, to, _, source) => λ at_output kept => trans(at_output(to),
+            sym(cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := to), kept(from, source, Inl(refl))))),
     }
 }
 
@@ -793,6 +797,7 @@ theorem Node::value_same(self node: Node, values, other: Valuation(), same: Valu
             same(64, index)),
         BufferStore(_, buffer, index, _) => λ w => cong_fn(λ (x: BitVec(64)) => word_value(byte_word(buffer_byte(Nil, buffer, x.toNat())), w),
             same(64, index)),
+        Resize(from, _, _, source) => λ w => cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := w), same(from, source)),
     }
 }
 

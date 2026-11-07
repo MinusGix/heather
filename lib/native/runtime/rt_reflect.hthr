@@ -44,7 +44,7 @@ import rt;
 
 // A primitive global: a word operation (by `Op::code`'s number), a `Bool`
 // connective, a literal, an extension, `foldl`, or a byte read or write.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat) }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -131,6 +131,11 @@ fn Known::field(names: List<String>, name: String, k: Nat) → Option<Nat> {
 }
 
 // The word operation of a `PWord` number at a width.
+// A shift by its kind: left, logical right, arithmetic right.
+fn Known::shift_op(kind, w, c: Nat) → Op {
+    match kind { Zero => Shl(w, c), Succ(a) => match a { Zero => Lshr(w, c), Succ(_) => Ashr(w, c) } }
+}
+
 fn Known::word_op(op: Nat, w: Nat) → Op {
     match op {
         Zero => Add(w),
@@ -189,8 +194,26 @@ fn rt_memo(xs: List<Pair<Tm, Nat>>, t: Tm) → Option<Nat> {
     match xs { Nil => None, Cons(p, rest) => match p.fst.same(t) { True => Some(p.snd), False => rt_memo(rest, t) } }
 }
 
+// A numeral, or a number computed from numerals as `zero_extend`'s
+// `extra + n` leaves an operand's width: its head normal forms are
+// successors (`succ`, the constructor's global) down to a numeral, one per
+// step, `fuel` of them at most.
+fn rt_number(fuel, succ: Nat, h: Handle) → Tac<Nat> {
+    match fuel {
+        Zero => rt_refuse("expected a numeral"),
+        Succ(f) => whnf_or(h).bind(λ w => view(w).bind(λ u => match u {
+            HLit(n) => pure(n),
+            HGlobal(g, _, args) => match g.id.same(succ) {
+                True => match args { Cons(p, Nil) => rt_number(f, succ, p).bind(λ n => pure(Succ(n))), _ => rt_refuse("expected a numeral") },
+                False => rt_refuse("expected a numeral"),
+            },
+            _ => rt_refuse("expected a numeral"),
+        })),
+    }
+}
+
 fn rt_literal(h: Handle) → Tac<Nat> {
-    view(h).bind(λ v => match v { HLit(n) => pure(n), _ => rt_refuse("expected a numeral") })
+    view(h).bind(λ v => match v { HLit(n) => pure(n), _ => rt_global("Succ").bind(λ succ => rt_number(1024, succ, h)) })
 }
 
 // ---------------------------------------------------------------------------
@@ -643,6 +666,30 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             }),
                             Nil => rt_refuse("`zero_extend` without its width"),
                         },
+                        // `truncate(n, extra, x)`: both widths are literals.
+                        PTrunc => match args {
+                            Cons(n, rest) => rt_literal(n).bind(λ nv => match rest {
+                                Cons(extra, more) => rt_literal(extra).bind(λ e => match more {
+                                    Cons(x, _) => rt_go(f, k, st, x, True).bind(λ r => pure(r.fst.finish(h, operand, Prim(Trunc(nv, e), [RSt::level(r.snd)])))),
+                                    Nil => rt_refuse("`truncate` without its operand"),
+                                }),
+                                Nil => rt_refuse("`truncate` without its widths"),
+                            }),
+                            Nil => rt_refuse("`truncate` without its widths"),
+                        },
+                        // A shift of a word by a literal count (FunctionIR's
+                        // shifts are immediate).
+                        PShift(kind) => match args {
+                            Cons(x, rest) => match rest {
+                                Cons(count, _) => k.ty_of(x).bind(λ t => match t {
+                                    Word(w) => rt_literal(count).bind(λ c => rt_go(f, k, st, x, True).bind(λ r =>
+                                        pure(r.fst.finish(h, operand, Prim(Known::shift_op(kind, w, c), [RSt::level(r.snd)]))))),
+                                    _ => rt_refuse("`" ++ name ++ "` of something other than a word"),
+                                }),
+                                Nil => rt_refuse("`" ++ name ++ "` without its count"),
+                            },
+                            Nil => rt_refuse("`" ++ name ++ "` without its operand"),
+                        },
                         PToNat => match args {
                             Cons(x, _) => k.ty_of(x).bind(λ t => match t {
                                 Word(w) => match w.same(64) {
@@ -828,7 +875,9 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
      Pair("BitVec::unsigned_lt_bit", PWord(6)), Pair("BitVec::signed_lt_bit", PWord(7)),
      Pair("Bool::and", PConj), Pair("Bool::or", PDisj), Pair("Bool::not", PNeg),
      Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("List::foldl", PFoldl),
-     Pair("List::byte_at", PGet), Pair("List::with_byte", PSet), Pair("BitVec::toNat", PToNat)]
+     Pair("List::byte_at", PGet), Pair("List::with_byte", PSet), Pair("BitVec::toNat", PToNat),
+     Pair("BitVec::truncate", PTrunc), Pair("BitVec::shift_left", PShift(0)), Pair("BitVec::shift_right", PShift(1)),
+     Pair("BitVec::arithmetic_shift_right", PShift(2))]
 }
 
 fn rt_prims(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {

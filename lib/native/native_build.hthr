@@ -419,6 +419,7 @@ fn Node::output_to(self node: Node, dest: Nat) → Node {
         Equal(width, _, left, right) => Equal(width, dest, left, right),
         BufferLoad(_, buffer, index) => BufferLoad(dest, buffer, index),
         BufferStore(_, buffer, index, value) => BufferStore(dest, buffer, index, value),
+        Resize(from, to, _, source) => Resize(from, to, dest, source),
     }
 }
 

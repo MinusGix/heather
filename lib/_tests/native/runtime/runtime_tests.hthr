@@ -147,6 +147,21 @@ runtime fn safe_pred(n: BitVec(64)) → BitVec(64) {
 theorem safe_pred_runs(n: BitVec(64)): program_eval(safe_pred::program, 0, [n]) = safe_pred(n) { safe_pred::agrees(n) }
 
 // ---------------------------------------------------------------------------
+// Widths and shifts: `truncate` and `zero_extend` (one `Resize` node each)
+// and shifts by a literal, `<<` among them, reflected and compiled through
+// the instance with nothing proved here.
+
+runtime fn spread(x: BitVec(64)) → BitVec(64) {
+    x.truncate(8, 56).zero_extend(56).add(x << 3).bxor(x.arithmetic_shift_right(60)).bor(x.shift_right(7))
+}
+
+theorem spread_rt_is(): spread::rt = Fun([Word(64)], Word(64),
+    Let(Prim(Trunc(8, 56), [0]), Let(Prim(Zext(8, 56), [0]), Let(Prim(Shl(64, 3), [2]), Let(Prim(Add(64), [1, 0]),
+        Let(Prim(Ashr(64, 60), [4]), Let(Prim(Bxor(64), [1, 0]), Let(Prim(Lshr(64, 7), [6]), Prim(Bor(64), [1, 0]))))))))) { refl }
+
+theorem spread_runs(x: BitVec(64)): program_eval(spread::program, 0, [x]) = spread(x) { spread::agrees(x) }
+
+// ---------------------------------------------------------------------------
 // Refusals. Each names its reason, and the function under the prefix is not
 // published either (the item is one transaction).
 

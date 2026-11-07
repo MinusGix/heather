@@ -625,6 +625,7 @@ theorem Node::read_ids(self node: Node): node.read_ports().map(λ (port: Port) =
         Equal(_, _, _, _) => refl,
         BufferLoad(_, _, _) => refl,
         BufferStore(_, _, _, _) => refl,
+        Resize(_, _, _, _) => refl,
     }
 }
 
