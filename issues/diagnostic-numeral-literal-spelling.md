@@ -1,10 +1,10 @@
 ---
 title: Spell Int and Rat numerals as numerals in diagnostics
-status: open
+status: closed
 labels: [frontend,diagnostics,notation,ergonomics]
 area: language
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
 ---
 
 A diagnostic spells a Nat numeral as the numeral (`3`, not `S(S(S(0)))`),
@@ -34,3 +34,18 @@ carrier would elaborate to this term, and never reduce to find out.
   `x ^ 2` at `Rat` and `Apart(b * b, 0)`.
 - A literal whose carrier has no numeral route keeps its constructor
   spelling.
+
+## Log
+
+- 2026-11-07: Done. The speller reads the `Numeral` instance table backwards
+  (`Speller::carrier_numeral`, docs/surface-type-display-design.md §5.3): each
+  closed instance's `ofNat` body is a template over the literal, read off the
+  dictionary's definition without reducing anything, and a term spells as the
+  numeral `k` exactly when it is that template at `k` in its own scope. Int,
+  Rat, Dyadic and CReal numerals now read as written (`x ^ 2`, `Apart(b * b,
+  0)`, `-3` as the negation of `3`). Deliberately not spelled as numerals:
+  `NegSucc(k)`, which a written `-(k + 1)` does not elaborate to (it
+  elaborates to `Int::neg(OfNat(k + 1))`), so showing it as `-(k + 1)` would
+  print a reduct as its redex; and the numerals of parameterized instances
+  (`BitVec(n)`, `SInt(n)`), which still show `ofNat(3)` because their template
+  has the instance's parameter in it as well as the literal.
