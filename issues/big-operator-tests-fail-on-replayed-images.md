@@ -1,6 +1,6 @@
 ---
 title: big_operator_tests fails in the --pr lane over replayed images
-status: open
+status: closed
 labels: [testing, cache, rewrite]
 area: infrastructure
 milestone: [none]
@@ -29,3 +29,22 @@ removed.
 ## Log
 
 - 2026-11-07: Filed.
+- 2026-11-07: Root cause and fix. Not the image cache key: the replay only
+  exposed a matching gap in `rewrite` that a fresh elaboration hits too.
+  `Semiring::mul_range_l`'s left side `c * ∑ k < n, f(k)` is headed by the
+  caller's operator *variable* `*`, and §6.2 of
+  docs/equation-rewrite-design.md matched a local-variable head by `==`
+  only (keyed conversion was for global heads). The sum's monoid inside it is
+  an upcast of the `Semiring` dictionary, which #462 mints once per context
+  prefix as an `#open` global. Fresh, the test's theorems share
+  `big_operator`'s section prefix, reuse its minted global, and the spellings
+  are `==`. Replayed from images the 919a001 sentinel build wrote, there is
+  no minted global upstream (that compiler inlined the record), the test
+  mints its own, and `==` fails. Reproduced on a fresh build with a prefix
+  the section does not share (`<B: Type, A: Semiring(≈, +, *)>`), now
+  `class_law_open_other_prefix` in big_operator_tests. Fix: a local-variable
+  head is keyed like a global one (`keyable_head` in
+  crates/elab/src/rewrite.rs; relation form and equation form): same head,
+  arguments by conversion, under the same 256-candidate cap. Checked over the
+  seeded sentinel stores with `--accept-stale-images`: the base binary gives
+  the two errors at :262 and :273, the fixed one passes.
