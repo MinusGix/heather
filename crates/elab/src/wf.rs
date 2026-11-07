@@ -472,7 +472,10 @@ impl Elaborator {
     ) -> R<Term> {
         // Does this `match` descend on one of the enclosing declaration's own
         // parameters? If so, a self-call in an arm is the ih (§6.4).
-        let dec = crate::recursion::guard_param(cx, &scrut, arms);
+        // The `match` recursion at the top wrapped the body in is the guard
+        // whatever the planner would say (docs/recursion-at-the-top-design.md
+        // §4, slice 3).
+        let dec = self.top_guard(span).or_else(|| crate::recursion::guard_param(cx, &scrut, arms));
         let Type::Wf { level, .. } = scrut_ty else {
             return err(
                 "internal: a recursive declaration did not lower to a `Wf`",

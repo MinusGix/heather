@@ -212,13 +212,16 @@ fn every_way_of_reading_a_varied_value_is_compiled_by_measure() {
         theorem r_2(): r<Nat>([7, 8], []) = 2 { refl }");
 }
 
+/// A `let` above the match from a parameter the calls vary, at a type with
+/// no measure: recursion at the top on the tree recomputes `y` at each
+/// level (issues/recursion-at-top-wf.md), so it means its source.
 #[test]
-fn a_varied_value_at_a_parameter_with_no_measure_is_refused() {
-    refused(
-        "inductive T { Leaf, Node(l: T, r: T) }
-         fn d(t: T, x: Nat) -> Nat { let y = plus(x, 1); match t { Leaf => y, Node(l, r) => d(l, plus(x, 1)) } }",
-        "bind `y` inside each arm that reads it",
-    );
+fn a_varied_value_at_a_parameter_with_no_measure_is_compiled_at_the_top() {
+    let notes = ok("inductive T { Leaf, Node(l: T, r: T) }
+         fn d(t: T, x: Nat) -> Nat { let y = plus(x, 1); match t { Leaf => y, Node(l, r) => d(l, plus(x, 1)) } }
+         theorem d_1(): d(Node(Leaf, Leaf), 0) = 2 { refl }
+         theorem d_step(l: T, r: T, x: Nat): d(Node(l, r), x) = d(l, plus(x, 1)) { refl }");
+    assert_eq!(notes, 0);
 }
 
 /// `d` is generalized only because its type mentions the varied `x`
@@ -312,11 +315,11 @@ fn a_recursive_match_off_the_result_is_compiled_at_the_top() {
 }
 
 #[test]
-fn a_recursive_match_off_the_result_is_refused_off_nat() {
-    refused(
-        "fn v(xs: List<Nat>) -> Nat { Succ(match xs { Nil => 0, Cons(_, t) => v(t) }) }",
-        "is not the result of `v`",
-    );
+fn a_recursive_match_off_the_result_is_compiled_at_the_top_off_nat() {
+    let notes = ok("fn v(xs: List<Nat>) -> Nat { Succ(match xs { Nil => 0, Cons(_, t) => v(t) }) }
+         theorem v_2(): v([4, 5]) = 3 { refl }
+         theorem v_step(h: Nat, t: List<Nat>): v(Cons(h, t)) = Succ(v(t)) { refl }");
+    assert_eq!(notes, 0);
 }
 
 #[test]

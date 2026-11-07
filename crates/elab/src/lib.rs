@@ -3734,7 +3734,23 @@ impl Elaborator {
     fn at_top_candidate(&self, decl: &Decl, dec: usize) -> bool {
         dec.checked_sub(decl.tyvars.len())
             .and_then(|i| decl.params.get(i))
-            .is_some_and(|p| !p.implicit && matches!(p.ty.kind, TyKind::Nat))
+            .is_some_and(|p| !p.implicit && (matches!(p.ty.kind, TyKind::Nat) || self.top_wf(&p.ty).is_some()))
+    }
+
+    /// The tier-1 `Wf` inductive a parameter of type `ty` is, if recursion
+    /// at the top can take it apart (slice 3): recursive, not codata, not
+    /// an indexed family, the `IWf` route, a mutual group or infinitary.
+    fn top_wf(&self, ty: &Ty) -> Option<Rc<inductive::Inductive>> {
+        let TyKind::Named { name, .. } = &ty.kind else { return None };
+        let ind = self.lookup_inductive(name)?;
+        (ind.recursive
+            && !ind.codata
+            && ind.index.is_none()
+            && ind.skel.is_none()
+            && ind.members.is_empty()
+            && !ind.infinitary()
+            && ind.ctors.iter().all(|c| c.res.is_none()))
+        .then(|| Rc::clone(ind))
     }
 
     /// Elaborate `decl` by `elaborate`; where that refuses a self-call (a
@@ -3781,7 +3797,9 @@ impl Elaborator {
     /// falls back as the inline gate would, so the answer is the same at
     /// every width.
     fn try_recursion_at_top(&mut self, decl: &Decl, dec: usize, attempt: TopAttempt) -> bool {
-        let lowered = self.recursion_at_top_body(decl, dec);
+        let Some(lowered) = self.recursion_at_top_body(decl, dec) else {
+            return false;
+        };
         let warn_mark = self.pass.warnings.borrow().len();
         let inline = attempt == TopAttempt::Fallback;
         let at = Some((dec, lowered.span, inline));
@@ -3834,7 +3852,15 @@ impl Elaborator {
     /// the body recomputes at each level with this level's values: a read of
     /// `z` is this level's `z`, and a `match z` inside takes its arm, whose
     /// predecessor is the guard's (docs/recursion-at-the-top-design.md §3).
-    fn recursion_at_top_body(&self, decl: &Decl, dec: usize) -> Decl {
+    fn recursion_at_top_body(&self, decl: &Decl, dec: usize) -> Option<Decl> {
+        let param = &decl.params[dec - decl.tyvars.len()];
+        if let Some(ind) = self.top_wf(&param.ty) {
+            return recursion_at_top_hoisted(decl, dec, &ind);
+        }
+        Some(self.recursion_at_top_nat(decl, dec))
+    }
+
+    fn recursion_at_top_nat(&self, decl: &Decl, dec: usize) -> Decl {
         let span = decl.span;
         let z = decl.params[dec - decl.tyvars.len()].name.clone();
         let pred = format!("{z}#pred");
@@ -11472,4 +11498,214 @@ struct PackedFamily<'a> {
 enum TopAttempt {
     Default,
     Fallback,
+}
+
+/// Recursion at the top on a tier-1 `Wf` parameter `z`
+/// (docs/recursion-at-the-top-design.md §4, slice 3), by hoisting: one
+/// `match z` around the body, each arm rebinding `z` to its constructor
+/// term, and every `match z` in the body replaced by its arm for that
+/// constructor (a `match` on a known constructor, taken at the surface).
+/// The arm binders are the body's own first `match z`'s, so its nested
+/// `match`es on them are the chain the window reads, and a self-call on
+/// one of them elaborates to the child the guard compares by term.
+///
+/// `None` (the plain lowering stands) where the rewrite cannot be stated
+/// without tracking scopes: `z` rebound anywhere in the body, a `match z`
+/// with an equation, a written motive or a nested pattern, or no
+/// `match z` at all.
+fn recursion_at_top_hoisted(decl: &Decl, dec: usize, ind: &inductive::Inductive) -> Option<Decl> {
+    use heather_syntax::{Arm, Block, Pat, Stmt};
+    let span = decl.span;
+    let param = &decl.params[dec - decl.tyvars.len()];
+    let z = param.name.clone();
+    let whole = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span: decl.body.span };
+    // Every name the body binds: `z` among them is a scope this rewrite
+    // does not track.
+    let mut bound: Vec<String> = Vec::new();
+    crate::surface::walk_expr(&whole, &mut |e| match &e.kind {
+        ExprKind::Lam { binders, .. } => bound.extend(binders.iter().map(|b| b.name.clone())),
+        ExprKind::Block(b) => {
+            for st in &b.stmts {
+                match st {
+                    Stmt::Let { name, .. } | Stmt::LetCode { name, .. } => bound.push(name.clone()),
+                    Stmt::LetRecord { fields, .. } => fields.iter().for_each(|f| measure::pat_names(&f.pat, &mut bound)),
+                }
+            }
+        }
+        ExprKind::Match { eqbind, arms, .. } => {
+            bound.extend(eqbind.iter().cloned());
+            arms.iter().for_each(|a| a.binders.iter().for_each(|p| measure::pat_names(p, &mut bound)));
+        }
+        ExprKind::MatchCode { arms, .. } => {
+            arms.iter().for_each(|a| a.binders.iter().for_each(|p| measure::pat_names(p, &mut bound)));
+        }
+        _ => {}
+    });
+    if bound.contains(&z) {
+        return None;
+    }
+    let ctor_of = |arm: &Arm, c: &inductive::Ctor| !arm.default && (arm.ctor == c.name || arm.ctor.ends_with(&format!("::{}", c.name)));
+    let simple = |arm: &Arm, c: &inductive::Ctor| {
+        arm.binders.len() == c.fields.len() && arm.binders.iter().all(|p| matches!(p, Pat::Var { .. }))
+    };
+    let is_z = |e: &Expr| matches!(&e.kind, ExprKind::Var(v) if *v == z);
+    // The first `match z`, whose binders name the wrapper's.
+    let mut first: Option<Vec<Arm>> = None;
+    let mut refused = false;
+    crate::surface::walk_expr(&whole, &mut |e| {
+        if let ExprKind::Match { form, scrut, eqbind, motive, arms, .. } = &e.kind
+            && is_z(scrut)
+        {
+            if *form != MatchForm::Match || eqbind.is_some() || motive.is_some() {
+                refused = true;
+            }
+            if first.is_none() {
+                first = Some(arms.clone());
+            }
+        }
+    });
+    let first = first?;
+    if refused {
+        return None;
+    }
+    // The body with every `match z` taken out, for capture: a hoisted name
+    // the rest of the body mentions would be shadowed by the wrapper.
+    let mut rest = whole.clone();
+    crate::alpha::walk_expr_mut(&mut rest, &mut |e| {
+        if let ExprKind::Match { scrut, .. } = &e.kind
+            && is_z(scrut)
+        {
+            e.kind = ExprKind::Refl;
+            return true;
+        }
+        false
+    });
+    let mut mentioned = Vec::new();
+    crate::alpha::collect_names(&rest, &mut mentioned);
+    // Whether the body reads `z` other than to take it apart: the
+    // scrutinees of its `match z`s blanked, their arms kept.
+    let mut unscrutinized = whole.clone();
+    crate::alpha::walk_expr_mut(&mut unscrutinized, &mut |e| {
+        if let ExprKind::Match { scrut, .. } = &mut e.kind
+            && is_z(scrut)
+        {
+            scrut.kind = ExprKind::Refl;
+        }
+        false
+    });
+    let mut read = Vec::new();
+    crate::alpha::collect_names(&unscrutinized, &mut read);
+    let reads_z = read.contains(&z);
+    let pat_name = |p: &Pat| match p {
+        Pat::Var { name, .. } => name.clone(),
+        _ => unreachable!("simple binders only"),
+    };
+    let mut arms = Vec::new();
+    for (i, c) in ind.ctors.iter().enumerate() {
+        let written = first.iter().find(|a| ctor_of(a, c) && simple(a, c));
+        let names: Vec<String> = (0..c.fields.len())
+            .map(|j| {
+                written
+                    .map(|a| pat_name(&a.binders[j]))
+                    .filter(|n| n != "_" && *n != z && !mentioned.contains(n))
+                    .unwrap_or_else(|| format!("{z}#{i}_{j}"))
+            })
+            .collect();
+        let var = |n: &str| Expr { kind: ExprKind::Var(n.to_string()), span };
+        let head = written.map_or_else(|| c.name.clone(), |a| a.ctor.clone());
+        let value = if names.is_empty() {
+            var(&head)
+        } else {
+            Expr {
+                kind: ExprKind::App {
+                    head: Box::new(var(&head)),
+                    args: names.iter().map(|n| var(n)).collect(),
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            }
+        };
+        // Each `match z` in the body, at this constructor, is its arm.
+        let mut body = whole.clone();
+        let mut ok = true;
+        crate::alpha::walk_expr_mut(&mut body, &mut |e| loop {
+            // A replacement that is itself a `match z` is taken again here:
+            // the walk visits a replaced node's children, not the node.
+            let ExprKind::Match { scrut, arms: inner, .. } = &e.kind else { return false };
+            if !is_z(scrut) {
+                return false;
+            }
+            let Some(arm) = inner.iter().find(|a| ctor_of(a, c)).or_else(|| inner.iter().find(|a| a.default)) else {
+                ok = false;
+                return true;
+            };
+            if !arm.default && !simple(arm, c) {
+                ok = false;
+                return true;
+            }
+            let mut stmts = Vec::new();
+            if !arm.default {
+                for (p, n) in arm.binders.iter().zip(&names) {
+                    let b = pat_name(p);
+                    if b != "_" && b != *n {
+                        stmts.push(Stmt::Let { name: b, ty: None, expr: var(n), span, opaque: false });
+                    }
+                }
+            }
+            let result = arm.body.clone();
+            *e = if stmts.is_empty() {
+                result
+            } else {
+                let rspan = result.span;
+                Expr {
+                    kind: ExprKind::Block(Box::new(Block { stmts, result: Box::new(result), ons: Vec::new(), span: rspan })),
+                    span: rspan,
+                }
+            };
+            // The replacement's children are visited next, so a `match z`
+            // inside the arm is this constructor's too.
+        });
+        if !ok {
+            return None;
+        }
+        let ExprKind::Block(body) = body.kind else { unreachable!("the body is a block") };
+        // `z` rebound only where the body still reads it, anywhere but as a
+        // `match`'s scrutinee (inside the arms too): an unread binding still
+        // costs its annotated elaboration and its term.
+        let mut stmts = Vec::new();
+        if reads_z {
+            stmts.push(Stmt::Let { name: z.clone(), ty: Some(param.ty.clone()), expr: value, span, opaque: false });
+        }
+        stmts.extend(body.stmts);
+        arms.push(Arm {
+            ctor: head,
+            default: false,
+            binders: names.iter().map(|n| Pat::Var { name: n.clone(), span }).collect(),
+            body: Expr {
+                kind: ExprKind::Block(Box::new(Block { stmts, result: body.result, ons: body.ons, span: decl.body.span })),
+                span: decl.body.span,
+            },
+            span,
+        });
+    }
+    let mut lowered = decl.clone();
+    lowered.body = heather_syntax::Block {
+        stmts: Vec::new(),
+        result: Box::new(Expr {
+            kind: ExprKind::Match {
+                form: MatchForm::Match,
+                generated: true,
+                scrut: Box::new(Expr { kind: ExprKind::Var(z), span }),
+                eqbind: None,
+                motive: None,
+                arms,
+            },
+            span,
+        }),
+        ons: Vec::new(),
+        span: decl.body.span,
+    };
+    Some(lowered)
 }

@@ -100,16 +100,15 @@ theorem List::abs_sum_nonneg({F: Format}, self xs: List<Finite(F)>): 0 <= xs.abs
 }
 
 // `s` is the recursive sum of `a` then `xs` in `mode`, every step's exact
-// sum in range: `s₀ = a`, `sₖ = ○(sₖ₋₁ + xₖ)`. Curried, so the accumulator
-// can vary under the `∃`.
-fn List::RecSum_of({F: Format}, self xs: List<Finite(F)>, mode: Mode) → Finite(F) → Finite(F) → Type {
+// sum in range: `s₀ = a`, `sₖ = ○(sₖ₋₁ + xₖ)`. The accumulator varies under
+// the `∃` (issues/ih-generalization-under-exists.md).
+fn List::RecSum({F: Format}, self xs: List<Finite(F)>, mode: Mode, a, s: Finite(F)) → Type {
     match xs {
-        Nil => λ (a: Finite(F)) (s: Finite(F)) => a = s,
-        Cons(y, t) => λ (a: Finite(F)) (s: Finite(F)) =>
-            ∃ r: Finite(F), (a.val() + y.val()).abs() <= (Finite::max_finite(F)).val() ∧ a.add(y, mode := mode) = Float::Fin(r) ∧ t.RecSum_of(mode)(r, s),
+        Nil => a = s,
+        Cons(y, t) =>
+            ∃ r: Finite(F), (a.val() + y.val()).abs() <= (Finite::max_finite(F)).val() ∧ a.add(y, mode := mode) = Float::Fin(r) ∧ t.RecSum(mode, r, s),
     }
 }
-fn List::RecSum({F: Format}, self xs: List<Finite(F)>, mode: Mode, a, s: Finite(F)) → Type { xs.RecSum_of(mode)(a, s) }
 
 // One step's arithmetic: `γ(m)` after the step and `u` at it compose to
 // `γ(m + 1)` (named values, so `linarith` reads the products as monomials).

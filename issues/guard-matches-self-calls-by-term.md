@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,inductives]
 area: language
 created: 2026-07-26
-updated: 2026-07-26
+updated: 2026-11-07
 ---
 
 
@@ -71,3 +71,7 @@ Cross-cutting note: option 3 touches the same structure as
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[nested-inductives-container-fields]] (`docs/inductive-tier1-wf-lowering.md`); [[surface-declaration-generator]] (`docs/inductive-tier1-wf-lowering.md`).
+- 2026-11-07: not retired by recursion at the top on `Wf`
+  ([[recursion-at-top-wf]]), which hoists the body's own `match` and keeps
+  the guard's child terms as the keys: a self-call on a hoisted binder
+  elaborates to the same alias the guard table holds.

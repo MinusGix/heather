@@ -207,7 +207,7 @@ pub(crate) fn deshadow(body: &mut Block, bound: &[String]) {
 }
 
 /// Every local name `e` binds or reads, for [`deshadow`]'s fresh names.
-fn collect_names(e: &Expr, out: &mut Vec<String>) {
+pub(crate) fn collect_names(e: &Expr, out: &mut Vec<String>) {
     crate::surface::walk_expr(e, &mut |x| match &x.kind {
         ExprKind::Var(n) => out.push(n.clone()),
         ExprKind::Lam { binders, .. } => out.extend(binders.iter().map(|b| b.name.clone())),
@@ -436,6 +436,73 @@ impl Deshadow {
                 self.expr(motive);
                 self.expr(case);
             }
+        }
+    }
+}
+
+/// Every expression in `e`, outermost first, mutably: `f` returns whether
+/// it replaced the node, and a replaced node's children are not visited.
+/// Expressions inside types are not visited (a type is not rewritten here).
+pub(crate) fn walk_expr_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr) -> bool) {
+    if f(e) {
+        return;
+    }
+    match &mut e.kind {
+        ExprKind::Var(_)
+        | ExprKind::OpSymbol { .. }
+        | ExprKind::Univ { .. }
+        | ExprKind::Num(_)
+        | ExprKind::Scaled(_)
+        | ExprKind::Char(_)
+        | ExprKind::Str(_)
+        | ExprKind::ArgSlot(_)
+        | ExprKind::Refl
+        | ExprKind::AutoRefl
+        | ExprKind::Hole(_)
+        | ExprKind::TyLit(_) => {}
+        ExprKind::App { head, args, named, .. } => {
+            walk_expr_mut(head, f);
+            for a in args { walk_expr_mut(a, f); }
+            for n in named { walk_expr_mut(&mut n.expr, f); }
+        }
+        ExprKind::TyApp { head, .. } => walk_expr_mut(head, f),
+        ExprKind::Lam { body, .. } => walk_expr_mut(body, f),
+        ExprKind::CollectionLit(xs) => for x in xs { walk_expr_mut(x, f); },
+        ExprKind::Eq(a, b) => { walk_expr_mut(a, f); walk_expr_mut(b, f); }
+        ExprKind::Match { scrut, motive, arms, .. } => {
+            walk_expr_mut(scrut, f);
+            if let Some(m) = motive { walk_expr_mut(m, f); }
+            for a in arms { walk_expr_mut(&mut a.body, f); }
+        }
+        ExprKind::MatchCode { scrut, arms, .. } => {
+            walk_expr_mut(scrut, f);
+            for a in arms { walk_expr_mut(&mut a.body, f); }
+        }
+        ExprKind::Dot { recv, args, named, .. } => {
+            walk_expr_mut(recv, f);
+            if let Some(xs) = args { for x in xs { walk_expr_mut(x, f); } }
+            for n in named { walk_expr_mut(&mut n.expr, f); }
+        }
+        ExprKind::Index { recv, idx } => { walk_expr_mut(recv, f); walk_expr_mut(idx, f); }
+        ExprKind::RecordLit { fields, .. } => for x in fields { walk_expr_mut(&mut x.expr, f); },
+        ExprKind::RecordUpdate { base, fields } => {
+            walk_expr_mut(base, f);
+            for x in fields { walk_expr_mut(&mut x.expr, f); }
+        }
+        ExprKind::Block(b) => {
+            for s in &mut b.stmts {
+                match s {
+                    Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } | Stmt::LetCode { expr, .. } => walk_expr_mut(expr, f),
+                }
+            }
+            walk_expr_mut(&mut b.result, f);
+            for on in &mut b.ons { walk_expr_mut(&mut on.expr, f); }
+        }
+        ExprKind::Quote(x) | ExprKind::Splice(x) => walk_expr_mut(x, f),
+        ExprKind::J { proof, motive, case } => {
+            walk_expr_mut(proof, f);
+            walk_expr_mut(motive, f);
+            walk_expr_mut(case, f);
         }
     }
 }

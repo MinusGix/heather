@@ -1,7 +1,7 @@
 # Recursion at the top: compiling structural recursion against `below`
 
 Status: **decided** (Minus, 2026-11-04): option A, staged as §4 lists;
-slice 1 is issues/recursion-below-nat-fallback.md
+slices 1–3 built (§4, §5); slice 1 is issues/recursion-below-nat-fallback.md
 (issues/recursion-on-elaborated-terms.md). Step 7 of
 docs/elaborator-principles-survey.md §8, extending its §6.2–6.3.
 
@@ -177,6 +177,33 @@ codata (corecursion is a different lowering), and `meta fn`s.
    cov-window-in-theorem-arms, cov-convoy-motive-second-ambient,
    guard-matches-self-calls-by-term, ih-generalization-under-exists, the rest
    of cov-window-term-size.
+
+   *As built* (2026-11-07, issues/recursion-at-top-wf.md): by **hoisting**,
+   not a new `Below`. The body's own first `match z` moves to the top: one
+   arm per constructor, binding that `match`'s own binder names, rebinding
+   `z` to the constructor term (`let z: T = Cons(h, t)`), with every
+   `match z` in the body replaced by its arm for that constructor (a
+   `match` on a known constructor, taken at the surface;
+   `recursion_at_top_hoisted` in crates/elab/src/lib.rs). The wrapper is the
+   guard (`top_guard` in `elab_match_wf`); everything else is the existing
+   tier-1 lowering, so the window is the `below` and its convoys carry calls
+   at any depth, as at `Nat` (§5). A body whose `match` is already outermost
+   lowers to the same term as before, so the default costs nothing there.
+   The rewrite declines (the plain lowering stands) where it would have to
+   track scopes: `z` rebound in the body, a `match z` with an equation, a
+   written motive or a nested pattern. Hoisted names the rest of the body
+   mentions are replaced by fresh ones.
+
+   Retired: ih-generalization-under-exists (summation's `RecSum` is written
+   directly), the `fn-recursion-means-the-function` refusals at tier-1 `Wf` (the parameter
+   in its arm, a `let` above, a `match` off the result), and the
+   branch-on-varied-parameter refusals over a list. **Not** retired: the
+   window and the term comparison stay (the keys are still the child terms,
+   built by the same alias code at both sites), so
+   guard-matches-self-calls-by-term, cov-convoy-motive-second-ambient and
+   cov-window-term-size are unchanged, and cov-window-in-theorem-arms'
+   second probe (a chain `match` under a `λ`) still gets the outer goal,
+   at the top as on master.
 
 Retires, at the end: the guard-selection family, the window, the
 surface-scoped planner for every inductive below the indexed tier.
