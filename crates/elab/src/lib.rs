@@ -3349,6 +3349,19 @@ impl Elaborator {
         self.traits
             .derived()
             .iter()
+            .filter(|d| !crate::resolve::is_open_head(d.head.as_deref()))
+            .map(|d| d.name.as_str())
+            .collect()
+    }
+
+    /// The **open** derivations minted so far, in mint order: an upcast or a
+    /// merged class's assembly at a class carrier, abstracted over the
+    /// context prefix it was found in ([`Self::record_open`]).
+    pub fn open_derivations(&self) -> Vec<&str> {
+        self.traits
+            .derived()
+            .iter()
+            .filter(|d| crate::resolve::is_open_head(d.head.as_deref()))
             .map(|d| d.name.as_str())
             .collect()
     }

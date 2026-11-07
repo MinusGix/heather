@@ -302,6 +302,64 @@ content-addressed name; see §9.2 for why and what it costs.
 Locals and scoped values never touch this table: step 1 of the search returns
 before it is consulted, and nothing writes it but a mint.
 
+### 8.1 Open derivations (amended 2026-11-06)
+
+A class carrier has two answers that are not closed and are not exactly a
+local either: an **upcast** from a child dictionary in scope (step 1b,
+`docs/traits-owner-dispatch-design.md` §3) and a **merged class's assembly**
+(step 2b, `join_parents`). Both are records assembled field by field and
+kernel-checked at the goal. Inside `section<K: OrderedField(…)>` every item
+repeats the same few of them, and each repetition paid for the assembly, for
+the kernel check, and again in the gate, because the record is inlined into
+the proof term. One generic `linarith` paid about 12x its `Rat` twin, nearly
+all of it here. The parent records from a weaker-class rule's premise were the
+same cost (`issues/sign-rules-at-weakest-class.md`).
+
+Both answers are built from the context's **prefix** alone: the carrier, its
+operations, the dictionary, and what a `let` in scope built from those. So
+they are canonicalized over that prefix:
+
+- **Recorded** (`record_open`) where step 1b or 2b answers. The shortest
+  prefix of Γ that the goal and the value both live in is found by
+  strengthening, which is monotone in the prefix length, so a binary search
+  finds it. The value is abstracted over that prefix as `λ prefix. value` at
+  `Π prefix. goal` and queued with the closed queue entries, read out of the
+  goal world as `record_joined` reads its type. The value is queued, not the
+  goal, because the mint cannot re-run the search: a merged class's parent
+  can come from a `let` (a tactic's certificate binds the integers it needs)
+  that the empty context does not have.
+- **Minted** between items (`mint_open`), checked in the empty context like
+  any mint, and filed under the head `#open:<goal class>`. The closed table's
+  lookups skip these entries, and `derived_instances` does not list them
+  (`open_derivations` does).
+- **Read** at step 1a (`open_hit`), after the exact scope pass and before
+  step 1b, so a local of exactly the goal type still wins. An entry applies
+  where its telescope's binder types are exactly Γ's first entries and its
+  goal, weakened past the rest of Γ, converts with the goal. The answer is
+  the global applied to those prefix variables (`app@` nodes), and the
+  innermost matching prefix wins, as step 1b takes the innermost dictionary.
+  When the prefix ends in a dictionary of a descendant class, step 1a
+  reports that dictionary as its provenance, as 1b does, so a dispatched
+  projection still reads its field out of the child.
+
+**Syntactic readers.** A dictionary that used to be a written record is now
+an application of a global, and a reader that walked the record by syntax
+needs a δ step it did not take before. Two needed changes:
+
+- `ring`'s `same_dictionary_read` unfolds an open derivation at the base of a
+  projection chain (`unfold_open_app`) to see that a parent class's `inv` is
+  the section's `K.inv`.
+- `rewrite`'s `match_spine` defers an open application in a law's left side
+  to conversion (`is_open_app`), as it deferred the record, so it is checked
+  once `bind_dictionaries` has bound the law's dictionary.
+
+A new syntactic reader of dictionaries should do the same.
+
+As with the closed table, the first item of a prefix still inlines its copy.
+Library modules mint the common prefixes (an `OrderedField` section's upcasts
+to `CommRing`, `Semiring`, `GroupRel`), so a client section with the same
+binders starts out with hits.
+
 ## 9. What implementing this corrected
 
 ### 9.1 Selection is by checked trial, not by head keying
