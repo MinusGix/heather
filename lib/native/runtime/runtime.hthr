@@ -338,10 +338,12 @@ theorem Setup::eq_trans<A>(a, b, c: A, p: a = b, q: b = c): a = c { trans(p, q) 
 // program's numbering (`Function::relabel`), and every call of the program
 // is answered by the uncurried meaning of the function it names, which is
 // what each function, so renamed, returns (`Compile::part`). Then
-// `program_eval_sources` makes the program's evaluation those meanings, so
+// `program_fit_sources` makes the program's evaluation those meanings, so
 // the agreement assumes nothing. A function is answered only by functions
-// below it, which `program_evaluable` checks by evaluation; no function's
-// proof unfolds another's code.
+// below it at their arity, which `program_calls_fit` checks by evaluation;
+// no function's proof unfolds another's code. The caller checks only that
+// the calls fit (linear in the program), never `evaluable`'s quadratic
+// disjointness (issues/runtime-fn-caller-agreement-fuel.md).
 
 // A function of words to a count, curried (a measure, spelled by the
 // generator as a `λ` per word), and the same on a word list.
@@ -476,12 +478,11 @@ fn Compile::table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> → BitVe
 // An instance's code, linked into a program whose calls `srcs` answers,
 // returns its function's meaning: where `links` names, for each entry of
 // its table, a function of the program answered by that entry's meaning
-// (`linked`, by conversion), its code is evaluable against its table
-// (`ok`), and it takes its function's parameters (`params`), both by
+// (`linked`, by conversion), its code's calls fit its table (`ok`), and it takes its function's parameters (`params`), both by
 // evaluation. This is one conjunct of `program_sourced`.
 theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>,
     linked: links.map(λ (n: Nat) => link_source(srcs, n)) = c.world.uncurried(),
-    ok: c.code.evaluable(c.world.arity()).IsTrue(), params: c.code.parameters.len().matches(c.reflected.params.len()).IsTrue()):
+    ok: c.code.calls_fit(c.world.arity()).IsTrue(), params: c.code.parameters.len().matches(c.reflected.params.len()).IsTrue()):
     (words: List<BitVec(64)>) → words.len() = Compile::linked(f, c, links).parameters.len() →
     Compile::linked(f, c, links).eval(link_sources(srcs), words) = Compile::uncurried(f, c, words) {
     λ words n => {
@@ -988,7 +989,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let meaning <- runtime_global("Fun::meaning");
     let code_of <- runtime_global("Setup::code");
     let program_eval <- runtime_global("program_eval");
-    let eval_sources <- runtime_global("program_eval_sources");
+    let eval_sources <- runtime_global("program_fit_sources");
     let sources <- runtime_global("link_sources");
     let count <- runtime_global("runtime_count");
     let word_list <- runtime_ctors_at(ts.words);

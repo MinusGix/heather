@@ -1956,6 +1956,18 @@ impl Elaborator {
         }
     }
 
+    /// Did comparing two committed types run out of fuel (rather than find
+    /// them different)? Asked only on the way to reporting a mismatch.
+    fn ty_conv_out_of_fuel(&self, run: &mut Run, at: usize, a: &Type, b: &Type, lvl: &Level) -> bool {
+        let (pa, pb) = (run.partial_ty(a), run.partial_ty(b));
+        let (Some(x), Some(y)) = (run.committed_ty(&pa), run.committed_ty(&pb)) else { return false };
+        let Ok(cx) = run.cx(at) else { return false };
+        matches!(
+            self.goal_oracle().convert_type(&cx.gamma, Layer::Prog, &x, &y, lvl),
+            Err(heather_kernel::conv::ConvError::OutOfFuel)
+        )
+    }
+
     /// [`Self::same_ty`] for terms: their types, then the terms, compared as
     /// the reflexivity equations they would be the two sides of.
     fn same_tm(&self, run: &mut Run, at: usize, x: &Reified, y: &Reified) -> Result<bool, Fault> {
@@ -3158,6 +3170,16 @@ impl Elaborator {
             let k = run.world() as u32 - m;
             let (fun, dom, cod) = (f.term.shift_global(k), Rc::new(dom.shift_global(k)), Rc::new(cod.shift_global(k)));
             if !a.level.equiv(&dom_level) || !self.same_ty(run, at, &a.ty, &dom, &dom_level)? {
+                // A comparison that ran out of fuel is not a mismatch: say so,
+                // and name the budget, rather than spell two types that may
+                // well be convertible (issues/runtime-fn-caller-agreement-fuel.md).
+                if a.level.equiv(&dom_level) && self.ty_conv_out_of_fuel(run, at, &a.ty, &dom, &dom_level) {
+                    return Err(Fault::Ill(format!(
+                        "an argument's type could not be compared with the expected type within the conversion budget \
+                         ({} steps): the comparison ran out of fuel, which is not a mismatch",
+                        self.policy.fuel
+                    )));
+                }
                 return Err(Fault::Ill(format!(
                     "an argument of type `{}` where `{}` is expected",
                     self.shown_ty(run, at, &a.ty),

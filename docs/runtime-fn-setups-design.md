@@ -1114,13 +1114,19 @@ every runtime fn it reaches. What the round fixed:
   stated over the class, so it holds for any instance, hand-written or
   generated: where the program's word functions read through the renaming
   are the table's meanings (`linked`, one equation between lists of word
-  functions, checked by conversion), the code is evaluable against its
-  table and takes its function's parameters (both by evaluation), the
-  renamed code returns its meaning. The parts are `program_sourced`'s
-  conjuncts, and `program_eval_sources` (moved from `function_ir_compile`
-  to `function_ir_eval`) turns them into the program's agreement. That
-  "function `i` is answered only by functions below `i`" is
-  `program_evaluable`, checked by evaluation; the lowering needs no bound.
+  functions, checked by conversion), the code's calls fit its table and it
+  takes its function's parameters (both by evaluation), the renamed code
+  returns its meaning. The parts are `program_sourced`'s conjuncts, and
+  `program_fit_sources` (`function_ir_eval`) turns them into the program's
+  agreement. That "function `i` is answered only by functions below `i`,
+  at their arity" is `program_calls_fit`, checked by evaluation; the
+  lowering needs no bound. Answering calls alike (`eval_answers`) needs
+  only that the calls fit, not `evaluable`'s disjointness, which is
+  quadratic in a function's size: checking it for every callee made a
+  caller of a dozen-arm callee run out of fuel
+  (issues/runtime-fn-caller-agreement-fuel.md). `program_evaluable`
+  remains what the x86 certificate checks (`eval_computes` needs the
+  disjointness).
 - **The program.** The generator walks the tables depth first (each
   callee's table read by reflecting it again, as its own generator did) and
   places each function once, callees first, the function itself last. A

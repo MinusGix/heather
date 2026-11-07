@@ -840,32 +840,75 @@ theorem loop_eval_same(step, other_step: Valuation() → Valuation(), same: (v: 
     }
 }
 
-// The theorem: an evaluable region, its calls answered alike wherever the
-// arities fit, evaluates alike from agreeing valuations.
-theorem StructuredRegion::eval_answers(self region: StructuredRegion, call, other: Answers(), arity: Nat → Option<Nat>,
-    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → other(f, words) = call(f, words)):
-    region.evaluable(arity).IsTrue() → (values, others: Valuation()) → Valuation::Same(values, others) →
-    Valuation::Same(region.eval(call, values), region.eval(other, others)) {
+// Every call names a function of the arity it is given: all that answering
+// a region's calls alike needs of it (`eval_answers`). Linear in the
+// region, where `evaluable`'s disjointness checks are quadratic, so a
+// program built from functions already checked (a runtime fn's callees,
+// issues/runtime-fn-caller-agreement-fuel.md) is linked by this alone.
+fn StructuredRegion::calls_fit(self region: StructuredRegion, arity: Nat → Option<Nat>) → Bool {
     match region {
-        Dataflow(body) => λ ok values others same => eval_nodes_same(body.nodes, values, others, same),
-        Sequence(prefix, continuation) => λ ok values others same => {
+        Dataflow(_) => True,
+        Sequence(_, continuation) => continuation.calls_fit(arity),
+        Compose(prefix, continuation) => prefix.calls_fit(arity) && continuation.calls_fit(arity),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.calls_fit(arity) && when_false.calls_fit(arity),
+        Call(callee, arguments, _) => arity_fits(arity(callee), arguments.len()),
+        Loop(_, _, _, _, body, _, _, _, _) => body.calls_fit(arity),
+    }
+}
+
+theorem StructuredRegion::evaluable_calls_fit(self region: StructuredRegion, arity: Nat → Option<Nat>):
+    region.evaluable(arity).IsTrue() → region.calls_fit(arity).IsTrue() {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(prefix, continuation) => λ ok => {
             let parts = Bool::is_true_and(nodes_evaluable(prefix.nodes),
                 disjoint(continuation.writes(), nodes_mentions(prefix.nodes)) && continuation.evaluable(arity), ok);
             let later = Bool::is_true_and(disjoint(continuation.writes(), nodes_mentions(prefix.nodes)), continuation.evaluable(arity), parts.right);
-            continuation.eval_answers(call, other, arity, answers, later.right, prefix.eval(values), prefix.eval(others),
-                eval_nodes_same(prefix.nodes, values, others, same))
+            continuation.evaluable_calls_fit(arity, later.right)
         },
-        Compose(prefix, continuation) => λ ok values others same => {
+        Compose(prefix, continuation) => λ ok => {
             let parts = Bool::is_true_and(prefix.evaluable(arity),
                 disjoint(continuation.writes(), prefix.mentions()) && continuation.evaluable(arity), ok);
             let later = Bool::is_true_and(disjoint(continuation.writes(), prefix.mentions()), continuation.evaluable(arity), parts.right);
-            continuation.eval_answers(call, other, arity, answers, later.right, prefix.eval(call, values), prefix.eval(other, others),
-                prefix.eval_answers(call, other, arity, answers, parts.left, values, others, same))
+            Bool::is_true_and_intro(prefix.calls_fit(arity), continuation.calls_fit(arity),
+                prefix.evaluable_calls_fit(arity, parts.left), continuation.evaluable_calls_fit(arity, later.right))
         },
-        Conditional(_, condition, _, _, when_true, when_false) => λ ok values others same => λ w id => {
+        Conditional(_, condition, _, _, when_true, when_false) => λ ok => {
             let parts = Bool::is_true_and(absent(condition, when_true.writes() ++ when_false.writes()),
                 when_true.evaluable(arity) && when_false.evaluable(arity), ok);
             let arms = Bool::is_true_and(when_true.evaluable(arity), when_false.evaluable(arity), parts.right);
+            Bool::is_true_and_intro(when_true.calls_fit(arity), when_false.calls_fit(arity),
+                when_true.evaluable_calls_fit(arity, arms.left), when_false.evaluable_calls_fit(arity, arms.right))
+        },
+        Call(callee, arguments, result) => λ ok => Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()), ok).right,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok => {
+            let passes = Bool::is_true_and(body.evaluable(arity), distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
+                && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+                && outputs.len().matches(parameters.len())))))), ok);
+            body.evaluable_calls_fit(arity, passes.left)
+        },
+    }
+}
+
+// The theorem: a region whose calls fit, its calls answered alike wherever
+// the arities fit, evaluates alike from agreeing valuations.
+theorem StructuredRegion::eval_answers(self region: StructuredRegion, call, other: Answers(), arity: Nat → Option<Nat>,
+    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → other(f, words) = call(f, words)):
+    region.calls_fit(arity).IsTrue() → (values, others: Valuation()) → Valuation::Same(values, others) →
+    Valuation::Same(region.eval(call, values), region.eval(other, others)) {
+    match region {
+        Dataflow(body) => λ ok values others same => eval_nodes_same(body.nodes, values, others, same),
+        Sequence(prefix, continuation) => λ ok values others same =>
+            continuation.eval_answers(call, other, arity, answers, ok, prefix.eval(values), prefix.eval(others),
+                eval_nodes_same(prefix.nodes, values, others, same)),
+        Compose(prefix, continuation) => λ ok values others same => {
+            let parts = Bool::is_true_and(prefix.calls_fit(arity), continuation.calls_fit(arity), ok);
+            continuation.eval_answers(call, other, arity, answers, parts.right, prefix.eval(call, values), prefix.eval(other, others),
+                prefix.eval_answers(call, other, arity, answers, parts.left, values, others, same))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ ok values others same => λ w id => {
+            let arms = Bool::is_true_and(when_true.calls_fit(arity), when_false.calls_fit(arity), ok);
             let bit: (values(1, condition).head_bit() = others(1, condition).head_bit()) =
                 sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(1, condition)));
             let aligned = match values(1, condition).head_bit() as λ b =>
@@ -881,26 +924,21 @@ theorem StructuredRegion::eval_answers(self region: StructuredRegion, call, othe
                 }), aligned)
         },
         Call(callee, arguments, result) => λ ok values others same => {
-            let parts = Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()), ok);
             let words = words_of(values, arguments);
             let read: (words_of(others, arguments) = words) = words_agree(arguments, values, others, λ id _ => same(64, id));
             let fits: arity_fits(arity(callee), words.len()).IsTrue() =
-                j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), parts.right);
+                j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), ok);
             let answered: (other(callee, words_of(others, arguments)) = call(callee, words)) =
                 trans(cong_fn(λ (ws: List<BitVec(64)>) => other(callee, ws), read), answers(callee, words, fits));
             Valuation::set_same(values, others, same, result, word_value(call(callee, words)), word_value(other(callee, words_of(others, arguments))),
                 λ w => cong_fn(λ (x: BitVec(64)) => word_value(x, w), answered))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok values others same => {
-            let passes = Bool::is_true_and(body.evaluable(arity), distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
-                && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
-                && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
-                && outputs.len().matches(parameters.len())))))), ok);
             let step = λ (pass: Valuation()) => body.eval(call, pass);
             let other_step = λ (pass: Valuation()) => body.eval(other, pass);
             let end = loop_eval(step, parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs));
             let ran: (loop_eval(other_step, parameters, count, exit, next, others(64, bound).toNat(), words_of(others, inputs)) = end) =
-                trans(loop_eval_same(step, other_step, λ v => body.eval_answers(call, other, arity, answers, passes.left, v, v, λ w id => refl),
+                trans(loop_eval_same(step, other_step, λ v => body.eval_answers(call, other, arity, answers, ok, v, v, λ w id => refl),
                         parameters, count, exit, next, others(64, bound).toNat(), words_of(others, inputs)),
                     eq2(λ (n: Nat) (s: List<BitVec(64)>) => loop_eval(step, parameters, count, exit, next, n, s),
                         cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64, bound)), words_agree(inputs, values, others, λ id _ => same(64, id))));
@@ -926,15 +964,21 @@ fn Function::evaluable(self function: Function, arity: Nat → Option<Nat>) → 
     function.body.evaluable(arity) && (distinct(function.parameters) && disjoint(function.body.writes(), function.parameters))
 }
 
-// An evaluable function, its calls answered alike wherever the arities
-// fit, returns alike.
+fn Function::calls_fit(self function: Function, arity: Nat → Option<Nat>) → Bool { function.body.calls_fit(arity) }
+
+theorem Function::evaluable_calls_fit(self function: Function, arity: Nat → Option<Nat>, ok: function.evaluable(arity).IsTrue()):
+    function.calls_fit(arity).IsTrue() {
+    function.body.evaluable_calls_fit(arity, Bool::is_true_and(function.body.evaluable(arity),
+        distinct(function.parameters) && disjoint(function.body.writes(), function.parameters), ok).left)
+}
+
+// A function whose calls fit, its calls answered alike wherever the
+// arities fit, returns alike.
 theorem Function::eval_answers(self function: Function, call, other: Answers(), arity: Nat → Option<Nat>,
     answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → other(f, words) = call(f, words),
-    ok: function.evaluable(arity).IsTrue(), arguments: List<BitVec(64)>): function.eval(other, arguments) = function.eval(call, arguments) {
-    let parts = Bool::is_true_and(function.body.evaluable(arity),
-        distinct(function.parameters) && disjoint(function.body.writes(), function.parameters), ok);
+    ok: function.calls_fit(arity).IsTrue(), arguments: List<BitVec(64)>): function.eval(other, arguments) = function.eval(call, arguments) {
     let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
-    StructuredRegion::eval_answers(function.body, call, other, arity, answers, parts.left, bound, bound, λ w id => refl, 64, function.result)
+    StructuredRegion::eval_answers(function.body, call, other, arity, answers, ok, bound, bound, λ w id => refl, 64, function.result)
 }
 
 // A program's functions, each answering its calls by the functions after
@@ -1069,15 +1113,37 @@ fn program_sourced(functions: List<Function>, sources: Answers()) → Type {
     }
 }
 
-theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(functions).IsTrue(), sources: Answers(),
+// Every function's calls name earlier functions at their arity: what
+// `program_eval_sources` needs, linear in the program (`calls_fit`).
+fn program_calls_fit(functions: List<Function>) → Bool {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => last.calls_fit(program_arity(earlier)) && program_calls_fit(earlier),
+    }
+}
+
+theorem program_evaluable_calls_fit(functions: List<Function>): program_evaluable(functions).IsTrue() → program_calls_fit(functions).IsTrue() {
+    match functions {
+        Nil => λ _ => trivial,
+        Cons(last, earlier) => λ ok => {
+            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
+            Bool::is_true_and_intro(last.calls_fit(program_arity(earlier)), program_calls_fit(earlier),
+                last.evaluable_calls_fit(program_arity(earlier), parts.left), program_evaluable_calls_fit(earlier, parts.right))
+        },
+    }
+}
+
+// `program_eval_sources` from `program_calls_fit` alone: what a runtime fn's
+// `f::agrees` links its program with (issues/runtime-fn-caller-agreement-fuel.md).
+theorem program_fit_sources(functions: List<Function>, ok: program_calls_fit(functions).IsTrue(), sources: Answers(),
     sourced: program_sourced(functions, sources)):
     (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
         program_eval(functions, f, words) = sources(f, words) {
     match functions {
         Nil => λ f words never => false_elim(never),
         Cons(last, earlier) => λ f words => {
-            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
-            let ih = program_eval_sources(earlier, parts.right, sources, sourced.right);
+            let parts = Bool::is_true_and(last.calls_fit(program_arity(earlier)), program_calls_fit(earlier), ok);
+            let ih = program_fit_sources(earlier, parts.right, sources, sourced.right);
             (match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
                     words.len()).IsTrue() →
@@ -1090,6 +1156,14 @@ theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(fu
             })
         },
     }
+}
+
+// For a program checked whole (`program_evaluable`).
+theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(functions).IsTrue(), sources: Answers(),
+    sourced: program_sourced(functions, sources)):
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
+        program_eval(functions, f, words) = sources(f, words) {
+    program_fit_sources(functions, program_evaluable_calls_fit(functions, ok), sources, sourced)
 }
 
 // An evaluable function, its calls answered by results its callees may

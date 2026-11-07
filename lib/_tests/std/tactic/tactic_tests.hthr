@@ -109,3 +109,19 @@ section<A: OrderedAddGroup(≈, <, <=, +)> {
 // expect-error: an argument of type `OrderedAddGroup<…>` where `LocatedAddGroup<…>` is expected
 theorem no_located_dictionary(x, y: A, h: x <= y): A.inv(y) <= A.inv(x) { by use_law("LocatedAddGroup::neg_le") }
 }
+
+// A generator's term whose argument cannot be compared with the expected
+// type within the conversion budget is refused for the budget, not as a
+// mismatch spelling both types (issues/runtime-fn-caller-agreement-fuel.md:
+// a `runtime fn`'s agreement said `an argument of type True where El[0](…)
+// is expected` when its `IsTrue()` evaluation ran out of fuel).
+fn budget_countdown(n: Nat) → List<Nat> { match n { Zero => Nil, Succ(k) => Cons(k, budget_countdown(k)) } }
+fn budget_heavy() → Bool { budget_countdown(1000000).len().same(1000000) }
+theorem budget_takes_heavy(h: budget_heavy().IsTrue()): True { trivial }
+fn budget_apply_heavy() → Tac<Expr> {
+    let f <- lookup("budget_takes_heavy").or_fail("");
+    let t <- resolve("trivial").or_fail("");
+    exact(App(Global(f), Hd(t)))
+}
+// expect-error: within the conversion budget
+theorem budget_heavy_argument(): True { by budget_apply_heavy() }

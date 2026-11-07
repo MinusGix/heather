@@ -162,6 +162,68 @@ theorem spread_rt_is(): spread::rt = Fun([Word(64)], Word(64),
 theorem spread_runs(x: BitVec(64)): program_eval(spread::program, 0, [x]) = spread(x) { spread::agrees(x) }
 
 // ---------------------------------------------------------------------------
+// A fourteen-arm callee and its caller (issues/runtime-fn-caller-agreement-fuel.md):
+// a lexer's byte classifier. Linking checks only that each function's calls
+// fit (`program_calls_fit`, linear); `program_evaluable`'s disjointness is
+// quadratic in a function's size, and for `byte_class` alone it runs past
+// the kernel's per-declaration fuel, so neither function could be compiled
+// while `f::agrees` re-checked it for every function of the program.
+
+runtime fn byte_class(b: BitVec(64)) → BitVec(64) {
+    match b.eq_bit(BitVec::ofNat(10)) {
+        True => BitVec::ofNat(6),
+        False => match b.eq_bit(BitVec::ofNat(32)) {
+            True => BitVec::ofNat(0),
+            False => match b.sub(BitVec::ofNat(97)).unsigned_lt_bit(BitVec::ofNat(26)) {
+                True => BitVec::ofNat(1),
+                False => match b.sub(BitVec::ofNat(65)).unsigned_lt_bit(BitVec::ofNat(26)) {
+                    True => BitVec::ofNat(1),
+                    False => match b.eq_bit(BitVec::ofNat(95)) {
+                        True => BitVec::ofNat(1),
+                        False => match b.sub(BitVec::ofNat(48)).unsigned_lt_bit(BitVec::ofNat(10)) {
+                            True => BitVec::ofNat(2),
+                            False => match b.eq_bit(BitVec::ofNat(47)) {
+                                True => BitVec::ofNat(3),
+                                False => match b.eq_bit(BitVec::ofNat(45)) {
+                                    True => BitVec::ofNat(4),
+                                    False => match b.eq_bit(BitVec::ofNat(62)) {
+                                        True => BitVec::ofNat(5),
+                                        False => match b.eq_bit(BitVec::ofNat(9)) {
+                                            True => BitVec::ofNat(0),
+                                            False => match b.eq_bit(BitVec::ofNat(34)) {
+                                                True => BitVec::ofNat(8),
+                                                False => match b.eq_bit(BitVec::ofNat(39)) {
+                                                    True => BitVec::ofNat(8),
+                                                    False => match b.eq_bit(BitVec::ofNat(40)) {
+                                                        True => BitVec::ofNat(9),
+                                                        False => match b.eq_bit(BitVec::ofNat(41)) {
+                                                            True => BitVec::ofNat(10),
+                                                            False => BitVec::ofNat(7),
+                                                        },
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// Two bytes' classes at once: the callee linked twice into one call site's
+// program, its agreement unconditional.
+runtime fn byte_class_pair(a, b: BitVec(64)) → BitVec(64) { byte_class(a).add(byte_class(b) << 8) }
+
+theorem byte_class_pair_runs(a, b: BitVec(64)): program_eval(byte_class_pair::program, 1, [a, b]) = byte_class_pair(a, b) {
+    byte_class_pair::agrees(a, b)
+}
+
+// ---------------------------------------------------------------------------
 // Refusals. Each names its reason, and the function under the prefix is not
 // published either (the item is one transaction).
 
