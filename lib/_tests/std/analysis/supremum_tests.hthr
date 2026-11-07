@@ -1,0 +1,61 @@
+// Probes of `lib/std/analysis/supremum.hthr`: a supremum stated by hand
+// over any ordered field, the located supremum found at the reals and shown
+// to be that one, the converse direction (order completeness gives Cauchy
+// limits) at the reals, and the refusal at the rationals, which have no
+// `OrderComplete` instance. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import list; import relation; import relation_props; import order; import algebra_rel;
+import semiring; import ordered_field; import big_operator; import ring; import omega; import linarith;
+import rat; import creal; import real_fn; import sequence; import supremum; import real_complete;
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+// The open ray below `c` has supremum `c`: `c - ε/2` is in it and above
+// `c - ε`.
+theorem ray_sup(c: K): IsSup(λ (x: K) => x < c, c) {
+    And(λ x xc => StrictOrder::le_of_lt(x, c, xc), λ e pe => {
+        let h = OrderedField::half(e);
+        let ph: (K.unit < h) = OrderedField::half_pos(e, pe);
+        let hh: (h + h ≈ e) = OrderedField::half_add(e);
+        let inside: (c + K.inv(h) < c) = linarith(ph);
+        let above: (c + K.inv(e) < c + K.inv(h)) = linarith(ph, hh);
+        Exists(c + K.inv(h), And(inside, above))
+    })
+}
+
+// So the ray is upper located, with no decision made.
+theorem ray_located(c: K): UpperLocated(λ (x: K) => x < c) {
+    IsSup::located(λ (x: K) => x < c, c, ray_sup(c))
+}
+
+theorem ray_inhabited(c: K): ∃ x: K, x < c {
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let lt: (c + K.inv(K.multiplicative.unit) < c) = linarith(o);
+    Exists(c + K.inv(K.multiplicative.unit), lt)
+}
+
+theorem ray_bounded(c: K): ∃ b: K, UpperBound(λ (x: K) => x < c, b) {
+    Exists(c, (ray_sup(c)).left)
+}
+
+}
+
+// At the reals the capability finds the ray's supremum, and it is `c`.
+theorem creal_ray_sup(c: CReal): OrderComplete::sup(λ (x: CReal) => x < c, ray_inhabited(c), ray_bounded(c), ray_located(c)) ≈ c {
+    IsSup::unique(λ (x: CReal) => x < c, OrderComplete::sup(λ (x: CReal) => x < c, ray_inhabited(c), ray_bounded(c), ray_located(c)), c,
+        OrderComplete::is_sup(λ (x: CReal) => x < c, ray_inhabited(c), ray_bounded(c), ray_located(c)), ray_sup(c))
+}
+
+// The converse direction, read at the reals: a Cauchy sequence's limit as a
+// supremum.
+theorem creal_limit_by_sup(xs: Nat → CReal, hc: CauchySeq(xs)): ∃ l: CReal, Converges(xs, l) {
+    OrderComplete::cauchy_limit(xs, hc)
+}
+
+// The rationals have no `OrderComplete` instance, so the located supremum
+// is refused there although the ray is located.
+// expect-error: no instance for `OrderComplete
+theorem rat_ray_sup_refused(c: Rat): ∃ s: Rat, IsSup(λ (x: Rat) => x < c, s) {
+    Exists(OrderComplete::sup(λ (x: Rat) => x < c, ray_inhabited(c), ray_bounded(c), ray_located(c)),
+        OrderComplete::is_sup(λ (x: Rat) => x < c, ray_inhabited(c), ray_bounded(c), ray_located(c)))
+}

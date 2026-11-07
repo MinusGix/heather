@@ -13,6 +13,10 @@
 //
 // Nothing is chosen: the limit is `CReal::lim` of a sequence built from the
 // modulus, and its terms evaluate.
+//
+// So `CReal` is order complete too (supremum.hthr's `OrderComplete`): an
+// inhabited, bounded-above, upper-located set of reals has a supremum, the
+// limit of the bisection that `CauchyComplete::located_sup` runs.
 
 import logic;
 import nat;
@@ -32,6 +36,7 @@ import rat;
 import creal;
 import real_fn;
 import sequence;
+import supremum;
 
 // A positive real is above some `2^-k`: above some `1/(k+1)` from its terms
 // on (`pos_gap`), and `2^-k <= 1/(k+1)`.
@@ -130,4 +135,15 @@ theorem CReal::cauchy_complete(xs: Nat → CReal, hc: CauchySeq(xs)): ∃ l: CRe
 
 instance CauchyComplete<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {
     cauchy_limit := CReal::cauchy_complete,
+}
+
+// Located suprema, by bisection in the Cauchy-complete reals.
+theorem CReal::located_sup(S: CReal → Type, inh: ∃ x: CReal, S(x), bdd: ∃ b: CReal, UpperBound(S, b), loc: UpperLocated(S)):
+    ∃ s: CReal, IsSup(S, s)
+{
+    CauchyComplete::located_sup(S, inh, bdd, loc)
+}
+
+instance OrderComplete<CReal>(CReal::Same, CReal::Lt, CReal::Le, CReal::add, CReal::mul) {
+    located_sup := CReal::located_sup,
 }
