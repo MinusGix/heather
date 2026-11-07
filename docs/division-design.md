@@ -190,7 +190,11 @@ designation / at OrderedField := OrderedField::div
   `OrderedAddMonoid::positive_add`, and its nonnegative premise ran
   `linarith` where `positive_add` needed nothing. A second pass that
   withholds every search rule first was tried and dropped: a goal plain
-  rules cannot answer then paid for its plain search twice.
+  rules cannot answer then paid for its plain search twice. What the move
+  still costs at a field is conversion: a weaker rule's conclusion reaches
+  `A.unit` through the upcast dictionary, and comparing it with the
+  section's `K.unit` goes through projections
+  (issues/upcast-projection-conversion-cost.md).
 - **Arithmetic last.** `invertible_by_nlinarith`/`_neg` and, at the leaves,
   `positive_add_by_nlinarith`, `negative_add_by_nlinarith` (subtraction is
   `x + K.inv(y)` there) and `nonneg_by_linarith`. A tactic default runs in a

@@ -89,9 +89,20 @@ So: re-measure a weaker-class `positive_add` against the field-level one with
   `LocatedAddMonoid::positive_add_nonneg` before
   `OrderedAddMonoid::positive_add`; its `NonNegBy` premise ran
   `nonneg_by_linarith` first. Rules over a class are now tried weakest
-  class first (`rule_class_rank`). With both, the field probes cost what
-  they did on master, item for item within noise (`div_sum` 9 goals on both
-  sides). A plain-rules-first second pass was tried instead of (b) and
-  dropped: it doubled the plain search of every goal that needs a search
-  rule (the `nlinarith` probes, about 1.5x).
+  class first (`rule_class_rank`). With both, the field probes run the
+  same search as on master (resolve goals 9,341 against 9,360; `div_sum` 9
+  goals on both sides).
+- 2026-11-07: What is left is conversion, not search. `scripts/perf ab
+  --base origin/master --whole-tree` over the field probes (cold, three
+  samples): the probe items take about 35% longer (6.4 s to 8.1–9.4 s), the
+  kernel gate about 25%, and `conv_shortcut_hits` doubles (24,285 to
+  49,870), all of it in items whose proofs go through a weaker-class rule
+  (`div_square_plus_one` 186 to 1,741 queries). A rule's conclusion speaks
+  of `A.unit` through the upcast dictionary, and every comparison with the
+  field section's own `K.unit` is a conversion through projections. Filed as
+  issues/upcast-projection-conversion-cost.md. Far from the 20x that kept
+  the rules at the field, and the generality is the point of the move.
+- 2026-11-07: A plain-rules-first second pass was tried instead of the
+  ordering and dropped: it doubled the plain search of every goal that
+  needs a search rule (the `nlinarith` probes, about 1.5x).
 
