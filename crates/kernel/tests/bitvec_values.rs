@@ -732,9 +732,12 @@ fn a_node_longer_than_any_chain_the_stack_holds_checks() {
     // runs on the test thread's own stack, with no `RUST_MIN_STACK` help
     // assumed; its elements share one `Rc`, as a literal's repeated
     // character does. Typing, substitution and syntactic equality walk the
-    // node; comparing two long vectors *by value* is the conversion's depth
-    // budget's business (issues/long-vector-conversion-depth.md), so the
-    // value comparison is pinned at a length under it.
+    // node; comparing two separately built nodes *by value* unfolds them into
+    // a chain as long as the node, which conversion walks by deferring its
+    // deep tail comparisons (docs/deep-term-walks-design.md). That is pinned
+    // at a tenth of the length, far past the depth budget: each unfolded
+    // tail is a fresh node whose bounds walk its whole live window, so the
+    // comparison is quadratic in the length (issues/vec-items-window-bounds.md).
     let node_of = |n: usize| Term::VecItems {
         level: Level::Zero,
         elem: rty(Type::Nat),
@@ -748,6 +751,6 @@ fn a_node_longer_than_any_chain_the_stack_holds_checks() {
     let shifted = node.shift_local(1);
     assert!(shifted == node);
     assert!(node_of(n as usize) == node);
-    let short = node_of(500);
-    accepts(&g, &short, &node_of(500), &vec(Type::Nat, Term::NatLit(500u64.into())));
+    let m = 20_000u64;
+    accepts(&g, &node_of(m as usize), &node_of(m as usize), &vec(Type::Nat, Term::NatLit(m.into())));
 }

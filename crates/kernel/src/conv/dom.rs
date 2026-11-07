@@ -431,7 +431,7 @@ pub(super) trait Dom<'v>: Sized {
     /// `None` opts a domain out. A key must determine the pair's denotation:
     /// the closures, the scope each is read in, and the Ψ they are read
     /// under.
-    type MemoKey: std::hash::Hash + Eq;
+    type MemoKey: std::hash::Hash + Eq + Clone;
     fn tm_memo_key(env: &Env<'v>, a: &Self::TmC, b: &Self::TmC) -> Option<Self::MemoKey>;
     /// A **type** in weak head normal form.
     type Ty;

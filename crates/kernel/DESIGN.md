@@ -583,9 +583,26 @@ and by the exporter. The elaborator emits it for a vector literal of more than
 256 elements (`VEC_ITEMS_ABOVE`, `check_vec_lit`), and a collection literal
 over one builds only a 64-element constructor spine (`LONG_SPINE`) with the
 fold over the node behind it, so the term the gate sees stays shallow too.
-What remains linear in depth is *comparing* two long vectors by value: the
-conversion's Σ rule recurses on the tail natively and meets the depth budget
-(`issues/long-vector-conversion-depth.md`).
+Comparing two long vectors *by value* unfolds them into chains; conversion
+walks those at constant native depth by deferring the comparisons it meets
+deep (docs/deep-term-walks-design.md), in time still quadratic in the length
+(`issues/vec-items-window-bounds.md`).
+
+**A deep data value is walked by a loop, not a frame per level.** Data is
+deep along one child (a list's tail, a vector chain's rest, a successor's
+predecessor), and `term::spine_child` names it. Past `SPINE_ITERATE_AT`
+frames, the bounds cache warms the spine bottom-up and substitution
+rebuilds it in a loop over a heap path; the checker and conversion queue
+the premise they meet that deep instead of descending (premises of a yes/no
+judgment are a conjunction), with every later premise of the same context
+queued behind it, and the frame that returns to depth zero judges the queue
+as a stack in the recursive walk's own order (order changes no verdict, but
+a conjunction stops at its first failure, so it changes the cost). A speculative
+δ-attempt drains its own queued premises before it counts as a success and
+drops them when it fails; a `true` recorded while premises are queued is
+memoized provisionally and taken back with them (conversion), and a refused
+check that queued anything forgets the typing memos. Below the threshold every walk is its old code.
+Design and what still recurses: docs/deep-term-walks-design.md.
 
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental

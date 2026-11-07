@@ -541,7 +541,31 @@ fn sub_m_sig<M: Mapper>(sig: &Rc<MSig>, m: &mut M, at: Depths) -> Rc<MSig> {
     }
 }
 
+thread_local! {
+    /// Native depth of [`sub_tm`]: past [`crate::term::SPINE_ITERATE_AT`]
+    /// a data spine is mapped by [`sub_tm_spine`]'s loop instead of one
+    /// frame per node (docs/deep-term-walks-design.md).
+    static SUB_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
+    if let Some(done) = sub_tm_answered(t, m, at) {
+        return done;
+    }
+    let depth = SUB_DEPTH.with(|d| d.get());
+    if depth >= crate::term::SPINE_ITERATE_AT && crate::term::spine_child(t).is_some() {
+        return sub_tm_spine(t, m, at);
+    }
+    SUB_DEPTH.with(|d| d.set(depth + 1));
+    let out = sub_tm_walked(t, m, at);
+    SUB_DEPTH.with(|d| d.set(depth));
+    out
+}
+
+/// [`sub_tm`]'s answers that take no walk of `t`'s children: a whole-node
+/// replacement, a skipped subtree, a variable, a memoized shared node.
+/// `None` means "walk it" ([`sub_tm_walked`]).
+fn sub_tm_answered<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Option<Rc<Term>> {
     if let Some(count) = M::COUNT_NODES {
         count(1);
     }
@@ -551,7 +575,7 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     // does not even apply — the node really is different).
     if let Some(r) = m.pre_tm(t, at) {
         m.note();
-        return r.into_rc();
+        return Some(r.into_rc());
     }
     if m.skip_tm(t, at) {
         #[cfg(debug_assertions)]
@@ -565,7 +589,7 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
                 M::NAME
             );
         }
-        return Rc::clone(t);
+        return Some(Rc::clone(t));
     }
     let key = (Rc::as_ptr(t) as usize, at);
     // `Var` leaves are shared by construction (`Term::var_rc`), so their
@@ -578,22 +602,22 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
         let before = *m.changes();
         let mapped = map_term(t, m, at);
         if *m.changes() == before {
-            return shared_tm::<M>(t, mapped);
+            return Some(shared_tm::<M>(t, mapped));
         }
         if let Term::Var(_) = mapped {
-            return mapped.into_rc();
+            return Some(mapped.into_rc());
         }
         if Rc::strong_count(t) == 1 {
-            return Rc::new(mapped);
+            return Some(Rc::new(mapped));
         }
-        let Some(memo) = m.memo() else { return Rc::new(mapped) };
+        let Some(memo) = m.memo() else { return Some(Rc::new(mapped)) };
         if let Some((_, out, _)) = memo.terms.get(&key) {
             crate::stats::subst_memo_hits(1);
-            return Rc::clone(out);
+            return Some(Rc::clone(out));
         }
         let out = Rc::new(mapped);
         memo.terms.insert(key, (Rc::clone(t), Rc::clone(&out), true));
-        return out;
+        return Some(out);
     }
     // As in `sub_ty`.
     let shared = Rc::strong_count(t) > 1 && m.memo().is_some();
@@ -616,19 +640,155 @@ fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
             if changed {
                 m.note();
             }
-            return out;
+            return Some(out);
         }
     }
+    None
+}
+
+/// [`sub_tm`] past its answers: map the children, keep `t` when nothing
+/// changed, and memoize a shared node.
+fn sub_tm_walked<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
+    let shared = Rc::strong_count(t) > 1;
     let before = *m.changes();
     let mapped = map_term(t, m, at);
     let changed = *m.changes() != before;
+    sub_tm_settled(t, m, at, mapped, changed, shared)
+}
+
+/// The node `mapped` built for `t`: `t` itself when nothing changed, and
+/// the memo's entry for a node that was shared (`strong_count > 1`) before
+/// the walk.
+fn sub_tm_settled<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths, mapped: Term, changed: bool, shared: bool) -> Rc<Term> {
     let out = if changed { mapped.into_rc() } else { shared_tm::<M>(t, mapped) };
     if shared {
         if let Some(memo) = m.memo() {
-            memo.terms.insert(key, (Rc::clone(t), Rc::clone(&out), changed));
+            memo.terms.insert((Rc::as_ptr(t) as usize, at), (Rc::clone(t), Rc::clone(&out), changed));
         }
     }
     out
+}
+
+/// A deep data spine mapped by a loop (docs/deep-term-walks-design.md):
+/// down [`crate::term::spine_child`] while each node needs walking, the
+/// bottom by an ordinary [`sub_tm`] at depth zero, then back up rebuilding
+/// each node around its mapped child ([`map_spine_node`]). Every node gets
+/// exactly [`sub_tm`]'s treatment — its answers on the way down, the
+/// change test and memo on the way up — so the result is the recursion's;
+/// only the order in which siblings are visited differs, and no mapper's
+/// result depends on that.
+#[inline(never)]
+fn sub_tm_spine<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
+    let mut path = vec![Rc::clone(t)];
+    let mut bottom = None;
+    while bottom.is_none() {
+        let last = path.last().expect("the path starts at t");
+        let child = crate::term::spine_child(last).expect("only spine forms join the path");
+        if let Some(done) = sub_tm_answered(child, m, at) {
+            bottom = Some((done, false));
+        } else if crate::term::spine_child(child).is_some() {
+            let child = Rc::clone(child);
+            path.push(child);
+        } else {
+            let child = Rc::clone(child);
+            let depth = SUB_DEPTH.with(|d| d.replace(0));
+            let before = *m.changes();
+            let out = sub_tm_walked(&child, m, at);
+            let changed = *m.changes() != before;
+            SUB_DEPTH.with(|d| d.set(depth));
+            bottom = Some((out, changed));
+        }
+    }
+    let (mut acc, mut acc_changed) = bottom.expect("the loop ends at a bottom");
+    // `acc_changed` is whether the mapped child differs from the original;
+    // an answered child (a skip, a memo hit) reports through the counter,
+    // so compare the nodes instead.
+    let depth = SUB_DEPTH.with(|d| d.replace(0));
+    let shared: Vec<bool> = path.iter().map(|node| Rc::strong_count(node) > 2).collect();
+    for (node, shared) in path.iter().zip(shared).rev() {
+        let child = crate::term::spine_child(node).expect("a spine form");
+        acc_changed = acc_changed || !Rc::ptr_eq(&acc, child);
+        let before = *m.changes();
+        let mapped = map_spine_node(node, m, at, acc);
+        let changed = acc_changed || *m.changes() != before;
+        acc = sub_tm_settled(node, m, at, mapped, changed, shared);
+        acc_changed = changed;
+    }
+    SUB_DEPTH.with(|d| d.set(depth));
+    acc
+}
+
+/// [`map_term`]'s arm for a spine form, with the spine child already
+/// mapped to `child`.
+fn map_spine_node<M: Mapper>(t: &Term, m: &mut M, at: Depths, child: Rc<Term>) -> Term {
+    let on_spine = |c: &Rc<Term>| crate::term::spine_child(t).is_some_and(|s| Rc::ptr_eq(s, c));
+    let mut child = Some(child);
+    let mut sub = |c: &Rc<Term>, m: &mut M| -> Rc<Term> {
+        if on_spine(c) && child.is_some() {
+            child.take().expect("checked")
+        } else {
+            sub_tm(c, m, at)
+        }
+    };
+    match t {
+        Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
+            let (fst_level, snd_level) = (m.level(fst_level, at), m.level(snd_level, at));
+            let (fst_ty, snd_ty) = (sub_ty(fst_ty, m, at), sub_ty(snd_ty, m, at + dep(0, 0, 1)));
+            let fst = sub(fst, m);
+            let snd = sub(snd, m);
+            Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd }
+        }
+        Term::PairAt { ty, fst, snd } => {
+            let ty = ty.as_ref().map(|t| sub_ty(t, m, at));
+            let fst = sub(fst, m);
+            let snd = sub(snd, m);
+            Term::PairAt { ty, fst, snd }
+        }
+        Term::InlAt { ty, val } => Term::InlAt { ty: ty.as_ref().map(|t| sub_ty(t, m, at)), val: sub(val, m) },
+        Term::InrAt { ty, val } => Term::InrAt { ty: ty.as_ref().map(|t| sub_ty(t, m, at)), val: sub(val, m) },
+        Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => Term::Inl {
+            lhs_level: m.level(lhs_level, at),
+            rhs_level: m.level(rhs_level, at),
+            lhs: sub_ty(lhs, m, at),
+            rhs: sub_ty(rhs, m, at),
+            val: sub(val, m),
+        },
+        Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => Term::Inr {
+            lhs_level: m.level(lhs_level, at),
+            rhs_level: m.level(rhs_level, at),
+            lhs: sub_ty(lhs, m, at),
+            rhs: sub_ty(rhs, m, at),
+            val: sub(val, m),
+        },
+        Term::Supf { level, shape, arity, label, children } => {
+            let level = m.level(level, at);
+            let shape = sub_ty(shape, m, at);
+            let arity = sub_tm(arity, m, at + dep(0, 0, 1));
+            let label = sub(label, m);
+            let children = sub(children, m);
+            Term::Supf { level, shape, arity, label, children }
+        }
+        Term::Supi { sig, label, children } => {
+            let sig = sub_iwf_sig(sig, m, at);
+            let label = sub(label, m);
+            let children = sub(children, m);
+            Term::Supi { sig, label, children }
+        }
+        Term::Succ(n) => Term::Succ(sub(n, m)),
+        Term::AppAt { fun, arg } => {
+            let fun = sub(fun, m);
+            let arg = sub(arg, m);
+            Term::AppAt { fun, arg }
+        }
+        Term::App { fun, dom_level, cod_level, dom, cod, arg } => {
+            let fun = sub(fun, m);
+            let (dom_level, cod_level) = (m.level(dom_level, at), m.level(cod_level, at));
+            let (dom, cod) = (sub_ty(dom, m, at), sub_ty(cod, m, at + dep(0, 0, 1)));
+            let arg = sub(arg, m);
+            Term::App { fun, dom_level, cod_level, dom, cod, arg }
+        }
+        _ => unreachable!("map_spine_node is given a spine form"),
+    }
 }
 
 /// The motive/branch bundles of the code recursors, shared on the same rule.

@@ -1114,6 +1114,27 @@ struct Tc {
     /// The typing memo (module docs, §The typing memo): per node and scope,
     /// for this gate.
     judged: RefCell<PtrMap<Scope, Judged>>,
+    /// How many [`Tc::tm_check`]s are open on the native stack.
+    check_depth: Cell<u32>,
+    /// Checks deferred past [`crate::term::SPINE_ITERATE_AT`] open checks
+    /// (docs/deep-term-walks-design.md): a checking premise only answers
+    /// yes or no, so a rule's premises are a conjunction whose order is
+    /// free, and a check reached that deep is queued instead of descended
+    /// into. The outermost open check drains the queue, at depth zero,
+    /// before it answers — so no verdict leaves the checker with a queued
+    /// premise unjudged, and a deep data value (a long list's spine) is
+    /// checked by a loop rather than one native frame per node.
+    deferred: RefCell<Vec<(Env, Rc<Term>, ITy, Level)>>,
+    /// How many checks have ever been queued on [`Tc::deferred`]: a refusal
+    /// from an outermost check that queued any forgets the memos
+    /// ([`Tc::forget_after_refusal`]).
+    deferred_pushed: Cell<u64>,
+    /// The queue's length when the check being judged began (the root, or
+    /// a popped check): once anything is queued past it, every later check
+    /// in it is queued too, and the drain judges each check's own queued
+    /// premises before the next, so the order is the recursive walk's
+    /// (`Conv`'s `defer_floor`, docs/deep-term-walks-design.md §3.3).
+    defer_floor: Cell<usize>,
     /// The strengthened scopes' telescopes, interned one entry at a time
     /// from the outermost of the `k` (§The typing memo): `(parent id, entry
     /// type's address)` to the entry's level, its keep-alive and the
@@ -1560,6 +1581,10 @@ impl Tc {
             conv_memo_entries: Cell::new(0),
             closed_convs: RefCell::new(HashMap::new()),
             judged: RefCell::new(PtrMap::default()),
+            check_depth: Cell::new(0),
+            deferred: RefCell::new(Vec::new()),
+            deferred_pushed: Cell::new(0),
+            defer_floor: Cell::new(0),
             teles: RefCell::new(HashMap::new()),
             tele_ids: Cell::new(0),
             closed_tys: RefCell::new(PtrMap::default()),
@@ -2653,6 +2678,51 @@ impl Tc {
     /// the function intro forms (so checking-only `box` bodies work), else
     /// infer + conversion at `typeof(i)`.
     fn tm_check(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
+        let depth = self.check_depth.get();
+        if depth >= crate::term::SPINE_ITERATE_AT
+            || (depth > 0 && self.deferred.borrow().len() > self.defer_floor.get())
+        {
+            return self.tm_check_deferred(env, t, ty, l);
+        }
+        let pushed = self.deferred_pushed.get();
+        self.check_depth.set(depth + 1);
+        let verdict = self.tm_check_here(env, t, ty, l);
+        self.check_depth.set(depth);
+        if depth != 0 {
+            return verdict;
+        }
+        let verdict = match verdict {
+            Ok(()) => self.drain_deferred(),
+            Err(err) => {
+                self.deferred.borrow_mut().clear();
+                Err(err)
+            }
+        };
+        if verdict.is_err() && self.deferred_pushed.get() != pushed {
+            self.forget_after_refusal();
+        }
+        verdict
+    }
+
+    /// The memos after a refused outermost check that queued premises: a
+    /// node is memoized when its own frame's rules succeed, which with
+    /// premises queued is before the whole verdict is in, so an entry made
+    /// during a check that was then refused may stand on a queued premise
+    /// that failed (or was never judged). Dropping them keeps every memo
+    /// entry backed by a complete verdict for whatever this checker judges
+    /// next; a refusal ends almost every gate, so this costs nothing that
+    /// matters.
+    #[cold]
+    #[inline(never)]
+    fn forget_after_refusal(&self) {
+        self.judged.borrow_mut().clear();
+        self.closed_tys.borrow_mut().clear();
+        self.closed_sigs.borrow_mut().clear();
+    }
+
+    /// [`Tc::tm_check`]'s rules, judged on this frame.
+    #[inline(always)]
+    fn tm_check_here(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "check");
         if self.refused.is_some() {
@@ -2662,6 +2732,40 @@ impl Tc {
             return self.tm_check_memo(env, t, ty, l);
         }
         self.tm_check_inner(env, t, ty, l)
+    }
+
+    /// Queue a check met too deep to descend into ([`Tc::deferred`]).
+    #[cold]
+    #[inline(never)]
+    fn tm_check_deferred(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
+        self.deferred.borrow_mut().push((env.clone(), Rc::clone(t), owned_expected(ty), l.clone()));
+        self.deferred_pushed.set(self.deferred_pushed.get() + 1);
+        Ok(())
+    }
+
+    /// Judge every queued check, each from depth zero (so each may queue
+    /// more, which this loop also takes), stopping at the first refusal.
+    #[cold]
+    #[inline(never)]
+    fn drain_deferred(&self) -> R {
+        // A stack in walk order: each check's own queued premises are
+        // reversed onto the top as it finishes.
+        self.deferred.borrow_mut().reverse();
+        let verdict = loop {
+            let Some((env, t, ty, l)) = self.deferred.borrow_mut().pop() else { break Ok(()) };
+            let start = self.deferred.borrow().len();
+            self.defer_floor.set(start);
+            self.check_depth.set(1);
+            let verdict = self.tm_check_here(&env, &t, ty.as_ref(), &l);
+            self.check_depth.set(0);
+            if let Err(err) = verdict {
+                self.deferred.borrow_mut().clear();
+                break Err(err);
+            }
+            self.deferred.borrow_mut()[start..].reverse();
+        };
+        self.defer_floor.set(0);
+        verdict
     }
 
     /// [`Tc::tm_check`] on [`locate_refusal`]'s checker: the same rules,
