@@ -5,7 +5,7 @@ labels: [metaprogramming,performance,tier2]
 area: tactics
 milestone: [tac-host-interface]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-11-06
 ---
 
 A `by t` run fails once the tactic has answered about a thousand requests:
@@ -48,3 +48,10 @@ but a search tactic in `tac-first-port` can exceed a thousand requests.
 ## Log
 
 - 2026-10-21: Fixed host-side, and the mechanism confirmed: a resumed tree's proof is the previous tree's proof applied (the `match` alias `k := λy. ⟨f' y, c y⟩`, `c = snd t`), so the n-th tree's proof was a chain of n projections that only the final leaf's `J` forced. `Interpreted::pin` (crates/elab/src/host.rs) forces both components of each resumed tree and hands the next `host_resume` closures that are values, so every chain is one link long whatever the force cache keeps. `spin(1100)` failed before and `spin(9900)` passes now in about two seconds (debug test build); the 10 000-request budget is again the only bound. Tests: `long_runs` in crates/elab/tests/tactic_host.rs (Goal and Defeq at 3000 requests, a failure read after 1500, the budget control). Found while testing, older and separate: left-nested binds are exponential in their depth, filed as [[tier2-left-nested-bind-cost]].
+- 2026-11-06: The pin cut only half of it. A run under a `bind` keeps the
+  same chain one level in, where the host cannot reach: the inner trees are
+  inside the bind's closures, so `spin(2200).bind(λ e => pure(e))` still
+  failed at its final step. Fixed in the evaluator instead, for every level
+  at once: the links are applications of a variable bound to the previous
+  link's thunk, and such a head is now forced on the machine's own loop
+  (docs/native-depth-budget-design.md §9, [[grind-unrelated-lemma-fuel]]).

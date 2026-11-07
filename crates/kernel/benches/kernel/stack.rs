@@ -49,11 +49,14 @@ pub enum Kind {
     /// frame size is the quotient and nothing else.
     CheckNumeral,
     /// One evaluation of `f(f(… f(1)))`, `n` deep, for
-    /// `f = λx. elim_Nat(_. Nat; ze; a b. b; x)`. Each scrutinee is a
-    /// variable standing for the argument's thunk, so forcing it re-enters
-    /// `Eval::drive` while the enclosing drive is still in its loop: one
-    /// counted level per `f`, from syntax of fixed depth (the shape of
-    /// `eval_differential.rs`'s `nested_scrutinee_value`).
+    /// `f = λx. elim_Nat(_. Nat; ze; a b. b; (λy. y) x)`. Each scrutinee is
+    /// an application standing for the argument's thunk, so forcing it
+    /// re-enters `Eval::drive` while the enclosing drive is still in its
+    /// loop: one counted level per `f`, from syntax of fixed depth (the shape
+    /// of `eval_differential.rs`'s `nested_scrutinee_value`). The scrutinee
+    /// is not the bare `x`: a variable head is forced on the machine's own
+    /// loop and costs no native depth (docs/native-depth-budget-design.md
+    /// §9), so it would measure nothing.
     EvalNestedScrutinee,
 }
 
@@ -128,7 +131,14 @@ fn nested_scrutinee(levels: u64) -> Rc<Term> {
             motive: rty(Type::Nat),
             base: rt(Term::Zero),
             step: rt(v(0)),
-            scrut: rt(v(0)),
+            scrut: rt(Term::App {
+                fun: rt(Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: rty(Type::Nat), body: rt(v(0)) }),
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: rty(Type::Nat),
+                cod: rty(Type::Nat),
+                arg: rt(v(0)),
+            }),
         }),
     });
     let mut t = rt(num(1));

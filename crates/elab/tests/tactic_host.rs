@@ -278,6 +278,18 @@ fn long_runs() {
     );
     assert!(msg.contains("the tactic failed: no local's type is the goal"), "{msg}");
     assert!(msg.contains("tried q: its type is not the goal"), "{msg}");
+    // A run under a `bind`: the tree the host pins is the bind's, and the
+    // inner run's proof is read through one `match` alias per answered
+    // request, a chain the final `Pure`'s `J` forces whole. Each link used to
+    // cost a native re-entry, so this failed past about 2000 requests
+    // (issues/grind-unrelated-lemma-fuel.md); the machine now forces a
+    // variable head on its own loop (docs/native-depth-budget-design.md §9).
+    check(
+        "fn spin(k: Nat) → tactic::Tac<tactic::Expr> {
+             match k { Zero => assumption(), Succ(j) => defeq(NatLit(0), NatLit(0)).bind(λ g => spin(j)) }
+         }
+         theorem under(n: Nat, h: n = 3): n = 3 { by spin(3000).bind(λ e => pure(e)) }",
+    );
     // The conversation itself is still bounded.
     let msg = refused(
         "fn spin(k: Nat) → tactic::Tac<tactic::Expr> {

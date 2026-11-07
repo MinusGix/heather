@@ -1598,18 +1598,42 @@ fn a_failed_thunk_is_not_poisoned() {
     let _ = psi;
 }
 
-/// `f(f(… f(su ze)))` for `f = λx. elim_Nat(_. Nat; ze; a b. b; x)`, nested
-/// `d` deep. Every layer is `ze`, so the answer does not depend on `d`; what
-/// depends on `d` is the **native** depth, and that is the point.
+/// `f(f(… f(su ze)))` for `f = λx. elim_Nat(_. Nat; ze; a b. b; s(x))`,
+/// nested `d` deep. Every layer is `ze`, so the answer does not depend on
+/// `d`; what depends on `d` is the **native** depth, and that is the point.
 ///
 /// Nesting the eliminations in the *syntax* would not do it: `step_eval`
 /// walks a syntactic scrutinee chain to the bottom before the first `drive`
-/// starts, so the machines run one after another. Here each scrutinee is a
-/// *variable* standing for the argument thunk, so forcing it re-enters
-/// `drive` while the enclosing `drive` is still in its loop — one live frame
-/// per layer, from syntax of fixed depth. That is the shape
-/// `iterate_increment` builds (docs/native-depth-budget-design.md §1).
-fn nested_scrutinee_value(d: u32) -> Rc<Term> {
+/// starts, so the machines run one after another. Here each scrutinee stands
+/// for the argument thunk, so forcing it starts a machine while the enclosing
+/// one is still in its loop. That is the shape `iterate_increment` builds
+/// (docs/native-depth-budget-design.md §1).
+///
+/// With `wrapped`, the scrutinee is `(λy. y) x`, an application, and each
+/// layer re-enters `drive` natively: one counted frame per layer. Without,
+/// it is the variable `x` itself, which the machine forces on its own loop
+/// with the elimination waiting on the heap (`Eval::await_bound`, §9 of the
+/// design note): no native depth at all.
+fn nested_scrutinee_value(d: u32, wrapped: bool) -> Rc<Term> {
+    let x = Rc::new(Term::Var(LocalVar(0)));
+    let scrut = if wrapped {
+        let id = Rc::new(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(Term::Var(LocalVar(0))),
+        });
+        Rc::new(Term::App {
+            fun: id,
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+            arg: x,
+        })
+    } else {
+        x
+    };
     let drain = Rc::new(Term::Lam {
         dom_level: Level::Zero,
         cod_level: Level::Zero,
@@ -1619,7 +1643,7 @@ fn nested_scrutinee_value(d: u32) -> Rc<Term> {
             motive: Rc::new(Type::Nat),
             base: Rc::new(Term::Zero),
             step: Rc::new(Term::Var(LocalVar(0))),
-            scrut: Rc::new(Term::Var(LocalVar(0))),
+            scrut,
         }),
     });
     let mut t = numeral(1);
@@ -1650,7 +1674,7 @@ fn nested_scrutinee_value(d: u32) -> Rc<Term> {
 fn a_deep_value_is_refused_rather_than_overflowing_the_stack() {
     heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     let gamma = LocalCtx::nil();
-    let t = nested_scrutinee_value(64);
+    let t = nested_scrutinee_value(64, true);
     let arena = ValueArena::new();
 
     let mut small = Eval::new(FUEL, Defs::opaque(), gamma.base, &arena);
@@ -1665,6 +1689,33 @@ fn a_deep_value_is_refused_rather_than_overflowing_the_stack() {
         .eval_tm(&t, &Env::empty())
         .expect("the same value must answer on the full budget");
     assert!(matches!(&*v, Val::Zero), "and it must be the same answer");
+}
+
+/// A chain whose every link is a *variable* head (a scrutinee, a function, a
+/// pair, `J`'s proof bound to a thunk) costs no native depth: the machine
+/// forces the variable on its own loop and the elimination waits on the heap
+/// (`Eval::await_bound`, docs/native-depth-budget-design.md §9). So the value
+/// the previous test refuses on eight frames answers there once its
+/// scrutinees are the variables themselves, and far past the bound on the
+/// full budget. That chain shape is what a tactic's proof read through a run
+/// of `match` aliases is (issues/grind-unrelated-lemma-fuel.md).
+#[test]
+fn a_chain_through_variable_heads_needs_no_native_depth() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
+    let gamma = LocalCtx::nil();
+    let arena = ValueArena::new();
+
+    let t = nested_scrutinee_value(64, false);
+    let mut small = Eval::new(FUEL, Defs::opaque(), gamma.base, &arena);
+    small.reserve_depth(NATIVE_DEPTH_LIMIT - 8);
+    let v = small.eval_tm(&t, &Env::empty()).expect("a variable-headed chain answers on eight frames");
+    assert!(matches!(&*v, Val::Zero), "with the deep machine's answer");
+
+    let deep = nested_scrutinee_value(4 * NATIVE_DEPTH_LIMIT, false);
+    let mut full = Eval::new(FUEL, Defs::opaque(), gamma.base, &arena);
+    let v = full.eval_tm(&deep, &Env::empty()).expect("and past the depth bound on the full budget");
+    assert!(matches!(&*v, Val::Zero), "with the same answer");
+    std::mem::forget(deep);
 }
 
 /// The rewriter and the evaluator agree on *which* inputs are cheap: with a

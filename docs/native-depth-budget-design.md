@@ -185,7 +185,9 @@ version is a `Reason` on `OutOfFuel` and its own round.
   rather than bound it. It also costs the machine its simplest invariant —
   that the heap stack carries only the two places a result flows *back* into
   something — and turns every non-tail position into a frame kind. Bounding
-  first is the verdict-neutral step; that is a redesign.
+  first is the verdict-neutral step; that is a redesign. *Done since for the
+  variable head (§9), which needed no new frame kind; a head that is any
+  other term still recurses natively.*
 - **A guard page or `stacker`-style stack growth** hides the abort without
   bounding anything: the computation that overflows 8 MiB overflows 8 GB a
   little later, and the checker would then be total only up to the machine's
@@ -279,3 +281,46 @@ The evaluator's chain is now measured where the checking walk's is:
 `stack/eval-nested-scrutinee` in `crates/kernel/benches/kernel/stack.rs`,
 which bisects §1's nested-scrutinee value on a thread of known size (small
 enough that the stack runs out before the budget does).
+
+## 9. Variable heads wait on the heap (2026-11-06)
+
+`issues/grind-unrelated-lemma-fuel.md`. A `grind` call that closed stopped
+closing when one unneeded lemma was added, with "ran out of fuel or nesting
+depth, after 2699 requests". It was the depth, and it was not grind's: any
+tactic that answered more than about 2,000 requests under a `bind` failed
+when it finished (`spin(2200).bind(λ e => pure(e))`, where `spin` asks
+`Defeq` 2,200 times).
+
+**The chain.** A tier-2 `match` (docs/inductive-tier2-w-lowering.md §7)
+reads a function child through the alias `k := λy. ⟨f' y, c y⟩`, `c` the
+scrutinee's proof. `bind`'s `Ask` arm passes `k(x)` down, so the proof of a
+run's `n`-th tree under a bind is `c y` with `c` the `(n-1)`-th's: one link
+per answered request. The host's `pin` forces the outermost tree's proof at
+every step (issues/tactic-run-continuation-chain.md), but the trees a bind
+wraps are inside its closures, and nothing forces their proofs until the
+inner run's `Pure`, whose `J` forces the whole chain. Every link is an
+application whose function is a *variable* bound to the previous link's
+thunk, `app(c; y)`, and §1's machine re-entered `drive` to force it: 2,047
+levels of `app@(x2; x0)`, with the fuel almost untouched.
+
+**The change.** `step_eval` gives an elimination whose head is a variable
+bound to a closure — an application's function, a projection's pair, a
+scrutinee, `J`'s proof — to `Eval::await_bound`: the elimination goes on the
+frame stack as a `Frame::Owned`, and the variable's thunk is forced by the
+same loop (`Work::Force`). That is the frame kind "an elimination waiting for
+its head" that forcing a `TmClo::Elim` already pushes, so §6's invariant
+holds: the heap stack still carries only memos and eliminations waiting for
+a value. `eval_tm_ref` takes the drive's floor before its first step, since
+that step can now leave a frame, and a refused drive truncates to its floor.
+
+**What it reaches, and what it does not.** A value chain through variable
+heads costs no native depth at any length: §1's nested scrutinee with bare
+variable scrutinees answers on eight frames
+(`a_chain_through_variable_heads_needs_no_native_depth`), and the tactic
+control runs 3,000 requests under a bind (`long_runs`). A head that is any
+other term — an application, a projection of an application, a redex —
+still evaluates natively, where its depth is the syntax's for a syntactic
+chain and counted against the bound for a value one. The refusal control and
+the stack probe now nest the scrutinee as `(λy. y) x` to keep one counted
+level per layer. Answers do not change, only whether there is one: the same
+work in the same order, its continuation on the heap.
