@@ -752,6 +752,11 @@ impl<'v> Dom<'v> for Values {
         run(cv, env, |ev| ev.delta_step(w))
     }
 
+    fn delta_tm_ahead(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &&'v Val<'v>) -> R<&'v Val<'v>> {
+        let w = *w;
+        run(cv, env, |ev| ev.delta_step_transparent(w))
+    }
+
     fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'v Val<'v>) -> R<&'v Val<'v>> {
         run(cv, env, |ev| ev.delta_whnf(w))
     }

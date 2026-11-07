@@ -5,7 +5,7 @@ labels: [native,compiler,metaprogramming]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 Round R5 of `docs/compiler-milestones-proposal.md` (§4.2 N1, §7): the `runtime fn` generator and the default
@@ -89,3 +89,19 @@ integration round. The other slices have their own issues:
   helpers; `heather reflect` from instances; callees by instance search.
   `Fold` over buffers is not on this path (no x86 example folds a buffer)
   and still waits on buffers in `StructuredRegion::eval` (§16.6).
+- 2026-11-06 (round 4): loops through `Setup` and `Compile` (design §16.11).
+  `Fun::lower_any` dispatches on `RtShape` (plain, fuel, measured) and
+  `Setup.sound` is over the shapes; `Setup::compile_fuel`/`compile_measured`
+  are the loop instances, whose equations the generator proves (`refl` per
+  word for a fuel, `f::ext`/`f::irrel` for a measure). A `Count` parameter
+  crosses a call as a word read by `toNat`. The reflector reads a fuel's
+  `ElimNat` (host `Arms`) and a measured function's `f::body`. A leaving
+  pass now writes every `next` word, which the x86 emission needed. The six
+  `loop_*` examples are runtime fns and `compile-x86` compiles them through
+  their instances; the Rust reflector's loop code is deleted (an unmarked
+  loop is refused, naming the marker). Probes:
+  `lib/_tests/native/runtime/runtime_loop_tests.hthr`. Still open
+  here: `Bool` helpers (then the rest of `function_ir_source/`), `heather
+  reflect` from instances, callees by instance search, a `decreases` measure
+  that is not a word's `toNat`.
+  The generator's cost per linked function is [[runtime-generator-link-cost]].

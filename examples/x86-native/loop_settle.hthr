@@ -1,14 +1,23 @@
 import bitvec;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
 
 // A call in a loop's pass, and a result computed when the passes run out:
 // `stir` mixes `x` with `y` until its low three bits are clear, at most a
 // hundred times.
 
-fn stir(x, y: BitVec(64)) → BitVec(64) {
+runtime fn stir(x, y: BitVec(64)) → BitVec(64) {
     x.add(y).bxor(x.sub(y))
 }
 
-fn settling(fuel: Nat, x, y: BitVec(64)) → BitVec(64) {
+runtime fn settling(fuel: Nat, x, y: BitVec(64)) → BitVec(64) {
     match fuel {
         Zero => x.bxor(y),
         Succ(k) => match x.band(BitVec::ofNat(7)).eq_bit(BitVec::ofNat(0)) {
@@ -18,6 +27,6 @@ fn settling(fuel: Nat, x, y: BitVec(64)) → BitVec(64) {
     }
 }
 
-fn settle(a, b: BitVec(64)) → BitVec(64) {
+runtime fn settle(a, b: BitVec(64)) → BitVec(64) {
     settling(BitVec::ofNat(100, n := 64).toNat(), a, b)
 }

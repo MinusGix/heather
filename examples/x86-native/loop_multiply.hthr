@@ -1,9 +1,18 @@
 import bitvec;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
 
 // Multiplication by shifts and adds, a pass per bit of `b`: the loop
 // leaves when the mask has shifted out, and a pass's tree adds or not.
 
-fn shift_add(fuel: Nat, a, mask, acc, b: BitVec(64)) → BitVec(64) {
+runtime fn shift_add(fuel: Nat, a, mask, acc, b: BitVec(64)) → BitVec(64) {
     match fuel {
         Zero => acc,
         Succ(k) => match mask.eq_bit(BitVec::ofNat(0)) {
@@ -16,6 +25,6 @@ fn shift_add(fuel: Nat, a, mask, acc, b: BitVec(64)) → BitVec(64) {
     }
 }
 
-fn multiply(a, b: BitVec(64)) → BitVec(64) {
+runtime fn multiply(a, b: BitVec(64)) → BitVec(64) {
     shift_add(BitVec::ofNat(65, n := 64).toNat(), a, BitVec::ofNat(1), BitVec::ofNat(0), b)
 }

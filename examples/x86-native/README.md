@@ -35,12 +35,12 @@ calls, each from its `Compile` instance, and `f::agrees`, that the program
 evaluates to `f` ([design §16.9](../../docs/runtime-fn-setups-design.md)).
 `compile-x86` compiles a marked function through those: its certificate's
 `_agrees` is `f::agrees`, and nothing about the program is proved by the
-compiler. An unmarked function is refused, naming the marker, unless its
-program has a loop or a test through a `Bool` helper, which the default
-setup does not compile yet; those go through the older Rust reflector the
-rest of this page describes, until the loop round retires it. The files
-here that are loop-free are marked; `branches.hthr`'s `composed`, `either`
-and `calls_either` call the `Bool` helper `unequal` and stay unmarked.
+compiler. Loops are runtime fns too (design §16.11). An unmarked function
+is refused, naming the marker, unless its program has a test through a
+`Bool` helper, which the default setup does not compile yet; those go
+through the older Rust reflector the rest of this page describes. Every
+file here is marked but `branches.hthr`'s `composed`, `either` and
+`calls_either`, which call the `Bool` helper `unequal`.
 
 ## What `compile-x86` certifies
 
@@ -117,45 +117,39 @@ inputs.
 
 ## Loops
 
-A recursion on a fuel compiles to a verified loop. The helper is
-`h(fuel: Nat, x…: BitVec(64)) → BitVec(64)` with one to four words,
-matching its fuel `Zero`/`Succ(k)`; the `Succ` arm's tail positions either
-return a word or recurse as `after(k, …)`. Each such helper becomes a native
-function of its own, its body the loop, and every call `h(w.toNat(), e…)`
-calls it — under a branch, followed by more work, in a called function, or
-inside another loop's pass. The loop runs at most `w` passes; out of fuel it
-computes the `Zero` arm. The arm may not read `k` or the recursion as a
-value, and a fuel that is no word's `toNat` is refused.
-`loop_triangle.hthr` counts down, `loop_multiply.hthr` keeps an invariant
-word out of the recursion, `loop_settle.hthr` calls a function in each
-pass and decides on several comparisons, and `loop_anywhere.hthr` puts
-loops in each of those places.
+A recursion on a fuel compiles to a verified loop. The function is
+`runtime fn h(fuel: Nat, x…: BitVec(64)) → BitVec(64)`, matching its fuel
+`Zero`/`Succ(k)`; the `Succ` arm's tail positions either return a word or
+recurse as `h(k, …)`. It is a native function of its own, its body the
+loop, and a caller passes its fuel as a word's count, `h(w.toNat(), e…)`
+(the fuel crosses the call in a word) — under a branch, followed by more
+work, in a called function, or inside another loop's pass. The loop runs
+at most `w` passes; out of fuel it computes the `Zero` arm. The arm may not
+read the recursion as a value. `loop_triangle.hthr` counts down,
+`loop_multiply.hthr` keeps an invariant word out of the recursion,
+`loop_settle.hthr` calls a function in each pass and decides on several
+comparisons, and `loop_anywhere.hthr` puts loops in each of those places.
 
-A function that `decreases` a measure `w.toNat()` of a word `w` compiles to
-a loop too, with no fuel to write: its native function takes the words
-only, computes `w`, and runs at most `w` passes of its step, a recursion
-going round and an answer leaving. The passes cannot run out before the
-recursion does, since each pass lowers the measure; the branch after the
-loop runs the step once more for the answer, a recursion there taking a
-value no run reaches. `loop_measure.hthr` counts a word down, `decreases
-n.toNat()`, and `loop_climb.hthr` climbs to a bound, `decreases
-hi.sub(lo).toNat()`, its loop's bound computed first.
+A `runtime fn` that `decreases` a measure `w.toNat()` of a word `w`
+compiles to a loop too, with no fuel to write: its native function takes
+the words and runs at most `2^64 - 1` passes of its step, a recursion going
+round and an answer leaving. The passes cannot run out first, since each
+lowers the measure, which is below `2^64`. `loop_measure.hthr` counts a word
+down, `decreases n.toNat()`, and `loop_climb.hthr` climbs to a bound,
+`decreases hi.sub(lo).toNat()`.
 
-The certificate proves the program a function at a time. Each function's
-`_agrees` says that its region, evaluated with every call answered by the
-source function called (`_sources`), is its source function, and the
-library's `program_eval_sources` composes them into the program's. A
-loop's `_agrees` is no longer one `refl`: `_pass_agrees` states that one
-pass is one unfolding of the source's step (split over the pass's
-comparisons by `_pass_cased`), `_base` that the exhausted branch is the
-`Zero` arm, and the library's `loop_eval_agrees_from` lifts both to the
-loop by induction on the fuel. A measured loop's `_agrees` is stated
-against the source's recursor `f::rec` at a bound on its measure (the
-bound's proof carried along): `_body_tree` proves by `split_all` that the
-source's step `f::body` is the pass's tree with its recursion abstracted,
-`_pass_measured` and `_base` meet the passes left and the run out, and the
-library's `loop_eval_agrees_measured` lifts them by induction on the
-passes left. A function that calls another agrees
+Nothing about a particular loop is proved in its certificate. Each shape's
+lowering is proved once (`lib/native/runtime/rt_loop.hthr`), and the
+`runtime fn` generator proves what the function supplies: for a fuel, its
+two equations, one `refl` per word; for a measure, that the step with its
+recursion answered by anything agreeing below the measure is the function,
+from the function's own `f::ext` and `f::irrel` (design §16.10–§16.11).
+
+The Rust reflector's certificates, for the `Bool`-helper programs, prove
+the program a function at a time. Each function's `_agrees` says that its
+region, evaluated with every call answered by the source function called
+(`_sources`), is its source function, and the library's
+`program_eval_sources` composes them into the program's. A function that calls another agrees
 through an *expansion* that spells each call as the call it answers, so its
 proof never unfolds a callee; that is also what lets a caller call a
 function deciding through a connective (`calls_either` in

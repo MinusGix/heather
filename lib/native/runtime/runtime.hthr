@@ -53,6 +53,7 @@ import rt_reflect;
 import rt_lower;
 import function_ir;
 import function_ir_eval;
+import rt_loop;
 
 // ---------------------------------------------------------------------------
 // The judgment: what the default setup compiles today, with the reason for
@@ -70,7 +71,15 @@ fn Ty::all_word64(ts: List<Ty>) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_word64().and(Ty::all_word64(rest)) }
 }
 
-fn Sig::is_words(self s: Sig) → Bool { Ty::all_word64(s.params).and(s.result.is_word64()) }
+// A code a call passes in one word: a 64-bit word, or a count (a loop's
+// fuel, as `w.toNat()`).
+fn Ty::is_held(self t: Ty) → Bool { match t { Word(w) => w.same(64), Count => True, _ => False } }
+
+fn Ty::all_held(ts: List<Ty>) → Bool {
+    match ts { Nil => True, Cons(t, rest) => t.is_held().and(Ty::all_held(rest)) }
+}
+
+fn Sig::is_words(self s: Sig) → Bool { Ty::all_held(s.params).and(s.result.is_word64()) }
 
 fn Op::judge(self o: Op) → Verdict {
     match o {
@@ -98,7 +107,7 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>) → Verdict {
         Make(_, _) => Ok,
         Field(_, _, _) => Ok,
         Call(f, _) => match f {
-            Zero => Refused("a call of itself: recursion is not lowered yet (issues/native-compiled-procedures.md)"),
+            Zero => Refused("a call of itself that is not the last thing it does: a recursion is lowered as a loop, its calls of itself in tail position (docs/runtime-fn-setups-design.md §16.11)"),
             Succ(_) => match Sig::at(sigs, f).is_words() {
                 True => Ok,
                 False => Refused("a call of a function that does not take and return 64-bit words (issues/function-ir-multi-word-calls.md)"),
@@ -109,15 +118,52 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>) → Verdict {
     }
 }
 
+// A loop's pass: calls of itself only in tail position.
+fn Tm::judge_tail(self t: Tm, sigs: List<Sig>) → Verdict {
+    match t {
+        Let(e, body) => e.judge(sigs).and(body.judge_tail(sigs)),
+        If(_, yes, no) => yes.judge_tail(sigs).and(no.judge_tail(sigs)),
+        IfEq(_, yes, no) => yes.judge_tail(sigs).and(no.judge_tail(sigs)),
+        Call(f, args) => match f { Zero => Ok, Succ(g) => Call(Succ(g), args).judge(sigs) },
+        Var(i) => Var(i).judge(sigs),
+        Lit(c, n) => Lit(c, n).judge(sigs),
+        Prim(op, args) => Prim(op, args).judge(sigs),
+        Make(i, args) => Make(i, args).judge(sigs),
+        Field(i, k, of) => Field(i, k, of).judge(sigs),
+        Fold(over, init, step) => Fold(over, init, step).judge(sigs),
+        Case(c, zero, succ) => Case(c, zero, succ).judge(sigs),
+    }
+}
+
+fn Fun::words_reason() → String {
+    "a parameter that is not a 64-bit word: the default setup compiles functions from 64-bit words (and a loop's `Nat` fuel, first) to a 64-bit word (issues/function-ir-multi-word-calls.md)"
+}
+
 // The function at entry 0 of its world's table: 64-bit words in and out
 // (FunctionIR's calling convention today), and a body of what the lowering
-// covers.
+// covers; a fuel recursion and a measured one are loops (design §16.11).
 fn Fun::judge(self f: Fun, w: World) → Verdict {
-    match Ty::all_word64(f.params) {
-        False => Refused("a parameter that is not a 64-bit word: the default setup compiles functions from 64-bit words to a 64-bit word (issues/function-ir-multi-word-calls.md)"),
-        True => match f.result.is_word64() {
-            False => Refused("a result that is not a 64-bit word: the default setup compiles functions from 64-bit words to a 64-bit word (issues/function-ir-multi-word-calls.md)"),
-            True => f.body.judge(w.sigs),
+    match f.result.is_word64() {
+        False => Refused("a result that is not a 64-bit word: the default setup compiles functions from 64-bit words to a 64-bit word (issues/function-ir-multi-word-calls.md)"),
+        True => match f.shape() {
+            Plain => match Ty::all_word64(f.params) {
+                False => Refused(Fun::words_reason()),
+                True => f.body.judge(w.sigs),
+            },
+            Fuel(w0, wrest, zero, succ) => match Ty::all_word64(Cons(w0, wrest)) {
+                False => Refused(Fun::words_reason()),
+                True => match f.body {
+                    Case(c, _, _) => match c.same(Succ(wrest.len())) {
+                        False => Refused("a `match` on a `Nat` that is not the fuel, its first parameter"),
+                        True => zero.judge(w.sigs).and(succ.judge_tail(w.sigs)),
+                    },
+                    _ => Refused("a fuel recursion's body is its fuel's `match`"),
+                },
+            },
+            Measured(w0, wrest, body) => match Ty::all_word64(Cons(w0, wrest)) {
+                False => Refused(Fun::words_reason()),
+                True => body.judge_tail(w.sigs),
+            },
         },
     }
 }
@@ -130,12 +176,13 @@ record Setup {
     name: String,
     judge: Fun → World → Verdict,
     lower: Fun → World → Option<Function>,
-    sound: (f: Fun) → (w: World) → f.LowerHolds(w, lower(f, w)),
+    sound: (f: Fun) → (w: World) → f.Holds(w, lower(f, w)),
 }
 
 // The default setup: abstract programming over words and `Bool`, lowered
-// to FunctionIR (design §7, `rt_lower.hthr`).
-fn Setup::default() → Setup { Setup("default", Fun::judge, Fun::lower, λ f w => Fun::lower_sound(f, w)) }
+// to FunctionIR (design §7, `rt_lower.hthr`), a fuel recursion and a
+// measured one as loops (`rt_loop.hthr`).
+fn Setup::default() → Setup { Setup("default", Fun::judge, Fun::lower_any, λ f w => Fun::lower_any_sound(f, w)) }
 
 fn Setup::lowers(r: Option<Function>) → Bool { match r { None => False, Some(_) => True } }
 
@@ -158,12 +205,18 @@ theorem Setup::of_lowered(f: Fun, w: World, r: Option<Function>): Setup::lowers(
     }
 }
 
-// What a setup's code means, wherever the setup lowered: the agreement every
-// `runtime fn` reads off, with `ok` checked by evaluation.
-theorem Setup::code_answers(s: Setup, f: Fun, w: World, ok: s.lowered(f, w).IsTrue()):
+// What a setup promises at a shape the function has: `f.Holds` read there.
+theorem Setup::holds_at(s: Setup, f: Fun, w: World, shape: RtShape, shaped: f.shape() = shape): f.HoldsAt(w, shape, s.lower(f, w)) {
+    j(shaped, λ x _ => f.HoldsAt(w, x, s.lower(f, w)), s.sound(f, w))
+}
+
+// What a setup's code means, wherever the setup lowered a plain function:
+// the agreement every loop-free `runtime fn` reads off, with `ok` checked by
+// evaluation and `plain` by evaluation too.
+theorem Setup::code_answers(s: Setup, f: Fun, w: World, ok: s.lowered(f, w).IsTrue(), plain: f.shape() = Plain):
     (call: Answers()) → Tm::CallsAgree(w, call) →
     Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => s.code(f, w).eval(call, xs)) {
-    Setup::of_lowered(f, w, s.lower(f, w), ok, s.sound(f, w))
+    Setup::of_lowered(f, w, s.lower(f, w), ok, Setup::holds_at(s, f, w, Plain, plain))
 }
 
 // ---------------------------------------------------------------------------
@@ -208,15 +261,74 @@ fn Setup::typed_refl<F>(f: F) → Itself(F) = Itself(F) { refl }
 // and the agreement `Setup::code_answers` gives, carried to `f` along the
 // pin. At a runtime fn `typed` and `pinned` are both `refl`, which the
 // kernel checks by conversion (the reflection's meaning unfolds to `f`'s
-// body node for node, docs/runtime-fn-setups-design.md §4.3), and `ok` is
-// `trivial`, the lowering evaluated.
+// body node for node, docs/runtime-fn-setups-design.md §4.3), and `ok` and
+// `plain` are evaluation.
 fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, typed: Itself(F) = Itself(Ty::Arrows(w.tys, rt.params, rt.result)),
-    pinned: retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f) = rt.meaning(w), ok: s.lowered(rt, w).IsTrue()) → Compile<F>(f)
+    pinned: retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f) = rt.meaning(w), ok: s.lowered(rt, w).IsTrue(),
+    plain: rt.shape() = Plain) → Compile<F>(f)
 {
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
         j(sym(pinned), λ g _ => Ty::Answers(w.tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs)),
-            Setup::code_answers(s, rt, w, ok, call, agree)))
+            Setup::code_answers(s, rt, w, ok, plain, call, agree)))
 }
+
+// A fuel recursion's instance (design §16.11): no pin (the function at an
+// open fuel is stuck on it), but its two equations, `zero` and `step`,
+// each `refl` per word at the function itself, and the loop's soundness
+// read at the function. The reflection is the function of the pieces.
+fn Setup::fuel_fun(w0: Ty, wrest: List<Ty>, c: Nat, zero, succ: Tm) → Fun { Fun(Cons(Count, Cons(w0, wrest)), Word(64), Case(c, zero, succ)) }
+
+fn Setup::compile_fuel<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, c: Nat, zero, succ: Tm, w: World,
+    typed: Itself(F) = Itself(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), Word(64))),
+    shaped: Setup::fuel_fun(w0, wrest, c, zero, succ).shape() = Fuel(w0, wrest, zero, succ),
+    zero_eq: Fun::FuelZero(Cons(w0, wrest), zero, w, retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), Word(64)), typed, f)),
+    step_eq: (n: Nat) → Fun::FuelStep(Cons(w0, wrest), succ, w, retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), Word(64)), typed, f), n),
+    ok: s.lowered(Setup::fuel_fun(w0, wrest, c, zero, succ), w).IsTrue()) → Compile<F>(f)
+{
+    let rt = Setup::fuel_fun(w0, wrest, c, zero, succ);
+    let h = retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), Word(64)), typed, f);
+    Compile(rt, w, typed, s.code(rt, w), λ call agree =>
+        Fun::fuel_answers(Cons(w0, wrest), w, h, s.lower(rt, w), ok,
+            Setup::holds_at(s, rt, w, Fuel(w0, wrest, zero, succ), shaped, h, zero_eq, step_eq), call, agree))
+}
+
+// A measured recursion's instance: its measure `m` below `2^64` and
+// `Guarded`, which the generator proves from the function's own `f::ext`
+// and `f::irrel`, and the loop's soundness read at the function.
+fn Setup::measured_fun(w0: Ty, wrest: List<Ty>, body: Tm) → Fun { Fun(Cons(w0, wrest), Word(64), body) }
+
+fn Setup::compile_measured<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, body: Tm, w: World,
+    typed: Itself(F) = Itself(Ty::Arrows(w.tys, Cons(w0, wrest), Word(64))),
+    shaped: Setup::measured_fun(w0, wrest, body).shape() = Measured(w0, wrest, body),
+    m: List<BitVec(64)> → Nat, bounded: Fun::Bounded(Cons(w0, wrest), m),
+    guarded: Fun::Guarded(Cons(w0, wrest), body, w, retype(Ty::Arrows(w.tys, Cons(w0, wrest), Word(64)), typed, f), m),
+    ok: s.lowered(Setup::measured_fun(w0, wrest, body), w).IsTrue()) → Compile<F>(f)
+{
+    let rt = Setup::measured_fun(w0, wrest, body);
+    let h = retype(Ty::Arrows(w.tys, Cons(w0, wrest), Word(64)), typed, f);
+    Compile(rt, w, typed, s.code(rt, w), λ call agree =>
+        Fun::measured_answers(Cons(w0, wrest), w, h, s.lower(rt, w), ok,
+            Setup::holds_at(s, rt, w, Measured(w0, wrest, body), shaped, h, m, bounded, guarded), call, agree))
+}
+
+// What the generator cites for a measured instance, named here so that a
+// module marking a runtime fn needs only `import runtime;` and its listed
+// imports (issues/runtime-generator-imports.md), not `rt_loop`, `nat` or
+// `logic`.
+fn Setup::Guarded(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, Word(64)), m: List<BitVec(64)> → Nat) → Type {
+    Fun::Guarded(ws, body, w, h, m)
+}
+
+// Transparent, and `Nat::lt_succ_self` itself: a `decreases` function's
+// body passes that proof to its recursor, and the instance's statements
+// meet it by conversion.
+fn Setup::lt_succ(n: Nat) → n < Succ(n) { Nat::lt_succ_self(n) }
+
+theorem Setup::below_pow(x: BitVec(64)): x.toNat() < Nat::pow(2, 64) { BitVec::toNat_lt_pow(64, x) }
+
+theorem Setup::eq_sym<A>(a, b: A, p: a = b): b = a { sym(p) }
+
+theorem Setup::eq_trans<A>(a, b, c: A, p: a = b, q: b = c): a = c { trans(p, q) }
 
 // ---------------------------------------------------------------------------
 // Linking (design §16.9): one FunctionIR program from instances. An
@@ -232,15 +344,16 @@ fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, typed: Itself(F) = Itsel
 // below it, which `program_evaluable` checks by evaluation; no function's
 // proof unfolds another's code.
 
-// A curried meaning on a word list: each word cast to its parameter's code
-// (zero past the list's end, as `Ty::extend` reads), the result cast to a
-// word.
-fn Ty::uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → List<BitVec(64)> → BitVec(64) {
+// A function of words to a count, curried (a measure, spelled by the
+// generator as a `λ` per word), and the same on a word list.
+fn Ty::WordsToNat(ps: List<Ty>) → Type { match ps { Nil => Nat, Cons(_, rest) => BitVec(64) → Ty::WordsToNat(rest) } }
+
+fn Ty::on_words(ps: List<Ty>) → Ty::WordsToNat(ps) → List<BitVec(64)> → Nat {
     match ps {
-        Nil => λ v ws => Ty::cast(tys, r, Word(64), v),
-        Cons(p, rest) => λ v ws => match ws {
-            Nil => Ty::uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, BitVec::zero())), Nil),
-            Cons(x, more) => Ty::uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), more),
+        Nil => λ v _ => v,
+        Cons(_, rest) => λ v ws => match ws {
+            Nil => Ty::on_words(rest, v(BitVec::zero()), Nil),
+            Cons(x, more) => Ty::on_words(rest, v(x), more),
         },
     }
 }
@@ -442,6 +555,8 @@ def runtime_w_words: List<BitVec(64)> = [];
 def runtime_w_word: BitVec(64) = BitVec::ofNat(0);
 def runtime_w_srcs: List<List<BitVec(64)> → BitVec(64)> = [];
 def runtime_w_functions: List<Function> = [];
+def runtime_w_shape: RtShape = Plain;
+def runtime_w_nat: Nat = 0;
 
 record RtTypes { ty: Handle, tm: Handle, op: Handle, fun_t: Handle, sig: Handle, world: Handle, verdict: Handle, function: Handle,
     tys: Handle, nats: Handle, sigs: Handle, words: Handle, word: Handle, srcs: Handle, functions: Handle }
@@ -451,7 +566,7 @@ fn runtime_type_of(name: String) → Tac<Handle> {
 }
 
 fn runtime_type_handles() → Tac<RtTypes> {
-    Pure(RtTypes(<- runtime_type_of("runtime_w_ty"), <- runtime_type_of("runtime_w_tm"), <- runtime_type_of("runtime_w_op"),
+    pure(RtTypes(<- runtime_type_of("runtime_w_ty"), <- runtime_type_of("runtime_w_tm"), <- runtime_type_of("runtime_w_op"),
         <- runtime_type_of("runtime_w_fun"), <- runtime_type_of("runtime_w_sig"), <- runtime_type_of("runtime_w_world"),
         <- runtime_type_of("runtime_w_verdict"), <- runtime_type_of("runtime_w_function"), <- runtime_type_of("runtime_w_tys"),
         <- runtime_type_of("runtime_w_nats"), <- runtime_type_of("runtime_w_sigs"), <- runtime_type_of("runtime_w_words"),
@@ -577,10 +692,19 @@ record Linking { order: List<Nat>, names: List<String>, tables: List<List<Nat>> 
 // A function whose callees are still being placed.
 record LinkFrame { g: Nat, name: String, table: List<Nat>, pending: List<Nat> }
 
+// A runtime fn reflected: a function that `decreases` from its step
+// `f::body` (`rt_reflect_measured`), any other from its body.
+fn runtime_reflect(k: Known, g: Nat, name: String) → Tac<Pair<Fun, List<Nat>>> {
+    lookup(name ++ "::body").bind(λ c => match c {
+        Accepted(step) => rt_reflect_measured(4096, k, g, step.id),
+        Refused(_) => rt_reflect_one(4096, k, g),
+    })
+}
+
 // A runtime fn's table: itself, then the runtime fns it calls, as the
 // reflector numbers them (what its own `g::world` lists).
-fn runtime_table(k: Known, g: Nat) → Tac<List<Nat>> {
-    rt_reflect_one(4096, Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io), g).bind(λ r => pure(r.snd))
+fn runtime_table(k: Known, g: Nat, name: String) → Tac<List<Nat>> {
+    runtime_reflect(Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io, k.nat, None), g, name).bind(λ r => pure(r.snd))
 }
 
 fn runtime_self<A>(a: A) → a = a { refl }
@@ -610,7 +734,7 @@ fn runtime_link(fuel: Nat, k: Known, stack: List<LinkFrame>, l: Linking) → Tac
                     let later = Cons(LinkFrame(fr.g, fr.name, fr.table, cs), rest);
                     match Known::index(l.order, c, 0) {
                         Some(_) => runtime_link(more, k, later, l),
-                        None => runtime_table(k, c).bind(λ t => runtime_name_of(c).bind(λ n =>
+                        None => runtime_name_of(c).bind(λ n => runtime_table(k, c, n).bind(λ t =>
                             runtime_link(more, k, Cons(LinkFrame(c, n, t, t.drop(1)), later), l))),
                     }
                 },
@@ -663,6 +787,186 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
 // ---------------------------------------------------------------------------
 // The generator: `runtime fn f(…) → … { … }`.
 
+// Abstractions over locals, the first outermost.
+fn runtime_lams(xs: List<LocalRef>, body: Expr) → Expr { xs.foldr(λ x acc => Lam(x, acc), body) }
+
+// `Succ(n)` and `w.toNat()` as functions a generator can apply.
+fn runtime_succ(n: Nat) → Nat { Succ(n) }
+
+fn runtime_count(w: BitVec(64)) → Nat { w.toNat() }
+
+// Binders of a statement opened in turn, each read in weak head normal form
+// first (`ForWords` unfolds to one binder per word).
+fn runtime_open_n(fuel: Nat, h: Handle, names: List<String>) → Tac<Pair<List<LocalRef>, Handle>> {
+    match names {
+        Nil => pure(Pair([], h)),
+        Cons(n, rest) => match fuel {
+            Zero => runtime_fail("a statement with more binders than the generator opens"),
+            Succ(f) => whnf_or(h).bind(λ w => open(w, n).or_fail("runtime: a binder of a loop's statement: ").bind(λ o =>
+                runtime_open_n(f, o.body, rest).bind(λ r => pure(Pair(Cons(o.local.ref, r.fst), r.snd))))),
+        },
+    }
+}
+
+// A measured function's measure at the words `xs`, and the domain of its
+// recursor's bound proof at the bound `z`: `f::rec(z, xs…, h)` takes
+// `h: μ(xs…) < z`.
+fn runtime_bound_dom(rec: Expr, z: Expr, xs: List<Expr>) → Tac<Handle> {
+    let t <- infer(ap(rec, Cons(z, xs))).or_fail("runtime: a measured function's recursor: ");
+    let w <- whnf_or(t);
+    let v <- view(w);
+    match v { HPi(dom) => pure(dom), _ => runtime_fail("a measured function's recursor does not take its bound's proof") }
+}
+
+fn runtime_measure_of(dom: Handle) → Tac<Handle> {
+    let v <- view(dom);
+    match v {
+        HGlobal(_, _, args) => match args {
+            Cons(mu, _) => pure(mu),
+            Nil => runtime_fail("a measured function's bound proof is not `μ < z`"),
+        },
+        _ => runtime_fail("a measured function's bound proof is not `μ < z`"),
+    }
+}
+
+fn runtime_measure_at(rec: Expr, xs: List<Expr>) → Tac<Handle> {
+    runtime_bound_dom(rec, NatLit(0), xs).bind(λ d => runtime_measure_of(d))
+}
+
+// The word a measure is the `toNat` of: a measured runtime fn's loop is
+// given `2^64 - 1` passes, so its measure must be a 64-bit word's `toNat`.
+fn runtime_measured_word(mu: Handle) → Tac<Handle> {
+    let v <- view(mu);
+    let refused = "a measured runtime fn must `decreases` a 64-bit word's `toNat` (its loop is given `2^64 - 1` passes)";
+    match v {
+        HGlobal(g, _, args) => runtime_ref("BitVec::toNat").bind(λ (to_nat: GlobalRef) => match g.id.same(to_nat.id) {
+            True => match args.rev() { Cons(x, _) => pure(x), Nil => runtime_fail(refused) },
+            False => runtime_fail(refused),
+        }),
+        _ => runtime_fail(refused),
+    }
+}
+
+// A fuel recursion's instance: its two equations, `refl` per word at the
+// function itself (design §16.11).
+fn runtime_fuel_instance(f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, typed: Expr,
+    w0: Ty, wrest: List<Ty>, c: Nat, zero, succ: Tm) → Tac<Expr> {
+    let compile <- runtime_global("Setup::compile_fuel");
+    let rfl <- runtime_global("tactic::rfl");
+    let succ_g <- runtime_global("runtime_succ");
+    let nat_h <- runtime_type_of("runtime_w_nat");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let ws = Cons(w0, wrest);
+    let shaped = ap(rfl, [Blank, ap(runtime_at(shapes, 1), [Ty::quote(w0, q), Ty::quotes(wrest, q), Tm::quote(zero, q), Tm::quote(succ, q)])]);
+    let xs <- runtime_params(ts.word, ws, None, 0);
+    let zero_eq = runtime_lams(xs, ap(rfl, [Blank, ap(Global(f), Cons(NatLit(0), runtime_locals(xs)))]));
+    let r <- assume(Hd(nat_h), "r", None).or_fail("runtime: a fuel: ");
+    let ys <- runtime_params(ts.word, ws, Some(r.ref), 0);
+    let step_eq = Lam(r.ref, runtime_lams(ys, ap(rfl, [Blank, ap(Global(f), Cons(ap(succ_g, [Local(r.ref)]), runtime_locals(ys)))])));
+    pure(ap(compile, [Blank, Global(f), setup, Ty::quote(w0, q), Ty::quotes(wrest, q), NatLit(c), Tm::quote(zero, q), Tm::quote(succ, q),
+        world_e, typed, shaped, zero_eq, step_eq, Hd(trivial_h)]))
+}
+
+// A measured recursion's instance: its measure, the measure below `2^64`,
+// and `Fun::Guarded` from the function's own `f::ext` and `f::irrel`
+// (`lib/_tests/native/runtime/rt_loop_tests.hthr`'s `count_down_guarded`,
+// spelled for any arity).
+fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, typed: Expr,
+    w0: Ty, wrest: List<Ty>, body: Tm) → Tac<Expr> {
+    let compile <- runtime_global("Setup::compile_measured");
+    let rfl <- runtime_global("tactic::rfl");
+    let sym_g <- runtime_global("Setup::eq_sym");
+    let trans_g <- runtime_global("Setup::eq_trans");
+    let lt_succ <- runtime_global("Setup::lt_succ");
+    let lt_pow <- runtime_global("Setup::below_pow");
+    let on_words <- runtime_global("Ty::on_words");
+    let guarded_g <- runtime_global("Setup::Guarded");
+    let rec <- runtime_global(name ++ "::rec");
+    let ext <- runtime_global(name ++ "::ext");
+    let irrel <- runtime_global(name ++ "::irrel");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let word_list <- runtime_ctors_at(ts.words);
+    let ws = Cons(w0, wrest);
+    let ws_e = Ty::quotes(ws, q);
+    let body_e = Tm::quote(body, q);
+    let list = λ (ys: List<LocalRef>) => RtQ::seq(word_list, runtime_locals(ys));
+    let shaped = ap(rfl, [Blank, ap(runtime_at(shapes, 2), [Ty::quote(w0, q), Ty::quotes(wrest, q), body_e])]);
+    // The measure, as a function of the words.
+    let zs <- runtime_params(ts.word, ws, None, 0);
+    let mu_z <- runtime_measure_at(rec, runtime_locals(zs));
+    let m_e = ap(on_words, [ws_e, runtime_lams(zs, Hd(mu_z))]);
+    // Below `2^64`: the measure is a word's `toNat`.
+    let bs <- runtime_params(ts.word, ws, None, 0);
+    let mu_b <- runtime_measure_at(rec, runtime_locals(bs));
+    let word_b <- runtime_measured_word(mu_b);
+    let bounded = runtime_lams(bs, ap(lt_pow, [Hd(word_b)]));
+    // `Guarded`: its binders opened off its statement (the words, the
+    // recursion `again`, and what `again` agrees with below the measure).
+    let g_t <- as_type(ap(guarded_g, [ws_e, body_e, world_e, Global(f), m_e])).or_fail("runtime: a measured function's `Guarded`: ");
+    let words: List<String> = List::range(ws.len()).map(λ i => "x".append(decimal_name(2, i)));
+    let names = words.append(["again", "hyp"]);
+    let opened <- runtime_open_n(64, g_t, names);
+    let xs = opened.fst.take(ws.len());
+    let again = opened.fst.nth(ws.len()).unwrap_or(LocalRef(0));
+    let hyp = opened.fst.nth(Succ(ws.len())).unwrap_or(LocalRef(0));
+    let mu_x <- runtime_measure_at(rec, runtime_locals(xs));
+    let n_e = Hd(mu_x);
+    // `g1 = λ y… p => f::rec(N, y…, p)`.
+    let ys1 <- runtime_params(ts.word, ws, Some(hyp), 0);
+    let d1 <- runtime_bound_dom(rec, n_e, runtime_locals(ys1));
+    let p1 <- assume(Hd(d1), "p", Some(ys1.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g1 = runtime_lams(ys1.append([p1.ref]), ap(rec, Cons(n_e, runtime_locals(ys1).append([Local(p1.ref)]))));
+    // `g2 = λ y… _ => again([y…])`.
+    let ys2 <- runtime_params(ts.word, ws, Some(hyp), 0);
+    let d2 <- runtime_bound_dom(rec, n_e, runtime_locals(ys2));
+    let p2 <- assume(Hd(d2), "q", Some(ys2.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g2 = runtime_lams(ys2.append([p2.ref]), ap(Local(again), [list(ys2)]));
+    // They agree: `f::irrel` on the left, the hypothesis on the right.
+    let ys3 <- runtime_params(ts.word, ws, Some(hyp), 0);
+    let d3 <- runtime_bound_dom(rec, n_e, runtime_locals(ys3));
+    let mu_y <- runtime_measure_of(d3);
+    let p3 <- assume(Hd(d3), "p", Some(ys3.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let q3 <- assume(Hd(d3), "q", Some(p3.ref)).or_fail("runtime: a bound proof: ");
+    let irr = ap(irrel, Cons(n_e, Cons(Blank, runtime_locals(ys3).append([Local(p3.ref), ap(lt_succ, [Hd(mu_y)])]))));
+    let hy = ap(Local(hyp), [list(ys3), ap(rfl, [Blank, NatLit(ws.len())]), Local(p3.ref)]);
+    let hg = runtime_lams(ys3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, hy])]));
+    let lt_n = ap(lt_succ, [n_e]);
+    let guarded = runtime_lams(xs.append([again, hyp]),
+        ap(sym_g, [Blank, Blank, Blank, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, runtime_locals(xs).append([lt_n, lt_n])))))))]));
+    pure(ap(compile, [Blank, Global(f), setup, Ty::quote(w0, q), Ty::quotes(wrest, q), body_e, world_e, typed, shaped, m_e, bounded, guarded,
+        Hd(trivial_h)]))
+}
+
+// The `Compile(f)` instance, by the reflection's shape.
+fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, setup, world_e, rt_e: Expr) → Tac<Expr> {
+    let rfl <- runtime_global("tactic::rfl");
+    let typed_refl <- runtime_global("Setup::typed_refl");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let shapes <- runtime_type_of("runtime_w_shape").bind(λ h => runtime_ctors_at(h));
+    let typed = ap(typed_refl, [Blank, Global(f)]);
+    match rfun.shape() {
+        Plain => runtime_global("Setup::compile").bind(λ compile =>
+            pure(ap(compile, [Blank, Global(f), setup, rt_e, world_e, typed, ap(rfl, [Blank, Global(f)]), Hd(trivial_h),
+                ap(rfl, [Blank, runtime_at(shapes, 0)])]))),
+        Fuel(w0, wrest, zero, succ) => match rfun.body {
+            Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, typed, w0, wrest, c, zero, succ),
+            _ => runtime_fail("a fuel recursion whose body is not its fuel's `match`"),
+        },
+        Measured(w0, wrest, body) => runtime_measured_instance(name, f, q, ts, shapes, setup, world_e, typed, w0, wrest, body),
+    }
+}
+
+// A word read at a parameter's code: a count as the word's `toNat`.
+fn runtime_args(count: Expr, ps: List<Ty>, ys: List<Expr>) → List<Expr> {
+    match ps {
+        Nil => ys,
+        Cons(p, rest) => match ys {
+            Nil => Nil,
+            Cons(y, more) => Cons(match p { Count => ap(count, [y]), _ => y }, runtime_args(count, rest, more)),
+        },
+    }
+}
+
 fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, l: Linking) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
@@ -670,7 +974,6 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     // by conversion (the kernel's), where a hole would be left to the
     // unifier, which does not unfold the reflection's meaning.
     let rfl <- runtime_global("tactic::rfl");
-    let typed_refl <- runtime_global("Setup::typed_refl");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let pair <- runtime_global("Pair::of");
     let callees = runtime_callees(pair, Hd(trivial_h), funs);
@@ -681,56 +984,71 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let judge <- runtime_global("Fun::judge");
     let meaning <- runtime_global("Fun::meaning");
     let code_of <- runtime_global("Setup::code");
-    let compile <- runtime_global("Setup::compile");
     let program_eval <- runtime_global("program_eval");
     let eval_sources <- runtime_global("program_eval_sources");
     let sources <- runtime_global("link_sources");
+    let count <- runtime_global("runtime_count");
     let word_list <- runtime_ctors_at(ts.words);
     let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let rt_e = Fun::quote(rfun, q);
     let world_e = ap(world_of, [no_records, RtQ::seq(q.sigs, sigs.map(λ s => Sig::quote(s, q))), callees]);
     let code_e = ap(code_of, [setup, rt_e, world_e]);
-    let instance_e = ap(compile, [Blank, Global(f), setup, rt_e, world_e, ap(typed_refl, [Blank, Global(f)]), ap(rfl, [Blank, Global(f)]),
-        Hd(trivial_h)]);
-    let instance_t <- infer(instance_e).or_fail("runtime: `" ++ name ++ "`'s instance: ");
+    let built <- runtime_instance(name, f, rfun, q, ts, setup, world_e, rt_e);
+    let instance_t <- infer(built).or_fail("runtime: `" ++ name ++ "`'s instance: ");
+    // Held as a hole solved by it: a loop's instance abstracts locals opened
+    // here, and a `Lam` reifies only where its local was opened, while a
+    // handle stands anywhere (`f::agrees` reads it under its parameters).
+    let held <- hole(instance_t).or_fail("runtime: `" ++ name ++ "`'s instance: ");
+    let solved <- defeq(Hd(held), built);
+    let instance_e <- match solved { True => pure(Hd(held)), False => runtime_fail("`" ++ name ++ "`'s instance does not solve its hole") };
     // The program: this function and every runtime fn it reaches, each
     // callee's code from its own instance.
     let insts <- runtime_instances(l.order, l.names, f.id, instance_e);
     let linked <- runtime_linked(q, ts, l, insts);
     let root = NatLit(l.order.len() - 1);
-    // `f::reflects` and `f::agrees` quantify over the parameters.
+    // `f::reflects` and `f::agrees` quantify over the parameters (`f::agrees`
+    // reads a count off its word, as a call passes it).
     let xs <- runtime_params(ts.word, rfun.params, None, 0);
     let ys <- runtime_params(ts.word, rfun.params, None, 0);
     let at_ys = runtime_locals(ys);
     let words_e = RtQ::seq(word_list, at_ys);
-    Pure([
+    // The pin, for a function its reflection's meaning converts to: a loop's
+    // meaning is one step of it, which is the function only at a
+    // constructor fuel (or a measure's bound), so its instance rests on its
+    // equations instead.
+    let pin: List<Decl> = match rfun.shape() {
+        Plain => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
+            Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
+            ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]))],
+        _ => [],
+    };
+    let head: List<Decl> = [
         Decl(AsValue, name ++ "::rt", [], Hd(ts.fun_t), rt_e),
         Decl(AsValue, name ++ "::world", [], Hd(ts.world), world_e),
         Decl(AsTheorem, name ++ "::judged", [], Equation(ap(judge, [rt_e, world_e]), runtime_at(verdicts, 0)),
-            ap(rfl, [Blank, runtime_at(verdicts, 0)])),
-        Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
-            Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
-            ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))])),
+            ap(rfl, [Blank, runtime_at(verdicts, 0)]))];
+    let tail: List<Decl> = [
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
         Decl(AsInstance("Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e),
         Decl(AsValue, name ++ "::program", [], Hd(ts.functions), linked.program),
         Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys),
-            Equation(ap(program_eval, [linked.program, root, words_e]), ap(Global(f), at_ys)),
+            Equation(ap(program_eval, [linked.program, root, words_e]), ap(Global(f), runtime_args(count, rfun.params, at_ys))),
             ap(eval_sources, [linked.program, Hd(trivial_h), ap(sources, [linked.srcs]), linked.sourced, root, words_e, Hd(trivial_h)])),
-    ])
+    ];
+    pure(head.append(pin).append(tail))
 }
 
 fn runtime(name: String) → Tac<List<Decl>> {
     let f <- runtime_ref(name);
     let k <- rt_known_in([name], [], True);
-    let reflected <- rt_reflect_one(4096, k, f.id);
+    let reflected <- runtime_reflect(k, f.id, name);
     let rfun = reflected.fst;
     let callee_sigs <- runtime_sigs(k, reflected.snd.drop(1));
     let sigs = Cons(rfun.sig(), callee_sigs);
     let world = World(RecInfo::none, sigs, Sig::sems_default(RecInfo::none, sigs));
     match Fun::judge(rfun, world) {
         Refused(why) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
-        Ok => match Setup::lowers(Fun::lower(rfun, world)) {
+        Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {
             False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
             True => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1))], Linking([], [], [])).bind(λ l =>
                 runtime_publish(name, f, rfun, sigs, reflected.snd, l)),

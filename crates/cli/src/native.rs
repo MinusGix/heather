@@ -387,15 +387,15 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     }
     // A function runs only when it is marked: `runtime fn f` publishes its
     // program and the program's agreement (from its `Compile` instance and
-    // its callees', docs/runtime-fn-setups-design.md §16.9). The Rust
-    // reflector stays only for what the default setup does not compile yet,
-    // loops and tests through `Bool` helpers; anything else unmarked is
-    // refused, naming the marker.
+    // its callees', docs/runtime-fn-setups-design.md §16.9), loops
+    // included (§16.11). The Rust reflector stays only for what the default
+    // setup does not compile yet, tests through `Bool` helpers; anything
+    // else unmarked is refused, naming the marker.
     let shape = if elab.qualified_global(&format!("{source_name}::compile")).is_some() {
         verified::runtime_shape(&elab, &prefix, &root_name, &source_name)?
     } else {
         let program = verified::reflect(&elab, &source_name)?;
-        if !program.functions.iter().any(|function| function.looped.is_some() || function.helped) {
+        if !program.functions.iter().any(|function| function.helped) {
             return Err(format!("`{symbol}` is not a runtime fn: mark it `runtime fn {symbol}`, and the functions it calls, with `import runtime;` \
                 (docs/runtime-fn-setups-design.md §16.9)"));
         }

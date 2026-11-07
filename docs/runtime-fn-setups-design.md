@@ -1226,3 +1226,86 @@ a measured function's body as written (`f_unfold`'s right-hand side, with
 examples and `crates/elab/src/function_ir_source/` deleted. `Bool` helpers
 are separate: a call whose result is a `Bit` needs a word on the call's
 edge (a branch on the bit to `0`/`1`, read back by a comparison).
+
+### 16.11 R5d round 4: loops through `Setup` and `Compile` (2026-11-06)
+
+`runtime fn` now takes the two loop shapes §16.10 proved, and `compile-x86`
+compiles the loop examples through their instances; the Rust reflector no
+longer compiles loops (it refuses one, naming the marker) and keeps only
+tests through `Bool` helpers and `heather reflect`. What the round settled:
+
+- **The lowering dispatches on a shape** (`RtShape`, `Fun::shape` in
+  `rt_loop.hthr`). A function whose first parameter is a `Count` and whose
+  body is a `Case` on it is `Fuel`; one whose body calls itself (entry 0)
+  is `Measured`; anything else is `Plain`. `Fun::lower_any` lowers by the
+  shape, and `Fun::Holds` is what each shape's code promises given what the
+  function supplies: nothing for `Plain` (`Fun::LowerHolds`), `FuelZero`
+  and `FuelStep` for a fuel, a measure with `Bounded` and `Guarded` for a
+  measured loop. `Fun::lower_any_sound` is the three soundness theorems
+  under one statement, and `Setup.sound` is now `f.Holds(w, lower(f, w))`,
+  so a setup's soundness is over the shapes.
+- **An instance per shape** (`Setup::compile`, `Setup::compile_fuel`,
+  `Setup::compile_measured` in `runtime.hthr`). A plain function's instance
+  rests on the pin, as before. A loop's cannot: its meaning is one step,
+  which is the function only at a constructor fuel or below a bound, so its
+  instance takes the shape's equations instead and builds the `rt` term from
+  its pieces, which keeps the statements reducing. The generator proves the
+  equations: `FuelZero` and `FuelStep` are `λ x… => refl` (with `λ r` for the
+  step), and `Guarded` is three applications of the function's own
+  `f::ext`, `f::irrel` and the hypothesis (`runtime_measured_instance`, for
+  any arity; `rt_loop_tests`'s `count_down_guarded` was the template). A
+  measured function must `decreases` a word's `toNat`: `Bounded` is
+  `BitVec::toNat_lt_pow` at that word, read off `f::rec`'s bound proof.
+- **A count crosses a call held in a word.** A signature's `Count`
+  parameter is a word on the call's edge, read by `toNat`
+  (`Ty::cast(Word(64) → Count)` is now `toNat`, `Ty::held_reads`), so
+  `triangle` passes `n.toNat()` to `sum_down` and the callee's fuel is the
+  word's count. A runtime fn's `f::agrees` reads its count parameters the
+  same way (`sum_down::agrees(r, n, acc)` is about `sum_down(r.toNat(), …)`).
+- **The reflector reads both bodies.** A fuel recursion's body is the
+  kernel's `ElimNat` applied to the varied words, which `View` shows as no
+  head; the host's `Arms` now opens it (the `Zero` arm the base, the `Succ`
+  arm under `k` and `ih`), and `rt_reflect` reads `ih` applied to the varied
+  words as `Call(0, …)` with the fuel's predecessor first. A measured
+  function is reflected from `f::body` (found by `lookup`), its ih applied
+  to the words and a proof read as `Call(0, words)`. `sum_down` reflects to
+  §16.10's hand-written step exactly (`runtime_loop_tests`'s `sum_down_rt_is`).
+- **A leaving pass writes every `next` word.** §16.10's pass moved a
+  leaving value to the first `next` port only; the evaluator does not care,
+  but the x86 emission meets a branch's two register files and keeps only
+  what both arms hold, so the other words were lost and the loop's exit
+  refused. A leaf now copies the value to the rest too (`Tm::leave_region`),
+  which nothing reads. Both arms also write the flag *last*
+  (`Tm::again_region` moves the arguments first): the planner gives each arm
+  the join's registers (`pick_targets`) only where they are free, and with
+  the flag first an arm going round could find its register still holding
+  a source, put the flag elsewhere and the next word in the flag's place,
+  which the meet dropped (`loop_climb`).
+- **A caller's pin meets its callee before unfolding it.** The pin is
+  `meaning(rt, world)(x⃗) = f(x⃗)` by conversion, and `world` holds the
+  callees themselves. The kernel's δ-lazy loop unfolded the newer head
+  first, so it unfolded `f`'s callee on the right before the left reached
+  it through `world`, and a callee given a closed count (`loop_multiply`'s
+  65, `loop_anywhere`'s 100) then unrolled on both sides into a tree with
+  two recursive arms per pass. Conversion now remembers the spines it
+  stepped past and meets the other side there
+  (`issues/conversion-meet-past-newer-head.md`, `crates/kernel/DESIGN.md`).
+- **Generated instances are held as solved holes.** A loop's instance
+  abstracts locals the generator opened, and a host `Lam` reifies only at
+  the scope its local was opened in, so the instance cannot be repeated
+  inside `f::agrees`'s statement under its parameters. The generator solves
+  a hole with it (`defeq`) and uses the hole's handle, which stands
+  anywhere.
+- **What the generator cites is named in `runtime`** (`Setup::Guarded`,
+  `Setup::lt_succ`, `Setup::below_pow`, `Setup::eq_sym`, `Setup::eq_trans`),
+  so a module marking a loop needs only `runtime-generator-imports`' list.
+  `Setup::lt_succ` is a transparent `fn` returning `Nat::lt_succ_self`,
+  because a `decreases` function's body passes exactly that proof to its
+  recursor and the instance meets it by conversion.
+
+Left: `Bool`-returning helpers (`branches.hthr`'s `unequal` callers still
+use the Rust reflector), `heather reflect` from instances, `Fold` in the
+lowering, and a `decreases` measure that is not a word's `toNat` (a count
+parameter matched below the top is refused by the reflector today). The generator's cost grows with the functions a
+program links ([[runtime-generator-link-cost]]): `loop_anywhere` was cut to
+five functions to stay well inside the native gate's rail.

@@ -22,7 +22,7 @@ fn raise_letter_native_program() → List<Function> { raise_letter_native_first_
 
 theorem raise_letter_native_evaluable(): program_evaluable(raise_letter_native_program()).IsTrue() { trivial }
 
-// What each function computes: its source, a loop's bound its fuel.
+// What each function computes: its source.
 fn raise_letter_native_sources() → Answers() {
     λ (g0: Nat) (words: List<BitVec(64)>) => match g0 { Zero => native_tool_words::raise_letter(words.word(0)), Succ(g1) => BitVec::zero() }
 }

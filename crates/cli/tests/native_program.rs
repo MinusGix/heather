@@ -81,20 +81,15 @@ static uint64_t sum_down(uint64_t fuel, uint64_t n, uint64_t acc) {
     for (; fuel != 0; --fuel) { if (n == 0) return acc; acc += n; n -= 1; }
     return acc;
 }
-static uint64_t settling(unsigned fuel, uint64_t x, uint64_t y) {
-    for (; fuel != 0; --fuel) { if ((x & 7) == 0) return x; x = (x + y) ^ (x - y); y += 1; }
-    return x ^ y;
-}
 static uint64_t triangle(uint64_t a) { uint64_t n = a & 255; return sum_down(n, n, 0); }
 static uint64_t nested(uint64_t fuel, uint64_t n, uint64_t acc) {
     for (; fuel != 0; --fuel) { if (n == 0) return acc; acc += triangle(n); n -= 1; }
     return acc;
 }
-static uint64_t either(uint64_t a, uint64_t b) { return a < b || a == 5 ? a : b; }
 static uint64_t reference(uint64_t a, uint64_t b) {
     uint64_t m = a & 63;
-    if (a < b) { uint64_t t = sum_down(m, m, b); return settling(100, t, a) + t + triangle(b); }
-    return either(nested(m, m, b), a);
+    if (a < b) { uint64_t t = sum_down(m, m, b); return t + triangle(b + t); }
+    return nested(m, m, b) ^ a;
 }
 "#),
 ];
@@ -116,6 +111,10 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 ];
 
 const CALLS: &[&str] = &["CallTo("];
+// A loop is a `runtime fn`'s: its program and agreement are its generator's,
+// from the `Compile` instances (docs/runtime-fn-setups-design.md §16.11),
+// with nothing proved per loop in the certificate.
+const LOOPED: &[&str] = &["::agrees(", "::program"];
 
 #[test]
 fn programs_with_calls_execute_levels() { execute("levels", &LEVELS, CALLS); }
@@ -127,10 +126,10 @@ fn programs_with_calls_execute_composed() { execute("composed", &COMPOSED, CALLS
 fn programs_with_calls_execute_saved() { execute("saved", &SAVED, CALLS); }
 
 #[test]
-fn programs_with_loops_execute() { execute("loops", &LOOPS, &["Loop(", "loop_eval_agrees_from(", "_pass_cased("]); }
+fn programs_with_loops_execute() { execute("loops", &LOOPS, LOOPED); }
 
 #[test]
-fn programs_with_measured_loops_execute() { execute("measured", &MEASURED, &["Loop(", "loop_eval_agrees_measured(", "_body_tree(", "split_all;"]); }
+fn programs_with_measured_loops_execute() { execute("measured", &MEASURED, LOOPED); }
 
 fn execute(group: &str, cases: &[Case], claims: &[&str]) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -181,30 +180,24 @@ int main(void) {{
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-// What the loop fragment refuses, each with its reason: a fuel that is no
-// word's `toNat`, and a recursion read as a value.
+// A loop that is not a `runtime fn` is refused, naming the marker: the Rust
+// reflector no longer compiles loops (what a `runtime fn` loop refuses is
+// `lib/_tests/native/runtime/runtime_tests.hthr`'s to probe).
 #[test]
-fn loop_sources_are_refused() {
+fn unmarked_loops_are_refused() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = root.join(format!("target/native-loop-refusals-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let recursion = "fn count(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {\n\
-        match fuel { Zero => acc, Succ(k) => count(k, n.sub(BitVec::ofNat(1)), acc.add(n)) }\n}\n";
-    let cases = [
-        ("literal_fuel", "fn literal_fuel(a, b: BitVec(64)) → BitVec(64) { count(10, a, b) }\n", "as `w.toNat()` of a word"),
-        ("read_recursion", "fn after(fuel: Nat, n: BitVec(64)) → BitVec(64) {\n\
-            match fuel { Zero => n, Succ(k) => after(k, n.add(n)).add(n) }\n}\n\
-            fn read_recursion(a, b: BitVec(64)) → BitVec(64) { after(a.toNat(), b) }\n", "reads its fuel, or its recursion as a value"),
-    ];
-    for (file, body, why) in cases {
-        std::fs::write(dir.join(format!("{file}.hthr")), format!("import bitvec;\n{recursion}{body}")).unwrap();
-        let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
-            .arg("compile-x86").arg(dir.join(format!("{file}.hthr"))).args([file, "-o"]).arg(dir.join(format!("{file}.s")))
-            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
-            .output().unwrap();
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(!result.status.success() && stderr.contains(why), "{file}: {stderr}");
-    }
+    let source = "import bitvec;\nfn count(fuel: Nat, n, acc: BitVec(64)) → BitVec(64) {\n\
+        match fuel { Zero => acc, Succ(k) => count(k, n.sub(BitVec::ofNat(1)), acc.add(n)) }\n}\n\
+        fn unmarked(a, b: BitVec(64)) → BitVec(64) { count(a.toNat(), a, b) }\n";
+    std::fs::write(dir.join("unmarked.hthr"), source).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .arg("compile-x86").arg(dir.join("unmarked.hthr")).args(["unmarked", "-o"]).arg(dir.join("unmarked.s"))
+        .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success() && stderr.contains("mark it `runtime fn count`"), "{stderr}");
     std::fs::remove_dir_all(dir).unwrap();
 }

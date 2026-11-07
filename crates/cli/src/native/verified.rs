@@ -274,7 +274,7 @@ pub(super) fn agreement_text(prefix: &str, program: &function_ir_source::Reflect
         let words: Vec<String> = (0..function.arity).map(|i| format!("words.word({i})")).collect();
         answers = format!("match g{k} {{ Zero => {}, Succ(g{}) => {answers} }}", function.answer(&words), k + 1);
     }
-    let mut agreements = format!("// What each function computes: its source, a loop's bound its fuel.
+    let mut agreements = format!("// What each function computes: its source.
 fn {prefix}_sources() → Answers() {{
     λ (g0: Nat) (words: List<BitVec(64)>) => {answers}
 }}
@@ -315,27 +315,12 @@ pub(super) fn owner_imports(program: &function_ir_source::ReflectedProgram) -> S
     owners.iter().map(|owner| format!("import {owner};\n")).collect()
 }
 
-/// The program's definitions: each function `{prefix}_fn{k}()` (a loop's
-/// pieces too), the lists `{prefix}_first_{k}()` and `{prefix}_program()`.
+/// The program's definitions: each function `{prefix}_fn{k}()`, the lists `{prefix}_first_{k}()` and `{prefix}_program()`.
 pub(super) fn program_text(prefix: &str, program: &function_ir_source::ReflectedProgram) -> String {
     let mut definitions = String::new();
     definitions.push_str(&format!("\n// The program, function `k` the one with `k` after it: {}.\n", program.functions.iter().map(|function| function.source_name.as_str()).collect::<Vec<_>>().join(", ")));
-    // Each function by name; a loop's pieces too, so that its agreement
-    // meets the program at them (`loop_then_eval`).
     for (k, function) in program.functions.iter().enumerate() {
-        let name = format!("{prefix}_fn{k}");
-        let text = match &function.looped {
-            Some(looped) => {
-                definitions.push_str(&format!("fn {name}_loop_body() → StructuredRegion {{\n    {}\n}}\n\n", looped.body.render()));
-                definitions.push_str(&format!("fn {name}_loop_post() → StructuredRegion {{\n    {}\n}}\n\n", looped.post.render()));
-                if let Some(prefix) = looped.measured.as_ref().and_then(|measured| measured.prefix.as_ref()) {
-                    definitions.push_str(&format!("fn {name}_loop_bound() → StructuredRegion {{\n    {}\n}}\n\n", prefix.render()));
-                }
-                format!("Function(parameters := [{}], body := {}, result := {})", parameters(function.arity), loop_function_body(&name, looped), function.result)
-            }
-            None => function.render(),
-        };
-        definitions.push_str(&format!("fn {name}() → Function {{\n    {text}\n}}\n\n"));
+        definitions.push_str(&format!("fn {prefix}_fn{k}() → Function {{\n    {}\n}}\n\n", function.render()));
     }
     // The exported function is the last, so the first the program lists;
     // the others answer its calls.
@@ -351,7 +336,7 @@ pub(super) fn program_text(prefix: &str, program: &function_ir_source::Reflected
 }
 
 /// Function `name`'s agreement with its source, its calls answered by
-/// `sources`: by conversion, through an expansion, or as a loop.
+/// `sources`: by conversion, through an expansion.
 fn function_agreement(name: &str, sources: &str, function: &function_ir_source::ProgramFunction) -> String {
     let arguments = arguments(function.arity);
     let typed = typed(&arguments);
@@ -359,9 +344,6 @@ fn function_agreement(name: &str, sources: &str, function: &function_ir_source::
     let answer = function.answer(&arguments);
     let joined = arguments.join(", ");
     let source = &function.source_name;
-    if let Some(looped) = &function.looped {
-        return loop_agreement(name, sources, looped, function);
-    }
     // With its calls open, the function is its expansion by conversion and
     // no callee is unfolded; with the callees' sources for them, the
     // expansion is the source.
@@ -384,302 +366,6 @@ theorem {name}_agrees({typed}): {name}().eval({sources}, {list}) = {answer} {{
 ", more = if typed.is_empty() { String::new() } else { format!(", {typed}") }, rest = if joined.is_empty() { String::new() } else { format!(", {joined}") },
         expansion = function.expansion)
 }
-
-/// The agreement of a function that is a loop: by induction on the fuel
-/// (`loop_eval_agrees`), the pass by cases on its comparisons, the source's
-/// recursion abstracted as `later`.
-fn loop_agreement(prefix: &str, call_of: &str, looped: &function_ir_source::ReflectedLoop, function: &function_ir_source::ProgramFunction) -> String {
-    use function_ir_source::ids;
-    let n = looped.arity;
-    let xs: Vec<String> = (0..n).map(|i| format!("x{i}")).collect();
-    let cs: Vec<String> = (0..looped.conditions.len()).map(|k| format!("c{k}")).collect();
-    let typed_more = |names: &[String], ty: &str| if names.is_empty() { String::new() } else { format!(", {}: {ty}", names.join(", ")) };
-    let (x_typed, c_typed) = (typed_more(&xs, "BitVec(64)"), typed_more(&cs, "Bool"));
-    let x_args = xs.join(", ");
-    let conditions = looped.conditions.join(", ");
-    let with = |list: &str| if list.is_empty() { String::new() } else { format!(", {list}") };
-    let at_v: Vec<String> = looped.parameters.iter().map(|p| format!("v(64, {p})")).collect();
-    let at_v = at_v.join(", ");
-    let source = &function.source_name;
-    let words: Vec<String> = (0..n).map(|i| format!("state.word({i})")).collect();
-    let finish = |values: &str| format!("loop_finish({prefix}_loop_post(), {call_of}, {values}, [{}], {}, {})", ids(&looped.outputs), looped.exhausted, function.result);
-    let step = format!("λ (pass: Valuation()) => {prefix}_loop_body().eval({call_of}, pass)");
-    let pass_of = |values: &str| format!("loop_pass({step}, [{}], {}, {}, [{}], {}, later, r, v)", ids(&looped.parameters), looped.count, looped.exit,
-        ids(&looped.next), finish(values));
-    // The case split, along the pass's tree: each path's comparisons
-    // literals, both sides compute.
-    let cased = convoy(&|cs: &str| format!("{prefix}_pass_cases(later, {x_args}{cs}) = {prefix}_tree_cases(later, {x_args}{cs})"), &looped.split,
-        &mut cs.clone());
-    let by_cases = "split_all;\n    all_goals { refl }";
-    let unfolds = if looped.decided { by_cases } else { "refl" };
-    let base = if looped.base_decided {
-        format!("fn {prefix}_base_expansion({x}) → BitVec(64) {{
-    {base}
-}}
-
-theorem {prefix}_base_expanded(v, values: Valuation()):
-    {fin}(LoopEnd(words_of(v, [{params}]), True)) = {prefix}_base_expansion({at_v}) {{ refl }}
-
-theorem {prefix}_base_expands({x}): {prefix}_base_expansion({x_args}) = {prefix}_run(0, [{x_args}]) {{
-    {by_cases}
-}}
-
-theorem {prefix}_base(v, values: Valuation()):
-    {fin}(LoopEnd(words_of(v, [{params}]), True)) = {prefix}_run(0, words_of(v, [{params}])) {{
-    trans({prefix}_base_expanded(v, values), {prefix}_base_expands({at_v}))
-}}
-", x = &x_typed[2..], base = looped.base, fin = finish("values"), params = ids(&looped.parameters))
-    } else {
-        format!("theorem {prefix}_base(v, values: Valuation()):
-    {fin}(LoopEnd(words_of(v, [{params}]), True)) = {prefix}_run(0, words_of(v, [{params}])) {{ refl }}
-", fin = finish("values"), params = ids(&looped.parameters))
-    };
-    let parameters = arguments(function.arity);
-    let arguments = parameters.join(", ");
-    let answer = function.answer(&parameters);
-    let values = format!("Valuation::bind(Valuation::zero(), [{}], [{arguments}])", (0..parameters.len()).map(|i| i.to_string()).collect::<Vec<_>>().join(", "));
-    let body = loop_function_body(prefix, looped);
-    // The pass, the same for either recursion: its tree, as the program
-    // evaluates it, and the two met by cases.
-    let passes = format!("// A pass as the source's tree, then as the program evaluates it; its
-// comparisons are `c0, …`.
-fn {prefix}_tree_cases(later: List<BitVec(64)> → BitVec(64){x_typed}{c_typed}) → BitVec(64) {{
-    {tree}
-}}
-
-fn {prefix}_tree(later: List<BitVec(64)> → BitVec(64){x_typed}) → BitVec(64) {{ {prefix}_tree_cases(later, {x_args}{conds}) }}
-
-fn {prefix}_pass_cases(later: List<BitVec(64)> → BitVec(64){x_typed}{c_typed}) → BitVec(64) {{
-    {pass}
-}}
-
-fn {prefix}_pass(later: List<BitVec(64)> → BitVec(64){x_typed}) → BitVec(64) {{ {prefix}_pass_cases(later, {x_args}{conds}) }}
-
-theorem {prefix}_pass_cased(later: List<BitVec(64)> → BitVec(64){x_typed}{c_typed}):
-    {prefix}_pass_cases(later, {x_args}{cs_args}) = {prefix}_tree_cases(later, {x_args}{cs_args}) {{
-    {cased}
-}}
-
-theorem {prefix}_pass_tree(later: List<BitVec(64)> → BitVec(64){x_typed}): {prefix}_pass(later, {x_args}) = {prefix}_tree(later, {x_args}) {{
-    {prefix}_pass_cased(later, {x_args}{conds})
-}}
-
-theorem {prefix}_pass_expanded(r: Nat, v, values: Valuation(), later: List<BitVec(64)> → BitVec(64)):
-    {pass_values} = {prefix}_pass(later, {at_v}) {{ refl }}
-
-theorem {prefix}_pass_agrees(r: Nat, v, values: Valuation(), later: List<BitVec(64)> → BitVec(64)):
-    {pass_values} = {prefix}_tree(later, {at_v}) {{
-    trans({prefix}_pass_expanded(r, v, values, later), {prefix}_pass_tree(later, {at_v}))
-}}
-
-// The function down to its loop.
-theorem {prefix}_entered({typed}): {prefix}().eval({call_of}, [{arguments}]) = {body}.eval({call_of}, {values})(64, {result}) {{
-    let spelled: ({prefix}().eval({call_of}, [{arguments}]) =
-        Function(parameters := [{numbered}], body := {body}, result := {result}).eval({call_of}, [{arguments}])) = refl;
-    trans(spelled, function_eval_body([{numbered}], {body}, {result}, {call_of}, [{arguments}]))
-}}
-", typed = typed(&parameters), numbered = (0..parameters.len()).map(|i| i.to_string()).collect::<Vec<_>>().join(", "), result = function.result,
-        tree = looped.tree, pass = looped.pass, conds = with(&conditions), cs_args = with(&cs.join(", ")), pass_values = pass_of("values"));
-    if let Some(measured) = &looped.measured {
-        return measured_agreement(prefix, call_of, looped, measured, function, &passes);
-    }
-    format!("// `{source}` recurses on its fuel, and its function is a loop: the two agree by
-// induction on the fuel, a pass at a time.
-fn {prefix}_run(fuel: Nat, state: List<BitVec(64)>) → BitVec(64) {{ {source}(fuel, {words}) }}
-
-{passes}
-theorem {prefix}_unfolds(r: Nat{x_typed}): {source}(Succ(r), {x_args}) = {prefix}_tree(λ (state: List<BitVec(64)>) => {prefix}_run(r, state), {x_args}) {{
-    {unfolds}
-}}
-
-{base}
-// The loop's end made the result, and the source's recursion at the loop's
-// fuel and inputs: each step meets the next at the same `loop_eval` and the
-// same recursion, unfolded no further, so a constant fuel is never run.
-theorem {prefix}_enters({typed}): {prefix}().eval({call_of}, [{arguments}]) =
-    {fin_at}(loop_eval({step}, [{params}], {count}, {exit}, [{next}], {values}(64, {bound_id}).toNat(), words_of({values}, [{inputs}]))) {{
-    trans({prefix}_entered({arguments}), loop_then_eval([{inputs}], {bound_id}, [{params}], {count}, {prefix}_loop_body(), {exit}, [{next}],
-        [{outputs}], {exhausted}, {prefix}_loop_post(), {call_of}, {values}, {result}))
-}}
-
-theorem {prefix}_runs({typed}): {prefix}_run({values}(64, {bound_id}).toNat(), words_of({values}, [{inputs}])) = {answer} {{ refl }}
-
-theorem {prefix}_agrees({typed}): {prefix}().eval({call_of}, [{arguments}]) = {answer} {{
-    let values = {values};
-    trans({prefix}_enters({arguments}), trans(loop_eval_agrees_from({step}, [{params}], {count}, {exit}, [{next}], trivial, refl,
-        {fin}, λ (fuel: Nat) (state: List<BitVec(64)>) => {prefix}_run(fuel, state),
-        λ v => {prefix}_base(v, values),
-        λ r v => trans({prefix}_pass_agrees(r, v, values, λ (state: List<BitVec(64)>) => {prefix}_run(r, state)), sym({prefix}_unfolds(r, {at_v}))),
-        values(64, {bound_id}).toNat(), values, [{inputs}], refl), {prefix}_runs({arguments})))
-}}
-
-", typed = typed(&parameters), outputs = ids(&looped.outputs), exhausted = looped.exhausted, result = function.result, fin_at = finish(&values),
-        words = words.join(", "), fin = finish("values"), params = ids(&looped.parameters), count = looped.count, exit = looped.exit,
-        next = ids(&looped.next), bound_id = looped.bound, inputs = ids(&looped.inputs))
-}
-
-/// The agreement of a function that is a loop bounded by its measure
-/// (`function_ir_source::Measured`): by induction on the passes left
-/// (`loop_eval_agrees_measured`), a pass by cases on its comparisons and by
-/// `split_all` on the source's step, whose recursion is any `g` that some
-/// `later` answers for (`_body_tree`). With no passes left the measure is
-/// below one, so the step's recursion is refuted where it would be taken.
-fn measured_agreement(prefix: &str, call_of: &str, looped: &function_ir_source::ReflectedLoop, measured: &function_ir_source::Measured,
-    function: &function_ir_source::ProgramFunction, passes: &str) -> String
-{
-    use function_ir_source::ids;
-    let n = looped.arity;
-    let xs: Vec<String> = (0..n).map(|i| format!("x{i}")).collect();
-    let cs: Vec<String> = (0..looped.conditions.len()).map(|k| format!("c{k}")).collect();
-    let x_args = xs.join(", ");
-    let x_typed = format!("{x_args}: BitVec(64)");
-    let x_lam: String = xs.iter().map(|x| format!("({x}: BitVec(64)) ")).collect();
-    let c_typed = if cs.is_empty() { String::new() } else { format!(", {}: Bool", cs.join(", ")) };
-    let cs_args: String = cs.iter().map(|c| format!(", {c}")).collect();
-    let conds: String = looped.conditions.iter().map(|c| format!(", {c}")).collect();
-    let source = &function.source_name;
-    let words: Vec<String> = (0..n).map(|i| format!("state.word({i})")).collect();
-    let at_v: Vec<String> = looped.parameters.iter().map(|p| format!("v(64, {p})")).collect();
-    let at_v = at_v.join(", ");
-    let params = ids(&looped.parameters);
-    let finish = |values: &str| format!("loop_finish({prefix}_loop_post(), {call_of}, {values}, [{}], {}, {})", ids(&looped.outputs), looped.exhausted, function.result);
-    let step = format!("λ (pass: Valuation()) => {prefix}_loop_body().eval({call_of}, pass)");
-    let fin = finish("values");
-    let rest = |r: &str, state: &str| format!("{fin}(loop_eval({step}, [{params}], {}, {}, [{}], {r}, {state}))", looped.count, looped.exit, ids(&looped.next));
-    let later = format!("λ (state: List<BitVec(64)>) => {}", rest("r", "state"));
-    let pass_values = format!("loop_pass({step}, [{params}], {}, {}, [{}], {fin}, {later}, r, v)", looped.count, looped.exit, ids(&looped.next));
-    let first = "λ (state: List<BitVec(64)>) => state.word(0)";
-    let mut assigned = cs.clone();
-    let post_cased = convoy(&|cs: &str| format!("{prefix}_post_cases({x_args}{cs}) = {prefix}_tree_cases({first}, {x_args}{cs})"), &looped.split,
-        &mut assigned);
-    let parameters = arguments(function.arity);
-    let arguments = parameters.join(", ");
-    let answer = function.answer(&parameters);
-    let bound = looped.bound;
-    let inputs = ids(&looped.inputs);
-    let bind = format!("Valuation::bind(Valuation::zero(), [{}], [{arguments}])", (0..parameters.len()).map(|i| i.to_string()).collect::<Vec<_>>().join(", "));
-    // The valuation the loop starts from: after its bound.
-    let values = match measured.prefix {
-        Some(_) => format!("{prefix}_loop_bound().eval({call_of}, {bind})"),
-        None => bind,
-    };
-    let lt = "nat::Nat::Lt";
-    format!("// `{source}` recurses on its measure, and its function is a loop of at most
-// as many passes: the two agree by induction on the passes left, a pass at a
-// time.
-fn {prefix}_measure_of({x_typed}) → Nat {{ @bitvec::BitVec::toNat(64, {word}) }}
-
-fn {prefix}_measure(state: List<BitVec(64)>) → Nat {{ {prefix}_measure_of({words}) }}
-
-fn {prefix}_run(r: Nat, state: List<BitVec(64)>, h: {lt}({prefix}_measure(state), Succ(r))) → BitVec(64) {{ {source}::rec(Succ(r), {words}, h) }}
-
-{passes}
-// The source's step is the pass's tree, its recursion answered by `later`.
-theorem {prefix}_body_tree(k: Nat, g: ({x_typed}) → {lt}({prefix}_measure_of({x_args}), k) → BitVec(64), later: List<BitVec(64)> → BitVec(64),
-    hg: ({x_typed}) → (p: {lt}({prefix}_measure_of({x_args}), k)) → g({x_args}, p) = later([{x_args}]), {x_typed},
-    h: {lt}({prefix}_measure_of({x_args}), Succ(k))): {source}::body(k, g, {x_args}, h) = {prefix}_tree(later, {x_args}) {{
-    let recurs: ({{{x_typed}}} → {{p: {lt}({prefix}_measure_of({x_args}), k)}} → g({x_args}, p) = later([{x_args}])) = hg;
-    split_all;
-    all_goals {{ recurs }}
-}}
-
-// A pass: going round, the recursion on the passes left.
-theorem {prefix}_pass_measured(r: Nat, v, values: Valuation(), h: {lt}({prefix}_measure(words_of(v, [{params}])), Succ(Succ(r))),
-    earlier: (state: List<BitVec(64)>) → state.len() = {n} → (p: {lt}({prefix}_measure(state), Succ(r))) →
-        {rest_r} = {prefix}_run(r, state, p)):
-    {pass_values} = {prefix}_run(Succ(r), words_of(v, [{params}]), h) {{
-    trans({prefix}_pass_agrees(r, v, values, {later}), sym({prefix}_body_tree(Succ(r), λ {x_lam}(p: {lt}({prefix}_measure_of({x_args}), Succ(r))) =>
-        {source}::rec(Succ(r), {x_args}, p), {later},
-        λ {x_lam}(p: {lt}({prefix}_measure_of({x_args}), Succ(r))) => sym(earlier([{x_args}], refl, p)), {at_v}, h)))
-}}
-
-// With the passes run out, the tree once more, a recursion reading its next
-// first word: none is taken, the measure being below one.
-fn {prefix}_post_cases({x_typed}{c_typed}) → BitVec(64) {{
-    {exhausted}
-}}
-
-fn {prefix}_post({x_typed}) → BitVec(64) {{ {prefix}_post_cases({x_args}{conds}) }}
-
-theorem {prefix}_post_cased({x_typed}{c_typed}): {prefix}_post_cases({x_args}{cs_args}) = {prefix}_tree_cases({first}, {x_args}{cs_args}) {{
-    {post_cased}
-}}
-
-theorem {prefix}_post_tree({x_typed}): {prefix}_post({x_args}) = {prefix}_tree({first}, {x_args}) {{
-    {prefix}_post_cased({x_args}{conds})
-}}
-
-theorem {prefix}_post_expanded(v, values: Valuation()): {fin}(LoopEnd(words_of(v, [{params}]), True)) = {prefix}_post({at_v}) {{ refl }}
-
-theorem {prefix}_base(v, values: Valuation(), h: {lt}({prefix}_measure(words_of(v, [{params}])), 1)):
-    {fin}(LoopEnd(words_of(v, [{params}]), True)) = {prefix}_run(0, words_of(v, [{params}]), h) {{
-    trans({prefix}_post_expanded(v, values), trans({prefix}_post_tree({at_v}), sym({prefix}_body_tree(0,
-        λ {x_lam}(p: {lt}({prefix}_measure_of({x_args}), 0)) => {source}::rec(0, {x_args}, p), {first},
-        λ {x_lam}(p: {lt}({prefix}_measure_of({x_args}), 0)) => false_elim(p), {at_v}, h))))
-}}
-
-// The loop's end made the result, and the source's recursion at a bound on
-// its measure, the loop's.
-theorem {prefix}_enters({typed}): {prefix}().eval({call_of}, [{arguments}]) =
-    {fin_at}(loop_eval({step}, [{params}], {count}, {exit}, [{next}], {values}(64, {bound}).toNat(), words_of({values}, [{inputs}]))) {{
-    trans({prefix}_entered({arguments}), loop_then_eval([{inputs}], {bound}, [{params}], {count}, {prefix}_loop_body(), {exit}, [{next}],
-        [{outputs}], {exhausted_id}, {prefix}_loop_post(), {call_of}, {values}, {result}))
-}}
-
-theorem {prefix}_runs({typed}): {prefix}_run({values}(64, {bound}).toNat(), words_of({values}, [{inputs}]),
-    nat::Nat::lt_succ_self({values}(64, {bound}).toNat())) = {answer} {{ refl }}
-
-theorem {prefix}_agrees({typed}): {prefix}().eval({call_of}, [{arguments}]) = {answer} {{
-    let values = {values};
-    trans({prefix}_enters({arguments}), trans(loop_eval_agrees_measured({step}, [{params}], {count}, {exit}, [{next}], trivial,
-        {fin}, λ (state: List<BitVec(64)>) => {prefix}_measure(state),
-        λ (r: Nat) (state: List<BitVec(64)>) (h: {lt}({prefix}_measure(state), Succ(r))) => {prefix}_run(r, state, h),
-        λ v h => {prefix}_base(v, values, h),
-        λ r v h earlier => {prefix}_pass_measured(r, v, values, h, earlier),
-        values(64, {bound}).toNat(), words_of(values, [{inputs}]), refl, nat::Nat::lt_succ_self(values(64, {bound}).toNat())),
-        {prefix}_runs({arguments})))
-}}
-
-", word = measured.word, words = words.join(", "), exhausted = measured.exhausted, rest_r = rest("r", "state"), typed = typed(&parameters),
-        fin_at = finish(&values), count = looped.count, exit = looped.exit, next = ids(&looped.next), outputs = ids(&looped.outputs),
-        exhausted_id = looped.exhausted, result = function.result)
-}
-
-/// A case split along a pass's tree, from the comparisons `assigned`: at
-/// each node a convoy on its comparison, both sides of `goal` (at the
-/// comparisons as they then stand) computing; at each leaf `refl`.
-fn convoy(goal: &dyn Fn(&str) -> String, split: &function_ir_source::Split, assigned: &mut Vec<String>) -> String {
-    use function_ir_source::Split;
-    match split {
-        Split::Leaf => "refl".into(),
-        Split::Node(k, no, yes) => {
-            let scrutinee = assigned[*k].clone();
-            assigned[*k] = format!("b{k}");
-            let motive = goal(&assigned.iter().map(|c| format!(", {c}")).collect::<String>());
-            assigned[*k] = "False".into();
-            let when_false = convoy(goal, no, assigned);
-            assigned[*k] = "True".into();
-            let when_true = convoy(goal, yes, assigned);
-            assigned[*k] = scrutinee.clone();
-            format!("match {scrutinee} as λ b{k} => {motive} {{\n        False => {when_false},\n        True => {when_true},\n    }}")
-        }
-    }
-}
-
-/// A loop function's body, its loop's pieces by name: after the regions
-/// computing a measured loop's bound.
-fn loop_function_body(prefix: &str, looped: &function_ir_source::ReflectedLoop) -> String {
-    use function_ir_source::ids;
-    let body = format!("Compose(Loop([{}], {}, [{}], {}, {prefix}_loop_body(), {}, [{}], [{}], {}), {prefix}_loop_post())", ids(&looped.inputs), looped.bound,
-        ids(&looped.parameters), looped.count, looped.exit, ids(&looped.next), ids(&looped.outputs), looped.exhausted);
-    match looped.measured.as_ref().and_then(|measured| measured.prefix.as_ref()) {
-        Some(_) => format!("Compose({prefix}_loop_bound(), {body})"),
-        None => body,
-    }
-}
-
-/// A function's parameter ids, as the reflector numbers them.
-fn parameters(arity: usize) -> String { (0..arity).map(|i| i.to_string()).collect::<Vec<_>>().join(", ") }
 
 /// The layout checks a stretch of items at a time, from the first: their
 /// names against the items before them, their jumps against the whole

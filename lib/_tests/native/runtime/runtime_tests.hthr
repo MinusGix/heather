@@ -163,14 +163,3 @@ runtime fn is_small(a: BitVec(64)) → Bool { a.unsigned_lt_bit(BitVec::ofNat(8)
 
 // expect-error: a parameter that is not a 64-bit word
 runtime fn sum_bytes(xs: List<BitVec(8)>, start: BitVec(64)) → BitVec(64) { start }
-
-// `decreases` recursion reads through the generated recursor, which the
-// reflector does not read yet (docs/runtime-fn-setups-design.md §16.3).
-// expect-error: `count_down#rec` is generated (a `decreases` function's recursion)
-runtime fn count_down(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
-    match h: n.eq_bit(BitVec::ofNat(0)) {
-        True => acc,
-        False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)),
-    }
-    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
-}

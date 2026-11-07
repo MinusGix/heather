@@ -1,0 +1,35 @@
+import bitvec;
+import bool;
+
+// Conversion meets a spine where the other side arrives at it
+// (issues/conversion-meet-past-newer-head.md): an older function applied to
+// a newer one reduces *to* the newer one's application, so the kernel must
+// not unfold the newer side's head before the older side gets there. Past
+// it, `walk` at a closed count unrolls on both sides into a tree with two
+// recursive arms per pass, 2^64 leaves no comparison below can shortcut.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+
+// Older than `walk`: reaches it only through its argument, and spells the
+// arguments its own way (as `meaning` reads them from an environment), so
+// the two sides' trees agree only by unfolding, not by sharing.
+fn word_of(x: BitVec(64)) → BitVec(64) { x }
+fn count_of(n: Nat) → Nat { n }
+fn apply_to(g: Nat → BitVec(64) → BitVec(64), n: Nat, x: BitVec(64)) → BitVec(64) { g(count_of(n), word_of(x)) }
+
+fn walk(fuel: Nat, x: BitVec(64)) → BitVec(64) {
+    match fuel {
+        Zero => x,
+        Succ(k) => match x.band(BitVec::ofNat(1)).eq_bit(BitVec::ofNat(0)) {
+            True => walk(k, x.add(x)),
+            False => walk(k, x.add(BitVec::ofNat(1))),
+        },
+    }
+}
+
+theorem walk_meets(x: BitVec(64)): apply_to(walk, 64, x) = walk(64, x) { refl }
+
+// The other way round, and under a wrapper newer than both.
+fn walk64(x: BitVec(64)) → BitVec(64) { walk(64, x) }
+
+theorem walk_meets_wrapped(x: BitVec(64)): walk64(x) = apply_to(walk, 64, x) { refl }

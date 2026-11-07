@@ -154,10 +154,36 @@ fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
     }
 }
 
+// A value read as a count: a word's `toNat` (how a count held in a word
+// crosses a call, docs/runtime-fn-setups-design.md §16.11), 0 for the rest.
+fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
+    match a as λ x => x.sem(tys) → Nat {
+        Word(_) => λ v => v.toNat(),
+        Bit => λ _ => 0,
+        Bytes(_) => λ _ => 0,
+        Lines => λ _ => 0,
+        Named(_) => λ _ => 0,
+        Count => λ n => n,
+    }
+}
+
+// A value at `a` read at a code it is not: a count from a word, the
+// default otherwise (every judgment refuses the other mismatches).
+fn Ty::convert(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
+    match b as λ y => y.sem(tys) {
+        Word(_) => BitVec::ofNat(0),
+        Bit => False,
+        Bytes(_) => Nil,
+        Lines => Nil,
+        Named(i) => Named(i).default(tys),
+        Count => Ty::to_count(tys, a, v),
+    }
+}
+
 // A value at `a` read at `b`: itself when the codes agree, which at closed
-// codes is a conversion.
+// codes is a conversion; a word read as a count is its `toNat`.
 fn Ty::cast(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
-    match a.equation(b) { Inl(e) => j(e, λ x _ => x.sem(tys), v), Inr(_) => b.default(tys) }
+    match a.equation(b) { Inl(e) => j(e, λ x _ => x.sem(tys), v), Inr(_) => Ty::convert(tys, a, b, v) }
 }
 
 // The curried function type of a signature.

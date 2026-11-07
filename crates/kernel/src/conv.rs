@@ -111,6 +111,41 @@ enum TmProgress<T> {
     Nat(T, T),
 }
 
+/// How many single δ-steps [`Conv::meet_on_the_way`] looks ahead for a head
+/// the other side was advanced past.
+const MEET_STEPS: usize = 64;
+
+/// The last few spines one side of a conversion was advanced past, each
+/// at its head ([`Conv::tm_w`]): the other side, reducing, may arrive at one
+/// of those heads, and meets the spine there. Each is tried once.
+struct Passed<T> {
+    spines: Vec<(GlobalVar, T)>,
+}
+
+impl<T> Default for Passed<T> {
+    fn default() -> Self { Passed { spines: Vec::new() } }
+}
+
+impl<T: Clone> Passed<T> {
+    const KEPT: usize = 8;
+
+    fn push(&mut self, head: GlobalVar, spine: &T) {
+        if self.spines.len() == Self::KEPT {
+            self.spines.remove(0);
+        }
+        self.spines.push((head, spine.clone()));
+    }
+
+    fn is_empty(&self) -> bool { self.spines.is_empty() }
+
+    fn take(&mut self, head: GlobalVar) -> Option<T> {
+        let at = self.spines.iter().position(|(h, _)| *h == head)?;
+        Some(self.spines.remove(at).1)
+    }
+
+}
+
+
 /// `Ψ; Γ ⊢_i T ≈ T' : l` — convertibility of types.
 /// Syntactic equality **modulo level equivalence** — the quotient DeLaM
 /// ch. 05's Static Code lemma (`lem:dt:static`) takes over its equalities,
@@ -972,6 +1007,34 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// forcing a length nobody reads would only spend fuel.
     /// Unfold a term's defined heads until none remains
     /// ([`Dom::delta_whnf_tm`]).
+    /// Advance a copy of `w` one defined head at a time, at most
+    /// [`MEET_STEPS`], until its head is one the other side was advanced
+    /// past (`passed`), and meet the two spines there. `w_is_b` says which
+    /// side of the comparison `w` is. On no meet the caller unfolds `w`
+    /// itself, in one transparent run as before: the copy's single steps
+    /// are a look-ahead, never the result.
+    fn meet_on_the_way(&mut self, env: &Env<'v>, w: &D::Tm, passed: &mut Passed<D::Tm>, w_is_b: bool) -> R<bool> {
+        let mut w = w.clone();
+        for _ in 0..MEET_STEPS {
+            if passed.is_empty() {
+                return Ok(false);
+            }
+            let Some(h) = D::delta_head(self, env, &w) else { return Ok(false) };
+            if let Some(spine) = passed.take(h) {
+                let met = if w_is_b {
+                    self.delta_lazy(|c| c.tm_nee(env, &spine, &w).map(drop))?
+                } else {
+                    self.delta_lazy(|c| c.tm_nee(env, &w, &spine).map(drop))?
+                };
+                if met.is_some() {
+                    return Ok(true);
+                }
+            }
+            w = D::delta_tm_ahead(self, env, &w)?;
+        }
+        Ok(false)
+    }
+
     fn delta_to_head_tm(&mut self, env: &Env<'v>, w: D::Tm) -> R<D::Tm> {
         if D::delta_head(self, env, &w).is_none() {
             return Ok(w);
@@ -1456,8 +1519,30 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // spine, and when both sides stop at the *same* one, try the spine
         // comparison before unfolding anything.
         if self.has_defs {
+            // The spines each side stood at when the loop advanced it past
+            // a newer head the other side did not have: where the other
+            // side may still arrive (`Passed`). A body mentions only older
+            // globals, but an argument may carry a newer one —
+            // `meaning(rt, world)(x⃗)` against `f(x⃗)`, where `world` holds
+            // `f`'s callee — and past that head a recursion at a closed
+            // count unrolls on both sides into trees no meet below
+            // shortcuts (`issues/conversion-meet-past-newer-head.md`).
+            let mut passed_a = Passed::default();
+            let mut passed_b = Passed::default();
             loop {
                 let heads = (D::delta_head(self, env, &wa), D::delta_head(self, env, &wb));
+                if let Some(u) = heads.0
+                    && let Some(spine) = passed_b.take(u)
+                    && self.delta_lazy(|c| c.tm_nee(env, &wa, &spine).map(drop))?.is_some()
+                {
+                    return Ok(TmProgress::Done);
+                }
+                if let Some(u) = heads.1
+                    && let Some(spine) = passed_a.take(u)
+                    && self.delta_lazy(|c| c.tm_nee(env, &spine, &wb).map(drop))?.is_some()
+                {
+                    return Ok(TmProgress::Done);
+                }
                 if let (Some(u1), Some(u2)) = heads
                     && u1 == u2
                     // A defined head is neutral even when its declared result
@@ -1477,8 +1562,23 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // loop would otherwise take, done as one transparent
                     // reduction (`Dom::delta_whnf_tm`) so that a spine
                     // stuck on a glued scrutinee is not replayed per step.
-                    (Some(_), None) => wa = self.delta_to_head_tm(env, wa)?,
-                    (None, Some(_)) => wb = self.delta_to_head_tm(env, wb)?,
+                    //
+                    // Unless the other side was advanced past heads this side
+                    // may still arrive at (`Passed`): then this side first
+                    // looks for one, a head at a time
+                    // (`Conv::meet_on_the_way`).
+                    (Some(_), None) => {
+                        if self.meet_on_the_way(env, &wa, &mut passed_b, false)? {
+                            return Ok(TmProgress::Done);
+                        }
+                        wa = self.delta_to_head_tm(env, wa)?;
+                    }
+                    (None, Some(_)) => {
+                        if self.meet_on_the_way(env, &wb, &mut passed_a, true)? {
+                            return Ok(TmProgress::Done);
+                        }
+                        wb = self.delta_to_head_tm(env, wb)?;
+                    }
                     // A body can mention only older globals. With de Bruijn
                     // global indices, the newer declaration has the smaller
                     // index in the current Ψ. Advance only that side: if it
@@ -1486,6 +1586,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // next loop iteration meets there instead of unfolding
                     // the other side past the rendezvous in lockstep.
                     (Some(u1), Some(u2)) if u1.0 < u2.0 => {
+                        passed_a.push(u1, &wa);
                         wa = D::delta_tm(self, env, &wa)?;
                     }
                     // The same head on both sides, and the meet there just
@@ -1529,7 +1630,8 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                             wb = D::delta_tm(self, env, &wb)?;
                         }
                     }
-                    (Some(_), Some(_)) => {
+                    (Some(_), Some(u2)) => {
+                        passed_b.push(u2, &wb);
                         wb = D::delta_tm(self, env, &wb)?;
                     }
                 }
