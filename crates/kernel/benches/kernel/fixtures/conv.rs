@@ -20,7 +20,7 @@ use crate::common::Rng;
 use crate::harness::{Case, Family};
 
 pub fn families() -> Vec<Family> {
-    vec![computed_numeral(), perturbed_pairs(), vec_literal()]
+    vec![computed_numeral(), perturbed_pairs(), vec_literal(), vec_items_values()]
 }
 
 /// `add n n ≡ 2n` at `Nat` — an equation discharged purely by computation,
@@ -212,6 +212,43 @@ fn vec_literal() -> Family {
     Family {
         name: "conv/vec-literal",
         what: "check([x₀…xₙ₋₁] : [T; n]) — a nested-pair literal against its vector type",
+        unit: "elements",
+        expect_slope: Some((0.85, 1.35)),
+        cases,
+    }
+}
+
+/// Two separately built `VecItems` nodes (a long literal's one-node form,
+/// `term::Term::VecItems`) compared by value, as `"aaa…" ++ "b" = "aaa…b"`
+/// does once both sides are literals: no shared array, so conversion
+/// unfolds both one element at a time, each tail a fresh node one element
+/// on. Linear since each fresh tail's bounds come from the array's stored
+/// suffix joins (`bounds.rs`, `Cache::window_use`); walking each tail's
+/// window made it quadratic (`issues/vec-items-window-bounds.md`).
+fn vec_items_values() -> Family {
+    let cases = [1024u64, 2048, 4096, 8192, 16384]
+        .iter()
+        .map(|&n| {
+            let node = || Term::VecItems {
+                level: Level::Zero,
+                elem: Rc::new(Type::Nat),
+                items: (0..n).map(|j| Rc::new(num(j % 7))).collect::<Vec<_>>().into(),
+                from: 0,
+            };
+            let (lhs, rhs) = (node(), node());
+            let ty = Type::Vec { level: Level::Zero, elem: Rc::new(Type::Nat), len: Rc::new(Term::NatLit(n.into())) };
+            let gamma = nil_ctx();
+            let go = move || {
+                conv_term(&GlobalCtx::default(), &gamma, Layer::Prog, &lhs, &rhs, &ty, &Level::Zero, FUEL)
+                    .is_ok() as u64
+            };
+            assert!(go() == 1, "the two {n}-element nodes are not convertible");
+            Case::new(n, 1, go)
+        })
+        .collect();
+    Family {
+        name: "conv/vec-items-values",
+        what: "[x₀…xₙ₋₁] ≡ [x₀…xₙ₋₁] — two separately built VecItems nodes, by value",
         unit: "elements",
         expect_slope: Some((0.85, 1.35)),
         cases,

@@ -175,6 +175,7 @@ Two, and both have been paid for elsewhere in this tree:
 | `conv/computed-numeral` | an equation discharged purely by computation — the thesis-shaped fixture in miniature |
 | `conv/perturbed-pairs` | conversion over the generated well-typed corpus: representative shapes, not chosen ones |
 | `conv/vec-literal` | a nested-pair vector literal at the elaborator's shape checked against `[T; n]` — linear since the spelled-`Vec` congruence (2026-09-11); it was quadratic through the `Σ` encodings |
+| `conv/vec-items-values` | two separately built `VecItems` nodes compared by value — linear since tail windows read the array's suffix joins (2026-11-07, `issues/vec-items-window-bounds.md`); it was quadratic, each fresh tail walking its window |
 | `wf/check-tree` | reading branching data — `Vec`/`Fin` unfolding per constructor |
 | `wf/mirror-involution` | `Wf` elimination at depth, twice, then compared |
 | `code/check-identity-recursor` | the 45-branch code recursor: the largest single thing the checker sees (a fixed cost, ~0.54 ms) |

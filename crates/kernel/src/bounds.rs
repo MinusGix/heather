@@ -150,7 +150,31 @@ struct Cache {
     /// [`crate::term::SPINE_ITERATE_AT`] a node's spine is computed from the
     /// bottom up first ([`Cache::warm_spine`]).
     depth: u32,
+    /// Suffix joins of the item arrays whose tail windows were asked about
+    /// ([`Cache::window_use`]).
+    windows: Vec<WindowSlot>,
 }
+
+/// One item array's suffix joins at a stride, under a weak key to the array
+/// (the [`Slot`] argument: the key pins the allocation, so an address match
+/// names the array the joins were computed from, whose contents cannot have
+/// changed). `suffix[k]` is the join of `items[k * WINDOW_STRIDE..]`.
+///
+/// The key pins the array's *block* (one pointer per element) past its
+/// death until evicted, never the elements; the table is small and only
+/// arrays whose tail windows are queried get an entry, so that is a few
+/// blocks.
+struct WindowSlot {
+    key: Option<Weak<[Rc<Term>]>>,
+    suffix: Box<[LocalUse]>,
+}
+
+/// Elements between two stored suffix joins: a window's answer is one
+/// lookup plus at most this many joins.
+const WINDOW_STRIDE: usize = 32;
+
+/// log2 of [`WindowSlot`]s per cache.
+const WINDOW_BITS: u32 = 6;
 
 /// One direct-mapped entry: the memoized answer under a weak key, and the
 /// two-stage marker, side by side so a probe reads one cache line.
@@ -209,7 +233,60 @@ impl Cache {
             terms: (0..1 << BITS).map(|_| Slot::empty()).collect(),
             types: (0..1 << BITS).map(|_| Slot::empty()).collect(),
             depth: 0,
+            windows: (0..1 << WINDOW_BITS)
+                .map(|_| WindowSlot { key: None, suffix: Box::new([]) })
+                .collect(),
         }
+    }
+
+    /// The join of `items[from..]`'s uses: the live window of a
+    /// [`Term::VecItems`] node.
+    ///
+    /// Comparing two vectors by value unfolds one of these nodes per element
+    /// (`term::vec_items_unfold`), each tail a *fresh* node one element on,
+    /// and the value machine asks every fresh tail's bounds (its closed-term
+    /// memo key); walked whole, the windows cost the square of the length
+    /// (issues/vec-items-window-bounds.md). A window is a suffix of one
+    /// shared array, so the array's suffix joins at a stride, computed once
+    /// in a pass from the back, answer any window with one lookup and fewer
+    /// than [`WINDOW_STRIDE`] joins. The from-zero window, which every
+    /// ordinary walk of a literal asks, is the node's own memo entry and is
+    /// walked directly: an array gets suffix joins only when a tail is
+    /// asked about, and only when it is long enough for them to pay.
+    fn window_use(&mut self, items: &Rc<[Rc<Term>]>, from: u32) -> LocalUse {
+        let from = from as usize;
+        let live = items.get(from..).unwrap_or(&[]);
+        if from == 0 || live.len() < 2 * WINDOW_STRIDE {
+            let mut used = LocalUse::CLOSED;
+            for item in live {
+                used = used.join(self.term_use(item));
+            }
+            return used;
+        }
+        let p = Rc::as_ptr(items).cast::<()>() as usize;
+        let i = slot(p) >> (BITS - WINDOW_BITS);
+        let hit = matches!(&self.windows[i].key, Some(k) if std::ptr::eq(k.as_ptr().cast::<()>(), Rc::as_ptr(items).cast::<()>()));
+        if !hit {
+            // From the back, so each stored join is one stride's joins on
+            // the next; the elements' own answers come from the term table.
+            let mut suffix = vec![LocalUse::CLOSED; items.len().div_ceil(WINDOW_STRIDE)];
+            let mut used = LocalUse::CLOSED;
+            for (j, item) in items.iter().enumerate().rev() {
+                used = used.join(self.term_use(item));
+                if j % WINDOW_STRIDE == 0 {
+                    suffix[j / WINDOW_STRIDE] = used;
+                }
+            }
+            self.windows[i] = WindowSlot { key: Some(Rc::downgrade(items)), suffix: suffix.into() };
+        }
+        // The stored join at the first stride boundary at or past `from`,
+        // and the elements before it one by one.
+        let k = from.div_ceil(WINDOW_STRIDE);
+        let mut used = self.windows[i].suffix.get(k).copied().unwrap_or(LocalUse::CLOSED);
+        for item in &items[from..(k * WINDOW_STRIDE).min(items.len())] {
+            used = used.join(self.term_use(item));
+        }
+        used
     }
 
     fn term_use(&mut self, t: &Rc<Term>) -> LocalUse {
@@ -669,12 +746,11 @@ impl Cache {
                 .join(self.term_use(zero))
                 .join(self.term_use(one)),
             // A loop, not a fold of joins: the node exists to be shallow.
+            // A window past the array's start is an unfolded tail, met once
+            // per element as a value comparison walks the vector, so it is
+            // answered from the array's suffix joins ([`Cache::window_use`]).
             Term::VecItems { elem, items, from, .. } => {
-                let mut used = self.type_use(elem);
-                for item in items.get(*from as usize..).unwrap_or(&[]) {
-                    used = used.join(self.term_use(item));
-                }
-                used
+                self.type_use(elem).join(self.window_use(items, *from))
             }
             Term::InlAt { ty, val: t } | Term::InrAt { ty, val: t } => {
                 self.opt_type_use(ty).join(self.term_use(t))
@@ -932,6 +1008,39 @@ mod tests {
         );
         assert_eq!(term_use(&rt(Term::Zero)), LocalUse::CLOSED);
         assert_eq!(type_use(&Rc::new(Type::Nat)), LocalUse::CLOSED);
+    }
+
+    #[test]
+    fn vec_items_windows_are_their_elements_joins() {
+        // Every window of an array with open elements scattered through it,
+        // asked in a comparison's order (from the front, one on each time)
+        // and then out of order, against the plain join of its elements:
+        // the stored suffix joins and the stride's remainder must agree with
+        // walking the window, at every offset from a stride boundary.
+        let n = 5 * WINDOW_STRIDE + 7;
+        let items: Rc<[Rc<Term>]> = (0..n)
+            .map(|j| match j % 41 {
+                0 => v(j as u32 % 70),
+                _ => rt(Term::Zero),
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let node = |from: u32| {
+            rt(Term::VecItems {
+                level: Level::Zero,
+                elem: Rc::new(Type::Nat),
+                items: Rc::clone(&items),
+                from,
+            })
+        };
+        let direct = |from: usize| {
+            items[from..].iter().fold(LocalUse::CLOSED, |a, t| a.join(term_use(t)))
+        };
+        let mut c = Cache::new();
+        let order = (0..n).chain((0..n).rev().step_by(3));
+        for from in order {
+            assert_eq!(c.term_use(&node(from as u32)), direct(from), "window from {from}");
+        }
     }
 
     #[test]
