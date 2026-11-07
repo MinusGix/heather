@@ -1360,6 +1360,12 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             Term::ElimCodeTm { .. } => return self.step_elim_code_tm(t, env),
             Term::VecLit { .. } => return self.step_vec_lit(t, env),
+            // Its one-step view, a pair whose tail is the same array one
+            // element on: one pair per element demanded, never the chain.
+            Term::VecItems { level, elem, items, from } => {
+                let unfolded = crate::term::vec_items_unfold(level, elem, items, *from).ok_or(OutOfFuel)?;
+                return self.step_eval(&unfolded, env);
+            }
             _ => return self.step_intro(t, env),
         };
         Ok(Work::Val(self.arena.val(v)))

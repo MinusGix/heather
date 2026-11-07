@@ -588,6 +588,25 @@ pub enum Term {
         width: u32,
         bits: u64,
     },
+    /// `[e_from, …, e_{n-1}]^l(T)` — a vector literal held as one array of
+    /// its elements (`issues/long-string-literal-stack-overflow.md`).
+    /// Observationally the right-nested pair chain the `Vec` rule types,
+    /// ending in `⟨⟩^l`, with the one-step view [`vec_items_unfold`]: what
+    /// [`Term::VecLit`] is for two-valued elements, for any elements. What
+    /// it buys is *depth*: a chain is as deep as the literal is long, and
+    /// every syntax-directed walk (typing, substitution, hashing, `Drop`)
+    /// recursed once per element, so a few thousand elements overflowed the
+    /// native stack; this node is one level deep at any length, and every
+    /// walk loops over `items`. Elements `items[from..]` are the live ones,
+    /// so the view's tail is the same array one further on, built in O(1);
+    /// `from < items.len()` (the empty vector is `⟨⟩`). Equality and hashes
+    /// read the live elements only.
+    VecItems {
+        level: Level,
+        elem: Rc<Type>,
+        items: Rc<[Rc<Term>]>,
+        from: u32,
+    },
 
     // ---- dependent pairs (extension beyond DeLaM ch. 04) ----
     /// `pair^{l,l'}(x:S. T; a; b) : Σ^{l,l'}(x:S). T` — dependent pair
@@ -2445,6 +2464,66 @@ pub fn vec_lit_chain(
             fst: Rc::clone(if bits >> i & 1 == 0 { zero } else { one }),
             snd: Rc::new(acc),
         };
+    }
+    acc
+}
+
+/// A [`Term::VecItems`]'s live elements, `items[from..]`; `None` when the
+/// node is out of range (no live element), which the typing rule refuses.
+pub fn vec_items_live(items: &[Rc<Term>], from: u32) -> Option<&[Rc<Term>]> {
+    items.get(from as usize..).filter(|live| !live.is_empty())
+}
+
+/// The `Vec` length a chain of `n` elements carries: `Zero` at zero, a
+/// literal above, as the elaborator's `check_vec_lit` spells it.
+fn vec_len_lit(n: usize) -> Term {
+    if n == 0 { Term::Zero } else { Term::NatLit((n as u64).into()) }
+}
+
+/// The node of a vector chain holding `head` with `rest` behind it, `rest`
+/// being `rest_len` elements long: the annotations `check_vec_lit` and
+/// [`vec_lit_unfold`] write.
+fn vec_chain_node(level: &Level, elem: &Rc<Type>, shifted: &Rc<Type>, rest_len: usize, head: Rc<Term>, rest: Term) -> Term {
+    Term::Pair {
+        fst_level: level.clone(),
+        snd_level: level.clone(),
+        fst_ty: Rc::clone(elem),
+        snd_ty: Rc::new(Type::Vec {
+            level: level.clone(),
+            elem: Rc::clone(shifted),
+            len: Rc::new(vec_len_lit(rest_len)),
+        }),
+        fst: head,
+        snd: Rc::new(rest),
+    }
+}
+
+/// A [`Term::VecItems`]'s one-step view: the pair the `Vec` rule types,
+/// its head the first live element and its tail the same array one element
+/// further on (or `⟨⟩^l` after the last). The adequacy owner, as
+/// [`vec_lit_unfold`] is for [`Term::VecLit`]: projections, the evaluator
+/// and the full chain all read the node through it. `None` out of range.
+pub fn vec_items_unfold(level: &Level, elem: &Rc<Type>, items: &Rc<[Rc<Term>]>, from: u32) -> Option<Term> {
+    let live = vec_items_live(items, from)?;
+    let rest = if live.len() == 1 {
+        Term::Triv { level: level.clone() }
+    } else {
+        Term::VecItems { level: level.clone(), elem: Rc::clone(elem), items: Rc::clone(items), from: from + 1 }
+    };
+    let shifted = Rc::new(elem.shift_local(1));
+    Some(vec_chain_node(level, elem, &shifted, live.len() - 1, Rc::clone(&live[0]), rest))
+}
+
+/// A [`Term::VecItems`] spelled out: the whole pair chain, built from the
+/// back without recursion, each node [`vec_items_unfold`]'s. Only for a
+/// reader that has to take the vector apart by its components and cannot
+/// read the node (the quote boundary, an export target): the chain is as
+/// deep as the literal is long, which is what the node exists to avoid.
+pub fn vec_items_chain(level: &Level, elem: &Rc<Type>, items: &[Rc<Term>]) -> Term {
+    let shifted = Rc::new(elem.shift_local(1));
+    let mut acc = Term::Triv { level: level.clone() };
+    for (i, item) in items.iter().enumerate().rev() {
+        acc = vec_chain_node(level, elem, &shifted, items.len() - 1 - i, Rc::clone(item), acc);
     }
     acc
 }

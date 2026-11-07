@@ -270,6 +270,7 @@ mod tag {
     pub const E_TMDVEC: u8 = 0x82;
     pub const E_TMIWF: u8 = 0x83;
     pub const E_VECLIT: u8 = 0x84;
+    pub const E_VECITEMS: u8 = 0x85;
 
     // A node digest, in place of a term's or a type's encoding.
     pub const DIGEST: u8 = 0x1f;
@@ -961,6 +962,18 @@ impl<'a> Walk<'a> {
                 self.u32(*width);
                 self.u32(*bits as u32);
                 self.u32((bits >> 32) as u32);
+            }
+            // The live elements and their count, wherever the array starts:
+            // the node means its elements, as `syntax_eq` compares it.
+            Term::VecItems { level, elem, items, from } => {
+                let live = items.get(*from as usize..).unwrap_or(&[]);
+                self.tag(tag::E_VECITEMS);
+                self.level(level);
+                self.ty(elem);
+                self.u64(live.len() as u64);
+                for item in live {
+                    self.term(item);
+                }
             }
             Term::AppAt { fun, arg } => {
                 self.tag(tag::E_APP_AT);

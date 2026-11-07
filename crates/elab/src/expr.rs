@@ -27,6 +27,11 @@ const NATIVE_EXPR_DEPTH_LIMIT: usize = 512;
 
 pub(crate) struct ExprDepthGuard<'a>(&'a Cell<usize>);
 
+/// The longest vector literal elaborated as a pair chain; a longer one is a
+/// single [`Term::VecItems`] node. A chain this long is a few hundred kernel
+/// frames deep, well inside every stack the checker runs on.
+pub(crate) const VEC_ITEMS_ABOVE: usize = 256;
+
 impl<'a> ExprDepthGuard<'a> {
     pub(crate) fn enter(depth: &'a Cell<usize>, span: Span) -> R<Self> {
         if depth.get() >= NATIVE_EXPR_DEPTH_LIMIT {
@@ -1164,6 +1169,14 @@ impl<'a> ExprElab<'a> {
             checked.push(Rc::new(elab.check_expression(cx, element, &elem, &level)?));
         }
         checked.reverse();
+        // A long literal is one `VecItems` node: its pair chain would be as
+        // deep as the literal is long, and every walk over it — the
+        // kernel's typing first — recursed once per element
+        // (issues/long-string-literal-stack-overflow.md). Short ones keep
+        // their chain, which readers of small vectors take apart.
+        if checked.len() > VEC_ITEMS_ABOVE {
+            return Ok(Term::VecItems { level, elem, items: checked.into(), from: 0 });
+        }
         // The longest tail that packs is written as one `VecLit`, and only
         // what precedes it as pairs (docs/bitvector-literal-entry-design.md
         // §3: the literal is the chain it spells, so the split is invisible).

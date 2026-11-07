@@ -580,3 +580,174 @@ fn a_box_payload_sees_the_chain() {
     in_box((*spelled).clone()).unwrap();
     accepts(&LocalCtx::nil(), &spelled, &l, &ty);
 }
+
+// -------------------------------------------------------------------------
+// The items node `Term::VecItems` (issues/long-string-literal-stack-overflow.md)
+// -------------------------------------------------------------------------
+//
+// The packed literal's sibling for any elements: an array, one level deep at
+// any length, read through the same one-step view. The rows mirror the
+// packed literal's — it *is* its chain, element by element, at an open
+// element type too — and add the two things only it has: a live window
+// (`from`) and a length past what any recursive walk survives.
+
+use heather_kernel::term::vec_items_chain;
+
+fn items_over(elem: Type, items: &[Term], from: u32) -> Term {
+    Term::VecItems {
+        level: Level::Zero,
+        elem: rty(elem),
+        items: items.iter().cloned().map(rt).collect::<Vec<_>>().into(),
+        from,
+    }
+}
+
+fn chain_over(elem: Type, items: &[Term]) -> Term {
+    let items: Vec<_> = items.iter().cloned().map(rt).collect();
+    vec_items_chain(&Level::Zero, &rty(elem), &items)
+}
+
+fn nats(n: u64) -> Vec<Term> {
+    (0..n).map(|i| nat(i % 3)).collect()
+}
+
+#[test]
+fn an_items_node_is_its_chain() {
+    let g = gamma_with(&[]);
+    for n in [1u64, 2, 7] {
+        let xs = nats(n);
+        let ty = vec(Type::Nat, nat(n));
+        let node = items_over(Type::Nat, &xs, 0);
+        check(&g, &node, &ty);
+        accepts(&g, &node, &chain_over(Type::Nat, &xs), &ty);
+        accepts(&g, &chain_over(Type::Nat, &xs), &node, &ty);
+        for position in [0, n as usize - 1] {
+            let mut ys = xs.clone();
+            ys[position] = nat(5);
+            refuses(&g, &node, &chain_over(Type::Nat, &ys), &ty);
+            refuses(&g, &node, &items_over(Type::Nat, &ys, 0), &ty);
+        }
+    }
+}
+
+#[test]
+fn an_items_node_means_its_live_window() {
+    // `from` skips a prefix: the node is the shorter vector, equal (as
+    // syntax and as a value) to the node of the window alone.
+    let g = gamma_with(&[]);
+    let xs = nats(6);
+    let window = items_over(Type::Nat, &xs, 2);
+    let alone = items_over(Type::Nat, &xs[2..], 0);
+    let ty = vec(Type::Nat, nat(4));
+    check(&g, &window, &ty);
+    assert!(window == alone);
+    accepts(&g, &window, &chain_over(Type::Nat, &xs[2..]), &ty);
+    assert!(window != items_over(Type::Nat, &xs, 1));
+    // At the wrong length the type itself refuses.
+    assert!(check_term(&GlobalCtx::default(), 0, Layer::Prog, &g, &window, &vec(Type::Nat, nat(6)), &Level::Zero, FUEL)
+        .is_err());
+}
+
+#[test]
+fn open_items_at_an_open_element_type_are_their_chain() {
+    // Γ = (A : Ty 0, x : El A, y : El A), as for the packed literal: and,
+    // past it, substitution maps the items like any other subterm.
+    let mut g = LocalCtx::nil();
+    g.entries.push(CtxEntry { ty: rty(Type::Ty(Level::Zero)), level: Level::constant(1) });
+    let el = |a: u32| Type::El { level: Level::Zero, tm: rt(Term::Var(LocalVar(a))) };
+    g.entries.push(CtxEntry { ty: rty(el(0)), level: Level::Zero });
+    g.entries.push(CtxEntry { ty: rty(el(1)), level: Level::Zero });
+    let a = el(2);
+    let (x, y) = (Term::Var(LocalVar(1)), Term::Var(LocalVar(0)));
+    let node = items_over(a.clone(), &[x.clone(), y.clone(), x.clone()], 0);
+    let ty = vec(a.clone(), nat(3));
+    check(&g, &node, &ty);
+    accepts(&g, &node, &chain_over(a.clone(), &[x.clone(), y.clone(), x.clone()]), &ty);
+    refuses(&g, &node, &chain_over(a.clone(), &[x.clone(), x.clone(), x.clone()]), &ty);
+    refuses(&g, &node, &chain_over(a.clone(), &[x.clone(), y.clone(), y.clone()]), &ty);
+    // Weakened under one more binder of the element type, every item moves.
+    let mut g2 = g.clone();
+    g2.entries.push(CtxEntry { ty: rty(el(2)), level: Level::Zero });
+    let shifted = node.shift_local(1);
+    let ty2 = vec(el(3), nat(3));
+    check(&g2, &shifted, &ty2);
+    let (x2, y2) = (Term::Var(LocalVar(2)), Term::Var(LocalVar(1)));
+    accepts(&g2, &shifted, &chain_over(el(3), &[x2.clone(), y2, x2]), &ty2);
+}
+
+#[test]
+fn an_out_of_range_or_ill_typed_items_node_is_refused() {
+    assert_eq!(infer_err(&items_over(Type::Nat, &nats(3), 3)), TypeError::HeadMismatch);
+    assert_eq!(infer_err(&items_over(Type::Nat, &[], 0)), TypeError::HeadMismatch);
+    // An item of another type, anywhere, is a refusal.
+    infer_err(&items_over(Type::Nat, &[nat(1), triv(), nat(2)], 0));
+    infer_err(&items_over(Type::Nat, &[nat(1), nat(1), triv()], 0));
+    heather_kernel::typing::infer_term(&GlobalCtx::default(), 0, Layer::Prog, &LocalCtx::nil(), &items_over(Type::Nat, &nats(3), 0), FUEL)
+        .unwrap();
+}
+
+#[test]
+fn projections_of_an_items_node_reduce_to_its_chain_s() {
+    let g = LocalCtx::nil();
+    let xs = [nat(4), nat(5), nat(6)];
+    let node = items_over(Type::Nat, &xs, 0);
+    let proj = |second: bool, of: Term, len: u64| {
+        let (fst_ty, snd_ty, pair) = (rty(Type::Nat), rty(vec(Type::Nat, nat(len - 1))), rt(of));
+        if second {
+            Term::Snd { fst_level: Level::Zero, snd_level: Level::Zero, fst_ty, snd_ty, pair }
+        } else {
+            Term::Fst { fst_level: Level::Zero, snd_level: Level::Zero, fst_ty, snd_ty, pair }
+        }
+    };
+    assert!(whnf_term(&proj(false, node.clone(), 3), &g, FUEL).unwrap() == nat(4));
+    assert!(whnf_term(&proj(true, node.clone(), 3), &g, FUEL).unwrap() == items_over(Type::Nat, &xs, 1));
+    let second = proj(false, proj(true, node, 3), 2);
+    assert!(whnf_term(&second, &g, FUEL).unwrap() == nat(5));
+    // The last element's tail is `⟨⟩`.
+    assert!(whnf_term(&proj(true, items_over(Type::Nat, &xs, 2), 1), &g, FUEL).unwrap() == triv());
+}
+
+#[test]
+fn a_box_payload_sees_the_items_chain() {
+    let xs = nats(3);
+    let node = items_over(Type::Nat, &xs, 0);
+    let ty = vec(Type::Nat, nat(3));
+    let code_ty = Type::CodeTm { ctx: LocalCtx::nil(), ty: rty(ty.clone()), level: Level::Zero };
+    let in_box = |t: Term| {
+        check_term(&GlobalCtx::default(), 0, Layer::Meta, &LocalCtx::nil(), &Term::BoxTm(rt(t)), &code_ty, &Level::Zero, FUEL)
+    };
+    assert_eq!(in_box(node.clone()).unwrap_err(), TypeError::UnderBox);
+    let spelled =
+        spell_checked_in_code(&GlobalCtx::default(), 0, Layer::Code, &LocalCtx::nil(), rt(node.clone()), &ty, &Level::Zero, FUEL)
+            .unwrap();
+    assert!(*spelled == chain_over(Type::Nat, &xs));
+    in_box((*spelled).clone()).unwrap();
+    accepts(&LocalCtx::nil(), &spelled, &node, &ty);
+}
+
+#[test]
+fn a_node_longer_than_any_chain_the_stack_holds_checks() {
+    // The point of the node: a chain this long overflowed the checker's
+    // stack (a few thousand elements did), the node is one level deep. This
+    // runs on the test thread's own stack, with no `RUST_MIN_STACK` help
+    // assumed; its elements share one `Rc`, as a literal's repeated
+    // character does. Typing, substitution and syntactic equality walk the
+    // node; comparing two long vectors *by value* is the conversion's depth
+    // budget's business (issues/long-vector-conversion-depth.md), so the
+    // value comparison is pinned at a length under it.
+    let node_of = |n: usize| Term::VecItems {
+        level: Level::Zero,
+        elem: rty(Type::Nat),
+        items: vec![rt(nat(1)); n].into(),
+        from: 0,
+    };
+    let g = gamma_with(&[]);
+    let n = 200_000u64;
+    let node = node_of(n as usize);
+    check(&g, &node, &vec(Type::Nat, Term::NatLit(n.into())));
+    let shifted = node.shift_local(1);
+    assert!(shifted == node);
+    assert!(node_of(n as usize) == node);
+    let short = node_of(500);
+    accepts(&g, &short, &node_of(500), &vec(Type::Nat, Term::NatLit(500u64.into())));
+}

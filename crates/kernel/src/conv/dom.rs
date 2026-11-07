@@ -1508,6 +1508,7 @@ impl<'v> Dom<'v> for Syn {
             | Term::Pair { .. }
             | Term::PairAt { .. }
             | Term::VecLit { .. }
+            | Term::VecItems { .. }
             | Term::Triv { .. }
             | Term::SRefl { .. }
             | Term::Squash { .. } => TmView::Opaque,

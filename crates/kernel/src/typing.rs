@@ -3924,6 +3924,32 @@ impl Tc {
                     level.clone(),
                 ))
             }
+            // [e₀, …, e_{n-1}]^l(T) : Vec^l(T; n) @ l, n ≥ 1 — the premises
+            // of the pair chain it spells (`term::vec_items_unfold`): `T` a
+            // type at `l` and every element a `T`, the chain's `snd`
+            // premises being `Vec`s of the same `T`. Checked in a loop, which
+            // is the node's reason to exist: the chain recursed once per
+            // element. A compact spelling like `VecLit`, so refused where
+            // that is.
+            Term::VecItems { level, elem, items, from } => {
+                self.checked_spelling_admitted(env)?;
+                let Some(live) = crate::term::vec_items_live(items, *from) else {
+                    return Err(TypeError::HeadMismatch);
+                };
+                self.level_wf(env, level)?;
+                self.ty_check(env, elem, level)?;
+                for item in live {
+                    self.tm_check_rc(env, item, elem, level)?;
+                }
+                Ok((
+                    Type::Vec {
+                        level: level.clone(),
+                        elem: Rc::clone(elem),
+                        len: Rc::new(Term::NatLit((live.len() as u64).into())),
+                    },
+                    level.clone(),
+                ))
+            }
             // ⟨⟩^l : Unit^l @ l.
             //
             // The level annotation is load-bearing, not decoration: without
@@ -4652,6 +4678,7 @@ fn term_head(t: &Term) -> &'static str {
         Term::ElimSquash { .. } => "ElimSquash",
         Term::Pair { .. } => "Pair",
         Term::VecLit { .. } => "VecLit",
+        Term::VecItems { .. } => "VecItems",
         Term::Fst { .. } => "Fst",
         Term::Snd { .. } => "Snd",
         Term::Triv { .. } => "Triv",
