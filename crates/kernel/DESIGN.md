@@ -597,9 +597,9 @@ the premise they meet that deep instead of descending (premises of a yes/no
 judgment are a conjunction, so their order is free), and the frame that
 returns to depth zero judges the queue before it answers. A speculative
 δ-attempt drains its own queued premises before it counts as a success and
-drops them when it fails; a verdict whose subtree queued anything is not
-memoized as `true` (conversion), and a refused check that queued anything
-forgets the typing memos. Below the threshold every walk is its old code.
+drops them when it fails; a `true` recorded while premises are queued is
+memoized provisionally and taken back with them (conversion), and a refused
+check that queued anything forgets the typing memos. Below the threshold every walk is its old code.
 Design and what still recurses: docs/deep-term-walks-design.md.
 
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its

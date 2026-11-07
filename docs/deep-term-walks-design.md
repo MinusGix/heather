@@ -135,10 +135,18 @@ care:
   returns to depth zero itself; it leaves the queue to the running drain
   (`draining_at_top`) instead of starting a nested one, so draining a long
   chain stays one native frame.
-- **Memo.** A comparison whose subtree queued anything does not memoize its
-  `true` (`deferred_pushed` counts pushes; `tm` and `tm_nat_tail` compare
-  the count before and after). A `false` is always the subtree's own
-  failure and is still memoized.
+- **Memo.** A comparison whose subtree queued anything memoizes its
+  `true` *provisionally* (`deferred_pushed` counts pushes; `tm` and
+  `tm_nat_tail` compare the count before and after), and so does any
+  success recorded while the queue is non-empty, since it may stand on a
+  provisional entry's memo hit. The provisional entries are taken back when
+  their queue is dropped: a failed δ-attempt takes back those made since
+  its mark, a refusal at depth zero takes back all, and a successful drain
+  at depth zero with no attempt open makes them final. Not memoizing them
+  at all was the first version; a shared subterm then compared once per
+  occurrence, and a `refl` over `CReal` sequences in `creal_tests` ran out
+  of fuel. A `false` is always the subtree's own failure and is memoized
+  as before.
 
 ### 3.5 What it buys
 
@@ -216,6 +224,6 @@ Below the threshold every walk runs its old code; the added cost is one
 counter compare per `tm_check`, `Conv::tm`, `sub_tm` and bounds miss, which
 `scripts/bench --check` gates. Past it, typing and conversion pay one queue
 push and pop per deferred premise (an `Env` clone each), substitution one
-path vector per spine, bounds one warm-up walk per spine. A deep shared
-spine compared twice no longer memoizes its `true` on the first pass, so it
-is compared again; no workload in the corpus is deep enough to show it.
+path vector per spine, bounds one warm-up walk per spine. A
+queued comparison's ancestors are memoized provisionally, which costs a
+log entry each until the depth-zero drain.

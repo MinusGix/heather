@@ -872,8 +872,22 @@ struct Conv<'v, D: Dom<'v>> {
     /// with a queued premise unjudged.
     deferred: Vec<(Env<'v>, D::TmC, D::TmC, D::TyC, Level)>,
     /// How many comparisons have ever been queued: a [`Conv::tm`] whose
-    /// subtree queued one does not memoize its (not yet complete) `true`.
+    /// subtree queued one memoizes its `true` *provisionally*.
     deferred_pushed: u64,
+    /// The memo's provisional `true`s: verdicts whose subtree queued
+    /// comparisons not yet judged. Each holds as long as its queued
+    /// premises do, which is until the queue they sit in is dropped: a
+    /// failed δ-attempt ([`Conv::delta_lazy`]) takes back the ones made
+    /// inside it, a refusal at depth zero takes back all. A successful
+    /// drain at depth zero with no attempt open makes them all final. (Not
+    /// memoizing them at all was tried: a shared subterm then compares
+    /// once per occurrence, and `creal_tests`' `half_terms` ran out of
+    /// fuel.)
+    provisional: Vec<D::MemoKey>,
+    /// δ-attempts open: while any is, a successful drain at depth zero
+    /// keeps the provisional log, since the attempt may still fail and take
+    /// back the entries made after its mark.
+    attempts_open: u32,
     /// The depth the queue is being drained at: comparisons are queued
     /// [`crate::term::SPINE_ITERATE_AT`] frames above it. A drain inside a
     /// δ-attempt runs at the attempt's depth, and a threshold counted from
@@ -890,7 +904,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // the same δ stage (`reduce::Defs::sealed_body`).
         let has_defs = !psi.sealed.is_empty()
             || psi.bindings.iter().any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, deferred: Vec::new(), deferred_pushed: 0, defer_base: 0, draining_at_top: false, _dom: PhantomData }
+        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, deferred: Vec::new(), deferred_pushed: 0, provisional: Vec::new(), attempts_open: 0, defer_base: 0, draining_at_top: false, _dom: PhantomData }
     }
 
     fn spend(&mut self) -> R {
@@ -941,18 +955,41 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // judged before it counts as a success, and dropped with it when it
         // fails ([`Conv::deferred`]).
         let mark = self.deferred.len();
+        let provisional = self.provisional.len();
+        self.attempts_open += 1;
         let tried = attempt(self).and_then(|v| self.drain_deferred(mark).map(|()| v));
+        self.attempts_open -= 1;
+        if tried.is_err() {
+            self.deferred.truncate(mark);
+            self.take_back_provisional(provisional);
+        }
         match tried {
             Ok(v) => Ok(Some(v)),
-            Err(ConvError::NotConvertible) => {
-                self.deferred.truncate(mark);
-                Ok(None)
-            }
-            Err(e) => {
-                self.deferred.truncate(mark);
-                Err(e)
-            }
+            Err(ConvError::NotConvertible) => Ok(None),
+            Err(e) => Err(e),
         }
+    }
+
+    /// Remove the provisional `true`s made since `mark` from the memo: the
+    /// queue they stood on was dropped.
+    fn take_back_provisional(&mut self, mark: usize) {
+        if self.provisional.len() <= mark {
+            return;
+        }
+        for key in self.provisional.drain(mark..) {
+            self.memo.remove(&key);
+        }
+    }
+
+    /// Memoize a success; provisionally when its subtree queued premises
+    /// (`pushed` is [`Conv::deferred_pushed`] when it started), or when any
+    /// are queued at all — it may stand on a provisional entry's memo hit,
+    /// whose premises are still waiting.
+    fn memo_true(&mut self, key: D::MemoKey, pushed: u64) {
+        if self.deferred_pushed != pushed || !self.deferred.is_empty() {
+            self.provisional.push(key.clone());
+        }
+        self.memo.insert(key, true);
     }
 
     /// Judge the comparisons queued past `mark`, at the current depth (each
@@ -992,16 +1029,17 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // A drain at depth zero is already taking the queue: a comparison
         // it popped returning there leaves the rest to that loop, which
         // keeps the drain one native frame instead of one per item.
-        if self.depth != 0 || self.deferred.is_empty() || self.draining_at_top {
+        if self.depth != 0 || self.draining_at_top || (self.deferred.is_empty() && self.provisional.is_empty()) {
             return result;
         }
-        match result {
-            Ok(()) => self.drain_deferred(0),
-            Err(e) => {
-                self.deferred.clear();
-                Err(e)
-            }
+        let result = result.and_then(|()| self.drain_deferred(0));
+        if result.is_err() {
+            self.deferred.clear();
+            self.take_back_provisional(0);
+        } else if self.attempts_open == 0 {
+            self.provisional.clear();
         }
+        result
     }
 
     /// `L ⊢ l ≈ l' : Level` as a premise.
@@ -1572,10 +1610,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         self.depth -= 1;
         if let Some(key) = key {
             match &result {
-                Ok(()) if self.deferred_pushed != pushed => {}
-                Ok(()) => {
-                    self.memo.insert(key, true);
-                }
+                Ok(()) => self.memo_true(key, pushed),
                 Err(ConvError::NotConvertible) => {
                     self.memo.insert(key, false);
                 }
@@ -1811,14 +1846,17 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         let verdict = match &result {
             // Not yet a verdict while premises it queued are unjudged
             // ([`Conv::deferred`]).
-            Ok(()) if self.deferred_pushed != pushed => None,
             Ok(()) => Some(true),
             Err(ConvError::NotConvertible) => Some(false),
             Err(ConvError::OutOfFuel) => None,
         };
         if let Some(verdict) = verdict {
             for key in pending {
-                self.memo.insert(key, verdict);
+                if verdict {
+                    self.memo_true(key, pushed);
+                } else {
+                    self.memo.insert(key, false);
+                }
             }
         }
         self.settle_at_top(result)

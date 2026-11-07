@@ -163,6 +163,10 @@ fn closed_nat_equality_depth_budget_keeps_the_depth_guard() {
     let ty = Values::nat(&env);
     let mut cv = Conv::<Values>::new(FUEL, &psi);
     cv.depth = NATIVE_DEPTH_LIMIT;
+    // As if a queue were being drained at this depth: past the deferral
+    // threshold counted from zero, the comparison would be queued, not
+    // descended into (docs/deep-term-walks-design.md §3.4).
+    cv.defer_base = NATIVE_DEPTH_LIMIT;
     assert_eq!(cv.tm(&env, &a, &b, &ty, &Level::Zero), Err(ConvError::OutOfFuel));
     assert_eq!(cv.depth, NATIVE_DEPTH_LIMIT);
     assert!(cv.memo.is_empty());
