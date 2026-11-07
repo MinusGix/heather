@@ -1,0 +1,453 @@
+// Suprema of located sets, and order completeness as a capability
+// (issues/order-completeness-located-sup.md;
+// docs/sequences-and-completeness.md §2, §4).
+//
+// A set is a predicate `S: K → Type` over a section's `K: OrderedField(≈,
+// <, <=, +, *)`. Its supremum is read constructively, with the
+// approximation as data:
+//
+// - `UpperBound(S, b)`: every element of `S` is `<= b`.
+// - `IsSup(S, s)`: `s` bounds `S`, and each `ε > 0` has an element of `S`
+//   above `s - ε`.
+// - `UpperLocated(S)`: for `a < b`, either `b` bounds `S` or some element of
+//   `S` is above `a`, given as a disjunction the proof can branch on.
+//
+// Locatedness is exactly what a supremum needs: a set with a supremum is
+// upper located (`IsSup::located`, by cotransitivity at the supremum), and
+// in a Cauchy-complete field an inhabited, bounded, upper-located set has
+// one (`CauchyComplete::located_sup`). The proof is a bisection in thirds of
+// the gap: the stage `[a, b]` has `b` bounding `S` and an element of `S`
+// above `a`, and the located disjunction at `a + t·(b - a) < b - t·(b - a)`
+// keeps one side, so the width falls by `1 - t` at each step. Any lower end
+// is below any upper end (the element above it is below every bound), so the
+// upper ends are a Cauchy sequence with the widths' modulus, and its limit is
+// the supremum. Nothing is chosen: the stages are a recursion over the
+// located disjunction, and the limit is the field's own.
+//
+// `OrderComplete` states the capability: every inhabited, bounded-above,
+// upper-located set has a supremum. Over an ordered field it is equivalent
+// to `CauchyComplete`: the bisection gives one direction, and the other
+// reads a Cauchy sequence's limit as the supremum of the points it
+// eventually stays above (`OrderComplete::cauchy_limit`). The unrestricted
+// least-upper-bound principle implies LPO and is no capability of a
+// constructive carrier (the note's §2).
+
+import logic;
+import nat;
+import int;
+import list;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import big_operator;
+import ring;
+import omega;
+import linarith;
+import real_fn;
+import sequence;
+
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+fn UpperBound(S: K → Type, b: K) → Type { (x: K) → S(x) → x <= b }
+
+fn IsSup(S: K → Type, s: K) → Type {
+    UpperBound(S, s) ∧ ((e: K) → K.unit < e → ∃ x: K, S(x) ∧ s + K.inv(e) < x)
+}
+
+fn UpperLocated(S: K → Type) → Type {
+    (a, b: K) → a < b → UpperBound(S, b) ∨ (∃ x: K, S(x) ∧ a < x)
+}
+
+// ---------------------------------------------------------------------------
+// Suprema.
+
+// A supremum is below every upper bound: an element above `s - ε` is below
+// the bound, for every `ε`.
+theorem IsSup::le_upper(S: K → Type, s, b: K, hs: IsSup(S, s), hb: UpperBound(S, b)): s <= b {
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    OrderedField::le_of_forall_pos(s, b, K.multiplicative.unit, StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o), λ e pe => {
+        let a = hs.right(e, pe);
+        let above: (s + K.inv(e) < a.witness) = a.proof.right;
+        let below: (a.witness <= b) = hb(a.witness, a.proof.left);
+        linarith(above, below)
+    })
+}
+
+// A supremum is unique up to `≈`.
+theorem IsSup::unique(S: K → Type, s, t: K, hs: IsSup(S, s), ht: IsSup(S, t)): s ≈ t {
+    StrictOrder::le_antisymm(s, t, IsSup::le_upper(S, s, t, hs, ht.left), IsSup::le_upper(S, t, s, ht, hs.left))
+}
+
+// A supremum moves along `≈`.
+theorem IsSup::respects(S: K → Type, s, t: K, hs: IsSup(S, s), st: s ≈ t): IsSup(S, t) {
+    And(λ x sx => {
+        let le: (x <= s) = hs.left(x, sx);
+        linarith(le, st)
+    }, λ e pe => {
+        let a = hs.right(e, pe);
+        let above: (s + K.inv(e) < a.witness) = a.proof.right;
+        Exists(a.witness, And(a.proof.left, linarith(above, st)))
+    })
+}
+
+// A set with a supremum is upper located: cotransitivity places `s`
+// against `a < b`. Either `s < b`, and `b` bounds `S`, or `a < s`, and the
+// element above `s - (s - a)` is above `a`.
+theorem IsSup::located(S: K → Type, s: K, hs: IsSup(S, s)): UpperLocated(S) {
+    λ a b ab => match K.rel_cotrans(a, b, s, ab) {
+        Inl(as) => {
+            let pe: (K.unit < s + K.inv(a)) = linarith(as);
+            let p = hs.right(s + K.inv(a), pe);
+            let above: (s + K.inv(s + K.inv(a)) < p.witness) = p.proof.right;
+            Inr(Exists(p.witness, And(p.proof.left, linarith(above))))
+        },
+        Inr(sb) => Inl(λ x sx => {
+            let le: (x <= s) = hs.left(x, sx);
+            StrictOrder::le_of_lt(x, b, PseudoOrder::lt_of_le_of_lt(x, s, b, le, sb))
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The bisection.
+
+// Stage `n` of the bisection at rate `c` from width `w`: `b` bounds `S`, an
+// element of `S` is above `a`, and `b - a ≈ cⁿ·w`.
+fn Bisection(S: K → Type, c, w: K, n: Nat, a, b: K) → Type {
+    UpperBound(S, b) ∧ ((∃ x: K, S(x) ∧ a < x) ∧ b + K.inv(a) ≈ OrderedField::npow(c, n) * w)
+}
+
+// Any stage's lower end is below any stage's upper end: the element above
+// the one is below the other.
+theorem Bisection::stage_lt(S: K → Type, c, w: K, m, n: Nat, a, b, a2, b2: K, hm: Bisection(S, c, w, m, a, b),
+    hn: Bisection(S, c, w, n, a2, b2)): a < b2
+{
+    let ex = hm.right.left;
+    PseudoOrder::lt_of_lt_of_le(a, ex.witness, b2, ex.proof.right, hn.left(ex.witness, ex.proof.left))
+}
+
+// One step. With `d = t·(b - a)` and `2t < 1`, `a + d < b - d`, and the
+// located disjunction there keeps `[a, b - d]` (when `b - d` bounds `S`) or
+// `[a + d, b]` (when an element is above `a + d`). Either way the width is
+// `(b - a)·(1 - t)`.
+theorem Bisection::step(S: K → Type, loc: UpperLocated(S), t: K, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, a, b: K,
+    h: Bisection(S, K.multiplicative.unit + K.inv(t), w, n, a, b)):
+    ∃ a2: K, ∃ b2: K, Bisection(S, K.multiplicative.unit + K.inv(t), w, Succ(n), a2, b2)
+{
+    let c = K.multiplicative.unit + K.inv(t);
+    let d = t * (b + K.inv(a));
+    let ex = h.right.left;
+    let ax: (a < ex.witness) = ex.proof.right;
+    let xb: (ex.witness <= b) = h.left(ex.witness, ex.proof.left);
+    let pw: (K.unit < b + K.inv(a)) = linarith(ax, xb);
+    let p2: (K.unit < K.multiplicative.unit + K.inv(t + t)) = linarith(ht2);
+    let gap: (K.unit < (b + K.inv(a)) * (K.multiplicative.unit + K.inv(t + t))) =
+        OrderedSemiring::mul_pos(b + K.inv(a), K.multiplicative.unit + K.inv(t + t), pw, p2);
+    let lt: (a + d < b + K.inv(d)) = linarith(gap);
+    let hw: (b + K.inv(a) ≈ OrderedField::npow(c, n) * w) = h.right.right;
+    let hwc: ((b + K.inv(a)) * c ≈ (OrderedField::npow(c, n) * w) * c) =
+        OrderedSemiring::mul_respects(b + K.inv(a), OrderedField::npow(c, n) * w, c, c, hw, K.rel_refl(c));
+    let ps: (OrderedField::npow(c, Succ(n)) * w ≈ (OrderedField::npow(c, n) * c) * w) =
+        OrderedSemiring::mul_respects(OrderedField::npow(c, Succ(n)), OrderedField::npow(c, n) * c, w, w, OrderedField::npow_succ(c, n), K.rel_refl(w));
+    match loc(a + d, b + K.inv(d), lt) {
+        Inl(ub) => {
+            let width: ((b + K.inv(d)) + K.inv(a) ≈ OrderedField::npow(c, Succ(n)) * w) = ring(hwc, ps);
+            Exists(a, Exists(b + K.inv(d), And(ub, And(ex, width))))
+        },
+        Inr(above) => {
+            let width: (b + K.inv(a + d) ≈ OrderedField::npow(c, Succ(n)) * w) = ring(hwc, ps);
+            Exists(a + d, Exists(b, And(h.left, And(above, width))))
+        },
+    }
+}
+
+// The stages, by recursion over the located disjunction.
+fn Bisection::run(S: K → Type, loc: UpperLocated(S), t: K, ht2: t + t < K.multiplicative.unit, w, a0, b0: K,
+    h0: Bisection(S, K.multiplicative.unit + K.inv(t), w, Zero, a0, b0), n: Nat) →
+    ∃ a: K, ∃ b: K, Bisection(S, K.multiplicative.unit + K.inv(t), w, n, a, b)
+{
+    match n {
+        Zero => Exists(a0, Exists(b0, h0)),
+        Succ(m) => {
+            let p = Bisection::run(S, loc, t, ht2, w, a0, b0, h0, m);
+            Bisection::step(S, loc, t, ht2, w, m, p.witness, p.proof.witness, p.proof.proof)
+        },
+    }
+}
+
+// A stage past `N` is narrower than `ε` once `cᴺ <= e2` with `w·e2 <= ε`.
+// Over plain parameters, so the kernel never normalises the witnesses that
+// produce them (docs/proof-patterns.md, `*_close` helpers).
+theorem Bisection::width_close(S: K → Type, c, w: K, hc0: K.unit <= c, hc1: c <= K.multiplicative.unit, pw: K.unit <= w,
+    e, e2: K, sb: w * e2 <= e, N: Nat, le: OrderedField::npow(c, N) <= e2, n: Nat, from: Nat::Le(N, n), a, b: K,
+    hn: Bisection(S, c, w, n, a, b)): b + K.inv(a) <= e
+{
+    let cn = OrderedField::npow(c, n);
+    let at: (cn <= OrderedField::npow(c, N)) = OrderedField::npow_antitone(c, hc0, hc1, N, n, from);
+    let m: (cn * w <= e2 * w) = OrderedSemiring::mul_le_mono_r(cn, e2, w, PseudoOrder::le_trans(cn, OrderedField::npow(c, N), e2, at, le), pw);
+    let hw: (b + K.inv(a) ≈ cn * w) = hn.right.right;
+    linarith(m, hw, sb)
+}
+
+// Two upper ends past `N` are within `ε`: each is above the other's lower
+// end, which is within `ε` of it.
+theorem Bisection::cauchy_close(S: K → Type, c, w: K, hc0: K.unit <= c, hc1: c <= K.multiplicative.unit, pw: K.unit <= w,
+    e, e2: K, sb: w * e2 <= e, N: Nat, le: OrderedField::npow(c, N) <= e2, m, n: Nat, fm: Nat::Le(N, m), fk: Nat::Le(N, n),
+    a, b, a2, b2: K, hm: Bisection(S, c, w, m, a, b), hn: Bisection(S, c, w, n, a2, b2)): AbsLe(b + K.inv(b2), e)
+{
+    let wm: (b + K.inv(a) <= e) = Bisection::width_close(S, c, w, hc0, hc1, pw, e, e2, sb, N, le, m, fm, a, b, hm);
+    let wn: (b2 + K.inv(a2) <= e) = Bisection::width_close(S, c, w, hc0, hc1, pw, e, e2, sb, N, le, n, fk, a2, b2, hn);
+    let l1: (a < b2) = Bisection::stage_lt(S, c, w, m, n, a, b, a2, b2, hm, hn);
+    let l2: (a2 < b) = Bisection::stage_lt(S, c, w, n, m, a2, b2, a, b, hn, hm);
+    LocatedAddGroup::abs_le_intro(b + K.inv(b2), e, linarith(wn, l2), linarith(wm, l1))
+}
+
+// A stage within `ε/2` of `s` and narrower than `ε/2` has an element above
+// `s - ε`.
+theorem Bisection::approx_close(S: K → Type, c, w: K, n: Nat, a, b, s, e, h: K, hh: h + h ≈ e, hn: Bisection(S, c, w, n, a, b),
+    narrow: b + K.inv(a) <= h, near: AbsLe(b + K.inv(s), h)): ∃ x: K, S(x) ∧ s + K.inv(e) < x
+{
+    let ex = hn.right.left;
+    let ax: (a < ex.witness) = ex.proof.right;
+    let nl: (K.inv(h) <= b + K.inv(s)) = near.left;
+    Exists(ex.witness, And(ex.proof.left, linarith(ax, narrow, nl, hh)))
+}
+
+// The stages' upper ends, which converge to the supremum.
+fn Bisection::upper(S: K → Type, loc: UpperLocated(S), t: K, ht2: t + t < K.multiplicative.unit, w, a0, b0: K,
+    h0: Bisection(S, K.multiplicative.unit + K.inv(t), w, Zero, a0, b0)) → Nat → K
+{
+    λ (n: Nat) => Bisection::run(S, loc, t, ht2, w, a0, b0, h0, n).proof.witness
+}
+
+// The upper ends are Cauchy, with the widths' modulus.
+theorem Bisection::cauchy(S: K → Type, loc: UpperLocated(S), t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K,
+    pw: K.unit <= w, a0, b0: K, h0: Bisection(S, K.multiplicative.unit + K.inv(t), w, Zero, a0, b0)):
+    CauchySeq(Bisection::upper(S, loc, t, ht2, w, a0, b0, h0))
+{
+    let c = K.multiplicative.unit + K.inv(t);
+    let hc0: (K.unit <= c) = linarith(ht2, ht);
+    let hc1: (c < K.multiplicative.unit) = linarith(ht);
+    let hc1le: (c <= K.multiplicative.unit) = StrictOrder::le_of_lt(c, K.multiplicative.unit, hc1);
+    λ e pe => {
+        let sh = OrderedField::shrink(w, e, pw, pe);
+        let small = OrderedField::npow_small(c, hc0, hc1, sh.witness, sh.proof.left);
+        Exists(small.witness, λ m n fm fk => {
+            let pm = Bisection::run(S, loc, t, ht2, w, a0, b0, h0, m);
+            let pn = Bisection::run(S, loc, t, ht2, w, a0, b0, h0, n);
+            Bisection::cauchy_close(S, c, w, hc0, hc1le, pw, e, sh.witness, sh.proof.right, small.witness,
+                small.proof(small.witness, small.witness.le_refl()), m, n, fm, fk,
+                pm.witness, pm.proof.witness, pn.witness, pn.proof.witness, pm.proof.proof, pn.proof.proof)
+        })
+    }
+}
+
+// A limit of the upper ends bounds `S`: each upper end does.
+theorem Bisection::limit_bounds(S: K → Type, loc: UpperLocated(S), t: K, ht2: t + t < K.multiplicative.unit, w, a0, b0: K,
+    h0: Bisection(S, K.multiplicative.unit + K.inv(t), w, Zero, a0, b0), s: K,
+    conv: Converges(Bisection::upper(S, loc, t, ht2, w, a0, b0, h0), s)): UpperBound(S, s)
+{
+    λ x sx => Converges::le(λ (n: Nat) => x, Bisection::upper(S, loc, t, ht2, w, a0, b0, h0), x, s, Converges::const(x), conv,
+        λ n => Bisection::run(S, loc, t, ht2, w, a0, b0, h0, n).proof.proof.left(x, sx))
+}
+
+// A limit of the upper ends is approached from `S`: a stage late enough is
+// within `ε/2` of it and narrower than `ε/2`.
+theorem Bisection::limit_approx(S: K → Type, loc: UpperLocated(S), t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K,
+    pw: K.unit <= w, a0, b0: K, h0: Bisection(S, K.multiplicative.unit + K.inv(t), w, Zero, a0, b0), s: K,
+    conv: Converges(Bisection::upper(S, loc, t, ht2, w, a0, b0, h0), s), e: K, pe: K.unit < e): ∃ x: K, S(x) ∧ s + K.inv(e) < x
+{
+    let c = K.multiplicative.unit + K.inv(t);
+    let hc0: (K.unit <= c) = linarith(ht2, ht);
+    let hc1: (c < K.multiplicative.unit) = linarith(ht);
+    let hc1le: (c <= K.multiplicative.unit) = StrictOrder::le_of_lt(c, K.multiplicative.unit, hc1);
+    let h = OrderedField::half(e);
+    let ph = OrderedField::half_pos(e, pe);
+    let p = conv(h, ph);
+    let sh = OrderedField::shrink(w, h, pw, ph);
+    let small = OrderedField::npow_small(c, hc0, hc1, sh.witness, sh.proof.left);
+    let n = p.witness.max(small.witness);
+    let st = Bisection::run(S, loc, t, ht2, w, a0, b0, h0, n);
+    let narrow: (st.proof.witness + K.inv(st.witness) <= h) = Bisection::width_close(S, c, w, hc0, hc1le, pw, h, sh.witness, sh.proof.right,
+        small.witness, small.proof(small.witness, small.witness.le_refl()), n, p.witness.le_max_r(small.witness),
+        st.witness, st.proof.witness, st.proof.proof);
+    Bisection::approx_close(S, c, w, n, st.witness, st.proof.witness, s, e, h, OrderedField::half_add(e), st.proof.proof, narrow,
+        p.proof(n, p.witness.le_max_l(small.witness)))
+}
+
+// The first stage: `a0 = x0 - 1`, below the element `x0`, and the bound
+// `b0`, with width `w = b0 - a0`.
+theorem Bisection::start(S: K → Type, c, x0, b0: K, sx: S(x0), hb: UpperBound(S, b0)):
+    Bisection(S, c, b0 + K.inv(x0 + K.inv(K.multiplicative.unit)), Zero, x0 + K.inv(K.multiplicative.unit), b0)
+{
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let w = b0 + K.inv(x0 + K.inv(K.multiplicative.unit));
+    let z: (OrderedField::npow(c, Zero) * w ≈ K.multiplicative.unit * w) =
+        OrderedSemiring::mul_respects(OrderedField::npow(c, Zero), K.multiplicative.unit, w, w, OrderedField::npow_zero(c), K.rel_refl(w));
+    let w0: (w ≈ OrderedField::npow(c, Zero) * w) = ring(z);
+    let a0x: (x0 + K.inv(K.multiplicative.unit) < x0) = linarith(o);
+    And(hb, And(Exists(x0, And(sx, a0x)), w0))
+}
+
+// The rate: `t = 1/4`, so the width falls by `3/4` a step.
+theorem Bisection::quarter(x: K): ∃ t: K, K.unit < t ∧ t + t < K.multiplicative.unit {
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let h1 = OrderedField::half(K.multiplicative.unit);
+    let t = OrderedField::half(h1);
+    let ph1: (K.unit < h1) = OrderedField::half_pos(K.multiplicative.unit, o);
+    let ht: (K.unit < t) = OrderedField::half_pos(h1, ph1);
+    let hh1: (h1 + h1 ≈ K.multiplicative.unit) = OrderedField::half_add(K.multiplicative.unit);
+    let htt: (t + t ≈ h1) = OrderedField::half_add(h1);
+    let ht2: (t + t < K.multiplicative.unit) = linarith(hh1, htt, ph1);
+    Exists(t, And(ht, ht2))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Located suprema in a Cauchy-complete field.
+
+section<K: CauchyComplete(≈, <, <=, +, *)> {
+
+// The bisection's limit is the supremum.
+theorem Bisection::sup(S: K → Type, loc: UpperLocated(S), t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K,
+    pw: K.unit <= w, a0, b0: K, h0: Bisection(S, K.multiplicative.unit + K.inv(t), w, Zero, a0, b0)): ∃ s: K, IsSup(S, s)
+{
+    let cs = Bisection::cauchy(S, loc, t, ht, ht2, w, pw, a0, b0, h0);
+    let s = CauchyComplete::limit(Bisection::upper(S, loc, t, ht2, w, a0, b0, h0), cs);
+    let conv = CauchyComplete::converges(Bisection::upper(S, loc, t, ht2, w, a0, b0, h0), cs);
+    Exists(s, And(Bisection::limit_bounds(S, loc, t, ht2, w, a0, b0, h0, s, conv),
+        λ e pe => Bisection::limit_approx(S, loc, t, ht, ht2, w, pw, a0, b0, h0, s, conv, e, pe)))
+}
+
+theorem CauchyComplete::located_sup(S: K → Type, inh: ∃ x: K, S(x), bdd: ∃ b: K, UpperBound(S, b), loc: UpperLocated(S)):
+    ∃ s: K, IsSup(S, s)
+{
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let q = Bisection::quarter(inh.witness);
+    let xb: (inh.witness <= bdd.witness) = bdd.proof(inh.witness, inh.proof);
+    let pw: (K.unit <= bdd.witness + K.inv(inh.witness + K.inv(K.multiplicative.unit))) = linarith(xb, o);
+    Bisection::sup(S, loc, q.witness, q.proof.left, q.proof.right, bdd.witness + K.inv(inh.witness + K.inv(K.multiplicative.unit)), pw,
+        inh.witness + K.inv(K.multiplicative.unit), bdd.witness,
+        Bisection::start(S, K.multiplicative.unit + K.inv(q.witness), inh.witness, bdd.witness, inh.proof, bdd.proof))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Order completeness, as a capability.
+//
+// An ordered field is order complete when every inhabited, bounded-above,
+// upper-located set has a supremum, given as data. The field spells
+// `UpperBound`, `UpperLocated` and `IsSup` out, as `CauchyComplete`'s does,
+// because a class body cannot name the section's predicates;
+// `OrderComplete::sup` and `::is_sup` read it back. `CReal` inhabits it
+// (real_complete.hthr, from `CauchyComplete::located_sup`); `Rat` does not.
+class OrderComplete<A>(same as ≈: A → A → Type, lt as <: A → A → Type, le as <=: A → A → Type,
+    add as +: A → A → A, mul as *: A → A → A)
+    extends OrderedField<A>(same, lt, le, add, mul)
+{
+    located_sup: (S: A → Type) → (∃ x: A, S(x)) → (∃ b: A, (x: A) → S(x) → x <= b) →
+        ((a, b: A) → a < b → ((x: A) → S(x) → x <= b) ∨ (∃ x: A, S(x) ∧ a < x)) →
+        ∃ s: A, ((x: A) → S(x) → x <= s) ∧ ((e: A) → unit < e → ∃ x: A, S(x) ∧ s + inv(e) < x),
+}
+
+section<K: OrderComplete(≈, <, <=, +, *)> {
+
+fn OrderComplete::sup(S: K → Type, inh: ∃ x: K, S(x), bdd: ∃ b: K, UpperBound(S, b), loc: UpperLocated(S)) → K {
+    K.located_sup(S, inh, bdd, loc).witness
+}
+
+theorem OrderComplete::is_sup(S: K → Type, inh: ∃ x: K, S(x), bdd: ∃ b: K, UpperBound(S, b), loc: UpperLocated(S)):
+    IsSup(S, OrderComplete::sup(S, inh, bdd, loc))
+{
+    K.located_sup(S, inh, bdd, loc).proof
+}
+
+// The converse: an order-complete field is Cauchy complete. A Cauchy
+// sequence's limit is the supremum of the points it eventually stays above.
+fn OrderComplete::EventuallyBelow(xs: Nat → K, y: K) → Type {
+    ∃ N: Nat, (n: Nat) → Nat::Le(N, n) → y <= xs(n)
+}
+
+// Past an index where the sequence stays within `δ`, `xs(N) - δ` is
+// eventually below it and `xs(N) + δ` bounds every point that is.
+theorem OrderComplete::below_at(xs: Nat → K, d: K, N: Nat,
+    hN: (m, n: Nat) → Nat::Le(N, m) → Nat::Le(N, n) → AbsLe(xs(m) + K.inv(xs(n)), d)):
+    OrderComplete::EventuallyBelow(xs, xs(N) + K.inv(d))
+{
+    Exists(N, λ n from => {
+        let l: (K.inv(d) <= xs(n) + K.inv(xs(N))) = hN(n, N, from, N.le_refl()).left;
+        linarith(l)
+    })
+}
+
+theorem OrderComplete::bound_at(xs: Nat → K, d: K, N: Nat,
+    hN: (m, n: Nat) → Nat::Le(N, m) → Nat::Le(N, n) → AbsLe(xs(m) + K.inv(xs(n)), d)):
+    UpperBound(λ (y: K) => OrderComplete::EventuallyBelow(xs, y), xs(N) + d)
+{
+    λ y sy => {
+        let n = N.max(sy.witness);
+        let below: (y <= xs(n)) = sy.proof(n, N.le_max_r(sy.witness));
+        let r: (xs(n) + K.inv(xs(N)) <= d) = hN(n, N, N.le_max_l(sy.witness), N.le_refl()).right;
+        linarith(below, r)
+    }
+}
+
+// The points a Cauchy sequence eventually stays above are upper located:
+// for `a < b` take `q = (b - a)/4` and an index `N` past which the sequence
+// stays within `q`; cotransitivity places `xs(N)` against `a + q < b - q`.
+theorem OrderComplete::below_located(xs: Nat → K, hc: CauchySeq(xs)):
+    UpperLocated(λ (y: K) => OrderComplete::EventuallyBelow(xs, y))
+{
+    λ a b ab => {
+        let g: (K.unit < b + K.inv(a)) = linarith(ab);
+        let h = OrderedField::half(b + K.inv(a));
+        let q = OrderedField::half(h);
+        let ph: (K.unit < h) = OrderedField::half_pos(b + K.inv(a), g);
+        let pq: (K.unit < q) = OrderedField::half_pos(h, ph);
+        let hh: (h + h ≈ b + K.inv(a)) = OrderedField::half_add(b + K.inv(a));
+        let hq: (q + q ≈ h) = OrderedField::half_add(h);
+        let lt: (a + q < b + K.inv(q)) = linarith(hh, hq, pq);
+        let p = hc(q, pq);
+        match K.rel_cotrans(a + q, b + K.inv(q), xs(p.witness), lt) {
+            Inl(lo) => Inr(Exists(xs(p.witness) + K.inv(q), And(OrderComplete::below_at(xs, q, p.witness, p.proof), linarith(lo)))),
+            Inr(hi) => Inl(λ y sy => {
+                let ub = OrderComplete::bound_at(xs, q, p.witness, p.proof);
+                let le: (y <= xs(p.witness) + q) = ub(y, sy);
+                linarith(le, hi)
+            }),
+        }
+    }
+}
+
+theorem OrderComplete::cauchy_limit(xs: Nat → K, hc: CauchySeq(xs)): ∃ l: K, Converges(xs, l) {
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let p1 = hc(K.multiplicative.unit, o);
+    let S = λ (y: K) => OrderComplete::EventuallyBelow(xs, y);
+    let inh: ∃ y: K, S(y) = Exists(xs(p1.witness) + K.inv(K.multiplicative.unit), OrderComplete::below_at(xs, K.multiplicative.unit, p1.witness, p1.proof));
+    let bdd: ∃ b: K, UpperBound(S, b) = Exists(xs(p1.witness) + K.multiplicative.unit, OrderComplete::bound_at(xs, K.multiplicative.unit, p1.witness, p1.proof));
+    let loc: UpperLocated(S) = OrderComplete::below_located(xs, hc);
+    let s = OrderComplete::sup(S, inh, bdd, loc);
+    let hs: IsSup(S, s) = OrderComplete::is_sup(S, inh, bdd, loc);
+    Exists(s, λ e pe => {
+        let h = OrderedField::half(e);
+        let ph = OrderedField::half_pos(e, pe);
+        let hh: (h + h ≈ e) = OrderedField::half_add(e);
+        let p = hc(h, ph);
+        let N = p.witness;
+        let lo: (xs(N) + K.inv(h) <= s) = hs.left(xs(N) + K.inv(h), OrderComplete::below_at(xs, h, N, p.proof));
+        let hi: (s <= xs(N) + h) = IsSup::le_upper(S, s, xs(N) + h, hs, OrderComplete::bound_at(xs, h, N, p.proof));
+        Exists(N, λ n from => {
+            let u: AbsLe(xs(n) + K.inv(xs(N)), h) = p.proof(n, N, from, N.le_refl());
+            let ul: (K.inv(h) <= xs(n) + K.inv(xs(N))) = u.left;
+            let ur: (xs(n) + K.inv(xs(N)) <= h) = u.right;
+            LocatedAddGroup::abs_le_intro(xs(n) + K.inv(s), e, linarith(ul, hi, hh), linarith(ur, lo, hh))
+        })
+    })
+}
+
+}

@@ -1,11 +1,11 @@
 ---
 title: Located suprema as an order-completeness capability
-status: open
+status: closed
 labels: [stdlib,mathematics,reals,order]
 area: mathematics
 milestone: [math-reals]
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
 ---
 
 The order-completeness side of [[real-completeness-interfaces]]. A supremum
@@ -30,3 +30,15 @@ docs/sequences-and-completeness.md §2 has the table of notions.
 ## Log
 
 - 2026-11-06: Filed from the sequences round.
+- 2026-11-07: Done. lib/std/analysis/supremum.hthr: `UpperBound`, `IsSup`
+  (unique, respects, below every upper bound), `UpperLocated`, and
+  `IsSup::located` (a supremum makes the set located, so the hypothesis is
+  exactly right). `CauchyComplete::located_sup` by bisection at rate 3/4
+  over plain-parameter stages (`Bisection::*`); the `OrderComplete` class;
+  and the converse `OrderComplete::cauchy_limit`, so the two capabilities
+  are equivalent over an ordered field. `CReal` instance in
+  real_complete.hthr; probes in lib/_tests/std/analysis/supremum_tests.hthr
+  (the ray below `c` has supremum `c`, found at `CReal`, refused at `Rat`).
+  The consumers moved to [[located-sup-consumers]]; the merged-call kernel
+  panic hit on the way is [[merged-call-through-upcast-panics]].
+  docs/sequences-and-completeness.md §4.

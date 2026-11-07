@@ -106,7 +106,7 @@ setting: constructive, with `∃` as data, and no countable choice assumed.
 | Regular-sequence completeness at a fixed rate | every `xs` with `\|xₘ - xₙ\| <= 2^-m + 2^-n` converges at that rate | `CReal` (`CReal::complete`) | `Rat` | built, CReal-only |
 | Cauchy completeness with a modulus | `CauchyComplete` | `CReal` | `Rat` | **built** |
 | Sequential completeness, modulus only asserted | Cauchy as `∀ε. ∥∃N …∥` | `CReal` *with* countable choice | — | not stated |
-| Order completeness at located sets | a nonempty, bounded-above, upper-located set has a supremum | `CReal` (expected, by bisection) | `Rat` | next |
+| Order completeness at located sets | a nonempty, bounded-above, upper-located set has a supremum | `CReal` (by bisection) | `Rat` | **built**, equivalent to the row above (§4) |
 | Classical least-upper-bound | every nonempty bounded-above set has a supremum | nothing constructive | `CReal` | not a capability |
 | Monotone convergence | every bounded monotone sequence converges | nothing constructive | `CReal` | not a capability |
 
@@ -125,7 +125,8 @@ How they connect:
   only for a set whose upper bounds are located: for `a < b`, either `b` is
   an upper bound or some element exceeds `a`. With that disjunction as data,
   bisection builds a Cauchy sequence of upper bounds with a modulus. So
-  `CauchyComplete` plus Archimedean gives located suprema, with no choice.
+  `CauchyComplete` plus Archimedean gives located suprema, with no choice,
+  and the converse holds too, so the two rows are one capability (§4).
   The unrestricted least-upper-bound principle implies LPO (Bishop–Bridges),
   so no constructive carrier inhabits it, `CReal` included. Monotone
   convergence is equivalent to LPO in the same way.
@@ -144,9 +145,10 @@ How they connect:
   `l·l ≈ 2` (`Converges::mul`, `Converges::le` against `root_floor_spec`),
   and `num² = 2·den²` has no solution with `den > 0`. That last fact is
   descent over `Nat`, and the parity lemmas are in `nat.hthr`.
-- **Located suprema** as an `OrderComplete` capability, proved for every
-  `CauchyComplete` Archimedean field by bisection
-  ([order-completeness-located-sup](../issues/order-completeness-located-sup.md)).
+- **Consumers of located suprema**: the supremum of a uniformly continuous
+  function on a closed interval, which would make `BoundedOn` a theorem
+  there, and the intermediate value theorem with a located sign change
+  ([located-sup-consumers](../issues/located-sup-consumers.md)).
 - **Series**: partial sums, `Summable`, the geometric series and comparison
   with a tail modulus. These come before
   [power-series-evaluation](../issues/power-series-evaluation.md), and the
@@ -154,3 +156,75 @@ How they connect:
 - **A contraction on a closed domain** (a domain that keeps its limits), the
   form Newton's lemma needs locally
   ([valued-rings-and-newton](../issues/valued-rings-and-newton.md)).
+
+## 4. Located suprema
+
+`lib/std/analysis/supremum.hthr` (issue
+[order-completeness-located-sup](../issues/order-completeness-located-sup.md)).
+A set is a predicate `S: K → Type`, and its supremum carries its
+approximation as data:
+
+- `UpperBound(S, b)`: every element of `S` is `<= b`.
+- `IsSup(S, s)`: `s` bounds `S`, and each `ε > 0` has an element of `S`
+  above `s - ε`.
+- `UpperLocated(S)`: for `a < b`, either `b` bounds `S` or some element is
+  above `a`, as a disjunction a proof branches on.
+
+A supremum is below every upper bound (`IsSup::le_upper`), so it is unique up
+to `≈` (`IsSup::unique`), and it moves along `≈` (`IsSup::respects`).
+Locatedness is necessary as well as sufficient: a set with a supremum is
+upper located (`IsSup::located`), since cotransitivity places `s` against
+`a < b`.
+
+**The bisection.** Stage `n` (`Bisection(S, c, w, n, a, b)`) has `b`
+bounding `S`, an element of `S` above `a`, and width `b - a ≈ cⁿ·w`. One
+step (`Bisection::step`) cuts at `a + d < b - d` with `d = t·(b - a)` and
+`2t < 1`, asks the located disjunction there, and keeps `[a, b - d]` or
+`[a + d, b]`. Either way the width becomes `(b - a)·(1 - t)`. `t = 1/4`
+(`Bisection::quarter`), so `c = 3/4`. The stages are a plain recursion over
+the disjunction (`Bisection::run`). The proof needs no nesting of the
+intervals: any stage's lower end is below any stage's upper end, because the
+element above the one is below the other (`Bisection::stage_lt`). So two
+upper ends past `N` are within the larger width, which is at most `cᴺ·w`,
+and the upper ends are Cauchy with the modulus `npow_small` gives
+(`Bisection::cauchy`). In a `CauchyComplete` field their limit bounds `S`
+(each upper end does, and `Converges::le` passes it to the limit), and an
+element of a late stage is above `s - ε` (`Bisection::limit_approx`). That
+is `CauchyComplete::located_sup`, and `CReal::located_sup` reads it at the
+reals.
+
+**The capability.** `class OrderComplete<A>(≈, <, <=, +, *) extends
+OrderedField` has one field, `located_sup`, spelled out as `CauchyComplete`'s
+is; `OrderComplete::sup` and `::is_sup` read it back. `CReal` inhabits it
+(real_complete.hthr). `Rat` does not, and the probe
+`rat_ray_sup_refused` in `lib/_tests/std/analysis/supremum_tests.hthr` holds
+that refusal.
+
+**Equivalent to Cauchy completeness.** The converse is
+`OrderComplete::cauchy_limit`: a Cauchy sequence converges to the supremum
+of the points it eventually stays above (`OrderComplete::EventuallyBelow`).
+Past an index `N` where the sequence stays within `δ`, `xs(N) - δ` is
+eventually below it and `xs(N) + δ` bounds every point that is
+(`below_at`, `bound_at`). Those two facts at `δ = (b - a)/4`, with
+cotransitivity placing `xs(N)` against `a + δ < b - δ`, make the set upper
+located (`below_located`), and at `δ = ε/2` they put the supremum within `ε`
+of every late term. So over an ordered field with the Archimedean law (which
+`OrderedField` carries) the two capabilities coincide. They stay two
+classes because each is the natural statement for a different consumer:
+limits for the contraction mapping theorem and series, suprema for extrema
+and the intermediate value theorem.
+
+Proof-engineering notes:
+
+- Each piece of the bisection is a theorem over plain parameters
+  (`width_close`, `cauchy_close`, `approx_close`, and the `Bisection::*`
+  lemmas that take `t`, `w`, `a0`, `b0` and the first stage as parameters).
+  Written as one theorem with the setup in `let`s, the main proof ran past
+  8 GiB.
+- Calling a theorem whose result type is a definition that unfolds to a Π
+  with the Π's arguments merged into one list (`bound_at(xs, d, N, hN, y,
+  sy)`) panics the kernel's substitution when the definition was declared at
+  a parent class's section
+  ([merged-call-through-upcast-panics](../issues/merged-call-through-upcast-panics.md)).
+  Bind the result with `let` and apply it.
+
