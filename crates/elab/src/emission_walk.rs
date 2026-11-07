@@ -347,6 +347,12 @@ impl Walk<'_> {
                 self.term(zero, d);
                 self.term(one, d);
             }
+            Term::VecItems { elem, items, from, .. } => {
+                self.slot("VecItems.elem", elem, d);
+                for item in items.get(*from as usize..).unwrap_or(&[]) {
+                    self.term(item, d);
+                }
+            }
             Term::PairAt { ty, fst, snd } => {
                 if let Some(ty) = ty {
                     self.slot("PairAt.ty", ty, d);

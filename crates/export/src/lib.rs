@@ -753,6 +753,13 @@ impl Tr<'_> {
                 }
                 self.tm(&heather_kernel::term::vec_lit_chain(level, elem, zero, one, *width, *bits))?
             }
+            // Likewise a vector-items node.
+            Term::VecItems { level, elem, items, from } => {
+                let Some(live) = heather_kernel::term::vec_items_live(items, *from) else {
+                    return refuse("vector literal out of range");
+                };
+                self.tm(&heather_kernel::term::vec_items_chain(level, elem, live))?
+            }
             // ---- checked spellings: the components are the target's to infer ----
             Term::PairAt { ty, fst, snd } => self.at_ty(ty, "pair", 2, vec![self.tm(fst)?, self.tm(snd)?])?,
             Term::InlAt { ty, val } => self.at_ty(ty, "inl", 2, vec![self.tm(val)?])?,

@@ -632,6 +632,14 @@ impl Cache {
                 .type_use(elem)
                 .join(self.term_use(zero))
                 .join(self.term_use(one)),
+            // A loop, not a fold of joins: the node exists to be shallow.
+            Term::VecItems { elem, items, from, .. } => {
+                let mut used = self.type_use(elem);
+                for item in items.get(*from as usize..).unwrap_or(&[]) {
+                    used = used.join(self.term_use(item));
+                }
+                used
+            }
             Term::InlAt { ty, val: t } | Term::InrAt { ty, val: t } => {
                 self.opt_type_use(ty).join(self.term_use(t))
             }

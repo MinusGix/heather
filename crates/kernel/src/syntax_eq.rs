@@ -493,6 +493,17 @@ impl SharedEq for Term {
                     && elem.shared_eq(o_elem, m) && zero.shared_eq(o_zero, m)
                     && one.shared_eq(o_one, m)
             }
+            // The live elements, wherever each array starts.
+            Term::VecItems { level, elem, items, from } => {
+                let Term::VecItems { level: o_level, elem: o_elem, items: o_items, from: o_from } = other
+                else {
+                    return false;
+                };
+                let (a, b) = (items.get(*from as usize..), o_items.get(*o_from as usize..));
+                let (Some(a), Some(b)) = (a, b) else { return false };
+                a.len() == b.len() && level.shared_eq(o_level, m) && elem.shared_eq(o_elem, m)
+                    && a.iter().zip(b).all(|(x, y)| x.shared_eq(y, m))
+            }
             Term::PairAt { ty, fst, snd } => {
                 let Term::PairAt { ty: o_ty, fst: o_fst, snd: o_snd } = other else { return false };
                 ty.shared_eq(o_ty, m) && fst.shared_eq(o_fst, m) && snd.shared_eq(o_snd, m)

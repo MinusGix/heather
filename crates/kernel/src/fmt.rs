@@ -269,6 +269,23 @@ impl fmt::Debug for Term {
                 f,
                 "vec[{level:?}]({elem:?}; {zero:?}, {one:?}; {width}#{bits:#x})"
             ),
+            // The first few elements and a count: the node can be as long
+            // as a file, and the budget would only elide the rest one `…`
+            // per element.
+            Term::VecItems { level, elem, items, from } => {
+                let live = items.get(*from as usize..).unwrap_or(&[]);
+                write!(f, "vec[{level:?}]({elem:?}; [")?;
+                for (i, item) in live.iter().take(8).enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{item:?}")?;
+                }
+                if live.len() > 8 {
+                    write!(f, ", … {} more", live.len() - 8)?;
+                }
+                f.write_str("])")
+            }
             Term::Succ(t) => write!(f, "S({t:?})"),
             Term::ElimNat { level, motive, base, step, scrut } => write!(
                 f,

@@ -562,6 +562,31 @@ at most two distinct terms over an element type that whnfs to a sum, packing
 the last 64 and keeping any prefix as pairs (`check_vec_lit`); everything
 else elaborates as before.
 
+**A long vector literal is one node** (`Term::VecItems`,
+`issues/long-string-literal-stack-overflow.md`). `VecItems{ℓ, T, items, from}`
+is `VecLit`'s construction for elements of any kind: notation for the chain
+`⟨items[from], ⟨…, ⟨items[n-1], ⟨⟩⟩⟩⟩`, with the one-step view
+`term::vec_items_unfold` (its head pair, with the tail the same array one
+element further on) as the single adequacy owner, read by the projections,
+the evaluator, and the full chain (`vec_items_chain`) alike. Its typing rule
+is the chain's premises — `T` a type at `ℓ` and every live item a `T` — and
+returns `Vec^ℓ(T; n)`. What it buys is depth, not speed: a chain is as deep as
+the literal is long, and every syntax-directed walk (typing, substitution,
+`bounds`, hashing, the image writer, `Drop`) recursed once per element, so a
+string literal of a couple of thousand characters overflowed the checker's
+native stack. The node is one level deep at any length and each walk loops
+over the array. `from` makes the tail O(1); equality, the Merkle hash and the
+image encoding read only the live window, so two nodes with the same live
+elements are the same term. Like `VecLit` it is a compact spelling, refused
+under `box` and in layer v and written out as its chain at the quote boundary
+and by the exporter. The elaborator emits it for a vector literal of more than
+256 elements (`VEC_ITEMS_ABOVE`, `check_vec_lit`), and a collection literal
+over one builds only a 64-element constructor spine (`LONG_SPINE`) with the
+fold over the node behind it, so the term the gate sees stays shallow too.
+What remains linear in depth is *comparing* two long vectors by value: the
+conversion's Σ rule recurses on the tail natively and meets the depth budget
+(`issues/long-vector-conversion-depth.md`).
+
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
 theorem's `u`-cases redo under that split — see

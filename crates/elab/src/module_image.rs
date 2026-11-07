@@ -33,7 +33,7 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x1f";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x20";
 const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1c";
 
 /// The two encodings' versions, image then interface: what a module cache
@@ -1087,6 +1087,14 @@ fn put_term_node(w: &mut Writer, term: &Term) {
         Term::VecLit { level, elem, zero, one, width, bits } => {
             w.byte(70); put_level(w, level); put_type(w, elem); put_term(w, zero); put_term(w, one); w.u32(*width); w.u64(*bits);
         }
+        // A vector-items node: its live elements, written from the start.
+        Term::VecItems { level, elem, items, from } => {
+            let live = items.get(*from as usize..).unwrap_or(&[]);
+            w.byte(71); put_level(w, level); put_type(w, elem); w.len(live.len());
+            for item in live {
+                put_term(w, item);
+            }
+        }
     }
 }
 
@@ -1165,6 +1173,15 @@ fn get_term_node(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
             let (level, elem, zero, one) = (get_level(r)?, type_rc(r)?, term_rc(r)?, term_rc(r)?);
             let (width, bits) = (r.u32()?, r.u64()?);
             Term::VecLit { level, elem, zero, one, width, bits }
+        }
+        71 => {
+            let (level, elem) = (get_level(r)?, type_rc(r)?);
+            let n = r.len()?;
+            let items = (0..n).map(|_| term_rc(r)).collect::<Result<Vec<_>, _>>()?;
+            if items.is_empty() {
+                return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag: 71 });
+            }
+            Term::VecItems { level, elem, items: items.into(), from: 0 }
         }
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "term", tag }),
     }))

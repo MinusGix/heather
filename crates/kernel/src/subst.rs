@@ -946,6 +946,18 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             width: *width,
             bits: *bits,
         },
+        // The live elements, mapped in a loop; an unchanged array is kept.
+        Term::VecItems { level, elem, items, from } => {
+            let live = items.get(*from as usize..).unwrap_or(&[]);
+            let mapped: Vec<Rc<Term>> = live.iter().map(|item| sub_tm(item, m, at)).collect();
+            let same = mapped.iter().zip(live).all(|(a, b)| Rc::ptr_eq(a, b));
+            Term::VecItems {
+                level: m.level(level, at),
+                elem: sub_ty(elem, m, at),
+                items: if same { Rc::clone(items) } else { mapped.into() },
+                from: if same { *from } else { 0 },
+            }
+        }
         Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => Term::Fst {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -2666,6 +2678,16 @@ impl Mapper for RebuildChecked<'_> {
             let elem = sub_ty(elem, self, at);
             let (zero, one) = (sub_tm(zero, self, at), sub_tm(one, self, at));
             return Some(crate::term::vec_lit_chain(level, &elem, &zero, &one, *width, *bits));
+        }
+        // Likewise an items node (`term::vec_items_chain`): the chain is as
+        // deep as the literal is long, which a reader of components asks for.
+        if let Term::VecItems { level, elem, items, from } = &**t {
+            let live = crate::term::vec_items_live(items, *from)?;
+            self.seen += 1;
+            self.replaced += 1;
+            let elem = sub_ty(elem, self, at);
+            let live: Vec<Rc<Term>> = live.iter().map(|item| sub_tm(item, self, at)).collect();
+            return Some(crate::term::vec_items_chain(level, &elem, &live));
         }
         if !matches!(
             &**t,

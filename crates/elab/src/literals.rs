@@ -577,6 +577,10 @@ impl Elaborator {
     }
 }
 
+/// How many elements of a long literal's spine
+/// [`Elaborator::collection_literal_spine`] builds out.
+const LONG_SPINE: usize = 64;
+
 /// One constructor value of a collection literal's spine, opened: the node
 /// with its label's element projections contracted, its children still to
 /// build, and the ones built so far.
@@ -606,9 +610,17 @@ impl Elaborator {
     /// per element) bounds the walk for a container whose literal is not a
     /// spine, so the result is always the same value, at worst less built.
     ///
-    /// Iterative, since a spine is as deep as the literal is long.
+    /// Iterative, since a spine is as deep as the literal is long. Which is
+    /// also why a *long* literal (one whose vector is a
+    /// [`Term::VecItems`], past [`crate::expr::VEC_ITEMS_ABOVE`]) gets only
+    /// a [`LONG_SPINE`]-element head: the result is a term, and a spine as
+    /// long as the literal is a term as deep as it, which every syntax walk
+    /// after this one recursed through
+    /// (issues/long-string-literal-stack-overflow.md). The rest stays the
+    /// fold over the vector, which the kernel unfolds on demand.
     pub(crate) fn collection_literal_spine(&self, cx: &Cx, value: Term, len: usize) -> Term {
-        let mut budget = 4 * (len + 1);
+        let spined = if len > crate::expr::VEC_ITEMS_ABOVE { LONG_SPINE } else { len };
+        let mut budget = 4 * (spined + 1);
         let mut stack: Vec<SpineFrame> = Vec::new();
         let mut next = Rc::new(value);
         loop {
@@ -742,6 +754,14 @@ fn contracted(t: &Rc<Term>) -> Rc<Term> {
 fn projected(t: &Term) -> Option<Rc<Term>> {
     let (first, inner) = crate::spelling::proj_of(t)?;
     let inner = projected(inner).unwrap_or_else(|| Rc::clone(inner));
+    // A long literal's vector is one items node: read through its one-step
+    // view, so the tail comes back as the node one element further on.
+    if let Term::VecItems { level, elem, items, from } = &*inner {
+        let Term::Pair { fst, snd, .. } = heather_kernel::term::vec_items_unfold(level, elem, items, *from)? else {
+            unreachable!("a vector-items node unfolds to a pair")
+        };
+        return Some(if first { fst } else { snd });
+    }
     let (fst, snd) = crate::spelling::pair_of(&inner)?;
     Some(Rc::clone(if first { fst } else { snd }))
 }

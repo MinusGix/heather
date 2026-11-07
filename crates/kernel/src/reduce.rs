@@ -839,6 +839,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
             // rule of their own in the recursor's β.
             Term::Pair { fst, .. } | Term::PairAt { fst, .. } => Some((**fst).clone()),
             Term::VecLit { .. } => vec_lit_proj(pair, false),
+            Term::VecItems { .. } => vec_items_proj(pair, false),
             _ => step_scrut(pair, gamma, defs, frames).map(|p| Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -862,6 +863,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
                     Some((**(if second { snd } else { fst })).clone())
                 }
                 Term::VecLit { .. } => vec_lit_proj(pair, second),
+                Term::VecItems { .. } => vec_items_proj(pair, second),
                 // The checked projections carry no annotation at all (design
                 // §2.1), so there is nothing here but the receiver: a
                 // projection on a neutral pair is neutral, and exposing the
@@ -942,6 +944,7 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { snd, .. } | Term::PairAt { snd, .. } => Some((**snd).clone()),
             Term::VecLit { .. } => vec_lit_proj(pair, true),
+            Term::VecItems { .. } => vec_items_proj(pair, true),
             _ => step_scrut(pair, gamma, defs, frames).map(|p| Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -3079,6 +3082,19 @@ fn vec_lit_proj(lit: &Term, second: bool) -> Option<Term> {
     Some((*if second { snd } else { fst }).clone())
 }
 
+/// `fst`/`snd` of a [`Term::VecItems`], through its one-step view
+/// ([`crate::term::vec_items_unfold`]) as [`vec_lit_proj`] is. Out of
+/// range is ill-typed and stuck.
+fn vec_items_proj(node: &Term, second: bool) -> Option<Term> {
+    let Term::VecItems { level, elem, items, from } = node else {
+        unreachable!("vec_items_proj is given a vector-items node")
+    };
+    let Term::Pair { fst, snd, .. } = crate::term::vec_items_unfold(level, elem, items, *from)? else {
+        unreachable!("a vector-items node unfolds to a pair")
+    };
+    Some((*if second { snd } else { fst }).clone())
+}
+
 /// Weak head normal terms `w` (Nf), including neutrals.
 pub fn is_whnf_term(t: &Term) -> bool {
     match t {
@@ -3113,6 +3129,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         // as the forms they spell (docs/intro-by-type-design.md).
         | Term::PairAt { .. }
         | Term::VecLit { .. }
+        | Term::VecItems { .. }
         | Term::InlAt { .. }
         | Term::InrAt { .. }
         | Term::Sup { .. }
