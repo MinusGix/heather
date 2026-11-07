@@ -147,6 +147,20 @@ fn PreservesRelation<A, B>(RA: A → A → Type, RB: B → B → Type,
     Respectful<A, A, B, B>(RA, RB, f, f)
 }
 
+// Every function preserves identity, into any reflexive relation: what a
+// relation rewrite crosses a context by when the argument changed by `=`,
+// as it does where no evidence names another relation for a function out of
+// the carrier (docs/equation-rewrite-design.md §11.6).
+theorem preserves_relid<A, B>(S: B → B → Type, f: A → B, r: Reflexive<B>(S)):
+    PreservesRelation(RelId<A>, S, f)
+{
+    λ x y h => j(h, λ w q => S(f(x), f(w)), r.rel_refl(f(x)))
+}
+
+theorem preserves_relid_relid<A, B>(f: A → B): PreservesRelation(RelId<A>, RelId<B>, f) {
+    λ x y h => j(h, λ w q => f(x) = f(w), refl)
+}
+
 fn Injective<A, B>(f: A → B) → Type {
     (x, y: A) → f(x) = f(y) → x = y
 }
@@ -194,3 +208,13 @@ theorem relation_eq_l<A>(R: A → A → Type,
 theorem relation_eq_r<A>(R: A → A → Type,
     a, b, c: A, first: R(a, b), rest: b = c): R(a, c)
 { j(rest, λ y q => R(a, y), first) }
+
+// The `=` steps as `Trans` dictionaries, for a chain that meets one where
+// it asks for a class (a relation rewrite's side changed by `=`, §11.6).
+fn trans_relid_l<A>(R: A → A → Type) → Trans<A>(RelId<A>, R, R) {
+    Trans(λ x y z first rest => relation_eq_l(R, x, y, z, first, rest))
+}
+
+fn trans_relid_r<A>(R: A → A → Type) → Trans<A>(R, RelId<A>, R) {
+    Trans(λ x y z first rest => relation_eq_r(R, x, y, z, first, rest))
+}

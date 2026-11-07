@@ -77,11 +77,84 @@ theorem two_arguments<A: Equivalence(R)>(R: A → A → Type, k: A → Nat → A
     h: R(x, y), e: R(k(y, n, y), y)): R(k(x, n, x), y)
 { rewrite(h, e) }
 
-// A function out of the carrier leaves it, and with no evidence naming the
-// relation at `Nat` the rewrite is refused (docs/equation-rewrite-design.md §11.4).
-// expect-error: no evidence about it names the relation its result changes by
+// A function out of the carrier leaves it (docs/equation-rewrite-design.md
+// §11.4, §11.6). With nothing naming a relation at `Nat`, its result changes
+// by `=`, and the obligation says what that asks of `size`; `back` then
+// crosses back into `R` by `R`'s reflexivity, as every function preserves `=`.
+// expect-error: ?compatibility : PreservesRelation(R, RelId, size)
 theorem leaves_the_carrier<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, back: Nat → A, x, y, z: A,
     h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
+{ rewrite(h, e) }
+theorem leaves_the_carrier_discharged<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, back: Nat → A, x, y, z: A,
+    supply: (u: A) → PreservesRelation(R, RelId<Nat>, size), h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
+{
+    rewrite(h, e)
+    on ?compatibility := supply(x);
+}
+// A hypothesis in scope names the relation, `=` here or another one.
+theorem hypothesis_names_identity<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, back: Nat → A, x, y, z: A,
+    cs: PreservesRelation(R, RelId<Nat>, size), h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
+{ rewrite(h, e) }
+theorem hypothesis_names_other<A: Equivalence(R)>(R: A → A → Type, S: Nat → Nat → Type, size: A → Nat, back: Nat → A, x, y, z: A,
+    cs: PreservesRelation(R, S, size), cb: PreservesRelation(S, R, back), h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
+{ rewrite(h, e) }
+// The relation a hypothesis names is still owed its way back.
+// expect-error: ?compatibility : PreservesRelation(S, R, back)
+theorem hypothesis_one_way<A: Equivalence(R)>(R: A → A → Type, S: Nat → Nat → Type, size: A → Nat, back: Nat → A, x, y, z: A,
+    cs: PreservesRelation(R, S, size), h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
+{ rewrite(h, e) }
+// A hypothesis about another function names nothing.
+// expect-error: ?compatibility : PreservesRelation(R, RelId, size)
+theorem hypothesis_other_function<A: Equivalence(R)>(R: A → A → Type, S: Nat → Nat → Type, size, other: A → Nat, back: Nat → A, x, y, z: A,
+    cs: PreservesRelation(R, S, other), h: R(x, y), e: R(back(size(y)), z)): R(back(size(x)), z)
+{ rewrite(h, e) }
+// A change by `=` crosses a context in its carrier, and is chained into a
+// goal at `Nat` as an `=` step, on either side.
+theorem identity_through<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, back: Nat → A, x, y, z: A,
+    cs: PreservesRelation(R, RelId<Nat>, size), h: R(x, y), e: R(back(Nat::add(size(y), 1)), z)): R(back(Nat::add(size(x), 1)), z)
+{ rewrite(h, e) }
+theorem identity_goal_left<A: Equivalence(R)>(R: A → A → Type, T: Nat → Nat → Type, size: A → Nat, x, y: A, m: Nat,
+    cs: PreservesRelation(R, RelId<Nat>, size), h: R(x, y), e: T(size(y), m)): T(size(x), m)
+{ rewrite(h, e) }
+theorem identity_goal_right<A: Equivalence(R)>(R: A → A → Type, T: Nat → Nat → Type, size: A → Nat, x, y: A, m: Nat,
+    cs: PreservesRelation(R, RelId<Nat>, size), h: R(x, y), e: T(m, size(y))): T(m, size(x))
+{ rewrite(h, e) }
+// Below binders, whether or not the context mentions them.
+theorem leaving_under_binder<A: Equivalence(R)>(R: A → A → Type, F: (Nat → A) → A, size: A → Nat, back: Nat → Nat → A, x, y, w: A,
+    c: PreservesRelation(Pointwise<Nat, A>(R), R, F), cs: PreservesRelation(R, RelId<Nat>, size), h: R(x, y),
+    e: R(F(λ n => back(n, size(y))), w)): R(F(λ n => back(n, size(x))), w)
+{ rewrite(h, e) }
+
+// Two changed arguments at different relations: `Respects2` over the
+// relation each changed by, the result's named as a context's is.
+theorem binary_mixed<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, op: A → Nat → A, x, y, z: A,
+    cs: PreservesRelation(R, RelId<Nat>, size), c: Respects2<A, Nat, A>(R, RelId<Nat>, R, op), h: R(x, y),
+    e: R(op(y, size(y)), z)): R(op(x, size(x)), z)
+{ rewrite(h, e) }
+// Both by `=`: every operation respects it (`relid_respects2`), and
+// `Nat::add`'s registered instance is found as it is.
+theorem binary_identity<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, g: Nat → Nat → Nat, back: Nat → A, x, y, z: A,
+    cs: PreservesRelation(R, RelId<Nat>, size), h: R(x, y),
+    e: R(back(g(size(y), size(y))), z)): R(back(g(size(x), size(x))), z)
+{ rewrite(h, e) }
+theorem binary_identity_registered<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, back: Nat → A, x, y, z: A,
+    cs: PreservesRelation(R, RelId<Nat>, size), h: R(x, y),
+    e: R(back(Nat::add(size(y), size(y))), z)): R(back(Nat::add(size(x), size(x))), z)
+{ rewrite(h, e) }
+// An operation out of the carrier with both arguments changed by `R`.
+theorem binary_out<A: Equivalence(R)>(R: A → A → Type, d: A → A → Nat, back: Nat → A, x, y, z: A,
+    c: Respects2<A, A, Nat>(R, R, RelId<Nat>, d), h: R(x, y),
+    e: R(back(d(y, y)), z)): R(back(d(x, x)), z)
+{ rewrite(h, e) }
+// expect-error: ?compatibility : Respects2
+theorem binary_out_open<A: Equivalence(R)>(R: A → A → Type, d: A → A → Nat, back: Nat → A, x, y, z: A, h: R(x, y),
+    e: R(back(d(y, y)), z)): R(back(d(x, x)), z)
+{ rewrite(h, e) }
+// Two changed arguments that are not the last two: the refusal names the
+// relation each changed by.
+// expect-error: changes in 2 of its arguments (by `R` and `RelId`)
+theorem two_arguments_two_relations<A: Equivalence(R)>(R: A → A → Type, size: A → Nat, k: A → Nat → Nat → A, x, y, z: A, n: Nat,
+    cs: PreservesRelation(R, RelId<Nat>, size), h: R(x, y), e: R(k(y, size(y), n), z)): R(k(x, size(x), n), z)
 { rewrite(h, e) }
 
 // Under a binder (§10): the body is rewritten below it, the two λs are

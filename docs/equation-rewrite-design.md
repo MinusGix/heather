@@ -716,13 +716,8 @@ it continues from `S`: its parent's congruence takes `S` as the argument's
 relation, a λ above it is related by `Pointwise(S)`, and the goal's side
 chains `S` into the goal's relation at the goal's carrier.
 
-Only unary and pointwise contexts leave the carrier: `Respects2` is over `R`
-alone, so a binary node with a changed argument at another relation takes the
-unary route or is refused. A relation found below binders must not mention
-them. No rule naming a relation is refused with that hint. Still open, in the
-follow-up (`issues/rewrite-setoid-heterogeneous-sources.md`): hypotheses in
-scope as a source of `S`, a fallback to `=` at the target, two changed
-arguments arriving at different relations.
+A relation found below binders must not mention them. More sources of `S`,
+and binary nodes whose arguments arrive at different relations, are §11.6.
 
 ### 11.5 Inside a constructor
 
@@ -770,5 +765,56 @@ fn rewrite_assoc_under_tau<A, B, C>(E: Events, t: CoTree<A>(E), f: A → CoTree<
 position and an indexed declaration, over evidence given as hypotheses;
 `coitree_eutt_tests.hthr` the `Eutt` laws under `CTau`, `CVis` and a
 `bind`'s continuation.
+
+### 11.6 More sources for the result's relation
+
+`issues/rewrite-setoid-heterogeneous-sources.md`, 2026-11-07. §11.4 read `S`
+off evidence rules only, refused a context no rule names, and crossed a
+binary node only when both arguments changed by `R`. Now, for a context
+`C → D` that leaves the carrier, the candidates for `S` are, in order:
+
+1. **Hypotheses in scope**, `p : PreservesRelation(R', S, f)` as written,
+   whose `f` converts to the context. Resolution then finds `p` itself.
+2. **Evidence rules**, as §11.4.
+3. **The rewrite's own `R`**, when `D` is its carrier: a node that left the
+   carrier and comes back (`back(size(x))` with `size : A → Nat`,
+   `back : Nat → A`) is related by `R` again, so its parents continue as if
+   it had never left.
+4. **`RelId<D>`**, when nothing above named a relation, as Rocq's `Proper`
+   search falls back to `eq`. Resolution rarely proves
+   `PreservesRelation(R, RelId<D>, f)` (`f` must be constant on `R`'s
+   classes), so it is usually the obligation, which now says exactly what
+   the step needs instead of refusing; when it is false (`map` from `Eutt` to
+   `=`), the obligation shows that too.
+
+The first that resolves relates the node, and with none the first is the
+obligation. A relation that converts to `RelId` at its carrier is marked as
+such on the node (`Rel::identity`), and every place that would ask a class of
+it uses what `=` has for every function instead:
+
+- **Crossing a context** from an argument changed by `=`: into `=`,
+  `preserves_relid_relid(f)` (`ap`); into any `S` that resolves `Reflexive`,
+  `preserves_relid(S, f, refl)` — a transport (`relation_props`). This is
+  what carries `back(size(x))` back into `R`.
+- **Chaining into the goal**: a side changed by `=` is the `=` step `calc`
+  transports along, given to the chain as the `Trans` dictionaries
+  `trans_relid_l(G)`/`trans_relid_r(G)`; its symmetry is
+  `relid_equivalence`'s.
+
+**Two changed arguments.** A node whose last two arguments both changed,
+not both by `R` or into a result type other than `R`'s carrier, crosses by
+`Respects2<A, B, D>(RA, RB, S, op)` over the relation each changed by — the
+class was always heterogeneous; only the rewrite asked it at `R` alone. `S`'s
+candidates: `RelId<D>` first when both arguments changed by `=` (every
+operation respects it, `algebra_rel::relid_respects2`), then `R` when `D` is
+its carrier, then either argument's relation when `D` is that argument's
+carrier, then `RelId<D>` when none applies; resolved in turn, the first as
+the obligation. Two changed arguments anywhere else are still refused, and
+the refusal now names the relation each changed by when one is not `R`.
+
+`algebra_rel_tests.hthr` probes each source, the `=` crossings and chains on
+both goal sides, a context below binders, the binary cases, and the
+obligations and refusal; `coitree_eutt_tests.hthr` the `=` fallback's false
+obligation for `map`.
 
 [`MParts::kids_lam`]: ../crates/elab/src/codata.rs

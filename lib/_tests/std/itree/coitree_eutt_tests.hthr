@@ -182,7 +182,10 @@ fn rewrite_no_evidence<R>(E: Events, t: CoTree<R>(E)) → Eutt<R>(E, twice(E, CT
     rewrite(Eutt::tau_l, Eutt::refl(E, twice(E, t)))
 }
 fn leave<A, B>(E: Events, t: CoTree<A>(E), f: A → B) → CoTree<B>(E) { CoTree::map(E, t, f) }
-// expect-error: no evidence about it names the relation its result changes by
+// With no evidence naming a relation at its result, the result changes by
+// `=` (§11.6), which `map` does not preserve from `Eutt`: the obligation
+// says so.
+// expect-error: ?compatibility : PreservesRelation(λ (x: CoTree<A>(E)) => λ (y: CoTree<A>(E)) => Eutt<A>(E, x, y), RelId, λ (x: CoTree<A>(E)) => leave(E, x, f))
 fn rewrite_no_named_relation<A, B>(E: Events, t: CoTree<A>(E), f: A → B) → Eutt<B>(E, leave(E, CTau(t), f), leave(E, t, f)) {
     rewrite(Eutt::tau_l, Eutt::refl(E, leave(E, t, f)))
 }
