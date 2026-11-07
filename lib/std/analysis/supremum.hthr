@@ -416,8 +416,7 @@ theorem OrderComplete::below_located(xs: Nat → K, hc: CauchySeq(xs)):
         match K.rel_cotrans(a + q, b + K.inv(q), xs(p.witness), lt) {
             Inl(lo) => Inr(Exists(xs(p.witness) + K.inv(q), And(OrderComplete::below_at(xs, q, p.witness, p.proof), linarith(lo)))),
             Inr(hi) => Inl(λ y sy => {
-                let ub = OrderComplete::bound_at(xs, q, p.witness, p.proof);
-                let le: (y <= xs(p.witness) + q) = ub(y, sy);
+                let le: (y <= xs(p.witness) + q) = OrderComplete::bound_at(xs, q, p.witness, p.proof, y, sy);
                 linarith(le, hi)
             }),
         }

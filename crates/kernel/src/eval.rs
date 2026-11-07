@@ -1995,7 +1995,9 @@ impl<'a, 'v> Eval<'a, 'v> {
     }
 
     fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> &'v Val<'v> {
-        let body = self.defs.body_unshifted(var).map(Rc::clone);
+        // An occurrence whose δ does not fit the definition's context is
+        // ill-typed and stays an unglued neutral (`Defs::fits`).
+        let body = self.defs.body_unshifted(var).filter(|_| self.defs.fits(var, subst.terms.len())).map(Rc::clone);
         let unfold = body.map(|body| self.glue(var, &subst, body));
         neutral(self.arena, Head::Global { var, subst }, ElimSpine::empty(), unfold)
     }
@@ -2025,7 +2027,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             return None;
         }
         let Head::Global { var, subst } = &n.head else { return None };
-        if !self.defs.is_sealed(*var) {
+        if !self.defs.is_sealed(*var) || !self.defs.fits(*var, subst.terms.len()) {
             return None;
         }
         let (at, body) = self.defs.sealed_proof_unshifted(*var)?;

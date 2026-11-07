@@ -1171,8 +1171,8 @@ impl matching::ConstantMotiveElab for Elaborator {
 }
 
 impl application::ExplicitArgElab for Elaborator {
-    fn whnf_for_application(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
-        self.whnf(cx, ty, span)
+    fn whnf_for_application(&self, cx: &Cx, ty: &Type, scratch: u32, span: Span) -> R<Type> {
+        self.whnf_in(cx, ty, scratch, span)
     }
 
     fn emits_checked_applications(&self, _cx: &Cx) -> bool {
@@ -11162,6 +11162,51 @@ impl Elaborator {
             .map(Rc::new)
             .map_err(|_| ElabError::Elab {
                 msg: "out of fuel reducing a term".into(),
+                span,
+            })
+    }
+
+    /// [`Self::whnf`] for a type scoped in an application's **scratch
+    /// world** of width `scratch`: `scratch` metavariables at the global
+    /// indices below every committed binding (`application.rs`). At zero it
+    /// is [`Self::whnf`].
+    ///
+    /// The reduction runs in the semantic world extended by `scratch` opaque
+    /// bindings, so every index the type mentions names what it names in
+    /// the scratch world: a committed definition unfolds as itself, and a
+    /// metavariable is a stuck global. The bindings stand in only for their
+    /// indices: δ reads a binding's body and nothing else (`Defs::body`), and
+    /// these have none, so their declared type is never consulted. Reducing
+    /// the type against the committed world instead read every committed
+    /// global `scratch` bindings too deep: δ unfolded some other definition,
+    /// and substituting its body — scoped in that definition's own context —
+    /// by this occurrence's substitution aborted the kernel
+    /// (issues/merged-call-through-upcast-panics.md).
+    ///
+    /// Of the inline respellings only the reference's has a scratch-world
+    /// reading ([`Self::unspell_here_in`]); the sum and `Wf` ones read their
+    /// head at committed indices, so they are not asked here. A probe that
+    /// meets a sum or a `Wf` wanted a `Π` and refuses either way.
+    pub(crate) fn whnf_in(&self, cx: &Cx, ty: &Type, scratch: u32, span: Span) -> R<Type> {
+        if scratch == 0 {
+            return self.whnf(cx, ty, span);
+        }
+        if let Some(inline) = self.unspell_here_in(ty, scratch) {
+            return Ok(inline);
+        }
+        let stand_in = GlobalBinding::Tm {
+            ctx: cx.gamma.clone(),
+            layer: Layer::Prog,
+            ty: Rc::new(Type::Nat),
+            level: Level::Zero,
+            body: None,
+        };
+        let semantic = self.semantic_oracle();
+        let world = semantic.world().extended((0..scratch).map(|_| stand_in.clone()));
+        oracle::SemanticOracle::in_world(world, self.policy.fuel)
+            .whnf_type(&cx.gamma, ty)
+            .map_err(|_| ElabError::Elab {
+                msg: "out of fuel reducing a type".into(),
                 span,
             })
     }

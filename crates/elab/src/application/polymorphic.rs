@@ -37,7 +37,7 @@ impl Elaborator {
             let mut inner = vec![Sol::Unsolved; prefix];
             let mut doms = Vec::with_capacity(prefix);
             for slot in 0..k {
-                let Type::Pi { dom, cod, cod_level, .. } = self.whnf(cx, &ty, argument.span)? else {
+                let Type::Pi { dom, cod, cod_level, .. } = self.whnf_in(cx, &ty, k, argument.span)? else {
                     return Ok(None);
                 };
                 doms.push((*dom).clone());

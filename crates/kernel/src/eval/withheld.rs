@@ -69,6 +69,9 @@ impl<'a, 'v> Eval<'a, 'v> {
         if !self.closed(work) {
             return None;
         }
+        if !self.defs.fits(*var, subst.terms.len()) {
+            return None;
+        }
         let body = std::sync::Arc::clone(self.defs.withheld_body_unshifted(*var)?);
         crate::withheld::note(self.defs, *var);
         let mut unfold = self.glue(*var, subst, body);
