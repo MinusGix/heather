@@ -880,9 +880,8 @@ struct Conv<'v, D: Dom<'v>> {
     /// failed δ-attempt ([`Conv::delta_lazy`]) takes back the ones made
     /// inside it, a refusal at depth zero takes back all. A successful
     /// drain at depth zero with no attempt open makes them all final. (Not
-    /// memoizing them at all was tried: a shared subterm then compares
-    /// once per occurrence, and `creal_tests`' `half_terms` ran out of
-    /// fuel.)
+    /// memoizing them at all would compare a shared subterm once per
+    /// occurrence.)
     provisional: Vec<D::MemoKey>,
     /// δ-attempts open: while any is, a successful drain at depth zero
     /// keeps the provisional log, since the attempt may still fail and take

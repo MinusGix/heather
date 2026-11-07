@@ -162,10 +162,8 @@ care:
   provisional entry's memo hit. The provisional entries are taken back when
   their queue is dropped: a failed δ-attempt takes back those made since
   its mark, a refusal at depth zero takes back all, and a successful drain
-  at depth zero with no attempt open makes them final. Not memoizing them
-  at all was the first version; a shared subterm then compared once per
-  occurrence, and a `refl` over `CReal` sequences in `creal_tests` ran out
-  of fuel. A `false` is always the subtree's own failure and is memoized
+  at depth zero with no attempt open makes them final. (Not memoizing them
+  at all would compare a shared subterm once per occurrence.) A `false` is always the subtree's own failure and is memoized
   as before.
 
 ### 3.5 What it buys
