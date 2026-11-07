@@ -29,8 +29,10 @@
 //   point of `I` with `|f(x)| <= ε`. Cotransitivity at each point of the walk
 //   says `-ε < f(x)` (then `|f(x)| <= ε`, since the walk keeps `f(x) <= ε/2`)
 //   or `f(x) < -ε/2`, and then the next point has `f <= 0`; the walk cannot
-//   reach `b` this way, since `f(b) >= 0`. No completeness is spent. An exact
-//   root needs more than continuity constructively (the note's §5).
+//   reach `b` this way, since `f(b) >= 0`. No completeness is spent.
+// - `UnifContOn::ivt_nonconst`: an exact root, in a `CauchyComplete` field,
+//   for a locally non-constant `f` (`LocallyNonconstOn`), by a bisection;
+//   `UnifContOn::ivt` is its strictly increasing case.
 
 import logic;
 import nat;
@@ -326,43 +328,57 @@ theorem UnifContOn::ivt_approx(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(�
 }
 
 // ---------------------------------------------------------------------------
-// The exact intermediate value theorem, for a strictly increasing function.
+// The exact intermediate value theorem, for a locally non-constant function.
+//
+// `f` is locally non-constant on a domain when every `x < y` there and
+// every value `c` have a point `z` of `[x, y]` with `f(z)` apart from `c`.
+// It is what an exact root needs constructively beyond continuity: a
+// strictly increasing function is locally non-constant (cotransitivity at
+// `c` between `f(x) < f(y)`), and so is a polynomial that is not constant
+// (a finite difference of its degree is a nonzero constant), but a function
+// that may linger at `0` is not.
 //
 // A bisection like supremum.hthr's: stage `n` is `[l, r]` inside `[a, b]`
-// with `f(l) <= 0 <= f(r)`, `l < r` and width `cⁿ·w`. One step cuts at
-// `l + d < r - d` with `d = t·(r - l)`; `f` is strictly increasing, so
-// `f(l + d) < f(r - d)`, and cotransitivity places `0` against them: keep
-// `[l + d, r]` when `f(l + d) < 0`, `[l, r - d]` when `0 < f(r - d)`. No
-// nesting is needed: any stage's lower end is below any stage's upper end,
-// since `f(r') < f(l)` would put `f(l) <= 0 <= f(r')` out of order.
+// with `f(l) <= 0 <= f(r)`, `l < r` and width at most `cⁿ·w`. One step asks
+// for a `z` in the middle `[l + d, r - d]` (`d = t·(r - l)`) with `f(z)` apart
+// from `0`, and keeps `[z, r]` when `f(z) < 0`, `[l, z]` when `0 < f(z)`;
+// either way the width falls by `1 - t`. Each stage lies inside the last
+// (`RootStage::nested`), so all lower ends past `N` lie in stage `N`, whose
+// width bounds their distances.
 
 // Strictly increasing on a domain.
 fn StrictMonoOn(D: K → Type, f: K → K) → Type { (x, y: K) → D(x) → D(y) → x < y → f(x) < f(y) }
 
+// Locally non-constant on a domain.
+fn LocallyNonconstOn(D: K → Type, f: K → K) → Type {
+    (x, y, c: K) → D(x) → D(y) → x < y → ∃ z: K, Within(<=, x, z, y) ∧ (f(z) < c ∨ c < f(z))
+}
+
+// A strictly increasing function is locally non-constant: cotransitivity
+// places `c` against `f(x) < f(y)`.
+theorem StrictMonoOn::nonconst(D: K → Type, f: K → K, inc: StrictMonoOn(D, f)): LocallyNonconstOn(D, f) {
+    λ x y c dx dy xy => {
+        let le: (x <= y) = StrictOrder::le_of_lt(x, y, xy);
+        match K.rel_cotrans(f(x), f(y), c, inc(x, y, dx, dy, xy)) {
+            Inl(below) => Exists(x, And(And(StrictOrder::le_refl(x), le), Inl(below))),
+            Inr(above) => Exists(y, And(And(le, StrictOrder::le_refl(y)), Inr(above))),
+        }
+    }
+}
+
 // Stage `n` of the root bisection at rate `c` from width `w`.
 fn RootStage(a, b: K, f: K → K, c, w: K, n: Nat, l, r: K) → Type {
     (Within(<=, a, l, b) ∧ Within(<=, a, r, b)) ∧
-        ((f(l) <= K.unit ∧ K.unit <= f(r)) ∧ (l < r ∧ r + K.inv(l) ≈ OrderedField::npow(c, n) * w))
+        ((f(l) <= K.unit ∧ K.unit <= f(r)) ∧ (l < r ∧ r + K.inv(l) <= OrderedField::npow(c, n) * w))
 }
 
-// Any stage's lower end is below any stage's upper end.
-theorem RootStage::le(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), c, w: K, m, n: Nat, l, r, l2, r2: K,
-    hm: RootStage(a, b, f, c, w, m, l, r), hn: RootStage(a, b, f, c, w, n, l2, r2)): l <= r2
+// The cut points of a stage: `l + d < r - d`, both in `[a, b]`, with
+// `d = t·(r - l)`.
+theorem RootStage::cut(a, b: K, f: K → K, t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r: K,
+    h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r)):
+    Within(<=, a, l + t * (r + K.inv(l)), b) ∧ (Within(<=, a, r + K.inv(t * (r + K.inv(l))), b) ∧
+        l + t * (r + K.inv(l)) < r + K.inv(t * (r + K.inv(l))))
 {
-    K.le_of_not_lt(l, r2, λ back => {
-        let lt: (f(r2) < f(l)) = inc(r2, l, hn.left.right, hm.left.left, back);
-        let fl: (f(l) <= K.unit) = hm.right.left.left;
-        let fr: (K.unit <= f(r2)) = hn.right.left.right;
-        K.lt_irrefl(f(l), linarith(lt, fl, fr))
-    })
-}
-
-// One step: either way the width falls by `1 - t`.
-theorem RootStage::step(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
-    ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r: K, h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r)):
-    ∃ l2: K, ∃ r2: K, RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Succ(n), l2, r2)
-{
-    let c = K.multiplicative.unit + K.inv(t);
     let d = t * (r + K.inv(l));
     let dl: Within(<=, a, l, b) = h.left.left;
     let dr: Within(<=, a, r, b) = h.left.right;
@@ -375,46 +391,140 @@ theorem RootStage::step(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => With
     let gap: (K.unit < (r + K.inv(l)) * (K.multiplicative.unit + K.inv(t + t))) =
         OrderedSemiring::mul_pos(r + K.inv(l), K.multiplicative.unit + K.inv(t + t), pw, p2);
     let lt: (l + d < r + K.inv(d)) = linarith(gap);
-    let dl2: Within(<=, a, l + d, b) = And(linarith(al, pd), linarith(lt, pd, rb));
-    let dr2: Within(<=, a, r + K.inv(d), b) = And(linarith(al, lt, pd), linarith(rb, pd));
-    let hw: (r + K.inv(l) ≈ OrderedField::npow(c, n) * w) = h.right.right.right;
-    let hwc: ((r + K.inv(l)) * c ≈ (OrderedField::npow(c, n) * w) * c) =
-        OrderedSemiring::mul_respects(r + K.inv(l), OrderedField::npow(c, n) * w, c, c, hw, K.rel_refl(c));
+    And(And(linarith(al, pd), linarith(lt, pd, rb)), And(And(linarith(al, lt, pd), linarith(rb, pd)), lt))
+}
+
+// The width after a cut at `z` in `[l + d, r - d]`: either side is at most
+// `(r - l)·(1 - t)`.
+theorem RootStage::cut_width(t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r, z: K,
+    hw: r + K.inv(l) <= OrderedField::npow(K.multiplicative.unit + K.inv(t), n) * w,
+    zl: l + t * (r + K.inv(l)) <= z, zr: z <= r + K.inv(t * (r + K.inv(l)))):
+    r + K.inv(z) <= OrderedField::npow(K.multiplicative.unit + K.inv(t), Succ(n)) * w ∧
+        z + K.inv(l) <= OrderedField::npow(K.multiplicative.unit + K.inv(t), Succ(n)) * w
+{
+    let c = K.multiplicative.unit + K.inv(t);
+    let hc0: (K.unit <= c) = linarith(ht2, ht);
+    let hwc: ((r + K.inv(l)) * c <= (OrderedField::npow(c, n) * w) * c) =
+        OrderedSemiring::mul_le_mono_r(r + K.inv(l), OrderedField::npow(c, n) * w, c, hw, hc0);
     let ps: (OrderedField::npow(c, Succ(n)) * w ≈ (OrderedField::npow(c, n) * c) * w) =
         OrderedSemiring::mul_respects(OrderedField::npow(c, Succ(n)), OrderedField::npow(c, n) * c, w, w, OrderedField::npow_succ(c, n), K.rel_refl(w));
-    match K.rel_cotrans(f(l + d), f(r + K.inv(d)), K.unit, inc(l + d, r + K.inv(d), dl2, dr2, lt)) {
-        Inl(neg) => {
-            let fl: (f(l + d) <= K.unit) = linarith(neg);
-            let width: (r + K.inv(l + d) ≈ OrderedField::npow(c, Succ(n)) * w) = ring(hwc, ps);
-            Exists(l + d, Exists(r, And(And(dl2, dr), And(And(fl, h.right.left.right), And(linarith(lt, pd), width)))))
-        },
-        Inr(pos) => {
-            let fr: (K.unit <= f(r + K.inv(d))) = linarith(pos);
-            let width: ((r + K.inv(d)) + K.inv(l) ≈ OrderedField::npow(c, Succ(n)) * w) = ring(hwc, ps);
-            Exists(l, Exists(r + K.inv(d), And(And(dl, dr2), And(And(h.right.left.left, fr), And(linarith(lt, pd), width)))))
-        },
+    let ps2: ((OrderedField::npow(c, n) * w) * c ≈ (OrderedField::npow(c, n) * c) * w) = ring;
+    let e1: (r + K.inv(l + t * (r + K.inv(l))) ≈ (r + K.inv(l)) * c) = ring;
+    let e2: ((r + K.inv(t * (r + K.inv(l)))) + K.inv(l) ≈ (r + K.inv(l)) * c) = ring;
+    And(linarith(zl, e1, hwc, ps, ps2), linarith(zr, e2, hwc, ps, ps2))
+}
+
+// Keeping `[z, r]` where `f(z) < 0`.
+theorem RootStage::keep_right(a, b: K, f: K → K, t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r, z: K,
+    h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r),
+    zin: Within(<=, l + t * (r + K.inv(l)), z, r + K.inv(t * (r + K.inv(l)))), neg: f(z) < K.unit):
+    RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Succ(n), z, r) ∧ (l <= z ∧ r <= r)
+{
+    let lr: (l < r) = h.right.right.left;
+    let pd: (K.unit < t * (r + K.inv(l))) = OrderedSemiring::mul_pos(t, r + K.inv(l), ht, linarith(lr));
+    let dl: Within(<=, a, l, b) = h.left.left;
+    let dr: Within(<=, a, r, b) = h.left.right;
+    let zl: (l + t * (r + K.inv(l)) <= z) = zin.left;
+    let zr: (z <= r + K.inv(t * (r + K.inv(l)))) = zin.right;
+    let dz: Within(<=, a, z, b) = And(linarith(dl, pd, zl), linarith(zr, pd, dr));
+    let wd = RootStage::cut_width(t, ht, ht2, w, n, l, r, z, h.right.right.right, zl, zr);
+    let fz: (f(z) <= K.unit) = linarith(neg);
+    And(And(And(dz, dr), And(And(fz, h.right.left.right), And(linarith(zr, pd), wd.left))),
+        And(linarith(zl, pd), StrictOrder::le_refl(r)))
+}
+
+// Keeping `[l, z]` where `0 < f(z)`.
+theorem RootStage::keep_left(a, b: K, f: K → K, t: K, ht: K.unit < t, ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r, z: K,
+    h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r),
+    zin: Within(<=, l + t * (r + K.inv(l)), z, r + K.inv(t * (r + K.inv(l)))), pos: K.unit < f(z)):
+    RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Succ(n), l, z) ∧ (l <= l ∧ z <= r)
+{
+    let lr: (l < r) = h.right.right.left;
+    let pd: (K.unit < t * (r + K.inv(l))) = OrderedSemiring::mul_pos(t, r + K.inv(l), ht, linarith(lr));
+    let dl: Within(<=, a, l, b) = h.left.left;
+    let dr: Within(<=, a, r, b) = h.left.right;
+    let zl: (l + t * (r + K.inv(l)) <= z) = zin.left;
+    let zr: (z <= r + K.inv(t * (r + K.inv(l)))) = zin.right;
+    let dz: Within(<=, a, z, b) = And(linarith(dl, pd, zl), linarith(zr, pd, dr));
+    let wd = RootStage::cut_width(t, ht, ht2, w, n, l, r, z, h.right.right.right, zl, zr);
+    let fz: (K.unit <= f(z)) = linarith(pos);
+    And(And(And(dl, dz), And(And(h.right.left.left, fz), And(linarith(zl, pd), wd.right))),
+        And(StrictOrder::le_refl(l), linarith(zr, pd)))
+}
+
+// One step, inside the last: local non-constancy gives a `z` in the middle
+// with `f(z)` apart from `0`, and its sign picks the side. A `fn` whose body
+// is only that choice, so that unfolding a stage reads no proof.
+fn RootStage::step(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w: K, n: Nat, l, r: K, h: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r)) →
+    ∃ l2: K, ∃ r2: K, RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Succ(n), l2, r2) ∧ (l <= l2 ∧ r2 <= r)
+{
+    let cut = RootStage::cut(a, b, f, t, ht, ht2, w, n, l, r, h);
+    let found = nc(l + t * (r + K.inv(l)), r + K.inv(t * (r + K.inv(l))), K.unit, cut.left, cut.right.left, cut.right.right);
+    match found.proof.right {
+        Inl(neg) => Exists(found.witness, Exists(r, RootStage::keep_right(a, b, f, t, ht, ht2, w, n, l, r, found.witness, h, found.proof.left, neg))),
+        Inr(pos) => Exists(l, Exists(found.witness, RootStage::keep_left(a, b, f, t, ht, ht2, w, n, l, r, found.witness, h, found.proof.left, pos))),
     }
 }
 
-// The stages, by recursion over the cotransitivity disjunction.
-fn RootStage::run(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+// The stages, by recursion over the steps.
+fn RootStage::run(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
     ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0), n: Nat) →
     ∃ l: K, ∃ r: K, RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, n, l, r)
 {
     match n {
         Zero => Exists(l0, Exists(r0, h0)),
         Succ(m) => {
-            let p = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, m);
-            RootStage::step(a, b, f, inc, t, ht, ht2, w, m, p.witness, p.proof.witness, p.proof.proof)
+            let p = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m);
+            let s = RootStage::step(a, b, f, nc, t, ht, ht2, w, m, p.witness, p.proof.witness, p.proof.proof);
+            Exists(s.witness, Exists(s.proof.witness, s.proof.proof.left))
         },
     }
 }
 
+// Stage `m + k` lies inside stage `m`.
+theorem RootStage::nested_add(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0),
+    m, k: Nat):
+    RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m).witness <= RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m.add(k)).witness ∧
+        RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m.add(k)).proof.witness <= RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m).proof.witness
+{
+    match k {
+        Zero => {
+            let p = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m);
+            And(StrictOrder::le_refl(p.witness), StrictOrder::le_refl(p.proof.witness))
+        },
+        Succ(j) => {
+            let ih = RootStage::nested_add(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m, j);
+            let p = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m.add(j));
+            let s = RootStage::step(a, b, f, nc, t, ht, ht2, w, m.add(j), p.witness, p.proof.witness, p.proof.proof);
+            let q = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m);
+            let l1: (q.witness <= p.witness) = ih.left;
+            let r1: (p.proof.witness <= q.proof.witness) = ih.right;
+            let l2: (p.witness <= s.witness) = s.proof.proof.right.left;
+            let r2: (s.proof.witness <= p.proof.witness) = s.proof.proof.right.right;
+            And(PseudoOrder::le_trans(q.witness, p.witness, s.witness, l1, l2),
+                PseudoOrder::le_trans(s.proof.witness, p.proof.witness, q.proof.witness, r2, r1))
+        },
+    }
+}
+
+// Every stage past `m` lies inside stage `m`.
+theorem RootStage::nested(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+    ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0),
+    m, n: Nat, h: Nat::Le(m, n)):
+    RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m).witness <= RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, n).witness ∧
+        RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, n).proof.witness <= RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m).proof.witness
+{
+    let at = RootStage::nested_add(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m, n.sub(m));
+    rewrite(sym(m.le_add(n, h)), at)
+}
+
 // The stages' lower ends, which converge to the root.
-fn RootStage::lower(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+fn RootStage::lower(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
     ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0)) → Nat → K
 {
-    λ (n: Nat) => RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n).witness
+    λ (n: Nat) => RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, n).witness
 }
 
 // A stage past `N` is narrower than `ε` once `cᴺ <= e2` with `w·e2 <= ε`.
@@ -425,29 +535,22 @@ theorem RootStage::width_close(a, b: K, f: K → K, c, w: K, hc0: K.unit <= c, h
     let cn = OrderedField::npow(c, n);
     let at: (cn <= OrderedField::npow(c, N)) = OrderedField::npow_antitone(c, hc0, hc1, N, n, from);
     let m: (cn * w <= e2 * w) = OrderedSemiring::mul_le_mono_r(cn, e2, w, PseudoOrder::le_trans(cn, OrderedField::npow(c, N), e2, at, le), pw);
-    let hw: (r + K.inv(l) ≈ cn * w) = hn.right.right.right;
+    let hw: (r + K.inv(l) <= cn * w) = hn.right.right.right;
     linarith(m, hw, sb)
 }
 
-// Two lower ends past `N` are within `ε`: each is below the other's upper
-// end, which is within `ε` of it.
-theorem RootStage::cauchy_close(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), c, w: K,
-    hc0: K.unit <= c, hc1: c <= K.multiplicative.unit, pw: K.unit <= w, e, e2: K, sb: w * e2 <= e, N: Nat,
-    le: OrderedField::npow(c, N) <= e2, m, n: Nat, fm: Nat::Le(N, m), fk: Nat::Le(N, n), l, r, l2, r2: K,
-    hm: RootStage(a, b, f, c, w, m, l, r), hn: RootStage(a, b, f, c, w, n, l2, r2)): AbsLe(l + K.inv(l2), e)
+// Two points of a stage narrower than `ε` are within `ε`.
+theorem RootStage::cauchy_close(lN, rN, x, y, e: K, wN: rN + K.inv(lN) <= e, lx: lN <= x, xr: x <= rN, ly: lN <= y, yr: y <= rN):
+    AbsLe(x + K.inv(y), e)
 {
-    let wm: (r + K.inv(l) <= e) = RootStage::width_close(a, b, f, c, w, hc0, hc1, pw, e, e2, sb, N, le, m, fm, l, r, hm);
-    let wn: (r2 + K.inv(l2) <= e) = RootStage::width_close(a, b, f, c, w, hc0, hc1, pw, e, e2, sb, N, le, n, fk, l2, r2, hn);
-    let l1: (l <= r2) = RootStage::le(a, b, f, inc, c, w, m, n, l, r, l2, r2, hm, hn);
-    let l2r: (l2 <= r) = RootStage::le(a, b, f, inc, c, w, n, m, l2, r2, l, r, hn, hm);
-    LocatedAddGroup::abs_le_intro(l + K.inv(l2), e, linarith(wm, l2r), linarith(wn, l1))
+    LocatedAddGroup::abs_le_intro(x + K.inv(y), e, linarith(wN, lx, yr), linarith(wN, ly, xr))
 }
 
 // The lower ends are Cauchy, with the widths' modulus.
-theorem RootStage::cauchy(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+theorem RootStage::cauchy(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
     ht2: t + t < K.multiplicative.unit, w: K, pw: K.unit <= w, l0, r0: K,
     h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0)):
-    CauchySeq(RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0))
+    CauchySeq(RootStage::lower(a, b, f, nc, t, ht, ht2, w, l0, r0, h0))
 {
     let c = K.multiplicative.unit + K.inv(t);
     let hc0: (K.unit <= c) = linarith(ht2, ht);
@@ -456,29 +559,39 @@ theorem RootStage::cauchy(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Wi
     λ e pe => {
         let sh = OrderedField::shrink(w, e, pw, pe);
         let small = OrderedField::npow_small(c, hc0, hc1, sh.witness, sh.proof.left);
-        Exists(small.witness, λ m n fm fk => {
-            let pm = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, m);
-            let pn = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n);
-            RootStage::cauchy_close(a, b, f, inc, c, w, hc0, hc1le, pw, e, sh.witness, sh.proof.right, small.witness,
-                small.proof(small.witness, small.witness.le_refl()), m, n, fm, fk,
-                pm.witness, pm.proof.witness, pn.witness, pn.proof.witness, pm.proof.proof, pn.proof.proof)
+        let N = small.witness;
+        Exists(N, λ m n fm fk => {
+            let pN = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, N);
+            let pm = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, m);
+            let pn = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, n);
+            let wN: (pN.proof.witness + K.inv(pN.witness) <= e) = RootStage::width_close(a, b, f, c, w, hc0, hc1le, pw, e, sh.witness,
+                sh.proof.right, N, small.proof(N, N.le_refl()), N, N.le_refl(), pN.witness, pN.proof.witness, pN.proof.proof);
+            let nm = RootStage::nested(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, N, m, fm);
+            let nn = RootStage::nested(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, N, n, fk);
+            let lm: (pN.witness <= pm.witness) = nm.left;
+            let rm: (pm.proof.witness <= pN.proof.witness) = nm.right;
+            let ln: (pN.witness <= pn.witness) = nn.left;
+            let rn: (pn.proof.witness <= pN.proof.witness) = nn.right;
+            let im: (pm.witness < pm.proof.witness) = pm.proof.proof.right.right.left;
+            let in: (pn.witness < pn.proof.witness) = pn.proof.proof.right.right.left;
+            RootStage::cauchy_close(pN.witness, pN.proof.witness, pm.witness, pn.witness, e, wN, lm, linarith(im, rm), ln, linarith(in, rn))
         })
     }
 }
 
 // A limit of the lower ends is in `[a, b]`: every lower end is.
-theorem RootStage::limit_within(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
+theorem RootStage::limit_within(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
     ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0), z: K,
-    conv: Converges(RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0), z)): Within(<=, a, z, b)
+    conv: Converges(RootStage::lower(a, b, f, nc, t, ht, ht2, w, l0, r0, h0), z)): Within(<=, a, z, b)
 {
-    let lo = RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0);
+    let lo = RootStage::lower(a, b, f, nc, t, ht, ht2, w, l0, r0, h0);
     And(Converges::le(λ (n: Nat) => a, lo, a, z, Converges::const(a), conv, λ n => {
-            let st = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n);
+            let st = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, n);
             let dl: Within(<=, a, st.witness, b) = st.proof.proof.left.left;
             dl.left
         }),
         Converges::le(lo, λ (n: Nat) => b, z, b, conv, Converges::const(b), λ n => {
-            let st = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n);
+            let st = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, n);
             let dl: Within(<=, a, st.witness, b) = st.proof.proof.left.left;
             dl.right
         }))
@@ -486,16 +599,16 @@ theorem RootStage::limit_within(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K)
 
 // At a limit `z` of the lower ends, `f(z) <= 0`: within the modulus at
 // `ε` of a lower end, where `f <= 0`, `f(z) <= ε`.
-theorem RootStage::limit_nonpos(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f),
+theorem RootStage::limit_nonpos(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f),
     hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
     ht2: t + t < K.multiplicative.unit, w, l0, r0: K, h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0), z: K,
-    conv: Converges(RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0), z), dz: Within(<=, a, z, b)): f(z) <= K.unit
+    conv: Converges(RootStage::lower(a, b, f, nc, t, ht, ht2, w, l0, r0, h0), z), dz: Within(<=, a, z, b)): f(z) <= K.unit
 {
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
     OrderedField::le_of_forall_pos(f(z), K.unit, K.multiplicative.unit, StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o), λ e pe => {
         let mo = hf(e, pe);
         let p = conv(mo.witness, mo.proof.left);
-        let st = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, p.witness);
+        let st = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, p.witness);
         let near: AbsLe(st.witness + K.inv(z), mo.witness) = p.proof(p.witness, p.witness.le_refl());
         let r = mo.proof.right(st.witness, z, st.proof.proof.left.left, dz, linarith(near));
         let up: (f(z) + K.inv(f(st.witness)) <= e) = r.right;
@@ -522,11 +635,11 @@ theorem RootStage::nonneg_close(a, b: K, f: K → K, c, w, e, d, h: K, hh: h + h
 
 // At a limit `z` of the lower ends, `0 <= f(z)`: a late stage's upper end,
 // where `f >= 0`, is within the modulus at `ε` of `z`.
-theorem RootStage::limit_nonneg(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f),
+theorem RootStage::limit_nonneg(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f),
     hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f), t: K, ht: K.unit < t,
     ht2: t + t < K.multiplicative.unit, w: K, pw: K.unit <= w, l0, r0: K,
     h0: RootStage(a, b, f, K.multiplicative.unit + K.inv(t), w, Zero, l0, r0), z: K,
-    conv: Converges(RootStage::lower(a, b, f, inc, t, ht, ht2, w, l0, r0, h0), z), dz: Within(<=, a, z, b)): K.unit <= f(z)
+    conv: Converges(RootStage::lower(a, b, f, nc, t, ht, ht2, w, l0, r0, h0), z), dz: Within(<=, a, z, b)): K.unit <= f(z)
 {
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
     let c = K.multiplicative.unit + K.inv(t);
@@ -542,7 +655,7 @@ theorem RootStage::limit_nonneg(a, b: K, f: K → K, inc: StrictMonoOn(λ (x: K)
         let sh = OrderedField::shrink(w, h, pw, ph);
         let small = OrderedField::npow_small(c, hc0, hc1, sh.witness, sh.proof.left);
         let n = p.witness.max(small.witness);
-        let st = RootStage::run(a, b, f, inc, t, ht, ht2, w, l0, r0, h0, n);
+        let st = RootStage::run(a, b, f, nc, t, ht, ht2, w, l0, r0, h0, n);
         let narrow: (st.proof.witness + K.inv(st.witness) <= h) = RootStage::width_close(a, b, f, c, w, hc0, hc1le, pw, h, sh.witness,
             sh.proof.right, small.witness, small.proof(small.witness, small.witness.le_refl()), n, p.witness.le_max_r(small.witness),
             st.witness, st.proof.witness, st.proof.proof);
@@ -559,7 +672,7 @@ theorem RootStage::start(a, b: K, f: K → K, c: K, ab: a < b, fa: f(a) <= K.uni
     let w = b + K.inv(a);
     let z: (OrderedField::npow(c, Zero) * w ≈ K.multiplicative.unit * w) =
         OrderedSemiring::mul_respects(OrderedField::npow(c, Zero), K.multiplicative.unit, w, w, OrderedField::npow_zero(c), K.rel_refl(w));
-    let w0: (w ≈ OrderedField::npow(c, Zero) * w) = ring(z);
+    let w0: (w <= OrderedField::npow(c, Zero) * w) = StrictOrder::le_of_same(w, OrderedField::npow(c, Zero) * w, ring(z));
     let le: (a <= b) = StrictOrder::le_of_lt(a, b, ab);
     And(And(And(StrictOrder::le_refl(a), le), And(le, StrictOrder::le_refl(b))), And(And(fa, fb), And(ab, w0)))
 }
@@ -590,11 +703,11 @@ theorem UnifContOn::sup(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (x: K
 
 section<K: CauchyComplete(≈, <, <=, +, *)> {
 
-// The intermediate value theorem for a strictly increasing, uniformly
+// The intermediate value theorem for a locally non-constant, uniformly
 // continuous function with `f(a) <= 0 <= f(b)` on `a < b`: a root in
 // `[a, b]`, the limit of the bisection's lower ends.
-theorem UnifContOn::ivt(a, b: K, ab: a < b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f),
-    inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), fa: f(a) <= K.unit, fb: K.unit <= f(b)):
+theorem UnifContOn::ivt_nonconst(a, b: K, ab: a < b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f),
+    nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), fa: f(a) <= K.unit, fb: K.unit <= f(b)):
     ∃ z: K, Within(<=, a, z, b) ∧ f(z) ≈ K.unit
 {
     let q = Bisection::quarter(a);
@@ -603,14 +716,23 @@ theorem UnifContOn::ivt(a, b: K, ab: a < b, f: K → K, hf: UnifContOn(λ (x: K)
     let w = b + K.inv(a);
     let pw: (K.unit <= w) = linarith(ab);
     let h0: RootStage(a, b, f, c, w, Zero, a, b) = RootStage::start(a, b, f, c, ab, fa, fb);
-    let cs = RootStage::cauchy(a, b, f, inc, t, q.proof.left, q.proof.right, w, pw, a, b, h0);
-    let lo = RootStage::lower(a, b, f, inc, t, q.proof.left, q.proof.right, w, a, b, h0);
+    let cs = RootStage::cauchy(a, b, f, nc, t, q.proof.left, q.proof.right, w, pw, a, b, h0);
+    let lo = RootStage::lower(a, b, f, nc, t, q.proof.left, q.proof.right, w, a, b, h0);
     let z = CauchyComplete::limit(lo, cs);
     let conv: Converges(lo, z) = CauchyComplete::converges(lo, cs);
-    let dz: Within(<=, a, z, b) = RootStage::limit_within(a, b, f, inc, t, q.proof.left, q.proof.right, w, a, b, h0, z, conv);
-    let np: (f(z) <= K.unit) = RootStage::limit_nonpos(a, b, f, inc, hf, t, q.proof.left, q.proof.right, w, a, b, h0, z, conv, dz);
-    let nn: (K.unit <= f(z)) = RootStage::limit_nonneg(a, b, f, inc, hf, t, q.proof.left, q.proof.right, w, pw, a, b, h0, z, conv, dz);
+    let dz: Within(<=, a, z, b) = RootStage::limit_within(a, b, f, nc, t, q.proof.left, q.proof.right, w, a, b, h0, z, conv);
+    let np: (f(z) <= K.unit) = RootStage::limit_nonpos(a, b, f, nc, hf, t, q.proof.left, q.proof.right, w, a, b, h0, z, conv, dz);
+    let nn: (K.unit <= f(z)) = RootStage::limit_nonneg(a, b, f, nc, hf, t, q.proof.left, q.proof.right, w, pw, a, b, h0, z, conv, dz);
     Exists(z, And(dz, StrictOrder::le_antisymm(f(z), K.unit, np, nn)))
+}
+
+// For a strictly increasing function.
+theorem UnifContOn::ivt(a, b: K, ab: a < b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f),
+    inc: StrictMonoOn(λ (x: K) => Within(<=, a, x, b), f), fa: f(a) <= K.unit, fb: K.unit <= f(b)):
+    ∃ z: K, Within(<=, a, z, b) ∧ f(z) ≈ K.unit
+{
+    let nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f) = StrictMonoOn::nonconst(λ (x: K) => Within(<=, a, x, b), f, inc);
+    UnifContOn::ivt_nonconst(a, b, ab, f, hf, nc, fa, fb)
 }
 
 }

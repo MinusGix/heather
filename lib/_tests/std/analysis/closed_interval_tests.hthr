@@ -50,6 +50,89 @@ theorem id_sup(a, b: K, ab: a <= b): IsSup(λ (y: K) => ImageOn(λ (x: K) => Wit
     }, λ e pe => Exists(b, And(Exists(b, And(And(ab, StrictOrder::le_refl(b)), K.rel_refl(b))), linarith(pe))))
 }
 
+// A positive sum of four has a positive term: cotransitivity places the
+// last three against `0 < p + q + r + s`.
+theorem pos4(p, q, r, s: K, h: K.unit < p + q + r + s): K.unit < p ∨ (K.unit < q ∨ (K.unit < r ∨ K.unit < s)) {
+    match K.rel_cotrans(K.unit, p + q + r + s, q + r + s, h) {
+        Inr(lt) => Inl(linarith(lt)),
+        Inl(rest) => match K.rel_cotrans(K.unit, q + r + s, r + s, rest) {
+            Inr(lt) => Inr(Inl(linarith(lt))),
+            Inl(rest2) => match K.rel_cotrans(K.unit, r + s, s, rest2) {
+                Inr(lt) => Inr(Inr(Inl(linarith(lt)))),
+                Inl(last) => Inr(Inr(Inr(last))),
+            },
+        },
+    }
+}
+
+// `x³ - x` is locally non-constant, though not monotone: at four points
+// `h` apart its third difference is `6h³ > 0`, so one of them has `f`
+// apart from any `c`.
+theorem cubic_nonconst(D: K → Type): LocallyNonconstOn(D, λ (x: K) => x * x * x + K.inv(x)) {
+    λ x y c dx dy xy => {
+        let g: (K.unit < y + K.inv(x)) = linarith(xy);
+        let q1 = OrderedField::half(y + K.inv(x));
+        let h = OrderedField::half(q1);
+        let pq: (K.unit < q1) = OrderedField::half_pos(y + K.inv(x), g);
+        let ph: (K.unit < h) = OrderedField::half_pos(q1, pq);
+        let hq: (q1 + q1 ≈ y + K.inv(x)) = OrderedField::half_add(y + K.inv(x));
+        let hh: (h + h ≈ q1) = OrderedField::half_add(q1);
+        let z1 = x + h;
+        let z2 = x + h + h;
+        let z3 = x + h + h + h;
+        let p = z3 * z3 * z3 + K.inv(z3) + K.inv(c);
+        let q = (c + K.inv(z2 * z2 * z2 + K.inv(z2))) + (c + K.inv(z2 * z2 * z2 + K.inv(z2))) + (c + K.inv(z2 * z2 * z2 + K.inv(z2)));
+        let r = (z1 * z1 * z1 + K.inv(z1) + K.inv(c)) + (z1 * z1 * z1 + K.inv(z1) + K.inv(c)) + (z1 * z1 * z1 + K.inv(z1) + K.inv(c));
+        let s = c + K.inv(x * x * x + K.inv(x));
+        let h3: (K.unit < h * h * h) = OrderedSemiring::mul_pos(h * h, h, OrderedSemiring::mul_pos(h, h, ph, ph), ph);
+        let diff: (p + q + r + s ≈ h * h * h + h * h * h + h * h * h + h * h * h + h * h * h + h * h * h) = ring;
+        let le: (x <= y) = StrictOrder::le_of_lt(x, y, xy);
+        match pos4(p, q, r, s, linarith(diff, h3)) {
+            Inl(a) => {
+                let v: (c < z3 * z3 * z3 + K.inv(z3)) = linarith(a);
+                Exists(z3, And(And(linarith(ph), linarith(ph, hh, hq)), Inr(v)))
+            },
+            Inr(Inl(b)) => {
+                let v: (z2 * z2 * z2 + K.inv(z2) < c) = linarith(b);
+                Exists(z2, And(And(linarith(ph), linarith(ph, hh, hq)), Inl(v)))
+            },
+            Inr(Inr(Inl(cc))) => {
+                let v: (c < z1 * z1 * z1 + K.inv(z1)) = linarith(cc);
+                Exists(z1, And(And(linarith(ph), linarith(ph, hh, hq)), Inr(v)))
+            },
+            Inr(Inr(Inr(d))) => {
+                let v: (x * x * x + K.inv(x) < c) = linarith(d);
+                Exists(x, And(And(StrictOrder::le_refl(x), le), Inl(v)))
+            },
+        }
+    }
+}
+
+// `x³ - x` on `[-b, b]` is Lipschitz with constant `3b² + 1`:
+// `y³ - y - (x³ - x) = (y² + xy + x² - 1)(y - x)`.
+theorem cubic_lipschitz(b: K, pb: K.unit <= b):
+    LipschitzOn(λ (x: K) => Within(<=, K.inv(b), x, b), λ (x: K) => x * x * x + K.inv(x),
+        b * b + b * b + b * b + K.multiplicative.unit)
+{
+    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+    let sq: (K.unit <= b * b) = OrderedRing::sq_nonneg(b);
+    And(linarith(sq, o), λ x y h dx dy hxy => {
+        let ax: AbsLe(x, b) = linarith(dx);
+        let ay: AbsLe(y, b) = linarith(dy);
+        let one: AbsLe(K.inv(K.multiplicative.unit), K.multiplicative.unit) = linarith(o);
+        let yy = OrderedField::abs_le_mul(y, y, b, b, ay, ay);
+        let xy2 = OrderedField::abs_le_mul(x, y, b, b, ax, ay);
+        let xx = OrderedField::abs_le_mul(x, x, b, b, ax, ax);
+        let poly: AbsLe(y * y + x * y + x * x + K.inv(K.multiplicative.unit), b * b + b * b + b * b + K.multiplicative.unit) =
+            linarith(yy, xy2, xx, one);
+        let m = OrderedField::abs_le_mul(y * y + x * y + x * x + K.inv(K.multiplicative.unit), y + K.inv(x),
+            b * b + b * b + b * b + K.multiplicative.unit, h, poly, hxy);
+        LocatedAddGroup::abs_le_weaken((y * y + x * y + x * x + K.inv(K.multiplicative.unit)) * (y + K.inv(x)),
+            (y * y * y + K.inv(y)) + K.inv(x * x * x + K.inv(x)), (b * b + b * b + b * b + K.multiplicative.unit) * h,
+            (b * b + b * b + b * b + K.multiplicative.unit) * h, m, ring, StrictOrder::le_refl((b * b + b * b + b * b + K.multiplicative.unit) * h))
+    })
+}
+
 }
 
 // `√2` exists at the reals: `x² - 2` changes sign on `[0, 2]`.
@@ -88,4 +171,19 @@ theorem rat_sqrt_two_refused(x: Rat): ∃ z: Rat, Within(<=, 0, z, 2) ∧ z * z 
     let fa: Rat::Le(0 * 0 + -2, 0) = linarith;
     let fb: Rat::Le(0, 2 * 2 + -2) = linarith;
     UnifContOn::ivt(0, 2, linarith, λ (y: Rat) => y * y + -2, sq_cont(2, 2, pb), sq_mono(2, 2), fa, fb)
+}
+
+// A root of `x³ - x` on `[-2, 2]`, found from local non-constancy: the
+// cubic is not monotone there (it has three roots), so the strictly
+// increasing form would not apply.
+theorem creal_cubic_root(x: CReal): ∃ z: CReal, Within(<=, -2, z, 2) ∧ z * z * z + -z ≈ 0 {
+    let pb: CReal::Le(0, 2) = linarith;
+    let fa: CReal::Le(-2 * -2 * -2 + --2, 0) = linarith;
+    let fb: CReal::Le(0, 2 * 2 * 2 + -2) = linarith;
+    let two: CReal = 2;
+    let hf: UnifContOn(λ (y: CReal) => Within(<=, -2, y, 2), λ (y: CReal) => y * y * y + -y) =
+        LipschitzOn::unif_cont(λ (y: CReal) => Within(<=, -2, y, 2), λ (y: CReal) => y * y * y + -y, two * two + two * two + two * two + 1,
+            cubic_lipschitz(two, pb));
+    UnifContOn::ivt_nonconst(-2, 2, linarith, λ (y: CReal) => y * y * y + -y, hf,
+        cubic_nonconst(λ (y: CReal) => Within(<=, -2, y, 2)), fa, fb)
 }

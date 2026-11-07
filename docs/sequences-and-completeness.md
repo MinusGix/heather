@@ -145,10 +145,6 @@ How they connect:
   `l·l ≈ 2` (`Converges::mul`, `Converges::le` against `root_floor_spec`),
   and `num² = 2·den²` has no solution with `den > 0`. That last fact is
   descent over `Nat`, and the parity lemmas are in `nat.hthr`.
-- **The exact intermediate value theorem for a locally non-constant
-  function**, the general constructive form, beside the strictly increasing
-  one §5 proves
-  ([ivt-locally-nonconstant](../issues/ivt-locally-nonconstant.md)).
 - **Series**: partial sums, `Summable`, the geometric series and comparison
   with a tail modulus. These come before
   [power-series-evaluation](../issues/power-series-evaluation.md), and the
@@ -271,28 +267,45 @@ one point at a time, and the covering lemma becomes the `≤` split.
 
 **The exact theorem, and its hypothesis.** An exact root needs more than
 continuity constructively: for a function that lingers at `0` the root
-depends on the sign of an undecided real. The round names *strictly
-increasing* first (`StrictMonoOn(I, f)`: `x < y` gives `f(x) < f(y)`), the
-textbook constructive form, and proves `UnifContOn::ivt` in a
-`CauchyComplete` field for `a < b`. It is a bisection like §4's: stage `n`
-(`RootStage`) is `[l, r] ⊆ [a, b]` with `f(l) <= 0 <= f(r)`, `l < r` and
-width `cⁿ·w`. One step cuts at `l + d < r - d` (`d = t·(r - l)`, `t = 1/4`),
-where `f(l + d) < f(r - d)`, and cotransitivity places `0` between them:
-keep `[l + d, r]` or `[l, r - d]`. Strictness also gives the nesting §4 got
-from its witnesses: `f(r') < f(l)` would put `f(l) <= 0 <= f(r')` out of
-order, so every lower end is below every upper end (`RootStage::le`) and the
-lower ends are Cauchy. Their limit `z` is in `[a, b]`, and continuity at a
-late stage gives `f(z) <= ε` from the lower end and `f(z) >= -ε` from the
-upper one. The probe `creal_sqrt_two` finds `√2` this way; at `Rat` the same
-call is refused for want of the `CauchyComplete` instance
+depends on the sign of an undecided real. The hypothesis is *local
+non-constancy* (`LocallyNonconstOn(I, f)`): every `x < y` in `I` and every
+value `c` have a `z ∈ [x, y]` with `f(z)` apart from `c`. It is the general
+constructive form (Bridges–Richman). A strictly increasing function
+(`StrictMonoOn`) has it, since cotransitivity places `c` against
+`f(x) < f(y)` (`StrictMonoOn::nonconst`), and so does a polynomial that is not
+constant: a finite difference of its degree is a nonzero constant, and a
+positive sum has a positive term. The probe `cubic_nonconst` does this for
+`x³ - x`, whose third difference at step `h` is `6h³`.
+
+`UnifContOn::ivt_nonconst` proves the theorem in a `CauchyComplete` field for
+`a < b` (`UnifContOn::ivt` is its strictly increasing case). It is a
+bisection like §4's. Stage `n` (`RootStage`) is `[l, r] ⊆ [a, b]` with
+`f(l) <= 0 <= f(r)`, `l < r` and width at most `cⁿ·w`. One step asks local
+non-constancy for a `z` in the middle `[l + d, r - d]` (`d = t·(r - l)`,
+`t = 1/4`) with `f(z)` apart from `0`, and keeps `[z, r]` when `f(z) < 0` or
+`[l, z]` when `0 < f(z)`. Either way the width falls by `1 - t`
+(`RootStage::cut_width`), and the new stage lies inside the old. Nothing
+outside the stages orders their ends, so the nesting is proved: stage
+`m + k` inside stage `m` by induction on `k` (`RootStage::nested_add`), and
+`Nat::le_add` turns any `N <= n` into that shape (`RootStage::nested`).
+Every lower end past `N` then lies in stage `N`, whose width bounds their
+distances, so the lower ends are Cauchy. Their limit `z` is in `[a, b]`, and
+continuity at a late stage gives `f(z) <= ε` from its lower end and
+`f(z) >= -ε` from its upper one.
+
+The probes find `√2` (`creal_sqrt_two`, strictly increasing) and a root of
+`x³ - x` on `[-2, 2]` (`creal_cubic_root`, not monotone there); at `Rat` the
+same call is refused for want of the `CauchyComplete` instance
 (`rat_sqrt_two_refused`).
 
-The general form, for a *locally non-constant* function (every interval has
-a point where `f` is apart from any given value), and a root in an
-`OrderComplete` field as an infimum, are left to
-[ivt-locally-nonconstant](../issues/ivt-locally-nonconstant.md).
+Proof-engineering notes:
 
-Proof-engineering note: `RootStage::limit_nonneg` first stated the final
-estimate inline, and its kernel check was an order of magnitude past the
-rest of the module; the estimate moved into `RootStage::nonneg_close`, over
-plain parameters, as §4's `*_close` lemmas did.
+- `RootStage::step` is a `fn` whose body is only the choice: the cut points
+  and both outcomes are theorems over plain parameters (`cut`, `keep_left`,
+  `keep_right`). Written as one theorem with its proofs in `let`s, the
+  kernel ran out of fuel checking `nested_add`, whose conversions unfold
+  `run(Succ(j))` to `step(…)`.
+- `RootStage::limit_nonneg` first stated the final estimate inline, and its
+  kernel check was an order of magnitude past the rest of the module; the
+  estimate moved into `RootStage::nonneg_close`, over plain parameters, as
+  §4's `*_close` lemmas did.
