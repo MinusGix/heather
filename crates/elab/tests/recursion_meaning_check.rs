@@ -1,7 +1,8 @@
 //! The meaning check for structural recursion (issues/recursion-meaning-check.md,
-//! `crates/elab/src/meaning.rs`): in review mode, every structurally recursive
-//! `fn` is checked to unfold to its own source, so a lowering that computes
-//! something else is reported rather than silently accepted.
+//! `crates/elab/src/meaning.rs`): with the check on (`set_meaning_check`,
+//! `heather check --meaning-check`), every structurally recursive `fn` is
+//! checked to unfold to its own source, so a lowering that computes something
+//! else is refused, located at the declaration, rather than silently accepted.
 //!
 //! The negative controls need a real miscompile. The planner refuses or
 //! re-routes every one known today, so they run with it switched off
@@ -10,6 +11,8 @@
 //! compiled function computes the wrong answer.
 
 use heather_elab::{Elaborator, Lint};
+
+use crate::support;
 
 fn meaning_warnings(e: &mut Elaborator) -> Vec<String> {
     e.take_warnings()
@@ -54,6 +57,26 @@ fn ordinary_structural_recursions_mean_their_source() {
     assert!(ws.is_empty(), "{ws:?}");
 }
 
+/// A member whose parameter has the member's base name (`Stmt::weights`'s
+/// `weights`, `Scope::nodes`'s `nodes` in the library): the body's bare
+/// `count` is the parameter, and the self-calls are method calls, so the
+/// restated source keeps the parameter instead of naming the function.
+#[test]
+fn a_parameter_named_like_its_member_is_not_the_self_reference() {
+    let src = "
+        inductive Tree { Leaf, Node(l: Tree, r: Tree) }
+        fn Tree::count(self t: Tree, count: Nat) → Nat {
+            match t { Leaf => Succ(count), Node(l, r) => r.count(l.count(count)) }
+        }
+        inductive Seq { Done, More(n: Nat, rest: Seq) }
+        fn Seq::sum(self s: Seq, sum: Nat) → Nat {
+            match s { Done => sum, More(_, rest) => rest.sum(Succ(sum)) }
+        }
+    ";
+    let ws = reviewed(src);
+    assert!(ws.is_empty(), "{ws:?}");
+}
+
 /// An interface definition's body is withheld at open arguments once it is
 /// registered (issues/interface-definitions.md), where `refl` could not
 /// unfold it. It is elaborated as the plain `fn` first, and checked there,
@@ -81,9 +104,10 @@ fn a_course_of_values_recursion_means_its_source_at_depth_two() {
     assert!(ws.is_empty(), "{ws:?}");
 }
 
-/// Outside review mode nothing is stated, and nothing is reported.
+/// The check is off by default (until its cost comes down): then, outside
+/// review mode, nothing is stated, and a miscompile is accepted silently.
 #[test]
-fn the_meaning_check_is_silent_outside_review_mode() {
+fn with_the_check_off_nothing_is_stated_outside_review_mode() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.skip_recursion_plan();
     let src = "
@@ -96,25 +120,54 @@ fn the_meaning_check_is_silent_outside_review_mode() {
     assert!(meaning_warnings(&mut e).is_empty());
 }
 
-fn miscompiled(src: &str, wrong: &str) -> Vec<String> {
-    // The compiled function computes the wrong answer: `refl` proves it.
+/// With the check off, review mode still reports a miscompile, as the
+/// `recursion-meaning` lint rather than a refusal.
+#[test]
+fn with_the_check_off_review_mode_reports_a_miscompile() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.skip_recursion_plan();
+    e.set_review_lints(true);
+    let src = "
+        fn u(n: Nat, x: Nat) → Nat {
+            let y = Succ(x);
+            match n { Zero => y, Succ(k) => u(k, Succ(Succ(x))) }
+        }
+    ";
+    assert!(e.check_source(src).is_empty());
+    let ws = meaning_warnings(&mut e);
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert!(ws[0].contains("`u` does not unfold to its source"), "{ws:?}");
+}
+
+/// The miscompile `src` reproduces with the planner and the check off
+/// (`refl` proves `wrong`, a value the source does not compute), and with
+/// the check on it is refused, for not unfolding to its source, located at
+/// the declaration.
+fn refused_miscompile(src: &str, wrong: &str, name: &str) {
     let mut shown = Elaborator::with_prelude().expect("prelude");
     shown.skip_recursion_plan();
+    shown.set_meaning_check(false);
     let errors = shown.check_source(&format!("{src}\n{wrong}"));
     assert!(errors.is_empty(), "the miscompile reproduces: {errors:?}");
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.skip_recursion_plan();
-    e.set_review_lints(true);
-    let errors = e.check_source(src);
-    assert!(errors.is_empty(), "{errors:?}");
-    meaning_warnings(&mut e)
+    e.set_meaning_check(true);
+    let rendered = support::assert_refused(
+        &mut e,
+        "miscompile",
+        src,
+        support::Refusal::Says(&format!("the compiled `{name}` does not unfold to its source")),
+    );
+    let at = src.find(&format!("fn {name}(")).expect("the declaration");
+    let line = src[..at].lines().count();
+    assert!(rendered.starts_with(&format!("{line}:")), "located at `fn {name}` (line {line}): {rendered}");
 }
 
 /// issues/recursion-let-reads-changing-parameter.md: a `let` above the
 /// recursive `match` reads a parameter the self-call varies, and the
 /// structural lowering keeps the top call's value at every level.
 #[test]
-fn a_stale_let_is_reported() {
+fn a_stale_let_is_refused() {
     let src = "
         fn u(n: Nat, x: Nat) → Nat {
             let y = Succ(x);
@@ -122,22 +175,18 @@ fn a_stale_let_is_reported() {
         }
     ";
     // The source says u(1, x) = x + 3.
-    let ws = miscompiled(src, "theorem wrong(x: Nat): u(1, x) = Succ(x) { refl }");
-    assert_eq!(ws.len(), 1, "{ws:?}");
-    assert!(ws[0].contains("`u` does not unfold to its source"), "{ws:?}");
+    refused_miscompile(src, "theorem wrong(x: Nat): u(1, x) = Succ(x) { refl }", "u");
 }
 
 /// PR #389's wrong meaning: a branch above the recursive `match` reads a
 /// parameter the recursion varies, and is decided once, by the top call.
 #[test]
-fn a_branch_on_a_varied_parameter_is_reported() {
+fn a_branch_on_a_varied_parameter_is_refused() {
     let src = "
         fn v(d: Nat, n: Nat) → Nat {
             match d { Zero => 0, Succ(_) => match n { Zero => 7, Succ(k) => v(k, k) } }
         }
     ";
     // The source says v(1, 1) = v(0, 0) = 0.
-    let ws = miscompiled(src, "theorem wrong(): v(1, 1) = 7 { refl }");
-    assert_eq!(ws.len(), 1, "{ws:?}");
-    assert!(ws[0].contains("`v` does not unfold to its source"), "{ws:?}");
+    refused_miscompile(src, "theorem wrong(): v(1, 1) = 7 { refl }", "v");
 }

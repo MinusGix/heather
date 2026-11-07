@@ -24,9 +24,15 @@
 //!
 //! The statement is elaborated and gated like any declaration, inside a
 //! session transaction that is always rolled back, so nothing is registered
-//! and the module image does not change. Today it runs in review mode only
-//! (`heather check --review`), reporting through the `recursion-meaning`
-//! lint, until the library's report is empty (the issue's step 1).
+//! and the module image does not change. With the check on (`heather check
+//! --meaning-check`; off by default until its cost comes down), a statement
+//! the kernel refuses is the declaration's refusal (the issue's step 2);
+//! with it off, review mode reports it as a lint. One it cannot settle (out
+//! of fuel, or a body form the restatement does not reproduce) refuses
+//! nothing, and review mode (`heather check --review`) reports it through the
+//! `recursion-meaning` lint. Cost: one gated equation per structurally
+//! recursive `fn`, one conversion per constructor of the split; deeper plans
+//! are tried only after a refusal.
 
 use heather_syntax::ast::{Arm, Block, Decl, DeclKind, Expr, ExprKind, MatchForm, Pat, Ty, TyKind};
 use heather_syntax::Span;
@@ -112,7 +118,10 @@ fn source(decl: &Decl) -> Expr {
 
 /// A member recurses under its base name (`nth(t)` inside `fn List::nth`),
 /// which is in scope only for its own body; outside it the self-calls are
-/// spelled qualified, as `f_unfold`'s right-hand side spells them.
+/// spelled qualified, as `f_unfold`'s right-hand side spells them. A
+/// parameter of the base name shadows it (`fn Stmt::weights(self s, …,
+/// weights: List<Nat>)`, whose self-calls are all `rest.weights(…)`), so the
+/// body's bare `weights` is the parameter and stays as written.
 fn qualified_source(decl: &Decl) -> Expr {
     let body = source(decl);
     let base = decl.name.rsplit("::").next().unwrap_or(&decl.name);
@@ -120,7 +129,8 @@ fn qualified_source(decl: &Decl) -> Expr {
         return body;
     }
     let qualified = var(&decl.name, decl.span);
-    crate::measure::subst(&body, &[(base, &qualified)], &mut Vec::new())
+    let mut bound: Vec<String> = decl.params.iter().map(|p| p.name.clone()).collect();
+    crate::measure::subst(&body, &[(base, &qualified)], &mut bound)
 }
 
 /// The name of the statement. `#` keeps it out of the surface namespace,
@@ -367,24 +377,36 @@ impl Elaborator {
         verdict
     }
 
-    /// Run [`Self::recursion_meaning`] for a review and report anything but
-    /// [`Verdict::Holds`] as a `recursion-meaning` lint at the declaration.
-    pub(crate) fn review_recursion_meaning(&mut self, decl: &Decl, decs: &[String]) {
+    /// Check that the `fn` `decl`, just committed, means its source: a
+    /// [`Verdict::Differs`] is the declaration's refusal, located at it; a
+    /// [`Verdict::Undecided`] is no evidence either way, so it refuses
+    /// nothing and is reported only in review mode (`heather check
+    /// --review`), as the `recursion-meaning` lint. Only a `fn` whose
+    /// self-calls were lowered under a guard (or at the top) has a recursion
+    /// to check.
+    pub(crate) fn check_recursion_meaning(&mut self, decl: &Decl) -> crate::R<()> {
+        let decs = self.attempt.recursion_decs.borrow().clone();
+        if decs.is_empty() || !(self.policy.meaning_check || self.policy.review_lints) {
+            return Ok(());
+        }
         let name = &decl.name;
-        match self.recursion_meaning(decl, decs) {
+        match self.recursion_meaning(decl, &decs) {
             Verdict::Holds => {}
-            Verdict::Differs(why) => self.emit_lint(
-                Lint::RecursionMeaning,
-                format!(
+            Verdict::Differs(why) => {
+                let msg = format!(
                     "the compiled `{name}` does not unfold to its source: `{}` was refused ({}); \
-                     the structural lowering may compute something other than the body says \
-                     (issues/recursion-meaning-check.md)",
+                     the structural lowering computes something other than the body says, which is a \
+                     compiler bug (issues/recursion-meaning-check.md); writing the recursion with \
+                     `decreases` lowers it by measure instead",
                     meaning_name(name),
                     one_line(&why),
-                ),
-                decl.span,
-            ),
-            Verdict::Undecided(why) => self.emit_lint(
+                );
+                if self.policy.meaning_check {
+                    return Err(ElabError::Elab { msg, span: decl.span });
+                }
+                self.emit_lint(Lint::RecursionMeaning, msg, decl.span);
+            }
+            Verdict::Undecided(why) if self.policy.review_lints => self.emit_lint(
                 Lint::RecursionMeaning,
                 format!(
                     "could not decide whether `{name}` unfolds to its source: `{}` was not settled ({}) \
@@ -394,7 +416,9 @@ impl Elaborator {
                 ),
                 decl.span,
             ),
+            Verdict::Undecided(_) => {}
         }
+        Ok(())
     }
 }
 

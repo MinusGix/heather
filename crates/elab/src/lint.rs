@@ -49,9 +49,11 @@ pub enum Lint {
     /// A `fn`'s recursive `match` reads its own parameter, so the `fn` is
     /// compiled by measure (issues/fn-recursion-means-the-function.md).
     RecursionByMeasure,
-    /// A structural `fn` whose compiled definition does not unfold to its
-    /// source (issues/recursion-meaning-check.md). Review-mode only: its
-    /// recognizer states and gates one equation per recursive `fn`.
+    /// A structural `fn` whose meaning check could not be settled (out of
+    /// fuel, or a body the restatement does not reproduce), or, with the
+    /// check turned off, one that does not unfold to its source
+    /// (issues/recursion-meaning-check.md; with the check on, that is a
+    /// refusal). Review-mode only.
     RecursionMeaning,
     /// A decimal literal at a carrier that does not hold its value exactly
     /// (`0.1` at a binary float), decided by the carrier's `DecimalLiteral`
