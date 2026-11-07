@@ -1,8 +1,8 @@
 // grind over codata observations: a side's head normal form, read once the
 // graph as written proves nothing (docs/grind-design.md §14.4). A module of
-// its own: with `coitree` in scope every grind call in a module costs
-// several times more (issues/grind-closure-cost.md), which put the main
-// probe module over its CPU rail.
+// its own so that `grind_tests` does not pull in itree/coitree's closure.
+// (It moved here when that scope made every grind call seconds slower; that
+// cost is gone, issues/grind-scope-size-cost.md.)
 import logic; import bool; import nat; import list; import option; import tactic; import grind; import itree; import coitree;
 
 // An observation that computes to a constructor's value, one stuck

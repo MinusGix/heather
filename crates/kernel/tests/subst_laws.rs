@@ -20,7 +20,7 @@ use std::sync::Arc as Rc;
 use common::*;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
-use heather_kernel::term::{CtxBase, CtxEntry, LocalCtx, LocalSubst, LocalVar, Term, Type};
+use heather_kernel::term::{CtxBase, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type};
 
 const CASES: u64 = 300;
 const BUDGET: u32 = 12;
@@ -361,6 +361,37 @@ fn substitution_shares_subterms_it_cannot_change() {
     }
 }
 
+/// Relocating a module image (`ModuleDelta::relocate`, which renumbers its
+/// globals through `reindex_global`) must keep a DAG a DAG: a node shared in
+/// the input is moved once and shared in the output. Before 2026-11-06 it was
+/// moved once per occurrence, so an image loaded at another position than
+/// its canonical one came back as a tree. `tactic`/`grind` spelled Tac values
+/// as `W` encodings, which share heavily; moved by an unrelated import
+/// (`itree`, `coitree`), they made every grind call cost seconds more
+/// (issues/grind-scope-size-cost.md). Stated on pointers, as above: equality
+/// holds for the copying walk too.
+#[test]
+fn relocation_keeps_shared_nodes_shared() {
+    heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
+    // A node that has to move (it names global 0), written twice.
+    let moved = Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: LocalSubst::id(&LocalCtx::nil()) });
+    let t = Term::App {
+        fun: Rc::clone(&moved),
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: Rc::new(Type::Nat),
+        cod: Rc::new(Type::Nat),
+        arg: Rc::clone(&moved),
+    };
+    let out = t.reindex_global(&mut |i| Some(i + 3)).expect("the map refuses nothing");
+    match out {
+        Term::App { fun, arg, .. } => {
+            assert!(matches!(&*fun, Term::GlobalTm { var: GlobalVar(3), .. }), "the global did not move");
+            assert!(Rc::ptr_eq(&fun, &arg), "relocation copied a shared node once per occurrence");
+        }
+        _ => panic!("relocation changed the head shape"),
+    }
+}
 
 #[test]
 fn global_local_commute_weakening_focus() {
