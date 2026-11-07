@@ -5,7 +5,7 @@ labels: [native,compiler,proofs]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-11-04
+updated: 2026-11-07
 ---
 
 Slice R5b of `docs/runtime-fn-setups-design.md` (§2, §5–§7): the `Setup`
@@ -96,3 +96,27 @@ landed in `lib/native/runtime/runtime.hthr` with the generator
 ([[runtime-fn-default-setup]], design §16.8). The open items here are
 unchanged: the program wrapper, `Fold` and the byte primitives, `zero_extend`.
 - 2026-11-05: gardener: cites a file it shares with [[function-ir-alu-core]] (`lib/native/runtime/rt_lower.hthr`).
+
+**2026-11-07 (R5b round 4).** Widths and shifts (design §16.12). The
+program wrapper and both loop shapes were already done (R5d rounds 2–4), so
+what this issue still lacked for N1 was `zero_extend`/`truncate`, the
+shifts, the byte primitives and `Fold`. This round does the word half:
+
+- FunctionIR's `Resize(from, to, output, source)` node, valued
+  `ofNat(values(from, source).toNat())` at every width: a zero extension or
+  a truncation by `BitVec::ofNat_toNat_zero_extend` / `_truncate`. Every
+  match on `Node` gained its arm; S4 and the memory-resident leaf refuse it
+  (as S4 refuses shifts).
+- `rt` gains `Trunc(n, extra)`, `Shl`/`Lshr`/`Ashr(w, k)`. `Zext` and
+  `Trunc` lower to a `Resize`, shifts to the immediate shift nodes; their
+  cases of `Tm::lower_sound` are `Tm::resize_node_sound` and
+  `Tm::word1_node_sound`. The judge no longer refuses `Zext`.
+- The reflector reads `truncate` and the shifts (`<<` too), and a width
+  computed from numerals (`extra + n`).
+
+Probes: `rt_lower_tests` (`widen`, `low`, `spread` agree through the
+theorem; `widen_not_signed` refused; the negative control
+`wrong_zext_node_sound`, a `Zext` lowered to a wide `Move`, is refused by the
+kernel), and `runtime_tests`' `runtime fn spread`, reflected and agreeing
+with nothing proved. Still open: `Get`, `Set` and `Fold`, which need the
+theorem over `function_ir_state`'s `run` (design §16.12 says how).

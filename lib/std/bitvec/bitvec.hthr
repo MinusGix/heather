@@ -2004,6 +2004,44 @@ theorem BitVec::ofNat_zero(n: Nat): BitVec::ofNat(0, n := n) = BitVec::zero() {
     }
 }
 
+// A vector's value written back at a wider width is its zero extension,
+// and at a narrower one its low bits: `ofNat(x.toNat())` is the one resize
+// both directions are (FunctionIR's `Resize` node). The recursion is
+// `ofNat_toNat`'s, on the narrower width.
+theorem BitVec::ofNat_toNat_zero_extend(n: Nat): (extra: Nat) → (x: BitVec(n)) →
+        BitVec::ofNat(x.toNat(), n := extra + n) = x.zero_extend(extra) {
+    match n {
+        Zero => λ extra x => BitVec::ofNat_zero(extra),
+        Succ(k, ih) => λ extra x => {
+            let h = x.head_bit();
+            let m = (x.tail_bits()).toNat();
+            BitVec::cons_bit_cong(extra + k, BitVec::odd_bit_digit(h, m),
+                trans(j(BitVec::half_digit(h, m),
+                        λ y _ => BitVec::ofNat(Nat::half(Nat::of_bit(h) + Nat::twice(m)), n := extra + k)
+                            = BitVec::ofNat(y), refl),
+                    ih(extra, x.tail_bits())),
+                a := BitVec::odd_bit(Nat::of_bit(h) + Nat::twice(m)), b := h)
+        },
+    }
+}
+
+theorem BitVec::ofNat_toNat_truncate(n: Nat): (extra: Nat) → (x: BitVec(extra + n)) →
+        BitVec::ofNat(x.toNat(), n := n) = BitVec::truncate(n, extra, x) {
+    match n {
+        Zero => λ extra x => refl,
+        Succ(k, ih) => λ extra x => {
+            let h = x.head_bit();
+            let m = (x.tail_bits()).toNat();
+            BitVec::cons_bit_cong(k, BitVec::odd_bit_digit(h, m),
+                trans(j(BitVec::half_digit(h, m),
+                        λ y _ => BitVec::ofNat(Nat::half(Nat::of_bit(h) + Nat::twice(m)), n := k)
+                            = BitVec::ofNat(y), refl),
+                    ih(extra, x.tail_bits())),
+                a := BitVec::odd_bit(Nat::of_bit(h) + Nat::twice(m)), b := h)
+        },
+    }
+}
+
 // A value below `2^n` has nothing above its low `n` bits. With n = 47 this is
 // how a Nat bound on an address becomes the machine's low-canonical premise.
 theorem BitVec::drop_low_zero_of_lt(n: Nat): (m: Nat) → (x: BitVec(m + n)) →

@@ -4,7 +4,7 @@ status: open
 labels: [compiler,function-ir,semantics,bitvec,x86]
 area: heather-in-heather
 created: 2026-08-31
-updated: 2026-11-02
+updated: 2026-11-07
 ---
 
 After the Add-DAG lowering path is executable, extend the official pure
@@ -77,3 +77,11 @@ a `Move` reads its source at the wider width, which says nothing of the
 narrow value. A zero-extend (and truncate) node with its equation would let
 `Tm::lower_sound` cover it like the other primitives.
 - 2026-11-05: gardener: cites a file it shares with [[runtime-default-setup-soundness]] (`lib/native/runtime/rt_lower.hthr`).
+- 2026-11-07: the node exists: `Resize(from, to, output, source)`, valued
+  `ofNat(values(from, source).toNat())` at every width (a zero extension or a
+  truncation, `BitVec::ofNat_toNat_zero_extend` / `_truncate`), and
+  `Tm::lower_sound` covers `Zext`, `Trunc` and the immediate shifts
+  ([[runtime-default-setup-soundness]], design §16.12). No x86 rule yet: S4
+  refuses `Resize` as it refuses shifts, and the memory-resident leaf treats
+  it as never wide. Its x86 rule (`MOVZX`, or `AND` with a mask, at 64) is
+  this issue's.

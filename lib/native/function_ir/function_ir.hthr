@@ -63,6 +63,11 @@ inductive Node {
     // threads (`function_ir_state`); the equations below say nothing of
     // buffers, so they leave both outputs free.
     BufferStore(output: Nat, buffer: Nat, index: Nat, value: Nat),
+    // The `from`-bit word `source` read as a `to`-bit word: zero-extended
+    // when `to` is wider, its low `to` bits when narrower. Both are
+    // `ofNat(x.toNat())` at the output's width, so one equation covers the
+    // two directions (`BitVec::ofNat_toNat_zero_extend`, `_truncate`).
+    Resize(from: Nat, to: Nat, output: Nat, source: Nat),
 }
 
 record Region {
@@ -88,6 +93,7 @@ fn node_output(node: Node) → Port {
         Equal(_, output, _, _) => Port(output, 1),
         BufferLoad(output, _, _) => Port(output, 64),
         BufferStore(output, _, _, _) => Port(output, 64),
+        Resize(_, to, output, _) => Port(output, to),
     }
 }
 
@@ -340,6 +346,9 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
             UnaryImmediateNodeIndexed(directory, index, 64, output, at),
         BufferStore(output, _, at, value) =>
             BinaryNodeIndexed(directory, index, 64, output, at, value),
+        Resize(from, to, output, source) =>
+            ProducedAt(directory, index, output, to) ∧
+            HasAvailableDirectoryPort(directory, source, from, index),
     }
 }
 
@@ -631,6 +640,8 @@ fn NodeHolds(values: Valuation(), node: Node) → Type {
                 values(width, left).eq_bit(values(width, right))),
         BufferLoad(_, _, _) => True,
         BufferStore(_, _, _, _) => True,
+        Resize(from, to, output, source) =>
+            values(to, output) = BitVec::ofNat(values(from, source).toNat()),
     }
 }
 

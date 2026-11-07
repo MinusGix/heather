@@ -53,6 +53,8 @@ fn Node::wide(self node: Node) → Bool {
         Equal(width, _, _, _) => width.matches(64),
         BufferLoad(_, _, _) => True,
         BufferStore(_, _, _, _) => True,
+        // A resize is never at one width.
+        Resize(_, _, _, _) => False,
     }
 }
 

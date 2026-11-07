@@ -129,6 +129,7 @@ theorem Node::run_other(self node: Node, values: Valuation(), buffers: Buffers()
         BufferLoad(output, buffer, index) => λ ne => Valuation::set_other(values, output, load_value(buffers, buffer, index, values), w, id, ne),
         BufferStore(output, buffer, index, value) => λ ne => Valuation::set_other(values, output,
             load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values), w, id, ne),
+        Resize(from, to, output, source) => λ ne => Resize(from, to, output, source).step_other(values, w, id, ne),
     }(ne)
 }
 
@@ -202,6 +203,7 @@ theorem Node::run_wide(self node: Node, values, other: Valuation(), same: (x: Na
                 trans(eq2(λ (b: Buffers()) (x: BitVec(64)) => word_value(byte_word(buffer_byte(b, buffer, x.toNat())), 64), kept, same(index)),
                     sym(Valuation::set_here(other, output, load_value(theirs, buffer, index, other), 64))))⟩
         },
+        Resize(_, _, _, _) => λ never => false_elim(never),
     }(wide)
 }
 
@@ -242,6 +244,7 @@ theorem Node::run_word(self node: Node, values: Valuation(), buffers: Buffers(),
         BufferLoad(output, buffer, index) => λ _ => BitVec::ofNat_toNat(64, BufferLoad(output, buffer, index).run(values, buffers).values(64, output)),
         BufferStore(output, buffer, index, value) => λ _ =>
             BitVec::ofNat_toNat(64, BufferStore(output, buffer, index, value).run(values, buffers).values(64, output)),
+        Resize(_, _, _, _) => λ never => false_elim(never),
     }(wide)
 }
 
@@ -330,6 +333,8 @@ theorem Node::renamed_step(self node: Node, spare: Nat, values: Valuation()):
             Valuation::set_here(values, spare, BufferLoad(spare, buffer, index).value(values), 64)),
         BufferStore(_, buffer, index, value) => cong_fn(λ (x: BitVec(64)) => x.toNat(),
             Valuation::set_here(values, spare, BufferStore(spare, buffer, index, value).value(values), 64)),
+        Resize(from, to, _, source) => cong_fn(λ (x: BitVec(to)) => x.toNat(),
+            Valuation::set_here(values, spare, Resize(from, to, spare, source).value(values), to)),
     }
 }
 
@@ -351,6 +356,7 @@ theorem Node::renamed_reads(self node: Node, output: Nat): function_ir_eval::Nod
         Equal(_, _, _, _) => refl,
         BufferLoad(_, _, _) => refl,
         BufferStore(_, _, _, _) => refl,
+        Resize(_, _, _, _) => refl,
     }
 }
 
