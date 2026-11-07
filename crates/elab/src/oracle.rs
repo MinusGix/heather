@@ -586,9 +586,15 @@ mod tests {
         Type::El {
             level: Level::Zero,
             tm: Rc::new(Term::App {
+                // `P` is declared in the empty context, so its occurrence in
+                // `x : Nat` is `P^{·^1}`: no payloads (an identity would
+                // supply one too many, which δ refuses to unfold).
                 fun: Rc::new(Term::GlobalTm {
                     var: GlobalVar(0),
-                    subst: LocalSubst::id(&one_nat()),
+                    subst: LocalSubst {
+                        tail: heather_kernel::term::SubstTail::Empty { len: 1, base: heather_kernel::term::CtxBase::Nil },
+                        terms: vec![],
+                    },
                 }),
                 dom_level: Level::Zero,
                 cod_level: Level::constant(1),
@@ -673,9 +679,13 @@ mod tests {
         let ty = Type::El {
             level: Level::Zero,
             // Innermost binding: the code pushed last.
+            // Declared in the empty context: `·^1`, no payloads.
             tm: Rc::new(Term::GlobalTm {
                 var: GlobalVar(0),
-                subst: LocalSubst::id(&one_nat()),
+                subst: LocalSubst {
+                    tail: heather_kernel::term::SubstTail::Empty { len: 1, base: heather_kernel::term::CtxBase::Nil },
+                    terms: vec![],
+                },
             }),
         };
         let got = oracle.whnf_type(&one_nat(), &ty).unwrap();

@@ -730,7 +730,18 @@ pub(crate) fn skel_params(skel: &Skel) -> Rc<Vec<ParamMeta>> {
 
 /// The only expression-elaboration capabilities an explicit application uses.
 pub(crate) trait ExplicitArgElab {
-    fn whnf_for_application(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type>;
+    /// The weak head of a callee's (remaining) type, to read its next `Π`
+    /// off. `scratch` is the width of the world `ty` is scoped in: zero for
+    /// the committed world, `n` inside an implicit application, whose `n`
+    /// metavariables sit at the global indices below every committed
+    /// binding. The width is part of the question, not a detail of it: δ
+    /// reads a global's body by index, so a scratch-world type reduced as
+    /// if it were committed unfolds a *different* definition for every
+    /// global it mentions — `u9` names the binding nine deep, not the
+    /// definition two deep that the call meant — and substitutes a body
+    /// built for another context into this one
+    /// (issues/merged-call-through-upcast-panics.md).
+    fn whnf_for_application(&self, cx: &Cx, ty: &Type, scratch: u32, span: Span) -> R<Type>;
 
     /// The emission spelling of an `App`'s `dom`/`cod` annotations
     /// (issues/emission-site-respell-audit.md): every component that is a
@@ -876,9 +887,9 @@ pub(crate) fn apply_explicit(
                 (Some(held), _) => {
                     ty = ty.apply_local(held);
                     delta = None;
-                    elab.whnf_for_application(cx, &ty, arg.span)?
+                    elab.whnf_for_application(cx, &ty, 0, arg.span)?
                 }
-                (None, _) => elab.whnf_for_application(cx, &ty, arg.span)?,
+                (None, _) => elab.whnf_for_application(cx, &ty, 0, arg.span)?,
             };
             let Type::Pi { dom_level, cod_level, dom, cod } = head else {
                 return err(format!("{what} is applied to too many arguments"), arg.span);
@@ -909,7 +920,7 @@ pub(crate) fn apply_explicit(
         return Ok((term, ty, lvl));
     }
     for (i, arg) in args.iter().enumerate() {
-        let head = elab.whnf_for_application(cx, &ty, arg.span)?;
+        let head = elab.whnf_for_application(cx, &ty, 0, arg.span)?;
         let Type::Pi {
             dom_level,
             cod_level,
@@ -1042,7 +1053,7 @@ fn apply_implicit_planned(
 
     for step in plan.steps(param_offset) {
         let parameter = step.parameter;
-        let head_ty = elab.whnf_for_application(cx, &ty, span)?;
+        let head_ty = elab.whnf_for_application(cx, &ty, n, span)?;
         let Type::Pi {
             dom_level,
             cod_level,
@@ -1228,7 +1239,7 @@ fn apply_implicit_planned(
     if !spill.is_empty() && sols.iter().any(|solution| solution.solved().is_none()) {
         let mut taken = 0;
         while taken < spill.len() && sols.iter().any(|solution| solution.solved().is_none()) {
-            let head_ty = elab.whnf_for_application(cx, &ty, span)?;
+            let head_ty = elab.whnf_for_application(cx, &ty, n, span)?;
             let Type::Pi {
                 dom_level,
                 cod_level,
@@ -1246,7 +1257,26 @@ fn apply_implicit_planned(
             {
                 break;
             }
-            let (inferred, inferred_ty, _) = elab.infer_application_argument(cx, argument)?;
+            // A spill only *teaches* here: the call does not need it to, since
+            // every spilled argument is checked against its zonked domain
+            // below. So an argument that does not infer on its own stops the
+            // teaching instead of refusing the call — the restart's reading
+            // of the same failure in the declared spine above, where the
+            // argument is re-planned rather than reported. A constructor
+            // value is the usual one: `not_apart_of_same(a, b, h, Inl(l))`,
+            // whose `¬ Apart(a, b)` unfolds to a `Π` that `Inl` only checks
+            // against.
+            let (inferred, inferred_ty, _) = match elab.infer_application_argument(cx, argument) {
+                Err(ElabError::Elab { .. })
+                    if matches!(
+                        argument.kind,
+                        ExprKind::App { .. } | ExprKind::Dot { .. } | ExprKind::Var(_)
+                    ) =>
+                {
+                    break;
+                }
+                other => other?,
+            };
             owed.learn(elab, cx, &dom, &dom_level, inferred_ty, n, &mut sols, &meta_doms, span, argument.span);
             let argument = Rc::new(inferred.shift_global(n));
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
@@ -1463,7 +1493,7 @@ mod tests {
     }
 
     impl ExplicitArgElab for FakeExprElab {
-        fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _span: Span) -> R<Type> {
+        fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _scratch: u32, _span: Span) -> R<Type> {
             Ok(ty.clone())
         }
 
@@ -1482,7 +1512,7 @@ mod tests {
     }
 
     impl ExplicitArgElab for FakeImplicitElab {
-        fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _span: Span) -> R<Type> {
+        fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _scratch: u32, _span: Span) -> R<Type> {
             Ok(ty.clone())
         }
 

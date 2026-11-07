@@ -1786,7 +1786,7 @@ mod tests {
     struct FakeSelfCall;
 
     impl ExplicitArgElab for FakeSelfCall {
-        fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _span: Span) -> R<Type> {
+        fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _scratch: u32, _span: Span) -> R<Type> {
             Ok(ty.clone())
         }
 

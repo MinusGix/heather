@@ -221,12 +221,12 @@ Proof-engineering notes:
   lemmas that take `t`, `w`, `a0`, `b0` and the first stage as parameters).
   Written as one theorem with the setup in `let`s, the main proof ran past
   8 GiB.
-- Calling a theorem whose result type is a definition that unfolds to a Π
-  with the Π's arguments merged into one list (`bound_at(xs, d, N, hN, y,
-  sy)`) panics the kernel's substitution when the definition was declared at
-  a parent class's section
-  ([merged-call-through-upcast-panics](../issues/merged-call-through-upcast-panics.md)).
-  Bind the result with `let` and apply it.
+- `below_located` calls `bound_at(xs, d, N, hN, y, sy)` with the result
+  type's Π arguments merged into one list. Until 2026-11-07 that aborted
+  the process from a child class's section, because the elaborator reduced
+  the result type against the wrong global world
+  ([merged-call-through-upcast-panics](../issues/merged-call-through-upcast-panics.md));
+  it is fixed, and the merged form is the probe.
 
 ## 5. Functions on a closed interval
 

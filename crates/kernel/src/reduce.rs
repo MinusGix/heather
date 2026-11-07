@@ -317,6 +317,27 @@ impl<'a> Defs<'a> {
         self.sealed_at(v)
     }
 
+    /// Whether an occurrence `v^δ` whose substitution has `terms` payloads
+    /// fits `v`'s declared context: δ supplies exactly one payload per entry
+    /// of Δ. Typing demands it of every occurrence (`subst_ck`'s
+    /// `SubstMismatch`); δ-reduction, which the elaborator also runs on terms
+    /// no judgement has seen, checks it before substituting a body, so an
+    /// occurrence that does not fit is an ill-typed **stuck** form, as the
+    /// reducer's contract says ([`whnf_type`]), instead of a body
+    /// substituted by a δ that does not cover its context. Without the check
+    /// a misnumbered global — an elaborator reading a type against the wrong
+    /// world — aborted the process in the substitution
+    /// (issues/merged-call-through-upcast-panics.md), and the value machine
+    /// read the uncovered entries as base variables. An O(1) test: the
+    /// binding is looked up by index, as the body is.
+    pub(crate) fn fits(&self, v: GlobalVar, terms: usize) -> bool {
+        let Some(psi) = self.psi else { return false };
+        let Some(i) = psi.bindings.len().checked_sub(1 + v.0 as usize) else {
+            return false;
+        };
+        matches!(psi.bindings.get(i), Some(GlobalBinding::Tm { ctx, .. }) if ctx.entries.len() == terms)
+    }
+
     /// Whether `v` is a definition here — the head test the conversion
     /// heuristic keys on, without paying for the rescoped body.
     pub fn is_defined(&self, v: GlobalVar) -> bool {
@@ -658,7 +679,7 @@ fn step_scrut(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) -> Op
 fn unseal_spine(t: &Term, defs: Defs<'_>) -> Option<Term> {
     Some(match t {
         Term::GlobalTm { var, subst } => {
-            if !defs.is_sealed(*var) {
+            if !defs.is_sealed(*var) || !defs.fits(*var, subst.terms.len()) {
                 return None;
             }
             defs.sealed_body(*var)?.apply_local(subst)
@@ -716,6 +737,9 @@ fn unfold_withheld(t: &Term, defs: Defs<'_>) -> Option<Term> {
     fn rebuild(t: &Term, defs: Defs<'_>, var: GlobalVar) -> Option<Term> {
         Some(match t {
             Term::GlobalTm { var: v, subst } if *v == var => {
+                if !defs.fits(var, subst.terms.len()) {
+                    return None;
+                }
                 crate::withheld::note(defs, var);
                 defs.withheld_body(var)?.apply_local(subst)
             }
@@ -748,7 +772,9 @@ fn step_term_frame(t: &Term, gamma: &LocalCtx, defs: Defs<'_>, frames: &Frames) 
     match t {
         // δ: `u^δ ⇝ t[δ]` for a definition `u := t`. Opaque at layer c,
         // where `defs` is `Defs::opaque()` — see [`Defs`].
-        Term::GlobalTm { var, subst } => Some(defs.body(*var)?.apply_local(subst)),
+        Term::GlobalTm { var, subst } if defs.fits(*var, subst.terms.len()) => {
+            Some(defs.body(*var)?.apply_local(subst))
+        }
         Term::ElimNat { level, motive, base, step, scrut } => match &**scrut {
             // elim_Nat … ze ⇝ s
             t if crate::term::is_nat_zero(t) => Some((**base).clone()),

@@ -617,3 +617,49 @@ fn const_branches(t: Term) -> Rc<Branches> {
         tm_elim_iwf: z(),
     })
 }
+
+/// An occurrence whose substitution does not fit the definition's context is
+/// an ill-typed **stuck** form, not a body substituted out of range. Typing
+/// refuses it (`SubstMismatch`); reduction, which the elaborator also runs on
+/// terms no judgement has seen, must not abort on it: a misnumbered global —
+/// a type read against the wrong Ψ — met the substitution's scoping
+/// assertion and took the process down
+/// (issues/merged-call-through-upcast-panics.md).
+///
+/// The definition reads its context's *outermost* entry, so a substitution
+/// one payload short leaves exactly the variable the body mentions
+/// uncovered. The fitting occurrence is the positive control.
+#[test]
+fn an_occurrence_that_does_not_fit_its_definition_is_stuck() {
+    // `third : Trm_c(x, y, z : Nat ⊢ Nat) := x`.
+    let p = psi(vec![GlobalBinding::Tm {
+        ctx: nil_ctx(3),
+        layer: Layer::Code,
+        ty: rty(Type::Nat),
+        level: Level::Zero,
+        body: Some(rt(v(2))),
+    }]);
+    let g = nil_ctx(0);
+    let at = |terms: Vec<Rc<Term>>| Term::GlobalTm {
+        var: GlobalVar(0),
+        subst: LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms },
+    };
+    let fits = at(vec![rt(num(7)), rt(num(8)), rt(num(9))]);
+    let short = at(vec![rt(num(8)), rt(num(9))]);
+    let defs = Defs::transparent(&p);
+    assert_eq!(whnf_term_delta(&fits, &g, defs, FUEL), Ok(num(7)));
+    assert_eq!(whnf_term_delta(&short, &g, defs, FUEL), Ok(short.clone()));
+    // …through a type's `El` too, the elaborator's head probes' route.
+    let el = Type::El { level: Level::Zero, tm: rt(short.clone()) };
+    assert_eq!(whnf_type_delta(&el, &g, defs, FUEL), Ok(el.clone()));
+    // The value machine agrees: conversion is decided there, and the short
+    // occurrence converts with no numeral (its uncovered entry is not read
+    // as some other variable).
+    assert!(conv_term(&p, &g, Layer::Prog, &short, &num(7), &Type::Nat, &c(0), FUEL).is_err());
+    assert_eq!(conv_term(&p, &g, Layer::Prog, &fits, &num(7), &Type::Nat, &c(0), FUEL), Ok(()));
+    // And the judgement refuses it.
+    assert_eq!(
+        check_term(&p, 0, Layer::Prog, &g, &short, &Type::Nat, &c(0), FUEL),
+        Err(TypeError::SubstMismatch)
+    );
+}
