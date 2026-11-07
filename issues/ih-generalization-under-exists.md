@@ -1,10 +1,10 @@
 ---
 title: Induction-hypothesis generalization misses a self-call under ∃
-status: open
+status: closed
 labels: [elaborator, recursion]
 area: language
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-07
 ---
 
 A `Type`-valued `fn` whose self-call varies a parameter inside an `∃` is
@@ -29,3 +29,11 @@ Not investigated: the refusal may come from the scan not seeing the call
 inside the `∃`'s lambda (`Elaborator::varying_params` reads surface arms),
 or from the goal `Type` not counting as a known result type. A fix
 removes `RecSum_of`.
+
+## Log
+- 2026-11-07: fixed by recursion at the top on `Wf` ([[recursion-at-top-wf]]):
+  the default attempt, which generalizes only the varied parameters its
+  surface scan sees, still misses the call and falls back; the fallback at
+  the top generalizes every other parameter and is accepted.
+  `List::RecSum` is written directly and `RecSum_of` is gone; the probe is
+  `RunSum` in `lib/_tests/std/core/recursion_at_top_tests.hthr`.

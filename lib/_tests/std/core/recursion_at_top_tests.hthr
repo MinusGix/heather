@@ -110,3 +110,67 @@ theorem three_varied_lit(): three_varied(0, 10, 1) = 1 { refl }
 fn add_right(m, n: Nat) → Nat { match n { Zero => m, Succ(k) => Succ(add_right(m, k)) } }
 theorem add_right_big(): add_right(1000000, 1000000) = 2000000 { refl }
 theorem add_right_step(m, k: Nat): add_right(m, Succ(k)) = Succ(add_right(m, k)) { refl }
+
+// Recursion at the top on a tier-1 `Wf` parameter (slice 3): the body's
+// own `match` is hoisted to the top, each arm rebinding the parameter to
+// its constructor term, so the parameter, and a `let` from it above the
+// `match`, are this level's values.
+fn list_read(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(h, t) => { let j = xs; Succ(list_read(t)) } } }
+theorem list_read_lit(): list_read([1, 2, 3]) = 3 { refl }
+theorem list_read_step(h: Nat, t: List<Nat>): list_read(Cons(h, t)) = Succ(list_read(t)) { refl }
+
+// The parameter's value used, not only bound: a rebinding the body needs is
+// emitted wherever `xs` is read, inside the arm too.
+fn list_len_read(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(_, t) => list_len_read(t) + xs.len() } }
+theorem list_len_read_lit(): list_len_read([7, 8]) = 3 { refl }
+theorem list_len_read_step(h: Nat, t: List<Nat>): list_len_read(Cons(h, t)) = list_len_read(t) + Succ(t.len()) { refl }
+
+fn list_above(xs: List<Nat>) → Nat { let n = xs.len(); match xs { Nil => n, Cons(_, t) => n + list_above(t) } }
+theorem list_above_lit(): list_above([5, 5, 5]) = 6 { refl }
+
+// Course of values through the hoisted arm: the call two below.
+fn skip_two(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(a, r) => match r { Nil => a, Cons(_, r2) => a + skip_two(r2) } } }
+theorem skip_two_lit(): skip_two([1, 2, 3, 4, 5]) = 9 { refl }
+theorem skip_two_step(a, b: Nat, r2: List<Nat>): skip_two(Cons(a, Cons(b, r2))) = a + skip_two(r2) { refl }
+
+// A self-call varying a parameter under an `∃`
+// (issues/ih-generalization-under-exists.md).
+fn RunSum(xs: List<Nat>, a, s: Nat) → Type {
+    match xs { Nil => a = s, Cons(y, t) => ∃ r: Nat, a + y = r ∧ RunSum(t, r, s) }
+}
+theorem run_sum_two(): RunSum([1, 2], 0, 3) { Exists(1, And(refl, Exists(3, And(refl, refl)))) }
+
+// A theorem's goal with a hypothesis about the scrutinee, the call two
+// below (the shape of issues/cov-window-in-theorem-arms.md's first probe,
+// accepted on master already; kept as the plain lowering's control).
+theorem skip_two_hyp(xs: List<Nat>): (n: Nat) → skip_two(xs) = n → True {
+    match xs {
+        Nil => λ n q => trivial,
+        Cons(a, r) => match r {
+            Nil => λ n q => trivial,
+            Cons(c, r2) => λ n q => skip_two_hyp(r2, skip_two(r2), refl),
+        },
+    }
+}
+
+// A branching type, the parameter read in the arm, and a generalized
+// accumulator.
+inductive TopTree { TLeaf, TNode(TopTree, Nat, TopTree) }
+fn tree_size(t: TopTree) → Nat { match t { TLeaf => 0, TNode(l, _, r) => { let me = t; tree_size(l) + tree_size(r) + 1 } } }
+theorem tree_size_lit(): tree_size(TNode(TNode(TLeaf, 1, TLeaf), 2, TLeaf)) = 2 { refl }
+theorem tree_size_step(l, r: TopTree, x: Nat): tree_size(TNode(l, x, r)) = tree_size(l) + tree_size(r) + 1 { refl }
+fn tree_self(t: TopTree) → List<TopTree> { match t { TLeaf => [t], TNode(l, _, r) => Cons(t, tree_self(l)) } }
+theorem tree_self_lit(): tree_self(TNode(TLeaf, 1, TLeaf)) = [TNode(TLeaf, 1, TLeaf), TLeaf] { refl }
+fn tree_depths(t: TopTree, d: Nat) → Nat { match t { TLeaf => d, TNode(l, _, r) => tree_depths(l, Succ(d)) + tree_depths(r, Succ(d)) } }
+theorem tree_depths_lit(): tree_depths(TNode(TLeaf, 1, TLeaf), 0) = 2 { refl }
+
+// Negative control: a call at the list itself does not descend.
+// expect-error: recursive call to `list_stuck` must descend
+fn list_stuck(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(_, t) => { let j = xs; list_stuck(xs) } } }
+
+// A recursive `match` off the result, in an argument or a `let` right-hand
+// side: hoisted like any other, it is the recursion at every level.
+fn list_off_result(xs: List<Nat>) → Nat { 1 + match xs { Nil => 0, Cons(_, t) => list_off_result(t) } }
+theorem list_off_result_lit(): list_off_result([1, 2]) = 3 { refl }
+fn list_let_result(xs: List<Nat>) → Nat { let r: Nat = match xs { Nil => 0, Cons(_, t) => list_let_result(t) }; r + 1 }
+theorem list_let_result_lit(): list_let_result([1, 2]) = 3 { refl }

@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,recursion,design]
 area: language
 created: 2026-09-25
-updated: 2026-11-04
+updated: 2026-11-07
 ---
 
 Since 2026-09-25 the elaborator **refuses** a structurally recursive `fn`
@@ -93,3 +93,9 @@ in its own arm would still compute the wrong type.
 - 2026-11-02: Found a sibling miscompile this issue's refusals do not cover: a `let` above the recursive `match` bound from a parameter the self-call changes keeps the top call's value ([[recursion-let-reads-changing-parameter]]).
 - 2026-11-04: 2026-11-04: For `Nat`, the parameter read inside its arm (or through a `let`/`have` above the match) now lowers by recursion at the top ([[recursion-below-nat-fallback]]), which means the source and unfolds by conversion; the measure lowering is the fallback where that does not elaborate (calls two below, an implicit varied). `List` and the misplaced-match spellings at other types are unchanged.
 - 2026-11-05: gardener: cites a file it shares with [[frontend-roadmap]] (`docs/termination-measures-design.md`); [[omega-renders-member-by-base-name]] (`docs/termination-measures-design.md`).
+- 2026-11-07: step 2 (the recursion at the function) now covers tier-1 `Wf`
+  too ([[recursion-at-top-wf]]): the parameter in its arm, a `let` above the
+  match, and a `match` off the result (in an argument, a `let` right-hand
+  side) lower at the top for `List` and declared tree types, by `refl` at a
+  literal and an open argument. Left: indexed, `IWf`, forded and mutual
+  families, which keep the refusals and the measure route.

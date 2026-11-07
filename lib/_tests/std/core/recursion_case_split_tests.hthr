@@ -87,24 +87,29 @@ theorem inner_is_d(d: Nat, n: Nat): inner(d, n) = d {
 // expect-error: argument `n` has to be `k`
 fn lone(n: Nat) → Nat { match n { Zero => 0, Succ(k) => lone(n) } }
 
-// A branch above the recursion on a parameter its calls change is decided by
-// the top call and skipped by every recursive one, so it is refused, whether
-// the branch is a `match` on the parameter, an `if` or a computed scrutinee
-// (issues/recursion-branch-on-varied-parameter.md).
-// expect-error: sits under a branch that depends on `d`
+// A branch above the recursion on a parameter its calls change was decided
+// by the top call and skipped by every recursive one, so it was refused,
+// whether the branch is a `match` on the parameter, an `if` or a computed
+// scrutinee (issues/recursion-branch-on-varied-parameter.md). Recursion at
+// the top on the list recomputes the branch at every level, so each now
+// means its source: the call at `x = 0` takes the branch.
 fn split_varied(d: Nat, xs: List<Nat>) → Nat {
     match d { Zero => 0, Succ(_) => match xs {
         Nil => 7, Cons(x, t) => split_varied(x, t) } }
 }
-// expect-error: sits under a branch that depends on `d`
 fn if_varied(d: Nat, xs: List<Nat>) → Nat {
     if d = 0 { 0 } else { match xs { Nil => 7, Cons(x, t) => if_varied(x, t) } }
 }
-// expect-error: sits under a branch that depends on `d`
 fn bit_varied(d: Nat, xs: List<Nat>) → Nat {
     match decide_bit<d = 0>() { True => 0, False => match xs {
         Nil => 7, Cons(x, t) => bit_varied(x, t) } }
 }
+theorem split_varied_branch(): split_varied(1, [0, 5]) = 0 { refl }
+theorem split_varied_through(): split_varied(1, [3, 5]) = 7 { refl }
+theorem if_varied_branch(): if_varied(1, [0, 5]) = 0 { refl }
+theorem if_varied_through(): if_varied(1, [3, 5]) = 7 { refl }
+theorem bit_varied_branch(): bit_varied(1, [0, 5]) = 0 { refl }
+theorem bit_varied_through(): bit_varied(1, [3, 5]) = 7 { refl }
 // The same branch over a parameter the calls pass unchanged is fine.
 fn split_kept(d: Nat, xs: List<Nat>) → Nat {
     match d { Zero => 0, Succ(_) => match xs {
