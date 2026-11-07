@@ -1,11 +1,11 @@
 ---
 title: State the sign rules at the weakest class that proves them (use what you need)
-status: open
+status: closed
 labels: [mathematics,traits,performance]
 area: mathematics
 milestone: [math-classes]
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
 ---
 
 The sign rules that let `/` and `⁻¹` find their apartness proof over a class
@@ -65,3 +65,33 @@ So: re-measure a weaker-class `positive_add` against the field-level one with
    rules (`positive_inv`, `invertible_*`) at `OrderedField`.
 3. Probes in lib/_tests at an `OrderedRing` section, at `Int` through its
    instance, and at the field, to show that the field search is unchanged.
+
+## Log
+
+- 2026-11-07: Done. The predicates and the rules for `+`, negation and `*`
+  moved to a new module, lib/std/algebra/ordered_sign.hthr, each at its
+  weakest class: `OrderedAddMonoid` (`positive_add`, `negative_add`),
+  `LocatedAddMonoid` (a sum with a nonnegative summand), `OrderedAddGroup`
+  (negation), `OrderedSemiring` (`positive_mul`, `nonneg_mul`,
+  `positive_one`), `OrderedRing` (a negative factor, `nonneg_mul_self`).
+  `positive_inv`, `negative_inv`, `positive_div`, the `invertible_*` rules
+  and the arithmetic fallbacks stay at `OrderedField` in `field_division`.
+  Probes: lib/_tests/std/algebra/ordered_sign_tests.hthr (monoid, semiring
+  and ring sections, `Int`, `Nat`, refusals); `field_division_tests`
+  unchanged.
+- 2026-11-07: The measurement (step 1) found no upcast cost left, but two
+  resolver gaps. (a) A rule from a module the caller reaches only through an
+  import could not be cited (`rule_citation` required a direct import), so
+  at a field section every moved rule failed to build and `nlinarith`
+  answered: about 200 ms an item, and failing searches looked faster
+  because the moved rules died at once. The citation now needs the rule's
+  module in the import closure (`Names::reaches`). (b) Canonical order put
+  `LocatedAddMonoid::positive_add_nonneg` before
+  `OrderedAddMonoid::positive_add`; its `NonNegBy` premise ran
+  `nonneg_by_linarith` first. Rules over a class are now tried weakest
+  class first (`rule_class_rank`). With both, the field probes cost what
+  they did on master, item for item within noise (`div_sum` 9 goals on both
+  sides). A plain-rules-first second pass was tried instead of (b) and
+  dropped: it doubled the plain search of every goal that needs a search
+  rule (the `nlinarith` probes, about 1.5x).
+

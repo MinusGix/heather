@@ -1,0 +1,89 @@
+// Probes of `lib/std/algebra/ordered_sign.hthr`: a sign found by search in a
+// section over each ordered class below the field, and at `Int` and `Nat`
+// through their instances (issues/sign-rules-at-weakest-class.md). The field
+// sections are `field_division_tests`'s. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import relation; import order; import algebra_rel; import semiring;
+import ordered_field; import ordered_sign;
+
+// What each probe asks the search for.
+theorem positive<A>(lt, le: A → A → Type, zero, x: A, h: PositiveBy(lt, le, zero, x) := infer):
+    PositiveBy(lt, le, zero, x) { h }
+theorem negative<A>(lt, le: A → A → Type, zero, x: A, h: NegativeBy(lt, le, zero, x) := infer):
+    NegativeBy(lt, le, zero, x) { h }
+theorem nonneg<A>(lt, le: A → A → Type, zero, x: A, h: NonNegBy(lt, le, zero, x) := infer):
+    NonNegBy(lt, le, zero, x) { h }
+
+// An ordered additive monoid: sums of a strict sign, from the `<` a local
+// states.
+section<M: OrderedAddMonoid(≈, <, <=, +)> {
+
+theorem monoid_sum(a, b, c: M, ha: M.unit < a, hb: M.unit < b, hc: M.unit < c): M.unit < a + b + c {
+    positive(<, <=, M.unit, a + b + c)
+}
+theorem monoid_negative_sum(a, b: M, ha: a < M.unit, hb: b < M.unit): a + b < M.unit {
+    negative(<, <=, M.unit, a + b)
+}
+
+// A nonnegative summand needs the located monoid.
+// expect-error: no instance for `PositiveBy(
+theorem monoid_sum_nonneg(a, b: M, ha: M.unit < a, hb: M.unit <= b): M.unit < a + b {
+    positive(<, <=, M.unit, a + b)
+}
+
+}
+
+// An ordered semiring: products, one, and sums mixing `<` and `≤`.
+section<S: OrderedSemiring(≈, <, <=, +, *)> {
+
+theorem semiring_product(a, b: S, ha: S.unit < a, hb: S.unit < b): S.unit < a * b + S.multiplicative.unit {
+    positive(<, <=, S.unit, a * b + S.multiplicative.unit)
+}
+theorem semiring_nonneg(a, b: S, ha: S.unit <= a, hb: S.unit <= b): S.unit <= a * b + a {
+    nonneg(<, <=, S.unit, a * b + a)
+}
+theorem semiring_mixed(a, b: S, ha: S.unit < a, hb: S.unit <= b): S.unit < a + b * b {
+    positive(<, <=, S.unit, a + b * b)
+}
+
+// A square needs negation to be nonnegative.
+// expect-error: no instance for `NonNegBy(
+theorem semiring_square(a: S): S.unit <= a * a {
+    nonneg(<, <=, S.unit, a * a)
+}
+
+}
+
+// An ordered ring: negation, products with a negative factor, squares.
+section<R: OrderedRing(≈, <, <=, +, *)> {
+
+theorem ring_square_plus_one(a: R): R.unit < a * a + R.multiplicative.unit {
+    positive(<, <=, R.unit, a * a + R.multiplicative.unit)
+}
+theorem ring_negatives(a, b: R, ha: a < R.unit, hb: b < R.unit): R.unit < a * b {
+    positive(<, <=, R.unit, a * b)
+}
+theorem ring_mixed_product(a, b: R, ha: a < R.unit, hb: R.unit < b): a * b < R.unit {
+    negative(<, <=, R.unit, a * b)
+}
+theorem ring_negation(a, b: R, ha: R.unit < a, hb: b < R.unit): R.unit < R.inv(b) + a * R.inv(b) {
+    positive(<, <=, R.unit, R.inv(b) + a * R.inv(b))
+}
+
+// Nothing known about a factor is refused.
+// expect-error: no instance for `PositiveBy(
+theorem ring_unknown(a, b: R, ha: R.unit < a): R.unit < a * b {
+    positive(<, <=, R.unit, a * b)
+}
+
+}
+
+// Carriers reach the rules through their instances.
+theorem int_sum_of_products(a, b, c: Int, ha: Int::Lt(0, a), hb: Int::Lt(b, 0), hc: Int::Lt(c, 0)):
+    PositiveBy(Int::Lt, Int::Le, 0, a + b * c)
+{
+    positive(Int::Lt, Int::Le, 0, a + b * c)
+}
+theorem nat_product(a, b: Nat, ha: Nat::Lt(0, a), hb: Nat::Lt(0, b)): PositiveBy(Nat::Lt, Nat::Le, 0, a * b + 1) {
+    positive(Nat::Lt, Nat::Le, 0, a * b + 1)
+}

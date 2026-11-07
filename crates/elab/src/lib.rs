@@ -2733,10 +2733,16 @@ impl Elaborator {
         {
             return NameRes::Found(module.to_string());
         }
+        // An evidence rule the search proposes is cited by its key on the
+        // caller's behalf, as a certificate names its dependencies above. Its
+        // module need only be in the import closure: a rule reaches a file
+        // through the module that imports it (`field_division`'s sign rules
+        // are `ordered_sign`'s), as an instance does, and the caller never
+        // wrote its name.
         if self.scope.rule_citation.borrow().as_deref() == Some(name)
             && let Some((module, base)) = split_qual(name)
             && self.names.declares(module, base)
-            && (self.names.module() == module || self.names.scope().imports_module(module))
+            && self.names.reaches(module)
         {
             return NameRes::Found(module.to_string());
         }

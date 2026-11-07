@@ -1,0 +1,158 @@
+// Signs over the ordered-algebra classes: positive, negative and
+// nonnegative, carried through `+`, negation and `*` by evidence rules, each
+// stated at the weakest class whose laws prove it (docs/division-design.md
+// §6, issues/sign-rules-at-weakest-class.md).
+//
+// A sign goal is answered by search wherever a class carrier is in scope: in
+// a section over an ordered field, the rules here are what find a divisor's
+// apartness (`field_division`), and in one over an ordered semiring or ring
+// they prove a sign side condition as they stand. The rules sit in sections
+// over `OrderedAddMonoid`, `LocatedAddMonoid`, `OrderedAddGroup`,
+// `OrderedSemiring` and `OrderedRing`; used at a stronger class, a rule's
+// dictionary premise is an upcast, which the resolver mints once per context
+// prefix (docs/traits-layer2-design.md §8.1).
+//
+// The sign predicates are generic in the relation, like `ApartBy`, so a
+// rule's premise is smaller than its conclusion (Paterson's condition,
+// docs/traits-layer2-design.md §6); a sign goal written with `<` itself has
+// a local relation for a head and no rule can be keyed on it, so a defaulted
+// premise asks for `PositiveBy(<, <=, K.unit, e)`. Both relations are
+// arguments so that a nonnegative premise mentions nothing its positive
+// conclusion does not.
+
+import logic;
+import nat;
+import int;
+import relation;
+import relation_props;
+import order;
+import algebra_rel;
+import semiring;
+import ordered_field;
+
+// ---------------------------------------------------------------------------
+// Signs, generic in the relation.
+
+fn PositiveBy<A>(lt, le: A → A → Type, zero, x: A) → Type { lt(zero, x) }
+
+fn NegativeBy<A>(lt, le: A → A → Type, zero, x: A) → Type { lt(x, zero) }
+
+fn NonNegBy<A>(lt, le: A → A → Type, zero, x: A) → Type { le(zero, x) }
+
+// ---------------------------------------------------------------------------
+// Sums of a strict sign: an ordered additive monoid.
+
+section<A: OrderedAddMonoid(≈, <, <=, +)> {
+
+evidence theorem OrderedAddMonoid::positive_add({x, y: A}, hx: PositiveBy(<, <=, A.unit, x) := infer,
+    hy: PositiveBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x + y)
+{
+    OrderedAddMonoid::add_pos(x, y, hx, hy)
+}
+
+evidence theorem OrderedAddMonoid::negative_add({x, y: A}, hx: NegativeBy(<, <=, A.unit, x) := infer,
+    hy: NegativeBy(<, <=, A.unit, y) := infer): NegativeBy(<, <=, A.unit, x + y)
+{
+    StrictOrder::lt_respects_r(x + y, A.unit + A.unit, A.unit, A.unit_r(A.unit), OrderedAddMonoid::add_lt_mono(x, A.unit, y, A.unit, hx, hy))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Sums with a nonnegative summand: `<` mixed with `≤` needs the located
+// monoid.
+
+section<A: LocatedAddMonoid(≈, <, <=, +)> {
+
+evidence theorem LocatedAddMonoid::positive_add_nonneg({x, y: A}, hx: PositiveBy(<, <=, A.unit, x) := infer,
+    hy: NonNegBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x + y)
+{
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddMonoid::add_lt_le_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
+evidence theorem LocatedAddMonoid::positive_nonneg_add({x, y: A}, hx: NonNegBy(<, <=, A.unit, x) := infer,
+    hy: PositiveBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x + y)
+{
+    StrictOrder::lt_respects_l(A.unit + A.unit, A.unit, x + y, A.unit_r(A.unit), LocatedAddMonoid::add_le_lt_mono(A.unit, x, A.unit, y, hx, hy))
+}
+
+evidence theorem LocatedAddMonoid::nonneg_add({x, y: A}, hx: NonNegBy(<, <=, A.unit, x) := infer,
+    hy: NonNegBy(<, <=, A.unit, y) := infer): NonNegBy(<, <=, A.unit, x + y)
+{
+    LocatedAddMonoid::add_nonneg(x, y, hx, hy)
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Negation: an ordered additive group.
+
+section<A: OrderedAddGroup(≈, <, <=, +)> {
+
+evidence theorem OrderedAddGroup::positive_neg({x: A}, hx: NegativeBy(<, <=, A.unit, x) := infer):
+    PositiveBy(<, <=, A.unit, A.inv(x))
+{
+    OrderedAddGroup::neg_pos(x, hx)
+}
+
+evidence theorem OrderedAddGroup::negative_neg({x: A}, hx: PositiveBy(<, <=, A.unit, x) := infer):
+    NegativeBy(<, <=, A.unit, A.inv(x))
+{
+    StrictOrder::lt_respects_r(A.inv(x), A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(x), OrderedAddGroup::neg_lt(A.unit, x, hx))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Products of nonnegative factors, and one: an ordered semiring.
+
+section<A: OrderedSemiring(≈, <, <=, +, *)> {
+
+evidence theorem OrderedSemiring::positive_mul({x, y: A}, hx: PositiveBy(<, <=, A.unit, x) := infer,
+    hy: PositiveBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x * y)
+{
+    OrderedSemiring::mul_pos(x, y, hx, hy)
+}
+
+evidence theorem OrderedSemiring::nonneg_mul({x, y: A}, hx: NonNegBy(<, <=, A.unit, x) := infer,
+    hy: NonNegBy(<, <=, A.unit, y) := infer): NonNegBy(<, <=, A.unit, x * y)
+{
+    OrderedSemiring::mul_nonneg(x, y, hx, hy)
+}
+
+// One is positive, so `a / 1` needs nothing.
+evidence theorem OrderedSemiring::positive_one(): PositiveBy(<, <=, A.unit, A.multiplicative.unit) { A.zero_lt_one }
+
+}
+
+// ---------------------------------------------------------------------------
+// Products with a negative factor, and squares: an ordered ring.
+
+section<A: OrderedRing(≈, <, <=, +, *)> {
+
+evidence theorem OrderedRing::positive_mul_neg({x, y: A}, hx: NegativeBy(<, <=, A.unit, x) := infer,
+    hy: NegativeBy(<, <=, A.unit, y) := infer): PositiveBy(<, <=, A.unit, x * y)
+{
+    StrictOrder::lt_respects_r(A.unit, A.inv(x) * A.inv(y), x * y, Ring::neg_mul_neg(x, y),
+        OrderedSemiring::mul_pos(A.inv(x), A.inv(y), OrderedAddGroup::neg_pos(x, hx), OrderedAddGroup::neg_pos(y, hy)))
+}
+
+evidence theorem OrderedRing::negative_mul_l({x, y: A}, hx: NegativeBy(<, <=, A.unit, x) := infer,
+    hy: PositiveBy(<, <=, A.unit, y) := infer): NegativeBy(<, <=, A.unit, x * y)
+{
+    let p: (A.unit < A.inv(x * y)) = StrictOrder::lt_respects_r(A.unit, A.inv(x) * y, A.inv(x * y), Ring::neg_mul(x, y),
+        OrderedSemiring::mul_pos(A.inv(x), y, OrderedAddGroup::neg_pos(x, hx), hy));
+    OrderedAddGroup::neg_of_neg_pos(x * y, p)
+}
+
+evidence theorem OrderedRing::negative_mul_r({x, y: A}, hx: PositiveBy(<, <=, A.unit, x) := infer,
+    hy: NegativeBy(<, <=, A.unit, y) := infer): NegativeBy(<, <=, A.unit, x * y)
+{
+    let p: (A.unit < A.inv(x * y)) = StrictOrder::lt_respects_r(A.unit, x * A.inv(y), A.inv(x * y), Ring::mul_neg(x, y),
+        OrderedSemiring::mul_pos(x, A.inv(y), hx, OrderedAddGroup::neg_pos(y, hy)));
+    OrderedAddGroup::neg_of_neg_pos(x * y, p)
+}
+
+evidence theorem OrderedRing::nonneg_mul_self({x: A}): NonNegBy(<, <=, A.unit, x * x) { OrderedRing::sq_nonneg(x) }
+
+}
