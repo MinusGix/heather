@@ -2468,6 +2468,37 @@ pub fn vec_lit_chain(
     acc
 }
 
+/// The child a value nests *through*, for the walks that iterate down a
+/// deep term instead of recursing one native frame per level
+/// (docs/deep-term-walks-design.md): a pair's tail (or its head, when the
+/// tail is a leaf — a constructor's children tuple `⟨xs, ⟨⟩⟩` nests through
+/// `xs`), an injection's payload, a constructor value's children, a
+/// successor's predecessor, an application's argument. These are the forms
+/// data is built from, so a long list, vector or numeral is a chain of them.
+/// It binds nothing, so the child lives at its parent's depths. Which child
+/// is chosen is a matter of cost only — every walk that reads it computes
+/// the same answer whichever child it picks — so the choice is a heuristic
+/// for where the depth is, never a correctness condition.
+pub fn spine_child(t: &Term) -> Option<&Rc<Term>> {
+    let leaf = |t: &Term| {
+        matches!(t, Term::Triv { .. } | Term::Zero | Term::NatLit(_) | Term::Var(_) | Term::TmNat | Term::TmTy(_))
+    };
+    match t {
+        Term::Pair { fst, snd, .. } | Term::PairAt { fst, snd, .. } => Some(if leaf(snd) { fst } else { snd }),
+        Term::Inl { val, .. } | Term::Inr { val, .. } | Term::InlAt { val, .. } | Term::InrAt { val, .. } => Some(val),
+        Term::Supf { children, .. } | Term::Supi { children, .. } => Some(children),
+        Term::Succ(n) => Some(n),
+        Term::App { arg, .. } | Term::AppAt { arg, .. } => Some(arg),
+        _ => None,
+    }
+}
+
+/// How deep a native walk goes before it starts iterating down
+/// [`spine_child`] chains instead: deep enough that ordinary terms never get
+/// there (and pay nothing), shallow enough that the frames above it fit any
+/// stack the checker runs on, a kernel worker's included.
+pub const SPINE_ITERATE_AT: u32 = 128;
+
 /// A [`Term::VecItems`]'s live elements, `items[from..]`; `None` when the
 /// node is out of range (no live element), which the typing rule refuses.
 pub fn vec_items_live(items: &[Rc<Term>], from: u32) -> Option<&[Rc<Term>]> {

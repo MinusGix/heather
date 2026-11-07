@@ -1,6 +1,6 @@
 ---
 title: Comparing two long vectors or lists by value meets the conversion's depth budget
-status: open
+status: closed
 labels: [kernel, conversion, literals]
 area: kernel
 created: 2026-11-07
@@ -46,3 +46,12 @@ instantiated `snd` type, and no sibling comparison left. Two items nodes
 with the same array could also compare item by item before evaluating, as a
 congruence. Measure with `scripts/perf ab`: this is the conversion's hottest
 path.
+
+## Log
+
+- 2026-11-07: fixed by conversion's deferral of comparisons met deep
+  (docs/deep-term-walks-design.md §3.4) rather than a Σ-tail continuation:
+  the reproduction's two theorems check at 3,000 characters, and the
+  kernel twin compares two 20,000-element nodes
+  (`a_node_longer_than_any_chain_the_stack_holds_checks`). What is left is
+  time, not depth: [[vec-items-window-bounds]].

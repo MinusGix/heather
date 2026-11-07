@@ -861,6 +861,19 @@ struct Conv<'v, D: Dom<'v>> {
     /// inside them, so that one budget bounds the whole stack
     /// (docs/native-depth-budget-design.md).
     depth: u32,
+    /// Comparisons met [`crate::term::SPINE_ITERATE_AT`] frames deep,
+    /// queued instead of descended into (docs/deep-term-walks-design.md):
+    /// a rule's premises are a conjunction, so the order they are judged in
+    /// is free, and a long vector or list compared component by component
+    /// is then a loop, not a frame per element. The queue is drained by the
+    /// comparison that returns to depth zero ([`Conv::tm`], [`Conv::ty`]),
+    /// and within a speculative attempt by the attempt itself
+    /// ([`Conv::delta_lazy`]), so no verdict — and no attempt's — leaves
+    /// with a queued premise unjudged.
+    deferred: Vec<(Env<'v>, D::TmC, D::TmC, D::TyC, Level)>,
+    /// How many comparisons have ever been queued: a [`Conv::tm`] whose
+    /// subtree queued one does not memoize its (not yet complete) `true`.
+    deferred_pushed: u64,
     _dom: PhantomData<(&'v (), D)>,
 }
 
@@ -870,7 +883,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // the same δ stage (`reduce::Defs::sealed_body`).
         let has_defs = !psi.sealed.is_empty()
             || psi.bindings.iter().any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, _dom: PhantomData }
+        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, deferred: Vec::new(), deferred_pushed: 0, _dom: PhantomData }
     }
 
     fn spend(&mut self) -> R {
@@ -917,10 +930,60 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// died), and no fuel refund — monotone-decreasing fuel is the totality
     /// argument.
     fn delta_lazy<T>(&mut self, attempt: impl FnOnce(&mut Self) -> R<T>) -> R<Option<T>> {
-        match attempt(self) {
+        // An attempt is a verdict of its own: the comparisons it queued are
+        // judged before it counts as a success, and dropped with it when it
+        // fails ([`Conv::deferred`]).
+        let mark = self.deferred.len();
+        let tried = attempt(self).and_then(|v| self.drain_deferred(mark).map(|()| v));
+        match tried {
             Ok(v) => Ok(Some(v)),
-            Err(ConvError::NotConvertible) => Ok(None),
-            Err(e) => Err(e),
+            Err(ConvError::NotConvertible) => {
+                self.deferred.truncate(mark);
+                Ok(None)
+            }
+            Err(e) => {
+                self.deferred.truncate(mark);
+                Err(e)
+            }
+        }
+    }
+
+    /// Judge the comparisons queued past `mark`, at the current depth (each
+    /// may queue more, which this loop also takes).
+    #[cold]
+    #[inline(never)]
+    fn drain_deferred(&mut self, mark: usize) -> R {
+        while self.deferred.len() > mark {
+            let (env, a, b, ty, l) = self.deferred.pop().expect("longer than the mark");
+            if let Err(e) = self.tm(&env, &a, &b, &ty, &l) {
+                self.deferred.truncate(mark);
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Queue a comparison met too deep to descend into.
+    #[cold]
+    #[inline(never)]
+    fn defer_tm(&mut self, env: &Env<'v>, a: &D::TmC, b: &D::TmC, ty: &D::TyC, l: &Level) -> R {
+        self.deferred.push((env.clone(), a.clone(), b.clone(), ty.clone(), l.clone()));
+        self.deferred_pushed += 1;
+        Ok(())
+    }
+
+    /// A comparison back at depth zero settles the queue: drained after a
+    /// success, dropped after a failure.
+    fn settle_at_top(&mut self, result: R) -> R {
+        if self.depth != 0 || self.deferred.is_empty() {
+            return result;
+        }
+        match result {
+            Ok(()) => self.drain_deferred(0),
+            Err(e) => {
+                self.deferred.clear();
+                Err(e)
+            }
         }
     }
 
@@ -956,7 +1019,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             self.ty_w(env, &mut wa, &mut wb, l)
         })();
         self.depth -= 1;
-        out
+        self.settle_at_top(out)
     }
 
     /// `Γ ⊢ Vec^l(T; k) ≈ Vec^l'(T'; k')` decided on the spelling, before
@@ -1475,6 +1538,10 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 return if verdict { Ok(()) } else { Err(ConvError::NotConvertible) };
             }
         }
+        if self.depth >= crate::term::SPINE_ITERATE_AT {
+            return self.defer_tm(env, a, b, ty, l);
+        }
+        let pushed = self.deferred_pushed;
         self.descend()?;
         let result = (|| {
             let w = D::whnf_ty(self, env, ty)?;
@@ -1488,6 +1555,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         self.depth -= 1;
         if let Some(key) = key {
             match &result {
+                Ok(()) if self.deferred_pushed != pushed => {}
                 Ok(()) => {
                     self.memo.insert(key, true);
                 }
@@ -1497,7 +1565,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 Err(ConvError::OutOfFuel) => {}
             }
         }
-        result
+        self.settle_at_top(result)
     }
 
     /// [`Conv::tm`] at the **root**; see [`Conv::ty_root`].
@@ -1687,6 +1755,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     fn tm_nat_tail(&mut self, env: &Env<'v>, mut a: D::TmC, mut b: D::TmC) -> R {
         let mut entered = false;
         let mut pending = Vec::new();
+        let pushed = self.deferred_pushed;
         let result = (|| {
             loop {
                 self.spend()?;
@@ -1723,6 +1792,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             self.depth -= 1;
         }
         let verdict = match &result {
+            // Not yet a verdict while premises it queued are unjudged
+            // ([`Conv::deferred`]).
+            Ok(()) if self.deferred_pushed != pushed => None,
             Ok(()) => Some(true),
             Err(ConvError::NotConvertible) => Some(false),
             Err(ConvError::OutOfFuel) => None,
@@ -1732,7 +1804,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 self.memo.insert(key, verdict);
             }
         }
-        result
+        self.settle_at_top(result)
     }
 
     /// `Γ ⊢ w ≈ w' : W @ l` for weak head normal terms at a WHNF type,

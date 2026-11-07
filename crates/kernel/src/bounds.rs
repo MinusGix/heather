@@ -146,6 +146,10 @@ impl LocalUse {
 struct Cache {
     terms: Vec<Slot<Term>>,
     types: Vec<Slot<Type>>,
+    /// Native depth of [`Cache::term_use`]'s recursion: past
+    /// [`crate::term::SPINE_ITERATE_AT`] a node's spine is computed from the
+    /// bottom up first ([`Cache::warm_spine`]).
+    depth: u32,
 }
 
 /// One direct-mapped entry: the memoized answer under a weak key, and the
@@ -204,6 +208,7 @@ impl Cache {
         Cache {
             terms: (0..1 << BITS).map(|_| Slot::empty()).collect(),
             types: (0..1 << BITS).map(|_| Slot::empty()).collect(),
+            depth: 0,
         }
     }
 
@@ -232,9 +237,40 @@ impl Cache {
         if let Some(u) = self.terms[i].hit(t) {
             return u;
         }
+        if self.depth >= crate::term::SPINE_ITERATE_AT {
+            self.warm_spine(t);
+            if let Some(u) = self.terms[i].hit(t) {
+                return u;
+            }
+        }
+        self.depth += 1;
         let u = self.compute_term(t);
+        self.depth -= 1;
         self.terms[i].store(t, u);
         u
+    }
+
+    /// A deep node's spine answered from the bottom up, so the recursion
+    /// that follows meets a stored answer one level down instead of walking
+    /// the chain one native frame per node (docs/deep-term-walks-design.md).
+    /// Each node below `t` is computed with the depth reset: its own spine
+    /// child is already stored, so it recurses a level or two. A collision
+    /// that evicted that child costs one more level, never the chain.
+    fn warm_spine(&mut self, t: &Rc<Term>) {
+        let mut path = Vec::new();
+        let mut cur = crate::term::spine_child(t);
+        while let Some(c) = cur {
+            if self.terms[slot(Rc::as_ptr(c) as usize)].hit(c).is_some() {
+                break;
+            }
+            path.push(Rc::clone(c));
+            cur = crate::term::spine_child(c);
+        }
+        let depth = std::mem::replace(&mut self.depth, 0);
+        for node in path.iter().rev() {
+            self.term_use(node);
+        }
+        self.depth = depth;
     }
 
     /// Two-stage query (see the [`Cache`] docs): `None` means "not seen
