@@ -663,13 +663,13 @@ impl Elaborator {
     }
 
     /// The spellings of `lhs` the goal uses: `lhs` itself, and every term
-    /// under no binder with `lhs`'s head (a global's application) that
-    /// converts to it, capped. Abstracting them all in one pass is the
+    /// under no binder with `lhs`'s head (a global's or a local variable's
+    /// application, [`keyable_head`]) that converts to it, capped. Abstracting them all in one pass is the
     /// match-motive synthesis's §4.4 move: half a rewrite is worse than none.
     fn spellings(&self, cx: &Cx, goal: &Type, lhs: &Term, carrier: &Type, level: &Level) -> Vec<Term> {
         let mut out = vec![lhs.clone()];
         let (head, _) = crate::spelling::app_spine(lhs);
-        if !matches!(head, Term::GlobalTm { .. }) {
+        if !keyable_head(head) {
             return out;
         }
         for t in goal.root_terms().into_iter().filter(|t| same_key(lhs, t, 0)).take(CANDIDATES) {
@@ -808,6 +808,19 @@ fn eta(t: &Term) -> Option<Term> {
     }
     let lowered = g.inst_top(0, &Term::Zero);
     (lowered.shift_local(1) == **g).then_some(lowered)
+}
+
+/// A left side whose occurrences are found by conversion, not `==` alone
+/// (docs/equation-rewrite-design.md §6.2): one headed by a global, or by a
+/// local variable. A variable converts to nothing but itself, but the
+/// arguments it is applied to may be spelled differently in the goal: a
+/// class law's operation is the caller's operator variable, and the
+/// dictionary its left side builds from the class's (a sum's monoid) is
+/// resolved at the law's section prefix, while the goal resolved it at its
+/// own, minted per prefix as an `#open` global (traits-layer2-design.md
+/// §8.1) or spelled by another compiler build in a replayed image.
+fn keyable_head(head: &Term) -> bool {
+    matches!(head, Term::GlobalTm { .. } | Term::Var(_))
 }
 
 /// The key a candidate must share with a pattern: the same application

@@ -210,7 +210,7 @@ Lean's behaviour too and the fix is the same: pin an argument,
 ### 6.2 Keyed occurrences
 
 An occurrence of `a` is `a` itself or a term under no binder, with `a`'s
-head **global** and argument count, that converts to `a` at its type
+head (a **global** or a local variable) and argument count, that converts to `a` at its type
 (`MotiveSynthesisElab::motive_candidate_converts`, which also checks the
 candidate's own type, the guard the motive synthesis needed at irrelevant
 types). At most 256 candidates per step are tested; misses cost one
@@ -219,8 +219,19 @@ All spellings are abstracted in one pass (`abstract_local_any`), so the
 motive never sees half a rewrite; `at :=` numbers them together
 (`abstract_local_at` takes several patterns).
 
-A local-variable head is matched by `==` only: a variable converts to
-nothing but itself short of a `let`, and the elaborator inlines those.
+A local-variable head is keyed the same way (2026-11-07,
+`issues/big-operator-tests-fail-on-replayed-images.md`). It was matched by
+`==` alone, on the reading that a variable converts to nothing but itself;
+but its *arguments* need not be spelled alike. A class law's left side is
+headed by the caller's operator variable (`c * ∑ k < n, f(k)` at
+`Semiring::mul_range_l`), and the dictionary it builds from the class's — the
+sum's monoid, an upcast — is spelled as the law's section resolved it, while
+the goal resolved it at its own context prefix. Since #462 an upcast is a
+global minted once per prefix (`docs/traits-layer2-design.md` §8.1), so a
+theorem whose prefix the section does not share (`<B: Type, A: Semiring(…)>`),
+or a law replayed from an image another compiler build wrote, spelled it
+differently and the rewrite found no occurrence. The two spellings convert
+by unfolding the minted global, so the argument-wise test finds it.
 
 What this recovered, measured by re-running the per-site conversion over
 the `j` sites round 1 left: 13 more convert (bitvec 6, utf8 4, int 2, nat 1)

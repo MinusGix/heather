@@ -478,8 +478,9 @@ pub(super) struct RelationRewrite<'a> {
     base: u32,
     /// The level of a relation application `R(x, y)`: of `proof`'s type.
     holds: Level,
-    /// Keyed conversion is asked only of a left side headed by a global, as
-    /// in the equation form (§6.2), and at most [`CANDIDATES`] times.
+    /// Keyed conversion is asked only of a left side headed by a global or a
+    /// local variable, as in the equation form (§6.2), and at most
+    /// [`CANDIDATES`] times.
     keyed: bool,
     conversions: usize,
     occurrences: usize,
@@ -521,7 +522,7 @@ impl<'a> RelationRewrite<'a> {
         base: u32,
         holds: Level,
     ) -> R<Self> {
-        let keyed = matches!(crate::spelling::app_spine(&relation.left).0, Term::GlobalTm { .. });
+        let keyed = super::keyable_head(crate::spelling::app_spine(&relation.left).0);
         let mut rw = RelationRewrite {
             e,
             original: cx,

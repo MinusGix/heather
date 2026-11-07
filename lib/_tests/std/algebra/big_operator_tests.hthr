@@ -261,6 +261,14 @@ theorem rel_derive_sum(n: Nat, f: Nat → Rat): PreservesRelation(Rat::Same, Rat
 theorem class_law_open<A: Semiring(≈, +, *)>(n: Nat, f: Nat → A, c: A, e: ∑ k < n, c * f(k) ≈ c): c * ∑ k < n, f(k) ≈ c {
     rewrite(Semiring::mul_range_l, e)
 }
+// At a context prefix the law's section does not share (`B` first), the
+// sum's monoid is resolved at the goal's own prefix and spelled by another
+// minted global than the law's left side: the occurrence, headed by the
+// operator variable `*`, is found by converting its arguments, not by `==`
+// (issues/big-operator-tests-fail-on-replayed-images.md).
+theorem class_law_open_other_prefix<B: Type, A: Semiring(≈, +, *)>(b: B, n: Nat, f: Nat → A, c: A, e: ∑ k < n, c * f(k) ≈ c): c * ∑ k < n, f(k) ≈ c {
+    rewrite(Semiring::mul_range_l, e)
+}
 theorem class_law_rat(n: Nat, f: Nat → Rat, c: Rat, e: ∑ k < n, c * f(k) ≈ c): c * ∑ k < n, f(k) ≈ c { rewrite(Semiring::mul_range_l, e) }
 // A body that is no η-redex binds `f` to the λ itself.
 theorem class_law_body(n: Nat, f: Nat → Rat, c: Rat, e: ∑ k < n, c * (f(k) + 1) ≈ 0): c * ∑ k < n, (f(k) + 1) ≈ 0 {
