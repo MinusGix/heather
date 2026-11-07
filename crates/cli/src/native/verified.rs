@@ -4,7 +4,9 @@
 //! The function and the functions it calls are reflected into a FunctionIR
 //! program, and the certificate is what `function_ir_compile` says about it:
 //! the program lowered by `lower_program` with the heuristic's placement,
-//! evaluable, evaluating to the source function, and so returning the
+//! evaluable (checked by `program_scan`, one pass over the program, and
+//! `program_scan_evaluable`; issues/function-ir-evaluable-quadratic.md),
+//! evaluating to the source function, and so returning the
 //! source's value at the function's label. Nothing in it is about this
 //! program's code beyond equations the kernel checks by evaluation. The
 //! bytes and the entry offset are evaluated here, from the same
@@ -83,14 +85,14 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
 ", functions - 1 - k));
         }
         let typed = typed(&parameters);
-        let agreement = format!("theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{ trivial }}
+        let agreement = format!("{evaluable}
 
 // The program's function {f} evaluates to the source function: the
 // generator's theorem, from each function's `Compile` instance.
 theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]) = {answer} {{
     {source}::agrees({list})
 }}
-", f = functions - 1, list = parameters.join(", "));
+", evaluable = evaluable_text(prefix, functions), f = functions - 1, list = parameters.join(", "));
         Shape { functions, root: functions - 1, arity, definitions, agreement, answer }
     }
 }
@@ -260,6 +262,28 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
     Ok(Compiled { text, bytes, entry })
 }
 
+/// `{prefix}_evaluable`: the program's functions evaluable, checked by
+/// `program_scan` (one pass over each function,
+/// issues/function-ir-evaluable-quadratic.md) a function per declaration,
+/// so the kernel's per-declaration fuel bounds the largest function rather
+/// than the program; `program_scan_drop` joins them, from the last
+/// function (`{prefix}_scans_{k}` covers functions `0..=k`).
+fn evaluable_text(prefix: &str, functions: usize) -> String {
+    let mut text = format!("theorem {prefix}_scans_none(): program_scan({prefix}_program().drop({functions})).IsTrue() {{ trivial }}\n");
+    for k in 0..functions {
+        let below = if k == 0 { "none".to_string() } else { (k - 1).to_string() };
+        text.push_str(&format!("theorem {prefix}_scanned_{k}(): program_scan_head({prefix}_program().drop({d})).IsTrue() {{ trivial }}
+theorem {prefix}_scans_{k}(): program_scan({prefix}_program().drop({d})).IsTrue() {{
+    program_scan_drop({prefix}_program(), {d}, {prefix}_scanned_{k}(), {prefix}_scans_{below}())
+}}
+", d = functions - 1 - k));
+    }
+    text.push_str(&format!("theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{
+    program_scan_evaluable({prefix}_program(), program_scan_drop_zero({prefix}_program(), {prefix}_scans_{last}()))
+}}", last = functions - 1));
+    text
+}
+
 /// The program's agreement with its source: `{prefix}_evaluable`, each
 /// function's agreement, and `{prefix}_agrees`, the program's root
 /// function evaluating to the source function (`program_eval_sources`).
@@ -293,7 +317,8 @@ fn {prefix}_sources() → Answers() {{
     let typed = typed(&parameters);
     let list = format!("[{}]", parameters.join(", "));
     let call = root.answer(&parameters);
-    format!("theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{ trivial }}
+    let evaluable = evaluable_text(prefix, program.functions.len());
+    format!("{evaluable}
 
 {agreements}
 theorem {prefix}_sourced(): program_sourced({prefix}_program(), {sources}) {{

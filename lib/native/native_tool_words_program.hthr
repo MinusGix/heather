@@ -20,7 +20,14 @@ fn raise_letter_native_fn0() → Function {
 fn raise_letter_native_first_0() → List<Function> { Cons(raise_letter_native_fn0(), Nil) }
 fn raise_letter_native_program() → List<Function> { raise_letter_native_first_0() }
 
-theorem raise_letter_native_evaluable(): program_evaluable(raise_letter_native_program()).IsTrue() { trivial }
+theorem raise_letter_native_scans_none(): program_scan(raise_letter_native_program().drop(1)).IsTrue() { trivial }
+theorem raise_letter_native_scanned_0(): program_scan_head(raise_letter_native_program().drop(0)).IsTrue() { trivial }
+theorem raise_letter_native_scans_0(): program_scan(raise_letter_native_program().drop(0)).IsTrue() {
+    program_scan_drop(raise_letter_native_program(), 0, raise_letter_native_scanned_0(), raise_letter_native_scans_none())
+}
+theorem raise_letter_native_evaluable(): program_evaluable(raise_letter_native_program()).IsTrue() {
+    program_scan_evaluable(raise_letter_native_program(), program_scan_drop_zero(raise_letter_native_program(), raise_letter_native_scans_0()))
+}
 
 // What each function computes: its source.
 fn raise_letter_native_sources() → Answers() {

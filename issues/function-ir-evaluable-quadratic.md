@@ -1,6 +1,6 @@
 ---
 title: Check FunctionIR evaluability in one pass, not per nesting level
-status: open
+status: closed
 labels: [native, function-ir, perf]
 area: heather-in-heather
 milestone: [nh-front]
@@ -42,3 +42,29 @@ the disjointness in the common case, with the pairwise check as the
 fallback), and a theorem that the pass implies `evaluable`, which the
 certificate cites in place of `trivial`. The proofs that read `evaluable`'s
 conjuncts stay as they are.
+
+## Resolution (2026-11-07)
+
+Not the min/max-with-fallback shape: the lowering allocates a match's join
+id before the comparison its condition reads, so an arm's writes are
+routinely below its prefix's mentions and the fallback would have run at
+every level. Instead `StructuredRegion::scan` (`function_ir_eval`) walks a
+region once in evaluation order with the ids mentioned so far as marks (a
+`List<Bool>` bitmap): a write must find its id unmarked, every mention marks
+its id, a conditional's arms start from the same marks with the condition
+marked and are joined after, and a loop's or function's body starts from its
+parameters. That is `evaluable`'s condition read the other way round, so it
+accepts exactly what `evaluable` accepts (probes in
+`lib/_tests/native/function_ir/function_ir_eval_tests.hthr`, each refusal
+beside `evaluable`'s). `scan_sound`/`scan_marks`/`scan_keeps` prove it, and
+`program_scan_evaluable` gives `program_evaluable`, which the certificate
+cites; `eval_computes` and the proofs reading `evaluable`'s conjuncts are
+unchanged.
+
+The certificate (`crates/cli/src/native/verified.rs`, `evaluable_text`) also
+checks one function per declaration (`{prefix}_scanned_{k}`, joined by
+`program_scan_drop`), since the fuel is per declaration. `compile-x86` of the
+self-hosted lexer's `step` now certifies; its largest declaration is
+`step_full`'s scan, about 29% of the fuel. What remains is the scan's cost
+per id (marks are indexed by unary ids, so a function costs the sum of the
+ids it mentions): [[function-ir-scan-id-cost]].
