@@ -157,8 +157,8 @@ impl Elaborator {
             if flexible_left
                 && expected_for_numeral.is_none()
                 && sibling_for_numeral.is_none()
-                && expected.is_some_and(|t| self.is_local_carrier(cx, t, span))
                 && let Some(op) = self.designated_at_scope_class(cx, sym, fixity)
+                && expected.is_some_and(|t| self.is_local_carrier(cx, t, span))
             {
                 return Ok(op);
             }

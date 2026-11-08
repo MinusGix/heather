@@ -160,6 +160,13 @@ impl Elaborator {
     /// scope (operator rung 2b, numerals at a class carrier).
     pub(crate) fn is_local_carrier(&self, cx: &Cx, ty: &Type, span: Span) -> bool {
         let is_var = |t: &Type| matches!(t, Type::El { tm, .. } if matches!(**tm, Term::Var(_)));
-        is_var(ty) || self.whnf(cx, ty, span).is_ok_and(|head| is_var(&head))
+        // A nominal type is never one, and is the common case: no whnf.
+        if is_var(ty) {
+            return true;
+        }
+        if matches!(ty, Type::Nat) || self.tag_of(ty).is_some() {
+            return false;
+        }
+        self.whnf(cx, ty, span).is_ok_and(|head| is_var(&head))
     }
 }
