@@ -499,6 +499,48 @@ an event loop over `epoll`. Each such compiler is a DSL in vision §2.2's
 sense, proved once for its own terms, and none of them asks `Source` for
 continuations.
 
+### 5.6 Restricted APIs are the default (Minus, 2026-11-08)
+
+Minus, on this note: *"I agree that we need some notion of `Io`, in a sense
+we're always running on a global system. But ideally everything should go
+through smaller restricted APIs, this is better for understanding and for
+optimization and so on. This probably still needs `Io` in some sense though
+it'd be neat if it could be guaranteed that you aren't touching it."*
+
+So the direction is §5.2 as the *default style*, not an option: `Io` is
+named only at the top (`main`) and inside the instances that implement the
+small interfaces over it; everything else is written against interfaces.
+"Guaranteed you aren't touching it" then comes in three strengths, each
+already within reach:
+
+1. **By typing, for free.** A function with no carrier parameter is pure: it
+   cannot reach `Io` at all. A function generic in `C` with only
+   `Stdout<C>` cannot call `open` on its carrier, because `C` is abstract
+   and no member of `Io` applies to it. The checker enforces this today
+   (the generic `greet` cannot be written to read). What it does not stop
+   is a *concrete* restricted wrapper (`record StdoutCap { io: Io }`) whose
+   field a caller projects out: Heather has no private fields, so a
+   restricted API must be a class over an abstract carrier, not a record
+   around `Io`. (An `interface fn` opaque constructor is the other route,
+   if a concrete type is ever wanted.)
+2. **By the meaning, per instance.** At the `Io` instance, `Io::Only(P, f)`
+   (§5.3) states the semantic guarantee: every exchange the run adds is a
+   write to stdout. For a compiled function it is one evaluation of the
+   footprint analysis over `ETm`.
+3. **For every instance at once.** That `f` generic in `Stdout<C>` has
+   footprint "stdout writes" at *every* carrier is a free theorem; per
+   function it comes from certified parametricity
+   (`issues/certified-parametricity.md`), §7 question 3.
+
+For optimization, the interface is the footprint: a pass that wants to
+reorder or merge two calls asks for their `Io::Only` facts, and a function
+written against `Stdout<C>` publishes the narrowest one by construction.
+The issue owning the library of interfaces
+(`effect-interfaces-over-carriers`) should therefore aim at the standard
+set an ordinary program uses (byte sinks and sources per descriptor, a
+file-system interface, arguments, exit status), with `Io` itself reserved
+for `main` and for the instances.
+
 ## 6. Fit with proving the compiler once
 
 | Piece | Below `rt` | In `rt`/reflector | Library only |
@@ -519,11 +561,10 @@ each with its case of a soundness proof that is already by induction over
 1. **Which complaint is it?** Signatures, handling, or reasoning (the
    introduction's three). The note addresses all three; the order of the
    issues in §8 assumes signatures and composition first, frames second.
-2. **Class-generic carriers for user effects.** Capabilities design §1
-   rejected a class-generic *world* because it puts a type parameter on
-   every effectful signature. For user effects that parameter *is* the
-   signature (it is how a function says it only logs). The recommendation
-   keeps `Io` concrete and makes only user effects generic. Agreed?
+2. **Class-generic carriers for user effects.** *Answered (Minus,
+   2026-11-08, §5.6):* restricted APIs are the default, with `Io` at the
+   top and in the instances. Capabilities design §1's rejection of a
+   class-generic world stands for `Io` itself.
 3. **Moving theorems between carriers.** `greet` proved at the pure
    carrier says nothing about `greet` at `Io` without either a second proof
    or a free theorem. Per-function parametricity
