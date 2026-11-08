@@ -458,3 +458,125 @@ evidence theorem Io::against_co_respects<R>({io: Io}):
 {
     λ t u e => Io::against_co_cong(t, u, e, io)
 }
+
+// ---------------------------------------------------------------------------
+// Two loops over a world that go round together
+
+// Equivalent passes at every state give equivalent loops.
+fn Io::iterate_cong<A, B>(step1: A → Io → Partial(Mutated<Io, Step<A, B>>), step2: A → Io → Partial(Mutated<Io, Step<A, B>>),
+    hs: (a: A) → (io: Io) → Eutt<Mutated<Io, Step<A, B>>>(Events::none(), step1(a, io), step2(a, io)), a: A, io: Io) →
+    Eutt<Mutated<Io, B>>(Events::none(), Io::iterate(step1, a, io), Io::iterate(step2, a, io))
+{
+    Eutt::iter_cong<Mutated<Io, A>, Mutated<Io, B>>(Events::none(), λ s => Io::lift_step(step1, s), λ s => Io::lift_step(step2, s),
+        λ s => Eutt::bind_cong_l<Mutated<Io, Step<A, B>>, Step<Mutated<Io, A>, Mutated<Io, B>>>(Events::none(), step1(s.value, s.after), step2(s.value, s.after),
+            λ m => CRet(Io::shift(m)), hs(s.value, s.after)),
+        Mutated(io, a))
+}
+
+// A pass with no silent step: a total function of the state and the world.
+fn Io::total<A, B>(f: A → Io → Mutated<Io, Step<A, B>>) → A → Io → Partial(Mutated<Io, Step<A, B>>) {
+    λ x io2 => CRet(f(x, io2))
+}
+
+// Two passes' answers that go on together: both round again at related
+// states, or both out at related results.
+fn Io::StepRel<A, B, C, D>(R: A → C → Type, Q: B → D → Type, x: Step<A, B>, y: Step<C, D>) → Type {
+    match x {
+        Continue(a) => match y { Continue(c) => R(a, c), Break(_) => False },
+        Break(b) => match y { Continue(_) => False, Break(d) => Q(b, d) },
+    }
+}
+
+// What a loop of total passes, followed by `k`, observes first: one silent
+// step to the next pass, or `k` at the result.
+fn Io::loop_obs<A, B, X>(f: A → Io → Mutated<Io, Step<A, B>>, k: Mutated<Io, B> → Partial(X), after: Io, v: Step<A, B>) → Obs<X>(Events::none()) {
+    match v {
+        Continue(a2) => OTau(CoTree::bind(Events::none(), Io::iterate(Io::total(f), a2, after), k)),
+        Break(b) => CoTree::obs(Events::none(), k(Mutated(after, b))),
+    }
+}
+
+theorem Io::loop_obs_at<A, B, X>(f: A → Io → Mutated<Io, Step<A, B>>, k: Mutated<Io, B> → Partial(X)): (m: Mutated<Io, Step<A, B>>) →
+    CoTree::obs(Events::none(), CoTree::bind(Events::none(),
+        CoTree::iter_obs<Mutated<Io, A>, Mutated<Io, B>>(Events::none(), λ s => Io::lift_step<A, B>(Io::total(f), s), ORet(Io::shift(m))), k))
+        = Io::loop_obs(f, k, m.after, m.value)
+{
+    λ m => match m {
+        Mutated(after, v) => match v {
+            Continue(_) => refl,
+            Break(_) => refl,
+        },
+    }
+}
+
+// Loops of total passes, each followed by its rest: started at related
+// states, with passes that leave the same world and related answers, and
+// rests that agree at related results, they agree. A simulation proved
+// once, by direct corecursion: a pass round again on both sides is one
+// silent step on both.
+fn Io::iterate_rel<A, B, C, D, X>(fa: A → Io → Mutated<Io, Step<A, B>>, fc: C → Io → Mutated<Io, Step<C, D>>,
+    R: A → C → Type, Q: B → D → Type,
+    hs: (a: A) → (c: C) → R(a, c) → (io: Io) → (fa(a, io).after = fc(c, io).after) ∧ Io::StepRel(R, Q, fa(a, io).value, fc(c, io).value),
+    k1: Mutated<Io, B> → Partial(X), k2: Mutated<Io, D> → Partial(X),
+    hk: (b: B) → (d: D) → Q(b, d) → (io: Io) → Eutt<X>(Events::none(), k1(Mutated(io, b)), k2(Mutated(io, d))),
+    a: A, c: C, r: R(a, c), io: Io) →
+    Eutt<X>(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a, io), k1),
+        CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2))
+{
+    let h = hs(a, c, r, io);
+    let after = fa(a, io).after;
+    let oa: (CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a, io), k1))
+            = Io::loop_obs(fa, k1, after, fa(a, io).value)) = Io::loop_obs_at(fa, k1, fa(a, io));
+    let oc0: (CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2))
+            = Io::loop_obs(fc, k2, fc(c, io).after, fc(c, io).value)) = Io::loop_obs_at(fc, k2, fc(c, io));
+    let oc: (CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2))
+            = Io::loop_obs(fc, k2, after, fc(c, io).value)) =
+        j(sym(h.left), λ y _ => CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2))
+            = Io::loop_obs(fc, k2, y, fc(c, io).value), oc0);
+    match va: fa(a, io).value {
+        Continue(a2) => match vc: fc(c, io).value {
+            Continue(c2) => {
+                let rel: R(a2, c2) = j(vc, λ y _ => Io::StepRel(R, Q, Continue(a2), y),
+                    j(va, λ y _ => Io::StepRel(R, Q, y, fc(c, io).value), h.right));
+                ETau(0, 0, CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a2, after), k1),
+                    CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c2, after), k2),
+                    j(va, λ y _ => CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a, io), k1))
+                        = Io::loop_obs(fa, k1, after, y), oa),
+                    j(vc, λ y _ => CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2))
+                        = Io::loop_obs(fc, k2, after, y), oc),
+                    Io::iterate_rel(fa, fc, R, Q, hs, k1, k2, hk, a2, c2, rel, after))
+            },
+            Break(_) => false_elim(j(vc, λ y _ => Io::StepRel(R, Q, Continue(a2), y),
+                j(va, λ y _ => Io::StepRel(R, Q, y, fc(c, io).value), h.right))),
+        },
+        Break(b) => match vc: fc(c, io).value {
+            Continue(c2) => false_elim(j(vc, λ y _ => Io::StepRel(R, Q, Break(b), y),
+                j(va, λ y _ => Io::StepRel(R, Q, y, fc(c, io).value), h.right))),
+            Break(d) => {
+                let q: Q(b, d) = j(vc, λ y _ => Io::StepRel(R, Q, Break(b), y),
+                    j(va, λ y _ => Io::StepRel(R, Q, y, fc(c, io).value), h.right));
+                let ea: (CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a, io), k1))
+                        = CoTree::obs(Events::none(), k1(Mutated(after, b)))) =
+                    j(va, λ y _ => CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a, io), k1))
+                        = Io::loop_obs(fa, k1, after, y), oa);
+                let ec: (CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2))
+                        = CoTree::obs(Events::none(), k2(Mutated(after, d)))) =
+                    j(vc, λ y _ => CoTree::obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2))
+                        = Io::loop_obs(fc, k2, after, y), oc);
+                Eutt::trans(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a, io), k1),
+                    k1(Mutated(after, b)),
+                    CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2),
+                    Eutt::of_bisim(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a, io), k1),
+                        k1(Mutated(after, b)), Bisim::of_obs(Events::none(), CoTree::bind(Events::none(), Io::iterate(Io::total(fa), a, io), k1),
+                            k1(Mutated(after, b)), ea)),
+                    Eutt::trans(Events::none(), k1(Mutated(after, b)), k2(Mutated(after, d)),
+                        CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2),
+                        hk(b, d, q, after),
+                        Eutt::of_bisim(Events::none(), k2(Mutated(after, d)),
+                            CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2),
+                            Bisim::of_obs(Events::none(), k2(Mutated(after, d)),
+                                CoTree::bind(Events::none(), Io::iterate(Io::total(fc), c, io), k2), sym(ec)))))
+            },
+        },
+    }
+}

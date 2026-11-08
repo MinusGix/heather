@@ -402,3 +402,133 @@ theorem Env::compute_moved(self env: Env, call: Answers(), region: StructuredReg
         trans(cong_fn(λ (x: BitVec(width)) => x.toNat(), Valuation::set_here(after.values, out, λ wd => after.values(wd, src), width)),
             cong_fn(λ (s: State) => s.values(width, src).toNat(), region.run_byte_free(call, free, env.valuation(), env.buffers))))
 }
+
+// ---------------------------------------------------------------------------
+// Statements with loops: world threading in `Partial`
+
+// A pass's flow as a step of the loop's iteration, the world threaded.
+fn Stmt::pass_step(again: Nat, m: Mutated<Io, Flow>) → Partial(Mutated<Io, Step<Env, Flow>>) {
+    CRet(Mutated(m.after, m.value.pass(again)))
+}
+
+// The rest of a `Then`, from where the first statement left the world, as
+// world threading in `Partial`.
+fn Stmt::then_run(rest: Io → Env → Partial(Mutated<Io, Flow>), m: Mutated<Io, Flow>) → Partial(Mutated<Io, Flow>) {
+    match m.value {
+        Onward(next) => rest(m.after, next),
+        Exited(status) => CRet(Mutated(m.after, Exited(status))),
+    }
+}
+
+// Every statement as world threading: a loop is `Io::iterate` of its
+// pass, which may go round forever, so the meaning is in `Partial`
+// (docs/effects-capabilities-design.md §4); a procedure call is its tree
+// read against the world. A function of the environment and the world, so
+// that the recursion is on the statement.
+fn Stmt::run(self s: Stmt, call: Answers(), perform: PerformsCo()) → Env → Io → Partial(Mutated<Io, Flow>) {
+    match s {
+        Compute(region) => λ env io => CRet(Mutated(io, Onward(env.compute(call, region)))),
+        Invoke(shape) => λ env io => CRet(Stmt::thread(Invoke(shape), call, env, io)),
+        Then(first, rest) => λ env io => CoTree::bind(Events::none(), first.run(call, perform)(env, io),
+            λ m => Stmt::then_run(λ io2 env2 => rest.run(call, perform)(env2, io2), m)),
+        Branch(condition, yes, no) => λ env io => match env.bit(condition) {
+            True => yes.run(call, perform)(env, io),
+            False => no.run(call, perform)(env, io),
+        },
+        Repeat(body, again) => λ env io => Io::iterate<Env, Flow>(λ e io2 =>
+            CoTree::bind(Events::none(), body.run(call, perform)(e, io2), λ m => Stmt::pass_step(again, m)), env, io),
+        Exit(status) => λ env io => CRet(Mutated(io, Exited(env.word(status)))),
+        Arg(index, buf, len) => λ env io => CRet(Mutated(io, Onward(env.arg(env.number(index), buf, len)))),
+        Perform(procedure, args, results) => λ env io => Io::against_co(perform(procedure, args, results, env), io),
+    }
+}
+
+// The theorem: every statement's tree, read against any world, is its
+// threading, up to silent steps. A loop is the loop lemma (`Io::reads_iter`)
+// at the pass's reading.
+fn Stmt::reads_run(self s: Stmt, call: Answers(), perform: PerformsCo()) →
+    (env: Env) → Io::Reads(s.denote_co(call, perform)(env), λ io => s.run(call, perform)(env, io))
+{
+    match s {
+        Compute(region) => λ env => Io::reads_ret(Onward(env.compute(call, region))),
+        Invoke(shape) => λ env io => ERet(1, 0, Stmt::thread(Invoke(shape), call, env, io), refl, refl),
+        Then(first, rest) => λ env => {
+            let h = λ (flow: Flow) => match flow as λ _ => CoTree<Flow>(Events::linux()) {
+                Onward(next) => rest.denote_co(call, perform)(next),
+                Exited(status) => CRet(Exited(status)),
+            };
+            let g = λ (flow: Flow) (io: Io) => Stmt::then_run(λ io2 env2 => rest.run(call, perform)(env2, io2), Mutated(io, flow));
+            let rh: (flow: Flow) → Io::Reads(h(flow), g(flow)) = λ flow => match flow as λ f =>
+                    Io::Reads(match f as λ _ => CoTree<Flow>(Events::linux()) {
+                        Onward(next) => rest.denote_co(call, perform)(next),
+                        Exited(status) => CRet(Exited(status)),
+                    }, λ io => Stmt::then_run(λ io2 env2 => rest.run(call, perform)(env2, io2), Mutated(io, f))) {
+                Onward(next) => rest.reads_run(call, perform, next),
+                Exited(status) => Io::reads_ret(Exited(status)),
+            };
+            Io::reads_bind(first.denote_co(call, perform)(env), λ io => first.run(call, perform)(env, io), h, g,
+                first.reads_run(call, perform, env), rh)
+        },
+        Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b => Io::Reads(
+                match b as λ _ => CoTree<Flow>(Events::linux()) {
+                    True => yes.denote_co(call, perform)(env),
+                    False => no.denote_co(call, perform)(env),
+                },
+                λ io => match b as λ _ => Partial(Mutated<Io, Flow>) { True => yes.run(call, perform)(env, io), False => no.run(call, perform)(env, io) }) {
+            True => yes.reads_run(call, perform, env),
+            False => no.reads_run(call, perform, env),
+        },
+        Repeat(body, again) => λ env => Io::reads_iter<Env, Flow>(
+            λ e => CoTree::map(Events::linux(), body.denote_co(call, perform)(e), λ flow => flow.pass(again)),
+            λ e io2 => CoTree::bind(Events::none(), body.run(call, perform)(e, io2), λ m => Stmt::pass_step(again, m)),
+            λ e => Io::reads_bind<Flow, Step<Env, Flow>>(body.denote_co(call, perform)(e), λ io => body.run(call, perform)(e, io),
+                λ flow => CRet(flow.pass(again)), λ flow io => CRet(Mutated(io, flow.pass(again))),
+                body.reads_run(call, perform, e), λ flow => Io::reads_ret(flow.pass(again))),
+            env),
+        Exit(status) => λ env => Io::reads_ret(Exited(env.word(status))),
+        Arg(index, buf, len) => λ env => Io::reads_ret(Onward(env.arg(env.number(index), buf, len))),
+        Perform(procedure, args, results) => λ env io => Eutt::refl(Events::none(), Io::against_co(perform(procedure, args, results, env), io)),
+    }
+}
+
+// A loop-free statement's threading in `Partial` is its plain threading,
+// returned.
+fn Stmt::run_straight(self s: Stmt, call: Answers(), perform: PerformsCo()) → s.straight().IsTrue() → (env: Env) → (io: Io) →
+    Eutt<Mutated<Io, Flow>>(Events::none(), s.run(call, perform)(env, io), CRet(Stmt::thread(s, call, env, io)))
+{
+    match s {
+        Compute(region) => λ _ env io => Eutt::refl(Events::none(), CRet(Mutated(io, Onward(env.compute(call, region))))),
+        Invoke(shape) => λ _ env io => Eutt::refl(Events::none(), CRet(Stmt::thread(Invoke(shape), call, env, io))),
+        Then(first, rest) => λ ok env io => {
+            let parts = Bool::is_true_and(first.straight(), rest.straight(), ok);
+            let k = λ (m: Mutated<Io, Flow>) => Stmt::then_run(λ io2 env2 => rest.run(call, perform)(env2, io2), m);
+            let m1 = Stmt::thread(first, call, env, io);
+            let hk: (m: Mutated<Io, Flow>) → Eutt<Mutated<Io, Flow>>(Events::none(), k(m), CRet(Stmt::then_thread(rest, call, m))) =
+                λ m => match m.value as λ f => Eutt<Mutated<Io, Flow>>(Events::none(),
+                        Stmt::then_run(λ io2 env2 => rest.run(call, perform)(env2, io2), Mutated(m.after, f)),
+                        CRet(Stmt::then_thread(rest, call, Mutated(m.after, f)))) {
+                    Onward(next) => rest.run_straight(call, perform, parts.right, next, m.after),
+                    Exited(status) => Eutt::refl(Events::none(), CRet(Mutated(m.after, Exited(status)))),
+                };
+            Eutt::trans(Events::none(), CoTree::bind(Events::none(), first.run(call, perform)(env, io), k),
+                CoTree::bind(Events::none(), CRet(m1), k), CRet(Stmt::thread(Then(first, rest), call, env, io)),
+                Eutt::bind_cong_l(Events::none(), first.run(call, perform)(env, io), CRet(m1), k,
+                    first.run_straight(call, perform, parts.left, env, io)),
+                Eutt::trans(Events::none(), CoTree::bind(Events::none(), CRet(m1), k), k(m1), CRet(Stmt::thread(Then(first, rest), call, env, io)),
+                    Eutt::bind_ret_l(Events::none(), m1, k), hk(m1)))
+        },
+        Branch(condition, yes, no) => λ ok env io => {
+            let parts = Bool::is_true_and(yes.straight(), no.straight(), ok);
+            match env.bit(condition) as λ b => Eutt<Mutated<Io, Flow>>(Events::none(),
+                    match b as λ _ => Partial(Mutated<Io, Flow>) { True => yes.run(call, perform)(env, io), False => no.run(call, perform)(env, io) },
+                    CRet(match b as λ _ => Mutated<Io, Flow> { True => Stmt::thread(yes, call, env, io), False => Stmt::thread(no, call, env, io) })) {
+                True => yes.run_straight(call, perform, parts.left, env, io),
+                False => no.run_straight(call, perform, parts.right, env, io),
+            }
+        },
+        Repeat(_, _) => λ never => false_elim(never),
+        Exit(status) => λ _ env io => Eutt::refl(Events::none(), CRet(Mutated(io, Exited(env.word(status))))),
+        Arg(index, buf, len) => λ _ env io => Eutt::refl(Events::none(), CRet(Mutated(io, Onward(env.arg(env.number(index), buf, len))))),
+        Perform(_, _, _) => λ never => false_elim(never),
+    }
+}

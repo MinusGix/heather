@@ -1,0 +1,153 @@
+// Probes of effectful `rt` programs with loops lowered to a `Source`
+// (`rt_io_loop`, `native_source_io`; docs/effects-capabilities-design.md
+// §8.6): a loop that echoes stdin to stdout until the end of the input, the
+// statements it lowers to, those statements and its meaning run against a
+// scripted world (each to the same end as the surface `while` it models),
+// and the soundness theorem instantiated so that the lowered program's tree
+// reads as its meaning at every world. Plus refusals: a loop that rebinds
+// its buffer to the one a read wrote over, a condition that is not a bit, a
+// variable rebound to one of another code. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import itree;
+import coitree;
+import coitree_rec;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import native_source;
+import native_source_co;
+import native_source_io;
+import rt;
+import rt_lower;
+import rt_io;
+import rt_io_lower;
+import rt_io_loop;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// The surface method it models: read into the buffer and write what came
+// back, while the last read brought something.
+fn Io::echo_all(io: Io, buf: List<BitVec(8)>) → Partial(Mutated<Io, BitVec(64)>) {
+    let mut io = io;
+    let mut buf = buf;
+    let mut n: BitVec(64) = BitVec::ofNat(1);
+    while BitVec::ofNat(0).unsigned_lt_bit(n) {
+        let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+        let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
+        buf := r.buf;
+        n := r.result;
+    }
+    Pointed::ret(Mutated(io, n))
+}
+
+// The loop's condition, `0 <u n`, over the state `[n, buf]`.
+fn going() → Tm { Tm::Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])) }
+
+// A pass, over `[n, buf]`: read up to 64 bytes into the buffer, write what
+// came back. It ends in the context `[w, from, fd, count, buf', max, fd, n,
+// buf]`.
+fn pass_body() → ETm {
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 3, 0],
+    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 2],
+    ETm::Pure(Lit(Word(64), 0))))))))
+}
+
+// `n := 1`, then the loop rebinding `n` to the read's count and the buffer
+// to the one it filled, then `n`.
+fn echo_all_prog() → ELoop {
+    ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
+        ELoop::While(going(), pass_body(), [3, 4], ELoop::Done(ETm::Pure(Var(0)))))
+}
+
+fn echo_g() → List<Ty> { [Bytes(0)] }
+fn echo_locs() → List<Loc> { [InBuffer(0)] }
+
+fn lowers(o: Option<ELowered>) → Bool { match o { None => False, Some(_) => True } }
+
+fn echo_lowered() → Option<ELowered> { echo_all_prog().lower(ETm::plain_world(), echo_g(), echo_locs(), 1) }
+
+theorem echo_all_lowers(): lowers(echo_lowered()) = True { refl }
+
+fn echo_stmt() → Stmt { echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).stmt }
+fn echo_result() → Nat { echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).result }
+
+fn zeros() → List<BitVec(8)> { List::replicate(BitVec::ofNat(0), 64) }
+fn piped() → Io { Io::of(World::piped([[b(104), b(105)], [b(121), b(111)]])) }
+fn start(buf: List<BitVec(8)>) → native_source::Env { native_source::Env([], [buf], []) }
+
+fn no_calls() → Answers() { λ f ws => BitVec::ofNat(0) }
+fn no_procedures() → PerformsCo() { λ p args results env => CRet(Onward(env)) }
+
+// The statements run at a piped world: "hiyo" comes back out, three reads
+// (the last at the end of the input) and three writes, and the result word
+// holds the last count, 0. The surface method ends at the same world with
+// the same value.
+fn echo_run() → Partial(Mutated<Io, BitVec(64)>) {
+    CoTree::map(Events::none(), echo_stmt().run(no_calls(), no_procedures())(start(zeros()), piped()),
+        λ m => ELoop::back(Word(64), RecInfo::none, echo_result(), m))
+}
+
+theorem echo_runs_sent(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), echo_run(), λ m => m.after.sent(Io::stdout())),
+    [b(104), b(105), b(121), b(111)]) { Returns(30, refl) }
+
+theorem echo_runs_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), echo_run(), λ m => m.value), BitVec::ofNat(0)) {
+    Returns(30, refl)
+}
+
+theorem echo_surface_sent(): Returns<List<BitVec(8)>>(Events::none(),
+    CoTree::map(Events::none(), Io::echo_all(piped(), zeros()), λ m => m.after.sent(Io::stdout())), [b(104), b(105), b(121), b(111)]) {
+    Returns(30, refl)
+}
+
+theorem echo_surface_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), Io::echo_all(piped(), zeros()), λ m => m.value),
+    BitVec::ofNat(0)) {
+    Returns(30, refl)
+}
+
+// The program's meaning runs to the same end.
+fn echo_meaning() → Partial(Mutated<Io, BitVec(64)>) { echo_all_prog().sem(ETm::plain_world(), echo_g(), Pair(zeros(), trivial), piped()) }
+
+theorem echo_meaning_sent(): Returns<List<BitVec(8)>>(Events::none(), CoTree::map(Events::none(), echo_meaning(), λ m => m.after.sent(Io::stdout())),
+    [b(104), b(105), b(121), b(111)]) { Returns(30, refl) }
+
+theorem echo_meaning_result(): Returns<BitVec(64)>(Events::none(), CoTree::map(Events::none(), echo_meaning(), λ m => m.value), BitVec::ofNat(0)) {
+    Returns(30, refl)
+}
+
+// The theorem at this program: the lowered statements' tree, read against
+// any world, is the program's meaning, up to silent steps.
+fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
+    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), echo_stmt().denote_co(no_calls(), perform)(start(buf)),
+            λ flow => flow.read_back(Word(64), RecInfo::none, echo_result())),
+        λ io => echo_all_prog().sem(ETm::plain_world(), echo_g(), Pair(buf, trivial), io))
+{
+    echo_all_prog().lower_reads(ETm::plain_world(), echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
+        no_calls(), Tm::calls_agree_none(RecInfo::none, no_calls()), perform, start(buf), Pair(buf, trivial),
+        ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
+}
+
+// ---------------------------------------------------------------------------
+// Refusals: the lowering returns `None`.
+
+// The buffer rebound to itself as it was before the read wrote over it
+// (variable 8): gone, so refused.
+theorem stale_refused(): lowers(ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
+    ELoop::While(going(), pass_body(), [3, 8], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = False { refl }
+
+// A condition that is a word, not a bit.
+theorem word_cond_refused(): lowers(ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
+    ELoop::While(Var(0), pass_body(), [3, 4], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = False { refl }
+
+// `n` rebound to the buffer.
+theorem code_refused(): lowers(ELoop::Seq(ETm::Let(Lit(Word(64), 1), ETm::Pure(Lit(Word(64), 0))),
+    ELoop::While(going(), pass_body(), [4, 4], ELoop::Done(ETm::Pure(Var(0))))).lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = False { refl }

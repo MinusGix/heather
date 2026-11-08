@@ -988,19 +988,21 @@ theorem ETm::call_sound(e: Effect, w: rt::World, g: List<Ty>, locs: List<Loc>, n
 // The lowering
 
 // The statements, the word the value ends in, and the next fresh word.
-record ELowered { stmt: Stmt, result: Nat, next: Nat }
+// The statements, the word the value lands in, the next fresh word, and
+// where every variable of the end context lives after them.
+record ELowered { stmt: Stmt, result: Nat, next: Nat, locs: List<Loc> }
 
 fn ETm::lower(self t: ETm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat) → Option<ELowered> {
     match t {
-        Pure(v) => ETm::lower_value(v, w, g, locs, next).and_then(λ c => Some(ELowered(Compute(c.region), c.result, c.next))),
+        Pure(v) => ETm::lower_value(v, w, g, locs, next).and_then(λ c => Some(ELowered(Compute(c.region), c.result, c.next, locs))),
         // The body sees the value as variable 0, in the word it was moved to.
         Let(e, body) => ETm::lower_value(e, w, g, locs, next).and_then(λ c =>
             body.lower(w, Cons(Tm::ty(e, w, g), g), Cons(InWord(c.result), locs), c.next).and_then(λ lb =>
-                Some(ELowered(Then(Compute(c.region), lb.stmt), lb.result, lb.next)))),
+                Some(ELowered(Then(Compute(c.region), lb.stmt), lb.result, lb.next, lb.locs)))),
         // The body sees the call's results where it landed them.
         Invoke(e, args, body) => ETm::lower_call(e, g, locs, next, args).and_then(λ k =>
             body.lower(w, Ty::bind_onto(e.results(), g), k.locs, Succ(next)).and_then(λ lb =>
-                Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next)))),
+                Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next, lb.locs)))),
     }
 }
 
@@ -1016,14 +1018,28 @@ fn ETm::Lands(t: Ty, tys: Nat → RecInfo, result: Nat, m: Mutated<Io, Flow>, e:
     (m.after = e.after) ∧ m.value.Keeps(t, tys, result, e.value)
 }
 
+// Where a statement leaves the program: on, with every variable of a
+// context kept where it lives.
+fn Flow::KeepsAll(self flow: Flow, tys: Nat → RecInfo, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g)) → Type {
+    match flow { Onward(env) => LocsHold(tys, env, g, locs, vals), Exited(_) => False }
+}
+
+// After the statements: every variable of the end context kept where the
+// lowering says it lives, below the next fresh word.
+fn ETm::EndHolds(self t: ETm, w: rt::World, g: List<Ty>, vals: rt::Env(w.tys, g), io: Io, next: Nat, l: ELowered, m: Mutated<Io, Flow>) → Type {
+    m.value.KeepsAll(w.tys, t.ctx_end(w, g), l.locs, t.sem_end(w, g, vals, io).value) ∧ (LocsBelow(l.locs, l.next) ∧ (next <= l.next))
+}
+
 // What a lowering promises: loop-free statements that, from any environment
-// holding the variables and at any world, land where the meaning does.
+// holding the variables and at any world, land where the meaning does, and
+// leave the end context's variables where they live.
 fn ETm::LowerHolds(self t: ETm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat, r: Option<ELowered>) → Type {
     match r {
         None => True,
         Some(l) => l.stmt.straight().IsTrue() ∧ ((call: Answers()) → Tm::CallsAgree(w, call) → (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) →
             LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
-            ETm::Lands(t.ty(w, g), w.tys, l.result, Stmt::thread(l.stmt, call, env, io), t.sem(w, g, vals, io))),
+            ETm::Lands(t.ty(w, g), w.tys, l.result, Stmt::thread(l.stmt, call, env, io), t.sem(w, g, vals, io))
+                ∧ t.EndHolds(w, g, vals, io, next, l, Stmt::thread(l.stmt, call, env, io))),
     }
 }
 
@@ -1033,10 +1049,13 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World): (g: List<Ty>) → (locs: Li
     match t {
         Pure(v) => λ g locs next => {
             let P = λ (r: Option<ELowered>) => ETm::LowerHolds(ETm::Pure(v), w, g, locs, next, r);
-            Option::and_then_elim(P, trivial, ETm::lower_value(v, w, g, locs, next), λ c => Some(ELowered(Compute(c.region), c.result, c.next)),
+            Option::and_then_elim(P, trivial, ETm::lower_value(v, w, g, locs, next), λ c => Some(ELowered(Compute(c.region), c.result, c.next, locs)),
                 λ c e_c => ⟨trivial, λ call agree env vals io held below pos => {
                     let vh = j(e_c, λ r _ => ETm::ValueHolds(v, w, g, locs, next, r), ETm::value_sound(v, w, g, locs, next));
-                    ⟨refl, vh.right(call, agree, env, vals, held, below, pos).right.left⟩
+                    let ran = vh.right(call, agree, env, vals, held, below, pos);
+                    let le: (next <= c.next) = Nat::le_trans(next, c.result, c.next, ran.left,
+                        j(sym(vh.left), λ n _ => c.result <= n, Nat::le_succ_r(c.result, c.result, c.result.le_refl())));
+                    ⟨⟨refl, ran.right.left⟩, ⟨ran.right.right, ⟨locs_below_mono(locs, next, c.next, le, below), le⟩⟩⟩
                 }⟩)
         },
         Let(e, body) => λ g locs next => {
@@ -1044,9 +1063,9 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World): (g: List<Ty>) → (locs: Li
             let g2 = Cons(Tm::ty(e, w, g), g);
             Option::and_then_elim(P, trivial, ETm::lower_value(e, w, g, locs, next),
                 λ c => body.lower(w, g2, Cons(InWord(c.result), locs), c.next).and_then(λ lb =>
-                    Some(ELowered(Then(Compute(c.region), lb.stmt), lb.result, lb.next))), λ c e_c =>
+                    Some(ELowered(Then(Compute(c.region), lb.stmt), lb.result, lb.next, lb.locs))), λ c e_c =>
             Option::and_then_elim(P, trivial, body.lower(w, g2, Cons(InWord(c.result), locs), c.next),
-                λ lb => Some(ELowered(Then(Compute(c.region), lb.stmt), lb.result, lb.next)), λ lb e_lb => {
+                λ lb => Some(ELowered(Then(Compute(c.region), lb.stmt), lb.result, lb.next, lb.locs)), λ lb e_lb => {
                 let vh = j(e_c, λ r _ => ETm::ValueHolds(e, w, g, locs, next, r), ETm::value_sound(e, w, g, locs, next));
                 let ih = j(e_lb, λ r _ => ETm::LowerHolds(body, w, g2, Cons(InWord(c.result), locs), c.next, r),
                     body.lower_sound(w, g2, Cons(InWord(c.result), locs), c.next));
@@ -1055,8 +1074,9 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World): (g: List<Ty>) → (locs: Li
                     let fresh: (c.result < c.next) = j(sym(vh.left), λ n _ => c.result < n, c.result.lt_succ_self());
                     let le: (next <= c.next) = Nat::le_trans(next, c.result, c.next, ran.left, Nat::le_trans(c.result, Succ(c.result), c.next,
                         Nat::le_succ_r(c.result, c.result, c.result.le_refl()), fresh));
-                    ih.right(call, agree, env.compute(call, c.region), Pair(Tm::sem(e, w, g, vals), vals), io, ran.right,
-                        ⟨fresh, locs_below_mono(locs, next, c.next, le, below)⟩, Nat::lt_of_lt_of_le(0, next, c.next, pos, le))
+                    let r = ih.right(call, agree, env.compute(call, c.region), Pair(Tm::sem(e, w, g, vals), vals), io, ran.right,
+                        ⟨fresh, locs_below_mono(locs, next, c.next, le, below)⟩, Nat::lt_of_lt_of_le(0, next, c.next, pos, le));
+                    ⟨r.left, ⟨r.right.left, ⟨r.right.right.left, Nat::le_trans(next, c.next, lb.next, le, r.right.right.right)⟩⟩⟩
                 }⟩
             }))
         },
@@ -1064,10 +1084,10 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World): (g: List<Ty>) → (locs: Li
             let P = λ (r: Option<ELowered>) => ETm::LowerHolds(ETm::Invoke(e, args, body), w, g, locs, next, r);
             let g2 = Ty::bind_onto(e.results(), g);
             Option::and_then_elim(P, trivial, ETm::lower_call(e, g, locs, next, args),
-                λ k => body.lower(w, g2, k.locs, Succ(next)).and_then(λ lb => Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next))),
+                λ k => body.lower(w, g2, k.locs, Succ(next)).and_then(λ lb => Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next, lb.locs))),
                 λ k e_k =>
             Option::and_then_elim(P, trivial, body.lower(w, g2, k.locs, Succ(next)),
-                λ lb => Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next)), λ lb e_lb => {
+                λ lb => Some(ELowered(Then(Stmt::Invoke(k.shape), lb.stmt), lb.result, lb.next, lb.locs)), λ lb e_lb => {
                 let ch = j(e_k, λ r _ => ETm::CallHolds(e, w, g, locs, next, args, r), ETm::call_sound(e, w, g, locs, next, args));
                 let ih = j(e_lb, λ r _ => ETm::LowerHolds(body, w, g2, k.locs, Succ(next), r), body.lower_sound(w, g2, k.locs, Succ(next)));
                 ⟨ih.left, λ call agree env vals io held below pos => {
@@ -1075,9 +1095,13 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World): (g: List<Ty>) → (locs: Li
                     let after = Io::call(io, k.shape.cmd(env)).after;
                     let env2 = k.shape.answer(env, Io::call(io, k.shape.cmd(env)).value);
                     let vals2 = Effect::push(w.tys, e.results(), g, vals, ETm::applied(e, w, g, vals, io, args).value);
-                    j(ans.left, λ y _ => ETm::Lands(body.ty(w, g2), w.tys, lb.result, Stmt::thread(lb.stmt, call, env2, after), body.sem(w, g2, vals2, y)),
-                        ih.right(call, agree, env2, vals2, after, ans.right.left, ans.right.right,
-                            Nat::lt_of_lt_of_le(0, next, Succ(next), pos, Nat::le_succ_r(next, next, next.le_refl()))))
+                    let r = ih.right(call, agree, env2, vals2, after, ans.right.left, ans.right.right,
+                            Nat::lt_of_lt_of_le(0, next, Succ(next), pos, Nat::le_succ_r(next, next, next.le_refl())));
+                    j(ans.left, λ y _ => ETm::Lands(body.ty(w, g2), w.tys, lb.result, Stmt::thread(lb.stmt, call, env2, after), body.sem(w, g2, vals2, y))
+                            ∧ (Stmt::thread(lb.stmt, call, env2, after).value.KeepsAll(w.tys, body.ctx_end(w, g2), lb.locs, body.sem_end(w, g2, vals2, y).value)
+                                ∧ (LocsBelow(lb.locs, lb.next) ∧ (next <= lb.next))),
+                        ⟨r.left, ⟨r.right.left, ⟨r.right.right.left,
+                            Nat::le_trans(next, Succ(next), lb.next, Nat::le_succ_r(next, next, next.le_refl()), r.right.right.right)⟩⟩⟩)
                 }⟩
             }))
         },
@@ -1144,7 +1168,7 @@ fn ETm::lower_reads(self t: ETm, w: rt::World, g: List<Ty>, locs: List<Loc>, nex
         Stmt::reads_thread(l.stmt, call, perform, holds.left, env), λ flow => Io::reads_ret(flow.read_back(ty, w.tys, l.result)));
     λ io => {
         let m = Stmt::thread(l.stmt, call, env, io);
-        let lands = holds.right(call, agree, env, vals, io, held, below, pos);
+        let lands = holds.right(call, agree, env, vals, io, held, below, pos).left;
         let same: (back(m) = CRet(t.sem(w, g, vals, io))) =
             eq2<Io, ty.sem(w.tys), Partial(Mutated<Io, ty.sem(w.tys)>)>(λ a x => CRet(Mutated(a, x)), lands.left,
                 m.value.read_back_keeps(ty, w.tys, l.result, t.sem(w, g, vals, io).value, lands.right));
