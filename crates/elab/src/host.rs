@@ -2611,6 +2611,22 @@ impl Elaborator {
         if !is_name(name) {
             return Err(format!("`{name}` is not a name"));
         }
+        // A qualified key, as `name_of` spells one, denotes its declaration
+        // wherever its module is in the import closure: a registered table
+        // (docs/registered-values-design.md) reaches a `by` through the
+        // modules its client imports, which need not include the lemma's.
+        if let Some((module, base)) = crate::names::split_qual(name)
+            && self.names.reaches(module)
+        {
+            if let Some(ind) = self.types.inductive(name) {
+                return Ok(run.global_ref(GlobalKey::Type(ind.tag)));
+            }
+            if self.names.declares(module, base)
+                && let Some(info) = self.names.global(name)
+            {
+                return Ok(run.global_ref(GlobalKey::At(info.abs as usize)));
+            }
+        }
         let key = match name {
             "Nat" => GlobalKey::Builtin("Nat"),
             "Succ" => GlobalKey::Builtin("Succ"),
@@ -3802,6 +3818,14 @@ impl Elaborator {
             },
             _ => unreachable!("the parser writes a prefix as a name or a call of one"),
         };
+        // `register def x: T = e;`: the built-in prefix, unless a generator of
+        // that name is in scope (docs/registered-values-design.md).
+        if prefix == "register"
+            && matches!(p.generator.kind, ExprKind::Var(_))
+            && !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_))
+        {
+            return self.elab_registered_def(d);
+        }
         let form = if d.value { "def" } else if d.kind == heather_syntax::ast::DeclKind::Theorem { "theorem" } else { "fn" };
         let label = format!("{prefix} {form} {}", d.name);
         if !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_)) {
