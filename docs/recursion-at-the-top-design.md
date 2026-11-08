@@ -205,6 +205,18 @@ codata (corecursion is a different lowering), and `meta fn`s.
    second probe (a chain `match` under a `λ`) still gets the outer goal,
    at the top as on master.
 
+   *Follow-up* (2026-11-08): the convoy, which slice 3 keeps as the
+   `below`'s carrier, had two defects of its own, both now fixed. It
+   reindexed the motive past the binders since the guard instead of since
+   the recursion's `match`, so a motive mentioning a type parameter or a
+   parameter before the decreasing one was refused by the kernel at depth 2,
+   on `Nat` and `List` (cov-convoy-motive-second-ambient, closed). And at a
+   `List` it checked a chain `match` under a `λ` against the motive with
+   that `λ`'s `Π` still on (cov-window-in-theorem-arms, closed): the
+   consumed binders now travel with the window (`WfCov::peel`), chosen by
+   conversion against the `match`'s goal only where binders intervene.
+   Probes: `lib/_tests/std/core/recursion_window_tests.hthr`.
+
 Retires, at the end: the guard-selection family, the window, the
 surface-scoped planner for every inductive below the indexed tier.
 

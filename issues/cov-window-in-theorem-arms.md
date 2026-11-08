@@ -1,10 +1,10 @@
 ---
 title: Course-of-values window in a theorem: a goal with a hypothesis on the scrutinee is refused, a chain match under a λ gets the outer goal
-status: open
+status: closed
 labels: [frontend,elaboration,recursion,proofs]
 area: language
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-11-08
 ---
 
 Found closing [[utf8-encode-decode-strictness]] (2026-09-18). The strictness
@@ -59,3 +59,4 @@ the arm and the nested `match`; both are in `wf_chain_convoy` / `WfConvoy`
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[wf-nested-match-motive-synthesis-kernel-refusal]] (`docs/list-course-of-values-design.md`).
+- 2026-11-08: 2026-11-08: probe 2 FIXED: at a `List`, a chain `match` under a `λ` (written, or the `λ m` that `generalize::wrap_arms` writes for a varied parameter) is now checked against the motive with the `Π`s those `λ`s consumed instantiated at them. The convoy's codomain was the enclosing motive at the goal anchor, `Π` and all (`Nat` gets the right one from motive synthesis, so only `Wf` was affected). `WfCov::peel` carries the consumed binders as terms; `convoy_peel` (`wf.rs`) picks how many by conversion against the `match`'s own goal, trying none first, and only where binders stand between the guard and the `match`, so every convoy accepted before emits the term it always did. Probes `shift_lam`, `shift_lam2` (two `λ`s), `shift3_lam` (handed down a second convoy), `walk`/`shift_all` (a generalized parameter at depth 2, which was refused too: `this has type Nat, but Nat -> Nat is expected`) and a negative control, in `lib/_tests/std/core/recursion_window_tests.hthr`. Probe 1 was already accepted (2026-11-07); probe 3 is [[convoyed-window-vs-written-motive]]'s diagnostic. Closing.

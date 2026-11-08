@@ -569,13 +569,19 @@ impl Elaborator {
             return None;
         }
         let by = (cx.names.len() - depth) as u32;
+        // The motive is scoped over the recursion's own context (`gamma`, the
+        // `match`'s, plus z), so it is reindexed past every binder since that
+        // `match`, the arm's `k` and ih included; `by` counts only those since
+        // the guard, and a motive mentioning a variable of `gamma` read the
+        // wrong binder with it (issues/cov-convoy-motive-second-ambient.md).
+        let from_match = (cx.gamma.entries.len() - gamma.entries.len()) as u32;
         Some(Convoy {
             dec: g.dec,
             preds: preds.clone(),
             d: comps.len(),
             lvl: mlvl.clone(),
             motive: motive
-                .apply_local(&embed(gamma, by + 1).extended(Rc::new(Term::Var(LocalVar(0))))),
+                .apply_local(&embed(gamma, from_match + 1).extended(Rc::new(Term::Var(LocalVar(0))))),
             outer_motive: Rc::clone(motive),
             gamma: gamma.clone(),
             tuple: tuple.shift_local(by),

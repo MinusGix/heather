@@ -1,0 +1,102 @@
+// Probes of the course-of-values window's convoy (docs/list-course-of-values-design.md
+// §4, docs/course-of-values-recursion-design.md §5): a nested `match` on the
+// chain's end, inside the recursion's arm, carries the window down, and its
+// arms are checked against the recursion's motive there.
+//
+// Two defects, one per probe family:
+// - a motive mentioning any variable of the recursion's own context (a type
+//   parameter, a parameter before the decreasing one) was reindexed past the
+//   binders since the guard only, not those since the `match`, so the convoy
+//   read the wrong binder and the kernel refused the declaration
+//   (issues/cov-convoy-motive-second-ambient.md), at `Nat` and at `List`;
+// - at a `List`, a nested `match` under a `λ` (written, or a generalized
+//   parameter's) was checked against the motive with its `Π` still on
+//   (issues/cov-window-in-theorem-arms.md probe 2).
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import nat; import list;
+
+// -- a second ambient variable, `List` -----------------------------------
+
+// A type parameter: the motive mentions `A`.
+fn Skip<A>(xs: List<A>) → Type {
+    match xs { Nil => True, Cons(_, r) => match r { Nil => True, Cons(_, r2) => Skip(r2) } }
+}
+theorem skip_all<A>(xs: List<A>): Skip(xs) {
+    match xs { Nil => trivial, Cons(_, r) => match r { Nil => trivial, Cons(_, r2) => skip_all(r2) } }
+}
+
+// A parameter before the decreasing one, read by the motive.
+fn Keep(k: Nat, xs: List<Nat>) → Type {
+    match xs { Nil => k = k, Cons(_, r) => match r { Nil => True, Cons(_, r2) => Keep(k, r2) } }
+}
+theorem keep_all(k: Nat, xs: List<Nat>): Keep(k, xs) {
+    match xs { Nil => refl, Cons(_, r) => match r { Nil => trivial, Cons(_, r2) => keep_all(k, r2) } }
+}
+
+// -- a second ambient variable, `Nat` ------------------------------------
+
+fn Every2(k: Nat, n: Nat) → Type {
+    match n { Zero => k = k, Succ(p) => match p { Zero => True, Succ(j) => Every2(k, j) } }
+}
+theorem every2(k: Nat, n: Nat): Every2(k, n) {
+    match n { Zero => refl, Succ(p) => match p { Zero => trivial, Succ(j) => every2(k, j) } }
+}
+
+fn Refl2<A>(x: A, n: Nat) → Type {
+    match n { Zero => x = x, Succ(p) => match p { Zero => True, Succ(j) => Refl2(x, j) } }
+}
+theorem refl2<A>(x: A, n: Nat): Refl2(x, n) {
+    match n { Zero => refl, Succ(p) => match p { Zero => trivial, Succ(j) => refl2(x, j) } }
+}
+
+// …and under a written `λ`, which `Nat` already peeled by motive synthesis.
+theorem every2_lam(k: Nat, n: Nat): Nat → Every2(k, n) {
+    match n { Zero => λ z => refl, Succ(p) => λ z => match p { Zero => trivial, Succ(j) => every2_lam(k, j, z) } }
+}
+
+// -- a nested `match` under a `λ`, `List` --------------------------------
+
+// A generalized parameter: the arms are wrapped in `λ m`, so the nested
+// `match` sits under it. Computes, at a literal and an open list.
+fn walk(xs: List<Nat>, m: Nat) → Nat {
+    match xs { Nil => m, Cons(a, r) => match r { Nil => m + a, Cons(b, r2) => walk(r2, m + a + b) } }
+}
+theorem walk_lit(): walk([1, 2, 3, 4, 5], 0) = 15 { refl }
+theorem walk_open(a: Nat, b: Nat, r: List<Nat>, m: Nat): walk(Cons(a, Cons(b, r)), m) = walk(r, m + a + b) { refl }
+
+// A dependent motive over the generalized parameter, at an open element type.
+fn Shift<A>(xs: List<A>, m: Nat) → Type {
+    match xs { Nil => m = m, Cons(_, r) => match r { Nil => True, Cons(_, r2) => Shift(r2, Succ(m)) } }
+}
+theorem shift_all<A>(xs: List<A>, m: Nat): Shift(xs, m) {
+    match xs { Nil => refl, Cons(_, r) => match r { Nil => trivial, Cons(_, r2) => shift_all(r2, Succ(m)) } }
+}
+// In checking position: the type is computed by the window.
+theorem shift_two(): Shift<Nat>([1, 2], 0) { refl }
+
+// A written `λ`, its binder read by the call (probe 2's shape).
+theorem shift_lam<A>(xs: List<A>): (m: Nat) → Shift(xs, m) {
+    match xs { Nil => λ m => refl, Cons(_, r) => λ m => match r { Nil => trivial, Cons(_, r2) => shift_lam(r2, Succ(m)) } }
+}
+
+// Two `λ`s, the goal reading both.
+theorem shift_lam2<A>(xs: List<A>): (m: Nat) → (k: Nat) → Shift(xs, m + k) {
+    match xs { Nil => λ m k => refl, Cons(_, r) => λ m k => match r { Nil => trivial, Cons(_, r2) => shift_lam2(r2, m, Succ(k)) } }
+}
+
+// Three deep, under the `λ`: the peel is handed down to the second convoy.
+fn Shift3(xs: List<Nat>, m: Nat) → Type {
+    match xs { Nil => m = m, Cons(_, r) => match r { Nil => True, Cons(_, r2) => match r2 { Nil => True, Cons(_, r3) => Shift3(r3, Succ(m)) } } }
+}
+theorem shift3_lam(xs: List<Nat>): (m: Nat) → Shift3(xs, m) {
+    match xs { Nil => λ m => refl, Cons(_, r) => λ m => match r { Nil => trivial, Cons(_, r2) => match r2 { Nil => trivial, Cons(_, r3) => shift3_lam(r3, Succ(m)) } } }
+}
+
+// Negative control: the call passes `m` where the motive at `r2` needs
+// `Succ(m)`; the peel instantiates the `Π` at the arm's own `m`, so this is
+// a genuine mismatch and stays refused.
+// expect-error(kernel): NotConvertible
+theorem shift_lam_wrong<A>(xs: List<A>): (m: Nat) → Shift(xs, m) {
+    match xs { Nil => λ m => refl, Cons(_, r) => λ m => match r { Nil => trivial, Cons(_, r2) => shift_lam_wrong(r2, m) } }
+}
