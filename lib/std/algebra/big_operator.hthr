@@ -451,3 +451,22 @@ register def mono_ordered_field_range: MonoEntry = MonoClassRules(name_of(Ordere
 ], [
     class_sign(False, Named(name_of(MonoidRel::range)), name_of(LocatedAddMonoid::range_nonneg)),
 ]);
+
+// ---------------------------------------------------------------------------
+// `mono`'s laws at `Int` (lib/std/tactic/mono_laws.hthr): registered here
+// and not in `int`, which is below the tactics and `string`.
+
+register def mono_int_order: MonoEntry = MonoOrder(name_of(Int::Le), name_of(Int::Lt), name_of(Int::le_refl), name_of(Int::le_of_lt), None);
+
+register def mono_int_rules: MonoEntry = MonoRules(name_of(Int::Le), [
+    mono_law(False, name_of(Int::add), [1], name_of(Int::add_le_mono_l)),
+    mono_law(False, name_of(Int::add), [0], name_of(Int::add_le_mono_r)),
+    mono_law(False, name_of(Int::add), [0, 1], name_of(Int::add_le_mono)),
+    mono_law(False, name_of(Int::mul), [1], name_of(Int::mul_le_mono_l)),
+    mono_law(False, name_of(Int::mul), [0], name_of(Int::mul_le_mono_r)),
+    mono_law(True, name_of(Int::mul), [0], name_of(Int::mul_lt_mono_r)),
+], [
+    mono_sign(False, name_of(Int::abs), name_of(Int::abs_nonneg)),
+]);
+
+register def mono_int_unsub: MonoEntry = MonoUnsub(name_of(Int::sub), name_of(Int::add), name_of(Int::neg));

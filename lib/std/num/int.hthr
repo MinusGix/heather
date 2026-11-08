@@ -6,7 +6,6 @@ import relation_props;
 import algebra_rel;
 import algebra;
 import morphism;
-import mono_laws;
 
 inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
 
@@ -2018,22 +2017,3 @@ theorem Int::natAbs_pos_of_ne(self a: Int, h: ¬(a = OfNat(0))): 0 < a.natAbs() 
         NegSucc(_) => trivial,
     }
 }
-
-// ---------------------------------------------------------------------------
-// `mono`'s laws at `Int` (lib/std/tactic/mono_laws.hthr): registered here,
-// where every lemma they name is in scope.
-
-register def mono_int_order: MonoEntry = MonoOrder(name_of(Int::Le), name_of(Int::Lt), name_of(Int::le_refl), name_of(Int::le_of_lt), None);
-
-register def mono_int_rules: MonoEntry = MonoRules(name_of(Int::Le), [
-    mono_law(False, name_of(Int::add), [1], name_of(Int::add_le_mono_l)),
-    mono_law(False, name_of(Int::add), [0], name_of(Int::add_le_mono_r)),
-    mono_law(False, name_of(Int::add), [0, 1], name_of(Int::add_le_mono)),
-    mono_law(False, name_of(Int::mul), [1], name_of(Int::mul_le_mono_l)),
-    mono_law(False, name_of(Int::mul), [0], name_of(Int::mul_le_mono_r)),
-    mono_law(True, name_of(Int::mul), [0], name_of(Int::mul_lt_mono_r)),
-], [
-    mono_sign(False, name_of(Int::abs), name_of(Int::abs_nonneg)),
-]);
-
-register def mono_int_unsub: MonoEntry = MonoUnsub(name_of(Int::sub), name_of(Int::add), name_of(Int::neg));
