@@ -20,7 +20,7 @@ time come last.
 
 | # | Finding | Where | Evidence it bites | Breach costs | Make explicit? | Issue |
 |---|---------|-------|-------------------|--------------|----------------|-------|
-| 1 | The value memo does not record the mode a value was forced in | `value.rs` `ValueArena`, `eval.rs` `Eval::transparent` | **a real defect** (#459: a convertible interval verdict refused) | completeness, history dependence | **yes** (first attempt §1: not a memo-only fix) | [[value-memo-evaluation-mode]] |
+| 1 | The value memo does not record the mode a value was forced in | `value.rs` `ValueArena`, `eval.rs` `Eval::transparent` | **a real defect** (#459: a convertible interval verdict refused) | completeness, history dependence | the #459 path fixed (§1: withheld-call closedness); (a) still worth doing | [[value-memo-evaluation-mode]] |
 | 2 | Deferred-premise queues: two hand-kept copies of one discipline | `conv.rs` `Conv` (8 fields), `typing.rs` `Tc` (4 fields) | **two defects while it was built** (deep-term-walks §3.3, §3.4) | soundness (a provisional memo entry kept) | **yes** | [[kernel-premise-queue-type]] |
 | 3 | Typing memo keys copy `Env`'s fields by hand | `typing.rs` `Scope`, `TyScope`, `SigScope` | none found | soundness (a stale memo hit) | **yes**, cheap | [[typing-memo-scope-key]] |
 | 4 | Ψ-bound `GlobalCache`, plus `Defs`' layer condition | `reduce.rs` `Defs`, `GlobalCache` | none found | soundness | yes (already filed) | [[kernel-psi-bound-cache]] |
@@ -134,16 +134,41 @@ deletes the hazard, where (b) only manages it.
   and `wb` to its transparent stage. So "the mode a value was forced at" is
   a property of values, not of memo entries.
 
-What remains open, cheapest first:
+**Second attempt (2026-11-08): the exact path, fixed narrowly.** A
+differential run found it: each transparent `delta_whnf` was re-run with
+lazily forced memo entries refused, and the first result that changed was
+logged. The value in both runs was a call of a **withheld** (`interface fn`)
+global left unglued (`u ·app ·app ·app ·case …`), so the transparent run had
+nothing to unfold.
 
-1. Find the exact path by which the #459 shape reaches a transparent run
-   with a stuck value it cannot step. Head spines resume correctly, so the
-   path is specific, and fixing it may be a narrow change.
-2. Give values their level: a byte on `Val`/`TmClo::Val`, set at
-   construction, with transparent readers resuming stuck ones. That is
-   complete, but it touches every `vclo` site and conversion's staging.
-3. Keep master's call-site rule (`delta_step_transparent`'s comment), now
-   with a reproduction recorded here.
+- **The state.** A withheld call is glued once its arguments are closed
+  (`eval/withheld.rs`), and closedness is decided by *forcing* each
+  argument and walking its parts. A δ-lazy force of a closed argument such
+  as `pred(two)` stops at an eliminator stuck on a glued scrutinee, a
+  neutral the walk does not open. So it answers "open", and the call stays
+  withheld. That verdict is not a memo entry the reader could check: it
+  is built into the call's value (glued or unglued), and the memo hands
+  that value to every later reader. A transparent run that reads it has no
+  unfolding to take.
+- **The fix** (`Eval::closed`). The walk forces δ-transparently whatever
+  the run's mode. It also goes into the unfolding of a glued neutral whose
+  spine has a non-application eliminator, because the memo can still hand
+  it a value a lazy run forced first. Each half is needed: the regression
+  test `a_withheld_call_at_a_lazily_stuck_closed_argument_is_glued`
+  (`crates/kernel/tests/eval_differential.rs`) fails without either. With
+  both, the five interval verdicts pass even under the lazy look-ahead.
+- **#459's transparent look-ahead stays.** With the fix and the lazy
+  look-ahead, `rt_lower_tests::spread_agrees` runs out of fuel. That is a
+  cost, not a refusal: the look-ahead and the run that follows then force
+  the same unfoldings twice. `delta_step_transparent`'s comment now gives
+  that reason, not correctness.
+
+What remains: the memo is still mode-blind in general (a lazily forced
+value read by a transparent run is resumed by the spine replay, which is
+correct but repeats work), and option (a), binding the arena to its `Defs`,
+is still worth doing. Neither is a known defect now. Giving values a level
+byte (`Val`/`TmClo::Val`) would close the general case and is the route if
+another mode-dependent verdict turns up.
 
 ## 2. Deferred-premise queues: two hand-kept copies of one discipline
 

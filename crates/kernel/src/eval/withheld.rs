@@ -85,7 +85,22 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// Whether every item reads no free local variable, forcing what it
     /// visits (module docs). Iterative, so a long closed list costs no
     /// native depth.
-    fn closed(&mut self, mut work: Vec<Item<'v>>) -> bool {
+    ///
+    /// The forcing is δ-transparent whatever the run's mode: the verdict
+    /// is kept, as a glued or an unglued call, in values the memo shares
+    /// between δ-lazy and δ-transparent readers, so it must not depend on
+    /// which of them asked first (issues/value-memo-evaluation-mode.md).
+    /// A δ-lazy force stops at an eliminator stuck on a glued closed
+    /// computation, which the walk cannot open, and the call stayed
+    /// withheld for the transparent run that read it next.
+    fn closed(&mut self, work: Vec<Item<'v>>) -> bool {
+        let saved = std::mem::replace(&mut self.transparent, true);
+        let out = self.closed_0(work);
+        self.transparent = saved;
+        out
+    }
+
+    fn closed_0(&mut self, mut work: Vec<Item<'v>>) -> bool {
         let mut budget = CLOSED_NODES;
         // Values are shared graphs (a real number's closures capture the
         // same computations many times over), so each node is visited once.
@@ -153,6 +168,14 @@ fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>) -> bool {
         Val::TmPi { dom, cod, .. } => return { push!(dom); binder(cod, 1, work) },
         Val::TmSigma { fst, snd, .. } => return { push!(fst); binder(snd, 1, work) },
         Val::TmW { shape, pos, .. } => return { push!(shape); binder(pos, 1, work) },
+        // An eliminator stuck on a glued scrutinee is where a δ-lazy force
+        // stopped and a δ-transparent one goes on (`Eval::step_neutral`).
+        // [`Eval::closed`] forces transparently, but the memo can still
+        // hand it a value a lazy run forced, so the walk goes on as the
+        // transparent force would: into the unfolding. Else the verdict
+        // would depend on how the argument was first forced, and a call
+        // judged open stays unglued in the memo for every later reader.
+        Val::Neutral(VNeutral { unfold: Some(u), spine, .. }) if !spine.iter_rev().all(|e| e.is_application()) => push!(u),
         Val::Neutral(n) => match &n.head {
             Head::Var(_) | Head::BaseVar(_) | Head::Stuck(_) => return false,
             Head::BoxedGlobalTy(_) | Head::BoxedGlobalTm(_) => {}
