@@ -742,34 +742,67 @@ theorem Ty::one_word_reads(tys: Nat → RecInfo, values: Valuation(), port: Nat,
     }
 }
 
-// A code held in one 64-bit word across a call: a word, or a count (a
-// loop's fuel, the word it is the `toNat` of).
-fn Ty::Held(self p: Ty) → Type {
-    match p { Word(w) => w = 64, Bit => False, Bytes(_) => False, Lines => False, Named(_) => False, Count => True }
+// A code held in one 64-bit word across a call: a word, a record held in
+// one (`Ty::OneWord`, a type at its repr's word), or a count (a loop's
+// fuel, the word it is the `toNat` of).
+fn Ty::Held(self p: Ty, tys: Nat → RecInfo) → Type {
+    match p { Word(w) => w = 64, Bit => False, Bytes(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => True }
 }
 
-fn Ty::check_held(self p: Ty) → Option<p.Held()> {
-    match p as λ x => Option<x.Held()> {
+fn Ty::check_held(self p: Ty, tys: Nat → RecInfo) → Option<p.Held(tys)> {
+    match p as λ x => Option<x.Held(tys)> {
         Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
-        Bit => None, Bytes(_) => None, Lines => None, Named(_) => None,
+        Bit => None, Bytes(_) => None, Lines => None,
+        Named(i) => Ty::check_fields_word(tys(i).fields),
         Count => Some(trivial),
     }
 }
 
-fn Ty::Helds(ps: List<Ty>) → Type {
-    match ps { Nil => True, Cons(p, rest) => p.Held() ∧ Ty::Helds(rest) }
+fn Ty::Helds(tys: Nat → RecInfo, ps: List<Ty>) → Type {
+    match ps { Nil => True, Cons(p, rest) => p.Held(tys) ∧ Ty::Helds(tys, rest) }
 }
 
-fn Ty::check_helds(ps: List<Ty>) → Option<Ty::Helds(ps)> {
+fn Ty::check_helds(tys: Nat → RecInfo, ps: List<Ty>) → Option<Ty::Helds(tys, ps)> {
     match ps {
         Nil => Some(trivial),
-        Cons(p, rest) => p.check_held().and_then(λ e => Ty::check_helds(rest).and_then(λ ok => Some(⟨e, ok⟩))),
+        Cons(p, rest) => p.check_held(tys).and_then(λ e => Ty::check_helds(tys, rest).and_then(λ ok => Some(⟨e, ok⟩))),
+    }
+}
+
+// A record held in one word, holding at its port, is the record built from
+// the port's word (`back`: building from the fields read off a record is
+// the record).
+theorem Ty::record_word_reads(T: Type, fs: List<Ty>, mk: Ty::Flats(fs) → T, get: T → Ty::Flats(fs),
+    back: (v: T) → mk(get(v)) = v, e: fs = [Word(64)], values: Valuation(), port: Nat, v: T,
+    h: Ty::FieldsHold(fs, values, port, get(v))): mk(Ty::flats_word(fs, values(64, port))) = v {
+    let general = j(sym(e), λ g _ => (mk2: Ty::Flats(g) → T) → (get2: T → Ty::Flats(g)) → ((u: T) → mk2(get2(u)) = u) →
+            Ty::FieldsHold(g, values, port, get2(v)) → mk2(Ty::flats_word(g, values(64, port))) = v,
+        λ mk2 get2 back2 h2 => trans(cong_fn(λ (x: BitVec(64)) => mk2(Pair(x, trivial)), h2.left), back2(v)));
+    general(mk, get, back, h)
+}
+
+// The word a code held in one word crosses a boundary as, read back at the
+// code, is the value.
+theorem Ty::one_word_back(tys: Nat → RecInfo, t: Ty): t.OneWord(tys) → (v: t.sem(tys)) →
+    Ty::cast(tys, Word(64), t, Ty::cast(tys, t, Word(64), v)) = v {
+    match t {
+        Word(w) => λ (e: w = 64) v => Ty::cast_back(tys, Word(w), Word(64), j(e, λ n _ => Word(w) = Word(n), refl), v),
+        Bit => λ never => false_elim(never),
+        Bytes(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e v => {
+            let general = j(sym(e), λ g _ => (mk2: Ty::Flats(g) → tys(i).T) → (get2: tys(i).T → Ty::Flats(g)) →
+                    ((u: tys(i).T) → mk2(get2(u)) = u) → mk2(Ty::flats_word(g, Ty::flats_head_word(g, get2(v)))) = v,
+                λ mk2 get2 back2 => back2(v));
+            general(tys(i).mk, tys(i).get, tys(i).back)
+        },
+        Count => λ never => false_elim(never),
     }
 }
 
 // A port holding a value of a code held in a word: the word, read back at
 // the code, is the value (a count's `toNat` is the count).
-theorem Ty::held_reads(tys: Nat → RecInfo, p: Ty, values: Valuation(), port: Nat): p.Held() → (v: p.sem(tys)) →
+theorem Ty::held_reads(tys: Nat → RecInfo, p: Ty, values: Valuation(), port: Nat): p.Held(tys) → (v: p.sem(tys)) →
     p.Holds(tys, values, port, v) → Ty::cast(tys, Word(64), p, values(64, port)) = v {
     match p {
         Word(w) => λ (e: w = 64) => j(sym(e), λ x _ => (v: BitVec(x)) → values(x, port) = v → Ty::cast(tys, Word(64), Word(x), values(64, port)) = v,
@@ -777,14 +810,14 @@ theorem Ty::held_reads(tys: Nat → RecInfo, p: Ty, values: Valuation(), port: N
         Bit => λ never => false_elim(never),
         Bytes(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(_) => λ never => false_elim(never),
+        Named(i) => λ e v held => Ty::record_word_reads(tys(i).T, tys(i).fields, tys(i).mk, tys(i).get, tys(i).back, e, values, port, v, held),
         Count => λ _ n held => held,
     }
 }
 
 // A signature the calling convention covers: each parameter held in a word,
 // and a word result.
-fn Sig::Words(self s: Sig) → Type { Ty::Helds(s.params) ∧ (s.result = Word(64)) }
+fn Sig::Words(self s: Sig, tys: Nat → RecInfo) → Type { Ty::Helds(tys, s.params) ∧ s.result.OneWord(tys) }
 
 // A function on words answers like a curried meaning: on every word list,
 // the meaning applied to the words (each cast to its parameter's code)
@@ -800,14 +833,13 @@ fn Ty::Answers(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps
 // Every word-signature function of the program is answered by `call` with
 // its meaning.
 fn Tm::CallsAgree(w: World, call: Answers()) → Type {
-    (f: Nat) → Sig::at(w.sigs, f).Words() →
+    (f: Nat) → Sig::at(w.sigs, f).Words(w.tys) →
         Ty::Answers(w.tys, Sig::at(w.sigs, f).params, Sig::at(w.sigs, f).result, Sig::get(w.tys, w.sigs, w.callees, f), λ ws => call(f, ws))
 }
 
 // A program with no functions has nothing to answer.
 theorem Tm::calls_agree_none(tys: Nat → RecInfo, call: Answers()): Tm::CallsAgree(World(tys, [], trivial), call) {
-    λ f ok => Ty::bit_ne_word(64, ok.right,
-        Ty::Answers(tys, Sig::at([], f).params, Sig::at([], f).result, Sig::get(tys, [], trivial, f), λ ws => call(f, ws)))
+    λ f ok => false_elim(ok.right)
 }
 
 // ---------------------------------------------------------------------------
@@ -980,14 +1012,14 @@ fn Tm::lower_field(w: World, g: List<Ty>, ports: List<Nat>, next, i, k, of: Nat)
 
 // A call's arguments: each a variable at its parameter's code, one per
 // parameter, each held in a word (a word, or a count).
-fn Tm::call_args(g: List<Ty>, ports: List<Nat>, ps: List<Ty>, args: List<Nat>) → Option<List<Nat>> {
+fn Tm::call_args(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, ps: List<Ty>, args: List<Nat>) → Option<List<Nat>> {
     match ps {
         Nil => match args { Nil => Some(Nil), Cons(_, _) => None },
         Cons(p, rest) => match args {
             Nil => None,
             Cons(a, more) => port_at(ports, a).and_then(λ q =>
-                Ty::at(g, a).check(p).and_then(λ _ => p.check_held().and_then(λ _ =>
-                    Tm::call_args(g, ports, rest, more).and_then(λ qs => Some(Cons(q, qs)))))),
+                Ty::at(g, a).check(p).and_then(λ _ => p.check_held(tys).and_then(λ _ =>
+                    Tm::call_args(tys, g, ports, rest, more).and_then(λ qs => Some(Cons(q, qs)))))),
         },
     }
 }
@@ -1001,17 +1033,17 @@ fn Tm::called(f: Nat, qs: List<Nat>, next: Nat) → Lowered {
 }
 
 fn Tm::lower_call_args(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Tm::call_args(g, ports, Sig::at(w.sigs, f).params, args).and_then(λ qs => Some(Tm::called(f, qs, next)))
+    Tm::call_args(w.tys, g, ports, Sig::at(w.sigs, f).params, args).and_then(λ qs => Some(Tm::called(f, qs, next)))
 }
 
 fn Tm::lower_call_result(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Sig::at(w.sigs, f).result.check(Word(64)).and_then(λ _ => Tm::lower_call_args(w, g, ports, next, f, args))
+    Sig::at(w.sigs, f).result.check_one_word(w.tys).and_then(λ _ => Tm::lower_call_args(w, g, ports, next, f, args))
 }
 
 // A call of the program's function `f`: FunctionIR's `Call` of the same
 // index, at a signature of words.
 fn Tm::lower_call(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Ty::check_helds(Sig::at(w.sigs, f).params).and_then(λ _ => Tm::lower_call_result(w, g, ports, next, f, args))
+    Ty::check_helds(w.tys, Sig::at(w.sigs, f).params).and_then(λ _ => Tm::lower_call_result(w, g, ports, next, f, args))
 }
 
 fn Tm::lower(self t: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> {
@@ -1426,7 +1458,7 @@ theorem Tm::ifeq_of_if(c: Nat, yes, no: Tm, w: World, g: List<Ty>, ports: List<N
 theorem Tm::call_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Valuation(), env: Env(w.tys, g),
     held: EnvHolds(w.tys, values, g, ports, env), r: Ty, ps: List<Ty>):
     (args: List<Nat>) → (F: Ty::Arrows(w.tys, ps, r)) → (ans: List<BitVec(64)> → BitVec(64)) →
-    Ty::Answers(w.tys, ps, r, F, ans) → (qs: List<Nat>) → Tm::call_args(g, ports, ps, args) = Some(qs) →
+    Ty::Answers(w.tys, ps, r, F, ans) → (qs: List<Nat>) → Tm::call_args(w.tys, g, ports, ps, args) = Some(qs) →
     ans(words_of(values, qs)) = Ty::cast(w.tys, r, Word(64), Tm::apply(w, g, env, r, ps, F, args)) {
     match ps {
         Nil => λ args => match args {
@@ -1442,11 +1474,11 @@ theorem Tm::call_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Val
                 let Goal = λ (qs: List<Nat>) => ans(words_of(values, qs)) = Ty::cast(w.tys, r, Word(64), Tm::apply(w, g, env, r, Cons(p, rest), F, Cons(a, more)));
                 let P = λ (o: Option<List<Nat>>) => (qs: List<Nat>) → o = Some(qs) → Goal(qs);
                 let none: P(None) = λ qs e => Option::none_ne_some(qs, e, Goal(qs));
-                let after = λ (q: Nat) => p.check_held().and_then(λ _ => Tm::call_args(g, ports, rest, more).and_then(λ qs => Some(Cons(q, qs))));
+                let after = λ (q: Nat) => p.check_held(w.tys).and_then(λ _ => Tm::call_args(w.tys, g, ports, rest, more).and_then(λ qs => Some(Cons(q, qs))));
                 Option::and_then_elim(P, none, port_at(ports, a), λ q => Ty::at(g, a).check(p).and_then(λ _ => after(q)), λ q at_q =>
                 Option::and_then_elim(P, none, Ty::at(g, a).check(p), λ _ => after(q), λ ea _ =>
-                Option::and_then_elim(P, none, p.check_held(), λ _ => Tm::call_args(g, ports, rest, more).and_then(λ qs => Some(Cons(q, qs))), λ hp _ =>
-                Option::and_then_elim(P, none, Tm::call_args(g, ports, rest, more), λ qs => Some(Cons(q, qs)), λ found e_rest =>
+                Option::and_then_elim(P, none, p.check_held(w.tys), λ _ => Tm::call_args(w.tys, g, ports, rest, more).and_then(λ qs => Some(Cons(q, qs))), λ hp _ =>
+                Option::and_then_elim(P, none, Tm::call_args(w.tys, g, ports, rest, more), λ qs => Some(Cons(q, qs)), λ found e_rest =>
                     λ qs e => j(Option::some_inj(Cons(q, found), qs, e), λ z _ => Goal(z), {
                         let x = values(64, q);
                         let arg_eq: (Ty::cast(w.tys, Word(64), p, x) = Ty::cast(w.tys, Ty::at(g, a), p, Env::get(w.tys, g, env, a))) =
@@ -1464,9 +1496,9 @@ theorem Tm::call_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Val
 theorem Tm::lower_call_sound(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>):
     Tm::LowerHolds(Call(f, args), w, g, ports, next, Tm::lower_call(w, g, ports, next, f, args)) {
     let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Call(f, args), w, g, ports, next, r);
-    Option::and_then_elim(P, trivial, Ty::check_helds(Sig::at(w.sigs, f).params), λ _ => Tm::lower_call_result(w, g, ports, next, f, args), λ ok _ =>
-    Option::and_then_elim(P, trivial, Sig::at(w.sigs, f).result.check(Word(64)), λ _ => Tm::lower_call_args(w, g, ports, next, f, args), λ er _ =>
-    Option::and_then_elim(P, trivial, Tm::call_args(g, ports, Sig::at(w.sigs, f).params, args),
+    Option::and_then_elim(P, trivial, Ty::check_helds(w.tys, Sig::at(w.sigs, f).params), λ _ => Tm::lower_call_result(w, g, ports, next, f, args), λ ok _ =>
+    Option::and_then_elim(P, trivial, Sig::at(w.sigs, f).result.check_one_word(w.tys), λ _ => Tm::lower_call_args(w, g, ports, next, f, args), λ er _ =>
+    Option::and_then_elim(P, trivial, Tm::call_args(w.tys, g, ports, Sig::at(w.sigs, f).params, args),
         λ qs => Some(Tm::called(f, qs, next)), λ qs e_qs =>
         λ call agree values env held below => {
             let r = Sig::at(w.sigs, f).result;
@@ -1481,14 +1513,17 @@ theorem Tm::lower_call_sound(w: World, g: List<Ty>, ports: List<Nat>, next, f: N
             let after = Valuation::set(called, Succ(next), moved);
             let word_moved: (after(64, Succ(next)) = Ty::cast(w.tys, r, Word(64), meaning)) =
                 trans(Valuation::set_here(called, Succ(next), moved, 64), word);
-            let second = Tm::set_sound(w.tys, called, Succ(next), r, j(sym(er), λ x _ => x.OnePort(), trivial), moved, meaning,
-                j(Ty::cast_back(w.tys, r, Word(64), er, meaning), λ u _ => r.Holds(w.tys, after, Succ(next), u),
-                    Ty::cast_holds(w.tys, after, Succ(next), Word(64), r, sym(er), Ty::cast(w.tys, r, Word(64), meaning), word_moved)));
+            // The result, held in one word (a word, or a record held at its
+            // repr's word), holds at the moved port.
+            let holds: r.Holds(w.tys, after, Succ(next), meaning) =
+                j(Ty::one_word_back(w.tys, r, er, meaning), λ u _ => r.Holds(w.tys, after, Succ(next), u),
+                    Ty::one_word_holds(w.tys, after, Succ(next), r, er, Ty::cast(w.tys, r, Word(64), meaning), word_moved));
             ⟨Nat::le_succ_r(next, Succ(next), Nat::le_succ_r(next, next, next.le_refl())),
-                ⟨second.right.left,
-                    ⟨λ wd id lt => trans(second.right.right.left(wd, id, Nat::lt_trans(id, next, Succ(next), lt, next.lt_succ_self())),
+                ⟨Ty::one_word_below(w.tys, r, er, Succ(next)),
+                    ⟨λ wd id lt => trans(Valuation::set_other(called, Succ(next), moved, wd, id,
+                            Nat::ne_of_lt(id, Succ(next), Nat::lt_trans(id, next, Succ(next), lt, next.lt_succ_self()))),
                         Valuation::set_other(values, next, v, wd, id, Nat::ne_of_lt(id, next, lt))),
-                        second.right.right.right⟩⟩⟩
+                        holds⟩⟩⟩
         })))
 }
 

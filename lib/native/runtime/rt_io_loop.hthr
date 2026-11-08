@@ -269,7 +269,7 @@ theorem ELoop::frames_trans(frame: List<Loc>, env, env1: Env, same: Loc::AllSame
 
 // A word or a bit moved: kept at its place, the rest's sources and every
 // other place untouched.
-theorem ELoop::move_word_sound(tys: Nat → RecInfo, t: Ty, one: t.OneWord(), rest: List<Ty>, ds: List<Loc>, ss: List<Loc>, more: Stmt,
+theorem ELoop::move_word_sound(tys: Nat → RecInfo, t: Ty, one: t.Scalar(), rest: List<Ty>, ds: List<Loc>, ss: List<Loc>, more: Stmt,
     ih: ELoop::MovesHold(tys, rest, ds, ss, Some(more)), dw, sw: Nat,
     c1: Loc::clear(ss, [dw]).IsTrue(), c2: Loc::clear([InWord(dw)], Loc::words(ds)).IsTrue()):
     ELoop::MovesHold(tys, Cons(t, rest), Cons(InWord(dw), ds), Cons(InWord(sw), ss),

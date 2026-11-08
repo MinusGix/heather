@@ -692,21 +692,22 @@ theorem ETm::close_lands(env: Env, io: Io, locs: List<Loc>, fd, next: Nat, fdv: 
 // ---------------------------------------------------------------------------
 // Pure values: the pure lowering's region, its result moved to a fresh word
 
-// A code held in one word.
-fn Ty::OneWord(self t: Ty) → Type {
+// A code held in one port at its own width: a word or a bit (`Ty::OneWord`,
+// `rt_lower.hthr`, is the boundary's: one 64-bit word, records included).
+fn Ty::Scalar(self t: Ty) → Type {
     match t { Word(_) => True, Bit => True, Bytes(_) => False, Lines => False, Named(_) => False, Count => False }
 }
 
-fn Ty::check_one_word(self t: Ty) → Option<t.OneWord()> {
-    match t as λ x => Option<x.OneWord()> {
+fn Ty::check_scalar(self t: Ty) → Option<t.Scalar()> {
+    match t as λ x => Option<x.Scalar()> {
         Word(_) => Some(trivial), Bit => Some(trivial), Bytes(_) => None, Lines => None, Named(_) => None, Count => None,
     }
 }
 
 // A value held at `port` at its code's width, moved to `out`, is kept there.
-theorem Ty::kept_moved(self t: Ty, tys: Nat → RecInfo, env: Env, out: Nat, values: Valuation(), port: Nat, one: t.OneWord(), v: t.sem(tys),
+theorem Ty::kept_moved(self t: Ty, tys: Nat → RecInfo, env: Env, out: Nat, values: Valuation(), port: Nat, one: t.Scalar(), v: t.sem(tys),
     h: t.Holds(tys, values, port, v), e: env.number(out) = values(t.width(), port).toNat()): t.Kept(tys, env, InWord(out), v) {
-    match t as λ x => x.OneWord() → (v: x.sem(tys)) → x.Holds(tys, values, port, v) → env.number(out) = values(x.width(), port).toNat() →
+    match t as λ x => x.Scalar() → (v: x.sem(tys)) → x.Holds(tys, values, port, v) → env.number(out) = values(x.width(), port).toNat() →
             x.Kept(tys, env, InWord(out), v) {
         Word(wd) => λ _ v h e => trans(e, cong_fn(λ (x: BitVec(wd)) => x.toNat(), h)),
         Bit => λ _ v h e => trans(e, cong_fn(λ (x: BitVec(1)) => x.toNat(), h)),
@@ -727,7 +728,7 @@ fn ETm::value_checked(t: Ty, locs: List<Loc>, l: Lowered) → Option<Lowered> {
 }
 
 fn ETm::lower_value(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next: Nat) → Option<Lowered> {
-    Tm::ty(v, w, g).check_one_word().and_then(λ _ =>
+    Tm::ty(v, w, g).check_scalar().and_then(λ _ =>
         Tm::lower(v, w, g, Loc::ports(locs), next).and_then(λ l => ETm::value_checked(Tm::ty(v, w, g), locs, l)))
 }
 
@@ -747,7 +748,7 @@ theorem ETm::value_sound(v: Tm, w: rt::World, g: List<Ty>, locs: List<Loc>, next
     ETm::ValueHolds(v, w, g, locs, next, ETm::lower_value(v, w, g, locs, next)) {
     let P = λ (r: Option<Lowered>) => ETm::ValueHolds(v, w, g, locs, next, r);
     let t = Tm::ty(v, w, g);
-    Option::and_then_elim(P, trivial, t.check_one_word(),
+    Option::and_then_elim(P, trivial, t.check_scalar(),
         λ _ => Tm::lower(v, w, g, Loc::ports(locs), next).and_then(λ l => ETm::value_checked(t, locs, l)), λ one _ =>
     Option::and_then_elim(P, trivial, Tm::lower(v, w, g, Loc::ports(locs), next), λ l => ETm::value_checked(t, locs, l), λ l e_l =>
     Option::and_then_elim(P, trivial, Tm::check_true(l.region.byte_free()),
