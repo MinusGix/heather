@@ -5,7 +5,7 @@ labels: [tactics,testing]
 area: tactics
 milestone: [tac-general]
 created: 2026-11-05
-updated: 2026-11-06
+updated: 2026-11-08
 ---
 
 Importing `grind` into a library module is cheap for `heather check` (images
@@ -79,3 +79,4 @@ grind_with([e])`.
   216 s → about 120 s against master's 35 s. Left: the closure's own
   elaboration, [[tier2-constructor-value-cost]]. The conversions are still
   out pending Minus's call.
+- 2026-11-08: 2026-11-08: [[tactic-only-imports]] would make the closure the importer's cost and not its clients': grind's certificates cite only trans/sym/cong and six small lemmas.

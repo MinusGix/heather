@@ -5,7 +5,7 @@ labels: [tactics,proofs,performance,ergonomics]
 area: tactics
 milestone: [tac-general]
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-11-08
 ---
 
 `rewrite(h, e)` with an unapplied law instantiates it once, at the first node
@@ -27,3 +27,7 @@ Design questions this owns: the spelling (a named argument on `rewrite`, or
 another entry point, since `rw` semantics are what the library relies on), and
 termination: a law whose right side matches its own left side
 (commutativity) must not loop, so a rewritten node is not matched again.
+
+## Log
+
+- 2026-11-08: 2026-11-08: [[simp-tactic]] builds on this walk with a set of laws in place of one.
