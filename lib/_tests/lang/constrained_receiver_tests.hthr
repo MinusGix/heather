@@ -1,0 +1,116 @@
+// A dot call on a receiver whose type is a type variable finds the members
+// of the classes constraining that variable in scope: `c.say(m)` at
+// `c: C` under `d: Log<C> := infer` is `Log::say(c, m)`, `mut self`
+// threading included (issues/method-call-on-constrained-carrier.md).
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import nat; import logic; import list;
+
+class Log<C> { log: C → Nat → Mutated<C, True> }
+
+record Collect { lines: List<Nat> }
+instance Log<Collect> { log := λ c m => Mutated(Collect(Cons(m, c.lines)), trivial) }
+record Buffered<C> { inner: C, pending: List<Nat> }
+instance<C> Log<Buffered<C>> { log := λ c m => Mutated(Buffered(c.inner, c.pending ++ [m]), trivial) }
+
+fn Log::say<C>(mut self c: C, m: Nat, d: Log<C> := infer) → True {
+    c := d.log(c, m).after;
+    trivial
+}
+
+// The effects-locality note's `greet`, written with dot calls: each
+// statement threads `c` through the `mut self` member.
+fn greet<C>(c0: C, d: Log<C> := infer) → C {
+    let mut c = c0;
+    c.say(1);
+    c.say(2);
+    c
+}
+theorem greet_collect(): greet(Collect([])).lines = [2, 1] { refl }
+theorem greet_buffered(): greet(Buffered(Collect([]), [])).pending = [1, 2] { refl }
+
+// In a loop, and with the answer bound by `let`.
+fn greet_n<C>(c0: C, n: Nat, d: Log<C> := infer) → C {
+    let mut c = c0;
+    for i in 0..n { c.say(i); }
+    let t = c.say(7);
+    c
+}
+theorem greet_n_collect(): greet_n(Collect([]), 3).lines = [7, 2, 1, 0] { refl }
+
+// A member calling another member on its own receiver, the second one
+// recursive through its own written name.
+fn Log::say_twice<C>(mut self c: C, m: Nat, d: Log<C> := infer) → True {
+    c.say(m);
+    c.say(m);
+    trivial
+}
+fn twice<C>(c0: C, d: Log<C> := infer) → C {
+    let mut c = c0;
+    c.say_twice(5);
+    c
+}
+theorem twice_collect(): twice(Collect([])).lines = [5, 5] { refl }
+
+// A non-`mut` member at a constrained receiver: an ordinary method call.
+fn Log::logged<C>(self c: C, m: Nat, d: Log<C> := infer) → C { d.log(c, m).after }
+fn once<C>(c: C, d: Log<C> := infer) → C { c.logged(4) }
+theorem once_collect(): once(Collect([])).lines = [4] { refl }
+
+// A parent's member is reached through a child constraint.
+class Tagged<C> extends Log<C> { tag: Nat }
+instance Tagged<Collect> { log := λ c m => Mutated(Collect(Cons(m, c.lines)), trivial), tag := 9 }
+fn via_child<C>(c0: C, d: Tagged<C> := infer) → C {
+    let mut c = c0;
+    c.say(d.tag);
+    c
+}
+theorem via_child_collect(): via_child(Collect([])).lines = [9] { refl }
+
+// Negative control: an unconstrained variable has no owner to search.
+// expect-error: unbound name `say`
+fn unconstrained<C>(c0: C) → C {
+    let mut c = c0;
+    c.say(1);
+    c
+}
+
+// Negative control: a constraint at another variable does not reach `c`.
+// expect-error: unbound name `say`
+fn other_variable<C, D>(c0: C, d: Log<D> := infer) → C {
+    let mut c = c0;
+    c.say(1);
+    c
+}
+
+// Two constraining classes that both own the member are ambiguous.
+class Shout<C> { shout: C → Mutated<C, True> }
+fn Shout::say<C>(mut self c: C, m: Nat, d: Shout<C> := infer) → True {
+    c := d.shout(c).after;
+    trivial
+}
+// expect-error: `say` at this receiver is `Log::say` and `Shout::say`
+fn both<C>(c0: C, d: Log<C> := infer, e: Shout<C> := infer) → C {
+    let mut c = c0;
+    c.say(1);
+    c
+}
+// Either is reached by its qualified name.
+fn both_qualified<C>(c0: C, d: Log<C> := infer, e: Shout<C> := infer) → C {
+    let mut c = c0;
+    c := Log::say(c, 1).after;
+    c
+}
+
+// The concrete receiver's route is unchanged: `Collect` owns its own
+// namespace, so the class route is never asked.
+fn Collect::say(mut self c: Collect, m: Nat) → True {
+    c := Collect(Cons(m + 100, c.lines));
+    trivial
+}
+fn concrete(c0: Collect, d: Log<Collect> := infer) → Collect {
+    let mut c = c0;
+    c.say(1);
+    c
+}
+theorem concrete_collect(): concrete(Collect([])).lines = [101] { refl }

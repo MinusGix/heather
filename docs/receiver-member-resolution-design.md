@@ -242,3 +242,35 @@ amending the section named:
     7 are the `Decide` instance heads, and 11 were not examined
     (`@bitvec::BitVec::add(64, …)` ×8 in `lib/native/function_ir/function_ir_x86.hthr`,
     `@byte_cons_cong` ×3 in `x86_64/model.hthr`).
+
+## 8. Owners of a constrained type variable (2026-11-08)
+
+A receiver whose type is a type variable has no nominal owner, so §1's
+routes all decline and the call went to the ambient `name`. Where a class
+dictionary in scope constrains that variable — an instance argument
+`d: K<C> := infer` or a section constraint, read off `cx.dicts` as written —
+the class is the owner: `c.say(m)` at `c: C` is `K::say(c, m)`, and the
+`mut self` marking and threading are the ones a concrete receiver gets,
+since everything after `member_head` is unchanged
+(`Elaborator::constrained_member`,
+`issues/method-call-on-constrained-carrier.md`).
+
+- **Candidates.** For each dictionary whose carrier converts to the
+  receiver's type: its class, and each parent written at the class's own
+  first parameter (a multi-parameter class may extend a parent at another
+  argument, which is not an owner of this variable). A candidate is a
+  `K::name` that resolves; the declaration under construction counts by its
+  written name, so a member may call itself by dot.
+- **Never the registry.** A variable has constraints, not instances, so the
+  route never asks layer 2. It runs only after every nominal owner route has
+  declined and only when `cx.dicts` is non-empty, so a concrete receiver and
+  a declaration with no class binder pay nothing.
+- **Ambiguity, as §0 rules.** Two distinct owners are refused with both
+  named, in sorted order. One owner beside an ambient `name` (local, alias,
+  self-reference or global) is refused as §1 refuses `D::name` beside one:
+  no carrier is known here, so §2's disjointness filter cannot discard the
+  ambient reading.
+- Probes: `lib/_tests/lang/constrained_receiver_tests.hthr` (the
+  effects-locality note's `greet` by dot calls, a loop, a member calling a
+  member, a parent's member through a child constraint, two negative
+  controls, the ambiguity, and a concrete receiver unchanged).
