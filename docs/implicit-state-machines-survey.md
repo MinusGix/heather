@@ -7,6 +7,9 @@ than by an explicit state type. For each: where it is, the states and
 transitions as they exist, the invariants it leans on, what has gone or could
 go wrong because it is implicit, and whether an enum or typestate would pay.
 
+**Second pass (2026-11-08):** `docs/kernel-implicit-state-review.md` reads the
+kernel alone, re-checks §3 and §6, and adds five kernel findings.
+
 A sibling survey looks at the same code from the data-oriented-design side.
 The two meet wherever a struct's *fields* are regrouped: §1 (the Elaborator's
 field lifetimes) and §10's memo tables are the overlap. This survey only asks
