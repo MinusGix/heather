@@ -786,11 +786,11 @@ theorem Fun::fuel_pass_sound(ws: List<Ty>, succ: Tm, w: World, h: Nat → Ty::Ar
     let env = Pair(r, Ty::extend(tys, ws, [Count], Pair(Succ(r), trivial), st));
     let held: EnvHolds(tys, pv1, Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws), env) =
         ⟨trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), pv1_k), counts.right),
-            Fun::env_extend_holds(tys, pv1, ws, [Count], [c], Pair(Succ(r), trivial), Succ(c), st, ok,
+            Fun::env_extend_holds(tys, pv1, ws, [Count], [c], Pair(Succ(r), trivial), Succ(c), st, Ty::words_one_words(tys, ws, ok),
                 ⟨trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), trans(pv1_c, pv_c)), counts.left), trivial⟩, words)⟩;
     let below: Below(tys, Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws), Succ(flag)) =
         ⟨k_base, below_mono(tys, Fun::fuel_ctx(ws), k, Succ(flag), Nat::le_of_lt(k, Succ(flag), k_base), Fun::ports_onto(ws, Succ(c), [c]),
-            Fun::below_onto(tys, ws, [Count], Succ(c), [c], ok, ⟨c.lt_succ_self(), trivial⟩))⟩;
+            Fun::below_onto(tys, ws, [Count], Succ(c), [c], Ty::words_one_words(tys, ws, ok), ⟨c.lt_succ_self(), trivial⟩))⟩;
     let ran = j(lowered, λ o _ => Tm::TailHolds(succ, w, 1, flag, ns, Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws), Succ(flag), o),
         Tm::tail_sound(succ, w, 1, flag, ns, Cons(Count, Fun::fuel_ctx(ws)), Fun::fuel_ports(ws), Succ(flag)))(call, agree, pv1, env, held, below);
     // The exit bit, from the flag word.
@@ -839,11 +839,11 @@ theorem Fun::fuel_zero_sound(ws: List<Ty>, zero: Tm, w: World, h: Nat → Ty::Ar
     let len_os: (os.len() = st.len()) = trans(Fun::ids_len(ws, Succ(z)), sym(len));
     let read = Fun::state_kept(values, os, st, x, z, bit_value(True), λ wd => BitVec::ofNat(0), Fun::ids_distinct(ws, Succ(z)), len_os,
         Fun::absent_ids(ws, Succ(z), x, Inr(x.le_refl())), Fun::absent_ids(ws, Succ(z), z, Inl(z.lt_succ_self())));
-    let held: EnvHolds(tys, qz, ctx, ports, env) = Fun::env_extend_holds(tys, qz, ws, [Count], [z], Pair(0, trivial), Succ(z), st, ok,
+    let held: EnvHolds(tys, qz, ctx, ports, env) = Fun::env_extend_holds(tys, qz, ws, [Count], [z], Pair(0, trivial), Succ(z), st, Ty::words_one_words(tys, ws, ok),
         ⟨cong_fn(λ (v: BitVec(64)) => v.toNat(), Valuation::set_here(q, z, λ wd => BitVec::ofNat(0), 64)), trivial⟩,
         Fun::bound_of_words(qz, os, st, len_os, read));
     let below: Below(tys, ctx, ports, Succ(x)) = below_mono(tys, ctx, x, Succ(x), Nat::le_succ_r(x, x, x.le_refl()), ports,
-        Fun::below_onto(tys, ws, [Count], Succ(z), [z], ok, ⟨z.lt_succ_self(), trivial⟩));
+        Fun::below_onto(tys, ws, [Count], Succ(z), [z], Ty::words_one_words(tys, ws, ok), ⟨z.lt_succ_self(), trivial⟩));
     let ran = j(lowered_z, λ o _ => Tm::LowerHolds(zero, w, ctx, ports, Succ(x), o), Tm::lower_sound(zero, w, ctx, ports, Succ(x)))(
         call, agree, qz, env, held, below);
     let after = lz.region.eval(call, qz);
@@ -996,7 +996,7 @@ theorem Fun::meas_env(ws: List<Ty>, tys: Nat → RecInfo, ok: Ty::Words(ws), m: 
     EnvHolds(tys, Valuation::bind(base, Fun::param_ids(ws, m), st), Ty::bind_onto(ws, Nil), Fun::ports_onto(ws, m, Nil),
         Ty::extend(tys, ws, Nil, trivial, st)) {
     let ids_len: (Fun::param_ids(ws, m).len() = st.len()) = trans(Fun::ids_len(ws, m), sym(len));
-    Fun::env_extend_holds(tys, Valuation::bind(base, Fun::param_ids(ws, m), st), ws, Nil, Nil, trivial, m, st, ok, trivial,
+    Fun::env_extend_holds(tys, Valuation::bind(base, Fun::param_ids(ws, m), st), ws, Nil, Nil, trivial, m, st, Ty::words_one_words(tys, ws, ok), trivial,
         Fun::bound_of_words(Valuation::bind(base, Fun::param_ids(ws, m), st), Fun::param_ids(ws, m), st, ids_len,
             words_of_bind(base, Fun::param_ids(ws, m), Fun::ids_distinct(ws, m), st, ids_len)))
 }
@@ -1034,7 +1034,7 @@ theorem Fun::meas_pass_sound(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.t
     let c_flag: (c < Succ(flag)) = Nat::lt_of_lt_of_le(c, Succ(c), Succ(flag), c.lt_succ_self(),
         Nat::le_succ_r(Succ(c), flag, Fun::past_ge(ws, Succ(c))));
     let below: Below(tys, ctx, ports, Succ(flag)) = below_mono(tys, ctx, c, Succ(flag), Nat::le_of_lt(c, Succ(flag), c_flag), ports,
-        Fun::below_onto(tys, ws, Nil, Succ(bnd), Nil, ok, trivial));
+        Fun::below_onto(tys, ws, Nil, Succ(bnd), Nil, Ty::words_one_words(tys, ws, ok), trivial));
     let ran = j(lowered, λ o _ => Tm::TailHolds(body, w, 0, flag, ns, ctx, ports, Succ(flag), o),
         Tm::tail_sound(body, w, 0, flag, ns, ctx, ports, Succ(flag)))(call, agree, pv, env, held, below);
     let pv2 = t.region.eval(call, pv);
@@ -1083,12 +1083,12 @@ theorem Fun::meas_zero_sound(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.t
     let read: (words_of(q, os) = st) = trans(words_agree(os, bound, q,
             λ y mem => Valuation::set_other(bound, x, bit_value(True), 64, y, λ e => absent_mem(x, os, x_out, y, mem, sym(e)))),
         words_of_bind(values, os, Fun::ids_distinct(ws, o), st, len_os));
-    let held: EnvHolds(tys, q, ctx, ports, env) = Fun::env_extend_holds(tys, q, ws, Nil, Nil, trivial, o, st, ok, trivial,
+    let held: EnvHolds(tys, q, ctx, ports, env) = Fun::env_extend_holds(tys, q, ws, Nil, Nil, trivial, o, st, Ty::words_one_words(tys, ws, ok), trivial,
         Fun::bound_of_words(q, os, st, len_os, read));
     let x_flag: (x <= Succ(flag2)) = Nat::le_succ_r(x, flag2, Nat::le_of_lt(x, flag2,
         Nat::lt_of_lt_of_le(x, Succ(x), flag2, x.lt_succ_self(), Fun::past_ge(ws, Succ(x)))));
     let below: Below(tys, ctx, ports, Succ(flag2)) = below_mono(tys, ctx, x, Succ(flag2), x_flag, ports,
-        j(sym(x_at), λ y _ => Below(tys, ctx, ports, y), Fun::below_onto(tys, ws, Nil, o, Nil, ok, trivial)));
+        j(sym(x_at), λ y _ => Below(tys, ctx, ports, y), Fun::below_onto(tys, ws, Nil, o, Nil, Ty::words_one_words(tys, ws, ok), trivial)));
     let ran = j(lowered2, λ r _ => Tm::TailHolds(body, w, 0, flag2, ns2, ctx, ports, Succ(flag2), r),
         Tm::tail_sound(body, w, 0, flag2, ns2, ctx, ports, Succ(flag2)))(call, agree, q, env, held, below);
     let q2 = t2.region.eval(call, q);

@@ -90,7 +90,7 @@ fn ESeg::close(segs: List<ESeg>, last: ETm) → ETm {
 
 fn ESeg::lets(lets: List<Tm>) → List<ESeg> { lets.map(λ e => SLet(e)) }
 
-fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, Some(io), k.nat, k.recursion) }
+fn Known::at_world(self k: Known, io: IoKnown) → Known { Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, Some(io), k.nat, k.recursion, k.reprs) }
 
 record IoWalk { st: RSt, segs: List<ESeg>, io: IoKnown }
 

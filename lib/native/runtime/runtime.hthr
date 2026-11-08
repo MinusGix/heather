@@ -81,6 +81,21 @@ fn Ty::all_held(ts: List<Ty>) → Bool {
 
 fn Sig::is_words(self s: Sig) → Bool { Ty::all_held(s.params).and(s.result.is_word64()) }
 
+// A code a function's boundary passes in one 64-bit word: the word, or a
+// record of one such field (a type held by its repr, design §16.13). What
+// `Ty::check_one_word` (`rt_lower.hthr`) accepts, as `Bool`.
+fn Ty::is_one_word(self t: Ty, tys: Nat → RecInfo) → Bool {
+    match t {
+        Word(w) => w.same(64),
+        Named(i) => match tys(i).fields { Cons(f, rest) => f.is_word64().and(match rest { Nil => True, Cons(_, _) => False }), Nil => False },
+        _ => False,
+    }
+}
+
+fn Ty::all_one_word(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
+    match ts { Nil => True, Cons(t, rest) => t.is_one_word(tys).and(Ty::all_one_word(rest, tys)) }
+}
+
 fn Op::judge(self o: Op) → Verdict {
     match o {
         Get(_) => Refused("a byte read: byte buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
@@ -138,19 +153,26 @@ fn Fun::words_reason() → String {
     "a parameter that is not a 64-bit word: the default setup compiles functions from 64-bit words (and a loop's `Nat` fuel, first) to a 64-bit word (issues/function-ir-multi-word-calls.md)"
 }
 
+fn Fun::loop_words_reason() → String {
+    "a loop over something other than 64-bit words: a loop's state and result are words (a type held by its repr is not yet, issues/runtime-repr-loops.md)"
+}
+
 // The function at entry 0 of its world's table: 64-bit words in and out
 // (FunctionIR's calling convention today), and a body of what the lowering
 // covers; a fuel recursion and a measured one are loops (design §16.11).
 fn Fun::judge(self f: Fun, w: World) → Verdict {
-    match f.result.is_word64() {
+    match f.result.is_one_word(w.tys) {
         False => Refused("a result that is not a 64-bit word: the default setup compiles functions from 64-bit words to a 64-bit word (issues/function-ir-multi-word-calls.md)"),
         True => match f.shape() {
-            Plain => match Ty::all_word64(f.params) {
+            // A loop-free function's boundary also passes a type held by its
+            // repr in one word (`SInt(64)`, design §16.13); a loop's state is
+            // words.
+            Plain => match Ty::all_one_word(f.params, w.tys) {
                 False => Refused(Fun::words_reason()),
                 True => f.body.judge(w.sigs),
             },
-            Fuel(w0, wrest, zero, succ) => match Ty::all_word64(Cons(w0, wrest)) {
-                False => Refused(Fun::words_reason()),
+            Fuel(w0, wrest, zero, succ) => match Ty::all_word64(Cons(w0, wrest)).and(f.result.is_word64()) {
+                False => Refused(Fun::loop_words_reason()),
                 True => match f.body {
                     Case(c, _, _) => match c.same(Succ(wrest.len())) {
                         False => Refused("a `match` on a `Nat` that is not the fuel, its first parameter"),
@@ -159,8 +181,8 @@ fn Fun::judge(self f: Fun, w: World) → Verdict {
                     _ => Refused("a fuel recursion's body is its fuel's `match`"),
                 },
             },
-            Measured(w0, wrest, body) => match Ty::all_word64(Cons(w0, wrest)) {
-                False => Refused(Fun::words_reason()),
+            Measured(w0, wrest, body) => match Ty::all_word64(Cons(w0, wrest)).and(f.result.is_word64()) {
+                False => Refused(Fun::loop_words_reason()),
                 True => body.judge_tail(w.sigs),
             },
         },
@@ -708,7 +730,7 @@ fn runtime_reflect(k: Known, g: Nat, name: String) → Tac<Pair<Fun, List<Nat>>>
 // A runtime fn's table: itself, then the runtime fns it calls, as the
 // reflector numbers them (what its own `g::world` lists).
 fn runtime_table(k: Known, g: Nat, name: String) → Tac<List<Nat>> {
-    runtime_reflect(Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io, k.nat, None), g, name).bind(λ r => pure(r.snd))
+    runtime_reflect(Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io, k.nat, None, k.reprs), g, name).bind(λ r => pure(r.snd))
 }
 
 fn runtime_self<A>(a: A) → a = a { refl }
@@ -961,17 +983,129 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
 }
 
 // A word read at a parameter's code: a count as the word's `toNat`.
-fn runtime_args(count: Expr, ps: List<Ty>, ys: List<Expr>) → List<Expr> {
+// A word read at a parameter's code: a count as the word's `toNat`, a type
+// held by its repr as the repr's `abs` of the word.
+fn runtime_args(count: Expr, reprs: List<ReprEntry>, ps: List<Ty>, ys: List<Expr>) → List<Expr> {
     match ps {
         Nil => ys,
         Cons(p, rest) => match ys {
             Nil => Nil,
-            Cons(y, more) => Cons(match p { Count => ap(count, [y]), _ => y }, runtime_args(count, rest, more)),
+            Cons(y, more) => Cons(match p {
+                Count => ap(count, [y]),
+                Named(i) => match reprs.nth(i) { Some(e) => ap(Global(GlobalRef(e.abs)), [y]), None => y },
+                _ => y,
+            }, runtime_args(count, reprs, rest, more)),
         },
     }
 }
 
-fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, l: Linking) → Tac<List<Decl>> {
+// The function's result as the word it returns: a type held by its repr
+// read back by the repr's `emb`.
+fn runtime_result(reprs: List<ReprEntry>, r: Ty, e: Expr) → Expr {
+    match r { Named(i) => match reprs.nth(i) { Some(en) => ap(Global(GlobalRef(en.emb)), [e]), None => e }, _ => e }
+}
+
+// The parameters' types, for the pin: a word, or the type a repr holds.
+fn runtime_param_types(word: Handle, reprs: List<ReprEntry>, ps: List<Ty>) → List<Handle> {
+    ps.map(λ p => match p { Named(i) => match reprs.nth(i) { Some(e) => e.ty, None => word }, _ => word })
+}
+
+fn runtime_params_at(ts: List<Handle>, under: Option<LocalRef>, i: Nat) → Tac<List<LocalRef>> {
+    match ts {
+        Nil => pure([]),
+        Cons(t, rest) => assume(Hd(t), "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
+            runtime_params_at(rest, Some(x.ref), Succ(i)).bind(λ more => pure(Cons(x.ref, more)))),
+    }
+}
+
+fn runtime_repr_infos(word: Handle, word_repr, rfl: Expr, reprs: List<ReprEntry>) → Tac<List<Expr>> {
+    match reprs {
+        Nil => pure([]),
+        Cons(e, rest) => {
+            let x <- assume(Hd(word), "w", None).or_fail("runtime: a repr's word: ");
+            let round = Lam(x.ref, ap(rfl, [Blank, Local(x.ref)]));
+            let more <- runtime_repr_infos(word, word_repr, rfl, rest);
+            pure(Cons(ap(word_repr, [Blank, Global(GlobalRef(e.abs)), Global(GlobalRef(e.emb)), round]), more))
+        },
+    }
+}
+
+// The world's type table: none without reprs, else each repr's
+// `RecInfo::word_repr`, its round trip `refl` at each word.
+fn runtime_tys(word: Handle, reprs: List<ReprEntry>) → Tac<Expr> {
+    match reprs {
+        Nil => runtime_global("RecInfo::none"),
+        Cons(_, _) => {
+            let cons <- runtime_global("RecInfo::cons");
+            let none <- runtime_global("RecInfo::none");
+            let word_repr <- runtime_global("RecInfo::word_repr");
+            let rfl <- runtime_global("tactic::rfl");
+            let entries <- runtime_repr_infos(word, word_repr, rfl, reprs);
+            let table = entries.foldr(λ e acc => ap(cons, [e, acc]), none);
+            // Held as a hole solved by it: a repr's round trip abstracts a
+            // local opened here, and a `Lam` reifies only where its local
+            // was opened, while a handle stands anywhere.
+            let t <- infer(table).or_fail("runtime: the type table: ");
+            let held <- hole(t).or_fail("runtime: the type table: ");
+            let solved <- defeq(Hd(held), table);
+            match solved { True => pure(Hd(held)), False => runtime_fail("the type table does not solve its hole") }
+        },
+    }
+}
+
+// A repr's carrier, read off its `emb`'s type.
+fn runtime_carrier(k: Known, rname: String, et: Handle) → Tac<Ty> {
+    let ev <- view(et);
+    match ev {
+        HPi(_) => open(et, "s").or_fail("runtime: `" ++ rname ++ "::emb`: ").bind(λ o => k.ty(o.body)),
+        _ => runtime_fail("`" ++ rname ++ "::emb` is not a function"),
+    }
+}
+
+fn runtime_repr_add(k: Known, h: Handle, acc: List<ReprEntry>) → Tac<List<ReprEntry>> {
+    let v <- view(h);
+    match v {
+        HGlobal(g, _, _) => match g.id.same(k.bitvec).or(g.id.same(k.boolean)).or(g.id.same(k.list)).or(g.id.same(k.nat)) {
+            True => pure(acc),
+            False => repr_of(h).bind(λ c => match c {
+                Refused(_) => pure(acc),
+                Accepted(r) => view(r).bind(λ rv => match rv {
+                    HGlobal(rg, rname, _) => match Known::repr_at(acc, rg.id, 0) {
+                        Some(_) => pure(acc),
+                        None => {
+                            let abs <- runtime_ref(rname ++ "::abs");
+                            let emb <- runtime_ref(rname ++ "::emb");
+                            let et <- infer(Global(emb)).or_fail("runtime: `" ++ rname ++ "::emb`: ");
+                            let carrier <- runtime_carrier(k, rname, et);
+                            match carrier.is_word64() {
+                                True => pure(acc ++ [ReprEntry(rg.id, abs.id, emb.id, h)]),
+                                False => runtime_fail("the datarepr `" ++ rname ++ "` holds its type in something other than one 64-bit word: a repr'd type crosses a function's boundary in one (issues/runtime-repr-narrow-words.md)"),
+                            }
+                        },
+                    },
+                    _ => pure(acc),
+                }),
+            }),
+        },
+        _ => pure(acc),
+    }
+}
+
+// The types of the function's signature held by their `datarepr` (design
+// §16.13), each once, in order: the reprs its reflection reads. A repr's
+// carrier must be one 64-bit word.
+fn runtime_reprs(fuel: Nat, k: Known, t: Handle, acc: List<ReprEntry>) → Tac<List<ReprEntry>> {
+    match fuel {
+        Zero => runtime_fail("a function with more parameters than the generator reads"),
+        Succ(more) => view(t).bind(λ v => match v {
+            HPi(dom) => runtime_repr_add(k, dom, acc).bind(λ acc2 =>
+                open(t, "x").or_fail("runtime: a parameter: ").bind(λ o => runtime_reprs(more, k, o.body, acc2))),
+            _ => runtime_repr_add(k, t, acc),
+        }),
+    }
+}
+
+fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, l: Linking, reprs: List<ReprEntry>) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     // `refl` at a closed term, its type given: checked against a statement
@@ -982,7 +1116,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let pair <- runtime_global("Pair::of");
     let callees = runtime_callees(pair, Hd(trivial_h), funs);
     let world_of <- runtime_global("World::of");
-    let no_records <- runtime_global("RecInfo::none");
+    let tys_e <- runtime_tys(ts.word, reprs);
     let setup <- runtime_global("Setup::default");
     let verdicts <- runtime_ctors_at(ts.verdict);
     let judge <- runtime_global("Fun::judge");
@@ -995,7 +1129,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let word_list <- runtime_ctors_at(ts.words);
     let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let rt_e = Fun::quote(rfun, q);
-    let world_e = ap(world_of, [no_records, RtQ::seq(q.sigs, sigs.map(λ s => Sig::quote(s, q))), callees]);
+    let world_e = ap(world_of, [tys_e, RtQ::seq(q.sigs, sigs.map(λ s => Sig::quote(s, q))), callees]);
     let code_e = ap(code_of, [setup, rt_e, world_e]);
     let built <- runtime_instance(name, f, rfun, q, ts, setup, world_e, rt_e);
     let instance_t <- infer(built).or_fail("runtime: `" ++ name ++ "`'s instance: ");
@@ -1012,7 +1146,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let root = NatLit(l.order.len() - 1);
     // `f::reflects` and `f::agrees` quantify over the parameters (`f::agrees`
     // reads a count off its word, as a call passes it).
-    let xs <- runtime_params(ts.word, rfun.params, None, 0);
+    let xs <- runtime_params_at(runtime_param_types(ts.word, reprs, rfun.params), None, 0);
     let ys <- runtime_params(ts.word, rfun.params, None, 0);
     let at_ys = runtime_locals(ys);
     let words_e = RtQ::seq(word_list, at_ys);
@@ -1036,26 +1170,36 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         Decl(AsInstance("Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e),
         Decl(AsValue, name ++ "::program", [], Hd(ts.functions), linked.program),
         Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys),
-            Equation(ap(program_eval, [linked.program, root, words_e]), ap(Global(f), runtime_args(count, rfun.params, at_ys))),
+            Equation(ap(program_eval, [linked.program, root, words_e]), runtime_result(reprs, rfun.result, ap(Global(f), runtime_args(count, reprs, rfun.params, at_ys)))),
             ap(eval_sources, [linked.program, Hd(trivial_h), ap(sources, [linked.srcs]), linked.sourced, root, words_e, Hd(trivial_h)])),
     ];
     pure(head.append(pin).append(tail))
 }
 
+// The type table the generator judges and lowers against: each repr's
+// shape, one 64-bit word (a `RecInfo` is too large for `foldr`'s result).
+fn runtime_shapes(reprs: List<ReprEntry>) → Nat → RecInfo {
+    match reprs { Nil => RecInfo::none, Cons(_, rest) => RecInfo::cons(RecInfo::shape([Word(64)]), runtime_shapes(rest)) }
+}
+
 fn runtime(name: String) → Tac<List<Decl>> {
     let f <- runtime_ref(name);
-    let k <- rt_known_in([name], [], True);
+    let k0 <- rt_known_in([name], [], True);
+    let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let reprs <- runtime_reprs(64, k0, ft, []);
+    let k = k0.with_reprs(reprs);
     let reflected <- runtime_reflect(k, f.id, name);
     let rfun = reflected.fst;
     let callee_sigs <- runtime_sigs(k, reflected.snd.drop(1));
     let sigs = Cons(rfun.sig(), callee_sigs);
-    let world = World(RecInfo::none, sigs, Sig::sems_default(RecInfo::none, sigs));
+    let tys = match reprs { Nil => RecInfo::none, Cons(_, _) => runtime_shapes(reprs) };
+    let world = World(tys, sigs, Sig::sems_default(tys, sigs));
     match Fun::judge(rfun, world) {
         Refused(why) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
         Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {
             False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
             True => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1))], Linking([], [], [])).bind(λ l =>
-                runtime_publish(name, f, rfun, sigs, reflected.snd, l)),
+                runtime_publish(name, f, rfun, sigs, reflected.snd, l, reprs)),
         },
     }
 }

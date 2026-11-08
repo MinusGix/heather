@@ -995,6 +995,17 @@ elaborated type; for v1's arguments (`Nat`, a nullary inductive) the two
 agree, and the gap is worth closing when an argument can be a type expression.
 An `Impl`'s operation half is its resolved name — see the note on §1.2.
 
+**As-landed (value parameters, 2026-11-08).** A spec may also be an
+inductive applied to closed *value* arguments, `datarepr I64 for SInt(64)`
+(`valparam_spec_view`): the field types are instantiated at the arguments
+and the key's argument half is their spelling (`"64"`), the same rule.
+Each width is its own monomorph; one repr over the telescope is
+issues/datarepr-value-parameter-telescope.md. The registry is read back
+from tactics by the host request `Repr(ty)` (`repr_of`), which spells a
+type's arguments as numerals and answers the repr's global, so a generator
+finds `I64::abs`/`I64::emb` from `SInt(64)` alone; the `runtime` generator
+does (docs/runtime-fn-setups-design.md §16.13).
+
 ## 5. Staging
 
 ### 5.1 v1 — byte-free (trigger: already pulled — certgen's parameterized-instantiations stage is waiting on it)

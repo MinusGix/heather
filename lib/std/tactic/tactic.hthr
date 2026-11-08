@@ -307,6 +307,18 @@ inductive Req {
     // between two different constructors' values, a proof of `goal`.
     // Refused where the surface `absurd` is (one constructor on both sides).
     Absurd(e: Expr, goal: Handle),
+    // `h`'s head definition unfolded once and applied to its arguments, the
+    // β-redex contracted: `f(a, b)` as `f`'s body at `a` and `b`, implicit
+    // arguments included, with nothing else reduced. Refused where `Body`
+    // is (no body, universe-polymorphic), and for a head that is not a
+    // global. What a reader that inlines a definition reads instead of the
+    // call (docs/runtime-fn-setups-design.md §16.13).
+    Unfold(h: Handle),
+    // The representation registered for the type `ty` (a `datarepr`,
+    // docs/datarepr-design.md §1.4), as a handle to its assembled value
+    // (`I64`, whose `I64::abs`, `I64::emb`, … are its members). Refused when
+    // the type has none.
+    Repr(ty: Handle),
 }
 
 inductive Never {}
@@ -344,6 +356,8 @@ fn Resp(r: Req) → Type {
         Fields(_) => Checked<Projected>,
         Inj(_, _) => Checked<Handle>,
         Absurd(_, _) => Checked<Handle>,
+        Unfold(_) => Checked<Handle>,
+        Repr(_) => Checked<Handle>,
     }
 }
 
@@ -432,6 +446,8 @@ fn say(msg: String, notes: List<Note>) → Tac<True> { ask(Say(msg, notes)) }
 fn fields(e: Expr) → Tac<Checked<Projected>> { ask(Fields(e)) }
 fn inj_field(e: Expr, k: Nat) → Tac<Checked<Handle>> { ask(Inj(e, k)) }
 fn absurd_at(e: Expr, goal: Handle) → Tac<Checked<Handle>> { ask(Absurd(e, goal)) }
+fn unfold(h: Handle) → Tac<Checked<Handle>> { ask(Unfold(h)) }
+fn repr_of(ty: Handle) → Tac<Checked<Handle>> { ask(Repr(ty)) }
 
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
@@ -493,6 +509,8 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Fields(_) => match a { AFields(c) => Fits(c), _ => Mismatch },
         Inj(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Absurd(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Unfold(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Repr(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -857,7 +875,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 12: `Restore`. 13: `Lookup`. 14: `Cases`. 15: `Constructor`. 16: `Close`.
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
 // 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`. 26: `Say`.
-// 27: `Fields`. 28: `Inj`. 29: `Absurd`.
+// 27: `Fields`. 28: `Inj`. 29: `Absurd`. 30: `Unfold`. 31: `Repr`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -891,6 +909,8 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Fields(_) => 27,
             Inj(_, _) => 28,
             Absurd(_, _) => 29,
+            Unfold(_) => 30,
+            Repr(_) => 31,
         },
     }
 }
@@ -943,6 +963,8 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Synth(goal) => goal.id,
             Spine(h) => h.id,
             Absurd(_, goal) => goal.id,
+            Unfold(h) => h.id,
+            Repr(ty) => ty.id,
             _ => 0,
         },
     }

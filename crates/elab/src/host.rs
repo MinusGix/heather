@@ -407,6 +407,10 @@ pub enum Request {
     /// What a run says about itself, rendered like `Fail`'s message and
     /// notes, and reported only if the run succeeds.
     Say(String, Vec<NoteView>),
+    /// A term's head definition unfolded once at its arguments.
+    Unfold(u64),
+    /// The representation registered for a type, by the type's handle.
+    Repr(u64),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -947,6 +951,8 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Absurd(e, self.nat_of("host_handle", vec![tree])?)))
             }
+            30 => Ok(Step::Ask(Request::Unfold(self.nat_of("host_handle", vec![tree])?))),
+            31 => Ok(Step::Ask(Request::Repr(self.nat_of("host_handle", vec![tree])?))),
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1791,6 +1797,8 @@ impl Elaborator {
                 Request::Fields(e) => Answer::Fields(refusable(self.fields_request(run, &e))?),
                 Request::Inj(e, k) => Answer::Handle(refusable(self.inj_request(run, &e, k, span))?),
                 Request::Absurd(e, goal) => Answer::Handle(refusable(self.absurd_request(run, &e, goal, span))?),
+                Request::Unfold(h) => Answer::Handle(refusable(self.unfold_request(run, h))?),
+                Request::Repr(ty) => Answer::Handle(refusable(self.repr_request(run, ty))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2237,6 +2245,103 @@ impl Elaborator {
         }
         let shift = (len - abs) as u32;
         Ok(run.issue(0, Held::Term(body.shift_global(shift), ty.shift_global(shift), level.clone())))
+    }
+
+    /// `Unfold(h)`: the term `h` stands for, its head definition replaced
+    /// by its body and the β-redexes at the head contracted, so `f(a, b)`
+    /// reads as `f`'s body at `a` and `b` (implicit arguments included) and
+    /// nothing else is reduced. Refused where `Body` is, for a head that is
+    /// not a global, and in a scope under unsolved holes.
+    fn unfold_request(&self, run: &mut Run, h: u64) -> Result<u64, Fault> {
+        let (at, held) = run.held(h)?;
+        let Held::Term(t, ty, level) = held else { return Err(Fault::Ill(format!("handle {h} stands for a type, not a call"))) };
+        let t = run.committed_tm(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let ty = run.committed_ty(&ty).ok_or_else(|| Fault::Ill("its type mentions a hole nothing has solved".into()))?;
+        if run.scopes[at].world != 0 {
+            return Err(Fault::Ill("it is under holes nothing has solved".into()));
+        }
+        let (head, args) = crate::spelling::app_spine(&t);
+        let Term::GlobalTm { var, .. } = head else {
+            return Err(Fault::Ill("its head is not a global, so there is no definition to unfold".into()));
+        };
+        let abs = self.global_abs_of(*var).ok_or_else(|| Fault::Ill("its head is not a global this run can read".into()))?;
+        let name = self.global_name_at(abs).unwrap_or_else(|| "this global".into());
+        let world = self.goal_psi();
+        let len = world.bindings.len();
+        let Some(GlobalBinding::Tm { ctx, ty: gty, body, .. }) = world.bindings.get(abs) else {
+            return Err(Fault::Ill(format!("`{name}` is not a term")));
+        };
+        let Some(body) = body else {
+            return Err(Fault::Ill(format!("`{name}` has no body to unfold: a theorem's proof is not kept, and an axiom has none")));
+        };
+        if !ctx.entries.is_empty() || matches!(**gty, Type::UPi { .. }) {
+            return Err(Fault::Ill(format!("`{name}` is universe-polymorphic or context-dependent, and its body is not read yet")));
+        }
+        let locals = run.cx(at)?.gamma.len() as u32;
+        let mut out = body.shift_global((len - abs) as u32).shift_local(locals);
+        for a in args {
+            out = Term::AppAt { fun: Rc::new(out), arg: Rc::clone(a) };
+        }
+        let out = crate::spelling::beta_head(&out).unwrap_or(out);
+        Ok(run.issue(at, Held::Term(out, ty, level)))
+    }
+
+    /// `Repr(ty)`: the representation registered for the type `ty` stands
+    /// for (`datarepr`, docs/datarepr-design.md §1.4), as a handle to the
+    /// repr's assembled value. A type is keyed as the declaration keys it: a
+    /// declaration with no parameters by its tag, one with value parameters
+    /// by its tag and its arguments, which must be numerals (`SInt(64)`);
+    /// type arguments are not read yet.
+    fn repr_request(&self, run: &mut Run, h: u64) -> Result<u64, Fault> {
+        let (at, held) = run.held(h)?;
+        let Held::Type(ty, level) = held else { return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))) };
+        let ty = run.committed_ty(&ty).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?;
+        let cx = run.cx(at)?;
+        let ty = self.unspell_here(&ty).unwrap_or(ty);
+        let ind = self.display_tag_of(&ty).ok_or_else(|| Fault::Ill("it is not a declared inductive, which is what a repr represents".into()))?;
+        let argkey = if ind.params.is_empty() && ind.valparams.is_empty() {
+            String::new()
+        } else if ind.params.is_empty() && ind.index.is_none() {
+            let args = self.value_args(&cx, &ty, &level, &ind)
+                .ok_or_else(|| Fault::Ill(format!("`{}`'s arguments could not be read", ind.name)))?;
+            let mut spelled = Vec::with_capacity(args.len());
+            for a in &args {
+                let n = crate::inductive::nat_value(a)
+                    .ok_or_else(|| Fault::Ill(format!("`{}` at an argument that is not a numeral has no repr: a repr is per instantiation", ind.name)))?;
+                spelled.push(n.to_string());
+            }
+            spelled.join(",")
+        } else {
+            return Err(Fault::Ill(format!("`{}` takes type arguments, and a repr's type arguments are not read yet", ind.name)));
+        };
+        let global = self.representations.for_spec(&(Some(ind.tag), argkey))
+            .map(|info| info.global.clone())
+            .ok_or_else(|| Fault::Ill(format!("`{}` has no repr registered here", self.shown_ty(run, at, &ty))))?;
+        let (term, gty, glevel) = self.raw_global(&global)
+            .ok_or_else(|| Fault::Ill(format!("the repr `{global}` is not a global here")))?;
+        let n = run.cx(at)?.gamma.len() as u32;
+        Ok(run.issue(at, Held::Term(term.shift_local(n), gty.shift_local(n), glevel)))
+    }
+
+    /// The value arguments a value-parameterized declaration's instance is
+    /// at (`SInt(64)`'s `64`), read as [`Self::view_instance`] reads them:
+    /// by unifying with the declaration's template at unknown arguments.
+    fn value_args(&self, cx: &Cx, ty: &Type, level: &Level, ind: &crate::Inductive) -> Option<Vec<Rc<Term>>> {
+        let m = (ind.params.len() + ind.valparams.len()) as u32;
+        let mut code = self.gen_ref(cx, crate::gendefs::GenDef::TyCodeFn(ind.tag))?.shift_global(m);
+        for j in 0..m {
+            let meta = Term::GlobalTm { var: GlobalVar(j), subst: LocalSubst::id(&cx.gamma) };
+            code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
+        }
+        let template = Type::El { level: level.clone(), tm: Rc::new(code) };
+        let inline = self.unspell_here_in(&template, m)?;
+        let mut sols = vec![Sol::Unsolved; m as usize];
+        self.unify_root(cx, &inline, ty, m, &mut sols, &[], Span { start: 0, end: 0 });
+        let solved = crate::unification::zonked(&inline, m, &sols)?;
+        if !self.conv_types(cx, &solved, ty, level) {
+            return None;
+        }
+        sols.iter().skip(ind.params.len()).map(|s| s.solved().cloned()).collect()
     }
 
     /// `Arms(h)`: the `match` `h` stands for, scrutinee and arms. A tier-0
