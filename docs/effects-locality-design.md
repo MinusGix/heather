@@ -570,6 +570,10 @@ each with its case of a soundness proof that is already by induction over
    or a free theorem. Per-function parametricity
    (`issues/certified-parametricity.md`) would generate it from the body;
    is that the route, or is instance-by-instance proof acceptable?
+   *Answered (Minus, 2026-11-08):* parametricity, proved within the
+   language. Not a metatheorem for every definition, since code at layer m
+   can observe code; a per-function certificate for the carrier-shaped
+   fragment (`issues/carrier-parametricity.md`).
 4. **What is a resource?** Descriptors 0/1/2 are static; descriptors from
    `open` are run-time values, and paths alias (two opens of one file).
    Start with the standard descriptors and paths as resources, descriptors
@@ -596,6 +600,9 @@ Filed with this note:
   frame theorem (§5.3).
 - `rt-effectful-callees`: an `ETm` call of an effectful function, lowered to
   a `Source` procedure (§5.4, N6).
+- `carrier-parametricity` (added after Minus's answer to §7 question 3):
+  the free theorem of a function generic in an effect carrier, generated
+  and checked in the language.
 - `method-call-on-constrained-carrier`: dot calls on a receiver whose type
   is a constrained type variable find the constraining classes' members
   (§5.2 item 1).
