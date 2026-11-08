@@ -900,6 +900,7 @@ fn Tm::prim2(op: Op, g: List<Ty>, next, a, b, pa, pb: Nat) → Option<Lowered> {
         ToNat => None,
         Trunc(_, _) => None,
         Shl(_, _) => None, Lshr(_, _) => None, Ashr(_, _) => None,
+        Sext(_, _) => None,
     }
 }
 
@@ -923,6 +924,8 @@ fn Tm::prim1(op: Op, g: List<Ty>, next, a, pa: Nat) → Option<Lowered> {
         Shl(width, k) => Tm::unary(g, a, Word(width), Tm::one_node(ShiftLeft(width, next, pa, k), next)),
         Lshr(width, k) => Tm::unary(g, a, Word(width), Tm::one_node(LogicalShiftRight(width, next, pa, k), next)),
         Ashr(width, k) => Tm::unary(g, a, Word(width), Tm::one_node(ArithmeticShiftRight(width, next, pa, k), next)),
+        // A sign extension is one `SignResize`, `Resize`'s signed twin.
+        Sext(n, extra) => Tm::unary(g, a, Word(Succ(n)), Tm::one_node(SignResize(Succ(n), extra + Succ(n), next, pa), next)),
         // A count is held as the word it is the `toNat` of: no code.
         ToNat => Ty::at(g, a).check(Word(64)).and_then(λ _ => Some(Lowered(nodes_region(Nil), pa, next))),
         _ => None,
@@ -1234,6 +1237,25 @@ theorem Tm::resize_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, 
     }
 }
 
+// The same for a `SignResize`: its value at the output's width is the
+// operand read in two's complement there.
+theorem Tm::sresize_node_sound(w: World, g: List<Ty>, ports: List<Nat>, next, a, pa: Nat, at_a: port_at(ports, a) = Some(pa), from, to: Nat,
+    f: BitVec(from) → BitVec(to), law: (x: BitVec(from)) → x.sresize(to) = f(x), ea: Ty::at(g, a) = Word(from)):
+    (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
+    EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+    (next <= Succ(next)) ∧ ((next < Succ(next)) ∧ (Keeps(values, Valuation::set(values, next, λ wd => values(from, pa).sresize(wd)), next) ∧
+        Word(to).Holds(w.tys, Valuation::set(values, next, λ wd => values(from, pa).sresize(wd)), next,
+            f(Ty::cast(w.tys, Ty::at(g, a), Word(from), Env::get(w.tys, g, env, a)))))) {
+    λ call agree values env held below => {
+        let x = Ty::cast(w.tys, Ty::at(g, a), Word(from), Env::get(w.tys, g, env, a));
+        Tm::set_sound(w.tys, values, next, Word(to), trivial, λ wd => values(from, pa).sresize(wd), f(x),
+            trans(Valuation::set_here(values, next, λ wd => values(from, pa).sresize(wd), to),
+                trans(cong_fn(λ (y: BitVec(from)) => y.sresize(to),
+                        Tm::operand(w, g, ports, values, env, held, a, pa, at_a, Word(from), ea)),
+                    law(x))))
+    }
+}
+
 // A check of the operand's code, then the leaf.
 theorem Tm::unary_sound(P: Option<Lowered> → Type, none: P(None), g: List<Ty>, a: Nat, t: Ty, l: Lowered,
     leaf: Ty::at(g, a) = t → P(Some(l))): P(Tm::unary(g, a, t, l)) {
@@ -1307,6 +1329,7 @@ theorem Tm::prim2_sound(op: Op, w: World, g: List<Ty>, ports: List<Nat>, next, a
         ToNat => trivial,
         Trunc(_, _) => trivial,
         Shl(_, _) => trivial, Lshr(_, _) => trivial, Ashr(_, _) => trivial,
+        Sext(_, _) => trivial,
     }
 }
 
@@ -1359,6 +1382,10 @@ theorem Tm::prim1_sound(op: Op, w: World, g: List<Ty>, ports: List<Nat>, next, a
         Ashr(width, k) => Tm::unary_sound(λ r => Tm::LowerHolds(Prim(Ashr(width, k), [a]), w, g, ports, next, r), trivial, g, a, Word(width),
             Tm::one_node(ArithmeticShiftRight(width, next, pa, k), next), λ ea =>
             Tm::word1_node_sound(w, g, ports, next, a, pa, at_a, width, λ wd x => x.arithmetic_shift_right(k), ea)),
+        Sext(n, extra) => Tm::unary_sound(λ r => Tm::LowerHolds(Prim(Sext(n, extra), [a]), w, g, ports, next, r), trivial, g, a, Word(Succ(n)),
+            Tm::one_node(SignResize(Succ(n), extra + Succ(n), next, pa), next), λ ea =>
+            Tm::sresize_node_sound(w, g, ports, next, a, pa, at_a, Succ(n), extra + Succ(n), λ x => x.sign_extend(extra),
+                λ x => BitVec::sresize_sign_extend(n, extra, x), ea)),
         _ => trivial,
     }
 }

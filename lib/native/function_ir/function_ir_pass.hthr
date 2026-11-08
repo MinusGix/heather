@@ -239,6 +239,7 @@ fn Node::folded(self node: Node, facts: List<Fact>) → Option<Nat> {
         BufferLoad(_, _, _) => None,
         BufferStore(_, _, _, _) => None,
         Resize(_, _, _, _) => None,
+        SignResize(_, _, _, _) => None,
     }
 }
 
@@ -299,6 +300,7 @@ theorem Node::folded_value(self node: Node, facts: List<Fact>, values: Valuation
         BufferLoad(_, _, _) => λ none => absurd(none),
         BufferStore(_, _, _, _) => λ none => absurd(none),
         Resize(_, _, _, _) => λ none => absurd(none),
+        SignResize(_, _, _, _) => λ none => absurd(none),
     })(folded)
 }
 
@@ -321,6 +323,7 @@ theorem Node::folded_pure(self node: Node, facts: List<Fact>, v: Nat, folded: no
         BufferLoad(_, _, _) => absurd(folded),
         BufferStore(_, _, _, _) => absurd(folded),
         Resize(_, _, _, _) => trivial,
+        SignResize(_, _, _, _) => trivial,
     }
 }
 
@@ -361,6 +364,7 @@ theorem Node::value_agree(self node: Node, values, other: Valuation(), agree: no
         BufferStore(_, buffer, index, _) => λ agree w => cong_fn(λ (x: BitVec(64)) => word_value(byte_word(buffer_byte(Nil, buffer, x.toNat())), w),
             agree(index, Inl(refl), 64)),
         Resize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => BitVec::ofNat(x.toNat(), n := w), agree(source, Inl(refl), from)),
+        SignResize(from, _, _, source) => λ agree w => cong_fn(λ (x: BitVec(from)) => x.sresize(w), agree(source, Inl(refl), from)),
     })(agree)
 }
 
@@ -409,6 +413,7 @@ theorem Node::runs_alike(self node: Node, values, other: Valuation(), buffers: B
                         sym(Valuation::set_here(values, output, load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values), w))))⟩
         },
         Resize(from, to, output, source) => λ agree => Resize(from, to, output, source).runs_alike_pure(values, other, buffers, agree, trivial),
+        SignResize(from, to, output, source) => λ agree => SignResize(from, to, output, source).runs_alike_pure(values, other, buffers, agree, trivial),
     })(agree)
 }
 
@@ -433,6 +438,7 @@ theorem Node::run_keeps(self node: Node, values: Valuation(), buffers: Buffers()
         BufferStore(output, buffer, index, value) => Valuation::set_other(values, output,
             load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values), w, id, ne),
         Resize(from, to, output, source) => Valuation::set_other(values, output, Resize(from, to, output, source).value(values), w, id, ne),
+        SignResize(from, to, output, source) => Valuation::set_other(values, output, SignResize(from, to, output, source).value(values), w, id, ne),
     }
 }
 
