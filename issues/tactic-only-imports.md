@@ -63,3 +63,12 @@ module, and a negative control shows that a tactic-only name used outside a
 - **[[grind-closure-cost]]** owns the cost of the closure itself. Assumed
   here: only that the cost is paid by the importer and not by its clients
   once this lands.
+
+## Log
+- 2026-11-08: `char` and `string` are in the common prelude now (Minus:
+  "for `import char; import string;` we can put those in prelude";
+  `lib/std/core/common.hthr` exports `Char` and `String`), so every module
+  after the facade has them and grind's closure adds `tactic`, `derive`,
+  `nat_map`, `egraph` and `grind`. grind's certificate also cites
+  `grind::congr_dep` now (docs/grind-design.md §15.1), a seventh lemma to
+  move.

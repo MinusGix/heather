@@ -1758,7 +1758,6 @@ fn by_holes(g: Graph, lm: Lemma, h: Handle, s: Subst, args: List<Option<Nat>>, f
     }
 }
 
-
 // The instance a near match found at the binders' nodes `a`. One like it
 // may have been added already (from the other side's pattern): it is added
 // again for its definitional edge, which is new, and reading it again adds

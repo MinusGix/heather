@@ -1,6 +1,6 @@
 ---
 title: grind: read a stuck side one definition unfolding at a time, as the hand trans chain does by conversion
-status: open
+status: closed
 labels: [tactics]
 area: tactics
 milestone: [tac-general]
@@ -61,3 +61,17 @@ control shows that an `interface fn` head is not unfolded.
   proof can cite.
 - **[[grind-matching-fuel-on-native-terms]]**: the same probe with the
   lemmas given by name runs out of fuel before this question is reached.
+
+## Log
+- 2026-11-08: Done (docs/grind-design.md §15.1). A `Spell` host request
+  returns a term's next spelling (head definition unfolded, head reduced
+  until a call or a local is at the head again), through the interface
+  boundary as conversion sees it. grind spells the stuck terms under the
+  sides when they stay apart, joining each to its term by a `defn` edge,
+  with stand-ins for premises and disequality premises from either
+  orientation. `Fun::post_left` closes by `grind_using` with its three
+  lemmas (`lib/_tests/std/tactic/grind_native_tests.hthr`), and
+  `interface_head_folded` there is the negative control (`Interval::neg` at
+  open arguments). The open questions: every stuck head under the sides,
+  capped (`grind_spell_cap`, `grind_spell_passes`); a withheld body is not
+  unfolded; each step is one host request and one node.

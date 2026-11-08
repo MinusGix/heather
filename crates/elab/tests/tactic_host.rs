@@ -159,7 +159,9 @@ fn wrong_results_are_refused_at_the_by() {
         "fn a_type() → tactic::Tac<tactic::Expr> { goal().bind(λ g => Pure(Hd(g.target))) }
          theorem t(n: Nat, h: n = 3): n = 3 { by a_type }",
     );
-    assert!(msg.contains("which is not a term"), "{msg}");
+    // A type handle where a term is expected stands for its code, which is
+    // a term of a universe and so no proof of the goal.
+    assert!(msg.contains("the tactic returned a proof of `Type<0>`, not of the goal `n = 3`"), "{msg}");
     let msg = refused(
         "fn handle() → tactic::Tac<tactic::Expr> { defeq(Hd(Handle(77)), Hd(Handle(0))).bind(λ s => assumption()) }
          theorem t(n: Nat, h: n = 3): n = 3 { by handle }",

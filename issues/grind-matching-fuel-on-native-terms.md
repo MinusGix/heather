@@ -1,6 +1,6 @@
 ---
 title: grind: e-matching three lemmas over a native-sized goal runs out of fuel
-status: open
+status: closed
 labels: [tactics,performance]
 area: tactics
 milestone: [tac-general]
@@ -45,3 +45,16 @@ fuel, and the matching cost per round is stated as a shape in §5.
 - **[[egraph-scaling-structures]]** owns the e-graph's data structures.
   Assumed here: only that a head-symbol index can sit beside the class
   table.
+
+## Log
+- 2026-11-08: Done (docs/grind-design.md §15.2). The fuel went to linear
+  structures (nodes and classes as lists), inlined `let`s recomputed across
+  evaluations, whole-graph congruence passes and class tables rebuilt every
+  round, and matching through congruent copies. The e-graph's arrays are
+  `NatMap` tries (`lib/std/data/nat_map.hthr`), it keeps its class table,
+  parents and a signature index and closes incrementally from a dirty list,
+  and unlists congruent copies from their class; grind's atoms are keyed,
+  pattern roots come from a uses index, and values read across evaluations
+  are `shared`. The call closes (with spelling, [[grind-unfold-defined-heads]])
+  under the suite's address-space rail. What bounds a run is its total fuel,
+  since the arena is not freed during a tactic run (§15.3).
