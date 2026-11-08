@@ -164,14 +164,37 @@ designation / at OrderedField := OrderedField::div
   arguments so that a nonnegative premise mentions nothing its positive
   conclusion does not. `Invertible(x)` carries the section's whole index,
   so a sign premise is smaller than it.
-- **Rules at the field.** Every rule is stated at `OrderedField`, not at the
-  weakest class it needs (the convention for theorems): a rule at
-  `OrderedSemiring` applied in a field section builds the parent dictionary
-  as a record at every application, and the search proposes and checks many.
-  That cost about twenty times as much on the probes. Since open derivations
-  (docs/traits-layer2-design.md §8.1) an upcast is an application after its
-  first item, so moving the rules down is now
-  issues/sign-rules-at-weakest-class.md.
+- **Rules at the weakest class.** The predicates and the rules for `+`,
+  negation and `*` are `lib/std/algebra/ordered_sign.hthr`'s, each in a
+  section over the weakest class whose laws prove it: `OrderedAddMonoid`
+  (`positive_add`, `negative_add`), `LocatedAddMonoid` (a sum with a
+  nonnegative summand), `OrderedAddGroup` (negation), `OrderedSemiring`
+  (`positive_mul`, `nonneg_mul`, `positive_one`) and `OrderedRing` (a
+  negative factor, `nonneg_mul_self`). Only the rules for `⁻¹` and `/`, the
+  apartness rules and the arithmetic fallbacks are at `OrderedField`. Used
+  in a field section, a weaker rule's dictionary premise is an upcast; the
+  first round stated every rule at the field because that upcast was built
+  as a record at every application (about twenty times a field rule's
+  cost). Open derivations (docs/traits-layer2-design.md §8.1) mint it once
+  per context prefix, after which it is an application, so the rules moved
+  down (issues/sign-rules-at-weakest-class.md). The same search now answers
+  a sign goal in any ordered semiring or ring section, and at `Nat` and
+  `Int` through their instances. Two resolver changes came with the move.
+  A rule is cited by its key on the caller's behalf, so its module need
+  only be in the caller's import closure: a client of `field_division`
+  imports `ordered_sign` through it (`rule_citation`, `Names::reaches`);
+  before, every moved rule failed to build there and the `nlinarith`
+  fallbacks answered instead. And rules over a class are tried weakest
+  class first, then in canonical order (`rule_class_rank`): canonical order
+  put `LocatedAddMonoid::positive_add_nonneg` before
+  `OrderedAddMonoid::positive_add`, and its nonnegative premise ran
+  `linarith` where `positive_add` needed nothing. A second pass that
+  withholds every search rule first was tried and dropped: a goal plain
+  rules cannot answer then paid for its plain search twice. What the move
+  still costs at a field is conversion: a weaker rule's conclusion reaches
+  `A.unit` through the upcast dictionary, and comparing it with the
+  section's `K.unit` goes through projections
+  (issues/upcast-projection-conversion-cost.md).
 - **Arithmetic last.** `invertible_by_nlinarith`/`_neg` and, at the leaves,
   `positive_add_by_nlinarith`, `negative_add_by_nlinarith` (subtraction is
   `x + K.inv(y)` there) and `nonneg_by_linarith`. A tactic default runs in a
@@ -186,7 +209,8 @@ designation / at OrderedField := OrderedField::div
 A carrier reads the generic laws through its instance by unfolding:
 `OrderedField::div_mul_cancel(a, b, h := Inr(hb))` proves `a / b * b ≈ a` at
 `Rat`. The carriers' own copies stay (issues/carrier-division-through-class.md).
-Probes: `lib/_tests/std/algebra/field_division_tests.hthr`.
+Probes: `lib/_tests/std/algebra/field_division_tests.hthr`, and below the
+field `lib/_tests/std/algebra/ordered_sign_tests.hthr`.
 
 ## 7. Left open
 

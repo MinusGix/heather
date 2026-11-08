@@ -374,9 +374,11 @@ pub(crate) struct DynamicScope {
     /// `:= infer` never runs omega.
     pub(crate) positivity: RefCell<Option<resolve::PositivityRun>>,
     /// The evidence rule a search is citing right now (`resolve.rs`,
-    /// `build_candidate`). Its qualified name resolves when the module being
-    /// elaborated can see the rule's module, even inside a default that runs
-    /// in another declaring scope: `Rat(1, F.top())` in a float module runs
+    /// `build_candidate`). Its qualified name resolves when the rule's module
+    /// is in the import closure of the module being elaborated (imported, or
+    /// imported by an import: `field_division`'s clients reach
+    /// `ordered_sign`'s sign rules through it), even inside a default that
+    /// runs in another declaring scope: `Rat(1, F.top())` in a float module runs
     /// `Rat`'s `den_pos` default in `rat`'s scope, which does not import
     /// `float`, yet the rule about `F.top()` is the caller's to use.
     pub(crate) rule_citation: RefCell<Option<String>>,

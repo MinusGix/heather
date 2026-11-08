@@ -820,6 +820,16 @@ impl Elaborator {
         // order, and the search rules after them, so a goal a cheap producer
         // answers never pays for a search.
         let (mut rules, search): (Vec<_>, Vec<_>) = rules.into_iter().partition(|g| !self.is_search_rule(g));
+        // Rules stated over a class go weakest class first (a stable sort,
+        // so canonical order within one class). The weakest statement of a
+        // decomposition is the one with the plainest premises: at a sum,
+        // `OrderedAddMonoid::positive_add` asks for two signs, the located
+        // monoid's mixed rules ask for a nonnegative, which a search rule
+        // answers by a `linarith` run, and canonical order alone would try
+        // them first (docs/division-design.md §6).
+        if rules.len() > 1 {
+            rules.sort_by_cached_key(|g| self.rule_class_rank(g));
+        }
         // Inside an arithmetic tactic's own run (`linarith`, `ring`,
         // `omega` reading and checking their certificates) no search rule
         // runs: its tactic would start another such run, whose reading can
@@ -1067,6 +1077,27 @@ impl Elaborator {
             .iter()
             .zip(&goal_args)
             .any(|(r, g)| pattern_clashes(r, g, binders, &mut assigned))
+    }
+
+    /// How many ancestors the class a rule is stated over has (its section's
+    /// dictionary premise), `0` for a rule over no class: the order
+    /// [`Self::computed_or_ruled`] tries rules in. The class is read off the
+    /// premise as written, in the rule's own module, which the caller may
+    /// reach only through an import ([`crate::names::Names::reaches`]).
+    fn rule_class_rank(&self, global: &str) -> usize {
+        let Some(info) = self.names.global(global) else { return 0 };
+        let Some((module, _)) = crate::names::split_qual(global) else { return 0 };
+        let Some(scope) = self.names.module_scope(module) else { return 0 };
+        for p in info.params.iter() {
+            let Some(head) = p.solver.as_deref().and_then(written_head) else { continue };
+            let found = self.names.resolve_kinds(Some(scope), head, crate::names::ANY_KIND, |_, _, _| false);
+            let crate::names::NameRes::Found(origin) = found else { continue };
+            let base = crate::names::split_qual(head).map_or(head, |(_, b)| b);
+            if let Some(class) = self.traits.class(&crate::names::qkey(&origin, base)) {
+                return class.ancestors.len();
+            }
+        }
+        0
     }
 
     /// Does the global have a defaulted parameter: is it, as an evidence

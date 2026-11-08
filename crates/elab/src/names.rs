@@ -295,6 +295,31 @@ impl Names {
         self.module_scope(module).is_some()
     }
 
+    /// Is `module` this file's own, or in its import closure: imported, or
+    /// imported by a module it reaches? What decides whether a declaration
+    /// the file never names can still be cited on its behalf, as an evidence
+    /// rule the search found is (`Elaborator::resolve_declared_kinds`).
+    pub(crate) fn reaches(&self, module: &str) -> bool {
+        if self.scope.module == module || self.scope.imports_module(module) {
+            return true;
+        }
+        let mut seen: Vec<&str> = self.scope.imports.iter().map(|i| i.module.as_str()).collect();
+        let mut stack = seen.clone();
+        while let Some(m) = stack.pop() {
+            let Some(s) = self.module_scope(m) else { continue };
+            for i in &s.imports {
+                if i.module == module {
+                    return true;
+                }
+                if !seen.contains(&i.module.as_str()) {
+                    seen.push(&i.module);
+                    stack.push(&i.module);
+                }
+            }
+        }
+        false
+    }
+
     pub(crate) fn enter_scope(&mut self, scope: Scope) {
         // Re-entering the same module is an additive source chunk (a REPL and
         // many tests rely on this). Keep one delta for all of its chunks;
