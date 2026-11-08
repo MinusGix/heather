@@ -26,3 +26,7 @@ op to land on:
 
 Neither reaches the x86 back end yet in any case: S4 refuses shifts and
 `Resize` ([[function-ir-x86-shift-legalization]]).
+
+## Log
+
+- 2026-11-08: i64 round 3: shifts reach x86 ([[function-ir-x86-shift-legalization]], closed), so `shift_right` on an i64 compiles. `Sext` stays: for i64 alone no x86 is needed, and narrow signed words wait on [[runtime-repr-narrow-words]] (S4 keeps only 64- and 1-bit values in registers). Division waits on [[x86-undefined-flags]]: IDIV leaves every flag undefined.

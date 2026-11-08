@@ -1,0 +1,29 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import int;
+import sint;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// Shifts by constants (docs/runtime-fn-setups-design.md §16.13, round 3):
+// a shift by `k` lowers to `k` one-bit shifts, the only x86 shifts whose
+// flags are all defined but AF.
+runtime fn shifted(a, b: BitVec(64)) → BitVec(64) {
+    let left = a.shift_left(5).bxor(b.shift_left(0));
+    let right = a.shift_right(63).add(b.shift_right(1));
+    let rotated = a.shift_left(40).bor(a.shift_right(24));
+    left.add(right).bxor(rotated)
+}

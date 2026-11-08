@@ -1,0 +1,25 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import int;
+import sint;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// An `i64`'s right shift is SAR; by 63 or more it leaves the sign in every
+// bit, legalized to SAR by 63.
+runtime fn signed_shifts(a, b: BitVec(64)) → BitVec(64) {
+    a.as_signed().shift_right(7).as_unsigned().add(b.as_signed().shift_right(64).as_unsigned())
+}

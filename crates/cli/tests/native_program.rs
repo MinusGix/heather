@@ -110,6 +110,25 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 "#),
 ];
 
+// Shifts by constants (docs/runtime-fn-setups-design.md §16.13, round 3):
+// one-bit SHL/SHR/SAR chains, a count of 64 or more legalized (zero, or
+// SAR by 63), and an `i64`'s arithmetic shift. C's shifts by the width or
+// more are undefined, so the references spell the legalized result.
+const SHIFTS: [Case; 3] = [
+    ("shifts", "shifted", r#"
+static uint64_t reference(uint64_t a, uint64_t b) {
+    uint64_t left = (a << 5) ^ b, right = (a >> 63) + (b >> 1), rotated = (a << 40) | (a >> 24);
+    return (left + right) ^ rotated;
+}
+"#),
+    ("shifts_past", "past", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { (void)a; return b; }
+"#),
+    ("shifts_signed", "signed_shifts", r#"
+static uint64_t reference(uint64_t a, uint64_t b) { return (uint64_t)((int64_t)a >> 7) + (uint64_t)((int64_t)b >> 63); }
+"#),
+];
+
 const CALLS: &[&str] = &["CallTo("];
 // A loop is a `runtime fn`'s: its program and agreement are its generator's,
 // from the `Compile` instances (docs/runtime-fn-setups-design.md §16.11),
@@ -124,6 +143,9 @@ fn programs_with_calls_execute_composed() { execute("composed", &COMPOSED, CALLS
 
 #[test]
 fn programs_with_calls_execute_saved() { execute("saved", &SAVED, CALLS); }
+
+#[test]
+fn programs_with_shifts_execute() { execute("shifts", &SHIFTS, &[]); }
 
 #[test]
 fn programs_with_loops_execute() { execute("loops", &LOOPS, LOOPED); }

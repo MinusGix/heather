@@ -954,6 +954,61 @@ fn BitVec::arithmetic_shift_right({n: Nat}, self x: BitVec(n), count: Nat) → B
     }
 }
 
+// A shift by `a + b` is the shift by `a`, then by `b`, and at 64 bits a
+// shift saturates: by 64 or more, SHL and SHR leave zero, and by 63 or more
+// SAR leaves the sign in every bit. The proofs at 64 go by halves, since a
+// whole 64-step shift of a neutral word runs out of conversion fuel.
+theorem BitVec::shift_left_add({n: Nat}, self x: BitVec(n), a, b: Nat): x.shift_left(a + b) = x.shift_left(a).shift_left(b) {
+    match b {
+        Zero => refl,
+        Succ(k, ih) => j(ih, λ y _ => x.shift_left(a + k).shift_left_one() = y.shift_left_one(), refl),
+    }
+}
+theorem BitVec::arithmetic_shift_right_add({n: Nat}, self x: BitVec(n), a, b: Nat):
+    x.arithmetic_shift_right(a + b) = x.arithmetic_shift_right(a).arithmetic_shift_right(b) {
+    match b {
+        Zero => refl,
+        Succ(k, ih) => j(ih, λ y _ => x.arithmetic_shift_right(a + k).arithmetic_shift_right_one() = y.arithmetic_shift_right_one(), refl),
+    }
+}
+theorem BitVec::shift_left_32(x: BitVec(64)): x.shift_left(32) = BitVec::zero(n := 32).concat(x.take_low(32, 32)) { refl }
+theorem BitVec::shift_left_64(x: BitVec(64)): x.shift_left(64) = BitVec::zero() {
+    let low = BitVec::zero(n := 32).concat(x.take_low(32, 32));
+    trans(x.shift_left_add(32, 32),
+        trans(j(BitVec::shift_left_32(x), λ y _ => x.shift_left(32).shift_left(32) = y.shift_left(32), refl),
+            BitVec::shift_left_32(low)))
+}
+theorem BitVec::shift_left_past(x: BitVec(64), m: Nat): x.shift_left(m + 64) = BitVec::zero() {
+    trans(x.shift_left_add(m, 64), BitVec::shift_left_64(x.shift_left(m)))
+}
+theorem BitVec::shift_right_past(x: BitVec(64), m: Nat): x.shift_right(m + 64) = BitVec::zero() { refl }
+theorem BitVec::arithmetic_shift_right_32(z: BitVec(64)):
+    z.arithmetic_shift_right(32) = z.drop_low(32, 32).concat(BitVec::repeat_bit(z.sign_bit(), n := 32)) { refl }
+theorem BitVec::arithmetic_shift_right_31(z: BitVec(64)):
+    z.arithmetic_shift_right(31) = z.drop_low(31, 33).concat(BitVec::repeat_bit(z.sign_bit(), n := 31)) { refl }
+theorem BitVec::arithmetic_shift_right_63(y: BitVec(64)): y.arithmetic_shift_right(63) = BitVec::repeat_bit(y.sign_bit()) {
+    let w = y.arithmetic_shift_right(31);
+    trans(y.arithmetic_shift_right_add(31, 32),
+        trans(BitVec::arithmetic_shift_right_32(w),
+            j(BitVec::arithmetic_shift_right_31(y),
+                λ z _ => w.drop_low(32, 32).concat(BitVec::repeat_bit(w.sign_bit(), n := 32)) =
+                    z.drop_low(32, 32).concat(BitVec::repeat_bit(z.sign_bit(), n := 32)), refl)))
+}
+theorem BitVec::repeat_arithmetic_shift_right(b: Bool, m: Nat):
+    BitVec::repeat_bit(b, n := 64).arithmetic_shift_right(m) = BitVec::repeat_bit(b) {
+    match m {
+        Zero => refl,
+        Succ(_, ih) => j(sym(ih), λ y _ => y.arithmetic_shift_right_one() = BitVec::repeat_bit(b), refl),
+    }
+}
+theorem BitVec::arithmetic_shift_right_past(y: BitVec(64), m: Nat): y.arithmetic_shift_right(m + 63) = y.arithmetic_shift_right(63) {
+    let fill = BitVec::arithmetic_shift_right_63(y);
+    trans(j(Nat::add_comm(m, 63), λ k _ => y.arithmetic_shift_right(m + 63) = y.arithmetic_shift_right(k), refl),
+        trans(y.arithmetic_shift_right_add(63, m),
+            trans(j(fill, λ z _ => y.arithmetic_shift_right(63).arithmetic_shift_right(m) = z.arithmetic_shift_right(m), refl),
+                trans(BitVec::repeat_arithmetic_shift_right(y.sign_bit(), m), sym(fill)))))
+}
+
 // ---------------------------------------------------------------------------
 // Core pointwise laws. More arithmetic laws are stated through the explicit
 // `toNat`/`toInt` boundary above; no theorem silently treats wrapped arithmetic

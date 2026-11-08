@@ -417,6 +417,7 @@ fn Instruction::numbers(self instruction: Instruction) → List<Nat> {
         TestRR(l, r) => [11, l.index(), r.index()],
         AddRI8(d, immediate) => [12, d.index(), immediate.toNat()],
         AddRI32(d, immediate) => [13, d.index(), immediate.toNat()],
+        ShiftOne(op, d) => [14, match op { OpShl => 0, OpShr => 1, OpSar => 2 }, d.index()],
     }
 }
 
