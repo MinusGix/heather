@@ -1398,9 +1398,12 @@ What landed:
   (and which is not a field of one) is unfolded once and walked again:
   `SInt::add(a, b)` is `SInt(a.bits.add(b.bits))`, reflected as `Field`,
   `Add(64)`, `Make`. `lt_bit` arrives at `BitVec::signed_lt_bit` (`Slt`,
-  `JL`) and `shift_right` at `arithmetic_shift_right` (`Ashr`, `SAR`). An
-  ordinary helper over `i64` is inlined the same way; that is a
-  convenience, not a promise, since the pin is what checks it.
+  `JL`) and `shift_right` at `arithmetic_shift_right` (`Ashr`, `SAR`).
+  Only the type's own operations are read so (Minus, 2026-11-08): a
+  global in the spec type's namespace (`SInt::add`), or the function the
+  repr's `abs` is (`BitVec::as_signed`). Any other function over `i64` is
+  refused as an ordinary fn to mark `runtime fn`, so what is compiled stays
+  what the program marked.
 - **The boundary passes the record in one word.** A function's parameters
   and result were `Word(64)` (`Ty::Words`); they are now `Ty::OneWord`: a
   64-bit word, or a record whose fields are `[Word(64)]`. `Ty::convert`
@@ -1413,11 +1416,34 @@ What landed:
   I64::emb(f(I64::abs()(x), I64::abs()(y)))`, which for `i64_add` converts
   to `x.add(y)`: the same words a `u64` add takes and returns.
 
-Refused, each with its reason and issue: a call of a runtime fn with a
-repr'd signature (`Sig::is_words`, issues/runtime-repr-calls.md), a loop
-over repr'd words (issues/runtime-repr-loops.md), a repr'd type the
-signature does not name (issues/runtime-repr-inner-types.md), a repr whose
-carrier is not one 64-bit word (issues/runtime-repr-narrow-words.md). Sign
-extension and signed division have no `rt` op
-(issues/runtime-signed-extend-divide.md). Probes:
+Refused, each with its reason and issue: a loop over repr'd words
+(issues/runtime-repr-loops.md), a repr whose carrier is not one 64-bit
+word (issues/runtime-repr-narrow-words.md). Sign extension and signed
+division have no `rt` op (issues/runtime-signed-extend-divide.md). Probes:
 `lib/_tests/native/runtime/runtime_sint_tests.hthr`.
+
+**Round 2 (same day): calls, and types the signature does not name.**
+
+- **The table is found as the walk meets it.** The first round read the
+  reprs off the signature, so an `i64` local in a `u64` function was
+  refused. Now the walk asks `Repr` of every type it cannot otherwise
+  place, and on a repr not yet in its table stops with a marked refusal
+  naming it; `rt_with_reprs` appends the repr and walks again from the
+  start (`attempt` rewinds the walk's handles, so the refusal carries
+  names, not handles). A repr's place is therefore fixed before any
+  `Named(i)` names it, and the table is the order the walk first met the
+  types. Each walk is short, and a program meets few reprs.
+- **Calls pass a record held in one word.** `Sig::Words` (what
+  `Tm::CallsAgree` answers for) and `Tm::lower_call` take the table: a
+  parameter is `Held` when it is a 64-bit word, a count, or a record whose
+  fields are `[Word(64)]`, and the result is `OneWord`. Reading an
+  argument's word back at the record needs the other round trip, so
+  `RecInfo` gains `back: mk(get(v)) = v` (`refl` by η for a record's own
+  constructor and fields, and for a repr whose `abs` is the constructor;
+  `word_repr` takes it, the generator passing `λ s => refl`). The call's
+  result lands in its port by `Ty::one_word_holds` and `one_word_back`.
+- **Each function keeps its own table.** A caller numbers the reprs its
+  walk met, its callee its own; linking compares each table entry's
+  uncurried meaning with the callee instance's by conversion
+  (`Compile::part`'s `linked`), and both reduce to `emb ∘ g ∘ abs` on
+  words whatever the numbering. No shared table was needed.

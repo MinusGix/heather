@@ -96,6 +96,16 @@ fn Ty::all_one_word(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_one_word(tys).and(Ty::all_one_word(rest, tys)) }
 }
 
+fn Ty::all_held_at(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
+    match ts { Nil => True, Cons(t, rest) => match t { Count => True, _ => t.is_one_word(tys) }.and(Ty::all_held_at(rest, tys)) }
+}
+
+// A signature a call passes and returns in words, a type held by its repr
+// among them (what `Tm::lower_call` checks, as `Bool`).
+fn Sig::is_held_at(self s: Sig, tys: Nat → RecInfo) → Bool {
+    Ty::all_held_at(s.params, tys).and(s.result.is_one_word(tys))
+}
+
 fn Op::judge(self o: Op) → Verdict {
     match o {
         Get(_) => Refused("a byte read: byte buffers are not lowered yet (docs/runtime-fn-setups-design.md §16.6)"),
@@ -106,7 +116,7 @@ fn Op::judge(self o: Op) → Verdict {
 }
 
 // A term of the function at entry 0 of `sigs`.
-fn Tm::judge(self t: Tm, sigs: List<Sig>) → Verdict {
+fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
     match t {
         Var(_) => Ok,
         Lit(c, _) => match c {
@@ -115,14 +125,14 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>) → Verdict {
             _ => Refused("a literal that is not a word or a `Bool`: byte buffers and lists are not lowered yet"),
         },
         Prim(op, _) => op.judge(),
-        Let(e, body) => e.judge(sigs).and(body.judge(sigs)),
-        If(_, yes, no) => yes.judge(sigs).and(no.judge(sigs)),
-        IfEq(_, yes, no) => yes.judge(sigs).and(no.judge(sigs)),
+        Let(e, body) => e.judge(sigs, tys).and(body.judge(sigs, tys)),
+        If(_, yes, no) => yes.judge(sigs, tys).and(no.judge(sigs, tys)),
+        IfEq(_, yes, no) => yes.judge(sigs, tys).and(no.judge(sigs, tys)),
         Make(_, _) => Ok,
         Field(_, _, _) => Ok,
         Call(f, _) => match f {
             Zero => Refused("a call of itself that is not the last thing it does: a recursion is lowered as a loop, its calls of itself in tail position (docs/runtime-fn-setups-design.md §16.11)"),
-            Succ(_) => match Sig::at(sigs, f).is_words() {
+            Succ(_) => match Sig::at(sigs, f).is_held_at(tys) {
                 True => Ok,
                 False => Refused("a call of a function that does not take and return 64-bit words (issues/function-ir-multi-word-calls.md)"),
             },
@@ -133,19 +143,19 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>) → Verdict {
 }
 
 // A loop's pass: calls of itself only in tail position.
-fn Tm::judge_tail(self t: Tm, sigs: List<Sig>) → Verdict {
+fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
     match t {
-        Let(e, body) => e.judge(sigs).and(body.judge_tail(sigs)),
-        If(_, yes, no) => yes.judge_tail(sigs).and(no.judge_tail(sigs)),
-        IfEq(_, yes, no) => yes.judge_tail(sigs).and(no.judge_tail(sigs)),
-        Call(f, args) => match f { Zero => Ok, Succ(g) => Call(Succ(g), args).judge(sigs) },
-        Var(i) => Var(i).judge(sigs),
-        Lit(c, n) => Lit(c, n).judge(sigs),
-        Prim(op, args) => Prim(op, args).judge(sigs),
-        Make(i, args) => Make(i, args).judge(sigs),
-        Field(i, k, of) => Field(i, k, of).judge(sigs),
-        Fold(over, init, step) => Fold(over, init, step).judge(sigs),
-        Case(c, zero, succ) => Case(c, zero, succ).judge(sigs),
+        Let(e, body) => e.judge(sigs, tys).and(body.judge_tail(sigs, tys)),
+        If(_, yes, no) => yes.judge_tail(sigs, tys).and(no.judge_tail(sigs, tys)),
+        IfEq(_, yes, no) => yes.judge_tail(sigs, tys).and(no.judge_tail(sigs, tys)),
+        Call(f, args) => match f { Zero => Ok, Succ(g) => Call(Succ(g), args).judge(sigs, tys) },
+        Var(i) => Var(i).judge(sigs, tys),
+        Lit(c, n) => Lit(c, n).judge(sigs, tys),
+        Prim(op, args) => Prim(op, args).judge(sigs, tys),
+        Make(i, args) => Make(i, args).judge(sigs, tys),
+        Field(i, k, of) => Field(i, k, of).judge(sigs, tys),
+        Fold(over, init, step) => Fold(over, init, step).judge(sigs, tys),
+        Case(c, zero, succ) => Case(c, zero, succ).judge(sigs, tys),
     }
 }
 
@@ -169,21 +179,21 @@ fn Fun::judge(self f: Fun, w: World) → Verdict {
             // words.
             Plain => match Ty::all_one_word(f.params, w.tys) {
                 False => Refused(Fun::words_reason()),
-                True => f.body.judge(w.sigs),
+                True => f.body.judge(w.sigs, w.tys),
             },
             Fuel(w0, wrest, zero, succ) => match Ty::all_word64(Cons(w0, wrest)).and(f.result.is_word64()) {
                 False => Refused(Fun::loop_words_reason()),
                 True => match f.body {
                     Case(c, _, _) => match c.same(Succ(wrest.len())) {
                         False => Refused("a `match` on a `Nat` that is not the fuel, its first parameter"),
-                        True => zero.judge(w.sigs).and(succ.judge_tail(w.sigs)),
+                        True => zero.judge(w.sigs, w.tys).and(succ.judge_tail(w.sigs, w.tys)),
                     },
                     _ => Refused("a fuel recursion's body is its fuel's `match`"),
                 },
             },
             Measured(w0, wrest, body) => match Ty::all_word64(Cons(w0, wrest)).and(f.result.is_word64()) {
                 False => Refused(Fun::loop_words_reason()),
-                True => body.judge_tail(w.sigs),
+                True => body.judge_tail(w.sigs, w.tys),
             },
         },
     }
@@ -438,12 +448,11 @@ fn World::uncurried(self w: World) → List<List<BitVec(64)> → BitVec(64)> { S
 
 fn World::arity(self w: World) → Nat → Option<Nat> { λ k => Sig::arity(w.sigs, k) }
 
-theorem Sig::uncurried_answers(tys: Nat → RecInfo, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (f: Nat) → Sig::at(sigs, f).Words() →
+theorem Sig::uncurried_answers(tys: Nat → RecInfo, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (f: Nat) → Sig::at(sigs, f).Words(tys) →
     Ty::Answers(tys, Sig::at(sigs, f).params, Sig::at(sigs, f).result, Sig::get(tys, sigs, cs, f), λ ws => link_sources(Sig::uncurried(tys, sigs, cs), f, ws)) {
     match sigs {
-        Nil => λ cs f ok => Ty::bit_ne_word(64, ok.right,
-            Ty::Answers(tys, Sig::at([], f).params, Sig::at([], f).result, Sig::get(tys, [], cs, f), λ ws => link_sources(Sig::uncurried(tys, [], cs), f, ws))),
-        Cons(s, rest) => λ cs f => match f as λ g => Sig::at(Cons(s, rest), g).Words() →
+        Nil => λ cs f ok => false_elim(ok.right),
+        Cons(s, rest) => λ cs f => match f as λ g => Sig::at(Cons(s, rest), g).Words(tys) →
             Ty::Answers(tys, Sig::at(Cons(s, rest), g).params, Sig::at(Cons(s, rest), g).result, Sig::get(tys, Cons(s, rest), cs, g),
                 λ ws => link_sources(Sig::uncurried(tys, Cons(s, rest), cs), g, ws)) {
             Zero => λ _ => Ty::answers_uncurry(tys, s.params, s.result, cs.fst),
@@ -730,7 +739,8 @@ fn runtime_reflect(k: Known, g: Nat, name: String) → Tac<Pair<Fun, List<Nat>>>
 // A runtime fn's table: itself, then the runtime fns it calls, as the
 // reflector numbers them (what its own `g::world` lists).
 fn runtime_table(k: Known, g: Nat, name: String) → Tac<List<Nat>> {
-    runtime_reflect(Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io, k.nat, None, k.reprs), g, name).bind(λ r => pure(r.snd))
+    rt_with_reprs(16, Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io, k.nat, None, k.reprs),
+        λ k2 => runtime_reflect(k2, g, name)).bind(λ r => pure(r.snd.snd))
 }
 
 fn runtime_self<A>(a: A) → a = a { refl }
@@ -1024,14 +1034,16 @@ fn runtime_repr_infos(word: Handle, word_repr, rfl: Expr, reprs: List<ReprEntry>
         Cons(e, rest) => {
             let x <- assume(Hd(word), "w", None).or_fail("runtime: a repr's word: ");
             let round = Lam(x.ref, ap(rfl, [Blank, Local(x.ref)]));
+            let s <- assume(Hd(e.ty), "s", None).or_fail("runtime: a repr's value: ");
+            let back = Lam(s.ref, ap(rfl, [Blank, Local(s.ref)]));
             let more <- runtime_repr_infos(word, word_repr, rfl, rest);
-            pure(Cons(ap(word_repr, [Blank, Global(GlobalRef(e.abs)), Global(GlobalRef(e.emb)), round]), more))
+            pure(Cons(ap(word_repr, [Blank, Global(GlobalRef(e.abs)), Global(GlobalRef(e.emb)), round, back]), more))
         },
     }
 }
 
 // The world's type table: none without reprs, else each repr's
-// `RecInfo::word_repr`, its round trip `refl` at each word.
+// `RecInfo::word_repr`, its round trips `refl` at each word and each value.
 fn runtime_tys(word: Handle, reprs: List<ReprEntry>) → Tac<Expr> {
     match reprs {
         Nil => runtime_global("RecInfo::none"),
@@ -1062,46 +1074,20 @@ fn runtime_carrier(k: Known, rname: String, et: Handle) → Tac<Ty> {
     }
 }
 
-fn runtime_repr_add(k: Known, h: Handle, acc: List<ReprEntry>) → Tac<List<ReprEntry>> {
-    let v <- view(h);
-    match v {
-        HGlobal(g, _, _) => match g.id.same(k.bitvec).or(g.id.same(k.boolean)).or(g.id.same(k.list)).or(g.id.same(k.nat)) {
-            True => pure(acc),
-            False => repr_of(h).bind(λ c => match c {
-                Refused(_) => pure(acc),
-                Accepted(r) => view(r).bind(λ rv => match rv {
-                    HGlobal(rg, rname, _) => match Known::repr_at(acc, rg.id, 0) {
-                        Some(_) => pure(acc),
-                        None => {
-                            let abs <- runtime_ref(rname ++ "::abs");
-                            let emb <- runtime_ref(rname ++ "::emb");
-                            let et <- infer(Global(emb)).or_fail("runtime: `" ++ rname ++ "::emb`: ");
-                            let carrier <- runtime_carrier(k, rname, et);
-                            match carrier.is_word64() {
-                                True => pure(acc ++ [ReprEntry(rg.id, abs.id, emb.id, h)]),
-                                False => runtime_fail("the datarepr `" ++ rname ++ "` holds its type in something other than one 64-bit word: a repr'd type crosses a function's boundary in one (issues/runtime-repr-narrow-words.md)"),
-                            }
-                        },
-                    },
-                    _ => pure(acc),
-                }),
-            }),
+// Every repr the program reads holds its type in one 64-bit word (the
+// boundary passes one).
+fn runtime_check_carriers(k: Known, rs: List<ReprEntry>) → Tac<True> {
+    match rs {
+        Nil => pure(trivial),
+        Cons(e, rest) => {
+            let rname = e.name;
+            let et <- infer(Global(GlobalRef(e.emb))).or_fail("runtime: `" ++ rname ++ "::emb`: ");
+            let carrier <- runtime_carrier(k, rname, et);
+            match carrier.is_word64() {
+                True => runtime_check_carriers(k, rest),
+                False => runtime_fail("the datarepr `" ++ rname ++ "` holds its type in something other than one 64-bit word: a repr'd type crosses a function's boundary in one (issues/runtime-repr-narrow-words.md)"),
+            }
         },
-        _ => pure(acc),
-    }
-}
-
-// The types of the function's signature held by their `datarepr` (design
-// §16.13), each once, in order: the reprs its reflection reads. A repr's
-// carrier must be one 64-bit word.
-fn runtime_reprs(fuel: Nat, k: Known, t: Handle, acc: List<ReprEntry>) → Tac<List<ReprEntry>> {
-    match fuel {
-        Zero => runtime_fail("a function with more parameters than the generator reads"),
-        Succ(more) => view(t).bind(λ v => match v {
-            HPi(dom) => runtime_repr_add(k, dom, acc).bind(λ acc2 =>
-                open(t, "x").or_fail("runtime: a parameter: ").bind(λ o => runtime_reprs(more, k, o.body, acc2))),
-            _ => runtime_repr_add(k, t, acc),
-        }),
     }
 }
 
@@ -1185,12 +1171,16 @@ fn runtime_shapes(reprs: List<ReprEntry>) → Nat → RecInfo {
 fn runtime(name: String) → Tac<List<Decl>> {
     let f <- runtime_ref(name);
     let k0 <- rt_known_in([name], [], True);
-    let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
-    let reprs <- runtime_reprs(64, k0, ft, []);
-    let k = k0.with_reprs(reprs);
-    let reflected <- runtime_reflect(k, f.id, name);
+    // The reflection and its callees' signatures, the types held by their
+    // reprs added to the table as the walk meets them (design §16.13).
+    let found <- rt_with_reprs(16, k0, λ k1 => runtime_reflect(k1, f.id, name).bind(λ r =>
+        runtime_sigs(k1, r.snd.drop(1)).bind(λ ss => pure(Pair(r, ss)))));
+    let k = found.fst;
+    let reprs = k.reprs;
+    let reflected = found.snd.fst;
     let rfun = reflected.fst;
-    let callee_sigs <- runtime_sigs(k, reflected.snd.drop(1));
+    let callee_sigs = found.snd.snd;
+    let checked <- runtime_check_carriers(k, reprs);
     let sigs = Cons(rfun.sig(), callee_sigs);
     let tys = match reprs { Nil => RecInfo::none, Cons(_, _) => runtime_shapes(reprs) };
     let world = World(tys, sigs, Sig::sems_default(tys, sigs));

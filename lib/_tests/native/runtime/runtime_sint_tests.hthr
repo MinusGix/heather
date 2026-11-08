@@ -72,7 +72,39 @@ runtime fn i64_mix(a: SInt(64), b: BitVec(64)) → BitVec(64) { a.as_unsigned().
 theorem i64_mix_rt_is(): i64_mix::rt = Fun([Named(0), Word(64)], Word(64), Let(Field(0, 0, 1), Prim(Add(64), [0, 1]))) { refl }
 
 // ---------------------------------------------------------------------------
+// Calls: a runtime fn with an `i64` signature is called with the record's
+// word and returns one, and the linked program agrees on words.
+
+runtime fn i64_twice(a: SInt(64)) → SInt(64) { i64_add(a, a) }
+
+theorem i64_twice_rt_is(): i64_twice::rt = Fun([Named(0)], Named(0), Call(1, [0, 0])) { refl }
+
+theorem i64_twice_agrees(x: BitVec(64)): program_eval(i64_twice::program, 1, [x]) = x.add(x) { i64_twice::agrees(x) }
+
+// A `u64` function calling one over `i64`, its argument and result crossing
+// by `as_signed`/`as_unsigned`: the table holds `I64` though the signature
+// does not name it, found as the walk meets it.
+runtime fn u64_via_i64(x: BitVec(64)) → BitVec(64) { i64_min(x.as_signed(), BitVec::ofNat(0).as_signed()).as_unsigned() }
+
+theorem u64_via_i64_agrees(): program_eval(u64_via_i64::program, 1, [BitVec::ofNat(0xffffffffffffffff)]) =
+    BitVec::ofNat(0xffffffffffffffff) { u64_via_i64::agrees(BitVec::ofNat(0xffffffffffffffff)) }
+
+// An `i64` local in a `u64` function.
+runtime fn u64_sar_signed(x: BitVec(64)) → BitVec(64) { x.as_signed().shift_right(1).as_unsigned() }
+
+theorem u64_sar_signed_rt_is(): u64_sar_signed::rt =
+    Fun([Word(64)], Word(64), Let(Make(0, [0]), Let(Field(0, 0, 0), Let(Prim(Ashr(64, 1), [0]), Let(Make(0, [0]), Field(0, 0, 0)))))) { refl }
+
+// ---------------------------------------------------------------------------
 // Refusals, each with its reason.
+
+// Only the type's own operations are read through their definitions
+// (Minus, 2026-11-08): a helper over `i64` is a function the program must
+// mark `runtime fn`.
+fn i64_helper(a: SInt(64)) → SInt(64) { a + a }
+
+// expect-error: `i64_helper` is an ordinary fn: mark it `runtime fn`
+runtime fn uses_i64_helper(a: SInt(64)) → SInt(64) { i64_helper(a) }
 
 // A narrower signed word has a repr too, but the boundary passes one 64-bit
 // word.
@@ -82,7 +114,3 @@ runtime fn i32_add(a: SInt(32), b: SInt(32)) → SInt(32) { a + b }
 // A loop's state is words (issues/runtime-repr-loops.md).
 // expect-error: a parameter that is not a 64-bit word
 runtime fn i64_count(n: Nat, a: SInt(64)) → SInt(64) { match n { Zero => a, Succ(k) => i64_count(k, a + a) } }
-
-// A call of a runtime fn with an `i64` signature (issues/runtime-repr-calls.md).
-// expect-error: cannot be a runtime fn under the default setup
-runtime fn i64_twice(a: SInt(64)) → SInt(64) { i64_add(a, a) }

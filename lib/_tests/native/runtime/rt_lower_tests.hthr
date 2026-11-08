@@ -283,7 +283,7 @@ fn wc_tys(i: Nat) → RecInfo {
     RecInfo(WcState, [Word(64), Word(64), Bit],
         λ t => WcState(t.fst, t.snd.fst, t.snd.snd.fst),
         λ s => Pair(s.lines, Pair(s.words, Pair(s.inside, trivial))),
-        λ t => refl)
+        λ t => refl, λ s => refl)
 }
 
 fn wc_step_body() → Tm {
@@ -336,7 +336,7 @@ theorem choose_agrees(c: Bool, s, t: WcState, call: Answers(), values: Valuation
 // Refusals: a field past the record's end, and a record of a record.
 theorem field_past_end_refused(): Tm::lower(Field(0, 3, 0), wc_world(), [Named(0)], [0], 3) = None { refl }
 
-fn nested_tys(i: Nat) → RecInfo { RecInfo(True, [Named(0)], λ _ => trivial, λ _ => Pair(trivial, trivial), λ t => refl) }
+fn nested_tys(i: Nat) → RecInfo { RecInfo(True, [Named(0)], λ _ => trivial, λ _ => Pair(trivial, trivial), λ t => refl, λ v => refl) }
 
 theorem record_of_record_refused(): Tm::lower(Make(0, [0]), World(nested_tys, [], trivial), [Named(0)], [0], 1) = None { refl }
 

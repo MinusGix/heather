@@ -87,6 +87,10 @@ fn Ty::flats_default(ts: List<Ty>) → Ty::Flats(ts) {
 record RecInfo {
     T: Type, fields: List<Ty>, mk: Ty::Flats(fields) → T, get: T → Ty::Flats(fields),
     round: (t: Ty::Flats(fields)) → get(mk(t)) = t,
+    // And building from what was read off a record is the record (`refl`
+    // by η for a record's own constructor and fields): what passing a
+    // record held in one word to a call relies on.
+    back: (v: T) → mk(get(v)) = v,
 }
 
 // The `i`th code, `Bit` past the end (every judgment refuses that index).
@@ -557,7 +561,7 @@ fn Fun::meaning(self f: Fun, w: World) → Ty::Arrows(w.tys, f.params, f.result)
 }
 
 // The type table of a program with no records.
-fn RecInfo::none(i: Nat) → RecInfo { RecInfo(True, [], λ _ => trivial, λ _ => trivial, λ t => refl) }
+fn RecInfo::none(i: Nat) → RecInfo { RecInfo(True, [], λ _ => trivial, λ _ => trivial, λ t => refl, λ v => refl) }
 
 // A type table with `r` first and `rest` after it (a `RecInfo` is too large
 // for a `List`): a table of entries in order is `cons`es ending at
@@ -566,16 +570,17 @@ fn RecInfo::cons(r: RecInfo, rest: Nat → RecInfo) → Nat → RecInfo { λ i =
 
 // A record's shape alone, its type its field tuple: what a generator judges
 // and lowers against, neither of which reads a record's type.
-fn RecInfo::shape(fs: List<Ty>) → RecInfo { RecInfo(Ty::Flats(fs), fs, λ t => t, λ t => t, λ t => refl) }
+fn RecInfo::shape(fs: List<Ty>) → RecInfo { RecInfo(Ty::Flats(fs), fs, λ t => t, λ t => t, λ t => refl, λ t => refl) }
 
 // A type held in one 64-bit word by its `datarepr` (`SInt(64)` at
 // `BitVec(64)`, docs/runtime-fn-setups-design.md §16.13): the spec type
 // `S`, built from the word by the repr's `abs` and read back by its `emb`,
 // with the round trip `emb(abs(x)) = x` (`refl` at a repr whose images
 // are its constructors' fields).
-fn RecInfo::word_repr<S>(abs: BitVec(64) → S, emb: S → BitVec(64), round: (x: BitVec(64)) → emb(abs(x)) = x) → RecInfo {
+fn RecInfo::word_repr<S>(abs: BitVec(64) → S, emb: S → BitVec(64), round: (x: BitVec(64)) → emb(abs(x)) = x,
+    back: (s: S) → abs(emb(s)) = s) → RecInfo {
     RecInfo(S, [Word(64)], λ t => abs(t.fst), λ s => Pair(emb(s), trivial),
-        λ t => j(sym(round(t.fst)), λ y _ => Pair(y, trivial) = t, refl))
+        λ t => j(sym(round(t.fst)), λ y _ => Pair(y, trivial) = t, refl), back)
 }
 
 // ---------------------------------------------------------------------------

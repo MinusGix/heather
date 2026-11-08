@@ -1,6 +1,6 @@
 ---
 title: Reflect repr'd types that the signature does not name
-status: open
+status: closed
 labels: [native, runtime-fn]
 area: heather-in-heather
 milestone: [nh-front]
@@ -21,3 +21,14 @@ nodes have (one `infer` per node, which the walk already pays), or the walk
 threads the reprs found so far through `RSt` and the table is the order
 they were met. The second keeps one pass; `Known::ty` would then need the
 state, which every call site of `ty_of` would thread.
+
+## Log
+
+### 2026-11-08 — done (round 2 of [[sint-native-lowering]])
+
+docs/runtime-fn-setups-design.md §16.13, "Round 2": the walk finds repr'd
+types as it meets them (`rt_with_reprs`), calls pass and return a record
+held in one word (`Sig::Words` over the table, `RecInfo::back`), and each
+function keeps its own table, linking by conversion. Probes in
+`lib/_tests/native/runtime/runtime_sint_tests.hthr` (`i64_twice`,
+`u64_via_i64`, `u64_sar_signed`).

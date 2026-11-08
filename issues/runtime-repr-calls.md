@@ -1,6 +1,6 @@
 ---
 title: Call runtime fns whose signature holds a repr'd type
-status: open
+status: closed
 labels: [native, runtime-fn]
 area: heather-in-heather
 milestone: [nh-front]
@@ -31,3 +31,14 @@ Two things stand in the way:
 The `Tm::lower_sound` call case already passes and returns 64-bit words
 (`Ty::OneWord` covers both sides of the boundary), so the proof side is
 expected to be a judgment change plus the table above.
+
+## Log
+
+### 2026-11-08 — done (round 2 of [[sint-native-lowering]])
+
+docs/runtime-fn-setups-design.md §16.13, "Round 2": the walk finds repr'd
+types as it meets them (`rt_with_reprs`), calls pass and return a record
+held in one word (`Sig::Words` over the table, `RecInfo::back`), and each
+function keeps its own table, linking by conversion. Probes in
+`lib/_tests/native/runtime/runtime_sint_tests.hthr` (`i64_twice`,
+`u64_via_i64`, `u64_sar_signed`).
