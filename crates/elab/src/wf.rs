@@ -165,6 +165,13 @@ pub(crate) struct WfConvoy {
     window: Rc<Term>,
     goal: Rc<Term>,
     generalized: Option<Rc<Vec<usize>>>,
+    /// [`WfCov::peel`], at this `match`'s context: the window's own, shifted
+    /// here, and then whatever `λ`s stand between the guard and this `match`
+    /// ([`Elaborator::convoy_peel`]).
+    peel: Vec<Rc<Term>>,
+    /// How many binders stand between the guard's arm and this `match`: the
+    /// candidates [`Elaborator::convoy_peel`] may take, outermost first.
+    between: u32,
 }
 
 impl WfConvoy {
@@ -186,6 +193,52 @@ impl WfConvoy {
     fn goal(&self, gamma: &LocalCtx, extra: u32, t: Term) -> Term {
         Self::at(&self.goal, gamma, extra, t)
     }
+
+    /// The obligation this `match` computes when its scrutinee is `t`: the
+    /// enclosing recursion's motive at the goal anchor, with the leading `Π`s
+    /// the arms above took off ([`Self::peel`]) instantiated at their `λ`s,
+    /// and the level that leaves. `t` is scoped `extra` binders past `gamma`.
+    fn anchored(&self, gamma: &LocalCtx, extra: u32, t: Term) -> (Type, Level) {
+        let ty = self.motive.apply_local(
+            &embed(gamma, extra).extended(Rc::new(self.goal(gamma, extra, t))),
+        );
+        peel_pis(ty, self.lvl.clone(), gamma, extra, self.peel.iter().map(|a| a.shift_local(extra)))
+            .expect("a convoy's peel was chosen against these very Πs")
+    }
+}
+
+/// `ty`'s leading `Π`s instantiated at `args`, one each, and the level of
+/// what is left; `None` where `ty` has fewer syntactic `Π`s than that. `ty`
+/// is scoped `extra` binders past `gamma`, and so is every argument.
+fn peel_pis(
+    mut ty: Type,
+    mut lvl: Level,
+    gamma: &LocalCtx,
+    extra: u32,
+    args: impl Iterator<Item = Term>,
+) -> Option<(Type, Level)> {
+    let n = gamma.entries.len() as u32 + extra;
+    // The identity on `gamma` and the `extra` binders past it, which each
+    // `Π`'s codomain extends by the argument it is instantiated at.
+    let tail = match gamma.base {
+        heather_kernel::term::CtxBase::Nil => heather_kernel::term::SubstTail::Empty {
+            len: n,
+            base: heather_kernel::term::CtxBase::Nil,
+        },
+        heather_kernel::term::CtxBase::Var(g) => heather_kernel::term::SubstTail::Wk { len: n, ctx_var: g },
+    };
+    let ident = heather_kernel::term::LocalSubst {
+        tail,
+        terms: (0..n).map(|j| Rc::new(Term::Var(LocalVar(n - 1 - j)))).collect(),
+    };
+    for a in args {
+        let Type::Pi { cod, cod_level, .. } = ty else {
+            return None;
+        };
+        ty = cod.apply_local(&ident.clone().extended(Rc::new(a)));
+        lvl = cod_level;
+    }
+    Some((ty, lvl))
 }
 
 impl Tel<'_> {
@@ -499,11 +552,14 @@ impl Elaborator {
         // uncollected: it must **convoy** them, or its arms cannot see that the
         // value one below the arm's child is the value at the child's own
         // child (§4).
-        let convoy = if dec.is_none() {
+        let mut convoy = if dec.is_none() {
             self.wf_chain_convoy(cx, &scrut)
         } else {
             None
         };
+        if let Some(c) = convoy.as_mut() {
+            c.peel = self.convoy_peel(cx, c, &motive, &mlvl, &scrut);
+        }
         let rec = match (&convoy, d) {
             (Some(convoy), _) => WfRec::Convoy(convoy),
             (None, 1) => WfRec::None,
@@ -547,13 +603,7 @@ impl Elaborator {
                     // The whole `match` computes the enclosing recursion's
                     // motive at the anchor, which is `chain[0]` — the very
                     // obligation the enclosing arm is being checked against.
-                    Rc::new(convoy.motive.apply_local(
-                        &embed(&cx.gamma, 1).extended(Rc::new(convoy.goal(
-                            &cx.gamma,
-                            1,
-                            scrut.shift_local(1),
-                        ))),
-                    )),
+                    Rc::new(convoy.anchored(&cx.gamma, 1, scrut.shift_local(1)).0),
                     Rc::new(convoy.tuple.clone()),
                 ))
             }
@@ -589,9 +639,17 @@ impl Elaborator {
         if window.chain.last()?.shift_local(by) != *scrut {
             return None;
         }
+        // The motive and `tail_D` are scoped over the recursion's own context
+        // (`window.gamma`, the `match`'s, plus z), not the arm's: they reach
+        // this `match` past *every* binder pushed since, the arm's branch
+        // binders included, and not only past the `by` since the guard. With
+        // `by` a motive mentioning any variable of `window.gamma` (a type
+        // parameter, a parameter before the decreasing one) read the wrong
+        // binder (issues/cov-convoy-motive-second-ambient.md).
+        let from_match = (cx.gamma.entries.len() - window.gamma.entries.len()) as u32;
         let reindex = |t: &Rc<Term>| {
             t.apply_local(
-                &embed(&window.gamma, by + 1).extended(Rc::new(Term::Var(LocalVar(0)))),
+                &embed(&window.gamma, from_match + 1).extended(Rc::new(Term::Var(LocalVar(0)))),
             )
         };
         Some(WfConvoy {
@@ -604,7 +662,7 @@ impl Elaborator {
             d: window.comps.len(),
             lvl: window.mlvl.clone(),
             motive: Rc::new(window.motive.apply_local(
-                &embed(&window.gamma, by + 1).extended(Rc::new(Term::Var(LocalVar(0)))),
+                &embed(&window.gamma, from_match + 1).extended(Rc::new(Term::Var(LocalVar(0)))),
             )),
             outer_motive: Rc::clone(&window.motive),
             gamma: window.gamma.clone(),
@@ -614,7 +672,41 @@ impl Elaborator {
             window: Rc::new(window.window.shift_local(by)),
             goal: Rc::new(window.goal.shift_local(by)),
             generalized: g.generalized.clone(),
+            peel: window.peel.iter().map(|t| Rc::new(t.shift_local(by))).collect(),
+            between: by,
         })
+    }
+
+    /// Which of the `λ`s between the guard's arm and this `match` took a `Π`
+    /// off the motive, so that the `match` is checked against what is left
+    /// ([`WfCov::peel`]). The goal decides: the anchored obligation with the
+    /// first `k` of those binders instantiated is the one convertible with
+    /// what this `match` is expected to compute, `k = 0` first.
+    ///
+    /// With no binders in between, which is the ordinary nesting, nothing is
+    /// tried and the convoy is what it always was. Where no `k` fits the
+    /// peel is left alone and the arms meet the mismatch they always did.
+    fn convoy_peel(&self, cx: &Cx, convoy: &WfConvoy, motive: &Type, mlvl: &Level, scrut: &Term) -> Vec<Rc<Term>> {
+        if convoy.between == 0 {
+            return convoy.peel.clone();
+        }
+        let goal = motive.apply_local(&embed(&cx.gamma, 0).extended(Rc::new(scrut.clone())));
+        let (anchored, anchored_lvl) = convoy.anchored(&cx.gamma, 0, scrut.clone());
+        if anchored == goal || self.conv_types(cx, &anchored, &goal, mlvl) {
+            return convoy.peel.clone();
+        }
+        for k in 1..=convoy.between {
+            let args = (0..k).map(|i| Term::Var(LocalVar(convoy.between - 1 - i)));
+            let Some((ty, lvl)) = peel_pis(anchored.clone(), anchored_lvl.clone(), &cx.gamma, 0, args) else {
+                break;
+            };
+            if lvl == *mlvl && (ty == goal || self.conv_types(cx, &ty, &goal, mlvl)) {
+                let mut peel = convoy.peel.clone();
+                peel.extend((0..k).map(|i| Rc::new(Term::Var(LocalVar(convoy.between - 1 - i)))));
+                return peel;
+            }
+        }
+        convoy.peel.clone()
     }
 
     /// How deep into the chain this `match`'s self-calls reach, over all its
@@ -855,24 +947,22 @@ impl Elaborator {
                 // not a subterm, so synthesis has to recover the scrutinee
                 // out of a reduced goal and at depth it does not. Rebuilding
                 // it here is the §4 anchoring again, one level up.
-                let anchored = convoy
-                    .motive
-                    .apply_local(&embed(&cx.gamma, 2).extended(Rc::new(convoy.goal(
-                        &cx.gamma,
-                        2,
-                        Term::Var(LocalVar(1)),
-                    ))));
+                // Under the `λ`s the arms above consumed, what is left of it
+                // (`WfConvoy::anchored`).
+                let (anchored, body_lvl) = convoy.anchored(&cx.gamma, 2, Term::Var(LocalVar(1)));
+                let pi_lvl = if body_lvl == convoy.lvl {
+                    convoy.lvl.clone()
+                } else {
+                    Level::max(convoy.lvl.clone(), body_lvl.clone())
+                };
                 let pi = Type::Pi {
                     dom_level: convoy.lvl.clone(),
-                    cod_level: convoy.lvl.clone(),
+                    cod_level: body_lvl.clone(),
                     dom: Rc::new(carried),
                     cod: Rc::new(anchored),
                 };
-                let rec = TelRec::Convoy {
-                    convoy,
-                    body_lvl: convoy.lvl.clone(),
-                };
-                (Rc::new(pi), convoy.lvl.clone(), rec)
+                let rec = TelRec::Convoy { convoy, body_lvl };
+                (Rc::new(pi), pi_lvl, rec)
             }
         };
         // Name both closed and parameterized recursive types in the children
@@ -1519,6 +1609,7 @@ impl Elaborator {
                                         d_body + 1,
                                         Rc::new(Term::Var(LocalVar(0))),
                                     ))),
+                                    peel: Vec::new(),
                                 });
                                 acx.guard = plain_guard(&acx, Some(window), children);
                                 let body =
@@ -1617,6 +1708,7 @@ impl Elaborator {
                                 dom: Rc::clone(&elem),
                                 body: Rc::new(goal_anchor),
                             }),
+                            peel: convoy.peel.iter().map(|t| Rc::new(t.shift_local(up))).collect(),
                         });
                         ccx.guard = Some(Rc::new(Guard {
                             dec: convoy.dec,

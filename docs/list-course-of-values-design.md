@@ -169,6 +169,16 @@ changes; everything else above stands as written.
    terms; they are applied by substitution, and no β-redex reaches an
    annotation.
 
+   Building the codomain rather than synthesizing it has one more cost: the
+   goal a nested `match` stands under may sit past `λ`s the arm already took
+   off the motive (a written `λ m`, or the one ih generalization wraps a
+   varied parameter's arm in). `M_outer[goal(z)]` still has those `Π`s, so
+   the window also carries the consumed binders (`WfCov::peel`, as terms),
+   and the codomain is `M_outer[goal(z)]` with its leading `Π`s instantiated
+   at them. How many a `match` consumed is read off its own goal by
+   conversion, none tried first, and only where binders stand between the
+   guard and the `match` (2026-11-08, cov-window-in-theorem-arms).
+
 4. **New: a window arm's goal is spelled at the rebuilt constructor.** The
    telescope states the step at `sup_f(ℓ; cs')`; the window's components are
    built at `sup_f(ℓ; (child, ⟨⟩))` instead. The two are convertible — `cs'`

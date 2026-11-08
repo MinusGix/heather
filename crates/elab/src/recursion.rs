@@ -1723,6 +1723,16 @@ pub(crate) struct WfCov {
     /// `Wf` arm's value has its child under a `nth`, not as a subterm, so
     /// synthesis cannot recover it and the goal is rebuilt here instead.
     pub(crate) goal: Rc<Term>,
+    /// The binders the arms above have already taken off the motive, as
+    /// terms scoped like [`Self::chain`]: one per leading `Π` of `M[goal]`
+    /// an arm's `λ` consumed before reaching this point (a generalized
+    /// parameter's, which `generalize::wrap_arms` writes, or one the source
+    /// wrote). A nested `match` under those `λ`s is checked against `M` with
+    /// its leading `Π`s instantiated at them, not against `M` itself
+    /// (issues/cov-window-in-theorem-arms.md probe 2,
+    /// issues/cov-convoy-motive-second-ambient.md). Empty in the recursion's
+    /// own arm, which is where the window starts.
+    pub(crate) peel: Vec<Rc<Term>>,
 }
 
 /// What a self-call over a container binder needs, gathered at the arm and
