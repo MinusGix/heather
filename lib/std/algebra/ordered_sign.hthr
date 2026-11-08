@@ -155,4 +155,19 @@ evidence theorem OrderedRing::negative_mul_r({x, y: A}, hx: PositiveBy(<, <=, A.
 
 evidence theorem OrderedRing::nonneg_mul_self({x: A}): NonNegBy(<, <=, A.unit, x * x) { OrderedRing::sq_nonneg(x) }
 
+// A numeral above zero is positive: at a section's carrier `2` is the ring's
+// own `Ring::nat_cast<A>(2)` (issues/class-carrier-arithmetic-surface.md), so
+// `a / 2` finds its apartness here and not by `nlinarith`.
+theorem OrderedRing::nat_cast_succ_pos(n: Nat): A.unit < Ring::nat_cast<A>(Succ(n)) {
+    match n {
+        Zero => A.zero_lt_one,
+        Succ(m) => OrderedAddMonoid::add_pos(Ring::nat_cast<A>(Succ(m)), A.multiplicative.unit,
+            OrderedRing::nat_cast_succ_pos(m), A.zero_lt_one),
+    }
+}
+
+evidence theorem OrderedRing::positive_nat_cast({n: Nat}): PositiveBy(<, <=, A.unit, Ring::nat_cast<A>(Succ(n))) {
+    OrderedRing::nat_cast_succ_pos(n)
+}
+
 }

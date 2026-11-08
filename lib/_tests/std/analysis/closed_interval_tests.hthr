@@ -6,7 +6,7 @@
 // one, refused there. Tests, not library: nothing outside lib/_tests imports
 // this module (docs/test-value-audit.md §4.5).
 import logic; import nat; import int; import list; import relation; import relation_props; import order; import algebra_rel;
-import semiring; import ordered_field; import big_operator; import ring; import omega; import linarith;
+import semiring; import ordered_field; import field_division; import big_operator; import ring; import omega; import linarith;
 import rat; import creal; import real_fn; import sequence; import supremum; import real_complete; import closed_interval;
 
 section<K: OrderedField(≈, <, <=, +, *)> {
@@ -71,8 +71,8 @@ theorem pos4(p, q, r, s: K, h: K.unit < p + q + r + s): K.unit < p ∨ (K.unit <
 theorem cubic_nonconst(D: K → Type): LocallyNonconstOn(D, λ (x: K) => x * x * x + K.inv(x)) {
     λ x y c dx dy xy => {
         let g: (K.unit < y + K.inv(x)) = linarith(xy);
-        let q1 = OrderedField::half(y + K.inv(x));
-        let h = OrderedField::half(q1);
+        let q1 = (y + K.inv(x)) / 2;
+        let h = q1 / 2;
         let pq: (K.unit < q1) = OrderedField::half_pos(y + K.inv(x), g);
         let ph: (K.unit < h) = OrderedField::half_pos(q1, pq);
         let hq: (q1 + q1 ≈ y + K.inv(x)) = OrderedField::half_add(y + K.inv(x));

@@ -116,3 +116,16 @@ theorem rat_inv_unique(x, y: Rat, h: x + y ≈ 0): y ≈ -x { GroupRel::inv_uniq
 theorem nat_views_agree(): Nat::CommMonoid(Nat::add).unit = Nat::CommMonoidRel(RelId, Nat::add).unit { refl }
 theorem nat_ring_view(): Nat::CommSemiring(RelId, Nat::add, Nat::mul).multiplicative.unit = Nat::Monoid(Nat::mul).unit { refl }
 theorem int_group_view(x: Int): Int::Group(Int::add).inv(x) = Int::GroupRel(RelId, Int::add).inv(x) { refl }
+
+// `-x`, `x - y` and numerals at a ring's carrier
+// (issues/class-carrier-arithmetic-surface.md): the designations at `Ring`,
+// each one δ-step from the dictionary spelling, and `2` the ring's
+// `nat_cast`, which computes to `1 + 1`.
+section<R: Ring(≈, +, *)> {
+
+theorem ring_class_negated_difference(x, y: R): -(x - y) ≈ R.inv(x + R.inv(y)) { R.rel_refl(-(x - y)) }
+theorem ring_class_two(x: R): 2 ≈ 1 + 1 { R.rel_refl(2) }
+theorem ring_class_zero_is_unit(x: R): x + 0 ≈ x { R.unit_r(x) }
+theorem ring_class_negative_numeral(x: R): -2 + 2 ≈ 0 { R.inv_l(2) }
+
+}

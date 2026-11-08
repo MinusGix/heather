@@ -285,3 +285,16 @@ theorem int_cross_trans(a, b, c, d, e, f: Int, hd: OfNat(0) < d, h1: a * d ≈ c
 theorem nat_mul_not_cancellative(): ¬((x, y, z: Nat) → z * x = z * y → x = y) {
     λ h => omega(h(0, 1, 0, omega))
 }
+
+// `-x` and `x - y` at an ordered group's carrier, the designations at
+// `OrderedAddGroup` (issues/class-carrier-arithmetic-surface.md). A group has
+// no `1`, so it has no numerals: they come from a ring in scope.
+section<A: OrderedAddGroup(≈, <, <=, +)> {
+
+theorem group_class_sub_self(x: A): x - x ≈ A.unit { A.inv_r(x) }
+theorem group_class_neg_sub(x, y: A): -(x - y) ≈ y - x { OrderedAddGroup::neg_sub(x, y) }
+
+// expect-error: needs a ring over `A` in scope
+theorem group_class_has_no_numerals(x: A): x + 0 ≈ x { A.unit_r(x) }
+
+}

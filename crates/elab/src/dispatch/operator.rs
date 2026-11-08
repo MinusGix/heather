@@ -151,6 +151,17 @@ impl Elaborator {
             } else {
                 None
             };
+            // A numeral-led application checked at a section's carrier
+            // (`1 - x`, `-1` at `K`): the numeral would otherwise propose
+            // `Nat`, so the class's designation (rung 2b) is asked first.
+            if flexible_left
+                && expected_for_numeral.is_none()
+                && sibling_for_numeral.is_none()
+                && expected.is_some_and(|t| self.is_local_carrier(cx, t, span))
+                && let Some(op) = self.designated_at_scope_class(cx, sym, fixity)
+            {
+                return Ok(op);
+            }
             let probed = if let Some(from_expected) = expected_for_numeral {
                 Some(from_expected)
             } else if let Some(from_sibling) = sibling_for_numeral {
@@ -276,10 +287,14 @@ impl Elaborator {
     }
 
     /// Rung 2b: the operation `sym` designates at the class of a dictionary
-    /// in scope, innermost first. Only asked when the operand has no nominal
-    /// carrier, so a carrier's own designation always wins; a scope with no
-    /// class dictionary pays one tag read per binder.
-    fn designated_at_scope_class(&self, cx: &Cx, sym: &str, fixity: OpFixity) -> Option<String> {
+    /// in scope, innermost first, or else at one of its untagged ancestors
+    /// (`-` is designated at `Ring` and at `OrderedAddGroup`, and reaches a
+    /// section over `OrderedField` through either; a tagged parent, such as
+    /// a ring's `multiplicative` monoid, is another operation's structure
+    /// and is not asked). Only asked when the operand has no nominal carrier,
+    /// so a carrier's own designation always wins; a scope with no class
+    /// dictionary pays one tag read per binder.
+    pub(crate) fn designated_at_scope_class(&self, cx: &Cx, sym: &str, fixity: OpFixity) -> Option<String> {
         for pos in (0..cx.names.len()).rev() {
             let (_, ty, _) = self.local(cx, pos);
             let Some(ind) = self.tag_of(&ty) else { continue };
@@ -287,11 +302,18 @@ impl Elaborator {
                 continue;
             }
             let ckey = crate::names::qkey(&ind.scope.module, &ind.name);
-            if !self.traits.has_class(&ckey) {
-                continue;
-            }
+            let Some(class) = self.traits.class(&ckey) else { continue };
             if let Some(op) = self.designated(sym, fixity, &ckey) {
                 return Some(op);
+            }
+            let inherited = class
+                .ancestors
+                .iter()
+                .filter(|a| a.path.is_empty())
+                .filter_map(|a| self.key_of(&a.name))
+                .find_map(|akey| self.designated(sym, fixity, &akey));
+            if inherited.is_some() {
+                return inherited;
             }
         }
         None

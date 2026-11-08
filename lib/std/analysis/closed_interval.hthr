@@ -44,6 +44,7 @@ import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
+import field_division;
 import big_operator;
 import ring;
 import omega;
@@ -81,12 +82,12 @@ theorem Within::step(a, b, x, s: K, m: Nat, dx: Within(<=, a, x, b), ps: K.unit 
 // most `n` half-steps apart have values within `(n + 1)·ε`.
 theorem UnifContOn::steps(D: K → Type, f: K → K, hD: ConvexOn(D), e, d: K, pd: K.unit < d,
     md: (x, y: K) → D(x) → D(y) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), e), n: Nat):
-    (x, y: K) → D(x) → D(y) → x <= y → y + K.inv(x) <= K.of_nat(n) * OrderedField::half(d) →
+    (x, y: K) → D(x) → D(y) → x <= y → y + K.inv(x) <= K.of_nat(n) * (d / 2) →
         AbsLe(f(y) + K.inv(f(x)), K.of_nat(Succ(n)) * e)
 {
     match n {
         Zero => λ x y dx dy xy span => {
-            let s = OrderedField::half(d);
+            let s = d / 2;
             let w: (K.of_nat(Zero) * s ≈ K.unit) = OrderedField::of_nat_zero_mul(s);
             let r = md(x, y, dx, dy, linarith(xy, span, w, pd));
             let su: (K.of_nat(Succ(Zero)) ≈ K.of_nat(Zero) + K.multiplicative.unit) = K.of_nat_succ(Zero);
@@ -95,7 +96,7 @@ theorem UnifContOn::steps(D: K → Type, f: K → K, hD: ConvexOn(D), e, d: K, p
                 K.rel_refl(f(y) + K.inv(f(x))), StrictOrder::le_of_same(e, K.of_nat(Succ(Zero)) * e, ring(su, z0)))
         },
         Succ(m) => λ x y dx dy xy span => {
-            let s = OrderedField::half(d);
+            let s = d / 2;
             let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
             let sd: (s < d) = OrderedField::half_lt(d, pd);
             let su: (K.of_nat(Succ(Succ(m))) ≈ K.of_nat(Succ(m)) + K.multiplicative.unit) = K.of_nat_succ(Succ(m));
@@ -129,7 +130,7 @@ theorem UnifContOn::steps(D: K → Type, f: K → K, hD: ConvexOn(D), e, d: K, p
 // half-steps, and `|f(a)| <= f(a)² + 1`.
 theorem UnifContOn::bounded_close(a, b: K, ab: a <= b, f: K → K, d: K, pd: K.unit < d,
     md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), K.multiplicative.unit),
-    n: Nat, hn: b + K.inv(a) <= K.of_nat(n) * OrderedField::half(d)):
+    n: Nat, hn: b + K.inv(a) <= K.of_nat(n) * (d / 2)):
     BoundedOn(λ (x: K) => Within(<=, a, x, b), f, f(a) * f(a) + K.multiplicative.unit + K.of_nat(Succ(n)) * K.multiplicative.unit)
 {
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
@@ -155,7 +156,7 @@ theorem UnifContOn::bounded(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (
 {
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
     let mo = hf(K.multiplicative.unit, o);
-    let n = OrderedField::archimedean_mul(b + K.inv(a), OrderedField::half(mo.witness), OrderedField::half_pos(mo.witness, mo.proof.left));
+    let n = OrderedField::archimedean_mul(b + K.inv(a), mo.witness / 2, OrderedField::half_pos(mo.witness, mo.proof.left));
     Exists(f(a) * f(a) + K.multiplicative.unit + K.of_nat(Succ(n.witness)) * K.multiplicative.unit,
         UnifContOn::bounded_close(a, b, ab, f, mo.witness, mo.proof.left, mo.proof.right, n.witness, n.proof))
 }
@@ -177,10 +178,10 @@ theorem UnifContOn::near_below(a, b: K, f: K → K, p, q, h, d: K, hq: p + h + h
 // `[x, b]`, or the image has an element above `p`.
 theorem UnifContOn::located_steps(a, b: K, f: K → K, p, q, h, d: K, ph: K.unit < h, hq: p + h + h ≈ q, pd: K.unit < d,
     md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), h), n: Nat):
-    (x: K) → Within(<=, a, x, b) → b + K.inv(x) <= K.of_nat(n) * OrderedField::half(d) →
+    (x: K) → Within(<=, a, x, b) → b + K.inv(x) <= K.of_nat(n) * (d / 2) →
         ((y: K) → Within(<=, a, y, b) → x <= y → f(y) <= q) ∨ (∃ y: K, ImageOn(λ (z: K) => Within(<=, a, z, b), f, y) ∧ p < y)
 {
-    let s = OrderedField::half(d);
+    let s = d / 2;
     let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
     let sd: (s < d) = OrderedField::half_lt(d, pd);
     let pm: (p < p + h) = linarith(ph);
@@ -224,12 +225,12 @@ theorem UnifContOn::located(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (
 {
     λ p q pq => {
         let g: (K.unit < q + K.inv(p)) = linarith(pq);
-        let h = OrderedField::half(q + K.inv(p));
+        let h = (q + K.inv(p)) / 2;
         let ph: (K.unit < h) = OrderedField::half_pos(q + K.inv(p), g);
         let hh: (h + h ≈ q + K.inv(p)) = OrderedField::half_add(q + K.inv(p));
         let hq: (p + h + h ≈ q) = ring(hh);
         let mo = hf(h, ph);
-        let n = OrderedField::archimedean_mul(b + K.inv(a), OrderedField::half(mo.witness), OrderedField::half_pos(mo.witness, mo.proof.left));
+        let n = OrderedField::archimedean_mul(b + K.inv(a), mo.witness / 2, OrderedField::half_pos(mo.witness, mo.proof.left));
         let da: Within(<=, a, a, b) = And(StrictOrder::le_refl(a), ab);
         let walk = UnifContOn::located_steps(a, b, f, p, q, h, mo.witness, ph, hq, mo.proof.left, mo.proof.right, n.witness);
         match walk(a, da, n.proof) {
@@ -270,10 +271,10 @@ theorem UnifContOn::image_bounded(a, b: K, ab: a <= b, f: K → K, hf: UnifContO
 theorem UnifContOn::ivt_steps(a, b: K, f: K → K, e, h, d: K, ph: K.unit < h, he: h + h ≈ e, pd: K.unit < d,
     md: (x, y: K) → Within(<=, a, x, b) → Within(<=, a, y, b) → AbsLe(y + K.inv(x), d) → AbsLe(f(y) + K.inv(f(x)), h),
     db: Within(<=, a, b, b), fb: K.unit <= f(b), n: Nat):
-    (x: K) → Within(<=, a, x, b) → f(x) <= h → b + K.inv(x) <= K.of_nat(n) * OrderedField::half(d) →
+    (x: K) → Within(<=, a, x, b) → f(x) <= h → b + K.inv(x) <= K.of_nat(n) * (d / 2) →
         ∃ y: K, Within(<=, a, y, b) ∧ AbsLe(f(y), e)
 {
-    let s = OrderedField::half(d);
+    let s = d / 2;
     let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
     let sd: (s < d) = OrderedField::half_lt(d, pd);
     let lt: (K.inv(e) < K.inv(h)) = linarith(ph, he);
@@ -316,11 +317,11 @@ theorem UnifContOn::ivt_steps(a, b: K, f: K → K, e, h, d: K, ph: K.unit < h, h
 theorem UnifContOn::ivt_approx(a, b: K, ab: a <= b, f: K → K, hf: UnifContOn(λ (x: K) => Within(<=, a, x, b), f),
     fa: f(a) <= K.unit, fb: K.unit <= f(b), e: K, pe: K.unit < e): ∃ x: K, Within(<=, a, x, b) ∧ AbsLe(f(x), e)
 {
-    let h = OrderedField::half(e);
+    let h = e / 2;
     let ph: (K.unit < h) = OrderedField::half_pos(e, pe);
     let he: (h + h ≈ e) = OrderedField::half_add(e);
     let mo = hf(h, ph);
-    let n = OrderedField::archimedean_mul(b + K.inv(a), OrderedField::half(mo.witness), OrderedField::half_pos(mo.witness, mo.proof.left));
+    let n = OrderedField::archimedean_mul(b + K.inv(a), mo.witness / 2, OrderedField::half_pos(mo.witness, mo.proof.left));
     let da: Within(<=, a, a, b) = And(StrictOrder::le_refl(a), ab);
     let db: Within(<=, a, b, b) = And(ab, StrictOrder::le_refl(b));
     let walk = UnifContOn::ivt_steps(a, b, f, e, h, mo.witness, ph, he, mo.proof.left, mo.proof.right, db, fb, n.witness);
@@ -649,7 +650,7 @@ theorem RootStage::limit_nonneg(a, b: K, f: K → K, nc: LocallyNonconstOn(λ (x
     let back: (K.inv(f(z)) <= K.unit) = OrderedField::le_of_forall_pos(K.inv(f(z)), K.unit, K.multiplicative.unit,
         StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o), λ e pe => {
         let mo = hf(e, pe);
-        let h = OrderedField::half(mo.witness);
+        let h = mo.witness / 2;
         let ph: (K.unit < h) = OrderedField::half_pos(mo.witness, mo.proof.left);
         let p = conv(h, ph);
         let sh = OrderedField::shrink(w, h, pw, ph);

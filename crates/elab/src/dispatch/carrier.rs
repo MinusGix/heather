@@ -3,7 +3,7 @@
 //! Dispatch policies consume a carrier as two deliberately distinct names:
 //! the spelling diagnostics show and the declaration key registries compare.
 
-use heather_kernel::term::{GlobalBinding, Type};
+use heather_kernel::term::{GlobalBinding, Term, Type};
 use heather_syntax::Span;
 
 use crate::inductive::Inductive;
@@ -153,5 +153,13 @@ impl Elaborator {
             return Some(Carrier::constant("Nat"));
         }
         self.tag_of(&head).map(|ind| Carrier::of_ind(&ind))
+    }
+
+    /// Is `ty` a type variable of the context, a section's carrier `K`: a
+    /// type with no nominal carrier, whose operations are a dictionary's in
+    /// scope (operator rung 2b, numerals at a class carrier).
+    pub(crate) fn is_local_carrier(&self, cx: &Cx, ty: &Type, span: Span) -> bool {
+        let is_var = |t: &Type| matches!(t, Type::El { tm, .. } if matches!(**tm, Term::Var(_)));
+        is_var(ty) || self.whnf(cx, ty, span).is_ok_and(|head| is_var(&head))
     }
 }

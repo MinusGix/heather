@@ -55,6 +55,38 @@ theorem linarith_quotient_positive(a, c: K, hc: K.unit < c, ha: K.unit < a): K.u
 
 }
 
+// Numerals and `-` at the section's carrier
+// (issues/class-carrier-arithmetic-surface.md): `0` and `1` are the units,
+// `2` is the ring's `Ring::nat_cast<K>(2)`, `-x` and `x - y` the class's
+// designations, each one δ-step from the dictionary spelling, which `refl`
+// and the tactics read alike.
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+theorem numeral_neg_cancels(x: K): x + -x ≈ 0 { K.inv_r(x) }
+theorem numeral_units(x: K): 0 < 1 { K.zero_lt_one }
+theorem numeral_unit_spelling(x: K): K.unit < K.multiplicative.unit { let p: (0 < 1) = K.zero_lt_one; p }
+theorem numeral_sub_unfolds(x, y: K): x - y ≈ x + K.inv(y) { K.rel_refl(x + K.inv(y)) }
+theorem numeral_led_difference(x: K): 1 - x ≈ K.multiplicative.unit + K.inv(x) { K.rel_refl(1 - x) }
+theorem numeral_negative_one(x: K): -1 ≈ K.inv(K.multiplicative.unit) { K.rel_refl(-1) }
+theorem numeral_two_is_one_plus_one(x: K): 2 ≈ 1 + 1 { K.rel_refl(2) }
+theorem numeral_ring_difference_of_squares(x, y: K): (x - y) * (x + y) ≈ x * x - y * y { ring }
+theorem numeral_ring_halves(e: K): e / 2 + e / 2 ≈ e { ring }
+theorem numeral_ring_thirds(a, b: K): (a - b) / 3 + b / 3 ≈ a / 3 { ring }
+theorem numeral_linarith_half(e: K, he: 0 < e): e / 2 < e { linarith(he) }
+theorem numeral_linarith_thirds(a: K, ha: 0 < a): a / 3 < a / 2 { linarith(ha) }
+theorem numeral_linarith_neg(a: K, ha: a < 0): 0 < -a { linarith(ha) }
+fn numeral_divisor_sign(a, b: K, hb: 0 < b) → K { a / -b }
+fn numeral_divisor_gap(a, b, c: K, h: b < c) → K { a / (c - b) }
+
+// A divisor with no source spelling (`c + 1`, whose `+` is the section's
+// binder): `ring` reads the quotient and its reciprocal's fact from the terms.
+theorem quotient_unspelled_divisor(c, e: K, hc: 0 <= c): c * (e / (c + 1)) + e / (c + 1) ≈ e { ring }
+// A reciprocal whose apartness the search built through a rule
+// (issues/ring-reciprocal-of-searched-proof.md): its fact is read too.
+theorem ring_searched_product_reciprocal(x, y: K, hx: 0 < x, hy: 0 < y): (x * y)⁻¹ * x ≈ y⁻¹ { ring }
+
+}
+
 // A carrier reads the generic laws through its instance: at `Rat`, the
 // class's quotient is `Rat`'s own `/` by unfolding.
 theorem rat_reads_div_mul_cancel(a, b: Rat, hb: Rat::Lt(0, b)): a / b * b ≈ a {
