@@ -1,6 +1,6 @@
 ---
 title: Dot calls on a constrained type-variable receiver find the class's members
-status: open
+status: closed
 labels: [frontend,elaboration,effects]
 area: language
 created: 2026-11-08
@@ -33,3 +33,7 @@ the `Io` surface read as imperative code.
 ## What it assumes from elsewhere
 
 - **[[effect-interfaces-over-carriers]]** is the customer.
+
+## Log
+
+- 2026-11-08: Built: `Elaborator::constrained_member` (dispatch/member.rs) reads owners off the class dictionaries in scope when the receiver's type has no nominal owner; design in docs/receiver-member-resolution-design.md §8; probes lib/_tests/lang/constrained_receiver_tests.hthr.

@@ -410,7 +410,9 @@ What it needs:
    `Io` surface pleasant is lost. The fix is a lookup rule: a dot call on a
    receiver whose type is a variable with class constraints in scope finds
    the members owned by those classes (Rust's trait methods on a generic,
-   Haskell's class methods). Issue `method-call-on-constrained-carrier`.
+   Haskell's class methods). Issue `method-call-on-constrained-carrier`,
+   built 2026-11-08: `c.say(m);` now threads `c` through `Log::say`
+   (`lib/_tests/lang/constrained_receiver_tests.hthr`).
 2. **Several effects.** A function using two interfaces takes *one*
    carrier with both constraints (`d1: Log<C> := infer, d2: Rand<C> :=
    infer`), not two carriers, because two carriers both backed by `Io`
