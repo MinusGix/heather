@@ -4,7 +4,7 @@ status: open
 labels: [design,traits,ergonomics]
 area: language
 created: 2026-08-09
-updated: 2026-11-02
+updated: 2026-11-08
 ---
 
 Filed ahead of need, from the operators round's close (2026-08-09). Once the
@@ -76,3 +76,4 @@ one.
 - 2026-08-09: Decision recorded from user review (2026-08-09): the as-notation of [[binder-symbol-as-notation]] does not double as the advertised default — local niceness and claimed defaults are different speech acts; Monoid leans toward advertising nothing.
 - 2026-11-02: From [[strict-order-presentation]] (closed 2026-11-02, docs/strict-order-presentation-design.md §2.3): both order relations are class indices, so no derived-notation expression is needed. The one requirement left here is that `(≈, <, ≤)` is advertised and overridden as one package. Today every order binder spells all three, so no collision can arise yet.
 - 2026-11-05: gardener: cites a file it shares with [[class-inherited-field-implementations]] (`docs/strict-order-presentation-design.md`); [[class-parent-names-resolve-in-client-scope]] (`docs/strict-order-presentation-design.md`).
+- 2026-11-08: Stdlib awkwardness survey (docs/stdlib-math-awkwardness-survey.md §6): a binder's symbols also capture other carriers' operands (rung 1 fires before types), so two-carrier sections write `Rat::Le(0, a)`; filed as [[section-symbols-capture-other-carriers]].
