@@ -75,13 +75,14 @@ theorem Prog::lands_jmp(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, befor
 // A block at a label, onto whatever holds of the state it computes.
 theorem Site::moves_exec<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
     before: Prog, name: Nat, instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Block(instructions)),
-    post: MachineState<M> → Type):
+    reads: block_reads(instructions, DefinedFlags::none()) = True, post: MachineState<M> → Type):
     site.Moves(writes, prog_len(before), prog_len(before) + block_length(instructions),
         λ (s: MachineState<M>) => post(execute_block_normal(instructions, s)), post) {
     λ s here resident holds => {
         let item = site.item_resident(fits, s.memory, resident, k, before, name, Block(instructions), at);
         let ran = block_steps(site.fetch, site.data, instructions, s,
-            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes(instructions), address), item));
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes(instructions), address), item),
+            block_reads_from_none(instructions, reads, s.flags.defined));
         let u = execute_block_normal(instructions, s);
         Exists(u, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, u, ran.left),
             ⟨trans(ran.right.left, site.rip_after(s, prog_len(before), block_length(instructions), here)),
@@ -173,22 +174,23 @@ theorem Site::moves_jcc<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fill
     to: Nat, pre: Gprs → Flags → M → Type, post: MachineState<M> → Type,
     taken: site.Moves(writes, landing, to, λ (t: MachineState<M>) => pre(t.gprs, t.flags, t.memory) ∧ condition_holds(cc, t.flags) = True, post),
     fall: site.Moves(writes, prog_len(before) + 6, to, λ (t: MachineState<M>) => pre(t.gprs, t.flags, t.memory) ∧ condition_holds(cc, t.flags) = False, post)):
-    site.Moves(writes, prog_len(before), to, λ (s: MachineState<M>) => pre(s.gprs, s.flags, s.memory), post) {
+    site.Moves(writes, prog_len(before), to, λ (s: MachineState<M>) =>
+        pre(s.gprs, s.flags, s.memory) ∧ condition_defined(cc, s.flags.defined) = True, post) {
     λ s here resident holds => {
         let displacement = asm_jump_of(asm_labels(site.program), prog_len(before), Jcc(cc, target));
         let control = JumpIfNear(cc, displacement);
         let u = execute_near_control(control, s);
         let jumped = machine_steps_of_fetched(site.fetch, site.data, writes, s, u, fetched_steps_one(site.fetch, site.data, s, u,
-            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), refl⟩)));
+            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), ⟨holds.right, refl⟩⟩)));
         match yes: condition_holds(cc, s.flags) {
             True => site.arrives_after(writes, s, u, to, post, jumped, taken(u,
                 trans(near_if_taken_rip(cc, displacement, s, yes),
                     trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), here),
                         jumps_forward(site.origin, prog_len(before), 6, displacement, landing, lands))),
-                resident, ⟨holds, yes⟩)),
+                resident, ⟨holds.left, yes⟩)),
             False => site.arrives_after(writes, s, u, to, post, jumped, fall(u,
                 trans(near_if_not_taken_rip(cc, displacement, s, yes), site.rip_after(s, prog_len(before), 6, here)),
-                resident, ⟨holds, yes⟩)),
+                resident, ⟨holds.left, yes⟩)),
         }
     }
 }
@@ -233,23 +235,24 @@ theorem LinuxIo::goes_jcc<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(
         λ (u: MachineState<M>) => pre(u.gprs, u.flags, u.memory) ∧ condition_holds(cc, u.flags) = True),
     fall: io.site(program, origin).Goes(io, prog_len(before) + 6, t,
         λ (u: MachineState<M>) => pre(u.gprs, u.flags, u.memory) ∧ condition_holds(cc, u.flags) = False)):
-    io.site(program, origin).Goes(io, prog_len(before), t, λ (s: MachineState<M>) => pre(s.gprs, s.flags, s.memory)) {
+    io.site(program, origin).Goes(io, prog_len(before), t, λ (s: MachineState<M>) =>
+        pre(s.gprs, s.flags, s.memory) ∧ condition_defined(cc, s.flags.defined) = True) {
     let site = io.site(program, origin);
     λ s here resident holds => {
         let displacement = asm_jump_of(asm_labels(program), prog_len(before), Jcc(cc, target));
         let control = JumpIfNear(cc, displacement);
         let u = execute_near_control(control, s);
         let jumped = linux_steps_of_fetched(io, s, u, fetched_steps_one(io.fetch, io.data, s, u,
-            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), refl⟩)));
+            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), ⟨holds.right, refl⟩⟩)));
         paid_back(io, t, s, u, jumped,
             match yes: condition_holds(cc, s.flags) {
                 True => taken(u,
                     trans(near_if_taken_rip(cc, displacement, s, yes),
                         trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), here),
                             jumps_forward(origin, prog_len(before), 6, displacement, landing, lands))),
-                    resident, ⟨holds, yes⟩),
+                    resident, ⟨holds.left, yes⟩),
                 False => fall(u, trans(near_if_not_taken_rip(cc, displacement, s, yes), site.rip_after(s, prog_len(before), 6, here)),
-                    resident, ⟨holds, yes⟩),
+                    resident, ⟨holds.left, yes⟩),
             })
     }
 }
@@ -267,7 +270,7 @@ theorem LinuxIo::goes_jmp<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(
         let control = JumpNear(displacement);
         let u = execute_near_control(control, s);
         let jumped = linux_steps_of_fetched(io, s, u, fetched_steps_one(io.fetch, io.data, s, u,
-            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jmp(target), at, here), refl⟩)));
+            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jmp(target), at, here), ⟨refl, refl⟩⟩)));
         paid_back(io, t, s, u, jumped, goes(u,
             trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, displacement), here),
                 near_lands_target(origin, prog_len(before), displacement, landing, lands)),
@@ -289,7 +292,7 @@ theorem LinuxIo::goes_jmp_tau<M>(self io: LinuxIo<M>, program: Prog, origin: Bit
         let control = JumpNear(displacement);
         let u = execute_near_control(control, s);
         let jumped: LinuxStep(io, s, u) =
-            Inl(Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jmp(target), at, here), refl⟩));
+            Inl(Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jmp(target), at, here), ⟨refl, refl⟩⟩));
         paid_tau_step(io, t, s, u, jumped, goes(u,
             trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, displacement), here),
                 near_lands_target(origin, prog_len(before), displacement, landing, lands)),

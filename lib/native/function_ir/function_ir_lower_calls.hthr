@@ -311,6 +311,7 @@ theorem call_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
     let post = λ (g: Gprs) (m: M) => ArgsIn(words_of(values, arguments), argument_registers(), g) ∧ (Kept(callee_saved(), g0, g) ∧ rest(m));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, moves.code, at,
+            site.program.block_reads_at(laid, k, prog, 0, moves.code, at),
             λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
             λ x held => {
                 let y = execute_block_normal(moves.code, x);
@@ -864,6 +865,7 @@ theorem kept_block_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(
     ⟨prog.within_then(0, Block(lowered.code)),
      λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(lowered.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), within.witness, prog, 0, lowered.code, within.proof,
+            site.program.block_reads_at(laid, within.witness, prog, 0, lowered.code, within.proof),
             λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
             λ x held => ⟨keeps(x, held.left.left, held.left.right),
                 ⟨kept_trans(callee_saved(), s0.gprs, x.gprs, execute_block_normal(lowered.code, x).gprs, held.right.left,
@@ -1410,6 +1412,7 @@ theorem loop_marks<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
         λ (s: MachineState<M>) => stack.LoopHead(d, s0, registers, 0, state)(s.gprs, s.memory),
         λ (t: MachineState<M>) => stack.LoopDone(d, s0, registers, state, True)(t.gprs, t.memory)) {
     site.moves_block(stack.writes, site.program.laid_out_fits(laid), k, At(before, x_name, Block([])), 0, [registers.mark()], at,
+        site.program.block_reads_at(laid, k, At(before, x_name, Block([])), 0, [registers.mark()], at),
         stack.LoopHead(d, s0, registers, 0, state), stack.LoopDone(d, s0, registers, state, True),
         λ s memory held => ⟨⟨args_after_write(state, registers.state, s.gprs, registers.flag, BitVec::ofNat(1), apart.right.left, held.left.left),
                 sym(read_gpr_after_write(registers.flag, BitVec::ofNat(1), s.gprs))⟩,
@@ -1488,14 +1491,16 @@ theorem loop_leaves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
                     λ (t: MachineState<M>) => moved(t.gprs, t.memory),
                     λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = False,
                     λ (t: MachineState<M>) => moved(t.gprs, t.memory),
-                    site.moves_block(stack.writes, fits, leave_in.witness, left, 0, out.leave, leave_in.proof, pre, moved,
+                    site.moves_block(stack.writes, fits, leave_in.witness, left, 0, out.leave, leave_in.proof,
+                        program.block_reads_at(laid, leave_in.witness, left, 0, out.leave, leave_in.proof), pre, moved,
                         λ s memory held => {
                             let ran = out_ok.right.left(values, s, held.left);
                             ⟨ran.left, ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, execute_block_normal(out.leave, s).gprs, held.right.left,
                                 ran.right), held.right.right⟩⟩
                         }),
                     λ s held => held.left, λ t held => held),
-                site.moves_block(stack.writes, fits, cleared_in.witness, leave, 0, [registers.clear()], cleared_in.proof, moved, post,
+                site.moves_block(stack.writes, fits, cleared_in.witness, leave, 0, [registers.clear()], cleared_in.proof,
+                    program.block_reads_at(laid, cleared_in.witness, leave, 0, [registers.clear()], cleared_in.proof), moved, post,
                     λ s memory held => ⟨⟨args_after_write(words_of(values, next), registers.state, s.gprs, registers.flag, BitVec::ofNat(0),
                             apart.right.left, held.left),
                         sym(read_gpr_after_write(registers.flag, BitVec::ofNat(0), s.gprs))⟩,
@@ -1573,7 +1578,8 @@ theorem loop_rounds<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
                     λ (t: MachineState<M>) => turned(t.gprs, t.memory),
                     λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.register.tests_zero(s.gprs) = True,
                     λ (t: MachineState<M>) => turned(t.gprs, t.memory),
-                    site.moves_block(stack.writes, fits, back_in.witness, cont, 0, out.back, back_in.proof, pre, turned,
+                    site.moves_block(stack.writes, fits, back_in.witness, cont, 0, out.back, back_in.proof,
+                        program.block_reads_at(laid, back_in.witness, cont, 0, out.back, back_in.proof), pre, turned,
                         λ s memory held => {
                             let ran = out_ok.right.right.left(values, s, held.left);
                             ⟨⟨ran.left.right, trans(ran.left.left, counted)⟩,
@@ -1581,7 +1587,8 @@ theorem loop_rounds<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
                               held.right.right⟩⟩
                         }),
                     λ s held => held.left, λ t held => held),
-                site.moves_block(stack.writes, fits, stepped_in.witness, back, 0, [registers.step()], stepped_in.proof, turned, post,
+                site.moves_block(stack.writes, fits, stepped_in.witness, back, 0, [registers.step()], stepped_in.proof,
+                    program.block_reads_at(laid, stepped_in.witness, back, 0, [registers.step()], stepped_in.proof), turned, post,
                     λ s memory held => ⟨⟨args_after_write(words_of(values, next), registers.state, s.gprs, registers.counter,
                             read_gpr(registers.counter, s.gprs).add(c), apart.left, held.left.left),
                         trans(read_gpr_after_write(registers.counter, read_gpr(registers.counter, s.gprs).add(c), s.gprs),
@@ -1672,6 +1679,7 @@ theorem loop_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
         let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧
             (Kept(callee_saved(), s0.gprs, g) ∧ stack.Unchanged(d + 64, s0.memory, m));
         let entering = site.moves_block(stack.writes, program.laid_out_fits(laid), entered_in.witness, prog, 0, entry.code, entered_in.proof,
+            program.block_reads_at(laid, entered_in.witness, prog, 0, entry.code, entered_in.proof),
             pre, stack.LoopHead(d, s0, registers, n, words_of(values, inputs)),
             λ s memory held => {
                 let ran = entry_ok.left(s, held.left.left);
@@ -1875,6 +1883,7 @@ theorem prologue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(),
     let post = λ (g: Gprs) (m: M) => (g = write_gpr(Rsp, stack.at(d), s0.gprs)) ∧ (m = s0.memory);
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_allocate()]), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_allocate()], at,
+            site.program.block_reads_at(laid, k, prog, 0, [frame_allocate()], at),
             λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
             λ x held => {
                 let ran: (execute_block_normal([frame_allocate()], x).gprs = write_gpr(Rsp, stack.at(d), s0.gprs)) =
@@ -1897,6 +1906,7 @@ theorem result_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), s
         (Kept(callee_saved(), s1.gprs, g) ∧ stack.Unchanged(d + 64, s1.memory, m));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, moves.code, at,
+            site.program.block_reads_at(laid, k, prog, 0, moves.code, at),
             λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
             λ x held => {
                 let y = execute_block_normal(moves.code, x);
@@ -1923,6 +1933,7 @@ theorem epilogue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(),
         ((read_gpr(Rsp, g) = stack.at(d + 64)) ∧ stack.Unchanged(d + 64, s1.memory, m)));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length([frame_free()]), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, [frame_free()], at,
+            site.program.block_reads_at(laid, k, prog, 0, [frame_free()], at),
             λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
             λ x held => {
                 let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at(d)) = trans(held.right.left.right.right.left, rsp1);

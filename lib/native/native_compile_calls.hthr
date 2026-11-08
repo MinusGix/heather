@@ -580,7 +580,7 @@ theorem Target::goes_copy_head(self t: Target, v: Nat → BitVec(8), p: Prog, bu
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre(execute_block_normal([CmpRR(R8, Rax)], u).gprs,
             execute_block_normal([CmpRR(R8, Rax)], u).flags, execute_block_normal([CmpRR(R8, Rax)], u).memory),
         λ (u: MachineState<X86Memory(t.r.profile)>) => t.CopyAt(v, buf, bytes, i, vals, u.gprs, u.memory),
-        t.goes_block(set, 0, [CmpRR(R8, Rax)], w_cmp, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped),
+        t.goes_block_jcc(set, 0, [CmpRR(R8, Rax)], w_cmp, tree, E, pre, jumped, λ _ => refl),
         λ u held => ⟨held, refl⟩)
 }
 
@@ -767,7 +767,7 @@ theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(execute_block_normal([TestRR(Rax, Rax)], u).gprs,
             execute_block_normal([TestRR(Rax, Rax)], u).flags, execute_block_normal([TestRR(Rax, Rax)], u).memory),
         λ (u: MachineState<X86Memory(t.r.profile)>) => q_st(u.gprs, u.memory),
-        t.goes_block(asked, 0, [TestRR(Rax, Rax)], w_tested0, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(u.gprs, u.flags, u.memory), jumped),
+        t.goes_block_jcc(asked, 0, [TestRR(Rax, Rax)], w_tested0, tree, S, pre_js, jumped, λ _ => refl),
         λ u held => ⟨held, refl⟩)
 }
 
@@ -813,7 +813,7 @@ theorem Target::goes_read_back_failed(self t: Target, live, out: List<Nat>, env:
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(execute_block_normal([TestRR(Rax, Rax)], u).gprs,
             execute_block_normal([TestRR(Rax, Rax)], u).flags, execute_block_normal([TestRR(Rax, Rax)], u).memory),
         λ (u: MachineState<X86Memory(t.r.profile)>) => q_st(u.gprs, u.memory),
-        t.goes_block(asked, 0, [TestRR(Rax, Rax)], w_tested0, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre_js(u.gprs, u.flags, u.memory), jumped),
+        t.goes_block_jcc(asked, 0, [TestRR(Rax, Rax)], w_tested0, tree, S, pre_js, jumped, λ _ => refl),
         λ u held => ⟨held, refl⟩)
 }
 

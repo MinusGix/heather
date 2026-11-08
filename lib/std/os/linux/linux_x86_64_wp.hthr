@@ -145,6 +145,8 @@ fn wp_item_honest<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), la
     match item {
         Proved(index, bytes, _, _) => contracts(index).Runs(io.fetch, io.data, bytes),
         CallTo(target) => callees(target).Returns(io, view, next_rip(origin, labels(target))),
+        // A block reads only flags it set itself (issues/x86-undefined-flags.md).
+        Block(instructions) => block_reads(instructions, DefinedFlags::none()).IsTrue(),
         _ => True,
     }
 }
@@ -258,7 +260,7 @@ fn wp_item<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), labels: N
                 λ w => then(passed, t, w, byte_store_after(linux_writes(io), store, state))),
             False => False,
         },
-        Jcc(cc, target) => λ passed t v state =>
+        Jcc(cc, target) => λ passed t v state => (condition_defined(cc, state.flags.defined) = True) ∧
             ((condition_holds(cc, state.flags) = True) →
                 wp_leaf(origin, labels(target), post, passed, t, v, execute_near_control(JumpIfNear(cc, near_rel(here + 6, labels(target))), state))) ∧
             ((condition_holds(cc, state.flags) = False) →
@@ -435,7 +437,9 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
     match item {
         Block(instructions) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
             let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, canonical_block_bytes(instructions), a), code(v, state.memory, holds));
-            let ran = block_steps(io.fetch, io.data, instructions, state, resident);
+            let ran = block_steps(io.fetch, io.data, instructions, state, resident,
+                block_reads_from_none(instructions, eq_true_of_is_true(block_reads(instructions, DefinedFlags::none()), honest),
+                    state.flags.defined));
             let after = execute_block_normal(instructions, state);
             wp_after(io, view, origin, tr, here + block_length(instructions), then, goes, passed, t, v, state, after, cur,
                 linux_steps_of_fetched(io, state, after, ran.left),
@@ -502,17 +506,17 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
             let after = execute_near_control(jcc, state);
             let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, near_control_bytes(jcc), a), code(v, state.memory, holds));
             let steps = linux_steps_of_fetched(io, state, after, fetched_steps_one(io.fetch, io.data, state, after,
-                near_fetched_step(io.fetch, io.data, jcc, state, resident)));
+                near_fetched_step(io.fetch, io.data, jcc, state, resident, held.left)));
             runs_as_back(io, cur, state, after, steps,
                 match yes: condition_holds(cc, state.flags) {
                     True => leaves(passed, t, v, after, cur,
-                        held.left(yes)(after, trans(near_if_taken_rip(cc, d, state, yes),
+                        held.right.left(yes)(after, trans(near_if_taken_rip(cc, d, state, yes),
                             trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 6, d), rip),
                                 wp_lands(origin, labels, here, 6, Jcc(cc, target), labels(target), reach))), refl),
                         holds, trace_of, valid, short),
                     False => goes(passed, t, v, after, cur,
                         trans(near_if_not_taken_rip(cc, d, state, yes), rip_advance(origin, state.rip, here, 6, rip)),
-                        holds, trace_of, valid, short, held.right(yes)),
+                        holds, trace_of, valid, short, held.right.right(yes)),
                 })
         },
         Jmp(target) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
@@ -521,7 +525,7 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
             let after = execute_near_control(jmp, state);
             let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, near_control_bytes(jmp), a), code(v, state.memory, holds));
             let steps = linux_steps_of_fetched(io, state, after, fetched_steps_one(io.fetch, io.data, state, after,
-                near_fetched_step(io.fetch, io.data, jmp, state, resident)));
+                near_fetched_step(io.fetch, io.data, jmp, state, resident, refl)));
             runs_as_back(io, cur, state, after, steps,
                 leaves(passed, t, v, after, cur,
                     held(after, trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, d), rip),

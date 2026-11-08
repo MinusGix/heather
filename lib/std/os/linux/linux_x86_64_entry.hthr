@@ -29,7 +29,7 @@ theorem linux_entry_right<M>(left, right: BitVec(64), before: MachineState<M>):
 theorem linux_entry_executes<M>(left, right: BitVec(64), before: MachineState<M>):
     ExecuteBlock(linux_entry_instructions(left, right), before,
         linux_entry_state(left, right, before))
-{ canonical_block_executes_normal(linux_entry_instructions(left, right), before) }
+{ canonical_block_executes_normal(linux_entry_instructions(left, right), before, refl) }
 
 fn linux_exit_instructions() → List<Instruction> {
     [MovRR(Rdi, Rax), MovRI(Rax, BitVec::ofNat(60))]
@@ -42,7 +42,7 @@ fn linux_exit_state<M>(before: MachineState<M>) → MachineState<M> {
 
 theorem linux_exit_executes<M>(before: MachineState<M>):
     ExecuteBlock(linux_exit_instructions(), before, linux_exit_state(before))
-{ canonical_block_executes_normal(linux_exit_instructions(), before) }
+{ canonical_block_executes_normal(linux_exit_instructions(), before, refl) }
 
 theorem linux_exit_number<M>(before: MachineState<M>):
     read_gpr(Rax, linux_exit_state(before).gprs) = BitVec::ofNat(60)

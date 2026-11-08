@@ -1475,7 +1475,7 @@ division have no `rt` op (issues/runtime-signed-extend-divide.md). Probes:
   (`runtime-repr-narrow-words`).
 - **Division needs the flags model.** `IDIV` leaves every flag
   undefined, which neither the AF erasure nor a one-bit trick covers;
-  `x86-undefined-flags` holds the choice.
+  `x86-undefined-flags` holds the choice (the mask, round 4).
 - **What stays out.** The generator's agreement check compares the
   reflected meaning with the source by conversion, which unfolds a shift by
   a large count (64 or more, or a signed one past about a hundred) when the
@@ -1521,8 +1521,57 @@ division have no `rt` op (issues/runtime-signed-extend-divide.md). Probes:
   FunctionIR and evaluates there, and reaches x86 with narrow words
   (`function-ir-narrow-arithmetic`, `runtime-repr-narrow-words`).
 - **What waits.** Signed division still waits on the flags model
-  (`x86-undefined-flags`). One repr over `SInt`'s width
+  (`x86-undefined-flags`; the mask is round 5). One repr over `SInt`'s width
   (`datarepr-value-parameter-telescope`) pays only when a narrow `SInt`
   can be held, which is the narrow-words issue, so it moves with that.
   `SInt::extend` itself takes an `SInt(32)`, a value the fragment does
   not hold yet; widening an `i32`'s bits is written on the word.
+
+**Round 5 (same day): an undefined-flags mask; one shift instruction.**
+
+- **Flags carry which of them are defined.** `Flags` gained a
+  `DefinedFlags` field (`defined`), so an instruction that passes the flags
+  through (MOV, SETcc) passes the mask through too, and one that writes
+  them states its mask: all six after ADD/SUB/CMP, all but AF after the
+  logical ones, TEST and the one-bit shifts, and `DefinedFlags::shifted()`
+  (neither AF nor OF) after a shift by an imm8. The canonical result
+  (`execute_normal`) holds `False` in each undefined flag; `Execute`
+  admits any value there (`∃ other: Flags, … fill_undefined(normal,
+  other)`), which subsumes the old AF-only disjunction.
+- **Reading an undefined flag has no `Execute`.** `Execute` begins with
+  `instruction.reads_defined(before.flags.defined) = True` (SETB reads CF,
+  SETL SF and OF, SETE ZF); the near and short JCCs' `EmittedExecutes`
+  begin with `condition_defined`. The manual gives a program no value to
+  read there, so the model has no run, and determinism needs no case for
+  it.
+- **`SameDefinedState` erases what is undefined.** It is the pullback of
+  `=` along `erase_undefined` (each undefined flag cleared, the mask kept).
+  The respect lemma's premise changed from "the step ignores AF" to "the
+  step commutes with erasing" (`erase(f(s)) = f(erase(s))`): pass-through
+  and flag-writing steps commute by `refl`; readers commute given their
+  read flags are defined (`same_defined_respects_reading`). The five linux
+  determinism files check unchanged: they reach the x86 layer only through
+  lemmas whose statements did not move.
+- **The compiler's code reads only flags it set.** `block_reads(code,
+  DefinedFlags::none())` is a closed verdict per block (an abstract run of
+  the mask, admitting no faulting instruction), monotone in the start mask
+  (`block_reads_from_none`), and `Prog::laid_out` gained
+  `blocks_read_own()`, so one evaluation per program covers every block's
+  runs (`Prog::block_reads_at`); certificates add a `{p}_reads` theorem by
+  `trivial`. A JCC's step takes its condition's definedness as part of its
+  precondition; `Target::goes_block_jcc` gives it by `refl` after the CMP
+  or TEST block before it.
+- **A shift by `k` is one instruction.** `Instruction::ShiftImm(op, d,
+  imm8)` is `REX.W C1 /4, /5, /7 ib`, its count masked to six bits
+  (`shift_count`); a masked count of zero keeps every flag (and the mask).
+  The model leaves OF undefined even at a count of one (the mask stays one
+  constant); `ShiftOne` remains the count of one. Lowering emits nothing
+  for zero, `ShiftOne` for one and `ShiftImm` up to 63
+  (`shift_code_executes`, by `shift_count_of` — `toNat_ofNat` and
+  `mod_of_lt` — with no bit-level reasoning); legalization still keeps 64
+  and past from an instruction.
+- **`Exception` is no longer empty.** It has `DivideError`, and `Execute`
+  faults with it where `Instruction::faults(gprs)` says so; no instruction
+  faults yet. IDIV is the next round (`x86-idiv-signed-division`): its
+  fault depends on register values, which the per-block mask check cannot
+  see, so it needs a value-level admission route beside `block_reads`.

@@ -478,8 +478,7 @@ theorem Target::goes_path_head(self t: Target, env: Env, buf, cap: Nat, found: t
                     },
                 }
             });
-        let test = t.goes_block(loaded, 0, [TestRR(Rdx, Rdx)], w_flagged, tree,
-            λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped);
+        let test = t.goes_block_jcc(loaded, 0, [TestRR(Rdx, Rdx)], w_flagged, tree, E, pre, jumped, λ _ => refl);
         test
     };
     // The JE at the length.
@@ -518,7 +517,7 @@ theorem Target::goes_path_head(self t: Target, env: Env, buf, cap: Nat, found: t
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre1(execute_block_normal([CmpRR(R8, Rcx)], u).gprs,
             execute_block_normal([CmpRR(R8, Rcx)], u).flags, execute_block_normal([CmpRR(R8, Rcx)], u).memory),
         λ (u: MachineState<X86Memory(t.r.profile)>) => t.PathAt(env, buf, path, vals, i, u.gprs, u.memory),
-        t.goes_block(head, 0, [CmpRR(R8, Rcx)], w_cmp, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre1(u.gprs, u.flags, u.memory), jumped1),
+        t.goes_block_jcc(head, 0, [CmpRR(R8, Rcx)], w_cmp, tree, E, pre1, jumped1, λ _ => refl),
         λ u held => ⟨held, refl⟩)
 }
 
