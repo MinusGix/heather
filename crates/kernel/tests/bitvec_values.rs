@@ -734,10 +734,11 @@ fn a_node_longer_than_any_chain_the_stack_holds_checks() {
     // character does. Typing, substitution and syntactic equality walk the
     // node; comparing two separately built nodes *by value* unfolds them into
     // a chain as long as the node, which conversion walks by deferring its
-    // deep tail comparisons (docs/deep-term-walks-design.md). That is pinned
-    // at a tenth of the length, far past the depth budget: each unfolded
-    // tail is a fresh node whose bounds walk its whole live window, so the
-    // comparison is quadratic in the length (issues/vec-items-window-bounds.md).
+    // deep tail comparisons (docs/deep-term-walks-design.md), at the full
+    // length: each unfolded tail is a fresh node, whose bounds the array's
+    // suffix joins answer in a stride's work, so the comparison is linear in
+    // the length (it was quadratic, and this was pinned at a tenth of it:
+    // issues/vec-items-window-bounds.md).
     let node_of = |n: usize| Term::VecItems {
         level: Level::Zero,
         elem: rty(Type::Nat),
@@ -751,6 +752,5 @@ fn a_node_longer_than_any_chain_the_stack_holds_checks() {
     let shifted = node.shift_local(1);
     assert!(shifted == node);
     assert!(node_of(n as usize) == node);
-    let m = 20_000u64;
-    accepts(&g, &node_of(m as usize), &node_of(m as usize), &vec(Type::Nat, Term::NatLit(m.into())));
+    accepts(&g, &node_of(n as usize), &node_of(n as usize), &vec(Type::Nat, Term::NatLit(n.into())));
 }

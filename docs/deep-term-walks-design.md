@@ -173,10 +173,14 @@ chain on an 8 MiB thread: drop, shift, typecheck, compare two separately
 built chains, substitute into an open chain, refuse chains that differ at
 the bottom, refuse an ill-typed bottom element, and check and compare a
 successor chain. `bitvec_values.rs` now compares two separately built
-20,000-element `VecItems` nodes by value (it pinned 500 before, under the
-depth budget); that comparison is quadratic in time, because each unfolded
-tail is a fresh node whose bounds walk the live window
-(`issues/vec-items-window-bounds.md`). At the surface, `s() = "aaa…"` and `"aaa…" ++ "b" =
+200,000-element `VecItems` nodes by value (it pinned 500 before, under the
+depth budget). That comparison is linear in time: each unfolded tail is a
+fresh node, and its bounds (the value machine's closed-term memo key) come
+from the item array's suffix joins, stored at a stride the first time a
+tail window is asked about (`bounds.rs`, `Cache::window_use`;
+`issues/vec-items-window-bounds.md`, where walking each window made it
+quadratic). The length a comparison reaches is now the conversion budget's
+(`DEFAULT_FUEL`), not its time. At the surface, `s() = "aaa…"` and `"aaa…" ++ "b" =
 "aaa…b"` at 3,000 characters, refused `OutOfFuel` before, check.
 
 The depth budget is untouched: a deep *computation* (a non-tail recursion
