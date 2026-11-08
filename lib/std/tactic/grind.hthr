@@ -68,6 +68,7 @@ import tactic;
 import derive;
 import pair;
 import egraph;
+import nat_map;
 
 // Congruence of an application in both places, and in the function alone.
 // (`cong`, the prelude's, is the argument alone.)
@@ -76,6 +77,13 @@ theorem congr<A, B>({f: A → B}, {g: A → B}, {a: A}, {b: A}, hf: f = g, ha: a
 }
 
 theorem congr_fun<A, B>({f: A → B}, {g: A → B}, {a: A}, hf: f = g): f(a) = g(a) {
+    j(hf, λ h q => f(a) = h(a), refl)
+}
+
+// The same at a dependent function, for an argument that is part of the
+// operator (`GDepOp`): two valuations `(w: Nat) → Nat → BitVec(w)` one
+// class, applied at one width.
+theorem congr_dep<A>({B: A → Type}, {f: (a: A) → B(a)}, {g: (a: A) → B(a)}, {a: A}, hf: f = g): f(a) = g(a) {
     j(hf, λ h q => f(a) = h(a), refl)
 }
 
@@ -137,7 +145,43 @@ record GInfo { expr: Expr, whole: Bool, by: List<String> }
 // An atom: how it is compared, its handle, and its node.
 record AtomEntry { key: AtomKey, h: Handle, node: Nat }
 
-record Graph { eg: EGraph<GOp, Fact>, info: List<GInfo>, atoms: List<AtomEntry> }
+// The atoms, by number, and indexed for `atom`'s search: an atom whose key
+// decides is found in its key's bucket (`atom_key_code`); the others, which
+// `Defeq` compares, are listed apart, newest first.
+record Atoms { all: Array<AtomEntry>, keyed: NatMap<List<AtomEntry>>, others: List<AtomEntry> }
+
+fn atoms_empty() → Atoms { Atoms(Array::empty(), NatMap::empty(), []) }
+
+fn atom_key_code(k: AtomKey) → Option<Nat> {
+    match k {
+        KGlobal(x) => Some(x * 5),
+        KLocal(x) => Some(x * 5 + 1),
+        KLit(n) => Some(n * 5 + 2),
+        KCtor(t, i) => Some(nat_pair(t, i) * 5 + 3),
+        KSucc(x) => Some(x * 5 + 4),
+        KOther => None,
+    }
+}
+
+fn Atoms::nth(self a: Atoms, i: Nat) → Option<AtomEntry> { a.all.nth(i) }
+
+fn Atoms::len(self a: Atoms) → Nat { a.all.len() }
+
+fn Atoms::bucket(self a: Atoms, k: AtomKey) → List<AtomEntry> {
+    match atom_key_code(k) {
+        None => a.others,
+        Some(c) => match nat_map_get(a.keyed, c) { None => [], Some(es) => es },
+    }
+}
+
+fn Atoms::snoc(self a: Atoms, e: AtomEntry) → Atoms {
+    match atom_key_code(e.key) {
+        None => Atoms(a.all.snoc(e), a.keyed, Cons(e, a.others)),
+        Some(c) => Atoms(a.all.snoc(e), nat_map_set(a.keyed, c, Cons(e, a.bucket(e.key))), a.others),
+    }
+}
+
+record Graph { eg: EGraph<GOp, Fact>, info: Array<GInfo>, atoms: Atoms }
 
 record Interned { g: Graph, node: Nat }
 
@@ -191,7 +235,7 @@ record Node2 { a: Nat, b: Nat }
 record Diseq { proof: Expr, name: String, lhs: Handle, rhs: Handle, sides: Node2 }
 
 // The lemmas a proof cites.
-record GrindLaws { trans: GlobalRef, sym: GlobalRef, cong: GlobalRef, congr: GlobalRef, congr_fun: GlobalRef, rfl: GlobalRef, defn: GlobalRef, fals: GlobalRef, false_elim: GlobalRef, exfalso: GlobalRef, succ_inj: GlobalRef }
+record GrindLaws { trans: GlobalRef, sym: GlobalRef, cong: GlobalRef, congr: GlobalRef, congr_fun: GlobalRef, rfl: GlobalRef, defn: GlobalRef, fals: GlobalRef, false_elim: GlobalRef, exfalso: GlobalRef, succ_inj: GlobalRef, congr_dep: GlobalRef }
 
 // What constructors and disequalities have given (docs/grind-design.md §14):
 // the laws a proof cites, `Succ`'s reference, the goal a disjointness proves (under the binders the
@@ -227,7 +271,7 @@ fn with_cf(fs: Facts, cf: CState) → Facts { Facts(fs.g, fs.read, fs.skipped, f
 
 fn with_pending(fs: Facts, ps: List<Pend>) → Facts { Facts(fs.g, fs.read, fs.skipped, fs.lemmas, fs.seen, fs.offered, fs.locals, fs.givens, ps, fs.cf) }
 
-fn graph_empty() → Graph { Graph(EGraph::empty<GOp, Fact>(), [], []) }
+fn graph_empty() → Graph { Graph(EGraph::empty<GOp, Fact>(), Array::empty(), atoms_empty()) }
 
 // `Nat`'s successor as a function, so that `Succ(n)` is an application the
 // graph closes under congruence and takes apart by injectivity (§14).
@@ -246,9 +290,17 @@ fn prov(g: Graph, i: Nat) → List<String> {
 
 fn provs(g: Graph, ns: List<Nat>) → List<String> { concat_map(ns, λ n => prov(g, n)) }
 
+// The `left` entries from `i` on, marked as brought by `by`.
+fn stamp_go(info: Array<GInfo>, i: Nat, left: Nat, by: List<String>) → Array<GInfo> {
+    match left {
+        Zero => info,
+        Succ(l) => stamp_go(info.update(i, λ n => GInfo(n.expr, n.whole, by)), i + 1, l, by),
+    }
+}
+
 // The nodes `from` on, marked as brought by `by`.
 fn stamped(g: Graph, from: Nat, by: List<String>) → Graph {
-    Graph(g.eg, g.info.take(from) ++ g.info.drop(from).map(λ n => GInfo(n.expr, n.whole, by)), g.atoms)
+    Graph(g.eg, stamp_go(g.info, from, g.info.len() - from, by), g.atoms)
 }
 
 // The nodes a node is made of: its children, and a dependent argument,
@@ -272,7 +324,7 @@ fn mark_whole(g: Graph, i: Nat, h: Handle) → Graph {
 // The graph after an `add`: a new node gets its information.
 fn with_added(g: Graph, a: Added<GOp, Fact>, e: Expr) → Interned {
     match a.id.same(g.info.len()) {
-        True => Interned(Graph(a.g, g.info ++ [GInfo(e, False, [])], g.atoms), a.id),
+        True => Interned(Graph(a.g, g.info.snoc(GInfo(e, False, [])), g.atoms), a.id),
         False => Interned(Graph(a.g, g.info, g.atoms), a.id),
     }
 }
@@ -288,7 +340,7 @@ fn app_node(g: Graph, f: Nat, a: Nat, dependent: Bool) → Interned {
 
 fn new_atom(g: Graph, h: Handle, key: AtomKey) → Interned {
     let a = g.eg.fresh(GAtomOp(g.atoms.len()), []);
-    Interned(Graph(a.g, g.info ++ [GInfo(Hd(h), False, [])], g.atoms ++ [AtomEntry(key, h, a.id)]), a.id)
+    Interned(Graph(a.g, g.info.snoc(GInfo(Hd(h), False, [])), g.atoms.snoc(AtomEntry(key, h, a.id))), a.id)
 }
 
 // The graph a run starts from: `succ_fn` (handle `sh`) its first atom, for
@@ -367,7 +419,8 @@ fn given_of(l: GrindLaws, f: Fact, forward: Bool) → Expr {
 
 // Congruence of node `from` and node `to` from their children's evidence:
 // `cong` when the functions are one node, `congr_fun` when the arguments
-// are (or the argument is part of the operator), `congr` otherwise. The
+// are (`congr_dep` when the argument is part of the operator), `congr`
+// otherwise. The
 // functions and arguments are passed explicitly: as holes, an equation
 // between partial applications does not unify (docs/grind-design.md §7).
 fn cong_of(l: GrindLaws, g: Graph, from: Nat, ks: List<KidProof<Expr>>) → Expr {
@@ -376,7 +429,7 @@ fn cong_of(l: GrindLaws, g: Graph, from: Nat, ks: List<KidProof<Expr>>) → Expr
         Cons(kf, rest) => match rest {
             Nil => match g.eg.node(from) {
                 Some(n) => match n.op {
-                    GDepOp(x) => apps(Global(l.congr_fun), [Blank, Blank, expr_at(g, kf.from), expr_at(g, kf.to), expr_at(g, x), kf.proof]),
+                    GDepOp(x) => apps(Global(l.congr_dep), [Blank, Blank, expr_at(g, kf.from), expr_at(g, kf.to), expr_at(g, x), kf.proof]),
                     _ => NatLit(0),
                 },
                 None => NatLit(0),
@@ -395,6 +448,77 @@ fn cong_of(l: GrindLaws, g: Graph, from: Nat, ks: List<KidProof<Expr>>) → Expr
 fn proof_alg(l: GrindLaws, g: Graph) → PathAlg<Fact, Expr> {
     PathAlg(λ n => rfl_of(l, expr_at(g, n)), λ f fwd => given_of(l, f, fwd), λ from _ ks => cong_of(l, g, from, ks), λ p q => trans_of(l, p, q))
 }
+
+// A `congr_dep` the explanation emitted: its function sides, argument and
+// proof. Its motive `B` is no unifier's to find (`?B(w) ≟ Nat → BitVec(w)`
+// is outside the pattern fragment the elaborator solves), so `dep_motives`
+// reads it off the function's type, opened, before anything infers the
+// proof.
+record DepCall { f: Expr, g: Expr, a: Expr, p: Expr }
+
+fn dep_head(l: GrindLaws, e: Expr) → Bool {
+    match e { Global(r) => r.id.same(l.congr_dep.id), _ => False }
+}
+
+fn dep_call(l: GrindLaws, e: Expr) → Option<DepCall> {
+    match e {
+        App(e5, p) => match e5 {
+            App(e4, x) => match e4 {
+                App(e3, gg) => match e3 {
+                    App(e2, ff) => match e2 {
+                        App(e1, _) => match e1 {
+                            App(e0, _) => match dep_head(l, e0) { True => Some(DepCall(ff, gg, x, p)), False => None },
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn pi_dom(v: Head) → Option<Handle> { match v { HPi(d) => Some(d), _ => None } }
+
+// The domain and the motive `λ w => B(w)` of `f`'s type.
+fn dep_motive(f: Expr) → Tac<Option<Pair<Expr, Expr>>> {
+    infer(f).bind(λ c => match c {
+        Refused(_) => pure(None),
+        Accepted(ty) => whnf(ty).bind(λ cw => match cw {
+            Refused(_) => pure(None),
+            Accepted(w) => view(w).bind(λ v => match pi_dom(v) {
+                None => pure(None),
+                Some(dom) => open(w, "w").bind(λ oc => match oc {
+                    Refused(_) => pure(None),
+                    Accepted(op) => pure(Some(Pair(Hd(dom), Lam(op.local.ref, Hd(op.body))))),
+                }),
+            }),
+        }),
+    })
+}
+
+fn dep_motives(l: GrindLaws, fuel: Nat, e: Expr) → Tac<Expr> {
+    match fuel {
+        Zero => pure(e),
+        Succ(f) => match e {
+            App(fe, a) => match dep_call(l, e) {
+                Some(c) => dep_motives(l, f, c.p).bind(λ p2 => dep_motive(c.f).bind(λ om => match om {
+                    None => pure(apps(Global(l.congr_dep), [Blank, Blank, c.f, c.g, c.a, p2])),
+                    Some(m) => pure(apps(Global(l.congr_dep), [m.fst, m.snd, c.f, c.g, c.a, p2])),
+                })),
+                None => dep_motives(l, f, fe).bind(λ f2 => dep_motives(l, f, a).bind(λ a2 => pure(App(f2, a2)))),
+            },
+            Lam(x, b) => dep_motives(l, f, b).bind(λ b2 => pure(Lam(x, b2))),
+            _ => pure(e),
+        },
+    }
+}
+
+fn with_motives(l: GrindLaws, e: Expr) → Tac<Expr> { dep_motives(l, 4096, e) }
 
 // ---------------------------------------------------------------------------
 // The report when the sides are not in one class.
@@ -456,7 +580,7 @@ fn stuck_notes(g: Graph, l: Nat, r: Nat, fs: Facts) → List<Note> {
     let skipped: List<Note> = match fs.skipped { Nil => [], Cons(_, _) => [Tried("not equations, not read", names_line(fs.skipped))] };
     Cons(At(expr_at(g, l), Tried("the left side", "in class " ++ cl)),
     Cons(At(expr_at(g, r), Tried("the right side", "in class " ++ cr)),
-        class_notes(g, g.eg.class_table(), 0) ++ fs.read ++ skipped
+        class_notes(g, g.eg.class_table().to_list(), 0) ++ fs.read ++ skipped
             ++ [Tried("to close it", "one more equation between a member of " ++ cl ++ " and a member of " ++ cr ++ ", as a hint: `grind_with([…])`")]))
 }
 
@@ -485,7 +609,7 @@ fn atom_among(g: Graph, h: Handle, ask: List<Nat>) → Tac<Option<Nat>> {
 
 // The atom node of `h`, read under `key`.
 fn atom(g: Graph, h: Handle, key: AtomKey) → Tac<Interned> {
-    let s = atom_search(g.atoms, key, h, []);
+    let s = atom_search(g.atoms.bucket(key), key, h, []);
     match s.found {
         Some(i) => pure(Interned(g, i)),
         None => atom_among(g, h, s.ask).bind(λ o => match o {
@@ -1292,29 +1416,108 @@ fn settled<A>(n: Nat, t: Tac<A>) → Tac<A> { defeq(NatLit(n), NatLit(n)).bind(�
 // What one lemma's patterns found: new instances, matches, near matches.
 record PatFound { insts: List<Inst>, matched: Nat, nears: List<Near> }
 
+// `xs ++ ys`, but `xs` itself when `ys` is empty: a root that adds nothing
+// leaves no layer of appends for every later walk to pass through.
+fn grown<A>(xs: List<A>, ys: List<A>) → List<A> { match ys { Nil => xs, Cons(_, _) => xs ++ ys } }
+
 // Pattern `lp` (number `j` of lemma `k`, of `n` binders) matched root by
 // root, each root its own evaluation (`settled`): its new instances (at
 // most `cap`), its matches, and its near matches, each once.
-fn root_insts(g: Graph, table: List<List<Nat>>, k: Nat, n: Nat, lp: LPat, j: Nat, roots: List<Nat>, seen: List<Inst>, cap: Nat, acc: PatFound) → Tac<PatFound> {
+fn root_insts(g: Graph, table: Array<List<Nat>>, k: Nat, n: Nat, lp: LPat, j: Nat, roots: List<Nat>, seen: List<Inst>, cap: Nat, acc: PatFound) → Tac<PatFound> {
     match roots {
         Nil => pure(acc),
-        Cons(r, rest) => {
-            let ms = g.eg.ematch_loose_at(λ q op s => gq_test(g, q, op, s), λ i => flag_at(lp.slack, i), table, lp.pat, r);
-            let strict = strict_of(ms);
-            let fresh = new_insts(g, k, n, strict, seen).take(cap);
-            let nears = nears_of(k, j, n, ms, acc.nears);
-            settled(strict.len() + fresh.len() + nears.len(), root_insts(g, table, k, n, lp, j, rest, seen ++ fresh, cap.sub(fresh.len()), PatFound(acc.insts ++ fresh, acc.matched + strict.len(), acc.nears ++ nears)))
-        },
+        Cons(r, rest) => shared(g.eg.ematch_loose_at(λ q op s => gq_test(g, q, op, s), λ i => flag_at(lp.slack, i), table, lp.pat, r), λ ms =>
+            shared(strict_of(ms), λ strict =>
+            shared(new_insts(g, k, n, strict, seen).take(cap), λ fresh =>
+            shared(nears_of(k, j, n, ms, acc.nears), λ nears =>
+            settled(strict.len() + fresh.len() + nears.len(), root_insts(g, table, k, n, lp, j, rest, fresh ++ seen, cap.sub(fresh.len()), PatFound(grown(acc.insts, fresh), acc.matched + strict.len(), grown(acc.nears, nears)))))))),
     }
 }
 
 fn on_pat<A>(t: Tac<PatFound>, k: PatFound → Tac<A>) → Tac<A> { t.bind(k) }
 
-fn pats_insts(g: Graph, table: List<List<Nat>>, k: Nat, n: Nat, ps: List<LPat>, j: Nat, seen: List<Inst>, cap: Nat) → Tac<PatFound> {
+fn nats_once(xs: List<Nat>, seen: List<Nat>) → List<Nat> {
+    match xs {
+        Nil => [],
+        Cons(x, rest) => match nat_in(seen, x) { True => nats_once(rest, seen), False => Cons(x, nats_once(rest, Cons(x, seen))) },
+    }
+}
+
+// The roots a pattern can match at. A pattern's spine (`f(a)(b)…` read
+// through its functions, never its arguments: a near match leaves only an
+// argument) ends at a key or at a variable. At a key, its roots are the
+// applications reached from that key's atoms by going up the spine, from
+// a class to the applications whose function is in it (`uses`), as many
+// times as the spine is long: matching then visits the terms that apply
+// the lemma's function, not every node. At a variable, every node.
+fn pattern_spine(is: List<PItem<GQ>>, i: Nat, depth: Nat, fuel: Nat) → Option<Pair<AtomKey, Nat>> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match is.nth(i) {
+            None => None,
+            Some(it) => match it {
+                PVar(_) => None,
+                POp(q, ks) => match q {
+                    QKey(k) => Some(Pair(k, depth)),
+                    _ => match ks { Nil => None, Cons(fi, _) => pattern_spine(is, fi, depth + 1, f) },
+                },
+            },
+        },
+    }
+}
+
+// The applications, and the dependent applications, by their function's
+// class.
+fn uses_from(g: Graph, ns: List<ENode<GOp>>, i: Nat, acc: NatMap<List<Nat>>) → NatMap<List<Nat>> {
+    match ns {
+        Nil => acc,
+        Cons(nd, rest) => uses_from(g, rest, i + 1, match nd.op {
+            GAtomOp(_) => acc,
+            _ => match nd.kids {
+                Nil => acc,
+                Cons(f, _) => shared(g.eg.find(f), λ c => nat_map_set(acc, c, Cons(i, match nat_map_get(acc, c) { None => [], Some(us) => us }))),
+            },
+        }),
+    }
+}
+
+fn uses_index(g: Graph) → NatMap<List<Nat>> { uses_from(g, g.eg.nodes.to_list(), 0, NatMap::empty()) }
+
+fn uses_of(uses: NatMap<List<Nat>>, cs: List<Nat>) → List<Nat> {
+    concat_map(cs, λ c => match nat_map_get(uses, c) { None => [], Some(us) => us })
+}
+
+// The nodes `depth` applications above the classes `cs`.
+fn spine_up(g: Graph, uses: NatMap<List<Nat>>, cs: List<Nat>, depth: Nat) → List<Nat> {
+    match depth {
+        Zero => cs,
+        Succ(d) => match d {
+            Zero => uses_of(uses, cs),
+            Succ(_) => spine_up(g, uses, nats_once(uses_of(uses, cs).map(λ n => g.eg.find(n)), []), d),
+        },
+    }
+}
+
+fn nats_sorted(xs: List<Nat>) → List<Nat> { match xs { Nil => [], Cons(x, rest) => nat_insert(x, nats_sorted(rest)) } }
+
+fn pattern_roots(g: Graph, uses: NatMap<List<Nat>>, p: Pattern<GQ>) → List<Nat> {
+    match pattern_spine(p.items, p.root, 0, Succ(p.items.len())) {
+        None => List::count_from(0, g.eg.size()),
+        Some(kd) => {
+            let atoms = g.atoms.bucket(kd.fst).filter(λ e => key_same(kd.fst, e.key)).map(λ e => e.node);
+            match kd.snd {
+                Zero => nats_sorted(atoms),
+                Succ(_) => nats_sorted(nats_once(spine_up(g, uses, nats_once(atoms.map(λ a => g.eg.find(a)), []), kd.snd), [])),
+            }
+        },
+    }
+}
+
+fn pats_insts(g: Graph, table: Array<List<Nat>>, uses: NatMap<List<Nat>>, k: Nat, n: Nat, ps: List<LPat>, j: Nat, seen: List<Inst>, cap: Nat) → Tac<PatFound> {
     match ps {
         Nil => pure(PatFound([], 0, [])),
-        Cons(lp, rest) => on_pat(root_insts(g, table, k, n, lp, j, List::range(g.eg.size()), seen, cap, PatFound([], 0, [])), λ here =>
-            on_pat(pats_insts(g, table, k, n, rest, Succ(j), seen ++ here.insts, cap.sub(here.insts.len())), λ tail =>
+        Cons(lp, rest) => on_pat(root_insts(g, table, k, n, lp, j, pattern_roots(g, uses, lp.pat), seen, cap, PatFound([], 0, [])), λ here =>
+            on_pat(pats_insts(g, table, uses, k, n, rest, Succ(j), here.insts ++ seen, cap.sub(here.insts.len())), λ tail =>
                 pure(PatFound(here.insts ++ tail.insts, here.matched + tail.matched, here.nears ++ tail.nears)))),
     }
 }
@@ -1323,11 +1526,11 @@ fn with_matched(lm: Lemma, n: Nat) → Lemma { Lemma(lm.name, lm.proof, lm.binde
 
 fn with_tried(lm: Lemma, t: NearTried) → Lemma { Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pats, lm.refs, lm.matched, lm.added, lm.defined, Cons(t, lm.tried)) }
 
-fn round_insts(g: Graph, table: List<List<Nat>>, ls: List<Lemma>, k: Nat, seen: List<Inst>, cap: Nat) → Tac<Found> {
+fn round_insts(g: Graph, table: Array<List<Nat>>, uses: NatMap<List<Nat>>, ls: List<Lemma>, k: Nat, seen: List<Inst>, cap: Nat) → Tac<Found> {
     match ls {
         Nil => pure(Found([], [], [])),
-        Cons(lm, rest) => pats_insts(g, table, k, lm.binders, lm.pats, 0, seen, cap).bind(λ pf =>
-            round_insts(g, table, rest, Succ(k), seen ++ pf.insts, cap.sub(pf.insts.len())).bind(λ tail =>
+        Cons(lm, rest) => pats_insts(g, table, uses, k, lm.binders, lm.pats, 0, seen, cap).bind(λ pf =>
+            round_insts(g, table, uses, rest, Succ(k), pf.insts ++ seen, cap.sub(pf.insts.len())).bind(λ tail =>
                 pure(Found(pf.insts ++ tail.insts, Cons(with_matched(lm, pf.matched), tail.lemmas), pf.nears ++ tail.nears)))),
     }
 }
@@ -1488,7 +1691,7 @@ fn inst_expr(g: Graph, lm: Lemma, h: Handle, a: List<Option<Nat>>) → Expr {
 // order, then the atoms that are not (a type argument, read as part of an
 // operator).
 fn solution_candidates(g: Graph) → List<Nat> {
-    List::append(List::range(g.info.len()).filter(λ c => is_whole(g, c)), g.atoms.map(λ a => a.node).filter(λ c => is_whole(g, c).not()))
+    List::append(List::count_from(0, g.info.len()).filter(λ c => is_whole(g, c)), g.atoms.all.to_list().map(λ a => a.node).filter(λ c => is_whole(g, c).not()))
 }
 
 // The first of the nodes `cs` the solved hole `x` is, by `Defeq` (each
@@ -1555,12 +1758,6 @@ fn by_holes(g: Graph, lm: Lemma, h: Handle, s: Subst, args: List<Option<Nat>>, f
     }
 }
 
-fn nats_once(xs: List<Nat>, seen: List<Nat>) → List<Nat> {
-    match xs {
-        Nil => [],
-        Cons(x, rest) => match nat_in(seen, x) { True => nats_once(rest, seen), False => Cons(x, nats_once(rest, Cons(x, seen))) },
-    }
-}
 
 // The instance a near match found at the binders' nodes `a`. One like it
 // may have been added already (from the other side's pattern): it is added
@@ -1581,7 +1778,7 @@ fn draw_one(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat>,
     let item = nr.slack.item;
     let node = nr.slack.node;
     let args = nr.s.at.take(lm.binders);
-    let cs = List::range(g.info.len()).filter(λ c => from.leb(c).and(is_whole(g, c)));
+    let cs = List::count_from(0, g.info.len()).filter(λ c => from.leb(c).and(is_whole(g, c)));
     let tried = λ (upto: Nat) => with_tried(lm, NearTried(nr.pat, item, node, args, upto, asked));
     match cs {
         Nil => pure(Resolved(None, match asked { True => tried(from), False => lm }, budget)),
@@ -1679,7 +1876,7 @@ fn grind_laws() → Tac<GrindLaws> {
     law("trans").bind(λ t => law("sym").bind(λ s => law("cong").bind(λ c =>
     law("grind::congr").bind(λ cr => law("grind::congr_fun").bind(λ cf => law("tactic::rfl").bind(λ r => law("grind::defn").bind(λ d =>
     law("False").bind(λ f => law("grind::elim_false").bind(λ fe => law("grind::exfalso").bind(λ ex => law("grind::succ_inj").bind(λ si =>
-    pure(GrindLaws(t, s, c, cr, cf, r, d, f, fe, ex, si)))))))))))))
+    law("grind::congr_dep").bind(λ cd => pure(GrindLaws(t, s, c, cr, cf, r, d, f, fe, ex, si, cd))))))))))))))
 }
 
 // The names of the facts a path cites, by the same explanation the proof is.
@@ -1795,28 +1992,30 @@ fn stuck(g: Graph, fs: Facts, gt: GoalAt, why: String) → Tac<Expr> {
             let skipped: List<Note> = match fs.skipped { Nil => [], Cons(_, _) => [Tried("not equations, not read", names_line(fs.skipped))] };
             fail("grind: the goal is not an equation, and the facts hold no contradiction",
                 Cons(At(Hd(gt.target), Tried("the goal", "not an equation: proved only from a contradiction")),
-                    class_notes(g, g.eg.class_table(), 0) ++ fs2.read ++ skipped
+                    class_notes(g, g.eg.class_table().to_list(), 0) ++ fs2.read ++ skipped
                         ++ [Tried("to close it", "two different constructors in one class, or both sides of a disequality")]))
         },
     }
 }
 
-// The graph closed under congruence, one pass per evaluation (`settled`):
-// a pass compares every node's signature with the earlier ones, and the
-// passes of a graph of a few dozen terms outgrow one evaluation's fuel
-// together.
+// The graph closed under congruence, a batch of waiting nodes per
+// evaluation (`settled`): closing is incremental (`EGraph::close`), and the
+// first batches of a fresh graph hold every node.
+fn grind_settle_batch() → Nat { 64 }
+
 fn close_passes(eg: EGraph<GOp, Fact>, fuel: Nat) → Tac<EGraph<GOp, Fact>> {
     match fuel {
         Zero => pure(eg),
-        Succ(f) => {
-            let g2 = eg.congruence_pass(gop_same, sigs_from(eg, eg.nodes, 0), []);
-            settled(g2.edges.len(), match g2.edges.len().same(eg.edges.len()) { True => pure(g2), False => close_passes(g2, f) })
+        Succ(f) => match eg.is_closed() {
+            True => pure(eg),
+            False => shared(eg.settle_some(gop_same, grind_settle_batch()), λ g2 =>
+                settled(g2.edges.len() + g2.dirty.len(), close_passes(g2, f))),
         },
     }
 }
 
 fn closed(fs: Facts) → Tac<Facts> {
-    close_passes(fs.g.eg, Succ(fs.g.eg.size())).bind(λ eg => pure(with_graph(fs, Graph(eg, fs.g.info, fs.g.atoms))))
+    close_passes(fs.g.eg, fs.g.eg.size() * 4 + 16).bind(λ eg => pure(with_graph(fs, Graph(eg, fs.g.info, fs.g.atoms))))
 }
 
 fn on_closed<A>(t: Tac<Facts>, k: Facts → Tac<A>) → Tac<A> { t.bind(k) }
@@ -2061,7 +2260,7 @@ fn grind_ctor_fuel() → Nat { 16 }
 // again while that adds an edge; then the disequalities checked.
 fn ctor_closed(l: GrindLaws, fs0: Facts, fuel: Nat) → Tac<Facts> {
     on_closed(closed(fs0), λ fs => {
-        let ps = table_pairs(fs.g, fs.g.eg.class_table(), fs.cf.done);
+        let ps = table_pairs(fs.g, fs.g.eg.class_table().to_list(), fs.cf.done);
         settled(ps.len(), match ps {
             Nil => pure(with_diseq_contra(l, fs)),
             Cons(_, _) => ctor_pairs(l, fs, ps).bind(λ f2 => match fuel {
@@ -2106,7 +2305,7 @@ fn by_graph(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
                     False => pure(Premised(c, None, [], [])),
                     True => match c.g.eg.explain(proof_alg(l, c.g), x.node, y.node) {
                         None => pure(Premised(c, None, [], [])),
-                        Some(pf) => pure(Premised(c, Some(pf), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns }, found_between(c.g, x.node, y.node))),
+                        Some(pf) => with_motives(l, pf).bind(λ pf2 => pure(Premised(c, Some(pf2), match c.g.eg.explain(cited_alg(), x.node, y.node) { None => [], Some(ns) => ns }, found_between(c.g, x.node, y.node)))),
                     },
                 })
             })
@@ -2123,21 +2322,97 @@ fn by_local(ty: Handle, ls: List<Given>) → Tac<Option<Given>> {
 
 fn on_premised(t: Tac<Premised>, k: Premised → Tac<Premised>) → Tac<Premised> { t.bind(k) }
 
-// The premise `ty`: by the graph, by a local, or by `Synth`.
+// `d`'s sides as `x`'s and `y`'s classes (`fwd`) or the other way round,
+// from `e: x = y`: the equation `d` refutes.
+fn diseq_chain(l: GrindLaws, g: Graph, d: Diseq, x: Nat, y: Nat, e: Expr, fwd: Bool) → Option<Expr> {
+    let ex = cast_of(l, expr_at(g, x), expr_at(g, y), e);
+    let pa = proof_alg(l, g);
+    match fwd {
+        True => match g.eg.explain(pa, d.sides.a, x) {
+            None => None,
+            Some(p1) => match g.eg.explain(pa, y, d.sides.b) { None => None, Some(p2) => Some(trans_of(l, trans_of(l, p1, ex), p2)) },
+        },
+        False => match g.eg.explain(pa, d.sides.a, y) {
+            None => None,
+            Some(p1) => match g.eg.explain(pa, x, d.sides.b) { None => None, Some(p2) => Some(trans_of(l, trans_of(l, p1, sym_of(l, ex)), p2)) },
+        },
+    }
+}
+
+// The first disequality read whose sides are the classes of `x` and `y`,
+// either way round, applied under `λ e` (`r`) to the equation it refutes.
+fn diseq_premise(l: GrindLaws, fs: Facts, x: Nat, y: Nat, r: LocalRef, ds: List<Diseq>) → Premised {
+    match ds {
+        Nil => Premised(fs, None, [], []),
+        Cons(d, rest) => {
+            let g = fs.g;
+            let fwd = g.eg.same_class(d.sides.a, x).and(g.eg.same_class(d.sides.b, y));
+            let bwd = g.eg.same_class(d.sides.a, y).and(g.eg.same_class(d.sides.b, x));
+            match fwd.or(bwd) {
+                False => diseq_premise(l, fs, x, y, r, rest),
+                True => match diseq_chain(l, g, d, x, y, Local(r), fwd) {
+                    None => diseq_premise(l, fs, x, y, r, rest),
+                    Some(chain) => Premised(fs, Some(Lam(r, App(d.proof, cast_of(l, Hd(d.lhs), Hd(d.rhs), chain)))),
+                        Cons(d.name, match fwd {
+                            True => cited_between(g, d.sides.a, x) ++ cited_between(g, y, d.sides.b),
+                            False => cited_between(g, d.sides.a, y) ++ cited_between(g, x, d.sides.b),
+                        }), []),
+                },
+            }
+        },
+    }
+}
+
+// A disequality premise `a = b → False` by a disequality read whose sides
+// are `a`'s and `b`'s classes, either way round (`apart: x ≠ o0` proves
+// `o0 ≠ x`).
+fn by_diseq(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
+    let none = pure(Premised(fs, None, [], []));
+    match fs.cf.diseqs {
+        Nil => none,
+        Cons(_, _) => whnf(ty).bind(λ c => match c {
+            Refused(_) => none,
+            Accepted(w) => view(w).bind(λ v => match v {
+                HPi(dom) => sides_of(dom).bind(λ o => match o {
+                    None => none,
+                    Some(p) => open(w, "e").bind(λ oc => match oc {
+                        Refused(_) => none,
+                        Accepted(op) => match op.dependent {
+                            True => none,
+                            False => is_false(l.fals, op.body).bind(λ f => match f {
+                                False => none,
+                                True => read_term(fs.g, p.fst).bind(λ x => read_term(x.g, p.snd).bind(λ y =>
+                                    on_closed(closed(with_graph(fs, y.g)), λ cl => shared(diseq_premise(l, cl, x.node, y.node, op.local.ref, cl.cf.diseqs), λ pm => match pm.proof {
+                                        None => pure(pm),
+                                        Some(pf) => with_motives(l, pf).bind(λ pf2 => pure(Premised(pm.fs, Some(pf2), pm.uses, pm.found))),
+                                    })))),
+                            }),
+                        },
+                    }),
+                }),
+                _ => none,
+            }),
+        }),
+    }
+}
+
+// The premise `ty`: by the graph, by a local, by a disequality read, or by
+// `Synth`.
 fn prove_premise(l: GrindLaws, fs: Facts, ty: Handle) → Tac<Premised> {
     on_premised(by_graph(l, fs, ty), λ pg => match pg.proof {
         Some(_) => pure(pg),
         None => by_local(ty, pg.fs.locals.map(λ lo => Given(Local(lo.ref), lo.name, lo.ty)) ++ pg.fs.givens).bind(λ ol => match ol {
             Some(gv) => pure(Premised(pg.fs, Some(gv.proof), [gv.name], [])),
-            None => synth(ty).bind(λ c => match c {
-                Accepted(h) => pure(Premised(pg.fs, Some(Hd(h)), [], [])),
-                Refused(_) => pure(Premised(pg.fs, None, [], [])),
+            None => on_premised(by_diseq(l, pg.fs, ty), λ pd => match pd.proof {
+                Some(_) => pure(pd),
+                None => synth(ty).bind(λ c => match c {
+                    Accepted(h) => pure(Premised(pd.fs, Some(Hd(h)), [], [])),
+                    Refused(_) => pure(Premised(pd.fs, None, [], [])),
+                }),
             }),
         }),
     })
 }
-
-fn pi_dom(v: Head) → Option<Handle> { match v { HPi(d) => Some(d), _ => None } }
 
 // The domain of a function type, as written or once in head normal form.
 fn pi_domain(ty: Handle) → Tac<Option<Handle>> {
@@ -2214,7 +2489,7 @@ fn on_built(l: GrindLaws, bd: Building, i: Inst, lm: Lemma) → Tac<Facts> {
                     // the lemma.
                     let old = fs.g.info.len();
                     let at = concat_map(i.args, λ a => opt_list(a)) ++ match i.def { Some(d) => [d.node], None => [] };
-                    let found = names_once(provs(fs.g, at) ++ older_parts(y.g, old, y.g.eg.nodes.drop(old)) ++ pfound, []);
+                    let found = names_once(provs(fs.g, at) ++ older_parts(y.g, old, y.g.eg.nodes.to_list().drop(old)) ++ pfound, []);
                     let g1 = stamped(y.g, old, names_once(Cons(lm.name, uses ++ found), []));
                     let ef = names_once(found ++ provs(g1, [x.node, y.node]), []);
                     pure(Facts(with_definition(l, Graph(g1.eg.union(x.node, y.node, Fact(pr, lm.name, uses, ef)), g1.info, g1.atoms), i, lm.name, ef, x.node, y.node), fs.read, fs.skipped, fs.lemmas.update(i.lemma, λ m => bump_added(m, is_def(i.def))), fs.seen, fs.offered, fs.locals, fs.givens, fs.pending, fs.cf))
@@ -2288,38 +2563,199 @@ fn settle(report: Bool, l: GrindLaws, fs: Facts, gt: GoalAt, why: String) → Ta
 
 fn on_found(t: Tac<Found>, k: Found → Tac<Expr>) → Tac<Expr> { t.bind(k) }
 
+// ---------------------------------------------------------------------------
+// Terms spelled one definition further on (docs/grind-design.md §15).
+//
+// A hand `trans` chain crosses steps that only conversion sees: a call
+// unfolded to the call its definition makes (`loop_finish(…)(…)` to
+// `branch(…).eval(…)(64, rr)`), a value computed (`word_value(s0)(64)` to
+// `s0`). Grind takes them when matching finds nothing new: each whole term
+// not spelled yet is asked for its next spelling (`Spell`: its head
+// definition unfolded, and the head reduced on until a call, a local or a
+// value is at the head again), which is read as a node of its own and
+// joined to the term by `grind::defn`, which the kernel checks by
+// computation. A term whose spelling is stuck may compute once one of its
+// argument's classmates stands in for the argument (`head_bit(q(1, x))`,
+// where `q(1, x)` is `bit_value(False)(1)`): that application is spelled
+// too, and joined to the term through congruence. A definition the world
+// withholds (an `interface fn`) is never unfolded: `Spell` refuses it.
+
+// Where spelling has got to: the nodes below `from` are spelled; `stuck`
+// are those whose spelling was stuck, and `tried` the (node, classmate)
+// pairs already stood in.
+record SpellState { from: Nat, stuck: List<Nat>, tried: List<Node2> }
+
+record SpellOut { fs: Facts, sp: SpellState }
+
+fn spell_empty() → SpellState { SpellState(0, [], []) }
+
+// The number of nodes a spelling pass visits, and of stand-ins it asks.
+fn grind_spell_cap() → Nat { 256 }
+
+fn grind_stand_in_cap() → Nat { 32 }
+
+// How many passes a run may spell in; each that joins something is followed
+// by a round of matching.
+fn grind_spell_passes() → Nat { 8 }
+
+// Is a spelling, viewed as `v`, a term worth a node: a call, a local, a
+// value (not a `match`, a `λ`, or a form `View` does not name)?
+fn spelt_form(v: Head) → Bool {
+    match v {
+        HGlobal(_, _, _) => True,
+        HLocal(_, _) => True,
+        HCtor(_, _, _, _) => True,
+        HLit(_) => True,
+        HField(_, _, _) => True,
+        _ => False,
+    }
+}
+
+// Join node `n` to the term `w` spells it as, read into the graph, by
+// `grind::defn`; the new nodes are marked as brought by what brought `n`.
+fn join_spelt(l: GrindLaws, fs: Facts, n: Nat, w: Handle) → Tac<Facts> {
+    read_term(fs.g, w).bind(λ r => {
+        let g = stamped(r.g, fs.g.info.len(), prov(fs.g, n));
+        match g.eg.same_class(n, r.node) {
+            True => pure(with_graph(fs, g)),
+            False => pure(with_graph(fs, Graph(g.eg.union(n, r.node, Fact(defn_of(l, expr_at(g, n), expr_at(g, r.node)), "", [], provs(g, [n, r.node]))), g.info, g.atoms))),
+        }
+    })
+}
+
+// `e` spelled, when its spelling is worth a node.
+fn spelt(e: Expr) → Tac<Option<Handle>> {
+    next_spelling(e).bind(λ c => match c {
+        Refused(_) => pure(None),
+        Accepted(w) => view(w).bind(λ v => match spelt_form(v) { True => pure(Some(w)), False => pure(None) }),
+    })
+}
+
+// Is node `n` an application (not a dependent one), by its two parts?
+fn app_parts(g: Graph, n: Nat) → Option<Node2> {
+    match g.eg.node(n) {
+        None => None,
+        Some(nd) => match nd.op {
+            GAppOp => match nd.kids { Cons(f, rest) => match rest { Cons(a, _) => Some(Node2(f, a)), Nil => None }, Nil => None },
+            _ => None,
+        },
+    }
+}
+
+// Spell the whole nodes from `i` on, and the nodes their spellings add, at
+// most `budget` of them: a node whose spelling is stuck is remembered.
+fn spell_from(l: GrindLaws, fs: Facts, i: Nat, stuck: List<Nat>, budget: Nat) → Tac<Pair<Facts, Pair<Nat, List<Nat>>>> {
+    match budget {
+        Zero => pure(Pair(fs, Pair(i, stuck))),
+        Succ(b) => match i.leb(fs.g.info.len()).and(i.same(fs.g.info.len()).not()) {
+            False => pure(Pair(fs, Pair(i, stuck))),
+            True => match is_whole(fs.g, i) {
+                False => spell_from(l, fs, i + 1, stuck, b),
+                True => spelt(expr_at(fs.g, i)).bind(λ o => match o {
+                    None => spell_from(l, fs, i + 1, match app_parts(fs.g, i) { Some(_) => Cons(i, stuck), None => stuck }, b),
+                    Some(w) => join_spelt(l, fs, i, w).bind(λ f2 => spell_from(l, f2, i + 1, stuck, b)),
+                }),
+            },
+        },
+    }
+}
+
+// The whole classmates of node `a` other than `a`, not yet stood in for
+// it under node `s`.
+fn stand_ins(g: Graph, table: Array<List<Nat>>, s: Nat, a: Nat, tried: List<Node2>) → List<Nat> {
+    table_members(table, g.eg.find(a)).filter(λ m => m.same(a).not().and(is_whole(g, m)).and(node2_in(tried, s, m).not()))
+}
+
+record StandIn { fs: Facts, tried: List<Node2>, left: Nat }
+
+// Spell the stuck node `s`, `p(a)`, as `p(m)` for each of `ms`: the first
+// that spells is read, `p(m)` made a node (congruence joins it to `s`), and
+// the spelling joined to it.
+fn stand_in(l: GrindLaws, fs: Facts, s: Nat, p: Nat, ms: List<Nat>, tried: List<Node2>, left: Nat) → Tac<StandIn> {
+    match left {
+        Zero => pure(StandIn(fs, tried, 0)),
+        Succ(lf) => match ms {
+            Nil => pure(StandIn(fs, tried, left)),
+            Cons(m, rest) => spelt(App(expr_at(fs.g, p), expr_at(fs.g, m))).bind(λ o => match o {
+                None => stand_in(l, fs, s, p, rest, Cons(Node2(s, m), tried), lf),
+                Some(w) => {
+                    let pm = app_node(fs.g, p, m, False);
+                    join_spelt(l, with_graph(fs, stamped(pm.g, fs.g.info.len(), provs(fs.g, [s, m]))), pm.node, w).bind(λ f2 =>
+                        pure(StandIn(f2, Cons(Node2(s, m), tried), lf)))
+                },
+            }),
+        },
+    }
+}
+
+fn stand_ins_all(l: GrindLaws, fs: Facts, table: Array<List<Nat>>, ss: List<Nat>, tried: List<Node2>, left: Nat) → Tac<StandIn> {
+    match ss {
+        Nil => pure(StandIn(fs, tried, left)),
+        Cons(s, rest) => match app_parts(fs.g, s) {
+            None => stand_ins_all(l, fs, table, rest, tried, left),
+            Some(pa) => stand_in(l, fs, s, pa.a, stand_ins(fs.g, table, s, pa.b, tried), tried, left).bind(λ r =>
+                stand_ins_all(l, r.fs, table, rest, r.tried, r.left)),
+        },
+    }
+}
+
+// One spelling pass: the nodes not spelled yet, then the stuck ones'
+// stand-ins.
+fn spelled(l: GrindLaws, fs: Facts, sp: SpellState) → Tac<SpellOut> {
+    spell_from(l, fs, sp.from, sp.stuck, grind_spell_cap()).bind(λ r => {
+        let f1 = r.fst;
+        stand_ins_all(l, f1, f1.g.eg.class_table(), r.snd.snd, sp.tried, grind_stand_in_cap()).bind(λ si =>
+            pure(SpellOut(si.fs, SpellState(r.snd.fst, r.snd.snd, si.tried))))
+    })
+}
+
 // Close the graph; prove `l = r` from it, or instantiate the lemmas once
-// more (at most `rounds` times), or fail with what it holds.
-fn saturate(rounds: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, gt: GoalAt) → Tac<Expr> {
-    match rounds {
+// more (at most `rounds` times), or spell its terms further (at most
+// `spells` times), or fail with what it holds. `fuel` bounds the two
+// together.
+fn saturate(fuel: Nat, rounds: Nat, spells: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, gt: GoalAt, sp: SpellState) → Tac<Expr> {
+    match fuel {
         Zero => on_closed(ctor_closed(l, fs0, grind_ctor_fuel()), λ fs => settle(report, l, fs, gt, "stopped after " ++ decimal_name(Succ(done), done) ++ " rounds")),
-        Succ(r) => on_closed(ctor_closed(l, fs0, grind_ctor_fuel()), λ fs => {
+        Succ(f) => on_closed(ctor_closed(l, fs0, grind_ctor_fuel()), λ fs => {
             let g = fs.g;
+            // Stuck as written: spelled further, and the graph matched
+            // again, while that joins something (§15).
+            let spell_or_stuck = λ (at: Facts) (why: String) => match spells {
+                Zero => stuck(at.g, at, gt, why),
+                Succ(s) => spelled(l, at, sp).bind(λ so => match so.fs.g.eg.edges.len().same(at.g.eg.edges.len()) {
+                    True => stuck(so.fs.g, so.fs, gt, why),
+                    False => add_insts(l, with_pending(so.fs, []), so.fs.pending.map(λ p => p.inst)).bind(λ fs2 => saturate(f, rounds, s, done, report, l, fs2, gt, so.sp)),
+                }),
+            };
             // Stuck as written: the sides' head normal forms are read, and
             // the graph closed again, before giving up (§14.4).
             // A round runs again only if a reduct joined something.
             let give_up = λ (at: Facts) (why: String) => match at.cf.unreduced {
                 Cons(_, _) => reduced(at).bind(λ fr => match fr.g.eg.edges.len().same(at.g.eg.edges.len()) {
-                    True => stuck(fr.g, fr, gt, why),
-                    False => saturate(r, done, report, l, fr, gt),
+                    True => spell_or_stuck(fr, why),
+                    False => saturate(f, rounds, spells, done, report, l, fr, gt, sp),
                 }),
-                Nil => stuck(g, at, gt, why),
+                Nil => spell_or_stuck(at, why),
             };
             match concluded(report, l, fs, gt) {
                 Some(t) => t,
-                None => match fs.lemmas {
-                    Nil => give_up(fs, ""),
-                    Cons(_, _) => {
-                        let table = g.eg.class_table();
-                        settled(table.len() + g.eg.edges.len(), on_found(round_insts(g, table, fs.lemmas, 0, fs.seen, grind_round_cap()), λ strict =>
-                            on_found(resolve_nears(g, strict.lemmas, strict.nears, fs.seen ++ strict.insts, grind_defeq_budget(), []), λ near => {
-                            let insts = strict.insts ++ near.insts;
-                            let next = Facts(g, fs.read, fs.skipped, near.lemmas, fs.seen ++ insts, fs.offered, fs.locals, fs.givens, fs.pending, fs.cf);
-                            match insts {
-                                Nil => give_up(next, match done { Zero => "no instance in the graph", Succ(_) => "no new instance after " ++ decimal_name(Succ(done), done) ++ " rounds" }),
-                                Cons(_, _) => add_insts(l, with_pending(next, []), insts ++ next.pending.map(λ p => p.inst)).bind(λ fs2 => saturate(r, Succ(done), report, l, fs2, gt)),
-                            }
-                        })))
+                None => match rounds {
+                    Zero => settle(report, l, fs, gt, "stopped after " ++ decimal_name(Succ(done), done) ++ " rounds"),
+                    Succ(r) => match fs.lemmas {
+                        Nil => give_up(fs, ""),
+                        Cons(_, _) => {
+                            shared(g.eg.class_table(), λ table =>
+                            shared(uses_index(g), λ uses =>
+                            settled(table.len() + g.eg.edges.len() + nat_map_count(uses), on_found(round_insts(g, table, uses, fs.lemmas, 0, fs.seen, grind_round_cap()), λ strict =>
+                                on_found(resolve_nears(g, strict.lemmas, strict.nears, fs.seen ++ strict.insts, grind_defeq_budget(), []), λ near => {
+                                shared(strict.insts ++ near.insts, λ insts =>
+                                shared(Facts(g, fs.read, fs.skipped, near.lemmas, fs.seen ++ insts, fs.offered, fs.locals, fs.givens, fs.pending, fs.cf), λ next =>
+                                match insts {
+                                    Nil => give_up(next, match done { Zero => "no instance in the graph", Succ(_) => "no new instance after " ++ decimal_name(Succ(done), done) ++ " rounds" }),
+                                    Cons(_, _) => add_insts(l, with_pending(next, []), insts ++ next.pending.map(λ p => p.inst)).bind(λ fs2 => saturate(f, r, spells, Succ(done), report, l, fs2, gt, sp)),
+                                }))
+                            })))))
+                        },
                     },
                 },
             }
@@ -2387,7 +2823,7 @@ fn grind_run(names: List<String>, hints: List<Expr>, report: Bool) → Tac<Expr>
             let gt = GoalAt(gr.sides, og.target, og.opened.map(λ lo => lo.ref));
             read_locals(Facts(gr.g, [], [], [], [], [], locals, [], [], cstate_empty(l, sr.id, og.target)), locals).bind(λ fs => read_hints(fs, hints, 0).bind(λ fs2 =>
             read_names(fs2, names).bind(λ fs3 =>
-            saturate(grind_rounds(), 0, report, l, fs3, gt).bind(λ p => pure(lams(gt.intros, p))))))
+            saturate(grind_rounds() + grind_spell_passes() + grind_rounds(), grind_rounds(), grind_spell_passes(), 0, report, l, fs3, gt, spell_empty()).bind(λ p => with_motives(l, p).bind(λ p2 => pure(lams(gt.intros, p2)))))))
         })),
     }))))
 }

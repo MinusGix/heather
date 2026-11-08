@@ -253,11 +253,17 @@ theorem one_ctor_no_contradiction<A>(x, y: A, h: Some(x) = Some(y)): False { by 
 theorem one_side_no_contradiction(n: Bool, h: n = True): False { by grind() }
 // expect-error: no contradiction
 theorem diseq_apart(f: Nat → Nat, a, b: Nat, h: f(a) ≠ f(b)): False { by grind() }
-// Not yet: a successor against a literal (`Succ(a)` with `a = 2` is `3` by
-// computation, which the graph does not see), and a constructor whose field
-// a later field's type mentions (its value is read as an atom).
-// expect-error: grind: the two sides are not in one class
-theorem succ_literal_unread(f: Nat → Nat, a: Nat, h: a = 2): f(Succ(a)) = f(3) { by grind() }
+// A successor against a literal: when the sides stay apart, grind reads
+// each stuck term's next spelling (`3` is `Succ(2)`), so `Succ(a)` with
+// `a = 2` meets it (docs/grind-design.md §15).
+theorem succ_literal_spelled(f: Nat → Nat, a: Nat, h: a = 2): f(Succ(a)) = f(3) { by grind() }
+// A defined head is read by its next spelling when the sides stay apart
+// (`shown(2)` is `Succ(2)`, which meets `3`; docs/grind-design.md §15).
+// An `interface fn` of another module stays folded: grind_native_tests.
+fn shown(n: Nat) → Nat { Succ(n) }
+theorem defined_head_spelled(f: Nat → Nat): f(shown(2)) = f(3) { by grind() }
+// Not yet: a constructor whose field a later field's type mentions (its
+// value is read as an atom).
 record Tied { lo: Nat, hi: Nat, same: lo = hi }
 // expect-error: grind: the two sides are not in one class
 theorem dependent_ctor_unread(a, b, c, d: Nat, s: a = b, t: c = d, h: Tied(a, b, s) = Tied(c, d, t)): a = c { by grind() }
