@@ -4,7 +4,7 @@ status: open
 labels: [surface,proofs,ergonomics]
 area: language
 created: 2026-10-04
-updated: 2026-10-21
+updated: 2026-11-08
 ---
 
 Raised by Minus (2026-10-04) over
@@ -58,3 +58,4 @@ helps with both: it names each fact once, at the point it is taken apart.
 ## Log
 
 - 2026-10-21: The code cited above (crates/elab/tests/fixtures/open_read_close.hthr, examples/x86-native/wc.hthr) was burned in B1 ([[native-burn-process-stack]]; last at 189659d, tag native-v0); the language ask stands on its own.
+- 2026-11-08: Stdlib awkwardness survey (docs/stdlib-math-awkwardness-survey.md §7): probed 2026-11-08, `let ⟨n, a, b⟩ = h;` is still a parse error (`expected let binding name, found LAngle`), while `match h { ⟨n, ⟨a, b⟩⟩ => … }` works. Math libraries: 59 chains of three or more `.left`/`.right`, 60 nested `Exists(…) => match` arms (36 in creal.hthr), 904 `.witness`/`.proof` reads.
