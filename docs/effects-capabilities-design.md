@@ -404,7 +404,9 @@ In order:
    lemma. *Built for computations with no loop (§8.5, slice 4):*
    `ETm::lower` in `lib/native/runtime/rt_io_lower.hthr` and
    `ETm::lower_reads`, `Io::Reads` of the lowered tree against `ETm::sem`.
-   Branches and `ERepeat` remain (§8.4).
+   *Loops built (§8.6, slice 5):* `ELoop` in
+   `lib/native/runtime/rt_io_loop.hthr`, lowered to `Repeat`, with
+   `ELoop::lower_reads`. Branches over the world remain (§8.4).
 3. **Linearity** as a clause of the default judgment (§5). *Built with
    the reflector (§8.3):* no `ETm` names the world, so the clause is the
    reflector's refusals at the call.
@@ -544,8 +546,8 @@ What the build found and decided:
   `EIf(c, a, b)` whose meaning branches on the whole `Mutated` needs a
   commuting conversion to agree with that by `refl`; either the lowering
   joins the world with the values or the pin goes through an equation.
-- **Loops.** `for` over a body with `Invoke`s needs `ERepeat` and the loop
-  lemma of §6 item 2.
+- **Loops.** *Built as `ELoop` (§8.6).* A `for` over a list is not yet a
+  loop form; a `while` with no measure is.
 - **Callees.** An effectful callee (`EFun` calling `EFun`) is not modelled;
   `ETm::plain_world()` is the world with no callees.
 
@@ -598,5 +600,63 @@ reads as the surface method `Io::echo_lowered` at every world. A
 three-call open/read/close lowers; a write naming the buffer as it was
 before the read, and a buffer bound by a pure `Let`, are refused.
 
-**Left.** Branches over the world and loops (§8.4); the lowering is not yet
-what a `runtime fn` setup publishes, which is item 4's `main`.
+**Left.** Branches over the world (§8.4); the lowering is not yet what a
+`runtime fn` setup publishes, which is item 4's `main`. Loops: §8.6.
+
+### 8.6 Loops over the world (slice 5)
+
+**The form.** `ELoop` (`lib/native/runtime/rt_io_loop.hthr`) is a chain of
+loop-free computations (`Seq(t, rest)`: `rest` sees `t`'s end context) and
+loops, ending in a computation's value (`Done`). A loop is
+`While(cond, body, rebind, rest)`: its state is the **whole environment**,
+and each pass runs `body` (an `ETm`) and rebinds variable `i` to the end
+context's variable `rebind[i]`. That is the surface `while`'s threading
+(sequencing design §18): a local the body assigns is rebound to its new
+value, any other to itself. The condition is a `Tm` of code `Bit`.
+
+**The meaning** is in `Partial`, since the loop may go round forever:
+`if cond { do body while cond }`, `Io::iterate` of a total pass that runs
+the body (`ETm::sem_end`, the end environment with the world after the
+calls), gathers the next state and tests the condition again. It is the
+surface `while` up to silent steps; that bridge is the reflector's to
+prove, as the state shapes differ (the surface nests the threaded locals
+in `Mutated` pairs).
+
+**The source side.** `Stmt::run` (`native_source_io`) is every statement as
+world threading in `Partial` (a `Repeat` is `Io::iterate` of its pass, a
+procedure call its tree read against the world), and `Stmt::reads_run`
+proves once, unconditionally, that a statement's tree reads as it
+(`Io::reads_iter` at a `Repeat`). `Stmt::run_straight` says a loop-free
+statement's `run` is its `thread`, returned.
+
+**The lowering** keeps every variable where it lived before the loop. A
+pass is the body's statements, then moves of each word variable from
+where the body left its new value back to its word, then the condition
+again into the flag word the `Repeat` tests. Before the loop the condition
+is computed once and a `Branch` skips the loop when it fails. A buffer
+variable must end the pass in its own buffer; one rebound to a buffer a
+read wrote over (gone) is refused. The moves are checked so that none
+writes a word a later one reads or an earlier one wrote.
+
+**Soundness.** `ELoop::lower_sound`, by induction over `ELoop`. A loop is
+`Io::iterate_rel` (`linux_world_co`): two loops of total passes, started at
+related states, whose passes leave the same world and go on together
+(both round again at related states, or both out at related results),
+followed by rests that agree at related results, agree up to silent steps.
+Proved once by direct corecursion. The relation is "the environment holds
+the state at the loop's places"; a pass keeps it by the loop-free
+lowering's theorem, which now also gives the end environment
+(`ETm::EndHolds`, `ELowered.locs`), the sources' and moves' theorems, and
+the condition's. `ELoop::lower_reads` is `Io::Reads` of the lowered tree
+against the meaning.
+
+**Probes** (`lib/_tests/native/runtime/rt_io_loop_tests.hthr`): a loop that
+echoes stdin to stdout until a read returns nothing lowers; its statements,
+its meaning and the surface `while` it models (`Io::echo_all`) each send
+"hiyo" at a piped world and end with 0; `lower_reads` instantiated at it.
+Refused: the buffer rebound to the one the read wrote over, a word
+condition, a variable rebound to one of another code.
+
+**Left.** Branches over the world (`EIf`), so that a pass can skip a
+write; the reflector reading a surface `while` into `ELoop` and the bridge
+from its nested state to `ELoop::sem`; `runtime fn main`.

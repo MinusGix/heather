@@ -59,8 +59,8 @@ fn echo_lowered() → Option<ELowered> { echo_body().lower(ETm::plain_world(), e
 // read's count as its length, the value the write's result word.
 theorem echo_lowers(): lowers(echo_lowered()) = True { refl }
 
-fn echo_stmt() → Stmt { echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0)).stmt }
-fn echo_result() → Nat { echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0)).result }
+fn echo_stmt() → Stmt { echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).stmt }
+fn echo_result() → Nat { echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).result }
 
 theorem echo_shape(): Stmt::straight(echo_stmt()) = True { refl }
 
@@ -91,7 +91,7 @@ fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
             λ flow => flow.read_back(Word(64), RecInfo::none, echo_result())),
         λ io => CRet(Io::echo_lowered(io, buf)))
 {
-    echo_body().lower_reads(ETm::plain_world(), echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0)), refl,
+    echo_body().lower_reads(ETm::plain_world(), echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
         no_calls(), Tm::calls_agree_none(RecInfo::none, no_calls()), perform, start(buf), Pair(buf, trivial),
         ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }

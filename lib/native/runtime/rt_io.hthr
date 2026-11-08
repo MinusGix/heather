@@ -197,6 +197,48 @@ fn ETm::sem(self t: ETm, w: rt::World) → (g: List<Ty>) → rt::Env(w.tys, g) �
     }
 }
 
+// The context a computation's value is computed in: every variable its
+// `Let`s and calls bound, on top of `g`.
+fn ETm::ctx_end(self t: ETm, w: rt::World, g: List<Ty>) → List<Ty> {
+    match t {
+        Pure(_) => g,
+        Let(e, body) => body.ctx_end(w, Cons(e.ty(w, g), g)),
+        Invoke(e, _, body) => body.ctx_end(w, Ty::bind_onto(e.results(), g)),
+    }
+}
+
+// The environment there, with the world after the calls: what a loop's
+// pass rebinds its state from.
+fn ETm::sem_end(self t: ETm, w: rt::World) → (g: List<Ty>) → rt::Env(w.tys, g) → Io → Mutated<Io, rt::Env(w.tys, t.ctx_end(w, g))> {
+    match t {
+        Pure(_) => λ g env io => Mutated(io, env),
+        Let(e, body) => λ g env io => body.sem_end(w, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
+        Invoke(e, args, body) => λ g env io =>
+            body.sem_end(w, Ty::bind_onto(e.results(), g),
+                Effect::push(w.tys, e.results(), g, env,
+                    Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                        e.params(), e.sem(w.tys, io), args).value),
+                Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                    e.params(), e.sem(w.tys, io), args).after),
+    }
+}
+
+// The world after the calls is the meaning's.
+theorem ETm::sem_end_after(self t: ETm, w: rt::World): (g: List<Ty>) → (env: rt::Env(w.tys, g)) → (io: Io) →
+    t.sem_end(w, g, env, io).after = t.sem(w, g, env, io).after {
+    match t {
+        Pure(_) => λ g env io => refl,
+        Let(e, body) => λ g env io => body.sem_end_after(w, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), io),
+        Invoke(e, args, body) => λ g env io =>
+            body.sem_end_after(w, Ty::bind_onto(e.results(), g),
+                Effect::push(w.tys, e.results(), g, env,
+                    Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                        e.params(), e.sem(w.tys, io), args).value),
+                Effect::apply(w, g, env, Mutated<Io, Ty::Flats(e.results())>, Mutated(io, Ty::flats_default(e.results())),
+                    e.params(), e.sem(w.tys, io), args).after),
+    }
+}
+
 // An effectful function: a `mut self` method over `Io`, its operands
 // pure codes.
 record EFun { params: List<Ty>, result: Ty, body: ETm }
