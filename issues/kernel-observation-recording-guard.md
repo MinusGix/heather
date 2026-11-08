@@ -23,4 +23,4 @@ One `Observation { unsealed, glued }` frame with `unseal`'s guard and nesting (o
 
 ## Related
 
-[[interface-body-early-cutoff]], [[theorem-witness-unfolding]].
+[[interface-body-early-cutoff]], [[theorem-witness-unfolding]], [[fmt-budget-state-nesting]] (the other thread-local state that a guard should restore whole).
