@@ -5,7 +5,9 @@ Status: **built, first slice (2026-11-02)**, the first round of
 milestone `nh-effects`). It extends `docs/sequencing-surface-design.md` §8
 (effects are layer 2 with `mut self`) and `docs/runtime-fn-setups-design.md`
 §6.1 and §8 (the setup's `sound` proves the effectful agreement once). Read
-`docs/compilation-vision.md` first.
+`docs/compilation-vision.md` first. Where this design is coarse (one
+capability for every effect, no local handlers, no frame rule) and what to
+build on it is assessed in `docs/effects-locality-design.md` (2026-11-08).
 
 ## 0. In one page
 
