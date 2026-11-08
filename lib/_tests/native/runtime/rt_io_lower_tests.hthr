@@ -1,0 +1,135 @@
+// Probes of effectful `rt` lowered to a `Source` (`rt_io_lower`,
+// `native_source_io`; docs/effects-capabilities-design.md §8.5): a `mut self`
+// method over `Io`, its computation, the statements it lowers to, those
+// statements run against a scripted world, and the soundness theorem
+// instantiated so that the lowered program's tree reads as the surface
+// method at every world. Plus refusals: a buffer used after a read wrote
+// over it, a buffer bound by a pure `Let`. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import itree;
+import coitree;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import native_source;
+import native_source_co;
+import native_source_io;
+import rt;
+import rt_lower;
+import rt_io;
+import rt_io_lower;
+
+// Read up to 64 bytes from stdin into the buffer, and write what came back
+// to stdout: the write's result word.
+fn Io::echo_lowered(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
+    let r = io.read_into(Io::stdin(), buf, BitVec::ofNat(64));
+    let w = io.write_from(Io::stdout(), r.buf, BitVec::ofNat(0), r.result);
+    w
+}
+
+// Its computation (as `reflects_io_as` reads it; rt_io_tests pins that).
+fn echo_body() → ETm {
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 0],
+    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 3, 0, 2],
+    ETm::Pure(Var(0))))))))
+}
+
+fn echo_g() → List<Ty> { [Bytes(0)] }
+
+// The parameter `buf` lives in buffer 0; words are fresh from 1.
+fn echo_locs() → List<Loc> { [InBuffer(0)] }
+
+// Whether a lowering went through.
+fn lowers(o: Option<ELowered>) → Bool { match o { None => False, Some(_) => True } }
+
+fn echo_lowered() → Option<ELowered> { echo_body().lower(ETm::plain_world(), echo_g(), echo_locs(), 1) }
+
+// The lowering: each literal a region moved to a fresh word, the read
+// landing in buffer 0 and its count in a fresh word, the write naming the
+// read's count as its length, the value the write's result word.
+theorem echo_lowers(): lowers(echo_lowered()) = True { refl }
+
+fn echo_stmt() → Stmt { echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0)).stmt }
+fn echo_result() → Nat { echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0)).result }
+
+theorem echo_shape(): Stmt::straight(echo_stmt()) = True { refl }
+
+// The source's environment: buffer 0 holds the caller's buffer.
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn zeros() → List<BitVec(8)> { List::replicate(BitVec::ofNat(0), 64) }
+fn piped() → Io { Io::of(World::piped([[b(104), b(105)]])) }
+fn start(buf: List<BitVec(8)>) → native_source::Env { native_source::Env([], [buf], []) }
+
+fn no_calls() → Answers() { λ f ws => BitVec::ofNat(0) }
+
+// Run at a piped world: "hi" comes back out, and the result word holds the
+// write's count.
+theorem echo_runs_sent():
+    Stmt::thread(echo_stmt(), no_calls(), start(zeros()), piped()).after.sent(Io::stdout()) = [b(104), b(105)] { refl }
+
+theorem echo_runs_result():
+    Stmt::thread(echo_stmt(), no_calls(), start(zeros()), piped()).value.read_back(Word(64), RecInfo::none, echo_result()) = BitVec::ofNat(2) { refl }
+
+// The computation's meaning is the surface method, world and all.
+theorem echo_means(io: Io, buf: List<BitVec(8)>):
+    echo_body().sem(ETm::plain_world(), echo_g(), Pair(buf, trivial), io) = Io::echo_lowered(io, buf) { refl }
+
+// The theorem at this program: the lowered statements' tree, read against
+// any world, is the surface method, up to silent steps.
+fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
+    Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), echo_stmt().denote_co(no_calls(), perform)(start(buf)),
+            λ flow => flow.read_back(Word(64), RecInfo::none, echo_result())),
+        λ io => CRet(Io::echo_lowered(io, buf)))
+{
+    echo_body().lower_reads(ETm::plain_world(), echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0)), refl,
+        no_calls(), Tm::calls_agree_none(RecInfo::none, no_calls()), perform, start(buf), Pair(buf, trivial),
+        ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
+}
+
+// ---------------------------------------------------------------------------
+// Three calls, two buffers, arithmetic over two answers.
+
+fn read_file_body() → ETm {
+    // buf, path
+    ETm::Let(Lit(Word(64), 16),
+    ETm::Invoke(Opens(0), [2, 0],
+    ETm::Let(Lit(Word(64), 64),
+    ETm::Invoke(Reads(0), [1, 3, 0],
+    ETm::Invoke(Closes, [3],
+    ETm::Pure(Prim(Add(64), [1, 0])))))))
+}
+
+// `path` (variable 1) in buffer 0, `buf` (variable 0) in buffer 1.
+theorem read_file_lowers():
+    lowers(read_file_body().lower(ETm::plain_world(), [Bytes(0), Bytes(0)], [InBuffer(1), InBuffer(0)], 1)) = True { refl }
+
+// ---------------------------------------------------------------------------
+// Refusals: the lowering returns `None`.
+
+// The write names the buffer as it was before the read wrote over it
+// (variable 4, the parameter): it is gone, so the lowering refuses it rather
+// than send what the read left.
+fn stale_body() → ETm {
+    ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 0],
+    ETm::Let(Lit(Word(64), 1), ETm::Let(Lit(Word(64), 0), ETm::Invoke(Writes(0), [1, 6, 0, 2],
+    ETm::Pure(Var(0))))))))
+}
+
+theorem stale_refused(): lowers(stale_body().lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = False { refl }
+
+// The same program reading the fresh buffer (variable 3) lowers.
+theorem stale_control(): lowers(echo_body().lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = True { refl }
+
+// A buffer bound by a pure `Let` has no word to live in.
+theorem bytes_let_refused():
+    lowers(ETm::Let(Var(0), ETm::Pure(Lit(Word(64), 0))).lower(ETm::plain_world(), echo_g(), echo_locs(), 1)) = False { refl }

@@ -66,14 +66,17 @@ import function_ir_eval;
 // Encodings: what a port holds for a value of a code.
 
 // A record's field at one port: a word at its width, a bit as the one-bit
-// word `ofBool`. A byte buffer has no port's worth of value (`Fold`'s round
-// gives it a buffer), and a record field of a record type is refused, so
-// neither holds.
+// word `ofBool`. A byte buffer is not in the valuation at all: it is held by
+// its id in the buffer file, which the effectful layer relates
+// (`rt_io_lower`'s `LocsHold`), and no region this lowering builds reads one
+// (byte primitives and `Fold` lower to `None`), so the valuation asks
+// nothing of it. A record field of a record type is refused, so it never
+// holds.
 fn Ty::FlatHolds(self t: Ty, values: Valuation(), port: Nat) → t.Flat() → Type {
     match t {
         Word(w) => λ v => values(w, port) = v,
         Bit => λ v => values(1, port) = BitVec::ofBool(v),
-        Bytes(_) => λ _ => False,
+        Bytes(_) => λ _ => True,
         Lines => λ _ => False,
         Named(_) => λ _ => False,
         Count => λ n => values(64, port).toNat() = n,
@@ -91,12 +94,13 @@ fn Ty::FieldsHold(fs: List<Ty>, values: Valuation()) → Nat → Ty::Flats(fs) �
 
 // A word at its width; a bit as the one-bit word `ofBool`, which is what a
 // comparison node writes and what a conditional reads (its head bit); a
-// record as its fields from the port on. Byte buffers have none yet.
+// record as its fields from the port on. A byte buffer asks nothing of the
+// valuation: it lives in the buffer file (`FlatHolds`).
 fn Ty::Holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat) → t.sem(tys) → Type {
     match t {
         Word(w) => λ v => values(w, port) = v,
         Bit => λ v => values(1, port) = BitVec::ofBool(v),
-        Bytes(_) => λ _ => False,
+        Bytes(_) => λ _ => True,
         Lines => λ _ => False,
         Named(i) => λ v => Ty::FieldsHold(tys(i).fields, values, port, tys(i).get(v)),
         // A count as the word it is the `toNat` of.
