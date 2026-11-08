@@ -1,0 +1,404 @@
+// A source's statements read against a world, threaded: what a loop-free
+// statement does to the capability `Io` and to the environment, as a plain
+// function, and that its tree reads as that function at every world
+// (docs/effects-capabilities-design.md §8.5; issues/effects-uniqueness-surface.md,
+// slice 4).
+//
+// `Stmt::denote_co` is a tree over Linux's calls. A lowering from effectful
+// `rt` (`rt_io_lower`) proves its statements agree with a computation's
+// meaning, which is world threading (`ETm::sem`, `Io → Mutated<Io, R>`).
+// The two meet here, once and for every source: `Stmt::thread` is the
+// world-threading meaning of a loop-free statement (`Stmt::straight`), and
+// `Stmt::reads_thread` is `Io::Reads` of its tree against it. So a
+// lowering's `sound` is a statement about `thread`, an ordinary function of
+// the environment and the world, with no tree and no coinduction in it.
+//
+// The cases are the reading's construct by construct: a region and an
+// argument are `Io::reads_ret`, a call is the world answering it one silent
+// step away (as `Io::reads_trigger`), `Then` is `Io::reads_bind`, a branch
+// is the arm the bit picks. A loop needs `Io::reads_iter` and a `Partial`
+// meaning, so `thread` is the loop-free fragment, which is what the
+// lowering emits until computations have loops.
+import logic;
+import nat;
+import list;
+import option;
+import bool;
+import bitvec;
+import itree;
+import coitree;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import native_source;
+import native_source_co;
+
+// A statement with no loop and no procedure call.
+fn Stmt::straight(self s: Stmt) → Bool {
+    match s {
+        Compute(_) => True,
+        Invoke(_) => True,
+        Then(first, rest) => first.straight() && rest.straight(),
+        Branch(_, yes, no) => yes.straight() && no.straight(),
+        Repeat(_, _) => False,
+        Exit(_) => True,
+        Arg(_, _, _) => True,
+        Perform(_, _, _) => False,
+    }
+}
+
+// A loop-free statement as world threading: each call put to the world, its
+// answer decoded into the environment. A loop or a procedure call (which
+// `straight` refuses) does nothing.
+fn Stmt::thread(self s: Stmt, call: Answers(), env: Env, io: Io) → Mutated<Io, Flow> {
+    match s {
+        Compute(region) => Mutated(io, Onward(env.compute(call, region))),
+        Invoke(shape) => Mutated(Io::call(io, shape.cmd(env)).after, Onward(shape.answer(env, Io::call(io, shape.cmd(env)).value))),
+        Then(first, rest) => {
+            let m = Stmt::thread(first, call, env, io);
+            match m.value {
+                Onward(next) => Stmt::thread(rest, call, next, m.after),
+                Exited(status) => Mutated(m.after, Exited(status)),
+            }
+        },
+        Branch(condition, yes, no) => match env.bit(condition) {
+            True => Stmt::thread(yes, call, env, io),
+            False => Stmt::thread(no, call, env, io),
+        },
+        Repeat(_, _) => Mutated(io, Onward(env)),
+        Exit(status) => Mutated(io, Exited(env.word(status))),
+        Arg(index, buf, len) => Mutated(io, Onward(env.arg(env.number(index), buf, len))),
+        Perform(_, _, _) => Mutated(io, Onward(env)),
+    }
+}
+
+// The rest of a `Then`, from where the first statement left the world.
+fn Stmt::then_thread(rest: Stmt, call: Answers(), m: Mutated<Io, Flow>) → Mutated<Io, Flow> {
+    match m.value {
+        Onward(next) => Stmt::thread(rest, call, next, m.after),
+        Exited(status) => Mutated(m.after, Exited(status)),
+    }
+}
+
+// The continuation `Then` binds, read as world threading in `Partial`.
+fn Stmt::then_co(rest: Stmt, call: Answers(), flow: Flow, io: Io) → Partial(Mutated<Io, Flow>) {
+    match flow {
+        Onward(next) => CRet(Stmt::thread(rest, call, next, io)),
+        Exited(status) => CRet(Mutated(io, Exited(status))),
+    }
+}
+
+theorem Stmt::then_co_ret(rest: Stmt, call: Answers(), m: Mutated<Io, Flow>):
+    Stmt::then_co(rest, call, m.value, m.after) = CRet(Stmt::then_thread(rest, call, m)) {
+    match m.value as λ f => (match f as λ _ => Partial(Mutated<Io, Flow>) {
+            Onward(next) => CRet(Stmt::thread(rest, call, next, m.after)),
+            Exited(status) => CRet(Mutated(m.after, Exited(status))),
+        }) = CRet(match f as λ _ => Mutated<Io, Flow> { Onward(next) => Stmt::thread(rest, call, next, m.after), Exited(status) => Mutated(m.after, Exited(status)) }) {
+        Onward(_) => refl,
+        Exited(_) => refl,
+    }
+}
+
+// The theorem: a loop-free statement's tree, read against any world, is its
+// threading, up to the silent steps the reading takes for calls.
+fn Stmt::reads_thread(self s: Stmt, call: Answers(), perform: PerformsCo()) →
+    s.straight().IsTrue() → (env: Env) → Io::Reads(s.denote_co(call, perform)(env), λ io => CRet(Stmt::thread(s, call, env, io)))
+{
+    match s {
+        Compute(region) => λ _ env => Io::reads_ret(Onward(env.compute(call, region))),
+        Invoke(shape) => λ _ env io => ERet(1, 0, Stmt::thread(Invoke(shape), call, env, io), refl, refl),
+        Then(first, rest) => λ ok env => {
+            let parts = Bool::is_true_and(first.straight(), rest.straight(), ok);
+            let h = λ (flow: Flow) => match flow as λ _ => CoTree<Flow>(Events::linux()) {
+                Onward(next) => rest.denote_co(call, perform)(next),
+                Exited(status) => CRet(Exited(status)),
+            };
+            let rh: (flow: Flow) → Io::Reads(h(flow), λ io => Stmt::then_co(rest, call, flow, io)) = λ flow => match flow as λ f =>
+                    Io::Reads(match f as λ _ => CoTree<Flow>(Events::linux()) {
+                        Onward(next) => rest.denote_co(call, perform)(next),
+                        Exited(status) => CRet(Exited(status)),
+                    }, λ io => Stmt::then_co(rest, call, f, io)) {
+                Onward(next) => rest.reads_thread(call, perform, parts.right, next),
+                Exited(status) => Io::reads_ret(Exited(status)),
+            };
+            let bound = Io::reads_bind(first.denote_co(call, perform)(env), λ io => CRet(Stmt::thread(first, call, env, io)), h,
+                λ flow io => Stmt::then_co(rest, call, flow, io), first.reads_thread(call, perform, parts.left, env), rh);
+            λ io => Eutt::trans(Events::none(), Io::against_co(Stmt::denote_co(Then(first, rest), call, perform)(env), io),
+                CoTree::bind<Mutated<Io, Flow>, Mutated<Io, Flow>>(Events::none(), CRet(Stmt::thread(first, call, env, io)), λ m => Stmt::then_co(rest, call, m.value, m.after)),
+                CRet(Stmt::thread(Then(first, rest), call, env, io)),
+                bound(io),
+                j(Stmt::then_co_ret(rest, call, Stmt::thread(first, call, env, io)),
+                    λ y _ => Eutt<Mutated<Io, Flow>>(Events::none(),
+                        CoTree::bind<Mutated<Io, Flow>, Mutated<Io, Flow>>(Events::none(), CRet(Stmt::thread(first, call, env, io)), λ m => Stmt::then_co(rest, call, m.value, m.after)), y),
+                    Eutt::bind_ret_l<Mutated<Io, Flow>, Mutated<Io, Flow>>(Events::none(), Stmt::thread(first, call, env, io), λ m => Stmt::then_co(rest, call, m.value, m.after))))
+        },
+        Branch(condition, yes, no) => λ ok env => {
+            let parts = Bool::is_true_and(yes.straight(), no.straight(), ok);
+            match env.bit(condition) as λ b => Io::Reads(
+                    match b as λ _ => CoTree<Flow>(Events::linux()) {
+                        True => yes.denote_co(call, perform)(env),
+                        False => no.denote_co(call, perform)(env),
+                    },
+                    λ io => CRet(match b as λ _ => Mutated<Io, Flow> { True => Stmt::thread(yes, call, env, io), False => Stmt::thread(no, call, env, io) })) {
+                True => yes.reads_thread(call, perform, parts.left, env),
+                False => no.reads_thread(call, perform, parts.right, env),
+            }
+        },
+        Repeat(_, _) => λ never => false_elim(never),
+        Exit(status) => λ _ env => Io::reads_ret(Exited(env.word(status))),
+        Arg(index, buf, len) => λ _ env => Io::reads_ret(Onward(env.arg(env.number(index), buf, len))),
+        Perform(_, _, _) => λ never => false_elim(never),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The environment's files, read after a write
+
+// A file's entry `k`, or `d` past its end: `Env::number` with `d` zero,
+// `Env::buffer` with `d` empty.
+fn List::read_or<A>(self xs: List<A>, k: Nat, d: A) → A {
+    match xs.nth(k) { None => d, Some(y) => y }
+}
+
+theorem List::put_here<A>(i: Nat): (xs: List<A>) → (x: A) → (d: A) → xs.put(i, x, d).read_or(i, d) = x {
+    match i {
+        Zero => λ xs x d => match xs as λ ys => ys.put(Zero, x, d).read_or(Zero, d) = x { Nil => refl, Cons(_, _) => refl },
+        Succ(k) => λ xs x d => match xs as λ ys => ys.put(Succ(k), x, d).read_or(Succ(k), d) = x {
+            Nil => List::put_here(k, Nil, x, d),
+            Cons(_, rest) => List::put_here(k, rest, x, d),
+        },
+    }
+}
+
+theorem List::put_other<A>(i: Nat): (xs: List<A>) → (x: A) → (d: A) → (k: Nat) → k ≠ i → xs.put(i, x, d).read_or(k, d) = xs.read_or(k, d) {
+    match i {
+        Zero => λ xs x d k => match k as λ k2 => k2 ≠ Zero → xs.put(Zero, x, d).read_or(k2, d) = xs.read_or(k2, d) {
+            Zero => λ ne => false_elim(ne(refl)),
+            Succ(k2) => λ _ => match xs as λ ys => ys.put(Zero, x, d).read_or(Succ(k2), d) = ys.read_or(Succ(k2), d) {
+                Nil => refl,
+                Cons(_, _) => refl,
+            },
+        },
+        Succ(i2) => λ xs x d k => match k as λ k2 => k2 ≠ Succ(i2) → xs.put(Succ(i2), x, d).read_or(k2, d) = xs.read_or(k2, d) {
+            Zero => λ _ => match xs as λ ys => ys.put(Succ(i2), x, d).read_or(Zero, d) = ys.read_or(Zero, d) { Nil => refl, Cons(_, _) => refl },
+            Succ(k2) => λ ne => match xs as λ ys => ys.put(Succ(i2), x, d).read_or(Succ(k2), d) = ys.read_or(Succ(k2), d) {
+                Nil => List::put_other(i2, Nil, x, d, k2, λ e => ne(cong_fn(λ (n: Nat) => Succ(n), e))),
+                Cons(_, rest) => List::put_other(i2, rest, x, d, k2, λ e => ne(cong_fn(λ (n: Nat) => Succ(n), e))),
+            },
+        },
+    }
+}
+
+theorem Env::number_set_here(self env: Env, id: Nat, word: BitVec(64)): env.set_word(id, word).number(id) = word.toNat() {
+    List::put_here(id, env.words, word.toNat(), 0)
+}
+
+theorem Env::number_set_other(self env: Env, id: Nat, word: BitVec(64), k: Nat, ne: k ≠ id): env.set_word(id, word).number(k) = env.number(k) {
+    List::put_other(id, env.words, word.toNat(), 0, k, ne)
+}
+
+theorem Env::buffer_set_here(self env: Env, b: Nat, bytes: List<BitVec(8)>): env.set_buffer(b, bytes).buffer(b) = bytes {
+    List::put_here(b, env.buffers, bytes, Nil)
+}
+
+theorem Env::buffer_set_other(self env: Env, b: Nat, bytes: List<BitVec(8)>, k: Nat, ne: k ≠ b): env.set_buffer(b, bytes).buffer(k) = env.buffer(k) {
+    List::put_other(b, env.buffers, bytes, Nil, k, ne)
+}
+
+// ---------------------------------------------------------------------------
+// What a region leaves in the environment (`Env::compute`)
+
+fn Port::ids(ports: List<Port>) → List<Nat> {
+    match ports { Nil => Nil, Cons(p, rest) => Cons(p.id, Port::ids(rest)) }
+}
+
+theorem Port::ids_append(xs: List<Port>, ys: List<Port>): Port::ids(xs ++ ys) = Port::ids(xs) ++ Port::ids(ys) {
+    match xs {
+        Nil => refl,
+        Cons(p, rest) => cong_fn(λ (l: List<Nat>) => Cons(p.id, l), Port::ids_append(rest, ys)),
+    }
+}
+
+theorem absent_join(id: Nat, xs, ys: List<Nat>): absent(id, xs).IsTrue() → absent(id, ys).IsTrue() → absent(id, xs ++ ys).IsTrue() {
+    match xs {
+        Nil => λ _ h => h,
+        Cons(x, rest) => λ h hy => {
+            let parts = Bool::is_true_and(id.differs(x), absent(id, rest), h);
+            Bool::is_true_and_intro(id.differs(x), absent(id, rest ++ ys), parts.left, absent_join(id, rest, ys, parts.right, hy))
+        },
+    }
+}
+
+// Settling keeps the buffers and the command line.
+theorem Env::settle_buffers(after: Valuation(), ports: List<Port>): (env: Env) → env.settle(after, ports).buffers = env.buffers {
+    match ports {
+        Nil => λ env => refl,
+        Cons(port, rest) => λ env => Env::settle_buffers(after, rest, Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers, env.args)),
+    }
+}
+
+// A word no port names keeps its number.
+theorem Env::settle_other(after: Valuation(), id: Nat, ports: List<Port>): (env: Env) → absent(id, Port::ids(ports)).IsTrue() →
+    env.settle(after, ports).number(id) = env.number(id) {
+    match ports {
+        Nil => λ env _ => refl,
+        Cons(port, rest) => λ env h => {
+            let parts = Bool::is_true_and(id.differs(port.id), absent(id, Port::ids(rest)), h);
+            let first = Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers, env.args);
+            trans(Env::settle_other(after, id, rest, first, parts.right),
+                List::put_other(port.id, env.words, after(port.width, port.id).toNat(), 0, id, id.differs_ne(port.id, parts.left)))
+        },
+    }
+}
+
+// The last port settled is the word it was written at.
+theorem Env::settle_last(after: Valuation(), p: Port, ports: List<Port>): (env: Env) →
+    env.settle(after, ports ++ [p]).number(p.id) = after(p.width, p.id).toNat() {
+    match ports {
+        Nil => λ env => List::put_here(p.id, env.words, after(p.width, p.id).toNat(), 0),
+        Cons(port, rest) => λ env => Env::settle_last(after, p, rest, Env(env.words.put(port.id, after(port.width, port.id).toNat(), 0), env.buffers, env.args)),
+    }
+}
+
+// A region with no byte node and no loop: it runs as it evaluates, and
+// leaves the buffers as they were.
+fn StructuredRegion::byte_free(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(body) => nodes_pure(body.nodes),
+        Sequence(prefix, continuation) => nodes_pure(prefix.nodes) && continuation.byte_free(),
+        Compose(prefix, continuation) => prefix.byte_free() && continuation.byte_free(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.byte_free() && when_false.byte_free(),
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, _, _, _, _, _) => False,
+    }
+}
+
+theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Answers()): region.byte_free().IsTrue() →
+    (values: Valuation()) → (buffers: Buffers()) → region.run(call, values, buffers) = State(region.eval(call, values), buffers) {
+    match region {
+        Dataflow(body) => λ free values buffers => run_nodes_pure(body.nodes, free, values, buffers),
+        Sequence(prefix, continuation) => λ free values buffers => {
+            let parts = Bool::is_true_and(nodes_pure(prefix.nodes), continuation.byte_free(), free);
+            j(sym(run_nodes_pure(prefix.nodes, parts.left, values, buffers)),
+                λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, eval_nodes(prefix.nodes, values)), buffers),
+                continuation.run_byte_free(call, parts.right, eval_nodes(prefix.nodes, values), buffers))
+        },
+        Compose(prefix, continuation) => λ free values buffers => {
+            let parts = Bool::is_true_and(prefix.byte_free(), continuation.byte_free(), free);
+            j(sym(prefix.run_byte_free(call, parts.left, values, buffers)),
+                λ s _ => continuation.run(call, s.values, s.buffers) = State(continuation.eval(call, prefix.eval(call, values)), buffers),
+                continuation.run_byte_free(call, parts.right, prefix.eval(call, values), buffers))
+        },
+        Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ free values buffers => {
+            let parts = Bool::is_true_and(when_true.byte_free(), when_false.byte_free(), free);
+            let b = values(1, condition).head_bit();
+            let same_either: ((match b as λ _ => Buffers() { False => buffers, True => buffers }) = buffers) =
+                match b { False => refl, True => refl };
+            j(sym(when_false.run_byte_free(call, parts.right, values, buffers)), λ f _ => State(λ w id => match b {
+                        False => f.values(w, id),
+                        True => when_true.run(call, values, buffers).values(w, id),
+                    }, match b { False => f.buffers, True => when_true.run(call, values, buffers).buffers }) =
+                    State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), buffers),
+                j(sym(when_true.run_byte_free(call, parts.left, values, buffers)), λ t _ => State(λ w id => match b {
+                            False => when_false.eval(call, values)(w, id),
+                            True => t.values(w, id),
+                        }, match b { False => buffers, True => t.buffers }) =
+                        State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), buffers),
+                    cong_fn<Buffers(), State>(λ held => State(Conditional(inputs, condition, arguments, outputs, when_true, when_false).eval(call, values), held),
+                        same_either)))
+        },
+        Call(_, _, _) => λ _ values buffers => refl,
+        Loop(_, _, _, _, _, _, _, _, _) => λ never => false_elim(never),
+    }
+}
+
+theorem nodes_write_ids(nodes: List<Node>): Port::ids(nodes_write_ports(nodes)) = nodes_writes(nodes) {
+    match nodes {
+        Nil => refl,
+        Cons(node, rest) => cong_fn(λ (l: List<Nat>) => Cons(node_output(node).id, l), nodes_write_ids(rest)),
+    }
+}
+
+theorem word_port_ids(ids: List<Nat>): Port::ids(word_ports(ids)) = ids {
+    match ids {
+        Nil => refl,
+        Cons(id, rest) => cong_fn(λ (l: List<Nat>) => Cons(id, l), word_port_ids(rest)),
+    }
+}
+
+// What a run writes is among what the region names as written.
+theorem StructuredRegion::written_within(self region: StructuredRegion, call: Answers()): (values: Valuation()) → (buffers: Buffers()) →
+    (id: Nat) → absent(id, region.writes()).IsTrue() → absent(id, Port::ids(region.written(call, values, buffers))).IsTrue() {
+    match region {
+        Dataflow(body) => λ values buffers id h => j(sym(nodes_write_ids(body.nodes)), λ l _ => absent(id, l).IsTrue(), h),
+        Sequence(prefix, continuation) => λ values buffers id h => {
+            let parts = absent_append(id, nodes_writes(prefix.nodes), continuation.writes(), h);
+            let after = run_nodes(prefix.nodes, values, buffers);
+            j(sym(Port::ids_append(nodes_write_ports(prefix.nodes), continuation.written(call, after.values, after.buffers))),
+                λ l _ => absent(id, l).IsTrue(),
+                absent_join(id, Port::ids(nodes_write_ports(prefix.nodes)), Port::ids(continuation.written(call, after.values, after.buffers)),
+                    j(sym(nodes_write_ids(prefix.nodes)), λ l _ => absent(id, l).IsTrue(), parts.left),
+                    continuation.written_within(call, after.values, after.buffers, id, parts.right)))
+        },
+        Compose(prefix, continuation) => λ values buffers id h => {
+            let parts = absent_append(id, prefix.writes(), continuation.writes(), h);
+            let after = prefix.run(call, values, buffers);
+            j(sym(Port::ids_append(prefix.written(call, values, buffers), continuation.written(call, after.values, after.buffers))),
+                λ l _ => absent(id, l).IsTrue(),
+                absent_join(id, Port::ids(prefix.written(call, values, buffers)), Port::ids(continuation.written(call, after.values, after.buffers)),
+                    prefix.written_within(call, values, buffers, id, parts.left),
+                    continuation.written_within(call, after.values, after.buffers, id, parts.right)))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ values buffers id h => {
+            let parts = absent_append(id, when_true.writes(), when_false.writes(), h);
+            match values(1, condition).head_bit() as λ b => absent(id, Port::ids(match b as λ _ => List<Port> {
+                    False => when_false.written(call, values, buffers),
+                    True => when_true.written(call, values, buffers),
+                })).IsTrue() {
+                False => when_false.written_within(call, values, buffers, id, parts.right),
+                True => when_true.written_within(call, values, buffers, id, parts.left),
+            }
+        },
+        Call(_, _, _) => λ values buffers id h => h,
+        Loop(_, _, _, _, _, _, _, outputs, exhausted) => λ values buffers id h => {
+            let parts = Bool::is_true_and(id.differs(exhausted), absent(id, outputs), h);
+            j(sym(Port::ids_append(word_ports(outputs), [Port(exhausted, 1)])), λ l _ => absent(id, l).IsTrue(),
+                absent_join(id, Port::ids(word_ports(outputs)), [exhausted],
+                    j(sym(word_port_ids(outputs)), λ l _ => absent(id, l).IsTrue(), parts.right),
+                    Bool::is_true_and_intro(id.differs(exhausted), True, parts.left, trivial)))
+        },
+    }
+}
+
+// A byte-free region keeps the buffers.
+theorem Env::compute_buffers(self env: Env, call: Answers(), region: StructuredRegion, free: region.byte_free().IsTrue()):
+    env.compute(call, region).buffers = env.buffers {
+    let after = region.run(call, env.valuation(), env.buffers);
+    trans(Env::settle_buffers(after.values, region.written(call, env.valuation(), env.buffers), Env(env.words, after.buffers, env.args)),
+        cong_fn(λ (s: State) => s.buffers, region.run_byte_free(call, free, env.valuation(), env.buffers)))
+}
+
+// A word the region does not name as written keeps its number.
+theorem Env::compute_other(self env: Env, call: Answers(), region: StructuredRegion, id: Nat, h: absent(id, region.writes()).IsTrue()):
+    env.compute(call, region).number(id) = env.number(id) {
+    let after = region.run(call, env.valuation(), env.buffers);
+    Env::settle_other(after.values, id, region.written(call, env.valuation(), env.buffers), Env(env.words, after.buffers, env.args),
+        region.written_within(call, env.valuation(), env.buffers, id, h))
+}
+
+// A byte-free region followed by a move to `out`: `out` holds the moved
+// port's value, at the move's width.
+theorem Env::compute_moved(self env: Env, call: Answers(), region: StructuredRegion, free: region.byte_free().IsTrue(), width, out, src: Nat):
+    env.compute(call, Compose(region, Dataflow(Region(Ports(Nil), [Move(width, out, src)], Ports(Nil))))).number(out) =
+        region.eval(call, env.valuation())(width, src).toNat() {
+    let after = region.run(call, env.valuation(), env.buffers);
+    let moved = Valuation::set(after.values, out, λ wd => after.values(wd, src));
+    trans(Env::settle_last(moved, Port(out, width), region.written(call, env.valuation(), env.buffers), Env(env.words, after.buffers, env.args)),
+        trans(cong_fn(λ (x: BitVec(width)) => x.toNat(), Valuation::set_here(after.values, out, λ wd => after.values(wd, src), width)),
+            cong_fn(λ (s: State) => s.values(width, src).toNat(), region.run_byte_free(call, free, env.valuation(), env.buffers))))
+}

@@ -401,7 +401,10 @@ In order:
    through N1's lowering, `Invoke`s become `Invoke` statements, and loops
    holding `Invoke`s become `Repeat`. `sound` is `Io::Reads` of the
    source's tree against the reflected meaning, by `reads_bind` and the loop
-   lemma.
+   lemma. *Built for computations with no loop (§8.5, slice 4):*
+   `ETm::lower` in `lib/native/runtime/rt_io_lower.hthr` and
+   `ETm::lower_reads`, `Io::Reads` of the lowered tree against `ETm::sem`.
+   Branches and `ERepeat` remain (§8.4).
 3. **Linearity** as a clause of the default judgment (§5). *Built with
    the reflector (§8.3):* no `ETm` names the world, so the clause is the
    reflector's refusals at the call.
@@ -546,3 +549,54 @@ What the build found and decided:
 - **Callees.** An effectful callee (`EFun` calling `EFun`) is not modelled;
   `ETm::plain_world()` is the world with no callees.
 
+### 8.5 Lowering to a `Source` (slice 4)
+
+`ETm::lower(w, g, locs, next)` (`lib/native/runtime/rt_io_lower.hthr`)
+turns a computation into `Source` statements: each pure value (a `Pure`, a
+`Let`'s bound term) is the pure lowering's region (`Tm::lower`) followed by
+a move of its one result port to a fresh word, each `Invoke` an `Invoke`
+statement whose `CallShape` names the words and buffers holding its
+operands, and sequencing `Then`. It returns the statements, the word the
+value lands in, and the next fresh word; `None` is a refusal.
+
+**Where variables live.** A layout (`Loc`, one per variable) places each
+word or bit in a word of the environment, held as the number it is the
+`toNat` of, and each byte buffer in a buffer of the file. A read fills its
+buffer in place, so after it every variable that named that buffer is
+`Gone`, and the lowering refuses a gone variable: the call's uniqueness
+fact is decided at the lowering, not assumed. A buffer bound by a pure
+`Let` has no word to live in and is refused too.
+
+**The meaning of loop-free statements.** `Stmt::thread`
+(`lib/native/native_source_io.hthr`) runs straight statements against a
+world: each `Invoke` put to the world (`Io::call`) and its answer landed as
+`Env::invoke` lands it. `Stmt::reads_thread` proves once that a straight
+statement's coinductive tree reads as `thread` at every world, by
+`reads_bind` and `reads_ret`.
+
+**Soundness, once.** `ETm::lower_sound`, by induction over `ETm`: from any
+environment holding the variables at their locations and any world, the
+lowered statements' threading leaves the world `ETm::sem` leaves and the
+meaning's value in the result word. Composed with `reads_thread` it is
+`ETm::lower_reads`: the lowered tree, mapped through the result word's
+read-back, reads as `ETm::sem` at every world, up to silent steps. Each
+pure step uses `Tm::lower_sound` at the environment's valuation plus three
+checks the lowering decides and the proof uses once: the region has no
+byte node or loop (`byte_free`, so it evaluates as it runs and keeps the
+buffers), it writes no live variable's word, and the value is one word or
+bit.
+
+**A decision in `rt_lower`.** `Ty::Holds` and `Ty::FlatHolds` at `Bytes`
+are `True` (they were `False`): a buffer lives in the buffer file, so the
+pure valuation asks nothing of it. No pure theorem depended on the old
+value; it only made every environment with a buffer variable unusable.
+
+**Probes** (`lib/_tests/native/runtime/rt_io_lower_tests.hthr`): echo (read
+into the caller's buffer, write what came back) lowers, runs "hi" through a
+piped world to stdout, and `lower_reads` instantiated at it says its tree
+reads as the surface method `Io::echo_lowered` at every world. A
+three-call open/read/close lowers; a write naming the buffer as it was
+before the read, and a buffer bound by a pure `Let`, are refused.
+
+**Left.** Branches over the world and loops (§8.4); the lowering is not yet
+what a `runtime fn` setup publishes, which is item 4's `main`.
