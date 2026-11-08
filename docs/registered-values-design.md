@@ -72,7 +72,10 @@ register def mono_rat_rules: MonoEntry = MonoRules(name_of(Rat::Le), [
 
 A carrier's laws may arrive in several entries, each where its lemmas are:
 `big_operator` adds the sums' laws for `Nat`, `Int` and the located classes,
-because `Int::range_le` lives there and not in `int`. `mono` concatenates
+because `Int::range_le` lives there and not in `int`. `Int`'s whole table
+is there too: `int` sits below `string` and the tactics, and importing the
+entry types would put `string` in the closure of nearly every module.
+`Nat`'s is in `mono_laws` itself. `mono` concatenates
 the entries for one carrier in the registry's order. It still applies the
 first law that covers a goal, so an operation's laws stay in one entry.
 
