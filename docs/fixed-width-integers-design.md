@@ -187,7 +187,10 @@ at.
   `⁻¹` there asks for apartness, and whether `a / b` should too, or read the
   total `recip`, is a choice of its own.
 - ~~**Division laws.**~~ Done 2026-11-06 (§4.2).
-- **Native lowering of `SInt`.** The native frontend reads `BitVec` words;
-  an `SInt` field is one record level above them.
-  `issues/sint-native-lowering.md`.
+- ~~**Native lowering of `SInt`.**~~ Done 2026-11-08 through a `datarepr`
+  per width (`I64` for `SInt(64)`, `sint.hthr`): a `runtime fn` over `i64`
+  passes it in the 64-bit word a `u64` takes, `lt_bit` and `shift_right`
+  reflecting as the signed ops (docs/runtime-fn-setups-design.md §16.13).
+  Sign extension and signed division are
+  `issues/runtime-signed-extend-divide.md`.
 - ~~**Display.**~~ Done: §2.1, `issues/type-name-display-respelling.md`.

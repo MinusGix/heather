@@ -50,6 +50,12 @@ record PrimEntry { g: Nat, p: Prim }
 
 record RecEntry { g: Nat }
 
+// A type the program holds by its `datarepr` (docs/runtime-fn-setups-design.md
+// §16.13): the repr's global (what `Repr` answers for the type), its `abs`
+// and `emb`, and the type itself. Its code is `Named(recs.len() + i)`, `i`
+// its place among the program's reprs.
+record ReprEntry { repr: Nat, abs: Nat, emb: Nat, ty: Handle }
+
 // A call on Linux an effectful body has made (`rt_io_reflect`,
 // docs/effects-capabilities-design.md §8.3), as the reflector reads its
 // answer back: its place on the world chain (the first call is 0), the
@@ -92,10 +98,21 @@ record Known {
     nat: Nat,
     // The recursion the walk is inside, if any.
     recursion: Option<SelfCall>,
+    // The types the program holds by their `datarepr`, after `recs` in the
+    // type table.
+    reprs: List<ReprEntry>,
 }
 
 fn Known::within(self k: Known, sc: SelfCall) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc))
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs)
+}
+
+fn Known::with_reprs(self k: Known, rs: List<ReprEntry>) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs)
+}
+
+fn Known::repr_at(rs: List<ReprEntry>, g: Nat, i: Nat) → Option<Nat> {
+    match rs { Nil => None, Cons(r, rest) => match r.repr.same(g) { True => Some(i), False => Known::repr_at(rest, g, Succ(i)) } }
 }
 
 // Whether a local is the recursion's.
@@ -243,6 +260,57 @@ fn Known::is_bytes(self k: Known, h: Handle) → Tac<Bool> {
     }
 }
 
+// A type held by its `datarepr`: its place among the program's reprs, after
+// its records. A type with a repr the program was not given is refused with
+// that reason (the generator gives the reprs of the function's signature).
+fn Known::repr_ty(self k: Known, h: Handle, name: String) → Tac<Ty> {
+    let none = "`" ++ name ++ "` has no runtime layout under the reflected fragment";
+    match k.reprs {
+        Nil => rt_refuse(none),
+        Cons(_, _) => repr_of(h).bind(λ c => match c {
+            Refused(_) => rt_refuse(none),
+            Accepted(r) => view(r).bind(λ v => match v {
+                HGlobal(rg, rname, _) => match Known::repr_at(k.reprs, rg.id, 0) {
+                    Some(i) => pure(Named(k.recs.len() + i)),
+                    None => rt_refuse("`" ++ name ++ "` is held by its datarepr `" ++ rname ++ "`, which the function's signature does not name: a repr'd type is reflected only where a parameter or the result has it (issues/runtime-repr-inner-types.md)"),
+                },
+                _ => rt_refuse(none),
+            }),
+        }),
+    }
+}
+
+// Whether a node's type is one the program holds by its `datarepr`
+// (never failing: a node whose type has no layout is not).
+fn Known::is_repr_typed(self k: Known, h: Handle) → Tac<Bool> {
+    match k.reprs {
+        Nil => pure(False),
+        Cons(_, _) => infer(Hd(h)).bind(λ c => match c {
+            Refused(_) => pure(False),
+            Accepted(t) => view(t).bind(λ v => match v {
+                HGlobal(g, _, _) => match Known::rec(k.recs, g.id, 0) {
+                    Some(_) => pure(False),
+                    None => repr_of(t).bind(λ rc => match rc {
+                        Refused(_) => pure(False),
+                        Accepted(r) => view(r).bind(λ rv => match rv {
+                            HGlobal(rg, _, _) => pure(match Known::repr_at(k.reprs, rg.id, 0) { Some(_) => True, None => False }),
+                            _ => pure(False),
+                        }),
+                    }),
+                },
+                _ => pure(False),
+            }),
+        }),
+    }
+}
+
+fn Known::any_repr_typed(self k: Known, hs: List<Handle>) → Tac<Bool> {
+    match hs {
+        Nil => pure(False),
+        Cons(h, rest) => k.is_repr_typed(h).bind(λ b => match b { True => pure(True), False => k.any_repr_typed(rest) }),
+    }
+}
+
 fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
     view(h).bind(λ v => match v {
         HGlobal(g, name, args) => match g.id.same(k.nat) {
@@ -269,7 +337,7 @@ fn Known::ty(self k: Known, h: Handle) → Tac<Ty> {
                     },
                     False => match Known::rec(k.recs, g.id, 0) {
                         Some(i) => pure(Named(i)),
-                        None => rt_refuse("`" ++ name ++ "` has no runtime layout under the reflected fragment"),
+                        None => k.repr_ty(h, name),
                     },
                 },
             },
@@ -625,6 +693,54 @@ fn rt_fuel_match(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, m: MatchIn
     }
 }
 
+// Whether `name` is a field of a repr'd record `r`.
+fn Known::is_field_of_repr(self k: Known, r: Handle, name: String) → Tac<Bool> {
+    let held <- k.is_repr_typed(r);
+    match held {
+        False => pure(False),
+        True => infer(Hd(r)).bind(λ c => match c {
+            Refused(_) => pure(False),
+            Accepted(rty) => ctors(rty).bind(λ cc => match cc {
+                Accepted(cs) => match cs {
+                    Cons(ci, _) => pure(match Known::field(rt_field_names(ci.fields), name, 0) { Some(_) => True, None => False }),
+                    Nil => pure(False),
+                },
+                Refused(_) => pure(False),
+            }),
+        }),
+    }
+}
+
+// An operation on a type the program holds by its repr (`SInt::add`, design
+// §16.13), read through its definition: its one-step unfolding, which
+// builds the record from operations on the carrier's words. `None` for a
+// global that touches no repr'd type, or a field of one (read as a field),
+// which the walk reads as before.
+fn rt_transfer(k: Known, h: Handle, name: String, args: List<Handle>) → Tac<Option<Handle>> {
+    match k.reprs {
+        Nil => pure(None),
+        Cons(_, _) => {
+            let field <- match args {
+                Cons(r, Nil) => k.is_field_of_repr(r, name),
+                _ => pure(False),
+            };
+            match field {
+                True => pure(None),
+                False => {
+                    let touches <- k.any_repr_typed(Cons(h, args));
+                    match touches {
+                        False => pure(None),
+                        True => unfold(h).bind(λ c => match c {
+                            Accepted(u) => pure(Some(u)),
+                            Refused(why) => rt_refuse("`" ++ name ++ "` on a type held by its repr could not be read through its definition: " ++ why),
+                        }),
+                    }
+                },
+            }
+        },
+    }
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -722,13 +838,16 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                     },
                     None => rt_callee(k, st, g, name).bind(λ found => match found {
                         Some(si) => RSt::operands(λ s a => rt_go(f, k, s, a, True), si.fst, args).bind(λ r => pure(r.fst.finish(h, operand, Call(si.snd, r.snd)))),
-                        None => match args {
-                            Cons(r, rest) => match rest {
-                                Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
-                                Cons(_, _) => rt_unknown(name),
+                        None => rt_transfer(k, h, name, args).bind(λ moved => match moved {
+                            Some(u) => rt_go(f, k, st, u, operand),
+                            None => match args {
+                                Cons(r, rest) => match rest {
+                                    Nil => rt_field(f, k, st, h, operand, r, name, λ s a => rt_go(f, k, s, a, True)),
+                                    Cons(_, _) => rt_unknown(name),
+                                },
+                                Nil => rt_constant(k, g, name).bind(λ c => rt_go(f, k, st, c, operand)),
                             },
-                            Nil => rt_constant(k, g, name).bind(λ c => rt_go(f, k, st, c, operand)),
-                        },
+                        }),
                     }),
                 },
                 HField(r, name, args) => match args {
@@ -758,7 +877,14 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         }),
                         False => match Known::rec(k.recs, ty.id, 0) {
                         Some(ri) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
-                        None => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
+                        // A record held by its repr: its code is its type's.
+                        None => k.is_repr_typed(h).bind(λ held => match held {
+                            True => k.ty_of(h).bind(λ t => match t {
+                                Named(ri) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
+                                _ => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
+                            }),
+                            False => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
+                        }),
                         },
                     },
                 },
@@ -904,7 +1030,7 @@ fn rt_known_in(funs: List<String>, recs: List<String>, discover: Bool) → Tac<K
     rt_global("Bool").bind(λ bo =>
     rt_global("List").bind(λ li =>
     rt_global("Nat").bind(λ na =>
-    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None)))))))))
+    pure(Known(ps, gs, rs, discover, bv, bo, li, None, na, None, [])))))))))
 }
 
 fn rt_known(funs: List<String>, recs: List<String>) → Tac<Known> { rt_known_in(funs, recs, False) }

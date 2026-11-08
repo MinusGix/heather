@@ -1,0 +1,88 @@
+// Probes of `runtime fn` over signed words (docs/runtime-fn-setups-design.md
+// §16.13, issues/sint-native-lowering.md): an `i64` is `SInt(64)`, a record
+// over `BitVec(64)` that `sint.hthr` gives a `datarepr` (`I64`). The
+// generator finds the repr through the registry, holds the type at
+// `Named(0)` with the repr's `abs`/`emb` as its record table entry, reads
+// `SInt`'s operations through their definitions on the word, and passes an
+// `i64` in the 64-bit word a `u64` takes. Tests, not library: nothing
+// imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import int;
+import sint;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// Arithmetic: `a + b` is `SInt::add`, read through its definition as the
+// word's `add` between the field and the constructor.
+
+runtime fn i64_add(a: SInt(64), b: SInt(64)) → SInt(64) { a + b }
+
+theorem i64_add_rt_is(): i64_add::rt =
+    Fun([Named(0), Named(0)], Named(0), Let(Field(0, 0, 1), Let(Field(0, 0, 1), Let(Prim(Add(64), [1, 0]), Make(0, [0]))))) { refl }
+
+// The same function over `u64`: an `i64` crosses the boundary in the same
+// registers, its parameters the unsigned function's (the body differs only
+// by the moves the record's field and constructor lower to).
+runtime fn u64_add(a: BitVec(64), b: BitVec(64)) → BitVec(64) { a.add(b) }
+
+theorem i64_add_params_are_u64s(): i64_add::code.parameters = u64_add::code.parameters { refl }
+
+// The program agrees with the function on every pair of words, read as
+// signed (`I64::abs`) and the result read back (`I64::emb`): here that is
+// the unsigned sum, by conversion.
+theorem i64_add_agrees(x, y: BitVec(64)): program_eval(i64_add::program, 0, [x, y]) = x.add(y) { i64_add::agrees(x, y) }
+
+theorem i64_add_reflects(a, b: SInt(64)): i64_add::rt.meaning(i64_add::world)(a, b) = a + b { i64_add::reflects(a, b) }
+
+// ---------------------------------------------------------------------------
+// The signed operations: `lt_bit` is the word's signed comparison (`Slt`,
+// x86's `JL`), `shift_right` its arithmetic shift (`Ashr`, `SAR`).
+
+runtime fn i64_min(a: SInt(64), b: SInt(64)) → SInt(64) { if a.lt_bit(b) { a } else { b } }
+
+theorem i64_min_rt_is(): i64_min::rt =
+    Fun([Named(0), Named(0)], Named(0), Let(Field(0, 0, 1), Let(Field(0, 0, 1), Let(Prim(Slt(64), [1, 0]), If(0, Var(4), Var(3)))))) { refl }
+
+// -1 < 1 signed, so the minimum of the words `2⁶⁴ - 1` and `1` is the first.
+theorem i64_min_minus_one(): program_eval(i64_min::program, 0, [BitVec::ofNat(0xffffffffffffffff), BitVec::ofNat(1)]) =
+    BitVec::ofNat(0xffffffffffffffff) { i64_min::agrees(BitVec::ofNat(0xffffffffffffffff), BitVec::ofNat(1)) }
+
+runtime fn i64_sar(a: SInt(64)) → SInt(64) { a.shift_right(3) }
+
+theorem i64_sar_rt_is(): i64_sar::rt = Fun([Named(0)], Named(0), Let(Field(0, 0, 0), Let(Prim(Ashr(64, 3), [0]), Make(0, [0])))) { refl }
+
+// Signed and unsigned words side by side, crossing by `as_unsigned`.
+runtime fn i64_mix(a: SInt(64), b: BitVec(64)) → BitVec(64) { a.as_unsigned().add(b) }
+
+theorem i64_mix_rt_is(): i64_mix::rt = Fun([Named(0), Word(64)], Word(64), Let(Field(0, 0, 1), Prim(Add(64), [0, 1]))) { refl }
+
+// ---------------------------------------------------------------------------
+// Refusals, each with its reason.
+
+// A narrower signed word has a repr too, but the boundary passes one 64-bit
+// word.
+// expect-error: holds its type in something other than one 64-bit word
+runtime fn i32_add(a: SInt(32), b: SInt(32)) → SInt(32) { a + b }
+
+// A loop's state is words (issues/runtime-repr-loops.md).
+// expect-error: a parameter that is not a 64-bit word
+runtime fn i64_count(n: Nat, a: SInt(64)) → SInt(64) { match n { Zero => a, Succ(k) => i64_count(k, a + a) } }
+
+// A call of a runtime fn with an `i64` signature (issues/runtime-repr-calls.md).
+// expect-error: cannot be a runtime fn under the default setup
+runtime fn i64_twice(a: SInt(64)) → SInt(64) { i64_add(a, a) }

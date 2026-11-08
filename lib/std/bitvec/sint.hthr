@@ -204,3 +204,14 @@ theorem SInt::rem_nonneg(k: Nat, a, d: SInt(Succ(k)), nonneg: OfNat(0) <= a.toIn
 theorem SInt::rem_nonpos(k: Nat, a, d: SInt(Succ(k)), negative: a.toInt() < OfNat(0)): (a % d).toInt() <= OfNat(0) {
     BitVec::srem_nonpos(k, a.bits, d.bits, negative)
 }
+
+// ---------------------------------------------------------------------------
+// Machine representations (docs/datarepr-design.md, value-parameter specs):
+// a signed integer of a fixed width is held by its bits, `abs` reading them
+// as signed. `runtime fn` (docs/runtime-fn-setups-design.md §16.13) finds
+// these through the registry and passes an `i64` in the 64-bit word a `u64`
+// takes, its operations read through their definitions on the word.
+datarepr I8 for SInt(8) { R := BitVec(8), abs := BitVec::as_signed, mk SInt := λ b => b }
+datarepr I16 for SInt(16) { R := BitVec(16), abs := BitVec::as_signed, mk SInt := λ b => b }
+datarepr I32 for SInt(32) { R := BitVec(32), abs := BitVec::as_signed, mk SInt := λ b => b }
+datarepr I64 for SInt(64) { R := BitVec(64), abs := BitVec::as_signed, mk SInt := λ b => b }

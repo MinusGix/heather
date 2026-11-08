@@ -167,15 +167,68 @@ fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
     }
 }
 
-// A value at `a` read at a code it is not: a count from a word, the
-// default otherwise (every judgment refuses the other mismatches).
-fn Ty::convert(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
-    match b as λ y => y.sem(tys) {
-        Word(_) => BitVec::ofNat(0),
+// A 64-bit word read at a flat code, and a flat value read back as a
+// 64-bit word: the word itself at `Word(64)` (the transport along `64 = w`
+// evaluates away at a literal width), the default elsewhere.
+fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
+    match f as λ y => y.Flat() {
+        Word(w) => match Nat::equation(64, w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(0) },
         Bit => False,
         Bytes(_) => Nil,
         Lines => Nil,
-        Named(i) => Named(i).default(tys),
+        Named(_) => trivial,
+        Count => 0,
+    }
+}
+
+fn Ty::flat_word(self f: Ty) → f.Flat() → BitVec(64) {
+    match f as λ y => y.Flat() → BitVec(64) {
+        Word(w) => λ v => match w.equation(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(0) },
+        Bit => λ _ => BitVec::ofNat(0),
+        Bytes(_) => λ _ => BitVec::ofNat(0),
+        Lines => λ _ => BitVec::ofNat(0),
+        Named(_) => λ _ => BitVec::ofNat(0),
+        Count => λ _ => BitVec::ofNat(0),
+    }
+}
+
+// A record held in one word (a type at its `datarepr`'s word carrier,
+// `SInt(64)` at `BitVec(64)`): built from the word, its first field is the
+// word and the rest are defaults; read back, the word is its first field.
+fn Ty::flats_word(fs: List<Ty>, x: BitVec(64)) → Ty::Flats(fs) {
+    match fs { Nil => trivial, Cons(f, rest) => Pair(f.word_at(x), Ty::flats_default(rest)) }
+}
+
+fn Ty::flats_head_word(fs: List<Ty>) → Ty::Flats(fs) → BitVec(64) {
+    match fs as λ g => Ty::Flats(g) → BitVec(64) { Nil => λ _ => BitVec::ofNat(0), Cons(f, _) => λ t => f.flat_word(t.fst) }
+}
+
+// The word a value crosses a function's boundary as, read off a word or a
+// record held in one word (zero for the rest).
+fn Ty::word_from(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → BitVec(64) {
+    match a as λ x => x.sem(tys) → BitVec(64) {
+        Word(w) => λ v => Word(w).flat_word(v),
+        Bit => λ _ => BitVec::ofNat(0),
+        Bytes(_) => λ _ => BitVec::ofNat(0),
+        Lines => λ _ => BitVec::ofNat(0),
+        Named(i) => λ v => Ty::flats_head_word(tys(i).fields, tys(i).get(v)),
+        Count => λ _ => BitVec::ofNat(0),
+    }
+}
+
+// A value at `a` read at a code it is not: a count from a word, a record
+// held in one word from the word (its repr's `abs`) and the word from the
+// record (its field), the default otherwise (every judgment refuses the
+// other mismatches). The two record cases are how a function's boundary,
+// which passes 64-bit words, reads a parameter or result held in one
+// (`Ty::OneWord`, `rt_lower.hthr`).
+fn Ty::convert(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
+    match b as λ y => y.sem(tys) {
+        Word(w) => Word(w).word_at(Ty::word_from(tys, a, v)),
+        Bit => False,
+        Bytes(_) => Nil,
+        Lines => Nil,
+        Named(i) => tys(i).mk(Ty::flats_word(tys(i).fields, Ty::word_from(tys, a, v))),
         Count => Ty::to_count(tys, a, v),
     }
 }
@@ -505,6 +558,25 @@ fn Fun::meaning(self f: Fun, w: World) → Ty::Arrows(w.tys, f.params, f.result)
 
 // The type table of a program with no records.
 fn RecInfo::none(i: Nat) → RecInfo { RecInfo(True, [], λ _ => trivial, λ _ => trivial, λ t => refl) }
+
+// A type table with `r` first and `rest` after it (a `RecInfo` is too large
+// for a `List`): a table of entries in order is `cons`es ending at
+// `RecInfo::none`.
+fn RecInfo::cons(r: RecInfo, rest: Nat → RecInfo) → Nat → RecInfo { λ i => match i { Zero => r, Succ(k) => rest(k) } }
+
+// A record's shape alone, its type its field tuple: what a generator judges
+// and lowers against, neither of which reads a record's type.
+fn RecInfo::shape(fs: List<Ty>) → RecInfo { RecInfo(Ty::Flats(fs), fs, λ t => t, λ t => t, λ t => refl) }
+
+// A type held in one 64-bit word by its `datarepr` (`SInt(64)` at
+// `BitVec(64)`, docs/runtime-fn-setups-design.md §16.13): the spec type
+// `S`, built from the word by the repr's `abs` and read back by its `emb`,
+// with the round trip `emb(abs(x)) = x` (`refl` at a repr whose images
+// are its constructors' fields).
+fn RecInfo::word_repr<S>(abs: BitVec(64) → S, emb: S → BitVec(64), round: (x: BitVec(64)) → emb(abs(x)) = x) → RecInfo {
+    RecInfo(S, [Word(64)], λ t => abs(t.fst), λ s => Pair(emb(s), trivial),
+        λ t => j(sym(round(t.fst)), λ y _ => Pair(y, trivial) = t, refl))
+}
 
 // ---------------------------------------------------------------------------
 // Equality of reflected code, as `Bool`: what a reflector's value numbering

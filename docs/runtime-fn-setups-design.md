@@ -1362,3 +1362,62 @@ nodes runs as it evaluates), and an in-place `Set` justified by the old
 buffer's variable being dead after it (`Unique`). A fold's step takes a
 `Word(8)` element across a call, which wants a 64-bit word on the edge: a
 `Resize(8, 64)` there now that the node exists.
+
+### 16.13 Types held by their `datarepr`: `i64` (2026-11-08)
+
+`i64` is `SInt(64)`, a one-field record over `BitVec(64)`
+(docs/fixed-width-integers-design.md §3). Minus chose to lower it through a
+`datarepr` rather than have the reflector see through one-field records
+(issues/sint-native-lowering.md): the repr is the place a type says how it
+is held, and the generator asks for it instead of guessing from the shape.
+What landed:
+
+- **A repr per width, from the registry.** `sint.hthr` states `datarepr
+  I64 for SInt(64) { R := BitVec(64), abs := BitVec::as_signed, mk SInt :=
+  λ b => b }` (and `I8`…`I32`). The datarepr elaborator now accepts a spec
+  that is an inductive applied to closed value arguments
+  (`valparam_spec_view`), monomorphised there and keyed by the spelled
+  arguments; one repr over the telescope is
+  issues/datarepr-value-parameter-telescope.md. Two host requests serve
+  the generator: `Repr(ty)` answers the repr's global for a type (refused
+  when it has none), and `Unfold(h)` is a global application's one-step δ
+  with its arguments substituted and β-reduced at the head.
+- **A repr'd type is a `Named` record whose table entry is the repr.** The
+  generator reads the function's signature, asks `Repr` of each type, and
+  numbers the repr'd ones; the reflector's `Known::ty` gives such a type
+  `Named(recs.len() + i)`. The published world's table is `RecInfo::cons`es
+  of `RecInfo::word_repr(abs, emb, round)`: type `S`, one `Word(64)` field,
+  `mk` the repr's `abs`, `get` its `emb`, and `round` the repr's round trip,
+  `refl` per word. The meaning therefore stays at the spec type, so the pin
+  `f::rt.meaning(f::world)(xs) = f(xs)` is still a conversion node for
+  node, and a reflection that misreads the repr fails it. The generator's
+  own judgment and lowering read the table's shape only
+  (`RecInfo::shape([Word(64)])`).
+- **Operations are read through their definitions.** A global the
+  reflector does not know whose result or an argument has a repr'd type
+  (and which is not a field of one) is unfolded once and walked again:
+  `SInt::add(a, b)` is `SInt(a.bits.add(b.bits))`, reflected as `Field`,
+  `Add(64)`, `Make`. `lt_bit` arrives at `BitVec::signed_lt_bit` (`Slt`,
+  `JL`) and `shift_right` at `arithmetic_shift_right` (`Ashr`, `SAR`). An
+  ordinary helper over `i64` is inlined the same way; that is a
+  convenience, not a promise, since the pin is what checks it.
+- **The boundary passes the record in one word.** A function's parameters
+  and result were `Word(64)` (`Ty::Words`); they are now `Ty::OneWord`: a
+  64-bit word, or a record whose fields are `[Word(64)]`. `Ty::convert`
+  reads a word at such a record as `mk` of it and the record back as its
+  field, so `Ty::cast(Word(64) → Named(i))` is the repr's `abs` and the
+  reverse its `emb`, by conversion at a closed table. `Fun::lower_sound`
+  carries the change (`Ty::one_word_holds`, `one_word_reads`); the loop
+  theorems keep `Ty::Words` and bridge (`Ty::words_one_words`). So
+  `f::agrees` reads `program_eval(f::program, 0, [x, y]) =
+  I64::emb(f(I64::abs()(x), I64::abs()(y)))`, which for `i64_add` converts
+  to `x.add(y)`: the same words a `u64` add takes and returns.
+
+Refused, each with its reason and issue: a call of a runtime fn with a
+repr'd signature (`Sig::is_words`, issues/runtime-repr-calls.md), a loop
+over repr'd words (issues/runtime-repr-loops.md), a repr'd type the
+signature does not name (issues/runtime-repr-inner-types.md), a repr whose
+carrier is not one 64-bit word (issues/runtime-repr-narrow-words.md). Sign
+extension and signed division have no `rt` op
+(issues/runtime-signed-extend-divide.md). Probes:
+`lib/_tests/native/runtime/runtime_sint_tests.hthr`.

@@ -640,6 +640,108 @@ fn Ty::check_words(ps: List<Ty>) → Option<Ty::Words(ps)> {
     }
 }
 
+// A code a function takes or returns in one 64-bit word at its boundary:
+// a 64-bit word, or a record whose one field is (a type held at its
+// `datarepr`'s word carrier, `SInt(64)` as `BitVec(64)`). The word read at
+// the record is the record built from it (`Ty::convert`), so the record is
+// scalar-replaced into the word's port and its field is the word.
+fn Ty::OneWord(self t: Ty, tys: Nat → RecInfo) → Type {
+    match t { Word(w) => w = 64, Bit => False, Bytes(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => False }
+}
+
+fn Ty::check_fields_word(fs: List<Ty>) → Option<fs = [Word(64)]> {
+    match fs as λ g => Option<g = [Word(64)]> {
+        Nil => None,
+        Cons(f, rest) => match rest as λ r => Option<Cons(f, r) = [Word(64)]> {
+            Nil => f.check(Word(64)).and_then(λ e => Some(j(e, λ x _ => Cons(f, Nil) = Cons(x, Nil), refl))),
+            Cons(_, _) => None,
+        },
+    }
+}
+
+fn Ty::check_one_word(self t: Ty, tys: Nat → RecInfo) → Option<t.OneWord(tys)> {
+    match t as λ x => Option<x.OneWord(tys)> {
+        Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
+        Bit => None, Bytes(_) => None, Lines => None,
+        Named(i) => Ty::check_fields_word(tys(i).fields),
+        Count => None,
+    }
+}
+
+fn Ty::OneWords(tys: Nat → RecInfo, ps: List<Ty>) → Type {
+    match ps { Nil => True, Cons(p, rest) => p.OneWord(tys) ∧ Ty::OneWords(tys, rest) }
+}
+
+fn Ty::check_one_words(tys: Nat → RecInfo, ps: List<Ty>) → Option<Ty::OneWords(tys, ps)> {
+    match ps {
+        Nil => Some(trivial),
+        Cons(p, rest) => p.check_one_word(tys).and_then(λ e => Ty::check_one_words(tys, rest).and_then(λ ok => Some(⟨e, ok⟩))),
+    }
+}
+
+// Every 64-bit word is held in one.
+theorem Ty::words_one_words(tys: Nat → RecInfo, ps: List<Ty>): Ty::Words(ps) → Ty::OneWords(tys, ps) {
+    match ps {
+        Nil => λ _ => trivial,
+        Cons(p, rest) => λ ok => ⟨j(sym(ok.left), λ x _ => x.OneWord(tys), refl), Ty::words_one_words(tys, rest, ok.right)⟩,
+    }
+}
+
+// A record held in one word, built from the word at its port, holds there:
+// its one field is the word.
+theorem Ty::record_word_holds(T: Type, fs: List<Ty>, mk: Ty::Flats(fs) → T, get: T → Ty::Flats(fs),
+    round: (t: Ty::Flats(fs)) → get(mk(t)) = t, e: fs = [Word(64)], values: Valuation(), port: Nat, x: BitVec(64),
+    h: values(64, port) = x): Ty::FieldsHold(fs, values, port, get(mk(Ty::flats_word(fs, x)))) {
+    let core = j(sym(e), λ g _ => Ty::FieldsHold(g, values, port, Ty::flats_word(g, x)), ⟨h, trivial⟩);
+    j(sym(round(Ty::flats_word(fs, x))), λ r _ => Ty::FieldsHold(fs, values, port, r), core)
+}
+
+// A word at its port, read at a code held in one word, holds there.
+theorem Ty::one_word_holds(tys: Nat → RecInfo, values: Valuation(), port: Nat, t: Ty): t.OneWord(tys) → (x: BitVec(64)) →
+    values(64, port) = x → t.Holds(tys, values, port, Ty::cast(tys, Word(64), t, x)) {
+    match t {
+        Word(w) => λ (e: w = 64) x h => Ty::cast_holds(tys, values, port, Word(64), Word(w), j(sym(e), λ n _ => Word(64) = Word(n), refl), x, h),
+        Bit => λ never => false_elim(never),
+        Bytes(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e x h => Ty::record_word_holds(tys(i).T, tys(i).fields, tys(i).mk, tys(i).get, tys(i).round, e, values, port, x, h),
+        Count => λ never => false_elim(never),
+    }
+}
+
+// A code held in one word spans one port.
+theorem Ty::one_word_below(tys: Nat → RecInfo, t: Ty): t.OneWord(tys) → (m: Nat) → t.Below(tys, m, Succ(m)) {
+    match t {
+        Word(_) => λ _ m => m.lt_succ_self(),
+        Bit => λ never => false_elim(never),
+        Bytes(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e m => j(sym(e), λ g _ => Ty::FieldsBelow(g, m, Succ(m)), ⟨m.lt_succ_self(), trivial⟩),
+        Count => λ never => false_elim(never),
+    }
+}
+
+// The fields of a record held in one word hold the word its first field is.
+theorem Ty::fields_word_reads(values: Valuation(), port: Nat, fs: List<Ty>, e: fs = [Word(64)]): (t: Ty::Flats(fs)) →
+    Ty::FieldsHold(fs, values, port, t) → values(64, port) = Ty::flats_head_word(fs, t) {
+    j(sym(e), λ g _ => (t: Ty::Flats(g)) → Ty::FieldsHold(g, values, port, t) → values(64, port) = Ty::flats_head_word(g, t),
+        λ t held => held.left)
+}
+
+// A value of a code held in one word, at its port: the port's word is the
+// value read as a word.
+theorem Ty::one_word_reads(tys: Nat → RecInfo, values: Valuation(), port: Nat, t: Ty): t.OneWord(tys) → (v: t.sem(tys)) →
+    t.Holds(tys, values, port, v) → values(64, port) = Ty::cast(tys, t, Word(64), v) {
+    match t {
+        Word(w) => λ (e: w = 64) v h => Ty::cast_holds(tys, values, port, Word(w), Word(64), j(e, λ n _ => Word(w) = Word(n), refl), v, h),
+        Bit => λ never => false_elim(never),
+        Bytes(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e v h => Ty::fields_word_reads(values, port, tys(i).fields, e, tys(i).get(v), h),
+        Count => λ never => false_elim(never),
+    }
+}
+
 // A code held in one 64-bit word across a call: a word, or a count (a
 // loop's fuel, the word it is the `toNat` of).
 fn Ty::Held(self p: Ty) → Type {
@@ -1568,12 +1670,14 @@ fn Fun::lower_distinct(self f: Fun, w: World) → Option<Function> {
 }
 
 fn Fun::lower_result(self f: Fun, w: World) → Option<Function> {
-    f.result.check(Word(64)).and_then(λ _ => f.lower_distinct(w))
+    f.result.check_one_word(w.tys).and_then(λ _ => f.lower_distinct(w))
 }
 
-// A function of words to a word, lowered to a FunctionIR function.
+// A function of words to a word, lowered to a FunctionIR function: each
+// parameter and the result a 64-bit word, or a record held in one
+// (`Ty::OneWord`).
 fn Fun::lower(self f: Fun, w: World) → Option<Function> {
-    Ty::check_words(f.params).and_then(λ _ => f.lower_result(w))
+    Ty::check_one_words(w.tys, f.params).and_then(λ _ => f.lower_result(w))
 }
 
 // Words as an environment: the parameters bound onto `g` in order, each
@@ -1648,7 +1752,7 @@ theorem Fun::bind_bound(ids: List<Nat>): (xs: List<BitVec(64)>) → distinct(ids
 
 // The parameters' ports hold the environment the words make.
 theorem Fun::env_extend_holds(tys: Nat → RecInfo, values: Valuation(), ps: List<Ty>): (g: List<Ty>) → (ports: List<Nat>) →
-    (env: Env(tys, g)) → (m: Nat) → (xs: List<BitVec(64)>) → Ty::Words(ps) → EnvHolds(tys, values, g, ports, env) →
+    (env: Env(tys, g)) → (m: Nat) → (xs: List<BitVec(64)>) → Ty::OneWords(tys, ps) → EnvHolds(tys, values, g, ports, env) →
     Fun::BoundWords(values, Fun::param_ids(ps, m), xs) →
     EnvHolds(tys, values, Ty::bind_onto(ps, g), Fun::ports_onto(ps, m, ports), Ty::extend(tys, ps, g, env, xs)) {
     match ps {
@@ -1658,20 +1762,20 @@ theorem Fun::env_extend_holds(tys: Nat → RecInfo, values: Valuation(), ps: Lis
             EnvHolds(tys, values, Ty::bind_onto(Cons(p, rest), g), Fun::ports_onto(Cons(p, rest), m, ports), Ty::extend(tys, Cons(p, rest), g, env, ys)) {
             Nil => λ bound => Fun::env_extend_holds(tys, values, rest, Cons(p, g), Cons(m, ports),
                 Pair(Ty::cast(tys, Word(64), p, BitVec::zero()), env), Succ(m), Nil, ok.right,
-                ⟨Ty::cast_holds(tys, values, m, Word(64), p, sym(ok.left), BitVec::zero(), bound.left), held⟩, bound.right),
+                ⟨Ty::one_word_holds(tys, values, m, p, ok.left, BitVec::zero(), bound.left), held⟩, bound.right),
             Cons(x, more) => λ bound => Fun::env_extend_holds(tys, values, rest, Cons(p, g), Cons(m, ports),
                 Pair(Ty::cast(tys, Word(64), p, x), env), Succ(m), more, ok.right,
-                ⟨Ty::cast_holds(tys, values, m, Word(64), p, sym(ok.left), x, bound.left), held⟩, bound.right),
+                ⟨Ty::one_word_holds(tys, values, m, p, ok.left, x, bound.left), held⟩, bound.right),
         },
     }
 }
 
-theorem Fun::below_onto(tys: Nat → RecInfo, ps: List<Ty>): (g: List<Ty>) → (m: Nat) → (ports: List<Nat>) → Ty::Words(ps) →
+theorem Fun::below_onto(tys: Nat → RecInfo, ps: List<Ty>): (g: List<Ty>) → (m: Nat) → (ports: List<Nat>) → Ty::OneWords(tys, ps) →
     Below(tys, g, ports, m) → Below(tys, Ty::bind_onto(ps, g), Fun::ports_onto(ps, m, ports), Fun::past(ps, m)) {
     match ps {
         Nil => λ g m ports _ below => below,
         Cons(p, rest) => λ g m ports ok below => Fun::below_onto(tys, rest, Cons(p, g), Succ(m), Cons(m, ports), ok.right,
-            ⟨Ty::below_cast(tys, Word(64), p, sym(ok.left), m, Succ(m), m.lt_succ_self()),
+            ⟨Ty::one_word_below(tys, p, ok.left, m),
                 below_mono(tys, g, m, Succ(m), Nat::le_succ_r(m, m, m.le_refl()), ports, below)⟩),
     }
 }
@@ -1691,8 +1795,8 @@ theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
     let ids = Fun::param_ids(f.params, 0);
     let ports = Fun::ports_onto(f.params, 0, Nil);
     let next = Fun::past(f.params, 0);
-    Option::and_then_elim(P, trivial, Ty::check_words(f.params), λ _ => f.lower_result(w), λ ok _ =>
-    Option::and_then_elim(P, trivial, f.result.check(Word(64)), λ _ => f.lower_distinct(w), λ er _ =>
+    Option::and_then_elim(P, trivial, Ty::check_one_words(w.tys, f.params), λ _ => f.lower_result(w), λ ok _ =>
+    Option::and_then_elim(P, trivial, f.result.check_one_word(w.tys), λ _ => f.lower_distinct(w), λ er _ =>
     Option::and_then_elim(P, trivial, Tm::check_true(distinct(ids)), λ _ => f.lower_body(w), λ apart _ =>
     Option::and_then_elim(P, trivial, f.body.lower(w, f.context(), ports, next), λ c => f.lower_typed(w, c), λ c lowered =>
     Option::and_then_elim(P, trivial, Tm::ty(f.body, w, f.context()).check(f.result), λ _ => Some(Function(ids, c.region, c.result)), λ eb _ =>
@@ -1707,7 +1811,7 @@ theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
                     Tm::lower_sound(f.body, w, f.context(), ports, next))(call, agree, values, env,
                     Fun::env_extend_holds(w.tys, values, f.params, Nil, Nil, trivial, 0, xs, ok, trivial, Fun::bind_bound(ids, xs, apart)),
                     Fun::below_onto(w.tys, f.params, Nil, 0, Nil, ok, trivial));
-                Ty::cast_holds(w.tys, after, c.result, f.result, Word(64), er, Ty::cast(w.tys, body_ty, f.result, Tm::sem(f.body, w, f.context(), env)),
+                Ty::one_word_reads(w.tys, after, c.result, f.result, er, Ty::cast(w.tys, body_ty, f.result, Tm::sem(f.body, w, f.context(), env)),
                     Ty::cast_holds(w.tys, after, c.result, body_ty, f.result, eb, Tm::sem(f.body, w, f.context(), env), ran.right.right.right))
             }))))))
 }

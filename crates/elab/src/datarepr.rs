@@ -266,6 +266,9 @@ pub(crate) fn spell_ty(t: &Ty) -> Option<String> {
             let a: Option<Vec<String>> = args.iter().map(spell_ty).collect();
             format!("{name}<{}>", a?.join(", "))
         }
+        // A type written as an expression, `BitVec(64)` or `SInt(n)`, spelled
+        // as that expression: only the forms `spell_expr` spells faithfully.
+        TyKind::OfExpr(e) => spell_expr(e)?,
         TyKind::Fn {
             binder: None,
             implicit: false,
@@ -320,6 +323,12 @@ impl Elaborator {
                 key: (None, String::new()),
                 monomorph: None,
             });
+        }
+        // A value-parameterized declaration at spellable arguments,
+        // `SInt(64)`: monomorphic, the arguments substituted into the field
+        // types exactly as type arguments are below.
+        if let TyKind::OfExpr(e) = &spec.kind {
+            return self.valparam_spec_view(spell, e, span);
         }
         let TyKind::Named { name, args } = &spec.kind else {
             return err(
@@ -396,6 +405,87 @@ impl Elaborator {
         Ok(SpecView {
             key: (Some(ind.tag), argkey.clone()),
             monomorph: (!args.is_empty()).then_some((ind.tag, argkey)),
+            spell,
+            ctors,
+        })
+    }
+
+    /// The spec view of a value-parameterized declaration applied to
+    /// spellable arguments, `SInt(64)`: the arguments are substituted for
+    /// the value parameters in every field type, so the generated source
+    /// is the monomorph's (a repr over `SInt(n)` at a neutral `n` would be
+    /// a telescope the emission does not have yet,
+    /// issues/datarepr-value-parameter-telescope.md). The key is the
+    /// declaration's tag and the spelled arguments, so each width is its
+    /// own spec type with its own repr.
+    fn valparam_spec_view(&self, spell: String, e: &Expr, span: Span) -> R<SpecView> {
+        let ExprKind::App { head, args, named, .. } = &e.kind else {
+            return err(format!("`{spell}` is not a declared inductive applied to its arguments"), span);
+        };
+        let ExprKind::Var(name) = &head.kind else {
+            return err(format!("`{spell}` is not a declared inductive applied to its arguments"), span);
+        };
+        if !named.is_empty() {
+            return err(format!("`{spell}`: a repr's spec type passes its arguments in order, not by name"), span);
+        }
+        let Some(ind) = self.lookup_inductive(name).cloned() else {
+            return err(format!("`{name}` is not a declared inductive"), span);
+        };
+        if ind.index.is_some() || !ind.params.is_empty() || ind.valparams.is_empty() {
+            return err(
+                format!(
+                    "`{spell}`: a repr's spec type applied to arguments is a declaration with value \
+                     parameters only (`record SInt(n: Nat)`); type arguments are written `D<T>`, and \
+                     indexed families are not represented (docs/datarepr-design.md §5.1)"
+                ),
+                span,
+            );
+        }
+        if ind.valparams.len() != args.len() {
+            return err(
+                format!("`{name}` takes {} value argument(s), not {}", ind.valparams.len(), args.len()),
+                span,
+            );
+        }
+        let mut subst: HashMap<&str, String> = HashMap::new();
+        let mut spelled = Vec::new();
+        for ((p, _), a) in ind.valparams.iter().zip(args.iter()) {
+            let Some(s) = spell_expr(a) else {
+                return err(format!("`{spell}`'s argument cannot be spelled"), span);
+            };
+            subst.insert(p.as_str(), s.clone());
+            spelled.push(s);
+        }
+        let mut ctors = Vec::new();
+        for c in &ind.ctors {
+            let mut fields = Vec::new();
+            for (i, (_, fty)) in c.fields.iter().enumerate() {
+                let fty = subst_ty(fty, &subst);
+                let Some(s) = spell_ty(&fty) else {
+                    return err(
+                        format!(
+                            "`{}`'s field {i} has a type this round cannot spell: a v1 repr's \
+                             non-recursive fields are left at their spec types \
+                             (docs/datarepr-design.md §1.1)",
+                            c.name
+                        ),
+                        span,
+                    );
+                };
+                fields.push(FieldView {
+                    binder: format!("a{i}"),
+                    rec: s == spell,
+                    spell: s,
+                });
+            }
+            ctors.push(CtorView {
+                name: c.name.clone(),
+                fields,
+            });
+        }
+        Ok(SpecView {
+            key: (Some(ind.tag), spelled.join(",")),
+            monomorph: None,
             spell,
             ctors,
         })
@@ -2032,9 +2122,41 @@ pub(crate) fn subst_ty(t: &Ty, m: &HashMap<&str, String>) -> Ty {
             dom: Box::new(subst_ty(dom, m)),
             cod: Box::new(subst_ty(cod, m)),
         },
+        // A value parameter inside a type written as an expression,
+        // `BitVec(n)`: substituted by name in the expression's spellable
+        // forms (anything else is left, and then declines to spell).
+        TyKind::OfExpr(e) => TyKind::OfExpr(Box::new(subst_expr(e, m))),
         k => k.clone(),
     };
     Ty { kind, span: t.span }
+}
+
+/// [`subst_ty`]'s expression half: a variable named in `m` becomes its
+/// spelling (re-parsed as a name or a numeral by the generated source), in
+/// the forms [`spell_expr`] spells.
+pub(crate) fn subst_expr(e: &Expr, m: &HashMap<&str, String>) -> Expr {
+    let kind = match &e.kind {
+        ExprKind::Var(n) => match m.get(n.as_str()) {
+            Some(s) => match s.parse::<u64>() {
+                Ok(v) => ExprKind::Num(v.into()),
+                Err(_) => ExprKind::Var(s.clone()),
+            },
+            None => ExprKind::Var(n.clone()),
+        },
+        ExprKind::App { head, args, named, explicit, goal_oriented } => ExprKind::App {
+            head: Box::new(subst_expr(head, m)),
+            args: args.iter().map(|a| subst_expr(a, m)).collect(),
+            named: named.clone(),
+            explicit: *explicit,
+            goal_oriented: *goal_oriented,
+        },
+        ExprKind::TyApp { head, args } => ExprKind::TyApp {
+            head: Box::new(subst_expr(head, m)),
+            args: args.iter().map(|a| subst_ty(a, m)).collect(),
+        },
+        k => k.clone(),
+    };
+    Expr { kind, span: e.span }
 }
 
 // -- the cost basis: `impl f for Rp` ----------------------------------------

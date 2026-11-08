@@ -82,3 +82,11 @@ theorem div_rem_law_i64(a, d: i64, nonzero: d ≠ SInt::zero(),
 {
     SInt::div_rem_toInt(63, a, d, nonzero, away)
 }
+
+// The machine representations: `abs` reads the bits as signed and `emb` is
+// the field, both by conversion, and the round trip holds both ways.
+theorem i64_abs_is(x: BitVec(64)): I64::abs()(x) = SInt(x) { refl }
+theorem i64_emb_is(s: SInt(64)): I64::emb(s) = s.bits { refl }
+theorem i64_emb_abs(x: BitVec(64)): I64::emb(I64::abs()(x)) = x { refl }
+theorem i8_abs_emb(s: SInt(8)): I8::abs()(I8::emb(s)) = s { refl }
+theorem i8_minus_one(): I8::emb(s8(-1)) = 255 { refl }
