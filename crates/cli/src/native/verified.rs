@@ -550,6 +550,10 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
                         tag @ 8..=10 => format!("{}({})", ["SetBelow", "SetLess", "SetEqual"][tag as usize - 8], low(take()?)?),
                         12 => format!("AddRI8({}, {})", gpr(take()?)?, word(8, take()?)),
                         13 => format!("AddRI32({}, {})", gpr(take()?)?, word(32, take()?)),
+                        14 => {
+                            let op = *["OpShl", "OpShr", "OpSar"].get(take()? as usize).ok_or_else(bad)?;
+                            format!("ShiftOne({op}, {})", gpr(take()?)?)
+                        }
                         _ => return Err(bad()),
                     };
                     instructions.push(instruction);

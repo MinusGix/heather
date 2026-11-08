@@ -5,7 +5,7 @@ labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-21
-updated: 2026-10-21
+updated: 2026-11-08
 ---
 
 The verified lowering ([[function-ir-verified-lowering]]) selects only
@@ -42,3 +42,7 @@ request.
   between FunctionIR's shifts and x86's masked counts. Assumed here: only
   that a shift selection rule waits on it.
 - **[[function-ir-verified-lowering]]** owns the lowering's rounds.
+
+## Log
+
+- 2026-11-08: i64 round 3: shifts are selected now (chains of `SHL/SHR/SAR r64, 1` after `ShiftOp::legalize`); multiply and divide wait on [[x86-undefined-flags]].

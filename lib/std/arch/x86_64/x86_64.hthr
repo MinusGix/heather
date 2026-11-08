@@ -144,6 +144,9 @@ fn low_byte_rex(register: LowByteGpr) → Option<BitVec(8)> {
     }
 }
 
+// The one-bit shifts D1 /4, /5 and /7, told apart by ModRM.reg.
+inductive ShiftOp { OpShl, OpShr, OpSar }
+
 inductive Instruction {
     MovRR(destination: Gpr, source: Gpr),
     MovRI(destination: Gpr, immediate: BitVec(64)),
@@ -161,6 +164,9 @@ inductive Instruction {
     // (docs/structured-lowering-code-size-design.md §4).
     AddRI8(destination: Gpr, immediate: BitVec(8)),
     AddRI32(destination: Gpr, immediate: BitVec(32)),
+    // SHL, SHR or SAR by one: every flag but AF defined
+    // (docs/runtime-fn-setups-design.md §16.13, round 3).
+    ShiftOne(op: ShiftOp, destination: Gpr),
 }
 
 // X86 instructions occupy 1 through 15 bytes. Squashing makes the fact
@@ -518,6 +524,16 @@ fn add_ri32_bytes(destination: Gpr, immediate: BitVec(32)) → List<BitVec(8)> {
         imm32_byte0(immediate), imm32_byte1(immediate), imm32_byte2(immediate), imm32_byte3(immediate)]
 }
 
+// REX.W D1 /digit: the destination is ModRM.r/m, and ModRM.reg holds the
+// digit that selects the shift, spelled as the register with its code.
+fn ShiftOp::extension(self op: ShiftOp) → Gpr {
+    match op { OpShl => Rsp, OpShr => Rbp, OpSar => Rdi }
+}
+
+fn shift_one_bytes(op: ShiftOp, destination: Gpr) → List<BitVec(8)> {
+    rr_bytes(0xd1, destination, op.extension())
+}
+
 fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
     match instruction {
         // 89 /r: MOV r64 into r/m64.
@@ -553,6 +569,7 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
             rr_bytes(0x85, left, right),
         AddRI8(destination, immediate) => add_ri8_bytes(destination, immediate),
         AddRI32(destination, immediate) => add_ri32_bytes(destination, immediate),
+        ShiftOne(op, destination) => shift_one_bytes(op, destination),
     }
 }
 
@@ -617,6 +634,7 @@ fn canonical_length_valid(instruction: Instruction) →
         TestRR(_, _) => And(trivial, trivial),
         AddRI8(_, _) => And(trivial, trivial),
         AddRI32(_, _) => And(trivial, trivial),
+        ShiftOne(_, _) => And(trivial, trivial),
     }
 }
 
@@ -701,6 +719,7 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
         TestRR(left, right) => RrEncoding(bytes, 0x85, left, right),
         AddRI8(destination, immediate) => bytes = add_ri8_bytes(destination, immediate),
         AddRI32(destination, immediate) => bytes = add_ri32_bytes(destination, immediate),
+        ShiftOne(op, destination) => bytes = shift_one_bytes(op, destination),
     }
 }
 
@@ -1670,6 +1689,67 @@ fn decode_add_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     }
 }
 
+// The shift selected by ModRM.reg, if any.
+fn ShiftOp::of_extension(register: Gpr) → Option<ShiftOp> {
+    match register {
+        Rsp => Some(OpShl), Rbp => Some(OpShr), Rdi => Some(OpSar),
+        _ => None,
+    }
+}
+
+// REX.W D1 /4, /5 or /7 with a register-direct ModRM. It is tried after the
+// two-register forms, so their decoding is unchanged.
+fn decode_shift_one(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
+    match bytes {
+        Nil => None,
+        Cons(rex, t1) => match t1 {
+            Nil => None,
+            Cons(opcode, t2) => match t2 {
+                Nil => None,
+                Cons(modrm, t3) => match t3 {
+                    Cons(_, _) => None,
+                    Nil => match opcode.eq_dec(BitVec::ofNat(0xd1)) {
+                        Inr(_) => None,
+                        Inl(_) => match ShiftOp::of_extension(gpr_from_fields(byte_bit3(modrm),
+                                byte_bit4(modrm), byte_bit5(modrm), byte_bit2(rex))) {
+                            None => None,
+                            Some(op) => {
+                                let destination = gpr_from_fields(byte_bit0(modrm), byte_bit1(modrm),
+                                    byte_bit2(modrm), byte_bit0(rex));
+                                match rex.eq_dec(rex_w_rr(destination, op.extension())) {
+                                    Inr(_) => None,
+                                    Inl(_) => match modrm.eq_dec(modrm_rr(destination, op.extension())) {
+                                        Inr(_) => None,
+                                        Inl(_) => Some(decoded_canonical(ShiftOne(op, destination))),
+                                    },
+                                }
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// A two-register form's decoding, erased, else the one-bit shift's.
+fn or_shift_one(bytes: List<BitVec(8)>, result: Option<ByteDecode(bytes)>) → Option<DecodedInstruction> {
+    match result {
+        None => decode_shift_one(bytes),
+        Some(found) => Some(decoded_canonical(found.instruction)),
+    }
+}
+
+theorem or_shift_one_found(bytes: List<BitVec(8)>, result: Option<ByteDecode(bytes)>,
+    decoded: DecodedInstruction, erased: erase_byte_decode(bytes, result) = Some(decoded)):
+    or_shift_one(bytes, result) = Some(decoded)
+{
+    (match result as λ r => erase_byte_decode(bytes, r) = Some(decoded) → or_shift_one(bytes, r) = Some(decoded) {
+        None => λ no => absurd(no),
+        Some(found) => λ same => same,
+    })(erased)
+}
+
 fn decode_instruction(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     match decode_mov_ri(bytes) {
         Some(decoded) => Some(decoded),
@@ -1677,10 +1757,7 @@ fn decode_instruction(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
             Some(decoded) => Some(decoded),
             None => match decode_add_ri(bytes) {
                 Some(decoded) => Some(decoded),
-                None => match decode_bytes(bytes) {
-                    None => None,
-                    Some(result) => Some(decoded_canonical(result.instruction)),
-                },
+                None => or_shift_one(bytes, decode_bytes(bytes)),
             },
         },
     }
@@ -1688,7 +1765,7 @@ fn decode_instruction(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
 
 theorem decode_instruction_rr_unfolds(opcode: Nat, rm, reg: Gpr):
     decode_instruction(rr_bytes(opcode, rm, reg)) =
-        erase_byte_decode(rr_bytes(opcode, rm, reg),
+        or_shift_one(rr_bytes(opcode, rm, reg),
             decode_opcode_direct(rex_w_rr(rm, reg), BitVec::ofNat(opcode),
                 modrm_rr(rm, reg)))
 {
@@ -1700,7 +1777,10 @@ theorem decode_instruction_rr_complete(form: RrOpcode, rm, reg: Gpr):
         Some(decoded_rr(rr_opcode_instruction(form, rm, reg)))
 {
     trans(decode_instruction_rr_unfolds(rr_opcode_nat(form), rm, reg),
-        decode_rr_opcode_complete(form, rm, reg))
+        or_shift_one_found(rr_bytes(rr_opcode_nat(form), rm, reg),
+            decode_opcode_direct(rex_w_rr(rm, reg), BitVec::ofNat(rr_opcode_nat(form)), modrm_rr(rm, reg)),
+            decoded_rr(rr_opcode_instruction(form, rm, reg)),
+            decode_rr_opcode_complete(form, rm, reg)))
 }
 
 theorem rr_encoding_exact(bytes: List<BitVec(8)>, opcode: Nat, rm, reg: Gpr,
@@ -1869,6 +1949,68 @@ theorem decode_add_ri8_complete(destination: Gpr, immediate: BitVec(8)):
     }
 }
 
+theorem decode_shift_one_complete(op: ShiftOp, destination: Gpr):
+    decode_instruction(shift_one_bytes(op, destination)) =
+        Some(decoded_canonical(ShiftOne(op, destination)))
+{
+    match op {
+        OpShl => match destination {
+            Rax => refl,
+            Rcx => refl,
+            Rdx => refl,
+            Rbx => refl,
+            Rsp => refl,
+            Rbp => refl,
+            Rsi => refl,
+            Rdi => refl,
+            R8 => refl,
+            R9 => refl,
+            R10 => refl,
+            R11 => refl,
+            R12 => refl,
+            R13 => refl,
+            R14 => refl,
+            R15 => refl,
+        },
+        OpShr => match destination {
+            Rax => refl,
+            Rcx => refl,
+            Rdx => refl,
+            Rbx => refl,
+            Rsp => refl,
+            Rbp => refl,
+            Rsi => refl,
+            Rdi => refl,
+            R8 => refl,
+            R9 => refl,
+            R10 => refl,
+            R11 => refl,
+            R12 => refl,
+            R13 => refl,
+            R14 => refl,
+            R15 => refl,
+        },
+        OpSar => match destination {
+            Rax => refl,
+            Rcx => refl,
+            Rdx => refl,
+            Rbx => refl,
+            Rsp => refl,
+            Rbp => refl,
+            Rsi => refl,
+            Rdi => refl,
+            R8 => refl,
+            R9 => refl,
+            R10 => refl,
+            R11 => refl,
+            R12 => refl,
+            R13 => refl,
+            R14 => refl,
+            R15 => refl,
+        },
+    }
+}
+
 theorem decode_add_ri32_complete(destination: Gpr, immediate: BitVec(32)):
     decode_instruction(add_ri32_bytes(destination, immediate)) =
         Some(decoded_canonical(AddRI32(destination, immediate)))
@@ -1991,6 +2133,10 @@ theorem decode_instruction_complete(bytes: List<BitVec(8)>,
             j(sym(encoding), λ actual q => decode_instruction(actual) =
                 Some(decoded_canonical(AddRI32(destination, immediate))),
                 decode_add_ri32_complete(destination, immediate)),
+        ShiftOne(op, destination) => λ encoding =>
+            j(sym(encoding), λ actual q => decode_instruction(actual) =
+                Some(decoded_canonical(ShiftOne(op, destination))),
+                decode_shift_one_complete(op, destination)),
     }(decoding)
 }
 
@@ -2032,6 +2178,7 @@ theorem decoded_canonical_length(instruction: Instruction):
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
         CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl,
         TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
+        ShiftOne(_, _) => refl,
     }
 }
 
@@ -2061,6 +2208,7 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
         TestRR(_, _) => And(And(refl, And(refl, refl)), refl),
         AddRI8(_, _) => And(refl, refl),
         AddRI32(_, _) => And(refl, refl),
+        ShiftOne(_, _) => And(refl, refl),
     }
 }
 
@@ -2178,6 +2326,7 @@ theorem canonical_bytes_length(instruction: Instruction):
         TestRR(_, _) => refl,
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,
+        ShiftOne(_, _) => refl,
     }
 }
 
@@ -2304,6 +2453,50 @@ fn test_flags(left, right: BitVec(64), af: Bool) → Flags {
 }
 
 record RegisterEffect { gprs: Gprs, flags: Flags }
+
+fn ShiftOp::apply(self op: ShiftOp, x: BitVec(64)) → BitVec(64) {
+    match op {
+        OpShl => x.shift_left_one(),
+        OpShr => x.shift_right_one(),
+        OpSar => x.arithmetic_shift_right_one(),
+    }
+}
+
+// CF is the bit shifted out; OF, defined for a count of one, is whether SHL
+// changed the sign, SHR's original sign, and clear for SAR.
+fn ShiftOp::carry(self op: ShiftOp, x: BitVec(64)) → Bool {
+    match op { OpShl => x.sign_bit(), OpShr => x.get(FZ), OpSar => x.get(FZ) }
+}
+
+fn ShiftOp::overflow(self op: ShiftOp, x: BitVec(64)) → Bool {
+    match op {
+        OpShl => x.shift_left_one().sign_bit().xor(x.sign_bit()),
+        OpShr => x.sign_bit(),
+        OpSar => False,
+    }
+}
+
+// AF after a shift by a nonzero count is undefined, so it is supplied, as
+// TEST's is.
+fn shift_flags(op: ShiftOp, x: BitVec(64), af: Bool) → Flags {
+    let result = op.apply(x);
+    Flags(
+        cf := op.carry(x),
+        pf := xor_bits(8, result.take_low(8, 56)).not(),
+        af := af,
+        zf := is_zero_bits(64, result),
+        sf := result.sign_bit(),
+        of := op.overflow(x),
+    )
+}
+
+fn execute_shift_one(op: ShiftOp, destination: Gpr, before: Gprs, af: Bool) → RegisterEffect {
+    let x = read_gpr(destination, before);
+    RegisterEffect(
+        gprs := write_gpr(destination, op.apply(x), before),
+        flags := shift_flags(op, x, af),
+    )
+}
 
 fn execute_add(destination, source: Gpr, before: Gprs) → RegisterEffect
 {
@@ -2453,6 +2646,8 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
             execute_add_immediate(destination, immediate.sign_extend(56), before),
         AddRI32(destination, immediate) =>
             execute_add_immediate(destination, immediate.sign_extend(32), before),
+        // Canonical representative; `Execute` admits both values of AF.
+        ShiftOne(op, destination) => execute_shift_one(op, destination, before, False),
     }
 }
 
@@ -2469,6 +2664,18 @@ fn execute_normal<M>(decoded: DecodedInstruction, before: MachineState<M>) →
 }
 
 inductive Exception { }
+
+fn execute_shift<M>(op: ShiftOp, destination: Gpr, length: Nat, before: MachineState<M>,
+    af: Bool) → MachineState<M>
+{
+    let effect = execute_shift_one(op, destination, before.gprs, af);
+    MachineState<M>(
+        gprs := effect.gprs,
+        flags := effect.flags,
+        rip := next_rip(before.rip, length),
+        memory := before.memory,
+    )
+}
 
 fn execute_test<M>(left, right: Gpr, length: Nat, before: MachineState<M>,
     af: Bool) → MachineState<M>
@@ -2548,6 +2755,7 @@ theorem erase_af_normal_commute<M>(instruction: Instruction, before: MachineStat
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
         CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl,
         TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
+        ShiftOne(_, _) => refl,
     }
 }
 
@@ -2574,6 +2782,13 @@ theorem execute_test_same_defined<M>(left, right: Gpr, length: Nat,
     refl
 }
 
+theorem execute_shift_same_defined<M>(op: ShiftOp, destination: Gpr, length: Nat,
+    before: MachineState<M>, first, second: Bool):
+    SameDefinedState<M>(execute_shift(op, destination, length, before, first),
+        execute_shift(op, destination, length, before, second)) {
+    refl
+}
+
 fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
     outcome: SemanticOutcome<MachineState<M>, Exception>) → Type
 {
@@ -2593,6 +2808,8 @@ fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
             outcome = Returned(execute_test(left, right, decoded.length, before, af)),
         AddRI8(_, _) => outcome = Returned(execute_normal(decoded, before)),
         AddRI32(_, _) => outcome = Returned(execute_normal(decoded, before)),
+        ShiftOne(op, destination) => ∃ af: Bool,
+            outcome = Returned(execute_shift(op, destination, decoded.length, before, af)),
     }
 }
 
@@ -2632,6 +2849,12 @@ theorem execute_same_defined<M>(instruction: Instruction, length: Nat,
                 λ state _ => SameDefinedState<M>(state,
                     execute_normal(DecodedInstruction(TestRR(left, right), length, valid), before)),
                 execute_test_same_defined(left, right, length, before, proof.witness, False)),
+        ShiftOne(op, d) => λ result proof =>
+            j(sym(returned_machine_inj(result,
+                execute_shift(op, d, length, before, proof.witness), proof.proof)),
+                λ state _ => SameDefinedState<M>(state,
+                    execute_normal(DecodedInstruction(ShiftOne(op, d), length, valid), before)),
+                execute_shift_same_defined(op, d, length, before, proof.witness, False)),
     })(after, executed)
 }
 
@@ -2690,6 +2913,7 @@ theorem canonical_execute_normal_is_allowed<M>(instruction: Instruction,
         TestRR(_, _) => Exists(False, refl),
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,
+        ShiftOne(_, _) => Exists(False, refl),
     }
 }
 
@@ -2908,6 +3132,7 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         TestRR(_, _) => refl,
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,
+        ShiftOne(_, _) => refl,
     }
 }
 

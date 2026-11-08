@@ -1447,3 +1447,38 @@ division have no `rt` op (issues/runtime-signed-extend-divide.md). Probes:
   uncurried meaning with the callee instance's by conversion
   (`Compile::part`'s `linked`), and both reduce to `emb ∘ g ∘ abs` on
   words whatever the numbering. No shared table was needed.
+
+**Round 3 (same day): shifts reach x86; division waits on the flags model.**
+
+- **A shift by `k` is `k` one-bit shifts.** FunctionIR shift counts are
+  constants. x86's `SHL/SHR/SAR r64, imm8` leaves OF undefined at any count
+  but one, and the model's determinism theory (`SameDefinedState`, which
+  erases only AF) cannot hold an undefined OF. `SHL/SHR/SAR r64, 1`
+  (`REX.W D1 /4, /5, /7`, `Instruction::ShiftOne`) defines every flag but
+  AF, so it is modelled the way `TEST` is: `Execute` admits either AF,
+  `execute_register` takes `False` as its representative, and nothing
+  about determinism is restated. `x.shift_left(Succ(k))` is
+  `x.shift_left(k).shift_left_one()` by definition, so the chain's meaning
+  is `shift_chain_executes`, by induction with no bit-level reasoning.
+  The cost is code size: a shift by 40 is 40 instructions.
+- **Legalization is apart from selection.** `ShiftOp::legalize` says what
+  a shift by `count` is in terms any target could select from:
+  `ShiftsBy(count)` up to 63, then `ShiftsToZero` for SHL and SHR and
+  `ShiftsBy(63)` for SAR, proved by `legalize_sound` from the `BitVec`
+  saturation facts (`shift_left_past`, `arithmetic_shift_right_past`; the
+  64-bit proofs go by halves, as a whole 64-step shift of a neutral word
+  runs out of conversion fuel). `File::select_shift` then picks the
+  chain, or `MOV r, 0`. No count of 64 or more reaches an instruction.
+- **Sign extension needs no x86 for `i64`.** `SInt::extend` widens a
+  narrower signed word, and S4 keeps only 64- and 1-bit values in
+  registers, so `MOVSX` waits on narrow words
+  (`runtime-repr-narrow-words`).
+- **Division needs the flags model.** `IDIV` leaves every flag
+  undefined, which neither the AF erasure nor a one-bit trick covers;
+  `x86-undefined-flags` holds the choice.
+- **What stays out.** The generator's agreement check compares the
+  reflected meaning with the source by conversion, which unfolds a shift by
+  a large count (64 or more, or a signed one past about a hundred) when the
+  shifted word meets another shift under one operation; those functions are
+  refused with an out-of-fuel note (`runtime-shift-conversion-unfolding`).
+  Shifts by realistic counts, rotations among them, compile.

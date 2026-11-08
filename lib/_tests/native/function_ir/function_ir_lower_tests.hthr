@@ -1,0 +1,67 @@
+// Probes of the verified lowering's shifts (function_ir_lower,
+// docs/runtime-fn-setups-design.md §16.13 round 3): legalization of the
+// count, apart from selection, and the code each count selects.
+import function_ir;
+import function_ir_lower;
+import x86_64;
+import bitvec;
+import list;
+import logic;
+import nat;
+
+// Legalization: counts 0, 1 and 63 are shifts by themselves; past that SHL
+// and SHR are zero and SAR is SAR by 63, at 64, 65 and a very large count.
+theorem shl_by_0(): OpShl.legalize(0) = ShiftsBy(0) { refl }
+theorem shl_by_1(): OpShl.legalize(1) = ShiftsBy(1) { refl }
+theorem shl_by_63(): OpShl.legalize(63) = ShiftsBy(63) { refl }
+theorem shl_at_64(): OpShl.legalize(64) = ShiftsToZero { refl }
+theorem shr_at_65(): OpShr.legalize(65) = ShiftsToZero { refl }
+theorem shl_far(): OpShl.legalize(1000000000000) = ShiftsToZero { refl }
+theorem sar_at_63(): OpSar.legalize(63) = ShiftsBy(63) { refl }
+theorem sar_at_64(): OpSar.legalize(64) = ShiftsBy(63) { refl }
+theorem sar_far(): OpSar.legalize(1000000000000) = ShiftsBy(63) { refl }
+
+// The negative control: SHL by 64 is never selected as a shift by 64, the
+// count x86 would mask to zero.
+theorem shl_64_not_masked(): ¬(OpShl.legalize(64) = ShiftsBy(64)) { λ same => absurd(same) }
+
+// What legalization claims, at a word: SAR past the width is the sign in
+// every bit, SHL past it zero.
+theorem sar_far_means(): OpSar.by(BitVec::ofNat(0x8000000000000000), 1000) = BitVec::ofNat(0xffffffffffffffff) {
+    OpSar.legalize_sound(BitVec::ofNat(0x8000000000000000), 1000)
+}
+theorem shl_far_means(x: BitVec(64)): OpShl.by(x, 1000000000000) = BitVec::zero() { OpShl.legalize_sound(x, 1000000000000) }
+
+// Selection: the value is in RDI, the result goes to RAX.
+fn in_rdi() → File { File::empty().write(Rdi, Some(Held(0, Word))) }
+fn code_of(lowered: Option<Lowered>) → List<Instruction> { match lowered { None => [], Some(l) => l.code } }
+
+theorem shl_0_code(): code_of(ShiftLeft(64, 1, 0, 0).lower(Rax, in_rdi())) = [MovRR(Rax, Rdi)] { refl }
+theorem shl_3_code(): code_of(ShiftLeft(64, 1, 0, 3).lower(Rax, in_rdi())) =
+    [MovRR(Rax, Rdi), ShiftOne(OpShl, Rax), ShiftOne(OpShl, Rax), ShiftOne(OpShl, Rax)] { refl }
+theorem shr_1_code(): code_of(LogicalShiftRight(64, 1, 0, 1).lower(Rax, in_rdi())) = [MovRR(Rax, Rdi), ShiftOne(OpShr, Rax)] { refl }
+theorem shl_64_code(): code_of(ShiftLeft(64, 1, 0, 64).lower(Rax, in_rdi())) = [MovRI(Rax, BitVec::zero())] { refl }
+theorem shr_65_code(): code_of(LogicalShiftRight(64, 1, 0, 65).lower(Rax, in_rdi())) = [MovRI(Rax, BitVec::zero())] { refl }
+theorem sar_65_length(): code_of(ArithmeticShiftRight(64, 1, 0, 65).lower(Rax, in_rdi())).len() = 64 { refl }
+theorem sar_63_length(): code_of(ArithmeticShiftRight(64, 1, 0, 63).lower(Rax, in_rdi())).len() = 64 { refl }
+// A shift at another width has no registers yet.
+theorem shl_32_refused(): ShiftLeft(32, 1, 0, 3).lower(Rax, in_rdi()) = None { refl }
+
+// The instruction: REX.W D1 /4, /5 and /7, decoded back.
+theorem shl_rax_bytes(): canonical_bytes(ShiftOne(OpShl, Rax)) = [BitVec::ofNat(0x48), BitVec::ofNat(0xd1), BitVec::ofNat(0xe0)] { refl }
+theorem shr_rcx_bytes(): canonical_bytes(ShiftOne(OpShr, Rcx)) = [BitVec::ofNat(0x48), BitVec::ofNat(0xd1), BitVec::ofNat(0xe9)] { refl }
+theorem sar_r9_bytes(): canonical_bytes(ShiftOne(OpSar, R9)) = [BitVec::ofNat(0x49), BitVec::ofNat(0xd1), BitVec::ofNat(0xf9)] { refl }
+theorem sar_r9_decodes(): decode_instruction(canonical_bytes(ShiftOne(OpSar, R9))) = Some(decoded_canonical(ShiftOne(OpSar, R9))) { refl }
+// D1 /6 is not modelled, so it does not decode.
+theorem d1_6_refused(): decode_instruction([BitVec::ofNat(0x48), BitVec::ofNat(0xd1), BitVec::ofNat(0xf0)]) = None { refl }
+
+// Flags at count one: SHL of the top bit carries it out and overflows; SAR
+// never overflows; SHR's OF is the original sign.
+theorem shl_top_flags(): shift_flags(OpShl, BitVec::ofNat(0x8000000000000000), False).cf = True ∧
+    shift_flags(OpShl, BitVec::ofNat(0x8000000000000000), False).of = True ∧
+    shift_flags(OpShl, BitVec::ofNat(0x8000000000000000), False).zf = True { ⟨refl, ⟨refl, refl⟩⟩ }
+theorem sar_flags(): shift_flags(OpSar, BitVec::ofNat(0x8000000000000001), False).cf = True ∧
+    shift_flags(OpSar, BitVec::ofNat(0x8000000000000001), False).of = False ∧
+    shift_flags(OpSar, BitVec::ofNat(0x8000000000000001), False).sf = True { ⟨refl, ⟨refl, refl⟩⟩ }
+theorem shr_flags(): shift_flags(OpShr, BitVec::ofNat(0x8000000000000000), False).of = True ∧
+    shift_flags(OpShr, BitVec::ofNat(0x8000000000000000), False).sf = False { ⟨refl, refl⟩ }
