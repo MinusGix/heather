@@ -546,14 +546,6 @@ theorem List::folded_last(self nodes: List<Node>): (facts: List<Fact>) → (i: N
 // ---------------------------------------------------------------------------
 // Removing dead nodes
 
-theorem Bool::is_true_or_l(self a: Bool, b: Bool, h: a.IsTrue()): (a || b).IsTrue() {
-    match a { True => trivial, False => false_elim(h) }
-}
-
-theorem Bool::is_true_or_r(self a: Bool, b: Bool, h: b.IsTrue()): (a || b).IsTrue() {
-    (match a { True => trivial, False => h })
-}
-
 // An id of a list is not absent from it.
 theorem present_of_mem(id: Nat, ids: List<Nat>, m: Mem(id, ids)): (!absent(id, ids)).IsTrue() {
     match none: absent(id, ids) {

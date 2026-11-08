@@ -737,13 +737,6 @@ theorem Env::pass_agrees(self env: Env, parameters: List<Nat>, count, m: Nat, st
 
 theorem Exists::with<A, R>(P: A → Type, e: Exists<A>(P), k: (a: A) → P(a) → R): R { k(e.witness, e.proof) }
 
-theorem Nat::differs_of_ne(self a, b: Nat, ne: a ≠ b): a.differs(b).IsTrue() {
-    match a.eq_dec(b) {
-        Inl(eq) => false_elim(ne(eq)),
-        Inr(_) => trivial,
-    }
-}
-
 theorem moves_wide(to: List<Nat>): (from: List<Nat>) → nodes_wide(moves(to, from)).IsTrue() {
     match to {
         Nil => λ from => trivial,

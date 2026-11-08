@@ -1,0 +1,59 @@
+// Probes of `scan`, FunctionIR evaluability checked in one pass
+// (function_ir_eval, issues/function-ir-evaluable-quadratic.md): it accepts
+// and refuses what `evaluable` does.
+import function_ir;
+import function_ir_eval;
+import bool;
+import list;
+import option;
+
+fn no_calls() → Nat → Option<Nat> { λ _ => None }
+
+fn nodes(body: List<Node>) → StructuredRegion { Dataflow(Region(inputs := Ports([]), nodes := body, outputs := Ports([]))) }
+
+fn of(body: StructuredRegion) → Function { Function(parameters := [0], body := body, result := 1) }
+
+// Both arms write the join id `1`, allocated before the comparison the
+// condition reads: an arm may write what an earlier region never
+// mentioned, whatever its number.
+fn joined() → Function {
+    of(Compose(nodes([Const(64, 2, 97), UnsignedLessThan(64, 3, 0, 2)]),
+        Conditional(Ports([]), 3, Ports([]), Ports([]), nodes([Move(64, 1, 0)]), nodes([Const(64, 4, 5), Move(64, 1, 4)]))))
+}
+
+theorem joined_scans(): joined().scan(no_calls()) = True { refl }
+theorem joined_evaluable(): joined().evaluable(no_calls()) = True { refl }
+theorem joined_by_scan(): joined().evaluable(no_calls()).IsTrue() { joined().scan_evaluable(no_calls(), trivial) }
+
+// A continuation writing an id its prefix mentioned.
+fn rewritten() → Function { of(Compose(nodes([Const(64, 2, 1), Move(64, 1, 2)]), nodes([Const(64, 2, 7)]))) }
+
+theorem rewritten_refused(): rewritten().scan(no_calls()) = False { refl }
+theorem rewritten_not_evaluable(): rewritten().evaluable(no_calls()) = False { refl }
+
+// An arm writing its condition.
+fn condition_written() → Function {
+    of(Compose(nodes([Const(1, 3, 1)]), Conditional(Ports([]), 3, Ports([]), Ports([]), nodes([Const(1, 3, 0), Move(64, 1, 0)]),
+        nodes([Move(64, 1, 0)]))))
+}
+
+theorem condition_written_refused(): condition_written().scan(no_calls()) = False { refl }
+theorem condition_written_not_evaluable(): condition_written().evaluable(no_calls()) = False { refl }
+
+// A node reading its own output.
+fn self_read() → Function { of(nodes([Add(64, 1, 1, 0)])) }
+
+theorem self_read_refused(): self_read().scan(no_calls()) = False { refl }
+theorem self_read_not_evaluable(): self_read().evaluable(no_calls()) = False { refl }
+
+// A body writing a parameter.
+fn parameter_written() → Function { of(nodes([Const(64, 0, 1), Move(64, 1, 0)])) }
+
+theorem parameter_written_refused(): parameter_written().scan(no_calls()) = False { refl }
+theorem parameter_written_not_evaluable(): parameter_written().evaluable(no_calls()) = False { refl }
+
+// A call of a function the program does not have.
+fn unknown_call() → Function { of(Call(5, [0], 1)) }
+
+theorem unknown_call_refused(): unknown_call().scan(no_calls()) = False { refl }
+theorem unknown_call_not_evaluable(): unknown_call().evaluable(no_calls()) = False { refl }

@@ -1125,8 +1125,10 @@ every runtime fn it reaches. What the round fixed:
   quadratic in a function's size: checking it for every callee made a
   caller of a dozen-arm callee run out of fuel
   (issues/runtime-fn-caller-agreement-fuel.md). `program_evaluable`
-  remains what the x86 certificate checks (`eval_computes` needs the
-  disjointness).
+  remains what the x86 certificate needs (`eval_computes` needs the
+  disjointness); it checks it through `program_scan`, one pass over each
+  function, a function per declaration, and `program_scan_evaluable`
+  (issues/function-ir-evaluable-quadratic.md).
 - **The program.** The generator walks the tables depth first (each
   callee's table read by reflecting it again, as its own generator did) and
   places each function once, callees first, the function itself last. A

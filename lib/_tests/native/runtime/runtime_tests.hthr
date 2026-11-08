@@ -223,6 +223,13 @@ theorem byte_class_pair_runs(a, b: BitVec(64)): program_eval(byte_class_pair::pr
     byte_class_pair::agrees(a, b)
 }
 
+// The whole program evaluable, the disjointness the x86 certificate needs:
+// `program_scan` checks it in one pass where `program_evaluable` itself
+// runs past the fuel (issues/function-ir-evaluable-quadratic.md).
+theorem byte_class_pair_evaluable(): program_evaluable(byte_class_pair::program).IsTrue() {
+    program_scan_evaluable(byte_class_pair::program, trivial)
+}
+
 // ---------------------------------------------------------------------------
 // Refusals. Each names its reason, and the function under the prefix is not
 // published either (the item is one transaction).

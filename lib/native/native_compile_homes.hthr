@@ -55,7 +55,7 @@ theorem Nat::same_false(self n: Nat, m: Nat, ne: n ≠ m): n.same(m) = False {
     }
 }
 
-theorem Nat::differs_of_ne(self a: Nat, b: Nat, ne: a ≠ b): a.differs(b) = True {
+theorem Nat::differs_eq_of_ne(self a: Nat, b: Nat, ne: a ≠ b): a.differs(b) = True {
     (match a.eq_dec(b) {
         Inl(e) => false_elim(ne(e)),
         Inr(_) => refl,
@@ -115,7 +115,7 @@ theorem List::union_right(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, b))
 // A word of `out` other than the one written is live before the write.
 theorem live_before_keeps(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat, m: Mem(i, out), ne: i ≠ written):
     Mem(i, live_before(reads, written, out)) {
-    let apart: (absent(i, [written]) = True) = j(sym(i.differs_of_ne(written, ne)), λ b _ => Bool::and(b, True) = True, refl);
+    let apart: (absent(i, [written]) = True) = j(sym(i.differs_eq_of_ne(written, ne)), λ b _ => Bool::and(b, True) = True, refl);
     reads.union_right(out.minus([written]), i, out.mem_filter_of(λ (id: Nat) => absent(id, [written]), i, apart, m))
 }
 
