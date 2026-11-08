@@ -5,7 +5,7 @@ labels: [proofs,elaboration,arithmetic,solver]
 area: tactics
 milestone: [tac-arith]
 created: 2026-08-27
-updated: 2026-10-28
+updated: 2026-11-08
 ---
 
 Make integer disequality and divisibility first-class reflected inputs instead
@@ -31,3 +31,4 @@ kernel reconstruction.
 ## Log
 
 - 2026-10-28: `≠` half landed: Omega's frontend reflects a context `x ≠ y` at Int (and Nat via `Int::ofnat_ne`) as `Relation::Ne` with evidence `omega::normalized_ne_value`, CutSat reads it via `assume_ne`, and the eager two-way split is skipped once CutSat has a model. Eight disequalities on one variable used to be 2⁸ Omega runs. Refusals print CutSat's integer model. Left: written divisibility `d ∣ e` and `¬(d ∣ e)` still go through the remainder (`mod`) reflection and the split; reflecting them as CutSat divisibility (`assume_dvd`) is what remains here.
+- 2026-11-08: Related reader gap: [[omega-reads-min-max]] (max/min read as atoms).

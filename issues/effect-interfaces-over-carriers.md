@@ -45,3 +45,4 @@ the pure, `Io` and buffered handlers working today by `refl`.
 ## Log
 
 - 2026-11-08: - 2026-11-08: Minus (on PR #484): restricted APIs should be the default, with Io only at the top and inside the instances, ideally with a guarantee that code isn't touching Io. So this issue's library is the standard set an ordinary program uses (byte sinks/sources per descriptor, file system, args, exit), not a few examples. Restrictions must be classes over an abstract carrier, since Heather has no private fields to hide a record's Io (docs/effects-locality-design.md §5.6).
+- 2026-11-08: [[method-call-on-constrained-carrier]] is built: `c.say(m);` on a constrained carrier variable threads `c` through `Log::say`.

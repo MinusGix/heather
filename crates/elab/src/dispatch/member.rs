@@ -394,6 +394,12 @@ impl Elaborator {
         let Some((carrier, owner)) =
             inferred.or_else(|| self.receiver_owner_by_head(cx, recv, span))
         else {
+            // A receiver at a type variable has no owner of its own, but a
+            // class constraining the variable here is one
+            // (issues/method-call-on-constrained-carrier.md).
+            if let Some(qualified) = self.constrained_member(cx, recv, name, span)? {
+                return Ok(qualified);
+            }
             // `f.pos(…)` written for a function's member `f::pos`
             // (issues/function-owned-members.md): the receiver's type is a
             // function type, which owns no namespace, so the call falls back
@@ -456,6 +462,109 @@ impl Elaborator {
             );
         }
         Ok(qualified)
+    }
+
+    /// The callee of `recv.name(…)` when the receiver's type is a type
+    /// variable (or any type with no nominal carrier) that a class
+    /// dictionary in scope constrains: `K::name` for the binder's class `K`
+    /// or one of its parents at the same carrier, as Rust finds a trait's
+    /// methods on a generic and Haskell a class's
+    /// (issues/method-call-on-constrained-carrier.md).
+    ///
+    /// The candidates are read off `cx.dicts` — instance arguments
+    /// `d: K<C> := infer` and section constraints, as written — and never off
+    /// the instance registry: a variable has no instances, only constraints.
+    /// So the route costs nothing in a declaration with no class binder,
+    /// and a concrete receiver never reaches it (its owner answered first).
+    ///
+    /// Two constraining classes owning the member are an ambiguity naming
+    /// both, and so is a member beside an ambient `name`: evidence shrinks
+    /// the candidate set and never races candidates, as for a nominal owner.
+    /// `None` leaves the call to the ambient reading, as before this route.
+    fn constrained_member(&self, cx: &Cx, recv: &Expr, name: &str, span: Span) -> R<Option<String>> {
+        if cx.dicts.is_empty() {
+            return Ok(None);
+        }
+        let Ok((_, rty, rlvl)) = self.elab_infer(cx, recv) else {
+            return Ok(None);
+        };
+        // The declaration under construction is reached by its written name:
+        // a recursive `c.say(…)` inside `fn Log::say` is not yet a global.
+        let selfref = cx.selfref.as_ref().map(|s| s.written_name.as_str());
+        let mut found: Vec<(String, String)> = Vec::new();
+        for d in cx.dicts.iter_inner() {
+            let Some(dkey) = self.key_of(&d.class) else { continue };
+            let Some(info) = self.traits.class(&dkey).cloned() else { continue };
+            let Ok((dc, dlvl)) = self.elab_ty(cx, &d.carrier) else { continue };
+            if dlvl != rlvl || !self.conv_types(cx, &dc, &rty, &rlvl) {
+                continue;
+            }
+            // A parent is an owner only at the class's own carrier: a
+            // multi-parameter class may extend a parent at another argument.
+            let at_carrier = |args: &[Ty]| {
+                matches!(args.first().map(|t| &t.kind),
+                    Some(heather_syntax::TyKind::Named { name, args }) if args.is_empty()
+                        && info.params.first() == Some(name))
+            };
+            let owners = std::iter::once(d.class.clone()).chain(
+                info.ancestors
+                    .iter()
+                    .filter(|a| at_carrier(&a.args))
+                    .map(|a| a.name.clone()),
+            );
+            for owner in owners {
+                let qualified = format!("{owner}::{name}");
+                let key = if selfref == Some(qualified.as_str()) {
+                    qualified.clone()
+                } else {
+                    match self.resolve_name(&qualified) {
+                        NameRes::Found(_) => {}
+                        NameRes::Ambiguous(_) => return Err(self.name_miss(&qualified, String::new(), span)),
+                        _ => continue,
+                    }
+                    let Some(key) = self.key_of(&qualified) else { continue };
+                    key
+                };
+                if !found.iter().any(|(k, _)| *k == key) {
+                    found.push((key, qualified));
+                }
+            }
+        }
+        match found.as_slice() {
+            [] => Ok(None),
+            [(_, qualified)] => {
+                let ambient = cx.names.iter_inner().any(|n| n == name)
+                    || cx.aliases.iter_inner().any(|a| a.name == *name)
+                    || cx.selfref.as_ref().is_some_and(|s| s.matches(name) && s.written_name != *qualified)
+                    || self.lookup_global(name).is_some();
+                if ambient {
+                    return err(
+                        format!(
+                            "`{name}` here is both `{qualified}`, reached through a class constraining \
+                             the receiver's type, and a name in scope on its own — write one of them: \
+                             `{qualified}(…)` for the member, or the bare call `{name}(…)` with the \
+                             receiver as an argument"
+                        ),
+                        span,
+                    );
+                }
+                Ok(Some(qualified.clone()))
+            }
+            many => {
+                // Named in sorted order, never scope order.
+                let mut many = many.to_vec();
+                many.sort();
+                let list = many.iter().map(|(_, q)| format!("`{q}`")).collect::<Vec<_>>().join(" and ");
+                err(
+                    format!(
+                        "`{name}` at this receiver is {list}, each reached through a class \
+                         constraining the receiver's type — write the one you meant by its \
+                         qualified name"
+                    ),
+                    span,
+                )
+            }
+        }
     }
 
     /// Does the bare `name` have a reading that could take a receiver of

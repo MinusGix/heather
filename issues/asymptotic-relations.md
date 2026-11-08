@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,analysis,reals,design]
 area: mathematics
 milestone: [math-reals]
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-11-08
 ---
 
 Layer C of `docs/analysis-foundations-design.md` (§6): countable nested
@@ -37,3 +37,7 @@ bridge theorems.
 ## What it assumes from elsewhere
 - **[[real-completeness-interfaces]]** owns completeness; nothing here needs
   more than `CReal::lim`.
+
+## Log
+
+- 2026-11-08: Stdlib awkwardness survey (docs/stdlib-math-awkwardness-survey.md §8): demand for the `Eventually` slice, counted 2026-11-08: `OrderedField::half`/`half_pos`/`half_add` 135 uses, `below_both`/`shrink` 34, and `le_max_*` threshold plumbing 75 in analysis and creal. Pulling `Eventually` with its `and`/`mono` lemmas ahead of the Landau relations would serve sequence.hthr and real_fn_limit.hthr now; [[omega-reads-min-max]] removes the threshold half by itself.
