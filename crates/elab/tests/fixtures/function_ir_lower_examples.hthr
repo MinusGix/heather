@@ -144,7 +144,7 @@ theorem cleared_operand_refused():
     refl
 }
 
-// Shifts have no instruction in the ISA model yet.
+// A shift by a constant lowers to one-bit shifts (§16.13 round 3).
 fn shift_region() → Region {
     Region(
         inputs := Ports([Port(id := 0, width := 64)]),
@@ -152,7 +152,17 @@ fn shift_region() → Region {
         outputs := Ports([Port(id := 1, width := 64)]))
 }
 
-theorem shift_refused(): shift_region().lower_planned([Rdi], [Rax]) = None { refl }
+theorem shift_lowers(): shift_region().lower_planned([Rdi], [Rax]).is_some() = True { refl }
+
+// A shift at another width has no registers yet.
+fn narrow_shift_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 32)]),
+        nodes := [ShiftLeft(width := 32, output := 1, value := 0, amount := 3)],
+        outputs := Ports([Port(id := 1, width := 32)]))
+}
+
+theorem narrow_shift_refused(): narrow_shift_region().lower_planned([Rdi], [Rax]) = None { refl }
 
 // Nor do other widths.
 fn narrow_region() → Region {
