@@ -390,7 +390,7 @@ theorem LocatedAddGroup::range_abs_le(n: Nat, f, g: Nat → A):
     ((k: Nat) → Nat::Lt(k, n) → AbsLe(f(k), g(k))) → AbsLe(∑ k < n, f(k), ∑ k < n, g(k))
 {
     match n {
-        Zero => λ h => And(StrictOrder::le_of_same(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(A.unit)), StrictOrder::le_refl(A.unit)),
+        Zero => λ h => And(StrictOrder::le_of_same(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero()), StrictOrder::le_refl(A.unit)),
         Succ(m) => λ h => LocatedAddGroup::abs_le_add(∑ k < m, f(k), f(m), ∑ k < m, g(k), g(m),
             LocatedAddGroup::range_abs_le(m, f, g, λ k hk => h(k, omega(hk))), h(m, m.lt_succ_self())),
     }

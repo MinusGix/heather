@@ -856,6 +856,24 @@ pub(crate) fn op_index_symbol(name: &str) -> Option<&str> {
     (!sym.is_empty()).then_some(sym)
 }
 
+/// A callee's written class goal, its generated index binders shown as the
+/// symbols they were written with: `OrderedField<K>(≈, <, <=, +, *)`, not
+/// `OrderedField<K>(#op≈@0_0, …)`. `true` beside it when any binder was
+/// replaced.
+pub(crate) fn render_goal_symbols(written: &Ty, params: &[crate::ParamMeta]) -> (String, bool) {
+    let mut goal = render_ty(written);
+    let mut symbolic = false;
+    for p in params {
+        if let Some(symbol) = op_index_symbol(&p.name)
+            && goal.contains(&p.name)
+        {
+            goal = goal.replace(&p.name, symbol);
+            symbolic = true;
+        }
+    }
+    (goal, symbolic)
+}
+
 // -- renaming a parent's type parameters ------------------------------------
 //
 // `extends` arguments are restricted to the child's own type parameters

@@ -853,8 +853,7 @@ impl Problem<'_> {
             return Err("internal: `linarith`'s elimination returned a combination that is not a contradiction".into());
         }
         let c = &self.carrier;
-        let point = term_alias(a);
-        let num_pos = |k: Z| format!("linarith::lin_num_pos<{c}>({point}, {})", k - 1);
+        let num_pos = |k: Z| format!("linarith::lin_num_pos<{c}>({})", k - 1);
         let num = |k: Z| self.spell.num(k);
         let mut cited = Vec::new();
         let mut cite = |f: usize| {
@@ -921,7 +920,7 @@ impl Problem<'_> {
             parts.push((num(constant), num_pos(constant), true));
         }
         let (s, hs, positive) = match parts.pop() {
-            None => (num(0), format!("linarith::lin_zero_le<{c}>({point})"), false),
+            None => (num(0), format!("linarith::lin_zero_le<{c}>()"), false),
             Some(last) => parts.into_iter().rev().fold(last, |(e, p, st), (ei, pi, si)| {
                 let lemma = match (si, st) {
                     (false, false) => "lin_add_le_le",

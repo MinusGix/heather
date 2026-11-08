@@ -104,7 +104,7 @@ theorem UnifContOn::steps(D: K → Type, f: K → K, hD: ConvexOn(D), e, d: K, p
                 Inr(close) => {
                     let r = md(x, y, dx, dy, linarith(xy, close));
                     let pe: (K.unit <= e) = LocatedAddGroup::abs_le_nonneg(f(y) + K.inv(f(x)), e, r);
-                    let nn: (K.unit <= K.of_nat(Succ(m)) * e) = OrderedSemiring::mul_nonneg(K.of_nat(Succ(m)), e, OrderedField::of_nat_nonneg(e, Succ(m)), pe);
+                    let nn: (K.unit <= K.of_nat(Succ(m)) * e) = OrderedSemiring::mul_nonneg(K.of_nat(Succ(m)), e, OrderedField::of_nat_nonneg(Succ(m)), pe);
                     LocatedAddGroup::abs_le_weaken(f(y) + K.inv(f(x)), f(y) + K.inv(f(x)), e, K.of_nat(Succ(Succ(m))) * e, r,
                         K.rel_refl(f(y) + K.inv(f(x))), linarith(nn, w))
                 },
@@ -137,7 +137,7 @@ theorem UnifContOn::bounded_close(a, b: K, ab: a <= b, f: K → K, d: K, pd: K.u
     let fa: AbsLe(f(a), c) = OrderedField::abs_le_sq_succ(f(a));
     let pc: (K.unit <= c) = LocatedAddGroup::abs_le_nonneg(f(a), c, fa);
     let nn: (K.unit <= K.of_nat(Succ(n)) * K.multiplicative.unit) = OrderedSemiring::mul_nonneg(K.of_nat(Succ(n)), K.multiplicative.unit,
-        OrderedField::of_nat_nonneg(a, Succ(n)), StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o));
+        OrderedField::of_nat_nonneg(Succ(n)), StrictOrder::le_of_lt(K.unit, K.multiplicative.unit, o));
     let da: Within(<=, a, a, b) = And(StrictOrder::le_refl(a), ab);
     And(linarith(pc, nn), λ x dx => {
         let ax: (a <= x) = dx.left;
@@ -710,7 +710,7 @@ theorem UnifContOn::ivt_nonconst(a, b: K, ab: a < b, f: K → K, hf: UnifContOn(
     nc: LocallyNonconstOn(λ (x: K) => Within(<=, a, x, b), f), fa: f(a) <= K.unit, fb: K.unit <= f(b)):
     ∃ z: K, Within(<=, a, z, b) ∧ f(z) ≈ K.unit
 {
-    let q = Bisection::quarter(a);
+    let q = Bisection::quarter();
     let t = q.witness;
     let c = K.multiplicative.unit + K.inv(t);
     let w = b + K.inv(a);

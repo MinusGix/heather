@@ -100,8 +100,7 @@ theorem rat_mul_lt(x, y, z: Rat, h: x < y, hz: 0 < z): z * x < z * y { OrderedSe
 theorem creal_below_nat(x: CReal): ∃ n: Nat, x < CReal::ofRat(Rat::ofInt(OfNat(n))) { CReal::archimedean(x) }
 
 theorem creal_nat_climbs(n: Nat): CReal::ofRat(Rat::ofInt(OfNat(n))) < CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))) {
-    let x: CReal = 0;
-    OrderedField::of_nat_lt_succ(x, n)
+    OrderedField::of_nat_lt_succ(n)
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +128,6 @@ theorem creal_archimedean_inv(x: CReal, hx: 0 < x):
     ∃ n: Nat, CReal::ofRat(Rat::ofInt(OfNat(Succ(n))))⁻¹ < x
 {
     match OrderedField::archimedean_recip(x, hx) {
-        Exists(n, below) => Exists(n, CReal::lt_respects(CReal::inv_respects(CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))).same_refl(), h := Inr(OrderedField::of_nat_pos(x, n))), x.same_refl(), below)),
+        Exists(n, below) => Exists(n, CReal::lt_respects(CReal::inv_respects(CReal::ofRat(Rat::ofInt(OfNat(Succ(n)))).same_refl(), h := Inr(OrderedField::of_nat_pos(n))), x.same_refl(), below)),
     }
 }
