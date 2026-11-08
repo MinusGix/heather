@@ -29,3 +29,7 @@ Completeness and determinism, not soundness: a transparent value is δ-equal to 
 ## Related
 
 [[kernel-premise-queue-type]], [[kernel-psi-bound-cache]] (the same "cache bound to its Ψ" shape one level up), [[elaboration-determinism]].
+
+## Log
+
+- 2026-11-08: 2026-11-08: first attempt, not landed (`docs/kernel-implicit-state-review.md` §1 has the details; patches in `/mnt/project-files/value-memo-unfolding/`). Reproduced by reverting #459's look-ahead: 5 `NotConvertible` in `interval_tactic_tests`. A level tag on memo entries, with transparent readers rejecting lazy values, fixes them at under 1% cost on calc_parser (shared-application memo left untagged). But it makes `creal_tests::half_terms` and `rt_lower_tests::spread_agrees` run out of fuel, because re-evaluating loses the lazy run's sharing. Resuming stuck spines instead keeps those passing but does not fix the 5. The level belongs to values (`TmClo::Val`, conversion's `wa`/`wb` handed between stages), not to memo entries. Next: find the exact #459 path; or give `Val` a level byte.

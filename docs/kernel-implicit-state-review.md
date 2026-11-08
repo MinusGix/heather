@@ -20,7 +20,7 @@ time come last.
 
 | # | Finding | Where | Evidence it bites | Breach costs | Make explicit? | Issue |
 |---|---------|-------|-------------------|--------------|----------------|-------|
-| 1 | The value memo does not record the mode a value was forced in | `value.rs` `ValueArena`, `eval.rs` `Eval::transparent` | **a real defect** (#459: a convertible interval verdict refused) | completeness, history dependence | **yes** | [[value-memo-evaluation-mode]] |
+| 1 | The value memo does not record the mode a value was forced in | `value.rs` `ValueArena`, `eval.rs` `Eval::transparent` | **a real defect** (#459: a convertible interval verdict refused) | completeness, history dependence | **yes** (first attempt §1: not a memo-only fix) | [[value-memo-evaluation-mode]] |
 | 2 | Deferred-premise queues: two hand-kept copies of one discipline | `conv.rs` `Conv` (8 fields), `typing.rs` `Tc` (4 fields) | **two defects while it was built** (deep-term-walks §3.3, §3.4) | soundness (a provisional memo entry kept) | **yes** | [[kernel-premise-queue-type]] |
 | 3 | Typing memo keys copy `Env`'s fields by hand | `typing.rs` `Scope`, `TyScope`, `SigScope` | none found | soundness (a stale memo hit) | **yes**, cheap | [[typing-memo-scope-key]] |
 | 4 | Ψ-bound `GlobalCache`, plus `Defs`' layer condition | `reduce.rs` `Defs`, `GlobalCache` | none found | soundness | yes (already filed) | [[kernel-psi-bound-cache]] |
@@ -102,6 +102,48 @@ assume determinism (`issues/elaboration-determinism.md`).
 
 (a) is worth doing anyway. Between (b) and (c), measure (c) first: it
 deletes the hazard, where (b) only manages it.
+
+**First attempt (2026-11-08): not landed.** The patches are kept in
+`/mnt/project-files/value-memo-unfolding/`.
+
+- **Reproduced.** Reverting #459's transparent look-ahead
+  (`delta_tm_ahead` back to `delta_step`) makes five theorems of
+  `lib/_tests/std/tactic/interval_tactic_tests.hthr` refuse with
+  `NotConvertible`.
+- **(b) as rejection.** `Eval` carries `Unfolding { Opaque, Lazy, Transparent }`
+  in place of its bool, and the force, closed-value and type memos keep it
+  beside each value; a reader takes only values forced at its level or
+  above. This fixes those five under the lazy look-ahead, and costs under
+  1% of evaluation steps on `calc_parser`, provided the shared-application
+  memo is left untagged (tagged, it cost +68% steps and +88% memory).
+  Keying strictly by mode cost +18% steps.
+- **But the library gate refuses two modules with `OutOfFuel`**
+  (`creal_tests::half_terms`, `rt_lower_tests::spread_agrees`). A
+  transparent reader that re-evaluates a lazily forced closure builds fresh
+  closures for everything below it, so the sharing the lazy run built is
+  lost and fuel runs out.
+- **(b) as resumption.** A transparent reader takes a lazy value unless it
+  is a glued neutral with a non-application elimination in its spine, and
+  resumes that one from its own unfolding. This keeps both modules passing,
+  but does *not* fix the five refusals.
+- **Why not.** Instrumenting the rejecting variant shows the differing
+  values are exactly such stuck spines, so the gap is in values that reach
+  a transparent run without passing through the memo. A value the
+  evaluator wraps as `TmClo::Val` (`Eval::vclo`, 58 sites, many of them in
+  conversion) carries no level. Conversion itself hands lazily forced `wa`
+  and `wb` to its transparent stage. So "the mode a value was forced at" is
+  a property of values, not of memo entries.
+
+What remains open, cheapest first:
+
+1. Find the exact path by which the #459 shape reaches a transparent run
+   with a stuck value it cannot step. Head spines resume correctly, so the
+   path is specific, and fixing it may be a narrow change.
+2. Give values their level: a byte on `Val`/`TmClo::Val`, set at
+   construction, with transparent readers resuming stuck ones. That is
+   complete, but it touches every `vclo` site and conversion's staging.
+3. Keep master's call-site rule (`delta_step_transparent`'s comment), now
+   with a reproduction recorded here.
 
 ## 2. Deferred-premise queues: two hand-kept copies of one discipline
 
