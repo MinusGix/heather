@@ -5,7 +5,7 @@ labels: [caching,elaboration,performance]
 area: language
 milestone: [lang-proof-modularity]
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-08
 ---
 
 `docs/interface-definitions-design.md` §8. Outside its module an interface
@@ -34,3 +34,4 @@ The §8 probe replays the consumer after the `Zero`-arm edit, and a closed
 
 - 2026-11-02: Filed from the interface-definitions build.
 - 2026-11-05: gardener: cites a file it shares with [[interface-definitions]] (`docs/interface-definitions-design.md`).
+- 2026-11-08: 2026-11-08: the gluing record this issue will read has no drop guard yet; [[kernel-observation-recording-guard]] should land first or with it.

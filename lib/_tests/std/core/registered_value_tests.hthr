@@ -1,0 +1,62 @@
+// Probes of checked names and registered values
+// (docs/registered-values-design.md): `name_of(p)` is the checked key a
+// `by` looks up, `register def` enters a value under its type, and
+// `registered(T)` lists them where it is read. `mono`'s tables
+// (lib/std/tactic/mono_laws.hthr) are the library's client; mono_tests
+// exercises them. Tests, not library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+
+record Row { op: String, lemma: String }
+
+fn rows(rs: List<Row> := registered(Row)) → List<Row> { rs }
+
+// A default is read where the call is: nothing is registered yet here.
+theorem none_yet(): rows() = [] { refl }
+
+register def row_b: Row = Row(name_of(Nat::add), name_of(Nat::add_le_mono_l));
+
+register def row_a: Row = Row(name_of(Nat), name_of(Succ));
+
+// In canonical (key) order, not declaration order.
+theorem both(): rows() = [row_a, row_b] { refl }
+
+// The qualified key, which `Lookup` resolves wherever the module is in the
+// import closure; a builtin is its own name.
+theorem spelled(): name_of(Nat::add) = "nat::Nat::add" { refl }
+
+theorem builtin(): name_of(Nat) = "Nat" { refl }
+
+// A tactic reading its table at the `by`: the last row's lemma, applied.
+fn last_lemma(rs: List<Row>) → Tac<Expr> {
+    match rs {
+        Nil => fail("no rows", []),
+        Cons(r, rest) => match rest {
+            Nil => match <- lookup(r.lemma) { Accepted(g) => pure(Global(g)), Refused(why) => fail(why, []) },
+            Cons(_, _) => last_lemma(rest),
+        },
+    }
+}
+
+fn by_table(h: Expr, rs: List<Row> := registered(Row)) → Tac<Expr> { apply(<- last_lemma(rs), exact(h)) }
+
+theorem looked_up(a, b, c: Nat, h: a <= b): c + a <= c + b { by by_table(h) }
+
+// expect-error: `Nat::add_le_mono_left` names no global here
+def typo: String = name_of(Nat::add_le_mono_left);
+
+// expect-error: has parameters
+register def opt: Option<Nat> = None;
+
+// expect-error: writes its type
+register def untyped = Row("a", "b");
+
+// expect-error: names no record or inductive type here
+def not_a_type: List<Row> = registered(rows);

@@ -130,6 +130,7 @@ theorem Node::run_other(self node: Node, values: Valuation(), buffers: Buffers()
         BufferStore(output, buffer, index, value) => λ ne => Valuation::set_other(values, output,
             load_value(store_byte(buffers, buffer, values(64, index).toNat(), low_byte(values(64, value))), buffer, index, values), w, id, ne),
         Resize(from, to, output, source) => λ ne => Resize(from, to, output, source).step_other(values, w, id, ne),
+        SignResize(from, to, output, source) => λ ne => SignResize(from, to, output, source).step_other(values, w, id, ne),
     }(ne)
 }
 
@@ -204,6 +205,7 @@ theorem Node::run_wide(self node: Node, values, other: Valuation(), same: (x: Na
                     sym(Valuation::set_here(other, output, load_value(theirs, buffer, index, other), 64))))⟩
         },
         Resize(_, _, _, _) => λ never => false_elim(never),
+        SignResize(_, _, _, _) => λ never => false_elim(never),
     }(wide)
 }
 
@@ -245,6 +247,7 @@ theorem Node::run_word(self node: Node, values: Valuation(), buffers: Buffers(),
         BufferStore(output, buffer, index, value) => λ _ =>
             BitVec::ofNat_toNat(64, BufferStore(output, buffer, index, value).run(values, buffers).values(64, output)),
         Resize(_, _, _, _) => λ never => false_elim(never),
+        SignResize(_, _, _, _) => λ never => false_elim(never),
     }(wide)
 }
 
@@ -335,6 +338,8 @@ theorem Node::renamed_step(self node: Node, spare: Nat, values: Valuation()):
             Valuation::set_here(values, spare, BufferStore(spare, buffer, index, value).value(values), 64)),
         Resize(from, to, _, source) => cong_fn(λ (x: BitVec(to)) => x.toNat(),
             Valuation::set_here(values, spare, Resize(from, to, spare, source).value(values), to)),
+        SignResize(from, to, _, source) => cong_fn(λ (x: BitVec(to)) => x.toNat(),
+            Valuation::set_here(values, spare, SignResize(from, to, spare, source).value(values), to)),
     }
 }
 
@@ -357,6 +362,7 @@ theorem Node::renamed_reads(self node: Node, output: Nat): function_ir_eval::Nod
         BufferLoad(_, _, _) => refl,
         BufferStore(_, _, _, _) => refl,
         Resize(_, _, _, _) => refl,
+        SignResize(_, _, _, _) => refl,
     }
 }
 

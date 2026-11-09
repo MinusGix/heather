@@ -642,6 +642,24 @@ impl<'a, 'v> Eval<'a, 'v> {
         }
     }
 
+    /// [`Eval::delta_step`] run **transparently**, as [`Eval::delta_whnf`]'s
+    /// steps are: a single step that looks ahead (conversion's
+    /// `meet_on_the_way`) forces the glued unfoldings the transparent run
+    /// that follows will read, and forced opaquely they hold eliminators
+    /// stuck on glued scrutinees that the run must replay. That costs work,
+    /// not correctness, and enough of it to run `rt_lower_tests`'s
+    /// `spread_agrees` out of fuel. #459 found the step refusing a
+    /// convertible pair instead: the cause was a withheld call judged open
+    /// at a lazily forced argument and memoized unglued, fixed where the
+    /// verdict is made ([`Eval::closed`],
+    /// `docs/kernel-implicit-state-review.md` §1).
+    pub fn delta_step_transparent(&mut self, v: &'v Val<'v>) -> Res<&'v Val<'v>> {
+        let saved = std::mem::replace(&mut self.transparent, true);
+        let out = self.delta_step(v);
+        self.transparent = saved;
+        out
+    }
+
     /// Force the glued unfoldings at the head until the value is not a
     /// definition's spine — i.e. the δ-transparent weak head value.
     ///
@@ -654,20 +672,6 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// loop is still needed — an application spine over a glued head is
     /// left glued by the replay — and it terminates because every round
     /// unfolds at least the innermost definition.
-    /// [`Eval::delta_step`] run **transparently**, as [`Eval::delta_whnf`]'s
-    /// steps are: a single step that looks ahead (conversion's
-    /// `meet_on_the_way`) must force a glued unfolding to the value the
-    /// transparent run would, because the forced thunk is memoized in the
-    /// value and that run reads it afterwards. Forced opaquely, it holds an
-    /// eliminator stuck on a glued scrutinee that the run then cannot step,
-    /// and conversion answers `NotConvertible` on a convertible pair.
-    pub fn delta_step_transparent(&mut self, v: &'v Val<'v>) -> Res<&'v Val<'v>> {
-        let saved = std::mem::replace(&mut self.transparent, true);
-        let out = self.delta_step(v);
-        self.transparent = saved;
-        out
-    }
-
     pub fn delta_whnf(&mut self, mut v: &'v Val<'v>) -> Res<&'v Val<'v>> {
         let saved = std::mem::replace(&mut self.transparent, true);
         let out = loop {

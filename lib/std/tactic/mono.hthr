@@ -24,12 +24,15 @@
 // Anything else is reported at its statement: the tactic proves the goal or
 // fails, it does not leave goals open.
 //
-// The laws are the carriers' own theorems, named in `mono_carriers`, or the
-// classes' (`OrderedAddMonoid::add_le_mono_l`, …), named in `mono_classes`,
-// whose dictionary `apply` finds in scope the way a call does; a name that
-// does not resolve where the tactic runs is skipped, so a client that does
-// not import `creal` pays nothing for it. `mono_with(hs)` takes the facts the
-// leaves need as terms: `by mono_with([s.small(k, hk)])`.
+// The laws are the carriers' own theorems, or the classes'
+// (`OrderedAddMonoid::add_le_mono_l`, …, whose dictionary `apply` finds in
+// scope the way a call does), registered beside them as `MonoEntry` values
+// (lib/std/tactic/mono_laws.hthr) with every lemma a checked `name_of`. The
+// tactic reads the entries its client's world has, `registered(MonoEntry)`
+// at the `by` (docs/registered-values-design.md), so a client that does not
+// import `creal` pays nothing for it, and a new carrier gets `mono` by
+// registering its laws. `mono_with(hs)` takes the facts the leaves need as
+// terms: `by mono_with([s.small(k, hk)])`.
 
 import logic;
 import bool;
@@ -40,222 +43,7 @@ import char;
 import string;
 import tactic;
 import cast;
-
-// A monotonicity law: at `<` when `strict`, otherwise at `<=`, a goal whose
-// sides are both `op` applied, differing at most at the argument positions
-// `moves` (as the view lists them), is proved by `lemma` from its premises.
-record MonoLaw { strict: Bool, op: String, moves: List<Nat>, lemma: String }
-
-// A sign law: `0 <= op(…)` (or `0 < op(…)` when `strict`) by `lemma`.
-record SignLaw { strict: Bool, op: String, lemma: String }
-
-// One ordered carrier: its two orders, reflexivity of `<=`, `<` weakened to
-// `<=`, its laws, and the lemmas that replace a side by one it is `≈` to
-// (`<=` left and right, then `<`), for reading casts (empty where the
-// carrier's `≈` is `=` or there are none).
-record MonoCarrier { le: String, lt: String, reflexive: String, weaken: String, laws: List<MonoLaw>, signs: List<SignLaw>, pushes: Option<PushLaws> }
-
-record PushLaws { le_l: String, le_r: String, lt_l: String, lt_r: String }
-
-fn mono_law(strict: Bool, op: String, moves: List<Nat>, lemma: String) → MonoLaw { MonoLaw(strict, op, moves, lemma) }
-
-fn mono_sign(strict: Bool, op: String, lemma: String) → SignLaw { SignLaw(strict, op, lemma) }
-
-// The laws, one-sided ones before the two-sided one of the same operation,
-// so a goal that keeps one operand fixed owes no premise about it. A sum
-// `∑ k < n, f(k)` (`MonoidRel::range(+, n, f)`, its terms at position 2)
-// moves termwise: the premise is `(k: Nat) → k < n → f(k) <= g(k)`, whose
-// binders the search opens.
-fn mono_rat() → MonoCarrier {
-    MonoCarrier("Rat::Le", "Rat::Lt", "Rat::le_refl", "Rat::le_of_lt", [
-        mono_law(False, "Rat::add", [1], "Rat::add_le_mono_l"),
-        mono_law(False, "Rat::add", [0], "Rat::add_le_mono_r"),
-        mono_law(False, "Rat::add", [0, 1], "Rat::add_le_mono"),
-        mono_law(False, "Rat::sub", [1], "Rat::sub_le_sub_l"),
-        mono_law(False, "Rat::sub", [0], "Rat::sub_le_sub_r"),
-        mono_law(False, "Rat::sub", [0, 1], "Rat::sub_le_sub"),
-        mono_law(False, "Rat::mul", [1], "Rat::mul_le_mono_l"),
-        mono_law(False, "Rat::mul", [0], "Rat::mul_le_mono_r"),
-        mono_law(False, "Rat::mul", [0, 1], "Rat::mul_le_mul"),
-        mono_law(False, "Rat::neg", [0], "Rat::neg_le"),
-        mono_law(False, "Rat::recip", [0], "Rat::recip_le_recip"),
-        mono_law(False, "Rat::npow", [0], "Rat::npow_le_mono"),
-        mono_law(True, "Rat::add", [1], "Rat::add_lt_mono_l"),
-        mono_law(True, "Rat::add", [0], "Rat::add_lt_mono_r"),
-        mono_law(True, "Rat::add", [0, 1], "Rat::add_lt_mono"),
-        mono_law(True, "Rat::sub", [1], "Rat::sub_lt_sub_l"),
-        mono_law(True, "Rat::sub", [0], "Rat::sub_lt_sub_r"),
-        mono_law(True, "Rat::mul", [1], "Rat::mul_lt_mono_l"),
-        mono_law(True, "Rat::mul", [0], "Rat::mul_lt_mono_r"),
-        mono_law(True, "Rat::neg", [0], "Rat::neg_lt"),
-        mono_law(False, "MonoidRel::range", [2], "Rat::range_le"),
-    ], [
-        mono_sign(False, "Rat::abs", "Rat::abs_nonneg"),
-        mono_sign(False, "Rat::add", "Rat::add_nonneg"),
-        mono_sign(False, "Rat::mul", "Rat::mul_nonneg"),
-        mono_sign(False, "Rat::npow", "Rat::npow_nonneg"),
-        mono_sign(False, "Rat::recip", "Rat::recip_nonneg"),
-        mono_sign(True, "Rat::add", "Rat::add_pos"),
-        mono_sign(True, "Rat::mul", "Rat::mul_pos"),
-        mono_sign(True, "Rat::npow", "Rat::npow_pos"),
-        mono_sign(True, "Rat::inv_succ", "Rat::inv_succ_pos"),
-        mono_sign(False, "MonoidRel::range", "Rat::range_nonneg"),
-    ], Some(PushLaws("Rat::le_of_same_of_le", "Rat::le_of_same_r", "Rat::lt_of_same_l", "Rat::lt_of_same_r")))
-}
-
-fn mono_creal() → MonoCarrier {
-    MonoCarrier("CReal::Le", "CReal::Lt", "CReal::le_refl", "CReal::le_of_lt", [
-        mono_law(False, "CReal::add", [1], "CReal::add_le_mono_l"),
-        mono_law(False, "CReal::add", [0], "CReal::add_le_mono_r"),
-        mono_law(False, "CReal::add", [0, 1], "CReal::add_le_mono"),
-        mono_law(False, "CReal::mul", [1], "CReal::mul_le_mono_l"),
-        mono_law(False, "CReal::mul", [0], "CReal::mul_le_mono_r"),
-        mono_law(False, "CReal::neg", [0], "CReal::neg_le"),
-        mono_law(False, "CReal::inv", [0, 1], "CReal::inv_le_inv"),
-        mono_law(True, "CReal::add", [1], "CReal::add_lt_mono_l"),
-        mono_law(True, "CReal::add", [0], "CReal::add_lt_mono_r"),
-        mono_law(True, "CReal::add", [0, 1], "CReal::add_lt_mono"),
-        mono_law(True, "CReal::mul", [1], "CReal::mul_lt_mono_l"),
-        mono_law(True, "CReal::mul", [0], "CReal::mul_lt_mono_r"),
-        mono_law(False, "MonoidRel::range", [2], "CReal::range_le"),
-    ], [
-        mono_sign(False, "CReal::add", "CReal::add_nonneg"),
-        mono_sign(False, "CReal::mul", "CReal::mul_nonneg"),
-        mono_sign(True, "CReal::add", "CReal::add_pos"),
-        mono_sign(True, "CReal::mul", "CReal::mul_pos"),
-        mono_sign(False, "MonoidRel::range", "CReal::range_nonneg"),
-    ], Some(PushLaws("CReal::le_of_same_l", "CReal::le_of_same_r", "CReal::lt_of_same_l", "CReal::lt_of_same_r")))
-}
-
-fn mono_int() → MonoCarrier {
-    MonoCarrier("Int::Le", "Int::Lt", "Int::le_refl", "Int::le_of_lt", [
-        mono_law(False, "Int::add", [1], "Int::add_le_mono_l"),
-        mono_law(False, "Int::add", [0], "Int::add_le_mono_r"),
-        mono_law(False, "Int::add", [0, 1], "Int::add_le_mono"),
-        mono_law(False, "Int::mul", [1], "Int::mul_le_mono_l"),
-        mono_law(False, "Int::mul", [0], "Int::mul_le_mono_r"),
-        mono_law(True, "Int::mul", [0], "Int::mul_lt_mono_r"),
-        mono_law(False, "MonoidRel::range", [2], "Int::range_le"),
-    ], [
-        mono_sign(False, "Int::abs", "Int::abs_nonneg"),
-    ], None)
-}
-
-fn mono_nat() → MonoCarrier {
-    MonoCarrier("Nat::Le", "Nat::Lt", "Nat::le_refl", "Nat::le_of_lt", [
-        mono_law(False, "Nat::add", [1], "Nat::add_le_mono_l"),
-        mono_law(False, "Nat::add", [0], "Nat::add_le_mono_r"),
-        mono_law(False, "Nat::add", [0, 1], "Nat::add_le_mono"),
-        mono_law(False, "Nat::mul", [1], "Nat::mul_le_mono_l"),
-        mono_law(False, "Nat::mul", [0], "Nat::mul_le_mono_r"),
-        mono_law(False, "Nat::mul", [0, 1], "Nat::mul_le_mono"),
-        mono_law(False, "Nat::pow", [1], "Nat::pow_le_pow_r"),
-        mono_law(False, "MonoidRel::range", [2], "Nat::range_le"),
-    ], [], None)
-}
-
-def mono_carriers: List<MonoCarrier> = [mono_rat(), mono_creal(), mono_int(), mono_nat()];
-
-// An operation of a class carrier: the dictionary's argument at a position
-// (0 is the carrier, then the class's index: `OrderedField<A>(≈, <, <=, +,
-// *)` has `+` at 4), a field read off the dictionary (`A.inv`), or a global
-// generic over the class (`MonoidRel::range`, a sum).
-inductive ClassOp { Index(i: Nat), Field(name: String), Named(name: String) }
-
-record ClassLaw { strict: Bool, op: ClassOp, moves: List<Nat>, lemma: String }
-
-record ClassSign { strict: Bool, op: ClassOp, lemma: String }
-
-// An ordered class: where its dictionary lists `<` and `<=`, and the laws
-// that hold at it. A field read's record is its first argument, so `A.inv(x)`
-// moves at position 1. Every class extends `StrictOrder`, whose `le_refl` and
-// `le_of_lt` are the reflexivity and weakening.
-record MonoClass { class: String, lt: Nat, le: Nat, laws: List<ClassLaw>, signs: List<ClassSign> }
-
-fn class_law(strict: Bool, op: ClassOp, moves: List<Nat>, lemma: String) → ClassLaw { ClassLaw(strict, op, moves, lemma) }
-
-fn class_sign(strict: Bool, op: ClassOp, lemma: String) → ClassSign { ClassSign(strict, op, lemma) }
-
-// Translation, at every ordered monoid.
-fn mono_monoid_laws() → List<ClassLaw> {
-    [
-        class_law(False, Index(4), [1], "OrderedAddMonoid::add_le_mono_l"),
-        class_law(False, Index(4), [0], "OrderedAddMonoid::add_le_mono_r"),
-        class_law(True, Index(4), [1], "OrderedAddMonoid::add_lt_mono_l"),
-    ]
-}
-
-// What a group adds: negation.
-fn mono_neg_law() → List<ClassLaw> {
-    [class_law(True, Field("inv"), [1], "OrderedAddGroup::neg_lt")]
-}
-
-// What locatedness adds: both summands at once, a strict and a weak bound
-// together, and a sum's terms.
-fn mono_located_laws() → List<ClassLaw> {
-    [
-        class_law(False, Index(4), [0, 1], "LocatedAddMonoid::add_le_mono"),
-        class_law(True, Index(4), [0, 1], "LocatedAddMonoid::add_lt_le_mono"),
-        class_law(False, Named("MonoidRel::range"), [2], "LocatedAddMonoid::range_le"),
-    ]
-}
-
-// Negation at `<=`, which needs both.
-fn mono_located_neg_law() → List<ClassLaw> {
-    [class_law(False, Field("inv"), [1], "LocatedAddGroup::neg_le")]
-}
-
-fn mono_group_laws() → List<ClassLaw> { mono_monoid_laws() ++ mono_neg_law() }
-
-fn mono_located_group_laws() → List<ClassLaw> {
-    mono_group_laws() ++ mono_located_laws() ++ mono_located_neg_law()
-}
-
-// Products by a nonnegative or positive factor, at every ordered semiring.
-fn mono_semiring_laws() → List<ClassLaw> {
-    [
-        class_law(False, Index(5), [1], "OrderedSemiring::mul_le_mono_l"),
-        class_law(False, Index(5), [0], "OrderedSemiring::mul_le_mono_r"),
-        class_law(False, Index(5), [0, 1], "OrderedSemiring::mul_le_mul"),
-        class_law(True, Index(5), [1], "OrderedSemiring::mul_lt_mono_l"),
-        class_law(True, Index(5), [0], "OrderedSemiring::mul_lt_mono_r"),
-    ]
-}
-
-fn mono_located_signs() → List<ClassSign> {
-    [
-        class_sign(True, Index(4), "OrderedAddMonoid::add_pos"),
-        class_sign(False, Index(4), "LocatedAddMonoid::add_nonneg"),
-        class_sign(False, Named("MonoidRel::range"), "LocatedAddMonoid::range_nonneg"),
-    ]
-}
-
-fn mono_semiring_signs() → List<ClassSign> {
-    mono_located_signs() ++ [
-        class_sign(False, Index(5), "OrderedSemiring::mul_nonneg"),
-        class_sign(True, Index(5), "OrderedSemiring::mul_pos"),
-    ]
-}
-
-// The classes, strongest first.
-fn mono_classes() → List<MonoClass> {
-    [
-        MonoClass("OrderedField", 2, 3, mono_located_group_laws() ++ mono_semiring_laws(),
-            mono_semiring_signs() ++ [class_sign(True, Field("recip"), "OrderedField::recip_pos")]),
-        MonoClass("OrderedRing", 2, 3, mono_located_group_laws() ++ mono_semiring_laws(), mono_semiring_signs()),
-        MonoClass("OrderedSemiring", 2, 3, mono_monoid_laws() ++ mono_located_laws() ++ mono_semiring_laws(), mono_semiring_signs()),
-        MonoClass("LocatedAddGroup", 2, 3, mono_located_group_laws(), mono_located_signs()),
-        MonoClass("LocatedAddMonoid", 2, 3, mono_monoid_laws() ++ mono_located_laws(), mono_located_signs()),
-        MonoClass("OrderedAddGroup", 2, 3, mono_group_laws() ++ [class_law(True, Index(4), [0, 1], "OrderedAddMonoid::add_lt_mono")], [
-            class_sign(True, Index(4), "OrderedAddMonoid::add_pos"),
-        ]),
-        MonoClass("OrderedAddMonoid", 2, 3, mono_monoid_laws() ++ [class_law(True, Index(4), [0, 1], "OrderedAddMonoid::add_lt_mono")], [
-            class_sign(True, Index(4), "OrderedAddMonoid::add_pos"),
-        ]),
-        MonoClass("PseudoOrder", 2, 3, [], []),
-        MonoClass("StrictOrder", 2, 3, [], []),
-    ]
-}
+import mono_laws;
 
 // ---------------------------------------------------------------------------
 // The carrier, resolved where the tactic runs.
@@ -298,7 +86,7 @@ record Pushes { le_l: GlobalRef, le_r: GlobalRef, lt_l: GlobalRef, lt_r: GlobalR
 // What a run works with: the goal's carrier, its laws, the given terms, and
 // the cast edges in scope (read once per run where the carrier has push
 // lemmas: a morphism local is recognised by checking a law at it).
-record Mono { le: OpKey, lt: OpKey, reflexive: Option<GlobalRef>, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>, truth: Handle, holds: GlobalRef, edges: List<EdgeRef> }
+record Mono { le: OpKey, lt: OpKey, reflexive: Option<GlobalRef>, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>, truth: Handle, holds: GlobalRef, edges: List<EdgeRef>, entries: List<MonoEntry> }
 
 fn mono_try_global(name: String) → Tac<Option<GlobalRef>> {
     match <- lookup(name) { Accepted(g) => pure(Some(g)), Refused(_) => pure(None) }
@@ -339,12 +127,14 @@ fn mono_signs(ls: List<SignLaw>) → Tac<List<Sign>> {
 
 fn mono_is(o: Option<GlobalRef>, g: GlobalRef) → Bool { match o { None => False, Some(r) => g.id.same(r.id) } }
 
+theorem mono_trivial(): True { trivial }
+
 // What every run needs beside its laws: a theorem of `True`, for an order
 // that computes.
-fn mono_run(le, lt: OpKey, rf, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>) → Tac<Mono> {
-    let triv <- mono_global("mono_trivial");
+fn mono_run(le, lt: OpKey, rf, weaken: Option<GlobalRef>, laws: List<Law>, signs: List<Sign>, pushes: Option<Pushes>, given: List<Given>, es: List<MonoEntry>) → Tac<Mono> {
+    let triv <- mono_global(name_of(mono_trivial));
     let truth <- infer(Global(triv)).or_fail("mono: ");
-    pure(Mono(le, lt, rf, weaken, laws, signs, pushes, given, truth, triv, []))
+    pure(Mono(le, lt, rf, weaken, laws, signs, pushes, given, truth, triv, [], es))
 }
 
 // The four push lemmas, when all of them resolve.
@@ -361,32 +151,60 @@ fn mono_pushes(o: Option<PushLaws>) → Tac<Option<Pushes>> {
     }
 }
 
-// The carrier whose `<=` or `<` is the global `rel`, resolved, or `None`.
-fn mono_carrier(cs: List<MonoCarrier>, rel: GlobalRef, given: List<Given>) → Tac<Option<Mono>> {
+fn mono_same_name(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
+
+// The laws every `MonoRules` entry of `es` gives the carrier whose `<=` is
+// `le`, in the registry's order.
+fn mono_rules_laws(le: String, es: List<MonoEntry>) → List<MonoLaw> {
+    match es {
+        Nil => [],
+        Cons(e, rest) => match e {
+            MonoRules(l, laws, _) => match mono_same_name(l, le) { True => laws ++ mono_rules_laws(le, rest), False => mono_rules_laws(le, rest) },
+            _ => mono_rules_laws(le, rest),
+        },
+    }
+}
+
+fn mono_rules_signs(le: String, es: List<MonoEntry>) → List<SignLaw> {
+    match es {
+        Nil => [],
+        Cons(e, rest) => match e {
+            MonoRules(l, _, signs) => match mono_same_name(l, le) { True => signs ++ mono_rules_signs(le, rest), False => mono_rules_signs(le, rest) },
+            _ => mono_rules_signs(le, rest),
+        },
+    }
+}
+
+// The carrier whose `<=` or `<` is the global `rel`: the first `MonoOrder`
+// of `cs` naming it, resolved, with the rules `es` registers at it.
+fn mono_carrier(cs, es: List<MonoEntry>, rel: GlobalRef, given: List<Given>) → Tac<Option<Mono>> {
     match cs {
         Nil => pure(None),
-        Cons(c, rest) => {
-            let le <- mono_try_global(c.le);
-            let lt <- mono_try_global(c.lt);
-            match mono_is(le, rel) || mono_is(lt, rel) {
-                False => mono_carrier(rest, rel, given),
-                True => match le {
-                    None => pure(None),
-                    Some(l) => match lt {
+        Cons(c, rest) => match c {
+            MonoOrder(le_name, lt_name, reflexive, weakening, push_laws) => {
+                let le <- mono_try_global(le_name);
+                let lt <- mono_try_global(lt_name);
+                match mono_is(le, rel) || mono_is(lt, rel) {
+                    False => mono_carrier(rest, es, rel, given),
+                    True => match le {
                         None => pure(None),
-                        Some(s) => {
-                            let rf <- mono_try_global(c.reflexive);
-                            let weaken <- mono_try_global(c.weaken);
-                            let laws <- mono_laws(c.laws);
-                            let signs <- mono_signs(c.signs);
-                            let pushes <- mono_pushes(c.pushes);
-                            let M <- mono_run(KGlobal(l.id), KGlobal(s.id), rf, weaken, laws, signs, pushes, given);
-                            pure(Some(M))
+                        Some(l) => match lt {
+                            None => pure(None),
+                            Some(s) => {
+                                let rf <- mono_try_global(reflexive);
+                                let weaken <- mono_try_global(weakening);
+                                let laws <- mono_laws(mono_rules_laws(le_name, es));
+                                let signs <- mono_signs(mono_rules_signs(le_name, es));
+                                let pushes <- mono_pushes(push_laws);
+                                let M <- mono_run(KGlobal(l.id), KGlobal(s.id), rf, weaken, laws, signs, pushes, given, es);
+                                pure(Some(M))
+                            },
                         },
                     },
-                },
-            }
-        }
+                }
+            },
+            _ => mono_carrier(rest, es, rel, given),
+        },
     }
 }
 
@@ -443,15 +261,36 @@ fn mono_class_signs(args: List<Handle>, ls: List<ClassSign>) → Tac<List<Sign>>
     }
 }
 
-// The push lemmas at every class (a cast read through a morphism in scope,
-// `cast_local_edges`): `StrictOrder`'s, applied with the dictionary in scope.
-fn mono_class_pushes() → PushLaws {
-    PushLaws("StrictOrder::le_of_same_l", "StrictOrder::le_of_same_r", "StrictOrder::lt_of_same_l", "StrictOrder::lt_of_same_r")
+// A class's dictionary, as its `MonoClass` entry describes it: where it
+// lists `<` and `<=`, and the reflexivity, weakening and push lemmas applied
+// with it in scope.
+record ClassOrder { class: String, lt: Nat, le: Nat, reflexive: String, weaken: String, pushes: PushLaws }
+
+// The laws every `MonoClassRules` entry of `es` gives the class `c`.
+fn mono_class_rules_laws(c: String, es: List<MonoEntry>) → List<ClassLaw> {
+    match es {
+        Nil => [],
+        Cons(e, rest) => match e {
+            MonoClassRules(k, laws, _) => match mono_same_name(k, c) { True => laws ++ mono_class_rules_laws(c, rest), False => mono_class_rules_laws(c, rest) },
+            _ => mono_class_rules_laws(c, rest),
+        },
+    }
+}
+
+fn mono_class_rules_signs(c: String, es: List<MonoEntry>) → List<ClassSign> {
+    match es {
+        Nil => [],
+        Cons(e, rest) => match e {
+            MonoClassRules(k, _, signs) => match mono_same_name(k, c) { True => signs ++ mono_class_rules_signs(c, rest), False => mono_class_rules_signs(c, rest) },
+            _ => mono_class_rules_signs(c, rest),
+        },
+    }
 }
 
 // The run for a dictionary of class `c`, whose arguments are `args`, when
-// its `<=` or `<` is `rel`.
-fn mono_dictionary(c: MonoClass, args: List<Handle>, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
+// its `<=` or `<` is `rel`. A cast is read through a morphism in scope
+// (`cast_local_edges`) by the class's push lemmas.
+fn mono_dictionary(c: ClassOrder, es: List<MonoEntry>, args: List<Handle>, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
     let le <- mono_index_key(args, c.le);
     let lt <- mono_index_key(args, c.lt);
     match le {
@@ -461,12 +300,12 @@ fn mono_dictionary(c: MonoClass, args: List<Handle>, rel: OpKey, given: List<Giv
             Some(s) => match l.same(rel) || s.same(rel) {
                 False => pure(None),
                 True => {
-                    let rf <- mono_try_global("StrictOrder::le_refl");
-                    let weaken <- mono_try_global("StrictOrder::le_of_lt");
-                    let laws <- mono_class_laws(args, c.laws);
-                    let signs <- mono_class_signs(args, c.signs);
-                    let pushes <- mono_pushes(Some(mono_class_pushes()));
-                    let M <- mono_run(l, s, rf, weaken, laws, signs, pushes, given);
+                    let rf <- mono_try_global(c.reflexive);
+                    let weaken <- mono_try_global(c.weaken);
+                    let laws <- mono_class_laws(args, mono_class_rules_laws(c.class, es));
+                    let signs <- mono_class_signs(args, mono_class_rules_signs(c.class, es));
+                    let pushes <- mono_pushes(Some(c.pushes));
+                    let M <- mono_run(l, s, rf, weaken, laws, signs, pushes, given, es);
                     pure(Some(M))
                 },
             },
@@ -474,34 +313,38 @@ fn mono_dictionary(c: MonoClass, args: List<Handle>, rel: OpKey, given: List<Giv
     }
 }
 
-// The first class of `cs` whose global is `g`.
-fn mono_class_named(cs: List<MonoClass>, g: GlobalRef) → Tac<Option<MonoClass>> {
+// The first `MonoClass` entry of `cs` whose class is `g`.
+fn mono_class_named(cs: List<MonoEntry>, g: GlobalRef) → Tac<Option<ClassOrder>> {
     match cs {
         Nil => pure(None),
-        Cons(c, rest) => match mono_is(<- mono_try_global(c.class), g) { True => pure(Some(c)), False => mono_class_named(rest, g) },
+        Cons(c, rest) => match c {
+            MonoClass(class, lt, le, rf, weaken, pushes) => match mono_is(<- mono_try_global(class), g) {
+                True => pure(Some(ClassOrder(class, lt, le, rf, weaken, pushes))),
+                False => mono_class_named(rest, g),
+            },
+            _ => mono_class_named(rest, g),
+        },
     }
 }
 
 // A local of the goal's context that is an ordered class's dictionary whose
 // `<=` or `<` is `rel`, read as a carrier, innermost first.
-fn mono_class_carrier(ls: List<LocalInfo>, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
+fn mono_class_carrier(es: List<MonoEntry>, ls: List<LocalInfo>, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
     match ls {
         Nil => pure(None),
         Cons(l, rest) => {
             let v <- view(l.ty);
-            let next: Tac<Option<Mono>> = mono_class_carrier(rest, rel, given);
+            let next: Tac<Option<Mono>> = mono_class_carrier(es, rest, rel, given);
             match v {
-                HGlobal(g, _, args) => match <- mono_class_named(mono_classes(), g) {
+                HGlobal(g, _, args) => match <- mono_class_named(es, g) {
                     None => next,
-                    Some(c) => match <- mono_dictionary(c, args, rel, given) { Some(M) => pure(Some(M)), None => next },
+                    Some(c) => match <- mono_dictionary(c, es, args, rel, given) { Some(M) => pure(Some(M)), None => next },
                 },
                 _ => next,
             }
         },
     }
 }
-
-theorem mono_trivial(): True { trivial }
 
 // ---------------------------------------------------------------------------
 // Reading the two sides.
@@ -872,33 +715,29 @@ fn mono_cast_or_leaf(M: Mono, prove: Tac<Expr>, strict: Bool, target, l, r: Hand
 // A subtraction at a side's head read as `x + -y`, which every carrier's
 // `-` is by definition: a cast pushed into `(a - c).rat()` comes out as a
 // sum (`a.rat() + (-c).rat()`), and the other side's `x - y` then meets it.
-record Unsub { sub: String, add: String, neg: String }
-
-fn mono_unsubs() → List<Unsub> {
-    [Unsub("Rat::sub", "Rat::add", "Rat::neg"), Unsub("CReal::sub", "CReal::add", "CReal::neg"),
-     Unsub("Int::sub", "Int::add", "Int::neg"), Unsub("Dyadic::sub", "Dyadic::add", "Dyadic::neg")]
-}
-
 // Only against a sum (`other`'s head is the carrier's `+`): elsewhere the
 // restated goal is no nearer a law, and costs the search its fuel.
-fn mono_unsub_named(f: GlobalRef, x, y: Handle, other: Option<GlobalRef>, us: List<Unsub>) → Tac<Option<Expr>> {
+fn mono_unsub_named(f: GlobalRef, x, y: Handle, other: Option<GlobalRef>, us: List<MonoEntry>) → Tac<Option<Expr>> {
     match us {
         Nil => pure(None),
-        Cons(u, rest) => match <- mono_try_global(u.sub) {
-            None => mono_unsub_named(f, x, y, other, rest),
-            Some(g) => match g.id.same(f.id) {
-                False => mono_unsub_named(f, x, y, other, rest),
-                True => {
-                    let a <- mono_try_global(u.add);
-                    let n <- mono_try_global(u.neg);
-                    Pure({
-                        let ga <- a;
-                        let gn <- n;
-                        let h <- other;
-                        match h.id.same(ga.id) { True => Some(App(App(Global(ga), Hd(x)), App(Global(gn), Hd(y)))), False => None }
-                    })
+        Cons(u, rest) => match u {
+            MonoUnsub(sub, add, neg) => match <- mono_try_global(sub) {
+                None => mono_unsub_named(f, x, y, other, rest),
+                Some(g) => match g.id.same(f.id) {
+                    False => mono_unsub_named(f, x, y, other, rest),
+                    True => {
+                        let a <- mono_try_global(add);
+                        let n <- mono_try_global(neg);
+                        Pure({
+                            let ga <- a;
+                            let gn <- n;
+                            let h <- other;
+                            match h.id.same(ga.id) { True => Some(App(App(Global(ga), Hd(x)), App(Global(gn), Hd(y)))), False => None }
+                        })
+                    },
                 },
             },
+            _ => mono_unsub_named(f, x, y, other, rest),
         },
     }
 }
@@ -907,13 +746,13 @@ fn mono_head_global(h: Handle) → Tac<Option<GlobalRef>> {
     Pure(match <- view(h) { HGlobal(f, _, _) => Some(f), _ => None })
 }
 
-fn mono_unsub_side(h, other: Handle) → Tac<Option<Expr>> {
+fn mono_unsub_side(us: List<MonoEntry>, h, other: Handle) → Tac<Option<Expr>> {
     let og <- mono_head_global(other);
     match og {
         None => pure(None),
         Some(_) => match <- view(h) {
             HGlobal(f, _, args) => match args {
-                Cons(x, more) => match more { Cons(y, rest) => match rest { Nil => mono_unsub_named(f, x, y, og, mono_unsubs()), Cons(_, _) => pure(None) }, Nil => pure(None) },
+                Cons(x, more) => match more { Cons(y, rest) => match rest { Nil => mono_unsub_named(f, x, y, og, us), Cons(_, _) => pure(None) }, Nil => pure(None) },
                 Nil => pure(None),
             },
             _ => pure(None),
@@ -944,8 +783,8 @@ fn mono_unsub_goal(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Expr) → Tac<
 // `None` where neither side is a subtraction. The restated goal is the
 // goal up to unfolding `-`, so its proof is the goal's.
 fn mono_unsub(M: Mono, prove: Tac<Expr>, strict: Bool, l, r: Handle) → Tac<Option<Expr>> {
-    let ol <- mono_unsub_side(l, r);
-    let or <- mono_unsub_side(r, l);
+    let ol <- mono_unsub_side(M.entries, l, r);
+    let or <- mono_unsub_side(M.entries, r, l);
     match ol {
         None => match or { None => mono_none(), Some(_) => mono_unsub_goal(M, prove, strict, mono_or_hd(ol, l), mono_or_hd(or, r)) },
         Some(_) => mono_unsub_goal(M, prove, strict, mono_or_hd(ol, l), mono_or_hd(or, r)),
@@ -1040,18 +879,18 @@ fn mono_given(hs: List<Expr>) → Tac<List<Given>> {
 }
 
 fn mono_not_order<A>(target: Handle) → Tac<A> {
-    fail("mono: the goal is not `<=` or `<` at `Rat`, `CReal`, `Int`, `Nat` or an ordered class's dictionary in scope", [At(Hd(target), Tried("the goal", "not an order the tactic has laws for"))])
+    fail("mono: the goal is not `<=` or `<` at a carrier or an ordered class's dictionary whose laws are registered here (`MonoEntry`, lib/std/tactic/mono_laws.hthr)", [At(Hd(target), Tried("the goal", "not an order the tactic has laws for"))])
 }
 
 // The carrier of a goal whose relation is `rel`: a concrete carrier's order,
 // or a class dictionary's in scope.
-fn mono_find(g: GoalInfo, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
+fn mono_find(es: List<MonoEntry>, g: GoalInfo, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> {
     match rel {
-        KGlobal(id) => match <- mono_carrier(mono_carriers, GlobalRef(id), given) {
+        KGlobal(id) => match <- mono_carrier(es, es, GlobalRef(id), given) {
             Some(M) => pure(Some(M)),
-            None => mono_class_carrier(g.locals, rel, given),
+            None => mono_class_carrier(es, g.locals, rel, given),
         },
-        _ => mono_class_carrier(g.locals, rel, given),
+        _ => mono_class_carrier(es, g.locals, rel, given),
     }
 }
 
@@ -1059,18 +898,20 @@ fn mono_find(g: GoalInfo, rel: OpKey, given: List<Given>) → Tac<Option<Mono>> 
 fn mono_with_edges(M: Mono) → Tac<Mono> {
     match M.pushes {
         None => pure(M),
-        Some(_) => pure(Mono(M.le, M.lt, M.reflexive, M.weaken, M.laws, M.signs, M.pushes, M.given, M.truth, M.holds, <- cast_all_edges())),
+        Some(_) => pure(Mono(M.le, M.lt, M.reflexive, M.weaken, M.laws, M.signs, M.pushes, M.given, M.truth, M.holds, <- cast_all_edges(), M.entries)),
     }
 }
 
 // `mono_with(hs, depth)`: prove `l <= r` or `l < r` by monotonicity, with
-// the terms `hs` for the leaves, splitting at most `depth` goals deep.
-fn mono_with(hs: List<Expr>, depth: Nat := 64) → Tac<Expr> {
+// the terms `hs` for the leaves, splitting at most `depth` goals deep. The
+// laws are `entries`, by default every `MonoEntry` registered where the
+// call is.
+fn mono_with(hs: List<Expr>, depth: Nat := 64, entries: List<MonoEntry> := registered(MonoEntry)) → Tac<Expr> {
     let g <- goal();
     match mono_call(<- view(g.target)) {
         Some(c) => {
             let given <- mono_given(hs);
-            match <- mono_find(g, c.op, given) {
+            match <- mono_find(entries, g, c.op, given) {
                 None => mono_not_order(g.target),
                 Some(M) => mono_prove(<- mono_with_edges(M), depth),
             }
@@ -1080,4 +921,4 @@ fn mono_with(hs: List<Expr>, depth: Nat := 64) → Tac<Expr> {
 }
 
 // `mono()`: `mono_with` from the goal's hypotheses alone.
-fn mono(depth: Nat := 64) → Tac<Expr> { mono_with([], depth := depth) }
+fn mono(depth: Nat := 64, entries: List<MonoEntry> := registered(MonoEntry)) → Tac<Expr> { mono_with([], depth := depth, entries := entries) }

@@ -411,6 +411,9 @@ pub enum Request {
     Unfold(u64),
     /// The representation registered for a type, by the type's handle.
     Repr(u64),
+    /// A term's next spelling: its head definition unfolded and the head
+    /// reduced on until a call, a local or a value is at the head again.
+    Spell(RExpr),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -953,6 +956,10 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             }
             30 => Ok(Step::Ask(Request::Unfold(self.nat_of("host_handle", vec![tree])?))),
             31 => Ok(Step::Ask(Request::Repr(self.nat_of("host_handle", vec![tree])?))),
+            32 => {
+                let mut budget = READ_BUDGET;
+                Ok(Step::Ask(Request::Spell(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1799,6 +1806,7 @@ impl Elaborator {
                 Request::Absurd(e, goal) => Answer::Handle(refusable(self.absurd_request(run, &e, goal, span))?),
                 Request::Unfold(h) => Answer::Handle(refusable(self.unfold_request(run, h))?),
                 Request::Repr(ty) => Answer::Handle(refusable(self.repr_request(run, ty))?),
+                Request::Spell(e) => Answer::Handle(refusable(self.spell_request(run, &e))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2286,6 +2294,57 @@ impl Elaborator {
         Ok(run.issue(at, Held::Term(out, ty, level)))
     }
 
+    /// `Spell(e)`: the term `e` stands for, spelled one definition further
+    /// on. Its head definition is unfolded and the head reduced on, by the
+    /// elaborator's reduct walk (`Unfold::Spelling`), until the first reduct
+    /// headed by a global's call or a local, or the walk's end (a value, or a
+    /// stuck form, which the caller tells apart by `View`). Projections of
+    /// the reduct's pairs are read off, as `Whnf` reads them. Refused when
+    /// nothing at the head reduces (a local's call, a call of an opaque or
+    /// withheld definition: an `interface fn`'s body is not this world's to
+    /// read) and when the walk's budget runs out first. What a reader that
+    /// follows a term through its definitions, one call at a time, reads
+    /// (docs/grind-design.md §15).
+    fn spell_request(&self, run: &mut Run, e: &RExpr) -> Result<u64, Fault> {
+        let at = run.scope_of(e)?;
+        let mark = run.trail.len();
+        let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
+        let (Some(t), Some(ty)) = (run.committed_tm(&r.term), run.committed_ty(&r.ty)) else {
+            run.restore(mark);
+            return Err(Fault::Ill("it mentions a hole nothing has solved".into()));
+        };
+        let gamma = run.cx(at)?.gamma;
+        // Through the interface boundary as conversion sees it: another
+        // module's `interface fn` stays folded at open arguments
+        // (docs/interface-definitions-design.md §3), so no spelling it
+        // returns is one the gate would refuse to convert.
+        let world = match self.withheld_policy() {
+            Some(w) => self.goal_psi().withholding(Some(w)),
+            None => self.goal_psi(),
+        };
+        let oracle = crate::oracle::SemanticOracle::in_world(world, self.policy.fuel);
+        let mut last = None;
+        for reduct in oracle.unfold(&gamma, &t, Unfold::Spelling) {
+            let (head, _) = crate::spelling::app_spine(&reduct);
+            if matches!(head, Term::GlobalTm { .. } | Term::Var(_)) {
+                let out = (*crate::spelling::contract_projections(&Rc::new(reduct))).clone();
+                return Ok(run.issue(at, Held::Term(out, ty, r.level)));
+            }
+            last = Some(reduct);
+        }
+        let Some(end) = last else {
+            return Err(Fault::Ill("nothing at its head reduces: a local, or a definition this world does not unfold".into()));
+        };
+        // The walk stopped: at a head normal form, or at the budget.
+        match oracle.bounded(1).unfold(&gamma, &end, Unfold::OneStep).next() {
+            None => {
+                let out = (*crate::spelling::contract_projections(&Rc::new(end))).clone();
+                Ok(run.issue(at, Held::Term(out, ty, r.level)))
+            }
+            Some(_) => Err(Fault::Ill("its head reduces past the walk's budget before a call is at the head again".into())),
+        }
+    }
+
     /// `Repr(ty)`: the representation registered for the type `ty` stands
     /// for (`datarepr`, docs/datarepr-design.md §1.4), as a handle to the
     /// repr's assembled value. A type is keyed as the declaration keys it: a
@@ -2610,6 +2669,22 @@ impl Elaborator {
     fn lookup_request(&self, run: &mut Run, name: &str) -> Result<u64, String> {
         if !is_name(name) {
             return Err(format!("`{name}` is not a name"));
+        }
+        // A qualified key, as `name_of` spells one, denotes its declaration
+        // wherever its module is in the import closure: a registered table
+        // (docs/registered-values-design.md) reaches a `by` through the
+        // modules its client imports, which need not include the lemma's.
+        if let Some((module, base)) = crate::names::split_qual(name)
+            && self.names.reaches(module)
+        {
+            if let Some(ind) = self.types.inductive(name) {
+                return Ok(run.global_ref(GlobalKey::Type(ind.tag)));
+            }
+            if self.names.declares(module, base)
+                && let Some(info) = self.names.global(name)
+            {
+                return Ok(run.global_ref(GlobalKey::At(info.abs as usize)));
+            }
         }
         let key = match name {
             "Nat" => GlobalKey::Builtin("Nat"),
@@ -3178,10 +3253,19 @@ impl Elaborator {
         let m = run.world() as u32;
         match e {
             RExpr::Hd(h) => match run.held(*h)? {
-                (s, Held::Type(ty, _)) => Err(Fault::Ill(format!(
-                    "handle {h} stands for the type `{}`, which is not a term",
-                    self.shown_ty(run, s, &ty)
-                ))),
+                // A type where a term is expected stands for its code, of
+                // the universe at its level (a motive's body, `λ w => B(w)`).
+                (s, Held::Type(ty, level)) => match crate::code::code_of(&ty) {
+                    Some(c) => Ok(Reified {
+                        term: run.lift(s, at, |k| c.shift_local(k))?,
+                        ty: Type::Ty(level.clone()),
+                        level: Level::succ(level),
+                    }),
+                    None => Err(Fault::Ill(format!(
+                        "handle {h} stands for the type `{}`, which has no code and is not a term",
+                        self.shown_ty(run, s, &ty)
+                    ))),
+                },
                 (s, Held::Term(term, ty, level)) => Ok(Reified {
                     term: run.lift(s, at, |k| term.shift_local(k))?,
                     ty: run.lift(s, at, |k| ty.shift_local(k))?,
@@ -3802,6 +3886,14 @@ impl Elaborator {
             },
             _ => unreachable!("the parser writes a prefix as a name or a call of one"),
         };
+        // `register def x: T = e;`: the built-in prefix, unless a generator of
+        // that name is in scope (docs/registered-values-design.md).
+        if prefix == "register"
+            && matches!(p.generator.kind, ExprKind::Var(_))
+            && !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_))
+        {
+            return self.elab_registered_def(d);
+        }
         let form = if d.value { "def" } else if d.kind == heather_syntax::ast::DeclKind::Theorem { "theorem" } else { "fn" };
         let label = format!("{prefix} {form} {}", d.name);
         if !matches!(self.resolve_name(&prefix), crate::NameRes::Found(_)) {

@@ -162,6 +162,7 @@ mod sealing;
 // value-graph counter that priced the naming, and the readback itself. Both
 // are inert unless `HEATHER_RB` is set.
 mod recursion;
+mod registered;
 mod representations;
 pub mod resolve;
 mod session;
@@ -2743,6 +2744,16 @@ impl Elaborator {
         // wrote its name.
         if self.scope.rule_citation.borrow().as_deref() == Some(name)
             && let Some((module, base)) = split_qual(name)
+            && self.names.declares(module, base)
+            && self.names.reaches(module)
+        {
+            return NameRes::Found(module.to_string());
+        }
+        // A registered value is cited by its key on the caller's behalf by
+        // `registered(T)` (docs/registered-values-design.md), as an evidence
+        // rule is above: its module need only be in the import closure.
+        if let Some((module, base)) = split_qual(name)
+            && self.traits.is_registered(name)
             && self.names.declares(module, base)
             && self.names.reaches(module)
         {
@@ -5590,6 +5601,10 @@ impl Elaborator {
             };
         }
         self.refuse_value_call(cx, e)?;
+        // `name_of(p)` and `registered(T)` (docs/registered-values-design.md).
+        if let Some(rewritten) = self.registry_rewrite(cx, e)? {
+            return self.elab_check_skel_slots_written(cx, &rewritten, expected, lvl, hint, skel, capture_slots);
+        }
         // A corecursive body's two positions, a node and a child
         // (docs/codata-elaborator-design.md §5.2).
         if let Some(site) = cx.corec.as_ref()
@@ -7820,6 +7835,9 @@ impl Elaborator {
         if let Some(rewritten) = self.owner_rewrite(cx, e)? {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
+        if let Some(rewritten) = self.registry_rewrite(cx, e)? {
+            return self.elab_infer_at(cx, &rewritten, expected);
+        }
         if let ExprKind::App {
             head,
             args,
@@ -9324,6 +9342,12 @@ impl Elaborator {
                     return Ok(self.reduced_embedding(cx, out));
                 }
                 None if named => {
+                    if let Some(at_class) = self.class_carrier_numeral(cx, e, expected, expected_level, span) {
+                        return Ok(at_class);
+                    }
+                    if let Some(refusal) = self.class_numeral_refusal(cx, expected, span) {
+                        return Err(refusal);
+                    }
                     return Err(ElabError::Resolution {
                         goal: display,
                         span,
@@ -9334,6 +9358,12 @@ impl Elaborator {
                 // reading below, as before the class was reachable.
                 None => {}
             }
+        }
+        if let Some(at_class) = self.class_carrier_numeral(cx, e, expected, expected_level, span) {
+            return Ok(at_class);
+        }
+        if let Some(refusal) = self.class_numeral_refusal(cx, expected, span) {
+            return Err(refusal);
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type

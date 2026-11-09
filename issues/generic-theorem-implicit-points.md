@@ -119,3 +119,7 @@ that.
 - Moving `ordered_field.hthr` itself to implicit points (the third acceptance
   bullet) is ~700 call rewrites plus `mono`'s positional lemma table, and is
   filed as [[class-theorems-implicit-points]]. Closed.
+- 2026-11-09: merged over class-carrier numerals (#494). A point-free
+  theorem stated only in numerals (`two_pos(): 0 < 2`) does not name its
+  section's carrier, and the section check refuses it (sections-design
+  §4.1), so it is written `K.unit < 2`.

@@ -152,7 +152,10 @@ impl Elaborator {
     /// list-building route of its own. Read in `string`'s scope, which is
     /// what lets the characters build without `char` imported here.
     fn string_intro(&self, text: &str, span: Span) -> Option<(Expr, String)> {
-        let ctor = self.key_of(STRING_TYPE)?;
+        // In the closure is enough, as for a character literal's spec: a
+        // `name_of(p)` is a string in a module that imports a registry's
+        // types and not `string` (docs/registered-values-design.md).
+        let ctor = self.closure_key(STRING_TYPE)?;
         let module = key_module(&ctor).to_string();
         let chars = text
             .chars()
@@ -271,6 +274,66 @@ impl Elaborator {
             }
         }
         Ok(())
+    }
+
+    /// A numeral checked at a section's carrier `K`, which has no `Numeral`
+    /// instance but a ring dictionary in scope: the ring's own naturals,
+    /// `Ring::nat_cast<K>(n)` (semiring.hthr), whose `0` and `1` compute to
+    /// the dictionary's `K.unit` and `K.multiplicative.unit` and are emitted
+    /// as those, so a statement written with numerals is the one written
+    /// with the units (issues/class-carrier-arithmetic-surface.md). `None`
+    /// where `K` is no type variable, `semiring` is not loaded, or no ring
+    /// is in scope at `K`, leaving the caller's diagnosis.
+    pub(crate) fn class_carrier_numeral(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+        expected_level: &Level,
+        span: Span,
+    ) -> Option<Term> {
+        const NAT_CAST: &str = "semiring::Ring::nat_cast";
+        if !matches!(e.kind, ExprKind::Num(_)) || !self.is_local_carrier(cx, expected, span) {
+            return None;
+        }
+        let name = self.key_of(NAT_CAST).map(|_| NAT_CAST.to_string())?;
+        let call = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr { kind: ExprKind::Var(name), span }),
+                args: vec![e.clone()],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        // Asked first, so a scope with no ring at `K` leaves nothing behind;
+        // then elaborated for real, its instance goals kept.
+        let check = || self.generated_scope(|me| me.elab_check(cx, &call, expected, expected_level));
+        if !self.probe(|| check().is_ok()) {
+            return None;
+        }
+        let out = check().ok()?;
+        Some(self.reduced_embedding(cx, out))
+    }
+
+    /// Why a numeral checked at a type variable has no reading
+    /// ([`Self::class_carrier_numeral`] found none): said in terms of what
+    /// would give it one, not as a `Nat`-against-`A` mismatch.
+    pub(crate) fn class_numeral_refusal(&self, cx: &Cx, expected: &Type, span: Span) -> Option<ElabError> {
+        if !self.is_local_carrier(cx, expected, span) {
+            return None;
+        }
+        let carrier = self.display_type(cx, expected);
+        Some(ElabError::Elab {
+            msg: format!(
+                "a numeral at `{carrier}`, a type parameter, is its ring's `Ring::nat_cast<{carrier}>(n)` \
+                 (`0` and `1` the units), so it needs a ring over `{carrier}` in scope \
+                 (`<{carrier}: Ring(≈, +, *)>`, or a class that extends it, with `semiring` imported); \
+                 there is none, and no `Numeral<{carrier}>` instance either"
+            ),
+            span,
+        })
     }
 
     pub(crate) fn reduced_embedding(&self, cx: &Cx, out: Term) -> Term {

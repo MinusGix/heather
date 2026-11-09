@@ -93,8 +93,10 @@ explicit parameter is a function outside the section and is not refused.
 - The language server lists a `def` as a constant (symbol kind 14).
 - `tree-sitter-heather` has `value_declaration` and `prefixed_declaration`,
   with a corpus case; the keyword is in `syntax-inventory.json`.
-- `mono_carriers` (`lib/std/tactic/mono.hthr`) is the migrated example: a list
-  constant read by the tactic, now `def mono_carriers: List<MonoCarrier> = …;`.
+- `mono_carriers` (`lib/std/tactic/mono.hthr`) was the migrated example: a list
+  constant read by the tactic, `def mono_carriers: List<MonoCarrier> = …;`.
+  Since 2026-11-08 its rows are `register def`s in the carriers' modules
+  (docs/registered-values-design.md).
 
 ## 3. Declaration-prefix generators
 

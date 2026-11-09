@@ -425,6 +425,10 @@ pub(crate) enum Unfold {
     /// headed by (issues/unifier-lazy-delta.md). A bound on one hop, not on
     /// the chain: each hop is taken only at a mismatch.
     NextHead,
+    /// A tactic's `Spell`: a term followed through its head definition until
+    /// a call is at the head again, which may run a small decision (a
+    /// `match` on `Nat::equation(64, w)` at a literal) on the way.
+    Spelling,
 }
 
 impl Unfold {
@@ -437,7 +441,7 @@ impl Unfold {
             Unfold::HoleComparison | Unfold::MatchedArm | Unfold::WordShape => 16,
             Unfold::InstanceBit | Unfold::LiteralEmbedding => 32,
             Unfold::Proposition | Unfold::RuleGoal | Unfold::StuckScrutinee | Unfold::NextHead => 64,
-            Unfold::FamilyEncoding => 1024,
+            Unfold::FamilyEncoding | Unfold::Spelling => 1024,
         }
     }
 }

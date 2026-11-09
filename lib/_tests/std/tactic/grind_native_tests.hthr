@@ -1,0 +1,44 @@
+// Probes of grind on lib/native's proof chains (docs/grind-design.md §15,
+// issues/grind-matching-fuel-on-native-terms.md,
+// issues/grind-unfold-defined-heads.md): a chain a hand proof spells step by
+// step, closed from the lemmas it cites, and the control that a withheld
+// definition stays folded. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import rt;
+import function_ir;
+import function_ir_eval;
+import function_ir_compile;
+import rt_lower;
+import rt_loop;
+import dyadic;
+import interval;
+import tactic;
+import grind;
+
+// `Fun::post_left` (rt_loop.hthr), whose hand proof cites these three
+// lemmas and `apart`. grind reads the loop's exit through the next spelling
+// of each stuck head (`loop_finish`, `Fun::post`, `branch`, `bind`),
+// instantiates `branch_false` once its premise's bit meets `False` by a
+// stand-in, and proves `set_other`'s premise `o0 ≠ x` from `apart: x ≠ o0`.
+theorem post_left_by_grind(x, rr, o0: Nat, os: List<Nat>, exhausted: StructuredRegion, call: Answers(), values: Valuation(), s0: BitVec(64),
+    rest: List<BitVec(64)>, apart: x ≠ o0):
+    loop_finish(Fun::post(x, rr, o0, exhausted), call, values, Cons(o0, os), x, rr)(LoopEnd(Cons(s0, rest), False)) = s0 {
+    by grind_using(["Valuation::set_here", "Valuation::set_other", "branch_false"], [])
+}
+
+// A definition of another module is read by its next spelling, and an
+// `interface fn` is not: at an open argument its body is withheld from
+// importers (docs/interface-definitions-design.md §3), so grind leaves its
+// head folded as conversion does, and a client cites its `_unfold_`
+// equations.
+theorem plain_head_spelled(f: Interval → Nat, d: Dyadic): f(Interval::point(d)) = f(Bnd(d, d)) { by grind() }
+// expect-error: grind: the two sides are not in one class
+theorem interface_head_folded(f: Interval → Nat, a, b: Dyadic): f(Interval::neg(Bnd(a, b))) = f(Bnd(-b, -a)) { by grind() }

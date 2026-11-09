@@ -1,11 +1,11 @@
 ---
 title: Read a reciprocal's fact in ring when its apartness was searched through a rule
-status: open
+status: closed
 labels: [tactics,mathematics]
 area: tactics
 milestone: [tac-arith]
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-08
 ---
 
 `ring` reads a reciprocal `x⁻¹` with its fact `x⁻¹ * x ≈ 1`, written as
@@ -24,3 +24,15 @@ Same in a section over `OrderedField`. A reciprocal of a local (`x⁻¹` at
 (implicit arguments of the rule), so the fact's elaboration fails silently.
 A fix could elaborate the fact at the proof term itself instead of its
 spelling, or re-search the apartness at the fact.
+
+## Log
+
+- 2026-11-08: Closed by the class-carrier-arithmetic-surface round. At
+  `Rat` the example already checked on master
+  (83c825d). In a section over `OrderedField` it was refused: the fact's
+  arguments spelled through the section's hidden binders (`#op+@0_3`,
+  `#constraint0`), which no source parses. `reciprocal_fact` now binds an
+  argument with no source spelling to an alias at its kernel-inferred type
+  and names the carrier, and `quotient` builds a class quotient's
+  reciprocal from the quotient's own arguments. Probe:
+  `ring_searched_product_reciprocal` in field_division_tests.

@@ -13,3 +13,5 @@ export option::{Option};
 export list::{List};
 export pair::{Pair};
 export algebra::{Numeral, Default, Cmp, Semigroup, Monoid, CommMonoid, Group};
+export char::{Char};
+export string::{String};

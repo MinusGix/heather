@@ -261,6 +261,7 @@ theorem Node::run_wide_on(self node: Node, values, other: Valuation(), buffers: 
                     sym(Valuation::set_here(other, output, load_value(theirs, buffer, index, other), 64))))⟩
         },
         Resize(_, _, _, _) => λ _ never => false_elim(never),
+        SignResize(_, _, _, _) => λ _ never => false_elim(never),
     }
 }
 
@@ -346,6 +347,7 @@ theorem Scope::clean_coherent(self s: Scope, node: Node, values: Valuation(), en
         BufferLoad(_, _, _) => λ never => false_elim(never),
         BufferStore(_, _, _, _) => λ never => false_elim(never),
         Resize(_, _, _, _) => λ never => false_elim(never),
+        SignResize(_, _, _, _) => λ never => false_elim(never),
     }
 }
 

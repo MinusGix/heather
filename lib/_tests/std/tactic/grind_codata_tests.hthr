@@ -11,7 +11,7 @@ theorem reduct_observed<R>(E: Events, t: CoTree<R>(E), r: R, e: CoTree::obs(E, C
 theorem reduct_stuck<R>(E: Events, t: CoTree<R>(E), r: R, e: CoTree::obs(E, t) = ORet(r), f: CoTree::obs(E, t) = OTau(t)): False { by grind() }
 theorem reduct_spin<R>(E: Events, r: R, e: CoTree::obs(E, CoTree::spin<R>(E)) = ORet(r)): False { by grind() }
 
-// Not yet: a reduct's field is its spelling, not the local it came from
-// (issues/grind-reduct-fields.md).
-// expect-error: grind: the two sides are not in one class
-theorem reduct_field_unread<R>(E: Events, t, u: CoTree<R>(E), e: CoTree::obs(E, CTau(t)) = OTau(u)): u = t { by grind() }
+// A reduct's field is its spelling, not the local it came from
+// (issues/grind-reduct-fields.md); spelling the local's side meets it
+// (docs/grind-design.md §15.1).
+theorem reduct_field_spelled<R>(E: Events, t, u: CoTree<R>(E), e: CoTree::obs(E, CTau(t)) = OTau(u)): u = t { by grind() }

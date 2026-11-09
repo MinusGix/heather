@@ -43,7 +43,7 @@
 // (a uniformly continuous function on a closed interval is bounded,
 // `UnifContOn::bounded` in closed_interval.hthr).
 //
-// The bound lemmas at the top (`OrderedField::half`, `below_both`, `shrink`,
+// The bound lemmas at the top (`OrderedField::half_add`, `below_both`, `shrink`,
 // `LocatedAddGroup::abs_le_mul`, …) are facts about an ordered field and
 // would live in `ordered_field.hthr`, but their proofs are `linarith` and
 // `nlinarith` calls and the `linarith` kit imports `ordered_field`; they
@@ -59,6 +59,7 @@ import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
+import field_division;
 import big_operator;
 import ring;
 import omega;
@@ -69,62 +70,37 @@ section<K: OrderedField(≈, <, <=, +, *)> {
 // ---------------------------------------------------------------------------
 // Bounds over an ordered field.
 
-theorem OrderedField::two_pos(): K.unit < K.multiplicative.unit + K.multiplicative.unit {
-    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
+theorem OrderedField::two_pos(): K.unit < 2 {
+    let o: (0 < 1) = K.zero_lt_one;
     linarith(o)
 }
 
-// e/2, through the reciprocal of 1 + 1.
-fn OrderedField::half(e: K) → K {
-    e * K.recip(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos()))
-}
+theorem OrderedField::half_add(e: K): e / 2 + e / 2 ≈ e { ring }
 
-theorem OrderedField::half_add(e: K): OrderedField::half(e) + OrderedField::half(e) ≈ e {
-    let r = K.recip(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos()));
-    let m: ((K.multiplicative.unit + K.multiplicative.unit) * r ≈ K.multiplicative.unit) =
-        K.mul_recip(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos()));
-    let k: (e * r + e * r ≈ e) = ring(m);
-    k
-}
+theorem OrderedField::half_pos(e: K, he: 0 < e): 0 < e / 2 { linarith(he) }
 
-theorem OrderedField::half_pos(e: K, he: K.unit < e): K.unit < OrderedField::half(e) {
-    let r: (K.unit < K.recip(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos()))) =
-        OrderedField::recip_pos(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos()), OrderedField::two_pos());
-    OrderedSemiring::mul_pos(e, K.recip(K.multiplicative.unit + K.multiplicative.unit, Inr(OrderedField::two_pos())), he, r)
-}
-
-theorem OrderedField::half_lt(e: K, he: K.unit < e): OrderedField::half(e) < e {
-    let a = OrderedField::half_add(e);
-    let p = OrderedField::half_pos(e, he);
-    linarith(a, p)
-}
+theorem OrderedField::half_lt(e: K, he: 0 < e): e / 2 < e { linarith(he) }
 
 // A positive below two positives, with no minimum: cotransitivity places `b`
 // against the gap `a/2 < a`. Either `a/2 < b`, and `a/2` is below both, or
 // `b < a`, and `b` is.
-theorem OrderedField::below_both(a, b: K, ha: K.unit < a, hb: K.unit < b):
-    ∃ d: K, K.unit < d ∧ d <= a ∧ d <= b
-{
-    match K.rel_cotrans(OrderedField::half(a), a, b, OrderedField::half_lt(a, ha)) {
-        Inl(below) => Exists(OrderedField::half(a), And(OrderedField::half_pos(a, ha),
-            And(StrictOrder::le_of_lt(OrderedField::half(a), a, OrderedField::half_lt(a, ha)), StrictOrder::le_of_lt(OrderedField::half(a), b, below)))),
+theorem OrderedField::below_both(a, b: K, ha: 0 < a, hb: 0 < b): ∃ d: K, 0 < d ∧ d <= a ∧ d <= b {
+    match K.rel_cotrans(a / 2, a, b, OrderedField::half_lt(a, ha)) {
+        Inl(below) => Exists(a / 2, And(OrderedField::half_pos(a, ha),
+            And(StrictOrder::le_of_lt(a / 2, a, OrderedField::half_lt(a, ha)), StrictOrder::le_of_lt(a / 2, b, below)))),
         Inr(above) => Exists(b, And(hb, And(StrictOrder::le_of_lt(b, a, above), StrictOrder::le_refl(b)))),
     }
 }
 
 // A positive `e2` with `c·e2 <= e`, for a nonnegative `c`: `e/(c + 1)`.
 // What a rule spends to make a factor's bound fit inside its share of `ε`.
-theorem OrderedField::shrink(c, e: K, hc: K.unit <= c, he: K.unit < e):
-    ∃ e2: K, K.unit < e2 ∧ c * e2 <= e
-{
-    let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
-    let pc: (K.unit < c + K.multiplicative.unit) = linarith(hc, o);
-    let r = K.recip(c + K.multiplicative.unit, Inr(pc));
-    let m: ((c + K.multiplicative.unit) * r ≈ K.multiplicative.unit) = K.mul_recip(c + K.multiplicative.unit, Inr(pc));
-    let pr: (K.unit < r) = OrderedField::recip_pos(c + K.multiplicative.unit, Inr(pc), pc);
-    let per: (K.unit < e * r) = OrderedSemiring::mul_pos(e, r, he, pr);
-    let k: (c * (e * r) + e * r ≈ e) = ring(m);
-    Exists(e * r, And(per, linarith(k, per)))
+theorem OrderedField::shrink(c, e: K, hc: 0 <= c, he: 0 < e): ∃ e2: K, 0 < e2 ∧ c * e2 <= e {
+    let o: (0 < 1) = K.zero_lt_one;
+    let pc: (0 < c + 1) = linarith(hc, o);
+    let r = e / (c + 1);
+    let k: (c * r + r ≈ e) = ring;
+    let pr: (0 < r) = linarith(he, pc);
+    Exists(r, And(pr, linarith(k, pr)))
 }
 
 theorem OrderedField::of_nat_nonneg(n: Nat): K.unit <= K.of_nat(n) {
@@ -279,7 +255,7 @@ theorem DerivOn::add(D: K → Type, f, f1, g, g1: K → K, hf: DerivOn(D, f, f1)
     DerivOn(D, λ x => f(x) + g(x), λ x => f1(x) + g1(x))
 {
     λ e pe => {
-        let e2 = OrderedField::half(e);
+        let e2 = e / 2;
         let p2 = OrderedField::half_pos(e, pe);
         match hf(e2, p2) {
             Exists(d1, a1) => match hg(e2, p2) {
@@ -352,10 +328,10 @@ theorem DerivOn::chain_step(f, f1, g, g1: K → K, M, N, e, e1, e3, x, y, h: K, 
     rg: AbsLe(g(f(y)) + K.inv(g(f(x))) + K.inv(g1(f(x)) * (f(y) + K.inv(f(x)))), e1 * ((M + K.multiplicative.unit) * h)),
     rf: AbsLe(f(y) + K.inv(f(x)) + K.inv(f1(x) * (y + K.inv(x))), e3 * h),
     nx: AbsLe(g1(f(x)), N),
-    b1: (M + K.multiplicative.unit) * e1 <= OrderedField::half(e), b3: N * e3 <= OrderedField::half(e)):
+    b1: (M + K.multiplicative.unit) * e1 <= e / 2, b3: N * e3 <= e / 2):
     AbsLe(g(f(y)) + K.inv(g(f(x))) + K.inv((g1(f(x)) * f1(x)) * (y + K.inv(x))), e * h)
 {
-    let e2 = OrderedField::half(e);
+    let e2 = e / 2;
     let t = OrderedField::abs_le_mul(g1(f(x)), f(y) + K.inv(f(x)) + K.inv(f1(x) * (y + K.inv(x))), N, e3 * h, nx, rf);
     let q1: ((M + K.multiplicative.unit) * e1 * h <= e2 * h) =
         OrderedSemiring::mul_le_mono_r((M + K.multiplicative.unit) * e1, e2, h, b1, hn);
@@ -374,8 +350,8 @@ theorem DerivOn::chain_step(f, f1, g, g1: K → K, M, N, e, e1, e3, x, y, h: K, 
 // (`issues/library-gate-module-cold-rail.md`).
 theorem DerivOn::chain_close(D, E: K → Type, f, f1, g, g1: K → K, M, N, e: K, hm: MapsTo(D, E, f), bg: BoundedOn(E, g1, N),
     pL: K.unit <= M + K.multiplicative.unit,
-    b1: ∃ e2: K, K.unit < e2 ∧ (M + K.multiplicative.unit) * e2 <= OrderedField::half(e),
-    b3: ∃ e2: K, K.unit < e2 ∧ N * e2 <= OrderedField::half(e),
+    b1: ∃ e2: K, K.unit < e2 ∧ (M + K.multiplicative.unit) * e2 <= e / 2,
+    b3: ∃ e2: K, K.unit < e2 ∧ N * e2 <= e / 2,
     a0: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
         AbsLe(f(y) + K.inv(f(x)), (M + K.multiplicative.unit) * h)),
     ag: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → E(x) → E(y) → AbsLe(y + K.inv(x), h) → h <= d →
@@ -415,10 +391,10 @@ theorem DerivOn::chain(D, E: K → Type, f, f1, g, g1: K → K, M, N: K, hm: Map
         let ml = bf.left;
         let pL: (K.unit <= M + K.multiplicative.unit) = linarith(ml, o);
         let a0 = DerivOn::local_lipschitz(D, f, f1, M, hf, bf);
-        let b1 = OrderedField::shrink(M + K.multiplicative.unit, OrderedField::half(e), pL, p2);
+        let b1 = OrderedField::shrink(M + K.multiplicative.unit, e / 2, pL, p2);
         let ag = hg(b1.witness, b1.proof.left);
         let bc = OrderedField::shrink(M + K.multiplicative.unit, ag.witness, pL, ag.proof.left);
-        let b3 = OrderedField::shrink(N, OrderedField::half(e), bg.left, p2);
+        let b3 = OrderedField::shrink(N, e / 2, bg.left, p2);
         let af = hf(b3.witness, b3.proof.left);
         let au = OrderedField::below_both(a0.witness, af.witness, a0.proof.left, af.proof.left);
         let ad = OrderedField::below_both(au.witness, bc.witness, au.proof.left, bc.proof.left);
@@ -437,12 +413,12 @@ theorem DerivOn::mul_step(f, f1, g, g1: K → K, A, B, M, N, e, e1, e3, x, y, h:
     rg: AbsLe(g(y) + K.inv(g(x)) + K.inv(g1(x) * (y + K.inv(x))), e3 * h),
     lipf: AbsLe(f(y) + K.inv(f(x)), (M + K.multiplicative.unit) * h),
     lipg: AbsLe(g(y) + K.inv(g(x)), (N + K.multiplicative.unit) * h),
-    c1: B * e1 <= OrderedField::half(OrderedField::half(e)), c3: A * e3 <= OrderedField::half(OrderedField::half(e)),
-    q3a: (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h <= OrderedField::half(e)):
+    c1: B * e1 <= e / 2 / 2, c3: A * e3 <= e / 2 / 2,
+    q3a: (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h <= e / 2):
     AbsLe(f(y) * g(y) + K.inv(f(x) * g(x)) + K.inv((f1(x) * g(x) + f(x) * g1(x)) * (y + K.inv(x))), e * h)
 {
-    let e2 = OrderedField::half(e);
-    let e4 = OrderedField::half(e2);
+    let e2 = e / 2;
+    let e4 = e2 / 2;
     let t1 = OrderedField::abs_le_mul(g(x), f(y) + K.inv(f(x)) + K.inv(f1(x) * (y + K.inv(x))), B, e1 * h, bx, rf);
     let t2 = OrderedField::abs_le_mul(f(x), g(y) + K.inv(g(x)) + K.inv(g1(x) * (y + K.inv(x))), A, e3 * h, ax, rg);
     let t3 = OrderedField::abs_le_mul(f(y) + K.inv(f(x)), g(y) + K.inv(g(x)),
@@ -477,13 +453,13 @@ theorem DerivOn::mul_close(D: K → Type, f, f1, g, g1: K → K, A, B, M, N, e: 
         AbsLe(f(y) + K.inv(f(x)), (M + K.multiplicative.unit) * h)),
     bl: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
         AbsLe(g(y) + K.inv(g(x)), (N + K.multiplicative.unit) * h)),
-    c1: ∃ e2: K, K.unit < e2 ∧ B * e2 <= OrderedField::half(OrderedField::half(e)),
+    c1: ∃ e2: K, K.unit < e2 ∧ B * e2 <= e / 2 / 2,
     af: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
         AbsLe(f(y) + K.inv(f(x)) + K.inv(f1(x) * (y + K.inv(x))), c1.witness * h)),
-    c3: ∃ e2: K, K.unit < e2 ∧ A * e2 <= OrderedField::half(OrderedField::half(e)),
+    c3: ∃ e2: K, K.unit < e2 ∧ A * e2 <= e / 2 / 2,
     ag: ∃ d: K, K.unit < d ∧ ((x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d →
         AbsLe(g(y) + K.inv(g(x)) + K.inv(g1(x) * (y + K.inv(x))), c3.witness * h)),
-    cc: ∃ e2: K, K.unit < e2 ∧ (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * e2 <= OrderedField::half(e),
+    cc: ∃ e2: K, K.unit < e2 ∧ (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * e2 <= e / 2,
     au: ∃ d: K, K.unit < d ∧ d <= al.witness ∧ d <= bl.witness,
     av: ∃ d: K, K.unit < d ∧ d <= af.witness ∧ d <= ag.witness,
     aw: ∃ d: K, K.unit < d ∧ d <= au.witness ∧ d <= av.witness,
@@ -503,7 +479,7 @@ theorem DerivOn::mul_close(D: K → Type, f, f1, g, g1: K → K, A, B, M, N, e: 
             bl.proof.right(x, y, h, dx, dy, hxy, PseudoOrder::le_trans(h, au.witness, bl.witness, hu, au.proof.right.right)),
             c1.proof.right, c3.proof.right,
             PseudoOrder::le_trans((M + K.multiplicative.unit) * (N + K.multiplicative.unit) * h,
-                (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * cc.witness, OrderedField::half(e),
+                (M + K.multiplicative.unit) * (N + K.multiplicative.unit) * cc.witness, e / 2,
                 OrderedSemiring::mul_le_mono_l(h, cc.witness, (M + K.multiplicative.unit) * (N + K.multiplicative.unit),
                     PseudoOrder::le_trans(h, ad.witness, cc.witness, hd, ad.proof.right.right), pP), cc.proof.right))
     }))
@@ -518,7 +494,7 @@ theorem DerivOn::mul(D: K → Type, f, f1, g, g1: K → K, A, B, M, N: K, hf: De
 {
     λ e pe => {
         let p2 = OrderedField::half_pos(e, pe);
-        let p4 = OrderedField::half_pos(OrderedField::half(e), p2);
+        let p4 = OrderedField::half_pos(e / 2, p2);
         let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
         let mm = bf1.left;
         let nn = bg1.left;
@@ -528,11 +504,11 @@ theorem DerivOn::mul(D: K → Type, f, f1, g, g1: K → K, A, B, M, N: K, hf: De
             OrderedSemiring::mul_nonneg(M + K.multiplicative.unit, N + K.multiplicative.unit, pM, pN);
         let al = DerivOn::local_lipschitz(D, f, f1, M, hf, bf1);
         let bl = DerivOn::local_lipschitz(D, g, g1, N, hg, bg1);
-        let c1 = OrderedField::shrink(B, OrderedField::half(OrderedField::half(e)), bg.left, p4);
+        let c1 = OrderedField::shrink(B, e / 2 / 2, bg.left, p4);
         let af = hf(c1.witness, c1.proof.left);
-        let c3 = OrderedField::shrink(A, OrderedField::half(OrderedField::half(e)), bf.left, p4);
+        let c3 = OrderedField::shrink(A, e / 2 / 2, bf.left, p4);
         let ag = hg(c3.witness, c3.proof.left);
-        let cc = OrderedField::shrink((M + K.multiplicative.unit) * (N + K.multiplicative.unit), OrderedField::half(e), pP, p2);
+        let cc = OrderedField::shrink((M + K.multiplicative.unit) * (N + K.multiplicative.unit), e / 2, pP, p2);
         let au = OrderedField::below_both(al.witness, bl.witness, al.proof.left, bl.proof.left);
         let av = OrderedField::below_both(af.witness, ag.witness, af.proof.left, ag.proof.left);
         let aw = OrderedField::below_both(au.witness, av.witness, au.proof.left, av.proof.left);
@@ -736,12 +712,12 @@ theorem DerivOn::mvi_split(f: K → K, L, x, y, z, s: K, hz: z ≈ x + s,
 // is `n - 1` half-steps (at `n = 0` it cannot be above `d/2`).
 theorem DerivOn::mvi_steps(D: K → Type, f: K → K, L, d: K, hD: ConvexOn(D), pd: K.unit < d,
     loc: (x, y, h: K) → D(x) → D(y) → AbsLe(y + K.inv(x), h) → h <= d → AbsLe(f(y) + K.inv(f(x)), L * h), n: Nat):
-    (x, y: K) → D(x) → D(y) → x <= y → y + K.inv(x) <= K.of_nat(n) * OrderedField::half(d) →
+    (x, y: K) → D(x) → D(y) → x <= y → y + K.inv(x) <= K.of_nat(n) * (d / 2) →
         AbsLe(f(y) + K.inv(f(x)), L * (y + K.inv(x)))
 {
     match n {
         Zero => λ x y dx dy xy span => {
-            let s = OrderedField::half(d);
+            let s = d / 2;
             let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
             let sd: (s < d) = OrderedField::half_lt(d, pd);
             let z0: (K.of_nat(Zero) ≈ K.unit) = K.of_nat_zero;
@@ -750,7 +726,7 @@ theorem DerivOn::mvi_steps(D: K → Type, f: K → K, L, d: K, hD: ConvexOn(D), 
             loc(x, y, y + K.inv(x), dx, dy, LocatedAddGroup::abs_le_self(x, y, xy), close)
         },
         Succ(m) => λ x y dx dy xy span => {
-            let s = OrderedField::half(d);
+            let s = d / 2;
             let ps: (K.unit < s) = OrderedField::half_pos(d, pd);
             let sd: (s < d) = OrderedField::half_lt(d, pd);
             match K.rel_cotrans(s, d, y + K.inv(x), sd) {
@@ -785,7 +761,7 @@ theorem OrderedField::archimedean_mul(a, d: K, pd: K.unit < d): ∃ n: Nat, a <=
 
 // A bound `c + ε·w` for every `ε > 0`, with `w >= 0`, is a bound `c`: were
 // `c < z`, the `ε` with `w·ε <= (z - c)/2` would put `z` below itself.
-theorem OrderedField::forall_pos_step(z, c, w, e: K, hz: z <= c + e * w, he: w * e <= OrderedField::half(z + K.inv(c)),
+theorem OrderedField::forall_pos_step(z, c, w, e: K, hz: z <= c + e * w, he: w * e <= (z + K.inv(c)) / 2,
     gap: c < z): False
 {
     let hl = OrderedField::half_lt(z + K.inv(c), OrderedAddGroup::sub_pos(c, z, gap));
@@ -795,7 +771,7 @@ theorem OrderedField::forall_pos_step(z, c, w, e: K, hz: z <= c + e * w, he: w *
 
 theorem OrderedField::le_of_forall_pos(z, c, w: K, pw: K.unit <= w, h: (e: K) → K.unit < e → z <= c + e * w): z <= c {
     K.le_of_not_lt(z, c, λ gap => {
-        let s = OrderedField::shrink(w, OrderedField::half(z + K.inv(c)), pw,
+        let s = OrderedField::shrink(w, (z + K.inv(c)) / 2, pw,
             OrderedField::half_pos(z + K.inv(c), OrderedAddGroup::sub_pos(c, z, gap)));
         OrderedField::forall_pos_step(z, c, w, s.witness, h(s.witness, s.proof.left), s.proof.right, gap)
     })
@@ -817,7 +793,7 @@ theorem DerivOn::mvi_eps(D: K → Type, f, g: K → K, M, e: K, pe: K.unit < e, 
     AbsLe(f(y) + K.inv(f(x)), (M + e) * (y + K.inv(x)))
 {
     let a = DerivOn::local_lipschitz_eps(D, f, g, M, e, pe, hd, hb);
-    let n = OrderedField::archimedean_mul(y + K.inv(x), OrderedField::half(a.witness), OrderedField::half_pos(a.witness, a.proof.left));
+    let n = OrderedField::archimedean_mul(y + K.inv(x), a.witness / 2, OrderedField::half_pos(a.witness, a.proof.left));
     DerivOn::mvi_steps(D, f, M + e, a.witness, hD, a.proof.left, a.proof.right, n.witness, x, y, dx, dy, xy, n.proof)
 }
 

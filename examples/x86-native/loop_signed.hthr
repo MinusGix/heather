@@ -1,0 +1,29 @@
+import bitvec;
+import bitvec_nat;
+import int;
+import sint;
+import logic;
+import nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// A loop over an `i64` with an `i64` result (docs/runtime-fn-setups-design.md
+// §16.13, round 4): the state and the result are held in a word by `I64`,
+// and the leaving arm returns the `i64` itself, read back as its word
+// outside the match.
+runtime fn signed_walk(n: BitVec(64), x: SInt(64)) → SInt(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => x,
+        False => signed_walk(n.sub(BitVec::ofNat(1)), if x.lt_bit(n.as_signed()) { x + n.as_signed() } else { x.shift_right(1) - n.as_signed() }),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+runtime fn signed_loop(a, b: BitVec(64)) → BitVec(64) { signed_walk(a.band(BitVec::ofNat(1023)), b.as_signed()).as_unsigned() }

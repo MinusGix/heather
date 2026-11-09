@@ -1,6 +1,6 @@
 ---
 title: Numerals, prefix minus and subtraction at a class-section carrier
-status: open
+status: closed
 labels: [notation,traits,stdlib,ergonomics]
 area: mathematics
 milestone: [math-classes]
@@ -64,3 +64,31 @@ closed_interval, supremum) and the same mathematics at `Rat`/`CReal`.
 
 [[infix-subtraction-notation]] (the carrier half), [[class-default-operators]],
 [[casting-standard]]; docs/stdlib-math-awkwardness-survey.md §2.
+
+## Log
+
+- 2026-11-08: Done. `-x` and `x - y` are designations at `Ring`
+  (semiring.hthr) and at `OrderedAddGroup` (ordered_field.hthr), and rung 2b
+  now asks a dictionary's untagged ancestors after its own class, so both
+  reach a section over `OrderedField`; a numeral-led application checked at
+  a section's carrier (`1 - x`, `-1`) asks rung 2b before the numeral's
+  `Nat` default. A numeral checked at a type parameter with no `Numeral`
+  instance is `Ring::nat_cast<K>(n)` through the ring in scope, `0` and `1`
+  emitted as the dictionary's units (`class_carrier_numeral`, literals.rs);
+  with no ring in scope it is refused saying so. `ring` reads the four
+  wrappers; `OrderedRing::positive_nat_cast` (ordered_sign.hthr) signs a
+  numeral divisor; `linarith` reads `e / 2` (its reciprocal's positivity
+  rule now names `x` and the carrier at a class carrier). On the way, `ring`
+  builds a class quotient's reciprocal from its arguments and aliases a
+  reciprocal fact's unspellable arguments, which also closes
+  [[ring-reciprocal-of-searched-proof]]. real_fn's bound lemmas are stated
+  with numerals, `OrderedField::half` is gone for `e / 2` (sequence,
+  closed_interval, supremum, real_fn_limit and their tests import
+  `field_division`), `shrink`'s witness is `e / (c + 1)`. Probes:
+  field_division_tests, semiring_tests, ordered_field_tests (a refusal at a
+  group). Negative control: `scripts/timings --diff` against master on
+  creal.hthr has no changed count; on rat.hthr only `ordered_field::AbsLt`
+  moved (fewer queries), the item checked right after the new
+  `OrderedAddGroup::neg`/`sub`, whose conversions it now finds memoized.
+  Restating the rest of the generic analysis files is
+  [[restate-generic-analysis-with-numerals]].

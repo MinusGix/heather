@@ -647,6 +647,24 @@ theorem List::len_range_from(a, n: Nat): List::range_from(a, n).len() = n {
     }
 }
 
+// `[a, a + 1, …, a + n - 1]` again, built from the front, for a loop that
+// walks it: walking `range_from` passes through every append below it, so
+// a walk of `n` costs `n²`, while each step here costs one cell. Each
+// number is `a + i` by addition, a literal when `a` is one.
+fn List::count_from(a, n: Nat) → List<Nat> {
+    match n {
+        Zero => Nil,
+        Succ(k) => Cons(a, List::count_from(a + 1, k)),
+    }
+}
+
+theorem List::len_count_from(a, n: Nat): List::count_from(a, n).len() = n {
+    match n {
+        Zero => {},
+        Succ(k) => Nat::cong_succ(List::len_count_from(a + 1, k)),
+    }
+}
+
 fn List::zip<A, B>(self xs: List<A>) → List<B> → List<Pair<A, B>> {
     match xs {
         Nil => λ (ys: List<B>) => Nil,

@@ -4,7 +4,7 @@ status: open
 labels: [kernel,refactor,state-machine]
 area: kernel
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-08
 ---
 
 Name the kernel checker's four modes with an enum instead of four independent fields.
@@ -20,3 +20,7 @@ Name the kernel checker's four modes with an enum instead of four independent fi
 ## Related
 
 Filed together from the implicit-state-machines survey (`docs/implicit-state-machines-survey.md`, 2026-11-02, ranked there): [[elab-field-lifetimes-explicit]], [[module-pass-state-machine]], [[kernel-psi-bound-cache]], [[decl-attempt-lifecycle]], [[goal-slot-state-enum]].
+
+## Log
+
+- 2026-11-08: 2026-11-08: still accurate in the kernel second pass (`docs/kernel-implicit-state-review.md` §5); line numbers moved (`Tc` ~1080, mode tests ~2146–3446). A Locate checker bypasses the typing memo via `tm_check_noting`, so `mode.memo_allowed()` should cover it, and it can share the [[kernel-premise-queue-type]] queue without the memo take-back question.

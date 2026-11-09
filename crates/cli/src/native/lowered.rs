@@ -49,6 +49,7 @@ impl Reader<'_> {
             13 => ("BufferLoad", 3),
             14 => ("BufferStore", 4),
             15 => ("Resize", 4),
+            16 => ("SignResize", 4),
             tag => return Err(format!("node tag {tag}")),
         };
         Ok(format!("{name}({})", join(&self.take(fields)?)))
