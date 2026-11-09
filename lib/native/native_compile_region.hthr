@@ -93,12 +93,7 @@ theorem Target::code_fits(self t: Target): FillsFit(t.program, no_fills()) { t.p
 
 // An address the code spells (`Layout::word_at`, `buffer_at`, `scratch_at`)
 // is the region's `next_rip` to it.
-theorem Target::at_rip(self t: Target, q: Nat, inside: q <= t.r.size): t.r.low.add_nat(q) = next_rip(t.r.low, q) {
-    let low = t.r.low.toNat();
-    let below: (q <= Nat::pow(2, 47)) = Nat::le_trans(q, low + t.r.size, Nat::pow(2, 47),
-        Nat::le_trans(q, low + q, low + t.r.size, low.le_add_r(q), low.add_le_mono_l(q, t.r.size, inside)), t.r.canonical);
-    BitVec::add_nat_iterate(64, t.r.low, q, Nat::le_trans(Succ(q), Succ(Nat::pow(2, 47)), Nat::pow(2, 64), below, canonical_below_top()))
-}
+theorem Target::at_rip(self t: Target, q: Nat): t.r.low.add_nat(q) = next_rip(t.r.low, q) { BitVec::add_nat_iterate(64, t.r.low, q) }
 
 // What a statement's code claims, over the region's profile.
 fn Target::Goes(self t: Target, at: Nat, tree: ITree<BitVec(64)>(Events::linux()), pre: MachineState<X86Memory(t.r.profile)> → Type) → Type {
@@ -384,19 +379,16 @@ theorem Target::slot_fits(self t: Target, i: Nat, inside: i < t.words): 8 * i + 
         Nat::le_trans(8 * i + 8, 8 * t.words, t.layout().scratch_offset(), words, t.layout().scratch_after_words()), t.scratch_fits())
 }
 
-theorem Target::word_rip(self t: Target, i: Nat, inside: i < t.words): t.layout().word_at(i) = next_rip(t.r.low, 8 * i) {
-    t.at_rip(8 * i, (8 * i).le_of_add_le(8, t.r.size, t.slot_fits(i, inside)))
+theorem Target::word_rip(self t: Target, i: Nat): t.layout().word_at(i) = next_rip(t.r.low, 8 * i) {
+    t.at_rip(8 * i)
 }
 
-theorem Target::buffer_rip(self t: Target, b, cap: Nat, found: t.caps.nth(b) = Some(cap)):
-    t.layout().buffer_at(b) = next_rip(t.r.low, t.layout().buffer_offset(b)) {
-    let bo = t.layout().buffer_offset(b);
-    t.at_rip(bo, Nat::le_trans(bo, t.layout().scratch_offset(), t.r.size,
-        bo.le_of_add_le(cap, t.layout().scratch_offset(), t.layout().buffer_end(b, cap, found)), t.scratch_fits()))
+theorem Target::buffer_rip(self t: Target, b: Nat): t.layout().buffer_at(b) = next_rip(t.r.low, t.layout().buffer_offset(b)) {
+    t.at_rip(t.layout().buffer_offset(b))
 }
 
 theorem Target::scratch_rip(self t: Target): t.layout().scratch_at() = next_rip(t.r.low, t.layout().scratch_offset()) {
-    t.at_rip(t.layout().scratch_offset(), t.scratch_fits())
+    t.at_rip(t.layout().scratch_offset())
 }
 
 // The word in slot `i`, read at its address.
@@ -417,7 +409,7 @@ theorem Target::read_slot(self t: Target, env: Env, v: Nat → BitVec(8), m: X86
     let low = t.r.low.toNat();
     let ends: (low + (q + 8) <= Nat::pow(2, 47)) = Nat::le_trans(low + (q + 8), low + t.r.size, Nat::pow(2, 47),
         low.add_le_mono_l(q + 8, t.r.size, fits), t.r.canonical);
-    j(sym(t.word_rip(i, inside)), λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(t.r.profile.data(), m, a) = Some(env.word(i))),
+    j(sym(t.word_rip(i)), λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(t.r.profile.data(), m, a) = Some(env.word(i))),
         ⟨j(sym(value), λ x _ => x + 8 <= Nat::pow(2, 47), j(sym(low.add_assoc(q, 8)), λ x _ => x <= Nat::pow(2, 47), ends)),
          trans(read, cong_fn<BitVec(64), Option<BitVec(64)>>(λ w => Some(w), t.layout().keeps_word_at(env, v, keeps, i, inside)))⟩)
 }
@@ -540,7 +532,7 @@ theorem Target::placed_word(self t: Target, env: Env, m: X86Memory(t.r.profile),
     inside: i < t.words, word: BitVec(64)):
     t.Placed(env.set_word(i, word), t.r.profile.store(m, t.layout().word_at(i), word_bytes(word))) {
     let v = placed.witness;
-    j(sym(t.word_rip(i, inside)), λ a _ => t.Placed(env.set_word(i, word), t.r.profile.store(m, a, word_bytes(word))),
+    j(sym(t.word_rip(i)), λ a _ => t.Placed(env.set_word(i, word), t.r.profile.store(m, a, word_bytes(word))),
         Exists(t.r.buffer(v).set_span(8 * i, word_bytes(word).to_vector()).cells,
             ⟨t.r.store_holds(v, m, placed.proof.left, 8 * i, word_bytes(word), t.slot_fits(i, inside)),
              ⟨t.layout().keeps_word(t.r, env, v, placed.proof.right.left, i, inside, word),

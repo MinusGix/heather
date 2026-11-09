@@ -97,5 +97,6 @@ ripple and not `a + -b` by definition (since read through a `SubtractionLaw`
 instance, [[ring-carrier-subtraction-law]]). `BitVec::int_cast` and
 `bitvec_div`'s `BitVec::ofInt` were one map spelled two ways, now one
 definition ([[bitvec-int-cast-is-ofint]]). The ~240 `fits` premises in native, arch
-and os are unchanged; each can now be dropped where its lemma only needed the
-modular statement, as callers are next touched.
+and os were left; the pass over them found most of them real (value
+readings, canonical addresses, sign tests) and dropped the few that only fed
+a word equation ([[fits-premises-modular]]).

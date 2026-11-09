@@ -1255,20 +1255,19 @@ theorem loop_counter_nonzero(rest: Nat, lt: Succ(rest) < Nat::pow(2, 64)):
 }
 
 // ADD counter, -1 counts a pass off.
-theorem loop_counter_step(rest: Nat, lt: Succ(rest) < Nat::pow(2, 64)):
+theorem loop_counter_step(rest: Nat):
     BitVec::ofNat(Succ(rest), n := 64).add(BitVec::ofNat(255, n := 8).sign_extend(56)) = BitVec::ofNat(rest, n := 64) {
     let c = BitVec::ofNat(255, n := 8).sign_extend(56);
     let zero = BitVec::zero(n := 64);
-    let under: (rest < Nat::pow(2, 64)) = { omega };
     let reading: (c.toNat() = Nat::pow(2, 64) - 1) = refl;
     let count: (Succ(rest) + (Nat::pow(2, 64) - 1) = rest + Nat::pow(2, 64)) = { omega };
     trans(sym(BitVec::iter_add_eq_add(64, BitVec::ofNat(Succ(rest), n := 64), c)),
     trans(BitVec::cong_iterate_increment_count(64, BitVec::ofNat(Succ(rest), n := 64), reading),
-    trans(BitVec::cong_iterate_increment(64, Nat::pow(2, 64) - 1, sym(BitVec::zero_iterate_increment(64, Succ(rest), lt))),
+    trans(BitVec::cong_iterate_increment(64, Nat::pow(2, 64) - 1, sym(BitVec::zero_iterate_increment(64, Succ(rest)))),
     trans(BitVec::iterate_increment_compose(64, zero, Succ(rest), Nat::pow(2, 64) - 1),
     trans(BitVec::cong_iterate_increment_count(64, zero, count),
     trans(sym(BitVec::iterate_increment_compose(64, zero, rest, Nat::pow(2, 64))),
-    trans(BitVec::iterate_increment_period(64, zero.iterate_increment(rest)), BitVec::zero_iterate_increment(64, rest, under))))))))
+    trans(BitVec::iterate_increment_period(64, zero.iterate_increment(rest)), BitVec::zero_iterate_increment(64, rest))))))))
 }
 
 // ---------------------------------------------------------------------------
@@ -1592,7 +1591,7 @@ theorem loop_rounds<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), st
                     λ s memory held => ⟨⟨args_after_write(words_of(values, next), registers.state, s.gprs, registers.counter,
                             read_gpr(registers.counter, s.gprs).add(c), apart.left, held.left.left),
                         trans(read_gpr_after_write(registers.counter, read_gpr(registers.counter, s.gprs).add(c), s.gprs),
-                            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), held.left.right), loop_counter_step(rest, lt)))⟩,
+                            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(c), held.left.right), loop_counter_step(rest)))⟩,
                         ⟨kept_trans(callee_saved(), s0.gprs, s.gprs, execute_block_normal([registers.step()], s).gprs, held.right.left,
                             execute_block_kept<M>([registers.step()], s, callee_saved(), apart.right.right.right.right)), held.right.right⟩⟩)),
             site.moves_jump(stack.writes, fits, again_in.witness, stepped, 0, h_name, again_in.proof, h_at, jump_lands, post)))

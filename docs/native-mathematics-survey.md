@@ -164,7 +164,10 @@ in `nat.hthr`/`int.hthr`, the modular half of `bitvec_nat` (P3 is
 `BitVec::ofNat_add`, P6 `BitVec::toNat_add_mod`), and `bitvec_ring`'s
 `CommRingOfInt<BitVec(n)>`, so P1 now proves (`=` or `≈`). `ring` reads `-`
 at words through a `SubtractionLaw` instance
-(`issues/ring-carrier-subtraction-law.md`, closed the same day).
+(`issues/ring-carrier-subtraction-law.md`, closed the same day). The pass
+over the `fits` premises (`issues/fits-premises-modular.md`) found most of
+the 240 real: value readings, canonical addresses and sign tests; the few
+that only fed a word equation are gone.
 
 ## 3. Transition systems and simulation diagrams
 

@@ -17,10 +17,6 @@ import int;
 // (`ofNat_add`, `ofNat_mul`, `ofNat_pow`). No bound anywhere; the
 // no-overflow facts after this section are these with `Nat::mod_of_lt`.
 
-theorem BitVec::ofNat_cong(n: Nat, {a, b: Nat}, p: a = b): BitVec::ofNat(a, n := n) = BitVec::ofNat(b) {
-    @cong(λ (t: Nat) => BitVec::ofNat(t, n := n), a, b, p)
-}
-
 // A word is its value: equal values are equal words.
 theorem BitVec::toNat_inj(n: Nat, {a, b: BitVec(n)}, p: a.toNat() = b.toNat()): a = b {
     trans(sym(BitVec::ofNat_toNat(n, a)), trans(BitVec::ofNat_cong(n, p), BitVec::ofNat_toNat(n, b)))
@@ -68,35 +64,6 @@ theorem BitVec::ofNat_modeq(n: Nat, {a, b: Nat}, h: Nat::ModEq(Nat::pow(2, n), a
 // The words of `0` and of `2^n` are one word.
 theorem BitVec::ofNat_pow_two(n: Nat): BitVec::ofNat(Nat::pow(2, n), n := n) = BitVec::ofNat(0) {
     BitVec::ofNat_modeq(n, Nat::pow(2, n).mod_self())
-}
-
-// `ofNat` at a low bit and twice a number is that bit on that number's word.
-theorem BitVec::ofNat_digit(k: Nat, b: Bool, m: Nat):
-    BitVec::ofNat(Nat::of_bit(b) + Nat::twice(m), n := Succ(k)) = BitVec::ofNat(m, n := k).cons_bit(b)
-{
-    BitVec::cons_bit_cong(k, BitVec::odd_bit_digit(b, m), BitVec::ofNat_cong(k, BitVec::half_digit(b, m)))
-}
-
-// One more, as `ofNat` writes it: a clear low bit is set, and a set one
-// carries into the increment of the rest.
-theorem BitVec::increment_ofNat(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).increment() = BitVec::ofNat(Succ(x)) {
-    match n {
-        Zero => λ x => refl,
-        Succ(k, ih) => λ x => {
-            let m = Nat::half(x);
-            let step: (BitVec::ofNat(m, n := k).cons_bit(BitVec::odd_bit(x)).increment()
-                    = BitVec::ofNat(Succ(Nat::of_bit(BitVec::odd_bit(x)) + Nat::twice(m)), n := Succ(k))) =
-                match BitVec::odd_bit(x) as λ b => BitVec::ofNat(m, n := k).cons_bit(b).increment()
-                        = BitVec::ofNat(Succ(Nat::of_bit(b) + Nat::twice(m)), n := Succ(k)) {
-                    False => sym(trans(BitVec::ofNat_cong(Succ(k), sym(Nat::add_succ_left(0, Nat::twice(m)))),
-                        BitVec::ofNat_digit(k, True, m))),
-                    True => trans(BitVec::cons_bit_cong(k, refl, ih(m), a := False, b := False),
-                        sym(trans(BitVec::ofNat_cong(Succ(k), trans(Nat::cong_succ(BitVec::one_add(Nat::twice(m))), sym(Nat::add_left_zero(Nat::twice(Succ(m)))))),
-                            BitVec::ofNat_digit(k, False, Succ(m))))),
-                };
-            trans(step, BitVec::ofNat_cong(Succ(k), Nat::cong_succ(BitVec::odd_bit_add_twice_half(x))))
-        },
-    }
 }
 
 theorem BitVec::iterate_increment_ofNat(n, x, count: Nat):
@@ -190,6 +157,14 @@ theorem BitVec::ofNat_add(n, x, y: Nat): BitVec::ofNat(x, n := n).add(BitVec::of
                 = (x.mod(w) + y.mod(w)).mod(w) := Nat::cong(λ (v: Nat) => (x.mod(w) + v).mod(w), BitVec::toNat_ofNat_mod(n, y)),
                 = (x + y).mod(w) := sym(x.add_mod(y, w)),
         }))
+}
+
+// The same read off two words known to be `ofNat`s: `add_words` with no
+// bound, its equation at the word rather than its value.
+theorem BitVec::ofNat_add_of(n: Nat, {a, b: BitVec(n)}, {left, right: Nat}, a_word: a = BitVec::ofNat(left), b_word: b = BitVec::ofNat(right)):
+    a.add(b) = BitVec::ofNat(left + right) {
+    trans(@cong(λ (x: BitVec(n)) => x.add(b), a, BitVec::ofNat(left), a_word),
+    trans(@cong(λ (y: BitVec(n)) => BitVec::ofNat(left, n := n).add(y), b, BitVec::ofNat(right), b_word), BitVec::ofNat_add(n, left, right)))
 }
 
 theorem BitVec::ofNat_mul(n, x, y: Nat): BitVec::ofNat(x, n := n).mul(BitVec::ofNat(y)) = BitVec::ofNat(x * y) {
@@ -341,6 +316,9 @@ theorem word_of_nat_succ(value: Nat):
     word_of_nat(64, Succ(value)) = word_of_nat(64, value).add(BitVec::ofNat(1)) {
     BitVec::iter_add_eq_add(64, word_of_nat(64, value), BitVec::ofNat(1))
 }
+
+// It is `ofNat`, at every width and count.
+theorem word_of_nat_eq_ofNat(n, value: Nat): word_of_nat(n, value) = BitVec::ofNat(value) { BitVec::zero_iterate_increment(n, value) }
 
 theorem word_of_nat_toNat(n: Nat, word: BitVec(n)): word_of_nat(n, word.toNat()) = word {
     BitVec::iterate_increment_toNat(n, word)

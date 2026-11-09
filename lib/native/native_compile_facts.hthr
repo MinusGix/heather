@@ -214,11 +214,6 @@ theorem mask_low_bit(n: Nat): BitVec::ofNat(n, n := 64).band(BitVec::ofNat(1)) =
     eq2(λ (rest: BitVec(63)) (b: Bool) => rest.cons_bit(b), BitVec::band_zero_r(63, BitVec::ofNat(n.half(), n := 63)), BitVec::odd_bit(n).and_true())
 }
 
-// A count Linux returns, as the source keeps it.
-theorem word_of_nat_ofNat(c: Nat, fits: c < Nat::pow(2, 64)): word_of_nat(64, c) = BitVec::ofNat(c) {
-    trans(sym(BitVec::ofNat_toNat(64, word_of_nat(64, c))), cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), toNat_word_of_nat(64, c, fits)))
-}
-
 // The negated errno: the source negates it, Linux counts down from the top.
 theorem source_errno_word(e: Nat, error: Errno(e)): native_source::errno_word(e) = linux_x86_64_io::errno_word(e) {
     let b = BitVec::ofNat(e, n := 64);

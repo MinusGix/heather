@@ -93,7 +93,7 @@ theorem Target::buffer_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf
 theorem Target::buffer_toNat(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap)):
     t.layout().buffer_at(buf).toNat() = t.r.low.toNat() + t.layout().buffer_offset(buf) {
     let bo = t.layout().buffer_offset(buf);
-    trans(cong_fn<BitVec(64), Nat>(λ a => a.toNat(), t.buffer_rip(buf, cap, found)),
+    trans(cong_fn<BitVec(64), Nat>(λ a => a.toNat(), t.buffer_rip(buf)),
         t.r.toNat_at(bo, Nat::le_trans(bo, t.layout().scratch_offset(), t.r.size,
             bo.le_of_add_le(cap, t.layout().scratch_offset(), t.layout().buffer_end(buf, cap, found)), t.scratch_fits())))
 }
@@ -195,13 +195,6 @@ theorem Target::writes_request(self t: Target, env: Env, m: X86Memory(t.r.profil
     ⟨counted, ⟨t.writes_from(env, m, placed, buf, cap, found, from, len, base, base_at), sent⟩⟩
 }
 
-// A count no longer than what the buffer sent is a word.
-theorem Target::count_fits(self t: Target, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), count, n: Nat,
-    le: count <= n, sent: n <= cap): count < Nat::pow(2, 64) {
-    Nat::le_trans(Succ(count), Succ(cap), Nat::pow(2, 64), Nat::le_succ_succ(count, cap, Nat::le_trans(count, n, cap, le, sent)),
-        t.cap_small(buf, cap, found))
-}
-
 // ---------------------------------------------------------------------------
 // A write
 
@@ -277,7 +270,7 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
                 λ resident a => match a {
                     Wrote(count) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
                         cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w),
-                            word_of_nat_ofNat(count, t.count_fits(buf, cap, found, count, bytes.len(), answers, asked.right.right)))⟩⟩⟩,
+                            word_of_nat_eq_ofNat(64, count))⟩⟩⟩,
                     WriteFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨kept,
                         cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
                 }⟩⟩
@@ -734,7 +727,7 @@ theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, filled, s.gprs, s.memory) ∧ (filled.set_word(result, read_gpr(Rax, s.gprs)) = filled.set_word(result, count_word(n))),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(live, filled, s.gprs, s.memory) ∧ (read_gpr(Rax, s.gprs) = word_of_nat(64, n)), stored,
         λ s held => ⟨held.left, trans(cong_fn<BitVec(64), Env>(λ w => filled.set_word(result, w), held.right),
-            cong_fn<BitVec(64), Env>(λ w => filled.set_word(result, w), word_of_nat_ofNat(n, n_small)))⟩);
+            cong_fn<BitVec(64), Env>(λ w => filled.set_word(result, w), word_of_nat_eq_ofNat(64, n)))⟩);
     // The copy, from its head.
     let so = layout.scratch_offset();
     let copy_pre: MachineState<X86Memory(t.r.profile)> → Type = λ u => Exists<List<Nat>>(λ words => Exists<Nat → BitVec(8)>(λ v =>
@@ -759,7 +752,7 @@ theorem Target::goes_read_back_ok(self t: Target, live, out: List<Nat>, env: Env
             let kept = held.left.left.left;
             let landed = kept.proof.left;
             Exists(kept.witness, Exists(landed.witness, ⟨landed.proof.right.left, ⟨landed.proof.right.right.right,
-                ⟨⟨trivial, ⟨refl, ⟨t.scratch_rip(), ⟨t.buffer_rip(buf, cap, found), ⟨held.left.left.right, ⟨Exists(landed.witness, ⟨landed.proof.left,
+                ⟨⟨trivial, ⟨refl, ⟨t.scratch_rip(), ⟨t.buffer_rip(buf), ⟨held.left.left.right, ⟨Exists(landed.witness, ⟨landed.proof.left,
                     ⟨λ q _ => refl, ⟨λ k c early _ => false_elim(k.not_succ_le_zero(early)), landed.proof.right.right.left.right⟩⟩⟩), refl⟩⟩⟩⟩⟩⟩,
                  ⟨landed.proof.right.right.left.left, kept.proof.right⟩⟩⟩⟩))
         }));

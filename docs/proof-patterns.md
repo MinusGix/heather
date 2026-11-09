@@ -76,7 +76,10 @@ property of Heather.
   `int` imported for its coefficients), `-` included: a carrier whose `-` is
   an operation of its own names the law with a `SubtractionLaw` instance
   ([[ring-carrier-subtraction-law]]). A `fits` premise threaded only to a
-  no-overflow lemma whose modular form would do is a premise too many.
+  no-overflow lemma whose modular form would do is a premise too many: a
+  word equation needs none (`BitVec::zero_iterate_increment`,
+  `word_of_nat_eq_ofNat`, `BitVec::ofNat_add_of`, `Target::at_rip`); a
+  `toNat` reading, a sign or zero test and a canonical-address bound do.
 
 ## 3. omega
 

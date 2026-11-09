@@ -79,3 +79,13 @@ theorem complement_plus_one(n: Nat, x: BitVec(n)): x.complement() + 1 = -x {
 theorem negative_complement(n: Nat): BitVec::ofInt(NegSucc(4), n := n) = BitVec::ofNat(4).complement() { BitVec::ofInt_negSucc(n, 4) }
 // At a literal width both spellings evaluate to one word.
 theorem negative_literal(): BitVec::ofInt(NegSucc(4), n := 8) = BitVec::ofNat(4).complement() { refl }
+
+// Word equations past the period need no bound
+// (issues/fits-premises-modular.md): counting up from zero is `ofNat`, and
+// adding a literal is counting up by it, at any count.
+theorem count_past_period(): BitVec::zero(n := 8).iterate_increment(300) = BitVec::ofNat(300) { BitVec::zero_iterate_increment(8, 300) }
+theorem count_open(n, m: Nat): word_of_nat(n, m) = BitVec::ofNat(m) { word_of_nat_eq_ofNat(n, m) }
+theorem add_literal_open(n: Nat, a: BitVec(n), k: Nat): a.add_nat(k) = a.iterate_increment(k) { BitVec::add_nat_iterate(n, a, k) }
+theorem sum_of_ofNats(n: Nat, a, b: BitVec(n), p, q: Nat, ha: a = BitVec::ofNat(p), hb: b = BitVec::ofNat(q)): a.add(b) = BitVec::ofNat(p + q) {
+    BitVec::ofNat_add_of(n, ha, hb)
+}

@@ -621,7 +621,7 @@ theorem Target::goes_byte_init(self t: Target, live: List<Nat>, env: Env, p: Pro
     let blocked = t.goes_block(p, 0, movs, moved.within_before(0, StoreByte(store), t.program, within), tree, pre_store, wrote);
     let ends: (o + cap <= t.r.size) = Nat::le_trans(o + cap, layout.scratch_offset(), t.r.size, layout.buffer_end(buf, cap, found), t.scratch_fits());
     let fits: (o + i + 1 <= t.r.size) = omega(ends, below);
-    let at: (layout.byte_at(buf, i) = next_rip(t.r.low, o + i)) = t.at_rip(o + i, omega(fits));
+    let at: (layout.byte_at(buf, i) = next_rip(t.r.low, o + i)) = t.at_rip(o + i);
     let byte: (imm_byte0(byte_word(c)) = c) = BitVec::split_concat_low(8, 56, c, BitVec::zero());
     λ s here resident held => {
         let writable = j(sym(at), λ a _ => t.io().writable(s.memory, a, 1), t.writable(s.memory, o + i, 1, fits));

@@ -130,7 +130,7 @@ theorem Target::held_frame_store(self t: Target, live: List<Nat>, env: Env, g: G
         argv_at_kept(t.argv(), m, t.argv(), m2, t.kept_store(m, fo, bytes, fits), word_in(v, so), t.args, pp.right.right.right.left));
     let placed: u.Placed(env.with_words(words), m2) = Exists(w, ⟨holds, ⟨keeps, ⟨pp.right.right.left, ⟨argv, ⟨frame,
         ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room), pp.right.right.right.right.right.left), t.frames_store(m, fo, bytes, fits, frames, index, at)⟩⟩⟩⟩⟩⟩);
-    j(sym(t.at_rip(fo, omega(slots))), λ a _ => u.Held(live, env, g, t.r.profile.store(m, a, bytes)), Exists(words, ⟨placed, held.proof.right⟩))
+    j(sym(t.at_rip(fo)), λ a _ => u.Held(live, env, g, t.r.profile.store(m, a, bytes)), Exists(words, ⟨placed, held.proof.right⟩))
 }
 
 // The room slot stored.
@@ -162,7 +162,7 @@ theorem Target::held_room_store(self t: Target, live: List<Nat>, env: Env, g: Gp
     let placed: u.Placed(env.with_words(words), m2) = Exists(w, ⟨holds, ⟨keeps, ⟨pp.right.right.left, ⟨argv,
         ⟨trans(frame, pp.right.right.right.right.left), ⟨trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), stored), value),
          t.frames_store(m, ro, bytes, fits, t.frames, t.index, pp.right.right.right.right.right.right)⟩⟩⟩⟩⟩⟩);
-    j(sym(t.at_rip(ro, omega(slots))), λ a _ => u.Held(live, env, g, t.r.profile.store(m, a, bytes)), Exists(words, ⟨placed, held.proof.right⟩))
+    j(sym(t.at_rip(ro)), λ a _ => u.Held(live, env, g, t.r.profile.store(m, a, bytes)), Exists(words, ⟨placed, held.proof.right⟩))
 }
 
 // ---------------------------------------------------------------------------
@@ -350,14 +350,14 @@ theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Pr
                 let fits_f: (fo + 8 <= t.r.size) = omega(slots);
                 let read = u.read_at(v, m2, held2.proof.left.proof.left, fo, fits_f);
                 let frame: (word_in(v, fo) = t.frame()) = u.held_frame_slot(live, env, g2, m2, held2);
-                let rip_f = sym(t.at_rip(fo, omega(slots)));
+                let rip_f = sym(t.at_rip(fo));
                 let read_f: (read_word(t.site().data, m2, layout.frame_at()) = Some(t.frame())) =
                     j(rip_f, λ a _ => read_word(t.site().data, m2, a) = Some(t.frame()),
                         trans(read.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), frame)));
                 let canonical_f: (layout.frame_at().toNat() + 8 <= Nat::pow(2, 47)) = j(rip_f, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left);
                 let last: at_move(word_store_after(t.writes(), WordStore(Rbx, Rax), execute_block_normal(down, s))) =
                     Exists(t.frame(), ⟨canonical_f, ⟨read_f, ⟨u.held_scratch(live, env, g2, m2, held2, Rsp, t.frame(), trivial), refl⟩⟩⟩);
-                let rip_r = sym(t.at_rip(ro, omega(slots)));
+                let rip_r = sym(t.at_rip(ro));
                 ⟨refl, ⟨j(rip_r, λ a _ => t.writes().writable(m, a, 8), t.writable(m, ro, 8, omega(slots))),
                     ⟨j(rip_r, λ a _ => t.site().Resident(t.r.profile.store(m, a, bytes)), t.store_resident(m, ro, bytes, omega(slots), resident)), last⟩⟩⟩
             });
@@ -391,7 +391,7 @@ theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Pr
         let v = held.proof.left.witness;
         let word = word_in(v, ro);
         let read = t.read_at(v, m, held.proof.left.proof.left, ro, omega(slots));
-        let rip_r = sym(t.at_rip(ro, omega(slots)));
+        let rip_r = sym(t.at_rip(ro));
         let g1 = write_gpr(Rbx, layout.room_at(), g);
         let held1 = t.held_scratch(live, env, write_gpr(Rbx, layout.room_at(), g), m, t.held_scratch(live, env, g, m, held, Rbx, layout.room_at(), trivial),
             Rax, word, trivial);
@@ -883,7 +883,7 @@ theorem Target::goes_word_home(self t: Target, live, out: List<Nat>, env: Env, p
                     let set = t.held_slot_set(live, out, env, id, w, g, m, held.left, sub, slot, inside);
                     let back: t.Held(out, env, g, m2) = t.held_like(out, env.set_word(id, w), env, g, m2, set, env.like_set_same(id, w, number, out));
                     let fits: (8 * id + word_bytes(w).len() <= t.r.size) = t.slot_fits(id, inside);
-                    let kept: t.StackKept(m, m2) = j(sym(t.word_rip(id, inside)), λ x _ => t.StackKept(m, t.r.profile.store(m, x, word_bytes(w))),
+                    let kept: t.StackKept(m, m2) = j(sym(t.word_rip(id)), λ x _ => t.StackKept(m, t.r.profile.store(m, x, word_bytes(w))),
                         λ k inside_k => t.stack_read_store(m, 8 * id, word_bytes(w), fits, k, inside_k));
                     j(sym(kept_value), λ v _ => q(write_gpr(Rbx, a, g), t.r.profile.store(m, a, word_bytes(v))),
                         held.right.right(write_gpr(Rbx, a, g), m2, t.held_scratch(out, env, g, m2, back, Rbx, a, trivial),
@@ -1139,8 +1139,8 @@ theorem Target::goes_call_leave(self t: Target, live: List<Nat>, env: Env, p: Pr
     λ s here resident held => {
         let g = s.gprs;
         let m = s.memory;
-        let rip_f = sym(t.at_rip(fo, omega(slots)));
-        let rip_r = sym(t.at_rip(ro, omega(slots)));
+        let rip_f = sym(t.at_rip(fo));
+        let rip_r = sym(t.at_rip(ro));
         let frame_bytes = word_bytes(t.frame());
         let m2 = t.r.profile.store(m, layout.frame_at(), word_bytes(read_gpr(Rsp, g)));
         let stored1: v1.Held(live, env, g, t.r.profile.store(m, layout.frame_at(), frame_bytes)) =
@@ -1303,7 +1303,7 @@ theorem Target::goes_callee_entry(self t: Target, live: List<Nat>, env: Env, pre
     λ s here resident held => {
         let g = s.gprs;
         let m = s.memory;
-        let rip_f = sym(t.at_rip(fo, omega(slots)));
+        let rip_f = sym(t.at_rip(fo));
         let g1 = write_gpr(Rbx, layout.frame_at(), g);
         let m2 = t.r.profile.store(m, layout.frame_at(), word_bytes(read_gpr(Rsp, g)));
         let stored: c.Held(live, env, g, t.r.profile.store(m, layout.frame_at(), word_bytes(t.stack.at(index2)))) =
@@ -1381,7 +1381,7 @@ theorem Target::goes_callee_return(self t: Target, after: Env, b: Prog, results:
             let v = held2.proof.left.witness;
             let read = t.read_at(v, m, held2.proof.left.proof.left, fo, omega(slots));
             let frame: (word_in(v, fo) = t.frame()) = t.held_frame_slot(results, after, g2, m, held2);
-            let rip_f = sym(t.at_rip(fo, omega(slots)));
+            let rip_f = sym(t.at_rip(fo));
             Exists(t.frame(), ⟨j(rip_f, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left),
                 ⟨j(rip_f, λ a _ => read_word(t.site().data, m, a) = Some(t.frame()), trans(read.right, cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), frame))),
                  ⟨t.held_scratch(results, after, g3, m, t.held_scratch(results, after, g2, m, held2, Rbx, layout.frame_at(), trivial), Rsp, t.frame(), trivial),
