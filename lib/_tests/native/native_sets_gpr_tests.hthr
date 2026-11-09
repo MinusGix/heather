@@ -1,0 +1,30 @@
+// Probes of the `sets` tactic (lib/std/tactic/set_tactic.hthr) over
+// register pools and element equalities: `Gpr::absent_from` as a spelling
+// of non-membership, `x.same(y)`, `a.matches(b)` and `a.differs(b)` as
+// spellings of equality, `gprs_outside` as a relation, and plain equation
+// goals. Tests, not library (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option;
+import function_ir_eval; import x86_64; import native_compile; import native_compile_perform;
+import set_tactic;
+
+// A register absent from a pool, apart from each of it.
+theorem gpr_absent_head(r, o: Gpr, rest: List<Gpr>, h: r.absent_from(Cons(o, rest)).IsTrue()): o.same(r) = False { by sets() }
+theorem gpr_absent_rest(r, o: Gpr, rest: List<Gpr>, h: r.absent_from(Cons(o, rest)).IsTrue()): r.absent_from(rest).IsTrue() { by sets() }
+theorem gpr_absent_mem(x: Gpr, rs: List<Gpr>, h: x.absent_from(rs).IsTrue(), r: Gpr, m: Mem(r, rs)): x.same(r) = False { by sets() }
+theorem gpr_append(r: Gpr, a, b: List<Gpr>, h: Mem(r, a ++ b), n: r.absent_from(a).IsTrue()): Mem(r, b) { by sets() }
+theorem gpr_same_hyp(r, o: Gpr, rest: List<Gpr>, e: r.same(o) = True, h: Mem(o, rest)): r.absent_from(rest) = False { by sets() }
+theorem gpr_literal_pool(r: Gpr, n: r.absent_from([Rax, Rbx, Rsp]).IsTrue()): r.same(Rbx) = False { by sets() }
+
+// Equation goals, plain and spelled.
+theorem gpr_eq_goal(r, o: Gpr, h: Mem(r, [o])): r = o { by sets() }
+theorem nat_matches_goal(i, j: Nat, a: List<Nat>, h: Mem(i, a), n: ¬Mem(j, a)): i.matches(j) = False { by sets() }
+theorem nat_differs_goal(i, j: Nat, a: List<Nat>, h: Mem(i, a), n: absent(j, a).IsTrue()): i.differs(j).IsTrue() { by sets() }
+theorem nat_matches_hyp(i, j: Nat, a: List<Nat>, e: i.matches(j) = True, h: Mem(j, a)): Mem(i, a) { by sets() }
+
+// `gprs_outside` as a relation.
+theorem outside_mem(rs, pool: List<Gpr>, h: gprs_outside(rs, pool).IsTrue(), r: Gpr, m: Mem(r, rs)): r.absent_from(pool).IsTrue() { by sets() }
+theorem outside_tail(r: Gpr, rs, pool: List<Gpr>, h: gprs_outside(Cons(r, rs), pool).IsTrue()): gprs_outside(rs, pool).IsTrue() ∧ r.absent_from(pool).IsTrue() { by sets() }
+
+// The negative control: absence from the tail says nothing of the head.
+// expect-error: sets: the goal does not follow from the membership facts in scope
+theorem gpr_wrong(r, o: Gpr, rest: List<Gpr>, h: r.absent_from(rest).IsTrue()): o.same(r) = False { by sets() }

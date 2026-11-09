@@ -433,6 +433,31 @@ fn SetBitLaw<A>(f: A → List<A> → Bool, negated: Bool) → Type {
     (x: A) → (s: List<A>) → Reflects(Mem(x, s), match negated { False => f(x, s), True => !f(x, s) })
 }
 
+// An equation between elements spelled as a Boolean: `f(x, y)` reflects
+// `x = y`, or, when `negated`, `!f(x, y)` does (native's `x.same(y)`,
+// `a.matches(b)`, `a.differs(b)`). Registered as a `SetEqEntry`; the
+// tactic reads the spelling as the equation or its negation.
+fn SetEqLaw<A>(f: A → A → Bool, negated: Bool) → Type {
+    (x, y: A) → Reflects(x = y, match negated { False => f(x, y), True => !f(x, y) })
+}
+
+// Between any reflected proposition and its bit.
+theorem set_reflect_true({P: Type}, b: Bool, r: Reflects(P, b), h: b = True): P { r.left(h) }
+theorem set_reflect_false({P: Type}, b: Bool, r: Reflects(P, b), h: b = False): ¬P { r.right(h) }
+theorem set_reflect_is_true({P: Type}, b: Bool, r: Reflects(P, b), p: P): b = True { set_true_of(r, p) }
+theorem set_reflect_is_false({P: Type}, b: Bool, r: Reflects(P, b), np: ¬P): b = False {
+    (match b as λ c => Reflects(P, c) → c = False {
+        False => λ _ => refl,
+        True => λ (r2: Reflects(P, True)) => false_elim(np(r2.left(refl))),
+    })(r)
+}
+
+// An equation goal is membership in a singleton; a disequation is `False`
+// under the equation. The two as types the tactic can quote.
+theorem set_eq_of_mem_single<A>(x, y: A, m: Mem(x, [y])): x = y { match m { Inl(e) => e, Inr(never) => false_elim(never) } }
+fn set_eq_prop<A>(x, y: A) → Type { x = y }
+fn set_ne_prop<A>(x, y: A) → Type { ¬(x = y) }
+
 // From a spelling to membership, `b` being the spelled bit read as `x ∈ s`.
 theorem set_spell_true<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), h: b = True): Mem(x, s) { r.left(h) }
 theorem set_spell_false<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), h: b = False): ¬Mem(x, s) { r.right(h) }

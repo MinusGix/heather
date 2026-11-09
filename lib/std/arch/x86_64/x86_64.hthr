@@ -60,6 +60,26 @@ theorem Gpr::same_sound(self register: Gpr): (query: Gpr) →
     }
 }
 
+theorem Gpr::same_self(self register: Gpr): register.same(register) = True { register.index().same_self() }
+
+// `same` decides equality of registers.
+theorem Gpr::same_reflects(self a: Gpr, b: Gpr): Reflects(a = b, a.same(b)) {
+    match s: a.same(b) {
+        True => And(λ _ => a.same_sound(b, s), λ (no: True = False) => absurd(no)),
+        False => And(λ (no: False = True) => absurd(no),
+            λ _ (e: a = b) => absurd(trans(sym(j(e, λ y _ => a.same(y) = True, a.same_self())), s))),
+    }
+}
+
+fn Gpr::eq_dec(self a: Gpr, b: Gpr) → a = b ∨ ¬(a = b) {
+    match s: a.same(b) {
+        True => Inl(a.same_reflects(b).left(s)),
+        False => Inr(a.same_reflects(b).right(s)),
+    }
+}
+
+instance DecEq<Gpr> { eq_dec := Gpr::eq_dec }
+
 record Gprs { at: Gpr → BitVec(64) }
 
 fn zero_gprs() → Gprs { Gprs(at := λ (register: Gpr) => BitVec::zero()) }
