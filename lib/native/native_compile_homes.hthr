@@ -37,6 +37,8 @@ import logic;
 import nat;
 import option;
 import omega;
+import tactic;
+import set_tactic;
 
 // ---------------------------------------------------------------------------
 // Registers apart
@@ -114,15 +116,10 @@ theorem List::union_right(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, b))
 
 // A word of `out` other than the one written is live before the write.
 theorem live_before_keeps(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat, m: Mem(i, out), ne: i ≠ written):
-    Mem(i, live_before(reads, written, out)) {
-    let apart: (absent(i, [written]) = True) = j(sym(i.differs_eq_of_ne(written, ne)), λ b _ => Bool::and(b, True) = True, refl);
-    reads.union_right(out.minus([written]), i, out.mem_filter_of(λ (id: Nat) => absent(id, [written]), i, apart, m))
-}
+    Mem(i, live_before(reads, written, out)) { by sets() }
 
 // What a step reads is live before it.
-theorem live_before_reads(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat, m: Mem(i, reads)): Mem(i, live_before(reads, written, out)) {
-    reads.union_left(out.minus([written]), i, m)
-}
+theorem live_before_reads(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat, m: Mem(i, reads)): Mem(i, live_before(reads, written, out)) { by sets() }
 
 // ---------------------------------------------------------------------------
 // The one-pass check is the checks

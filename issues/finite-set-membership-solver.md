@@ -1,6 +1,6 @@
 ---
 title: Decide membership goals over finite-set expressions
-status: open
+status: closed
 labels: [tactics,native,sets]
 area: tactics
 milestone: [hih-passes]
@@ -44,3 +44,7 @@ assignment that falsifies it.
 - **[[address-interval-sets]]** produces footprint goals of this shape once
   intervals are reduced to endpoints. Assumed here: nothing; this issue
   stands alone.
+
+## Log
+
+- 2026-11-09: Built. `lib/std/data/set/set_solve.hthr` reflects set expressions (atoms, `Cons` of an indexed element, a filter by an indexed predicate, and registered binary operations whose `SetLaw` names their connective: ∪, ∩, ∖) into Booleans of the leaves, proves the reading sound (`SetExpr::reflects`), and `set_solve` turns a closed `set_taut(…) = True` (by `refl`) plus the facts' proofs into the goal. `lib/std/data/set/set_ops.hthr` is the operation registry (`SetOpEntry`, `++` registered); `lib/std/tactic/set_tactic.hthr` is `sets()`: it reads `Mem`/`¬Mem`/`¬(x = e)`/inclusion hypotheses at the goal's element (an inclusion is applied to it, so `Inside` and any `(i) → Mem(i, a) → Mem(i, b)` count), introduces inclusion goals, reads `False` goals at a membership's element, reads an unknown call through its definition when that is a call again (`live_before` as `union`), adds `x ∈ [e]` for elements convertible to `x`, runs the table in Heather first and refuses with the falsifying assignment, one note per leaf. Native registers `union` (∪) and `minus` (∖) with their laws in `native_alloc`; `inside_union`, `inside_minus`, `inside_live_before` (native_alloc) and `live_before_keeps`, `live_before_reads` (native_compile_homes) are now `by sets()`. Probes and the negative control: `lib/_tests/std/tactic/set_tactic_tests.hthr`. Boolean spellings (`absent`, `holds`, `within`), `DecEq<Gpr>` and migrating the remaining chains: [[set-solver-boolean-spellings]].

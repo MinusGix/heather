@@ -1,0 +1,23 @@
+// The operations the `sets` tactic (lib/std/tactic/set_tactic.hthr) reads:
+// its registry entries (docs/registered-values-design.md). A module that
+// defines a set operation registers it beside its membership law
+// (`SetLaw`, lib/std/data/set/set_solve.hthr), so the tactic reifies it
+// instead of treating it as an atom. Only the entry type and `++`'s entry
+// live here, so a theory module can import this without the tactic.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import set_solve;
+
+// An operation by name, its connective and its law, each name a `name_of`.
+// `implicits` counts the implicit parameters the operation and its law both
+// open with (an element type, say), which the tactic leaves to inference;
+// the law takes nothing else.
+record SetOpEntry { op: String, conn: SetConn, law: String, implicits: Nat }
+
+register def set_append_entry: SetOpEntry = SetOpEntry(name_of(List::append), SetOr, name_of(set_append_law), 1);

@@ -53,6 +53,13 @@ property of Heather.
   domain and the match spells its unfolding (20–170× kernel steps).
 - **Put case analysis of a trace or other inductive in a small lemma over
   its own type**, not inside a recursion or under a computed binder.
+- **Membership over lists read as sets is `by sets()`**
+  (`lib/std/tactic/set_tactic.hthr`), not a chain of `mem_append_l`,
+  `union_right`, `mem_filter_of` citations: the goal and the `Mem`, `¬Mem`,
+  `≠` and inclusion hypotheses about its element become a truth table that
+  the kernel checks by evaluation. A new set operation registers a
+  `SetOpEntry` with its `SetLaw` beside its definition. Each atom, element
+  and predicate doubles the table, so keep a big literal behind a name.
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
   `rewrite` and generic-lemma matching convert, or fail before instance
   search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).
