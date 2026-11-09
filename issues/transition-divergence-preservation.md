@@ -1,6 +1,6 @@
 ---
 title: Carry divergence and behaviours through simulation diagrams
-status: open
+status: closed
 labels: [relation,semantics,coinduction]
 area: mathematics
 milestone: [hih-passes]
@@ -50,3 +50,19 @@ such diagrams does too.
   proof of a codata predicate over a state type is accepted.
 - **[[linux-sim-divergence]]** proved the tree-side exact converse
   (`LinuxSimCo`); this is the state-side counterpart.
+
+## Log
+
+- 2026-11-09: Done in lib/std/relation/transition.hthr. `Acc` (its `below`
+  takes the smaller index with its proof, one argument, as the tier-2
+  lowering asks) and `WellFounded`; `Acc::down` along runs, `Plus::last`,
+  `WellFounded::plus`, `::lex` (nested: `Acc::lex_second` takes the outer
+  hypothesis as a function), `::star_compose` (the composite diagram's order
+  is well-founded when both parts' are), `::empty`, `::nat_pred`. Codata
+  `Forever` and `ForeverN`; `StarDiagram::forever_n` (corecursive),
+  `ForeverN::first_plus` (by `Acc`), `StarDiagram::forever`.
+  `Forever::never_stuck`; `Terminates`, `StarDiagram::terminates`,
+  `::terminates_exactly` and `::diverges_exactly` into a deterministic
+  target. Going wrong is not carried: a forward diagram says nothing of a
+  source that stops short, so sources are taken safe, as in CompCert. Probes
+  carry divergence through the no-op pass and the composite.

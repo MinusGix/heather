@@ -129,3 +129,47 @@ theorem drops_backward(i: Nat, a, a2: Pair<Nat, Nat>, b: Nat, matched: Drops(i, 
     StarDiagram::backward(Skip, Tick, Below, Drops, drops_diagram(), tick_det(), i, a, a2, b, Succ(b),
         matched, refl, step)
 }
+
+// ---------------------------------------------------------------------------
+// Divergence
+
+// The counter never stops.
+fn tick_forever(n: Nat) → Forever<Nat>(Tick, n) {
+    Again(Succ(n), refl, tick_forever(Succ(n)))
+}
+
+// Neither does the source with no-ops: a no-op, or a count.
+fn skip_forever(a: Pair<Nat, Nat>) → Forever<Pair<Nat, Nat>>(Skip, a) {
+    match a {
+        Pair(pending, count) => match pending {
+            Zero => Again(Pair(0, Succ(count)), refl, skip_forever(Pair(0, Succ(count)))),
+            Succ(k) => Again(Pair(k, count), refl, skip_forever(Pair(k, count))),
+        },
+    }
+}
+
+// Dropping no-ops stutters only finitely often, so the counter it is
+// matched to runs forever too.
+fn dropped_forever(a: Pair<Nat, Nat>) → Forever<Nat>(Tick, a.snd) {
+    StarDiagram::forever(Skip, Tick, Below, Drops, drops_diagram(), WellFounded::nat_pred(), a.fst, a, a.snd,
+        ⟨refl, refl⟩, skip_forever(a))
+}
+
+// And through both passes, the doubled counter.
+fn composed_forever(a: Pair<Nat, Nat>) → Forever<Nat>(TickTwice, a.snd + a.snd) {
+    StarDiagram::forever(Skip, TickTwice, λ x y => StarComposeLt(Below, λ p q => False, x, y),
+        λ k s c => StarCompose(Drops, λ u b c2 => Doubled(b, c2), k, s, c), passes_compose(),
+        WellFounded::star_compose(Below, λ p q => False, WellFounded::nat_pred(), WellFounded::empty()),
+        Pair(trivial, a.fst), a, a.snd + a.snd, Exists(a.snd, ⟨⟨refl, refl⟩, refl⟩), skip_forever(a))
+}
+
+// A deterministic system that runs forever reaches nothing stuck.
+theorem ticks_never_stuck(n, c: Nat, run: Star(Tick, n, c)): ¬Stuck(Tick, c) {
+    StarDiagram::diverges_exactly(Skip, Tick, Below, Drops, drops_diagram(), WellFounded::nat_pred(), tick_det(),
+        0, Pair(0, n), n, ⟨refl, refl⟩, skip_forever(Pair(0, n)), c, run)
+}
+
+// The stutter order of the composite is well-founded.
+theorem composite_order_wf(): WellFounded<Pair<True, Nat>>(λ x y => StarComposeLt(Below, λ p q => False, x, y)) {
+    WellFounded::star_compose(Below, λ p q => False, WellFounded::nat_pred(), WellFounded::empty())
+}
