@@ -42,6 +42,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_compile;
 import rt_lower;
+import set_tactic;
 
 // ---------------------------------------------------------------------------
 // The tail meaning.
@@ -173,16 +174,7 @@ theorem Tm::moves_to_writes(ns: List<Nat>): (qs: List<Nat>) → (id: Nat) → ab
     }
 }
 
-theorem Tm::disjoint_tail(n: Nat, rest: List<Nat>, ys: List<Nat>): disjoint(Cons(n, rest), ys).IsTrue() → disjoint(rest, ys).IsTrue() {
-    match ys {
-        Nil => λ _ => trivial,
-        Cons(y, more) => λ h => {
-            let parts = Bool::is_true_and(absent(y, Cons(n, rest)), disjoint(Cons(n, rest), more), h);
-            Bool::is_true_and_intro(absent(y, rest), disjoint(rest, more),
-                Bool::is_true_and(y.differs(n), absent(y, rest), parts.left).right, Tm::disjoint_tail(n, rest, more, parts.right))
-        },
-    }
-}
+theorem Tm::disjoint_tail(n: Nat, rest: List<Nat>, ys: List<Nat>): disjoint(Cons(n, rest), ys).IsTrue() → disjoint(rest, ys).IsTrue() { by sets() }
 
 // Distinct targets, none a source, as many as the sources: the targets read
 // the sources' words.

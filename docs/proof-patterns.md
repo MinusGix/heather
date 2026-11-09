@@ -55,11 +55,17 @@ property of Heather.
   its own type**, not inside a recursion or under a computed binder.
 - **Membership over lists read as sets is `by sets()`**
   (`lib/std/tactic/set_tactic.hthr`), not a chain of `mem_append_l`,
-  `union_right`, `mem_filter_of` citations: the goal and the `Mem`, `¬Mem`,
-  `≠` and inclusion hypotheses about its element become a truth table that
-  the kernel checks by evaluation. A new set operation registers a
-  `SetOpEntry` with its `SetLaw` beside its definition. Each atom, element
-  and predicate doubles the table, so keep a big literal behind a name.
+  `union_right`, `mem_filter_of`, `Bool::is_true_and` citations: the goal
+  and the `Mem`, `¬Mem`, `=`, `≠`, inclusion and spelled
+  (`absent(x, s).IsTrue()`, `holds`) hypotheses about its element become a
+  truth table that the kernel checks by evaluation; `∧` and records of such
+  facts split. Relations between sets (`a.within(b)`, `disjoint(xs, ys)`)
+  are read too: a hypothesis at the element, a goal by its intro law. A new
+  set operation registers a `SetOpEntry` with its `SetLaw`, a new Boolean
+  spelling a `SetBitEntry` with its `SetBitLaw`, a new relation a
+  `SetRelEntry` with its elim and intro laws, beside its definition. Each atom, element and predicate doubles the
+  table, so keep a big literal behind a name. A call costs a few tenths of
+  a second, mostly the tactic's own run; a one-step citation is cheaper.
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
   `rewrite` and generic-lemma matching convert, or fail before instance
   search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).
@@ -67,8 +73,8 @@ property of Heather.
   Nat.** Every word operation is `ofNat` of the Nat one at every width
   (`BitVec::add_eq_ofNat`, `ofNat_add`, `toNat_add_mod`, `bitvec_nat`), and
   a word identity is `ring`'s at `BitVec(n)` (`import bitvec_ring;`, with
-  `int` imported for its coefficients). `ring` does not read `-` there yet:
-  rewrite with `BitVec::sub_eq_add_neg` first
+  `int` imported for its coefficients), `-` included: a carrier whose `-` is
+  an operation of its own names the law with a `SubtractionLaw` instance
   ([[ring-carrier-subtraction-law]]). A `fits` premise threaded only to a
   no-overflow lemma whose modular form would do is a premise too many.
 

@@ -112,7 +112,7 @@ impl Elaborator {
         //    (issues/section-symbols-capture-other-carriers.md).
         if fixity == OpFixity::Infix
             && let Some((_, n)) = cx.op_locals.iter_inner().find(|(s, _)| s == sym)
-            && !self.binder_declines_operands(cx, n, sym, args, span)
+            && !self.binder_declines_operands(cx, n, sym, args, expected, span)
         {
             return Ok(n.clone());
         }
@@ -292,7 +292,8 @@ impl Elaborator {
     }
 
     /// Does rung 1's binder `binder` decline these operands — are they at a
-    /// nominal carrier the binder's operation is not at?
+    /// nominal carrier the binder's operation is not at? A bare symbol in a
+    /// checking position is asked the same of the carrier `expected` names.
     ///
     /// The binder's carrier is the first domain of its type (`K` for
     /// `#op+@0_3 : K -> K -> K`); the operands' is the first
@@ -304,13 +305,28 @@ impl Elaborator {
     /// generic code the binder exists for. Only a symbol designated somewhere
     /// is asked, because only then can rung 2 give the operands a meaning of
     /// their own, so a file declaring no designation pays nothing.
-    fn binder_declines_operands(&self, cx: &Cx, binder: &str, sym: &str, args: &[Expr], span: Span) -> bool {
-        if args.is_empty() || !self.traits.has_designation_for(OpFixity::Infix, sym) {
+    fn binder_declines_operands(
+        &self,
+        cx: &Cx,
+        binder: &str,
+        sym: &str,
+        args: &[Expr],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> bool {
+        if !self.traits.has_designation_for(OpFixity::Infix, sym) {
             return false;
         }
         // A shift's count is not at the carrier (`x << 2`).
         let operands = if is_shift(sym) { &args[..1] } else { args };
         let mut found: Option<Option<Carrier>> = None;
+        // Bare, the carrier is the first domain of the type this checking
+        // position asks for, rung 2's second source: `OrderedRingHom<Rat,
+        // K>(map, ≈, …)` passes `Rat`'s `≈` where `Rat → Rat → Type` is
+        // expected (issues/constraint-indices-from-carrier-designations.md).
+        if args.is_empty() {
+            found = Some(expected.and_then(|t| self.expected_carrier_head(cx, t, span)));
+        }
         for arg in operands {
             operator_carrier_leaf(arg, |leaf| {
                 if self.is_checking_only(cx, leaf) {

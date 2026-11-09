@@ -43,6 +43,7 @@ import series;
 import elementary;
 import omega;
 import tactic;
+import wlog;
 import mono;
 import linarith;
 import ring;
@@ -607,21 +608,19 @@ theorem CReal::exp_rat_neg_mul(a: Rat): CReal::exp_rat(a) * CReal::exp_rat(-a) �
 }
 
 theorem CReal::exp_rat_pos(a: Rat): 0 < CReal::exp_rat(a) {
-    match Rat::le_total(0, a) {
-        Inl(ha) => {
-            let g = CReal::exp_rat_ge(a, ha);
-            let one: (CReal::ofRat(0) < CReal::ofRat(1 + a)) = CReal::ofRat_lt(linarith(ha));
-            CReal::lt_of_lt_of_le(one, g)
-        },
-        Inr(ha) => {
-            let na: (0 <= -a) = linarith(ha);
-            let g = CReal::exp_rat_ge(-a, na);
-            let pos: (0 < CReal::exp_rat(-a)) = CReal::lt_of_lt_of_le(CReal::ofRat_lt(linarith(na)), g);
-            let prod: (0 < CReal::exp_rat(-a) * CReal::exp_rat(a)) =
-                CReal::lt_of_lt_of_le(CReal::zero_lt_one(), CReal::le_of_same(CReal::same_sym(CReal::same_trans(CReal::mul_comm(CReal::exp_rat(-a), CReal::exp_rat(a)), CReal::exp_rat_neg_mul(a)))));
+    // Positive at a nonnegative point by `1 + a <= exp(a)`; at a negative one
+    // because `exp(a)·exp(-a) = 1` with `exp(-a)` positive.
+    by wlog_sign(a,
+        λ x pos => {
+            let prod: (0 < CReal::exp_rat(-x) * CReal::exp_rat(x)) =
+                CReal::lt_of_lt_of_le(CReal::zero_lt_one(), CReal::le_of_same(CReal::same_sym(CReal::same_trans(CReal::mul_comm(CReal::exp_rat(-x), CReal::exp_rat(x)), CReal::exp_rat_neg_mul(x)))));
             CReal::pos_of_mul_pos(pos, prod)
         },
-    }
+        λ x hx => {
+            let g = CReal::exp_rat_ge(x, hx);
+            let one: (CReal::ofRat(0) < CReal::ofRat(1 + x)) = CReal::ofRat_lt(linarith(hx));
+            CReal::lt_of_lt_of_le(one, g)
+        })
 }
 
 // exp(b) = exp(a)·exp(b - a), and exp(b - a) is at least 1 + (b - a).

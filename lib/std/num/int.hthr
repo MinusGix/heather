@@ -889,7 +889,7 @@ theorem Int::le_total(self a, b: Int): a <= b ∨ b <= a {
 // A property symmetric in its two points holds everywhere once it holds
 // where the first is the smaller: a case split on `le_total` whose two arms
 // are one proof with the roles exchanged, proved once
-// (issues/wlog-symmetric-cases.md). `by wlog_le(m, n, swap, le)`
+// (issues/wlog-symmetric-cases.md). `by wlog(m, n, swap, le)`
 // (tactic/wlog.hthr) reads `P` off the goal.
 theorem Int::wlog_le(P: Int → Int → Type, swap: (a, b: Int) → P(a, b) → P(b, a),
     le: (a, b: Int) → a <= b → P(a, b), m, n: Int): P(m, n) {
@@ -1276,6 +1276,18 @@ theorem Int::le_neg(self a: Int): (b: Int) → a <= b → -b <= -a {
 }
 
 // A square is nonnegative: a nonpositive `a` squares as `(-a)·(-a)`.
+// A property that carries from `-a` to `a` holds everywhere once it holds
+// at the nonnegative points: a sign split whose negative arm is the
+// nonnegative one through negation, proved once
+// (issues/wlog-sign-and-ordered-carriers.md). `by wlog_sign(x, neg, nn)`
+// (tactic/wlog.hthr) reads `P` off the goal.
+theorem Int::wlog_nonneg(P: Int → Type, neg: (a: Int) → P(-a) → P(a), nn: (a: Int) → OfNat(0) <= a → P(a), x: Int): P(x) {
+    match Int::le_total(OfNat(0), x) {
+        Inl(h) => nn(x, h),
+        Inr(h) => neg(x, nn(-x, x.le_neg(OfNat(0), h))),
+    }
+}
+
 theorem Int::sq_nonneg(self a: Int): OfNat(0) <= a * a {
     match OfNat(0).le_total(a) {
         Inl(up) => a.mul_nonneg(a, up, up),

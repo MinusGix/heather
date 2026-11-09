@@ -33,7 +33,7 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x21";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x22";
 const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1c";
 
 /// The two encodings' versions, image then interface: what a module cache
@@ -1899,6 +1899,7 @@ fn put_inductive(w: &mut Writer, info: &Inductive) {
     w.vec(&info.params, |w, name| w.string(name));
     w.option(info.varies.as_ref(), |w, k| w.u32(*k as u32));
     w.vec(&info.valparams, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
+    w.vec(&info.valparam_defaults, |w, d| w.option(d.as_deref(), put_expr));
     w.vec(&info.op_symbols, |w, (symbol, name)| { w.string(symbol); w.string(name); });
     w.vec(&info.ctors, put_ctor); w.bool(info.recursive); w.bool(info.is_record); w.bool(info.codata);
     w.option(info.index.as_ref(), |w, index| w.string(index));
@@ -1922,6 +1923,7 @@ fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError
         params: r.vec(Reader::string)?,
         varies: r.option(|r| Ok(r.u32()? as usize))?,
         valparams: r.vec(|r| Ok((r.string()?, get_ty(r)?)))?,
+        valparam_defaults: r.vec(|r| r.option(|r| Ok(Rc::new(get_expr(r)?))))?,
         op_symbols: r.vec(|r| Ok((r.string()?, r.string()?)))?,
         ctors: r.vec(get_ctor)?, recursive: r.bool()?, is_record: r.bool()?, codata: r.bool()?,
         index: r.option(Reader::string)?,

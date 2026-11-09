@@ -244,19 +244,21 @@ theorem SetExpr::reflects<A>(self e: SetExpr, env: SetEnv<A>, d: DecEq<A>, x: A)
 
 // A hypothesis at `x`: `x` is in `e`, `x` is not in `e`, or if `x` is in
 // `a` then it is in `b` (an inclusion `(i: A) → i ∈ a → i ∈ b` applied to
-// `x`, so sets that mention the bound element are read too).
-inductive SetFact { FMem(e: SetExpr), FNot(e: SetExpr), FImp(a: SetExpr, b: SetExpr) }
+// `x`, so sets that mention the bound element are read too), or if `x` is
+// in `a` then it is not in `b` (`a` and `b` apart at `x`).
+inductive SetFact { FMem(e: SetExpr), FNot(e: SetExpr), FImp(a: SetExpr, b: SetExpr), FApart(a: SetExpr, b: SetExpr) }
 
 fn SetFact::Holds<A>(self f: SetFact, env: SetEnv<A>, x: A) → Type {
     match f {
         FMem(e) => Mem(x, e.denote(env)),
         FNot(e) => ¬Mem(x, e.denote(env)),
         FImp(a, b) => Mem(x, a.denote(env)) → Mem(x, b.denote(env)),
+        FApart(a, b) => Mem(x, a.denote(env)) → ¬Mem(x, b.denote(env)),
     }
 }
 
 fn SetFact::bit(self f: SetFact, v: SetBits) → Bool {
-    match f { FMem(e) => e.eval(v), FNot(e) => !e.eval(v), FImp(a, b) => !a.eval(v) || b.eval(v) }
+    match f { FMem(e) => e.eval(v), FNot(e) => !e.eval(v), FImp(a, b) => !a.eval(v) || b.eval(v), FApart(a, b) => !a.eval(v) || !b.eval(v) }
 }
 
 theorem set_true_of({P: Type}, {b: Bool}, r: Reflects(P, b), p: P): b = True { bool::eq_true_of_is_true(b, reflects_intro(r, p)) }
@@ -266,6 +268,7 @@ theorem SetFact::bit_of<A>(self f: SetFact, env: SetEnv<A>, d: DecEq<A>, x: A, h
         FMem(e) => set_true_of(e.reflects(env, d, x), h),
         FNot(e) => set_true_of(reflects_not(e.reflects(env, d, x)), h),
         FImp(a, b) => set_true_of(reflects_imp(a.reflects(env, d, x), b.reflects(env, d, x)), h),
+        FApart(a, b) => set_true_of(reflects_imp(a.reflects(env, d, x), reflects_not(b.reflects(env, d, x))), h),
     }
 }
 
@@ -391,6 +394,7 @@ fn set_op_e(i: Nat, a, b: SetExpr) → SetExpr { SOp(i, a, b) }
 fn set_fact_mem(e: SetExpr) → SetFact { FMem(e) }
 fn set_fact_not(e: SetExpr) → SetFact { FNot(e) }
 fn set_fact_imp(a, b: SetExpr) → SetFact { FImp(a, b) }
+fn set_fact_apart(a, b: SetExpr) → SetFact { FApart(a, b) }
 fn set_goal_mem(e: SetExpr) → SetGoal { GMem(e) }
 fn set_goal_not(e: SetExpr) → SetGoal { GNot(e) }
 fn set_goal_false() → SetGoal { GFalse }
@@ -414,3 +418,59 @@ theorem set_not_single_sym<A>(x, y: A, n: ¬(y = x)): ¬Mem(x, [y]) {
     λ (m: Mem(x, [y])) => match m { Inl(e) => n(sym(e)), Inr(f) => f }
 }
 theorem set_held_cons({P, Q: Type}, p: P, q: Q): P ∧ Q { And(p, q) }
+theorem set_mem_of_eq<A>(x, y: A, h: x = y): Mem(x, [y]) { Inl(h) }
+theorem set_mem_of_eq_sym<A>(x, y: A, h: y = x): Mem(x, [y]) { Inl(sym(h)) }
+
+// ---------------------------------------------------------------------------
+// Membership spelled as a Boolean
+
+// A Boolean spelling of membership: `f(x, s)` reflects `x ∈ s`, or, when
+// `negated`, `!f(x, s)` does (`absent(x, s)` is `x ∉ s`). A module that
+// spells membership so registers the law (`SetBitEntry`,
+// lib/std/data/set/set_ops.hthr), and the `sets` tactic reads `f(x, s) =
+// True`, `= False` and `.IsTrue()` through it, as hypotheses and as goals.
+fn SetBitLaw<A>(f: A → List<A> → Bool, negated: Bool) → Type {
+    (x: A) → (s: List<A>) → Reflects(Mem(x, s), match negated { False => f(x, s), True => !f(x, s) })
+}
+
+// From a spelling to membership, `b` being the spelled bit read as `x ∈ s`.
+theorem set_spell_true<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), h: b = True): Mem(x, s) { r.left(h) }
+theorem set_spell_false<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), h: b = False): ¬Mem(x, s) { r.right(h) }
+
+// From membership to the spelling.
+theorem set_spell_is_true<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), p: Mem(x, s)): b = True { set_true_of(r, p) }
+theorem set_spell_is_false<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), np: ¬Mem(x, s)): b = False {
+    (match b as λ c => Reflects(Mem(x, s), c) → c = False {
+        False => λ _ => refl,
+        True => λ (r2: Reflects(Mem(x, s), True)) => false_elim(np(r2.left(refl))),
+    })(r)
+}
+
+// A negation read through: `!!u` reflects what `u` does.
+theorem set_reflects_not_not<A>(x: A, s: List<A>, u: Bool, r: Reflects(Mem(x, s), u)): Reflects(Mem(x, s), !!u) {
+    (match u as λ c => Reflects(Mem(x, s), c) → Reflects(Mem(x, s), !!c) {
+        False => λ r2 => r2,
+        True => λ r2 => r2,
+    })(r)
+}
+
+// The bit facts the tactic moves between.
+theorem set_not_of_true(b: Bool, h: b = True): !b = False { j(sym(h), λ c _ => !c = False, refl) }
+theorem set_not_of_false(b: Bool, h: b = False): !b = True { j(sym(h), λ c _ => !c = True, refl) }
+theorem set_true_of_not_false(b: Bool, h: !b = False): b = True {
+    (match b as λ c => !c = False → c = True { True => λ _ => refl, False => λ bad => absurd(bad) })(h)
+}
+theorem set_false_of_not_true(b: Bool, h: !b = True): b = False {
+    (match b as λ c => !c = True → c = False { False => λ _ => refl, True => λ bad => absurd(bad) })(h)
+}
+theorem set_eq_true_of_is(b: Bool, h: b.IsTrue()): b = True { bool::eq_true_of_is_true(b, h) }
+theorem set_is_of_eq_true(b: Bool, h: b = True): b.IsTrue() { j(sym(h), λ c _ => c.IsTrue(), trivial) }
+
+// A fact about an element `x` is equal to, moved to `x`.
+theorem set_mem_transport<A>(x, y: A, s: List<A>, e: x = y, h: Mem(y, s)): Mem(x, s) { j(sym(e), λ z _ => Mem(z, s), h) }
+theorem set_not_transport<A>(x, y: A, s: List<A>, e: x = y, h: ¬Mem(y, s)): ¬Mem(x, s) { j(sym(e), λ z _ => ¬Mem(z, s), h) }
+theorem set_eq_sym<A>(x, y: A, e: y = x): x = y { sym(e) }
+
+// An inclusion whose conclusion is a spelling, read as membership: the
+// spelling's conversion after the inclusion.
+theorem set_comp({P, Q, R: Type}, f: Q → R, g: P → Q): P → R { λ (p: P) => f(g(p)) }

@@ -2,7 +2,7 @@
 // carriers that state a `wlog_le`, and its refusals. Tests, not library:
 // nothing outside lib/_tests imports this module (docs/test-value-audit.md
 // §4.5).
-import logic; import nat; import int; import tactic; import wlog;
+import logic; import nat; import int; import rat; import dyadic; import creal; import ring; import omega; import tactic; import wlog;
 
 // The two cases are unannotated terms, checked where the lemma puts them:
 // `h` is the goal at `(a, b)`, `le` the order the main case may assume.
@@ -31,6 +31,41 @@ theorem sym_sum(f: Nat → Nat): SymSum(f) {
 // way round.
 theorem order_given(m, n: Nat): m <= n ∨ n <= m {
     by wlog(m, n, λ a b h => match h { Inl(x) => Inr(x), Inr(x) => Inl(x) }, λ a b le => Inl(le))
+}
+
+// At `Rat` and `Dyadic`, the same lemma by the same name.
+theorem rat_add_comm(m, n: Rat): m + n ≈ n + m {
+    by wlog(m, n, λ a b h => Rat::same_sym(h), λ a b le => a.add_comm(b))
+}
+theorem dyadic_order(m, n: Dyadic): m <= n ∨ n <= m {
+    by wlog(m, n, λ a b h => match h { Inl(x) => Inr(x), Inr(x) => Inl(x) }, λ a b le => Inl(le))
+}
+
+// Hypotheses about the points, generalized with them: each case takes them
+// at its own points, after its own arguments, in the order `over` names them.
+theorem over_hypotheses(m, n, k: Nat, hm: m <= k, hn: n <= k): m + n <= k + k {
+    by wlog(m, n, λ a b h => λ hb ha => { let r = h(ha, hb); omega(r) }, λ a b le => λ ha hb => omega(ha, hb), over := [hm, hn])
+}
+// Without them the cases see only the original points' hypotheses, which say
+// nothing about `a` and `b`.
+// expect-error: omega
+theorem over_missing(m, n, k: Nat, hm: m <= k, hn: n <= k): m + n <= k + k {
+    by wlog(m, n, λ a b h => omega(h), λ a b le => omega(hm, hn))
+}
+
+// Signs: the negative case is the nonnegative one through negation.
+theorem rat_square(x: Rat): 0 <= x * x {
+    by wlog_sign(x, λ a h => { let e: ((-a) * (-a) ≈ a * a) = ring; Rat::le_of_le_of_same(h, e) }, λ a h => Rat::mul_nonneg(h, h))
+}
+theorem int_add_neg(x: Int): x + -x = 0 {
+    by wlog_sign(x, λ a h => { let e = (-a).add_neg(); omega(h) }, λ a h => a.add_neg())
+}
+
+// At `CReal`, where `<=` has no decision: the main case is proved below the
+// second point up to a tolerance.
+theorem creal_add_comm(m, n: CReal): m + n ≈ n + m {
+    let one: CReal = 1;
+    by wlog_within(m, n, one, CReal::zero_lt_one(), λ a b h => CReal::same_sym(h), λ a b lt => CReal::add_comm(a, b))
 }
 
 // A case is checked at its place, and its own error is the one reported:

@@ -418,6 +418,8 @@ pub enum Request {
     Spell(RExpr),
     /// A handle with a local of the goal's context abstracted out of it.
     Abstract(u64, RExpr),
+    /// A type handle with a local of the goal's context bound in front.
+    Revert(u64, RExpr),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -545,7 +547,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             return Ok(hit.clone());
         }
         let key = format!("tactic::{name}");
-        let abs = self.elab.global_abs(&key).ok_or_else(|| {
+        let abs = self.elab.protocol_abs(name).ok_or_else(|| {
             format!("`{key}` is not declared; `by` needs the protocol from `import tactic;`")
         })?;
         let GlobalBinding::Tm { ty, .. } = &self.world.bindings[abs] else {
@@ -968,6 +970,11 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let mut budget = READ_BUDGET;
                 let x = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Abstract(self.nat_of("host_handle", vec![tree])?, x)))
+            }
+            34 => {
+                let mut budget = READ_BUDGET;
+                let x = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Revert(self.nat_of("host_handle", vec![tree])?, x)))
             }
             other => Err(format!("a request tree with tag {other}")),
         }
@@ -1580,6 +1587,21 @@ pub(crate) struct Quoting {
 }
 
 impl Elaborator {
+    /// `tactic::name`'s absolute index: by the name where the `by` is, or,
+    /// where the module only imports `tactic` through another (a tactic
+    /// library such as `set_tactic`), by its key in the import closure, as
+    /// `Lookup` reaches a qualified name. A `by` needs the protocol loaded,
+    /// not its short names (`pure`, `goal`, `open`, …) in scope, where they
+    /// would rival the client's own members.
+    pub(crate) fn protocol_abs(&self, name: &str) -> Option<usize> {
+        let key = format!("tactic::{name}");
+        self.global_abs(&key).or_else(|| {
+            (self.names.reaches("tactic") && self.names.declares("tactic", name))
+                .then(|| self.names.global(&key).map(|info| info.abs as usize))
+                .flatten()
+        })
+    }
+
     /// `by t` at `goal`: elaborate `t` as a `tactic::Tac<tactic::Expr>`, or
     /// look it up among the registered native tactics, and run it.
     pub(crate) fn run_by(&self, cx: &Cx, tactic: &Expr, goal: &Type, lvl: &Level, span: Span) -> R<Term> {
@@ -1607,8 +1629,8 @@ impl Elaborator {
     /// `tactic::name`'s head and type in `world`.
     fn protocol_signature(&self, world: &GlobalCtx, name: &str, keyword: &str, span: Span) -> R<(Term, Type)> {
         let key = format!("tactic::{name}");
-        let Some(abs) = self.global_abs(&key) else {
-            return err(format!("`{keyword}` runs a value of the `tactic` protocol; add `import tactic;`"), span);
+        let Some(abs) = self.protocol_abs(name) else {
+            return err(format!("`{keyword}` runs a value of the `tactic` protocol; add `import tactic;` (or import a tactic library that does)"), span);
         };
         let len = world.bindings.len();
         let GlobalBinding::Tm { ty, .. } = &world.bindings[abs] else {
@@ -1886,6 +1908,7 @@ impl Elaborator {
                 Request::Repr(ty) => Answer::Handle(refusable(self.repr_request(run, ty))?),
                 Request::Spell(e) => Answer::Handle(refusable(self.spell_request(run, &e))?),
                 Request::Abstract(h, x) => Answer::Handle(refusable(self.abstract_request(run, h, &x))?),
+                Request::Revert(h, x) => Answer::Handle(refusable(self.revert_request(run, h, &x))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2465,6 +2488,27 @@ impl Elaborator {
         let lam = Term::Lam { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(body) };
         let pi = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
         Ok(run.issue(at, Held::Term(lam, pi, Level::join(dom_level, level))))
+    }
+
+    /// `Revert(h, x)`: the type `(y: X) → h[y/x]` for `x` a local of the
+    /// goal's context of type `X`; what `wlog` makes of a hypothesis about
+    /// its points before abstracting them. As with `Abstract`, a later local
+    /// whose type mentions `x` keeps meaning the original one.
+    fn revert_request(&self, run: &mut Run, h: u64, x: &RExpr) -> Result<u64, Fault> {
+        let (at, held) = run.held(h)?;
+        let (ty, level) = match held {
+            Held::Type(t, l) => (run.committed_ty(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?, l),
+            Held::Term(..) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
+        };
+        let p = self.root_local_position(run, x)?;
+        let gamma = run.cx(at)?.gamma;
+        let n = gamma.len();
+        let entry = gamma.entries.get(p).expect("a local of the goal's context");
+        let dom_level = entry.level.clone();
+        let dom = Rc::new(entry.ty.shift_local((n - p) as u32));
+        let cod = ty.apply_local(&crate::generalize::rename(&gamma, &[p], 1));
+        let pi = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
+        Ok(run.issue(at, Held::Type(pi, Level::join(dom_level, level))))
     }
 
     /// The position in the goal's context of the local `x` names: a
@@ -4439,8 +4483,11 @@ impl Elaborator {
     }
 
     /// Each branch's proof, checked at its goal, in the committed world.
+    /// Each is committed as soon as it is checked: a later branch's `Blank`
+    /// grows the world with a hole, and a term read before that growth
+    /// would no longer address its globals in the larger world.
     fn branch_proofs(&self, run: &mut Run, split: &Split, proofs: &[RExpr]) -> Result<Vec<(Term, usize)>, Fault> {
-        let mut terms = Vec::with_capacity(proofs.len());
+        let mut fills = Vec::with_capacity(proofs.len());
         for (k, (&(scope, goal), p)) in split.branches.iter().zip(proofs).enumerate() {
             let r = self.reify(run, p, scope)?;
             let (_, Held::Type(ty, level)) = run.held(goal)? else { unreachable!("a branch's goal is a type") };
@@ -4451,12 +4498,8 @@ impl Elaborator {
                     self.shown_ty(run, scope, &ty)
                 )));
             }
-            terms.push((scope, r.term));
-        }
-        let mut fills = Vec::with_capacity(terms.len());
-        for (k, (scope, t)) in terms.into_iter().enumerate() {
-            let c = run.committed_tm(&t).ok_or_else(|| {
-                Fault::Ill(format!("branch {k}'s proof `{}` mentions a hole nothing solved", self.shown_tm(run, scope, &t)))
+            let c = run.committed_tm(&r.term).ok_or_else(|| {
+                Fault::Ill(format!("branch {k}'s proof `{}` mentions a hole nothing solved", self.shown_tm(run, scope, &r.term)))
             })?;
             fills.push((c, run.len(scope)));
         }

@@ -259,6 +259,16 @@ theorem Rat::le_total(self x, y: Rat): x <= y ∨ y <= x {
     (x.num * y.den.int()).le_total(y.num * x.den.int())
 }
 
+// `wlog`'s order case at `Rat` (tactic/wlog.hthr; the lemma at `Nat`
+// says what it is for).
+theorem Rat::wlog_le(P: Rat → Rat → Type, swap: (a, b: Rat) → P(a, b) → P(b, a),
+    le: (a, b: Rat) → a <= b → P(a, b), m, n: Rat): P(m, n) {
+    match m.le_total(n) {
+        Inl(h) => le(m, n, h),
+        Inr(h) => swap(n, m, le(n, m, h)),
+    }
+}
+
 theorem Rat::le_respects({x, x2, y, y2: Rat}, hx: x ≈ x2, hy: y ≈ y2, h: x <= y): x2 <= y2 {
     Rat::le_trans(Rat::le_trans(Rat::le_of_same(Rat::same_sym(hx)), h), Rat::le_of_same(hy))
 }
@@ -653,6 +663,18 @@ theorem Rat::neg_le({x, y: Rat}, h: x <= y): -y <= -x {
 
 theorem Rat::neg_lt({x, y: Rat}, h: x < y): -y < -x {
     omega(y.num.mul_neg_l(x.den.int()), x.num.mul_neg_l(y.den.int()))
+}
+
+// A property that carries from `-a` to `a` holds everywhere once it holds
+// at the nonnegative points: a sign split whose negative arm is the
+// nonnegative one through negation, proved once
+// (issues/wlog-sign-and-ordered-carriers.md). `by wlog_sign(x, neg, nn)`
+// (tactic/wlog.hthr) reads `P` off the goal.
+theorem Rat::wlog_nonneg(P: Rat → Type, neg: (a: Rat) → P(-a) → P(a), nn: (a: Rat) → 0 <= a → P(a), x: Rat): P(x) {
+    match Rat::le_total(0, x) {
+        Inl(h) => nn(x, h),
+        Inr(h) => neg(x, nn(-x, Rat::neg_le(h))),
+    }
 }
 
 theorem Rat::add_le_mono_l(self x, y, z: Rat, h: x <= y): z + x <= z + y {

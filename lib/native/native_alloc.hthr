@@ -39,7 +39,6 @@ import char;
 import string;
 import set_solve;
 import set_ops;
-import tactic;
 import set_tactic;
 
 // ---------------------------------------------------------------------------
@@ -861,15 +860,6 @@ fn Homes::spelled(self homes: Homes) → List<Nat> { Cons(homes.of.len(), homes.
 // and nothing needs the growth to stop.
 
 // Sets of ids as lists.
-theorem absent_false_mem(id: Nat, ids: List<Nat>): absent(id, ids) = False → Mem(id, ids) {
-    match ids {
-        Nil => λ no => absurd(no),
-        Cons(x, rest) => (match id.eq_dec(x) {
-            Inl(e) => λ _ => Inl(e),
-            Inr(_) => λ no => Inr(absent_false_mem(id, rest, no)),
-        }),
-    }
-}
 
 theorem List::holds_mem(self ids: List<Nat>, id: Nat, held: ids.holds(id) = True): Mem(id, ids) {
     (match absent(id, ids) as λ b => absent(id, ids) = b → !b = True → Mem(id, ids) {
@@ -897,6 +887,17 @@ theorem List::within_mem(self a: List<Nat>, b: List<Nat>): a.within(b).IsTrue() 
         },
     }
 }
+
+theorem List::within_of(self a: List<Nat>, b: List<Nat>): ((i: Nat) → Mem(i, a) → Mem(i, b)) → a.within(b).IsTrue() {
+    match a {
+        Nil => λ _ => trivial,
+        Cons(id, rest) => λ h => Bool::is_true_and_intro(b.holds(id), rest.within(b),
+            set_is_of_eq_true(b.holds(id), b.mem_holds(id, h(id, Inl(refl)))), rest.within_of(b, λ i m => h(i, Inr(m)))),
+    }
+}
+
+// `a.within(b)` is the inclusion of `a` in `b`, so `sets` reads it.
+register def within_set_entry: SetRelEntry = SetRelEntry(name_of(List::within), name_of(List::within_mem), name_of(List::within_of), 0);
 
 // `union` and `minus` as the `sets` tactic reads them
 // (lib/std/tactic/set_tactic.hthr): `∪` and `∖`, so a membership goal over
@@ -935,13 +936,7 @@ fn List::Inside(self a: List<Nat>, m: List<Nat>) → Type { (i: Nat) → Mem(i, 
 // A set the check found, inside `m`; nothing when it found none.
 fn Option::Inside(self o: Option<List<Nat>>, m: List<Nat>) → Type { match o { None => False, Some(l) => l.Inside(m) } }
 
-theorem List::within_of_inside(self a: List<Nat>, m: List<Nat>): a.Inside(m) → a.within(m) = True {
-    match a {
-        Nil => λ _ => refl,
-        Cons(id, rest) => λ inside => j(sym(m.mem_holds(id, inside(id, Inl(refl)))), λ b _ => (b && rest.within(m)) = True,
-            rest.within_of_inside(m, λ i x => inside(i, Inr(x)))),
-    }
-}
+theorem List::within_of_inside(self a: List<Nat>, m: List<Nat>): a.Inside(m) → a.within(m) = True { by sets() }
 
 theorem List::inside_union(self a: List<Nat>, b, m: List<Nat>, sa: a.Inside(m), sb: b.Inside(m)): a.union(b).Inside(m) { by sets() }
 

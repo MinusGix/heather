@@ -52,6 +52,7 @@ import list;
 import logic;
 import nat;
 import option;
+import set_tactic;
 
 // ---------------------------------------------------------------------------
 // Moving between environments
@@ -826,12 +827,7 @@ record Clear(x: Nat, count, exhausted: Nat, parameters, touched: List<Nat>) {
 }
 
 theorem clear_of(x, count, exhausted: Nat, parameters, touched: List<Nat>, h: absent(x, Cons(count, Cons(exhausted, parameters ++ touched))).IsTrue()):
-    Clear(x, count, exhausted, parameters, touched) {
-    let p1 = Bool::is_true_and(x.differs(count), absent(x, Cons(exhausted, parameters ++ touched)), h);
-    let p2 = Bool::is_true_and(x.differs(exhausted), absent(x, parameters ++ touched), p1.right);
-    let p3 = absent_append(x, parameters, touched, p2.right);
-    Clear(x.differs_ne(count, p1.left), x.differs_ne(exhausted, p2.left), p3.left, p3.right)
-}
+    Clear(x, count, exhausted, parameters, touched) { by sets() }
 
 // The code from `p` to `q` runs as the region's meaning, from what it needs
 // live to what is live after it.
