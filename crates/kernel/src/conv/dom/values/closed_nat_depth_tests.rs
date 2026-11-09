@@ -103,7 +103,7 @@ fn closed_nat_equality_depth_budget_rejects_off_by_one() {
         assert_eq!(cv.tm(&env, a, b, &ty, &Level::Zero), Err(ConvError::NotConvertible));
         assert_eq!(cv.depth, 0);
         let key = Values::tm_memo_key(&env, a, b).unwrap();
-        assert_eq!(cv.memo.get(&key), Some(&false));
+        assert_eq!(cv.memo.get(&key), Some(false));
     }
 }
 
@@ -166,7 +166,7 @@ fn closed_nat_equality_depth_budget_keeps_the_depth_guard() {
     // As if a queue were being drained at this depth: past the deferral
     // threshold counted from zero, the comparison would be queued, not
     // descended into (docs/deep-term-walks-design.md §3.4).
-    cv.defer_base = NATIVE_DEPTH_LIMIT;
+    let _drain = cv.deferred.begin_drain(0, NATIVE_DEPTH_LIMIT);
     assert_eq!(cv.tm(&env, &a, &b, &ty, &Level::Zero), Err(ConvError::OutOfFuel));
     assert_eq!(cv.depth, NATIVE_DEPTH_LIMIT);
     assert!(cv.memo.is_empty());
@@ -195,7 +195,7 @@ fn closed_nat_equality_depth_budget_residual_memo_and_caller_depth() {
         // The loop must memoize its residual pairs too, after their verdict
         // exists. A hit still needs only entry fuel and no new depth slot.
         let key = Values::tm_memo_key(&env, &a, &b).unwrap();
-        assert_eq!(cv.memo.get(&key), Some(&(extra == 0)));
+        assert_eq!(cv.memo.get(&key), Some(extra == 0));
         cv.fuel = 1;
         cv.depth = NATIVE_DEPTH_LIMIT;
         assert_eq!(cv.tm(&env, &a, &b, &ty, &Level::Zero), expected);

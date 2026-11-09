@@ -21,7 +21,7 @@ time come last.
 | # | Finding | Where | Evidence it bites | Breach costs | Make explicit? | Issue |
 |---|---------|-------|-------------------|--------------|----------------|-------|
 | 1 | The value memo does not record the mode a value was forced in | `value.rs` `ValueArena`, `eval.rs` `Eval::transparent` | **a real defect** (#459: a convertible interval verdict refused) | completeness, history dependence | the #459 path fixed (§1: withheld-call closedness); (a) still worth doing | [[value-memo-evaluation-mode]] |
-| 2 | Deferred-premise queues: two hand-kept copies of one discipline | `conv.rs` `Conv` (8 fields), `typing.rs` `Tc` (4 fields) | **two defects while it was built** (deep-term-walks §3.3, §3.4) | soundness (a provisional memo entry kept) | **yes** | [[kernel-premise-queue-type]] |
+| 2 | Deferred-premise queues: two hand-kept copies of one discipline | `conv.rs` `Conv` (8 fields), `typing.rs` `Tc` (4 fields) | **two defects while it was built** (deep-term-walks §3.3, §3.4) | soundness (a provisional memo entry kept) | **done** (§2, `premises.rs`) | [[kernel-premise-queue-type]] |
 | 3 | Typing memo keys copy `Env`'s fields by hand | `typing.rs` `Scope`, `TyScope`, `SigScope` | none found | soundness (a stale memo hit) | **yes**, cheap | [[typing-memo-scope-key]] |
 | 4 | Ψ-bound `GlobalCache`, plus `Defs`' layer condition | `reduce.rs` `Defs`, `GlobalCache` | none found | soundness | yes (already filed) | [[kernel-psi-bound-cache]] |
 | 5 | The checker's mode | `typing.rs` `Tc` | none found | wrong mode's shortcut | yes, modest (already filed) | [[kernel-checker-mode-enum]] |
@@ -235,6 +235,21 @@ place. Risk: this is `Conv::tm`'s prologue and epilogue, the kernel's
 hottest path. The type must compile down to today's field reads.
 `scripts/perf ab` should show identical counters and no time delta beyond
 noise.
+
+**Done (2026-11-09).** `crates/kernel/src/premises.rs` holds the
+discipline once: `PremiseQueue<I>` owns the queue, floor, base, push count
+and the depth-zero drain flag, and its phases are calls (`should_defer`,
+`past_floor`, `defer`, `begin_drain`/`pop`/`judged`/`end_drain`,
+`open_attempt`/`close_attempt`). `VerdictMemo<K>` owns conversion's memo
+with its provisional log and open-attempt count (`succeeded`, `refused`,
+`open_attempt`/`close_attempt`, `settle_at_top`), so a provisional `true`
+is taken back by the type, not by remembering two call sites. `Conv` keeps
+`depth` and the two values; `Tc` keeps `check_depth` and a
+`RefCell<PremiseQueue>`, and still forgets its memos wholesale after a
+refusal (that choice is now visible in one place, the module docs). The
+`Drain` and `Attempt` records are `#[must_use]`, so a phase opened and not
+closed is a warning. `scripts/perf ab` on `calc_parser`: conversion and
+checking counters identical (`local_subst_nodes` +0.1%).
 
 ## 3. Typing memo keys copy `Env`'s fields by hand
 

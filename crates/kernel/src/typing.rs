@@ -175,6 +175,7 @@ use crate::conv::{conv_local_ctx_cached, conv_type_cached};
 #[cfg(feature = "value-metrics")]
 use crate::conv::{conv_local_ctx_cached_with_metrics, conv_type_cached_with_metrics};
 use crate::layer::Layer;
+use crate::premises::PremiseQueue;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi};
 use crate::reduce::{whnf_type_delta, Defs, GlobalCache, Sig};
@@ -1117,24 +1118,15 @@ struct Tc {
     /// How many [`Tc::tm_check`]s are open on the native stack.
     check_depth: Cell<u32>,
     /// Checks deferred past [`crate::term::SPINE_ITERATE_AT`] open checks
-    /// (docs/deep-term-walks-design.md): a checking premise only answers
-    /// yes or no, so a rule's premises are a conjunction whose order is
-    /// free, and a check reached that deep is queued instead of descended
-    /// into. The outermost open check drains the queue, at depth zero,
-    /// before it answers — so no verdict leaves the checker with a queued
-    /// premise unjudged, and a deep data value (a long list's spine) is
-    /// checked by a loop rather than one native frame per node.
-    deferred: RefCell<Vec<(Env, Rc<Term>, ITy, Level)>>,
-    /// How many checks have ever been queued on [`Tc::deferred`]: a refusal
-    /// from an outermost check that queued any forgets the memos
-    /// ([`Tc::forget_after_refusal`]).
-    deferred_pushed: Cell<u64>,
-    /// The queue's length when the check being judged began (the root, or
-    /// a popped check): once anything is queued past it, every later check
-    /// in it is queued too, and the drain judges each check's own queued
-    /// premises before the next, so the order is the recursive walk's
-    /// (`Conv`'s `defer_floor`, docs/deep-term-walks-design.md §3.3).
-    defer_floor: Cell<usize>,
+    /// ([`crate::premises`]): a checking premise only answers yes or no, so
+    /// a rule's premises are a conjunction whose order is free, and a check
+    /// reached that deep is queued instead of descended into. The outermost
+    /// open check drains the queue, at depth zero, before it answers — so no
+    /// verdict leaves the checker with a queued premise unjudged, and a deep
+    /// data value (a long list's spine) is checked by a loop rather than one
+    /// native frame per node. A refusal from an outermost check that queued
+    /// any forgets the memos ([`Tc::forget_after_refusal`]).
+    deferred: RefCell<PremiseQueue<(Env, Rc<Term>, ITy, Level)>>,
     /// The strengthened scopes' telescopes, interned one entry at a time
     /// from the outermost of the `k` (§The typing memo): `(parent id, entry
     /// type's address)` to the entry's level, its keep-alive and the
@@ -1582,9 +1574,7 @@ impl Tc {
             closed_convs: RefCell::new(HashMap::new()),
             judged: RefCell::new(PtrMap::default()),
             check_depth: Cell::new(0),
-            deferred: RefCell::new(Vec::new()),
-            deferred_pushed: Cell::new(0),
-            defer_floor: Cell::new(0),
+            deferred: RefCell::new(PremiseQueue::new()),
             teles: RefCell::new(HashMap::new()),
             tele_ids: Cell::new(0),
             closed_tys: RefCell::new(PtrMap::default()),
@@ -2679,12 +2669,13 @@ impl Tc {
     /// infer + conversion at `typeof(i)`.
     fn tm_check(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
         let depth = self.check_depth.get();
-        if depth >= crate::term::SPINE_ITERATE_AT
-            || (depth > 0 && self.deferred.borrow().len() > self.defer_floor.get())
-        {
+        // At depth zero the queue is empty (the outermost check settles it
+        // before returning, and a drain judges its items at depth one), so
+        // only the threshold can defer there.
+        if self.deferred.borrow().should_defer(depth) {
             return self.tm_check_deferred(env, t, ty, l);
         }
-        let pushed = self.deferred_pushed.get();
+        let pushed = self.deferred.borrow().epoch();
         self.check_depth.set(depth + 1);
         let verdict = self.tm_check_here(env, t, ty, l);
         self.check_depth.set(depth);
@@ -2694,11 +2685,11 @@ impl Tc {
         let verdict = match verdict {
             Ok(()) => self.drain_deferred(),
             Err(err) => {
-                self.deferred.borrow_mut().clear();
+                self.deferred.borrow_mut().drop_past(0);
                 Err(err)
             }
         };
-        if verdict.is_err() && self.deferred_pushed.get() != pushed {
+        if verdict.is_err() && self.deferred.borrow().queued_since(pushed) {
             self.forget_after_refusal();
         }
         verdict
@@ -2738,8 +2729,7 @@ impl Tc {
     #[cold]
     #[inline(never)]
     fn tm_check_deferred(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
-        self.deferred.borrow_mut().push((env.clone(), Rc::clone(t), owned_expected(ty), l.clone()));
-        self.deferred_pushed.set(self.deferred_pushed.get() + 1);
+        self.deferred.borrow_mut().defer((env.clone(), Rc::clone(t), owned_expected(ty), l.clone()));
         Ok(())
     }
 
@@ -2748,23 +2738,18 @@ impl Tc {
     #[cold]
     #[inline(never)]
     fn drain_deferred(&self) -> R {
-        // A stack in walk order: each check's own queued premises are
-        // reversed onto the top as it finishes.
-        self.deferred.borrow_mut().reverse();
+        let drain = self.deferred.borrow_mut().begin_drain(0, 0);
         let verdict = loop {
-            let Some((env, t, ty, l)) = self.deferred.borrow_mut().pop() else { break Ok(()) };
-            let start = self.deferred.borrow().len();
-            self.defer_floor.set(start);
+            let Some(((env, t, ty, l), start)) = self.deferred.borrow_mut().pop(&drain) else { break Ok(()) };
             self.check_depth.set(1);
             let verdict = self.tm_check_here(&env, &t, ty.as_ref(), &l);
             self.check_depth.set(0);
             if let Err(err) = verdict {
-                self.deferred.borrow_mut().clear();
                 break Err(err);
             }
-            self.deferred.borrow_mut()[start..].reverse();
+            self.deferred.borrow_mut().judged(start);
         };
-        self.defer_floor.set(0);
+        self.deferred.borrow_mut().end_drain(drain, verdict.is_ok());
         verdict
     }
 
