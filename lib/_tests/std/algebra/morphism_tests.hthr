@@ -63,3 +63,18 @@ instance Cast<R, S>(R::s) { }
 fn one_edge(p: P) → Q { ↑p }
 // expect-error: `↑` from `P` to `S` has 2 paths of the same length
 fn ambiguous(p: P) → S { ↑p }
+
+// Index defaults (issues/constraint-indices-from-carrier-designations.md): a
+// record's trailing indices may say what fills them when an application
+// stops before them, elaborated at the use site, so a bare symbol is the
+// designation at the slot's carrier.
+record Unital<A>(op: A → A → A := +, e: A := 0) { right: (x: A) → op(x, e) = x }
+fn unital_int(u: Unital<Int>) → Unital<Int>(Int::add, OfNat(0)) { u }
+fn unital_int_op(u: Unital<Int>(Int::add)) → Unital<Int>(Int::add, OfNat(0)) { u }
+fn unital_nat(u: Unital<Nat>) → Unital<Nat>(Nat::add, Zero) { u }
+// A written index wins over the default.
+theorem unital_mul(u: Unital<Nat>(Nat::mul, 1)): Nat::mul(3, 1) = 3 { u.right(3) }
+// The default must mean something at the carrier, and the refusal says
+// which index it was filling.
+// expect-error: omitted index `op` is its default `+`
+fn unital_bool(u: Unital<Bool>) → Nat { 0 }

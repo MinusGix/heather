@@ -26,8 +26,10 @@ class Cast<A, B>(map: A → B) { }
 // An order-embedding ring morphism: preserves `≈`, `0`, `1`, `+`, `*` and
 // negation, and preserves and reflects `<=` and `<`.
 record OrderedRingHom<A, B>(map: A → B,
-        same_a, lt_a, le_a: A → A → Type, add_a, mul_a: A → A → A, neg_a: A → A, zero_a, one_a: A,
-        same_b, lt_b, le_b: B → B → Type, add_b, mul_b: B → B → B, neg_b: B → B, zero_b, one_b: B) {
+        same_a: A → A → Type := ≈, lt_a: A → A → Type := <, le_a: A → A → Type := <=,
+        add_a: A → A → A := +, mul_a: A → A → A := *, neg_a: A → A := λ x => -x, zero_a: A := 0, one_a: A := 1,
+        same_b: B → B → Type := ≈, lt_b: B → B → Type := <, le_b: B → B → Type := <=,
+        add_b: B → B → B := +, mul_b: B → B → B := *, neg_b: B → B := λ x => -x, zero_b: B := 0, one_b: B := 1) {
     map_respects: (x, y: A) → same_a(x, y) → same_b(map(x), map(y)),
     map_zero: same_b(map(zero_a), zero_b),
     map_one: same_b(map(one_a), one_b),

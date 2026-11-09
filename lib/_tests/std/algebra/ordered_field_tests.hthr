@@ -320,6 +320,8 @@ theorem group_class_has_no_numerals(x: A): x + 0 ≈ x { A.unit_r(x) }
 
 }
 
+fn section_twice<A>(f: A → A → A, a: A) → A { f(a, a) }
+
 // A section's symbols are its carrier's: an operand at a carrier of its own
 // reads that carrier's designation, and generic operands keep the binder's
 // (issues/section-symbols-capture-other-carriers.md).
@@ -336,6 +338,12 @@ theorem section_nat_is_nat(x: K, m, n: Nat): m + n = Nat::add(m, n) { refl }
 // The section's own carrier still reads the binder, numerals included.
 theorem section_own_carrier(x: K): x + K.unit ≈ x { K.unit_r(x) }
 theorem section_own_numeral(x: K): x + 0 ≈ x { K.unit_r(x) }
+
+// Bare, the carrier is the one the position expects: `Rat`'s `+` where
+// `Rat → Rat → Rat` is asked for, as in `OrderedRingHom<Rat, K>(map, ≈, …)`
+// (issues/constraint-indices-from-carrier-designations.md).
+theorem section_bare_rat(x: K, a: Rat): section_twice<Rat>(+, a) = Rat::add(a, a) { refl }
+theorem section_bare_own(x: K): section_twice<K>(+, x) = x + x { refl }
 
 // expect-error: nothing designates `+` at `Bool`
 theorem section_bool_has_no_plus(x: K, p, q: Bool): p + q = p { refl }

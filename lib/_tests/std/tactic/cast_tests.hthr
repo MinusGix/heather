@@ -131,8 +131,7 @@ theorem no_fact(a, c: Dyadic, x, y: Rat, hx: a.rat() <= x): (a + c).rat() <= x +
 // images through it, and through its composite with `Dyadic::rat_hom`. In
 // the section `+` and `<=` are `K`'s, so the source's are spelled out.
 section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
-        hom: OrderedRingHom<Rat, K>(map, Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
-            ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
+        hom: OrderedRingHom<Rat, K>(map)) {
 
 theorem local_hom_add(p, q: Rat, x, y: K, hx: map(p) <= x, hy: map(q) <= y): map(Rat::add(p, q)) <= x + y { by mono_with([hx, hy]) }
 

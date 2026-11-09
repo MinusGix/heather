@@ -167,7 +167,11 @@ same spilling, the same diagnostics. Three rungs, in order:
 > b` at `Rat` is `Rat`'s, from rung 2. The operands' carrier is §4.1's probe
 > over every operand, numerals skipped; an operand at no nominal head (`K`
 > itself), one that does not infer, or numerals alone keep the binder, so
-> generic code reads exactly as before.
+> generic code reads exactly as before. Amended again 2026-11-09
+> (issues/constraint-indices-from-carrier-designations.md): a *bare* symbol
+> in a checking position is asked the same of the expected type's first
+> domain, rung 2's second source, so `OrderedRingHom<Rat, K>(map, ≈, <, <=,
+> +, *, …)` inside the section passes `Rat`'s operations at the `Rat` slots.
 >
 > **(2) The designation at the carrier.** The symbol is applied and the left
 > operand's type has a head; or the symbol is bare in a **checking** position
