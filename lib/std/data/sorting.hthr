@@ -1,0 +1,421 @@
+// Sorting, generic in the order (issues/sorting-order-theory.md).
+//
+// Four pieces, each over a relation `R` rather than at one carrier:
+//
+// - `Sorted(R)`: each element is `R`-below the next. Adjacent pairs, as
+//   `lib/lang/list_algos.hthr` first wrote it at `Nat`; under a preorder
+//   the head is below everything after it (`sorted_le_mem`).
+// - insertion sort over a decided total relation, proved sorted and a
+//   permutation (`std/perm`), and stable: elements the order ties keep
+//   their input order.
+// - uniqueness: two sorted permutations of one list are equal under a
+//   partial order, so a sort's specification names its output.
+// - the lexicographic order `Lex(R)` on lists, a preorder from a preorder,
+//   total from a decided total one, and linear from a decided linear one.
+//   At `BitVec::unsigned_le` it is the C locale's byte order, which `sort`
+//   (lib/native/runtime/line_tools.hthr) writes its lines in.
+//
+// `list_algos`' `Sorted`, `isort` and their theorems are this module's at
+// `Nat::Le`.
+
+import logic;
+import bool;
+import nat;
+import list;
+import relation_props;
+import order;
+import perm;
+
+// ---------------------------------------------------------------------------
+// Sorted
+
+// `x` is `R`-below the head of `xs`, vacuously at `Nil`.
+fn List::LeHead<A>(R: A → A → Type, x: A, self xs: List<A>) → Type {
+    match xs { Nil => True, Cons(h, _) => R(x, h) }
+}
+
+fn List::Sorted<A>(self xs: List<A>, R: A → A → Type) → Type {
+    match xs { Nil => True, Cons(h, t) => And<List::LeHead(R, h, t), t.Sorted(R)> }
+}
+
+theorem List::sorted_tail<A>(R: A → A → Type, h: A, self t: List<A>, s: Cons(h, t).Sorted(R)): t.Sorted(R) {
+    s.right
+}
+
+// An equation read as the relation, at a reflexive one.
+theorem List::rel_of_eq<A: Preorder(R)>(R: A → A → Type, a, b: A, e: b = a): R(a, b) {
+    subst(e, A.rel_refl(b))
+}
+
+// Under a preorder the head of a sorted list is below every later element.
+theorem List::sorted_le_mem<A: Preorder(R)>(R: A → A → Type, h: A, self t: List<A>):
+    Cons(h, t).Sorted(R) → (b: A) → Mem(b, t) → R(h, b)
+{
+    match t {
+        Nil => λ s b m => false_elim(m),
+        Cons(h2, t2) => λ s b m => match m {
+            Inl(e) => A.rel_trans(h, h2, b, s.left, List::rel_of_eq(R, h2, b, e)),
+            Inr(m2) => A.rel_trans(h, h2, b, s.left, t2.sorted_le_mem(R, h2, s.right, b, m2)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Two sorted permutations of one list are one list.
+//
+// The heads are each below the other (each is in the other list, and a
+// sorted list's head is below its members), so antisymmetry makes them one;
+// the tails are then permutations of each other (`perm_cons_inv`), sorted,
+// and equal by induction. Nothing is decided: the proof reads the
+// permutation and the two sortedness proofs only.
+
+theorem List::head_le_of_perm<A: Preorder(R)>(R: A → A → Type, a, b: A, t1, t2: List<A>,
+    s: Cons(a, t1).Sorted(R), p: Perm(Cons(b, t2), Cons(a, t1))): R(a, b)
+{
+    match Cons(b, t2).perm_mem(b, Cons(a, t1), p, Inl(refl)) {
+        Inl(e) => List::rel_of_eq(R, a, b, e),
+        Inr(m) => t1.sorted_le_mem(R, a, s, b, m),
+    }
+}
+
+theorem List::perm_cons_inv_eq<A>(a, b: A, t1, t2: List<A>, e: a = b, p: Perm(Cons(a, t1), Cons(b, t2))): Perm(t1, t2) {
+    subst(e, t1.perm_cons_inv(a, t2, p))
+}
+
+theorem List::sorted_perm_eq<A: PartialOrder(R)>(R: A → A → Type, self xs: List<A>):
+    (ys: List<A>) → xs.Sorted(R) → ys.Sorted(R) → Perm(xs, ys) → xs = ys
+{
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => λ sx sy p => refl,
+            Cons(_, _) => λ sx sy p => false_elim(p),
+        },
+        Cons(a, t1) => λ ys => match ys {
+            Nil => λ sx sy p => match p { Exists(_, h) => false_elim(h.left) },
+            Cons(b, t2) => λ sx sy p => {
+                let e: (a = b) = A.rel_antisym(a, b,
+                    List::head_le_of_perm(R, a, b, t1, t2, sx, Cons(a, t1).perm_sym(Cons(b, t2), p)),
+                    List::head_le_of_perm(R, b, a, t2, t1, sy, p));
+                List::cons_eq(t1, t2, a, b, e,
+                    t1.sorted_perm_eq(R, t2, sx.right, sy.right, List::perm_cons_inv_eq(a, b, t1, t2, e, p)))
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Insertion sort, over a decided relation.
+//
+// `x` goes in front of the first element it is `R`-below, so it goes in
+// front of the elements it ties with: inserting the input's head into the
+// sorted rest keeps tied elements in input order, which is stability.
+
+fn List::insert_ordered<A: DecidableRel(R)>(R: A → A → Type, x: A, self xs: List<A>) → List<A> {
+    match xs {
+        Nil => [x],
+        Cons(h, t) => or_pick(A.rel_dec(x, h), Cons(h, t.insert_ordered(R, x)), Cons(x, Cons(h, t))),
+    }
+}
+
+fn List::insertion_sort<A: DecidableRel(R)>(R: A → A → Type, self xs: List<A>) → List<A> {
+    match xs { Nil => Nil, Cons(h, t) => t.insertion_sort(R).insert_ordered(R, h) }
+}
+
+// A refused comparison is the other one, at a total relation.
+theorem List::rel_of_not<A: Total(R)>(R: A → A → Type, x, h: A, n: ¬R(x, h)): R(h, x) {
+    match A.rel_total(x, h) {
+        Inl(xh) => false_elim(n(xh)),
+        Inr(hx) => hx,
+    }
+}
+
+theorem List::le_head_insert<A: DecidableRel(R)>(R: A → A → Type, h, x: A, self t: List<A>):
+    R(h, x) → List::LeHead(R, h, t) → List::LeHead(R, h, t.insert_ordered(R, x))
+{
+    match t {
+        Nil => λ hx ht => hx,
+        Cons(h2, _) => λ hx ht => match A.rel_dec(x, h2) {
+            Inl(_) => hx,
+            Inr(_) => ht,
+        },
+    }
+}
+
+theorem List::insert_ordered_sorted<A: DecidableRel(R) + Total(R)>(R: A → A → Type, x: A, self xs: List<A>):
+    xs.Sorted(R) → xs.insert_ordered(R, x).Sorted(R)
+{
+    match xs {
+        Nil => λ s => And(trivial, trivial),
+        Cons(h, t) => λ s => match A.rel_dec(x, h) {
+            Inl(good) => And(good, s),
+            Inr(bad) => And(
+                t.le_head_insert(R, h, x, List::rel_of_not(R, x, h, bad), s.left),
+                t.insert_ordered_sorted(R, x, s.right)),
+        },
+    }
+}
+
+theorem List::insertion_sort_sorted<A: DecidableRel(R) + Total(R)>(R: A → A → Type, self xs: List<A>):
+    xs.insertion_sort(R).Sorted(R)
+{
+    match xs {
+        Nil => trivial,
+        Cons(h, t) => t.insertion_sort(R).insert_ordered_sorted(R, h, t.insertion_sort_sorted(R)),
+    }
+}
+
+// Inserting is picking in reverse: the result less `x` is the input.
+theorem List::insert_ordered_picks<A: DecidableRel(R)>(R: A → A → Type, x: A, self xs: List<A>):
+    Picks(x, xs.insert_ordered(R, x), xs)
+{
+    match xs {
+        Nil => Nil.picks_head(x),
+        Cons(h, t) => match A.rel_dec(x, h) {
+            Inl(_) => Cons(h, t).picks_head(x),
+            Inr(_) => t.insert_ordered(R, x).picks_later(x, h, t, t.insert_ordered_picks(R, x)),
+        },
+    }
+}
+
+theorem List::insertion_sort_perm<A: DecidableRel(R)>(R: A → A → Type, self xs: List<A>): Perm(xs, xs.insertion_sort(R)) {
+    match xs {
+        Nil => trivial,
+        Cons(h, t) => Exists(t.insertion_sort(R), And(t.insertion_sort(R).insert_ordered_picks(R, h), t.insertion_sort_perm(R))),
+    }
+}
+
+// The specification of a sort, and insertion sort meeting it.
+fn List::SortedPerm<A>(self xs: List<A>, R: A → A → Type, out: List<A>) → Type {
+    out.Sorted(R) ∧ Perm(xs, out)
+}
+
+theorem List::insertion_sort_correct<A: DecidableRel(R) + Total(R)>(R: A → A → Type, self xs: List<A>):
+    xs.SortedPerm(R, xs.insertion_sort(R))
+{
+    And(xs.insertion_sort_sorted(R), xs.insertion_sort_perm(R))
+}
+
+// Under a partial order the specification names one list.
+theorem List::sorted_perm_unique<A: PartialOrder(R)>(R: A → A → Type, self xs: List<A>, out1, out2: List<A>,
+    h1: xs.SortedPerm(R, out1), h2: xs.SortedPerm(R, out2)): out1 = out2
+{
+    out1.sorted_perm_eq(R, out2, h1.left, h2.left, out1.perm_trans(xs, out2, xs.perm_sym(out1, h1.right), h2.right))
+}
+
+// ---------------------------------------------------------------------------
+// Stability.
+//
+// Read through a filter: for any predicate `p` whose true elements are all
+// `R`-below one another (the elements tied with some `c`, under a
+// preorder), insertion sort keeps the order of the elements `p` selects.
+// The one step: inserting `x` passes `h` only when `x` is not below `h`, so
+// `p` cannot hold of both, and the two commute under the filter.
+
+fn List::Chain<A>(R: A → A → Type, p: A → Bool) → Type {
+    (a, b: A) → p(a) = True → p(b) = True → R(a, b)
+}
+
+// One step of `filter`, its bit read off.
+fn List::filter_step<A>(b: Bool, h: A, rest: List<A>) → List<A> {
+    match b { True => Cons(h, rest), False => rest }
+}
+
+theorem List::filter_step_swap<A>(b1, b2: Bool, h, x: A, r: List<A>):
+    (b1 = True → b2 = True → False) →
+    List::filter_step(b1, h, List::filter_step(b2, x, r)) = List::filter_step(b2, x, List::filter_step(b1, h, r))
+{
+    match b1 {
+        True => match b2 {
+            True => λ n => false_elim(n(refl, refl)),
+            False => λ n => refl,
+        },
+        False => λ n => refl,
+    }
+}
+
+theorem List::filter_swap<A>(R: A → A → Type, p: A → Bool, x, h: A, self t: List<A>,
+    chain: List::Chain(R, p), n: ¬R(x, h)):
+    Cons(h, Cons(x, t)).filter(p) = Cons(x, Cons(h, t)).filter(p)
+{
+    List::filter_step_swap(p(h), p(x), h, x, t.filter(p), λ eh ex => n(chain(x, h, ex, eh)))
+}
+
+// The filter of `h :: _` reads only the filter of the tail.
+theorem List::filter_cons_cong<A>(p: A → Bool, h: A, ys, zs: List<A>, e: ys.filter(p) = zs.filter(p)):
+    Cons(h, ys).filter(p) = Cons(h, zs).filter(p)
+{
+    cong_fn(λ (r: List<A>) => List::filter_step(p(h), h, r), e)
+}
+
+theorem List::insert_ordered_filter<A: DecidableRel(R)>(R: A → A → Type, p: A → Bool, chain: List::Chain(R, p),
+    x: A, self xs: List<A>): xs.insert_ordered(R, x).filter(p) = Cons(x, xs).filter(p)
+{
+    match xs {
+        Nil => refl,
+        Cons(h, t) => match A.rel_dec(x, h) {
+            Inl(_) => refl,
+            Inr(bad) => trans(
+                List::filter_cons_cong(p, h, t.insert_ordered(R, x), Cons(x, t), t.insert_ordered_filter(R, p, chain, x)),
+                t.filter_swap(R, p, x, h, chain, bad)),
+        },
+    }
+}
+
+theorem List::insertion_sort_stable<A: DecidableRel(R)>(R: A → A → Type, p: A → Bool, chain: List::Chain(R, p),
+    self xs: List<A>): xs.insertion_sort(R).filter(p) = xs.filter(p)
+{
+    match xs {
+        Nil => refl,
+        Cons(h, t) => trans(
+            t.insertion_sort(R).insert_ordered_filter(R, p, chain, h),
+            List::filter_cons_cong(p, h, t.insertion_sort(R), t, t.insertion_sort_stable(R, p, chain))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The lexicographic order.
+//
+// `LexAt(R, xs, ys)`: `Nil` is below everything; `x :: xs` is below `y :: ys`
+// when `x` is below `y` and, should `y` also be below `x` (a tie), `xs` is
+// below `ys`. Written with `R` alone, so it needs no strict order or
+// equality beside it: at a linear order the tie is equality, and at a total
+// preorder it is the preorder's equivalence.
+
+fn List::LexAt<A>(R: A → A → Type, xs, ys: List<A>) → Type {
+    match xs {
+        Nil => True,
+        Cons(x, xt) => match ys {
+            Nil => False,
+            Cons(y, yt) => R(x, y) ∧ (R(y, x) → List::LexAt(R, xt, yt)),
+        },
+    }
+}
+
+theorem List::lex_refl<A: Preorder(R)>(R: A → A → Type, self xs: List<A>): List::LexAt(R, xs, xs) {
+    match xs {
+        Nil => trivial,
+        Cons(x, t) => And(A.rel_refl(x), λ _ => t.lex_refl(R)),
+    }
+}
+
+theorem List::lex_trans<A: Preorder(R)>(R: A → A → Type, self xs: List<A>):
+    (ys, zs: List<A>) → List::LexAt(R, xs, ys) → List::LexAt(R, ys, zs) → List::LexAt(R, xs, zs)
+{
+    match xs {
+        Nil => λ ys zs h1 h2 => trivial,
+        Cons(x, xt) => λ ys => match ys {
+            Nil => λ zs h1 => false_elim(h1),
+            Cons(y, yt) => λ zs => match zs {
+                Nil => λ h1 h2 => false_elim(h2),
+                Cons(z, zt) => λ h1 h2 => And(
+                    A.rel_trans(x, y, z, h1.left, h2.left),
+                    λ (zx: R(z, x)) => xt.lex_trans(R, yt, zt,
+                        h1.right(A.rel_trans(y, z, x, h2.left, zx)),
+                        h2.right(A.rel_trans(z, x, y, zx, h1.left)))),
+            },
+        },
+    }
+}
+
+// Totality decides ties, so it needs the decider: comparable heads that tie
+// one way round defer to the tails.
+theorem List::lex_total<A: DecidableRel(R) + Total(R)>(R: A → A → Type, self xs: List<A>):
+    (ys: List<A>) → List::LexAt(R, xs, ys) ∨ List::LexAt(R, ys, xs)
+{
+    match xs {
+        Nil => λ ys => Inl(trivial),
+        Cons(x, xt) => λ ys => match ys {
+            Nil => Inr(trivial),
+            Cons(y, yt) => match xt.lex_total(R, yt) {
+                Inl(l) => match A.rel_dec(x, y) {
+                    Inl(xy) => Inl(And(xy, λ _ => l)),
+                    Inr(nxy) => Inr(And(List::rel_of_not(R, x, y, nxy), λ xy => false_elim(nxy(xy)))),
+                },
+                Inr(l) => match A.rel_dec(y, x) {
+                    Inl(yx) => Inr(And(yx, λ _ => l)),
+                    Inr(nyx) => Inl(And(List::rel_of_not(R, y, x, nyx), λ yx => false_elim(nyx(yx)))),
+                },
+            },
+        },
+    }
+}
+
+theorem List::lex_antisym<A: PartialOrder(R)>(R: A → A → Type, self xs: List<A>):
+    (ys: List<A>) → List::LexAt(R, xs, ys) → List::LexAt(R, ys, xs) → xs = ys
+{
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => λ h1 h2 => refl,
+            Cons(_, _) => λ h1 h2 => false_elim(h2),
+        },
+        Cons(x, xt) => λ ys => match ys {
+            Nil => λ h1 => false_elim(h1),
+            Cons(y, yt) => λ h1 h2 => List::cons_eq(xt, yt, x, y,
+                A.rel_antisym(x, y, h1.left, h2.left),
+                xt.lex_antisym(R, yt, h1.right(h2.left), h2.right(h1.left))),
+        },
+    }
+}
+
+fn List::lex_dec<A: DecidableRel(R)>(R: A → A → Type, self xs: List<A>)
+    → (ys: List<A>) → List::LexAt(R, xs, ys) ∨ ¬List::LexAt(R, xs, ys)
+{
+    match xs {
+        Nil => λ ys => Inl(trivial),
+        Cons(x, xt) => λ ys => match ys {
+            Nil => Inr(λ h => h),
+            Cons(y, yt) => match A.rel_dec(x, y) {
+                Inr(nxy) => Inr(λ h => nxy(h.left)),
+                Inl(xy) => match A.rel_dec(y, x) {
+                    Inr(nyx) => Inl(And(xy, λ yx => false_elim(nyx(yx)))),
+                    Inl(yx) => match xt.lex_dec(R, yt) {
+                        Inl(l) => Inl(And(xy, λ _ => l)),
+                        Inr(nl) => Inr(λ h => nl(h.right(yx))),
+                    },
+                },
+            },
+        },
+    }
+}
+
+// The order as a relation, for the classes and for `Sorted`. Separate from
+// `LexAt` because a declaration applied to some of its arguments is refused,
+// so the relation is the λ over the last two.
+fn List::Lex<A>(R: A → A → Type) → List<A> → List<A> → Type {
+    λ xs ys => List::LexAt(R, xs, ys)
+}
+
+// The dictionaries, one per layer.
+fn List::lex_preorder<A: Preorder(R)>(R: A → A → Type) → Preorder<List<A>>(List::Lex(R)) {
+    Preorder(λ xs => xs.lex_refl(R), λ xs ys zs h1 h2 => xs.lex_trans(R, ys, zs, h1, h2))
+}
+
+fn List::lex_decidable<A: DecidableRel(R)>(R: A → A → Type) → DecidableRel<List<A>>(List::Lex(R)) {
+    DecidableRel(λ xs ys => xs.lex_dec(R, ys))
+}
+
+fn List::lex_total_preorder<A: TotalPreorder(R) + DecidableRel(R)>(R: A → A → Type)
+    → TotalPreorder<List<A>>(List::Lex(R))
+{
+    TotalPreorder(λ xs => xs.lex_refl(R), λ xs ys zs h1 h2 => xs.lex_trans(R, ys, zs, h1, h2),
+        λ xs ys => xs.lex_total(R, ys))
+}
+
+fn List::lex_linear_order<A: LinearOrder(R) + DecidableRel(R)>(R: A → A → Type)
+    → LinearOrder<List<A>>(List::Lex(R))
+{
+    LinearOrder(λ xs => xs.lex_refl(R), λ xs ys zs h1 h2 => xs.lex_trans(R, ys, zs, h1, h2),
+        λ xs ys h1 h2 => xs.lex_antisym(R, ys, h1, h2), λ xs ys => xs.lex_total(R, ys))
+}
+
+// The same, as instances, so a sort over `Lex(R)` finds them.
+instance<A: DecidableRel(R)>(R: A → A → Type) DecidableRel<List<A>>(List::Lex(R)) {
+    rel_dec := λ xs ys => xs.lex_dec(R, ys),
+}
+
+instance<A: LinearOrder(R) + DecidableRel(R)>(R: A → A → Type) LinearOrder<List<A>>(List::Lex(R)) {
+    rel_refl := λ xs => xs.lex_refl(R),
+    rel_trans := λ xs ys zs h1 h2 => xs.lex_trans(R, ys, zs, h1, h2),
+    rel_antisym := λ xs ys h1 h2 => xs.lex_antisym(R, ys, h1, h2),
+    rel_total := λ xs ys => xs.lex_total(R, ys),
+}
