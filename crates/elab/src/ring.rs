@@ -396,6 +396,9 @@ fn equation(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Equation> {
 /// relation is not unfolded.
 fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Option<Equation> {
     elab.key_of("ring::RingExpr::sound_rel")?;
+    if let Type::Id { level, ty: carrier_ty, lhs, rhs } = ty {
+        return identity_equation(elab, cx, carrier_ty, level, lhs, rhs, span);
+    }
     let rel = Relation::of_type(elab, cx, ty, span)?;
     let Type::El { tm, .. } = ty else {
         return None;
@@ -413,9 +416,44 @@ fn relation_equation(elab: &Elaborator, cx: &Cx, ty: &Type, span: Span) -> Optio
     })
 }
 
+/// `lhs = rhs` at a ring carrier whose `≈` is identity (`RelId`, as at
+/// `BitVec(n)`): the same goal as `lhs ≈ rhs`, which unfolds to it, so the
+/// certificate's `≈` converts to the `=` written. The carrier's operations
+/// take its parameters before their operands, one per argument its type is
+/// applied to, as the `≈` reading counts them off `RelId<T>(lhs, rhs)`.
+fn identity_equation(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, level: &Level, lhs: &Rc<Term>, rhs: &Rc<Term>, span: Span) -> Option<Equation> {
+    let carrier = elab.carrier_of_ty(cx, carrier_ty, span)?;
+    if elab.designated("≈", OpFixity::Infix, &carrier.key)? != "relation::RelId" {
+        return None;
+    }
+    let Type::El { tm, .. } = carrier_ty else {
+        return None;
+    };
+    let mut params = 0;
+    let mut head = tm;
+    while let Some((fun, _)) = crate::spelling::app_of(head) {
+        params += 1;
+        head = fun;
+    }
+    let ops = rel_carrier_at(elab, cx, carrier_ty, Some(params), None, span)?;
+    Some(Equation {
+        carrier: Carrier::Rel(Rc::new(ops)),
+        ty: carrier_ty.clone(),
+        level: level.clone(),
+        lhs: Rc::clone(lhs),
+        rhs: Rc::clone(rhs),
+    })
+}
+
 /// A carrier with a `CommRingOfInt` instance, its spelling and designated
 /// operations; else a class carrier ([`class_carrier`]).
 fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term>, span: Span) -> Option<RelCarrier> {
+    rel_carrier_at(elab, cx, carrier_ty, None, goal, span)
+}
+
+/// [`rel_carrier`], with the carrier's parameter count given (`params`) or
+/// read off the goal's relation.
+fn rel_carrier_at(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, params: Option<usize>, goal: Option<&Term>, span: Span) -> Option<RelCarrier> {
     let Some(carrier) = elab.carrier_of_ty(cx, carrier_ty, span) else {
         return class_carrier(elab, cx, carrier_ty);
     };
@@ -428,7 +466,11 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
     // other designations are read as coming from the same section. A
     // reading with no goal (`linarith`'s) is at a carrier with no parameters.
     let same = elab.designated("≈", OpFixity::Infix, &carrier.key)?;
-    let prefix = match goal { Some(goal) => named_args(elab, goal, &same)?.len().checked_sub(2)?, None => 0 };
+    let prefix = match (params, goal) {
+        (Some(params), _) => params,
+        (None, Some(goal)) => named_args(elab, goal, &same)?.len().checked_sub(2)?,
+        (None, None) => 0,
+    };
     let op = |sym: &str, fixity| {
         elab.designated(sym, fixity, &carrier.key).map(|name| if prefix == 0 { Op::Global(name) } else { Op::GlobalAfter(name, prefix) })
     };
@@ -1576,7 +1618,7 @@ impl Reifier<'_> {
             }
         }
         let source = self.elab.spell_term_source(self.cx, tm)?;
-        let value = integer_source(&source).or_else(|| trailing_integer(&source))?;
+        let value = integer_source(&source).or_else(|| trailing_integer(&source)).or_else(|| of_nat_numeral(&source))?;
         let written = match &ops.class {
             None => format!("ring::RingExpr::eval_rel<{}>(ring::RConst({}), Nil)", ops.source, int_source(value)),
             Some(_) => format!("semiring::Ring::int_cast<{}>({})", ops.source, int_source(value)),
@@ -1727,6 +1769,22 @@ fn int_literal(source: &str) -> Option<Z> {
         }
     }
     digits(source)
+}
+
+/// A carrier's numeral spelled as its `ofNat` call, with the carrier's
+/// parameters named after the literal: `bitvec::BitVec::ofNat(2, n := n)`,
+/// a word numeral at an open width. Only a candidate; the caller's
+/// conversion decides.
+fn of_nat_numeral(source: &str) -> Option<Z> {
+    let rest = source.strip_suffix(')')?;
+    let (head, args) = rest.split_once("::ofNat(")?;
+    if head.contains('(') {
+        return None;
+    }
+    let digits_end = args.find(|c: char| !c.is_ascii_digit()).unwrap_or(args.len());
+    let digits: Z = args[..digits_end].parse().ok()?;
+    let after = &args[digits_end..];
+    (after.is_empty() || after.starts_with(", ")).then_some(digits)
 }
 
 fn trailing_integer(source: &str) -> Option<Z> {

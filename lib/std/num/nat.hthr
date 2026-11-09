@@ -1248,6 +1248,141 @@ theorem Nat::div_split(self n: Nat, c, k: Pos<Nat>): n.div(c) = n.div(c * k) * k
 }
 
 // ---------------------------------------------------------------------------
+// Congruence modulo a divisor (issues/machine-words-modular-ring.md). A
+// multiple of the divisor added anywhere changes no remainder
+// (`add_mul_mod`), and every law here is that read at the decomposition
+// `div_mul_add_mod` names: reduction commutes with `+`, `*` and powers.
+// `ModEq(m, a, b)` is equality of remainders, so its compatibility laws are
+// these, and machine words (`BitVec(n)`, ℤ/2ⁿ) are read through them.
+
+theorem Nat::add_right_comm(self a, b, c: Nat): (a + b) + c = (a + c) + b {
+    trans(a.add_assoc(b, c), trans(Nat::cong(λ (x: Nat) => a + x, b.add_comm(c)), sym(a.add_assoc(c, b))))
+}
+
+theorem Nat::add_mul_mod(self n: Nat, d: Pos<Nat>, k: Nat): (n + k * d).mod(d) = n.mod(d) {
+    (n + k * d).div_mod_unique(d, n.div(d) + k, n.mod(d),
+        calc {
+            (n.div(d) + k) * d + n.mod(d)
+                = (n.div(d) * d + k * d) + n.mod(d) := prelude::cong(n.div(d).add_mul_distr(k, d)),
+                = (n.div(d) * d + n.mod(d)) + k * d := (n.div(d) * d).add_right_comm(k * d, n.mod(d)),
+                = n + k * d := prelude::cong(n.div_mul_add_mod(d)),
+        },
+        n.mod_lt(d)).right
+}
+
+theorem Nat::mul_mod_self(self k: Nat, d: Pos<Nat>): (k * d).mod(d) = 0 {
+    trans(Nat::cong(λ (x: Nat) => x.mod(d), sym((k * d).add_left_zero())), (0).add_mul_mod(d, k))
+}
+
+theorem Nat::mod_self(self d: Pos<Nat>): d.mod(d) = 0 {
+    trans(Nat::cong(λ (x: Nat) => x.mod(d), sym(d.mul_left_one())), (1).mul_mod_self(d))
+}
+
+theorem Nat::mod_mod(self n: Nat, d: Pos<Nat>): n.mod(d).mod(d) = n.mod(d) {
+    n.mod(d).mod_of_lt(d, n.mod_lt(d))
+}
+
+// Reducing one summand first changes nothing.
+theorem Nat::mod_add_mod(self a, b: Nat, d: Pos<Nat>): (a.mod(d) + b).mod(d) = (a + b).mod(d) {
+    let whole: (a.mod(d) + b + a.div(d) * d = a + b) = calc {
+        a.mod(d) + b + a.div(d) * d
+            = a.mod(d) + a.div(d) * d + b := a.mod(d).add_right_comm(b, a.div(d) * d),
+            = a.div(d) * d + a.mod(d) + b := prelude::cong(a.mod(d).add_comm(a.div(d) * d)),
+            = a + b := prelude::cong(a.div_mul_add_mod(d)),
+    };
+    trans(sym((a.mod(d) + b).add_mul_mod(d, a.div(d))), Nat::cong(λ (x: Nat) => x.mod(d), whole))
+}
+
+theorem Nat::add_mod_mod(self a, b: Nat, d: Pos<Nat>): (a + b.mod(d)).mod(d) = (a + b).mod(d) {
+    trans(Nat::cong(λ (x: Nat) => x.mod(d), a.add_comm(b.mod(d))),
+        trans(b.mod_add_mod(a, d), Nat::cong(λ (x: Nat) => x.mod(d), b.add_comm(a))))
+}
+
+theorem Nat::add_mod(self a, b: Nat, d: Pos<Nat>): (a + b).mod(d) = (a.mod(d) + b.mod(d)).mod(d) {
+    sym(trans(a.mod_add_mod(b.mod(d), d), a.add_mod_mod(b, d)))
+}
+
+// The same for products. (`mod_mul_mod` above is the other law, about a
+// divisor's multiple.)
+theorem Nat::mul_mod_left(self a, b: Nat, d: Pos<Nat>): (a.mod(d) * b).mod(d) = (a * b).mod(d) {
+    let whole: (a.mod(d) * b + (a.div(d) * b) * d = a * b) = calc {
+        a.mod(d) * b + (a.div(d) * b) * d
+            = a.mod(d) * b + a.div(d) * (b * d) := prelude::cong(a.div(d).mul_assoc(b, d)),
+            = a.mod(d) * b + a.div(d) * (d * b) := prelude::cong(b.mul_comm(d)),
+            = a.mod(d) * b + (a.div(d) * d) * b := prelude::cong(sym(a.div(d).mul_assoc(d, b))),
+            = (a.div(d) * d) * b + a.mod(d) * b := (a.mod(d) * b).add_comm((a.div(d) * d) * b),
+            = (a.div(d) * d + a.mod(d)) * b := sym((a.div(d) * d).add_mul_distr(a.mod(d), b)),
+            = a * b := prelude::cong(a.div_mul_add_mod(d)),
+    };
+    trans(sym((a.mod(d) * b).add_mul_mod(d, a.div(d) * b)), Nat::cong(λ (x: Nat) => x.mod(d), whole))
+}
+
+theorem Nat::mul_mod_right(self a, b: Nat, d: Pos<Nat>): (a * b.mod(d)).mod(d) = (a * b).mod(d) {
+    trans(Nat::cong(λ (x: Nat) => x.mod(d), a.mul_comm(b.mod(d))),
+        trans(b.mul_mod_left(a, d), Nat::cong(λ (x: Nat) => x.mod(d), b.mul_comm(a))))
+}
+
+theorem Nat::mul_mod(self a, b: Nat, d: Pos<Nat>): (a * b).mod(d) = (a.mod(d) * b.mod(d)).mod(d) {
+    sym(trans(a.mul_mod_left(b.mod(d), d), a.mul_mod_right(b, d)))
+}
+
+// What a divisor's multiple leaves, its divisor leaves too. No positivity
+// for `k`: at `k = 0` both sides reduce modulo `m` alone.
+theorem Nat::mod_mod_of_dvd(self x, k: Nat, m: Pos<Nat>, h: m.Divides(k)): x.mod(k).mod(m) = x.mod(m) {
+    let c = k.div(m);
+    let k_eq: (c * m = k) = j(h, λ y _ => c * m + y = k, k.div_mul_add_mod(m));
+    let whole: (x.mod(k) + (x.div(k) * c) * m = x) = calc {
+        x.mod(k) + (x.div(k) * c) * m
+            = x.mod(k) + x.div(k) * (c * m) := prelude::cong(x.div(k).mul_assoc(c, m)),
+            = x.mod(k) + x.div(k) * k := prelude::cong(k_eq),
+            = x.div(k) * k + x.mod(k) := x.mod(k).add_comm(x.div(k) * k),
+            = x := x.div_mul_add_mod(k),
+    };
+    trans(sym(x.mod(k).add_mul_mod(m, x.div(k) * c)), Nat::cong(λ (y: Nat) => y.mod(m), whole))
+}
+
+// Congruence modulo `m`: equal remainders. At `m = 0` it is equality.
+fn Nat::ModEq(m, a, b: Nat) → Type { a.mod(m) = b.mod(m) }
+
+theorem Nat::modeq_refl(m, a: Nat): Nat::ModEq(m, a, a) { refl }
+
+theorem Nat::modeq_symm({m, a, b: Nat}, h: Nat::ModEq(m, a, b)): Nat::ModEq(m, b, a) { sym(h) }
+
+theorem Nat::modeq_trans({m, a, b, c: Nat}, h1: Nat::ModEq(m, a, b), h2: Nat::ModEq(m, b, c)): Nat::ModEq(m, a, c) {
+    trans(h1, h2)
+}
+
+// A number is congruent to its remainder.
+theorem Nat::modeq_mod(self a: Nat, m: Pos<Nat>): Nat::ModEq(m, a.mod(m), a) { a.mod_mod(m) }
+
+theorem Nat::modeq_add(m: Pos<Nat>, {a, b, c, d: Nat}, h1: Nat::ModEq(m, a, b), h2: Nat::ModEq(m, c, d)):
+    Nat::ModEq(m, a + c, b + d)
+{
+    calc {
+        (a + c).mod(m)
+            = (a.mod(m) + c.mod(m)).mod(m) := a.add_mod(c, m),
+            = (b.mod(m) + c.mod(m)).mod(m) := Nat::cong(λ (x: Nat) => (x + c.mod(m)).mod(m), h1),
+            = (b.mod(m) + d.mod(m)).mod(m) := Nat::cong(λ (x: Nat) => (b.mod(m) + x).mod(m), h2),
+            = (b + d).mod(m) := sym(b.add_mod(d, m)),
+    }
+}
+
+theorem Nat::modeq_mul(m: Pos<Nat>, {a, b, c, d: Nat}, h1: Nat::ModEq(m, a, b), h2: Nat::ModEq(m, c, d)):
+    Nat::ModEq(m, a * c, b * d)
+{
+    calc {
+        (a * c).mod(m)
+            = (a.mod(m) * c.mod(m)).mod(m) := a.mul_mod(c, m),
+            = (b.mod(m) * c.mod(m)).mod(m) := Nat::cong(λ (x: Nat) => (x * c.mod(m)).mod(m), h1),
+            = (b.mod(m) * d.mod(m)).mod(m) := Nat::cong(λ (x: Nat) => (b.mod(m) * x).mod(m), h2),
+            = (b * d).mod(m) := sym(b.mul_mod(d, m)),
+    }
+}
+
+// Adding a multiple of the modulus, on either side, is congruent.
+theorem Nat::modeq_add_mul(self a: Nat, m: Pos<Nat>, k: Nat): Nat::ModEq(m, a + k * m, a) { a.add_mul_mod(m, k) }
+
+// ---------------------------------------------------------------------------
 
 fn Nat::max(self a: Nat) → Nat → Nat {
     match a {
@@ -1592,6 +1727,36 @@ evidence theorem Nat::add_pos_r({a, b: Nat}, pb: 0 < b := infer): 0 < a + b {
 // denominator's positivity with no argument.
 evidence theorem Nat::pow_pos({a, n: Nat}, pa: 0 < a := infer): 0 < a.pow(n) { a.one_le_pow(n, pa) }
 
+// Powers, and the power-of-two fact words truncate by, under congruence
+// modulo a divisor (`add_mod` and the rest, above).
+theorem Nat::pow_mod(self a: Nat, d: Pos<Nat>, k: Nat): a.mod(d).pow(k).mod(d) = a.pow(k).mod(d) {
+    match k {
+        Zero => refl,
+        Succ(j) => calc {
+            (a.mod(d).pow(j) * a.mod(d)).mod(d)
+                = (a.mod(d).pow(j) * a).mod(d) := a.mod(d).pow(j).mul_mod_right(a, d),
+                = (a.mod(d).pow(j).mod(d) * a).mod(d) := sym(a.mod(d).pow(j).mul_mod_left(a, d)),
+                = (a.pow(j).mod(d) * a).mod(d) := Nat::cong(λ (x: Nat) => (x * a).mod(d), a.pow_mod(d, j)),
+                = (a.pow(j) * a).mod(d) := a.pow(j).mul_mod_left(a, d),
+        },
+    }
+}
+
+theorem Nat::modeq_pow(m: Pos<Nat>, k: Nat, {a, b: Nat}, h: Nat::ModEq(m, a, b)): Nat::ModEq(m, a.pow(k), b.pow(k)) {
+    trans(sym(a.pow_mod(m, k)), trans(Nat::cong(λ (x: Nat) => x.pow(k).mod(m), h), b.pow_mod(m, k)))
+}
+
+// A power divides every higher power of the same base.
+theorem Nat::pow_dvd_pow_add(self b: Pos<Nat>, n, k: Nat): b.pow(n).Divides(b.pow(k + n)) {
+    trans(Nat::cong(λ (x: Nat) => x.mod(b.pow(n)), b.pow_add(k, n)), b.pow(k).mul_mod_self(b.pow(n)))
+}
+
+// The power-of-two fact words truncate by: the low `n` digits of the low
+// `k + n` digits are the low `n` digits.
+theorem Nat::mod_pow_mod(self x: Nat, b: Pos<Nat>, n, k: Nat): x.mod(b.pow(k + n)).mod(b.pow(n)) = x.mod(b.pow(n)) {
+    x.mod_mod_of_dvd(b.pow(k + n), b.pow(n), b.pow_dvd_pow_add(n, k))
+}
+
 theorem Nat::fact_le_succ(self n: Nat): n.fact() <= Succ(n).fact() {
     rewrite(sym(n.fact().mul_left_one()), n.fact().mul_le_mono_r(1, Succ(n), trivial))
 }
@@ -1667,6 +1832,10 @@ theorem Nat::le_succ_half_add(self n: Nat): n <= Succ(n.half() + n.half()) {
 }
 
 theorem Nat::mul_two(self n: Nat): n * 2 = n + n { Nat::cong(λ (w: Nat) => w + n, n.add_left_zero()) }
+
+theorem Nat::mul_twice(self a, b: Nat): a * b.twice() = (a * b).twice() {
+    trans(Nat::cong(λ (w: Nat) => a * w, b.twice_add_self()), trans(a.mul_add_distr(b, b), sym((a * b).twice_add_self())))
+}
 
 // `⌊n / 2^k⌋`, by halving `k` times: the shift a rounding takes.
 fn Nat::shr(self n, k: Nat) → Nat { match k { Zero => n, Succ(i) => n.half().shr(i) } }

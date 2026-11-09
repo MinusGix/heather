@@ -416,6 +416,11 @@ fn BitVec::mul({n: Nat}, self a, b: BitVec(n)) → BitVec(n) {
     BitVec::ofNat(a.toNat() * b.toNat())
 }
 
+// `a` multiplied by itself `k` times; the empty product is one.
+fn BitVec::pow({n: Nat}, self a: BitVec(n), k: Nat) → BitVec(n) {
+    match k { Zero => BitVec::ofNat(1), Succ(j) => a.pow(j).mul(a) }
+}
+
 fn BitVec::carry_add({n: Nat}, self a, b: BitVec(n)) → Type {
     Nat::pow(2, n) <= a.toNat() + b.toNat()
 }
@@ -1342,6 +1347,7 @@ designation < at BitVec(n) := BitVec::unsigned_lt
 designation + at BitVec(n) := BitVec::add
 designation - at BitVec(n) := BitVec::sub
 designation * at BitVec(n) := BitVec::mul
+designation ^ at BitVec(n) := BitVec::pow
 designation prefix - at BitVec(n) := BitVec::neg
 // Bits and shifts, read as Rust reads them at `u8`: `>>` is the zero-filling
 // shift, and a shift's count is a `Nat` (issues/integer-operator-symbols.md).

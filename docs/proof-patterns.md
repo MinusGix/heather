@@ -56,6 +56,14 @@ property of Heather.
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
   `rewrite` and generic-lemma matching convert, or fail before instance
   search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).
+- **State a word fact modulo `2^n`; add a bound only to read the value as a
+  Nat.** Every word operation is `ofNat` of the Nat one at every width
+  (`BitVec::add_eq_ofNat`, `ofNat_add`, `toNat_add_mod`, `bitvec_nat`), and
+  a word identity is `ring`'s at `BitVec(n)` (`import bitvec_ring;`, with
+  `int` imported for its coefficients). `ring` does not read `-` there yet:
+  rewrite with `BitVec::sub_eq_add_neg` first
+  ([[ring-carrier-subtraction-law]]). A `fits` premise threaded only to a
+  no-overflow lemma whose modular form would do is a premise too many.
 
 ## 3. omega
 

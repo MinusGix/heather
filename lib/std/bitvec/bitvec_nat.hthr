@@ -1,25 +1,305 @@
-// Unsigned word/Nat bridges. Bounds are mathematical, never modular.
+// Unsigned word/Nat bridges. Two halves: the modular one first, where a word
+// is its value modulo `2^n` and every equation holds at every width; then the
+// no-overflow facts, which read a word's value as the Nat itself under a
+// bound, and are the modular ones with `Nat::mod_of_lt`.
 import bitvec;
 import bool;
 import logic;
 import nat;
+import int;
+
+// ---------------------------------------------------------------------------
+// The modular half (issues/machine-words-modular-ring.md): `BitVec(n)` is
+// ℤ/2ⁿ. `ofNat` reads its argument modulo `2^n` at every width
+// (`toNat_ofNat_mod`), every operation is `ofNat` of the Nat operation on its
+// operands' values (`add_eq_ofNat`, `sub_eq_ofNat`, `neg_eq_ofNat`, `mul` by
+// definition), and so `ofNat` is a semiring homomorphism at every width
+// (`ofNat_add`, `ofNat_mul`, `ofNat_pow`). No bound anywhere; the
+// no-overflow facts after this section are these with `Nat::mod_of_lt`.
+
+theorem BitVec::ofNat_cong(n: Nat, {a, b: Nat}, p: a = b): BitVec::ofNat(a, n := n) = BitVec::ofNat(b) {
+    @cong(λ (t: Nat) => BitVec::ofNat(t, n := n), a, b, p)
+}
+
+// A word is its value: equal values are equal words.
+theorem BitVec::toNat_inj(n: Nat, {a, b: BitVec(n)}, p: a.toNat() = b.toNat()): a = b {
+    trans(sym(BitVec::ofNat_toNat(n, a)), trans(BitVec::ofNat_cong(n, p), BitVec::ofNat_toNat(n, b)))
+}
+
+// `ofNat` keeps the low `n` digits: its value is the argument modulo `2^n`.
+// The recursion is `ofNat`'s, on the width; the step is `div_mod_unique` at
+// the low bit plus twice the induction hypothesis.
+theorem BitVec::toNat_ofNat_mod(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).toNat() = x.mod(Nat::pow(2, n)) {
+    match n {
+        Zero => λ x => sym(x.mod_one()),
+        Succ(k, ih) => λ x => {
+            let p = Nat::pow(2, k);
+            let h = Nat::half(x);
+            let o = Nat::of_bit(BitVec::odd_bit(x));
+            let s = h.mod(p);
+            let parts: (h.div(p) * Nat::pow(2, Succ(k)) + (o + s.twice()) = x) = calc {
+                h.div(p) * Nat::pow(2, Succ(k)) + (o + s.twice())
+                    = h.div(p) * p.twice() + (o + s.twice()) := prelude::cong(BitVec::pow_two_succ_twice(k)),
+                    = (h.div(p) * p).twice() + (o + s.twice()) := prelude::cong(h.div(p).mul_twice(p)),
+                    = o + ((h.div(p) * p).twice() + s.twice()) := (h.div(p) * p).twice().add_left_comm(o, s.twice()),
+                    = o + (h.div(p) * p + s).twice() := prelude::cong(sym((h.div(p) * p).twice_add(s))),
+                    = o + h.twice() := prelude::cong(h.div_mul_add_mod(p)),
+                    = x := BitVec::odd_bit_add_twice_half(x),
+            };
+            let below: (o + s.twice() < Nat::pow(2, Succ(k))) =
+                rewrite(BitVec::pow_two_succ_twice(k), BitVec::bit_twice_lt(BitVec::odd_bit(x), s, p, h.mod_lt(p)));
+            trans(Nat::cong(λ (w: Nat) => o + w.twice(), ih(h)),
+                sym(x.div_mod_unique(Nat::pow(2, Succ(k)), h.div(p), o + s.twice(), parts, below).right))
+        },
+    }
+}
+
+theorem BitVec::ofNat_mod(n, x: Nat): BitVec::ofNat(x.mod(Nat::pow(2, n)), n := n) = BitVec::ofNat(x) {
+    trans(BitVec::ofNat_cong(n, sym(BitVec::toNat_ofNat_mod(n, x))), BitVec::ofNat_toNat(n, BitVec::ofNat(x)))
+}
+
+// Congruent naturals are the same word.
+theorem BitVec::ofNat_modeq(n: Nat, {a, b: Nat}, h: Nat::ModEq(Nat::pow(2, n), a, b)):
+    BitVec::ofNat(a, n := n) = BitVec::ofNat(b)
+{
+    trans(sym(BitVec::ofNat_mod(n, a)), trans(BitVec::ofNat_cong(n, h), BitVec::ofNat_mod(n, b)))
+}
+
+// The words of `0` and of `2^n` are one word.
+theorem BitVec::ofNat_pow_two(n: Nat): BitVec::ofNat(Nat::pow(2, n), n := n) = BitVec::ofNat(0) {
+    BitVec::ofNat_modeq(n, Nat::pow(2, n).mod_self())
+}
+
+// `ofNat` at a low bit and twice a number is that bit on that number's word.
+theorem BitVec::ofNat_digit(k: Nat, b: Bool, m: Nat):
+    BitVec::ofNat(Nat::of_bit(b) + Nat::twice(m), n := Succ(k)) = BitVec::ofNat(m, n := k).cons_bit(b)
+{
+    BitVec::cons_bit_cong(k, BitVec::odd_bit_digit(b, m), BitVec::ofNat_cong(k, BitVec::half_digit(b, m)))
+}
+
+// One more, as `ofNat` writes it: a clear low bit is set, and a set one
+// carries into the increment of the rest.
+theorem BitVec::increment_ofNat(n: Nat): (x: Nat) → BitVec::ofNat(x, n := n).increment() = BitVec::ofNat(Succ(x)) {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => {
+            let m = Nat::half(x);
+            let step: (BitVec::ofNat(m, n := k).cons_bit(BitVec::odd_bit(x)).increment()
+                    = BitVec::ofNat(Succ(Nat::of_bit(BitVec::odd_bit(x)) + Nat::twice(m)), n := Succ(k))) =
+                match BitVec::odd_bit(x) as λ b => BitVec::ofNat(m, n := k).cons_bit(b).increment()
+                        = BitVec::ofNat(Succ(Nat::of_bit(b) + Nat::twice(m)), n := Succ(k)) {
+                    False => sym(trans(BitVec::ofNat_cong(Succ(k), sym(Nat::add_succ_left(0, Nat::twice(m)))),
+                        BitVec::ofNat_digit(k, True, m))),
+                    True => trans(BitVec::cons_bit_cong(k, refl, ih(m), a := False, b := False),
+                        sym(trans(BitVec::ofNat_cong(Succ(k), trans(Nat::cong_succ(BitVec::one_add(Nat::twice(m))), sym(Nat::add_left_zero(Nat::twice(Succ(m)))))),
+                            BitVec::ofNat_digit(k, False, Succ(m))))),
+                };
+            trans(step, BitVec::ofNat_cong(Succ(k), Nat::cong_succ(BitVec::odd_bit_add_twice_half(x))))
+        },
+    }
+}
+
+theorem BitVec::iterate_increment_ofNat(n, x, count: Nat):
+    BitVec::ofNat(x, n := n).iterate_increment(count) = BitVec::ofNat(x + count)
+{
+    match count {
+        Zero => refl,
+        Succ(c) => {
+            let prev: (BitVec::ofNat(x, n := n).iterate_increment(c) = BitVec::ofNat(x + c)) = BitVec::iterate_increment_ofNat(n, x, c);
+            trans(@cong(λ (w: BitVec(n)) => w.increment(), BitVec::ofNat(x, n := n).iterate_increment(c), BitVec::ofNat(x + c), prev),
+                BitVec::increment_ofNat(n, x + c))
+        },
+    }
+}
+
+theorem BitVec::iterate_decrement_ofNat(n, x, count: Nat):
+    BitVec::ofNat(x + count, n := n).iterate_decrement(count) = BitVec::ofNat(x)
+{
+    match count {
+        Zero => refl,
+        Succ(c) => {
+            let prev: (BitVec::ofNat(x + c, n := n).iterate_decrement(c) = BitVec::ofNat(x)) = BitVec::iterate_decrement_ofNat(n, x, c);
+            let back: (BitVec::ofNat(Succ(x + c), n := n).decrement() = BitVec::ofNat(x + c)) =
+                trans(@cong(λ (w: BitVec(n)) => w.decrement(), BitVec::ofNat(Succ(x + c), n := n), BitVec::ofNat(x + c).increment(),
+                    sym(BitVec::increment_ofNat(n, x + c))),
+                    BitVec::decrement_increment(n, BitVec::ofNat(x + c)));
+            trans(BitVec::cong_iterate_decrement(n, c, back), prev)
+        },
+    }
+}
+
+// The operations, each `ofNat` of the Nat operation on the values.
+theorem BitVec::add_eq_ofNat(n: Nat, a, b: BitVec(n)): a.add(b) = BitVec::ofNat(a.toNat() + b.toNat()) {
+    trans(sym(BitVec::iter_add_eq_add(n, a, b)),
+        trans(@cong(λ (w: BitVec(n)) => w.iterate_increment(b.toNat()), a, BitVec::ofNat(a.toNat()), sym(BitVec::ofNat_toNat(n, a))),
+            BitVec::iterate_increment_ofNat(n, a.toNat(), b.toNat())))
+}
+
+// `a - b` is `a + 2^n - b`: the borrow out of the top is the `2^n` added.
+theorem BitVec::sub_eq_ofNat(n: Nat, a, b: BitVec(n)): a.sub(b) = BitVec::ofNat(a.toNat() + Nat::pow(2, n) - b.toNat()) {
+    let w = Nat::pow(2, n);
+    let d = a.toNat() + w - b.toNat();
+    let fits: (b.toNat() <= a.toNat() + w) =
+        b.toNat().le_trans(w, a.toNat() + w, Nat::le_of_lt(b.toNat(), w, BitVec::toNat_lt_pow(n, b)), a.toNat().le_add_r(w));
+    let wrapped: (BitVec::ofNat(d + b.toNat(), n := n) = a) =
+        trans(BitVec::ofNat_cong(n, b.toNat().sub_add_cancel(a.toNat() + w, fits)),
+        trans(BitVec::ofNat_modeq(n, trans(Nat::cong(λ (y: Nat) => (a.toNat() + y).mod(w), sym(w.mul_left_one())), a.toNat().modeq_add_mul(w, 1))),
+            BitVec::ofNat_toNat(n, a)));
+    trans(sym(BitVec::iter_sub_eq_sub(n, a, b)),
+        trans(BitVec::cong_iterate_decrement(n, b.toNat(), sym(wrapped)), BitVec::iterate_decrement_ofNat(n, d, b.toNat())))
+}
+
+theorem BitVec::neg_eq_ofNat(n: Nat, a: BitVec(n)): a.neg() = BitVec::ofNat(Nat::pow(2, n) - a.toNat()) {
+    trans(sym(BitVec::iter_neg_eq_neg(n, a)),
+        trans(BitVec::iter_sub_eq_sub(n, BitVec::zero(), a),
+        trans(BitVec::sub_eq_ofNat(n, BitVec::zero(), a),
+            BitVec::ofNat_cong(n, Nat::cong(λ (y: Nat) => y - a.toNat(),
+                trans(Nat::cong(λ (y: Nat) => y + Nat::pow(2, n), BitVec::zero_toNat(n)), Nat::pow(2, n).add_left_zero()))))))
+}
+
+// The values, modulo `2^n` (P6 of docs/native-mathematics-survey.md).
+theorem BitVec::toNat_add_mod(n: Nat, a, b: BitVec(n)): a.add(b).toNat() = (a.toNat() + b.toNat()).mod(Nat::pow(2, n)) {
+    trans(@cong(λ (w: BitVec(n)) => w.toNat(), a.add(b), BitVec::ofNat(a.toNat() + b.toNat()), BitVec::add_eq_ofNat(n, a, b)),
+        BitVec::toNat_ofNat_mod(n, a.toNat() + b.toNat()))
+}
+
+theorem BitVec::toNat_mul_mod(n: Nat, a, b: BitVec(n)): a.mul(b).toNat() = (a.toNat() * b.toNat()).mod(Nat::pow(2, n)) {
+    BitVec::toNat_ofNat_mod(n, a.toNat() * b.toNat())
+}
+
+theorem BitVec::toNat_sub_mod(n: Nat, a, b: BitVec(n)):
+    a.sub(b).toNat() = (a.toNat() + Nat::pow(2, n) - b.toNat()).mod(Nat::pow(2, n))
+{
+    trans(@cong(λ (w: BitVec(n)) => w.toNat(), a.sub(b), BitVec::ofNat(a.toNat() + Nat::pow(2, n) - b.toNat()), BitVec::sub_eq_ofNat(n, a, b)),
+        BitVec::toNat_ofNat_mod(n, a.toNat() + Nat::pow(2, n) - b.toNat()))
+}
+
+theorem BitVec::toNat_neg_mod(n: Nat, a: BitVec(n)): a.neg().toNat() = (Nat::pow(2, n) - a.toNat()).mod(Nat::pow(2, n)) {
+    trans(@cong(λ (w: BitVec(n)) => w.toNat(), a.neg(), BitVec::ofNat(Nat::pow(2, n) - a.toNat()), BitVec::neg_eq_ofNat(n, a)),
+        BitVec::toNat_ofNat_mod(n, Nat::pow(2, n) - a.toNat()))
+}
+
+// `ofNat` is a semiring homomorphism at every width (P3): what a constant
+// fold proves once for all widths.
+theorem BitVec::ofNat_add(n, x, y: Nat): BitVec::ofNat(x, n := n).add(BitVec::ofNat(y)) = BitVec::ofNat(x + y) {
+    let w = Nat::pow(2, n);
+    trans(BitVec::add_eq_ofNat(n, BitVec::ofNat(x), BitVec::ofNat(y)),
+        BitVec::ofNat_modeq(n, calc {
+            (BitVec::ofNat(x, n := n).toNat() + BitVec::ofNat(y, n := n).toNat()).mod(w)
+                = (x.mod(w) + BitVec::ofNat(y, n := n).toNat()).mod(w) := Nat::cong(λ (v: Nat) => (v + BitVec::ofNat(y, n := n).toNat()).mod(w), BitVec::toNat_ofNat_mod(n, x)),
+                = (x.mod(w) + y.mod(w)).mod(w) := Nat::cong(λ (v: Nat) => (x.mod(w) + v).mod(w), BitVec::toNat_ofNat_mod(n, y)),
+                = (x + y).mod(w) := sym(x.add_mod(y, w)),
+        }))
+}
+
+theorem BitVec::ofNat_mul(n, x, y: Nat): BitVec::ofNat(x, n := n).mul(BitVec::ofNat(y)) = BitVec::ofNat(x * y) {
+    let w = Nat::pow(2, n);
+    BitVec::ofNat_modeq(n, calc {
+        (BitVec::ofNat(x, n := n).toNat() * BitVec::ofNat(y, n := n).toNat()).mod(w)
+            = (x.mod(w) * BitVec::ofNat(y, n := n).toNat()).mod(w) := Nat::cong(λ (v: Nat) => (v * BitVec::ofNat(y, n := n).toNat()).mod(w), BitVec::toNat_ofNat_mod(n, x)),
+                = (x.mod(w) * y.mod(w)).mod(w) := Nat::cong(λ (v: Nat) => (x.mod(w) * v).mod(w), BitVec::toNat_ofNat_mod(n, y)),
+            = (x * y).mod(w) := sym(x.mul_mod(y, w)),
+    })
+}
+
+theorem BitVec::ofNat_pow(n, x, k: Nat): BitVec::ofNat(x, n := n).pow(k) = BitVec::ofNat(x.pow(k)) {
+    match k {
+        Zero => refl,
+        Succ(j) => {
+            let prev: (BitVec::ofNat(x, n := n).pow(j) = BitVec::ofNat(x.pow(j))) = BitVec::ofNat_pow(n, x, j);
+            trans(@cong(λ (w: BitVec(n)) => w.mul(BitVec::ofNat(x)), BitVec::ofNat(x, n := n).pow(j), BitVec::ofNat(x.pow(j)), prev),
+                BitVec::ofNat_mul(n, x.pow(j), x))
+        },
+    }
+}
+
+// A difference that does not go below zero, at every width.
+theorem BitVec::ofNat_sub(n, x, y: Nat, fits: y <= x): BitVec::ofNat(x, n := n).sub(BitVec::ofNat(y)) = BitVec::ofNat(x - y) {
+    let parts: (BitVec::ofNat(x, n := n) = BitVec::ofNat(x - y).add(BitVec::ofNat(y))) =
+        trans(BitVec::ofNat_cong(n, sym(y.sub_add_cancel(x, fits))), sym(BitVec::ofNat_add(n, x - y, y)));
+    trans(@cong(λ (w: BitVec(n)) => w.sub(BitVec::ofNat(y)), BitVec::ofNat(x), BitVec::ofNat(x - y).add(BitVec::ofNat(y)), parts),
+        BitVec::add_sub_cancel(n, BitVec::ofNat(x - y), BitVec::ofNat(y)))
+}
+
+// An operand written as its word: what the ring laws are proved through.
+theorem BitVec::add_ofNat_l(n, x: Nat, b: BitVec(n)): BitVec::ofNat(x, n := n).add(b) = BitVec::ofNat(x + b.toNat()) {
+    trans(@cong(λ (w: BitVec(n)) => BitVec::ofNat(x, n := n).add(w), b, BitVec::ofNat(b.toNat()), sym(BitVec::ofNat_toNat(n, b))),
+        BitVec::ofNat_add(n, x, b.toNat()))
+}
+
+theorem BitVec::add_ofNat_r(n: Nat, a: BitVec(n), y: Nat): a.add(BitVec::ofNat(y)) = BitVec::ofNat(a.toNat() + y) {
+    trans(@cong(λ (w: BitVec(n)) => w.add(BitVec::ofNat(y)), a, BitVec::ofNat(a.toNat()), sym(BitVec::ofNat_toNat(n, a))),
+        BitVec::ofNat_add(n, a.toNat(), y))
+}
+
+theorem BitVec::mul_ofNat_l(n, x: Nat, b: BitVec(n)): BitVec::ofNat(x, n := n).mul(b) = BitVec::ofNat(x * b.toNat()) {
+    trans(@cong(λ (w: BitVec(n)) => BitVec::ofNat(x, n := n).mul(w), b, BitVec::ofNat(b.toNat()), sym(BitVec::ofNat_toNat(n, b))),
+        BitVec::ofNat_mul(n, x, b.toNat()))
+}
+
+theorem BitVec::mul_ofNat_r(n: Nat, a: BitVec(n), y: Nat): a.mul(BitVec::ofNat(y)) = BitVec::ofNat(a.toNat() * y) {
+    trans(@cong(λ (w: BitVec(n)) => w.mul(BitVec::ofNat(y)), a, BitVec::ofNat(a.toNat()), sym(BitVec::ofNat_toNat(n, a))),
+        BitVec::ofNat_mul(n, a.toNat(), y))
+}
+
+// Truncation is a ring homomorphism: the low `n` bits of a value at a wider
+// width are its low `n` bits (`Nat::mod_pow_mod`).
+theorem BitVec::truncate_ofNat(n, extra, x: Nat): BitVec::ofNat(x, n := extra + n).truncate(n, extra) = BitVec::ofNat(x) {
+    trans(sym(BitVec::ofNat_toNat_truncate(n, extra, BitVec::ofNat(x))),
+        BitVec::ofNat_modeq(n, trans(Nat::cong(λ (y: Nat) => y.mod(Nat::pow(2, n)), BitVec::toNat_ofNat_mod(extra + n, x)),
+            x.mod_pow_mod(2, n, extra))))
+}
+
+theorem BitVec::truncate_eq_ofNat(n, extra: Nat, x: BitVec(extra + n)): x.truncate(n, extra) = BitVec::ofNat(x.toNat()) {
+    sym(BitVec::ofNat_toNat_truncate(n, extra, x))
+}
+
+theorem BitVec::truncate_add(n, extra: Nat, x, y: BitVec(extra + n)):
+    x.add(y).truncate(n, extra) = x.truncate(n, extra).add(y.truncate(n, extra))
+{
+    trans(@cong(λ (w: BitVec(extra + n)) => w.truncate(n, extra), x.add(y), BitVec::ofNat(x.toNat() + y.toNat()), BitVec::add_eq_ofNat(extra + n, x, y)),
+    trans(BitVec::truncate_ofNat(n, extra, x.toNat() + y.toNat()),
+    trans(sym(BitVec::ofNat_add(n, x.toNat(), y.toNat())),
+    trans(@cong(λ (w: BitVec(n)) => w.add(BitVec::ofNat(y.toNat())), BitVec::ofNat(x.toNat()), x.truncate(n, extra), sym(BitVec::truncate_eq_ofNat(n, extra, x))),
+        @cong(λ (w: BitVec(n)) => x.truncate(n, extra).add(w), BitVec::ofNat(y.toNat()), y.truncate(n, extra), sym(BitVec::truncate_eq_ofNat(n, extra, y)))))))
+}
+
+theorem BitVec::truncate_mul(n, extra: Nat, x, y: BitVec(extra + n)):
+    x.mul(y).truncate(n, extra) = x.truncate(n, extra).mul(y.truncate(n, extra))
+{
+    trans(BitVec::truncate_ofNat(n, extra, x.toNat() * y.toNat()),
+    trans(sym(BitVec::ofNat_mul(n, x.toNat(), y.toNat())),
+    trans(@cong(λ (w: BitVec(n)) => w.mul(BitVec::ofNat(y.toNat())), BitVec::ofNat(x.toNat()), x.truncate(n, extra), sym(BitVec::truncate_eq_ofNat(n, extra, x))),
+        @cong(λ (w: BitVec(n)) => x.truncate(n, extra).mul(w), BitVec::ofNat(y.toNat()), y.truncate(n, extra), sym(BitVec::truncate_eq_ofNat(n, extra, y))))))
+}
+
+// The signed reading is the unsigned one modulo `2^n`: they differ by `2^n`
+// exactly when the sign bit is set.
+theorem BitVec::toInt_modeq(n: Nat, x: BitVec(n)): Int::ModEq(Nat::pow(2, n), x.toInt(), OfNat(x.toNat())) {
+    let w = OfNat(Nat::pow(2, n));
+    let both: (s: Bool) → Int::ModEq(Nat::pow(2, n), (match s as λ _ => Int {
+            False => OfNat(x.toNat()),
+            True => OfNat(x.toNat()).sub(w),
+        }), OfNat(x.toNat())) =
+        λ s => match s {
+            False => Int::modeq_refl(Nat::pow(2, n), OfNat(x.toNat())),
+            True => Exists(NegSucc(0), Int::cong(λ (y: Int) => OfNat(x.toNat()) + y, trans(sym(w.mul_neg_one()), w.mul_comm(NegSucc(0))))),
+        };
+    both(x.sign_bit())
+}
+
+// Below `2^n` nothing wraps: the no-overflow half.
 
 theorem add_ofNat_sum(n: Nat, a, b: BitVec(n),
     bounded: a.toNat() + b.toNat() < Nat::pow(2, n)):
     a.add(b) = BitVec::ofNat(a.toNat() + b.toNat()) {
-    let total = a.toNat() + b.toNat();
-    trans(sym(BitVec::iter_add_eq_add(n, a, b)),
-      trans(BitVec::cong_iterate_increment(n, b.toNat(), sym(BitVec::iterate_increment_toNat(n, a))),
-      trans(BitVec::iterate_increment_compose(n, BitVec::zero(), a.toNat(), b.toNat()),
-      trans(BitVec::cong_iterate_increment_count(n, BitVec::zero(), sym(BitVec::toNat_ofNat(n, total, bounded))),
-        BitVec::iterate_increment_toNat(n, BitVec::ofNat(total))))))
+    BitVec::add_eq_ofNat(n, a, b)
 }
 
 theorem toNat_add(n: Nat, a, b: BitVec(n),
     bounded: a.toNat() + b.toNat() < Nat::pow(2, n)):
     a.add(b).toNat() = a.toNat() + b.toNat() {
-    trans(rewrite(sym(add_ofNat_sum(n, a, b, bounded)), refl),
-        BitVec::toNat_ofNat(n, a.toNat() + b.toNat(), bounded))
+    trans(BitVec::toNat_add_mod(n, a, b), (a.toNat() + b.toNat()).mod_of_lt(Nat::pow(2, n), bounded))
 }
 
 // The machine's unsigned test decides the same strict bound as Nat.

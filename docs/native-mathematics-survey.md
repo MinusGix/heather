@@ -148,6 +148,12 @@ constant folding and strength reduction in FunctionIR passes, address
 arithmetic in a wrapping space (`rip_compose` is associativity in ℤ/2⁶⁴),
 and checksums and hashes in tools.
 
+**Landed (2026-11-09).** `issues/machine-words-modular-ring.md`: the congruence kit
+in `nat.hthr`/`int.hthr`, the modular half of `bitvec_nat` (P3 is
+`BitVec::ofNat_add`, P6 `BitVec::toNat_add_mod`), and `bitvec_ring`'s
+`CommRingOfInt<BitVec(n)>`, so P1 now proves (`=` or `≈`). `ring` does not
+yet read `-` at words (`issues/ring-carrier-subtraction-law.md`).
+
 ## 3. Transition systems and simulation diagrams
 
 **Today.** The reflexive-transitive closure of a step relation is defined
