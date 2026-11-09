@@ -339,6 +339,12 @@ inductive Req {
     // a type with no code. Only `h` is abstracted: a hypothesis about `x` is
     // not, so it speaks of the original `x` in the abstraction.
     Abstract(h: Handle, x: Expr),
+    // The type `h` with the goal's local `x` bound in front of it:
+    // `(y: X) → h[y/x]`, `X` the local's type. What `wlog` makes of a
+    // hypothesis about its points before abstracting them, so the cases
+    // receive it at their own points (Lean's `generalizing`). Refused for
+    // a term, and where `Abstract` is.
+    Revert(h: Handle, x: Expr),
 }
 
 inductive Never {}
@@ -380,6 +386,7 @@ fn Resp(r: Req) → Type {
         Repr(_) => Checked<Handle>,
         Spell(_) => Checked<Handle>,
         Abstract(_, _) => Checked<Handle>,
+        Revert(_, _) => Checked<Handle>,
     }
 }
 
@@ -472,6 +479,7 @@ fn unfold(h: Handle) → Tac<Checked<Handle>> { ask(Unfold(h)) }
 fn repr_of(ty: Handle) → Tac<Checked<Handle>> { ask(Repr(ty)) }
 fn next_spelling(e: Expr) → Tac<Checked<Handle>> { ask(Spell(e)) }
 fn abstract_over(h: Handle, x: Expr) → Tac<Checked<Handle>> { ask(Abstract(h, x)) }
+fn revert_into(h: Handle, x: Expr) → Tac<Checked<Handle>> { ask(Revert(h, x)) }
 
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
@@ -537,6 +545,7 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Repr(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Spell(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Abstract(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Revert(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -902,7 +911,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
 // 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`. 26: `Say`.
 // 27: `Fields`. 28: `Inj`. 29: `Absurd`. 30: `Unfold`. 31: `Repr`.
-// 32: `Spell`. 33: `Abstract`.
+// 32: `Spell`. 33: `Abstract`. 34: `Revert`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -940,6 +949,7 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Repr(_) => 31,
             Spell(_) => 32,
             Abstract(_, _) => 33,
+            Revert(_, _) => 34,
         },
     }
 }
@@ -963,6 +973,7 @@ fn host_lhs(t: Tac<Expr>) → Expr {
             Absurd(e, _) => e,
             Spell(e) => e,
             Abstract(_, x) => x,
+            Revert(_, x) => x,
             _ => NatLit(0),
         },
     }
@@ -997,6 +1008,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Unfold(h) => h.id,
             Repr(ty) => ty.id,
             Abstract(h, _) => h.id,
+            Revert(h, _) => h.id,
             _ => 0,
         },
     }

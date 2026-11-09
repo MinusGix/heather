@@ -418,6 +418,8 @@ pub enum Request {
     Spell(RExpr),
     /// A handle with a local of the goal's context abstracted out of it.
     Abstract(u64, RExpr),
+    /// A type handle with a local of the goal's context bound in front.
+    Revert(u64, RExpr),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -968,6 +970,11 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let mut budget = READ_BUDGET;
                 let x = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Abstract(self.nat_of("host_handle", vec![tree])?, x)))
+            }
+            34 => {
+                let mut budget = READ_BUDGET;
+                let x = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Revert(self.nat_of("host_handle", vec![tree])?, x)))
             }
             other => Err(format!("a request tree with tag {other}")),
         }
@@ -1886,6 +1893,7 @@ impl Elaborator {
                 Request::Repr(ty) => Answer::Handle(refusable(self.repr_request(run, ty))?),
                 Request::Spell(e) => Answer::Handle(refusable(self.spell_request(run, &e))?),
                 Request::Abstract(h, x) => Answer::Handle(refusable(self.abstract_request(run, h, &x))?),
+                Request::Revert(h, x) => Answer::Handle(refusable(self.revert_request(run, h, &x))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -2465,6 +2473,27 @@ impl Elaborator {
         let lam = Term::Lam { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(body) };
         let pi = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
         Ok(run.issue(at, Held::Term(lam, pi, Level::join(dom_level, level))))
+    }
+
+    /// `Revert(h, x)`: the type `(y: X) → h[y/x]` for `x` a local of the
+    /// goal's context of type `X`; what `wlog` makes of a hypothesis about
+    /// its points before abstracting them. As with `Abstract`, a later local
+    /// whose type mentions `x` keeps meaning the original one.
+    fn revert_request(&self, run: &mut Run, h: u64, x: &RExpr) -> Result<u64, Fault> {
+        let (at, held) = run.held(h)?;
+        let (ty, level) = match held {
+            Held::Type(t, l) => (run.committed_ty(&t).ok_or_else(|| Fault::Ill("it mentions a hole nothing has solved".into()))?, l),
+            Held::Term(..) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
+        };
+        let p = self.root_local_position(run, x)?;
+        let gamma = run.cx(at)?.gamma;
+        let n = gamma.len();
+        let entry = gamma.entries.get(p).expect("a local of the goal's context");
+        let dom_level = entry.level.clone();
+        let dom = Rc::new(entry.ty.shift_local((n - p) as u32));
+        let cod = ty.apply_local(&crate::generalize::rename(&gamma, &[p], 1));
+        let pi = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
+        Ok(run.issue(at, Held::Type(pi, Level::join(dom_level, level))))
     }
 
     /// The position in the goal's context of the local `x` names: a

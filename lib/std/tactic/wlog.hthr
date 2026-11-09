@@ -1,4 +1,5 @@
-// `wlog`: a symmetric case split proved once (issues/wlog-symmetric-cases.md).
+// `wlog`: a symmetric case split proved once (issues/wlog-symmetric-cases.md,
+// issues/wlog-sign-and-ordered-carriers.md).
 //
 // A proof that splits on `m.le_total(n)` and proves the same thing in both
 // arms with `m` and `n` exchanged proves it once instead:
@@ -11,31 +12,92 @@
 // The tactic abstracts `m` and `n` out of the goal into the motive
 // `P = λ a b => goal[a/m, b/n]` (the `Abstract` request) and applies the
 // carrier's lemma `T::wlog_le(P, swap, le, m, n)`, `T` the type `m` has
-// (`Nat::wlog_le`, `Int::wlog_le`; any carrier that states one in the same
+// (`Nat`, `Int`, `Rat`, `Dyadic`; any carrier that states one in the same
 // shape is served). The two cases are ordinary terms, written unannotated:
 // each is checked where the lemma puts it, at `(a, b: T) → P(a, b) →
 // P(b, a)` and `(a, b: T) → a <= b → P(a, b)` with `P`'s applications
 // contracted, so their binders read as the goal does.
 //
-// Only the goal is abstracted. A hypothesis of the context that mentions
-// `m` or `n` keeps speaking of the original points inside the cases; state
-// what the cases need in the goal (as `λ m n =>` under a `∀` does).
+// Two more shapes go the same way: `wlog_sign(x, neg, nn)`, a sign split
+// whose negative case is the nonnegative one through negation
+// (`T::wlog_nonneg`: `Int`, `Rat`), and `wlog_within(m, n, e, he, swap,
+// near)` at an order with no decision (`CReal::wlog_within`, by
+// cotransitivity, the main case below the second point up to `e`).
+//
+// Only the goal is abstracted, unless hypotheses are named: a hypothesis
+// that mentions the points keeps speaking of the original ones inside the
+// cases. `over := [h1, h2]` generalizes those too (Lean's `generalizing`,
+// the `Revert` request): the goal becomes `(h1: H1) → (h2: H2) → goal`
+// before the points are abstracted, so each case takes them at its own
+// points after its arguments, and the tactic applies the lemma's result to
+// `h1, h2`.
 
 import tactic;
 
-// `T::wlog_le` for the type `m` has, by its head's name. The type is read in
+// `T::<suffix>` for the type `x` has, by its head's name. The type is read in
 // head normal form: a point bound by a `λ` under a definition's `Π` has the
 // definition's spelling of its type (a code) until it is decoded.
-fn wlog_lemma(m: Expr) → Tac<Handle> {
-    infer(m).or_fail("wlog: the first point: ").bind(λ ty => whnf_or(ty).bind(view).bind(λ hd => match hd {
-        HGlobal(_, name, _) => resolve(name ++ "::wlog_le").or_fail("wlog: no `" ++ name ++ "::wlog_le` to split by: "),
-        _ => fail("wlog: the points' type is no named carrier with a `wlog_le`", [At(m, Tried("its type", "not a named type"))]),
+fn wlog_lemma(x: Expr, suffix: String) → Tac<Handle> {
+    infer(x).or_fail("wlog: the first point: ").bind(λ ty => whnf_or(ty).bind(view).bind(λ hd => match hd {
+        HGlobal(_, name, _) => resolve(name ++ "::" ++ suffix).or_fail("wlog: no `" ++ name ++ "::" ++ suffix ++ "` to split by: "),
+        _ => fail("wlog: the points' type is no named carrier with a `" ++ suffix ++ "`", [At(x, Tried("its type", "not a named type"))]),
     }))
 }
 
-fn wlog(m: Expr, n: Expr, swap: Expr, le: Expr) → Tac<Expr> {
-    goal().bind(λ g =>
-        abstract_over(g.target, n).or_fail("wlog: the goal over the second point: ").bind(λ pn =>
-            abstract_over(pn, m).or_fail("wlog: the goal over the first point: ").bind(λ p =>
-                wlog_lemma(m).bind(λ lemma => pure(App(App(App(App(App(Hd(lemma), Hd(p)), swap), le), m), n))))))
+// The type `t` with the hypotheses `over` bound in front of it, the first
+// outermost: the last is reverted first, so an earlier one its type mentions
+// is still a local when it is.
+fn wlog_reverted(t: Handle, over: List<Expr>) → Tac<Handle> {
+    match over {
+        Nil => pure(t),
+        Cons(h, rest) => wlog_reverted(t, rest).bind(λ inner => revert_into(inner, h).or_fail("wlog: a hypothesis to generalize: ")),
+    }
+}
+
+// `t` with the points abstracted, the first outermost: `λ a b => t[a/m, b/n]`.
+fn wlog_abstracted(t: Handle, points: List<Expr>) → Tac<Handle> {
+    match points {
+        Nil => pure(t),
+        Cons(x, rest) => wlog_abstracted(t, rest).bind(λ inner => abstract_over(inner, x).or_fail("wlog: the goal over a point: ")),
+    }
+}
+
+fn wlog_applied(f: Expr, args: List<Expr>) → Expr {
+    match args { Nil => f, Cons(a, rest) => wlog_applied(App(f, a), rest) }
+}
+
+// The common shape: `T::<suffix>(P, cases…, points…)` applied to the
+// generalized hypotheses, `P` the goal with `over` reverted and the points
+// abstracted, `T` the first point's carrier.
+fn wlog_by(suffix: String, points: List<Expr>, cases: List<Expr>, over: List<Expr>) → Tac<Expr> {
+    match points {
+        Nil => fail("wlog: no point to split on", []),
+        Cons(first, _) => goal().bind(λ g =>
+            wlog_reverted(g.target, over).bind(λ t =>
+                wlog_abstracted(t, points).bind(λ p =>
+                    wlog_lemma(first, suffix).bind(λ lemma =>
+                        pure(wlog_applied(wlog_applied(wlog_applied(App(Hd(lemma), Hd(p)), cases), points), over)))))),
+    }
+}
+
+// Symmetric in two points: the main case `le` may assume `a <= b`, and `swap`
+// proves the goal at `(b, a)` from the goal at `(a, b)`. `over` lists
+// hypotheses about the points the cases need at their own points (Lean's
+// `generalizing`): each case then takes them, in order, after its own
+// arguments.
+fn wlog(m: Expr, n: Expr, swap: Expr, le: Expr, over: List<Expr> := []) → Tac<Expr> {
+    wlog_by("wlog_le", [m, n], [swap, le], over)
+}
+
+// Symmetric through negation: the main case `nn` may assume `0 <= a`, and
+// `neg` proves the goal at `a` from the goal at `-a` (`T::wlog_nonneg`).
+fn wlog_sign(x: Expr, neg: Expr, nn: Expr, over: List<Expr> := []) → Tac<Expr> {
+    wlog_by("wlog_nonneg", [x], [neg, nn], over)
+}
+
+// Symmetric in two points of an order with no decision (`CReal`): given
+// `he: 0 < e`, the main case `near` may assume `a < b + e`
+// (`T::wlog_within`, by cotransitivity).
+fn wlog_within(m: Expr, n: Expr, e: Expr, he: Expr, swap: Expr, near: Expr, over: List<Expr> := []) → Tac<Expr> {
+    wlog_by("wlog_within", [m, n], [swap, e, he, near], over)
 }
