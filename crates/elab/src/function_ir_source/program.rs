@@ -665,7 +665,7 @@ struct Reader<'a, 'v> {
 
 impl<'a, 'v> Reader<'a, 'v> {
     fn new(elaborator: &'a Elaborator, arena: &'v ValueArena<'v>) -> Self {
-        Reader { psi: elaborator.psi(), arena, cache: heather_kernel::reduce::GlobalCache::new() }
+        Reader { psi: elaborator.psi(), arena, cache: heather_kernel::reduce::GlobalCache::for_psi(elaborator.psi()) }
     }
 
     fn global(&self, elaborator: &Elaborator, name: &str) -> Result<&'v TmClo<'v>, SourceError> {

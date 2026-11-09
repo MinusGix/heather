@@ -1,10 +1,10 @@
 ---
 title: Bind GlobalCache to its Ψ in the type
-status: open
+status: closed
 labels: [kernel,soundness,refactor,state-machine]
 area: kernel
 created: 2026-11-02
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 Bind a `GlobalCache` to the Ψ it was built for in the type, so a mismatched pair cannot be constructed.
@@ -29,3 +29,4 @@ Filed together from the implicit-state-machines survey (`docs/implicit-state-mac
 
 - 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`crates/kernel/src/reduce.rs`); [[elab-emits-normal-form-of-matched-type-argument]] (`docs/conversion-query-arena-pooling-design.md`); [[reducer-step-frame-size]] (`crates/kernel/src/reduce.rs`).
 - 2026-11-08: 2026-11-08: still open and accurate in the kernel second pass (`docs/kernel-implicit-state-review.md` §4): 17 `GlobalCache::new()` pairings in `typing.rs`, 2 in `conv.rs`. Addition: `Defs::transparent` is also "only sound at a computing layer" (`reduce.rs` ~192), enforced only at `Conv::defs`. The `ScopedGlobals` could be the only way to obtain a transparent `Defs`, as `scope.defs(layer)`, returning opaque at layer c. Same pairing shape one level down: [[value-memo-evaluation-mode]] (the value arena and its `Defs`).
+- 2026-11-09: done by identity: `GlobalCache::for_psi` records Ψ's bindings identity, and `Defs::transparent_cached` consults the cache only beside that Ψ (debug builds assert; release drops the memo). `GlobalCache::new` is gone, so every pairing, the elaborator's readers included, names its Ψ. A `ScopedGlobals` pair type was not needed for the guarantee. Unit tests in `reduce.rs` (`global_cache_tests`). The layer condition on `Defs::transparent` stays documented (`docs/kernel-implicit-state-review.md` §4).

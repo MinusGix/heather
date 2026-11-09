@@ -134,15 +134,29 @@ pub(crate) struct Sig {
 /// table keyed by an index that means different things in different scopes.
 /// An entry surviving a push would answer about the wrong binding: a
 /// soundness bug, not a slowdown.
-#[derive(Default)]
+///
+/// So a cache is built *for* a Ψ ([`GlobalCache::for_psi`]) and holds that
+/// Ψ's identity, and [`Defs::transparent_cached`] uses it only beside the
+/// same Ψ. Every change to Ψ's bindings gives them a fresh identity, so a
+/// cache paired with any other Ψ, by a caller that forgot to rebuild it, is
+/// not consulted (docs/kernel-implicit-state-review.md §4).
 pub struct GlobalCache {
+    /// The identity of the Ψ this cache is for ([`GlobalBindings`]' token).
+    psi: Rc<()>,
     bodies: std::cell::RefCell<Vec<Option<Rc<Term>>>>,
     sigs: std::cell::RefCell<Vec<Option<Rc<Sig>>>>,
 }
 
 impl GlobalCache {
-    pub fn new() -> GlobalCache {
-        GlobalCache::default()
+    /// An empty cache for `psi`.
+    pub fn for_psi(psi: &GlobalCtx) -> GlobalCache {
+        GlobalCache { psi: psi.bindings.identity(), bodies: Default::default(), sigs: Default::default() }
+    }
+
+    /// Whether this cache was built for `psi`.
+    #[inline]
+    pub fn belongs_to(&self, psi: &GlobalCtx) -> bool {
+        Rc::ptr_eq(&self.psi, psi.bindings.identity_ref())
     }
 
     fn body_or_insert(&self, v: GlobalVar, build: impl FnOnce() -> Term) -> Rc<Term> {
@@ -192,9 +206,13 @@ impl<'a> Defs<'a> {
     }
 
     /// [`Defs::transparent`] with a [`GlobalCache`] to memoize the rescoping
-    /// in. The cache must belong to this exact `psi`.
+    /// in. A cache built for another Ψ is not used: its entries would answer
+    /// about other bindings ([`GlobalCache`]). That is a caller's bug, so a
+    /// debug build stops on it; a release build only loses the memo.
     pub fn transparent_cached(psi: &'a GlobalCtx, cache: &'a GlobalCache) -> Defs<'a> {
-        Defs { psi: Some(psi), cache: Some(cache) }
+        let belongs = cache.belongs_to(psi);
+        debug_assert!(belongs, "a GlobalCache paired with a Ψ it was not built for");
+        Defs { psi: Some(psi), cache: belongs.then_some(cache) }
     }
 
     /// The body of `v`, rescoped from its Ψ-prefix into the ambient Ψ (the
@@ -3143,5 +3161,47 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::BoxTy(_)
         | Term::BoxTm(_) => true,
         _ => is_neutral_term(t),
+    }
+}
+
+#[cfg(test)]
+mod global_cache_tests {
+    use super::*;
+    use crate::layer::Layer;
+    use crate::term::{GlobalBinding, LocalCtx};
+
+    fn psi_with(n: u32) -> GlobalCtx {
+        GlobalCtx::new(vec![GlobalBinding::defined_tm(
+            LocalCtx::nil(),
+            Layer::Code,
+            Rc::new(Type::Nat),
+            Level::Zero,
+            Rc::new(Term::Succ(Rc::new(if n == 0 { Term::Zero } else { Term::Succ(Rc::new(Term::Zero)) }))),
+        )])
+    }
+
+    /// A cache answers only beside the Ψ it was built for: a clone shares
+    /// the identity, and a push or a rebuilt Ψ does not.
+    #[test]
+    fn a_cache_belongs_to_the_psi_it_was_built_for() {
+        let psi = psi_with(0);
+        let cache = GlobalCache::for_psi(&psi);
+        assert!(cache.belongs_to(&psi));
+        assert!(cache.belongs_to(&psi.clone()));
+        let mut pushed = psi.clone();
+        pushed.push(GlobalBinding::defined_tm(LocalCtx::nil(), Layer::Code, Rc::new(Type::Nat), Level::Zero, Rc::new(Term::Zero)));
+        assert!(!cache.belongs_to(&pushed));
+        assert!(!cache.belongs_to(&psi_with(0)), "same bindings, another Ψ");
+    }
+
+    /// Pairing a cache with another Ψ is a caller's bug: a debug build stops
+    /// on it rather than let the cache answer about other bindings.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "a GlobalCache paired with a Ψ it was not built for")]
+    fn a_mismatched_cache_is_refused() {
+        let (a, b) = (psi_with(0), psi_with(1));
+        let cache = GlobalCache::for_psi(&a);
+        let _ = Defs::transparent_cached(&b, &cache);
     }
 }

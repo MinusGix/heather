@@ -97,7 +97,7 @@ pub(crate) struct Reader<'a, 'v> {
 
 impl<'a, 'v> Reader<'a, 'v> {
     pub(crate) fn new(psi: &'a GlobalCtx, arena: &'v ValueArena<'v>) -> Reader<'a, 'v> {
-        Reader { psi, arena, cache: reduce::GlobalCache::new() }
+        Reader { psi, arena, cache: reduce::GlobalCache::for_psi(psi) }
     }
 
     /// A closed term as a sub-structure of the value graph — the root a read

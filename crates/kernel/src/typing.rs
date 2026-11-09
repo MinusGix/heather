@@ -308,7 +308,7 @@ fn check_global_bindings<'a>(
 fn binding_env(prefix: &GlobalCtx, univs: u32) -> Env {
     Env {
         psi: prefix.clone(),
-        cache: Rc::new(GlobalCache::new()),
+        cache: Rc::new(GlobalCache::for_psi(prefix)),
         gamma: LocalCtx::nil(),
         layer: Layer::Prog,
         univs,
@@ -382,7 +382,7 @@ pub fn check_local_ctx(
 ) -> R {
     let env = Env {
         psi: psi.clone(),
-        cache: Rc::new(GlobalCache::new()),
+        cache: Rc::new(GlobalCache::for_psi(psi)),
         gamma: LocalCtx::nil(),
         layer,
         univs,
@@ -405,7 +405,7 @@ pub fn check_type(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -426,7 +426,7 @@ pub fn check_type_profiled(
     _metrics: &ValueMetrics,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
@@ -444,7 +444,7 @@ pub fn infer_type(
     fuel: u64,
 ) -> R<Level> {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -466,7 +466,7 @@ pub fn check_term(
 ) -> R {
     crate::stats::check_terms(1);
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -489,7 +489,7 @@ pub fn check_term_profiled(
 ) -> R {
     crate::stats::check_terms(1);
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: Some(_metrics.clone()),
     };
@@ -508,7 +508,7 @@ pub fn infer_term(
     fuel: u64,
 ) -> R<(Type, Level)> {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -558,15 +558,14 @@ pub fn locate_refusal(
     fuel: u64,
 ) -> Option<RefusedSite> {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    let mut tc = Tc::new(fuel);
-    tc.refused = Some(RefCell::new(None));
+    let tc = Tc::with_mode(fuel, TcMode::Locate { slot: RefCell::new(None) });
     let verdict = tc.tm_check_ty(&env, &Rc::new(t.clone()), ty, level);
     verdict.err()?;
-    tc.refused.and_then(RefCell::into_inner)
+    tc.mode.into_refused()
 }
 
 /// [`locate_refusal`] for [`check_type`]: the innermost *term* check under
@@ -581,15 +580,14 @@ pub fn locate_type_refusal(
     fuel: u64,
 ) -> Option<RefusedSite> {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
-    let mut tc = Tc::new(fuel);
-    tc.refused = Some(RefCell::new(None));
+    let tc = Tc::with_mode(fuel, TcMode::Locate { slot: RefCell::new(None) });
     let verdict = tc.ty_check_syn(&env, ty, level);
     verdict.err()?;
-    tc.refused.and_then(RefCell::into_inner)
+    tc.mode.into_refused()
 }
 
 /// A checked spelling's former, as the eager checker viewed it: what the
@@ -721,12 +719,10 @@ fn spell_checked(
         if crate::subst::count_checked_spellings(&t, all) == 0 {
             return Ok(t);
         }
-        let mut tc = Tc::eager(fuel);
-        tc.spellings = Some(RefCell::new(HashMap::new()));
-        tc.spell_all = all;
+        let tc = Tc::with_mode(fuel, TcMode::Spell { all, record: RefCell::new(HashMap::new()) });
         let env = Env {
             psi: psi.clone(),
-            cache: Rc::new(GlobalCache::new()),
+            cache: Rc::new(GlobalCache::for_psi(psi)),
             gamma: gamma.clone(),
             layer,
             univs,
@@ -735,7 +731,7 @@ fn spell_checked(
             value_metrics: None,
         };
         tc.tm_check_ty(&env, &t, ty, level)?;
-        let mut spelled = tc.spellings.take().expect("set above").into_inner();
+        let mut spelled = tc.mode.into_spellings();
         share_spelled(&mut spelled);
         let (next, replaced) = crate::subst::rebuild_checked_spellings(&t, &spelled, base, all);
         // `replaced` counts the nodes unshared for an ambiguous record too:
@@ -795,12 +791,10 @@ fn spell_checked_ty(
         if crate::subst::count_checked_spellings_ty(&t, all) == 0 {
             return Ok(t);
         }
-        let mut tc = Tc::eager(fuel);
-        tc.spellings = Some(RefCell::new(HashMap::new()));
-        tc.spell_all = all;
+        let tc = Tc::with_mode(fuel, TcMode::Spell { all, record: RefCell::new(HashMap::new()) });
         let env = Env {
             psi: psi.clone(),
-            cache: Rc::new(GlobalCache::new()),
+            cache: Rc::new(GlobalCache::for_psi(psi)),
             gamma: gamma.clone(),
             layer,
             univs,
@@ -809,7 +803,7 @@ fn spell_checked_ty(
             value_metrics: None,
         };
         tc.ty_check(&env, &t, level)?;
-        let mut spelled = tc.spellings.take().expect("set above").into_inner();
+        let mut spelled = tc.mode.into_spellings();
         share_spelled(&mut spelled);
         let (next, replaced) = crate::subst::rebuild_checked_spellings_ty(&t, &spelled, base, all);
         // `replaced` counts the nodes unshared for an ambiguous record too:
@@ -930,7 +924,7 @@ pub mod oracle {
     fn oracle_env(psi: &GlobalCtx, univs: u32, layer: Layer, gamma: &LocalCtx) -> Env {
         Env {
             psi: psi.clone(),
-            cache: Rc::new(GlobalCache::new()),
+            cache: Rc::new(GlobalCache::for_psi(psi)),
             gamma: gamma.clone(),
             layer,
             univs,
@@ -956,7 +950,7 @@ pub fn check_local_subst(
     fuel: u64,
 ) -> R {
     let env = Env {
-        psi: psi.clone(), cache: Rc::new(GlobalCache::new()), gamma: gamma.clone(), layer, univs, under_box: false,
+        psi: psi.clone(), cache: Rc::new(GlobalCache::for_psi(psi)), gamma: gamma.clone(), layer, univs, under_box: false,
         #[cfg(feature = "value-metrics")]
         value_metrics: None,
     };
@@ -1058,13 +1052,15 @@ impl Env {
         let tg = globals.len() as u32;
         let mut psi = shift_univ_psi(&self.psi, tu);
         psi.extend(globals);
+        // Ψ changed, so a cached entry's index denotes a different binding:
+        // keeping the old cache here — body or signature alike — would be a
+        // soundness bug, not a slowdown (and `Defs::transparent_cached` would
+        // not consult it). Conversion's `push_tele` rebuilds for the same
+        // reason.
+        let cache = Rc::new(GlobalCache::for_psi(&psi));
         Env {
             psi,
-            // Ψ changed, so a cached entry's index denotes a different
-            // binding: keeping the old cache here — body or signature alike —
-            // would be a soundness bug, not a slowdown. Conversion's
-            // `push_tele` rebuilds for the same reason.
-            cache: Rc::new(GlobalCache::new()),
+            cache,
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
             univs: self.univs + tu,
@@ -1112,28 +1108,8 @@ fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
 struct Tc {
     /// Per-conversion / per-normalization budget (see module docs).
     fuel: u64,
-    /// **The oracle mode** (`docs/intro-by-type-design.md` §3.6). Under it
-    /// an [`ITy::Sel`] is spelled the moment it would be formed and the five
-    /// `@` rules view their annotation through the rewriter, so the checker
-    /// is the one that existed before descriptions did: today's answer, at
-    /// today's cost, on the same arms. That is what makes
-    /// `tests/typing_differential.rs` test *only* the new thing — that
-    /// evaluating a description and rewriting it agree.
-    materialize_eagerly: bool,
-    /// The quote-boundary translation's record ([`spell_checked_in_code`]):
-    /// at each checked spelling the eager checker visits, the components of
-    /// the former it viewed, keyed by the node's address and Γ's length.
-    /// `None` on every checker but that one.
-    ///
-    /// The key names a node, not an occurrence: a node the term shares
-    /// between two places at the same Γ length can be viewed at two
-    /// different formers (a motive's `inl@`, and the same node in a branch
-    /// annotation where the scrutinee is a constructor). Such a node's entry
-    /// is `None`, and the rebuild unshares it for the next pass.
-    spellings: Option<RefCell<HashMap<(usize, u32), Option<Spelled>>>>,
-    /// Whether `spellings` records every checked spelling, or only the
-    /// introductions the export spells ([`spell_checked_for_export`]).
-    spell_all: bool,
+    /// Which of its four checkers this is ([`TcMode`]).
+    mode: TcMode,
     /// Successful conversions whose syntax has different outer constructors.
     /// The cache lives for one public kernel gate; identity keys own every `Rc`
     /// they identify, so allocator reuse cannot create an aliasing key.
@@ -1186,12 +1162,6 @@ struct Tc {
     /// the two above (issues/quoted-component-traversal-remainder.md).
     #[cfg(feature = "value-metrics")]
     query_trace_seen: Cell<u64>,
-    /// [`locate_refusal`]'s record: the innermost check that failed, kept
-    /// the first time an error passes through [`Tc::tm_check`]. `None` on
-    /// every checker but that one, so a gate that succeeds — every gate the
-    /// suite runs but its refusals — pays one untaken branch per failing
-    /// check and nothing per passing one.
-    refused: Option<RefCell<Option<RefusedSite>>>,
 }
 
 /// `HEATHER_CONV_QUERY_TRACE`'s parsed setting: the item to trace and the
@@ -1555,6 +1525,101 @@ fn owned_expected(ty: ITyRef) -> ITy {
     }
 }
 
+/// The kernel checker's four modes (issues/kernel-checker-mode-enum.md).
+/// One value, so the arms ask a named question ([`TcMode::eager`],
+/// [`TcMode::spellings`], [`TcMode::refused_slot`]) and the twelve
+/// combinations of the four fields it replaced that no checker was built
+/// with cannot be built.
+enum TcMode {
+    /// The gate: descriptions stay lazy, every memo is used.
+    Gate,
+    /// The differential oracle ([`Tc::eager`]): the gate's rules, with
+    /// every description materialized at once.
+    Oracle,
+    /// The quote-boundary translation ([`spell_checked_in_code`],
+    /// [`spell_checked_for_export`]): the oracle, recording the former it
+    /// viewed at each checked spelling.
+    Spell {
+        /// Whether every checked spelling is recorded, or only the
+        /// introductions the export spells.
+        all: bool,
+        /// At each checked spelling the checker visits, the components of
+        /// the former it viewed, keyed by the node's address and Γ's
+        /// length.
+        ///
+        /// The key names a node, not an occurrence: a node the term shares
+        /// between two places at the same Γ length can be viewed at two
+        /// different formers (a motive's `inl@`, and the same node in a
+        /// branch annotation where the scrutinee is a constructor). Such a
+        /// node's entry is `None`, and the rebuild unshares it for the next
+        /// pass.
+        record: RefCell<HashMap<(usize, u32), Option<Spelled>>>,
+    },
+    /// [`locate_refusal`]'s checker: the gate, keeping the innermost check
+    /// that failed, the first time an error passes through
+    /// [`Tc::tm_check`]. It bypasses the typing memo
+    /// ([`Tc::tm_check_noting`]). A gate that succeeds, every gate the
+    /// suite runs but its refusals, pays one untaken branch per failing
+    /// check and nothing per passing one.
+    Locate { slot: RefCell<Option<RefusedSite>> },
+}
+
+impl TcMode {
+    /// Whether descriptions are materialized at once rather than kept
+    /// lazy (**the oracle mode**, `docs/intro-by-type-design.md` §3.6).
+    ///
+    /// Under it an [`ITy::Sel`] is spelled the moment it would be formed,
+    /// and the five `@` rules view their annotation through the rewriter,
+    /// so the checker is the one that existed before descriptions did. That is what makes `tests/typing_differential.rs`
+    /// test *only* the new thing — that evaluating a description and
+    /// rewriting it agree.
+    #[inline]
+    fn eager(&self) -> bool {
+        matches!(self, TcMode::Oracle | TcMode::Spell { .. })
+    }
+
+    /// The spelling record, on the quote-boundary translation's checker.
+    #[inline]
+    fn spellings(&self) -> Option<&RefCell<HashMap<(usize, u32), Option<Spelled>>>> {
+        match self {
+            TcMode::Spell { record, .. } => Some(record),
+            _ => None,
+        }
+    }
+
+    /// Whether every checked spelling is recorded; `true` off the spelling
+    /// checker, where nothing is.
+    #[inline]
+    fn spell_all(&self) -> bool {
+        !matches!(self, TcMode::Spell { all: false, .. })
+    }
+
+    /// [`locate_refusal`]'s slot, on its checker.
+    #[inline]
+    fn refused_slot(&self) -> Option<&RefCell<Option<RefusedSite>>> {
+        match self {
+            TcMode::Locate { slot } => Some(slot),
+            _ => None,
+        }
+    }
+
+    /// The spelling record, taken out of a spelling checker.
+    fn into_spellings(self) -> HashMap<(usize, u32), Option<Spelled>> {
+        match self {
+            TcMode::Spell { record, .. } => record.into_inner(),
+            _ => panic!("not a spelling checker"),
+        }
+    }
+
+    /// The refusal found, taken out of a locating checker.
+    fn into_refused(self) -> Option<RefusedSite> {
+        match self {
+            TcMode::Locate { slot } => slot.into_inner(),
+            _ => None,
+        }
+    }
+}
+
 /// How many expected types one node keeps per scope. A node checked
 /// against more distinct types than this in one scope pays from then on, as
 /// it did before the memo; the bound is a count, so which checks hit stays
@@ -1567,20 +1632,19 @@ const STRENGTHEN_MAX: u32 = 8;
 
 impl Tc {
     fn new(fuel: u64) -> Tc {
-        Tc::with_mode(fuel, false)
+        Tc::with_mode(fuel, TcMode::Gate)
     }
 
-    /// The differential oracle's checker: [`Tc::new`] with §3.6's mode bit.
+    /// The differential oracle's checker: [`Tc::new`] with §3.6's eager
+    /// materialization ([`TcMode::eager`]).
     fn eager(fuel: u64) -> Tc {
-        Tc::with_mode(fuel, true)
+        Tc::with_mode(fuel, TcMode::Oracle)
     }
 
-    fn with_mode(fuel: u64, materialize_eagerly: bool) -> Tc {
+    fn with_mode(fuel: u64, mode: TcMode) -> Tc {
         Tc {
             fuel,
-            materialize_eagerly,
-            spellings: None,
-            spell_all: true,
+            mode,
             conv_memo: RefCell::new(HashMap::new()),
             conv_memo_entries: Cell::new(0),
             closed_convs: RefCell::new(HashMap::new()),
@@ -1597,7 +1661,6 @@ impl Tc {
             diag_term: RefCell::new(None),
             #[cfg(feature = "value-metrics")]
             query_trace_seen: Cell::new(0),
-            refused: None,
         }
     }
 
@@ -1621,7 +1684,7 @@ impl Tc {
     #[cold]
     #[inline(never)]
     fn note_refused(&self, env: &Env, t: &Term, expected: ITyRef, inferred: Option<&Type>, l: &Level, err: TypeError) {
-        let Some(slot) = self.refused.as_ref() else { return };
+        let Some(slot) = self.mode.refused_slot() else { return };
         let mut slot = slot.borrow_mut();
         if slot.is_some() {
             return;
@@ -2145,7 +2208,7 @@ impl Tc {
     /// through: the rewriter unless it is a selection (§3.3).
     fn view_expected(&self, env: &Env, t: ITyRef) -> R<TyForm> {
         match t.as_ity() {
-            Some(t) => self.view(env, t, !t.is_syn() && !self.materialize_eagerly),
+            Some(t) => self.view(env, t, !t.is_syn() && !self.mode.eager()),
             // A bare spelling is syntax, so `!is_syn()` is false and the view
             // is the syntactic one — reached without building an `ITy`.
             None => self.view_syn(env, t),
@@ -2157,7 +2220,7 @@ impl Tc {
     /// form.
     fn view_at(&self, env: &Env, t: &Rc<Type>) -> R<(ITy, TyForm)> {
         let t = ITy::Syn(Rc::clone(t));
-        let form = self.view(env, &t, !self.materialize_eagerly)?;
+        let form = self.view(env, &t, !self.mode.eager())?;
         Ok((t, form))
     }
 
@@ -2166,7 +2229,7 @@ impl Tc {
     /// under the eager mode). The projections' receiver type is the case
     /// that is a spelling: the type a `pair@^{T}` inferred, which is `T`.
     fn view_v(&self, env: &Env, t: &ITy) -> R<TyForm> {
-        self.view(env, t, !self.materialize_eagerly)
+        self.view(env, t, !self.mode.eager())
     }
 
     /// Keep `form`'s components for `t` when this checker is the quote
@@ -2174,8 +2237,8 @@ impl Tc {
     /// views are syntax, so a component that is still a selection means the
     /// translator is not in eager mode, and nothing is kept.
     fn record(&self, env: &Env, t: &Term, form: &TyForm) {
-        let Some(rec) = &self.spellings else { return };
-        if !self.spell_all && matches!(t, Term::FstAt { .. } | Term::SndAt { .. } | Term::AppAt { .. }) {
+        let Some(rec) = self.mode.spellings() else { return };
+        if !self.mode.spell_all() && matches!(t, Term::FstAt { .. } | Term::SndAt { .. } | Term::AppAt { .. }) {
             return;
         }
         let syn = |t: &ITy| match t {
@@ -2259,7 +2322,7 @@ impl Tc {
     /// shared by the family type at every binder depth of an eliminator's
     /// step, and its premises are judged once per gate, not per occurrence.
     fn iwf_sig_wf(&self, env: &Env, sig: &Rc<IWfSig>) -> R {
-        if self.spellings.is_some() || !crate::bounds::iwf_sig_locally_closed(sig) {
+        if self.mode.spellings().is_some() || !crate::bounds::iwf_sig_locally_closed(sig) {
             return self.iwf_sig_premises(env, sig);
         }
         let key = SigScope::of(env, sig);
@@ -2407,7 +2470,7 @@ impl Tc {
     /// closed-type memo (module docs, §The typing memo): a locally closed
     /// type's level is inferred once per gate, whatever Γ it recurs in.
     fn ty_check(&self, env: &Env, t: &Rc<Type>, l: &Level) -> R {
-        if self.spellings.is_some() || !closed_memo_candidate(t) {
+        if self.mode.spellings().is_some() || !closed_memo_candidate(t) {
             return self.ty_check_syn(env, t, l);
         }
         let key = TyScope::of(env, t);
@@ -2728,10 +2791,10 @@ impl Tc {
     fn tm_check_here(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "check");
-        if self.refused.is_some() {
+        if self.mode.refused_slot().is_some() {
             return self.tm_check_noting(env, t, ty, l);
         }
-        if self.spellings.is_none() && check_memoized(t) {
+        if self.mode.spellings().is_none() && check_memoized(t) {
             return self.tm_check_memo(env, t, ty, l);
         }
         self.tm_check_inner(env, t, ty, l)
@@ -2771,7 +2834,7 @@ impl Tc {
     #[cold]
     #[inline(never)]
     fn tm_check_noting(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
-        let verdict = if self.spellings.is_none() && check_memoized(t) {
+        let verdict = if self.mode.spellings().is_none() && check_memoized(t) {
             self.tm_check_memo(env, t, ty, l)
         } else {
             self.tm_check_inner(env, t, ty, l)
@@ -2929,7 +2992,7 @@ impl Tc {
         // under (`issues/mutual-group-recursion-gate-cost.md`). Not while
         // recording spellings: the domain's own checked spellings are
         // recorded by judging it.
-        if self.spellings.is_some() || ps.as_syn().is_none_or(|p| p != &**dom) {
+        if self.mode.spellings().is_some() || ps.as_syn().is_none_or(|p| p != &**dom) {
             self.ty_check(env, dom, dom_level)?;
             self.conv_ty(env, ps.as_ref(), ITyRef::Syn(dom), dom_level)?;
         }
@@ -3033,7 +3096,7 @@ impl Tc {
                 {
                     *self.diag_term.borrow_mut() = Some((**t).clone());
                 }
-                if self.refused.is_some() {
+                if self.mode.refused_slot().is_some() {
                     return self.conv_ty_noting(env, t, ty, &inferred, l);
                 }
                 self.conv_ty(env, ty, inferred.as_ref(), l)
@@ -3056,7 +3119,7 @@ impl Tc {
     fn tm_infer(&self, env: &Env, t: &Rc<Term>) -> R<(ITy, Level)> {
         #[cfg(feature = "value-metrics")]
         let _frame = self.diag_enter(t, "infer");
-        if self.spellings.is_none() && infer_memoized(t) {
+        if self.mode.spellings().is_none() && infer_memoized(t) {
             return self.tm_infer_memo(env, t);
         }
         self.tm_infer_fresh(env, t)
@@ -3215,7 +3278,7 @@ impl Tc {
             // first draft's `fst@(T; p)` unnecessary: `T` was always the type
             // `p` already infers.
             Term::FstAt { pair } => {
-                if !self.materialize_eagerly {
+                if !self.mode.eager() {
                     return self.projection_at_spine(env, t);
                 }
                 self.checked_spelling_admitted(env)?;
@@ -3232,7 +3295,7 @@ impl Tc {
             // spelling again, so the inferred type stays source-shaped even
             // though `U` itself came out of the view.
             Term::SndAt { pair } => {
-                if !self.materialize_eagerly {
+                if !self.mode.eager() {
                     return self.projection_at_spine(env, t);
                 }
                 self.checked_spelling_admitted(env)?;
@@ -3332,7 +3395,7 @@ impl Tc {
         let (mut ty, mut level) = self.tm_infer(env, head)?;
         let mut pending: Option<(Rc<Type>, LocalSubst)> = None;
         for &(node, arg) in spine.iter().rev() {
-            if self.spellings.is_none() {
+            if self.mode.spellings().is_none() {
                 let pi = match &pending {
                     Some((base, _)) => Some(Rc::clone(base)),
                     None => match ty.as_syn() {
@@ -3370,7 +3433,7 @@ impl Tc {
     /// One `app@` node `t = app@(f; arg)`, `f` inferred as `fun_ty`.
     fn app_at_node(&self, env: &Env, t: &Term, fun_ty: ITy, arg: &Rc<Term>) -> R<(ITy, Level)> {
         if let Some(Type::Pi { dom_level, cod_level, dom, cod }) = fun_ty.as_syn() {
-            if let Some(rec) = self.spellings.as_ref().filter(|_| self.spell_all) {
+            if let Some(rec) = self.mode.spellings().filter(|_| self.mode.spell_all()) {
                 keep_spelled(
                     rec,
                     (t as *const Term as usize, env.gamma.entries.len() as u32),
@@ -3440,7 +3503,7 @@ impl Tc {
                 Ok(())
             }
             Term::InlAt { ty: None, .. } | Term::InrAt { ty: None, .. }
-                if !self.materialize_eagerly && self.spellings.is_none() =>
+                if !self.mode.eager() && self.mode.spellings().is_none() =>
             {
                 self.injection_at_spine(env, t, ty, l)
             }
@@ -4978,8 +5041,8 @@ mod memo_tests {
 
     fn env(psi: GlobalCtx) -> Env {
         Env {
+            cache: Rc::new(GlobalCache::for_psi(&psi)),
             psi,
-            cache: Rc::new(GlobalCache::new()),
             gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs: 0,
@@ -5228,9 +5291,10 @@ mod typing_memo_tests {
 
     /// Γ = `f : Nat → Nat → result`.
     fn env_with_f(result: Rc<Type>) -> Env {
+        let psi = GlobalCtx::default();
         Env {
-            psi: GlobalCtx::default(),
-            cache: Rc::new(GlobalCache::new()),
+            cache: Rc::new(GlobalCache::for_psi(&psi)),
+            psi,
             gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs: 0,
