@@ -655,7 +655,7 @@ impl<'v> Env<'v> {
         gamma: &LocalCtx,
         layer: Layer,
     ) -> Env<'v> {
-        Env::new_with(arena, psi, gamma, layer, Rc::new(GlobalCache::new()))
+        Env::new_with(arena, psi, gamma, layer, Rc::new(GlobalCache::for_psi(psi)))
     }
 
     /// As [`Env::new`], but over a [`GlobalCache`] the caller keeps: the checker
@@ -726,6 +726,7 @@ impl<'v> Env<'v> {
         let tg = globals.len() as u32;
         let mut psi = shift_univ_psi(&self.psi, tu);
         psi.extend(globals);
+        let cache = Rc::new(GlobalCache::for_psi(&psi));
         let psi = Rc::new(psi);
         let o = Outer { arena: self.arena, univs: tu, globals: tg };
         let mut vtys = TyEnv::empty();
@@ -735,7 +736,7 @@ impl<'v> Env<'v> {
         Env {
             arena: self.arena,
             psi,
-            cache: Rc::new(GlobalCache::new()),
+            cache,
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
             rho: value::shift::env(&self.rho, o),

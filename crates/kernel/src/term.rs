@@ -2200,6 +2200,11 @@ impl GlobalBindings {
         Rc::clone(&self.identity)
     }
 
+    /// [`GlobalBindings::identity`] without taking a reference count.
+    pub(crate) fn identity_ref(&self) -> &Rc<()> {
+        &self.identity
+    }
+
     /// [`GlobalBindings::identity`]'s address, without the token. A key
     /// built from it must hold the token alongside.
     pub(crate) fn identity_addr(&self) -> usize {

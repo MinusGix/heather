@@ -23,8 +23,8 @@ time come last.
 | 1 | The value memo does not record the mode a value was forced in | `value.rs` `ValueArena`, `eval.rs` `Eval::transparent` | **a real defect** (#459: a convertible interval verdict refused) | completeness, history dependence | the #459 path fixed (§1: withheld-call closedness); (a) still worth doing | [[value-memo-evaluation-mode]] |
 | 2 | Deferred-premise queues: two hand-kept copies of one discipline | `conv.rs` `Conv` (8 fields), `typing.rs` `Tc` (4 fields) | **two defects while it was built** (deep-term-walks §3.3, §3.4) | soundness (a provisional memo entry kept) | **done** (§2, `premises.rs`) | [[kernel-premise-queue-type]] |
 | 3 | Typing memo keys copy `Env`'s fields by hand | `typing.rs` `Scope`, `TyScope`, `SigScope` | none found | soundness (a stale memo hit) | **done** (§3, `Ambient`) | [[typing-memo-scope-key]] |
-| 4 | Ψ-bound `GlobalCache`, plus `Defs`' layer condition | `reduce.rs` `Defs`, `GlobalCache` | none found | soundness | yes (already filed) | [[kernel-psi-bound-cache]] |
-| 5 | The checker's mode | `typing.rs` `Tc` | none found | wrong mode's shortcut | yes, modest (already filed) | [[kernel-checker-mode-enum]] |
+| 4 | Ψ-bound `GlobalCache`, plus `Defs`' layer condition | `reduce.rs` `Defs`, `GlobalCache` | none found | soundness | **done** (§4, cache holds its Ψ's identity) | [[kernel-psi-bound-cache]] |
+| 5 | The checker's mode | `typing.rs` `Tc` | none found | wrong mode's shortcut | **done** (§5, `TcMode`) | [[kernel-checker-mode-enum]] |
 | 6 | Observation recordings: one guarded, one not | `unseal.rs`, `withheld.rs` | none yet (the second has no reader) | stale incremental cache | **done** (§6, `recording.rs`) | [[kernel-observation-recording-guard]] |
 | 7 | `Debug`'s budget state in three thread-locals | `fmt.rs` `REMAINING`/`DEPTH`/`EXACT` | **a latent panic, reproduced** (§7) | the `{:?}`-is-safe rail | **done** (§7, `FmtState`) | [[fmt-budget-state-nesting]] |
 | 8 | Seven hand-paired native-depth counters | see §8 | none | time only | no | — |
@@ -311,6 +311,18 @@ the issue proposes could also be the only way to get a transparent `Defs`,
 taking the layer: `scope.defs(layer)` returns opaque at layer c. Logged on
 the issue.
 
+**Done (2026-11-09), by identity rather than a new pair type.** A
+`GlobalCache` is built only by `GlobalCache::for_psi(psi)` and keeps that
+Ψ's bindings identity, which every change to the bindings refreshes.
+`Defs::transparent_cached` consults the cache only beside that same Ψ; a
+mismatched pair is a caller's bug, which a debug build stops on and a
+release build answers without the memo. That holds for every pairing,
+the elaborator's `Reader`s included, without threading a new
+`ScopedGlobals` type through the seventeen checker scopes and two
+conversion ones. The layer condition on `Defs::transparent` is unchanged:
+conversion enforces it at `Conv::defs`, the checker only asks at
+`typeof(i)`, and the elaborator's readers run at computing layers.
+
 ## 5. The checker's mode (filed; unchanged)
 
 [[kernel-checker-mode-enum]] stands. Line numbers moved (`Tc` is now at
@@ -321,6 +333,13 @@ the typing memo by routing every check through `tm_check_noting`. That is
 one reason a Locate checker can share §2's queue without the memo
 take-back question arising. With `TcMode`, that becomes `mode.memo_allowed()`
 rather than a field test placed before the memo test.
+
+**Done (2026-11-09).** `typing.rs` `enum TcMode { Gate, Oracle, Spell {
+all, record }, Locate { slot } }` replaces `materialize_eagerly`,
+`spellings`, `spell_all` and `refused`. Arms ask `mode.eager()`,
+`mode.spellings()`, `mode.spell_all()` and `mode.refused_slot()`; the
+spelling and locating checkers are built by `Tc::with_mode` with their
+record, not by field writes after `Tc::eager`/`Tc::new`.
 
 ## 6. Observation recordings: one guarded, one not
 
