@@ -37,7 +37,6 @@ import logic;
 import nat;
 import option;
 import omega;
-import tactic;
 import set_tactic;
 
 // ---------------------------------------------------------------------------
@@ -102,17 +101,9 @@ theorem List::mem_filter_of<A>(self xs: List<A>, p: A → Bool, a: A, keep: p(a)
     }
 }
 
-theorem List::union_left(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, a)): Mem(i, a.union(b)) {
-    a.mem_append_l(b.filter(λ (id: Nat) => absent(id, a)), i, m)
-}
+theorem List::union_left(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, a)): Mem(i, a.union(b)) { by sets() }
 
-theorem List::union_right(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, b)): Mem(i, a.union(b)) {
-    match none: absent(i, a) {
-        True => a.mem_append_r(b.filter(λ (id: Nat) => absent(id, a)), i,
-            b.mem_filter_of(λ (id: Nat) => absent(id, a), i, none, m)),
-        False => a.union_left(b, i, absent_false_mem(i, a, none)),
-    }
-}
+theorem List::union_right(self a: List<Nat>, b: List<Nat>, i: Nat, m: Mem(i, b)): Mem(i, a.union(b)) { by sets() }
 
 // A word of `out` other than the one written is live before the write.
 theorem live_before_keeps(reads: List<Nat>, written: Nat, out: List<Nat>, i: Nat, m: Mem(i, out), ne: i ≠ written):

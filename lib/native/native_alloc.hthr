@@ -39,7 +39,6 @@ import char;
 import string;
 import set_solve;
 import set_ops;
-import tactic;
 import set_tactic;
 
 // ---------------------------------------------------------------------------
@@ -926,6 +925,17 @@ theorem List::minus_set_law(): SetLaw<Nat>(List::minus, SetDiff) {
         })
 }
 
+// `absent(x, s)` is `x ∉ s`, so `sets` reads it (and `holds`, which is
+// `!absent`) as membership.
+theorem absent_set_law(): SetBitLaw<Nat>(absent, True) {
+    λ x s => match none: absent(x, s) {
+        True => And(λ (no: False = True) => absurd(no),
+            λ _ (m: Mem(x, s)) => absent_mem(x, s, j(sym(none), λ c _ => c.IsTrue(), trivial), x, m, refl)),
+        False => And(λ _ => absent_false_mem(x, s, none), λ (no: True = False) => absurd(no)),
+    }
+}
+
+register def absent_set_entry: SetBitEntry = SetBitEntry(name_of(absent), name_of(absent_set_law), True, 0);
 register def union_set_entry: SetOpEntry = SetOpEntry(name_of(List::union), SetOr, name_of(List::union_set_law), 0);
 register def minus_set_entry: SetOpEntry = SetOpEntry(name_of(List::minus), SetDiff, name_of(List::minus_set_law), 0);
 

@@ -36,8 +36,8 @@ import list;
 import logic;
 import nat;
 import option;
-import tactic;
 import grind;
+import set_tactic;
 
 // ---------------------------------------------------------------------------
 // The meaning
@@ -451,15 +451,7 @@ theorem absent_ports_append(x: Nat, a, b: List<Port>, h: absent(x, port_ids(a ++
     absent_append(x, port_ids(a), port_ids(b), j(port_ids_append(a, b), λ l _ => absent(x, l).IsTrue(), h))
 }
 
-theorem absent_append_intro(x: Nat, xs, ys: List<Nat>): absent(x, xs).IsTrue() → absent(x, ys).IsTrue() → absent(x, xs ++ ys).IsTrue() {
-    match xs {
-        Nil => λ _ b => b,
-        Cons(y, rest) => λ a b => {
-            let parts = Bool::is_true_and(x.differs(y), absent(x, rest), a);
-            Bool::is_true_and_intro(x.differs(y), absent(x, rest ++ ys), parts.left, absent_append_intro(x, rest, ys, parts.right, b))
-        },
-    }
-}
+theorem absent_append_intro(x: Nat, xs, ys: List<Nat>): absent(x, xs).IsTrue() → absent(x, ys).IsTrue() → absent(x, xs ++ ys).IsTrue() { by sets() }
 
 theorem Nat::matches_false(self a: Nat, b: Nat, ne: a ≠ b): a.matches(b) = False {
     match a.eq_dec(b) {
@@ -468,12 +460,7 @@ theorem Nat::matches_false(self a: Nat, b: Nat, ne: a ≠ b): a.matches(b) = Fal
     }
 }
 
-theorem List::holds_false_absent(self ids: List<Nat>, x: Nat, h: ids.holds(x) = False): absent(x, ids).IsTrue() {
-    (match absent(x, ids) as λ b => (!b) = False → b.IsTrue() {
-        True => λ _ => trivial,
-        False => λ bad => absurd(bad),
-    })(h)
-}
+theorem List::holds_false_absent(self ids: List<Nat>, x: Nat, h: ids.holds(x) = False): absent(x, ids).IsTrue() { by sets() }
 
 // A run leaves every id it wrote no port of as it was.
 theorem StructuredRegion::run_frame(self region: StructuredRegion, call: Answers()): (values: Valuation()) → (buffers: Buffers()) → (w, x: Nat) →

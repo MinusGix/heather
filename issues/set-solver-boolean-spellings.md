@@ -34,3 +34,7 @@ Cost shape to keep in mind: the verdict enumerates 2^(atoms + elements +
 predicates), so a literal list read element by element is the expensive
 case; the reader keeps a call whose definition is a literal or a `match`
 as one atom.
+
+## Log
+
+- 2026-11-09: Spellings done: `SetBitLaw`/`SetBitEntry` (a Boolean that reflects membership, or whose negation does); native registers `absent` (`absent_set_law` in native_alloc), and `holds` reads through its definition as `!absent`. `sets` reads `b = True`, `b = False`, `b.IsTrue()` as hypotheses and goals, `x = e` hypotheses (facts about `e` move to `x`), `∧` hypotheses by halves, and splits `∧`/record goals (`Clear`). `clear_of`, `absent_append_intro`, `holds_false_absent`, `union_left/right`, `mem_minus_nil/cons` are now `by sets()`. Two fixes on the way: `by` finds the tactic protocol through the import closure (a native module importing `tactic` got `pure` in scope, which made `node.pure().IsTrue()` ambiguous; diagnostic gap filed as [[chained-dot-ambiguity-reported-as-unbound]]), and Close commits each branch's proof before the next branch's `Blank` grows the world (a kernel LevelMismatch before). Left: relation spellings (`within(a, b) = True`, `disjoint(xs, ys).IsTrue()`) and inclusions whose conclusion is a spelling (`disjoint_mem`), `DecEq<Gpr>`, and modules upstream of native_alloc (`absent_append`, `absent_join` in native_source_io) which cannot see the registered law. A call costs about 0.15–0.6 s, most of it the tactic's own interpretation, not the table.
