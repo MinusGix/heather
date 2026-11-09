@@ -23,9 +23,11 @@
 
 import tactic;
 
-// `T::wlog_le` for the type `m` has, by its head's name.
+// `T::wlog_le` for the type `m` has, by its head's name. The type is read in
+// head normal form: a point bound by a `λ` under a definition's `Π` has the
+// definition's spelling of its type (a code) until it is decoded.
 fn wlog_lemma(m: Expr) → Tac<Handle> {
-    infer(m).or_fail("wlog: the first point: ").bind(λ ty => view(ty).bind(λ hd => match hd {
+    infer(m).or_fail("wlog: the first point: ").bind(λ ty => whnf_or(ty).bind(view).bind(λ hd => match hd {
         HGlobal(_, name, _) => resolve(name ++ "::wlog_le").or_fail("wlog: no `" ++ name ++ "::wlog_le` to split by: "),
         _ => fail("wlog: the points' type is no named carrier with a `wlog_le`", [At(m, Tried("its type", "not a named type"))]),
     }))

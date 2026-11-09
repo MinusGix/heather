@@ -20,6 +20,13 @@ theorem under_lambda(k: Nat): (m, n: Nat) → k + (m + n) = k + (n + m) {
     λ m n => by wlog(m, n, λ a b h => sym(h), λ a b le => cong(f := λ (t: Nat) => j + t, p := a.add_comm(b)))
 }
 
+// A goal a definition states, its points bound by the `λ` that opens it:
+// their type is the definition's spelling until it is decoded.
+fn SymSum(f: Nat → Nat) → Type { (m, n: Nat) → f(m) + f(n) = f(n) + f(m) }
+theorem sym_sum(f: Nat → Nat): SymSum(f) {
+    λ m n => by wlog(m, n, λ a b h => sym(h), λ a b le => f(a).add_comm(f(b)))
+}
+
 // The order the main case assumes is the lemma's: `a <= b`, never the other
 // way round.
 theorem order_given(m, n: Nat): m <= n ∨ n <= m {
