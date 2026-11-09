@@ -21,6 +21,7 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("int", include_str!("../../../../lib/std/num/int.hthr")),
     ("bitvec", include_str!("../../../../lib/std/bitvec/bitvec.hthr")),
     ("function_ir", include_str!("../../../../lib/native/function_ir/function_ir.hthr")),
+    ("dec_set", include_str!("../../../../lib/std/data/set/dec_set.hthr")),
     ("set_solve", include_str!("../../../../lib/std/data/set/set_solve.hthr")),
     ("set_ops", include_str!("../../../../lib/std/data/set/set_ops.hthr")),
     ("function_ir_eval", include_str!("../../../../lib/native/function_ir/function_ir_eval.hthr")),

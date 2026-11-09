@@ -27,6 +27,7 @@ import nat;
 import omega;
 import option;
 import list;
+import dec_set;
 
 // ---------------------------------------------------------------------------
 // Spans
@@ -524,3 +525,18 @@ theorem Span::pack_has(sizes: List<Nat>): (base, x: Nat) → SpanSet::any(Span::
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// As carriers of the `sets` tactic (lib/std/data/set/dec_set.hthr): a span
+// and a span set are sets of naturals with Boolean membership, the empty
+// span the empty set, and the operations proved above are their union,
+// intersection and difference. The relations `within`, `apart` and
+// `disjoint` are registered for the tactic in span_set_rels.hthr.
+
+instance DecSet<Span, Nat> { has := Span::has, empty := Span(0, 0), has_empty := λ x => refl }
+instance SetInter<Span, Nat>(Span::has, Span::meet) { has_inter := Span::meet_has }
+
+instance DecSet<SpanSet, Nat> { has := SpanSet::has, empty := SpanSet::empty(), has_empty := λ x => refl }
+instance SetUnion<SpanSet, Nat>(SpanSet::has, SpanSet::union) { has_union := SpanSet::union_has }
+instance SetInter<SpanSet, Nat>(SpanSet::has, SpanSet::inter) { has_inter := SpanSet::inter_has }
+instance SetMinus<SpanSet, Nat>(SpanSet::has, SpanSet::minus) { has_minus := SpanSet::minus_has }

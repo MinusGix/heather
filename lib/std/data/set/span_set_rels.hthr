@@ -1,0 +1,20 @@
+// The relations between spans and span sets (lib/std/data/set/span_set.hthr)
+// as the `sets` tactic reads them (`SetRelEntry`, set_ops.hthr): `within`
+// is an inclusion, `apart` and `disjoint` say no element is in both, each
+// through its sound and complete laws. Apart from span_set so that the
+// machine models importing span sets do not import the tactic's registry.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import span_set;
+import set_ops;
+
+register def span_within_entry: SetRelEntry = SetRelEntry(name_of(Span::within), name_of(Span::within_sound), name_of(Span::within_complete), 0);
+register def span_apart_entry: SetRelEntry = SetRelEntry(name_of(Span::apart), name_of(Span::apart_sound), name_of(Span::apart_complete), 0);
+register def span_set_within_entry: SetRelEntry = SetRelEntry(name_of(SpanSet::within), name_of(SpanSet::within_sound), name_of(SpanSet::within_complete), 0);
+register def span_set_disjoint_entry: SetRelEntry = SetRelEntry(name_of(SpanSet::disjoint), name_of(SpanSet::disjoint_sound), name_of(SpanSet::disjoint_complete), 0);

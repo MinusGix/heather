@@ -22,6 +22,7 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("x86_64_store", include_str!("../../../../lib/std/arch/x86_64/x86_64_store.hthr")),
     ("x86_64_stack", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
     ("linux_x86_64_io", include_str!("../../../../lib/std/os/linux/linux_x86_64_io.hthr")),
+    ("dec_set", include_str!("../../../../lib/std/data/set/dec_set.hthr")),
     ("set_solve", include_str!("../../../../lib/std/data/set/set_solve.hthr")),
     ("set_ops", include_str!("../../../../lib/std/data/set/set_ops.hthr")),
 ];
