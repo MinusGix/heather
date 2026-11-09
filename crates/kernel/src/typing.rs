@@ -1002,6 +1002,37 @@ struct Env {
 }
 
 impl Env {
+    /// The scope's [`Ambient`]. The pattern names every field, so a field
+    /// added to `Env` does not compile until it is either keyed here or
+    /// said not to be read by any rule.
+    #[inline]
+    fn ambient(&self) -> Ambient {
+        let Env {
+            psi,
+            // A cache of `psi`'s rescoped bodies: what it answers is fixed
+            // by `psi`.
+            cache: _,
+            gamma,
+            layer,
+            univs,
+            under_box,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: _,
+        } = self;
+        Ambient {
+            psi: psi.bindings.identity_addr(),
+            // Γ's entries are keyed apart: by identity in a [`Scope`], and
+            // not at all in a closed type's key, which reads none.
+            gamma_base: match gamma.base {
+                CtxBase::Nil => None,
+                CtxBase::Var(g) => Some(g.0),
+            },
+            univs: *univs,
+            layer: *layer,
+            under_box: *under_box,
+        }
+    }
+
     /// Replace Γ (and the layer) — for premises stated in a different local
     /// context, e.g. `Ψ; Δ ⊢_p T @ l`.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env {
@@ -1329,37 +1360,46 @@ struct ClosedConvBucket {
     univs: u32,
 }
 
-/// A [`Judged`] entry's key: the node and its scope, by identity (module
-/// docs, §The typing memo). The addresses are kept valid by the entry.
+/// Everything a typing rule reads from its scope besides Γ's entries: the
+/// part of [`Env`] every typing memo key ([`Scope`], [`TyScope`],
+/// [`SigScope`]) holds, so a component added here is in all three by
+/// construction ([`Env::ambient`], docs/kernel-implicit-state-review.md §3).
+///
+/// Ψ is held by its bindings' identity, which also stands for the parts of
+/// Ψ that are not bindings. Changing the interface boundary
+/// ([`GlobalCtx::withholding`]) gives the bindings a fresh identity. A
+/// sealed proof kept later ([`GlobalCtx::seal_kept`]) does not, and need
+/// not: it only adds δ-steps, so a judgment made before it still holds
+/// after. The memo's addresses are kept valid by its entries' keep-alives.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Scope {
-    node: usize,
+struct Ambient {
     psi: usize,
-    /// Γ's identity token, or, in a strengthened scope, the interned id of
-    /// the innermost `k` entries ([`Tc::strengthened`]).
-    gamma: usize,
-    /// Whether `gamma` is a telescope id rather than Γ's identity.
-    strengthened: bool,
     gamma_base: Option<u32>,
     univs: u32,
     layer: Layer,
     under_box: bool,
 }
 
+/// A [`Judged`] entry's key: the node and its scope, by identity (module
+/// docs, §The typing memo). The addresses are kept valid by the entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Scope {
+    node: usize,
+    ambient: Ambient,
+    /// Γ's identity token, or, in a strengthened scope, the interned id of
+    /// the innermost `k` entries ([`Tc::strengthened`]).
+    gamma: usize,
+    /// Whether `gamma` is a telescope id rather than Γ's identity.
+    strengthened: bool,
+}
+
 impl Scope {
     fn of(env: &Env, t: &Rc<Term>) -> Scope {
         Scope {
             node: Rc::as_ptr(t) as usize,
-            psi: env.psi.bindings.identity_addr(),
+            ambient: env.ambient(),
             gamma: env.gamma.entries.identity_addr(),
             strengthened: false,
-            gamma_base: match env.gamma.base {
-                CtxBase::Nil => None,
-                CtxBase::Var(g) => Some(g.0),
-            },
-            univs: env.univs,
-            layer: env.layer,
-            under_box: env.under_box,
         }
     }
 }
@@ -1370,26 +1410,12 @@ impl Scope {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct TyScope {
     node: usize,
-    psi: usize,
-    gamma_base: Option<u32>,
-    univs: u32,
-    layer: Layer,
-    under_box: bool,
+    ambient: Ambient,
 }
 
 impl TyScope {
     fn of(env: &Env, t: &Rc<Type>) -> TyScope {
-        TyScope {
-            node: Rc::as_ptr(t) as usize,
-            psi: env.psi.bindings.identity_addr(),
-            gamma_base: match env.gamma.base {
-                CtxBase::Nil => None,
-                CtxBase::Var(g) => Some(g.0),
-            },
-            univs: env.univs,
-            layer: env.layer,
-            under_box: env.under_box,
-        }
+        TyScope { node: Rc::as_ptr(t) as usize, ambient: env.ambient() }
     }
 }
 
@@ -1397,26 +1423,12 @@ impl TyScope {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct SigScope {
     sig: usize,
-    psi: usize,
-    gamma_base: Option<u32>,
-    univs: u32,
-    layer: Layer,
-    under_box: bool,
+    ambient: Ambient,
 }
 
 impl SigScope {
     fn of(env: &Env, sig: &Rc<IWfSig>) -> SigScope {
-        SigScope {
-            sig: Rc::as_ptr(sig) as usize,
-            psi: env.psi.bindings.identity_addr(),
-            gamma_base: match env.gamma.base {
-                CtxBase::Nil => None,
-                CtxBase::Var(g) => Some(g.0),
-            },
-            univs: env.univs,
-            layer: env.layer,
-            under_box: env.under_box,
-        }
+        SigScope { sig: Rc::as_ptr(sig) as usize, ambient: env.ambient() }
     }
 }
 
