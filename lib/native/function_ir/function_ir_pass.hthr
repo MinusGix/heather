@@ -39,6 +39,7 @@ import list;
 import logic;
 import nat;
 import option;
+import dec_set;
 import set_tactic;
 
 // ---------------------------------------------------------------------------

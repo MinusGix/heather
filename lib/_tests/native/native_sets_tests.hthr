@@ -4,7 +4,7 @@
 // (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import char; import string;
 import function_ir_eval; import native_alloc;
-import tactic; import set_solve; import set_ops; import set_tactic;
+import tactic; import set_solve; import set_ops; import dec_set; import set_tactic;
 
 // A spelling as a hypothesis, each way.
 theorem absent_hyp(i: Nat, a, b: List<Nat>, h: Mem(i, a ++ b), n: absent(i, a).IsTrue()): Mem(i, b) { by sets() }

@@ -121,7 +121,11 @@ native. Hypotheses are read at the goal's element, an inclusion applied to
 it. Native's liveness lemmas `inside_union`, `inside_minus`,
 `inside_live_before`, `live_before_keeps` and `live_before_reads` are one
 call each. The Boolean spellings (`absent(…) = True`, `holds`, `within`)
-are `set-solver-boolean-spellings`.
+are `set-solver-boolean-spellings`. Since `sets-any-carrier` the registry of
+operations is gone: a carrier is any type with a `DecSet` instance and an
+operation any function with a `SetUnion`/`SetInter`/`SetMinus`/`SetInsert`/
+`SetFilter` instance (`lib/std/data/set/dec_set.hthr`), found by instance
+search, so span sets (§4) are read as lists are.
 
 ## 2. Machine words as ℤ/2ⁿ
 

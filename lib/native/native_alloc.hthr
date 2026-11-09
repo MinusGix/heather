@@ -37,6 +37,7 @@ import nat;
 import option;
 import char;
 import string;
+import dec_set;
 import set_solve;
 import set_ops;
 import set_tactic;
@@ -900,10 +901,11 @@ theorem List::within_of(self a: List<Nat>, b: List<Nat>): ((i: Nat) → Mem(i, a
 register def within_set_entry: SetRelEntry = SetRelEntry(name_of(List::within), name_of(List::within_mem), name_of(List::within_of), 0);
 
 // `union` and `minus` as the `sets` tactic reads them
-// (lib/std/tactic/set_tactic.hthr): `∪` and `∖`, so a membership goal over
-// live sets is a truth table rather than a chain of citations.
-theorem List::union_set_law(): SetLaw<Nat>(List::union, SetOr) {
-    λ x a b => Iff(
+// (lib/std/tactic/set_tactic.hthr): `∪` and `∖` on lists of ids
+// (lib/std/data/set/dec_set.hthr), so a membership goal over live sets is a
+// truth table rather than a chain of citations.
+theorem List::union_mem_iff(x: Nat, a, b: List<Nat>): Mem(x, a.union(b)) ↔ (Mem(x, a) ∨ Mem(x, b)) {
+    Iff(
         mp := λ (m: Mem(x, a.union(b))) => match a.mem_append(b.filter(λ (id: Nat) => absent(id, a)), x, m) {
             Inl(l) => Inl(l),
             Inr(r) => Inr(b.mem_filter(x, λ (id: Nat) => absent(id, a), r)),
@@ -911,24 +913,34 @@ theorem List::union_set_law(): SetLaw<Nat>(List::union, SetOr) {
         mpr := λ (o: Mem(x, a) ∨ Mem(x, b)) => match o {
             Inl(l) => a.mem_append_l(b.filter(λ (id: Nat) => absent(id, a)), x, l),
             Inr(r) => match none: absent(x, a) {
-                True => a.mem_append_r(b.filter(λ (id: Nat) => absent(id, a)), x, set_mem_filter_intro(b, x, λ (id: Nat) => absent(id, a), none, r)),
+                True => a.mem_append_r(b.filter(λ (id: Nat) => absent(id, a)), x, List::mem_filter_keep(b, x, λ (id: Nat) => absent(id, a), none, r)),
                 False => a.mem_append_l(b.filter(λ (id: Nat) => absent(id, a)), x, absent_false_mem(x, a, none)),
             },
         })
 }
 
-theorem List::minus_set_law(): SetLaw<Nat>(List::minus, SetDiff) {
-    λ x a b => Iff(
+theorem List::minus_mem_iff(x: Nat, a, b: List<Nat>): Mem(x, a.minus(b)) ↔ (Mem(x, a) ∧ ¬Mem(x, b)) {
+    Iff(
         mp := λ (m: Mem(x, a.minus(b))) => And(a.mem_filter(x, λ (id: Nat) => absent(id, b), m),
             λ (mb: Mem(x, b)) => absent_mem(x, b, j(sym(a.mem_filter_holds(x, λ (id: Nat) => absent(id, b), m)), λ c _ => c.IsTrue(), trivial), x, mb, refl)),
         mpr := λ (both: Mem(x, a) ∧ ¬Mem(x, b)) => match none: absent(x, b) {
-            True => set_mem_filter_intro(a, x, λ (id: Nat) => absent(id, b), none, both.left),
+            True => List::mem_filter_keep(a, x, λ (id: Nat) => absent(id, b), none, both.left),
             False => false_elim(both.right(absent_false_mem(x, b, none))),
         })
 }
 
-register def union_set_entry: SetOpEntry = SetOpEntry(name_of(List::union), SetOr, name_of(List::union_set_law), 0);
-register def minus_set_entry: SetOpEntry = SetOpEntry(name_of(List::minus), SetDiff, name_of(List::minus_set_law), 0);
+theorem List::union_has(a, b: List<Nat>, x: Nat): a.union(b).has(x) = (a.has(x) || b.has(x)) {
+    set_reflects_same(List::has_reflects(a.union(b), x),
+        reflects_iff(reflects_or(List::has_reflects(a, x), List::has_reflects(b, x)), (List::union_mem_iff(x, a, b)).mpr, (List::union_mem_iff(x, a, b)).mp))
+}
+
+theorem List::minus_has(a, b: List<Nat>, x: Nat): a.minus(b).has(x) = (a.has(x) && !b.has(x)) {
+    set_reflects_same(List::has_reflects(a.minus(b), x),
+        reflects_iff(reflects_and(List::has_reflects(a, x), reflects_not(List::has_reflects(b, x))), (List::minus_mem_iff(x, a, b)).mpr, (List::minus_mem_iff(x, a, b)).mp))
+}
+
+instance SetUnion<List<Nat>, Nat>(List::has, List::union) { has_union := List::union_has }
+instance SetMinus<List<Nat>, Nat>(List::has, List::minus) { has_minus := List::minus_has }
 
 // Every id of `a` is one of `m`.
 fn List::Inside(self a: List<Nat>, m: List<Nat>) → Type { (i: Nat) → Mem(i, a) → Mem(i, m) }

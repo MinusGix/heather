@@ -44,6 +44,7 @@ import logic;
 import nat;
 import option;
 import omega;
+import dec_set;
 import set_tactic;
 
 // ---------------------------------------------------------------------------

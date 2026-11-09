@@ -3,7 +3,7 @@
 // library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import char; import string;
-import tactic; import set_solve; import set_ops; import set_tactic;
+import tactic; import dec_set; import set_solve; import set_ops; import set_tactic; import span_set; import span_set_rels;
 
 // Unions, nested either way.
 theorem app_right(i: Nat, a, b, c: List<Nat>, h: Mem(i, b)): Mem(i, (a ++ b) ++ c) { by sets() }
@@ -38,3 +38,62 @@ theorem neq_sym(i, j: Nat, a: List<Nat>, h: Mem(i, Cons(j, a)), n: ¬(j = i)): M
 // The negative control: membership in a union does not pick a side.
 // expect-error: sets: the goal does not follow from the membership facts in scope
 theorem no_side(i: Nat, a, b: List<Nat>, h: Mem(i, a ++ b)): Mem(i, a) { by sets() }
+
+// ---------------------------------------------------------------------------
+// Any carrier with decidable membership (lib/std/data/set/dec_set.hthr)
+
+// Lists spelled by their own membership, and memberships compared: `x` is
+// in one set exactly when in the other.
+theorem has_union(i: Nat, a, b: List<Nat>, h: a.has(i) = True): (b ++ a).has(i) = True { by sets() }
+theorem has_union_comm(i: Nat, a, b: List<Nat>): (a ++ b).has(i) = (b ++ a).has(i) { by sets() }
+theorem has_mixed(i: Nat, a, b: List<Nat>, h: Mem(i, a), n: b.has(i) = False): Mem(i, a ++ b) ∧ ¬Mem(i, b) { by sets() }
+
+// Span sets: union, intersection, difference, read through their
+// instances, with membership as `= True`, `.IsTrue()` and `!`.
+theorem span_union(x: Nat, a, b: SpanSet, h: a.has(x) = True): b.union(a).has(x) = True { by sets() }
+theorem span_minus(x: Nat, a, b: SpanSet, h: a.has(x).IsTrue(), n: b.has(x).IsTrue() → False): a.minus(b).has(x).IsTrue() { by sets() }
+theorem span_inter(x: Nat, a, b, c: SpanSet, h: a.inter(b).has(x) = True): !c.minus(a).has(x) = True ∧ b.has(x) = True { by sets() }
+theorem span_same(x: Nat, a, b, c: SpanSet): a.union(b.inter(c)).has(x) = a.union(b).inter(a.union(c)).has(x) { by sets() }
+theorem span_empty(x: Nat, a: SpanSet): SpanSet::empty().union(a).has(x) = a.has(x) { by sets() }
+theorem span_meet(x: Nat, s, t: Span, h: s.meet(t).has(x) = True): t.has(x) = True { by sets() }
+
+// Registered relations between span sets (span_set_rels.hthr): read as
+// inclusions, proved true from one, and proved false from an element on the
+// wrong side.
+theorem span_within(x: Nat, a, b: SpanSet, w: a.within(b) = True, h: a.has(x) = True): b.has(x) = True { by sets() }
+theorem span_within_union(a, b: SpanSet): a.within(a.union(b)) = True { by sets() }
+theorem span_not_within(x: Nat, a, b: SpanSet, h: a.has(x) = True, n: b.has(x) = False): a.within(b) = False { by sets() }
+theorem span_not_disjoint(x: Nat, a, b: SpanSet, h: a.inter(b).has(x) = True): a.disjoint(b) = False { by sets() }
+theorem span_disjoint_minus(a, b: SpanSet): a.minus(b).disjoint(b) = True { by sets() }
+// The footprint inclusion of issues/span-footprint-automation.md part 1,
+// as the proposition, through the verdict `sets` decides.
+theorem span_footprint_within(a, b, c: SpanSet): a.union(b).Within(a.union(b).union(c)) {
+    a.union(b).within_sound(a.union(b).union(c), by sets())
+}
+
+// A carrier of the client's own: characteristic functions, with an
+// insertion.
+record Bits { at: Nat → Bool }
+fn Bits::has(self s: Bits, x: Nat) → Bool { s.at(x) }
+fn Bits::insert(e: Nat, s: Bits) → Bits { Bits(λ (x: Nat) => or_bit(x.eq_dec(e)) || s.at(x)) }
+fn Bits::union(self a, b: Bits) → Bits { Bits(λ (x: Nat) => a.at(x) || b.at(x)) }
+theorem Bits::has_here(e: Nat, s: Bits): Bits::insert(e, s).has(e) = True {
+    match d: e.eq_dec(e) { Inl(_) => refl, Inr(n) => false_elim(n(refl)) }
+}
+theorem Bits::has_other(x, e: Nat, s: Bits, n: ¬(x = e)): Bits::insert(e, s).has(x) = s.has(x) {
+    match d: x.eq_dec(e) { Inl(q) => false_elim(n(q)), Inr(_) => refl }
+}
+instance DecSet<Bits, Nat> { has := Bits::has, empty := Bits(λ (x: Nat) => False), has_empty := λ x => refl }
+instance SetInsert<Bits, Nat>(Bits::has, Bits::insert) { has_here := Bits::has_here, has_other := Bits::has_other }
+instance SetUnion<Bits, Nat>(Bits::has, Bits::union) { has_union := λ a b x => refl }
+
+theorem bits_insert(x, e: Nat, s, t: Bits, h: s.has(x) = True): Bits::insert(e, s.union(t)).has(x) = True { by sets() }
+theorem bits_other(x, e: Nat, s: Bits, h: Bits::insert(e, s).has(x) = True, n: ¬(x = e)): s.has(x) = True { by sets() }
+theorem bits_is(x, e: Nat, h: Bits::insert(e, Bits(λ (y: Nat) => False)).has(x) = True): x = e { by sets() }
+
+// The negative controls: an intersection is not a union, and a set of no
+// carrier is not read.
+// expect-error: sets: the goal does not follow from the membership facts in scope
+theorem span_not_same(x: Nat, a, b: SpanSet): a.union(b).has(x) = a.inter(b).has(x) { by sets() }
+// expect-error: sets: the goal does not follow from the membership facts in scope
+theorem span_within_wrong(a, b: SpanSet): a.union(b).within(a) = True { by sets() }

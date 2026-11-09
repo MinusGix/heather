@@ -5,6 +5,7 @@
 // goals. Tests, not library (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option;
 import function_ir_eval; import x86_64; import native_compile; import native_compile_perform;
+import dec_set;
 import set_tactic;
 
 // A register absent from a pool, apart from each of it.

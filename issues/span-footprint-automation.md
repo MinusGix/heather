@@ -42,3 +42,13 @@ A probe in `lib/_tests/std/data/set/span_set_tests.hthr` proves a footprint
 inclusion over atoms (`a.union(b).Within(a.union(b).union(c))`) with `by
 sets()`, and an open `Span::Disjoint` premise with endpoints in scope is
 found without naming `apart_sound`.
+
+## Log
+
+- 2026-11-09: part 1 done by [[sets-any-carrier]]. `sets` reads any carrier
+  with a `DecSet` instance; `Span` and `SpanSet` declare theirs
+  (`span_set.hthr`), and `span_set_rels.hthr` registers `within`,
+  `apart` and `disjoint` as relations. `a.union(b).Within(a.union(b).union(c))`
+  is `within_sound(…, by sets())` in
+  `lib/_tests/std/tactic/set_tactic_tests.hthr` (`span_footprint_within`).
+  Part 2 (endpoint relations as searched facts) stays open.
