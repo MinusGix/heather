@@ -688,8 +688,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                     ⟨t.store_resident(m, so + name.len(), one, fits, resident),
                      ⟨⟨⟨refl, ⟨refl, ⟨refl, ends.right⟩⟩⟩, trivial⟩, λ resident2 a => match a {
                         Opened(fd) => λ answers junk leaves rcx r11 => ⟨resident2, ⟨answers, ⟨kept,
-                            cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), word_of_nat_ofNat(fd, Nat::le_trans(Succ(fd), Nat::pow(2, 31), Nat::pow(2, 64),
-                                answers, Nat::leb_sound(Nat::pow(2, 31), Nat::pow(2, 64), trivial))))⟩⟩⟩,
+                            cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), word_of_nat_eq_ofNat(64, fd))⟩⟩⟩,
                         OpenFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident2, ⟨answers, ⟨kept,
                             cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
                      }⟩⟩⟩;
@@ -701,7 +700,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
             λ (w: MachineState<X86Memory(t.r.profile)>) => t.PathAt(placed_env, path, bytes, vals, 0, w.gprs, w.memory), looped);
         let rcx: (read_gpr(Rcx, u0.gprs) = word_of_nat(64, bytes.len())) = trans(sym(word_of_nat_toNat(64, read_gpr(Rcx, u0.gprs))),
             cong_fn<Nat, BitVec(64)>(λ n => word_of_nat(64, n), trans(held0.right, sym(bytes_len))));
-        setting(u0, here0, resident0, ⟨Nat::nonneg(name.len()), ⟨refl, ⟨rcx, ⟨t.buffer_rip(path, cap, found), ⟨t.scratch_rip(),
+        setting(u0, here0, resident0, ⟨Nat::nonneg(name.len()), ⟨refl, ⟨rcx, ⟨t.buffer_rip(path), ⟨t.scratch_rip(),
             ⟨Exists(v, ⟨placed.proof.left, ⟨placed.proof.right.left, ⟨placed.proof.right.right, λ k b early => false_elim(Nat::not_succ_le_zero(k, early))⟩⟩⟩), refl⟩⟩⟩⟩⟩⟩)
     };
     // The count clamped to the capacity.

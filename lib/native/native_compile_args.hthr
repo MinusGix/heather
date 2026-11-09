@@ -495,31 +495,23 @@ theorem Target::read_stack(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.
     let low = t.r.low.toNat();
     let ends: (low + (q + 8) <= Nat::pow(2, 47)) = Nat::le_trans(low + (q + 8), low + t.r.size, Nat::pow(2, 47),
         low.add_le_mono_l(q + 8, t.r.size, fits), t.r.canonical);
-    j(sym(t.at_rip(q, q.le_of_add_le(8, t.r.size, fits))), λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(t.r.profile.data(), m, a) = Some(word_in(v, q))),
+    j(sym(t.at_rip(q)), λ a _ => (a.toNat() + 8 <= Nat::pow(2, 47)) ∧ (read_word(t.r.profile.data(), m, a) = Some(word_in(v, q))),
         ⟨j(sym(value), λ x _ => x + 8 <= Nat::pow(2, 47), j(sym(low.add_assoc(q, 8)), λ x _ => x <= Nat::pow(2, 47), ends)), read⟩)
 }
 
 // RBX doubled three times, plus RSP and eight: argument `k`'s slot.
-theorem argv_slot_sum(a, r: BitVec(64), k, argc: Nat, value: a.toNat() = k, below: k < argc,
-    room: r.toNat() + 8 * (argc + 2) <= Nat::pow(2, 47)):
+theorem argv_slot_sum(a, r: BitVec(64), k: Nat, value: a.toNat() = k):
     a.add(a).add(a.add(a)).add(a.add(a).add(a.add(a))).add(r).add(BitVec::ofNat(8)) = argv_slot(r, 1 + k) {
-    let top = canonical_below_top();
     let rn = r.toNat();
-    let a2 = a.add(a);
-    let a4 = a2.add(a2);
-    let a8 = a4.add(a4);
-    let v2: (a2.toNat() = k + k) = add_words(64, a, a, k, k, value, value, omega(below, room, top));
-    let v4: (a4.toNat() = (k + k) + (k + k)) = add_words(64, a2, a2, k + k, k + k, v2, v2, omega(below, room, top));
-    let v8: (a8.toNat() = ((k + k) + (k + k)) + ((k + k) + (k + k))) =
-        add_words(64, a4, a4, (k + k) + (k + k), (k + k) + (k + k), v4, v4, omega(below, room, top));
-    let s1 = a8.add(r);
-    let n8 = ((k + k) + (k + k)) + ((k + k) + (k + k));
-    let v1: (s1.toNat() = n8 + rn) = add_words(64, a8, r, n8, rn, v8, refl, omega(below, room, top));
-    let eight: (BitVec::ofNat(8, n := 64).toNat() = 8) = BitVec::toNat_ofNat(64, 8, omega(top));
-    let s2 = s1.add(BitVec::ofNat(8));
-    let v: (s2.toNat() = (n8 + rn) + 8) = add_words(64, s1, BitVec::ofNat(8), n8 + rn, 8, v1, eight, omega(below, room, top));
-    let same: ((n8 + rn) + 8 = rn + 8 * (1 + k)) = omega();
-    trans(sym(word_of_nat_toNat(64, s2)), cong_fn<Nat, BitVec(64)>(λ n => word_of_nat(64, n), trans(v, same)))
+    let a1: (a = BitVec::ofNat(k)) = trans(sym(BitVec::ofNat_toNat(64, a)), BitVec::ofNat_cong(64, value));
+    let a2 = BitVec::ofNat_add_of(64, a1, a1);
+    let a4 = BitVec::ofNat_add_of(64, a2, a2);
+    let a8 = BitVec::ofNat_add_of(64, a4, a4);
+    let s1 = BitVec::ofNat_add_of(64, a8, sym(BitVec::ofNat_toNat(64, r)));
+    let eight: (BitVec::ofNat(8, n := 64) = BitVec::ofNat(8)) = refl;
+    let s2 = BitVec::ofNat_add_of(64, s1, eight);
+    let same: ((((k + k) + (k + k)) + ((k + k) + (k + k)) + rn) + 8 = rn + 8 * (1 + k)) = omega();
+    trans(s2, trans(BitVec::ofNat_cong(64, same), sym(word_of_nat_eq_ofNat(64, rn + 8 * (1 + k)))))
 }
 
 // Below argc: the argument's pointer loaded from its slot, its bytes
@@ -600,7 +592,7 @@ theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p
                 λ (w: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env1, w.gprs, w.memory) ∧ (env1.set_word(len, read_gpr(Rax, w.gprs)) = final), to_out),
             λ w at => ⟨Exists(words, ⟨t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, arg, pointer, arg.len(), refl, w.memory, at.right.right),
                     j(sym(at.right.left.right.right.right.right), λ vs _ => t.homes.Agrees(live, env1, words, vs), agrees)⟩),
-                trans(cong_fn<BitVec(64), Env>(λ y => env1.set_word(len, y), trans(at.right.left.left, word_of_nat_ofNat(arg.len(), len_small))),
+                trans(cong_fn<BitVec(64), Env>(λ y => env1.set_word(len, y), trans(at.right.left.left, word_of_nat_eq_ofNat(64, arg.len()))),
                     sym(arg_is))⟩);
         // the copy, from its head with nothing copied
         let start: (0 + arg.len() = arg.len()) = omega();
@@ -615,13 +607,12 @@ theorem Target::goes_arg_found(self t: Target, live, out: List<Nat>, env: Env, p
                 ((read_word(t.site().data, w.memory, read_gpr(Rbx, w.gprs)) = Some(word)) ∧ post2(word_load_after(WordLoad(Rsi, Rbx), word, w)))),
             loading);
         let address: (read_gpr(Rbx, execute_block_normal(slots, u).gprs) = argv_slot(rsp, 1 + k)) = trans(
-            argv_slot_sum(read_gpr(Rcx, u.gprs), read_gpr(Rdx, u.gprs), k, argc, held.right.right.left,
-                under, j(sym(held.right.left), λ y _ => y.toNat() + 8 * (argc + 2) <= Nat::pow(2, 47), stacking.left.left)),
+            argv_slot_sum(read_gpr(Rcx, u.gprs), read_gpr(Rdx, u.gprs), k, held.right.right.left),
             cong_fn<BitVec(64), BitVec(64)>(λ y => argv_slot(y, 1 + k), held.right.left));
         let cells = t.arg_cells_start(v, buf, cap, arg, pointer, m, held.left.left, stacking, entry.proof.right.right);
         let regs_at: t.ArgAt(v, buf, cap, arg, pointer, 0, vals, write_gpr(Rdi, layout.buffer_at(buf), write_gpr(R9, BitVec::ofNat(cap),
                 write_gpr(R8, BitVec::ofNat(0), write_gpr(Rsi, pointer, execute_block_normal(slots, u).gprs)))), m) =
-            ⟨Nat::le_of_lt(0, Succ(arg.len()), omega()), ⟨⟨refl, ⟨refl, ⟨sym(word_of_nat_toNat(64, pointer)), ⟨t.buffer_rip(buf, cap, found),
+            ⟨Nat::le_of_lt(0, Succ(arg.len()), omega()), ⟨⟨refl, ⟨refl, ⟨sym(word_of_nat_toNat(64, pointer)), ⟨t.buffer_rip(buf),
                 held.right.right.right.right⟩⟩⟩⟩, cells⟩⟩;
         summing(u, here, resident, Exists(pointer, ⟨j(sym(address), λ y _ => y.toNat() + 8 <= Nat::pow(2, 47), slot_word.left),
             ⟨j(sym(address), λ y _ => read_word(t.site().data, m, y) = Some(pointer), slot_word.right), regs_at⟩⟩))
@@ -865,13 +856,13 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
         let r2 = t.store_resident(m1, so + 8, bytes, fits2, r1);
         let at_third: third(next_rip(t.r.low, so + 16)) = ⟨t.writable(m2, so + 16, 8, fits3),
             ⟨t.store_resident(m2, so + 16, bytes3, fits3, r2), t.held_placed(live, t.start_env(), g3, m3, placed, slotted)⟩⟩;
-        let c3: third(layout.room_at()) = j(sym(t.at_rip(so + 16, omega(slots))), λ c _ => third(c), at_third);
+        let c3: third(layout.room_at()) = j(sym(t.at_rip(so + 16)), λ c _ => third(c), at_third);
         let second = λ (b: BitVec(64)) => t.writes().writable(m1, b, 8) ∧ (t.site().Resident(t.r.profile.store(m1, b, bytes)) ∧
             ((store_base_plain(Rbx) = True) ∧ (t.writes().writable(t.r.profile.store(m1, b, bytes), layout.room_at(), 8) ∧
             (t.site().Resident(t.r.profile.store(t.r.profile.store(m1, b, bytes), layout.room_at(), bytes3)) ∧
              t.Held(live, t.start_env(), g3, t.r.profile.store(t.r.profile.store(m1, b, bytes), layout.room_at(), bytes3))))));
         let at_second: second(next_rip(t.r.low, so + 8)) = ⟨t.writable(m1, so + 8, 8, fits2), ⟨r2, ⟨refl, c3⟩⟩⟩;
-        let c2: second(layout.frame_at()) = j(sym(t.at_rip(so + 8, omega(slots))), λ b _ => second(b), at_second);
+        let c2: second(layout.frame_at()) = j(sym(t.at_rip(so + 8)), λ b _ => second(b), at_second);
         let goal = λ (a: BitVec(64)) => t.writes().writable(m, a, 8) ∧ (t.site().Resident(t.r.profile.store(m, a, bytes)) ∧
             ((store_base_plain(Rbx) = True) ∧ (t.writes().writable(t.r.profile.store(m, a, bytes), layout.frame_at(), 8) ∧
             (t.site().Resident(t.r.profile.store(t.r.profile.store(m, a, bytes), layout.frame_at(), bytes)) ∧
@@ -879,11 +870,11 @@ theorem Target::goes_start(self t: Target, live: List<Nat>, slotted: t.homes.slo
             (t.site().Resident(t.r.profile.store(t.r.profile.store(t.r.profile.store(m, a, bytes), layout.frame_at(), bytes), layout.room_at(), bytes3)) ∧
              t.Held(live, t.start_env(), g3,
                 t.r.profile.store(t.r.profile.store(t.r.profile.store(m, a, bytes), layout.frame_at(), bytes), layout.room_at(), bytes3)))))))));
-        let at_goal: goal(next_rip(t.r.low, so)) = ⟨t.writable(m, so, 8, fits), ⟨r1, ⟨refl, j(sym(t.at_rip(so + 8, omega(slots))),
+        let at_goal: goal(next_rip(t.r.low, so)) = ⟨t.writable(m, so, 8, fits), ⟨r1, ⟨refl, j(sym(t.at_rip(so + 8)),
             λ b _ => t.writes().writable(m1, b, 8) ∧ (t.site().Resident(t.r.profile.store(m1, b, bytes)) ∧
             ((store_base_plain(Rbx) = True) ∧ (t.writes().writable(t.r.profile.store(m1, b, bytes), layout.room_at(), 8) ∧
             (t.site().Resident(t.r.profile.store(t.r.profile.store(m1, b, bytes), layout.room_at(), bytes3)) ∧
              t.Held(live, t.start_env(), g3, t.r.profile.store(t.r.profile.store(m1, b, bytes), layout.room_at(), bytes3)))))), at_second)⟩⟩⟩;
-        moved1(s, here, resident, ⟨refl, j(sym(t.at_rip(so, omega(slots))), λ a _ => goal(a), at_goal)⟩)
+        moved1(s, here, resident, ⟨refl, j(sym(t.at_rip(so)), λ a _ => goal(a), at_goal)⟩)
     }
 }

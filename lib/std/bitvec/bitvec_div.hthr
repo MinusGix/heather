@@ -285,7 +285,7 @@ theorem BitVec::neg_toNat(n: Nat, x: BitVec(n), positive: 0 < x.toNat()): x.neg(
     let fits: (a <= w) = Nat::le_of_lt(a, w, BitVec::toNat_lt_pow(n, x));
     let lt: (w - a < w) = w.sub_lt_of_pos(a, positive, fits);
     let c = BitVec::ofNat(w - a, n := n);
-    let start: (BitVec::zero(n := n).iterate_increment(w - a) = c) = BitVec::zero_iterate_increment(n, w - a, lt);
+    let start: (BitVec::zero(n := n).iterate_increment(w - a) = c) = BitVec::zero_iterate_increment(n, w - a);
     let wraps: (c.add(x) = BitVec::zero()) =
         trans(sym(BitVec::iter_add_eq_add(n, c, x)),
         trans(BitVec::cong_iterate_increment(n, a, sym(start)),
