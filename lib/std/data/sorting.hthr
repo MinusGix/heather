@@ -275,23 +275,23 @@ theorem List::insertion_sort_stable<A: DecidableRel(R)>(R: A → A → Type, p: 
 // ---------------------------------------------------------------------------
 // The lexicographic order.
 //
-// `LexAt(R, xs, ys)`: `Nil` is below everything; `x :: xs` is below `y :: ys`
+// `Lex(R, xs, ys)`: `Nil` is below everything; `x :: xs` is below `y :: ys`
 // when `x` is below `y` and, should `y` also be below `x` (a tie), `xs` is
 // below `ys`. Written with `R` alone, so it needs no strict order or
 // equality beside it: at a linear order the tie is equality, and at a total
 // preorder it is the preorder's equivalence.
 
-fn List::LexAt<A>(R: A → A → Type, xs, ys: List<A>) → Type {
+fn List::Lex<A>(R: A → A → Type, xs, ys: List<A>) → Type {
     match xs {
         Nil => True,
         Cons(x, xt) => match ys {
             Nil => False,
-            Cons(y, yt) => R(x, y) ∧ (R(y, x) → List::LexAt(R, xt, yt)),
+            Cons(y, yt) => R(x, y) ∧ (R(y, x) → List::Lex(R, xt, yt)),
         },
     }
 }
 
-theorem List::lex_refl<A: Preorder(R)>(R: A → A → Type, self xs: List<A>): List::LexAt(R, xs, xs) {
+theorem List::lex_refl<A: Preorder(R)>(R: A → A → Type, self xs: List<A>): List::Lex(R, xs, xs) {
     match xs {
         Nil => trivial,
         Cons(x, t) => And(A.rel_refl(x), λ _ => t.lex_refl(R)),
@@ -299,7 +299,7 @@ theorem List::lex_refl<A: Preorder(R)>(R: A → A → Type, self xs: List<A>): L
 }
 
 theorem List::lex_trans<A: Preorder(R)>(R: A → A → Type, self xs: List<A>):
-    (ys, zs: List<A>) → List::LexAt(R, xs, ys) → List::LexAt(R, ys, zs) → List::LexAt(R, xs, zs)
+    (ys, zs: List<A>) → List::Lex(R, xs, ys) → List::Lex(R, ys, zs) → List::Lex(R, xs, zs)
 {
     match xs {
         Nil => λ ys zs h1 h2 => trivial,
@@ -320,7 +320,7 @@ theorem List::lex_trans<A: Preorder(R)>(R: A → A → Type, self xs: List<A>):
 // Totality decides ties, so it needs the decider: comparable heads that tie
 // one way round defer to the tails.
 theorem List::lex_total<A: DecidableRel(R) + Total(R)>(R: A → A → Type, self xs: List<A>):
-    (ys: List<A>) → List::LexAt(R, xs, ys) ∨ List::LexAt(R, ys, xs)
+    (ys: List<A>) → List::Lex(R, xs, ys) ∨ List::Lex(R, ys, xs)
 {
     match xs {
         Nil => λ ys => Inl(trivial),
@@ -341,7 +341,7 @@ theorem List::lex_total<A: DecidableRel(R) + Total(R)>(R: A → A → Type, self
 }
 
 theorem List::lex_antisym<A: PartialOrder(R)>(R: A → A → Type, self xs: List<A>):
-    (ys: List<A>) → List::LexAt(R, xs, ys) → List::LexAt(R, ys, xs) → xs = ys
+    (ys: List<A>) → List::Lex(R, xs, ys) → List::Lex(R, ys, xs) → xs = ys
 {
     match xs {
         Nil => λ ys => match ys {
@@ -358,7 +358,7 @@ theorem List::lex_antisym<A: PartialOrder(R)>(R: A → A → Type, self xs: List
 }
 
 fn List::lex_dec<A: DecidableRel(R)>(R: A → A → Type, self xs: List<A>)
-    → (ys: List<A>) → List::LexAt(R, xs, ys) ∨ ¬List::LexAt(R, xs, ys)
+    → (ys: List<A>) → List::Lex(R, xs, ys) ∨ ¬List::Lex(R, xs, ys)
 {
     match xs {
         Nil => λ ys => Inl(trivial),
@@ -378,14 +378,8 @@ fn List::lex_dec<A: DecidableRel(R)>(R: A → A → Type, self xs: List<A>)
     }
 }
 
-// The order as a relation, for the classes and for `Sorted`. Separate from
-// `LexAt` because a declaration applied to some of its arguments is refused,
-// so the relation is the λ over the last two.
-fn List::Lex<A>(R: A → A → Type) → List<A> → List<A> → Type {
-    λ xs ys => List::LexAt(R, xs, ys)
-}
-
-// The dictionaries, one per layer.
+// The dictionaries, one per layer. The order as a relation is `Lex(R)`, the
+// declaration applied to `R` alone.
 fn List::lex_preorder<A: Preorder(R)>(R: A → A → Type) → Preorder<List<A>>(List::Lex(R)) {
     Preorder(λ xs => xs.lex_refl(R), λ xs ys zs h1 h2 => xs.lex_trans(R, ys, zs, h1, h2))
 }

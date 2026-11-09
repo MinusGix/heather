@@ -1107,11 +1107,29 @@ fn apply_implicit_planned(
             next_meta += 1;
             Rc::new(meta)
         } else {
+            let Some(argument) = arguments.next() else {
+                // Out of arguments with only explicit parameters left: the
+                // call is a partial application, the function of the rest
+                // (issues/declaration-partial-application.md) — where a
+                // function is what is wanted, which is any position that
+                // states no result type or states a `Π`. A position that
+                // states another type keeps the arity error, which says
+                // more than a mismatch against the partial call's `Π` would.
+                let rest = parameter - param_offset;
+                let only_explicit = mask[rest..].iter().all(|&implicit| !implicit)
+                    && params[parameter..].iter().all(|p| p.default.is_none() && p.solver.is_none());
+                let wants_function = match expected {
+                    None => true,
+                    Some(expected) => {
+                        matches!(elab.whnf_for_application(cx, expected, 0, span)?, Type::Pi { .. })
+                    }
+                };
+                if only_explicit && wants_function {
+                    break;
+                }
+                return err(format!("`{name}` is applied to too few arguments"), span);
+            };
             explicit_doms.push((parameter, (*dom).clone()));
-            let argument = arguments.next().ok_or_else(|| ElabError::Elab {
-                msg: format!("`{name}` is applied to too few arguments"),
-                span,
-            })?;
             let mut class = elab.classify_application_argument(cx, argument);
             // Re-planned after its inference failed: deferred, and inferred
             // again (reporting its own error) only if its domain never

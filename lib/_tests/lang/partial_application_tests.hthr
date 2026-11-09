@@ -1,0 +1,40 @@
+// A declaration applied to fewer explicit arguments than it takes is the
+// function of the rest, wherever a function is wanted: an argument at a
+// function-typed parameter, a result stated as a `Π`, a class index (see
+// `List::Lex(R)` in std/sorting), or a position that states no type at all
+// (issues/declaration-partial-application.md). Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import list;
+
+fn spread<A>(slack: Nat, size: A → Nat, x, y: A) → Nat { size(x) + size(y) + slack }
+fn add3(a, b, c: Nat) → Nat { a + b + c }
+fn twice(f: Nat → Nat, x: Nat) → Nat { f(f(x)) }
+fn on_diagonal<A>(f: A → A → Nat, x: A) → Nat { f(x, x) }
+
+// At a function-typed parameter: no implicits, and one the written
+// arguments fix.
+theorem add3_twice(): twice(add3(1, 2), 0) = 6 { refl }
+theorem spread_diagonal(): on_diagonal<List<Nat>>(spread(1, List::len<Nat>), [4, 5]) = 5 { refl }
+
+// As a result stated as a function type.
+fn spread_by_one<A>(size: A → Nat) → A → A → Nat { spread(1, size) }
+theorem spread_by_one_at(): spread_by_one(List::len<Nat>, [1], [2, 3]) = 4 { refl }
+
+// Inferred, where the outer call's implicit is still open: `on_diagonal`'s
+// `A` is learnt from the partial call's type, not from the list literal.
+theorem diagonal_learns(): on_diagonal(spread(2, List::len<Nat>), [7]) = 4 { refl }
+
+// Under a binder, at an open type: the partial call mentions the λ's own
+// variable.
+theorem twice_open(k: Nat): twice(add3(k, 0), 0) = k + 0 + (k + 0 + 0) { refl }
+
+// An explicit parameter left out where a value of the result type is
+// wanted is still too few arguments, not a mismatch against a function.
+// expect-error: `spread` is applied to too few arguments
+fn not_a_function() → Nat { spread(0, List::len<Nat>, [1]) }
+
+// A left-out parameter followed by an implicit one is not the function of
+// the rest: that implicit would have nothing to be filled from.
+fn late<A>(n: Nat, x: A, {m: Nat}, e: m = n) → Nat { n }
+// expect-error: `late` is applied to too few arguments
+fn late_partial() → Nat → Nat { late<Nat>(1) }
