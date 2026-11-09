@@ -2030,3 +2030,107 @@ theorem Int::natAbs_pos_of_ne(self a: Int, h: ¬(a = OfNat(0))): 0 < a.natAbs() 
         NegSucc(_) => trivial,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Congruence modulo `m` (issues/machine-words-modular-ring.md): the two
+// differ by a multiple of `m`. What a word's signed and unsigned readings
+// share (`BitVec::toInt_modeq`), so a signed identity is a ring identity at
+// `BitVec(n)` and a range fact.
+
+fn Int::ModEq(m: Nat, a, b: Int) → Type { ∃ k: Int, a = b + k * OfNat(m) }
+
+theorem Int::add_left_comm(self a, b, c: Int): a + (b + c) = b + (a + c) {
+    trans(sym(a.add_assoc(b, c)), trans(Int::cong(λ (y: Int) => y + c, a.add_comm(b)), b.add_assoc(a, c)))
+}
+
+// `b + 0·m` is `b`.
+theorem Int::add_zero_mul(self b: Int, m: Int): b + OfNat(0) * m = b {
+    trans(Int::cong(λ (y: Int) => b + y, m.zero_mul()), b.add_zero())
+}
+
+theorem Int::modeq_refl(m: Nat, a: Int): Int::ModEq(m, a, a) { Exists(OfNat(0), sym(a.add_zero_mul(OfNat(m)))) }
+
+theorem Int::modeq_symm({m: Nat}, {a, b: Int}, h: Int::ModEq(m, a, b)): Int::ModEq(m, b, a) {
+    match h {
+        Exists(k, e) => Exists(-k, sym(calc {
+            a + -k * OfNat(m)
+                = (b + k * OfNat(m)) + -k * OfNat(m) := Int::cong(λ (y: Int) => y + -k * OfNat(m), e),
+                = b + (k * OfNat(m) + -k * OfNat(m)) := b.add_assoc(k * OfNat(m), -k * OfNat(m)),
+                = b + (k + -k) * OfNat(m) := Int::cong(λ (y: Int) => b + y, sym(k.add_mul_distr(-k, OfNat(m)))),
+                = b + OfNat(0) * OfNat(m) := Int::cong(λ (y: Int) => b + y * OfNat(m), k.add_neg()),
+                = b := b.add_zero_mul(OfNat(m)),
+        })),
+    }
+}
+
+theorem Int::modeq_trans({m: Nat}, {a, b, c: Int}, h1: Int::ModEq(m, a, b), h2: Int::ModEq(m, b, c)): Int::ModEq(m, a, c) {
+    match h1 {
+        Exists(k1, e1) => match h2 {
+            Exists(k2, e2) => Exists(k2 + k1, calc {
+                a
+                    = b + k1 * OfNat(m) := e1,
+                    = (c + k2 * OfNat(m)) + k1 * OfNat(m) := Int::cong(λ (y: Int) => y + k1 * OfNat(m), e2),
+                    = c + (k2 * OfNat(m) + k1 * OfNat(m)) := c.add_assoc(k2 * OfNat(m), k1 * OfNat(m)),
+                    = c + (k2 + k1) * OfNat(m) := Int::cong(λ (y: Int) => c + y, sym(k2.add_mul_distr(k1, OfNat(m)))),
+            }),
+        },
+    }
+}
+
+theorem Int::modeq_add({m: Nat}, {a, b, c, d: Int}, h1: Int::ModEq(m, a, b), h2: Int::ModEq(m, c, d)): Int::ModEq(m, a + c, b + d) {
+    match h1 {
+        Exists(k1, e1) => match h2 {
+            Exists(k2, e2) => Exists(k1 + k2, calc {
+                a + c
+                    = (b + k1 * OfNat(m)) + c := Int::cong(λ (y: Int) => y + c, e1),
+                    = (b + k1 * OfNat(m)) + (d + k2 * OfNat(m)) := Int::cong(λ (y: Int) => (b + k1 * OfNat(m)) + y, e2),
+                    = b + (k1 * OfNat(m) + (d + k2 * OfNat(m))) := b.add_assoc(k1 * OfNat(m), d + k2 * OfNat(m)),
+                    = b + (d + (k1 * OfNat(m) + k2 * OfNat(m))) := Int::cong(λ (y: Int) => b + y, Int::add_left_comm(k1 * OfNat(m), d, k2 * OfNat(m))),
+                    = (b + d) + (k1 * OfNat(m) + k2 * OfNat(m)) := sym(b.add_assoc(d, k1 * OfNat(m) + k2 * OfNat(m))),
+                    = (b + d) + (k1 + k2) * OfNat(m) := Int::cong(λ (y: Int) => (b + d) + y, sym(k1.add_mul_distr(k2, OfNat(m)))),
+            }),
+        },
+    }
+}
+
+// A factor on the left keeps a congruence.
+theorem Int::modeq_mul_l({m: Nat}, {a, b: Int}, c: Int, h: Int::ModEq(m, a, b)): Int::ModEq(m, c * a, c * b) {
+    match h {
+        Exists(k, e) => Exists(c * k, calc {
+            c * a
+                = c * (b + k * OfNat(m)) := Int::cong(λ (y: Int) => c * y, e),
+                = c * b + c * (k * OfNat(m)) := c.mul_add_distr(b, k * OfNat(m)),
+                = c * b + (c * k) * OfNat(m) := Int::cong(λ (y: Int) => c * b + y, sym(c.mul_assoc(k, OfNat(m)))),
+        }),
+    }
+}
+
+theorem Int::modeq_mul({m: Nat}, {a, b, c, d: Int}, h1: Int::ModEq(m, a, b), h2: Int::ModEq(m, c, d)): Int::ModEq(m, a * c, b * d) {
+    let right: (Int::ModEq(m, a * c, b * c)) =
+        j(c.mul_comm(b), λ y _ => Int::ModEq(m, a * c, y), j(c.mul_comm(a), λ y _ => Int::ModEq(m, y, c * b), Int::modeq_mul_l(c, h1)));
+    Int::modeq_trans(right, Int::modeq_mul_l(b, h2))
+}
+
+// Congruent naturals are congruent integers.
+theorem Int::modeq_ofNat(m: Nat, {a, b: Nat}, h: Nat::ModEq(m, a, b)): Int::ModEq(m, OfNat(a), OfNat(b)) {
+    let qa = OfNat(a.div(m));
+    let qb = OfNat(b.div(m));
+    let r = OfNat(b.mod(m));
+    // a = qa·m + r and b = qb·m + r, so a = b + (qa − qb)·m.
+    let ea: (OfNat(a) = qa * OfNat(m) + r) =
+        Int::cong_ofnat(trans(sym(a.div_mul_add_mod(m)), Nat::cong(λ (y: Nat) => a.div(m) * m + y, h)));
+    let eb: (OfNat(b) = qb * OfNat(m) + r) = Int::cong_ofnat(sym(b.div_mul_add_mod(m)));
+    Exists(qa + -qb, calc {
+        OfNat(a)
+            = qa * OfNat(m) + r := ea,
+            = r + qa * OfNat(m) := (qa * OfNat(m)).add_comm(r),
+            = r + (qb * OfNat(m) + (qa + -qb) * OfNat(m)) := Int::cong(λ (y: Int) => r + y, calc {
+                qa * OfNat(m)
+                    = (qb + (qa + -qb)) * OfNat(m) := Int::cong(λ (y: Int) => y * OfNat(m), sym(trans(Int::add_left_comm(qb, qa, -qb), trans(Int::cong(λ (y: Int) => qa + y, qb.add_neg()), qa.add_zero())))),
+                    = qb * OfNat(m) + (qa + -qb) * OfNat(m) := qb.add_mul_distr(qa + -qb, OfNat(m)),
+            }),
+            = (r + qb * OfNat(m)) + (qa + -qb) * OfNat(m) := sym(r.add_assoc(qb * OfNat(m), (qa + -qb) * OfNat(m))),
+            = (qb * OfNat(m) + r) + (qa + -qb) * OfNat(m) := Int::cong(λ (y: Int) => y + (qa + -qb) * OfNat(m), r.add_comm(qb * OfNat(m))),
+            = OfNat(b) + (qa + -qb) * OfNat(m) := Int::cong(λ (y: Int) => y + (qa + -qb) * OfNat(m), sym(eb)),
+    })
+}

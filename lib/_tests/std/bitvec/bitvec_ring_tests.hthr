@@ -1,0 +1,62 @@
+// Probes of `lib/std/bitvec/bitvec_ring.hthr` and the modular half of
+// `bitvec_nat`: `ring` at machine words, literal and open widths; `ofNat` a
+// homomorphism at an open width (the constant fold
+// issues/function-ir-pass-arithmetic-folds.md cites); a word's value modulo
+// `2^n`; and wrap-around read both ways. Tests, not library
+// (docs/test-value-audit.md §4.5).
+import bool; import logic; import nat; import int; import algebra; import semiring; import ring;
+import bitvec; import bitvec_nat; import bitvec_ring;
+
+// P1 of docs/native-mathematics-survey.md.
+theorem ring_words(a, b, c: BitVec(64)): a.add(b.add(c)) ≈ c.add(b.add(a)) { ring }
+theorem ring_square(n: Nat, a, b: BitVec(n)): (a + b) * (a + b) ≈ a * a + 2 * (a * b) + b * b { ring }
+theorem ring_numerals(a: BitVec(64)): a + a + 3 * a ≈ 5 * a { ring }
+theorem ring_negation(a, b: u64): -(a * b) ≈ (-a) * b { ring }
+theorem ring_hypothesis(n: Nat, a, b, c: BitVec(n), h: a ≈ b * c): a * a ≈ b * b * (c * c) { ring(h) }
+// `≈` at a word is `=`.
+theorem ring_is_equality(a, b: BitVec(32)): a * b + a = a * (b + 1) { ring }
+// Subtraction once rewritten to the negation it is.
+theorem ring_subtraction(n: Nat, a, b: BitVec(n)): (a - b) + b = a {
+    rewrite(BitVec::sub_eq_add_neg(n, a, b), { let done: ((a + -b) + b ≈ a) = ring; done })
+}
+
+// `ring` proves identities of every commutative ring, so a fact of ℤ/2 alone
+// (`a + a = 0` at one bit) is not one, though it holds.
+// expect-error: it is not an identity of commutative rings
+theorem ring_characteristic(a: BitVec(1)): a + a ≈ 0 { ring }
+theorem characteristic_by_value(a: BitVec(1)): a + a = 0 {
+    let v: ((a.toNat() + a.toNat()).mod(2) = 0) = match a.toNat().lt_or_ge(1) {
+        Inl(zero) => Nat::cong(λ (y: Nat) => (y + y).mod(2), Nat::le_antisym(a.toNat(), 0, zero, a.toNat().nonneg())),
+        Inr(one) => Nat::cong(λ (y: Nat) => (y + y).mod(2), Nat::le_antisym(a.toNat(), 1, Nat::le_of_succ_succ(a.toNat(), 1, BitVec::toNat_lt_pow(1, a)), one)),
+    };
+    BitVec::toNat_inj(1, trans(BitVec::toNat_add_mod(1, a, a), v))
+}
+
+// P3: the fold at an open width, and at a literal one where it wraps.
+theorem fold_open(n, a, c: Nat): BitVec::ofNat(a, n := n).add(BitVec::ofNat(c, n := n)) = BitVec::ofNat(a + c, n := n) {
+    BitVec::ofNat_add(n, a, c)
+}
+theorem fold_wraps(): BitVec::ofNat(255, n := 8).add(BitVec::ofNat(1)) = BitVec::ofNat(0) { refl }
+theorem fold_mul_open(n, a, c: Nat): BitVec::ofNat(a, n := n).mul(BitVec::ofNat(c, n := n)) = BitVec::ofNat(a * c, n := n) {
+    BitVec::ofNat_mul(n, a, c)
+}
+
+// P6: a sum's value is the values' sum modulo `2^n`.
+theorem value_of_sum(n: Nat, a, b: BitVec(n)): a.add(b).toNat() = (a.toNat() + b.toNat()).mod(Nat::pow(2, n)) {
+    BitVec::toNat_add_mod(n, a, b)
+}
+theorem value_wraps(): BitVec::ofNat(300, n := 8).toNat() = 44 { trans(BitVec::toNat_ofNat_mod(8, 300), refl) }
+
+// Truncation is a ring homomorphism.
+theorem truncate_sum(x, y: BitVec(64)): x.add(y).truncate(32, 32) = x.truncate(32, 32).add(y.truncate(32, 32)) {
+    BitVec::truncate_add(32, 32, x, y)
+}
+
+// The signed and unsigned readings agree modulo `2^n`.
+theorem signed_unsigned(x: BitVec(8)): Int::ModEq(256, x.toInt(), OfNat(x.toNat())) { BitVec::toInt_modeq(8, x) }
+
+// The Nat kit at closed values.
+theorem nat_add_mod(): (17 + 9).mod(5) = (17.mod(5) + 9.mod(5)).mod(5) { refl }
+theorem nat_modeq(a, b: Nat, h: Nat::ModEq(7, a, b)): Nat::ModEq(7, a * a + 3, b * b + 3) {
+    Nat::modeq_add(7, Nat::modeq_mul(7, h, h), Nat::modeq_refl(7, 3))
+}
