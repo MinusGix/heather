@@ -541,12 +541,3 @@ theorem BitVec::srem_nonpos(k: Nat, a, d: BitVec(Succ(k)), negative: a.toInt() <
             Int::neg_ofNat_le_zero(a.magnitude().urem(d.magnitude()).toNat()))),
     }
 }
-
-// The low `n` bits of an integer in two's complement: `-(k + 1)` is the
-// complement of `k`, so a negative integer needs no subtraction from `2^n`.
-fn BitVec::ofInt({n: Nat}, z: Int) → BitVec(n) {
-    match z {
-        OfNat(k) => BitVec::ofNat(k),
-        NegSucc(k) => BitVec::ofNat(k).complement(),
-    }
-}
