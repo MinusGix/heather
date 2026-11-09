@@ -5,7 +5,7 @@ labels: [native,compiler,optimisation]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-31
-updated: 2026-11-01
+updated: 2026-11-09
 ---
 
 The first FunctionIR pass in Heather ([[function-ir-pass-in-heather]],
@@ -54,3 +54,7 @@ The claim between statements is still `Target::Held` over the live set;
 the known words are a premise of the one statement after the leaf
 (`Target::RunsK`). Facts that would cross a loop's head or a branch's join
 would need them in the claim itself, which no tool has wanted yet.
+
+## Log
+
+- 2026-11-09: 2026-11-09: the ofNat laws at an open width are part of [[machine-words-modular-ring]] (docs/native-mathematics-survey.md §2; probe P3 shows the Add law is not by conversion).

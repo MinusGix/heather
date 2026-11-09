@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,logic,semantics,design]
 area: heather-in-heather
 created: 2026-08-25
-updated: 2026-09-08
+updated: 2026-11-09
 ---
 
 Specifications that update structured state repeatedly need a common way to
@@ -66,3 +66,4 @@ syntax.  The round should decide from written proofs, not from terminology.
   bit slices, and the partial-access bridge are still its acceptance residue.
 
 - 2026-09-08: The reusable callee customer (`cb877f2`) needed generic read-after-write/read-after-other-write and seven explicit instruction-field lemmas. Generalize these into the core location kit where appropriate; [[state-projection-conversion-cost]] separately investigates whether the kernel unnecessarily revisits state history.
+- 2026-11-09: 2026-11-09: docs/native-mathematics-survey.md counts about 265 citations of point-update laws over five store types (Valuation::set_other/set_here, read_gpr_other, Memory::get_set_*, nat_map_get_set_*, Env::*_set_other), each kit separate; a generic point update over decidable equality would serve all five. Footprints as address sets are [[address-interval-sets]]; exclusive ownership is [[separation-algebra-ownership]].

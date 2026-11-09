@@ -3,7 +3,7 @@ title: Compose Wp views over disjoint regions (separating product)
 status: open
 labels: [native,memory,proofs]
 created: 2026-10-22
-updated: 2026-10-22
+updated: 2026-11-09
 area: heather-in-heather
 milestone: [hih-memory-model]
 ---
@@ -39,3 +39,7 @@ to avoid; the general piece is a separating product.
   `DataRegion::program_view`. Assumed here: only that each region's view is
   the buffer view.
 - **[[native-one-wp]]** owns `View`/`ViewSound`.
+
+## Log
+
+- 2026-11-09: 2026-11-09: footprints, their disjointness and the packing of regions are filed as [[address-interval-sets]] (docs/native-mathematics-survey.md §4); build the local views over them.

@@ -4,7 +4,7 @@ status: open
 labels: [compiler,function-ir,semantics,bitvec,x86]
 area: heather-in-heather
 created: 2026-08-31
-updated: 2026-11-07
+updated: 2026-11-09
 ---
 
 After the Add-DAG lowering path is executable, extend the official pure
@@ -85,3 +85,4 @@ narrow value. A zero-extend (and truncate) node with its equation would let
   refuses `Resize` as it refuses shifts, and the memory-resident leaf treats
   it as never wide. Its x86 rule (`MOVZX`, or `AND` with a mask, at 64) is
   this issue's.
+- 2026-11-09: 2026-11-09: each instruction form added to the encoder costs a decoder round-trip induction today; combinators proved once are filed as [[codec-round-trips]] (docs/native-mathematics-survey.md §8).

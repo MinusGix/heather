@@ -5,7 +5,7 @@ labels: [compiler, design, traits, tactics]
 area: heather-in-heather
 milestone: [hih-native-heather]
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-09
 ---
 
 `docs/compilation-vision.md` §6.2 (Minus, 2026-11-01): facts are open classes
@@ -59,3 +59,4 @@ round.
   range analysis, the range analysis and the exhaustive check; the fourth,
   a real out-of-bounds read, kept).
 - 2026-11-05: gardener: cites a file it shares with [[regex-dfa-compiler]] (`docs/compilation-vision.md`).
+- 2026-11-09: 2026-11-09: a framework that makes each new analysis a lattice, transfers and local lemmas is filed as [[dataflow-checked-fixpoints]], with [[word-abstract-domains]] as its numeric domains (docs/native-mathematics-survey.md §5–6).
