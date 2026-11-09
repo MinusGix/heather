@@ -1,0 +1,39 @@
+// `wlog`: a symmetric case split proved once (issues/wlog-symmetric-cases.md).
+//
+// A proof that splits on `m.le_total(n)` and proves the same thing in both
+// arms with `m` and `n` exchanged proves it once instead:
+//
+//     λ m n => by wlog(m, n, λ a b h => <the goal at b, a from h, the goal at a, b>,
+//                            λ a b le => <the goal at a, b, given a <= b>)
+//
+// as Lean's `wlog h : m ≤ n` does: the main case may assume `m <= n`, and
+// the reduction proves the goal at `(b, a)` from the goal at `(a, b)`.
+// The tactic abstracts `m` and `n` out of the goal into the motive
+// `P = λ a b => goal[a/m, b/n]` (the `Abstract` request) and applies the
+// carrier's lemma `T::wlog_le(P, swap, le, m, n)`, `T` the type `m` has
+// (`Nat::wlog_le`, `Int::wlog_le`; any carrier that states one in the same
+// shape is served). The two cases are ordinary terms, written unannotated:
+// each is checked where the lemma puts it, at `(a, b: T) → P(a, b) →
+// P(b, a)` and `(a, b: T) → a <= b → P(a, b)` with `P`'s applications
+// contracted, so their binders read as the goal does.
+//
+// Only the goal is abstracted. A hypothesis of the context that mentions
+// `m` or `n` keeps speaking of the original points inside the cases; state
+// what the cases need in the goal (as `λ m n =>` under a `∀` does).
+
+import tactic;
+
+// `T::wlog_le` for the type `m` has, by its head's name.
+fn wlog_lemma(m: Expr) → Tac<Handle> {
+    infer(m).or_fail("wlog: the first point: ").bind(λ ty => view(ty).bind(λ hd => match hd {
+        HGlobal(_, name, _) => resolve(name ++ "::wlog_le").or_fail("wlog: no `" ++ name ++ "::wlog_le` to split by: "),
+        _ => fail("wlog: the points' type is no named carrier with a `wlog_le`", [At(m, Tried("its type", "not a named type"))]),
+    }))
+}
+
+fn wlog(m: Expr, n: Expr, swap: Expr, le: Expr) → Tac<Expr> {
+    goal().bind(λ g =>
+        abstract_over(g.target, n).or_fail("wlog: the goal over the second point: ").bind(λ pn =>
+            abstract_over(pn, m).or_fail("wlog: the goal over the first point: ").bind(λ p =>
+                wlog_lemma(m).bind(λ lemma => pure(App(App(App(App(App(Hd(lemma), Hd(p)), swap), le), m), n))))))
+}

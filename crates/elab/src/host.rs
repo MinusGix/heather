@@ -26,7 +26,9 @@
 //! expects a `tactic::Expr` but is given some other term of the goal's
 //! context (`by exact(h)`) takes a handle to that term instead
 //! ([`Elaborator::quote_for_by`]). The quoted term is replaced by a closed
-//! `host_quote(n)`, so the tactic value stays closed.
+//! `host_quote(n)`, so the tactic value stays closed. A term that infers no
+//! type (an unannotated `λ`) is quoted as written ([`Quoted::Surface`]) and
+//! checked where the tactic's result places it (design §26).
 //!
 //! **Holes.** `Hole` makes a metavariable of the run, which the requests that
 //! compare terms solve and `Restore` forgets ([`Run`] says how they are
@@ -414,6 +416,8 @@ pub enum Request {
     /// A term's next spelling: its head definition unfolded and the head
     /// reduced on until a call, a local or a value is at the head again.
     Spell(RExpr),
+    /// A handle with a local of the goal's context abstracted out of it.
+    Abstract(u64, RExpr),
 }
 
 /// One layer of a handle, as `View` answers it (`tactic::Head`).
@@ -960,6 +964,11 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
                 let mut budget = READ_BUDGET;
                 Ok(Step::Ask(Request::Spell(self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?)))
             }
+            33 => {
+                let mut budget = READ_BUDGET;
+                let x = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Abstract(self.nat_of("host_handle", vec![tree])?, x)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1112,6 +1121,11 @@ struct Run {
     shared: std::collections::HashMap<(usize, usize), (Rc<Term>, u64)>,
     /// What the run said (`Say`), reported at its span once it succeeds.
     said: Vec<String>,
+    /// The surface terms the arguments quoted, by handle ([`Quoted`]).
+    surfaces: std::collections::HashMap<u64, Expr>,
+    /// The first surface term that failed to check, reported as itself if
+    /// the run fails.
+    surface_error: Option<crate::ElabError>,
 }
 
 /// A remembered reification: the world it was made in (its terms are
@@ -1222,13 +1236,25 @@ impl Run {
             readings: std::collections::HashMap::new(),
             shared: std::collections::HashMap::new(),
             said: Vec::new(),
+            surfaces: std::collections::HashMap::new(),
+            surface_error: None,
         }
     }
 
     /// The handles an invocation's arguments quoted, in order, at the root.
-    fn issue_quoted(&mut self, quoted: Vec<Held>) {
-        for held in quoted {
-            self.issue(0, held);
+    fn issue_quoted(&mut self, quoted: Vec<Quoted>) {
+        for q in quoted {
+            match q {
+                Quoted::Held(held) => {
+                    self.issue(0, held);
+                }
+                Quoted::Surface(e) => {
+                    // A placeholder `held` never reads: it answers for the
+                    // surface term first.
+                    let h = self.issue(0, Held::Type(Type::Nat, Level::Zero));
+                    self.surfaces.insert(h, e);
+                }
+            }
         }
     }
 
@@ -1266,6 +1292,13 @@ impl Run {
 
     /// A handle's scope and what it stands for, in the current world.
     fn held(&self, h: u64) -> Result<(usize, Held), Fault> {
+        if self.surfaces.contains_key(&h) {
+            return Err(Fault::Ill(format!(
+                "handle {h} is a term the tactic was handed whose type is decided by where it stands (an \
+                 unannotated `λ`): it can be an application's argument or the tactic's result, and nothing can \
+                 ask about it"
+            )));
+        }
         let issued = self.held.get(h as usize).ok_or_else(|| Fault::Protocol(format!("handle {h} was not issued by this run")))?;
         let by = (self.world() - issued.world) as u32;
         let held = match &issued.held {
@@ -1518,6 +1551,16 @@ struct Reified {
 
 /// The state of quoting while one `by`'s tactic expression is elaborated
 /// (see the module comment).
+/// What a tactic's argument quoted: an elaborated term or type, or surface
+/// syntax whose type only its place in the tactic's result decides.
+#[derive(Clone)]
+pub(crate) enum Quoted {
+    Held(Held),
+    /// A term that infers no type of its own (an unannotated `λ`), checked
+    /// where the result places it ([`Elaborator::check_surface`]).
+    Surface(Expr),
+}
+
 pub(crate) struct Quoting {
     /// `tactic::Expr` and its level.
     expr: Type,
@@ -1527,7 +1570,7 @@ pub(crate) struct Quoting {
     /// The goal's context, where every quoted term must live.
     root: LocalCtx,
     /// The quoted terms and types, in handle order after the goal.
-    terms: RefCell<Vec<Held>>,
+    terms: RefCell<Vec<Quoted>>,
     /// The expression being checked without quoting, by the probe that
     /// decides whether it needs quoting at all.
     plain: Cell<Option<Span>>,
@@ -1579,7 +1622,7 @@ impl Elaborator {
     /// type `tactic::entry` takes, with quoting on: a closed term and the
     /// handles its arguments quoted. A generator issues no goal handle, so
     /// its quoted handles start at 0.
-    fn protocol_value(&self, cx: &Cx, world: &GlobalCtx, e: &Expr, entry: &str, keyword: &str, span: Span) -> R<(Term, Vec<Held>)> {
+    fn protocol_value(&self, cx: &Cx, world: &GlobalCtx, e: &Expr, entry: &str, keyword: &str, span: Span) -> R<(Term, Vec<Quoted>)> {
         let shown = tactic_name(e);
         let (_, takes) = self.protocol_signature(world, entry, keyword, span)?;
         let Type::Pi { dom_level, dom, .. } = takes else {
@@ -1651,7 +1694,7 @@ impl Elaborator {
             let Some(ty) = crate::unification::strengthen_ty(&q.root, &ty, d) else {
                 return err("a quoted type must live in the goal's context", e.span);
             };
-            return Ok(Some(self.quoted(&q, cx, Held::Type(ty, level), e.span)?));
+            return Ok(Some(self.quoted(&q, cx, Quoted::Held(Held::Type(ty, level)), e.span)?));
         }
         // A bare global is quoted as itself, its implicit parameters still
         // binders of its type for `Match` to solve; inferring it would
@@ -1663,19 +1706,43 @@ impl Elaborator {
             && !(level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level))
         {
             let root = q.root.len() as u32;
-            return Ok(Some(self.quoted(&q, cx, Held::Term(term.shift_local(root), ty.shift_local(root), level), e.span)?));
+            return Ok(Some(self.quoted(&q, cx, Quoted::Held(Held::Term(term.shift_local(root), ty.shift_local(root), level)), e.span)?));
         }
         q.plain.set(Some(e.span));
-        let plain = self.probe(|| {
+        let inferred = self.probe(|| {
             let inferred = self.elab_infer(cx, e);
             q.plain.set(None);
             match inferred {
-                Err(_) => true,
-                Ok((_, ty, level)) => level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level),
+                Err(_) => None,
+                Ok((_, ty, level)) => Some(level.equiv(&q.level) && self.conv_types(cx, &ty, &q.expr, &level)),
             }
         });
-        if plain {
-            return Ok(None);
+        match inferred {
+            Some(true) => return Ok(None),
+            Some(false) => {}
+            None => {
+                // No type of its own (an unannotated `λ`): unless it is an
+                // `Expr` after all, it is held as written and checked where
+                // the tactic's result places it, at the type that place
+                // expects (`Elaborator::check_surface`). Only directly under
+                // the goal's context, where nothing the tactic expression
+                // binds can be in scope.
+                if q.no_goal || cx.gamma.len() != q.root.len() {
+                    return Ok(None);
+                }
+                let before = q.terms.borrow().len();
+                q.plain.set(Some(e.span));
+                let is_expr = self.probe(|| {
+                    let checked = self.elab_check(cx, e, expected, lvl).is_ok();
+                    q.plain.set(None);
+                    checked
+                });
+                q.terms.borrow_mut().truncate(before);
+                if is_expr {
+                    return Ok(None);
+                }
+                return Ok(Some(self.quoted(&q, cx, Quoted::Surface(e.clone()), e.span)?));
+            }
         }
         // Inferred for real, with quoting off: what is quoted is an
         // ordinary term, and its dependencies and notes are this
@@ -1693,12 +1760,12 @@ impl Elaborator {
                 e.span,
             );
         };
-        Ok(Some(self.quoted(&q, cx, Held::Term(term, ty, level), e.span)?))
+        Ok(Some(self.quoted(&q, cx, Quoted::Held(Held::Term(term, ty, level)), e.span)?))
     }
 
     /// Record a quoted term of the goal's context and return the closed
     /// `host_quote(n)` that stands for it, weakened to `cx`.
-    fn quoted(&self, q: &Quoting, cx: &Cx, held: Held, span: Span) -> R<Term> {
+    fn quoted(&self, q: &Quoting, cx: &Cx, held: Quoted, span: Span) -> R<Term> {
         let n = {
             let mut terms = q.terms.borrow_mut();
             terms.push(held);
@@ -1731,7 +1798,7 @@ impl Elaborator {
         shown: &str,
         goal: &Type,
         lvl: &Level,
-        quoted: Vec<Held>,
+        quoted: Vec<Quoted>,
         span: Span,
     ) -> R<Term> {
         let fail = |msg: String| err(format!("`by {shown}`: {msg}"), span);
@@ -1741,7 +1808,15 @@ impl Elaborator {
         self.issue_lets(cx, &mut run);
         match self.drive(&mut run, speaker) {
             Ok(Ended::Result(e)) => {
-                let proof = self.finish(&mut run, &e, cx, goal, lvl).or_else(|msg| fail(msg))?;
+                let proof = match self.finish(&mut run, &e, cx, goal, lvl) {
+                    Ok(proof) => proof,
+                    Err(msg) => {
+                        return match run.surface_error.take() {
+                            Some(failure) => Err(failure),
+                            None => fail(msg),
+                        };
+                    }
+                };
                 // What the run said is reported only now that it succeeded,
                 // as one warning: the lints are kept one per span.
                 if !run.said.is_empty() {
@@ -1750,7 +1825,10 @@ impl Elaborator {
                 Ok(proof)
             }
             Ok(Ended::Published(_)) => fail("only `generate` publishes declarations".into()),
-            Err(msg) => fail(msg),
+            Err(msg) => match run.surface_error.take() {
+                Some(failure) => Err(failure),
+                None => fail(msg),
+            },
         }
     }
 
@@ -1807,6 +1885,7 @@ impl Elaborator {
                 Request::Unfold(h) => Answer::Handle(refusable(self.unfold_request(run, h))?),
                 Request::Repr(ty) => Answer::Handle(refusable(self.repr_request(run, ty))?),
                 Request::Spell(e) => Answer::Handle(refusable(self.spell_request(run, &e))?),
+                Request::Abstract(h, x) => Answer::Handle(refusable(self.abstract_request(run, h, &x))?),
                 Request::Say(msg, notes) => {
                     let rendered = self.render_notes(run, &notes).map_err(Fault::msg)?;
                     run.said.push(format!("{msg}{rendered}"));
@@ -1823,6 +1902,13 @@ impl Elaborator {
     /// The tactic's result as a proof of the goal: elaborated, compared with
     /// the goal (which may solve holes), and in the committed world.
     fn finish(&self, run: &mut Run, e: &RExpr, cx: &Cx, goal: &Type, lvl: &Level) -> Result<Term, String> {
+        if let RExpr::Hd(h) = e
+            && run.surfaces.contains_key(h)
+        {
+            let shifted = goal.shift_global(run.world() as u32);
+            let term = self.check_surface(run, *h, &shifted, lvl, 0).map_err(Fault::msg)?;
+            return run.committed_tm(&term).ok_or_else(|| "the tactic's proof mentions a hole nothing solved".to_string());
+        }
         let r = self.reify(run, e, 0).map_err(|f| format!("the tactic's result is not a term: {}", f.msg()))?;
         let same = r.level.equiv(lvl) && self.same_ty(run, 0, &r.ty, &goal.shift_global(run.world() as u32), lvl).map_err(Fault::msg)?;
         if !same {
@@ -2342,6 +2428,62 @@ impl Elaborator {
                 Ok(run.issue(at, Held::Term(out, ty, r.level)))
             }
             Some(_) => Err(Fault::Ill("its head reduces past the walk's budget before a call is at the head again".into())),
+        }
+    }
+
+    /// `Abstract(h, x)`: `λ y => h[y/x]`, for `x` a local of the goal's
+    /// context, a function of `x`'s type. A type is abstracted as its code,
+    /// so abstracting a goal over `n` and then `m` is the motive
+    /// `λ a b => goal[a/m, b/n]` a case lemma takes (`wlog`,
+    /// issues/wlog-symmetric-cases.md). Only `h` is abstracted: a later
+    /// local whose type mentions `x` keeps meaning the original one, which
+    /// is still in scope, so the abstraction is well typed whatever `h`
+    /// mentions; nothing here is trusted, as the kernel checks the proof
+    /// that uses it.
+    fn abstract_request(&self, run: &mut Run, h: u64, x: &RExpr) -> Result<u64, Fault> {
+        let unsolved = || Fault::Ill("it mentions a hole nothing has solved".into());
+        let (at, held) = run.held(h)?;
+        let (term, ty, level) = match held {
+            Held::Type(t, l) => {
+                let t = run.committed_ty(&t).ok_or_else(unsolved)?;
+                let Some(c) = crate::code::code_of(&t) else {
+                    return Err(Fault::Ill(format!("the type `{}` has no code to abstract", self.shown_ty(run, at, &t))));
+                };
+                (c, Type::Ty(l.clone()), Level::succ(l))
+            }
+            Held::Term(t, ty, l) => (run.committed_tm(&t).ok_or_else(unsolved)?, run.committed_ty(&ty).ok_or_else(unsolved)?, l),
+        };
+        let p = self.root_local_position(run, x)?;
+        let gamma = run.cx(at)?.gamma;
+        let n = gamma.len();
+        let entry = gamma.entries.get(p).expect("a local of the goal's context");
+        let dom_level = entry.level.clone();
+        let dom = Rc::new(entry.ty.shift_local((n - p) as u32));
+        let sigma = crate::generalize::rename(&gamma, &[p], 1);
+        let body = term.apply_local(&sigma);
+        let cod = ty.apply_local(&sigma);
+        let lam = Term::Lam { dom_level: dom_level.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(body) };
+        let pi = Type::Pi { dom_level: dom_level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
+        Ok(run.issue(at, Held::Term(lam, pi, Level::join(dom_level, level))))
+    }
+
+    /// The position in the goal's context of the local `x` names: a
+    /// `Local` of the goal, or a handle to one (a quoted `m`).
+    fn root_local_position(&self, run: &Run, x: &RExpr) -> Result<usize, Fault> {
+        let not_local = || Fault::Ill("only a local of the goal's context (not a `let`) can be abstracted".into());
+        match x {
+            RExpr::Local(id) if run.let_local(*id).is_none() => match run.local(*id)? {
+                (0, i) => Ok(i),
+                _ => Err(not_local()),
+            },
+            RExpr::Hd(h) => match run.held(*h)? {
+                (s, Held::Term(Term::Var(LocalVar(k)), ..)) => {
+                    let i = run.len(s) - 1 - k as usize;
+                    if i < run.len(0) { Ok(i) } else { Err(not_local()) }
+                }
+                _ => Err(not_local()),
+            },
+            _ => Err(not_local()),
         }
     }
 
@@ -3331,6 +3473,42 @@ impl Elaborator {
         }
     }
 
+    /// The surface term a tactic was handed as `h` ([`Quoted::Surface`]),
+    /// checked at `expected`, a type of scope `at` in the current world: the
+    /// type of the place the tactic's result puts it. It is elaborated in
+    /// the goal's context, as it was written there, so `expected` must
+    /// mention no hole and no local the tactic introduced. β-redexes a
+    /// motive's application left (`P(a, b)` with `P` a `λ`) are contracted
+    /// first, so the term's binders read as the goal does. A failure is the
+    /// term's own error, which the run reports as itself if it fails.
+    fn check_surface(&self, run: &mut Run, h: u64, expected: &Type, level: &Level, at: usize) -> Result<Term, Fault> {
+        let e = run.surfaces.get(&h).cloned().expect("a surface handle");
+        let Some(ty) = run.committed_ty(expected) else {
+            return Err(Fault::Ill("a term handed over as written stands where the expected type mentions a hole nothing has solved".into()));
+        };
+        let d = (run.len(at) - run.len(0)) as u32;
+        let Some(ty) = crate::unification::strengthen_ty(&run.scopes[0].cx.gamma, &ty, d) else {
+            return Err(Fault::Ill(
+                "a term handed over as written stands where the expected type mentions a local the tactic introduced".into(),
+            ));
+        };
+        let ty = contract_redexes(&ty);
+        let cx = run.scopes[0].cx.clone();
+        match self.elab_check(&cx, &e, &ty, level) {
+            Ok(term) => Ok(term.shift_local(d).shift_global(run.world() as u32)),
+            Err(failure) => {
+                let msg = match &failure {
+                    crate::ElabError::Elab { msg, .. } => msg.clone(),
+                    _ => "it does not elaborate".to_string(),
+                };
+                if run.surface_error.is_none() {
+                    run.surface_error = Some(failure);
+                }
+                Err(Fault::Ill(format!("a term handed over as written does not check at its place: {msg}")))
+            }
+        }
+    }
+
     /// `f(a)`, reified at scope `at`.
     fn reify_app(&self, run: &mut Run, f: &RExpr, a: &RExpr, at: usize) -> Result<Reified, Fault> {
         let f = self.reify(run, f, at)?;
@@ -3348,7 +3526,15 @@ impl Elaborator {
         let Type::Pi { dom_level, cod_level, dom, cod } = pi else {
             return Err(Fault::Ill(format!("`{}` is applied but is not a function", self.shown_ty(run, at, &fty))));
         };
-        let (fun, dom, cod, arg) = if matches!(a, RExpr::Blank) {
+        let surface = match a {
+            RExpr::Hd(h) if run.surfaces.contains_key(h) => Some(*h),
+            _ => None,
+        };
+        let (fun, dom, cod, arg) = if let Some(h) = surface {
+            // A term handed over as written: checked at the domain.
+            let term = self.check_surface(run, h, &dom, &dom_level, at)?;
+            (f.term, dom, cod, term)
+        } else if matches!(a, RExpr::Blank) {
             // An argument left to inference: a hole at the domain,
             // at this scope, which the rest of the `Expr` solves.
             run.holes.push(Hole { home: at, sol: None });
@@ -4308,4 +4494,27 @@ fn is_name(name: &str) -> bool {
             let mut cs = part.chars();
             cs.next().is_some_and(|c| c.is_alphabetic() || c == '_') && cs.all(|c| c.is_alphanumeric() || c == '_')
         })
+}
+
+/// `ty` with the β-redexes of a motive's application contracted in every
+/// `El` below its Π spine, and each code literal decoded: `P(a, b)` for
+/// `P = λ y z => ⌜G⌝` reads as `G[a, b]`
+/// (`spelling::beta_head_ty`, `inductive::decode_deep`).
+fn contract_redexes(ty: &Type) -> Type {
+    match ty {
+        Type::Pi { dom_level, cod_level, dom, cod } => Type::Pi {
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::new(contract_redexes(dom)),
+            cod: Rc::new(contract_redexes(cod)),
+        },
+        _ => {
+            let t = crate::spelling::beta_head_ty(ty).unwrap_or_else(|| ty.clone());
+            let t = crate::inductive::decode_deep(&t).unwrap_or(t);
+            match &t {
+                Type::Pi { .. } => contract_redexes(&t),
+                _ => t,
+            }
+        }
+    }
 }

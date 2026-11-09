@@ -11,7 +11,10 @@
 // A tactic's argument that expects an `Expr` may be any term of the goal's
 // context: `by exact(h)` with `h` a hypothesis hands the tactic a handle to
 // `h`. Everything else about a tactic's arguments is closed; a tactic reaches
-// the goal's locals through `Goal`.
+// the goal's locals through `Goal`. A term with no type of its own (an
+// unannotated `λ`) is handed over as written: its handle can only be an
+// argument of the result, or the result, and is checked at the type that
+// place expects (`wlog`'s cases; design §26).
 //
 // Importing this module imports the *protocol*, never an implementation.
 // What answers is the elaborator running the build; a Heather handler for the
@@ -328,6 +331,14 @@ inductive Req {
     // What `grind` reads a term through its definitions by
     // (docs/grind-design.md §15).
     Spell(e: Expr),
+    // `h` with the goal's local `x` abstracted out of it: `λ y => h[y/x]`,
+    // a function of `x`'s type. A type is abstracted as its code, so a goal
+    // abstracted over `m` and then `n` is the motive `λ a b => goal[a/m,
+    // b/n]` a case lemma takes (`wlog`, issues/wlog-symmetric-cases.md).
+    // Refused for an `x` that is not a local of the goal's context, and for
+    // a type with no code. Only `h` is abstracted: a hypothesis about `x` is
+    // not, so it speaks of the original `x` in the abstraction.
+    Abstract(h: Handle, x: Expr),
 }
 
 inductive Never {}
@@ -368,6 +379,7 @@ fn Resp(r: Req) → Type {
         Unfold(_) => Checked<Handle>,
         Repr(_) => Checked<Handle>,
         Spell(_) => Checked<Handle>,
+        Abstract(_, _) => Checked<Handle>,
     }
 }
 
@@ -459,6 +471,7 @@ fn absurd_at(e: Expr, goal: Handle) → Tac<Checked<Handle>> { ask(Absurd(e, goa
 fn unfold(h: Handle) → Tac<Checked<Handle>> { ask(Unfold(h)) }
 fn repr_of(ty: Handle) → Tac<Checked<Handle>> { ask(Repr(ty)) }
 fn next_spelling(e: Expr) → Tac<Checked<Handle>> { ask(Spell(e)) }
+fn abstract_over(h: Handle, x: Expr) → Tac<Checked<Handle>> { ask(Abstract(h, x)) }
 
 fn publish<A>(decls: List<Decl>) → Tac<A> {
     Ask(Publish(decls), λ never => match never {})
@@ -523,6 +536,7 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Unfold(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Repr(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Spell(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
+        Abstract(_, _) => match a { AHandle(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -888,7 +902,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 17: `Assume`. 18: `Ctors`. 19: `AsType`. 20: `Publish`. 21: `Holes`.
 // 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`. 26: `Say`.
 // 27: `Fields`. 28: `Inj`. 29: `Absurd`. 30: `Unfold`. 31: `Repr`.
-// 32: `Spell`.
+// 32: `Spell`. 33: `Abstract`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -925,6 +939,7 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Unfold(_) => 30,
             Repr(_) => 31,
             Spell(_) => 32,
+            Abstract(_, _) => 33,
         },
     }
 }
@@ -947,6 +962,7 @@ fn host_lhs(t: Tac<Expr>) → Expr {
             Inj(e, _) => e,
             Absurd(e, _) => e,
             Spell(e) => e,
+            Abstract(_, x) => x,
             _ => NatLit(0),
         },
     }
@@ -980,6 +996,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Absurd(_, goal) => goal.id,
             Unfold(h) => h.id,
             Repr(ty) => ty.id,
+            Abstract(h, _) => h.id,
             _ => 0,
         },
     }

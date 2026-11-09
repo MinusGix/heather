@@ -1020,3 +1020,36 @@ Two answers changed with them:
 `Lookup("False")` answers the kernel's empty type, as `Lookup("True")`
 answers its unit.
 
+
+## 26. Terms whose place types them, and `Abstract` (2026-11-09)
+
+`wlog` (issues/wlog-symmetric-cases.md, `lib/std/tactic/wlog.hthr`) is a
+tactic whose arguments are proofs the user writes in place, unannotated:
+`by wlog(m, n, λ a b h => …, λ a b le => …)`. Neither `λ` infers a type, and
+the type each must have (`(a, b: T) → P(a, b) → P(b, a)` with `P` the
+goal abstracted) exists only once the tactic has read the goal. Two
+additions serve it, and neither is specific to it:
+
+- **A quoted argument may be held as written.** Where a tactic expects an
+  `Expr` and is given a term that infers no type and does not check as an
+  `Expr` either, quoting keeps its surface syntax (`Quoted::Surface`) in
+  place of an elaborated term, under a handle like any other. The handle can
+  stand only where the result gives it a type: as an application's argument,
+  where reification checks it at the domain (`Elaborator::check_surface`),
+  or as the tactic's whole result, checked at the goal. Every request that
+  asks about a handle (`Infer`, `View`, …) is refused for it. It is
+  elaborated in the goal's context, where it was written, so the expected
+  type must mention no hole and no local the tactic introduced; β-redexes a
+  motive's application leaves (`P(a, b)` with `P` a `λ`) are contracted
+  first, so the term's binders read as the goal does. A term that fails to
+  check is reported as its own error, at its own span, when the run fails.
+  Only directly under the goal's context: under a binder of the tactic
+  expression itself, the old refusal stands.
+- **`Abstract(h: Handle, x: Expr) → Checked<Handle>`**: `λ y => h[y/x]`,
+  for `x` a local of the goal's context (a `Local` of the goal or a quoted
+  `m`), a function of `x`'s type; a type is abstracted as its code. Two
+  abstractions make a two-place motive. Only `h` is abstracted: a later local
+  whose type mentions `x` keeps meaning the original, which is still in
+  scope, so the result is well typed whatever `h` mentions, and the kernel
+  checks the proof that uses it. It reuses the induction-hypothesis
+  generalization's renaming (`generalize::rename`). Tag 33.
