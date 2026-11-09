@@ -36,4 +36,4 @@ definition; record why for each one that does not fit.
 
 ## Log
 
-- 2026-11-09: 2026-11-09: Checked the shapes: `LoopRuns` (wp: a Pi over invariant states to RunsAs a trace; function_ir: counted passes with an exit bit) and `Site::Runs` are not reflexive-transitive closures of one step, so they would not shrink by becoming `Star`. `ExecuteSteps` (8 uses) and `SimPaid` (as a plus diagram over tree Tau steps) are the two that fit.
+- 2026-11-09: Checked the shapes: `LoopRuns` (wp: a Pi over invariant states to RunsAs a trace; function_ir: counted passes with an exit bit) and `Site::Runs` are not reflexive-transitive closures of one step, so they would not shrink by becoming `Star`. `ExecuteSteps` (8 uses) and `SimPaid` (as a plus diagram over tree Tau steps) are the two that fit.
