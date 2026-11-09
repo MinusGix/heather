@@ -464,6 +464,19 @@ theorem Nat::le_total(self n, m: Nat): n <= m ∨ m <= n {
     }
 }
 
+// A property symmetric in its two points holds everywhere once it holds
+// where the first is the smaller: a case split on `le_total` whose two arms
+// are one proof with the roles exchanged, proved once
+// (issues/wlog-symmetric-cases.md). `by wlog_le(m, n, swap, le)`
+// (tactic/wlog.hthr) reads `P` off the goal.
+theorem Nat::wlog_le(P: Nat → Nat → Type, swap: (a, b: Nat) → P(a, b) → P(b, a),
+    le: (a, b: Nat) → a <= b → P(a, b), m, n: Nat): P(m, n) {
+    match m.le_total(n) {
+        Inl(h) => le(m, n, h),
+        Inr(h) => swap(n, m, le(n, m, h)),
+    }
+}
+
 fn Nat::le_dec(self n, m: Nat) → n <= m ∨ ¬(n <= m) {
     match n {
         Zero => Inl(trivial),

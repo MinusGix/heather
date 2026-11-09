@@ -401,7 +401,7 @@ fn pattern_names<'a>(pat: &'a Pat, out: &mut Vec<&'a str>) {
 /// The substitution `Γ → Γ, y₁ … y_i` that sends the generalized parameter
 /// `positions[l]` (for `l < i`) to `y_{l+1}` and every other binder to itself,
 /// weakened past the new ones. `i = 0` is the identity.
-fn rename(gamma: &LocalCtx, positions: &[usize], i: usize) -> LocalSubst {
+pub(crate) fn rename(gamma: &LocalCtx, positions: &[usize], i: usize) -> LocalSubst {
     let m = gamma.entries.len();
     let extra = i as u32;
     let tail = match gamma.base {

@@ -47,6 +47,7 @@ import real_atanh;
 import real_exp;
 import omega;
 import tactic;
+import wlog;
 import linarith;
 import ring;
 
@@ -178,8 +179,18 @@ theorem CReal::atanh_tail(t: CReal, ht: AbsLe(t, CReal::half_r()), m, j: Nat):
 theorem CReal::atanh_regular(t: CReal): CReal::Regular(λ n => CReal::atanh_n(n, CReal::atanh_clamp(t))) {
     let x = CReal::atanh_clamp(t);
     let hx = CReal::atanh_clamp_in(t);
-    λ m n => match m.le_total(n) {
-        Inl(_) => {
+    // The bound is symmetric in `m` and `n`: proved where `m <= n`, and
+    // read the other way round by swapping the two sides.
+    λ m n => by wlog(m, n,
+        λ a b h => {
+            let d = CReal::atanh_n(a, x) - CReal::atanh_n(b, x);
+            let sa = CReal::ofRat_add(Rat::inv_pow2(a), Rat::inv_pow2(b));
+            let sb = CReal::ofRat_add(Rat::inv_pow2(b), Rat::inv_pow2(a));
+            let lo: (-CReal::ofRat(Rat::inv_pow2(b) + Rat::inv_pow2(a)) <= CReal::atanh_n(b, x) - CReal::atanh_n(a, x)) = linarith(h, d.le_abs(), sa, sb);
+            let hi: (CReal::atanh_n(b, x) - CReal::atanh_n(a, x) <= CReal::ofRat(Rat::inv_pow2(b) + Rat::inv_pow2(a))) = linarith(h, d.neg_le_abs(), sa, sb);
+            CReal::abs_le(lo, hi)
+        },
+        λ m n le => {
             let e: (m + (n - m) = n) = omega;
             let a = j(e, λ v _ => AbsLe(CReal::atanh_n(v, x) + -CReal::atanh_n(m, x), CReal::ofRat(Rat::inv_pow2(m))),
                 CReal::atanh_tail(x, hx, m, n - m));
@@ -188,22 +199,8 @@ theorem CReal::atanh_regular(t: CReal): CReal::Regular(λ n => CReal::atanh_n(n,
             let sum = CReal::ofRat_add(Rat::inv_pow2(m), Rat::inv_pow2(n));
             let lo: (-CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n)) <= CReal::atanh_n(m, x) - CReal::atanh_n(n, x)) = linarith(a.right, pn, sum);
             let hi: (CReal::atanh_n(m, x) - CReal::atanh_n(n, x) <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = linarith(al, pn, sum);
-            let r: ((CReal::atanh_n(m, x) - CReal::atanh_n(n, x)).abs() <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = CReal::abs_le(lo, hi);
-            r
-        },
-        Inr(_) => {
-            let e: (n + (m - n) = m) = omega;
-            let a = j(e, λ v _ => AbsLe(CReal::atanh_n(v, x) + -CReal::atanh_n(n, x), CReal::ofRat(Rat::inv_pow2(n))),
-                CReal::atanh_tail(x, hx, n, m - n));
-            let al: (-CReal::ofRat(Rat::inv_pow2(n)) <= CReal::atanh_n(m, x) + -CReal::atanh_n(n, x)) = a.left;
-            let pm: (CReal::ofRat(0) <= CReal::ofRat(Rat::inv_pow2(m))) = CReal::ofRat_le(Rat::inv_pow2_nonneg(m));
-            let sum = CReal::ofRat_add(Rat::inv_pow2(m), Rat::inv_pow2(n));
-            let lo: (-CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n)) <= CReal::atanh_n(m, x) - CReal::atanh_n(n, x)) = linarith(al, pm, sum);
-            let hi: (CReal::atanh_n(m, x) - CReal::atanh_n(n, x) <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = linarith(a.right, pm, sum);
-            let r: ((CReal::atanh_n(m, x) - CReal::atanh_n(n, x)).abs() <= CReal::ofRat(Rat::inv_pow2(m) + Rat::inv_pow2(n))) = CReal::abs_le(lo, hi);
-            r
-        },
-    }
+            CReal::abs_le(lo, hi)
+        })
 }
 
 // atanh at the reals, clamped into [-1/2, 1/2].

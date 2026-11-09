@@ -1,0 +1,47 @@
+// Probes of `lib/std/tactic/wlog.hthr`: `wlog` on symmetric goals at the
+// carriers that state a `wlog_le`, and its refusals. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5).
+import logic; import nat; import int; import tactic; import wlog;
+
+// The two cases are unannotated terms, checked where the lemma puts them:
+// `h` is the goal at `(a, b)`, `le` the order the main case may assume.
+theorem nat_add_comm(m, n: Nat): m + n = n + m {
+    by wlog(m, n, λ a b h => sym(h), λ a b le => a.add_comm(b))
+}
+theorem int_add_comm(m, n: Int): m + n = n + m {
+    by wlog(m, n, λ a b h => sym(h), λ a b le => a.add_comm(b))
+}
+
+// Under binders and beside a `let`: the goal is the body under `λ m n`, and
+// the cases see the `let` as the proof around them does.
+theorem under_lambda(k: Nat): (m, n: Nat) → k + (m + n) = k + (n + m) {
+    let j = k;
+    λ m n => by wlog(m, n, λ a b h => sym(h), λ a b le => cong(f := λ (t: Nat) => j + t, p := a.add_comm(b)))
+}
+
+// A goal a definition states, its points bound by the `λ` that opens it:
+// their type is the definition's spelling until it is decoded.
+fn SymSum(f: Nat → Nat) → Type { (m, n: Nat) → f(m) + f(n) = f(n) + f(m) }
+theorem sym_sum(f: Nat → Nat): SymSum(f) {
+    λ m n => by wlog(m, n, λ a b h => sym(h), λ a b le => f(a).add_comm(f(b)))
+}
+
+// The order the main case assumes is the lemma's: `a <= b`, never the other
+// way round.
+theorem order_given(m, n: Nat): m <= n ∨ n <= m {
+    by wlog(m, n, λ a b h => match h { Inl(x) => Inr(x), Inr(x) => Inl(x) }, λ a b le => Inl(le))
+}
+
+// A case is checked at its place, and its own error is the one reported:
+// the reduction must produce the goal at `(b, a)`, not restate `(a, b)`.
+// expect-error: `b + a = a + b` is expected here
+theorem swap_not_symmetric(m, n: Nat): m + n = n + m {
+    by wlog(m, n, λ a b h => h, λ a b le => a.add_comm(b))
+}
+
+// Only a local of the goal's context is abstracted.
+// expect-error: only a local of the goal's context
+theorem not_a_local(m, n: Nat): (m + 1) + n = n + (m + 1) {
+    by wlog(m + 1, n, λ a b h => sym(h), λ a b le => a.add_comm(b))
+}

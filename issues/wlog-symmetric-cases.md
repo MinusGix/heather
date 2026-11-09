@@ -1,10 +1,10 @@
 ---
 title: Symmetric case splits proved once: wlog lemmas for order totality and sign
-status: open
+status: closed
 labels: [stdlib,proofs,ergonomics,tactics]
 area: mathematics
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 A proof that splits on `m.le_total(n)` (or `le_dec`, `lt_total`, a sign
@@ -47,3 +47,17 @@ the match-motive synthesis does; it is not needed to get the benefit.
   in this issue saying why the slopes make that longer than the copy.
 
 Related: docs/stdlib-math-awkwardness-survey.md §9.
+
+## Log
+
+- 2026-11-09: Done as the tactic directly (Minus: "we can just add wlog").
+  `Nat::wlog_le` and `Int::wlog_le` in their type files; `by wlog(m, n,
+  swap, le)` (lib/std/tactic/wlog.hthr) abstracts `m` and `n` out of the
+  goal into `P` and applies the carrier's `T::wlog_le`, with the two cases
+  written as unannotated `λ`s checked where the lemma puts them. Host side
+  (docs/host-elaboration-interface-design.md §26): an `Abstract` request,
+  and quoted arguments held as surface syntax when they infer no type.
+  `CReal::atanh_regular` is the customer: one arm plus a five-line swap.
+  Probes in lib/_tests/std/tactic/wlog_tests.hthr. The sign version
+  through negation (`err_in_nonpos` from `err_in_nonneg`, `Format::nbr_at`)
+  and the `PseudoOrder`/`CReal` versions are [[wlog-sign-and-ordered-carriers]].
