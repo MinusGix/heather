@@ -327,7 +327,7 @@ fn a_value_parameter_contributes_no_level_and_the_join_is_kept() {
     let m = bad(&format!(
         "{src}\ntheorem s(x: Wrap(1), y: Wrap(1), h: x = y): y = x {{ sym(h) }}"
     ));
-    assert!(m.contains("LevelMismatch"), "{m}");
+    assert!(m.contains("the type this call offers it is at `Type<1>`"), "{m}");
     // level 0: the same lemma at `Halts` does.
     ok(&format!(
         "{src}\ntheorem s(x: Halts(4), y: Halts(4), h: x = y): y = x {{ sym(h) }}"

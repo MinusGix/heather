@@ -199,19 +199,20 @@ fn a_refl_that_only_converts_is_still_accepted() {
 /// about keeps the kernel's own report, class and all.
 #[test]
 fn the_kernel_is_still_the_judge() {
-    // A level-1 record (its `c` field is a `Type`) under the prelude's
-    // `sym`, which is stated at `Type<0>`: nothing in checking holds a note
-    // about levels, so the gate's own report stands, class and all.
+    // A `meta fn` whose body has the wrong type: the meta gate maps the
+    // kernel's verdict straight through, with no note
+    // (issues/meta-fn-mismatch-reaches-kernel.md), so the gate's own report
+    // stands, class and all. When that issue closes, this needs another
+    // kernel-only refusal.
     let src = "
-record Wrap { c: Type, w: c }
-theorem s(x: Wrap, y: Wrap, h: x = y): y = x { sym(h) }
+meta fn s(g: Ctx, n: Nat) -> Code(g |- Nat) { n }
 ";
     let r = reject(src);
     let rendered = r.render(src);
-    assert!(rendered.contains("the kernel rejected `s`: LevelMismatch"), "{rendered}");
+    assert!(rendered.contains("the kernel rejected `s`: NotConvertible"), "{rendered}");
     // No note, so the span stays where the gate put it: the declaration.
     let ElabError::Kernel { span, .. } = r else { panic!("expected a kernel rejection: {r}") };
-    assert!(src[span.start as usize..span.end as usize].starts_with("theorem s("), "{rendered}");
+    assert!(src[span.start as usize..span.end as usize].starts_with("meta fn s("), "{rendered}");
 }
 
 /// **Negative control, the one that would break real programs.** The comparison

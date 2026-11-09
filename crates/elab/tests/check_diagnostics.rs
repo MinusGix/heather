@@ -74,16 +74,17 @@ fn parse_error_is_wholesale() {
 
 #[test]
 fn kernel_rejection_renders_with_the_declaration_position() {
-    // A level-1 record under the prelude's `Type<0>` `sym`. Not a `refl`:
-    // that one carries a note of its own and is reported at the `refl`
+    // A `meta fn` mismatch only the kernel refuses
+    // (issues/meta-fn-mismatch-reaches-kernel.md). Not a `refl`: that one
+    // carries a note of its own and is reported at the `refl`
     // ([[elab-refl-accepts-match-eta-kernel-rejects]]), so it could no longer
     // witness the *declaration* position this test is about.
-    let src = "record Wrap {\n\
-                   c: Type,\n\
-                   w: c\n\
+    let src = "fn one() -> Nat {\n\
+                   1\n\
                }\n\
-               theorem broken(x: Wrap, y: Wrap, h: x = y): y = x {\n\
-                   sym(h)\n\
+               \n\
+               meta fn broken(g: Ctx, n: Nat) -> Code(g |- Nat) {\n\
+                   n\n\
                }\n";
     let errs = check(src);
     assert_eq!(errs.len(), 1, "{errs:?}");
@@ -121,15 +122,15 @@ fn multi_line_span_carets_only_its_first_line() {
     // The kernel rejection's span is the whole declaration; the caret run
     // must stop at the end of the first line rather than spill. (A `refl`'s
     // rejection is spanned at the `refl` and is one line, so it cannot be the
-    // fixture: this is the same level-1 record as above.)
-    let src = "record Wrap { c: Type, w: c }\n\
-               theorem broken(x: Wrap, y: Wrap, h: x = y): y = x {\n\
-                   sym(h)\n\
+    // fixture: this is the same `meta fn` mismatch as above.)
+    let src = "fn one() -> Nat { 1 }\n\
+               meta fn broken(g: Ctx, n: Nat) -> Code(g |- Nat) {\n\
+                   n\n\
                }\n";
     let errs = check(src);
     let s = errs[0].render_snippet(src, "f.hthr");
     let caret_line = s.lines().last().unwrap();
-    let source_line = "theorem broken(x: Wrap, y: Wrap, h: x = y): y = x {";
+    let source_line = "meta fn broken(g: Ctx, n: Nat) -> Code(g |- Nat) {";
     assert_eq!(
         caret_line.trim_start_matches([' ', '|']).len(),
         source_line.len(),
