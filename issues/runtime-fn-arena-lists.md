@@ -6,7 +6,7 @@ area: heather-in-heather
 milestone: [nh-heap]
 blocked-by: [effects-uniqueness-surface]
 created: 2026-11-02
-updated: 2026-11-04
+updated: 2026-11-09
 ---
 
 The front-end half of [[native-heap-arena]] (docs/native-heap-arena-design.md
@@ -47,3 +47,4 @@ builder versions, and the builder versions are deleted.
 - 2026-11-02: 2026-11-02: Customers moved onto rt_io's word-level calls (`Io::read_into` into a kept buffer, `Io::write_from` of a span; PR #395) so they reflect through ETm once it has loops. A line written from the arena is then a span of the arena buffer, so `Bytes` values must be lowerable as (buffer, offset, length) views, not only as whole buffers. Review follow-ups filed: [[mut-self-early-return]], [[bool-conditions-and-literals]], [[effectful-loops-without-passes]], [[numerals-without-algebra-import]].
 - 2026-11-04: `Io::tac` and `Io::sort` no longer take `passes` ([[effectful-loops-without-passes]]): their loops are `while` with no measure and they mean `Io → Partial(Mutated<Io, R>)`; probes in `line_tools_tests` are `Returns` at a count. `sort` now orders its lines first (`List::sorted_out`, consing the greatest first, so every cell is new and write-once) and writes them with the same loop as `tac` (`Io::write_lines`).
 - 2026-11-05: gardener: cites a file it shares with [[datarepr-guarded-images]] (`lib/native/native_arena.hthr`); [[native-arena-cell-codecs]] (`lib/native/native_arena.hthr`); [[native-sort-gate-rail]] (`crates/cli/tests/native_tools.rs`); [[native-tool-test-cold-certificate-rail]] (`crates/cli/tests/native_tools.rs`).
+- 2026-11-09: 2026-11-09: sort's spec (sorted permutation under the byte-lexicographic order) needs [[sorting-order-theory]] (docs/native-mathematics-survey.md §8).

@@ -5,7 +5,7 @@ labels: [compiler,x86,memory,proofs]
 area: heather-in-heather
 milestone: [hih-memory]
 created: 2026-09-07
-updated: 2026-10-28
+updated: 2026-11-09
 ---
 
 ## Scope
@@ -53,3 +53,4 @@ separation logic or an allocator.
 
 - 2026-09-08: The private-frame customer required staged byte-address exclusions for eight-byte words. Investigate reusable region-disjointness and word-preservation interfaces so callers do not manually assemble byte-pair obligations. Include overlap, wraparound, and access-right premises; byte-level effects remain the checked foundation.
 - 2026-10-28: Bookkeeping: WritesOnly, CallMemoryPolicy and NativeIntegerCallContract, which the 2026-09-07 entries record, are no longer in lib/ or crates/. They went with the per-function call path in the B1/B2 burns and survive only under probes/ and in older docs. The live successors are [[wp-proved-memory-contracts]] (footprints for Proved items) and [[native-procedure-contracts]] (compiled procedure contracts). Found while writing docs/wp-preserving-compilation-survey.md.
+- 2026-11-09: 2026-11-09: footprints as interval sets are filed as [[address-interval-sets]].
