@@ -1056,6 +1056,7 @@ fn apply_implicit_planned(
     let mut ty = callee_ty.shift_global(n);
     let mut level = callee_lvl;
     let mut sols = vec![Sol::Unsolved; n as usize];
+    crate::unification::clear_level_declines();
     let mut meta_doms = Vec::with_capacity(n as usize);
     let mut meta_lvls = Vec::with_capacity(n as usize);
     let mut slot_param = Vec::with_capacity(n as usize);
@@ -1412,16 +1413,21 @@ fn apply_implicit_planned(
         let mut solution = sols[slot]
             .solved()
             .cloned()
-            .ok_or_else(|| ElabError::Elab {
-                msg: unsolved_message(
-                    name,
-                    slot_param
-                        .get(slot)
-                        .and_then(|&parameter| params.get(parameter)),
-                    value_head,
-                    bare_ref,
-                ),
-                span,
+            .ok_or_else(|| {
+                let parameter = slot_param.get(slot).and_then(|&parameter| params.get(parameter));
+                let msg = match (parameter, crate::unification::level_decline(slot as u32)) {
+                    (Some(p), Some((want, got))) => format!(
+                        "the type argument `{}` of `{name}` lives at `Type<{}>`, but the type \
+                         this call offers it is at `Type<{}>` — universes in this system are \
+                         non-cumulative, so a type does not also inhabit the universes above \
+                         its own, and there is no lift",
+                        p.name,
+                        crate::show_level(&want),
+                        crate::show_level(&got),
+                    ),
+                    _ => unsolved_message(name, parameter, value_head, bare_ref),
+                };
+                ElabError::Elab { msg, span }
             })?;
         // The discharge writes this solution through the whole spine's
         // annotations, so it is written in the emission spelling (§5).

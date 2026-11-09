@@ -6,10 +6,11 @@ theorem broken(n: Nat): n = Succ(n) {
     refl
 }
 
-record Wrap { c: Type, w: c }
-
-theorem levels(x: Wrap, y: Wrap, h: x = y): y = x {
-    sym(h)
+// A `meta fn` mismatch the elaborator does not see yet
+// (issues/meta-fn-mismatch-reaches-kernel.md): only the kernel refuses it.
+// When that issue closes, this needs another kernel-only refusal.
+meta fn unchecked(g: Ctx, n: Nat) -> Code(g |- Nat) {
+    n
 }
 
 fn id_nat(n: Nat) -> Nat {

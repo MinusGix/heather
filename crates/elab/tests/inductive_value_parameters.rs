@@ -362,12 +362,25 @@ fn a_non_uniform_occurrence_is_refused_by_name() {
     assert!(m.contains("declares no value parameters"), "{m}");
 }
 
-/// The other refusals: an index beside value parameters, and a field that
-/// would shadow a parameter in *any* constructor, not only the first.
+/// An index beside value parameters (on the `IWf` route since
+/// issues/indexed-families-at-any-index-type.md): an occurrence writes the
+/// value parameters and then the index, and one that leaves the index out,
+/// or varies a value argument, is refused by name.
+#[test]
+fn an_index_beside_value_parameters() {
+    ok("inductive D(m: Nat) : (n: Nat) -> Type { E : D(m, 0), F(k: Nat, d: D(m, k)) : D(m, Succ(k)) }
+        fn e3() -> D(3, 0) { E }
+        fn f3() -> D(3, 1) { F(0, E) }");
+    let m = bad("inductive D(m: Nat) : (n: Nat) -> Type { E : D(0) }");
+    assert!(m.contains("with no index after its value parameters"), "{m}");
+    let m = bad("inductive D(m: Nat) : (n: Nat) -> Type { E : D(m, 0), F(k: Nat, d: D(Succ(m), k)) : D(m, Succ(k)) }");
+    assert!(m.contains("at value arguments other than its own value parameters"), "{m}");
+}
+
+/// The other refusals: a field that would shadow a parameter in *any*
+/// constructor, not only the first.
 #[test]
 fn the_declaration_refusals_carry_their_messages() {
-    let m = bad("inductive D(m: Nat) : (n: Nat) -> Type { E : D(0) }");
-    assert!(m.contains("has both value parameters and an index"), "{m}");
     let m = bad("inductive D(m: Nat) { E, F(m: Nat) }");
     assert!(m.contains("a value parameter of `D` and a field of its constructor `F`"), "{m}");
     let m = bad("inductive D(m: Nat) { E(x: Nat), F(y: Nat, m: Nat) }");

@@ -247,7 +247,7 @@ impl Elaborator {
                         );
                     }
                     // The single-family rules for what can be an index type.
-                    self.index_type(dom, &d.name)?;
+                    self.index_type(dom, &d.name, &[])?;
                     Some((n.clone(), (**dom).clone()))
                 }
             };
@@ -393,7 +393,7 @@ impl Elaborator {
             lowered.push(self.elab_ty(cx, a)?);
         }
         let idx_t = self.member_index(cx, fam, k, idx, span)?;
-        self.lower_iwf_instance(cx, fam, &lowered, idx_t, span)
+        self.lower_iwf_instance(cx, fam, &lowered, &[], idx_t, span)
     }
 
     /// The family's index at member `k`: `D_t#member(e)`, built by the member
