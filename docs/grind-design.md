@@ -197,6 +197,14 @@ by class pair instead of the pairwise pass; union by rank with the edge
 forest kept separately; a native closure behind the oracle tier with the same
 proof reconstruction.
 
+That was round 1's graph. Since 2026-11-08 the nodes and classes sit in
+`NatMap` tries, the signature table exists, and closure is incremental
+(§15.2): a lookup is logarithmic in the graph, a close reads only the dirty
+nodes against their bucket, and a round's matching walks each pattern root
+from the uses index through class rows that hold no congruent copies. What
+bounds a run is its total fuel across evaluations, since the arena is not
+freed during a tactic run (§15.3). Union by rank and a native closure remain.
+
 ## 6. Rounds
 
 | round | builds | done when |
