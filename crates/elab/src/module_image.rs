@@ -1905,6 +1905,7 @@ fn put_inductive(w: &mut Writer, info: &Inductive) {
     w.option(info.index_ty.as_ref(), |w, ty| match ty {
         IdxTy::Nat => w.byte(0),
         IdxTy::Decl(info) => { w.byte(1); put_inductive(w, info); }
+        IdxTy::Open { ty, name } => { w.byte(2); put_ty(w, ty); w.string(name); }
     });
     w.option(info.skel.as_deref(), put_inductive);
     w.vec(&info.co_index, |w, (name, ty)| { w.string(name); put_ty(w, ty); });
@@ -1926,6 +1927,7 @@ fn get_inductive(r: &mut Reader<'_>) -> Result<Inductive, ModuleImageDecodeError
         index: r.option(Reader::string)?,
         index_ty: r.option(|r| match r.byte()? {
             0 => Ok(IdxTy::Nat), 1 => Ok(IdxTy::Decl(Rc::new(get_inductive(r)?))),
+            2 => Ok(IdxTy::Open { ty: get_ty(r)?, name: r.string()? }),
             tag => Err(ModuleImageDecodeError::InvalidTag { sort: "index type", tag }),
         })?,
         skel: r.option(|r| Ok(Rc::new(get_inductive(r)?)))?,

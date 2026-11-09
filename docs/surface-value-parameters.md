@@ -292,11 +292,18 @@ tier 1 and tier 2 cannot disagree about it.
 
 ### 6.3 What stays refused
 
-**Value parameters beside an index** (`inductive D(m: Nat) : (n: Nat) ->
-Type`), by name. The index telescope and the result annotations would have to
-be read under the parameters, route 2b's skeleton would have to carry them,
-and nothing asks for it yet. The bare-variable-index arm above now names the
-`inductive` spelling as well as the `record` one.
+~~**Value parameters beside an index**~~, accepted since 2026-11-09
+(issues/indexed-families-at-any-index-type.md) on the `IWf` route only: a
+declaration with both is never route 1's. An occurrence is
+`D<p̄>(v̄, e)` (or `D<p̄>(v̄)(e)`), the value arguments the declaration's own
+in order, as in §6.2, and the index after them. The shape declaration
+carries the value parameters, so the payload is read under them; the index
+type, the result and child indices, and a function child's domain are read
+with them bound (`field_scope_cx`), and the signature is built at the use's
+value arguments (`iwf_sig`/`iw_sig` take them). The bare-variable-index arm
+above now names the `inductive` spelling as well as the `record` one, and it
+fires only when the children sit at the result's variable too: an
+accessibility-shaped family (a child at another index) is a genuine index.
 
 The generators that already refused a value-parameterized record
 (`datarepr`, certgen) refuse a value-parameterized `inductive` by the

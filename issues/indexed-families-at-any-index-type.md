@@ -1,6 +1,6 @@
 ---
 title: Indexed families at any index type, beside value parameters
-status: open
+status: closed
 labels: [inductives,indexed-families,elaboration]
 area: language
 created: 2026-11-09
@@ -51,3 +51,7 @@ Also met by an infinitary field (`f: (e: …) → Cover<…>(…)(e.witness)`): 
 value parameters, the uniform occurrence `D<p̄>(v̄)(e)` is not recognised by
 the infinitary classifier ("a function whose result mentions `Cover` under
 another type").
+
+## Log
+
+- 2026-11-09: Done. `index_type` accepts one of the declaration's type parameters (`IdxTy::Open`, IWf route only, read at the use's arguments by `index_type_at`); value parameters beside an index are accepted on the IWf route (shape carries them, `iwf_sig`/`iw_sig`/`lower_iwf_instance` take `vargs`, written `D<p̄>(v̄, e)` or `D<p̄>(v̄)(e)`); the bare-variable rule refuses only when the children sit at the result variable too (`children_vary`); and a self-call through a function child compares the rebound index by conversion (`SelfCallElab::same_index`). Probes: lib/_tests/lang/open_index_tests.hthr. Other index types (`List<A>`, `Σ`, defs) still meet route 1's checks.

@@ -17,6 +17,14 @@ use crate::{Cx, R, err, matching};
 /// the ordinary application engine.
 pub(crate) trait SelfCallElab: ExplicitArgElab {
     fn infer_self_call_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)>;
+    /// Whether a self-call's argument is the index a rebound parameter must
+    /// take (`expected`, the child's written index). Structural by default;
+    /// the elaborator compares by conversion, since the call spells the index
+    /// through the arm's binders and the signature through the payload's
+    /// projections.
+    fn same_index(&self, _cx: &Cx, expected: &Term, got: &Term, _ty: &Type, _level: &Level) -> bool {
+        expected == got
+    }
     fn self_call_application_params(&self, name: &str) -> Rc<Vec<ParamMeta>>;
     /// The declaration `name`'s [`RecursionPlan::Misplaced`], if it has one.
     fn misplaced_recursion(&self, name: &str) -> Option<(usize, String)>;
@@ -981,7 +989,7 @@ pub(crate) fn elab_self_call(
         }
         // Compare by binder for Nat and by term for Wf. Names are diagnostic
         // data only and cannot fake structural descent through shadowing.
-        let (argument_term, _, _) = elab.infer_self_call_argument(cx, argument)?;
+        let (argument_term, argument_ty, argument_lvl) = elab.infer_self_call_argument(cx, argument)?;
         let accepted = match (&guard.kind, position == guard.dec) {
             (GuardKind::Nat { preds, comps, .. }, true) => match argument_term {
                 Term::Var(LocalVar(index)) => {
@@ -1064,12 +1072,12 @@ pub(crate) fn elab_self_call(
                         // written for it, at the argument the call passed.
                         if let Some((at, arg)) = &through_fn {
                             return fn_children[*at].rebind.as_ref().is_some_and(|term| {
-                                term.shift_local_above(shift, 1).inst_top(0, arg) == argument_term
+                                elab.same_index(cx, &term.shift_local_above(shift, 1).inst_top(0, arg), &argument_term, &argument_ty, &argument_lvl)
                             });
                         }
                         terms
                             .get(descendant)
-                            .is_some_and(|term| term.shift_local(shift) == argument_term)
+                            .is_some_and(|term| elab.same_index(cx, &term.shift_local(shift), &argument_term, &argument_ty, &argument_lvl))
                     })
             }
         };
