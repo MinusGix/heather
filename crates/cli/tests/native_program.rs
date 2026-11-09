@@ -97,7 +97,7 @@ static uint64_t reference(uint64_t a, uint64_t b) {
 // Loops bounded by a measure (issues/function-ir-loop-measure-recursion.md):
 // a `decreases` function compiled to a loop of at most its measure's
 // passes, the bound a parameter or computed first.
-const MEASURED: [Case; 2] = [
+const MEASURED: [Case; 3] = [
     ("loop_measure", "triangle", r#"
 static uint64_t reference(uint64_t a, uint64_t b) { for (uint64_t n = a & 1023; n != 0; --n) b += n; return b; }
 "#),
@@ -106,6 +106,18 @@ static uint64_t reference(uint64_t a, uint64_t b) {
     uint64_t lo = a & 255, hi = b & 1023, acc = b;
     for (; lo < hi; ++lo) acc = acc + acc + lo;
     return acc ^ lo;
+}
+"#),
+    // A measured loop whose state is an `i64` (§16.13, round 4): signed
+    // compare, arithmetic shift and the word's add/sub on the record's word.
+    ("loop_signed", "signed_loop", r#"
+static uint64_t reference(uint64_t a, uint64_t b) {
+    int64_t x = (int64_t)b;
+    for (uint64_t n = a & 1023; n != 0; --n) {
+        int64_t s = (int64_t)n;
+        x = x < s ? (int64_t)((uint64_t)x + (uint64_t)s) : (int64_t)((uint64_t)(x >> 1) - (uint64_t)s);
+    }
+    return (uint64_t)x;
 }
 "#),
 ];

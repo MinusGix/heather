@@ -1,6 +1,6 @@
 ---
 title: Loops over repr'd words in runtime fns
-status: open
+status: closed
 labels: [native, runtime-fn]
 area: heather-in-heather
 milestone: [nh-front]
@@ -21,3 +21,7 @@ The loop theorems (`rt_loop.hthr`) are stated over `Ty::Words`; since
 loop equations' state casts (`Ty::cast` at `Named(i)` is the repr's `abs`
 of the word, `Ty::convert`) and the generator's per-word equation spelling,
 which assumes each state variable is a `BitVec(64)`.
+
+## Log
+
+- 2026-11-08: 2026-11-08: done in i64 round 4 (docs/runtime-fn-setups-design.md §16.13): fuel and measured loops take OneWords state and a repr'd result; the tail is read as a word outside its branches (Tm::out/Tm::into). Probes in runtime_sint_tests.hthr; examples/x86-native/loop_signed compiles to certified x86.

@@ -68,6 +68,10 @@ inductive Node {
     // `ofNat(x.toNat())` at the output's width, so one equation covers the
     // two directions (`BitVec::ofNat_toNat_zero_extend`, `_truncate`).
     Resize(from: Nat, to: Nat, output: Nat, source: Nat),
+    // The `from`-bit word `source` read as a `to`-bit word in two's
+    // complement: sign-extended when `to` is wider, its low `to` bits when
+    // narrower (`BitVec::sresize`; `BitVec::sresize_sign_extend`).
+    SignResize(from: Nat, to: Nat, output: Nat, source: Nat),
 }
 
 record Region {
@@ -94,6 +98,7 @@ fn node_output(node: Node) → Port {
         BufferLoad(output, _, _) => Port(output, 64),
         BufferStore(output, _, _, _) => Port(output, 64),
         Resize(_, to, output, _) => Port(output, to),
+        SignResize(_, to, output, _) => Port(output, to),
     }
 }
 
@@ -347,6 +352,9 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
         BufferStore(output, _, at, value) =>
             BinaryNodeIndexed(directory, index, 64, output, at, value),
         Resize(from, to, output, source) =>
+            ProducedAt(directory, index, output, to) ∧
+            HasAvailableDirectoryPort(directory, source, from, index),
+        SignResize(from, to, output, source) =>
             ProducedAt(directory, index, output, to) ∧
             HasAvailableDirectoryPort(directory, source, from, index),
     }
@@ -642,6 +650,8 @@ fn NodeHolds(values: Valuation(), node: Node) → Type {
         BufferStore(_, _, _, _) => True,
         Resize(from, to, output, source) =>
             values(to, output) = BitVec::ofNat(values(from, source).toNat()),
+        SignResize(from, to, output, source) =>
+            values(to, output) = values(from, source).sresize(to),
     }
 }
 

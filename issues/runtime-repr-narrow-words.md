@@ -21,3 +21,7 @@ narrow word: zero-extended for `BitVec(w)`, sign-extended for `SInt(w)`
 (a `Resize` at the edge, §16.12, and its signed twin from
 [[runtime-signed-extend-divide]]), with `Ty::convert`'s word reading
 generalised from `Word(64)` to any width.
+
+## Log
+
+- 2026-11-08: 2026-11-08: the signed twin of Resize exists now (FunctionIR SignResize, rt Sext), so the boundary widening this issue wants has both nodes. datarepr-value-parameter-telescope moves with this issue: one repr over SInt's width only pays once a narrow SInt can be held. SInt::extend takes an SInt(32), so it is refused until then.
