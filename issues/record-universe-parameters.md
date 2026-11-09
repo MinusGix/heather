@@ -1,6 +1,6 @@
 ---
 title: Let records declare type parameters at a universe
-status: open
+status: closed
 labels: [frontend,elaboration,syntax]
 area: language
 created: 2026-11-09
@@ -28,3 +28,4 @@ class (`kinded_class_ty`).
 ## Log
 
 - 2026-11-09: Filed from frame-and-locale-foundations.
+- 2026-11-09: Done. The parser reads a record's `<A: Type<n>>` as a leading value parameter (they lead any plain type parameters), and `R<A, B>(v, …)` reads the surplus angle arguments back as those values (`universe_lead` in elab/inductive.rs). FrameHom, LocaleMap and Nucleus moved onto it; probes in lib/_tests/lang/universe_parameter_tests.hthr, parser tests in crates/syntax/tests/record_universe_params.rs.

@@ -784,8 +784,9 @@ impl Elaborator {
             // Route 2b: the index is the constructor's *written* result index
             // at the arguments it was given (docs/inductive-fording-lowering.md
             // §2), which is the whole widening.
-            let (idx, _, _) = self.iwf_ctor_index(cx, ind, i, args, span)?;
-            self.lower_iwf_instance(cx, ind, &targs, idx, span)?
+            let ity = self.index_type_at(cx, ind, &targs, &[], span)?;
+            let (idx, _, _) = self.iwf_ctor_index(cx, ind, i, args, ity)?;
+            self.lower_iwf_instance(cx, ind, &targs, &[], idx, span)?
         } else if ind.index.is_some() && args.len() == ind.ctors[i].fields.len() {
             // The result index comes from the pattern and the written index
             // argument (docs/inductive-indexed-lowering.md §5); the wrong-
@@ -1021,7 +1022,7 @@ impl Elaborator {
             if found.tag != ind.tag {
                 return None;
             }
-            let idx = match self.iwf_ctor_index(cx, ind, i, args, span) {
+            let idx = match self.iwf_ctor_index(cx, ind, i, args, (fam.ity.clone(), fam.ilvl.clone())) {
                 Ok((idx, _, _)) => idx,
                 Err(e) => return Some(Err(e)),
             };
@@ -1113,8 +1114,9 @@ impl Elaborator {
                     );
                 }
                 let (ty, lvl) = if ind.skel.is_some() {
-                    let (idx, _, _) = self.iwf_ctor_index(cx, &ind, i, args, span)?;
-                    self.lower_iwf_instance(cx, &ind, &lowered, idx, span)?
+                    let ity = self.index_type_at(cx, &ind, &lowered, &[], span)?;
+                    let (idx, _, _) = self.iwf_ctor_index(cx, &ind, i, args, ity)?;
+                    self.lower_iwf_instance(cx, &ind, &lowered, &[], idx, span)?
                 } else {
                     let (idx, _, _) = self.indexed_ctor_index(cx, &ind, i, args, span)?;
                     self.lower_indexed_instance(cx, &ind, &lowered, idx, span)?

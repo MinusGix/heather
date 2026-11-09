@@ -458,6 +458,34 @@ impl Elaborator {
         {
             IdxTy::Nat => Ok((Type::Nat, Level::Zero)),
             IdxTy::Decl(i) => self.lower_instance(cx, i, &[], &[], span),
+            IdxTy::Open { name, .. } => err(
+                format!(
+                    "internal: `{}`'s index type `{name}` is read at the family's \
+                     arguments (`index_type_at`)",
+                    ind.name
+                ),
+                span,
+            ),
+        }
+    }
+
+    /// `⟦I⟧` at the family's type arguments `args` and value arguments
+    /// `vargs`, scoped in `cx`: an open index type is written over the
+    /// declaration's parameters, so it is read where they are bound.
+    pub(crate) fn index_type_at(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
+        span: Span,
+    ) -> R<(Type, Level)> {
+        match ind.index_ty.as_ref() {
+            Some(IdxTy::Open { ty, .. }) => {
+                let fcx = self.field_scope_cx(cx, ind, args, vargs);
+                self.elab_ty(&fcx, ty)
+            }
+            _ => self.index_type_of(cx, ind, span),
         }
     }
 
@@ -492,6 +520,7 @@ impl Elaborator {
                 };
                 Ok((t, Type::Nat, Level::Zero))
             }
+            IdxTy::Open { .. } => return err("internal: an open index type is not route 1's", span),
             IdxTy::Decl(iind) => {
                 let (ity, ilvl) = self.lower_instance(cx, iind, &[], &[], span)?;
                 let pargs: Vec<&Expr> = pat.vars.iter().map(|&k| args[k].borrow()).collect();
@@ -509,6 +538,24 @@ impl Elaborator {
         let ExprKind::App { head, args, .. } = &e.kind else {
             return Ok(None);
         };
+        // `D<ā>(v̄)(e)`: a family with value parameters, applied to them and
+        // then to its index (or `D<ā>(v̄, e)` in one list).
+        let (head, args, vexprs): (&Expr, &[Expr], &[Expr]) = match &head.kind {
+            ExprKind::App { head: h, args: vs, .. }
+                if crate::inductive::named_head(h)
+                    .and_then(|(n, _)| self.lookup_inductive(n))
+                    .is_some_and(|i| i.index.is_some() && !i.valparams.is_empty()) =>
+            {
+                (h, args, vs)
+            }
+            _ => match crate::inductive::named_head(head).and_then(|(n, _)| self.lookup_inductive(n)) {
+                Some(i) if i.index.is_some() && !i.valparams.is_empty() && args.len() > i.valparams.len() => {
+                    let k = i.valparams.len();
+                    (&**head, &args[k..], &args[..k])
+                }
+                _ => (&**head, &args[..], &[][..]),
+            },
+        };
         let Some((name, targs)) = crate::inductive::named_head(head) else {
             return Ok(None);
         };
@@ -516,7 +563,7 @@ impl Elaborator {
             // A mutual group's member at an index
             // (docs/mutual-inductive-design.md §2).
             if let Some((fam, k)) = self.lookup_member(name) {
-                let idx = match args.as_slice() {
+                let idx = match args {
                     [idx] => Some(idx),
                     _ if fam.members[k].index.is_none() => {
                         return err(format!("`{name}` is not indexed"), span);
@@ -530,7 +577,7 @@ impl Elaborator {
         if ind.index.is_none() {
             return Ok(None);
         }
-        let [idx] = args.as_slice() else {
+        let [idx] = args else {
             return err(format!("`{name}` takes exactly one index"), span);
         };
         if targs.len() != ind.params.len() {
@@ -547,14 +594,25 @@ impl Elaborator {
         for a in targs {
             lowered.push(self.elab_ty(cx, a)?);
         }
-        let (ity, ilvl) = self.index_type_of(cx, &ind, span)?;
+        if vexprs.len() != ind.valparams.len() {
+            return err(
+                format!(
+                    "`{name}` takes {} value argument(s) before its index, found {}",
+                    ind.valparams.len(),
+                    vexprs.len()
+                ),
+                span,
+            );
+        }
+        let vargs = self.valparam_args(cx, &ind, &lowered, vexprs, span)?;
+        let (ity, ilvl) = self.index_type_at(cx, &ind, &lowered, &vargs, span)?;
         let idx_t = self.elab_check(cx, idx, &ity, &ilvl)?;
         // Route 2b's families are Σ+`sEq`, not `El` of an eliminator
         // (docs/inductive-fording-lowering.md §6); the classifier decided which
         // at declaration time, and the skeleton is the record of that decision.
         if ind.skel.is_some() {
             return self
-                .lower_iwf_instance(cx, &ind, &lowered, idx_t, span)
+                .lower_iwf_instance(cx, &ind, &lowered, &vargs, idx_t, span)
                 .map(Some);
         }
         self.lower_indexed_instance(cx, &ind, &lowered, idx_t, span)
@@ -805,6 +863,7 @@ impl Elaborator {
             // A recursive declared index: `elim_Wf`, with `cs`/`ih` threaded
             // through the `Case` motive so each branch sees them at its own
             // constructor-refined arity (§8.2 fact 1).
+            IdxTy::Open { .. } => return err("internal: an open index type is not route 1's", span),
             IdxTy::Decl(iind) => {
                 let (ity_ty, _) = self.lower_instance(cx, iind, &[], &[], span)?;
                 let wf_body = |bcx: &Cx,
@@ -1415,6 +1474,7 @@ impl Elaborator {
                     &body,
                 )?
             }
+            IdxTy::Open { .. } => return err("internal: an open index type is not route 1's", span),
             IdxTy::Decl(iind) => {
                 let (ity_ty, _) = self.lower_instance(cx, iind, &[], &[], span)?;
                 let body = |bcx: &Cx,

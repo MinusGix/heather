@@ -1,9 +1,8 @@
 ---
 title: Present the real line as a locale
-status: blocked
+status: open
 labels: [stdlib,mathematics,reals,locale-theory,research]
 area: mathematics
-blocked-by: [inductive-formal-covers]
 created: 2026-09-02
 updated: 2026-11-09
 ---
@@ -31,3 +30,4 @@ points are conclusions or imported principles, never definitional premises.
   predicative locale foundation exists.
 - 2026-11-09: Foundations landed (docs/frame-locale-design.md); now waits on
   [[inductive-formal-covers]] for the interval axioms' cover.
+- 2026-11-09: Unblocked: inductive-formal-covers is done; the real line is presented by an axiom set over rational intervals and `Cover` (lib/std/locale/formal_topology.hthr).

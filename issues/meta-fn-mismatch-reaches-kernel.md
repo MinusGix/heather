@@ -4,7 +4,7 @@ status: open
 labels: [elaboration,diagnostics,meta]
 area: language
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-09
 ---
 
 Found probing [[recursion-on-elaborated-terms]] (master c345c863). Inside a
@@ -45,3 +45,7 @@ the `kernel_refusal` route is safe as a backstop.
 
 Each example above refused by the elaborator at the expression, naming both
 types as written; an expect-error probe per shape in lib/_tests.
+
+## Log
+
+- 2026-11-09: Now also the kernel-only refusal fixture of five tests (crates/cli/tests/fixtures/bad.hthr, check_diagnostics, check_reports_mismatch), since the level-1 `sym` fixture they used is refused by the elaborator (implicit-type-argument-above-its-level). Closing this needs another kernel-only fixture for them.

@@ -208,6 +208,16 @@ impl<'a> Walk<'a> {
         self.unlocated.push((site, region));
     }
 
+    /// The `<` directly after a declaration's name, if its parameters are
+    /// written in angle brackets.
+    fn lt_after_name(&self, region: Span, name: &str) -> Option<usize> {
+        let i = self.toks.iter().position(|t| {
+            t.span.start >= region.start && matches!(&t.kind, TokKind::Ident(n) if n == name)
+        })?;
+        let t = self.toks.get(i + 1)?;
+        matches!(t.kind, TokKind::Lt).then_some(t.span.start)
+    }
+
     /// A parameter list whose names are bare `String`s in the AST and so carry
     /// no spans — `class C<A>`, `inductive I<A>`. Located from the declared
     /// name instead; the names cannot nest, so the first `Gt` after the opener
@@ -519,8 +529,25 @@ impl<'a> Walk<'a> {
                 self.decl(&p.decl);
             }
             Item::Inductive(i) => {
-                if !i.params.is_empty() {
-                    self.list_bare("inductive-params", i.span, &i.name, 0);
+                if let Some(open) = self.lt_after_name(i.span, &i.name) {
+                    // `record R<A: Type<1>, X>`: a parameter declared at a
+                    // universe is a leading value parameter, written in the
+                    // angle brackets, whose own `Type<n>` list nests inside
+                    // the outer one. Those are the leading value parameters
+                    // with no `(` between the opener and them.
+                    let paren = self
+                        .toks
+                        .iter()
+                        .find(|t| t.span.start > open && matches!(t.kind, TokKind::LParen | TokKind::LBrace))
+                        .map_or(usize::MAX, |t| t.span.start);
+                    let inner_end = i
+                        .valparams
+                        .iter()
+                        .take_while(|p| p.span.start < paren)
+                        .map(|p| p.ty.span.end)
+                        .max()
+                        .unwrap_or(0);
+                    self.list_bare("inductive-params", i.span, &i.name, inner_end);
                 }
                 for p in &i.valparams {
                     self.param(p);
