@@ -72,8 +72,8 @@ Landed in three layers, each in its type's file.
 - **`bitvec_ring.hthr`** (new): the ring laws (`add_assoc`, `add_neg`,
   `mul_assoc`, `mul_comm`, distributivity, units) and
   `CommRing`/`CommRingOfInt<BitVec(n)>` at `RelId`, with `≈` designated
-  `RelId`. The integers' image is `BitVec::int_cast` (numerals and negated
-  numerals), proved equal to `Ring::int_cast` so its laws are the generic
+  `RelId`. The integers' image is `BitVec::ofInt` (numerals and negated
+  numerals; it was `BitVec::int_cast` until [[bitvec-int-cast-is-ofint]]), proved equal to `Ring::int_cast` so its laws are the generic
   ones.
 - **`ring`** (`crates/elab/src/ring.rs`): an `=` goal at a carrier whose `≈`
   is `RelId` and which has `CommRingOfInt` is read as the `≈` goal it
@@ -95,7 +95,7 @@ here, with `ofNat_sub` for its `Sub` case.
 Left: `ring` cannot read `-` at words, because `BitVec::sub` is its own
 ripple and not `a + -b` by definition; `BitVec::sub_eq_add_neg` rewrites it
 first ([[ring-carrier-subtraction-law]]). `BitVec::int_cast` and
-`bitvec_div`'s `BitVec::ofInt` are one map spelled two ways
-([[bitvec-int-cast-is-ofint]]). The ~240 `fits` premises in native, arch
+`bitvec_div`'s `BitVec::ofInt` were one map spelled two ways, now one
+definition ([[bitvec-int-cast-is-ofint]]). The ~240 `fits` premises in native, arch
 and os are unchanged; each can now be dropped where its lemma only needed the
 modular statement, as callers are next touched.
