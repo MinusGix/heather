@@ -171,7 +171,7 @@ pub fn gen_ctx(sc: &Sc, r: &mut Rng, b: u32) -> (LocalCtx, Shape) {
 /// Precondition: `sc.reaches(target.base)`.
 pub fn gen_subst(sc: &Sc, r: &mut Rng, b: u32, target: Shape) -> LocalSubst {
     let tail = match target.base {
-        BaseRef::Nil => SubstTail::Empty { len: sc.local.len, base: sc.base(sc.local.base) },
+        BaseRef::Nil => SubstTail::Empty,
         BaseRef::Abs(a) => {
             assert!(sc.local.base == BaseRef::Abs(a), "generator scoping bug");
             SubstTail::Wk { len: sc.local.len, ctx_var: sc.db(a) }

@@ -1308,7 +1308,7 @@ impl Elaborator {
             .iter()
             .filter(|d| !is_open_head(d.head.as_deref()) && heads_may_agree(d.head.as_deref(), prefer))
             .find(|d| self.derived_conv(cx, &d.ty.shift_global(now - d.at), goal, &d.level))?;
-        Some(self.derived_ref(cx, d.abs))
+        Some(self.derived_ref(d.abs))
     }
 
     /// [`Self::derived_hit`] for a merged class's assembly (step 2b), at the
@@ -1329,7 +1329,7 @@ impl Elaborator {
                 let ty = if pad == 0 { ty } else { weaken_global_below(&ty, pad) };
                 self.derived_conv(cx, &ty, spelled, &d.level)
             })?;
-        Some(self.derived_ref(cx, d.abs))
+        Some(self.derived_ref(d.abs))
     }
 
     /// Queue a merged class's assembly for the canonical table. Unlike
@@ -1536,7 +1536,7 @@ impl Elaborator {
             }
         }
         let (abs, m) = best?;
-        let mut t = self.derived_ref(cx, abs);
+        let mut t = self.derived_ref(abs);
         for i in 0..m {
             t = Term::AppAt { fun: Rc::new(t), arg: Rc::new(Term::Var(heather_kernel::term::LocalVar(n - 1 - i))) };
         }
@@ -1568,7 +1568,7 @@ impl Elaborator {
     /// reference hides behind a δ step; `None` for anything else.
     pub(crate) fn unfold_open_app(&self, t: &Term) -> Option<Term> {
         let (head, args) = crate::spelling::app_spine(t);
-        let Term::GlobalTm { var, subst } = head else { return None };
+        let Term::GlobalTm { var, .. } = head else { return None };
         let abs = self.global_abs_of(*var)? as u32;
         if !self.traits.derived().iter().any(|d| d.abs == abs && is_open_head(d.head.as_deref())) {
             return None;
@@ -1586,7 +1586,7 @@ impl Elaborator {
             return None;
         }
         let delta = LocalSubst {
-            tail: SubstTail::Empty { len: subst.source_len(), base: subst.source_base() },
+            tail: SubstTail::Empty,
             terms: args.iter().map(|a| Rc::clone(a)).collect(),
         };
         Some(inner.apply_local(&delta))
@@ -1639,7 +1639,7 @@ impl Elaborator {
     /// makes for a written name: the goals sit innermost, so a committed
     /// binding is that much further out, and a closed statement's delayed
     /// substitution is the empty map out of the current Γ.
-    fn derived_ref(&self, cx: &Cx, abs: u32) -> Term {
+    fn derived_ref(&self, abs: u32) -> Term {
         if let Some(key) = self.names.global_name_at(abs) {
             self.attempt
                 .direct_dependencies
@@ -1651,10 +1651,7 @@ impl Elaborator {
         Term::GlobalTm {
             var,
             subst: LocalSubst {
-                tail: SubstTail::Empty {
-                    len: cx.gamma.entries.len() as u32,
-                    base: cx.gamma.base,
-                },
+                tail: SubstTail::Empty,
                 terms: vec![],
             },
         }

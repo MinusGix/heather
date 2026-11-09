@@ -34,7 +34,7 @@
 //!   the `tag` module — the value space is partitioned, not reused per sort);
 //! - a **fixed-width integer**: `u32` little-endian for de Bruijn indices,
 //!   binder counts and lengths;
-//! - a **referent hash**: exactly 32 raw bytes, at the five global-reference
+//! - a **referent hash**: exactly 32 raw bytes, at the four global-reference
 //!   sites listed below;
 //! - a **sub-encoding**: the same scheme, recursively.
 //!
@@ -55,7 +55,7 @@
 //! and §Totality above is what that gap actually cost.
 //!
 //! *Substitution.* Global references are the one place the encoding is not a
-//! function of the tree alone. At exactly five sites a `GlobalVar` is replaced
+//! function of the tree alone. At exactly four sites a `GlobalVar` is replaced
 //! by the 32 bytes of its referent's interface hash:
 //!
 //! | site | what it is |
@@ -64,7 +64,6 @@
 //! | [`Type::GlobalTy`] | `U^δ` |
 //! | [`CtxBase::Var`] | a context variable `g` as a context's base |
 //! | [`SubstTail::Wk`] | `wk^k_g` — the tail names `g` |
-//! | [`SubstTail::Empty`]'s `base` | `·^k_g` — likewise, through `CtxBase` |
 //!
 //! Those are every occurrence of `GlobalVar` in `crates/kernel/src/term.rs`,
 //! and the walker reaches them through `CtxBase`/`SubstTail` rather than by
@@ -108,12 +107,18 @@ pub type Hash = [u8; 32];
 ///
 /// **Bumped again with node digests** (`issues/image-tree-walks-let-shared-terms.md`):
 /// a large term or type is hashed as the digest of its encoding.
-const DOMAIN_IFACE: &[u8] = b"heather/iface/4\0";
-const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/3\0";
-const DOMAIN_CHECK: &[u8] = b"heather/check/4\0";
-const DOMAIN_STATEMENT: &[u8] = b"heather/statement/3\0";
+///
+/// **Bumped again with the empty tail's decoration**
+/// (`issues/empty-substitution-tail-decoration.md`): `·` is hashed as its
+/// tag alone, the kernel's syntax no longer recording a length or a base
+/// there. (`store::FORMAT` stays: the change is the kernel's, so every
+/// earlier verdict already sits in another kernel's section.)
+const DOMAIN_IFACE: &[u8] = b"heather/iface/5\0";
+const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/4\0";
+const DOMAIN_CHECK: &[u8] = b"heather/check/5\0";
+const DOMAIN_STATEMENT: &[u8] = b"heather/statement/4\0";
 /// The domain of a node digest's preimage (`Walk::term`, `Walk::ty`).
-const DOMAIN_NODE: &[u8] = b"heather/node/1\0";
+const DOMAIN_NODE: &[u8] = b"heather/node/2\0";
 
 /// A term or type whose encoding reaches this many bytes is written into its
 /// parent's as a node digest (`tag::DIGEST` and the SHA-256 of
@@ -449,7 +454,7 @@ impl<'a> Walk<'a> {
     }
 
     /// Emit the referent's interface hash in place of the positional index —
-    /// the Merkle substitution, at all five sites (see the module docs).
+    /// the Merkle substitution, at all four sites (see the module docs).
     fn global(&mut self, var: u32) {
         match self
             .len
@@ -545,11 +550,7 @@ impl<'a> Walk<'a> {
         let LocalSubst { tail, terms } = s;
         self.tag(tag::LOCAL_SUBST);
         match *tail {
-            SubstTail::Empty { len, base } => {
-                self.tag(tag::TAIL_EMPTY);
-                self.u32(len);
-                self.base(base);
-            }
+            SubstTail::Empty => self.tag(tag::TAIL_EMPTY),
             SubstTail::Wk { len, ctx_var } => {
                 self.tag(tag::TAIL_WK);
                 self.u32(len);

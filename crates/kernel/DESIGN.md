@@ -31,7 +31,8 @@ applications. Concretely:
   code recursors).
 - The modal part: global contexts with three binding forms
   (`g : Ctx`, `U : Typ_i(Δ, l)` for i ∈ {c,p}, `u : Trm_i(Δ ⊢ T @ l)` for
-  i ∈ {v,c}); local substitutions `·^k_{g?}`, `wk^k_g`, `δ,t/x`; global
+  i ∈ {v,c}); local substitutions `·`, `wk^k_g`, `δ,t/x` (the paper's
+  `·^k_{g?}` without its decoration, §Representation); global
   variables `U^δ`, `u^δ`; meta-functions over contexts (`CtxPi/CtxLam/CtxApp`)
   and over types (`TyPi/TyLam/TyApp`); contextual types `□(Δ ⊢ Ty l)` and
   `□(Δ ⊢ T @ l)` (both at universe 0); `box`; `letbox` for both kinds; and the
@@ -845,7 +846,7 @@ paper too).
   A closure whose body reads **no capture** is one value wherever it is
   read, so the arena also keeps closed closures' values by their body and
   global offset alone (`TmClo::closed_ident`; the environment's length too
-  when the body holds a substitution tail, which the length rewrites), and
+  when the body holds a weakening `wk^k_g`, which counts it), and
   the fold-class and transducer memos key a step or motive the same way
   past its own binders (`TmClo::ident_under`). Both answer the same
   question the closure key does, for every closure over that body: a
@@ -945,7 +946,7 @@ paper too).
   is by construction: entries are chosen
   by node kind, never by reference count (the bounds memo's keep-alives
   perturb counts), nothing is evicted, and failures are not cached. A
-  tail-free node that reads only Γ's innermost few entries, whose types stay
+  node with no weakening tail that reads only Γ's innermost few entries, whose types stay
   among them, is keyed by those entries instead of by Γ (a *strengthened*
   scope): its judgment is the same under any Γ ending in them, which is what
   lets an indexed family's index functions be judged once rather than once
@@ -972,7 +973,8 @@ paper too).
 - **Per-node free-local-variable bounds** (2026-07-31,
   issues/subst-visits-closed-subtrees.md route B): the local-namespace
   traversals skip subtrees that provably cannot change (loose de Bruijn
-  bound ≤ depth, no substitution tail in scope) in O(1) instead of walking
+  bound ≤ depth, no weakening tail `wk^k_g` in scope; the empty tail `·` is
+  changed by nothing) in O(1) instead of walking
   them. Deliberately *not* a field on the node — that would make the flag an
   invariant of every construction site in kernel and elab. Instead
   `src/bounds.rs` computes it as a memoized pure function of the immutable
@@ -1000,9 +1002,54 @@ paper too).
   is exactly what a good skip test looks like.
 - Local contexts are `(base, entries)` where base is `·` or a context
   variable `g`; entries carry `(T, l)`.
-- Local substitutions mirror the paper's three-form syntax including the
-  `·^k_{g?}` / `wk^k_g` tails and the query operations δ̂ (length) and δ̌
-  (base) used by composition.
+- Local substitutions mirror the paper's three-form syntax, `·` / `wk^k_g`
+  tails under a list of terms, with one departure.
+
+  **The empty substitution is `·`** (2026-11-09,
+  `issues/empty-substitution-tail-decoration.md`). The paper writes the
+  empty tail `·^k_{g?}`, decorated with the length `k` and the base `g?` of
+  the context it is read in, so that the queries δ̂ (length) and δ̌ (base) are
+  total functions of the syntax. This kernel's `SubstTail::Empty` carries
+  neither. Both are redundant in the paper's own system, which is why
+  dropping them is a change of representation and not of theory:
+
+  - *Nothing computes with them.* The operations that mention the
+    decoration of an empty tail only produce another empty tail's: a
+    weakening adds to `k`, a global substitution adds `|σ(g)|` and replaces
+    the base by `σ(g)`'s, a composition `· ∘ δ` overwrites both with δ̂ and
+    δ̌. The one consumer of a length is the expansion of `wk^k_g` when `g` is
+    replaced by a concrete context (the variables `k + |Γ'| − 1 … k`), and
+    that reads a weakening's.
+  - *δ̂ is read only off weakenings.* Composition asks for δ̂ in `wk_g ∘ δ =
+    wk_g^{δ̂}`. That composition is scoped only when δ targets a context
+    based at `g`, and then δ's own tail is `wk^m_g`, which still carries
+    `m`. (`LocalSubst::wk_len` is the partial δ̂; δ̌ has no reader left.)
+  - *Typing pinned them.* The rule for `Γ ⊢ ·^k_{g?} : ·` demands `k = |Γ|`
+    and the base Γ's, so among well-typed terms the decoration is a
+    function of the position, and the erasure `·^k_{g?} ↦ ·` is injective
+    on them. A derivation in the paper's syntax erases to one here, and one
+    here decorates to exactly one there, by writing Γ's length and base at
+    each empty tail. The rule here is `Γ ⊢ · : ·`, for every Γ.
+  - *The value domain had already dropped them* (`value.rs`, `VTail`), for
+    the reason given there: both are determined by the scope a value lives
+    in. Nothing outside the kernel read them either: the exporter closes a
+    global over its context and never looked at the tail.
+
+  What the decoration cost is why it went. A reference to a top-level
+  definition is `u^·`, so with `k` in it every type mentioning a definition
+  was different syntax at every binder depth: no weakening or instantiation
+  could share it (about a third of all substitution visits on a library
+  check existed only to renumber it), `==` could not recognise the same
+  closed type met under two binders, and the typing memo's closed and
+  strengthened scopes applied only to types mentioning no definition at
+  all. With the base in it, a closed statement read under a context
+  variable was a kernel `SubstMismatch` unless every tail was rewritten.
+  Each of those had grown a workaround (the closed-conversion memo's
+  special cases for a bare global, the elaborator's "frame" a closed copy
+  had to be re-read in); the representation removes the cause. A subtree
+  with no free local variable and no `wk^k_g` is now *closed syntax*: the
+  same allocation serves every context, and the bounds summary's one tail
+  flag means "a weakening shows", which is rare.
 - Recursor motives/branches are **fixed-shape structs**, one field per branch,
   each field a term under a documented telescope of binders (the ch. 04 branch
   telescopes) — not a list, so exhaustiveness is structural.

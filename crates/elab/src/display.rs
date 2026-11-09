@@ -572,10 +572,7 @@ impl Speller<'_> {
     fn dependent(&self, body: &Type, d: u32) -> bool {
         let m = self.cx.gamma.entries.len() as u32 + d;
         let tail = match self.cx.gamma.base {
-            CtxBase::Nil => SubstTail::Empty {
-                len: m,
-                base: CtxBase::Nil,
-            },
+            CtxBase::Nil => SubstTail::Empty,
             CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
         };
         let terms = (0..m)

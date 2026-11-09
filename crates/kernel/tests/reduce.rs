@@ -412,7 +412,7 @@ fn beta_ctx_app_and_ty_app() {
         Some(Term::CtxApp { fun: rt(Term::Zero), ctx: delta })
     );
     // (Λ U. box U^·) @ Nat ⇝ box Nat
-    let empty = LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms: vec![] };
+    let empty = LocalSubst { tail: SubstTail::Empty, terms: vec![] };
     let t = Term::TyApp {
         fun: rt(Term::TyLam {
             ctx: nil_ctx(0),
@@ -428,7 +428,7 @@ fn beta_ctx_app_and_ty_app() {
 #[test]
 fn beta_letbox() {
     let gamma = nil_ctx(0);
-    let empty = LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms: vec![] };
+    let empty = LocalSubst { tail: SubstTail::Empty, terms: vec![] };
     // letbox (U. box U^·) (box Nat) ⇝ box Nat
     let t = Term::LetBoxTy {
         motive_level: Level::Zero,
@@ -904,7 +904,7 @@ fn elim_code_tm_reduces_type_before_term() {
 fn recursors_block_on_boxed_global_variables() {
     let gamma = nil_ctx(0);
     let b = Rc::new(dummy_branches());
-    let empty = LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms: vec![] };
+    let empty = LocalSubst { tail: SubstTail::Empty, terms: vec![] };
     // elim^Typ … (box U^δ): neutral, no step.
     let t = elim_ty(
         &b,

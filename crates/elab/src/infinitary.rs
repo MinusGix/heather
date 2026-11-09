@@ -378,7 +378,7 @@ impl Elaborator {
         // Once the declaration has registered its leaf predicate, every
         // instance at the registered profile names it instead of spelling it
         // (`GenDef::WCanon`): inline it is nearly all of `⟦D⟧`.
-        if let Some(canon) = self.w_canon_ref(cx, ind, args, vargs, &lw) {
+        if let Some(canon) = self.w_canon_ref(ind, args, vargs, &lw) {
             p.canon = Rc::new(canon);
             return Ok((p.d_at(0), lw));
         }
@@ -572,7 +572,6 @@ impl Elaborator {
     /// `None` keeps the inline spelling.
     fn w_canon_ref(
         &self,
-        cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
         vargs: &[(Term, Type, Level)],
@@ -598,7 +597,7 @@ impl Elaborator {
             _ => return None,
         }
         // One binder past `cx`: the tree's.
-        let mut tm = Rc::new(self.gen_ref_deeper(cx, key, 1)?);
+        let mut tm = Rc::new(self.gen_ref(key)?);
         for (a, _) in args {
             tm = app_at(tm, Rc::new(crate::code::code_of(a)?.shift_local(1)));
         }
@@ -1185,11 +1184,11 @@ inductive List1 { Nil1, Cons1(x: Nat, r: List1) }
         let e = env();
         for name in ["Tree", "ITree"] {
             assert!(
-                e.el.gen_ref(&e.cx, GenDef::WCanon(e.ind(name).tag)).is_some(),
+                e.el.gen_ref(GenDef::WCanon(e.ind(name).tag)).is_some(),
                 "`{name}` registers `{name}#canon`"
             );
         }
-        assert!(e.el.gen_ref(&e.cx, GenDef::WCanon(e.ind("List1").tag)).is_none());
+        assert!(e.el.gen_ref(GenDef::WCanon(e.ind("List1").tag)).is_none());
     }
 
     /// The reference is `D#canon` itself — the Ψ index, not a shape — applied

@@ -596,7 +596,7 @@ mod tests {
                 fun: Rc::new(Term::GlobalTm {
                     var: GlobalVar(0),
                     subst: LocalSubst {
-                        tail: heather_kernel::term::SubstTail::Empty { len: 1, base: heather_kernel::term::CtxBase::Nil },
+                        tail: heather_kernel::term::SubstTail::Empty,
                         terms: vec![],
                     },
                 }),
@@ -687,7 +687,7 @@ mod tests {
             tm: Rc::new(Term::GlobalTm {
                 var: GlobalVar(0),
                 subst: LocalSubst {
-                    tail: heather_kernel::term::SubstTail::Empty { len: 1, base: heather_kernel::term::CtxBase::Nil },
+                    tail: heather_kernel::term::SubstTail::Empty,
                     terms: vec![],
                 },
             }),

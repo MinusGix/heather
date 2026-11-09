@@ -511,11 +511,11 @@ impl Tr<'_> {
 
     fn global(&self, var: u32, subst: &LocalSubst) -> R<Hx> {
         match subst.tail {
-            // `·^k, t̄`: a global over the context t̄ substitutes (none for a
-            // closed one), used under k binders: exported closed over its
-            // context, so it applies to t̄, outermost first.
-            SubstTail::Empty { base: CtxBase::Nil, .. } => {}
-            _ => return refuse("global with a weakening substitution"),
+            // `·, t̄`: a global over the context t̄ substitutes (none for a
+            // closed one): exported closed over its context, so it applies
+            // to t̄, outermost first.
+            SubstTail::Empty => {}
+            SubstTail::Wk { .. } => return refuse("global with a weakening substitution"),
         }
         match self.at.checked_sub(1 + var as usize) {
             Some(abs) => Ok(app(Hx::Global(abs), subst.terms.iter().map(|t| self.tm(t)).collect::<R<_>>()?)),

@@ -255,7 +255,7 @@ impl Elaborator {
         let cx = &pcx;
         let shape_rc = self.share_iwf_part(shape_decl.tag, false, shape);
         let ity_rc = self.share_iwf_part(ind.tag, true, ity);
-        if let Some(sig) = self.iwf_sig_named(cx, ind, args, &shape_rc, &l, &ity_rc, &ilvl) {
+        if let Some(sig) = self.iwf_sig_named(ind, args, &shape_rc, &l, &ity_rc, &ilvl) {
             return Ok(sig);
         }
         let shape = (*shape_rc).clone();
@@ -417,7 +417,7 @@ impl Elaborator {
             return;
         }
         // `Fin(D#iarity ā x)` over `(tel, x)`, minted now.
-        let Some(aref) = self.m_ref_app(&cx, GenDef::IArity(ind.tag), &tel_vars, 1) else {
+        let Some(aref) = self.m_ref_app(GenDef::IArity(ind.tag), &tel_vars, 1) else {
             return;
         };
         let fin = Rc::new(Type::Fin { len: aref });
@@ -484,9 +484,9 @@ impl Elaborator {
     /// spelled as the family's `D#idnth` when its signature is named: the
     /// convoy repeats the telescope at every level of the case tree, and
     /// inline `dnth` carries the children's family several times over.
-    fn iwf_match_telescope(&self, cx: &Cx, sig: &Rc<IWfSig>, mlvl: &Level, motive: &Type) -> (Type, Type, Type) {
+    fn iwf_match_telescope(&self, sig: &Rc<IWfSig>, mlvl: &Level, motive: &Type) -> (Type, Type, Type) {
         let (cs_ty, ih_ty, st_ty) = iwf_step_telescope(sig, mlvl, motive);
-        let Some(nth) = self.iwf_named_dnth(cx, sig) else {
+        let Some(nth) = self.iwf_named_dnth(sig) else {
             return (cs_ty, ih_ty, st_ty);
         };
         let ih_ty = Type::Pi {
@@ -500,7 +500,7 @@ impl Elaborator {
 
     /// `D#idnth ā a cs i` in `(cx, a, cs, i)`, for a signature in `cx` whose
     /// arity is `D#iarity ā x`.
-    fn iwf_named_dnth(&self, cx: &Cx, sig: &IWfSig) -> Option<Term> {
+    fn iwf_named_dnth(&self, sig: &IWfSig) -> Option<Term> {
         let (GenDef::IArity(tag), args) = self.gen_app_of(&sig.arity)? else {
             return None;
         };
@@ -510,7 +510,7 @@ impl Elaborator {
         }
         // The telescope's arguments, read out of the shape binder.
         let tel: Vec<Rc<Term>> = tel.iter().map(|a| Rc::new(a.inst_top(0, &Term::Zero))).collect();
-        self.m_ref_app(cx, GenDef::IDnth(tag), &tel, 3).map(|t| (*t).clone())
+        self.m_ref_app(GenDef::IDnth(tag), &tel, 3).map(|t| (*t).clone())
     }
 
     /// The named signature of an instance (§2): `None` when the family
@@ -521,7 +521,6 @@ impl Elaborator {
     #[allow(clippy::too_many_arguments)]
     fn iwf_sig_named(
         &self,
-        cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
         shape: &Rc<Type>,
@@ -542,9 +541,9 @@ impl Elaborator {
             idx_level: ilvl.clone(),
             idx: Rc::clone(ity),
             shape: Rc::clone(shape),
-            arity: self.m_ref_app(cx, GenDef::IArity(ind.tag), &tel, 1)?,
-            out: self.m_ref_app(cx, GenDef::IOut(ind.tag), &tel, 1)?,
-            child: self.m_ref_app(cx, GenDef::IChild(ind.tag), &tel, 2)?,
+            arity: self.m_ref_app(GenDef::IArity(ind.tag), &tel, 1)?,
+            out: self.m_ref_app(GenDef::IOut(ind.tag), &tel, 1)?,
+            child: self.m_ref_app(GenDef::IChild(ind.tag), &tel, 2)?,
         }))
     }
 
@@ -981,7 +980,7 @@ impl Elaborator {
         };
         // A closed index is not abstracted, for the same reason a closed
         // inversion argument is not: its literals also spell the signature.
-        let open = fam.idx.shift_local(1) != *fam.idx;
+        let open = !literal_closed(&fam.idx);
         if open
             && let Some(Type::Pi { cod, .. }) = pi.abstract_local(&fam.idx)
             && fits(&cod)
@@ -1198,7 +1197,7 @@ impl Elaborator {
         }
         // Open and neither: abstracted where the motive writes it. A closed
         // one is not — its literals also spell the signature.
-        if item.arg.shift_local(1) != *item.arg {
+        if !literal_closed(&item.arg) {
             pairs.push(((*item.arg).clone(), (*item.pat).clone()));
         }
         self.inverted_level(bcx, inv, e, rest, pairs)
@@ -1416,7 +1415,7 @@ impl Elaborator {
         let fl = sig.family_level();
         // The step telescope, `cs` in (Γ, a), `ih` in (Γ, a, cs), the step's
         // type in (Γ, a, cs, ih).
-        let (cs_ty, ih_ty, st_ty) = self.iwf_match_telescope(cx, sig, &mlvl, &motive);
+        let (cs_ty, ih_ty, st_ty) = self.iwf_match_telescope(sig, &mlvl, &motive);
         // The convoy's motive over (Γ, a, x): the three re-abstracted at `x`.
         let convoy = Type::Pi {
             dom_level: fl.clone(),
@@ -1843,6 +1842,15 @@ fn index_value(t: Term) -> Term {
     }
 }
 
+/// Whether `t` reads neither a local variable nor a global: a literal, which
+/// also spells the signature it indexes, so a motive does not abstract it.
+/// A reference to a definition is not one. (The test was `t.shift_local(1)
+/// == t` while an empty substitution tail recorded the depth, which made a
+/// weakening change every global reference.)
+fn literal_closed(t: &Term) -> bool {
+    t.shift_local(1) == *t && t.shift_global(1) == *t
+}
+
 #[cfg(test)]
 mod named_signature {
     //! `docs/iwf-named-signature-design.md`: an `IWf`-route family at the
@@ -1897,7 +1905,7 @@ mod named_signature {
         let sig = el.iwf_sig(&Cx::empty(), &v, &[], &[], SPAN).expect("signature");
         let t = v.tag;
         assert_eq!(heads(&el, &sig), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
-        let nth = el.iwf_named_dnth(&Cx::empty(), &sig).expect("the ih is spelled with `V#idnth`");
+        let nth = el.iwf_named_dnth(&sig).expect("the ih is spelled with `V#idnth`");
         assert!(matches!(el.gen_app_of(&nth), Some((GenDef::IDnth(k), _)) if k == t));
     }
 
@@ -1941,6 +1949,6 @@ mod named_signature {
             .iwf_sig(&Cx::empty(), &p, &[(Type::Ty(Level::Zero), Level::succ(Level::Zero))], &[], SPAN)
             .expect("signature at Type");
         assert_eq!(heads(&el, &at_type), [None, None, None]);
-        assert!(el.iwf_named_dnth(&Cx::empty(), &at_type).is_none());
+        assert!(el.iwf_named_dnth(&at_type).is_none());
     }
 }

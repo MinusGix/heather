@@ -115,7 +115,7 @@ fn beta_zero() -> Term {
 /// The empty substitution `·⁰` out of the empty context.
 fn empty_subst(terms: Vec<Term>) -> LocalSubst {
     LocalSubst {
-        tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+        tail: SubstTail::Empty,
         terms: terms.into_iter().map(rt).collect(),
     }
 }

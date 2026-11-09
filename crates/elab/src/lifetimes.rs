@@ -592,13 +592,13 @@ pub(crate) struct Memos {
     /// its last reader was ([`Elaborator::guard_ty`]): the shift and the
     /// frame it was read at, the raw copy, and the read. Nothing here is
     /// semantic.
-    pub(crate) guard_reads: RefCell<HashMap<gendefs::GuardKey, (u32, SubstTail, Rc<Type>, Rc<Type>)>>,
+    pub(crate) guard_reads: RefCell<HashMap<gendefs::GuardKey, (u32, Rc<Type>, Rc<Type>)>>,
     /// A `Wf` slot pair's guard as the one former it is read as, by the raw
     /// shape it was built from.
     pub(crate) guard_slot_formers: RefCell<HashMap<u32, (Rc<Type>, Rc<Type>)>>,
     /// …and a spine's components, read together so a sum keeps pointing at
     /// its sides ([`Elaborator::with_spine`]).
-    pub(crate) guard_spine_reads: RefCell<HashMap<u32, (u32, SubstTail, Rc<Type>, Rc<gendefs::SpineCodes>)>>,
+    pub(crate) guard_spine_reads: RefCell<HashMap<u32, (u32, Rc<Type>, Rc<gendefs::SpineCodes>)>>,
     /// The type names the program has written (`u8`, `i(n)`, its own `def
     /// Byte: Type = …`), least recently written first, each with the
     /// instance it expands to ([`Elaborator::record_type_name`]). Read only

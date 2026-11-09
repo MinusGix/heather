@@ -264,8 +264,8 @@ mod tests {
 
     /// Only the captures a body reads are compared, so two spines of
     /// different lengths agree on a body that reads none past its pending
-    /// binders — unless the body holds a substitution tail, which the whole
-    /// spine's length rewrites, or reads a capture one side lacks.
+    /// binders — unless the body holds a weakening `wk^k_g`, which counts
+    /// the whole spine's length, or reads a capture one side lacks.
     #[test]
     fn suspended_identity_ignores_spine_length_past_the_used_captures() {
         let arena = ValueArena::new();
@@ -283,9 +283,17 @@ mod tests {
         // x2 reads capture 1, which only the long spine has.
         let outer = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(2)))));
         assert!(!Values::tm_identity_fast(&mk(short, &outer), &mk(long, &outer)));
-        // A tail is rewritten by the spine's length, whatever it reads.
+        // An empty tail records no length: a reference to a closed global
+        // is one value under either spine.
         let gamma = LocalCtx::nil();
-        let tail = Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: crate::term::LocalSubst::id(&gamma) });
+        let empty = Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: crate::term::LocalSubst::id(&gamma) });
+        assert!(clo_identity(&TmClo::syn(short, Rc::clone(&empty)), &TmClo::syn(long, empty), 0, &mut 64));
+        // A weakening counts the spine's length, whatever it reads.
+        let wk = crate::term::LocalSubst {
+            tail: crate::term::SubstTail::Wk { len: 0, ctx_var: GlobalVar(0) },
+            terms: Vec::new(),
+        };
+        let tail = Rc::new(Term::GlobalTm { var: GlobalVar(1), subst: wk });
         assert!(!clo_identity(&TmClo::syn(short, Rc::clone(&tail)), &TmClo::syn(long, tail), 0, &mut 64));
     }
 
@@ -614,7 +622,7 @@ fn clo_identity<'v>(a: &TmClo<'v>, b: &TmClo<'v>, pending: u32, budget: &mut u32
                     }
                     _ => {
                         let u = crate::bounds::term_local_use(b1);
-                        env_identity(e1, e2, u.bound.saturating_sub(pending), u.has_tail, budget)
+                        env_identity(e1, e2, u.bound.saturating_sub(pending), u.has_wk, budget)
                     }
                 })
         }
@@ -647,7 +655,7 @@ fn ty_clo_identity<'v>(a: &TyClo<'v>, b: &TyClo<'v>, pending: u32, budget: &mut 
             (Rc::ptr_eq(b1, b2) || b1 == b2)
                 && (value::Env::ptr_eq(e1, e2) || {
                     let u = crate::bounds::type_local_use(b1);
-                    env_identity(e1, e2, u.bound.saturating_sub(pending), u.has_tail, budget)
+                    env_identity(e1, e2, u.bound.saturating_sub(pending), u.has_wk, budget)
                 })
         }
         _ => false,
@@ -655,9 +663,9 @@ fn ty_clo_identity<'v>(a: &TyClo<'v>, b: &TyClo<'v>, pending: u32, budget: &mut 
 }
 
 // Only the `used` innermost captures are read, so the spines may differ in
-// length past them, unless the body holds a substitution tail: a tail is
-// rewritten by the whole environment's length (`bounds.rs`), so then the
-// lengths must agree too.
+// length past them, unless the body holds a weakening `wk^k_g`: it counts
+// the whole environment's length (`bounds.rs`), so then the lengths must
+// agree too.
 fn env_identity<'v>(a: &value::Env<'v>, b: &value::Env<'v>, used: u32, tail: bool, budget: &mut u32) -> bool {
     if a.gshift() != b.gshift() { return false; }
     if a.len() != b.len() && (tail || used > a.len().min(b.len())) { return false; }
@@ -1205,10 +1213,11 @@ impl<'v> Dom<'v> for Values {
         TmC::value(env, d.terms[k])
     }
 
-    /// `VTail`'s coarser test: the source context's length and `·`'s base are
-    /// dropped, because an environment machine — having substituted nothing —
-    /// never renormalizes them, and both are determined by the scope, which
-    /// the two sides of a comparison share (stage 1's log, note 2).
+    /// `VTail`'s coarser test: a weakening's source length is dropped,
+    /// because an environment machine — having substituted nothing — never
+    /// renormalizes it, and it is determined by the scope, which the two
+    /// sides of a comparison share (stage 1's log, note 2). The empty tail
+    /// has nothing to drop (`term.rs`, `LocalSubst`).
     fn subst_tails_agree(a: &VSubst<'v>, b: &VSubst<'v>) -> bool {
         a.tail == b.tail
     }

@@ -10392,7 +10392,7 @@ impl Elaborator {
         let meta_off = self.scope.meta_pushed.borrow().len() as u32;
         let var = len - 1 - abs + self.global_padding() + meta_off;
         let empty = LocalSubst {
-            tail: SubstTail::Empty { len: cx.gamma.entries.len() as u32, base: cx.gamma.base },
+            tail: SubstTail::Empty,
             terms: vec![],
         };
         let ty = ty.shift_global(var + 1).apply_local(&empty);
@@ -11120,10 +11120,7 @@ impl Elaborator {
                 // The binding is closed (· ⊢), so the delayed substitution
                 // is the empty map out of the current Γ.
                 let subst = LocalSubst {
-                    tail: SubstTail::Empty {
-                        len: cx.gamma.entries.len() as u32,
-                        base: cx.gamma.base,
-                    },
+                    tail: SubstTail::Empty,
                     terms: vec![],
                 };
                 // …and the *type* travels the same way: `T[δ]`, exactly the

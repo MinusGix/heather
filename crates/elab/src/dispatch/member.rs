@@ -768,7 +768,7 @@ impl Elaborator {
         let Term::GlobalTm { var, subst } = head else {
             return None;
         };
-        if !subst.terms.is_empty() || !matches!(subst.tail, SubstTail::Empty { .. }) {
+        if !subst.terms.is_empty() || !matches!(subst.tail, SubstTail::Empty) {
             return None;
         }
         let abs = self.global_abs_of(*var)?;
@@ -800,7 +800,7 @@ impl Elaborator {
         let mut tm = Term::GlobalTm {
             var: *var,
             subst: LocalSubst {
-                tail: SubstTail::Empty { len: k, base: CtxBase::Nil },
+                tail: SubstTail::Empty,
                 terms: Vec::new(),
             },
         };

@@ -20,7 +20,7 @@
 //! - Global substitution rewrites local-substitution *tails*: replacing `g`
 //!   by a concrete context `Γ'` turns `wk^k_g` into the expanded weakening
 //!   `wk^k_{Γ'}` (new tail plus one variable term per entry of `Γ'`), and
-//!   `·^k_g` into `·^{k+|Γ'|}` over `Γ'`'s base.
+//!   leaves the empty tail `·` alone.
 //!
 //! ## Shifting by zero
 //!
@@ -1504,13 +1504,14 @@ impl Mapper for ShiftLocal {
     }
 
     fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        // An empty tail names no variable and records no length: a
+        // weakening leaves it as it is.
         let t = match tail {
-            SubstTail::Empty { len, base } => SubstTail::Empty { len: len + self.by, base },
+            SubstTail::Empty => return (tail, Vec::new()),
             SubstTail::Wk { len, ctx_var } => SubstTail::Wk { len: len + self.by, ctx_var },
         };
-        if t != tail {
-            self.note();
-        }
+        // `by` is nonzero here, as for a variable.
+        self.note();
         (t, Vec::new())
     }
 
@@ -1574,10 +1575,7 @@ impl Mapper for ShiftGlobal {
 
     fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
         let t = match tail {
-            SubstTail::Empty { len, base: CtxBase::Var(g) } => {
-                SubstTail::Empty { len, base: CtxBase::Var(self.var(g, at)) }
-            }
-            SubstTail::Empty { .. } => tail,
+            SubstTail::Empty => tail,
             SubstTail::Wk { len, ctx_var } => {
                 SubstTail::Wk { len, ctx_var: self.var(ctx_var, at) }
             }
@@ -1659,10 +1657,7 @@ impl Mapper for ReindexGlobal<'_> {
 
     fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
         let t = match tail {
-            SubstTail::Empty { len, base: CtxBase::Var(g) } => {
-                SubstTail::Empty { len, base: CtxBase::Var(self.var(g, at)) }
-            }
-            SubstTail::Empty { .. } => tail,
+            SubstTail::Empty => tail,
             SubstTail::Wk { len, ctx_var } => {
                 SubstTail::Wk { len, ctx_var: self.var(ctx_var, at) }
             }
@@ -1850,21 +1845,21 @@ impl Mapper for SubstLocal<'_> {
         out
     }
 
-    /// Composition on tails (ch. 02/05): `wk_g^k ∘ δ = wk_g^{δ̂}`,
-    /// `·_{g?}^k ∘ δ = ·_{δ̌}^{δ̂}`, where δ is conceptually lifted to the
-    /// current depths (source length + local depth; base shifted by the
-    /// global depth).
+    /// Composition on tails (ch. 02/05): `wk_g^k ∘ δ = wk_g^{δ̂}` and
+    /// `· ∘ δ = ·`, where δ is conceptually lifted to the current depth
+    /// (source length + local depth).
+    ///
+    /// δ̂ is read off δ's own weakening: `wk_g ∘ δ` is scoped only when δ
+    /// targets a context based at `g`, so that its tail is `wk_g` too
+    /// (`term.rs`, [`LocalSubst`]). Against an empty-tailed δ the
+    /// composition means nothing, and the length is counted from the binders
+    /// passed alone.
     fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
-        let len = self.delta.source_len() + at.local;
         let t = match tail {
-            SubstTail::Wk { ctx_var, .. } => SubstTail::Wk { len, ctx_var },
-            SubstTail::Empty { .. } => {
-                let base = match self.delta.source_base() {
-                    CtxBase::Nil => CtxBase::Nil,
-                    CtxBase::Var(g) => CtxBase::Var(GlobalVar(g.0 + at.global)),
-                };
-                SubstTail::Empty { len, base }
+            SubstTail::Wk { ctx_var, .. } => {
+                SubstTail::Wk { len: self.delta.wk_len().unwrap_or(0) + at.local, ctx_var }
             }
+            SubstTail::Empty => tail,
         };
         if t != tail {
             self.note();
@@ -1931,7 +1926,7 @@ impl Mapper for InstTop<'_> {
 
     fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
         let t = match tail {
-            SubstTail::Empty { len, base } => SubstTail::Empty { len: len - 1 + self.by, base },
+            SubstTail::Empty => tail,
             SubstTail::Wk { len, ctx_var } => SubstTail::Wk { len: len - 1 + self.by, ctx_var },
         };
         if t != tail {
@@ -2214,7 +2209,7 @@ impl Mapper for SubstGlobal<'_> {
                     // so entry j (outermost = 0) is variable k + m' - 1 - j.
                     let (base, m_prime) = Self::ctx_payload_shape(c, at);
                     let new_tail = match base {
-                        CtxBase::Nil => SubstTail::Empty { len: len + m_prime, base: CtxBase::Nil },
+                        CtxBase::Nil => SubstTail::Empty,
                         CtxBase::Var(g) => SubstTail::Wk { len: len + m_prime, ctx_var: g },
                     };
                     let terms = (0..m_prime)
@@ -2227,25 +2222,7 @@ impl Mapper for SubstGlobal<'_> {
                      payload"
                 ),
             },
-            SubstTail::Empty { len, base: CtxBase::Var(g) } => match self.resolve(g, at) {
-                Resolved::Bound => {
-                    (SubstTail::Empty { len, base: CtxBase::Var(g) }, Vec::new())
-                }
-                Resolved::Renumber(v) => {
-                    self.note();
-                    (SubstTail::Empty { len, base: CtxBase::Var(v) }, Vec::new())
-                }
-                Resolved::Payload(GlobalEntry::Ctx(c)) => {
-                    self.note();
-                    let (base, m_prime) = Self::ctx_payload_shape(c, at);
-                    (SubstTail::Empty { len: len + m_prime, base }, Vec::new())
-                }
-                Resolved::Payload(_) => panic!(
-                    "kernel invariant violated: context variable substituted by a non-context \
-                     payload"
-                ),
-            },
-            SubstTail::Empty { .. } => (tail, Vec::new()),
+            SubstTail::Empty => (tail, Vec::new()),
         }
     }
 }
@@ -2511,7 +2488,7 @@ impl LocalSubst {
     pub fn id(ctx: &LocalCtx) -> LocalSubst {
         let m = ctx.entries.len() as u32;
         let tail = match ctx.base {
-            CtxBase::Nil => SubstTail::Empty { len: m, base: CtxBase::Nil },
+            CtxBase::Nil => SubstTail::Empty,
             CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
         };
         // Shared leaves: `|Γ|` refcount increments, not `|Γ|` allocations
@@ -2666,7 +2643,7 @@ mod tests {
         // Substituting Ty ℓ0 for x under Λℓ. …: the payload's level must
         // become ℓ1 inside.
         let delta = LocalSubst {
-            tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+            tail: SubstTail::Empty,
             terms: vec![rt(Term::TmTy(Level::Var(UnivVar(0))))],
         };
         let t = Term::ULam {

@@ -221,10 +221,7 @@ fn peel_pis(
     // The identity on `gamma` and the `extra` binders past it, which each
     // `Π`'s codomain extends by the argument it is instantiated at.
     let tail = match gamma.base {
-        heather_kernel::term::CtxBase::Nil => heather_kernel::term::SubstTail::Empty {
-            len: n,
-            base: heather_kernel::term::CtxBase::Nil,
-        },
+        heather_kernel::term::CtxBase::Nil => heather_kernel::term::SubstTail::Empty,
         heather_kernel::term::CtxBase::Var(g) => heather_kernel::term::SubstTail::Wk { len: n, ctx_var: g },
     };
     let ident = heather_kernel::term::LocalSubst {
@@ -987,7 +984,7 @@ impl Elaborator {
         // `Case` annotations of an inline arity (`Sum` vs `Sum`, 300 queries
         // of the five-node FunctionIR/x86 module after the value sites
         // agreed, 2026-09-06; issues/emission-site-respell-audit.md).
-        let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
+        let (shape_e, arity_e) = match self.wf_slot_refs(shape, arity) {
             Some((s, a)) => (Rc::new(s), Rc::new(a)),
             None => self
                 .emit_wf_slots(cx, shape, arity, 0)
@@ -1994,14 +1991,14 @@ record DepC { m: Nat, eq: m = m }
         for name in ["T", "U", "Flat"] {
             let tag = e.ind(name).tag;
             assert!(
-                e.el.gen_ref(&e.cx, GenDef::TyCode(tag)).is_some(),
+                e.el.gen_ref(GenDef::TyCode(tag)).is_some(),
                 "`{name}` should have a `#tycode`"
             );
         }
         // §14.12's boundary, verbatim: `⟦Box<A>⟧` is monomorphized per
         // instantiation, so there is no one closed type to name.
         assert!(
-            e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag))
+            e.el.gen_ref(GenDef::TyCode(e.ind("Box").tag))
                 .is_none()
         );
     }
@@ -2056,7 +2053,7 @@ record DepC { m: Nat, eq: m = m }
         assert!(e.el.respell_ty(&e.cx, &forgery).is_none());
         // …and the same read keyed by hand at the tag declines too, which is
         // the property `respell_ty` inherits rather than adds.
-        assert!(e.el.closed_type_ref(&e.cx, e.ind("T").tag, &forgery).is_none());
+        assert!(e.el.closed_type_ref(e.ind("T").tag, &forgery).is_none());
         let _ = l;
     }
 
@@ -2068,14 +2065,14 @@ record DepC { m: Nat, eq: m = m }
         // lowering is expected.
         let (_, l) = e.lowered("T");
         let u_code =
-            e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("U").tag))
+            e.el.gen_ref(GenDef::TyCode(e.ind("U").tag))
                 .expect("U has a code");
         let forged = Type::El {
             level: l,
             tm: Rc::new(u_code),
         };
         // Neither by tag…
-        assert!(e.el.closed_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
+        assert!(e.el.closed_type_ref(e.ind("T").tag, &forged).is_none());
         // …nor by the structural read, which does not follow a neutral code.
         assert!(e.el.respell_ty(&e.cx, &forged).is_none());
     }
@@ -2100,10 +2097,7 @@ record DepC { m: Nat, eq: m = m }
         let dup = Term::GlobalTm {
             var: GlobalVar(e.el.global_padding()),
             subst: LocalSubst {
-                tail: SubstTail::Empty {
-                    len: 0,
-                    base: CtxBase::Nil,
-                },
+                tail: SubstTail::Empty,
                 terms: vec![],
             },
         };
@@ -2115,7 +2109,7 @@ record DepC { m: Nat, eq: m = m }
             level: l,
             tm: Rc::new(dup),
         };
-        assert!(e.el.closed_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
+        assert!(e.el.closed_type_ref(e.ind("T").tag, &forged).is_none());
         assert!(e.el.respell_ty(&e.cx, &forged).is_none());
     }
 
@@ -2192,7 +2186,7 @@ theorem bnat_computes(): bnat(BCons(4, BNil)) = 4 { refl }
         )
         .expect("a parameterized declaration keeps its inline lowering");
         assert!(
-            e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag))
+            e.el.gen_ref(GenDef::TyCode(e.ind("Box").tag))
                 .is_none()
         );
     }
@@ -2404,26 +2398,26 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         for name in ["T", "U"] {
             let tag = e.ind(name).tag;
             assert!(
-                e.el.gen_ref(&e.cx, GenDef::ShapeCode(tag)).is_some(),
+                e.el.gen_ref(GenDef::ShapeCode(tag)).is_some(),
                 "`{name}` should have a `#shape`"
             );
             assert!(
-                e.el.gen_ref(&e.cx, GenDef::ArityFn(tag)).is_some(),
+                e.el.gen_ref(GenDef::ArityFn(tag)).is_some(),
                 "`{name}` should have a `#arity`"
             );
         }
         // No `Wf`, no slots — `Flat` keeps its `#tycode` and nothing else.
         assert!(
-            e.el.gen_ref(&e.cx, GenDef::ShapeCode(e.ind("Flat").tag))
+            e.el.gen_ref(GenDef::ShapeCode(e.ind("Flat").tag))
                 .is_none()
         );
         assert!(
-            e.el.gen_ref(&e.cx, GenDef::ArityFn(e.ind("Flat").tag))
+            e.el.gen_ref(GenDef::ArityFn(e.ind("Flat").tag))
                 .is_none()
         );
         // …and the monomorphization boundary is `TyCode`'s, inherited.
         assert!(
-            e.el.gen_ref(&e.cx, GenDef::ShapeCode(e.ind("Box").tag))
+            e.el.gen_ref(GenDef::ShapeCode(e.ind("Box").tag))
                 .is_none()
         );
     }
@@ -2439,7 +2433,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             panic!("T is recursive")
         };
         let (sref, aref) =
-            e.el.wf_slot_refs(&e.cx, shape, arity)
+            e.el.wf_slot_refs(shape, arity)
                 .expect("T's slots respell");
         let Type::El { tm, .. } = &sref else {
             panic!("a shape slot takes `El` of a code")
@@ -2486,7 +2480,7 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             e.el.policy.fuel,
         )
         .expect("the reference reduces");
-        let (sref, aref) = e.el.wf_slot_refs(&e.cx, shape, arity).expect("T's slots are named");
+        let (sref, aref) = e.el.wf_slot_refs(shape, arity).expect("T's slots are named");
         let Type::Wf { shape: s2, arity: a2, .. } = &stepped else {
             panic!("it reduces to a `Wf`")
         };
@@ -2503,11 +2497,11 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
             tm: Rc::new(Term::TmSum {
                 lhs_level: spine.ctors[0].1.clone(),
                 rhs_level: spine.rhs(0).1.clone(),
-                lhs: Rc::new(e.el.gen_ref(&e.cx, GenDef::PayloadCode(tag, 0)).expect("named")),
-                rhs: Rc::new(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).expect("named")),
+                lhs: Rc::new(e.el.gen_ref(GenDef::PayloadCode(tag, 0)).expect("named")),
+                rhs: Rc::new(e.el.gen_ref(GenDef::SuffixCode(tag, 0)).expect("named")),
             }),
         };
-        assert!(e.el.wf_slot_refs(&e.cx, &decoded_shape, arity).is_some());
+        assert!(e.el.wf_slot_refs(&decoded_shape, arity).is_some());
     }
 
     /// The named pair with one slot swapped is not a spelling of `T`, and
@@ -2520,8 +2514,8 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         let (Type::Wf { level, shape: ts, arity: ta }, Type::Wf { shape: us, arity: ua, .. }) = (&t_ty, &u_ty) else {
             panic!("T and U are recursive")
         };
-        let (t_sref, _) = e.el.wf_slot_refs(&e.cx, ts, ta).expect("T's slots are named");
-        let (_, u_aref) = e.el.wf_slot_refs(&e.cx, us, ua).expect("U's slots are named");
+        let (t_sref, _) = e.el.wf_slot_refs(ts, ta).expect("T's slots are named");
+        let (_, u_aref) = e.el.wf_slot_refs(us, ua).expect("U's slots are named");
         let swapped = Type::Wf { level: level.clone(), shape: Rc::new(t_sref), arity: Rc::new(u_aref) };
         assert_eq!(e.el.unspell_wf_slots(&swapped), None);
     }
@@ -2539,13 +2533,13 @@ theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
         };
         // Every label gets one more child than it should.
         let bumped = Term::Succ(Rc::clone(arity));
-        assert!(e.el.wf_slot_refs(&e.cx, shape, &bumped).is_none());
+        assert!(e.el.wf_slot_refs(shape, &bumped).is_none());
         // …and the mirror: `U`'s shape with `T`'s arity is not `U`'s pair.
         let (u_ty, _) = e.lowered("U");
         let Type::Wf { shape: ushape, .. } = &u_ty else {
             panic!("U is recursive")
         };
-        assert!(e.el.wf_slot_refs(&e.cx, ushape, arity).is_none());
+        assert!(e.el.wf_slot_refs(ushape, arity).is_none());
     }
 
     /// A constructor **value** carries the references — the site the
@@ -2652,19 +2646,19 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
             let tag = e.ind(name).tag;
             for k in 0..3 {
                 assert!(
-                    e.el.gen_ref(&e.cx, GenDef::PayloadCode(tag, k)).is_some(),
+                    e.el.gen_ref(GenDef::PayloadCode(tag, k)).is_some(),
                     "`{name}` should have a `#payload{k}`"
                 );
             }
-            assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).is_some(), "`{name}`");
+            assert!(e.el.gen_ref(GenDef::SuffixCode(tag, 0)).is_some(), "`{name}`");
             // `rhs(1)` is the last payload itself: no definition of its own.
-            assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 1)).is_none(), "`{name}`");
+            assert!(e.el.gen_ref(GenDef::SuffixCode(tag, 1)).is_none(), "`{name}`");
             assert!(e.el.types.gdefs().has_spine_code_entry(tag), "`{name}`");
         }
         for name in ["Box", "Box2"] {
             let tag = e.ind(name).tag;
-            assert!(e.el.gen_ref(&e.cx, GenDef::PayloadCode(tag, 0)).is_none(), "`{name}`");
-            assert!(e.el.gen_ref(&e.cx, GenDef::SuffixCode(tag, 0)).is_none(), "`{name}`");
+            assert!(e.el.gen_ref(GenDef::PayloadCode(tag, 0)).is_none(), "`{name}`");
+            assert!(e.el.gen_ref(GenDef::SuffixCode(tag, 0)).is_none(), "`{name}`");
             assert!(!e.el.types.gdefs().has_spine_code_entry(tag));
         }
     }
@@ -2763,7 +2757,7 @@ theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
         let Type::Wf { shape, .. } = &t_ty else {
             panic!("T is recursive")
         };
-        let sref = e.el.gen_type_ref(&e.cx, GenDef::ShapeCode(tag), &l).expect("T has a shape code");
+        let sref = e.el.gen_type_ref(GenDef::ShapeCode(tag), &l).expect("T has a shape code");
         let stepped = heather_kernel::reduce::whnf_type_delta(
             &sref,
             &e.cx.gamma,
@@ -3436,9 +3430,9 @@ theorem fnext3_computes(): fnext3(FB(2)) = FC(2, 2) { refl }
         let found = crate::emission_walk::walk_decl(&e.el, "planted", &stmt, Some(&under));
         let slots: Vec<(&str, u32)> = found.iter().map(|f| (f.slot, f.depth)).collect();
         assert_eq!(slots, vec![("stmt", 0), ("Refl.ty", 1)]);
-        // …and what it would write there is `T`'s own reference, minted at
-        // the binder's depth rather than the statement's — a closed type
-        // hides the shift, so the depth is asserted rather than assumed.
+        // …and what it would write there is `T`'s own reference, which is
+        // the same at the binder's depth as at the statement's: an empty
+        // substitution tail records no context.
         let (lowered, _) = e.lowered("T");
         let at0 = e.el.emit_ty(&e.cx, &lowered, 0).expect("`T`'s lowering respells");
         let Type::El { tm, .. } = &at0 else {
@@ -3446,7 +3440,7 @@ theorem fnext3_computes(): fnext3(FB(2)) = FC(2, 2) { refl }
         };
         assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
         let at1 = e.el.emit_ty(&e.cx, &lowered, 1).expect("…at the binder's depth too");
-        assert_ne!(at0, at1, "the substitution tail is one longer under a binder");
+        assert_eq!(at0, at1, "a closed reference is one spelling under any binders");
         assert_eq!(found[1].emitted, format!("{at1:?}"));
     }
 
@@ -3538,16 +3532,22 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             "the walk's `Fst`/`Snd` annotations are already the chokepoint's:\n{}",
             listed.join("\n")
         );
-        // `h5_use`'s binder is the inline instance `Σ(tag). Σ(ok : s.a = FA). Unit`
+        // `h5_use`'s binder is the instance `Σ(tag). Σ(ok : s.a = FA). Unit`
         // at `s := S5(FA, 1)`: the equation's left side is the walk's
         // `fst(snd(⟨tag, ⟨FA, ⟨1, ⟨⟩⟩⟩⟩))`, and its `Fst` annotation must be
-        // the very type the literal's own field link states.
+        // the very type the literal's own field link states. The binder is
+        // spelled through `H5#tycode_fn` (the identity step has no tail to
+        // decline on since the empty substitution records nothing,
+        // issues/empty-substitution-tail-decoration.md), so it is read
+        // through the name, in the world as it is now.
         let abs = e.el.lookup_global("h5_use").expect("`h5_use` is registered").abs as usize;
         let GlobalBinding::Tm { ty, .. } = e.el.psi.bindings.get(abs).expect("…and bound") else {
             panic!("a theorem is a term binding")
         };
         let Type::Pi { dom, .. } = &**ty else { panic!("`h5_use` binds `h`") };
-        let Type::Sigma { snd, .. } = &**dom else { panic!("the instance is a Σ (tag first)") };
+        let named = dom.shift_global((e.el.psi.bindings.len() - abs) as u32);
+        let inline = e.el.unspell_here(&named).expect("the instance is spelled through its code function");
+        let Type::Sigma { snd, .. } = &inline else { panic!("the instance is a Σ (tag first): {inline:?}") };
         let Type::Sigma { fst, .. } = &**snd else { panic!("…then the field") };
         let Type::Id { lhs, .. } = &**fst else { panic!("`ok` is an equation") };
         // Since stage 2 (`docs/intro-by-type-design.md` §2.1) the projection
@@ -3593,7 +3593,7 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
         use super::*;
 
         fn code_fn_of(e: &Env, name: &str) -> Option<Term> {
-            e.el.gen_ref(&e.cx, GenDef::TyCodeFn(e.ind(name).tag))
+            e.el.gen_ref(GenDef::TyCodeFn(e.ind(name).tag))
         }
 
         /// The instantiation `D<args>` as `lower_instance` writes it.
@@ -3617,9 +3617,9 @@ theorem s5a_neutral(s: S5): s5a(s) = s.a { refl }
             // closed declaration has the whole-type code and no function.
             for name in ["T", "U", "Flat"] {
                 assert!(code_fn_of(&e, name).is_none(), "`{name}` is closed");
-                assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind(name).tag)).is_some());
+                assert!(e.el.gen_ref(GenDef::TyCode(e.ind(name).tag)).is_some());
             }
-            assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag)).is_none());
+            assert!(e.el.gen_ref(GenDef::TyCode(e.ind("Box").tag)).is_none());
         }
 
         #[test]
@@ -4197,7 +4197,7 @@ theorem slot_literal(): slot_n(slot_flat(2)) = 2 { refl }
                         let tag = e.ind(name).tag;
                         let key = GenDef::TyCodeFn(tag);
                         let entry = e.el.ty_code_fn_now(tag, 0).expect("a registered entry");
-                        let fun = e.el.gen_ref(&e.cx, key).expect("a reference");
+                        let fun = e.el.gen_ref(key).expect("a reference");
                         let Term::GlobalTm { var, .. } = &fun else {
                             panic!("a definition reference is a global")
                         };
@@ -4332,7 +4332,7 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
             // what a dependent spine may not do (§13.6).
             for name in ["Cell", "Mixed", "BV"] {
                 assert!(
-                    e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind(name).tag, 0))
+                    e.el.gen_ref(GenDef::RecProj(e.ind(name).tag, 0))
                         .is_some(),
                     "`{name}` is telescoped and flat: its field 0 should have a `#proj`"
                 );
@@ -4345,12 +4345,12 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
             // out and registers none.
             for (name, fam) in [("Dep", true), ("Cell", false), ("Mixed", false), ("BV", false)] {
                 assert!(
-                    e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind(name).tag, 0))
+                    e.el.gen_ref(GenDef::RecProj(e.ind(name).tag, 0))
                         .is_some(),
                     "`{name}` should have a `#proj` for field 0"
                 );
                 assert_eq!(
-                    e.el.gen_ref(&e.cx, GenDef::RecFam(e.ind(name).tag, 0))
+                    e.el.gen_ref(GenDef::RecFam(e.ind(name).tag, 0))
                         .is_some(),
                     fam,
                     "`{name}`'s shape is decided by its spine's dependency"
@@ -4360,11 +4360,11 @@ record Third<A> { a: A, n: Nat, ok: n = later(n) }
             // …and the closed side is exactly as it was: a dependent spine is
             // named, a flat one is left to the (already linear) walk.
             assert!(
-                e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind("DepC").tag, 0))
+                e.el.gen_ref(GenDef::RecProj(e.ind("DepC").tag, 0))
                     .is_some()
             );
             assert!(
-                e.el.gen_ref(&e.cx, GenDef::RecProj(e.ind("Plain").tag, 0))
+                e.el.gen_ref(GenDef::RecProj(e.ind("Plain").tag, 0))
                     .is_none(),
                 "a closed non-dependent record keeps the inline walk"
             );
@@ -4752,18 +4752,18 @@ theorem pack_lit_out_r(): pack_lit().out.r = GB(1) { refl }
                 // `psi().bindings.len()` fixtures move by.
                 for j in 0..3 {
                     assert!(
-                        e.el.gen_ref(&e.cx, GenDef::RecProj(tag, j)).is_some(),
+                        e.el.gen_ref(GenDef::RecProj(tag, j)).is_some(),
                         "field {j} is named"
                     );
                 }
                 for step in 0..=3 {
                     assert!(
-                        e.el.gen_ref(&e.cx, GenDef::RecFam(tag, step)).is_some(),
+                        e.el.gen_ref(GenDef::RecFam(tag, step)).is_some(),
                         "spine entry {step} has a tail family"
                     );
                 }
                 for step in 1..3 {
-                    assert!(e.el.gen_ref(&e.cx, GenDef::RecTail(tag, step)).is_some());
+                    assert!(e.el.gen_ref(GenDef::RecTail(tag, step)).is_some());
                 }
                 // The statement is over the telescope: two arguments before
                 // the receiver, and the domain at them is the receiver's own
@@ -5526,13 +5526,13 @@ theorem late_pick_zero(l: Late): late_pick(Zero, l) = l { refl }
         let e = Env { el, cx: Cx::empty() };
         let late = e.ind("Late").tag;
         for k in 0..2 {
-            assert!(e.el.gen_ref(&e.cx, GenDef::PayloadCode(late, k)).is_some(), "`Late#payload{k}`");
+            assert!(e.el.gen_ref(GenDef::PayloadCode(late, k)).is_some(), "`Late#payload{k}`");
         }
-        assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(late)).is_some(), "`Late#tycode`");
+        assert!(e.el.gen_ref(GenDef::TyCode(late)).is_some(), "`Late#tycode`");
         let rec = e.ind("LateRec").tag;
-        assert!(e.el.gen_ref(&e.cx, GenDef::ShapeCode(rec)).is_some(), "`LateRec#shape`");
-        assert!(e.el.gen_ref(&e.cx, GenDef::ArityFn(rec)).is_some(), "`LateRec#arity`");
-        assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(rec)).is_some(), "`LateRec#tycode`");
+        assert!(e.el.gen_ref(GenDef::ShapeCode(rec)).is_some(), "`LateRec#shape`");
+        assert!(e.el.gen_ref(GenDef::ArityFn(rec)).is_some(), "`LateRec#arity`");
+        assert!(e.el.gen_ref(GenDef::TyCode(rec)).is_some(), "`LateRec#tycode`");
         for (name, tag) in [("Late", late), ("LateRec", rec)] {
             let (inline, l) = e.lowered(name);
             let named = e.el.respell_ty(&e.cx, &inline).unwrap_or_else(|| panic!("`{name}` respells to its code"));
@@ -5544,17 +5544,16 @@ theorem late_pick_zero(l: Late): late_pick(Zero, l) = l { refl }
             // The negative control: the stale spelling itself, its `twice`
             // one binding over, is not this declaration's lowering.
             assert!(e.el.respell_ty(&e.cx, &inline.shift_global(1)).is_none(), "`{name}`: a stale lowering");
-            // Under a binder the lowering's `twice` carries the longer
-            // context, and so does the reference minted there; the guard
-            // is read in that context, and the reference unspells back to it.
+            // Under a binder the lowering is the same syntax, its `twice`
+            // included (an empty substitution tail records no context), and
+            // so is the reference minted there, which unspells back to it.
             let mut cx = Cx::empty();
             cx.push("#k".into(), Type::Nat, Level::Zero);
             let deeper = inline.shift_local(1);
-            assert_ne!(deeper, inline, "`{name}`: the lowering mentions a global, which carries its context");
+            assert_eq!(deeper, inline, "`{name}`: a closed lowering is one spelling under any binders");
             let named = e.el.respell_ty(&cx, &deeper).unwrap_or_else(|| panic!("`{name}` respells under a binder"));
             assert!(e.el.conv_types(&cx, &named, &deeper, &l), "`{name}`");
             assert_eq!(e.el.unspell_here(&named).as_ref(), Some(&deeper), "`{name}` unspells in its context");
-            assert!(e.el.respell_ty(&cx, &inline).is_none(), "`{name}`: the lowering of another context");
         }
         let mut wrong = e.el;
         let refusal = wrong.elab_source("fn late_bad() → Late { LateB(Succ(Succ(Zero)), refl) }")

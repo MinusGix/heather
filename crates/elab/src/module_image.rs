@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x22";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1c";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x23";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1d";
 
 /// The two encodings' versions, image then interface: what a module cache
 /// key covers, so a bump of either is a clean miss for every reader rather
@@ -628,11 +628,7 @@ fn get_ctx(r: &mut Reader<'_>) -> Result<LocalCtx, ModuleImageDecodeError> {
 
 fn put_subst(w: &mut Writer, subst: &LocalSubst) {
     match subst.tail {
-        SubstTail::Empty { len, base } => {
-            w.byte(tag::TAIL_EMPTY);
-            w.u32(len);
-            put_base(w, base);
-        }
+        SubstTail::Empty => w.byte(tag::TAIL_EMPTY),
         SubstTail::Wk { len, ctx_var } => {
             w.byte(tag::TAIL_WK);
             w.u32(len);
@@ -644,10 +640,7 @@ fn put_subst(w: &mut Writer, subst: &LocalSubst) {
 
 fn get_subst(r: &mut Reader<'_>) -> Result<LocalSubst, ModuleImageDecodeError> {
     let tail = match r.byte()? {
-        tag::TAIL_EMPTY => SubstTail::Empty {
-            len: r.u32()?,
-            base: get_base(r)?,
-        },
+        tag::TAIL_EMPTY => SubstTail::Empty,
         tag::TAIL_WK => SubstTail::Wk {
             len: r.u32()?,
             ctx_var: GlobalVar(r.u32()?),
