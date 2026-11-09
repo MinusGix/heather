@@ -1,0 +1,242 @@
+// The FunctionIR pass (`function_ir_pass`) as two simulation diagrams,
+// composed (issues/function-ir-passes-as-diagrams.md; the diagrams are
+// lib/std/relation/transition.hthr's).
+//
+// A leaf read a step at a time (`Leaf`): its schedule still to run, its
+// words and its buffers; a step runs the schedule's first node
+// (`Leaf::Step`). One run of the schedule's length ends where `run_nodes`
+// does (`List::leaf_runs`), and since a step is determined and an empty
+// schedule cannot step, every run to an empty schedule ends there
+// (`List::leaf_ends`).
+//
+// - Folding is a lock-step diagram (`fold_lockstep`): each node is
+//   answered by its folded node, from words the same as the source's, with
+//   the facts learned so far holding of them (`FoldMatch`).
+// - Removal is a star diagram (`prune_star`): a dropped node is a stutter
+//   (the target stays put, the index, the nodes left, goes down) and a kept
+//   node is one target step; the target's words agree with the source's
+//   wherever the target's schedule still needs them (`PruneMatch`).
+// - `StarDiagram::compose` makes them one diagram (`optimise_star`), and
+//   `List::optimised_runs` is that diagram's `runs` read at the end of the
+//   schedule: a third pass is one more `compose`.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_pass;
+import transition;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import pair;
+
+// ---------------------------------------------------------------------------
+// A leaf a step at a time
+
+record Leaf { nodes: List<Node>, values: Valuation(), buffers: Buffers() }
+
+// From a schedule, words and buffers: the first node run, its rest left.
+fn Leaf::StepFrom(nodes: List<Node>, values: Valuation(), buffers: Buffers(), next: Leaf) → Type {
+    match nodes {
+        Nil => False,
+        Cons(node, rest) => next = Leaf(rest, node.run(values, buffers).values, node.run(values, buffers).buffers),
+    }
+}
+
+fn Leaf::Step(s, t: Leaf) → Type { Leaf::StepFrom(s.nodes, s.values, s.buffers, t) }
+
+theorem Leaf::step_from_det(nodes: List<Node>, values: Valuation(), buffers: Buffers()): (b, c: Leaf) →
+    Leaf::StepFrom(nodes, values, buffers, b) → Leaf::StepFrom(nodes, values, buffers, c) → b = c {
+    match nodes {
+        Nil => λ b c no _ => false_elim(no),
+        Cons(_, _) => λ b c left right => trans(left, sym(right)),
+    }
+}
+
+theorem Leaf::step_det(): Deterministic(Leaf::Step) {
+    λ a b c => Leaf::step_from_det(a.nodes, a.values, a.buffers, b, c)
+}
+
+// A leaf with nothing left to run stays where it is.
+theorem Leaf::done_stuck(s: Leaf, done: s.nodes = Nil): Stuck(Leaf::Step, s) {
+    λ t step => j(done, λ x _ => Leaf::StepFrom(x, s.values, s.buffers, t), step)
+}
+
+// A schedule's run, a step at a time, ends where `run_nodes` does.
+theorem List::leaf_runs(self nodes: List<Node>): (values: Valuation()) → (buffers: Buffers()) →
+    StarN(Leaf::Step, nodes.len(), Leaf(nodes, values, buffers),
+        Leaf(Nil, run_nodes(nodes, values, buffers).values, run_nodes(nodes, values, buffers).buffers)) {
+    match nodes {
+        Nil => λ values buffers => refl,
+        Cons(node, rest) => λ values buffers => {
+            let after = node.run(values, buffers);
+            let ran = run_nodes(rest, after.values, after.buffers);
+            StarN::cons(Leaf::Step, rest.len(), Leaf(Cons(node, rest), values, buffers), Leaf(rest, after.values, after.buffers),
+                Leaf(Nil, ran.values, ran.buffers), refl, rest.leaf_runs(after.values, after.buffers))
+        },
+    }
+}
+
+// And any run to an empty schedule ends there.
+theorem List::leaf_ends(self nodes: List<Node>, values: Valuation(), buffers: Buffers(), finish: Leaf,
+    run: Star(Leaf::Step, Leaf(nodes, values, buffers), finish), done: finish.nodes = Nil):
+    finish = Leaf(Nil, run_nodes(nodes, values, buffers).values, run_nodes(nodes, values, buffers).buffers) {
+    let ran = run_nodes(nodes, values, buffers);
+    Star::stuck_determined(Leaf::Step, Leaf::step_det(), Leaf(nodes, values, buffers), finish, Leaf(Nil, ran.values, ran.buffers),
+        run, Leaf::done_stuck(finish, done),
+        Star::of_n(Leaf::Step, nodes.len(), Leaf(nodes, values, buffers), Leaf(Nil, ran.values, ran.buffers),
+            nodes.leaf_runs(values, buffers)),
+        Leaf::done_stuck(Leaf(Nil, ran.values, ran.buffers), refl))
+}
+
+// ---------------------------------------------------------------------------
+// Folding: lock-step
+
+// The target runs the source's schedule folded under facts that hold of the
+// source's words, from the same words and buffers.
+fn FoldMatch(s, t: Leaf) → Type {
+    ∃ facts: List<Fact>, (t.nodes = s.nodes.folded(facts))
+        ∧ (facts.Hold(s.values) ∧ (Valuation::Same(s.values, t.values) ∧ (t.buffers = s.buffers)))
+}
+
+theorem fold_lockstep(): LockstepDiagram(Leaf::Step, Leaf::Step, FoldMatch) {
+    λ s => match s {
+        Leaf(nodes, values, buffers) => match nodes {
+            Nil => λ s2 t matched step => false_elim(step),
+            Cons(node, rest) => λ s2 t matched step => {
+                let facts = matched.witness;
+                let m = matched.proof;
+                let learned = node.learn(facts);
+                let after = node.run(values, buffers);
+                let ran = node.fold(facts).run(t.values, t.buffers);
+                let t2 = Leaf(rest.folded(learned), ran.values, ran.buffers);
+                let moved: Leaf::Step(t, t2) = j(sym(m.left), λ x _ => Leaf::StepFrom(x, t.values, t.buffers, t2), refl);
+                let fold = node.fold_runs(facts, values, t.values, buffers, m.right.left, m.right.right.left);
+                let base: FoldMatch(Leaf(rest, after.values, after.buffers),
+                        Leaf(rest.folded(learned), node.fold(facts).run(t.values, buffers).values, node.fold(facts).run(t.values, buffers).buffers)) =
+                    Exists(learned, ⟨refl, ⟨fold.right.right, ⟨fold.right.left, fold.left⟩⟩⟩);
+                let at_t: FoldMatch(Leaf(rest, after.values, after.buffers), t2) =
+                    j(sym(m.right.right.right), λ bb _ => FoldMatch(Leaf(rest, after.values, after.buffers),
+                        Leaf(rest.folded(learned), node.fold(facts).run(t.values, bb).values, node.fold(facts).run(t.values, bb).buffers)), base);
+                Exists(t2, ⟨moved, j(sym(step), λ x _ => FoldMatch(x, t2), at_t)⟩)
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Removal: a dropped node stutters
+
+// One node fewer left.
+fn Fewer(j, i: Nat) → Type { Succ(j) = i }
+
+// The target runs the source's schedule pruned, from the same buffers and
+// from words that agree with the source's wherever the target needs them;
+// the index is how many nodes the source has left.
+fn PruneMatch(out: List<Nat>, i: Nat, s, t: Leaf) → Type {
+    (i = s.nodes.len()) ∧ ((t.nodes = s.nodes.pruned(out)) ∧ ((t.buffers = s.buffers) ∧
+        ((k: Nat) → t.nodes.needs(out, k).IsTrue() → (w: Nat) → t.values(w, k) = s.values(w, k))))
+}
+
+theorem prune_star(out: List<Nat>): StarDiagram(Leaf::Step, Leaf::Step, Fewer, λ i s t => PruneMatch(out, i, s, t)) {
+    λ i s => match s {
+        Leaf(nodes, values, buffers) => match nodes {
+            Nil => λ s2 t matched step => false_elim(step),
+            Cons(node, rest) => λ s2 t matched step => {
+                let o = node_output(node).id;
+                let kept = rest.pruned(out);
+                let after = node.run(values, buffers);
+                let agree = matched.right.right.right;
+                let same_buffers: (t.buffers = buffers) = matched.right.right.left;
+                (match node.pure() && !kept.needs(out, o) as λ d => (node.pure() && !kept.needs(out, o)) = d →
+                        (t.nodes = match d { True => kept, False => Cons(node, kept) }) →
+                        ∃ j: Nat, ∃ b2: Leaf, StarAnswer(Leaf::Step, Fewer, i, j, t, b2) ∧ PruneMatch(out, j, s2, b2) {
+                    True => λ drop at_kept => {
+                        let gone = node.dropped(kept, out, drop);
+                        let base: PruneMatch(out, rest.len(), Leaf(rest, node.step(values), buffers), t) =
+                            ⟨refl, ⟨at_kept, ⟨same_buffers, λ k needed w => match k.eq_dec(o) as λ _ => t.values(w, k) = node.step(values)(w, k) {
+                                Inl(e) => false_elim(gone.right(j(e, λ x _ => kept.needs(out, x).IsTrue(),
+                                    j(at_kept, λ x _ => List::needs(x, out, k).IsTrue(), needed)))),
+                                Inr(ne) => trans(agree(k, needed, w), sym(Valuation::set_other(values, o, node.value(values), w, k, ne))),
+                            }⟩⟩⟩;
+                        let ran: PruneMatch(out, rest.len(), Leaf(rest, after.values, after.buffers), t) =
+                            j(sym(node.run_pure(values, buffers, gone.left)), λ st _ => PruneMatch(out, rest.len(), Leaf(rest, st.values, st.buffers), t), base);
+                        Exists(rest.len(), Exists(t, ⟨Inr(⟨Star::refl(Leaf::Step, t), sym(matched.left)⟩),
+                            j(sym(step), λ x _ => PruneMatch(out, rest.len(), x, t), ran)⟩))
+                    },
+                    False => λ _ at_cons => {
+                        let needs_here = λ (k: Nat) (here: Cons(node, kept).needs(out, k).IsTrue()) =>
+                            j(sym(at_cons), λ x _ => List::needs(x, out, k).IsTrue(), here);
+                        let alike = node.runs_alike(values, t.values, buffers, λ id m w => agree(id, needs_here(id, node.needs_read(kept, out, id, m)), w));
+                        let moved_to = node.run(t.values, buffers);
+                        let base: PruneMatch(out, rest.len(), Leaf(rest, after.values, after.buffers), Leaf(kept, moved_to.values, moved_to.buffers)) =
+                            ⟨refl, ⟨refl, ⟨alike.left, λ k needed w => match k.eq_dec(o) {
+                                Inl(e) => j(sym(e), λ x _ => moved_to.values(w, x) = after.values(w, x), alike.right(w)),
+                                Inr(ne) => trans(node.run_keeps(t.values, buffers, w, k, ne),
+                                    trans(agree(k, needs_here(k, node.needs_later(kept, out, k, ne, needed)), w),
+                                        sym(node.run_keeps(values, buffers, w, k, ne)))),
+                            }⟩⟩⟩;
+                        let ran = node.run(t.values, t.buffers);
+                        let t2 = Leaf(kept, ran.values, ran.buffers);
+                        let moved: Leaf::Step(t, t2) = j(sym(at_cons), λ x _ => Leaf::StepFrom(x, t.values, t.buffers, t2), refl);
+                        let at_t: PruneMatch(out, rest.len(), Leaf(rest, after.values, after.buffers), t2) =
+                            j(sym(same_buffers), λ bb _ => PruneMatch(out, rest.len(), Leaf(rest, after.values, after.buffers),
+                                Leaf(kept, node.run(t.values, bb).values, node.run(t.values, bb).buffers)), base);
+                        Exists(rest.len(), Exists(t2, ⟨Inl(Plus::one(Leaf::Step, t, t2, moved)),
+                            j(sym(step), λ x _ => PruneMatch(out, rest.len(), x, t2), at_t)⟩))
+                    },
+                })(refl, matched.right.left)
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The pass: the two composed
+
+fn NoOrder(p, q: True) → Type { False }
+
+fn OptimiseOrder(x, y: Pair<Nat, True>) → Type { StarComposeLt(NoOrder, Fewer, x, y) }
+
+fn OptimiseMatch(out: List<Nat>, k: Pair<Nat, True>, s, t: Leaf) → Type {
+    StarCompose(λ (i: True) (a: Leaf) (b: Leaf) => FoldMatch(a, b), λ (i: Nat) (a: Leaf) (b: Leaf) => PruneMatch(out, i, a, b), k, s, t)
+}
+
+theorem optimise_star(out: List<Nat>): StarDiagram(Leaf::Step, Leaf::Step, OptimiseOrder, λ k s t => OptimiseMatch(out, k, s, t)) {
+    StarDiagram::compose<Leaf, Leaf, Leaf, True, Nat>(Leaf::Step, Leaf::Step, Leaf::Step, NoOrder, Fewer,
+        λ i a b => FoldMatch(a, b), λ i a b => PruneMatch(out, i, a, b),
+        PlusDiagram::star<Leaf, Leaf, True>(Leaf::Step, Leaf::Step, NoOrder, FoldMatch,
+            LockstepDiagram::plus(Leaf::Step, Leaf::Step, FoldMatch, fold_lockstep())),
+        prune_star(out))
+}
+
+// The theorem: from any valuation and buffers, the optimised nodes run to
+// the same buffers, and leave every word live after them as the nodes did
+// at every width.
+theorem List::optimised_runs(self nodes: List<Node>, out: List<Nat>, values: Valuation(), buffers: Buffers()):
+    (run_nodes(nodes.optimised(out), values, buffers).buffers = run_nodes(nodes, values, buffers).buffers)
+        ∧ ((i: Nat) → Mem(i, out) → (w: Nat) → run_nodes(nodes.optimised(out), values, buffers).values(w, i) = run_nodes(nodes, values, buffers).values(w, i)) {
+    let ran = run_nodes(nodes, values, buffers);
+    let start = Leaf(nodes, values, buffers);
+    let target = Leaf(nodes.optimised(out), values, buffers);
+    let index = Pair(nodes.folded([]).len(), trivial);
+    let matched: OptimiseMatch(out, index, start, target) =
+        Exists(Leaf(nodes.folded([]), values, buffers), ⟨Exists([], ⟨refl, ⟨trivial, ⟨λ w id => refl, refl⟩⟩⟩),
+            ⟨refl, ⟨refl, ⟨refl, λ k _ w => refl⟩⟩⟩⟩);
+    let mapped = StarDiagram::runs(Leaf::Step, Leaf::Step, OptimiseOrder, λ k s t => OptimiseMatch(out, k, s, t), optimise_star(out),
+        nodes.len(), index, start, Leaf(Nil, ran.values, ran.buffers), target, matched, nodes.leaf_runs(values, buffers));
+    let finish = mapped.proof.witness;
+    let composite = mapped.proof.proof.right;
+    let fold = composite.proof.left;
+    let prune = composite.proof.right;
+    let done: (finish.nodes = Nil) =
+        trans(prune.right.left, cong_fn<List<Node>, List<Node>>(λ x => x.pruned(out), fold.proof.left));
+    let ends = nodes.optimised(out).leaf_ends(values, buffers, finish, mapped.proof.proof.left, done);
+    ⟨trans(sym(cong_fn<Leaf, Buffers()>(λ l => l.buffers, ends)), trans(prune.right.right.left, fold.proof.right.right.right)),
+     λ i m w => {
+        let needed: finish.nodes.needs(out, i).IsTrue() = j(sym(done), λ x _ => List::needs(x, out, i).IsTrue(), present_of_mem(i, out, m));
+        trans(sym(cong_fn<Leaf, BitVec(w)>(λ l => l.values(w, i), ends)),
+            trans(prune.right.right.right(i, needed, w), fold.proof.right.right.left(w, i)))
+     }⟩
+}

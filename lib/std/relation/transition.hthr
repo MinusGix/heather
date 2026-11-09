@@ -384,13 +384,13 @@ fn PlusDiagram<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B �
 }
 
 // The target took a step, or took none and the index went down.
-fn Answers<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
+fn StarAnswer<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
     Plus(T, b, b2) ∨ (Star(T, b, b2) ∧ lt(j, i))
 }
 
 fn StarDiagram<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type) → Type {
     (i: I) → (a, a2: A) → (b: B) → Match(i, a, b) → S(a, a2) →
-        ∃ j: I, ∃ b2: B, Answers(T, lt, i, j, b, b2) ∧ Match(j, a2, b2)
+        ∃ j: I, ∃ b2: B, StarAnswer(T, lt, i, j, b, b2) ∧ Match(j, a2, b2)
 }
 
 theorem LockstepDiagram::plus<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type,
@@ -501,13 +501,13 @@ theorem PlusDiagram::compose<A, B, C>(S: A → A → Type, T: B → B → Type, 
 
 // What a star diagram answers along a plus run of its source: the target
 // took a step, or took none and the index went down `Plus(lt)`.
-fn AnswersAlong<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
+fn StarAnswerAlong<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
     Plus(T, b, b2) ∨ (Star(T, b, b2) ∧ Plus(lt, j, i))
 }
 
 // One more answer after an accumulated one.
-theorem AnswersAlong::then<B, I>(T: B → B → Type, lt: I → I → Type, i, j, k: I, b, b1, b2: B,
-    so_far: AnswersAlong(T, lt, i, j, b, b1), next: Answers(T, lt, j, k, b1, b2)): AnswersAlong(T, lt, i, k, b, b2) {
+theorem StarAnswerAlong::then<B, I>(T: B → B → Type, lt: I → I → Type, i, j, k: I, b, b1, b2: B,
+    so_far: StarAnswerAlong(T, lt, i, j, b, b1), next: StarAnswer(T, lt, j, k, b1, b2)): StarAnswerAlong(T, lt, i, k, b, b2) {
     match so_far {
         Inl(plus) => match next {
             Inl(more) => Inl(Plus::trans(T, b, b1, b2, plus, more)),
@@ -523,15 +523,15 @@ theorem AnswersAlong::then<B, I>(T: B → B → Type, lt: I → I → Type, i, j
 
 theorem StarDiagram::along<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
     diagram: StarDiagram(S, T, lt, Match), n: Nat):
-    (i, j: I) → (a, a2: A) → (b, b1: B) → AnswersAlong(T, lt, i, j, b, b1) → Match(j, a, b1) → StarN(S, n, a, a2) →
-        ∃ k: I, ∃ b2: B, AnswersAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
+    (i, j: I) → (a, a2: A) → (b, b1: B) → StarAnswerAlong(T, lt, i, j, b, b1) → Match(j, a, b1) → StarN(S, n, a, a2) →
+        ∃ k: I, ∃ b2: B, StarAnswerAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
     match n {
         Zero => λ i j a a2 b b1 so_far matched same =>
             Exists(j, Exists(b1, ⟨so_far, j(same, λ e _ => Match(j, e, b1), matched)⟩)),
         Succ(_, ih) => λ i j a a2 b b1 so_far matched run => {
             let next = diagram(j, a, run.witness, b1, matched, run.proof.left);
             ih(i, next.witness, run.witness, a2, b, next.proof.witness,
-                AnswersAlong::then(T, lt, i, j, next.witness, b, b1, next.proof.witness, so_far, next.proof.proof.left),
+                StarAnswerAlong::then(T, lt, i, j, next.witness, b, b1, next.proof.witness, so_far, next.proof.proof.left),
                 next.proof.proof.right, run.proof.right)
         },
     }
@@ -540,10 +540,10 @@ theorem StarDiagram::along<A, B, I>(S: A → A → Type, T: B → B → Type, lt
 // Along a plus run of the source.
 theorem StarDiagram::plus_runs<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
     diagram: StarDiagram(S, T, lt, Match), i: I, a, a2: A, b: B, matched: Match(i, a, b), run: Plus(S, a, a2)):
-    ∃ k: I, ∃ b2: B, AnswersAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
+    ∃ k: I, ∃ b2: B, StarAnswerAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
     let first = diagram(i, a, run.witness, b, matched, run.proof.left);
     let b1 = first.proof.witness;
-    let so_far: AnswersAlong(T, lt, i, first.witness, b, b1) = match first.proof.proof.left {
+    let so_far: StarAnswerAlong(T, lt, i, first.witness, b, b1) = match first.proof.proof.left {
         Inl(plus) => Inl(plus),
         Inr(stutter) => Inr(⟨stutter.left, Plus::one(lt, first.witness, i, stutter.right)⟩),
     };
@@ -580,7 +580,7 @@ theorem StarDiagram::compose<A, B, C, I, J>(S: A → A → Type, T: B → B → 
         let b2 = one.proof.witness;
         // Where the first diagram's target moved, the second follows it.
         let follow: Plus(T, b, b2) → ∃ k2: Pair<J, I>, ∃ c2: C,
-            Answers(U, λ x y => StarComposeLt(first_lt, second_lt, x, y), k, k2, c, c2) ∧
+            StarAnswer(U, λ x y => StarComposeLt(first_lt, second_lt, x, y), k, k2, c, c2) ∧
             StarCompose(first_match, second_match, k2, a2, c2) = λ moved => {
             let two = StarDiagram::plus_runs(T, U, second_lt, second_match, second, k.fst, b, b2, c,
                 matched.proof.right, moved);
@@ -644,4 +644,247 @@ theorem StarDiagram::backward<A, B, I>(S: A → A → Type, T: B → B → Type,
             Inr(plus) => ahead(plus),
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// Well-founded orders
+//
+// `Acc(lt, i)`: every descending chain from `i` is finite, as an inductive
+// family whose premise is a function (the kernel takes such infinitary
+// families; a recursive field takes one argument, so `below` takes the
+// smaller index with its proof). Recursion over it is recursion over `lt`.
+
+inductive Acc<I>(lt: I → I → Type): (i: I) → Type {
+    AccIntro(i: I, below: (e: Exists<I>(λ j => lt(j, i))) → Acc<I>(lt, e.witness)): Acc<I>(lt, i),
+}
+
+fn WellFounded<I>(lt: I → I → Type) → Type { (i: I) → Acc<I>(lt, i) }
+
+theorem Acc::below<I>(lt: I → I → Type, i: I, acc: Acc<I>(lt, i)): (j: I) → lt(j, i) → Acc<I>(lt, j) {
+    match acc { AccIntro(_, smaller) => λ j less => smaller(Exists(j, less)) }
+}
+
+// What is reached going down from an accessible index is accessible.
+theorem Acc::down<I>(lt: I → I → Type, n: Nat): (j, i: I) → StarN(lt, n, j, i) → Acc<I>(lt, i) → Acc<I>(lt, j) {
+    match n {
+        Zero => λ j i same acc => j(sym(same), λ x _ => Acc<I>(lt, x), acc),
+        Succ(_, ih) => λ j i run acc =>
+            Acc::below(lt, run.witness, ih(run.witness, i, run.proof.right, acc), j, run.proof.left),
+    }
+}
+
+// The last step of a plus run.
+theorem StarN::last<A>(R: A → A → Type, n: Nat): (a, b, c: A) → R(a, b) → StarN(R, n, b, c) →
+    ∃ m: A, Star(R, a, m) ∧ R(m, c) {
+    match n {
+        Zero => λ a b c step same => Exists(a, ⟨Star::refl(R, a), j(same, λ x _ => R(a, x), step)⟩),
+        Succ(_, ih) => λ a b c step run => {
+            let rest = ih(b, run.witness, c, run.proof.left, run.proof.right);
+            Exists(rest.witness, ⟨Star::cons(R, a, b, rest.witness, step, rest.proof.left), rest.proof.right⟩)
+        },
+    }
+}
+
+theorem Plus::last<A>(R: A → A → Type, a, c: A, run: Plus(R, a, c)): ∃ m: A, Star(R, a, m) ∧ R(m, c) {
+    StarN::last(R, run.proof.right.witness, a, run.witness, c, run.proof.left, run.proof.right.proof)
+}
+
+// An order's transitive closure is well-founded where the order is.
+theorem Acc::plus<I>(lt: I → I → Type, i: I, acc: Acc<I>(lt, i)): Acc<I>(λ x y => Plus(lt, x, y), i) {
+    match acc {
+        AccIntro(i1, below) => AccIntro(i1, λ e => {
+            let j = e.witness;
+            let last = Plus::last(lt, j, i1, e.proof);
+            let m = last.witness;
+            let at_m = Acc::plus(lt, m, below(Exists(m, last.proof.right)));
+            match Star::cases(lt, j, m, last.proof.left) {
+                Inl(same) => j(sym(same), λ x _ => Acc<I>(λ x2 y2 => Plus(lt, x2, y2), x), at_m),
+                Inr(closer) => Acc::below(λ x y => Plus(lt, x, y), m, at_m, j, closer),
+            }
+        }),
+    }
+}
+
+theorem WellFounded::plus<I>(lt: I → I → Type, wf: WellFounded(lt)): WellFounded<I>(λ x y => Plus(lt, x, y)) {
+    λ i => Acc::plus(lt, i, wf(i))
+}
+
+// The lexicographic order of two well-founded orders is well-founded: down
+// the second while the first holds (`Acc::lex_second`, given what is below
+// in the first), and down the first (`Acc::lex`).
+theorem Acc::lex_second<I, J>(first: I → I → Type, second: J → J → Type, x: I,
+    lower: (e: Exists<I>(λ x2 => first(x2, x))) → (y: J) → Acc<Pair<I, J>>(λ p q => Lex(first, second, p, q), Pair(e.witness, y)),
+    y: J, acc: Acc<J>(second, y)): Acc<Pair<I, J>>(λ p q => Lex(first, second, p, q), Pair(x, y)) {
+    match acc {
+        AccIntro(y1, below_second) => AccIntro(Pair(x, y1), λ e => match e.proof {
+            Inl(down_first) => j(Pair::ext(Pair(e.witness.fst, e.witness.snd), e.witness, refl, refl),
+                λ q _ => Acc<Pair<I, J>>(λ u v => Lex(first, second, u, v), q),
+                lower(Exists(e.witness.fst, down_first), e.witness.snd)),
+            Inr(held) => j(Pair::ext(Pair(x, e.witness.snd), e.witness, sym(held.left), refl),
+                λ q _ => Acc<Pair<I, J>>(λ u v => Lex(first, second, u, v), q),
+                Acc::lex_second(first, second, x, lower, e.witness.snd, below_second(Exists(e.witness.snd, held.right)))),
+        }),
+    }
+}
+
+theorem Acc::lex<I, J>(first: I → I → Type, second: J → J → Type, second_wf: WellFounded(second),
+    x: I, acc: Acc<I>(first, x)): (y: J) → Acc<Pair<I, J>>(λ p q => Lex(first, second, p, q), Pair(x, y)) {
+    match acc {
+        AccIntro(x1, below_first) => λ y => Acc::lex_second(first, second, x1,
+            λ e y2 => Acc::lex(first, second, second_wf, e.witness, below_first(e), y2), y, second_wf(y)),
+    }
+}
+
+theorem WellFounded::lex<I, J>(first: I → I → Type, second: J → J → Type,
+    first_wf: WellFounded(first), second_wf: WellFounded(second)): WellFounded<Pair<I, J>>(λ p q => Lex(first, second, p, q)) {
+    λ p => j(Pair::ext(Pair(p.fst, p.snd), p, refl, refl), λ q _ => Acc<Pair<I, J>>(λ u v => Lex(first, second, u, v), q),
+        Acc::lex(first, second, second_wf, p.fst, first_wf(p.fst), p.snd))
+}
+
+// The composite of two star diagrams is ordered well-foundedly when both
+// are.
+theorem WellFounded::star_compose<I, J>(first_lt: I → I → Type, second_lt: J → J → Type,
+    first_wf: WellFounded(first_lt), second_wf: WellFounded(second_lt)):
+    WellFounded<Pair<J, I>>(λ x y => StarComposeLt(first_lt, second_lt, x, y)) {
+    WellFounded::lex<J, I>(λ p q => Plus(second_lt, p, q), first_lt, WellFounded::plus(second_lt, second_wf), first_wf)
+}
+
+// Nothing is below anything: the order of a diagram that never stutters.
+theorem WellFounded::empty<I>(): WellFounded<I>(λ x y => False) {
+    λ i => AccIntro(i, λ e => false_elim(e.proof))
+}
+
+// One fewer, on `Nat`.
+theorem WellFounded::nat_pred(): WellFounded<Nat>(λ j i => Succ(j) = i) {
+    λ n => match n {
+        Zero => AccIntro(0, λ e => false_elim(Nat::succ_ne_zero(e.witness, e.proof))),
+        Succ(k, ih) => AccIntro(Succ(k), λ e => j(sym(Nat::succ_inj(e.witness, k, e.proof)), λ x _ => Acc<Nat>(λ j2 i2 => Succ(j2) = i2, x), ih)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runs that never end
+
+codata Forever<A>(R: A → A → Type): (a: A) → Type {
+    Again(b: A, step: R(a, b), next: Forever<A>(R, b)),
+}
+
+// What a star diagram carries a run that never ends to: the target steps,
+// or stays put while the index goes down, forever.
+codata ForeverN<B, I>(T: B → B → Type, lt: I → I → Type): (i: I) → (b: B) → Type {
+    Moves(j: I, b2: B, plus: Plus(T, b, b2), next: ForeverN<B, I>(T, lt, j, b2)),
+    Waits(j: I, b2: B, run: Star(T, b, b2), less: lt(j, i), next: ForeverN<B, I>(T, lt, j, b2)),
+}
+
+fn StarDiagram::forever_n<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), i: I, a: A, b: B, matched: Match(i, a, b), source: Forever<A>(S, a))
+    → ForeverN<B, I>(T, lt, i, b) {
+    match source {
+        Again(a2, step, next) => {
+            let answer = diagram(i, a, a2, b, matched, step);
+            let j = answer.witness;
+            let b2 = answer.proof.witness;
+            match answer.proof.proof.left {
+                Inl(plus) => Moves(j, b2, plus,
+                    StarDiagram::forever_n(S, T, lt, Match, diagram, j, a2, b2, answer.proof.proof.right, next)),
+                Inr(stutter) => Waits(j, b2, stutter.left, stutter.right,
+                    StarDiagram::forever_n(S, T, lt, Match, diagram, j, a2, b2, answer.proof.proof.right, next)),
+            }
+        },
+    }
+}
+
+// From an accessible index, the waiting ends: a plus run comes first.
+theorem ForeverN::first_plus<B, I>(T: B → B → Type, lt: I → I → Type, i: I, acc: Acc<I>(lt, i)):
+    (b: B) → ForeverN<B, I>(T, lt, i, b) → ∃ j: I, ∃ b2: B, Plus(T, b, b2) ∧ ForeverN<B, I>(T, lt, j, b2) {
+    match acc {
+        AccIntro(_, below) => λ b f => match f {
+            Moves(j, b2, plus, next) => Exists(j, Exists(b2, ⟨plus, next⟩)),
+            Waits(j, b2, run, less, next) => match Star::cases(T, b, b2, run) {
+                Inl(same) => j(sym(same), λ x _ => ∃ j2: I, ∃ b3: B, Plus(T, x, b3) ∧ ForeverN<B, I>(T, lt, j2, b3),
+                    ForeverN::first_plus(T, lt, j, below(Exists(j, less)), b2, next)),
+                Inr(plus) => Exists(j, Exists(b2, ⟨plus, next⟩)),
+            },
+        },
+    }
+}
+
+// A counted run still to take, then `ForeverN`: one step at a time.
+fn ForeverN::forever_from<B, I>(T: B → B → Type, lt: I → I → Type, wf: WellFounded(lt), n: Nat, m: B, j: I, b: B,
+    run: StarN(T, n, m, b), rest: ForeverN<B, I>(T, lt, j, b)) → Forever<B>(T, m) {
+    match n {
+        Zero => {
+            let found = ForeverN::first_plus(T, lt, j, wf(j), b, rest);
+            let plus = found.proof.proof.left;
+            Again(plus.witness, j(sym(run), λ x _ => T(x, plus.witness), plus.proof.left),
+                ForeverN::forever_from(T, lt, wf, plus.proof.right.witness, plus.witness, found.witness, found.proof.witness,
+                    plus.proof.right.proof, found.proof.proof.right))
+        },
+        Succ(k) => Again(run.witness, run.proof.left,
+            ForeverN::forever_from(T, lt, wf, k, run.witness, j, b, run.proof.right, rest)),
+    }
+}
+
+// A star diagram with a well-founded order carries a source that runs
+// forever to a target that runs forever.
+fn StarDiagram::forever<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), wf: WellFounded(lt), i: I, a: A, b: B, matched: Match(i, a, b),
+    source: Forever<A>(S, a)) → Forever<B>(T, b) {
+    ForeverN::forever_from(T, lt, wf, 0, b, i, b, refl, StarDiagram::forever_n(S, T, lt, Match, diagram, i, a, b, matched, source))
+}
+
+// A deterministic system that runs forever from `a` reaches no stuck state.
+theorem Forever::never_stuck<A>(R: A → A → Type, det: Deterministic(R), n: Nat):
+    (a, c: A) → Forever<A>(R, a) → StarN(R, n, a, c) → ¬Stuck(R, c) {
+    match n {
+        Zero => λ a c f same stuck => match f {
+            Again(b, step, _) => stuck(b, j(same, λ x _ => R(x, b), step)),
+        },
+        Succ(_, ih) => λ a c f run => match f {
+            Again(b, step, next) => ih(run.witness, c, j(det(a, b, run.witness, step, run.proof.left), λ x _ => Forever<A>(R, x), next),
+                run.proof.right),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Behaviours
+//
+// A run ends in a final state, runs forever, or stops short of one. A
+// diagram that matches final states to final states keeps the first, and
+// with a well-founded order the second (`StarDiagram::forever`); into a
+// deterministic target where final states are stuck, the source's
+// behaviour is the target's only one.
+
+fn Terminates<A>(R: A → A → Type, Final: A → Type, a, b: A) → Type { Star(R, a, b) ∧ Final(b) }
+
+theorem StarDiagram::terminates<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), SFinal: A → Type, TFinal: B → Type,
+    finals: (i: I) → (a: A) → (b: B) → Match(i, a, b) → SFinal(a) → TFinal(b),
+    i: I, a, a2: A, b: B, matched: Match(i, a, b), ends: Terminates(S, SFinal, a, a2)):
+    ∃ b2: B, Terminates(T, TFinal, b, b2) {
+    let mapped = StarDiagram::runs(S, T, lt, Match, diagram, ends.left.witness, i, a, a2, b, matched, ends.left.proof);
+    Exists(mapped.proof.witness, ⟨mapped.proof.proof.left,
+        finals(mapped.witness, a2, mapped.proof.witness, mapped.proof.proof.right, ends.right)⟩)
+}
+
+// Into a deterministic target whose final states are stuck: a terminating
+// source is answered by the one end the target can stop in, and a source
+// that runs forever by a target that never stops.
+theorem StarDiagram::terminates_exactly<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), det: Deterministic(T), SFinal: A → Type, TFinal: B → Type,
+    finals: (i: I) → (a: A) → (b: B) → Match(i, a, b) → SFinal(a) → TFinal(b), final_stuck: (b: B) → TFinal(b) → Stuck(T, b),
+    i: I, a, a2: A, b: B, matched: Match(i, a, b), ends: Terminates(S, SFinal, a, a2),
+    c: B, stops: Star(T, b, c), stuck: Stuck(T, c)): TFinal(c) {
+    let answered = StarDiagram::terminates(S, T, lt, Match, diagram, SFinal, TFinal, finals, i, a, a2, b, matched, ends);
+    let b2 = answered.witness;
+    j(Star::stuck_determined(T, det, b, b2, c, answered.proof.left, final_stuck(b2, answered.proof.right), stops, stuck),
+        λ x _ => TFinal(x), answered.proof.right)
+}
+
+theorem StarDiagram::diverges_exactly<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), wf: WellFounded(lt), det: Deterministic(T),
+    i: I, a: A, b: B, matched: Match(i, a, b), source: Forever<A>(S, a), c: B, stops: Star(T, b, c)): ¬Stuck(T, c) {
+    Forever::never_stuck(T, det, stops.witness, b, c, StarDiagram::forever(S, T, lt, Match, diagram, wf, i, a, b, matched, source),
+        stops.proof)
 }

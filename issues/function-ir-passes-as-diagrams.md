@@ -1,6 +1,6 @@
 ---
 title: State FunctionIR passes as simulation diagrams and compose them
-status: open
+status: closed
 labels: [native,semantics,relation]
 area: heather-in-heather
 milestone: [hih-passes]
@@ -42,3 +42,18 @@ adding a third pass is one more `compose`, not a new run proof.
 - **[[transition-systems-and-simulations]]** owns the diagrams. Assumed
   here: they are stated over any step relation and index order.
 - **[[function-ir-pass-arithmetic-folds]]** owns which folds exist.
+
+## Log
+
+- 2026-11-09: Done in lib/native/function_ir/function_ir_pass_diagrams.hthr.
+  `Leaf` (schedule left, words, buffers) with `Leaf::Step` running the first
+  node; `List::leaf_runs` (a run of the schedule's length ends at
+  `run_nodes`) and `List::leaf_ends` (determinism: every run to an empty
+  schedule ends there). `fold_lockstep` (match: folded under facts that hold,
+  same words and buffers) and `prune_star` (a dropped node stutters with the
+  index the nodes left; match: pruned, same buffers, words agree where the
+  target still needs them), composed by `StarDiagram::compose` as
+  `optimise_star`. `List::optimised_runs` moved there and is now
+  `StarDiagram::runs` of the composite read at the end of the schedule;
+  function_ir_pass's whole-schedule inductions `folded_runs` and
+  `pruned_runs` are gone. native_compile_pass cites it unchanged.
