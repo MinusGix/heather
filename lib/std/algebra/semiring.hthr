@@ -455,3 +455,23 @@ instance CommRing<Int>(RelId<Int>, Int::add, Int::mul) {
     zero_mul := Int::zero_mul,
     mul_zero := Int::mul_zero,
 }
+
+// ---------------------------------------------------------------------------
+// A carrier whose `-` is an operation of its own, not `x + -y` by definition
+// (`BitVec::sub` is one ripple-borrow pass), names the law that relates
+// them, and `ring` reads `x - y` through it
+// (issues/ring-carrier-subtraction-law.md). Where `-` unfolds to the sum
+// (`Rat::sub`), no instance is needed: conversion reads it.
+
+class SubtractionLaw<A>(same as ≈: A → A → Type, add as +: A → A → A, sub as -: A → A → A) {
+    neg: A → A,
+    sub_add_neg: (x, y: A) → x - y ≈ x + neg(y),
+}
+
+section<A: SubtractionLaw(≈, +, -)> {
+
+// The law at a carrier named by its type alone, `SubtractionLaw::sub_eq<T>(x, y)`:
+// what `ring`'s certificate cites.
+theorem SubtractionLaw::sub_eq(x, y: A): x - y ≈ x + A.neg(y) { A.sub_add_neg(x, y) }
+
+}

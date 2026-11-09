@@ -99,6 +99,9 @@ struct RelCarrier {
     /// At a class carrier, its integers (`ClassInts`); `None` at a carrier
     /// with a `CommRingOfInt` instance.
     class: Option<ClassInts>,
+    /// The carrier has a `SubtractionLaw` instance: its `-` is an operation
+    /// of its own, read through the law (`Reifier::sub_through_law`).
+    sub_law: bool,
 }
 
 /// How an operation is named where a term spells it: a carrier's
@@ -426,15 +429,23 @@ fn identity_equation(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, level: &Leve
     if elab.designated("≈", OpFixity::Infix, &carrier.key)? != "relation::RelId" {
         return None;
     }
-    let Type::El { tm, .. } = carrier_ty else {
-        return None;
+    // Written `BitVec(n)`, a binder's type arrives as the record's
+    // structure; its parameters are the declaration's.
+    let params = match carrier_ty {
+        Type::El { tm, .. } => {
+            let mut params = 0;
+            let mut head = tm;
+            while let Some((fun, _)) = crate::spelling::app_of(head) {
+                params += 1;
+                head = fun;
+            }
+            params
+        }
+        _ => {
+            let ind = elab.tag_of(carrier_ty).or_else(|| elab.tag_of(&elab.whnf(cx, carrier_ty, span).ok()?))?;
+            ind.params.len() + ind.valparams.len()
+        }
     };
-    let mut params = 0;
-    let mut head = tm;
-    while let Some((fun, _)) = crate::spelling::app_of(head) {
-        params += 1;
-        head = fun;
-    }
     let ops = rel_carrier_at(elab, cx, carrier_ty, Some(params), None, span)?;
     Some(Equation {
         carrier: Carrier::Rel(Rc::new(ops)),
@@ -490,6 +501,9 @@ fn rel_carrier_at(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, params: Option<
         class_negs: Vec::new(),
         class_subs: Vec::new(),
         class: None,
+        sub_law: elab
+            .key_of("semiring::SubtractionLaw")
+            .is_some_and(|law| !elab.traits.instances_answering(&law, Some(&carrier.key)).is_empty()),
     })
 }
 
@@ -547,6 +561,7 @@ fn read_class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<R
         class_negs,
         class_subs,
         class: Some(ClassInts { ints: Rc::new(ints), ty, level, zero, one }),
+        sub_law: false,
     })
 }
 
@@ -1005,6 +1020,14 @@ impl Reifier<'_> {
         {
             return Ok(Syn::Add(Box::new(a), Box::new(b)));
         }
+        if ops.sub_law
+            && let Some(op) = &ops.sub
+            && let Some(args) = op.args(self.elab, tm)
+            && let [a, b] = args.as_slice()
+        {
+            let (a, b) = (Rc::clone(a), Rc::clone(b));
+            return self.sub_through_law(tm, &a, &b, ops, depth);
+        }
         for op in ops.sub.iter().chain(&ops.class_subs) {
             if let Some((a, b)) = self.binary_op(tm, op, depth)? {
                 return Ok(Syn::Sub(Box::new(a), Box::new(b)));
@@ -1417,6 +1440,30 @@ impl Reifier<'_> {
     /// operands, is read the same way. An image of an image (`CReal::ofRat((a + c).rat())`) carries the
     /// inner law through the outer edge by `map_respects`. Confirmed, like
     /// [`Self::cast`], by converting the term to the law's left side.
+    /// `a - b` at a carrier whose `-` is not `a + -b` by definition
+    /// (`BitVec::sub`, one ripple): an atom with its `SubtractionLaw` as a
+    /// definition fact, `t ≈ a + -b`, so the difference is read as the sum
+    /// and the certificate cites the law where conversion could not
+    /// (issues/ring-carrier-subtraction-law.md).
+    fn sub_through_law(&mut self, tm: &Rc<Term>, a: &Rc<Term>, b: &Rc<Term>, ops: &RelCarrier, depth: u32) -> Result<Syn, String> {
+        let atom = self.intern(tm)?;
+        if self.facts.iter().any(|f| f.atom == atom) {
+            return Ok(Syn::Atom(atom));
+        }
+        let spell = |t: &Term| {
+            self.elab.spell_term_source(self.cx, t).ok_or_else(|| "`ring` cannot spell a difference's operand to cite its subtraction law".to_string())
+        };
+        let proof = format!("semiring::SubtractionLaw::sub_eq<{}>(({}), ({}))", ops.source, spell(a)?, spell(b)?);
+        let (term, ty, level) = parse_expr(&proof)
+            .ok()
+            .and_then(|e| self.elab.generated_scope(|me| me.elab_infer(self.cx, &e)).ok())
+            .ok_or_else(|| format!("`ring` could not cite `{}`'s subtraction law (`SubtractionLaw::sub_eq`)", ops.source))?;
+        let rhs = Syn::Sub(Box::new(self.reify_within(a, depth)?), Box::new(self.reify_within(b, depth)?));
+        let sides = Written { lhs: Syn::Atom(atom), rhs };
+        self.facts.push(Fact { atom, kind: FactKind::Definition, term, ty, level, sides });
+        Ok(Syn::Atom(atom))
+    }
+
     fn edge_image(&mut self, tm: &Rc<Term>, depth: u32) -> Result<Option<usize>, String> {
         let Some(proof) = self.edge_law(tm, EDGE_NESTING) else {
             return Ok(None);

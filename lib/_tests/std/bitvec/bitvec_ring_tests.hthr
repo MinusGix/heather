@@ -15,10 +15,19 @@ theorem ring_negation(a, b: u64): -(a * b) ≈ (-a) * b { ring }
 theorem ring_hypothesis(n: Nat, a, b, c: BitVec(n), h: a ≈ b * c): a * a ≈ b * b * (c * c) { ring(h) }
 // `≈` at a word is `=`.
 theorem ring_is_equality(a, b: BitVec(32)): a * b + a = a * (b + 1) { ring }
-// Subtraction once rewritten to the negation it is.
-theorem ring_subtraction(n: Nat, a, b: BitVec(n)): (a - b) + b = a {
-    rewrite(BitVec::sub_eq_add_neg(n, a, b), { let done: ((a + -b) + b ≈ a) = ring; done })
-}
+// Subtraction, its own ripple, read through `SubtractionLaw`
+// (issues/ring-carrier-subtraction-law.md): open and literal widths, `=` and
+// `≈`, nested differences, and a difference in a hypothesis whose sides are
+// bare variables (their type arrives as the record's structure).
+theorem ring_subtraction(n: Nat, a, b: BitVec(n)): (a - b) + b = a { ring }
+theorem ring_sub_distributes(a, b, c: BitVec(64)): (a - b) * c = a * c - b * c { ring }
+theorem ring_sub_nested(n: Nat, a, b: BitVec(n)): a - (a - b) ≈ b { ring }
+theorem ring_sub_hypothesis(n: Nat, a, b, c: BitVec(n), h: a - b = c): a = b + c { ring(h) }
+theorem ring_sub_numerals(a: u8): (a - 1) * (a + 1) = a * a - 1 { ring }
+theorem ring_variable_sides(n: Nat, a, b, c: BitVec(n), h: a = c): a + b = b + c { ring(h) }
+// A difference is still not a sum.
+// expect-error: it is not an identity of commutative rings
+theorem ring_sub_not_add(n: Nat, a, b: BitVec(n)): a - b = a + b { ring }
 
 // `ring` proves identities of every commutative ring, so a fact of ℤ/2 alone
 // (`a + a = 0` at one bit) is not one, though it holds.
