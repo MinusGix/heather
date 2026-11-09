@@ -218,13 +218,13 @@ section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
 
 // `P` holds at every rational of an interval whose images bracket `x`.
 fn Rat::Around(x: K, P: Rat → Type) → Type {
-    ∃ lo: Rat, ∃ hi: Rat, map(lo) <= x ∧ x <= map(hi) ∧ ((q: Rat) → Rat::Le(lo, q) → Rat::Le(q, hi) → P(q))
+    ∃ lo: Rat, ∃ hi: Rat, map(lo) <= x ∧ x <= map(hi) ∧ ((q: Rat) → lo <= q → q <= hi → P(q))
 }
 
 // At an image the interval is the point, for a `P` that respects `≈`.
 theorem Rat::around_of_rat(q: Rat, P: Rat → Type, resp: (a, b: Rat) → Rat::Same(a, b) → P(b) → P(a), h: P(q)): Rat::Around(hom, map(q), P) {
     Exists(q, Exists(q, And(StrictOrder::le_refl(map(q)), And(StrictOrder::le_refl(map(q)),
-        λ p (l: Rat::Le(q, p)) (u: Rat::Le(p, q)) => resp(p, q, Rat::le_antisymm(u, l), h)))))
+        λ p (l: q <= p) (u: p <= q) => resp(p, q, Rat::le_antisymm(u, l), h)))))
 }
 
 // And at an image the point is in the interval: the morphism reflects `≤`.
@@ -256,23 +256,23 @@ theorem Rat::around_mono(x: K, P, Q: Rat → Type, f: (q: Rat) → P(q) → Q(q)
 // The interval can be cut at a rational below `x`, and at one above,
 // without deciding anything about `x`: of two rationals below it the
 // larger is below it.
-theorem Rat::around_above(x: K, P: Rat → Type, b: Rat, hb: map(b) <= x, h: Rat::Around(hom, x, P)): Rat::Around(hom, x, λ q => Rat::Le(b, q) ∧ P(q)) {
+theorem Rat::around_above(x: K, P: Rat → Type, b: Rat, hb: map(b) <= x, h: Rat::Around(hom, x, P)): Rat::Around(hom, x, λ q => b <= q ∧ P(q)) {
     match h {
         Exists(lo, rest) => match rest {
             Exists(hi, w) => match Rat::le_total(lo, b) {
-                Inl(lb) => Exists(b, Exists(hi, And(hb, And(w.right.left, λ q (l: Rat::Le(b, q)) u => And(l, w.right.right(q, Rat::le_trans(lb, l), u)))))),
-                Inr(bl) => Exists(lo, Exists(hi, And(w.left, And(w.right.left, λ q (l: Rat::Le(lo, q)) u => And(Rat::le_trans(bl, l), w.right.right(q, l, u)))))),
+                Inl(lb) => Exists(b, Exists(hi, And(hb, And(w.right.left, λ q (l: b <= q) u => And(l, w.right.right(q, Rat::le_trans(lb, l), u)))))),
+                Inr(bl) => Exists(lo, Exists(hi, And(w.left, And(w.right.left, λ q (l: lo <= q) u => And(Rat::le_trans(bl, l), w.right.right(q, l, u)))))),
             },
         },
     }
 }
 
-theorem Rat::around_below(x: K, P: Rat → Type, c: Rat, hc: x <= map(c), h: Rat::Around(hom, x, P)): Rat::Around(hom, x, λ q => Rat::Le(q, c) ∧ P(q)) {
+theorem Rat::around_below(x: K, P: Rat → Type, c: Rat, hc: x <= map(c), h: Rat::Around(hom, x, P)): Rat::Around(hom, x, λ q => q <= c ∧ P(q)) {
     match h {
         Exists(lo, rest) => match rest {
             Exists(hi, w) => match Rat::le_total(hi, c) {
-                Inl(hc0) => Exists(lo, Exists(hi, And(w.left, And(w.right.left, λ q l (u: Rat::Le(q, hi)) => And(Rat::le_trans(u, hc0), w.right.right(q, l, u)))))),
-                Inr(ch) => Exists(lo, Exists(c, And(w.left, And(hc, λ q l (u: Rat::Le(q, c)) => And(u, w.right.right(q, l, Rat::le_trans(u, ch))))))),
+                Inl(hc0) => Exists(lo, Exists(hi, And(w.left, And(w.right.left, λ q l (u: q <= hi) => And(Rat::le_trans(u, hc0), w.right.right(q, l, u)))))),
+                Inr(ch) => Exists(lo, Exists(c, And(w.left, And(hc, λ q l (u: q <= c) => And(u, w.right.right(q, l, Rat::le_trans(u, ch))))))),
             },
         },
     }
@@ -284,7 +284,7 @@ theorem Rat::around_ends(x: K, P: Rat → Type, h: Rat::Around(hom, x, P)): ∃ 
     match h {
         Exists(lo, rest) => match rest {
             Exists(hi, w) => {
-                let lh: Rat::Le(lo, hi) = hom.le_of_map(lo, hi, PseudoOrder::le_trans(map(lo), x, map(hi), w.left, w.right.left));
+                let lh: (lo <= hi) = hom.le_of_map(lo, hi, PseudoOrder::le_trans(map(lo), x, map(hi), w.left, w.right.left));
                 Exists(lo, Exists(hi, And(w.left, And(w.right.left, And(w.right.right(lo, lo.le_refl(), lh), w.right.right(hi, lh, hi.le_refl()))))))
             },
         },
@@ -298,10 +298,10 @@ theorem Rat::around_meet(x: K, P, Q: Rat → Type, hp: Rat::Around(hom, x, P), h
             Exists(b, wp) => match hq {
                 Exists(c, rc) => match rc {
                     Exists(d, wq) => {
-                        let ad: Rat::Le(a, d) = hom.le_of_map(a, d, PseudoOrder::le_trans(map(a), x, map(d), wp.left, wq.right.left));
-                        let cb: Rat::Le(c, b) = hom.le_of_map(c, b, PseudoOrder::le_trans(map(c), x, map(b), wq.left, wp.right.left));
-                        let ab: Rat::Le(a, b) = hom.le_of_map(a, b, PseudoOrder::le_trans(map(a), x, map(b), wp.left, wp.right.left));
-                        let cd: Rat::Le(c, d) = hom.le_of_map(c, d, PseudoOrder::le_trans(map(c), x, map(d), wq.left, wq.right.left));
+                        let ad: (a <= d) = hom.le_of_map(a, d, PseudoOrder::le_trans(map(a), x, map(d), wp.left, wq.right.left));
+                        let cb: (c <= b) = hom.le_of_map(c, b, PseudoOrder::le_trans(map(c), x, map(b), wq.left, wp.right.left));
+                        let ab: (a <= b) = hom.le_of_map(a, b, PseudoOrder::le_trans(map(a), x, map(b), wp.left, wp.right.left));
+                        let cd: (c <= d) = hom.le_of_map(c, d, PseudoOrder::le_trans(map(c), x, map(d), wq.left, wq.right.left));
                         match Rat::le_total(a, c) {
                             Inl(ac) => Exists(c, And(wp.right.right(c, ac, cb), wq.right.right(c, c.le_refl(), cd))),
                             Inr(ca) => Exists(a, And(wp.right.right(a, a.le_refl(), ab), wq.right.right(a, ca, ad))),

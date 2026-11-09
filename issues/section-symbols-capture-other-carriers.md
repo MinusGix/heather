@@ -1,11 +1,11 @@
 ---
 title: A section's operator symbols capture every carrier, so a second carrier is written prefix
-status: open
+status: closed
 labels: [notation,traits,elaboration,ergonomics]
 area: language
 milestone: [math-classes]
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 A constraint binder that names a symbol (`section<K: OrderedField(≈, <, <=,
@@ -63,3 +63,19 @@ the surface; this issue only asks that the Rat side not be restated).
   naming that carrier, not "the expected type".
 
 Related: [[operation-indexed-classes]]; docs/stdlib-math-awkwardness-survey.md §6.
+
+## Log
+
+- 2026-11-09: Rung 1 is carrier-aware (`binder_declines_operands`,
+  crates/elab/src/dispatch/operator.rs; docs/operators-onto-classes-design.md
+  §4, amended): a binder's symbol declines operands at a nominal carrier its
+  operation's first domain is not at, so rung 2 reads that carrier's
+  designation; an operand at `K`, one that does not infer, or numerals alone
+  keep the binder. float_real.hthr's and round_real.hthr's section statements
+  and proofs now write `0 <= a`, `R <= a * lo + b`, `1 - u`, `-e` (the
+  kernel verdicts replayed from cache: the terms are identical). Probes and
+  the `Bool` refusal (which names `Bool`) in
+  lib/_tests/std/algebra/ordered_field_tests.hthr. The second half, leaving
+  the `Rat` indices of `OrderedRingHom<Rat, K>(…)` to `Rat`'s designations,
+  moved to [[constraint-indices-from-carrier-designations]], with the
+  display residue (diagnostics there still spell `Rat::Le(a, b)`).
