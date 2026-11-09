@@ -394,6 +394,12 @@ inductive families writable; mutual families
 (`docs/mutual-inductive-design.md`) and families whose premises quantify
 over an argument (`docs/iwf-infinitary-design.md`, a logical relation's
 shape) lower onto it or onto `W` without a kernel change.
+`docs/heather-coq-port-assessment.md` gives the blockers for a Heather copy
+of heather-coq and proposes rungs
+([heather-coq-port](../issues/heather-coq-port.md)). By predicativity and
+Gödel, the copy carries normalisation, canonicity and consistency only for
+fragments weaker than Heather. Inversion and subject reduction are not
+behind that limit (`docs/definitional-inversion-survey.md`, PR #173).
 
 **Constructive design** (a principle across this area, see
 [Design principles](#design-principles)). The kernel is predicative and has no axioms by default
@@ -641,6 +647,11 @@ separate machines do not slow each other's tests.
 - 2026-10-24: `hih-km-runs` done (`lib/kernel_model/kernel_runs.hthr`): the
   affine and synchronous run folds join the unary fold in the model with
   pairs, projections and runs (`docs/kernel-model-design.md` §7).
+- 2026-10-24: The heather-coq port is assessed
+  (`docs/heather-coq-port-assessment.md`, issue `heather-coq-port`), with
+  rungs under `math-metatheory` proposed for Minus's review. Two language
+  blockers were filed and have since landed: `mutual-inductive-declarations`
+  and `indexed-infinitary-families`.
 - 2026-10-26: `hih-tools` added under `hih-program-logic`, at Minus's request
   to get from cat to real programs. It is the plan in
   `docs/native-real-programs-plan.md`: bytes, compile capacity, a program
