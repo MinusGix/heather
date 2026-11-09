@@ -121,7 +121,10 @@ item instead of an argument.
 A use spells `El l (app(D#tycode_fn^δ; ā))`, the head from `gen_ref_deeper`
 (the substitution tail's length is `cx.gamma.entries.len() + depth`; the
 definition is closed and its Ψ index is context-independent) and one
-`gen_app`-shaped `App` node per argument.
+`gen_app`-shaped `App` node per argument. (Amended 2026-11-09: the empty
+substitution records nothing, so the head is `gen_ref` at every depth and
+`gen_ref_deeper` is gone; the depth paragraph of §4.1 describes a tail that
+no longer exists. `issues/empty-substitution-tail-decoration.md`.)
 
 **Probe (B).** `El (app(Box#tycode_fn^δ; ⌜⟦Flat⟧⌝))` passes
 `kernel_check_type` at the instance level, converts with the inline
