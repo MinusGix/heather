@@ -319,3 +319,25 @@ theorem group_class_neg_sub(x, y: A): -(x - y) ≈ y - x { OrderedAddGroup::neg_
 theorem group_class_has_no_numerals(x: A): x + 0 ≈ x { A.unit_r(x) }
 
 }
+
+// A section's symbols are its carrier's: an operand at a carrier of its own
+// reads that carrier's designation, and generic operands keep the binder's
+// (issues/section-symbols-capture-other-carriers.md).
+section<K: OrderedField(≈, <, <=, +, *)> {
+
+theorem section_rat_operands(x: K, a, b: Rat, h: a <= b): a + 0 <= b {
+    Rat::le_respects(Rat::same_sym(Rat::add_zero(a)), b.same_refl(), h)
+}
+theorem section_rat_is_rat(x: K, a, b: Rat): a * b + a = Rat::add(Rat::mul(a, b), a) { refl }
+// A numeral-led operand takes its carrier from the operand beside it.
+theorem section_rat_numeral_led(x: K, a: Rat): 0 + a = Rat::add(0, a) { refl }
+theorem section_nat_is_nat(x: K, m, n: Nat): m + n = Nat::add(m, n) { refl }
+
+// The section's own carrier still reads the binder, numerals included.
+theorem section_own_carrier(x: K): x + K.unit ≈ x { K.unit_r(x) }
+theorem section_own_numeral(x: K): x + 0 ≈ x { K.unit_r(x) }
+
+// expect-error: nothing designates `+` at `Bool`
+theorem section_bool_has_no_plus(x: K, p, q: Bool): p + q = p { refl }
+
+}

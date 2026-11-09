@@ -106,8 +106,13 @@ impl Elaborator {
         // 1. A constraint binder that named the symbol. Innermost first, and
         //    before any type is looked at: inside `<A: Monoid(+)>` the `+` is
         //    the bound index and nothing else, at every carrier.
+        //    Unless an operand is at a carrier of its own the binder is not
+        //    at: inside `section<K: OrderedField(+, <=)>`, `a + 0 <= b` with
+        //    `a, b: Rat` means `Rat`'s, which rung 2 finds
+        //    (issues/section-symbols-capture-other-carriers.md).
         if fixity == OpFixity::Infix
             && let Some((_, n)) = cx.op_locals.iter_inner().find(|(s, _)| s == sym)
+            && !self.binder_declines_operands(cx, n, sym, args, span)
         {
             return Ok(n.clone());
         }
@@ -284,6 +289,67 @@ impl Elaborator {
             ),
             span,
         )
+    }
+
+    /// Does rung 1's binder `binder` decline these operands — are they at a
+    /// nominal carrier the binder's operation is not at?
+    ///
+    /// The binder's carrier is the first domain of its type (`K` for
+    /// `#op+@0_3 : K -> K -> K`); the operands' is the first
+    /// inference-capable non-numeral leaf of their operator trees, probed as
+    /// rung 2 probes (docs/operators-onto-classes-design.md §4.1). The binder
+    /// keeps the symbol whenever either is unknown: an operand that does not
+    /// infer, or a numeral-only one (`0 + 1` inside the section is `K`'s, as
+    /// before), or an operand at a type with no nominal head, which is the
+    /// generic code the binder exists for. Only a symbol designated somewhere
+    /// is asked, because only then can rung 2 give the operands a meaning of
+    /// their own, so a file declaring no designation pays nothing.
+    fn binder_declines_operands(&self, cx: &Cx, binder: &str, sym: &str, args: &[Expr], span: Span) -> bool {
+        if args.is_empty() || !self.traits.has_designation_for(OpFixity::Infix, sym) {
+            return false;
+        }
+        // A shift's count is not at the carrier (`x << 2`).
+        let operands = if is_shift(sym) { &args[..1] } else { args };
+        let mut found: Option<Option<Carrier>> = None;
+        for arg in operands {
+            operator_carrier_leaf(arg, |leaf| {
+                if self.is_checking_only(cx, leaf) {
+                    return true;
+                }
+                match self.probe(|| {
+                    let (_, ty, _) = self.elab_infer(cx, leaf).ok()?;
+                    Some(self.carrier_of_ty(cx, &ty, span))
+                }) {
+                    Some(carrier) => {
+                        found = Some(carrier);
+                        false
+                    }
+                    None => true,
+                }
+            });
+            if found.is_some() {
+                break;
+            }
+        }
+        let Some(Some(operand)) = found else {
+            return false;
+        };
+        let binder_carrier = self.probe(|| {
+            let var = Expr {
+                kind: ExprKind::Var(binder.into()),
+                span,
+            };
+            let (_, ty, _) = self.elab_infer(cx, &var).ok()?;
+            let Type::Pi { dom, .. } = self.whnf(cx, &ty, span).ok()? else {
+                return None;
+            };
+            Some(self.carrier_of_ty(cx, &dom, span))
+        });
+        match binder_carrier {
+            None => false,
+            Some(None) => true,
+            Some(Some(at)) => at.key != operand.key,
+        }
     }
 
     /// Rung 2b: the operation `sym` designates at the class of a dictionary

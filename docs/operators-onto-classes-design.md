@@ -160,6 +160,14 @@ same spilling, the same diagnostics. Three rungs, in order:
 > signature and body. Innermost declaration-level binding wins; this is the
 > only rung that can fire inside generic code, and it fires without looking at
 > any type.
+> Amended 2026-11-09 (issues/section-symbols-capture-other-carriers.md): it
+> declines an applied symbol whose operands are at a nominal carrier the
+> binder's operation is not at (its type's first domain), when the symbol is
+> designated somewhere. Inside `section<K: OrderedField(+, <=)>`, `a + 0 <=
+> b` at `Rat` is `Rat`'s, from rung 2. The operands' carrier is §4.1's probe
+> over every operand, numerals skipped; an operand at no nominal head (`K`
+> itself), one that does not infer, or numerals alone keep the binder, so
+> generic code reads exactly as before.
 >
 > **(2) The designation at the carrier.** The symbol is applied and the left
 > operand's type has a head; or the symbol is bare in a **checking** position
