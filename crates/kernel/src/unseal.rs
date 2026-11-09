@@ -15,11 +15,10 @@
 //! caller *must* consult it before reusing a judgment — that is its purpose.
 //! Recordings nest; an inner recording's indices are also the outer one's.
 
-use std::cell::RefCell;
-use std::collections::BTreeSet;
+use crate::recording::{self, Frames};
 
 thread_local! {
-    static FRAMES: RefCell<Vec<BTreeSet<usize>>> = const { RefCell::new(Vec::new()) };
+    static FRAMES: Frames = const { Frames::new(Vec::new()) };
 }
 
 /// Run `f`, and return the absolute Ψ indices of the sealed proofs it
@@ -34,70 +33,31 @@ pub fn record<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>) {
 /// unsealed on this thread between [`Recording::start`] and
 /// [`Recording::finish`]. Dropping it unfinished (a panic unwinding through
 /// the span) still closes it, so a later recording does not inherit it.
-pub struct Recording {
-    depth: usize,
-}
+pub struct Recording(recording::Recording);
 
 impl Recording {
     pub fn start() -> Recording {
-        let depth = FRAMES.with(|frames| {
-            let mut frames = frames.borrow_mut();
-            frames.push(BTreeSet::new());
-            frames.len()
-        });
-        Recording { depth }
+        Recording(recording::Recording::start(&FRAMES))
     }
 
     /// Close the recording and return what it saw, which also reaches every
     /// recording it is nested in.
     pub fn finish(self) -> Vec<usize> {
-        let opened = close(self.depth);
-        std::mem::forget(self);
-        opened.into_iter().collect()
+        self.0.finish()
     }
-}
-
-impl Drop for Recording {
-    fn drop(&mut self) {
-        close(self.depth);
-    }
-}
-
-/// Pop the frame at `depth` — and any left open inside it, merging them in
-/// first — handing its indices to the frame outside it too.
-fn close(depth: usize) -> BTreeSet<usize> {
-    FRAMES.with(|frames| {
-        let mut frames = frames.borrow_mut();
-        let mut mine = BTreeSet::new();
-        while frames.len() >= depth && depth > 0 {
-            mine.extend(frames.pop().unwrap_or_default());
-        }
-        if let Some(outer) = frames.last_mut() {
-            outer.extend(mine.iter().copied());
-        }
-        mine
-    })
 }
 
 /// Report, to whatever is recording on this thread, unsealings a judgment
 /// made elsewhere — a verdict computed on another thread and reused here.
 /// Nothing is counted: the unsealing itself was counted where it happened.
 pub fn observe(opened: &[usize]) {
-    FRAMES.with(|frames| {
-        if let Some(top) = frames.borrow_mut().last_mut() {
-            top.extend(opened.iter().copied());
-        }
-    });
+    recording::note(&FRAMES, opened.iter().copied());
 }
 
 /// The sealed proof at absolute Ψ index `at` is being unsealed.
 pub(crate) fn note(at: usize) {
     crate::stats::sealed_unfolds(1);
-    FRAMES.with(|frames| {
-        if let Some(top) = frames.borrow_mut().last_mut() {
-            top.insert(at);
-        }
-    });
+    recording::note(&FRAMES, [at]);
 }
 
 #[cfg(test)]

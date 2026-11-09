@@ -35,8 +35,8 @@ fn bad_file_prints_all_diagnostics_exit_one() {
     );
     assert!(err.contains("--> bad.hthr:6:5"), "{err}");
     // … while a refusal checking holds no note about stays at its declaration.
-    assert!(err.contains("error: the kernel rejected `levels`: LevelMismatch"), "{err}");
-    assert!(err.contains("--> bad.hthr:11:1"), "{err}");
+    assert!(err.contains("error: the kernel rejected `unchecked`: NotConvertible"), "{err}");
+    assert!(err.contains("--> bad.hthr:12:1"), "{err}");
     assert!(err.contains("unsolved goals in `open_goal`"), "{err}");
     assert!(err.contains("bad.hthr: 3 errors"), "{err}");
 }

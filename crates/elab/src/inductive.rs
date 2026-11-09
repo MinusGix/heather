@@ -189,6 +189,12 @@ pub(crate) enum IdxTy {
     Nat,
     /// A declared inductive with no parameters and no index of its own.
     Decl(Rc<Inductive>),
+    /// Any other type, written over the declaration's type and value
+    /// parameters (`inductive Cover<P>(…) : (a: P) -> Type`). The `IWf` route
+    /// needs nothing of an index type (docs/iwf-former-design.md §8.2); route
+    /// 1 and inversion at a constructor-headed index do, so an open index is
+    /// `IWf`-only and never inverted. `name` is its spelling, for messages.
+    Open { ty: Ty, name: String },
 }
 
 /// One index-type constructor, as the indexed lowering reads it: its name and
@@ -224,6 +230,7 @@ impl IdxTy {
                     rec: c.kind.iter().map(|k| *k == FieldKind::Plain).collect(),
                 })
                 .collect(),
+            IdxTy::Open { .. } => vec![],
         }
     }
 
@@ -231,6 +238,7 @@ impl IdxTy {
         match self {
             IdxTy::Nat => "Nat",
             IdxTy::Decl(i) => &i.name,
+            IdxTy::Open { name, .. } => name,
         }
     }
 }
@@ -1007,20 +1015,10 @@ impl Elaborator {
         // parameter is substituted at lowering and never read as an index.
         // Beside an index it stays refused: the index telescope would have to
         // be read under the parameters, and nothing asks for that yet.
-        if !d.valparams.is_empty()
-            && let Some(ix) = d_index
-        {
-            return err(
-                format!(
-                    "`{}` has both value parameters and an index: the two do not combine \
-                     this round. Write the uniform argument as a value parameter and drop \
-                     the index, or state the varying one as the index alone \
-                     (docs/surface-value-parameters.md §6)",
-                    d.name
-                ),
-                ix.span,
-            );
-        }
+        // Beside an index, they are read on the `IWf` route only
+        // (`classify_indexed_route`), substituted into the payload, the
+        // children's family and the index type.
+        let _ = d_index;
         for (i, p) in d.valparams.iter().enumerate() {
             if d.valparams[..i].iter().any(|o| o.name == p.name) {
                 return err(format!("duplicate value parameter `{}`", p.name), p.span);
@@ -1110,7 +1108,7 @@ impl Elaborator {
                 if *implicit {
                     return err(crate::IMPLICIT_MARK_REFUSED, ty.span);
                 }
-                let ity = self.index_type(dom, &d.name)?;
+                let ity = self.index_type(dom, &d.name, &d.params)?;
                 if !matches!(cod.kind, TyKind::Univ { level: 0 }) {
                     return err(
                         "an index telescope ends in bare `Type`; the family's level is \
@@ -1499,9 +1497,9 @@ impl Elaborator {
         if ind.skel.is_some() && ind.params.is_empty() && ind.valparams.is_empty() {
             let from = self.attempt.check_notes.borrow().len();
             if ind.iwf_infinitary() {
-                self.iw_sig(&Cx::empty(), &ind, &[], d.span)?;
+                self.iw_sig(&Cx::empty(), &ind, &[], &[], d.span)?;
             } else {
-                self.iwf_sig(&Cx::empty(), &ind, &[], d.span)?;
+                self.iwf_sig(&Cx::empty(), &ind, &[], &[], d.span)?;
             }
             if let Some(e) = self.mismatch_since(from) {
                 return Err(e);
@@ -1550,9 +1548,17 @@ impl Elaborator {
     /// not a policy — a parameterized index would need its arguments at every
     /// use, an indexed index would need a two-level family, and a
     /// single-constructor index has one closed value and so indexes nothing.
-    pub(crate) fn index_type(&self, dom: &Ty, name: &str) -> R<IdxTy> {
+    pub(crate) fn index_type(&self, dom: &Ty, name: &str, params: &[String]) -> R<IdxTy> {
         if matches!(dom.kind, TyKind::Nat) {
             return Ok(IdxTy::Nat);
+        }
+        // One of the declaration's own type parameters: an open index, which
+        // only the `IWf` route lowers (docs/iwf-former-design.md §8.2).
+        if let TyKind::Named { name: iname, args } = &dom.kind
+            && args.is_empty()
+            && params.iter().any(|p| p == iname)
+        {
+            return Ok(IdxTy::Open { ty: dom.clone(), name: iname.clone() });
         }
         let TyKind::Named { name: iname, args } = &dom.kind else {
             return err(
@@ -1722,6 +1728,21 @@ impl Elaborator {
             }
             return Err(self.name_miss(name, format!("unknown type `{name}`"), span));
         };
+        // `R<Omega, Nat>` at a record declared `R<A: Type<1>, X>`: the
+        // angle arguments past the type parameters are its leading value
+        // parameters, and with no others the bare spelling is complete.
+        if args.len() > ind.params.len() {
+            let ind = Rc::clone(ind);
+            let (targs, lead) = self.universe_lead(&ind, args, name, span)?;
+            if lead.len() == ind.valparams.len() {
+                let mut lowered = Vec::with_capacity(targs.len());
+                for a in targs {
+                    lowered.push(self.elab_ty(cx, a)?);
+                }
+                let vargs = self.valparam_args(cx, &ind, &lowered, &lead, span)?;
+                return self.lower_instance(cx, &ind, &lowered, &vargs, span);
+            }
+        }
         if args.len() != ind.params.len() {
             return err(
                 format!(
@@ -1942,6 +1963,14 @@ impl Elaborator {
         if ind.valparams.is_empty() {
             return Ok(None);
         }
+        let (targs, lead) = self.universe_lead(&ind, targs, name, span)?;
+        let all: Vec<Expr>;
+        let args: &[Expr] = if lead.is_empty() {
+            args
+        } else {
+            all = lead.into_iter().chain(args.iter().cloned()).collect();
+            &all
+        };
         // Written type arguments win. Omitted entirely, they may be recovered
         // from the value arguments' own types
         // (issues/exists-type-arg-not-inferred.md) — the case `Exists<A>(P: A
@@ -1970,6 +1999,42 @@ impl Elaborator {
         let vargs = self.valparam_args(cx, &ind, &lowered, args, span)?;
         self.lower_instance(cx, &ind, &lowered, &vargs, span)
             .map(Some)
+    }
+
+    /// The angle arguments past a declaration's type parameters, read as its
+    /// leading value parameters declared at a universe (`record R<A:
+    /// Type<1>>`, which the parser makes a value parameter): the type
+    /// arguments left, and the rest as expressions, each a type literal
+    /// checked at its universe (issues/record-universe-parameters.md). An
+    /// arity error when there is no such parameter to fill.
+    pub(crate) fn universe_lead<'t>(
+        &self,
+        ind: &Inductive,
+        targs: &'t [Ty],
+        name: &str,
+        span: Span,
+    ) -> R<(&'t [Ty], Vec<Expr>)> {
+        if targs.len() <= ind.params.len() {
+            return Ok((targs, Vec::new()));
+        }
+        let k = targs.len() - ind.params.len();
+        if k > ind.valparams.len()
+            || !ind.valparams[..k].iter().all(|(_, t)| matches!(t.kind, TyKind::Univ { .. }))
+        {
+            return err(
+                format!(
+                    "`{name}` takes {} type argument(s), found {}",
+                    ind.params.len(),
+                    targs.len()
+                ),
+                span,
+            );
+        }
+        let lead = targs[..k]
+            .iter()
+            .map(|t| Expr { kind: ExprKind::TyLit(Box::new(t.clone())), span: t.span })
+            .collect();
+        Ok((&targs[k..], lead))
     }
 
     /// A declared type former **partially applied**, checked against an
@@ -4775,7 +4840,7 @@ fn parse_result_index<'a>(
     ctors: &[CtorDecl],
     ity: &IdxTy,
 ) -> R<IdxPat> {
-    let idx = parse_result_head(c, r, name, params)?;
+    let idx = parse_result_head(c, r, name, params, &[])?;
     // A declared index's constructors are looked up by name first, so a
     // *nullary* one (`Bal(SLeaf)`) is a pattern and not the bare-variable
     // (fording) case below.
@@ -4911,8 +4976,68 @@ fn parse_result_index<'a>(
 /// the type must be the declaration at its own parameters, and what comes back
 /// is the single index expression. Route 1 then insists it is a pattern; route
 /// 2b does not constrain it at all (fording doc §2).
-fn parse_result_head<'a>(c: &CtorDecl, r: &'a Expr, name: &str, params: &[String]) -> R<&'a Expr> {
-    let ExprKind::App { head, args, .. } = &r.kind else {
+/// An occurrence of a family with value parameters, `D<p̄>(v̄)(e)` or
+/// `D<p̄>(v̄, e)`, read as `D<p̄>` applied to its index arguments: `None` when
+/// `e` is not such an application, an error when the value arguments are not
+/// the declaration's own value parameters in order (a uniform occurrence).
+fn family_app<'a>(c: &CtorDecl, e: &'a Expr, name: &str, vnames: &[String]) -> Option<R<(&'a Expr, &'a [Expr])>> {
+    let ExprKind::App { head, args, .. } = &e.kind else { return None };
+    if vnames.is_empty() {
+        return Some(Ok((head, args)));
+    }
+    let own = |vs: &[Expr]| {
+        vs.len() == vnames.len()
+            && vs.iter().zip(vnames).all(|(v, n)| matches!(&v.kind, ExprKind::Var(w) if w == n))
+    };
+    let (h, vs, idx): (&Expr, &[Expr], &[Expr]) = match &head.kind {
+        ExprKind::App { head: h, args: vs, .. } => (h, vs, args),
+        _ if args.len() > vnames.len() => (head, &args[..vnames.len()], &args[vnames.len()..]),
+        _ => (head, args, &[]),
+    };
+    if named_head(h).is_none_or(|(n, _)| n != name) {
+        return None;
+    }
+    if idx.is_empty() {
+        return Some(err(
+            format!(
+                "`{}` writes `{name}` with no index after its value parameters: an \
+                 occurrence of `{name}` is `{name}({}, index)`",
+                c.name,
+                vnames.join(", ")
+            ),
+            e.span,
+        ));
+    }
+    if !own(vs) {
+        return Some(err(
+            format!(
+                "`{}` uses `{name}` at value arguments other than its own value parameters \
+                 ({}); a recursive occurrence is uniform in them",
+                c.name,
+                vnames.join(", ")
+            ),
+            e.span,
+        ));
+    }
+    Some(Ok((h, idx)))
+}
+
+fn parse_result_head<'a>(c: &CtorDecl, r: &'a Expr, name: &str, params: &[String], vnames: &[String]) -> R<&'a Expr> {
+    let (head, args) = match family_app(c, r, name, vnames) {
+        Some(res) => res?,
+        None if vnames.is_empty() => (r, &[][..]),
+        None => {
+            return err(
+                format!(
+                    "`{}`'s result annotation must be `{name}<…>({})(index)`",
+                    c.name,
+                    vnames.join(", ")
+                ),
+                r.span,
+            )
+        }
+    };
+    let ExprKind::App { .. } = &r.kind else {
         return err(
             format!(
                 "`{}`'s result annotation must be `{name}<…>(index)` — an applied \
@@ -4954,7 +5079,7 @@ fn parse_result_head<'a>(c: &CtorDecl, r: &'a Expr, name: &str, params: &[String
             r.span,
         );
     }
-    let [idx] = args.as_slice() else {
+    let [idx] = args else {
         return err(
             format!("`{name}` takes exactly one index this round"),
             r.span,
@@ -5235,6 +5360,17 @@ fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
     // measure, no cast anywhere).
     let mut rows = Vec::with_capacity(d.ctors.len());
     let mut r1_fail = None;
+    let vnames: Vec<String> = d.valparams.iter().map(|p| p.name.clone()).collect();
+    // An open index type has no constructors to recurse on, and route 1 does
+    // not read value parameters: `IWf` only.
+    if matches!(ity, IdxTy::Open { .. }) || !vnames.is_empty() {
+        return d
+            .ctors
+            .iter()
+            .map(|c| classify_iwf(c, &d.name, &d.params, &vnames, ity))
+            .collect::<R<Vec<_>>>()
+            .map(IdxRoute::Iwf);
+    }
     for c in &d.ctors {
         let r = c.result.as_ref().expect("checked just above");
         let attempt = parse_result_index(c, r, &d.name, &d.params, &d.ctors, ity).and_then(|pat| {
@@ -5253,13 +5389,16 @@ fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
     };
     // A *uniform* bare-variable index is a parameter wearing an index's
     // spelling. The `IWf` route would happily generate it, so the route-1
-    // message has to win here rather than be tried after.
-    if all_bare_var_indices(&d.ctors, ity) {
+    // message has to win here rather than be tried after. Uniform means the
+    // children too: an accessibility-shaped family, every result at its own
+    // variable but a child at another index (`Down(a, b, …, c: D(b)) :
+    // D(a)`), is a genuine index.
+    if all_bare_var_indices(&d.ctors, ity) && !children_vary(&d.ctors, &d.name, &d.params, &vnames, ity) {
         return Err(e1);
     }
     let mut frows = Vec::with_capacity(d.ctors.len());
     for c in &d.ctors {
-        match classify_iwf(c, &d.name, &d.params, ity) {
+        match classify_iwf(c, &d.name, &d.params, &vnames, ity) {
             Ok(v) => frows.push(v),
             Err(e2) => {
                 // The mixed row: the declaration is in neither fragment, and
@@ -5306,10 +5445,11 @@ fn classify_iwf(
     c: &CtorDecl,
     name: &str,
     params: &[String],
+    vnames: &[String],
     ity: &IdxTy,
 ) -> R<(Expr, Vec<FieldKind>, Vec<Option<Expr>>)> {
     let r = c.result.as_ref().expect("checked by the caller");
-    let idx = parse_result_head(c, r, name, params)?;
+    let idx = parse_result_head(c, r, name, params, vnames)?;
     let mut kinds = vec![FieldKind::Payload; c.fields.len()];
     let mut child_idx: Vec<Option<Expr>> = vec![None; c.fields.len()];
     for (k, f) in c.fields.iter().enumerate() {
@@ -5324,7 +5464,8 @@ fn classify_iwf(
         // A child: `D<params>(e)`, which the parser delivers as an expression
         // in type position.
         if let TyKind::OfExpr(e) = &child_ty.kind
-            && let ExprKind::App { head, args, .. } = &e.kind
+            && let Some(app) = family_app(c, e, name, vnames)
+            && let (head, args) = app?
             && let Some((rname, targs)) = named_head(head)
             && rname == name
         {
@@ -5344,7 +5485,7 @@ fn classify_iwf(
                     f.ty.span,
                 );
             }
-            let [e] = args.as_slice() else {
+            let [e] = args else {
                 return err(
                     format!("a child of `{}` states one index: `{name}(i)`", c.name),
                     f.ty.span,
@@ -5468,7 +5609,7 @@ fn check_index_expr(c: &CtorDecl, e: &Expr, ity: &IdxTy) -> R<()> {
             };
             let ok = match ity {
                 IdxTy::Nat => matches!(c.fields[f].ty.kind, TyKind::Nat),
-                IdxTy::Decl(_) => matches!(&c.fields[f].ty.kind,
+                IdxTy::Decl(_) | IdxTy::Open { .. } => matches!(&c.fields[f].ty.kind,
                     TyKind::Named { name: n, args } if n == iname && args.is_empty()),
             };
             if !ok {
@@ -5538,8 +5679,9 @@ fn shape_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) -> In
         tag,
         params: d.params.clone(),
         varies: None,
-        valparams: vec![],
-        valparam_defaults: vec![],
+        // The payload is read over the value parameters too.
+        valparams: d.valparams.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+        valparam_defaults: vec![None; d.valparams.len()],
         op_symbols: vec![],
         ctors: sctors,
         recursive: false,
@@ -5580,6 +5722,20 @@ pub(crate) fn arm_ctor_index(ind: &Inductive, written: &str) -> Option<usize> {
 /// excluded here. Without that, an enum-indexed family with one bare-variable
 /// constructor (§3.4's non-uniform row, at a declared index) was rejected with
 /// the *parameter* message instead of fording (found 2026-08-04).
+/// Whether some child of a declaration whose every result index is a bare
+/// variable sits at an index other than its constructor's own variable. A
+/// constructor the `IWf` classifier refuses counts as not varying, so its
+/// refusal is still the route-1 one.
+fn children_vary(ctors: &[CtorDecl], name: &str, params: &[String], vnames: &[String], ity: &IdxTy) -> bool {
+    ctors.iter().any(|c| {
+        let Ok((res, _, kids)) = classify_iwf(c, name, params, vnames, ity) else {
+            return false;
+        };
+        let ExprKind::Var(v) = &res.kind else { return false };
+        kids.iter().flatten().any(|e| !matches!(&e.kind, ExprKind::Var(w) if w == v))
+    })
+}
+
 fn all_bare_var_indices(ctors: &[CtorDecl], ity: &IdxTy) -> bool {
     let icts = ity.ctors();
     ctors.iter().all(|c| {
@@ -5627,7 +5783,15 @@ fn self_head<'a>(t: &'a Ty, name: &str) -> Option<(&'a [Ty], Option<&'a [Expr]>)
         TyKind::OfExpr(e) => match &e.kind {
             ExprKind::App { head, args, .. } => match named_head(head) {
                 Some((n, targs)) if n == name => Some((targs, Some(args))),
-                _ => None,
+                // `D<p̄>(v̄)(e)`, an indexed family with value parameters: its
+                // value arguments, which `classify_iwf` reads with the index.
+                _ => match &head.kind {
+                    ExprKind::App { head: h, args: vs, .. } => match named_head(h) {
+                        Some((n, targs)) if n == name => Some((targs, Some(vs))),
+                        _ => None,
+                    },
+                    _ => None,
+                },
             },
             _ => None,
         },

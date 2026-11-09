@@ -1234,6 +1234,14 @@ impl recursion::SelfCallElab for Elaborator {
         self.elab_infer(cx, argument)
     }
 
+    fn same_index(&self, cx: &Cx, expected: &Term, got: &Term, ty: &Type, level: &Level) -> bool {
+        expected == got
+            || self
+                .semantic_oracle()
+                .convert_term(&cx.gamma, heather_kernel::layer::Layer::Prog, expected, got, ty, level)
+                .is_ok()
+    }
+
     fn self_call_application_params(&self, name: &str) -> Rc<Vec<ParamMeta>> {
         self.params_of(name)
     }

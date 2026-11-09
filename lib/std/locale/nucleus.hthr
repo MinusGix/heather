@@ -15,7 +15,7 @@
 import logic;
 import frame;
 
-record Nucleus(A: Type<1>, le: A → A → Type, meet: A → A → A, c: A → A) {
+record Nucleus<A: Type<1>>(le: A → A → Type, meet: A → A → A, c: A → A) {
     mono: (x, y: A) → le(x, y) → le(c(x), c(y)),
     infl: (x: A) → le(x, c(x)),
     idem: (x: A) → le(c(c(x)), c(x)),
@@ -28,7 +28,7 @@ fn NucleusLe<A: Type<1>>(le: A → A → Type, c: A → A) → A → A → Type 
 // The opens of the sublocale: the same carrier, meets and joins, at the
 // nucleus's order.
 fn Nucleus::frame<A: Type<1> + Frame(le, meet, sup)>(le: A → A → Type, meet: A → A → A,
-        sup: (I: Type) → (I → A) → A, {c: A → A}, n: Nucleus(A, le, meet, c))
+        sup: (I: Type) → (I → A) → A, {c: A → A}, n: Nucleus<A>(le, meet, c))
     → Frame<A>(NucleusLe(le, c), meet, sup)
 {
     Frame {
@@ -53,8 +53,8 @@ fn Nucleus::frame<A: Type<1> + Frame(le, meet, sup)>(le: A → A → Type, meet:
 // a frame homomorphism into the coarser order is the whole content of the
 // nucleus laws.
 fn Nucleus::inclusion<A: Type<1> + Frame(le, meet, sup)>(le: A → A → Type, meet: A → A → A,
-        sup: (I: Type) → (I → A) → A, {c: A → A}, n: Nucleus(A, le, meet, c))
-    → LocaleMap(A, A, NucleusLe(le, c), meet, A.top, sup, le, meet, A.top, sup)
+        sup: (I: Type) → (I → A) → A, {c: A → A}, n: Nucleus<A>(le, meet, c))
+    → LocaleMap<A, A>(NucleusLe(le, c), meet, A.top, sup, le, meet, A.top, sup)
 {
     LocaleMap(λ x => x, FrameHom(
         λ x y h => A.le_trans(x, y, c(y), h, n.infl(y)),
@@ -67,7 +67,7 @@ fn Nucleus::inclusion<A: Type<1> + Frame(le, meet, sup)>(le: A → A → Type, m
 // other at the sublocale's order. So the closure is the reflection of an
 // open into the fixed points, and the preorder is the fixed-point frame.
 theorem Nucleus::closure_same<A: Type<1> + Preorder1(le)>(le: A → A → Type, meet: A → A → A, {c: A → A},
-        n: Nucleus(A, le, meet, c), x: A): NucleusLe(le, c, x, c(x)) ∧ NucleusLe(le, c, c(x), x)
+        n: Nucleus<A>(le, meet, c), x: A): NucleusLe(le, c, x, c(x)) ∧ NucleusLe(le, c, c(x), x)
 {
     And(A.le_trans(x, c(x), c(c(x)), n.infl(x), n.infl(c(x))), A.le_refl(c(x)))
 }
@@ -79,7 +79,7 @@ theorem Nucleus::closure_same<A: Type<1> + Preorder1(le)>(le: A → A → Type, 
 // one: the smallest dense sublocale of the point.
 fn Omega::dn(p: Omega) → Omega { Omega(¬¬p.holds) }
 
-fn Omega::dn_nucleus() → Nucleus(Omega, Omega::Le, Omega::meet, Omega::dn) {
+fn Omega::dn_nucleus() → Nucleus<Omega>(Omega::Le, Omega::meet, Omega::dn) {
     Nucleus(
         λ p q (h: p.holds → q.holds) (np: ¬¬p.holds) (nq: ¬q.holds) => np(λ (x: p.holds) => nq(h(x))),
         λ p (x: p.holds) (n: ¬p.holds) => n(x),

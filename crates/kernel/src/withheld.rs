@@ -14,38 +14,52 @@
 //! recording, so a recording can never change an answer. Only an
 //! elaborator world ever withholds, so the trusted check records nothing.
 
-use std::cell::RefCell;
-use std::collections::BTreeSet;
-
+use crate::recording::{self, Frames, Recording};
 use crate::reduce::Defs;
 use crate::term::GlobalVar;
 
 thread_local! {
-    static FRAMES: RefCell<Vec<BTreeSet<usize>>> = const { RefCell::new(Vec::new()) };
+    static FRAMES: Frames = const { Frames::new(Vec::new()) };
 }
 
 /// Run `f`, and return the absolute Ψ indices of the withheld definitions it
-/// unfolded on this thread, ascending and without repeats.
+/// unfolded on this thread, ascending and without repeats. A panic out of
+/// `f` that is caught further out still closes this recording
+/// ([`Recording`]), as `crate::unseal`'s does.
 pub fn record<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>) {
-    FRAMES.with(|frames| frames.borrow_mut().push(BTreeSet::new()));
+    let recording = Recording::start(&FRAMES);
     let out = f();
-    let mine = FRAMES.with(|frames| {
-        let mut frames = frames.borrow_mut();
-        let mine = frames.pop().unwrap_or_default();
-        if let Some(outer) = frames.last_mut() {
-            outer.extend(mine.iter().copied());
-        }
-        mine
-    });
-    (out, mine.into_iter().collect())
+    (out, recording.finish())
 }
 
 /// Note that the withheld definition `var` of `defs`' world was unfolded.
 pub(crate) fn note(defs: Defs<'_>, var: GlobalVar) {
     let Some(at) = defs.absolute(var) else { return };
-    FRAMES.with(|frames| {
-        if let Some(top) = frames.borrow_mut().last_mut() {
-            top.insert(at);
-        }
-    });
+    recording::note(&FRAMES, [at]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panic inside an inner recording, caught inside the outer one,
+    /// leaves the outer recording its own frame: what the outer saw before
+    /// and after is kept, and the inner's notes reach it too.
+    #[test]
+    fn a_caught_panic_inside_a_recording_does_not_strand_its_frame() {
+        let (_, outer) = record(|| {
+            recording::note(&FRAMES, [3]);
+            let caught = std::panic::catch_unwind(|| {
+                record(|| {
+                    recording::note(&FRAMES, [1]);
+                    panic!("inside the inner recording");
+                })
+            });
+            assert!(caught.is_err());
+            recording::note(&FRAMES, [5]);
+        });
+        assert_eq!(outer, vec![1, 3, 5]);
+        // Nothing is left open.
+        FRAMES.with(|frames| assert!(frames.borrow().is_empty()));
+    }
 }

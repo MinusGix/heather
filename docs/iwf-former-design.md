@@ -301,6 +301,17 @@ them. `I` may be any type, multi-index families are a Σ-index, and
 parameterized index types are fine. Only inversion (§8.3) needs structure
 on `I`.
 
+The elaborator caught up with this in part on 2026-11-09
+(issues/indexed-families-at-any-index-type.md): an index type may be one of
+the declaration's own type parameters (`inductive Cover<P>(…) : (a: P) ->
+Type`, `IdxTy::Open`), read at the use's arguments (`index_type_at`). Such a
+family is on this route only, and a `match` on it never inverts: its index
+is a variable or abstracted (§8.3's tiers 1 and 2). A self-call through a
+function child compares the index it passes with the child's written index
+by conversion, since the call spells it through the arm's binders and the
+signature through the payload's projections. Other index types (`List<A>`,
+a `Σ`, a `def`) still meet route 1's checks in `index_type`.
+
 ### 8.3 `match`
 
 The eliminator's motive ranges over *all* indices. A `match` whose scrutinee

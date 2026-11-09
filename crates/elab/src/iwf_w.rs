@@ -797,6 +797,7 @@ impl Elaborator {
         cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<Rc<IwSig>> {
         let shape_decl = ind
@@ -804,14 +805,15 @@ impl Elaborator {
             .as_ref()
             .expect("an IWf-route declaration has a shape declaration");
         let n = ind.ctors.len();
-        let (shape, ls) = self.lower_instance(cx, shape_decl, args, &[], span)?;
-        let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
+        let (shape, ls) = self.lower_instance(cx, shape_decl, args, vargs, span)?;
+        let (ity, ilvl) = self.index_type_at(cx, ind, args, vargs, span)?;
         let spine = self.spine(&shape, &ls, n, span)?;
         // The function domains are spelled over the type parameters: bound
         // here, to `args`, for every branch below.
         let mut cx = cx.clone();
-        let tyvars = self.field_scope_cx(&cx, ind, args, &[]).tyvars;
-        cx.tyvars.extend(tyvars.iter().cloned());
+        let scope = self.field_scope_cx(&cx, ind, args, vargs);
+        cx.tyvars.extend(scope.tyvars.iter().cloned());
+        cx.aliases.extend(scope.aliases.iter().cloned());
         let cx = &cx;
         // The function domains' one level `lp` (§1.3), read at a generic
         // payload, where the written indices are checked too.

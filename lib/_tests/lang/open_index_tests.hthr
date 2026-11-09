@@ -1,0 +1,51 @@
+// Probes of indexed families at any index type, beside value parameters
+// (issues/indexed-families-at-any-index-type.md). Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat;
+
+// Indexed by a type parameter. Every result is at its own variable, but a
+// child sits at another index, so this is a genuine index, not a parameter.
+inductive Acc<P>: (a: P) → Type {
+    Stop(a: P): Acc<P>(a),
+    Step(a: P, b: P, c: Acc<P>(b)): Acc<P>(a),
+}
+
+fn Acc::depth<P>(a: P, x: Acc<P>(a)) → Nat {
+    match x { Stop(_) => 0, Step(_, b, c) => Succ(Acc::depth(b, c)) }
+}
+
+fn two_steps(n: Nat) → Acc<Nat>(n) { Step(n, 0, Step(0, 7, Stop(7))) }
+
+// Closed and open computation through the open index.
+theorem two_steps_depth(n: Nat): Acc::depth(n, two_steps(n)) = 2 { refl }
+
+theorem depth_step<P>(a, b: P, c: Acc<P>(b)): Acc::depth(a, Step(a, b, c)) = Succ(Acc::depth(b, c)) { refl }
+
+// Value parameters beside the index, and a function child whose index reads
+// its argument: `Reach(step, goal, a)` says every path from `a` meets `goal`.
+inductive Reach<P>(step: P → P → Type, goal: P → Type): (a: P) → Type {
+    Done(a: P, h: goal(a)): Reach<P>(step, goal, a),
+    Fan(a: P, f: (e: Exists<P>(λ b => step(a, b))) → Reach<P>(step, goal, e.witness)): Reach<P>(step, goal, a),
+}
+
+// Recursion through the function child, at the index its argument names.
+fn Reach::mono<P>(step: P → P → Type, g1, g2: P → Type, w: (b: P) → g1(b) → g2(b), a: P,
+        r: Reach<P>(step, g1, a)) → Reach<P>(step, g2, a)
+{
+    match r {
+        Done(a1, h) => Done(a1, w(a1, h)),
+        Fan(a1, f) => Fan(a1, λ e => Reach::mono(step, g1, g2, w, e.witness, f(e))),
+    }
+}
+
+// A node with no successor reaches any goal vacuously.
+theorem reach_stuck(goal: Nat → Type): Reach<Nat>(λ x y => False, goal, 0) {
+    Fan(0, λ e => match e.proof {})
+}
+
+// A recursive occurrence at other value arguments is not uniform.
+// expect-error: at value arguments other than its own value parameters
+inductive Bad<P>(r: P → Type): (a: P) → Type {
+    BStop(a: P): Bad<P>(r, a),
+    BStep(a: P, b: P, c: Bad<P>(λ x => r(x), b)): Bad<P>(r, a),
+}

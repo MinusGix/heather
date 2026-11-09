@@ -491,6 +491,38 @@ pub(super) fn unify_ty_root(
     crate::stats::timed(crate::stats::Timer::Unify, || unify_ty(u, pat, subj, n, d, sols));
 }
 
+thread_local! {
+    /// Each type meta the `El` rule declined to solve because the subject sat
+    /// at another level: `(meta, its level, the subject's)`. Read by the
+    /// unsolved-argument message, which otherwise says no argument mentions
+    /// the parameter (issues/implicit-type-argument-above-its-level.md).
+    static LEVEL_DECLINED: RefCell<Vec<(u32, Level, Level)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Forget the level declines recorded so far (a new call's metas).
+pub(crate) fn clear_level_declines() {
+    LEVEL_DECLINED.with(|c| c.borrow_mut().clear());
+}
+
+/// The level decline recorded for meta `slot`, if any: `(its level, the
+/// level of the type offered for it)`.
+pub(crate) fn level_decline(slot: u32) -> Option<(Level, Level)> {
+    LEVEL_DECLINED.with(|c| c.borrow().iter().rev().find(|(m, _, _)| *m == slot).map(|(_, a, b)| (a.clone(), b.clone())))
+}
+
+/// A type's level where its head states it, `None` where reading it would
+/// mean typing a code.
+fn apparent_level(t: &Type) -> Option<Level> {
+    match t {
+        Type::El { level, .. } => Some(level.clone()),
+        Type::Nat => Some(Level::Zero),
+        Type::Ty(l) => Some(l.plus(1)),
+        Type::Pi { dom_level, cod_level, .. } => Some(Level::join(dom_level.clone(), cod_level.clone())),
+        Type::Sigma { fst_level, snd_level, .. } => Some(Level::join(fst_level.clone(), snd_level.clone())),
+        _ => None,
+    }
+}
+
 pub(super) fn unify_ty(
     u: &U<'_>,
     pat: &Type,
@@ -501,10 +533,18 @@ pub(super) fn unify_ty(
 ) {
     // The `El` rule. Checked before the congruence so that `El ?A` meeting a
     // *decoded* `El t` still solves rather than descending into the code.
-    if let Type::El { tm, .. } = pat
+    if let Type::El { tm, level } = pat
         && let Term::GlobalTm { var, subst } = &**tm
         && var.0 < n
     {
+        // Universes do not cumulate: a meta standing for a type at one level
+        // is never solved by a type at another
+        // (issues/implicit-type-argument-above-its-level.md). Declined, so
+        // the call reports the parameter it could not fill.
+        if let Some(l) = apparent_level(subj).filter(|l| !l.equiv(level)) {
+            LEVEL_DECLINED.with(|c| c.borrow_mut().push((var.0, level.clone(), l)));
+            return;
+        }
         // The Miller-pattern guard (docs/unifier-completeness-design.md §6):
         // the delayed substitution must be exactly the weakened identity
         // `embed(Γ, d)` — the one condition under which taking the

@@ -189,14 +189,15 @@ impl Elaborator {
         cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
         idx: Term,
         span: Span,
     ) -> R<(Type, Level)> {
         if ind.iwf_infinitary() {
-            let sig = self.iw_sig(cx, ind, args, span)?;
+            let sig = self.iw_sig(cx, ind, args, vargs, span)?;
             return Ok((sig.fam(0, &idx), sig.lvl()));
         }
-        let sig = self.iwf_sig(cx, ind, args, span)?;
+        let sig = self.iwf_sig(cx, ind, args, vargs, span)?;
         let lvl = sig.family_level();
         Ok((sig.at(Rc::new(idx)), lvl))
     }
@@ -234,6 +235,7 @@ impl Elaborator {
         cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<Rc<IWfSig>> {
         let _scope = self.use_inductive_scope(ind);
@@ -242,8 +244,15 @@ impl Elaborator {
             .as_ref()
             .expect("an IWf-route declaration has a shape declaration");
         let n = ind.ctors.len();
-        let (shape, l) = self.lower_instance(cx, shape_decl, args, &[], span)?;
-        let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
+        let (shape, l) = self.lower_instance(cx, shape_decl, args, vargs, span)?;
+        let (ity, ilvl) = self.index_type_at(cx, ind, args, vargs, span)?;
+        // The index expressions and the payload are written over the type
+        // and value parameters: bound here, to `args` and `vargs`.
+        let mut pcx = cx.clone();
+        let scope = self.field_scope_cx(cx, ind, args, vargs);
+        pcx.tyvars.extend(scope.tyvars.iter().cloned());
+        pcx.aliases.extend(scope.aliases.iter().cloned());
+        let cx = &pcx;
         let shape_rc = self.share_iwf_part(shape_decl.tag, false, shape);
         let ity_rc = self.share_iwf_part(ind.tag, true, ity);
         if let Some(sig) = self.iwf_sig_named(cx, ind, args, &shape_rc, &l, &ity_rc, &ilvl) {
@@ -363,7 +372,7 @@ impl Elaborator {
         let Some((cx, binders, targs, _)) = self.tycode_fn_telescope(ind, span) else {
             return;
         };
-        let Ok(sig) = self.iwf_sig(&cx, ind, &targs, span) else {
+        let Ok(sig) = self.iwf_sig(&cx, ind, &targs, &[], span) else {
             return;
         };
         let tel = self.emitted_tel(&binders);
@@ -438,7 +447,7 @@ impl Elaborator {
         }
         // `dnth` over the children tuple, at the named signature built now: in
         // `(tel, a, cs, i)`, as `iwf_step_telescope` spells it.
-        let Ok(nsig) = self.iwf_sig(&cx, ind, &targs, span) else {
+        let Ok(nsig) = self.iwf_sig(&cx, ind, &targs, &[], span) else {
             return;
         };
         let fl = nsig.family_level();
@@ -661,9 +670,8 @@ impl Elaborator {
         ind: &Inductive,
         i: usize,
         args: &[A],
-        span: Span,
+        (ity, ilvl): (Type, Level),
     ) -> R<(Term, Type, Level)> {
-        let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
         let acx = self.res_arg_cx(cx, ind, i, args, &[])?;
         let t = {
             let _scope = self.use_inductive_scope(ind);
@@ -1251,6 +1259,8 @@ impl Elaborator {
                 let spine = self.spine(&ty, &l, iind.ctors.len(), span).ok()?;
                 self.read_ctor(cx, iind, &spine, &w, true, span).ok()?
             }
+            // An open index type has no constructors to read off.
+            crate::inductive::IdxTy::Open { .. } => None,
         }
     }
 
@@ -1884,7 +1894,7 @@ mod named_signature {
             "V",
         );
         registered(&el, &v);
-        let sig = el.iwf_sig(&Cx::empty(), &v, &[], SPAN).expect("signature");
+        let sig = el.iwf_sig(&Cx::empty(), &v, &[], &[], SPAN).expect("signature");
         let t = v.tag;
         assert_eq!(heads(&el, &sig), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
         let nth = el.iwf_named_dnth(&Cx::empty(), &sig).expect("the ih is spelled with `V#idnth`");
@@ -1906,7 +1916,7 @@ mod named_signature {
             &crate::mutual_family::family_name("M0"),
         );
         registered(&el, &fam);
-        let sig = el.iwf_sig(&Cx::empty(), &fam, &[], SPAN).expect("signature");
+        let sig = el.iwf_sig(&Cx::empty(), &fam, &[], &[], SPAN).expect("signature");
         let t = fam.tag;
         assert_eq!(heads(&el, &sig), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
     }
@@ -1925,10 +1935,10 @@ mod named_signature {
         );
         registered(&el, &p);
         let t = p.tag;
-        let at_nat = el.iwf_sig(&Cx::empty(), &p, &[(Type::Nat, Level::Zero)], SPAN).expect("signature at Nat");
+        let at_nat = el.iwf_sig(&Cx::empty(), &p, &[(Type::Nat, Level::Zero)], &[], SPAN).expect("signature at Nat");
         assert_eq!(heads(&el, &at_nat), [Some(GenDef::IArity(t)), Some(GenDef::IOut(t)), Some(GenDef::IChild(t))]);
         let at_type = el
-            .iwf_sig(&Cx::empty(), &p, &[(Type::Ty(Level::Zero), Level::succ(Level::Zero))], SPAN)
+            .iwf_sig(&Cx::empty(), &p, &[(Type::Ty(Level::Zero), Level::succ(Level::Zero))], &[], SPAN)
             .expect("signature at Type");
         assert_eq!(heads(&el, &at_type), [None, None, None]);
         assert!(el.iwf_named_dnth(&Cx::empty(), &at_type).is_none());
