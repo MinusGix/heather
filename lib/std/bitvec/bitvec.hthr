@@ -1278,6 +1278,12 @@ fn BitVec::eq_dec({n: Nat}, self x, y: BitVec(n)) → x = y ∨ x ≠ y {
     })(x, y)
 }
 
+// Decidable equality as the class, at every width: what a container's
+// decider (`List::occurrences`, `perm_iff_occurrences`) asks of its element
+// type. `x.eq_dec(y)` still reads `BitVec::eq_dec`: the member is that very
+// function (issues/deceq-instance-member-ambiguity.md).
+instance(n: Nat) DecEq<BitVec(n)> { eq_dec := BitVec::eq_dec }
+
 // `eq_bit` is equality (S3 of docs/native-programs-read-like-programs-design.md).
 theorem BitVec::bool_eq_self(a: Bool): BitVec::bool_eq(a, a) = True { match a { False => refl, True => refl } }
 

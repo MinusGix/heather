@@ -321,17 +321,23 @@ impl Elaborator {
     /// inferred later, by the application solving `g`'s subject domain
     /// against the same receiver type. Comparing the two answers would be
     /// elaborating both readings, so the rule is restricted to where they are
-    /// answers to **one equation**: the instance's parameters are all type
-    /// binders, `g` takes them all and in order as its leading implicit type
-    /// parameters, and `g`'s declared subject domain is *syntactically* the
-    /// field's own carrier at those binders. Both solvers then match the same
-    /// pattern against the same receiver type, and a pattern in distinct
-    /// binders has one first-order answer. Excluded by this, and so still
-    /// the error: an instance with `requires` or value parameters (its
-    /// binders are not all type binders, and a `requires` binder handed to
-    /// `g` would be one the desugaring resolves afresh), a universe-
-    /// polymorphic `g` (`UApp`), and a subject domain spelled differently
-    /// from the instance head (an alias, a respelling).
+    /// answers to **one equation**: `g` takes the instance's binders all and
+    /// in order as its leading implicits — a type binder as a type
+    /// parameter, an index binder (`instance(n: Nat) DecEq<BitVec(n)>`) as
+    /// an implicit `{n: Nat}` of the same domain that only unification fills
+    /// — and `g`'s declared subject domain is *syntactically* the field's own
+    /// carrier at those binders. Both solvers then match the same pattern
+    /// against the same receiver type, and a pattern in distinct binders has
+    /// one first-order answer (issues/deceq-instance-member-ambiguity.md).
+    /// Excluded by this, and so still the error: an instance with
+    /// `requires` (a dictionary binder handed to `g` would be one the
+    /// desugaring resolves afresh, and `g`'s matching parameter has a
+    /// solver), a universe-polymorphic `g` (`UApp`), and a subject domain
+    /// spelled differently from the instance head (an alias, a respelling).
+    ///
+    /// A dictionary the resolver minted at closed arguments is a global
+    /// whose body applies the instance to them; it is read through, so the
+    /// test sees the instance's literal.
     ///
     /// Cost: this runs only where the rule-2 error was about to fire, which
     /// before this test was every such call — so no call that elaborated
@@ -339,36 +345,58 @@ impl Elaborator {
     pub(crate) fn field_is_global(&self, dict: &Term, idx: usize, g: usize) -> bool {
         // The dictionary's spine: the instance global and its arguments.
         let (head, dargs) = crate::spelling::app_spine(dict);
-        let n = dargs.len();
         let Term::GlobalTm { var, .. } = head else {
             return false;
         };
-        let Some(inst) = self.global_abs_of(*var) else {
+        let Some(mut inst) = self.global_abs_of(*var) else {
             return false;
         };
-        let Some(GlobalBinding::Tm {
-            ctx,
-            body: Some(body),
-            ..
-        }) = self.psi.bindings.get(inst)
-        else {
-            return false;
-        };
-        if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 {
-            return false;
-        }
-        // β: exactly one `λ` per argument, each binding a type — a value
-        // binder here is a `requires` dictionary or an index (see above).
-        let mut value: &Term = body;
-        for _ in 0..n {
-            let Term::Lam { dom, body, .. } = value else {
+        let mut n = dargs.len();
+        // A dictionary the resolver minted at closed arguments
+        // (`instance(n: Nat) DecEq<BitVec(n)>` at `BitVec(8)`) is a global
+        // whose body is the instance applied to them: read through it, at
+        // most a few times, to the instance whose body is the literal.
+        let mut hops = 0;
+        let (mut value, binder_doms) = loop {
+            let Some(GlobalBinding::Tm {
+                ctx,
+                body: Some(body),
+                ..
+            }) = self.psi.bindings.get(inst)
+            else {
                 return false;
             };
-            if !matches!(**dom, Type::Ty(_)) {
+            if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 {
                 return false;
             }
-            value = body;
-        }
+            // β: exactly one `λ` per argument. A binder at a type is a type
+            // parameter; any other is an index or a `requires` dictionary,
+            // told apart below against `g`'s own parameter at the same
+            // position.
+            let mut value: &Term = body;
+            let mut binder_doms: Vec<&Type> = Vec::with_capacity(n);
+            for _ in 0..n {
+                let Term::Lam { dom, body, .. } = value else {
+                    return false;
+                };
+                binder_doms.push(dom);
+                value = body;
+            }
+            if crate::spelling::pair_of(value).is_some() {
+                break (value, binder_doms);
+            }
+            // The body is scoped over the Ψ prefix before its binding.
+            let (inner, inner_args) = crate::spelling::app_spine(value);
+            let Term::GlobalTm { var: inner, .. } = inner else {
+                return false;
+            };
+            hops += 1;
+            let Some(next) = inst.checked_sub(inner.0 as usize + 1).filter(|_| hops <= 4) else {
+                return false;
+            };
+            inst = next;
+            n = inner_args.len();
+        };
         // ι: entry `idx + 1` of the literal spine, in either pair spelling.
         for _ in 0..=idx {
             let Some((_, snd)) = crate::spelling::pair_of(value) else {
@@ -416,7 +444,19 @@ impl Elaborator {
             return false;
         }
         let (lead, rest) = params.split_at(n);
-        if !lead.iter().all(|p| p.implicit && p.is_type)
+        // A type binder is a leading `<A>`; an index binder is an implicit
+        // `{n: T}` that nothing but unification fills — no default, no
+        // solver, so never a `requires` dictionary the desugaring would
+        // resolve afresh.
+        let lead_fits = lead.iter().zip(&binder_doms).all(|(p, dom)| {
+            p.implicit
+                && if matches!(dom, Type::Ty(_)) {
+                    p.is_type
+                } else {
+                    !p.is_type && p.solver.is_none() && p.default.is_none()
+                }
+        });
+        if !lead_fits
             || rest.iter().any(|p| p.implicit || p.is_type)
             || rest.iter().position(|p| p.is_self).is_some_and(|i| i != 0)
         {
@@ -433,11 +473,19 @@ impl Elaborator {
             return false;
         };
         let mut gcur: &Type = gty;
-        for _ in 0..n {
+        for idom in &binder_doms {
             let Type::Pi { dom, cod, .. } = gcur else {
                 return false;
             };
-            if !matches!(**dom, Type::Ty(_)) {
+            // Binder for binder the same domain: a universe for a type
+            // binder, the index's own type for an index (`{n: Nat}` beside
+            // `instance(n: Nat)`), so both solvers fill one telescope.
+            let same = match (&**dom, *idom) {
+                (Type::Ty(_), Type::Ty(_)) => true,
+                (Type::Ty(_), _) | (_, Type::Ty(_)) => false,
+                (gd, id) => gd.shift_global((inst - g) as u32) == *id,
+            };
+            if !same {
                 return false;
             }
             gcur = cod;
