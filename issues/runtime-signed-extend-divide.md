@@ -31,3 +31,4 @@ Neither reaches the x86 back end yet in any case: S4 refuses shifts and
 
 - 2026-11-08: i64 round 3: shifts reach x86 ([[function-ir-x86-shift-legalization]], closed), so `shift_right` on an i64 compiles. `Sext` stays: for i64 alone no x86 is needed, and narrow signed words wait on [[runtime-repr-narrow-words]] (S4 keeps only 64- and 1-bit values in registers). Division waits on [[x86-undefined-flags]]: IDIV leaves every flag undefined.
 - 2026-11-08: 2026-11-08: i64 round 4: sign extension done. BitVec::sign_extend reflects to rt Sext(n, extra), lowered to the new FunctionIR SignResize node (value BitVec::sresize, tied to sign_extend by sresize_sign_extend). S4 refuses SignResize as it refuses Resize, so it reaches x86 with narrow words. Division still waits on x86-undefined-flags and on Minus's choice about IDIV's flags.
+- 2026-11-08: Division now waits on [[x86-idiv-signed-division]]: the flags mask landed ([[x86-undefined-flags]] closed).

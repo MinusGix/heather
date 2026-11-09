@@ -69,6 +69,140 @@ fn ExecuteBlock<M>(instructions: List<Instruction>) →
         instructions)
 }
 
+// ---------------------------------------------------------------------------
+// Which flags a block reads (issues/x86-undefined-flags.md)
+
+// The flags defined after an instruction, from those defined before
+// (`execute_normal_defines` holds it to the semantics).
+fn Instruction::defines(self instruction: Instruction, defined: DefinedFlags) → DefinedFlags {
+    match instruction {
+        MovRR(_, _) => defined, MovRI(_, _) => defined,
+        AddRR(_, _) => DefinedFlags::all(), SubRR(_, _) => DefinedFlags::all(),
+        AndRR(_, _) => DefinedFlags::but_af(), OrRR(_, _) => DefinedFlags::but_af(), XorRR(_, _) => DefinedFlags::but_af(),
+        CmpRR(_, _) => DefinedFlags::all(),
+        SetBelow(_) => defined, SetLess(_) => defined, SetEqual(_) => defined,
+        TestRR(_, _) => DefinedFlags::but_af(),
+        AddRI8(_, _) => DefinedFlags::all(), AddRI32(_, _) => DefinedFlags::all(),
+        ShiftOne(_, _) => DefinedFlags::but_af(),
+        ShiftImm(_, _, immediate) => shift_imm_defines(shift_count(immediate), defined),
+    }
+}
+
+theorem execute_normal_defines<M>(instruction: Instruction, s: MachineState<M>):
+    execute_normal(decoded_canonical(instruction), s).flags.defined = instruction.defines(s.flags.defined) {
+    match instruction {
+        MovRR(_, _) => refl, MovRI(_, _) => refl, AddRR(_, _) => refl, SubRR(_, _) => refl,
+        AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl, CmpRR(_, _) => refl,
+        SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl, TestRR(_, _) => refl,
+        AddRI8(_, _) => refl, AddRI32(_, _) => refl, ShiftOne(_, _) => refl,
+        ShiftImm(op, d, immediate) => shift_imm_flags_defined(op, read_gpr(d, s.gprs), shift_count(immediate), s.flags),
+    }
+}
+
+// An instruction a straight-line block may hold from these defined flags:
+// it reads only defined ones and cannot fault.
+fn Instruction::admitted(self instruction: Instruction, defined: DefinedFlags) → Bool {
+    instruction.reads_defined(defined) && !instruction.may_fault()
+}
+
+// Whether every instruction of the block reads only flags defined when it
+// runs, from `defined` at its start. The compiler's blocks read only flags
+// they set themselves, so `block_reads(code, DefinedFlags::none())` is a
+// closed verdict, and it covers any start (`block_reads_from_none`).
+fn block_reads(instructions: List<Instruction>, defined: DefinedFlags) → Bool {
+    match instructions {
+        Nil => True,
+        Cons(instruction, rest) => instruction.admitted(defined) && block_reads(rest, instruction.defines(defined)),
+    }
+}
+
+fn implies(a, b: Bool) → Bool { match a { False => True, True => b } }
+
+// Every flag defined in `self` is defined in `other`.
+fn DefinedFlags::within(self a, b: DefinedFlags) → Bool {
+    implies(a.cf, b.cf) && (implies(a.pf, b.pf) && (implies(a.af, b.af) &&
+        (implies(a.zf, b.zf) && (implies(a.sf, b.sf) && implies(a.of, b.of)))))
+}
+
+theorem and_true_intro({a, b: Bool}, left: a = True, right: b = True): (a && b) = True {
+    j(sym(left), λ x _ => (x && b) = True, right)
+}
+
+theorem implies_true({a, b: Bool}, holds: implies(a, b) = True, here: a = True): b = True {
+    j(here, λ x _ => implies(x, b) = True, holds)
+}
+
+theorem within_cf({a, b: DefinedFlags}, w: a.within(b) = True): implies(a.cf, b.cf) = True { and_true_left(w) }
+theorem within_zf({a, b: DefinedFlags}, w: a.within(b) = True): implies(a.zf, b.zf) = True {
+    and_true_left(and_true_right(and_true_right(and_true_right(w))))
+}
+theorem within_sf({a, b: DefinedFlags}, w: a.within(b) = True): implies(a.sf, b.sf) = True {
+    and_true_left(and_true_right(and_true_right(and_true_right(and_true_right(w)))))
+}
+theorem within_of({a, b: DefinedFlags}, w: a.within(b) = True): implies(a.of, b.of) = True {
+    and_true_right(and_true_right(and_true_right(and_true_right(and_true_right(w)))))
+}
+
+theorem Instruction::reads_within(self instruction: Instruction, a, b: DefinedFlags, w: a.within(b) = True):
+    instruction.reads_defined(a) = True → instruction.reads_defined(b) = True {
+    match instruction {
+        SetBelow(_) => λ r => implies_true(within_cf(w), r),
+        SetLess(_) => λ r => and_true_intro(implies_true(within_sf(w), and_true_left(r)),
+            implies_true(within_of(w), and_true_right(r))),
+        SetEqual(_) => λ r => implies_true(within_zf(w), r),
+        MovRR(_, _) => λ r => r, MovRI(_, _) => λ r => r, AddRR(_, _) => λ r => r, SubRR(_, _) => λ r => r,
+        AndRR(_, _) => λ r => r, OrRR(_, _) => λ r => r, XorRR(_, _) => λ r => r, CmpRR(_, _) => λ r => r,
+        TestRR(_, _) => λ r => r, AddRI8(_, _) => λ r => r, AddRI32(_, _) => λ r => r, ShiftOne(_, _) => λ r => r,
+        ShiftImm(_, _, _) => λ r => r,
+    }
+}
+
+theorem shift_imm_defines_within(count: Nat, a, b: DefinedFlags, w: a.within(b) = True):
+    shift_imm_defines(count, a).within(shift_imm_defines(count, b)) = True {
+    match count { Zero => w, Succ(_) => refl }
+}
+
+theorem Instruction::defines_within(self instruction: Instruction, a, b: DefinedFlags, w: a.within(b) = True):
+    instruction.defines(a).within(instruction.defines(b)) = True {
+    match instruction {
+        MovRR(_, _) => w, MovRI(_, _) => w,
+        AddRR(_, _) => refl, SubRR(_, _) => refl, AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
+        CmpRR(_, _) => refl, SetBelow(_) => w, SetLess(_) => w, SetEqual(_) => w, TestRR(_, _) => refl,
+        AddRI8(_, _) => refl, AddRI32(_, _) => refl, ShiftOne(_, _) => refl,
+        ShiftImm(_, _, immediate) => shift_imm_defines_within(shift_count(immediate), a, b, w),
+    }
+}
+
+theorem Instruction::admitted_within(self instruction: Instruction, a, b: DefinedFlags, w: a.within(b) = True,
+    ok: instruction.admitted(a) = True): instruction.admitted(b) = True {
+    and_true_intro(instruction.reads_within(a, b, w, and_true_left(ok)), and_true_right(ok))
+}
+
+theorem block_reads_within(instructions: List<Instruction>): (a, b: DefinedFlags) → a.within(b) = True →
+    block_reads(instructions, a) = True → block_reads(instructions, b) = True {
+    match instructions {
+        Nil => λ a b w ok => refl,
+        Cons(instruction, rest) => λ a b w ok =>
+            and_true_intro(instruction.admitted_within(a, b, w, and_true_left(ok)),
+                block_reads_within(rest, instruction.defines(a), instruction.defines(b), instruction.defines_within(a, b, w),
+                    and_true_right(ok))),
+    }
+}
+
+// A block that reads only flags it set itself reads only defined flags
+// from any start.
+theorem block_reads_from_none(instructions: List<Instruction>, ok: block_reads(instructions, DefinedFlags::none()) = True,
+    defined: DefinedFlags): block_reads(instructions, defined) = True {
+    block_reads_within(instructions, DefinedFlags::none(), defined, refl, ok)
+}
+
+theorem Instruction::admitted_runs<M>(self instruction: Instruction, s: MachineState<M>,
+    ok: instruction.admitted(s.flags.defined) = True):
+    Execute(decoded_canonical(instruction), s, Returned(execute_normal(decoded_canonical(instruction), s))) {
+    canonical_execute_normal_is_allowed(instruction, s, and_true_left(ok),
+        instruction.never_faults(s.gprs, not_true(and_true_right(ok))))
+}
+
 // One-step certificate composition avoids asking the kernel to discover a
 // recursive proof for an arbitrary instruction list. A selector emits one
 // application per selected instruction, while sharing this constructor and
@@ -82,6 +216,7 @@ theorem execute_block_nil<M>(state: MachineState<M>):
 
 theorem canonical_execute_block_cons<M>(instruction: Instruction,
     rest: List<Instruction>, before, after: MachineState<M>,
+    ok: instruction.admitted(before.flags.defined) = True,
     tail: ExecuteBlock(rest,
         execute_normal(decoded_canonical(instruction), before), after)):
     ExecuteBlock(Cons(instruction, rest), before, after)
@@ -91,18 +226,23 @@ theorem canonical_execute_block_cons<M>(instruction: Instruction,
             Execute(decoded_canonical(current), state, Returned(result)),
         instruction, rest, before,
         execute_normal(decoded_canonical(instruction), before), after,
-        canonical_execute_normal_is_allowed(instruction, before), tail)
+        instruction.admitted_runs(before, ok), tail)
 }
 
 theorem canonical_block_executes_normal<M>(instructions: List<Instruction>):
-    (before: MachineState<M>) → ExecuteBlock(instructions, before,
-        execute_block_normal(instructions, before))
+    (before: MachineState<M>) → block_reads(instructions, before.flags.defined) = True →
+    ExecuteBlock(instructions, before, execute_block_normal(instructions, before))
 {
-    execute_steps_are_allowed(
-        λ instruction state => execute_normal(decoded_canonical(instruction), state),
-        λ instruction state after =>
-            Execute(decoded_canonical(instruction), state, Returned(after)),
-        canonical_execute_normal_is_allowed<M>, instructions)
+    match instructions {
+        Nil => λ before _ => execute_block_nil(before),
+        Cons(instruction, rest) => λ before ok =>
+            canonical_execute_block_cons(instruction, rest, before,
+                execute_block_normal(rest, execute_normal(decoded_canonical(instruction), before)),
+                and_true_left(ok),
+                canonical_block_executes_normal(rest, execute_normal(decoded_canonical(instruction), before),
+                    j(sym(execute_normal_defines(instruction, before)),
+                        λ d _ => block_reads(rest, d) = True, and_true_right(ok)))),
+    }
 }
 
 // The sixteen x86 condition codes (Jcc, SETcc), in the manual's encoding
@@ -586,38 +726,110 @@ theorem near_if_taken_rip<M>(cc: ConditionCode, displacement: BitVec(32), state:
         near_branch_target(state.rip, 6, displacement), refl)
 }
 
-theorem erase_af_short_commute<M>(control: ShortControl, before: MachineState<M>):
-    erase_af(execute_short_control(control, before)) =
-    erase_af(execute_short_control(control, erase_af(before))) {
-    match control {
-        JumpIf(cc, _) => match cc {
-            O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
-            S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
-        },
-        Jump(_) => refl,
+// The flags a condition reads, all defined.
+fn condition_defined(cc: ConditionCode, d: DefinedFlags) → Bool {
+    match cc {
+        O => d.of, NO => d.of, B => d.cf, AE => d.cf, E => d.zf, NE => d.zf,
+        BE => d.cf && d.zf, A => d.cf && d.zf, S => d.sf, NS => d.sf, P => d.pf, NP => d.pf,
+        L => d.sf && d.of, GE => d.sf && d.of, LE => d.zf && (d.sf && d.of), G => d.zf && (d.sf && d.of),
     }
 }
 
-theorem erase_af_near_commute<M>(control: NearControl, before: MachineState<M>):
-    erase_af(execute_near_control(control, before)) =
-    erase_af(execute_near_control(control, erase_af(before))) {
-    match control {
-        JumpIfNear(cc, _) => match cc {
-            O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
-            S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
-        },
-        JumpNear(_) => refl,
+// After CMP every condition reads defined flags.
+theorem condition_defined_all(cc: ConditionCode): condition_defined(cc, DefinedFlags::all()) = True {
+    match cc {
+        O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
+        S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
     }
 }
 
-evidence theorem short_control_respects_defined<M>({control: ShortControl}):
-    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, execute_short_control<M>(control)) {
-    same_defined_respects(execute_short_control<M>(control), λ state => erase_af_short_commute(control, state))
+// After TEST, AND, OR, XOR or a shift by one, too: no condition reads AF.
+theorem condition_defined_but_af(cc: ConditionCode): condition_defined(cc, DefinedFlags::but_af()) = True {
+    match cc {
+        O => refl, NO => refl, B => refl, AE => refl, E => refl, NE => refl, BE => refl, A => refl,
+        S => refl, NS => refl, P => refl, NP => refl, L => refl, GE => refl, LE => refl, G => refl,
+    }
 }
 
-evidence theorem near_control_respects_defined<M>({control: NearControl}):
-    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, execute_near_control<M>(control)) {
-    same_defined_respects(execute_near_control<M>(control), λ state => erase_af_near_commute(control, state))
+theorem cong_bool2(g: Bool → Bool → Bool, {a, b, c, d: Bool}, left: a = b, right: c = d): g(a, c) = g(b, d) {
+    trans(cong_fn(λ (x: Bool) => g(x, c), left), cong_fn(λ (y: Bool) => g(b, y), right))
+}
+
+// A condition over defined flags reads the same once they are erased.
+theorem condition_erased(cc: ConditionCode, f: Flags, defined: condition_defined(cc, f.defined) = True):
+    condition_holds(cc, f.erase()) = condition_holds(cc, f) {
+    let cf = λ (here: f.defined.cf = True) => keep_defined_true(f.cf, False, here);
+    let zf = λ (here: f.defined.zf = True) => keep_defined_true(f.zf, False, here);
+    let sf = λ (here: f.defined.sf = True) => keep_defined_true(f.sf, False, here);
+    let of = λ (here: f.defined.of = True) => keep_defined_true(f.of, False, here);
+    let pf = λ (here: f.defined.pf = True) => keep_defined_true(f.pf, False, here);
+    let less = λ (here: (f.defined.sf && f.defined.of) = True) =>
+        cong_bool2(λ x y => x.xor(y), sf(and_true_left(here)), of(and_true_right(here)));
+    (match cc as λ c => condition_defined(c, f.defined) = True → condition_holds(c, f.erase()) = condition_holds(c, f) {
+        O => λ h => of(h), NO => λ h => cong_fn(Bool::not, of(h)),
+        B => λ h => cf(h), AE => λ h => cong_fn(Bool::not, cf(h)),
+        E => λ h => zf(h), NE => λ h => cong_fn(Bool::not, zf(h)),
+        BE => λ h => cong_bool2(λ x y => x || y, cf(and_true_left(h)), zf(and_true_right(h))),
+        A => λ h => cong_fn(Bool::not, cong_bool2(λ x y => x || y, cf(and_true_left(h)), zf(and_true_right(h)))),
+        S => λ h => sf(h), NS => λ h => cong_fn(Bool::not, sf(h)),
+        P => λ h => pf(h), NP => λ h => cong_fn(Bool::not, pf(h)),
+        L => λ h => less(h), GE => λ h => cong_fn(Bool::not, less(h)),
+        LE => λ h => cong_bool2(λ x y => x || y, zf(and_true_left(h)), less(and_true_right(h))),
+        G => λ h => cong_fn(Bool::not, cong_bool2(λ x y => x || y, zf(and_true_left(h)), less(and_true_right(h)))),
+    })(defined)
+}
+
+fn ShortControl::reads_defined(self control: ShortControl, d: DefinedFlags) → Bool {
+    match control { JumpIf(cc, _) => condition_defined(cc, d), Jump(_) => True }
+}
+
+fn NearControl::reads_defined(self control: NearControl, d: DefinedFlags) → Bool {
+    match control { JumpIfNear(cc, _) => condition_defined(cc, d), JumpNear(_) => True }
+}
+
+theorem erase_short_commute<M>(control: ShortControl, before: MachineState<M>,
+    reads: control.reads_defined(before.flags.defined) = True):
+    erase_undefined(execute_short_control(control, before)) =
+    execute_short_control(control, erase_undefined(before)) {
+    (match control as λ c => c.reads_defined(before.flags.defined) = True →
+        erase_undefined(execute_short_control(c, before)) = execute_short_control(c, erase_undefined(before)) {
+        JumpIf(cc, displacement) => λ h => cong_fn(λ (taken: Bool) =>
+                with_rip(erase_undefined(before), jump_zero_rip(taken, before.rip, displacement)),
+            sym(condition_erased(cc, before.flags, h))),
+        Jump(_) => λ _ => refl,
+    })(reads)
+}
+
+theorem erase_near_commute<M>(control: NearControl, before: MachineState<M>,
+    reads: control.reads_defined(before.flags.defined) = True):
+    erase_undefined(execute_near_control(control, before)) =
+    execute_near_control(control, erase_undefined(before)) {
+    (match control as λ c => c.reads_defined(before.flags.defined) = True →
+        erase_undefined(execute_near_control(c, before)) = execute_near_control(c, erase_undefined(before)) {
+        JumpIfNear(cc, displacement) => λ h => cong_fn(λ (taken: Bool) =>
+                with_rip(erase_undefined(before), match taken {
+                    False => next_rip(before.rip, 6),
+                    True => near_branch_target(before.rip, 6, displacement),
+                }),
+            sym(condition_erased(cc, before.flags, h))),
+        JumpNear(_) => λ _ => refl,
+    })(reads)
+}
+
+// A jump reading defined flags goes the same way from states the same where
+// defined.
+theorem short_control_respects_defined<M>(control: ShortControl, left, right: MachineState<M>, same: left ≈ right,
+    reads: control.reads_defined(left.flags.defined) = True):
+    execute_short_control(control, left) ≈ execute_short_control(control, right) {
+    same_defined_respects_reading(execute_short_control<M>(control), λ (d: DefinedFlags) => control.reads_defined(d),
+        λ state ok => erase_short_commute(control, state, ok), left, right, same, reads)
+}
+
+theorem near_control_respects_defined<M>(control: NearControl, left, right: MachineState<M>, same: left ≈ right,
+    reads: control.reads_defined(left.flags.defined) = True):
+    execute_near_control(control, left) ≈ execute_near_control(control, right) {
+    same_defined_respects_reading(execute_near_control<M>(control), λ (d: DefinedFlags) => control.reads_defined(d),
+        λ state ok => erase_near_commute(control, state, ok), left, right, same, reads)
 }
 
 theorem execute_near_control_preserves_gprs<M>(control: NearControl, before: MachineState<M>):

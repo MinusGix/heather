@@ -122,16 +122,16 @@ theorem drain_pass(origin: BitVec(64), w: Nat, page: Nat → BitVec(8), state: M
             λ a => match a {
                 ReadBytes(bytes) => match bytes {
                     Nil => λ fits junk leaves rcx r11 => Exists(0, ⟨trivial, ⟨refl,
-                        ⟨λ yes after rip _ => Inr(λ holds => drain_exit(origin, DataRegion::io_data(4096, drain_within()).buffer(page).set_span(0, List::to_vector<BitVec(8)>(Nil)).cells,
+                        ⟨refl, ⟨λ yes after rip _ => Inr(λ holds => drain_exit(origin, DataRegion::io_data(4096, drain_within()).buffer(page).set_span(0, List::to_vector<BitVec(8)>(Nil)).cells,
                             after, rip, holds)),
-                         λ no => absurd(trans(sym(drain_none_zero()), no))⟩⟩⟩),
+                         λ no => absurd(trans(sym(drain_none_zero()), no))⟩⟩⟩⟩),
                     Cons(_, rest) => λ fits junk leaves rcx r11 => Exists(0, ⟨drain_fits(Succ(rest.len()), fits), ⟨refl,
-                        ⟨λ yes => absurd(trans(sym(yes), drain_some_nonzero(rest.len(), fits))),
-                         λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩),
+                        ⟨refl, ⟨λ yes => absurd(trans(sym(yes), drain_some_nonzero(rest.len(), fits))),
+                         λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩⟩),
                 },
                 ReadFailed(e) => λ error junk leaves rcx r11 => Exists(0, ⟨drain_fits(junk.len(), leaves), ⟨refl,
-                    ⟨λ yes => absurd(trans(sym(yes), drain_failed_nonzero(e, error))),
-                     λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩),
+                    ⟨refl, ⟨λ yes => absurd(trans(sym(yes), drain_failed_nonzero(e, error))),
+                     λ no after rip _ => Inl(Exists(m, ⟨rip, ⟨refl, trivial⟩⟩))⟩⟩⟩⟩),
             }⟩,
     }
 }

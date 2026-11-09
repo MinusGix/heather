@@ -1,6 +1,6 @@
 ---
 title: Model flags x86 leaves undefined (IDIV, MUL, SHL by k)
-status: open
+status: closed
 labels: [native,x86,semantics]
 area: heather-in-heather
 milestone: [nh-front]
@@ -35,3 +35,7 @@ shift by `k` costing `k` instructions. Signed division (`SInt::div`/`rem`,
 
 - The chosen route compiles `SInt::div`/`rem` with guards at a zero
   divisor and `MIN / -1` (x86 faults on both), checked end to end against C.
+
+## Log
+
+- 2026-11-08: Built the mask (docs/runtime-fn-setups-design.md §16.13, round 5): `DefinedFlags` in `Flags`, `SameDefinedState` erases undefined flags, reading one has no `Execute`, compiler blocks pass `block_reads` from no flag defined (`Prog::laid_out`'s `blocks_read_own`); the five linux determinism files check unchanged. Shifts by k are one `ShiftImm` (C1 ib). The IDIV acceptance moves to [[x86-idiv-signed-division]], which owns the value-level fault admission and the rt/FunctionIR division.

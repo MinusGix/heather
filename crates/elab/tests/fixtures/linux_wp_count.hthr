@@ -120,13 +120,13 @@ theorem count_pass(origin: BitVec(64), w: Nat):
         LoopPost(X86Profile::io(8192).linux(), count_view(origin), origin, prog_len(asm_back(count_loop(), 7)), count_inv(), w), t, frame, state) {
     match w {
         Zero => λ t frame state held => Exists(0, ⟨count_room(), ⟨refl,
-            ⟨λ yes after rip same => Inr(λ holds => j(sym(held.left), λ s _ => Sim(X86Profile::io(8192).linux(), s, after),
+            ⟨refl, ⟨λ yes after rip same => Inr(λ holds => j(sym(held.left), λ s _ => Sim(X86Profile::io(8192).linux(), s, after),
                 count_exit(origin, frame, after, rip, holds))),
-             λ no => absurd(trans(sym(test_self_zero(64, count_slot(frame), held.right)), no))⟩⟩⟩),
+             λ no => absurd(trans(sym(test_self_zero(64, count_slot(frame), held.right)), no))⟩⟩⟩⟩),
         Succ(m) => λ t frame state held => Exists(0, ⟨count_room(), ⟨refl,
-            ⟨λ yes => absurd(trans(sym(yes), test_self_nonzero(64, count_slot(frame), j(sym(held.right), λ k _ => 0 < k, { omega })))),
+            ⟨refl, ⟨λ yes => absurd(trans(sym(yes), test_self_nonzero(64, count_slot(frame), j(sym(held.right), λ k _ => 0 < k, { omega })))),
              λ no => Exists(0, ⟨count_store_room(count_slot(frame).sub(BitVec::ofNat(1))), ⟨refl,
-                λ after rip same => Inl(Exists(m, ⟨rip, ⟨⟨held.left, count_stored(frame, m, held.right)⟩, { omega }⟩⟩))⟩⟩)⟩⟩⟩),
+                λ after rip same => Inl(Exists(m, ⟨rip, ⟨⟨held.left, count_stored(frame, m, held.right)⟩, { omega }⟩⟩))⟩⟩)⟩⟩⟩⟩),
     }
 }
 

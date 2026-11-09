@@ -342,27 +342,65 @@ theorem targets_named_back(whole: Prog, k: Nat): (p: Prog) → targets_named_las
     }
 }
 
+// Every block reads only flags it set itself (issues/x86-undefined-flags.md):
+// a flag-reading instruction follows, in its own block, the instruction that
+// defined what it reads.
+fn Asm::reads_own(self item: Asm) → Bool {
+    match item { Block(instructions) => block_reads(instructions, DefinedFlags::none()), _ => True }
+}
+
+fn Prog::blocks_read_own(self p: Prog) → Bool {
+    match p { Start => True, At(before, _, item) => item.reads_own() && before.blocks_read_own() }
+}
+
+theorem blocks_read_back(k: Nat): (p: Prog) → p.blocks_read_own() = True → asm_back(p, k).blocks_read_own() = True {
+    match k {
+        Zero => λ p ok => ok,
+        Succ(j) => λ p => match p {
+            Start => λ ok => ok,
+            At(before, _, item) => λ ok => blocks_read_back(j, before, and_true_right(ok)),
+        },
+    }
+}
+
 // The one check: what a producer evaluates before it hands a program out.
-fn Prog::laid_out(self p: Prog) → Bool { p.no_holes() && (p.names_unique() && (p.jumps_land() && p.targets_named())) }
+fn Prog::laid_out(self p: Prog) → Bool {
+    p.no_holes() && (p.names_unique() && (p.jumps_land() && (p.targets_named() && p.blocks_read_own())))
+}
 
 theorem Prog::laid_out_intro(self p: Prog, holes: p.no_holes().IsTrue(), unique: p.names_unique().IsTrue(), lands: p.jumps_land().IsTrue(),
-    named: p.targets_named().IsTrue()): p.laid_out().IsTrue() {
-    Bool::is_true_and_intro(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), holes,
-        Bool::is_true_and_intro(p.names_unique(), p.jumps_land() && p.targets_named(), unique,
-            Bool::is_true_and_intro(p.jumps_land(), p.targets_named(), lands, named)))
+    named: p.targets_named().IsTrue(), reads: p.blocks_read_own().IsTrue()): p.laid_out().IsTrue() {
+    Bool::is_true_and_intro(p.no_holes(), p.names_unique() && (p.jumps_land() && (p.targets_named() && p.blocks_read_own())), holes,
+        Bool::is_true_and_intro(p.names_unique(), p.jumps_land() && (p.targets_named() && p.blocks_read_own()), unique,
+            Bool::is_true_and_intro(p.jumps_land(), p.targets_named() && p.blocks_read_own(), lands,
+                Bool::is_true_and_intro(p.targets_named(), p.blocks_read_own(), named, reads))))
 }
 
 theorem Prog::laid_out_fits(self p: Prog, laid: p.laid_out().IsTrue()): FillsFit(p, no_fills()) {
-    p.no_holes_fit(Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), laid).left)
+    p.no_holes_fit(Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && (p.targets_named() && p.blocks_read_own())), laid).left)
 }
 theorem Prog::laid_out_unique(self p: Prog, laid: p.laid_out().IsTrue()): p.names_unique().IsTrue() {
-    Bool::is_true_and(p.names_unique(), p.jumps_land() && p.targets_named(),
-        Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), laid).right).left
+    Bool::is_true_and(p.names_unique(), p.jumps_land() && (p.targets_named() && p.blocks_read_own()),
+        Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && (p.targets_named() && p.blocks_read_own())), laid).right).left
 }
 theorem Prog::laid_out_lands(self p: Prog, laid: p.laid_out().IsTrue()): p.jumps_land().IsTrue() {
-    Bool::is_true_and(p.jumps_land(), p.targets_named(),
-        Bool::is_true_and(p.names_unique(), p.jumps_land() && p.targets_named(),
-            Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && p.targets_named()), laid).right).right).left
+    Bool::is_true_and(p.jumps_land(), p.targets_named() && p.blocks_read_own(),
+        Bool::is_true_and(p.names_unique(), p.jumps_land() && (p.targets_named() && p.blocks_read_own()),
+            Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && (p.targets_named() && p.blocks_read_own())), laid).right).right).left
+}
+theorem Prog::laid_out_reads(self p: Prog, laid: p.laid_out().IsTrue()): p.blocks_read_own() = True {
+    eq_true_of_is_true(p.blocks_read_own(), Bool::is_true_and(p.targets_named(), p.blocks_read_own(),
+        Bool::is_true_and(p.jumps_land(), p.targets_named() && p.blocks_read_own(),
+            Bool::is_true_and(p.names_unique(), p.jumps_land() && (p.targets_named() && p.blocks_read_own()),
+                Bool::is_true_and(p.no_holes(), p.names_unique() && (p.jumps_land() && (p.targets_named() && p.blocks_read_own())),
+                    laid).right).right).right).right)
+}
+
+// A block of a laid-out program reads only flags it set itself.
+theorem Prog::block_reads_at(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat,
+    instructions: List<Instruction>, at: asm_back(p, k) = At(before, name, Block(instructions))):
+    block_reads(instructions, DefinedFlags::none()) = True {
+    and_true_left(j(at, λ q _ => q.blocks_read_own() = True, blocks_read_back(k, p, p.laid_out_reads(laid))))
 }
 
 // ---------------------------------------------------------------------------
@@ -453,21 +491,23 @@ theorem Site::item_resident<M>(self site: Site<M>, fits: FillsFit(site.program, 
 // An instruction block resident at the state's RIP runs fetched to its end.
 theorem block_steps<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, instructions: List<Instruction>):
     (s: MachineState<M>) → CodeResident(fetch, s.memory, canonical_block_bytes(instructions), s.rip) →
+    block_reads(instructions, s.flags.defined) = True →
     FetchedSteps(fetch, data, s, execute_block_normal(instructions, s)) ∧
     (execute_block_normal(instructions, s).rip = next_rip(s.rip, block_length(instructions)) ∧
      execute_block_normal(instructions, s).memory = s.memory) {
     match instructions {
-        Nil => λ s _ => ⟨fetched_steps_refl(fetch, data, s), ⟨refl, refl⟩⟩,
-        Cons(instruction, rest) => λ s resident => {
+        Nil => λ s _ _ => ⟨fetched_steps_refl(fetch, data, s), ⟨refl, refl⟩⟩,
+        Cons(instruction, rest) => λ s resident ok => {
             let middle = execute_normal(decoded_canonical(instruction), s);
             let parts = resident_split(fetch, s.memory, canonical_bytes(instruction), canonical_block_bytes(rest), s.rip, resident);
             let advanced: (next_rip(s.rip, canonical_length(instruction)) = middle.rip) =
                 sym(execute_normal_advances_rip(decoded_canonical(instruction), s));
             let tail = block_steps(fetch, data, rest, middle,
                 j(trans(rip_count(s.rip, canonical_bytes_length(instruction)), advanced),
-                    λ address _ => CodeResident(fetch, s.memory, canonical_block_bytes(rest), address), parts.right));
+                    λ address _ => CodeResident(fetch, s.memory, canonical_block_bytes(rest), address), parts.right),
+                j(sym(execute_normal_defines(instruction, s)), λ d _ => block_reads(rest, d) = True, and_true_right(ok)));
             ⟨fetched_steps_cons(fetch, data, s, middle, execute_block_normal(rest, middle),
-                ordinary_fetched_step(fetch, data, instruction, s, parts.left), tail.left),
+                ordinary_fetched_step(fetch, data, instruction, s, parts.left, and_true_left(ok)), tail.left),
              ⟨trans(tail.right.left, trans(
                 cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length(rest)), sym(advanced)),
                 rip_compose(s.rip, canonical_length(instruction), block_length(rest)))),
@@ -479,13 +519,15 @@ theorem block_steps<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, instructi
 // A block at a label runs from the label to its end.
 theorem Site::runs_block<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name: Nat,
     instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Block(instructions)),
+    reads: block_reads(instructions, DefinedFlags::none()) = True,
     pre, post: Gprs → Type,
     step: (s: MachineState<M>) → pre(s.gprs) → post(execute_block_normal(instructions, s).gprs)):
     site.Runs(prog_len(before), prog_len(before) + block_length(instructions), pre, post) {
     λ s here resident holds => {
         let item = site.item_resident(fits, s.memory, resident, k, before, name, Block(instructions), at);
         let ran = block_steps(site.fetch, site.data, instructions, s,
-            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes(instructions), address), item));
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes(instructions), address), item),
+            block_reads_from_none(instructions, reads, s.flags.defined));
         Exists(execute_block_normal(instructions, s), ⟨ran.left, ⟨trans(ran.right.left, trans(
             cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length(instructions)), here),
             rip_compose(site.origin, prog_len(before), block_length(instructions)))), ⟨ran.right.right, step(s, holds)⟩⟩⟩)
@@ -502,7 +544,7 @@ theorem Site::runs_jump<M>(self site: Site<M>, fits: FillsFit(site.program, no_f
         let control = JumpNear(displacement);
         let item = site.item_resident(fits, s.memory, resident, k, before, name, Jmp(target), at);
         let step = near_fetched_step(site.fetch, site.data, control, s,
-            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, near_control_bytes(control), address), item));
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, near_control_bytes(control), address), item), refl);
         Exists(execute_near_control(control, s), ⟨fetched_steps_one(site.fetch, site.data, s, execute_near_control(control, s), step),
             ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, displacement), here),
                 near_lands_target(site.origin, prog_len(before), displacement, to, lands)), ⟨refl, holds⟩⟩⟩)
@@ -551,6 +593,16 @@ theorem Test::steps<M>(self test: Test, s: MachineState<M>):
     match test { Nonzero(_) => ⟨refl, refl⟩, Compare(_, _, _) => ⟨refl, refl⟩ }
 }
 
+// A test reads no flags, and its JCC reads only flags the test defined.
+theorem Test::reads<M>(self test: Test, s: MachineState<M>): block_reads([test.instruction()], s.flags.defined) = True {
+    match test { Nonzero(_) => refl, Compare(_, _, _) => refl }
+}
+
+theorem Test::jcc_reads<M>(self test: Test, s: MachineState<M>):
+    condition_defined(test.cc(), execute_block_normal([test.instruction()], s).flags.defined) = True {
+    match test { Nonzero(_) => refl, Compare(cc, _, _) => condition_defined_all(cc) }
+}
+
 fn Prog::tested(self start: Prog, test: Test) → Prog { At(start, 0, Block([test.instruction()])) }
 fn Prog::branched(self start: Prog, test: Test, else_name: Nat) → Prog { At(start.tested(test), 0, Jcc(test.cc(), else_name)) }
 
@@ -575,7 +627,8 @@ theorem Site::runs_branch_on<M>(self site: Site<M>, fits: FillsFit(site.program,
         let tested = start.tested(test);
         let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([instruction]), test_at);
         let ran = block_steps(site.fetch, site.data, [instruction], s,
-            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([instruction]), address), item));
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([instruction]), address), item),
+            test.reads(s));
         let u = execute_block_normal([instruction], s);
         let stepped = test.steps<M>(s);
         let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
@@ -586,7 +639,7 @@ theorem Site::runs_branch_on<M>(self site: Site<M>, fits: FillsFit(site.program,
         let jcc = site.item_resident(fits, s.memory, resident, branch_k, tested, 0, Jcc(test.cc(), else_name), branch_at);
         let step = near_fetched_step(site.fetch, site.data, control, u,
             resident_state(site.fetch, near_control_bytes(control), s.memory, next_rip(site.origin, prog_len(tested)), u,
-                ran.right.right, u_rip, jcc));
+                ran.right.right, u_rip, jcc), test.jcc_reads(s));
         let v = execute_near_control(control, u);
         let entry = fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step));
         let kept = λ (b: Bool) (taken: test.taken(s.gprs) = b) =>

@@ -46,3 +46,4 @@ request.
 ## Log
 
 - 2026-11-08: i64 round 3: shifts are selected now (chains of `SHL/SHR/SAR r64, 1` after `ShiftOp::legalize`); multiply and divide wait on [[x86-undefined-flags]].
+- 2026-11-08: 2026-11-08 round 4: shifts by a constant are one `SHL/SHR/SAR r64, imm8` (`ShiftImm`); IDIV is [[x86-idiv-signed-division]].

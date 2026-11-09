@@ -96,13 +96,41 @@ theorem read_gpr_after_write(register: Gpr, value: BitVec(64),
     }
 }
 
+// Which of the six arithmetic flags hold a value the manual defines
+// (issues/x86-undefined-flags.md). An instruction that leaves a flag
+// undefined clears its bit here, and whatever value the flag then holds is
+// one `Execute` chose among all of them; `SameDefinedState` erases it, and an
+// instruction that reads it has no `Execute` at all.
+record DefinedFlags {
+    cf: Bool, pf: Bool, af: Bool, zf: Bool, sf: Bool, of: Bool,
+}
+
+fn DefinedFlags::all() → DefinedFlags {
+    DefinedFlags(cf := True, pf := True, af := True, zf := True, sf := True, of := True)
+}
+
+fn DefinedFlags::none() → DefinedFlags {
+    DefinedFlags(cf := False, pf := False, af := False, zf := False, sf := False, of := False)
+}
+
+// What TEST, AND, OR, XOR and a shift by one leave: everything but AF.
+// After a shift by a nonzero immediate: OF and AF undefined.
+fn DefinedFlags::shifted() → DefinedFlags {
+    DefinedFlags(cf := True, pf := True, af := False, zf := True, sf := True, of := False)
+}
+
+fn DefinedFlags::but_af() → DefinedFlags {
+    DefinedFlags(cf := True, pf := True, af := False, zf := True, sf := True, of := True)
+}
+
 record Flags {
     cf: Bool, pf: Bool, af: Bool, zf: Bool, sf: Bool, of: Bool,
+    defined: DefinedFlags,
 }
 
 fn clear_flags() → Flags {
     Flags(cf := False, pf := False, af := False,
-        zf := False, sf := False, of := False)
+        zf := False, sf := False, of := False, defined := DefinedFlags::all())
 }
 
 record MachineState<M> {
@@ -144,7 +172,8 @@ fn low_byte_rex(register: LowByteGpr) → Option<BitVec(8)> {
     }
 }
 
-// The one-bit shifts D1 /4, /5 and /7, told apart by ModRM.reg.
+// The shifts, D1 /4, /5 and /7 by one and C1 /4, /5 and /7 by an imm8,
+// told apart by ModRM.reg.
 inductive ShiftOp { OpShl, OpShr, OpSar }
 
 inductive Instruction {
@@ -167,6 +196,10 @@ inductive Instruction {
     // SHL, SHR or SAR by one: every flag but AF defined
     // (docs/runtime-fn-setups-design.md §16.13, round 3).
     ShiftOne(op: ShiftOp, destination: Gpr),
+    // SHL, SHR or SAR by an immediate the processor masks to six bits: OF
+    // and AF undefined, every flag kept at a masked count of zero
+    // (`shift_imm_flags`).
+    ShiftImm(op: ShiftOp, destination: Gpr, immediate: BitVec(8)),
 }
 
 // X86 instructions occupy 1 through 15 bytes. Squashing makes the fact
@@ -534,6 +567,12 @@ fn shift_one_bytes(op: ShiftOp, destination: Gpr) → List<BitVec(8)> {
     rr_bytes(0xd1, destination, op.extension())
 }
 
+// REX.W C1 /digit ib: the one-bit shift's ModRM, then the count.
+fn shift_imm_bytes(op: ShiftOp, destination: Gpr, immediate: BitVec(8)) → List<BitVec(8)> {
+    [rex_w_rr(destination, op.extension()), BitVec::ofNat(0xc1),
+        modrm_rr(destination, op.extension()), immediate]
+}
+
 fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
     match instruction {
         // 89 /r: MOV r64 into r/m64.
@@ -570,6 +609,7 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         AddRI8(destination, immediate) => add_ri8_bytes(destination, immediate),
         AddRI32(destination, immediate) => add_ri32_bytes(destination, immediate),
         ShiftOne(op, destination) => shift_one_bytes(op, destination),
+        ShiftImm(op, destination, immediate) => shift_imm_bytes(op, destination, immediate),
     }
 }
 
@@ -600,7 +640,7 @@ fn decoded_rr(instruction: Instruction) → DecodedInstruction {
 
 fn canonical_length(instruction: Instruction) → Nat {
     match instruction {
-        MovRI(_, _) => 10, AddRI8(_, _) => 4, AddRI32(_, _) => 7,
+        MovRI(_, _) => 10, AddRI8(_, _) => 4, AddRI32(_, _) => 7, ShiftImm(_, _, _) => 4,
         SetBelow(destination) => setcc_length(destination), SetLess(destination) => setcc_length(destination),
         SetEqual(destination) => setcc_length(destination),
         _ => 3,
@@ -635,6 +675,7 @@ fn canonical_length_valid(instruction: Instruction) →
         AddRI8(_, _) => And(trivial, trivial),
         AddRI32(_, _) => And(trivial, trivial),
         ShiftOne(_, _) => And(trivial, trivial),
+        ShiftImm(_, _, _) => And(trivial, trivial),
     }
 }
 
@@ -720,6 +761,7 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
         AddRI8(destination, immediate) => bytes = add_ri8_bytes(destination, immediate),
         AddRI32(destination, immediate) => bytes = add_ri32_bytes(destination, immediate),
         ShiftOne(op, destination) => bytes = shift_one_bytes(op, destination),
+        ShiftImm(op, destination, immediate) => bytes = shift_imm_bytes(op, destination, immediate),
     }
 }
 
@@ -1656,8 +1698,38 @@ fn decode_add_ri_head(rex, opcode, modrm, expected: BitVec(8),
     }
 }
 
-// Four bytes are 83 /0 ib, seven 81 /0 id; every other length is refused
-// by its shape, so no other form's decoding changes.
+// The shift selected by ModRM.reg, if any.
+fn ShiftOp::of_extension(register: Gpr) → Option<ShiftOp> {
+    match register {
+        Rsp => Some(OpShl), Rbp => Some(OpShr), Rdi => Some(OpSar),
+        _ => None,
+    }
+}
+
+// REX.W C1 /4, /5 or /7 ib with a register-direct ModRM.
+fn decode_shift_imm(rex, opcode, modrm, immediate: BitVec(8)) → Option<DecodedInstruction> {
+    match opcode.eq_dec(BitVec::ofNat(0xc1)) {
+        Inr(_) => None,
+        Inl(_) => match ShiftOp::of_extension(gpr_from_fields(byte_bit3(modrm),
+                byte_bit4(modrm), byte_bit5(modrm), byte_bit2(rex))) {
+            None => None,
+            Some(op) => {
+                let destination = gpr_from_fields(byte_bit0(modrm), byte_bit1(modrm),
+                    byte_bit2(modrm), byte_bit0(rex));
+                match rex.eq_dec(rex_w_rr(destination, op.extension())) {
+                    Inr(_) => None,
+                    Inl(_) => match modrm.eq_dec(modrm_rr(destination, op.extension())) {
+                        Inr(_) => None,
+                        Inl(_) => Some(decoded_canonical(ShiftImm(op, destination, immediate))),
+                    },
+                }
+            },
+        },
+    }
+}
+
+// Four bytes are 83 /0 ib or C1 /digit ib, seven 81 /0 id; every other
+// length is refused by its shape, so no other form's decoding changes.
 fn decode_add_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
     match bytes {
         Nil => None,
@@ -1668,8 +1740,11 @@ fn decode_add_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
                 Cons(modrm, t3) => match t3 {
                     Nil => None,
                     Cons(b0, t4) => match t4 {
-                        Nil => decode_add_ri_head(rex, opcode, modrm,
-                            BitVec::ofNat(0x83), λ d => AddRI8(d, b0)),
+                        Nil => match decode_add_ri_head(rex, opcode, modrm,
+                                BitVec::ofNat(0x83), λ d => AddRI8(d, b0)) {
+                            Some(decoded) => Some(decoded),
+                            None => decode_shift_imm(rex, opcode, modrm, b0),
+                        },
                         Cons(b1, t5) => match t5 {
                             Nil => None,
                             Cons(b2, t6) => match t6 {
@@ -1686,14 +1761,6 @@ fn decode_add_ri(bytes: List<BitVec(8)>) → Option<DecodedInstruction> {
                 },
             },
         },
-    }
-}
-
-// The shift selected by ModRM.reg, if any.
-fn ShiftOp::of_extension(register: Gpr) → Option<ShiftOp> {
-    match register {
-        Rsp => Some(OpShl), Rbp => Some(OpShr), Rdi => Some(OpSar),
-        _ => None,
     }
 }
 
@@ -1949,6 +2016,68 @@ theorem decode_add_ri8_complete(destination: Gpr, immediate: BitVec(8)):
     }
 }
 
+theorem decode_shift_imm_complete(op: ShiftOp, destination: Gpr, immediate: BitVec(8)):
+    decode_instruction(shift_imm_bytes(op, destination, immediate)) =
+        Some(decoded_canonical(ShiftImm(op, destination, immediate)))
+{
+    match op {
+        OpShl => match destination {
+            Rax => refl,
+            Rcx => refl,
+            Rdx => refl,
+            Rbx => refl,
+            Rsp => refl,
+            Rbp => refl,
+            Rsi => refl,
+            Rdi => refl,
+            R8 => refl,
+            R9 => refl,
+            R10 => refl,
+            R11 => refl,
+            R12 => refl,
+            R13 => refl,
+            R14 => refl,
+            R15 => refl
+        },
+        OpShr => match destination {
+            Rax => refl,
+            Rcx => refl,
+            Rdx => refl,
+            Rbx => refl,
+            Rsp => refl,
+            Rbp => refl,
+            Rsi => refl,
+            Rdi => refl,
+            R8 => refl,
+            R9 => refl,
+            R10 => refl,
+            R11 => refl,
+            R12 => refl,
+            R13 => refl,
+            R14 => refl,
+            R15 => refl
+        },
+        OpSar => match destination {
+            Rax => refl,
+            Rcx => refl,
+            Rdx => refl,
+            Rbx => refl,
+            Rsp => refl,
+            Rbp => refl,
+            Rsi => refl,
+            Rdi => refl,
+            R8 => refl,
+            R9 => refl,
+            R10 => refl,
+            R11 => refl,
+            R12 => refl,
+            R13 => refl,
+            R14 => refl,
+            R15 => refl
+        },
+    }
+}
+
 theorem decode_shift_one_complete(op: ShiftOp, destination: Gpr):
     decode_instruction(shift_one_bytes(op, destination)) =
         Some(decoded_canonical(ShiftOne(op, destination)))
@@ -2137,6 +2266,10 @@ theorem decode_instruction_complete(bytes: List<BitVec(8)>,
             j(sym(encoding), λ actual q => decode_instruction(actual) =
                 Some(decoded_canonical(ShiftOne(op, destination))),
                 decode_shift_one_complete(op, destination)),
+        ShiftImm(op, destination, immediate) => λ encoding =>
+            j(sym(encoding), λ actual q => decode_instruction(actual) =
+                Some(decoded_canonical(ShiftImm(op, destination, immediate))),
+                decode_shift_imm_complete(op, destination, immediate)),
     }(decoding)
 }
 
@@ -2178,7 +2311,7 @@ theorem decoded_canonical_length(instruction: Instruction):
         AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
         CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl,
         TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
-        ShiftOne(_, _) => refl,
+        ShiftOne(_, _) => refl, ShiftImm(_, _, _) => refl,
     }
 }
 
@@ -2209,6 +2342,7 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
         AddRI8(_, _) => And(refl, refl),
         AddRI32(_, _) => And(refl, refl),
         ShiftOne(_, _) => And(refl, refl),
+        ShiftImm(_, _, _) => And(refl, refl),
     }
 }
 
@@ -2327,6 +2461,7 @@ theorem canonical_bytes_length(instruction: Instruction):
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,
         ShiftOne(_, _) => refl,
+        ShiftImm(_, _, _) => refl,
     }
 }
 
@@ -2364,6 +2499,7 @@ fn add_flags(left, right: BitVec(64)) → Flags {
         zf := is_zero_bits(64, result),
         sf := result.sign_bit(),
         of := left.signed_overflow_add(right),
+        defined := DefinedFlags::all(),
     )
 }
 
@@ -2378,6 +2514,7 @@ fn sub_flags(left, right: BitVec(64)) → Flags {
         zf := is_zero_bits(64, result),
         sf := result.sign_bit(),
         of := left.signed_overflow_sub(right),
+        defined := DefinedFlags::all(),
     )
 }
 
@@ -2449,6 +2586,7 @@ fn test_flags(left, right: BitVec(64), af: Bool) → Flags {
         zf := is_zero_bits(64, result),
         sf := result.sign_bit(),
         of := False,
+        defined := DefinedFlags::but_af(),
     )
 }
 
@@ -2460,6 +2598,25 @@ fn ShiftOp::apply(self op: ShiftOp, x: BitVec(64)) → BitVec(64) {
         OpShr => x.shift_right_one(),
         OpSar => x.arithmetic_shift_right_one(),
     }
+}
+
+// A shift by `count` one-bit steps; past the width SHL and SHR are zero.
+fn ShiftOp::by(self op: ShiftOp, x: BitVec(64), count: Nat) → BitVec(64) {
+    match op {
+        OpShl => x.shift_left(count),
+        OpShr => x.shift_right(count),
+        OpSar => x.arithmetic_shift_right(count),
+    }
+}
+
+theorem ShiftOp::by_succ(self op: ShiftOp, x: BitVec(64), count: Nat):
+    op.apply(op.by(x, count)) = op.by(x, Succ(count))
+{
+    match op { OpShl => refl, OpShr => refl, OpSar => refl }
+}
+
+theorem ShiftOp::by_zero(self op: ShiftOp, x: BitVec(64)): op.by(x, 0) = x {
+    match op { OpShl => refl, OpShr => refl, OpSar => refl }
 }
 
 // CF is the bit shifted out; OF, defined for a count of one, is whether SHL
@@ -2487,6 +2644,55 @@ fn shift_flags(op: ShiftOp, x: BitVec(64), af: Bool) → Flags {
         zf := is_zero_bits(64, result),
         sf := result.sign_bit(),
         of := op.overflow(x),
+        defined := DefinedFlags::but_af(),
+    )
+}
+
+// A 64-bit shift masks its count to six bits.
+fn shift_count(immediate: BitVec(8)) → Nat { immediate.toNat().mod(64) }
+
+// After a shift by an immediate: nothing changes at a masked count of
+// zero; otherwise CF is the last bit shifted out and PF, ZF and SF read the
+// result, OF is undefined past a count of one and AF always, and the model
+// leaves OF undefined at one too (ShiftOne is the count of one), so the
+// mask is one constant. Undefined flags read False in this canonical
+// representative.
+fn shift_imm_flags(op: ShiftOp, x: BitVec(64), count: Nat, flags: Flags) → Flags {
+    match count {
+        Zero => flags,
+        Succ(k) => {
+            let last = op.by(x, k);
+            let result = op.apply(last);
+            Flags(
+                cf := op.carry(last),
+                pf := xor_bits(8, result.take_low(8, 56)).not(),
+                af := False,
+                zf := is_zero_bits(64, result),
+                sf := result.sign_bit(),
+                of := False,
+                defined := DefinedFlags::shifted(),
+            )
+        },
+    }
+}
+
+fn shift_imm_defines(count: Nat, defined: DefinedFlags) → DefinedFlags {
+    match count { Zero => defined, Succ(_) => DefinedFlags::shifted() }
+}
+
+theorem shift_imm_flags_defined(op: ShiftOp, x: BitVec(64), count: Nat, flags: Flags):
+    shift_imm_flags(op, x, count, flags).defined = shift_imm_defines(count, flags.defined)
+{
+    match count { Zero => refl, Succ(_) => refl }
+}
+
+fn execute_shift_imm(op: ShiftOp, destination: Gpr, immediate: BitVec(8), before: Gprs,
+    flags: Flags) → RegisterEffect
+{
+    let x = read_gpr(destination, before);
+    RegisterEffect(
+        gprs := write_gpr(destination, op.by(x, shift_count(immediate)), before),
+        flags := shift_imm_flags(op, x, shift_count(immediate), flags),
     )
 }
 
@@ -2536,6 +2742,7 @@ fn logic_flags(result: BitVec(64)) → Flags {
         zf := is_zero_bits(64, result),
         sf := result.sign_bit(),
         of := False,
+        defined := DefinedFlags::but_af(),
     )
 }
 
@@ -2648,6 +2855,8 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
             execute_add_immediate(destination, immediate.sign_extend(32), before),
         // Canonical representative; `Execute` admits both values of AF.
         ShiftOne(op, destination) => execute_shift_one(op, destination, before, False),
+        ShiftImm(op, destination, immediate) =>
+            execute_shift_imm(op, destination, immediate, before, flags),
     }
 }
 
@@ -2663,7 +2872,258 @@ fn execute_normal<M>(decoded: DecodedInstruction, before: MachineState<M>) →
     )
 }
 
-inductive Exception { }
+// x86 raises #DE when a division's quotient does not fit or its divisor is
+// zero.
+inductive Exception { DivideError }
+
+// ---------------------------------------------------------------------------
+// Undefined flags (issues/x86-undefined-flags.md)
+
+// A flag's value where it is defined, `other` where it is not.
+fn keep_defined(defined, value, other: Bool) → Bool { match defined { True => value, False => other } }
+
+theorem keep_defined_twice(defined, value, first, second: Bool):
+    keep_defined(defined, keep_defined(defined, value, first), second) = keep_defined(defined, value, second) {
+    match defined { True => refl, False => refl }
+}
+
+theorem keep_defined_self(defined, value: Bool): keep_defined(defined, value, value) = value {
+    match defined { True => refl, False => refl }
+}
+
+theorem keep_defined_true({defined: Bool}, value, other: Bool, here: defined = True):
+    keep_defined(defined, value, other) = value {
+    j(sym(here), λ d _ => keep_defined(d, value, other) = value, refl)
+}
+
+theorem and_true_left({a, b: Bool}, both: (a && b) = True): a = True {
+    (match a as λ x => (x && b) = True → x = True { True => λ _ => refl, False => λ no => absurd(no) })(both)
+}
+
+theorem and_true_right({a, b: Bool}, both: (a && b) = True): b = True {
+    (match a as λ x => (x && b) = True → b = True { True => λ yes => yes, False => λ no => absurd(no) })(both)
+}
+
+// The flags with each undefined one taken from `other`.
+fn Flags::fill(self flags, other: Flags) → Flags {
+    Flags(
+        cf := keep_defined(flags.defined.cf, flags.cf, other.cf),
+        pf := keep_defined(flags.defined.pf, flags.pf, other.pf),
+        af := keep_defined(flags.defined.af, flags.af, other.af),
+        zf := keep_defined(flags.defined.zf, flags.zf, other.zf),
+        sf := keep_defined(flags.defined.sf, flags.sf, other.sf),
+        of := keep_defined(flags.defined.of, flags.of, other.of),
+        defined := flags.defined)
+}
+
+// The flags with each undefined one cleared: what two runs agree on.
+fn Flags::erase(self flags: Flags) → Flags { flags.fill(clear_flags()) }
+
+theorem shift_imm_flags_erase(op: ShiftOp, x: BitVec(64), count: Nat, flags: Flags):
+    shift_imm_flags(op, x, count, flags).erase() = shift_imm_flags(op, x, count, flags.erase())
+{
+    match count { Zero => refl, Succ(_) => refl }
+}
+
+theorem Flags::fields_eq(defined: DefinedFlags, {cf, pf, af, zf, sf, of, cf2, pf2, af2, zf2, sf2, of2: Bool},
+    e_cf: cf = cf2, e_pf: pf = pf2, e_af: af = af2, e_zf: zf = zf2, e_sf: sf = sf2, e_of: of = of2):
+    Flags(cf, pf, af, zf, sf, of, defined) = Flags(cf2, pf2, af2, zf2, sf2, of2, defined) {
+    trans(cong_fn(λ (x: Bool) => Flags(x, pf, af, zf, sf, of, defined), e_cf),
+    trans(cong_fn(λ (x: Bool) => Flags(cf2, x, af, zf, sf, of, defined), e_pf),
+    trans(cong_fn(λ (x: Bool) => Flags(cf2, pf2, x, zf, sf, of, defined), e_af),
+    trans(cong_fn(λ (x: Bool) => Flags(cf2, pf2, af2, x, sf, of, defined), e_zf),
+    trans(cong_fn(λ (x: Bool) => Flags(cf2, pf2, af2, zf2, x, of, defined), e_sf),
+        cong_fn(λ (x: Bool) => Flags(cf2, pf2, af2, zf2, sf2, x, defined), e_of))))))
+}
+
+// Filling changes only undefined flags, so it is invisible once erased.
+theorem Flags::fill_erase(self flags, other: Flags): flags.fill(other).erase() = flags.erase() {
+    let d = flags.defined;
+    Flags::fields_eq(d,
+        keep_defined_twice(d.cf, flags.cf, other.cf, False), keep_defined_twice(d.pf, flags.pf, other.pf, False),
+        keep_defined_twice(d.af, flags.af, other.af, False), keep_defined_twice(d.zf, flags.zf, other.zf, False),
+        keep_defined_twice(d.sf, flags.sf, other.sf, False), keep_defined_twice(d.of, flags.of, other.of, False))
+}
+
+theorem Flags::erase_twice(self flags: Flags): flags.erase().erase() = flags.erase() {
+    flags.fill_erase(clear_flags())
+}
+
+theorem Flags::fill_self(self flags: Flags): flags.fill(flags) = flags {
+    let d = flags.defined;
+    Flags::fields_eq(d,
+        keep_defined_self(d.cf, flags.cf), keep_defined_self(d.pf, flags.pf), keep_defined_self(d.af, flags.af),
+        keep_defined_self(d.zf, flags.zf), keep_defined_self(d.sf, flags.sf), keep_defined_self(d.of, flags.of))
+}
+
+fn MachineState::with_flags<M>(self state: MachineState<M>, flags: Flags) → MachineState<M> {
+    MachineState(gprs := state.gprs, flags := flags, rip := state.rip, memory := state.memory)
+}
+
+// The state with its undefined flags cleared.
+fn erase_undefined<M>(state: MachineState<M>) → MachineState<M> {
+    state.with_flags(state.flags.erase())
+}
+
+// The state with its undefined flags taken from `other`: an outcome
+// `Execute` admits beside the canonical one.
+fn fill_undefined<M>(state: MachineState<M>, other: Flags) → MachineState<M> {
+    state.with_flags(state.flags.fill(other))
+}
+
+theorem erase_fill<M>(state: MachineState<M>, other: Flags):
+    erase_undefined(fill_undefined(state, other)) = erase_undefined(state) {
+    cong_fn(λ (flags: Flags) => state.with_flags(flags), state.flags.fill_erase(other))
+}
+
+theorem fill_undefined_self<M>(state: MachineState<M>): fill_undefined(state, state.flags) = state {
+    cong_fn(λ (flags: Flags) => state.with_flags(flags), state.flags.fill_self())
+}
+
+// States the same where defined: the pullback of `=` along `erase_undefined`
+// (`SameDefinedState::pullback`), so its equivalence is `pullback_equivalence`'s
+// and a function respects it as soon as it commutes with erasing
+// (`same_defined_respects`). Proofs may still use `refl`, `sym` and `trans`
+// on it directly: it is an equality of erased states. Which flags are
+// defined is part of what is compared.
+fn SameDefinedState<M>(left, right: MachineState<M>) → Type {
+    erase_undefined(left) = erase_undefined(right)
+}
+
+theorem SameDefinedState::pullback<M>(left, right: MachineState<M>):
+    SameDefinedState<M>(left, right) = Pullback(erase_undefined<M>, RelId<MachineState<M>>, left, right) {
+    refl
+}
+
+instance<M> Equivalence<MachineState<M>>(SameDefinedState<M>) {
+    rel_refl := pullback_equivalence(erase_undefined<M>, RelId<MachineState<M>>, relid_equivalence()).rel_refl,
+    rel_sym := pullback_equivalence(erase_undefined<M>, RelId<MachineState<M>>, relid_equivalence()).rel_sym,
+    rel_trans := pullback_equivalence(erase_undefined<M>, RelId<MachineState<M>>, relid_equivalence()).rel_trans,
+}
+
+designation ≈ at MachineState := SameDefinedState
+
+theorem SameDefinedState::of_equal<M>({left, right: MachineState<M>}, same: left = right): left ≈ right {
+    cong_fn(erase_undefined<M>, same)
+}
+
+// The defined components, read back.
+theorem SameDefinedState::gprs<M>({left, right: MachineState<M>}, same: left ≈ right): left.gprs = right.gprs {
+    cong_fn(λ (state: MachineState<M>) => state.gprs, same)
+}
+theorem SameDefinedState::rip<M>({left, right: MachineState<M>}, same: left ≈ right): left.rip = right.rip {
+    cong_fn(λ (state: MachineState<M>) => state.rip, same)
+}
+theorem SameDefinedState::memory<M>({left, right: MachineState<M>}, same: left ≈ right): left.memory = right.memory {
+    cong_fn(λ (state: MachineState<M>) => state.memory, same)
+}
+theorem SameDefinedState::defined<M>({left, right: MachineState<M>}, same: left ≈ right):
+    left.flags.defined = right.flags.defined {
+    cong_fn(λ (state: MachineState<M>) => state.flags.defined, same)
+}
+
+// Undefined flags filled in any way leave the state the same where defined.
+theorem SameDefinedState::fill<M>(state: MachineState<M>, other: Flags): fill_undefined(state, other) ≈ state {
+    erase_fill(state, other)
+}
+
+// Commuting with the quotient map is respecting the relation: a step that
+// reads no undefined flag erases after as it would before.
+theorem same_defined_respects<M>(f: MachineState<M> → MachineState<M>,
+    commute: (state: MachineState<M>) → erase_undefined(f(state)) = f(erase_undefined(state))):
+    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, f) {
+    λ left right same => trans(commute(left), trans(cong_fn(f, same), sym(commute(right))))
+}
+
+// The same for a step that commutes only where it reads defined flags. Two
+// states the same where defined have the same flags defined, so one side's
+// reading is the other's.
+theorem same_defined_respects_reading<M>(f: MachineState<M> → MachineState<M>, reads: DefinedFlags → Bool,
+    commute: (state: MachineState<M>) → reads(state.flags.defined) = True →
+        erase_undefined(f(state)) = f(erase_undefined(state)),
+    left, right: MachineState<M>, same: left ≈ right, defined: reads(left.flags.defined) = True):
+    f(left) ≈ f(right) {
+    let other: (reads(right.flags.defined) = True) =
+        trans(cong_fn(reads, sym(SameDefinedState::defined(same))), defined);
+    trans(commute(left, defined), trans(cong_fn(f, same), sym(commute(right, other))))
+}
+
+// The flags an instruction reads, all defined. Every other instruction
+// reads none.
+fn Instruction::reads_defined(self instruction: Instruction, defined: DefinedFlags) → Bool {
+    match instruction {
+        SetBelow(_) => defined.cf,
+        SetLess(_) => defined.sf && defined.of,
+        SetEqual(_) => defined.zf,
+        _ => True,
+    }
+}
+
+// Whether the instruction faults from these registers. Only a division
+// can.
+fn Instruction::faults(self instruction: Instruction, gprs: Gprs) → Bool { False }
+
+// Whether the instruction can fault from some registers.
+fn Instruction::may_fault(self instruction: Instruction) → Bool { False }
+
+theorem Instruction::never_faults(self instruction: Instruction, gprs: Gprs, never: instruction.may_fault() = False):
+    instruction.faults(gprs) = False {
+    refl
+}
+
+theorem not_true({b: Bool}, holds: !b = True): b = False {
+    (match b as λ x => !x = True → x = False { False => λ _ => refl, True => λ no => absurd(no) })(holds)
+}
+
+theorem erase_normal_commute<M>(instruction: Instruction, before: MachineState<M>,
+    reads: instruction.reads_defined(before.flags.defined) = True):
+    erase_undefined(execute_normal(decoded_canonical(instruction), before)) =
+    execute_normal(decoded_canonical(instruction), erase_undefined(before)) {
+    (match instruction as λ form => form.reads_defined(before.flags.defined) = True →
+        erase_undefined(execute_normal(decoded_canonical(form), before)) =
+        execute_normal(decoded_canonical(form), erase_undefined(before)) {
+        MovRR(_, _) => λ _ => refl, MovRI(_, _) => λ _ => refl,
+        AddRR(_, _) => λ _ => refl, SubRR(_, _) => λ _ => refl,
+        AndRR(_, _) => λ _ => refl, OrRR(_, _) => λ _ => refl, XorRR(_, _) => λ _ => refl,
+        CmpRR(_, _) => λ _ => refl,
+        SetBelow(d) => λ defined => cong_fn(λ (c: Bool) => MachineState<M>(write_low_byte(d, c, before.gprs),
+                before.flags.erase(), next_rip(before.rip, decoded_canonical(SetBelow(d)).length), before.memory),
+            sym(keep_defined_true(before.flags.cf, False, defined))),
+        SetLess(d) => λ defined => cong_fn(λ (c: Bool) => MachineState<M>(write_low_byte(d, c, before.gprs),
+                before.flags.erase(), next_rip(before.rip, decoded_canonical(SetLess(d)).length), before.memory),
+            sym(trans(cong_fn(λ (s: Bool) => s.xor(keep_defined(before.flags.defined.of, before.flags.of, False)),
+                    keep_defined_true(before.flags.sf, False, and_true_left(defined))),
+                cong_fn(λ (o: Bool) => before.flags.sf.xor(o),
+                    keep_defined_true(before.flags.of, False, and_true_right(defined)))))),
+        SetEqual(d) => λ defined => cong_fn(λ (c: Bool) => MachineState<M>(write_low_byte(d, c, before.gprs),
+                before.flags.erase(), next_rip(before.rip, decoded_canonical(SetEqual(d)).length), before.memory),
+            sym(keep_defined_true(before.flags.zf, False, defined))),
+        TestRR(_, _) => λ _ => refl, AddRI8(_, _) => λ _ => refl, AddRI32(_, _) => λ _ => refl,
+        ShiftOne(_, _) => λ _ => refl,
+        ShiftImm(op, d, immediate) => λ _ => cong_fn(λ (f: Flags) => MachineState<M>(
+                write_gpr(d, op.by(read_gpr(d, before.gprs), shift_count(immediate)), before.gprs), f,
+                next_rip(before.rip, decoded_canonical(ShiftImm(op, d, immediate)).length), before.memory),
+            shift_imm_flags_erase(op, read_gpr(d, before.gprs), shift_count(immediate), before.flags)),
+    })(reads)
+}
+
+theorem execute_normal_respects_defined<M>(instruction: Instruction, left, right: MachineState<M>,
+    same: left ≈ right, reads: instruction.reads_defined(left.flags.defined) = True):
+    execute_normal(decoded_canonical(instruction), left) ≈ execute_normal(decoded_canonical(instruction), right) {
+    same_defined_respects_reading(execute_normal<M>(decoded_canonical(instruction)),
+        λ (defined: DefinedFlags) => instruction.reads_defined(defined),
+        λ state ok => erase_normal_commute(instruction, state, ok), left, right, same, reads)
+}
+
+theorem returned_machine_inj<M>(left, right: MachineState<M>,
+    same: Returned<MachineState<M>, Exception>(left) = Returned(right)):
+    left = right {
+    Option::some_inj(left, right,
+        cong_fn(λ outcome => match outcome {
+            Returned(state) => Some(state),
+            Faulted(_) => None<MachineState<M>>,
+        }, same))
+}
 
 fn execute_shift<M>(op: ShiftOp, destination: Gpr, length: Nat, before: MachineState<M>,
     af: Bool) → MachineState<M>
@@ -2689,92 +3149,6 @@ fn execute_test<M>(left, right: Gpr, length: Nat, before: MachineState<M>,
     )
 }
 
-// AF after TEST is undefined. The two permitted outcomes still agree on
-// every register, RIP, memory, and every flag a later instruction reads:
-// they are equal once AF is erased.
-fn erase_af<M>(state: MachineState<M>) → MachineState<M> {
-    MachineState(
-        gprs := state.gprs,
-        flags := Flags(state.flags.cf, state.flags.pf, False,
-            state.flags.zf, state.flags.sf, state.flags.of),
-        rip := state.rip,
-        memory := state.memory)
-}
-
-// States the same where defined: the pullback of `=` along `erase_af`
-// (`SameDefinedState::pullback`), so its equivalence is `pullback_equivalence`'s
-// and a function respects it as soon as it commutes with erasing
-// (`same_defined_respects`). Proofs may still use `refl`, `sym` and `trans`
-// on it directly: it is an equality of erased states.
-fn SameDefinedState<M>(left, right: MachineState<M>) → Type {
-    erase_af(left) = erase_af(right)
-}
-
-theorem SameDefinedState::pullback<M>(left, right: MachineState<M>):
-    SameDefinedState<M>(left, right) = Pullback(erase_af<M>, RelId<MachineState<M>>, left, right) {
-    refl
-}
-
-instance<M> Equivalence<MachineState<M>>(SameDefinedState<M>) {
-    rel_refl := pullback_equivalence(erase_af<M>, RelId<MachineState<M>>, relid_equivalence()).rel_refl,
-    rel_sym := pullback_equivalence(erase_af<M>, RelId<MachineState<M>>, relid_equivalence()).rel_sym,
-    rel_trans := pullback_equivalence(erase_af<M>, RelId<MachineState<M>>, relid_equivalence()).rel_trans,
-}
-
-designation ≈ at MachineState := SameDefinedState
-
-theorem SameDefinedState::of_equal<M>({left, right: MachineState<M>}, same: left = right): left ≈ right {
-    cong_fn(erase_af<M>, same)
-}
-
-// The defined components, read back.
-theorem SameDefinedState::gprs<M>({left, right: MachineState<M>}, same: left ≈ right): left.gprs = right.gprs {
-    cong_fn(λ (state: MachineState<M>) => state.gprs, same)
-}
-theorem SameDefinedState::rip<M>({left, right: MachineState<M>}, same: left ≈ right): left.rip = right.rip {
-    cong_fn(λ (state: MachineState<M>) => state.rip, same)
-}
-theorem SameDefinedState::memory<M>({left, right: MachineState<M>}, same: left ≈ right): left.memory = right.memory {
-    cong_fn(λ (state: MachineState<M>) => state.memory, same)
-}
-
-// Commuting with the quotient map is respecting the relation.
-theorem same_defined_respects<M>(f: MachineState<M> → MachineState<M>,
-    commute: (state: MachineState<M>) → erase_af(f(state)) = erase_af(f(erase_af(state)))):
-    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, f) {
-    λ left right same => trans(commute(left),
-        trans(cong_fn(λ (state: MachineState<M>) => erase_af(f(state)), same), sym(commute(right))))
-}
-
-theorem erase_af_normal_commute<M>(instruction: Instruction, before: MachineState<M>):
-    erase_af(execute_normal(decoded_canonical(instruction), before)) =
-    erase_af(execute_normal(decoded_canonical(instruction), erase_af(before))) {
-    match instruction {
-        MovRR(_, _) => refl, MovRI(_, _) => refl,
-        AddRR(_, _) => refl, SubRR(_, _) => refl,
-        AndRR(_, _) => refl, OrRR(_, _) => refl, XorRR(_, _) => refl,
-        CmpRR(_, _) => refl, SetBelow(_) => refl, SetLess(_) => refl, SetEqual(_) => refl,
-        TestRR(_, _) => refl, AddRI8(_, _) => refl, AddRI32(_, _) => refl,
-        ShiftOne(_, _) => refl,
-    }
-}
-
-evidence theorem execute_normal_respects_defined<M>({instruction: Instruction}):
-    PreservesRelation(SameDefinedState<M>, SameDefinedState<M>, execute_normal<M>(decoded_canonical(instruction))) {
-    same_defined_respects(execute_normal<M>(decoded_canonical(instruction)),
-        λ state => erase_af_normal_commute(instruction, state))
-}
-
-theorem returned_machine_inj<M>(left, right: MachineState<M>,
-    same: Returned<MachineState<M>, Exception>(left) = Returned(right)):
-    left = right {
-    Option::some_inj(left, right,
-        cong_fn(λ outcome => match outcome {
-            Returned(state) => Some(state),
-            Faulted(_) => None<MachineState<M>>,
-        }, same))
-}
-
 theorem execute_test_same_defined<M>(left, right: Gpr, length: Nat,
     before: MachineState<M>, first, second: Bool):
     SameDefinedState<M>(execute_test(left, right, length, before, first),
@@ -2789,73 +3163,43 @@ theorem execute_shift_same_defined<M>(op: ShiftOp, destination: Gpr, length: Nat
     refl
 }
 
-fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
-    outcome: SemanticOutcome<MachineState<M>, Exception>) → Type
-{
-    match decoded.instruction {
-        MovRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        MovRI(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        AddRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        SubRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        AndRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        OrRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        XorRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        CmpRR(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        SetBelow(_) => outcome = Returned(execute_normal(decoded, before)),
-        SetLess(_) => outcome = Returned(execute_normal(decoded, before)),
-        SetEqual(_) => outcome = Returned(execute_normal(decoded, before)),
-        TestRR(left, right) => ∃ af: Bool,
-            outcome = Returned(execute_test(left, right, decoded.length, before, af)),
-        AddRI8(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        AddRI32(_, _) => outcome = Returned(execute_normal(decoded, before)),
-        ShiftOne(op, destination) => ∃ af: Bool,
-            outcome = Returned(execute_shift(op, destination, decoded.length, before, af)),
+// What an instruction may do from `before`: fault, or return its canonical
+// result with any values in the flags it leaves undefined.
+fn ExecuteOutcome<M>(fault: Bool, normal: MachineState<M>, outcome: SemanticOutcome<MachineState<M>, Exception>) → Type {
+    match fault {
+        True => outcome = Faulted(DivideError),
+        False => ∃ other: Flags, outcome = Returned(fill_undefined(normal, other)),
     }
 }
 
-theorem execute_fixed_same_defined<M>(form: Instruction, length: Nat,
-    valid: ∥1 <= length ∧ length <= 15∥, before, after: MachineState<M>,
-    proof: Returned<MachineState<M>, Exception>(after) =
-        Returned(execute_normal(DecodedInstruction(form, length, valid), before))):
-    SameDefinedState<M>(after, execute_normal(DecodedInstruction(form, length, valid), before)) {
-    SameDefinedState::of_equal(returned_machine_inj(after, execute_normal(DecodedInstruction(form, length, valid), before), proof))
+// The step relation. An instruction reading a flag not defined has none:
+// the manual gives the program no value to read, so a program whose runs
+// read one has no run here, and the compiler's code reads only flags it set
+// itself (`block_reads`, x86_64_block).
+fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
+    outcome: SemanticOutcome<MachineState<M>, Exception>) → Type
+{
+    decoded.instruction.reads_defined(before.flags.defined) = True ∧
+        ExecuteOutcome(decoded.instruction.faults(before.gprs), execute_normal(decoded, before), outcome)
 }
 
-// An ordinary instruction has one result; TEST's only choice is AF.
+theorem execute_outcome_returned<M>(fault: Bool, normal, after: MachineState<M>,
+    executed: ExecuteOutcome(fault, normal, Returned(after))): after ≈ normal {
+    (match fault as λ f => ExecuteOutcome(f, normal, Returned(after)) → after ≈ normal {
+        True => λ faulted => absurd(faulted),
+        False => λ chosen => j(sym(returned_machine_inj(after, fill_undefined(normal, chosen.witness), chosen.proof)),
+            λ state _ => state ≈ normal, SameDefinedState::fill(normal, chosen.witness)),
+    })(executed)
+}
+
+// Whatever an instruction returns is its canonical result where defined.
 theorem execute_same_defined<M>(instruction: Instruction, length: Nat,
     valid: ∥1 <= length ∧ length <= 15∥, before, after: MachineState<M>,
     executed: Execute(DecodedInstruction(instruction, length, valid), before, Returned(after))):
     SameDefinedState<M>(after,
         execute_normal(DecodedInstruction(instruction, length, valid), before)) {
-    (match instruction as λ form => (result: MachineState<M>) →
-        Execute(DecodedInstruction(form, length, valid), before, Returned(result)) →
-        SameDefinedState<M>(result, execute_normal(DecodedInstruction(form, length, valid), before)) {
-        MovRR(d, s) => λ result proof => execute_fixed_same_defined(MovRR(d, s), length, valid, before, result, proof),
-        MovRI(d, value) => λ result proof => execute_fixed_same_defined(MovRI(d, value), length, valid, before, result, proof),
-        AddRR(d, s) => λ result proof => execute_fixed_same_defined(AddRR(d, s), length, valid, before, result, proof),
-        SubRR(d, s) => λ result proof => execute_fixed_same_defined(SubRR(d, s), length, valid, before, result, proof),
-        AndRR(d, s) => λ result proof => execute_fixed_same_defined(AndRR(d, s), length, valid, before, result, proof),
-        OrRR(d, s) => λ result proof => execute_fixed_same_defined(OrRR(d, s), length, valid, before, result, proof),
-        XorRR(d, s) => λ result proof => execute_fixed_same_defined(XorRR(d, s), length, valid, before, result, proof),
-        CmpRR(d, s) => λ result proof => execute_fixed_same_defined(CmpRR(d, s), length, valid, before, result, proof),
-        SetBelow(d) => λ result proof => execute_fixed_same_defined(SetBelow(d), length, valid, before, result, proof),
-        SetLess(d) => λ result proof => execute_fixed_same_defined(SetLess(d), length, valid, before, result, proof),
-        SetEqual(d) => λ result proof => execute_fixed_same_defined(SetEqual(d), length, valid, before, result, proof),
-        AddRI8(d, value) => λ result proof => execute_fixed_same_defined(AddRI8(d, value), length, valid, before, result, proof),
-        AddRI32(d, value) => λ result proof => execute_fixed_same_defined(AddRI32(d, value), length, valid, before, result, proof),
-        TestRR(left, right) => λ result proof =>
-            j(sym(returned_machine_inj(result,
-                execute_test(left, right, length, before, proof.witness), proof.proof)),
-                λ state _ => SameDefinedState<M>(state,
-                    execute_normal(DecodedInstruction(TestRR(left, right), length, valid), before)),
-                execute_test_same_defined(left, right, length, before, proof.witness, False)),
-        ShiftOne(op, d) => λ result proof =>
-            j(sym(returned_machine_inj(result,
-                execute_shift(op, d, length, before, proof.witness), proof.proof)),
-                λ state _ => SameDefinedState<M>(state,
-                    execute_normal(DecodedInstruction(ShiftOne(op, d), length, valid), before)),
-                execute_shift_same_defined(op, d, length, before, proof.witness, False)),
-    })(after, executed)
+    execute_outcome_returned(instruction.faults(before.gprs),
+        execute_normal(DecodedInstruction(instruction, length, valid), before), after, executed.right)
 }
 
 theorem execute_pair_same_defined<M>(instruction: Instruction, length: Nat,
@@ -2877,7 +3221,8 @@ theorem execute_canonical_respects_defined<M>(instruction: Instruction,
     calc {
         after_left ≈ execute_normal(decoded_canonical(instruction), before_left) :=
             execute_same_defined(instruction, canonical_length(instruction), valid, before_left, after_left, left),
-        ≈ execute_normal(decoded_canonical(instruction), before_right) := rel_cong(before_same),
+        ≈ execute_normal(decoded_canonical(instruction), before_right) :=
+            execute_normal_respects_defined(instruction, before_left, before_right, before_same, left.left),
         ≈ after_right := sym(execute_same_defined(instruction, canonical_length(instruction), valid,
             before_right, after_right, right)),
     }
@@ -2893,49 +3238,51 @@ fn ExecuteAt<M>(span: InstructionBytes, decoded: DecodedInstruction,
         ∧ Execute(decoded, before, outcome)
 }
 
+// The canonical result is an outcome wherever the instruction reads only
+// defined flags and does not fault.
+theorem execute_normal_is_allowed<M>(decoded: DecodedInstruction, before: MachineState<M>,
+    reads: decoded.instruction.reads_defined(before.flags.defined) = True,
+    safe: decoded.instruction.faults(before.gprs) = False):
+    Execute(decoded, before, Returned(execute_normal(decoded, before)))
+{
+    ⟨reads, j(sym(safe), λ fault _ => ExecuteOutcome(fault, execute_normal(decoded, before),
+            Returned(execute_normal(decoded, before))),
+        Exists(execute_normal(decoded, before).flags,
+            cong_fn(λ (state: MachineState<M>) => Returned<MachineState<M>, Exception>(state),
+                sym(fill_undefined_self(execute_normal(decoded, before))))))⟩
+}
+
 theorem canonical_execute_normal_is_allowed<M>(instruction: Instruction,
-    before: MachineState<M>):
+    before: MachineState<M>, reads: instruction.reads_defined(before.flags.defined) = True,
+    safe: instruction.faults(before.gprs) = False):
     Execute(decoded_canonical(instruction), before,
         Returned(execute_normal(decoded_canonical(instruction), before)))
 {
-    match instruction {
-        MovRR(_, _) => refl,
-        MovRI(_, _) => refl,
-        AddRR(_, _) => refl,
-        SubRR(_, _) => refl,
-        AndRR(_, _) => refl,
-        OrRR(_, _) => refl,
-        XorRR(_, _) => refl,
-        CmpRR(_, _) => refl,
-        SetBelow(_) => refl,
-        SetLess(_) => refl,
-        SetEqual(_) => refl,
-        TestRR(_, _) => Exists(False, refl),
-        AddRI8(_, _) => refl,
-        AddRI32(_, _) => refl,
-        ShiftOne(_, _) => Exists(False, refl),
-    }
+    execute_normal_is_allowed(decoded_canonical(instruction), before, reads, safe)
 }
 
 theorem canonical_encoding_executes<M>(instruction: Instruction,
-    before: MachineState<M>):
+    before: MachineState<M>, reads: instruction.reads_defined(before.flags.defined) = True,
+    safe: instruction.faults(before.gprs) = False):
     ExecuteAt(encoded_at(before.rip, instruction),
         decoded_canonical(instruction), before,
         Returned(execute_normal(decoded_canonical(instruction), before)))
 {
     And(refl, And(canonical_encoding_decodes(before.rip, instruction),
-        canonical_execute_normal_is_allowed(instruction, before)))
+        canonical_execute_normal_is_allowed(instruction, before, reads, safe)))
 }
 
 theorem decoded_byte_result_executes<M>(bytes: List<BitVec(8)>,
-    result: ByteDecode(bytes), before: MachineState<M>):
+    result: ByteDecode(bytes), before: MachineState<M>,
+    reads: result.instruction.reads_defined(before.flags.defined) = True,
+    safe: result.instruction.faults(before.gprs) = False):
     ExecuteAt(
         InstructionBytes(start := before.rip, bytes := bytes),
         decoded_canonical(result.instruction), before,
         Returned(execute_normal(decoded_canonical(result.instruction), before)))
 {
     And(refl, And(decoded_byte_result_at(before.rip, bytes, result),
-        canonical_execute_normal_is_allowed(result.instruction, before)))
+        canonical_execute_normal_is_allowed(result.instruction, before, reads, safe)))
 }
 
 theorem alternate_mov_encoding_executes<M>(destination, source: Gpr,
@@ -2948,7 +3295,7 @@ theorem alternate_mov_encoding_executes<M>(destination, source: Gpr,
 {
     And(refl, And(
         alternate_mov_encoding_decodes(before.rip, destination, source),
-        canonical_execute_normal_is_allowed(MovRR(destination, source), before)))
+        canonical_execute_normal_is_allowed(MovRR(destination, source), before, refl, refl)))
 }
 
 theorem alternate_add_encoding_executes<M>(destination, source: Gpr,
@@ -2961,7 +3308,7 @@ theorem alternate_add_encoding_executes<M>(destination, source: Gpr,
 {
     And(refl, And(
         alternate_add_encoding_decodes(before.rip, destination, source),
-        canonical_execute_normal_is_allowed(AddRR(destination, source), before)))
+        canonical_execute_normal_is_allowed(AddRR(destination, source), before, refl, refl)))
 }
 
 theorem alternate_sub_encoding_executes<M>(destination, source: Gpr,
@@ -2974,7 +3321,7 @@ theorem alternate_sub_encoding_executes<M>(destination, source: Gpr,
 {
     And(refl, And(
         alternate_sub_encoding_decodes(before.rip, destination, source),
-        canonical_execute_normal_is_allowed(SubRR(destination, source), before)))
+        canonical_execute_normal_is_allowed(SubRR(destination, source), before, refl, refl)))
 }
 
 theorem alternate_cmp_encoding_executes<M>(left, right: Gpr,
@@ -2986,7 +3333,7 @@ theorem alternate_cmp_encoding_executes<M>(left, right: Gpr,
         Returned(execute_normal(decoded_rr(CmpRR(left, right)), before)))
 {
     And(refl, And(alternate_cmp_encoding_decodes(before.rip, left, right),
-        canonical_execute_normal_is_allowed(CmpRR(left, right), before)))
+        canonical_execute_normal_is_allowed(CmpRR(left, right), before, refl, refl)))
 }
 
 theorem external_decoding_executes<M>(span: InstructionBytes,
@@ -3006,7 +3353,7 @@ theorem test_allows_af<M>(left, right: Gpr, length: Nat,
             length := length, valid_length := valid),
         before, Returned(execute_test(left, right, length, before, af)))
 {
-    Exists(af, refl)
+    ⟨refl, Exists(Flags(False, False, af, False, False, False, DefinedFlags::none()), refl)⟩
 }
 
 theorem test_flags_spec(left, right: BitVec(64), af: Bool):
@@ -3018,7 +3365,8 @@ theorem test_flags_spec(left, right: BitVec(64), af: Bool):
             af := af,
             zf := is_zero_bits(64, left.band(right)),
             sf := left.band(right).sign_bit(),
-            of := False)
+            of := False,
+            defined := DefinedFlags::but_af())
 {}
 
 theorem sub_flags_spec(left, right: BitVec(64)):
@@ -3031,7 +3379,8 @@ theorem sub_flags_spec(left, right: BitVec(64)):
                 right.take_low(4, 60)),
             zf := is_zero_bits(64, left.sub(right)),
             sf := left.sub(right).sign_bit(),
-            of := left.signed_overflow_sub(right))
+            of := left.signed_overflow_sub(right),
+            defined := DefinedFlags::all())
 {}
 
 theorem execute_cmp_frames<M>(left, right: Gpr, length: Nat,
@@ -3070,7 +3419,8 @@ theorem execute_normal_test_is_allowed<M>(left, right: Gpr, length: Nat,
             DecodedInstruction(instruction := TestRR(left, right),
                 length := length, valid_length := valid), before)))
 {
-    Exists(False, refl)
+    execute_normal_is_allowed(DecodedInstruction(instruction := TestRR(left, right),
+        length := length, valid_length := valid), before, refl, refl)
 }
 
 inductive CoverageStatus { SemanticsDefined, SemanticsMissing }
@@ -3133,6 +3483,7 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         AddRI8(_, _) => refl,
         AddRI32(_, _) => refl,
         ShiftOne(_, _) => refl,
+        ShiftImm(_, _, _) => refl,
     }
 }
 

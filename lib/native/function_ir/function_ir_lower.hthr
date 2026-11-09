@@ -1224,39 +1224,29 @@ theorem File::compare_keeps<M>(self file: File, values: Valuation(), op: Compare
 }
 
 // ---------------------------------------------------------------------------
-// Shifts by a constant. x86 leaves OF undefined after a shift by more than
-// one, so a shift by `k` is `k` one-bit shifts (only AF undefined, which the
-// model erases), each `x.shift_left(Succ(k)) = x.shift_left(k).shift_left_one()`
-// by definition. Counts the hardware would mask are legalized first
-// (`ShiftOp::legalize`, below).
-
-fn ShiftOp::by(self op: ShiftOp, x: BitVec(64), count: Nat) → BitVec(64) {
-    match op {
-        OpShl => x.shift_left(count),
-        OpShr => x.shift_right(count),
-        OpSar => x.arithmetic_shift_right(count),
-    }
-}
-
-theorem ShiftOp::by_succ(self op: ShiftOp, x: BitVec(64), count: Nat):
-    op.apply(op.by(x, count)) = op.by(x, Succ(count))
-{
-    match op { OpShl => refl, OpShr => refl, OpSar => refl }
-}
-
-theorem ShiftOp::by_zero(self op: ShiftOp, x: BitVec(64)): op.by(x, 0) = x {
-    match op { OpShl => refl, OpShr => refl, OpSar => refl }
-}
-
+// Shifts by a constant: one SHL, SHR or SAR, by one (D1) or by an imm8
+// (C1). The count reaches the instruction already legalized below 64
+// (`ShiftOp::legalize`, below), so the hardware's six-bit mask is the
+// identity on it (`shift_count_of`); a count of zero is no instruction.
 fn ShiftOp::Holds(self op: ShiftOp, values: Valuation(), output, value, count: Nat) → Type {
     values(64, output) = op.by(values(64, value), count)
 }
 
-fn shift_chain(op: ShiftOp, destination: Gpr, count: Nat) → List<Instruction> {
+fn shift_code(op: ShiftOp, destination: Gpr, count: Nat) → List<Instruction> {
     match count {
         Zero => [],
-        Succ(k) => shift_chain(op, destination, k) ++ [ShiftOne(op, destination)],
+        Succ(k) => match k {
+            Zero => [ShiftOne(op, destination)],
+            Succ(_) => [ShiftImm(op, destination, BitVec::ofNat(count))],
+        },
     }
+}
+
+// The six-bit mask leaves a count below 64 alone.
+theorem shift_count_of(count: Nat, fits: count <= 63): shift_count(BitVec::ofNat(count)) = count {
+    let small: (count < Nat::pow(2, 8)) = Nat::le_trans(count, 63, 255, fits, trivial);
+    trans(cong_fn(λ (n: Nat) => n.mod(64), BitVec::toNat_ofNat(8, count, small)),
+        Nat::mod_of_lt(count, 64, fits))
 }
 
 // Two register files that read alike, register by register.
@@ -1295,44 +1285,49 @@ theorem File::represents_agree(self file: File, values: Valuation(), left, right
         represents.left(query)), represents.right⟩
 }
 
-// The chain writes the destination, shifted, and nothing else.
-theorem shift_chain_executes<M>(op: ShiftOp, destination: Gpr, count: Nat): (s: MachineState<M>) →
-    GprsAgree(execute_block_normal(shift_chain(op, destination, count), s).gprs,
+// The shift writes the destination, shifted, and nothing else.
+theorem shift_code_executes<M>(op: ShiftOp, destination: Gpr, count: Nat, fits: count <= 63,
+    s: MachineState<M>):
+    GprsAgree(execute_block_normal(shift_code(op, destination, count), s).gprs,
         write_gpr(destination, op.by(read_gpr(destination, s.gprs), count), s.gprs))
 {
-    match count {
-        Zero => λ s => j(sym(op.by_zero(read_gpr(destination, s.gprs))),
-            λ x _ => GprsAgree(s.gprs, write_gpr(destination, x, s.gprs)),
+    let x = read_gpr(destination, s.gprs);
+    (match count as λ c => c <= 63 →
+            GprsAgree(execute_block_normal(shift_code(op, destination, c), s).gprs,
+                write_gpr(destination, op.by(x, c), s.gprs)) {
+        Zero => λ _ => j(sym(op.by_zero(x)),
+            λ y _ => GprsAgree(s.gprs, write_gpr(destination, y, s.gprs)),
             gprs_agree_write_read(destination, s.gprs)),
-        Succ(k, ih) => λ s => {
-            let x = read_gpr(destination, s.gprs);
-            let before = execute_block_normal(shift_chain(op, destination, k), s);
-            let agree = ih(s);
-            let reads: (read_gpr(destination, before.gprs) = op.by(x, k)) =
-                trans(agree(destination), read_gpr_after_write(destination, op.by(x, k), s.gprs));
-            let shifted: (op.apply(read_gpr(destination, before.gprs)) = op.by(x, Succ(k))) =
-                trans(j(reads, λ y _ => op.apply(read_gpr(destination, before.gprs)) = op.apply(y), refl),
-                    op.by_succ(x, k));
-            let last: GprsAgree(write_gpr(destination, op.apply(read_gpr(destination, before.gprs)), before.gprs),
-                    write_gpr(destination, op.by(x, Succ(k)), s.gprs)) =
-                j(shifted, λ y _ => GprsAgree(write_gpr(destination, op.apply(read_gpr(destination, before.gprs)), before.gprs),
-                        write_gpr(destination, y, s.gprs)),
-                    gprs_agree_write(destination, op.apply(read_gpr(destination, before.gprs)), op.by(x, k),
-                        before.gprs, s.gprs, agree));
-            j(sym(execute_block_append<M>(shift_chain(op, destination, k), [ShiftOne(op, destination)], s)),
-                λ state _ => GprsAgree(state.gprs, write_gpr(destination, op.by(x, Succ(k)), s.gprs)), last)
-        },
-    }
+        Succ(k) => (match k as λ m => Succ(m) <= 63 →
+                GprsAgree(execute_block_normal(shift_code(op, destination, Succ(m)), s).gprs,
+                    write_gpr(destination, op.by(x, Succ(m)), s.gprs)) {
+            Zero => λ _ => j(op.by_succ(x, 0),
+                λ y _ => GprsAgree(write_gpr(destination, op.apply(x), s.gprs),
+                    write_gpr(destination, y, s.gprs)),
+                j(sym(op.by_zero(x)),
+                    λ y _ => GprsAgree(write_gpr(destination, op.apply(x), s.gprs),
+                        write_gpr(destination, op.apply(y), s.gprs)),
+                    λ _ => refl)),
+            Succ(m) => λ fits => j(sym(shift_count_of(Succ(Succ(m)), fits)),
+                λ c _ => GprsAgree(write_gpr(destination, op.by(x, c), s.gprs),
+                    write_gpr(destination, op.by(x, Succ(Succ(m))), s.gprs)),
+                λ _ => refl),
+        }),
+    })(fits)
 }
 
-// `count` one-bit shifts of the value already in the destination.
+// The value already in the destination, shifted by a count below 64 (one
+// past it is refused, and legalization never asks for one).
 fn shift_after(op: ShiftOp, moved: Lowered, destination: Gpr, output, value, count: Nat,
     at: Option<FoundAt(moved.file, Held(value, Word), destination)>) → Option<Lowered>
 {
     match at {
         None => None,
-        Some(_) => Some(Lowered(shift_chain(op, destination, count),
-            moved.file.write(destination, Some(Held(output, Word))))),
+        Some(_) => match count.le_dec(63) {
+            Inr(_) => None,
+            Inl(_) => Some(Lowered(shift_code(op, destination, count),
+                moved.file.write(destination, Some(Held(output, Word))))),
+        },
     }
 }
 
@@ -1344,17 +1339,20 @@ theorem shift_after_keeps<M>(values: Valuation(), op: ShiftOp, moved: Lowered,
 {
     match at {
         None => trivial,
-        Some(here) => λ s represents holds => {
-            let x = read_gpr(destination, s.gprs);
-            let rep: (values(64, value) = x) = here.rep(values, s.gprs, represents);
-            let written: (values(64, output) = op.by(x, count)) =
-                j(rep, λ y _ => values(64, output) = op.by(y, count), holds);
-            moved.file.write(destination, Some(Held(output, Word))).represents_agree(values,
-                execute_block_normal(shift_chain(op, destination, count), s).gprs,
-                write_gpr(destination, op.by(x, count), s.gprs),
-                shift_chain_executes<M>(op, destination, count, s),
-                moved.file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
-                    op.by(x, count), represents, written))
+        Some(here) => match count.le_dec(63) {
+            Inr(_) => trivial,
+            Inl(fits) => λ s represents holds => {
+                let x = read_gpr(destination, s.gprs);
+                let rep: (values(64, value) = x) = here.rep(values, s.gprs, represents);
+                let written: (values(64, output) = op.by(x, count)) =
+                    j(rep, λ y _ => values(64, output) = op.by(y, count), holds);
+                moved.file.write(destination, Some(Held(output, Word))).represents_agree(values,
+                    execute_block_normal(shift_code(op, destination, count), s).gprs,
+                    write_gpr(destination, op.by(x, count), s.gprs),
+                    shift_code_executes<M>(op, destination, count, fits, s),
+                    moved.file.represents_write(values, s.gprs, destination, Some(Held(output, Word)),
+                        op.by(x, count), represents, written))
+            },
         },
     }
 }
@@ -1441,8 +1439,8 @@ theorem ShiftOp::legalize_sound(self op: ShiftOp, x: BitVec(64), count: Nat):
     }
 }
 
-// Selection: a legal shift by `k` is `k` one-bit shifts, and zero is an
-// immediate MOV.
+// Selection: a legal shift by `k` is one shift instruction (none for zero),
+// and zero is an immediate MOV.
 fn File::select_shift(self file: File, op: ShiftOp, destination: Gpr, output, value: Nat, legal: ShiftLegal) → Option<Lowered> {
     match legal {
         ShiftsBy(by) => file.shift_by(op, destination, output, value, by),

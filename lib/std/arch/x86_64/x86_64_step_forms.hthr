@@ -104,7 +104,16 @@ fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) 
                     None => None,
                     Some(op) => emitted_form(ShiftOne(op, rm)),
                 },
-                Inr(_) => decode_rr_form(opcode, rm, reg),
+                Inr(_) => match opcode.eq_dec(BitVec::ofNat(0xc1)) {
+                    Inl(_) => match rest {
+                        Nil => None,
+                        Cons(b0, _) => match ShiftOp::of_extension(reg) {
+                            None => None,
+                            Some(op) => emitted_form(ShiftImm(op, rm, b0)),
+                        },
+                    },
+                    Inr(_) => decode_rr_form(opcode, rm, reg),
+                },
             },
             Inl(_) => match rest {
                 Nil => None,
@@ -425,6 +434,11 @@ theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
             OpShl => cong_fn(λ (d: Gpr) => emitted_form(ShiftOne(OpShl, d)), rm_of_fields(destination, Rsp, True, True)),
             OpShr => cong_fn(λ (d: Gpr) => emitted_form(ShiftOne(OpShr, d)), rm_of_fields(destination, Rbp, True, True)),
             OpSar => cong_fn(λ (d: Gpr) => emitted_form(ShiftOne(OpSar, d)), rm_of_fields(destination, Rdi, True, True)),
+        },
+        ShiftImm(op, destination, immediate) => match op {
+            OpShl => cong_fn(λ (d: Gpr) => emitted_form(ShiftImm(OpShl, d, immediate)), rm_of_fields(destination, Rsp, True, True)),
+            OpShr => cong_fn(λ (d: Gpr) => emitted_form(ShiftImm(OpShr, d, immediate)), rm_of_fields(destination, Rbp, True, True)),
+            OpSar => cong_fn(λ (d: Gpr) => emitted_form(ShiftImm(OpSar, d, immediate)), rm_of_fields(destination, Rdi, True, True)),
         },
     }
 }

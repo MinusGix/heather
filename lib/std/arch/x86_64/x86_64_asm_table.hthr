@@ -374,12 +374,14 @@ theorem LabelTable::checked_named(self t: LabelTable, whole: Prog,
 }
 
 // The pass over the whole program, with the table's depth, is its layout.
-theorem LabelTable::laid_out_of(self t: LabelTable, p: Prog, end: Nat, ok: t.checked(p, t.depth, end).IsTrue(), holes: p.no_holes().IsTrue()):
+theorem LabelTable::laid_out_of(self t: LabelTable, p: Prog, end: Nat, ok: t.checked(p, t.depth, end).IsTrue(), holes: p.no_holes().IsTrue(),
+    reads: p.blocks_read_own().IsTrue()):
     p.laid_out().IsTrue() {
     let has = λ (k: Nat) (h: t.has(Succ(k)).IsTrue()) => Bool::is_true_and(Succ(t.index_of(Succ(k))).leb(t.depth), asm_same(t.name_at(t.index_of(Succ(k))), Succ(k)), h);
     p.laid_out_intro(holes, t.checked_unique(p, t.depth, end, ok),
         t.checked_lands(p, λ k h => t.target_at(p, t.depth, end, k, ok, has(k, h).left, has(k, h).right), p, t.depth, end, ok),
-        t.checked_named(p, λ k h => t.has_named(p, t.depth, end, k, ok, has(k, h).left, has(k, h).right), p, t.depth, end, ok))
+        t.checked_named(p, λ k h => t.has_named(p, t.depth, end, k, ok, has(k, h).left, has(k, h).right), p, t.depth, end, ok),
+        reads)
 }
 
 // ---------------------------------------------------------------------------

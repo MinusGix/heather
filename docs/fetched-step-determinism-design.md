@@ -10,23 +10,32 @@ boundary as it stood after the first slices (2026-09-27); §5–§7 close it.
 
 ## 1. The exact observation
 
-`TEST r64, r64` leaves AF architecturally undefined. The `Execute` relation
-correctly permits either value. Thus equality of complete `MachineState`s is
-false even for two executions of the same decoded instruction. The relation
-`SameDefinedState` compares all registers, RIP, memory, and CF/PF/ZF/SF/OF;
-it omits AF. It is defined as equality after `erase_af`, which supplies a
-canonical representative of a state: the pullback of `=` along `erase_af`
-(`SameDefinedState::pullback`), registered as an `Equivalence` and written `≈`
-at `MachineState`. `execute_pair_same_defined` proves that two executions of
-the same decoded ordinary instruction agree on this observation. The proof
-uses the functional `execute_normal` as a common state and treats TEST
-separately.
+`TEST r64, r64` leaves AF architecturally undefined, and IDIV, MUL and the
+shifts by an imm8 leave others. The flags carry a mask of which are defined
+(`DefinedFlags`, the `defined` field of `Flags`), and the `Execute` relation
+permits any value in an undefined flag. Thus equality of complete
+`MachineState`s is false even for two executions of the same decoded
+instruction. The relation `SameDefinedState` compares all registers, RIP,
+memory, the mask and the defined flags. It is defined as equality after
+`erase_undefined`, which clears each undefined flag and so supplies a
+canonical representative of a state: the pullback of `=` along
+`erase_undefined` (`SameDefinedState::pullback`), registered as an
+`Equivalence` and written `≈` at `MachineState`.
+`execute_pair_same_defined` proves that two executions of the same decoded
+ordinary instruction agree on this observation, through the functional
+`execute_normal` as a common state. An instruction that reads an undefined
+flag (SETcc, JCC) has no `Execute` at all (docs/runtime-fn-setups-design.md
+§16.13, round 5), so readers are related only where what they read is
+defined (`same_defined_respects_reading`).
 
 The observation is preserved by each emitted operation. A function that
-commutes with erasing AF respects the relation (`same_defined_respects`);
-executing an ordinary instruction or branch, a load's result and a store's
-result each commute, and each is registered as an `evidence theorem` of
-`PreservesRelation`, so `rel_cong` finds it. The byte-load proof additionally
+commutes with erasing respects the relation (`same_defined_respects`);
+a load's result and a store's result each commute and are registered as
+`evidence theorem`s of `PreservesRelation`, so `rel_cong` finds them; an
+ordinary instruction or branch commutes only where the flags it reads are
+defined, so it is stated with that premise
+(`execute_normal_respects_defined`, `short_control_respects_defined`,
+`near_control_respects_defined`) and not as evidence. The byte-load proof additionally
 uses equality of memory and the base register to show both executions read
 the same byte; the store proof uses equality of the base, source, and memory.
 These yield `execute_canonical_respects_defined`,
@@ -131,7 +140,7 @@ fetched, no step runs, from that state or a related one.
   the same responses have equal event lists. At each syscall the request is
   read off related registers and memory (`writes_from_unique` for a write's
   bytes), and Linux's returns read only defined components
-  (`same_defined_respects`, by `erase_af` commuting with each return).
+  (`same_defined_respects`, by `erase_undefined` commuting with each return).
 - `linux_runs_every` is the one-state corollary. It is not vacuous:
   `claim_is_run` turns a claim into a run (zeros for RCX and R11, an empty
   junk buffer) and `same_responses_refl` matches its answers.

@@ -136,7 +136,8 @@ theorem Site::moves_branch_on<M>(self site: Site<M>, writes: ByteWrites<M>, fits
         let tested = start.tested(test);
         let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([instruction]), test_at);
         let ran = block_steps(site.fetch, site.data, [instruction], s,
-            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([instruction]), address), item));
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([instruction]), address), item),
+            test.reads(s));
         let u = execute_block_normal([instruction], s);
         let stepped = test.steps<M>(s);
         let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
@@ -147,7 +148,7 @@ theorem Site::moves_branch_on<M>(self site: Site<M>, writes: ByteWrites<M>, fits
         let jcc = site.item_resident(fits, s.memory, resident, branch_k, tested, 0, Jcc(test.cc(), else_name), branch_at);
         let step = near_fetched_step(site.fetch, site.data, control, u,
             resident_state(site.fetch, near_control_bytes(control), s.memory, next_rip(site.origin, prog_len(tested)), u,
-                ran.right.right, u_rip, jcc));
+                ran.right.right, u_rip, jcc), test.jcc_reads(s));
         let v = execute_near_control(control, u);
         let entry = machine_steps_of_fetched(site.fetch, site.data, writes, s, v,
             fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step)));
@@ -202,12 +203,13 @@ theorem Site::moves_branch<M>(self site: Site<M>, writes: ByteWrites<M>, fits: F
 // A pure block at a label, its condition on registers and memory together.
 theorem Site::moves_block<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
     before: Prog, name: Nat, instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Block(instructions)),
+    reads: block_reads(instructions, DefinedFlags::none()) = True,
     pre, post: Gprs → M → Type,
     step: (s: MachineState<M>) → (memory: M) → pre(s.gprs, memory) → post(execute_block_normal(instructions, s).gprs, memory)):
     site.Moves(writes, prog_len(before), prog_len(before) + block_length(instructions),
         λ (s: MachineState<M>) => pre(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory)) {
     site.moves_of_pure(writes, prog_len(before), prog_len(before) + block_length(instructions), pre, post,
-        λ memory => site.runs_block(fits, k, before, name, instructions, at, λ (g: Gprs) => pre(g, memory),
+        λ memory => site.runs_block(fits, k, before, name, instructions, at, reads, λ (g: Gprs) => pre(g, memory),
             λ (g: Gprs) => post(g, memory), λ s held => step(s, memory, held)))
 }
 
@@ -245,7 +247,7 @@ theorem Site::moves_test<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fil
         let tested = start.test_label(register);
         let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([test]), test_at);
         let ran = block_steps(site.fetch, site.data, [test], s,
-            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([test]), address), item));
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([test]), address), item), refl);
         let u = execute_block_normal([test], s);
         let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
             cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length([test])), here),
@@ -255,7 +257,7 @@ theorem Site::moves_test<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fil
         let jcc = site.item_resident(fits, s.memory, resident, branch_k, tested, 0, Jcc(E, else_name), branch_at);
         let step = near_fetched_step(site.fetch, site.data, control, u,
             resident_state(site.fetch, near_control_bytes(control), s.memory, next_rip(site.origin, prog_len(tested)), u,
-                ran.right.right, u_rip, jcc));
+                ran.right.right, u_rip, jcc), refl);
         let v = execute_near_control(control, u);
         let entry = machine_steps_of_fetched(site.fetch, site.data, writes, s, v,
             fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, step)));

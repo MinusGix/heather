@@ -226,8 +226,11 @@ fn {prefix}_code() → Prog {{ {prefix}_code_{last}() }}
 {layout}
 theorem {prefix}_holes(): {prefix}_code().no_holes().IsTrue() {{ trivial }}
 
+// Every block reads only flags it set itself (issues/x86-undefined-flags.md).
+theorem {prefix}_reads(): {prefix}_code().blocks_read_own().IsTrue() {{ trivial }}
+
 theorem {prefix}_laid(): {prefix}_code().laid_out().IsTrue() {{
-    {prefix}_code().laid_out_intro({prefix}_holes(), {prefix}_unique_0(), {prefix}_lands_0(), {prefix}_named_0())
+    {prefix}_code().laid_out_intro({prefix}_holes(), {prefix}_unique_0(), {prefix}_lands_0(), {prefix}_named_0(), {prefix}_reads())
 }}
 
 theorem {prefix}_lowers(): lower_program({prefix}_program(), {prefix}_placement()) = Some({prefix}_code()) {{
@@ -553,6 +556,10 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
                         14 => {
                             let op = *["OpShl", "OpShr", "OpSar"].get(take()? as usize).ok_or_else(bad)?;
                             format!("ShiftOne({op}, {})", gpr(take()?)?)
+                        }
+                        15 => {
+                            let op = *["OpShl", "OpShr", "OpSar"].get(take()? as usize).ok_or_else(bad)?;
+                            format!("ShiftImm({op}, {}, {})", gpr(take()?)?, word(8, take()?))
                         }
                         _ => return Err(bad()),
                     };
