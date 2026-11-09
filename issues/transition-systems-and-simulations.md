@@ -1,6 +1,6 @@
 ---
 title: One transition-system library: closures, invariants, simulation diagrams
-status: open
+status: closed
 labels: [relation,native,semantics]
 area: mathematics
 milestone: [hih-passes]
@@ -40,3 +40,27 @@ monotonicity, and two FunctionIR passes compose by diagram composition.
 
 - **[[itree-iter-simulation]]** and `itree_sim.hthr` own tree-side
   simulation. Assumed here: nothing; this issue is the state-side partner.
+
+## Log
+
+- 2026-11-09: Built `lib/std/relation/transition.hthr`: `StarN`/`Star`/`Plus`
+  and their kit (cons, snoc, append, split, cases, map, monotone);
+  `Invariant`, `Restrict`, `Reachable` (least invariant); `Deterministic`,
+  `Stuck`, equal-length runs end together, runs are prefixes of one another,
+  stuck ends agree; `LockstepDiagram`/`PlusDiagram`/`StarDiagram` (index type
+  and any order `lt`), `runs`, vertical `compose` (star: lexicographic on the
+  second's index under `Plus(lt₂)`, then the first's, as CompCert), and
+  `backward` into a deterministic target. relation.hthr's `Steps`/`Reaches`
+  moved there as `StarN`/`Star`; `FetchedRuns`/`FetchedSteps`,
+  `MachineRuns`/`MachineSteps`, `LinuxStepsN`/`LinuxSteps`/`LinuxPlus` are now
+  definitions at their step, their kits one-line citations, and the four
+  inclusions `StarN::monotone`/`Star::monotone` at a named step inclusion.
+  Probes (lib/_tests/std/relation/transition_tests.hthr) compose a stuttering
+  pass (no-ops dropped) with a lock-step one. The last "done when" — two
+  FunctionIR passes composed — needs a small-step reading of a leaf first,
+  so it moves to [[function-ir-passes-as-diagrams]]. Residue filed:
+  [[transition-divergence-preservation]] (well-founded orders, `Forever`,
+  behaviours), [[labelled-transition-systems]] (traces; `LinuxRuns` as an
+  instance), [[transition-run-tactics]] (runs by evaluation, a `steps`
+  tactic, invariant splits), [[transition-run-predicates-migration]]
+  (`ExecuteSteps`, `Site::Runs`, `LoopRuns`, `SimPaid`).

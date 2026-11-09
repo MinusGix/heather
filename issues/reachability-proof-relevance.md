@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,logic,semantics,proofs,design]
 area: heather-in-heather
 created: 2026-08-26
-updated: 2026-08-26
+updated: 2026-11-09
 ---
 
 `Reaches(R, a, b)` currently exposes an existential fuel and its exact `Steps`
@@ -20,5 +20,9 @@ client proofs demonstrate a real distinction.
 
 ## What it assumes from elsewhere
 
-- **[[relational-semantics-refinement-kit]]** owns `Steps` and `Reaches`.
+- **[[transition-systems-and-simulations]]** owns `StarN` and `Star` (once `Steps` and `Reaches`).
 - **[[squash-library-api]]** owns the available propositional-truncation tools.
+
+## Log
+
+- 2026-11-09: `Steps`/`Reaches` moved to lib/std/relation/transition.hthr as `StarN`/`Star` ([[transition-systems-and-simulations]]); the question stands for `Star`.

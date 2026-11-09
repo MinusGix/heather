@@ -1,0 +1,131 @@
+// Probes of `lib/std/relation/transition.hthr`: runs, determinism and
+// simulation diagrams at concrete systems, and a stuttering pass composed
+// with a lock-step one. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import transition; import relation; import logic; import nat; import pair; import omega;
+
+theorem concatenate<A>(R: A → A → Type, m, n: Nat, a, b, c: A,
+    ab: StarN(R, m, a, b), bc: StarN(R, n, b, c)): StarN(R, m + n, a, c)
+{ StarN::append(R, m, n, a, b, c, ab, bc) }
+
+theorem refine_each_step<A>(R, S: A → A → Type, h: Included(R, S),
+    n: Nat, a, b: A, path: StarN(R, n, a, b)): StarN(S, n, a, b)
+{ StarN::monotone(R, S, h, n, a, b, path) }
+
+// ---------------------------------------------------------------------------
+// A counter: one step adds one.
+
+fn Tick(a, b: Nat) → Type { b = Succ(a) }
+
+theorem tick_det(): Deterministic(Tick) {
+    λ a b c left right => trans(left, sym(right))
+}
+
+// Three ticks from zero, by evaluation of the counted run.
+theorem three_ticks(): StarN(Tick, 3, 0, 3) {
+    StarN::cons(Tick, 2, 0, 1, 3, refl, StarN::cons(Tick, 1, 1, 2, 3, refl, StarN::one(Tick, 2, 3, refl)))
+}
+
+theorem ticks_end_together(b: Nat, run: StarN(Tick, 3, 0, b)): b = 3 {
+    StarN::determined(Tick, tick_det(), 3, 0, b, 3, run, three_ticks())
+}
+
+// Even numbers are an invariant of the double tick.
+fn TickTwice(a, b: Nat) → Type { b = Succ(Succ(a)) }
+fn Even(n: Nat) → Type { ∃ k: Nat, n = k + k }
+
+theorem even_kept(): Invariant(TickTwice, Even) {
+    λ a b even step => {
+        let k = even.witness;
+        let was: (a = k + k) = even.proof;
+        let now: (b = Succ(Succ(a))) = step;
+        Exists(Succ(k), { omega })
+    }
+}
+
+theorem reached_even(n: Nat, reached: Reachable(TickTwice, λ a => a = 0, n)): Even(n) {
+    Reachable::least(TickTwice, λ a => a = 0, Even, even_kept(),
+        λ a zero => Exists(0, zero), n, reached)
+}
+
+// A countdown stops only at zero, so any two stopped runs agree.
+fn Down(a, b: Nat) → Type { a = Succ(b) }
+
+theorem down_det(): Deterministic(Down) {
+    λ a b c left right => Nat::succ_inj(b, c, trans(sym(left), right))
+}
+
+theorem zero_stuck(): Stuck(Down, 0) { λ b step => Nat::zero_ne_succ(b, step) }
+
+theorem stops_at_zero(a, b: Nat, run: Star(Down, a, b), stopped: Stuck(Down, b), down: Star(Down, a, 0)): b = 0 {
+    Star::stuck_determined(Down, down_det(), a, b, 0, run, stopped, down, zero_stuck())
+}
+
+// ---------------------------------------------------------------------------
+// A pass that drops no-ops, composed with one that doubles.
+//
+// The source counts with pending no-ops: a state is (no-ops left, count).
+// A no-op step is a stutter of the counter (its index, the no-ops left,
+// goes down); a counting step is one tick. The counter is then simulated in
+// lock-step by a counter that counts in twos.
+
+fn Skip(a, b: Pair<Nat, Nat>) → Type {
+    match a.fst {
+        Zero => b = Pair(0, Succ(a.snd)),
+        Succ(k) => b = Pair(k, a.snd),
+    }
+}
+
+fn Below(i, j: Nat) → Type { Succ(i) = j }
+
+fn Drops(i: Nat, a: Pair<Nat, Nat>, b: Nat) → Type { (a.fst = i) ∧ (a.snd = b) }
+
+theorem drops_diagram(): StarDiagram(Skip, Tick, Below, Drops) {
+    λ i a a2 b => match a {
+        Pair(pending, _) => match pending {
+            Zero => λ m s => Exists(0, Exists(Succ(b), ⟨Inl(Plus::one(Tick, b, Succ(b), refl)),
+                j(sym(s), λ x _ => Drops(0, x, Succ(b)), ⟨refl, Nat::cong_succ(m.right)⟩)⟩)),
+            Succ(k) => λ m s => Exists(k, Exists(b, ⟨Inr(⟨Star::refl(Tick, b), m.left⟩),
+                j(sym(s), λ x _ => Drops(k, x, b), ⟨refl, m.right⟩)⟩)),
+        },
+    }
+}
+
+fn Doubled(b, c: Nat) → Type { c = b + b }
+
+theorem doubled_diagram(): LockstepDiagram(Tick, TickTwice, Doubled) {
+    λ b b2 c matched step => {
+        let was: (c = b + b) = matched;
+        let now: (b2 = Succ(b)) = step;
+        Exists(Succ(Succ(c)), ⟨refl, { omega }⟩)
+    }
+}
+
+// The two passes compose: the doubled counter simulates the no-op source.
+theorem passes_compose(): StarDiagram<Pair<Nat, Nat>, Nat, Pair<True, Nat>>(Skip, TickTwice,
+    λ x y => StarComposeLt(Below, λ p q => False, x, y),
+    λ k a c => StarCompose(Drops, λ u b c2 => Doubled(b, c2), k, a, c)) {
+    StarDiagram::compose(Skip, Tick, TickTwice, Below, λ p q => False, Drops, λ u b c2 => Doubled(b, c2),
+        drops_diagram(),
+        PlusDiagram::star(Tick, TickTwice, λ p q => False, Doubled,
+            LockstepDiagram::plus(Tick, TickTwice, Doubled, doubled_diagram())))
+}
+
+// And so a run of the source with its no-ops is a run of the doubled
+// counter.
+theorem source_runs_doubled(n: Nat, a, a2: Pair<Nat, Nat>, run: StarN(Skip, n, a, a2)):
+    ∃ k: Pair<True, Nat>, ∃ c2: Nat, Star(TickTwice, a.snd + a.snd, c2) ∧
+        StarCompose(Drops, λ u b c2 => Doubled(b, c2), k, a2, c2) {
+    StarDiagram::runs(Skip, TickTwice, λ x y => StarComposeLt(Below, λ p q => False, x, y),
+        λ k s c => StarCompose(Drops, λ u b c2 => Doubled(b, c2), k, s, c), passes_compose(),
+        n, Pair(trivial, a.fst), a, a2, a.snd + a.snd, Exists(a.snd, ⟨⟨refl, refl⟩, refl⟩), run)
+}
+
+// Into a deterministic target a forward diagram is backward: the counter's
+// tick from a matched state is the no-op source's next counting step, or
+// the source stutters toward it.
+theorem drops_backward(i: Nat, a, a2: Pair<Nat, Nat>, b: Nat, matched: Drops(i, a, b), step: Skip(a, a2)):
+    ∃ j: Nat, (∃ b3: Nat, Star(Tick, Succ(b), b3) ∧ Drops(j, a2, b3)) ∨ (Below(j, i) ∧ Drops(j, a2, b)) {
+    StarDiagram::backward(Skip, Tick, Below, Drops, drops_diagram(), tick_det(), i, a, a2, b, Succ(b),
+        matched, refl, step)
+}
