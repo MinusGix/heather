@@ -14,6 +14,7 @@ pub mod fmt;
 pub mod layer;
 pub mod level;
 mod premises;
+mod recording;
 pub mod rec;
 pub mod reduce;
 pub mod stats;

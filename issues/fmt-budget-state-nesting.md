@@ -1,10 +1,10 @@
 ---
 title: Hold the bounded Debug formatter's state in one enum
-status: open
+status: closed
 labels: [kernel,state-machine,fmt]
 area: kernel
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 Hold the bounded `Debug` formatter's state in one enum, so `write_exact` nested inside a bounded `{:?}` cannot re-arm the budget or underflow the depth.
@@ -20,3 +20,6 @@ Review: `docs/kernel-implicit-state-review.md` §7.
 ## Proposal
 
 `Cell<FmtState>` with `enum FmtState { Idle, Bounded { remaining, depth }, Exact { depth } }`. `write_exact`'s guard saves and restores the whole state, and `node`'s outermost test matches `Idle`. Add the reproducing test (a `Debug` impl calling `write_exact` on a 600-deep `Succ` chain inside `node`) to `fmt.rs`'s tests.
+
+## Log
+- 2026-11-09: done. One `Cell<FmtState>` (`Idle`, `Bounded { remaining, depth }`, `Exact`); `write_exact` saves and restores the whole state; an outermost node resets to `Idle` in a drop guard, so a panicking `Debug` impl cannot strand the thread mid-budget either. Regression test `fmt::tests::write_exact_inside_a_bounded_format_resumes_it` panics on the old code.

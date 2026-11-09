@@ -45,13 +45,35 @@ const NODE_BUDGET: isize = 512;
 /// are several KB each, and test threads get a 2 MB stack).
 const DEPTH_BUDGET: u32 = 64;
 
+/// Where the current thread is in a format call. One value rather than a
+/// counter, a depth and a flag, so that a mode entered inside another
+/// (`write_exact` from inside a bounded `{:?}`) saves and restores the
+/// whole of it (docs/kernel-implicit-state-review.md §7).
+#[derive(Clone, Copy)]
+enum FmtState {
+    /// No format call is in progress: the next node is an outermost one
+    /// and arms the budget.
+    Idle,
+    /// Inside a bounded format call: nodes left to print, and the current
+    /// nesting depth.
+    Bounded { remaining: isize, depth: u32 },
+    /// Inside [`write_exact`]: nothing is elided, so nothing is counted.
+    Exact,
+}
+
 thread_local! {
-    /// Remaining node budget; negative means "no format call in progress".
-    static REMAINING: Cell<isize> = const { Cell::new(-1) };
-    /// Current nesting depth within the outermost format call.
-    static DEPTH: Cell<u32> = const { Cell::new(0) };
-    /// Set for the duration of [`write_exact`]: no elision at all.
-    static EXACT: Cell<bool> = const { Cell::new(false) };
+    static STATE: Cell<FmtState> = const { Cell::new(FmtState::Idle) };
+}
+
+/// Puts the thread back to [`FmtState::Idle`] when an outermost node ends,
+/// even by a panic inside a `Debug` impl, which would otherwise leave every
+/// later `{:?}` on the thread continuing a spent budget.
+struct EndOutermost;
+
+impl Drop for EndOutermost {
+    fn drop(&mut self) {
+        STATE.with(|s| s.set(FmtState::Idle));
+    }
 }
 
 /// Wrap one node's formatting: arms the budget at the outermost call,
@@ -61,32 +83,27 @@ pub(crate) fn node(
     f: &mut fmt::Formatter<'_>,
     body: impl FnOnce(&mut fmt::Formatter<'_>) -> fmt::Result,
 ) -> fmt::Result {
-    REMAINING.with(|r| {
-        DEPTH.with(|d| {
-            let exact = EXACT.with(Cell::get);
-            let outermost = r.get() < 0;
-            if outermost {
-                // In exact mode the counter must never reach 0, or a nested
-                // call would mistake `r < 0` for "outermost" and re-arm.
-                r.set(if exact { isize::MAX } else { NODE_BUDGET });
-                d.set(0);
-            }
-            let spent = !exact && (r.get() == 0 || d.get() >= DEPTH_BUDGET);
-            let res = if spent {
-                f.write_str("…")
-            } else {
-                r.set(r.get() - 1);
-                d.set(d.get() + 1);
-                let res = body(f);
-                d.set(d.get() - 1);
-                res
-            };
-            if outermost {
-                r.set(-1);
-            }
-            res
-        })
-    })
+    let (remaining, depth, _outermost) = match STATE.with(Cell::get) {
+        FmtState::Exact => return body(f),
+        FmtState::Bounded { remaining, depth } => (remaining, depth, None),
+        FmtState::Idle => (NODE_BUDGET, 0, Some(EndOutermost)),
+    };
+    if remaining <= 0 || depth >= DEPTH_BUDGET {
+        return f.write_str("…");
+    }
+    STATE.with(|s| s.set(FmtState::Bounded { remaining: remaining - 1, depth: depth + 1 }));
+    let res = body(f);
+    // The children spent from the budget; the depth is this node's again.
+    STATE.with(|s| {
+        let remaining = match s.get() {
+            FmtState::Bounded { remaining, .. } => remaining,
+            // A child restores whatever it replaced, so this is not met;
+            // if it were, an empty budget is the safe answer.
+            FmtState::Idle | FmtState::Exact => 0,
+        };
+        s.set(FmtState::Bounded { remaining, depth });
+    });
+    res
 }
 
 /// Render `value` with **no elision at all**, streaming it into `sink`.
@@ -113,16 +130,17 @@ pub(crate) fn node(
 /// Not for diagnostics, and never for a `{:?}` reached by accident: every
 /// use should be a deliberate "I want the exact structure".
 pub fn write_exact(sink: &mut impl fmt::Write, value: &impl fmt::Debug) -> fmt::Result {
-    struct Guard(bool);
-    impl Drop for Guard {
+    struct Restore(FmtState);
+    impl Drop for Restore {
         fn drop(&mut self) {
-            EXACT.with(|e| e.set(self.0));
+            STATE.with(|s| s.set(self.0));
         }
     }
     // A guard, not a plain reset: `write!` can return early on sink error,
-    // and a leaked `EXACT` would silently unbound every later `{:?}`. It
-    // restores the previous value so a nested call re-nests correctly.
-    let _guard = Guard(EXACT.with(|e| e.replace(true)));
+    // and a leaked `Exact` would silently unbound every later `{:?}`. It
+    // restores the whole state it replaced, so a call nested inside a
+    // bounded format resumes that format's budget and depth exactly.
+    let _restore = Restore(STATE.with(|s| s.replace(FmtState::Exact)));
     write!(sink, "{value:?}")
 }
 
@@ -742,6 +760,44 @@ mod tests {
         let b = format!("{t:?}");
         assert_eq!(a, b);
         assert!(a.contains('…'));
+    }
+
+    /// `write_exact` nested inside a bounded `{:?}` resumes the bounded
+    /// format where it left it. With three separate cells the exact walk
+    /// ran the outer budget below zero, the next node took itself for an
+    /// outermost one and reset the depth, and unwinding the outer frames
+    /// underflowed it: a debug-build panic (§7 of
+    /// docs/kernel-implicit-state-review.md).
+    #[test]
+    fn write_exact_inside_a_bounded_format_resumes_it() {
+        let deep = |n: usize| {
+            let mut t = Rc::new(Term::Zero);
+            for _ in 0..n {
+                t = Rc::new(Term::Succ(t));
+            }
+            t
+        };
+        struct Nested(Rc<Term>, Rc<Term>);
+        impl std::fmt::Debug for Nested {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                super::node(f, |f| {
+                    let mut exact = String::new();
+                    super::write_exact(&mut exact, &self.0)?;
+                    write!(f, "{} | {:?}", exact.len(), self.1)
+                })
+            }
+        }
+        let n = Nested(deep(600), deep(2000));
+        let s = format!("{n:?}");
+        // The exact walk printed all 600 successors; the bounded part after
+        // it is still bounded, and elided.
+        let (len, rest) = s.split_once(" | ").expect("both parts");
+        assert!(len.parse::<usize>().unwrap() > 600);
+        assert!(rest.contains('…') && rest.len() < 16 * 1024, "the bounded part stays bounded");
+        // The thread is idle again: a later format re-arms a full budget.
+        let t = deep(2000);
+        assert_eq!(format!("{t:?}"), format!("{t:?}"));
+        assert!(!format!("{:?}", deep(3)).contains('…'), "a small term prints in full");
     }
 
     #[test]
