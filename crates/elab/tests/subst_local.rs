@@ -180,8 +180,16 @@ fn an_annotated_let_and_an_argument() {
 
 #[test]
 fn neither_side_a_local_is_refused() {
-    let e = bad("theorem t(a, b: Nat, h: a + 0 = b + 0, k: a <= 3): b <= 3 { subst(h, k) }");
+    let e = bad("theorem t(a, b: Nat, h: a + 1 = b + 1, k: a <= 3): b <= 3 { subst(h, k) }");
     assert!(e.contains("neither side") && e.contains("rewrite(h, e)"), "{e}");
+}
+
+// A side that only reduces to a local is that local: `a + 0` is `a`
+// (issues/pattern-variables-not-rewritable.md, where a pattern variable
+// re-bound by a split is the case that needs it).
+#[test]
+fn a_side_reducing_to_a_local_is_eliminated() {
+    ok("theorem t(a, b: Nat, h: a + 0 = b + 0, k: a <= 3): b <= 3 { subst(h, k) }");
 }
 
 #[test]

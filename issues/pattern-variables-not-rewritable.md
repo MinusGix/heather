@@ -1,6 +1,6 @@
 ---
 title: A matched list's pattern variables are not locals to subst, and rewrite misses them
-status: open
+status: closed
 labels: [elaboration, rewrite, proofs]
 area: language
 created: 2026-11-09
@@ -36,3 +36,7 @@ pattern variables in.
 A pattern variable is a local for `subst` (eliminated by reverting what
 mentions it, as for a λ-bound one) and an occurrence for `rewrite`, and the
 helpers in `std/perm` can be inlined.
+
+## Log
+
+- 2026-11-09: Done. Where `subst` or `rewrite` would refuse a side that is a chain of pair projections from a local (a pattern variable is one), the local is taken apart into binders first (`split_projection`, crates/elab/src/subst_local.rs; docs/equation-rewrite-design.md §8), every later local and the goal bound again over them, and the projections substituted back after: Σ-η makes the result the goal's type. `rewrite` also tries the local a left side reduces to. Fires only where the old route refused. std/perm's six head-case helpers (`mem_back`, `picks_len_head`, `occurrences_picks_head`, `picks_swap_head`, `perm_picks_head`, `picks_perm_head`) are inlined and gone; probes in lib/_tests/lang/pattern_variable_tests.hthr.

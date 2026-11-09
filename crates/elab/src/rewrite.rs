@@ -107,7 +107,31 @@ impl Elaborator {
             return Ok(Rc::unwrap_or_clone(step.emit(&plan, Polarity::Backward, Rc::new(case), 0)?));
         }
         let (proof, Equation { level, ty, lhs, rhs }) = self.rewrite_instance(cx, h, proof, &proof_ty, goal, GOAL)?;
-        let motive = self.rewrite_motive(cx, h, at, goal, GOAL, &ty, &level, &lhs, &rhs, lvl)?;
+        let (lhs, motive) = match self.rewrite_motive(cx, h, at, goal, GOAL, &ty, &level, &lhs, &rhs, lvl) {
+            Ok(motive) => (lhs, motive),
+            // A left side that is a pattern variable — a projection of the
+            // matched value, which the goal mentions whole — is the local it
+            // reduces to, or becomes one once the value is taken apart
+            // (issues/pattern-variables-not-rewritable.md). Only here, where
+            // the rewrite was about to refuse.
+            Err(e) => {
+                let local = self.reduces_to_local(cx, &lhs, h.span).and_then(|p| {
+                    let x = Rc::new(Term::Var(LocalVar((cx.names.len() - 1 - p) as u32)));
+                    let motive = self.rewrite_motive(cx, h, at, goal, GOAL, &ty, &level, &x, &rhs, lvl).ok()?;
+                    Some((x, motive))
+                });
+                match local {
+                    Some(found) => found,
+                    None => {
+                        let Some(split) = self.split_projection(cx, &lhs, goal, h.span) else {
+                            return Err(e);
+                        };
+                        let term = self.rewrite_from(&split.cx, equations, at, body, &split.goal, lvl)?;
+                        return Ok(split.close(&term));
+                    }
+                }
+            }
+        };
         // The goal after this step: `M[b/y]`.
         let next = motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&rhs)));
         let case = self.rewrite_from(cx, rest, None, body, &next, lvl)?;
