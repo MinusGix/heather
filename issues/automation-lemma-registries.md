@@ -5,7 +5,7 @@ labels: [tactics,design,ergonomics]
 area: tactics
 milestone: [lang-proof-modularity]
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-08
 ---
 
 Round P3 of `docs/compiler-milestones-proposal.md` (§6.2, §7): lemma registries that automation reads, so a
@@ -21,3 +21,7 @@ tactic.
 ## Done when
 
 A new ordered carrier gets `mono` and `norm_num` by registering its lemmas, with no edit to either tactic, and `mono_carriers` is gone.
+
+## Log
+
+- 2026-11-08: 2026-11-08: [[simp-tactic]] wants the same registration for its default lemma set, so this mechanism should not be shaped only around mono and norm_num.

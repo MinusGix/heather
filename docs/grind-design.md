@@ -273,8 +273,9 @@ What the library does not have yet: a soundness theorem for e-matching
 congruences ([egraph-setoid-path-algebra](../issues/egraph-setoid-path-algebra.md)),
 a theorem that a hash-consed `add` returns a node of the requested value
 ([egraph-add-value-theorem](../issues/egraph-add-value-theorem.md); clients
-that need it use `fresh`), and union by rank or a signature table
+that need it use `fresh`), and union by rank
 ([egraph-scaling-structures](../issues/egraph-scaling-structures.md), §5).
+Its arrays, signature index and incremental closure are §15.2's.
 
 ## 9. Lemmas by e-matching (round 2, 2026-11-02)
 
@@ -1008,3 +1009,112 @@ replayed the cold check went from about 216 s to about 120 s; master's own
 stayed at about 35 s. What is left of the difference is the closure's own
 elaboration (`grind` about 42 s, `tactic` about 23 s), which is
 [tier2-constructor-value-cost](../issues/tier2-constructor-value-cost.md).
+
+## 15. Native chains: next spellings and an incremental graph (2026-11-08)
+
+The tactics survey (PR #488) found that grind does not reach `lib/native`'s
+hand `trans` chains for two reasons
+([grind-unfold-defined-heads](../issues/grind-unfold-defined-heads.md),
+[grind-matching-fuel-on-native-terms](../issues/grind-matching-fuel-on-native-terms.md)):
+the chains cross steps only conversion sees, and matching three lemmas over a
+native-sized graph ran out of fuel. The probe both name, `rt_loop`'s
+`Fun::post_left`, now closes by
+`grind_using(["Valuation::set_here", "Valuation::set_other", "branch_false"], [])`
+(`lib/_tests/std/tactic/grind_native_tests.hthr`), under the suite's
+address-space rail.
+
+### 15.1 Next spellings
+
+`Spell(e)` (tactic tag 32) answers `e` spelled one definition further on:
+its head definition unfolded and the head reduced on (the elaborator's
+reduct walk, `Unfold::Spelling`) until a global's call or a local is at the
+head again, or as far as it reduces. A term stuck in a `match` on a literal
+decision (`Nat::equation(64, w)`) is followed through it, and a closed value
+(`word_value(s0)(64)`) to its value. The walk goes through the interface
+boundary as conversion does: another module's `interface fn` at an open
+argument is not unfolded, so a spelling is never one the gate would refuse
+(`interface_head_folded`, the negative control).
+
+When the sides stay apart, grind reads the next spelling of each stuck term
+under them (`spell_from`): the spelling is read into the graph and joined to
+the term as written by a `defn` edge, whose `refl` the kernel checks. That
+is the hand chain's step, taken one δ at a time: `loop_finish(Fun::post(…),
+…)(…)` → `Fun::post(…).eval(…)(…)` → `branch(x, …).eval(…)(…)`, which
+`branch_false`'s pattern meets. A pass spells at most `grind_spell_cap()`
+terms, a term already tried is not tried again, and at most
+`grind_spell_passes()` passes run, each followed by the ordinary rounds.
+
+A premise no equation meets can still be one the graph decides with a
+**stand-in**: `branch_false` needs `values(1, x).head_bit() = False`, where
+`values` is `Valuation::set(bound, x, bit_value(False))`; the term is
+built from the instance's nodes (`app_node`), the graph closes, and the
+premise is proved by its class. A disequality premise (`o0 ≠ x`) is proved
+from a disequality read whose sides are its sides' classes, either way
+round (`by_diseq`: `λ e => apart(…)` over the explanation).
+
+**Dependent congruence.** Spelling joins valuations (`Valuation()` is
+`(w: Nat) → Nat → BitVec(w)`), so a congruence step can be one through a
+dependent application `q(64)`. `congr_dep` carries a motive `B: A → Type`
+no unifier finds (`?B(w) ≟ Nat → BitVec(w)` is outside the pattern fragment
+the elaborator solves); `dep_motives` reads it off the function's type,
+opened, as `Lam(w, body)`, before anything infers the proof. A type handle
+where a term is expected now stands for its code (`reify`), which is what
+lets a motive's body be a type.
+
+### 15.2 What the cost was, and the incremental graph
+
+The probe's first runs held the value arena past 8 GiB: the arena is not
+freed during a tactic run, so what bounds a run is its **total** fuel across
+evaluations, not one evaluation's. Profiled by evaluation, the cost was the
+graph, not the spelling:
+
+- **Linear structures.** The nodes and classes were lists, so every `find`
+  and node lookup walked the graph. They are now `Array`s over `NatMap`
+  (`lib/std/data/nat_map.hthr`), a binary trie keyed by `Nat`: a lookup is a
+  step per bit of the key. Node ids must stay numerals (`+ 1`, not `Succ`),
+  or `half` walks a unary chain.
+- **`let` is inlined.** A `let` read three times is computed three times; a
+  value a recursion reads after a `settled` is computed again in the next
+  evaluation. `shared(a, λ x => …)` (in `nat_map`) binds it once.
+- **Whole-graph passes.** Congruence closure compared every node's
+  signature every pass, and e-matching rebuilt the class table every round.
+  The graph now keeps its class table (`class_rows`), each class's parents,
+  and a signature index (`sigs`, by the key of the first two children's
+  classes), and closes **incrementally** as egg's rebuilding does: a node is
+  read again only when it is new or a child's class was merged
+  (`relabelled` puts the absorbed class's parents on `dirty`). A node read
+  is merged with the first node filed under its key that is congruent to it
+  in another class; leaves are never read. grind closes a batch of
+  `grind_settle_batch()` dirty nodes per evaluation.
+- **Congruent copies.** A node merged with its congruent twin leaves its
+  class's row (`unlisted`): it has the same operator over the same classes,
+  so matching through the twin finds everything it would. Without that, a
+  pattern item meeting a class visited every congruent copy, and a match
+  through nested copies was found once per combination; on the probe that
+  was about half the remaining total fuel.
+
+None of this touches the soundness proofs' reasoning: `Agrees` reads only
+the nodes and the representatives, every new field is carried through by
+conversion, and every merge is still checked at the graph it is made in
+(`settle_one_agrees`, `settle_all_agrees`, `close_agrees`). Hash-consing
+looks only in its key's bucket (`node_among`), and `add_at` with a found
+node leaves the graph unchanged, so a bucket that misses only costs a
+duplicate node.
+
+Costs, as shapes: a lookup is logarithmic in the graph; a close reads each
+dirty node against its bucket; a merge relabels the representatives array
+(linear, lazily, which is what union by rank would fix) and moves the
+absorbed class's rows. On the probe the remaining total is spread over atom
+search, the uses index, stamping, explanation and matching, none above a
+fifth.
+
+### 15.3 Not done
+
+- Union by rank and the representatives kept as a forest
+  ([egraph-scaling-structures](../issues/egraph-scaling-structures.md)).
+- The arena: a tactic run's values are never freed, so total fuel is the
+  bound. A host that reclaimed what no live value reaches between requests
+  would turn it back into a per-evaluation bound.
+- Which heads to spell: today every stuck head under the sides, up to the
+  caps; a lemma-directed choice (spell toward a head some pattern names)
+  would spell less.

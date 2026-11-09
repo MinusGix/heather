@@ -24,6 +24,7 @@ pub const STD: &[(&str, &str)] = &[
     ("string", include_str!("../../../../lib/std/text/string.hthr")),
     ("tactic", include_str!("../../../../lib/std/tactic/tactic.hthr")),
     ("derive", include_str!("../../../../lib/std/tactic/derive.hthr")),
+    ("nat_map", include_str!("../../../../lib/std/data/nat_map.hthr")),
     ("egraph", include_str!("../../../../lib/std/data/egraph.hthr")),
     ("grind", include_str!("../../../../lib/std/tactic/grind.hthr")),
 ];
