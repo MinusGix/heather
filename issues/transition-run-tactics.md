@@ -43,3 +43,7 @@ one native invariant is proved by the split.
 - **[[transition-systems-and-simulations]]** owns the kit. Assumed here:
   `StarN`/`Star`/`Plus`, `Invariant`, `StarDiagram`.
 - **[[grind-port]]** owns `grind`.
+
+## Log
+
+- 2026-11-09: 2026-11-09: Measured before starting: hand run chains are rare now that native goes through the compiler (linux_steps_trans 9 uses, fetched_steps_one 14, machine_steps_trans 4, linux_plus_back 3 across lib). A `steps` tactic pays little until hand-proved runs return; runs by evaluation needs a step that is a function, which native's relational steps are not. Lowered priority.
