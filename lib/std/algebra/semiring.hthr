@@ -161,6 +161,26 @@ theorem Ring::neg_mul_neg<A: Ring(≈, +, *)>(x, y: A): A.inv(x) * A.inv(y) ≈ 
 }
 
 // ---------------------------------------------------------------------------
+// Negation and subtraction as symbols. Inside `section<A: Ring(≈, +, *)>` an
+// operand at `A` has no designation of its own, so `-x` and `x - y` read the
+// ones at the class of the dictionary in scope (operator rung 2b,
+// docs/operators-onto-classes-design.md §4): `-x` is the group's inverse
+// `A.inv(x)` and `x - y` is `x + A.inv(y)`, each one δ-step from what a
+// statement spelled before (issues/class-carrier-arithmetic-surface.md).
+// `OrderedAddGroup` designates the same two at an ordered group.
+
+section<A: Ring(≈, +, *)> {
+
+fn Ring::neg(self x: A) → A { A.inv(x) }
+
+fn Ring::sub(self x, y: A) → A { x + A.inv(y) }
+
+}
+
+designation prefix - at Ring := Ring::neg
+designation - at Ring := Ring::sub
+
+// ---------------------------------------------------------------------------
 // The integers every ring has (docs/casting-design.md §5.6, §16). `Int` is
 // initial among rings: `0`, `1`, `+` and negation already name a map out of
 // it, so a ring needs no `of_int` field to have its integers. `nat_cast`

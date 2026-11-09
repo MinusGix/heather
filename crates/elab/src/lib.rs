@@ -9340,6 +9340,12 @@ impl Elaborator {
                     return Ok(self.reduced_embedding(cx, out));
                 }
                 None if named => {
+                    if let Some(at_class) = self.class_carrier_numeral(cx, e, expected, expected_level, span) {
+                        return Ok(at_class);
+                    }
+                    if let Some(refusal) = self.class_numeral_refusal(cx, expected, span) {
+                        return Err(refusal);
+                    }
                     return Err(ElabError::Resolution {
                         goal: display,
                         span,
@@ -9350,6 +9356,12 @@ impl Elaborator {
                 // reading below, as before the class was reachable.
                 None => {}
             }
+        }
+        if let Some(at_class) = self.class_carrier_numeral(cx, e, expected, expected_level, span) {
+            return Ok(at_class);
+        }
+        if let Some(refusal) = self.class_numeral_refusal(cx, expected, span) {
+            return Err(refusal);
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type

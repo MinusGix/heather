@@ -55,6 +55,7 @@ fn Node::wide(self node: Node) → Bool {
         BufferStore(_, _, _, _) => True,
         // A resize is never at one width.
         Resize(_, _, _, _) => False,
+        SignResize(_, _, _, _) => False,
     }
 }
 

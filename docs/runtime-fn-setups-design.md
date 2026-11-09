@@ -1482,3 +1482,47 @@ division have no `rt` op (issues/runtime-signed-extend-divide.md). Probes:
   shifted word meets another shift under one operation; those functions are
   refused with an out-of-fuel note (`runtime-shift-conversion-unfolding`).
   Shifts by realistic counts, rotations among them, compile.
+
+**Round 4 (same day): loops over `i64`, and sign extension.**
+
+- **A loop's state and result may be held by a repr.** The fuel and
+  measured shapes required `Ty::Words`; they now take `Ty::OneWords` for
+  the state and a `Word(_)` or `Named(_)` result (`Fun::shape`), and the
+  judge reads `Ty::all_one_word`. The loop theorems in `rt_loop` keep
+  their word-level statement and take the result type `res` with its
+  `res.OneWord(tys)` witness.
+- **The result is read as a word outside the branches.** The first
+  attempt read the tail's value at each leaf, which put `emb` under every
+  match arm, and that does not convert with the body. Now
+  `Tm::tail_sem` returns `res.sem(tys)` and the recursive call's value
+  re-enters by `Tm::into` (`cast Word(64) → res`); `TailHolds` reads the
+  whole tail once through `Tm::out` (`cast res → Word(64)`), and
+  `Tm::out_into`/`out_match`/`leave_cont` move it across the branches. At a
+  repr the round trip `abs(emb(y)) ≡ y` is record η, so nothing per type
+  is proved.
+- **The generator's instances read arguments at their types.**
+  `runtime_fuel_instance` and `runtime_measured_instance` apply `f` to
+  `runtime_args` (each word read by its repr's `abs` where the type has
+  one) and wrap the recursive call in `runtime_into`; the measured
+  instance's hypothesis comes back through `runtime_cong_into` and its
+  conclusion through `runtime_cong_out`. `examples/x86-native/loop_signed`
+  is a measured loop over an `i64` (signed compare, `SAR`, add and
+  subtract) that compiles to certified x86 and agrees with C
+  (`native_program.rs`, `MEASURED`).
+- **Sign extension is an `rt` op and a FunctionIR node.**
+  `BitVec::sign_extend(extra, x)` reflects to `Sext(n, extra)` (operand
+  `Word(Succ(n))`), lowered to `SignResize(from, to)`, whose value is
+  `BitVec::sresize`: sign extension (or truncation) at any pair of widths,
+  defined by recursion on the output width (`BitVec::widen_bits`) so that
+  the node needs no width arithmetic. `BitVec::sresize_sign_extend` ties
+  it to `sign_extend` at `extra + Succ(n)`. Every pass treats
+  `SignResize` as it treats `Resize`. S4 refuses both (it keeps only
+  64- and 1-bit values in registers), so sign extension compiles to
+  FunctionIR and evaluates there, and reaches x86 with narrow words
+  (`function-ir-narrow-arithmetic`, `runtime-repr-narrow-words`).
+- **What waits.** Signed division still waits on the flags model
+  (`x86-undefined-flags`). One repr over `SInt`'s width
+  (`datarepr-value-parameter-telescope`) pays only when a narrow `SInt`
+  can be held, which is the narrow-words issue, so it moves with that.
+  `SInt::extend` itself takes an `SInt(32)`, a value the fragment does
+  not hold yet; widening an `i32`'s bits is written on the word.

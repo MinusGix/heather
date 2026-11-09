@@ -284,6 +284,7 @@ fn Node::read_ports(self node: Node) → List<Port> {
         BufferLoad(_, _, index) => [Port(index, 64)],
         BufferStore(_, _, index, value) => [Port(index, 64), Port(value, 64)],
         Resize(from, _, _, source) => [Port(source, from)],
+        SignResize(from, _, _, source) => [Port(source, from)],
     }
 }
 
@@ -635,6 +636,7 @@ fn Node::renamed(self node: Node, output: Nat) → Node {
         BufferLoad(_, buffer, index) => BufferLoad(output, buffer, index),
         BufferStore(_, buffer, index, value) => BufferStore(output, buffer, index, value),
         Resize(from, to, _, source) => Resize(from, to, output, source),
+        SignResize(from, to, _, source) => SignResize(from, to, output, source),
     }
 }
 

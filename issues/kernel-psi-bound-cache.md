@@ -4,7 +4,7 @@ status: open
 labels: [kernel,soundness,refactor,state-machine]
 area: kernel
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-08
 ---
 
 Bind a `GlobalCache` to the Ψ it was built for in the type, so a mismatched pair cannot be constructed.
@@ -28,3 +28,4 @@ Filed together from the implicit-state-machines survey (`docs/implicit-state-mac
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[conversion-typed-eliminator-congruence]] (`crates/kernel/src/reduce.rs`); [[elab-emits-normal-form-of-matched-type-argument]] (`docs/conversion-query-arena-pooling-design.md`); [[reducer-step-frame-size]] (`crates/kernel/src/reduce.rs`).
+- 2026-11-08: 2026-11-08: still open and accurate in the kernel second pass (`docs/kernel-implicit-state-review.md` §4): 17 `GlobalCache::new()` pairings in `typing.rs`, 2 in `conv.rs`. Addition: `Defs::transparent` is also "only sound at a computing layer" (`reduce.rs` ~192), enforced only at `Conv::defs`. The `ScopedGlobals` could be the only way to obtain a transparent `Defs`, as `scope.defs(layer)`, returning opaque at layer c. Same pairing shape one level down: [[value-memo-evaluation-mode]] (the value arena and its `Defs`).

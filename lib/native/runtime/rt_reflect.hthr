@@ -44,7 +44,7 @@ import rt;
 
 // A primitive global: a word operation (by `Op::code`'s number), a `Bool`
 // connective, a literal, an extension, `foldl`, or a byte read or write.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat) }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -830,6 +830,21 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             }),
                             Nil => rt_refuse("`zero_extend` without its width"),
                         },
+                        // `sign_extend(extra, x)`: the width is a literal, the
+                        // operand a word of positive width.
+                        PSext => match args {
+                            Cons(extra, rest) => rt_literal(extra).bind(λ e => match rest {
+                                Cons(x, _) => k.ty_of(x).bind(λ t => match t {
+                                    Word(w) => match w {
+                                        Succ(n) => rt_go(f, k, st, x, True).bind(λ r => pure(r.fst.finish(h, operand, Prim(Sext(n, e), [RSt::level(r.snd)])))),
+                                        Zero => rt_refuse("`sign_extend` of a zero-width word"),
+                                    },
+                                    _ => rt_refuse("`sign_extend` of something other than a word"),
+                                }),
+                                Nil => rt_refuse("`sign_extend` without its operand"),
+                            }),
+                            Nil => rt_refuse("`sign_extend` without its width"),
+                        },
                         // `truncate(n, extra, x)`: both widths are literals.
                         PTrunc => match args {
                             Cons(n, rest) => rt_literal(n).bind(λ nv => match rest {
@@ -1048,7 +1063,7 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
      Pair("BitVec::bor", PWord(3)), Pair("BitVec::bxor", PWord(4)), Pair("BitVec::eq_bit", PWord(5)),
      Pair("BitVec::unsigned_lt_bit", PWord(6)), Pair("BitVec::signed_lt_bit", PWord(7)),
      Pair("Bool::and", PConj), Pair("Bool::or", PDisj), Pair("Bool::not", PNeg),
-     Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("List::foldl", PFoldl),
+     Pair("BitVec::ofNat", POfNat), Pair("BitVec::zero_extend", PZext), Pair("BitVec::sign_extend", PSext), Pair("List::foldl", PFoldl),
      Pair("List::byte_at", PGet), Pair("List::with_byte", PSet), Pair("BitVec::toNat", PToNat),
      Pair("BitVec::truncate", PTrunc), Pair("BitVec::shift_left", PShift(0)), Pair("BitVec::shift_right", PShift(1)),
      Pair("BitVec::arithmetic_shift_right", PShift(2))]

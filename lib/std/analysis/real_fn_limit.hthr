@@ -30,6 +30,7 @@ import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
+import field_division;
 import big_operator;
 import ring;
 import omega;
@@ -145,10 +146,10 @@ theorem DerivOn::recip_step(u, u1, v: K → K, B, N, e, e1, d, x, y, h: K, hn: K
     vx: AbsLe(v(x), B), vy: AbsLe(v(y), B), nx: AbsLe(u1(x), N), hxy: AbsLe(y + K.inv(x), h), hh: h <= d,
     ru: AbsLe(u(y) + K.inv(u(x)) + K.inv(u1(x) * (y + K.inv(x))), e1 * h),
     lu: AbsLe(u(y) + K.inv(u(x)), (N + K.multiplicative.unit) * h),
-    b1: B * B * e1 <= OrderedField::half(e), b2: B * N * (B * B * (N + K.multiplicative.unit)) * d <= OrderedField::half(e)):
+    b1: B * B * e1 <= e / 2, b2: B * N * (B * B * (N + K.multiplicative.unit)) * d <= e / 2):
     AbsLe(v(y) + K.inv(v(x)) + K.inv(K.inv(v(x) * v(x) * u1(x)) * (y + K.inv(x))), e * h)
 {
-    let e2 = OrderedField::half(e);
+    let e2 = e / 2;
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
     let vv = OrderedField::abs_le_mul(v(x), v(y), B, B, vx, vy);
     let ey: (v(x) * (u(y) * v(y)) ≈ v(x)) = ring(iy);
@@ -195,10 +196,10 @@ theorem DerivOn::recip(D: K → Type, u, u1, v: K → K, B, N: K, hu: DerivOn(D,
         let pC: (K.unit <= C) = OrderedSemiring::mul_nonneg(B * N, B * B * (N + K.multiplicative.unit),
             OrderedSemiring::mul_nonneg(B, N, pB, pN),
             OrderedSemiring::mul_nonneg(B * B, N + K.multiplicative.unit, OrderedSemiring::mul_nonneg(B, B, pB, pB), linarith(pN, o)));
-        let b1 = OrderedField::shrink(B * B, OrderedField::half(e), OrderedSemiring::mul_nonneg(B, B, pB, pB), p2);
+        let b1 = OrderedField::shrink(B * B, e / 2, OrderedSemiring::mul_nonneg(B, B, pB, pB), p2);
         let au = hu(b1.witness, b1.proof.left);
         let al = DerivOn::local_lipschitz(D, u, u1, N, hu, hn);
-        let b2 = OrderedField::shrink(C, OrderedField::half(e), pC, p2);
+        let b2 = OrderedField::shrink(C, e / 2, pC, p2);
         let a3 = OrderedField::below_both(au.witness, al.witness, au.proof.left, al.proof.left);
         let ad = OrderedField::below_both(a3.witness, b2.witness, a3.proof.left, b2.proof.left);
         Exists(ad.witness, And(ad.proof.left, λ x y h dx dy hxy hd => {

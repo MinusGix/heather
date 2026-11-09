@@ -41,6 +41,7 @@ import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
+import field_division;
 import big_operator;
 import ring;
 import omega;
@@ -107,7 +108,7 @@ theorem Converges::add(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Con
     Converges(λ (n: Nat) => xs(n) + ys(n), a + b)
 {
     λ e pe => {
-        let h = OrderedField::half(e);
+        let h = e / 2;
         let ph = OrderedField::half_pos(e, pe);
         let hh = OrderedField::half_add(e);
         let p = hx(h, ph);
@@ -177,7 +178,7 @@ theorem Converges::mul(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Con
     Converges(λ (n: Nat) => xs(n) * ys(n), a * b)
 {
     λ e pe => {
-        let h = OrderedField::half(e);
+        let h = e / 2;
         let ph = OrderedField::half_pos(e, pe);
         let hh = OrderedField::half_add(e);
         let A = (a * a + K.multiplicative.unit) + K.multiplicative.unit;
@@ -250,7 +251,7 @@ theorem Converges::squeeze(xs, ys, zs: Nat → K, l: K, hx: Converges(xs, l), hz
 // the limit.
 theorem Converges::cauchy(xs: Nat → K, a: K, hx: Converges(xs, a)): CauchySeq(xs) {
     λ e pe => {
-        let h = OrderedField::half(e);
+        let h = e / 2;
         let hh = OrderedField::half_add(e);
         let p = hx(h, OrderedField::half_pos(e, pe));
         Exists(p.witness, λ m n fm fk => {
@@ -272,7 +273,7 @@ theorem CauchySeq::converges_of_cluster(xs: Nat → K, l: K, hc: CauchySeq(xs),
     near: (e: K) → K.unit < e → (N: Nat) → ∃ k: Nat, Nat::Le(N, k) ∧ AbsLe(xs(k) + K.inv(l), e)): Converges(xs, l)
 {
     λ e pe => {
-        let h = OrderedField::half(e);
+        let h = e / 2;
         let ph = OrderedField::half_pos(e, pe);
         let hh = OrderedField::half_add(e);
         let c = hc(h, ph);
@@ -625,9 +626,9 @@ theorem Contraction::cauchy(f: K → K, c: K, hf: Contraction(f, c), x: K): Cauc
     let hR: ((K.multiplicative.unit + K.inv(c)) * R ≈ K.multiplicative.unit) = K.mul_recip(K.multiplicative.unit + K.inv(c), Inr(pq));
     let pR: (K.unit <= R) = StrictOrder::le_of_lt(K.unit, R, OrderedField::recip_pos(K.multiplicative.unit + K.inv(c), Inr(pq), pq));
     λ e pe => {
-        let s = OrderedField::shrink(D * R, OrderedField::half(e), OrderedSemiring::mul_nonneg(D, R, pD, pR), OrderedField::half_pos(e, pe));
+        let s = OrderedField::shrink(D * R, e / 2, OrderedSemiring::mul_nonneg(D, R, pD, pR), OrderedField::half_pos(e, pe));
         let small = OrderedField::npow_small(c, hf.left, hf.right.left, s.witness, s.proof.left);
-        Exists(small.witness, λ m n fm fk => Contraction::cauchy_close(f, c, hf, x, D, hD, R, hR, pR, e, OrderedField::half(e), s.witness,
+        Exists(small.witness, λ m n fm fk => Contraction::cauchy_close(f, c, hf, x, D, hD, R, hR, pR, e, e / 2, s.witness,
             OrderedField::half_add(e), s.proof.right, small.witness, small.proof(small.witness, small.witness.le_refl()), m, n, fm, fk))
     }
 }

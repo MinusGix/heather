@@ -81,6 +81,13 @@ struct RelCarrier {
     sub: Option<Op>,
     mul: Option<Op>,
     neg: Option<Op>,
+    /// At a class carrier, the class designations of `-x` and `x - y`
+    /// (`Ring::neg`/`sub`, `OrderedAddGroup::neg`/`sub`): read as negations
+    /// and differences beside `neg` (`K.inv`, as a statement spells it) and
+    /// `sub` (none). Every one is read, not only the scope's own: a lemma
+    /// stated over a parent class carries the parent's.
+    class_negs: Vec<Op>,
+    class_subs: Vec<Op>,
     /// The postfix `⁻¹`, read as a reciprocal (`Reifier::reciprocal`).
     inv: Option<Op>,
     /// `/`, read as a product with the divisor's reciprocal
@@ -438,6 +445,8 @@ fn rel_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type, goal: Option<&Term
         inv: op("⁻¹", OpFixity::Postfix),
         div: op("/", OpFixity::Infix),
         pow: op("^", OpFixity::Infix),
+        class_negs: Vec::new(),
+        class_subs: Vec::new(),
         class: None,
     })
 }
@@ -475,10 +484,14 @@ fn read_class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<R
     // field never spells them.
     let generic = |name: &str| {
         let key = elab.key_of(name)?;
-        let operands = if name.ends_with("::div") { 3 } else { 2 };
+        let operands = if name.ends_with("::div") { 3 } else if name.ends_with("::neg") { 1 } else { 2 };
         let prefix = elab.names.global(&key)?.params.len().checked_sub(operands)?;
         Some(Op::GlobalAfter(key, prefix))
     };
+    // `-x` and `x - y` (issues/class-carrier-arithmetic-surface.md): the
+    // designations at `Ring` and at `OrderedAddGroup`, where loaded.
+    let class_negs = ["semiring::Ring::neg", "ordered_field::OrderedAddGroup::neg"].into_iter().filter_map(generic).collect();
+    let class_subs = ["semiring::Ring::sub", "ordered_field::OrderedAddGroup::sub"].into_iter().filter_map(generic).collect();
     Some(RelCarrier {
         source,
         same: Op::Term(same),
@@ -489,6 +502,8 @@ fn read_class_carrier(elab: &Elaborator, cx: &Cx, carrier_ty: &Type) -> Option<R
         inv: generic("field_division::OrderedField::inv"),
         div: generic("field_division::OrderedField::div"),
         pow: None,
+        class_negs,
+        class_subs,
         class: Some(ClassInts { ints: Rc::new(ints), ty, level, zero, one }),
     })
 }
@@ -948,22 +963,23 @@ impl Reifier<'_> {
         {
             return Ok(Syn::Add(Box::new(a), Box::new(b)));
         }
-        if let Some(op) = &ops.sub
-            && let Some((a, b)) = self.binary_op(tm, op, depth)?
-        {
-            return Ok(Syn::Sub(Box::new(a), Box::new(b)));
+        for op in ops.sub.iter().chain(&ops.class_subs) {
+            if let Some((a, b)) = self.binary_op(tm, op, depth)? {
+                return Ok(Syn::Sub(Box::new(a), Box::new(b)));
+            }
         }
         if let Some(op) = &ops.mul
             && let Some((a, b)) = self.binary_op(tm, op, depth)?
         {
             return Ok(Syn::Mul(Box::new(a), Box::new(b)));
         }
-        if let Some(op) = &ops.neg
-            && let Some(args) = op.args(self.elab, tm)
-            && let [inner] = args.as_slice()
-        {
-            let inner = Rc::clone(inner);
-            return Ok(Syn::Neg(Box::new(self.reify_within(&inner, depth)?)));
+        for op in ops.neg.iter().chain(&ops.class_negs) {
+            if let Some(args) = op.args(self.elab, tm)
+                && let [inner] = args.as_slice()
+            {
+                let inner = Rc::clone(inner);
+                return Ok(Syn::Neg(Box::new(self.reify_within(&inner, depth)?)));
+            }
         }
         if let Some((base, k)) = self.literal_power(tm, ops) {
             let base = self.reify_within(&base, depth)?;
@@ -1103,11 +1119,49 @@ impl Reifier<'_> {
         let [a, b, h] = args.as_slice() else {
             return None;
         };
+        if let Some(r) = self.reciprocal_of_quotient(tm, ops, inv) {
+            return Some((Rc::clone(a), Rc::new(r)));
+        }
         let b = self.elab.spell_term_source(self.cx, b)?;
         let h = self.elab.spell_term_source(self.cx, h)?;
         let expr = parse_expr(&format!("{inv}({b}, h := {h})")).ok()?;
         let (r, _, _) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
         Some((Rc::clone(a), Rc::new(r)))
+    }
+
+    /// At a class carrier, `a / b`'s reciprocal built from the quotient's
+    /// own arguments, not re-elaborated from a spelling: the section's `+` and
+    /// dictionary spell as binder names no source can write (`c + 1` is
+    /// `#op+@0_3(c, …)`). `OrderedField::div` and `OrderedField::inv` take
+    /// the same section prefix, so the reciprocal is `inv` at the quotient's
+    /// prefix, its divisor and its proof.
+    fn reciprocal_of_quotient(&self, tm: &Rc<Term>, ops: &RelCarrier, inv: &str) -> Option<Term> {
+        ops.class.as_ref()?;
+        let (Op::GlobalAfter(div, prefix), Op::GlobalAfter(_, inv_prefix)) = (ops.div.as_ref()?, ops.inv.as_ref()?) else {
+            return None;
+        };
+        if prefix != inv_prefix {
+            return None;
+        }
+        let (head, args) = crate::spelling::app_spine(tm);
+        let Term::GlobalTm { var, subst } = head else {
+            return None;
+        };
+        let [.., b, h] = args.as_slice() else {
+            return None;
+        };
+        if args.len() != prefix + 3 {
+            return None;
+        }
+        // Ψ indices count down from the newest binding: `inv`'s is `div`'s
+        // moved by the distance between the two.
+        let (div_abs, inv_abs) = (self.elab.global_abs(div)?, self.elab.global_abs(inv)?);
+        let inv_var = heather_kernel::term::GlobalVar(u32::try_from(i64::from(var.0) + div_abs as i64 - inv_abs as i64).ok()?);
+        let mut out = Term::GlobalTm { var: inv_var, subst: subst.clone() };
+        for arg in args[..*prefix].iter().chain([b, h]) {
+            out = Term::AppAt { fun: Rc::new(out), arg: Rc::clone(arg) };
+        }
+        (self.elab.global_abs_of(inv_var)? == inv_abs).then_some(out)
     }
 
     /// `0 < r` for a reciprocal `r = d⁻¹` of a positive numeral `d` (`a / 2`
@@ -1123,14 +1177,26 @@ impl Reifier<'_> {
         let inv = ops.inv.as_ref()?.global()?;
         let rule = format!("{}positive_inv", inv.strip_suffix("inv")?);
         self.elab.key_of(&rule)?;
-        let args = named_args(self.elab, r, inv)?;
+        // Past a class carrier's prefix (`Op::args`): `x` and its proof.
+        let args = ops.inv.as_ref()?.args(self.elab, r)?;
         let [_, h] = args.as_slice() else {
             return None;
         };
         let h = self.elab.spell_term_source(self.cx, h)?;
-        let r = self.elab.spell_term_source(self.cx, r)?;
+        let r_source = self.elab.spell_term_source(self.cx, r)?;
+        // At a class carrier the rule's indices and its `x` are named: its
+        // conclusion `PositiveBy(<, <=, K.unit, x⁻¹)` is read against
+        // `0 < r` only after the call, too late to pin them
+        // (issues/generic-theorem-implicit-points.md).
+        let call = match &ops.class {
+            None => format!("{rule}(h := {h})"),
+            Some(_) => {
+                let den = self.elab.spell_term_source(self.cx, den)?;
+                format!("{rule}<{}>(x := {den}, h := {h})", ops.source)
+            }
+        };
         // The rule concludes `r.Positive()`; the rows read `0 < r`.
-        let source = format!("{{ let __pos: (0 < {r}) = {rule}(h := {h}); __pos }}");
+        let source = format!("{{ let __pos: (0 < {r_source}) = {call}; __pos }}");
         let expr = parse_expr(&source).ok()?;
         let (term, ty, level) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
         Some((term, ty, level, source))
@@ -1176,15 +1242,45 @@ impl Reifier<'_> {
     fn reciprocal_fact(&mut self, lemma: &str, args: &[(Option<&str>, Rc<Term>)], atom: usize) -> Option<Fact> {
         self.elab.key_of(lemma)?;
         let mut written = Vec::new();
-        for (name, arg) in args {
-            let source = self.elab.spell_term_source(self.cx, arg)?;
+        // An argument with no source spelling (a class carrier's `c + 1`,
+        // whose `+` is a section binder) is named by an alias bound to the
+        // term, at its type by the kernel's inference.
+        let mut lemma_cx = None;
+        for (i, (name, arg)) in args.iter().enumerate() {
+            let source = match self.elab.spell_term_source(self.cx, arg).filter(|s| !s.contains('#')) {
+                Some(source) => source,
+                None => {
+                    let oracle = self.elab.goal_oracle();
+                    let (ty, level) =
+                        heather_kernel::typing::infer_term(oracle.world(), 0, Layer::Prog, &self.cx.gamma, arg, self.elab.policy.fuel).ok()?;
+                    let alias = format!("__ring_fact_arg{i}");
+                    lemma_cx.get_or_insert_with(|| self.cx.clone()).aliases.push(Rc::new(Alias {
+                        name: alias.clone(),
+                        depth: self.cx.names.len(),
+                        term: Rc::clone(arg),
+                        ty,
+                        level,
+                        skel: None,
+                        spliced: None,
+                        shifted: Default::default(),
+                    }));
+                    alias
+                }
+            };
             written.push(match name {
                 Some(name) => format!("{name} := {source}"),
                 None => source,
             });
         }
-        let expr = parse_expr(&format!("{lemma}({})", written.join(", "))).ok()?;
-        let (term, ty, level) = self.elab.generated_scope(|me| me.elab_infer(self.cx, &expr)).ok()?;
+        // At a class carrier the lemma's indices are pinned by its carrier,
+        // as `numeral_reciprocal_positive`'s are.
+        let carrier = match (&self.carrier, lemma_cx.is_some()) {
+            (Carrier::Rel(ops), true) if ops.class.is_some() => format!("<{}>", ops.source),
+            _ => String::new(),
+        };
+        let expr = parse_expr(&format!("{lemma}{carrier}({})", written.join(", "))).ok()?;
+        let cx = lemma_cx.as_ref().unwrap_or(self.cx);
+        let (term, ty, level) = self.elab.generated_scope(|me| me.elab_infer(cx, &expr)).ok()?;
         let eq = relation_equation(self.elab, self.cx, &ty, self.span).filter(|eq| eq.carrier == self.carrier)?;
         self.in_fact = true;
         let sides = (|| Ok::<_, String>(Written { lhs: self.reify(&eq.lhs)?, rhs: self.reify(&eq.rhs)? }))();

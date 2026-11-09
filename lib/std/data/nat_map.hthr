@@ -1,0 +1,322 @@
+// Finite maps keyed by `Nat`, and arrays over them: lookup and update in
+// time logarithmic in the key.
+//
+// A `List` read by position walks one cell per unit of the index, so a
+// structure that is indexed by node numbers (the e-graph's nodes and
+// classes, `lib/std/data/egraph.hthr`) pays a walk as long as the graph at
+// every lookup. A `NatMap` is a binary trie: key `0` is the root's own
+// slot, and key `Succ(k)` goes to the child `k`'s low bit picks, at key
+// `⌊k/2⌋`. `low_bit` and `half` evaluate on numerals directly
+// (`lib/std/num/nat.hthr`), so a lookup costs a step per bit of the key.
+//
+// A slot may be empty (`None`), so an update is a path rebuilt and nothing
+// else: no invariant ties a map's shape to its keys, and the laws below
+// (`get_set_same`, `get_set_other`) hold of every map. `Array` is a map whose
+// keys are `0 .. len`, with `List`'s positional operations and the laws
+// clients of a list's `nth` use, stated the same way.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+
+inductive NatMap<A> { MEmpty, MNode(here: Option<A>, even: NatMap<A>, odd: NatMap<A>) }
+
+fn NatMap::empty<A>() → NatMap<A> { MEmpty }
+
+// The root of `m`, opened: an empty map is a node with nothing in it.
+fn NatMap::here_of<A>(self m: NatMap<A>) → Option<A> { match m { MEmpty => None, MNode(h, _, _) => h } }
+
+fn NatMap::even_of<A>(self m: NatMap<A>) → NatMap<A> { match m { MEmpty => MEmpty, MNode(_, e, _) => e } }
+
+fn NatMap::odd_of<A>(self m: NatMap<A>) → NatMap<A> { match m { MEmpty => MEmpty, MNode(_, _, o) => o } }
+
+// One of two answers by a low bit: `even` at `0`, `odd` otherwise. Both
+// are arguments and only the chosen one is evaluated, so the recursions
+// below pass both children's and pay for one.
+fn NatMap::pick<B>(b: Nat, even: B, odd: B) → B { match b { Zero => even, Succ(_) => odd } }
+
+// `m` with the child a low bit `b` picks replaced: `even` at `0`, `odd`
+// otherwise.
+fn NatMap::rebuild<A>(b: Nat, m: NatMap<A>, even: NatMap<A>, odd: NatMap<A>) → NatMap<A> {
+    match b { Zero => MNode(m.here_of(), even, m.odd_of()), Succ(_) => MNode(m.here_of(), m.even_of(), odd) }
+}
+
+// `k(a)`: `a` computed once however often `k` reads it. A `let` is
+// inlined where it is read, so a `let` read three times is computed three
+// times; an argument is one shared value.
+fn shared<A, B>(a: A, k: A → B) → B { k(a) }
+
+// The value at key `k`, by recursion on the map. (Lookup is the hot
+// operation, and a structural recursion evaluates as the map's own
+// eliminator; a level halves the key once, its low bit being `j - h * 2`,
+// `low_bit` unfolded. `nat_map_set`, which may have to build its path
+// below an empty map, recurses on the key by `decreases`, which re-binds
+// every parameter and so takes no `self`.)
+fn nat_map_get<A>(m: NatMap<A>, k: Nat) → Option<A> {
+    match m {
+        MEmpty => None,
+        MNode(here, even, odd) => match k {
+            Zero => here,
+            Succ(j) => shared(j.half(), λ h => NatMap::pick(j - h * 2, nat_map_get(even, h), nat_map_get(odd, h))),
+        },
+    }
+}
+
+// `m` with key `k` holding `x`.
+fn nat_map_set<A>(m: NatMap<A>, k: Nat, x: A) → NatMap<A> decreases k {
+    match k {
+        Zero => MNode(Some(x), m.even_of(), m.odd_of()),
+        Succ(j) => NatMap::rebuild(j.low_bit(), m, nat_map_set(m.even_of(), j.half(), x), nat_map_set(m.odd_of(), j.half(), x)),
+    }
+    on ?dec1 := j.half_le();
+    on ?dec2 := j.half_le();
+}
+
+fn NatMap::get<A>(self m: NatMap<A>, k: Nat) → Option<A> { nat_map_get(m, k) }
+
+fn NatMap::set<A>(self m: NatMap<A>, k: Nat, x: A) → NatMap<A> { nat_map_set(m, k, x) }
+
+fn NatMap::map<A, B>(self m: NatMap<A>, f: A → B) → NatMap<B> {
+    match m {
+        MEmpty => MEmpty,
+        MNode(here, even, odd) => MNode(here.map(f), even.map(f), odd.map(f)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Laws.
+
+theorem NatMap::pick_same<B>(b: Nat, x: B): NatMap::pick(b, x, x) = x {
+    match b { Zero => refl, Succ(_) => refl }
+}
+
+theorem nat_map_get_zero<A>(m: NatMap<A>): nat_map_get(m, 0) = m.here_of() {
+    match m { MEmpty => refl, MNode(_, _, _) => refl }
+}
+
+theorem nat_map_get_succ<A>(m: NatMap<A>, j: Nat): nat_map_get(m, Succ(j)) = NatMap::pick(j.low_bit(), nat_map_get(m.even_of(), j.half()), nat_map_get(m.odd_of(), j.half())) {
+    match m { MEmpty => sym(NatMap::pick_same(j.low_bit(), None)), MNode(_, _, _) => refl }
+}
+
+theorem nat_map_get_empty<A>(k: Nat): nat_map_get(NatMap::empty<A>(), k) = None { refl }
+
+// A key below `Succ` is told apart by its low bit and its half.
+theorem nat_map_low_bit_parts(j: Nat): (j.half() + j.half()) + j.low_bit() = j {
+    let parts = j.ldiv_bit_parts();
+    trans(Nat::cong(λ (y: Nat) => (j.half() + j.half()) + y, j.low_bit_eq()), parts.left)
+}
+
+theorem nat_map_low_bit_le_one(j: Nat): j.low_bit() <= 1 {
+    j(sym(j.low_bit_eq()), λ y _ => y <= 1, j.ldiv_bit_parts().right)
+}
+
+theorem nat_map_bits_inj(j, i: Nat, hb: j.low_bit() = i.low_bit(), hh: j.half() = i.half()): j = i {
+    let mid: ((j.half() + j.half()) + j.low_bit() = (i.half() + i.half()) + i.low_bit()) =
+        trans(Nat::cong(λ (y: Nat) => (y + y) + j.low_bit(), hh), Nat::cong(λ (y: Nat) => (i.half() + i.half()) + y, hb));
+    trans(sym(nat_map_low_bit_parts(j)), trans(mid, nat_map_low_bit_parts(i)))
+}
+
+// A low bit that is a successor is `1`.
+theorem nat_map_low_bit_one(j, a: Nat, h: j.low_bit() = Succ(a)): j.low_bit() = 1 {
+    let le: (Succ(a) <= 1) = j(h, λ y _ => y <= 1, nat_map_low_bit_le_one(j));
+    let zero: (a = 0) = Nat::le_antisym(a, 0, le, trivial);
+    trans(h, Nat::cong(λ (y: Nat) => Succ(y), zero))
+}
+
+theorem nat_map_pick_rebuild_same<A>(b: Nat, m: NatMap<A>, even: NatMap<A>, odd: NatMap<A>, h: Nat, x: A):
+    nat_map_get(even, h) = Some(x) → nat_map_get(odd, h) = Some(x) →
+    NatMap::pick(b, nat_map_get(NatMap::rebuild(b, m, even, odd).even_of(), h), nat_map_get(NatMap::rebuild(b, m, even, odd).odd_of(), h)) = Some(x) {
+    match b { Zero => λ ie io => ie, Succ(_) => λ ie io => io }
+}
+
+theorem nat_map_rebuild_here<A>(b: Nat, m: NatMap<A>, even: NatMap<A>, odd: NatMap<A>): NatMap::rebuild(b, m, even, odd).here_of() = m.here_of() {
+    match b { Zero => refl, Succ(_) => refl }
+}
+
+theorem nat_map_pick_rebuild_other<A>(b, c: Nat, m: NatMap<A>, even: NatMap<A>, odd: NatMap<A>, h: Nat):
+    (b = 0 → c = 0 → nat_map_get(even, h) = nat_map_get(m.even_of(), h)) →
+    ((a, d: Nat) → b = Succ(a) → c = Succ(d) → nat_map_get(odd, h) = nat_map_get(m.odd_of(), h)) →
+    NatMap::pick(c, nat_map_get(NatMap::rebuild(b, m, even, odd).even_of(), h), nat_map_get(NatMap::rebuild(b, m, even, odd).odd_of(), h))
+        = NatMap::pick(c, nat_map_get(m.even_of(), h), nat_map_get(m.odd_of(), h)) {
+    match b {
+        Zero => match c { Zero => λ ce co => ce(refl, refl), Succ(_) => λ ce co => refl },
+        Succ(a) => match c { Zero => λ ce co => refl, Succ(d) => λ ce co => co(a, d, refl, refl) },
+    }
+}
+
+theorem nat_map_get_set_same<A>(m: NatMap<A>, k: Nat, x: A): nat_map_get(nat_map_set(m, k, x), k) = Some(x) decreases k {
+    match k {
+        Zero => trans(nat_map_get_zero(nat_map_set(m, 0, x)), cong_fn(λ (n: NatMap<A>) => n.here_of(), nat_map_set_unfold(m, 0, x))),
+        Succ(j) => {
+            let h = j.half();
+            let even = nat_map_set(m.even_of(), h, x);
+            let odd = nat_map_set(m.odd_of(), h, x);
+            let ie: (nat_map_get(even, h) = Some(x)) = nat_map_get_set_same(m.even_of(), h, x);
+            let io: (nat_map_get(odd, h) = Some(x)) = nat_map_get_set_same(m.odd_of(), h, x);
+            trans(nat_map_get_succ(nat_map_set(m, Succ(j), x), j),
+                trans(cong_fn(λ (n: NatMap<A>) => NatMap::pick(j.low_bit(), nat_map_get(n.even_of(), h), nat_map_get(n.odd_of(), h)), nat_map_set_unfold(m, Succ(j), x)),
+                    nat_map_pick_rebuild_same(j.low_bit(), m, even, odd, h, x, ie, io)))
+        },
+    }
+    on ?dec1 := j.half_le();
+    on ?dec2 := j.half_le();
+}
+
+theorem nat_map_get_set_other<A>(m: NatMap<A>, k: Nat, x: A): (i: Nat) → k ≠ i → nat_map_get(nat_map_set(m, k, x), i) = nat_map_get(m, i) decreases k {
+    match k {
+        Zero => λ i => match i {
+            Zero => λ ne => false_elim(ne(refl)),
+            Succ(l) => λ ne => trans(nat_map_get_succ(nat_map_set(m, 0, x), l),
+                trans(cong_fn(λ (n: NatMap<A>) => NatMap::pick(l.low_bit(), nat_map_get(n.even_of(), l.half()), nat_map_get(n.odd_of(), l.half())), nat_map_set_unfold(m, 0, x)),
+                    sym(nat_map_get_succ(m, l)))),
+        },
+        Succ(j) => λ i => {
+            let h = j.half();
+            let even = nat_map_set(m.even_of(), h, x);
+            let odd = nat_map_set(m.odd_of(), h, x);
+            match i {
+                Zero => λ ne => trans(nat_map_get_zero(nat_map_set(m, Succ(j), x)),
+                    trans(cong_fn(λ (n: NatMap<A>) => n.here_of(), nat_map_set_unfold(m, Succ(j), x)),
+                        trans(nat_map_rebuild_here(j.low_bit(), m, even, odd), sym(nat_map_get_zero(m))))),
+                Succ(l) => λ ne => {
+                    let g = l.half();
+                    let apart: (j ≠ l) = λ e => ne(Nat::cong(λ (y: Nat) => Succ(y), e));
+                    let ce = λ (b0: j.low_bit() = 0) (c0: l.low_bit() = 0) =>
+                        nat_map_get_set_other(m.even_of(), h, x, g, λ (hg: h = g) => apart(nat_map_bits_inj(j, l, trans(b0, sym(c0)), hg)));
+                    let co = λ (a: Nat) (d: Nat) (b1: j.low_bit() = Succ(a)) (c1: l.low_bit() = Succ(d)) =>
+                        nat_map_get_set_other(m.odd_of(), h, x, g, λ (hg: h = g) => apart(nat_map_bits_inj(j, l, trans(nat_map_low_bit_one(j, a, b1), sym(nat_map_low_bit_one(l, d, c1))), hg)));
+                    trans(nat_map_get_succ(nat_map_set(m, Succ(j), x), l),
+                        trans(cong_fn(λ (n: NatMap<A>) => NatMap::pick(l.low_bit(), nat_map_get(n.even_of(), g), nat_map_get(n.odd_of(), g)), nat_map_set_unfold(m, Succ(j), x)),
+                            trans(nat_map_pick_rebuild_other(j.low_bit(), l.low_bit(), m, even, odd, g, ce, co), sym(nat_map_get_succ(m, l)))))
+                },
+            }
+        },
+    }
+    on ?dec1 := j.half_le();
+    on ?dec2 := j.half_le();
+}
+
+theorem nat_map_pick_map<B, C>(b: Nat, f: B → C, x, y: Option<B>): NatMap::pick(b, x, y).map(f) = NatMap::pick(b, x.map(f), y.map(f)) {
+    match b { Zero => refl, Succ(_) => refl }
+}
+
+theorem nat_map_here_map<A, B>(m: NatMap<A>, f: A → B): m.map(f).here_of() = m.here_of().map(f) {
+    match m { MEmpty => refl, MNode(_, _, _) => refl }
+}
+
+theorem nat_map_even_map<A, B>(m: NatMap<A>, f: A → B): m.map(f).even_of() = m.even_of().map(f) {
+    match m { MEmpty => refl, MNode(_, _, _) => refl }
+}
+
+theorem nat_map_odd_map<A, B>(m: NatMap<A>, f: A → B): m.map(f).odd_of() = m.odd_of().map(f) {
+    match m { MEmpty => refl, MNode(_, _, _) => refl }
+}
+
+theorem nat_map_get_map<A, B>(m: NatMap<A>, f: A → B, k: Nat): nat_map_get(m.map(f), k) = nat_map_get(m, k).map(f) decreases k {
+    match k {
+        Zero => trans(nat_map_get_zero(m.map(f)), trans(nat_map_here_map(m, f), cong_fn(λ (o: Option<A>) => o.map(f), sym(nat_map_get_zero(m))))),
+        Succ(j) => {
+            let h = j.half();
+            let ie: (nat_map_get(m.even_of().map(f), h) = nat_map_get(m.even_of(), h).map(f)) = nat_map_get_map(m.even_of(), f, h);
+            let io: (nat_map_get(m.odd_of().map(f), h) = nat_map_get(m.odd_of(), h).map(f)) = nat_map_get_map(m.odd_of(), f, h);
+            let e1: (nat_map_get(m.map(f).even_of(), h) = nat_map_get(m.even_of(), h).map(f)) =
+                trans(cong_fn(λ (n: NatMap<B>) => nat_map_get(n, h), nat_map_even_map(m, f)), ie);
+            let o1: (nat_map_get(m.map(f).odd_of(), h) = nat_map_get(m.odd_of(), h).map(f)) =
+                trans(cong_fn(λ (n: NatMap<B>) => nat_map_get(n, h), nat_map_odd_map(m, f)), io);
+            trans(nat_map_get_succ(m.map(f), j),
+                trans(cong_fn(λ (y: Option<B>) => NatMap::pick(j.low_bit(), y, nat_map_get(m.map(f).odd_of(), h)), e1),
+                    trans(cong_fn(λ (y: Option<B>) => NatMap::pick(j.low_bit(), nat_map_get(m.even_of(), h).map(f), y), o1),
+                        trans(sym(nat_map_pick_map(j.low_bit(), f, nat_map_get(m.even_of(), h), nat_map_get(m.odd_of(), h))),
+                            cong_fn(λ (o: Option<A>) => o.map(f), sym(nat_map_get_succ(m, j)))))))
+        },
+    }
+    on ?dec1 := j.half_le();
+    on ?dec2 := j.half_le();
+}
+
+// ---------------------------------------------------------------------------
+// Arrays: the keys `0 .. len` of a map, with a list's positional operations
+// at a logarithmic cost each. Only `snoc` and `update` write, and they write
+// below `len`, so the map holds exactly those keys; the laws below do not
+// need that, and hold of any array.
+
+record Array<A> { count: Nat, slots: NatMap<A> }
+
+fn Array::len<A>(self a: Array<A>) → Nat { a.count }
+
+fn Array::empty<A>() → Array<A> { Array(0, MEmpty) }
+
+fn Array::nth<A>(self a: Array<A>, i: Nat) → Option<A> { nat_map_get(a.slots, i) }
+
+// `a` with `x` after its last element.
+fn Array::snoc<A>(self a: Array<A>, x: A) → Array<A> { Array(a.count + 1, nat_map_set(a.slots, a.count, x)) }
+
+fn Array::map<A, B>(self a: Array<A>, f: A → B) → Array<B> { Array(a.count, a.slots.map(f)) }
+
+fn Array::update_at<A>(a: Array<A>, i: Nat, f: A → A, o: Option<A>) → Array<A> {
+    match o { None => a, Some(v) => Array(a.count, nat_map_set(a.slots, i, f(v))) }
+}
+
+// `a` with element `i` replaced by `f` of it; `a` when there is none.
+fn Array::update<A>(self a: Array<A>, i: Nat, f: A → A) → Array<A> { Array::update_at(a, i, f, a.nth(i)) }
+
+fn Array::of_list_go<A>(xs: List<A>, a: Array<A>) → Array<A> {
+    match xs { Nil => a, Cons(x, rest) => Array::of_list_go(rest, a.snoc(x)) }
+}
+
+fn Array::of_list<A>(xs: List<A>) → Array<A> { Array::of_list_go(xs, Array::empty()) }
+
+fn Array::replicate<A>(x: A, n: Nat) → Array<A> { Array::of_list(List::replicate(x, n)) }
+
+// How many keys have a value: a walk of the whole tree, which forces it.
+fn nat_map_count<A>(m: NatMap<A>) → Nat {
+    match m {
+        MEmpty => 0,
+        MNode(here, even, odd) => match here { None => 0, Some(_) => 1 } + nat_map_count(even) + nat_map_count(odd),
+    }
+}
+
+// `[x0, y0, x1, y1, …]`, the rest of the longer list after.
+fn interleave<A>(xs: List<A>, ys: List<A>) → List<A> {
+    match xs {
+        Nil => ys,
+        Cons(x, rest) => match ys { Nil => xs, Cons(y, more) => Cons(x, Cons(y, interleave(rest, more))) },
+    }
+}
+
+// The values at `0, 1, 2, …` up to the first key with none, read off the
+// tree in one walk: key `0` is here, and the even and odd subtrees hold
+// the keys `2i + 1` and `2i + 2`, which alternate.
+fn nat_map_dense<A>(m: NatMap<A>) → List<A> {
+    match m {
+        MEmpty => [],
+        MNode(here, even, odd) => match here { None => [], Some(x) => Cons(x, interleave(nat_map_dense(even), nat_map_dense(odd))) },
+    }
+}
+
+// The elements in order. An array's keys are `0` to `count - 1`, so its
+// tree is dense and read in one walk, at a constant per element where
+// reading each index pays a lookup.
+fn Array::to_list<A>(self a: Array<A>) → List<A> { nat_map_dense(a.slots) }
+
+theorem Array::nth_empty<A>(i: Nat): Array::empty<A>().nth(i) = None { nat_map_get_empty<A>(i) }
+
+theorem Array::len_snoc<A>(a: Array<A>, x: A): a.snoc(x).len() = Succ(a.len()) { refl }
+
+theorem Array::nth_snoc_last<A>(a: Array<A>, x: A): a.snoc(x).nth(a.count) = Some(x) { nat_map_get_set_same(a.slots, a.count, x) }
+
+theorem Array::nth_snoc_other<A>(a: Array<A>, x: A, i: Nat, ne: a.count ≠ i): a.snoc(x).nth(i) = a.nth(i) {
+    nat_map_get_set_other(a.slots, a.count, x, i, ne)
+}
+
+// What `snoc` leaves: the element it adds, at `len`, and every other as it was.
+theorem Array::nth_snoc_cases<A>(a: Array<A>, y: A, i: Nat): Or<a.snoc(y).nth(i) = a.nth(i), And<i = a.count, a.snoc(y).nth(i) = Some(y)>> {
+    match a.count.eq_dec(i) {
+        Inl(e) => Inr(And(sym(e), j(e, λ k _ => a.snoc(y).nth(k) = Some(y), Array::nth_snoc_last(a, y)))),
+        Inr(ne) => Inl(Array::nth_snoc_other(a, y, i, ne)),
+    }
+}
+
+theorem Array::nth_map<A, B>(a: Array<A>, f: A → B, i: Nat): a.map(f).nth(i) = a.nth(i).map(f) { nat_map_get_map(a.slots, f, i) }

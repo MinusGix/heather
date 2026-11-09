@@ -319,6 +319,9 @@ inductive Op {
     // `x.shift_left(k)`, `x.shift_right(k)` and `x.arithmetic_shift_right(k)`
     // of a `BitVec(w)`, by a literal count.
     Shl(w: Nat, k: Nat), Lshr(w: Nat, k: Nat), Ashr(w: Nat, k: Nat),
+    // `x.sign_extend(extra)` of a `BitVec(Succ(n))` (an `i32`'s `extend`
+    // to `i64`, `MOVSX`).
+    Sext(n: Nat, extra: Nat),
 }
 
 fn Op::params(self o: Op) → List<Ty> {
@@ -333,6 +336,7 @@ fn Op::params(self o: Op) → List<Ty> {
         ToNat => [Word(64)],
         Trunc(n, extra) => [Word(extra + n)],
         Shl(w, _) => [Word(w)], Lshr(w, _) => [Word(w)], Ashr(w, _) => [Word(w)],
+        Sext(n, _) => [Word(Succ(n))],
     }
 }
 
@@ -347,6 +351,7 @@ fn Op::result(self o: Op) → Ty {
         ToNat => Count,
         Trunc(n, _) => Word(n),
         Shl(w, _) => Word(w), Lshr(w, _) => Word(w), Ashr(w, _) => Word(w),
+        Sext(n, extra) => Word(extra + Succ(n)),
     }
 }
 
@@ -372,6 +377,7 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Shl(w, k) => λ (x: BitVec(w)) => x.shift_left(k),
         Lshr(w, k) => λ (x: BitVec(w)) => x.shift_right(k),
         Ashr(w, k) => λ (x: BitVec(w)) => x.arithmetic_shift_right(k),
+        Sext(n, extra) => λ (x: BitVec(Succ(n))) => x.sign_extend(extra),
     }
 }
 
@@ -625,6 +631,7 @@ fn Op::code(self o: Op) → Pair<Nat, Pair<Nat, Nat>> {
         ToNat => Pair(15, Pair(0, 0)),
         Trunc(n, extra) => Pair(16, Pair(n, extra)),
         Shl(w, k) => Pair(17, Pair(w, k)), Lshr(w, k) => Pair(18, Pair(w, k)), Ashr(w, k) => Pair(19, Pair(w, k)),
+        Sext(n, extra) => Pair(20, Pair(n, extra)),
     }
 }
 

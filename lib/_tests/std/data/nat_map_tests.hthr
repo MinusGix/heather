@@ -1,0 +1,44 @@
+// Probes of `lib/std/data/nat_map.hthr`: lookups and updates at keys on
+// both sides of the trie, an array built by `snoc` read back in order (the
+// dense walk), and the laws at an open map. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import nat_map;
+
+fn opt_nat_same(o: Option<Nat>, n: Nat) → Bool { match o { None => False, Some(m) => m.same(n) } }
+
+fn nats_same(xs: List<Nat>, ys: List<Nat>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, xr) => match ys { Nil => False, Cons(y, yr) => x.same(y).and(nats_same(xr, yr)) },
+    }
+}
+
+fn m3() → NatMap<Nat> { nat_map_set(nat_map_set(nat_map_set(NatMap::empty(), 0, 10), 5, 15), 1000, 7) }
+
+theorem get_root(): opt_nat_same(nat_map_get(m3(), 0), 10) = True { refl }
+theorem get_deep(): opt_nat_same(nat_map_get(m3(), 1000), 7) = True { refl }
+theorem get_overwritten(): opt_nat_same(nat_map_get(nat_map_set(m3(), 5, 6), 5), 6) = True { refl }
+theorem get_absent(): nat_map_get(m3(), 4) = None { refl }
+theorem count_three(): nat_map_count(m3()) = 3 { refl }
+
+fn arr(n: Nat) → Array<Nat> { Array::of_list(List::count_from(0, n)) }
+
+// The dense walk reads an array back in order, at sizes that end on each
+// side of the trie.
+theorem to_list_seven(): nats_same(arr(7).to_list(), [0, 1, 2, 3, 4, 5, 6]) = True { refl }
+theorem to_list_eight(): nats_same(arr(8).to_list(), List::count_from(0, 8)) = True { refl }
+theorem to_list_hundred(): nats_same(arr(100).to_list(), List::count_from(0, 100)) = True { refl }
+theorem nth_hundred(): opt_nat_same(arr(100).nth(63), 63) = True { refl }
+theorem updated(): nats_same((arr(5).update(2, λ x => x + 40)).to_list(), [0, 1, 42, 3, 4]) = True { refl }
+theorem len_snoc_open(a: Array<Nat>, x: Nat): a.snoc(x).len() = Succ(a.len()) { Array::len_snoc(a, x) }
+
+// The laws, at an open map and open keys.
+theorem set_then_get<A>(m: NatMap<A>, k: Nat, x: A): nat_map_get(nat_map_set(m, k, x), k) = Some(x) { nat_map_get_set_same(m, k, x) }
+theorem set_other_key<A>(m: NatMap<A>, k, i: Nat, x: A, ne: k ≠ i): nat_map_get(nat_map_set(m, k, x), i) = nat_map_get(m, i) {
+    nat_map_get_set_other(m, k, x, i, ne)
+}

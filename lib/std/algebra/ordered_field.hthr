@@ -499,6 +499,19 @@ class OrderedAddGroup<A>(same as ≈: A → A → Type, lt as <: A → A → Typ
     extends OrderedAddMonoid<A>(same, lt, le, add), GroupRel<A>(same, add)
 {}
 
+// `-x` and `x - y` at a section's carrier (rung 2b, as `Ring`'s in
+// semiring.hthr): the inverse, and a sum with it.
+section<A: OrderedAddGroup(≈, <, <=, +)> {
+
+fn OrderedAddGroup::neg(self x: A) → A { A.inv(x) }
+
+fn OrderedAddGroup::sub(self x, y: A) → A { x + A.inv(y) }
+
+}
+
+designation prefix - at OrderedAddGroup := OrderedAddGroup::neg
+designation - at OrderedAddGroup := OrderedAddGroup::sub
+
 section<A: OrderedAddGroup(≈, <, <=, +)> {
 
 // |x| < e and |x| ≤ e, as the intervals (-e, e) and [-e, e]. Stating the

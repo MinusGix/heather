@@ -243,6 +243,23 @@ fn BitVec::sign_bit({n: Nat}, self x: BitVec(n)) → Bool {
     }
 }
 
+// `x` read at width `w` in two's complement: its bits, then the bit `s`
+// (its sign, `sresize`) repeated past them; its low `w` bits where `w` is
+// narrower. FunctionIR's `SignResize`, the signed twin of `Resize`'s
+// `ofNat(x.toNat())`: at a wider width it is the sign extension
+// (`BitVec::sresize_sign_extend`). The recursion is on the output's width.
+fn BitVec::widen_bits(w, n: Nat, x: BitVec(n), s: Bool) → BitVec(w) {
+    (match w as λ v => (m: Nat) → BitVec(m) → BitVec(v) {
+        Zero => λ m y => BitVec::nil(),
+        Succ(k, ih) => λ m => match m as λ l => BitVec(l) → BitVec(Succ(k)) {
+            Zero => λ _ => ih(0, BitVec::nil()).cons_bit(s),
+            Succ(l) => λ z => ih(l, z.tail_bits()).cons_bit(z.head_bit()),
+        },
+    })(n, x)
+}
+
+fn BitVec::sresize({n: Nat}, self x: BitVec(n), w: Nat) → BitVec(w) { BitVec::widen_bits(w, n, x, x.sign_bit()) }
+
 fn BitVec::toInt({n: Nat}, self x: BitVec(n)) → Int {
     match x.sign_bit() {
         False => OfNat(x.toNat()),
@@ -2095,6 +2112,27 @@ theorem BitVec::ofNat_toNat_truncate(n: Nat): (extra: Nat) → (x: BitVec(extra 
                 a := BitVec::odd_bit(Nat::of_bit(h) + Nat::twice(m)), b := h)
         },
     }
+}
+
+// Read at a wider width, a vector's two's-complement value is its sign
+// extension: its bits, then its sign bit (FunctionIR's `SignResize`).
+theorem BitVec::widen_bits_repeat(s: Bool, w: Nat): (x: BitVec(0)) → BitVec::widen_bits(w, 0, x, s) = BitVec::repeat_bit(s, n := w) {
+    match w {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_tail_cong(k, s, ih(BitVec::nil())),
+    }
+}
+
+theorem BitVec::widen_bits_concat(s: Bool, extra, n: Nat): (x: BitVec(n)) →
+        BitVec::widen_bits(extra + n, n, x, s) = x.concat(BitVec::repeat_bit(s, n := extra)) {
+    match n {
+        Zero => λ x => BitVec::widen_bits_repeat(s, extra, x),
+        Succ(m, ih) => λ x => BitVec::cons_bit_tail_cong(extra + m, x.head_bit(), ih(x.tail_bits())),
+    }
+}
+
+theorem BitVec::sresize_sign_extend(n, extra: Nat, x: BitVec(Succ(n))): x.sresize(extra + Succ(n)) = x.sign_extend(extra) {
+    BitVec::widen_bits_concat(x.sign_bit(), extra, Succ(n), x)
 }
 
 // A value below `2^n` has nothing above its low `n` bits. With n = 47 this is

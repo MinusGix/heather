@@ -96,6 +96,45 @@ theorem u64_sar_signed_rt_is(): u64_sar_signed::rt =
     Fun([Word(64)], Word(64), Let(Make(0, [0]), Let(Field(0, 0, 0), Let(Prim(Ashr(64, 1), [0]), Let(Make(0, [0]), Field(0, 0, 0)))))) { refl }
 
 // ---------------------------------------------------------------------------
+// Sign extension (issues/runtime-signed-extend-divide.md): `sign_extend` is
+// rt's `Sext`, lowered to FunctionIR's `SignResize`. An `i32` and an `i8`
+// read out of a `u64`'s low bits and widened back, sign and all.
+
+runtime fn sext32(x: BitVec(64)) → BitVec(64) { x.truncate(32, 32).sign_extend(32) }
+
+theorem sext32_rt_is(): sext32::rt = Fun([Word(64)], Word(64), Let(Prim(Trunc(32, 32), [0]), Prim(Sext(31, 32), [0]))) { refl }
+
+theorem sext32_negative(): program_eval(sext32::program, 0, [BitVec::ofNat(0x1234567880000000)]) =
+    BitVec::ofNat(0xffffffff80000000) { sext32::agrees(BitVec::ofNat(0x1234567880000000)) }
+
+theorem sext32_positive(): program_eval(sext32::program, 0, [BitVec::ofNat(0xffffffff7fffffff)]) =
+    BitVec::ofNat(0x7fffffff) { sext32::agrees(BitVec::ofNat(0xffffffff7fffffff)) }
+
+// The control: zero extension of the same word keeps the high half clear.
+runtime fn zext32(x: BitVec(64)) → BitVec(64) { x.truncate(32, 32).zero_extend(32) }
+
+theorem zext32_negative(): program_eval(zext32::program, 0, [BitVec::ofNat(0x1234567880000000)]) =
+    BitVec::ofNat(0x80000000) { zext32::agrees(BitVec::ofNat(0x1234567880000000)) }
+
+// expect-error(mismatch)
+theorem zext32_is_not_sext(): program_eval(zext32::program, 0, [BitVec::ofNat(0x80000000)]) =
+    BitVec::ofNat(0xffffffff80000000) { zext32::agrees(BitVec::ofNat(0x80000000)) }
+
+runtime fn sext8(x: BitVec(64)) → BitVec(64) { x.truncate(8, 56).sign_extend(56) }
+
+theorem sext8_agrees(x: BitVec(64)): program_eval(sext8::program, 0, [x]) = x.truncate(8, 56).sign_extend(56) { sext8::agrees(x) }
+
+theorem sext8_minus_one(): program_eval(sext8::program, 0, [BitVec::ofNat(0xff)]) = BitVec::ofNat(0xffffffffffffffff) { sext8::agrees(BitVec::ofNat(0xff)) }
+
+// An `i32`'s word widened and read as an `i64`. (`SInt::extend` itself
+// takes an `SInt(32)`, a value the reflected fragment does not hold yet:
+// issues/runtime-repr-narrow-words.md.)
+runtime fn i32_bits_to_i64(x: BitVec(64)) → SInt(64) { x.truncate(32, 32).sign_extend(32).as_signed() }
+
+theorem i32_bits_to_i64_agrees(): program_eval(i32_bits_to_i64::program, 0, [BitVec::ofNat(0xfffffffe)]) =
+    BitVec::ofNat(0xfffffffffffffffe) { i32_bits_to_i64::agrees(BitVec::ofNat(0xfffffffe)) }
+
+// ---------------------------------------------------------------------------
 // Refusals, each with its reason.
 
 // Only the type's own operations are read through their definitions
@@ -110,7 +149,3 @@ runtime fn uses_i64_helper(a: SInt(64)) → SInt(64) { i64_helper(a) }
 // word.
 // expect-error: holds its type in something other than one 64-bit word
 runtime fn i32_add(a: SInt(32), b: SInt(32)) → SInt(32) { a + b }
-
-// A loop's state is words (issues/runtime-repr-loops.md).
-// expect-error: a parameter that is not a 64-bit word
-runtime fn i64_count(n: Nat, a: SInt(64)) → SInt(64) { match n { Zero => a, Succ(k) => i64_count(k, a + a) } }
