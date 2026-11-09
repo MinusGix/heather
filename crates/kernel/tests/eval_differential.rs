@@ -60,7 +60,7 @@ use heather_kernel::level::Level;
 use heather_kernel::reduce::{whnf_term_delta, whnf_type_delta, Defs, NATIVE_DEPTH_LIMIT};
 use heather_kernel::term::{
     CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar,
-    SubstTail, Term, Type,
+    SubstTail, Term, Type, Withheld,
 };
 use heather_kernel::value::{
     Elim, Env, Head, PiAnn, SigAnn, SumAnn, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
@@ -1549,6 +1549,68 @@ fn nat_drain(n: u32) -> Rc<Term> {
         step: Rc::new(Term::Var(LocalVar(0))),
         scrut: numeral(n),
     })
+}
+
+/// A withheld definition's call at a closed argument is glued whatever
+/// mode first evaluates it (`eval/withheld.rs`, issues/value-memo-evaluation-mode.md).
+/// The argument `pred(two)` is closed, but a δ-lazy force leaves it as a
+/// fold stuck on the glued `two`, which the closedness walk could not open:
+/// the call stayed withheld, the memo kept it so, and a δ-transparent run
+/// that read it could not unfold it — conversion refused the interval
+/// verdicts of `lib/_tests/std/tactic/interval_tactic_tests.hthr` under a
+/// δ-lazy look-ahead (#459). Both routes are held: the call evaluated by a
+/// lazy run, and the argument already forced lazily (a memo hit) first.
+#[test]
+fn a_withheld_call_at_a_lazily_stuck_closed_argument_is_glued() {
+    let nil = || LocalCtx { base: CtxBase::Nil, entries: (vec![]).into() };
+    let nat = || Rc::new(Type::Nat);
+    let global = |v: u32| {
+        Rc::new(Term::GlobalTm {
+            var: GlobalVar(v),
+            subst: LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms: vec![] },
+        })
+    };
+    // Ψ = two := 2, w := λ n. n — `w` withheld until one argument.
+    let arrow = Rc::new(Type::Pi { dom_level: Level::Zero, cod_level: Level::Zero, dom: nat(), cod: nat() });
+    let id = Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: Level::Zero, dom: nat(), body: Rc::new(Term::Var(LocalVar(0))) });
+    let mut withheld = Withheld::new();
+    withheld.insert(1, 1);
+    let psi = GlobalCtx::new(vec![
+        GlobalBinding::defined_tm(nil(), Layer::Code, nat(), Level::Zero, numeral(2)),
+        GlobalBinding::defined_tm(nil(), Layer::Code, arrow, Level::Zero, id),
+    ])
+    .withholding(Some(Rc::new(withheld)));
+    // `pred(two)`: a general fold, which a lazy run leaves stuck on `two`.
+    let pred_two = Rc::new(Term::ElimNat {
+        level: Level::Zero,
+        motive: nat(),
+        base: Rc::new(Term::Zero),
+        step: Rc::new(Term::Var(LocalVar(1))),
+        scrut: global(1),
+    });
+    let call = |arg: Rc<Term>| {
+        Rc::new(Term::App { fun: global(0), dom_level: Level::Zero, cod_level: Level::Zero, dom: nat(), cod: nat(), arg })
+    };
+    let gamma = LocalCtx::nil();
+    for forced_first in [false, true] {
+        let arena = ValueArena::new();
+        let mut ev = Eval::new(FUEL, Defs::transparent(&psi), gamma.base, &arena);
+        let arg = arena.tm(TmClo::syn(Env::empty(), Rc::clone(&pred_two)));
+        if forced_first {
+            let lazy = ev.force(arg).expect("a stuck fold is one step");
+            assert!(
+                matches!(&*lazy, Val::Neutral(n) if n.unfold.is_some()),
+                "the premise: a lazy run leaves the fold stuck on the glued `two`"
+            );
+        }
+        let v = ev.eval_tm(&call(Rc::new(Term::Var(LocalVar(0)))), &Env::empty().push(&arena, arg)).expect("one call");
+        assert!(
+            matches!(&*v, Val::Neutral(n) if n.unfold.is_some()),
+            "the call at a closed argument is glued (argument forced first: {forced_first})"
+        );
+        let out = ev.delta_whnf(v).expect("the transparent run unfolds the call");
+        assert!(matches!(&*out, Val::Succ(p) if matches!(&*ev.force(p).unwrap(), Val::Zero)), "w(pred(2)) = 1");
+    }
 }
 
 #[test]
