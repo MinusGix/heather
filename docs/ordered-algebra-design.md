@@ -126,8 +126,8 @@ renamed mechanically:
   `OrderedSemiring::pos_of_mul_pos`
 - `OrderedField::{mul_le_mono_{l,r}_nonpos, sq_nonneg}` → `OrderedRing::…`
 
-`mono`'s class table (`lib/std/tactic/mono.hthr`, `mono_classes`) has a row for
-each new class. A goal inside `section<A: OrderedSemiring(…)>` gets the semiring's
+`mono`'s class entries (registered at the end of `ordered_field.hthr` since
+2026-11-08, docs/registered-values-design.md) have one for each new class. A goal inside `section<A: OrderedSemiring(…)>` gets the semiring's
 laws, and one inside `section<A: OrderedAddMonoid(…)>` gets translation.
 `Nat::range_le` and `Int::range_le` remain as named one-line calls to the generic
 theorem, because `mono`'s carrier tables cite them.

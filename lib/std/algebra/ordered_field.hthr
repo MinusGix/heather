@@ -63,6 +63,8 @@ import algebra_rel;
 import semiring;
 import omega;
 import order;
+import list;
+import mono_laws;
 
 // ---------------------------------------------------------------------------
 // Relations built from the strict order.
@@ -1229,3 +1231,87 @@ instance OrderedRing<Int>(RelId<Int>, Int::Lt, Int::Le, Int::add, Int::mul) {
     mul_lt_l := λ x y z h hz => x.mul_lt_mono_l(y, z, h, hz),
     mul_lt_reflect_l := λ x y z hz h => x.lt_of_mul_lt_mul_l(y, z, hz, h),
 }
+
+// ---------------------------------------------------------------------------
+// `mono`'s laws at the ordered classes (lib/std/tactic/mono_laws.hthr),
+// strongest class first. Every class extends `StrictOrder`, whose
+// `le_refl`, `le_of_lt` and `≈` pushes are the reflexivity, weakening and
+// cast reading at every dictionary; `big_operator` adds the sums' laws.
+
+def mono_class_pushes: PushLaws = PushLaws(name_of(StrictOrder::le_of_same_l), name_of(StrictOrder::le_of_same_r),
+    name_of(StrictOrder::lt_of_same_l), name_of(StrictOrder::lt_of_same_r));
+
+// Translation, at every ordered monoid.
+def mono_monoid_laws: List<ClassLaw> = [
+    class_law(False, Index(4), [1], name_of(OrderedAddMonoid::add_le_mono_l)),
+    class_law(False, Index(4), [0], name_of(OrderedAddMonoid::add_le_mono_r)),
+    class_law(True, Index(4), [1], name_of(OrderedAddMonoid::add_lt_mono_l)),
+];
+
+// What a group adds: negation.
+def mono_neg_laws: List<ClassLaw> = [class_law(True, Field("inv"), [1], name_of(OrderedAddGroup::neg_lt))];
+
+// What locatedness adds: both summands at once, a strict and a weak bound
+// together.
+def mono_located_laws: List<ClassLaw> = [
+    class_law(False, Index(4), [0, 1], name_of(LocatedAddMonoid::add_le_mono)),
+    class_law(True, Index(4), [0, 1], name_of(LocatedAddMonoid::add_lt_le_mono)),
+];
+
+// Negation at `<=`, which needs both.
+def mono_located_neg_laws: List<ClassLaw> = [class_law(False, Field("inv"), [1], name_of(LocatedAddGroup::neg_le))];
+
+def mono_located_group_laws: List<ClassLaw> = mono_monoid_laws ++ mono_neg_laws ++ mono_located_laws ++ mono_located_neg_laws;
+
+// Products by a nonnegative or positive factor, at every ordered semiring.
+def mono_semiring_laws: List<ClassLaw> = [
+    class_law(False, Index(5), [1], name_of(OrderedSemiring::mul_le_mono_l)),
+    class_law(False, Index(5), [0], name_of(OrderedSemiring::mul_le_mono_r)),
+    class_law(False, Index(5), [0, 1], name_of(OrderedSemiring::mul_le_mul)),
+    class_law(True, Index(5), [1], name_of(OrderedSemiring::mul_lt_mono_l)),
+    class_law(True, Index(5), [0], name_of(OrderedSemiring::mul_lt_mono_r)),
+];
+
+// Both summands strictly, where nothing better is known.
+def mono_add_lt_laws: List<ClassLaw> = [class_law(True, Index(4), [0, 1], name_of(OrderedAddMonoid::add_lt_mono))];
+
+def mono_located_signs: List<ClassSign> = [
+    class_sign(True, Index(4), name_of(OrderedAddMonoid::add_pos)),
+    class_sign(False, Index(4), name_of(LocatedAddMonoid::add_nonneg)),
+];
+
+def mono_semiring_signs: List<ClassSign> = mono_located_signs ++ [
+    class_sign(False, Index(5), name_of(OrderedSemiring::mul_nonneg)),
+    class_sign(True, Index(5), name_of(OrderedSemiring::mul_pos)),
+];
+
+def mono_add_pos_signs: List<ClassSign> = [class_sign(True, Index(4), name_of(OrderedAddMonoid::add_pos))];
+
+register def mono_ordered_field: MonoEntry = MonoClass(name_of(OrderedField), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_field_rules: MonoEntry = MonoClassRules(name_of(OrderedField), mono_located_group_laws ++ mono_semiring_laws,
+    mono_semiring_signs ++ [class_sign(True, Field("recip"), name_of(OrderedField::recip_pos))]);
+
+register def mono_ordered_ring: MonoEntry = MonoClass(name_of(OrderedRing), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_ring_rules: MonoEntry = MonoClassRules(name_of(OrderedRing), mono_located_group_laws ++ mono_semiring_laws, mono_semiring_signs);
+
+register def mono_ordered_semiring: MonoEntry = MonoClass(name_of(OrderedSemiring), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_semiring_rules: MonoEntry = MonoClassRules(name_of(OrderedSemiring),
+    mono_monoid_laws ++ mono_located_laws ++ mono_semiring_laws, mono_semiring_signs);
+
+register def mono_located_group: MonoEntry = MonoClass(name_of(LocatedAddGroup), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_located_group_rules: MonoEntry = MonoClassRules(name_of(LocatedAddGroup), mono_located_group_laws, mono_located_signs);
+
+register def mono_located: MonoEntry = MonoClass(name_of(LocatedAddMonoid), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_located_rules: MonoEntry = MonoClassRules(name_of(LocatedAddMonoid), mono_monoid_laws ++ mono_located_laws, mono_located_signs);
+
+register def mono_ordered_add_group: MonoEntry = MonoClass(name_of(OrderedAddGroup), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_add_group_rules: MonoEntry = MonoClassRules(name_of(OrderedAddGroup),
+    mono_monoid_laws ++ mono_neg_laws ++ mono_add_lt_laws, mono_add_pos_signs);
+
+register def mono_ordered_add_monoid: MonoEntry = MonoClass(name_of(OrderedAddMonoid), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_add_monoid_rules: MonoEntry = MonoClassRules(name_of(OrderedAddMonoid),
+    mono_monoid_laws ++ mono_add_lt_laws, mono_add_pos_signs);
+
+register def mono_pseudo_order: MonoEntry = MonoClass(name_of(PseudoOrder), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+
+register def mono_strict_order: MonoEntry = MonoClass(name_of(StrictOrder), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);

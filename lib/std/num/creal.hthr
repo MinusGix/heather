@@ -56,6 +56,7 @@ import linarith;
 import rat;
 import morphism;
 import dyadic;
+import mono_laws;
 export algebra::{Numeral};
 
 record CReal {
@@ -3423,3 +3424,34 @@ theorem CReal::apart_of_scaled({Z, E: CReal}, a, b, nu, eps, d: Rat, hnu: 0 < nu
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// `mono`'s laws at `CReal` (lib/std/tactic/mono_laws.hthr): registered here,
+// where every lemma they name is in scope.
+
+register def mono_creal_order: MonoEntry = MonoOrder(name_of(CReal::Le), name_of(CReal::Lt), name_of(CReal::le_refl), name_of(CReal::le_of_lt),
+    Some(PushLaws(name_of(CReal::le_of_same_l), name_of(CReal::le_of_same_r), name_of(CReal::lt_of_same_l), name_of(CReal::lt_of_same_r))));
+
+register def mono_creal_rules: MonoEntry = MonoRules(name_of(CReal::Le), [
+    mono_law(False, name_of(CReal::add), [1], name_of(CReal::add_le_mono_l)),
+    mono_law(False, name_of(CReal::add), [0], name_of(CReal::add_le_mono_r)),
+    mono_law(False, name_of(CReal::add), [0, 1], name_of(CReal::add_le_mono)),
+    mono_law(False, name_of(CReal::mul), [1], name_of(CReal::mul_le_mono_l)),
+    mono_law(False, name_of(CReal::mul), [0], name_of(CReal::mul_le_mono_r)),
+    mono_law(False, name_of(CReal::neg), [0], name_of(CReal::neg_le)),
+    mono_law(False, name_of(CReal::inv), [0, 1], name_of(CReal::inv_le_inv)),
+    mono_law(True, name_of(CReal::add), [1], name_of(CReal::add_lt_mono_l)),
+    mono_law(True, name_of(CReal::add), [0], name_of(CReal::add_lt_mono_r)),
+    mono_law(True, name_of(CReal::add), [0, 1], name_of(CReal::add_lt_mono)),
+    mono_law(True, name_of(CReal::mul), [1], name_of(CReal::mul_lt_mono_l)),
+    mono_law(True, name_of(CReal::mul), [0], name_of(CReal::mul_lt_mono_r)),
+    mono_law(False, name_of(MonoidRel::range), [2], name_of(CReal::range_le)),
+], [
+    mono_sign(False, name_of(CReal::add), name_of(CReal::add_nonneg)),
+    mono_sign(False, name_of(CReal::mul), name_of(CReal::mul_nonneg)),
+    mono_sign(True, name_of(CReal::add), name_of(CReal::add_pos)),
+    mono_sign(True, name_of(CReal::mul), name_of(CReal::mul_pos)),
+    mono_sign(False, name_of(MonoidRel::range), name_of(CReal::range_nonneg)),
+]);
+
+register def mono_creal_unsub: MonoEntry = MonoUnsub(name_of(CReal::sub), name_of(CReal::add), name_of(CReal::neg));

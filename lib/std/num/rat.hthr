@@ -35,6 +35,7 @@ import ordered_field;
 import morphism;
 import big_operator;
 import linarith;
+import mono_laws;
 export algebra::{Numeral};
 
 record Rat { num: Int, den: Pos<Nat> }
@@ -2658,3 +2659,47 @@ theorem Rat::far_of_int(N: Int, nu: Rat, hnu: 0 <= nu, {b: Rat}, hb: b ≈ Rat::
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// `mono`'s laws at `Rat` (lib/std/tactic/mono_laws.hthr): registered here,
+// where every lemma they name is in scope.
+
+register def mono_rat_order: MonoEntry = MonoOrder(name_of(Rat::Le), name_of(Rat::Lt), name_of(Rat::le_refl), name_of(Rat::le_of_lt),
+    Some(PushLaws(name_of(Rat::le_of_same_of_le), name_of(Rat::le_of_same_r), name_of(Rat::lt_of_same_l), name_of(Rat::lt_of_same_r))));
+
+register def mono_rat_rules: MonoEntry = MonoRules(name_of(Rat::Le), [
+    mono_law(False, name_of(Rat::add), [1], name_of(Rat::add_le_mono_l)),
+    mono_law(False, name_of(Rat::add), [0], name_of(Rat::add_le_mono_r)),
+    mono_law(False, name_of(Rat::add), [0, 1], name_of(Rat::add_le_mono)),
+    mono_law(False, name_of(Rat::sub), [1], name_of(Rat::sub_le_sub_l)),
+    mono_law(False, name_of(Rat::sub), [0], name_of(Rat::sub_le_sub_r)),
+    mono_law(False, name_of(Rat::sub), [0, 1], name_of(Rat::sub_le_sub)),
+    mono_law(False, name_of(Rat::mul), [1], name_of(Rat::mul_le_mono_l)),
+    mono_law(False, name_of(Rat::mul), [0], name_of(Rat::mul_le_mono_r)),
+    mono_law(False, name_of(Rat::mul), [0, 1], name_of(Rat::mul_le_mul)),
+    mono_law(False, name_of(Rat::neg), [0], name_of(Rat::neg_le)),
+    mono_law(False, name_of(Rat::recip), [0], name_of(Rat::recip_le_recip)),
+    mono_law(False, name_of(Rat::npow), [0], name_of(Rat::npow_le_mono)),
+    mono_law(True, name_of(Rat::add), [1], name_of(Rat::add_lt_mono_l)),
+    mono_law(True, name_of(Rat::add), [0], name_of(Rat::add_lt_mono_r)),
+    mono_law(True, name_of(Rat::add), [0, 1], name_of(Rat::add_lt_mono)),
+    mono_law(True, name_of(Rat::sub), [1], name_of(Rat::sub_lt_sub_l)),
+    mono_law(True, name_of(Rat::sub), [0], name_of(Rat::sub_lt_sub_r)),
+    mono_law(True, name_of(Rat::mul), [1], name_of(Rat::mul_lt_mono_l)),
+    mono_law(True, name_of(Rat::mul), [0], name_of(Rat::mul_lt_mono_r)),
+    mono_law(True, name_of(Rat::neg), [0], name_of(Rat::neg_lt)),
+    mono_law(False, name_of(MonoidRel::range), [2], name_of(Rat::range_le)),
+], [
+    mono_sign(False, name_of(Rat::abs), name_of(Rat::abs_nonneg)),
+    mono_sign(False, name_of(Rat::add), name_of(Rat::add_nonneg)),
+    mono_sign(False, name_of(Rat::mul), name_of(Rat::mul_nonneg)),
+    mono_sign(False, name_of(Rat::npow), name_of(Rat::npow_nonneg)),
+    mono_sign(False, name_of(Rat::recip), name_of(Rat::recip_nonneg)),
+    mono_sign(True, name_of(Rat::add), name_of(Rat::add_pos)),
+    mono_sign(True, name_of(Rat::mul), name_of(Rat::mul_pos)),
+    mono_sign(True, name_of(Rat::npow), name_of(Rat::npow_pos)),
+    mono_sign(True, name_of(Rat::inv_succ), name_of(Rat::inv_succ_pos)),
+    mono_sign(False, name_of(MonoidRel::range), name_of(Rat::range_nonneg)),
+]);
+
+register def mono_rat_unsub: MonoEntry = MonoUnsub(name_of(Rat::sub), name_of(Rat::add), name_of(Rat::neg));

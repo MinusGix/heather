@@ -33,7 +33,7 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x20";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x21";
 const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1c";
 
 /// The two encodings' versions, image then interface: what a module cache
@@ -2156,6 +2156,7 @@ fn put_event(w: &mut Writer, event: &DeltaEvent) {
             w.byte(18); w.string(&rule.global); w.string(&rule.relation);
             w.vec(&rule.heads, |w, head| w.option(head.as_ref(), |w, head| w.string(head)));
         }
+        DeltaEvent::Registered { ty, global } => { w.byte(20); w.string(ty); w.string(global); }
         DeltaEvent::Interface { key, info } => {
             w.byte(19); w.string(key); w.string(&info.module); w.u32(info.arity); w.string(&info.name);
             w.vec(&info.equations, |w, eq| w.string(eq));
@@ -2215,6 +2216,7 @@ fn get_event(r: &mut Reader<'_>) -> Result<DeltaEvent, ModuleImageDecodeError> {
         18 => DeltaEvent::Evidence(EvidenceRule {
             global: r.string()?, relation: r.string()?, heads: r.vec(|r| r.option(Reader::string))?,
         }),
+        20 => DeltaEvent::Registered { ty: r.string()?, global: r.string()? },
         19 => DeltaEvent::Interface { key: r.string()?, info: crate::interfaces::InterfaceInfo {
             module: r.string()?, arity: r.u32()?, name: r.string()?, equations: r.vec(Reader::string)?,
         } },

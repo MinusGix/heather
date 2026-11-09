@@ -41,6 +41,7 @@ import ordered_field;
 import semiring;
 import rat;
 import morphism;
+import mono_laws;
 export algebra::{Numeral};
 
 record Dyadic { mant: Int, exp: Int }
@@ -896,3 +897,6 @@ theorem Dyadic::trim_same(self d: Dyadic): d.trim() ≈ d {
         },
     }
 }
+
+// `mono` reads a side `x - y` as `x + -y` (lib/std/tactic/mono_laws.hthr).
+register def mono_dyadic_unsub: MonoEntry = MonoUnsub(name_of(Dyadic::sub), name_of(Dyadic::add), name_of(Dyadic::neg));
