@@ -1,0 +1,89 @@
+// Type-valued functions over a mutual family, as one structural group
+// (issues/mutual-group-type-valued-members.md): a sibling call inside a
+// connective's operand (`P ∧ Q` is `And<P, Q>`, so the call sits in a type
+// argument) is a group edge and is rewritten like any other call, and `True`
+// in a member's arm is the proposition, read off the result type `Type` as
+// it is outside a group. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat;
+
+// Locally nameless terms over operators `O`; `ACons(b, t, rest)` is an
+// argument `t` under `b` binders.
+inductive Tm<O> {
+    Bv(index: Nat),
+    Fv(atom: Nat),
+    Node(op: O, args: Args<O>),
+}
+inductive Args<O> {
+    ANil,
+    ACons(binds: Nat, head: Tm<O>, tail: Args<O>),
+}
+
+// `∧`: every bound variable is below `d`.
+fn Lc<O>(t: Tm<O>, d: Nat) → Type {
+    match t { Bv(i) => i < d, Fv(_) => True, Node(_, ts) => LcArgs(ts, d) }
+}
+fn LcArgs<O>(ts: Args<O>, d: Nat) → Type {
+    match ts { ANil => True, ACons(b, t, rest) => Lc(t, d + b) ∧ LcArgs(rest, d) }
+}
+
+// `∨`: the atom `a` occurs.
+fn Occurs<O>(t: Tm<O>, a: Nat) → Type {
+    match t { Bv(_) => False, Fv(b) => a = b, Node(_, ts) => OccursArgs(ts, a) }
+}
+fn OccursArgs<O>(ts: Args<O>, a: Nat) → Type {
+    match ts { ANil => False, ACons(_, t, rest) => Occurs(t, a) ∨ OccursArgs(rest, a) }
+}
+
+// `∃`, its body a `λ` holding the sibling call: some argument that binds a
+// variable has the atom `a` in it.
+fn OccursBound<O>(t: Tm<O>, a: Nat) → Type {
+    match t { Bv(_) => False, Fv(_) => False, Node(_, ts) => OccursBoundArgs(ts, a) }
+}
+fn OccursBoundArgs<O>(ts: Args<O>, a: Nat) → Type {
+    match ts {
+        ANil => False,
+        ACons(b, t, rest) => (∃ k: Nat, b = Succ(k) ∧ Occurs(t, a)) ∨ OccursBound(t, a) ∨ OccursBoundArgs(rest, a),
+    }
+}
+
+// `∀`, a written type holding the sibling call: each argument is closed at
+// every depth past its binders.
+fn LcPast<O>(t: Tm<O>, d: Nat) → Type {
+    match t { Bv(i) => i < d, Fv(_) => True, Node(_, ts) => LcPastArgs(ts, d) }
+}
+fn LcPastArgs<O>(ts: Args<O>, d: Nat) → Type {
+    match ts { ANil => True, ACons(b, t, rest) => (∀ e: Nat, LcPast(t, d + b + e)) ∧ LcPastArgs(rest, d) }
+}
+
+// The members compute: each statement below is its value's type only by
+// unfolding the group.
+theorem lc_closed(): Lc<Nat>(Node(0, ACons(1, Bv(0), ACons(0, Fv(3), ANil))), 0) {
+    And(Succ(0).le_refl(), And(trivial, trivial))
+}
+theorem occurs_second(): Occurs<Nat>(Node(0, ACons(0, Bv(0), ACons(0, Fv(3), ANil))), 3) {
+    Inr(Inl(refl))
+}
+theorem occurs_bound(): OccursBound<Nat>(Node(0, ACons(2, Fv(5), ANil)), 5) {
+    Inl(Exists(1, And(refl, refl)))
+}
+theorem lc_past_atom(): LcPast<Nat>(Node(0, ACons(0, Fv(1), ANil)), 0) {
+    And(λ e => trivial, trivial)
+}
+theorem not_occurs_bv(): ¬Occurs<Nat>(Bv(0), 0) { λ h => h }
+
+// A theorem group over the type-valued group: local closure is monotone in
+// the depth.
+theorem lc_mono<O>(t: Tm<O>, d, e: Nat, h: Lc(t, d), le: d <= e): Lc(t, e) {
+    match t {
+        Bv(i) => Succ(i).le_trans(d, e, h, le),
+        Fv(_) => trivial,
+        Node(_, ts) => lc_args_mono(ts, d, e, h, le),
+    }
+}
+theorem lc_args_mono<O>(ts: Args<O>, d, e: Nat, h: LcArgs(ts, d), le: d <= e): LcArgs(ts, e) {
+    match ts {
+        ANil => trivial,
+        ACons(b, t, rest) => And(lc_mono(t, d + b, e + b, h.left, b.add_le_mono_r(d, e, le)), lc_args_mono(rest, d, e, h.right, le)),
+    }
+}

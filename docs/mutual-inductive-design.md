@@ -215,6 +215,13 @@ keys a group's slice on all its members' source, sees the same grouping as
 elaboration. Every other cycle keeps today's behaviour, the forward
 reference refusal.
 
+A call counts wherever the body writes it, the types it writes included:
+`P ∧ Q` is `And<P, Q>`, so in a `Type`-valued member a sibling call inside a
+connective's operand sits in a type argument, and `∀ x: A, P` is a type
+literal. The edge scan and the call rewrite both enter written types (a
+dependent arrow's binder shadows in its codomain); `∃`'s body is already a
+`λ` (issues/mutual-group-type-valued-members.md).
+
 **Errors in the members' terms.** `f#rec` is checked by the ordinary
 structural guard, whose messages name the declaration and parameters it
 checks. Each rewritten call records its span and callee, and an error from
