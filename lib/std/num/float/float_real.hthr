@@ -165,8 +165,7 @@ theorem Format::faithful_error_bound(self F: Format, q: Rat, r: Finite(F), range
 }
 
 section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
-        hom: OrderedRingHom<Rat, K>(map, ≈, <, <=, +, *, Rat::neg, 0, 1,
-            ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
+        hom: OrderedRingHom<Rat, K>(map)) {
 
 // `R <= a·lo + b` with `0 <= a` and `lo` below `x`: `R <= a·x + b` at `x`.
 theorem Rat::affine_up(x: K, lo, R, a, b: Rat, a_nn: 0 <= a, l: map(lo) <= x, at: R <= a * lo + b): map(R) <= map(a) * x + map(b) {

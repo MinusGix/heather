@@ -1,6 +1,6 @@
 ---
 title: A constraint at a nominal carrier restates every index its designations already name
-status: open
+status: closed
 labels: [notation,traits,elaboration,ergonomics]
 area: language
 milestone: [math-classes]
@@ -37,14 +37,6 @@ side at a nominal carrier not be restated.
 - A carrier with no designation for an index is refused naming the carrier
   and the index.
 
-## Also carried from the parent
-
-Diagnostics inside such a section still spell a `Rat` relation as
-`Rat::Le(a, b)`: display.rs keeps rung 1's block on any symbol a binder
-installed. It may lift it where the resolver now would read the symbol back
-(an operand at a nominal carrier other than the binder's, not numerals
-alone), which display can tell from the callee's declared operand carrier.
-
 ## Log
 
 - 2026-11-09: Filed as the residue of [[section-symbols-capture-other-carriers]].
@@ -60,4 +52,16 @@ alone), which display can tell from the callee's declared operand carrier.
   use site), which is named-arguments-design §9's staged binder default
   applied to a type's indices, with its free symbols resolved at the use
   site rather than the declaration's.
+- 2026-11-09: Index defaults landed (Minus picked them over stopping at bare
+  symbols). A `record`'s trailing value parameters may end `:= e`
+  (parser `valparam_list(_, defaults)`; `Inductive::valparam_defaults`, in
+  the module image, format bumped); `valparam_args_after` fills an omitted
+  suffix by checking the default at the slot's instantiated type under the
+  use site's symbols, stored η-short (`index_default_short`) so the
+  structural record's indices stay learnable (`?neg_b := K.inv`).
+  `OrderedRingHom`'s indices default to `≈ < <= + *`, `λ x => -x`, `0`,
+  `1`, and the four transfer headers are `OrderedRingHom<Rat, K>(map)`;
+  `ring`/`mono`/`linarith` through the local morphism unchanged
+  (cast_tests). Docs: surface-value-parameters §6.5. The display residue
+  moved to [[section-display-other-carrier-symbols]].
 

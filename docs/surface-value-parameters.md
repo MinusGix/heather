@@ -319,6 +319,46 @@ parameter, and every refusal of §6.2–6.3.
 
 ---
 
+## 6.5 Index defaults (2026-11-09)
+
+A `record`'s value parameter may end `:= e`, an **index default**
+(issues/constraint-indices-from-carrier-designations.md):
+
+```heather
+record OrderedRingHom<A, B>(map: A → B,
+        same_a: A → A → Type := ≈, …, neg_a: A → A := λ x => -x, zero_a: A := 0, one_a: A := 1,
+        same_b: B → B → Type := ≈, …)
+```
+
+- **A trailing run, positional.** Unlike a `fn` parameter's default
+  (docs/named-arguments-design.md §9) the slot keeps its position, so every
+  application that writes all the indices reads as before. Only a trailing
+  run may have defaults (a parse error otherwise), and an application omits
+  a suffix of them; one that omits them all may drop the parentheses.
+- **Elaborated at the use site.** The default is checked at the slot's type
+  as the application instantiates it, in a context that has the
+  declaration's earlier indices and type parameters by name and the *use
+  site's* operator symbols. So a bare `≈` is the designation at the slot's
+  carrier (`Rat::Same` at `Rat`), or, inside `section<K: OrderedField(≈, …)>`,
+  the binder (the carrier-aware rung 1, docs/operators-onto-classes-design.md
+  §4). That is what makes `OrderedRingHom<Rat, K>(map)` mean both sides at
+  once. A global a default names must be visible at the use site.
+- **Refused where it means nothing**: a default that does not elaborate is
+  reported at the application, naming the index and its default.
+- **Terms, η-short.** A function default is stored η-short: `λ x => -x`
+  is `Rat::neg` at `Rat`, and at a section's carrier, where `-x` is the
+  designated `OrderedAddGroup::neg(…, x)`, the dictionary field it computes
+  to, `K.inv`. A record's type is structural, so a caller recovers its
+  indices from the field types by unification, which learns `?neg_b :=
+  K.inv` from `?neg_b(map(x))` and nothing from a λ or from a wrapper with
+  extra arguments (the unifier's refusal to guess `?f := add(a)` from
+  `add(a, x)` stands). So `OrderedRingHom<Rat, K>(map)` elaborates to the
+  same indices the explicit header wrote, and `ring`, `mono` and
+  `linarith` read the morphism as before.
+
+The record's image carries the defaults, so the module-image format was
+bumped.
+
 ## 7. What this does not do
 
 Route 2 — a general `Sigma<A, B>` with `B` a type family — stays deferred, for

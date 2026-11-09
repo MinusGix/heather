@@ -116,8 +116,7 @@ fn Interval::below_eq(self I, J: Interval) → Bool {
 // identity, `HasReal` at `CReal` and `CReal::ofRat_hom`.
 
 section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
-        hom: OrderedRingHom<Rat, K>(map, ≈, <, <=, +, *, Rat::neg, 0, 1,
-            ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
+        hom: OrderedRingHom<Rat, K>(map)) {
 
 fn Interval::HasIn(self I: Interval, x: K) → Type {
     match I { Bnd(lo, hi) => map(lo.rat()) <= x ∧ x <= map(hi.rat()), Whole => True }

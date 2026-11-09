@@ -91,6 +91,13 @@ pub(crate) struct Inductive {
     /// Empty for every declaration without the `(…)` list, which is the state
     /// every check below degenerates to.
     pub valparams: Vec<(String, Ty)>,
+    /// `same_a: A → A → Type := ≈` — each value parameter's **index default**,
+    /// beside [`Self::valparams`] (issues/constraint-indices-from-carrier-designations.md):
+    /// what fills the slot when a type application stops before it,
+    /// elaborated at the *use site* under the use site's symbols, so `≈` is
+    /// the designation at the slot's instantiated carrier or the binder that
+    /// names it there. A trailing run only (the parser's check).
+    pub valparam_defaults: Vec<Option<Rc<Expr>>>,
     /// `class Semigroup<A>(op as ∙: A -> A -> A)` — the **body spellings** the
     /// value parameters install, as (symbol, value-parameter name) in written
     /// order (issues/binder-symbol-as-notation.md).
@@ -1450,6 +1457,7 @@ impl Elaborator {
                 .iter()
                 .map(|p| (p.name.clone(), p.ty.clone()))
                 .collect(),
+            valparam_defaults: d.valparams.iter().map(|p| p.default.as_deref().cloned().map(Rc::new)).collect(),
             op_symbols: d
                 .valparams
                 .iter()
@@ -1728,6 +1736,17 @@ impl Elaborator {
         // value arguments are only reachable through the *applied* spelling,
         // which arrives as `TyKind::OfExpr` and is caught upstream by
         // [`Self::try_valparam_ty`]; getting here means none were written.
+        // Unless every one has an index default: then the bare name is the
+        // application that omits them all.
+        if !ind.valparams.is_empty() && ind.valparam_defaults.iter().all(Option::is_some) {
+            let ind = Rc::clone(ind);
+            let mut lowered = Vec::with_capacity(args.len());
+            for a in args {
+                lowered.push(self.elab_ty(cx, a)?);
+            }
+            let vargs = self.valparam_args(cx, &ind, &lowered, &[], span)?;
+            return self.lower_instance(cx, &ind, &lowered, &vargs, span);
+        }
         if !ind.valparams.is_empty() {
             return err(
                 format!(
@@ -2443,7 +2462,12 @@ impl Elaborator {
         args: &[Expr],
         span: Span,
     ) -> R<Vec<(Term, Type, Level)>> {
-        if given.len() + args.len() != ind.valparams.len() {
+        // Index defaults fill a trailing run of slots the application stops
+        // before (issues/constraint-indices-from-carrier-designations.md).
+        let required = ind.valparams.len()
+            - ind.valparam_defaults.iter().rev().take_while(|d| d.is_some()).count();
+        let written = given.len() + args.len();
+        if written > ind.valparams.len() || written < required {
             return err(
                 format!(
                     "`{}` takes {} value argument(s), found {}",
@@ -2483,7 +2507,35 @@ impl Elaborator {
             };
             let tm = match given.next() {
                 Some((tm, _, _)) => tm,
-                None => self.elab_check(cx, args.next().expect("counted above"), &ty, &level)?,
+                None => match args.next() {
+                    Some(arg) => self.elab_check(cx, arg, &ty, &level)?,
+                    None => {
+                        // An index default: the declaration's telescope names
+                        // (the earlier indices, its type parameters) and the
+                        // use site's symbols, so `≈` is the slot's carrier's.
+                        let default = ind.valparam_defaults[out.len()].as_ref().expect("counted above");
+                        let mut dcx = tcx.clone();
+                        dcx.op_locals = cx.op_locals.clone();
+                        // Reported here, at the application that omitted
+                        // it: the default's own span is in the declaring
+                        // module.
+                        match self.elab_check(&dcx, default, &ty, &level) {
+                            Ok(tm) => self.index_default_short(&dcx, tm),
+                            Err(e) => {
+                                return err(
+                                    format!(
+                                        "`{}`'s omitted index `{pname}` is its default `{}`, which does \
+                                         not elaborate here: {}",
+                                        ind.name,
+                                        crate::traits::render_expr(default),
+                                        e.message()
+                                    ),
+                                    span,
+                                );
+                            }
+                        }
+                    }
+                },
             };
             // A carrier declared at a universe (`class Frame<A: Type<1>>`) is
             // a type to the rest of the telescope: bound as a type parameter,
@@ -2513,6 +2565,45 @@ impl Elaborator {
             out.push((tm, ty, level));
         }
         Ok(out)
+    }
+
+    /// An index default that is a function, stored η-short: `λ x => -x` is
+    /// `Rat::neg` at `Rat`, and at a section's carrier, where `-x` is the
+    /// designated `OrderedAddGroup::neg(…, x)`, the dictionary field it
+    /// computes to (`K.inv`). A record's type is structural, so its indices
+    /// are recovered from its field types by unification, which learns
+    /// `?neg_b := K.inv` from `?neg_b(map(x))` and nothing from a λ or a
+    /// wrapper with extra arguments
+    /// (issues/constraint-indices-from-carrier-designations.md). Anything
+    /// else is kept as elaborated.
+    fn index_default_short(&self, cx: &Cx, tm: Term) -> Term {
+        let Term::Lam { dom, dom_level, body, .. } = &tm else {
+            return tm;
+        };
+        let mut bcx = cx.clone();
+        bcx.push("#default".into(), (**dom).clone(), dom_level.clone());
+        let eta = |b: &Term| -> Option<Term> {
+            let (f, a) = crate::spelling::app_of(b)?;
+            if !matches!(&**a, Term::Var(v) if v.0 == 0) {
+                return None;
+            }
+            crate::unification::strengthen_tm(&bcx.gamma, f, 1)
+        };
+        // Through definitions to a dictionary field, when that is what the
+        // body computes to; a body stuck elsewhere (`Rat::neg(x)` unfolds
+        // to a `match` on `x`) keeps its own head.
+        if let Ok(w) = self.semantic_oracle().whnf_term_bounded(&bcx.gamma, body)
+            && let Some(f) = eta(&w)
+        {
+            let mut h = crate::spelling::app_spine(&f).0;
+            while let Term::Fst { pair, .. } | Term::FstAt { pair } | Term::Snd { pair, .. } | Term::SndAt { pair } = h {
+                h = crate::spelling::app_spine(pair).0;
+            }
+            if matches!(h, Term::Var(_)) && !matches!(f, Term::Var(_)) {
+                return f;
+            }
+        }
+        eta(body).unwrap_or(tm)
     }
 
     /// `⟦D<ā>⟧`: the tag spine at tier 0, and the `Wf` over it at tier 1
@@ -5448,6 +5539,7 @@ fn shape_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) -> In
         params: d.params.clone(),
         varies: None,
         valparams: vec![],
+        valparam_defaults: vec![],
         op_symbols: vec![],
         ctors: sctors,
         recursive: false,
