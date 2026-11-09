@@ -3402,6 +3402,107 @@ fn split_int_to_nat(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
     Ok(None)
 }
 
+/// The case facts a `max`/`min` split binds (`__omega_mm{k}_case`, the
+/// order of the two arguments, and `__omega_mm{k}_eq`, which of them the read
+/// is).
+const MAX_MIN_CASE: &str = "__omega_mm";
+
+/// The `max`/`min` reads omega splits, at `Nat` and `Int`: the definition,
+/// whether its arguments are integers, and the lemma that splits it.
+const MAX_MIN_READS: [(&str, bool, &str); 4] = [
+    ("nat::Nat::max", false, "omega::nat_max_elim"),
+    ("nat::Nat::min", false, "omega::nat_min_elim"),
+    ("int::Int::max", true, "omega::int_max_elim"),
+    ("int::Int::min", true, "omega::int_min_elim"),
+];
+
+/// The `max`/`min` reads in `tm` (each with its `MAX_MIN_READS` row),
+/// outermost first, through any application and an Int constructor's payload;
+/// a binder's body is not entered.
+fn max_min_reads<'a>(elab: &Elaborator, tm: &'a Rc<Term>, out: &mut Vec<(&'a Rc<Term>, usize)>) {
+    if let Term::Succ(inner) = &**tm {
+        return max_min_reads(elab, inner, out);
+    }
+    if let Some((_, inner)) = int_ctor_payload(elab, tm) {
+        return max_min_reads(elab, inner, out);
+    }
+    if let Some(row) = MAX_MIN_READS
+        .iter()
+        .position(|(name, _, _)| named_args(elab, tm, name).is_some_and(|args| args.len() == 2))
+    {
+        out.push((tm, row));
+    }
+    let (head, args) = app_spine(tm);
+    if !matches!(head, Term::Lam { .. }) {
+        for arg in args {
+            max_min_reads(elab, arg, out);
+        }
+    }
+}
+
+/// A `a.max(b)` or `a.min(b)` a fact reads as an atom, at `Nat` or `Int`,
+/// split by its `omega::*_elim` lemma into the order of its arguments: `a <=
+/// b` with the read equal to `b` (`max`) or `a` (`min`), or `b <= a` with the
+/// other. Each branch is `omega` again, so the read stays one atom that the
+/// case's equation names; the certificate cites the `max_eq_*`/`min_eq_*`
+/// theorems and never unfolds the definition. A read a case equation names is
+/// settled (issues/omega-reads-min-max.md, design §20).
+fn split_max_min(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    let facts = local_facts(elab, cx);
+    let spelled_reads = |ty: &Type| {
+        let mut found = Vec::new();
+        if let Some((_, left, right)) = integral_sides(elab, cx, ty) {
+            let mut terms = Vec::new();
+            max_min_reads(elab, &left, &mut terms);
+            max_min_reads(elab, &right, &mut terms);
+            found.extend(terms.into_iter().filter_map(|(tm, row)| {
+                let (name, int, _) = MAX_MIN_READS[row];
+                let args = named_args(elab, tm, name)?;
+                let spell = |tm: &Rc<Term>| if int { int_term_source(elab, cx, tm) } else { nat_term_source(elab, cx, tm) };
+                Some((spell(tm).ok()?, row, spell(args[0]).ok()?, spell(args[1]).ok()?))
+            }));
+        }
+        found
+    };
+    let case_equations: Vec<_> = facts
+        .iter()
+        .filter(|(name, _)| name.starts_with(MAX_MIN_CASE) && name.ends_with("_eq"))
+        .collect();
+    if case_equations.len() >= SUB_SPLIT_LIMIT {
+        return Ok(None);
+    }
+    let settled: std::collections::HashSet<String> = case_equations
+        .iter()
+        .filter_map(|(_, ty)| spelled_reads(ty).into_iter().next())
+        .map(|(source, _, _, _)| source)
+        .collect();
+    let k = case_equations.len();
+    for (_, ty) in facts.iter().rev() {
+        let Some((_, row, a, b)) =
+            spelled_reads(ty).into_iter().find(|(source, _, _, _)| !settled.contains(source))
+        else {
+            continue;
+        };
+        let lemma = MAX_MIN_READS[row].2;
+        if elab.key_of(lemma).is_none() {
+            continue;
+        }
+        let source = format!(
+            "{lemma}({a}, {b}, \
+             {MAX_MIN_CASE}{k}_case {MAX_MIN_CASE}{k}_eq ⊢ omega, \
+             {MAX_MIN_CASE}{k}_case {MAX_MIN_CASE}{k}_eq ⊢ omega)",
+        );
+        return Ok(Some(Certificate {
+            atoms: None,
+            guards: None,
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report(lemma, 1),
+        }));
+    }
+    Ok(None)
+}
+
 /// The names a Bool-guard round binds (`split_bool_guards`): its parts
 /// (`__omega_guard{k}_{i}`, read in the round, never again), the guards it
 /// leaves for the next round (`__omega_open{k}_{i}`), and the facts it binds
@@ -4223,6 +4324,9 @@ fn refute_spelled(
             return Ok(certificate);
         }
         if record_failure && let Some(certificate) = split_int_to_nat(elab, cx)? {
+            return Ok(certificate);
+        }
+        if record_failure && let Some(certificate) = split_max_min(elab, cx)? {
             return Ok(certificate);
         }
         let local_types = local_facts(elab, cx)

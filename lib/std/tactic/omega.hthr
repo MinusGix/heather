@@ -963,6 +963,51 @@ theorem int_to_nat_elim(x: Int,
     }(left, right)
 }
 
+// A `max`/`min` read's two cases, by the order of its arguments: `a <= b`
+// with the read equal to `b` (`max`) or `a` (`min`), or `b <= a` with the
+// other. The read stays an atom in both, so the certificate cites the
+// `*_eq_*` theorems and never unfolds the definition
+// (issues/omega-reads-min-max.md).
+theorem nat_max_elim(a, b: Nat,
+    left: a <= b → a.max(b) = b → False,
+    right: b <= a → a.max(b) = a → False): False
+{
+    match a.le_total(b) {
+        Inl(h) => left(h, a.max_eq_r(b, h)),
+        Inr(h) => right(h, a.max_eq_l(b, h)),
+    }
+}
+
+theorem nat_min_elim(a, b: Nat,
+    left: a <= b → a.min(b) = a → False,
+    right: b <= a → a.min(b) = b → False): False
+{
+    match a.le_total(b) {
+        Inl(h) => left(h, Nat::min_eq_l(a, b, h)),
+        Inr(h) => right(h, Nat::min_eq_r(a, b, h)),
+    }
+}
+
+theorem int_max_elim(a, b: Int,
+    left: a <= b → a.max(b) = b → False,
+    right: b <= a → a.max(b) = a → False): False
+{
+    match a.le_total(b) {
+        Inl(h) => left(h, a.max_eq_r(b, h)),
+        Inr(h) => right(h, a.max_eq_l(b, h)),
+    }
+}
+
+theorem int_min_elim(a, b: Int,
+    left: a <= b → a.min(b) = a → False,
+    right: b <= a → a.min(b) = b → False): False
+{
+    match a.le_total(b) {
+        Inl(h) => left(h, Int::min_eq_l(a, b, h)),
+        Inr(h) => right(h, a.min_eq_r(b, h)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Bool guards (issues/omega-reads-bool-guards.md, design §17). A fact
 // `b.IsTrue()` is read by `b`'s structure: each rule takes one connective

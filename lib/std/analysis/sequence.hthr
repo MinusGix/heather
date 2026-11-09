@@ -91,8 +91,8 @@ theorem Converges::unique(xs: Nat → K, a, b: K, ha: Converges(xs, a), hb: Conv
         let p = ha(e, pe);
         let q = hb(e, pe);
         let n = p.witness.max(q.witness);
-        let u = p.proof(n, p.witness.le_max_l(q.witness));
-        let v = q.proof(n, p.witness.le_max_r(q.witness));
+        let u = p.proof(n, omega);
+        let v = q.proof(n, omega);
         let ul: (K.inv(e) <= xs(n) + K.inv(a)) = u.left;
         let ur: (xs(n) + K.inv(a) <= e) = u.right;
         let vl: (K.inv(e) <= xs(n) + K.inv(b)) = v.left;
@@ -115,8 +115,8 @@ theorem Converges::add(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Con
         let q = hy(h, ph);
         let N = p.witness.max(q.witness);
         Exists(N, λ n from => {
-            let u = p.proof(n, p.witness.le_trans(N, n, p.witness.le_max_l(q.witness), from));
-            let v = q.proof(n, q.witness.le_trans(N, n, p.witness.le_max_r(q.witness), from));
+            let u = p.proof(n, omega);
+            let v = q.proof(n, omega);
             LocatedAddGroup::abs_le_sum2(xs(n) + K.inv(a), ys(n) + K.inv(b), (xs(n) + ys(n)) + K.inv(a + b), h, h, e, u, v, ring,
                 StrictOrder::le_of_same(h + h, e, hh))
         })
@@ -219,8 +219,8 @@ theorem Converges::le(xs, ys: Nat → K, a, b: K, hx: Converges(xs, a), hy: Conv
         let p = hx(e, pe);
         let q = hy(e, pe);
         let n = p.witness.max(q.witness);
-        let ul: (K.inv(e) <= xs(n) + K.inv(a)) = p.proof(n, p.witness.le_max_l(q.witness)).left;
-        let vr: (ys(n) + K.inv(b) <= e) = q.proof(n, p.witness.le_max_r(q.witness)).right;
+        let ul: (K.inv(e) <= xs(n) + K.inv(a)) = p.proof(n, omega).left;
+        let vr: (ys(n) + K.inv(b) <= e) = q.proof(n, omega).right;
         let t: (xs(n) <= ys(n)) = h(n);
         linarith(ul, vr, t)
     })
@@ -235,8 +235,8 @@ theorem Converges::squeeze(xs, ys, zs: Nat → K, l: K, hx: Converges(xs, l), hz
         let q = hz(e, pe);
         let N = p.witness.max(q.witness);
         Exists(N, λ n from => {
-            let ul: (K.inv(e) <= xs(n) + K.inv(l)) = p.proof(n, p.witness.le_trans(N, n, p.witness.le_max_l(q.witness), from)).left;
-            let vr: (zs(n) + K.inv(l) <= e) = q.proof(n, q.witness.le_trans(N, n, p.witness.le_max_r(q.witness), from)).right;
+            let ul: (K.inv(e) <= xs(n) + K.inv(l)) = p.proof(n, omega).left;
+            let vr: (zs(n) + K.inv(l) <= e) = q.proof(n, omega).right;
             let a: (xs(n) <= ys(n)) = lo(n);
             let b: (ys(n) <= zs(n)) = hi(n);
             LocatedAddGroup::abs_le_intro(ys(n) + K.inv(l), e, linarith(ul, a), linarith(vr, b))
