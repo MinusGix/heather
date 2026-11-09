@@ -1714,6 +1714,21 @@ impl Elaborator {
             }
             return Err(self.name_miss(name, format!("unknown type `{name}`"), span));
         };
+        // `R<Omega, Nat>` at a record declared `R<A: Type<1>, X>`: the
+        // angle arguments past the type parameters are its leading value
+        // parameters, and with no others the bare spelling is complete.
+        if args.len() > ind.params.len() {
+            let ind = Rc::clone(ind);
+            let (targs, lead) = self.universe_lead(&ind, args, name, span)?;
+            if lead.len() == ind.valparams.len() {
+                let mut lowered = Vec::with_capacity(targs.len());
+                for a in targs {
+                    lowered.push(self.elab_ty(cx, a)?);
+                }
+                let vargs = self.valparam_args(cx, &ind, &lowered, &lead, span)?;
+                return self.lower_instance(cx, &ind, &lowered, &vargs, span);
+            }
+        }
         if args.len() != ind.params.len() {
             return err(
                 format!(
@@ -1923,6 +1938,14 @@ impl Elaborator {
         if ind.valparams.is_empty() {
             return Ok(None);
         }
+        let (targs, lead) = self.universe_lead(&ind, targs, name, span)?;
+        let all: Vec<Expr>;
+        let args: &[Expr] = if lead.is_empty() {
+            args
+        } else {
+            all = lead.into_iter().chain(args.iter().cloned()).collect();
+            &all
+        };
         // Written type arguments win. Omitted entirely, they may be recovered
         // from the value arguments' own types
         // (issues/exists-type-arg-not-inferred.md) — the case `Exists<A>(P: A
@@ -1951,6 +1974,42 @@ impl Elaborator {
         let vargs = self.valparam_args(cx, &ind, &lowered, args, span)?;
         self.lower_instance(cx, &ind, &lowered, &vargs, span)
             .map(Some)
+    }
+
+    /// The angle arguments past a declaration's type parameters, read as its
+    /// leading value parameters declared at a universe (`record R<A:
+    /// Type<1>>`, which the parser makes a value parameter): the type
+    /// arguments left, and the rest as expressions, each a type literal
+    /// checked at its universe (issues/record-universe-parameters.md). An
+    /// arity error when there is no such parameter to fill.
+    pub(crate) fn universe_lead<'t>(
+        &self,
+        ind: &Inductive,
+        targs: &'t [Ty],
+        name: &str,
+        span: Span,
+    ) -> R<(&'t [Ty], Vec<Expr>)> {
+        if targs.len() <= ind.params.len() {
+            return Ok((targs, Vec::new()));
+        }
+        let k = targs.len() - ind.params.len();
+        if k > ind.valparams.len()
+            || !ind.valparams[..k].iter().all(|(_, t)| matches!(t.kind, TyKind::Univ { .. }))
+        {
+            return err(
+                format!(
+                    "`{name}` takes {} type argument(s), found {}",
+                    ind.params.len(),
+                    targs.len()
+                ),
+                span,
+            );
+        }
+        let lead = targs[..k]
+            .iter()
+            .map(|t| Expr { kind: ExprKind::TyLit(Box::new(t.clone())), span: t.span })
+            .collect();
+        Ok((&targs[k..], lead))
     }
 
     /// A declared type former **partially applied**, checked against an

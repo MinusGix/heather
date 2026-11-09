@@ -94,25 +94,36 @@ resolved, but three readings did not know about the leading value:
    as its own). A leading value at a universe is now also bound as a type
    parameter, which shadows correctly.
 
-A record still cannot declare `<A: Type<1>>`
-(`issues/record-universe-parameters.md`), so `FrameHom`, `LocaleMap` and
-`Nucleus` take their carriers as value parameters (`FrameHom(A, B, map, …)`).
+**A record's parameters declared at a universe** take the same route
+(`issues/record-universe-parameters.md`): `record FrameHom<A: Type<1>, B:
+Type<1>>(map: A → B, …)` parses each universe-declared parameter as a leading
+value parameter (they must come before any plain type parameter), and a use
+`FrameHom<A, B>(map, …)` reads the angle arguments past the record's plain
+type parameters back as those leading values (`universe_lead`). So
+`FrameHom`, `LocaleMap` and `Nucleus` are written with their carriers in the
+angle brackets, as a class is.
+
+**An implicit type argument offered below its universe** is refused by the
+elaborator (`issues/implicit-type-argument-above-its-level.md`):
+`false_elim<P>` at `A: Type<1>` names both levels and the non-cumulativity
+reason. The call stays refused, since `false_elim`'s `P` is at `Type<0>`; the
+library writes `match e {}`.
 
 ## 4. Homomorphisms, locales and points
 
-`FrameHom(A, B, map, ≤ₐ, ⊓ₐ, ⊤ₐ, supₐ, ≤ᵦ, ⊓ᵦ, ⊤ᵦ, supᵦ)` is a record in the
+`FrameHom<A, B>(map, ≤ₐ, ⊓ₐ, ⊤ₐ, supₐ, ≤ᵦ, ⊓ᵦ, ⊤ᵦ, supᵦ)` is a record in the
 shape of `morphism.hthr`'s `OrderedRingHom`: the operations are parameters, so
 a law is stated at the carriers' own operations. Identity and composition are
 `FrameHom::id` and `FrameHom::comp`.
 
 A locale is its frame; only the direction of maps changes.
-`LocaleMap(X, Y, …)` holds `inv: Y → X` and a `FrameHom` from `Y`'s opens to
+`LocaleMap<X, Y>(…)` holds `inv: Y → X` and a `FrameHom` from `Y`'s opens to
 `X`'s. There is no separate locale type, because a locale has no data beyond
 its frame.
 
 **Points are derived.** `Omega` is the frame of opens of the one-point locale
 (small propositions, `≤` implication, `⊓` conjunction, `sup` Σ), and
-`Point(…) := LocaleMap(Omega, X, …)`. The completely-prime-filter reading is
+`Point(…) := LocaleMap<Omega, X>(…)`. The completely-prime-filter reading is
 proved rather than assumed: `Point::in_top`, `in_mono`, `in_meet`, `in_sup`
 (a point lies in a join only through one of its terms). Nothing defines a
 locale by its points.

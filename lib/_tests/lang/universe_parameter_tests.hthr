@@ -1,0 +1,47 @@
+// Probes of parameters declared at a universe above `Type<0>`
+// (issues/record-universe-parameters.md,
+// issues/implicit-type-argument-above-its-level.md). Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat;
+
+// A large type: a record holding a small type.
+record Prop1 { holds: Type }
+fn Prop1::Le(p, q: Prop1) → Type { p.holds → q.holds }
+
+// A record's carriers declared at a universe, written in the angle brackets.
+// They are the record's leading value parameters, so the remaining value
+// parameters and the fields can mention them.
+record Hom<A: Type<1>, B: Type<1>>(map: A → B, le_a: A → A → Type, le_b: B → B → Type) {
+    map_mono: (x, y: A) → le_a(x, y) → le_b(map(x), map(y)),
+}
+
+fn Hom::id<A: Type<1>>(le: A → A → Type) → Hom<A, A>(λ x => x, le, le) { Hom(λ x y h => h) }
+
+theorem Hom::apply<A: Type<1>>(le: A → A → Type, x, y: A, h: le(x, y)): le(x, y) {
+    (Hom::id(le)).map_mono(x, y, h)
+}
+
+// A use at a concrete large carrier, inside another record's field.
+record Pt<A: Type<1>>(le: A → A → Type) {
+    at: A → Prop1,
+    hom: Hom<A, Prop1>(at, le, Prop1::Le),
+}
+
+theorem Pt::mono<A: Type<1>>(le: A → A → Type, p: Pt<A>(le), x, y: A, h: le(x, y)): Prop1::Le(p.at(x), p.at(y)) {
+    p.hom.map_mono(x, y, h)
+}
+
+// A universe parameter followed by an ordinary type parameter.
+record Tagged<A: Type<1>, X> { a: A, x: X }
+
+fn tagged(p: Prop1) → Tagged<Prop1, Nat> { Tagged(p, 3) }
+
+theorem tagged_x(p: Prop1): (tagged(p)).x = 3 { refl }
+
+// An implicit type argument at `Type<1>` is not solved by a small type: the
+// elaborator says so, instead of handing the kernel an ill-levelled term.
+// expect-error: universes in this system are non-cumulative, so a type does not also inhabit the universes above its own
+fn bot1<A: Type<1>>(e: False) → A { false_elim(e) }
+
+// The way to eliminate `False` into a large type.
+fn bot1_ok<A: Type<1>>(e: False) → A { match e {} }

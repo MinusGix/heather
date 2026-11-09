@@ -2250,8 +2250,54 @@ impl Parser {
         let start = self.peek_span();
         self.bump(); // `record`
         let (name, _) = self.ident("record name")?;
-        let params = self.tyvar_list()?;
-        let valparams = self.valparam_list(false)?;
+        // `record R<A: Type<1>, X>`: a parameter declared at a universe is a
+        // type the record's own type parameters (which live at `Type<0>`)
+        // cannot hold, so it becomes a leading value parameter at that
+        // universe, the way a class carrier declared at one does. A use site
+        // still writes it in the angle brackets (`R<Omega, Nat>(…)`): the
+        // elaborator reads angle arguments past the type parameters as these
+        // leading values (issues/record-universe-parameters.md).
+        let (named, kinds) = self.class_tyvar_list()?;
+        let mut params = Vec::new();
+        let mut valparams = Vec::new();
+        for (p, kind) in named.into_iter().zip(kinds) {
+            match kind {
+                None => params.push(p),
+                Some(ty) if matches!(ty.kind, TyKind::Univ { .. }) => {
+                    if !params.is_empty() {
+                        return Err(ParseError {
+                            msg: format!(
+                                "a record's parameters at a universe lead its type parameters: \
+                                 write `{p}` before `{}`",
+                                params[0]
+                            ),
+                            span: ty.span,
+                        });
+                    }
+                    valparams.push(Param {
+                        name: p,
+                        span: ty.span,
+                        ty,
+                        implicit: false,
+                        is_self: false,
+                        solver: None,
+                        default: None,
+                        origin: ParamOrigin::Written,
+                        symbol: None,
+                    });
+                }
+                Some(ty) => {
+                    return Err(ParseError {
+                        msg: format!(
+                            "a record's type parameter is annotated only with a universe \
+                             (`<{p}: Type<1>>`); a type-constructor parameter is a class's"
+                        ),
+                        span: ty.span,
+                    });
+                }
+            }
+        }
+        valparams.extend(self.valparam_list(false)?);
         let varies = self.varies_clause()?;
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();

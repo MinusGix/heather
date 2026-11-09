@@ -1,6 +1,6 @@
 ---
 title: An inferred type argument above its parameter's level reaches the kernel
-status: open
+status: closed
 labels: [frontend,elaboration,diagnostics]
 area: language
 created: 2026-11-09
@@ -31,3 +31,4 @@ legal).
 ## Log
 
 - 2026-11-09: Filed from frame-and-locale-foundations.
+- 2026-11-09: Done. The unifier's El rule declines to solve a meta at `Type<n>` with a type whose apparent level is another (`apparent_level`), and records the decline; the unsolved-argument error then says which level the parameter wants and which the call offers, with the non-cumulativity reason. Probe in lib/_tests/lang/universe_parameter_tests.hthr. The call stays refused: making it legal is implicit-level-polymorphism.
