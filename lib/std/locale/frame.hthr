@@ -1,0 +1,410 @@
+// Frames and locales, point-free (issues/frame-and-locale-foundations.md,
+// docs/frame-locale-design.md).
+//
+// A frame is a preorder with finite meets and joins of every *small* family,
+// where finite meets distribute over those joins. A locale is a frame read
+// backwards: a map of locales `X → Y` is a frame homomorphism `O(Y) → O(X)`,
+// and a point of `X` is a map from the one-point locale, so points are a
+// derived notion and a locale is never defined by them.
+//
+// Universe policy (design §2). The kernel is predicative, so the frames that
+// exist are large: their carriers (`Omega`, `Opens<X>`, a presented frame)
+// quantify over `Type` and live at `Type<1>`, while their order is small
+// (`A → A → Type`, "locally small") and their joins are indexed by small
+// types (`(I: Type) → (I → A) → A`). The classes here are declared at
+// `Type<1>` for that reason. Nothing is assumed about powersets: a join is a
+// family, never a subset, which is exactly what makes it predicative.
+//
+// Equality is the preorder's: two opens are the same when each is below the
+// other. Antisymmetry is not a field, so a frame of predicates needs no
+// extensionality, and every law is stated by its nontrivial inequality, the
+// other direction being a theorem (`FiniteMeets::meet_le_l` and friends).
+//
+// The classes are layered so that every theorem sits at the class whose
+// indices its statement names (`docs/frame-locale-design.md` §3): a client at
+// a concrete carrier pins the indices from its own statement, and an index no
+// statement mentions would leave the call unresolvable.
+
+import logic;
+import bool;
+
+// ---------------------------------------------------------------------------
+// The layers.
+
+// A preorder on a large carrier. `order`'s `Preorder` is the same class at
+// `Type<0>`; the copy exists because classes are not level-polymorphic
+// (issues/implicit-level-polymorphism.md).
+class Preorder1<A: Type<1>>(le as <=: A → A → Type) {
+    le_refl: (x: A) → x <= x,
+    le_trans: (x, y, z: A) → x <= y → y <= z → x <= z,
+}
+
+// Finite meets: binary meets and a top, as universal properties.
+class FiniteMeets<A: Type<1>>(le as <=: A → A → Type, meet as ⊓: A → A → A) extends Preorder1<A>(le) {
+    meet_le_l: (x, y: A) → x ⊓ y <= x,
+    meet_le_r: (x, y: A) → x ⊓ y <= y,
+    le_meet: (x, y, z: A) → z <= x → z <= y → z <= x ⊓ y,
+    top: A,
+    le_top: (x: A) → x <= top,
+}
+
+// Joins of small families: `sup(I, f)` is a least upper bound of `f`'s
+// values. Binary joins and the bottom are joins over `Bool` and `False`
+// (`SupLattice::join`, `SupLattice::bot`), not fields.
+class SupLattice<A: Type<1>>(le as <=: A → A → Type, sup: (I: Type) → (I → A) → A) extends Preorder1<A>(le) {
+    le_sup: (I: Type, f: I → A, i: I) → f(i) <= sup(I, f),
+    sup_le: (I: Type, f: I → A, z: A) → ((i: I) → f(i) <= z) → sup(I, f) <= z,
+}
+
+// A frame: finite meets distribute over small joins. Only the nontrivial
+// inequality is a field; `Frame::meet_sup` is the equivalence.
+class Frame<A: Type<1>>(le as <=: A → A → Type, meet as ⊓: A → A → A, sup: (I: Type) → (I → A) → A)
+    extends FiniteMeets<A>(le, meet), SupLattice<A>(le, sup)
+{
+    meet_sup_le: (x: A, I: Type, f: I → A) → x ⊓ sup(I, f) <= sup(I, λ i => x ⊓ f(i)),
+}
+
+// ---------------------------------------------------------------------------
+// Finite meets.
+
+section<A: Type<1> + FiniteMeets(<=, ⊓)> {
+
+theorem FiniteMeets::le_meet_iff(x, y, z: A): z <= x ⊓ y ↔ (z <= x ∧ z <= y) {
+    Iff(
+        mp := λ (h: z <= x ⊓ y) => And(
+            A.le_trans(z, x ⊓ y, x, h, A.meet_le_l(x, y)),
+            A.le_trans(z, x ⊓ y, y, h, A.meet_le_r(x, y))),
+        mpr := λ (h: z <= x ∧ z <= y) => A.le_meet(x, y, z, h.left, h.right))
+}
+
+theorem FiniteMeets::meet_mono(x, x2, y, y2: A, hx: x <= x2, hy: y <= y2): x ⊓ y <= x2 ⊓ y2 {
+    A.le_meet(x2, y2, x ⊓ y,
+        A.le_trans(x ⊓ y, x, x2, A.meet_le_l(x, y), hx),
+        A.le_trans(x ⊓ y, y, y2, A.meet_le_r(x, y), hy))
+}
+
+theorem FiniteMeets::meet_comm_le(x, y: A): x ⊓ y <= y ⊓ x {
+    A.le_meet(y, x, x ⊓ y, A.meet_le_r(x, y), A.meet_le_l(x, y))
+}
+
+theorem FiniteMeets::meet_assoc_le(x, y, z: A): (x ⊓ y) ⊓ z <= x ⊓ (y ⊓ z) {
+    let xy: ((x ⊓ y) ⊓ z <= x ⊓ y) = A.meet_le_l(x ⊓ y, z);
+    A.le_meet(x, y ⊓ z, (x ⊓ y) ⊓ z,
+        A.le_trans((x ⊓ y) ⊓ z, x ⊓ y, x, xy, A.meet_le_l(x, y)),
+        A.le_meet(y, z, (x ⊓ y) ⊓ z,
+            A.le_trans((x ⊓ y) ⊓ z, x ⊓ y, y, xy, A.meet_le_r(x, y)),
+            A.meet_le_r(x ⊓ y, z)))
+}
+
+theorem FiniteMeets::meet_assoc_ge(x, y, z: A): x ⊓ (y ⊓ z) <= (x ⊓ y) ⊓ z {
+    let yz: (x ⊓ (y ⊓ z) <= y ⊓ z) = A.meet_le_r(x, y ⊓ z);
+    A.le_meet(x ⊓ y, z, x ⊓ (y ⊓ z),
+        A.le_meet(x, y, x ⊓ (y ⊓ z),
+            A.meet_le_l(x, y ⊓ z),
+            A.le_trans(x ⊓ (y ⊓ z), y ⊓ z, y, yz, A.meet_le_l(y, z))),
+        A.le_trans(x ⊓ (y ⊓ z), y ⊓ z, z, yz, A.meet_le_r(y, z)))
+}
+
+theorem FiniteMeets::le_meet_self(x: A): x <= x ⊓ x {
+    A.le_meet(x, x, x, A.le_refl(x), A.le_refl(x))
+}
+
+theorem FiniteMeets::le_top_meet(x: A): x <= A.top ⊓ x {
+    A.le_meet(A.top, x, x, A.le_top(x), A.le_refl(x))
+}
+
+// Below a meet with something above: the meet changes nothing.
+theorem FiniteMeets::le_meet_of_le(x, y: A, h: x <= y): x <= x ⊓ y {
+    A.le_meet(x, y, x, A.le_refl(x), h)
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Small joins.
+
+// The bottom is the join of nothing and the binary join the join over
+// `Bool`. Written outside the section, over the join operation itself, so a
+// statement that mentions them pins the section's `sup`.
+fn SupLattice::bot<A: Type<1>>(sup: (I: Type) → (I → A) → A) → A { sup(False, λ (e: False) => match e {}) }
+
+fn SupLattice::pick<A: Type<1>>(x, y: A, b: Bool) → A { match b { True => x, False => y } }
+
+fn SupLattice::join<A: Type<1>>(sup: (I: Type) → (I → A) → A, x, y: A) → A { sup(Bool, λ b => SupLattice::pick(x, y, b)) }
+
+section<A: Type<1> + SupLattice(<=, sup)>({sup: (I: Type) → (I → A) → A}) {
+
+theorem SupLattice::sup_le_iff(I: Type, f: I → A, z: A): sup(I, f) <= z ↔ ((i: I) → f(i) <= z) {
+    Iff(
+        mp := λ (h: sup(I, f) <= z) (i: I) => A.le_trans(f(i), sup(I, f), z, A.le_sup(I, f, i), h),
+        mpr := λ (h: (i: I) → f(i) <= z) => A.sup_le(I, f, z, h))
+}
+
+theorem SupLattice::le_sup_of(I: Type, f: I → A, x: A, i: I, h: x <= f(i)): x <= sup(I, f) {
+    A.le_trans(x, f(i), sup(I, f), h, A.le_sup(I, f, i))
+}
+
+theorem SupLattice::sup_mono(I: Type, f, g: I → A, h: (i: I) → f(i) <= g(i)): sup(I, f) <= sup(I, g) {
+    A.sup_le(I, f, sup(I, g), λ i => SupLattice::le_sup_of(I, g, f(i), i, h(i)))
+}
+
+// A join over fewer indices is below: reindexing along any `r` only loses
+// terms. Two families with the same values in each other's range have
+// the same join.
+theorem SupLattice::sup_reindex(I, J: Type, f: I → A, r: J → I): sup(J, λ j => f(r(j))) <= sup(I, f) {
+    A.sup_le(J, λ j => f(r(j)), sup(I, f), λ j => A.le_sup(I, f, r(j)))
+}
+
+// Each term below some term of the other family: the join is below.
+theorem SupLattice::sup_le_sup(I, J: Type, f: I → A, g: J → A, h: (i: I) → Exists<J>(λ j => f(i) <= g(j))):
+    sup(I, f) <= sup(J, g)
+{
+    A.sup_le(I, f, sup(J, g), λ i => SupLattice::le_sup_of(J, g, f(i), h(i).witness, h(i).proof))
+}
+
+theorem SupLattice::bot_le(x: A): SupLattice::bot(sup) <= x {
+    A.sup_le(False, λ (e: False) => match e {}, x, λ (e: False) => match e {})
+}
+
+theorem SupLattice::le_join_l(x, y: A): x <= SupLattice::join(sup, x, y) {
+    A.le_sup(Bool, λ b => SupLattice::pick(x, y, b), True)
+}
+
+theorem SupLattice::le_join_r(x, y: A): y <= SupLattice::join(sup, x, y) {
+    A.le_sup(Bool, λ b => SupLattice::pick(x, y, b), False)
+}
+
+theorem SupLattice::join_le(x, y, z: A, hx: x <= z, hy: y <= z): SupLattice::join(sup, x, y) <= z {
+    A.sup_le(Bool, λ b => SupLattice::pick(x, y, b), z, λ b => match b { True => hx, False => hy })
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Frames: the distributive law.
+
+section<A: Type<1> + Frame(<=, ⊓, sup)>({sup: (I: Type) → (I → A) → A}) {
+
+// The easy direction holds in any preorder with meets and joins.
+theorem Frame::sup_meet_le_meet_sup(x: A, I: Type, f: I → A): sup(I, λ i => x ⊓ f(i)) <= x ⊓ sup(I, f) {
+    A.sup_le(I, λ i => x ⊓ f(i), x ⊓ sup(I, f), λ i =>
+        FiniteMeets::meet_mono(x, x, f(i), sup(I, f), A.le_refl(x), A.le_sup(I, f, i)))
+}
+
+theorem Frame::meet_sup(x: A, I: Type, f: I → A):
+    x ⊓ sup(I, f) <= sup(I, λ i => x ⊓ f(i)) ∧ sup(I, λ i => x ⊓ f(i)) <= x ⊓ sup(I, f)
+{
+    And(A.meet_sup_le(x, I, f), Frame::sup_meet_le_meet_sup(x, I, f))
+}
+
+// The law with the meet on the right.
+theorem Frame::sup_meet_le(x: A, I: Type, f: I → A): sup(I, f) ⊓ x <= sup(I, λ i => f(i) ⊓ x) {
+    A.le_trans(sup(I, f) ⊓ x, x ⊓ sup(I, f), sup(I, λ i => f(i) ⊓ x),
+        FiniteMeets::meet_comm_le(sup(I, f), x),
+        A.le_trans(x ⊓ sup(I, f), sup(I, λ i => x ⊓ f(i)), sup(I, λ i => f(i) ⊓ x),
+            A.meet_sup_le(x, I, f),
+            SupLattice::sup_mono(I, λ i => x ⊓ f(i), λ i => f(i) ⊓ x, λ i => FiniteMeets::meet_comm_le(x, f(i)))))
+}
+
+// Binary distributivity: a frame is a distributive lattice.
+theorem Frame::meet_join_le(x, y, z: A): x ⊓ SupLattice::join(sup, y, z) <= SupLattice::join(sup, x ⊓ y, x ⊓ z) {
+    A.le_trans(x ⊓ SupLattice::join(sup, y, z), sup(Bool, λ b => x ⊓ SupLattice::pick(y, z, b)), SupLattice::join(sup, x ⊓ y, x ⊓ z),
+        A.meet_sup_le(x, Bool, λ b => SupLattice::pick(y, z, b)),
+        SupLattice::sup_mono(Bool, λ b => x ⊓ SupLattice::pick(y, z, b), λ b => SupLattice::pick(x ⊓ y, x ⊓ z, b),
+            λ b => match b { True => A.le_refl(x ⊓ y), False => A.le_refl(x ⊓ z) }))
+}
+
+// The bottom absorbs meets.
+theorem Frame::meet_bot_le(x: A): x ⊓ SupLattice::bot(sup) <= SupLattice::bot(sup) {
+    A.le_trans(x ⊓ SupLattice::bot(sup), SupLattice::bot(sup), SupLattice::bot(sup), A.meet_le_r(x, SupLattice::bot(sup)), A.le_refl(SupLattice::bot(sup)))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Homomorphisms, locale maps and points.
+
+// A frame homomorphism: monotone, and preserving finite meets and small joins.
+// Each law is the inequality monotonicity does not already give; the
+// equivalences are `FrameHom::meet_law` and `FrameHom::sup_law`. The
+// carriers are value parameters because a record's type parameters live at
+// `Type<0>` (issues/record-universe-parameters.md).
+record FrameHom(A, B: Type<1>, map: A → B,
+        le_a: A → A → Type, meet_a: A → A → A, top_a: A, sup_a: (I: Type) → (I → A) → A,
+        le_b: B → B → Type, meet_b: B → B → B, top_b: B, sup_b: (I: Type) → (I → B) → B) {
+    map_mono: (x, y: A) → le_a(x, y) → le_b(map(x), map(y)),
+    map_meet: (x, y: A) → le_b(meet_b(map(x), map(y)), map(meet_a(x, y))),
+    map_top: le_b(top_b, map(top_a)),
+    map_sup: (I: Type, f: I → A) → le_b(map(sup_a(I, f)), sup_b(I, λ i => map(f(i)))),
+}
+
+section<A: Type<1> + FiniteMeets(le_a, meet_a), B: Type<1> + Frame(le_b, meet_b, sup_b)>({map: A → B},
+        {le_a: A → A → Type}, {meet_a: A → A → A}, {top_a: A}, {sup_a: (I: Type) → (I → A) → A},
+        {le_b: B → B → Type}, {meet_b: B → B → B}, {top_b: B}, {sup_b: (I: Type) → (I → B) → B},
+        h: FrameHom(A, B, map, le_a, meet_a, top_a, sup_a, le_b, meet_b, top_b, sup_b)) {
+
+theorem FrameHom::meet_law(x, y: A):
+    le_b(meet_b(map(x), map(y)), map(meet_a(x, y))) ∧ le_b(map(meet_a(x, y)), meet_b(map(x), map(y)))
+{
+    And(h.map_meet(x, y), B.le_meet(map(x), map(y), map(meet_a(x, y)),
+        h.map_mono(meet_a(x, y), x, A.meet_le_l(x, y)), h.map_mono(meet_a(x, y), y, A.meet_le_r(x, y))))
+}
+
+}
+
+section<A: Type<1> + SupLattice(le_a, sup_a), B: Type<1> + SupLattice(le_b, sup_b)>({map: A → B},
+        {le_a: A → A → Type}, {meet_a: A → A → A}, {top_a: A}, {sup_a: (I: Type) → (I → A) → A},
+        {le_b: B → B → Type}, {meet_b: B → B → B}, {top_b: B}, {sup_b: (I: Type) → (I → B) → B},
+        h: FrameHom(A, B, map, le_a, meet_a, top_a, sup_a, le_b, meet_b, top_b, sup_b)) {
+
+theorem FrameHom::sup_law(I: Type, f: I → A):
+    le_b(map(sup_a(I, f)), sup_b(I, λ i => map(f(i)))) ∧ le_b(sup_b(I, λ i => map(f(i))), map(sup_a(I, f)))
+{
+    And(h.map_sup(I, f), B.sup_le(I, λ i => map(f(i)), map(sup_a(I, f)), λ i => h.map_mono(f(i), sup_a(I, f), A.le_sup(I, f, i))))
+}
+
+}
+
+// The identity, and composition.
+fn FrameHom::id<A: Type<1> + Preorder1(le)>(le: A → A → Type, meet: A → A → A, top: A, sup: (I: Type) → (I → A) → A)
+    → FrameHom(A, A, λ x => x, le, meet, top, sup, le, meet, top, sup)
+{
+    FrameHom(λ x y h => h, λ x y => A.le_refl(meet(x, y)), A.le_refl(top), λ I f => A.le_refl(sup(I, f)))
+}
+
+fn FrameHom::comp<A: Type<1>, B: Type<1>, C: Type<1> + Preorder1(le_c)>({f: A → B}, {g: B → C},
+        {le_a: A → A → Type}, {meet_a: A → A → A}, {top_a: A}, {sup_a: (I: Type) → (I → A) → A},
+        {le_b: B → B → Type}, {meet_b: B → B → B}, {top_b: B}, {sup_b: (I: Type) → (I → B) → B},
+        le_c: C → C → Type, {meet_c: C → C → C}, {top_c: C}, {sup_c: (I: Type) → (I → C) → C},
+        hf: FrameHom(A, B, f, le_a, meet_a, top_a, sup_a, le_b, meet_b, top_b, sup_b),
+        hg: FrameHom(B, C, g, le_b, meet_b, top_b, sup_b, le_c, meet_c, top_c, sup_c))
+    → FrameHom(A, C, λ x => g(f(x)), le_a, meet_a, top_a, sup_a, le_c, meet_c, top_c, sup_c)
+{
+    FrameHom(
+        λ x y h => hg.map_mono(f(x), f(y), hf.map_mono(x, y, h)),
+        λ x y => C.le_trans(meet_c(g(f(x)), g(f(y))), g(meet_b(f(x), f(y))), g(f(meet_a(x, y))),
+            hg.map_meet(f(x), f(y)), hg.map_mono(meet_b(f(x), f(y)), f(meet_a(x, y)), hf.map_meet(x, y))),
+        C.le_trans(top_c, g(top_b), g(f(top_a)), hg.map_top, hg.map_mono(top_b, f(top_a), hf.map_top)),
+        λ I k => C.le_trans(g(f(sup_a(I, k))), g(sup_b(I, λ i => f(k(i)))), sup_c(I, λ i => g(f(k(i)))),
+            hg.map_mono(f(sup_a(I, k)), sup_b(I, λ i => f(k(i))), hf.map_sup(I, k)),
+            hg.map_sup(I, λ i => f(k(i)))))
+}
+
+// A map of locales `X → Y` is a frame homomorphism back, `O(Y) → O(X)`:
+// the inverse image of opens. The locale is the frame; only the direction
+// of its maps changes.
+record LocaleMap(X, Y: Type<1>,
+        le_x: X → X → Type, meet_x: X → X → X, top_x: X, sup_x: (I: Type) → (I → X) → X,
+        le_y: Y → Y → Type, meet_y: Y → Y → Y, top_y: Y, sup_y: (I: Type) → (I → Y) → Y) {
+    inv: Y → X,
+    hom: FrameHom(Y, X, inv, le_y, meet_y, top_y, sup_y, le_x, meet_x, top_x, sup_x),
+}
+
+// ---------------------------------------------------------------------------
+// Truth values: the frame of small propositions, the one-point locale.
+
+// `Omega` is the frame of opens of a single point. Its carrier holds a small
+// type, so it lives at `Type<1>`: this is the frame no predicative carrier at
+// `Type<0>` can be, and why the classes above are declared at `Type<1>`.
+record Omega { holds: Type }
+
+fn Omega::Le(p, q: Omega) → Type { p.holds → q.holds }
+fn Omega::meet(p, q: Omega) → Omega { Omega(p.holds ∧ q.holds) }
+fn Omega::top() → Omega { Omega(True) }
+fn Omega::sup(I: Type, f: I → Omega) → Omega { Omega(Exists<I>(λ i => f(i).holds)) }
+
+designation <= at Omega := Omega::Le
+designation ⊓ at Omega := Omega::meet
+
+instance Frame<Omega>(Omega::Le, Omega::meet, Omega::sup) {
+    le_refl := λ p (h: p.holds) => h,
+    le_trans := λ p q r h1 h2 (h: p.holds) => h2(h1(h)),
+    meet_le_l := λ p q (h: p.holds ∧ q.holds) => h.left,
+    meet_le_r := λ p q (h: p.holds ∧ q.holds) => h.right,
+    le_meet := λ p q r h1 h2 (h: r.holds) => And(h1(h), h2(h)),
+    top := Omega::top(),
+    le_top := λ p h => trivial,
+    le_sup := λ I f i (h: f(i).holds) => Exists(i, h),
+    sup_le := λ I f r h (e: Exists<I>(λ i => f(i).holds)) => h(e.witness, e.proof),
+    meet_sup_le := λ p I f (h: p.holds ∧ Exists<I>(λ i => f(i).holds)) =>
+        Exists(h.right.witness, And(h.left, h.right.proof)),
+}
+
+// ---------------------------------------------------------------------------
+// Points: a derived notion.
+
+// A point of a locale is a map into it from the one-point locale: a frame
+// homomorphism from its opens to `Omega`, which says of each open whether
+// the point is in it.
+fn Point<X: Type<1>>(le: X → X → Type, meet: X → X → X, top: X, sup: (I: Type) → (I → X) → X) → Type<1> {
+    LocaleMap(Omega, X, Omega::Le, Omega::meet, Omega::top(), Omega::sup, le, meet, top, sup)
+}
+
+section<X: Type<1>>({le: X → X → Type}, {meet: X → X → X}, {top: X}, {sup: (I: Type) → (I → X) → X},
+        p: Point(le, meet, top, sup)) {
+
+// The opens a point is in form a completely prime filter: the top, closed
+// upwards and under meets, and in a join only through one of its terms.
+theorem Point::in_top(): p.inv(top).holds { p.hom.map_top(trivial) }
+
+theorem Point::in_mono(x, y: X, h: le(x, y), hx: p.inv(x).holds): p.inv(y).holds { p.hom.map_mono(x, y, h, hx) }
+
+theorem Point::in_meet(x, y: X, hx: p.inv(x).holds, hy: p.inv(y).holds): p.inv(meet(x, y)).holds {
+    p.hom.map_meet(x, y, And(hx, hy))
+}
+
+theorem Point::in_sup(I: Type, f: I → X, h: p.inv(sup(I, f)).holds): Exists<I>(λ i => p.inv(f(i)).holds) {
+    p.hom.map_sup(I, f, h)
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Spatial frames: the opens of a type.
+
+// The frame of all predicates on a small type `X`, ordered by inclusion: the
+// discrete space's opens. Joins are Σ over the index, so they need no
+// powerset; the order compares predicates pointwise, never by equality.
+record Opens<X> { has: X → Type }
+
+fn Opens::Le<X>(u, v: Opens<X>) → Type { (x: X) → u.has(x) → v.has(x) }
+fn Opens::meet<X>(u, v: Opens<X>) → Opens<X> { Opens(λ x => u.has(x) ∧ v.has(x)) }
+fn Opens::top<X>() → Opens<X> { Opens(λ x => True) }
+fn Opens::sup<X>(I: Type, f: I → Opens<X>) → Opens<X> { Opens(λ x => Exists<I>(λ i => f(i).has(x))) }
+
+designation <= at Opens<X> := Opens::Le
+designation ⊓ at Opens<X> := Opens::meet
+
+instance<X> Frame<Opens<X>>(Opens::Le<X>, Opens::meet<X>, Opens::sup<X>) {
+    le_refl := λ u x h => h,
+    le_trans := λ u v w h1 h2 x h => h2(x, h1(x, h)),
+    meet_le_l := λ u v x h => h.left,
+    meet_le_r := λ u v x h => h.right,
+    le_meet := λ u v w h1 h2 x h => And(h1(x, h), h2(x, h)),
+    top := Opens::top<X>(),
+    le_top := λ u x h => trivial,
+    le_sup := λ I f i x h => Exists(i, h),
+    sup_le := λ I f w h x e => h(e.witness, x, e.proof),
+    meet_sup_le := λ u I f x h => Exists(h.right.witness, And(h.left, h.right.proof)),
+}
+
+// Every element is a point: the opens it lies in.
+fn Opens::point<X>(x: X) → Point(Opens::Le<X>, Opens::meet<X>, Opens::top<X>(), Opens::sup<X>) {
+    LocaleMap(λ u => Omega(u.has(x)), FrameHom(
+        λ u v h (hx: u.has(x)) => h(x, hx),
+        λ u v (h: u.has(x) ∧ v.has(x)) => h,
+        λ (t: True) => t,
+        λ I f e => e))
+}
+
+// Every function is a map of locales, by preimage.
+fn Opens::map<X, Y>(g: X → Y) → LocaleMap(Opens<X>, Opens<Y>,
+        Opens::Le<X>, Opens::meet<X>, Opens::top<X>(), Opens::sup<X>,
+        Opens::Le<Y>, Opens::meet<Y>, Opens::top<Y>(), Opens::sup<Y>)
+{
+    LocaleMap(λ v => Opens(λ x => v.has(g(x))), FrameHom(
+        λ u v h x hx => h(g(x), hx),
+        λ u v x h => h,
+        λ x t => t,
+        λ I f x e => e))
+}

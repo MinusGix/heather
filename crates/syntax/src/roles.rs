@@ -88,7 +88,7 @@ fn walk<'a>(toks: &'a [Tok], file: &File) -> Walk<'a> {
         w.item(it);
     }
     for &(head, first, last) in &file.section_typarams {
-        w.list_spanned("section-tyvars", head, first, last);
+        w.tyvar_list("section-tyvars", head, first, last);
     }
     w
 }
@@ -169,11 +169,51 @@ impl<'a> Walk<'a> {
         }
     }
 
+    /// A type-parameter list, `<A, B: Type<1> + C>`. A parameter's universe
+    /// annotation (`: Type<n>`) is no AST node of its own (`TyParam` keeps
+    /// only the level), so its list is found from the tokens, and the outer
+    /// list closes at the first `>` that is not one of those.
+    fn tyvar_list(&mut self, site: &'static str, region: Span, first: Span, last: Span) {
+        let Some(open) = self.lt_in(region.start, first.start) else {
+            self.unlocated.push((site, region));
+            return;
+        };
+        let Some(mut i) = self.toks.iter().position(|t| t.span.start >= first.start) else {
+            self.unlocated.push((site, region));
+            return;
+        };
+        while i < self.toks.len() {
+            let t = &self.toks[i];
+            match &t.kind {
+                TokKind::Gt if t.span.start >= last.end => {
+                    self.sites.push((site, Delims { open, close: t.span.start }));
+                    return;
+                }
+                TokKind::Ident(kw)
+                    if kw == "Type"
+                        && i + 3 < self.toks.len()
+                        && matches!(self.toks[i + 1].kind, TokKind::Lt)
+                        && matches!(self.toks[i + 2].kind, TokKind::Num(_))
+                        && matches!(self.toks[i + 3].kind, TokKind::Gt) =>
+                {
+                    let (o, c) = (self.toks[i + 1].span.start, self.toks[i + 3].span.start);
+                    self.sites.push(("tyvar-univ", Delims { open: o, close: c }));
+                    i += 4;
+                    continue;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        self.unlocated.push((site, region));
+    }
+
     /// A parameter list whose names are bare `String`s in the AST and so carry
     /// no spans — `class C<A>`, `inductive I<A>`. Located from the declared
     /// name instead; the names cannot nest, so the first `Gt` after the opener
-    /// closes the list.
-    fn list_bare(&mut self, site: &'static str, region: Span, name: &str) {
+    /// closes the list — unless a parameter carries a kind (`class
+    /// C<A: Type<1>>`), whose own lists end before `inner_end`.
+    fn list_bare(&mut self, site: &'static str, region: Span, name: &str, inner_end: usize) {
         let after_name = self
             .toks
             .iter()
@@ -198,7 +238,7 @@ impl<'a> Walk<'a> {
         match self
             .toks
             .iter()
-            .find(|t| matches!(t.kind, TokKind::Gt) && t.span.start > open)
+            .find(|t| matches!(t.kind, TokKind::Gt) && t.span.start > open && t.span.start >= inner_end)
             .map(|t| t.span.start)
         {
             Some(close) => self.sites.push((site, Delims { open, close })),
@@ -458,7 +498,7 @@ impl<'a> Walk<'a> {
         // in the section's head, before the member (`walk` locates that list).
         let own: Vec<&TyParam> = d.tyvars.iter().filter(|t| t.span.start >= d.span.start).collect();
         if let (Some(first), Some(last)) = (own.first(), own.last()) {
-            self.list_spanned("decl-tyvars", d.span, first.span, last.span);
+            self.tyvar_list("decl-tyvars", d.span, first.span, last.span);
         }
         for p in &d.params {
             self.param(p);
@@ -480,7 +520,7 @@ impl<'a> Walk<'a> {
             }
             Item::Inductive(i) => {
                 if !i.params.is_empty() {
-                    self.list_bare("inductive-params", i.span, &i.name);
+                    self.list_bare("inductive-params", i.span, &i.name, 0);
                 }
                 for p in &i.valparams {
                     self.param(p);
@@ -499,7 +539,8 @@ impl<'a> Walk<'a> {
             }
             Item::Class(c) => {
                 if !c.params.is_empty() {
-                    self.list_bare("class-params", c.span, &c.name);
+                    let inner_end = c.kinds.iter().flatten().map(|k| k.span.end).max().unwrap_or(0);
+                    self.list_bare("class-params", c.span, &c.name, inner_end);
                 }
                 for k in c.kinds.iter().flatten() {
                     self.ty(k);

@@ -13,6 +13,9 @@ use super::Carrier;
 use crate::inductive::Inductive;
 use crate::{Cx, ElabError, Elaborator, ParamMeta, Sol, traits, zonked};
 
+/// A dot sugar's goal arguments: the type arguments and the value arguments.
+pub(crate) type GoalArgs = (Vec<(Type, Level)>, Vec<(Term, Type, Level)>);
+
 impl Elaborator {
     /// The value-slot ladder's **step 2** at a goal the dot sugars are
     /// building (`docs/operation-indexed-classes-design.md` §5, §5.1): a
@@ -79,6 +82,13 @@ impl Elaborator {
     /// binder's index at an indexed one, and the value-slot refusal where
     /// scope has no answer. `Ok(None)` is "this candidate cannot be built at
     /// all", which the caller skips as it always did.
+    ///
+    /// Answers the goal's type arguments too, because a class whose carrier
+    /// is declared at a universe (`class Frame<A: Type<1>>`) takes that
+    /// carrier as its record's leading *value* parameter, the way a kinded
+    /// carrier is taken ([`Self::elab_class`]). There the carrier, a type at
+    /// the declared universe, is passed as its code and the goal has no type
+    /// arguments (docs/frame-locale-design.md §3).
     pub(crate) fn index_vargs(
         &self,
         cx: &Cx,
@@ -88,9 +98,14 @@ impl Elaborator {
         targs: &[(Type, Level)],
         subject: &str,
         span: Span,
-    ) -> Result<Option<Vec<(Term, Type, Level)>>, ElabError> {
+    ) -> Result<Option<GoalArgs>, ElabError> {
+        let lead = match self.universe_carrier(cx, info, targs) {
+            Ok(lead) => lead,
+            Err(()) => return Ok(None),
+        };
+        let gargs: Vec<(Type, Level)> = if lead.is_some() { Vec::new() } else { targs.to_vec() };
         if info.valparams.is_empty() {
-            return Ok(Some(Vec::new()));
+            return Ok(Some((gargs, lead.into_iter().collect())));
         }
         let (carrier, clvl) = &targs[0];
         let Some(index) = self.scope_index(cx, key, carrier, clvl) else {
@@ -99,10 +114,43 @@ impl Elaborator {
             let head = self.carrier_of_ty(cx, carrier, span);
             return Err(self.value_slot_refusal(info, Some(key), subject, head.as_ref(), span));
         };
-        match self.valparam_args(cx, ind, targs, &index, span) {
-            Ok(v) => Ok(Some(v)),
+        match self.valparam_args_after(cx, ind, &gargs, lead.into_iter().collect(), &index, span) {
+            Ok(v) => Ok(Some((gargs, v))),
             Err(_) => Ok(None),
         }
+    }
+
+    /// A one-parameter class declared at a universe (`<A: Type<1>>`): its
+    /// carrier as the record's leading value argument, `Ok(None)` when the
+    /// class's carrier is an ordinary type parameter, and `Err` when the
+    /// carrier is not a type at the declared universe (no cumulativity, so
+    /// that candidate cannot be built). A class over a type constructor
+    /// (`Bind<M: Type → Type>`) never reaches here with a type subject.
+    pub(crate) fn universe_carrier(
+        &self,
+        cx: &Cx,
+        info: &traits::ClassInfo,
+        targs: &[(Type, Level)],
+    ) -> Result<Option<(Term, Type, Level)>, ()> {
+        let Some(Some(kind)) = info.kinds.first() else {
+            return Ok(None);
+        };
+        if info.kinds.len() != 1 || targs.len() != 1 {
+            return Err(());
+        }
+        let Ok((Type::Ty(want), _)) = self.elab_ty(cx, kind) else {
+            return Err(());
+        };
+        let (carrier, clvl) = &targs[0];
+        if !want.equiv(clvl) {
+            return Err(());
+        }
+        // A carrier read off an expression is already a code (`El ⌜T⌝`); a
+        // lowered one (`Omega::Frame(…)`, a receiver's type) is quoted.
+        let Some(tm) = crate::code::code_of(carrier) else {
+            return Err(());
+        };
+        Ok(Some((tm, Type::Ty(clvl.clone()), clvl.plus(1))))
     }
 
     /// Fill a blocked goal's **index slots** from a dictionary in scope

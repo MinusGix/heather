@@ -1,0 +1,93 @@
+// Formal topologies: frames presented by a small basis and a cover relation
+// (docs/frame-locale-design.md §6).
+//
+// A formal topology is a small type `P` of basic opens with a preorder and a
+// relation `a ◁ U` ("the basic open `a` is covered by the family `U`"). It is
+// the predicative presentation of a locale (Sambin; Coquand, Sambin, Smith
+// and Valentini): the frame of opens is built from families of basic opens,
+// which are small, so nothing quantifies over a powerset, and the frame's
+// large carrier (`Opens<P>`, at `Type<1>`) is only ever indexed by small
+// types.
+//
+// The cover is axiomatic here: any relation with the four rules below
+// presents a frame (`FormalTopology::frame`). Generating one from a small
+// set of axioms by induction, the usual way to present a particular locale,
+// is issues/inductive-formal-covers.md.
+
+import logic;
+import relation_props;
+import order;
+import frame;
+
+// The cover's four rules. `Opens::down_meet` is the formal meet of two families: the
+// basic opens below something in each. Stated over the preorder `le_p` on
+// the basis, whose own laws are not needed: reflexivity of the cover and
+// `left` already give everything the frame uses.
+fn Opens::down_meet<P>(le_p: P → P → Type, u, v: Opens<P>) → Opens<P> {
+    Opens(λ a => Exists<P>(λ b => u.has(b) ∧ le_p(a, b)) ∧ Exists<P>(λ d => v.has(d) ∧ le_p(a, d)))
+}
+
+record FormalTopology(P: Type, le_p: P → P → Type, cov: P → Opens<P> → Type) {
+    cov_refl: (a: P, u: Opens<P>) → u.has(a) → cov(a, u),
+    cov_trans: (a: P, u, v: Opens<P>) → cov(a, u) → ((b: P) → u.has(b) → cov(b, v)) → cov(a, v),
+    cov_left: (a, b: P, u: Opens<P>) → le_p(a, b) → cov(b, u) → cov(a, u),
+    cov_meet: (a: P, u, v: Opens<P>) → cov(a, u) → cov(a, v) → cov(a, Opens::down_meet(le_p, u, v)),
+}
+
+// The order on opens: every basic open of `u` is covered by `v`.
+fn FormalTopology::Le<P>(cov: P → Opens<P> → Type, u, v: Opens<P>) → Type { (a: P) → u.has(a) → cov(a, v) }
+
+// The frame a formal topology presents. Joins are unions and need no rule:
+// the union of a small family of families is a family.
+fn FormalTopology::frame<P>({le_p: P → P → Type}, {cov: P → Opens<P> → Type}, t: FormalTopology(P, le_p, cov))
+    → Frame<Opens<P>>(λ u v => FormalTopology::Le(cov, u, v), λ u v => Opens::down_meet(le_p, u, v), Opens::sup<P>)
+{
+    Frame {
+        le_refl: λ u a h => t.cov_refl(a, u, h),
+        le_trans: λ u v w h1 h2 a h => t.cov_trans(a, v, w, h1(a, h), h2),
+        meet_le_l: λ u v a h => t.cov_left(a, h.left.witness, u, h.left.proof.right, t.cov_refl(h.left.witness, u, h.left.proof.left)),
+        meet_le_r: λ u v a h => t.cov_left(a, h.right.witness, v, h.right.proof.right, t.cov_refl(h.right.witness, v, h.right.proof.left)),
+        le_meet: λ u v w hu hv a h => t.cov_meet(a, u, v, hu(a, h), hv(a, h)),
+        top: Opens::top<P>(),
+        le_top: λ u a h => t.cov_refl(a, Opens::top<P>(), trivial),
+        le_sup: λ I f i a h => t.cov_refl(a, Opens::sup(I, f), Exists(i, h)),
+        sup_le: λ I f w h a e => h(e.witness, a, e.proof),
+        meet_sup_le: λ u I f a h => t.cov_refl(a, Opens::sup(I, λ i => Opens::down_meet(le_p, u, f(i))),
+            Exists(h.right.proof.left.witness, And(h.left,
+                Exists(h.right.witness, And(h.right.proof.left.proof, h.right.proof.right))))),
+    }
+}
+
+// The basic open `a` as an open: everything below it.
+fn FormalTopology::basic<P>(le_p: P → P → Type, a: P) → Opens<P> { Opens(λ b => le_p(b, a)) }
+
+// The presentation is a basis: every open is the join of the basic opens it
+// contains, indexed by the small type of its members.
+theorem FormalTopology::sup_basic<P: Preorder(le_p)>(le_p: P → P → Type, {cov: P → Opens<P> → Type},
+        t: FormalTopology(P, le_p, cov), u: Opens<P>):
+    FormalTopology::Le(cov, u, Opens::sup(Exists<P>(u.has), λ e => FormalTopology::basic(le_p, e.witness)))
+        ∧ FormalTopology::Le(cov, Opens::sup(Exists<P>(u.has), λ e => FormalTopology::basic(le_p, e.witness)), u)
+{
+    And(
+        λ a h => t.cov_refl(a, Opens::sup(Exists<P>(u.has), λ e => FormalTopology::basic(le_p, e.witness)),
+            Exists(Exists(a, h), P.rel_refl(a))),
+        λ b e => t.cov_left(b, e.witness.witness, u, e.proof, t.cov_refl(e.witness.witness, u, e.witness.proof)))
+}
+
+// ---------------------------------------------------------------------------
+// The Alexandrov topology: no axioms.
+
+// With no covering axioms, `a` is covered by `u` exactly when it lies below
+// one of `u`'s members, and the frame is the down-sets of the preorder.
+fn Opens::Below<P>(le_p: P → P → Type, a: P, u: Opens<P>) → Type { Exists<P>(λ b => u.has(b) ∧ le_p(a, b)) }
+
+fn FormalTopology::alexandrov<P: Preorder(le_p)>(le_p: P → P → Type)
+    → FormalTopology(P, le_p, λ a u => Opens::Below(le_p, a, u))
+{
+    FormalTopology(
+        λ a u h => Exists(a, And(h, P.rel_refl(a))),
+        λ a u v h k => Exists((k(h.witness, h.proof.left)).witness, And((k(h.witness, h.proof.left)).proof.left,
+            P.rel_trans(a, h.witness, (k(h.witness, h.proof.left)).witness, h.proof.right, (k(h.witness, h.proof.left)).proof.right))),
+        λ a b u hab h => Exists(h.witness, And(h.proof.left, P.rel_trans(a, b, h.witness, hab, h.proof.right))),
+        λ a u v hu hv => Exists(a, And(And(hu, hv), P.rel_refl(a))))
+}

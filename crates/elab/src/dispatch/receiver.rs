@@ -134,7 +134,7 @@ impl Elaborator {
             let targs = [(rty.clone(), rlvl.clone())];
             // An indexed class's goal has a value slot, and the ladder's step 2
             // is what fills it here (§5.1): scope, then refuse by name.
-            let vargs = match self.index_vargs(cx, key, info, &ind, &targs, &carrier, span) {
+            let (gargs, vargs) = match self.index_vargs(cx, key, info, &ind, &targs, &carrier, span) {
                 Ok(Some(v)) => v,
                 Ok(None) => continue,
                 Err(e) => {
@@ -142,7 +142,7 @@ impl Elaborator {
                     continue;
                 }
             };
-            let Ok((goal, glvl)) = self.lower_instance(cx, &ind, &targs, &vargs, span) else {
+            let Ok((goal, glvl)) = self.lower_instance(cx, &ind, &gargs, &vargs, span) else {
                 continue;
             };
             let display = format!("{}<{carrier}>", info.name);

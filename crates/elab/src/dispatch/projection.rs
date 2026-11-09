@@ -222,7 +222,7 @@ impl Elaborator {
                 continue;
             };
             let targs = [(carrier.clone(), clvl.clone())];
-            let vargs = match self.index_vargs(cx, key, info, &ind, &targs, &subject, span) {
+            let (gargs, vargs) = match self.index_vargs(cx, key, info, &ind, &targs, &subject, span) {
                 Ok(Some(v)) => v,
                 Ok(None) => continue,
                 Err(e) => {
@@ -230,7 +230,7 @@ impl Elaborator {
                     continue;
                 }
             };
-            let Ok((goal, glvl)) = self.lower_instance(cx, &ind, &targs, &vargs, span) else {
+            let Ok((goal, glvl)) = self.lower_instance(cx, &ind, &gargs, &vargs, span) else {
                 continue;
             };
             let display = format!("{}<{subject}>", info.name);
@@ -467,11 +467,15 @@ impl Elaborator {
                 _ => written.push(a.clone()),
             }
         }
-        let vargs = match self.valparam_args(cx, &ind, &targs, &written, span) {
+        // A carrier declared at a universe is the record's leading value
+        // argument (`docs/frame-locale-design.md` §3).
+        let lead = self.universe_carrier(cx, &info, &targs).ok()?;
+        let gargs: Vec<(Type, Level)> = if lead.is_some() { Vec::new() } else { targs.to_vec() };
+        let vargs = match self.valparam_args_after(cx, &ind, &gargs, lead.into_iter().collect(), &written, span) {
             Ok(v) => v,
             Err(e) => return Some(Err(e)),
         };
-        let (goal, glvl) = self.lower_instance(cx, &ind, &targs, &vargs, span).ok()?;
+        let (goal, glvl) = self.lower_instance(cx, &ind, &gargs, &vargs, span).ok()?;
         let display = format!(
             "{}<{subject}>{}",
             info.name,
