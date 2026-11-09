@@ -205,6 +205,26 @@ designation / at OrderedField := OrderedField::div
   divisor does not first pay a failing `nlinarith`.
 - **Tactics.** `ring` and `linarith` read `OrderedField::inv` and `div` at a
   class carrier as at `Rat` (`class_carrier` in `crates/elab/src/ring.rs`).
+  At a class carrier a quotient's reciprocal is built from the quotient's own
+  arguments, and a reciprocal's fact names an argument that has no source
+  spelling by an alias bound to its term: the section's `+` and dictionary
+  spell as binder names no source can write, so `e / (c + 1)` was an atom.
+- **Numerals and minus** (2026-11-08,
+  issues/class-carrier-arithmetic-surface.md). A numeral checked at a
+  section's carrier `K`, with no `Numeral<K>` instance, is the ring's own
+  `Ring::nat_cast<K>(n)` (semiring.hthr), found through the ring in scope;
+  `0` and `1` compute to the dictionary's units and are emitted as them, so
+  a statement with numerals is the one with `K.unit` and
+  `K.multiplicative.unit` (`literals.rs`, `class_carrier_numeral`). A
+  numeral at a type parameter with no ring in scope is refused saying so.
+  `-x` and `x - y` are designations at `Ring` (`Ring::neg`, `Ring::sub`)
+  and at `OrderedAddGroup`, one δ-step from `K.inv(x)` and `x + K.inv(y)`,
+  reached from a field section through rung 2b's ancestors; `ring` reads
+  all four. `OrderedRing::positive_nat_cast` (ordered_sign.hthr) signs a
+  numeral divisor, so `e / 2` finds its apartness by a rule, and `linarith`
+  reads `e / 2` as `½·e` through the reciprocal's positivity, as at `Rat`.
+  `real_fn`'s bound lemmas are stated with numerals (`OrderedField::half_pos`:
+  `0 < e → 0 < e / 2`), and `OrderedField::half` is gone for `e / 2`.
 
 A carrier reads the generic laws through its instance by unfolding:
 `OrderedField::div_mul_cancel(a, b, h := Inr(hb))` proves `a / b * b ≈ a` at
@@ -224,6 +244,7 @@ tried). Still open:
 - issues/carrier-division-through-class.md: `Rat`'s and `CReal`'s `/` as
   the class's, retiring their copies.
 - issues/class-carrier-division-gaps.md: a sign goal written with `<` at a
-  class carrier, numerals there, and the trace's spelling.
+  class carrier, and the trace's spelling (numerals there moved to
+  issues/class-carrier-arithmetic-surface.md, done 2026-11-08).
 - issues/ring-reciprocal-of-searched-proof.md: `ring` reads no fact for a
   reciprocal whose apartness the search built through a rule.

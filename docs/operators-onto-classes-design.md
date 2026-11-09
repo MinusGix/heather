@@ -173,6 +173,12 @@ same spilling, the same diagnostics. Three rungs, in order:
 > OrderedField := OrderedField::inv` gives `x⁻¹` its meaning inside
 > `section<K: OrderedField(…)>`. The designated operation is generic and
 > emitted bare, so its own dictionary is found at the operand's carrier.
+> Amended 2026-11-08 (issues/class-carrier-arithmetic-surface.md): a
+> dictionary's untagged ancestors are asked after its own class, so `-` and
+> `x - y`, designated at `Ring` and at `OrderedAddGroup`, reach a section
+> over `OrderedField`; and a numeral-led application checked at a section's
+> carrier (`1 - x`, `-1`) asks this rung before the numeral's `Nat` default
+> proposes a carrier.
 >
 > **(3) The symbol's fallback name.** `+`→`add`, `*`→`mul`, `<=`→`Le`,
 > `<`→`lt`, resolved by `Elaborator::resolve` exactly as the parser's
