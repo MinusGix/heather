@@ -42,3 +42,4 @@ frame it is the join over basic opens `a` with `↓a ⊓ x ≤ y`, a small index
 
 - 2026-11-09: Filed from frame-and-locale-foundations, whose presentation
   basis is axiomatic.
+- 2026-11-09: Blocked on [[indexed-families-at-any-index-type]]: the cover is a family indexed by the basis `P`, a type parameter, beside value parameters (the axioms and the covered open), and the elaborator refuses all three (index type, value parameters with an index, bare-variable results).
