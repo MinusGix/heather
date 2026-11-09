@@ -119,7 +119,7 @@ theorem both_one_pos_swapped<A: CommRingOfInt(≈, +, *) + OrderedField(≈, <, 
 theorem both_of_nat_pos<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)>(x: A, n: Nat):
     A.unit < A.of_nat(Succ(n))
 {
-    OrderedField::of_nat_pos(x, n)
+    OrderedField::of_nat_pos(n)
 }
 
 // At a concrete carrier the dictionary is assembled from the two instances.
@@ -285,6 +285,27 @@ theorem int_cross_trans(a, b, c, d, e, f: Int, hd: OfNat(0) < d, h1: a * d ≈ c
 theorem nat_mul_not_cancellative(): ¬((x, y, z: Nat) → z * x = z * y → x = y) {
     λ h => omega(h(0, 1, 0, omega))
 }
+
+// Implicit points at a class theorem (issues/generic-theorem-implicit-points.md):
+// the hypotheses solve the points, the points' types the carrier, and the
+// carrier pins the class goal's indices, from the section's dictionary or
+// from the carrier's designations.
+section<K: OrderedField(≈, <, <=, +, *)> {
+theorem implicit_lt_le({x, y, z: K}, a: x < y, b: y < z): x <= z { StrictOrder::le_of_lt(x, z, K.lt_trans(x, y, z, a, b)) }
+theorem implicit_in_section(a, b, c: K, h1: a < b, h2: b < c): a <= c { implicit_lt_le(h1, h2) }
+// No point at all: the expected type pins the order, and its type the carrier.
+theorem no_point(): K.unit < K.multiplicative.unit { K.zero_lt_one }
+theorem no_point_in_section(a: K): K.unit < K.multiplicative.unit { no_point() }
+}
+theorem implicit_at_rat(a, b, c: Rat, h1: a < b, h2: b < c): a <= c { implicit_lt_le(h1, h2) }
+theorem implicit_at_creal(a, b, c: CReal, h1: a < b, h2: b < c): a <= c { implicit_lt_le(h1, h2) }
+theorem no_point_at_rat(): Rat::Lt(0, 1) { no_point() }
+theorem no_point_at_creal(): CReal::Lt(0, 1) { no_point() }
+
+// Hypotheses at two carriers: the first fixes the carrier, and the point
+// only the second mentions is not inferred, as at a concrete carrier.
+// expect-error: could not infer the implicit argument `z` of `implicit_lt_le`
+theorem implicit_two_carriers(a, b: Rat, c, d: CReal, h1: a < b, h2: c < d): True { let _ = implicit_lt_le(h1, h2); trivial }
 
 // `-x` and `x - y` at an ordered group's carrier, the designations at
 // `OrderedAddGroup` (issues/class-carrier-arithmetic-surface.md). A group has

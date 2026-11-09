@@ -16,8 +16,10 @@
 // proof that `b - a` is a nonnegative combination, which at `CReal` is a
 // refutation of `b < a` assembled from the instance's laws.
 //
-// Points are explicit (`ordered_field`'s convention); `num_pos` and
-// `zero_le` take a point only so a caller's carrier pins `A`.
+// Points are explicit (`ordered_field`'s convention). `one_pos`, `num_pos`
+// and `zero_le` take none: the certificate names the carrier
+// (`lin_num_pos<K>(n)`), and a section's own call is pinned by its expected
+// type (issues/generic-theorem-implicit-points.md).
 
 import logic;
 import nat;
@@ -38,25 +40,25 @@ section<A: OrderedField(≈, <, <=, +, *) + CommRingOfInt(≈, +, *)> {
 // ---------------------------------------------------------------------------
 // Coefficients: the carrier's positive numerals.
 
-theorem lin_one_pos(x: A): A.unit < A.of_int(OfNat(1)) {
+theorem lin_one_pos(): A.unit < A.of_int(OfNat(1)) {
     StrictOrder::lt_respects_r(A.unit, A.multiplicative.unit, A.of_int(OfNat(1)),
         A.rel_sym(A.of_int(OfNat(1)), A.multiplicative.unit, A.of_int_one), A.zero_lt_one)
 }
 
-theorem lin_num_pos(x: A, n: Nat): A.unit < A.of_int(OfNat(Succ(n))) {
+theorem lin_num_pos(n: Nat): A.unit < A.of_int(OfNat(Succ(n))) {
     match n {
-        Zero => lin_one_pos(x),
+        Zero => lin_one_pos(),
         Succ(m) => StrictOrder::lt_respects_r(A.unit, A.of_int(OfNat(Succ(m))) + A.of_int(OfNat(1)), A.of_int(OfNat(Succ(Succ(m)))),
             A.rel_sym(A.of_int(OfNat(Succ(Succ(m)))), A.of_int(OfNat(Succ(m))) + A.of_int(OfNat(1)), A.of_int_add(OfNat(Succ(m)), OfNat(1))),
-            OrderedAddMonoid::add_pos(A.of_int(OfNat(Succ(m))), A.of_int(OfNat(1)), lin_num_pos(x, m), lin_one_pos(x))),
+            OrderedAddMonoid::add_pos(A.of_int(OfNat(Succ(m))), A.of_int(OfNat(1)), lin_num_pos(m), lin_one_pos())),
     }
 }
 
-theorem lin_num_nonneg(x: A, n: Nat): A.unit <= A.of_int(OfNat(Succ(n))) {
-    StrictOrder::le_of_lt(A.unit, A.of_int(OfNat(Succ(n))), lin_num_pos(x, n))
+theorem lin_num_nonneg(n: Nat): A.unit <= A.of_int(OfNat(Succ(n))) {
+    StrictOrder::le_of_lt(A.unit, A.of_int(OfNat(Succ(n))), lin_num_pos(n))
 }
 
-theorem lin_zero_le(x: A): A.unit <= A.unit { StrictOrder::le_refl(A.unit) }
+theorem lin_zero_le(): A.unit <= A.unit { StrictOrder::le_refl(A.unit) }
 
 // ---------------------------------------------------------------------------
 // Facts as nonnegative parts: `a R b` gives `b - a` on the right side of zero.
@@ -94,7 +96,7 @@ theorem lin_scale_lt(k, x: A, hk: A.unit < k, hx: A.unit < x): A.unit < k * x { 
 // scaled by the denominator a reciprocal in it clears.
 theorem lin_den_pos(s, d: A, hs: A.unit < s, e: s * d ≈ A.of_int(OfNat(1))): A.unit < d {
     OrderedSemiring::pos_of_mul_pos(s, d, hs, StrictOrder::lt_respects_r(A.unit, A.of_int(OfNat(1)), s * d, A.rel_sym(s * d, A.of_int(OfNat(1)), e),
-        lin_one_pos(s)))
+        lin_one_pos()))
 }
 
 // ---------------------------------------------------------------------------

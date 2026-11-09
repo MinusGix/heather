@@ -1424,6 +1424,17 @@ impl application::ImplicitApplicationElab for Elaborator {
         self.solve_from_expected(cx, result, expected, n, sols, meta_doms, guesses, span)
     }
 
+    fn learn_from_solution_types(
+        &self,
+        cx: &Cx,
+        meta_doms: &[Type],
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    ) -> bool {
+        Elaborator::learn_from_solution_types(self, cx, meta_doms, n, sols, span)
+    }
+
     fn resolve_application_obligation(
         &self,
         cx: &Cx,
@@ -1462,7 +1473,7 @@ impl application::ImplicitApplicationElab for Elaborator {
         // goal the caller asked for. Operator notation in it is
         // issues/diagnostic-operator-resugaring.md's.
         let display = written
-            .map(traits::render_ty)
+            .map(|w| traits::render_goal_symbols(w, params).0)
             .unwrap_or_else(|| "a solver parameter".to_string());
         let applied = obligation
             .applied
@@ -1601,20 +1612,11 @@ impl application::ImplicitApplicationElab for Elaborator {
             .get(obligation.param)
             .map(|parameter| parameter.name.as_str())
             .unwrap_or("?");
-        let mut goal = params
+        let (goal, symbolic) = params
             .get(obligation.param)
             .and_then(|parameter| parameter.solver.as_deref())
-            .map(traits::render_ty)
-            .unwrap_or_else(|| "a solver parameter".to_string());
-        let mut symbolic = false;
-        for p in params {
-            if let Some(symbol) = traits::op_index_symbol(&p.name)
-                && goal.contains(&p.name)
-            {
-                goal = goal.replace(&p.name, symbol);
-                symbolic = true;
-            }
-        }
+            .map(|written| traits::render_goal_symbols(written, params))
+            .unwrap_or_else(|| ("a solver parameter".to_string(), false));
         if symbolic {
             return ElabError::Elab {
                 msg: format!(

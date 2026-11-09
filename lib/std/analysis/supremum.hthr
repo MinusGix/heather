@@ -294,7 +294,7 @@ theorem Bisection::start(S: K → Type, c, x0, b0: K, sx: S(x0), hb: UpperBound(
 }
 
 // The rate: `t = 1/4`, so the width falls by `3/4` a step.
-theorem Bisection::quarter(x: K): ∃ t: K, K.unit < t ∧ t + t < K.multiplicative.unit {
+theorem Bisection::quarter(): ∃ t: K, K.unit < t ∧ t + t < K.multiplicative.unit {
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
     let h1 = K.multiplicative.unit / 2;
     let t = h1 / 2;
@@ -328,7 +328,7 @@ theorem CauchyComplete::located_sup(S: K → Type, inh: ∃ x: K, S(x), bdd: ∃
     ∃ s: K, IsSup(S, s)
 {
     let o: (K.unit < K.multiplicative.unit) = K.zero_lt_one;
-    let q = Bisection::quarter(inh.witness);
+    let q = Bisection::quarter();
     let xb: (inh.witness <= bdd.witness) = bdd.proof(inh.witness, inh.proof);
     let pw: (K.unit <= bdd.witness + K.inv(inh.witness + K.inv(K.multiplicative.unit))) = linarith(xb, o);
     Bisection::sup(S, loc, q.witness, q.proof.left, q.proof.right, bdd.witness + K.inv(inh.witness + K.inv(K.multiplicative.unit)), pw,

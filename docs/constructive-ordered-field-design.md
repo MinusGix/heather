@@ -224,12 +224,22 @@ theorem derives it from `0 < x < y`.
 
 ## Calling a generic theorem
 
-A generic theorem's indices are filled from its carrier, and the carrier is
-read off an explicit point (or a type argument, `le_of_lt<Rat>(x, y, h)`), so
-every generic theorem takes its points explicitly:
-`StrictOrder::le_antisymm(x, y, hxy, hyx)`, not `(hxy, hyx)`. With implicit
-endpoints, the hypothesis `?lt(?x, ?y)` is not a pattern the unifier can solve
-against `Rat::Lt(a, b)` before the carrier is known.
+A generic theorem's indices are filled from its carrier: from the section's
+dictionary in scope, or from the carrier's designations. The carrier is read
+off an explicit point, a type argument (`le_of_lt<Rat>(x, y, h)`), or, since
+issues/generic-theorem-implicit-points.md, the **type of any solved slot**:
+a hypothesis `h1: a < b` at an implicit-pointed theorem
+(`p({x, y, z: K}, h1: x < y, h2: y < z)`) solves `?x := a` and `?< := <`, and
+`a : Rat` (or the order's own type) is what solves `?K`. The call then reads
+like the carrier's own, `p(h1, h2)`, inside a section and at `Rat` or
+`CReal` alike, and a theorem with no point at all (`two_pos()`) is pinned by
+its expected type. Hypotheses at two carriers are refused naming the point
+only the second one mentions, as at a concrete carrier.
+
+The library's theorems still take their points explicitly
+(`StrictOrder::le_antisymm(x, y, hxy, hyx)`); moving them to implicit points
+is issues/class-theorems-implicit-points.md, which also has to move `mono`'s
+lemma table, whose calls are built positionally.
 
 A predicate meets its own unfolding: a `Close(x, y, e)` hypothesis passes
 where `AbsLt(x - y, e)` is expected, and a result `AbsLt(x, e)` checks against

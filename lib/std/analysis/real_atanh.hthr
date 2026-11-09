@@ -221,7 +221,7 @@ theorem OrderedField::npow_small(r: K, p0: K.unit <= r, hr: r + r <= K.multiplic
     let m: (w * q ≈ K.multiplicative.unit) = K.mul_recip(w, Inr(pw));
     let n = K.archimedean(q);
     let big: (w * q < w * K.of_nat(n.witness)) = OrderedSemiring::mul_lt_mono_l(q, K.of_nat(n.witness), w, n.proof, pw);
-    let pn = OrderedField::of_nat_nonneg(w, n.witness);
+    let pn = OrderedField::of_nat_nonneg(n.witness);
     let le = OrderedField::npow_mul_nat(r, p0, hr, n.witness);
     Exists(n.witness, K.le_of_not_lt(OrderedField::npow(r, n.witness), w, λ back => {
         let up: (w * K.of_nat(n.witness) <= OrderedField::npow(r, n.witness) * K.of_nat(n.witness)) =

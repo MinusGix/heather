@@ -356,6 +356,20 @@ pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
         obligation: &ResolveOb,
         span: Span,
     ) -> crate::ElabError;
+
+    /// Learn open slots from the types of the solved slots whose declared
+    /// types mention them (`?x := a` with `a : K` teaches `?K`). `true` when
+    /// it solved something.
+    fn learn_from_solution_types(
+        &self,
+        _cx: &Cx,
+        _meta_doms: &[Type],
+        _n: u32,
+        _sols: &mut [Sol],
+        _span: Span,
+    ) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -391,7 +405,12 @@ pub(crate) fn retry_obligations(
     span: Span,
 ) -> R<()> {
     loop {
-        let mut progressed = false;
+        // A solution's own type may pin a slot no read reached: the carrier
+        // of a class theorem whose points a hypothesis solved
+        // (issues/generic-theorem-implicit-points.md). Before the solver
+        // obligations, whose goals it is what closes.
+        let mut progressed = !resolves.is_empty()
+            && elab.learn_from_solution_types(cx, meta_doms, n, sols, span);
         let mut blocked = false;
         for obligation in resolves {
             if !matches!(sols[obligation.slot], Sol::Withheld) {
