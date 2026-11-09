@@ -26,7 +26,7 @@ time come last.
 | 4 | Ψ-bound `GlobalCache`, plus `Defs`' layer condition | `reduce.rs` `Defs`, `GlobalCache` | none found | soundness | yes (already filed) | [[kernel-psi-bound-cache]] |
 | 5 | The checker's mode | `typing.rs` `Tc` | none found | wrong mode's shortcut | yes, modest (already filed) | [[kernel-checker-mode-enum]] |
 | 6 | Observation recordings: one guarded, one not | `unseal.rs`, `withheld.rs` | none yet (the second has no reader) | stale incremental cache | yes, before its first reader | [[kernel-observation-recording-guard]] |
-| 7 | `Debug`'s budget state in three thread-locals | `fmt.rs` `REMAINING`/`DEPTH`/`EXACT` | **a latent panic, reproduced** (§7) | the `{:?}`-is-safe rail | yes, cheap | [[fmt-budget-state-nesting]] |
+| 7 | `Debug`'s budget state in three thread-locals | `fmt.rs` `REMAINING`/`DEPTH`/`EXACT` | **a latent panic, reproduced** (§7) | the `{:?}`-is-safe rail | **done** (§7, `FmtState`) | [[fmt-budget-state-nesting]] |
 | 8 | Seven hand-paired native-depth counters | see §8 | none | time only | no | — |
 | 9 | Smaller ones | see §9 | none | — | no | — |
 | 10 | Already explicit | see §10 | — | — | — | — |
@@ -376,6 +376,17 @@ tests' Ψ hash. So this is latent. But CLAUDE.md treats "an accidental
 { Idle, Bounded { remaining, depth }, Exact { depth } }`, where `write_exact`
 saves the whole state and restores it in its guard, and `node`'s
 outermost test matches `Idle`.
+
+**Done (2026-11-09).** `fmt.rs` holds one `Cell<FmtState>` with `Idle`,
+`Bounded { remaining, depth }` and `Exact`. `node` arms the budget when it
+finds `Idle`, and `write_exact` replaces the whole state and restores it in
+its guard. Exact mode no longer counts anything, so it cannot run a
+budget below zero. An outermost node also resets the thread to `Idle`
+in a drop guard, so a panic inside a `Debug` impl no longer leaves later
+`{:?}`s continuing a spent budget. The reproduction is now the unit test
+`fmt::tests::write_exact_inside_a_bounded_format_resumes_it`, which panics
+on the old code ("attempt to subtract with overflow") and passes on the
+new.
 
 ## 8. Seven native-depth counters, hand-paired — leave them
 
