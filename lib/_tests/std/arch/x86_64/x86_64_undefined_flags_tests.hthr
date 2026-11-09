@@ -1,0 +1,62 @@
+// Undefined flags (issues/x86-undefined-flags.md): which flags an
+// instruction leaves defined, that a read of an undefined one has no
+// Execute, and the block check the compiler's code passes
+// (`block_reads`, x86_64_block).
+import x86_64;
+import x86_64_block;
+import bitvec;
+import bool;
+import logic;
+import list;
+import relation;
+
+// The masks each instruction leaves: arithmetic defines all six, the
+// logical ones all but AF, a shift by an imm8 neither AF nor OF, and a shift
+// whose masked count is zero (64) leaves the mask it found.
+theorem cmp_defines_all(d: DefinedFlags): CmpRR(Rax, Rbx).defines(d) = DefinedFlags::all() { refl }
+theorem test_defines_but_af(d: DefinedFlags): TestRR(Rax, Rbx).defines(d) = DefinedFlags::but_af() { refl }
+theorem shift_imm_defines_shifted(d: DefinedFlags):
+    ShiftImm(OpShl, Rax, BitVec::ofNat(3)).defines(d) = DefinedFlags::shifted() { refl }
+theorem shift_imm_64_keeps(d: DefinedFlags): ShiftImm(OpShl, Rax, BitVec::ofNat(64)).defines(d) = d { refl }
+theorem mov_keeps(d: DefinedFlags): MovRR(Rax, Rbx).defines(d) = d { refl }
+
+// Block checks, from no flag defined at the block's start.
+theorem cmp_then_setl_reads(): block_reads([CmpRR(Rax, Rbx), SetLess(Al)], DefinedFlags::none()) = True { refl }
+theorem test_then_sete_reads(): block_reads([TestRR(Rax, Rax), MovRR(Rcx, Rax), SetEqual(Al)], DefinedFlags::none()) = True { refl }
+// Nothing set CF yet.
+theorem setb_first_refused(): block_reads([SetBelow(Al)], DefinedFlags::none()) = False { refl }
+// SETL reads OF, which a shift by three leaves undefined; SETB reads CF,
+// which it defines.
+theorem shift_then_setl_refused():
+    block_reads([ShiftImm(OpShl, Rax, BitVec::ofNat(3)), SetLess(Al)], DefinedFlags::none()) = False { refl }
+theorem shift_then_setb_reads():
+    block_reads([ShiftImm(OpShl, Rax, BitVec::ofNat(3)), SetBelow(Al)], DefinedFlags::none()) = True { refl }
+// A shift by one (D1) keeps OF defined.
+theorem shift_one_then_setl_reads():
+    block_reads([ShiftOne(OpShl, Rax), SetLess(Al)], DefinedFlags::none()) = True { refl }
+
+// A read of an undefined flag has no step at all, from any state.
+theorem setb_undefined_no_execute<M>(s: MachineState<M>, outcome: SemanticOutcome<MachineState<M>, Exception>,
+    undefined: s.flags.defined.cf = False): ¬Execute(decoded_canonical(SetBelow(Al)), s, outcome)
+{
+    λ e => absurd(trans(sym(undefined), e.left))
+}
+
+// Undefined flags are any value: two states differing only in an undefined
+// flag are the same defined state, and one differing in a defined flag is
+// not.
+fn some_state() → MachineState<Nat> {
+    MachineState<Nat>(gprs := Gprs(at := λ _ => BitVec::zero()),
+        flags := Flags(False, False, False, False, False, False, DefinedFlags::but_af()),
+        rip := BitVec::zero(), memory := 0)
+}
+fn af_set() → MachineState<Nat> {
+    some_state().with_flags(Flags(False, False, True, False, False, False, DefinedFlags::but_af()))
+}
+fn cf_set() → MachineState<Nat> {
+    some_state().with_flags(Flags(True, False, False, False, False, False, DefinedFlags::but_af()))
+}
+theorem af_undefined_same(): some_state() ≈ af_set() { refl }
+theorem cf_defined_differs(): ¬(erase_undefined(some_state()) = erase_undefined(cf_set())) {
+    λ same => absurd(cong_fn(λ (s: MachineState<Nat>) => s.flags.cf, same))
+}

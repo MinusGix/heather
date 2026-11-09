@@ -119,9 +119,9 @@ fn x86_64_suite() {
     }
 }
 
-// `SameDefinedState` is `=` pulled back along `erase_af`: a registered
+// `SameDefinedState` is `=` pulled back along `erase_undefined`: a registered
 // equivalence, `≈` at `MachineState`, and congruence through the steps that
-// commute with erasing AF. The controls: a function that branches on AF has
+// commute with erasing undefined flags. The controls: a function that branches on AF has
 // no such proof and no certificate for `rel_cong`, and TEST's two permitted
 // results are related without being equal.
 fn same_defined_setoid_check(base: &Elaborator) {
@@ -133,22 +133,30 @@ import bool;
 import logic;
 import list;
 
-// Two ordinary instructions in a row, from states that differ only in AF:
-// congruence walks both steps, each by its registered evidence.
-theorem two_steps_related<M>(first, second: Instruction, a, b: MachineState<M>, same: a ≈ b):
+// Two ordinary instructions in a row, from states that differ only in
+// undefined flags: each step reading only defined flags keeps them related.
+theorem two_steps_related<M>(first, second: Instruction, a, b: MachineState<M>, same: a ≈ b,
+    first_reads: first.reads_defined(a.flags.defined) = True,
+    second_reads: second.reads_defined(execute_normal(decoded_canonical(first), a).flags.defined) = True):
     execute_normal(decoded_canonical(second), execute_normal(decoded_canonical(first), a)) ≈
     execute_normal(decoded_canonical(second), execute_normal(decoded_canonical(first), b)) {
-    rel_cong(same)
+    execute_normal_respects_defined(second, execute_normal(decoded_canonical(first), a),
+        execute_normal(decoded_canonical(first), b),
+        execute_normal_respects_defined(first, a, b, same, first_reads), second_reads)
 }
 
-// TEST's two permitted results, then one more step, then back.
+// TEST's two permitted results, then one more step reading what TEST
+// defined, then back.
 theorem test_then_step<M>(left, right: Gpr, next: Instruction, before: MachineState<M>, x: MachineState<M>,
+    reads: next.reads_defined(DefinedFlags::but_af()) = True,
     back: x = execute_normal(decoded_canonical(next), execute_test(left, right, 3, before, False))):
     execute_normal(decoded_canonical(next), execute_test(left, right, 3, before, True)) ≈ x {
     calc {
         execute_normal(decoded_canonical(next), execute_test(left, right, 3, before, True)) ≈
             execute_normal(decoded_canonical(next), execute_test(left, right, 3, before, False)) :=
-            rel_cong(execute_test_same_defined(left, right, 3, before, True, False)),
+            execute_normal_respects_defined(next, execute_test(left, right, 3, before, True),
+                execute_test(left, right, 3, before, False),
+                execute_test_same_defined(left, right, 3, before, True, False), reads),
         ≈ x := SameDefinedState::of_equal(sym(back)),
     }
 }
@@ -413,12 +421,14 @@ theorem sub_and_cmp_direction_encodings_normalize(start: BitVec(64)):
 }
 
 theorem compiler_bytes_reach_execution<M>(instruction: Instruction,
-    before: MachineState<M>):
+    before: MachineState<M>,
+    reads: instruction.reads_defined(before.flags.defined) = True,
+    safe: instruction.faults(before.gprs) = False):
     ExecuteAt(encoded_at(before.rip, instruction),
         decoded_canonical(instruction), before,
         Returned(execute_normal(decoded_canonical(instruction), before)))
 {
-    canonical_encoding_executes(instruction, before)
+    canonical_encoding_executes(instruction, before, reads, safe)
 }
 
 theorem decoded_length_drives_fallthrough<M>(span: InstructionBytes,
@@ -577,13 +587,15 @@ theorem executable_decoder_soundness_is_carried_by_result(
 }
 
 theorem executable_decoder_result_reaches_execution<M>(
-    bytes: List<BitVec(8)>, result: ByteDecode(bytes), before: MachineState<M>):
+    bytes: List<BitVec(8)>, result: ByteDecode(bytes), before: MachineState<M>,
+    reads: result.instruction.reads_defined(before.flags.defined) = True,
+    safe: result.instruction.faults(before.gprs) = False):
     ExecuteAt(
         InstructionBytes(start := before.rip, bytes := bytes),
         decoded_canonical(result.instruction), before,
         Returned(execute_normal(decoded_canonical(result.instruction), before)))
 {
-    decoded_byte_result_executes(bytes, result, before)
+    decoded_byte_result_executes(bytes, result, before, reads, safe)
 }
 
 theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
@@ -601,7 +613,7 @@ theorem external_mov_bytes_reach_execution<M>(before: MachineState<M>):
         decoded_rr(MovRR(Rax, Rbx)), before,
         Returned(execute_normal(decoded_rr(MovRR(Rax, Rbx)), before)),
         refl, And(Inl(And(refl, And(refl, refl))), refl),
-        canonical_execute_normal_is_allowed(MovRR(Rax, Rbx), before))
+        canonical_execute_normal_is_allowed(MovRR(Rax, Rbx), before, refl, refl))
 }
 
 "#;
@@ -932,7 +944,7 @@ fn before() -> MachineState<List<BitVec(8)>> {
 theorem fetched_executes(): ExecuteFetched(test_access(),
     encoded_at(start(), MovRR(Rax, Rbx)), decoded_canonical(MovRR(Rax, Rbx)),
     before(), Returned(execute_normal(decoded_canonical(MovRR(Rax, Rbx)), before())))
-{ ⟨FetchedFrom(⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩), canonical_encoding_executes(MovRR(Rax, Rbx), before())⟩ }
+{ ⟨FetchedFrom(⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, ⟨refl, trivial⟩⟩⟩⟩⟩⟩⟩⟩), canonical_encoding_executes(MovRR(Rax, Rbx), before(), refl, refl)⟩ }
 "#;
     if let Err(err) = e.elab_module_source("fetch_checks", source) {
         panic!("fetch checks: {}", err.render(source));

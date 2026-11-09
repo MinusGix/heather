@@ -1,10 +1,10 @@
 ---
 title: One type for the deferred-premise queues of conversion and the checker
-status: open
+status: closed
 labels: [kernel,state-machine,soundness,refactor]
 area: kernel
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 Give the deferred-premise discipline of the deep-term walks one type, shared by conversion and the checker, instead of eight hand-coordinated fields in `Conv` and four in `Tc`.
@@ -26,3 +26,6 @@ This is `Conv::tm`'s prologue and epilogue, the hottest path in the kernel. The 
 ## Related
 
 [[value-memo-evaluation-mode]], [[typing-memo-scope-key]], [[kernel-checker-mode-enum]] (a Locate checker bypasses the memo, so it shares the queue without the take-back question).
+
+## Log
+- 2026-11-09: done. `crates/kernel/src/premises.rs`: `PremiseQueue<I>` (queue, floor, base, push count, depth-zero drain flag; drain and attempt phases as calls returning `#[must_use]` records) shared by `Conv` and `Tc`, and `VerdictMemo<K>` (conversion's memo with its provisional log and attempt count). `perf ab` on calc_parser: conversion and checking counters identical. The checker still forgets its memos wholesale after a refusal; that is now one stated choice in the module docs.

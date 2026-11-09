@@ -398,7 +398,7 @@ theorem Target::goes_arg_body(self t: Target, v: Nat → BitVec(8), buf, cap: Na
         λ (u: MachineState<X86Memory(t.r.profile)>) => pre(execute_block_normal([CmpRR(R8, R9)], u).gprs,
             execute_block_normal([CmpRR(R8, R9)], u).flags, execute_block_normal([CmpRR(R8, R9)], u).memory),
         λ (u: MachineState<X86Memory(t.r.profile)>) => t.ArgAt(v, buf, cap, arg, pointer, i, vals, u.gprs, u.memory) ∧ (read_gpr(Rdx, u.gprs) = byte.zero_extend(56)),
-        t.goes_block(tested, 0, [CmpRR(R8, R9)], w_cmp, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped2),
+        t.goes_block_jcc(tested, 0, [CmpRR(R8, R9)], w_cmp, tree, AE, pre, jumped2, λ _ => refl),
         λ u held => ⟨held, refl⟩)
 }
 
@@ -442,8 +442,7 @@ theorem Target::goes_arg_head(self t: Target, v: Nat → BitVec(8), buf, cap: Na
                 Inl(end) => absurd(trans(sym(held2.right), trans(zf_is(u.gprs, u.flags, u.memory, held2.left), byte_tests_zero(byte, end.right)))),
                 Inr(more) => body(byte, more.left, u, here2, res2, ⟨held2.left.left.left, held2.left.left.right.left⟩),
             });
-        let test = t.goes_block(loaded, 0, [TestRR(Rdx, Rdx)], w_flagged, tree,
-            λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped);
+        let test = t.goes_block_jcc(loaded, 0, [TestRR(Rdx, Rdx)], w_flagged, tree, E, pre, jumped, λ _ => refl);
         let load = t.goes_load_byte(head, 0, ByteLoad(Rdx, Rsi), w_loaded, tree,
             λ (u: MachineState<X86Memory(t.r.profile)>) => pre(execute_block_normal([TestRR(Rdx, Rdx)], u).gprs,
                 execute_block_normal([TestRR(Rdx, Rdx)], u).flags, execute_block_normal([TestRR(Rdx, Rdx)], u).memory), test);
@@ -743,7 +742,7 @@ theorem Target::goes_args(self t: Target, live, out: List<Nat>, env: Env, p: Pro
             λ (w: MachineState<X86Memory(t.r.profile)>) => pre(execute_block_normal([CmpRR(Rcx, R9)], w).gprs,
                 execute_block_normal([CmpRR(Rcx, R9)], w).flags, execute_block_normal([CmpRR(Rcx, R9)], w).memory),
             λ (w: MachineState<X86Memory(t.r.profile)>) => Q3(w.gprs, w.memory),
-            t.goes_block(c3, 0, [CmpRR(Rcx, R9)], w_c4, tree, λ (w: MachineState<X86Memory(t.r.profile)>) => pre(w.gprs, w.flags, w.memory), compared),
+            t.goes_block_jcc(c3, 0, [CmpRR(Rcx, R9)], w_c4, tree, AE, pre, compared, λ _ => refl),
             λ w held2 => ⟨held2, refl⟩);
         let indexed = t.goes_word_to(live, env, c2, index, Rcx, in_index, holds, w_c3, tree, Q3, comparing);
         let post_argc = λ (w: MachineState<X86Memory(t.r.profile)>) => t.Held(live, env, w.gprs, w.memory) ∧

@@ -358,6 +358,16 @@ theorem Dyadic::le_of_lt({a, b: Dyadic}, h: a < b): a <= b { Rat::le_of_lt(x := 
 
 theorem Dyadic::le_total(self a, b: Dyadic): a <= b ∨ b <= a { a.rat().le_total(b.rat()) }
 
+// `wlog`'s order case at `Dyadic` (tactic/wlog.hthr; the lemma at `Nat`
+// says what it is for).
+theorem Dyadic::wlog_le(P: Dyadic → Dyadic → Type, swap: (a, b: Dyadic) → P(a, b) → P(b, a),
+    le: (a, b: Dyadic) → a <= b → P(a, b), m, n: Dyadic): P(m, n) {
+    match m.le_total(n) {
+        Inl(h) => le(m, n, h),
+        Inr(h) => swap(n, m, le(n, m, h)),
+    }
+}
+
 theorem Dyadic::lt_of_lt_of_le({a, b, c: Dyadic}, h1: a < b, h2: b <= c): a < c {
     Rat::lt_of_lt_of_le(x := a.rat(), y := b.rat(), z := c.rat(), h1 := h1, h2 := h2)
 }

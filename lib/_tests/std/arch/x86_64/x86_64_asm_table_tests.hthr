@@ -22,7 +22,7 @@ fn table() → LabelTable {
 }
 
 theorem prog_checked(): table().checked(prog(), table().depth, 14).IsTrue() { trivial }
-theorem prog_laid_out(): prog().laid_out().IsTrue() { table().laid_out_of(prog(), 14, prog_checked(), trivial) }
+theorem prog_laid_out(): prog().laid_out().IsTrue() { table().laid_out_of(prog(), 14, prog_checked(), trivial, trivial) }
 
 // The last two items, then the two before them.
 theorem prog_checked_by_stretches(): table().checked(prog(), 4, 14).IsTrue() {

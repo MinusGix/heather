@@ -64,7 +64,7 @@ theorem double_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack:
                 λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧
                     ((read_word(data, t.memory, stack.at(i)) = Some(ret)) ∧ DoublePost<M>(i, s0, return_near_after(ret, t))),
                 site.moves_of_runs(stack.writes, 0, 6, pre, post, frame,
-                    site.runs_block(fits, 5, Start.label(1), 0, double_code(), refl, pre, post,
+                    site.runs_block(fits, 5, Start.label(1), 0, double_code(), refl, refl, pre, post,
                         λ s held => ⟨trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), held.left), held.right),
                             cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rdi, g).add(read_gpr(Rdi, g)), held.left)⟩)),
                 λ s held => ⟨⟨cong_fn<MachineState<M>, Gprs>(λ x => x.gprs, held.left), held.right.left⟩,
@@ -96,7 +96,7 @@ theorem caller_moves<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: S
             λ (s: MachineState<M>) => entered(s.gprs) ∧ always(s.memory), λ (s: MachineState<M>) => set(s.gprs) ∧ always(s.memory),
             λ (s: MachineState<M>) => entered(s.gprs), λ (s: MachineState<M>) => set(s.gprs) ∧ always(s.memory),
             site.moves_of_runs(stack.writes, 7, 17, entered, set, always,
-                site.runs_block(fits, 2, caller_start(), 0, [MovRI(Rdi, BitVec::ofNat(21))], refl, entered, set,
+                site.runs_block(fits, 2, caller_start(), 0, [MovRI(Rdi, BitVec::ofNat(21))], refl, refl, entered, set,
                     λ s held => ⟨held, refl⟩)),
             λ s held => ⟨held, trivial⟩, λ t held => held),
         site.moves_call(stack, fits, 1, caller_set(), 0, 1, refl, 0,

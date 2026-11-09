@@ -391,8 +391,11 @@ theorem {p}_allocated(): {src}().allocation_ok({homes}).IsTrue() {{ j(sym({p}_al
 {table}{layout}
 theorem {p}_holes(): {p}_code().no_holes().IsTrue() {{ trivial }}
 
+// Every block reads only flags it set itself (issues/x86-undefined-flags.md).
+theorem {p}_reads(): {p}_code().blocks_read_own().IsTrue() {{ trivial }}
+
 theorem {p}_laid(): {p}_code().laid_out().IsTrue() {{
-    {p}_table().laid_out_of({p}_code(), {length}, {p}_checked_{count}(), {p}_holes())
+    {p}_table().laid_out_of({p}_code(), {length}, {p}_checked_{count}(), {p}_holes(), {p}_reads())
 }}
 
 theorem {p}_compiles(): {src}().compile({LOW}, {homes}) = Some({p}_code()) {{

@@ -101,8 +101,8 @@ queued only the deep premise and went on with its ancestors' later
 siblings at once, and the library gate caught exactly that (an expected
 `NotConvertible` in `rt_loop_tests` became `OutOfFuel`). So once anything
 is queued in a context — the root check, or one popped check being judged —
-every later check in that context is queued too (`defer_floor` is the
-queue's length when the context began), and the queue is a stack in walk
+every later check in that context is queued too (the queue's *floor* is
+its length when the context began), and the queue is a stack in walk
 order: when a popped check finishes, the checks it queued are reversed onto
 the top, so its first premise is judged next, before its later siblings.
 The premises are judged in exactly the recursive walk's order; only the
@@ -126,12 +126,17 @@ What keeps this sound:
 
 ### 3.4 Conversion (`conv.rs`)
 
+Both walks keep this discipline in one type since 2026-11-09:
+`PremiseQueue` and conversion's `VerdictMemo` (`crates/kernel/src/premises.rs`),
+where each phase below is a call rather than a field write
+(`docs/kernel-implicit-state-review.md` §2).
+
 The same argument holds for conversion's premises. `Conv::tm` past the
 threshold (after the identity and memo shortcuts, which answer without
 descending) queues the comparison on `Conv::deferred`. Three points needed
 care:
 
-- **Order** is kept exactly as in §3.3: `Conv::defer_floor` marks the
+- **Order** is kept exactly as in §3.3: the queue's floor marks the
   context (the root, a popped comparison, a δ-attempt), every comparison
   after the first queued one in it is queued too (the Nat tail loop
   included), and the drain reverses each finished comparison's own queued
@@ -148,16 +153,16 @@ care:
   failed attempt's premises are never judged against the comparison that
   follows it. The attempt drains at its own depth, which may itself be past
   the threshold, so the threshold counts from the depth the queue is being
-  drained at (`defer_base`); counted from zero, every popped comparison was
+  drained at (the queue's base); counted from zero, every popped comparison was
   queued straight back until the fuel ran out (the library gate's
   `x86_64_block` found this).
 - **One drain at a time.** A comparison popped by the depth-zero drain
   returns to depth zero itself; it leaves the queue to the running drain
-  (`draining_at_top`) instead of starting a nested one, so draining a long
+  (`PremiseQueue::draining_at_top`) instead of starting a nested one, so draining a long
   chain stays one native frame.
 - **Memo.** A comparison whose subtree queued anything memoizes its
-  `true` *provisionally* (`deferred_pushed` counts pushes; `tm` and
-  `tm_nat_tail` compare the count before and after), and so does any
+  `true` *provisionally* (the queue counts pushes; `tm` and
+  `tm_nat_tail` compare `PremiseQueue::epoch` before and after), and so does any
   success recorded while the queue is non-empty, since it may stand on a
   provisional entry's memo hit. The provisional entries are taken back when
   their queue is dropped: a failed δ-attempt takes back those made since

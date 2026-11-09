@@ -45,8 +45,8 @@ fn EmittedExecutes<M>(data: ByteReadAccess<M>, emitted: EmittedInstruction,
             decoded_canonical(instruction), before, Returned(after)),
         EmitLoad(load) => Exists<BitVec(8)>(λ byte => ByteLoadStep<M>(data, load, byte, before, after)),
         EmitWordLoad(load) => Exists<BitVec(64)>(λ word => WordLoadStep<M>(data, load, word, before, after)),
-        EmitShort(control) => after = execute_short_control(control, before),
-        EmitNear(control) => after = execute_near_control(control, before),
+        EmitShort(control) => control.reads_defined(before.flags.defined) = True ∧ after = execute_short_control(control, before),
+        EmitNear(control) => control.reads_defined(before.flags.defined) = True ∧ after = execute_near_control(control, before),
     }
 }
 
@@ -68,8 +68,8 @@ theorem emitted_exec_same_defined<M>(data: ByteReadAccess<M>, emitted: EmittedIn
         EmitWordLoad(load) => λ a b p q => SameDefinedState::of_equal(
             word_load_same(data, load, before, a, b, p.witness, q.witness,
                 p.proof, q.proof)),
-        EmitShort(control) => λ a b p q => SameDefinedState::of_equal(trans(p, sym(q))),
-        EmitNear(control) => λ a b p q => SameDefinedState::of_equal(trans(p, sym(q))),
+        EmitShort(control) => λ a b p q => SameDefinedState::of_equal(trans(p.right, sym(q.right))),
+        EmitNear(control) => λ a b p q => SameDefinedState::of_equal(trans(p.right, sym(q.right))),
     })(first, second, left, right)
 }
 
@@ -93,14 +93,14 @@ theorem emitted_exec_respects_defined<M>(data: ByteReadAccess<M>, emitted: Emitt
             word_load_respects_defined(data, load, a, b, x, y,
                 p.witness, q.witness, same, p.proof, q.proof),
         EmitShort(control) => λ a b same x y p q => calc {
-            x ≈ execute_short_control(control, a) := SameDefinedState::of_equal(p),
-            ≈ execute_short_control(control, b) := rel_cong(same),
-            ≈ y := SameDefinedState::of_equal(sym(q)),
+            x ≈ execute_short_control(control, a) := SameDefinedState::of_equal(p.right),
+            ≈ execute_short_control(control, b) := short_control_respects_defined(control, a, b, same, p.left),
+            ≈ y := SameDefinedState::of_equal(sym(q.right)),
         },
         EmitNear(control) => λ a b same x y p q => calc {
-            x ≈ execute_near_control(control, a) := SameDefinedState::of_equal(p),
-            ≈ execute_near_control(control, b) := rel_cong(same),
-            ≈ y := SameDefinedState::of_equal(sym(q)),
+            x ≈ execute_near_control(control, a) := SameDefinedState::of_equal(p.right),
+            ≈ execute_near_control(control, b) := near_control_respects_defined(control, a, b, same, p.left),
+            ≈ y := SameDefinedState::of_equal(sym(q.right)),
         },
     })(before_left, before_right, before_same, after_left, after_right, left, right)
 }
@@ -172,6 +172,7 @@ theorem short_fetched_respects_defined<M>(fetch: FetchAccess<M>,
         InstructionBytes(before_left.rip, short_control_bytes(left))),
     right_fetch: FetchedFrom(fetch, before_right.memory,
         InstructionBytes(before_right.rip, short_control_bytes(right))),
+    left_reads: left.reads_defined(before_left.flags.defined) = True,
     left_exec: after_left = execute_short_control(left, before_left),
     right_exec: after_right = execute_short_control(right, before_right)):
     SameDefinedState<M>(after_left, after_right) {
@@ -188,7 +189,8 @@ theorem short_fetched_respects_defined<M>(fetch: FetchAccess<M>,
                 SameDefinedState<M>(after_left, after_right),
                 λ agreed => calc {
                     after_left ≈ execute_short_control(left, before_left) := SameDefinedState::of_equal(left_exec),
-                    ≈ execute_short_control(left, before_right) := rel_cong(before_same),
+                    ≈ execute_short_control(left, before_right) :=
+                        short_control_respects_defined(left, before_left, before_right, before_same, left_reads),
                     ≈ after_right := SameDefinedState::of_equal(sym(agreed)),
                 })(execution);
     runner(right, control, right_exec)
@@ -203,6 +205,7 @@ theorem near_fetched_respects_defined<M>(fetch: FetchAccess<M>,
     right_fetch: FetchedFrom(fetch, before_right.memory,
         InstructionBytes(before_right.rip, near_control_bytes(right))),
     length: near_control_bytes(left).len() = near_control_bytes(right).len(),
+    left_reads: left.reads_defined(before_left.flags.defined) = True,
     left_exec: after_left = execute_near_control(left, before_left),
     right_exec: after_right = execute_near_control(right, before_right)):
     SameDefinedState<M>(after_left, after_right) {
@@ -218,7 +221,8 @@ theorem near_fetched_respects_defined<M>(fetch: FetchAccess<M>,
                 SameDefinedState<M>(after_left, after_right),
                 λ agreed => calc {
                     after_left ≈ execute_near_control(left, before_left) := SameDefinedState::of_equal(left_exec),
-                    ≈ execute_near_control(left, before_right) := rel_cong(before_same),
+                    ≈ execute_near_control(left, before_right) :=
+                        near_control_respects_defined(left, before_left, before_right, before_same, left_reads),
                     ≈ after_right := SameDefinedState::of_equal(sym(agreed)),
                 })(execution);
     runner(right, control, right_exec)
@@ -315,11 +319,12 @@ theorem resident_readable<M>(fetch: FetchAccess<M>, memory: M, bytes: List<BitVe
 
 // One canonical instruction, resident at the state's rip, is a fetched step.
 theorem ordinary_fetched_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, instruction: Instruction,
-    before: MachineState<M>, resident: CodeResident(fetch, before.memory, canonical_bytes(instruction), before.rip)):
+    before: MachineState<M>, resident: CodeResident(fetch, before.memory, canonical_bytes(instruction), before.rip),
+    ok: instruction.admitted(before.flags.defined) = True):
     FetchedStep(fetch, data, before, execute_normal(decoded_canonical(instruction), before)) {
     Exists(EmitOrdinary(instruction),
         ⟨FetchedFrom(resident_readable(fetch, before.memory, canonical_bytes(instruction), before.rip, resident)),
-         canonical_encoding_executes(instruction, before)⟩)
+         ⟨refl, ⟨canonical_encoding_decodes(before.rip, instruction), instruction.admitted_runs(before, ok)⟩⟩⟩)
 }
 
 theorem resident_state<M>(fetch: FetchAccess<M>, bytes: List<BitVec(8)>, memory: M, address: BitVec(64),
@@ -337,16 +342,18 @@ theorem rip_count(start: BitVec(64), {first, second: Nat}, same: first = second)
     BitVec::cong_iterate_increment_count(64, start, same)
 }
 theorem short_fetched_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, control: ShortControl,
-    before: MachineState<M>, resident: CodeResident(fetch, before.memory, short_control_bytes(control), before.rip)):
+    before: MachineState<M>, resident: CodeResident(fetch, before.memory, short_control_bytes(control), before.rip),
+    reads: control.reads_defined(before.flags.defined) = True):
     FetchedStep(fetch, data, before, execute_short_control(control, before)) {
     Exists(EmitShort(control),
-        ⟨FetchedFrom(resident_readable(fetch, before.memory, short_control_bytes(control), before.rip, resident)), refl⟩)
+        ⟨FetchedFrom(resident_readable(fetch, before.memory, short_control_bytes(control), before.rip, resident)), ⟨reads, refl⟩⟩)
 }
 theorem near_fetched_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, control: NearControl,
-    before: MachineState<M>, resident: CodeResident(fetch, before.memory, near_control_bytes(control), before.rip)):
+    before: MachineState<M>, resident: CodeResident(fetch, before.memory, near_control_bytes(control), before.rip),
+    reads: control.reads_defined(before.flags.defined) = True):
     FetchedStep(fetch, data, before, execute_near_control(control, before)) {
     Exists(EmitNear(control),
-        ⟨FetchedFrom(resident_readable(fetch, before.memory, near_control_bytes(control), before.rip, resident)), refl⟩)
+        ⟨FetchedFrom(resident_readable(fetch, before.memory, near_control_bytes(control), before.rip, resident)), ⟨reads, refl⟩⟩)
 }
 theorem fetched_steps_one<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, before, after: MachineState<M>,
     step: FetchedStep(fetch, data, before, after)): FetchedSteps(fetch, data, before, after) {

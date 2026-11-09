@@ -200,7 +200,25 @@ theorem Target::goes_block(self t: Target, before: Prog, name: Nat, instructions
     t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) => post(execute_block_normal(instructions, s))) {
     t.io().goes_after(t.program, t.origin, prog_len(before), prog_len(before) + block_length(instructions), tree,
         λ (s: MachineState<X86Memory(t.r.profile)>) => post(execute_block_normal(instructions, s)), post,
-        t.site().moves_exec(t.writes(), t.code_fits(), within.witness, before, name, instructions, within.proof, post), next)
+        t.site().moves_exec(t.writes(), t.code_fits(), within.witness, before, name, instructions, within.proof,
+            t.program.block_reads_at(t.laid, within.witness, before, name, instructions, within.proof), post), next)
+}
+
+// A block, then a JCC reading flags the block left defined: the JCC's
+// precondition (`LinuxIo::goes_jcc`) less the definedness the block's
+// last flag-setting instruction gives at every start (`defined`, by `refl`
+// after a CMP or TEST).
+theorem Target::goes_block_jcc(self t: Target, before: Prog, name: Nat, instructions: List<Instruction>,
+    within: Prog::At(before, name, Block(instructions)).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()),
+    cc: ConditionCode, pre: Gprs → Flags → X86Memory(t.r.profile) → Type,
+    next: t.Goes(prog_len(before) + block_length(instructions), tree, λ (u: MachineState<X86Memory(t.r.profile)>) =>
+        pre(u.gprs, u.flags, u.memory) ∧ condition_defined(cc, u.flags.defined) = True),
+    defined: (s: MachineState<X86Memory(t.r.profile)>) → condition_defined(cc, execute_block_normal(instructions, s).flags.defined) = True):
+    t.Goes(prog_len(before), tree, λ (s: MachineState<X86Memory(t.r.profile)>) =>
+        pre(execute_block_normal(instructions, s).gprs, execute_block_normal(instructions, s).flags, execute_block_normal(instructions, s).memory)) {
+    let ran = t.goes_block(before, name, instructions, within, tree, λ (u: MachineState<X86Memory(t.r.profile)>) =>
+        pre(u.gprs, u.flags, u.memory) ∧ condition_defined(cc, u.flags.defined) = True, next);
+    λ s here resident holds => ran(s, here, resident, ⟨holds, defined(s)⟩)
 }
 
 theorem Target::goes_load(self t: Target, before: Prog, name: Nat, load: WordLoad, within: Prog::At(before, name, Load(load)).Within(t.program),
@@ -593,8 +611,7 @@ theorem Target::goes_clamp(self t: Target, p: Prog, value, bound: Gpr, n: Nat, w
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, cmp, 0, B, Succ(n), w_jcc.proof, prog_len(moved), lands, tree, pre,
         λ u here resident held => next(u, here, resident, held.left.left(held.right)),
         λ u here resident held => fall(u, here, resident, held.left.right(held.right)));
-    t.goes_block(p, 0, [CmpRR(value, bound)], w_cmp, tree,
-        λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped)
+    t.goes_block_jcc(p, 0, [CmpRR(value, bound)], w_cmp, tree, B, pre, jumped, λ _ => refl)
 }
 
 // TEST's ZF on a masked bit: set where the bit is clear.
@@ -635,8 +652,7 @@ theorem Target::goes_tests(self t: Target, live: List<Nat>, env: Env, p: Prog, c
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), within.witness, tested, 0, E, Succ(n), within.proof, prog_len(else_before), lands, tree, pre,
         λ u here resident held => no(Bool::clear_of_not(env.bit(condition), u.flags.zf, held.left.right, held.right), u, here, resident, held.left.left),
         λ u here resident held => yes(Bool::set_of_not(env.bit(condition), u.flags.zf, held.left.right, held.right), u, here, resident, held.left.left));
-    let flagged = t.goes_block(bits, 0, [TestRR(Rax, Rax)], w_tested, tree,
-        λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped);
+    let flagged = t.goes_block_jcc(bits, 0, [TestRR(Rax, Rax)], w_tested, tree, E, pre, jumped, λ _ => refl);
     let q = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
         (is_zero_bits(64, read_gpr(Rax, g).band(read_gpr(Rax, g))) = !env.bit(condition));
     let loaded = t.goes_bit_to(live, env, p, condition, Rax, inside, holds, w_bits, tree, q,

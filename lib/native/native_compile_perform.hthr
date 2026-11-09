@@ -377,7 +377,7 @@ theorem Target::goes_call_enter(self t: Target, live: List<Nat>, env: Env, p: Pr
             Succ(d) => fall(d, z)(u, here, resident, held),
         });
     let at_jcc = λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory);
-    let flagged = t.goes_block(p2, 0, [TestRR(Rax, Rax)], w_p3, tree, at_jcc, jumped);
+    let flagged = t.goes_block_jcc(p2, 0, [TestRR(Rax, Rax)], w_p3, tree, E, pre, jumped, λ _ => refl);
     let at_test = λ (u: MachineState<X86Memory(t.r.profile)>) => at_jcc(execute_block_normal([TestRR(Rax, Rax)], u));
     let loaded = t.goes_load(p1, 0, WordLoad(Rax, Rbx), w_p2, tree, at_test, flagged);
     let at_load: MachineState<X86Memory(t.r.profile)> → Type = λ u => Exists<BitVec(64)>(λ word =>

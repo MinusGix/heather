@@ -1053,3 +1053,9 @@ additions serve it, and neither is specific to it:
   scope, so the result is well typed whatever `h` mentions, and the kernel
   checks the proof that uses it. It reuses the induction-hypothesis
   generalization's renaming (`generalize::rename`). Tag 33.
+- **`Revert(h: Handle, x: Expr) → Checked<Handle>`**: the type
+  `(y: X) → h[y/x]` for `x` a local of the goal's context of type `X`. It
+  is `Abstract` with a `Π` for a `λ`, on a type: `wlog`'s `over := [h…]`
+  binds hypotheses about its points in front of the goal before the points
+  are abstracted, so the cases receive them at their own points (Lean's
+  `generalizing`). Tag 34.

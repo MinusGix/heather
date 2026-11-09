@@ -300,7 +300,7 @@ theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
             let ok: post(byte_load_after(ByteLoad(Rax, Rbx), v(o + i), s1)) = hp.right.right.right.right(byte_load_after(ByteLoad(Rax, Rbx), v(o + i), s1).gprs, rax, hp.left);
             added(u, here, resident, Exists(v(o + i), ⟨reads.left, ⟨reads.right, ok⟩⟩))
         });
-    let compared = t.goes_block(w0, 0, set, w_cmp, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped);
+    let compared = t.goes_block_jcc(w0, 0, set, w_cmp, tree, AE, pre, jumped, λ _ => refl);
     let loads = t.goes_word_to(live, env, p, index, Rcx, inside, holds, w_w0, tree,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ ((read_gpr(Rcx, g) = w) ∧ then_q(m)),
         λ u here resident held => compared(u, here, resident,
@@ -435,7 +435,7 @@ theorem Target::goes_byte_from(self t: Target, live: List<Nat>, env: Env, p: Pro
             let below: (i < cap) = omega(lt, cap_is);
             valued(u, here, resident, ⟨hp.left, ⟨hp.left, ⟨hp.right.left, ⟨refl, below⟩⟩⟩⟩)
         });
-    let compared = t.goes_block(w0, 0, set, w_cmp, tree, λ (u: MachineState<X86Memory(t.r.profile)>) => pre(u.gprs, u.flags, u.memory), jumped);
+    let compared = t.goes_block_jcc(w0, 0, set, w_cmp, tree, AE, pre, jumped, λ _ => refl);
     let indexed = t.goes_word_to(live, env, p, index, Rcx, inside_index, holds_index, w_w0, tree,
         λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ (read_gpr(Rcx, g) = w),
         λ u here resident held => compared(u, here, resident,

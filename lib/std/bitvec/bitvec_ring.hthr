@@ -18,6 +18,7 @@ import algebra_rel;
 import semiring;
 import bitvec;
 import bitvec_nat;
+import bitvec_signed;
 
 // ---------------------------------------------------------------------------
 // The laws.
@@ -164,16 +165,9 @@ instance(n: Nat) CommRing<BitVec(n)>(RelId<BitVec(n)>, BitVec::add, BitVec::mul)
 
 designation ≈ at BitVec(n) := RelId
 
-// The integers in a word: a non-negative one is its numeral, a negative one
-// the negation of its magnitude's, so a coefficient `ring` writes reads back
-// as the goal's numeral. (`BitVec::ofInt` in `bitvec_div` is the same map
-// spelled by the complement.)
-fn BitVec::int_cast({n: Nat}, c: Int) → BitVec(n) {
-    match c {
-        OfNat(k) => BitVec::ofNat(k),
-        NegSucc(k) => BitVec::ofNat(Succ(k)).neg(),
-    }
-}
+// The integers in a word are `BitVec::ofInt` (`bitvec`): a non-negative one
+// is its numeral, a negative one the negation of its magnitude's, so a
+// coefficient `ring` writes reads back as the goal's numeral.
 
 theorem BitVec::nat_cast_eq(n, k: Nat): Ring::nat_cast<BitVec(n)>(k) = BitVec::ofNat(k) {
     match k {
@@ -187,29 +181,29 @@ theorem BitVec::nat_cast_eq(n, k: Nat): Ring::nat_cast<BitVec(n)>(k) = BitVec::o
     }
 }
 
-theorem BitVec::int_cast_eq(n: Nat, c: Int): Ring::int_cast<BitVec(n)>(c) = BitVec::int_cast(c) {
+theorem BitVec::int_cast_ofInt(n: Nat, c: Int): Ring::int_cast<BitVec(n)>(c) = BitVec::ofInt(c) {
     match c {
         OfNat(k) => BitVec::nat_cast_eq(n, k),
         NegSucc(k) => @cong(λ (w: BitVec(n)) => w.neg(), Ring::nat_cast<BitVec(n)>(Succ(k)), BitVec::ofNat(Succ(k)), BitVec::nat_cast_eq(n, Succ(k))),
     }
 }
 
-theorem BitVec::int_cast_add(n: Nat, a, b: Int):
-    BitVec::int_cast(Int::add(a, b), n := n) = BitVec::int_cast(a).add(BitVec::int_cast(b))
+theorem BitVec::ofInt_add(n: Nat, a, b: Int):
+    BitVec::ofInt(Int::add(a, b), n := n) = BitVec::ofInt(a).add(BitVec::ofInt(b))
 {
-    trans(sym(BitVec::int_cast_eq(n, Int::add(a, b))),
+    trans(sym(BitVec::int_cast_ofInt(n, Int::add(a, b))),
     trans(Ring::int_cast_add<BitVec(n)>(a, b),
-    trans(@cong(λ (w: BitVec(n)) => w.add(Ring::int_cast<BitVec(n)>(b)), Ring::int_cast<BitVec(n)>(a), BitVec::int_cast(a), BitVec::int_cast_eq(n, a)),
-        @cong(λ (w: BitVec(n)) => BitVec::int_cast(a, n := n).add(w), Ring::int_cast<BitVec(n)>(b), BitVec::int_cast(b), BitVec::int_cast_eq(n, b)))))
+    trans(@cong(λ (w: BitVec(n)) => w.add(Ring::int_cast<BitVec(n)>(b)), Ring::int_cast<BitVec(n)>(a), BitVec::ofInt(a), BitVec::int_cast_ofInt(n, a)),
+        @cong(λ (w: BitVec(n)) => BitVec::ofInt(a, n := n).add(w), Ring::int_cast<BitVec(n)>(b), BitVec::ofInt(b), BitVec::int_cast_ofInt(n, b)))))
 }
 
-theorem BitVec::int_cast_mul(n: Nat, a, b: Int):
-    BitVec::int_cast(Int::mul(a, b), n := n) = BitVec::int_cast(a).mul(BitVec::int_cast(b))
+theorem BitVec::ofInt_mul(n: Nat, a, b: Int):
+    BitVec::ofInt(Int::mul(a, b), n := n) = BitVec::ofInt(a).mul(BitVec::ofInt(b))
 {
-    trans(sym(BitVec::int_cast_eq(n, Int::mul(a, b))),
+    trans(sym(BitVec::int_cast_ofInt(n, Int::mul(a, b))),
     trans(Ring::int_cast_mul<BitVec(n)>(a, b),
-    trans(@cong(λ (w: BitVec(n)) => w.mul(Ring::int_cast<BitVec(n)>(b)), Ring::int_cast<BitVec(n)>(a), BitVec::int_cast(a), BitVec::int_cast_eq(n, a)),
-        @cong(λ (w: BitVec(n)) => BitVec::int_cast(a, n := n).mul(w), Ring::int_cast<BitVec(n)>(b), BitVec::int_cast(b), BitVec::int_cast_eq(n, b)))))
+    trans(@cong(λ (w: BitVec(n)) => w.mul(Ring::int_cast<BitVec(n)>(b)), Ring::int_cast<BitVec(n)>(a), BitVec::ofInt(a), BitVec::int_cast_ofInt(n, a)),
+        @cong(λ (w: BitVec(n)) => BitVec::ofInt(a, n := n).mul(w), Ring::int_cast<BitVec(n)>(b), BitVec::ofInt(b), BitVec::int_cast_ofInt(n, b)))))
 }
 
 instance(n: Nat) CommRingOfInt<BitVec(n)>(RelId<BitVec(n)>, BitVec::add, BitVec::mul) {
@@ -241,9 +235,40 @@ instance(n: Nat) CommRingOfInt<BitVec(n)>(RelId<BitVec(n)>, BitVec::add, BitVec:
     inv_r := BitVec::add_neg(n),
     inv_respects := λ x y h => cong(h),
     commutative := Commutative { comm: BitVec::mul_comm(n) },
-    of_int := BitVec::int_cast,
+    of_int := BitVec::ofInt,
     of_int_zero := refl,
     of_int_one := refl,
-    of_int_add := BitVec::int_cast_add(n),
-    of_int_mul := BitVec::int_cast_mul(n),
+    of_int_add := BitVec::ofInt_add(n),
+    of_int_mul := BitVec::ofInt_mul(n),
+}
+
+// ---------------------------------------------------------------------------
+// The complement.
+
+// Inverses are unique: a word that adds with `y` to zero is `y`'s negation.
+theorem BitVec::eq_neg_of_add(n: Nat, c, y: BitVec(n), h: c.add(y) = BitVec::ofNat(0)): c = y.neg() {
+    trans(sym(BitVec::add_zero(n, c)),
+    trans(@cong(λ (w: BitVec(n)) => c.add(w), BitVec::ofNat(0), y.add(y.neg()), sym(BitVec::add_neg(n, y))),
+    trans(sym(BitVec::add_assoc(n, c, y, y.neg())),
+    trans(@cong(λ (w: BitVec(n)) => w.add(y.neg()), c.add(y), BitVec::ofNat(0), h),
+        BitVec::zero_add(n, y.neg())))))
+}
+
+// The complement is the negation less one: `!x = -(x + 1)`, since a word and
+// its complement sum to all ones (`complement_toNat_add`).
+theorem BitVec::complement_eq_neg(n: Nat, x: BitVec(n)): x.complement() = x.add(BitVec::ofNat(1)).neg() {
+    let fill: (x.complement().add(x.add(BitVec::ofNat(1))) = BitVec::ofNat(0)) =
+        trans(@cong(λ (w: BitVec(n)) => x.complement().add(w), x.add(BitVec::ofNat(1)), BitVec::ofNat(x.toNat() + 1), BitVec::add_ofNat_r(n, x, 1)),
+        trans(BitVec::add_ofNat_r(n, x.complement(), x.toNat() + 1),
+        trans(BitVec::ofNat_cong(n, BitVec::complement_toNat_add(n, x)),
+            BitVec::ofNat_pow_two(n))));
+    BitVec::eq_neg_of_add(n, x.complement(), x.add(BitVec::ofNat(1)), fill)
+}
+
+// `-(k + 1)` is the complement of `k`: the two's-complement reading of a
+// negative integer, with no subtraction from `2^n`
+// (issues/bitvec-int-cast-is-ofint.md).
+theorem BitVec::ofInt_negSucc(n, k: Nat): BitVec::ofInt(NegSucc(k), n := n) = BitVec::ofNat(k).complement() {
+    trans(@cong(λ (w: BitVec(n)) => w.neg(), BitVec::ofNat(Succ(k)), BitVec::ofNat(k).add(BitVec::ofNat(1)), sym(BitVec::ofNat_add(n, k, 1))),
+        sym(BitVec::complement_eq_neg(n, BitVec::ofNat(k))))
 }
