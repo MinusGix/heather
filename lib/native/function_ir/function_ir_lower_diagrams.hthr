@@ -1,0 +1,239 @@
+// S4's lowering of a schedule (`lower_nodes`, function_ir_lower) as a star
+// diagram, composed with the FunctionIR pass's (function_ir_pass_diagrams;
+// lib/std/relation/transition.hthr's diagrams).
+//
+// The target is x86 code run an instruction at a time (`BlockStep`, a
+// `Pending` command list over `execute_normal`): a block runs its length to
+// where `execute_block_normal` ends (`block_runs`). The source is a leaf a
+// node at a time (`Leaf::Step`).
+//
+// - Lowering is a star diagram (`lower_star`): each node is answered by the
+//   code its placement emitted, run in full. A folded node, or one whose
+//   code is empty, is a stutter (`Star`, the nodes left going down), so the
+//   diagram never needs a node's code to be nonempty. What is matched
+//   (`LowerMatch`): the leaf's nodes still lower, from a file that describes
+//   the code's registers, to the code still pending, ending at one file; the
+//   region's equations hold of one valuation `meant`, which is what the
+//   leaf's nodes evaluate to from its words.
+// - `compile_star` is the pass and lowering composed by one
+//   `StarDiagram::compose`, and `List::compiled_runs` reads that diagram's
+//   `runs` at the end of the schedule: the optimised schedule's code leaves
+//   its final file describing words that agree, on every live output, with
+//   what the original schedule runs to.
+//
+// S4 lowers words only (byte nodes have no registers), so the lowered
+// schedule is pure (`nodes_pure`), where a node runs as it evaluates.
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_pass;
+import function_ir_pass_diagrams;
+import function_ir_lower;
+import transition;
+import relation;
+import x86_64;
+import x86_64_block;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+
+// ---------------------------------------------------------------------------
+// Code an instruction at a time
+
+fn BlockStep<M>(a, b: Pending<Instruction, MachineState<M>>) → Type {
+    Pending::Step<Instruction, MachineState<M>>(λ instruction state => execute_normal(decoded_canonical(instruction), state), a, b)
+}
+
+theorem block_runs<M>(code, rest: List<Instruction>, state: MachineState<M>):
+    StarN<Pending<Instruction, MachineState<M>>>(λ a b => BlockStep<M>(a, b), code.len(), Pending(code ++ rest, state),
+        Pending(rest, execute_block_normal<M>(code, state))) {
+    Pending::runs<Instruction, MachineState<M>>(λ instruction before => execute_normal(decoded_canonical(instruction), before),
+        code, rest, state)
+}
+
+// ---------------------------------------------------------------------------
+// A schedule's lowering, one node off the front
+
+// What lowering a schedule with a first node means: the node lowered at its
+// placement, then the rest from the file it left.
+fn ConsLowered(node: Node, rest: List<Node>, file: File, body: Lowered) → Type {
+    ∃ place: Place, ∃ first: Lowered, ∃ later: List<Place>, ∃ after: Lowered,
+        (node.lower_at(place, file) = Some(first)) ∧ ((lower_nodes(rest, later, first.file) = Some(after)) ∧ (body = first.then(after)))
+}
+
+theorem lower_nodes_cons(node: Node, rest: List<Node>, file: File, body: Lowered): (placement: List<Place>) →
+    lower_nodes(Cons(node, rest), placement, file) = Some(body) → ConsLowered(node, rest, file, body) {
+    λ placement => match placement {
+        Nil => λ none => Option::none_ne_some(body, none, ConsLowered(node, rest, file, body)),
+        Cons(place, later) => λ lowered =>
+            (match node.lower_at(place, file) as λ o => node.lower_at(place, file) = o →
+                    (match o { None => None, Some(first) => first.then_option(lower_nodes(rest, later, first.file)) }) = Some(body) →
+                    ConsLowered(node, rest, file, body) {
+                None => λ _ none => Option::none_ne_some(body, none, ConsLowered(node, rest, file, body)),
+                Some(first) => λ at once =>
+                    (match lower_nodes(rest, later, first.file) as λ o => lower_nodes(rest, later, first.file) = o →
+                            first.then_option(o) = Some(body) → ConsLowered(node, rest, file, body) {
+                        None => λ _ none => Option::none_ne_some(body, none, ConsLowered(node, rest, file, body)),
+                        Some(after) => λ at_rest both => Exists(place, Exists(first, Exists(later, Exists(after,
+                            ⟨at, ⟨at_rest, sym(Option::some_inj(first.then(after), body, both))⟩⟩)))),
+                    })(refl, once),
+            })(refl, lowered),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lowering: a star diagram
+
+// The index is how many nodes the leaf has left. Its nodes are pure, what
+// they evaluate to from its words is `meant` and they hold of it, and they
+// lower, from a file describing the block's registers at `meant`, to the
+// block's code before `tail`, ending at `end`.
+fn LowerMatch<M>(meant: Valuation(), end: File, tail: List<Instruction>, i: Nat, leaf: Leaf,
+    block: Pending<Instruction, MachineState<M>>) → Type {
+    (i = leaf.nodes.len()) ∧ (nodes_pure(leaf.nodes).IsTrue() ∧
+        (((w, id: Nat) → meant(w, id) = eval_nodes(leaf.nodes, leaf.values, w, id)) ∧ (NodesHold(meant, leaf.nodes) ∧
+            (∃ placement: List<Place>, ∃ file: File, ∃ body: Lowered,
+                (lower_nodes(leaf.nodes, placement, file) = Some(body)) ∧ ((body.file = end) ∧
+                    ((block.code = body.code ++ tail) ∧ file.Represents(meant, block.state.gprs)))))))
+}
+
+theorem lower_star<M>(meant: Valuation(), end: File, tail: List<Instruction>):
+    StarDiagram<Leaf, Pending<Instruction, MachineState<M>>, Nat>(Leaf::Step, λ a b => BlockStep<M>(a, b), Fewer,
+        λ i s b => LowerMatch<M>(meant, end, tail, i, s, b)) {
+    λ i s => match s {
+        Leaf(nodes, values, buffers) => match nodes {
+            Nil => λ s2 b matched step => false_elim(step),
+            Cons(node, rest) => λ s2 b => match b {
+                Pending(code, state) => λ matched step => {
+                    let pure = Bool::is_true_and(node.pure(), nodes_pure(rest), matched.right.left);
+                    let agree = matched.right.right.left;
+                    let holds = matched.right.right.right.left;
+                    let lowered = matched.right.right.right.right;
+                    let file = lowered.proof.witness;
+                    let body = lowered.proof.proof.witness;
+                    let facts = lowered.proof.proof.proof;
+                    let parts = lower_nodes_cons(node, rest, file, body, lowered.witness, facts.left);
+                    let place = parts.witness;
+                    let first = parts.proof.witness;
+                    let later = parts.proof.proof.witness;
+                    let after = parts.proof.proof.proof.witness;
+                    let eqs = parts.proof.proof.proof.proof;
+                    let first_keeps: Keeps<M>(meant, file, NodeHolds(meant, node), first) =
+                        node.lower_at(place, file).all_some(λ (l: Lowered) => Keeps<M>(meant, file, NodeHolds(meant, node), l),
+                            first, eqs.left, node.lower_at_keeps<M>(meant, place, file));
+                    let b2 = Pending<Instruction, MachineState<M>>(after.code ++ tail, execute_block_normal<M>(first.code, state));
+                    // The first node's code, then the rest's, then the tail.
+                    let at_code: (code = first.code ++ (after.code ++ tail)) =
+                        trans(facts.right.right.left, trans(cong_fn<Lowered, List<Instruction>>(λ l => l.code ++ tail, eqs.right.right),
+                            first.code.append_assoc(after.code, tail)));
+                    let run = j(sym(at_code), λ x _ => StarN<Pending<Instruction, MachineState<M>>>(λ a c => BlockStep<M>(a, c),
+                            first.code.len(), Pending(x, state), b2),
+                        block_runs<M>(first.code, after.code ++ tail, state));
+                    let at_end: (after.file = end) = trans(sym(cong_fn<Lowered, File>(λ l => l.file, eqs.right.right)), facts.right.left);
+                    let base: LowerMatch<M>(meant, end, tail, rest.len(), Leaf(rest, node.step(values), buffers), b2) =
+                        ⟨refl, ⟨pure.right, ⟨λ w id => agree(w, id), ⟨holds.right,
+                            Exists(later, Exists(first.file, Exists(after, ⟨eqs.right.left, ⟨at_end, ⟨refl,
+                                first_keeps(state, facts.right.right.right, holds.left)⟩⟩⟩)))⟩⟩⟩⟩;
+                    let ran: LowerMatch<M>(meant, end, tail, rest.len(), Leaf(rest, node.run(values, buffers).values, node.run(values, buffers).buffers), b2) =
+                        j(sym(node.run_pure(values, buffers, pure.left)),
+                            λ st _ => LowerMatch<M>(meant, end, tail, rest.len(), Leaf(rest, st.values, st.buffers), b2), base);
+                    Exists(rest.len(), Exists(b2, ⟨Inr(⟨Star::of_n<Pending<Instruction, MachineState<M>>>(λ a c => BlockStep<M>(a, c),
+                            first.code.len(), Pending(code, state), b2, run), sym(matched.left)⟩),
+                        j(sym(step), λ x _ => LowerMatch<M>(meant, end, tail, rest.len(), x, b2), ran)⟩))
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The pass, then lowering: composed
+
+fn CompileOrder(x, y: Pair<Nat, Pair<Nat, True>>) → Type { StarComposeLt(OptimiseOrder, Fewer, x, y) }
+
+fn CompileMatch<M>(out: List<Nat>, meant: Valuation(), end: File, tail: List<Instruction>, k: Pair<Nat, Pair<Nat, True>>,
+    s: Leaf, block: Pending<Instruction, MachineState<M>>) → Type {
+    StarCompose(λ (i: Pair<Nat, True>) (a: Leaf) (b: Leaf) => OptimiseMatch(out, i, a, b),
+        λ (i: Nat) (b: Leaf) (c: Pending<Instruction, MachineState<M>>) => LowerMatch<M>(meant, end, tail, i, b, c), k, s, block)
+}
+
+theorem compile_star<M>(out: List<Nat>, meant: Valuation(), end: File, tail: List<Instruction>):
+    StarDiagram<Leaf, Pending<Instruction, MachineState<M>>, Pair<Nat, Pair<Nat, True>>>(Leaf::Step, λ a b => BlockStep<M>(a, b),
+        CompileOrder, λ k s b => CompileMatch<M>(out, meant, end, tail, k, s, b)) {
+    StarDiagram::compose<Leaf, Leaf, Pending<Instruction, MachineState<M>>, Pair<Nat, True>, Nat>(Leaf::Step, Leaf::Step,
+        λ a b => BlockStep<M>(a, b), OptimiseOrder, Fewer,
+        λ i a b => OptimiseMatch(out, i, a, b), λ i b c => LowerMatch<M>(meant, end, tail, i, b, c),
+        optimise_star(out), lower_star<M>(meant, end, tail))
+}
+
+// The theorem: lower the optimised schedule from a file describing the
+// registers at what it evaluates to, and the code's final registers are
+// described, by the file lowering ends at, at words that agree on every
+// live output with what the original schedule runs to.
+theorem List::compiled_runs<M>(self nodes: List<Node>, out: List<Nat>, values: Valuation(), buffers: Buffers(),
+    placement: List<Place>, file: File, body: Lowered, state: MachineState<M>,
+    pure: nodes_pure(nodes.optimised(out)).IsTrue(), evaluable: nodes_evaluable(nodes.optimised(out)).IsTrue(),
+    lowered: lower_nodes(nodes.optimised(out), placement, file) = Some(body),
+    represents: file.Represents(eval_nodes(nodes.optimised(out), values), state.gprs)):
+    body.file.Represents(eval_nodes(nodes.optimised(out), values), execute_block_normal<M>(body.code, state).gprs)
+        ∧ ((i: Nat) → Mem(i, out) → (w: Nat) → eval_nodes(nodes.optimised(out), values, w, i) = run_nodes(nodes, values, buffers).values(w, i)) {
+    let meant = eval_nodes(nodes.optimised(out), values);
+    let ran = run_nodes(nodes, values, buffers);
+    let start = Leaf(nodes, values, buffers);
+    let target = Leaf(nodes.optimised(out), values, buffers);
+    let block = Pending<Instruction, MachineState<M>>(body.code ++ Nil, state);
+    let index = Pair(nodes.optimised(out).len(), Pair(nodes.folded([]).len(), trivial));
+    let optimising: OptimiseMatch(out, index.snd, start, target) =
+        Exists(Leaf(nodes.folded([]), values, buffers), ⟨Exists([], ⟨refl, ⟨trivial, ⟨λ w id => refl, refl⟩⟩⟩),
+            ⟨refl, ⟨refl, ⟨refl, λ k _ w => refl⟩⟩⟩⟩);
+    let lowering: LowerMatch<M>(meant, body.file, Nil, index.fst, target, block) =
+        ⟨refl, ⟨pure, ⟨λ w id => refl, ⟨eval_nodes_holds(nodes.optimised(out), evaluable, values, meant, λ w id _ => refl),
+            Exists(placement, Exists(file, Exists(body, ⟨lowered, ⟨refl, ⟨refl, represents⟩⟩⟩)))⟩⟩⟩⟩;
+    let mapped = StarDiagram::runs<Leaf, Pending<Instruction, MachineState<M>>, Pair<Nat, Pair<Nat, True>>>(Leaf::Step,
+        λ a b => BlockStep<M>(a, b), CompileOrder, λ k s b => CompileMatch<M>(out, meant, body.file, Nil, k, s, b),
+        compile_star<M>(out, meant, body.file, Nil), nodes.len(), index, start, Leaf(Nil, ran.values, ran.buffers), block,
+        Exists(target, ⟨optimising, lowering⟩), nodes.leaf_runs(values, buffers));
+    let finish = mapped.proof.witness;
+    let composite = mapped.proof.proof.right;
+    let middle = composite.witness;
+    let fold = composite.proof.left.proof.left;
+    let prune = composite.proof.left.proof.right;
+    let lower = composite.proof.right;
+    // The pass's side ends with nothing left to run…
+    let done: (middle.nodes = Nil) =
+        trans(prune.right.left, cong_fn<List<Node>, List<Node>>(λ x => x.pruned(out), fold.proof.left));
+    // …so lowering's ends with nothing left to lower: no code before the
+    // tail, at the file the whole lowering ends at.
+    let rest = lower.right.right.right.right;
+    let last = rest.proof.proof.witness;
+    let facts = rest.proof.proof.proof;
+    let empty: (Lowered([], rest.proof.witness) = last) = Option::some_inj(Lowered([], rest.proof.witness), last,
+        j(done, λ x _ => lower_nodes(x, rest.witness, rest.proof.witness) = Some(last), facts.left));
+    let no_code: (finish.code = Nil) = trans(facts.right.right.left, cong_fn<Lowered, List<Instruction>>(λ l => l.code ++ Nil, sym(empty)));
+    let at_file: (rest.proof.witness = body.file) = trans(cong_fn<Lowered, File>(λ l => l.file, empty), facts.right.left);
+    // The code ran to its end, which is where it runs in full.
+    let ended: (finish = Pending<Instruction, MachineState<M>>(Nil, execute_block_normal<M>(body.code, state))) =
+        Star::stuck_determined<Pending<Instruction, MachineState<M>>>(λ a b => BlockStep<M>(a, b),
+            Pending::step_det<Instruction, MachineState<M>>(λ instruction before => execute_normal(decoded_canonical(instruction), before)),
+            block, finish, Pending<Instruction, MachineState<M>>(Nil, execute_block_normal<M>(body.code, state)),
+            mapped.proof.proof.left,
+            λ c moved => j(no_code, λ x _ => Pending::StepFrom<Instruction, MachineState<M>>(
+                λ instruction before => execute_normal(decoded_canonical(instruction), before), x, finish.state, c), moved),
+            Star::of_n<Pending<Instruction, MachineState<M>>>(λ a b => BlockStep<M>(a, b), body.code.len(), block,
+                Pending<Instruction, MachineState<M>>(Nil, execute_block_normal<M>(body.code, state)), block_runs<M>(body.code, Nil, state)),
+            Pending::done_stuck<Instruction, MachineState<M>>(λ instruction before => execute_normal(decoded_canonical(instruction), before),
+                execute_block_normal<M>(body.code, state)));
+    let described: body.file.Represents(meant, finish.state.gprs) =
+        j(at_file, λ f _ => f.Represents(meant, finish.state.gprs), facts.right.right.right);
+    ⟨j(ended, λ p _ => body.file.Represents(meant, p.state.gprs), described),
+     λ i m w => {
+        let needed: middle.nodes.needs(out, i).IsTrue() = j(sym(done), λ x _ => List::needs(x, out, i).IsTrue(), present_of_mem(i, out, m));
+        let evaluated: (meant(w, i) = middle.values(w, i)) =
+            j(done, λ x _ => meant(w, i) = eval_nodes(x, middle.values, w, i), lower.right.right.left(w, i));
+        trans(evaluated, trans(prune.right.right.right(i, needed, w), fold.proof.right.right.left(w, i)))
+     }⟩
+}

@@ -399,3 +399,4 @@ costs a refusal, never a wrong program.
 
 - 2026-11-05: gardener: cites a file it shares with [[function-ir-multi-word-calls]] (`lib/native/function_ir/function_ir.hthr`); [[function-ir-x86-shift-legalization]] (`lib/native/function_ir/function_ir_lower.hthr`).
 - 2026-11-09: 2026-11-09: passes composing by simulation-diagram composition, and the four machine closure kits made one, are filed as [[transition-systems-and-simulations]] (docs/native-mathematics-survey.md §3).
+- 2026-11-09: `lower_nodes` is also a star diagram from leaves to x86 code, composed after the pass (`compile_star`, `List::compiled_runs` in function_ir_lower_diagrams.hthr): [[s4-lowering-as-diagram]].

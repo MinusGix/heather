@@ -206,6 +206,10 @@ trees, not states, and §3's diagrams are its machine-side partner.
 closures, invariants, determinism and the three diagrams with vertical
 composition; the native closures are its instances. What is left is filed
 in the log of issues/transition-systems-and-simulations.md.
+The FunctionIR pass is two composed diagrams
+(`function_ir_pass_diagrams.hthr`), and S4's lowering is a third, composed
+after them into x86 code run an instruction at a time
+(`function_ir_lower_diagrams.hthr`, issues/s4-lowering-as-diagram.md).
 
 ## 4. Address intervals and interval sets
 
