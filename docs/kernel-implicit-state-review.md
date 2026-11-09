@@ -21,8 +21,8 @@ time come last.
 | # | Finding | Where | Evidence it bites | Breach costs | Make explicit? | Issue |
 |---|---------|-------|-------------------|--------------|----------------|-------|
 | 1 | The value memo does not record the mode a value was forced in | `value.rs` `ValueArena`, `eval.rs` `Eval::transparent` | **a real defect** (#459: a convertible interval verdict refused) | completeness, history dependence | the #459 path fixed (§1: withheld-call closedness); (a) still worth doing | [[value-memo-evaluation-mode]] |
-| 2 | Deferred-premise queues: two hand-kept copies of one discipline | `conv.rs` `Conv` (8 fields), `typing.rs` `Tc` (4 fields) | **two defects while it was built** (deep-term-walks §3.3, §3.4) | soundness (a provisional memo entry kept) | **yes** | [[kernel-premise-queue-type]] |
-| 3 | Typing memo keys copy `Env`'s fields by hand | `typing.rs` `Scope`, `TyScope`, `SigScope` | none found | soundness (a stale memo hit) | **yes**, cheap | [[typing-memo-scope-key]] |
+| 2 | Deferred-premise queues: two hand-kept copies of one discipline | `conv.rs` `Conv` (8 fields), `typing.rs` `Tc` (4 fields) | **two defects while it was built** (deep-term-walks §3.3, §3.4) | soundness (a provisional memo entry kept) | **done** (§2, `premises.rs`) | [[kernel-premise-queue-type]] |
+| 3 | Typing memo keys copy `Env`'s fields by hand | `typing.rs` `Scope`, `TyScope`, `SigScope` | none found | soundness (a stale memo hit) | **done** (§3, `Ambient`) | [[typing-memo-scope-key]] |
 | 4 | Ψ-bound `GlobalCache`, plus `Defs`' layer condition | `reduce.rs` `Defs`, `GlobalCache` | none found | soundness | yes (already filed) | [[kernel-psi-bound-cache]] |
 | 5 | The checker's mode | `typing.rs` `Tc` | none found | wrong mode's shortcut | yes, modest (already filed) | [[kernel-checker-mode-enum]] |
 | 6 | Observation recordings: one guarded, one not | `unseal.rs`, `withheld.rs` | none yet (the second has no reader) | stale incremental cache | yes, before its first reader | [[kernel-observation-recording-guard]] |
@@ -236,6 +236,21 @@ hottest path. The type must compile down to today's field reads.
 `scripts/perf ab` should show identical counters and no time delta beyond
 noise.
 
+**Done (2026-11-09).** `crates/kernel/src/premises.rs` holds the
+discipline once: `PremiseQueue<I>` owns the queue, floor, base, push count
+and the depth-zero drain flag, and its phases are calls (`should_defer`,
+`past_floor`, `defer`, `begin_drain`/`pop`/`judged`/`end_drain`,
+`open_attempt`/`close_attempt`). `VerdictMemo<K>` owns conversion's memo
+with its provisional log and open-attempt count (`succeeded`, `refused`,
+`open_attempt`/`close_attempt`, `settle_at_top`), so a provisional `true`
+is taken back by the type, not by remembering two call sites. `Conv` keeps
+`depth` and the two values; `Tc` keeps `check_depth` and a
+`RefCell<PremiseQueue>`, and still forgets its memos wholesale after a
+refusal (that choice is now visible in one place, the module docs). The
+`Drain` and `Attempt` records are `#[must_use]`, so a phase opened and not
+closed is a warning. `scripts/perf ab` on `calc_parser`: conversion and
+checking counters identical (`local_subst_nodes` +0.1%).
+
 ## 3. Typing memo keys copy `Env`'s fields by hand
 
 **Where.** `typing.rs` `Env` (~973) and the three memo keys built from it:
@@ -265,6 +280,20 @@ and the rest (`cache`, metrics). Build the three keys from that sub-struct, so
 a field added to it is in every key by construction. Assert once, at `Tc`'s
 entry points, that `sealed`/`withheld` match the gate's Ψ for every `Env` the
 checker builds (a `debug_assert!` on identity). No behaviour change.
+
+**Done (2026-11-09).** `typing.rs` `Ambient { psi, gamma_base, univs,
+layer, under_box }` is the key part all three hold, built only by
+`Env::ambient`, whose pattern names every `Env` field without `..`: a field
+added to `Env` does not compile until it is keyed there or excused with a
+reason (`cache` is, since it is fixed by Ψ). `Env` itself was not split,
+which would have touched every scope constructor for the same guarantee.
+The Ψ question was settled by reading, not by an assert: `withholding`
+already gives the bindings a fresh identity, and `seal_kept` does not but
+need not, because a sealed proof only adds δ-steps, so a judgment made
+before it still holds after. `Ambient`'s doc states both. Conversion's two
+verdict buckets (`ConvMemoBucket`, `ClosedConvBucket`) keep their own
+fields: they key a conversion, which never reads `under_box`, the one
+component `Ambient` has that they lack.
 
 ## 4. Ψ-bound `GlobalCache` (filed; unchanged) and `Defs`' layer condition
 

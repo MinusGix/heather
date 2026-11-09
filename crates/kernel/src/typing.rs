@@ -175,6 +175,7 @@ use crate::conv::{conv_local_ctx_cached, conv_type_cached};
 #[cfg(feature = "value-metrics")]
 use crate::conv::{conv_local_ctx_cached_with_metrics, conv_type_cached_with_metrics};
 use crate::layer::Layer;
+use crate::premises::PremiseQueue;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi};
 use crate::reduce::{whnf_type_delta, Defs, GlobalCache, Sig};
@@ -1001,6 +1002,37 @@ struct Env {
 }
 
 impl Env {
+    /// The scope's [`Ambient`]. The pattern names every field, so a field
+    /// added to `Env` does not compile until it is either keyed here or
+    /// said not to be read by any rule.
+    #[inline]
+    fn ambient(&self) -> Ambient {
+        let Env {
+            psi,
+            // A cache of `psi`'s rescoped bodies: what it answers is fixed
+            // by `psi`.
+            cache: _,
+            gamma,
+            layer,
+            univs,
+            under_box,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: _,
+        } = self;
+        Ambient {
+            psi: psi.bindings.identity_addr(),
+            // Γ's entries are keyed apart: by identity in a [`Scope`], and
+            // not at all in a closed type's key, which reads none.
+            gamma_base: match gamma.base {
+                CtxBase::Nil => None,
+                CtxBase::Var(g) => Some(g.0),
+            },
+            univs: *univs,
+            layer: *layer,
+            under_box: *under_box,
+        }
+    }
+
     /// Replace Γ (and the layer) — for premises stated in a different local
     /// context, e.g. `Ψ; Δ ⊢_p T @ l`.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env {
@@ -1117,24 +1149,15 @@ struct Tc {
     /// How many [`Tc::tm_check`]s are open on the native stack.
     check_depth: Cell<u32>,
     /// Checks deferred past [`crate::term::SPINE_ITERATE_AT`] open checks
-    /// (docs/deep-term-walks-design.md): a checking premise only answers
-    /// yes or no, so a rule's premises are a conjunction whose order is
-    /// free, and a check reached that deep is queued instead of descended
-    /// into. The outermost open check drains the queue, at depth zero,
-    /// before it answers — so no verdict leaves the checker with a queued
-    /// premise unjudged, and a deep data value (a long list's spine) is
-    /// checked by a loop rather than one native frame per node.
-    deferred: RefCell<Vec<(Env, Rc<Term>, ITy, Level)>>,
-    /// How many checks have ever been queued on [`Tc::deferred`]: a refusal
-    /// from an outermost check that queued any forgets the memos
-    /// ([`Tc::forget_after_refusal`]).
-    deferred_pushed: Cell<u64>,
-    /// The queue's length when the check being judged began (the root, or
-    /// a popped check): once anything is queued past it, every later check
-    /// in it is queued too, and the drain judges each check's own queued
-    /// premises before the next, so the order is the recursive walk's
-    /// (`Conv`'s `defer_floor`, docs/deep-term-walks-design.md §3.3).
-    defer_floor: Cell<usize>,
+    /// ([`crate::premises`]): a checking premise only answers yes or no, so
+    /// a rule's premises are a conjunction whose order is free, and a check
+    /// reached that deep is queued instead of descended into. The outermost
+    /// open check drains the queue, at depth zero, before it answers — so no
+    /// verdict leaves the checker with a queued premise unjudged, and a deep
+    /// data value (a long list's spine) is checked by a loop rather than one
+    /// native frame per node. A refusal from an outermost check that queued
+    /// any forgets the memos ([`Tc::forget_after_refusal`]).
+    deferred: RefCell<PremiseQueue<(Env, Rc<Term>, ITy, Level)>>,
     /// The strengthened scopes' telescopes, interned one entry at a time
     /// from the outermost of the `k` (§The typing memo): `(parent id, entry
     /// type's address)` to the entry's level, its keep-alive and the
@@ -1337,37 +1360,46 @@ struct ClosedConvBucket {
     univs: u32,
 }
 
-/// A [`Judged`] entry's key: the node and its scope, by identity (module
-/// docs, §The typing memo). The addresses are kept valid by the entry.
+/// Everything a typing rule reads from its scope besides Γ's entries: the
+/// part of [`Env`] every typing memo key ([`Scope`], [`TyScope`],
+/// [`SigScope`]) holds, so a component added here is in all three by
+/// construction ([`Env::ambient`], docs/kernel-implicit-state-review.md §3).
+///
+/// Ψ is held by its bindings' identity, which also stands for the parts of
+/// Ψ that are not bindings. Changing the interface boundary
+/// ([`GlobalCtx::withholding`]) gives the bindings a fresh identity. A
+/// sealed proof kept later ([`GlobalCtx::seal_kept`]) does not, and need
+/// not: it only adds δ-steps, so a judgment made before it still holds
+/// after. The memo's addresses are kept valid by its entries' keep-alives.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Scope {
-    node: usize,
+struct Ambient {
     psi: usize,
-    /// Γ's identity token, or, in a strengthened scope, the interned id of
-    /// the innermost `k` entries ([`Tc::strengthened`]).
-    gamma: usize,
-    /// Whether `gamma` is a telescope id rather than Γ's identity.
-    strengthened: bool,
     gamma_base: Option<u32>,
     univs: u32,
     layer: Layer,
     under_box: bool,
 }
 
+/// A [`Judged`] entry's key: the node and its scope, by identity (module
+/// docs, §The typing memo). The addresses are kept valid by the entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Scope {
+    node: usize,
+    ambient: Ambient,
+    /// Γ's identity token, or, in a strengthened scope, the interned id of
+    /// the innermost `k` entries ([`Tc::strengthened`]).
+    gamma: usize,
+    /// Whether `gamma` is a telescope id rather than Γ's identity.
+    strengthened: bool,
+}
+
 impl Scope {
     fn of(env: &Env, t: &Rc<Term>) -> Scope {
         Scope {
             node: Rc::as_ptr(t) as usize,
-            psi: env.psi.bindings.identity_addr(),
+            ambient: env.ambient(),
             gamma: env.gamma.entries.identity_addr(),
             strengthened: false,
-            gamma_base: match env.gamma.base {
-                CtxBase::Nil => None,
-                CtxBase::Var(g) => Some(g.0),
-            },
-            univs: env.univs,
-            layer: env.layer,
-            under_box: env.under_box,
         }
     }
 }
@@ -1378,26 +1410,12 @@ impl Scope {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct TyScope {
     node: usize,
-    psi: usize,
-    gamma_base: Option<u32>,
-    univs: u32,
-    layer: Layer,
-    under_box: bool,
+    ambient: Ambient,
 }
 
 impl TyScope {
     fn of(env: &Env, t: &Rc<Type>) -> TyScope {
-        TyScope {
-            node: Rc::as_ptr(t) as usize,
-            psi: env.psi.bindings.identity_addr(),
-            gamma_base: match env.gamma.base {
-                CtxBase::Nil => None,
-                CtxBase::Var(g) => Some(g.0),
-            },
-            univs: env.univs,
-            layer: env.layer,
-            under_box: env.under_box,
-        }
+        TyScope { node: Rc::as_ptr(t) as usize, ambient: env.ambient() }
     }
 }
 
@@ -1405,26 +1423,12 @@ impl TyScope {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct SigScope {
     sig: usize,
-    psi: usize,
-    gamma_base: Option<u32>,
-    univs: u32,
-    layer: Layer,
-    under_box: bool,
+    ambient: Ambient,
 }
 
 impl SigScope {
     fn of(env: &Env, sig: &Rc<IWfSig>) -> SigScope {
-        SigScope {
-            sig: Rc::as_ptr(sig) as usize,
-            psi: env.psi.bindings.identity_addr(),
-            gamma_base: match env.gamma.base {
-                CtxBase::Nil => None,
-                CtxBase::Var(g) => Some(g.0),
-            },
-            univs: env.univs,
-            layer: env.layer,
-            under_box: env.under_box,
-        }
+        SigScope { sig: Rc::as_ptr(sig) as usize, ambient: env.ambient() }
     }
 }
 
@@ -1582,9 +1586,7 @@ impl Tc {
             closed_convs: RefCell::new(HashMap::new()),
             judged: RefCell::new(PtrMap::default()),
             check_depth: Cell::new(0),
-            deferred: RefCell::new(Vec::new()),
-            deferred_pushed: Cell::new(0),
-            defer_floor: Cell::new(0),
+            deferred: RefCell::new(PremiseQueue::new()),
             teles: RefCell::new(HashMap::new()),
             tele_ids: Cell::new(0),
             closed_tys: RefCell::new(PtrMap::default()),
@@ -2679,12 +2681,13 @@ impl Tc {
     /// infer + conversion at `typeof(i)`.
     fn tm_check(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
         let depth = self.check_depth.get();
-        if depth >= crate::term::SPINE_ITERATE_AT
-            || (depth > 0 && self.deferred.borrow().len() > self.defer_floor.get())
-        {
+        // At depth zero the queue is empty (the outermost check settles it
+        // before returning, and a drain judges its items at depth one), so
+        // only the threshold can defer there.
+        if self.deferred.borrow().should_defer(depth) {
             return self.tm_check_deferred(env, t, ty, l);
         }
-        let pushed = self.deferred_pushed.get();
+        let pushed = self.deferred.borrow().epoch();
         self.check_depth.set(depth + 1);
         let verdict = self.tm_check_here(env, t, ty, l);
         self.check_depth.set(depth);
@@ -2694,11 +2697,11 @@ impl Tc {
         let verdict = match verdict {
             Ok(()) => self.drain_deferred(),
             Err(err) => {
-                self.deferred.borrow_mut().clear();
+                self.deferred.borrow_mut().drop_past(0);
                 Err(err)
             }
         };
-        if verdict.is_err() && self.deferred_pushed.get() != pushed {
+        if verdict.is_err() && self.deferred.borrow().queued_since(pushed) {
             self.forget_after_refusal();
         }
         verdict
@@ -2738,8 +2741,7 @@ impl Tc {
     #[cold]
     #[inline(never)]
     fn tm_check_deferred(&self, env: &Env, t: &Rc<Term>, ty: ITyRef, l: &Level) -> R {
-        self.deferred.borrow_mut().push((env.clone(), Rc::clone(t), owned_expected(ty), l.clone()));
-        self.deferred_pushed.set(self.deferred_pushed.get() + 1);
+        self.deferred.borrow_mut().defer((env.clone(), Rc::clone(t), owned_expected(ty), l.clone()));
         Ok(())
     }
 
@@ -2748,23 +2750,18 @@ impl Tc {
     #[cold]
     #[inline(never)]
     fn drain_deferred(&self) -> R {
-        // A stack in walk order: each check's own queued premises are
-        // reversed onto the top as it finishes.
-        self.deferred.borrow_mut().reverse();
+        let drain = self.deferred.borrow_mut().begin_drain(0, 0);
         let verdict = loop {
-            let Some((env, t, ty, l)) = self.deferred.borrow_mut().pop() else { break Ok(()) };
-            let start = self.deferred.borrow().len();
-            self.defer_floor.set(start);
+            let Some(((env, t, ty, l), start)) = self.deferred.borrow_mut().pop(&drain) else { break Ok(()) };
             self.check_depth.set(1);
             let verdict = self.tm_check_here(&env, &t, ty.as_ref(), &l);
             self.check_depth.set(0);
             if let Err(err) = verdict {
-                self.deferred.borrow_mut().clear();
                 break Err(err);
             }
-            self.deferred.borrow_mut()[start..].reverse();
+            self.deferred.borrow_mut().judged(start);
         };
-        self.defer_floor.set(0);
+        self.deferred.borrow_mut().end_drain(drain, verdict.is_ok());
         verdict
     }
 
