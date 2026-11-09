@@ -7,14 +7,19 @@
 // such as `a.Inside(m)` unfolds to them) and a conjunction or a record of
 // facts is split field by field, is `Mem(x, s)`, a Boolean spelling of it
 // known `True` or `False` (`absent(x, s).IsTrue()`, `ids.holds(x) = True`),
-// or `False`, which is tried at each element a hypothesis is about.
+// `False`, which is tried at each element a hypothesis is about, or a
+// registered relation between two sets known true (`a.within(b)`,
+// `disjoint(xs, ys)`), proved through its intro law from the function type
+// the law takes, which is then proved as any other goal.
 //
 // Every hypothesis about the same element is read as a fact: `Mem(x, s)`,
 // `¬Mem(x, s)` (or `Mem(x, s) → False`), a spelling known `True` or
 // `False`, `x = e` and `¬(x = e)` either way round, each half of a
 // conjunction, and every function type that, applied to `x`, is
-// `Mem(x, a) → Mem(x, b)` (an inclusion, or a definition that unfolds to
-// one). A fact about an element `x` is known equal to is moved to `x`.
+// `Mem(x, a) → C` (an inclusion, or a definition that unfolds to one),
+// `C` being `Mem(x, b)`, `¬Mem(x, b)` or a spelling of either; a registered
+// relation known true is read through its elim law as such a function
+// type. A fact about an element `x` is known equal to is moved to `x`.
 // Hypotheses of any other shape are skipped.
 //
 // Each set is read into a `SetExpr`: `Nil` and `Cons(e, s)` by their
@@ -25,7 +30,8 @@
 // call again, and otherwise as an atom; atoms, elements and predicates are
 // told apart up to definitional equality, and an element convertible to `x`
 // is the fact `x ∈ [e]`. A spelling is a registered `SetBitEntry` (native's
-// `absent`), `!` of one, or a call whose definition is one.
+// `absent`), `!` of one, or a call whose definition is one. A relation is a
+// registered `SetRelEntry` (native's `within`, `disjoint`).
 //
 // A client module needs only `import set_tactic;`: `by` finds the tactic
 // protocol through the import closure, so `tactic`'s short names (`pure`,
@@ -55,6 +61,8 @@ record SetOpHead { f: GlobalRef, conn: SetConn, law: GlobalRef, implicits: Nat }
 
 record SetBitHead { f: GlobalRef, law: GlobalRef, negated: Bool, implicits: Nat }
 
+record SetRelHead { f: GlobalRef, elim: GlobalRef, intro: GlobalRef, implicits: Nat }
+
 // The lemmas that move between a spelling, membership and an element's
 // equations (lib/std/data/set/set_solve.hthr), and the globals that tell a
 // spelling apart.
@@ -64,6 +72,7 @@ record SetLemmas {
     not_not: GlobalRef, not_of_true: GlobalRef, not_of_false: GlobalRef,
     true_of_not_false: GlobalRef, false_of_not_true: GlobalRef, eq_true_of_is: GlobalRef, is_of_eq_true: GlobalRef,
     mem_of_eq: GlobalRef, mem_of_eq_sym: GlobalRef, mem_transport: GlobalRef, not_transport: GlobalRef, eq_sym: GlobalRef,
+    comp: GlobalRef, fapart: GlobalRef,
 }
 
 record SetHeads {
@@ -77,6 +86,7 @@ record SetHeads {
     ops: List<SetOpHead>,
     lem: SetLemmas,
     bits: List<SetBitHead>,
+    rels: List<SetRelHead>,
 }
 
 fn sets_global(name: String) → Tac<GlobalRef> {
@@ -103,6 +113,17 @@ fn sets_bit_heads(es: List<SetBitEntry>) → Tac<List<SetBitHead>> {
     }
 }
 
+fn sets_rel_heads(es: List<SetRelEntry>) → Tac<List<SetRelHead>> {
+    match es {
+        Nil => pure(Nil),
+        Cons(e, rest) => lookup(e.op).bind(λ c => match c {
+            Refused(_) => sets_rel_heads(rest),
+            Accepted(f) => sets_global(e.elim).bind(λ elim => sets_global(e.intro).bind(λ intro =>
+                sets_rel_heads(rest).bind(λ hs => pure(Cons(SetRelHead(f, elim, intro, e.implicits), hs))))),
+        }),
+    }
+}
+
 fn sets_lemmas() → Tac<SetLemmas> {
     let not_g <- sets_global("bool::Bool::not");
     let is_true <- sets_global("bool::Bool::IsTrue");
@@ -124,12 +145,14 @@ fn sets_lemmas() → Tac<SetLemmas> {
     let mem_transport <- sets_global("set_solve::set_mem_transport");
     let not_transport <- sets_global("set_solve::set_not_transport");
     let eq_sym <- sets_global("set_solve::set_eq_sym");
+    let comp <- sets_global("set_solve::set_comp");
+    let fapart <- sets_global("set_solve::set_fact_apart");
     pure(SetLemmas(not_g, is_true, bool_ty, and_ty, spell_true, spell_false, spell_is_true, spell_is_false,
         not_not, not_of_true, not_of_false, true_of_not_false, false_of_not_true, eq_true_of_is, is_of_eq_true,
-        mem_of_eq, mem_of_eq_sym, mem_transport, not_transport, eq_sym))
+        mem_of_eq, mem_of_eq_sym, mem_transport, not_transport, eq_sym, comp, fapart))
 }
 
-fn sets_heads(entries: List<SetOpEntry>, bit_entries: List<SetBitEntry>) → Tac<SetHeads> {
+fn sets_heads(entries: List<SetOpEntry>, bit_entries: List<SetBitEntry>, rel_entries: List<SetRelEntry>) → Tac<SetHeads> {
     let mem <- sets_global("list::Mem");
     let false_ty <- sets_global("False");
     let filter <- sets_global("list::List::filter");
@@ -166,8 +189,9 @@ fn sets_heads(entries: List<SetOpEntry>, bit_entries: List<SetBitEntry>) → Tac
     let ops <- sets_op_heads(entries);
     let lem <- sets_lemmas();
     let bits <- sets_bit_heads(bit_entries);
+    let rels <- sets_rel_heads(rel_entries);
     pure(SetHeads(mem, false_ty, filter, dec_eq, rfl, solve, env, op, nil, cons, or, and, diff,
-        atom, snil, scons, sfilter, sop, fmem, fnot, fsub, gmem, gnot, gfalse, held_nil, held_cons, mem_self, not_single, not_single_sym, list_ty, pred_ty, op_ty, fact_ty, ops, lem, bits))
+        atom, snil, scons, sfilter, sop, fmem, fnot, fsub, gmem, gnot, gfalse, held_nil, held_cons, mem_self, not_single, not_single_sym, list_ty, pred_ty, op_ty, fact_ty, ops, lem, bits, rels))
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +333,7 @@ fn sets_quote_fact(H: SetHeads, f: SetFact) → Expr {
         FMem(e) => sets_app(H.fmem, [sets_quote(H, e)]),
         FNot(e) => sets_app(H.fnot, [sets_quote(H, e)]),
         FImp(a, b) => sets_app(H.fsub, [sets_quote(H, a), sets_quote(H, b)]),
+        FApart(a, b) => sets_app(H.lem.fapart, [sets_quote(H, a), sets_quote(H, b)]),
     }
 }
 
@@ -429,11 +454,12 @@ fn sets_bit(H: SetHeads, b: Handle, fuel: Nat) → Tac<Option<SetBit>> {
     }
 }
 
-// The spelled `b` known to be `v` (by `hb`), as a membership literal: the
-// element, the set, whether the element is in it, and the proof.
-record SetLit { elt: Handle, set: Handle, holds: Bool, proof: Expr }
+// The spelled `b` known to be `v`, as a membership literal: the element,
+// the set, whether the element is in it, and the lemmas (each applied to
+// the last's result) that turn a proof of `b = v` into one of it.
+record SetConv { elt: Handle, set: Handle, holds: Bool, steps: List<Expr> }
 
-fn sets_bit_lit(H: SetHeads, l: SetBit, v: Bool, hb: Expr) → Tac<Option<SetLit>> {
+fn sets_bit_conv(H: SetHeads, l: SetBit, v: Bool) → Tac<Option<SetConv>> {
     infer(Hd(l.elt)).bind(λ c => match c {
         Refused(_) => pure(None),
         Accepted(t) => {
@@ -445,16 +471,68 @@ fn sets_bit_lit(H: SetHeads, l: SetBit, v: Bool, hb: Expr) → Tac<Option<SetLit
             let M = H.lem;
             pure(Some(match l.neg {
                 False => match v {
-                    True => SetLit(l.elt, l.set, True, sets_app(M.spell_true, [T, x, s, b, l.r, hb])),
-                    False => SetLit(l.elt, l.set, False, sets_app(M.spell_false, [T, x, s, b, l.r, hb])),
+                    True => SetConv(l.elt, l.set, True, [sets_app(M.spell_true, [T, x, s, b, l.r])]),
+                    False => SetConv(l.elt, l.set, False, [sets_app(M.spell_false, [T, x, s, b, l.r])]),
                 },
                 True => match v {
-                    True => SetLit(l.elt, l.set, False, sets_app(M.spell_false, [T, x, s, nb, l.r, sets_app(M.not_of_true, [b, hb])])),
-                    False => SetLit(l.elt, l.set, True, sets_app(M.spell_true, [T, x, s, nb, l.r, sets_app(M.not_of_false, [b, hb])])),
+                    True => SetConv(l.elt, l.set, False, [App(Global(M.not_of_true), b), sets_app(M.spell_false, [T, x, s, nb, l.r])]),
+                    False => SetConv(l.elt, l.set, True, [App(Global(M.not_of_false), b), sets_app(M.spell_true, [T, x, s, nb, l.r])]),
                 },
             }))
         },
     })
+}
+
+// The steps applied to a proof, and composed after a function.
+fn sets_steps_apply(steps: List<Expr>, p: Expr) → Expr {
+    match steps { Nil => p, Cons(f, rest) => sets_steps_apply(rest, App(f, p)) }
+}
+
+fn sets_steps_after(H: SetHeads, steps: List<Expr>, g: Expr) → Expr {
+    match steps { Nil => g, Cons(f, rest) => sets_steps_after(H, rest, apps(Global(H.lem.comp), [Blank, Blank, Blank, f, g])) }
+}
+
+record SetLit { elt: Handle, set: Handle, holds: Bool, proof: Expr }
+
+fn sets_bit_lit(H: SetHeads, l: SetBit, v: Bool, hb: Expr) → Tac<Option<SetLit>> {
+    sets_bit_conv(H, l, v).bind(λ o => match o {
+        None => pure(None),
+        Some(cv) => pure(Some(SetLit(cv.elt, cv.set, cv.holds, sets_steps_apply(cv.steps, hb)))),
+    })
+}
+
+// A registered relation between two sets applied to them.
+record SetRel { head: SetRelHead, a: Handle, b: Handle }
+
+fn sets_rel_head(rs: List<SetRelHead>, g: GlobalRef) → Option<SetRelHead> {
+    match rs { Nil => None, Cons(e, rest) => match g.id.same(e.f.id) { True => Some(e), False => sets_rel_head(rest, g) } }
+}
+
+fn sets_rel(H: SetHeads, b: Handle) → Tac<Option<SetRel>> {
+    view(b).bind(λ v => match v {
+        HGlobal(g, _, args) => match sets_rel_head(H.rels, g) {
+            Some(e) => match args { Cons(a, Cons(c, Nil)) => pure(Some(SetRel(e, a, c))), _ => pure(None) },
+            None => pure(None),
+        },
+        _ => pure(None),
+    })
+}
+
+// `h: f(a, b).IsTrue()` read through the relation's `elim`.
+fn sets_rel_elim(r: SetRel, h: Expr) → Expr {
+    apps(sets_blanks(Global(r.head.elim), r.head.implicits), [Hd(r.a), Hd(r.b), h])
+}
+
+// `f(a, b).IsTrue()` proved through the relation's `intro`, its premise by
+// `solve` (the tactic itself, on that premise).
+fn sets_rel_intro(r: SetRel, ls: List<LocalInfo>, solve: Tac<Expr>) → Tac<Expr> {
+    let intro = apps(sets_blanks(Global(r.head.intro), r.head.implicits), [Hd(r.a), Hd(r.b)]);
+    let t <- infer(intro).or_fail("sets: ");
+    let v <- sets_view(t);
+    match v {
+        HPi(dom) => focus(GoalInfo(dom, ls), solve).bind(λ p => pure(App(intro, p))),
+        _ => fail("sets: a relation's intro law does not take the premise to prove", [At(intro, Tried("the law", "not a function"))]),
+    }
 }
 
 // A hypothesis: its proof, its name for messages, and its statement.
@@ -468,11 +546,12 @@ fn sets_givens_of(ls: List<LocalInfo>) → List<SetGiven> {
 // literal (`Mem`, `¬Mem`, or a spelling known `True` or `False`), an
 // equation or disequation between elements, a function type whose
 // conclusion is about its argument (an inclusion, read once the element is
-// known), a conjunction, or none of these.
+// known; a registered relation known true is read through its `elim` as
+// one), a conjunction, or none of these.
 inductive SetShape {
     ShapeLit(l: SetLit),
     ShapeEq(l: Handle, r: Handle, holds: Bool, proof: Expr),
-    ShapeAll,
+    ShapeAll(proof: Expr),
     ShapeAnd,
     ShapeOther,
 }
@@ -483,9 +562,9 @@ fn sets_pi_shape(H: SetHeads, gv: SetGiven, ty: Handle) → Tac<SetShape> {
     open(ty, "i").bind(λ c => match c {
         Refused(_) => pure(ShapeOther),
         Accepted(o) => match o.dependent {
-            True => pure(ShapeAll),
+            True => pure(ShapeAll(gv.proof)),
             False => sets_view(o.body).bind(λ bv => match sets_is_false(H, bv) {
-                False => pure(ShapeAll),
+                False => pure(ShapeAll(gv.proof)),
                 True => sets_view(o.local.ty).bind(λ dv => match sets_mem_of(H, dv) {
                     Some(m) => pure(ShapeLit(SetLit(m.elt, m.set, False, gv.proof))),
                     None => match dv { HEq(l, r) => pure(ShapeEq(l, r, False, gv.proof)), _ => pure(ShapeOther) },
@@ -502,7 +581,13 @@ fn sets_shape_once(H: SetHeads, gv: SetGiven, ty: Handle) → Tac<SetShape> {
             HPi(_) => sets_pi_shape(H, gv, ty),
             HEq(l, r) => view(r).bind(λ rv => match sets_bool_value(H, rv) {
                 Some(val) => sets_bit(H, l, sets_fuel).bind(λ o => match o {
-                    None => pure(ShapeOther),
+                    None => match val {
+                        False => pure(ShapeOther),
+                        True => sets_rel(H, l).bind(λ orl => match orl {
+                            None => pure(ShapeOther),
+                            Some(rl) => pure(ShapeAll(sets_rel_elim(rl, sets_app(H.lem.is_of_eq_true, [Hd(l), gv.proof])))),
+                        }),
+                    },
                     Some(bit) => sets_bit_lit(H, bit, val, gv.proof).bind(λ ol => pure(sets_lit_shape(ol))),
                 }),
                 None => pure(ShapeEq(l, r, True, gv.proof)),
@@ -510,7 +595,10 @@ fn sets_shape_once(H: SetHeads, gv: SetGiven, ty: Handle) → Tac<SetShape> {
             HGlobal(g, _, args) => match g.id.same(H.lem.is_true.id) {
                 True => match args {
                     Cons(b, Nil) => sets_bit(H, b, sets_fuel).bind(λ o => match o {
-                        None => pure(ShapeOther),
+                        None => sets_rel(H, b).bind(λ orl => match orl {
+                            None => pure(ShapeOther),
+                            Some(rl) => pure(ShapeAll(sets_rel_elim(rl, gv.proof))),
+                        }),
                         Some(bit) => sets_bit_lit(H, bit, True, sets_app(H.lem.eq_true_of_is, [Hd(b), gv.proof])).bind(λ ol => pure(sets_lit_shape(ol))),
                     }),
                     _ => pure(ShapeOther),
@@ -569,8 +657,59 @@ fn sets_mem_at(H: SetHeads, L: SetLeaves, x: Handle, v: Head) → Tac<Option<Set
     }
 }
 
-// `proof: Mem(x, a) → Mem(x, b)` (its type `ty`), as the fact `FImp`. The
-// conclusion is read off `proof` applied to a hole, so that its handle
+// A conclusion about an element: `Mem(y, s)`, `¬Mem(y, s)`, or a spelling
+// known `True` or `False`, with the steps that turn a proof of it into
+// membership or its negation.
+fn sets_concl_once(H: SetHeads, ty: Handle) → Tac<Option<SetConv>> {
+    sets_view(ty).bind(λ v => match sets_mem_of(H, v) {
+        Some(m) => pure(Some(SetConv(m.elt, m.set, True, Nil))),
+        None => match v {
+            HPi(_) => open(ty, "m").bind(λ c => match c {
+                Refused(_) => pure(None),
+                Accepted(o) => match o.dependent {
+                    True => pure(None),
+                    False => sets_view(o.body).bind(λ bv => match sets_is_false(H, bv) {
+                        False => pure(None),
+                        True => sets_view(o.local.ty).bind(λ dv => match sets_mem_of(H, dv) {
+                            Some(m) => pure(Some(SetConv(m.elt, m.set, False, Nil))),
+                            None => pure(None),
+                        }),
+                    }),
+                },
+            }),
+            HEq(l, r) => view(r).bind(λ rv => match sets_bool_value(H, rv) {
+                None => pure(None),
+                Some(val) => sets_bit(H, l, sets_fuel).bind(λ o => match o { None => pure(None), Some(bit) => sets_bit_conv(H, bit, val) }),
+            }),
+            HGlobal(g, _, args) => match g.id.same(H.lem.is_true.id) {
+                False => pure(None),
+                True => match args {
+                    Cons(b, Nil) => sets_bit(H, b, sets_fuel).bind(λ o => match o {
+                        None => pure(None),
+                        Some(bit) => sets_bit_conv(H, bit, True).bind(λ oc => match oc {
+                            None => pure(None),
+                            Some(cv) => pure(Some(SetConv(cv.elt, cv.set, cv.holds, Cons(App(Global(H.lem.eq_true_of_is), Hd(b)), cv.steps)))),
+                        }),
+                    }),
+                    _ => pure(None),
+                },
+            },
+            _ => pure(None),
+        },
+    })
+}
+
+// As written, else as its head normal form (`¬P` unfolds to `P → False`).
+fn sets_concl(H: SetHeads, ty: Handle) → Tac<Option<SetConv>> {
+    sets_concl_once(H, ty).bind(λ o => match o {
+        Some(_) => pure(o),
+        None => whnf(ty).bind(λ c => match c { Accepted(w) => sets_concl_once(H, w), Refused(_) => pure(None) }),
+    })
+}
+
+// `proof: Mem(x, a) → C` (its type `ty`), `C` a conclusion about `x`: the
+// fact `FImp` when `C` says `x` is in `b`, `FApart` when it says `x` is not.
+// The conclusion is read off `proof` applied to a hole, so that its handle
 // lives where the goal does rather than under the binder.
 fn sets_imp_at(H: SetHeads, x: Handle, acc: SetFacts, name: String, proof: Expr, ty: Handle) → Tac<Option<SetFacts>> {
     sets_view(ty).bind(λ tv => match tv {
@@ -579,10 +718,19 @@ fn sets_imp_at(H: SetHeads, x: Handle, acc: SetFacts, name: String, proof: Expr,
             Some(ra) => holes(proof, 1).bind(λ c => match c {
                 Accepted(Cons(hh, Nil)) => infer(App(proof, Hd(hh))).bind(λ c2 => match c2 {
                     Refused(_) => pure(None),
-                    Accepted(cod) => sets_view(cod).bind(λ cv => sets_mem_at(H, ra.leaves, x, cv).bind(λ ob => match ob {
+                    Accepted(cod) => sets_concl(H, cod).bind(λ ocv => match ocv {
                         None => pure(None),
-                        Some(rb) => pure(Some(acc.add(rb.leaves, FImp(ra.e, rb.e), proof, Tried(name, "an inclusion, at x")))),
-                    })),
+                        Some(cv) => sets_same_elt(cv.elt, x).bind(λ same => match same {
+                            False => pure(None),
+                            True => sets_read(H, ra.leaves, cv.set, sets_fuel).bind(λ rb => {
+                                let p = sets_steps_after(H, cv.steps, proof);
+                                pure(Some(match cv.holds {
+                                    True => acc.add(rb.leaves, FImp(ra.e, rb.e), p, Tried(name, "an inclusion, at x")),
+                                    False => acc.add(rb.leaves, FApart(ra.e, rb.e), p, Tried(name, "sets apart, at x")),
+                                }))
+                            }),
+                        }),
+                    }),
                 }),
                 _ => pure(None),
             }),
@@ -591,12 +739,12 @@ fn sets_imp_at(H: SetHeads, x: Handle, acc: SetFacts, name: String, proof: Expr,
     })
 }
 
-// `gv: (i: A) → … → Mem(i, a) → Mem(i, b)`, applied to `x`.
-fn sets_all_at(H: SetHeads, x: Handle, acc: SetFacts, gv: SetGiven) → Tac<Option<SetFacts>> {
-    let proof = App(gv.proof, Hd(x));
+// `proof: (i: A) → … → Mem(i, a) → C`, applied to `x`.
+fn sets_all_at(H: SetHeads, x: Handle, acc: SetFacts, name: String, all: Expr) → Tac<Option<SetFacts>> {
+    let proof = App(all, Hd(x));
     infer(proof).bind(λ c => match c {
         Refused(_) => pure(None),
-        Accepted(ty) => sets_imp_at(H, x, acc, gv.name, proof, ty),
+        Accepted(ty) => sets_imp_at(H, x, acc, name, proof, ty),
     })
 }
 
@@ -685,7 +833,7 @@ fn sets_facts(H: SetHeads, T: Expr, x: Handle, als: List<SetAlias>, gs: List<Set
                         False => sets_facts(H, T, x, als, rest, acc, n),
                     }),
                 }),
-                ShapeAll => sets_all_at(H, x, acc, gv).bind(λ o => match o {
+                ShapeAll(all) => sets_all_at(H, x, acc, gv.name, all).bind(λ o => match o {
                     None => sets_facts(H, T, x, als, rest, acc, n),
                     Some(acc2) => sets_facts(H, T, x, als, rest, acc2, n),
                 }),
@@ -848,7 +996,7 @@ fn sets_spelled(H: SetHeads, gs: List<SetGiven>, l: SetBit, v: Bool) → Tac<Exp
     }
 }
 
-def sets_not_read: String = "sets: the goal is not a membership, a spelling of one, `False`, a conjunction of these, or a function type ending in one";
+def sets_not_read: String = "sets: the goal is not a membership, a spelling of one, a registered relation between sets, `False`, a conjunction of these, or a function type ending in one";
 
 fn sets_go(H: SetHeads, fuel: Nat) → Tac<Expr> {
     match fuel {
@@ -873,7 +1021,14 @@ fn sets_go(H: SetHeads, fuel: Nat) → Tac<Expr> {
                         HEq(l, r) => view(r).bind(λ rv => match sets_bool_value(H, rv) {
                             None => other,
                             Some(val) => sets_bit(H, l, sets_fuel).bind(λ o => match o {
-                                None => other,
+                                None => match val {
+                                    False => other,
+                                    True => sets_rel(H, l).bind(λ orl => match orl {
+                                        None => other,
+                                        Some(rl) => sets_rel_intro(rl, g.locals, sets_go(H, k)).bind(λ p =>
+                                            pure(sets_app(H.lem.eq_true_of_is, [Hd(l), p]))),
+                                    }),
+                                },
                                 Some(bit) => sets_spelled(H, gs, bit, val),
                             }),
                         }),
@@ -886,7 +1041,10 @@ fn sets_go(H: SetHeads, fuel: Nat) → Tac<Expr> {
                             False => match f.id.same(H.lem.is_true.id) {
                             True => match args {
                                 Cons(b, Nil) => sets_bit(H, b, sets_fuel).bind(λ o => match o {
-                                    None => other,
+                                    None => sets_rel(H, b).bind(λ orl => match orl {
+                                        None => other,
+                                        Some(rl) => sets_rel_intro(rl, g.locals, sets_go(H, k)),
+                                    }),
                                     Some(bit) => sets_spelled(H, gs, bit, True).bind(λ p => pure(sets_app(H.lem.is_of_eq_true, [Hd(b), p]))),
                                 }),
                                 _ => other,
@@ -905,6 +1063,7 @@ fn sets_go(H: SetHeads, fuel: Nat) → Tac<Expr> {
 // `sets()`: prove the goal from the membership facts in scope. The
 // operations and spellings it reads are `entries` and `bits`, by default
 // every `SetOpEntry` and `SetBitEntry` registered where the call is.
-fn sets(entries: List<SetOpEntry> := registered(SetOpEntry), bits: List<SetBitEntry> := registered(SetBitEntry)) → Tac<Expr> {
-    sets_heads(entries, bits).bind(λ H => sets_go(H, 16))
+fn sets(entries: List<SetOpEntry> := registered(SetOpEntry), bits: List<SetBitEntry> := registered(SetBitEntry),
+    rels: List<SetRelEntry> := registered(SetRelEntry)) → Tac<Expr> {
+    sets_heads(entries, bits, rels).bind(λ H => sets_go(H, 16))
 }

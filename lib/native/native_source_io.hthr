@@ -37,6 +37,7 @@ import function_ir_eval;
 import function_ir_state;
 import native_source;
 import native_source_co;
+import set_tactic;
 
 // A statement with no loop and no procedure call.
 fn Stmt::straight(self s: Stmt) → Bool {
@@ -224,15 +225,7 @@ theorem Port::ids_append(xs: List<Port>, ys: List<Port>): Port::ids(xs ++ ys) = 
     }
 }
 
-theorem absent_join(id: Nat, xs, ys: List<Nat>): absent(id, xs).IsTrue() → absent(id, ys).IsTrue() → absent(id, xs ++ ys).IsTrue() {
-    match xs {
-        Nil => λ _ h => h,
-        Cons(x, rest) => λ h hy => {
-            let parts = Bool::is_true_and(id.differs(x), absent(id, rest), h);
-            Bool::is_true_and_intro(id.differs(x), absent(id, rest ++ ys), parts.left, absent_join(id, rest, ys, parts.right, hy))
-        },
-    }
-}
+theorem absent_join(id: Nat, xs, ys: List<Nat>): absent(id, xs).IsTrue() → absent(id, ys).IsTrue() → absent(id, xs ++ ys).IsTrue() { by sets() }
 
 // Settling keeps the buffers and the command line.
 theorem Env::settle_buffers(after: Valuation(), ports: List<Port>): (env: Env) → env.settle(after, ports).buffers = env.buffers {

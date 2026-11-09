@@ -59,9 +59,11 @@ property of Heather.
   and the `Mem`, `¬Mem`, `=`, `≠`, inclusion and spelled
   (`absent(x, s).IsTrue()`, `holds`) hypotheses about its element become a
   truth table that the kernel checks by evaluation; `∧` and records of such
-  facts split. A new set operation registers a `SetOpEntry` with its
-  `SetLaw`, a new Boolean spelling a `SetBitEntry` with its `SetBitLaw`,
-  beside its definition. Each atom, element and predicate doubles the
+  facts split. Relations between sets (`a.within(b)`, `disjoint(xs, ys)`)
+  are read too: a hypothesis at the element, a goal by its intro law. A new
+  set operation registers a `SetOpEntry` with its `SetLaw`, a new Boolean
+  spelling a `SetBitEntry` with its `SetBitLaw`, a new relation a
+  `SetRelEntry` with its elim and intro laws, beside its definition. Each atom, element and predicate doubles the
   table, so keep a big literal behind a name. A call costs a few tenths of
   a second, mostly the tactic's own run; a one-step citation is cheaper.
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
