@@ -5,7 +5,7 @@ labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-21
-updated: 2026-10-24
+updated: 2026-11-09
 ---
 
 Round S4 of `docs/native-program-logic-design.md` (§3.2, §9): lower
@@ -398,3 +398,4 @@ costs a refusal, never a wrong program.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[function-ir-multi-word-calls]] (`lib/native/function_ir/function_ir.hthr`); [[function-ir-x86-shift-legalization]] (`lib/native/function_ir/function_ir_lower.hthr`).
+- 2026-11-09: 2026-11-09: passes composing by simulation-diagram composition, and the four machine closure kits made one, are filed as [[transition-systems-and-simulations]] (docs/native-mathematics-survey.md §3).

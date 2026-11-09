@@ -92,12 +92,16 @@ tactic prove something false: every proof is checked.
 
 ## 5. The laws
 
-`mono_carriers()` lists, per carrier, the two orders, `le_refl`,
+Each carrier registers, beside its lemmas, its two orders, `le_refl`,
 `le_of_lt`, the monotonicity laws `(strict, op, moves, lemma)` and the sign
-laws `(strict, op, lemma)`, by name. They are resolved where the tactic runs
-(`Lookup`), and a name that does not resolve is skipped, so a client that
-imports `rat` and not `creal` resolves only what it can see. Only the
-carrier whose order the goal is resolves its laws.
+laws `(strict, op, lemma)` as `MonoEntry` values whose names are checked
+`name_of`s (`lib/std/tactic/mono_laws.hthr`,
+docs/registered-values-design.md; until 2026-11-08 they were strings in
+the tactic's `mono_carriers`). The tactic reads the entries the `by`'s
+import closure has (`registered(MonoEntry)`), so a client that imports
+`rat` and not `creal` sees only `rat`'s, and resolves the names
+(`Lookup`) where it runs. Only the carrier whose order the goal is resolves
+its laws.
 
 This round added the laws the registry wanted and `rat` lacked:
 `Rat::add_nonneg`, `Rat::add_pos`, `Rat::sub_le_sub`, `Rat::npow_nonneg`,
@@ -159,9 +163,10 @@ local, which `View` presents as `HField(record, name, args)`
 (`docs/host-elaboration-interface-design.md` §18).
 
 - **The carrier.** A goal whose relation is not a concrete carrier's order
-  is read off the context: the first local whose type views as one of
-  `mono_classes`' classes (`OrderedField`, `LocatedAddGroup`,
-  `OrderedAddGroup`, `PseudoOrder`, `StrictOrder`, strongest first), and
+  is read off the context: the first local whose type views as a class with
+  a registered `MonoClass` entry (`OrderedField`, `LocatedAddGroup`,
+  `OrderedAddGroup`, `PseudoOrder`, `StrictOrder`, …; `ordered_field`
+  registers them), and
   whose `<=` or `<` argument is the goal's relation. The class's laws name
   their operations by the dictionary's argument positions (`+` is argument 4
   of `OrderedField<A>(≈, <, <=, +, *)`) or by field (`inv`, `recip`), and are

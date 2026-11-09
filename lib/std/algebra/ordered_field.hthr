@@ -63,6 +63,8 @@ import algebra_rel;
 import semiring;
 import omega;
 import order;
+import list;
+import mono_laws;
 
 // ---------------------------------------------------------------------------
 // Relations built from the strict order.
@@ -554,7 +556,7 @@ theorem OrderedAddGroup::sub_add_cancel(x, y: A): (x + A.inv(y)) + y ≈ x {
     }
 }
 
-theorem OrderedAddGroup::neg_zero(x: A): A.inv(A.unit) ≈ A.unit {
+theorem OrderedAddGroup::neg_zero(): A.inv(A.unit) ≈ A.unit {
     A.rel_sym(A.unit, A.inv(A.unit), GroupRel::inv_unique(+, A.unit, A.unit, A.unit_r(A.unit)))
 }
 
@@ -603,11 +605,11 @@ theorem OrderedAddGroup::neg_lt(x, y: A, h: x < y): A.inv(y) < A.inv(x) {
 
 // Negation swaps the sides of zero.
 theorem OrderedAddGroup::neg_pos(x: A, h: x < A.unit): A.unit < A.inv(x) {
-    StrictOrder::lt_respects_l(A.inv(A.unit), A.unit, A.inv(x), OrderedAddGroup::neg_zero(x), OrderedAddGroup::neg_lt(x, A.unit, h))
+    StrictOrder::lt_respects_l(A.inv(A.unit), A.unit, A.inv(x), OrderedAddGroup::neg_zero(), OrderedAddGroup::neg_lt(x, A.unit, h))
 }
 
 theorem OrderedAddGroup::neg_of_neg_pos(x: A, h: A.unit < A.inv(x)): x < A.unit {
-    A.lt_respects(A.inv(A.inv(x)), x, A.inv(A.unit), A.unit, GroupRel::inv_inv(+, x), OrderedAddGroup::neg_zero(x),
+    A.lt_respects(A.inv(A.inv(x)), x, A.inv(A.unit), A.unit, GroupRel::inv_inv(+, x), OrderedAddGroup::neg_zero(),
         OrderedAddGroup::neg_lt(A.unit, A.inv(x), h))
 }
 
@@ -662,7 +664,7 @@ theorem OrderedAddGroup::same_zero_of_abs_lt(x: A,
     A.lt_tight(x, A.unit,
         λ neg => {
             let pos: (A.unit < A.inv(x)) = StrictOrder::lt_respects_l(A.inv(A.unit), A.unit, A.inv(x),
-                OrderedAddGroup::neg_zero(x), OrderedAddGroup::neg_lt(x, A.unit, neg));
+                OrderedAddGroup::neg_zero(), OrderedAddGroup::neg_lt(x, A.unit, neg));
             A.lt_irrefl(x, StrictOrder::lt_respects_l(A.inv(A.inv(x)), x, x, GroupRel::inv_inv(+, x), all(A.inv(x), pos).left))
         },
         λ pos => A.lt_irrefl(x, all(x, pos).right))
@@ -710,7 +712,7 @@ section<A: LocatedAddGroup(≈, <, <=, +)> {
 theorem LocatedAddGroup::abs_lt_pos(x, e: A, h: AbsLt(x, e)): A.unit < e {
     match A.rel_cotrans(A.inv(e), e, A.unit, StrictOrder::between_lt(A.inv(e), x, e, h)) {
         Inl(below) => A.lt_respects(A.inv(A.unit), A.unit, A.inv(A.inv(e)), e,
-            OrderedAddGroup::neg_zero(x), GroupRel::inv_inv(+, e), OrderedAddGroup::neg_lt(A.inv(e), A.unit, below)),
+            OrderedAddGroup::neg_zero(), GroupRel::inv_inv(+, e), OrderedAddGroup::neg_lt(A.inv(e), A.unit, below)),
         Inr(above) => above,
     }
 }
@@ -777,7 +779,7 @@ theorem OrderedSemiring::mul_respects(x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y
     A.multiplicative.respects2(x, x2, hx, y, y2, hy)
 }
 
-theorem OrderedSemiring::one_apart_zero(x: A): ApartBy(<, A.multiplicative.unit, A.unit) {
+theorem OrderedSemiring::one_apart_zero(): ApartBy(<, A.multiplicative.unit, A.unit) {
     Inr(A.zero_lt_one)
 }
 
@@ -939,7 +941,7 @@ section<A: OrderedRing(≈, <, <=, +, *)> {
 // Multiplying by a nonpositive reverses a weak inequality: negate the
 // factor, multiply, and negate back.
 theorem OrderedRing::mul_le_mono_l_nonpos(x, y, z: A, h: x <= y, hz: z <= A.unit): z * y <= z * x {
-    let nz: (A.unit <= A.inv(z)) = StrictOrder::le_of_same_l(A.unit, A.inv(A.unit), A.inv(z), A.rel_sym(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(z)), LocatedAddGroup::neg_le(z, A.unit, hz));
+    let nz: (A.unit <= A.inv(z)) = StrictOrder::le_of_same_l(A.unit, A.inv(A.unit), A.inv(z), A.rel_sym(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero()), LocatedAddGroup::neg_le(z, A.unit, hz));
     let flipped: (A.inv(A.inv(z) * y) <= A.inv(A.inv(z) * x)) = LocatedAddGroup::neg_le(A.inv(z) * x, A.inv(z) * y, OrderedSemiring::mul_le_mono_l(x, y, A.inv(z), h, nz));
     let back = λ (w: A) => A.rel_trans(A.inv(A.inv(z) * w), A.inv(A.inv(z * w)), z * w,
         A.inv_respects(A.inv(z) * w, A.inv(z * w), Ring::neg_mul(z, w)), GroupRel::inv_inv(+, z * w));
@@ -1048,17 +1050,17 @@ theorem OrderedField::recip_mul(x: A, h: ApartBy(<, x, A.unit)): A.recip(x, h) *
 }
 
 // The embedded naturals climb by one at each step.
-theorem OrderedField::of_nat_lt_succ(x: A, n: Nat): A.of_nat(n) < A.of_nat(Succ(n)) {
+theorem OrderedField::of_nat_lt_succ(n: Nat): A.of_nat(n) < A.of_nat(Succ(n)) {
     A.lt_respects(A.of_nat(n) + A.unit, A.of_nat(n), A.of_nat(n) + A.multiplicative.unit, A.of_nat(Succ(n)),
         A.unit_r(A.of_nat(n)), A.rel_sym(A.of_nat(Succ(n)), A.of_nat(n) + A.multiplicative.unit, A.of_nat_succ(n)),
         OrderedAddMonoid::add_lt_mono_l(A.unit, A.multiplicative.unit, A.of_nat(n), A.zero_lt_one))
 }
 
-theorem OrderedField::of_nat_pos(x: A, n: Nat): A.unit < A.of_nat(Succ(n)) {
+theorem OrderedField::of_nat_pos(n: Nat): A.unit < A.of_nat(Succ(n)) {
     match n {
-        Zero => StrictOrder::lt_respects_l(A.of_nat(Zero), A.unit, A.of_nat(Succ(Zero)), A.of_nat_zero, OrderedField::of_nat_lt_succ(x, Zero)),
-        Succ(m) => A.lt_trans(A.unit, A.of_nat(Succ(m)), A.of_nat(Succ(Succ(m))), OrderedField::of_nat_pos(x, m),
-            OrderedField::of_nat_lt_succ(x, Succ(m))),
+        Zero => StrictOrder::lt_respects_l(A.of_nat(Zero), A.unit, A.of_nat(Succ(Zero)), A.of_nat_zero, OrderedField::of_nat_lt_succ(Zero)),
+        Succ(m) => A.lt_trans(A.unit, A.of_nat(Succ(m)), A.of_nat(Succ(Succ(m))), OrderedField::of_nat_pos(m),
+            OrderedField::of_nat_lt_succ(Succ(m))),
     }
 }
 
@@ -1120,7 +1122,7 @@ theorem OrderedField::recip_lt_recip(x, y: A, hx: ApartBy(<, x, A.unit), hy: Apa
 // 1/(n+1). Its inverse is below some natural n, so below n + 1, and
 // inverting reverses that.
 theorem OrderedField::archimedean_recip(x: A, hx: A.unit < x):
-    ∃ n: Nat, A.recip(A.of_nat(Succ(n)), Inr(OrderedField::of_nat_pos(x, n))) < x
+    ∃ n: Nat, A.recip(A.of_nat(Succ(n)), Inr(OrderedField::of_nat_pos(n))) < x
 {
     let h: ApartBy(<, x, A.unit) = Inr(hx);
     let u = A.recip(x, h);
@@ -1128,9 +1130,9 @@ theorem OrderedField::archimedean_recip(x: A, hx: A.unit < x):
     match A.archimedean(u) {
         Exists(n, below) => {
             let big = A.of_nat(Succ(n));
-            let pbig: (A.unit < big) = OrderedField::of_nat_pos(x, n);
+            let pbig: (A.unit < big) = OrderedField::of_nat_pos(n);
             let flipped: (A.recip(big, Inr(pbig)) < A.recip(u, Inr(pu))) = OrderedField::recip_lt_recip(u, big, Inr(pu), Inr(pbig), pu,
-                A.lt_trans(u, A.of_nat(n), big, below, OrderedField::of_nat_lt_succ(x, n)));
+                A.lt_trans(u, A.of_nat(n), big, below, OrderedField::of_nat_lt_succ(n)));
             Exists(n, StrictOrder::lt_respects_r(A.recip(big, Inr(pbig)), A.recip(u, Inr(pu)), x, OrderedField::recip_recip(x, h, Inr(pu)), flipped))
         },
     }
@@ -1229,3 +1231,87 @@ instance OrderedRing<Int>(RelId<Int>, Int::Lt, Int::Le, Int::add, Int::mul) {
     mul_lt_l := λ x y z h hz => x.mul_lt_mono_l(y, z, h, hz),
     mul_lt_reflect_l := λ x y z hz h => x.lt_of_mul_lt_mul_l(y, z, hz, h),
 }
+
+// ---------------------------------------------------------------------------
+// `mono`'s laws at the ordered classes (lib/std/tactic/mono_laws.hthr),
+// strongest class first. Every class extends `StrictOrder`, whose
+// `le_refl`, `le_of_lt` and `≈` pushes are the reflexivity, weakening and
+// cast reading at every dictionary; `big_operator` adds the sums' laws.
+
+def mono_class_pushes: PushLaws = PushLaws(name_of(StrictOrder::le_of_same_l), name_of(StrictOrder::le_of_same_r),
+    name_of(StrictOrder::lt_of_same_l), name_of(StrictOrder::lt_of_same_r));
+
+// Translation, at every ordered monoid.
+def mono_monoid_laws: List<ClassLaw> = [
+    class_law(False, Index(4), [1], name_of(OrderedAddMonoid::add_le_mono_l)),
+    class_law(False, Index(4), [0], name_of(OrderedAddMonoid::add_le_mono_r)),
+    class_law(True, Index(4), [1], name_of(OrderedAddMonoid::add_lt_mono_l)),
+];
+
+// What a group adds: negation.
+def mono_neg_laws: List<ClassLaw> = [class_law(True, Field("inv"), [1], name_of(OrderedAddGroup::neg_lt))];
+
+// What locatedness adds: both summands at once, a strict and a weak bound
+// together.
+def mono_located_laws: List<ClassLaw> = [
+    class_law(False, Index(4), [0, 1], name_of(LocatedAddMonoid::add_le_mono)),
+    class_law(True, Index(4), [0, 1], name_of(LocatedAddMonoid::add_lt_le_mono)),
+];
+
+// Negation at `<=`, which needs both.
+def mono_located_neg_laws: List<ClassLaw> = [class_law(False, Field("inv"), [1], name_of(LocatedAddGroup::neg_le))];
+
+def mono_located_group_laws: List<ClassLaw> = mono_monoid_laws ++ mono_neg_laws ++ mono_located_laws ++ mono_located_neg_laws;
+
+// Products by a nonnegative or positive factor, at every ordered semiring.
+def mono_semiring_laws: List<ClassLaw> = [
+    class_law(False, Index(5), [1], name_of(OrderedSemiring::mul_le_mono_l)),
+    class_law(False, Index(5), [0], name_of(OrderedSemiring::mul_le_mono_r)),
+    class_law(False, Index(5), [0, 1], name_of(OrderedSemiring::mul_le_mul)),
+    class_law(True, Index(5), [1], name_of(OrderedSemiring::mul_lt_mono_l)),
+    class_law(True, Index(5), [0], name_of(OrderedSemiring::mul_lt_mono_r)),
+];
+
+// Both summands strictly, where nothing better is known.
+def mono_add_lt_laws: List<ClassLaw> = [class_law(True, Index(4), [0, 1], name_of(OrderedAddMonoid::add_lt_mono))];
+
+def mono_located_signs: List<ClassSign> = [
+    class_sign(True, Index(4), name_of(OrderedAddMonoid::add_pos)),
+    class_sign(False, Index(4), name_of(LocatedAddMonoid::add_nonneg)),
+];
+
+def mono_semiring_signs: List<ClassSign> = mono_located_signs ++ [
+    class_sign(False, Index(5), name_of(OrderedSemiring::mul_nonneg)),
+    class_sign(True, Index(5), name_of(OrderedSemiring::mul_pos)),
+];
+
+def mono_add_pos_signs: List<ClassSign> = [class_sign(True, Index(4), name_of(OrderedAddMonoid::add_pos))];
+
+register def mono_ordered_field: MonoEntry = MonoClass(name_of(OrderedField), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_field_rules: MonoEntry = MonoClassRules(name_of(OrderedField), mono_located_group_laws ++ mono_semiring_laws,
+    mono_semiring_signs ++ [class_sign(True, Field("recip"), name_of(OrderedField::recip_pos))]);
+
+register def mono_ordered_ring: MonoEntry = MonoClass(name_of(OrderedRing), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_ring_rules: MonoEntry = MonoClassRules(name_of(OrderedRing), mono_located_group_laws ++ mono_semiring_laws, mono_semiring_signs);
+
+register def mono_ordered_semiring: MonoEntry = MonoClass(name_of(OrderedSemiring), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_semiring_rules: MonoEntry = MonoClassRules(name_of(OrderedSemiring),
+    mono_monoid_laws ++ mono_located_laws ++ mono_semiring_laws, mono_semiring_signs);
+
+register def mono_located_group: MonoEntry = MonoClass(name_of(LocatedAddGroup), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_located_group_rules: MonoEntry = MonoClassRules(name_of(LocatedAddGroup), mono_located_group_laws, mono_located_signs);
+
+register def mono_located: MonoEntry = MonoClass(name_of(LocatedAddMonoid), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_located_rules: MonoEntry = MonoClassRules(name_of(LocatedAddMonoid), mono_monoid_laws ++ mono_located_laws, mono_located_signs);
+
+register def mono_ordered_add_group: MonoEntry = MonoClass(name_of(OrderedAddGroup), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_add_group_rules: MonoEntry = MonoClassRules(name_of(OrderedAddGroup),
+    mono_monoid_laws ++ mono_neg_laws ++ mono_add_lt_laws, mono_add_pos_signs);
+
+register def mono_ordered_add_monoid: MonoEntry = MonoClass(name_of(OrderedAddMonoid), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+register def mono_ordered_add_monoid_rules: MonoEntry = MonoClassRules(name_of(OrderedAddMonoid),
+    mono_monoid_laws ++ mono_add_lt_laws, mono_add_pos_signs);
+
+register def mono_pseudo_order: MonoEntry = MonoClass(name_of(PseudoOrder), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);
+
+register def mono_strict_order: MonoEntry = MonoClass(name_of(StrictOrder), 2, 3, name_of(StrictOrder::le_refl), name_of(StrictOrder::le_of_lt), mono_class_pushes);

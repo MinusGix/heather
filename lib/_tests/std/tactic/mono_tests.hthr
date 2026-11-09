@@ -53,7 +53,7 @@ theorem no_premise(a, b, c: Rat): a + c <= b + c { by mono() }
 // expect-error: mono: nothing proves this goal
 theorem not_strict(a, b, c: Rat, h: a <= b): a + c < b + c { by mono() }
 // Only orders are read.
-// expect-error: mono: the goal is not `<=` or `<` at `Rat`, `CReal`, `Int`, `Nat` or an ordered class
+// expect-error: mono: the goal is not `<=` or `<` at a carrier or an ordered class
 theorem not_order(a: Rat): a ≈ a { by mono() }
 
 // A class carrier: the order and operations are a dictionary's in scope,

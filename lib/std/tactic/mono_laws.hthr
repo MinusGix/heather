@@ -1,0 +1,94 @@
+// What `mono` (lib/std/tactic/mono.hthr) reads: its registry entries.
+//
+// A carrier gets `mono` by registering its laws beside them, not by editing
+// the tactic (issues/automation-lemma-registries.md): each module writes
+// `register def …: MonoEntry = …;` with its lemmas named by `name_of`, so a
+// name is checked where it is written, where the lemma is in scope, and
+// `mono` reads every entry its client's world has with
+// `registered(MonoEntry)` (docs/registered-values-design.md). A client that
+// does not import `creal` sees none of `creal`'s entries and pays nothing
+// for them.
+//
+// This module holds only the entries' types, so a carrier's module can
+// import it without the tactic.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+
+// A monotonicity law: at `<` when `strict`, otherwise at `<=`, a goal whose
+// sides are both `op` applied, differing at most at the argument positions
+// `moves` (as the view lists them), is proved by `lemma` from its premises.
+record MonoLaw { strict: Bool, op: String, moves: List<Nat>, lemma: String }
+
+// A sign law: `0 <= op(…)` (or `0 < op(…)` when `strict`) by `lemma`.
+record SignLaw { strict: Bool, op: String, lemma: String }
+
+// The lemmas that replace a side by one it is `≈` to (`<=` left and right,
+// then `<`), for reading casts.
+record PushLaws { le_l: String, le_r: String, lt_l: String, lt_r: String }
+
+fn mono_law(strict: Bool, op: String, moves: List<Nat>, lemma: String) → MonoLaw { MonoLaw(strict, op, moves, lemma) }
+
+fn mono_sign(strict: Bool, op: String, lemma: String) → SignLaw { SignLaw(strict, op, lemma) }
+
+// An operation of a class carrier: the dictionary's argument at a position
+// (0 is the carrier, then the class's index: `OrderedField<A>(≈, <, <=, +,
+// *)` has `+` at 4), a field read off the dictionary (`A.inv`), or a global
+// generic over the class (`MonoidRel::range`, a sum).
+inductive ClassOp { Index(i: Nat), Field(name: String), Named(name: String) }
+
+record ClassLaw { strict: Bool, op: ClassOp, moves: List<Nat>, lemma: String }
+
+record ClassSign { strict: Bool, op: ClassOp, lemma: String }
+
+fn class_law(strict: Bool, op: ClassOp, moves: List<Nat>, lemma: String) → ClassLaw { ClassLaw(strict, op, moves, lemma) }
+
+fn class_sign(strict: Bool, op: ClassOp, lemma: String) → ClassSign { ClassSign(strict, op, lemma) }
+
+// One registry entry. Every name is a `name_of`.
+//
+// - `MonoOrder`: an ordered carrier, by its two orders: reflexivity of
+//   `<=`, `<` weakened to `<=`, and its push lemmas (`None` where its `≈`
+//   is `=` or it has none). One per carrier.
+// - `MonoRules`: laws and sign laws at the carrier whose `<=` is `le`. A
+//   carrier's rules may come in several entries, each where its lemmas are
+//   (`big_operator` adds the sums'); they are read in the registry's order,
+//   one entry's laws in the order it lists them, and the first law that
+//   covers a goal is the one applied. So an entry lists an operation's
+//   one-sided laws before its two-sided one, and an operation's laws stay in
+//   one entry.
+// - `MonoClass`: an ordered class, by where its dictionary lists `<` and
+//   `<=`, with the reflexivity, weakening and push lemmas applied at its
+//   dictionary. A field read's record is its first argument, so `A.inv(x)`
+//   moves at position 1.
+// - `MonoClassRules`: laws and sign laws at a dictionary of `class`, in
+//   several entries as a carrier's are.
+// - `MonoUnsub`: a carrier's subtraction, which is `x + -y` by definition,
+//   so a side `x - y` can meet a sum a cast pushed out.
+inductive MonoEntry {
+    MonoOrder(le: String, lt: String, reflexive: String, weaken: String, pushes: Option<PushLaws>),
+    MonoRules(le: String, laws: List<MonoLaw>, signs: List<SignLaw>),
+    MonoClass(class: String, lt: Nat, le: Nat, reflexive: String, weaken: String, pushes: PushLaws),
+    MonoClassRules(class: String, laws: List<ClassLaw>, signs: List<ClassSign>),
+    MonoUnsub(sub: String, add: String, neg: String),
+}
+
+// `Nat`'s laws, here because `nat` is below this module (`big_operator`
+// adds its sums').
+
+register def mono_nat_order: MonoEntry = MonoOrder(name_of(Nat::Le), name_of(Nat::Lt), name_of(Nat::le_refl), name_of(Nat::le_of_lt), None);
+
+register def mono_nat_rules: MonoEntry = MonoRules(name_of(Nat::Le), [
+    mono_law(False, name_of(Nat::add), [1], name_of(Nat::add_le_mono_l)),
+    mono_law(False, name_of(Nat::add), [0], name_of(Nat::add_le_mono_r)),
+    mono_law(False, name_of(Nat::add), [0, 1], name_of(Nat::add_le_mono)),
+    mono_law(False, name_of(Nat::mul), [1], name_of(Nat::mul_le_mono_l)),
+    mono_law(False, name_of(Nat::mul), [0], name_of(Nat::mul_le_mono_r)),
+    mono_law(False, name_of(Nat::mul), [0, 1], name_of(Nat::mul_le_mono)),
+    mono_law(False, name_of(Nat::pow), [1], name_of(Nat::pow_le_pow_r)),
+], []);

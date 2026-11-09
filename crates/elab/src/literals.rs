@@ -152,7 +152,10 @@ impl Elaborator {
     /// list-building route of its own. Read in `string`'s scope, which is
     /// what lets the characters build without `char` imported here.
     fn string_intro(&self, text: &str, span: Span) -> Option<(Expr, String)> {
-        let ctor = self.key_of(STRING_TYPE)?;
+        // In the closure is enough, as for a character literal's spec: a
+        // `name_of(p)` is a string in a module that imports a registry's
+        // types and not `string` (docs/registered-values-design.md).
+        let ctor = self.closure_key(STRING_TYPE)?;
         let module = key_module(&ctor).to_string();
         let chars = text
             .chars()

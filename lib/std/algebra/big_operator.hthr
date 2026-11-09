@@ -42,6 +42,7 @@ import order;
 import algebra_rel;
 import semiring;
 import ordered_field;
+import mono_laws;
 
 section<A: MonoidRel(≈, op)>(op as ∙: A → A → A) {
 
@@ -390,7 +391,7 @@ theorem LocatedAddGroup::range_abs_le(n: Nat, f, g: Nat → A):
     ((k: Nat) → Nat::Lt(k, n) → AbsLe(f(k), g(k))) → AbsLe(∑ k < n, f(k), ∑ k < n, g(k))
 {
     match n {
-        Zero => λ h => And(StrictOrder::le_of_same(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(A.unit)), StrictOrder::le_refl(A.unit)),
+        Zero => λ h => And(StrictOrder::le_of_same(A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero()), StrictOrder::le_refl(A.unit)),
         Succ(m) => λ h => LocatedAddGroup::abs_le_add(∑ k < m, f(k), f(m), ∑ k < m, g(k), g(m),
             LocatedAddGroup::range_abs_le(m, f, g, λ k hk => h(k, omega(hk))), h(m, m.lt_succ_self())),
     }
@@ -407,3 +408,65 @@ theorem Nat::range_le(n: Nat, f, g: Nat → Nat): ((k: Nat) → k < n → f(k) <
 theorem Int::range_le(n: Nat, f, g: Nat → Int): ((k: Nat) → k < n → f(k) <= g(k)) → MonoidRel::range(+, n, f) <= MonoidRel::range(+, n, g) {
     λ h => LocatedAddMonoid::range_le(n, f, g, h)
 }
+
+// ---------------------------------------------------------------------------
+// `mono`'s laws for sums (lib/std/tactic/mono_laws.hthr): a sum's terms move
+// termwise, at the carriers whose own rules live below this module and at
+// every located class.
+
+register def mono_nat_range: MonoEntry = MonoRules(name_of(Nat::Le), [
+    mono_law(False, name_of(MonoidRel::range), [2], name_of(Nat::range_le)),
+], []);
+
+register def mono_int_range: MonoEntry = MonoRules(name_of(Int::Le), [
+    mono_law(False, name_of(MonoidRel::range), [2], name_of(Int::range_le)),
+], []);
+
+register def mono_located_range: MonoEntry = MonoClassRules(name_of(LocatedAddMonoid), [
+    class_law(False, Named(name_of(MonoidRel::range)), [2], name_of(LocatedAddMonoid::range_le)),
+], [
+    class_sign(False, Named(name_of(MonoidRel::range)), name_of(LocatedAddMonoid::range_nonneg)),
+]);
+
+register def mono_located_group_range: MonoEntry = MonoClassRules(name_of(LocatedAddGroup), [
+    class_law(False, Named(name_of(MonoidRel::range)), [2], name_of(LocatedAddMonoid::range_le)),
+], [
+    class_sign(False, Named(name_of(MonoidRel::range)), name_of(LocatedAddMonoid::range_nonneg)),
+]);
+
+register def mono_ordered_semiring_range: MonoEntry = MonoClassRules(name_of(OrderedSemiring), [
+    class_law(False, Named(name_of(MonoidRel::range)), [2], name_of(LocatedAddMonoid::range_le)),
+], [
+    class_sign(False, Named(name_of(MonoidRel::range)), name_of(LocatedAddMonoid::range_nonneg)),
+]);
+
+register def mono_ordered_ring_range: MonoEntry = MonoClassRules(name_of(OrderedRing), [
+    class_law(False, Named(name_of(MonoidRel::range)), [2], name_of(LocatedAddMonoid::range_le)),
+], [
+    class_sign(False, Named(name_of(MonoidRel::range)), name_of(LocatedAddMonoid::range_nonneg)),
+]);
+
+register def mono_ordered_field_range: MonoEntry = MonoClassRules(name_of(OrderedField), [
+    class_law(False, Named(name_of(MonoidRel::range)), [2], name_of(LocatedAddMonoid::range_le)),
+], [
+    class_sign(False, Named(name_of(MonoidRel::range)), name_of(LocatedAddMonoid::range_nonneg)),
+]);
+
+// ---------------------------------------------------------------------------
+// `mono`'s laws at `Int` (lib/std/tactic/mono_laws.hthr): registered here
+// and not in `int`, which is below the tactics and `string`.
+
+register def mono_int_order: MonoEntry = MonoOrder(name_of(Int::Le), name_of(Int::Lt), name_of(Int::le_refl), name_of(Int::le_of_lt), None);
+
+register def mono_int_rules: MonoEntry = MonoRules(name_of(Int::Le), [
+    mono_law(False, name_of(Int::add), [1], name_of(Int::add_le_mono_l)),
+    mono_law(False, name_of(Int::add), [0], name_of(Int::add_le_mono_r)),
+    mono_law(False, name_of(Int::add), [0, 1], name_of(Int::add_le_mono)),
+    mono_law(False, name_of(Int::mul), [1], name_of(Int::mul_le_mono_l)),
+    mono_law(False, name_of(Int::mul), [0], name_of(Int::mul_le_mono_r)),
+    mono_law(True, name_of(Int::mul), [0], name_of(Int::mul_lt_mono_r)),
+], [
+    mono_sign(False, name_of(Int::abs), name_of(Int::abs_nonneg)),
+]);
+
+register def mono_int_unsub: MonoEntry = MonoUnsub(name_of(Int::sub), name_of(Int::add), name_of(Int::neg));

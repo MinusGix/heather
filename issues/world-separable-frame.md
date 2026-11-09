@@ -4,7 +4,7 @@ status: open
 labels: [effects,proofs,design]
 area: interaction-trees
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 A world is any function of the whole history, so a write to fd 1 may change
@@ -39,3 +39,7 @@ the type.
   statement.
 - **[[wp-view-separating-product]]** is the machine-level analogue for
   memory; nothing is shared but the shape.
+
+## Log
+
+- 2026-11-09: 2026-11-09: commuting operations at disjoint resources (trace equivalence) is filed as [[effect-independence]], shared with a reordering pass.

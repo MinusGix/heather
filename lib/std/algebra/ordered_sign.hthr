@@ -98,7 +98,7 @@ evidence theorem OrderedAddGroup::positive_neg({x: A}, hx: NegativeBy(<, <=, A.u
 evidence theorem OrderedAddGroup::negative_neg({x: A}, hx: PositiveBy(<, <=, A.unit, x) := infer):
     NegativeBy(<, <=, A.unit, A.inv(x))
 {
-    StrictOrder::lt_respects_r(A.inv(x), A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(x), OrderedAddGroup::neg_lt(A.unit, x, hx))
+    StrictOrder::lt_respects_r(A.inv(x), A.inv(A.unit), A.unit, OrderedAddGroup::neg_zero(), OrderedAddGroup::neg_lt(A.unit, x, hx))
 }
 
 }

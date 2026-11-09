@@ -199,6 +199,10 @@ pub(crate) struct Traits {
     /// (`nat::Nat::Lt`), each list in canonical (global-name) order
     /// (docs/positivity-evidence-design.md §6 A).
     evidence: HashMap<String, Vec<EvidenceRule>>,
+    /// Registered values (`register def x: T = e;`) by the qualified key of
+    /// their type `T`, each list in canonical (global-name) order: what
+    /// `registered(T)` reads (docs/registered-values-design.md).
+    registered: HashMap<String, Vec<String>>,
 }
 
 /// One `evidence theorem`: what `:= infer` may apply at a proposition goal.
@@ -384,6 +388,22 @@ impl Traits {
     /// The rules about `relation`, in canonical order.
     pub(crate) fn evidence_rules(&self, relation: &str) -> &[EvidenceRule] {
         self.evidence.get(relation).map_or(&[], Vec::as_slice)
+    }
+
+    pub(crate) fn commit_registered(&mut self, ty: String, global: String) {
+        let values = self.registered.entry(ty).or_default();
+        debug_assert!(!values.contains(&global));
+        let at = values.partition_point(|g| *g < global);
+        values.insert(at, global);
+    }
+
+    pub(crate) fn is_registered(&self, global: &str) -> bool {
+        self.registered.values().flatten().any(|g| g == global)
+    }
+
+    /// The values registered at the type `ty`, in canonical order.
+    pub(crate) fn registered(&self, ty: &str) -> &[String] {
+        self.registered.get(ty).map_or(&[], Vec::as_slice)
     }
 
     pub(crate) fn commit_designation(&mut self, key: DesigKey, info: DesignationInfo) {
@@ -854,6 +874,24 @@ pub(crate) fn op_index_symbol(name: &str) -> Option<&str> {
     let rest = name.strip_prefix("#op")?;
     let (sym, _) = rest.rsplit_once('@')?;
     (!sym.is_empty()).then_some(sym)
+}
+
+/// A callee's written class goal, its generated index binders shown as the
+/// symbols they were written with: `OrderedField<K>(≈, <, <=, +, *)`, not
+/// `OrderedField<K>(#op≈@0_0, …)`. `true` beside it when any binder was
+/// replaced.
+pub(crate) fn render_goal_symbols(written: &Ty, params: &[crate::ParamMeta]) -> (String, bool) {
+    let mut goal = render_ty(written);
+    let mut symbolic = false;
+    for p in params {
+        if let Some(symbol) = op_index_symbol(&p.name)
+            && goal.contains(&p.name)
+        {
+            goal = goal.replace(&p.name, symbol);
+            symbolic = true;
+        }
+    }
+    (goal, symbolic)
 }
 
 // -- renaming a parent's type parameters ------------------------------------

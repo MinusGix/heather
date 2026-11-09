@@ -222,8 +222,8 @@ theorem Ring::nat_cast_succ(n: Nat): Ring::nat_cast<A>(Succ(n)) ≈ Ring::nat_ca
     }
 }
 
-// Negation fixes zero. The point only pins `A`.
-theorem Ring::inv_unit(x: A): A.inv(A.unit) ≈ A.unit {
+// Negation fixes zero.
+theorem Ring::inv_unit(): A.inv(A.unit) ≈ A.unit {
     A.rel_sym(A.unit, A.inv(A.unit), GroupRel::inv_unique(+, A.unit, A.unit, A.unit_l(A.unit)))
 }
 
@@ -274,7 +274,7 @@ theorem Ring::nat_cast_mul(m, n: Nat): Ring::nat_cast<A>(Nat::mul(m, n)) ≈ Rin
 
 theorem Ring::int_cast_neg_of_nat(n: Nat): Ring::int_cast<A>(Int::negOfNat(n)) ≈ A.inv(Ring::nat_cast<A>(n)) {
     match n {
-        Zero => A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit<A>(A.unit)),
+        Zero => A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit<A>()),
         Succ(k) => A.rel_refl(A.inv(Ring::nat_cast<A>(Succ(k)))),
     }
 }
@@ -291,7 +291,7 @@ theorem Ring::int_cast_sub_nat_nat(m, n: Nat): Ring::int_cast<A>(Int::subNatNat(
             Zero => calc {
                 Ring::nat_cast<A>(Succ(k))
                     ≈ Ring::nat_cast<A>(Succ(k)) + A.unit := A.rel_sym(Ring::nat_cast<A>(Succ(k)) + A.unit, Ring::nat_cast<A>(Succ(k)), A.unit_r(Ring::nat_cast<A>(Succ(k)))),
-                    ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(A.unit) := rel_cong(A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit<A>(A.unit))),
+                    ≈ Ring::nat_cast<A>(Succ(k)) + A.inv(A.unit) := rel_cong(A.rel_sym(A.inv(A.unit), A.unit, Ring::inv_unit<A>())),
             },
             Succ(l) => calc {
                 Ring::int_cast<A>(Int::subNatNat(k, l))

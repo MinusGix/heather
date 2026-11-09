@@ -5,7 +5,7 @@ labels: [compiler,design,runtime,metaprogramming]
 area: heather-in-heather
 milestone: [nh-ownership]
 created: 2026-08-11
-updated: 2026-10-31
+updated: 2026-11-09
 ---
 
 Direction, user-stated 2026-08-11 (explicitly still very much theoretical): a Rust-like ownership model for a subset of Heather so that fast, low-level, memory-safe code WITH mathematical proofs is excellent to write; linear types and similar disciplines by the same route.
@@ -20,3 +20,4 @@ Prerequisites, all owned elsewhere: the reflected-AST layer (elabcode-abstractio
 - 2026-10-31: 2026-10-31: Requirement from item 6 of the fundamental-improvements memo (https://claude.ai/artifact/Y2Jo9y9Mgd52QdguvaL43s): the ownership judgment should produce the uniqueness facts that in-place update of let mut arrays and records needs, so the sequencing surface's pure updates (docs/sequencing-surface-design.md §8.2: let mut xs; xs.push(b); xs[i] := v) compile in place with no run-time reference count, and the runtime fn certificate states agreement with the pure function.
 - 2026-10-31: 2026-10-31: `docs/runtime-fn-setups-design.md` §11 checks the setup record against this setup: after R3 a body has no mutation, so ownership over `rt` is a uniqueness judgment over SSA versions (a consumed version is not used again; borrows are non-consuming uses), its lowering updates buffers in place where the default copies, and its `sound` can reuse the default's cases. Same `rt`, stricter `judge`, its own `lower` and `sound`.
 - 2026-11-05: gardener: cites a file it shares with [[native-constant-time]] (`docs/constant-time-survey.md`); [[native-secret-erasure]] (`docs/constant-time-survey.md`).
+- 2026-11-09: 2026-11-09: the composable resource the setup needs (exclusive ownership of a footprint, split and rejoined across a borrow) is filed as [[separation-algebra-ownership]] (docs/native-mathematics-survey.md §7).

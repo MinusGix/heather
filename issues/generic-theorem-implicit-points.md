@@ -1,6 +1,6 @@
 ---
 title: Let a class-generic theorem take its points implicitly, so a call reads like the carrier's own
-status: open
+status: closed
 labels: [elaboration,inference,traits,ergonomics,stdlib]
 area: language
 milestone: [math-classes]
@@ -91,3 +91,35 @@ that.
 - **[[type-owned-namespaces]]** owns whether `CReal`'s copies can become
   reachability through the instance. Assumed here: only that removing the
   copies needs generic theorems that are as easy to call.
+
+## Log
+
+- 2026-11-08: Re-traced in `apply_implicit`. The design note's cause was not
+  the one: the hypotheses' reads already solve the points and the indices
+  (`?< := <` by the postponed guess, or from the section's dictionary), and
+  what stayed open was the **carrier** `?K`, which only the slots' own types
+  mention (`?x : El ?K`, `?< : El ?K → El ?K → Type`). No read ever looked
+  at a solution's type, so the class goal never became meta-free and the
+  call was refused before search. `Elaborator::learn_from_solution_types`
+  (crates/elab/src/solution_check.rs), run by `retry_obligations` ahead of
+  the solver obligations, reads each solved slot's kernel type against its
+  declared type while that type is open. Route 1 then works as the ladder
+  already did: scope rung inside a section, designation at `Rat`/`CReal`.
+  Neither route of the Direction needed building.
+- A slot written while its type was open is judged when the type closes and
+  undone if it does not fit, so the negative control (hypotheses at `Rat` and
+  `CReal`) refuses with "could not infer the implicit argument `z`", as the
+  same call at a concrete carrier does.
+- The issue's probes are lib/_tests/std/algebra/ordered_field_tests.hthr's
+  `implicit_*`/`no_point*`. The dummy points are gone (`two_pos`,
+  `of_nat_nonneg`, `of_nat_pos`, `of_nat_lt_succ`, `Bisection::quarter`,
+  `neg_zero`, `one_apart_zero`, `Ring::inv_unit`, `lin_one_pos`,
+  `lin_num_pos`, `lin_num_nonneg`, `lin_zero_le`); `RingExpr::of_nat_*` keep
+  their atom list, which `ring`'s reflection builds positionally.
+- Moving `ordered_field.hthr` itself to implicit points (the third acceptance
+  bullet) is ~700 call rewrites plus `mono`'s positional lemma table, and is
+  filed as [[class-theorems-implicit-points]]. Closed.
+- 2026-11-09: merged over class-carrier numerals (#494). A point-free
+  theorem stated only in numerals (`two_pos(): 0 < 2`) does not name its
+  section's carrier, and the section check refuses it (sections-design
+  §4.1), so it is written `K.unit < 2`.

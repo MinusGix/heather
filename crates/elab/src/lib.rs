@@ -162,6 +162,7 @@ mod sealing;
 // value-graph counter that priced the naming, and the readback itself. Both
 // are inert unless `HEATHER_RB` is set.
 mod recursion;
+mod registered;
 mod representations;
 pub mod resolve;
 mod session;
@@ -1423,6 +1424,17 @@ impl application::ImplicitApplicationElab for Elaborator {
         self.solve_from_expected(cx, result, expected, n, sols, meta_doms, guesses, span)
     }
 
+    fn learn_from_solution_types(
+        &self,
+        cx: &Cx,
+        meta_doms: &[Type],
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    ) -> bool {
+        Elaborator::learn_from_solution_types(self, cx, meta_doms, n, sols, span)
+    }
+
     fn resolve_application_obligation(
         &self,
         cx: &Cx,
@@ -1461,7 +1473,7 @@ impl application::ImplicitApplicationElab for Elaborator {
         // goal the caller asked for. Operator notation in it is
         // issues/diagnostic-operator-resugaring.md's.
         let display = written
-            .map(traits::render_ty)
+            .map(|w| traits::render_goal_symbols(w, params).0)
             .unwrap_or_else(|| "a solver parameter".to_string());
         let applied = obligation
             .applied
@@ -1600,20 +1612,11 @@ impl application::ImplicitApplicationElab for Elaborator {
             .get(obligation.param)
             .map(|parameter| parameter.name.as_str())
             .unwrap_or("?");
-        let mut goal = params
+        let (goal, symbolic) = params
             .get(obligation.param)
             .and_then(|parameter| parameter.solver.as_deref())
-            .map(traits::render_ty)
-            .unwrap_or_else(|| "a solver parameter".to_string());
-        let mut symbolic = false;
-        for p in params {
-            if let Some(symbol) = traits::op_index_symbol(&p.name)
-                && goal.contains(&p.name)
-            {
-                goal = goal.replace(&p.name, symbol);
-                symbolic = true;
-            }
-        }
+            .map(|written| traits::render_goal_symbols(written, params))
+            .unwrap_or_else(|| ("a solver parameter".to_string(), false));
         if symbolic {
             return ElabError::Elab {
                 msg: format!(
@@ -2741,6 +2744,16 @@ impl Elaborator {
         // wrote its name.
         if self.scope.rule_citation.borrow().as_deref() == Some(name)
             && let Some((module, base)) = split_qual(name)
+            && self.names.declares(module, base)
+            && self.names.reaches(module)
+        {
+            return NameRes::Found(module.to_string());
+        }
+        // A registered value is cited by its key on the caller's behalf by
+        // `registered(T)` (docs/registered-values-design.md), as an evidence
+        // rule is above: its module need only be in the import closure.
+        if let Some((module, base)) = split_qual(name)
+            && self.traits.is_registered(name)
             && self.names.declares(module, base)
             && self.names.reaches(module)
         {
@@ -5588,6 +5601,10 @@ impl Elaborator {
             };
         }
         self.refuse_value_call(cx, e)?;
+        // `name_of(p)` and `registered(T)` (docs/registered-values-design.md).
+        if let Some(rewritten) = self.registry_rewrite(cx, e)? {
+            return self.elab_check_skel_slots_written(cx, &rewritten, expected, lvl, hint, skel, capture_slots);
+        }
         // A corecursive body's two positions, a node and a child
         // (docs/codata-elaborator-design.md §5.2).
         if let Some(site) = cx.corec.as_ref()
@@ -7816,6 +7833,9 @@ impl Elaborator {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         if let Some(rewritten) = self.owner_rewrite(cx, e)? {
+            return self.elab_infer_at(cx, &rewritten, expected);
+        }
+        if let Some(rewritten) = self.registry_rewrite(cx, e)? {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         if let ExprKind::App {
