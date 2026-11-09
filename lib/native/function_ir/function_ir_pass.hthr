@@ -12,10 +12,12 @@
 // whose output nothing after it reads before writing it again and that the
 // leaf does not leave live, is dropped.
 //
-// What the pass keeps (`List::optimised_runs`): from any valuation and
-// buffers, the optimised nodes run to the same buffers and to the same
-// value, at every width, in every word live after them; and the last node
-// writing each live word writes it at the same width
+// What the pass keeps (`List::optimised_runs`, proved in
+// function_ir_pass_diagrams by composing the two passes as simulation
+// diagrams): from any valuation and buffers, the optimised nodes run to the
+// same buffers and to the same value, at every width, in every word live
+// after them; and the last node writing each live word writes it at the same
+// width
 // (`List::optimised_last`), so the words a leaf settles into the
 // environment are the same where they are live (native_compile_pass). Byte
 // nodes are never folded or dropped, so a leaf keeps the label names it
@@ -506,26 +508,6 @@ theorem Node::fold_runs(self node: Node, facts: List<Fact>, values, other: Valua
     })(refl)
 }
 
-// A schedule folded runs as it did: the same buffers, the same valuation.
-theorem List::folded_runs(self nodes: List<Node>): (facts: List<Fact>) → (values, other: Valuation()) → (buffers: Buffers()) →
-    facts.Hold(values) → Valuation::Same(values, other) →
-    (run_nodes(nodes.folded(facts), other, buffers).buffers = run_nodes(nodes, values, buffers).buffers)
-        ∧ Valuation::Same(run_nodes(nodes, values, buffers).values, run_nodes(nodes.folded(facts), other, buffers).values) {
-    match nodes {
-        Nil => λ facts values other buffers held same => ⟨refl, same⟩,
-        Cons(node, rest) => λ facts values other buffers held same => {
-            let step = node.fold_runs(facts, values, other, buffers, held, same);
-            let after = node.run(values, buffers);
-            let folded = node.fold(facts).run(other, buffers);
-            let later = rest.folded_runs(node.learn(facts), after.values, folded.values, after.buffers, step.right.right, step.right.left);
-            j(sym(step.left), λ b _ =>
-                    (run_nodes(rest.folded(node.learn(facts)), folded.values, b).buffers = run_nodes(rest, after.values, after.buffers).buffers)
-                    ∧ Valuation::Same(run_nodes(rest, after.values, after.buffers).values, run_nodes(rest.folded(node.learn(facts)), folded.values, b).values),
-                later)
-        },
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The last write of a word
 
@@ -609,51 +591,6 @@ theorem Node::dropped(self node: Node, kept: List<Node>, out: List<Nat>, drop: (
     ⟨parts.left, Bool::is_true_not(kept.needs(out, node_output(node).id), parts.right)⟩
 }
 
-// Pruned, from valuations agreeing on what the kept nodes need, the nodes
-// run to the same buffers and the same words live after them.
-theorem List::pruned_runs(self nodes: List<Node>, out: List<Nat>): (values, other: Valuation()) → (buffers: Buffers()) →
-    ((i: Nat) → nodes.pruned(out).needs(out, i).IsTrue() → (w: Nat) → other(w, i) = values(w, i)) →
-    (run_nodes(nodes.pruned(out), other, buffers).buffers = run_nodes(nodes, values, buffers).buffers)
-        ∧ ((i: Nat) → Mem(i, out) → (w: Nat) → run_nodes(nodes.pruned(out), other, buffers).values(w, i) = run_nodes(nodes, values, buffers).values(w, i)) {
-    match nodes {
-        Nil => λ values other buffers agree => ⟨refl, λ i m w => agree(i, present_of_mem(i, out, m), w)⟩,
-        Cons(node, rest) => λ values other buffers agree => {
-            let o = node_output(node).id;
-            let kept = rest.pruned(out);
-            let after = node.run(values, buffers);
-            (match node.pure() && !kept.needs(out, o) as λ d => (node.pure() && !kept.needs(out, o)) = d →
-                    ((i: Nat) → List::needs(match d { True => kept, False => Cons(node, kept) }, out, i).IsTrue() → (w: Nat) → other(w, i) = values(w, i)) →
-                    (run_nodes(match d { True => kept, False => Cons(node, kept) }, other, buffers).buffers = run_nodes(rest, after.values, after.buffers).buffers)
-                    ∧ ((i: Nat) → Mem(i, out) → (w: Nat) →
-                        run_nodes(match d { True => kept, False => Cons(node, kept) }, other, buffers).values(w, i) = run_nodes(rest, after.values, after.buffers).values(w, i)) {
-                True => λ drop agree => {
-                    let gone = node.dropped(kept, out, drop);
-                    j(sym(node.run_pure(values, buffers, gone.left)), λ s _ =>
-                            (run_nodes(kept, other, buffers).buffers = run_nodes(rest, s.values, s.buffers).buffers)
-                            ∧ ((i: Nat) → Mem(i, out) → (w: Nat) → run_nodes(kept, other, buffers).values(w, i) = run_nodes(rest, s.values, s.buffers).values(w, i)),
-                        rest.pruned_runs(out, node.step(values), other, buffers, λ i needed w => match i.eq_dec(o) as λ _ => other(w, i) = node.step(values)(w, i) {
-                            Inl(e) => false_elim(gone.right(j(e, λ x _ => kept.needs(out, x).IsTrue(), needed))),
-                            Inr(ne) => trans(agree(i, needed, w), sym(Valuation::set_other(values, o, node.value(values), w, i, ne))),
-                        }))
-                },
-                False => λ _ agree => {
-                    let alike = node.runs_alike(values, other, buffers, λ id m w => agree(id, node.needs_read(kept, out, id, m), w));
-                    let ran = node.run(other, buffers);
-                    let later = rest.pruned_runs(out, after.values, ran.values, after.buffers, λ i needed w => match i.eq_dec(o) {
-                        Inl(e) => j(sym(e), λ x _ => ran.values(w, x) = after.values(w, x), alike.right(w)),
-                        Inr(ne) => trans(node.run_keeps(other, buffers, w, i, ne),
-                            trans(agree(i, node.needs_later(kept, out, i, ne, needed), w), sym(node.run_keeps(values, buffers, w, i, ne)))),
-                    });
-                    j(sym(alike.left), λ b _ =>
-                            (run_nodes(kept, ran.values, b).buffers = run_nodes(rest, after.values, after.buffers).buffers)
-                            ∧ ((i: Nat) → Mem(i, out) → (w: Nat) → run_nodes(kept, ran.values, b).values(w, i) = run_nodes(rest, after.values, after.buffers).values(w, i)),
-                        later)
-                },
-            })(refl, agree)
-        },
-    }
-}
-
 // A word live after the nodes that none writes is needed before them.
 theorem List::needs_unwritten(self nodes: List<Node>, out: List<Nat>, i: Nat, m: Mem(i, out)): nodes.last_width(i) = None → nodes.needs(out, i).IsTrue() {
     match nodes {
@@ -705,19 +642,9 @@ theorem List::pruned_last(self nodes: List<Node>, out: List<Nat>, i: Nat, m: Mem
 // A leaf's nodes, folded and pruned, given the words live after it.
 fn List::optimised(self nodes: List<Node>, out: List<Nat>) → List<Node> { nodes.folded([]).pruned(out) }
 
-// The theorem: from any valuation and buffers, the optimised nodes run to
-// the same buffers, and leave every word live after them as the nodes did
-// at every width.
-theorem List::optimised_runs(self nodes: List<Node>, out: List<Nat>, values: Valuation(), buffers: Buffers()):
-    (run_nodes(nodes.optimised(out), values, buffers).buffers = run_nodes(nodes, values, buffers).buffers)
-        ∧ ((i: Nat) → Mem(i, out) → (w: Nat) → run_nodes(nodes.optimised(out), values, buffers).values(w, i) = run_nodes(nodes, values, buffers).values(w, i)) {
-    let folded = nodes.folded([]);
-    let fold = nodes.folded_runs([], values, values, buffers, trivial, λ w id => refl);
-    let prune = folded.pruned_runs(out, values, values, buffers, λ i _ w => refl);
-    ⟨trans(prune.left, fold.left), λ i m w => trans(prune.right(i, m, w), fold.right(w, i))⟩
-}
-
-// And each of those words is last written at the width it was.
+// Each word live after the leaf is last written at the width it was. What
+// the optimised nodes run to is `List::optimised_runs`, the composite of
+// the two passes' simulation diagrams (function_ir_pass_diagrams).
 theorem List::optimised_last(self nodes: List<Node>, out: List<Nat>, i: Nat, m: Mem(i, out)): nodes.optimised(out).last_width(i) = nodes.last_width(i) {
     trans(nodes.folded([]).pruned_last(out, i, m), nodes.folded_last([], i))
 }

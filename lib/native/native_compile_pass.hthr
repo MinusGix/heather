@@ -28,6 +28,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_state;
 import function_ir_pass;
+import function_ir_pass_diagrams;
 import itree;
 import x86_64;
 import x86_64_block;

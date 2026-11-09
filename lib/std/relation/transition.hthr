@@ -384,13 +384,13 @@ fn PlusDiagram<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B �
 }
 
 // The target took a step, or took none and the index went down.
-fn Answers<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
+fn StarAnswer<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
     Plus(T, b, b2) ∨ (Star(T, b, b2) ∧ lt(j, i))
 }
 
 fn StarDiagram<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type) → Type {
     (i: I) → (a, a2: A) → (b: B) → Match(i, a, b) → S(a, a2) →
-        ∃ j: I, ∃ b2: B, Answers(T, lt, i, j, b, b2) ∧ Match(j, a2, b2)
+        ∃ j: I, ∃ b2: B, StarAnswer(T, lt, i, j, b, b2) ∧ Match(j, a2, b2)
 }
 
 theorem LockstepDiagram::plus<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type,
@@ -501,13 +501,13 @@ theorem PlusDiagram::compose<A, B, C>(S: A → A → Type, T: B → B → Type, 
 
 // What a star diagram answers along a plus run of its source: the target
 // took a step, or took none and the index went down `Plus(lt)`.
-fn AnswersAlong<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
+fn StarAnswerAlong<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
     Plus(T, b, b2) ∨ (Star(T, b, b2) ∧ Plus(lt, j, i))
 }
 
 // One more answer after an accumulated one.
-theorem AnswersAlong::then<B, I>(T: B → B → Type, lt: I → I → Type, i, j, k: I, b, b1, b2: B,
-    so_far: AnswersAlong(T, lt, i, j, b, b1), next: Answers(T, lt, j, k, b1, b2)): AnswersAlong(T, lt, i, k, b, b2) {
+theorem StarAnswerAlong::then<B, I>(T: B → B → Type, lt: I → I → Type, i, j, k: I, b, b1, b2: B,
+    so_far: StarAnswerAlong(T, lt, i, j, b, b1), next: StarAnswer(T, lt, j, k, b1, b2)): StarAnswerAlong(T, lt, i, k, b, b2) {
     match so_far {
         Inl(plus) => match next {
             Inl(more) => Inl(Plus::trans(T, b, b1, b2, plus, more)),
@@ -523,15 +523,15 @@ theorem AnswersAlong::then<B, I>(T: B → B → Type, lt: I → I → Type, i, j
 
 theorem StarDiagram::along<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
     diagram: StarDiagram(S, T, lt, Match), n: Nat):
-    (i, j: I) → (a, a2: A) → (b, b1: B) → AnswersAlong(T, lt, i, j, b, b1) → Match(j, a, b1) → StarN(S, n, a, a2) →
-        ∃ k: I, ∃ b2: B, AnswersAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
+    (i, j: I) → (a, a2: A) → (b, b1: B) → StarAnswerAlong(T, lt, i, j, b, b1) → Match(j, a, b1) → StarN(S, n, a, a2) →
+        ∃ k: I, ∃ b2: B, StarAnswerAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
     match n {
         Zero => λ i j a a2 b b1 so_far matched same =>
             Exists(j, Exists(b1, ⟨so_far, j(same, λ e _ => Match(j, e, b1), matched)⟩)),
         Succ(_, ih) => λ i j a a2 b b1 so_far matched run => {
             let next = diagram(j, a, run.witness, b1, matched, run.proof.left);
             ih(i, next.witness, run.witness, a2, b, next.proof.witness,
-                AnswersAlong::then(T, lt, i, j, next.witness, b, b1, next.proof.witness, so_far, next.proof.proof.left),
+                StarAnswerAlong::then(T, lt, i, j, next.witness, b, b1, next.proof.witness, so_far, next.proof.proof.left),
                 next.proof.proof.right, run.proof.right)
         },
     }
@@ -540,10 +540,10 @@ theorem StarDiagram::along<A, B, I>(S: A → A → Type, T: B → B → Type, lt
 // Along a plus run of the source.
 theorem StarDiagram::plus_runs<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
     diagram: StarDiagram(S, T, lt, Match), i: I, a, a2: A, b: B, matched: Match(i, a, b), run: Plus(S, a, a2)):
-    ∃ k: I, ∃ b2: B, AnswersAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
+    ∃ k: I, ∃ b2: B, StarAnswerAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
     let first = diagram(i, a, run.witness, b, matched, run.proof.left);
     let b1 = first.proof.witness;
-    let so_far: AnswersAlong(T, lt, i, first.witness, b, b1) = match first.proof.proof.left {
+    let so_far: StarAnswerAlong(T, lt, i, first.witness, b, b1) = match first.proof.proof.left {
         Inl(plus) => Inl(plus),
         Inr(stutter) => Inr(⟨stutter.left, Plus::one(lt, first.witness, i, stutter.right)⟩),
     };
@@ -580,7 +580,7 @@ theorem StarDiagram::compose<A, B, C, I, J>(S: A → A → Type, T: B → B → 
         let b2 = one.proof.witness;
         // Where the first diagram's target moved, the second follows it.
         let follow: Plus(T, b, b2) → ∃ k2: Pair<J, I>, ∃ c2: C,
-            Answers(U, λ x y => StarComposeLt(first_lt, second_lt, x, y), k, k2, c, c2) ∧
+            StarAnswer(U, λ x y => StarComposeLt(first_lt, second_lt, x, y), k, k2, c, c2) ∧
             StarCompose(first_match, second_match, k2, a2, c2) = λ moved => {
             let two = StarDiagram::plus_runs(T, U, second_lt, second_match, second, k.fst, b, b2, c,
                 matched.proof.right, moved);
