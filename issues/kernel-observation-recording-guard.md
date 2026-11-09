@@ -1,10 +1,10 @@
 ---
 title: Guard withheld recordings like unseal recordings, before early cutoff reads them
-status: open
+status: closed
 labels: [kernel,state-machine,caching]
 area: kernel
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 Give `withheld::record` the drop guard `unseal::Recording` has, ideally as one recording type for both, before early cutoff starts reading it.
@@ -24,3 +24,6 @@ One `Observation { unsealed, glued }` frame with `unseal`'s guard and nesting (o
 ## Related
 
 [[interface-body-early-cutoff]], [[theorem-witness-unfolding]], [[fmt-budget-state-nesting]] (the other thread-local state that a guard should restore whole).
+
+## Log
+- 2026-11-09: done before its first reader. `crates/kernel/src/recording.rs` holds the guard and close protocol once; `unseal` and `withheld` each keep their own frame stack over it. `withheld::record` now survives a caught panic in its span (unit test). Two stacks rather than one `Observation` frame: the callers ask different questions.

@@ -25,7 +25,7 @@ time come last.
 | 3 | Typing memo keys copy `Env`'s fields by hand | `typing.rs` `Scope`, `TyScope`, `SigScope` | none found | soundness (a stale memo hit) | **done** (§3, `Ambient`) | [[typing-memo-scope-key]] |
 | 4 | Ψ-bound `GlobalCache`, plus `Defs`' layer condition | `reduce.rs` `Defs`, `GlobalCache` | none found | soundness | yes (already filed) | [[kernel-psi-bound-cache]] |
 | 5 | The checker's mode | `typing.rs` `Tc` | none found | wrong mode's shortcut | yes, modest (already filed) | [[kernel-checker-mode-enum]] |
-| 6 | Observation recordings: one guarded, one not | `unseal.rs`, `withheld.rs` | none yet (the second has no reader) | stale incremental cache | yes, before its first reader | [[kernel-observation-recording-guard]] |
+| 6 | Observation recordings: one guarded, one not | `unseal.rs`, `withheld.rs` | none yet (the second has no reader) | stale incremental cache | **done** (§6, `recording.rs`) | [[kernel-observation-recording-guard]] |
 | 7 | `Debug`'s budget state in three thread-locals | `fmt.rs` `REMAINING`/`DEPTH`/`EXACT` | **a latent panic, reproduced** (§7) | the `{:?}`-is-safe rail | **done** (§7, `FmtState`) | [[fmt-budget-state-nesting]] |
 | 8 | Seven hand-paired native-depth counters | see §8 | none | time only | no | — |
 | 9 | Smaller ones | see §9 | none | — | no | — |
@@ -347,6 +347,16 @@ lost frame means a client is replayed over a withheld body it did observe.
 `Observation { unsealed, glued }` frame type with `unseal`'s guard, or
 `withheld` reusing `unseal`'s `Recording`/`close`. It is small, and it
 removes the second copy before it gets a reader.
+
+**Done (2026-11-09).** `crates/kernel/src/recording.rs` is the one
+protocol: a `Recording` guard over a thread-local stack of frames, whose
+drop closes its frame and any left open inside it, plus `note`. `unseal`
+and `withheld` each keep their own stack and use it, so `withheld::record`
+now closes its frame on a caught panic as `unseal::record` always did
+(test `withheld::tests::a_caught_panic_inside_a_recording_does_not_strand_its_frame`).
+The two stay separate recordings rather than one `Observation` frame,
+because their callers ask different questions (a cache keyed on opened
+proofs, early cutoff keyed on glued bodies).
 
 ## 7. `Debug`'s budget state in three thread-locals
 
