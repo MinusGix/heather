@@ -223,3 +223,13 @@ fn equal_word(a, b: BitVec(64)) -> Bool {
 }
 theorem of_nat_distinct(): equal_word(@BitVec::ofNat(64, 0x401000), @BitVec::ofNat(64, 0x401008)) = False { refl }
 theorem of_nat_same(): equal_word(@BitVec::ofNat(64, 0x401000 + 8), @BitVec::ofNat(64, 0x401008)) = True { refl }
+
+// `DecEq` at every width (issues/deceq-instance-member-ambiguity.md): a
+// generic decider finds the instance, and a receiver call `x.eq_dec(y)`
+// still means `BitVec::eq_dec`, the instance's own field.
+fn same_by_class<A: DecEq>(a, b: A) -> Bool { match A.eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
+theorem class_same_byte(): same_by_class(@BitVec::ofNat(8, 7), @BitVec::ofNat(8, 7)) = True { refl }
+theorem class_distinct_byte(): same_by_class(@BitVec::ofNat(8, 7), @BitVec::ofNat(8, 9)) = False { refl }
+fn same_by_receiver(a, b: BitVec(8)) -> Bool { match a.eq_dec(b) { Inl(_) => True, Inr(_) => False } }
+theorem receiver_same_byte(): same_by_receiver(@BitVec::ofNat(8, 7), @BitVec::ofNat(8, 7)) = True { refl }
+theorem receiver_open_width(n: Nat, x: BitVec(n)): x.eq_dec(x) = BitVec::eq_dec(x, x) { refl }

@@ -20,8 +20,10 @@
 // `Picks` matches on `rest` in its later case rather than asking for an
 // equation `rest = y :: r`, so a value of it reduces as its lists do and no
 // proof below rewrites a list. The price is that a lemma reading the later
-// case matches `rest` first, and the head case is written once as its own
-// lemma (`*_head`) that each branch cites.
+// case matches `rest` first, so its head case is written in both of
+// `rest`'s arms. That case eliminates the pattern variable `t` along
+// `t = rest` (`subst`, `rewrite`), which takes the matched list apart
+// into locals (issues/pattern-variables-not-rewritable.md).
 
 import logic;
 import nat;
@@ -74,19 +76,14 @@ theorem List::picks_mem<A>(x: A, self ys: List<A>): (rest: List<A>) → Picks(x,
     }
 }
 
-// Membership read back along an equation of lists.
-theorem List::mem_back<A>(a: A, t, rest: List<A>, e: t = rest, m: Mem(a, rest)): Mem(a, t) {
-    subst(e, m)
-}
-
 // What is left is in `ys`.
 theorem List::picks_mem_rest<A>(x, a: A, self ys: List<A>): (rest: List<A>) → Picks(x, ys, rest) → Mem(a, rest) → Mem(a, ys) {
     match ys {
         Nil => λ rest h => false_elim(h),
         Cons(_, t) => λ rest => match rest {
             Nil => λ h m => false_elim(m),
-            Cons(r, rs) => λ h m => match h {
-                Inl(hd) => Inr(List::mem_back(a, t, Cons(r, rs), hd.right, m)),
+            Cons(_, rs) => λ h m => match h {
+                Inl(hd) => Inr(subst(hd.right, m)),
                 Inr(later) => match m {
                     Inl(e) => Inl(trans(e, sym(later.left))),
                     Inr(mr) => Inr(t.picks_mem_rest(x, a, rs, later.right, mr)),
@@ -125,17 +122,13 @@ theorem List::picks_mem_split<A>(x, a: A, self ys: List<A>): (rest: List<A>) →
     }
 }
 
-theorem List::picks_len_head<A>(y: A, t, rest: List<A>, e: t = rest): Cons(y, t).len() = Succ(rest.len()) {
-    subst(e, refl)
-}
-
 theorem List::picks_len<A>(x: A, self ys: List<A>): (rest: List<A>) → Picks(x, ys, rest) → ys.len() = Succ(rest.len()) {
     match ys {
         Nil => λ rest h => false_elim(h),
-        Cons(y, t) => λ rest => match rest {
-            Nil => λ h => match h { Inl(hd) => List::picks_len_head(y, t, Nil, hd.right), Inr(no) => false_elim(no) },
-            Cons(r, rs) => λ h => match h {
-                Inl(hd) => List::picks_len_head(y, t, Cons(r, rs), hd.right),
+        Cons(_, t) => λ rest => match rest {
+            Nil => λ h => match h { Inl(hd) => subst(hd.right, refl), Inr(no) => false_elim(no) },
+            Cons(_, rs) => λ h => match h {
+                Inl(hd) => subst(hd.right, refl),
                 Inr(later) => Nat::cong_succ(t.picks_len(x, rs, later.right)),
             },
         },
@@ -145,13 +138,6 @@ theorem List::picks_len<A>(x: A, self ys: List<A>): (rest: List<A>) → Picks(x,
 // Picking twice in either order: `zs` less `y` is `q`, and `q` less `x` is
 // `q2`, so `zs` less `x` is some `w` that less `y` is `q2`. Transitivity's
 // one real step.
-theorem List::picks_swap_head<A>(x, y, z: A, zt, rs, q2: List<A>,
-    hd: y = z ∧ zt = rs, h2: Picks(x, rs, q2)):
-    Exists<List<A>>(λ w => Picks(x, Cons(z, zt), w) ∧ Picks(y, w, q2))
-{
-    Exists(Cons(z, q2), And(Inr(And(refl, rewrite(hd.right, h2))), Inl(And(hd.left, refl))))
-}
-
 theorem List::picks_swap<A>(x, y: A, self zs: List<A>): (q: List<A>) → Picks(y, zs, q) → (q2: List<A>) → Picks(x, q, q2) →
     Exists<List<A>>(λ w => Picks(x, zs, w) ∧ Picks(y, w, q2))
 {
@@ -159,8 +145,8 @@ theorem List::picks_swap<A>(x, y: A, self zs: List<A>): (q: List<A>) → Picks(y
         Nil => λ q h1 => false_elim(h1),
         Cons(z, zt) => λ q => match q {
             Nil => λ h1 q2 h2 => false_elim(h2),
-            Cons(r, rs) => λ h1 q2 => match h1 {
-                Inl(hd) => λ h2 => List::picks_swap_head(x, y, z, zt, Cons(r, rs), q2, hd, h2),
+            Cons(_, rs) => λ h1 q2 => match h1 {
+                Inl(hd) => λ h2 => Exists(Cons(z, q2), And(Inr(And(refl, rewrite(hd.right, h2))), Inl(And(hd.left, refl)))),
                 Inr(later) => match q2 {
                     Nil => λ h2 => match h2 {
                         Inl(xh) => Exists(zt, And(Inl(And(trans(xh.left, sym(later.left)), refl)),
@@ -229,15 +215,6 @@ theorem List::perm_of_picks<A>(x: A, self ys, rest: List<A>, h: Picks(x, ys, res
     Exists(rest, And(h, rest.perm_refl()))
 }
 
-// The head case of `perm_picks` below, once for both shapes of `r`.
-theorem List::perm_picks_head<A>(x, y: A, s, zs, r: List<A>, p: Perm(Cons(y, s), zs), hd: x = y ∧ s = r):
-    Exists<List<A>>(λ r2 => Picks(x, zs, r2) ∧ Perm(r, r2))
-{
-    match p {
-        Exists(q, hq) => Exists(q, And(rewrite(hd.left, hq.left), rewrite(sym(hd.right), hq.right))),
-    }
-}
-
 // A permutation carries a pick across: what `ys` leaves after `x`, `zs`
 // leaves too, up to a permutation.
 theorem List::perm_picks<A>(x: A, self ys: List<A>): (zs: List<A>) → Perm(ys, zs) → (r: List<A>) → Picks(x, ys, r) →
@@ -247,11 +224,15 @@ theorem List::perm_picks<A>(x: A, self ys: List<A>): (zs: List<A>) → Perm(ys, 
         Nil => λ zs p r h => false_elim(h),
         Cons(y, s) => λ zs p r => match r {
             Nil => λ h => match h {
-                Inl(hd) => List::perm_picks_head(x, y, s, zs, Nil, p, hd),
+                Inl(hd) => match p {
+                    Exists(q, hq) => Exists(q, And(rewrite(hd.left, hq.left), rewrite(sym(hd.right), hq.right))),
+                },
                 Inr(no) => false_elim(no),
             },
-            Cons(r0, rs) => λ h => match h {
-                Inl(hd) => List::perm_picks_head(x, y, s, zs, Cons(r0, rs), p, hd),
+            Cons(_, rs) => λ h => match h {
+                Inl(hd) => match p {
+                    Exists(q, hq) => Exists(q, And(rewrite(hd.left, hq.left), rewrite(sym(hd.right), hq.right))),
+                },
                 Inr(later) => match p {
                     Exists(q, hq) => match s.perm_picks(x, q, hq.right, rs, later.right) {
                         Exists(q2, h2) => match zs.picks_swap(x, y, q, hq.left, q2, h2.left) {
@@ -279,24 +260,17 @@ theorem List::perm_trans<A>(self xs: List<A>): (ys, zs: List<A>) → Perm(xs, ys
     }
 }
 
-// The head case of `picks_perm` below.
-theorem List::picks_perm_head<A>(x, y: A, t, r, s: List<A>, hd: x = y ∧ t = r, p: Perm(r, s)):
-    Perm(Cons(y, t), Cons(x, s))
-{
-    Exists(s, And(Inl(And(sym(hd.left), refl)), rewrite(hd.right, p)))
-}
-
 // Putting `x` back where it was picked from, after rearranging the rest.
 theorem List::picks_perm<A>(x: A, self ys: List<A>): (r: List<A>) → Picks(x, ys, r) → (s: List<A>) → Perm(r, s) → Perm(ys, Cons(x, s)) {
     match ys {
         Nil => λ r h => false_elim(h),
-        Cons(y, t) => λ r => match r {
+        Cons(_, t) => λ r => match r {
             Nil => λ h s p => match h {
-                Inl(hd) => List::picks_perm_head(x, y, t, Nil, s, hd, p),
+                Inl(hd) => Exists(s, And(Inl(And(sym(hd.left), refl)), rewrite(hd.right, p))),
                 Inr(no) => false_elim(no),
             },
-            Cons(r0, rs) => λ h s p => match h {
-                Inl(hd) => List::picks_perm_head(x, y, t, Cons(r0, rs), s, hd, p),
+            Cons(_, rs) => λ h s p => match h {
+                Inl(hd) => Exists(s, And(Inl(And(sym(hd.left), refl)), rewrite(hd.right, p))),
                 Inr(later) => match p {
                     Exists(s0, hs) => Exists(Cons(x, s0), And(
                         Inr(And(refl, rewrite(later.left, hs.left))),
@@ -434,24 +408,18 @@ theorem List::pick_succ_swap<P, Q, R, S>(d1: Or<P, Q>, d2: Or<R, S>, n: Nat):
     }
 }
 
-theorem List::occurrences_picks_head<A: DecEq>(x, y, a: A, t, rest: List<A>, ex: x = y, e: t = rest):
-    Cons(y, t).occurrences(a) = Cons(x, rest).occurrences(a)
-{
-    subst(ex, subst(e, refl))
-}
-
 theorem List::occurrences_picks<A: DecEq>(x, a: A, self ys: List<A>): (rest: List<A>) → Picks(x, ys, rest) →
     ys.occurrences(a) = Cons(x, rest).occurrences(a)
 {
     match ys {
         Nil => λ rest h => false_elim(h),
-        Cons(y, t) => λ rest => match rest {
+        Cons(_, t) => λ rest => match rest {
             Nil => λ h => match h {
-                Inl(hd) => List::occurrences_picks_head(x, y, a, t, Nil, hd.left, hd.right),
+                Inl(hd) => subst(hd.left, subst(hd.right, refl)),
                 Inr(no) => false_elim(no),
             },
             Cons(r, rs) => λ h => match h {
-                Inl(hd) => List::occurrences_picks_head(x, y, a, t, Cons(r, rs), hd.left, hd.right),
+                Inl(hd) => subst(hd.left, subst(hd.right, refl)),
                 Inr(later) => rewrite(later.left,
                     trans(cong_fn(λ (n: Nat) => or_pick(A.eq_dec(a, r), n, Succ(n)), t.occurrences_picks(x, a, rs, later.right)),
                           List::pick_succ_swap(A.eq_dec(a, r), A.eq_dec(a, x), rs.occurrences(a)))),

@@ -1,0 +1,63 @@
+// A `match` arm's pattern variables are locals for `subst` and occurrences
+// for `rewrite`: the arm binds them as projections of the matched value, so
+// both take the value apart into locals first
+// (issues/pattern-variables-not-rewritable.md). Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import list; import option;
+
+fn TailIs<A>(ys, rest: List<A>) → Type { match ys { Nil => False, Cons(_, t) => t = rest } }
+
+// A recursive constructor's child, at an open element type: `subst` along
+// `t = []` eliminates `t`, and `h` with it.
+theorem tail_nil_len<A>(ys: List<A>): TailIs(ys, Nil) → ys.len() = 1 {
+    match ys {
+        Nil => λ h => false_elim(h),
+        Cons(_, _) => λ h => subst(h, refl),
+    }
+}
+
+// The same child as `rewrite`'s left side, at a goal that shows it only
+// through the matched list.
+theorem tail_len<A>(ys, rest: List<A>): TailIs(ys, rest) → ys.len() = Succ(rest.len()) {
+    match ys {
+        Nil => λ h => false_elim(h),
+        Cons(_, t) => λ h => { let e: (t = rest) = h; rewrite(e, refl) },
+    }
+}
+
+// A payload field, eliminated in the other direction (`0 = v`): `v` is a
+// component of a non-recursive constructor's payload.
+fn ZeroInside(o: Option<Nat>) → Type { match o { None => False, Some(v) => 0 = v } }
+theorem zero_inside(o: Option<Nat>): ZeroInside(o) → o = Some(0) {
+    match o {
+        None => λ h => false_elim(h),
+        Some(_) => λ h => subst(h, refl),
+    }
+}
+
+// Three fields: the last one is two projections deep, and the goal
+// mentions it only through the matched value.
+inductive Triple { Triple(a: Nat, b: Nat, c: Nat) }
+fn Triple::third(p: Triple) → Nat { match p { Triple(_, _, c) => c } }
+fn LastIs(p: Triple, n: Nat) → Type { match p { Triple(_, _, c) => c = n } }
+theorem last_is(p: Triple): LastIs(p, 5) → p.third() = 5 {
+    match p {
+        Triple(_, _, c) => λ h => { let e: (c = 5) = h; rewrite(e, refl) },
+    }
+}
+theorem last_is_subst(p: Triple): LastIs(p, 5) → p.third() = 5 {
+    match p {
+        Triple(_, _, _) => λ h => subst(h, refl),
+    }
+}
+
+// A pattern variable on both sides is no local to eliminate, whichever
+// list is taken apart.
+fn TailIsSelf<A>(ys: List<A>) → Type { match ys { Nil => False, Cons(y, t) => t = Cons(y, t) } }
+// expect-error: neither side of
+theorem tail_cycle<A>(ys: List<A>): TailIsSelf(ys) → False {
+    match ys {
+        Nil => λ h => h,
+        Cons(_, t) => λ h => subst(h, trivial),
+    }
+}

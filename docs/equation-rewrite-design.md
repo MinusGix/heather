@@ -355,6 +355,23 @@ equation; neither side a local the other side does not mention (pointing at
 `rewrite`); a `t` that mentions a local depending on `x` (it would be
 reverted out from under itself); inference position.
 
+**Pattern variables** (`issues/pattern-variables-not-rewritable.md`). A
+`match` arm binds its fields as aliases of projections of the arm's value —
+`fst(sndʲ(v))` of a payload, the `nth` of a children vector — and the arm's
+goal and hypotheses mention `v` whole. So `h : t = []` for the arm's `t` has
+no local side. Where `subst` would refuse for that reason, a side that is a
+chain of pair projections from a local `v` (read at its weak-head form) has
+`v` **taken apart** first (`split_projection`, `crates/elab/src/subst_local.rs`):
+a context in which `v`'s components down to that side are binders `c₀ … c_L`,
+every later local mentioning `v` is bound again at `v := (c₀, …, c_L)`, the
+goal likewise, and the aliases that were components are the binders
+themselves. The elimination runs there, and the result has the projections
+of `v` substituted back for the `cᵢ`; its type is the goal up to Σ-η, which
+the kernel's surjective pairing decides. `rewrite` does the same where it
+would refuse a left side the goal does not mention: first the local the left
+side reduces to, then the split. Both fire only where the old route refused,
+so a proof that elaborated before is untouched.
+
 What it does not do: eliminate a variable bound in the global context or a
 `let` (aliases are inlined, so `h : k = 3` with `let k = n` is `h : n = 3`
 already), or search for which equation to use. It is an elaborator entry

@@ -51,9 +51,9 @@ theorem tie_two_outputs():
 
 // The lexicographic order: a prefix is below, a longer list is not below its
 // prefix, and the order is decided.
-theorem lex_prefix(): List::LexAt(Nat::Le, [1], [1, 2]) { And(Nat::le_refl(1), λ _ => trivial) }
-theorem lex_not_longer(): ¬List::LexAt(Nat::Le, [1, 2], [1]) { λ h => h.right(Nat::le_refl(1)) }
-theorem lex_first_differs(): List::LexAt(Nat::Le, [1, 9], [2]) { And(trivial, λ h => false_elim(h)) }
+theorem lex_prefix(): List::Lex(Nat::Le, [1], [1, 2]) { And(Nat::le_refl(1), λ _ => trivial) }
+theorem lex_not_longer(): ¬List::Lex(Nat::Le, [1, 2], [1]) { λ h => h.right(Nat::le_refl(1)) }
+theorem lex_first_differs(): List::Lex(Nat::Le, [1, 9], [2]) { And(trivial, λ h => false_elim(h)) }
 
 // Lists of lists sort by the instances `Lex` gets from its element order.
 theorem nested_sort(): List::insertion_sort(List::Lex(Nat::Le), [[2], [1, 5], [], [1]]) = [[], [1], [1, 5], [2]] { refl }

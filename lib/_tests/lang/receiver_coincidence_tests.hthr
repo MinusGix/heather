@@ -1,0 +1,30 @@
+// A receiver call that reaches a class member and a carrier function is one
+// call when the instance's field *is* that function, applied to the
+// instance's own binders — value binders (an index) as well as type
+// binders (issues/deceq-instance-member-ambiguity.md,
+// issues/receiver-dispatch-coinciding-readings.md). Tests, not library:
+// nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import nat;
+
+class Sized<A> { measure: A → Nat }
+
+record Row(n: Nat) { cells: [Nat; n] }
+fn Row::measure({n: Nat}, self r: Row(n)) → Nat { n }
+instance(n: Nat) Sized<Row(n)> { measure := Row::measure }
+
+fn row() → Row(3) { Row([4, 5, 6]) }
+theorem row_measure(): row().measure() = 3 { refl }
+theorem row_measure_open(n: Nat, r: Row(n)): r.measure() = n { refl }
+fn generic_measure<A: Sized>(a: A) → Nat { A.measure(a) }
+theorem row_by_class(): generic_measure(row()) = 3 { refl }
+
+// The control: a field that is another function of the same type is a
+// second reading, and the call is still refused as ambiguous.
+record Col(n: Nat) { cells: [Nat; n] }
+fn Col::measure({n: Nat}, self c: Col(n)) → Nat { n }
+fn Col::other_measure({n: Nat}, self c: Col(n)) → Nat { 0 }
+instance(n: Nat) Sized<Col(n)> { measure := Col::other_measure }
+fn col() → Col(2) { Col([1, 2]) }
+// expect-error: `measure` here is both a member of
+theorem col_measure(): col().measure() = 2 { refl }
