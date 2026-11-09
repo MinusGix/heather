@@ -48,3 +48,16 @@ alone), which display can tell from the callee's declared operand carrier.
 ## Log
 
 - 2026-11-09: Filed as the residue of [[section-symbols-capture-other-carriers]].
+- 2026-11-09: First step: a bare symbol a section's binder named now resolves
+  at the slot's own carrier when the expected type's first domain is a
+  nominal one (`binder_declines_operands`, bare direction), so the headers
+  read `OrderedRingHom<Rat, K>(map, ≈, <, <=, +, *, Rat::neg, 0, 1, ≈, <,
+  <=, +, *, K.inv, K.unit, K.multiplicative.unit)` (interval, float_real,
+  round_real, cast_tests; kernel verdicts replayed, so the terms are
+  identical). `-` has no bare prefix form, so `Rat::neg` stays. Leaving the
+  indices out altogether is open: proposed as index defaults
+  (`same_a: A → A → Type := ≈`, an omitted trailing index elaborated at the
+  use site), which is named-arguments-design §9's staged binder default
+  applied to a type's indices, with its free symbols resolved at the use
+  site rather than the declaration's.
+

@@ -165,7 +165,7 @@ theorem Format::faithful_error_bound(self F: Format, q: Rat, r: Finite(F), range
 }
 
 section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
-        hom: OrderedRingHom<Rat, K>(map, Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+        hom: OrderedRingHom<Rat, K>(map, ≈, <, <=, +, *, Rat::neg, 0, 1,
             ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
 
 // `R <= a·lo + b` with `0 <= a` and `lo` below `x`: `R <= a·x + b` at `x`.

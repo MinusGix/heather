@@ -213,7 +213,7 @@ theorem Float::same_of_agree({F: Format}, a, b: Float(F), h: a.agree(b).IsTrue()
 // `CReal::ofRat_hom` it is `RoundsToReal`.
 
 section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
-        hom: OrderedRingHom<Rat, K>(map, Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+        hom: OrderedRingHom<Rat, K>(map, ≈, <, <=, +, *, Rat::neg, 0, 1,
             ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
 
 // `P` holds at every rational of an interval whose images bracket `x`.
@@ -1111,7 +1111,7 @@ theorem Format::faithful_enclosed_ends(self F: Format, e: Enclosed, n, p, step: 
 // Over any ordered field: a passing box around `x` gives a faithful
 // rounding of `x`.
 section<K: OrderedField(≈, <, <=, +, *)>({map: Rat → K},
-        hom: OrderedRingHom<Rat, K>(map, Rat::Same, Rat::Lt, Rat::Le, Rat::add, Rat::mul, Rat::neg, 0, 1,
+        hom: OrderedRingHom<Rat, K>(map, ≈, <, <=, +, *, Rat::neg, 0, 1,
             ≈, <, <=, +, *, K.inv, K.unit, K.multiplicative.unit)) {
 
 // `r` is a faithful rounding of `x`: of every rational of an interval
