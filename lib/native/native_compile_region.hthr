@@ -17,6 +17,7 @@
 // region, so the command line stays where it was (`Target::kept_store`),
 // and none reaches the RSP slot.
 import native_source;
+import span_set;
 import native_compile;
 import native_alloc;
 import native_compile_facts;
@@ -232,11 +233,19 @@ theorem Layout::buffer_end(self layout: Layout, b, cap: Nat, found: layout.capac
     ends
 }
 
+// A buffer's range is the `b`th piece of the capacities packed after the
+// words, so the packing lemma places it.
+fn Layout::buffer_span(self layout: Layout, b, cap: Nat) → Span { Span::packed(8 * layout.words, layout.capacities, b, cap) }
+
 theorem Layout::buffer_apart(self layout: Layout, b, cap, other: Nat, found: layout.capacities.nth(b) = Some(cap), below: b < other):
     layout.buffer_offset(b) + cap <= layout.buffer_offset(other) {
-    let apart: ((8 * layout.words + layout.capacities.take(b).total()) + cap <= 8 * layout.words + layout.capacities.take(other).total()) =
-        omega(layout.capacities.total_take_apart(b, cap, other, found, below));
-    apart
+    Span::packed_before(8 * layout.words, layout.capacities, b, cap, other, found, below)
+}
+
+// Two different buffers share no byte.
+theorem Layout::buffers_disjoint(self layout: Layout, b, cap, c, cap2: Nat, found: layout.capacities.nth(b) = Some(cap),
+    found2: layout.capacities.nth(c) = Some(cap2), differ: b ≠ c): layout.buffer_span(b, cap).Disjoint(layout.buffer_span(c, cap2)) {
+    Span::packed_disjoint(8 * layout.words, layout.capacities, b, cap, c, cap2, found, found2, differ)
 }
 
 // The scratch range is one byte longer than the largest buffer, so a path

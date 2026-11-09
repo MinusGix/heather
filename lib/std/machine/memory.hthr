@@ -29,6 +29,7 @@ import bitvec;
 import bitvec_nat;
 import bitvec_bytes;
 import vector;
+import span_set;
 
 // ---------------------------------------------------------------------------
 // Address spaces
@@ -640,42 +641,104 @@ theorem BitVec::ofNat_offset_toNat(n, base, i: Nat, fits: base + i < Nat::pow(2,
     trans(BitVec::offset_toNat(n, BitVec::ofNat(base), i, omega(low, fits)), cong_fn<Nat, Nat>(λ k => k + i, low))
 }
 
+// ---------------------------------------------------------------------------
+// Numbered spaces: spans of addresses as spans of numbers
+
+// A space whose addresses carry numbers that tell them apart, and where an
+// offset that stays below `top` adds to the number. Below its top, then, a
+// span of addresses is the `Span` of its numbers
+// (lib/std/data/set/span_set.hthr), and whether two spans overlap is
+// decided by their endpoints.
+record Numbering<A>(space: Space<A>, top: Nat) {
+    number: A → Nat,
+    differ: (x, y: A) → number(x) ≠ number(y) → space.same(x, y) = False,
+    offset: (a: A) → (i: Nat) → number(a) + i < top → number(space.offset(a, i)) = number(a) + i,
+}
+
+// A span below the top does not overlap itself…
+theorem Numbering::spans_distinct<A>(space: Space<A>, top: Nat, self nb: Numbering<A>(space, top), a: A, k: Nat,
+    fits: nb.number(a) + k <= top): space.Distinct(a, k) {
+    λ p q order high => nb.differ(space.offset(a, q), space.offset(a, p), λ same =>
+        Span::offsets_differ(nb.number(a), p, q, nb.number(space.offset(a, q)), nb.number(space.offset(a, p)), order, same,
+            nb.offset(a, q, Span::offset_below(nb.number(a), k, q, top, high, fits)),
+            nb.offset(a, p, Span::offset_below(nb.number(a), k, p, top, Nat::lt_trans(p, q, k, order, high), fits))))
+}
+
+// …and two below the top whose numbers' spans are disjoint share no address.
+theorem Numbering::spans_apart<A>(space: Space<A>, top: Nat, self nb: Numbering<A>(space, top), a: A, k: Nat, b: A, l: Nat,
+    disjoint: Span(nb.number(a), k).Disjoint(Span(nb.number(b), l)), fa: nb.number(a) + k <= top, fb: nb.number(b) + l <= top):
+    space.Apart(a, k, b, l) {
+    λ p q in_a in_b => nb.differ(space.offset(a, p), space.offset(b, q), λ same =>
+        Span::disjoint_offsets(nb.number(a), k, nb.number(b), l, disjoint, p, q, in_a, in_b,
+            nb.number(space.offset(a, p)), nb.number(space.offset(b, q)), same,
+            nb.offset(a, p, Span::offset_below(nb.number(a), k, p, top, in_a, fa)),
+            nb.offset(b, q, Span::offset_below(nb.number(b), l, q, top, in_b, fb))))
+}
+
+// An address whose number is outside a span below the top is none of its
+// addresses: what a store to the span leaves alone (a footprint the store
+// is disjoint from, `Span::Disjoint` or `SpanSet::Disjoint`, keeps its cells).
+theorem Numbering::outside<A>(space: Space<A>, top: Nat, self nb: Numbering<A>(space, top), a: A, k: Nat, fits: nb.number(a) + k <= top,
+    x: A, out: ¬Span(nb.number(a), k).has(nb.number(x)).IsTrue()): (p: Nat) → p < k → space.same(space.offset(a, p), x) = False {
+    λ p inside => nb.differ(space.offset(a, p), x, λ same =>
+        out(Span::offset_has(nb.number(a), k, p, nb.number(space.offset(a, p)), nb.number(x), inside,
+            nb.offset(a, p, Span::offset_below(nb.number(a), k, p, top, inside, fits)), same)))
+}
+
+fn BitVec::numbering(n: Nat) → Numbering<BitVec(n)>(BitVec::space(n), Nat::pow(2, n)) {
+    Numbering(
+        number := λ (x: BitVec(n)) => x.toNat(),
+        differ := λ x y numbers => BitVec::space_laws(n).same_false(BitVec::space(n), x, y,
+            λ e => numbers(cong_fn<BitVec(n), Nat>(λ v => v.toNat(), e))),
+        offset := λ a i fits => BitVec::offset_toNat(n, a, i, fits),
+    )
+}
+
+// Naturals never wrap: every top numbers them.
+fn Nat::numbering(top: Nat) → Numbering<Nat>(Nat::space(), top) {
+    Numbering(
+        number := λ (x: Nat) => x,
+        differ := λ x y numbers => Nat::space_laws().same_false(Nat::space(), x, y, numbers),
+        offset := λ a i fits => refl,
+    )
+}
+
 theorem BitVec::space_distinct(n: Nat, a: BitVec(n), k: Nat, fits: a.toNat() + k <= Nat::pow(2, n)):
     BitVec::space(n).Distinct(a, k) {
-    λ p q order high => BitVec::space_laws(n).same_false(BitVec::space(n), a.iterate_increment(q), a.iterate_increment(p), λ same => {
-        let at_q = BitVec::offset_toNat(n, a, q, omega(high, fits));
-        let at_p = BitVec::offset_toNat(n, a, p, omega(order, high, fits));
-        let numbers: (a.iterate_increment(q).toNat() = a.iterate_increment(p).toNat()) = rewrite(same, refl);
-        false_elim(omega(numbers, at_q, at_p, order))
-    })
+    BitVec::numbering(n).spans_distinct(BitVec::space(n), Nat::pow(2, n), a, k, fits)
+}
+
+// Two machine-word spans below the top of the space whose numbers' spans
+// are disjoint share no address.
+theorem BitVec::space_apart_of(n: Nat, a: BitVec(n), k: Nat, b: BitVec(n), l: Nat,
+    disjoint: Span(a.toNat(), k).Disjoint(Span(b.toNat(), l)), fa: a.toNat() + k <= Nat::pow(2, n), fb: b.toNat() + l <= Nat::pow(2, n)):
+    BitVec::space(n).Apart(a, k, b, l) {
+    BitVec::numbering(n).spans_apart(BitVec::space(n), Nat::pow(2, n), a, k, b, l, disjoint, fa, fb)
 }
 
 theorem BitVec::space_apart(n: Nat, a: BitVec(n), k: Nat, b: BitVec(n), l: Nat,
     below: a.toNat() + k <= b.toNat(), fits: b.toNat() + l <= Nat::pow(2, n)): BitVec::space(n).Apart(a, k, b, l) {
-    λ p q in_a in_b => BitVec::space_laws(n).same_false(BitVec::space(n), a.iterate_increment(p), b.iterate_increment(q), λ same => {
-        let at_p = BitVec::offset_toNat(n, a, p, omega(in_a, below, fits));
-        let at_q = BitVec::offset_toNat(n, b, q, omega(in_b, fits));
-        let numbers: (a.iterate_increment(p).toNat() = b.iterate_increment(q).toNat()) = rewrite(same, refl);
-        false_elim(omega(numbers, at_p, at_q, in_a, below))
-    })
+    BitVec::space_apart_of(n, a, k, b, l, Span(a.toNat(), k).disjoint_of_before(Span(b.toNat(), l), below), omega(below, fits), fits)
 }
 
 theorem BitVec::space_apart_above(n: Nat, a: BitVec(n), k: Nat, b: BitVec(n), l: Nat,
     above: b.toNat() + l <= a.toNat(), fits: a.toNat() + k <= Nat::pow(2, n)): BitVec::space(n).Apart(a, k, b, l) {
-    λ p q in_a in_b => BitVec::space_laws(n).same_false(BitVec::space(n), a.iterate_increment(p), b.iterate_increment(q), λ same => {
-        let at_p = BitVec::offset_toNat(n, a, p, omega(in_a, fits));
-        let at_q = BitVec::offset_toNat(n, b, q, omega(in_b, above, fits));
-        let numbers: (a.iterate_increment(p).toNat() = b.iterate_increment(q).toNat()) = rewrite(same, refl);
-        false_elim(omega(numbers, at_p, at_q, in_b, above))
-    })
+    BitVec::space_apart_of(n, a, k, b, l, Span(a.toNat(), k).disjoint_of_after(Span(b.toNat(), l), above), fits, omega(above, fits))
 }
 
 theorem Nat::space_distinct(a, k: Nat): Nat::space().Distinct(a, k) {
-    λ p q order high => Nat::space_laws().same_false(Nat::space(), a + q, a + p, λ same => false_elim(omega(same, order)))
+    let fits: (a + k <= a + k) = Nat::le_refl(a + k);
+    Nat::numbering(a + k).spans_distinct(Nat::space(), a + k, a, k, fits)
+}
+
+theorem Nat::space_apart_of(a, k, b, l: Nat, disjoint: Span(a, k).Disjoint(Span(b, l))): Nat::space().Apart(a, k, b, l) {
+    let fa: (a + k <= a + k + b + l) = omega();
+    let fb: (b + l <= a + k + b + l) = omega();
+    Nat::numbering(a + k + b + l).spans_apart(Nat::space(), a + k + b + l, a, k, b, l, disjoint, fa, fb)
 }
 
 theorem Nat::space_apart(a, k, b, l: Nat, below: a + k <= b): Nat::space().Apart(a, k, b, l) {
-    λ p q in_a in_b => Nat::space_laws().same_false(Nat::space(), a + p, b + q, λ same => false_elim(omega(same, in_a, below)))
+    Nat::space_apart_of(a, k, b, l, Span(a, k).disjoint_of_before(Span(b, l), below))
 }
 
 // ---------------------------------------------------------------------------

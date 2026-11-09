@@ -35,6 +35,7 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("result", include_str!("../../../lib/std/core/result.hthr")),
     ("vector", include_str!("../../../lib/std/data/vector.hthr")),
     ("bitvec_bytes", include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr")),
+    ("span_set", include_str!("../../../lib/std/data/set/span_set.hthr")),
     ("memory", include_str!("../../../lib/std/machine/memory.hthr")),
     ("x86_64_byte_memory", include_str!("../../../lib/std/arch/x86_64/x86_64_byte_memory.hthr")),
     ("linux_x86_64_byte_memory", include_str!("../../../lib/std/os/linux/linux_x86_64_byte_memory.hthr")),
