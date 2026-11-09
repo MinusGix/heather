@@ -1,0 +1,102 @@
+// Member declarations on a mutual family's members
+// (issues/mutual-family-member-declarations.md): `fn D::f` and
+// `theorem D::f` on a member of a mutual group elaborate, dot calls on a
+// member's values resolve to them, and a cycle of member declarations over
+// the family is one structural group (docs/mutual-inductive-design.md §6),
+// as the same cycle of free functions is. Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import nat; import logic;
+
+inductive Tm { Bv(index: Nat), Node(op: Nat, args: Args) }
+inductive Args { ANil, ACons(binds: Nat, head: Tm, tail: Args) }
+
+// The issue's probe: two member declarations, each calling the other by a
+// method call on an arm's child.
+fn Tm::size(self t: Tm) → Nat { match t { Bv(_) => 1, Node(_, ts) => Succ(ts.size()) } }
+fn Args::size(self ts: Args) → Nat {
+    match ts { ANil => 0, ACons(_, t, rest) => t.size() + rest.size() }
+}
+
+// Dot calls from outside the group, at a literal and computed by `refl`.
+fn leaf(i: Nat) → Tm { Bv(i) }
+theorem size_leaf(): leaf(4).size() = 1 { refl }
+theorem size_node(): Node(0, ACons(0, Bv(1), ACons(2, Bv(3), ANil))).size() = 3 { refl }
+theorem size_args(): ACons(0, Bv(1), ANil).size() = 1 { refl }
+// The qualified spelling reaches the same declaration.
+theorem size_qualified(): Tm::size(Bv(0)) = 1 { refl }
+
+// A member with no group: one declaration, no recursion.
+fn Tm::is_var(self t: Tm) → Bool { match t { Bv(_) => True, Node(_, _) => False } }
+theorem is_var_bv(): Bv(2).is_var() = True { refl }
+
+// The cycle written with qualified calls instead of method calls.
+fn Tm::count(self t: Tm) → Nat { match t { Bv(_) => 1, Node(_, ts) => Args::count(ts) } }
+fn Args::count(self ts: Args) → Nat {
+    match ts { ANil => 0, ACons(_, t, rest) => Tm::count(t) + Args::count(rest) }
+}
+theorem count_node(): Node(0, ACons(0, Bv(1), ACons(2, Bv(3), ANil))).count() = 2 { refl }
+
+// A group with an extra parameter and the receiver not first: the method
+// call's receiver fills the `self` parameter.
+fn Tm::shift(by: Nat, self t: Tm) → Tm {
+    match t { Bv(i) => Bv(i + by), Node(o, ts) => Node(o, ts.shift(by)) }
+}
+fn Args::shift(by: Nat, self ts: Args) → Args {
+    match ts { ANil => ANil, ACons(b, t, rest) => ACons(b, t.shift(by), rest.shift(by)) }
+}
+theorem shift_node(): Node(0, ACons(0, Bv(1), ANil)).shift(2) = Node(0, ACons(0, Bv(3), ANil)) { refl }
+
+// A group mixing a member declaration and a free function.
+fn Tm::leaves(self t: Tm) → Nat { match t { Bv(_) => 1, Node(_, ts) => args_leaves(ts) } }
+fn args_leaves(ts: Args) → Nat { match ts { ANil => 0, ACons(_, t, rest) => t.leaves() + args_leaves(rest) } }
+theorem leaves_node(): Node(0, ACons(0, Bv(1), ANil)).leaves() = 1 { refl }
+
+// A group of member theorems over the family, citing each other by method
+// call: `count` and `leaves` agree.
+theorem Tm::count_leaves(self t: Tm): t.count() = t.leaves() {
+    match t { Bv(_) => refl, Node(_, ts) => ts.count_leaves() }
+}
+theorem Args::count_leaves(self ts: Args): ts.count() = args_leaves(ts) {
+    match ts {
+        ANil => refl,
+        ACons(_, t, rest) => {
+            let h: (t.count() + rest.count() = t.leaves() + args_leaves(rest))
+                = rewrite(t.count_leaves(), rest.count_leaves(), refl);
+            h
+        },
+    }
+}
+theorem count_leaves_use(t: Tm): t.count() = t.leaves() { t.count_leaves() }
+
+// A type-parameterised family: the members' carrier is the member at any
+// type argument.
+inductive PTm<O> { PBv(index: Nat), PNode(op: O, args: PArgs<O>) }
+inductive PArgs<O> { PNil, PCons(head: PTm<O>, tail: PArgs<O>) }
+
+fn PTm::size<O>(self t: PTm<O>) → Nat { match t { PBv(_) => 1, PNode(_, ts) => Succ(ts.size()) } }
+fn PArgs::size<O>(self ts: PArgs<O>) → Nat {
+    match ts { PNil => 0, PCons(t, rest) => t.size() + rest.size() }
+}
+theorem psize(): PNode(True, PCons(PBv(0), PNil)).size() = 2 { refl }
+
+// An indexed group: the member's index is a parameter, the receiver its
+// `self`.
+inductive Even : (n: Nat) → Type { EZ : Even(0), ES(n: Nat, o: Odd(n)) : Even(Succ(n)) }
+inductive Odd : (n: Nat) → Type { OS(n: Nat, e: Even(n)) : Odd(Succ(n)) }
+
+fn Even::half(n: Nat, self e: Even(n)) → Nat { match e { EZ => 0, ES(k, o) => o.half(k) } }
+fn Odd::half(n: Nat, self o: Odd(n)) → Nat { match o { OS(k, e) => Succ(e.half(k)) } }
+theorem half_two(): ES(1, OS(0, EZ)).half(2) = 1 { refl }
+
+// A member names a declaration the group does not hold: still refused by
+// the owner rule's message.
+// expect-error: `Tree` is not a type, a type former or a function in scope
+fn Tree::size(self t: Tm) → Nat { 0 }
+
+// A method call whose receiver the group's rewrite cannot place (here a
+// call's result) is left to ordinary dispatch, which cannot reach a member
+// declared in the same group; the refusal names the qualified spellings.
+fn args_id(a: Args) → Args { a }
+// expect-error: unbound name `far`: within the structural group `Tm::far`, `Args::far`, a method call reaches
+fn Tm::far(self t: Tm) → Nat { match t { Bv(_) => 1, Node(_, ts) => args_id(ts).far() } }
+fn Args::far(self ts: Args) → Nat { match ts { ANil => 0, ACons(_, t, _) => t.far() } }
