@@ -265,7 +265,9 @@ Two recurring bookkeeping shapes in analysis:
   it gets stuck on `a <= c → b <= c → a.max(b) <= c` with a model that
   sets `max(a, b) = 1`). Lean's `omega` adds the two defining facts per
   `min`/`max` atom, and so can ours: [omega-reads-min-max](../issues/omega-reads-min-max.md). It is a small,
-  sharp tactic fix.
+  sharp tactic fix. *Landed 2026-11-09* as a case split per read
+  (omega design §20); the library sweep is
+  [omega-max-min-sweep](../issues/omega-max-min-sweep.md).
 - **"ε/2 each."** `OrderedField::half`, `half_pos` and `half_add` are
   threaded through 135 uses, and `below_both`/`shrink` through 34. Part of
   this goes with §2 (`e / 2` and `linarith` reading it). The rest is the

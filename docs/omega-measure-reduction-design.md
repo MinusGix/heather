@@ -723,3 +723,31 @@ an `Int` constructor's payload, so a case equation `OfNat(x.toNat()) = x`
 settles the read it names. Probes: `guard_int_*` and `to_nat_*` in
 `lib/_tests/std/tactic/omega_tests.hthr`, `idrain`/`iclimb` in
 `lib/_tests/std/core/imperative_statements_tests.hthr`.
+
+## 20. `max` and `min` at Nat and Int (2026-11-09)
+
+`issues/omega-reads-min-max.md`. `a.max(b)` was an opaque atom, so a goal
+past two thresholds (`a <= c`, `b <= c` ⊢ `a.max(b) <= c`) had the model
+`a = b = c = 0, max(a, b) = 1`, and every proof that picks an index past
+two others cited `le_max_l`/`le_max_r` and `le_trans` by hand. Lean's
+`omega` adds the defining facts per atom; here the read is split as §16
+splits `a - b`, by the order of its arguments: `omega::nat_max_elim(a, b,
+…)` gives `a <= b` with `a.max(b) = b`, or `b <= a` with `a.max(b) = a`
+(`min` the other way round), bound as `__omega_mm{k}_case`/`_eq`. Each
+case's facts imply the issue's `a <= m`, `b <= m`, `m = a ∨ m = b`, and a
+split is already the shape the fallbacks take, so no disjunction is added
+to the problem. The four lemmas (`nat_max_elim`, `nat_min_elim`,
+`int_max_elim`, `int_min_elim`, `omega.hthr`) cite `max_eq_l`/`max_eq_r`
+and `min_eq_l`/`min_eq_r` from `nat.hthr`/`int.hthr`; the certificate
+never unfolds `Nat::max`'s recursion or `Int::max`'s `if`.
+
+`split_max_min` runs after `split_int_to_nat`, under the same
+settle-by-spelling rule and limit of six; its search enters applications
+and an `Int` constructor's payload. Like the other splits it is only in
+the attempt that answers and only after CutSat found a model, so a goal
+that mentions no `max`/`min` gets no new atom, branch or certificate step.
+A read whose arguments omega cannot spell (an `Exists` witness projected
+out of a section's dictionary, as in `Converges::mul`) is not reached
+either; that is the fact reader's limit, not the split's. Probes:
+`max_*`, `le_min_bare`, `min_add_max`, `int_m*_*` and the refused controls
+`max_le_left`/`int_min_ge_left` in `lib/_tests/std/tactic/omega_tests.hthr`.

@@ -231,6 +231,27 @@ theorem to_nat_in_fact(x: Int, n: Nat, h: x.toNat() = n + 2): OfNat(2) <= x { om
 // expect-error: __omega_tonat
 theorem to_nat_pred_lt_unguarded(x: Int): (x - OfNat(1)).toNat() < x.toNat() { omega }
 
+// `a.max(b)` and `a.min(b)`, at `Nat` and `Int`, are split by the order of
+// their arguments: `a <= b` with the read `b` (`max`) or `a` (`min`), or
+// `b <= a` with the other (issues/omega-reads-min-max.md).
+theorem max_le_bare(a, b, c: Nat, h1: a <= c, h2: b <= c): a.max(b) <= c { omega }
+theorem le_min_bare(a, b, c: Nat, h1: c <= a, h2: c <= b): c <= a.min(b) { omega }
+theorem max_bounds(a, b: Nat): a <= a.max(b) ∧ b <= a.max(b) { omega }
+theorem min_add_max(a, b: Nat): a.min(b) + a.max(b) = a + b { omega }
+// In a fact, past two thresholds as a sequence's index is, and nested.
+theorem max_in_fact(a, b, n: Nat, h: a.max(b) + 1 <= n): a < n ∧ b < n { omega }
+theorem max_nested(a, b, c: Nat): a.max(b).max(c) = a.max(b.max(c)) { omega }
+theorem max_of_sub(a, b: Nat): a - b <= (a - b).max(b) { omega }
+// At `Int`, and mixing `min` with `-`.
+theorem int_max_ge(a, b: Int): a + OfNat(0) <= a.max(b) { omega }
+theorem int_min_sub(a, b: Int): OfNat(0) <= a - a.min(b) ∧ OfNat(0) <= b - a.min(b) { omega }
+theorem int_max_neg_min(a, b: Int): -(a.max(b)) = (-a).min(-b) { omega }
+// Control: at `b < a` the bound fails, and the refusal names the case.
+// expect-error: __omega_mm0_case
+theorem max_le_left(a, b: Nat): a.max(b) <= a { omega }
+// expect-error: __omega_mm0_case
+theorem int_min_ge_left(a, b: Int): a <= a.min(b) { omega }
+
 // `omega` is a checking form: where nothing is expected it says so and how
 // to state the goal, not "unbound name"
 // (issues/checking-tactic-in-inference-position-diagnostic.md).

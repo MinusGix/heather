@@ -1358,6 +1358,10 @@ theorem Nat::max_eq_r(self a: Nat): (b: Nat) → a <= b → a.max(b) = b {
     }
 }
 
+theorem Nat::max_eq_l(self a, b: Nat, above: b <= a): a.max(b) = a {
+    Nat::le_antisym(a.max(b), a, a.max_le(b, a, a.le_refl(), above), a.le_max_l(b))
+}
+
 theorem Nat::min_eq_l(a: Nat): (b: Nat) → a <= b → a.min(b) = a {
     match a {
         Zero => λ b h => refl,
