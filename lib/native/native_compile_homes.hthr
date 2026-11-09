@@ -75,15 +75,10 @@ theorem read_gpr_other(register, query: Gpr, value: BitVec(64), g: Gprs, differ:
 
 // A register absent from a list is apart from its head, and from the rest.
 theorem Gpr::absent_head(self register: Gpr, other: Gpr, rest: List<Gpr>, absent: register.absent_from(Cons(other, rest)).IsTrue()):
-    other.same(register) = False {
-    let parts = Bool::is_true_and(!register.same(other), register.absent_from(rest), absent);
-    trans(other.same_comm(register), Bool::false_of_not(register.same(other), parts.left))
-}
+    other.same(register) = False { by sets() }
 
 theorem Gpr::absent_rest(self register: Gpr, other: Gpr, rest: List<Gpr>, absent: register.absent_from(Cons(other, rest)).IsTrue()):
-    register.absent_from(rest).IsTrue() {
-    Bool::is_true_and(!register.same(other), register.absent_from(rest), absent).right
-}
+    register.absent_from(rest).IsTrue() { by sets() }
 
 // ---------------------------------------------------------------------------
 // Sets of words as lists
@@ -297,32 +292,33 @@ theorem Homes::used(self homes: Homes, id, k: Nat, at: homes.home(id) = InReg(k)
     homes.of.home_used(homes.loops, id, k, at)
 }
 
-// A register outside the pool is no home's.
-theorem home_register_apart(x: Gpr, outside: x.absent_from(home_pool()).IsTrue(), k: Nat): home_register(k).same(x) = False {
-    let r13 = x.absent_rest(R12, [R13, R14, R15, Rbp, R10], outside);
-    let r14 = x.absent_rest(R13, [R14, R15, Rbp, R10], r13);
-    let r15 = x.absent_rest(R14, [R15, Rbp, R10], r14);
-    let rbp = x.absent_rest(R15, [Rbp, R10], r15);
-    let r10 = x.absent_rest(Rbp, [R10], rbp);
+// Every home register is one of the pool (past the pool, `R12`).
+theorem home_register_pooled(k: Nat): Mem(home_register(k), home_pool()) {
     match k {
-        Zero => x.absent_head(R12, [R13, R14, R15, Rbp, R10], outside),
+        Zero => Inl(refl),
         Succ(k1) => match k1 {
-            Zero => x.absent_head(R13, [R14, R15, Rbp, R10], r13),
+            Zero => Inr(Inl(refl)),
             Succ(k2) => match k2 {
-                Zero => x.absent_head(R14, [R15, Rbp, R10], r14),
+                Zero => Inr(Inr(Inl(refl))),
                 Succ(k3) => match k3 {
-                    Zero => x.absent_head(R15, [Rbp, R10], r15),
+                    Zero => Inr(Inr(Inr(Inl(refl)))),
                     Succ(k4) => match k4 {
-                        Zero => x.absent_head(Rbp, [R10], rbp),
+                        Zero => Inr(Inr(Inr(Inr(Inl(refl))))),
                         Succ(k5) => match k5 {
-                            Zero => x.absent_head(R10, [], r10),
-                            Succ(_) => x.absent_head(R12, [R13, R14, R15, Rbp, R10], outside),
+                            Zero => Inr(Inr(Inr(Inr(Inr(Inl(refl)))))),
+                            Succ(_) => Inl(refl),
                         },
                     },
                 },
             },
         },
     }
+}
+
+// A register outside the pool is no home's.
+theorem home_register_apart(x: Gpr, outside: x.absent_from(home_pool()).IsTrue(), k: Nat): home_register(k).same(x) = False {
+    let m = home_register_pooled(k);
+    by sets()
 }
 
 theorem List::uses_outside(self of: List<Home>, x: Gpr, outside: x.absent_from(home_pool()).IsTrue()): of.homes_use(x) = False {
@@ -340,27 +336,7 @@ theorem Homes::unused(self homes: Homes, x: Gpr, outside: x.absent_from(home_poo
     homes.of.uses_outside(x, outside)
 }
 
-theorem home_register_mem(k: Nat): k < 6 → Mem(home_register(k), home_pool()) {
-    match k {
-        Zero => λ _ => Inl(refl),
-        Succ(k1) => match k1 {
-            Zero => λ _ => Inr(Inl(refl)),
-            Succ(k2) => match k2 {
-                Zero => λ _ => Inr(Inr(Inl(refl))),
-                Succ(k3) => match k3 {
-                    Zero => λ _ => Inr(Inr(Inr(Inl(refl)))),
-                    Succ(k4) => match k4 {
-                        Zero => λ _ => Inr(Inr(Inr(Inr(Inl(refl))))),
-                        Succ(k5) => match k5 {
-                            Zero => λ _ => Inr(Inr(Inr(Inr(Inr(Inl(refl)))))),
-                            Succ(_) => λ no => false_elim(no),
-                        },
-                    },
-                },
-            },
-        },
-    }
-}
+theorem home_register_mem(k: Nat): k < 6 → Mem(home_register(k), home_pool()) { λ _ => home_register_pooled(k) }
 
 // ---------------------------------------------------------------------------
 // The pool's registers, read

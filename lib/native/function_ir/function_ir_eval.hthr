@@ -1392,6 +1392,25 @@ theorem absent_set_law(): SetBitLaw<Nat>(absent, True) {
 
 register def absent_set_entry: SetBitEntry = SetBitEntry(name_of(absent), name_of(absent_set_law), True, 0);
 
+// `a.matches(b)` is `a = b` and `a.differs(b)` its negation, so `sets`
+// reads both as equations.
+theorem Nat::matches_reflects(self a, b: Nat): Reflects(a = b, a.matches(b)) {
+    match a.eq_dec(b) as λ d => Reflects(a = b, match d { Inl(_) => True, Inr(_) => False }) {
+        Inl(e) => And(λ _ => e, λ (no: True = False) => absurd(no)),
+        Inr(ne) => And(λ (no: False = True) => absurd(no), λ _ => ne),
+    }
+}
+
+theorem Nat::differs_reflects(self a, b: Nat): Reflects(a = b, !a.differs(b)) {
+    match a.eq_dec(b) as λ d => Reflects(a = b, Bool::not(match d { Inl(_) => False, Inr(_) => True })) {
+        Inl(e) => And(λ _ => e, λ (no: True = False) => absurd(no)),
+        Inr(ne) => And(λ (no: False = True) => absurd(no), λ _ => ne),
+    }
+}
+
+register def matches_set_entry: SetEqEntry = SetEqEntry(name_of(Nat::matches), name_of(Nat::matches_reflects), False, 0);
+register def differs_set_entry: SetEqEntry = SetEqEntry(name_of(Nat::differs), name_of(Nat::differs_reflects), True, 0);
+
 // `disjoint(xs, ys)`: every element of `ys` is absent from `xs`.
 register def disjoint_set_entry: SetRelEntry = SetRelEntry(name_of(disjoint), name_of(disjoint_mem), name_of(disjoint_of), 0);
 

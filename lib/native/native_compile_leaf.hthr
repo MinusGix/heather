@@ -44,25 +44,16 @@ import logic;
 import nat;
 import option;
 import omega;
+import set_tactic;
 
 // ---------------------------------------------------------------------------
 // Registers apart
 
 theorem Gpr::absent_first(self register: Gpr, other: Gpr, rest: List<Gpr>, absent: register.absent_from(Cons(other, rest)).IsTrue()):
-    register.same(other) = False {
-    Bool::false_of_not(register.same(other), Bool::is_true_and(!register.same(other), register.absent_from(rest), absent).left)
-}
+    register.same(other) = False { by sets() }
 
 // A register absent from a list is apart from each of it.
-theorem Gpr::absent_mem(self x: Gpr, registers: List<Gpr>): x.absent_from(registers).IsTrue() → (r: Gpr) → Mem(r, registers) → x.same(r) = False {
-    match registers {
-        Nil => λ _ r never => false_elim(never),
-        Cons(other, rest) => λ absent r m => match m {
-            Inl(e) => j(sym(e), λ y _ => x.same(y) = False, x.absent_first(other, rest, absent)),
-            Inr(later) => x.absent_mem(rest, x.absent_rest(other, rest, absent), r, later),
-        },
-    }
-}
+theorem Gpr::absent_mem(self x: Gpr, registers: List<Gpr>): x.absent_from(registers).IsTrue() → (r: Gpr) → Mem(r, registers) → x.same(r) = False { by sets() }
 
 // Ports in their registers stay there while those registers do.
 theorem ports_at_same(values: Valuation(), ports: List<Port>): (registers: List<Gpr>) → (g, g2: Gprs) →

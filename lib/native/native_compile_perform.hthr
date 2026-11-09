@@ -46,6 +46,8 @@ import logic;
 import nat;
 import option;
 import omega;
+import set_solve;
+import set_ops;
 import set_tactic;
 
 // ---------------------------------------------------------------------------
@@ -672,6 +674,30 @@ fn Gprs::KeepsOutside(self g2: Gprs, g: Gprs, registers: List<Gpr>) → Type {
 fn gprs_outside(registers: List<Gpr>, pool: List<Gpr>) → Bool {
     match registers { Nil => True, Cons(register, rest) => register.absent_from(pool) && gprs_outside(rest, pool) }
 }
+
+theorem gprs_outside_mem(registers, pool: List<Gpr>): gprs_outside(registers, pool).IsTrue() → (r: Gpr) → Mem(r, registers) → r.absent_from(pool).IsTrue() {
+    match registers {
+        Nil => λ _ r never => false_elim(never),
+        Cons(x, rest) => λ h r m => {
+            let parts = Bool::is_true_and(x.absent_from(pool), gprs_outside(rest, pool), h);
+            match m {
+                Inl(e) => j(sym(e), λ y _ => y.absent_from(pool).IsTrue(), parts.left),
+                Inr(later) => gprs_outside_mem(rest, pool, parts.right, r, later),
+            }
+        },
+    }
+}
+
+theorem gprs_outside_of(registers, pool: List<Gpr>): ((r: Gpr) → Mem(r, registers) → r.absent_from(pool).IsTrue()) → gprs_outside(registers, pool).IsTrue() {
+    match registers {
+        Nil => λ _ => trivial,
+        Cons(x, rest) => λ h => Bool::is_true_and_intro(x.absent_from(pool), gprs_outside(rest, pool),
+            h(x, Inl(refl)), gprs_outside_of(rest, pool, λ y m => h(y, Inr(m)))),
+    }
+}
+
+// `gprs_outside(registers, pool)`: no register of the list is in the pool.
+register def gprs_outside_set_entry: SetRelEntry = SetRelEntry(name_of(gprs_outside), name_of(gprs_outside_mem), name_of(gprs_outside_of), 0);
 
 // `Prog::words_to` into registers no word lives in, distinct and apart from
 // RBX: the words held, the registers hold them, and nothing else but RBX moves.

@@ -88,6 +88,8 @@ import list;
 import logic;
 import nat;
 import option;
+import set_solve;
+import set_ops;
 
 // ---------------------------------------------------------------------------
 // The layout
@@ -324,6 +326,28 @@ theorem Layout::of_taken(low: BitVec(64), words: Nat, capacities: List<Nat>, hom
 fn Gpr::absent_from(self register: Gpr, registers: List<Gpr>) → Bool {
     match registers { Nil => True, Cons(other, rest) => !register.same(other) && register.absent_from(rest) }
 }
+
+// `absent_from` is non-membership and `same` equality, so `sets` reads
+// both over register pools.
+theorem Gpr::absent_from_reflects(self x: Gpr, s: List<Gpr>): Reflects(Mem(x, s), !x.absent_from(s)) {
+    match s {
+        Nil => And(λ (no: False = True) => absurd(no), λ _ (m: Mem(x, Nil)) => m),
+        Cons(o, rest) => (match x.same(o) as λ c => x.same(o) = c → Reflects(Mem(x, Cons(o, rest)), !(!c && x.absent_from(rest))) {
+            True => λ same => And(λ _ => Inl(x.same_sound(o, same)), λ (no: True = False) => absurd(no)),
+            False => λ same => {
+                let r = x.absent_from_reflects(rest);
+                let ne: ¬(x = o) = x.same_reflects(o).right(same);
+                And(λ h => Inr(r.left(h)), λ h (m: Mem(x, Cons(o, rest))) => match m { Inl(e) => ne(e), Inr(later) => r.right(h)(later) })
+            },
+        })(refl),
+    }
+}
+
+theorem Gpr::absent_set_law(): SetBitLaw<Gpr>(Gpr::absent_from, True) { λ x s => x.absent_from_reflects(s) }
+
+register def gpr_absent_set_entry: SetBitEntry = SetBitEntry(name_of(Gpr::absent_from), name_of(Gpr::absent_set_law), True, 0);
+register def gpr_same_set_entry: SetEqEntry = SetEqEntry(name_of(Gpr::same), name_of(Gpr::same_reflects), False, 0);
+
 fn gprs_distinct(registers: List<Gpr>) → Bool {
     match registers { Nil => True, Cons(register, rest) => register.absent_from(rest) && gprs_distinct(rest) }
 }

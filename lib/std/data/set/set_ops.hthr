@@ -34,3 +34,8 @@ record SetBitEntry { op: String, law: String, negated: Bool, implicits: Nat }
 // spelling), and `intro(a, b, h)` proves `f(a, b).IsTrue()` from that same
 // function type. `implicits` is as for `SetOpEntry`.
 record SetRelEntry { op: String, elim: String, intro: String, implicits: Nat }
+
+// A Boolean spelling of equality between two elements by name, its law (a
+// `SetEqLaw`, by `name_of`), whether the law reads the negation, and the
+// implicit parameters, as for `SetBitEntry`.
+record SetEqEntry { op: String, law: String, negated: Bool, implicits: Nat }
