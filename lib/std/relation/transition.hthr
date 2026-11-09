@@ -31,6 +31,7 @@
 // The tree-side partner (`itree_sim.hthr`, `Program::Simulates`) relates
 // trees to states and stays separate.
 
+import list;
 import logic;
 import nat;
 import pair;
@@ -365,6 +366,50 @@ theorem Star::stuck_determined<A>(R: A → A → Type, det: Deterministic(R), a,
 theorem Plus::determined_step<A>(R: A → A → Type, det: Deterministic(R), a, b, c: A,
     step: R(a, b), run: Plus(R, a, c)): Star(R, b, c) {
     j(det(a, run.witness, b, run.proof.left, step), λ m _ => Star(R, m, c), run.proof.right)
+}
+
+// ---------------------------------------------------------------------------
+// Commands run one at a time
+
+// A list of commands as a transition system: the commands left and the
+// state, a step running the first (`execute_steps` a step at a time). A
+// block of code runs its length to where `execute_steps` ends
+// (`Pending::runs`), with whatever follows it still pending.
+record Pending<I, S> { code: List<I>, state: S }
+
+fn Pending::StepFrom<I, S>(step: I → S → S, code: List<I>, state: S, next: Pending<I, S>) → Type {
+    match code { Nil => False, Cons(command, rest) => next = Pending(rest, step(command, state)) }
+}
+
+fn Pending::Step<I, S>(step: I → S → S, a, b: Pending<I, S>) → Type { Pending::StepFrom(step, a.code, a.state, b) }
+
+theorem Pending::runs<I, S>(step: I → S → S, code: List<I>): (rest: List<I>) → (state: S) →
+    StarN<Pending<I, S>>(λ a b => Pending::Step(step, a, b), code.len(), Pending(code ++ rest, state),
+        Pending(rest, execute_steps(step, code, state))) {
+    match code {
+        Nil => λ rest state => StarN::zero<Pending<I, S>>(λ a b => Pending::Step(step, a, b), Pending(rest, state)),
+        Cons(command, more) => λ rest state => StarN::cons<Pending<I, S>>(λ a b => Pending::Step(step, a, b), more.len(),
+            Pending(Cons(command, more) ++ rest, state), Pending(more ++ rest, step(command, state)),
+            Pending(rest, execute_steps(step, more, step(command, state))), refl,
+            Pending::runs(step, more, rest, step(command, state))),
+    }
+}
+
+theorem Pending::step_from_det<I, S>(step: I → S → S, code: List<I>, state: S): (b, c: Pending<I, S>) →
+    Pending::StepFrom(step, code, state, b) → Pending::StepFrom(step, code, state, c) → b = c {
+    match code {
+        Nil => λ b c no _ => false_elim(no),
+        Cons(_, _) => λ b c left right => trans(left, sym(right)),
+    }
+}
+
+theorem Pending::step_det<I, S>(step: I → S → S): Deterministic<Pending<I, S>>(λ a b => Pending::Step(step, a, b)) {
+    λ a b c => Pending::step_from_det(step, a.code, a.state, b, c)
+}
+
+// Nothing left to run, nothing to step.
+theorem Pending::done_stuck<I, S>(step: I → S → S, state: S): Stuck<Pending<I, S>>(λ a b => Pending::Step(step, a, b), Pending(Nil, state)) {
+    λ b no => no
 }
 
 // ---------------------------------------------------------------------------

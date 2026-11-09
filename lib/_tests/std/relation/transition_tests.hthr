@@ -173,3 +173,21 @@ theorem ticks_never_stuck(n, c: Nat, run: Star(Tick, n, c)): ¬Stuck(Tick, c) {
 theorem composite_order_wf(): WellFounded<Pair<True, Nat>>(λ x y => StarComposeLt(Below, λ p q => False, x, y)) {
     WellFounded::star_compose(Below, λ p q => False, WellFounded::nat_pred(), WellFounded::empty())
 }
+
+// ---------------------------------------------------------------------------
+// Commands a step at a time
+
+// Adding a list of numbers: the run of its length ends at the sum, and so
+// does every run that runs out of commands.
+fn add_to(command, total: Nat) → Nat { total + command }
+
+theorem adds_up(): StarN<Pending<Nat, Nat>>(λ a b => Pending::Step(add_to, a, b), 3, Pending([1, 2, 3], 0), Pending(Nil, 6)) {
+    Pending::runs(add_to, [1, 2, 3], Nil, 0)
+}
+
+theorem adds_up_once(finish: Pending<Nat, Nat>, run: Star<Pending<Nat, Nat>>(λ a b => Pending::Step(add_to, a, b), Pending([1, 2, 3], 0), finish),
+    stopped: Stuck<Pending<Nat, Nat>>(λ a b => Pending::Step(add_to, a, b), finish)): finish = Pending(Nil, 6) {
+    Star::stuck_determined<Pending<Nat, Nat>>(λ a b => Pending::Step(add_to, a, b), Pending::step_det(add_to), Pending([1, 2, 3], 0), finish,
+        Pending(Nil, 6), run, stopped, Star::of_n<Pending<Nat, Nat>>(λ a b => Pending::Step(add_to, a, b), 3, Pending([1, 2, 3], 0), Pending(Nil, 6), adds_up()),
+        Pending::done_stuck(add_to, 6))
+}
