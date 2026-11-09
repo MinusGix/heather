@@ -37,6 +37,7 @@ import function_ir_eval;
 import function_ir_state;
 import native_source;
 import native_source_co;
+import dec_set;
 import set_tactic;
 
 // A statement with no loop and no procedure call.

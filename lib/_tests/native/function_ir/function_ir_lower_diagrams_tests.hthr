@@ -1,0 +1,38 @@
+// Probes of `function_ir_lower_diagrams`: the pass composed with S4's
+// lowering, at a schedule whose second node is dead. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5).
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_pass;
+import function_ir_lower;
+import function_ir_lower_diagrams;
+import x86_64;
+import x86_64_block;
+import bitvec;
+import list;
+import logic;
+import nat;
+import option;
+
+// Five into id 1, seven into id 2; only id 1 is live.
+fn two_consts() → List<Node> { [Const(64, 1, 5), Const(64, 2, 7)] }
+
+// The pass drops the dead node, and lowering what is left is one move.
+theorem dead_dropped(): two_consts().optimised([1]) = [Const(64, 1, 5)] { refl }
+
+fn code_of(lowered: Option<Lowered>) → List<Instruction> { match lowered { None => [], Some(l) => l.code } }
+
+theorem one_move(): code_of(lower_nodes(two_consts().optimised([1]), [Into(Rax)], File::empty())) = [MovRI(Rax, BitVec::ofNat(5))] { refl }
+
+// Whatever that lowering returns, run from any state, ends with its file
+// describing words that agree with the original schedule on id 1.
+theorem two_consts_compile<M>(state: MachineState<M>, body: Lowered,
+    lowered: lower_nodes(two_consts().optimised([1]), [Into(Rax)], File::empty()) = Some(body), w: Nat):
+    eval_nodes(two_consts().optimised([1]), λ v k => BitVec::zero(), w, 1) =
+        run_nodes(two_consts(), λ v k => BitVec::zero(), Nil).values(w, 1) {
+    two_consts().compiled_runs<M>([1], λ v k => BitVec::zero(), Nil, [Into(Rax)], File::empty(), body, state,
+        trivial, trivial, lowered, File::empty_represents(eval_nodes(two_consts().optimised([1]), λ v k => BitVec::zero()), state.gprs))
+        .right(1, Inl(refl), w)
+}

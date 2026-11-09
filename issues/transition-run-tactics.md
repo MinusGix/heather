@@ -24,7 +24,8 @@ saving is not writing the chain.
   step rules in scope: split at the states the rules' conclusions name,
   chain them with `Star::trans`/`Plus::trans_star`, and leave the side
   conditions as goals. A registry of step rules per relation, like the
-  sets tactic's operations (`SetOpEntry`).
+  sets tactic's relations (`SetRelEntry`), or an instance per relation, as
+  `sets` reads its operations (`lib/std/data/set/dec_set.hthr`).
 - **Invariants by search.** `Invariant(R, P)` for a step that is a sum of
   forms (`MachineStep` is three) is one obligation per form; generate them
   (`Invariant::or` over a step that is `∨`), and let `grind` take each.

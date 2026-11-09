@@ -42,6 +42,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_compile;
 import rt_lower;
+import dec_set;
 import set_tactic;
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,10 @@
-// The operations the `sets` tactic (lib/std/tactic/set_tactic.hthr) reads:
-// its registry entries (docs/registered-values-design.md). A module that
-// defines a set operation registers it beside its membership law
-// (`SetLaw`, lib/std/data/set/set_solve.hthr), so the tactic reifies it
-// instead of treating it as an atom. Only the entry type and `++`'s entry
-// live here, so a theory module can import this without the tactic.
+// The spellings the `sets` tactic (lib/std/tactic/set_tactic.hthr) reads
+// beside the carriers and operations it finds by instance
+// (lib/std/data/set/dec_set.hthr): its registry entries
+// (docs/registered-values-design.md) for Boolean spellings of list
+// membership that are not a carrier's own `has`, relations between two sets,
+// and equalities between elements. Only the entry types live here, so a
+// theory module can import this without the tactic.
 
 import logic;
 import bool;
@@ -14,17 +15,11 @@ import char;
 import string;
 import set_solve;
 
-// An operation by name, its connective and its law, each name a `name_of`.
-// `implicits` counts the implicit parameters the operation and its law both
-// open with (an element type, say), which the tactic leaves to inference;
-// the law takes nothing else.
-record SetOpEntry { op: String, conn: SetConn, law: String, implicits: Nat }
-
-register def set_append_entry: SetOpEntry = SetOpEntry(name_of(List::append), SetOr, name_of(set_append_law), 1);
-
-// A Boolean spelling of membership by name, its law (a `SetBitLaw`, by
-// `name_of`), whether the law reads the negation, and the implicit
-// parameters the function and its law open with, as for `SetOpEntry`.
+// A Boolean spelling of list membership by name, its law (a `SetBitLaw`, by
+// `name_of`), whether the law reads the negation, and `implicits`, the
+// implicit parameters the function and its law both open with (an element
+// type, say), which the tactic leaves to inference; the law takes nothing
+// else.
 record SetBitEntry { op: String, law: String, negated: Bool, implicits: Nat }
 
 // A Boolean spelling of a relation between two sets (`a.within(b)`,
@@ -32,7 +27,7 @@ record SetBitEntry { op: String, law: String, negated: Bool, implicits: Nat }
 // h: f(a, b).IsTrue())` proves a function type the tactic reads at each
 // element (an inclusion, or one whose conclusion is a non-membership or a
 // spelling), and `intro(a, b, h)` proves `f(a, b).IsTrue()` from that same
-// function type. `implicits` is as for `SetOpEntry`.
+// function type. `implicits` is as for `SetBitEntry`.
 record SetRelEntry { op: String, elim: String, intro: String, implicits: Nat }
 
 // A Boolean spelling of equality between two elements by name, its law (a

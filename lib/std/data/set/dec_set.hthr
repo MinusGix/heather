@@ -1,0 +1,145 @@
+// Sets with decidable membership: a carrier `S` of sets of `A` whose
+// membership is a Boolean, and its operations, each a class indexed by the
+// membership and the operation (docs/operation-indexed-classes-design.md:
+// index what identifies the structure, field what it provides), whose one
+// law says how the operation's membership combines its arguments'.
+//
+// The `sets` tactic (lib/std/tactic/set_tactic.hthr) reads every carrier
+// and operation through these: a set expression whose operations have
+// instances here is a Boolean formula in the membership of its leaves, so
+// a structure only declares its instances to be read (lists below; span
+// sets in span_set.hthr; native's `union` and `minus` in native_alloc).
+//
+// - `DecSet<S, A>`: `s.has(x)`, the empty set, and that nothing is in it.
+// - `SetUnion`, `SetInter`, `SetMinus`: a binary operation whose membership
+//   is "or", "and", "and not" of its arguments'.
+// - `SetInsert`: an element put in (`Cons`): the element is in the result,
+//   and any other element is in it exactly when it is in the set.
+// - `SetFilter`: the elements a predicate keeps.
+// - `SetReflects`: a proposition that membership decides (`Mem` for lists),
+//   so statements written with the proposition are read too.
+//
+// A law is an equation between Booleans, so it is used by rewriting and
+// by evaluation alike; the list instances derive theirs from the
+// propositional laws in list.hthr through `set_reflects_same`: two bits
+// that reflect one proposition are equal.
+
+import logic;
+import bool;
+import list;
+
+class DecSet<S, A> {
+    has: S → A → Bool,
+    empty: S,
+    has_empty: (x: A) → has(empty, x) = False,
+}
+
+class SetUnion<S, A>(has: S → A → Bool, op: S → S → S) {
+    has_union: (a, b: S) → (x: A) → has(op(a, b), x) = (has(a, x) || has(b, x)),
+}
+
+class SetInter<S, A>(has: S → A → Bool, op: S → S → S) {
+    has_inter: (a, b: S) → (x: A) → has(op(a, b), x) = (has(a, x) && has(b, x)),
+}
+
+class SetMinus<S, A>(has: S → A → Bool, op: S → S → S) {
+    has_minus: (a, b: S) → (x: A) → has(op(a, b), x) = (has(a, x) && !has(b, x)),
+}
+
+class SetInsert<S, A>(has: S → A → Bool, op: A → S → S) {
+    has_here: (e: A) → (s: S) → has(op(e, s), e) = True,
+    has_other: (x, e: A) → (s: S) → ¬(x = e) → has(op(e, s), x) = has(s, x),
+}
+
+class SetFilter<S, A>(has: S → A → Bool, op: S → (A → Bool) → S) {
+    has_filter: (s: S) → (p: A → Bool) → (x: A) → has(op(s, p), x) = (has(s, x) && p(x)),
+}
+
+class SetReflects<S, A>(has: S → A → Bool, P: A → S → Type) {
+    reflects: (s: S) → (x: A) → Reflects(P(x, s), has(s, x)),
+}
+
+// ---------------------------------------------------------------------------
+// Between a proposition and its bit
+
+theorem set_true_of({P: Type}, {b: Bool}, r: Reflects(P, b), p: P): b = True { bool::eq_true_of_is_true(b, reflects_intro(r, p)) }
+
+theorem set_false_of({P: Type}, {b: Bool}, r: Reflects(P, b), np: ¬P): b = False {
+    (match b as λ c => Reflects(P, c) → c = False {
+        False => λ _ => refl,
+        True => λ (r2: Reflects(P, True)) => false_elim(np(r2.left(refl))),
+    })(r)
+}
+
+// Two bits that reflect one proposition are equal.
+theorem set_reflects_same({P: Type}, {a, b: Bool}, ra: Reflects(P, a), rb: Reflects(P, b)): a = b {
+    (match a as λ c => Reflects(P, c) → c = b {
+        True => λ (r: Reflects(P, True)) => sym(set_true_of(rb, r.left(refl))),
+        False => λ (r: Reflects(P, False)) => sym(set_false_of(rb, r.right(refl))),
+    })(ra)
+}
+
+// A Boolean as the proposition that it is `True`.
+theorem set_bit_reflects(b: Bool): Reflects(b = True, b) {
+    And(λ h => h, λ (hf: b = False) (ht: b = True) => absurd(trans(sym(hf), ht)))
+}
+
+// ---------------------------------------------------------------------------
+// Lists
+
+fn List::has<A: DecEq>(self s: List<A>, x: A) → Bool {
+    match s { Nil => False, Cons(y, rest) => or_bit(x.eq_dec(y)) || rest.has(x) }
+}
+
+theorem List::has_reflects<A: DecEq>(s: List<A>, x: A): Reflects(Mem(x, s), s.has(x)) {
+    match s {
+        Nil => And(λ (no: False = True) => absurd(no), λ _ (m: False) => m),
+        Cons(y, rest) => reflects_or(or_bit_reflects(x.eq_dec(y)), List::has_reflects(rest, x)),
+    }
+}
+
+theorem List::has_here<A: DecEq>(e: A, s: List<A>): Cons(e, s).has(e) = True {
+    match d: e.eq_dec(e) { Inl(_) => refl, Inr(n) => false_elim(n(refl)) }
+}
+
+theorem List::has_other<A: DecEq>(x, e: A, s: List<A>, n: ¬(x = e)): Cons(e, s).has(x) = s.has(x) {
+    match d: x.eq_dec(e) { Inl(q) => false_elim(n(q)), Inr(_) => refl }
+}
+
+theorem List::has_append<A: DecEq>(a, b: List<A>, x: A): (a ++ b).has(x) = (a.has(x) || b.has(x)) {
+    set_reflects_same(List::has_reflects(a ++ b, x),
+        reflects_iff(reflects_or(List::has_reflects(a, x), List::has_reflects(b, x)),
+            (a.mem_append_iff(b, x)).mpr, (a.mem_append_iff(b, x)).mp))
+}
+
+theorem List::mem_filter_keep<A>(xs: List<A>, x: A, p: A → Bool, px: p(x) = True): Mem(x, xs) → Mem(x, xs.filter(p)) {
+    match xs {
+        Nil => λ m => m,
+        Cons(h, t) => λ m => match m {
+            Inl(e) => {
+                let ph: (p(h) = True) = trans(cong_fn(p, sym(e)), px);
+                j(sym(ph), λ b _ => Mem(x, match b { True => Cons(h, t.filter(p)), False => t.filter(p) }), Inl(e))
+            },
+            Inr(r) => {
+                let rest: Mem(x, t.filter(p)) = List::mem_filter_keep(t, x, p, px, r);
+                match ph: p(h) {
+                    True => Inr(rest),
+                    False => rest,
+                }
+            },
+        },
+    }
+}
+
+theorem List::has_filter<A: DecEq>(s: List<A>, p: A → Bool, x: A): s.filter(p).has(x) = (s.has(x) && p(x)) {
+    set_reflects_same(List::has_reflects(s.filter(p), x),
+        reflects_iff(reflects_and(List::has_reflects(s, x), set_bit_reflects(p(x))),
+            λ (both: Mem(x, s) ∧ (p(x) = True)) => List::mem_filter_keep(s, x, p, both.right, both.left),
+            λ (m: Mem(x, s.filter(p))) => And(s.mem_filter(x, p, m), s.mem_filter_holds(x, p, m))))
+}
+
+instance<A: DecEq> DecSet<List<A>, A> { has := List::has, empty := Nil, has_empty := λ x => refl }
+instance<A: DecEq> SetReflects<List<A>, A>(List::has, Mem) { reflects := List::has_reflects }
+instance<A: DecEq> SetInsert<List<A>, A>(List::has, Cons) { has_here := List::has_here, has_other := List::has_other }
+instance<A: DecEq> SetUnion<List<A>, A>(List::has, List::append) { has_union := List::has_append }
+instance<A: DecEq> SetFilter<List<A>, A>(List::has, List::filter) { has_filter := List::has_filter }

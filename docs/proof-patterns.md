@@ -53,22 +53,30 @@ property of Heather.
   domain and the match spells its unfolding (20–170× kernel steps).
 - **Put case analysis of a trace or other inductive in a small lemma over
   its own type**, not inside a recursion or under a computed binder.
-- **Membership over lists read as sets is `by sets()`**
+- **Membership over sets with decidable membership is `by sets()`**
   (`lib/std/tactic/set_tactic.hthr`), not a chain of `mem_append_l`,
-  `union_right`, `mem_filter_of`, `Bool::is_true_and` citations: the goal
-  and the `Mem`, `¬Mem`, `=`, `≠`, inclusion and spelled
+  `union_right`, `mem_filter_of`, `union_has`, `Bool::is_true_and`
+  citations: the goal and the membership (`Mem`, `s.has(x) = True`,
+  `.IsTrue()`, `¬`, `!`), `=`, `≠`, inclusion and spelled
   (`absent(x, s).IsTrue()`, `holds`) hypotheses about its element become a
   truth table that the kernel checks by evaluation; `∧` and records of such
-  facts split. Relations between sets (`a.within(b)`, `disjoint(xs, ys)`)
-  are read too: a hypothesis at the element, a goal by its intro law; so
-  are equations between elements and their spellings (`x.same(y)`,
-  `a.matches(b)`), as goals too. A new set operation registers a
-  `SetOpEntry` with its `SetLaw`, a new Boolean spelling a `SetBitEntry`
-  with its `SetBitLaw`, a new relation a `SetRelEntry` with its elim and
-  intro laws, an equality spelling a `SetEqEntry` with its `SetEqLaw`,
-  beside its definition. Each atom, element and predicate doubles the
-  table, so keep a big literal behind a name. A call costs a few tenths of
-  a second, mostly the tactic's own run; a one-step citation is cheaper.
+  facts split. Any carrier with a `DecSet` instance is read (lists, `Span`,
+  `SpanSet`, a client's own), its operations through their `SetUnion`,
+  `SetInter`, `SetMinus`, `SetInsert`, `SetFilter` instances
+  (`lib/std/data/set/dec_set.hthr`); a client imports `dec_set` beside
+  `set_tactic`, as instances come from direct imports. Relations between sets
+  (`a.within(b)`, `disjoint(xs, ys)`) are read too: a hypothesis at the
+  element, a goal `= True` by its intro law, `= False` by an element on the
+  wrong side; so are equations between elements and their spellings
+  (`x.same(y)`, `a.matches(b)`), and equations between two memberships of one
+  element (`(a ++ b).has(x) = (b ++ a).has(x)`). A new carrier or operation
+  declares its instance; a Boolean spelling of list membership that is not
+  a carrier's `has` registers a `SetBitEntry` with its `SetBitLaw`, a new
+  relation a `SetRelEntry` with its elim and intro laws, an equality
+  spelling a `SetEqEntry` with its `SetEqLaw`, beside its definition. Each
+  atom, element and predicate doubles the table, so keep a big literal
+  behind a name. A call costs a few tenths of a second, mostly the tactic's
+  own run; a one-step citation is cheaper.
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
   `rewrite` and generic-lemma matching convert, or fail before instance
   search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).

@@ -1,313 +1,478 @@
-// Membership in finite-set expressions, decided by a truth table
-// (issues/finite-set-membership-solver.md, docs/native-mathematics-survey.md §1).
+// Membership in set expressions over any carrier with decidable
+// membership, decided by a truth table (issues/finite-set-membership-solver.md,
+// issues/sets-any-carrier.md, docs/native-mathematics-survey.md §1).
 //
-// Sets here are lists read as sets: `Mem(x, xs)` is membership, and an
-// operation is anything whose membership is a Boolean combination of its
-// arguments' (`++` is "or", a union is "or", a difference "and not", a
-// filter "and" with the predicate's bit). So whether `x` is in a set
-// expression is a Boolean function of whether `x` is in each atom, equals
-// each listed element, and passes each filter's predicate, and a goal that
-// follows from its hypotheses for every assignment of those bits follows
-// for the real one. `set_solve` is that argument proved once: the caller
-// reifies the goal and hypotheses into `SetExpr`s over an environment of
-// atoms (`SetEnv`), and the verdict `set_taut(…) = True` is closed (it reads
-// only the expressions' shapes and the operations' connectives), so it is
-// proved by `refl`, by evaluation.
+// A carrier is a `DecSet<S, A>` (lib/std/data/set/dec_set.hthr): `s.has(x)`
+// is a Boolean, and an operation with an instance there (`SetUnion`,
+// `SetInter`, `SetMinus`, `SetInsert`, `SetFilter`) has a membership that is
+// a Boolean function of its arguments' (a union is "or", a difference "and
+// not", an insertion "or" with whether `x` is the element, a filter "and"
+// with the predicate's bit). So whether `x` is in a set expression is a
+// Boolean function of whether `x` is in each atom, equals each element, and
+// passes each predicate, and a goal that follows from its hypotheses for
+// every assignment of those bits follows for the real one. `set_solve` is
+// that argument proved once: the caller reifies the goal and hypotheses
+// into `SetExpr`s over an environment of atoms (`SetEnv`) with the
+// operations' laws (`set_ops_lawful`), and the verdict `set_taut(…) = True`
+// is closed (it reads only the expressions' shapes and the operations'
+// kinds), so it is proved by `refl`, by evaluation.
 //
 // The assignment is enumerated whole, so the verdict costs 2^k evaluations
 // of the formula for k atoms, elements and predicates together. The goals
-// it is for (liveness, ports, register pools) have a handful.
+// it is for (liveness, ports, register pools, footprints) have a handful.
 
 import logic;
 import bool;
 import nat;
 import list;
 import option;
+import dec_set;
 
 // ---------------------------------------------------------------------------
-// Connectives and operations
+// Operations
 
-// How an operation's membership combines its arguments'.
-inductive SetConn { SetOr, SetAnd, SetDiff }
+// How a binary operation's membership combines its arguments'.
+inductive SetConn { COr, CAnd, CDiff }
 
 fn SetConn::bit(self c: SetConn, a, b: Bool) → Bool {
-    match c { SetOr => a || b, SetAnd => a && b, SetDiff => a && !b }
+    match c { COr => a || b, CAnd => a && b, CDiff => a && !b }
 }
 
-fn SetConn::Holds(self c: SetConn, P, Q: Type) → Type {
-    match c { SetOr => P ∨ Q, SetAnd => P ∧ Q, SetDiff => P ∧ ¬Q }
+// An operation on the carrier: binary, putting an element in, or keeping
+// the elements a predicate passes.
+inductive SetOpFn<S, A> { OpBin(f: S → S → S, conn: SetConn), OpIns(f: A → S → S), OpFilt(f: S → (A → Bool) → S) }
+
+// What the truth table needs of an operation: everything but the function.
+inductive SetOpKind { KBin(conn: SetConn), KIns, KFilt }
+
+fn SetOpFn::kind<S, A>(self o: SetOpFn<S, A>) → SetOpKind {
+    match o { OpBin(_, c) => KBin(c), OpIns(_) => KIns, OpFilt(_) => KFilt }
 }
 
-theorem SetConn::reflects(self c: SetConn, {P, Q: Type}, {x, y: Bool}, p: Reflects(P, x), q: Reflects(Q, y)):
-    Reflects(c.Holds(P, Q), c.bit(x, y)) {
-    match c {
-        SetOr => reflects_or(p, q),
-        SetAnd => reflects_and(p, q),
-        SetDiff => reflects_and(p, reflects_not(q)),
+// The operation's law at the membership `has`: its class's law
+// (dec_set.hthr), so an instance's fields prove it as they are.
+fn SetOpFn::Lawful<S, A>(self o: SetOpFn<S, A>, has: S → A → Bool) → Type {
+    match o {
+        OpBin(f, c) => (a, b: S) → (x: A) → has(f(a, b), x) = c.bit(has(a, x), has(b, x)),
+        OpIns(f) => ((e: A) → (s: S) → has(f(e, s), e) = True) ∧ ((x, e: A) → (s: S) → ¬(x = e) → has(f(e, s), x) = has(s, x)),
+        OpFilt(f) => (s: S) → (p: A → Bool) → (x: A) → has(f(s, p), x) = (has(s, x) && p(x)),
     }
 }
 
-// An operation on sets with its membership law.
-fn SetLaw<A>(f: List<A> → List<A> → List<A>, c: SetConn) → Type {
-    (x: A) → (a, b: List<A>) → (Mem(x, f(a, b)) ↔ c.Holds(Mem(x, a), Mem(x, b)))
-}
-
-record SetOp<A> { f: List<A> → List<A> → List<A>, conn: SetConn, law: SetLaw(f, conn) }
-
-theorem set_append_law<A>(): SetLaw<A>(List::append, SetOr) {
-    λ x a b => a.mem_append_iff(b, x)
+fn set_ops_lawful<S, A>(os: List<SetOpFn<S, A>>, has: S → A → Bool) → Type {
+    match os { Nil => True, Cons(o, rest) => o.Lawful(has) ∧ set_ops_lawful(rest, has) }
 }
 
 // ---------------------------------------------------------------------------
-// Membership as a bit
+// Expressions, their environment, and their two readings
+
+// A set expression over indexed leaves: the `k`th atom, the empty set, the
+// `j`th element put in by the `i`th operation, the `k`th predicate's filter
+// by the `i`th operation, the `i`th binary operation.
+inductive SetExpr {
+    SAtom(k: Nat),
+    SEmpty,
+    SIns(i: Nat, j: Nat, s: SetExpr),
+    SFilt(i: Nat, k: Nat, s: SetExpr),
+    SBin(i: Nat, a: SetExpr, b: SetExpr),
+}
+
+record SetEnv<S, A> { sets: List<S>, elts: List<A>, preds: List<A → Bool>, ops: List<SetOpFn<S, A>> }
+
+// The leaves' readings; a missing index, or an operation of another kind,
+// reads as the empty set `z` (so the two readings below agree on it).
+fn set_atom<S>(z: S, ss: List<S>, k: Nat) → S {
+    match ss.nth(k) { None => z, Some(s) => s }
+}
+
+fn set_elt_ins<S, A>(z: S, f: A → S → S, es: List<A>, j: Nat, s: S) → S {
+    match es.nth(j) { None => z, Some(e) => f(e, s) }
+}
+
+fn set_ins_one<S, A>(z: S, o: SetOpFn<S, A>, es: List<A>, j: Nat, s: S) → S {
+    match o { OpIns(f) => set_elt_ins(z, f, es, j, s), OpBin(_, _) => z, OpFilt(_) => z }
+}
+
+fn set_ins_at<S, A>(z: S, os: List<SetOpFn<S, A>>, es: List<A>, i, j: Nat, s: S) → S {
+    match os.nth(i) { None => z, Some(o) => set_ins_one(z, o, es, j, s) }
+}
+
+fn set_pred_filt<S, A>(z: S, f: S → (A → Bool) → S, ps: List<A → Bool>, k: Nat, s: S) → S {
+    match ps.nth(k) { None => z, Some(p) => f(s, p) }
+}
+
+fn set_filt_one<S, A>(z: S, o: SetOpFn<S, A>, ps: List<A → Bool>, k: Nat, s: S) → S {
+    match o { OpFilt(f) => set_pred_filt(z, f, ps, k, s), OpBin(_, _) => z, OpIns(_) => z }
+}
+
+fn set_filt_at<S, A>(z: S, os: List<SetOpFn<S, A>>, ps: List<A → Bool>, i, k: Nat, s: S) → S {
+    match os.nth(i) { None => z, Some(o) => set_filt_one(z, o, ps, k, s) }
+}
+
+fn set_bin_one<S, A>(z: S, o: SetOpFn<S, A>, a, b: S) → S {
+    match o { OpBin(f, _) => f(a, b), OpIns(_) => z, OpFilt(_) => z }
+}
+
+fn set_bin_at<S, A>(z: S, os: List<SetOpFn<S, A>>, i: Nat, a, b: S) → S {
+    match os.nth(i) { None => z, Some(o) => set_bin_one(z, o, a, b) }
+}
+
+fn SetExpr::denote<S, A>(self e: SetExpr, C: DecSet<S, A>, env: SetEnv<S, A>) → S {
+    match e {
+        SAtom(k) => set_atom(C.empty, env.sets, k),
+        SEmpty => C.empty,
+        SIns(i, j, s) => set_ins_at(C.empty, env.ops, env.elts, i, j, s.denote(C, env)),
+        SFilt(i, k, s) => set_filt_at(C.empty, env.ops, env.preds, i, k, s.denote(C, env)),
+        SBin(i, a, b) => set_bin_at(C.empty, env.ops, i, a.denote(C, env), b.denote(C, env)),
+    }
+}
+
+// One assignment of the leaves' bits, and the operations' kinds.
+record SetBits { sets: List<Bool>, elts: List<Bool>, preds: List<Bool>, kinds: List<SetOpKind> }
+
+fn set_bit_at(bs: List<Bool>, k: Nat) → Bool {
+    match bs.nth(k) { None => False, Some(b) => b }
+}
+
+fn set_ins_kind(k: SetOpKind, es: List<Bool>, j: Nat, y: Bool) → Bool {
+    match k {
+        KIns => match es.nth(j) { None => False, Some(b) => b || y },
+        KBin(_) => False,
+        KFilt => False,
+    }
+}
+
+fn set_ins_bit(ks: List<SetOpKind>, es: List<Bool>, i, j: Nat, y: Bool) → Bool {
+    match ks.nth(i) { None => False, Some(k) => set_ins_kind(k, es, j, y) }
+}
+
+fn set_filt_kind(k: SetOpKind, ps: List<Bool>, n: Nat, y: Bool) → Bool {
+    match k {
+        KFilt => match ps.nth(n) { None => False, Some(b) => y && b },
+        KBin(_) => False,
+        KIns => False,
+    }
+}
+
+fn set_filt_bit(ks: List<SetOpKind>, ps: List<Bool>, i, n: Nat, y: Bool) → Bool {
+    match ks.nth(i) { None => False, Some(k) => set_filt_kind(k, ps, n, y) }
+}
+
+fn set_bin_kind(k: SetOpKind, a, b: Bool) → Bool {
+    match k { KBin(c) => c.bit(a, b), KIns => False, KFilt => False }
+}
+
+fn set_bin_bit(ks: List<SetOpKind>, i: Nat, a, b: Bool) → Bool {
+    match ks.nth(i) { None => False, Some(k) => set_bin_kind(k, a, b) }
+}
+
+fn SetExpr::eval(self e: SetExpr, v: SetBits) → Bool {
+    match e {
+        SAtom(k) => set_bit_at(v.sets, k),
+        SEmpty => False,
+        SIns(i, j, s) => set_ins_bit(v.kinds, v.elts, i, j, s.eval(v)),
+        SFilt(i, k, s) => set_filt_bit(v.kinds, v.preds, i, k, s.eval(v)),
+        SBin(i, a, b) => set_bin_bit(v.kinds, i, a.eval(v), b.eval(v)),
+    }
+}
 
 fn set_eq_bit<A>(d: DecEq<A>, x, y: A) → Bool { or_bit(d.eq_dec(x, y)) }
 
-fn set_mem_bit<A>(d: DecEq<A>, x: A, xs: List<A>) → Bool {
-    match xs { Nil => False, Cons(h, t) => set_eq_bit(d, x, h) || set_mem_bit(d, x, t) }
+fn set_kinds<S, A>(os: List<SetOpFn<S, A>>) → List<SetOpKind> { os.map(λ (o: SetOpFn<S, A>) => o.kind()) }
+
+// The bits of the element `x`: the real assignment.
+fn SetEnv::bits<S, A>(self env: SetEnv<S, A>, C: DecSet<S, A>, d: DecEq<A>, x: A) → SetBits {
+    SetBits(env.sets.map(λ (s: S) => C.has(s, x)),
+        env.elts.map(λ (a: A) => set_eq_bit(d, x, a)),
+        env.preds.map(λ (p: A → Bool) => p(x)),
+        set_kinds(env.ops))
+}
+
+// ---------------------------------------------------------------------------
+// At the real assignment, membership is the bit
+
+theorem set_atom_agrees<S, A>(C: DecSet<S, A>, x: A, ss: List<S>): (k: Nat) →
+    C.has(set_atom(C.empty, ss, k), x) = set_bit_at(ss.map(λ (s: S) => C.has(s, x)), k) {
+    match ss {
+        Nil => λ k => C.has_empty(x),
+        Cons(_, rest) => λ k => match k {
+            Zero => refl,
+            Succ(i) => set_atom_agrees(C, x, rest, i),
+        },
+    }
+}
+
+// `x` is put in by `f`: `x` is in the result when it is the element, else
+// when it is in the set.
+theorem set_ins_law<S, A>(C: DecSet<S, A>, d: DecEq<A>, x, e: A, f: A → S → S, s: S, y: Bool,
+    here: (e: A) → (s: S) → C.has(f(e, s), e) = True,
+    other: (x, e: A) → (s: S) → ¬(x = e) → C.has(f(e, s), x) = C.has(s, x),
+    r: C.has(s, x) = y): C.has(f(e, s), x) = (set_eq_bit(d, x, e) || y) {
+    (match d.eq_dec(x, e) as λ c => C.has(f(e, s), x) = (or_bit(c) || y) {
+        Inl(q) => j(sym(q), λ z _ => C.has(f(e, s), z) = True, here(e, s)),
+        Inr(n) => trans(other(x, e, s, n), r),
+    })
+}
+
+theorem set_elt_ins_agrees<S, A>(C: DecSet<S, A>, d: DecEq<A>, x: A, f: A → S → S,
+    here: (e: A) → (s: S) → C.has(f(e, s), e) = True,
+    other: (x, e: A) → (s: S) → ¬(x = e) → C.has(f(e, s), x) = C.has(s, x),
+    s: S, y: Bool, r: C.has(s, x) = y, es: List<A>): (j: Nat) →
+    C.has(set_elt_ins(C.empty, f, es, j, s), x) = set_ins_kind(KIns, es.map(λ (a: A) => set_eq_bit(d, x, a)), j, y) {
+    match es {
+        Nil => λ j => C.has_empty(x),
+        Cons(e, rest) => λ j => match j {
+            Zero => set_ins_law(C, d, x, e, f, s, y, here, other, r),
+            Succ(i) => set_elt_ins_agrees(C, d, x, f, here, other, s, y, r, rest, i),
+        },
+    }
+}
+
+theorem set_ins_one_agrees<S, A>(C: DecSet<S, A>, d: DecEq<A>, x: A, o: SetOpFn<S, A>, es: List<A>, j: Nat, s: S, y: Bool,
+    r: C.has(s, x) = y): o.Lawful(C.has) →
+    C.has(set_ins_one(C.empty, o, es, j, s), x) = set_ins_kind(o.kind(), es.map(λ (a: A) => set_eq_bit(d, x, a)), j, y) {
+    match o {
+        OpIns(f) => λ law => set_elt_ins_agrees(C, d, x, f, law.left, law.right, s, y, r, es, j),
+        OpBin(_, _) => λ _ => C.has_empty(x),
+        OpFilt(_) => λ _ => C.has_empty(x),
+    }
+}
+
+theorem set_ins_agrees<S, A>(C: DecSet<S, A>, d: DecEq<A>, x: A, es: List<A>, j: Nat, s: S, y: Bool, r: C.has(s, x) = y,
+    os: List<SetOpFn<S, A>>): set_ops_lawful(os, C.has) → (i: Nat) →
+    C.has(set_ins_at(C.empty, os, es, i, j, s), x) = set_ins_bit(set_kinds(os), es.map(λ (a: A) => set_eq_bit(d, x, a)), i, j, y) {
+    match os {
+        Nil => λ _ i => C.has_empty(x),
+        Cons(o, rest) => λ law i => match i {
+            Zero => set_ins_one_agrees(C, d, x, o, es, j, s, y, r, law.left),
+            Succ(k) => set_ins_agrees(C, d, x, es, j, s, y, r, rest, law.right, k),
+        },
+    }
+}
+
+// `f` keeps what `p` passes: membership "and" the predicate's bit.
+theorem set_pred_filt_agrees<S, A>(C: DecSet<S, A>, x: A, f: S → (A → Bool) → S,
+    law: (s: S) → (p: A → Bool) → (x: A) → C.has(f(s, p), x) = (C.has(s, x) && p(x)),
+    s: S, y: Bool, r: C.has(s, x) = y, ps: List<A → Bool>): (k: Nat) →
+    C.has(set_pred_filt(C.empty, f, ps, k, s), x) = set_filt_kind(KFilt, ps.map(λ (p: A → Bool) => p(x)), k, y) {
+    match ps {
+        Nil => λ k => C.has_empty(x),
+        Cons(p, rest) => λ k => match k {
+            Zero => trans(law(s, p, x), j(r, λ z _ => (C.has(s, x) && p(x)) = (z && p(x)), refl)),
+            Succ(i) => set_pred_filt_agrees(C, x, f, law, s, y, r, rest, i),
+        },
+    }
+}
+
+theorem set_filt_one_agrees<S, A>(C: DecSet<S, A>, x: A, o: SetOpFn<S, A>, ps: List<A → Bool>, k: Nat, s: S, y: Bool,
+    r: C.has(s, x) = y): o.Lawful(C.has) →
+    C.has(set_filt_one(C.empty, o, ps, k, s), x) = set_filt_kind(o.kind(), ps.map(λ (p: A → Bool) => p(x)), k, y) {
+    match o {
+        OpFilt(f) => λ law => set_pred_filt_agrees(C, x, f, law, s, y, r, ps, k),
+        OpBin(_, _) => λ _ => C.has_empty(x),
+        OpIns(_) => λ _ => C.has_empty(x),
+    }
+}
+
+theorem set_filt_agrees<S, A>(C: DecSet<S, A>, x: A, ps: List<A → Bool>, k: Nat, s: S, y: Bool, r: C.has(s, x) = y,
+    os: List<SetOpFn<S, A>>): set_ops_lawful(os, C.has) → (i: Nat) →
+    C.has(set_filt_at(C.empty, os, ps, i, k, s), x) = set_filt_bit(set_kinds(os), ps.map(λ (p: A → Bool) => p(x)), i, k, y) {
+    match os {
+        Nil => λ _ i => C.has_empty(x),
+        Cons(o, rest) => λ law i => match i {
+            Zero => set_filt_one_agrees(C, x, o, ps, k, s, y, r, law.left),
+            Succ(n) => set_filt_agrees(C, x, ps, k, s, y, r, rest, law.right, n),
+        },
+    }
+}
+
+theorem set_conn_cong(c: SetConn, {p, p2, q, q2: Bool}, ep: p = p2, eq: q = q2): c.bit(p, q) = c.bit(p2, q2) {
+    j(eq, λ z _ => c.bit(p, q) = c.bit(p2, z), j(ep, λ z _ => c.bit(p, q) = c.bit(z, q), refl))
+}
+
+theorem set_bin_one_agrees<S, A>(C: DecSet<S, A>, x: A, o: SetOpFn<S, A>, a, b: S, p, q: Bool,
+    ra: C.has(a, x) = p, rb: C.has(b, x) = q): o.Lawful(C.has) →
+    C.has(set_bin_one(C.empty, o, a, b), x) = set_bin_kind(o.kind(), p, q) {
+    match o {
+        OpBin(_, c) => λ law => trans(law(a, b, x), set_conn_cong(c, ra, rb)),
+        OpIns(_) => λ _ => C.has_empty(x),
+        OpFilt(_) => λ _ => C.has_empty(x),
+    }
+}
+
+theorem set_bin_agrees<S, A>(C: DecSet<S, A>, x: A, a, b: S, p, q: Bool, ra: C.has(a, x) = p, rb: C.has(b, x) = q,
+    os: List<SetOpFn<S, A>>): set_ops_lawful(os, C.has) → (i: Nat) →
+    C.has(set_bin_at(C.empty, os, i, a, b), x) = set_bin_bit(set_kinds(os), i, p, q) {
+    match os {
+        Nil => λ _ i => C.has_empty(x),
+        Cons(o, rest) => λ law i => match i {
+            Zero => set_bin_one_agrees(C, x, o, a, b, p, q, ra, rb, law.left),
+            Succ(n) => set_bin_agrees(C, x, a, b, p, q, ra, rb, rest, law.right, n),
+        },
+    }
+}
+
+theorem SetExpr::agrees<S, A>(self e: SetExpr, C: DecSet<S, A>, d: DecEq<A>, env: SetEnv<S, A>, lawful: set_ops_lawful(env.ops, C.has), x: A):
+    C.has(e.denote(C, env), x) = e.eval(env.bits(C, d, x)) {
+    match e {
+        SAtom(k) => set_atom_agrees(C, x, env.sets, k),
+        SEmpty => C.has_empty(x),
+        SIns(i, j, s) => set_ins_agrees(C, d, x, env.elts, j, s.denote(C, env), s.eval(env.bits(C, d, x)), s.agrees(C, d, env, lawful, x), env.ops, lawful, i),
+        SFilt(i, k, s) => set_filt_agrees(C, x, env.preds, k, s.denote(C, env), s.eval(env.bits(C, d, x)), s.agrees(C, d, env, lawful, x), env.ops, lawful, i),
+        SBin(i, a, b) => set_bin_agrees(C, x, a.denote(C, env), b.denote(C, env), a.eval(env.bits(C, d, x)), b.eval(env.bits(C, d, x)),
+            a.agrees(C, d, env, lawful, x), b.agrees(C, d, env, lawful, x), env.ops, lawful, i),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Elements
+
+// `x` is the `j`th element (`False` past the end).
+fn set_is_elt<A>(es: List<A>, j: Nat, x: A) → Type {
+    match es.nth(j) { None => False, Some(e) => x = e }
 }
 
 theorem set_false_reflects(): Reflects(False, False) {
     And(λ (no: False = True) => absurd(no), λ _ (m: False) => m)
 }
 
-theorem set_mem_reflects<A>(d: DecEq<A>, x: A, xs: List<A>): Reflects(Mem(x, xs), set_mem_bit(d, x, xs)) {
-    match xs {
-        Nil => set_false_reflects(),
-        Cons(h, t) => reflects_or(or_bit_reflects(d.eq_dec(x, h)), set_mem_reflects(d, x, t)),
-    }
-}
-
-// A Boolean as the proposition that it is `True`.
-theorem set_bit_reflects(b: Bool): Reflects(b = True, b) {
-    And(λ h => h, λ (hf: b = False) (ht: b = True) => absurd(trans(sym(hf), ht)))
-}
-
-theorem set_mem_filter_intro<A>(xs: List<A>, x: A, p: A → Bool, px: p(x) = True): Mem(x, xs) → Mem(x, xs.filter(p)) {
-    match xs {
-        Nil => λ m => m,
-        Cons(h, t) => λ m => match m {
-            Inl(e) => {
-                let ph: (p(h) = True) = trans(cong_fn(p, sym(e)), px);
-                j(sym(ph), λ b _ => Mem(x, match b { True => Cons(h, t.filter(p)), False => t.filter(p) }), Inl(e))
-            },
-            Inr(r) => {
-                let rest: Mem(x, t.filter(p)) = set_mem_filter_intro(t, x, p, px, r);
-                match ph: p(h) {
-                    True => Inr(rest),
-                    False => rest,
-                }
-            },
-        },
-    }
-}
-
-theorem set_filter_reflects<A>(xs: List<A>, x: A, p: A → Bool, {y: Bool}, r: Reflects(Mem(x, xs), y)):
-    Reflects(Mem(x, xs.filter(p)), p(x) && y) {
-    reflects_iff(reflects_and(set_bit_reflects(p(x)), r),
-        λ (both: (p(x) = True) ∧ Mem(x, xs)) => set_mem_filter_intro(xs, x, p, both.left, both.right),
-        λ (m: Mem(x, xs.filter(p))) => And(xs.mem_filter_holds(x, p, m), xs.mem_filter(x, p, m)))
-}
-
-// ---------------------------------------------------------------------------
-// Expressions, their environment, and their two readings
-
-// A set expression over indexed leaves: the `k`th atom, the `j`th element
-// consed on, the `k`th predicate's filter, the `i`th operation.
-inductive SetExpr {
-    SAtom(k: Nat),
-    SNil,
-    SCons(j: Nat, rest: SetExpr),
-    SFilter(k: Nat, s: SetExpr),
-    SOp(i: Nat, a: SetExpr, b: SetExpr),
-}
-
-record SetEnv<A> { sets: List<List<A>>, elts: List<A>, preds: List<A → Bool>, ops: List<SetOp<A>> }
-
-// The leaves' readings, a missing index read as empty (so the two readings
-// below agree on it).
-fn set_atom<A>(ss: List<List<A>>, k: Nat) → List<A> {
-    match ss.nth(k) { None => Nil, Some(s) => s }
-}
-
-fn set_cons_at<A>(es: List<A>, j: Nat, rest: List<A>) → List<A> {
-    match es.nth(j) { None => rest, Some(a) => Cons(a, rest) }
-}
-
-fn set_filter_at<A>(ps: List<A → Bool>, k: Nat, s: List<A>) → List<A> {
-    match ps.nth(k) { None => Nil, Some(p) => s.filter(p) }
-}
-
-fn set_op_at<A>(os: List<SetOp<A>>, i: Nat, a, b: List<A>) → List<A> {
-    match os.nth(i) { None => Nil, Some(o) => o.f(a, b) }
-}
-
-fn SetExpr::denote<A>(self e: SetExpr, env: SetEnv<A>) → List<A> {
-    match e {
-        SAtom(k) => set_atom(env.sets, k),
-        SNil => Nil,
-        SCons(j, rest) => set_cons_at(env.elts, j, rest.denote(env)),
-        SFilter(k, s) => set_filter_at(env.preds, k, s.denote(env)),
-        SOp(i, a, b) => set_op_at(env.ops, i, a.denote(env), b.denote(env)),
-    }
-}
-
-// One assignment of the leaves' bits, and the operations' connectives.
-record SetBits { sets: List<Bool>, elts: List<Bool>, preds: List<Bool>, conns: List<SetConn> }
-
-fn set_bit_at(bs: List<Bool>, k: Nat) → Bool {
-    match bs.nth(k) { None => False, Some(b) => b }
-}
-
-fn set_conn_at(cs: List<SetConn>, i: Nat, a, b: Bool) → Bool {
-    match cs.nth(i) { None => False, Some(c) => c.bit(a, b) }
-}
-
-fn SetExpr::eval(self e: SetExpr, v: SetBits) → Bool {
-    match e {
-        SAtom(k) => set_bit_at(v.sets, k),
-        SNil => False,
-        SCons(j, rest) => set_bit_at(v.elts, j) || rest.eval(v),
-        SFilter(k, s) => set_bit_at(v.preds, k) && s.eval(v),
-        SOp(i, a, b) => set_conn_at(v.conns, i, a.eval(v), b.eval(v)),
-    }
-}
-
-// The bits of the element `x`: the real assignment.
-fn SetEnv::bits<A>(self env: SetEnv<A>, d: DecEq<A>, x: A) → SetBits {
-    SetBits(env.sets.map(λ (s: List<A>) => set_mem_bit(d, x, s)),
-        env.elts.map(λ (a: A) => set_eq_bit(d, x, a)),
-        env.preds.map(λ (p: A → Bool) => p(x)),
-        env.ops.map(λ (o: SetOp<A>) => o.conn))
-}
-
-// ---------------------------------------------------------------------------
-// At the real assignment, the bit reflects membership
-
-theorem set_atom_reflects<A>(d: DecEq<A>, x: A, ss: List<List<A>>): (k: Nat) →
-    Reflects(Mem(x, set_atom(ss, k)), set_bit_at(ss.map(λ (s: List<A>) => set_mem_bit(d, x, s)), k)) {
-    match ss {
-        Nil => λ k => set_false_reflects(),
-        Cons(s, rest) => λ k => match k {
-            Zero => set_mem_reflects(d, x, s),
-            Succ(i) => set_atom_reflects(d, x, rest, i),
-        },
-    }
-}
-
-theorem set_cons_reflects<A>(d: DecEq<A>, x: A, es: List<A>, ys: List<A>, {y: Bool}, r: Reflects(Mem(x, ys), y)): (j: Nat) →
-    Reflects(Mem(x, set_cons_at(es, j, ys)), set_bit_at(es.map(λ (a: A) => set_eq_bit(d, x, a)), j) || y) {
+theorem set_elt_reflects<A>(d: DecEq<A>, x: A, es: List<A>): (j: Nat) →
+    Reflects(set_is_elt(es, j, x), set_bit_at(es.map(λ (a: A) => set_eq_bit(d, x, a)), j)) {
     match es {
-        Nil => λ j => r,
+        Nil => λ j => set_false_reflects(),
         Cons(a, rest) => λ j => match j {
-            Zero => reflects_or(or_bit_reflects(d.eq_dec(x, a)), r),
-            Succ(i) => set_cons_reflects(d, x, rest, ys, r, i),
+            Zero => or_bit_reflects(d.eq_dec(x, a)),
+            Succ(i) => set_elt_reflects(d, x, rest, i),
         },
-    }
-}
-
-theorem set_filter_at_reflects<A>(x: A, ps: List<A → Bool>, ys: List<A>, {y: Bool}, r: Reflects(Mem(x, ys), y)): (k: Nat) →
-    Reflects(Mem(x, set_filter_at(ps, k, ys)), set_bit_at(ps.map(λ (p: A → Bool) => p(x)), k) && y) {
-    match ps {
-        Nil => λ k => set_false_reflects(),
-        Cons(p, rest) => λ k => match k {
-            Zero => set_filter_reflects(ys, x, p, r),
-            Succ(i) => set_filter_at_reflects(x, rest, ys, r, i),
-        },
-    }
-}
-
-theorem set_op_reflects<A>(x: A, os: List<SetOp<A>>, as, bs: List<A>, {a, b: Bool}, ra: Reflects(Mem(x, as), a), rb: Reflects(Mem(x, bs), b)):
-    (i: Nat) → Reflects(Mem(x, set_op_at(os, i, as, bs)), set_conn_at(os.map(λ (o: SetOp<A>) => o.conn), i, a, b)) {
-    match os {
-        Nil => λ i => set_false_reflects(),
-        Cons(o, rest) => λ i => match i {
-            Zero => reflects_iff(o.conn.reflects(ra, rb), (o.law(x, as, bs)).mpr, (o.law(x, as, bs)).mp),
-            Succ(k) => set_op_reflects(x, rest, as, bs, ra, rb, k),
-        },
-    }
-}
-
-theorem SetExpr::reflects<A>(self e: SetExpr, env: SetEnv<A>, d: DecEq<A>, x: A):
-    Reflects(Mem(x, e.denote(env)), e.eval(env.bits(d, x))) {
-    match e {
-        SAtom(k) => set_atom_reflects(d, x, env.sets, k),
-        SNil => set_false_reflects(),
-        SCons(j, rest) => set_cons_reflects(d, x, env.elts, rest.denote(env), rest.reflects(env, d, x), j),
-        SFilter(k, s) => set_filter_at_reflects(x, env.preds, s.denote(env), s.reflects(env, d, x), k),
-        SOp(i, a, b) => set_op_reflects(x, env.ops, a.denote(env), b.denote(env), a.reflects(env, d, x), b.reflects(env, d, x), i),
     }
 }
 
 // ---------------------------------------------------------------------------
 // Facts and goals
 
-// A hypothesis at `x`: `x` is in `e`, `x` is not in `e`, or if `x` is in
-// `a` then it is in `b` (an inclusion `(i: A) → i ∈ a → i ∈ b` applied to
-// `x`, so sets that mention the bound element are read too), or if `x` is
-// in `a` then it is not in `b` (`a` and `b` apart at `x`).
-inductive SetFact { FMem(e: SetExpr), FNot(e: SetExpr), FImp(a: SetExpr, b: SetExpr), FApart(a: SetExpr, b: SetExpr) }
+// A hypothesis at `x`: `x` is in `e`, is not in `e`, if in `a` then in `b`
+// (an inclusion applied to `x`), if in `a` then not in `b` (`a` and `b`
+// apart at `x`), is the `j`th element, or is not.
+inductive SetFact { FMem(e: SetExpr), FNot(e: SetExpr), FImp(a: SetExpr, b: SetExpr), FApart(a: SetExpr, b: SetExpr), FEq(j: Nat), FNe(j: Nat) }
 
-fn SetFact::Holds<A>(self f: SetFact, env: SetEnv<A>, x: A) → Type {
+fn SetFact::Holds<S, A>(self f: SetFact, C: DecSet<S, A>, env: SetEnv<S, A>, x: A) → Type {
     match f {
-        FMem(e) => Mem(x, e.denote(env)),
-        FNot(e) => ¬Mem(x, e.denote(env)),
-        FImp(a, b) => Mem(x, a.denote(env)) → Mem(x, b.denote(env)),
-        FApart(a, b) => Mem(x, a.denote(env)) → ¬Mem(x, b.denote(env)),
+        FMem(e) => C.has(e.denote(C, env), x) = True,
+        FNot(e) => C.has(e.denote(C, env), x) = False,
+        FImp(a, b) => C.has(a.denote(C, env), x) = True → C.has(b.denote(C, env), x) = True,
+        FApart(a, b) => C.has(a.denote(C, env), x) = True → C.has(b.denote(C, env), x) = False,
+        FEq(j) => set_is_elt(env.elts, j, x),
+        FNe(j) => ¬set_is_elt(env.elts, j, x),
     }
 }
 
 fn SetFact::bit(self f: SetFact, v: SetBits) → Bool {
-    match f { FMem(e) => e.eval(v), FNot(e) => !e.eval(v), FImp(a, b) => !a.eval(v) || b.eval(v), FApart(a, b) => !a.eval(v) || !b.eval(v) }
-}
-
-theorem set_true_of({P: Type}, {b: Bool}, r: Reflects(P, b), p: P): b = True { bool::eq_true_of_is_true(b, reflects_intro(r, p)) }
-
-theorem SetFact::bit_of<A>(self f: SetFact, env: SetEnv<A>, d: DecEq<A>, x: A, h: f.Holds(env, x)): f.bit(env.bits(d, x)) = True {
     match f {
-        FMem(e) => set_true_of(e.reflects(env, d, x), h),
-        FNot(e) => set_true_of(reflects_not(e.reflects(env, d, x)), h),
-        FImp(a, b) => set_true_of(reflects_imp(a.reflects(env, d, x), b.reflects(env, d, x)), h),
-        FApart(a, b) => set_true_of(reflects_imp(a.reflects(env, d, x), reflects_not(b.reflects(env, d, x))), h),
+        FMem(e) => e.eval(v),
+        FNot(e) => !e.eval(v),
+        FImp(a, b) => !a.eval(v) || b.eval(v),
+        FApart(a, b) => !a.eval(v) || !b.eval(v),
+        FEq(j) => set_bit_at(v.elts, j),
+        FNe(j) => !set_bit_at(v.elts, j),
     }
 }
 
-fn set_facts_hold<A>(fs: List<SetFact>, env: SetEnv<A>, x: A) → Type {
-    match fs { Nil => True, Cons(f, rest) => f.Holds(env, x) ∧ set_facts_hold(rest, env, x) }
+// The bit facts the proofs move between.
+theorem set_not_of_true(b: Bool, h: b = True): !b = False { j(sym(h), λ c _ => !c = False, refl) }
+theorem set_not_of_false(b: Bool, h: b = False): !b = True { j(sym(h), λ c _ => !c = True, refl) }
+theorem set_true_of_not_false(b: Bool, h: !b = False): b = True {
+    (match b as λ c => !c = False → c = True { True => λ _ => refl, False => λ bad => absurd(bad) })(h)
+}
+theorem set_false_of_not_true(b: Bool, h: !b = True): b = False {
+    (match b as λ c => !c = True → c = False { False => λ _ => refl, True => λ bad => absurd(bad) })(h)
+}
+
+theorem set_imp_true(a, b: Bool, h: a = True → b = True): (!a || b) = True {
+    (match a as λ c => (c = True → b = True) → (!c || b) = True { True => λ k => k(refl), False => λ _ => refl })(h)
+}
+
+theorem set_apart_true(a, b: Bool, h: a = True → b = False): (!a || !b) = True {
+    (match a as λ c => (c = True → b = False) → (!c || !b) = True { True => λ k => set_not_of_false(b, k(refl)), False => λ _ => refl })(h)
+}
+
+theorem SetFact::bit_of<S, A>(self f: SetFact, C: DecSet<S, A>, d: DecEq<A>, env: SetEnv<S, A>, lawful: set_ops_lawful(env.ops, C.has), x: A,
+    h: f.Holds(C, env, x)): f.bit(env.bits(C, d, x)) = True {
+    match f {
+        FMem(e) => trans(sym(e.agrees(C, d, env, lawful, x)), h),
+        FNot(e) => set_not_of_false(e.eval(env.bits(C, d, x)), trans(sym(e.agrees(C, d, env, lawful, x)), h)),
+        FImp(a, b) => set_imp_true(a.eval(env.bits(C, d, x)), b.eval(env.bits(C, d, x)),
+            λ t => trans(sym(b.agrees(C, d, env, lawful, x)), h(trans(a.agrees(C, d, env, lawful, x), t)))),
+        FApart(a, b) => set_apart_true(a.eval(env.bits(C, d, x)), b.eval(env.bits(C, d, x)),
+            λ t => trans(sym(b.agrees(C, d, env, lawful, x)), h(trans(a.agrees(C, d, env, lawful, x), t)))),
+        FEq(j) => set_true_of(set_elt_reflects(d, x, env.elts, j), h),
+        FNe(j) => set_true_of(reflects_not(set_elt_reflects(d, x, env.elts, j)), h),
+    }
+}
+
+fn set_facts_hold<S, A>(fs: List<SetFact>, C: DecSet<S, A>, env: SetEnv<S, A>, x: A) → Type {
+    match fs { Nil => True, Cons(f, rest) => f.Holds(C, env, x) ∧ set_facts_hold(rest, C, env, x) }
 }
 
 fn set_facts_bit(fs: List<SetFact>, v: SetBits) → Bool {
     match fs { Nil => True, Cons(f, rest) => f.bit(v) && set_facts_bit(rest, v) }
 }
 
-theorem set_facts_bit_of<A>(env: SetEnv<A>, d: DecEq<A>, x: A, fs: List<SetFact>): set_facts_hold(fs, env, x) → set_facts_bit(fs, env.bits(d, x)) = True {
+theorem set_facts_bit_of<S, A>(C: DecSet<S, A>, d: DecEq<A>, env: SetEnv<S, A>, lawful: set_ops_lawful(env.ops, C.has), x: A, fs: List<SetFact>):
+    set_facts_hold(fs, C, env, x) → set_facts_bit(fs, env.bits(C, d, x)) = True {
     match fs {
         Nil => λ _ => refl,
         Cons(f, rest) => λ h => {
-            let first: (f.bit(env.bits(d, x)) = True) = f.bit_of(env, d, x, h.left);
-            let later: (set_facts_bit(rest, env.bits(d, x)) = True) = set_facts_bit_of(env, d, x, rest, h.right);
-            j(sym(first), λ b _ => (b && set_facts_bit(rest, env.bits(d, x))) = True, later)
+            let first: (f.bit(env.bits(C, d, x)) = True) = f.bit_of(C, d, env, lawful, x, h.left);
+            let later: (set_facts_bit(rest, env.bits(C, d, x)) = True) = set_facts_bit_of(C, d, env, lawful, x, rest, h.right);
+            j(sym(first), λ b _ => (b && set_facts_bit(rest, env.bits(C, d, x))) = True, later)
         },
     }
 }
 
-// The goal: `x` is in `e`, is not in `e`, or nothing (the hypotheses
-// contradict each other).
-inductive SetGoal { GMem(e: SetExpr), GNot(e: SetExpr), GFalse }
+// The goal: `x` is in `e`, is not in `e`, nothing (the hypotheses
+// contradict each other), is the `j`th element, or is in `a` exactly when
+// it is in `b`.
+inductive SetGoal { GMem(e: SetExpr), GNot(e: SetExpr), GFalse, GEq(j: Nat), GSame(a: SetExpr, b: SetExpr) }
 
-fn SetGoal::Holds<A>(self g: SetGoal, env: SetEnv<A>, x: A) → Type {
-    match g { GMem(e) => Mem(x, e.denote(env)), GNot(e) => ¬Mem(x, e.denote(env)), GFalse => False }
+fn SetGoal::Holds<S, A>(self g: SetGoal, C: DecSet<S, A>, env: SetEnv<S, A>, x: A) → Type {
+    match g {
+        GMem(e) => C.has(e.denote(C, env), x) = True,
+        GNot(e) => C.has(e.denote(C, env), x) = False,
+        GFalse => False,
+        GEq(j) => set_is_elt(env.elts, j, x),
+        GSame(a, b) => C.has(a.denote(C, env), x) = C.has(b.denote(C, env), x),
+    }
+}
+
+// Whether two bits are equal.
+fn set_beq(p, q: Bool) → Bool { match p { True => q, False => !q } }
+
+theorem set_eq_of_beq(p, q: Bool, h: set_beq(p, q) = True): p = q {
+    (match p as λ c => set_beq(c, q) = True → c = q {
+        True => λ (t: q = True) => sym(t),
+        False => λ (t: !q = True) => sym(set_false_of_not_true(q, t)),
+    })(h)
 }
 
 fn SetGoal::bit(self g: SetGoal, v: SetBits) → Bool {
-    match g { GMem(e) => e.eval(v), GNot(e) => !e.eval(v), GFalse => False }
+    match g {
+        GMem(e) => e.eval(v),
+        GNot(e) => !e.eval(v),
+        GFalse => False,
+        GEq(j) => set_bit_at(v.elts, j),
+        GSame(a, b) => set_beq(a.eval(v), b.eval(v)),
+    }
 }
 
-theorem SetGoal::holds_of<A>(self g: SetGoal, env: SetEnv<A>, d: DecEq<A>, x: A, h: g.bit(env.bits(d, x)) = True): g.Holds(env, x) {
+theorem SetGoal::holds_of<S, A>(self g: SetGoal, C: DecSet<S, A>, d: DecEq<A>, env: SetEnv<S, A>, lawful: set_ops_lawful(env.ops, C.has), x: A,
+    h: g.bit(env.bits(C, d, x)) = True): g.Holds(C, env, x) {
     match g {
-        GMem(e) => e.reflects(env, d, x).left(h),
-        GNot(e) => reflects_not(e.reflects(env, d, x)).left(h),
+        GMem(e) => trans(e.agrees(C, d, env, lawful, x), h),
+        GNot(e) => trans(e.agrees(C, d, env, lawful, x), set_false_of_not_true(e.eval(env.bits(C, d, x)), h)),
         GFalse => absurd(h),
+        GEq(j) => set_elt_reflects(d, x, env.elts, j).left(h),
+        GSame(a, b) => trans(a.agrees(C, d, env, lawful, x),
+            trans(set_eq_of_beq(a.eval(env.bits(C, d, x)), b.eval(env.bits(C, d, x)), h), sym(b.agrees(C, d, env, lawful, x)))),
     }
 }
 
@@ -353,82 +518,127 @@ theorem set_all_bits_sound(n: Nat): (f: List<Bool> → Bool) → set_all_bits(n,
 
 // For every assignment of the leaves' bits: the facts imply the goal. Closed
 // in everything it reads, so `= True` is proved by `refl`.
-fn set_taut(n, m, q: Nat, conns: List<SetConn>, facts: List<SetFact>, goal: SetGoal) → Bool {
+fn set_taut(n, m, q: Nat, kinds: List<SetOpKind>, facts: List<SetFact>, goal: SetGoal) → Bool {
     set_all_bits(n, λ (vs: List<Bool>) => set_all_bits(m, λ (ws: List<Bool>) => set_all_bits(q, λ (ps: List<Bool>) =>
-        !set_facts_bit(facts, SetBits(vs, ws, ps, conns)) || goal.bit(SetBits(vs, ws, ps, conns)))))
+        !set_facts_bit(facts, SetBits(vs, ws, ps, kinds)) || goal.bit(SetBits(vs, ws, ps, kinds)))))
 }
 
-theorem set_solve<A>(d: DecEq<A>, env: SetEnv<A>, x: A, facts: List<SetFact>, goal: SetGoal,
-    verdict: set_taut(env.sets.len(), env.elts.len(), env.preds.len(), env.ops.map(λ (o: SetOp<A>) => o.conn), facts, goal) = True,
-    held: set_facts_hold(facts, env, x)): goal.Holds(env, x) {
-    let v: SetBits = env.bits(d, x);
-    let conns: List<SetConn> = env.ops.map(λ (o: SetOp<A>) => o.conn);
+theorem set_solve<S, A>(C: DecSet<S, A>, d: DecEq<A>, env: SetEnv<S, A>, lawful: set_ops_lawful(env.ops, C.has), x: A,
+    facts: List<SetFact>, goal: SetGoal,
+    verdict: set_taut(env.sets.len(), env.elts.len(), env.preds.len(), set_kinds(env.ops), facts, goal) = True,
+    held: set_facts_hold(facts, C, env, x)): goal.Holds(C, env, x) {
+    let v: SetBits = env.bits(C, d, x);
+    let kinds: List<SetOpKind> = set_kinds(env.ops);
     let at_v: ((!set_facts_bit(facts, v) || goal.bit(v)) = True) =
-        set_all_bits_sound(env.preds.len(), λ (ps: List<Bool>) => !set_facts_bit(facts, SetBits(v.sets, v.elts, ps, conns)) || goal.bit(SetBits(v.sets, v.elts, ps, conns)),
+        set_all_bits_sound(env.preds.len(), λ (ps: List<Bool>) => !set_facts_bit(facts, SetBits(v.sets, v.elts, ps, kinds)) || goal.bit(SetBits(v.sets, v.elts, ps, kinds)),
             set_all_bits_sound(env.elts.len(), λ (ws: List<Bool>) => set_all_bits(env.preds.len(), λ (ps: List<Bool>) =>
-                    !set_facts_bit(facts, SetBits(v.sets, ws, ps, conns)) || goal.bit(SetBits(v.sets, ws, ps, conns))),
+                    !set_facts_bit(facts, SetBits(v.sets, ws, ps, kinds)) || goal.bit(SetBits(v.sets, ws, ps, kinds))),
                 set_all_bits_sound(env.sets.len(), λ (vs: List<Bool>) => set_all_bits(env.elts.len(), λ (ws: List<Bool>) => set_all_bits(env.preds.len(), λ (ps: List<Bool>) =>
-                        !set_facts_bit(facts, SetBits(vs, ws, ps, conns)) || goal.bit(SetBits(vs, ws, ps, conns)))),
-                    verdict, v.sets, env.sets.len_map(λ (s: List<A>) => set_mem_bit(d, x, s))),
+                        !set_facts_bit(facts, SetBits(vs, ws, ps, kinds)) || goal.bit(SetBits(vs, ws, ps, kinds)))),
+                    verdict, v.sets, env.sets.len_map(λ (s: S) => C.has(s, x))),
                 v.elts, env.elts.len_map(λ (a: A) => set_eq_bit(d, x, a))),
             v.preds, env.preds.len_map(λ (p: A → Bool) => p(x)));
-    let facts_true: (set_facts_bit(facts, v) = True) = set_facts_bit_of(env, d, x, facts, held);
+    let facts_true: (set_facts_bit(facts, v) = True) = set_facts_bit_of(C, d, env, lawful, x, facts, held);
     let goal_true: (goal.bit(v) = True) = j(facts_true, λ b _ => (!b || goal.bit(v)) = True, at_v);
-    goal.holds_of(env, d, x, goal_true)
+    goal.holds_of(C, d, env, lawful, x, goal_true)
 }
 
-// The membership hypothesis/goal helpers a tactic names as globals: lists
-// and the facts' proofs (`Lookup` names functions, not constructors).
+// ---------------------------------------------------------------------------
+// What the tactic names as globals (`Lookup` names functions, not
+// constructors; a class is not a term a tactic can quote, a function
+// returning its instance type is)
+
 fn set_list_nil<B>() → List<B> { Nil }
 fn set_list_cons<B>(h: B, t: List<B>) → List<B> { Cons(h, t) }
-fn set_env<A>(sets: List<List<A>>, elts: List<A>, preds: List<A → Bool>, ops: List<SetOp<A>>) → SetEnv<A> { SetEnv(sets, elts, preds, ops) }
-fn set_op<A>(f: List<A> → List<A> → List<A>, conn: SetConn, law: SetLaw(f, conn)) → SetOp<A> { SetOp(f, conn, law) }
-fn set_or() → SetConn { SetOr }
-fn set_and() → SetConn { SetAnd }
-fn set_diff() → SetConn { SetDiff }
+fn set_env<S, A>(sets: List<S>, elts: List<A>, preds: List<A → Bool>, ops: List<SetOpFn<S, A>>) → SetEnv<S, A> { SetEnv(sets, elts, preds, ops) }
+fn set_op_bin<S, A>(f: S → S → S, c: SetConn) → SetOpFn<S, A> { OpBin(f, c) }
+fn set_op_ins<S, A>(f: A → S → S) → SetOpFn<S, A> { OpIns(f) }
+fn set_op_filt<S, A>(f: S → (A → Bool) → S) → SetOpFn<S, A> { OpFilt(f) }
+fn set_or() → SetConn { COr }
+fn set_and() → SetConn { CAnd }
+fn set_diff() → SetConn { CDiff }
 fn set_atom_e(k: Nat) → SetExpr { SAtom(k) }
-fn set_nil_e() → SetExpr { SNil }
-fn set_cons_e(j: Nat, rest: SetExpr) → SetExpr { SCons(j, rest) }
-fn set_filter_e(k: Nat, s: SetExpr) → SetExpr { SFilter(k, s) }
-fn set_op_e(i: Nat, a, b: SetExpr) → SetExpr { SOp(i, a, b) }
+fn set_empty_e() → SetExpr { SEmpty }
+fn set_ins_e(i, j: Nat, s: SetExpr) → SetExpr { SIns(i, j, s) }
+fn set_filt_e(i, k: Nat, s: SetExpr) → SetExpr { SFilt(i, k, s) }
+fn set_bin_e(i: Nat, a, b: SetExpr) → SetExpr { SBin(i, a, b) }
 fn set_fact_mem(e: SetExpr) → SetFact { FMem(e) }
 fn set_fact_not(e: SetExpr) → SetFact { FNot(e) }
 fn set_fact_imp(a, b: SetExpr) → SetFact { FImp(a, b) }
 fn set_fact_apart(a, b: SetExpr) → SetFact { FApart(a, b) }
+fn set_fact_eq(j: Nat) → SetFact { FEq(j) }
+fn set_fact_ne(j: Nat) → SetFact { FNe(j) }
 fn set_goal_mem(e: SetExpr) → SetGoal { GMem(e) }
 fn set_goal_not(e: SetExpr) → SetGoal { GNot(e) }
 fn set_goal_false() → SetGoal { GFalse }
-// The dictionary type the tactic asks `Synth` for: a class is not a term
-// a tactic can quote, a function returning its instance type is.
+fn set_goal_eq(j: Nat) → SetGoal { GEq(j) }
+fn set_goal_same(a, b: SetExpr) → SetGoal { GSame(a, b) }
+
 fn set_dec_eq_type(A: Type) → Type { DecEq<A> }
-// The element types of the environment's lists, for the same reason.
+fn set_dec_set_type(S, A: Type) → Type { DecSet<S, A> }
+fn set_union_type<S, A>(has: S → A → Bool, op: S → S → S) → Type { SetUnion<S, A>(has, op) }
+fn set_inter_type<S, A>(has: S → A → Bool, op: S → S → S) → Type { SetInter<S, A>(has, op) }
+fn set_minus_type<S, A>(has: S → A → Bool, op: S → S → S) → Type { SetMinus<S, A>(has, op) }
+fn set_insert_type<S, A>(has: S → A → Bool, op: A → S → S) → Type { SetInsert<S, A>(has, op) }
+fn set_filter_type<S, A>(has: S → A → Bool, op: S → (A → Bool) → S) → Type { SetFilter<S, A>(has, op) }
+fn set_reflects_type<S, A>(has: S → A → Bool, P: A → S → Type) → Type { SetReflects<S, A>(has, P) }
 fn set_list_type(A: Type) → Type { List<A> }
 fn set_pred_type(A: Type) → Type { A → Bool }
-fn set_op_type(A: Type) → Type { SetOp<A> }
+fn set_op_type(S, A: Type) → Type { SetOpFn<S, A> }
 fn set_fact_type() → Type { SetFact }
 
+// A dictionary's fields, read by applying these (the tactic's `Fields`
+// does not read a dictionary whose later fields mention earlier ones).
+fn set_has_of<S, A>(C: DecSet<S, A>) → S → A → Bool { C.has }
+fn set_empty_of<S, A>(C: DecSet<S, A>) → S { C.empty }
+theorem set_union_law<S, A>(has: S → A → Bool, op: S → S → S, U: SetUnion<S, A>(has, op)):
+    (a, b: S) → (x: A) → has(op(a, b), x) = (has(a, x) || has(b, x)) { U.has_union }
+theorem set_inter_law<S, A>(has: S → A → Bool, op: S → S → S, U: SetInter<S, A>(has, op)):
+    (a, b: S) → (x: A) → has(op(a, b), x) = (has(a, x) && has(b, x)) { U.has_inter }
+theorem set_minus_law<S, A>(has: S → A → Bool, op: S → S → S, U: SetMinus<S, A>(has, op)):
+    (a, b: S) → (x: A) → has(op(a, b), x) = (has(a, x) && !has(b, x)) { U.has_minus }
+theorem set_insert_law<S, A>(has: S → A → Bool, op: A → S → S, U: SetInsert<S, A>(has, op)):
+    ((e: A) → (s: S) → has(op(e, s), e) = True) ∧ ((x, e: A) → (s: S) → ¬(x = e) → has(op(e, s), x) = has(s, x)) {
+    And(U.has_here, U.has_other)
+}
+theorem set_filter_law<S, A>(has: S → A → Bool, op: S → (A → Bool) → S, U: SetFilter<S, A>(has, op)):
+    (s: S) → (p: A → Bool) → (x: A) → has(op(s, p), x) = (has(s, x) && p(x)) { U.has_filter }
+
 theorem set_held_nil(): True { trivial }
-// An element the tactic finds equal to `x` by conversion is the fact
-// `x ∈ [e]`; a hypothesis `¬(x = e)` is the fact `x ∉ [e]`.
-theorem set_mem_self<A>(x: A): Mem(x, [x]) { Inl(refl) }
-theorem set_not_single<A>(x, y: A, n: ¬(x = y)): ¬Mem(x, [y]) {
-    λ (m: Mem(x, [y])) => match m { Inl(e) => n(e), Inr(f) => f }
-}
-theorem set_not_single_sym<A>(x, y: A, n: ¬(y = x)): ¬Mem(x, [y]) {
-    λ (m: Mem(x, [y])) => match m { Inl(e) => n(sym(e)), Inr(f) => f }
-}
 theorem set_held_cons({P, Q: Type}, p: P, q: Q): P ∧ Q { And(p, q) }
-theorem set_mem_of_eq<A>(x, y: A, h: x = y): Mem(x, [y]) { Inl(h) }
-theorem set_mem_of_eq_sym<A>(x, y: A, h: y = x): Mem(x, [y]) { Inl(sym(h)) }
+
+// A proposition membership decides (`Mem`), to and from the bit.
+theorem set_prop_true<S, A>(has: S → A → Bool, P: A → S → Type, R: SetReflects<S, A>(has, P), s: S, x: A, p: P(x, s)): has(s, x) = True {
+    set_true_of(R.reflects(s, x), p)
+}
+theorem set_prop_false<S, A>(has: S → A → Bool, P: A → S → Type, R: SetReflects<S, A>(has, P), s: S, x: A, np: ¬P(x, s)): has(s, x) = False {
+    set_false_of(R.reflects(s, x), np)
+}
+theorem set_prop_of_true<S, A>(has: S → A → Bool, P: A → S → Type, R: SetReflects<S, A>(has, P), s: S, x: A, h: has(s, x) = True): P(x, s) {
+    R.reflects(s, x).left(h)
+}
+theorem set_prop_of_false<S, A>(has: S → A → Bool, P: A → S → Type, R: SetReflects<S, A>(has, P), s: S, x: A, h: has(s, x) = False): ¬P(x, s) {
+    R.reflects(s, x).right(h)
+}
+
+// A fact about an element `x` is equal to, moved to `x`.
+theorem set_has_transport<S, A>(has: S → A → Bool, s: S, x, y: A, v: Bool, e: x = y, h: has(s, y) = v): has(s, x) = v {
+    j(sym(e), λ z _ => has(s, z) = v, h)
+}
+theorem set_eq_self<A>(x: A): x = x { refl }
+theorem set_eq_sym<A>(x, y: A, e: y = x): x = y { sym(e) }
+theorem set_ne_sym<A>(x, y: A, n: ¬(y = x)): ¬(x = y) { λ (e: x = y) => n(sym(e)) }
 
 // ---------------------------------------------------------------------------
 // Membership spelled as a Boolean
 
-// A Boolean spelling of membership: `f(x, s)` reflects `x ∈ s`, or, when
-// `negated`, `!f(x, s)` does (`absent(x, s)` is `x ∉ s`). A module that
+// A Boolean spelling of list membership: `f(x, s)` reflects `x ∈ s`, or,
+// when `negated`, `!f(x, s)` does (`absent(x, s)` is `x ∉ s`). A module that
 // spells membership so registers the law (`SetBitEntry`,
 // lib/std/data/set/set_ops.hthr), and the `sets` tactic reads `f(x, s) =
 // True`, `= False` and `.IsTrue()` through it, as hypotheses and as goals.
+// (A spelling that is a carrier's own `has`, up to its definition, needs no
+// entry.)
 fn SetBitLaw<A>(f: A → List<A> → Bool, negated: Bool) → Type {
     (x: A) → (s: List<A>) → Reflects(Mem(x, s), match negated { False => f(x, s), True => !f(x, s) })
 }
@@ -445,16 +655,9 @@ fn SetEqLaw<A>(f: A → A → Bool, negated: Bool) → Type {
 theorem set_reflect_true({P: Type}, b: Bool, r: Reflects(P, b), h: b = True): P { r.left(h) }
 theorem set_reflect_false({P: Type}, b: Bool, r: Reflects(P, b), h: b = False): ¬P { r.right(h) }
 theorem set_reflect_is_true({P: Type}, b: Bool, r: Reflects(P, b), p: P): b = True { set_true_of(r, p) }
-theorem set_reflect_is_false({P: Type}, b: Bool, r: Reflects(P, b), np: ¬P): b = False {
-    (match b as λ c => Reflects(P, c) → c = False {
-        False => λ _ => refl,
-        True => λ (r2: Reflects(P, True)) => false_elim(np(r2.left(refl))),
-    })(r)
-}
+theorem set_reflect_is_false({P: Type}, b: Bool, r: Reflects(P, b), np: ¬P): b = False { set_false_of(r, np) }
 
-// An equation goal is membership in a singleton; a disequation is `False`
-// under the equation. The two as types the tactic can quote.
-theorem set_eq_of_mem_single<A>(x, y: A, m: Mem(x, [y])): x = y { match m { Inl(e) => e, Inr(never) => false_elim(never) } }
+// The equation and its negation as types the tactic can quote.
 fn set_eq_prop<A>(x, y: A) → Type { x = y }
 fn set_ne_prop<A>(x, y: A) → Type { ¬(x = y) }
 
@@ -464,12 +667,7 @@ theorem set_spell_false<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b),
 
 // From membership to the spelling.
 theorem set_spell_is_true<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), p: Mem(x, s)): b = True { set_true_of(r, p) }
-theorem set_spell_is_false<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), np: ¬Mem(x, s)): b = False {
-    (match b as λ c => Reflects(Mem(x, s), c) → c = False {
-        False => λ _ => refl,
-        True => λ (r2: Reflects(Mem(x, s), True)) => false_elim(np(r2.left(refl))),
-    })(r)
-}
+theorem set_spell_is_false<A>(x: A, s: List<A>, b: Bool, r: Reflects(Mem(x, s), b), np: ¬Mem(x, s)): b = False { set_false_of(r, np) }
 
 // A negation read through: `!!u` reflects what `u` does.
 theorem set_reflects_not_not<A>(x: A, s: List<A>, u: Bool, r: Reflects(Mem(x, s), u)): Reflects(Mem(x, s), !!u) {
@@ -479,23 +677,18 @@ theorem set_reflects_not_not<A>(x: A, s: List<A>, u: Bool, r: Reflects(Mem(x, s)
     })(r)
 }
 
-// The bit facts the tactic moves between.
-theorem set_not_of_true(b: Bool, h: b = True): !b = False { j(sym(h), λ c _ => !c = False, refl) }
-theorem set_not_of_false(b: Bool, h: b = False): !b = True { j(sym(h), λ c _ => !c = True, refl) }
-theorem set_true_of_not_false(b: Bool, h: !b = False): b = True {
-    (match b as λ c => !c = False → c = True { True => λ _ => refl, False => λ bad => absurd(bad) })(h)
-}
-theorem set_false_of_not_true(b: Bool, h: !b = True): b = False {
-    (match b as λ c => !c = True → c = False { False => λ _ => refl, True => λ bad => absurd(bad) })(h)
-}
 theorem set_eq_true_of_is(b: Bool, h: b.IsTrue()): b = True { bool::eq_true_of_is_true(b, h) }
 theorem set_is_of_eq_true(b: Bool, h: b = True): b.IsTrue() { j(sym(h), λ c _ => c.IsTrue(), trivial) }
 
-// A fact about an element `x` is equal to, moved to `x`.
-theorem set_mem_transport<A>(x, y: A, s: List<A>, e: x = y, h: Mem(y, s)): Mem(x, s) { j(sym(e), λ z _ => Mem(z, s), h) }
-theorem set_not_transport<A>(x, y: A, s: List<A>, e: x = y, h: ¬Mem(y, s)): ¬Mem(x, s) { j(sym(e), λ z _ => ¬Mem(z, s), h) }
-theorem set_eq_sym<A>(x, y: A, e: y = x): x = y { sym(e) }
+// A relation known false is one whose truth leads to `False`.
+fn set_not_is(b: Bool) → Type { b.IsTrue() → False }
+theorem set_false_of_not_is(b: Bool, h: b.IsTrue() → False): b = False {
+    (match b as λ c => (c.IsTrue() → False) → c = False { True => λ k => false_elim(k(trivial)), False => λ _ => refl })(h)
+}
 
-// An inclusion whose conclusion is a spelling, read as membership: the
-// spelling's conversion after the inclusion.
+theorem set_false_of_ne_true(b: Bool, h: b = True → False): b = False {
+    (match b as λ c => (c = True → False) → c = False { True => λ k => false_elim(k(refl)), False => λ _ => refl })(h)
+}
+
+// An inclusion whose ends are read through conversions: `f` after `g`.
 theorem set_comp({P, Q, R: Type}, f: Q → R, g: P → Q): P → R { λ (p: P) => f(g(p)) }
