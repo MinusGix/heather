@@ -28,6 +28,8 @@ import function_ir;
 import bitvec;
 import bool;
 import list;
+import set_solve;
+import set_ops;
 import logic;
 import nat;
 import option;
@@ -1366,6 +1368,32 @@ theorem disjoint_of(xs, ys: List<Nat>): ((y: Nat) → Mem(y, ys) → absent(y, x
             h(y, Inl(refl)), disjoint_of(xs, rest, λ z m => h(z, Inr(m)))),
     }
 }
+
+// Sets of ids as lists.
+theorem absent_false_mem(id: Nat, ids: List<Nat>): absent(id, ids) = False → Mem(id, ids) {
+    match ids {
+        Nil => λ no => absurd(no),
+        Cons(x, rest) => (match id.eq_dec(x) {
+            Inl(e) => λ _ => Inl(e),
+            Inr(_) => λ no => Inr(absent_false_mem(id, rest, no)),
+        }),
+    }
+}
+
+// `absent(x, s)` is `x ∉ s`, so `sets` reads it (and `holds`, which is
+// `!absent`) as membership.
+theorem absent_set_law(): SetBitLaw<Nat>(absent, True) {
+    λ x s => match none: absent(x, s) {
+        True => And(λ (no: False = True) => absurd(no),
+            λ _ (m: Mem(x, s)) => absent_mem(x, s, j(sym(none), λ c _ => c.IsTrue(), trivial), x, m, refl)),
+        False => And(λ _ => absent_false_mem(x, s, none), λ (no: True = False) => absurd(no)),
+    }
+}
+
+register def absent_set_entry: SetBitEntry = SetBitEntry(name_of(absent), name_of(absent_set_law), True, 0);
+
+// `disjoint(xs, ys)`: every element of `ys` is absent from `xs`.
+register def disjoint_set_entry: SetRelEntry = SetRelEntry(name_of(disjoint), name_of(disjoint_mem), name_of(disjoint_of), 0);
 
 // Nothing `ys` mentions is written in `xs`: each of `ys` is marked and each
 // of `xs` is not.

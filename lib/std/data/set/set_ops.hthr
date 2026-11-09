@@ -26,3 +26,11 @@ register def set_append_entry: SetOpEntry = SetOpEntry(name_of(List::append), Se
 // `name_of`), whether the law reads the negation, and the implicit
 // parameters the function and its law open with, as for `SetOpEntry`.
 record SetBitEntry { op: String, law: String, negated: Bool, implicits: Nat }
+
+// A Boolean spelling of a relation between two sets (`a.within(b)`,
+// `disjoint(xs, ys)`) by name, with its two laws by `name_of`: `elim(a, b,
+// h: f(a, b).IsTrue())` proves a function type the tactic reads at each
+// element (an inclusion, or one whose conclusion is a non-membership or a
+// spelling), and `intro(a, b, h)` proves `f(a, b).IsTrue()` from that same
+// function type. `implicits` is as for `SetOpEntry`.
+record SetRelEntry { op: String, elim: String, intro: String, implicits: Nat }
