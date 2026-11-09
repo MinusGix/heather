@@ -44,7 +44,7 @@ order, and the `Nat` lemmas in `list_algos` are instances.
   preorder and a linear order, as constructors and as instances. New
   classes: `DecidableRel` (relation_props), `TotalPreorder` (order);
   `DecidableRel` at `Nat::Le`/`Int::Le`, and `LinearOrder` +
-  `DecidableRel` at `BitVec::unsigned_le` (bitvec_nat). `list_algos`'
+  `DecidableRel` at `BitVec::unsigned_le` (bitvec_order). `list_algos`'
   `Sorted`, `insert`, `isort`, `count` and every theorem are one-line
   instances. `sort`'s spec is stated in `line_tools`
   (`byte_sorted_spec`, `sort_spec_unique`); the probes check `sorted_out`

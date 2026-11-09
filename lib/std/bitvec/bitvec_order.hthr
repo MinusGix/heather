@@ -1,0 +1,23 @@
+// The unsigned order on words, as order classes. Its own module so the many
+// hand-listed closures over `bitvec_nat` need not grow `order`.
+import logic;
+import nat;
+import bitvec;
+import bitvec_nat;
+import relation_props;
+import order;
+
+// `unsigned_le` is `Nat::Le` pulled
+// back along `toNat`, and `toNat` is injective (`toNat_inj`), so it is a
+// linear order; its decider is the borrow bit's. At `BitVec(8)` this is the
+// C locale's byte order, and `List::Lex` of it orders byte strings
+// (lib/std/data/sorting.hthr, `sort` in lib/native/runtime/line_tools.hthr).
+
+instance(n: Nat) LinearOrder<BitVec(n)>(BitVec::unsigned_le) {
+    rel_refl := λ x => Nat::le_refl(x.toNat()),
+    rel_trans := λ x y z hxy hyz => Nat::le_trans(x.toNat(), y.toNat(), z.toNat(), hxy, hyz),
+    rel_antisym := λ x y hxy hyx => BitVec::toNat_inj(n, Nat::le_antisym(x.toNat(), y.toNat(), hxy, hyx)),
+    rel_total := λ x y => Nat::le_total(x.toNat(), y.toNat()),
+}
+
+instance(n: Nat) DecidableRel<BitVec(n)>(BitVec::unsigned_le) { rel_dec := BitVec::unsigned_le_dec }

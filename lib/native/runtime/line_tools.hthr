@@ -52,7 +52,7 @@ import native_source;
 import rt_io;
 import relation_props;
 import order;
-import bitvec_nat;
+import bitvec_order;
 import perm;
 import sorting;
 
@@ -238,7 +238,7 @@ fn List::sorted_out(self lines: List<List<BitVec(8)>>) → List<List<BitVec(8)>>
 // What sort promises (issues/sorting-order-theory.md). The C locale's
 // line order is the lexicographic order of bytes compared unsigned
 // (`List::Lex(BitVec::unsigned_le)`, a linear order: std/sorting and
-// std/bitvec/bitvec_nat), and the lines written are the lines read,
+// std/bitvec/bitvec_order), and the lines written are the lines read,
 // rearranged into it: `lines.SortedPerm(…, out)`. A linear order leaves one
 // such list (`sort_spec_unique`), so the specification names the output,
 // which `byte_sorted` computes by insertion sort; `sorted_out` is meant to

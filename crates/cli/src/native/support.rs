@@ -31,7 +31,6 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("function_ir_lower", include_str!("../../../../lib/native/function_ir/function_ir_lower.hthr")),
     ("x86_64_fetch", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetch.hthr")),
     ("x86_64_data_read", include_str!("../../../../lib/std/arch/x86_64/x86_64_data_read.hthr")),
-    ("order", include_str!("../../../../lib/std/algebra/order.hthr")),
     ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
     ("omega", include_str!("../../../../lib/std/tactic/omega.hthr")),
     ("bitvec_signed", include_str!("../../../../lib/std/bitvec/bitvec_signed.hthr")),
