@@ -1,6 +1,6 @@
 ---
 title: The empty substitution tail records nothing: closed syntax is context-independent
-status: open
+status: closed
 labels: [kernel,performance,representation]
 area: kernel
 created: 2026-11-09
@@ -98,3 +98,7 @@ questions (`shift_local(1) == t && shift_global(1) == t`;
   and weakenings are rare outside contextual types.
 - `Ambient::gamma_base` stays in the typing memo keys: a term can still
   mention the base through a `wk`.
+
+## Log
+
+- 2026-11-09: Measured with `scripts/perf ab`, cloud box, cold width-one `heather check docs/showcase/calc_parser.hthr`, three interleaved samples, master 8a593b6 against this change alone (no allocator change): wall 95.8/102.1/100.5 s to 39.3/39.5/37.6 s (-61%, separate), kernel gate 33.8/35.8/34.9 s to 12.2/12.5/11.6 s (-65%), max RSS 948 MB to 570 MB (-40%). Counters: `local_subst_nodes` 175.1 M to 16.7 M, `shift_global_nodes` 56.5 M to 38.2 M, `syntax_eq_nodes` 30.6 M to 17.7 M, `syntax_eq_memo_hits` 3.96 M to 0.86 M, `eval_steps` 10.5 M to 7.49 M, `conv_misses` 116,754 to 104,055, `conv_shortcut_hits` 2.82 M to 1.94 M, `typing_memo_hits` 961,673 to 673,377, `global_ref_rescopes` 500,902 to 322,029. The elaborator-side counters moved with the two behaviour changes in the body: `decls_gated` 45,006 to 31,691, `check_terms` 4,882 to 3,904, `solution_checks` 6,248 to 4,292, `unify_calls` 12,277 to 10,321; `resolve_goals`, `gendefs_pushed`, `instance_match_calls` and the projection counters are unchanged. Together with [[global-allocator]] on a quiet box: wall 93.5/99.2/83.4 s to 32.8/30.7/28.3 s (-67%), gate 32.9/36.1/29.2 s to 10.6/9.8/9.2 s (-70%), max RSS 949 MB to 635 MB. After the change, stack samples of the same run put substitution at about 28% of busy time, of which the global namespace (`shift_global`, `apply_global`) is the larger part: [[psi-references-by-level]], [[zonk-reads-in-one-pass]].
