@@ -35,6 +35,14 @@ class Total<A>(R: A → A → Type) {
     rel_total: (x, y: A) → R(x, y) ∨ R(y, x),
 }
 
+// A relation decided: for each pair, a proof or a refutation. Kept apart
+// from the law classes above, which say nothing about deciding; an algorithm
+// that branches on a relation (a sort, `List::Lex`'s totality) asks for it
+// beside the laws it needs (`<A: DecidableRel(R) + Total(R)>`).
+class DecidableRel<A>(R: A → A → Type) {
+    rel_dec: (x, y: A) → R(x, y) ∨ ¬R(x, y),
+}
+
 // The first composite is equality-like rather than order-like. Its empty body
 // is an intentional class-composition probe: the one useful dictionary has
 // exactly the three canonical parent views and no copied law of its own.

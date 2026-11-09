@@ -50,6 +50,11 @@ import coitree;
 import linux_world;
 import native_source;
 import rt_io;
+import relation_props;
+import order;
+import bitvec_order;
+import perm;
+import sorting;
 
 fn newline() → BitVec(8) { 10 }
 
@@ -228,6 +233,39 @@ fn List::sorted_out(self lines: List<List<BitVec(8)>>) → List<List<BitVec(8)>>
         last := p
     }
     out
+}
+
+// What sort promises (issues/sorting-order-theory.md). The C locale's
+// line order is the lexicographic order of bytes compared unsigned
+// (`List::Lex(BitVec::unsigned_le)`, a linear order: std/sorting and
+// std/bitvec/bitvec_order), and the lines written are the lines read,
+// rearranged into it: `lines.SortedPerm(…, out)`. A linear order leaves one
+// such list (`sort_spec_unique`), so the specification names the output,
+// which `byte_sorted` computes by insertion sort; `sorted_out` is meant to
+// be it, each line followed by a newline (`sorted_out_meets_spec` in the
+// tests checks closed inputs; the theorem at every input is
+// issues/sort-sorted-out-correct.md).
+fn List::ByteOrder() → List<BitVec(8)> → List<BitVec(8)> → Type { List::Lex(BitVec::unsigned_le) }
+
+fn List::byte_sorted(self lines: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
+    lines.insertion_sort(List::Lex(BitVec::unsigned_le))
+}
+
+// The lines as sort writes them: each followed by a newline.
+fn List::with_newlines(self lines: List<List<BitVec(8)>>) → List<List<BitVec(8)>> {
+    match lines { Nil => [], Cons(l, t) => List::Cons(l, List::Cons([newline()], t.with_newlines())) }
+}
+
+theorem List::byte_sorted_spec(self lines: List<List<BitVec(8)>>):
+    lines.SortedPerm(List::Lex(BitVec::unsigned_le), lines.byte_sorted())
+{
+    lines.insertion_sort_correct(List::Lex(BitVec::unsigned_le))
+}
+
+theorem List::sort_spec_unique(self lines, out: List<List<BitVec(8)>>,
+    h: lines.SortedPerm(List::Lex(BitVec::unsigned_le), out)): out = lines.byte_sorted()
+{
+    lines.sorted_perm_unique(List::Lex(BitVec::unsigned_le), out, lines.byte_sorted(), h, lines.byte_sorted_spec())
 }
 
 // GNU's `sort` over stdin in the C locale (`LC_ALL=C`): its lines, each

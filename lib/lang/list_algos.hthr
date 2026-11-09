@@ -26,12 +26,26 @@
 // specification: `count` and the permutation half. `Mem` went to `std/list`
 // because it is polymorphic; `count` stayed here because it is not, and the
 // reason it is not is a live language gap — see §the other half below.
+//
+// Generalized (2026-11-09, issues/sorting-order-theory.md): every
+// declaration below is now `std/sorting`'s or `std/perm`'s at `Nat::Le` and
+// `DecEq<Nat>`. Sortedness, insertion, the sorting proof and the counting
+// proof are written once over a relation there; what stays here is the
+// `Nat` spelling and the measurement the comments record. `count` is
+// polymorphic now (`List::occurrences`), the language gap the comment below
+// names having closed with `DecEq` (issues/decidable-equation-carrier.md),
+// and the `Perm` relation the wave deferred exists without an indexed family
+// (`std/perm`'s header says how). The comments are kept as the history of
+// each declaration's earlier, Nat-only proof.
 
 import list;
 import nat;
 import option;
 import logic;
 import bool;
+import order;
+import perm;
+import sorting;
 
 // ---------------------------------------------------------------------------
 // insertion sort, and the proof that it sorts.
@@ -55,17 +69,13 @@ import bool;
 // `LeHead(x, xs)` — `x` is below `xs`'s head, vacuously at `Nil`. The `True`
 // here is the kernel's `Unit^0`, so the vacuous case is proof-irrelevant for
 // free and `trivial` closes it.
-fn LeHead(x: Nat, xs: List<Nat>) → Type {
-    match xs { Nil => True, Cons(h, t) => x.Le(h) }
-}
+fn LeHead(x: Nat, xs: List<Nat>) → Type { List::LeHead(Nat::Le, x, xs) }
 
 // Sortedness as a conjunction rather than an `andb`. `And` is a record, so its
 // elimination is field access — which is precisely what retires `andb_true_l`
 // and `andb_true_r`: `hs.left` and `hs.right` are the same two facts with no
 // lemma between them.
-fn Sorted(xs: List<Nat>) → Type {
-    match xs { Nil => True, Cons(h, t) => And<LeHead(h, t), Sorted(t)> }
-}
+fn Sorted(xs: List<Nat>) → Type { List::Sorted(xs, Nat::Le) }
 
 // `insert` branches through `logic::or_pick`, and needs no hoisted `ins_pick`
 // of its own any more. The reason the old one existed — a `match` on a stuck
@@ -83,17 +93,9 @@ fn Sorted(xs: List<Nat>) → Type {
 // value — `std/nat`'s `instance(n, m: Nat) Decide<Le(n, m)>` is the one this
 // resolves to, and the whole difference here is that no declaration below
 // mentions a decision procedure by name.
-fn insert(x: Nat, xs: List<Nat>) → List<Nat> {
-    match xs {
-        Nil => Cons(x, Nil),
-        Cons(h, t) =>
-            or_pick(decide<x.Le(h)>(), Cons(h, insert(x, t)), Cons(x, Cons(h, t))),
-    }
-}
+fn insert(x: Nat, xs: List<Nat>) → List<Nat> { xs.insert_ordered(Nat::Le, x) }
 
-fn isort(xs: List<Nat>) → List<Nat> {
-    match xs { Nil => Nil, Cons(h, t) => insert(h, isort(t)) }
-}
+fn isort(xs: List<Nat>) → List<Nat> { xs.insertion_sort(Nat::Le) }
 
 // Inserting below a head keeps the head below everything. Two case splits and
 // no recursion — and the second is on the DECISION, so each arm's goal has
@@ -105,14 +107,7 @@ fn isort(xs: List<Nat>) → List<Nat> {
 theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
     h.Le(x) → LeHead(h, t) → LeHead(h, insert(x, t))
 {
-    match t {
-        Nil => λ hx ht => hx,
-        Cons(h2, t2) => λ hx ht =>
-            match decide<x.Le(h2)>() {
-                Inl(good) => hx,
-                Inr(bad) => ht,
-            },
-    }
+    t.le_head_insert(Nat::Le, h, x)
 }
 
 // The main lemma. `hs.left` and `hs.right` replace the two `andb_true_*`
@@ -120,24 +115,10 @@ theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
 // replaces `andb_true`. The refuting branch is the only one that works, and
 // what it does is assemble the conjunction the goal already asks for.
 theorem insert_sorted(x: Nat, xs: List<Nat>): Sorted(xs) → Sorted(insert(x, xs)) {
-    match xs {
-        Nil => λ hs => And(trivial, trivial),
-        Cons(h, t) => λ hs =>
-            match decide<x.Le(h)>() {
-                Inl(good) => And(good, hs),
-                Inr(bad) => And(
-                    le_head_insert(h, x, t, Nat::le_of_not_le(x, h, bad), hs.left),
-                    insert_sorted(x, t, hs.right)),
-            },
-    }
+    xs.insert_ordered_sorted(Nat::Le, x)
 }
 
-theorem isort_sorted(xs: List<Nat>): Sorted(isort(xs)) {
-    match xs {
-        Nil => trivial,
-        Cons(h, t) => insert_sorted(h, isort(t), isort_sorted(t)),
-    }
-}
+theorem isort_sorted(xs: List<Nat>): Sorted(isort(xs)) { xs.insertion_sort_sorted(Nat::Le) }
 
 // ---------------------------------------------------------------------------
 // the other half of the specification: the output is a REARRANGEMENT of the
@@ -174,19 +155,13 @@ theorem isort_sorted(xs: List<Nat>): Sorted(isort(xs)) {
 // the decider as an argument and thread it through every call site) is an
 // encoding around a missing feature and was not written.
 
-// Counting with a named decider. `or_pick(d, x, y)` takes `y` on `Inl`, so the
-// equal case is the `Succ`.
-fn count(a: Nat, xs: List<Nat>) → Nat {
-    match xs {
-        Nil => 0,
-        Cons(h, t) => or_pick(a.eq_dec(h), count(a, t), Succ(count(a, t))),
-    }
-}
+// Counting, now `List::occurrences` at `DecEq<Nat>`, whose decider is
+// `Nat::eq_dec`: the same `or_pick`, `Succ` on the equal case.
+fn count(a: Nat, xs: List<Nat>) → Nat { xs.occurrences(a) }
 
 // The one lemma the permutation proof needs, and it is about neither lists nor
 // sorting: two independent decisions each of which may add one commute. It
-// lives here rather than in `std/logic` because it mentions `Succ`, and `logic`
-// is below `nat`.
+// lives in `std/perm` now (`List::pick_succ_swap`), which counts through it.
 //
 // Four cases, all `refl`, and only ONE match needs to be written: substituting
 // `Inr` for the outer decision makes both sides the same term, so the inner
@@ -195,69 +170,33 @@ theorem pick_succ_comm<P, Q, R, S>(d1: Or<P, Q>, d2: Or<R, S>, n: Nat):
     or_pick(d1, or_pick(d2, n, Succ(n)), Succ(or_pick(d2, n, Succ(n))))
         = or_pick(d2, or_pick(d1, n, Succ(n)), Succ(or_pick(d1, n, Succ(n))))
 {
-    match d1 {
-        Inl(p) =>
-            match d2 {
-                Inl(r) => refl,
-                Inr(s) => refl,
-            },
-        Inr(q) => refl,
-    }
+    List::pick_succ_swap(d1, d2, n)
 }
 
-// Inserting is consing, as far as counting can tell. The `Inl` arm — `x` goes
-// in front — is `refl`, because there the two sides are the same list; all the
-// work is in the arm where `x` sinks past `h`, and it is exactly the commuting
-// lemma above with the IH rewritten in underneath it.
+// Inserting is consing, as far as counting can tell. Now one citation: the
+// inserted list less `x` is the input (`insert_ordered_picks`), and a pick
+// keeps every count (`occurrences_picks`, which is where the commuting lemma
+// above went).
 theorem count_insert(x: Nat, xs: List<Nat>, a: Nat):
     count(a, insert(x, xs)) = count(a, Cons(x, xs))
 {
-    match xs {
-        Nil => {},
-        Cons(h, t) =>
-            match decide<x.Le(h)>() {
-                Inl(good) => refl,
-                Inr(bad) =>
-                    trans(cong_fn(λ (n: Nat) => or_pick(a.eq_dec(h), n, Succ(n)),
-                                  count_insert(x, t, a)),
-                          pick_succ_comm(a.eq_dec(h), a.eq_dec(x), count(a, t))),
-            },
-    }
+    insert(x, xs).occurrences_picks(x, a, xs, xs.insert_ordered_picks(Nat::Le, x))
 }
 
-// The permutation half. `count_insert` at the recursive result, then the IH
-// under the same one-place context — `std/list`'s `cong_fn` is what carries it,
-// with the context written out as a lambda because it has to be
-// (issues/congruence-by-anti-unification.md).
+// The permutation half, read off the permutation: insertion sort's output is
+// a `Perm` of its input (`insertion_sort_perm`), and a `Perm` keeps counts.
 theorem count_isort(xs: List<Nat>, a: Nat): count(a, isort(xs)) = count(a, xs) {
-    match xs {
-        Nil => {},
-        Cons(h, t) =>
-            trans(count_insert(h, isort(t), a),
-                  cong_fn(λ (n: Nat) => or_pick(a.eq_dec(h), n, Succ(n)),
-                          count_isort(t, a))),
-    }
+    sym(xs.perm_occurrences(a, isort(xs), xs.insertion_sort_perm(Nat::Le)))
 }
 
-// Length, which permutation implies but not by any proof this file can write —
-// summing `count` over the elements is a fold this library does not have. Two
-// recursions, both `cong_succ` over the tail.
+// Length, which permutation implies: `perm_len` reads it off the `Perm`
+// directly, so the fold over `count` the earlier comment wanted is not needed.
 theorem len_insert(x: Nat, xs: List<Nat>): insert(x, xs).len() = Succ(xs.len()) {
-    match xs {
-        Nil => {},
-        Cons(h, t) =>
-            match decide<x.Le(h)>() {
-                Inl(good) => refl,
-                Inr(bad) => Nat::cong_succ(len_insert(x, t)),
-            },
-    }
+    insert(x, xs).picks_len(x, xs, xs.insert_ordered_picks(Nat::Le, x))
 }
 
 theorem len_isort(xs: List<Nat>): isort(xs).len() = xs.len() {
-    match xs {
-        Nil => {},
-        Cons(h, t) => trans(len_insert(h, isort(t)), Nat::cong_succ(len_isort(t))),
-    }
+    sym(xs.perm_len(isort(xs), xs.insertion_sort_perm(Nat::Le)))
 }
 
 // The membership half, on `std/list`'s `Mem`. Weaker than `count_isort` and
@@ -267,31 +206,12 @@ theorem len_isort(xs: List<Nat>): isort(xs).len() = xs.len() {
 theorem mem_insert(x: Nat, xs: List<Nat>, a: Nat):
     Mem(a, insert(x, xs)) → Mem(a, Cons(x, xs))
 {
-    match xs {
-        Nil => λ m => m,
-        Cons(h, t) =>
-            match decide<x.Le(h)>() {
-                Inl(good) => λ m => m,
-                Inr(bad) => λ m => match m {
-                    Inl(e) => Inr(Inl(e)),
-                    Inr(m2) => match mem_insert(x, t, a, m2) {
-                        Inl(e) => Inl(e),
-                        Inr(mt) => Inr(Inr(mt)),
-                    },
-                },
-            },
-    }
+    insert(x, xs).perm_mem(a, Cons(x, xs),
+        Cons(x, xs).perm_sym(insert(x, xs), insert(x, xs).perm_of_picks(x, xs, xs.insert_ordered_picks(Nat::Le, x))))
 }
 
 theorem mem_isort(xs: List<Nat>, a: Nat): Mem(a, isort(xs)) → Mem(a, xs) {
-    match xs {
-        Nil => λ m => m,
-        Cons(h, t) => λ m =>
-            match mem_insert(h, isort(t), a, m) {
-                Inl(e) => Inl(e),
-                Inr(mt) => Inr(mem_isort(t, a, mt)),
-            },
-    }
+    isort(xs).perm_mem(a, xs, xs.perm_sym(isort(xs), xs.insertion_sort_perm(Nat::Le)))
 }
 
 // Both halves in one statement, which is the point of the wave: this is the

@@ -25,6 +25,13 @@ class LinearOrder<A>(R: A → A → Type)
     extends PartialOrder<A>(R), Total<A>(R)
 {}
 
+// A total preorder: every pair comparable, ties allowed. What a sort key's
+// order is (`List::Lex` over a total preorder is one, and a stable sort
+// orders by one), and `LinearOrder` without antisymmetry.
+class TotalPreorder<A>(R: A → A → Type)
+    extends Preorder<A>(R), Total<A>(R)
+{}
+
 // The existing carrier-owned kits fill the complete child dictionary once.
 // Canonical parent instances are synthesized from it, so generic preorder and
 // partial-order consumers do not need duplicate registrations.
@@ -41,6 +48,9 @@ instance LinearOrder<Int>(Int::Le) {
     rel_antisym := Int::le_antisym,
     rel_total := Int::le_total,
 }
+
+instance DecidableRel<Nat>(Nat::Le) { rel_dec := Nat::le_dec }
+instance DecidableRel<Int>(Int::Le) { rel_dec := Int::le_dec }
 
 // The strict orders' transitivity and the two mixed pairs, so `calc` chains
 // `<=` and `<` steps at both carriers. `Nat`'s `n < m` is `Succ(n) <= m`,

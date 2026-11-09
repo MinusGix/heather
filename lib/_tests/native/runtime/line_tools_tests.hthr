@@ -23,6 +23,7 @@ import native_source;
 import native_build;
 import native_heap_tools;
 import line_tools;
+import sorting;
 
 // A read buffer of `n` bytes.
 fn zeros(n: Nat) → List<BitVec(8)> { List::replicate(0, n) }
@@ -177,3 +178,13 @@ theorem sorted_one(l: List<BitVec(8)>): List::sorted_out([l]) = [l, [10]] { refl
 theorem tac_line(): Returns(Events::none(), Outcome::co(Io::tac(piped([[97, 10]]), zeros(2), 2)), Outcome(0, [97, 10])) { Returns(20, refl) }
 theorem tac_source_line(): tac(2, 16).outcome(piped([[97, 10]]), 16) = Some(Outcome(0, [97, 10])) { refl }
 theorem tac_source_nothing(): tac(2, 16).outcome(piped([]), 16) = Some(Outcome(0, [])) { refl }
+
+// `sorted_out` meets sort's specification at closed inputs: what it writes is
+// the one sorted permutation (`List::byte_sorted`), newlines between. Ties,
+// a proper prefix, the empty line and an input already in order.
+fn spec_lines() → List<List<BitVec(8)>> { [[98], [97, 98], [], [97], [98], [97]] }
+theorem sorted_out_meets_spec(): spec_lines().sorted_out() = spec_lines().byte_sorted().with_newlines() { refl }
+theorem byte_sorted_closed(): spec_lines().byte_sorted() = [[], [97], [97], [97, 98], [98], [98]] { refl }
+theorem byte_sorted_in_order(): List::byte_sorted([[1], [1, 0], [2]]) = [[1], [1, 0], [2]] { refl }
+// Bytes compare unsigned: 255 is after 1, not before it as a signed byte.
+theorem byte_sorted_unsigned(): List::byte_sorted([[255], [1]]) = [[1], [255]] { refl }

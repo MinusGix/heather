@@ -299,7 +299,9 @@ with that round.
   from an order on elements, proved a total preorder; `Sorted` generic in
   the relation; a permutation relation with its congruences; "two sorted
   permutations of one list are equal" under a total order (so a spec names
-  the output); stability for keyed sorts.
+  the output); stability for keyed sorts. Done 2026-11-09: `lib/std/data/perm.hthr`
+  and `lib/std/data/sorting.hthr`; `sort`'s spec is in `line_tools`, and
+  proving `sorted_out` meets it is `sort-sorted-out-correct`.
 - **Codecs** (`codec-round-trips`). `x86_64.hthr` proves a decoder
   round-trip per instruction form (`decode_instruction_of_rr_encoding`,
   `_mov_ri_`, `_setcc_`, `immediate_bytes_roundtrip`, …); utf8, ELF and the
