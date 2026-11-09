@@ -46,6 +46,7 @@ import logic;
 import nat;
 import option;
 import omega;
+import set_tactic;
 
 // ---------------------------------------------------------------------------
 // The activation
@@ -1026,20 +1027,9 @@ theorem Target::holding_spares(self t: Target, g, g2: Gprs, spares: t.Spares(g, 
     }
 }
 
-theorem List::mem_minus_nil(self out: List<Nat>, i: Nat, m: Mem(i, out)): Mem(i, out.minus(Nil)) {
-    out.mem_filter_of(λ (id: Nat) => absent(id, Nil), i, refl, m)
-}
+theorem List::mem_minus_nil(self out: List<Nat>, i: Nat, m: Mem(i, out)): Mem(i, out.minus(Nil)) { by sets() }
 
-theorem List::mem_minus_cons(self out: List<Nat>, rest: List<Nat>, i, id: Nat, m: Mem(i, out.minus(rest)), ne: i ≠ id): Mem(i, out.minus(Cons(id, rest))) {
-    let kept: (absent(i, rest) = True) = out.mem_filter_holds(i, λ (x: Nat) => absent(x, rest), m);
-    let differs: (i.differs(id) = True) = (match i.eq_dec(id) {
-        Inl(e) => false_elim(ne(e)),
-        Inr(_) => refl,
-    });
-    out.mem_filter_of(λ (x: Nat) => absent(x, Cons(id, rest)), i,
-        j(sym(kept), λ b _ => i.differs(id) && b = True, j(sym(differs), λ b _ => b && True = True, refl)),
-        out.mem_filter(i, λ (x: Nat) => absent(x, rest), m))
-}
+theorem List::mem_minus_cons(self out: List<Nat>, rest: List<Nat>, i, id: Nat, m: Mem(i, out.minus(rest)), ne: i ≠ id): Mem(i, out.minus(Cons(id, rest))) { by sets() }
 
 // `Prog::words_from` from registers holding `values`, as many as the words:
 // the words set to them where `out` is live.

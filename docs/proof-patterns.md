@@ -55,11 +55,15 @@ property of Heather.
   its own type**, not inside a recursion or under a computed binder.
 - **Membership over lists read as sets is `by sets()`**
   (`lib/std/tactic/set_tactic.hthr`), not a chain of `mem_append_l`,
-  `union_right`, `mem_filter_of` citations: the goal and the `Mem`, `¬Mem`,
-  `≠` and inclusion hypotheses about its element become a truth table that
-  the kernel checks by evaluation. A new set operation registers a
-  `SetOpEntry` with its `SetLaw` beside its definition. Each atom, element
-  and predicate doubles the table, so keep a big literal behind a name.
+  `union_right`, `mem_filter_of`, `Bool::is_true_and` citations: the goal
+  and the `Mem`, `¬Mem`, `=`, `≠`, inclusion and spelled
+  (`absent(x, s).IsTrue()`, `holds`) hypotheses about its element become a
+  truth table that the kernel checks by evaluation; `∧` and records of such
+  facts split. A new set operation registers a `SetOpEntry` with its
+  `SetLaw`, a new Boolean spelling a `SetBitEntry` with its `SetBitLaw`,
+  beside its definition. Each atom, element and predicate doubles the
+  table, so keep a big literal behind a name. A call costs a few tenths of
+  a second, mostly the tactic's own run; a one-step citation is cheaper.
 - **State lemmas in the goal's spelling.** `x - y` against `x + -y` makes
   `rewrite` and generic-lemma matching convert, or fail before instance
   search (`hi + -lo`, not `hi - lo`, for a generic lemma at `Rat`).

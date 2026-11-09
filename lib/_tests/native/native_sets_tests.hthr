@@ -1,0 +1,47 @@
+// Probes of the `sets` tactic (lib/std/tactic/set_tactic.hthr) on native's
+// own spellings of membership: `union`, `minus` and `live_before` as
+// operations, `absent` and `holds` as Booleans. Tests, not library
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import char; import string;
+import function_ir_eval; import native_alloc;
+import tactic; import set_solve; import set_ops; import set_tactic;
+
+// A spelling as a hypothesis, each way.
+theorem absent_hyp(i: Nat, a, b: List<Nat>, h: Mem(i, a ++ b), n: absent(i, a).IsTrue()): Mem(i, b) { by sets() }
+theorem absent_eq_hyp(i: Nat, a, b: List<Nat>, h: Mem(i, a ++ b), n: absent(i, a) = True): Mem(i, b) { by sets() }
+theorem absent_false_hyp(i: Nat, a, b: List<Nat>, n: absent(i, a) = False): Mem(i, a.union(b)) { by sets() }
+theorem holds_hyp(i: Nat, a, b: List<Nat>, h: a.holds(i) = True): Mem(i, b ++ a) { by sets() }
+theorem holds_false_hyp(i: Nat, a, b: List<Nat>, h: Mem(i, a ++ b), n: a.holds(i) = False): Mem(i, b) { by sets() }
+
+// A spelling as the goal.
+theorem absent_goal(i: Nat, a, b: List<Nat>, n: absent(i, a ++ b).IsTrue()): absent(i, b).IsTrue() { by sets() }
+theorem absent_eq_goal(i: Nat, a, b: List<Nat>, n: ¬Mem(i, a), m: ¬Mem(i, b)): absent(i, a.union(b)) = True { by sets() }
+theorem absent_false_goal(i: Nat, a, b: List<Nat>, h: Mem(i, a)): absent(i, a.union(b)) = False { by sets() }
+theorem holds_goal(i: Nat, a, b: List<Nat>, h: Mem(i, a), n: absent(i, b).IsTrue()): a.minus(b).holds(i) = True { by sets() }
+theorem holds_false_goal(i: Nat, a, b: List<Nat>, n: Mem(i, b)): a.minus(b).holds(i) = False { by sets() }
+
+// Conjunctions: split as goals, read as hypotheses.
+theorem absent_split(i: Nat, a, b: List<Nat>, n: absent(i, a ++ b).IsTrue()): absent(i, a).IsTrue() ∧ absent(i, b).IsTrue() { by sets() }
+theorem absent_join(i: Nat, a, b: List<Nat>, n: absent(i, a).IsTrue() ∧ absent(i, b).IsTrue()): absent(i, a ++ b).IsTrue() { by sets() }
+
+// Literal elements and equations: `False` read at every element in turn.
+theorem not_head(x, c, d: Nat, a: List<Nat>, h: absent(x, Cons(c, Cons(d, a))).IsTrue()): x ≠ d ∧ absent(x, a).IsTrue() { by sets() }
+theorem eq_member(x, c: Nat, a: List<Nat>, e: x = c, h: Mem(c, a)): Mem(x, a) { by sets() }
+
+// Native's liveness, through its spelling.
+theorem keeps(reads: List<Nat>, written, i: Nat, out: List<Nat>, m: Mem(i, out), ne: i ≠ written):
+    live_before(reads, written, out).holds(i) = True { by sets() }
+
+// The negative control: a spelling does not make a non-member a member.
+// expect-error: sets: the goal does not follow from the membership facts in scope
+theorem absent_wrong(i: Nat, a, b: List<Nat>, n: absent(i, a).IsTrue()): absent(i, a ++ b).IsTrue() { by sets() }
+
+// A record of facts as the goal, split field by field (`clear_of`'s shape).
+record SetsClear(x: Nat, count, exhausted: Nat, parameters, touched: List<Nat>) {
+    not_count: x ≠ count,
+    not_exhausted: x ≠ exhausted,
+    not_parameter: absent(x, parameters).IsTrue(),
+    untouched: absent(x, touched).IsTrue(),
+}
+theorem sets_clear(x, count, exhausted: Nat, parameters, touched: List<Nat>,
+    h: absent(x, Cons(count, Cons(exhausted, parameters ++ touched))).IsTrue()): SetsClear(x, count, exhausted, parameters, touched) { by sets() }

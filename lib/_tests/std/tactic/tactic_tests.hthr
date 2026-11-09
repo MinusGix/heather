@@ -125,3 +125,15 @@ fn budget_apply_heavy() → Tac<Expr> {
 }
 // expect-error: within the conversion budget
 theorem budget_heavy_argument(): True { by budget_apply_heavy() }
+
+// A split's branches each proved with a `Blank` argument: every branch's
+// proof is committed before the next one's holes grow the world, so the
+// earlier ones still name their globals (a kernel LevelMismatch before).
+record SplitPair(x: Nat, c: Nat) { a: x = x, b: c = c }
+fn split_blank_rfl() → Tac<Expr> {
+    lookup("tactic::rfl").bind(λ c => match c { Accepted(r) => pure(App(App(Global(r), Blank), Blank)), Refused(w) => fail(w, []) })
+}
+fn split_each(t: Tac<Expr>) → Tac<Expr> {
+    goal().bind(λ g => constructor(g.target).bind(λ c => match c { Accepted(sp) => close_by(sp, g.locals, t), Refused(w) => fail(w, []) }))
+}
+theorem split_blanks(x, c: Nat): SplitPair(x, c) { by split_each(split_blank_rfl()) }

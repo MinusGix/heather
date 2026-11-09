@@ -545,7 +545,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
             return Ok(hit.clone());
         }
         let key = format!("tactic::{name}");
-        let abs = self.elab.global_abs(&key).ok_or_else(|| {
+        let abs = self.elab.protocol_abs(name).ok_or_else(|| {
             format!("`{key}` is not declared; `by` needs the protocol from `import tactic;`")
         })?;
         let GlobalBinding::Tm { ty, .. } = &self.world.bindings[abs] else {
@@ -1580,6 +1580,21 @@ pub(crate) struct Quoting {
 }
 
 impl Elaborator {
+    /// `tactic::name`'s absolute index: by the name where the `by` is, or,
+    /// where the module only imports `tactic` through another (a tactic
+    /// library such as `set_tactic`), by its key in the import closure, as
+    /// `Lookup` reaches a qualified name. A `by` needs the protocol loaded,
+    /// not its short names (`pure`, `goal`, `open`, …) in scope, where they
+    /// would rival the client's own members.
+    pub(crate) fn protocol_abs(&self, name: &str) -> Option<usize> {
+        let key = format!("tactic::{name}");
+        self.global_abs(&key).or_else(|| {
+            (self.names.reaches("tactic") && self.names.declares("tactic", name))
+                .then(|| self.names.global(&key).map(|info| info.abs as usize))
+                .flatten()
+        })
+    }
+
     /// `by t` at `goal`: elaborate `t` as a `tactic::Tac<tactic::Expr>`, or
     /// look it up among the registered native tactics, and run it.
     pub(crate) fn run_by(&self, cx: &Cx, tactic: &Expr, goal: &Type, lvl: &Level, span: Span) -> R<Term> {
@@ -1607,8 +1622,8 @@ impl Elaborator {
     /// `tactic::name`'s head and type in `world`.
     fn protocol_signature(&self, world: &GlobalCtx, name: &str, keyword: &str, span: Span) -> R<(Term, Type)> {
         let key = format!("tactic::{name}");
-        let Some(abs) = self.global_abs(&key) else {
-            return err(format!("`{keyword}` runs a value of the `tactic` protocol; add `import tactic;`"), span);
+        let Some(abs) = self.protocol_abs(name) else {
+            return err(format!("`{keyword}` runs a value of the `tactic` protocol; add `import tactic;` (or import a tactic library that does)"), span);
         };
         let len = world.bindings.len();
         let GlobalBinding::Tm { ty, .. } = &world.bindings[abs] else {
@@ -4439,8 +4454,11 @@ impl Elaborator {
     }
 
     /// Each branch's proof, checked at its goal, in the committed world.
+    /// Each is committed as soon as it is checked: a later branch's `Blank`
+    /// grows the world with a hole, and a term read before that growth
+    /// would no longer address its globals in the larger world.
     fn branch_proofs(&self, run: &mut Run, split: &Split, proofs: &[RExpr]) -> Result<Vec<(Term, usize)>, Fault> {
-        let mut terms = Vec::with_capacity(proofs.len());
+        let mut fills = Vec::with_capacity(proofs.len());
         for (k, (&(scope, goal), p)) in split.branches.iter().zip(proofs).enumerate() {
             let r = self.reify(run, p, scope)?;
             let (_, Held::Type(ty, level)) = run.held(goal)? else { unreachable!("a branch's goal is a type") };
@@ -4451,12 +4469,8 @@ impl Elaborator {
                     self.shown_ty(run, scope, &ty)
                 )));
             }
-            terms.push((scope, r.term));
-        }
-        let mut fills = Vec::with_capacity(terms.len());
-        for (k, (scope, t)) in terms.into_iter().enumerate() {
-            let c = run.committed_tm(&t).ok_or_else(|| {
-                Fault::Ill(format!("branch {k}'s proof `{}` mentions a hole nothing solved", self.shown_tm(run, scope, &t)))
+            let c = run.committed_tm(&r.term).ok_or_else(|| {
+                Fault::Ill(format!("branch {k}'s proof `{}` mentions a hole nothing solved", self.shown_tm(run, scope, &r.term)))
             })?;
             fills.push((c, run.len(scope)));
         }

@@ -21,3 +21,8 @@ import set_solve;
 record SetOpEntry { op: String, conn: SetConn, law: String, implicits: Nat }
 
 register def set_append_entry: SetOpEntry = SetOpEntry(name_of(List::append), SetOr, name_of(set_append_law), 1);
+
+// A Boolean spelling of membership by name, its law (a `SetBitLaw`, by
+// `name_of`), whether the law reads the negation, and the implicit
+// parameters the function and its law open with, as for `SetOpEntry`.
+record SetBitEntry { op: String, law: String, negated: Bool, implicits: Nat }

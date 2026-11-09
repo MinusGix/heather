@@ -4,20 +4,32 @@
 // docs/native-mathematics-survey.md §1).
 //
 // The goal, after its `→`s and `(i: A) →`s are introduced (an inclusion
-// such as `a.Inside(m)` unfolds to them), is `Mem(x, s)` or `False` (read at
-// the element of the first membership hypothesis). Every hypothesis about
-// the same element is read as a fact: `Mem(x, s)`, `¬Mem(x, s)` (or
-// `Mem(x, s) → False`), `¬(x = e)` either way round, and every function
-// type that, applied to `x`, is `Mem(x, a) → Mem(x, b)` (an inclusion, or a
-// definition that unfolds to one). Hypotheses of any other shape are
-// skipped. Each set is read into a `SetExpr`: `Nil` and `Cons(e, s)` by
-// their constructors, `s.filter(p)` as a filter, an operation registered as
-// a `SetOpEntry` (`++` in lib/std/data/set/set_ops.hthr; a module adds its
+// such as `a.Inside(m)` unfolds to them) and a conjunction or a record of
+// facts is split field by field, is `Mem(x, s)`, a Boolean spelling of it
+// known `True` or `False` (`absent(x, s).IsTrue()`, `ids.holds(x) = True`),
+// or `False`, which is tried at each element a hypothesis is about.
+//
+// Every hypothesis about the same element is read as a fact: `Mem(x, s)`,
+// `¬Mem(x, s)` (or `Mem(x, s) → False`), a spelling known `True` or
+// `False`, `x = e` and `¬(x = e)` either way round, each half of a
+// conjunction, and every function type that, applied to `x`, is
+// `Mem(x, a) → Mem(x, b)` (an inclusion, or a definition that unfolds to
+// one). A fact about an element `x` is known equal to is moved to `x`.
+// Hypotheses of any other shape are skipped.
+//
+// Each set is read into a `SetExpr`: `Nil` and `Cons(e, s)` by their
+// constructors, `s.filter(p)` as a filter, an operation registered as a
+// `SetOpEntry` (`++` in lib/std/data/set/set_ops.hthr; a module adds its
 // own beside their laws, as native_alloc does `union` and `minus`) as that
 // operation, a call of anything else through its definition when that is a
 // call again, and otherwise as an atom; atoms, elements and predicates are
 // told apart up to definitional equality, and an element convertible to `x`
-// is the fact `x ∈ [e]`.
+// is the fact `x ∈ [e]`. A spelling is a registered `SetBitEntry` (native's
+// `absent`), `!` of one, or a call whose definition is one.
+//
+// A client module needs only `import set_tactic;`: `by` finds the tactic
+// protocol through the import closure, so `tactic`'s short names (`pure`,
+// `open`, `goal`) need not be in the client's scope.
 //
 // The tactic evaluates the truth table itself first: when the facts do not
 // imply the goal it fails with an assignment that falsifies it, naming each
@@ -41,6 +53,19 @@ import set_ops;
 
 record SetOpHead { f: GlobalRef, conn: SetConn, law: GlobalRef, implicits: Nat }
 
+record SetBitHead { f: GlobalRef, law: GlobalRef, negated: Bool, implicits: Nat }
+
+// The lemmas that move between a spelling, membership and an element's
+// equations (lib/std/data/set/set_solve.hthr), and the globals that tell a
+// spelling apart.
+record SetLemmas {
+    not_g: GlobalRef, is_true: GlobalRef, bool_ty: GlobalRef, and_ty: GlobalRef,
+    spell_true: GlobalRef, spell_false: GlobalRef, spell_is_true: GlobalRef, spell_is_false: GlobalRef,
+    not_not: GlobalRef, not_of_true: GlobalRef, not_of_false: GlobalRef,
+    true_of_not_false: GlobalRef, false_of_not_true: GlobalRef, eq_true_of_is: GlobalRef, is_of_eq_true: GlobalRef,
+    mem_of_eq: GlobalRef, mem_of_eq_sym: GlobalRef, mem_transport: GlobalRef, not_transport: GlobalRef, eq_sym: GlobalRef,
+}
+
 record SetHeads {
     mem: GlobalRef, false_ty: GlobalRef, filter: GlobalRef, dec_eq: GlobalRef, rfl: GlobalRef,
     solve: GlobalRef, env: GlobalRef, op: GlobalRef, nil: GlobalRef, cons: GlobalRef,
@@ -50,6 +75,8 @@ record SetHeads {
     held_nil: GlobalRef, held_cons: GlobalRef, mem_self: GlobalRef, not_single: GlobalRef, not_single_sym: GlobalRef,
     list_ty: GlobalRef, pred_ty: GlobalRef, op_ty: GlobalRef, fact_ty: GlobalRef,
     ops: List<SetOpHead>,
+    lem: SetLemmas,
+    bits: List<SetBitHead>,
 }
 
 fn sets_global(name: String) → Tac<GlobalRef> {
@@ -66,7 +93,43 @@ fn sets_op_heads(es: List<SetOpEntry>) → Tac<List<SetOpHead>> {
     }
 }
 
-fn sets_heads(entries: List<SetOpEntry>) → Tac<SetHeads> {
+fn sets_bit_heads(es: List<SetBitEntry>) → Tac<List<SetBitHead>> {
+    match es {
+        Nil => pure(Nil),
+        Cons(e, rest) => lookup(e.op).bind(λ c => match c {
+            Refused(_) => sets_bit_heads(rest),
+            Accepted(f) => sets_global(e.law).bind(λ law => sets_bit_heads(rest).bind(λ hs => pure(Cons(SetBitHead(f, law, e.negated, e.implicits), hs)))),
+        }),
+    }
+}
+
+fn sets_lemmas() → Tac<SetLemmas> {
+    let not_g <- sets_global("bool::Bool::not");
+    let is_true <- sets_global("bool::Bool::IsTrue");
+    let bool_ty <- sets_global("Bool");
+    let and_ty <- sets_global("logic::And");
+    let spell_true <- sets_global("set_solve::set_spell_true");
+    let spell_false <- sets_global("set_solve::set_spell_false");
+    let spell_is_true <- sets_global("set_solve::set_spell_is_true");
+    let spell_is_false <- sets_global("set_solve::set_spell_is_false");
+    let not_not <- sets_global("set_solve::set_reflects_not_not");
+    let not_of_true <- sets_global("set_solve::set_not_of_true");
+    let not_of_false <- sets_global("set_solve::set_not_of_false");
+    let true_of_not_false <- sets_global("set_solve::set_true_of_not_false");
+    let false_of_not_true <- sets_global("set_solve::set_false_of_not_true");
+    let eq_true_of_is <- sets_global("set_solve::set_eq_true_of_is");
+    let is_of_eq_true <- sets_global("set_solve::set_is_of_eq_true");
+    let mem_of_eq <- sets_global("set_solve::set_mem_of_eq");
+    let mem_of_eq_sym <- sets_global("set_solve::set_mem_of_eq_sym");
+    let mem_transport <- sets_global("set_solve::set_mem_transport");
+    let not_transport <- sets_global("set_solve::set_not_transport");
+    let eq_sym <- sets_global("set_solve::set_eq_sym");
+    pure(SetLemmas(not_g, is_true, bool_ty, and_ty, spell_true, spell_false, spell_is_true, spell_is_false,
+        not_not, not_of_true, not_of_false, true_of_not_false, false_of_not_true, eq_true_of_is, is_of_eq_true,
+        mem_of_eq, mem_of_eq_sym, mem_transport, not_transport, eq_sym))
+}
+
+fn sets_heads(entries: List<SetOpEntry>, bit_entries: List<SetBitEntry>) → Tac<SetHeads> {
     let mem <- sets_global("list::Mem");
     let false_ty <- sets_global("False");
     let filter <- sets_global("list::List::filter");
@@ -101,8 +164,10 @@ fn sets_heads(entries: List<SetOpEntry>) → Tac<SetHeads> {
     let op_ty <- sets_global("set_solve::set_op_type");
     let fact_ty <- sets_global("set_solve::set_fact_type");
     let ops <- sets_op_heads(entries);
+    let lem <- sets_lemmas();
+    let bits <- sets_bit_heads(bit_entries);
     pure(SetHeads(mem, false_ty, filter, dec_eq, rfl, solve, env, op, nil, cons, or, and, diff,
-        atom, snil, scons, sfilter, sop, fmem, fnot, fsub, gmem, gnot, gfalse, held_nil, held_cons, mem_self, not_single, not_single_sym, list_ty, pred_ty, op_ty, fact_ty, ops))
+        atom, snil, scons, sfilter, sop, fmem, fnot, fsub, gmem, gnot, gfalse, held_nil, held_cons, mem_self, not_single, not_single_sym, list_ty, pred_ty, op_ty, fact_ty, ops, lem, bits))
 }
 
 // ---------------------------------------------------------------------------
@@ -203,230 +268,13 @@ fn sets_read(H: SetHeads, L: SetLeaves, h: Handle, fuel: Nat) → Tac<SetRead> {
 }
 
 // ---------------------------------------------------------------------------
-// Reading statements
-
-// `Mem(y, s)`, as its element and set.
-record SetMem { elt: Handle, set: Handle }
-
-fn sets_mem_of(H: SetHeads, v: Head) → Option<SetMem> {
-    match v {
-        HGlobal(g, _, args) => match g.id.same(H.mem.id) {
-            True => match args { Cons(y, Cons(s, Nil)) => Some(SetMem(y, s)), _ => None },
-            False => None,
-        },
-        _ => None,
-    }
-}
-
-fn sets_is_false(H: SetHeads, v: Head) → Bool {
-    match v { HGlobal(g, _, _) => g.id.same(H.false_ty.id), _ => False }
-}
+// Building terms
 
 fn apps(f: Expr, args: List<Expr>) → Expr { match args { Nil => f, Cons(a, rest) => apps(App(f, a), rest) } }
 
 fn sets_app(f: GlobalRef, args: List<Expr>) → Expr {
     apps(Global(f), args)
 }
-
-// What a hypothesis says, before it is read at an element: a membership,
-// a non-membership, a disequality, a function type whose conclusion is
-// about its bound element (an inclusion, read once the element is known),
-// or none of these.
-inductive SetShape { ShapeMem(m: SetMem), ShapeNot(m: SetMem), ShapeNeq(l: Handle, r: Handle), ShapeAll, ShapeOther }
-
-// One layer of `h`, past a definition or a substitution the view does not
-// present (the body of an unfolded `¬P` is one).
-fn sets_view(h: Handle) → Tac<Head> {
-    view(h).bind(λ v => match v {
-        HOther => whnf(h).bind(λ c => match c { Accepted(w) => view(w), Refused(_) => pure(v) }),
-        _ => pure(v),
-    })
-}
-
-fn sets_pi_shape(H: SetHeads, ty: Handle) → Tac<SetShape> {
-    open(ty, "i").bind(λ c => match c {
-        Refused(_) => pure(ShapeOther),
-        Accepted(o) => match o.dependent {
-            True => pure(ShapeAll),
-            False => sets_view(o.body).bind(λ bv => match sets_is_false(H, bv) {
-                False => pure(ShapeAll),
-                True => sets_view(o.local.ty).bind(λ dv => match sets_mem_of(H, dv) {
-                    Some(m) => pure(ShapeNot(m)),
-                    None => match dv { HEq(l, r) => pure(ShapeNeq(l, r)), _ => pure(ShapeOther) },
-                }),
-            }),
-        },
-    })
-}
-
-fn sets_shape_once(H: SetHeads, ty: Handle) → Tac<SetShape> {
-    view(ty).bind(λ v => match sets_mem_of(H, v) {
-        Some(m) => pure(ShapeMem(m)),
-        None => match v { HPi(_) => sets_pi_shape(H, ty), _ => pure(ShapeOther) },
-    })
-}
-
-// The shape as written, else as its head normal form (a subset predicate
-// unfolds to its function type, `¬P` to `P → False`).
-fn sets_shape(H: SetHeads, ty: Handle) → Tac<SetShape> {
-    sets_shape_once(H, ty).bind(λ s => match s {
-        ShapeOther => whnf(ty).bind(λ c => match c { Accepted(w) => sets_shape_once(H, w), Refused(_) => pure(ShapeOther) }),
-        _ => pure(s),
-    })
-}
-
-// The facts read at `x`, with their proofs, in the order of the locals.
-record SetFacts { leaves: SetLeaves, facts: List<SetFact>, proofs: List<Expr>, read: List<Note> }
-
-fn sets_same_elt(a, b: Handle) → Tac<Bool> { defeq(Hd(a), Hd(b)) }
-
-fn SetFacts::add(self acc: SetFacts, L: SetLeaves, f: SetFact, proof: Expr, note: Note) → SetFacts {
-    SetFacts(L, acc.facts ++ [f], acc.proofs ++ [proof], acc.read ++ [note])
-}
-
-// `Mem(y, s)` at `x`: `s` read, when `y` is `x`.
-fn sets_mem_at(H: SetHeads, L: SetLeaves, x: Handle, v: Head) → Tac<Option<SetRead>> {
-    match sets_mem_of(H, v) {
-        None => pure(None),
-        Some(m) => sets_same_elt(m.elt, x).bind(λ same => match same {
-            False => pure(None),
-            True => sets_read(H, L, m.set, sets_fuel).bind(λ r => pure(Some(r))),
-        }),
-    }
-}
-
-// `proof: Mem(x, a) → Mem(x, b)` (its type `ty`), as the fact `FImp`. The
-// conclusion is read off `proof` applied to a hole, so that its handle
-// lives where the goal does rather than under the binder.
-fn sets_imp_at(H: SetHeads, x: Handle, acc: SetFacts, name: String, proof: Expr, ty: Handle) → Tac<Option<SetFacts>> {
-    sets_view(ty).bind(λ tv => match tv {
-        HPi(dom) => sets_view(dom).bind(λ dv => sets_mem_at(H, acc.leaves, x, dv).bind(λ oa => match oa {
-            None => pure(None),
-            Some(ra) => holes(proof, 1).bind(λ c => match c {
-                Accepted(Cons(hh, Nil)) => infer(App(proof, Hd(hh))).bind(λ c2 => match c2 {
-                    Refused(_) => pure(None),
-                    Accepted(cod) => sets_view(cod).bind(λ cv => sets_mem_at(H, ra.leaves, x, cv).bind(λ ob => match ob {
-                        None => pure(None),
-                        Some(rb) => pure(Some(acc.add(rb.leaves, FImp(ra.e, rb.e), proof, Tried(name, "an inclusion, at x")))),
-                    })),
-                }),
-                _ => pure(None),
-            }),
-        })),
-        _ => pure(None),
-    })
-}
-
-// `l: (i: A) → … → Mem(i, a) → Mem(i, b)`, applied to `x`.
-fn sets_all_at(H: SetHeads, x: Handle, acc: SetFacts, l: LocalInfo) → Tac<Option<SetFacts>> {
-    let proof = App(Local(l.ref), Hd(x));
-    infer(proof).bind(λ c => match c {
-        Refused(_) => pure(None),
-        Accepted(ty) => sets_imp_at(H, x, acc, l.name, proof, ty),
-    })
-}
-
-// `l: ¬(x = e)` (or `¬(e = x)`, by `law`), as `x ∉ [e]`.
-fn sets_neq(T: Expr, x: Handle, acc: SetFacts, l: LocalInfo, e: Handle, law: GlobalRef) → Tac<SetFacts> {
-    let L = acc.leaves;
-    sets_intern(L.elts, e).bind(λ i =>
-        pure(acc.add(SetLeaves(L.sets, i.all, L.preds, L.ops), FNot(SCons(i.k, SNil)), sets_app(law, [T, Hd(x), Hd(e), Local(l.ref)]), Tried(l.name, "x is not this element"))))
-}
-
-fn sets_facts(H: SetHeads, T: Expr, x: Handle, ls: List<LocalInfo>, acc: SetFacts) → Tac<SetFacts> {
-    match ls {
-        Nil => pure(acc),
-        Cons(l, rest) => sets_shape(H, l.ty).bind(λ s => match s {
-            ShapeMem(m) => sets_same_elt(m.elt, x).bind(λ same => match same {
-                False => sets_facts(H, T, x, rest, acc),
-                True => sets_read(H, acc.leaves, m.set, sets_fuel).bind(λ r =>
-                    sets_facts(H, T, x, rest, acc.add(r.leaves, FMem(r.e), Local(l.ref), Tried(l.name, "x is in it")))),
-            }),
-            ShapeNot(m) => sets_same_elt(m.elt, x).bind(λ same => match same {
-                False => sets_facts(H, T, x, rest, acc),
-                True => sets_read(H, acc.leaves, m.set, sets_fuel).bind(λ r =>
-                    sets_facts(H, T, x, rest, acc.add(r.leaves, FNot(r.e), Local(l.ref), Tried(l.name, "x is not in it")))),
-            }),
-            ShapeNeq(a, b) => sets_same_elt(a, x).bind(λ left => match left {
-                True => sets_neq(T, x, acc, l, b, H.not_single).bind(λ acc2 => sets_facts(H, T, x, rest, acc2)),
-                False => sets_same_elt(b, x).bind(λ right => match right {
-                    True => sets_neq(T, x, acc, l, a, H.not_single_sym).bind(λ acc2 => sets_facts(H, T, x, rest, acc2)),
-                    False => sets_facts(H, T, x, rest, acc),
-                }),
-            }),
-            ShapeAll => sets_all_at(H, x, acc, l).bind(λ o => match o {
-                None => sets_facts(H, T, x, rest, acc),
-                Some(acc2) => sets_facts(H, T, x, rest, acc2),
-            }),
-            ShapeOther => sets_facts(H, T, x, rest, acc),
-        }),
-    }
-}
-
-// The elements read that are `x` itself, by conversion, as the facts `x ∈ [e]`.
-fn sets_self_facts(H: SetHeads, T: Expr, x: Handle, es: List<Handle>, k: Nat, acc: SetFacts) → Tac<SetFacts> {
-    match es {
-        Nil => pure(acc),
-        Cons(e, rest) => sets_same_elt(e, x).bind(λ same => match same {
-            False => sets_self_facts(H, T, x, rest, Succ(k), acc),
-            True => sets_self_facts(H, T, x, rest, Succ(k),
-                acc.add(acc.leaves, FMem(SCons(k, SNil)), sets_app(H.mem_self, [T, Hd(x)]), At(Hd(e), Tried("an element", "x is it")))),
-        }),
-    }
-}
-
-// The element a `False` goal is about: the first local that is a
-// membership or a non-membership.
-fn sets_some_elt(H: SetHeads, ls: List<LocalInfo>) → Tac<Option<Handle>> {
-    match ls {
-        Nil => pure(None),
-        Cons(l, rest) => sets_shape(H, l.ty).bind(λ s => match s {
-            ShapeMem(m) => pure(Some(m.elt)),
-            ShapeNot(m) => pure(Some(m.elt)),
-            _ => sets_some_elt(H, rest),
-        }),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The table, run here first
-
-fn sets_counter_q(q: Nat, f: List<Bool> → Bool) → Option<List<Bool>> {
-    match q {
-        Zero => match f(Nil) { True => None, False => Some(Nil) },
-        Succ(k) => match sets_counter_q(k, λ (bs: List<Bool>) => f(Cons(True, bs))) {
-            Some(bs) => Some(Cons(True, bs)),
-            None => match sets_counter_q(k, λ (bs: List<Bool>) => f(Cons(False, bs))) { Some(bs) => Some(Cons(False, bs)), None => None },
-        },
-    }
-}
-
-fn sets_counter(n, m, q: Nat, conns: List<SetConn>, facts: List<SetFact>, goal: SetGoal) → Option<SetBits> {
-    let ok = λ (b: SetBits) => !set_facts_bit(facts, b) || goal.bit(b);
-    match sets_counter_q(n, λ (vs: List<Bool>) => set_all_bits(m, λ (ws: List<Bool>) => set_all_bits(q, λ (ps: List<Bool>) => ok(SetBits(vs, ws, ps, conns))))) {
-        None => None,
-        Some(vs) => match sets_counter_q(m, λ (ws: List<Bool>) => set_all_bits(q, λ (ps: List<Bool>) => ok(SetBits(vs, ws, ps, conns)))) {
-            None => None,
-            Some(ws) => match sets_counter_q(q, λ (ps: List<Bool>) => ok(SetBits(vs, ws, ps, conns))) {
-                None => None,
-                Some(ps) => Some(SetBits(vs, ws, ps, conns)),
-            },
-        },
-    }
-}
-
-fn sets_notes(hs: List<Handle>, bs: List<Bool>, what, yes, no: String) → List<Note> {
-    match hs {
-        Nil => Nil,
-        Cons(h, rest) => match bs {
-            Nil => Nil,
-            Cons(b, more) => Cons(At(Hd(h), Tried(what, match b { True => yes, False => no })), sets_notes(rest, more, what, yes, no)),
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The proof
 
 // `f` applied to `k` arguments left to inference.
 fn sets_blanks(f: Expr, k: Nat) → Expr { match k { Zero => f, Succ(j) => sets_blanks(App(f, Blank), j) } }
@@ -482,19 +330,462 @@ fn sets_quote_goal(H: SetHeads, g: SetGoal) → Expr {
 
 fn sets_conns(os: List<SetOpHead>) → List<SetConn> { match os { Nil => Nil, Cons(o, rest) => Cons(o.conn, sets_conns(rest)) } }
 
-// Prove `goal` (a `Mem` at `x`, or `False`) from the facts at `x`.
-fn sets_prove(H: SetHeads, g: GoalInfo, x: Handle, goal_set: Option<Handle>) → Tac<Expr> {
+// ---------------------------------------------------------------------------
+// Reading statements
+
+// `Mem(y, s)`, as its element and set.
+record SetMem { elt: Handle, set: Handle }
+
+fn sets_mem_of(H: SetHeads, v: Head) → Option<SetMem> {
+    match v {
+        HGlobal(g, _, args) => match g.id.same(H.mem.id) {
+            True => match args { Cons(y, Cons(s, Nil)) => Some(SetMem(y, s)), _ => None },
+            False => None,
+        },
+        _ => None,
+    }
+}
+
+fn sets_is_false(H: SetHeads, v: Head) → Bool {
+    match v { HGlobal(g, _, _) => g.id.same(H.false_ty.id), _ => False }
+}
+
+fn sets_is_global(v: Head, g: GlobalRef) → Bool {
+    match v { HGlobal(f, _, _) => f.id.same(g.id), _ => False }
+}
+
+// `True` or `False` of `Bool`, as written.
+fn sets_bool_value(H: SetHeads, v: Head) → Option<Bool> {
+    match v {
+        HCtor(ty, _, name, fields) => match fields {
+            Nil => match ty.id.same(H.lem.bool_ty.id) {
+                True => match string_eq_dec(name, "True") { Inl(_) => Some(True), Inr(_) => Some(False) },
+                False => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+// One layer of `h`, past a definition or a substitution the view does not
+// present (the body of an unfolded `¬P` is one).
+fn sets_view(h: Handle) → Tac<Head> {
+    view(h).bind(λ v => match v {
+        HOther => whnf(h).bind(λ c => match c { Accepted(w) => view(w), Refused(_) => pure(v) }),
+        _ => pure(v),
+    })
+}
+
+// A Boolean that spells `elt ∈ set`: `r` proves `Reflects(Mem(elt, set),
+// c)` where `c` is the Boolean `b` itself, or `!b` when `neg`.
+record SetBit { elt: Handle, set: Handle, neg: Bool, r: Expr, b: Handle }
+
+fn sets_bit_head(bs: List<SetBitHead>, g: GlobalRef) → Option<SetBitHead> {
+    match bs { Nil => None, Cons(e, rest) => match g.id.same(e.f.id) { True => Some(e), False => sets_bit_head(rest, g) } }
+}
+
+// `b` read as a spelling: a registered spelling applied to an element and
+// a set, `!` of a spelling, or a call whose definition is one of these
+// (`ids.holds(x)` is `!absent(x, ids)`).
+fn sets_bit(H: SetHeads, b: Handle, fuel: Nat) → Tac<Option<SetBit>> {
+    match fuel {
+        Zero => pure(None),
+        Succ(n) => view(b).bind(λ v => match v {
+            HGlobal(g, _, args) => match g.id.same(H.lem.not_g.id) {
+                True => match args {
+                    Cons(u, Nil) => sets_bit(H, u, n).bind(λ o => match o {
+                        None => pure(None),
+                        Some(l) => match l.neg {
+                            True => pure(Some(SetBit(l.elt, l.set, False, l.r, b))),
+                            False => infer(Hd(l.elt)).bind(λ c => match c {
+                                Refused(_) => pure(None),
+                                Accepted(t) => pure(Some(SetBit(l.elt, l.set, True,
+                                    sets_app(H.lem.not_not, [Hd(t), Hd(l.elt), Hd(l.set), Hd(l.b), l.r]), b))),
+                            }),
+                        },
+                    }),
+                    _ => pure(None),
+                },
+                False => match sets_bit_head(H.bits, g) {
+                    Some(e) => match args {
+                        Cons(y, Cons(s, Nil)) => pure(Some(SetBit(y, s, e.negated, apps(sets_blanks(Global(e.law), e.implicits), [Hd(y), Hd(s)]), b))),
+                        _ => pure(None),
+                    },
+                    None => unfold(b).bind(λ c => match c {
+                        Refused(_) => pure(None),
+                        Accepted(u) => view(u).bind(λ uv => match uv {
+                            HGlobal(_, _, _) => sets_bit(H, u, n).bind(λ o => match o {
+                                None => pure(None),
+                                Some(l) => pure(Some(SetBit(l.elt, l.set, l.neg, l.r, b))),
+                            }),
+                            _ => pure(None),
+                        }),
+                    }),
+                },
+            },
+            _ => pure(None),
+        }),
+    }
+}
+
+// The spelled `b` known to be `v` (by `hb`), as a membership literal: the
+// element, the set, whether the element is in it, and the proof.
+record SetLit { elt: Handle, set: Handle, holds: Bool, proof: Expr }
+
+fn sets_bit_lit(H: SetHeads, l: SetBit, v: Bool, hb: Expr) → Tac<Option<SetLit>> {
+    infer(Hd(l.elt)).bind(λ c => match c {
+        Refused(_) => pure(None),
+        Accepted(t) => {
+            let T = Hd(t);
+            let x = Hd(l.elt);
+            let s = Hd(l.set);
+            let b = Hd(l.b);
+            let nb = App(Global(H.lem.not_g), b);
+            let M = H.lem;
+            pure(Some(match l.neg {
+                False => match v {
+                    True => SetLit(l.elt, l.set, True, sets_app(M.spell_true, [T, x, s, b, l.r, hb])),
+                    False => SetLit(l.elt, l.set, False, sets_app(M.spell_false, [T, x, s, b, l.r, hb])),
+                },
+                True => match v {
+                    True => SetLit(l.elt, l.set, False, sets_app(M.spell_false, [T, x, s, nb, l.r, sets_app(M.not_of_true, [b, hb])])),
+                    False => SetLit(l.elt, l.set, True, sets_app(M.spell_true, [T, x, s, nb, l.r, sets_app(M.not_of_false, [b, hb])])),
+                },
+            }))
+        },
+    })
+}
+
+// A hypothesis: its proof, its name for messages, and its statement.
+record SetGiven { proof: Expr, name: String, ty: Handle }
+
+fn sets_givens_of(ls: List<LocalInfo>) → List<SetGiven> {
+    match ls { Nil => Nil, Cons(l, rest) => Cons(SetGiven(Local(l.ref), l.name, l.ty), sets_givens_of(rest)) }
+}
+
+// What a hypothesis says, before it is read at an element: a membership
+// literal (`Mem`, `¬Mem`, or a spelling known `True` or `False`), an
+// equation or disequation between elements, a function type whose
+// conclusion is about its argument (an inclusion, read once the element is
+// known), a conjunction, or none of these.
+inductive SetShape {
+    ShapeLit(l: SetLit),
+    ShapeEq(l: Handle, r: Handle, holds: Bool, proof: Expr),
+    ShapeAll,
+    ShapeAnd,
+    ShapeOther,
+}
+
+fn sets_lit_shape(o: Option<SetLit>) → SetShape { match o { None => ShapeOther, Some(l) => ShapeLit(l) } }
+
+fn sets_pi_shape(H: SetHeads, gv: SetGiven, ty: Handle) → Tac<SetShape> {
+    open(ty, "i").bind(λ c => match c {
+        Refused(_) => pure(ShapeOther),
+        Accepted(o) => match o.dependent {
+            True => pure(ShapeAll),
+            False => sets_view(o.body).bind(λ bv => match sets_is_false(H, bv) {
+                False => pure(ShapeAll),
+                True => sets_view(o.local.ty).bind(λ dv => match sets_mem_of(H, dv) {
+                    Some(m) => pure(ShapeLit(SetLit(m.elt, m.set, False, gv.proof))),
+                    None => match dv { HEq(l, r) => pure(ShapeEq(l, r, False, gv.proof)), _ => pure(ShapeOther) },
+                }),
+            }),
+        },
+    })
+}
+
+fn sets_shape_once(H: SetHeads, gv: SetGiven, ty: Handle) → Tac<SetShape> {
+    view(ty).bind(λ v => match sets_mem_of(H, v) {
+        Some(m) => pure(ShapeLit(SetLit(m.elt, m.set, True, gv.proof))),
+        None => match v {
+            HPi(_) => sets_pi_shape(H, gv, ty),
+            HEq(l, r) => view(r).bind(λ rv => match sets_bool_value(H, rv) {
+                Some(val) => sets_bit(H, l, sets_fuel).bind(λ o => match o {
+                    None => pure(ShapeOther),
+                    Some(bit) => sets_bit_lit(H, bit, val, gv.proof).bind(λ ol => pure(sets_lit_shape(ol))),
+                }),
+                None => pure(ShapeEq(l, r, True, gv.proof)),
+            }),
+            HGlobal(g, _, args) => match g.id.same(H.lem.is_true.id) {
+                True => match args {
+                    Cons(b, Nil) => sets_bit(H, b, sets_fuel).bind(λ o => match o {
+                        None => pure(ShapeOther),
+                        Some(bit) => sets_bit_lit(H, bit, True, sets_app(H.lem.eq_true_of_is, [Hd(b), gv.proof])).bind(λ ol => pure(sets_lit_shape(ol))),
+                    }),
+                    _ => pure(ShapeOther),
+                },
+                False => match g.id.same(H.lem.and_ty.id) { True => pure(ShapeAnd), False => pure(ShapeOther) },
+            },
+            _ => pure(ShapeOther),
+        },
+    })
+}
+
+// The shape as written, else as its head normal form (a subset predicate
+// unfolds to its function type, `¬P` to `P → False`).
+fn sets_shape(H: SetHeads, gv: SetGiven) → Tac<SetShape> {
+    sets_shape_once(H, gv, gv.ty).bind(λ s => match s {
+        ShapeOther => whnf(gv.ty).bind(λ c => match c { Accepted(w) => sets_shape_once(H, gv, w), Refused(_) => pure(ShapeOther) }),
+        _ => pure(s),
+    })
+}
+
+fn sets_field_givens(name: String, fs: List<FieldProj>) → Tac<List<SetGiven>> {
+    match fs {
+        Nil => pure(Nil),
+        Cons(f, rest) => infer(Hd(f.term)).bind(λ c => sets_field_givens(name, rest).bind(λ more => match c {
+            Refused(_) => pure(more),
+            Accepted(ty) => pure(Cons(SetGiven(Hd(f.term), name ++ "." ++ f.name, ty), more)),
+        })),
+    }
+}
+
+// A conjunction's two halves, as hypotheses.
+fn sets_halves(gv: SetGiven) → Tac<List<SetGiven>> {
+    fields(gv.proof).bind(λ c => match c {
+        Refused(_) => pure(Nil),
+        Accepted(p) => sets_field_givens(gv.name, p.fields),
+    })
+}
+
+// The facts read at `x`, with their proofs, in the order of the hypotheses.
+record SetFacts { leaves: SetLeaves, facts: List<SetFact>, proofs: List<Expr>, read: List<Note> }
+
+fn sets_same_elt(a, b: Handle) → Tac<Bool> { defeq(Hd(a), Hd(b)) }
+
+fn SetFacts::add(self acc: SetFacts, L: SetLeaves, f: SetFact, proof: Expr, note: Note) → SetFacts {
+    SetFacts(L, acc.facts ++ [f], acc.proofs ++ [proof], acc.read ++ [note])
+}
+
+// `Mem(y, s)` at `x`: `s` read, when `y` is `x`.
+fn sets_mem_at(H: SetHeads, L: SetLeaves, x: Handle, v: Head) → Tac<Option<SetRead>> {
+    match sets_mem_of(H, v) {
+        None => pure(None),
+        Some(m) => sets_same_elt(m.elt, x).bind(λ same => match same {
+            False => pure(None),
+            True => sets_read(H, L, m.set, sets_fuel).bind(λ r => pure(Some(r))),
+        }),
+    }
+}
+
+// `proof: Mem(x, a) → Mem(x, b)` (its type `ty`), as the fact `FImp`. The
+// conclusion is read off `proof` applied to a hole, so that its handle
+// lives where the goal does rather than under the binder.
+fn sets_imp_at(H: SetHeads, x: Handle, acc: SetFacts, name: String, proof: Expr, ty: Handle) → Tac<Option<SetFacts>> {
+    sets_view(ty).bind(λ tv => match tv {
+        HPi(dom) => sets_view(dom).bind(λ dv => sets_mem_at(H, acc.leaves, x, dv).bind(λ oa => match oa {
+            None => pure(None),
+            Some(ra) => holes(proof, 1).bind(λ c => match c {
+                Accepted(Cons(hh, Nil)) => infer(App(proof, Hd(hh))).bind(λ c2 => match c2 {
+                    Refused(_) => pure(None),
+                    Accepted(cod) => sets_view(cod).bind(λ cv => sets_mem_at(H, ra.leaves, x, cv).bind(λ ob => match ob {
+                        None => pure(None),
+                        Some(rb) => pure(Some(acc.add(rb.leaves, FImp(ra.e, rb.e), proof, Tried(name, "an inclusion, at x")))),
+                    })),
+                }),
+                _ => pure(None),
+            }),
+        })),
+        _ => pure(None),
+    })
+}
+
+// `gv: (i: A) → … → Mem(i, a) → Mem(i, b)`, applied to `x`.
+fn sets_all_at(H: SetHeads, x: Handle, acc: SetFacts, gv: SetGiven) → Tac<Option<SetFacts>> {
+    let proof = App(gv.proof, Hd(x));
+    infer(proof).bind(λ c => match c {
+        Refused(_) => pure(None),
+        Accepted(ty) => sets_imp_at(H, x, acc, gv.name, proof, ty),
+    })
+}
+
+// `proof: x = e` (`holds`) or `¬(x = e)`, as `x ∈ [e]` or `x ∉ [e]`; the
+// equation's other way round by the `_sym` lemmas.
+fn sets_eq_fact(H: SetHeads, T: Expr, x: Handle, acc: SetFacts, name: String, e: Handle, holds: Bool, flipped: Bool, proof: Expr) → Tac<SetFacts> {
+    let L = acc.leaves;
+    let law: GlobalRef = match holds {
+        True => match flipped { False => H.lem.mem_of_eq, True => H.lem.mem_of_eq_sym },
+        False => match flipped { False => H.not_single, True => H.not_single_sym },
+    };
+    sets_intern(L.elts, e).bind(λ i => {
+        let f: SetFact = match holds { True => FMem(SCons(i.k, SNil)), False => FNot(SCons(i.k, SNil)) };
+        let note: String = match holds { True => "x is this element", False => "x is not this element" };
+        pure(acc.add(SetLeaves(L.sets, i.all, L.preds, L.ops), f, sets_app(law, [T, Hd(x), Hd(e), proof]), Tried(name, note)))
+    })
+}
+
+// An element `x` is known equal to: `e` proves `x = y`.
+record SetAlias { y: Handle, e: Expr }
+
+fn sets_aliases(H: SetHeads, T: Expr, x: Handle, gs: List<SetGiven>, acc: List<SetAlias>, fuel: Nat) → Tac<List<SetAlias>> {
+    match fuel {
+        Zero => pure(acc),
+        Succ(n) => match gs {
+            Nil => pure(acc),
+            Cons(gv, rest) => sets_shape(H, gv).bind(λ s => match s {
+                ShapeEq(a, b, holds, proof) => match holds {
+                    False => sets_aliases(H, T, x, rest, acc, n),
+                    True => sets_same_elt(a, x).bind(λ left => match left {
+                        True => sets_aliases(H, T, x, rest, acc ++ [SetAlias(b, proof)], n),
+                        False => sets_same_elt(b, x).bind(λ right => match right {
+                            True => sets_aliases(H, T, x, rest, acc ++ [SetAlias(a, sets_app(H.lem.eq_sym, [T, Hd(x), Hd(a), proof]))], n),
+                            False => sets_aliases(H, T, x, rest, acc, n),
+                        }),
+                    }),
+                },
+                ShapeAnd => sets_halves(gv).bind(λ hs => sets_aliases(H, T, x, hs ++ rest, acc, n)),
+                _ => sets_aliases(H, T, x, rest, acc, n),
+            }),
+        },
+    }
+}
+
+fn sets_alias_of(als: List<SetAlias>, y: Handle) → Tac<Option<SetAlias>> {
+    match als {
+        Nil => pure(None),
+        Cons(a, rest) => sets_same_elt(a.y, y).bind(λ same => match same { True => pure(Some(a)), False => sets_alias_of(rest, y) }),
+    }
+}
+
+// A literal about `x`, or about an element `x` equals, moved to `x`: its
+// proof at `x`, or nothing.
+fn sets_lit_at(H: SetHeads, T: Expr, x: Handle, als: List<SetAlias>, l: SetLit) → Tac<Option<Expr>> {
+    sets_same_elt(l.elt, x).bind(λ same => match same {
+        True => pure(Some(l.proof)),
+        False => sets_alias_of(als, l.elt).bind(λ o => match o {
+            None => pure(None),
+            Some(a) => pure(Some(sets_app(match l.holds { True => H.lem.mem_transport, False => H.lem.not_transport },
+                [T, Hd(x), Hd(a.y), Hd(l.set), a.e, l.proof]))),
+        }),
+    })
+}
+
+// How many hypotheses, conjunctions' halves included, a run reads.
+def sets_given_fuel: Nat = 1024;
+
+fn sets_facts(H: SetHeads, T: Expr, x: Handle, als: List<SetAlias>, gs: List<SetGiven>, acc: SetFacts, fuel: Nat) → Tac<SetFacts> {
+    match fuel {
+        Zero => pure(acc),
+        Succ(n) => match gs {
+            Nil => pure(acc),
+            Cons(gv, rest) => sets_shape(H, gv).bind(λ s => match s {
+                ShapeLit(l) => sets_lit_at(H, T, x, als, l).bind(λ o => match o {
+                    None => sets_facts(H, T, x, als, rest, acc, n),
+                    Some(proof) => sets_read(H, acc.leaves, l.set, sets_fuel).bind(λ r => {
+                        let f: SetFact = match l.holds { True => FMem(r.e), False => FNot(r.e) };
+                        let note: String = match l.holds { True => "x is in it", False => "x is not in it" };
+                        sets_facts(H, T, x, als, rest, acc.add(r.leaves, f, proof, Tried(gv.name, note)), n)
+                    }),
+                }),
+                ShapeEq(a, b, holds, proof) => sets_same_elt(a, x).bind(λ left => match left {
+                    True => sets_eq_fact(H, T, x, acc, gv.name, b, holds, False, proof).bind(λ acc2 => sets_facts(H, T, x, als, rest, acc2, n)),
+                    False => sets_same_elt(b, x).bind(λ right => match right {
+                        True => sets_eq_fact(H, T, x, acc, gv.name, a, holds, True, proof).bind(λ acc2 => sets_facts(H, T, x, als, rest, acc2, n)),
+                        False => sets_facts(H, T, x, als, rest, acc, n),
+                    }),
+                }),
+                ShapeAll => sets_all_at(H, x, acc, gv).bind(λ o => match o {
+                    None => sets_facts(H, T, x, als, rest, acc, n),
+                    Some(acc2) => sets_facts(H, T, x, als, rest, acc2, n),
+                }),
+                ShapeAnd => sets_halves(gv).bind(λ hs => sets_facts(H, T, x, als, hs ++ rest, acc, n)),
+                ShapeOther => sets_facts(H, T, x, als, rest, acc, n),
+            }),
+        },
+    }
+}
+
+// The elements read that are `x` itself, by conversion, as the facts `x ∈ [e]`.
+fn sets_self_facts(H: SetHeads, T: Expr, x: Handle, es: List<Handle>, k: Nat, acc: SetFacts) → Tac<SetFacts> {
+    match es {
+        Nil => pure(acc),
+        Cons(e, rest) => sets_same_elt(e, x).bind(λ same => match same {
+            False => sets_self_facts(H, T, x, rest, Succ(k), acc),
+            True => sets_self_facts(H, T, x, rest, Succ(k),
+                acc.add(acc.leaves, FMem(SCons(k, SNil)), sets_app(H.mem_self, [T, Hd(x)]), At(Hd(e), Tried("an element", "x is it")))),
+        }),
+    }
+}
+
+// The elements a `False` goal may be about: those of the membership
+// literals first, then those of the equations, each once.
+record SetElts { lits: List<Handle>, eqs: List<Handle> }
+
+fn sets_elts(H: SetHeads, gs: List<SetGiven>, acc: SetElts, fuel: Nat) → Tac<SetElts> {
+    match fuel {
+        Zero => pure(acc),
+        Succ(n) => match gs {
+            Nil => pure(acc),
+            Cons(gv, rest) => sets_shape(H, gv).bind(λ s => match s {
+                ShapeLit(l) => sets_intern(acc.lits, l.elt).bind(λ i => sets_elts(H, rest, SetElts(i.all, acc.eqs), n)),
+                ShapeEq(a, b, _, _) => sets_intern(acc.eqs, a).bind(λ i => sets_intern(i.all, b).bind(λ j =>
+                    sets_elts(H, rest, SetElts(acc.lits, j.all), n))),
+                ShapeAnd => sets_halves(gv).bind(λ hs => sets_elts(H, hs ++ rest, acc, n)),
+                _ => sets_elts(H, rest, acc, n),
+            }),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The table, run here first
+
+fn sets_counter_q(q: Nat, f: List<Bool> → Bool) → Option<List<Bool>> {
+    match q {
+        Zero => match f(Nil) { True => None, False => Some(Nil) },
+        Succ(k) => match sets_counter_q(k, λ (bs: List<Bool>) => f(Cons(True, bs))) {
+            Some(bs) => Some(Cons(True, bs)),
+            None => match sets_counter_q(k, λ (bs: List<Bool>) => f(Cons(False, bs))) { Some(bs) => Some(Cons(False, bs)), None => None },
+        },
+    }
+}
+
+fn sets_counter(n, m, q: Nat, conns: List<SetConn>, facts: List<SetFact>, goal: SetGoal) → Option<SetBits> {
+    let ok = λ (b: SetBits) => !set_facts_bit(facts, b) || goal.bit(b);
+    match sets_counter_q(n, λ (vs: List<Bool>) => set_all_bits(m, λ (ws: List<Bool>) => set_all_bits(q, λ (ps: List<Bool>) => ok(SetBits(vs, ws, ps, conns))))) {
+        None => None,
+        Some(vs) => match sets_counter_q(m, λ (ws: List<Bool>) => set_all_bits(q, λ (ps: List<Bool>) => ok(SetBits(vs, ws, ps, conns)))) {
+            None => None,
+            Some(ws) => match sets_counter_q(q, λ (ps: List<Bool>) => ok(SetBits(vs, ws, ps, conns))) {
+                None => None,
+                Some(ps) => Some(SetBits(vs, ws, ps, conns)),
+            },
+        },
+    }
+}
+
+fn sets_notes(hs: List<Handle>, bs: List<Bool>, what, yes, no: String) → List<Note> {
+    match hs {
+        Nil => Nil,
+        Cons(h, rest) => match bs {
+            Nil => Nil,
+            Cons(b, more) => Cons(At(Hd(h), Tried(what, match b { True => yes, False => no })), sets_notes(rest, more, what, yes, no)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The proof
+
+// What the core proof proves at `x`: `x ∈ s`, `x ∉ s`, or `False`.
+inductive SetWant { WMem(s: Handle), WNot(s: Handle), WFalse }
+
+// Prove `want` at `x` from the hypotheses' facts at `x`.
+fn sets_prove(H: SetHeads, gs: List<SetGiven>, x: Handle, want: SetWant) → Tac<Expr> {
     let elt_ty <- infer(Hd(x)).or_fail("sets: ");
     let T = Hd(elt_ty);
-    let read <- sets_facts(H, T, x, g.locals, SetFacts(SetLeaves(Nil, Nil, Nil, Nil), Nil, Nil, Nil));
-    let goal_read <- match goal_set {
-        None => pure(SetRead(read.leaves, SNil)),
-        Some(s) => sets_read(H, read.leaves, s, sets_fuel),
+    let als <- sets_aliases(H, T, x, gs, Nil, sets_given_fuel);
+    let read <- sets_facts(H, T, x, als, gs, SetFacts(SetLeaves(Nil, Nil, Nil, Nil), Nil, Nil, Nil), sets_given_fuel);
+    let goal_read <- match want {
+        WFalse => pure(SetRead(read.leaves, SNil)),
+        WMem(s) => sets_read(H, read.leaves, s, sets_fuel),
+        WNot(s) => sets_read(H, read.leaves, s, sets_fuel),
     };
     let found <- sets_self_facts(H, T, x, goal_read.leaves.elts, 0,
         SetFacts(goal_read.leaves, read.facts, read.proofs, read.read));
     let L = found.leaves;
-    let goal: SetGoal = match goal_set { None => GFalse, Some(_) => GMem(goal_read.e) };
+    let goal: SetGoal = match want { WFalse => GFalse, WMem(_) => GMem(goal_read.e), WNot(_) => GNot(goal_read.e) };
     let conns = sets_conns(L.ops);
     match set_taut(L.sets.len(), L.elts.len(), L.preds.len(), conns, found.facts, goal) {
         False => {
@@ -505,7 +796,7 @@ fn sets_prove(H: SetHeads, g: GoalInfo, x: Handle, goal_set: Option<Handle>) →
                     sets_notes(L.preds, b.preds, "a filter's predicate", "true at x", "false at x"),
             };
             fail("sets: the goal does not follow from the membership facts in scope; at this assignment every fact holds and the goal does not",
-                found.read ++ why)
+                Cons(At(Hd(x), Tried("x", "the element read at")), found.read ++ why))
         },
         True => {
             let dict_fn <- as_type(App(Global(H.dec_eq), T)).or_fail("sets: ");
@@ -519,30 +810,101 @@ fn sets_prove(H: SetHeads, g: GoalInfo, x: Handle, goal_set: Option<Handle>) →
     }
 }
 
+// `False`, at the first element it follows at.
+fn sets_false_at(H: SetHeads, gs: List<SetGiven>, xs: List<Handle>, first: Option<Outcome<Expr>>) → Tac<Expr> {
+    match xs {
+        Nil => match first {
+            Some(Failed(msg, notes)) => fail(msg, notes),
+            _ => fail("sets: the goal is `False` and no hypothesis is a membership or an equation to read it at", []),
+        },
+        Cons(x, rest) => attempt(sets_prove(H, gs, x, WFalse)).bind(λ o => match o {
+            Done(p) => pure(p),
+            Failed(_, _) => sets_false_at(H, gs, rest, match first { None => Some(o), Some(_) => first }),
+        }),
+    }
+}
+
+// A spelled goal: `b = v`, `b` read as `l`; the core goal is membership or
+// its negation, as `v` and the spelling's sense say.
+fn sets_spelled(H: SetHeads, gs: List<SetGiven>, l: SetBit, v: Bool) → Tac<Expr> {
+    let t <- infer(Hd(l.elt)).or_fail("sets: ");
+    let T = Hd(t);
+    let x = Hd(l.elt);
+    let s = Hd(l.set);
+    let b = Hd(l.b);
+    let nb = App(Global(H.lem.not_g), b);
+    let M = H.lem;
+    match l.neg {
+        False => match v {
+            True => sets_prove(H, gs, l.elt, WMem(l.set)).bind(λ p => pure(sets_app(M.spell_is_true, [T, x, s, b, l.r, p]))),
+            False => sets_prove(H, gs, l.elt, WNot(l.set)).bind(λ p => pure(sets_app(M.spell_is_false, [T, x, s, b, l.r, p]))),
+        },
+        True => match v {
+            True => sets_prove(H, gs, l.elt, WNot(l.set)).bind(λ p =>
+                pure(sets_app(M.true_of_not_false, [b, sets_app(M.spell_is_false, [T, x, s, nb, l.r, p])]))),
+            False => sets_prove(H, gs, l.elt, WMem(l.set)).bind(λ p =>
+                pure(sets_app(M.false_of_not_true, [b, sets_app(M.spell_is_true, [T, x, s, nb, l.r, p])]))),
+        },
+    }
+}
+
+def sets_not_read: String = "sets: the goal is not a membership, a spelling of one, `False`, a conjunction of these, or a function type ending in one";
+
 fn sets_go(H: SetHeads, fuel: Nat) → Tac<Expr> {
     match fuel {
-        Zero => fail("sets: the goal is not a membership, `False`, or a function type ending in one", []),
-        Succ(k) => goal().bind(λ g => sets_view(g.target).bind(λ v => match sets_mem_of(H, v) {
-            Some(m) => sets_prove(H, g, m.elt, Some(m.set)),
-            None => match sets_is_false(H, v) {
-                True => sets_some_elt(H, g.locals).bind(λ o => match o {
-                    None => fail("sets: the goal is `False` and no hypothesis is a membership to read it at", []),
-                    Some(x) => sets_prove(H, g, x, None),
+        Zero => fail(sets_not_read, []),
+        Succ(k) => goal().bind(λ g => sets_view(g.target).bind(λ v => {
+            let gs = sets_givens_of(g.locals);
+            // A function type, by its head normal form (an inclusion like
+            // `a.Inside(m)` unfolds to one), is introduced; a conjunction or
+            // a record of facts is split, each part proved alone.
+            let other: Tac<Expr> = open(g.target, "x").bind(λ c => match c {
+                Accepted(_) => intro_as("x", sets_go(H, k)),
+                Refused(_) => constructor(g.target).bind(λ c2 => match c2 {
+                    Accepted(sp) => close_by(sp, g.locals, sets_go(H, k)),
+                    Refused(_) => fail(sets_not_read, [At(Hd(g.target), Tried("the goal", "not read"))]),
                 }),
-                // A function type, by its head normal form (an inclusion
-                // like `a.Inside(m)` unfolds to one): introduce it.
-                False => open(g.target, "x").bind(λ c => match c {
-                    Accepted(_) => intro_as("x", sets_go(H, k)),
-                    Refused(_) => fail("sets: the goal is not a membership, `False`, or a function type ending in one", [At(Hd(g.target), Tried("the goal", "not read"))]),
-                }),
-            },
+            });
+            match sets_mem_of(H, v) {
+                Some(m) => sets_prove(H, gs, m.elt, WMem(m.set)),
+                None => match sets_is_false(H, v) {
+                    True => sets_elts(H, gs, SetElts(Nil, Nil), sets_given_fuel).bind(λ es => sets_false_at(H, gs, es.lits ++ es.eqs, None)),
+                    False => match v {
+                        HEq(l, r) => view(r).bind(λ rv => match sets_bool_value(H, rv) {
+                            None => other,
+                            Some(val) => sets_bit(H, l, sets_fuel).bind(λ o => match o {
+                                None => other,
+                                Some(bit) => sets_spelled(H, gs, bit, val),
+                            }),
+                        }),
+                        HGlobal(f, _, args) => match f.id.same(H.lem.and_ty.id) {
+                            True => match args {
+                                Cons(P, Cons(Q, Nil)) => focus(GoalInfo(P, g.locals), sets_go(H, k)).bind(λ p =>
+                                    focus(GoalInfo(Q, g.locals), sets_go(H, k)).bind(λ q => pure(sets_app(H.held_cons, [Blank, Blank, p, q])))),
+                                _ => other,
+                            },
+                            False => match f.id.same(H.lem.is_true.id) {
+                            True => match args {
+                                Cons(b, Nil) => sets_bit(H, b, sets_fuel).bind(λ o => match o {
+                                    None => other,
+                                    Some(bit) => sets_spelled(H, gs, bit, True).bind(λ p => pure(sets_app(H.lem.is_of_eq_true, [Hd(b), p]))),
+                                }),
+                                _ => other,
+                            },
+                            False => other,
+                        },
+                        },
+                        _ => other,
+                    },
+                },
+            }
         })),
     }
 }
 
 // `sets()`: prove the goal from the membership facts in scope. The
-// operations it reads are `entries`, by default every `SetOpEntry`
-// registered where the call is.
-fn sets(entries: List<SetOpEntry> := registered(SetOpEntry)) → Tac<Expr> {
-    sets_heads(entries).bind(λ H => sets_go(H, 16))
+// operations and spellings it reads are `entries` and `bits`, by default
+// every `SetOpEntry` and `SetBitEntry` registered where the call is.
+fn sets(entries: List<SetOpEntry> := registered(SetOpEntry), bits: List<SetBitEntry> := registered(SetBitEntry)) → Tac<Expr> {
+    sets_heads(entries, bits).bind(λ H => sets_go(H, 16))
 }
