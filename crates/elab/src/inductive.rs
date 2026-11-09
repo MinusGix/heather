@@ -2428,13 +2428,28 @@ impl Elaborator {
         args: &[Expr],
         span: Span,
     ) -> R<Vec<(Term, Type, Level)>> {
-        if args.len() != ind.valparams.len() {
+        self.valparam_args_after(cx, ind, targs, Vec::new(), args, span)
+    }
+
+    /// [`Self::valparam_args`] after `given`, the leading value arguments
+    /// already elaborated (a universe-declared class carrier, passed as its
+    /// code: `crate::dispatch::dictionary`'s `universe_carrier`).
+    pub(crate) fn valparam_args_after(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        targs: &[(Type, Level)],
+        given: Vec<(Term, Type, Level)>,
+        args: &[Expr],
+        span: Span,
+    ) -> R<Vec<(Term, Type, Level)>> {
+        if given.len() + args.len() != ind.valparams.len() {
             return err(
                 format!(
                     "`{}` takes {} value argument(s), found {}",
                     ind.name,
                     ind.valparams.len(),
-                    args.len()
+                    given.len() + args.len()
                 ),
                 span,
             );
@@ -2458,13 +2473,30 @@ impl Elaborator {
         // (issues/binder-symbol-as-notation.md). Installed as the telescope is
         // walked, which is what makes the scope "the rest of the telescope".
         tcx.op_locals.clear();
-        let mut out = Vec::with_capacity(args.len());
-        for ((pname, pty), arg) in ind.valparams.iter().zip(args) {
+        let mut out = Vec::with_capacity(ind.valparams.len());
+        let mut given = given.into_iter();
+        let mut args = args.iter();
+        for (pname, pty) in &ind.valparams {
             let (ty, level) = {
                 let _scope = self.use_inductive_scope(ind);
                 self.elab_ty(&tcx, pty)?
             };
-            let tm = self.elab_check(cx, arg, &ty, &level)?;
+            let tm = match given.next() {
+                Some((tm, _, _)) => tm,
+                None => self.elab_check(cx, args.next().expect("counted above"), &ty, &level)?,
+            };
+            // A carrier declared at a universe (`class Frame<A: Type<1>>`) is
+            // a type to the rest of the telescope: bound as a type parameter,
+            // so that it shadows a caller's type parameter of the same name,
+            // which an alias (looked up after type parameters) would not.
+            if let Type::Ty(l) = &ty {
+                tcx.tyvars.push(TyVar {
+                    name: pname.clone(),
+                    ty: Type::El { level: l.clone(), tm: Rc::new(tm.clone()) },
+                    level: l.clone(),
+                    depth,
+                });
+            }
             tcx.aliases.push(Rc::new(Alias {
                 skel: None,
                 name: pname.clone(),

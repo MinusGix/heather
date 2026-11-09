@@ -4,7 +4,7 @@ status: open
 labels: [testing,performance]
 area: infrastructure
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 `lib/_tests/native/runtime/runtime_tests.hthr` costs about 370 CPU-s of its
@@ -38,3 +38,7 @@ agreement proofs (see [[runtime-fn-caller-agreement-fuel]]).
 
 - A `scripts/test --pr` on a fresh container passes the library gate's
   `lib/_tests/native` folder.
+
+## Log
+
+- 2026-11-09: Seen again on the frame-and-locale-foundations round's `scripts/test --pr` (fresh container, gate killed at the rail); the module checks uncapped on the branch (4 refusals matched).

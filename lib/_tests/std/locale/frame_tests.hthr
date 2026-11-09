@@ -1,0 +1,93 @@
+// Probes of `lib/std/locale`: the frame laws stated once and read at the
+// spatial frame `Opens<X>` and at `Omega`; points as maps from the one-point
+// locale; a nucleus's sublocale; and a formal topology's presented frame.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import frame; import nucleus; import formal_topology;
+import logic; import bool; import nat; import order; import relation_props;
+
+// The layers each carrier registers.
+fn opens_layers() → Nat {
+    let o = Omega::Frame(Omega::Le, Omega::meet, Omega::sup);
+    0
+}
+
+// The generic laws at a concrete carrier: the statement's own operations pin
+// the frame's indices (`<=` and `⊓` by designation, the join by name).
+theorem opens_sup_mono(I: Type, f, g: I → Opens<Nat>, h: (i: I) → f(i) <= g(i)):
+    Opens::sup(I, f) <= Opens::sup(I, g)
+{
+    SupLattice::sup_mono(I, f, g, h)
+}
+
+theorem opens_meet_comm(u, v: Opens<Nat>): u ⊓ v <= v ⊓ u { FiniteMeets::meet_comm_le(u, v) }
+
+theorem opens_distrib(u: Opens<Nat>, I: Type, f: I → Opens<Nat>):
+    Opens::sup(I, f) ⊓ u <= Opens::sup(I, λ i => f(i) ⊓ u)
+{
+    Frame::sup_meet_le(u, I, f)
+}
+
+theorem opens_binary_distrib(u, v, w: Opens<Nat>):
+    u ⊓ SupLattice::join(Opens::sup<Nat>, v, w) <= SupLattice::join(Opens::sup<Nat>, u ⊓ v, u ⊓ w)
+{
+    Frame::meet_join_le(u, v, w)
+}
+
+theorem opens_bot_le(u: Opens<Nat>): SupLattice::bot(Opens::sup<Nat>) <= u { SupLattice::bot_le(u) }
+
+// What the order means at `Opens`: inclusion, pointwise.
+theorem opens_le_reads(u, v: Opens<Nat>, h: u <= v, n: Nat, hn: u.has(n)): v.has(n) { h(n, hn) }
+
+// `Omega`: a join holds only through one of its terms.
+theorem omega_join_l(p, q: Omega): p <= SupLattice::join(Omega::sup, p, q) { SupLattice::le_join_l(p, q) }
+
+theorem omega_join_holds(p, q: Omega, hp: p.holds): SupLattice::join(Omega::sup, p, q).holds { omega_join_l(p, q, hp) }
+
+theorem omega_distrib(p: Omega, I: Type, f: I → Omega):
+    p ⊓ Omega::sup(I, f) <= Omega::sup(I, λ i => p ⊓ f(i))
+{
+    let both: (p ⊓ Omega::sup(I, f) <= Omega::sup(I, λ i => p ⊓ f(i)) ∧ Omega::sup(I, λ i => p ⊓ f(i)) <= p ⊓ Omega::sup(I, f))
+        = Frame::meet_sup(p, I, f);
+    both.left
+}
+
+// Points. An element is a point of the spatial locale, and a point lies in a
+// join only through a term.
+theorem point_in_sup(n: Nat, I: Type, f: I → Opens<Nat>, h: Opens::sup(I, f).has(n)):
+    Exists<I>(λ i => f(i).has(n))
+{
+    Point::in_sup(Opens::point(n), I, f, h)
+}
+
+theorem point_in_top(n: Nat): (Opens::point(n)).inv(Opens::top<Nat>()).holds { Point::in_top(Opens::point(n)) }
+
+// A function is a map of locales, by preimage, and a point composes with it.
+theorem map_preimage(g: Nat → Nat, v: Opens<Nat>, n: Nat, h: v.has(g(n))): ((Opens::map(g)).inv(v)).has(n) { h }
+
+// The double-negation nucleus on `Omega`, and its sublocale.
+fn dn_frame() → Frame<Omega>(NucleusLe(Omega::Le, Omega::dn), Omega::meet, Omega::sup) {
+    Nucleus::frame(Omega::Le, Omega::meet, Omega::sup, Omega::dn_nucleus())
+}
+
+theorem dn_le_reads(p, q: Omega, h: NucleusLe(Omega::Le, Omega::dn, p, q), hp: p.holds): ¬¬q.holds { h(hp) }
+
+// A formal topology's frame: the down-sets of `Nat`'s order.
+fn alexandrov_nat() → Frame<Opens<Nat>>(
+    λ u v => FormalTopology::Le(λ a u => Opens::Below(Nat::Le, a, u), u, v),
+    λ u v => Opens::down_meet(Nat::Le, u, v), Opens::sup<Nat>)
+{
+    FormalTopology::frame(FormalTopology::alexandrov(Nat::Le))
+}
+
+// The basic open below `k` is covered by the open `{k}`.
+theorem alexandrov_covers(k: Nat):
+    FormalTopology::Le(λ a u => Opens::Below(Nat::Le, a, u), FormalTopology::basic(Nat::Le, k), Opens(λ n => n = k))
+{
+    λ a (h: a <= k) => Exists(k, And(refl, h))
+}
+
+// A carrier at `Type<0>` is not a frame's: universes do not cumulate, and a
+// frame of small propositions or predicates is itself large.
+// expect-error: universes in this system are non-cumulative
+fn small_carrier(f: Frame<Bool>(λ x y => True, λ x y => x, λ I g => True)) → Nat { 0 }

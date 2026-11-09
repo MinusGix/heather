@@ -369,10 +369,12 @@ theory, regular Cauchy reals (sum, product, inverse, order, Bishop bridge),
 relation-indexed algebra up to semiring and ring layers, orders, setoids and
 relations, finite sets with list and tree backends, bit-vectors, and
 `x⁻¹`/`xⁿ` notation without junk values (`docs/regular-cauchy-reals-round.md`,
-`docs/creal-*-round.md`, `docs/rational-order-round.md`). Nothing yet for
-measure, probability, combinatorics, asymptotics, locales or floating point.
+`docs/creal-*-round.md`, `docs/rational-order-round.md`), and point-free
+foundations: frames, locale maps, points, nuclei and formal-topology
+presentations over `Type<1>` carriers (`docs/frame-locale-design.md`). Nothing
+yet for measure, probability, combinatorics, asymptotics or floating point.
 Open design for those that have issues:
-[frame-and-locale-foundations](../issues/frame-and-locale-foundations.md),
+[inductive-formal-covers](../issues/inductive-formal-covers.md),
 [localic-real-numbers](../issues/localic-real-numbers.md),
 [real-completeness-interfaces](../issues/real-completeness-interfaces.md),
 [analysis foundations](analysis-foundations-design.md) (differential structure and dominance as the core, finite sums, asymptotics and expansions as first instances; its §13 orders the rounds),
