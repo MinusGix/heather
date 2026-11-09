@@ -1,0 +1,60 @@
+// Probes of `lib/std/data/set/span_set.hthr` (issues/address-interval-sets.md):
+// closed verdicts by `refl`, open endpoint facts through the sound and
+// complete deciders, a footprint as a value, the packing lemma at a literal
+// layout, and the `¬` theorems for the readings a client might expect (a
+// span ending where another starts overlaps it; a span set's verdicts look
+// at more than its first span). Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import option; import list; import span_set;
+
+// Closed membership and endpoint verdicts evaluate.
+theorem has_inside(): Span(4, 3).has(6) = True { refl }
+theorem has_end_excluded(): Span(4, 3).has(7) = False { refl }
+theorem within_closed(): Span(5, 2).within(Span(4, 4)) = True { refl }
+theorem apart_adjacent(): Span(0, 4).apart(Span(4, 2)) = True { refl }
+theorem apart_empty(): Span(3, 0).apart(Span(0, 10)) = True { refl }
+
+// Half-open: a span ending where another starts is disjoint from it, and
+// one ending a point later is not.
+theorem adjacent_disjoint(): Span(0, 4).Disjoint(Span(4, 2)) { Span(0, 4).apart_sound(Span(4, 2), trivial) }
+theorem overlap_not_disjoint(): ¬Span(0, 5).Disjoint(Span(4, 2)) { λ d => d(4, trivial, trivial) }
+
+// Open endpoints: the deciders turn endpoint arithmetic into the pointwise
+// relations and back.
+theorem open_before(a, k, l: Nat): Span(a, k).Disjoint(Span(a + k + 1, l)) { Span(a, k).disjoint_of_before(Span(a + k + 1, l), omega()) }
+theorem open_ordered(s, t: Span, d: s.Disjoint(t), hs: 0 < s.len, ht: 0 < t.len): (s.base + s.len <= t.base) ∨ (t.base + t.len <= s.base) {
+    s.ordered_of_disjoint(t, d, hs, ht)
+}
+theorem open_split(a, k, l, x: Nat): Span(a, k + l).has(x) = Span(a, k).has(x) || Span(a + k, l).has(x) { Span::concat_has(a, k, l, x) }
+
+// A footprint is a value: two buffers and a scratch range, their union,
+// intersections and differences computed and decided.
+fn buffers() → SpanSet { SpanSet([Span(16, 4), Span(20, 8)]) }
+fn scratch() → SpanSet { SpanSet::of(Span(28, 9)) }
+fn region() → SpanSet { SpanSet::of(Span(16, 32)) }
+
+theorem footprint_disjoint(): buffers().disjoint(scratch()) = True { refl }
+theorem footprint_within(): buffers().union(scratch()).within(region()) = True { refl }
+theorem footprint_not_within(): region().within(buffers()) = False { refl }
+theorem footprint_minus(): region().minus(buffers()).has(30) = True { refl }
+theorem footprint_minus_gone(): region().minus(buffers()).has(21) = False { refl }
+theorem footprint_inter(): buffers().inter(SpanSet::of(Span(18, 4))).has(21) = True { refl }
+
+// A verdict is a proof of the pointwise relation.
+theorem footprint_disjoint_points(): buffers().Disjoint(scratch()) { buffers().disjoint_sound(scratch(), trivial) }
+
+// The second span counts: a set whose first span is inside is not within
+// when a later one is outside.
+theorem later_span_counts(): ¬SpanSet([Span(0, 2), Span(9, 2)]).Within(SpanSet::of(Span(0, 4))) {
+    λ w => w(9, trivial)
+}
+
+// Packing: capacities 4, 8, 2 from 16 are the pieces at 16, 20, 28, the
+// union is the span of the total, and pieces are pairwise disjoint.
+theorem pack_literal(): Span::pack(16, [4, 8, 2]) = [Span(16, 4), Span(20, 8), Span(28, 2)] { refl }
+theorem pack_piece(): Span::packed(16, [4, 8, 2], 2, 2) = Span(28, 2) { refl }
+theorem pack_union(x: Nat): SpanSet::any(Span::pack(16, [4, 8, 2]), x) = Span(16, 14).has(x) { Span::pack_has([4, 8, 2], 16, x) }
+theorem pack_pieces_disjoint(sizes: List<Nat>, base, b, c, k, l: Nat, fb: sizes.nth(b) = Some(k), fc: sizes.nth(c) = Some(l), ne: b ≠ c):
+    Span::packed(base, sizes, b, k).Disjoint(Span::packed(base, sizes, c, l)) {
+    Span::packed_disjoint(base, sizes, b, k, c, l, fb, fc, ne)
+}

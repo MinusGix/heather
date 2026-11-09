@@ -1,0 +1,526 @@
+// Half-open spans of naturals, finite unions of them, and the packing lemma:
+// the sets of addresses a region, a buffer or a footprint occupies
+// (issues/address-interval-sets.md, docs/native-mathematics-survey.md §4).
+//
+// - A `Span(base, len)` is `[base, base + len)`. Membership is a Boolean
+//   (`has`), so a closed fact is a verdict `refl` proves and an open one is
+//   an `omega` guard. Containment and disjointness are pointwise
+//   propositions (`Within`, `Disjoint`), each decided exactly by comparing
+//   endpoints (`within`, `apart`: sound and complete).
+// - A `SpanSet` is a finite union, a list of spans with no invariant: union
+//   is `++`, intersection meets every pair, difference cuts each span by
+//   each span, and each is proved against membership, so a footprint is a
+//   value and inclusion or disjointness of two footprints is one computed
+//   verdict (`within`, `disjoint`: an empty difference or meet). Nothing
+//   rests on the list being sorted or merged.
+// - Packing: sizes laid out one after another from a base are spans at the
+//   prefix sums, each within the whole and wholly before every later one
+//   (`Layout`'s buffers, frames, scratch, the arena).
+//
+// Addresses in a `Space` reach these through a numbering
+// (`lib/std/machine/memory.hthr`, `Numbering`): a span that does not reach
+// the top of the space is its numbers' span.
+
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+
+// ---------------------------------------------------------------------------
+// Spans
+
+// `[base, base + len)`.
+record Span { base: Nat, len: Nat }
+
+fn Span::end(self s: Span) → Nat { s.base + s.len }
+
+// Membership by the endpoints themselves. Lemmas about a span built from
+// others (a meet, a cut, a piece) state their Boolean identity over
+// `covers` at the spelled endpoints, which `omega` reads, and convert to
+// `has` of the built span, whose fields `omega` would leave as atoms.
+fn Span::covers(base, len, x: Nat) → Bool { base.leb(x) && Succ(x).leb(base + len) }
+
+fn Span::has(self s: Span, x: Nat) → Bool { Span::covers(s.base, s.len, x) }
+
+theorem Span::has_intro(self s: Span, x: Nat, low: s.base <= x, high: x < s.base + s.len): s.has(x).IsTrue() { omega(low, high) }
+
+theorem Span::has_low(self s: Span, x: Nat, h: s.has(x).IsTrue()): s.base <= x { omega(h) }
+
+theorem Span::has_high(self s: Span, x: Nat, h: s.has(x).IsTrue()): x < s.base + s.len { omega(h) }
+
+// Every point of `s` is one of `t`.
+fn Span::Within(self s, t: Span) → Type { (x: Nat) → s.has(x).IsTrue() → t.has(x).IsTrue() }
+
+// No point is in both.
+fn Span::Disjoint(self s, t: Span) → Type { (x: Nat) → s.has(x).IsTrue() → t.has(x).IsTrue() → False }
+
+// The endpoint verdicts. An empty span is within everything and apart from
+// everything.
+fn Span::within(self s, t: Span) → Bool { s.len.leb(0) || (t.base.leb(s.base) && (s.base + s.len).leb(t.base + t.len)) }
+
+fn Span::apart(self s, t: Span) → Bool {
+    s.len.leb(0) || t.len.leb(0) || (s.base + s.len).leb(t.base) || (t.base + t.len).leb(s.base)
+}
+
+theorem Span::within_sound(self s, t: Span, h: s.within(t).IsTrue()): s.Within(t) { λ x hs => omega(h, hs) }
+
+theorem Span::within_complete(self s, t: Span, w: s.Within(t)): s.within(t).IsTrue() {
+    match s.len.lt_or_ge(1) {
+        Inl(empty) => omega(empty),
+        Inr(some) => {
+            let first = w(s.base, s.has_intro(s.base, omega(), omega(some)));
+            let last = w(s.base + s.len - 1, s.has_intro(s.base + s.len - 1, omega(some), omega(some)));
+            omega(some, first, last)
+        },
+    }
+}
+
+theorem Span::apart_sound(self s, t: Span, h: s.apart(t).IsTrue()): s.Disjoint(t) { λ x hs ht => omega(h, hs, ht) }
+
+theorem Span::apart_complete(self s, t: Span, d: s.Disjoint(t)): s.apart(t).IsTrue() {
+    match s.apart(t).is_true_dec() {
+        Inl(yes) => yes,
+        Inr(no) => {
+            let m = s.base.max(t.base);
+            false_elim(d(m, s.has_intro(m, omega(), omega(no)), t.has_intro(m, omega(), omega(no))))
+        },
+    }
+}
+
+// Offsets into spans, at numbers given as equations (a numbered space's
+// addresses, lib/std/machine/memory.hthr): two offsets into one span
+// differ…
+theorem Span::offsets_differ(base, p, q, u, v: Nat, order: p < q, same: u = v, at_q: u = base + q, at_p: v = base + p): False {
+    omega(order, same, at_q, at_p)
+}
+
+// …as do offsets into two disjoint spans…
+theorem Span::disjoint_offsets(a, k, b, l: Nat, disjoint: Span(a, k).Disjoint(Span(b, l)), p, q: Nat, in_a: p < k, in_b: q < l,
+    u, v: Nat, same: u = v, at_p: u = a + p, at_q: v = b + q): False {
+    let low_a: (a <= a + p) = omega();
+    let high_a: (a + p < a + k) = omega(in_a);
+    let low_b: (b <= a + p) = omega(same, at_p, at_q);
+    let high_b: (a + p < b + l) = omega(same, at_p, at_q, in_b);
+    disjoint(a + p, Span(a, k).has_intro(a + p, low_a, high_a), Span(b, l).has_intro(a + p, low_b, high_b))
+}
+
+// …and an offset into a span is in it, at any number equal to it.
+theorem Span::offset_has(base, k, p, u, v: Nat, inside: p < k, at: u = base + p, same: u = v): Span(base, k).has(v).IsTrue() {
+    let low: (base <= v) = omega(at, same);
+    let high: (v < base + k) = omega(at, same, inside);
+    Span(base, k).has_intro(v, low, high)
+}
+
+// …and an offset into a span below a bound is below it.
+theorem Span::offset_below(base, k, p, top: Nat, inside: p < k, fits: base + k <= top): base + p < top { omega(inside, fits) }
+
+// The shapes clients hold: one span ends before the other starts.
+theorem Span::disjoint_of_before(self s, t: Span, before: s.base + s.len <= t.base): s.Disjoint(t) {
+    λ x hs ht => omega(hs, ht, before)
+}
+
+theorem Span::disjoint_of_after(self s, t: Span, after: t.base + t.len <= s.base): s.Disjoint(t) {
+    λ x hs ht => omega(hs, ht, after)
+}
+
+theorem Span::disjoint_of_ordered(self s, t: Span, ordered: (s.base + s.len <= t.base) ∨ (t.base + t.len <= s.base)): s.Disjoint(t) {
+    match ordered { Inl(before) => s.disjoint_of_before(t, before), Inr(after) => s.disjoint_of_after(t, after) }
+}
+
+// Two nonempty disjoint spans are ordered: the converse of the above.
+theorem Span::ordered_of_disjoint(self s, t: Span, d: s.Disjoint(t), ne_s: 0 < s.len, ne_t: 0 < t.len):
+    (s.base + s.len <= t.base) ∨ (t.base + t.len <= s.base) {
+    let verdict = s.apart_complete(t, d);
+    match s.base.add(s.len).leb(t.base).is_true_dec() {
+        Inl(before) => Inl(omega(before)),
+        Inr(not_before) => Inr(omega(verdict, not_before, ne_s, ne_t)),
+    }
+}
+
+theorem Span::within_of_ends(self s, t: Span, low: t.base <= s.base, high: s.base + s.len <= t.base + t.len): s.Within(t) {
+    λ x hs => omega(hs, low, high)
+}
+
+theorem Span::within_refl(self s: Span): s.Within(s) { λ x h => h }
+
+theorem Span::within_trans(self s, t, u: Span, st: s.Within(t), tu: t.Within(u)): s.Within(u) { λ x h => tu(x, st(x, h)) }
+
+theorem Span::disjoint_symm(self s, t: Span, d: s.Disjoint(t)): t.Disjoint(s) { λ x ht hs => d(x, hs, ht) }
+
+// Disjointness passes to anything within either side.
+theorem Span::disjoint_within(self s, t, s2, t2: Span, d: s.Disjoint(t), ss: s2.Within(s), tt: t2.Within(t)): s2.Disjoint(t2) {
+    λ x h1 h2 => d(x, ss(x, h1), tt(x, h2))
+}
+
+// ---------------------------------------------------------------------------
+// Adjacency: splitting a span and putting two together
+
+// `[a, a + k)` then `[a + k, a + k + l)` is `[a, a + k + l)`.
+theorem Span::concat_has(a, k, l, x: Nat): Span(a, k + l).has(x) = Span(a, k).has(x) || Span(a + k, l).has(x) {
+    Bool::eq_of_is_true_iff(Span::covers(a, k + l, x), Span::covers(a, k, x) || Span::covers(a + k, l, x), λ h => omega(h), λ h => omega(h))
+}
+
+theorem Span::adjacent_disjoint(a, k, l: Nat): Span(a, k).Disjoint(Span(a + k, l)) { Span(a, k).disjoint_of_before(Span(a + k, l), omega()) }
+
+theorem Span::left_within(a, k, l: Nat): Span(a, k).Within(Span(a, k + l)) { Span(a, k).within_of_ends(Span(a, k + l), omega(), omega()) }
+
+theorem Span::right_within(a, k, l: Nat): Span(a + k, l).Within(Span(a, k + l)) {
+    Span(a + k, l).within_of_ends(Span(a, k + l), omega(), omega())
+}
+
+// A span cut at `k` of its points: the two pieces, the first `k` long.
+fn Span::take(self s: Span, k: Nat) → Span { Span(s.base, s.len.min(k)) }
+fn Span::drop(self s: Span, k: Nat) → Span { Span(s.base + s.len.min(k), s.len - k) }
+
+theorem Span::split_has(self s: Span, k, x: Nat): s.has(x) = s.take(k).has(x) || s.drop(k).has(x) {
+    Bool::eq_of_is_true_iff(s.has(x), Span::covers(s.base, s.len.min(k), x) || Span::covers(s.base + s.len.min(k), s.len - k, x),
+        λ h => omega(h), λ h => omega(h))
+}
+
+// ---------------------------------------------------------------------------
+// Meet and cut of two spans
+
+// The points of both.
+fn Span::meet(self s, t: Span) → Span { Span(s.base.max(t.base), (s.base + s.len).min(t.base + t.len) - s.base.max(t.base)) }
+
+theorem Span::meet_has(self s, t: Span, x: Nat): s.meet(t).has(x) = s.has(x) && t.has(x) {
+    Bool::eq_of_is_true_iff(Span::covers(s.base.max(t.base), (s.base + s.len).min(t.base + t.len) - s.base.max(t.base), x), s.has(x) && t.has(x),
+        λ h => omega(h), λ h => omega(h))
+}
+
+// The points of `s` not in `t`: what lies below `t`, then what lies above.
+fn Span::cut(self s, t: Span) → List<Span> {
+    [Span(s.base, (s.base + s.len).min(t.base) - s.base),
+        Span(s.base.max(t.base + t.len), (s.base + s.len) - s.base.max(t.base + t.len))]
+}
+
+// ---------------------------------------------------------------------------
+// Finite unions
+
+// A list of spans read as the union of their points. No order or merging
+// is assumed.
+record SpanSet { spans: List<Span> }
+
+fn SpanSet::any(spans: List<Span>, x: Nat) → Bool {
+    match spans { Nil => False, Cons(s, rest) => s.has(x) || SpanSet::any(rest, x) }
+}
+
+fn SpanSet::has(self a: SpanSet, x: Nat) → Bool { SpanSet::any(a.spans, x) }
+
+fn SpanSet::empty() → SpanSet { SpanSet(Nil) }
+
+fn SpanSet::of(s: Span) → SpanSet { SpanSet([s]) }
+
+// Union: both lists.
+fn SpanSet::union(self a, b: SpanSet) → SpanSet { SpanSet(a.spans ++ b.spans) }
+
+// Intersection: every span of the one met with every span of the other.
+fn SpanSet::meets(s: Span, ts: List<Span>) → List<Span> {
+    match ts { Nil => Nil, Cons(t, rest) => Cons(s.meet(t), SpanSet::meets(s, rest)) }
+}
+
+fn SpanSet::inter_spans(ss, ts: List<Span>) → List<Span> {
+    match ss { Nil => Nil, Cons(s, rest) => SpanSet::meets(s, ts) ++ SpanSet::inter_spans(rest, ts) }
+}
+
+fn SpanSet::inter(self a, b: SpanSet) → SpanSet { SpanSet(SpanSet::inter_spans(a.spans, b.spans)) }
+
+// Difference: each span cut by one span, then by the next.
+fn SpanSet::cut_all(ss: List<Span>, t: Span) → List<Span> {
+    match ss { Nil => Nil, Cons(s, rest) => s.cut(t) ++ SpanSet::cut_all(rest, t) }
+}
+
+fn SpanSet::minus_spans(ss, ts: List<Span>) → List<Span> {
+    match ts { Nil => ss, Cons(t, rest) => SpanSet::minus_spans(SpanSet::cut_all(ss, t), rest) }
+}
+
+fn SpanSet::minus(self a, b: SpanSet) → SpanSet { SpanSet(SpanSet::minus_spans(a.spans, b.spans)) }
+
+// No span has a point.
+fn SpanSet::void(spans: List<Span>) → Bool {
+    match spans { Nil => True, Cons(s, rest) => s.len.leb(0) && SpanSet::void(rest) }
+}
+
+fn SpanSet::is_empty(self a: SpanSet) → Bool { SpanSet::void(a.spans) }
+
+// The verdicts: nothing of `a` is left outside `b`; nothing is in both.
+fn SpanSet::within(self a, b: SpanSet) → Bool { a.minus(b).is_empty() }
+fn SpanSet::disjoint(self a, b: SpanSet) → Bool { a.inter(b).is_empty() }
+
+fn SpanSet::Within(self a, b: SpanSet) → Type { (x: Nat) → a.has(x).IsTrue() → b.has(x).IsTrue() }
+fn SpanSet::Disjoint(self a, b: SpanSet) → Type { (x: Nat) → a.has(x).IsTrue() → b.has(x).IsTrue() → False }
+
+// ---------------------------------------------------------------------------
+// The membership laws
+
+theorem SpanSet::any_append(ss: List<Span>): (ts: List<Span>) → (x: Nat) → SpanSet::any(ss ++ ts, x) = SpanSet::any(ss, x) || SpanSet::any(ts, x) {
+    match ss {
+        Nil => λ ts x => refl,
+        Cons(s, rest) => λ ts x => {
+            let ih: (SpanSet::any(rest ++ ts, x) = SpanSet::any(rest, x) || SpanSet::any(ts, x)) = SpanSet::any_append(rest, ts, x);
+            let step: (s.has(x) || SpanSet::any(rest ++ ts, x) = s.has(x) || (SpanSet::any(rest, x) || SpanSet::any(ts, x))) =
+                cong_fn<Bool, Bool>(λ b => s.has(x) || b, ih);
+            trans(step, sym(s.has(x).or_assoc(SpanSet::any(rest, x), SpanSet::any(ts, x))))
+        },
+    }
+}
+
+theorem SpanSet::union_has(self a, b: SpanSet, x: Nat): a.union(b).has(x) = a.has(x) || b.has(x) { SpanSet::any_append(a.spans, b.spans, x) }
+
+theorem SpanSet::any_meets(s: Span, ts: List<Span>): (x: Nat) → SpanSet::any(SpanSet::meets(s, ts), x) = s.has(x) && SpanSet::any(ts, x) {
+    match ts {
+        Nil => λ x => sym(s.has(x).and_false_r()),
+        Cons(t, rest) => λ x => {
+            let ih = SpanSet::any_meets(s, rest, x);
+            let here = s.meet_has(t, x);
+            let a = s.has(x);
+            let b = t.has(x);
+            let c = SpanSet::any(rest, x);
+            let both: (s.meet(t).has(x) || SpanSet::any(SpanSet::meets(s, rest), x) = (a && b) || (a && c)) =
+                Bool::or_cong(here, ih);
+            trans(both, Bool::eq_of_is_true_iff((a && b) || (a && c), a && (b || c), λ h => omega(h), λ h => omega(h)))
+        },
+    }
+}
+
+theorem SpanSet::any_inter(ss: List<Span>): (ts: List<Span>) → (x: Nat) →
+    SpanSet::any(SpanSet::inter_spans(ss, ts), x) = SpanSet::any(ss, x) && SpanSet::any(ts, x) {
+    match ss {
+        Nil => λ ts x => refl,
+        Cons(s, rest) => λ ts x => {
+            let a = s.has(x);
+            let b = SpanSet::any(rest, x);
+            let c = SpanSet::any(ts, x);
+            let joined = SpanSet::any_append(SpanSet::meets(s, ts), SpanSet::inter_spans(rest, ts), x);
+            let parts: (SpanSet::any(SpanSet::meets(s, ts), x) || SpanSet::any(SpanSet::inter_spans(rest, ts), x) = (a && c) || (b && c)) =
+                Bool::or_cong(SpanSet::any_meets(s, ts, x), SpanSet::any_inter(rest, ts, x));
+            trans(joined, trans(parts, Bool::eq_of_is_true_iff((a && c) || (b && c), (a || b) && c, λ h => omega(h), λ h => omega(h))))
+        },
+    }
+}
+
+theorem SpanSet::inter_has(self a, b: SpanSet, x: Nat): a.inter(b).has(x) = a.has(x) && b.has(x) { SpanSet::any_inter(a.spans, b.spans, x) }
+
+// Each piece of a cut is in `s` and not in `t`. (One lemma each: `omega`
+// reads every guard in scope, and both pieces at once pass its branch
+// budget.)
+theorem Span::cut_low(self s, t: Span, x: Nat, h: Span::covers(s.base, (s.base + s.len).min(t.base) - s.base, x).IsTrue()):
+    (s.has(x) && !t.has(x)).IsTrue() { omega(h) }
+
+theorem Span::cut_high(self s, t: Span, x: Nat, h: Span::covers(s.base.max(t.base + t.len), (s.base + s.len) - s.base.max(t.base + t.len), x).IsTrue()):
+    (s.has(x) && !t.has(x)).IsTrue() { omega(h) }
+
+theorem Span::cut_has(self s, t: Span, x: Nat): SpanSet::any(s.cut(t), x) = s.has(x) && !t.has(x) {
+    let low = Span::covers(s.base, (s.base + s.len).min(t.base) - s.base, x);
+    let high = Span::covers(s.base.max(t.base + t.len), (s.base + s.len) - s.base.max(t.base + t.len), x);
+    Bool::eq_of_is_true_iff(low || (high || False), s.has(x) && !t.has(x),
+        λ h => match Bool::is_true_or(low, high || False, h) {
+            Inl(l) => s.cut_low(t, x, l),
+            Inr(r) => match Bool::is_true_or(high, False, r) { Inl(u) => s.cut_high(t, x, u), Inr(none) => false_elim(none) },
+        },
+        λ h => match x.lt_or_ge(t.base) {
+            Inl(under) => Bool::is_true_or_l(low, high || False, omega(h, under)),
+            Inr(over) => Bool::is_true_or_r(low, high || False, Bool::is_true_or_l(high, False, omega(h, over))),
+        })
+}
+
+theorem SpanSet::any_cut_all(ss: List<Span>): (t: Span) → (x: Nat) → SpanSet::any(SpanSet::cut_all(ss, t), x) = SpanSet::any(ss, x) && !t.has(x) {
+    match ss {
+        Nil => λ t x => refl,
+        Cons(s, rest) => λ t x => {
+            let a = s.has(x);
+            let b = SpanSet::any(rest, x);
+            let c = t.has(x);
+            let joined = SpanSet::any_append(s.cut(t), SpanSet::cut_all(rest, t), x);
+            let parts: (SpanSet::any(s.cut(t), x) || SpanSet::any(SpanSet::cut_all(rest, t), x) = (a && !c) || (b && !c)) =
+                Bool::or_cong(s.cut_has(t, x), SpanSet::any_cut_all(rest, t, x));
+            trans(joined, trans(parts, Bool::eq_of_is_true_iff((a && !c) || (b && !c), (a || b) && !c, λ h => omega(h), λ h => omega(h))))
+        },
+    }
+}
+
+theorem SpanSet::any_minus(ts: List<Span>): (ss: List<Span>) → (x: Nat) →
+    SpanSet::any(SpanSet::minus_spans(ss, ts), x) = SpanSet::any(ss, x) && !SpanSet::any(ts, x) {
+    match ts {
+        Nil => λ ss x => sym(SpanSet::any(ss, x).and_true_r()),
+        Cons(t, rest) => λ ss x => {
+            let a = SpanSet::any(ss, x);
+            let b = t.has(x);
+            let c = SpanSet::any(rest, x);
+            let ih = SpanSet::any_minus(rest, SpanSet::cut_all(ss, t), x);
+            let inner: (SpanSet::any(SpanSet::cut_all(ss, t), x) && !c = (a && !b) && !c) =
+                cong_fn<Bool, Bool>(λ p => p && !c, SpanSet::any_cut_all(ss, t, x));
+            trans(ih, trans(inner, Bool::eq_of_is_true_iff((a && !b) && !c, a && !(b || c), λ h => omega(h), λ h => omega(h))))
+        },
+    }
+}
+
+theorem SpanSet::minus_has(self a, b: SpanSet, x: Nat): a.minus(b).has(x) = a.has(x) && !b.has(x) { SpanSet::any_minus(b.spans, a.spans, x) }
+
+theorem SpanSet::of_has(s: Span, x: Nat): SpanSet::of(s).has(x) = s.has(x) { s.has(x).or_false_r() }
+
+theorem SpanSet::void_sound(ss: List<Span>): (h: SpanSet::void(ss).IsTrue()) → (x: Nat) → ¬SpanSet::any(ss, x).IsTrue() {
+    match ss {
+        Nil => λ h x none => none,
+        Cons(s, rest) => λ h x => {
+            let parts = Bool::is_true_and(s.len.leb(0), SpanSet::void(rest), h);
+            let ih = SpanSet::void_sound(rest, parts.right, x);
+            λ some => match Bool::is_true_or(s.has(x), SpanSet::any(rest, x), some) {
+                Inl(here) => false_elim(omega(here, parts.left)),
+                Inr(later) => ih(later),
+            }
+        },
+    }
+}
+
+theorem SpanSet::void_complete(ss: List<Span>): ((x: Nat) → ¬SpanSet::any(ss, x).IsTrue()) → SpanSet::void(ss).IsTrue() {
+    match ss {
+        Nil => λ none => trivial,
+        Cons(s, rest) => λ none => {
+            let first: (s.len.leb(0).IsTrue()) = match s.len.lt_or_ge(1) {
+                Inl(empty) => omega(empty),
+                Inr(some) => false_elim(none(s.base, Bool::is_true_or_l(s.has(s.base), SpanSet::any(rest, s.base),
+                    s.has_intro(s.base, omega(), omega(some))))),
+            };
+            let others = SpanSet::void_complete(rest, λ x later => none(x, Bool::is_true_or_r(s.has(x), SpanSet::any(rest, x), later)));
+            Bool::is_true_and_intro(s.len.leb(0), SpanSet::void(rest), first, others)
+        },
+    }
+}
+
+theorem SpanSet::within_sound(self a, b: SpanSet, h: a.within(b).IsTrue()): a.Within(b) {
+    λ x inside => match b.has(x).is_true_dec() {
+        Inl(yes) => yes,
+        Inr(no) => {
+            let left: ((a.has(x) && !b.has(x)).IsTrue()) = omega(inside, no);
+            false_elim(SpanSet::void_sound(a.minus(b).spans, h, x, j(sym(a.minus_has(b, x)), λ v _ => v.IsTrue(), left)))
+        },
+    }
+}
+
+theorem SpanSet::within_complete(self a, b: SpanSet, w: a.Within(b)): a.within(b).IsTrue() {
+    SpanSet::void_complete(a.minus(b).spans, λ x left => {
+        let both: ((a.has(x) && !b.has(x)).IsTrue()) = j(a.minus_has(b, x), λ v _ => v.IsTrue(), left);
+        let inside: (a.has(x).IsTrue()) = omega(both);
+        omega(both, w(x, inside))
+    })
+}
+
+theorem SpanSet::disjoint_sound(self a, b: SpanSet, h: a.disjoint(b).IsTrue()): a.Disjoint(b) {
+    λ x ha hb => SpanSet::void_sound(a.inter(b).spans, h, x, j(sym(a.inter_has(b, x)), λ v _ => v.IsTrue(), omega(ha, hb)))
+}
+
+theorem SpanSet::disjoint_complete(self a, b: SpanSet, d: a.Disjoint(b)): a.disjoint(b).IsTrue() {
+    SpanSet::void_complete(a.inter(b).spans, λ x both => {
+        let parts: ((a.has(x) && b.has(x)).IsTrue()) = j(a.inter_has(b, x), λ v _ => v.IsTrue(), both);
+        d(x, omega(parts), omega(parts))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Packing: sizes laid out one after another
+
+fn List::total(self sizes: List<Nat>) → Nat {
+    match sizes { Nil => 0, Cons(size, rest) => size + rest.total() }
+}
+
+// The spans of `sizes` laid out from `base`, each starting where the last
+// ended.
+fn Span::pack(base: Nat, sizes: List<Nat>) → List<Span> {
+    match sizes { Nil => Nil, Cons(size, rest) => Cons(Span(base, size), Span::pack(base + size, rest)) }
+}
+
+// The `b`th of them, by its prefix sum.
+fn Span::packed(base: Nat, sizes: List<Nat>, b, size: Nat) → Span { Span(base + sizes.take(b).total(), size) }
+
+// Each piece ends by the total…
+theorem List::total_take_nth(self caps: List<Nat>): (b, cap: Nat) → caps.nth(b) = Some(cap) → caps.take(b).total() + cap <= caps.total() {
+    match caps {
+        Nil => λ b cap found => absurd(found),
+        Cons(size, rest) => λ b cap => match b {
+            Zero => λ found => { let fits: (0 + cap <= size + rest.total()) = omega(Option::some_inj(size, cap, found)); fits },
+            Succ(k) => λ found => {
+                let fits: ((size + rest.take(k).total()) + cap <= size + rest.total()) = omega(rest.total_take_nth(k, cap, found));
+                fits
+            },
+        },
+    }
+}
+
+// …and before any later one starts.
+theorem List::total_take_apart(self caps: List<Nat>): (b, cap, other: Nat) → caps.nth(b) = Some(cap) → b < other →
+    caps.take(b).total() + cap <= caps.take(other).total() {
+    match caps {
+        Nil => λ b cap other found => absurd(found),
+        Cons(size, rest) => λ b cap other => match other {
+            Zero => λ found bad => false_elim(omega(bad)),
+            Succ(o) => match b {
+                Zero => λ found _ => { let fits: (0 + cap <= size + rest.take(o).total()) = omega(Option::some_inj(size, cap, found)); fits },
+                Succ(k) => λ found below => {
+                    let fits: ((size + rest.take(k).total()) + cap <= size + rest.take(o).total()) = omega(rest.total_take_apart(k, cap, o, found, below));
+                    fits
+                },
+            },
+        },
+    }
+}
+
+// The packing lemma. A piece lies within the whole…
+theorem Span::packed_within(base: Nat, sizes: List<Nat>, b, size: Nat, found: sizes.nth(b) = Some(size)):
+    Span::packed(base, sizes, b, size).Within(Span(base, sizes.total())) {
+    Span::packed(base, sizes, b, size).within_of_ends(Span(base, sizes.total()), omega(), omega(sizes.total_take_nth(b, size, found)))
+}
+
+// …ends before every later piece starts…
+theorem Span::packed_before(base: Nat, sizes: List<Nat>, b, size, other: Nat, found: sizes.nth(b) = Some(size), below: b < other):
+    (base + sizes.take(b).total()) + size <= base + sizes.take(other).total() {
+    omega(sizes.total_take_apart(b, size, other, found, below))
+}
+
+// …and two different pieces share no point.
+theorem Span::packed_disjoint(base: Nat, sizes: List<Nat>, b, size, c, size2: Nat,
+    found: sizes.nth(b) = Some(size), found2: sizes.nth(c) = Some(size2), differ: b ≠ c):
+    Span::packed(base, sizes, b, size).Disjoint(Span::packed(base, sizes, c, size2)) {
+    match b.lt_or_ge(c) {
+        Inl(below) => Span::packed(base, sizes, b, size).disjoint_of_before(Span::packed(base, sizes, c, size2),
+            Span::packed_before(base, sizes, b, size, c, found, below)),
+        Inr(above) => Span::packed(base, sizes, b, size).disjoint_of_after(Span::packed(base, sizes, c, size2),
+            Span::packed_before(base, sizes, c, size2, b, found2, omega(above, differ))),
+    }
+}
+
+// The list form: `pack` lists exactly these pieces.
+theorem Span::pack_nth(sizes: List<Nat>): (base, b, size: Nat) → sizes.nth(b) = Some(size) →
+    Span::pack(base, sizes).nth(b) = Some(Span::packed(base, sizes, b, size)) {
+    match sizes {
+        Nil => λ base b size found => absurd(found),
+        Cons(first, rest) => λ base b size => match b {
+            Zero => λ found => {
+                let same: (first = size) = Option::some_inj(first, size, found);
+                let at: (base = base + 0) = omega();
+                j(same, λ k _ => Some(Span(base, first)) = Some(Span(base + 0, k)), cong_fn<Nat, Option<Span>>(λ n => Some(Span(n, first)), at))
+            },
+            Succ(k) => λ found => {
+                let ih = Span::pack_nth(rest, base + first, k, size, found);
+                let moved: (base + first + rest.take(k).total() = base + (first + rest.take(k).total())) = omega();
+                trans(ih, cong_fn<Nat, Option<Span>>(λ n => Some(Span(n, size)), moved))
+            },
+        },
+    }
+}
+
+// The whole layout as a footprint: the union of the pieces is the span of
+// the total.
+theorem Span::pack_has(sizes: List<Nat>): (base, x: Nat) → SpanSet::any(Span::pack(base, sizes), x) = Span(base, sizes.total()).has(x) {
+    match sizes {
+        Nil => λ base x => Bool::eq_of_is_true_iff(False, Span::covers(base, 0, x), λ h => false_elim(h), λ h => omega(h)),
+        Cons(size, rest) => λ base x => {
+            let ih = Span::pack_has(rest, base + size, x);
+            let step: (Span(base, size).has(x) || SpanSet::any(Span::pack(base + size, rest), x) = Span(base, size).has(x) || Span(base + size, rest.total()).has(x)) =
+                cong_fn<Bool, Bool>(λ p => Span(base, size).has(x) || p, ih);
+            trans(step, sym(Span::concat_has(base, size, rest.total(), x)))
+        },
+    }
+}

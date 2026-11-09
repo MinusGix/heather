@@ -35,6 +35,7 @@ const MODULES: &[(&str, &str)] = &[
         "bitvec_bytes",
         include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr"),
     ),
+    ("span_set", include_str!("../../../lib/std/data/set/span_set.hthr")),
     ("memory", include_str!("../../../lib/std/machine/memory.hthr")),
 ];
 

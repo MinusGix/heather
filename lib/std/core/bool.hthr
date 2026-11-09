@@ -39,6 +39,10 @@ theorem Bool::and_comm(self a, b: Bool): a && b = b && a {
     }
 }
 
+theorem Bool::and_false_r(self a: Bool): a && False = False {
+    match a { False => refl, True => refl }
+}
+
 theorem Bool::or_assoc(self a, b, c: Bool): (a || b) || c = a || (b || c) {
     match a { False => refl, True => refl }
 }
@@ -385,6 +389,25 @@ theorem Bool::is_true_not_intro(self b: Bool): ¬b.IsTrue() → b.not().IsTrue()
     match b {
         False => λ h => trivial,
         True => λ h => h(trivial),
+    }
+}
+
+theorem Bool::or_cong({a, b, c, d: Bool}, ab: a = b, cd: c = d): a || c = b || d {
+    j(ab, λ x _ => a || c = x || d, j(cd, λ y _ => a || c = a || y, refl))
+}
+
+// Two Booleans true together are equal: a Boolean identity is two
+// implications, each one `omega` over the guards' atoms.
+theorem Bool::eq_of_is_true_iff(self a: Bool): (b: Bool) → (a.IsTrue() → b.IsTrue()) → (b.IsTrue() → a.IsTrue()) → a = b {
+    match a {
+        True => λ b => match b {
+            True => λ _ _ => refl,
+            False => λ ab _ => false_elim(ab(trivial)),
+        },
+        False => λ b => match b {
+            True => λ _ ba => false_elim(ba(trivial)),
+            False => λ _ _ => refl,
+        },
     }
 }
 

@@ -35,6 +35,13 @@ to avoid; the general piece is a separating product.
 
 ## What it assumes from elsewhere
 
+- **[[address-interval-sets]]** owns address sets. Assumed here: a
+  footprint is a `SpanSet` of addresses' numbers under
+  `BitVec::numbering(64)` (`lib/std/data/set/span_set.hthr`,
+  `lib/std/machine/memory.hthr`), disjointness is `SpanSet::Disjoint` (a
+  `disjoint` verdict), and a store misses a footprint by
+  `Numbering::outside`.
+
 - **[[io-image-on-byte-model]]** owns the image profile, its regions and
   `DataRegion::program_view`. Assumed here: only that each region's view is
   the buffer view.

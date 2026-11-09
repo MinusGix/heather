@@ -225,6 +225,12 @@ membership goals left over. A **packing lemma**: sizes `s₀, …, sₖ` laid
 out consecutively from a base are pairwise disjoint intervals at the
 prefix sums, which is the shape of `Layout`, frames, scratch and the arena.
 
+**Built (2026-11-09).** `lib/std/data/set/span_set.hthr` (spans, span
+sets with proved ∪/∩/∖ and sound-complete verdicts, the packing lemma) and
+`Numbering` in `lib/std/machine/memory.hthr`; `issues/address-interval-sets.md`'s
+log has what moved onto it. `Homes::Apart` and `arena_cells_within` turned
+out not to be interval facts.
+
 **Who waits.** `wp-view-separating-product` needs "a view local to a
 footprint" and "disjoint footprints"; it owns the product of views and
 should take its footprints from here. `x86-call-memory-footprints`, the

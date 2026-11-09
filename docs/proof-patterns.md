@@ -116,6 +116,14 @@ property of Heather.
   nothing is expected the refusal says so (as for `ring`, `linarith`,
   `nlinarith`, `bv_omega`, `positivity`;
   [[checking-tactic-in-inference-position-diagnostic]], closed).
+- **A Boolean identity is two `omega`s.** `Bool::eq_of_is_true_iff(a, b,
+  λ h => omega(h), λ h => omega(h))` proves `a = b` for Booleans built
+  from `&&`/`||`/`!`/`leb`/`same` and atoms: the guard rounds are a truth
+  table over the atoms. An applied record field (`nb.number(a)`) does not
+  spell yet ([[omega-applied-field-atom]]), nor does a field of a call that
+  unfolds to a record ([[omega-field-of-record-valued-call]]): state the
+  identity over the spelled components (`Span::covers` in
+  `lib/std/data/set/span_set.hthr`) and let the kernel convert.
 - **Linear arithmetic at `Rat`/`CReal` is `linarith`**, not `omega`, which
   unfolds Rat facts into Int cross products.
 - **nat.hthr and int.hthr cannot import omega.** Facts about Nat and Int

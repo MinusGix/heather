@@ -187,37 +187,9 @@ theorem fill_short(buffer, bytes: List<BitVec(8)>, short: bytes.len() <= buffer.
 // ---------------------------------------------------------------------------
 // Where the layout puts each buffer
 
-// A buffer ends before the scratch range starts…
-theorem List::total_take_nth(self caps: List<Nat>): (b, cap: Nat) → caps.nth(b) = Some(cap) → caps.take(b).total() + cap <= caps.total() {
-    match caps {
-        Nil => λ b cap found => absurd(found),
-        Cons(size, rest) => λ b cap => match b {
-            Zero => λ found => { let fits: (0 + cap <= size + rest.total()) = omega(Option::some_inj(size, cap, found)); fits },
-            Succ(k) => λ found => {
-                let fits: ((size + rest.take(k).total()) + cap <= size + rest.total()) = omega(rest.total_take_nth(k, cap, found));
-                fits
-            },
-        },
-    }
-}
-
-// …and before any later one starts…
-theorem List::total_take_apart(self caps: List<Nat>): (b, cap, other: Nat) → caps.nth(b) = Some(cap) → b < other →
-    caps.take(b).total() + cap <= caps.take(other).total() {
-    match caps {
-        Nil => λ b cap other found => absurd(found),
-        Cons(size, rest) => λ b cap other => match other {
-            Zero => λ found bad => false_elim(omega(bad)),
-            Succ(o) => match b {
-                Zero => λ found _ => { let fits: (0 + cap <= size + rest.take(o).total()) = omega(Option::some_inj(size, cap, found)); fits },
-                Succ(k) => λ found below => {
-                    let fits: ((size + rest.take(k).total()) + cap <= size + rest.take(o).total()) = omega(rest.total_take_apart(k, cap, o, found, below));
-                    fits
-                },
-            },
-        },
-    }
-}
+// A buffer's range is a piece of the capacities packed after the words
+// (`Span::packed`, lib/std/data/set/span_set.hthr, which proves that each
+// ends before the scratch range and before any later one starts)…
 
 // …and the scratch range holds any of them.
 theorem List::largest_nth(self caps: List<Nat>): (b, cap: Nat) → caps.nth(b) = Some(cap) → cap <= caps.largest() {

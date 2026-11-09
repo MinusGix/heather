@@ -67,6 +67,7 @@
 // Any id at or past the source's words is refused. The program is checked once,
 // by evaluation, for its layout (`Prog::laid_out`).
 import native_source;
+import span_set;
 import native_alloc;
 import native_structured;
 import function_ir;
@@ -90,10 +91,6 @@ import option;
 
 // ---------------------------------------------------------------------------
 // The layout
-
-fn List::total(self sizes: List<Nat>) → Nat {
-    match sizes { Nil => 0, Cons(size, rest) => size + rest.total() }
-}
 
 fn List::largest(self sizes: List<Nat>) → Nat {
     match sizes { Nil => 0, Cons(size, rest) => size.max(rest.largest()) }
