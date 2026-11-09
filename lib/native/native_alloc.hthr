@@ -35,6 +35,12 @@ import list;
 import logic;
 import nat;
 import option;
+import char;
+import string;
+import set_solve;
+import set_ops;
+import tactic;
+import set_tactic;
 
 // ---------------------------------------------------------------------------
 // Homes
@@ -892,6 +898,37 @@ theorem List::within_mem(self a: List<Nat>, b: List<Nat>): a.within(b).IsTrue() 
     }
 }
 
+// `union` and `minus` as the `sets` tactic reads them
+// (lib/std/tactic/set_tactic.hthr): `∪` and `∖`, so a membership goal over
+// live sets is a truth table rather than a chain of citations.
+theorem List::union_set_law(): SetLaw<Nat>(List::union, SetOr) {
+    λ x a b => Iff(
+        mp := λ (m: Mem(x, a.union(b))) => match a.mem_append(b.filter(λ (id: Nat) => absent(id, a)), x, m) {
+            Inl(l) => Inl(l),
+            Inr(r) => Inr(b.mem_filter(x, λ (id: Nat) => absent(id, a), r)),
+        },
+        mpr := λ (o: Mem(x, a) ∨ Mem(x, b)) => match o {
+            Inl(l) => a.mem_append_l(b.filter(λ (id: Nat) => absent(id, a)), x, l),
+            Inr(r) => match none: absent(x, a) {
+                True => a.mem_append_r(b.filter(λ (id: Nat) => absent(id, a)), x, set_mem_filter_intro(b, x, λ (id: Nat) => absent(id, a), none, r)),
+                False => a.mem_append_l(b.filter(λ (id: Nat) => absent(id, a)), x, absent_false_mem(x, a, none)),
+            },
+        })
+}
+
+theorem List::minus_set_law(): SetLaw<Nat>(List::minus, SetDiff) {
+    λ x a b => Iff(
+        mp := λ (m: Mem(x, a.minus(b))) => And(a.mem_filter(x, λ (id: Nat) => absent(id, b), m),
+            λ (mb: Mem(x, b)) => absent_mem(x, b, j(sym(a.mem_filter_holds(x, λ (id: Nat) => absent(id, b), m)), λ c _ => c.IsTrue(), trivial), x, mb, refl)),
+        mpr := λ (both: Mem(x, a) ∧ ¬Mem(x, b)) => match none: absent(x, b) {
+            True => set_mem_filter_intro(a, x, λ (id: Nat) => absent(id, b), none, both.left),
+            False => false_elim(both.right(absent_false_mem(x, b, none))),
+        })
+}
+
+register def union_set_entry: SetOpEntry = SetOpEntry(name_of(List::union), SetOr, name_of(List::union_set_law), 0);
+register def minus_set_entry: SetOpEntry = SetOpEntry(name_of(List::minus), SetDiff, name_of(List::minus_set_law), 0);
+
 // Every id of `a` is one of `m`.
 fn List::Inside(self a: List<Nat>, m: List<Nat>) → Type { (i: Nat) → Mem(i, a) → Mem(i, m) }
 
@@ -906,21 +943,12 @@ theorem List::within_of_inside(self a: List<Nat>, m: List<Nat>): a.Inside(m) →
     }
 }
 
-theorem List::inside_union(self a: List<Nat>, b, m: List<Nat>, sa: a.Inside(m), sb: b.Inside(m)): a.union(b).Inside(m) {
-    λ i x => match a.mem_append(b.filter(λ (id: Nat) => absent(id, a)), i, x) {
-        Inl(l) => sa(i, l),
-        Inr(r) => sb(i, b.mem_filter(i, λ (id: Nat) => absent(id, a), r)),
-    }
-}
+theorem List::inside_union(self a: List<Nat>, b, m: List<Nat>, sa: a.Inside(m), sb: b.Inside(m)): a.union(b).Inside(m) { by sets() }
 
-theorem List::inside_minus(self a: List<Nat>, b, m: List<Nat>, sa: a.Inside(m)): a.minus(b).Inside(m) {
-    λ i x => sa(i, a.mem_filter(i, λ (id: Nat) => absent(id, b), x))
-}
+theorem List::inside_minus(self a: List<Nat>, b, m: List<Nat>, sa: a.Inside(m)): a.minus(b).Inside(m) { by sets() }
 
 theorem inside_live_before(reads: List<Nat>, written: Nat, out, m: List<Nat>, sr: reads.Inside(m), so: out.Inside(m)):
-    live_before(reads, written, out).Inside(m) {
-    reads.inside_union(out.minus([written]), m, sr, out.inside_minus([written], m, so))
-}
+    live_before(reads, written, out).Inside(m) { by sets() }
 
 // With every word in its slot, every write is apart and every live word
 // slotted.

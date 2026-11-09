@@ -112,6 +112,17 @@ do this today; P5 shows the hand chain one step costs.
 local (no class, no instance, no change to the compiler's definitions), and
 every later footprint theory (§4, §5, §7) produces goals of this shape.
 
+**Built (2026-11-09).** `by sets()` (`lib/std/tactic/set_tactic.hthr`, over
+`lib/std/data/set/set_solve.hthr`): operations are read through a registry
+(`SetOpEntry`, `lib/std/data/set/set_ops.hthr`) whose entries name the
+operation, its connective and its membership law, so native registers
+`union` and `minus` beside their definitions and the tactic imports nothing
+native. Hypotheses are read at the goal's element, an inclusion applied to
+it. Native's liveness lemmas `inside_union`, `inside_minus`,
+`inside_live_before`, `live_before_keeps` and `live_before_reads` are one
+call each. The Boolean spellings (`absent(…) = True`, `holds`, `within`)
+are `set-solver-boolean-spellings`.
+
 ## 2. Machine words as ℤ/2ⁿ
 
 **Today.** `lib/std/bitvec/bitvec_nat.hthr` opens with *"Bounds are

@@ -1,0 +1,40 @@
+// Probes of `lib/std/tactic/set_tactic.hthr`: the `sets` tactic on
+// membership goals over lists read as sets, and its refusals. Tests, not
+// library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import char; import string;
+import tactic; import set_solve; import set_ops; import set_tactic;
+
+// Unions, nested either way.
+theorem app_right(i: Nat, a, b, c: List<Nat>, h: Mem(i, b)): Mem(i, (a ++ b) ++ c) { by sets() }
+theorem app_left(i: Nat, a, b, c: List<Nat>, h: Mem(i, a)): Mem(i, c ++ (a ++ b)) { by sets() }
+theorem app_both(i: Nat, a, b: List<Nat>, h: Mem(i, a ++ b)): Mem(i, b ++ a) { by sets() }
+
+// Literal heads: the element is the head, or the tail holds it.
+theorem cons_head(i: Nat, a: List<Nat>): Mem(i, Cons(i, a)) { by sets() }
+theorem cons_tail(i, j: Nat, a: List<Nat>, h: Mem(i, a)): Mem(i, Cons(j, a)) { by sets() }
+theorem literal(i, j, k: Nat, a: List<Nat>, h: Mem(i, Cons(j, Cons(k, a))), hj: Not(Mem(i, [j])), ha: Not(Mem(i, a))): Mem(i, [k]) { by sets() }
+
+// Filters: membership is membership in the source and the predicate.
+theorem filter_keep(i: Nat, p: Nat → Bool, a, b: List<Nat>, h: Mem(i, a.filter(p))): Mem(i, (b ++ a).filter(p)) { by sets() }
+theorem filter_source(i: Nat, p: Nat → Bool, a: List<Nat>, h: Mem(i, a.filter(p))): Mem(i, a) { by sets() }
+
+// Inclusions in scope are used at the goal's element.
+theorem inclusion(i: Nat, a, b, c: List<Nat>, sub: (j: Nat) → Mem(j, a) → Mem(j, b), h: Mem(i, a ++ c)): Mem(i, b ++ c) { by sets() }
+
+// An inclusion goal is introduced first.
+theorem inclusion_goal(a, b, c: List<Nat>): (j: Nat) → Mem(j, a ++ b) → Mem(j, (b ++ c) ++ a) { by sets() }
+
+// A contradiction among the facts.
+theorem clash(i: Nat, a, b: List<Nat>, h: Mem(i, a), n: Not(Mem(i, b ++ a))): False { by sets() }
+
+// Another element type with decidable equality.
+theorem lists(x: List<Nat>, a, b: List<List<Nat>>, h: Mem(x, b)): Mem(x, a ++ b) { by sets() }
+
+// Disequalities in scope, either way round.
+theorem neq(i, j: Nat, a: List<Nat>, h: Mem(i, Cons(j, a)), n: ¬(i = j)): Mem(i, a) { by sets() }
+theorem neq_sym(i, j: Nat, a: List<Nat>, h: Mem(i, Cons(j, a)), n: ¬(j = i)): Mem(i, a) { by sets() }
+
+// The negative control: membership in a union does not pick a side.
+// expect-error: sets: the goal does not follow from the membership facts in scope
+theorem no_side(i: Nat, a, b: List<Nat>, h: Mem(i, a ++ b)): Mem(i, a) { by sets() }
