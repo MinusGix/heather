@@ -1558,7 +1558,7 @@ impl Parser {
         // and with the grammar a `record` head already has
         // (docs/operation-indexed-classes-design.md §2.1: there is no second
         // class form, only a per-class choice about the parameter list).
-        let valparams = self.valparam_list(true)?;
+        let valparams = self.valparam_list(true, false)?;
         let mut extends = Vec::new();
         if self.eat_kw("extends") {
             loop {
@@ -1878,7 +1878,7 @@ impl Parser {
         // pass through: a use site never writes them, since resolution recovers
         // them by unifying the head against the goal.
         let valparams: Vec<Param> = self
-            .valparam_list(false)?
+            .valparam_list(false, false)?
             .into_iter()
             .map(|p| Param { implicit: true, ..p })
             .collect();
@@ -2251,7 +2251,7 @@ impl Parser {
         self.bump(); // `record`
         let (name, _) = self.ident("record name")?;
         let params = self.tyvar_list()?;
-        let valparams = self.valparam_list(false)?;
+        let valparams = self.valparam_list(false, true)?;
         let varies = self.varies_clause()?;
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();
@@ -2427,7 +2427,13 @@ impl Parser {
     /// own field types — to install a spelling for. A `record`/`inductive`
     /// value parameter is refused by name rather than parsed and dropped:
     /// there is no customer for it, and silence would be the wrong answer.
-    fn valparam_list(&mut self, symbols: bool) -> R<Vec<Param>> {
+    /// `defaults`: a `record`'s list, where a parameter may end `:= e`
+    /// (issues/constraint-indices-from-carrier-designations.md): an **index
+    /// default**, what fills the slot when a type application stops before
+    /// it. Unlike a `fn` parameter's default it keeps its positional slot,
+    /// and only a trailing run of parameters may have one, so an application
+    /// omits a suffix and never a slot in the middle.
+    fn valparam_list(&mut self, symbols: bool, defaults: bool) -> R<Vec<Param>> {
         let mut params = Vec::new();
         if !matches!(self.peek(), TokKind::LParen) {
             return Ok(params);
@@ -2467,6 +2473,36 @@ impl Parser {
             }
             self.expect(&TokKind::Colon, "`:` (a value parameter is `name: T`)")?;
             let ty = self.ty()?;
+            let mut default = None;
+            if matches!(self.peek(), TokKind::ColonEq) {
+                let eq = self.bump().span;
+                // A lone operator symbol before `,` or `)` is a designation
+                // reference here as in an argument list: `same_a: A → A → Type := ≈`.
+                let e = match self.op_symbol_arg() {
+                    Some(sym) => sym,
+                    None => self.expr()?,
+                };
+                if !defaults {
+                    return Err(ParseError {
+                        msg: "only a `record`'s value parameter takes a default (an index \
+                              default, what fills the slot when a type application stops \
+                              before it)"
+                            .into(),
+                        span: eq.join(e.span),
+                    });
+                }
+                default = Some(Box::new(e));
+            } else if defaults && params.iter().any(|p: &Param| p.default.is_some()) {
+                return Err(ParseError {
+                    msg: format!(
+                        "`{}` follows a defaulted value parameter, so it needs a default \
+                         too: an application omits a trailing run of indices, never one \
+                         in the middle",
+                        names[0].0
+                    ),
+                    span: names[0].1.join(ty.span),
+                });
+            }
             for (n, nsp, symbol) in names {
                 params.push(Param {
                     name: n,
@@ -2474,7 +2510,7 @@ impl Parser {
                     implicit: false,
                     is_self: false,
                     solver: None,
-                    default: None,
+                    default: default.clone(),
                     origin: ParamOrigin::Written,
                     symbol,
                     span: nsp.join(ty.span),
@@ -2532,7 +2568,7 @@ impl Parser {
         // Parsed, then rejected by the elaborator: value parameters are a
         // `record` form this round (docs/surface-value-parameters.md §6), and a
         // named rejection beats `expected `{`, found LParen`.
-        let valparams = self.valparam_list(false)?;
+        let valparams = self.valparam_list(false, false)?;
         let varies = self.varies_clause()?;
         // `: (n: Nat) -> Type` — an index telescope
         // (docs/inductive-indexed-lowering.md §2). Parsed with the ordinary
@@ -8952,6 +8988,21 @@ mod tests {
         assert!(parse_file("axiom assumed(): Nat { 0 }").is_err());
         assert!(parse_file("theorem accidental(): Nat;").is_err());
         assert!(parse_file("postulate hidden(): Nat;").is_err());
+    }
+
+    // Index defaults (issues/constraint-indices-from-carrier-designations.md):
+    // a record's trailing run only, a bare symbol is a designation reference,
+    // and no other head takes one.
+    #[test]
+    fn record_index_defaults() {
+        let ok = parse_file("record U<A>(op: A -> A -> A := +, e: A := 0) { f: Nat }").expect("parses");
+        let Item::Inductive(d) = &ok.items[0] else { panic!("a record") };
+        assert!(matches!(d.valparams[0].default.as_deref().map(|e| &e.kind), Some(ExprKind::OpSymbol { .. })));
+        assert!(!d.valparams[0].implicit && d.valparams[1].default.is_some());
+        let middle = parse_file("record U<A>(op: A -> A -> A := +, e: A) { f: Nat }").unwrap_err();
+        assert!(middle.msg.contains("follows a defaulted value parameter"), "{}", middle.msg);
+        let class = parse_file("class C<A>(op: A -> A -> A := +) { }").unwrap_err();
+        assert!(class.msg.contains("only a `record`"), "{}", class.msg);
     }
 
     #[test]

@@ -3455,3 +3455,18 @@ register def mono_creal_rules: MonoEntry = MonoRules(name_of(CReal::Le), [
 ]);
 
 register def mono_creal_unsub: MonoEntry = MonoUnsub(name_of(CReal::sub), name_of(CReal::add), name_of(CReal::neg));
+
+// `wlog`'s order case at the reals (issues/wlog-sign-and-ordered-carriers.md).
+// `<=` is not decidable at `CReal`, so no `CReal::wlog_le`: the split is
+// cotransitivity's, which places `m` below `n + e` or above `n` for any
+// `e > 0`, and the main case is proved where the first point is below the
+// second up to that tolerance. `by wlog_within(m, n, e, he, swap, near)`
+// (tactic/wlog.hthr) reads `P` off the goal.
+theorem CReal::wlog_within(P: CReal → CReal → Type, swap: (a, b: CReal) → P(a, b) → P(b, a), e: CReal, he: 0 < e,
+    near: (a, b: CReal) → a < b + e → P(a, b), m, n: CReal): P(m, n) {
+    let up: (n < n + e) = linarith(he);
+    match n.lt_cotrans(n + e, m, up) {
+        Inl(nm) => { let r: (n < m + e) = linarith(nm, he); swap(n, m, near(n, m, r)) },
+        Inr(mn) => near(m, n, mn),
+    }
+}

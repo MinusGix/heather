@@ -1,10 +1,10 @@
 ---
 title: Derive the typing memo's keys from one scope sub-struct
-status: open
+status: closed
 labels: [kernel,state-machine,soundness,refactor]
 area: kernel
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 Build the typing memo's three keys from one sub-struct of the checker's `Env`, so a scope field a rule reads cannot be left out of a key.
@@ -24,3 +24,6 @@ Split `Env` into a `Copy` `JudgmentScope { psi_id, gamma_id, gamma_base, univs, 
 ## Related
 
 [[kernel-checker-mode-enum]], [[kernel-psi-bound-cache]], [[kernel-typing-memo-on-node-identity]].
+
+## Log
+- 2026-11-09: done, without splitting `Env`: `Ambient` (`psi`, `gamma_base`, `univs`, `layer`, `under_box`) is built only by `Env::ambient`, an exhaustive destructure, and `Scope`/`TyScope`/`SigScope` hold it. The sealed/withheld question is answered in `Ambient`'s doc instead of a `debug_assert!`: `withholding` refreshes Ψ's identity, and a later sealed proof only adds δ-steps (`docs/kernel-implicit-state-review.md` §3).

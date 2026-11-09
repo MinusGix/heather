@@ -69,3 +69,13 @@ theorem nat_add_mod(): (17 + 9).mod(5) = (17.mod(5) + 9.mod(5)).mod(5) { refl }
 theorem nat_modeq(a, b: Nat, h: Nat::ModEq(7, a, b)): Nat::ModEq(7, a * a + 3, b * b + 3) {
     Nat::modeq_add(7, Nat::modeq_mul(7, h, h), Nat::modeq_refl(7, 3))
 }
+
+// The complement is `-(x + 1)`, so `ring` reads `!x` once it is rewritten, and
+// the two spellings of a negative integer (`ofInt`'s negation, the
+// complement) are one word at an open width.
+theorem complement_plus_one(n: Nat, x: BitVec(n)): x.complement() + 1 = -x {
+    rewrite(BitVec::complement_eq_neg(n, x), { let done: (-(x + 1) + 1 ≈ -x) = ring; done })
+}
+theorem negative_complement(n: Nat): BitVec::ofInt(NegSucc(4), n := n) = BitVec::ofNat(4).complement() { BitVec::ofInt_negSucc(n, 4) }
+// At a literal width both spellings evaluate to one word.
+theorem negative_literal(): BitVec::ofInt(NegSucc(4), n := 8) = BitVec::ofNat(4).complement() { refl }

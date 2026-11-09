@@ -67,11 +67,11 @@
 //! rules, the fuel accounting, the left-biased inference and the layer
 //! discipline are the same either way.
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc as Rc;
 
 use crate::layer::Layer;
+use crate::premises::{PremiseQueue, VerdictMemo};
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, shift_univ_psi};
 use crate::reduce::{Defs, GlobalCache, Sig, NATIVE_DEPTH_LIMIT};
@@ -848,7 +848,7 @@ struct Conv<'v, D: Dom<'v>> {
     /// ~30% slower without it); it cannot carry a lockstep unfolding, whose
     /// closures are fresh on every round — see the same-head arm of
     /// [`Conv::tm_w`] for that case.
-    memo: HashMap<D::MemoKey, bool>,
+    memo: VerdictMemo<D::MemoKey>,
     /// Does Ψ contain any definition at all? Decided once, because when it
     /// does not — every program before this feature, and every fixture that
     /// only declares — the δ-lazy stage below has nothing to find, and
@@ -862,48 +862,15 @@ struct Conv<'v, D: Dom<'v>> {
     /// (docs/native-depth-budget-design.md).
     depth: u32,
     /// Comparisons met [`crate::term::SPINE_ITERATE_AT`] frames deep,
-    /// queued instead of descended into (docs/deep-term-walks-design.md):
-    /// a rule's premises are a conjunction, so the order they are judged in
-    /// is free, and a long vector or list compared component by component
-    /// is then a loop, not a frame per element. The queue is drained by the
-    /// comparison that returns to depth zero ([`Conv::tm`], [`Conv::ty`]),
-    /// and within a speculative attempt by the attempt itself
-    /// ([`Conv::delta_lazy`]), so no verdict — and no attempt's — leaves
-    /// with a queued premise unjudged.
-    deferred: Vec<(Env<'v>, D::TmC, D::TmC, D::TyC, Level)>,
-    /// How many comparisons have ever been queued: a [`Conv::tm`] whose
-    /// subtree queued one memoizes its `true` *provisionally*.
-    deferred_pushed: u64,
-    /// The memo's provisional `true`s: verdicts whose subtree queued
-    /// comparisons not yet judged. Each holds as long as its queued
-    /// premises do, which is until the queue they sit in is dropped: a
-    /// failed δ-attempt ([`Conv::delta_lazy`]) takes back the ones made
-    /// inside it, a refusal at depth zero takes back all. A successful
-    /// drain at depth zero with no attempt open makes them all final. (Not
-    /// memoizing them at all would compare a shared subterm once per
-    /// occurrence.)
-    provisional: Vec<D::MemoKey>,
-    /// δ-attempts open: while any is, a successful drain at depth zero
-    /// keeps the provisional log, since the attempt may still fail and take
-    /// back the entries made after its mark.
-    attempts_open: u32,
-    /// The depth the queue is being drained at: comparisons are queued
-    /// [`crate::term::SPINE_ITERATE_AT`] frames above it. A drain inside a
-    /// δ-attempt runs at the attempt's depth, and a threshold counted from
-    /// zero there would queue each popped comparison straight back.
-    defer_base: u32,
-    /// Whether a drain at depth zero is running ([`Conv::settle_at_top`]).
-    draining_at_top: bool,
-    /// The queue's length when the current context began — the root, a
-    /// popped comparison being judged, or a δ-attempt. Once anything is
-    /// queued past it, every later comparison in the context is queued too,
-    /// so the queue holds them in the order they were met, and the drain
-    /// judges each one's own queued premises before the next: the order is
-    /// the recursive walk's exactly (docs/deep-term-walks-design.md §3.4).
-    /// The order matters to the cost: a conjunction stops at its first
-    /// failure, and judging a cheap failing premise after an expensive one
-    /// can turn a refusal into running out of fuel.
-    defer_floor: usize,
+    /// queued instead of descended into ([`crate::premises`]): a rule's
+    /// premises are a conjunction, so a long vector or list compared
+    /// component by component is a loop, not a frame per element. The queue
+    /// is drained by the comparison that returns to depth zero
+    /// ([`Conv::settle_at_top`]), and within a speculative attempt by the
+    /// attempt itself ([`Conv::delta_lazy`]), so no verdict — and no
+    /// attempt's — leaves with a queued premise unjudged. A memo `true` made
+    /// while premises are queued is provisional ([`VerdictMemo`]).
+    deferred: PremiseQueue<(Env<'v>, D::TmC, D::TmC, D::TyC, Level)>,
     _dom: PhantomData<(&'v (), D)>,
 }
 
@@ -913,7 +880,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // the same δ stage (`reduce::Defs::sealed_body`).
         let has_defs = !psi.sealed.is_empty()
             || psi.bindings.iter().any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs, memo: HashMap::new(), depth: 0, deferred: Vec::new(), deferred_pushed: 0, provisional: Vec::new(), attempts_open: 0, defer_base: 0, draining_at_top: false, defer_floor: 0, _dom: PhantomData }
+        Conv { fuel, has_defs, memo: VerdictMemo::new(), depth: 0, deferred: PremiseQueue::new(), _dom: PhantomData }
     }
 
     fn spend(&mut self) -> R {
@@ -963,17 +930,12 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         // An attempt is a verdict of its own: the comparisons it queued are
         // judged before it counts as a success, and dropped with it when it
         // fails ([`Conv::deferred`]).
-        let mark = self.deferred.len();
-        let provisional = self.provisional.len();
-        let floor = std::mem::replace(&mut self.defer_floor, mark);
-        self.attempts_open += 1;
+        let queued = self.deferred.open_attempt();
+        let memo = self.memo.open_attempt();
+        let mark = queued.mark();
         let tried = attempt(self).and_then(|v| self.drain_deferred(mark).map(|()| v));
-        self.attempts_open -= 1;
-        self.defer_floor = floor;
-        if tried.is_err() {
-            self.deferred.truncate(mark);
-            self.take_back_provisional(provisional);
-        }
+        self.memo.close_attempt(memo, tried.is_ok());
+        self.deferred.close_attempt(queued, tried.is_ok());
         match tried {
             Ok(v) => Ok(Some(v)),
             Err(ConvError::NotConvertible) => Ok(None),
@@ -981,26 +943,13 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
     }
 
-    /// Remove the provisional `true`s made since `mark` from the memo: the
-    /// queue they stood on was dropped.
-    fn take_back_provisional(&mut self, mark: usize) {
-        if self.provisional.len() <= mark {
-            return;
-        }
-        for key in self.provisional.drain(mark..) {
-            self.memo.remove(&key);
-        }
-    }
-
     /// Memoize a success; provisionally when its subtree queued premises
-    /// (`pushed` is [`Conv::deferred_pushed`] when it started), or when any
-    /// are queued at all — it may stand on a provisional entry's memo hit,
-    /// whose premises are still waiting.
-    fn memo_true(&mut self, key: D::MemoKey, pushed: u64) {
-        if self.deferred_pushed != pushed || !self.deferred.is_empty() {
-            self.provisional.push(key.clone());
-        }
-        self.memo.insert(key, true);
+    /// (`epoch` is the queue's [`PremiseQueue::epoch`] when it started), or
+    /// when any are queued at all — it may stand on a provisional entry's
+    /// memo hit, whose premises are still waiting.
+    fn memo_true(&mut self, key: D::MemoKey, epoch: u64) {
+        let provisional = self.deferred.queued_since(epoch) || !self.deferred.is_empty();
+        self.memo.succeeded(key, provisional);
     }
 
     /// Judge the comparisons queued past `mark`, at the current depth (each
@@ -1008,29 +957,16 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     #[cold]
     #[inline(never)]
     fn drain_deferred(&mut self, mark: usize) -> R {
-        let base = std::mem::replace(&mut self.defer_base, self.depth);
-        let at_top = self.draining_at_top;
-        self.draining_at_top = at_top || self.depth == 0;
-        let floor = self.defer_floor;
+        let drain = self.deferred.begin_drain(mark, self.depth);
         let mut verdict = Ok(());
-        // A stack in walk order: each comparison's own queued premises are
-        // reversed onto the top as it finishes, so the first of them is
-        // popped next, ahead of its later siblings.
-        self.deferred[mark..].reverse();
-        while self.deferred.len() > mark {
-            let (env, a, b, ty, l) = self.deferred.pop().expect("longer than the mark");
-            let start = self.deferred.len();
-            self.defer_floor = start;
+        while let Some(((env, a, b, ty, l), start)) = self.deferred.pop(&drain) {
             if let Err(e) = self.tm(&env, &a, &b, &ty, &l) {
-                self.deferred.truncate(mark);
                 verdict = Err(e);
                 break;
             }
-            self.deferred[start..].reverse();
+            self.deferred.judged(start);
         }
-        self.defer_floor = floor;
-        self.defer_base = base;
-        self.draining_at_top = at_top;
+        self.deferred.end_drain(drain, verdict.is_ok());
         verdict
     }
 
@@ -1038,8 +974,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     #[cold]
     #[inline(never)]
     fn defer_tm(&mut self, env: &Env<'v>, a: &D::TmC, b: &D::TmC, ty: &D::TyC, l: &Level) -> R {
-        self.deferred.push((env.clone(), a.clone(), b.clone(), ty.clone(), l.clone()));
-        self.deferred_pushed += 1;
+        self.deferred.defer((env.clone(), a.clone(), b.clone(), ty.clone(), l.clone()));
         Ok(())
     }
 
@@ -1047,18 +982,18 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// success, dropped after a failure.
     fn settle_at_top(&mut self, result: R) -> R {
         // A drain at depth zero is already taking the queue: a comparison
-        // it popped returning there leaves the rest to that loop, which
-        // keeps the drain one native frame instead of one per item.
-        if self.depth != 0 || self.draining_at_top || (self.deferred.is_empty() && self.provisional.is_empty()) {
+        // it popped returning there leaves the rest to that loop.
+        if self.depth != 0
+            || self.deferred.draining_at_top()
+            || (self.deferred.is_empty() && !self.memo.has_provisional())
+        {
             return result;
         }
         let result = result.and_then(|()| self.drain_deferred(0));
         if result.is_err() {
-            self.deferred.clear();
-            self.take_back_provisional(0);
-        } else if self.attempts_open == 0 {
-            self.provisional.clear();
+            self.deferred.drop_past(0);
         }
+        self.memo.settle_at_top(result.is_ok());
         result
     }
 
@@ -1609,14 +1544,14 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
         let key = D::tm_memo_key(env, a, b);
         if let Some(key) = &key {
-            if let Some(&verdict) = self.memo.get(key) {
+            if let Some(verdict) = self.memo.get(key) {
                 return if verdict { Ok(()) } else { Err(ConvError::NotConvertible) };
             }
         }
-        if self.depth >= self.defer_base + crate::term::SPINE_ITERATE_AT || self.deferred.len() > self.defer_floor {
+        if self.deferred.should_defer(self.depth) {
             return self.defer_tm(env, a, b, ty, l);
         }
-        let pushed = self.deferred_pushed;
+        let pushed = self.deferred.epoch();
         self.descend()?;
         let result = (|| {
             let w = D::whnf_ty(self, env, ty)?;
@@ -1631,9 +1566,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         if let Some(key) = key {
             match &result {
                 Ok(()) => self.memo_true(key, pushed),
-                Err(ConvError::NotConvertible) => {
-                    self.memo.insert(key, false);
-                }
+                Err(ConvError::NotConvertible) => self.memo.refused(key),
                 Err(ConvError::OutOfFuel) => {}
             }
         }
@@ -1827,7 +1760,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     fn tm_nat_tail(&mut self, env: &Env<'v>, mut a: D::TmC, mut b: D::TmC) -> R {
         let mut entered = false;
         let mut pending = Vec::new();
-        let pushed = self.deferred_pushed;
+        let pushed = self.deferred.epoch();
         let result = (|| {
             loop {
                 self.spend()?;
@@ -1836,13 +1769,13 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 }
                 let key = D::tm_memo_key(env, &a, &b);
                 if let Some(key) = &key {
-                    if let Some(&verdict) = self.memo.get(key) {
+                    if let Some(verdict) = self.memo.get(key) {
                         return if verdict { Ok(()) } else { Err(NC) };
                     }
                 }
                 // Something earlier in this context was queued: the
                 // residual comparison waits its turn behind it.
-                if self.deferred.len() > self.defer_floor {
+                if self.deferred.past_floor() {
                     let ty = D::nat(env);
                     return self.defer_tm(env, &a, &b, &ty, &Level::Zero);
                 }
@@ -1881,7 +1814,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 if verdict {
                     self.memo_true(key, pushed);
                 } else {
-                    self.memo.insert(key, false);
+                    self.memo.refused(key);
                 }
             }
         }

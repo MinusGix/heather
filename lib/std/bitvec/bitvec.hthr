@@ -421,6 +421,19 @@ fn BitVec::pow({n: Nat}, self a: BitVec(n), k: Nat) → BitVec(n) {
     match k { Zero => BitVec::ofNat(1), Succ(j) => a.pow(j).mul(a) }
 }
 
+// The low `n` bits of an integer in two's complement: a non-negative one is
+// its numeral, a negative one the negation of its magnitude's. That is the
+// word ring's `of_int` (`bitvec_ring`), spelled so a coefficient `ring`
+// writes reads back as the goal's `-k` at an open width. The complement
+// reading, `-(k + 1)` as `ofNat(k).complement()`, is a theorem there
+// (`BitVec::ofInt_negSucc`).
+fn BitVec::ofInt({n: Nat}, z: Int) → BitVec(n) {
+    match z {
+        OfNat(k) => BitVec::ofNat(k),
+        NegSucc(k) => BitVec::ofNat(Succ(k)).neg(),
+    }
+}
+
 fn BitVec::carry_add({n: Nat}, self a, b: BitVec(n)) → Type {
     Nat::pow(2, n) <= a.toNat() + b.toNat()
 }
