@@ -81,8 +81,8 @@ theorem psize(): PNode(True, PCons(PBv(0), PNil)).size() = 2 { refl }
 
 // An indexed group: the member's index is a parameter, the receiver its
 // `self`.
-inductive Even : (n: Nat) → Type { EZ : Even(0), ES(n: Nat, o: Odd(n)) : Even(Succ(n)) }
-inductive Odd : (n: Nat) → Type { OS(n: Nat, e: Even(n)) : Odd(Succ(n)) }
+inductive Even: (n: Nat) → Type { EZ: Even(0), ES(n: Nat, o: Odd(n)): Even(Succ(n)) }
+inductive Odd: (n: Nat) → Type { OS(n: Nat, e: Even(n)): Odd(Succ(n)) }
 
 fn Even::half(n: Nat, self e: Even(n)) → Nat { match e { EZ => 0, ES(k, o) => o.half(k) } }
 fn Odd::half(n: Nat, self o: Odd(n)) → Nat { match o { OS(k, e) => Succ(e.half(k)) } }
