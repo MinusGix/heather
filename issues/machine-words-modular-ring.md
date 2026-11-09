@@ -92,9 +92,9 @@ library lemma (`BitVec::toNat_add_mod`). The `Add` fold citing `ofNat_add` is
 [[function-ir-pass-arithmetic-folds]]'s to write; the lemma it waits on is
 here, with `ofNat_sub` for its `Sub` case.
 
-Left: `ring` cannot read `-` at words, because `BitVec::sub` is its own
-ripple and not `a + -b` by definition; `BitVec::sub_eq_add_neg` rewrites it
-first ([[ring-carrier-subtraction-law]]). `BitVec::int_cast` and
+Left: `ring` could not read `-` at words, because `BitVec::sub` is its own
+ripple and not `a + -b` by definition (since read through a `SubtractionLaw`
+instance, [[ring-carrier-subtraction-law]]). `BitVec::int_cast` and
 `bitvec_div`'s `BitVec::ofInt` are one map spelled two ways
 ([[bitvec-int-cast-is-ofint]]). The ~240 `fits` premises in native, arch
 and os are unchanged; each can now be dropped where its lemma only needed the

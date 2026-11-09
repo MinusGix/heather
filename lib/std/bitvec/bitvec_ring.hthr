@@ -92,8 +92,8 @@ theorem BitVec::add_mul_distr(n: Nat, a, b, c: BitVec(n)): a.add(b).mul(c) = a.m
 }
 
 // Subtraction is adding the negation. Not by definition (`sub` is its own
-// ripple, one pass), so `ring` reads `a - b` only once this has rewritten it
-// (issues/ring-carrier-subtraction-law.md).
+// ripple, one pass), so `ring` reads `a - b` through this, as the
+// `SubtractionLaw` instance below (issues/ring-carrier-subtraction-law.md).
 theorem BitVec::sub_eq_add_neg(n: Nat, a, b: BitVec(n)): a.sub(b) = a.add(b.neg()) {
     let w = Nat::pow(2, n);
     let d = w - b.toNat();
@@ -163,6 +163,12 @@ instance(n: Nat) CommRing<BitVec(n)>(RelId<BitVec(n)>, BitVec::add, BitVec::mul)
 }
 
 designation ≈ at BitVec(n) := RelId
+
+// `-` is its own ripple, so `ring` reads it through the law.
+instance(n: Nat) SubtractionLaw<BitVec(n)>(RelId<BitVec(n)>, BitVec::add, BitVec::sub) {
+    neg := BitVec::neg,
+    sub_add_neg := BitVec::sub_eq_add_neg(n),
+}
 
 // The integers in a word: a non-negative one is its numeral, a negative one
 // the negation of its magnitude's, so a coefficient `ring` writes reads back

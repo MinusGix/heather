@@ -1,6 +1,6 @@
 ---
 title: ring reads a carrier's - only when it is a + inv(b) by definition
-status: open
+status: closed
 labels: [ring,tactics,bitvec]
 area: tactics
 milestone: [hih-passes]
@@ -17,7 +17,7 @@ mentioning `a - b` is reified as a subtraction and the certificate then fails
 to convert (`eval_rel(RAdd(RSub(…), …)) = …` against `a - b + b = a`), a type
 mismatch rather than a refusal naming the reason.
 
-`BitVec::sub_eq_add_neg` (`bitvec_ring`) rewrites it first today
+`BitVec::sub_eq_add_neg` (`bitvec_ring`) rewrote it first
 (`ring_subtraction` in `lib/_tests/std/bitvec/bitvec_ring_tests.hthr`).
 
 ## Shape of a fix
@@ -36,3 +36,24 @@ should at least say that `-` is not read at this carrier.
 
 - **[[machine-words-modular-ring]]** owns the word ring. Assumed here: only
   that `BitVec::sub_eq_add_neg` states the law.
+
+## Resolution
+
+Closed 2026-11-09. `semiring` has a class `SubtractionLaw<A>(≈, +, -)` with
+`neg` and `sub_add_neg: x - y ≈ x + neg(y)`, and the citable
+`SubtractionLaw::sub_eq<T>(x, y)`; `bitvec_ring` gives it at every width from
+`BitVec::sub_eq_add_neg`. `ring` asks for an instance at the carrier once
+(`RelCarrier::sub_law`); where there is one, a difference `a - b` is reified
+as an atom with a `Definition` fact citing the law
+(`Reifier::sub_through_law`), its definition the polynomial of `a - b` read
+as `a + inv(b)`. Carriers whose `-` unfolds to the sum (`Rat`, `CReal`) have
+no instance and are read as before. The class is the named law the "shape of
+a fix" asked for, not a convention on names.
+
+The probes found a second gap on the way: an `=` whose sides are bare
+variables (`h: a = c` at `BitVec(n)`) was refused, because a binder's type
+arrives as the record's structure, not `El(BitVec(n))`, and
+`identity_equation` counted the carrier's parameters off an `El` spine only.
+It now takes them from the declaration (`params` + `valparams`) there.
+Probes: `ring_subtraction` … `ring_variable_sides` and the refusal
+`ring_sub_not_add` in `lib/_tests/std/bitvec/bitvec_ring_tests.hthr`.

@@ -162,8 +162,9 @@ and checksums and hashes in tools.
 **Landed (2026-11-09).** `issues/machine-words-modular-ring.md`: the congruence kit
 in `nat.hthr`/`int.hthr`, the modular half of `bitvec_nat` (P3 is
 `BitVec::ofNat_add`, P6 `BitVec::toNat_add_mod`), and `bitvec_ring`'s
-`CommRingOfInt<BitVec(n)>`, so P1 now proves (`=` or `≈`). `ring` does not
-yet read `-` at words (`issues/ring-carrier-subtraction-law.md`).
+`CommRingOfInt<BitVec(n)>`, so P1 now proves (`=` or `≈`). `ring` reads `-`
+at words through a `SubtractionLaw` instance
+(`issues/ring-carrier-subtraction-law.md`, closed the same day).
 
 ## 3. Transition systems and simulation diagrams
 
