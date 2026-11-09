@@ -199,6 +199,11 @@ chain is composition, not a new proof (`hih-passes`). The tree-side
 simulation (`itree_sim.hthr`, `Program::Simulates`) stays: it is about
 trees, not states, and §3's diagrams are its machine-side partner.
 
+**Built (2026-11-09).** `lib/std/relation/transition.hthr` holds the
+closures, invariants, determinism and the three diagrams with vertical
+composition; the native closures are its instances. What is left is filed
+in the log of issues/transition-systems-and-simulations.md.
+
 ## 4. Address intervals and interval sets
 
 **Today.** `lib/std/machine/memory.hthr` states span facts pointwise:

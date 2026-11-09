@@ -18,6 +18,7 @@ import nat;
 import option;
 import omega;
 import relation_props;
+import transition;
 
 // The forms the compiler emits. Each executes by its existing relation; a
 // fetched step adds only the fetch of its exact canonical bytes. Calls join
@@ -227,44 +228,34 @@ theorem near_fetched_respects_defined<M>(fetch: FetchAccess<M>,
                 })(execution);
     runner(right, control, right_exec)
 }
-// `n` fetched steps, and a run of any length. Counting keeps concatenation a
-// plain induction, as LoopRuns does for iterations.
+// `n` fetched steps, and a run of any length: `StarN` and `Star`
+// (transition.hthr) at `FetchedStep`.
 fn FetchedRuns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, n: Nat) →
     MachineState<M> → MachineState<M> → Type {
-    match n {
-        Zero => λ before after => before = after,
-        Succ(k) => λ before after => Exists<MachineState<M>>(λ middle =>
-            FetchedStep(fetch, data, before, middle) ∧ FetchedRuns(fetch, data, k, middle, after)),
-    }
+    StarN(λ before after => FetchedStep(fetch, data, before, after), n)
 }
 fn FetchedSteps<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, before, after: MachineState<M>) → Type {
-    Exists<Nat>(λ n => FetchedRuns(fetch, data, n, before, after))
+    Star(λ s t => FetchedStep(fetch, data, s, t), before, after)
 }
 
 theorem fetched_steps_refl<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, state: MachineState<M>):
-    FetchedSteps(fetch, data, state, state) { Exists(Zero, refl) }
+    FetchedSteps(fetch, data, state, state) { Star::refl(λ s t => FetchedStep(fetch, data, s, t), state) }
 
 theorem fetched_steps_cons<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, before, middle, after: MachineState<M>,
     step: FetchedStep(fetch, data, before, middle), rest: FetchedSteps(fetch, data, middle, after)):
     FetchedSteps(fetch, data, before, after) {
-    Exists(Succ(rest.witness), Exists(middle, ⟨step, rest.proof⟩))
+    Star::cons(λ s t => FetchedStep(fetch, data, s, t), before, middle, after, step, rest)
 }
 
-theorem fetched_runs_append<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, n: Nat):
-    (before, middle, after: MachineState<M>) → FetchedRuns(fetch, data, n, before, middle) →
-    FetchedSteps(fetch, data, middle, after) → FetchedSteps(fetch, data, before, after) {
-    match n {
-        Zero => λ before middle after same rest =>
-            j(sym(same), λ state _ => FetchedSteps(fetch, data, state, after), rest),
-        Succ(k) => λ before middle after runs rest =>
-            fetched_steps_cons(fetch, data, before, runs.witness, after, runs.proof.left,
-                fetched_runs_append(fetch, data, k, runs.witness, middle, after, runs.proof.right, rest)),
-    }
+theorem fetched_runs_append<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, n: Nat, before, middle, after: MachineState<M>,
+    first: FetchedRuns(fetch, data, n, before, middle), rest: FetchedSteps(fetch, data, middle, after)):
+    FetchedSteps(fetch, data, before, after) {
+    StarN::then_star(λ s t => FetchedStep(fetch, data, s, t), n, before, middle, after, first, rest)
 }
 theorem fetched_steps_trans<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, before, middle, after: MachineState<M>,
     first: FetchedSteps(fetch, data, before, middle), second: FetchedSteps(fetch, data, middle, after)):
     FetchedSteps(fetch, data, before, after) {
-    fetched_runs_append(fetch, data, first.witness, before, middle, after, first.proof, second)
+    Star::trans(λ s t => FetchedStep(fetch, data, s, t), before, middle, after, first, second)
 }
 
 // Residency: every byte reads back, is executable, and the address after it
@@ -357,7 +348,7 @@ theorem near_fetched_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, con
 }
 theorem fetched_steps_one<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, before, after: MachineState<M>,
     step: FetchedStep(fetch, data, before, after)): FetchedSteps(fetch, data, before, after) {
-    fetched_steps_cons(fetch, data, before, after, after, step, fetched_steps_refl(fetch, data, after))
+    Star::one(λ s t => FetchedStep(fetch, data, s, t), before, after, step)
 }
 
 theorem resident_split_at<M>(fetch: FetchAccess<M>, memory: M, prefix, tail: List<BitVec(8)>, origin: BitVec(64), offset: Nat,

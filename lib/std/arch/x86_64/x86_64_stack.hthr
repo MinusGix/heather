@@ -27,6 +27,8 @@ import logic;
 import nat;
 import option;
 import omega;
+import relation;
+import transition;
 
 // ---------------------------------------------------------------------------
 // The forms
@@ -167,56 +169,49 @@ theorem stack_step_respects_same_witness<M>(fetch: FetchAccess<M>, data: ByteRea
 fn MachineStep<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>) → Type {
     FetchedStep(fetch, data, before, after) ∨ (StoreStep(fetch, writes, before, after) ∨ StackStep(fetch, data, writes, before, after))
 }
+// `StarN` and `Star` (transition.hthr) at `MachineStep`.
 fn MachineRuns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, n: Nat) →
     MachineState<M> → MachineState<M> → Type {
-    match n {
-        Zero => λ before after => before = after,
-        Succ(k) => λ before after => Exists<MachineState<M>>(λ middle =>
-            MachineStep(fetch, data, writes, before, middle) ∧ MachineRuns(fetch, data, writes, k, middle, after)),
-    }
+    StarN(λ before after => MachineStep(fetch, data, writes, before, after), n)
 }
 fn MachineSteps<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>) → Type {
-    Exists<Nat>(λ n => MachineRuns(fetch, data, writes, n, before, after))
+    Star(λ s t => MachineStep(fetch, data, writes, s, t), before, after)
 }
 
 theorem machine_steps_refl<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, state: MachineState<M>):
-    MachineSteps(fetch, data, writes, state, state) { Exists(Zero, refl) }
+    MachineSteps(fetch, data, writes, state, state) { Star::refl(λ s t => MachineStep(fetch, data, writes, s, t), state) }
 
 theorem machine_steps_one<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>,
     step: MachineStep(fetch, data, writes, before, after)): MachineSteps(fetch, data, writes, before, after) {
-    Exists(Succ(Zero), Exists(after, ⟨step, refl⟩))
+    Star::one(λ s t => MachineStep(fetch, data, writes, s, t), before, after, step)
 }
 
-theorem machine_runs_append<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, n: Nat):
-    (before, middle, after: MachineState<M>) → MachineRuns(fetch, data, writes, n, before, middle) →
-    MachineSteps(fetch, data, writes, middle, after) → MachineSteps(fetch, data, writes, before, after) {
-    match n {
-        Zero => λ before middle after same rest => j(sym(same), λ s _ => MachineSteps(fetch, data, writes, s, after), rest),
-        Succ(k) => λ before middle after first rest => {
-            let tail = machine_runs_append(fetch, data, writes, k, first.witness, middle, after, first.proof.right, rest);
-            Exists(Succ(tail.witness), Exists(first.witness, ⟨first.proof.left, tail.proof⟩))
-        },
-    }
+theorem machine_runs_append<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, n: Nat,
+    before, middle, after: MachineState<M>, first: MachineRuns(fetch, data, writes, n, before, middle),
+    rest: MachineSteps(fetch, data, writes, middle, after)): MachineSteps(fetch, data, writes, before, after) {
+    StarN::then_star(λ s t => MachineStep(fetch, data, writes, s, t), n, before, middle, after, first, rest)
 }
 
 theorem machine_steps_trans<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, middle, after: MachineState<M>,
     first: MachineSteps(fetch, data, writes, before, middle), second: MachineSteps(fetch, data, writes, middle, after)):
     MachineSteps(fetch, data, writes, before, after) {
-    machine_runs_append(fetch, data, writes, first.witness, before, middle, after, first.proof, second)
+    Star::trans(λ s t => MachineStep(fetch, data, writes, s, t), before, middle, after, first, second)
 }
 
-// A fetched run is a run of the machine.
-theorem machine_runs_of_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, n: Nat):
-    (before, after: MachineState<M>) → FetchedRuns(fetch, data, n, before, after) → MachineRuns(fetch, data, writes, n, before, after) {
-    match n {
-        Zero => λ before after same => same,
-        Succ(k) => λ before after run => Exists(run.witness, ⟨Inl(run.proof.left),
-            machine_runs_of_fetched(fetch, data, writes, k, run.witness, after, run.proof.right)⟩),
-    }
+// A fetched step is a step of the machine, so a fetched run is a run of it.
+theorem machine_step_of_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>):
+    Included<MachineState<M>, MachineState<M>>(λ s t => FetchedStep(fetch, data, s, t), λ s t => MachineStep(fetch, data, writes, s, t)) {
+    λ s t step => Inl(step)
+}
+theorem machine_runs_of_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, n: Nat,
+    before, after: MachineState<M>, run: FetchedRuns(fetch, data, n, before, after)): MachineRuns(fetch, data, writes, n, before, after) {
+    StarN::monotone(λ s t => FetchedStep(fetch, data, s, t), λ s t => MachineStep(fetch, data, writes, s, t),
+        machine_step_of_fetched(fetch, data, writes), n, before, after, run)
 }
 theorem machine_steps_of_fetched<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, before, after: MachineState<M>,
     steps: FetchedSteps(fetch, data, before, after)): MachineSteps(fetch, data, writes, before, after) {
-    Exists(steps.witness, machine_runs_of_fetched(fetch, data, writes, steps.witness, before, after, steps.proof))
+    Star::monotone(λ s t => FetchedStep(fetch, data, s, t), λ s t => MachineStep(fetch, data, writes, s, t),
+        machine_step_of_fetched(fetch, data, writes), before, after, steps)
 }
 
 theorem stack_step_machine<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, form: StackForm,

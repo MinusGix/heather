@@ -58,16 +58,6 @@ theorem monotone<A, B, C>(R1, R2: A → B → Type,
     Included(Compose<A, B, C>(R1, S1), Compose<A, B, C>(R2, S2))
 { compose_monotone(R1, R2, S1, S2, rr, ss) }
 
-theorem concatenate<A>(R: A → A → Type, m, n: Nat, a, b, c: A,
-    ab: Steps(R, m, a, b), bc: Steps(R, n, b, c)):
-    Steps(R, m + n, a, c)
-{ steps_concat(R, m, n, a, b, c, ab, bc) }
-
-theorem refine_each_step<A>(R, S: A → A → Type, h: Included(R, S),
-    fuel: Nat, a, b: A, path: Steps(R, fuel, a, b)):
-    Steps(S, fuel, a, b)
-{ steps_monotone(R, S, h, fuel, a, b, path) }
-
 // A deterministic customer (a graph) and a nondeterministic one (havoc).
 inductive TinyInstr { Increment, Clear }
 

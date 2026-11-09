@@ -1,0 +1,647 @@
+// Transition systems over any step relation: runs, invariants, determinism
+// and simulation diagrams, stated once (issues/transition-systems-and-
+// simulations.md; docs/native-mathematics-survey.md §3).
+//
+// A transition system here is only its step relation `R: A → A → Type`;
+// what a machine, a fetched-code profile or Linux adds is which relation.
+// Their closures (`FetchedRuns`, `MachineRuns`, `LinuxStepsN`, …) are
+// `StarN` at their step, so an inclusion of steps is `StarN::monotone`.
+//
+// - Runs: `StarN` counts its steps, so concatenation is a plain induction
+//   on the first count (`nat::add` recurses on its second argument, so the
+//   natural statement is `n + m`, `StarN::append_rev`); `Star` is a run of
+//   some length, `Plus` one of at least one step.
+// - Invariants: a predicate the step keeps holds along every run;
+//   `Reachable` is the least one containing the initial states.
+// - Determinism: equal-length runs end together, any two runs from a state
+//   are prefixes of one another, and two stuck ends are equal.
+// - Simulation diagrams (Leroy's and CompCert's `Smallstep`): lock-step,
+//   plus, and star, where a source step may be matched by no target step
+//   only as its index falls in `lt`. Each carries runs to runs, and the
+//   diagrams compose vertically: two star diagrams compose at the
+//   lexicographic order of (the second's index under `Plus(lt₂)`, the
+//   first's), which is why the index is a type and `lt` any relation, not a
+//   measure into `Nat`. Finite runs need nothing of `lt`; carrying
+//   divergence will ask it to be well-founded
+//   (issues/transition-divergence-preservation.md).
+// - A forward diagram into a deterministic target is also backward: each
+//   step of the target from a matched state is on the way to the state the
+//   diagram promised (`LockstepDiagram::backward` and its siblings).
+//
+// The tree-side partner (`itree_sim.hthr`, `Program::Simulates`) relates
+// trees to states and stays separate.
+
+import logic;
+import nat;
+import pair;
+import relation;
+
+// ---------------------------------------------------------------------------
+// Runs
+
+// Exactly `n` steps.
+fn StarN<A>(R: A → A → Type, n: Nat) → A → A → Type {
+    match n {
+        Zero => λ start finish => start = finish,
+        Succ(k) => λ start finish => ∃ middle: A, R(start, middle) ∧ StarN(R, k, middle, finish),
+    }
+}
+
+// Some number of steps.
+fn Star<A>(R: A → A → Type, start, finish: A) → Type {
+    ∃ n: Nat, StarN(R, n, start, finish)
+}
+
+// At least one step.
+fn Plus<A>(R: A → A → Type, start, finish: A) → Type {
+    ∃ middle: A, R(start, middle) ∧ Star(R, middle, finish)
+}
+
+theorem StarN::zero<A>(R: A → A → Type, a: A): StarN(R, 0, a, a) { refl }
+
+theorem StarN::one<A>(R: A → A → Type, a, b: A, step: R(a, b)): StarN(R, 1, a, b) {
+    Exists(b, ⟨step, refl⟩)
+}
+
+theorem StarN::cons<A>(R: A → A → Type, n: Nat, a, b, c: A, step: R(a, b), rest: StarN(R, n, b, c)):
+    StarN(R, Succ(n), a, c) {
+    Exists(b, ⟨step, rest⟩)
+}
+
+// A run's start and end may be moved along equalities.
+theorem StarN::cast<A>(R: A → A → Type, n: Nat, a, a2, b, b2: A, same_start: a = a2, same_end: b = b2,
+    run: StarN(R, n, a, b)): StarN(R, n, a2, b2) {
+    j(same_end, λ e _ => StarN(R, n, a2, e), j(same_start, λ s _ => StarN(R, n, s, b), run))
+}
+
+theorem StarN::snoc<A>(R: A → A → Type, n: Nat): (a, b, c: A) → StarN(R, n, a, b) → R(b, c) → StarN(R, Succ(n), a, c) {
+    match n {
+        Zero => λ a b c same step => StarN::one(R, a, c, j(sym(same), λ s _ => R(s, c), step)),
+        Succ(k, ih) => λ a b c run step =>
+            StarN::cons(R, Succ(k), a, run.witness, c, run.proof.left, ih(run.witness, b, c, run.proof.right, step)),
+    }
+}
+
+// Concatenation, in the order `nat::add` computes.
+theorem StarN::append_rev<A>(R: A → A → Type, m: Nat): (n: Nat) → (a, b, c: A) →
+    StarN(R, m, a, b) → StarN(R, n, b, c) → StarN(R, n + m, a, c) {
+    match m {
+        Zero => λ n a b c same rest => j(sym(same), λ s _ => StarN(R, n, s, c), rest),
+        Succ(_, ih) => λ n a b c first rest =>
+            Exists(first.witness, ⟨first.proof.left, ih(n, first.witness, b, c, first.proof.right, rest)⟩),
+    }
+}
+
+theorem StarN::append<A>(R: A → A → Type, m, n: Nat, a, b, c: A,
+    first: StarN(R, m, a, b), second: StarN(R, n, b, c)): StarN(R, m + n, a, c) {
+    j(n.add_comm(m), λ k _ => StarN(R, k, a, c), StarN::append_rev(R, m, n, a, b, c, first, second))
+}
+
+// A run of `n + m` steps passes a state after its first `m`.
+theorem StarN::split<A>(R: A → A → Type, m: Nat): (n: Nat) → (a, c: A) →
+    StarN(R, n + m, a, c) → ∃ b: A, StarN(R, m, a, b) ∧ StarN(R, n, b, c) {
+    match m {
+        Zero => λ n a c run => Exists(a, ⟨refl, run⟩),
+        Succ(_, ih) => λ n a c run => {
+            let rest = ih(n, run.witness, c, run.proof.right);
+            Exists(rest.witness, ⟨Exists(run.witness, ⟨run.proof.left, rest.proof.left⟩), rest.proof.right⟩)
+        },
+    }
+}
+
+// Steps carried along a map of states. An inclusion of steps is the map
+// `λ a => a`.
+theorem StarN::map<A, B>(R: A → A → Type, S: B → B → Type, f: A → B,
+    steps: (a, b: A) → R(a, b) → S(f(a), f(b)), n: Nat): (a, b: A) → StarN(R, n, a, b) → StarN(S, n, f(a), f(b)) {
+    match n {
+        Zero => λ a b same => j(same, λ e _ => f(a) = f(e), refl),
+        Succ(_, ih) => λ a b run =>
+            Exists(f(run.witness), ⟨steps(a, run.witness, run.proof.left), ih(run.witness, b, run.proof.right)⟩),
+    }
+}
+
+theorem StarN::monotone<A>(R, S: A → A → Type, included: Included(R, S), n: Nat):
+    (a, b: A) → StarN(R, n, a, b) → StarN(S, n, a, b) {
+    match n {
+        Zero => λ a b same => same,
+        Succ(_, ih) => λ a b run =>
+            Exists(run.witness, ⟨included(a, run.witness, run.proof.left), ih(run.witness, b, run.proof.right)⟩),
+    }
+}
+
+theorem Star::of_n<A>(R: A → A → Type, n: Nat, a, b: A, run: StarN(R, n, a, b)): Star(R, a, b) {
+    Exists(n, run)
+}
+
+theorem Star::refl<A>(R: A → A → Type, a: A): Star(R, a, a) { Exists(0, StarN::zero(R, a)) }
+
+theorem Star::one<A>(R: A → A → Type, a, b: A, step: R(a, b)): Star(R, a, b) {
+    Exists(1, StarN::one(R, a, b, step))
+}
+
+theorem Star::cons<A>(R: A → A → Type, a, b, c: A, step: R(a, b), rest: Star(R, b, c)): Star(R, a, c) {
+    Exists(Succ(rest.witness), StarN::cons(R, rest.witness, a, b, c, step, rest.proof))
+}
+
+theorem Star::snoc<A>(R: A → A → Type, a, b, c: A, run: Star(R, a, b), step: R(b, c)): Star(R, a, c) {
+    Exists(Succ(run.witness), StarN::snoc(R, run.witness, a, b, c, run.proof, step))
+}
+
+// A counted run, then any run.
+theorem StarN::then_star<A>(R: A → A → Type, n: Nat, a, b, c: A, first: StarN(R, n, a, b), second: Star(R, b, c)):
+    Star(R, a, c) {
+    Exists(second.witness + n, StarN::append_rev(R, n, second.witness, a, b, c, first, second.proof))
+}
+
+theorem Star::trans<A>(R: A → A → Type, a, b, c: A, first: Star(R, a, b), second: Star(R, b, c)): Star(R, a, c) {
+    StarN::then_star(R, first.witness, a, b, c, first.proof, second)
+}
+
+theorem Star::map<A, B>(R: A → A → Type, S: B → B → Type, f: A → B,
+    steps: (a, b: A) → R(a, b) → S(f(a), f(b)), a, b: A, run: Star(R, a, b)): Star(S, f(a), f(b)) {
+    Exists(run.witness, StarN::map(R, S, f, steps, run.witness, a, b, run.proof))
+}
+
+theorem Star::monotone<A>(R, S: A → A → Type, included: Included(R, S), a, b: A, run: Star(R, a, b)): Star(S, a, b) {
+    Exists(run.witness, StarN::monotone(R, S, included, run.witness, a, b, run.proof))
+}
+
+theorem Plus::one<A>(R: A → A → Type, a, b: A, step: R(a, b)): Plus(R, a, b) {
+    Exists(b, ⟨step, Star::refl(R, b)⟩)
+}
+
+theorem Plus::star<A>(R: A → A → Type, a, b: A, run: Plus(R, a, b)): Star(R, a, b) {
+    Star::cons(R, a, run.witness, b, run.proof.left, run.proof.right)
+}
+
+// A run of `Succ(n)` steps is a plus run.
+theorem Plus::of_n<A>(R: A → A → Type, n: Nat, a, b: A, run: StarN(R, Succ(n), a, b)): Plus(R, a, b) {
+    Exists(run.witness, ⟨run.proof.left, Exists(n, run.proof.right)⟩)
+}
+
+theorem Plus::cons<A>(R: A → A → Type, a, b, c: A, step: R(a, b), rest: Star(R, b, c)): Plus(R, a, c) {
+    Exists(b, ⟨step, rest⟩)
+}
+
+theorem Plus::snoc<A>(R: A → A → Type, a, b, c: A, run: Star(R, a, b), step: R(b, c)): Plus(R, a, c) {
+    let whole = StarN::snoc(R, run.witness, a, b, c, run.proof, step);
+    Plus::of_n(R, run.witness, a, c, whole)
+}
+
+theorem Plus::trans_star<A>(R: A → A → Type, a, b, c: A, first: Plus(R, a, b), second: Star(R, b, c)): Plus(R, a, c) {
+    Plus::cons(R, a, first.witness, c, first.proof.left, Star::trans(R, first.witness, b, c, first.proof.right, second))
+}
+
+theorem StarN::then_plus<A>(R: A → A → Type, n: Nat): (a, b, c: A) → StarN(R, n, a, b) → Plus(R, b, c) → Plus(R, a, c) {
+    match n {
+        Zero => λ a b c same plus => j(sym(same), λ s _ => Plus(R, s, c), plus),
+        Succ(_) => λ a b c first plus => Plus::cons(R, a, first.witness, c, first.proof.left,
+            Star::trans(R, first.witness, b, c, Exists(_, first.proof.right), Plus::star(R, b, c, plus))),
+    }
+}
+
+theorem Star::then_plus<A>(R: A → A → Type, a, b, c: A, first: Star(R, a, b), second: Plus(R, b, c)): Plus(R, a, c) {
+    StarN::then_plus(R, first.witness, a, b, c, first.proof, second)
+}
+
+theorem Plus::trans<A>(R: A → A → Type, a, b, c: A, first: Plus(R, a, b), second: Plus(R, b, c)): Plus(R, a, c) {
+    Plus::trans_star(R, a, b, c, first, Plus::star(R, b, c, second))
+}
+
+// A run is empty or takes a step.
+theorem Star::cases<A>(R: A → A → Type, a, b: A, run: Star(R, a, b)): (a = b) ∨ Plus(R, a, b) {
+    (match run.witness as λ n => StarN(R, n, a, b) → (a = b) ∨ Plus(R, a, b) {
+        Zero => λ same => Inl(same),
+        Succ(k) => λ steps => Inr(Plus::of_n(R, k, a, b, steps)),
+    })(run.proof)
+}
+
+theorem Plus::map<A, B>(R: A → A → Type, S: B → B → Type, f: A → B,
+    steps: (a, b: A) → R(a, b) → S(f(a), f(b)), a, b: A, run: Plus(R, a, b)): Plus(S, f(a), f(b)) {
+    Exists(f(run.witness), ⟨steps(a, run.witness, run.proof.left),
+        Star::map(R, S, f, steps, run.witness, b, run.proof.right)⟩)
+}
+
+theorem Plus::monotone<A>(R, S: A → A → Type, included: Included(R, S), a, b: A, run: Plus(R, a, b)): Plus(S, a, b) {
+    Exists(run.witness, ⟨included(a, run.witness, run.proof.left),
+        Star::monotone(R, S, included, run.witness, b, run.proof.right)⟩)
+}
+
+// ---------------------------------------------------------------------------
+// Invariants
+
+// A predicate every step keeps.
+fn Invariant<A>(R: A → A → Type, P: A → Type) → Type {
+    (a, b: A) → P(a) → R(a, b) → P(b)
+}
+
+theorem StarN::invariant<A>(R: A → A → Type, P: A → Type, keeps: Invariant(R, P), n: Nat):
+    (a, b: A) → P(a) → StarN(R, n, a, b) → P(b) {
+    match n {
+        Zero => λ a b holds same => j(same, λ e _ => P(e), holds),
+        Succ(_, ih) => λ a b holds run =>
+            ih(run.witness, b, keeps(a, run.witness, holds, run.proof.left), run.proof.right),
+    }
+}
+
+theorem Star::invariant<A>(R: A → A → Type, P: A → Type, keeps: Invariant(R, P), a, b: A,
+    holds: P(a), run: Star(R, a, b)): P(b) {
+    StarN::invariant(R, P, keeps, run.witness, a, b, holds, run.proof)
+}
+
+theorem Plus::invariant<A>(R: A → A → Type, P: A → Type, keeps: Invariant(R, P), a, b: A,
+    holds: P(a), run: Plus(R, a, b)): P(b) {
+    Star::invariant(R, P, keeps, a, b, holds, Plus::star(R, a, b, run))
+}
+
+theorem Invariant::and<A>(R: A → A → Type, P, Q: A → Type, first: Invariant(R, P), second: Invariant(R, Q)):
+    Invariant(R, λ a => P(a) ∧ Q(a)) {
+    λ a b holds step => ⟨first(a, b, holds.left, step), second(a, b, holds.right, step)⟩
+}
+
+// The steps taken from states where `P` holds.
+fn Restrict<A>(R: A → A → Type, P: A → Type, a, b: A) → Type { P(a) ∧ R(a, b) }
+
+// A run from where an invariant holds takes only steps from where it holds.
+theorem StarN::restrict<A>(R: A → A → Type, P: A → Type, keeps: Invariant(R, P), n: Nat):
+    (a, b: A) → P(a) → StarN(R, n, a, b) → StarN(λ x y => Restrict(R, P, x, y), n, a, b) {
+    match n {
+        Zero => λ a b holds same => same,
+        Succ(_, ih) => λ a b holds run => Exists(run.witness, ⟨⟨holds, run.proof.left⟩,
+            ih(run.witness, b, keeps(a, run.witness, holds, run.proof.left), run.proof.right)⟩),
+    }
+}
+
+theorem Star::restrict<A>(R: A → A → Type, P: A → Type, keeps: Invariant(R, P), a, b: A,
+    holds: P(a), run: Star(R, a, b)): Star(λ x y => Restrict(R, P, x, y), a, b) {
+    Exists(run.witness, StarN::restrict(R, P, keeps, run.witness, a, b, holds, run.proof))
+}
+
+// The states some run from an initial state reaches.
+fn Reachable<A>(R: A → A → Type, Init: A → Type, a: A) → Type {
+    ∃ start: A, Init(start) ∧ Star(R, start, a)
+}
+
+theorem Reachable::init<A>(R: A → A → Type, Init: A → Type, a: A, holds: Init(a)): Reachable(R, Init, a) {
+    Exists(a, ⟨holds, Star::refl(R, a)⟩)
+}
+
+theorem Reachable::invariant<A>(R: A → A → Type, Init: A → Type): Invariant(R, λ a => Reachable(R, Init, a)) {
+    λ a b reached step => Exists(reached.witness, ⟨reached.proof.left,
+        Star::snoc(R, reached.witness, a, b, reached.proof.right, step)⟩)
+}
+
+// Reachability is the least invariant containing the initial states: it is
+// what to prove a property inductive over.
+theorem Reachable::least<A>(R: A → A → Type, Init: A → Type, P: A → Type, keeps: Invariant(R, P),
+    starts: (a: A) → Init(a) → P(a), a: A, reached: Reachable(R, Init, a)): P(a) {
+    Star::invariant(R, P, keeps, reached.witness, a, starts(reached.witness, reached.proof.left), reached.proof.right)
+}
+
+// ---------------------------------------------------------------------------
+// Determinism
+
+fn Deterministic<A>(R: A → A → Type) → Type {
+    (a, b, c: A) → R(a, b) → R(a, c) → b = c
+}
+
+// No step leaves `a`.
+fn Stuck<A>(R: A → A → Type, a: A) → Type {
+    (b: A) → ¬R(a, b)
+}
+
+// Runs of one length from one state end at one state.
+theorem StarN::determined<A>(R: A → A → Type, det: Deterministic(R), n: Nat):
+    (a, b, c: A) → StarN(R, n, a, b) → StarN(R, n, a, c) → b = c {
+    match n {
+        Zero => λ a b c left right => trans(sym(left), right),
+        Succ(k, ih) => λ a b c left right => {
+            let met = det(a, left.witness, right.witness, left.proof.left, right.proof.left);
+            ih(left.witness, b, c, left.proof.right,
+                StarN::cast(R, k, right.witness, left.witness, c, c, sym(met), refl, right.proof.right))
+        },
+    }
+}
+
+// Two runs from one state: one is a prefix of the other.
+theorem StarN::determined_prefix<A>(R: A → A → Type, det: Deterministic(R), m: Nat):
+    (n: Nat) → (a, b, c: A) → StarN(R, m, a, b) → StarN(R, n, a, c) → Star(R, b, c) ∨ Star(R, c, b) {
+    match m {
+        Zero => λ n a b c left right => Inl(Exists(n, StarN::cast(R, n, a, b, c, c, left, refl, right))),
+        Succ(k, ih) => λ n a b c left => match n {
+            Zero => λ same => Inr(Exists(Succ(k), StarN::cast(R, Succ(k), a, c, b, b, same, refl, left))),
+            Succ(l) => λ run => {
+                let met = det(a, left.witness, run.witness, left.proof.left, run.proof.left);
+                ih(l, left.witness, b, c, left.proof.right,
+                    StarN::cast(R, l, run.witness, left.witness, c, c, sym(met), refl, run.proof.right))
+            },
+        },
+    }
+}
+
+theorem Star::determined_prefix<A>(R: A → A → Type, det: Deterministic(R), a, b, c: A,
+    left: Star(R, a, b), right: Star(R, a, c)): Star(R, b, c) ∨ Star(R, c, b) {
+    StarN::determined_prefix(R, det, left.witness, right.witness, a, b, c, left.proof, right.proof)
+}
+
+// A run from a stuck state is empty.
+theorem Star::from_stuck<A>(R: A → A → Type, a, b: A, stuck: Stuck(R, a), run: Star(R, a, b)): a = b {
+    (match run.witness as λ n => StarN(R, n, a, b) → a = b {
+        Zero => λ same => same,
+        Succ(_) => λ steps => false_elim(stuck(steps.witness, steps.proof.left)),
+    })(run.proof)
+}
+
+// A deterministic system stops in at most one state.
+theorem Star::stuck_determined<A>(R: A → A → Type, det: Deterministic(R), a, b, c: A,
+    left: Star(R, a, b), left_stuck: Stuck(R, b), right: Star(R, a, c), right_stuck: Stuck(R, c)): b = c {
+    match Star::determined_prefix(R, det, a, b, c, left, right) {
+        Inl(on) => Star::from_stuck(R, b, c, left_stuck, on),
+        Inr(on) => sym(Star::from_stuck(R, c, b, right_stuck, on)),
+    }
+}
+
+// The first step of a plus run is the only step.
+theorem Plus::determined_step<A>(R: A → A → Type, det: Deterministic(R), a, b, c: A,
+    step: R(a, b), run: Plus(R, a, c)): Star(R, b, c) {
+    j(det(a, run.witness, b, run.proof.left, step), λ m _ => Star(R, m, c), run.proof.right)
+}
+
+// ---------------------------------------------------------------------------
+// Simulation diagrams
+//
+// A source step from a state matched to a target state is answered by the
+// target. `Match` is the simulation relation; the star diagram indexes it,
+// and a source step the target does not answer (a stutter) must take the
+// index down `lt`.
+
+fn LockstepDiagram<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type) → Type {
+    (a, a2: A) → (b: B) → Match(a, b) → S(a, a2) → ∃ b2: B, T(b, b2) ∧ Match(a2, b2)
+}
+
+fn PlusDiagram<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type) → Type {
+    (a, a2: A) → (b: B) → Match(a, b) → S(a, a2) → ∃ b2: B, Plus(T, b, b2) ∧ Match(a2, b2)
+}
+
+// The target took a step, or took none and the index went down.
+fn Answers<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
+    Plus(T, b, b2) ∨ (Star(T, b, b2) ∧ lt(j, i))
+}
+
+fn StarDiagram<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type) → Type {
+    (i: I) → (a, a2: A) → (b: B) → Match(i, a, b) → S(a, a2) →
+        ∃ j: I, ∃ b2: B, Answers(T, lt, i, j, b, b2) ∧ Match(j, a2, b2)
+}
+
+theorem LockstepDiagram::plus<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type,
+    diagram: LockstepDiagram(S, T, Match)): PlusDiagram(S, T, Match) {
+    λ a a2 b matched step => {
+        let answer = diagram(a, a2, b, matched, step);
+        Exists(answer.witness, ⟨Plus::one(T, b, answer.witness, answer.proof.left), answer.proof.right⟩)
+    }
+}
+
+// A plus diagram is a star diagram at any index, whose index never moves.
+theorem PlusDiagram::star<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: A → B → Type,
+    diagram: PlusDiagram(S, T, Match)): StarDiagram(S, T, lt, λ i a b => Match(a, b)) {
+    λ i a a2 b matched step => {
+        let answer = diagram(a, a2, b, matched, step);
+        Exists(i, Exists(answer.witness, ⟨Inl(answer.proof.left), answer.proof.right⟩))
+    }
+}
+
+// Runs to runs. The lock-step diagram keeps the count.
+theorem LockstepDiagram::runs<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type,
+    diagram: LockstepDiagram(S, T, Match), n: Nat):
+    (a, a2: A) → (b: B) → Match(a, b) → StarN(S, n, a, a2) → ∃ b2: B, StarN(T, n, b, b2) ∧ Match(a2, b2) {
+    match n {
+        Zero => λ a a2 b matched same => Exists(b, ⟨refl, j(same, λ e _ => Match(e, b), matched)⟩),
+        Succ(k, ih) => λ a a2 b matched run => {
+            let first = diagram(a, run.witness, b, matched, run.proof.left);
+            let rest = ih(run.witness, a2, first.witness, first.proof.right, run.proof.right);
+            Exists(rest.witness, ⟨StarN::cons(T, k, b, first.witness, rest.witness, first.proof.left, rest.proof.left),
+                rest.proof.right⟩)
+        },
+    }
+}
+
+theorem PlusDiagram::runs<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type,
+    diagram: PlusDiagram(S, T, Match), n: Nat):
+    (a, a2: A) → (b: B) → Match(a, b) → StarN(S, n, a, a2) → ∃ b2: B, Star(T, b, b2) ∧ Match(a2, b2) {
+    match n {
+        Zero => λ a a2 b matched same => Exists(b, ⟨Star::refl(T, b), j(same, λ e _ => Match(e, b), matched)⟩),
+        Succ(_, ih) => λ a a2 b matched run => {
+            let first = diagram(a, run.witness, b, matched, run.proof.left);
+            let rest = ih(run.witness, a2, first.witness, first.proof.right, run.proof.right);
+            Exists(rest.witness, ⟨Star::trans(T, b, first.witness, rest.witness,
+                Plus::star(T, b, first.witness, first.proof.left), rest.proof.left), rest.proof.right⟩)
+        },
+    }
+}
+
+// A plus run of the source is a plus run of the target.
+theorem PlusDiagram::plus_runs<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type,
+    diagram: PlusDiagram(S, T, Match), a, a2: A, b: B, matched: Match(a, b), run: Plus(S, a, a2)):
+    ∃ b2: B, Plus(T, b, b2) ∧ Match(a2, b2) {
+    let first = diagram(a, run.witness, b, matched, run.proof.left);
+    let rest = PlusDiagram::runs(S, T, Match, diagram, run.proof.right.witness, run.witness, a2, first.witness,
+        first.proof.right, run.proof.right.proof);
+    Exists(rest.witness, ⟨Plus::trans_star(T, b, first.witness, rest.witness, first.proof.left, rest.proof.left),
+        rest.proof.right⟩)
+}
+
+theorem StarDiagram::runs<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), n: Nat):
+    (i: I) → (a, a2: A) → (b: B) → Match(i, a, b) → StarN(S, n, a, a2) →
+        ∃ j: I, ∃ b2: B, Star(T, b, b2) ∧ Match(j, a2, b2) {
+    match n {
+        Zero => λ i a a2 b matched same =>
+            Exists(i, Exists(b, ⟨Star::refl(T, b), j(same, λ e _ => Match(i, e, b), matched)⟩)),
+        Succ(_, ih) => λ i a a2 b matched run => {
+            let first = diagram(i, a, run.witness, b, matched, run.proof.left);
+            let b1 = first.proof.witness;
+            let moved: Star(T, b, b1) = match first.proof.proof.left {
+                Inl(plus) => Plus::star(T, b, b1, plus),
+                Inr(stutter) => stutter.left,
+            };
+            let rest = ih(first.witness, run.witness, a2, b1, first.proof.proof.right, run.proof.right);
+            Exists(rest.witness, Exists(rest.proof.witness, ⟨Star::trans(T, b, b1, rest.proof.witness, moved,
+                rest.proof.proof.left), rest.proof.proof.right⟩))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vertical composition
+
+theorem LockstepDiagram::compose<A, B, C>(S: A → A → Type, T: B → B → Type, U: C → C → Type,
+    first_match: A → B → Type, second_match: B → C → Type,
+    first: LockstepDiagram(S, T, first_match), second: LockstepDiagram(T, U, second_match)):
+    LockstepDiagram(S, U, Compose(first_match, second_match)) {
+    λ a a2 c matched step => {
+        let b = matched.witness;
+        let one = first(a, a2, b, matched.proof.left, step);
+        let two = second(b, one.witness, c, matched.proof.right, one.proof.left);
+        Exists(two.witness, ⟨two.proof.left, Exists(one.witness, ⟨one.proof.right, two.proof.right⟩)⟩)
+    }
+}
+
+theorem PlusDiagram::compose<A, B, C>(S: A → A → Type, T: B → B → Type, U: C → C → Type,
+    first_match: A → B → Type, second_match: B → C → Type,
+    first: PlusDiagram(S, T, first_match), second: PlusDiagram(T, U, second_match)):
+    PlusDiagram(S, U, Compose(first_match, second_match)) {
+    λ a a2 c matched step => {
+        let b = matched.witness;
+        let one = first(a, a2, b, matched.proof.left, step);
+        let two = PlusDiagram::plus_runs(T, U, second_match, second, b, one.witness, c, matched.proof.right,
+            one.proof.left);
+        Exists(two.witness, ⟨two.proof.left, Exists(one.witness, ⟨one.proof.right, two.proof.right⟩)⟩)
+    }
+}
+
+// What a star diagram answers along a plus run of its source: the target
+// took a step, or took none and the index went down `Plus(lt)`.
+fn AnswersAlong<B, I>(T: B → B → Type, lt: I → I → Type, i, j: I, b, b2: B) → Type {
+    Plus(T, b, b2) ∨ (Star(T, b, b2) ∧ Plus(lt, j, i))
+}
+
+// One more answer after an accumulated one.
+theorem AnswersAlong::then<B, I>(T: B → B → Type, lt: I → I → Type, i, j, k: I, b, b1, b2: B,
+    so_far: AnswersAlong(T, lt, i, j, b, b1), next: Answers(T, lt, j, k, b1, b2)): AnswersAlong(T, lt, i, k, b, b2) {
+    match so_far {
+        Inl(plus) => match next {
+            Inl(more) => Inl(Plus::trans(T, b, b1, b2, plus, more)),
+            Inr(stutter) => Inl(Plus::trans_star(T, b, b1, b2, plus, stutter.left)),
+        },
+        Inr(held) => match next {
+            Inl(more) => Inl(Star::then_plus(T, b, b1, b2, held.left, more)),
+            Inr(stutter) => Inr(⟨Star::trans(T, b, b1, b2, held.left, stutter.left),
+                Plus::cons(lt, k, j, i, stutter.right, Plus::star(lt, j, i, held.right))⟩),
+        },
+    }
+}
+
+theorem StarDiagram::along<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), n: Nat):
+    (i, j: I) → (a, a2: A) → (b, b1: B) → AnswersAlong(T, lt, i, j, b, b1) → Match(j, a, b1) → StarN(S, n, a, a2) →
+        ∃ k: I, ∃ b2: B, AnswersAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
+    match n {
+        Zero => λ i j a a2 b b1 so_far matched same =>
+            Exists(j, Exists(b1, ⟨so_far, j(same, λ e _ => Match(j, e, b1), matched)⟩)),
+        Succ(_, ih) => λ i j a a2 b b1 so_far matched run => {
+            let next = diagram(j, a, run.witness, b1, matched, run.proof.left);
+            ih(i, next.witness, run.witness, a2, b, next.proof.witness,
+                AnswersAlong::then(T, lt, i, j, next.witness, b, b1, next.proof.witness, so_far, next.proof.proof.left),
+                next.proof.proof.right, run.proof.right)
+        },
+    }
+}
+
+// Along a plus run of the source.
+theorem StarDiagram::plus_runs<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), i: I, a, a2: A, b: B, matched: Match(i, a, b), run: Plus(S, a, a2)):
+    ∃ k: I, ∃ b2: B, AnswersAlong(T, lt, i, k, b, b2) ∧ Match(k, a2, b2) {
+    let first = diagram(i, a, run.witness, b, matched, run.proof.left);
+    let b1 = first.proof.witness;
+    let so_far: AnswersAlong(T, lt, i, first.witness, b, b1) = match first.proof.proof.left {
+        Inl(plus) => Inl(plus),
+        Inr(stutter) => Inr(⟨stutter.left, Plus::one(lt, first.witness, i, stutter.right)⟩),
+    };
+    StarDiagram::along(S, T, lt, Match, diagram, run.proof.right.witness, i, first.witness, run.witness, a2, b, b1,
+        so_far, first.proof.proof.right, run.proof.right.proof)
+}
+
+// The lexicographic order on pairs, first component first.
+fn Lex<I, J>(first: I → I → Type, second: J → J → Type, x, y: Pair<I, J>) → Type {
+    first(x.fst, y.fst) ∨ ((x.fst = y.fst) ∧ second(x.snd, y.snd))
+}
+
+// The composite of two star diagrams is indexed by the second's index and
+// the first's, ordered by the second's under `Plus` first.
+fn StarCompose<A, B, C, I, J>(first_match: I → A → B → Type, second_match: J → B → C → Type,
+    k: Pair<J, I>, a: A, c: C) → Type {
+    ∃ b: B, first_match(k.snd, a, b) ∧ second_match(k.fst, b, c)
+}
+
+fn StarComposeLt<I, J>(first_lt: I → I → Type, second_lt: J → J → Type, x, y: Pair<J, I>) → Type {
+    Lex(λ p q => Plus(second_lt, p, q), first_lt, x, y)
+}
+
+theorem StarDiagram::compose<A, B, C, I, J>(S: A → A → Type, T: B → B → Type, U: C → C → Type,
+    first_lt: I → I → Type, second_lt: J → J → Type,
+    first_match: I → A → B → Type, second_match: J → B → C → Type,
+    first: StarDiagram(S, T, first_lt, first_match), second: StarDiagram(T, U, second_lt, second_match)):
+    StarDiagram<A, C, Pair<J, I>>(S, U, λ x y => StarComposeLt(first_lt, second_lt, x, y),
+        λ k a c => StarCompose(first_match, second_match, k, a, c)) {
+    λ k a a2 c matched step => {
+        let b = matched.witness;
+        let one = first(k.snd, a, a2, b, matched.proof.left, step);
+        let i2 = one.witness;
+        let b2 = one.proof.witness;
+        // Where the first diagram's target moved, the second follows it.
+        let follow: Plus(T, b, b2) → ∃ k2: Pair<J, I>, ∃ c2: C,
+            Answers(U, λ x y => StarComposeLt(first_lt, second_lt, x, y), k, k2, c, c2) ∧
+            StarCompose(first_match, second_match, k2, a2, c2) = λ moved => {
+            let two = StarDiagram::plus_runs(T, U, second_lt, second_match, second, k.fst, b, b2, c,
+                matched.proof.right, moved);
+            let c2 = two.proof.witness;
+            Exists(Pair(two.witness, i2), Exists(c2, ⟨
+                match two.proof.proof.left {
+                    Inl(plus) => Inl(plus),
+                    Inr(held) => Inr(⟨held.left, Inl(held.right)⟩),
+                },
+                Exists(b2, ⟨one.proof.proof.right, two.proof.proof.right⟩)⟩))
+        };
+        match one.proof.proof.left {
+            Inl(moved) => follow(moved),
+            Inr(stutter) => match Star::cases(T, b, b2, stutter.left) {
+                Inl(same) =>
+                    Exists(Pair(k.fst, i2), Exists(c, ⟨Inr(⟨Star::refl(U, c), Inr(⟨refl, stutter.right⟩)⟩),
+                        Exists(b2, ⟨one.proof.proof.right, j(same, λ e _ => second_match(k.fst, e, c), matched.proof.right)⟩)⟩)),
+                Inr(moved) => follow(moved),
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Forward into a deterministic target is backward
+//
+// Each step the target takes from a matched state is on the way to where
+// the diagram sends it, given that the source can step.
+
+theorem LockstepDiagram::backward<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type,
+    diagram: LockstepDiagram(S, T, Match), det: Deterministic(T), a: A, b, b2: B, matched: Match(a, b),
+    target: T(b, b2), progress: ∃ a2: A, S(a, a2)): ∃ a2: A, S(a, a2) ∧ Match(a2, b2) {
+    let answer = diagram(a, progress.witness, b, matched, progress.proof);
+    Exists(progress.witness, ⟨progress.proof,
+        j(det(b, answer.witness, b2, answer.proof.left, target), λ e _ => Match(progress.witness, e), answer.proof.right)⟩)
+}
+
+theorem PlusDiagram::backward<A, B>(S: A → A → Type, T: B → B → Type, Match: A → B → Type,
+    diagram: PlusDiagram(S, T, Match), det: Deterministic(T), a, a2: A, b, b2: B, matched: Match(a, b),
+    target: T(b, b2), source: S(a, a2)): ∃ b3: B, Star(T, b2, b3) ∧ Match(a2, b3) {
+    let answer = diagram(a, a2, b, matched, source);
+    Exists(answer.witness, ⟨Plus::determined_step(T, det, b, b2, answer.witness, target, answer.proof.left),
+        answer.proof.right⟩)
+}
+
+// A star diagram's source step either lies ahead of the target's step, or
+// was a stutter that left the target where it was.
+theorem StarDiagram::backward<A, B, I>(S: A → A → Type, T: B → B → Type, lt: I → I → Type, Match: I → A → B → Type,
+    diagram: StarDiagram(S, T, lt, Match), det: Deterministic(T), i: I, a, a2: A, b, b2: B,
+    matched: Match(i, a, b), target: T(b, b2), source: S(a, a2)):
+    ∃ j: I, (∃ b3: B, Star(T, b2, b3) ∧ Match(j, a2, b3)) ∨ (lt(j, i) ∧ Match(j, a2, b)) {
+    let answer = diagram(i, a, a2, b, matched, source);
+    let b3 = answer.proof.witness;
+    let ahead: Plus(T, b, b3) → (∃ b4: B, Star(T, b2, b4) ∧ Match(answer.witness, a2, b4)) ∨
+        (lt(answer.witness, i) ∧ Match(answer.witness, a2, b)) =
+        λ plus => Inl(Exists(b3, ⟨Plus::determined_step(T, det, b, b2, b3, target, plus), answer.proof.proof.right⟩));
+    Exists(answer.witness, match answer.proof.proof.left {
+        Inl(plus) => ahead(plus),
+        Inr(stutter) => match Star::cases(T, b, b3, stutter.left) {
+            Inl(same) => Inr(⟨stutter.right, j(sym(same), λ e _ => Match(answer.witness, a2, e), answer.proof.proof.right)⟩),
+            Inr(plus) => ahead(plus),
+        },
+    })
+}
