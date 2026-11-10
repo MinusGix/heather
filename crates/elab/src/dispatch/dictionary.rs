@@ -163,23 +163,39 @@ impl Elaborator {
     /// wrong guess costs a refusal and never a wrong term.
     ///
     /// `true` when it filled at least one slot.
+    /// The class a callee's written solver goal names, and its key. The
+    /// goal is the callee's own spelling (`CommRingOfInt<A>(≈, +, *)` in
+    /// `ring::RingExpr::eval_rel`), so where the caller's scope does not
+    /// name that class it is read in the callee's module, which wrote it: a
+    /// caller reaching the callee by a qualified name need not import the
+    /// modules the callee's signature names
+    /// (issues/linarith-rat-without-ordered-field-import.md). The caller's
+    /// reading is tried first, so no call that resolved before reads
+    /// differently.
+    fn solver_class_ref(&self, callee: &str, goal: &Ty) -> Option<(heather_syntax::ClassRef, String)> {
+        let read = |me: &Self| me.class_ref_of_ty(goal).and_then(|r| me.key_of(&r.name).map(|key| (r, key)));
+        if let Some(found) = read(self) {
+            return Some(found);
+        }
+        let (module, _) = crate::names::split_qual(callee)?;
+        self.with_module_scope(module, read).ok().flatten()
+    }
+
     pub(crate) fn fill_index_from_scope(
         &self,
         cx: &Cx,
+        callee: &str,
         goal: Option<&Ty>,
         params: &[ParamMeta],
         slot_param: &[usize],
         sols: &mut [Sol],
     ) -> bool {
-        let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else {
+        let Some((r, tkey)) = goal.and_then(|t| self.solver_class_ref(callee, t)) else {
             return false;
         };
         if r.index.is_empty() {
             return false;
         }
-        let Some(tkey) = self.key_of(&r.name) else {
-            return false;
-        };
         let mut filled = false;
         for a in &r.index {
             let ExprKind::Var(nm) = &a.kind else { continue };
@@ -228,6 +244,7 @@ impl Elaborator {
     pub(crate) fn fill_index_from_designation(
         &self,
         cx: &Cx,
+        callee: &str,
         goal: Option<&Ty>,
         params: &[ParamMeta],
         slot_param: &[usize],
@@ -237,7 +254,7 @@ impl Elaborator {
         applied: Option<&Term>,
         span: Span,
     ) -> bool {
-        let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else {
+        let Some((r, _)) = goal.and_then(|t| self.solver_class_ref(callee, t)) else {
             return false;
         };
         if r.index.is_empty() {

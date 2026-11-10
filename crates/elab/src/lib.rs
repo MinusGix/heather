@@ -1468,7 +1468,7 @@ impl application::ImplicitApplicationElab for Elaborator {
     fn resolve_application_obligation(
         &self,
         cx: &Cx,
-        _name: &str,
+        name: &str,
         params: &[ParamMeta],
         slot_param: &[usize],
         meta_doms: &[Type],
@@ -1484,9 +1484,9 @@ impl application::ImplicitApplicationElab for Elaborator {
             let written = params
                 .get(obligation.param)
                 .and_then(|p| p.solver.as_deref());
-            let changed = self.fill_index_from_scope(cx, written, params, slot_param, sols)
+            let changed = self.fill_index_from_scope(cx, name, written, params, slot_param, sols)
                 || self.fill_index_from_designation(
-                    cx, written, params, slot_param, sols, meta_doms, n,
+                    cx, name, written, params, slot_param, sols, meta_doms, n,
                     obligation.applied.as_ref(), span,
                 );
             return Ok(if changed {

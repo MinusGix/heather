@@ -191,7 +191,7 @@ loader/replay path in `crates/cli/tests/semantic.rs`.
 
 ### 3.5 The common prelude (2026-11-03)
 
-`lib/std/common.hthr` is a facade over the core modules (`logic`, `bool`,
+`lib/std/core/common.hthr` is a facade over the core modules (`logic`, `bool`,
 `option`, `list`, `pair`, `algebra`) that every module **later than it in a
 run's order** imports implicitly (`heather_elab::COMMON_MODULE`,
 `issues/std-prelude-facade.md`). The loader reads the prelude's closure
@@ -215,6 +215,16 @@ What an importer gets:
   instance's global (`list::List::CollectionLiteral`) and a designated
   operation (`bool::Bool::and`) are qualified names resolved at the use
   site.
+- **The ordered-field tower, qualified only** (2026-11-10): the prelude
+  also has a plain `import ordered_field;`, which exports nothing bare but
+  puts `ordered_field`, `semiring`, `order`, `int`, `omega`, `morphism` and
+  `mono_laws` in its closure. The arithmetic tactics ask for their carrier
+  classes by those qualified names (`ordered_field::OrderedField`,
+  `semiring::CommRingOfInt`), so `import rat; import linarith;` is enough
+  for `linarith` and `ring` at `Rat`
+  (`issues/linarith-rat-without-ordered-field-import.md`). Those seven
+  modules are now inside the prelude's closure and so no longer see it;
+  each imports what it uses directly.
 
 Why a curated facade and not "all of std sees all of std": measured on the
 cloud box, the prelude's closure is already in almost every module's, so

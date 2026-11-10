@@ -11,7 +11,6 @@ pub const READ_LOOP: &[(&str, &str)] = &[
     ("function_ir_loop", include_str!("../../../../lib/native/function_ir/function_ir_loop.hthr")),
     ("x86_64_fetch", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetch.hthr")),
     ("bitvec_nat", include_str!("../../../../lib/std/bitvec/bitvec_nat.hthr")),
-    ("omega", include_str!("../../../../lib/std/tactic/omega.hthr")),
     ("bitvec_signed", include_str!("../../../../lib/std/bitvec/bitvec_signed.hthr")),
     ("transition", include_str!("../../../../lib/std/relation/transition.hthr")),
     ("x86_64_fetched_code", include_str!("../../../../lib/std/arch/x86_64/x86_64_fetched_code.hthr")),

@@ -7,6 +7,16 @@
 // `le_trans`) stay out of every module's bare namespace; a module that wants
 // them imports their module as before. The modules exported from are inside
 // this facade's closure and so never import it themselves.
+// The ordered-field tower, imported and not exported: no bare name of it
+// enters an importer's namespace, but its modules are in the prelude's
+// closure and so visible qualified-only everywhere (`names::common_reaches`).
+// That is what the arithmetic tactics' own spellings need at a carrier whose
+// instances a module reaches without naming their classes' modules
+// (`semiring::CommRingOfInt`, `ordered_field::OrderedField`, the certificate
+// lemmas they cite): `import rat; import linarith;` is enough for `linarith`
+// at `Rat` (issues/linarith-rat-without-ordered-field-import.md).
+import ordered_field;
+
 export logic::{Not, And, Or, Iff, Exists, DecEq};
 export bool::{Bool, Decide, decide, decide_bit};
 export option::{Option};
