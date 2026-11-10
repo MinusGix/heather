@@ -1,0 +1,263 @@
+// Probes for programming in continuous time (docs/continuous-time-survey.md):
+// a program written against a time step `dt`, run exactly at the rationals,
+// its limit as `dt → 0` taken with a modulus, and a discrete answer improved
+// by what the limit says about the error. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import list; import relation; import relation_props; import order; import algebra_rel;
+import semiring; import ordered_field; import field_division; import big_operator; import ring; import omega; import linarith;
+import rat; import real_fn; import sequence;
+
+// ---------------------------------------------------------------------------
+// 1. A deterministic `dt` program: `t' = 1`, `x' = 2t`.
+//
+//     t, x := 0; while (t < T) { x += 2t·dt; t += dt }
+//
+// `run` is the loop with its counter explicit, `clock` the loop's `t`.
+
+fn fall_run(dt, t, x: Rat, n: Nat) → Rat {
+    match n { Zero => x, Succ(m) => fall_run(dt, t + dt, x + (2 * t) * dt, m) }
+}
+
+fn fall_clock(dt, t: Rat, n: Nat) → Rat {
+    match n { Zero => t, Succ(m) => fall_clock(dt, t + dt, m) }
+}
+
+// The same program written as a loop over local state. It is an ordinary
+// function of its step, and it runs. The loop counts steps where the paper
+// tests `t < T`: a `while` needs its `decreases`, and a clock guard's measure
+// is the number of steps left, which exists because `dt` is positive.
+fn fall_loop(dt: Rat, n: Nat) → Rat {
+    let mut t = Rat::ofInt(0);
+    let mut x = Rat::ofInt(0);
+    let mut k = n;
+    while 1 <= k decreases k {
+        x := x + (2 * t) * dt;
+        t := t + dt;
+        k := k - 1
+    }
+    x
+}
+theorem fall_loop_quarter(): fall_loop(Rat::inv_succ(3), 4) ≈ Rat(3, 4) { Rat::same_of_bool(fall_loop(Rat::inv_succ(3), 4), Rat(3, 4), refl) }
+
+// The program runs: four steps of a quarter, and eight of an eighth.
+theorem fall_run_quarter(): fall_run(Rat::inv_succ(3), 0, 0, 4) ≈ Rat(3, 4) { Rat::same_of_bool(fall_run(Rat::inv_succ(3), 0, 0, 4), Rat(3, 4), refl) }
+theorem fall_run_eighth(): fall_run(Rat::inv_succ(7), 0, 0, 8) ≈ Rat(7, 8) { Rat::same_of_bool(fall_run(Rat::inv_succ(7), 0, 0, 8), Rat(7, 8), refl) }
+
+// The loop invariant, for every `dt`: `x - t² + t·dt` is conserved. This is
+// the discrete Hoare triple, and `dt` is a plain parameter of it.
+theorem fall_invariant(dt, t, x: Rat, n: Nat):
+    fall_run(dt, t, x, n) + fall_clock(dt, t, n) * dt + -(fall_clock(dt, t, n) * fall_clock(dt, t, n)) ≈ x + t * dt + -(t * t)
+{
+    match n {
+        Zero => Rat::same_refl(x + t * dt + -(t * t)),
+        Succ(m) => {
+            let ih = fall_invariant(dt, t + dt, x + (2 * t) * dt, m);
+            let r: ((x + (2 * t) * dt) + (t + dt) * dt + -((t + dt) * (t + dt)) ≈ x + t * dt + -(t * t)) = ring;
+            Rat::same_trans(ih, r)
+        },
+    }
+}
+
+theorem fall_clock_spec(dt, t: Rat, n: Nat): fall_clock(dt, t, n) ≈ t + Rat::ofInt(OfNat(n)) * dt {
+    match n {
+        Zero => { let r: (t ≈ t + Rat::ofInt(OfNat(Zero)) * dt) = ring; r },
+        Succ(m) => {
+            let ih = fall_clock_spec(dt, t + dt, m);
+            let c: (Rat::ofInt(OfNat(Succ(m))) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
+            let r: ((t + dt) + Rat::ofInt(OfNat(m)) * dt ≈ t + Rat::ofInt(OfNat(Succ(m))) * dt) = ring(c);
+            Rat::same_trans(ih, r)
+        },
+    }
+}
+
+// The program at resolution `k`: `k + 1` steps of `T/(k + 1)`.
+fn fall_at(T: Rat, k: Nat) → Rat { fall_run(T * Rat::inv_succ(k), 0, 0, Succ(k)) }
+
+// Its exact value: the continuous answer `T²` less an error linear in `dt`.
+theorem fall_at_spec(T: Rat, k: Nat): fall_at(T, k) ≈ T * T + -((T * T) * Rat::inv_succ(k)) {
+    let dt = T * Rat::inv_succ(k);
+    let inv = fall_invariant(dt, 0, 0, Succ(k));
+    let c = fall_clock_spec(dt, 0, Succ(k));
+    let s: (Rat::ofInt(OfNat(Succ(k))) ≈ Rat::ofInt(OfNat(k)) + 1) = omega;
+    let u: (Rat::inv_succ(k) * (Rat::ofInt(OfNat(k)) + 1) ≈ 1) = Rat::inv_succ_cancel(k);
+    let ct: (fall_clock(dt, 0, Succ(k)) ≈ T) = ring(c, s, u);
+    let d: (fall_at(T, k) ≈ fall_run(dt, 0, 0, Succ(k))) = Rat::same_refl(fall_at(T, k));
+    ring(inv, ct, d, u)
+}
+
+// ---------------------------------------------------------------------------
+// 2. Into continuous time: the limit as `dt → 0`, with its modulus.
+
+theorem dt_step_vanishes(): Converges(λ (k: Nat) => Rat::inv_succ(k), Rat::ofInt(0)) {
+    λ e pe => {
+        let p: Rat::Lt(0, e) = pe;
+        let a = Rat::archimedean_inv(e, p);
+        Exists(a.witness, λ n from => {
+            let m: (Rat::inv_succ(n) <= Rat::inv_succ(a.witness)) = Rat::inv_succ_antitone(a.witness, n, from);
+            let q: (0 < Rat::inv_succ(n)) = Rat::inv_succ_pos(n);
+            let w: (Rat::inv_succ(a.witness) < e) = a.proof;
+            let lo: (-e <= Rat::inv_succ(n) + -Rat::ofInt(0)) = linarith(q, p);
+            let hi: (Rat::inv_succ(n) + -Rat::ofInt(0) <= e) = linarith(m, w);
+            LocatedAddGroup::abs_le_intro(Rat::inv_succ(n) + -Rat::ofInt(0), e, lo, hi)
+        })
+    }
+}
+
+// A program whose error is linear in the step converges, and the proof is
+// the modulus: how fine a step buys a wanted accuracy.
+theorem dt_linear_error(xs: Nat → Rat, l, c: Rat, h: (k: Nat) → xs(k) ≈ l + c * Rat::inv_succ(k)): Converges(xs, l) {
+    let s: Converges(λ (k: Nat) => c * Rat::inv_succ(k), c * 0) = Converges::scale(c, λ (k: Nat) => Rat::inv_succ(k), Rat::ofInt(0), dt_step_vanishes());
+    let a: Converges(λ (k: Nat) => l + c * Rat::inv_succ(k), l + c * 0) =
+        Converges::add(λ (k: Nat) => l, λ (k: Nat) => c * Rat::inv_succ(k), l, c * 0, Converges::const(l), s);
+    let z: (l + c * 0 ≈ l) = ring;
+    Converges::respects(λ (k: Nat) => l + c * Rat::inv_succ(k), xs, l + c * 0, l, λ n => Rat::same_sym(h(n)), z, a)
+}
+
+// The continuous meaning of the falling program is `T²`.
+theorem fall_continuous(T: Rat): Converges(λ (k: Nat) => fall_at(T, k), T * T) {
+    dt_linear_error(λ (k: Nat) => fall_at(T, k), T * T, -(T * T), λ k => {
+        let a = fall_at_spec(T, k);
+        let r: (T * T + -((T * T) * Rat::inv_succ(k)) ≈ T * T + -(T * T) * Rat::inv_succ(k)) = ring;
+        Rat::same_trans(a, r)
+    })
+}
+
+// Transfer: a closed bound proved of the program at every step holds of its
+// continuous meaning.
+theorem dt_transfer_le(xs: Nat → Rat, l, b: Rat, h: Converges(xs, l), inv: (k: Nat) → xs(k) <= b): l <= b {
+    Converges::le(xs, λ (k: Nat) => b, l, b, h, Converges::const(b), inv)
+}
+
+// ---------------------------------------------------------------------------
+// 3. Back out: the limit says the error is `-T²·dt`, so two coarse runs
+// cancel it. Richardson's combination of the program at `dt` and `dt/2` is
+// the continuous answer exactly, at every resolution.
+
+theorem fall_richardson(T: Rat, k: Nat): 2 * fall_at(T, k + k + 1) + -fall_at(T, k) ≈ T * T {
+    let a = fall_at_spec(T, k + k + 1);
+    let b = fall_at_spec(T, k);
+    let half: (Rat::inv_succ(k + k + 1) + Rat::inv_succ(k + k + 1) ≈ Rat::inv_succ(k)) = Rat::inv_succ_half(k);
+    ring(a, b, half)
+}
+
+// Two steps and four steps, each a quarter or more off, give 9 exactly.
+theorem fall_richardson_runs(): 2 * fall_run(Rat(3, 4), 0, 0, 4) + -fall_run(Rat(3, 2), 0, 0, 2) ≈ 9 {
+    Rat::same_of_bool(2 * fall_run(Rat(3, 4), 0, 0, 4) + -fall_run(Rat(3, 2), 0, 0, 2), 9, refl)
+}
+
+// ---------------------------------------------------------------------------
+// 4. A stochastic `dt` program: Brownian motion as a random walk
+// (Imada and Hsu's Program 1, arXiv 2611.12761).
+//
+//     t, x := 0; while (t < T) { t += dt; x += db }      db = ±√dt, evenly
+//
+// `expect(g, h, x, n)` is the expectation of `g` after `n` steps of `±h`
+// from `x`: the program's finitely supported output distribution, read
+// through a test function. `h` is `√dt`, so `dt` is `h·h`.
+
+fn walk_expect(g: Rat → Rat, h, x: Rat, n: Nat) → Rat {
+    match n { Zero => g(x), Succ(m) => (walk_expect(g, h, x + h, m) + walk_expect(g, h, x + -h, m)) * Rat::inv_succ(1) }
+}
+
+// `E[x]` is invariant: the paper's `{E[x] = 0} t += dt; x += db {E[x] = 0}`.
+theorem walk_mean(h, x: Rat, n: Nat): walk_expect(λ (y: Rat) => y, h, x, n) ≈ x {
+    match n {
+        Zero => Rat::same_refl(x),
+        Succ(m) => {
+            let a = walk_mean(h, x + h, m);
+            let b = walk_mean(h, x + -h, m);
+            let u: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
+            let g: ((walk_expect(λ (y: Rat) => y, h, x + h, m) + walk_expect(λ (y: Rat) => y, h, x + -h, m)) * Rat::inv_succ(1)
+                ≈ x) = ring(a, b, u);
+            g
+        },
+    }
+}
+
+// `E[x²] = x₀² + t`, with `t = n·dt`: exact at every step size.
+theorem walk_second(h, x: Rat, n: Nat): walk_expect(λ (y: Rat) => y * y, h, x, n) ≈ x * x + Rat::ofInt(OfNat(n)) * (h * h) {
+    match n {
+        Zero => { let r: (x * x ≈ x * x + Rat::ofInt(OfNat(Zero)) * (h * h)) = ring; r },
+        Succ(m) => {
+            let a = walk_second(h, x + h, m);
+            let b = walk_second(h, x + -h, m);
+            let c: (Rat::ofInt(OfNat(Succ(m))) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
+            let u: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
+            let g: ((walk_expect(λ (y: Rat) => y * y, h, x + h, m) + walk_expect(λ (y: Rat) => y * y, h, x + -h, m)) * Rat::inv_succ(1)
+                ≈ x * x + Rat::ofInt(OfNat(Succ(m))) * (h * h)) = ring(a, b, c, u);
+            g
+        },
+    }
+}
+
+// `E[x⁴] = 3t² - 2t·dt` from the origin: not the Gaussian's `3t²` at any
+// step, and the gap is linear in `dt`.
+theorem walk_fourth(h, x: Rat, n: Nat):
+    walk_expect(λ (y: Rat) => (y * y) * (y * y), h, x, n)
+        ≈ (x * x) * (x * x) + 6 * (x * x) * (Rat::ofInt(OfNat(n)) * (h * h))
+            + (3 * (Rat::ofInt(OfNat(n)) * Rat::ofInt(OfNat(n))) + -(2 * Rat::ofInt(OfNat(n)))) * ((h * h) * (h * h))
+{
+    match n {
+        Zero => {
+            let r: ((x * x) * (x * x) ≈ (x * x) * (x * x) + 6 * (x * x) * (Rat::ofInt(OfNat(Zero)) * (h * h))
+                + (3 * (Rat::ofInt(OfNat(Zero)) * Rat::ofInt(OfNat(Zero))) + -(2 * Rat::ofInt(OfNat(Zero)))) * ((h * h) * (h * h))) = ring;
+            r
+        },
+        Succ(m) => {
+            let a = walk_fourth(h, x + h, m);
+            let b = walk_fourth(h, x + -h, m);
+            let c: (Rat::ofInt(OfNat(Succ(m))) ≈ Rat::ofInt(OfNat(m)) + 1) = omega;
+            let u: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = omega;
+            let g: ((walk_expect(λ (y: Rat) => (y * y) * (y * y), h, x + h, m) + walk_expect(λ (y: Rat) => (y * y) * (y * y), h, x + -h, m)) * Rat::inv_succ(1)
+                ≈ (x * x) * (x * x) + 6 * (x * x) * (Rat::ofInt(OfNat(Succ(m))) * (h * h))
+                + (3 * (Rat::ofInt(OfNat(Succ(m))) * Rat::ofInt(OfNat(Succ(m)))) + -(2 * Rat::ofInt(OfNat(Succ(m))))) * ((h * h) * (h * h))) = ring(a, b, c, u);
+            g
+        },
+    }
+}
+
+// Time 1 at resolution `j`: steps of `h = 1/(j + 1)`, so `dt = h²` and
+// `(j + 1)²` of them.
+fn walk_unit(g: Rat → Rat, j: Nat) → Rat { walk_expect(g, Rat::inv_succ(j), 0, Succ(j) * Succ(j)) }
+
+// It runs: sixteen paths at `dt = 1/4`.
+theorem walk_unit_fourth_runs(): walk_unit(λ (y: Rat) => (y * y) * (y * y), 1) ≈ Rat(5, 2) {
+    Rat::same_of_bool(walk_unit(λ (y: Rat) => (y * y) * (y * y), 1), Rat(5, 2), refl)
+}
+
+theorem walk_unit_clock(j: Nat): Rat::ofInt(OfNat(Succ(j) * Succ(j))) * (Rat::inv_succ(j) * Rat::inv_succ(j)) ≈ 1 {
+    let u: (Rat::inv_succ(j) * (Rat::ofInt(OfNat(j)) + 1) ≈ 1) = Rat::inv_succ_cancel(j);
+    let m: (Rat::ofInt(OfNat(Succ(j) * Succ(j))) ≈ Rat::ofInt(OfNat(Succ(j))) * Rat::ofInt(OfNat(Succ(j)))) =
+        Rat::same_refl(Rat::ofInt(OfNat(Succ(j) * Succ(j))));
+    let s: (Rat::ofInt(OfNat(Succ(j))) ≈ Rat::ofInt(OfNat(j)) + 1) = omega;
+    ring(u, m, s)
+}
+
+// The variance at time 1 is 1 at every resolution, so in the limit.
+theorem walk_unit_variance(j: Nat): walk_unit(λ (y: Rat) => y * y, j) ≈ 1 {
+    let a = walk_second(Rat::inv_succ(j), 0, Succ(j) * Succ(j));
+    let d: (walk_unit(λ (y: Rat) => y * y, j) ≈ walk_expect(λ (y: Rat) => y * y, Rat::inv_succ(j), 0, Succ(j) * Succ(j))) =
+        Rat::same_refl(walk_unit(λ (y: Rat) => y * y, j));
+    ring(d, a, walk_unit_clock(j))
+}
+
+// The fourth moment is `3 - 2·dt`, and its continuous value is 3: the
+// Gaussian's `(4 - 1)!!`.
+theorem walk_unit_fourth(j: Nat): walk_unit(λ (y: Rat) => (y * y) * (y * y), j) ≈ 3 + -2 * (Rat::inv_succ(j) * Rat::inv_succ(j)) {
+    let a = walk_fourth(Rat::inv_succ(j), 0, Succ(j) * Succ(j));
+    let d: (walk_unit(λ (y: Rat) => (y * y) * (y * y), j) ≈ walk_expect(λ (y: Rat) => (y * y) * (y * y), Rat::inv_succ(j), 0, Succ(j) * Succ(j))) =
+        Rat::same_refl(walk_unit(λ (y: Rat) => (y * y) * (y * y), j));
+    ring(d, a, walk_unit_clock(j))
+}
+
+theorem walk_unit_fourth_continuous(): Converges(λ (j: Nat) => walk_unit(λ (y: Rat) => (y * y) * (y * y), j), Rat::ofInt(3)) {
+    let sq: Converges(λ (j: Nat) => Rat::inv_succ(j) * Rat::inv_succ(j), Rat::ofInt(0) * Rat::ofInt(0)) =
+        Converges::mul(λ (j: Nat) => Rat::inv_succ(j), λ (j: Nat) => Rat::inv_succ(j), Rat::ofInt(0), Rat::ofInt(0), dt_step_vanishes(), dt_step_vanishes());
+    let s: Converges(λ (j: Nat) => -2 * (Rat::inv_succ(j) * Rat::inv_succ(j)), -2 * (Rat::ofInt(0) * Rat::ofInt(0))) =
+        Converges::scale(-2, λ (j: Nat) => Rat::inv_succ(j) * Rat::inv_succ(j), Rat::ofInt(0) * Rat::ofInt(0), sq);
+    let a: Converges(λ (j: Nat) => 3 + -2 * (Rat::inv_succ(j) * Rat::inv_succ(j)), Rat::ofInt(3) + -2 * (Rat::ofInt(0) * Rat::ofInt(0))) =
+        Converges::add(λ (j: Nat) => Rat::ofInt(3), λ (j: Nat) => -2 * (Rat::inv_succ(j) * Rat::inv_succ(j)), Rat::ofInt(3), -2 * (Rat::ofInt(0) * Rat::ofInt(0)), Converges::const(Rat::ofInt(3)), s);
+    let z: (Rat::ofInt(3) + -2 * (Rat::ofInt(0) * Rat::ofInt(0)) ≈ Rat::ofInt(3)) = omega;
+    Converges::respects(λ (j: Nat) => 3 + -2 * (Rat::inv_succ(j) * Rat::inv_succ(j)), λ (j: Nat) => walk_unit(λ (y: Rat) => (y * y) * (y * y), j),
+        Rat::ofInt(3) + -2 * (Rat::ofInt(0) * Rat::ofInt(0)), Rat::ofInt(3), λ n => Rat::same_sym(walk_unit_fourth(n)), z, a)
+}
