@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc as Rc;
 
-use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalVar, SealedProof, Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalRef, LocalVar, SealedProof, Term, Type};
 
 use crate::gendefs::{GenDef, SpineCodes, TyCodeFn, WfSlots};
 use crate::metaprograms::MetaDef;
@@ -112,26 +112,35 @@ impl Mover<'_> {
         u32::try_from(p2.checked_sub(1)?.checked_sub(a2)?).ok()
     }
 
+    /// [`Self::index`] for either spelling: a constant is the absolute
+    /// position already, and moves to its counterpart's.
+    fn reference(&mut self, p: usize, p2: usize, r: GlobalRef) -> Option<GlobalRef> {
+        match r {
+            GlobalRef::Var(i) => self.index(p, p2, i).map(GlobalRef::Var),
+            GlobalRef::Const(a) => Some(GlobalRef::Const(u32::try_from(self.abs(a as usize)?).ok()?)),
+        }
+    }
+
     fn ty(&mut self, p: usize, t: &Type) -> Result<Type, RelocationRefusal> {
         let p2 = self.scope(p)?;
-        t.reindex_global(&mut |i| self.index(p, p2, i)).ok_or(NO_COUNTERPART)
+        t.reindex_global(&mut |r| self.reference(p, p2, r)).ok_or(NO_COUNTERPART)
     }
 
     fn tm(&mut self, p: usize, t: &Term) -> Result<Term, RelocationRefusal> {
         let p2 = self.scope(p)?;
-        t.reindex_global(&mut |i| self.index(p, p2, i)).ok_or(NO_COUNTERPART)
+        t.reindex_global(&mut |r| self.reference(p, p2, r)).ok_or(NO_COUNTERPART)
     }
 
     /// A payload of the dependency prefix, scoped at its old position `p`
     /// there: an opened proof.
     fn dependency_tm(&mut self, p: usize, t: &Term) -> Result<Term, RelocationRefusal> {
         let p2 = self.abs(p).ok_or(NO_COUNTERPART)?;
-        t.reindex_global(&mut |i| self.index(p, p2, i)).ok_or(NO_COUNTERPART)
+        t.reindex_global(&mut |r| self.reference(p, p2, r)).ok_or(NO_COUNTERPART)
     }
 
     fn binding(&mut self, p: usize, b: &GlobalBinding) -> Result<GlobalBinding, RelocationRefusal> {
         let p2 = self.scope(p)?;
-        b.reindex_global(&mut |i| self.index(p, p2, i)).ok_or(NO_COUNTERPART)
+        b.reindex_global(&mut |r| self.reference(p, p2, r)).ok_or(NO_COUNTERPART)
     }
 
     fn event(&mut self, e: &DeltaEvent) -> Result<DeltaEvent, RelocationRefusal> {

@@ -237,7 +237,7 @@ fn head<'v>(h: &Head<'v>, o: Outer<'v>) -> Head<'v> {
         Head::Global { var, subst } => Head::Global {
             // A global *variable* is an index into Ψ, so weakening Ψ
             // renumbers it exactly as `shift_global` renumbers the syntax.
-            var: crate::term::GlobalVar(var.0 + o.globals),
+            var: var.shifted(o.globals),
             subst: vsubst(subst, o),
         },
         Head::BoxedGlobalTy(t) => Head::BoxedGlobalTy(ty_syn(t, o)),
@@ -435,7 +435,7 @@ fn neutral<'v>(n: &'v VNeutral<'v>, o: Outer<'v>) -> &'v VNeutral<'v> {
 fn nety<'v>(n: &VNeTy<'v>, o: Outer<'v>) -> VNeTy<'v> {
     match n {
         VNeTy::Global { var, subst } => VNeTy::Global {
-            var: crate::term::GlobalVar(var.0 + o.globals),
+            var: var.shifted(o.globals),
             subst: vsubst(subst, o),
         },
         VNeTy::El { level: l, tm } => VNeTy::El { level: level(l, o), tm: val(tm, o) },

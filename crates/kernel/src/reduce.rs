@@ -123,8 +123,10 @@ pub(crate) struct Sig {
     pub(crate) ty: Option<Rc<Type>>,
 }
 
-/// Rescoped per-Ψ facts about a global binding, memoized by [`GlobalVar`]:
-/// its definition body, and its signature.
+/// Rescoped per-Ψ facts about a global **variable**, memoized by its index:
+/// its definition body, and its signature. A constant has nothing to
+/// rescope (its statement and body are read as stored, `GlobalVar::rescope`)
+/// and never enters.
 ///
 /// Both are `shift_global(v + 1)` of something stored in Ψ, and both are a
 /// function of the index alone — not of the occurrence, not of the δ that
@@ -159,14 +161,30 @@ impl GlobalCache {
         Rc::ptr_eq(&self.psi, psi.bindings.identity_ref())
     }
 
-    fn body_or_insert(&self, v: GlobalVar, build: impl FnOnce() -> Term) -> Rc<Term> {
+    fn body_or_insert(&self, v: u32, build: impl FnOnce() -> Term) -> Rc<Term> {
         let mut slots = self.bodies.borrow_mut();
         slot_or_insert(&mut slots, v, || Rc::new(build()))
     }
 
-    /// The rescoped signature of `v`, built on the first occurrence in this Ψ.
-    /// `build` reads only Ψ, never the cache, so there is no re-entrant borrow.
-    pub(crate) fn sig_or_insert(&self, v: GlobalVar, build: impl FnOnce() -> Sig) -> Rc<Sig> {
+    /// The context and statement of the binding `var` names, read in this
+    /// cache's Ψ, from the binding's own `ctx` and `ty` (`None` for a type
+    /// binding). A variable's are weakened by its index + 1, once per Ψ. A
+    /// constant's are read as stored: the same nodes at every occurrence, in
+    /// every Ψ.
+    pub(crate) fn sig(&self, var: GlobalVar, ctx: &LocalCtx, ty: Option<&Rc<Type>>) -> Rc<Sig> {
+        match var.as_index() {
+            Some(i) => self.sig_or_insert(i, || Sig {
+                ctx: ctx.shift_global(i + 1),
+                ty: ty.map(|ty| Rc::new(ty.shift_global(i + 1))),
+            }),
+            None => Rc::new(Sig { ctx: ctx.clone(), ty: ty.cloned() }),
+        }
+    }
+
+    /// The rescoped signature of the variable at index `v`, built on the
+    /// first occurrence in this Ψ. `build` reads only Ψ, never the cache, so
+    /// there is no re-entrant borrow.
+    fn sig_or_insert(&self, v: u32, build: impl FnOnce() -> Sig) -> Rc<Sig> {
         let mut slots = self.sigs.borrow_mut();
         slot_or_insert(&mut slots, v, || {
             crate::stats::global_sig_rescopes(1);
@@ -177,10 +195,10 @@ impl GlobalCache {
 
 fn slot_or_insert<T>(
     slots: &mut Vec<Option<Rc<T>>>,
-    v: GlobalVar,
+    v: u32,
     build: impl FnOnce() -> Rc<T>,
 ) -> Rc<T> {
-    let i = v.0 as usize;
+    let i = v as usize;
     if slots.len() <= i {
         slots.resize_with(i + 1, || None);
     }
@@ -243,27 +261,30 @@ impl<'a> Defs<'a> {
     pub fn withheld(&self, v: GlobalVar) -> Option<u32> {
         let psi = self.psi?;
         let w = psi.withheld.as_ref()?;
-        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        let i = psi.position(v)?;
         w.arity(i)
     }
 
     /// `v`'s absolute index in this world's Ψ.
     pub(crate) fn absolute(&self, v: GlobalVar) -> Option<usize> {
-        self.psi?.bindings.len().checked_sub(1 + v.0 as usize)
+        self.psi?.position(v)
     }
 
     fn body_of(&self, v: GlobalVar) -> Option<Rc<Term>> {
         let psi = self.psi?;
-        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        let i = psi.position(v)?;
         let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
             return None;
         };
+        // A constant's body is closed in the variables: read as stored, the
+        // same node in every Ψ.
+        let Some(index) = v.as_index() else { return Some(Rc::clone(t)) };
         let rescope = || {
             crate::stats::delta_body_rescopes(1);
-            t.shift_global(v.0 + 1)
+            t.shift_global(index + 1)
         };
         Some(match self.cache {
-            Some(c) => c.body_or_insert(v, rescope),
+            Some(c) => c.body_or_insert(index, rescope),
             None => Rc::new(rescope()),
         })
     }
@@ -283,7 +304,7 @@ impl<'a> Defs<'a> {
     /// [`Defs::body_unshifted`] whatever the interface boundary says.
     pub(crate) fn withheld_body_unshifted(&self, v: GlobalVar) -> Option<&'a Rc<Term>> {
         let psi = self.psi?;
-        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        let i = psi.position(v)?;
         let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
             return None;
         };
@@ -298,12 +319,12 @@ impl<'a> Defs<'a> {
         // Asked without loading a lazily kept proof: a stuck head is tested
         // far more often than it is opened.
         let Some(psi) = self.psi else { return false };
-        psi.bindings.len().checked_sub(1 + v.0 as usize).is_some_and(|i| psi.sealed_kept(i).is_some())
+        psi.position(v).is_some_and(|i| psi.sealed_kept(i).is_some())
     }
 
     fn sealed_at(&self, v: GlobalVar) -> Option<(usize, &'a Rc<Term>)> {
         let psi = self.psi?;
-        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        let i = psi.position(v)?;
         Some((i, psi.sealed_proof(i)?))
     }
 
@@ -315,13 +336,14 @@ impl<'a> Defs<'a> {
     pub(crate) fn sealed_body(&self, v: GlobalVar) -> Option<Rc<Term>> {
         let (i, t) = self.sealed_at(v)?;
         crate::unseal::note(i);
+        let Some(index) = v.as_index() else { return Some(Rc::clone(t)) };
         let rescope = || {
             crate::stats::delta_body_rescopes(1);
-            t.shift_global(v.0 + 1)
+            t.shift_global(index + 1)
         };
         // A sealed binding has no body, so the slot is free for its proof.
         Some(match self.cache {
-            Some(c) => c.body_or_insert(v, rescope),
+            Some(c) => c.body_or_insert(index, rescope),
             None => Rc::new(rescope()),
         })
     }
@@ -350,7 +372,7 @@ impl<'a> Defs<'a> {
     /// binding is looked up by index, as the body is.
     pub(crate) fn fits(&self, v: GlobalVar, terms: usize) -> bool {
         let Some(psi) = self.psi else { return false };
-        let Some(i) = psi.bindings.len().checked_sub(1 + v.0 as usize) else {
+        let Some(i) = psi.position(v) else {
             return false;
         };
         matches!(psi.bindings.get(i), Some(GlobalBinding::Tm { ctx, .. }) if ctx.entries.len() == terms)
@@ -363,7 +385,7 @@ impl<'a> Defs<'a> {
             return false;
         }
         let Some(psi) = self.psi else { return false };
-        let Some(i) = psi.bindings.len().checked_sub(1 + v.0 as usize) else {
+        let Some(i) = psi.position(v) else {
             return false;
         };
         matches!(psi.bindings.get(i), Some(GlobalBinding::Tm { body: Some(_), .. }))

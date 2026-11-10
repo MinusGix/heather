@@ -1468,7 +1468,7 @@ fn stream5_definitions_and_delta_payloads() {
         ];
         for (i, payload) in payloads.iter().enumerate() {
             let u = Rc::new(Term::GlobalTm {
-                var: GlobalVar(0),
+                var: GlobalVar::index(0),
                 subst: LocalSubst {
                     tail: SubstTail::Empty,
                     terms: vec![Rc::clone(payload)],
@@ -1566,7 +1566,7 @@ fn a_withheld_call_at_a_lazily_stuck_closed_argument_is_glued() {
     let nat = || Rc::new(Type::Nat);
     let global = |v: u32| {
         Rc::new(Term::GlobalTm {
-            var: GlobalVar(v),
+            var: GlobalVar::index(v),
             subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] },
         })
     };
@@ -1636,7 +1636,7 @@ fn a_failed_thunk_is_not_poisoned() {
     //     the definition's body rather than on a sub-term.
     let (dpsi, _) = defs_psi(Rc::clone(&big));
     let u = Rc::new(Term::GlobalTm {
-        var: GlobalVar(0),
+        var: GlobalVar::index(0),
         subst: LocalSubst {
             tail: SubstTail::Empty,
             terms: vec![Rc::new(Term::Zero)],
@@ -1810,7 +1810,7 @@ fn chain_delta_subst(arg: Rc<Term>) -> LocalSubst {
 }
 
 fn chain_ref(var: u32, arg: Rc<Term>) -> Rc<Term> {
-    Rc::new(Term::GlobalTm { var: GlobalVar(var), subst: chain_delta_subst(arg) })
+    Rc::new(Term::GlobalTm { var: GlobalVar::index(var), subst: chain_delta_subst(arg) })
 }
 
 /// `Ψ = (u₀ := su x, u₁ := su² (u₀^δ), u₂ := box …, u₃ := letbox …, …)`:

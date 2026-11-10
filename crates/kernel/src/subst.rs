@@ -103,6 +103,17 @@
 //! the test suite (300-seed substitution laws included) instead of silently
 //! producing a wrong term in release.
 //!
+//! The **global** operations skip on the same terms
+//! (`issues/psi-references-by-level.md`). `ShiftGlobal` and `SubstGlobal`
+//! act on free global *variables* and nothing else, a constant being named
+//! from the start of Ψ, so a subtree with no free variable at or past the
+//! operation's depth is its own image. That bound is memoized like the local
+//! one, in a table of its own, but it is not a second copy of the dep table:
+//! it is computed by this file's generic walk under a mapper that only looks
+//! ([`GlobalBound`]). What it prunes is nearly everything those two
+//! operations are applied to outside meta-level code, since a committed
+//! statement or body mentions no variable at all.
+//!
 //! ## Keeping a shared DAG shared
 //!
 //! A subterm reachable along two paths (a `let` alias's value used twice,
@@ -147,7 +158,7 @@ use crate::bounds;
 use crate::value::PtrMap;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
+    Branches, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalRef, GlobalVar, IWfSig, LocalCtx, MSig, LocalSubst, LocalVar, Motives,
     SubstTail, Term, Type,
 };
 
@@ -323,6 +334,11 @@ trait Mapper {
     /// node count is the claim §Keeping a shared DAG shared makes.
     const COUNT_NODES: Option<fn(u64)> = None;
 
+    /// Whether a skip this mapper takes ([`Self::skip_ty`], [`Self::skip_tm`])
+    /// claims the walk would change nothing, which debug builds then verify
+    /// by walking. Every mapper that builds a result says yes.
+    const VERIFY_SKIPS: bool = true;
+
     /// Count of *effective* changes this mapper has made — see
     /// §Sharing unchanged subtrees. Every hook below that returns something
     /// other than what it was given must [`Self::note`] it.
@@ -386,9 +402,10 @@ trait Mapper {
     /// Whether this subtree provably cannot be changed by this mapper at
     /// these depths, decided in O(1) from cached per-node metadata
     /// (see §Skipping closed subtrees). `false` — the default — means
-    /// "walk it and find out", never "changed". Only the local-namespace
-    /// operations opt in; every skip taken is re-verified against the real
-    /// traversal in debug builds ([`sub_ty`]/[`sub_tm`]).
+    /// "walk it and find out", never "changed". The local-namespace
+    /// operations and the two global ones that act on variables alone opt
+    /// in; every skip taken is re-verified against the real traversal in
+    /// debug builds ([`sub_ty`]/[`sub_tm`]).
     fn skip_ty(&mut self, _t: &Rc<Type>, _at: Depths) -> bool {
         false
     }
@@ -449,7 +466,7 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
         // counter — at the level `checks` sets, because the whole cost of
         // the walk being skipped is paid again.
         #[cfg(debug_assertions)]
-        if crate::checks::verify_this_skip() {
+        if M::VERIFY_SKIPS && crate::checks::verify_this_skip() {
             let before = *m.changes();
             let mapped = map_type(t, m, at);
             assert!(
@@ -579,7 +596,7 @@ fn sub_tm_answered<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Option<Rc<
     }
     if m.skip_tm(t, at) {
         #[cfg(debug_assertions)]
-        if crate::checks::verify_this_skip() {
+        if M::VERIFY_SKIPS && crate::checks::verify_this_skip() {
             let before = *m.changes();
             let mapped = map_term(t, m, at);
             assert!(
@@ -1535,11 +1552,15 @@ struct ShiftGlobal {
 
 impl ShiftGlobal {
     fn var(&mut self, v: GlobalVar, at: Depths) -> GlobalVar {
-        if v.0 < at.global {
-            v
-        } else {
-            self.note();
-            GlobalVar(v.0 + self.by)
+        match v.as_index() {
+            // `by` is nonzero here, so a free variable is always renumbered.
+            Some(i) if i >= at.global => {
+                self.note();
+                GlobalVar::index(i + self.by)
+            }
+            // Bound by a binder passed under, or a constant: a constant is
+            // named from the start of Ψ, which no weakening moves.
+            _ => v,
         }
     }
 }
@@ -1555,6 +1576,16 @@ impl Mapper for ShiftGlobal {
 
     fn memo(&mut self) -> Option<&mut NodeMemo> {
         Some(&mut self.memo)
+    }
+
+    // A weakening moves free variables and nothing else: a subtree with
+    // none at or past the cutoff is its own image (`bounds.rs`, §The
+    // global namespace).
+    fn skip_ty(&mut self, t: &Rc<Type>, at: Depths) -> bool {
+        bounds::skip_global_type(t, at.global)
+    }
+    fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
+        bounds::skip_global_term(t, at.global)
     }
 
     fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
@@ -1592,10 +1623,14 @@ impl Mapper for ShiftGlobal {
 /// already subtracted; `None` from it marks the result unusable rather than
 /// guessing, and the whole operation returns `None`.
 ///
+/// A constant is given to the map as it is, and the map may answer in either
+/// spelling for either: that is how a variable of the world a term was
+/// elaborated in becomes a constant of the world it is committed to.
+///
 /// Not used by the kernel's own judgements. Its output is untrusted like any
 /// other elaborator product, and is checked before it reaches Ψ.
 struct ReindexGlobal<'a> {
-    map: &'a mut dyn FnMut(u32) -> Option<u32>,
+    map: &'a mut dyn FnMut(GlobalRef) -> Option<GlobalRef>,
     failed: bool,
     changes: u64,
     /// Shared nodes are moved once, as `shift_global` does: a moved module
@@ -1608,12 +1643,17 @@ struct ReindexGlobal<'a> {
 
 impl ReindexGlobal<'_> {
     fn var(&mut self, v: GlobalVar, at: Depths) -> GlobalVar {
-        if v.0 < at.global {
-            return v;
-        }
-        match (self.map)(v.0 - at.global) {
-            Some(free) => {
-                let moved = GlobalVar(free + at.global);
+        let free = match v.view() {
+            GlobalRef::Var(i) if i < at.global => return v,
+            GlobalRef::Var(i) => GlobalRef::Var(i - at.global),
+            c @ GlobalRef::Const(_) => c,
+        };
+        match (self.map)(free) {
+            Some(to) => {
+                let moved = match to {
+                    GlobalRef::Var(free) => GlobalVar::index(free + at.global),
+                    GlobalRef::Const(p) => GlobalVar::constant(p),
+                };
                 if moved != v {
                     self.note();
                 }
@@ -1669,7 +1709,7 @@ impl Mapper for ReindexGlobal<'_> {
 impl GlobalBinding {
     /// [`Type::reindex_global`] over a whole binding: its context, statement
     /// and body share one global scope (the binding's prefix of Ψ).
-    pub fn reindex_global(&self, map: &mut dyn FnMut(u32) -> Option<u32>) -> Option<GlobalBinding> {
+    pub fn reindex_global(&self, map: &mut dyn FnMut(GlobalRef) -> Option<GlobalRef>) -> Option<GlobalBinding> {
         let mut m = ReindexGlobal { map, failed: false, changes: 0, memo: NodeMemo::default() };
         let at = Depths::default();
         let out = match self {
@@ -2092,7 +2132,9 @@ struct SubstGlobal<'a> {
 }
 
 enum Resolved<'a> {
-    /// Bound by a binder passed under during traversal.
+    /// Bound by a binder passed under during traversal, or a constant: σ
+    /// instantiates variables, and a constant is named from the start of Ψ,
+    /// below anything σ replaces or renumbers.
     Bound,
     /// Substituted: payload (scoped in the source, at depth zero).
     Payload(&'a GlobalEntry),
@@ -2103,13 +2145,14 @@ enum Resolved<'a> {
 impl<'a> SubstGlobal<'a> {
     fn resolve(&self, v: GlobalVar, at: Depths) -> Resolved<'a> {
         let n = self.sigma.entries.len() as u32;
-        if v.0 < at.global {
+        let Some(i) = v.as_index() else { return Resolved::Bound };
+        if i < at.global {
             Resolved::Bound
-        } else if v.0 - at.global < n {
-            let rel = (v.0 - at.global) as usize;
+        } else if i - at.global < n {
+            let rel = (i - at.global) as usize;
             Resolved::Payload(&self.sigma.entries[n as usize - 1 - rel])
         } else {
-            Resolved::Renumber(GlobalVar(v.0 - n))
+            Resolved::Renumber(GlobalVar::index(i - n))
         }
     }
 
@@ -2118,7 +2161,7 @@ impl<'a> SubstGlobal<'a> {
     fn ctx_payload_shape(c: &LocalCtx, at: Depths) -> (CtxBase, u32) {
         let base = match c.base {
             CtxBase::Nil => CtxBase::Nil,
-            CtxBase::Var(g) => CtxBase::Var(GlobalVar(g.0 + at.global)),
+            CtxBase::Var(g) => CtxBase::Var(g.shifted(at.global)),
         };
         (base, c.entries.len() as u32)
     }
@@ -2134,6 +2177,15 @@ impl Mapper for SubstGlobal<'_> {
 
     fn memo(&mut self) -> Option<&mut NodeMemo> {
         Some(&mut self.memo)
+    }
+
+    // σ replaces the innermost free variables and renumbers the rest: a
+    // subtree with no free variable is its own image.
+    fn skip_ty(&mut self, t: &Rc<Type>, at: Depths) -> bool {
+        bounds::skip_global_type(t, at.global)
+    }
+    fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
+        bounds::skip_global_term(t, at.global)
     }
 
     fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
@@ -2325,7 +2377,11 @@ macro_rules! ops {
 
             /// Weaken the global context by `by` bindings between existing
             /// binders: the innermost `cutoff` bindings stay fixed. See
-            /// [`Self::shift_univ_above`].
+            /// [`Self::shift_univ_above`]. The new bindings are variables,
+            /// so they go in among the variables: the innermost `cutoff`
+            /// bindings must all be variables, as every binder's are. (Among
+            /// the constants there is nothing to insert: a signature grows
+            /// at its end, and no reference moves when it does.)
             pub fn shift_global_above(&self, by: u32, cutoff: u32) -> $ty {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
@@ -2336,7 +2392,7 @@ macro_rules! ops {
             /// Rename every free global variable through `map`, which sees
             /// and returns indices counted from outside the term; `None` when
             /// the map refused one. See [`ReindexGlobal`].
-            pub fn reindex_global(&self, map: &mut dyn FnMut(u32) -> Option<u32>) -> Option<$ty> {
+            pub fn reindex_global(&self, map: &mut dyn FnMut(GlobalRef) -> Option<GlobalRef>) -> Option<$ty> {
                 let mut m = ReindexGlobal { map, failed: false, changes: 0, memo: NodeMemo::default() };
                 let out = $map(self, &mut m, Depths::default());
                 (!m.failed).then_some(out)
@@ -2533,6 +2589,112 @@ impl LocalSubst {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Free global variables, by subtree
+// ---------------------------------------------------------------------------
+
+/// The traversal with a mapper that only looks: it changes nothing and
+/// records `1 +` the largest global variable free in what it walks (`0` for
+/// none), which is what [`ShiftGlobal`] and [`SubstGlobal`] skip on
+/// (`bounds.rs`, §The global namespace). Being the same generic walk those
+/// two are, it crosses the binders they cross and reads the subtrees they
+/// read, by construction.
+///
+/// It walks one node: a child that is a term or a type is asked for through
+/// the memo ([`bounds::global_bound_term`]), which answers from its table or
+/// by running this on the child, and the child's bound is read from outside
+/// the global binders between it and the node.
+struct GlobalBound {
+    bound: u32,
+    changes: u64,
+}
+
+impl GlobalBound {
+    fn see(&mut self, v: GlobalVar, at: Depths) {
+        if let Some(i) = v.as_index() {
+            if i >= at.global {
+                self.bound = self.bound.max(i - at.global + 1);
+            }
+        }
+    }
+}
+
+impl Mapper for GlobalBound {
+    const LOCAL_OP: bool = false;
+    const NAME: &'static str = "free_global_bound";
+    // Its "skips" are memo reads, not claims that a walk would change
+    // nothing: there is nothing to verify by walking again.
+    const VERIFY_SKIPS: bool = false;
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
+
+    fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
+        self.see(var, at);
+        Type::GlobalTy { var, subst }
+    }
+
+    fn global_tm(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Term {
+        self.see(var, at);
+        Term::GlobalTm { var, subst }
+    }
+
+    fn ctx_base(&mut self, base: CtxBase, at: Depths) -> (CtxBase, CtxEntries) {
+        if let CtxBase::Var(g) = base {
+            self.see(g, at);
+        }
+        (base, CtxEntries::empty())
+    }
+
+    fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        if let SubstTail::Wk { ctx_var, .. } = tail {
+            self.see(ctx_var, at);
+        }
+        (tail, Vec::new())
+    }
+
+    fn skip_ty(&mut self, t: &Rc<Type>, at: Depths) -> bool {
+        self.bound = self.bound.max(bounds::global_bound_type(t).saturating_sub(at.global));
+        true
+    }
+
+    fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
+        self.bound = self.bound.max(bounds::global_bound_term(t).saturating_sub(at.global));
+        true
+    }
+}
+
+/// One node's walk for [`bounds::global_bound_term`]; call that instead.
+pub(crate) fn free_global_bound_term(t: &Term) -> u32 {
+    let mut m = GlobalBound { bound: 0, changes: 0 };
+    let _ = map_term(t, &mut m, Depths::default());
+    debug_assert_eq!(m.changes, 0);
+    m.bound
+}
+
+/// One node's walk for [`bounds::global_bound_type`]; call that instead.
+pub(crate) fn free_global_bound_type(t: &Type) -> u32 {
+    let mut m = GlobalBound { bound: 0, changes: 0 };
+    let _ = map_type(t, &mut m, Depths::default());
+    debug_assert_eq!(m.changes, 0);
+    m.bound
+}
+
+/// `1 +` the largest global **variable** free in `t`, `0` when it mentions
+/// none: constants are not variables. A term or type with bound `0` is
+/// closed in Ψ's variables, which is what a committed binding's parts are
+/// ([`crate::term::GlobalCtx::commit`]) and what makes `shift_global` and
+/// `apply_global` the identity on it.
+pub fn global_var_bound_tm(t: &Rc<Term>) -> u32 {
+    bounds::global_bound_term(t)
+}
+
+/// [`global_var_bound_tm`] for a type.
+pub fn global_var_bound_ty(t: &Rc<Type>) -> u32 {
+    bounds::global_bound_type(t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2668,7 +2830,7 @@ mod tests {
         let bound = Type::CtxPi {
             level: Level::Zero,
             body: Rc::new(Type::CodeTy {
-                ctx: LocalCtx::ctx_var(GlobalVar(0)),
+                ctx: LocalCtx::ctx_var(GlobalVar::index(0)),
                 level: Level::Zero,
             }),
         };
@@ -2677,7 +2839,7 @@ mod tests {
         let free = Type::CtxPi {
             level: Level::Zero,
             body: Rc::new(Type::CodeTy {
-                ctx: LocalCtx::ctx_var(GlobalVar(1)),
+                ctx: LocalCtx::ctx_var(GlobalVar::index(1)),
                 level: Level::Zero,
             }),
         };
@@ -2695,9 +2857,9 @@ mod tests {
         // s = Var 0 (innermost of Γ') for u.
         // Expected: δ' = {·³; [Var 2, Var 1]} and result s[δ'] = Var 1.
         let t = Term::GlobalTm {
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: LocalSubst {
-                tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar(1) },
+                tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar::index(1) },
                 terms: vec![],
             },
         };
@@ -2712,9 +2874,9 @@ mod tests {
         // The same, but keeping the substitution un-consumed: a variable
         // payload deeper than Γ' maps through the expanded weakening.
         let t2 = Term::GlobalTm {
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: LocalSubst {
-                tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar(1) },
+                tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar::index(1) },
                 terms: vec![],
             },
         };
@@ -2735,27 +2897,29 @@ mod tests {
         let ty = |bound: u32, free: u32| Type::Pi {
             dom_level: Level::Zero,
             cod_level: Level::Zero,
-            dom: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar(free)), level: Level::Zero }),
+            dom: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar::index(free)), level: Level::Zero }),
             cod: Rc::new(Type::CtxPi {
                 level: Level::Zero,
-                body: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar(bound)), level: Level::Zero }),
+                body: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar::index(bound)), level: Level::Zero }),
             }),
         };
         let t = ty(0, 0);
         let mut seen = Vec::new();
-        let out = t.reindex_global(&mut |i| {
-            seen.push(i);
-            Some(i + 3)
+        let out = t.reindex_global(&mut |r| {
+            r.map_var(|i| {
+                seen.push(i);
+                Some(i + 3)
+            })
         });
         assert_eq!(seen, vec![0], "the bound variable is not the map's");
         assert_eq!(out, Some(ty(0, 3)));
-        // Under the binder the free index is GlobalVar(1), seen as 0.
+        // Under the binder the free index is GlobalVar::index(1), seen as 0.
         let under = |g: u32| Type::CtxPi {
             level: Level::Zero,
-            body: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar(g)), level: Level::Zero }),
+            body: Rc::new(Type::CodeTy { ctx: LocalCtx::ctx_var(GlobalVar::index(g)), level: Level::Zero }),
         };
-        assert_eq!(under(1).reindex_global(&mut |i| Some(i)), Some(under(1)));
-        assert_eq!(under(1).reindex_global(&mut |i| Some(i + 2)), Some(under(3)));
+        assert_eq!(under(1).reindex_global(&mut |r| Some(r)), Some(under(1)));
+        assert_eq!(under(1).reindex_global(&mut |r| r.map_var(|i| Some(i + 2))), Some(under(3)));
         // A refusal anywhere refuses the whole term.
         assert_eq!(t.reindex_global(&mut |_| None), None);
     }
@@ -2765,11 +2929,11 @@ mod tests {
         // u^{wk¹_g}: both the head and the weakening's context variable are
         // free globals.
         let t = |u: u32, g: u32| Term::GlobalTm {
-            var: GlobalVar(u),
-            subst: LocalSubst { tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar(g) }, terms: vec![] },
+            var: GlobalVar::index(u),
+            subst: LocalSubst { tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar::index(g) }, terms: vec![] },
         };
-        assert_eq!(t(0, 1).reindex_global(&mut |i| Some(i * 10)), Some(t(0, 10)));
-        assert_eq!(t(0, 1).reindex_global(&mut |i| (i == 0).then_some(5)), None);
+        assert_eq!(t(0, 1).reindex_global(&mut |r| r.map_var(|i| Some(i * 10))), Some(t(0, 10)));
+        assert_eq!(t(0, 1).reindex_global(&mut |r| r.map_var(|i| (i == 0).then_some(5))), None);
     }
 }
 

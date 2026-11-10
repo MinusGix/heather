@@ -257,7 +257,9 @@ impl ModuleDelta {
 /// the first of them) kept beside their theorems.
 pub(crate) fn extend_sealed(psi: &mut GlobalCtx, bindings: &[GlobalBinding], sealed: &[(usize, Rc<SealedProof>)]) {
     let base = psi.bindings.len();
-    psi.extend(bindings.iter().cloned());
+    for binding in bindings {
+        psi.commit(binding.clone());
+    }
     for (k, proof) in sealed {
         psi.seal_kept(base + k, Rc::clone(proof));
     }
@@ -987,6 +989,23 @@ impl Elaborator {
         }
     }
 
+    /// An item failed under a slice plan. It contributed nothing, where the
+    /// previous delta's item at its place contributed its slice, so nothing
+    /// after it sits where the previous delta has it: a later slice names
+    /// its bindings by their positions in Ψ (its registrations, and every
+    /// reference to an earlier item), and none replays.
+    ///
+    /// Until constants this was left to the kernel: a later slice's
+    /// references were distances from the end of Ψ, so over the shorter
+    /// prefix they named other bindings and the recheck usually refused the
+    /// slice. A slice that mentioned nothing of its own module replayed, and
+    /// registered its names one position off.
+    pub(crate) fn slice_failed(&mut self) {
+        if let Some(plan) = self.pass.slice_plan.as_mut() {
+            plan.exact = false;
+        }
+    }
+
     /// An item was elaborated from source under a slice plan.
     pub(crate) fn slice_elaborated(&mut self) {
         if let Some(plan) = self.pass.slice_plan.as_mut() {
@@ -1221,7 +1240,7 @@ impl Elaborator {
         // computes with an earlier theorem's witness needs its sealed proof
         // in the prefix: with any, take the per-binding loop below.
         if gate.is_none() && inline && sealed.is_empty() {
-            return typing::check_global_ctx_extension(&self.psi, extension, 0, self.policy.fuel)
+            return typing::check_signature_extension(&self.psi, extension, 0, self.policy.fuel)
                 .map_err(ModuleReplayError::Kernel);
         }
         let mut prefix = Rc::clone(&self.psi.0);
@@ -1310,7 +1329,7 @@ impl Elaborator {
             drop(body);
             let at = prefix.bindings.len();
             let psi = crate::stats::make_mut(&mut prefix);
-            psi.push(binding.clone());
+            psi.commit(binding.clone());
             if let Ok(k) = sealed.binary_search_by_key(&index, |(k, _)| *k) {
                 psi.seal_kept(at, Rc::clone(&sealed[k].1));
             }

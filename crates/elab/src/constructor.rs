@@ -878,7 +878,7 @@ impl Elaborator {
         // exactly as a callee's `Π` binders do in `apply_implicit`.
         let to_scratch = (0..n).fold(LocalSubst::id(&cx.gamma), |s, j| {
             s.extended(Rc::new(Term::GlobalTm {
-                var: GlobalVar(j),
+                var: GlobalVar::index(j),
                 subst: LocalSubst::id(&cx.gamma),
             }))
         });

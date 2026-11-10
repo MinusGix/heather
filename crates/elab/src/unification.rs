@@ -365,8 +365,8 @@ impl Guesses<'_> {
 /// arguments the equation does not force ([`Guesses`])?
 fn guess_at(head: &Term, n: u32, pat: &Term, subj: &Term, sols: &[Sol]) -> Option<usize> {
     let Term::GlobalTm { var, .. } = head else { return None };
-    (var.0 < n && matches!(sols[var.0 as usize], Sol::Unsolved) && spine_len(subj) > spine_len(pat))
-        .then_some(var.0 as usize)
+    let slot = var.innermost(n)? as usize;
+    (matches!(sols[slot], Sol::Unsolved) && spine_len(subj) > spine_len(pat)).then_some(slot)
 }
 
 /// The subject `s`, `d` binders past `gamma`, unfolded to its next head
@@ -447,10 +447,12 @@ impl<'a> U<'a> {
         match (pat, subj) {
             (Term::Var(a), Term::Var(b)) => a != b,
             (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) => {
-                a.0 >= n && b.0 >= m && a.0 - n != b.0 - m
+                // Each read below its own side's metas: two committed
+                // bindings, and not the same one.
+                matches!((a.below(n), b.below(m)), (Some(a), Some(b)) if a != b)
             }
-            (Term::Var(_), Term::GlobalTm { var, .. }) => var.0 >= m,
-            (Term::GlobalTm { var, .. }, Term::Var(_)) => var.0 >= n,
+            (Term::Var(_), Term::GlobalTm { var, .. }) => var.innermost(m).is_none(),
+            (Term::GlobalTm { var, .. }, Term::Var(_)) => var.innermost(n).is_none(),
             _ => false,
         }
     }
@@ -535,14 +537,14 @@ pub(super) fn unify_ty(
     // *decoded* `El t` still solves rather than descending into the code.
     if let Type::El { tm, level } = pat
         && let Term::GlobalTm { var, subst } = &**tm
-        && var.0 < n
+        && let Some(slot) = var.innermost(n)
     {
         // Universes do not cumulate: a meta standing for a type at one level
         // is never solved by a type at another
         // (issues/implicit-type-argument-above-its-level.md). Declined, so
         // the call reports the parameter it could not fill.
         if let Some(l) = apparent_level(subj).filter(|l| !l.equiv(level)) {
-            LEVEL_DECLINED.with(|c| c.borrow_mut().push((var.0, level.clone(), l)));
+            LEVEL_DECLINED.with(|c| c.borrow_mut().push((slot, level.clone(), l)));
             return;
         }
         // The Miller-pattern guard (docs/unifier-completeness-design.md §6):
@@ -553,12 +555,12 @@ pub(super) fn unify_ty(
         // and by an instrumented full run, design §6.1); anything else — a
         // non-variable payload, and the today-unreachable permuted or
         // dropping renamings — is declined, which learn-only always permits.
-        if writable(u, var.0 as usize, sols)
+        if writable(u, slot as usize, sols)
             && *subst == embed(u.gamma, d)
             && let Some(s) = u.subject_ty(subj, d)
             && let Some(c) = code::code_of(&s)
         {
-            assign(u, var.0 as usize, c, sols);
+            assign(u, slot as usize, c, sols);
         }
         return;
     }
@@ -826,7 +828,7 @@ fn rigid_head(mut t: &Term) -> bool {
 fn rigid_atom(head: &Term, n: u32) -> bool {
     match head {
         Term::Var(_) => true,
-        Term::GlobalTm { var, .. } => var.0 >= n,
+        Term::GlobalTm { var, .. } => var.innermost(n).is_none(),
         _ => false,
     }
 }
@@ -879,13 +881,13 @@ fn matching_value_spine(u: &U<'_>, pat: &Term, subj: &Term, d: u32) -> bool {
 
 fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
     if let Term::GlobalTm { var, subst } = pat
-        && var.0 < n
+        && let Some(slot) = var.innermost(n)
     {
-        if writable(u, var.0 as usize, sols)
+        if writable(u, slot as usize, sols)
             && *subst == embed(u.gamma, d)
             && let Some(s) = u.subject_tm(subj, d)
         {
-            assign(u, var.0 as usize, s, sols);
+            assign(u, slot as usize, s, sols);
         }
         return;
     }
@@ -930,7 +932,7 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             // fragment. Except for the aligned rigid spine below, they are
             // left to the LGG hook ([`Elaborator::solve_from_expected`]);
             // this guard keeps partial-value guessing out. In the pattern,
-            // committed globals sit at `var.0 >= n`, so `D#fam` family spines
+            // committed globals are not among the innermost `n`, so `D#fam` family spines
             // (the type-arg-inference-through-index walker) are untouched.
             let mut head = pat;
             while let Some((fun, _)) = spelling::app_of(head) {
@@ -942,8 +944,8 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             // Result<Nat, Bool>` would teach `?B := Bool`, the argument the
             // λ fixes (docs/lambda-carrier-instances-design.md §7.3).
             if let Term::GlobalTm { var, .. } = head
-                && var.0 < n
-                && sols[var.0 as usize].solved().is_some_and(|t| matches!(&**t, Term::Lam { .. }))
+                && let Some(slot) = var.innermost(n)
+                && sols[slot as usize].solved().is_some_and(|t| matches!(&**t, Term::Lam { .. }))
             {
                 let p2 = partially_zonked_tm(pat, n, sols, u.gamma);
                 if let Some(r) = spelling::beta_head(&p2) {
@@ -955,8 +957,8 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             // head plus leading arguments
             // (docs/lambda-carrier-instances-design.md §7.3 reader 2).
             if let Term::GlobalTm { var, .. } = head
-                && var.0 < n
-                && sols[var.0 as usize].solved().is_none()
+                && let Some(slot) = var.innermost(n)
+                && sols[slot as usize].solved().is_none()
                 && spine_len(pat) == 1
                 && matches!(spine_head(s), Term::GlobalTm { .. })
                 && let Some(s0) = u.subject_tm(s, d)
@@ -972,8 +974,8 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
             // This is structural, learn-only inference, not higher-order
             // search; the completed application still passes the kernel.
             if let Term::GlobalTm { var, .. } = head
-                && var.0 < n
-                && sols[var.0 as usize].solved().is_none()
+                && let Some(slot) = var.innermost(n)
+                && sols[slot as usize].solved().is_none()
                 && !matching_value_spine(u, pat, subj, d)
             {
                 return;
@@ -1328,7 +1330,7 @@ fn committed_head(mut t: &Term, n: u32) -> bool {
     while let Some((fun, _)) = spelling::app_of(t) {
         t = fun;
     }
-    matches!(t, Term::GlobalTm { var, .. } if var.0 >= n)
+    matches!(t, Term::GlobalTm { var, .. } if var.innermost(n).is_none())
 }
 
 /// Is `t` a meta of this call **applied** to at least one argument —
@@ -1345,7 +1347,7 @@ fn flex_applied_head(mut t: &Term, n: u32) -> bool {
         applied = true;
         t = fun;
     }
-    applied && matches!(t, Term::GlobalTm { var, .. } if var.0 < n)
+    applied && matches!(t, Term::GlobalTm { var, .. } if var.innermost(n).is_some())
 }
 
 /// An applied meta `?M(p̄)` against a rigid application `C(ā)` whose head
@@ -1392,7 +1394,7 @@ fn flex_spine(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [So
 /// is not a meta applied to one argument or `D` declares no slot.
 fn slot_pair(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) -> bool {
     let Some((pfun, parg)) = spelling::app_of(pat) else { return false };
-    if !matches!(&**pfun, Term::GlobalTm { var, .. } if var.0 < n) {
+    if !matches!(&**pfun, Term::GlobalTm { var, .. } if var.innermost(n).is_some()) {
         return false;
     }
     let Some((c, a)) = (u.slot_view)(subj) else { return false };
@@ -1494,7 +1496,7 @@ pub(super) fn partially_zonked(dom: &Type, n: u32, sols: &[Sol], gamma: &LocalCt
     let entries = (0..n).rev().map(|slot| GlobalEntry::Tm(Rc::new(
         match sols[slot as usize].solved() {
             Some(t) => t.shift_global(n),
-            None => Term::GlobalTm { var: heather_kernel::term::GlobalVar(slot), subst: LocalSubst::id(gamma) },
+            None => Term::GlobalTm { var: heather_kernel::term::GlobalVar::index(slot), subst: LocalSubst::id(gamma) },
         }
     ))).collect();
     // The substitution consumes n slots, so first weaken the identity region
@@ -1508,7 +1510,7 @@ fn partially_zonked_tm(t: &Term, n: u32, sols: &[Sol], gamma: &LocalCtx) -> Term
     let entries = (0..n).rev().map(|slot| GlobalEntry::Tm(Rc::new(
         match sols[slot as usize].solved() {
             Some(t) => t.shift_global(n),
-            None => Term::GlobalTm { var: heather_kernel::term::GlobalVar(slot), subst: LocalSubst::id(gamma) },
+            None => Term::GlobalTm { var: heather_kernel::term::GlobalVar::index(slot), subst: LocalSubst::id(gamma) },
         }
     ))).collect();
     t.shift_global_above(n, n).apply_global(&GlobalSubst { entries })
@@ -1633,7 +1635,7 @@ mod tests {
         Type::El {
             level: Level::Zero,
             tm: Rc::new(Term::GlobalTm {
-                var: GlobalVar(0),
+                var: GlobalVar::index(0),
                 subst: embed(gamma, 0),
             }),
         }
@@ -1667,7 +1669,7 @@ mod tests {
         let gamma = LocalCtx::nil();
         let global = Term::GlobalTm {
             // Zero is a committed declaration in the subject, not meta 0.
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: embed(&gamma, 0),
         };
         let Type::El { tm, .. } = meta(&gamma) else {
@@ -1694,7 +1696,7 @@ mod tests {
     #[test]
     fn a_guess_waits_while_postponed_and_is_recorded_when_taken() {
         let gamma = LocalCtx::nil();
-        let global = Term::GlobalTm { var: GlobalVar(0), subst: embed(&gamma, 0) };
+        let global = Term::GlobalTm { var: GlobalVar::index(0), subst: embed(&gamma, 0) };
         let Type::El { tm, .. } = meta(&gamma) else {
             unreachable!()
         };
@@ -1746,7 +1748,7 @@ mod tests {
         assert!(!clashes(&Term::Succ(Rc::clone(&hole)), &one));
         // Below an application's arguments a difference decides nothing:
         // `g(0)` and `g(1)` may be equal.
-        let g = Term::GlobalTm { var: GlobalVar(1), subst: embed(&gamma, 0) };
+        let g = Term::GlobalTm { var: GlobalVar::index(1), subst: embed(&gamma, 0) };
         let g_at = |a: Term| app(g.clone(), Type::Nat, a);
         assert!(!clashes(&g_at(Term::Zero), &g_at(one.clone())));
         // Two type formers of different kinds.
@@ -1760,7 +1762,7 @@ mod tests {
     fn rigid_spines_of_different_lengths_pair_no_arguments() {
         let gamma = LocalCtx::nil();
         // Pattern global 1 is the subject's committed global 0 (`n = 1`).
-        let committed = |i| Term::GlobalTm { var: GlobalVar(i), subst: embed(&gamma, 0) };
+        let committed = |i| Term::GlobalTm { var: GlobalVar::index(i), subst: embed(&gamma, 0) };
         let Type::El { tm: hole, .. } = meta(&gamma) else {
             unreachable!()
         };
@@ -1803,11 +1805,11 @@ mod tests {
         }
         // A solved outer slot contains a committed global at index zero.
         // Partial substitution must keep it distinct from unsolved slot zero.
-        let code = Term::GlobalTm { var: GlobalVar(0), subst: embed(&gamma, 0) };
+        let code = Term::GlobalTm { var: GlobalVar::index(0), subst: embed(&gamma, 0) };
         let outer = [Sol::Solved(Rc::new(code.clone()))];
         let subject = partially_zonked(&meta(&gamma), 1, &outer, &gamma);
         let Type::El { tm, .. } = &subject else { unreachable!() };
-        assert!(matches!(&**tm, Term::GlobalTm { var: GlobalVar(1), .. }));
+        assert!(matches!(&**tm, Term::GlobalTm { var, .. } if *var == GlobalVar::index(1)));
         let mut u = U::syntactic(&gamma);
         u.subject_metas = Some((1, &outer));
         let mut inner = [Sol::Unsolved];

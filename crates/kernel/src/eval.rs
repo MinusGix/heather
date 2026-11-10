@@ -880,7 +880,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 level: level.clone(),
             },
             Type::GlobalTy { var, subst } => {
-                let var = GlobalVar(var.0 + env.gshift());
+                let var = var.shifted(env.gshift());
                 let subst = self.eval_subst(subst, env)?;
                 VTy::Neutral(VNeTy::Global { var, subst })
             }
@@ -1692,7 +1692,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
             // -- globals: glued neutrals --
             Term::GlobalTm { var, subst } => {
-                let var = GlobalVar(var.0 + env.gshift());
+                let var = var.shifted(env.gshift());
                 let subst = self.eval_subst(subst, env)?;
                 return Ok(Work::Val(self.global_tm(var, subst)));
             }
@@ -2015,7 +2015,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     /// `body[δ]` for the global `var` as a closure: δ's payload values over
     /// the body's own Ψ-prefix (the `global_tm` convention).
     fn glue(&mut self, var: GlobalVar, subst: &VSubst<'v>, body: Rc<Term>) -> &'v TmClo<'v> {
-        let mut denv = Env::at(var.0 + 1);
+        let mut denv = Env::of_binding(var);
         for v in &subst.terms {
             denv = denv.push(self.arena, self.vclo(*v));
         }

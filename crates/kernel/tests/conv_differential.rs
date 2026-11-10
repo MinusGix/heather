@@ -439,7 +439,7 @@ fn numeral(n: u32) -> Rc<Term> {
 
 fn global_at(payload: Rc<Term>) -> Rc<Term> {
     Rc::new(Term::GlobalTm {
-        var: GlobalVar(0),
+        var: GlobalVar::index(0),
         subst: LocalSubst {
             tail: SubstTail::Empty,
             terms: vec![payload],

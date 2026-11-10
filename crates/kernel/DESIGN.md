@@ -1050,6 +1050,83 @@ paper too).
   with no free local variable and no `wk^k_g` is now *closed syntax*: the
   same allocation serves every context, and the bounds summary's one tail
   flag means "a weakening shows", which is rare.
+- Ψ's bindings are named by `GlobalVar`, with one departure from the
+  paper's single index namespace.
+
+  **Constants are addressed from the start of Ψ** (2026-11-10,
+  `issues/psi-references-by-level.md`). The paper has one global context Ψ
+  and names its bindings by de Bruijn index, the distance from its end. This
+  kernel reads Ψ as `Σ; Ψ′`: a **signature** Σ, the first
+  `GlobalCtx::consts` bindings, and the **variables** Ψ′ after it. A
+  reference (`GlobalVar`) has two spellings, and each binding exactly one:
+
+  - a variable of Ψ′ is an index, as in the paper;
+  - a constant of Σ is its position from the start of Ψ.
+
+  With an empty signature this is the paper's syntax verbatim, and that is
+  what every hand-built Ψ and every kernel test is. The rules that change:
+
+  - *Reference.* `Σ; Ψ′ ⊢ c_p^δ` needs `p < |Σ|` and reads binding `p`;
+    `u_i^δ` needs `i < |Ψ′|`. An index that reaches into Σ is refused, so two
+    references read in one Ψ are the same binding exactly when they are
+    equal, and no comparison ever has to resolve a spelling.
+  - *Binders extend Ψ′.* `letbox`, the code recursors' branches, `Λg`, `ΛU`,
+    and outside the kernel the elaborator's goals and metavariables, push
+    variables. Nothing a term binds is ever a constant.
+  - *Σ grows only under no variable* (`GlobalCtx::commit`). So a constant's
+    context, statement and body are checked in Σ alone, and by the reference
+    rule they mention no variable free. This is the formation rule for Σ,
+    and like the well-formedness of Ψ it is a precondition of every
+    judgement, not something a judgement re-derives; `commit` checks it in
+    debug builds.
+
+  What this buys is that the three operations on the global namespace are
+  the identity on constants, by construction and not by a cache:
+
+  - *Weakening*, by variables (`shift_global`) or by further constants (no
+    operation at all): a position from the start does not move when Ψ grows
+    at the end. In particular `Σ; Ψ′ ⊢ J` gives `Σ, c; Ψ′ ⊢ J` with the same
+    syntax, which under indices alone renumbered every reference to Σ in `J`.
+  - *Substitution* (`apply_global`). A σ in instantiation form replaces the
+    innermost variables and renumbers the variables below them. Constants
+    are below every variable and are not renumbered, because nothing between
+    them and the start of Ψ was removed. The β-rules for `letbox` and the
+    recursors are subject-reducing for the reason they were: the body was
+    checked with its bound globals in Ψ′, so by the reference rule no
+    constant in it names one of them.
+  - *Reading a binding.* A variable's statement is scoped in its prefix of Ψ
+    and is weakened by `i + 1` to be read (`u^δ`'s rule). A constant's is
+    closed in the variables, and every constant it mentions is at the same
+    position in every later Ψ: it is read as stored. `reduce::GlobalCache`
+    holds rescoped statements and bodies of variables only.
+
+  The identity is also cheap to recognise on a term that is not a single
+  reference. Both operations act on free variables alone, so they skip a
+  subtree whose largest free global variable is below their depth, a
+  per-node bound memoized as the local one is (`bounds.rs`, §The global
+  namespace). A committed statement or body has bound zero, and so does
+  every type copied out of one, which is most of what an elaborator
+  rescopes and zonks: those walks end at the root.
+
+  *Adequacy.* Erase a derivation here to the paper's by spelling `c_p` as the
+  index `|Ψ| − 1 − p` at each occurrence (the occurrence's own Ψ, binders
+  crossed included). Reference, weakening and substitution above are the
+  paper's rules read through that erasure, so a derivation here erases to one
+  there. Conversely a derivation there, over a Ψ whose first `n` bindings are
+  each well-formed in the bindings before them, is one here with `|Σ| = n`
+  by respelling each index that reaches the first `n` bindings. The erasure
+  is not injective on raw syntax (it forgets where Σ ends), which is why the
+  split is part of the context and not of the term.
+
+  *Why not positions for every binding.* A single "level" namespace also
+  makes closed terms stable under extension, but a bound global then has to
+  be renumbered whenever its term moves under a longer Ψ, every weakening
+  needs the length of the Ψ its argument was scoped in, and the elaborator's
+  worlds (`Σ`, then a declaration's goals, then a `meta fn`'s binders)
+  commit helper definitions to Σ while goals are in scope, which would
+  renumber the goals at each commit. The split is the locally nameless
+  discipline: what a binder in scope introduced is relative to the end, what
+  is declared is absolute.
 - Recursor motives/branches are **fixed-shape structs**, one field per branch,
   each field a term under a documented telescope of binders (the ch. 04 branch
   telescopes) — not a list, so exhaustiveness is structural.

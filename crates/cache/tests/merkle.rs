@@ -6,9 +6,10 @@
 //! is no printed form any more, so those questions do not exist. What survives
 //! is the property they were proxies for, and it is now asked directly:
 //!
-//! - every site that carries a `GlobalVar` is **substituted** — the hash moves
-//!   when the referent's interface hash moves, and does *not* move when only
-//!   the position does;
+//! - every site that carries a `GlobalVar` is **substituted** when it names a
+//!   constant — the hash moves when the referent's interface hash moves, and
+//!   does *not* move when only the position does — and a variable, which is
+//!   bound in the term, is hashed as its index and reads no referent;
 //! - the walk is **fail-closed** on an unresolvable or poisoned reference;
 //! - opacity and a definition's body are part of the interface;
 //! - and the framing is injective on a corpus of near-miss structures,
@@ -39,31 +40,37 @@ fn id_subst() -> LocalSubst {
     LocalSubst { tail: SubstTail::Empty, terms: Vec::new() }
 }
 
-fn global_tm(k: u32) -> Term {
-    Term::GlobalTm { var: GlobalVar(k), subst: id_subst() }
-}
-
-fn global_ty(k: u32) -> Type {
-    Type::GlobalTy { var: GlobalVar(k), subst: id_subst() }
+/// The constant at position `p`: what a reference to a committed binding is.
+fn global_tm(p: u32) -> Term {
+    Term::GlobalTm { var: GlobalVar::constant(p), subst: id_subst() }
 }
 
 /// The four places a `GlobalVar` occurs in `crates/kernel/src/term.rs`, each as
-/// a term mentioning binding `k` and nothing else global.
+/// a term mentioning the constant at position `k` and (the last row's head,
+/// the first binding, apart) nothing else global.
 ///
 /// If a sixth site is ever added to the kernel, the walker's exhaustive
 /// `match` breaks the build first — this list is the *behavioural* half of the
 /// same guarantee, and adding the arm without adding the row here leaves a
 /// site untested.
 fn every_reference_site(k: u32) -> Vec<(&'static str, Term)> {
-    let g = GlobalVar(k);
+    every_site_of(GlobalVar::constant(k))
+}
+
+/// [`every_reference_site`] for any spelling.
+fn every_site_of(g: GlobalVar) -> Vec<(&'static str, Term)> {
+    let (tm, ty) = (
+        Term::GlobalTm { var: g, subst: id_subst() },
+        Type::GlobalTy { var: g, subst: id_subst() },
+    );
     vec![
-        ("Term::GlobalTm", global_tm(k)),
+        ("Term::GlobalTm", tm),
         (
             "Type::GlobalTy",
             Term::Lam {
                 dom_level: Level::Zero,
                 cod_level: Level::Zero,
-                dom: Rc::new(global_ty(k)),
+                dom: Rc::new(ty),
                 body: Rc::new(Term::Var(LocalVar(0))),
             },
         ),
@@ -74,7 +81,7 @@ fn every_reference_site(k: u32) -> Vec<(&'static str, Term)> {
         (
             "SubstTail::Wk",
             Term::GlobalTm {
-                var: GlobalVar(0),
+                var: GlobalVar::constant(0),
                 subst: LocalSubst { tail: SubstTail::Wk { len: 0, ctx_var: g }, terms: Vec::new() },
             },
         ),
@@ -89,21 +96,20 @@ fn every_reference_site(k: u32) -> Vec<(&'static str, Term)> {
 /// this would not move.
 #[test]
 fn every_reference_site_reads_its_referent() {
-    // `u1`/`g1` in a Ψ of length 4 resolves to absolute index 2.
     let base = prefix(4);
     let mut moved = base.clone();
     moved[2] = Some(sha256(b"a different referent entirely"));
 
-    for (what, t) in every_reference_site(1) {
+    for (what, t) in every_reference_site(2) {
         let a = term_hash(&base, 4, &t).expect("resolves");
         let b = term_hash(&moved, 4, &t).expect("resolves");
         assert_ne!(a, b, "{what}: the referent's interface hash is not reaching the walk");
     }
 }
 
-/// And the *position* is not fed: the same term over two Ψ prefixes of
+/// And the *position* is not fed: a reference over two Ψ prefixes of
 /// different lengths, with the referent's hash at the position the reference
-/// resolves to in each, hashes the same.
+/// names in each, hashes the same.
 ///
 /// This is the property the substitution exists for — the kernel telescope is
 /// positional, and a key that kept a Ψ index would die on the first merge that
@@ -122,13 +128,47 @@ fn no_reference_site_reads_its_position() {
         v
     };
 
-    // `GlobalVar(0)` means "the last binding" in both.
-    for (what, t) in every_reference_site(0) {
-        assert_eq!(
-            term_hash(&short, short.len() as u32, &t),
-            term_hash(&long, long.len() as u32, &t),
-            "{what}: hashed differently at two Ψ positions"
-        );
+    // The last binding of each: position 2 of the one, 8 of the other.
+    for ((what, at_short), (_, at_long)) in every_reference_site(2).into_iter().zip(every_reference_site(8)) {
+        let h = term_hash(&short, short.len() as u32, &at_short);
+        assert!(h.is_some(), "{what}: unhashable");
+        assert_eq!(h, term_hash(&long, long.len() as u32, &at_long), "{what}: hashed differently at two Ψ positions");
+    }
+}
+
+/// A variable is bound in the term (a `letbox`'s, a recursor branch's, a
+/// `Λg`'s): it is hashed as its index and reads nothing of Ψ. Before
+/// constants, a bound global was resolved against the prefix like a free
+/// one, so its hash was that of whichever committed binding sat that far from
+/// the end: it moved with an unrelated binding, and two bound globals whose
+/// stand-ins had one interface were one hash.
+#[test]
+fn a_bound_global_is_hashed_as_its_index() {
+    let base = prefix(4);
+    let mut moved = base.clone();
+    for h in moved.iter_mut() {
+        *h = Some(sha256(b"every binding is another"));
+    }
+    for i in [0u32, 1, 9] {
+        for (what, t) in every_site_of(GlobalVar::index(i)) {
+            let h = term_hash(&base, 4, &t);
+            assert!(h.is_some(), "{what}: a bound global at index {i} is hashable whatever Ψ holds");
+            let mut other = moved.clone();
+            // The last row's head is the first binding, a constant.
+            other[0] = base[0];
+            assert_eq!(h, term_hash(&other, 4, &t), "{what}: a bound global read a referent");
+        }
+    }
+    // Two bound globals stay two even when the bindings an index-resolving
+    // walk would have read for them are one.
+    let twins: Vec<Option<Hash>> = vec![Some(sha256(b"twin")); 4];
+    for ((what, a), (_, b)) in every_site_of(GlobalVar::index(0)).into_iter().zip(every_site_of(GlobalVar::index(1))) {
+        assert_ne!(term_hash(&twins, 4, &a), term_hash(&twins, 4, &b), "{what}: two bound globals hashed as one");
+    }
+    // And neither spelling is the other: index `i` and the constant it would
+    // have been resolved to.
+    for ((what, var), (_, konst)) in every_site_of(GlobalVar::index(1)).into_iter().zip(every_reference_site(2)) {
+        assert_ne!(term_hash(&base, 4, &var), term_hash(&base, 4, &konst), "{what}: a variable hashed as a constant");
     }
 }
 
@@ -148,20 +188,21 @@ fn the_same_declaration_at_two_positions_agrees() {
         v
     };
 
-    let binding = || GlobalBinding::Tm {
+    // The declaration mentions the binding before it: position 2, or 8.
+    let binding = |referent: u32| GlobalBinding::Tm {
         ctx: LocalCtx::nil(),
         layer: Layer::Code,
-        ty: Rc::new(Type::El { level: Level::Zero, tm: Rc::new(global_tm(0)) }),
+        ty: Rc::new(Type::El { level: Level::Zero, tm: Rc::new(global_tm(referent)) }),
         level: Level::Zero,
         body: None,
     };
 
     assert_eq!(
-        interface_hash(&short, &binding()),
-        interface_hash(&long, &binding()),
+        interface_hash(&short, &binding(2)),
+        interface_hash(&long, &binding(8)),
         "the same declaration hashed differently at two Ψ positions"
     );
-    assert!(interface_hash(&short, &binding()).is_some());
+    assert!(interface_hash(&short, &binding(2)).is_some());
 }
 
 /// Fail closed: a reference outside the known prefix, or onto a poisoned
@@ -179,11 +220,13 @@ fn an_unresolvable_reference_is_not_hashable() {
     }
 
     let poisoned: Vec<Option<Hash>> = vec![None, Some(sha256(b"fine"))];
-    for (what, t) in every_reference_site(1) {
-        // `GlobalVar(1)` resolves to index 0, which is poisoned.
+    for (what, t) in every_reference_site(0) {
         assert!(term_hash(&poisoned, 2, &t).is_none(), "{what}: poison did not propagate");
     }
-    assert!(term_hash(&poisoned, 2, &global_tm(0)).is_some(), "and only propagates");
+    assert!(term_hash(&poisoned, 2, &global_tm(1)).is_some(), "and only propagates");
+    // The length the term is scoped at bounds its constants, whatever the
+    // prefix holds past it.
+    assert!(term_hash(&p, 1, &global_tm(1)).is_none(), "a constant past the scope produced a hash");
 }
 
 /// A theorem's interface must not depend on its proof, and a `fn`'s must
@@ -495,11 +538,14 @@ fn distinct_structures_hash_distinctly() {
         ("UApp [0,0]", Term::UApp { fun: zero(), levels: vec![l0.clone(), l0.clone()] }),
         ("UApp [1]", Term::UApp { fun: zero(), levels: vec![l1.clone()] }),
         // Substitution term lists, same question one sort down.
-        ("u0^{}", Term::GlobalTm { var: GlobalVar(0), subst: subst_with(vec![]) }),
-        ("u0^{0}", Term::GlobalTm { var: GlobalVar(0), subst: subst_with(vec![zero()]) }),
+        ("c0^{}", global_tm(0)),
+        ("c1^{}", global_tm(1)),
+        ("u1^{}", Term::GlobalTm { var: GlobalVar::index(1), subst: subst_with(vec![]) }),
+        ("u0^{}", Term::GlobalTm { var: GlobalVar::index(0), subst: subst_with(vec![]) }),
+        ("u0^{0}", Term::GlobalTm { var: GlobalVar::index(0), subst: subst_with(vec![zero()]) }),
         (
             "u0^{0;0}",
-            Term::GlobalTm { var: GlobalVar(0), subst: subst_with(vec![zero(), zero()]) },
+            Term::GlobalTm { var: GlobalVar::index(0), subst: subst_with(vec![zero(), zero()]) },
         ),
         // Context entry counts.
         ("capp ()", Term::CtxApp { fun: zero(), ctx: ctx_with(vec![]) }),
@@ -513,9 +559,9 @@ fn distinct_structures_hash_distinctly() {
         (
             "tail wk^0_g1",
             Term::GlobalTm {
-                var: GlobalVar(0),
+                var: GlobalVar::index(0),
                 subst: LocalSubst {
-                    tail: SubstTail::Wk { len: 0, ctx_var: GlobalVar(1) },
+                    tail: SubstTail::Wk { len: 0, ctx_var: GlobalVar::index(1) },
                     terms: vec![],
                 },
             },
@@ -523,9 +569,9 @@ fn distinct_structures_hash_distinctly() {
         (
             "tail wk^1_g1",
             Term::GlobalTm {
-                var: GlobalVar(0),
+                var: GlobalVar::index(0),
                 subst: LocalSubst {
-                    tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar(1) },
+                    tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar::index(1) },
                     terms: vec![],
                 },
             },

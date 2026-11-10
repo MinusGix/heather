@@ -274,7 +274,7 @@ impl Elaborator {
         }
         let conclusion = cur;
         let name_of = |v: GlobalVar| {
-            abs.checked_sub(v.0 as usize + 1)
+            v.position(abs)
                 .and_then(|g| self.names.global_name_at(g as u32).map(str::to_string))
         };
         let Some((relation, heads)) = proposition_key(conclusion, &name_of) else {
@@ -1576,7 +1576,7 @@ impl Elaborator {
         let (_, body) = self.global_body_at(abs as usize)?;
         // Scoped in its prefix of Ψ; rescoped as `resolve` rescopes a
         // global's type, by the reference's own distance.
-        let mut inner: Term = body.shift_global(var.0 + 1);
+        let mut inner: Term = body.shift_global(var.rescope());
         let mut m = 0;
         while let Term::Lam { body, .. } = inner {
             inner = (*body).clone();
@@ -1614,7 +1614,7 @@ impl Elaborator {
             return;
         }
         let abs = self.psi.bindings.len() as u32;
-        self.psi.push(GlobalBinding::Tm {
+        self.psi.commit(GlobalBinding::Tm {
             ctx: LocalCtx::nil(),
             layer: Layer::Code,
             ty: Rc::new(ty.clone()),
@@ -1636,9 +1636,9 @@ impl Elaborator {
     }
 
     /// `u^δ` for a minted global, the same construction [`Elaborator::resolve`]
-    /// makes for a written name: the goals sit innermost, so a committed
-    /// binding is that much further out, and a closed statement's delayed
-    /// substitution is the empty map out of the current Γ.
+    /// makes for a written name: a committed binding is a constant, and a
+    /// closed statement's delayed substitution is the empty map out of the
+    /// current Γ.
     fn derived_ref(&self, abs: u32) -> Term {
         if let Some(key) = self.names.global_name_at(abs) {
             self.attempt
@@ -1646,8 +1646,7 @@ impl Elaborator {
                 .borrow_mut()
                 .insert(key.to_string());
         }
-        let len = self.psi.bindings.len() as u32;
-        let var = GlobalVar(len - 1 - abs + self.global_padding());
+        let var = GlobalVar::constant(abs);
         Term::GlobalTm {
             var,
             subst: LocalSubst {
@@ -1786,7 +1785,7 @@ impl Elaborator {
         }
         let name = format!("#derived{}", self.traits.derived().len());
         let abs = self.psi.bindings.len() as u32;
-        self.psi.push(GlobalBinding::Tm {
+        self.psi.commit(GlobalBinding::Tm {
             ctx: LocalCtx::nil(),
             layer: Layer::Code,
             ty: Rc::new(goal.clone()),

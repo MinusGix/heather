@@ -386,7 +386,7 @@ impl Elaborator {
             let at = (
                 match cx.gamma.base {
                     CtxBase::Nil => None,
-                    CtxBase::Var(v) => Some(v.0),
+                    CtxBase::Var(v) => Some(v.key()),
                 },
                 cx.gamma.entries.len(),
                 self.lowering_scope(),

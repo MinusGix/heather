@@ -1085,7 +1085,7 @@ fn apply_implicit_planned(
         };
         let argument = if step.implicit {
             let meta = Term::GlobalTm {
-                var: GlobalVar(next_meta),
+                var: GlobalVar::index(next_meta),
                 subst: LocalSubst::id(&cx.gamma),
             };
             if params
@@ -1194,7 +1194,7 @@ fn apply_implicit_planned(
                 }
                 None if class.checking_only => {
                     let meta = Term::GlobalTm {
-                        var: GlobalVar(next_meta),
+                        var: GlobalVar::index(next_meta),
                         subst: LocalSubst::id(&cx.gamma),
                     };
                     sols[next_meta as usize] = Sol::Withheld;

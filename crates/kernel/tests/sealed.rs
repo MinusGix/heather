@@ -73,7 +73,7 @@ fn fst(p: Term) -> Term {
 
 fn glob(var: u32, k: u32) -> Term {
     Term::GlobalTm {
-        var: GlobalVar(var),
+        var: GlobalVar::index(var),
         subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] },
     }
 }
@@ -276,7 +276,7 @@ fn a_lazily_kept_proof_loads_only_where_it_is_opened() {
     let g = nats(0);
     // Asking whether a head is sealed, and a bare application with no
     // elimination waiting on it, load nothing.
-    assert!(Defs::transparent(&p).is_sealed(GlobalVar(0)));
+    assert!(Defs::transparent(&p).is_sealed(GlobalVar::index(0)));
     let r = whnf_term_delta(&app(glob(0, 0), num(2)), &g, Defs::transparent(&p), FUEL);
     assert_eq!(r.ok(), Some(app(glob(0, 0), num(2))));
     assert_eq!(count(&loads), [0, 0]);

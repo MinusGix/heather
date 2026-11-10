@@ -73,7 +73,7 @@ impl Elaborator {
         let first = self.placeholder_base();
         let placeholders: Vec<_> = slot_param.iter().enumerate().map(|(slot, &p)| {
             let name = params.get(p).map(|p| p.name.as_str()).unwrap_or("_");
-            (GlobalVar(first + slot as u32), format!("?{name}"))
+            (GlobalVar::index(first + slot as u32), format!("?{name}"))
         }).collect();
         let entries = sols.iter().enumerate().rev().map(|(slot, sol)| {
             GlobalEntry::Tm(sol.solved().cloned().unwrap_or_else(|| Rc::new(Term::GlobalTm {
@@ -357,7 +357,7 @@ impl Elaborator {
         args.reverse();
         let Term::GlobalTm { var, .. } = head else { return None };
         // The body is scoped in the Ψ prefix before its own binding.
-        let at = abs.checked_sub(var.0.checked_add(1)?)?;
+        let at = var.position(abs as usize)? as u32;
         let is_bound = matches!(args.as_slice(), [a] if matches!(**a, Term::Var(LocalVar(0))));
         let (tag, takes_args) = match self.types.gdefs().key_for_abs(&at).copied() {
             Some(GenDef::TyCodeFn(tag)) => (tag, true),

@@ -74,7 +74,7 @@ use crate::layer::Layer;
 use crate::premises::{PremiseQueue, VerdictMemo};
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, shift_univ_psi};
-use crate::reduce::{Defs, GlobalCache, Sig, NATIVE_DEPTH_LIMIT};
+use crate::reduce::{Defs, GlobalCache, NATIVE_DEPTH_LIMIT};
 use crate::term::{
     Branches, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
@@ -758,7 +758,7 @@ impl<'v> Env<'v> {
 /// Ψ-lookup: `bindings[len - 1 - v]` (0 is innermost). The result is scoped
 /// over its *prefix* of Ψ — callers shift by `v + 1`.
 fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
-    psi.bindings.len().checked_sub(1 + v.0 as usize).and_then(|i| psi.bindings.get(i))
+    psi.lookup(v).map(|(_, binding)| binding)
 }
 
 /// The **definition** at the head of a δ-stuck spine, if any: the one
@@ -1172,7 +1172,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     (None, None) => break,
                     (Some(_), None) => *wa = D::delta_ty(self, env, wa)?,
                     (None, Some(_)) => *wb = D::delta_ty(self, env, wb)?,
-                    (Some(u1), Some(u2)) if u1.0 < u2.0 => {
+                    (Some(u1), Some(u2)) if u1.newer_than(u2) => {
                         *wa = D::delta_ty(self, env, wa)?;
                     }
                     (Some(_), Some(_)) => {
@@ -1469,10 +1469,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 }
                 let level = level.clone();
                 crate::stats::global_ref_rescopes(1);
-                let sig = env.cache.sig_or_insert(*u1, || Sig {
-                    ctx: ctx.shift_global(u1.0 + 1),
-                    ty: None,
-                });
+                let sig = env.cache.sig(*u1, ctx, None);
                 self.subst(env, d1, d2, &sig.ctx)?;
                 Ok(level)
             }
@@ -1653,13 +1650,12 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                         }
                         wb = self.delta_to_head_tm(env, wb)?;
                     }
-                    // A body can mention only older globals. With de Bruijn
-                    // global indices, the newer declaration has the smaller
-                    // index in the current Ψ. Advance only that side: if it
+                    // A body can mention only older globals
+                    // (`GlobalVar::newer_than`). Advance only the newer side: if it
                     // is a transparent wrapper around the other head, the
                     // next loop iteration meets there instead of unfolding
                     // the other side past the rendezvous in lockstep.
-                    (Some(u1), Some(u2)) if u1.0 < u2.0 => {
+                    (Some(u1), Some(u2)) if u1.newer_than(u2) => {
                         passed_a.push(u1, &wa);
                         wa = D::delta_tm(self, env, &wa)?;
                     }
@@ -2575,10 +2571,7 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         }
         let level = level.clone();
         crate::stats::global_ref_rescopes(1);
-        let sig = env.cache.sig_or_insert(*u1, || Sig {
-            ctx: ctx.shift_global(u1.0 + 1),
-            ty: Some(Rc::new(ty.shift_global(u1.0 + 1))),
-        });
+        let sig = env.cache.sig(*u1, ctx, Some(ty));
         // The binding form fixes the kind at this index, so a `Tm`
         // lookup always finds the `Tm` signature; the guard is a
         // kernel that reports rather than panics on a broken Ψ.

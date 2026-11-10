@@ -13,7 +13,7 @@ use heather_elab::Elaborator;
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{GlobalBinding, GlobalCtx, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalRef, LocalCtx, Term, Type};
 
 const LIB: &str = include_str!("../../../lib/lang/vec_code.hthr");
 
@@ -72,9 +72,23 @@ fn last_body(e: &Elaborator) -> (Term, Type, Level) {
 /// stored-annotation application rule never consulted Ψ for a head's type and
 /// let that pass; the typed rule reads the head's declared type and does not.
 fn owning_psi(e: &Elaborator) -> GlobalCtx {
-    let mut bindings = e.psi().bindings.to_vec();
-    bindings.pop().expect("a binding");
-    GlobalCtx::new(bindings)
+    let len = e.psi().bindings.len();
+    e.psi().prefix(len.checked_sub(1).expect("a binding"))
+}
+
+/// `t`, read out of `from`'s Ψ, as `to` spells it. The two elaborated the
+/// same source after the prelude, `to` after a library `from` did not load,
+/// and a reference to a committed binding is its position in Ψ: what the
+/// source declared sits that many positions later in `to`. Without this the
+/// cross-check below would compare references to different bindings.
+fn moved(t: &Term, from: &Elaborator, to: &Elaborator) -> Term {
+    let prelude = Elaborator::with_prelude().expect("prelude").psi().bindings.len() as u32;
+    let (from, to) = (from.psi().bindings.len() as u32, to.psi().bindings.len() as u32);
+    t.reindex_global(&mut |r| match r {
+        GlobalRef::Const(p) if p >= prelude => (p + to).checked_sub(from).map(GlobalRef::Const),
+        r => Some(r),
+    })
+    .expect("the source's declarations are past the library in both")
 }
 
 #[test]
@@ -107,6 +121,7 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
         let rust = elab(fixture);
         let (ht, hty, hl) = last_body(&hooked);
         let (rt, _, _) = last_body(&rust);
+        let rt = moved(&rt, &rust, &hooked);
         // The cross-check is only sharp if the hook actually fired: a decline
         // would make the two bodies *identical* and conversion vacuous. The
         // hook's output is a Π-spine application of the template's payload,

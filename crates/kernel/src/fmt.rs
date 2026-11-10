@@ -229,7 +229,7 @@ impl fmt::Debug for Type {
                     "M[{level:?},{pos_level:?},{idx_level:?}]({idx:?}; {shape:?}; {pos:?}; {next:?})({index:?})"
                 )
             }
-            Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
+            Type::GlobalTy { var, subst } => write!(f, "U{var}^{subst:?}"),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {
                 write!(f, "Π[U:Typ({ctx:?},{arg_level:?})@{body_level:?}]. {body:?}")
@@ -452,7 +452,7 @@ impl fmt::Debug for Term {
                 }
                 f.write_str(")")
             }
-            Term::GlobalTm { var, subst } => write!(f, "u{}^{subst:?}", var.0),
+            Term::GlobalTm { var, subst } => write!(f, "u{var}^{subst:?}"),
             Term::CtxLam { level, body } => write!(f, "Λ[g:Ctx@{level:?}]. {body:?}"),
             Term::CtxApp { fun, ctx } => write!(f, "capp({fun:?}, {ctx:?})"),
             Term::TyLam { ctx, arg_level, body_level, body } => {
@@ -506,7 +506,7 @@ impl fmt::Debug for LocalCtx {
             f.write_str("(")?;
             match base {
                 CtxBase::Nil => f.write_str("·")?,
-                CtxBase::Var(g) => write!(f, "g{}", g.0)?,
+                CtxBase::Var(g) => write!(f, "g{g}")?,
             }
             for CtxEntry { ty, level } in entries {
                 write!(f, ", {ty:?}@{level:?}")?;
@@ -545,7 +545,7 @@ impl fmt::Debug for LocalSubst {
             f.write_str("{")?;
             match *tail {
                 SubstTail::Empty => f.write_str("·")?,
-                SubstTail::Wk { len, ctx_var } => write!(f, "wk^{len}_g{}", ctx_var.0)?,
+                SubstTail::Wk { len, ctx_var } => write!(f, "wk^{len}_g{ctx_var}")?,
             }
             for t in terms {
                 write!(f, "; {t:?}")?;

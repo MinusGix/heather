@@ -127,7 +127,7 @@ fn with_visible<T>(n: u32, f: impl FnOnce() -> T) -> T {
 fn global(pos: u32, depth: u32) -> Term {
     let idx = VISIBLE.with(|vis| vis.get()) - 1 - pos;
     Term::GlobalTm {
-        var: GlobalVar(idx),
+        var: GlobalVar::index(idx),
         subst: LocalSubst {
             tail: SubstTail::Empty,
             terms: vec![],

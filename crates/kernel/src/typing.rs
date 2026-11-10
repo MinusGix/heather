@@ -178,7 +178,7 @@ use crate::layer::Layer;
 use crate::premises::PremiseQueue;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi};
-use crate::reduce::{whnf_type_delta, Defs, GlobalCache, Sig};
+use crate::reduce::{whnf_type_delta, Defs, GlobalCache};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     inst_motive2, iwf_children_ty, iwf_motive_scrut_ty, iwf_step_telescope, m_out_ty, m_step_ty, wf_step_telescope,
@@ -205,10 +205,14 @@ pub enum TypeError {
     /// A local variable exceeds `|Γ|`.
     UnboundLocalVar(u32),
     /// A global variable exceeds `|Ψ|`.
-    UnboundGlobalVar(u32),
+    UnboundGlobalVar(GlobalVar),
+    /// A reference that names a binding by the other spelling than the one
+    /// Ψ gives it: an index reaching into the signature, or a position past
+    /// it (DESIGN.md, "Constants are addressed from the start of Ψ").
+    MisspelledGlobal(GlobalVar),
     /// The global binding at this index has the wrong kind (e.g. `U^δ`
     /// hitting a `g : Ctx` or `u : Trm` binding).
-    WrongGlobalBinding(u32),
+    WrongGlobalBinding(GlobalVar),
     /// A rule was used at a layer that does not admit it (layer-m former
     /// below m, non-variable term at layer v, binding layer `i' > i`, or a
     /// binding whose declared layer is outside its admissible set).
@@ -266,9 +270,16 @@ fn note_conv_outcome(result: &Result<(), ConvError>) {
 
 /// `⊢_L Ψ` — well-formedness of a global context under `univs` universe
 /// variables.
+///
+/// Each binding is checked in the prefix before it, read with `psi`'s own
+/// split: the first [`GlobalCtx::consts`] as the signature growing, the
+/// rest as variables over it.
 pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
     let tc = Tc::new(fuel);
-    check_global_bindings(&tc, GlobalCtx::default(), psi.bindings.iter(), univs)
+    let consts = psi.consts();
+    let prefix = check_global_bindings(&tc, GlobalCtx::default(), psi.bindings.iter().take(consts), univs, true)?;
+    check_global_bindings(&tc, prefix, psi.bindings.iter().skip(consts), univs, false)?;
+    Ok(())
 }
 
 /// Check an ordered extension of an already well-formed global context.
@@ -284,7 +295,23 @@ pub fn check_global_ctx_extension(
     fuel: u64,
 ) -> R {
     let tc = Tc::new(fuel);
-    check_global_bindings(&tc, prefix.clone(), extension.iter(), univs)
+    check_global_bindings(&tc, prefix.clone(), extension.iter(), univs, false)?;
+    Ok(())
+}
+
+/// [`check_global_ctx_extension`] for an extension of the **signature**:
+/// `prefix` has no variable, and each binding of `extension` is checked as
+/// the constant it will be committed as ([`GlobalCtx::commit`]), over the
+/// prefix and the constants before it.
+pub fn check_signature_extension(
+    prefix: &GlobalCtx,
+    extension: &[GlobalBinding],
+    univs: u32,
+    fuel: u64,
+) -> R {
+    let tc = Tc::new(fuel);
+    check_global_bindings(&tc, prefix.clone(), extension.iter(), univs, true)?;
+    Ok(())
 }
 
 fn check_global_bindings<'a>(
@@ -292,7 +319,8 @@ fn check_global_bindings<'a>(
     mut prefix: GlobalCtx,
     bindings: impl IntoIterator<Item = &'a GlobalBinding>,
     univs: u32,
-) -> R {
+    commit: bool,
+) -> R<GlobalCtx> {
     for b in bindings {
         let env = binding_env(&prefix, univs);
         check_global_binding_declaration(tc, &env, b)?;
@@ -300,9 +328,13 @@ fn check_global_bindings<'a>(
             tc.tm_check_rc(&env.in_ctx(ctx.clone(), *layer), t, ty, level)?;
         }
         drop(env);
-        prefix.push(b.clone());
+        if commit {
+            prefix.commit(b.clone());
+        } else {
+            prefix.push(b.clone());
+        }
     }
-    Ok(())
+    Ok(prefix)
 }
 
 fn binding_env(prefix: &GlobalCtx, univs: u32) -> Env {
@@ -1019,7 +1051,7 @@ impl Env {
             // not at all in a closed type's key, which reads none.
             gamma_base: match gamma.base {
                 CtxBase::Nil => None,
-                CtxBase::Var(g) => Some(g.0),
+                CtxBase::Var(g) => Some(g.key()),
             },
             univs: *univs,
             layer: *layer,
@@ -1097,8 +1129,21 @@ fn is_identity(delta: &LocalSubst) -> bool {
     delta.terms.iter().enumerate().all(|(k, t)| matches!(&**t, Term::Var(v) if v.0 as usize == m - 1 - k))
 }
 
-fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
-    psi.bindings.len().checked_sub(1 + v.0 as usize).and_then(|i| psi.bindings.get(i))
+/// The binding `v` names, when `v` is Ψ's spelling of it (`Σ; Ψ′ ⊢ c_p` needs
+/// `p < |Σ|`, `u_i` needs `i < |Ψ′|`): the reference rule of DESIGN.md,
+/// "Constants are addressed from the start of Ψ". A variable's statement is
+/// scoped over its *prefix* of Ψ and callers weaken it by `v + 1`; a
+/// constant's is read as stored ([`GlobalCache::sig`]).
+fn lookup(psi: &GlobalCtx, v: GlobalVar) -> R<&GlobalBinding> {
+    // Whatever `v` reaches, spelled or not, so that a reference to a binding
+    // that is there is told apart from one to nothing.
+    let Some(binding) = v.position(psi.bindings.len()).and_then(|at| psi.bindings.get(at)) else {
+        return Err(TypeError::UnboundGlobalVar(v));
+    };
+    if !psi.spells(v) {
+        return Err(TypeError::MisspelledGlobal(v));
+    }
+    Ok(binding)
 }
 
 // ---------------------------------------------------------------------------
@@ -1815,7 +1860,7 @@ impl Tc {
             gamma: env.gamma.entries.identity(),
             gamma_base: match env.gamma.base {
                 CtxBase::Nil => None,
-                CtxBase::Var(g) => Some(g.0),
+                CtxBase::Var(g) => Some(g.key()),
             },
             layer: env.layer,
             univs: env.univs,
@@ -1849,7 +1894,7 @@ impl Tc {
                     psi: RcIdentity::new(env.psi.bindings.identity()),
                     gamma_base: match env.gamma.base {
                         CtxBase::Nil => None,
-                        CtxBase::Var(g) => Some(g.0),
+                        CtxBase::Var(g) => Some(g.key()),
                     },
                     layer: env.layer,
                     univs: env.univs,
@@ -2344,10 +2389,9 @@ impl Tc {
     /// `⊢_i Γ` (in `env.psi`; `env.gamma` is irrelevant).
     fn ctx_wf(&self, env: &Env, layer: Layer, gamma: &LocalCtx) -> R {
         if let CtxBase::Var(g) = gamma.base {
-            match lookup(&env.psi, g) {
-                Some(GlobalBinding::Ctx) => {}
-                Some(_) => return Err(TypeError::WrongGlobalBinding(g.0)),
-                None => return Err(TypeError::UnboundGlobalVar(g.0)),
+            match lookup(&env.psi, g)? {
+                GlobalBinding::Ctx => {}
+                _ => return Err(TypeError::WrongGlobalBinding(g)),
             }
         }
         // Each entry is checked in the prefix it is scoped in. Grown as we
@@ -2641,11 +2685,8 @@ impl Tc {
                 Ok(sig.family_level())
             }
             Type::GlobalTy { var, subst } => {
-                let Some(binding) = lookup(&env.psi, *var) else {
-                    return Err(TypeError::UnboundGlobalVar(var.0));
-                };
-                let GlobalBinding::Ty { ctx, layer, level } = binding else {
-                    return Err(TypeError::WrongGlobalBinding(var.0));
+                let GlobalBinding::Ty { ctx, layer, level } = lookup(&env.psi, *var)? else {
+                    return Err(TypeError::WrongGlobalBinding(*var));
                 };
                 // i' ∈ {c, p} is the binding invariant; i' ≤ i:
                 if *layer > env.layer {
@@ -2653,10 +2694,7 @@ impl Tc {
                 }
                 let level = level.clone();
                 crate::stats::global_ref_rescopes(1);
-                let sig = env.cache.sig_or_insert(*var, || Sig {
-                    ctx: ctx.shift_global(var.0 + 1),
-                    ty: None,
-                });
+                let sig = env.cache.sig(*var, ctx, None);
                 self.subst_ck(env, subst, &sig.ctx)?;
                 Ok(level)
             }
@@ -3539,11 +3577,8 @@ impl Tc {
                 Ok((e.ty.shift_local(x.0 + 1), e.level.clone()))
             }
             Term::GlobalTm { var, subst } => {
-                let Some(binding) = lookup(&env.psi, *var) else {
-                    return Err(TypeError::UnboundGlobalVar(var.0));
-                };
-                let GlobalBinding::Tm { ctx, layer, ty, level, .. } = binding else {
-                    return Err(TypeError::WrongGlobalBinding(var.0));
+                let GlobalBinding::Tm { ctx, layer, ty, level, .. } = lookup(&env.psi, *var)? else {
+                    return Err(TypeError::WrongGlobalBinding(*var));
                 };
                 // i' ∈ {v, c} is the binding invariant; i' ≤ i:
                 if *layer > env.layer {
@@ -3551,14 +3586,11 @@ impl Tc {
                 }
                 let level = level.clone();
                 crate::stats::global_ref_rescopes(1);
-                let sig = env.cache.sig_or_insert(*var, || Sig {
-                    ctx: ctx.shift_global(var.0 + 1),
-                    ty: Some(Rc::new(ty.shift_global(var.0 + 1))),
-                });
+                let sig = env.cache.sig(*var, ctx, Some(ty));
                 // The binding form fixes the kind at this index, so a `Tm`
                 // lookup always finds the `Tm` signature.
                 let Some(ty) = sig.ty.as_ref() else {
-                    return Err(TypeError::WrongGlobalBinding(var.0));
+                    return Err(TypeError::WrongGlobalBinding(*var));
                 };
                 self.subst_ck(env, subst, &sig.ctx)?;
                 Ok((ty.apply_local(subst), level))
@@ -4961,7 +4993,7 @@ fn type_anchor(ty: &Type) -> TypeAnchor {
                 head = fun;
             }
             match head {
-                Term::GlobalTm { var, .. } => TypeAnchor::Global(var.0),
+                Term::GlobalTm { var, .. } => TypeAnchor::Global(var.key()),
                 _ => TypeAnchor::Term(RcIdentity::new(Rc::clone(tm))),
             }
         }
@@ -5080,7 +5112,7 @@ mod memo_tests {
         Type::El {
             level: Level::Zero,
             tm: Rc::new(Term::GlobalTm {
-                var: GlobalVar(v),
+                var: GlobalVar::index(v),
                 subst: LocalSubst {
                     tail: SubstTail::Empty,
                     terms: vec![],
@@ -5103,7 +5135,7 @@ mod memo_tests {
 
     fn global_tm(v: u32) -> Term {
         Term::GlobalTm {
-            var: GlobalVar(v),
+            var: GlobalVar::index(v),
             subst: LocalSubst {
                 tail: SubstTail::Empty,
                 terms: vec![],

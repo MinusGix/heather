@@ -47,9 +47,8 @@ fn last_body(e: &Elaborator) -> (Term, Type, Level) {
 /// stored-annotation application rule never consulted Ψ for a head's type and
 /// let that pass; the typed rule reads the head's declared type and does not.
 fn owning_psi(e: &Elaborator) -> GlobalCtx {
-    let mut bindings = e.psi().bindings.to_vec();
-    bindings.pop().expect("a binding");
-    GlobalCtx::new(bindings)
+    let len = e.psi().bindings.len();
+    e.psi().prefix(len.checked_sub(1).expect("a binding"))
 }
 
 fn ok(src: &str) {

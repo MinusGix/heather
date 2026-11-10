@@ -97,7 +97,7 @@ pub struct Sc {
 
 impl Sc {
     pub fn db(&self, abs: u32) -> GlobalVar {
-        GlobalVar(self.globals.len() as u32 - 1 - abs)
+        GlobalVar::index(self.globals.len() as u32 - 1 - abs)
     }
 
     pub fn base(&self, b: BaseRef) -> CtxBase {

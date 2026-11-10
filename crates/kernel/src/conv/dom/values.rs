@@ -286,14 +286,14 @@ mod tests {
         // An empty tail records no length: a reference to a closed global
         // is one value under either spine.
         let gamma = LocalCtx::nil();
-        let empty = Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: crate::term::LocalSubst::id(&gamma) });
+        let empty = Rc::new(Term::GlobalTm { var: GlobalVar::index(0), subst: crate::term::LocalSubst::id(&gamma) });
         assert!(clo_identity(&TmClo::syn(short, Rc::clone(&empty)), &TmClo::syn(long, empty), 0, &mut 64));
         // A weakening counts the spine's length, whatever it reads.
         let wk = crate::term::LocalSubst {
-            tail: crate::term::SubstTail::Wk { len: 0, ctx_var: GlobalVar(0) },
+            tail: crate::term::SubstTail::Wk { len: 0, ctx_var: GlobalVar::index(0) },
             terms: Vec::new(),
         };
-        let tail = Rc::new(Term::GlobalTm { var: GlobalVar(1), subst: wk });
+        let tail = Rc::new(Term::GlobalTm { var: GlobalVar::index(1), subst: wk });
         assert!(!clo_identity(&TmClo::syn(short, Rc::clone(&tail)), &TmClo::syn(long, tail), 0, &mut 64));
     }
 
@@ -334,7 +334,7 @@ mod tests {
         let m2 = arena.ty(TyClo::new(rho.push(&arena, fresh(&arena, 1)), ty));
         assert!(!ty_clo_identity(m1, m2, 1, &mut 64));
         let shifted = rho.with_gshift(1);
-        let t = Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: crate::term::LocalSubst::id(&gamma) });
+        let t = Rc::new(Term::GlobalTm { var: GlobalVar::index(0), subst: crate::term::LocalSubst::id(&gamma) });
         assert!(!clo_identity(&TmClo::syn(rho, Rc::clone(&t)), &TmClo::syn(shifted, t), 0, &mut 64));
     }
 

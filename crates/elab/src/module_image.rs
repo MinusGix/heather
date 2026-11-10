@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x23";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1d";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x24";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x1e";
 
 /// The two encodings' versions, image then interface: what a module cache
 /// key covers, so a bump of either is a clean miss for every reader rather
@@ -593,7 +593,7 @@ fn put_base(w: &mut Writer, base: CtxBase) {
         CtxBase::Nil => w.byte(tag::BASE_NIL),
         CtxBase::Var(var) => {
             w.byte(tag::BASE_VAR);
-            w.u32(var.0);
+            w.u32(var.key());
         }
     }
 }
@@ -601,7 +601,7 @@ fn put_base(w: &mut Writer, base: CtxBase) {
 fn get_base(r: &mut Reader<'_>) -> Result<CtxBase, ModuleImageDecodeError> {
     match r.byte()? {
         tag::BASE_NIL => Ok(CtxBase::Nil),
-        tag::BASE_VAR => Ok(CtxBase::Var(GlobalVar(r.u32()?))),
+        tag::BASE_VAR => Ok(CtxBase::Var(GlobalVar::from_key(r.u32()?))),
         tag => Err(ModuleImageDecodeError::InvalidTag { sort: "context base", tag }),
     }
 }
@@ -632,7 +632,7 @@ fn put_subst(w: &mut Writer, subst: &LocalSubst) {
         SubstTail::Wk { len, ctx_var } => {
             w.byte(tag::TAIL_WK);
             w.u32(len);
-            w.u32(ctx_var.0);
+            w.u32(ctx_var.key());
         }
     }
     w.vec(&subst.terms, |w, term| put_term(w, term));
@@ -643,7 +643,7 @@ fn get_subst(r: &mut Reader<'_>) -> Result<LocalSubst, ModuleImageDecodeError> {
         tag::TAIL_EMPTY => SubstTail::Empty,
         tag::TAIL_WK => SubstTail::Wk {
             len: r.u32()?,
-            ctx_var: GlobalVar(r.u32()?),
+            ctx_var: GlobalVar::from_key(r.u32()?),
         },
         tag => return Err(ModuleImageDecodeError::InvalidTag { sort: "substitution tail", tag }),
     };
@@ -711,7 +711,7 @@ fn put_type_node(w: &mut Writer, ty: &Type) {
         Type::Wf { level, shape, arity } => {
             w.byte(16); put_level(w, level); put_type(w, shape); put_term(w, arity);
         }
-        Type::GlobalTy { var, subst } => { w.byte(17); w.u32(var.0); put_subst(w, subst); }
+        Type::GlobalTy { var, subst } => { w.byte(17); w.u32(var.key()); put_subst(w, subst); }
         Type::DVec { level, len, fam } => {
             w.byte(22); put_level(w, level); put_term(w, len); put_type(w, fam);
         }
@@ -877,7 +877,7 @@ fn get_type_node(r: &mut Reader<'_>) -> Result<Type, ModuleImageDecodeError> {
         14 => Type::Vec { level: get_level(r)?, elem: type_rc(r)?, len: term_rc(r)? },
         15 => Type::Fin { len: term_rc(r)? },
         16 => Type::Wf { level: get_level(r)?, shape: type_rc(r)?, arity: term_rc(r)? },
-        17 => Type::GlobalTy { var: GlobalVar(r.u32()?), subst: get_subst(r)? },
+        17 => Type::GlobalTy { var: GlobalVar::from_key(r.u32()?), subst: get_subst(r)? },
         18 => Type::CtxPi { level: get_level(r)?, body: type_rc(r)? },
         19 => Type::TyPi { ctx: get_ctx(r)?, arg_level: get_level(r)?, body_level: get_level(r)?, body: type_rc(r)? },
         20 => Type::CodeTy { ctx: get_ctx(r)?, level: get_level(r)? },
@@ -1035,7 +1035,7 @@ fn put_term_node(w: &mut Writer, term: &Term) {
         Term::UApp { fun, levels } => {
             w.byte(41); put_term(w, fun); w.vec(levels, put_level);
         }
-        Term::GlobalTm { var, subst } => { w.byte(42); w.u32(var.0); put_subst(w, subst); }
+        Term::GlobalTm { var, subst } => { w.byte(42); w.u32(var.key()); put_subst(w, subst); }
         Term::CtxLam { level, body } => { w.byte(43); put_level(w, level); put_term(w, body); }
         Term::CtxApp { fun, ctx } => { w.byte(44); put_term(w, fun); put_ctx(w, ctx); }
         Term::TyLam { ctx, arg_level, body_level, body } => {
@@ -1134,7 +1134,7 @@ fn get_term_node(r: &mut Reader<'_>) -> Result<Term, ModuleImageDecodeError> {
         39 => Term::App { fun: term_rc(r)?, dom_level: get_level(r)?, cod_level: get_level(r)?, dom: type_rc(r)?, cod: type_rc(r)?, arg: term_rc(r)? },
         40 => Term::ULam { num_vars: r.u32()?, level: get_level(r)?, body: term_rc(r)? },
         41 => Term::UApp { fun: term_rc(r)?, levels: r.vec(get_level)? },
-        42 => Term::GlobalTm { var: GlobalVar(r.u32()?), subst: get_subst(r)? },
+        42 => Term::GlobalTm { var: GlobalVar::from_key(r.u32()?), subst: get_subst(r)? },
         43 => Term::CtxLam { level: get_level(r)?, body: term_rc(r)? },
         44 => Term::CtxApp { fun: term_rc(r)?, ctx: get_ctx(r)? },
         45 => Term::TyLam { ctx: get_ctx(r)?, arg_level: get_level(r)?, body_level: get_level(r)?, body: term_rc(r)? },
@@ -2768,8 +2768,8 @@ mod tests {
                 kind: ExprKind::TyLit(Box::new(Ty { kind: TyKind::OfExpr(Box::new(e)), span: sp() })), span: sp() });
             let (succ, succ_depth) = terms(levels, 1, |t| Term::Succ(Rc::new(t)));
             let (fun, fun_depth) = terms(levels, 1, |t| Term::AppAt { fun: Rc::new(t), arg: Rc::new(Term::Zero) });
-            let (subst, subst_depth) = terms(levels, 1, |t| Term::GlobalTm { var: GlobalVar(0), subst: LocalSubst {
-                tail: SubstTail::Wk { len: 0, ctx_var: GlobalVar(0) }, terms: vec![Rc::new(t)] } });
+            let (subst, subst_depth) = terms(levels, 1, |t| Term::GlobalTm { var: GlobalVar::index(0), subst: LocalSubst {
+                tail: SubstTail::Wk { len: 0, ctx_var: GlobalVar::index(0) }, terms: vec![Rc::new(t)] } });
             let (el, el_depth) = terms(levels, 2, |t| Term::BoxTy(Rc::new(Type::El { level: Level::Zero, tm: Rc::new(t) })));
             vec![
                 ("term succ", succ, succ_depth, term),

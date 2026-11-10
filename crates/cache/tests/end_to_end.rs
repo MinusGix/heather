@@ -1019,8 +1019,9 @@ fn a_longer_divergent_psi_does_not_inherit_the_last_ones_hashes() {
         body: Some(Rc::new(body)),
     };
     let unit = || Term::TmUnit { level: Level::constant(0) };
-    let first = GlobalCtx::new(vec![def(Term::TmNat)]);
-    let second = GlobalCtx::new(vec![def(unit()), def(Term::TmNat)]);
+    // Committed bindings, as an elaborator's Ψ is: only a signature has keys.
+    let first = GlobalCtx::new(vec![def(Term::TmNat)]).with_consts(1);
+    let second = GlobalCtx::new(vec![def(unit()), def(Term::TmNat)]).with_consts(2);
     let body = Term::TmNat;
     let item = GateItem {
         name: "next",
@@ -1041,4 +1042,5 @@ fn a_longer_divergent_psi_does_not_inherit_the_last_ones_hashes() {
     fresh.begin_run();
     fresh.admits(&second, &item);
     assert_eq!(cache.interface_hashes(), fresh.interface_hashes());
+    assert_eq!(fresh.interface_hashes().len(), 2, "the second Ψ's bindings were hashed");
 }

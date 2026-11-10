@@ -553,11 +553,11 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         let GlobalBinding::Tm { ty, .. } = &self.world.bindings[abs] else {
             return Err(format!("`{key}` is not a term-level global"));
         };
-        let len = self.world.bindings.len();
+        let var = self.world.reference(abs).expect("a binding of the world");
         let empty = LocalCtx::nil();
-        let ty = Rc::new(ty.shift_global((len - abs) as u32));
+        let ty = Rc::new(ty.shift_global(var.rescope()));
         let head = Term::GlobalTm {
-            var: GlobalVar((len - 1 - abs) as u32),
+            var,
             subst: LocalSubst::id(&empty),
         };
         self.globals.borrow_mut().insert(name, (head.clone(), Rc::clone(&ty)));
@@ -1480,7 +1480,7 @@ impl Run {
     /// Hole `j`'s occurrence at its home, in the current world.
     fn occurrence(&self, j: usize) -> Term {
         Term::GlobalTm {
-            var: GlobalVar((self.world() - 1 - j) as u32),
+            var: GlobalVar::index((self.world() - 1 - j) as u32),
             subst: LocalSubst::id(&self.scopes[self.holes[j].home].cx.gamma),
         }
     }
@@ -1632,12 +1632,12 @@ impl Elaborator {
         let Some(abs) = self.protocol_abs(name) else {
             return err(format!("`{keyword}` runs a value of the `tactic` protocol; add `import tactic;` (or import a tactic library that does)"), span);
         };
-        let len = world.bindings.len();
         let GlobalBinding::Tm { ty, .. } = &world.bindings[abs] else {
             return err(format!("`{key}` is not a term-level global"), span);
         };
-        let head = Term::GlobalTm { var: GlobalVar((len - 1 - abs) as u32), subst: LocalSubst::id(&LocalCtx::nil()) };
-        Ok((head, ty.shift_global((len - abs) as u32)))
+        let var = world.reference(abs).expect("a binding of the world");
+        let head = Term::GlobalTm { var, subst: LocalSubst::id(&LocalCtx::nil()) };
+        Ok((head, ty.shift_global(var.rescope())))
     }
 
     /// Elaborate `e`, a `by`'s tactic or a `generate`'s generator, at the
@@ -2218,9 +2218,9 @@ impl Elaborator {
     /// outside Ψ, and those globals' names.
     fn placeholders(&self, run: &Run) -> (GlobalSubst, Vec<(GlobalVar, String)>) {
         let first = self.placeholder_base();
-        let names = (0..run.world()).map(|j| (GlobalVar(first + j as u32), format!("?{}", j + 1))).collect();
+        let names = (0..run.world()).map(|j| (GlobalVar::index(first + j as u32), format!("?{}", j + 1))).collect();
         let sigma = run.sigma(0, |j| Term::GlobalTm {
-            var: GlobalVar(first + j as u32),
+            var: GlobalVar::index(first + j as u32),
             subst: LocalSubst::id(&run.scopes[run.holes[j].home].cx.gamma),
         });
         (sigma, names)
@@ -2575,7 +2575,7 @@ impl Elaborator {
         let m = (ind.params.len() + ind.valparams.len()) as u32;
         let mut code = self.gen_ref(crate::gendefs::GenDef::TyCodeFn(ind.tag))?.shift_global(m);
         for j in 0..m {
-            let meta = Term::GlobalTm { var: GlobalVar(j), subst: LocalSubst::id(&cx.gamma) };
+            let meta = Term::GlobalTm { var: GlobalVar::index(j), subst: LocalSubst::id(&cx.gamma) };
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
         }
         let template = Type::El { level: level.clone(), tm: Rc::new(code) };
@@ -3002,15 +3002,15 @@ impl Elaborator {
     /// [`Self::raw_global`] by absolute Ψ index.
     fn raw_global_at(&self, abs: usize) -> Option<(Term, Type, Level)> {
         let world = self.goal_psi();
-        let len = world.bindings.len();
         let GlobalBinding::Tm { ctx, ty, level, .. } = world.bindings.get(abs)? else {
             return None;
         };
         if !ctx.entries.is_empty() || matches!(**ty, Type::UPi { .. }) {
             return None;
         }
-        let head = Term::GlobalTm { var: GlobalVar((len - 1 - abs) as u32), subst: LocalSubst::id(&LocalCtx::nil()) };
-        Some((head, ty.shift_global((len - abs) as u32), level.clone()))
+        let var = world.reference(abs)?;
+        let head = Term::GlobalTm { var, subst: LocalSubst::id(&LocalCtx::nil()) };
+        Some((head, ty.shift_global(var.rescope()), level.clone()))
     }
 
     /// `t`'s type by the kernel's inference, in scope `at`; `t` is committed.
@@ -3041,7 +3041,7 @@ impl Elaborator {
         let m = run.world() as u32;
         Ok(match held {
             Held::Term(t, ..) => match run.partial_tm(&t) {
-                Term::GlobalTm { var, .. } if var.0 < m => HeadView::Hole,
+                Term::GlobalTm { var, .. } if var.innermost(m).is_some() => HeadView::Hole,
                 _ => HeadView::Other,
             },
             Held::Type(t, _) => match run.partial_ty(&t) {
@@ -3110,7 +3110,7 @@ impl Elaborator {
         let m = (ind.params.len() + ind.valparams.len()) as u32;
         let mut code = self.gen_ref(crate::gendefs::GenDef::TyCodeFn(ind.tag))?.shift_global(m);
         for j in 0..m {
-            let meta = Term::GlobalTm { var: GlobalVar(j), subst: LocalSubst::id(&cx.gamma) };
+            let meta = Term::GlobalTm { var: GlobalVar::index(j), subst: LocalSubst::id(&cx.gamma) };
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
         }
         let template = Type::El { level: level.clone(), tm: Rc::new(code) };
@@ -3362,7 +3362,7 @@ impl Elaborator {
     fn match_scope(cx: &Cx, ty: &Type, i: u32, n: u32) -> Type {
         let mut subst = LocalSubst::id(&cx.gamma);
         for j in 0..i {
-            subst = subst.extended(Rc::new(Term::GlobalTm { var: GlobalVar(j), subst: LocalSubst::id(&cx.gamma) }));
+            subst = subst.extended(Rc::new(Term::GlobalTm { var: GlobalVar::index(j), subst: LocalSubst::id(&cx.gamma) }));
         }
         ty.shift_global(n).apply_local(&subst)
     }

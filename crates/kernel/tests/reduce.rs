@@ -110,7 +110,7 @@ fn num(n: u32) -> Term {
 /// — how a branch body references a global binding's own context.
 fn wk_id(g: u32, k: u32) -> LocalSubst {
     LocalSubst {
-        tail: SubstTail::Wk { len: k, ctx_var: GlobalVar(g) },
+        tail: SubstTail::Wk { len: k, ctx_var: GlobalVar::index(g) },
         terms: (0..k).map(|j| rt(v(k - 1 - j))).collect(),
     }
 }
@@ -118,19 +118,19 @@ fn wk_id(g: u32, k: u32) -> LocalSubst {
 /// Probe `box (U^{id})` for a global type binding `var` with index context
 /// `(g, k entries)`; after β it becomes `box` of the payload.
 fn box_gty(var: u32, g: u32, k: u32) -> Term {
-    Term::BoxTy(rty(Type::GlobalTy { var: GlobalVar(var), subst: wk_id(g, k) }))
+    Term::BoxTy(rty(Type::GlobalTy { var: GlobalVar::index(var), subst: wk_id(g, k) }))
 }
 
 /// Probe `box (u^{id})` for a global term binding, as [`box_gty`].
 fn box_gtm(var: u32, g: u32, k: u32) -> Term {
-    Term::BoxTm(rt(Term::GlobalTm { var: GlobalVar(var), subst: wk_id(g, k) }))
+    Term::BoxTm(rt(Term::GlobalTm { var: GlobalVar::index(var), subst: wk_id(g, k) }))
 }
 
 /// Probe observing the context variable `g`: `(0 @ g)` becomes `(0 @ Δ)`.
 fn ctx_probe(g: u32) -> Term {
     Term::CtxApp {
         fun: rt(Term::Zero),
-        ctx: LocalCtx::ctx_var(GlobalVar(g)),
+        ctx: LocalCtx::ctx_var(GlobalVar::index(g)),
     }
 }
 
@@ -418,7 +418,7 @@ fn beta_ctx_app_and_ty_app() {
             ctx: nil_ctx(0),
             arg_level: Level::Zero,
             body_level: Level::Zero,
-            body: rt(Term::BoxTy(rty(Type::GlobalTy { var: GlobalVar(0), subst: empty }))),
+            body: rt(Term::BoxTy(rty(Type::GlobalTy { var: GlobalVar::index(0), subst: empty }))),
         }),
         arg: rty(Type::Nat),
     };
@@ -435,7 +435,7 @@ fn beta_letbox() {
         code_level: Level::Zero,
         ctx: nil_ctx(0),
         motive: rty(Type::Nat),
-        body: rt(Term::BoxTy(rty(Type::GlobalTy { var: GlobalVar(0), subst: empty.clone() }))),
+        body: rt(Term::BoxTy(rty(Type::GlobalTy { var: GlobalVar::index(0), subst: empty.clone() }))),
         scrut: rt(Term::BoxTy(rty(Type::Nat))),
     };
     assert_eq!(step_term(&t, &gamma), Some(Term::BoxTy(rty(Type::Nat))));
@@ -446,7 +446,7 @@ fn beta_letbox() {
         ctx: nil_ctx(0),
         ty: rty(Type::Nat),
         motive: rty(Type::Nat),
-        body: rt(Term::BoxTm(rt(Term::GlobalTm { var: GlobalVar(0), subst: empty }))),
+        body: rt(Term::BoxTm(rt(Term::GlobalTm { var: GlobalVar::index(0), subst: empty }))),
         scrut: rt(Term::BoxTm(rt(Term::Zero))),
     };
     assert_eq!(step_term(&t, &gamma), Some(Term::BoxTm(rt(Term::Zero))));
@@ -910,7 +910,7 @@ fn recursors_block_on_boxed_global_variables() {
         &b,
         Level::Zero,
         nil_ctx(0),
-        Term::BoxTy(rty(Type::GlobalTy { var: GlobalVar(0), subst: empty.clone() })),
+        Term::BoxTy(rty(Type::GlobalTy { var: GlobalVar::index(0), subst: empty.clone() })),
     );
     assert_eq!(step_term(&t, &gamma), None);
     assert!(is_neutral_term(&t));
@@ -920,7 +920,7 @@ fn recursors_block_on_boxed_global_variables() {
         Level::Zero,
         nil_ctx(0),
         Type::Nat,
-        Term::BoxTm(rt(Term::GlobalTm { var: GlobalVar(0), subst: empty.clone() })),
+        Term::BoxTm(rt(Term::GlobalTm { var: GlobalVar::index(0), subst: empty.clone() })),
     );
     assert_eq!(step_term(&t, &gamma), None);
     assert!(is_neutral_term(&t));
@@ -931,7 +931,7 @@ fn recursors_block_on_boxed_global_variables() {
         Level::Zero,
         nil_ctx(0),
         Type::El { level: Level::Zero, tm: rt(Term::TmNat) },
-        Term::BoxTm(rt(Term::GlobalTm { var: GlobalVar(0), subst: empty })),
+        Term::BoxTm(rt(Term::GlobalTm { var: GlobalVar::index(0), subst: empty })),
     );
     assert!(!is_neutral_term(&t));
     assert!(step_term(&t, &gamma).is_some());

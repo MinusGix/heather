@@ -109,7 +109,9 @@ fn same_source_elaborates_identically() {
 /// Moved 2026-11-09 by the empty substitution tail recording nothing
 /// (`issues/empty-substitution-tail-decoration.md`): every `u^{·^k}` prints
 /// as `u^{·}`.
-const NAT_SUITE_GOLDEN: u64 = 0x44ff6f5637d805b3;
+/// Moved 2026-11-10 by constants (`issues/psi-references-by-level.md`): a
+/// reference to a committed binding prints as its position, `u@p`.
+const NAT_SUITE_GOLDEN: u64 = 0xc981c8b3f07951bd;
 
 #[test]
 fn nat_suite_golden_hash() {

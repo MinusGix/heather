@@ -226,7 +226,7 @@ fn eta_ctx_pi() {
         level: Level::Zero,
         body: rt(Term::CtxApp {
             fun: rt(v(0)),
-            ctx: LocalCtx::ctx_var(GlobalVar(0)),
+            ctx: LocalCtx::ctx_var(GlobalVar::index(0)),
         }),
     };
     ok_tm(&psi, &gamma, &expanded, &v(0), &cpi, &c(0));
@@ -249,7 +249,7 @@ fn eta_ty_pi() {
         body_level: Level::Zero,
         body: rt(Term::TyApp {
             fun: rt(v(0)),
-            arg: rty(Type::GlobalTy { var: GlobalVar(0), subst: empty_subst(vec![]) }),
+            arg: rty(Type::GlobalTy { var: GlobalVar::index(0), subst: empty_subst(vec![]) }),
         }),
     };
     ok_tm(&psi, &gamma, &expanded, &v(0), &tpi, &c(0));
@@ -410,7 +410,7 @@ fn global_term_substitutions_convert_componentwise() {
         body: None,
     }]);
     let g = nil_ctx(0);
-    let u = |t: Term| Term::GlobalTm { var: GlobalVar(0), subst: empty_subst(vec![t]) };
+    let u = |t: Term| Term::GlobalTm { var: GlobalVar::index(0), subst: empty_subst(vec![t]) };
     ok_tm(&psi, &g, &u(beta_zero()), &u(Term::Zero), &Type::Nat, &c(0));
     no_tm(&psi, &g, &u(num(1)), &u(Term::Zero), &Type::Nat, &c(0));
 }
@@ -541,7 +541,7 @@ fn elim_code_ty(motives: Rc<Motives>, branches: Rc<Branches>, ty_nat: Term) -> T
         code_level: Level::Zero,
         ctx: nil_ctx(0),
         scrut: rt(Term::BoxTy(rty(Type::GlobalTy {
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: empty_subst(vec![]),
         }))),
     }
@@ -663,7 +663,7 @@ fn recursor_scrut_box_is_syntactic() {
         code_level: Level::Zero,
         ctx: nil_ctx(0),
         scrut: rt(Term::BoxTy(rty(Type::GlobalTy {
-            var: GlobalVar(var),
+            var: GlobalVar::index(var),
             subst: empty_subst(vec![]),
         }))),
     };

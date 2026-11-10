@@ -309,6 +309,13 @@ impl Cache {
     }
 }
 
+/// Whether Ψ is committed bindings alone. Only such a world has keys: a
+/// question asked under global variables is answered by the kernel every
+/// time (fail closed, like an unhashable reference).
+fn is_signature(psi: &GlobalCtx) -> bool {
+    psi.consts() == psi.bindings.len()
+}
+
 impl Inner {
     /// Bring `prefix` up to Ψ's length.
     ///
@@ -371,6 +378,11 @@ impl Inner {
         while self.prefix.len() < psi.bindings.len() {
             let i = self.prefix.len();
             let h = match (self.pending.take(), self.statement.take()) {
+                // A variable of Ψ is nothing a key may mention: the walk
+                // reads a free reference as a constant (`merkle`'s module
+                // docs), and a binding past the signature is poison to
+                // whatever does name it.
+                _ if i >= psi.consts() => None,
                 (Some((idx, h)), _) if idx == i => h,
                 (_, Some((idx, b, h))) if idx == i && b == psi.bindings[i] => h,
                 _ => merkle::interface_hash(&self.prefix, &psi.bindings[i]),
@@ -385,6 +397,9 @@ impl Inner {
     /// The statement key of `binding` about to land at `psi.bindings.len()`,
     /// remembering its interface hash for `sync`. `None` when unhashable.
     fn statement_key(&mut self, psi: &GlobalCtx, binding: &heather_kernel::term::GlobalBinding) -> Option<(Hash, Hash)> {
+        if !is_signature(psi) {
+            return None;
+        }
         self.sync(psi);
         let at = self.prefix.len();
         let iface = match &self.statement {
@@ -402,6 +417,9 @@ impl Inner {
     /// Interface hash and check key for the item at the gate, or `None` if
     /// either is unhashable (§3.1: fail closed, never cache).
     fn identify(&mut self, psi: &GlobalCtx, item: &GateItem<'_>) -> Option<(Hash, Hash)> {
+        if !is_signature(psi) {
+            return None;
+        }
         let at = psi.bindings.len();
         // The `admits`/`accepted` pair asks about one declaration in one Ψ;
         // answering twice would double the run's hashing, which is the whole
