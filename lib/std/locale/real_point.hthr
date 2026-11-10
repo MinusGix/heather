@@ -101,7 +101,7 @@ fn CReal::formal_point(self x: CReal) → FormalPoint<QInterval>(QInterval::Le, 
 
 // The point of the real line a Cauchy real is.
 fn CReal::point(self x: CReal) → Point(RealLine::Le, RealLine::meet, Opens::top<QInterval>(), Opens::sup<QInterval>) {
-    FormalPoint::point(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, λ (a: QInterval) => x.In(a), x.formal_point())
+    (x.formal_point()).point()
 }
 
 // It lies in a basic open exactly when the real lies strictly between the
@@ -119,7 +119,7 @@ theorem CReal::in_of_point(self x: CReal, a: QInterval, h: (x.point()).inv(Forma
 theorem CReal::in_cover(self x: CReal, u: Opens<QInterval>, a: QInterval, c: RealLine::Cov(u, a), h: x.In(a)):
     Exists<QInterval>(λ b => u.has(b) ∧ x.In(b))
 {
-    FormalPoint::in_cover(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, λ (b: QInterval) => x.In(b), x.formal_point(), u, a, c, h)
+    (x.formal_point()).in_cover(u, a, c, h)
 }
 
 // Equal reals are the same point, and a point tells apart reals that are

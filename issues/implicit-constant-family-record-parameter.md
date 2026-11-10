@@ -1,6 +1,6 @@
 ---
 title: Infer a record type's parameter that is a constant family
-status: open
+status: closed
 labels: [elaborator,inference,records]
 area: language
 created: 2026-11-10
@@ -45,3 +45,18 @@ of it.
   for unification, or the declared type of the argument read before its
   whnf.
 - Then make the presentation implicit in `FormalPoint::point` and friends.
+
+## Log
+
+- 2026-11-10: Done. A field's `C(a)` is the Miller pattern `?C(a)`, and
+  `unify_tm` now solves such patterns by abstraction (`?C := λ a. Bool`),
+  binders annotated from the slot's declared type, wherever the first-order
+  congruence would not align the spine
+  (docs/unifier-completeness-design.md §10.4). The library case needed a
+  second rule: `ax` is read only through `(ax(a, k)).has(c)`, spelled as the
+  accessor `Opens::has` in the pattern and as a projection in the subject,
+  so a pattern call against a projection now unfolds the pattern's head
+  constant. `FormalPoint::point`, `in_open` and `in_cover` take the
+  presentation implicitly (and `p` as `self`); `CReal::point` and
+  `CReal::in_cover` call them as `(x.formal_point()).point()`. Probes in
+  lib/_tests/lang/implicit_family_tests.hthr.

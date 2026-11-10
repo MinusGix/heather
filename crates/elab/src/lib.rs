@@ -10395,6 +10395,12 @@ impl Elaborator {
         })
     }
 
+    /// [`unification::U::unfold_constant`]: a closed constant of Σ, `t`,
+    /// unfolded one δ step to its definition, when it is transparent.
+    fn unfold_constant(&self, cx: &Cx, t: &Term) -> Option<Term> {
+        self.semantic_oracle().unfold(&cx.gamma, t, Unfold::NextHead).next()
+    }
+
     /// The unifier's context for a root attempt in `cx`: the scope, and
     /// [`Self::spine_type_args`] for the `app@` nodes of a subject. Every
     /// solution is held to its slot's declared type in `doms` (the call's
@@ -10486,7 +10492,9 @@ impl Elaborator {
         let slot_view = |t: &Term| self.slot_view(t);
         let check = SolutionCheck::new(self, cx, doms, n);
         let admit = |i: usize, s: &Term, sols: &[Sol]| check.admit(i, s, sols);
+        let slot_type = |i: usize, sols: &[Sol]| doms.get(i).and_then(|t| unification::zonked(t, n, sols));
         let next_head = |t: &Term| self.next_head(cx, t);
+        let unfold_constant = |t: &Term| self.unfold_constant(cx, t);
         let u = unification::U {
             gamma: &cx.gamma,
             subject_metas: None,
@@ -10495,9 +10503,11 @@ impl Elaborator {
             respell: &respell,
             constructor: &constructor,
             slot_view: &slot_view,
+            slot_type: &slot_type,
             admit: &admit,
             disagree,
             next_head: &next_head,
+            unfold_constant: &unfold_constant,
             guesses,
             clash,
         };

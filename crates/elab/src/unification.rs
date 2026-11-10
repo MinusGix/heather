@@ -180,6 +180,11 @@ pub(super) struct U<'a> {
     /// an applied meta of one argument. `None` declines, and the aligned
     /// spine's head-plus-leading-arguments rule applies.
     pub(super) slot_view: &'a dyn Fn(&Term) -> Option<(Term, Term)>,
+    /// A slot's declared type with every earlier slot it mentions solved,
+    /// scoped in `gamma` and the committed Ψ: what a Miller solution's
+    /// binders are annotated with ([`miller`]). `None` when it still
+    /// mentions an open slot, or the caller has no declared types.
+    pub(super) slot_type: &'a dyn Fn(usize, &[Sol]) -> Option<Type>,
     /// Every write goes through [`assign`], and this is its one check
     /// (docs/elaborator-principles-survey.md P1,
     /// issues/unifier-checked-assignment.md): may `slot` take the solution,
@@ -201,6 +206,12 @@ pub(super) struct U<'a> {
     /// P3, issues/unifier-lazy-delta.md). `None` when the subject does not
     /// unfold, or not within the walk's budget.
     pub(super) next_head: &'a dyn Fn(&Term) -> Option<Term>,
+    /// A constant of Σ, closed, unfolded to its definition: the one δ step
+    /// the unifier takes on the **pattern** side ([`pattern_unfolded`]).
+    /// A constant is spelled the same in the pattern's scratch world and the
+    /// committed one, so its body needs no rescoping. `None` when it does
+    /// not unfold (an axiom, a withheld definition).
+    pub(super) unfold_constant: &'a dyn Fn(&Term) -> Option<Term>,
     /// Whether the approximate rules may write now ([`Guesses`]).
     pub(super) guesses: Guesses<'a>,
     /// Told when the two sides are **decidedly different** ([`Clash`]).
@@ -469,9 +480,11 @@ impl<'a> U<'a> {
             respell: &|_| None,
             constructor: &|_| None,
             slot_view: &|_| None,
+            slot_type: &|_, _| None,
             admit: &|_, _, _| true,
             disagree: None,
             next_head: &|_| None,
+            unfold_constant: &|_| None,
             guesses: Guesses::Take,
             clash: None,
         }
@@ -718,6 +731,19 @@ pub(super) fn unify_ty(
         (Type::El { tm: t1, .. }, Type::El { tm: t2, .. }) => {
             unify_tm(u, t1, t2, n, d, sols);
         }
+        // `El(?C(x̄))`, a Miller pattern, against a type former: the family's
+        // value is the former's code abstracted over the arguments
+        // ([`miller`]) — `λ a => Bool` read through a record field's `C(a)`
+        // (issues/implicit-constant-family-record-parameter.md). Before the
+        // re-spelling below, which could only meet a former that mentions
+        // none of the walk's binders, and whose first-order alignment would
+        // then pair the arguments with whatever the re-spelled code applies:
+        // `?C := List` from `List(Nat)`, refused by the kernel later.
+        (Type::El { tm, .. }, s) if !matches!(s, Type::El { .. }) && miller_spine(u, tm, n, d, sols).is_some() => {
+            if let Some(c) = code::code_of(s) {
+                unify_tm(u, tm, &c, n, d, sols);
+            }
+        }
         // A pattern spelled through a declaration's code, `El(app(D#code;
         // ?A))`, against the inline lowering of the same declaration: the
         // two spellings share nothing structural to align. Re-spell the
@@ -906,6 +932,22 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         let subj = s.as_ref().unwrap_or(subj);
         return unify_tm(u, pat, subj, n, d, sols);
     }
+    // A Miller pattern `?C(x̄)`, its arguments distinct binders the walk
+    // entered, against a subject the congruence below would not align with
+    // it: one that is no application, one that mentions none of the walk's
+    // binders (a constant family's value, `λ a => Bool` read through
+    // `C(a)`, where the alignment would pair `a` with an argument of the
+    // value), or a spine the flex-head guard refuses (`?in(a)` against
+    // `x.In(a)`: the leading `x` is a value). The abstraction is exact
+    // there. A spine the congruence does align keeps its first-order
+    // solution (`?C := Big` from `Big(a)`), which callers have always been
+    // given.
+    if let Some((slot, args)) = miller_spine(u, pat, n, d, sols)
+        && (!spelling::is_app(subj) || u.subject_tm(subj, d).is_some() || !matching_value_spine(u, pat, subj, d))
+        && miller(u, slot, &args, subj, d, sols)
+    {
+        return;
+    }
     match (pat, subj) {
         (Term::Succ(a), Term::Succ(b)) => unify_tm(u, a, b, n, d, sols),
         // A numeral is `Succ^k(Zero)` (kernel `NatLit`), so `Succ(?n) ≟ 8`
@@ -1072,6 +1114,18 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         }
         (Term::Lam { body: b1, .. }, Term::Lam { body: b2, .. }) => {
             unify_tm(u, b1, b2, n, d + 1, sols);
+        }
+        // A call against a projection: a record field read through its
+        // accessor in the pattern, `Opens::has<?P>(?ax(a, k))`, where the
+        // subject arrived with the accessor already unfolded,
+        // `fst@(RealAxiom::open(a, k))`. The δ-lazy order steps the subject
+        // only; here the pattern is the side that has to step, so its head
+        // constant unfolds and the β-redex it leaves is met again
+        // (issues/implicit-constant-family-record-parameter.md).
+        (p, s) if spelling::is_app(p) && projection_of(s).is_some() && zonked_tm(p, n, sols).is_none() => {
+            if let Some(r) = pattern_unfolded(u, p) {
+                unify_tm(u, &r, s, n, d, sols);
+            }
         }
         // A canonical pattern against a subject that has to compute before
         // it is one: `BitVec(Succ(?n))` at `x: BitVec(m + Succ(k))`, or
@@ -1358,6 +1412,100 @@ fn committed_head(mut t: &Term, n: u32) -> bool {
         t = fun;
     }
     matches!(t, Term::GlobalTm { var, .. } if var.innermost(n).is_none())
+}
+
+/// A Miller pattern `?C(x₁, …, x_k)`: an open slot of this call under the
+/// weakened identity, applied to distinct binders the walk entered (indices
+/// below `d`). The slot and its arguments' indices, outermost first.
+fn miller_spine(u: &U<'_>, pat: &Term, n: u32, d: u32, sols: &[Sol]) -> Option<(usize, Vec<u32>)> {
+    let mut args = Vec::new();
+    let mut head = pat;
+    while let Some((fun, arg)) = spelling::app_of(head) {
+        let Term::Var(LocalVar(i)) = &**arg else { return None };
+        if *i >= d || args.contains(i) {
+            return None;
+        }
+        args.push(*i);
+        head = fun;
+    }
+    if args.is_empty() {
+        return None;
+    }
+    args.reverse();
+    let Term::GlobalTm { var, subst } = head else { return None };
+    let slot = var.innermost(n)? as usize;
+    (matches!(sols[slot], Sol::Unsolved) && *subst == embed(u.gamma, d)).then_some((slot, args))
+}
+
+/// Solve the Miller pattern `?C(x̄) ≟ s` ([`miller_spine`]) by abstraction:
+/// `?C := λ ȳ. s[x̄ := ȳ]`, the one solution up to conversion, written only
+/// when `s` mentions no other binder the walk entered. The binders are
+/// annotated from the slot's declared type ([`U::slot_type`]), which the
+/// solution is held to anyway ([`U::admit`]). `true` when the pattern was
+/// answered, whether or not the slot took the solution; `false` leaves the
+/// pairing to the other rules.
+fn miller(u: &U<'_>, slot: usize, args: &[u32], subj: &Term, d: u32, sols: &mut [Sol]) -> bool {
+    let m = u.gamma.entries.len() as u32;
+    let k = args.len() as u32;
+    // `subj` is scoped in `gamma` and the `d` walked binders; the body is in
+    // `gamma` and the λ's `k`. Gamma's entries move up by `k`, the argument
+    // binders become the λ's, and every other walked binder is a marker:
+    // two different markers giving the same term is the proof it is absent.
+    let with = |marker: &Term| {
+        let tail = match u.gamma.base {
+            CtxBase::Nil => SubstTail::Empty,
+            CtxBase::Var(g) => SubstTail::Wk { len: m + k, ctx_var: g },
+        };
+        let mut terms: Vec<Rc<Term>> = (0..m).map(|j| Rc::new(Term::Var(LocalVar(m + k - 1 - j)))).collect();
+        for p in 0..d {
+            let i = d - 1 - p;
+            terms.push(Rc::new(match args.iter().position(|&a| a == i) {
+                Some(j) => Term::Var(LocalVar(k - 1 - j as u32)),
+                None => marker.clone(),
+            }));
+        }
+        subj.apply_local(&LocalSubst { tail, terms })
+    };
+    let body = with(&Term::Zero);
+    if body != with(&Term::Succ(Rc::new(Term::Zero))) {
+        return false;
+    }
+    let body = match u.subject_metas {
+        Some((sn, ssols)) => match zonked_tm(&body, sn, ssols) {
+            Some(b) => b,
+            None => return true,
+        },
+        None => body,
+    };
+    let Some(mut ty) = (u.slot_type)(slot, sols) else { return true };
+    let mut binders = Vec::with_capacity(args.len());
+    for _ in args {
+        let Type::Pi { dom_level, cod_level, dom, cod } = &*inductive::decoded(&ty) else { return true };
+        binders.push((dom_level.clone(), cod_level.clone(), Rc::clone(dom)));
+        let next = (**cod).clone();
+        ty = next;
+    }
+    let solution = binders.into_iter().rev().fold(body, |body, (dom_level, cod_level, dom)| Term::Lam {
+        dom_level,
+        cod_level,
+        dom,
+        body: Rc::new(body),
+    });
+    assign(u, slot, solution, sols);
+    true
+}
+
+/// A pattern spine headed by a closed constant of Σ, its head unfolded
+/// ([`U::unfold_constant`]) and the spine rebuilt over the body: a β-redex
+/// the next [`unify_tm`] contracts. `None` for any other head.
+fn pattern_unfolded(u: &U<'_>, p: &Term) -> Option<Term> {
+    let (head, args) = spelling::app_spine(p);
+    let Term::GlobalTm { var, subst } = head else { return None };
+    if !var.is_const() || !subst.terms.is_empty() || !matches!(subst.tail, SubstTail::Empty) {
+        return None;
+    }
+    let body = (u.unfold_constant)(head)?;
+    Some(args.iter().fold(body, |fun, arg| Term::AppAt { fun: Rc::new(fun), arg: Rc::clone(arg) }))
 }
 
 /// Is `t` a meta of this call **applied** to at least one argument —
