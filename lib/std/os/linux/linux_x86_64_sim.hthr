@@ -6,8 +6,10 @@
 // Linux answers it with the trace's answer, and from every state Linux may
 // resume in (whatever it leaves in RCX, R11 and a failed call's buffer) the
 // rest of the trace holds again; a trace that returns ends at an exit with
-// its status. `RunsAs` is that claim, by recursion on the trace, and it reads
-// the definitions `LinuxRuns` reads, so for a whole trace the two are one
+// its status. `RunsAs` is that claim: `call_system`'s `CallSystem::Holds` at
+// the process as a system of claims (`CallSystem::linux_claims`), and
+// `RunsAlong` the same at the process as a system of runs. It reads the
+// definitions `LinuxRuns` reads, so for a whole trace the two are one
 // (`runs_as_linux_runs`, `linux_runs_runs_as`). `Sim(t)` is the claim of
 // every trace of `t` Linux may produce: the history of answers is the
 // trace's. With determinism, a run with the answers of a whole trace of `t`
@@ -27,27 +29,57 @@ import linux_x86_64_determinism;
 import linux_trees;
 import itree;
 import itree_trace;
+import call_system;
+import transition;
 import x86_64;
+import x86_64_step_forms;
 import bitvec;
 import list;
 import logic;
 import nat;
 
+// A process over Linux's calls as a `CallSystem` (call_system.hthr): it
+// steps silently between syscalls, moves only at a syscall, returns at an
+// exit, and asks the call its registers request with writable buffers.
+// Linux answers; a claim covers every way Linux may resume (`LinuxAnswered`),
+// a run picks one (`LinuxResumed`).
+fn CallSystem::linux_claims<M>(io: LinuxIo<M>) → CallSystem<MachineState<M>, BitVec(64)>(Events::linux()) {
+    CallSystem(λ s t => LinuxStep(io, s, t), λ at => LinuxSyscallAt(io, at), λ at status => LinuxExits(at, status),
+        λ at c => LinuxRequests(io, at, c), λ at c a next => LinuxAnswered(io, at, c, a, next))
+}
+
+fn CallSystem::linux_runs<M>(io: LinuxIo<M>) → CallSystem<MachineState<M>, BitVec(64)>(Events::linux()) {
+    CallSystem(λ s t => LinuxStep(io, s, t), λ at => LinuxSyscallAt(io, at), λ at status => LinuxExits(at, status),
+        λ at c => LinuxAsks(io, at, c), λ at c a next => LinuxAsks(io, at, c) ∧ LinuxResumed(io, at, c, a, next))
+}
+
+// The claim a trace makes of the machine: `CallSystem::Holds` at the
+// process.
 fn RunsAs<M>(io: LinuxIo<M>, tr: Trace<BitVec(64)>(Events::linux())) → MachineState<M> → Type {
-    match tr {
-        TEnd => λ state => True,
-        TRet(status) => λ state => Exists<MachineState<M>>(λ at =>
-            LinuxSteps(io, state, at) ∧ (LinuxSyscallAt(io, at) ∧ LinuxExits(at, status))),
-        TCall(c) => λ state => Exists<MachineState<M>>(λ at =>
-            LinuxSteps(io, state, at) ∧ (LinuxSyscallAt(io, at) ∧ LinuxRequests(io, at, c))),
-        TAns(c, a, rest) => λ state => Exists<MachineState<M>>(λ at =>
-            LinuxSteps(io, state, at) ∧ (LinuxSyscallAt(io, at) ∧ LinuxAnswered(io, at, c, a, RunsAs(io, rest)))),
-    }
+    CallSystem::Holds(Events::linux(), CallSystem::linux_claims(io), tr)
+}
+
+// A run of the machine along a trace, as it happened.
+fn RunsAlong<M>(io: LinuxIo<M>, tr: Trace<BitVec(64)>(Events::linux())) → MachineState<M> → Type {
+    CallSystem::Holds(Events::linux(), CallSystem::linux_runs(io), tr)
 }
 
 fn Sim<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux())) → MachineState<M> → Type {
     λ state => (tr: Trace<BitVec(64)>(Events::linux())) → IsTrace(Events::linux(), t, tr) →
         Trace::LinuxValid(tr) → RunsAs(io, tr, state)
+}
+
+// `Sim` is refinement of the tree, as a system, by the machine's claims.
+theorem sim_refines<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    sim: Sim(io, t, state)): CallSystem::Refines(Events::linux(), CallSystem::tree<BitVec(64)>(Events::linux()),
+    CallSystem::linux_claims(io), λ tr => Trace::LinuxValid(tr), t, state) {
+    λ tr holds valid => sim(tr, CallSystem::tree_is_trace(Events::linux(), tr, t, holds), valid)
+}
+
+theorem refines_sim<M>(io: LinuxIo<M>, t: ITree<BitVec(64)>(Events::linux()), state: MachineState<M>,
+    refines: CallSystem::Refines(Events::linux(), CallSystem::tree<BitVec(64)>(Events::linux()),
+        CallSystem::linux_claims(io), λ tr => Trace::LinuxValid(tr), t, state)): Sim(io, t, state) {
+    λ tr it valid => refines(tr, IsTrace::holds(Events::linux(), t, tr, it), valid)
 }
 
 // A program meets its spec at every fuel.
@@ -220,6 +252,177 @@ theorem linux_runs_runs_as<M>(io: LinuxIo<M>, tr: Trace<BitVec(64)>(Events::linu
                     λ resumed claim => linux_runs_runs_as(io, rest, resumed, claim), answered.right.right)⟩⟩⟩⟩)
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Determinacy along traces: `CallSystem::determined` at the process. A
+// claim and a run from related states meet at related syscalls, ask one
+// call, and with the same answer resume in related states, since the claim
+// covers whatever Linux left the run.
+
+// An event as the first move of a trace.
+fn LinuxEvent::then(self event: LinuxEvent, rest: Trace<BitVec(64)>(Events::linux())) → Trace<BitVec(64)>(Events::linux()) {
+    match event { CallEvent(c, a) => TAns(c, a, rest), ExitEvent(status) => TRet(status) }
+}
+
+// How a run resumed after an event's call.
+fn LinuxEvent::resumed<M>(self event: LinuxEvent, io: LinuxIo<M>, at: MachineState<M>, next: MachineState<M> → Type) → Type {
+    match event { CallEvent(c, a) => LinuxResumed(io, at, c, a, next), ExitEvent(_) => True }
+}
+
+theorem linux_meets<M>(io: LinuxIo<M>): Meets<MachineState<M>, BitVec(64)>(Events::linux(), CallSystem::linux_claims(io),
+    CallSystem::linux_runs(io), λ x y => SameDefinedState<M>(x, y), λ c a d b => SameAnswer(c, a, d, b)) {
+    Meets(
+        λ a a2 b b2 same left right =>
+            step_respects_defined(io.fetch, io.data, linux_writes(io), a, a2, b, b2, same, left, right),
+        λ a a2 b2 same stop step => syscall_excludes_step(io.fetch, io.data, linux_writes(io), a, a2, b2, same, stop, step),
+        λ a a2 b same step stop =>
+            syscall_excludes_step(io.fetch, io.data, linux_writes(io), a2, a, b, sym(same), stop, step),
+        λ a a2 r r2 same _ _ (left: LinuxExits(a, r)) (right: LinuxExits(a2, r2)) =>
+            trans(sym(left.right), trans(register_related(Rdi, a, a2, same), right.right)),
+        λ a a2 c d same _ _ (left: LinuxRequests(io, a, c)) (right: LinuxAsks(io, a2, d)) =>
+            asks_meet(io, a, a2, same, c, d, left.left, right),
+        λ a a2 c d x y next next2 same _ _ (claim: LinuxAnswered(io, a, c, x, next))
+            (run: LinuxAsks(io, a2, d) ∧ LinuxResumed(io, a2, d, y, next2)) alike => {
+            let events: (CallEvent(c, x) = CallEvent(d, y)) = call_meets(io, a, a2, same, c, x, d, y, claim.left.left,
+                run.left, alike);
+            let moved: LinuxResumed(io, a2, c, x, next2) =
+                j(sym(events), λ e _ => LinuxEvent::resumed(e, io, a2, next2), run.right);
+            let junk = moved.witness;
+            let rcx = moved.proof.right.witness;
+            let r11 = moved.proof.right.proof.witness;
+            ⟨λ rest => cong_fn(λ (e: LinuxEvent) => LinuxEvent::then(e, rest), events),
+                Exists(linux_answered(io, a, c, x, junk, rcx, r11), Exists(linux_answered(io, a2, c, x, junk, rcx, r11),
+                    ⟨linux_answered_respects<M>(io, c, x, junk, rcx, r11, a, a2, same),
+                        ⟨claim.right.right(junk, moved.proof.left, rcx, r11), moved.proof.right.proof.proof⟩⟩))⟩
+        })
+}
+
+// A claimed trace and a run along a trace from related states that got the
+// same answers are one trace.
+theorem runs_as_determined<M>(io: LinuxIo<M>, tr, other: Trace<BitVec(64)>(Events::linux()), left, right: MachineState<M>,
+    same: SameDefinedState<M>(left, right), claim: RunsAs(io, tr, left), run: RunsAlong(io, other, right),
+    agree: CallSystem::Agree(Events::linux(), λ c a d b => SameAnswer(c, a, d, b), tr, other)): tr = other {
+    CallSystem::determined(Events::linux(), CallSystem::linux_claims(io), CallSystem::linux_runs(io),
+        λ x y => SameDefinedState<M>(x, y), λ c a d b => SameAnswer(c, a, d, b), linux_meets(io), tr, other, left, right,
+        same, claim, run, agree)
+}
+
+// ---------------------------------------------------------------------------
+// Event lists as traces. `LinuxRuns` and `LinuxRun` list a whole run's
+// events; as a trace they are its answered calls, then the return.
+
+fn Trace::of_linux_events(events: List<LinuxEvent>) → Trace<BitVec(64)>(Events::linux()) {
+    match events { Nil => TEnd, Cons(event, rest) => event.then(Trace::of_linux_events(rest)) }
+}
+
+theorem linux_run_along<M>(io: LinuxIo<M>, events: List<LinuxEvent>): (state: MachineState<M>) →
+    LinuxRun(io, events, state) → RunsAlong(io, Trace::of_linux_events(events), state) {
+    match events {
+        Nil => λ state never => false_elim(never),
+        Cons(event, rest) => λ state ran => {
+            let at = ran.witness;
+            (match event as λ e => RunAt(io, e, rest, at) → RunsAlong(io, Trace::of_linux_events(Cons(e, rest)), state) {
+                CallEvent(c, a) => λ here => {
+                    let resumed = here.right;
+                    let rcx = resumed.proof.right.witness;
+                    let r11 = resumed.proof.right.proof.witness;
+                    Exists(at, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨here.left, Exists(resumed.witness,
+                        ⟨resumed.proof.left, Exists(rcx, Exists(r11, linux_run_along(io, rest,
+                            linux_answered(io, at, c, a, resumed.witness, rcx, r11), resumed.proof.right.proof.proof)))⟩)⟩⟩⟩)
+                },
+                ExitEvent(_) => λ here => Exists(at, ⟨ran.proof.left, ⟨ran.proof.right.left, here.left⟩⟩),
+            })(run_at(io, event, rest, state, ran))
+        },
+    }
+}
+
+theorem linux_runs_claims<M>(io: LinuxIo<M>, events: List<LinuxEvent>): (state: MachineState<M>) →
+    LinuxRuns(io, events, state) → RunsAs(io, Trace::of_linux_events(events), state) {
+    match events {
+        Nil => λ state never => false_elim(never),
+        Cons(event, rest) => λ state claimed => {
+            let at = claimed.witness;
+            (match event as λ e => ClaimAt(io, e, rest, at) → RunsAs(io, Trace::of_linux_events(Cons(e, rest)), state) {
+                CallEvent(c, a) => λ here => Exists(at, ⟨claimed.proof.left, ⟨claimed.proof.right.left, ⟨here.left,
+                    ⟨here.right.left, linux_resumes_mono(io, at, c, a, LinuxRuns(io, rest), RunsAs(io, Trace::of_linux_events(rest)),
+                        λ resumed claim => linux_runs_claims(io, rest, resumed, claim), here.right.right)⟩⟩⟩⟩),
+                ExitEvent(_) => λ here => Exists(at, ⟨claimed.proof.left, ⟨claimed.proof.right.left, here.left⟩⟩),
+            })(claim_at(io, event, rest, state, claimed))
+        },
+    }
+}
+
+// A run's events are its trace's: an exit ends the list.
+theorem linux_run_events<M>(io: LinuxIo<M>, events: List<LinuxEvent>): (state: MachineState<M>) →
+    LinuxRun(io, events, state) → Trace::linux_events(Trace::of_linux_events(events)) = events {
+    match events {
+        Nil => λ state never => false_elim(never),
+        Cons(event, rest) => λ state ran => {
+            let at = ran.witness;
+            (match event as λ e => RunAt(io, e, rest, at) →
+                Trace::linux_events(Trace::of_linux_events(Cons(e, rest))) = Cons(e, rest) {
+                CallEvent(c, a) => λ here => {
+                    let resumed = here.right;
+                    let rcx = resumed.proof.right.witness;
+                    let r11 = resumed.proof.right.proof.witness;
+                    cong_fn(λ (more: List<LinuxEvent>) => Cons(CallEvent(c, a), more), linux_run_events(io, rest,
+                        linux_answered(io, at, c, a, resumed.witness, rcx, r11), resumed.proof.right.proof.proof))
+                },
+                ExitEvent(status) => λ here =>
+                    cong_fn(λ (more: List<LinuxEvent>) => Cons(ExitEvent(status), more), sym(here.right)),
+            })(run_at(io, event, rest, state, ran))
+        },
+    }
+}
+
+// Lists that got the same answers are traces that agree move by move.
+theorem same_responses_agree(claim: List<LinuxEvent>): (run: List<LinuxEvent>) → SameResponses(claim, run) →
+    CallSystem::Agree(Events::linux(), λ c a d b => SameAnswer(c, a, d, b), Trace::of_linux_events(claim),
+        Trace::of_linux_events(run)) {
+    match claim {
+        Nil => λ run => match run { Nil => λ _ => trivial, Cons(_, _) => λ never => false_elim(never) },
+        Cons(event, rest) => λ run => match run {
+            Nil => λ never => false_elim(never),
+            Cons(other, more) => λ responses => (match event as λ e => SameResponse(e, other) →
+                CallSystem::Agree(Events::linux(), λ c a d b => SameAnswer(c, a, d, b), e.then(Trace::of_linux_events(rest)),
+                    other.then(Trace::of_linux_events(more))) {
+                CallEvent(c, a) => match other as λ o => SameResponse(CallEvent(c, a), o) →
+                    CallSystem::Agree(Events::linux(), λ c a d b => SameAnswer(c, a, d, b),
+                        TAns(c, a, Trace::of_linux_events(rest)), o.then(Trace::of_linux_events(more))) {
+                    CallEvent(_, _) => λ alike => ⟨alike, same_responses_agree(rest, more, responses.right)⟩,
+                    ExitEvent(_) => λ never => false_elim(never),
+                },
+                ExitEvent(status) => match other as λ o => SameResponse(ExitEvent(status), o) →
+                    CallSystem::Agree(Events::linux(), λ c a d b => SameAnswer(c, a, d, b),
+                        Trace::returned<BitVec(64)>(Events::linux(), status), o.then(Trace::of_linux_events(more))) {
+                    ExitEvent(_) => λ _ => trivial,
+                    CallEvent(_, _) => λ never => false_elim(never),
+                },
+            })(responses.left),
+        },
+    }
+}
+
+// The run is the run (`linux_x86_64_determinism`), through the traces:
+// from related states, a claimed run and any actual run that got the same
+// answers produced the same events.
+theorem linux_runs_determine<M>(io: LinuxIo<M>, claim, run: List<LinuxEvent>, left, right: MachineState<M>,
+    same: SameDefinedState<M>(left, right), claimed: LinuxRuns(io, claim, left), ran: LinuxRun(io, run, right),
+    responses: SameResponses(claim, run)): claim = run {
+    let traces = runs_as_determined(io, Trace::of_linux_events(claim), Trace::of_linux_events(run), left, right, same,
+        linux_runs_claims(io, claim, left, claimed), linux_run_along(io, run, right, ran),
+        same_responses_agree(claim, run, responses));
+    trans(sym(linux_run_events(io, claim, left, claim_is_run(io, claim, left, claimed))),
+        trans(cong_fn(λ (tr: Trace<BitVec(64)>(Events::linux())) => Trace::linux_events(tr), traces),
+            linux_run_events(io, run, right, ran)))
+}
+
+// From one state, the claim is every run with its answers.
+theorem linux_runs_every<M>(io: LinuxIo<M>, claim, run: List<LinuxEvent>, start: MachineState<M>,
+    claimed: LinuxRuns(io, claim, start), ran: LinuxRun(io, run, start), responses: SameResponses(claim, run)):
+    run = claim {
+    sym(linux_runs_determine(io, claim, run, start, start, refl, claimed, ran, responses))
 }
 
 // A whole trace of the tree is a run of the machine…

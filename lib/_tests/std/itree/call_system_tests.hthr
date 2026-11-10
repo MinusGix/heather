@@ -1,0 +1,87 @@
+// Probes of `lib/std/itree/call_system.hthr`: an adding process as a call
+// system, its claims and runs, their determinacy, and a tree read as a
+// system. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import call_system; import itree; import itree_trace; import transition; import logic; import nat; import list;
+import omega;
+
+// Calls name a number; the answer is a number.
+fn Numbers() → Events { Events(Nat, λ _ => Nat) }
+
+// An adder: a state asks its own value, and resumes at the value plus the
+// answer. It returns its value, and never steps silently.
+fn adder_silent(a, b: Nat) → Type { False }
+fn adder_stop(a: Nat) → Type { True }
+fn adder_returns(a, r: Nat) → Type { r = a }
+fn adder_asks(a, c: Nat) → Type { c = a }
+fn adder_resumes(a, c, x, b: Nat) → Type { b = a + x }
+
+fn adder_claims() → CallSystem<Nat, Nat>(Numbers()) {
+    CallSystem::claiming(Numbers(), adder_silent, adder_stop, adder_returns, adder_asks, adder_resumes)
+}
+fn adder_runs() → CallSystem<Nat, Nat>(Numbers()) {
+    CallSystem::of_resumes(Numbers(), adder_silent, adder_stop, adder_returns, adder_asks, adder_resumes)
+}
+
+fn ans(c, x: Nat, rest: Trace<Nat>(Numbers())) → Trace<Nat>(Numbers()) { TAns(c, x, rest) }
+
+// From 2, asked 2 and answered 3, the adder returns 5.
+theorem adder_claims_five(): CallSystem::Holds(Numbers(), adder_claims(), TAns(2, 3, TRet(5)), 2) {
+    Exists(2, ⟨Star::refl(adder_silent, 2), ⟨trivial, ⟨refl, λ b (moved: b = 2 + 3) =>
+        Exists(b, ⟨Star::refl(adder_silent, b), ⟨trivial, { omega }⟩⟩)⟩⟩⟩)
+}
+
+// The adder can always resume, so a claim is a run.
+theorem adder_runs_five(): CallSystem::Holds(Numbers(), adder_runs(), TAns(2, 3, TRet(5)), 2) {
+    CallSystem::claim_is_run(Numbers(), adder_silent, adder_stop, adder_returns, adder_asks, adder_resumes,
+        λ a c x _ => Exists(a + x, refl), TAns(2, 3, TRet(5)), 2, adder_claims_five())
+}
+
+// A claim and a run from one state that got the same answers made one trace.
+theorem adder_meets(): Meets<Nat, Nat>(Numbers(), adder_claims(), adder_runs(), λ a b => a = b, λ c x d y => x = y) {
+    Meets(
+        λ a a2 b b2 same never _ => false_elim(never),
+        λ a a2 b2 same _ never => false_elim(never),
+        λ a a2 b same never _ => false_elim(never),
+        λ a a2 r r2 (same: a = a2) _ _ (left: r = a) (right: r2 = a2) => { omega },
+        λ a a2 c d (same: a = a2) _ _ (left: c = a) (right: d = a2) => { omega },
+        λ a a2 c d x y next next2 (same: a = a2) _ _ claim run (alike: x = y) => {
+            let asked: (c = a) = claim.left;
+            let asked2: (d = a2) = run.left;
+            let called: (c = d) = { omega };
+            let b2 = run.right.witness;
+            let resumed2: (b2 = a2 + y) = run.right.proof.left;
+            ⟨λ rest => trans(cong_fn(λ (e: Nat) => ans(e, x, rest), called), cong_fn(λ (z: Nat) => ans(d, z, rest), alike)),
+                Exists(a + x, Exists(b2, ⟨{ omega }, ⟨claim.right(a + x, refl), run.right.proof.right⟩⟩))⟩
+        })
+}
+
+theorem adder_runs_once(tr: Trace<Nat>(Numbers()), run: CallSystem::Holds(Numbers(), adder_runs(), tr, 2),
+    agree: CallSystem::Agree(Numbers(), λ c x d y => x = y, TAns(2, 3, TRet(5)), tr)): ans(2, 3, TRet(5)) = tr {
+    CallSystem::determined(Numbers(), adder_claims(), adder_runs(), λ a b => a = b, λ c x d y => x = y, adder_meets(),
+        TAns(2, 3, TRet(5)), tr, 2, 2, refl, adder_claims_five(), run, agree)
+}
+
+// The claim does not hold of a trace with another return.
+// expect-error: NotConvertible
+theorem adder_claims_six(): CallSystem::Holds(Numbers(), adder_claims(), TAns(2, 3, TRet(6)), 2) {
+    Exists(2, ⟨Star::refl(adder_silent, 2), ⟨trivial, ⟨refl, λ b (moved: b = 2 + 3) =>
+        Exists(b, ⟨Star::refl(adder_silent, b), ⟨trivial, refl⟩⟩)⟩⟩⟩)
+}
+
+// ---------------------------------------------------------------------------
+// A tree as a system: its traces are what its trace says of it.
+
+fn echo() → ITree<Nat>(Numbers()) { Tau(Vis(7, λ x => Ret(x))) }
+
+theorem echo_trace(): IsTrace(Numbers(), echo(), TAns(7, 4, TRet(4))) {
+    Answered(4, TRet(4), refl, Returned(refl))
+}
+
+theorem echo_holds(): CallSystem::Holds(Numbers(), CallSystem::tree<Nat>(Numbers()), TAns(7, 4, TRet(4)), echo()) {
+    IsTrace::holds(Numbers(), echo(), TAns(7, 4, TRet(4)), echo_trace())
+}
+
+theorem echo_trace_back(): IsTrace(Numbers(), echo(), TAns(7, 4, TRet(4))) {
+    CallSystem::tree_is_trace(Numbers(), TAns(7, 4, TRet(4)), echo(), echo_holds())
+}
