@@ -317,19 +317,51 @@ known error is a loop the compiler may replace by a cheaper computation
 with a smaller error, with the theorem as the licence. That is the same
 shape as any certified rewrite, and needs no new compiler concept.
 
-### 5.6 Verdict
+### 5.6 Utility against the naive method
+
+The naive method is to write the float loop and shrink `dt` until the answer
+stops moving. For getting numbers it wins almost always, and §5.2 should be
+read with that in mind (discussed with Minus, 2026-11-10):
+
+- A-priori bounds do not choose a step. The Euler bound carries a factor
+  like `e^(L·T)`, so the proved modulus asks for a step far smaller than is
+  needed. Bounds tight enough to act on are a-posteriori enclosures
+  (intervals, Taylor models), a heavier project.
+- Exact execution is slow. The probes run at `Rat` by kernel evaluation and
+  the denominators grow with every step.
+- Extrapolation and closed forms are what a numerics library or a computer
+  algebra system already does, unproved; the proof is rarely what was
+  missing.
+
+Comparing a float program with the same algorithm over the reals is the
+obvious case and predates the paper. What the `dt → 0` layer adds on top:
+
+1. The real algorithm is still discrete: "Euler at `dt = 0.01` over ℝ" is a
+   specification that names its own method. With the continuous meaning as
+   the specification, the step and the scheme become a choice, every
+   discretisation is a refinement of one meaning, and a setup may pick one
+   to meet a tolerance from two budgets (truncation and rounding). This is
+   precision selection one level up, and the only part that is programming.
+   It is worth something only with tight a-posteriori bounds.
+2. Some facts are exact only in the limit and calculus is simpler than
+   sums: reason in the continuum, return with an `O(dt)` correction. A proof
+   convenience.
+3. The paper's own direction, continuous facts by discrete program
+   reasoning, is a cheap route to some continuous mathematics. A proof
+   technique.
+
+### 5.7 Verdict
 
 - **The paper**: read for its idea (ordinary programs in a step, meaning by
   limit, proofs transferred from the discrete), not for its logic. Its
   semantics is classical where Heather's library is constructive, and the
   constructive version is strictly more useful: it runs and it carries the
   rate.
-- **The deterministic area**: worth doing, as mathematics-area work serving
-  `math-reals`. It gives integration and ODE solutions as computing terms,
-  and a precise statement of "this discrete program is
-  within `C·dtᵖ` of its continuous meaning" that extrapolation and later
-  compilation can use. Issues: [[step-families-and-order]],
-  [[riemann-integration]], [[euler-lipschitz-ode]].
+- **The deterministic area**: fits the library, but by §5.6 it has no
+  customer beyond integration, which `math-reals` needs anyway
+  ([[riemann-integration]]). The rest is parked until floats reach `rt` and
+  tolerance-driven discretisation has a use: [[step-families-and-order]],
+  [[euler-lipschitz-ode]].
 - **The stochastic area**: one targeted result (random-walk states converge
   to the Gaussian state), filed as [[random-walk-gaussian-state]], behind
   `finite-probability` and `ml-gaussian-states`. No measure theory.
