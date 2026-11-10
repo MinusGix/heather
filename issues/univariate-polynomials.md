@@ -35,4 +35,4 @@ a literal buffer is stated as a polynomial remainder and evaluated.
 
 ## What it assumes from elsewhere
 
-- **[[semiring-layers]]** (closed) owns the ring classes.
+- **[[semiring-ring-structure-api]]** owns the ring classes.
