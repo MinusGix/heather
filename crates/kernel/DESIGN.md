@@ -756,6 +756,45 @@ paper too).
   preserve the □ syntactic-equality rule and Id-at-□ coincidence: each hit
   implies identical syntax (directly, or via an identical environment), and
   identical syntax implies both equality-as-code and entrywise conversion.
+- **Two spellings of one former are compared on the syntax** (2026-11-10,
+  `Conv::lockstep`, issues/conversion-closed-pair-memo.md). A type is read
+  as it is spelled: itself, or the decoding `El^l c` of a code. When two
+  spellings show the same former (`Nat`, `Ty`, `Unit`, `Empty`, `sEmpty`,
+  squash, `Π`, `Σ`, `W`, `+`, `Id`, `sEq`), their components are compared
+  as spellings in turn, and only a pair that is not one former is given to
+  the domain. This is the rule the machine applies, not a new one: each of
+  these formers is weak head normal, a code's `El` decodes to it in one
+  step over the `El`s of the code's components, and the normal-form arm
+  compares exactly those components in exactly those scopes. What it
+  saves is the domain's copy of every node the two sides agree on, which
+  for a large type named on one side and written out on the other is
+  nearly all of them: the cost becomes a walk of the syntax plus the
+  machine's work where the spellings differ. The binders the walk passes
+  are pushed onto the scope only when such a place is reached. Codes
+  compared as terms at a universe are walked the same way with their
+  leaves compared as codes, never through their decodings, because `El` is
+  not injective (`Vec` at a canonical length and its `Σ` chain are one
+  type and two codes). The rewriter does none of this (`Dom::SPELLED`), so
+  the differential tests hold the walk to the specification.
+- **Convertible closed pairs are kept beside Ψ** (2026-11-10,
+  `ClosedPairs`, same issue). A spelling that reads no local variable is
+  one type under every Γ and every environment of its Ψ, so `convertible`
+  for two of them is a fact about the two nodes, the level, the layer and
+  the judgment (types, or codes), and it is kept in the `GlobalCache` for
+  the gate: an elaborated type is a dag, and without the table a pair of
+  sub-dags is judged once per path that reaches it, in every query. The
+  rules are the verdict memo's: only `convertible` is kept, never
+  exhaustion; nothing is kept while a premise is queued or a provisional
+  verdict could have been stood on; a refusal is not kept at all. Three
+  more are its own. A decoded code is identified by the code under its
+  `El`, since the `El` node is allocated at each decode. Every keyed node
+  is owned by its entry, so an address names one syntax for as long as it
+  is a key. And a walk that began at a root, which may be open, keeps only
+  pairs whose footprint it has asked. The table is bounded and never
+  evicts, so within a gate a judgment never costs more later than it did
+  earlier, which the checker's own memos rely on when a debug build judges
+  a kept pair again. A debug build also judges a sampled hit of this table
+  again without it.
 - **δ is glued.** A `u^δ` evaluates to a neutral carrying a memoized
   `unfold` thunk, `Some` exactly when Ψ defines `u`. The δ-lazy order is
   unchanged — compare without forcing the thunks, and on `NotConvertible`

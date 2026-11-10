@@ -546,6 +546,7 @@ pub(super) trait Dom<'v>: Sized {
 
     /// Raw syntax scoped in `env`'s Γ, as a sub-structure of the domain.
     fn embed_ty(env: &Env<'v>, t: Rc<Type>) -> Self::TyC;
+    fn embed_tm(env: &Env<'v>, t: Rc<Term>) -> Self::TmC;
     /// Raw syntax scoped in `env`'s Γ but *read in* `rec`'s scope — the code
     /// recursors' motives and branches, plus everything derived from them.
     fn embed_ty_at(rec: &Self::RecCtx, env: &Env<'v>, t: Rc<Type>) -> Self::TyC;
@@ -750,6 +751,22 @@ pub(super) trait Dom<'v>: Sized {
         label: &Self::TmC,
         children: &Self::TmC,
     ) -> R<Self::TmC>;
+    /// Does this domain compare spellings on the syntax where it can
+    /// ([`Conv::lockstep`], [`super::ClosedPairs`])? The rewriter does not:
+    /// it is the specification the differential tests hold the machine to
+    /// ([`super::oracle`]), so it reduces and compares, and nothing else.
+    const SPELLED: bool = false;
+    /// The spellings of two type sub-structures that are both raw syntax
+    /// reading nothing of the scope they were written in
+    /// ([`super::Spelled::closed`]), so that each is the same type read in
+    /// the present one. `None` is always safe.
+    fn closed_spellings(_a: &Self::TyC, _b: &Self::TyC) -> Option<(Rc<Type>, Rc<Type>)> {
+        None
+    }
+    /// [`Dom::closed_spellings`] for two term sub-structures, read as codes.
+    fn closed_codes(_a: &Self::TmC, _b: &Self::TmC) -> Option<(Rc<Term>, Rc<Term>)> {
+        None
+    }
     /// Syntactic equality of two type sub-structures, as a fast path only:
     /// `false` must always be safe (the caller falls back to a full
     /// comparison).
@@ -1564,6 +1581,11 @@ impl<'v> Dom<'v> for Syn {
 
     #[inline]
     fn embed_ty(_env: &Env<'v>, t: Rc<Type>) -> Rc<Type> {
+        t
+    }
+
+    #[inline]
+    fn embed_tm(_env: &Env<'v>, t: Rc<Term>) -> Rc<Term> {
         t
     }
 
