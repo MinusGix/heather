@@ -46,3 +46,7 @@ passes.
 - **[[function-ir-multi-word-calls]]** or a buffer-held state: eight words
   in and out do not fit one result register.
 - **[[runtime-default-setup-soundness]]** owns byte reads and writes.
+
+## Log
+
+- 2026-11-10: The arithmetic of both compression functions is compiled and proved; the memory is not. `lib/native/crypto/sha512_round.hthr` and `sha256_round.hthr` each hold three `runtime fn`s (`T1`, `T2`, one schedule word) with theorems taking them to [[sha2-specification]]: `sha512_round_spec` says a round of the specification is `Sha2State::turn` of the two compiled words, and `sha256_round_spec` the same through the 64-bit boundary (the specification's 32-bit word widened in, the low half of the result out). SHA-512's call a helper per Σ and σ; SHA-256's are one body each, since a call saves every live register and at this size that was most of the code. Certified sizes: SHA-512 `t1` 306 bytes with its two callees, SHA-256 `t1` 210 as one function, settles included. Both are linked into Rust and run as whole hashes with the state, schedule and constants held by the Rust caller (`crates/linked`, [[native-differential-harness]]). What this issue still owes is its actual scope: the state and schedule window as arrays, the round as a loop over the constant table, and `compress = spec` as one theorem ([[rt-fixed-arrays-and-tables]], [[native-library-exports-design]]). The bench-probe cases are not added yet.

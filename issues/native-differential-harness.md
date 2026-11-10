@@ -35,3 +35,7 @@ artifact is reported with the input that shows it.
 
 - **[[self-lexer-linked]]** and **[[sha256-linked-into-cache]]** are its
   first two users.
+
+## Log
+
+- 2026-11-10: A first form exists for linked exports, in Rust rather than C: `crates/linked/tests/sha512.rs` and `sha256.rs`. Per export: every argument at each corner while the others hold distinct words (a wrong register shows), 100,000 varied tuples against the function written out in Rust, and a fold that keeps live values across calls (a clobbered caller register shows). Per hash: the NIST vectors including the million `a`s, the `sha2` crate over every length through three blocks and over long messages, and `compress` alone from arbitrary hash values. For SHA-256, each export is also called with garbage above its 32-bit arguments, and the upper half of its result is read. Inputs are a seeded LCG; nothing is random. What this issue still owns: the same for exports over memory (a C or Rust harness that checks the bytes outside the contract's spans are untouched), whole-file token streams for the lexer, and a shared home for the corner tables.

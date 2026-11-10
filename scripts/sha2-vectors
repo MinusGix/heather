@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""Write `lib/_tests/std/crypto/sha2_tests.hthr`: SHA-2's test vectors as theorems.
+
+A whole block evaluated in one declaration is past the kernel's fuel, so a
+vector is proved by stages: the block, the schedule a few words at a time,
+the rounds a few at a time, each stage a `refl` whose two sides are a
+computation and a literal, and `lib/std/crypto/sha2.hthr`'s `*_then` and
+`*_of` theorems put the stages together. The literals come from the
+reference below, which is FIPS 180-4 transcribed, checked here against
+`hashlib` before anything is written.
+
+    scripts/sha2-vectors            # rewrite the tests module
+    scripts/sha2-vectors --check    # exit 1 if the module on disk is stale
+
+Stage sizes are the knobs (`EXTEND`, `RUN`): a stage must stay inside
+2^20 kernel steps, and wider words cost more per round.
+"""
+
+import hashlib
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "lib/_tests/std/crypto/sha2_tests.hthr"
+
+K256 = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]
+K512 = [
+    0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
+    0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
+    0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
+    0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235, 0xc19bf174cf692694,
+    0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
+    0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
+    0x983e5152ee66dfab, 0xa831c66d2db43210, 0xb00327c898fb213f, 0xbf597fc7beef0ee4,
+    0xc6e00bf33da88fc2, 0xd5a79147930aa725, 0x06ca6351e003826f, 0x142929670a0e6e70,
+    0x27b70a8546d22ffc, 0x2e1b21385c26c926, 0x4d2c6dfc5ac42aed, 0x53380d139d95b3df,
+    0x650a73548baf63de, 0x766a0abb3c77b2a8, 0x81c2c92e47edaee6, 0x92722c851482353b,
+    0xa2bfe8a14cf10364, 0xa81a664bbc423001, 0xc24b8b70d0f89791, 0xc76c51a30654be30,
+    0xd192e819d6ef5218, 0xd69906245565a910, 0xf40e35855771202a, 0x106aa07032bbd1b8,
+    0x19a4c116b8d2d0c8, 0x1e376c085141ab53, 0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8,
+    0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb, 0x5b9cca4f7763e373, 0x682e6ff3d6b2b8a3,
+    0x748f82ee5defb2fc, 0x78a5636f43172f60, 0x84c87814a1f0ab72, 0x8cc702081a6439ec,
+    0x90befffa23631e28, 0xa4506cebde82bde9, 0xbef9a3f7b2c67915, 0xc67178f2e372532b,
+    0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
+    0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
+    0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
+    0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
+]
+
+
+class Family:
+    def __init__(self, name, width, big0, big1, small0, small1, k, initial, output, extend, run, reference):
+        self.name, self.width, self.k, self.initial, self.output = name, width, k, initial, output
+        self.big0, self.big1, self.small0, self.small1 = big0, big1, small0, small1
+        self.mask = (1 << width) - 1
+        self.extend, self.run, self.reference = extend, run, reference
+
+    def rotr(self, x, n):
+        return ((x >> n) | (x << (self.width - n))) & self.mask
+
+    def big(self, r, x):
+        return self.rotr(x, r[0]) ^ self.rotr(x, r[1]) ^ self.rotr(x, r[2])
+
+    def small(self, r, x):
+        return self.rotr(x, r[0]) ^ self.rotr(x, r[1]) ^ (x >> r[2])
+
+    def pad(self, message):
+        word, block = self.width // 8, 16 * (self.width // 8)
+        zeros = (block - (len(message) + 1 + 2 * word) % block) % block
+        return message + b"\x80" + bytes(zeros) + (8 * len(message)).to_bytes(2 * word, "big")
+
+    def blocks(self, message):
+        word = self.width // 8
+        padded = self.pad(message)
+        words = [int.from_bytes(padded[i:i + word], "big") for i in range(0, len(padded), word)]
+        return [words[i:i + 16] for i in range(0, len(words), 16)]
+
+    def schedule(self, block):
+        w = list(block)
+        for t in range(16, len(self.k)):
+            w.append((self.small(self.small1, w[t - 2]) + w[t - 7] + self.small(self.small0, w[t - 15]) + w[t - 16]) & self.mask)
+        return w
+
+    def round(self, s, k, w):
+        a, b, c, d, e, f, g, h = s
+        ch = (e & f) ^ (~e & self.mask & g)
+        maj = (a & b) ^ (a & c) ^ (b & c)
+        t1 = (h + self.big(self.big1, e) + ch + k + w) & self.mask
+        t2 = (self.big(self.big0, a) + maj) & self.mask
+        return [(t1 + t2) & self.mask, a, b, c, (d + t1) & self.mask, e, f, g]
+
+    def digest(self, message):
+        h = list(self.initial)
+        for block in self.blocks(message):
+            w, s = self.schedule(block), list(h)
+            for t in range(len(self.k)):
+                s = self.round(s, self.k[t], w[t])
+            h = [(x + y) & self.mask for x, y in zip(h, s)]
+        return b"".join(x.to_bytes(self.width // 8, "big") for x in h[:self.output])
+
+
+SHA256 = Family("sha256", 32, (2, 13, 22), (6, 11, 25), (7, 18, 3), (17, 19, 10), K256,
+    [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19],
+    8, extend=24, run=16, reference=hashlib.sha256)
+SHA224 = Family("sha224", 32, (2, 13, 22), (6, 11, 25), (7, 18, 3), (17, 19, 10), K256,
+    [0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4],
+    7, extend=24, run=16, reference=hashlib.sha224)
+SHA512 = Family("sha512", 64, (28, 34, 39), (14, 18, 41), (1, 8, 7), (19, 61, 6), K512,
+    [0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+     0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179],
+    8, extend=16, run=8, reference=hashlib.sha512)
+SHA384 = Family("sha384", 64, (28, 34, 39), (14, 18, 41), (1, 8, 7), (19, 61, 6), K512,
+    [0xcbbb9d5dc1059ed8, 0x629a292a367cd507, 0x9159015a3070dd17, 0x152fecd8f70e5939,
+     0x67332667ffc00b31, 0x8eb44a8768581511, 0xdb0c2e0d64f98fa7, 0x47b5481dbefa4fa4],
+    6, extend=16, run=8, reference=hashlib.sha384)
+
+for family in (SHA256, SHA224, SHA512, SHA384):
+    for message in (b"", b"abc", b"a" * 55, b"a" * 56, b"a" * 111, b"a" * 112, b"a" * 300):
+        assert family.digest(message) == family.reference(message).digest(), (family.name, message)
+
+
+def hexes(values, digits, per_line, indent):
+    words = [f"0x{v:0{digits}x}" for v in values]
+    lines = [", ".join(words[i:i + per_line]) for i in range(0, len(words), per_line)]
+    return (",\n" + indent).join(lines)
+
+
+def vector(family, label, message, text):
+    """One one-block message: its block, schedule and rounds in stages."""
+    p, n, w = f"Sha2::{family.name}()", family.name + "_" + label, family.width
+    digits = w // 4
+    per_line = 4 if w == 64 else 8
+    blocks = family.blocks(message)
+    assert len(blocks) == 1, "a vector here is one block; a longer message is a fold of these"
+    block = blocks[0]
+    schedule = family.schedule(block)
+    rounds = len(family.k)
+    out = []
+    emit = out.append
+    emit(f"// {family.name.upper()}({text})")
+    emit(f"fn {n}_message() → List<BitVec(8)> {{ [{', '.join(f'0x{b:02x}' for b in message)}] }}")
+    emit(f"fn {n}_block() → List<BitVec({w})> {{\n    [{hexes(block, digits, per_line, '     ')}]\n}}")
+    emit(f"theorem {n}_blocks(): {p}.blocks({n}_message()) = [{n}_block()] {{ refl }}")
+    emit("")
+    emit("// The schedule, newest word first, a stage at a time.")
+    stages = (rounds - 16) // family.extend
+    assert stages * family.extend == rounds - 16
+    emit(f"fn {n}_window_0() → List<BitVec({w})> {{ {n}_block().rev() }}")
+    for i in range(stages):
+        new = schedule[16 + i * family.extend:16 + (i + 1) * family.extend][::-1]
+        emit(f"fn {n}_window_{i + 1}() → List<BitVec({w})> {{\n    List::append([{hexes(new, digits, per_line, '        ')}],\n        {n}_window_{i}())\n}}")
+        emit(f"theorem {n}_extend_{i + 1}(): {p}.extend({family.extend}, {n}_window_{i}()) = {n}_window_{i + 1}() {{ refl }}")
+    # extend(e + e + …, window_0) = window_stages
+    chain = f"{n}_extend_1()"
+    total = str(family.extend)
+    for i in range(1, stages):
+        chain = (f"{p}.extend_then({total}, {family.extend}, {n}_window_0(), {n}_window_{i}(), {n}_window_{i + 1}(),\n"
+                 f"        {chain}, {n}_extend_{i + 1}())")
+        total = f"({total}) + {family.extend}" if "+" in total else f"{total} + {family.extend}"
+    emit(f"fn {n}_schedule() → List<BitVec({w})> {{ {n}_window_{stages}().rev() }}")
+    emit(f"theorem {n}_scheduled(): {p}.schedule({n}_block()) = {n}_schedule() {{\n"
+         f"    {p}.schedule_of({n}_block(), {n}_window_{stages}(), {total}, refl,\n        {chain})\n}}")
+    emit("")
+    emit("// The rounds, a stage at a time.")
+    run_stages = rounds // family.run
+    assert run_stages * family.run == rounds
+    state = list(family.initial)
+    states = [state]
+    for t in range(rounds):
+        state = family.round(state, family.k[t], schedule[t])
+        if (t + 1) % family.run == 0:
+            states.append(state)
+    for i, s in enumerate(states[1:], start=1):
+        emit(f"fn {n}_state_{i}() → Sha2State({w}) {{\n    Sha2State({hexes(s, digits, per_line, '        ')})\n}}")
+    done = None  # the count of rounds so far, as the chain spells it
+    chain = None
+    for i in range(run_stages):
+        before = f"{p}.start()" if i == 0 else f"{n}_state_{i}()"
+        at = "0" if i == 0 else f"0 + ({done})"
+        emit(f"theorem {n}_run_{i + 1}(): {p}.run({n}_schedule(), {at}, {family.run}, {before}) = {n}_state_{i + 1}() {{ refl }}")
+        if i == 0:
+            chain, done = f"{n}_run_1()", str(family.run)
+        else:
+            chain = (f"{p}.run_then({n}_schedule(), 0, {done}, {family.run}, {p}.start(), {n}_state_{i}(), {n}_state_{i + 1}(),\n"
+                     f"        {chain}, {n}_run_{i + 1}())")
+            done = f"({done}) + {family.run}" if "+" in done else f"{done} + {family.run}"
+    emit(f"theorem {n}_ran(): {p}.run({n}_schedule(), 0, {done}, {p}.start()) = {n}_state_{run_stages}() {{\n    {chain}\n}}")
+    emit("")
+    digest = family.digest(message)
+    emit(f"theorem {n}_hash(): {p}.hash({n}_message()) = {p}.start().plus({n}_state_{run_stages}()) {{\n"
+         f"    {p}.hash_of_block({n}_message(), {n}_block(), {p}.start().plus({n}_state_{run_stages}()), {n}_blocks(),\n"
+         f"        {p}.compress_of({p}.start(), {n}_state_{run_stages}(), {n}_block(), {n}_schedule(), {done},\n"
+         f"            {n}_scheduled(), refl, {n}_ran()))\n}}")
+    emit(f"fn {n}_digest() → List<BitVec(8)> {{\n    [{hexes(digest, 2, 16, '     ')}]\n}}")
+    emit(f"theorem {n}_spelled(): {p}.spell({p}.start().plus({n}_state_{run_stages}())) = {n}_digest() {{ refl }}")
+    emit(f"// The vector: {family.name.upper()}({text}) = {digest.hex()}.")
+    emit(f"theorem {n}(): {p}.digest({n}_message()) = {n}_digest() {{\n"
+         f"    trans({p}.digest_of({n}_message(), {p}.start().plus({n}_state_{run_stages}()), {n}_hash()), {n}_spelled())\n}}")
+    return "\n".join(out)
+
+
+def padding(family):
+    """The padding at the lengths where it changes shape."""
+    p, word = f"Sha2::{family.name}()", family.width // 8
+    block = 16 * word
+    edge = block - 2 * word - 1  # the longest message whose padding fits its block
+    out = [f"// {family.name.upper()}'s padding: one block up to {edge} bytes, two from {edge + 1}."]
+    for length in (0, 1, edge, edge + 1, block - 1, block, block + edge, block + edge + 1):
+        blocks = len(family.blocks(bytes(length)))
+        out.append(f"theorem {family.name}_blocks_at_{length}(): "
+                   f"{p}.blocks(List::replicate(BitVec::zero(), {length})).len() = {blocks} {{ refl }}")
+    return "\n".join(out)
+
+
+HEADER = """// GENERATED by `scripts/sha2-vectors`; edit the script, not this file.
+//
+// SHA-2's test vectors as theorems over `lib/std/crypto/sha2.hthr`: the
+// digests of "abc" (FIPS 180-4's own example, the first vector of NIST's
+// CAVP short-message files) at both word widths, and the padding at the
+// lengths where its shape changes. Tests, not library
+// (docs/test-value-audit.md §4.5).
+//
+// A vector is proved by stages (the module header of `sha2.hthr`): each
+// `*_extend_*` and `*_run_*` is one `refl` between a computation and a
+// literal, inside a declaration's fuel, and `Sha2::extend_then`,
+// `run_then`, `schedule_of`, `compress_of`, `hash_of_block` and `digest_of`
+// put them together without evaluating anything twice.
+import bitvec; import bitvec_rotate; import bool; import list; import logic; import nat; import option;
+import sha2;
+"""
+
+
+def render():
+    parts = [HEADER.rstrip("\n")]
+    parts.append(vector(SHA256, "abc", b"abc", '"abc"'))
+    parts.append(vector(SHA512, "abc", b"abc", '"abc"'))
+    parts.append(padding(SHA256))
+    parts.append(padding(SHA512))
+    return "\n\n".join(parts) + "\n"
+
+
+def main():
+    text = render()
+    if "--check" in sys.argv[1:]:
+        if not OUT.exists() or OUT.read_text() != text:
+            print(f"{OUT.relative_to(ROOT)} is stale: run scripts/sha2-vectors", file=sys.stderr)
+            sys.exit(1)
+        return
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(text)
+    print(f"wrote {OUT.relative_to(ROOT)}")
+
+
+if __name__ == "__main__":
+    main()

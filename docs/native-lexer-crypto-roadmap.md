@@ -10,7 +10,8 @@ lists the documents it does ask to reconsider, and §9 the decisions that are
 Minus's. Probes are in the project folder's `native-roadmap/`; their numbers
 are in the issues this note files, not here.
 
-Read on master `b2fb02b`.
+Read on master `b2fb02b`. §10 records what has landed since and what Minus
+has answered.
 
 ---
 
@@ -33,6 +34,14 @@ compiled code implements it, and a native run.
 | theorem | at any source held in the caller's memory, the export returns the next token of `lex`, reads only the source span and writes only its frame | the exported `compress` leaves the specification's next state in the caller's state buffer, reads only the block, writes only the state, and leaks nothing that depends on the data |
 | where it runs | linked into `heather` behind a switch; the Rust lexer stays as bootstrap and oracle | linked into `crates/cache`, replacing the scalar path of `crates/cache/src/sha256.rs` |
 | the test | token streams equal on every file under `lib/` | NIST vectors by kernel evaluation and by native run; every cache key unchanged |
+
+**A third target, later: the numeral crate** (Minus, 2026-11-10).
+`crates/numeral`, the arbitrary-precision natural the lexer, the elaborator
+and the kernel share, is small, in the trusted base, and specified by `Nat`
+in a line per operation. It needs what the first two do not (a wide multiply
+and divide, a buffer whose length changes) and nothing they do not have a
+plan for, so it follows them (`issues/numeral-linked.md`). Linked code will
+be slower than rustc's until there is an optimizer; that is accepted.
 
 **Why SHA-256 first.** The compiler already has a first-party SHA-256, and
 its header calls it "the one place above the kernel with a trust story to
@@ -319,7 +328,9 @@ and effects slices past `runtime fn main` and one rewritten tool.
 
 1. Is "linked into the `heather` binary" the right reading of "linked
    directly"? If the process was meant, phases 2 and 3 of the lexer lane
-   swap the export contract for `runtime fn main`.
+   swap the export contract for `runtime fn main`. **Answered 2026-11-10:
+   yes, direct linking**, "a better test and method", with good tests
+   around it.
 2. SHA-256 in `crates/cache` as the first cryptography target. Turning it on
    by default changes the trust base.
 3. The milestones this note's PR adds (`nh-library`, `hih-crypto`,
@@ -330,3 +341,56 @@ and effects slices past `runtime fn main` and one rewritten tool.
 5. Stopping the signed-word rounds and capping the effects slices.
 6. A kernel fast path for word operations is not proposed. Cheap rotates
    and stage theorems cover evaluation for now.
+
+---
+
+## 10. What has landed
+
+**2026-11-10, the first round** (Minus: "iterate on several of the highest
+value pieces, in one PR"). Five of the seven startable rounds of §8 moved,
+each far enough that the next consumer is real:
+
+- **Linking, end to end** (§2's last piece, taken first because Minus named
+  it the better test). `crates/linked` links `compile-x86`'s output into a
+  Rust crate with `global_asm!` and calls it as a `safe fn`. The assembly is
+  checked in (`generated/`, listed in `EXPORTS.tsv`), a native gate
+  recompiles every export and compares (`crates/cli/tests/native_linked.rs`),
+  and `scripts/linked` rewrites it. That is decision 4's route, built; what
+  is not built is the export *contract* over caller-owned memory, since the
+  exports so far are functions of words
+  (`issues/native-library-exports-design.md`).
+- **The SHA-2 specification** (C0): `lib/std/crypto/sha2.hthr`, one family
+  for both widths, with "abc" proved at SHA-256 and SHA-512 by evaluation
+  through stage theorems (`lib/_tests/std/crypto/sha2_tests.hthr`), and
+  rotates as the standard's shift pair (`bitvec_rotate.hthr`).
+- **Narrow widths in the verified lowering**
+  (`issues/function-ir-narrow-arithmetic.md`). A value of any width up to
+  64 is held zero-extended; ADD, SUB and a left shift settle by a shift
+  left and back; resizes in both directions. The route is not the one §2
+  expected: no 32-bit instruction forms were added to the machine model.
+  Two 64-bit shifts after each carrying operation cost code size, not
+  proof, and the 32-bit forms become an optimization with a consumer
+  (`issues/x86-narrow-and-rotate-forms.md`,
+  `issues/function-ir-narrow-settle-lazily.md`).
+- **The word functions of both compression functions** (the arithmetic of
+  C1): `T1`, `T2` and a schedule word, for SHA-512 at the machine's width
+  and for SHA-256 through the narrow lowering, each a certified
+  `runtime fn` proved to be the specification's function
+  (`lib/native/crypto/`). The state, the schedule and the constants are
+  still the Rust caller's, which is what `rt-fixed-arrays-and-tables` and
+  the export contract remove.
+- **A differential harness in its first form**: `crates/linked/tests` runs
+  each export against plain Rust at the corners and over varied words,
+  and the whole hashes against the `sha2` crate over every length through
+  the padding boundaries and the NIST vectors. For SHA-256 it also calls
+  the exports with garbage above their 32-bit arguments.
+
+The first thing direct linking found was in the emitter: a program whose
+exported function comes first had its label written twice, which no test
+had assembled.
+
+Next, in order of what they unblock: fixed arrays and tables in the pure
+fragment (the whole of `compress` in Heather), the export contract over
+caller-owned memory (the state buffer; the scanner's source span), then
+SHA-256 behind a switch in `crates/cache`.
+

@@ -46,3 +46,7 @@ and SHA-256's Σ1 from [[sha2-compress-native]]'s probe certifies.
 - **[[x86-wide-multiply-and-carry]]** owns the next group.
 - **[[rotate-idiom-pass]]** owns recognising a rotate written as two
   shifts; here the rotate is emitted only where the source spells one.
+
+## Log
+
+- 2026-11-10: The probe named under "Done when" certifies without this issue: SHA-256's Σ1, and then its whole `T1`, `T2` and schedule word, compile through the narrow lowering of [[function-ir-narrow-arithmetic]], which settles with two 64-bit shifts and adds nothing to the machine model. So group 1 here (32-bit operand forms) is no longer on the route to a working SHA-256; it is an optimization of it, removing the settle at width 32 ([[function-ir-narrow-settle-lazily]] removes most of the others at every width). `ROR`/`ROL` likewise: each rotation is five instructions as a shift pair and would be two. `BSWAP`, the 16/32-bit loads and `LEA` are still on the route, for block loads and the constant table.

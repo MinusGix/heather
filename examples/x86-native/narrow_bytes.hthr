@@ -1,0 +1,41 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// Arithmetic on bytes in 64-bit registers
+// (issues/function-ir-narrow-arithmetic.md): a value narrower than the
+// machine's word is kept zero-extended in its register, so AND, OR, XOR, a
+// right shift and the unsigned comparisons read it as it is, and an ADD, a
+// SUB or a left shift, which can carry past the top of the byte, is
+// followed by a shift left and back by 56. Both tests here are ones a
+// missing clear would fail: the first reads the carry out of a byte as
+// `sum < x`, the second an equality against zero after a borrow.
+runtime fn bytes(a, b: BitVec(64)) → BitVec(64) {
+    let x = a.truncate(8, 56);
+    let y = b.truncate(8, 56);
+    let sum = x.add(y);
+    let difference = x.sub(y);
+    let spread = sum.shift_left(3).bxor(difference.shift_right(2));
+    let mixed = spread.add(BitVec::ofNat(167)).bor(x.band(y));
+    match sum.unsigned_lt_bit(x) {
+        True => mixed.sub(BitVec::ofNat(1)).zero_extend(56),
+        False => match difference.eq_bit(BitVec::ofNat(0)) {
+            True => x.zero_extend(56),
+            False => mixed.zero_extend(56),
+        },
+    }
+}

@@ -169,6 +169,17 @@ That decision belongs to the decision-procedure issue, once a goal needs it.
 
 ## 3. The native lane: narrow widths are Definition 4.1 at width 64
 
+> **Since 2026-11-10** the verified lowering holds narrow values as this
+> section proposes: `Kind` has `Narrow(w)` (the value zero-extended, the
+> compatibility relation at 64) and `Low(w)` (only the low `w` bits
+> right, what an ADD, a SUB or a left shift leaves), and settles the
+> second into the first by a shift left and back rather than a mask
+> (`lib/native/function_ir/function_ir_lower.hthr`, "Narrow widths";
+> the laws are `lib/std/bitvec/bitvec_resize.hthr`). The signed
+> comparison by sign flip, below, is still to do
+> (`issues/function-ir-narrow-arithmetic.md`). The rest of this section
+> is as written on 2026-10-25.
+
 The verified lowering (`function_ir_lower.hthr`) holds values of two kinds:
 `Word`, a 64-bit value as itself, and `Bit`, a 1-bit value zero-extended.
 Arithmetic at any other width is refused (`word_only`, "a node at another

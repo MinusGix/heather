@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Rewrite the assembly `crates/linked` links: every export of
+# `crates/linked/generated/EXPORTS.tsv`, compiled by `heather compile-x86`
+# (certificate checked, or nothing is written).
+#
+#   scripts/linked            # rewrite crates/linked/generated/*.s
+#   scripts/linked --check    # exit 1 if a file on disk is not what is emitted
+#
+# `crates/cli/tests/native_linked.rs` is the gate that holds the files to the
+# compiler; this is how a round that changed a linked module, or the
+# lowering, brings them back. Same discipline as every direct `heather` run:
+# built first (the link reserves address space a cap would refuse), then
+# capped.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+check=false
+[[ "${1:-}" == --check ]] && check=true
+
+cargo build -q -p heather-cli
+heather=target/debug/heather
+store="${HEATHER_CACHE_DIR:-target}/native-images"
+generated=crates/linked/generated
+work=$(mktemp -d "target/linked.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+stale=0
+while IFS=$'\t' read -r module function; do
+  [[ -z "$module" || "$module" == \#* ]] && continue
+  ( ulimit -v 8388608 -t 1500 -c 0
+    "$heather" compile-x86 "$module" "$function" -o "$work/$function.s" --cache-dir "$store" > "$work/$function.log" 2>&1 ) ||
+    { cat "$work/$function.log" >&2; echo "scripts/linked: compile-x86 $module $function failed" >&2; exit 1; }
+  if cmp -s "$work/$function.s" "$generated/$function.s"; then
+    echo "$function: unchanged"
+  elif $check; then
+    echo "$function: $generated/$function.s is stale" >&2
+    stale=1
+  else
+    cp "$work/$function.s" "$generated/$function.s"
+    echo "$function: rewritten"
+  fi
+done < "$generated/EXPORTS.tsv"
+exit $stale

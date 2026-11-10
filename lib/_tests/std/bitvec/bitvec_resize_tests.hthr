@@ -1,0 +1,57 @@
+// Probes of `lib/std/bitvec/bitvec_resize.hthr`: a narrow word held in a
+// wider one, at closed values. The laws there are proved at open widths;
+// these say what they compute, and the `False` verdicts are the reason the
+// compiler's narrow arithmetic settles a sum, a difference and a left
+// shift where it leaves AND, OR, XOR, a right shift and a comparison alone
+// (`lib/native/function_ir/function_ir_lower.hthr`, "Narrow widths"):
+// the wide operation on widened words is not the widened narrow result.
+// Tests, not library (docs/test-value-audit.md §4.5).
+import bool; import logic; import nat; import list; import bitvec; import bitvec_nat; import bitvec_resize;
+
+fn b(k: u8) → u8 { k }
+fn h(k: u16) → u16 { k }
+fn w(k: u64) → u64 { k }
+
+// Widening keeps the number; narrowing keeps the low bits.
+theorem widen(): b(200).resize(64) = w(200) { refl }
+theorem narrow(): w(0x1234).resize(8) = b(0x34) { refl }
+theorem narrow_odd(): (@BitVec::resize(64, w(0xffffffffffffffff), 27)) = 134217727 { refl }
+theorem to_nothing(): (@BitVec::resize(8, b(200), 0)) = BitVec::ofNat(0) { refl }
+
+// What the register holds after a wide sum of two bytes is not the byte
+// sum widened: the carry is still there. Its low byte is.
+theorem wide_sum_carries(): decide_bit<b(200).resize(64).add(b(100).resize(64)) = b(200).add(b(100)).resize(64)>() = False { refl }
+theorem wide_sum_low(): b(200).resize(64).add(b(100).resize(64)).resize(8) = b(44) { refl }
+theorem wide_difference_borrows():
+    decide_bit<b(3).resize(64).sub(b(5).resize(64)) = b(3).sub(b(5)).resize(64)>() = False { refl }
+theorem wide_difference_low(): b(3).resize(64).sub(b(5).resize(64)).resize(8) = b(254) { refl }
+theorem wide_shift_spills():
+    decide_bit<b(0x81).resize(64).shift_left(3) = b(0x81).shift_left(3).resize(64)>() = False { refl }
+theorem wide_shift_low(): b(0x81).resize(64).shift_left(3).resize(8) = b(8) { refl }
+
+// Settling: left and back by the difference of the widths is the low
+// bits, widened. At the byte, the half word and a width no instruction has.
+theorem settle_byte(): w(0x12c).shift_left(56).shift_right(56) = w(0x2c) { refl }
+theorem settle_half(): w(0xfedcba9876543210).shift_left(32).shift_right(32) = w(0x76543210) { refl }
+theorem settle_odd(): w(0xffffffffffffffff).shift_left(37).shift_right(37) = w(134217727) { refl }
+// One place short leaves a bit behind.
+theorem settle_short(): decide_bit<w(0x12c).shift_left(55).shift_right(55) = w(0x2c)>() = False { refl }
+
+// The operations that need nothing: the wide one on widened words is the
+// widened narrow one, here at the values that break the three above.
+theorem wide_and(): b(200).resize(64).band(b(100).resize(64)) = b(200).band(b(100)).resize(64) { refl }
+theorem wide_xor(): b(200).resize(64).bxor(b(100).resize(64)) = b(200).bxor(b(100)).resize(64) { refl }
+theorem wide_right(): b(0x81).resize(64).shift_right(3) = b(0x81).shift_right(3).resize(64) { refl }
+theorem wide_below(): b(3).resize(64).unsigned_lt_bit(b(5).resize(64)) = b(3).unsigned_lt_bit(b(5)) { refl }
+theorem wide_same(): b(200).resize(64).eq_bit(b(200).resize(64)) = True { refl }
+
+// The signed order is not kept by zero extension, which is why a narrow
+// signed comparison is refused rather than compiled as the wide one: 0x80
+// is below 1 as a signed byte and above it as a signed word.
+theorem signed_byte_below(): b(0x80).signed_lt_bit(b(1)) = True { refl }
+theorem signed_wide_above(): b(0x80).resize(64).signed_lt_bit(b(1).resize(64)) = False { refl }
+
+// Through two widths: narrowing twice is narrowing once, and widening
+// before narrowing below the source is narrowing.
+theorem twice(): w(0x12345678).resize(32).resize(16) = w(0x12345678).resize(16) { refl }
+theorem widened_then_narrowed(): h(0xabcd).resize(64).resize(8) = h(0xabcd).resize(8) { refl }

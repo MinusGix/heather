@@ -102,6 +102,9 @@ fn Target::kind_gprs(self t: Target, env: Env, kind: Option<Kind>, id: Nat, regi
                 let loaded = write_gpr(Rbx, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, a, g)));
                 write_gpr(register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded)
             },
+            // No port is at a narrow kind (`Kind::of_width`), so none loads.
+            Narrow(_) => g,
+            Low(_) => g,
         },
     }
 }
@@ -125,14 +128,14 @@ theorem Target::goes_port_to(self t: Target, live: List<Nat>, env: Env, p, q: Pr
     (match t.layout().word_fits(port.id) as λ fits => t.layout().word_fits(port.id) = fits →
         (match fits { False => None, True => match Kind::of_width(port.width) {
             None => None,
-            Some(kind) => match kind { Word => Some(p.word_to(t.layout(), port.id, register)), Bit => Some(p.bit_to(t.layout(), port.id, register)) },
+            Some(kind) => match kind { Word => Some(p.word_to(t.layout(), port.id, register)), Bit => Some(p.bit_to(t.layout(), port.id, register)), Narrow(_) => None, Low(_) => None },
         } }) = Some(q) →
         t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ post(t.port_gprs(env, port, register, g), m)) {
         False => λ _ none => absurd(none),
         True => λ fits => {
             let inside = t.layout().word_inside(port.id, j(sym(fits), λ b _ => b.IsTrue(), trivial));
             (match Kind::of_width(port.width) as λ k => Kind::of_width(port.width) = k →
-                (match k { None => None, Some(kind) => match kind { Word => Some(p.word_to(t.layout(), port.id, register)), Bit => Some(p.bit_to(t.layout(), port.id, register)) } }) = Some(q) →
+                (match k { None => None, Some(kind) => match kind { Word => Some(p.word_to(t.layout(), port.id, register)), Bit => Some(p.bit_to(t.layout(), port.id, register)), Narrow(_) => None, Low(_) => None } }) = Some(q) →
                 t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ post(t.port_gprs(env, port, register, g), m)) {
                 None => λ _ none => absurd(none),
                 Some(kind) => match kind {
@@ -152,6 +155,8 @@ theorem Target::goes_port_to(self t: Target, live: List<Nat>, env: Env, p, q: Pr
                         j(sym(kind_is), λ k _ => t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧
                             post(t.kind_gprs(env, k, port.id, register, g), m)), goes)
                     },
+                    Narrow(_) => λ _ none => absurd(none),
+                    Low(_) => λ _ none => absurd(none),
                 },
             })(refl)
         },
@@ -164,11 +169,11 @@ theorem Prog::port_to_kind(self p: Prog, layout: Layout, port: Port, register: G
     (match layout.word_fits(port.id) as λ fits => layout.word_fits(port.id) = fits →
         (match fits { False => None, True => match Kind::of_width(port.width) {
             None => None,
-            Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)) },
+            Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)), Narrow(_) => None, Low(_) => None },
         } }) = Some(q) → Exists<Kind>(λ kind => Kind::of_width(port.width) = Some(kind)) ∧ p.Within(q) {
         False => λ _ none => absurd(none),
         True => λ _ => (match Kind::of_width(port.width) as λ k => Kind::of_width(port.width) = k →
-                (match k { None => None, Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)) } }) = Some(q) →
+                (match k { None => None, Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)), Narrow(_) => None, Low(_) => None } }) = Some(q) →
                 Exists<Kind>(λ kind => Kind::of_width(port.width) = Some(kind)) ∧ p.Within(q) {
             None => λ _ none => absurd(none),
             Some(kind) => match kind {
@@ -176,6 +181,8 @@ theorem Prog::port_to_kind(self p: Prog, layout: Layout, port: Port, register: G
                     p.within_word_to(layout, port.id, register))⟩,
                 Bit => λ kind_is some => ⟨Exists(Bit, kind_is), j(Option::some_inj(p.bit_to(layout, port.id, register), q, some), λ x _ => p.Within(x),
                     p.within_bit_to(layout, port.id, register))⟩,
+                Narrow(_) => λ _ none => absurd(none),
+                Low(_) => λ _ none => absurd(none),
             },
         })(refl),
     })(refl, loaded)
@@ -271,6 +278,8 @@ theorem Target::held_kind(self t: Target, live: List<Nat>, env: Env, kind: Optio
                         Rbx, BitVec::ofNat(1), rbx),
                     register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), unused)
             },
+            Narrow(_) => held,
+            Low(_) => held,
         },
     }
 }
@@ -338,6 +347,8 @@ theorem Target::kind_gprs_frame(self t: Target, env: Env, kind: Option<Kind>, id
                     trans(read_gpr_other(Rbx, query, BitVec::ofNat(1), write_gpr(register, env.word(id), write_gpr(Rbx, a, g)), from_rbx),
                         trans(read_gpr_other(register, query, env.word(id), write_gpr(Rbx, a, g), apart), read_gpr_other(Rbx, query, a, g, from_rbx))))
             },
+            Narrow(_) => refl,
+            Low(_) => refl,
         },
     }
 }
@@ -359,6 +370,7 @@ theorem Target::ports_gprs_frame(self t: Target, env: Env, ports: List<Port>): (
 // A port read off its slot is what a valuation that agrees with the
 // environment there gives it.
 theorem Target::kind_rep(self t: Target, env: Env, values: Valuation(), id: Nat, register: Gpr, g: Gprs, kind: Kind,
+    plain: kind.plain() = True,
     apart: Rbx.same(register) = False, agree: (w: Nat) → values(w, id) = BitVec::ofNat(env.number(id))):
     KindRep(values, id, Some(kind), read_gpr(register, t.kind_gprs(env, Some(kind), id, register, g))) {
     let a = t.layout().rbx_word(env, id);
@@ -374,6 +386,8 @@ theorem Target::kind_rep(self t: Target, env: Env, values: Valuation(), id: Nat,
             trans(cong_fn<BitVec(1), BitVec(64)>(λ x => x.zero_extend(63), agree(1)),
                 trans(sym(mask_low_bit(env.number(id))), sym(trans(read_gpr_after_write(register, read_gpr(register, loaded).band(read_gpr(Rbx, loaded)), loaded), masked))))
         },
+        Narrow(_) => absurd(plain),
+        Low(_) => absurd(plain),
     }
 }
 
@@ -398,7 +412,8 @@ theorem Target::inputs_at(self t: Target, env: Env, values: Valuation(), written
                         t.ports_gprs_frame(env, rest, later, loaded, register, distinct_parts.left,
                             Rbx.absent_first(register, later, rbx));
                     let rep: KindRep(values, port.id, Some(kinds.witness), read_gpr(register, t.kind_gprs(env, Some(kinds.witness), port.id, register, g))) =
-                        t.kind_rep(env, values, port.id, register, g, kinds.witness, Rbx.absent_first(register, later, rbx),
+                        t.kind_rep(env, values, port.id, register, g, kinds.witness,
+                            Kind::of_width_plain(port.width, kinds.witness, kinds.proof), Rbx.absent_first(register, later, rbx),
                             λ w => agree(w, port.id, absent_parts.left));
                     let head: port.Rep(values, read_gpr(register, loaded)) =
                         j(sym(kinds.proof), λ k _ => KindRep(values, port.id, k, read_gpr(register, t.kind_gprs(env, k, port.id, register, g))), rep);

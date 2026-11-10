@@ -1,0 +1,25 @@
+[package]
+name = "heather-linked"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "heather_linked"
+
+# Nothing shipped depends on anything: what this crate links is Heather's own
+# compiled output (`generated/`), and its Rust is the glue around it.
+[dependencies]
+
+# An oracle, as `heather-cache`'s is (`crates/cache/Cargo.toml`): the tests
+# run the linked code against an independent SHA-512. Never linked into
+# anything shipped.
+[dev-dependencies]
+sha2 = "0.10"
+
+# `deny` where the workspace says `forbid`: linking the compiled bytes is
+# `global_asm!` and naming the functions in them an `unsafe extern` block, in
+# one module (`src/lib.rs`, where the certificate that justifies calling
+# them safely is named). Everything else is still refused.
+[lints.rust]
+unsafe_code = "deny"

@@ -19,6 +19,8 @@ fn checker() -> heather_elab::Elaborator {
         ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
         ("x86_64_stack_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
         ("function_ir_eval", include_str!("../../../lib/native/function_ir/function_ir_eval.hthr")),
+        // What the lowering's narrow widths read (`bitvec_nat` is the prefix's).
+        ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
         ("function_ir_lower_structured", include_str!("../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
         ("function_ir_lower_calls", include_str!("../../../lib/native/function_ir/function_ir_lower_calls.hthr")),

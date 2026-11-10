@@ -1,0 +1,459 @@
+// A word read at another width, and the operations of a narrow width on
+// words held zero-extended in a wider one
+// (issues/function-ir-narrow-arithmetic.md).
+//
+// `x.resize(w)` is `ofNat(x.toNat())`: the zero extension where `w` is wider
+// and the low bits where it is narrower, which is FunctionIR's `Resize` node
+// and the unsigned twin of `sresize`. A compiler that keeps a value of width
+// `n` in a register of width `m` keeps `x.resize(m)` there, and this module
+// is what that costs it per operation:
+//
+//   - AND, OR, XOR, a logical right shift, an unsigned comparison and an
+//     equality of two such registers are already the narrow operation's
+//     result held the same way (`resize_band` … `resize_eq_bit`);
+//   - an addition, a subtraction, a product and a left shift are right in
+//     their low `n` bits (`resize_add` … `resize_shift_left`), and the bits
+//     above are cleared by a shift left and back by `m − n`
+//     (`shift_pair_resize`), which needs no second register and no mask.
+//
+// Every statement takes the two widths and `n <= m` and nothing else, so one
+// proof serves bytes, 16- and 32-bit words in a 64-bit register and whatever
+// comes after. The laws about `zero_extend` and `truncate` they stand on are
+// indexed `extra + n` (`lib/std/bitvec/bitvec.hthr`); the shift laws here are
+// indexed `n + extra`, the side a top bit comes off, and each is carried to
+// the plain width along one equation of naturals.
+
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+
+fn BitVec::resize({n: Nat}, self x: BitVec(n), w: Nat) → BitVec(w) { BitVec::ofNat(x.toNat()) }
+
+theorem BitVec::resize_self(n: Nat, x: BitVec(n)): x.resize(n) = x { BitVec::ofNat_toNat(n, x) }
+
+theorem BitVec::resize_zero_extend(n, extra: Nat, x: BitVec(n)): x.resize(extra + n) = x.zero_extend(extra) {
+    BitVec::ofNat_toNat_zero_extend(n, extra, x)
+}
+
+theorem BitVec::resize_truncate(n, extra: Nat, x: BitVec(extra + n)): x.resize(n) = x.truncate(n, extra) {
+    BitVec::ofNat_toNat_truncate(n, extra, x)
+}
+
+// Truncation keeps subtraction, as it keeps addition: the borrow ripples up
+// from the low bits and never back down.
+theorem BitVec::truncate_sub_bits(n: Nat): (extra: Nat) → (x, y: BitVec(extra + n)) → (borrow: Bool) →
+    x.sub_bits(y, borrow).truncate(n, extra) = x.truncate(n, extra).sub_bits(y.truncate(n, extra), borrow)
+{
+    match n {
+        Zero => λ extra x y borrow => refl,
+        Succ(k, ih) => λ extra x y borrow => BitVec::cons_bit_cong(k, refl,
+            match BitVec::borrow_next(x.head_bit(), y.head_bit(), borrow) as λ next =>
+                (BitVec::sub_bits_next(x.tail_bits(), y.tail_bits(), next, λ a b c => a.sub_bits(b, c))).truncate(k, extra) =
+                BitVec::sub_bits_next((x.tail_bits()).truncate(k, extra), (y.tail_bits()).truncate(k, extra), next,
+                    λ a b c => a.sub_bits(b, c)) {
+                False => ih(extra, x.tail_bits(), y.tail_bits(), False),
+                True => ih(extra, x.tail_bits(), y.tail_bits(), True),
+            }),
+    }
+}
+
+theorem BitVec::truncate_sub(n, extra: Nat, x, y: BitVec(extra + n)):
+    x.sub(y).truncate(n, extra) = x.truncate(n, extra).sub(y.truncate(n, extra))
+{
+    BitVec::truncate_sub_bits(n, extra, x, y, False)
+}
+
+// ---------------------------------------------------------------------------
+// Operations that need nothing after them
+//
+// One law about `zero_extend`, at every `extra`, is the same law about
+// `resize` at every wider width.
+
+theorem BitVec::resize_binary(n, m: Nat, fits: n <= m,
+    f: (w: Nat) → BitVec(w) → BitVec(w) → BitVec(w),
+    law: (extra: Nat) → (a, b: BitVec(n)) →
+        f(extra + n, a.zero_extend(extra), b.zero_extend(extra)) = f(n, a, b).zero_extend(extra),
+    a, b: BitVec(n)):
+    f(m, a.resize(m), b.resize(m)) = f(n, a, b).resize(m)
+{
+    let wide: (f((m - n) + n, a.resize((m - n) + n), b.resize((m - n) + n)) = f(n, a, b).resize((m - n) + n)) =
+        j(sym(BitVec::resize_zero_extend(n, m - n, a)),
+            λ u _ => f((m - n) + n, u, b.resize((m - n) + n)) = f(n, a, b).resize((m - n) + n),
+            j(sym(BitVec::resize_zero_extend(n, m - n, b)),
+                λ v _ => f((m - n) + n, a.zero_extend(m - n), v) = f(n, a, b).resize((m - n) + n),
+                trans(law(m - n, a, b), sym(BitVec::resize_zero_extend(n, m - n, f(n, a, b))))));
+    j(n.sub_add_cancel(m, fits), λ w _ => f(w, a.resize(w), b.resize(w)) = f(n, a, b).resize(w), wide)
+}
+
+theorem BitVec::resize_test(n, m: Nat, fits: n <= m,
+    test: (w: Nat) → BitVec(w) → BitVec(w) → Bool,
+    law: (extra: Nat) → (a, b: BitVec(n)) →
+        test(extra + n, a.zero_extend(extra), b.zero_extend(extra)) = test(n, a, b),
+    a, b: BitVec(n)):
+    test(m, a.resize(m), b.resize(m)) = test(n, a, b)
+{
+    let wide: (test((m - n) + n, a.resize((m - n) + n), b.resize((m - n) + n)) = test(n, a, b)) =
+        j(sym(BitVec::resize_zero_extend(n, m - n, a)),
+            λ u _ => test((m - n) + n, u, b.resize((m - n) + n)) = test(n, a, b),
+            j(sym(BitVec::resize_zero_extend(n, m - n, b)),
+                λ v _ => test((m - n) + n, a.zero_extend(m - n), v) = test(n, a, b),
+                law(m - n, a, b)));
+    j(n.sub_add_cancel(m, fits), λ w _ => test(w, a.resize(w), b.resize(w)) = test(n, a, b), wide)
+}
+
+theorem BitVec::resize_band(n, m: Nat, fits: n <= m, a, b: BitVec(n)):
+    a.resize(m).band(b.resize(m)) = a.band(b).resize(m)
+{
+    BitVec::resize_binary(n, m, fits, λ (w: Nat) (x: BitVec(w)) (y: BitVec(w)) => x.band(y),
+        λ extra x y => BitVec::band_zero_extend(n, extra, x, y), a, b)
+}
+
+theorem BitVec::resize_bor(n, m: Nat, fits: n <= m, a, b: BitVec(n)):
+    a.resize(m).bor(b.resize(m)) = a.bor(b).resize(m)
+{
+    BitVec::resize_binary(n, m, fits, λ (w: Nat) (x: BitVec(w)) (y: BitVec(w)) => x.bor(y),
+        λ extra x y => BitVec::bor_zero_extend(n, extra, x, y), a, b)
+}
+
+theorem BitVec::resize_bxor(n, m: Nat, fits: n <= m, a, b: BitVec(n)):
+    a.resize(m).bxor(b.resize(m)) = a.bxor(b).resize(m)
+{
+    BitVec::resize_binary(n, m, fits, λ (w: Nat) (x: BitVec(w)) (y: BitVec(w)) => x.bxor(y),
+        λ extra x y => BitVec::bxor_zero_extend(n, extra, x, y), a, b)
+}
+
+theorem BitVec::resize_unsigned_lt_bit(n, m: Nat, fits: n <= m, a, b: BitVec(n)):
+    a.resize(m).unsigned_lt_bit(b.resize(m)) = a.unsigned_lt_bit(b)
+{
+    BitVec::resize_test(n, m, fits, λ (w: Nat) (x: BitVec(w)) (y: BitVec(w)) => x.unsigned_lt_bit(y),
+        λ extra x y => BitVec::unsigned_lt_zero_extend(n, extra, x, y), a, b)
+}
+
+theorem BitVec::resize_eq_bit(n, m: Nat, fits: n <= m, a, b: BitVec(n)):
+    a.resize(m).eq_bit(b.resize(m)) = a.eq_bit(b)
+{
+    BitVec::resize_test(n, m, fits, λ (w: Nat) (x: BitVec(w)) (y: BitVec(w)) => x.eq_bit(y),
+        λ extra x y => BitVec::eq_bit_zero_extend(n, extra, x, y), a, b)
+}
+
+// ---------------------------------------------------------------------------
+// Operations right in their low bits
+//
+// Truncation is a ring homomorphism, so the wide operation on two
+// zero-extended words, read back at the narrow width, is the narrow one.
+
+theorem BitVec::resize_back(n, m: Nat, fits: n <= m,
+    f: (w: Nat) → BitVec(w) → BitVec(w) → BitVec(w),
+    law: (extra: Nat) → (x, y: BitVec(extra + n)) →
+        f(extra + n, x, y).truncate(n, extra) = f(n, x.truncate(n, extra), y.truncate(n, extra)),
+    a, b: BitVec(n)):
+    f(m, a.resize(m), b.resize(m)).resize(n) = f(n, a, b)
+{
+    let wide: (f((m - n) + n, a.resize((m - n) + n), b.resize((m - n) + n)).resize(n) = f(n, a, b)) =
+        j(sym(BitVec::resize_zero_extend(n, m - n, a)),
+            λ u _ => f((m - n) + n, u, b.resize((m - n) + n)).resize(n) = f(n, a, b),
+            j(sym(BitVec::resize_zero_extend(n, m - n, b)),
+                λ v _ => f((m - n) + n, a.zero_extend(m - n), v).resize(n) = f(n, a, b),
+                trans(BitVec::resize_truncate(n, m - n, f((m - n) + n, a.zero_extend(m - n), b.zero_extend(m - n))),
+                trans(law(m - n, a.zero_extend(m - n), b.zero_extend(m - n)),
+                    j(sym(BitVec::truncate_zero_extend(n, m - n, a)),
+                        λ u _ => f(n, u, (b.zero_extend(m - n)).truncate(n, m - n)) = f(n, a, b),
+                        j(sym(BitVec::truncate_zero_extend(n, m - n, b)),
+                            λ v _ => f(n, a, v) = f(n, a, b), refl))))));
+    j(n.sub_add_cancel(m, fits), λ w _ => f(w, a.resize(w), b.resize(w)).resize(n) = f(n, a, b), wide)
+}
+
+theorem BitVec::resize_add(n, m: Nat, fits: n <= m, a, b: BitVec(n)):
+    a.resize(m).add(b.resize(m)).resize(n) = a.add(b)
+{
+    BitVec::resize_back(n, m, fits, λ (w: Nat) (x: BitVec(w)) (y: BitVec(w)) => x.add(y),
+        λ extra x y => BitVec::truncate_add(n, extra, x, y), a, b)
+}
+
+theorem BitVec::resize_sub(n, m: Nat, fits: n <= m, a, b: BitVec(n)):
+    a.resize(m).sub(b.resize(m)).resize(n) = a.sub(b)
+{
+    BitVec::resize_back(n, m, fits, λ (w: Nat) (x: BitVec(w)) (y: BitVec(w)) => x.sub(y),
+        λ extra x y => BitVec::truncate_sub(n, extra, x, y), a, b)
+}
+
+theorem BitVec::resize_mul(n, m: Nat, fits: n <= m, a, b: BitVec(n)):
+    a.resize(m).mul(b.resize(m)).resize(n) = a.mul(b)
+{
+    BitVec::resize_back(n, m, fits, λ (w: Nat) (x: BitVec(w)) (y: BitVec(w)) => x.mul(y),
+        λ extra x y => BitVec::truncate_mul(n, extra, x, y), a, b)
+}
+
+// ---------------------------------------------------------------------------
+// The top of a word, a bit at a time
+//
+// A word of `n + extra` bits, its `extra` top bits dropped; a word of `n`
+// bits with `extra` zeros under it, and with `extra` zeros over it. The
+// shifts are these: left by `extra` is the low bits over zeros, and right by
+// `extra` of that is the low bits under zeros.
+
+fn BitVec::low_bits(n, extra: Nat, x: BitVec(n + extra)) → BitVec(n) {
+    (match extra as λ k => BitVec(n + k) → BitVec(n) {
+        Zero => λ y => y,
+        Succ(_, ih) => λ y => ih(y.init()),
+    })(x)
+}
+
+fn BitVec::zeros_under(n, extra: Nat, x: BitVec(n)) → BitVec(n + extra) {
+    match extra as λ k => BitVec(n + k) {
+        Zero => x,
+        Succ(_, ih) => ih.cons_bit(False),
+    }
+}
+
+fn BitVec::zeros_over(n, extra: Nat, x: BitVec(n)) → BitVec(n + extra) {
+    match extra as λ k => BitVec(n + k) {
+        Zero => x,
+        Succ(_, ih) => ih.snoc(False),
+    }
+}
+
+theorem BitVec::shift_left_one_zero_low(n: Nat): (v: BitVec(n)) →
+    v.cons_bit(False).shift_left_one() = v.shift_left_one().cons_bit(False)
+{
+    match n { Zero => λ v => refl, Succ(_) => λ v => refl }
+}
+
+theorem BitVec::shift_left_zero_low(n: Nat, v: BitVec(n), count: Nat):
+    v.cons_bit(False).shift_left(count) = v.shift_left(count).cons_bit(False)
+{
+    match count {
+        Zero => refl,
+        Succ(k, ih) => trans(cong_fn(λ (z: BitVec(Succ(n))) => z.shift_left_one(), ih),
+            BitVec::shift_left_one_zero_low(n, v.shift_left(k))),
+    }
+}
+
+theorem BitVec::shift_left_one_first(n: Nat, x: BitVec(n), count: Nat):
+    x.shift_left_one().shift_left(count) = x.shift_left(count).shift_left_one()
+{
+    match count { Zero => refl, Succ(_, ih) => cong_fn(λ (z: BitVec(n)) => z.shift_left_one(), ih) }
+}
+
+theorem BitVec::shift_left_low_bits(n, extra: Nat): (y: BitVec(n + extra)) →
+    y.shift_left(extra) = BitVec::zeros_under(n, extra, BitVec::low_bits(n, extra, y))
+{
+    match extra {
+        Zero => λ y => refl,
+        Succ(k, ih) => λ y => trans(sym(BitVec::shift_left_one_first(Succ(n + k), y, k)),
+            trans(BitVec::shift_left_zero_low(n + k, y.init(), k),
+                cong_fn(λ (z: BitVec(n + k)) => z.cons_bit(False), ih(y.init())))),
+    }
+}
+
+theorem BitVec::shift_right_one_zero_high(n: Nat): (v: BitVec(n)) →
+    v.snoc(False).shift_right_one() = v.shift_right_one().snoc(False)
+{
+    match n { Zero => λ v => refl, Succ(_) => λ v => refl }
+}
+
+theorem BitVec::shift_right_zero_high(n: Nat, v: BitVec(n), count: Nat):
+    v.snoc(False).shift_right(count) = v.shift_right(count).snoc(False)
+{
+    match count {
+        Zero => refl,
+        Succ(k, ih) => trans(cong_fn(λ (z: BitVec(Succ(n))) => z.shift_right_one(), ih),
+            BitVec::shift_right_one_zero_high(n, v.shift_right(k))),
+    }
+}
+
+theorem BitVec::shift_right_one_first(n: Nat, x: BitVec(n), count: Nat):
+    x.shift_right_one().shift_right(count) = x.shift_right(count).shift_right_one()
+{
+    match count { Zero => refl, Succ(_, ih) => cong_fn(λ (z: BitVec(n)) => z.shift_right_one(), ih) }
+}
+
+theorem BitVec::shift_right_zeros_under(n: Nat, v: BitVec(n), extra: Nat):
+    BitVec::zeros_under(n, extra, v).shift_right(extra) = BitVec::zeros_over(n, extra, v)
+{
+    match extra {
+        Zero => refl,
+        Succ(k, ih) => trans(sym(BitVec::shift_right_one_first(Succ(n + k), BitVec::zeros_under(n, k, v).cons_bit(False), k)),
+            trans(BitVec::shift_right_zero_high(n + k, BitVec::zeros_under(n, k, v), k),
+                cong_fn(λ (z: BitVec(n + k)) => z.snoc(False), ih))),
+    }
+}
+
+// Zeros over a word are its zero extension: they add nothing to its value.
+theorem BitVec::snoc_false_toNat(n: Nat): (v: BitVec(n)) → v.snoc(False).toNat() = v.toNat() {
+    match n {
+        Zero => λ v => refl,
+        Succ(_, ih) => λ v => j(sym(ih(v.tail_bits())),
+            λ t _ => Nat::of_bit(v.head_bit()) + t.twice() = Nat::of_bit(v.head_bit()) + (v.tail_bits()).toNat().twice(), refl),
+    }
+}
+
+theorem BitVec::zeros_over_toNat(n: Nat, v: BitVec(n), extra: Nat): BitVec::zeros_over(n, extra, v).toNat() = v.toNat() {
+    match extra {
+        Zero => refl,
+        Succ(k, ih) => trans(BitVec::snoc_false_toNat(n + k, BitVec::zeros_over(n, k, v)), ih),
+    }
+}
+
+theorem BitVec::zeros_over_resize(n, extra: Nat, v: BitVec(n)): BitVec::zeros_over(n, extra, v) = v.resize(n + extra) {
+    trans(sym(BitVec::ofNat_toNat(n + extra, BitVec::zeros_over(n, extra, v))),
+        cong_fn(λ (value: Nat) => BitVec::ofNat(value, n := n + extra), BitVec::zeros_over_toNat(n, v, extra)))
+}
+
+// A word without its top bit is its value at one bit less. The recursion is
+// `ofNat_toNat`'s.
+theorem BitVec::resize_init(n: Nat): (u: BitVec(Succ(n))) → u.resize(n) = u.init() {
+    match n {
+        Zero => λ u => refl,
+        Succ(k, ih) => λ u => {
+            let h = u.head_bit();
+            let m = (u.tail_bits()).toNat();
+            BitVec::cons_bit_cong(k, BitVec::odd_bit_digit(h, m),
+                trans(j(BitVec::half_digit(h, m),
+                        λ y _ => BitVec::ofNat(Nat::half(Nat::of_bit(h) + Nat::twice(m)), n := k) = BitVec::ofNat(y), refl),
+                    ih(u.tail_bits())),
+                a := BitVec::odd_bit(Nat::of_bit(h) + Nat::twice(m)), b := h)
+        },
+    }
+}
+
+// Narrowing by way of a width between is narrowing.
+theorem BitVec::ofNat_narrowed(n, extra, value: Nat):
+    BitVec::ofNat(BitVec::ofNat(value, n := n + extra).toNat(), n := n) = BitVec::ofNat(value)
+{
+    j(extra.add_comm(n), λ w _ => BitVec::ofNat(BitVec::ofNat(value, n := w).toNat(), n := n) = BitVec::ofNat(value),
+        trans(BitVec::ofNat_toNat_truncate(n, extra, BitVec::ofNat(value)), BitVec::truncate_ofNat(n, extra, value)))
+}
+
+theorem BitVec::resize_low_bits(n, extra: Nat): (y: BitVec(n + extra)) → y.resize(n) = BitVec::low_bits(n, extra, y) {
+    match extra {
+        Zero => λ y => BitVec::ofNat_toNat(n, y),
+        Succ(k, ih) => λ y => trans(sym(BitVec::ofNat_narrowed(n, k, y.toNat())),
+            trans(cong_fn(λ (z: BitVec(n + k)) => z.resize(n), BitVec::resize_init(n + k, y)), ih(y.init()))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The shift pair
+
+// Left by `extra` and back clears the `extra` top bits: what is left is the
+// low `n` bits, zero-extended.
+theorem BitVec::shift_pair_low(n, extra: Nat, y: BitVec(n + extra)):
+    y.shift_left(extra).shift_right(extra) = y.resize(n).resize(n + extra)
+{
+    trans(cong_fn(λ (z: BitVec(n + extra)) => z.shift_right(extra), BitVec::shift_left_low_bits(n, extra, y)),
+    trans(BitVec::shift_right_zeros_under(n, BitVec::low_bits(n, extra, y), extra),
+    trans(BitVec::zeros_over_resize(n, extra, BitVec::low_bits(n, extra, y)),
+        cong_fn(λ (z: BitVec(n)) => z.resize(n + extra), sym(BitVec::resize_low_bits(n, extra, y))))))
+}
+
+theorem BitVec::shift_pair_resize(n, m: Nat, fits: n <= m, y: BitVec(m)):
+    y.shift_left(m - n).shift_right(m - n) = y.resize(n).resize(m)
+{
+    j(n.le_add(m, fits), λ w _ => (z: BitVec(w)) → z.shift_left(m - n).shift_right(m - n) = z.resize(n).resize(w),
+        λ z => BitVec::shift_pair_low(n, m - n, z))(y)
+}
+
+// ---------------------------------------------------------------------------
+// Shifts of a narrow word in a wide one
+
+// A logical right shift brings zeros in from the top, which is where the
+// extension's zeros already are.
+theorem BitVec::shift_right_zeros_over(n: Nat, a: BitVec(n), count, extra: Nat):
+    BitVec::zeros_over(n, extra, a).shift_right(count) = BitVec::zeros_over(n, extra, a.shift_right(count))
+{
+    match extra {
+        Zero => refl,
+        Succ(k, ih) => trans(BitVec::shift_right_zero_high(n + k, BitVec::zeros_over(n, k, a), count),
+            cong_fn(λ (z: BitVec(n + k)) => z.snoc(False), ih)),
+    }
+}
+
+theorem BitVec::resize_shift_right(n, m: Nat, fits: n <= m, a: BitVec(n), count: Nat):
+    a.resize(m).shift_right(count) = a.shift_right(count).resize(m)
+{
+    let wide: (a.resize(n + (m - n)).shift_right(count) = a.shift_right(count).resize(n + (m - n))) =
+        trans(cong_fn(λ (z: BitVec(n + (m - n))) => z.shift_right(count), sym(BitVec::zeros_over_resize(n, m - n, a))),
+        trans(BitVec::shift_right_zeros_over(n, a, count, m - n),
+            BitVec::zeros_over_resize(n, m - n, a.shift_right(count))));
+    j(n.le_add(m, fits), λ w _ => a.resize(w).shift_right(count) = a.shift_right(count).resize(w), wide)
+}
+
+theorem BitVec::init_shift_left_one(n: Nat): (u: BitVec(Succ(n))) →
+    u.shift_left_one().init() = u.init().shift_left_one()
+{
+    match n { Zero => λ u => refl, Succ(_) => λ u => refl }
+}
+
+theorem BitVec::init_shift_left(n: Nat, u: BitVec(Succ(n)), count: Nat):
+    u.shift_left(count).init() = u.init().shift_left(count)
+{
+    match count {
+        Zero => refl,
+        Succ(k, ih) => trans(BitVec::init_shift_left_one(n, u.shift_left(k)),
+            cong_fn(λ (z: BitVec(n)) => z.shift_left_one(), ih)),
+    }
+}
+
+theorem BitVec::init_snoc(n: Nat): (w: BitVec(n)) → (b: Bool) → w.snoc(b).init() = w {
+    match n {
+        Zero => λ w b => refl,
+        Succ(k, ih) => λ w b => trans(
+            BitVec::cons_bit_cong(k, refl, ih(w.tail_bits(), b), a := w.head_bit(), b := w.head_bit()),
+            BitVec::cons_head_tail(k, w)),
+    }
+}
+
+// A left shift moves bits up into the extension, and the low bits do not
+// see them.
+theorem BitVec::low_bits_shift_left(n: Nat, a: BitVec(n), count, extra: Nat):
+    BitVec::low_bits(n, extra, BitVec::zeros_over(n, extra, a).shift_left(count)) = a.shift_left(count)
+{
+    match extra {
+        Zero => refl,
+        Succ(k, ih) => trans(cong_fn(λ (z: BitVec(n + k)) => BitVec::low_bits(n, k, z),
+                trans(BitVec::init_shift_left(n + k, BitVec::zeros_over(n, k, a).snoc(False), count),
+                    cong_fn(λ (z: BitVec(n + k)) => z.shift_left(count),
+                        BitVec::init_snoc(n + k, BitVec::zeros_over(n, k, a), False)))),
+            ih),
+    }
+}
+
+theorem BitVec::resize_shift_left(n, m: Nat, fits: n <= m, a: BitVec(n), count: Nat):
+    a.resize(m).shift_left(count).resize(n) = a.shift_left(count)
+{
+    let wide: (a.resize(n + (m - n)).shift_left(count).resize(n) = a.shift_left(count)) =
+        trans(cong_fn(λ (z: BitVec(n + (m - n))) => z.shift_left(count).resize(n), sym(BitVec::zeros_over_resize(n, m - n, a))),
+        trans(BitVec::resize_low_bits(n, m - n, BitVec::zeros_over(n, m - n, a).shift_left(count)),
+            BitVec::low_bits_shift_left(n, a, count, m - n)));
+    j(n.le_add(m, fits), λ w _ => a.resize(w).shift_left(count).resize(n) = a.shift_left(count), wide)
+}
+
+// ---------------------------------------------------------------------------
+// Resizing twice
+
+// A word widened keeps its value.
+theorem BitVec::resize_toNat(n, m: Nat, fits: n <= m, a: BitVec(n)): a.resize(m).toNat() = a.toNat() {
+    let wide: (a.resize(n + (m - n)).toNat() = a.toNat()) =
+        trans(cong_fn(λ (z: BitVec(n + (m - n))) => z.toNat(), sym(BitVec::zeros_over_resize(n, m - n, a))),
+            BitVec::zeros_over_toNat(n, a, m - n));
+    j(n.le_add(m, fits), λ w _ => a.resize(w).toNat() = a.toNat(), wide)
+}
+
+// Widened and then resized is resized: to its own width that is the word
+// back, to a wider one the wider extension.
+theorem BitVec::resize_widened(n, m: Nat, fits: n <= m, a: BitVec(n), w: Nat): a.resize(m).resize(w) = a.resize(w) {
+    cong_fn(λ (value: Nat) => BitVec::ofNat(value, n := w), BitVec::resize_toNat(n, m, fits, a))
+}
+
+theorem BitVec::resize_round_trip(n, m: Nat, fits: n <= m, a: BitVec(n)): a.resize(m).resize(n) = a {
+    trans(BitVec::resize_widened(n, m, fits, a, n), BitVec::resize_self(n, a))
+}
+
+// Narrowed by way of a width between is narrowed.
+theorem BitVec::resize_narrowed(n, m: Nat, fits: n <= m, {k: Nat}, x: BitVec(k)): x.resize(m).resize(n) = x.resize(n) {
+    j(n.le_add(m, fits), λ w _ => x.resize(w).resize(n) = x.resize(n), BitVec::ofNat_narrowed(n, m - n, x.toNat()))
+}

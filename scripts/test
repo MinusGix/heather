@@ -111,7 +111,8 @@ if [[ "${1:-}" == --fast ]]; then
         --skip compiled_wc_prints_counts_as_gnu_wc
         --skip compiled_head_takes_its_count_as_gnu_head
         --skip compiled_decimals_round_trip_the_widest_words
-        --skip source_to_native_binary)
+        --skip source_to_native_binary
+        --skip linked_exports_are_what_the_compiler_emits)
 elif [[ "${1:-}" == --pr ]]; then
   shift
   TEST_LANE=pr
@@ -122,7 +123,7 @@ elif [[ "${1:-}" == --pr ]]; then
   # write-elf (`crates/cli/src/native.rs` and the module under it), the
   # kernel, or the gates themselves. No merge base with
   # origin/master (a checkout without it) means run them.
-  native_paths='^(lib/native/|lib/_tests/native/|lib/std/machine/|lib/std/os/|crates/cli/src/native(/|\.rs$)|crates/cli/tests/native|crates/kernel/src/|crates/kernel-lib/)'
+  native_paths='^(lib/native/|lib/_tests/native/|lib/std/machine/|lib/std/os/|crates/cli/src/native(/|\.rs$)|crates/cli/tests/native|crates/linked/|crates/kernel/src/|crates/kernel-lib/)'
   native_smoke=compiled_yes_runs_as_gnu_yes
   # Unfiltered, the lane also runs only the test files the diff can affect
   # (scripts/affected-targets.mjs, after the build below: Cargo's dep-info
@@ -372,7 +373,7 @@ if (( $# == 0 )); then
   # The fast lane skips every native certificate gate, so it has no prefix
   # to warm; the warmup alone is ~150 CPU-s.
   if [[ "$TEST_LANE" != fast ]]; then
-    selected heather native native_program native_branches && native_warmup
+    selected heather native native_program native_branches native_linked && native_warmup
   fi
 else
   if [[ "$requested" == *"--test native"* ]]; then

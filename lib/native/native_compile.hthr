@@ -226,7 +226,13 @@ fn Prog::port_to(self p: Prog, layout: Layout, port: Port, register: Gpr) → Op
         False => None,
         True => match Kind::of_width(port.width) {
             None => None,
-            Some(kind) => match kind { Word => Some(p.word_to(layout, port.id, register)), Bit => Some(p.bit_to(layout, port.id, register)) },
+            Some(kind) => match kind {
+                Word => Some(p.word_to(layout, port.id, register)),
+                Bit => Some(p.bit_to(layout, port.id, register)),
+                // No port is at a narrow kind (`Kind::of_width_plain`).
+                Narrow(_) => None,
+                Low(_) => None,
+            },
         },
     }
 }

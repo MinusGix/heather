@@ -1,0 +1,390 @@
+// SHA-2 as a specification (FIPS 180-4), one definition for the family
+// (issues/sha2-specification.md).
+//
+// SHA-256 and SHA-512 are the same function at two word widths: the
+// compression function, the message schedule and the padding differ only in
+// the width, the rotation counts, the round constants and the initial hash
+// value (§4.1.2 against §4.1.3, §4.2.2 against §4.2.3, §5.3). `Sha2` holds
+// those, and everything below is over `BitVec(p.width)`. SHA-224, SHA-384,
+// SHA-512/224 and SHA-512/256 are the same two functions from another
+// initial value, with the output cut short (§6.3 to §6.7), which is what
+// `output` is for.
+//
+// This file is the meaning: it is written to be read against the standard,
+// a section at a time, and nothing here is shaped for a machine. Compiled
+// code is proved against it (`lib/native/crypto/sha512_round.hthr` and
+// `sha256_round.hthr`), and its own test is the standard's vectors
+// (`lib/_tests/std/crypto/sha2_tests.hthr`).
+
+import bitvec;
+import bitvec_rotate;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// §4.1.2, §4.1.3: Ch and Maj, the same at every width.
+fn BitVec::ch({n: Nat}, self x, y, z: BitVec(n)) → BitVec(n) {
+    x.band(y).bxor(x.complement().band(z))
+}
+
+fn BitVec::maj({n: Nat}, self x, y, z: BitVec(n)) → BitVec(n) {
+    x.band(y).bxor(x.band(z)).bxor(y.band(z))
+}
+
+// Three counts: a Σ rotates by each, a σ rotates by two and shifts by the
+// third.
+record Sha2Counts { first: Nat, second: Nat, third: Nat }
+
+fn Sha2Counts::big({n: Nat}, self r: Sha2Counts, x: BitVec(n)) → BitVec(n) {
+    x.rotr(r.first).bxor(x.rotr(r.second)).bxor(x.rotr(r.third))
+}
+
+fn Sha2Counts::small({n: Nat}, self r: Sha2Counts, x: BitVec(n)) → BitVec(n) {
+    x.rotr(r.first).bxor(x.rotr(r.second)).bxor(x.shift_right(r.third))
+}
+
+// One member of the family. `k` is the round constants (their count is the
+// number of rounds), `initial` the eight words of H(0), `output` how many
+// words of the final hash value the digest keeps.
+record Sha2 {
+    width: Nat,
+    big0: Sha2Counts,
+    big1: Sha2Counts,
+    small0: Sha2Counts,
+    small1: Sha2Counts,
+    k: List<Nat>,
+    initial: List<Nat>,
+    output: Nat,
+}
+
+fn Sha2::rounds(self p: Sha2) → Nat { p.k.len() }
+// A word in bytes, a block in bytes (sixteen words), and the length field
+// that ends the padding (two words).
+fn Sha2::word_bytes(self p: Sha2) → Nat { p.width / 8 }
+fn Sha2::block_bytes(self p: Sha2) → Nat { 16 * p.word_bytes() }
+fn Sha2::length_bytes(self p: Sha2) → Nat { 2 * p.word_bytes() }
+
+// The working variables a to h (§6.2.2 step 2), and the hash value H(i)
+// they are added into.
+record Sha2State(n: Nat) {
+    a: BitVec(n), b: BitVec(n), c: BitVec(n), d: BitVec(n),
+    e: BitVec(n), f: BitVec(n), g: BitVec(n), h: BitVec(n),
+}
+
+fn Sha2State::plus({n: Nat}, self s, t: Sha2State(n)) → Sha2State(n) {
+    Sha2State(s.a.add(t.a), s.b.add(t.b), s.c.add(t.c), s.d.add(t.d),
+        s.e.add(t.e), s.f.add(t.f), s.g.add(t.g), s.h.add(t.h))
+}
+
+fn Sha2State::words({n: Nat}, self s: Sha2State(n)) → List<BitVec(n)> {
+    [s.a, s.b, s.c, s.d, s.e, s.f, s.g, s.h]
+}
+
+fn Sha2::word(self p: Sha2, words: List<Nat>, i: Nat) → BitVec(p.width) {
+    BitVec::ofNat(words.nth(i).unwrap_or(0))
+}
+
+fn Sha2::start(self p: Sha2) → Sha2State(p.width) {
+    Sha2State(p.word(p.initial, 0), p.word(p.initial, 1), p.word(p.initial, 2), p.word(p.initial, 3),
+        p.word(p.initial, 4), p.word(p.initial, 5), p.word(p.initial, 6), p.word(p.initial, 7))
+}
+
+// §6.2.2 step 3: one round, from the working variables, the round's
+// constant and its schedule word.
+fn Sha2::t1(self p: Sha2, s: Sha2State(p.width), k, w: BitVec(p.width)) → BitVec(p.width) {
+    s.h.add(p.big1.big(s.e)).add(s.e.ch(s.f, s.g)).add(k).add(w)
+}
+
+fn Sha2::t2(self p: Sha2, s: Sha2State(p.width)) → BitVec(p.width) {
+    p.big0.big(s.a).add(s.a.maj(s.b, s.c))
+}
+
+fn Sha2State::turn({n: Nat}, self s: Sha2State(n), t1, t2: BitVec(n)) → Sha2State(n) {
+    Sha2State(t1.add(t2), s.a, s.b, s.c, s.d.add(t1), s.e, s.f, s.g)
+}
+
+fn Sha2::round(self p: Sha2, s: Sha2State(p.width), k, w: BitVec(p.width)) → Sha2State(p.width) {
+    s.turn(p.t1(s, k, w), p.t2(s))
+}
+
+// §6.2.2 step 1: the message schedule. A window holds the words so far,
+// newest first, so the four a new word reads are at fixed places:
+// W(t) = σ1(W(t−2)) + W(t−7) + σ0(W(t−15)) + W(t−16).
+fn Sha2::window_word(self p: Sha2, window: List<BitVec(p.width)>, back: Nat) → BitVec(p.width) {
+    window.nth(back).unwrap_or(BitVec::zero())
+}
+
+fn Sha2::next_word(self p: Sha2, window: List<BitVec(p.width)>) → BitVec(p.width) {
+    p.small1.small(p.window_word(window, 1)).add(p.window_word(window, 6))
+        .add(p.small0.small(p.window_word(window, 14))).add(p.window_word(window, 15))
+}
+
+fn Sha2::push(self p: Sha2, window: List<BitVec(p.width)>) → List<BitVec(p.width)> {
+    Cons(p.next_word(window), window)
+}
+
+// `count` more words onto a window.
+fn Sha2::extend(self p: Sha2, count: Nat, window: List<BitVec(p.width)>) → List<BitVec(p.width)> {
+    match count { Zero => window, Succ(k) => p.push(p.extend(k, window)) }
+}
+
+// The whole schedule of a block, W(0) first.
+fn Sha2::schedule(self p: Sha2, block: List<BitVec(p.width)>) → List<BitVec(p.width)> {
+    p.extend(p.rounds() - 16, block.rev()).rev()
+}
+
+// Rounds `from` up to `from + count` over a schedule.
+fn Sha2::run(self p: Sha2, schedule: List<BitVec(p.width)>, from, count: Nat,
+    s: Sha2State(p.width)) → Sha2State(p.width)
+{
+    match count {
+        Zero => s,
+        Succ(n) => p.round(p.run(schedule, from, n, s), p.word(p.k, from + n),
+            p.window_word(schedule, from + n)),
+    }
+}
+
+// §6.2.2: the compression function, H(i) from H(i−1) and a block.
+fn Sha2::compress(self p: Sha2, hash: Sha2State(p.width), block: List<BitVec(p.width)>) → Sha2State(p.width) {
+    hash.plus(p.run(p.schedule(block), 0, p.rounds(), hash))
+}
+
+// ---------------------------------------------------------------------------
+// §5: bytes to blocks
+
+// `count` bytes, most significant first.
+fn Sha2::be_bytes(value, count: Nat) → List<BitVec(8)> {
+    match count {
+        Zero => [],
+        Succ(k) => Sha2::be_bytes(value / 256, k).append([BitVec::ofNat(value % 256)]),
+    }
+}
+
+// The number those bytes spell, most significant first.
+fn Sha2::be_value(bytes: List<BitVec(8)>) → Nat {
+    bytes.foldl(λ (acc: Nat) (b: BitVec(8)) => acc * 256 + b.toNat(), 0)
+}
+
+// `count` pieces of `size` each off the front of a list.
+fn Sha2::pieces<A>(size, count: Nat, xs: List<A>) → List<List<A>> {
+    match count {
+        Zero => [],
+        Succ(k) => Cons(xs.take(size), Sha2::pieces(size, k, xs.drop(size))),
+    }
+}
+
+// §5.1: a `1` bit, zeros, and the message's length in bits, ending on a
+// block boundary. Over bytes the `1` bit is the byte 0x80.
+fn Sha2::zeros(self p: Sha2, length: Nat) → Nat {
+    let block = p.block_bytes();
+    (block - (length + 1 + p.length_bytes()) % block) % block
+}
+
+fn Sha2::pad(self p: Sha2, message: List<BitVec(8)>) → List<BitVec(8)> {
+    message.append(Cons(BitVec::ofNat(0x80),
+        List::replicate(BitVec::zero(), p.zeros(message.len()))
+            .append(Sha2::be_bytes(8 * message.len(), p.length_bytes()))))
+}
+
+// §5.2: the padded message as blocks of sixteen big-endian words.
+fn Sha2::words(self p: Sha2, bytes: List<BitVec(8)>) → List<BitVec(p.width)> {
+    Sha2::pieces(p.word_bytes(), bytes.len() / p.word_bytes(), bytes)
+        .map(λ (piece: List<BitVec(8)>) => BitVec::ofNat(Sha2::be_value(piece)))
+}
+
+fn Sha2::blocks(self p: Sha2, message: List<BitVec(8)>) → List<List<BitVec(p.width)>> {
+    let padded = p.pad(message);
+    Sha2::pieces(16, padded.len() / p.block_bytes(), p.words(padded))
+}
+
+// §6.2.2, §6.4.2: the hash value after every block, and the digest it
+// spells: `output` words, each most significant byte first.
+fn Sha2::hash(self p: Sha2, message: List<BitVec(8)>) → Sha2State(p.width) {
+    p.blocks(message).foldl(λ (hash: Sha2State(p.width)) (block: List<BitVec(p.width)>) =>
+        p.compress(hash, block), p.start())
+}
+
+// A word's `count` low bytes, most significant first, read off its bits: a
+// word's `toNat` is a number in unary, which no digest should wait for.
+fn Sha2::spell_word({n: Nat}, count: Nat, word: BitVec(n)) → List<BitVec(8)> {
+    match count {
+        Zero => [],
+        Succ(k) => Sha2::spell_word(k, word.shift_right(8)).append([BitVec::widen_bits(8, n, word, False)]),
+    }
+}
+
+fn Sha2::spell(self p: Sha2, hash: Sha2State(p.width)) → List<BitVec(8)> {
+    hash.words().take(p.output).foldr(λ (word: BitVec(p.width)) (rest: List<BitVec(8)>) =>
+        Sha2::spell_word(p.word_bytes(), word).append(rest), Nil)
+}
+
+fn Sha2::digest(self p: Sha2, message: List<BitVec(8)>) → List<BitVec(8)> {
+    p.spell(p.hash(message))
+}
+
+// ---------------------------------------------------------------------------
+// The family (§4.2.2, §4.2.3, §5.3)
+
+fn Sha2::k256() → List<Nat> {
+    [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+     0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+     0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+     0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+     0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]
+}
+
+fn Sha2::k512() → List<Nat> {
+    [0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
+     0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
+     0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
+     0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235, 0xc19bf174cf692694,
+     0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
+     0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
+     0x983e5152ee66dfab, 0xa831c66d2db43210, 0xb00327c898fb213f, 0xbf597fc7beef0ee4,
+     0xc6e00bf33da88fc2, 0xd5a79147930aa725, 0x06ca6351e003826f, 0x142929670a0e6e70,
+     0x27b70a8546d22ffc, 0x2e1b21385c26c926, 0x4d2c6dfc5ac42aed, 0x53380d139d95b3df,
+     0x650a73548baf63de, 0x766a0abb3c77b2a8, 0x81c2c92e47edaee6, 0x92722c851482353b,
+     0xa2bfe8a14cf10364, 0xa81a664bbc423001, 0xc24b8b70d0f89791, 0xc76c51a30654be30,
+     0xd192e819d6ef5218, 0xd69906245565a910, 0xf40e35855771202a, 0x106aa07032bbd1b8,
+     0x19a4c116b8d2d0c8, 0x1e376c085141ab53, 0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8,
+     0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb, 0x5b9cca4f7763e373, 0x682e6ff3d6b2b8a3,
+     0x748f82ee5defb2fc, 0x78a5636f43172f60, 0x84c87814a1f0ab72, 0x8cc702081a6439ec,
+     0x90befffa23631e28, 0xa4506cebde82bde9, 0xbef9a3f7b2c67915, 0xc67178f2e372532b,
+     0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
+     0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
+     0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
+     0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817]
+}
+
+fn Sha2::family256(initial: List<Nat>, output: Nat) → Sha2 {
+    Sha2(width := 32,
+        big0 := Sha2Counts(2, 13, 22), big1 := Sha2Counts(6, 11, 25),
+        small0 := Sha2Counts(7, 18, 3), small1 := Sha2Counts(17, 19, 10),
+        k := Sha2::k256(), initial := initial, output := output)
+}
+
+fn Sha2::family512(initial: List<Nat>, output: Nat) → Sha2 {
+    Sha2(width := 64,
+        big0 := Sha2Counts(28, 34, 39), big1 := Sha2Counts(14, 18, 41),
+        small0 := Sha2Counts(1, 8, 7), small1 := Sha2Counts(19, 61, 6),
+        k := Sha2::k512(), initial := initial, output := output)
+}
+
+fn Sha2::sha256() → Sha2 {
+    Sha2::family256([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19], 8)
+}
+
+fn Sha2::sha224() → Sha2 {
+    Sha2::family256([0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939,
+        0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4], 7)
+}
+
+fn Sha2::sha512() → Sha2 {
+    Sha2::family512([0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+        0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179], 8)
+}
+
+fn Sha2::sha384() → Sha2 {
+    Sha2::family512([0xcbbb9d5dc1059ed8, 0x629a292a367cd507, 0x9159015a3070dd17, 0x152fecd8f70e5939,
+        0x67332667ffc00b31, 0x8eb44a8768581511, 0xdb0c2e0d64f98fa7, 0x47b5481dbefa4fa4], 6)
+}
+
+// ---------------------------------------------------------------------------
+// What a proof by stages reads: each definition's one step, and the
+// schedule and the rounds a piece at a time. A whole block evaluated in one
+// declaration is past the kernel's fuel, so a vector is proved by pieces and
+// these put the pieces together.
+
+theorem Sha2::extend_add(self p: Sha2, first: Nat, window: List<BitVec(p.width)>):
+    (second: Nat) → p.extend(first + second, window) = p.extend(second, p.extend(first, window))
+{
+    λ second => match second {
+        Zero => refl,
+        Succ(_, ih) => cong_fn(λ (w: List<BitVec(p.width)>) => p.push(w), ih),
+    }
+}
+
+theorem Sha2::run_add(self p: Sha2, schedule: List<BitVec(p.width)>, from, first: Nat,
+    s: Sha2State(p.width)):
+    (second: Nat) → p.run(schedule, from, first + second, s) =
+        p.run(schedule, from + first, second, p.run(schedule, from, first, s))
+{
+    λ second => match second {
+        Zero => refl,
+        Succ(k, ih) => {
+            let at: (from + (first + k) = (from + first) + k) = sym(Nat::add_assoc(from, first, k));
+            j(at, λ i _ => p.round(p.run(schedule, from, first + k, s), p.word(p.k, from + (first + k)),
+                    p.window_word(schedule, from + (first + k))) =
+                p.round(p.run(schedule, from + first, k, p.run(schedule, from, first, s)), p.word(p.k, i),
+                    p.window_word(schedule, i)),
+                cong_fn(λ (t: Sha2State(p.width)) => p.round(t, p.word(p.k, from + (first + k)),
+                    p.window_word(schedule, from + (first + k))), ih))
+        },
+    }
+}
+
+// Two stretches of the schedule, or of the rounds, end to end.
+theorem Sha2::extend_then(self p: Sha2, first, second: Nat,
+    start, middle, end: List<BitVec(p.width)>,
+    one: p.extend(first, start) = middle, two: p.extend(second, middle) = end):
+    p.extend(first + second, start) = end
+{
+    trans(p.extend_add(first, start, second),
+        trans(cong_fn(λ (w: List<BitVec(p.width)>) => p.extend(second, w), one), two))
+}
+
+theorem Sha2::run_then(self p: Sha2, schedule: List<BitVec(p.width)>, from, first, second: Nat,
+    s, middle, end: Sha2State(p.width),
+    one: p.run(schedule, from, first, s) = middle,
+    two: p.run(schedule, from + first, second, middle) = end):
+    p.run(schedule, from, first + second, s) = end
+{
+    trans(p.run_add(schedule, from, first, s, second),
+        trans(cong_fn(λ (t: Sha2State(p.width)) => p.run(schedule, from + first, second, t), one), two))
+}
+
+// The schedule from its window, the compression function from the schedule
+// and the rounds, and a one-block message's hash from its block.
+theorem Sha2::schedule_of(self p: Sha2, block, window: List<BitVec(p.width)>, count: Nat,
+    more: p.rounds() - 16 = count, extended: p.extend(count, block.rev()) = window):
+    p.schedule(block) = window.rev()
+{
+    trans(j(more, λ c _ => p.schedule(block) = p.extend(c, block.rev()).rev(), refl),
+        cong_fn(λ (w: List<BitVec(p.width)>) => w.rev(), extended))
+}
+
+theorem Sha2::compress_of(self p: Sha2, hash, end: Sha2State(p.width),
+    block, schedule: List<BitVec(p.width)>, count: Nat,
+    scheduled: p.schedule(block) = schedule, rounds: p.rounds() = count,
+    ran: p.run(schedule, 0, count, hash) = end):
+    p.compress(hash, block) = hash.plus(end)
+{
+    let counted: (p.compress(hash, block) = hash.plus(p.run(p.schedule(block), 0, count, hash))) =
+        j(rounds, λ c _ => p.compress(hash, block) = hash.plus(p.run(p.schedule(block), 0, c, hash)), refl);
+    let read: (p.compress(hash, block) = hash.plus(p.run(schedule, 0, count, hash))) =
+        j(scheduled, λ w _ => p.compress(hash, block) = hash.plus(p.run(w, 0, count, hash)), counted);
+    trans(read, cong_fn(λ (t: Sha2State(p.width)) => hash.plus(t), ran))
+}
+
+theorem Sha2::hash_of_block(self p: Sha2, message: List<BitVec(8)>, block: List<BitVec(p.width)>,
+    end: Sha2State(p.width),
+    one: p.blocks(message) = [block], compressed: p.compress(p.start(), block) = end):
+    p.hash(message) = end
+{
+    let folded: (p.hash(message) = p.compress(p.start(), block)) =
+        cong_fn(λ (blocks: List<List<BitVec(p.width)>>) =>
+            blocks.foldl(λ (hash: Sha2State(p.width)) (b: List<BitVec(p.width)>) => p.compress(hash, b), p.start()), one);
+    trans(folded, compressed)
+}
+
+theorem Sha2::digest_of(self p: Sha2, message: List<BitVec(8)>, hash: Sha2State(p.width),
+    hashed: p.hash(message) = hash): p.digest(message) = p.spell(hash)
+{
+    cong_fn(λ (h: Sha2State(p.width)) => p.spell(h), hashed)
+}

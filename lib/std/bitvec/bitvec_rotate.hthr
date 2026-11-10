@@ -1,0 +1,55 @@
+// Rotations of a word (issues/bitvec-rotates-and-wide-ops.md).
+//
+// A rotation is defined the way FIPS 180-4 §3.2 defines it, by the shift
+// pair: `ROTR^k(x) = (x >> k) ∨ (x << w − k)`. That is also what a compiled
+// word function computes until the machine model has `ROR`
+// (issues/x86-narrow-and-rotate-forms.md), so a `runtime fn` that spells the
+// pair agrees with a specification that says `rotr` by unfolding, and no
+// identity between two bit-level computations stands between them.
+//
+// The price is evaluation: a shift by `k` is `k` one-bit shifts, each linear
+// in the width, so a rotation costs both counts. A specification checked by
+// evaluating it pays that per rotation (stage theorems keep a declaration
+// inside its fuel, `lib/_tests/std/crypto/sha2_tests.hthr`). A form linear in the
+// width alone (`drop_low` and `concat`) and its equation with this one are
+// still owed.
+
+import bitvec;
+import bool;
+import logic;
+import nat;
+
+fn BitVec::rotr({n: Nat}, self x: BitVec(n), count: Nat) → BitVec(n) {
+    x.shift_right(count).bor(x.shift_left(n - count))
+}
+
+fn BitVec::rotl({n: Nat}, self x: BitVec(n), count: Nat) → BitVec(n) {
+    x.shift_left(count).bor(x.shift_right(n - count))
+}
+
+// The pair, named: what a caller rewrites with when its other side spells
+// the shifts.
+theorem BitVec::rotr_shifts(n: Nat, x: BitVec(n), count: Nat):
+    x.rotr(count) = x.shift_right(count).bor(x.shift_left(n - count)) { refl }
+
+theorem BitVec::rotl_shifts(n: Nat, x: BitVec(n), count: Nat):
+    x.rotl(count) = x.shift_left(count).bor(x.shift_right(n - count)) { refl }
+
+// Left by `count` is right by what is left of the width.
+theorem BitVec::rotl_eq_rotr(n: Nat, x: BitVec(n), count: Nat, fits: count <= n):
+    x.rotl(count) = x.rotr(n - count)
+{
+    let back: (n - (n - count) = count) = n.sub_sub_self(count, fits);
+    let right: (x.rotr(n - count) = x.shift_right(n - count).bor(x.shift_left(count))) =
+        j(back, λ c _ => x.rotr(n - count) = x.shift_right(n - count).bor(x.shift_left(c)), refl);
+    trans(BitVec::bor_comm(n, x.shift_left(count), x.shift_right(n - count)), sym(right))
+}
+
+theorem BitVec::rotr_eq_rotl(n: Nat, x: BitVec(n), count: Nat, fits: count <= n):
+    x.rotr(count) = x.rotl(n - count)
+{
+    let back: (n - (n - count) = count) = n.sub_sub_self(count, fits);
+    let left: (x.rotl(n - count) = x.shift_left(n - count).bor(x.shift_right(count))) =
+        j(back, λ c _ => x.rotl(n - count) = x.shift_left(n - count).bor(x.shift_right(c)), refl);
+    trans(BitVec::bor_comm(n, x.shift_right(count), x.shift_left(n - count)), sym(left))
+}

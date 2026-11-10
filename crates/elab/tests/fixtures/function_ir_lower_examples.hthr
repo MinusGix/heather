@@ -154,7 +154,56 @@ fn shift_region() → Region {
 
 theorem shift_lowers(): shift_region().lower_planned([Rdi], [Rax]).is_some() = True { refl }
 
-// A shift at another width has no registers yet.
+// Narrow widths (issues/function-ir-narrow-arithmetic.md). Inside a region
+// a value of any width up to 64 has a register: here two words are cut to
+// 32 bits, added and shifted there, and the result widened.
+fn narrow_inside_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)]),
+        nodes := [
+            Resize(from := 64, to := 32, output := 2, source := 0),
+            Resize(from := 64, to := 32, output := 3, source := 1),
+            Add(width := 32, output := 4, left := 2, right := 3),
+            ShiftLeft(width := 32, output := 5, value := 4, amount := 3),
+            Resize(from := 32, to := 64, output := 6, source := 5),
+        ],
+        outputs := Ports([Port(id := 6, width := 64)]))
+}
+
+theorem narrow_inside_lowers(): narrow_inside_region().lower_planned([Rdi, Rsi], [Rax]).is_some() = True { refl }
+
+// The same at a width no instruction has.
+fn odd_inside_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)]),
+        nodes := [
+            Resize(from := 64, to := 27, output := 2, source := 0),
+            Resize(from := 64, to := 27, output := 3, source := 1),
+            Sub(width := 27, output := 4, left := 2, right := 3),
+            Resize(from := 27, to := 64, output := 5, source := 4),
+        ],
+        outputs := Ports([Port(id := 5, width := 64)]))
+}
+
+theorem odd_inside_lowers(): odd_inside_region().lower_planned([Rdi, Rsi], [Rax]).is_some() = True { refl }
+
+// The signed order is not the unsigned order of zero-extended words, so a
+// narrow signed comparison has no code yet.
+fn narrow_signed_region() → Region {
+    Region(
+        inputs := Ports([Port(id := 0, width := 64), Port(id := 1, width := 64)]),
+        nodes := [
+            Resize(from := 64, to := 32, output := 2, source := 0),
+            Resize(from := 64, to := 32, output := 3, source := 1),
+            SignedLessThan(width := 32, output := 4, left := 2, right := 3),
+        ],
+        outputs := Ports([Port(id := 4, width := 1)]))
+}
+
+theorem narrow_signed_refused(): narrow_signed_region().lower_planned([Rdi, Rsi], [Rax]) = None { refl }
+
+// A narrow value does not cross a region's boundary: a port is a word or a
+// bit (issues/runtime-repr-narrow-words.md).
 fn narrow_shift_region() → Region {
     Region(
         inputs := Ports([Port(id := 0, width := 32)]),
@@ -164,7 +213,6 @@ fn narrow_shift_region() → Region {
 
 theorem narrow_shift_refused(): narrow_shift_region().lower_planned([Rdi], [Rax]) = None { refl }
 
-// Nor do other widths.
 fn narrow_region() → Region {
     Region(
         inputs := Ports([Port(id := 0, width := 32), Port(id := 1, width := 32)]),

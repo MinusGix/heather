@@ -14,6 +14,7 @@ import function_ir;
 import x86_64;
 import x86_64_block;
 import bitvec;
+import bitvec_resize;
 import bool;
 import list;
 import logic;
@@ -24,8 +25,15 @@ import option;
 // Registers and what they hold
 
 // A value a register holds: a 64-bit value as itself, a one-bit value
-// zero-extended (as `BitValuePlaced` places it today).
-inductive Kind { Word, Bit }
+// zero-extended (as `BitValuePlaced` places it today), a value of another
+// width zero-extended (`Narrow`), or one right in its low bits only (`Low`:
+// what an ADD of two narrow values leaves until it is settled, "Narrow
+// widths" below).
+inductive Kind { Word, Bit, Narrow(width: Nat), Low(width: Nat) }
+
+fn Kind::width(self kind: Kind) → Nat {
+    match kind { Word => 64, Bit => 1, Narrow(width) => width, Low(width) => width }
+}
 
 record Held { id: Nat, kind: Kind }
 
@@ -84,6 +92,8 @@ fn Held::Rep(self held: Held, values: Valuation(), word: BitVec(64)) → Type {
     match held.kind {
         Word => values(64, held.id) = word,
         Bit => values(1, held.id).zero_extend(63) = word,
+        Narrow(width) => values(width, held.id).resize(64) = word,
+        Low(width) => word.resize(width) = values(width, held.id),
     }
 }
 
@@ -169,8 +179,30 @@ theorem FoundAt::rep({file: File}, {held: Held}, {register: Gpr},
 
 fn Kind::eq_dec(self left, right: Kind) → left = right ∨ left ≠ right {
     match left {
-        Word => match right { Word => Inl(refl), Bit => Inr(λ no => absurd(no)) },
-        Bit => match right { Word => Inr(λ no => absurd(no)), Bit => Inl(refl) },
+        Word => match right {
+            Word => Inl(refl), Bit => Inr(λ no => absurd(no)),
+            Narrow(_) => Inr(λ no => absurd(no)), Low(_) => Inr(λ no => absurd(no)),
+        },
+        Bit => match right {
+            Word => Inr(λ no => absurd(no)), Bit => Inl(refl),
+            Narrow(_) => Inr(λ no => absurd(no)), Low(_) => Inr(λ no => absurd(no)),
+        },
+        Narrow(n) => match right {
+            Word => Inr(λ no => absurd(no)), Bit => Inr(λ no => absurd(no)),
+            Narrow(m) => match n.eq_dec(m) {
+                Inl(same) => Inl(cong_fn(λ (w: Nat) => Narrow(w), same)),
+                Inr(differ) => Inr(λ (no: Narrow(n) = Narrow(m)) => differ(cong_fn(λ (k: Kind) => k.width(), no))),
+            },
+            Low(_) => Inr(λ no => absurd(no)),
+        },
+        Low(n) => match right {
+            Word => Inr(λ no => absurd(no)), Bit => Inr(λ no => absurd(no)),
+            Narrow(_) => Inr(λ no => absurd(no)),
+            Low(m) => match n.eq_dec(m) {
+                Inl(same) => Inl(cong_fn(λ (w: Nat) => Low(w), same)),
+                Inr(differ) => Inr(λ (no: Low(n) = Low(m)) => differ(cong_fn(λ (k: Kind) => k.width(), no))),
+            },
+        },
     }
 }
 
@@ -399,7 +431,10 @@ fn File::place_from(self file: File, held: Held, destination: Gpr,
     found: Option<Found(file, held)>) → Option<Lowered>
 {
     match found {
-        None => match held.kind { Word => file.load_known(held.id, destination), Bit => None },
+        None => match held.kind {
+            Word => file.load_known(held.id, destination),
+            Bit => None, Narrow(_) => None, Low(_) => None,
+        },
         Some(here) => Some(file.place_found(held, destination, here,
             destination.same(here.register))),
     }
@@ -431,7 +466,7 @@ theorem File::place_from_keeps<M>(self file: File, values: Valuation(), held: He
     match found {
         None => match held.kind {
             Word => file.load_known_keeps<M>(values, held.id, destination),
-            Bit => trivial,
+            Bit => trivial, Narrow(_) => trivial, Low(_) => trivial,
         },
         Some(here) => file.place_found_keeps<M>(values, held, destination, here,
             destination.same(here.register)),
@@ -1482,9 +1517,831 @@ theorem File::shift_keeps<M>(self file: File, values: Valuation(), op: ShiftOp,
 }
 
 // ---------------------------------------------------------------------------
+// Narrow widths (issues/function-ir-narrow-arithmetic.md)
+//
+// A value of a width between the bit and the word sits in its register
+// zero-extended (`Narrow`), which is `Resize`'s own meaning, so widening it
+// is a retag. The 64-bit instruction is the narrow operation on two such
+// registers wherever the bits above cannot reach down or are zero already:
+// AND, OR, XOR, SHR, an unsigned comparison and an equality. ADD, SUB and
+// SHL are right in their low bits only (`Low`), and the bits above are
+// cleared by SHL and SHR by what is left of the register (`settle_code`,
+// `BitVec::shift_pair_resize`): in place, with no second register and no
+// mask. A truncation is the same settling of a value that was right in its
+// low bits all along.
+//
+// The steps are stated once over the kinds they read and write
+// (`Transfers`, `Reshapes`, `Compares`), and the laws are
+// `lib/std/bitvec/bitvec_resize.hthr`'s at any two widths, so nothing here
+// names 8, 16 or 32.
+
+// What an instruction on two registers leaves, at the kinds the file holds
+// its operands and its result: whatever words stand for the operands, `g`
+// of them stands for the result.
+fn Transfers(values: Valuation(), from, to: Kind, output, left, right: Nat,
+    g: BitVec(64) → BitVec(64) → BitVec(64)) → Type {
+    (a, b: BitVec(64)) → Held(left, from).Rep(values, a) → Held(right, from).Rep(values, b) →
+        Held(output, to).Rep(values, g(a, b))
+}
+
+fn kinded_after(op: BinaryOp, from, to: Kind, moved: Lowered, destination: Gpr, output, left, right: Nat,
+    at: Option<FoundAt(moved.file, Held(left, from), destination)>,
+    other: Option<Found(moved.file, Held(right, from))>) → Option<Lowered>
+{
+    match at {
+        None => None,
+        Some(_) => match other {
+            None => None,
+            Some(found) => Some(Lowered(
+                [op.instruction(destination, found.register)],
+                moved.file.write(destination, Some(Held(output, to))))),
+        },
+    }
+}
+
+theorem kinded_after_keeps<M>(values: Valuation(), op: BinaryOp, from, to: Kind, moved: Lowered,
+    destination: Gpr, output, left, right: Nat,
+    at: Option<FoundAt(moved.file, Held(left, from), destination)>,
+    other: Option<Found(moved.file, Held(right, from))>):
+    MayKeep<M>(values, moved.file,
+        Transfers(values, from, to, output, left, right, λ a b => op.apply(a, b)),
+        kinded_after(op, from, to, moved, destination, output, left, right, at, other))
+{
+    match at {
+        None => trivial,
+        Some(here) => match other {
+            None => trivial,
+            Some(found) => λ s represents transfers =>
+                j(sym(op.executes<M>(destination, found.register, s)),
+                    λ gprs _ => moved.file.write(destination, Some(Held(output, to))).Represents(values, gprs),
+                    moved.file.represents_write(values, s.gprs, destination,
+                        Some(Held(output, to)),
+                        op.apply(read_gpr(destination, s.gprs),
+                            read_gpr(found.register, s.gprs)),
+                        represents,
+                        transfers(read_gpr(destination, s.gprs), read_gpr(found.register, s.gprs),
+                            here.rep(values, s.gprs, represents),
+                            found.at.rep(values, s.gprs, represents)))),
+        },
+    }
+}
+
+// The left operand moved to the destination, then `OP destination, right`.
+fn File::kinded(self file: File, op: BinaryOp, from, to: Kind, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
+    match file.place(Held(left, from), destination) {
+        None => None,
+        Some(moved) => moved.then_option(kinded_after(op, from, to, moved, destination, output, left, right,
+                moved.file.found_at(Held(left, from), destination),
+                moved.file.find(Held(right, from)))),
+    }
+}
+
+theorem File::kinded_keeps<M>(self file: File, values: Valuation(), op: BinaryOp, from, to: Kind,
+    destination: Gpr, output, left, right: Nat):
+    MayKeep<M>(values, file,
+        Transfers(values, from, to, output, left, right, λ a b => op.apply(a, b)),
+        file.kinded(op, from, to, destination, output, left, right))
+{
+    (match file.place(Held(left, from), destination) as λ placed =>
+        MayKeep<M>(values, file, True, placed) →
+        MayKeep<M>(values, file, Transfers(values, from, to, output, left, right, λ a b => op.apply(a, b)), match placed {
+            None => None,
+            Some(moved) => moved.then_option(kinded_after(op, from, to, moved, destination, output, left, right,
+                    moved.file.found_at(Held(left, from), destination),
+                    moved.file.find(Held(right, from)))),
+        }) {
+        None => λ _ => trivial,
+        Some(moved) => λ moved_keeps =>
+            then_option_keeps<M>(values, file, Transfers(values, from, to, output, left, right, λ a b => op.apply(a, b)),
+                moved, moved_keeps,
+                kinded_after(op, from, to, moved, destination, output, left, right,
+                    moved.file.found_at(Held(left, from), destination),
+                    moved.file.find(Held(right, from))),
+                kinded_after_keeps<M>(values, op, from, to, moved, destination, output, left, right,
+                    moved.file.found_at(Held(left, from), destination),
+                    moved.file.find(Held(right, from)))),
+    })(file.place_keeps<M>(values, Held(left, from), destination))
+}
+
+// Code that rewrites the destination in place, by `g`, and writes no other
+// register.
+fn InPlace<M>(code: List<Instruction>, destination: Gpr, g: BitVec(64) → BitVec(64)) → Type {
+    (s: MachineState<M>) → GprsAgree(execute_block_normal(code, s).gprs,
+        write_gpr(destination, g(read_gpr(destination, s.gprs)), s.gprs))
+}
+
+theorem in_place_none<M>(destination: Gpr): InPlace<M>([], destination, λ x => x) {
+    λ s => gprs_agree_write_read(destination, s.gprs)
+}
+
+theorem in_place_shift<M>(op: ShiftOp, destination: Gpr, count: Nat, fits: count <= 63):
+    InPlace<M>(shift_code(op, destination, count), destination, λ x => op.by(x, count))
+{
+    λ s => shift_code_executes<M>(op, destination, count, fits, s)
+}
+
+theorem gprs_agree_trans(a, b, c: Gprs, first: GprsAgree(a, b), second: GprsAgree(b, c)): GprsAgree(a, c) {
+    λ query => trans(first(query), second(query))
+}
+
+theorem in_place_then<M>(first, second: List<Instruction>, destination: Gpr, f, g: BitVec(64) → BitVec(64),
+    runs_first: InPlace<M>(first, destination, f), runs_second: InPlace<M>(second, destination, g)):
+    InPlace<M>(first ++ second, destination, λ x => g(f(x)))
+{
+    λ s => {
+        let x = read_gpr(destination, s.gprs);
+        let middle = execute_block_normal(first, s);
+        let there: (read_gpr(destination, middle.gprs) = f(x)) =
+            trans(runs_first(s, destination), read_gpr_after_write(destination, f(x), s.gprs));
+        let over: GprsAgree(write_gpr(destination, g(read_gpr(destination, middle.gprs)), middle.gprs),
+                write_gpr(destination, g(f(x)), s.gprs)) =
+            j(sym(there),
+                λ y _ => GprsAgree(write_gpr(destination, g(y), middle.gprs), write_gpr(destination, g(f(x)), s.gprs)),
+                gprs_agree_write(destination, g(f(x)), f(x), middle.gprs, s.gprs, runs_first(s)));
+        j(sym(execute_block_append<M>(first, second, s)),
+            λ state _ => GprsAgree(state.gprs, write_gpr(destination, g(f(x)), s.gprs)),
+            gprs_agree_trans(execute_block_normal(second, middle).gprs,
+                write_gpr(destination, g(read_gpr(destination, middle.gprs)), middle.gprs),
+                write_gpr(destination, g(f(x)), s.gprs), runs_second(middle), over))
+    }
+}
+
+theorem in_place_same<M>(code: List<Instruction>, destination: Gpr, f, g: BitVec(64) → BitVec(64),
+    same: (x: BitVec(64)) → f(x) = g(x), runs: InPlace<M>(code, destination, f)):
+    InPlace<M>(code, destination, g)
+{
+    λ s => j(same(read_gpr(destination, s.gprs)),
+        λ y _ => GprsAgree(execute_block_normal(code, s).gprs, write_gpr(destination, y, s.gprs)), runs(s))
+}
+
+// The destination cleared above its low `width` bits.
+fn settle_code(destination: Gpr, width: Nat) → List<Instruction> {
+    shift_code(OpShl, destination, 64 - width) ++ shift_code(OpShr, destination, 64 - width)
+}
+
+theorem in_place_settle<M>(destination: Gpr, width: Nat, high: width <= 64, fits: 64 - width <= 63):
+    InPlace<M>(settle_code(destination, width), destination, λ x => x.resize(width).resize(64))
+{
+    in_place_same<M>(settle_code(destination, width), destination,
+        λ x => x.shift_left(64 - width).shift_right(64 - width), λ x => x.resize(width).resize(64),
+        λ x => BitVec::shift_pair_resize(width, 64, high, x),
+        in_place_then<M>(shift_code(OpShl, destination, 64 - width), shift_code(OpShr, destination, 64 - width),
+            destination, λ x => x.shift_left(64 - width), λ x => x.shift_right(64 - width),
+            in_place_shift<M>(OpShl, destination, 64 - width, fits),
+            in_place_shift<M>(OpShr, destination, 64 - width, fits)))
+}
+
+// What in-place code leaves, at the kinds the file holds its operand and
+// its result.
+fn Reshapes(values: Valuation(), from, to: Kind, output, value: Nat, g: BitVec(64) → BitVec(64)) → Type {
+    (a: BitVec(64)) → Held(value, from).Rep(values, a) → Held(output, to).Rep(values, g(a))
+}
+
+fn reshaped_after(code: List<Instruction>, from, to: Kind, moved: Lowered, destination: Gpr, output, value: Nat,
+    at: Option<FoundAt(moved.file, Held(value, from), destination)>) → Option<Lowered>
+{
+    match at {
+        None => None,
+        Some(_) => Some(Lowered(code, moved.file.write(destination, Some(Held(output, to))))),
+    }
+}
+
+theorem reshaped_after_keeps<M>(values: Valuation(), code: List<Instruction>, g: BitVec(64) → BitVec(64),
+    from, to: Kind, moved: Lowered, destination: Gpr, output, value: Nat,
+    runs: InPlace<M>(code, destination, g),
+    at: Option<FoundAt(moved.file, Held(value, from), destination)>):
+    MayKeep<M>(values, moved.file, Reshapes(values, from, to, output, value, g),
+        reshaped_after(code, from, to, moved, destination, output, value, at))
+{
+    match at {
+        None => trivial,
+        Some(here) => λ s represents reshapes =>
+            moved.file.write(destination, Some(Held(output, to))).represents_agree(values,
+                execute_block_normal(code, s).gprs,
+                write_gpr(destination, g(read_gpr(destination, s.gprs)), s.gprs),
+                runs(s),
+                moved.file.represents_write(values, s.gprs, destination, Some(Held(output, to)),
+                    g(read_gpr(destination, s.gprs)), represents,
+                    reshapes(read_gpr(destination, s.gprs), here.rep(values, s.gprs, represents)))),
+    }
+}
+
+// The operand moved to the destination, then the code. With no code it is
+// a copy under another name or another kind.
+fn File::reshaped(self file: File, code: List<Instruction>, from, to: Kind, destination: Gpr, output, value: Nat) → Option<Lowered> {
+    match file.place(Held(value, from), destination) {
+        None => None,
+        Some(moved) => moved.then_option(reshaped_after(code, from, to, moved, destination, output, value,
+            moved.file.found_at(Held(value, from), destination))),
+    }
+}
+
+theorem File::reshaped_keeps<M>(self file: File, values: Valuation(), code: List<Instruction>,
+    g: BitVec(64) → BitVec(64), from, to: Kind, destination: Gpr, output, value: Nat,
+    runs: InPlace<M>(code, destination, g)):
+    MayKeep<M>(values, file, Reshapes(values, from, to, output, value, g),
+        file.reshaped(code, from, to, destination, output, value))
+{
+    (match file.place(Held(value, from), destination) as λ placed =>
+        MayKeep<M>(values, file, True, placed) →
+        MayKeep<M>(values, file, Reshapes(values, from, to, output, value, g), match placed {
+            None => None,
+            Some(moved) => moved.then_option(reshaped_after(code, from, to, moved, destination, output, value,
+                moved.file.found_at(Held(value, from), destination))),
+        }) {
+        None => λ _ => trivial,
+        Some(moved) => λ moved_keeps =>
+            then_option_keeps<M>(values, file, Reshapes(values, from, to, output, value, g),
+                moved, moved_keeps,
+                reshaped_after(code, from, to, moved, destination, output, value,
+                    moved.file.found_at(Held(value, from), destination)),
+                reshaped_after_keeps<M>(values, code, g, from, to, moved, destination, output, value, runs,
+                    moved.file.found_at(Held(value, from), destination))),
+    })(file.place_keeps<M>(values, Held(value, from), destination))
+}
+
+// One step, then another from the file the first leaves.
+fn then_step(first: Option<Lowered>, next: File → Option<Lowered>) → Option<Lowered> {
+    match first { None => None, Some(step) => step.then_option(next(step.file)) }
+}
+
+theorem then_step_keeps<M>(values: Valuation(), file: File, first_facts, second_facts: Type,
+    first: Option<Lowered>, next: File → Option<Lowered>,
+    next_keeps: (middle: File) → MayKeep<M>(values, middle, second_facts, next(middle))):
+    MayKeep<M>(values, file, first_facts, first) →
+    MayKeep<M>(values, file, first_facts ∧ second_facts, then_step(first, next))
+{
+    match first {
+        None => λ _ => trivial,
+        Some(step) => λ first_keeps => then_option_seq<M>(values, file, first_facts, second_facts,
+            step, first_keeps, next(step.file), next_keeps(step.file)),
+    }
+}
+
+// A step whose facts follow from a node's.
+theorem keeps_from<M>(values: Valuation(), file: File, facts, holds: Type, out: Option<Lowered>,
+    derive: holds → facts, keeps: MayKeep<M>(values, file, facts, out)):
+    MayKeep<M>(values, file, holds, out)
+{
+    keeps_weaken<M>(values, file, facts, holds, out, derive, keeps)
+}
+
+// `id`, right in its low `width` bits in the destination, cleared above
+// them. A width of zero would shift by the whole register, which no
+// instruction does, and is refused.
+fn File::settle(self file: File, destination: Gpr, width, id: Nat) → Option<Lowered> {
+    match (64 - width).le_dec(63) {
+        Inr(_) => None,
+        Inl(_) => file.reshaped(settle_code(destination, width), Low(width), Narrow(width), destination, id, id),
+    }
+}
+
+theorem File::settle_keeps<M>(self file: File, values: Valuation(), destination: Gpr, width, id: Nat,
+    high: width <= 64):
+    MayKeep<M>(values, file, True, file.settle(destination, width, id))
+{
+    match (64 - width).le_dec(63) {
+        Inr(_) => trivial,
+        Inl(fits) => keeps_from<M>(values, file,
+            Reshapes(values, Low(width), Narrow(width), id, id, λ x => x.resize(width).resize(64)), True,
+            file.reshaped(settle_code(destination, width), Low(width), Narrow(width), destination, id, id),
+            λ _ => λ a (low: a.resize(width) = values(width, id)) =>
+                cong_fn(λ (c: BitVec(width)) => c.resize(64), sym(low)),
+            file.reshaped_keeps<M>(values, settle_code(destination, width), λ x => x.resize(width).resize(64),
+                Low(width), Narrow(width), destination, id, id,
+                in_place_settle<M>(destination, width, high, fits))),
+    }
+}
+
+// A step that leaves its result right in the low bits, then the settling.
+fn File::settled(self file: File, step: Option<Lowered>, destination: Gpr, width, output: Nat) → Option<Lowered> {
+    then_step(step, λ (middle: File) => middle.settle(destination, width, output))
+}
+
+theorem File::settled_keeps<M>(self file: File, values: Valuation(), facts: Type, step: Option<Lowered>,
+    destination: Gpr, width, output: Nat, high: width <= 64,
+    keeps: MayKeep<M>(values, file, facts, step)):
+    MayKeep<M>(values, file, facts, file.settled(step, destination, width, output))
+{
+    keeps_from<M>(values, file, facts ∧ True, facts, file.settled(step, destination, width, output),
+        λ holds => ⟨holds, trivial⟩,
+        then_step_keeps<M>(values, file, facts, True, step,
+            λ (middle: File) => middle.settle(destination, width, output),
+            λ middle => middle.settle_keeps<M>(values, destination, width, output, high),
+            keeps))
+}
+
+// Two-operand arithmetic at a narrow width.
+fn BinaryOp::at(self op: BinaryOp, width: Nat, left, right: BitVec(width)) → BitVec(width) {
+    match op {
+        OpAdd => left.add(right),
+        OpSub => left.sub(right),
+        OpAnd => left.band(right),
+        OpOr => left.bor(right),
+        OpXor => left.bxor(right),
+    }
+}
+
+fn BinaryOp::HoldsAt(self op: BinaryOp, values: Valuation(), width, output, left, right: Nat) → Type {
+    values(width, output) = op.at(width, values(width, left), values(width, right))
+}
+
+// A carry or a borrow runs up into the bits above; a bitwise operation
+// leaves the zeros there.
+fn BinaryOp::carries(self op: BinaryOp) → Bool {
+    match op { OpAdd => True, OpSub => True, OpAnd => False, OpOr => False, OpXor => False }
+}
+
+fn BinaryOp::leaves(self op: BinaryOp, width: Nat) → Kind {
+    match op.carries() { True => Low(width), False => Narrow(width) }
+}
+
+theorem BinaryOp::narrow_transfers(self op: BinaryOp, values: Valuation(), width, output, left, right: Nat,
+    high: width <= 64, holds: op.HoldsAt(values, width, output, left, right)):
+    Transfers(values, Narrow(width), op.leaves(width), output, left, right, λ a b => op.apply(a, b))
+{
+    let x = values(width, left);
+    let y = values(width, right);
+    let widened = λ (c: BitVec(width)) => c.resize(64);
+    match op {
+        OpAdd => λ a b (left_rep: x.resize(64) = a) (right_rep: y.resize(64) = b) =>
+            j(left_rep, λ u _ => u.add(b).resize(width) = values(width, output),
+                j(right_rep, λ v _ => x.resize(64).add(v).resize(width) = values(width, output),
+                    trans(BitVec::resize_add(width, 64, high, x, y), sym(holds)))),
+        OpSub => λ a b (left_rep: x.resize(64) = a) (right_rep: y.resize(64) = b) =>
+            j(left_rep, λ u _ => u.sub(b).resize(width) = values(width, output),
+                j(right_rep, λ v _ => x.resize(64).sub(v).resize(width) = values(width, output),
+                    trans(BitVec::resize_sub(width, 64, high, x, y), sym(holds)))),
+        OpAnd => λ a b (left_rep: x.resize(64) = a) (right_rep: y.resize(64) = b) =>
+            trans(cong_fn(widened, holds), trans(sym(BitVec::resize_band(width, 64, high, x, y)),
+                rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.band(q), left_rep, right_rep))),
+        OpOr => λ a b (left_rep: x.resize(64) = a) (right_rep: y.resize(64) = b) =>
+            trans(cong_fn(widened, holds), trans(sym(BitVec::resize_bor(width, 64, high, x, y)),
+                rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.bor(q), left_rep, right_rep))),
+        OpXor => λ a b (left_rep: x.resize(64) = a) (right_rep: y.resize(64) = b) =>
+            trans(cong_fn(widened, holds), trans(sym(BitVec::resize_bxor(width, 64, high, x, y)),
+                rewrite_both(λ (p: BitVec(64)) (q: BitVec(64)) => p.bxor(q), left_rep, right_rep))),
+    }
+}
+
+// The instruction, and the settling where a carry may have gone up.
+fn File::narrow_binary(self file: File, op: BinaryOp, width: Nat, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
+    let step = file.kinded(op, Narrow(width), op.leaves(width), destination, output, left, right);
+    match op.carries() { True => file.settled(step, destination, width, output), False => step }
+}
+
+theorem File::narrow_binary_keeps<M>(self file: File, values: Valuation(), op: BinaryOp, width: Nat,
+    destination: Gpr, output, left, right: Nat, high: width <= 64):
+    MayKeep<M>(values, file, op.HoldsAt(values, width, output, left, right),
+        file.narrow_binary(op, width, destination, output, left, right))
+{
+    let step = file.kinded(op, Narrow(width), op.leaves(width), destination, output, left, right);
+    let kept: MayKeep<M>(values, file, op.HoldsAt(values, width, output, left, right), step) =
+        keeps_from<M>(values, file,
+            Transfers(values, Narrow(width), op.leaves(width), output, left, right, λ a b => op.apply(a, b)),
+            op.HoldsAt(values, width, output, left, right), step,
+            λ holds => op.narrow_transfers(values, width, output, left, right, high, holds),
+            file.kinded_keeps<M>(values, op, Narrow(width), op.leaves(width), destination, output, left, right));
+    match op.carries() {
+        True => file.settled_keeps<M>(values, op.HoldsAt(values, width, output, left, right), step,
+            destination, width, output, high, kept),
+        False => kept,
+    }
+}
+
+// Shifts by a constant below 64. A left shift moves bits up out of the
+// value, so it is settled; a logical right shift brings in the zeros that
+// are above it already.
+fn File::narrow_shift_left(self file: File, width: Nat, destination: Gpr, output, value, count: Nat) → Option<Lowered> {
+    match count.le_dec(63) {
+        Inr(_) => None,
+        Inl(_) => file.settled(
+            file.reshaped(shift_code(OpShl, destination, count), Narrow(width), Low(width), destination, output, value),
+            destination, width, output),
+    }
+}
+
+theorem File::narrow_shift_left_keeps<M>(self file: File, values: Valuation(), width: Nat,
+    destination: Gpr, output, value, count: Nat, high: width <= 64):
+    MayKeep<M>(values, file, values(width, output) = values(width, value).shift_left(count),
+        file.narrow_shift_left(width, destination, output, value, count))
+{
+    match count.le_dec(63) {
+        Inr(_) => trivial,
+        Inl(fits) => file.settled_keeps<M>(values, values(width, output) = values(width, value).shift_left(count),
+            file.reshaped(shift_code(OpShl, destination, count), Narrow(width), Low(width), destination, output, value),
+            destination, width, output, high,
+            keeps_from<M>(values, file,
+                Reshapes(values, Narrow(width), Low(width), output, value, λ x => x.shift_left(count)),
+                values(width, output) = values(width, value).shift_left(count),
+                file.reshaped(shift_code(OpShl, destination, count), Narrow(width), Low(width), destination, output, value),
+                λ holds => λ a (rep: values(width, value).resize(64) = a) =>
+                    j(rep, λ u _ => u.shift_left(count).resize(width) = values(width, output),
+                        trans(BitVec::resize_shift_left(width, 64, high, values(width, value), count), sym(holds))),
+                file.reshaped_keeps<M>(values, shift_code(OpShl, destination, count), λ x => x.shift_left(count),
+                    Narrow(width), Low(width), destination, output, value,
+                    in_place_shift<M>(OpShl, destination, count, fits)))),
+    }
+}
+
+fn File::narrow_shift_right(self file: File, width: Nat, destination: Gpr, output, value, count: Nat) → Option<Lowered> {
+    match count.le_dec(63) {
+        Inr(_) => None,
+        Inl(_) => file.reshaped(shift_code(OpShr, destination, count), Narrow(width), Narrow(width), destination, output, value),
+    }
+}
+
+theorem File::narrow_shift_right_keeps<M>(self file: File, values: Valuation(), width: Nat,
+    destination: Gpr, output, value, count: Nat, high: width <= 64):
+    MayKeep<M>(values, file, values(width, output) = values(width, value).shift_right(count),
+        file.narrow_shift_right(width, destination, output, value, count))
+{
+    match count.le_dec(63) {
+        Inr(_) => trivial,
+        Inl(fits) => keeps_from<M>(values, file,
+            Reshapes(values, Narrow(width), Narrow(width), output, value, λ x => x.shift_right(count)),
+            values(width, output) = values(width, value).shift_right(count),
+            file.reshaped(shift_code(OpShr, destination, count), Narrow(width), Narrow(width), destination, output, value),
+            λ holds => λ a (rep: values(width, value).resize(64) = a) =>
+                trans(cong_fn(λ (c: BitVec(width)) => c.resize(64), holds),
+                    trans(sym(BitVec::resize_shift_right(width, 64, high, values(width, value), count)),
+                        cong_fn(λ (u: BitVec(64)) => u.shift_right(count), rep))),
+            file.reshaped_keeps<M>(values, shift_code(OpShr, destination, count), λ x => x.shift_right(count),
+                Narrow(width), Narrow(width), destination, output, value,
+                in_place_shift<M>(OpShr, destination, count, fits))),
+    }
+}
+
+// A copy, and a constant loaded zero-extended.
+fn File::narrow_copy(self file: File, width: Nat, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    file.reshaped([], Narrow(width), Narrow(width), destination, output, source)
+}
+
+theorem File::narrow_copy_keeps<M>(self file: File, values: Valuation(), width: Nat,
+    destination: Gpr, output, source: Nat):
+    MayKeep<M>(values, file, values(width, output) = values(width, source),
+        file.narrow_copy(width, destination, output, source))
+{
+    keeps_from<M>(values, file,
+        Reshapes(values, Narrow(width), Narrow(width), output, source, λ x => x),
+        values(width, output) = values(width, source),
+        file.narrow_copy(width, destination, output, source),
+        λ holds => λ a (rep: values(width, source).resize(64) = a) =>
+            trans(cong_fn(λ (c: BitVec(width)) => c.resize(64), holds), rep),
+        file.reshaped_keeps<M>(values, [], λ x => x, Narrow(width), Narrow(width), destination, output, source,
+            in_place_none<M>(destination)))
+}
+
+fn File::narrow_constant(self file: File, width: Nat, destination: Gpr, output, value: Nat) → Option<Lowered> {
+    Some(Lowered([MovRI(destination, BitVec::ofNat(value, n := width).resize(64))],
+        file.write(destination, Some(Held(output, Narrow(width))))))
+}
+
+theorem File::narrow_constant_keeps<M>(self file: File, values: Valuation(), width: Nat, destination: Gpr,
+    output, value: Nat):
+    MayKeep<M>(values, file, values(width, output) = BitVec::ofNat(value),
+        file.narrow_constant(width, destination, output, value))
+{
+    λ s represents holds =>
+        file.represents_write(values, s.gprs, destination, Some(Held(output, Narrow(width))),
+            BitVec::ofNat(value, n := width).resize(64), represents,
+            cong_fn(λ (c: BitVec(width)) => c.resize(64), holds))
+}
+
+// A comparison of two registers at the kind the file holds them: the bit
+// is the comparison of whatever words stand for the operands.
+fn Compares(values: Valuation(), from: Kind, op: CompareOp, output, left, right: Nat) → Type {
+    (a, b: BitVec(64)) → Held(left, from).Rep(values, a) → Held(right, from).Rep(values, b) →
+        values(1, output) = BitVec::ofBool(op.apply(a, b))
+}
+
+fn File::compared_found(self file: File, op: CompareOp, from: Kind, low: LowByteGpr, output, left, right: Nat,
+    first: Option<Found(file.cleared(low), Held(left, from))>,
+    second: Option<Found(file.cleared(low), Held(right, from))>) → Option<Lowered>
+{
+    match first {
+        None => None,
+        Some(a) => match second {
+            None => None,
+            Some(b) => Some(Lowered(
+                [XorRR(low_byte_gpr(low), low_byte_gpr(low)),
+                 CmpRR(a.register, b.register),
+                 op.instruction(low)],
+                file.cleared(low).write(low_byte_gpr(low), Some(Held(output, Bit))))),
+        },
+    }
+}
+
+fn File::compared_with(self file: File, op: CompareOp, from: Kind, output, left, right: Nat,
+    low: Option<LowByteGpr>) → Option<Lowered>
+{
+    match low {
+        None => None,
+        Some(byte) => file.compared_found(op, from, byte, output, left, right,
+            file.cleared(byte).find(Held(left, from)),
+            file.cleared(byte).find(Held(right, from))),
+    }
+}
+
+fn File::compared(self file: File, op: CompareOp, from: Kind, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
+    file.compared_with(op, from, output, left, right, destination.low_byte())
+}
+
+theorem compared_written(values: Valuation(), op: CompareOp, output: Nat,
+    a, b, zeroed: BitVec(64), holds: values(1, output) = BitVec::ofBool(op.apply(a, b)),
+    zero: zeroed = BitVec::zero()):
+    values(1, output).zero_extend(63) =
+        condition_byte(op.flag(sub_flags(a, b))).concat(zeroed.drop_low(8, 56))
+{
+    let bit: (values(1, output) = BitVec::ofBool(op.flag(sub_flags(a, b)))) =
+        trans(holds, j(sym(op.flag_sub(a, b)), λ c _ =>
+            BitVec::ofBool(op.apply(a, b)) = BitVec::ofBool(c), refl));
+    j(sym(zero), λ z _ => values(1, output).zero_extend(63) = condition_byte(op.flag(sub_flags(a, b))).concat(z.drop_low(8, 56)),
+        trans(j(bit, λ v _ => values(1, output).zero_extend(63) = v.zero_extend(63), refl),
+            sym(condition_byte_extends(op.flag(sub_flags(a, b))))))
+}
+
+theorem File::compared_found_keeps<M>(self file: File, values: Valuation(), op: CompareOp, from: Kind,
+    low: LowByteGpr, output, left, right: Nat,
+    first: Option<Found(file.cleared(low), Held(left, from))>,
+    second: Option<Found(file.cleared(low), Held(right, from))>):
+    MayKeep<M>(values, file, Compares(values, from, op, output, left, right),
+        file.compared_found(op, from, low, output, left, right, first, second))
+{
+    match first {
+        None => trivial,
+        Some(a) => match second {
+            None => trivial,
+            Some(b) => λ s represents compares => {
+                let register = low_byte_gpr(low);
+                let zeroing = execute_normal(decoded_canonical(XorRR(register, register)), s);
+                let compared = execute_normal(decoded_canonical(CmpRR(a.register, b.register)), zeroing);
+                let zeroed: file.cleared(low).Represents(values, zeroing.gprs) =
+                    file.represents_write(values, s.gprs, register, None,
+                        read_gpr(register, s.gprs).bxor(read_gpr(register, s.gprs)),
+                        represents, trivial);
+                j(sym(op.executes<M>(low, compared)),
+                    λ gprs _ => file.cleared(low).write(register, Some(Held(output, Bit))).Represents(values, gprs),
+                    file.cleared(low).represents_write(values, zeroing.gprs, register,
+                        Some(Held(output, Bit)),
+                        condition_byte(op.flag(compared.flags)).concat(
+                            read_gpr(register, zeroing.gprs).drop_low(8, 56)),
+                        zeroed,
+                        compared_written(values, op, output,
+                            read_gpr(a.register, zeroing.gprs),
+                            read_gpr(b.register, zeroing.gprs),
+                            read_gpr(register, zeroing.gprs),
+                            compares(read_gpr(a.register, zeroing.gprs), read_gpr(b.register, zeroing.gprs),
+                                a.at.rep(values, zeroing.gprs, zeroed),
+                                b.at.rep(values, zeroing.gprs, zeroed)),
+                            trans(read_gpr_after_write(register,
+                                    read_gpr(register, s.gprs).bxor(read_gpr(register, s.gprs)),
+                                    s.gprs),
+                                BitVec::xor_self(64, read_gpr(register, s.gprs))))))
+            },
+        },
+    }
+}
+
+theorem File::compared_keeps<M>(self file: File, values: Valuation(), op: CompareOp, from: Kind,
+    destination: Gpr, output, left, right: Nat):
+    MayKeep<M>(values, file, Compares(values, from, op, output, left, right),
+        file.compared(op, from, destination, output, left, right))
+{
+    match destination.low_byte() {
+        None => trivial,
+        Some(byte) => file.compared_found_keeps<M>(values, op, from, byte, output, left, right,
+            file.cleared(byte).find(Held(left, from)),
+            file.cleared(byte).find(Held(right, from))),
+    }
+}
+
+// An unsigned comparison and an equality of two zero-extended values are
+// the narrow ones. A signed comparison would read the register's sign, not
+// the value's, and has no narrow form yet.
+theorem narrow_compares_below(values: Valuation(), width, output, left, right: Nat, high: width <= 64,
+    holds: values(1, output) = BitVec::ofBool(values(width, left).unsigned_lt_bit(values(width, right)))):
+    Compares(values, Narrow(width), Below, output, left, right)
+{
+    let x = values(width, left);
+    let y = values(width, right);
+    λ a b (left_rep: x.resize(64) = a) (right_rep: y.resize(64) = b) =>
+        trans(holds, cong_fn(λ (c: Bool) => BitVec::ofBool(c),
+            j(left_rep, λ u _ => x.unsigned_lt_bit(y) = u.unsigned_lt_bit(b),
+                j(right_rep, λ v _ => x.unsigned_lt_bit(y) = x.resize(64).unsigned_lt_bit(v),
+                    sym(BitVec::resize_unsigned_lt_bit(width, 64, high, x, y))))))
+}
+
+theorem narrow_compares_same(values: Valuation(), width, output, left, right: Nat, high: width <= 64,
+    holds: values(1, output) = BitVec::ofBool(values(width, left).eq_bit(values(width, right)))):
+    Compares(values, Narrow(width), Same, output, left, right)
+{
+    let x = values(width, left);
+    let y = values(width, right);
+    λ a b (left_rep: x.resize(64) = a) (right_rep: y.resize(64) = b) =>
+        trans(holds, cong_fn(λ (c: Bool) => BitVec::ofBool(c),
+            j(left_rep, λ u _ => x.eq_bit(y) = u.eq_bit(b),
+                j(right_rep, λ v _ => x.eq_bit(y) = x.resize(64).eq_bit(v),
+                    sym(BitVec::resize_eq_bit(width, 64, high, x, y))))))
+}
+
+// ---------------------------------------------------------------------------
+// Resizing
+//
+// `Resize(from, to)` is `ofNat(x.toNat())`. To a word it is what the
+// register of a bit or a narrow value holds already; to a wider narrow
+// width likewise; to a narrower one the value is right in its low bits and
+// is settled.
+
+// A decision that picks between two steps, each kept on its side.
+fn at_width(target, width: Nat, decided: width = target ∨ width ≠ target, here, other: Option<Lowered>) → Option<Lowered> {
+    match decided { Inl(_) => here, Inr(_) => other }
+}
+
+theorem at_width_keeps<M>(values: Valuation(), file: File, target, width: Nat, facts: Nat → Type,
+    decided: width = target ∨ width ≠ target, here, other: Option<Lowered>,
+    here_keeps: MayKeep<M>(values, file, facts(target), here),
+    other_keeps: MayKeep<M>(values, file, facts(width), other)):
+    MayKeep<M>(values, file, facts(width), at_width(target, width, decided, here, other))
+{
+    match decided {
+        Inl(same) => j(sym(same), λ w _ => MayKeep<M>(values, file, facts(w), here), here_keeps),
+        Inr(_) => other_keeps,
+    }
+}
+
+fn when_fits(n, m: Nat, decided: n <= m ∨ ¬(n <= m), yes, no: Option<Lowered>) → Option<Lowered> {
+    match decided { Inl(_) => yes, Inr(_) => no }
+}
+
+theorem when_fits_keeps<M>(values: Valuation(), file: File, facts: Type, n, m: Nat,
+    decided: n <= m ∨ ¬(n <= m), yes, no: Option<Lowered>,
+    yes_keeps: n <= m → MayKeep<M>(values, file, facts, yes),
+    no_keeps: MayKeep<M>(values, file, facts, no)):
+    MayKeep<M>(values, file, facts, when_fits(n, m, decided, yes, no))
+{
+    match decided { Inl(fits) => yes_keeps(fits), Inr(_) => no_keeps }
+}
+
+fn Resized(values: Valuation(), from, to, output, source: Nat) → Type {
+    values(to, output) = values(from, source).resize(to)
+}
+
+// A value held at `kind`, read at `to` bits: right in its low bits, then
+// settled.
+fn File::narrowed(self file: File, kind: Kind, to: Nat, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    file.settled(file.reshaped([], kind, Low(to), destination, output, source), destination, to, output)
+}
+
+theorem File::narrowed_keeps<M>(self file: File, values: Valuation(), kind: Kind, from, to: Nat,
+    destination: Gpr, output, source: Nat, high: to <= 64,
+    low: Resized(values, from, to, output, source) → Reshapes(values, kind, Low(to), output, source, λ x => x)):
+    MayKeep<M>(values, file, Resized(values, from, to, output, source),
+        file.narrowed(kind, to, destination, output, source))
+{
+    file.settled_keeps<M>(values, Resized(values, from, to, output, source),
+        file.reshaped([], kind, Low(to), destination, output, source), destination, to, output, high,
+        keeps_from<M>(values, file, Reshapes(values, kind, Low(to), output, source, λ x => x),
+            Resized(values, from, to, output, source),
+            file.reshaped([], kind, Low(to), destination, output, source), low,
+            file.reshaped_keeps<M>(values, [], λ x => x, kind, Low(to), destination, output, source,
+                in_place_none<M>(destination))))
+}
+
+// A value held at `kind`, read at the kind `to`: the register as it is.
+fn File::retagged(self file: File, from, to: Kind, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    file.reshaped([], from, to, destination, output, source)
+}
+
+theorem File::retagged_keeps<M>(self file: File, values: Valuation(), holds: Type, from, to: Kind,
+    destination: Gpr, output, source: Nat,
+    same: holds → Reshapes(values, from, to, output, source, λ x => x)):
+    MayKeep<M>(values, file, holds, file.retagged(from, to, destination, output, source))
+{
+    keeps_from<M>(values, file, Reshapes(values, from, to, output, source, λ x => x), holds,
+        file.retagged(from, to, destination, output, source), same,
+        file.reshaped_keeps<M>(values, [], λ x => x, from, to, destination, output, source,
+            in_place_none<M>(destination)))
+}
+
+// To a word, from a bit or from a narrow width.
+fn File::resize_to_word(self file: File, from: Nat, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    at_width(1, from, from.eq_dec(1),
+        file.retagged(Bit, Word, destination, output, source),
+        file.retagged(Narrow(from), Word, destination, output, source))
+}
+
+theorem File::resize_to_word_keeps<M>(self file: File, values: Valuation(), from: Nat,
+    destination: Gpr, output, source: Nat):
+    MayKeep<M>(values, file, Resized(values, from, 64, output, source),
+        file.resize_to_word(from, destination, output, source))
+{
+    at_width_keeps<M>(values, file, 1, from, λ w => Resized(values, w, 64, output, source), from.eq_dec(1),
+        file.retagged(Bit, Word, destination, output, source),
+        file.retagged(Narrow(from), Word, destination, output, source),
+        file.retagged_keeps<M>(values, Resized(values, 1, 64, output, source), Bit, Word, destination, output, source,
+            λ holds => λ a (rep: values(1, source).zero_extend(63) = a) =>
+                trans(holds, trans(BitVec::resize_zero_extend(1, 63, values(1, source)), rep))),
+        file.retagged_keeps<M>(values, Resized(values, from, 64, output, source), Narrow(from), Word, destination, output, source,
+            λ holds => λ a (rep: values(from, source).resize(64) = a) => trans(holds, rep)))
+}
+
+// To a narrow width `to`, at most 64: from a word, from a bit, from a
+// narrower width and from a wider one.
+fn File::resize_to_narrow(self file: File, from, to: Nat, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    at_width(64, from, from.eq_dec(64),
+        file.narrowed(Word, to, destination, output, source),
+        at_width(1, from, from.eq_dec(1),
+            when_fits(1, to, Nat::le_dec(1, to),
+                file.retagged(Bit, Narrow(to), destination, output, source), None),
+            when_fits(from, to, from.le_dec(to),
+                file.retagged(Narrow(from), Narrow(to), destination, output, source),
+                file.narrowed(Narrow(from), to, destination, output, source))))
+}
+
+theorem File::resize_to_narrow_keeps<M>(self file: File, values: Valuation(), from, to: Nat,
+    destination: Gpr, output, source: Nat, high: to <= 64):
+    MayKeep<M>(values, file, Resized(values, from, to, output, source),
+        file.resize_to_narrow(from, to, destination, output, source))
+{
+    let widened = λ (c: BitVec(to)) => c.resize(64);
+    at_width_keeps<M>(values, file, 64, from, λ w => Resized(values, w, to, output, source), from.eq_dec(64),
+        file.narrowed(Word, to, destination, output, source),
+        at_width(1, from, from.eq_dec(1),
+            when_fits(1, to, Nat::le_dec(1, to),
+                file.retagged(Bit, Narrow(to), destination, output, source), None),
+            when_fits(from, to, from.le_dec(to),
+                file.retagged(Narrow(from), Narrow(to), destination, output, source),
+                file.narrowed(Narrow(from), to, destination, output, source))),
+        file.narrowed_keeps<M>(values, Word, 64, to, destination, output, source, high,
+            λ holds => λ a (rep: values(64, source) = a) =>
+                j(rep, λ u _ => u.resize(to) = values(to, output), sym(holds))),
+        at_width_keeps<M>(values, file, 1, from, λ w => Resized(values, w, to, output, source), from.eq_dec(1),
+            when_fits(1, to, Nat::le_dec(1, to),
+                file.retagged(Bit, Narrow(to), destination, output, source), None),
+            when_fits(from, to, from.le_dec(to),
+                file.retagged(Narrow(from), Narrow(to), destination, output, source),
+                file.narrowed(Narrow(from), to, destination, output, source)),
+            when_fits_keeps<M>(values, file, Resized(values, 1, to, output, source), 1, to, Nat::le_dec(1, to),
+                file.retagged(Bit, Narrow(to), destination, output, source), None,
+                λ fits => file.retagged_keeps<M>(values, Resized(values, 1, to, output, source), Bit, Narrow(to),
+                    destination, output, source,
+                    λ holds => λ a (rep: values(1, source).zero_extend(63) = a) =>
+                        trans(cong_fn(widened, holds),
+                            trans(BitVec::resize_widened(1, to, fits, values(1, source), 64),
+                                trans(BitVec::resize_zero_extend(1, 63, values(1, source)), rep)))),
+                trivial),
+            when_fits_keeps<M>(values, file, Resized(values, from, to, output, source), from, to, from.le_dec(to),
+                file.retagged(Narrow(from), Narrow(to), destination, output, source),
+                file.narrowed(Narrow(from), to, destination, output, source),
+                λ fits => file.retagged_keeps<M>(values, Resized(values, from, to, output, source), Narrow(from), Narrow(to),
+                    destination, output, source,
+                    λ holds => λ a (rep: values(from, source).resize(64) = a) =>
+                        trans(cong_fn(widened, holds),
+                            trans(BitVec::resize_widened(from, to, fits, values(from, source), 64), rep))),
+                file.narrowed_keeps<M>(values, Narrow(from), from, to, destination, output, source, high,
+                    λ holds => λ a (rep: values(from, source).resize(64) = a) =>
+                        j(rep, λ u _ => u.resize(to) = values(to, output),
+                            trans(BitVec::resize_narrowed(to, 64, high, values(from, source)), sym(holds)))))))
+}
+
+// A resize to one bit would have to leave a `Bit`, which no settling does
+// yet, and is refused.
+fn File::resize(self file: File, from, to: Nat, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    at_width(64, to, to.eq_dec(64),
+        file.resize_to_word(from, destination, output, source),
+        at_width(1, to, to.eq_dec(1), None,
+            when_fits(to, 64, to.le_dec(64),
+                file.resize_to_narrow(from, to, destination, output, source), None)))
+}
+
+theorem File::resize_keeps<M>(self file: File, values: Valuation(), from, to: Nat,
+    destination: Gpr, output, source: Nat):
+    MayKeep<M>(values, file, Resized(values, from, to, output, source),
+        file.resize(from, to, destination, output, source))
+{
+    at_width_keeps<M>(values, file, 64, to, λ w => Resized(values, from, w, output, source), to.eq_dec(64),
+        file.resize_to_word(from, destination, output, source),
+        at_width(1, to, to.eq_dec(1), None,
+            when_fits(to, 64, to.le_dec(64),
+                file.resize_to_narrow(from, to, destination, output, source), None)),
+        file.resize_to_word_keeps<M>(values, from, destination, output, source),
+        at_width_keeps<M>(values, file, 1, to, λ w => Resized(values, from, w, output, source), to.eq_dec(1),
+            None,
+            when_fits(to, 64, to.le_dec(64),
+                file.resize_to_narrow(from, to, destination, output, source), None),
+            trivial,
+            when_fits_keeps<M>(values, file, Resized(values, from, to, output, source), to, 64, to.le_dec(64),
+                file.resize_to_narrow(from, to, destination, output, source), None,
+                λ high => file.resize_to_narrow_keeps<M>(values, from, to, destination, output, source, high),
+                trivial)))
+}
+
+// ---------------------------------------------------------------------------
 // Nodes
 
-// Arithmetic is lowered at 64 bits; a node at another width is refused.
+// What only the word has yet (a signed comparison, an arithmetic right
+// shift): a node at another width is refused.
 fn word_only(width: Nat, decided: width = 64 ∨ width ≠ 64, step: Option<Lowered>) → Option<Lowered> {
     match decided { Inl(_) => step, Inr(_) => None }
 }
@@ -1500,25 +2357,32 @@ theorem word_only_keeps<M>(values: Valuation(), file: File, width: Nat,
     }
 }
 
-// Arithmetic at 64 bits, and what one-bit forms there are; any other width
-// is refused.
-fn word_or_bit(width: Nat, word: width = 64 ∨ width ≠ 64, bit: width = 1 ∨ width ≠ 1,
-    word_step, bit_step: Option<Lowered>) → Option<Lowered> {
-    match word { Inl(_) => word_step, Inr(_) => match bit { Inl(_) => bit_step, Inr(_) => None } }
+// A node by its width: the word's step, the bit's where there is one, and
+// the narrow step for any other width a register holds.
+fn by_width(width: Nat, word: width = 64 ∨ width ≠ 64, bit: width = 1 ∨ width ≠ 1,
+    word_step, bit_step, narrow_step: Option<Lowered>) → Option<Lowered> {
+    match word {
+        Inl(_) => word_step,
+        Inr(_) => match bit {
+            Inl(_) => bit_step,
+            Inr(_) => match width.le_dec(64) { Inl(_) => narrow_step, Inr(_) => None },
+        },
+    }
 }
 
-theorem word_or_bit_keeps<M>(values: Valuation(), file: File, width: Nat,
+theorem by_width_keeps<M>(values: Valuation(), file: File, width: Nat,
     facts: Nat → Type, word: width = 64 ∨ width ≠ 64, bit: width = 1 ∨ width ≠ 1,
-    word_step, bit_step: Option<Lowered>,
+    word_step, bit_step, narrow_step: Option<Lowered>,
     word_keeps: MayKeep<M>(values, file, facts(64), word_step),
-    bit_keeps: MayKeep<M>(values, file, facts(1), bit_step)):
-    MayKeep<M>(values, file, facts(width), word_or_bit(width, word, bit, word_step, bit_step))
+    bit_keeps: MayKeep<M>(values, file, facts(1), bit_step),
+    narrow_keeps: width <= 64 → MayKeep<M>(values, file, facts(width), narrow_step)):
+    MayKeep<M>(values, file, facts(width), by_width(width, word, bit, word_step, bit_step, narrow_step))
 {
     match word {
         Inl(wide) => j(sym(wide), λ w _ => MayKeep<M>(values, file, facts(w), word_step), word_keeps),
         Inr(_) => match bit {
-            Inl(narrow) => j(sym(narrow), λ w _ => MayKeep<M>(values, file, facts(w), bit_step), bit_keeps),
-            Inr(_) => trivial,
+            Inl(one) => j(sym(one), λ w _ => MayKeep<M>(values, file, facts(w), bit_step), bit_keeps),
+            Inr(_) => match width.le_dec(64) { Inl(high) => narrow_keeps(high), Inr(_) => trivial },
         },
     }
 }
@@ -1526,37 +2390,48 @@ theorem word_or_bit_keeps<M>(values: Valuation(), file: File, width: Nat,
 // One node, its result in `destination` (the placement's choice).
 fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered> {
     match node {
-        Const(width, output, value) => word_or_bit(width, width.eq_dec(64), width.eq_dec(1),
-            file.constant(destination, output, value), file.bit_constant(destination, output, value)),
-        Move(width, output, source) => word_only(width, width.eq_dec(64),
-            file.copy(destination, output, source)),
-        Add(width, output, left, right) => word_only(width, width.eq_dec(64),
-            file.add(destination, output, left, right)),
-        Sub(width, output, left, right) => word_only(width, width.eq_dec(64),
-            file.binary(OpSub, destination, output, left, right)),
-        BitAnd(width, output, left, right) => word_or_bit(width, width.eq_dec(64), width.eq_dec(1),
-            file.binary(OpAnd, destination, output, left, right), file.bits(OpAnd, destination, output, left, right)),
-        BitOr(width, output, left, right) => word_or_bit(width, width.eq_dec(64), width.eq_dec(1),
-            file.binary(OpOr, destination, output, left, right), file.bits(OpOr, destination, output, left, right)),
-        BitXor(width, output, left, right) => word_or_bit(width, width.eq_dec(64), width.eq_dec(1),
-            file.binary(OpXor, destination, output, left, right), file.bits(OpXor, destination, output, left, right)),
-        ShiftLeft(width, output, value, amount) => word_only(width, width.eq_dec(64),
-            file.shift(OpShl, destination, output, value, amount)),
-        LogicalShiftRight(width, output, value, amount) => word_only(width, width.eq_dec(64),
-            file.shift(OpShr, destination, output, value, amount)),
+        Const(width, output, value) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.constant(destination, output, value), file.bit_constant(destination, output, value),
+            file.narrow_constant(width, destination, output, value)),
+        Move(width, output, source) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.copy(destination, output, source), None,
+            file.narrow_copy(width, destination, output, source)),
+        Add(width, output, left, right) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.add(destination, output, left, right), None,
+            file.narrow_binary(OpAdd, width, destination, output, left, right)),
+        Sub(width, output, left, right) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpSub, destination, output, left, right), None,
+            file.narrow_binary(OpSub, width, destination, output, left, right)),
+        BitAnd(width, output, left, right) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpAnd, destination, output, left, right), file.bits(OpAnd, destination, output, left, right),
+            file.narrow_binary(OpAnd, width, destination, output, left, right)),
+        BitOr(width, output, left, right) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpOr, destination, output, left, right), file.bits(OpOr, destination, output, left, right),
+            file.narrow_binary(OpOr, width, destination, output, left, right)),
+        BitXor(width, output, left, right) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpXor, destination, output, left, right), file.bits(OpXor, destination, output, left, right),
+            file.narrow_binary(OpXor, width, destination, output, left, right)),
+        ShiftLeft(width, output, value, amount) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.shift(OpShl, destination, output, value, amount), None,
+            file.narrow_shift_left(width, destination, output, value, amount)),
+        LogicalShiftRight(width, output, value, amount) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.shift(OpShr, destination, output, value, amount), None,
+            file.narrow_shift_right(width, destination, output, value, amount)),
         ArithmeticShiftRight(width, output, value, amount) => word_only(width, width.eq_dec(64),
             file.shift(OpSar, destination, output, value, amount)),
-        UnsignedLessThan(width, output, left, right) => word_only(width, width.eq_dec(64),
-            file.compare(Below, destination, output, left, right)),
+        UnsignedLessThan(width, output, left, right) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.compare(Below, destination, output, left, right), None,
+            file.compared(Below, Narrow(width), destination, output, left, right)),
         SignedLessThan(width, output, left, right) => word_only(width, width.eq_dec(64),
             file.compare(Less, destination, output, left, right)),
-        Equal(width, output, left, right) => word_only(width, width.eq_dec(64),
-            file.compare(Same, destination, output, left, right)),
+        Equal(width, output, left, right) => by_width(width, width.eq_dec(64), width.eq_dec(1),
+            file.compare(Same, destination, output, left, right), None,
+            file.compared(Same, Narrow(width), destination, output, left, right)),
         // Registers only: a buffer is memory.
         BufferLoad(_, _, _) => None,
         BufferStore(_, _, _, _) => None,
-        // No width but 64 and 1 has registers here yet.
-        Resize(_, _, _, _) => None,
+        Resize(from, to, output, source) => file.resize(from, to, destination, output, source),
+        // A sign extension has no narrow form yet.
         SignResize(_, _, _, _) => None,
     }
 }
@@ -1565,65 +2440,95 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
     MayKeep<M>(values, file, NodeHolds(values, node), node.lower(destination, file))
 {
     match node {
-        Const(width, output, value) => word_or_bit_keeps<M>(values, file, width,
+        Const(width, output, value) => by_width_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Const(w, output, value)), width.eq_dec(64), width.eq_dec(1),
             file.constant(destination, output, value), file.bit_constant(destination, output, value),
+            file.narrow_constant(width, destination, output, value),
             file.constant_keeps<M>(values, destination, output, value),
-            file.bit_constant_keeps<M>(values, destination, output, value)),
-        Move(width, output, source) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, Move(w, output, source)), width.eq_dec(64),
-            file.copy(destination, output, source),
-            file.copy_keeps<M>(values, destination, output, source)),
-        Add(width, output, left, right) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, Add(w, output, left, right)), width.eq_dec(64),
-            file.add(destination, output, left, right),
-            file.add_keeps<M>(values, destination, output, left, right)),
-        Sub(width, output, left, right) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, Sub(w, output, left, right)), width.eq_dec(64),
-            file.binary(OpSub, destination, output, left, right),
-            file.binary_keeps<M>(values, OpSub, destination, output, left, right)),
-        BitAnd(width, output, left, right) => word_or_bit_keeps<M>(values, file, width,
+            file.bit_constant_keeps<M>(values, destination, output, value),
+            λ _ => file.narrow_constant_keeps<M>(values, width, destination, output, value)),
+        Move(width, output, source) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, Move(w, output, source)), width.eq_dec(64), width.eq_dec(1),
+            file.copy(destination, output, source), None,
+            file.narrow_copy(width, destination, output, source),
+            file.copy_keeps<M>(values, destination, output, source), trivial,
+            λ _ => file.narrow_copy_keeps<M>(values, width, destination, output, source)),
+        Add(width, output, left, right) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, Add(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
+            file.add(destination, output, left, right), None,
+            file.narrow_binary(OpAdd, width, destination, output, left, right),
+            file.add_keeps<M>(values, destination, output, left, right), trivial,
+            λ high => file.narrow_binary_keeps<M>(values, OpAdd, width, destination, output, left, right, high)),
+        Sub(width, output, left, right) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, Sub(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
+            file.binary(OpSub, destination, output, left, right), None,
+            file.narrow_binary(OpSub, width, destination, output, left, right),
+            file.binary_keeps<M>(values, OpSub, destination, output, left, right), trivial,
+            λ high => file.narrow_binary_keeps<M>(values, OpSub, width, destination, output, left, right, high)),
+        BitAnd(width, output, left, right) => by_width_keeps<M>(values, file, width,
             λ w => NodeHolds(values, BitAnd(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
             file.binary(OpAnd, destination, output, left, right), file.bits(OpAnd, destination, output, left, right),
+            file.narrow_binary(OpAnd, width, destination, output, left, right),
             file.binary_keeps<M>(values, OpAnd, destination, output, left, right),
-            file.bits_keeps<M>(values, OpAnd, destination, output, left, right)),
-        BitOr(width, output, left, right) => word_or_bit_keeps<M>(values, file, width,
+            file.bits_keeps<M>(values, OpAnd, destination, output, left, right),
+            λ high => file.narrow_binary_keeps<M>(values, OpAnd, width, destination, output, left, right, high)),
+        BitOr(width, output, left, right) => by_width_keeps<M>(values, file, width,
             λ w => NodeHolds(values, BitOr(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
             file.binary(OpOr, destination, output, left, right), file.bits(OpOr, destination, output, left, right),
+            file.narrow_binary(OpOr, width, destination, output, left, right),
             file.binary_keeps<M>(values, OpOr, destination, output, left, right),
-            file.bits_keeps<M>(values, OpOr, destination, output, left, right)),
-        BitXor(width, output, left, right) => word_or_bit_keeps<M>(values, file, width,
+            file.bits_keeps<M>(values, OpOr, destination, output, left, right),
+            λ high => file.narrow_binary_keeps<M>(values, OpOr, width, destination, output, left, right, high)),
+        BitXor(width, output, left, right) => by_width_keeps<M>(values, file, width,
             λ w => NodeHolds(values, BitXor(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
             file.binary(OpXor, destination, output, left, right), file.bits(OpXor, destination, output, left, right),
+            file.narrow_binary(OpXor, width, destination, output, left, right),
             file.binary_keeps<M>(values, OpXor, destination, output, left, right),
-            file.bits_keeps<M>(values, OpXor, destination, output, left, right)),
-        ShiftLeft(width, output, value, amount) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, ShiftLeft(w, output, value, amount)), width.eq_dec(64),
-            file.shift(OpShl, destination, output, value, amount),
-            file.shift_keeps<M>(values, OpShl, destination, output, value, amount)),
-        LogicalShiftRight(width, output, value, amount) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, LogicalShiftRight(w, output, value, amount)), width.eq_dec(64),
-            file.shift(OpShr, destination, output, value, amount),
-            file.shift_keeps<M>(values, OpShr, destination, output, value, amount)),
+            file.bits_keeps<M>(values, OpXor, destination, output, left, right),
+            λ high => file.narrow_binary_keeps<M>(values, OpXor, width, destination, output, left, right, high)),
+        ShiftLeft(width, output, value, amount) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, ShiftLeft(w, output, value, amount)), width.eq_dec(64), width.eq_dec(1),
+            file.shift(OpShl, destination, output, value, amount), None,
+            file.narrow_shift_left(width, destination, output, value, amount),
+            file.shift_keeps<M>(values, OpShl, destination, output, value, amount), trivial,
+            λ high => file.narrow_shift_left_keeps<M>(values, width, destination, output, value, amount, high)),
+        LogicalShiftRight(width, output, value, amount) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, LogicalShiftRight(w, output, value, amount)), width.eq_dec(64), width.eq_dec(1),
+            file.shift(OpShr, destination, output, value, amount), None,
+            file.narrow_shift_right(width, destination, output, value, amount),
+            file.shift_keeps<M>(values, OpShr, destination, output, value, amount), trivial,
+            λ high => file.narrow_shift_right_keeps<M>(values, width, destination, output, value, amount, high)),
         ArithmeticShiftRight(width, output, value, amount) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, ArithmeticShiftRight(w, output, value, amount)), width.eq_dec(64),
             file.shift(OpSar, destination, output, value, amount),
             file.shift_keeps<M>(values, OpSar, destination, output, value, amount)),
-        UnsignedLessThan(width, output, left, right) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, UnsignedLessThan(w, output, left, right)), width.eq_dec(64),
-            file.compare(Below, destination, output, left, right),
-            file.compare_keeps<M>(values, Below, destination, output, left, right)),
+        UnsignedLessThan(width, output, left, right) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, UnsignedLessThan(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
+            file.compare(Below, destination, output, left, right), None,
+            file.compared(Below, Narrow(width), destination, output, left, right),
+            file.compare_keeps<M>(values, Below, destination, output, left, right), trivial,
+            λ high => keeps_from<M>(values, file, Compares(values, Narrow(width), Below, output, left, right),
+                NodeHolds(values, UnsignedLessThan(width, output, left, right)),
+                file.compared(Below, Narrow(width), destination, output, left, right),
+                λ holds => narrow_compares_below(values, width, output, left, right, high, holds),
+                file.compared_keeps<M>(values, Below, Narrow(width), destination, output, left, right))),
         SignedLessThan(width, output, left, right) => word_only_keeps<M>(values, file, width,
             λ w => NodeHolds(values, SignedLessThan(w, output, left, right)), width.eq_dec(64),
             file.compare(Less, destination, output, left, right),
             file.compare_keeps<M>(values, Less, destination, output, left, right)),
-        Equal(width, output, left, right) => word_only_keeps<M>(values, file, width,
-            λ w => NodeHolds(values, Equal(w, output, left, right)), width.eq_dec(64),
-            file.compare(Same, destination, output, left, right),
-            file.compare_keeps<M>(values, Same, destination, output, left, right)),
+        Equal(width, output, left, right) => by_width_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, Equal(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),
+            file.compare(Same, destination, output, left, right), None,
+            file.compared(Same, Narrow(width), destination, output, left, right),
+            file.compare_keeps<M>(values, Same, destination, output, left, right), trivial,
+            λ high => keeps_from<M>(values, file, Compares(values, Narrow(width), Same, output, left, right),
+                NodeHolds(values, Equal(width, output, left, right)),
+                file.compared(Same, Narrow(width), destination, output, left, right),
+                λ holds => narrow_compares_same(values, width, output, left, right, high, holds),
+                file.compared_keeps<M>(values, Same, Narrow(width), destination, output, left, right))),
         BufferLoad(_, _, _) => trivial,
         BufferStore(_, _, _, _) => trivial,
-        Resize(_, _, _, _) => trivial,
+        Resize(from, to, output, source) => file.resize_keeps<M>(values, from, to, destination, output, source),
         SignResize(_, _, _, _) => trivial,
     }
 }
@@ -1748,12 +2653,33 @@ theorem lower_nodes_keeps<M>(values: Valuation(), nodes: List<Node>):
 // A region: inputs in registers, outputs moved to theirs
 
 // How a port's width sits in a register: 64 bits as a word, one bit
-// zero-extended, and nothing else yet.
+// zero-extended, and nothing else yet. A narrow value (`Narrow`, `Low`)
+// lives inside a region and does not cross its boundary
+// (issues/runtime-repr-narrow-words.md).
 fn Kind::of_width(width: Nat) → Option<Kind> {
     match width.eq_dec(64) {
         Inl(_) => Some(Word),
         Inr(_) => match width.eq_dec(1) { Inl(_) => Some(Bit), Inr(_) => None },
     }
+}
+
+// A port is a word or a bit: no value crosses a region's boundary at a
+// narrow kind.
+fn Kind::plain(self kind: Kind) → Bool {
+    match kind { Word => True, Bit => True, Narrow(_) => False, Low(_) => False }
+}
+
+theorem Kind::of_width_plain(width: Nat, kind: Kind, at: Kind::of_width(width) = Some(kind)): kind.plain() = True {
+    (match width.eq_dec(64) as λ d =>
+            (match d { Inl(_) => Some(Word), Inr(_) => match width.eq_dec(1) { Inl(_) => Some(Bit), Inr(_) => None } }) = Some(kind) →
+            kind.plain() = True {
+        Inl(_) => λ some => j(Option::some_inj(Word, kind, some), λ k _ => k.plain() = True, refl),
+        Inr(_) => match width.eq_dec(1) as λ e =>
+                (match e { Inl(_) => Some(Bit), Inr(_) => None }) = Some(kind) → kind.plain() = True {
+            Inl(_) => λ some => j(Option::some_inj(Bit, kind, some), λ k _ => k.plain() = True, refl),
+            Inr(_) => λ none => absurd(none),
+        },
+    })(at)
 }
 
 fn KindRep(values: Valuation(), id: Nat, kind: Option<Kind>, word: BitVec(64)) → Type {
@@ -2131,13 +3057,27 @@ fn target_of(id: Nat, entries: List<Port>, registers: List<Gpr>) → Option<Gpr>
 
 fn Node::output_id(self node: Node) → Nat { node_output(node).id }
 
+// The register that holds `id` zero-extended at a narrow width, if one does.
+fn File::narrow_at(self file: File, id: Nat, registers: List<Gpr>) → Option<Gpr> {
+    match registers {
+        Nil => None,
+        Cons(register, rest) => match file.at(register) {
+            None => file.narrow_at(id, rest),
+            Some(held) => match held.kind {
+                Narrow(_) => match held.id.same(id) { True => Some(register), False => file.narrow_at(id, rest) },
+                _ => file.narrow_at(id, rest),
+            },
+        },
+    }
+}
+
 fn Node::in_place(self node: Node, file: File, later: List<Nat>) → Option<Gpr> {
     match node.reads() {
         Nil => None,
         Cons(left, _) => match function_ir_lower::mentions(later, left) {
             True => None,
             False => match file.find(Held(left, Word)) {
-                None => None,
+                None => file.narrow_at(left, search_order()),
                 Some(found) => Some(found.register),
             },
         },
@@ -2145,12 +3085,13 @@ fn Node::in_place(self node: Node, file: File, later: List<Nat>) → Option<Gpr>
 }
 
 // Nodes cheapest in their first operand's register: arithmetic writes it
-// in place, and a `Move` there is only a retag (a call's result taken where
-// the call left it).
+// in place, and a `Move` or a `Resize` there is only a retag or a settling
+// (a call's result taken where the call left it).
 fn prefers_operand(node: Node) → Bool {
     match node {
         Add(_, _, _, _) => True, Sub(_, _, _, _) => True, BitAnd(_, _, _, _) => True,
-        BitOr(_, _, _, _) => True, BitXor(_, _, _, _) => True, Move(_, _, _) => True, _ => False,
+        BitOr(_, _, _, _) => True, BitXor(_, _, _, _) => True, Move(_, _, _) => True,
+        Resize(_, _, _, _) => True, _ => False,
     }
 }
 

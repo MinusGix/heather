@@ -141,6 +141,43 @@ static uint64_t reference(uint64_t a, uint64_t b) { return (uint64_t)((int64_t)a
 "#),
 ];
 
+// Narrow words in 64-bit registers (issues/function-ir-narrow-arithmetic.md):
+// a value of width n is kept zero-extended, and an ADD, a SUB or a left
+// shift is followed by a shift left and back by 64 − n. Bytes whose carry
+// and borrow are then tested, 32-bit words through a rotation and a
+// constant with its top bit set, and one value through 64, 32, 16, 27, 32
+// and 64 bits. The references compute at C's own narrow types, so an upper
+// bit the compiled code let through shows in the result.
+const NARROW: [Case; 3] = [
+    ("narrow_bytes", "bytes", r#"
+static uint64_t reference(uint64_t a, uint64_t b) {
+    uint8_t x = (uint8_t)a, y = (uint8_t)b, sum = (uint8_t)(x + y), difference = (uint8_t)(x - y);
+    uint8_t spread = (uint8_t)((uint8_t)(sum << 3) ^ (difference >> 2));
+    uint8_t mixed = (uint8_t)((uint8_t)(spread + 167) | (x & y));
+    if (sum < x) return (uint8_t)(mixed - 1);
+    if (difference == 0) return x;
+    return mixed;
+}
+"#),
+    ("narrow_words", "words", r#"
+static uint64_t reference(uint64_t a, uint64_t b) {
+    uint32_t x = (uint32_t)a, y = (uint32_t)b, rotated = (x << 7) | (x >> 25);
+    uint32_t sum = rotated + y + UINT32_C(2654435769);
+    return y < UINT32_C(2147483648) ? (uint32_t)(sum - x) : (uint32_t)((sum ^ (y >> 31)) << 1);
+}
+"#),
+    ("narrow_widths", "widths", r#"
+static uint64_t reference(uint64_t a, uint64_t b) {
+    uint32_t half = (uint32_t)a, odd = (uint32_t)b & UINT32_C(0x7ffffff);
+    uint16_t narrow = (uint16_t)half;
+    uint32_t grown = (uint16_t)(narrow + 65521);
+    uint32_t joined = ((grown + odd) << 9) & UINT32_C(0x7ffffff);
+    uint32_t back = joined + half;
+    return (uint64_t)((back >> 3) ^ half) + a;
+}
+"#),
+];
+
 const CALLS: &[&str] = &["CallTo("];
 // A loop is a `runtime fn`'s: its program and agreement are its generator's,
 // from the `Compile` instances (docs/runtime-fn-setups-design.md §16.11),
@@ -158,6 +195,9 @@ fn programs_with_calls_execute_saved() { execute("saved", &SAVED, CALLS); }
 
 #[test]
 fn programs_with_shifts_execute() { execute("shifts", &SHIFTS, &[]); }
+
+#[test]
+fn programs_with_narrow_words_execute() { execute("narrow", &NARROW, &[]); }
 
 #[test]
 fn programs_with_loops_execute() { execute("loops", &LOOPS, LOOPED); }
@@ -233,5 +273,42 @@ fn unmarked_loops_are_refused() {
         .output().unwrap();
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(!result.status.success() && stderr.contains("mark it `runtime fn count`"), "{stderr}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// What the narrow lowering does not take yet is refused, not compiled as
+// the 64-bit operation (issues/function-ir-narrow-arithmetic.md): zero
+// extension does not keep the signed order or the sign an arithmetic shift
+// copies (`lib/_tests/std/bitvec/bitvec_resize_tests.hthr`,
+// `signed_wide_above`), so a narrow signed comparison, a narrow arithmetic
+// shift and a sign extension have no code. Each reflects and agrees with
+// its source; the refusal is the lowering's.
+#[test]
+fn narrow_signed_operations_are_refused() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-narrow-refusals-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = "import logic;\nimport bool;\nimport nat;\nimport list;\nimport option;\nimport pair;\n\
+        import bitvec;\nimport bitvec_nat;\nimport tactic;\nimport char;\nimport string;\nimport rt;\n\
+        import rt_lower;\nimport function_ir;\nimport function_ir_eval;\nimport runtime;\n\
+        runtime fn signed_below(a, b: BitVec(64)) → BitVec(64) {\n\
+            match a.truncate(32, 32).signed_lt_bit(b.truncate(32, 32)) { True => a, False => b }\n}\n\
+        runtime fn signed_shift(a, b: BitVec(64)) → BitVec(64) {\n\
+            a.truncate(32, 32).arithmetic_shift_right(3).zero_extend(32).add(b)\n}\n\
+        runtime fn signed_widen(a, b: BitVec(64)) → BitVec(64) {\n\
+            a.truncate(32, 32).sign_extend(32).add(b)\n}\n";
+    std::fs::write(dir.join("signed.hthr"), source).unwrap();
+    for function in ["signed_below", "signed_shift", "signed_widen"] {
+        let output = dir.join(format!("{function}.s"));
+        let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+            .arg("compile-x86").arg(dir.join("signed.hthr")).args([function, "-o"]).arg(&output)
+            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+            .output().unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success() && stderr.contains("the verified lowering refused this program"),
+            "{function}: {stderr}");
+        assert!(!output.exists(), "{function}: a refused function wrote assembly");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }

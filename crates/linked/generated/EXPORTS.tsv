@@ -1,0 +1,12 @@
+# The Heather functions this crate links, one per line: the source module
+# and the `runtime fn` in it. `generated/<function>.s` is what
+# `heather compile-x86 <module> <function>` writes, checked in so a build of
+# the workspace needs no Heather compiler (docs/native-lexer-crypto-roadmap.md
+# §2, piece 7). `scripts/linked` rewrites the files;
+# `crates/cli/tests/native_linked.rs` holds them to the compiler.
+lib/native/crypto/sha512_round.hthr	sha512_t1
+lib/native/crypto/sha512_round.hthr	sha512_t2
+lib/native/crypto/sha512_round.hthr	sha512_next
+lib/native/crypto/sha256_round.hthr	sha256_t1
+lib/native/crypto/sha256_round.hthr	sha256_t2
+lib/native/crypto/sha256_round.hthr	sha256_next
