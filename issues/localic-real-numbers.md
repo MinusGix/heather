@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,mathematics,reals,locale-theory,research]
 area: mathematics
 created: 2026-09-02
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 Construct the localic real line from a rational-interval or formal-topology
@@ -31,3 +31,4 @@ points are conclusions or imported principles, never definitional premises.
 - 2026-11-09: Foundations landed (docs/frame-locale-design.md); now waits on
   [[inductive-formal-covers]] for the interval axioms' cover.
 - 2026-11-09: Unblocked: inductive-formal-covers is done; the real line is presented by an axiom set over rational intervals and `Cover` (lib/std/locale/formal_topology.hthr).
+- 2026-11-10: The line is presented and its first theorems are in (docs/localic-reals-design.md): `lib/std/locale/presentation.hthr` (the universal property `Cover::hom`: a map out of a presented frame is checked on generators; `FormalPoint`), `real_locale.hthr` (`QInterval`, `RealAxiom` with `Shrink` and `Split`, the frame, Heine–Borel `RealLine::compact` by induction on the cover, `nontrivial`, `basic_reflects`, `RealLine::negation`), `real_point.hthr` (`CReal::formal_point`, covers sound for reals, `neg_point`). Stays open as the umbrella for what remains: [[localic-real-points-are-cauchy]] (the converse and round trip), [[locale-products-and-real-arithmetic]] (addition and multiplication as maps), [[closed-interval-compact-sublocale]], [[interval-cover-decision]]; the same tool at other spaces is [[presented-spaces-cantor-baire]]. Worked around: [[implicit-constant-family-record-parameter]], [[linarith-rat-without-ordered-field-import]].

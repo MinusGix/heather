@@ -379,7 +379,9 @@ relations, finite sets with list and tree backends, bit-vectors, and
 `x⁻¹`/`xⁿ` notation without junk values (`docs/regular-cauchy-reals-round.md`,
 `docs/creal-*-round.md`, `docs/rational-order-round.md`), and point-free
 foundations: frames, locale maps, points, nuclei and formal-topology
-presentations over `Type<1>` carriers (`docs/frame-locale-design.md`). Nothing
+presentations over `Type<1>` carriers (`docs/frame-locale-design.md`), and the
+real line as a locale with Heine–Borel and Cauchy reals as its points
+(`docs/localic-reals-design.md`). Nothing
 yet for measure, probability, combinatorics, asymptotics or floating point.
 Open design for those that have issues:
 [inductive-formal-covers](../issues/inductive-formal-covers.md),
