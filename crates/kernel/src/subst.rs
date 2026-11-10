@@ -337,6 +337,7 @@ trait Mapper {
     /// Whether a skip this mapper takes ([`Self::skip_ty`], [`Self::skip_tm`])
     /// claims the walk would change nothing, which debug builds then verify
     /// by walking. Every mapper that builds a result says yes.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     const VERIFY_SKIPS: bool = true;
 
     /// Count of *effective* changes this mapper has made — see

@@ -4,7 +4,7 @@ status: open
 labels: [elaborator,kernel,performance]
 area: language
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 The elaborator decides "does this term still mention an unsolved slot" by
@@ -61,3 +61,4 @@ The patch is ~80 lines (`crates/kernel/src/subst.rs`, `unification.rs`,
 ## Log
 
 - 2026-11-09: Stack samples as in [[psi-references-by-level]]'s log: `zonked_tm` and `zonked` are 28 of the 37 samples whose stack shows `apply_global`. A/B of the read-tracking patch (`scripts/perf ab`, before = branch with the allocator, after = plus the patch, cold width-one `calc_parser`, three interleaved samples): wall 31.6/34.7/34.3 s to 33.4/33.1/32.8 s (spread exceeds the delta), `syntax_eq_nodes` 17,725,681 to 16,380,793, `syntax_eq_memo_hits` 862,665 to 839,494, `subst_memo_hits` 24.77 M to 21.98 M, 41 other counters identical.
+- 2026-11-10: [[psi-references-by-level]] was built as constants plus index variables, not levels, and with it a per-node memo of the largest free global variable (`subst::global_var_bound_tm`, `bounds.rs` §The global namespace). The third option above is now available in that form: a scratch world's slots are the variables, so "mentions an unsolved slot" is bounded by a read off the root, and both `apply_global` calls already skip every subtree with no free variable. Re-size before working on this: on the cold showcase `subst_memo_hits` fell 24.8 M → 4.2 M and `syntax_eq_nodes` 17.7 M → 7.1 M with that change alone, so the 2026-11-09 numbers here no longer describe the cost.

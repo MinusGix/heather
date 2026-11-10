@@ -1788,8 +1788,7 @@ impl Elaborator {
             );
         }
         // A declaration from a finished module, named bare, lowers to the same
-        // type at every use, up to weakening past the globals committed since
-        // (Ψ is de Bruijn): its field types are read in its own scope
+        // type at every use: its field types are read in its own scope
         // (`lower_ctor`'s `use_inductive_scope`) with no type or value
         // arguments and the use site's binders and aliases hidden, so only
         // what else a use site's context carries could reach them — class
@@ -1831,11 +1830,16 @@ impl Elaborator {
         // Kept only when closed over the locals, so a hit is the same type at
         // any depth. Hiding the use site's binders should make every bare
         // lowering closed; this is the backstop, paid once per miss. And only
-        // when it mentions no global: a reference counts from the end of Ψ
-        // *and* past the goal arena and a `meta fn`'s binders, which the
-        // key's Ψ length does not record. (Until 2026-11-09 the first test
-        // was also the second, by accident: an empty substitution tail
-        // recorded the depth, so a weakening changed every global reference.)
+        // when it mentions no global **variable**: one counts from the end
+        // of Ψ *and* past the goal arena and a `meta fn`'s binders, which the
+        // key's Ψ length does not record. A constant is the same reference
+        // in every extension of Ψ (DESIGN.md, "Constants are addressed from
+        // the start of Ψ"), so a lowering that mentions committed
+        // definitions is kept, which is most of them: until 2026-11-10 this
+        // test read "mentions no global at all", and a type whose fields
+        // name another declaration's code was lowered again at every
+        // mention. A rollback that moves Ψ back drops the entry
+        // (`Memos::clear_positional`, `restore_from_clone`).
         if memo && out.0.shift_local(1) == out.0 && out.0.shift_global(1) == out.0 {
             self.memos.named_type_memo.borrow_mut().insert(key, (ind, psi, out.clone()));
         }
