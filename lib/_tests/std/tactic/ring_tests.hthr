@@ -150,3 +150,18 @@ theorem class_nat_cast_zero(x: R): Ring::nat_cast<R>(0) * x + x ≈ x { ring }
 // expect-error: differ by
 theorem class_nat_cast_wrong(x: R): Ring::nat_cast<R>(3) * x ≈ x + x { ring }
 }
+
+// A section's bare `f<R>` is the value with its dictionary filled, wherever
+// it stands: an argument, a receiver, and `ring`'s atoms, which spell an
+// applied field read off a call (`(Sr::zero<R>).coeff(i)`) that way
+// (issues/applied-field-source-spelling-level-mismatch.md).
+record Sr<A> { coeff: Nat → A }
+section<R: CommRing(≈, +, *)> {
+fn Sr::zero() → Sr<R> { Sr { coeff: λ n => R.unit } }
+fn Sr::add(f, g: Sr<R>) → Sr<R> { Sr { coeff: λ n => f.coeff(n) + g.coeff(n) } }
+fn Sr::at0(f: Sr<R>) → R { f.coeff(0) }
+fn bare_argument(f: Sr<R>) → Sr<R> { Sr::add(Sr::zero<R>, f) }
+fn bare_receiver() → R { (Sr::zero<R>).coeff(0) }
+theorem atom_through_bare(f: Sr<R>, h: Sr::at0(Sr::zero<R>) ≈ f.coeff(0)): Sr::at0(Sr::zero()) ≈ f.coeff(0) { ring(h) }
+theorem applied_field_of_call(f, g: Sr<R>, i: Nat): Sr::add(f, g).coeff(i) * Sr::zero<R>().coeff(i) ≈ Sr::zero<R>().coeff(i) * Sr::add(f, g).coeff(i) { ring }
+}

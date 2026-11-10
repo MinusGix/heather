@@ -1,0 +1,370 @@
+// The real line as a locale (issues/localic-real-numbers.md,
+// docs/localic-reals-design.md).
+//
+// The line is presented, not built from points: a basis of intervals with
+// rational ends, two covering axioms, and the cover they generate (`Cover`,
+// formal_topology.hthr). Its opens are families of rational intervals. This
+// is not another carrier for real numbers: `CReal` is what one computes
+// with, and real_point.hthr shows each Cauchy real is a point of this
+// locale.
+//
+// What the locale has that the points do not, constructively, is
+// compactness: `RealLine::compact` is the Heine–Borel theorem, an induction
+// on the cover with no choice principle, and a program from a cover to a
+// finite subcover. From it: the locale is not empty (`nontrivial`) and the
+// presentation adds no inclusions between intervals (`basic_reflects`).
+//
+// Maps into the line are given on intervals and checked on the two axioms
+// (`Cover::hom`, presentation.hthr); `RealLine::negation` is the first.
+
+import logic;
+import nat;
+import int;
+import omega;
+import ring;
+import linarith;
+import relation_props;
+import order;
+import algebra;
+import algebra_rel;
+import semiring;
+import ordered_field;
+import list;
+import rat;
+import frame;
+import formal_topology;
+import presentation;
+
+// ---------------------------------------------------------------------------
+// The basis: open intervals with rational ends.
+
+// `(lo, hi)`. Any pair is a basic open; one with `hi <= lo` is empty, and
+// the cover says so (`RealLine::empty`).
+record QInterval { lo: Rat, hi: Rat }
+
+// Inclusion, read on the ends.
+fn QInterval::Le(a, b: QInterval) → Type { b.lo <= a.lo ∧ a.hi <= b.hi }
+
+theorem QInterval::le_refl(self a: QInterval): a.Le(a) { And(a.lo.le_refl(), a.hi.le_refl()) }
+
+theorem QInterval::le_trans({a, b, c: QInterval}, hab: a.Le(b), hbc: b.Le(c)): a.Le(c) {
+    And(Rat::le_trans(hbc.left, hab.left), Rat::le_trans(hab.right, hbc.right))
+}
+
+instance Preorder<QInterval>(QInterval::Le) {
+    rel_refl := QInterval::le_refl,
+    rel_trans := λ a b c hab hbc => QInterval::le_trans(hab, hbc),
+}
+
+// A rational lies in the interval.
+fn QInterval::Holds(self a: QInterval, x: Rat) → Type { a.lo < x ∧ x < a.hi }
+
+// The two axioms (Johnstone, Stone Spaces IV.1.1; Coquand and Negri's formal
+// reals). `Shrink`: an interval is covered by the nonempty intervals
+// strictly inside it. `Split(r, s)` with `r < s`: it is covered by its parts
+// below `s` and above `r`, which overlap.
+inductive RealAxiom { Shrink, Split(r: Rat, s: Rat, h: r < s) }
+
+fn RealAxiom::open(a: QInterval, k: RealAxiom) → Opens<QInterval> {
+    match k {
+        Shrink => Opens(λ c => (a.lo < c.lo ∧ c.lo < c.hi) ∧ c.hi < a.hi),
+        Split(r, s, _) => Opens(λ c => c.Le(a) ∧ (c.hi <= s ∨ r <= c.lo)),
+    }
+}
+
+// The axioms are already local: below `a`, the same axiom at the smaller
+// interval refines the one at `a`.
+theorem RealAxiom::localised(): Cover::Localised(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open) {
+    λ a b k hba => match k {
+        Shrink => Exists(Shrink, λ x hx => And(
+            And(Rat::le_of_lt(hx.left.left), Rat::le_of_lt(hx.right)),
+            Exists(x, And(
+                And(And(Rat::lt_of_le_of_lt(hba.left, hx.left.left), hx.left.right), Rat::lt_of_lt_of_le(hx.right, hba.right)),
+                x.le_refl())))),
+        Split(r, s, h) => Exists(Split(r, s, h), λ x hx => And(hx.left,
+            Exists(x, And(
+                And(And(Rat::le_trans(hba.left, hx.left.left), Rat::le_trans(hx.left.right, hba.right)), hx.right),
+                x.le_refl())))),
+    }
+}
+
+// The locale's opens: families of rational intervals.
+fn RealLine() → Type<1> { Opens<QInterval> }
+
+// `a ◁ u`: the interval `a` is covered by the family `u`.
+fn RealLine::Cov(u: Opens<QInterval>, a: QInterval) → Type {
+    Cover<QInterval>(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, u, a)
+}
+
+fn RealLine::Le(u, v: Opens<QInterval>) → Type { FormalTopology::Le(λ a w => RealLine::Cov(w, a), u, v) }
+
+fn RealLine::meet(u, v: Opens<QInterval>) → Opens<QInterval> { Opens::down_meet(QInterval::Le, u, v) }
+
+fn RealLine::topology() → FormalTopology(QInterval, QInterval::Le, λ a u => RealLine::Cov(u, a)) {
+    FormalTopology::inductive(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, RealAxiom::localised())
+}
+
+// The frame of opens of the real line.
+fn RealLine::frame() → Frame<Opens<QInterval>>(RealLine::Le, RealLine::meet, Opens::sup<QInterval>) {
+    FormalTopology::inductive_frame(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, RealAxiom::localised())
+}
+
+// ---------------------------------------------------------------------------
+// First covers.
+
+theorem RealLine::cov_trans(u, v: Opens<QInterval>, a: QInterval, c: RealLine::Cov(u, a),
+        h: (b: QInterval) → u.has(b) → RealLine::Cov(v, b)): RealLine::Cov(v, a)
+{
+    Cover::trans(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, u, v, a, c, h)
+}
+
+// An interval with nothing in it is covered by nothing.
+theorem RealLine::empty(u: Opens<QInterval>, a: QInterval, h: a.hi <= a.lo): RealLine::Cov(u, a) {
+    Axiom(a, Shrink, λ e => match Rat::not_lt_of_le(h, Rat::lt_trans(Rat::lt_trans(e.proof.left.left, e.proof.left.right), e.proof.right)) {})
+}
+
+// Two overlapping intervals cover what they span.
+theorem RealLine::glue(u: Opens<QInterval>, p, r, s, q: Rat, h: r < s,
+        left: RealLine::Cov(u, QInterval(p, s)), right: RealLine::Cov(u, QInterval(r, q))): RealLine::Cov(u, QInterval(p, q))
+{
+    Axiom(QInterval(p, q), Split(r, s, h), λ e => match e.proof.right {
+        Inl(below) => Down(e.witness, QInterval(p, s), And(e.proof.left.left, below), left),
+        Inr(above) => Down(e.witness, QInterval(r, q), And(above, e.proof.left.right), right),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Heine–Borel: a cover of an interval has a finite subcover of every
+// interval strictly inside it.
+//
+// Constructively this fails for the points of the line without a choice
+// principle (the fan theorem); for the locale it is an induction on the
+// cover, and the proof is a program from a cover to a list of its members
+// (Cederquist and Negri, "A constructive proof of the Heine-Borel covering
+// theorem for formal reals").
+
+// A finite family, and what it means for it to be drawn from `u` and to
+// hold a rational.
+fn RealLine::AllIn(l: List<QInterval>, u: Opens<QInterval>) → Type {
+    match l { Nil => True, Cons(c, t) => u.has(c) ∧ RealLine::AllIn(t, u) }
+}
+
+fn RealLine::Has(l: List<QInterval>, x: Rat) → Type {
+    match l { Nil => False, Cons(c, t) => c.Holds(x) ∨ RealLine::Has(t, x) }
+}
+
+theorem RealLine::all_append(l, m: List<QInterval>, u: Opens<QInterval>, hl: RealLine::AllIn(l, u), hm: RealLine::AllIn(m, u)):
+    RealLine::AllIn(l ++ m, u)
+{
+    match l { Nil => hm, Cons(_, t) => And(hl.left, RealLine::all_append(t, m, u, hl.right, hm)) }
+}
+
+theorem RealLine::has_append_l(l, m: List<QInterval>, x: Rat, h: RealLine::Has(l, x)): RealLine::Has(l ++ m, x) {
+    match l {
+        Nil => match h {},
+        Cons(_, t) => match h { Inl(here) => Inl(here), Inr(there) => Inr(RealLine::has_append_l(t, m, x, there)) },
+    }
+}
+
+theorem RealLine::has_append_r(l, m: List<QInterval>, x: Rat, h: RealLine::Has(m, x)): RealLine::Has(l ++ m, x) {
+    match l { Nil => h, Cons(_, t) => Inr(RealLine::has_append_r(t, m, x, h)) }
+}
+
+theorem RealLine::has_member(l: List<QInterval>, u: Opens<QInterval>, x: Rat, all: RealLine::AllIn(l, u), h: RealLine::Has(l, x)):
+    Exists<QInterval>(λ b => u.has(b) ∧ b.Holds(x))
+{
+    match l {
+        Nil => match h {},
+        Cons(c, t) => match h { Inl(here) => Exists(c, And(all.left, here)), Inr(there) => RealLine::has_member(t, u, x, all.right, there) },
+    }
+}
+
+// A finite subfamily of `u` holding every rational strictly between `lo`
+// and `hi`.
+fn RealLine::FinSub(u: Opens<QInterval>, lo, hi: Rat) → Type {
+    Exists<List<QInterval>>(λ l => RealLine::AllIn(l, u) ∧ ((x: Rat) → lo < x → x < hi → RealLine::Has(l, x)))
+}
+
+// Two finite subfamilies of overlapping ranges, joined.
+theorem RealLine::fin_glue(u: Opens<QInterval>, lo, t0, t1, hi: Rat, h: t0 < t1,
+        left: RealLine::FinSub(u, lo, t1), right: RealLine::FinSub(u, t0, hi)): RealLine::FinSub(u, lo, hi)
+{
+    Exists(left.witness ++ right.witness, And(
+        RealLine::all_append(left.witness, right.witness, u, left.proof.left, right.proof.left),
+        λ x hl hh => match t0.lt_cotrans(t1, x, h) {
+            Inl(above) => RealLine::has_append_r(left.witness, right.witness, x, right.proof.right(x, above, hh)),
+            Inr(below) => RealLine::has_append_l(left.witness, right.witness, x, left.proof.right(x, hl, below)),
+        }))
+}
+
+// One axiom's step: finite subfamilies for the ranges strictly inside each
+// member of the axiom's open give one for a range strictly inside `a`.
+theorem RealLine::compact_step(u: Opens<QInterval>, a: QInterval, k: RealAxiom,
+        ih: (e: Exists<QInterval>((RealAxiom::open(a, k)).has)) → (lo, hi: Rat) → e.witness.lo < lo → hi < e.witness.hi → RealLine::FinSub(u, lo, hi),
+        lo, hi: Rat, hl: a.lo < lo, hh: hi < a.hi):
+    RealLine::FinSub(u, lo, hi)
+{
+    match k {
+        // A nonempty range lies strictly inside an interval strictly inside `a`.
+        Shrink => match hi.le_dec(lo) {
+            Inl(none) => Exists(Nil, And(trivial, λ x xl xh => match Rat::not_lt_of_le(none, Rat::lt_trans(xl, xh)) {})),
+            Inr(some) => {
+                let m1 = Rat::mid(a.lo, lo);
+                let m2 = Rat::mid(hi, a.hi);
+                let lohi: (lo < hi) = Rat::lt_of_not_le(some);
+                let inside: ((RealAxiom::open(a, Shrink)).has(QInterval(m1, m2))) = And(
+                    And(Rat::lt_mid(hl), Rat::lt_trans(Rat::mid_lt(hl), Rat::lt_trans(lohi, Rat::lt_mid(hh)))),
+                    Rat::mid_lt(hh));
+                ih(Exists(QInterval(m1, m2), inside), lo, hi, Rat::mid_lt(hl), Rat::lt_mid(hh))
+            },
+        },
+        // If the split misses `a` on a side, `a` is itself a member;
+        // otherwise the two parts' subfamilies overlap between `r` and `s`.
+        Split(r, s, rs) => match a.hi.le_dec(s) {
+            Inl(low) => ih(Exists(a, And(a.le_refl(), Inl(low))), lo, hi, hl, hh),
+            Inr(nlow) => match r.le_dec(a.lo) {
+                Inl(high) => ih(Exists(a, And(a.le_refl(), Inr(high))), lo, hi, hl, hh),
+                Inr(nhigh) => {
+                    let t1 = Rat::mid(r, s);
+                    let t0 = Rat::mid(r, t1);
+                    let left = ih(Exists(QInterval(a.lo, s), And(And(a.lo.le_refl(), Rat::le_of_lt(Rat::lt_of_not_le(nlow))), Inl(s.le_refl()))),
+                        lo, t1, hl, Rat::mid_lt(rs));
+                    let right = ih(Exists(QInterval(r, a.hi), And(And(Rat::le_of_lt(Rat::lt_of_not_le(nhigh)), a.hi.le_refl()), Inr(r.le_refl()))),
+                        t0, hi, Rat::lt_mid(Rat::lt_mid(rs)), hh);
+                    RealLine::fin_glue(u, lo, t0, t1, hi, Rat::mid_lt(Rat::lt_mid(rs)), left, right)
+                },
+            },
+        },
+    }
+}
+
+theorem RealLine::compact(u: Opens<QInterval>, a: QInterval, c: RealLine::Cov(u, a), lo, hi: Rat, hl: a.lo < lo, hh: hi < a.hi):
+    RealLine::FinSub(u, lo, hi)
+{
+    match c {
+        Here(a1, h) => Exists([a1], And(And(h, trivial), λ x xl xh => Inl(And(Rat::lt_trans(hl, xl), Rat::lt_trans(xh, hh))))),
+        Down(_, b, h, c1) => RealLine::compact(u, b, c1, lo, hi, Rat::lt_of_le_of_lt(h.left, hl), Rat::lt_of_lt_of_le(hh, h.right)),
+        Axiom(a1, k, f) => RealLine::compact_step(u, a1, k,
+            λ e lo2 hi2 h1 h2 => RealLine::compact(u, e.witness, f(e), lo2, hi2, h1, h2), lo, hi, hl, hh),
+    }
+}
+
+// So a covered interval's rationals each lie in a member of the cover.
+theorem RealLine::cover_holds(u: Opens<QInterval>, a: QInterval, c: RealLine::Cov(u, a), x: Rat, h: a.Holds(x)):
+    Exists<QInterval>(λ b => u.has(b) ∧ b.Holds(x))
+{
+    let fin = RealLine::compact(u, a, c, Rat::mid(a.lo, x), Rat::mid(x, a.hi), Rat::lt_mid(h.left), Rat::mid_lt(h.right));
+    RealLine::has_member(fin.witness, u, x, fin.proof.left, fin.proof.right(x, Rat::mid_lt(h.left), Rat::lt_mid(h.right)))
+}
+
+// The line is not the empty locale: a nonempty interval is not covered by
+// nothing.
+theorem RealLine::nontrivial(a: QInterval, h: a.lo < a.hi): ¬(RealLine::Cov(SupLattice::bot(Opens::sup<QInterval>), a)) {
+    λ c => match (RealLine::cover_holds(SupLattice::bot(Opens::sup<QInterval>), a, c, Rat::mid(a.lo, a.hi), And(Rat::lt_mid(h), Rat::mid_lt(h)))).proof.left.witness {}
+}
+
+// The presentation adds no inclusions: a nonempty interval covered by the
+// intervals inside `b` is inside `b`. So the basic opens order in the frame
+// as their ends do.
+theorem RealLine::basic_reflects(a, b: QInterval, h: a.lo < a.hi, c: RealLine::Cov(FormalTopology::basic(QInterval::Le, b), a)): a.Le(b) {
+    let lo: (b.lo <= a.lo) = match b.lo.le_dec(a.lo) {
+        Inl(ok) => ok,
+        Inr(no) => {
+            let gap: (a.lo < b.lo) = Rat::lt_of_not_le(no);
+            // A rational of `a` at or below `b`'s lower end.
+            let x: (Exists<Rat>(λ x => a.Holds(x) ∧ x <= b.lo)) = match b.lo.le_dec(a.hi) {
+                Inl(inside) => Exists(Rat::mid(a.lo, b.lo), And(And(Rat::lt_mid(gap), Rat::lt_of_lt_of_le(Rat::mid_lt(gap), inside)), Rat::le_of_lt(Rat::mid_lt(gap)))),
+                Inr(outside) => Exists(Rat::mid(a.lo, a.hi), And(And(Rat::lt_mid(h), Rat::mid_lt(h)),
+                    Rat::le_of_lt(Rat::lt_trans(Rat::mid_lt(h), Rat::lt_of_not_le(outside))))),
+            };
+            let m = RealLine::cover_holds(FormalTopology::basic(QInterval::Le, b), a, c, x.witness, x.proof.left);
+            match Rat::not_lt_of_le(x.proof.right, Rat::lt_of_le_of_lt(m.proof.left.left, m.proof.right.left)) {}
+        },
+    };
+    let hi: (a.hi <= b.hi) = match a.hi.le_dec(b.hi) {
+        Inl(ok) => ok,
+        Inr(no) => {
+            let gap: (b.hi < a.hi) = Rat::lt_of_not_le(no);
+            let x: (Exists<Rat>(λ x => a.Holds(x) ∧ b.hi <= x)) = match a.lo.le_dec(b.hi) {
+                Inl(inside) => Exists(Rat::mid(b.hi, a.hi), And(And(Rat::lt_of_le_of_lt(inside, Rat::lt_mid(gap)), Rat::mid_lt(gap)), Rat::le_of_lt(Rat::lt_mid(gap)))),
+                Inr(outside) => Exists(Rat::mid(a.lo, a.hi), And(And(Rat::lt_mid(h), Rat::mid_lt(h)),
+                    Rat::le_of_lt(Rat::lt_trans(Rat::lt_of_not_le(outside), Rat::lt_mid(h))))),
+            };
+            let m = RealLine::cover_holds(FormalTopology::basic(QInterval::Le, b), a, c, x.witness, x.proof.left);
+            match Rat::not_lt_of_le(x.proof.right, Rat::lt_of_lt_of_le(m.proof.right.right, m.proof.left.right)) {}
+        },
+    };
+    And(lo, hi)
+}
+
+// ---------------------------------------------------------------------------
+// A first continuous map: negation.
+//
+// A map of locales into the line is a frame homomorphism out of its
+// presented frame, so it is given on intervals and checked on the two
+// axioms (`Cover::hom`). Negation sends an interval to its mirror image.
+
+fn QInterval::neg(self a: QInterval) → QInterval { QInterval(-a.hi, -a.lo) }
+
+theorem QInterval::neg_mono(a, b: QInterval, h: a.Le(b)): a.neg().Le(b.neg()) { And(Rat::neg_le(h.right), Rat::neg_le(h.left)) }
+
+theorem QInterval::neg_neg_le(self a: QInterval): a.neg().neg().Le(a) {
+    And(Rat::le_of_same(Rat::same_sym(a.lo.neg_neg())), Rat::le_of_same(a.hi.neg_neg()))
+}
+
+theorem QInterval::le_neg_neg(self a: QInterval): a.Le(a.neg().neg()) {
+    And(Rat::le_of_same(a.lo.neg_neg()), Rat::le_of_same(Rat::same_sym(a.hi.neg_neg())))
+}
+
+// Inside the mirror image of `a`: the mirror image is inside `a`.
+theorem QInterval::neg_le_of_le_neg(c, a: QInterval, h: c.Le(a.neg())): c.neg().Le(a) {
+    QInterval::le_trans(QInterval::neg_mono(c, a.neg(), h), a.neg_neg_le())
+}
+
+// The inverse image of a basic open.
+fn RealLine::neg_basic(a: QInterval) → Opens<QInterval> { FormalTopology::basic(QInterval::Le, a.neg()) }
+
+theorem RealLine::neg_models(a: QInterval, k: RealAxiom, c: QInterval, hc: c.Le(a.neg())):
+    RealLine::Cov(Cover::extend(Opens::sup<QInterval>, RealLine::neg_basic, RealAxiom::open(a, k)), c)
+{
+    match k {
+        Shrink => Axiom(c, Shrink, λ e => {
+            let d = e.witness;
+            let lo: (-a.hi <= c.lo) = hc.left;
+            let hi: (c.hi <= -a.lo) = hc.right;
+            let d1: (c.lo < d.lo) = e.proof.left.left;
+            let d2: (d.lo < d.hi) = e.proof.left.right;
+            let d3: (d.hi < c.hi) = e.proof.right;
+            let p1: (a.lo < -d.hi) = linarith(d3, hi);
+            let p2: (-d.hi < -d.lo) = linarith(d2);
+            let p3: (-d.lo < a.hi) = linarith(d1, lo);
+            Here(d, Exists(Exists(d.neg(), And(And(p1, p2), p3)), d.le_neg_neg()))
+        }),
+        Split(r, s, rs) => Axiom(c, Split(-s, -r, Rat::neg_lt(rs)), λ e => {
+            let d = e.witness;
+            let inside = QInterval::neg_le_of_le_neg(d, a, QInterval::le_trans(e.proof.left, hc));
+            let side: (-d.lo <= s ∨ r <= -d.hi) = match e.proof.right {
+                Inl(h) => { let h2: (d.hi <= -r) = h; Inr(linarith(h2)) },
+                Inr(h) => { let h2: (-s <= d.lo) = h; Inl(linarith(h2)) },
+            };
+            Here(d, Exists(Exists(d.neg(), And(inside, side)), d.le_neg_neg()))
+        }),
+    }
+}
+
+// Negation, as a map of the line to itself.
+fn RealLine::negation() → LocaleMap<Opens<QInterval>, Opens<QInterval>>(
+        RealLine::Le, RealLine::meet, Opens::top<QInterval>(), Opens::sup<QInterval>,
+        RealLine::Le, RealLine::meet, Opens::top<QInterval>(), Opens::sup<QInterval>)
+{
+    LocaleMap(λ u => Cover::extend(Opens::sup<QInterval>, RealLine::neg_basic, u),
+        Cover::hom(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, RealLine::frame(), RealLine::neg_basic,
+            λ a b h c hc => Here(c, QInterval::le_trans(a := c, b := a.neg(), c := b.neg(), hab := hc, hbc := QInterval::neg_mono(a, b, h))),
+            λ a k c hc => RealLine::neg_models(a, k, c, hc),
+            λ a b x hx => Here(x, Exists(
+                Exists(x.neg(), And(
+                    QInterval::neg_le_of_le_neg(x, a, QInterval::le_trans(a := x, b := hx.left.witness, c := a.neg(), hab := hx.left.proof.right, hbc := hx.left.proof.left)),
+                    QInterval::neg_le_of_le_neg(x, b, QInterval::le_trans(a := x, b := hx.right.witness, c := b.neg(), hab := hx.right.proof.right, hbc := hx.right.proof.left)))),
+                x.le_neg_neg())),
+            λ x _ => Here(x, Exists(x.neg(), x.le_neg_neg()))))
+}

@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,reals,setoids,axioms]
 area: mathematics
 milestone: [math-reals]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-11-10
 ---
 
 Construct maps among regular Cauchy, located Dedekind, lower, and later localic
@@ -27,3 +27,4 @@ constructively meaningful distinctions.
 
 - 2026-09-02: Filed to make interoperability a theorem/API problem rather than
   a demand that every representation share one implementation.
+- 2026-11-10: A first map exists one way: `CReal::formal_point` sends a Cauchy real to a point of the localic line, preserving order facts and negation (lib/std/locale/real_point.hthr). The converse and the round trip, which would be this issue's first acceptance, are [[localic-real-points-are-cauchy]].

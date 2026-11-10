@@ -1,0 +1,163 @@
+// Cauchy reals are points of the real line
+// (docs/localic-reals-design.md §5).
+//
+// A real lies in a rational interval when it is strictly between the ends.
+// The intervals a real lies in form a point of the localic line
+// (`CReal::formal_point`), and the line's two axioms are the two
+// constructive facts about `<` on `CReal`: splitting is cotransitivity and
+// shrinking is a rational between apart reals. So covers are sound for
+// reals (`CReal::in_cover`), apart reals are different points
+// (`point_separates`), and the line's negation map is negation of reals
+// (`neg_point`). The converse, a real from a point, is
+// issues/localic-real-points-are-cauchy.md.
+
+import logic;
+import nat;
+import int;
+import relation_props;
+import order;
+import rat;
+import creal;
+import frame;
+import formal_topology;
+import presentation;
+import real_locale;
+
+// `x` lies in the interval: strictly between its ends.
+fn CReal::In(self x: CReal, a: QInterval) → Type { CReal::ofRat(a.lo) < x ∧ x < CReal::ofRat(a.hi) }
+
+// A rational above two rationals below `x` and still below it, and the
+// mirror image: the larger of the two, by the rationals' total order.
+theorem CReal::below_both(self x: CReal, p, q: Rat, hp: CReal::ofRat(p) < x, hq: CReal::ofRat(q) < x):
+    Exists<Rat>(λ m => (p <= m ∧ q <= m) ∧ CReal::ofRat(m) < x)
+{
+    match p.le_total(q) {
+        Inl(h) => Exists(q, And(And(h, q.le_refl()), hq)),
+        Inr(h) => Exists(p, And(And(p.le_refl(), h), hp)),
+    }
+}
+
+theorem CReal::above_both(self x: CReal, p, q: Rat, hp: x < CReal::ofRat(p), hq: x < CReal::ofRat(q)):
+    Exists<Rat>(λ m => (m <= p ∧ m <= q) ∧ x < CReal::ofRat(m))
+{
+    match p.le_total(q) {
+        Inl(h) => Exists(p, And(And(p.le_refl(), h), hp)),
+        Inr(h) => Exists(q, And(And(h, q.le_refl()), hq)),
+    }
+}
+
+// Every real has a rational below it.
+theorem CReal::rat_below(self x: CReal): ∃ p: Rat, CReal::ofRat(p) < x {
+    match (-x).archimedean() {
+        Exists(n, h) => Exists(-Rat::ofInt(OfNat(n)),
+            CReal::lt_respects(CReal::same_sym(CReal::ofRat_neg(Rat::ofInt(OfNat(n)))), x.neg_neg(), CReal::neg_lt(h))),
+    }
+}
+
+theorem CReal::in_split(self x: CReal, a: QInterval, k: RealAxiom, ha: x.In(a)):
+    Exists<QInterval>(λ c => (RealAxiom::open(a, k)).has(c) ∧ x.In(c))
+{
+    match k {
+        Shrink => match CReal::rat_between(ha.left) {
+            Exists(p, hp) => match CReal::rat_between(ha.right) {
+                Exists(q, hq) => Exists(QInterval(p, q), And(
+                    And(And(CReal::lt_of_ofRat_lt(hp.left), CReal::lt_of_ofRat_lt(CReal::lt_trans(hp.right, hq.left))), CReal::lt_of_ofRat_lt(hq.right)),
+                    And(hp.right, hq.left))),
+            },
+        },
+        Split(r, s, rs) => match CReal::ofRat(r).lt_cotrans(CReal::ofRat(s), x, CReal::ofRat_lt(rs)) {
+            Inl(above) => match a.lo.le_total(r) {
+                Inl(h) => Exists(QInterval(r, a.hi), And(And(And(h, a.hi.le_refl()), Inr(r.le_refl())), And(above, ha.right))),
+                Inr(h) => Exists(a, And(And(And(a.lo.le_refl(), a.hi.le_refl()), Inr(h)), ha)),
+            },
+            Inr(below) => match s.le_total(a.hi) {
+                Inl(h) => Exists(QInterval(a.lo, s), And(And(And(a.lo.le_refl(), h), Inl(s.le_refl())), And(ha.left, below))),
+                Inr(h) => Exists(a, And(And(And(a.lo.le_refl(), a.hi.le_refl()), Inl(h)), ha)),
+            },
+        },
+    }
+}
+
+// The basic opens a real lies in form a point of the line. Splitting is
+// cotransitivity and shrinking is a rational between two apart reals, so
+// the two axioms are the two facts the order on `CReal` is built from.
+fn CReal::formal_point(self x: CReal) → FormalPoint<QInterval>(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, λ a => x.In(a)) {
+    FormalPoint(
+        λ a b h ha => And(CReal::lt_of_le_of_lt(CReal::ofRat_le(h.left), ha.left), CReal::lt_of_lt_of_le(ha.right, CReal::ofRat_le(h.right))),
+        λ a k ha => x.in_split(a, k, ha),
+        λ a b ha hb => match x.below_both(a.lo, b.lo, ha.left, hb.left) {
+            Exists(m, hm) => match x.above_both(a.hi, b.hi, ha.right, hb.right) {
+                Exists(n, hn) => Exists(QInterval(m, n), And(
+                    And(And(hm.left.left, hn.left.left), And(hm.left.right, hn.left.right)),
+                    And(hm.right, hn.right))),
+            },
+        },
+        match x.rat_below() {
+            Exists(p, hp) => match x.archimedean() {
+                Exists(n, hn) => Exists(QInterval(p, Rat::ofInt(OfNat(n))), And(hp, hn)),
+            },
+        })
+}
+
+// The point of the real line a Cauchy real is.
+fn CReal::point(self x: CReal) → Point(RealLine::Le, RealLine::meet, Opens::top<QInterval>(), Opens::sup<QInterval>) {
+    FormalPoint::point(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, λ (a: QInterval) => x.In(a), x.formal_point())
+}
+
+// It lies in a basic open exactly when the real lies strictly between the
+// ends.
+theorem CReal::point_in(self x: CReal, a: QInterval, h: x.In(a)): (x.point()).inv(FormalTopology::basic(QInterval::Le, a)).holds {
+    Exists(Exists(a, And(a.lo.le_refl(), a.hi.le_refl())), h)
+}
+
+theorem CReal::in_of_point(self x: CReal, a: QInterval, h: (x.point()).inv(FormalTopology::basic(QInterval::Le, a)).holds): x.In(a) {
+    (x.formal_point()).up(h.witness.witness, a, h.witness.proof, h.proof)
+}
+
+// A real in a covered interval lies in a member of the cover: covers are
+// sound for Cauchy reals, not only for rationals (`RealLine::cover_holds`).
+theorem CReal::in_cover(self x: CReal, u: Opens<QInterval>, a: QInterval, c: RealLine::Cov(u, a), h: x.In(a)):
+    Exists<QInterval>(λ b => u.has(b) ∧ x.In(b))
+{
+    FormalPoint::in_cover(QInterval::Le, λ (a: QInterval) => RealAxiom, RealAxiom::open, λ (b: QInterval) => x.In(b), x.formal_point(), u, a, c, h)
+}
+
+// Equal reals are the same point, and a point tells apart reals that are
+// apart: an interval one lies in and the other does not.
+theorem CReal::in_respects({x, y: CReal}, e: x ≈ y, a: QInterval, h: x.In(a)): y.In(a) {
+    And(CReal::lt_of_same_r(CReal::same_sym(e), h.left), CReal::lt_of_same_l(CReal::same_sym(e), h.right))
+}
+
+theorem CReal::point_separates({x, y: CReal}, h: x < y): Exists<QInterval>(λ a => x.In(a) ∧ ¬(y.In(a))) {
+    match CReal::rat_between(h) {
+        Exists(q, hq) => match x.rat_below() {
+            Exists(p, hp) => Exists(QInterval(p, q), And(And(hp, hq.left),
+                λ (back: y.In(QInterval(p, q))) => CReal::ofRat(q).lt_irrefl(CReal::lt_trans(hq.right, back.right)))),
+        },
+    }
+}
+
+// The negation map of the line (`RealLine::negation`) is negation of reals
+// on points: `-x` lies in an interval exactly when `x` lies in its mirror
+// image.
+theorem CReal::neg_in(self x: CReal, a: QInterval, h: x.In(a.neg())): (-x).In(a) {
+    And(
+        CReal::lt_respects(CReal::same_trans(CReal::neg_respects(CReal::ofRat_neg(a.lo)), CReal::ofRat(a.lo).neg_neg()), (-x).same_refl(), CReal::neg_lt(h.right)),
+        CReal::lt_respects((-x).same_refl(), CReal::same_trans(CReal::neg_respects(CReal::ofRat_neg(a.hi)), CReal::ofRat(a.hi).neg_neg()), CReal::neg_lt(h.left)))
+}
+
+theorem CReal::in_neg(self x: CReal, a: QInterval, h: (-x).In(a)): x.In(a.neg()) {
+    And(
+        CReal::lt_respects(CReal::same_sym(CReal::ofRat_neg(a.hi)), x.neg_neg(), CReal::neg_lt(h.right)),
+        CReal::lt_respects(x.neg_neg(), CReal::same_sym(CReal::ofRat_neg(a.lo)), CReal::neg_lt(h.left)))
+}
+
+// So the point `-x` is the point `x` followed by the map.
+theorem CReal::neg_point(self x: CReal, u: Opens<QInterval>):
+    (x.point()).inv((RealLine::negation()).inv(u)).holds ↔ ((-x).point()).inv(u).holds
+{
+    Iff(
+        mp := λ h => Exists(h.witness.proof.witness,
+            x.neg_in(h.witness.proof.witness.witness, (x.formal_point()).up(h.witness.witness, h.witness.proof.witness.witness.neg(), h.witness.proof.proof, h.proof))),
+        mpr := λ h => Exists(Exists(h.witness.witness.neg(), Exists(h.witness, h.witness.witness.neg().le_refl())), x.in_neg(h.witness.witness, h.proof)))
+}

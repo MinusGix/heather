@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,reals,domain-theory,order]
 area: mathematics
 milestone: [math-reals]
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-11-10
 ---
 
 Develop lower reals without forcing them into the ordered-field interface.
@@ -27,3 +27,4 @@ the required information exists.
 
 - 2026-09-02: Filed as a peer real-like construction, deliberately not another
   inhabitant of a single `Real` class.
+- 2026-11-10: The localic line's machinery (`Cover`, `Cover::hom`, `FormalPoint`, docs/localic-reals-design.md §7) presents the lower reals with lower ends only; a candidate construction for this issue, and where valuations on locales take values.

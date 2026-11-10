@@ -110,12 +110,13 @@ impl Elaborator {
     /// and a field that is no λ after its definitions contribute nothing,
     /// and `Nat`'s identity embedding is the display's own numeral.
     pub(crate) fn numeral_templates(&self) -> Vec<Term> {
-        let here = self.placeholder_base();
+        // A committed body names committed definitions only: it is read as
+        // stored.
         let definition = |abs: usize| -> Option<Term> {
             let Some(GlobalBinding::Tm { body: Some(body), .. }) = self.psi.bindings.get(abs) else {
                 return None;
             };
-            Some(body.shift_global(here.checked_sub(abs as u32)?))
+            Some((**body).clone())
         };
         let class = crate::literals::NUMERAL;
         let mut out = Vec::new();
@@ -1399,12 +1400,6 @@ impl Speller<'_> {
             let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
                 return None;
             };
-            // A source spelling is re-elaborated in the consumer's context,
-            // so it takes only a receiver that is a local there
-            // (issues/applied-field-source-spelling-level-mismatch.md).
-            if self.qualified && !matches!(&**receiver, Term::Var(_)) {
-                return None;
-            }
             let recv = self.tm(receiver, d + 1);
             // A receiver written with type arguments (`sin<A>`) is no
             // postfix operand, so only a bare one goes unparenthesised.
@@ -1615,10 +1610,9 @@ impl Speller<'_> {
             let code = Type::El { level: crate::Level::Zero, tm: Rc::clone(args.get(p)?) };
             return self.carrier_key(&code);
         }
-        // The binding's type is scoped in the Ψ prefix before it; the
-        // registry lookups below read a global as the display's scope does.
-        let here = self.el.placeholder_base();
-        self.carrier_key(&dom.shift_global(here.checked_sub(abs as u32)?))
+        // The binding is committed, so its type names committed definitions
+        // only and the registry lookups below read it as stored.
+        self.carrier_key(dom)
     }
 
     /// The designation key of a type's carrier, structurally: `Nat`, or the

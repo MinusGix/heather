@@ -47,7 +47,7 @@ name:
 | Declaration attempt | `attempt: DeclAttempt`, `misplaced_recursion`, `member_owner`, `instance_scope`, `impl_provenance` | deep copy | `DeclAttempt::{prepare, finish}` enumerate fields (§4) |
 | Dynamic scope | `positivity`, `by_quoting`, `host_leaves`, `rule_citation`, `meta_pushed`, `quote_depth`, `generated_depth`, `expr_depth`, `resolve_depth`, `omega_depth`, `ring_depth`, `omega_settled_guards` | copied (a clone inherits the depth, deliberately for `expr_depth`) | hand save/restore at each site (§8) |
 | Policy/config | `lint_profile`, `review_lints`, `gate`, `fuel`, `value_metrics`, `emission_findings`, `owed_checks_forgotten`, `native_tactics` | copied/shared | never rolled back |
-| Memos | `result_only_memo`, `named_type_memo`, `iwf_part_memo`, `guard_reads`, `guard_slot_formers`, `guard_spine_reads` | copied | two are cleared on restore (`session.rs:76`, `module_delta.rs:1009`); the rest validate by `Rc::ptr_eq` and need no clear |
+| Memos | `result_only_memo`, `named_type_memo`, `iwf_part_memo` (the three `guard_*` rescope memos went with `issues/identity-rescopes-after-constants.md`) | copied | two are cleared on restore (`session.rs:76`, `module_delta.rs:1009`); the rest validate by `Rc::ptr_eq` and need no clear |
 
 **How the classes are enforced today.** By convention spread over: three
 custom `Clone` impls (`KernelPool`, `ReplaySlot`, `JournalSlot`), the exception

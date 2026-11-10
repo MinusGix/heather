@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,probability]
 area: mathematics
 milestone: [ml-gaussian-states]
 created: 2026-10-21
-updated: 2026-10-22
+updated: 2026-11-10
 ---
 
 The constructive first layer of probability: distributions with finite
@@ -21,3 +21,5 @@ Continuous distributions and measure come later (roadmap mathematics item
 be shown to be a state of the same interface.
 
 ## Log
+
+- 2026-11-10: A first customer filed: [[random-walk-gaussian-state]] (the discrete semantics of a step program with coin flips is a finitely supported distribution; docs/continuous-time-survey.md §5.3).

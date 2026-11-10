@@ -396,24 +396,21 @@ impl Elaborator {
         if !self.push_m_def(GenDef::IArity(ind.tag), ind, &tel, ar_stmt, l.clone(), ar_body, span) {
             return;
         }
-        // Every push moves the globals the pieces built before it mention one
-        // further out (`register_m_sig`'s frame rule): one for the output
-        // index, two for the child index.
-        let tel1: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(1), l.clone())).collect();
-        let shape1 = Rc::new(sig.shape.shift_global(1));
+        // The pieces built before a push name committed definitions only, so
+        // each later piece reads them as they are (`register_m_sig`).
         let out_stmt = Type::Pi {
             dom_level: l.clone(),
             cod_level: li.clone(),
-            dom: Rc::clone(&shape1),
-            cod: Rc::new(sig.idx.shift_global(1).shift_local(1)),
+            dom: Rc::clone(&sig.shape),
+            cod: Rc::new(sig.idx.shift_local(1)),
         };
         let out_body = Term::Lam {
             dom_level: l.clone(),
             cod_level: li.clone(),
-            dom: shape1,
-            body: Rc::new(sig.out.shift_global(1)),
+            dom: Rc::clone(&sig.shape),
+            body: Rc::clone(&sig.out),
         };
-        if !self.push_m_def(GenDef::IOut(ind.tag), ind, &tel1, out_stmt, lvl(&l, &li), out_body, span) {
+        if !self.push_m_def(GenDef::IOut(ind.tag), ind, &tel, out_stmt, lvl(&l, &li), out_body, span) {
             return;
         }
         // `Fin(D#iarity ā x)` over `(tel, x)`, minted now.
@@ -421,28 +418,26 @@ impl Elaborator {
             return;
         };
         let fin = Rc::new(Type::Fin { len: aref });
-        let tel2: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(2), l.clone())).collect();
-        let shape2 = Rc::new(sig.shape.shift_global(2));
-        let i2 = Rc::new(sig.idx.shift_global(2).shift_local(2));
+        let i2 = Rc::new(sig.idx.shift_local(2));
         let child_i = Type::Pi { dom_level: Level::Zero, cod_level: li.clone(), dom: Rc::clone(&fin), cod: i2 };
         let child_stmt = Type::Pi {
             dom_level: l.clone(),
             cod_level: li.clone(),
-            dom: Rc::clone(&shape2),
+            dom: Rc::clone(&sig.shape),
             cod: Rc::new(child_i),
         };
         let child_body = Term::Lam {
             dom_level: l.clone(),
             cod_level: li.clone(),
-            dom: shape2,
+            dom: Rc::clone(&sig.shape),
             body: Rc::new(Term::Lam {
                 dom_level: Level::Zero,
                 cod_level: li.clone(),
                 dom: fin,
-                body: Rc::new(sig.child.shift_global(2)),
+                body: Rc::clone(&sig.child),
             }),
         };
-        if !self.push_m_def(GenDef::IChild(ind.tag), ind, &tel2, child_stmt, lvl(&l, &li), child_body, span) {
+        if !self.push_m_def(GenDef::IChild(ind.tag), ind, &tel, child_stmt, lvl(&l, &li), child_body, span) {
             return;
         }
         // `dnth` over the children tuple, at the named signature built now: in
@@ -476,8 +471,7 @@ impl Elaborator {
                 body: Rc::new(Term::Lam { dom_level: Level::Zero, cod_level: fl.clone(), dom: fin, body: Rc::new(nth) }),
             }),
         };
-        let tel3: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(3), l.clone())).collect();
-        let _ = self.push_m_def(GenDef::IDnth(ind.tag), ind, &tel3, stmt, lvl(&l, &fl), body, span);
+        let _ = self.push_m_def(GenDef::IDnth(ind.tag), ind, &tel, stmt, lvl(&l, &fl), body, span);
     }
 
     /// [`iwf_step_telescope`] for a match in `cx`, with the ih type's `dnth`
