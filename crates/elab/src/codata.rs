@@ -999,26 +999,22 @@ impl Elaborator {
             return;
         };
         let s_ty = Rc::new(Type::El { level: ls.clone(), tm: s_ref });
-        // Every push moves the globals the pieces built before it mention one
-        // further out (`ty_code_fn_at`'s frame rule), so each later piece is
-        // read past the pushes made since: one for the positions, two for the
-        // child index.
+        // The pieces built before a push name committed definitions only,
+        // so each later piece reads them as they are.
         let Type::El { tm: ptree, .. } = &*sig.pos else {
             return;
         };
-        let tel1: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(1), l.clone())).collect();
-        let ity1 = Rc::new(ity.shift_global(1));
         let pos_cod = Type::Pi { dom_level: ls.clone(), cod_level: Level::succ(lp.clone()), dom: Rc::clone(&s_ty), cod: Rc::new(Type::Ty(lp.clone())) };
         let lvl_s = Level::max(ls.clone(), Level::succ(lp.clone()));
-        let pos_stmt = Type::Pi { dom_level: li.clone(), cod_level: lvl_s.clone(), dom: Rc::clone(&ity1), cod: Rc::new(pos_cod) };
+        let pos_stmt = Type::Pi { dom_level: li.clone(), cod_level: lvl_s.clone(), dom: Rc::clone(&ity), cod: Rc::new(pos_cod) };
         let pos_body = Term::Lam {
             dom_level: li.clone(),
             cod_level: lvl_s.clone(),
-            dom: Rc::clone(&ity1),
-            body: Rc::new(Term::Lam { dom_level: ls.clone(), cod_level: Level::succ(lp.clone()), dom: Rc::clone(&s_ty), body: Rc::new(ptree.shift_global(1)) }),
+            dom: Rc::clone(&ity),
+            body: Rc::new(Term::Lam { dom_level: ls.clone(), cod_level: Level::succ(lp.clone()), dom: Rc::clone(&s_ty), body: Rc::clone(ptree) }),
         };
         let lvl2 = Level::max(li.clone(), lvl_s);
-        if !self.push_m_def(GenDef::MPos(ind.tag), ind, &tel1, pos_stmt, lvl2, pos_body, span) || !indexed {
+        if !self.push_m_def(GenDef::MPos(ind.tag), ind, &tel, pos_stmt, lvl2, pos_body, span) || !indexed {
             return;
         }
         // `El(D#mshape ā i)` and `El(D#mpos ā i s)` over `(tel, i)` and `(tel,
@@ -1031,27 +1027,25 @@ impl Elaborator {
         };
         let s_ty = Rc::new(Type::El { level: ls.clone(), tm: s_ref });
         let p_ty = Rc::new(Type::El { level: lp.clone(), tm: p_ref });
-        let tel2: Vec<(Type, Level)> = tel.iter().map(|(t, l)| (t.shift_global(2), l.clone())).collect();
-        let ity2 = Rc::new(ity.shift_global(2));
-        let i3 = Rc::new(ity2.shift_local(3));
+        let i3 = Rc::new(ity.shift_local(3));
         let next_p = Type::Pi { dom_level: lp.clone(), cod_level: li.clone(), dom: Rc::clone(&p_ty), cod: Rc::clone(&i3) };
         let lvl_p = Level::max(lp.clone(), li.clone());
         let next_s = Type::Pi { dom_level: ls.clone(), cod_level: lvl_p.clone(), dom: Rc::clone(&s_ty), cod: Rc::new(next_p) };
         let lvl_sp = Level::max(ls.clone(), lvl_p.clone());
-        let next_stmt = Type::Pi { dom_level: li.clone(), cod_level: lvl_sp.clone(), dom: Rc::clone(&ity2), cod: Rc::new(next_s) };
+        let next_stmt = Type::Pi { dom_level: li.clone(), cod_level: lvl_sp.clone(), dom: Rc::clone(&ity), cod: Rc::new(next_s) };
         let next_body = Term::Lam {
             dom_level: li.clone(),
             cod_level: lvl_sp.clone(),
-            dom: Rc::clone(&ity2),
+            dom: Rc::clone(&ity),
             body: Rc::new(Term::Lam {
                 dom_level: ls.clone(),
                 cod_level: lvl_p.clone(),
                 dom: Rc::clone(&s_ty),
-                body: Rc::new(Term::Lam { dom_level: lp.clone(), cod_level: li.clone(), dom: p_ty, body: Rc::new(sig.next.shift_global(2)) }),
+                body: Rc::new(Term::Lam { dom_level: lp.clone(), cod_level: li.clone(), dom: p_ty, body: Rc::clone(&sig.next) }),
             }),
         };
         let lvl3 = Level::max(li, lvl_sp);
-        let _ = self.push_m_def(GenDef::MNext(ind.tag), ind, &tel2, next_stmt, lvl3, next_body, span);
+        let _ = self.push_m_def(GenDef::MNext(ind.tag), ind, &tel, next_stmt, lvl3, next_body, span);
     }
 
     /// Close `ty`/`body` (scoped over the telescope) over it and push the

@@ -37,9 +37,11 @@
 
 use super::*;
 
-/// One queued derivation: goal, level, Ψ length at capture, carrier head,
-/// and an open derivation's value (see [`ModulePass::pending_derived`]).
-pub(crate) type PendingDerived = (Type, Level, u32, Option<String>, Option<Term>);
+/// One queued derivation: goal, level, carrier head, and an open
+/// derivation's value (see [`ModulePass::pending_derived`]). The goal names
+/// committed definitions only, so it needs no record of the Ψ it was
+/// captured in.
+pub(crate) type PendingDerived = (Type, Level, Option<String>, Option<Term>);
 
 /// State one *module pass* owns: what the deferred kernel gate has in flight,
 /// the item loop's position, and the diagnostics and reports the pass has
@@ -100,7 +102,7 @@ pub(crate) struct ModulePass {
     /// (§8). Empty for every program that resolves nothing, which is what
     /// keeps the whole mechanism free.
     ///
-    /// The fifth slot is an **open** derivation's value
+    /// The last slot is an **open** derivation's value
     /// ([`Elaborator::record_open`]): the type is then a Π over the context
     /// prefix the answer lived in, and the mint abstracts this term over the
     /// same binders instead of re-running the search.
@@ -588,17 +590,6 @@ pub(crate) struct Memos {
     /// with, by tag ([`Elaborator::share_iwf_part`]), so equal ones are one
     /// allocation. Nothing here is semantic.
     pub(crate) iwf_part_memo: RefCell<HashMap<(u32, bool), Rc<Type>>>,
-    /// The registry's guard copies that mention a global, each read where
-    /// its last reader was ([`Elaborator::guard_ty`]): the shift and the
-    /// frame it was read at, the raw copy, and the read. Nothing here is
-    /// semantic.
-    pub(crate) guard_reads: RefCell<HashMap<gendefs::GuardKey, (u32, Rc<Type>, Rc<Type>)>>,
-    /// A `Wf` slot pair's guard as the one former it is read as, by the raw
-    /// shape it was built from.
-    pub(crate) guard_slot_formers: RefCell<HashMap<u32, (Rc<Type>, Rc<Type>)>>,
-    /// …and a spine's components, read together so a sum keeps pointing at
-    /// its sides ([`Elaborator::with_spine`]).
-    pub(crate) guard_spine_reads: RefCell<HashMap<u32, (u32, Rc<Type>, Rc<gendefs::SpineCodes>)>>,
     /// The type names the program has written (`u8`, `i(n)`, its own `def
     /// Byte: Type = …`), least recently written first, each with the
     /// instance it expands to ([`Elaborator::record_type_name`]). Read only
@@ -640,9 +631,6 @@ impl Memos {
             named_type_memo,
             // Keyed by tag and by an `Rc`'s address (held), not by position.
             iwf_part_memo: _,
-            guard_reads: _,
-            guard_slot_formers: _,
-            guard_spine_reads: _,
             // Holds the Ψ position of each name's definition: a rollback can
             // put another `def` of the same name there.
             type_names,

@@ -3489,9 +3489,9 @@ impl Elaborator {
     /// signature-reflection round expected here
     /// (docs/opaque-globals-analysis-design.md §2): the opaque-globals round
     /// settled unfolding-for-analysis *at the reflection boundary*, so the
-    /// Ψ-read + rescope below (`shift_global` by the Ψ growth since the
-    /// binding — the same `v + 1` convention `Defs::body` uses on
-    /// prefix-scoped kernel data) already *is* `u^δ` unfolding-on-request.
+    /// Ψ-read below (a committed statement is read as stored, as
+    /// `Defs::body` reads a constant's body) already *is* `u^δ`
+    /// unfolding-on-request.
     /// No kernel machinery replaces it and no ch. 07 obligation attaches,
     /// because the kernel never learns reflection happened.
     ///
@@ -3512,9 +3512,9 @@ impl Elaborator {
         // §2.3), and a statement elaborated outside a quote may: translate it
         // in the binding's own world before rescoping.
         let ty = self.code_form_ty(abs, ctx, Rc::clone(ty), level)?;
-        let ty = &ty;
-        let growth = (self.psi.bindings.len() - abs) as u32;
-        let ty = ty.shift_global(growth);
+        // A committed statement names committed definitions only: it is
+        // read as stored.
+        let ty = (*ty).clone();
         // Unfolding-for-analysis, per the doctrine above, now with a second
         // case: a statement spells registered lowerings as `El (D#tycode^δ)`
         // (`docs/annotation-component-respell-design.md` §2.1), and at layer
@@ -10410,16 +10410,13 @@ impl Elaborator {
         let Some(GlobalInfo { abs, .. }) = self.names.global(global) else { return false };
         let Some(GlobalBinding::Tm { ty, .. }) = self.psi.bindings.get(*abs as usize) else { return false };
         // The use-site type, as a reference to the global would carry it
-        // (`elab_var`): rescoped to the full Ψ, then out of the empty context
-        // it was declared in into this Γ.
-        let len = self.psi.bindings.len() as u32;
-        let meta_off = self.scope.meta_pushed.borrow().len() as u32;
-        let var = len - 1 - abs + self.global_padding() + meta_off;
+        // (`elab_var`): a committed statement as stored, out of the empty
+        // context it was declared in into this Γ.
         let empty = LocalSubst {
             tail: SubstTail::Empty,
             terms: vec![],
         };
-        let ty = ty.shift_global(var + 1).apply_local(&empty);
+        let ty = ty.apply_local(&empty);
         // One slot per leading binder, instantiated as an application's
         // implicits are: the slots sit innermost, under the identity.
         let mut n = 0u32;
