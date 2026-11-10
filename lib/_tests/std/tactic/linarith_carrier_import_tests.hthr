@@ -1,0 +1,33 @@
+// Probes of `linarith` and `ring` in a module that imports the carrier and
+// the tactic and nothing of the ordered-field tower
+// (issues/linarith-rat-without-ordered-field-import.md). The classes the
+// tactics read the carrier through (`ordered_field::OrderedField`,
+// `semiring::CommRingOfInt`) are reached through the common prelude, which
+// imports `ordered_field` without exporting a name of it, and the class a
+// certificate lemma's signature names (`ring::RingExpr::eval_rel`'s
+// `CommRingOfInt<A>(≈, +, *)`) is read where that lemma was written. Before
+// either, the goal fell to the `Int` reading of `Rat`'s order and a numeral
+// in a certificate was an atom. Tests, not library (docs/test-value-audit.md
+// §4.5); keep the import lines as they are.
+import rat;
+import creal;
+import ring;
+import linarith;
+
+// The issue's line (lib/std/locale/real_locale.hthr's midpoint step).
+theorem rat_lt_of_twice({p, q, m: Rat}, h: p < q, e: m + m ≈ p + q): p < m { linarith(h, e) }
+theorem creal_lt_of_twice({p, q, m: CReal}, h: p < q, e: m + m ≈ p + q): p < m { linarith(h, e) }
+
+// Coefficients the certificate writes as numerals, and numerals written.
+theorem rat_double({x, y: Rat}, h: x <= y, k: 0 <= x): x <= y + y { linarith(h, k) }
+theorem rat_scaled(x, y: Rat, h1: 2 * x + y <= 3, h2: x - y <= 0): 3 * x <= 3 { linarith(h1, h2) }
+theorem creal_constant(x: CReal, h: x <= 0): x < 2 { linarith(h) }
+
+// `ring` reads `Rat`'s numerals as constants, not atoms.
+theorem rat_ring_two(p: Rat): 2 * p ≈ p + p { ring }
+theorem creal_ring_three(p: CReal): 3 * p ≈ p + p + p { ring }
+
+// Negative control: a goal the facts do not give is still refused, at `Rat`
+// and not at the `Int` reading of its order.
+// expect-error: no nonnegative combination of the facts and the goal's negation is a contradiction over `Rat`
+theorem rat_not_given({x, y: Rat}, h: x <= y): y <= x { linarith(h) }

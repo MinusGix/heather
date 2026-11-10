@@ -1,6 +1,6 @@
 ---
 title: linarith at Rat without ordered_field in scope reads the goal at Int and fails there
-status: open
+status: closed
 labels: [tactics,linarith,diagnostics]
 area: tactics
 created: 2026-11-10
@@ -31,3 +31,7 @@ numerator-denominator reading, which is nonlinear.
   carrier and the tactic is enough.
 
 Found writing lib/std/locale/real_locale.hthr (docs/localic-reals-design.md §8).
+
+## Log
+
+- 2026-11-10: Done (thread 'Make linarith work on Rat without imports'), the issue's second option in Minus's form: the prelude imports ordered_field (qualified-only), so the tactics' key lookups of ordered_field::OrderedField and semiring::CommRingOfInt succeed; and a callee's written solver goal (ring::RingExpr::eval_rel's CommRingOfInt<A>(≈, +, *)) whose class the caller cannot name is read in the callee's module (dispatch/dictionary.rs solver_class_ref), which made numerals in linarith's certificates and in ring at Rat constants again. Probes: lib/_tests/std/tactic/linarith_carrier_import_tests.hthr. The first option (a diagnostic naming the missing import) is moot for Rat/CReal.

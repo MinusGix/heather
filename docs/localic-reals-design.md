@@ -222,7 +222,9 @@ classes as they are. Three things were worked around and filed.
   explicitly, as `Cover::trans` does.
 - **`linarith` at `Rat` without `ordered_field` imported** reads the goal at
   `Int`, through numerators and denominators, and fails with that reading
-  (`issues/linarith-rat-without-ordered-field-import.md`).
+  (`issues/linarith-rat-without-ordered-field-import.md`). Fixed
+  2026-11-10: the common prelude imports `ordered_field`, so `import rat;
+  import linarith;` is enough.
 - **`QInterval.rel_trans(…)`**, a class member at a carrier whose relation
   index nothing in the call pins, is refused with a clear message; the module
   states `QInterval::le_trans` as a theorem. Not filed: the message says what

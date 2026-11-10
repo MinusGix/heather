@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,modules,tactics,cleanup]
 area: mathematics
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-10
 ---
 
 The arithmetic tactics import the theories they automate, so those theories
@@ -64,3 +64,7 @@ landing.
 
 [[feature-implicit-module-dependencies]], [[std-prelude-facade]];
 docs/stdlib-math-awkwardness-survey.md §4.
+
+## Log
+
+- 2026-11-10: 2026-11-10: the common prelude now imports ordered_field (issues/linarith-rat-without-ordered-field-import.md), so nat, int, omega, semiring, order and ordered_field are inside the prelude's closure. A split here keeps whatever the prelude's import reaches free of the prelude itself; a theory module that moves after its tactic leaves that closure and sees the prelude again.
