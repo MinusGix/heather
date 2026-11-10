@@ -935,48 +935,6 @@ pub(crate) struct SpineCodes {
     pub(crate) nodes: Vec<(Rc<Type>, Level)>,
 }
 
-impl SpineCodes {
-    /// Every component read as [`guard_read`] reads one, a sum over the
-    /// components' own nodes rebuilt over the read ones, so it keeps sharing
-    /// its sides with them as [`spine_agreement`]'s cheap path reads.
-    fn read(&self, by: u32) -> SpineCodes {
-        let ctors: Vec<(Rc<Type>, Level)> =
-            self.ctors.iter().map(|(ty, l)| (Rc::new(guard_read(ty, by)), l.clone())).collect();
-        let mut moved: HashMap<*const Type, Rc<Type>> =
-            self.ctors.iter().zip(&ctors).map(|((raw, _), (new, _))| (Rc::as_ptr(raw), Rc::clone(new))).collect();
-        // A node's sides follow it in the preorder.
-        let mut nodes: Vec<Option<(Rc<Type>, Level)>> = vec![None; self.nodes.len()];
-        for (j, (raw, l)) in self.nodes.iter().enumerate().rev() {
-            let over_sides = match &**raw {
-                Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
-                    match (moved.get(&Rc::as_ptr(lhs)), moved.get(&Rc::as_ptr(rhs))) {
-                        (Some(new_l), Some(new_r)) => Some(Type::Sum {
-                            lhs_level: lhs_level.clone(),
-                            rhs_level: rhs_level.clone(),
-                            lhs: Rc::clone(new_l),
-                            rhs: Rc::clone(new_r),
-                        }),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            let new = Rc::new(over_sides.unwrap_or_else(|| guard_read(raw, by)));
-            moved.insert(Rc::as_ptr(raw), Rc::clone(&new));
-            nodes[j] = Some((new, l.clone()));
-        }
-        SpineCodes { ctors, nodes: nodes.into_iter().map(|n| n.expect("every node moved")).collect() }
-    }
-}
-
-/// A guard copy cut in the empty context at some Ψ length, read `by`
-/// globals later: what the kernel's unfolding of a reference to the
-/// definition minted from it does to the body. The copy is closed, so it is
-/// the same in every local context.
-fn guard_read(raw: &Type, by: u32) -> Type {
-    raw.shift_global(by)
-}
-
 /// Per component, whether `spine`'s is structurally the registered one —
 /// [`Elaborator::spine_refs_by_position`]'s guard, at the cost of the
 /// payloads rather than of the sums.
@@ -1091,13 +1049,6 @@ struct GenDefLayer {
     /// ([`Elaborator::register_spine_codes`]), the inline spine the codes
     /// were minted from — the use-site guard, written all-or-nothing.
     spine_codes: HashMap<u32, SpineCodes>,
-    /// The Ψ length a guard copy above was cut at, for the copies that
-    /// mention a global (a function in a field's type). A global counts from
-    /// the end of Ψ, so such a copy equals the lowering in front of a reader
-    /// only once it is read in the reader's world
-    /// ([`Elaborator::guard_ty`]); a closed copy is the same in every world
-    /// and has no entry (`issues/codes-registered-in-a-stale-scope.md`).
-    guard_at: HashMap<GuardKey, u32>,
 }
 
 /// [`GenDefLayer`]'s tables, as the layer index numbers them.
@@ -1108,10 +1059,9 @@ const TY_CODE: usize = 3;
 const TY_CODE_FN: usize = 4;
 const WF_SLOTS: usize = 5;
 const SPINE_CODES: usize = 6;
-const GUARD_AT: usize = 7;
 
 impl RegistryLayer for GenDefLayer {
-    const TABLES: usize = 8;
+    const TABLES: usize = 7;
 
     fn keys(&self, table: usize, out: &mut dyn FnMut(u64)) {
         match table {
@@ -1122,33 +1072,15 @@ impl RegistryLayer for GenDefLayer {
             TY_CODE_FN => self.ty_code_fn.keys().for_each(|k| out(index_hash(k))),
             WF_SLOTS => self.wf_slots.keys().for_each(|k| out(index_hash(k))),
             SPINE_CODES => self.spine_codes.keys().for_each(|k| out(index_hash(k))),
-            GUARD_AT => self.guard_at.keys().for_each(|k| out(index_hash(k))),
             _ => unreachable!("GenDefLayer has {} tables", Self::TABLES),
         }
     }
 }
 
-/// Which guard copy a [`GenDefLayer::guard_at`] entry scopes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum GuardKey {
-    TyCode(u32),
-    Spine(u32),
-    WfSlots(u32),
-}
-
-/// Whether `ty` mentions a global **variable**: shifting the globals changes
-/// it. A constant does not move, so a type that names committed definitions
-/// only is not one (`crates/kernel/DESIGN.md`, "Constants are addressed from
-/// the start of Ψ").
-pub(crate) fn mentions_global(ty: &Type) -> bool {
-    ty.shift_global(1) != *ty
-}
-
-/// Whether `t` names a binding of Ψ at all, constant or variable. Not the
-/// question [`mentions_global`] answers, and not one a shift can answer: a
-/// reference to a committed definition is unchanged by every weakening. A
-/// guard that means "this is a literal" asks this
-/// (`issues/literal-guards-read-constants-as-closed.md`).
+/// Whether `t` names a binding of Ψ at all, constant or variable. Not a
+/// question a shift can answer: a reference to a committed definition is
+/// unchanged by every weakening. A guard that means "this is a literal" asks
+/// this (`issues/literal-guards-read-constants-as-closed.md`).
 pub(crate) fn names_global(t: &Term) -> bool {
     t.reindex_global(&mut |_| None).is_none()
 }
@@ -1252,14 +1184,6 @@ impl GenDefs {
 
     pub(crate) fn insert_ty_code(&mut self, tag: u32, value: (Rc<Type>, Level)) {
         self.tables.current_mut().ty_code.insert(tag, value);
-    }
-
-    pub(crate) fn guard_at(&self, key: GuardKey) -> Option<u32> {
-        self.tables.find(GUARD_AT, &key, |layer| layer.guard_at.get(&key).copied())
-    }
-
-    pub(crate) fn insert_guard_at(&mut self, key: GuardKey, at: u32) {
-        self.tables.current_mut().guard_at.insert(key, at);
     }
 
     pub(crate) fn insert_wf_slots(&mut self, tag: u32, value: WfSlots) {
@@ -1400,9 +1324,8 @@ impl Elaborator {
         if crate::code::code_of(&d_ty).is_none() {
             return;
         }
-        // The inline lowering as a code, read when it is pushed: the spine
-        // and slot definitions registered first move Ψ under it.
-        let inline_body = |me: &Self| crate::code::code_of(&me.read_now(&d_ty, at)).expect("checked above");
+        // The inline lowering as a code.
+        let inline_body = || crate::code::code_of(&d_ty).expect("checked above");
         // A flat declaration names its spine *first*, and its whole-type code
         // is then spelled over those names rather than as the inline literal
         // (`issues/inductive-spelling-codes-nonrecursive.md`): `El (D#tycode^δ)`
@@ -1420,7 +1343,7 @@ impl Elaborator {
             // then exposes exactly that, where the literal body made the
             // kernel walk the inline shape against the reference.
             self.register_wf_slots(ind, &d_ty, &l, at, span);
-            let named = match &self.read_now(&d_ty, at) {
+            let named = match &d_ty {
                 Type::Wf { level, shape, arity } => self
                     .wf_slot_refs(shape, arity)
                     .map(|(shape, arity)| Type::Wf {
@@ -1432,7 +1355,7 @@ impl Elaborator {
             };
             named
                 .and_then(|t| crate::code::code_of(&t))
-                .unwrap_or_else(|| inline_body(self))
+                .unwrap_or_else(inline_body)
         } else {
             match self.register_spine_codes(ind, &d_ty, &l, at, span) {
                 Some(named) => named,
@@ -1442,9 +1365,9 @@ impl Elaborator {
                 // what the constructor tuple is annotated with — rather than
                 // `F` inline, walked per constructor value.
                 None => self
-                    .respell_ty_deep(&cx, &self.read_now(&d_ty, at), 0)
+                    .respell_ty_deep(&cx, &d_ty, 0)
                     .and_then(|t| crate::code::code_of(&t))
-                    .unwrap_or_else(|| inline_body(self)),
+                    .unwrap_or_else(inline_body),
             }
         };
         let ty = Type::Ty(l.clone());
@@ -1746,8 +1669,6 @@ impl Elaborator {
         let spine = self.spine(d_ty, l, n, span).ok()?;
         let cx = Cx::empty();
         for (k, (ctor, lk)) in spine.ctors.iter().enumerate() {
-            // Each payload pushed moves the Ψ the next one is read in.
-            let ctor = &self.read_now(ctor, at);
             let emit = self.respell_ty_deep(&cx, ctor, 0);
             let body = crate::code::code_of(emit.as_ref().unwrap_or(ctor))?;
             self.push_gen_def(
@@ -1866,7 +1787,7 @@ impl Elaborator {
         // The declaration's own telescope and the context it lowers in —
         // `register_ty_code_fn`'s, verbatim, which is what makes the two
         // definitions' arguments the same `ā` at every use site.
-        let (mut tel, cx, targs, vargs) = if telescoped {
+        let (tel, cx, targs, vargs) = if telescoped {
             let Some((cx, binders, targs, vargs)) = self.tycode_fn_telescope(ind, span) else {
                 decline!("register_rec_projs", &ind.name, "telescope");
                 return;
@@ -1903,7 +1824,7 @@ impl Elaborator {
         // declaration. `Target`'s `X86Profile` is one, inline twenty times the
         // size of its name, and every `t.r` converted the two
         // (`issues/native-lemma-kernel-steps.md`).
-        let mut d_ty = Rc::new(if telescoped {
+        let d_ty = Rc::new(if telescoped {
             let Some(r) = self.respell_ty(&cx, &template) else {
                 decline!("register_rec_projs", &ind.name, "binder-reference");
                 return;
@@ -2025,19 +1946,9 @@ impl Elaborator {
                     decline!("register_rec_projs", &ind.name, "tail-family-{step}");
                     return;
                 };
-                d_ty = Rc::new(d_ty.shift_global(1));
-                shift_tel(&mut tel);
                 tf
             };
-            let (fst, mut structural, pair_g) = if simple {
-                (fst, structural, Rc::clone(&pair))
-            } else {
-                (
-                    Rc::new(fst.shift_global(1)),
-                    Rc::new(structural.shift_global(1)),
-                    Rc::new(pair.shift_global(1)),
-                )
-            };
+            let pair_g = Rc::clone(&pair);
             let proj = Rc::new(Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -2065,20 +1976,11 @@ impl Elaborator {
                     decline!("register_rec_projs", &ind.name, "projection-{}", step - 1);
                     return;
                 };
-                // Ψ just grew by one, so everything carried past the push is
-                // one binding further out (`Defs::body`'s convention). The
-                // walk is the only thing here that keeps terms across a push,
-                // and this is what keeps the references inside them — the
-                // families, projections and tails already registered —
-                // pointing at what they did.
-                d_ty = Rc::new(d_ty.shift_global(1));
-                shift_tel(&mut tel);
-                structural = Rc::new(structural.shift_global(1));
-                (
-                    payload,
-                    Rc::new(rest.shift_global(1)),
-                    Rc::new(tail_ann.shift_global(1)),
-                )
+                // Ψ just grew by one. Everything carried past the push names
+                // committed definitions only, so it is unchanged
+                // (`crates/kernel/DESIGN.md`, "Constants are addressed from
+                // the start of Ψ").
+                (payload, rest, tail_ann)
             };
             if step == nfields {
                 return;
@@ -2104,14 +2006,10 @@ impl Elaborator {
                 decline!("register_rec_projs", &ind.name, "tail-{step}");
                 return;
             };
-            d_ty = Rc::new(d_ty.shift_global(1));
-            shift_tel(&mut tel);
             // The walk itself keeps the spelled-out tail: it is what the next
             // entry's components are read off, and reading them off the code
             // would only mean decoding it again.
-            cur = structural
-                .apply_local(&LocalSubst::id(&vcx.gamma).extended(payload))
-                .shift_global(1);
+            cur = structural.apply_local(&LocalSubst::id(&vcx.gamma).extended(payload));
             pair = next;
         }
     }
@@ -2241,7 +2139,7 @@ impl Elaborator {
         let (tm, _, _) = saturate(
             &xcx.gamma,
             fun,
-            &ty.shift_global(1),
+            &ty,
             &tel_self_args(tel.len(), 2),
         )?;
         Some(Rc::new(Type::El {
@@ -2300,7 +2198,7 @@ impl Elaborator {
         let (tm, _, _) = saturate(
             &vcx.gamma,
             fun,
-            &ty.shift_global(1),
+            &ty,
             &tel_self_args(tel.len(), 1),
         )?;
         Some(Rc::new(tm))
@@ -2448,7 +2346,6 @@ impl Elaborator {
             Some(named) => named,
             None => {
                 // A spine that declined part way pushed its first payloads.
-                let shape = &self.read_now(shape, at);
                 let emitted = self.respell_ty_deep(&cx, shape, 0);
                 let Some(scode) = crate::code::code_of(emitted.as_ref().unwrap_or(shape)) else {
                     return;
@@ -2485,7 +2382,7 @@ impl Elaborator {
             dom_level: l.clone(),
             cod_level: Level::Zero,
             dom: Rc::new(sref),
-            body: Rc::new(arity.shift_global(self.lowering_scope() - at)),
+            body: Rc::clone(arity),
         };
         if self
             .push_gen_def(akey, &ind.name, ty, l.clone(), body, span)
@@ -2531,27 +2428,16 @@ impl Elaborator {
         })?;
         let slots = self.types.gdefs().wf_slots(&ind.tag)?;
         let l = &slots.level;
-        let (guard_shape, guard_arity) = self.guard_slots(ind.tag, slots, self.gen_ref_len(0))?;
-        if *guard_arity != *arity {
+        let (guard_shape, guard_arity) = (&slots.shape, &slots.arity);
+        if **guard_arity != *arity {
             return None;
         }
-        // The decode copy is `El` of `D#shape`'s *body*, which is scoped over
-        // the Ψ prefix before the definition (its `abs`): every reference in
-        // it — the spine's names, a named field type — counts from there,
-        // and the kernel's unfolding rescopes it to the current world. So the
-        // registry's copy is rescoped the same way before it is compared;
-        // compared raw, it stopped matching the first time Ψ grew past the
-        // declaration (`issues/recursive-spine-codes.md`, 2026-10-03).
-        if *guard_shape != *shape {
-            let gdefs = self.types.gdefs();
-            let Some(&abs) = gdefs.abs_for(&GenDef::ShapeCode(ind.tag)) else {
-                return None;
-            };
-            let now = self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset();
-            let by = now.checked_sub(abs)?;
-            if slots.shape_decoded.shift_global(by) != *shape {
-                return None;
-            }
+        // The decode copy is `El` of `D#shape`'s *body*: the spelling the
+        // kernel's unfolding of the reference gives, over the spine's names
+        // and named field types. Either copy names committed definitions
+        // only, so both are compared as stored.
+        if **guard_shape != *shape && *slots.shape_decoded != *shape {
+            return None;
         }
         let sref = self.gen_type_ref(GenDef::ShapeCode(ind.tag), l)?;
         let fun = self.gen_ref(GenDef::ArityFn(ind.tag))?;
@@ -2576,100 +2462,20 @@ impl Elaborator {
     /// [`GenDefs::ty_code`]). `None` means no closed registration matched;
     /// parameterized or component naming may still apply.
     pub(crate) fn closed_type_ref(&self, tag: u32, inline: &Type) -> Option<Type> {
-        self.closed_type_ref_in(tag, inline, 0)
-    }
-
-    /// [`Self::closed_type_ref`] for a type in a world `g` scratch globals
-    /// deep: where a global in it counts from.
-    fn closed_type_ref_in(&self, tag: u32, inline: &Type, g: u32) -> Option<Type> {
         let (registered, level) = self.types.gdefs().ty_code(&tag)?;
-        if *self.guard_ty(GuardKey::TyCode(tag), registered, self.gen_ref_len(g))? != *inline {
+        if **registered != *inline {
             return None;
         }
         self.gen_type_ref(GenDef::TyCode(tag), level)
     }
 
-    /// A guard copy of the registry, `raw`, read where a reader is: at Ψ
-    /// length `len`. A copy that mentions no global is the same everywhere
-    /// and comes back as it is. One that mentions a global is not: its
-    /// globals count from the end of Ψ, so they move past the definitions
-    /// committed since it was cut. That is the only movement: a closed copy
-    /// is one spelling in every local context and under any binders, because
-    /// a global's empty substitution records nothing about where it sits
-    /// (`issues/empty-substitution-tail-decoration.md`). `None` for a world
-    /// before the copy's own. One read is kept per guard, keyed by what it
-    /// is a function of (`issues/codes-registered-in-a-stale-scope.md`).
-    pub(crate) fn guard_ty(&self, key: GuardKey, raw: &Rc<Type>, len: u32) -> Option<Rc<Type>> {
-        let Some(at) = self.types.gdefs().guard_at(key) else {
-            return Some(Rc::clone(raw));
-        };
-        let by = len.checked_sub(at)?;
-        if let Some((b, r, read)) = self.memos.guard_reads.borrow().get(&key)
-            && *b == by
-            && Rc::ptr_eq(r, raw)
-        {
-            return Some(Rc::clone(read));
-        }
-        let read = Rc::new(guard_read(raw, by));
-        self.memos.guard_reads.borrow_mut().insert(key, (by, Rc::clone(raw), Rc::clone(&read)));
-        Some(read)
-    }
-
-    /// [`Self::guard_ty`] for a `Wf` slot pair, read as the one `Wf` former
-    /// it is.
-    fn guard_slots(&self, tag: u32, slots: &WfSlots, len: u32) -> Option<(Rc<Type>, Rc<Term>)> {
-        if self.types.gdefs().guard_at(GuardKey::WfSlots(tag)).is_none() {
-            return Some((Rc::clone(&slots.shape), Rc::clone(&slots.arity)));
-        }
-        let hit = self
-            .memos.guard_slot_formers
-            .borrow()
-            .get(&tag)
-            .filter(|(raw, _)| Rc::ptr_eq(raw, &slots.shape))
-            .map(|(_, former)| Rc::clone(former));
-        let former = match hit {
-            Some(former) => former,
-            None => {
-                let former = Rc::new(Type::Wf {
-                    level: slots.level.clone(),
-                    shape: Rc::clone(&slots.shape),
-                    arity: Rc::clone(&slots.arity),
-                });
-                self.memos.guard_slot_formers.borrow_mut().insert(tag, (Rc::clone(&slots.shape), Rc::clone(&former)));
-                former
-            }
-        };
-        let read = self.guard_ty(GuardKey::WfSlots(tag), &former, len)?;
-        let Type::Wf { shape, arity, .. } = &*read else { return None };
-        Some((Rc::clone(shape), Rc::clone(arity)))
-    }
-
-    /// `f` of the declaration's spine codes read where a reader is
-    /// ([`Self::guard_ty`]), all components together so that a sum still
-    /// shares its sides with the components (`spine_agreement`'s cheap
-    /// path). `None` when there are none, or for a world before their own.
-    fn with_spine<R>(&self, tag: u32, len: u32, f: impl FnOnce(&SpineCodes) -> R) -> Option<R> {
-        let codes = self.types.gdefs().spine_codes(&tag)?;
-        let Some(at) = self.types.gdefs().guard_at(GuardKey::Spine(tag)) else {
-            return Some(f(codes));
-        };
-        let by = len.checked_sub(at)?;
-        let raw = &codes.ctors.first()?.0;
-        let hit = self
-            .memos.guard_spine_reads
-            .borrow()
-            .get(&tag)
-            .filter(|(b, r, _)| *b == by && Rc::ptr_eq(r, raw))
-            .map(|(_, _, read)| Rc::clone(read));
-        let read = match hit {
-            Some(read) => read,
-            None => {
-                let read = Rc::new(codes.read(by));
-                self.memos.guard_spine_reads.borrow_mut().insert(tag, (by, Rc::clone(raw), Rc::clone(&read)));
-                read
-            }
-        };
-        Some(f(&read))
+    /// `f` of the declaration's spine codes, the registry's own copy: it
+    /// names committed definitions only, so it is the same type in every
+    /// world that can see the declaration
+    /// (`crates/kernel/DESIGN.md`, "Constants are addressed from the start
+    /// of Ψ"). `None` when there are none.
+    fn with_spine<R>(&self, tag: u32, f: impl FnOnce(&SpineCodes) -> R) -> Option<R> {
+        self.types.gdefs().spine_codes(&tag).map(f)
     }
 
     /// `lowered` spelled with the **registered** lowering's own nodes when it
@@ -2690,7 +2496,7 @@ impl Elaborator {
             .types
             .gdefs()
             .ty_code(&tag)
-            .and_then(|(registered, _)| self.guard_ty(GuardKey::TyCode(tag), registered, self.lowering_scope()));
+            .map(|(registered, _)| Rc::clone(registered));
         match registered {
             Some(registered) if *registered == lowered.0 => ((*registered).clone(), lowered.1),
             _ => lowered,
@@ -2725,8 +2531,7 @@ impl Elaborator {
     /// verbatim (§4.1's depth paragraph).
     pub(crate) fn respell_ty_at(&self, cx: &Cx, ty: &Type, d: u32, g: u32) -> Option<Type> {
         let ind = self.tag_of(ty)?;
-        if let Some(r) = self.closed_type_ref_in(ind.tag, ty, g) {
-            let r = if g == 0 { r } else { r.shift_global(g) };
+        if let Some(r) = self.closed_type_ref(ind.tag, ty) {
             return Some(if d == 0 { r } else { r.shift_local(d) });
         }
         // The one decline this site can report that the instance route cannot:
@@ -2796,7 +2601,7 @@ impl Elaborator {
         }
         let Type::Pi { dom, cod, .. } = self.whnf(cx, expected, span)? else { return Ok(None) };
         let (Type::Ty(l_s), Type::Ty(want)) = (&*dom, &*cod) else { return Ok(None) };
-        let Some(entry) = self.ty_code_fn_now(ind.tag, 0) else { return Ok(None) };
+        let Some(entry) = self.ty_code_fn_entry(ind.tag) else { return Ok(None) };
         if !entry.level.equiv(want) || !entry.param_levels.get(s).is_some_and(|l| l.equiv(l_s)) {
             return Ok(None);
         }
@@ -2839,7 +2644,7 @@ impl Elaborator {
         if s + 1 == ind.params.len() || args.len() != ind.params.len() || !ind.valparams.is_empty() {
             return None;
         }
-        let entry = self.ty_code_fn_now(tag, 0)?;
+        let entry = self.ty_code_fn_entry(tag)?;
         let mut head = tm;
         while let Some((fun, _)) = crate::spelling::app_of(head) {
             head = fun;
@@ -2858,7 +2663,7 @@ impl Elaborator {
             || ind.index.is_some()
             || !ind.co_index.is_empty()
             || !ind.members.is_empty()
-            || self.ty_code_fn_now(ind.tag, 0).is_some()
+            || self.ty_code_fn_entry(ind.tag).is_some()
         {
             return None;
         }
@@ -2963,7 +2768,7 @@ impl Elaborator {
     /// and no literal is left anywhere.
     fn instance_ref(&self, cx: &Cx, ind: &Inductive, ty: &Type, d: u32, g: u32) -> Option<Type> {
         let (level, args) = self.instance_match(cx, ind, ty, d, g)?;
-        let Some(spine) = self.gen_spine(cx, ind.tag, &args, d, g) else {
+        let Some(spine) = self.gen_spine(cx, ind.tag, &args, d) else {
             decline!("instance_ref", &ind.name, "spine");
             return None;
         };
@@ -2973,55 +2778,16 @@ impl Elaborator {
         })
     }
 
-    /// A registered [`TyCodeFn`] **read into the world its reader compares it
-    /// in**, which is never the world it was stored in.
-    ///
-    /// [`Self::register_ty_code_fn`] computes the template and the statement,
-    /// pushes `D#tycode_fn`, and commits them as computed — so both sit in the
-    /// Ψ prefix *before* the definition's own binding, exactly where a
-    /// binding's declared type sits. `GlobalVar`s number from the end of Ψ, so
-    /// from that push on every declaration moves the indices inside them, and a
-    /// reader comparing the stored copy against a type built now is comparing
-    /// two frames: the subject spells every global `len_at - abs` higher. For a
-    /// declaration whose lowering mentions no global that is a difference of
-    /// nothing, which is why the device looked like it had a dependency
-    /// boundary; for every other one it is the whole match, and §4.1's identity
-    /// step declined silently at every use site
+    /// The registered [`TyCodeFn`] of a declaration: its template and the
+    /// statement of `D#tycode_fn`, as stored. Both name committed
+    /// definitions only, so they are the same terms in every world that can
+    /// see the declaration, whatever was committed or pushed since
+    /// (`crates/kernel/DESIGN.md`, "Constants are addressed from the start
+    /// of Ψ"). Until 2026-11-10 a reader had to say which world it compared
+    /// in, and the entry was rescoped to it at every read
     /// (`docs/telescoped-record-projections-design.md` §2.1).
-    ///
-    /// The rescoping is on the **read**, off the reference's own variable —
-    /// [`Self::rec_proj_ref_at`]'s discipline for a projection's `Π`, for the
-    /// same reason it gives — and never a shift at commit time, which is right
-    /// for one instant and wrong after the next push. Nothing about the stored
-    /// entry or the image codec changes, so a replayed image self-corrects.
-    ///
-    /// `len_at` is the Ψ length the reader's own globals count from: the
-    /// reflection boundary's explicit anchor ([`Self::unspell_ty_deep`], which
-    /// deliberately assumes no padding), or [`Self::ty_code_fn_now`]'s
-    /// committed world.
-    pub(crate) fn ty_code_fn_at(&self, tag: u32, len_at: u32) -> Option<TyCodeFn> {
-        let entry = self.types.gdefs().ty_code_fn(&tag)?;
-        let abs = *self.types.gdefs().abs_for(&GenDef::TyCodeFn(tag))?;
-        let by = len_at.checked_sub(abs)?;
-        if by == 0 {
-            return Some(entry.clone());
-        }
-        Some(TyCodeFn {
-            template: Rc::new(entry.template.shift_global(by)),
-            stmt: Rc::new(entry.stmt.shift_global(by)),
-            param_levels: entry.param_levels.clone(),
-            level: entry.level.clone(),
-        })
-    }
-
-    /// [`Self::ty_code_fn_at`] in the committed world, `g` scratch globals
-    /// deep. This is [`Self::gen_ref`]'s own numbering — goal arena and `meta
-    /// fn` padding included — so the shift it computes is exactly the
-    /// `var.0 + 1` of the reference the caller is about to mint or has just
-    /// read, which is what makes the entry and the reference agree whatever
-    /// pushed in between.
-    pub(crate) fn ty_code_fn_now(&self, tag: u32, g: u32) -> Option<TyCodeFn> {
-        self.ty_code_fn_at(tag, self.gen_ref_len(g))
+    pub(crate) fn ty_code_fn_entry(&self, tag: u32) -> Option<TyCodeFn> {
+        self.types.gdefs().ty_code_fn(&tag).cloned()
     }
 
     /// The Ψ length a reference minted `g` scratch globals deep counts from —
@@ -3033,16 +2799,14 @@ impl Elaborator {
 
     /// `body[ā]` for an application `u^δ ā` of the registered definition
     /// `key` whose arguments are scoped in a context of `len` entries over
-    /// `base`: the stored body read into the committed world (the same
-    /// `shift_global` [`Self::ty_code_fn_at`] applies), its leading `λ`s
-    /// peeled one per argument and instantiated. `None` when `key` is not
+    /// `base`: the stored body, its leading `λ`s peeled one per argument
+    /// and instantiated. `None` when `key` is not
     /// registered or has fewer `λ`s than arguments. The structural readers of
     /// a named codata signature unfold through this
     /// (`docs/codata-named-signature-design.md` §3).
     pub(crate) fn unfold_gen_app(&self, key: GenDef, args: &[Rc<Term>]) -> Option<Term> {
         let abs = *self.types.gdefs().abs_for(&key)?;
         let (_, body) = self.global_body_at(abs as usize)?;
-        let by = self.gen_ref_len(0).checked_sub(abs)?;
         let mut cur: &Term = &body;
         for _ in args {
             let Term::Lam { body, .. } = cur else {
@@ -3051,7 +2815,7 @@ impl Elaborator {
             cur = body;
         }
         let subst = LocalSubst { tail: SubstTail::Empty, terms: args.to_vec() };
-        Some(cur.shift_global(by).apply_local(&subst))
+        Some(cur.apply_local(&subst))
     }
 
     /// [`Self::instance_ref`]'s two steps without the spine: the recovered
@@ -3098,7 +2862,7 @@ impl Elaborator {
         g: u32,
     ) -> Option<(Level, Vec<Rc<Term>>)> {
         crate::stats::count(crate::stats::Counter::InstanceMatchCalls);
-        let Some(entry) = self.ty_code_fn_now(ind.tag, g) else {
+        let Some(entry) = self.ty_code_fn_entry(ind.tag) else {
             decline!("instance_match", &ind.name, "no-tycode-fn");
             return None;
         };
@@ -3229,14 +2993,14 @@ impl Elaborator {
     /// ([`Self::instance_match`]). A merged class's dictionary is assembled at
     /// its parents' types read this way (`Elaborator::join_parents`).
     pub(crate) fn instance_type_at(&self, cx: &Cx, tag: u32, args: &[Rc<Term>]) -> Option<(Type, Level)> {
-        let entry = self.ty_code_fn_now(tag, 0)?;
+        let entry = self.ty_code_fn_entry(tag)?;
         let mut cur = Type::clone(&entry.stmt);
         for arg in args {
             let Type::Pi { cod, .. } = cur else { return None };
             cur = cod.apply_local(&id_subst_at(cx, 0).extended(Rc::clone(arg)));
         }
         let Type::Ty(level) = cur else { return None };
-        let spine = self.gen_spine(cx, tag, args, 0, 0)?;
+        let spine = self.gen_spine(cx, tag, args, 0)?;
         Some((Type::El { level: level.clone(), tm: Rc::new(spine) }, level))
     }
 
@@ -3245,7 +3009,7 @@ impl Elaborator {
     /// and abstracts the rest, η-short (docs/lambda-carrier-instances-design.md
     /// §7.2). With every argument given it is [`Self::gen_spine`]'s spine.
     pub(crate) fn code_fn_prefix(&self, cx: &Cx, tag: u32, args: &[Rc<Term>]) -> Option<Term> {
-        let entry = self.ty_code_fn_now(tag, 0)?;
+        let entry = self.ty_code_fn_entry(tag)?;
         let mut head = self.gen_ref(GenDef::TyCodeFn(tag))?;
         let mut cur = Type::clone(&entry.stmt);
         for arg in args {
@@ -3271,12 +3035,9 @@ impl Elaborator {
         Some(head)
     }
 
-    fn gen_spine(&self, cx: &Cx, tag: u32, args: &[Rc<Term>], d: u32, g: u32) -> Option<Term> {
-        let entry = self.ty_code_fn_now(tag, g)?;
+    fn gen_spine(&self, cx: &Cx, tag: u32, args: &[Rc<Term>], d: u32) -> Option<Term> {
+        let entry = self.ty_code_fn_entry(tag)?;
         let mut head = self.gen_ref(GenDef::TyCodeFn(tag))?;
-        if g != 0 {
-            head = head.shift_global(g);
-        }
         let mut cur = Type::clone(&entry.stmt);
         for arg in args {
             let Type::Pi {
@@ -3319,7 +3080,7 @@ impl Elaborator {
     /// the whole spine's tag says whose components they are.
     #[cfg(test)]
     pub(crate) fn spine_type_ref(&self, cx: &Cx, tag: u32, ty: &Type) -> Option<Type> {
-        self.with_spine(tag, self.gen_ref_len(0), |codes| {
+        self.with_spine(tag, |codes| {
             if let Some((k, (_, l))) = codes.ctors.iter().enumerate().find(|(_, (c, _))| **c == *ty) {
                 return self.gen_type_ref(GenDef::PayloadCode(tag, k), l);
             }
@@ -3349,7 +3110,7 @@ impl Elaborator {
         if !self.types.gdefs().has_spine_codes() {
             return None;
         }
-        self.with_spine(tag, self.gen_ref_len(0), |codes| {
+        self.with_spine(tag, |codes| {
             let n = codes.ctors.len();
             if spine.ctors.len() != n || spine.nodes.len() != codes.nodes.len() {
                 return None;
@@ -3746,7 +3507,7 @@ impl Elaborator {
         let Type::El { tm, .. } = ty else { return None };
         let len = self.gen_ref_len(g);
         if let Term::GlobalTm { var, .. } = &**tm {
-            return self.inline_of_code_key(self.code_key_at(len, *var)?, len);
+            return self.inline_of_code_key(self.code_key_at(len, *var)?);
         }
         // `El (app(D#tycode_fn^δ; ā))`, the applied spelling
         // (`docs/per-instantiation-type-codes-design.md` §4.2). Without this
@@ -3756,7 +3517,7 @@ impl Elaborator {
         let (GenDef::TyCodeFn(tag), args) = self.gen_app_of_at(len, tm)? else {
             return None;
         };
-        let entry = self.ty_code_fn_now(tag, g)?;
+        let entry = self.ty_code_fn_entry(tag)?;
         let args = self.inlined_arguments(&entry, &args, |el| self.unspell_here_in(el, g))?;
         Some(instance_of_template(&entry, &args))
     }
@@ -3825,15 +3586,15 @@ impl Elaborator {
     /// The registry's inline copy behind a code key that names a type
     /// occurrence — the whole lowering, a payload, or a suffix sum. `None`
     /// for every other key.
-    fn inline_of_code_key(&self, key: GenDef, len: u32) -> Option<Type> {
+    fn inline_of_code_key(&self, key: GenDef) -> Option<Type> {
         let gdefs = self.types.gdefs();
         match key {
             GenDef::TyCode(tag) => {
                 let (inline, _) = gdefs.ty_code(&tag)?;
-                self.guard_ty(GuardKey::TyCode(tag), inline, len).map(|t| (*t).clone())
+                Some((**inline).clone())
             }
-            GenDef::PayloadCode(tag, k) => self.with_spine(tag, len, |codes| (*codes.ctors[k].0).clone()),
-            GenDef::SuffixCode(tag, k) => self.with_spine(tag, len, |codes| (*codes.nodes[k + 1].0).clone()),
+            GenDef::PayloadCode(tag, k) => self.with_spine(tag, |codes| (*codes.ctors[k].0).clone()),
+            GenDef::SuffixCode(tag, k) => self.with_spine(tag, |codes| (*codes.nodes[k + 1].0).clone()),
             _ => None,
         }
     }
@@ -3901,7 +3662,7 @@ impl Elaborator {
             return None;
         }
         let (inline, _) = self.types.gdefs().ty_code(&tag)?;
-        self.guard_ty(GuardKey::TyCode(tag), inline, self.gen_ref_len(0)).map(|t| (*t).clone())
+        Some((**inline).clone())
     }
 
     /// `El (D#shape^δ)` back to the inline shape registered for a recursive
@@ -3923,8 +3684,7 @@ impl Elaborator {
         self.types
             .gdefs()
             .wf_slots(&tag)
-            .and_then(|slots| self.guard_slots(tag, slots, self.gen_ref_len(0)))
-            .map(|(shape, _)| (*shape).clone())
+            .map(|slots| (*slots.shape).clone())
     }
 
     /// [`Self::unspell_ty_deep`] anchored at the **current** world — goal and
@@ -3978,7 +3738,7 @@ impl Elaborator {
         if let Type::El { tm, .. } = ty
             && let Term::GlobalTm { var, .. } = &**tm
             && let Some(key) = self.code_key_at(len_at, *var)
-            && let Some(inline) = self.inline_of_code_key(key, len_at)
+            && let Some(inline) = self.inline_of_code_key(key)
         {
             return Some(inline);
         }
@@ -3988,7 +3748,7 @@ impl Elaborator {
         // a closed code.
         if let Type::El { tm, .. } = ty
             && let Some((GenDef::TyCodeFn(tag), args)) = self.gen_app_of_at(len_at, tm)
-            && let Some(entry) = self.ty_code_fn_at(tag, len_at)
+            && let Some(entry) = self.ty_code_fn_entry(tag)
             && let Some(args) =
                 self.inlined_arguments(&entry, &args, |el| self.unspell_ty_deep(len_at, el))
         {
@@ -4374,21 +4134,6 @@ impl Elaborator {
         self.psi.bindings.len() as u32 + self.global_padding() + self.meta_offset()
     }
 
-    /// `ty`, a lowering read when [`Self::lowering_scope`] was `at`, read in
-    /// the world now. A declaration's codes are registered one definition
-    /// after another from the one lowering, and a global reference in it (a
-    /// function in a field's type, `measured: bytes.len() = len`) counts
-    /// from the end of Ψ, so after `k` pushes it names the binding `k`
-    /// earlier unless it is moved. Unmoved, the kernel refused the code and
-    /// the declaration kept its inline spelling at every use
-    /// (`issues/codes-registered-in-a-stale-scope.md`).
-    fn read_now(&self, ty: &Type, at: u32) -> Type {
-        match self.lowering_scope() - at {
-            0 => ty.clone(),
-            by => ty.shift_global(by),
-        }
-    }
-
     fn meta_offset(&self) -> u32 {
         self.scope.meta_pushed.borrow().len() as u32
     }
@@ -4634,14 +4379,6 @@ fn tel_self_args(t: usize, extra: usize) -> Vec<Rc<Term>> {
         .rev()
         .map(|i| Rc::new(Term::Var(LocalVar(i as u32))))
         .collect()
-}
-
-/// Move a telescope one Ψ binding out, after a push
-/// ([`Elaborator::register_rec_projs`] keeps it across every one of them).
-fn shift_tel(tel: &mut [(Type, Level)]) {
-    for (ty, _) in tel.iter_mut() {
-        *ty = ty.shift_global(1);
-    }
 }
 
 

@@ -4204,15 +4204,14 @@ theorem slot_literal(): slot_n(slot_flat(2)) = 2 { refl }
             #[test]
             fn the_entry_is_read_through_the_references_own_variable() {
                 let mut e = env_with_globals();
-                // The entry's `stmt` *is* the definition's Ψ statement, so the
-                // two independent reads — the rescoped entry and
-                // `rec_proj_ref_at`'s read of the binding off the reference's
-                // own variable — must be one term, at every Ψ length.
+                // The entry's `stmt` *is* the definition's Ψ statement, and a
+                // statement names constants only, so the stored entry and the
+                // binding are one term at every Ψ length.
                 fn both_reads_agree(e: &Env) {
                     for name in ["Box", "Two", "Box2", "BV", "Mixed", "Cell", "Slot", "Mimic"] {
                         let tag = e.ind(name).tag;
                         let key = GenDef::TyCodeFn(tag);
-                        let entry = e.el.ty_code_fn_now(tag, 0).expect("a registered entry");
+                        let entry = e.el.ty_code_fn_entry(tag).expect("a registered entry");
                         let fun = e.el.gen_ref(key).expect("a reference");
                         let Term::GlobalTm { var, .. } = &fun else {
                             panic!("a definition reference is a global")
@@ -4223,17 +4222,8 @@ theorem slot_literal(): slot_n(slot_flat(2)) = 2 { refl }
                         else {
                             panic!("a definition is a term binding")
                         };
-                        assert_eq!(
-                            *entry.stmt,
-                            ty.shift_global(var.rescope()),
-                            "`{name}`'s entry and its Ψ binding disagree"
-                        );
-                        // Read at the frame it was stored in — the prefix
-                        // before its own binding — the rescoping is the
-                        // identity. That is what makes a replayed image
-                        // self-correct instead of needing a codec change.
-                        let raw = e.el.ty_code_fn_at(tag, abs as u32).expect("a registered entry");
-                        assert_eq!(*raw.stmt, **ty, "`{name}`'s entry is stored unshifted");
+                        assert!(var.as_index().is_none(), "`{name}`'s code function is a constant");
+                        assert_eq!(*entry.stmt, **ty, "`{name}`'s entry and its Ψ binding disagree");
                     }
                 }
                 let open_slot = |e: &Env| {

@@ -2573,7 +2573,7 @@ impl Elaborator {
     /// by unifying with the declaration's template at unknown arguments.
     fn value_args(&self, cx: &Cx, ty: &Type, level: &Level, ind: &crate::Inductive) -> Option<Vec<Rc<Term>>> {
         let m = (ind.params.len() + ind.valparams.len()) as u32;
-        let mut code = self.gen_ref(crate::gendefs::GenDef::TyCodeFn(ind.tag))?.shift_global(m);
+        let mut code = self.gen_ref(crate::gendefs::GenDef::TyCodeFn(ind.tag))?;
         for j in 0..m {
             let meta = Term::GlobalTm { var: GlobalVar::index(j), subst: LocalSubst::id(&cx.gamma) };
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };
@@ -3108,7 +3108,7 @@ impl Elaborator {
         }
         let cx = run.cx(at).ok()?;
         let m = (ind.params.len() + ind.valparams.len()) as u32;
-        let mut code = self.gen_ref(crate::gendefs::GenDef::TyCodeFn(ind.tag))?.shift_global(m);
+        let mut code = self.gen_ref(crate::gendefs::GenDef::TyCodeFn(ind.tag))?;
         for j in 0..m {
             let meta = Term::GlobalTm { var: GlobalVar::index(j), subst: LocalSubst::id(&cx.gamma) };
             code = Term::AppAt { fun: Rc::new(code), arg: Rc::new(meta) };

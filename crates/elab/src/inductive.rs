@@ -1811,13 +1811,11 @@ impl Elaborator {
         let psi = self.psi.bindings.len();
         if memo {
             let hit = self.memos.named_type_memo.borrow().get(&key).map(|(_, at, hit)| (*at, hit.clone()));
-            if let Some((at, (ty, level))) = hit.filter(|(at, _)| *at <= psi) {
-                if at == psi {
-                    return Ok((ty, level));
-                }
-                let out = self.share_registered_lowering(ind.tag, (ty.shift_global((psi - at) as u32), level));
-                self.memos.named_type_memo.borrow_mut().insert(key, (Rc::clone(ind), psi, out.clone()));
-                return Ok(out);
+            // An entry names committed definitions only (the guard below),
+            // so it is the same type in every extension of the Ψ it was
+            // made in; the length is kept to refuse one made in a longer Ψ.
+            if let Some((_, hit)) = hit.filter(|(at, _)| *at <= psi) {
+                return Ok(hit);
             }
         }
         let ind = Rc::clone(ind);
@@ -2321,7 +2319,7 @@ impl Elaborator {
         for targ in targs {
             fixed.push(self.elab_ty(cx, targ)?);
         }
-        if let Some(entry) = self.ty_code_fn_now(ind.tag, 0)
+        if let Some(entry) = self.ty_code_fn_entry(ind.tag)
             && entry.level.equiv(&want)
             && entry.param_levels.len() == fixed.len() + peeled.len()
             && entry.param_levels.iter().zip(&fixed).all(|(l, (_, k))| k.equiv(l))

@@ -1301,34 +1301,27 @@ impl Elaborator {
     }
 
     fn derived_hit(&self, cx: &Cx, goal: &Type, prefer: Option<&str>) -> Option<Term> {
-        let now = self.psi.bindings.len() as u32;
         let d = self
             .traits
             .derived()
             .iter()
             .filter(|d| !is_open_head(d.head.as_deref()) && heads_may_agree(d.head.as_deref(), prefer))
-            .find(|d| self.derived_conv(cx, &d.ty.shift_global(now - d.at), goal, &d.level))?;
+            .find(|d| self.derived_conv(cx, &d.ty, goal, &d.level))?;
         Some(self.derived_ref(d.abs))
     }
 
     /// [`Self::derived_hit`] for a merged class's assembly (step 2b), at the
-    /// goal's applied spelling and in the goal world: a table entry's
-    /// committed globals sit `global_padding` further out there. A
-    /// tactic's certificate is elaborated with goals in flight, which is
-    /// where nearly every such call is.
+    /// goal's applied spelling and in the goal world: a table entry names
+    /// committed definitions only, so it reads the same there. A tactic's
+    /// certificate is elaborated with goals in flight, which is where
+    /// nearly every such call is.
     fn joined_hit(&self, cx: &Cx, spelled: &Type, prefer: Option<&str>) -> Option<Term> {
-        let now = self.psi.bindings.len() as u32;
-        let pad = self.global_padding();
         let d = self
             .traits
             .derived()
             .iter()
             .filter(|d| !is_open_head(d.head.as_deref()) && heads_may_agree(d.head.as_deref(), prefer))
-            .find(|d| {
-                let ty = d.ty.shift_global(now - d.at);
-                let ty = if pad == 0 { ty } else { weaken_global_below(&ty, pad) };
-                self.derived_conv(cx, &ty, spelled, &d.level)
-            })?;
+            .find(|d| self.derived_conv(cx, &d.ty, spelled, &d.level))?;
         Some(self.derived_ref(d.abs))
     }
 
@@ -1346,28 +1339,19 @@ impl Elaborator {
         let Some(local) = crate::unification::strengthen_ty(&LocalCtx::nil(), spelled, n) else {
             return;
         };
-        let pad = self.global_padding();
-        let closed = if pad == 0 {
-            local
-        } else {
-            let down = local.apply_global(&heather_kernel::subst::GlobalSubst {
-                entries: (0..pad).map(|_| heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::Zero))).collect(),
-            });
-            if weaken_global_below(&down, pad) != local {
-                return;
-            }
-            down
+        let Some(closed) = below_goals_ty(&local, self.global_padding()) else {
+            return;
         };
         if !self.type_is_closed(&closed, lvl) {
             return;
         }
         let mut pending = self.pass.pending_derived.borrow_mut();
-        if pending.iter().any(|(t, l, _, head, open)| {
+        if pending.iter().any(|(t, l, head, open)| {
             open.is_none() && heads_may_agree(head.as_deref(), prefer) && self.derived_conv(&Cx::empty(), t, &closed, l)
         }) {
             return;
         }
-        pending.push((closed, lvl.clone(), self.psi.bindings.len() as u32, prefer.map(str::to_string), None));
+        pending.push((closed, lvl.clone(), prefer.map(str::to_string), None));
     }
 
     /// `f`'s answer at this scope and carrier, from [`Memos::scope_memo`]
@@ -1495,10 +1479,10 @@ impl Elaborator {
             level = Level::join(dom_level, level);
         }
         let mut pending = self.pass.pending_derived.borrow_mut();
-        if pending.iter().any(|(t, _, _, h, open)| open.is_some() && h.as_deref() == Some(head.as_str()) && *t == ty) {
+        if pending.iter().any(|(t, _, h, open)| open.is_some() && h.as_deref() == Some(head.as_str()) && *t == ty) {
             return;
         }
-        pending.push((ty, level, self.psi.bindings.len() as u32, Some(head), Some(tm)));
+        pending.push((ty, level, Some(head), Some(tm)));
     }
 
     /// Step 1a: a minted open derivation ([`Self::record_open`]) whose
@@ -1517,13 +1501,11 @@ impl Elaborator {
         let ckey = crate::names::qkey(&ind.scope.module, &ind.name);
         let head = format!("{OPEN_HEAD}{ckey}");
         let n = cx.gamma.entries.len() as u32;
-        let now = self.psi.bindings.len() as u32;
-        let pad = self.global_padding();
         let mut best: Option<(u32, u32)> = None;
         for d in self.traits.derived().iter().filter(|d| d.head.as_deref() == Some(head.as_str())) {
-            let ty = d.ty.shift_global(now - d.at);
-            let ty = if pad == 0 { ty } else { weaken_global_below(&ty, pad) };
-            let (doms, cod) = open_telescope(&ty);
+            // An entry names committed definitions only: it reads the same
+            // under the goals in flight.
+            let (doms, cod) = open_telescope(&d.ty);
             let m = doms.len() as u32;
             if m == 0 || m > n || best.is_some_and(|(_, b)| b >= m) {
                 continue;
@@ -1595,12 +1577,11 @@ impl Elaborator {
     /// Mint one open derivation ([`Self::record_open`]): `ty` is the closed
     /// `Π prefix. goal` and `body` the λ over the same binders.
     fn mint_open(&mut self, ty: &Type, lvl: &Level, body: &Term, head: Option<&str>) {
-        let now = self.psi.bindings.len() as u32;
         if self
             .traits
             .derived()
             .iter()
-            .any(|d| d.head.as_deref() == head && d.ty.shift_global(now - d.at) == *ty)
+            .any(|d| d.head.as_deref() == head && d.ty == *ty)
         {
             return;
         }
@@ -1674,20 +1655,16 @@ impl Elaborator {
             return;
         }
         let mut pending = self.pass.pending_derived.borrow_mut();
-        if pending.iter().any(|(t, l, _, head, open)| {
+        if pending.iter().any(|(t, l, head, open)| {
             open.is_none()
                 && heads_may_agree(head.as_deref(), prefer)
                 && self.derived_conv(&Cx::empty(), t, goal, l)
         }) {
             return;
         }
-        // With the Ψ length at capture: the item that recorded this goal goes
-        // on to push its own globals, and a stored type's `GlobalVar`s are
-        // relative to the Ψ that was (see [`Self::mint_pending`]).
         pending.push((
             goal.clone(),
             lvl.clone(),
-            self.psi.bindings.len() as u32,
             prefer.map(str::to_string),
             None,
         ));
@@ -1735,14 +1712,14 @@ impl Elaborator {
             if pending.is_empty() {
                 return;
             }
-            for (goal, lvl, at, prefer, open) in pending {
-                // The item pushed its own globals after this goal was
-                // captured, so every `GlobalVar` in it now points that much
-                // further out.
-                let grew = self.psi.bindings.len() as u32 - at;
+            for (goal, lvl, prefer, open) in pending {
+                // A queued goal was read out of the goal world into the
+                // committed Ψ, where a reference is a constant: the globals
+                // the item pushed since do not move it.
+                debug_assert!(goal.shift_global(1) == goal, "a queued derivation mentions a global variable");
                 match open {
-                    None => self.mint_one(&goal.shift_global(grew), &lvl, prefer.as_deref()),
-                    Some(body) => self.mint_open(&goal.shift_global(grew), &lvl, &body.shift_global(grew), prefer.as_deref()),
+                    None => self.mint_one(&goal, &lvl, prefer.as_deref()),
+                    Some(body) => self.mint_open(&goal, &lvl, &body, prefer.as_deref()),
                 }
             }
         }
@@ -1966,8 +1943,3 @@ impl Measure {
     }
 }
 
-/// A committed-world type read into a goal world `pad` arena entries deep:
-/// every global moves `pad` further out, since the arena sits innermost.
-fn weaken_global_below(t: &Type, pad: u32) -> Type {
-    t.shift_global(pad)
-}
