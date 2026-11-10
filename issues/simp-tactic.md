@@ -5,7 +5,7 @@ labels: [tactics,proofs,ergonomics]
 area: tactics
 milestone: [tac-general]
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-10
 ---
 
 Heather has no simplifier. The tactics that touch equations are:
@@ -75,3 +75,7 @@ the call.
 - **[[proof-scripts-as-tac-blocks]]** owns the goal model. Assumed here:
   only that a tactic can return a residual goal.
 - **[[automation-lemma-registries]]** owns registration.
+
+## Log
+
+- 2026-11-10: Minus, after the foundational-mathematics ranking (`docs/roadmap.md` log, 2026-11-10): `simp` "would be great", and it should be tunable and wrappable. Software is cheap now, so a variant written to be more powerful for one case is acceptable, as is a domain tactic that wraps `simp` with its own lemma set and side-condition discharger. Design consequence: the simplifier's loop takes its lemma set, its discharger and its pre/post procedures as arguments, so `set`-, substitution- (sigma calculus, [[generic-binding-syntax]]), `ZMod`- and Kleene-algebra-specific simplifiers are instances, not forks. The five new mathematics milestones are each mostly directed equation sets and raise this issue's priority.
