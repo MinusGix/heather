@@ -777,8 +777,12 @@ either; that is the fact reader's limit, not the split's. Probes:
   the spine's innermost head is a projection and each argument meets an
   explicit arrow of the field's declared (surface) type. An implicit binder,
   or a type the declaration names through an alias, declines, since the
-  spelling must re-elaborate to the same spine. Diagnostics show the same
-  spelling.
+  spelling must re-elaborate to the same spine. A source spelling takes only
+  a local receiver (`issues/applied-field-source-spelling-level-mismatch.md`:
+  a call receiver re-elaborated to a wrong level the kernel caught).
+  Diagnostics spell every receiver, so mismatch notes that used to fall
+  through to the kernel for want of a spelling are now reported where
+  they were recorded.
 
 §5's hazard: every occurrence of such a field takes the same route, goal and
 facts alike, so no atom splits; what moves is that `s.take(k).base` now

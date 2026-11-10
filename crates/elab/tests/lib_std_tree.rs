@@ -56,7 +56,7 @@ fn bad_size_laws<A>() -> TreePassLaws<A>(TreeSameSize<A>, drop_right_alg<A>()) {
     }
 }
 "#,
-        Refusal::Kernel,
+        Refusal::Mismatch,
     );
 }
 

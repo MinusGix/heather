@@ -1386,7 +1386,7 @@ impl Speller<'_> {
         while let Some((fun, arg)) = crate::spelling::app_of(head) {
             args.push(arg);
             head = fun;
-            let Some((record, idx)) = self.field_head(head) else {
+            let Some((receiver, record, idx)) = self.field_head(head) else {
                 continue;
             };
             let mut ty = &record.ctors[0].fields.get(idx)?.1;
@@ -1396,10 +1396,23 @@ impl Speller<'_> {
                 };
                 ty = cod;
             }
-            let shown = match crate::spelling::proj_of(head) {
-                Some(_) => self.field_read(head, d + 1)?,
-                None => self.call(head, d + 1),
+            let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
+                return None;
             };
+            // A source spelling is re-elaborated in the consumer's context,
+            // so it takes only a receiver that is a local there
+            // (issues/applied-field-source-spelling-level-mismatch.md).
+            if self.qualified && !matches!(&**receiver, Term::Var(_)) {
+                return None;
+            }
+            let recv = self.tm(receiver, d + 1);
+            // A receiver written with type arguments (`sin<A>`) is no
+            // postfix operand, so only a bare one goes unparenthesised.
+            let bare = (matches!(&**receiver, Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
+                || crate::spelling::proj_of(receiver).is_some())
+                && self.form(receiver).bare_receiver()
+                && !recv.contains('<');
+            let shown = if bare { format!("{recv}.{name}") } else { format!("({recv}).{name}") };
             let shown_args = args.iter().rev().map(|a| self.tm(a, d + 1)).collect::<Vec<_>>();
             return Some(format!("{shown}({})", shown_args.join(", ")));
         }
@@ -1409,13 +1422,12 @@ impl Speller<'_> {
     /// The record and field number a field read `head` names: an inline
     /// projection walk [`Elaborator::field_read_record`] types, or a
     /// projection definition applied to its instantiation and receiver.
-    fn field_head(&self, head: &Term) -> Option<(Rc<crate::inductive::Inductive>, usize)> {
+    fn field_head<'t>(&self, head: &'t Term) -> Option<(&'t Rc<Term>, Rc<crate::inductive::Inductive>, usize)> {
         if crate::spelling::proj_of(head).is_some() {
             if self.binders() != 0 {
                 return None;
             }
-            let (_, record, idx) = self.el.field_read_record(self.cx, head)?;
-            return Some((record, idx));
+            return self.el.field_read_record(self.cx, head);
         }
         let (inner, args) = crate::spelling::app_spine(head);
         if let Term::GlobalTm { var, subst } = inner
@@ -1425,7 +1437,7 @@ impl Speller<'_> {
             && record.is_record
             && args.len() == record.params.len() + record.valparams.len() + 1
         {
-            return Some((Rc::clone(record), field));
+            return Some((args.last()?, Rc::clone(record), field));
         }
         None
     }

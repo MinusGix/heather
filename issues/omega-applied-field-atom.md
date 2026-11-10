@@ -43,7 +43,11 @@ projection call spells it, then its arguments: `nb.number(a)`, at an inline
 projection or a projection definition (a record with parameters). It only
 does so when each argument meets an explicit arrow of the field's declared
 type, so the spelling re-elaborates to the same spine; an implicit binder or
-an aliased function type declines. omega then keys the atom by that
+an aliased function type declines. A source spelling takes only a local
+receiver: wider ones reached the kernel at the wrong level
+([[applied-field-source-spelling-level-mismatch]]). Diagnostics spell every
+receiver, so four refusals the kernel used to report (a spelling gap, not a
+skipped check) are now the elaborator's mismatch notes. omega then keys the atom by that
 spelling. `field_call_plain` closes, and `Span::offsets_differ`,
 `disjoint_offsets`, `offset_has` and `offset_below` are gone, inlined into
 `Numbering::spans_distinct`/`spans_apart`/`outside`. Design §21 of

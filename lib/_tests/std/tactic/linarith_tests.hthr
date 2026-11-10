@@ -254,6 +254,6 @@ theorem conj_close(x, y, e: K, h: Close(x, y, e)): y < x + e { linarith(h) }
 theorem conj_abs_le_goal(z, e, d: K, h: AbsLe(z, e), hd: K.unit <= d): AbsLe(z, e + d) { linarith }
 theorem conj_abs_lt_goal(z, e: K, h: AbsLe(z, e)): AbsLt(z + z, e + e + e + K.multiplicative.unit) { linarith(h) }
 // The side that fails is named, as a side of the goal as written.
-// expect-error: `linarith` could not prove the left side of `AbsLe(z, e + z)`
+// expect-error: `linarith` could not prove the left side `K.inv(e + z) <= z` of `AbsLe(z, e + z)`
 theorem conj_abs_le_goal_not_entailed(z, e: K, h: AbsLe(z, e)): AbsLe(z, e + z) { linarith(h) }
 }

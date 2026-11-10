@@ -126,7 +126,7 @@ fn a_wrong_law_is_refused() {
         "theorem bad(x, y, e, d: Rat, hx: -e < x ∧ x < e, hy: -d < y ∧ y < d): x + y < e + d ∧ -(e + d) < x + y {
             OrderedAddGroup::abs_lt_add(x, y, e, d, hx, hy)
         }",
-        Refusal::Kernel,
+        Refusal::Mismatch,
     );
 }
 
