@@ -1268,12 +1268,39 @@ fn unify_unfolded(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut
         clash(u);
         return;
     }
-    if !reducible(subj) || zonked_tm(pat, n, sols).is_some() {
+    if inert_pattern(pat) || !reducible(subj) || zonked_tm(pat, n, sols).is_some() {
         return;
     }
     if let Some(r) = subject_unfolded(u, subj, d) {
         unify_tm(u, pat, &r, n, d, sols);
     }
+}
+
+/// A pattern no rule of [`unify_tm`] reads: an eliminator with no
+/// congruence (every one but `elimNat`, the projections and β's λ). Whatever
+/// the subject unfolds to, the pairing falls through to
+/// [`unify_unfolded`] again and learns nothing, so the δ-lazy step is
+/// skipped before it zonks the pattern. That zonk is the step's whole cost
+/// at such a pattern, and it is not small: a branching inductive's arity is
+/// a case tree whose every node spells the remaining shape, so an
+/// `n`-constructor type's `Fin(arity(?a))` paid work superlinear in `n` per
+/// recursive arm of a lemma by cases
+/// (issues/wide-inductive-unifier-case-descent.md).
+fn inert_pattern(p: &Term) -> bool {
+    matches!(
+        p,
+        Term::J { .. }
+            | Term::ElimSEmpty { .. }
+            | Term::ElimSquash { .. }
+            | Term::ElimEmpty { .. }
+            | Term::Case { .. }
+            | Term::ElimW { .. }
+            | Term::ElimWf { .. }
+            | Term::ElimIWf { .. }
+            | Term::Out { .. }
+            | Term::ElimCodeTy { .. }
+            | Term::ElimCodeTm { .. }
+    )
 }
 
 /// Can `t` take a head step: its spine is headed by a global (δ), a λ (β)

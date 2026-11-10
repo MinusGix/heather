@@ -211,10 +211,10 @@ fn isa_roundtrip() -> Family {
 /// Recorded first (the issue, CLI at 10/30/90 formers): about quadratic in
 /// the gate, each arm's unfolded `lift` read back as a copy of its whole
 /// case tree. Since the hypothesis is spelled as calls and the kernel keeps
-/// one closure for it: about linear in the gate, with a superlinear
-/// elaboration residue (the unifier's head walk descending the case tree,
-/// `issues/wide-inductive-unifier-case-descent.md`) — slope ~1.2 on the
-/// cloud box; the lemma alone was about quadratic before.
+/// one closure for it, and the unifier no longer zonks the type's arity
+/// case tree at each arm (`issues/wide-inductive-unifier-case-descent.md`):
+/// about linear, slope ~1.1 on the cloud box; the lemma alone was about
+/// quadratic before.
 fn wide_lemma() -> Family {
     let src = |n: u64| {
         let n = n as usize;
@@ -278,7 +278,7 @@ fn wide_lemma() -> Family {
         name: "inductive/wide-lemma",
         what: "a congruence lemma by cases over an n-former syntax, against a dependent motive",
         unit: "formers",
-        expect_slope: Some((0.88, 1.58)),
+        expect_slope: Some((0.74, 1.44)),
         cases: sweep("inductive/wide-lemma", &[16, 32, 64, 128], src),
     }
 }
