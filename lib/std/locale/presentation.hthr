@@ -121,8 +121,8 @@ record FormalPoint<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a)
 }
 
 // The point of the presented locale it is: `u ↦ ∃ a ∈ u, in(a)`.
-fn FormalPoint::point<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>, in: P → Type,
-        p: FormalPoint<P>(le_p, C, ax, in))
+fn FormalPoint::point<P>({le_p: P → P → Type}, {C: P → Type}, {ax: (a: P) → C(a) → Opens<P>}, {in: P → Type},
+        self p: FormalPoint<P>(le_p, C, ax, in))
     → Point(λ (u: Opens<P>) (v: Opens<P>) => FormalTopology::Le(λ a w => Cover<P>(le_p, C, ax, w, a), u, v),
         λ (u: Opens<P>) (v: Opens<P>) => Opens::down_meet(le_p, u, v), Opens::top<P>(), Opens::sup<P>)
 {
@@ -136,17 +136,17 @@ fn FormalPoint::point<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C
 }
 
 // A point lies in an open exactly through a basic open of it.
-theorem FormalPoint::in_open<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>, in: P → Type,
-        p: FormalPoint<P>(le_p, C, ax, in), u: Opens<P>, a: P, hu: u.has(a), ha: in(a)):
-    (FormalPoint::point(le_p, C, ax, in, p)).inv(u).holds
+theorem FormalPoint::in_open<P>({le_p: P → P → Type}, {C: P → Type}, {ax: (a: P) → C(a) → Opens<P>}, {in: P → Type},
+        self p: FormalPoint<P>(le_p, C, ax, in), u: Opens<P>, a: P, hu: u.has(a), ha: in(a)):
+    (p.point()).inv(u).holds
 {
     Exists(Exists(a, hu), ha)
 }
 
 // A point in a covered basic open lies in a member of the cover: the
 // soundness of covers for points, the induction read at `Omega`.
-theorem FormalPoint::in_cover<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>, in: P → Type,
-        p: FormalPoint<P>(le_p, C, ax, in), u: Opens<P>, a: P, c: Cover<P>(le_p, C, ax, u, a), ha: in(a)):
+theorem FormalPoint::in_cover<P>({le_p: P → P → Type}, {C: P → Type}, {ax: (a: P) → C(a) → Opens<P>}, {in: P → Type},
+        self p: FormalPoint<P>(le_p, C, ax, in), u: Opens<P>, a: P, c: Cover<P>(le_p, C, ax, u, a), ha: in(a)):
     Exists<P>(λ b => u.has(b) ∧ in(b))
 {
     let e = Cover::gen_le(le_p, C, ax, Omega::Frame(Omega::Le, Omega::meet, Omega::sup), λ b => Omega(in(b)),

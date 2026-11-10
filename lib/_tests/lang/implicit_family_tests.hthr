@@ -1,0 +1,74 @@
+// An implicit that is a function-valued parameter of a record type, read
+// back from an argument of that type when the record's fields apply it to
+// their own binders: `C(a)` in a field is the Miller pattern `?C(a)`, and a
+// constant family's application has reduced away by the time the unifier
+// sees it, so the family is the field's type abstracted over `a`
+// (issues/implicit-constant-family-record-parameter.md). Tests, not library:
+// nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import nat; import list;
+
+record R<P>(C: P → Type, ax: (a: P) → C(a) → Nat) { f: (a: P, k: C(a)) → ax(a, k) = ax(a, k) }
+fn R::g<P>({C: P → Type}, {ax: (a: P) → C(a) → Nat}, self r: R<P>(C, ax)) → Nat { 0 }
+fn R::fam<P>({C: P → Type}, {ax: (a: P) → C(a) → Nat}, self r: R<P>(C, ax)) → P → Type { C }
+
+// A literal constant family, at a call and at a receiver.
+fn pick(a: Nat, k: Bool) → Nat { 0 }
+fn mk() → R<Nat>(λ (a: Nat) => Bool, pick) { R(λ a k => refl) }
+fn use_call() → Nat { R::g(mk()) }
+fn use_receiver() → Nat { mk().g() }
+// The family learned is the constant one.
+theorem learned_constant(): (mk().fam())(3) = Bool { refl }
+// In a checking position.
+fn use_checked() → Nat { let x: Nat = mk().g(); x }
+
+// A constant family whose value is itself an application: the arguments
+// must not be paired with `List`'s.
+fn pick_list(a: Nat, k: List<Nat>) → Nat { 0 }
+fn mk_list() → R<Nat>(λ (a: Nat) => List<Nat>, pick_list) { R(λ a k => refl) }
+theorem learned_application(): (mk_list().fam())(0) = List<Nat> { refl }
+
+// An open type: the family's value is a type variable, and the axiom map a
+// generic function at it.
+fn pick_any<Q>(a: Nat, k: Q) → Nat { 0 }
+fn use_open<Q>(r: R<Nat>(λ (a: Nat) => Q, pick_any<Q>)) → Nat { r.g() }
+theorem learned_open<Q>(r: R<Nat>(λ (a: Nat) => Q, pick_any<Q>)): (r.fam())(0) = Q { refl }
+
+// A family that depends on its argument through a type former, so its
+// application reduces to a former mentioning `a`.
+fn pick_eq(a: Nat, k: a = 0) → Nat { 0 }
+fn use_dependent(r: R<Nat>(λ (a: Nat) => a = 0, pick_eq)) → Nat { r.g() }
+theorem learned_dependent(r: R<Nat>(λ (a: Nat) => a = 0, pick_eq)): (r.fam())(5) = (5 = 0) { refl }
+
+// A family read through a definition applied to a value first: `x.Is(a)`
+// for a fixed `x`, where `?C := Is(x)` would partially apply a value.
+fn Nat::Is(self x: Nat, a: Nat) → Type { x = a }
+fn pick_is(x: Nat, a: Nat, k: x.Is(a)) → Nat { 0 }
+fn use_partial(x: Nat, r: R<Nat>(λ a => x.Is(a), λ a k => pick_is(x, a, k))) → Nat { r.g() }
+
+// What already worked keeps working: a neutral family, and a family that
+// is a declaration applied to the binder.
+fn use_neutral<P>(C: P → Type, ax: (a: P) → C(a) → Nat, r: R<P>(C, ax)) → Nat { r.g() }
+fn Small(a: Nat) → Type { Fin(a) }
+fn pick_small(a: Nat, k: Small(a)) → Nat { 0 }
+fn use_declared(r: R<Nat>(λ a => Small(a), pick_small)) → Nat { r.g() }
+
+// A parameter the fields read only through a field accessor of another
+// record (`(ax(a, k)).has(c)`), while the argument's type arrives with the
+// accessor unfolded to a projection: the pattern's accessor unfolds to meet
+// it.
+record Basic<P> { has: P → Type }
+record S<P>(C: P → Type, ax: (a: P) → C(a) → Basic<P>) { s: (a: P, k: C(a), c: P) → (ax(a, k)).has(c) → Nat }
+fn S::g<P>({C: P → Type}, {ax: (a: P) → C(a) → Basic<P>}, self r: S<P>(C, ax)) → Nat { 0 }
+inductive Side { Low, High }
+fn side_basic(a: Nat, k: Side) → Basic<Nat> { match k { Low => Basic(λ x => x = a), High => Basic(λ x => a = x) } }
+fn use_accessor(r: S<Nat>(λ (a: Nat) => Side, side_basic)) → Nat { r.g() }
+
+// The negative control: a family applied to something that is not one of
+// the field's binders is no Miller pattern, and neither the constant family
+// nor the point it is applied at can be read back from `Bool`.
+record T<P>(C: P → Type, p0: P) { t: C(p0) }
+fn T::g<P>({C: P → Type}, {p0: P}, self r: T<P>(C, p0)) → Nat { 0 }
+fn mk_t() → T<Nat>(λ (a: Nat) => Bool, 3) { T(True) }
+// expect-error: could not infer the implicit argument `p0` of `T::g`
+fn use_not_pattern() → Nat { mk_t().g() }
