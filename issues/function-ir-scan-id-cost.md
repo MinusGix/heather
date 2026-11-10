@@ -5,7 +5,7 @@ labels: [native,function-ir,perf]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-07
-updated: 2026-11-07
+updated: 2026-11-10
 ---
 
 `program_scan` (`lib/native/function_ir/function_ir_eval.hthr`,
@@ -49,3 +49,13 @@ Candidates: marks as a binary trie keyed through the accelerated `half` and
 a parity test (`O(log id)` levels at a constant each); or marks kept from
 the frontier down, so the usual fresh write and recent read are O(1) and
 only join ids walk.
+
+## Log
+
+- 2026-11-10: A compression function is the first body where this cost decides the
+  design: sixty-four (or eighty) rounds unrolled mention ids in the
+  thousands, and the scan pays the sum of them in unary. The roadmap
+  (`docs/native-lexer-crypto-roadmap.md` §5) therefore compiles the round as
+  a loop body over an array state first ([[rt-fixed-arrays-and-tables]],
+  [[sha2-compress-native]]) and treats the unrolled form as waiting on this
+  issue.

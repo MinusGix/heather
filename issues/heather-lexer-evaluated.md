@@ -5,7 +5,7 @@ labels: [self-hosting,lexer]
 area: heather-in-heather
 milestone: [self-lexer]
 created: 2026-11-07
-updated: 2026-11-07
+updated: 2026-11-10
 ---
 
 The first slice of [[self-hosted-lexer]] that can start on master today:
@@ -64,3 +64,13 @@ refused).
 - **[[self-hosted-lexer]]** owns the native `heather-lex` and its done-when.
   Assumed here: only that a pure lexer with this step shape is what it
   compiles.
+
+## Log
+
+- 2026-11-10: `docs/native-lexer-crypto-roadmap.md` §3 splits the lexer in two: a
+  **scanner** (kinds and spans over bytes, state held in words) and
+  **values** (numeral and string payloads, built from a span on demand). The
+  scanner is the half that is compiled and linked ([[self-lexer-linked]]); the
+  values stay evaluated first. Write this slice with that seam: the agreement
+  theorem against the Rust lexer is then stated once for the scanner and
+  reused by the linked export, and nothing in the scanner's state needs a heap.

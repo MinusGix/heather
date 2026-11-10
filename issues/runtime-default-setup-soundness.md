@@ -5,7 +5,7 @@ labels: [native,compiler,proofs]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-11-07
+updated: 2026-11-10
 ---
 
 Slice R5b of `docs/runtime-fn-setups-design.md` (§2, §5–§7): the `Setup`
@@ -120,3 +120,10 @@ theorem; `widen_not_signed` refused; the negative control
 kernel), and `runtime_tests`' `runtime fn spread`, reflected and agreeing
 with nothing proved. Still open: `Get`, `Set` and `Fold`, which need the
 theorem over `function_ir_state`'s `run` (design §16.12 says how).
+- 2026-11-10: `docs/native-lexer-crypto-roadmap.md` §5 counts this as a risk for both of
+  its targets: each links a certificate into a trusted binary
+  ([[sha256-linked-into-cache]], [[self-lexer-linked]]), so the generator's
+  per-function proof has to be the theorem the export cites, with no
+  per-program step left to trust. The export contract of
+  [[native-library-exports-design]] should be stated against the conclusion
+  this issue proves.

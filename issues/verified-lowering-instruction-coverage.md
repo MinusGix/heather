@@ -5,7 +5,7 @@ labels: [native,x86,ir,proofs]
 area: heather-in-heather
 milestone: [hih-passes]
 created: 2026-10-21
-updated: 2026-11-08
+updated: 2026-11-10
 ---
 
 The verified lowering ([[function-ir-verified-lowering]]) selects only
@@ -47,3 +47,10 @@ request.
 
 - 2026-11-08: i64 round 3: shifts are selected now (chains of `SHL/SHR/SAR r64, 1` after `ShiftOp::legalize`); multiply and divide wait on [[x86-undefined-flags]].
 - 2026-11-08: 2026-11-08 round 4: shifts by a constant are one `SHL/SHR/SAR r64, imm8` (`ShiftImm`); IDIV is [[x86-idiv-signed-division]].
+- 2026-11-10: `docs/native-lexer-crypto-roadmap.md` §2 piece 6 orders the forms by
+  customer. First group, for SHA-2 and the byte scanner: 32-bit operand forms
+  (with their zeroing of the upper half), rotates and `BSWAP`, byte compares
+  ([[x86-narrow-and-rotate-forms]]). Second group, for Poly1305 and field
+  arithmetic: `MUL`/`MULX`, `ADC`/`SBB`, `ADCX`/`ADOX`
+  ([[x86-wide-multiply-and-carry]]). `CMOV` belongs with constant time
+  ([[native-constant-time]]). SIMD and SHA-NI are explicitly not scheduled.

@@ -109,8 +109,11 @@ through `milestone:`; the list of issues is `scripts/issue list --milestone
 | `nh-effects` | heather-in-heather | open | A `runtime fn` talks to the system through `uniq` capabilities in the sequencing surface, denoting trees through `Source`; `cat FILE…`, `wc` and `head -n` are rewritten in it and pass their GNU tests. | hih-native-heather |
 | `nh-heap` | heather-in-heather | open | A `runtime fn` builds and reads lists and trees in an arena through `datarepr`, with exhaustion a defined exit; `sort` and `tac` pass their GNU tests. | hih-native-heather |
 | `nh-ownership` | heather-in-heather | open | A second setup checks Rust-style ownership over reflected code, is proved sound once against the byte memory model, and the compiler uses its evidence for in-place updates and frees. | hih-native-heather |
+| `nh-library` | heather-in-heather | open | A `runtime fn` over buffers its caller owns is exported under a named contract (a System V subset plus a memory footprint), proved once, and linked into a Rust binary; the first exports are the lexer's scanner and SHA-256's compress (`docs/native-lexer-crypto-roadmap.md` §2). | hih-native-heather |
 | `hih-pl-spec` | heather-in-heather | open | Linux's calls and answers are a tree container, and `Sim` (the machine produces exactly a tree's traces) is bridged both ways to `LinuxRuns`, with `tr`'s spec written as a tree. | hih-native-heather |
 | `hih-pl-wp` | heather-in-heather | open | One computed weakest precondition over every `Asm` item (syscalls and proved pieces included) and one loop rule are sound once, probed for elaborator cost. | hih-native-heather |
+| `hih-crypto` | heather-in-heather | open | Cryptographic primitives have a specification in Heather, compiled code proved to implement it, a constant-time theorem under a named leakage contract, and native runs against published vectors (`docs/native-lexer-crypto-roadmap.md` §4). |  |
+| `crypto-hash` | heather-in-heather | open | SHA-2 is specified once for both word widths, its compress and streaming update are `runtime fn`s proved against the specification, and the compiled SHA-256 replaces the scalar path of `crates/cache/src/sha256.rs` with every cache key unchanged. | hih-crypto |
 | `hih-kernel-model` | heather-in-heather | open | A model of the kernel's reduction in Heather states the facts its accelerations rely on, and proves them, so that an optimisation checked nightly can be promoted to proven (`docs/kernel-model-design.md`). |  |
 | `hih-km-probe` | heather-in-heather | done | The fold classifier's probe is sound: a run that is not blocked on a probe variable is, at the same fuel, the run of every instance (`Tm::whnf_inst`, `Tm::whnf_inst_settled`). | hih-kernel-model |
 | `hih-km-runs` | heather-in-heather | done | Iterating an affine or synchronous fold class over a run is the unary fold, in the model with Σ, projections and runs (`Tm::fold_affine`, `Tm::fold_affine_peeled`, `Tm::fold_sync`). | hih-kernel-model |
@@ -266,6 +269,11 @@ first allocation is `nh-heap`) underneath. `hih-passes` can proceed in
 parallel because it is meta-layer work; its first round is
 [function-ir-pass-in-heather](../issues/function-ir-pass-in-heather.md). `hih-self` is `self-lexer` and then
 `self-compiler`, on the compiler `hih-native-heather` builds.
+Since 2026-11-10 `docs/native-lexer-crypto-roadmap.md` charts two
+targets through these milestones: the lexer linked into the compiler
+(`self-lexer`, through `nh-library`: exports over memory the caller owns) and
+cryptography (`hih-crypto`, first `crypto-hash`: SHA-2, with the cache's own
+SHA-256 as its customer).
 `hih-kernel-model` is independent of all of them: it models the kernel's
 reduction in Heather so that the kernel's own accelerations, and later the
 caches, can be proved rather than checked nightly
@@ -671,3 +679,4 @@ separate machines do not slow each other's tests.
   threads decide alone and what they ask, are in `docs/agent-policy.md`.
 - 2026-11-04: `it-world-loops` added (Minus asked for the thread): the customer half of the coinductive loop decision (`docs/effects-capabilities-design.md` §4, §7.5), after the loop lemma up to `Eutt` landed (#409). It serves `nh-effects` without being under it, since it is about what a tree means, not about the setup.
 - 2026-11-04: `it-world-loops` marked done on the same round's PR: its one issue (issues/effectful-loops-without-passes.md) closed, with the bridge proved both ways (`Source::tree_co_refines`, `tree_co_refined`).
+- 2026-11-10: `nh-library`, `hih-crypto` and `crypto-hash` added with `docs/native-lexer-crypto-roadmap.md` (Minus asked for the roadmap to a lexer linked directly and to cryptography that is verified and run). Both targets are libraries, not programs: `nh-library` is the exports-over-borrowed-memory work that had no milestone (`issues/native-library-exports-design.md`), and the linked lexer no longer waits on `nh-effects`. `self-lexer`'s done-when is left as written for Minus to move.

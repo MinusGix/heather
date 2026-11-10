@@ -389,8 +389,9 @@ decides.
 | part | state | owner |
 |---|---|---|
 | back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
-| `rt` and setups | designed (PR #325) | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
-| `Compile(f)` class | designed (setups note §9.3) | `issues/compile-typeclass-design.md` |
+| `rt` and setups | built: the reflected language, the default setup and the `runtime fn` generator (words, loops, buffers, `i64` by its representation); issues still open for what the default setup does not take | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
+| `Compile(f)` class | built (`lib/native/runtime/runtime.hthr`); instances are linked into `f::program` | `issues/compile-typeclass-design.md` |
+| libraries and exports | proposed: a compiled function over memory its caller owns, linked into another binary | `docs/native-lexer-crypto-roadmap.md` §2, milestone `nh-library` |
 | facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
 | DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |

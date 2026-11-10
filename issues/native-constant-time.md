@@ -4,7 +4,8 @@ status: open
 labels: [native, x86, security]
 area: heather-in-heather
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-11-10
+milestone: [hih-crypto]
 ---
 
 Minus (2026-10-30), after BearSSL's *Constant-Time Crypto* and
@@ -50,3 +51,11 @@ constant-time come later and separately.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[native-compiled-code-shape]] (`docs/zeroization-survey.md`); [[ownership-discipline-over-code]] (`docs/constant-time-survey.md`).
+- 2026-11-10: Scheduled under `hih-crypto` by `docs/native-lexer-crypto-roadmap.md` §4.
+  The note asks for step 1 (the leakage transformer over the machine's `Step`
+  and the statement of the property) **before** the second primitive is
+  compiled, not after: every instruction form added for cryptography
+  ([[x86-narrow-and-rotate-forms]], [[x86-wide-multiply-and-carry]]) then
+  states its leakage when it is added, where retrofitting means revisiting
+  each form. SHA-2 is the easy first customer (no secret-dependent branch or
+  address); Poly1305 and X25519 are where it bites.

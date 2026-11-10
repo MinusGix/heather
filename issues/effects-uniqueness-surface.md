@@ -4,7 +4,7 @@ status: open
 labels: [language,effects,native,frontend]
 area: language
 created: 2026-10-28
-updated: 2026-11-08
+updated: 2026-11-10
 milestone: [nh-effects, lang-sequencing]
 ---
 
@@ -53,3 +53,9 @@ directly. This is the language round that gives them a front end.
 - 2026-11-08: slice 4, rt to Source for computations with no loop (design §8.5): `ETm::lower` (lib/native/runtime/rt_io_lower.hthr) lowers pure values through `Tm::lower` plus a move to a fresh word, `Invoke`s to `Invoke` statements over a variable layout (`Loc`: word, buffer, or `Gone` once a read wrote over the buffer, which the lowering refuses). `Stmt::thread`/`Stmt::reads_thread` (lib/native/native_source_io.hthr) give straight statements a world-threading meaning their tree reads as. `ETm::lower_sound` by induction over `ETm`, and `ETm::lower_reads`: the lowered tree reads as `ETm::sem` at every world (`Io::Reads`). rt_lower: `Ty::Holds`/`FlatHolds` at `Bytes` are now `True`. Probes: echo lowered, run at a piped world, and its tree read as the surface `Io::echo_lowered`; refusals for a stale buffer and a buffer bound by a pure `Let`. Left (design §6): branches over the world and `ERepeat` loops; `runtime fn main` publishing the lowered Source; the customers.
 - 2026-11-08: slice 5, loops over the world (design §8.6): `ELoop` (lib/native/runtime/rt_io_loop.hthr) chains loop-free computations and `while` loops whose state is the whole environment, each pass rebinding every variable to one of the body's end context; meaning in `Partial` as `if c { do body while c }` (`Io::iterate`). Lowered to `Repeat`: body, moves of each word back to its place (a buffer must end in its own buffer, so a stale buffer is refused), condition again into the flag. `ELoop::lower_sound` and `ELoop::lower_reads` (`Io::Reads` against the meaning). Supporting: `Stmt::run`/`reads_run` (every statement as world threading in `Partial`, tree read as it), `Io::iterate_rel` (loops that go round together agree, by direct corecursion), `ETm::sem_end` and the loop-free lowering keeping the end environment. Probe: an echo-until-EOF loop runs "hiyo" at a piped world as its surface `while` does. Left: branches over the world (`EIf`); the reflector for `while` and the bridge to `ELoop::sem`; `runtime fn main`; the customers.
 - 2026-11-08: - 2026-11-08: docs/effects-locality-design.md (effects locality assessment): the note's recommendation keeps one Io at the bottom and puts user effects in interfaces over a mut-self carrier, footprints as facts and a frame theorem over separable worlds. Follow-ups filed: [[effect-interfaces-over-carriers]], [[reflect-world-in-carrier-record]], [[io-footprint-facts]], [[world-separable-frame]], [[rt-effectful-callees]], [[method-call-on-constrained-carrier]].
+- 2026-11-10: `docs/native-lexer-crypto-roadmap.md` §8 proposes capping the remaining
+  effects slices: neither the linked lexer nor a linked hash runs in a world
+  (the caller owns the memory and does the I/O), so this surface is not on
+  their path. Proposed done-when for the cap: one process tool (`heather-lex`
+  as a wrapper over the linked scanner) written in the surface, and no slice
+  beyond what that tool needs until `nh-library` is done.
