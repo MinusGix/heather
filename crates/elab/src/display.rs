@@ -1400,12 +1400,6 @@ impl Speller<'_> {
             let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
                 return None;
             };
-            // A source spelling is re-elaborated in the consumer's context,
-            // so it takes only a receiver that is a local there
-            // (issues/applied-field-source-spelling-level-mismatch.md).
-            if self.qualified && !matches!(&**receiver, Term::Var(_)) {
-                return None;
-            }
             let recv = self.tm(receiver, d + 1);
             // A receiver written with type arguments (`sin<A>`) is no
             // postfix operand, so only a bare one goes unparenthesised.

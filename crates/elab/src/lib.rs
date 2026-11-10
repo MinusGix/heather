@@ -8204,8 +8204,7 @@ impl Elaborator {
                 // (docs/traits-layer2-design.md §9.3).
                 //
                 // Deliberately narrow: only a leading prefix that *contains a
-                // solver parameter* takes it, so no call that elaborated
-                // before this round changes shape.
+                // solver parameter* takes it.
                 let params = self.params_of(&name);
                 let prefix = mask.iter().take_while(|&&b| b).count();
                 let solver_here = (0..prefix).any(|k| {
@@ -8213,7 +8212,12 @@ impl Elaborator {
                         .get(args.len() + k)
                         .is_some_and(|p| p.solver.is_some())
                 });
-                if expected.is_some() && solver_here {
+                // With nothing expected the solvers are filled all the same:
+                // the dictionary-awaiting function is no value anything
+                // reads, and a receiver (`(Hurwitz::zero<A>).coeff(0)`) or an
+                // argument needs the series itself
+                // (issues/applied-field-source-spelling-level-mismatch.md).
+                if solver_here {
                     return application::apply_implicit(
                         self,
                         cx,
@@ -9600,7 +9604,12 @@ impl Elaborator {
         // unfolds to a Π is refused where the goal is *applied*, as
         // `HeadMismatch`, and the site that explains it is the checking note
         // at the `on` (issues/elab-accepts-conjunction-for-equation.md).
-        let conversion = matches!(e, TypeError::NotConvertible | TypeError::HeadMismatch);
+        // So is a level that disagrees: an argument whose type lives at
+        // another level than its domain (a section's `f<A>` placed before its
+        // dictionary was filled) is refused for the levels before any
+        // conversion is asked, and the note recorded at the argument says why
+        // (issues/applied-field-source-spelling-level-mismatch.md).
+        let conversion = matches!(e, TypeError::NotConvertible | TypeError::HeadMismatch | TypeError::LevelMismatch);
         if conversion
             && let Some((note, at)) = self.refused_decide().or_else(|| self.refused_trivial())
         {
