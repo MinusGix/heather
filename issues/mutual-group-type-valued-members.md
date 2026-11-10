@@ -1,6 +1,6 @@
 ---
 title: A Type-valued function over a mutual family: calls inside connectives are not group edges, and True reads as Bool's
-status: open
+status: closed
 labels: [elaboration,inductives,recursion]
 area: language
 milestone: [math-metatheory]
@@ -59,3 +59,17 @@ Probes in `lib/_tests`, with `∨` and `∃` forms beside `∧`.
 
 Related, from the same probe: [[mutual-family-member-declarations]] and
 [[wide-inductive-lemma-quadratic-gate]].
+
+## Log
+
+- 2026-11-09: Done. (1) `mutual_rec::callees` scans the expressions inside
+  the types a body writes (`walk_with_types`: type arguments, so `∧`/`∨`,
+  and type literals, so `∀`), and the call rewrite maps them the same way
+  (`Calls::ty`); `∃` already reached its `λ` body. (2) The checker's
+  universe arm reads `El(«Ty n»)` as the universe `Ty n` structurally
+  (`expected_universe`, crates/elab/src/lib.rs): the group's arm is checked
+  against its motive's codomain, which arrives as the decode of the code
+  `Type` rather than `Type`, so `True` fell through to `Bool`'s
+  constructor. Probes in lib/_tests/lang/mutual_type_valued_tests.hthr:
+  `∧`, `∨`, `∃` and `∀` groups, values whose types compute through the
+  group, and a theorem group (`lc_mono`) over one.

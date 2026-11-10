@@ -6450,10 +6450,13 @@ impl Elaborator {
             // A universe as the expected type: a *type* has been written where
             // a term is expected, so read it as one and quote it
             // (docs/surface-universe.md §4).
-            _ if matches!(expected, Type::Ty(_)) => {
-                let Type::Ty(want) = expected else {
-                    unreachable!()
-                };
+            //
+            // `El(«Ty n»)` is that universe too, read off without a whnf: it
+            // is what a codomain decoded from a type code arrives as, such as
+            // a structural group's member whose result is `Type`, checked
+            // against its motive's `(x̄) -> Type`
+            // (issues/mutual-group-type-valued-members.md).
+            _ if let Some(want) = expected_universe(expected) => {
                 self.expr_elab()
                     .check_at_universe(self, cx, e, want, e.span)
             }
@@ -11407,6 +11410,20 @@ impl Elaborator {
             Some(w) => padded.withholding(Some(w)),
             None => padded,
         };
+    }
+}
+
+/// The universe an expected type is, read structurally: `Type<n>`, or its
+/// decoded code `El(«Ty n»)`. No whnf, so the checking arm that asks costs
+/// nothing at the expected types that are neither.
+fn expected_universe(expected: &Type) -> Option<&Level> {
+    match expected {
+        Type::Ty(level) => Some(level),
+        Type::El { tm, .. } => match &**tm {
+            Term::TmTy(level) => Some(level),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

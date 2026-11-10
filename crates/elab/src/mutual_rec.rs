@@ -146,8 +146,54 @@ fn recursive_param_type(d: &Decl) -> Option<(&str, &[Ty], Option<&Expr>, usize)>
     }
 }
 
+/// [`crate::surface::walk_expr`], also entering the expressions a type
+/// written inside the expression embeds: `P ∧ Q` is `And<P, Q>`, so a call
+/// in a connective's operand sits in a type argument, and `∀ x: A, P` is a
+/// type literal (issues/mutual-group-type-valued-members.md).
+fn walk_with_types(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    crate::surface::walk_expr(e, &mut |x| {
+        f(x);
+        match &x.kind {
+            ExprKind::TyApp { args, .. } => {
+                for t in args {
+                    ty_exprs(t, &mut |y| walk_with_types(y, f));
+                }
+            }
+            ExprKind::TyLit(t) => ty_exprs(t, &mut |y| walk_with_types(y, f)),
+            _ => {}
+        }
+    });
+}
+
+/// The expressions a written type embeds, outermost first.
+fn ty_exprs(t: &Ty, go: &mut dyn FnMut(&Expr)) {
+    match &t.kind {
+        TyKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        TyKind::OfExpr(e) | TyKind::Fin(e) | TyKind::TypeOf(e) => go(e),
+        TyKind::Named { args, .. } => args.iter().for_each(|a| ty_exprs(a, go)),
+        TyKind::Vec { elem, len } => {
+            ty_exprs(elem, go);
+            go(len);
+        }
+        TyKind::Squash(t) | TyKind::Code { ty: t, .. } => ty_exprs(t, go),
+        TyKind::Fn { dom, cod, .. } => {
+            ty_exprs(dom, go);
+            ty_exprs(cod, go);
+        }
+        TyKind::Nat
+        | TyKind::Univ { .. }
+        | TyKind::Ctx
+        | TyKind::TyCode { .. }
+        | TyKind::Splice { .. } => {}
+    }
+}
+
 /// The run positions `d` calls: heads of applications, by name, and the
-/// member declarations a method call's name can reach.
+/// member declarations a method call's name can reach, including calls
+/// inside the types its body writes.
 fn callees(d: &Decl, run: &[&Decl], by_name: &HashMap<&str, Vec<usize>>) -> Vec<usize> {
     let mut out = Vec::new();
     let mut push = |out: &mut Vec<usize>, b: usize| {
@@ -156,7 +202,7 @@ fn callees(d: &Decl, run: &[&Decl], by_name: &HashMap<&str, Vec<usize>>) -> Vec<
         }
     };
     let mut scan = |e: &Expr| {
-        crate::surface::walk_expr(e, &mut |x| match &x.kind {
+        walk_with_types(e, &mut |x| match &x.kind {
             ExprKind::App { head, .. } => {
                 if let Some((n, _)) = named_head(head)
                     && let Some(hits) = by_name.get(n)
@@ -1258,9 +1304,12 @@ impl<'a, 'g> Calls<'a, 'g> {
                     goal_oriented: *goal_oriented,
                 }
             }
-            ExprKind::TyApp { head, args } => {
-                ExprKind::TyApp { head: Box::new(self.expr(head)), args: args.clone() }
-            }
+            // A call in a type argument is a call: `P ∧ Q` is `And<P, Q>`.
+            ExprKind::TyApp { head, args } => ExprKind::TyApp {
+                head: Box::new(self.expr(head)),
+                args: args.iter().map(|t| self.ty(t)).collect(),
+            },
+            ExprKind::TyLit(t) => ExprKind::TyLit(Box::new(self.ty(t))),
             ExprKind::Lam { binders, body } => {
                 let body = self.bind(binders.iter().map(|b| b.name.clone()), |me| me.expr(body));
                 ExprKind::Lam { binders: binders.clone(), body: Box::new(body) }
@@ -1335,12 +1384,41 @@ impl<'a, 'g> Calls<'a, 'g> {
             | ExprKind::Char(_)
             | ExprKind::Str(_)
             | ExprKind::ArgSlot(_)
-            | ExprKind::TyLit(_)
             | ExprKind::Refl
             | ExprKind::AutoRefl
             | ExprKind::Hole(_)) => other.clone(),
         };
         Expr { kind, span }
+    }
+
+    /// The rewrite inside a written type, the walk [`ty_exprs`] makes; a
+    /// dependent arrow's binder shadows in its codomain.
+    fn ty(&mut self, t: &Ty) -> Ty {
+        let kind = match &t.kind {
+            TyKind::Eq(a, b) => TyKind::Eq(Box::new(self.expr(a)), Box::new(self.expr(b))),
+            TyKind::OfExpr(e) => TyKind::OfExpr(Box::new(self.expr(e))),
+            TyKind::Fin(e) => TyKind::Fin(Box::new(self.expr(e))),
+            TyKind::TypeOf(e) => TyKind::TypeOf(Box::new(self.expr(e))),
+            TyKind::Named { name, args } => {
+                TyKind::Named { name: name.clone(), args: args.iter().map(|a| self.ty(a)).collect() }
+            }
+            TyKind::Vec { elem, len } => {
+                TyKind::Vec { elem: Box::new(self.ty(elem)), len: Box::new(self.expr(len)) }
+            }
+            TyKind::Squash(x) => TyKind::Squash(Box::new(self.ty(x))),
+            TyKind::Code { ctx, ty } => TyKind::Code { ctx: ctx.clone(), ty: Box::new(self.ty(ty)) },
+            TyKind::Fn { binder, implicit, dom, cod } => {
+                let dom = self.ty(dom);
+                let cod = self.bind(binder.clone(), |me| me.ty(cod));
+                TyKind::Fn { binder: binder.clone(), implicit: *implicit, dom: Box::new(dom), cod: Box::new(cod) }
+            }
+            other @ (TyKind::Nat
+            | TyKind::Univ { .. }
+            | TyKind::Ctx
+            | TyKind::TyCode { .. }
+            | TyKind::Splice { .. }) => other.clone(),
+        };
+        Ty { kind, span: t.span }
     }
 }
 

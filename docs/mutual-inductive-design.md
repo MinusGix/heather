@@ -215,6 +215,13 @@ keys a group's slice on all its members' source, sees the same grouping as
 elaboration. Every other cycle keeps today's behaviour, the forward
 reference refusal.
 
+A call counts wherever the body writes it, the types it writes included:
+`P ∧ Q` is `And<P, Q>`, so in a `Type`-valued member a sibling call inside a
+connective's operand sits in a type argument, and `∀ x: A, P` is a type
+literal. The edge scan and the call rewrite both enter written types (a
+dependent arrow's binder shadows in its codomain); `∃`'s body is already a
+`λ` (issues/mutual-group-type-valued-members.md).
+
 **Member declarations** (issues/mutual-family-member-declarations.md). A
 member owns a namespace as a declared type does: `fn Tm::size(self t: Tm)`
 and `theorem Tm::f` pass the owner rule, and a value whose type is the
