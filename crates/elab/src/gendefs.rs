@@ -1136,9 +1136,21 @@ pub(crate) enum GuardKey {
     WfSlots(u32),
 }
 
-/// Whether `ty` mentions a global: shifting the globals changes it.
+/// Whether `ty` mentions a global **variable**: shifting the globals changes
+/// it. A constant does not move, so a type that names committed definitions
+/// only is not one (`crates/kernel/DESIGN.md`, "Constants are addressed from
+/// the start of Ψ").
 pub(crate) fn mentions_global(ty: &Type) -> bool {
     ty.shift_global(1) != *ty
+}
+
+/// Whether `t` names a binding of Ψ at all, constant or variable. Not the
+/// question [`mentions_global`] answers, and not one a shift can answer: a
+/// reference to a committed definition is unchanged by every weakening. A
+/// guard that means "this is a literal" asks this
+/// (`issues/literal-guards-read-constants-as-closed.md`).
+pub(crate) fn names_global(t: &Term) -> bool {
+    t.reindex_global(&mut |_| None).is_none()
 }
 
 /// The registry: immutable image layers plus one suffix delta. The two

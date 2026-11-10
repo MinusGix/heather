@@ -343,7 +343,7 @@ impl Elaborator {
 
     fn type_name_shape_at(&self, abs: u32, depth: u32) -> Option<(u32, TypeNameShape)> {
         let (_, body) = self.global_body_at(abs as usize)?;
-        let closed = |t: &Rc<Term>| t.shift_local(1) == **t && t.shift_global(1) == **t;
+        let closed = |t: &Rc<Term>| t.shift_local(1) == **t && !crate::gendefs::names_global(t);
         let (family, inner) = match &*body {
             Term::Lam { body, .. } => (true, body),
             _ => (false, &body),

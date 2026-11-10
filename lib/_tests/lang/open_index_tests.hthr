@@ -49,3 +49,37 @@ inductive Bad<P>(r: P → Type): (a: P) → Type {
     BStop(a: P): Bad<P>(r, a),
     BStep(a: P, b: P, c: Bad<P>(λ x => r(x), b)): Bad<P>(r, a),
 }
+
+// An index that names a definition is open: the motive abstracts it, as it
+// does a variable, so each arm is checked at its own constructor's index
+// (issues/literal-guards-read-constants-as-closed.md).
+def seven: Nat = 7;
+fn same(n: Nat) → Nat { n }
+inductive Shade { Dark, Light }
+def shade: Shade = Light;
+
+theorem acc_at_def(x: Acc<Nat>(seven)): Acc<Nat>(seven) {
+    match x { Stop(a) => Stop(a), Step(a, b, c) => Step(a, b, c) }
+}
+
+theorem acc_at_fn(x: Acc<Nat → Nat>(same)): Acc<Nat → Nat>(same) {
+    match x { Stop(a) => Stop(a), Step(a, b, c) => Step(a, b, c) }
+}
+
+theorem acc_at_inductive_def(x: Acc<Shade>(shade)): Acc<Shade>(shade) {
+    match x { Stop(a) => Stop(a), Step(a, b, c) => Step(a, b, c) }
+}
+
+theorem acc_at_call(x: Acc<Nat>(same(3))): Acc<Nat>(same(3)) {
+    match x { Stop(a) => Stop(a), Step(a, b, c) => Step(a, b, c) }
+}
+
+theorem acc_at_var(k: Nat, x: Acc<Nat>(k)): Acc<Nat>(k) {
+    match x { Stop(a) => Stop(a), Step(a, b, c) => Step(a, b, c) }
+}
+
+// A literal index is closed and is not abstracted: every arm is held to it.
+// expect-error: at its written result index, which is not the expected `Acc<Nat>(7)`
+theorem acc_at_literal(x: Acc<Nat>(7)): Acc<Nat>(7) {
+    match x { Stop(a) => Stop(a), Step(a, b, c) => Step(a, b, c) }
+}
