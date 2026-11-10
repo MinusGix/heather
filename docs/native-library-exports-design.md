@@ -13,10 +13,10 @@ span of bytes its caller lends, which is what compiles the scanner's loop
 (a hash's state updated in place) is designed far enough to show the read
 half is not a dead end (§7), and is its own round.
 
-The memory clause of the theorem (§4) is not a sketch: its definitions and
-the lemmas the proof needs from them were checked by the kernel against the
-library as it stands, both over an abstract memory and for the byte memory
-model. The probe is appendix A.
+The memory clause of the theorem (§4) is not a sketch: its definitions,
+the lemmas the proof needs from them and the machine step of a read from a
+lent span were checked by the kernel against the library as it stands, over
+an abstract memory and for the byte memory model. The probe is appendix A.
 
 ## 0. Recommendation
 
@@ -292,7 +292,10 @@ by the 64-bit add the lowering has, then `MOVZX` at zero displacement, the
 form `ByteLoad` already certifies. No new instruction is needed for the
 read half. The add is `next_rip(a, k)` by `BitVec::iter_add_eq_add`, the
 same step `displaced_at` takes for frame slots, with `k < xs.len()` and the
-canonical bound keeping it from wrapping.
+canonical bound keeping it from wrapping. This step is checked too
+(`lent_load_step`, appendix A): from `Lends`, `Wrote` since entry, the
+register's equation and the index below the length, the machine's
+`ByteLoadStep` of `xs.byte_at(index)`.
 
 ## 6. The contract
 
@@ -445,10 +448,10 @@ in the lexer's library.
 
 Checked by the kernel on 2026-11-10 against the library on this branch, and
 not committed as a module (the issue asks for no code before the note is
-accepted), so the text is kept here. Neither part needed a new law on
+accepted), so the text is kept here. No part needed a new law on
 `Stack<M>` or on the memory model. What the probe does not cover is the
-lowering's side: the file's known comparisons and the load's case in
-`emit`, which are R1.
+lowering's bookkeeping: the file's known comparisons and the load's case
+in `emit`, which are R1.
 
 Over any memory, importing the x86 model, `x86_64_stack` and `transition`:
 
@@ -546,5 +549,47 @@ theorem DataRegion::lends(self r: DataRegion, i: Nat, room: i <= r.size, a: BitV
                 j(sym(step.proof.right.proof), λ x _ => r.profile.read(x, next_rip(a, k)) = xs.nth(k), trans(same, held))
             },
             m, after, readable.right(k, inside), wrote)⟩
+}
+```
+
+The machine step of a read (§5), importing `rt` for `byte_at`: a register
+holding the base plus the index reads the span's byte, at any memory the
+call's own stores have reached.
+
+```
+// Inside its length a list has the byte `byte_at` answers.
+theorem nth_or_zero(xs: List<BitVec(8)>): (k: Nat) → k < xs.len() → xs.nth(k) = Some(xs.nth(k).unwrap_or(BitVec::ofNat(0))) {
+    match xs {
+        Nil => λ k h => false_elim(h),
+        Cons(_, t) => λ k => match k {
+            Zero => λ _ => refl,
+            Succ(j) => λ h => nth_or_zero(t, j, h),
+        },
+    }
+}
+
+theorem List::nth_byte_at(self xs: List<BitVec(8)>, index: BitVec(64), inside: index.toNat() < xs.len()):
+    xs.nth(index.toNat()) = Some(xs.byte_at(index)) {
+    nth_or_zero(xs, index.toNat(), inside)
+}
+
+// A register holding base plus index reads the lent span's byte there, at
+// any memory the call's own stores have reached.
+theorem lent_load_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, entry: M, lent: stack.Lends(i, a, xs, entry), load: ByteLoad, index: BitVec(64), before: MachineState<M>,
+    wrote: stack.Wrote(i, entry, before.memory), held: read_gpr(load.base, before.gprs) = a.add(index), inside: index.toNat() < xs.len()):
+    ByteLoadStep<M>(data, load, xs.byte_at(index), before, byte_load_after(load, xs.byte_at(index), before)) {
+    let readable = lent(before.memory, wrote);
+    let address: (a.add(index) = next_rip(a, index.toNat())) = sym(BitVec::iter_add_eq_add(64, a, index));
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 64), trivial);
+    let value: (next_rip(a, index.toNat()).toNat() = a.toNat() + index.toNat()) =
+        BitVec::offset_toNat(64, a, index.toNat(), omega(readable.left, inside, top));
+    let at = trans(held, address);
+    ByteLoadStep(
+        canonical := j(sym(at), λ x _ => x.drop_low(47, 17) = BitVec::zero(),
+            BitVec::drop_low_zero_of_lt(47, 17, next_rip(a, index.toNat()), omega(value, readable.left, inside))),
+        present := j(sym(at), λ x _ => data.read(before.memory, x) = Some(xs.byte_at(index)),
+            trans(readable.right(index.toNat(), inside), xs.nth_byte_at(index, inside))),
+        execution := refl)
 }
 ```
