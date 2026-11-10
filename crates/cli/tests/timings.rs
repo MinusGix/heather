@@ -174,6 +174,62 @@ fn replay_phases_are_attributed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A run without a cache asks the kernel what a cold run over an empty cache
+/// directory asks (`issues/cacheless-run-rechecks-loaded-modules.md`). `both`
+/// imports two modules that do not import each other, so its world is the
+/// first one's with the second loaded into it: before the run kept its own
+/// verdicts in memory, that load checked the second module's bodies again,
+/// and on a library the size of the showcase's a third of the evaluator's
+/// steps were such repeats. The bare `ok` is unchanged: every declaration
+/// still faced the kernel in this process.
+#[test]
+fn a_run_without_a_cache_checks_a_loaded_module_once() {
+    let dir = std::env::temp_dir().join(format!("heather-bare-timings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    std::fs::write(dir.join("one.hthr"), "fn one() -> Nat { 1 }\n\ntheorem one_is(): one() = 1 { refl }\n").unwrap();
+    std::fs::write(dir.join("two.hthr"), "fn two() -> Nat { 2 }\n\ntheorem two_is(): two() = 2 { refl }\n").unwrap();
+    std::fs::write(
+        dir.join("both.hthr"),
+        "import one;\nimport two;\n\ntheorem both(): Succ(one()) = two() { refl }\n",
+    )
+    .unwrap();
+    let cache = dir.join("cache");
+    let bare = dir.join("bare.tsv");
+    let cold = dir.join("cold.tsv");
+
+    let without = heather(&dir, &["check".as_ref(), "--timings".as_ref(), bare.as_os_str(), "both.hthr".as_ref()]);
+    assert_eq!(without.status.code(), Some(0), "{}", String::from_utf8_lossy(&without.stderr));
+    assert_eq!(String::from_utf8_lossy(&without.stdout).lines().next(), Some("both.hthr: ok"));
+    let with = heather(
+        &dir,
+        &[
+            "check".as_ref(),
+            "--cache-dir".as_ref(),
+            cache.as_os_str(),
+            "--timings".as_ref(),
+            cold.as_os_str(),
+            "both.hthr".as_ref(),
+        ],
+    );
+    assert_eq!(with.status.code(), Some(0), "{}", String::from_utf8_lossy(&with.stderr));
+
+    let (bare, cold) = (Table::read(&bare), Table::read(&cold));
+    for column in ["check_terms", "eval_steps", "conv_misses", "decls_gated"] {
+        assert_eq!(
+            bare.total("run", column),
+            cold.total("run", column),
+            "`{column}`: a run without a cache and a cold run over an empty one ask the kernel the same",
+        );
+    }
+    assert!(bare.total("run", "check_terms") > 0, "and the kernel was asked");
+    // A run that named no cache writes no store: the working directory is
+    // where one with an empty path would have landed.
+    assert!(!dir.join(heather_cache::store::FILE).exists(), "a run without a cache saved its verdicts");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A run killed mid-check (the CPU rail's SIGXCPU or SIGKILL) still leaves
 /// its table: the header and every closed scope's row, and beside it
 /// `<stem>.open.tsv` naming the scopes that were open, the running

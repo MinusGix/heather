@@ -226,6 +226,19 @@ impl Cache {
         (Cache::over(store), why)
     }
 
+    /// A cache for one process: nothing loaded, nothing behind it, and
+    /// [`Cache::save`] writes nothing. The verdicts it holds are the ones
+    /// this process's own kernel gave, so every declaration still faces the
+    /// kernel once; what it vouches for is the same binding met again, which
+    /// is what loading a module into another module's world is
+    /// (`docs/module-dag-design.md` §6). A command run without a cache
+    /// directory installs one, so that it asks the kernel what a cold run
+    /// over an empty directory asks
+    /// (`issues/cacheless-run-rechecks-loaded-modules.md`).
+    pub fn in_process() -> Cache {
+        Cache::over(Store::empty(PathBuf::new()))
+    }
+
     /// A cache with no file behind it: for tests, and for a run that wants the
     /// hashing without the persistence.
     pub fn over(store: Store) -> Cache {
@@ -256,6 +269,10 @@ impl Cache {
     /// kernels sharing the store evict by that stamp.
     pub fn save(&self) -> std::io::Result<()> {
         let inner = self.inner.borrow();
+        if inner.store.dir.as_os_str().is_empty() {
+            // `Cache::in_process`: there is no directory to write to.
+            return Ok(());
+        }
         let now = store::now_secs();
         if inner.store.wants_save(now) {
             inner.store.save_at(KERNEL_SEMANTICS, now)?;

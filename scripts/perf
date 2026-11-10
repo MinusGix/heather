@@ -465,10 +465,11 @@ def summarize(tsv: Path):
     }
 
 
-def run_check(args, heather: Path, file: str, search, cache: Path, tsv: Path, workers: int, root: Path = ROOT):
+def run_check(args, heather: Path, file: str, search, cache, tsv: Path, workers: int, root: Path = ROOT):
     """One capped release `heather check` (or `compile-x86`, for a
     COMPILE_X86 path) over the sources at `root`; wall, CPU and peak RSS
-    from wait4."""
+    from wait4. `cache` is the cache directory, or None for the command with
+    no cache at all (`ab --mode bare`)."""
     if file in COMPILE_X86:
         # compile-x86 refuses an output that exists, and writes the
         # certificate beside it; both are scratch.
@@ -480,7 +481,9 @@ def run_check(args, heather: Path, file: str, search, cache: Path, tsv: Path, wo
         cmd = [str(heather), "check"]
     for d in search:
         cmd += ["-L", d]
-    cmd += ["--cache-dir", str(cache), "--kernel-workers", str(workers), "--timings", str(tsv)]
+    if cache is not None:
+        cmd += ["--cache-dir", str(cache)]
+    cmd += ["--kernel-workers", str(workers), "--timings", str(tsv)]
     if file not in COMPILE_X86:
         cmd.append(file)
 
@@ -1132,11 +1135,14 @@ def timing_columns(args, heather: Path, raw_dir: Path, label: str, root: Path = 
 
 def ab_sample(args, heather, file, search, raw_dir, label, i, root: Path = ROOT):
     """One cold check: a fresh cache dir, so the run elaborates and gates
-    everything rather than replaying somebody's images."""
-    cache = Path(tempfile.mkdtemp(prefix=f"heather-ab-{label}-"))
+    everything rather than replaying somebody's images. `--mode bare` is the
+    command with no cache at all, which is what a plain `heather check`
+    runs: the scratch directory is made and never named to it."""
+    scratch = Path(tempfile.mkdtemp(prefix=f"heather-ab-{label}-"))
+    cache = None if args.mode == "bare" else scratch
     tsv = raw_dir / f"{Path(file).stem}-{label}-{i}.tsv"
     try:
-        if args.mode != "cold":
+        if args.mode in ("warm", "edit"):
             # warm/edit need a seeded cache: one throwaway run first.
             run_check(args, heather, file, search, cache, raw_dir / f"seed-{label}-{i}.tsv", args.workers, root)
         path = root / file
@@ -1148,7 +1154,7 @@ def ab_sample(args, heather, file, search, raw_dir, label, i, root: Path = ROOT)
         finally:
             path.write_bytes(original)
     finally:
-        shutil.rmtree(cache, ignore_errors=True)
+        shutil.rmtree(scratch, ignore_errors=True)
     if out["exit"] != 0:
         sys.exit(f"error: the {label} binary failed on {file}: {out['summary']}\n"
                  + "\n".join(out.get("output_tail", [])))
@@ -1630,7 +1636,9 @@ def main():
                     help="touch every crate source before each build, so cargo cannot judge a tree fresh that "
                          "it has already built newer artifacts for (always do this on furnace)")
     sp.add_argument("--samples", type=int, default=3, help="interleaved before/after pairs (default 3)")
-    sp.add_argument("--mode", choices=("cold", "warm", "edit"), default="cold")
+    sp.add_argument("--mode", choices=("cold", "warm", "edit", "bare"), default="cold",
+                    help="cold: an empty cache directory (default); warm: images replayed; edit: one "
+                         "declaration appended; bare: no cache at all, a plain `heather check`")
     sp.add_argument("--corpus", choices=CORPUS, default="quick")
     sp.add_argument("--only", action="append", metavar="SUBSTR",
                     help="restrict the corpus to matching paths (default: the showcase alone — an A/B "

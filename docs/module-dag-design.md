@@ -172,6 +172,15 @@ replays about `n` images plus the sum of those remainders, which over the
 library is 166 in all; a folder's closure today replays nearly twice its
 size (`docs/library-world-design.md` §3).
 
+Each of those loads judges every binding of the image again, by the kernel
+or by a verdict the gate holds (§4). A command given no cache directory
+therefore installs a gate too, one with nothing loaded and nothing saved
+(`Cache::in_process`): the verdicts it holds are the ones this process's
+kernel gave where each module was elaborated, and a load is then hashing,
+as it is for `--cache`. With no gate at all the remainders were checked in
+the kernel once per world they were loaded into
+(`issues/cacheless-run-rechecks-loaded-modules.md`).
+
 The per-module bookkeeping that the early cutoff keeps for "the world under
 the next module" (the session's `world` and Merkle vectors) belongs to the
 snapshot, since each world is a different sequence; the Merkle hashes of a

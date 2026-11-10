@@ -334,9 +334,11 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         }
         Rc::new(store)
     });
-    if let Some(store) = &verdicts {
-        elab.set_gate(Rc::clone(store) as Rc<dyn heather_elab::gate::KernelGate>);
-    }
+    // Without a directory, the verdicts of this process alone
+    // (`Cache::in_process`): a module loaded into a second world is not
+    // checked a second time.
+    let gate = verdicts.clone().unwrap_or_else(|| Rc::new(heather_cache::Cache::in_process()));
+    elab.set_gate(gate as Rc<dyn heather_elab::gate::KernelGate>);
     let mut session = SemanticSession::new(cache);
     for &(name, src) in SUPPORT {
         check_module(&mut elab, &mut session, &loader::Module {
@@ -539,7 +541,7 @@ mod tests {
     #[test]
     fn the_bundled_library_checks() {
         let mut elab = Elaborator::with_prelude().unwrap();
-        let verdicts = heather_cache::Cache::over(heather_cache::store::Store::empty(PathBuf::from("unused")));
+        let verdicts = heather_cache::Cache::in_process();
         elab.set_gate(Rc::new(verdicts) as Rc<dyn heather_elab::gate::KernelGate>);
         let mut session = SemanticSession::new(Some(heather_cli::showcase::native_test_images()));
         for &(name, src) in SUPPORT {
