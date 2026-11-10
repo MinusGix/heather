@@ -741,6 +741,28 @@ theorem Nat::space_apart(a, k, b, l: Nat, below: a + k <= b): Nat::space().Apart
     Nat::space_apart_of(a, k, b, l, Span(a, k).disjoint_of_before(Span(b, l), below))
 }
 
+// Found, not cited (docs/facts-on-demand-design.md §3): in the two numbered
+// spaces, a premise `space.Distinct(a, k) := infer` or `space.Apart(a, k,
+// b, l) := infer` is the numbers' endpoint verdict and the fits below the
+// top, by `omega` over the asker's hypotheses (`a.toNat()` an atom). A
+// natural span never overlaps itself, so that one is a plain rule.
+evidence theorem BitVec::space_distinct_by_ends({n: Nat}, {a: BitVec(n)}, {k: Nat}, fits: a.toNat() + k <= Nat::pow(2, n) := omega):
+    BitVec::space(n).Distinct(a, k) {
+    BitVec::space_distinct(n, a, k, fits)
+}
+
+evidence theorem BitVec::space_apart_by_ends({n: Nat}, {a: BitVec(n)}, {k: Nat}, {b: BitVec(n)}, {l: Nat},
+    disjoint: Span(a.toNat(), k).apart(Span(b.toNat(), l)).IsTrue() := omega,
+    fa: a.toNat() + k <= Nat::pow(2, n) := omega, fb: b.toNat() + l <= Nat::pow(2, n) := omega): BitVec::space(n).Apart(a, k, b, l) {
+    BitVec::space_apart_of(n, a, k, b, l, Span(a.toNat(), k).apart_sound(Span(b.toNat(), l), disjoint), fa, fb)
+}
+
+evidence theorem Nat::space_distinct_always({a, k: Nat}): Nat::space().Distinct(a, k) { Nat::space_distinct(a, k) }
+
+evidence theorem Nat::space_apart_by_ends({a, k, b, l: Nat}, h: Span(a, k).apart(Span(b, l)).IsTrue() := omega): Nat::space().Apart(a, k, b, l) {
+    Nat::space_apart_of(a, k, b, l, Span(a, k).apart_sound(Span(b, l), h))
+}
+
 // ---------------------------------------------------------------------------
 // Buffers: a memory of its own over the indices `0..cap`
 

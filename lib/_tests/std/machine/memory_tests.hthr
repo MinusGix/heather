@@ -66,3 +66,33 @@ theorem overlap_does_not_read_back():
 {
     λ h => { let s: (5 = 1) = cong_fn(λ (v: [BitVec(8); 5]) => head(v).toNat(), h); omega(s) }
 }
+
+// In the numbered spaces, `Distinct` and `Apart` premises are found by the
+// numbers' endpoint verdicts (issues/span-footprint-automation.md): at a
+// machine-word space with the fits in scope, at a literal width, at the
+// naturals with and without the order, and negative controls.
+theorem needs_apart<A>(space: Space<A>, a: A, k: Nat, b: A, l: Nat, d: space.Apart(a, k, b, l) := infer): space.Apart(a, k, b, l) { d }
+theorem needs_distinct<A>(space: Space<A>, a: A, k: Nat, d: space.Distinct(a, k) := infer): space.Distinct(a, k) { d }
+
+theorem word_apart(n: Nat, a, b: BitVec(n), k, l: Nat, below: a.toNat() + k <= b.toNat(), fits: b.toNat() + l <= Nat::pow(2, n)):
+    BitVec::space(n).Apart(a, k, b, l) {
+    needs_apart(BitVec::space(n), a, k, b, l)
+}
+theorem word_apart_64(a, b: BitVec(64), above: b.toNat() + 8 <= a.toNat(), fits: a.toNat() + 16 <= Nat::pow(2, 64)):
+    BitVec::space(64).Apart(a, 16, b, 8) {
+    needs_apart(BitVec::space(64), a, 16, b, 8)
+}
+theorem word_distinct(n: Nat, a: BitVec(n), k: Nat, fits: a.toNat() + k <= Nat::pow(2, n)): BitVec::space(n).Distinct(a, k) {
+    needs_distinct(BitVec::space(n), a, k)
+}
+theorem nat_apart(a, k, b, l: Nat, below: a + k <= b): Nat::space().Apart(a, k, b, l) { needs_apart(Nat::space(), a, k, b, l) }
+theorem nat_distinct(a, k: Nat): Nat::space().Distinct(a, k) { needs_distinct(Nat::space(), a, k) }
+
+// Without the fit below the top, a word span may wrap onto the other.
+// expect-error: no instance for
+theorem word_apart_unfit(n: Nat, a, b: BitVec(n), k, l: Nat, below: a.toNat() + k <= b.toNat()): BitVec::space(n).Apart(a, k, b, l) {
+    needs_apart(BitVec::space(n), a, k, b, l)
+}
+
+// expect-error: no instance for
+theorem nat_apart_unordered(a, b: Nat): Nat::space().Apart(a, 1, b, 1) { needs_apart(Nat::space(), a, 1, b, 1) }

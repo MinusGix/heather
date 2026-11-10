@@ -155,6 +155,16 @@ theorem Span::disjoint_within(self s, t, s2, t2: Span, d: s.Disjoint(t), ss: s2.
     λ x h1 h2 => d(x, ss(x, h1), tt(x, h2))
 }
 
+// Found, not cited (docs/facts-on-demand-design.md §3): a premise
+// `s.Disjoint(t) := infer` or `s.Within(t) := infer` is the endpoint
+// verdict, by `omega` over the hypotheses in the asker's scope. A closed
+// pair is answered by the verdict evaluating; an open one by `omega`
+// reading `s.base`, `s.len` and the rest as atoms, so the hypotheses must
+// speak about the same endpoints.
+evidence theorem Span::disjoint_by_ends({s, t: Span}, h: s.apart(t).IsTrue() := omega): s.Disjoint(t) { s.apart_sound(t, h) }
+
+evidence theorem Span::within_by_ends({s, t: Span}, h: s.within(t).IsTrue() := omega): s.Within(t) { s.within_sound(t, h) }
+
 // ---------------------------------------------------------------------------
 // Adjacency: splitting a span and putting two together
 
