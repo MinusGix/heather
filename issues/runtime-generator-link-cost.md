@@ -5,7 +5,7 @@ labels: [native, runtime-fn, performance]
 area: heather-in-heather
 milestone: [hih-native-heather]
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-10
 ---
 
 Found wiring loops into `runtime fn` (design §16.11). `loop_anywhere.hthr`
@@ -22,3 +22,13 @@ Where the time goes inside the generator is not yet measured: the linking
 (`runtime_linked`, every callee's instance and sources re-read per caller)
 and the published statements' elaboration (`infer(built)` on the instance)
 are the candidates. A tool-sized runtime program would meet this first.
+
+## Log
+
+- 2026-11-10: Measured while probing for `docs/native-lexer-crypto-roadmap.md`
+  (2026-11-10, cloud box): the generator spends seconds per small word
+  function (Σ1 and T1 of SHA-256, a handful of operations each), and a first
+  `compile-x86` of one function is dominated by building the runtime closure
+  cold. A hash is tens of such functions and a scanner a table plus a loop, so
+  both targets want this cost as `scripts/bench-probes` cases before their
+  rounds start, to see it move.

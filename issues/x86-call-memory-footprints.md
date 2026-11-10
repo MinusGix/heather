@@ -3,7 +3,7 @@ title: Specify caller and callee memory footprints across calls
 status: open
 labels: [compiler,x86,memory,proofs]
 area: heather-in-heather
-milestone: [hih-memory]
+milestone: [hih-memory, nh-library]
 created: 2026-09-07
 updated: 2026-11-09
 ---

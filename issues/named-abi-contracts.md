@@ -5,6 +5,7 @@ labels: [compiler,abi,semantics,proofs]
 area: heather-in-heather
 created: 2026-09-07
 updated: 2026-09-07
+milestone: [nh-library]
 ---
 
 ## Scope
