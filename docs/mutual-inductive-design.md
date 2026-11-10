@@ -215,6 +215,23 @@ keys a group's slice on all its members' source, sees the same grouping as
 elaboration. Every other cycle keeps today's behaviour, the forward
 reference refusal.
 
+**Member declarations** (issues/mutual-family-member-declarations.md). A
+member owns a namespace as a declared type does: `fn Tm::size(self t: Tm)`
+and `theorem Tm::f` pass the owner rule, and a value whose type is the
+family at a member's index constructor has that member as its carrier
+(`Tm`, keyed in the family's module), so `t.size()` dispatches to
+`Tm::size` outside the group. Inside a group, where the members are not yet
+declared, a call reaches a sibling by its declared name (`Args::size(ts)`),
+a free one also by its base name, and a method call `x.size()` reaches the
+member declaration `E::size` when the source already says `x` is a value of
+member `E`: the recursive parameter, a parameter whose written type names a
+member, a field an arm binds (the field's rewritten occurrence names its
+member), a binder of a nested `match` on such a value, or a `let` of one.
+The rewrite reads no types, so any other receiver is left to dispatch, and
+the "unbound" it reports there is reworded to name the qualified
+spellings. Group formation adds an edge from a method call to every member
+declaration of that base name, over-approximating as calls by base name do.
+
 **Errors in the members' terms.** `f#rec` is checked by the ordinary
 structural guard, whose messages name the declaration and parameters it
 checks. Each rewritten call records its span and callee, and an error from

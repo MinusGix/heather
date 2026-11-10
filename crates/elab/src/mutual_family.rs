@@ -19,6 +19,8 @@
 //! kernel re-checks every term the routes emit, and a refusal names what the
 //! user wrote.
 
+use std::sync::Arc as Rc;
+
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
 use heather_syntax::ast::{CtorDecl, FieldDecl, InductiveDecl, Item};
@@ -394,6 +396,23 @@ impl Elaborator {
         }
         let idx_t = self.member_index(cx, fam, k, idx, span)?;
         self.lower_iwf_instance(cx, fam, &lowered, &[], idx_t, span)
+    }
+
+    /// The member a type is, when it is a mutual group's family at one of
+    /// its index constructors: `⟦Tm<ā>⟧` read back to the family and `Tm`'s
+    /// position. The index is read structurally, by its injection path over
+    /// the member index type (the spelling [`Self::member_index`] builds);
+    /// a neutral index is no member.
+    pub(crate) fn member_of_family_ty(&self, ty: &Type) -> Option<(Rc<Inductive>, usize)> {
+        let (fam, iwf) = self.iwf_of(ty)?;
+        if fam.members.is_empty() {
+            return None;
+        }
+        let path = crate::spelling::inj_path(&iwf.idx, fam.members.len());
+        if !path.reached || path.ctor >= fam.members.len() {
+            return None;
+        }
+        Some((fam, path.ctor))
     }
 
     /// The family's index at member `k`: `D_t#member(e)`, built by the member

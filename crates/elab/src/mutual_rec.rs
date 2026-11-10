@@ -93,11 +93,19 @@ pub(crate) fn structural_groups(items: &[Item], is_member: &dyn Fn(&str) -> bool
         if !over.contains(&true) {
             continue;
         }
+        // A call reaches a declaration by its base name or, for a member
+        // declaration (`fn Tm::size`), by its qualified one; a method call
+        // `x.size()` reaches every member declaration named `size`
+        // (issues/mutual-family-member-declarations.md). Both over-approximate,
+        // as §1 allows: an edge only ever groups.
         let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
         for (a, d) in run.iter().enumerate() {
             by_name.entry(base_name(&d.name)).or_default().push(a);
+            if base_name(&d.name) != d.name {
+                by_name.entry(d.name.as_str()).or_default().push(a);
+            }
         }
-        let edges: Vec<Vec<usize>> = run.iter().map(|d| callees(d, &by_name)).collect();
+        let edges: Vec<Vec<usize>> = run.iter().map(|d| callees(d, &run, &by_name)).collect();
         if !edges.iter().enumerate().any(|(a, es)| es.iter().any(|&b| b > a)) {
             continue;
         }
@@ -138,23 +146,34 @@ fn recursive_param_type(d: &Decl) -> Option<(&str, &[Ty], Option<&Expr>, usize)>
     }
 }
 
-/// The run positions `d` calls: heads of applications, by name.
-fn callees(d: &Decl, by_name: &HashMap<&str, Vec<usize>>) -> Vec<usize> {
+/// The run positions `d` calls: heads of applications, by name, and the
+/// member declarations a method call's name can reach.
+fn callees(d: &Decl, run: &[&Decl], by_name: &HashMap<&str, Vec<usize>>) -> Vec<usize> {
     let mut out = Vec::new();
+    let mut push = |out: &mut Vec<usize>, b: usize| {
+        if !out.contains(&b) {
+            out.push(b);
+        }
+    };
     let mut scan = |e: &Expr| {
-        crate::surface::walk_expr(e, &mut |x| {
-            let ExprKind::App { head, .. } = &x.kind else {
-                return;
-            };
-            if let Some((n, _)) = named_head(head)
-                && let Some(hits) = by_name.get(n)
-            {
-                for &b in hits {
-                    if !out.contains(&b) {
-                        out.push(b);
+        crate::surface::walk_expr(e, &mut |x| match &x.kind {
+            ExprKind::App { head, .. } => {
+                if let Some((n, _)) = named_head(head)
+                    && let Some(hits) = by_name.get(n)
+                {
+                    for &b in hits {
+                        push(&mut out, b);
                     }
                 }
             }
+            ExprKind::Dot { name, args: Some(_), .. } => {
+                for (b, o) in run.iter().enumerate() {
+                    if crate::names::split_qual(&o.name).is_some_and(|(_, base)| base == name) {
+                        push(&mut out, b);
+                    }
+                }
+            }
+            _ => {}
         });
     };
     for s in &d.body.stmts {
@@ -258,6 +277,13 @@ impl Rec<'_> {
         self.index.map(|i| self.decl.params[i].name.as_str())
     }
 
+    /// The parameter a method call's receiver fills: the one written
+    /// `self`, else the first (a group member's parameters are all
+    /// explicit, so positions are argument positions).
+    fn receiver_slot(&self) -> usize {
+        self.decl.params.iter().position(|p| p.is_self).unwrap_or(0)
+    }
+
     /// `x̄`: every parameter but the recursive one and its index, in order.
     fn rest(&self) -> impl DoubleEndedIterator<Item = &Param> {
         self.decl
@@ -290,6 +316,10 @@ struct Group<'a> {
     /// Every rewritten call: its span and the member it calls, so an error
     /// the recursion raises at a call is told in the callee's terms.
     sites: RefCell<Vec<(Span, usize)>>,
+    /// Every method call left to ordinary dispatch whose name is a group
+    /// member declaration's: its span and that name, so an "unbound" there
+    /// says which receivers the rewrite reads.
+    unplaced: RefCell<Vec<(Span, String)>>,
 }
 
 impl Group<'_> {
@@ -342,12 +372,93 @@ impl Group<'_> {
         tyapp(var(name, span), tyvars, span)
     }
 
+    /// The family member a parameter's written type names, `Tm` or
+    /// `Tm<ā>(e)`, by its base name.
+    fn written_member(&self, ty: &Ty) -> Option<usize> {
+        let name = match &ty.kind {
+            TyKind::Named { name, .. } => name.as_str(),
+            TyKind::OfExpr(e) => match &e.kind {
+                ExprKind::App { head, args, .. } if args.len() == 1 => named_head(head)?.0,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.fam.members.iter().position(|m| m.name == base_name(name))
+    }
+
+    /// The family member a constructor field is a child at: the family's
+    /// rewritten occurrence `D#mutual<p̄>(E#member(e))`
+    /// (docs/mutual-inductive-design.md §2), read back to `E`.
+    fn field_member(&self, ty: &Ty) -> Option<usize> {
+        let TyKind::OfExpr(e) = &ty.kind else {
+            return None;
+        };
+        let ExprKind::App { head, args, .. } = &e.kind else {
+            return None;
+        };
+        if args.len() != 1 || base_name(named_head(head)?.0) != base_name(&self.fam.name) {
+            return None;
+        }
+        let tag = match &args[0].kind {
+            ExprKind::Var(n) => n.as_str(),
+            ExprKind::App { head, .. } => named_head(head)?.0,
+            _ => return None,
+        };
+        let Some(IdxTy::Decl(iind)) = &self.fam.index_ty else {
+            return None;
+        };
+        iind.ctors.iter().position(|c| base_name(&c.name) == base_name(tag))
+    }
+
+    /// An arm on member `u`'s values: each of its direct field binders, by
+    /// name, with the member the field is a child at. Empty when the arm's
+    /// constructor is not one of `u`'s.
+    fn arm_fields(&self, u: usize, a: &Arm) -> Vec<(String, usize)> {
+        let Some(c) = self.fam.members[u]
+            .ctors
+            .iter()
+            .map(|&k| &self.fam.ctors[k])
+            .find(|c| c.name == base_name(&a.ctor))
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut next = 0;
+        for p in &a.binders {
+            let (at, name) = match p {
+                Pat::Var { name, .. } => {
+                    next += 1;
+                    (next - 1, name)
+                }
+                Pat::Named { field, pat, .. } => match &**pat {
+                    Pat::Var { name, .. } => {
+                        let Some(at) = c.fields.iter().position(|(f, _)| f.as_deref() == Some(field)) else {
+                            continue;
+                        };
+                        (at, name)
+                    }
+                    _ => continue,
+                },
+                Pat::Ctor { .. } => {
+                    next += 1;
+                    continue;
+                }
+            };
+            if let Some((_, ty)) = c.fields.get(at)
+                && let Some(m) = self.field_member(ty)
+            {
+                out.push((name.clone(), m));
+            }
+        }
+        out
+    }
+
     fn rec_of_member(&self, u: usize) -> Option<&Rec<'_>> {
         self.recs.iter().find(|r| r.member == u)
     }
 
     fn describe(&self) -> String {
-        self.recs.iter().map(|r| format!("`{}`", r.base())).collect::<Vec<_>>().join(", ")
+        self.recs.iter().map(|r| format!("`{}`", r.decl.name)).collect::<Vec<_>>().join(", ")
     }
 }
 
@@ -555,7 +666,7 @@ impl Elaborator {
                 }
             }
         }
-        Ok(Some(Group { fam, prefix, targs, recs, sites: RefCell::new(Vec::new()) }))
+        Ok(Some(Group { fam, prefix, targs, recs, sites: RefCell::new(Vec::new()), unplaced: RefCell::new(Vec::new()) }))
     }
 
     /// `ℓ` in `f#mot … -> Type<ℓ>`: the largest level of the members'
@@ -617,7 +728,7 @@ impl Elaborator {
         let mut ons = Vec::new();
         for r in &g.recs {
             let mut calls = Calls::new(g);
-            calls.bound.extend(r.decl.params.iter().map(|p| p.name.clone()));
+            calls.params(r);
             for on in &r.decl.body.ons {
                 let expr = calls.expr(&on.expr);
                 ons.push(heather_syntax::ast::OnStmt { expr, ..on.clone() });
@@ -791,8 +902,10 @@ impl Elaborator {
         // The arm's own binders, the parameters and the `let`s shadow a
         // member's name as they do in the written arm.
         let mut calls = Calls::new(g);
-        calls.bound.extend(names.iter().cloned());
-        calls.bound.extend(r.decl.params.iter().map(|p| p.name.clone()));
+        calls.params(r);
+        for (u, (_, ty)) in names.iter().zip(&c.fields) {
+            calls.push(u.clone(), g.field_member(ty));
+        }
         let body = calls.expr(body);
         calls.finish()?;
         let body = if stmts.is_empty() {
@@ -913,12 +1026,56 @@ fn wrapper(g: &Group, r: &Rec) -> Decl {
 struct Calls<'a, 'g> {
     g: &'a Group<'g>,
     bound: Vec<String>,
+    /// The family member a bound name's value is a value of, by its position
+    /// in `bound`: the arm's own children and the declaration's parameters,
+    /// which is what a method call's receiver is read against. A later
+    /// binder of the same name shadows the entry.
+    typed: Vec<(usize, usize)>,
     error: Option<ElabError>,
 }
 
 impl<'a, 'g> Calls<'a, 'g> {
     fn new(g: &'a Group<'g>) -> Self {
-        Calls { g, bound: Vec::new(), error: None }
+        Calls { g, bound: Vec::new(), typed: Vec::new(), error: None }
+    }
+
+    /// Bind `name`, a value of member `member` when that is known.
+    fn push(&mut self, name: String, member: Option<usize>) {
+        if let Some(u) = member {
+            self.typed.push((self.bound.len(), u));
+        }
+        self.bound.push(name);
+    }
+
+    /// `r`'s parameters, the recursive one at its own member.
+    fn params(&mut self, r: &Rec) {
+        for (i, p) in r.decl.params.iter().enumerate() {
+            let member = if i == r.scrut { Some(r.member) } else { self.g.written_member(&p.ty) };
+            self.push(p.name.clone(), member);
+        }
+    }
+
+    /// The member a method call's receiver is a value of: a name bound here
+    /// at a known member, and not shadowed since.
+    fn receiver_member(&self, recv: &Expr) -> Option<usize> {
+        let ExprKind::Var(v) = &recv.kind else {
+            return None;
+        };
+        let at = self.bound.iter().rposition(|b| b == v)?;
+        self.typed.iter().find(|(p, _)| *p == at).map(|(_, u)| *u)
+    }
+
+    /// The group member `recv.name(…)` calls: the member declaration
+    /// `E::name` of the member `E` the receiver is a value of
+    /// (issues/mutual-family-member-declarations.md). A receiver the
+    /// rewrite cannot place is left to ordinary dispatch.
+    fn method(&self, recv: &Expr, name: &str) -> Option<usize> {
+        let u = self.receiver_member(recv)?;
+        let owner = &self.g.fam.members[u].name;
+        self.g.recs.iter().position(|r| {
+            crate::names::split_qual(&r.decl.name)
+                .is_some_and(|(q, base)| base == name && base_name(q) == owner.as_str())
+        })
     }
 
     fn finish(self) -> R<()> {
@@ -934,12 +1091,16 @@ impl<'a, 'g> Calls<'a, 'g> {
         }
     }
 
-    /// The group member `n` names here, if it is one and not shadowed.
+    /// The group member `n` names here, if it is one and not shadowed: by
+    /// its declared name, or a free declaration by its base name (a member
+    /// declaration `Tm::size` is not reached by a bare `size`).
     fn member(&self, n: &str) -> Option<usize> {
         if self.bound.iter().any(|b| b == n) {
             return None;
         }
-        self.g.recs.iter().position(|r| r.base() == n || r.decl.name == n)
+        self.g.recs.iter().position(|r| r.decl.name == n).or_else(|| {
+            self.g.recs.iter().position(|r| r.base() == base_name(n) && base_name(&r.decl.name) == r.decl.name)
+        })
     }
 
     fn call(&mut self, at: usize, head: &Expr, args: Vec<Expr>, named: &[NamedArg], span: Span) -> Expr {
@@ -989,6 +1150,7 @@ impl<'a, 'g> Calls<'a, 'g> {
         self.bound.extend(names);
         let out = go(self);
         self.bound.truncate(n);
+        self.typed.retain(|(p, _)| *p < n);
         out
     }
 
@@ -1000,13 +1162,24 @@ impl<'a, 'g> Calls<'a, 'g> {
         fields.iter().map(|f| RecordLitField { expr: self.expr(&f.expr), ..f.clone() }).collect()
     }
 
-    fn arm(&mut self, a: &Arm, eqbind: Option<&String>) -> Arm {
+    /// A nested `match` arm. On a scrutinee at a known member, the arm's
+    /// field binders are values at their fields' members, so a method call
+    /// on one is placed as on the outer arm's children.
+    fn arm(&mut self, a: &Arm, eqbind: Option<&String>, scrut: Option<usize>) -> Arm {
         let mut names = Vec::new();
         for p in &a.binders {
             pat_names(p, &mut names);
         }
         names.extend(eqbind.cloned());
-        let body = self.bind(names, |me| me.expr(&a.body));
+        let fields = scrut.map(|u| self.g.arm_fields(u, a)).unwrap_or_default();
+        let n = self.bound.len();
+        for name in names {
+            let member = fields.iter().find(|(f, _)| *f == name).map(|(_, m)| *m);
+            self.push(name, member);
+        }
+        let body = self.expr(&a.body);
+        self.bound.truncate(n);
+        self.typed.retain(|(p, _)| *p < n);
         Arm { body, ..a.clone() }
     }
 
@@ -1016,8 +1189,14 @@ impl<'a, 'g> Calls<'a, 'g> {
         for s in &b.stmts {
             stmts.push(match s {
                 Stmt::Let { name, ty, expr, span, opaque } => {
+                    // A `let` at a written member type, or an alias of a
+                    // value at a known one, is a receiver the rewrite places.
+                    let member = match ty {
+                        Some(t) => self.g.written_member(t),
+                        None => self.receiver_member(expr),
+                    };
                     let expr = self.expr(expr);
-                    self.bound.push(name.clone());
+                    self.push(name.clone(), member);
                     Stmt::Let { name: name.clone(), ty: ty.clone(), expr, span: *span, opaque: *opaque }
                 }
                 Stmt::LetRecord { fields, expr, span } => {
@@ -1041,6 +1220,7 @@ impl<'a, 'g> Calls<'a, 'g> {
             .map(|on| heather_syntax::ast::OnStmt { expr: self.expr(&on.expr), ..on.clone() })
             .collect();
         self.bound.truncate(n);
+        self.typed.retain(|(p, _)| *p < n);
         Block { stmts, result: Box::new(result), ons, span: b.span }
     }
 
@@ -1093,20 +1273,41 @@ impl<'a, 'g> Calls<'a, 'g> {
                 scrut: Box::new(self.expr(scrut)),
                 eqbind: eqbind.clone(),
                 motive: motive.as_ref().map(|m| Box::new(self.expr(m))),
-                arms: arms.iter().map(|a| self.arm(a, eqbind.as_ref())).collect(),
+                arms: {
+                    let at = self.receiver_member(scrut);
+                    arms.iter().map(|a| self.arm(a, eqbind.as_ref(), at)).collect()
+                },
             },
             ExprKind::MatchCode { scrut, motive, arms } => ExprKind::MatchCode {
                 scrut: Box::new(self.expr(scrut)),
                 motive: motive.clone(),
-                arms: arms.iter().map(|a| self.arm(a, None)).collect(),
+                arms: arms.iter().map(|a| self.arm(a, None, None)).collect(),
             },
-            ExprKind::Dot { recv, name, tyargs, args, named } => ExprKind::Dot {
-                recv: Box::new(self.expr(recv)),
-                name: name.clone(),
-                tyargs: tyargs.clone(),
-                args: args.as_ref().map(|xs| xs.iter().map(|x| self.expr(x)).collect()),
-                named: self.named(named),
-            },
+            ExprKind::Dot { recv, name, tyargs, args: Some(args), named }
+                if let Some(at) = self.method(recv, name) =>
+            {
+                let mut args: Vec<Expr> = args.iter().map(|a| self.expr(a)).collect();
+                let slot = self.g.recs[at].receiver_slot().min(args.len());
+                args.insert(slot, self.expr(recv));
+                let named = self.named(named);
+                let head = var(&self.g.recs[at].decl.name, span);
+                let head = if tyargs.is_empty() { head } else { tyapp(head, tyargs.clone(), span) };
+                return self.call(at, &head, args, &named, span);
+            }
+            ExprKind::Dot { recv, name, tyargs, args, named } => {
+                if args.is_some()
+                    && self.g.recs.iter().any(|r| crate::names::split_qual(&r.decl.name).is_some_and(|(_, b)| b == name))
+                {
+                    self.g.unplaced.borrow_mut().push((span, name.clone()));
+                }
+                ExprKind::Dot {
+                    recv: Box::new(self.expr(recv)),
+                    name: name.clone(),
+                    tyargs: tyargs.clone(),
+                    args: args.as_ref().map(|xs| xs.iter().map(|x| self.expr(x)).collect()),
+                    named: self.named(named),
+                }
+            }
             ExprKind::Index { recv, idx } => {
                 ExprKind::Index { recv: Box::new(self.expr(recv)), idx: Box::new(self.expr(idx)) }
             }
@@ -1151,11 +1352,39 @@ fn reword(g: &Group, e: ElabError) -> ElabError {
         return e;
     };
     let rec = format!("`{}`", rec_name(&g.first().name));
+    // A method call the rewrite could not place, reported by dispatch as
+    // the bare name it fell back to.
+    if let Some((_, name)) = g
+        .unplaced
+        .borrow()
+        .iter()
+        .find(|(s, n)| s.start <= span.start && span.end <= s.end && msg == format!("unbound name `{n}`"))
+    {
+        let owners = g
+            .recs
+            .iter()
+            .filter_map(|r| crate::names::split_qual(&r.decl.name).filter(|(_, b)| b == name).map(|(q, _)| format!("`{q}::{name}(…)`")))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        return ElabError::Elab {
+            msg: format!(
+                "unbound name `{name}`: within the structural group {}, a method call reaches a \
+                 member declaration of the group only when its receiver is a parameter, a field \
+                 its arm binds, or a `let` of one, whose member is known before elaboration; \
+                 call it as {owners} (issues/mutual-family-member-declarations.md)",
+                g.describe()
+            ),
+            span,
+        };
+    }
     let sites = g.sites.borrow();
     let site = sites
         .iter()
         .filter(|(s, _)| s.start <= span.start && span.end <= s.end)
         .min_by_key(|(s, _)| s.end - s.start);
+    // A member declaration's recursion, `Tm::size#rec`, is spelled by its
+    // base name in a message.
+    let msg = msg.replace(&format!("`{}`", base_name(&rec_name(&g.first().name))), &rec);
     let msg = match site {
         Some(&(_, at)) => {
             let r = &g.recs[at];

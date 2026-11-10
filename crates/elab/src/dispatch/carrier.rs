@@ -53,7 +53,17 @@ impl Elaborator {
         // (`inductive.rs`'s claim, issues/true-prop-trivial-hypotheses.md). A
         // file that declares its own `True` is answered by `lookup_inductive`
         // first, exactly as the claim itself is.
-        self.lookup_inductive(name).is_some() || name == "Nat" || name == "Type" || name == "True"
+        //
+        // A mutual group's member (`Tm` of `inductive Tm {…} inductive Args
+        // {…}`) has no declaration of its own, yet is a type exactly as its
+        // siblings are: its values' carrier is the member
+        // ([`Self::member_carrier`]), so it owns a namespace too
+        // (issues/mutual-family-member-declarations.md).
+        self.lookup_inductive(name).is_some()
+            || self.lookup_member(name).is_some()
+            || name == "Nat"
+            || name == "Type"
+            || name == "True"
     }
 
     /// Does this name refer to a **type former** — a global whose result, after
@@ -142,6 +152,9 @@ impl Elaborator {
         if matches!(ty, Type::Nat) {
             return Some(Carrier::constant("Nat"));
         }
+        if let Some(c) = self.member_carrier(ty) {
+            return Some(c);
+        }
         if let Some(ind) = self.tag_of(ty) {
             return Some(Carrier::of_ind(&ind));
         }
@@ -152,7 +165,24 @@ impl Elaborator {
         if matches!(head, Type::Nat) {
             return Some(Carrier::constant("Nat"));
         }
+        if let Some(c) = self.member_carrier(&head) {
+            return Some(c);
+        }
         self.tag_of(&head).map(|ind| Carrier::of_ind(&ind))
+    }
+
+    /// A mutual group's family at a member's index constructor
+    /// (docs/mutual-inductive-design.md §2) is that **member's** carrier,
+    /// `Tm` and not `Tm#mutual`: the member is the type the writer named,
+    /// declared as an `Inductive` name in the family's module, so its key is
+    /// the one `lookup_member` resolves (issues/mutual-family-member-declarations.md).
+    /// A family at an index that is not a member constructor (a variable
+    /// index inside the group's own recursion) has no member and answers
+    /// `None`, as the family always did.
+    fn member_carrier(&self, ty: &Type) -> Option<Carrier> {
+        let (fam, k) = self.member_of_family_ty(ty)?;
+        let name = fam.members[k].name.clone();
+        Some(Carrier { key: crate::names::qkey(&fam.scope.module, &name), written: name })
     }
 
     /// Is `ty` a type variable of the context, a section's carrier `K`: a
