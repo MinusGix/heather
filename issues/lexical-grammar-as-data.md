@@ -33,3 +33,7 @@ change, and the hand-written step is deleted.
 
 - **[[regex-dfa-compiler]]** owns the DFA and `dfa_sound`. This issue is its
   first customer with more than one regex.
+
+## Log
+
+- 2026-11-10: There is now an automaton to generate: `lib/lang/lexer/lexer_scan.hthr` was written from a transition table (a Python model held to the Rust lexer before any Heather was written), and its states, kinds and families are the data this issue would own. Two facts the generated form must keep, found by the differential tests: a scanner needs a refusal no earlier accept excuses (`FAIL`: `12abc`, an unterminated literal) beside the ordinary dead end, and one token's start state depends on the previous kind (`>>`).

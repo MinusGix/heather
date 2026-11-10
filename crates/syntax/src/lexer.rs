@@ -423,7 +423,9 @@ fn lex_escape(src: &str, open: usize, i: usize) -> Result<(char, usize), LexErro
         end += 1;
     }
     if end == digits_start || bytes.get(end) != Some(&b'}') {
-        let stop = (end + 1).min(bytes.len());
+        // The character that stopped the digits, whole: it need not be one
+        // byte (`"\u{4∀"`), and a slice may not end inside it.
+        let stop = end + src[end..].chars().next().map_or(0, char::len_utf8);
         return Err(LexError {
             msg: format!("`{}` is not a `\\u{{hex}}` escape", &src[i - 1..stop]),
             span: Span { start: i - 1, end: stop },
@@ -987,6 +989,16 @@ mod tests {
         assert_eq!(chr(r"'\u{E000}'"), '\u{E000}');
         assert!(refused(r"'\u{110000}'").contains("above the last Unicode scalar value"));
         assert_eq!(chr(r"'\u{10FFFF}'"), '\u{10FFFF}');
+    }
+
+    #[test]
+    fn a_malformed_scalar_escape_is_reported_up_to_a_whole_character() {
+        // What stops the digits is quoted with them, and it may be wider
+        // than a byte: the report ends after it, not inside it.
+        assert_eq!(refused("\"\\u{4g}\""), "`\\u{4g` is not a `\\u{hex}` escape");
+        assert_eq!(refused("\"\\u{4∀}\""), "`\\u{4∀` is not a `\\u{hex}` escape");
+        assert_eq!(refused("\"\\u{→"), "`\\u{→` is not a `\\u{hex}` escape");
+        assert_eq!(refused("\"\\u{41"), "`\\u{41` is not a `\\u{hex}` escape");
     }
 
     #[test]

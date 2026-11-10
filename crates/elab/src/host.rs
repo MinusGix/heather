@@ -155,8 +155,12 @@ const REQUEST_BUDGET: usize = 10_000;
 
 /// Nodes of one returned `Expr`, and characters of one `String`, the host
 /// will read before declining (the runaway discipline: the value is produced
-/// by library code and may be arbitrarily large).
-const READ_BUDGET: usize = 4096;
+/// by library code and may be arbitrarily large). A generator's reply holds
+/// the function it compiles, so this is also the largest `runtime fn`: a
+/// family of the scanner's automaton (`lib/lang/lexer/lexer_scan.hthr`,
+/// about a hundred byte comparisons) is some five thousand nodes
+/// (`issues/runtime-generator-program-size.md`).
+const READ_BUDGET: usize = 1 << 14;
 
 /// Leading parameters `Match` will treat as unknowns before giving up.
 const MATCH_PARAMETERS: usize = 64;

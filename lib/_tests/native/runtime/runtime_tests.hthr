@@ -230,6 +230,36 @@ theorem byte_class_pair_evaluable(): program_evaluable(byte_class_pair::program)
     program_scan_evaluable(byte_class_pair::program, trivial)
 }
 
+// A program of nine functions: eight callees under one caller. The linked
+// program's sources and its code are each written once in the generator's
+// reply and referred to from every part, so the reply grows with the
+// functions and not with their square; before that this caller was refused
+// as an implausibly large reply (issues/runtime-generator-program-size.md).
+runtime fn eighth_0(a: u64) → u64 { a.add(1) }
+runtime fn eighth_1(a: u64) → u64 { a.add(2) }
+runtime fn eighth_2(a: u64) → u64 { a.add(3) }
+runtime fn eighth_3(a: u64) → u64 { a.add(4) }
+runtime fn eighth_4(a: u64) → u64 { a.add(5) }
+runtime fn eighth_5(a: u64) → u64 { a.add(6) }
+runtime fn eighth_6(a: u64) → u64 { a.add(7) }
+runtime fn eighth_7(a: u64) → u64 { a.add(8) }
+
+runtime fn eighths(which, a: u64) → u64 {
+    if which.eq_bit(0) { eighth_0(a) }
+    else if which.eq_bit(1) { eighth_1(a) }
+    else if which.eq_bit(2) { eighth_2(a) }
+    else if which.eq_bit(3) { eighth_3(a) }
+    else if which.eq_bit(4) { eighth_4(a) }
+    else if which.eq_bit(5) { eighth_5(a) }
+    else if which.eq_bit(6) { eighth_6(a) }
+    else { eighth_7(a) }
+}
+
+// The caller is the program's last function, the ninth.
+theorem eighths_runs(which, a: u64): program_eval(eighths::program, 8, [which, a]) = eighths(which, a) {
+    eighths::agrees(which, a)
+}
+
 // ---------------------------------------------------------------------------
 // Refusals. Each names its reason, and the function under the prefix is not
 // published either (the item is one transaction).

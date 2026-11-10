@@ -59,3 +59,4 @@ only join ids walk.
   a loop body over an array state first ([[rt-fixed-arrays-and-tables]],
   [[sha2-compress-native]]) and treats the unrolled form as waiting on this
   issue.
+- 2026-11-10: The scanner's automaton (`lib/lang/lexer/lexer_scan.hthr`) is the first table-shaped code certified, and this cost set its layout: a family of states is one function of about sixteen arms, because a function of twenty-one arms (`step_symbols` before it was split in two) failed with `…_native_scanned_0: OutOfFuel`. Twenty-three families certify, each in its own program. A function a little past that size hits memory before fuel ([[compile-x86-certificate-memory]]). Logarithmic marks would let a family be the natural one (all the symbol states together) and are the first of three things between the automaton and one compiled `scan_step` ([[runtime-generator-program-size]]).

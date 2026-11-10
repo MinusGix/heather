@@ -1,0 +1,905 @@
+//! The linked scanner against the Rust lexer.
+//!
+//! `heather_syntax::lex` is the oracle: on every Heather source in the
+//! repository, on every line of the library with one character changed, and
+//! on strings put together from the pieces tokens are made of, the scanner
+//! (`heather_linked::scanner`, compiled from
+//! `lib/lang/lexer/lexer_scan.hthr`) gives the lexer's kinds and spans where
+//! the lexer gives tokens, and refuses where it refuses.
+//!
+//! The one seam is values. The lexer's tokens hold them and it refuses
+//! three that do not fit (an exponent, a `\u{…}` escape, an argument-slot
+//! index); the scanner returns spans. [`lex_linked`] closes it the way the
+//! roadmap says the linked lexer will at first
+//! (`docs/native-lexer-crypto-roadmap.md` §3): the scanner cuts the source,
+//! and each token's value is read from its span alone. That function is a
+//! whole lexer, and it is compared with the oracle token for token, values
+//! included.
+#![cfg(all(target_arch = "x86_64", target_os = "linux"))]
+
+use std::path::{Path, PathBuf};
+
+use heather_linked::scanner::{self, DEAD, END, FAIL, Kind, Scanner, Token};
+use heather_syntax::lexer::{Tok, TokKind, lex};
+
+/// The scanner's kind for a lexer token.
+fn kind_of(kind: &TokKind) -> Kind {
+    match kind {
+        TokKind::Ident(_) => Kind::Ident,
+        TokKind::Num(_) => Kind::Num,
+        TokKind::Scaled(_) => Kind::Scaled,
+        TokKind::Char(_) => Kind::Char,
+        TokKind::Str(_) => Kind::Str,
+        TokKind::ArgSlot(_) => Kind::ArgSlot,
+        TokKind::Hole(_) => Kind::Hole,
+        TokKind::LParen => Kind::LParen,
+        TokKind::RParen => Kind::RParen,
+        TokKind::LBrace => Kind::LBrace,
+        TokKind::RBrace => Kind::RBrace,
+        TokKind::Comma => Kind::Comma,
+        TokKind::Colon => Kind::Colon,
+        TokKind::Semi => Kind::Semi,
+        TokKind::At => Kind::At,
+        TokKind::Dot => Kind::Dot,
+        TokKind::Plus => Kind::Plus,
+        TokKind::Minus => Kind::Minus,
+        TokKind::Bang => Kind::Bang,
+        TokKind::PlusPlus => Kind::PlusPlus,
+        TokKind::Star => Kind::Star,
+        TokKind::Lt => Kind::Lt,
+        TokKind::LtEq => Kind::LtEq,
+        TokKind::Gt => Kind::Gt,
+        TokKind::LBracket => Kind::LBracket,
+        TokKind::RBracket => Kind::RBracket,
+        TokKind::LSemantic => Kind::LSemantic,
+        TokKind::RSemantic => Kind::RSemantic,
+        TokKind::LAngle => Kind::LAngle,
+        TokKind::RAngle => Kind::RAngle,
+        TokKind::Pipe => Kind::Pipe,
+        TokKind::Amp => Kind::Amp,
+        TokKind::Slash => Kind::Slash,
+        TokKind::Percent => Kind::Percent,
+        TokKind::Shl => Kind::Shl,
+        TokKind::Shr => Kind::Shr,
+        TokKind::Arrow => Kind::Arrow,
+        TokKind::FatArrow => Kind::FatArrow,
+        TokKind::Turnstile => Kind::Turnstile,
+        TokKind::AmpAmp => Kind::AmpAmp,
+        TokKind::PipePipe => Kind::PipePipe,
+        TokKind::NormBar => Kind::NormBar,
+        TokKind::Bullet => Kind::Bullet,
+        TokKind::Approx => Kind::Approx,
+        TokKind::Caret => Kind::Caret,
+        TokKind::SupInverse => Kind::SupInverse,
+        TokKind::Join => Kind::Join,
+        TokKind::Meet => Kind::Meet,
+        TokKind::Neg => Kind::Neg,
+        TokKind::Wedge => Kind::Wedge,
+        TokKind::Vee => Kind::Vee,
+        TokKind::Iff => Kind::Iff,
+        TokKind::LArrow => Kind::LArrow,
+        TokKind::Exists => Kind::Exists,
+        TokKind::BigSum => Kind::BigSum,
+        TokKind::BigProd => Kind::BigProd,
+        TokKind::UpArrow => Kind::UpArrow,
+        TokKind::Forall => Kind::Forall,
+        TokKind::Dollar => Kind::Dollar,
+        TokKind::Lambda => Kind::Lambda,
+        TokKind::Eq => Kind::Eq,
+        TokKind::Ne => Kind::Ne,
+        TokKind::EqEq => Kind::EqEq,
+        TokKind::ColonEq => Kind::ColonEq,
+        TokKind::ColonColon => Kind::ColonColon,
+        TokKind::Eof => Kind::Eof,
+    }
+}
+
+/// The scanner's tokens up to the end or its refusal, and where it refused.
+fn scan(source: &str) -> (Vec<Token>, Option<usize>) {
+    let mut tokens = Vec::new();
+    for token in Scanner::new(source.as_bytes()) {
+        match token {
+            Ok(token) => tokens.push(token),
+            Err(refused) => return (tokens, Some(refused.at)),
+        }
+    }
+    (tokens, None)
+}
+
+/// A token's value, read from its span alone: the lexer on those bytes and
+/// nothing around them. `None` is one of the refusals about a value, and
+/// only those: a span the lexer refuses for its shape is a token the scanner
+/// should not have cut, and that is a failure here, not a refusal.
+fn value(source: &str, token: Token) -> Option<TokKind> {
+    if token.kind == Kind::Eof {
+        return Some(TokKind::Eof);
+    }
+    let alone = match lex(&source[token.start..token.end]) {
+        Ok(alone) => alone,
+        Err(error) => {
+            let about_a_value = ["is out of range", "is a surrogate, not a Unicode scalar value", "is above the last Unicode scalar value"]
+                .iter()
+                .any(|what| error.msg.contains(what));
+            assert!(about_a_value, "the scanner cut {token:?} from {source:?}, which the lexer refuses: {}", error.msg);
+            return None;
+        }
+    };
+    let [tok, eof] = alone.as_slice() else { panic!("{token:?} of {source:?} is not one token alone: {alone:?}") };
+    assert!(matches!(eof.kind, TokKind::Eof));
+    // `>>` is a shift by what stands before it, which a span alone does not
+    // hold, and it has no value to read: the scanner's kind stands.
+    if token.kind == Kind::Gt || token.kind == Kind::Shr {
+        return Some(if token.kind == Kind::Gt { TokKind::Gt } else { TokKind::Shr });
+    }
+    assert_eq!(kind_of(&tok.kind), token.kind, "{token:?} of {source:?} alone");
+    Some(tok.kind.clone())
+}
+
+/// The linked lexer: the scanner's cut of the source, with each token's
+/// value read from its span. `None` where it refuses.
+fn lex_linked(source: &str) -> Option<Vec<(TokKind, usize, usize)>> {
+    let (tokens, refused) = scan(source);
+    if refused.is_some() {
+        return None;
+    }
+    tokens.into_iter().map(|token| Some((value(source, token)?, token.start, token.end))).collect()
+}
+
+fn plain(tokens: &[Tok]) -> Vec<(TokKind, usize, usize)> {
+    tokens.iter().map(|tok| (tok.kind.clone(), tok.span.start, tok.span.end)).collect()
+}
+
+/// The two lexers on one source: the same tokens, or both refusing. Where
+/// both refuse, the scanner's refusal is not past the lexer's unless a
+/// value before it was refused first.
+fn agree(source: &str) -> Result<(), String> {
+    let theirs = lex(source);
+    let ours = lex_linked(source);
+    match (&theirs, &ours) {
+        (Ok(theirs), Some(ours)) => {
+            let theirs = plain(theirs);
+            if &theirs == ours {
+                return Ok(());
+            }
+            let at = theirs.iter().zip(ours).position(|(a, b)| a != b).unwrap_or(theirs.len().min(ours.len()));
+            Err(format!("token {at}: the lexer has {:?}, the scanner {:?}", theirs.get(at), ours.get(at)))
+        }
+        (Err(_), None) => {
+            let error = theirs.as_ref().unwrap_err();
+            let (tokens, refused) = scan(source);
+            let value_refused = tokens.iter().any(|token| value(source, *token).is_none());
+            match refused {
+                Some(at) if at > error.span.start && !value_refused => Err(format!(
+                    "the lexer refuses at {} ({}), the scanner only at {at}",
+                    error.span.start, error.msg
+                )),
+                _ => Ok(()),
+            }
+        }
+        (Ok(_), None) => Err(format!("the lexer accepts what the scanner refuses at {:?}", scan(source).1)),
+        (Err(error), Some(_)) => Err(format!("the scanner accepts what the lexer refuses: {}", error.msg)),
+    }
+}
+
+fn assert_agree(source: &str, what: &str) {
+    if let Err(why) = agree(source) {
+        panic!("{what}: {why}\n  source: {source:?}");
+    }
+}
+
+fn kinds(source: &str) -> Vec<Kind> {
+    let (tokens, refused) = scan(source);
+    assert_eq!(refused, None, "{source:?} is refused");
+    tokens.into_iter().map(|token| token.kind).collect()
+}
+
+fn spans(source: &str) -> Vec<(Kind, usize, usize)> {
+    let (tokens, refused) = scan(source);
+    assert_eq!(refused, None, "{source:?} is refused");
+    tokens.into_iter().map(|token| (token.kind, token.start, token.end)).collect()
+}
+
+fn root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("the repository")
+}
+
+fn sources_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries {
+        let path = entry.expect("entry").path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| name == "target") {
+                continue;
+            }
+            sources_under(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "hthr") {
+            out.push(path);
+        }
+    }
+}
+
+/// Every Heather source in the repository: the library, the examples, and
+/// the fixtures under `crates/`.
+fn corpus() -> Vec<(PathBuf, String)> {
+    let root = root();
+    let mut paths = Vec::new();
+    for dir in ["lib", "examples", "crates"] {
+        sources_under(&root.join(dir), &mut paths);
+    }
+    paths.sort();
+    assert!(paths.len() > 300, "only {} sources found under {}", paths.len(), root.display());
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            // A fixture that is not UTF-8 is not a `&str` the lexer takes.
+            let text = String::from_utf8(std::fs::read(&path).expect("read")).ok()?;
+            Some((path, text))
+        })
+        .collect()
+}
+
+/// The LCG of `tests/sha512.rs`.
+struct Lcg(u64);
+
+impl Lcg {
+    fn word(&mut self) -> u64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 ^ (self.0 >> 32)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        ((self.word() >> 16) % n as u64) as usize
+    }
+
+    fn pick<'a>(&mut self, from: &[&'a str]) -> &'a str {
+        from[self.below(from.len())]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The automaton's contract with the loop around it.
+
+#[test]
+fn the_kinds_are_the_modules() {
+    // `def KIND_IDENT: u64 = 1;` and its fellows, read from the source the
+    // linked code was compiled from, are `Kind`'s numbering.
+    let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
+    let mut seen = 0;
+    for line in module.lines() {
+        let Some(rest) = line.strip_prefix("def KIND_") else { continue };
+        let (name, value) = rest.split_once(": u64 = ").expect("a kind's definition");
+        let code: u64 = value.trim_end_matches(';').parse().expect("a kind's code");
+        let kind = Kind::of_code(code).unwrap_or_else(|| panic!("KIND_{name} = {code} is no `Kind`"));
+        assert_eq!(format!("{kind:?}").to_uppercase(), name.replace('_', ""), "KIND_{name} = {code}");
+        seen += 1;
+    }
+    assert_eq!(seen, Kind::ALL.len());
+    for (index, kind) in Kind::ALL.iter().enumerate() {
+        assert_eq!(kind.code(), index as u64 + 1);
+        assert_eq!(Kind::of_code(kind.code()), Some(*kind));
+    }
+    assert_eq!(Kind::of_code(0), None);
+    assert_eq!(Kind::of_code(69), None);
+    let constant = |name: &str| -> u64 {
+        let line = module.lines().find(|line| line.starts_with(&format!("def {name}: u64 = "))).expect(name);
+        let value = line.split_once(" = ").expect("a definition").1.trim_end_matches(';');
+        match value.strip_prefix("0x") {
+            Some(hex) => u64::from_str_radix(hex, 16).expect("hexadecimal"),
+            None => value.parse().expect("decimal"),
+        }
+    };
+    assert_eq!(constant("DEAD"), DEAD);
+    assert_eq!(constant("FAIL"), FAIL);
+    assert_eq!(constant("END"), END);
+}
+
+/// Every state the automaton can be in: the two starts and what stepping
+/// reaches from them.
+fn reachable() -> Vec<u64> {
+    let mut states = vec![scanner::begin(0), scanner::begin(Kind::Ident.code())];
+    let mut next = 0;
+    while next < states.len() {
+        for byte in 0..=END {
+            let to = scanner::step(states[next], byte);
+            if !states.contains(&to) {
+                states.push(to);
+            }
+        }
+        next += 1;
+    }
+    states
+}
+
+#[test]
+fn every_state_stops_at_the_end() {
+    // The loop feeds `END` once and then stops, so no state may ask for
+    // more: at the end a state stops (its last accept is the token) or
+    // refuses. The same holds for every word that is not a byte.
+    let states = reachable();
+    assert!(states.len() > 70, "{} states", states.len());
+    for state in &states {
+        for byte in [END, END + 1, 1 << 8 | 0x61, 1 << 32, u64::MAX] {
+            let to = scanner::step(*state, byte);
+            assert!(to == DEAD || to == FAIL, "state {state:#x} goes to {to:#x} on {byte:#x}");
+        }
+    }
+}
+
+#[test]
+fn a_state_accepts_a_kind_or_nothing() {
+    for state in reachable() {
+        let code = scanner::accept(state);
+        assert!(code == 0 || Kind::of_code(code).is_some_and(|kind| kind != Kind::Eof), "state {state:#x} accepts {code}");
+    }
+    assert_eq!(scanner::accept(DEAD), 0);
+    assert_eq!(scanner::accept(FAIL), 0);
+    // The two stops stay where they are, a finished token has no way on, and
+    // neither has a word that is no state: a number no family holds, or a
+    // state's number under the wrong kind.
+    let ident = state_after(scanner::begin(0), "a").expect("a state");
+    let paren = scanner::step(scanner::begin(0), u64::from(b'('));
+    assert_eq!(Kind::of_code(scanner::accept(ident)), Some(Kind::Ident));
+    assert_eq!(Kind::of_code(scanner::accept(paren)), Some(Kind::LParen));
+    for byte in [0x61, 0x3e, 0x5f, 0x30, 0x28, 0xe2, END] {
+        assert_eq!(scanner::step(DEAD, byte), DEAD);
+        assert_eq!(scanner::step(FAIL, byte), FAIL);
+        assert_eq!(scanner::step(paren, byte), DEAD);
+        assert_eq!(scanner::step(0xff, byte), DEAD);
+        assert_eq!(scanner::step(u64::MAX, byte), DEAD);
+        assert_eq!(scanner::step(ident & 0xff, byte), DEAD);
+        assert_eq!(scanner::step(ident | 1 << 40, byte), DEAD);
+    }
+}
+
+#[test]
+fn the_table_is_the_modules() {
+    // `scan_families` in the module is the list `scan_step` indexes, and
+    // the table `step` indexes here is the same functions in the same order.
+    let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
+    let from = module.find("fn scan_families()").expect("scan_families");
+    let list = &module[from..];
+    let list = &list[list.find('[').expect("a list") + 1..list.find(']').expect("its end")];
+    let theirs: Vec<&str> = list.split(',').map(str::trim).collect();
+    let ours: Vec<&str> = scanner::families().collect();
+    assert_eq!(theirs, ours);
+    assert_eq!(ours.len(), 23);
+    // Each family is exported by the manifest the regeneration gate reads.
+    let manifest = include_str!("../generated/EXPORTS.tsv");
+    for family in ours.iter().chain(&["scan_family", "scan_accept", "scan_begin"]) {
+        assert!(manifest.contains(&format!("lib/lang/lexer/lexer_scan.hthr\t{family}\n")), "{family} is not in EXPORTS.tsv");
+    }
+}
+
+#[test]
+fn a_shift_may_begin_only_after_a_gap() {
+    let shift = scanner::begin(0);
+    let plain = scanner::begin(Kind::Ident.code());
+    assert_ne!(shift, plain);
+    for kind in Kind::ALL {
+        let expected = if matches!(kind, Kind::Space | Kind::LParen | Kind::Comma) { shift } else { plain };
+        assert_eq!(scanner::begin(kind.code()), expected, "{kind:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tokens, by hand: what the lexer's own documentation promises, stated here
+// without the lexer.
+
+#[test]
+fn the_tokens_of_a_declaration() {
+    use Kind::*;
+    assert_eq!(
+        spans("fn f(x: Nat) → Nat { x }"),
+        [
+            (Ident, 0, 2),
+            (Ident, 3, 4),
+            (LParen, 4, 5),
+            (Ident, 5, 6),
+            (Colon, 6, 7),
+            (Ident, 8, 11),
+            (RParen, 11, 12),
+            (Arrow, 13, 16),
+            (Ident, 17, 20),
+            (LBrace, 21, 22),
+            (Ident, 23, 24),
+            (RBrace, 25, 26),
+            (Eof, 26, 26),
+        ]
+    );
+    assert_eq!(spans(""), [(Eof, 0, 0)]);
+    assert_eq!(spans("  // only a comment"), [(Eof, 19, 19)]);
+    assert_eq!(spans("a // b\nc"), [(Ident, 0, 1), (Ident, 7, 8), (Eof, 8, 8)]);
+}
+
+#[test]
+fn the_longest_token_wins_and_a_dead_end_falls_back() {
+    use Kind::*;
+    // A qualified name is one identifier; `::` before anything else is not
+    // part of it, and neither is a single `:`.
+    assert_eq!(kinds("nat::Nat::sub"), [Ident, Eof]);
+    assert_eq!(kinds("nat::{Le}"), [Ident, ColonColon, LBrace, Ident, RBrace, Eof]);
+    assert_eq!(kinds("x:=1"), [Ident, ColonEq, Num, Eof]);
+    assert_eq!(kinds("x:::y"), [Ident, ColonColon, Colon, Ident, Eof]);
+    assert_eq!(spans("a::1"), [(Ident, 0, 1), (ColonColon, 1, 3), (Num, 3, 4), (Eof, 4, 4)]);
+    // A point is a fraction only before a digit, and a hexadecimal one only
+    // when an exponent follows: the scan runs to the end of `.fff` before
+    // it knows, and comes back.
+    assert_eq!(kinds("1.5"), [Scaled, Eof]);
+    assert_eq!(kinds("1.method()"), [Num, Dot, Ident, LParen, RParen, Eof]);
+    assert_eq!(kinds("1..2"), [Num, Dot, Dot, Num, Eof]);
+    assert_eq!(kinds("0x1.8p3"), [Scaled, Eof]);
+    assert_eq!(spans("0xff.fff()"), [(Num, 0, 4), (Dot, 4, 5), (Ident, 5, 8), (LParen, 8, 9), (RParen, 9, 10), (Eof, 10, 10)]);
+    assert_eq!(kinds("0xff.f_p"), [Num, Dot, Ident, Eof]);
+    assert_eq!(kinds("1e5 1e-5 1_e5 0x1p3 0x1_p+3"), [Scaled, Scaled, Scaled, Scaled, Scaled, Eof]);
+    // Operators.
+    assert_eq!(kinds("<-> <- <= << < -> - ++ + => == = |- || | && & := :: :"), [
+        Iff, LArrow, LtEq, Shl, Lt, Arrow, Minus, PlusPlus, Plus, FatArrow, EqEq, Eq, Turnstile, PipePipe, Pipe,
+        AmpAmp, Amp, ColonEq, ColonColon, Colon, Eof
+    ]);
+    assert_eq!(kinds("<-->"), [LArrow, Arrow, Eof]);
+    assert_eq!(kinds("?p ? p ?"), [Hole, Hole, Ident, Hole, Eof]);
+    assert_eq!(spans("?p::q"), [(Hole, 0, 2), (ColonColon, 2, 4), (Ident, 4, 5), (Eof, 5, 5)]);
+}
+
+#[test]
+fn a_shift_needs_a_gap_before_it() {
+    use Kind::*;
+    assert_eq!(kinds("a >> b"), [Ident, Shr, Ident, Eof]);
+    assert_eq!(kinds("a>>b"), [Ident, Gt, Gt, Ident, Eof]);
+    assert_eq!(kinds("List<List<A>>"), [Ident, Lt, Ident, Lt, Ident, Gt, Gt, Eof]);
+    assert_eq!(kinds(">> (>> ,>> \n>>"), [Shr, LParen, Shr, Comma, Shr, Shr, Eof]);
+    assert_eq!(kinds(")>> ]>> =>>"), [RParen, Gt, Gt, RBracket, Gt, Gt, FatArrow, Gt, Eof]);
+    assert_eq!(kinds("a >>> b"), [Ident, Shr, Gt, Ident, Eof]);
+}
+
+#[test]
+fn the_symbols_past_ascii() {
+    use Kind::*;
+    assert_eq!(kinds("λ ¬ ∙ ≈ ⊔ ⊓ ∧ ∨ ↔ ← ∃ ∑ ∏ ↑ ∀ ≠ ⊢ → ∥ ⟨ ⟩ ⟦ ⟧"), [
+        Lambda, Neg, Bullet, Approx, Join, Meet, Wedge, Vee, Iff, LArrow, Exists, BigSum, BigProd, UpArrow, Forall,
+        Ne, Turnstile, Arrow, NormBar, LAngle, RAngle, LSemantic, RSemantic, Eof
+    ]);
+    assert_eq!(spans("x⁻¹"), [(Ident, 0, 1), (SupInverse, 1, 6), (Eof, 6, 6)]);
+    // An argument slot takes the subscript digits right behind it and
+    // nothing else: an ordinary digit, or another symbol that begins with
+    // the digits' first byte, is the next token.
+    assert_eq!(spans("·"), [(ArgSlot, 0, 2), (Eof, 2, 2)]);
+    assert_eq!(spans("·₁₂"), [(ArgSlot, 0, 8), (Eof, 8, 8)]);
+    assert_eq!(spans("·12"), [(ArgSlot, 0, 2), (Num, 2, 4), (Eof, 4, 4)]);
+    assert_eq!(spans("·₁→"), [(ArgSlot, 0, 5), (Arrow, 5, 8), (Eof, 8, 8)]);
+    assert_eq!(spans("·→"), [(ArgSlot, 0, 2), (Arrow, 2, 5), (Eof, 5, 5)]);
+}
+
+#[test]
+fn literals_end_at_their_quote() {
+    use Kind::*;
+    assert_eq!(spans(r#""a\"b" 'c' '\'' '\u{1F600}' "é\\""#), [
+        (Str, 0, 6),
+        (Char, 7, 10),
+        (Char, 11, 15),
+        (Char, 16, 27),
+        (Str, 28, 34),
+        (Eof, 34, 34)
+    ]);
+    assert_eq!(kinds("'é' '→' '😀' \"// not a comment\""), [Char, Char, Char, Str, Eof]);
+    assert_eq!(kinds("f('x',\"y\")"), [Ident, LParen, Char, Comma, Str, RParen, Eof]);
+}
+
+#[test]
+fn what_is_refused_and_where() {
+    // (source, offset of the token the scanner refuses)
+    let refused: &[(&str, usize)] = &[
+        // No token begins so.
+        ("a # b", 2),
+        ("x δ", 2),
+        ("a ⁻ b", 2),
+        ("a ` b", 2),
+        ("\u{b}", 0),
+        // `!=` is not a spelling of `≠`.
+        ("a != b", 2),
+        // Numerals: a letter glued on, a misplaced `_`, a prefix with no
+        // digit, an exponent that is not one.
+        ("12abc", 0),
+        ("x 1_", 2),
+        ("1__0", 0),
+        ("0x", 0),
+        ("0x_1", 0),
+        ("0xfg", 0),
+        ("0b12", 0),
+        ("0o78", 0),
+        ("0X1", 0),
+        ("1e", 0),
+        ("1e+", 0),
+        ("1.5e", 0),
+        ("1.5_", 0),
+        ("1.5x", 0),
+        ("1e5x", 0),
+        ("1e5_", 0),
+        ("0x1p", 0),
+        ("0x1.8_p3", 0),
+        ("0x1.8__1p3", 0),
+        // Literals: unterminated, across a line, a bad escape, and a
+        // character literal that is not one scalar value.
+        ("\"abc", 0),
+        ("f \"abc\nd\"", 2),
+        ("\"\\q\"", 0),
+        ("\"\\u41\"", 0),
+        ("\"\\u{}\"", 0),
+        ("\"\\u{4g}\"", 0),
+        ("\"\\", 0),
+        ("'a", 0),
+        ("''", 0),
+        ("'ab'", 0),
+        ("'\n'", 0),
+        ("'\\u{41}x'", 0),
+    ];
+    for (source, at) in refused {
+        let (_, where_) = scan(source);
+        assert_eq!(where_, Some(*at), "{source:?}");
+        assert!(lex(source).is_err(), "the lexer takes {source:?}");
+    }
+}
+
+#[test]
+fn a_value_is_refused_by_what_reads_it() {
+    // The three refusals about a value: each is a well-shaped token to the
+    // scanner, and refused when its span is read.
+    for source in ["1e99999999999", "\"\\u{D800}\"", "'\\u{110000}'", "·₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉₉"] {
+        let (tokens, refused) = scan(source);
+        assert_eq!(refused, None, "{source:?}");
+        assert_eq!(tokens.len(), 2, "{source:?}");
+        assert!(value(source, tokens[0]).is_none(), "{source:?} has a value");
+        assert!(lex(source).is_err(), "the lexer takes {source:?}");
+        assert_eq!(lex_linked(source), None);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The oracle.
+
+#[test]
+fn every_source_in_the_repository_lexes_the_same() {
+    let corpus = corpus();
+    let mut tokens = 0;
+    let mut seen = std::collections::HashSet::new();
+    for (path, text) in &corpus {
+        assert_agree(text, &path.display().to_string());
+        if let Ok(theirs) = lex(text) {
+            tokens += theirs.len();
+            seen.extend(theirs.iter().map(|tok| kind_of(&tok.kind)));
+        }
+    }
+    // The corpus is not vacuous: it is large, and it spells every kind of
+    // token there is but four that no source file happens to use (the
+    // hand-written tests above and the generated strings below hold those).
+    assert!(tokens > 1_000_000, "{tokens} tokens in {} sources", corpus.len());
+    let missing: Vec<Kind> =
+        Kind::ALL.iter().copied().filter(|kind| !matches!(kind, Kind::Space | Kind::Comment) && !seen.contains(kind)).collect();
+    assert_eq!(missing, [Kind::LSemantic, Kind::RSemantic, Kind::Dollar, Kind::EqEq]);
+}
+
+/// The pieces tokens are made of, and the pieces refusals are made of.
+const PIECES: &[&str] = &[
+    "a", "b", "e", "E", "f", "p", "P", "x", "o", "u", "n", "z", "G", "_", "0", "1", "7", "8", "9", "0x", "0o", "0b",
+    "0X", ".", "+", "-", "e5", "p3", "1e", "0x1.", "::", ":", ":=", "=", "==", "=>", "<", "<=", "<-", "<->", "<<",
+    ">", ">>", "|", "|-", "||", "&", "&&", "!", "!=", "++", "*", "/", "//", "%", "^", "@", "$", "?", ",", ";", "(",
+    ")", "{", "}", "[", "]", " ", "  ", "\t", "\n", "\r", "\u{c}", "\u{b}", "\"", "'", "\\", "\\n", "\\u", "\\u{",
+    "\\u{41}", "\\u{D800}", "\\u{110000}", "\\0", "\\'", "\\\"", "'a'", "\"s\"", "λ", "¬", "·", "₀", "₁", "₉", "⁻",
+    "¹", "⁻¹", "∙", "≈", "⊔", "⊓", "∧", "∨", "↔", "←", "∃", "∑", "∏", "↑", "∀", "≠", "⊢", "→", "∥", "⟨", "⟩", "⟦",
+    "⟧", "δ", "é", "²", "₊", "∘", "⟪", "😀", "#", "`", "~", "\u{0}", "\u{7f}", "\u{80}", "\u{2028}",
+];
+
+/// Narrower alphabets, so that a long numeral, a long literal or a run of
+/// operator characters is common and not a one-in-a-million draw.
+const THEMES: &[&[&str]] = &[
+    &["0", "1", "7", "9", "a", "f", "e", "E", "p", "P", "x", "o", "b", "g", "_", ".", "+", "-", "0x", "0o", "0b", " "],
+    &["0x", "1", "8", "a", "f", "_", ".", "p", "p3", "p+", "p-1", "P", "(", " "],
+    &["\"", "'", "\\", "u", "{", "}", "4", "1", "D800", "n", "q", "a", "é", "→", "😀", "\n", " ", "//"],
+    &["<", ">", "-", "=", "|", "&", ":", "+", "!", "/", "?", "a", "_", " ", "(", ",", "\n", "//", "0"],
+    &["·", "₀", "₁", "₉", "⁻", "¹", "⁻¹", "→", "∀", "λ", "¬", "\u{e2}", "\u{2080}", "\u{2189}", "a", "1", " "],
+];
+
+#[test]
+fn strings_of_token_pieces_lex_the_same() {
+    let mut random = Lcg(0x5ca11e7);
+    let mut refused = 0;
+    let rounds = 600_000;
+    for round in 0..rounds {
+        let pieces = match random.below(2 * THEMES.len()) {
+            theme if theme < THEMES.len() => THEMES[theme],
+            _ => PIECES,
+        };
+        let mut source = String::new();
+        for _ in 0..1 + random.below(9) {
+            source.push_str(random.pick(pieces));
+        }
+        assert_agree(&source, &format!("round {round}"));
+        refused += usize::from(lex(&source).is_err());
+    }
+    // Both verdicts are well represented, so neither side of `agree` is idle.
+    assert!(refused > rounds / 10 && refused < rounds * 9 / 10, "{refused} of {rounds} refused");
+}
+
+/// Characters past ASCII: every one a token is spelled with, and for each
+/// byte the automaton can be left waiting after, one that shares it and is
+/// no token.
+const BEYOND: &[&str] = &[
+    "λ", "¬", "·", "₀", "₁", "₉", "⁻", "¹", "∙", "≈", "⊔", "⊓", "∧", "∨", "↔", "←", "∃", "∑", "∏", "↑", "∀", "≠", "⊢",
+    "→", "∥", "⟨", "⟩", "⟦", "⟧", "ε", "£", "²", "↓", "∂", "≤", "⊕", "⟪", "⁺", "₊", "€", "‖", "δ", "é", "\u{80}",
+    "\u{7ff}", "\u{800}", "한", "\u{ffff}", "😀", "\u{10ffff}",
+];
+
+/// What follows the edge under test: enough to finish any token the edge
+/// left open, or to show that it cannot be finished.
+const AFTER: &[&str] = &[
+    "", "0", "1", "8", "a", "e", "f", "p", "x", "g", "u", "n", "_", ".", "+", "-", ":", "=", ">", "<", "|", "&", "/",
+    "\"", "'", "\\", "{", "}", " ", "\n", "(", "¹", "₁", "→", "é",
+];
+const AFTER_TWICE: &[&str] = &["1", "a", "e", "p", "_", ".", "+", ":", ">", "'", "\"", "}", " "];
+
+/// The automaton's state after a whole string from a start state, with the
+/// loop's restarts left out: `None` once it has stopped or refused.
+fn state_after(start: u64, text: &str) -> Option<u64> {
+    let mut state = start;
+    for byte in text.bytes() {
+        state = scanner::step(state, u64::from(byte));
+        if state == DEAD || state == FAIL {
+            return None;
+        }
+    }
+    Some(state)
+}
+
+#[test]
+fn every_edge_of_the_automaton_is_the_lexers() {
+    // Random strings rarely walk deep into a numeral or an escape, so this
+    // test walks there on purpose. For every state the automaton can rest
+    // in between two characters, the shortest string that leads to it; then
+    // every character after that string, each followed by every ending in
+    // `AFTER`. Each such source is compared with the lexer, so a wrong edge
+    // out of any state shows as a different token or a different verdict.
+    let mut alphabet: Vec<String> = (0..128u8).map(|byte| char::from(byte).to_string()).collect();
+    alphabet.extend(BEYOND.iter().map(|text| text.to_string()));
+    // A token after `]` starts in the plain state, and one at the start of
+    // the source in the state that lets `>>` be a shift.
+    let mut resting: Vec<(u64, String)> =
+        vec![(scanner::begin(0), String::new()), (scanner::begin(Kind::RBracket.code()), "]".to_string())];
+    let mut next = 0;
+    while next < resting.len() {
+        let (state, path) = resting[next].clone();
+        for symbol in &alphabet {
+            let Some(to) = state_after(state, symbol) else { continue };
+            if !resting.iter().any(|(seen, _)| *seen == to) {
+                resting.push((to, format!("{path}{symbol}")));
+            }
+        }
+        next += 1;
+    }
+    assert!(resting.len() > 60, "{} resting states", resting.len());
+    let mut endings: Vec<String> = AFTER.iter().map(|text| text.to_string()).collect();
+    for first in AFTER_TWICE {
+        endings.extend(AFTER_TWICE.iter().map(|second| format!("{first}{second}")));
+    }
+    let mut sources = 0;
+    let mut refused = 0;
+    for (_, path) in &resting {
+        for symbol in &alphabet {
+            for ending in &endings {
+                let source = format!("{path}{symbol}{ending}");
+                assert_agree(&source, "an edge");
+                sources += 1;
+                refused += usize::from(scan(&source).1.is_some());
+            }
+        }
+    }
+    assert!(sources > 1_000_000 && refused > sources / 10, "{refused} of {sources} refused");
+}
+
+#[test]
+fn every_line_of_the_library_lexes_the_same_with_one_character_changed() {
+    let mut random = Lcg(0x11b);
+    let mut lines = 0;
+    let mut refused = 0;
+    for (path, text) in corpus() {
+        if !path.starts_with(root().join("lib")) {
+            continue;
+        }
+        for (number, line) in text.lines().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            let what = format!("{}:{}", path.display(), number + 1);
+            // One line in eight is changed: a character dropped, doubled,
+            // or replaced by a piece.
+            if random.below(8) != 0 {
+                continue;
+            }
+            assert_agree(line, &what);
+            let starts: Vec<usize> = line.char_indices().map(|(at, _)| at).collect();
+            let at = starts[random.below(starts.len())];
+            let width = line[at..].chars().next().expect("a character").len_utf8();
+            let changed = match random.below(3) {
+                0 => format!("{}{}", &line[..at], &line[at + width..]),
+                1 => format!("{}{}{}", &line[..at + width], &line[at..at + width], &line[at + width..]),
+                _ => format!("{}{}{}", &line[..at], random.pick(PIECES), &line[at + width..]),
+            };
+            assert_agree(&changed, &format!("{what}, changed"));
+            lines += 1;
+            refused += usize::from(lex(&changed).is_err());
+        }
+    }
+    assert!(lines > 10_000, "{lines} lines");
+    assert!(refused > 100, "{refused} of {lines} changed lines refused");
+}
+
+// ---------------------------------------------------------------------------
+// The specification, evaluated.
+
+/// Short sources that between them hold every kind of token and every kind
+/// of refusal. `lib/_tests/lang/lexer/lexer_tokens_tests.hthr` states, for
+/// each, that the Heather loop over the Heather automaton (`Scanned::of`,
+/// evaluated by the kernel) gives exactly what the linked code gave here.
+/// Short, because the kernel evaluates a 64-bit comparison bit by bit and a
+/// declaration has a fuel.
+const PROBES: &[&str] = &[
+    "",
+    "  \t\n",
+    "fn f(x: Nat) → Nat { x }",
+    "let y := nat::Nat::sub(a, 1);",
+    "// a comment\nx /y",
+    "a >> b; List<List<A>>",
+    "(>> ,>> x>>",
+    "0x1f 0o17 0b101 1_000",
+    "1.5 1e-3 0x1.8p3 1_e5",
+    "1.max(2) 0xff.f() 1..2",
+    "\"a\\\"b\" 'c' '\\n' '\\u{1F600}'",
+    "'é' \"→ // s\"",
+    "?p ? p x::{y} a:::b",
+    "<-> <- <= << < -> - ++ +",
+    "=> == = |- || | && & := :: :",
+    "λ ¬ ∙ ≈ ⊔ ⊓ ∧ ∨ ↔ ←",
+    "∃ ∑ ∏ ↑ ∀ ≠ ⊢ → ∥",
+    "⟨a, b⟩ ⟦c⟧ x⁻¹ ·₁₂ ·",
+    "@ . ; ! * ^ % $ / [ ] { }",
+    "x 12abc",
+    "a != b",
+    "s \"abc",
+    "'ab'",
+    "0x",
+    "1.5e",
+    "x δ",
+    "0x1.8_p3",
+    "\"\\q\"",
+    "a # b",
+    "1__0",
+];
+
+/// A Heather string literal for a source.
+fn heather_literal(source: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in source.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn kind_constant(kind: Kind) -> String {
+    let mut name = String::from("KIND");
+    let debug = format!("{kind:?}");
+    let letters: Vec<char> = debug.chars().collect();
+    for (at, ch) in letters.iter().enumerate() {
+        // `LParen` is `LPAREN` and `ArgSlot` is `ARG_SLOT`: a new word
+        // begins at a capital that follows a small letter.
+        if at == 0 || (ch.is_uppercase() && letters[at - 1].is_lowercase()) {
+            name.push('_');
+        }
+        name.extend(ch.to_uppercase());
+    }
+    name
+}
+
+fn probes_module() -> String {
+    let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
+    let mut out = String::from(
+        "// GENERATED by `scripts/lexer-probes`; edit `PROBES` in\n\
+         // `crates/linked/tests/scanner.rs`, not this file.\n\
+         //\n\
+         // The scanner's specification evaluated by the kernel\n\
+         // (`lib/lang/lexer/lexer_tokens.hthr`): for each short source below,\n\
+         // `Scanned::of_text` is the tokens, or the refusal, that the linked\n\
+         // scanner gives for it, which `crates/linked/tests/scanner.rs` holds\n\
+         // to the Rust lexer. So the three agree on these: the Rust lexer and\n\
+         // the compiled automaton under Rust's loop by test, and the Heather\n\
+         // loop over the Heather automaton by these theorems. Between them\n\
+         // the sources hold every kind of token and every kind of refusal.\n\
+         // Tests, not library (docs/test-value-audit.md §4.5).\n\
+         import bitvec; import bool; import list; import logic; import nat; import option; import string; import utf8;\n\
+         import lexer_scan; import lexer_tokens;\n\n",
+    );
+    // Every state, by the module's own definitions.
+    let states: Vec<&str> = module
+        .lines()
+        .filter_map(|line| line.strip_prefix("def ")?.split_once(": u64 = "))
+        .map(|(name, _)| name)
+        .filter(|name| !name.starts_with("KIND_") && *name != "END")
+        .collect();
+    out.push_str("// Every state of the automaton: the stops, the starts, each family's, and a\n// finished token of each kind that has one.\n");
+    out.push_str("fn lexer_states() → List<u64> {\n");
+    let mut row = String::from("    [");
+    for (at, state) in states.iter().enumerate() {
+        let item = format!("{state}{}", if at + 1 < states.len() { "," } else { "]" });
+        if row.len() + 1 + item.len() > 110 {
+            out.push_str(row.trim_end());
+            out.push('\n');
+            row = String::from("        ");
+        } else if !row.ends_with('[') {
+            row.push(' ');
+        }
+        row.push_str(&item);
+    }
+    out.push_str(row.trim_end());
+    out.push_str("\n}\n\n");
+    out.push_str(
+        "// After the last byte the loop gives `END` once, and no state asks for more:\n\
+         // each stops there or refuses.\n\
+         fn lexer_stops(states: List<u64>) → Bool {\n    match states {\n        Nil => True,\n        \
+         Cons(s, rest) => (scan_step(s, END).eq_bit(DEAD) || scan_step(s, END).eq_bit(FAIL)) && lexer_stops(rest),\n    }\n}\n\n\
+         theorem lexer_states_stop_at_the_end(): lexer_stops(lexer_states()) = True { refl }\n\n\
+         // A state's kind is the one in its name: an identifier's, and a finished\n\
+         // arrow's.\n\
+         theorem lexer_accepts_by_state(): scan_accept(IDENT) = KIND_IDENT ∧ scan_accept(DONE_ARROW) = KIND_ARROW ∧ scan_accept(START) = 0 {\n    ⟨refl, ⟨refl, refl⟩⟩\n}\n\n",
+    );
+    for (number, source) in PROBES.iter().enumerate() {
+        let (tokens, refused) = scan(source);
+        let expected = match refused {
+            Some(at) => format!("Scanned::Refused({at})"),
+            None => {
+                let tokens: Vec<String> = tokens
+                    .iter()
+                    .map(|token| format!("Token({}, {}, {})", kind_constant(token.kind), token.start, token.end))
+                    .collect();
+                format!("Scanned::Tokens([{}])", tokens.join(", "))
+            }
+        };
+        out.push_str(&format!(
+            "theorem lexer_probe_{number}(): Scanned::of_text({}) =\n    {expected}\n{{ refl }}\n\n",
+            heather_literal(source)
+        ));
+    }
+    out.truncate(out.trim_end().len());
+    out.push('\n');
+    out
+}
+
+#[test]
+fn the_evaluated_probes_are_what_the_scanner_gives() {
+    // The probes agree with the lexer, and between them hold every kind.
+    let mut seen = std::collections::HashSet::new();
+    let mut refused = 0;
+    for source in PROBES {
+        assert!(source.len() <= 48, "{source:?} is {} bytes: too long to evaluate in one declaration", source.len());
+        assert_agree(source, "a probe");
+        let (tokens, at) = scan(source);
+        seen.extend(tokens.iter().map(|token| token.kind));
+        refused += usize::from(at.is_some());
+    }
+    let missing: Vec<Kind> =
+        Kind::ALL.iter().copied().filter(|kind| !matches!(kind, Kind::Space | Kind::Comment) && !seen.contains(kind)).collect();
+    assert!(missing.is_empty(), "no probe holds {missing:?}");
+    assert!(refused >= 10);
+    // The checked-in theorems state exactly what the linked scanner gives.
+    let path = root().join("lib/_tests/lang/lexer/lexer_tokens_tests.hthr");
+    let expected = probes_module();
+    if std::env::var_os("HEATHER_WRITE_LEXER_PROBES").is_some() {
+        std::fs::write(&path, &expected).expect("write the probes");
+    }
+    let found = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(found == expected, "{} is not what `PROBES` gives: run scripts/lexer-probes", path.display());
+}

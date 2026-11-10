@@ -41,3 +41,4 @@ Heather, compiled natively. This is the first half of what
   scanner behind a process wrapper, once `nh-effects` has its surface.
   Whether `self-lexer`'s done-when moves to the linked form is decision 3 of
   that note's §9.
+- 2026-11-10: The scanner exists as certified Heather linked into Rust ([[self-lexer-linked]], [[heather-lexer-evaluated]]); `heather-lex` as a process would reuse `lexer_scan.hthr` unchanged, since its step takes one byte and carries everything else in the state word.

@@ -135,6 +135,7 @@ lib/
     native_source stream_filter stream_filter_spec filter_step_piece
   certgen/       certgen_cert certgen_code ir_v1
   lang/          list_algos subtype subtype_code vec_code
+    lexer/       lexer_scan lexer_tokens     Heather's own scanner (linked: crates/linked)
 ```
 
 Reasons for the less obvious placements:

@@ -797,6 +797,18 @@ fn runtime_instances(order: List<Nat>, names: List<String>, root: Nat, own: Expr
 
 fn runtime_links(order: List<Nat>, table: List<Nat>) → List<Nat> { table.map(λ h => Known::index(order, h, 0).unwrap_or(0)) }
 
+// An expression held as a hole it solves, so that every later mention of it
+// is one node. The program and its sources are each named once per function
+// of the program in what follows: spelled out, the reply would grow with the
+// square of the program, and a program of a few dozen functions would be
+// past what the host reads (issues/runtime-generator-program-size.md).
+fn runtime_held(e: Expr, what: String) → Tac<Expr> {
+    let t <- infer(e).or_fail("runtime: " ++ what ++ ": ");
+    let held <- hole(t).or_fail("runtime: " ++ what ++ ": ");
+    let solved <- defeq(Hd(held), e);
+    match solved { True => pure(Hd(held)), False => runtime_fail(what ++ " does not solve its hole") }
+}
+
 // The program (the last function first, as `program_eval` reads it), the
 // word functions answering its calls, and the proof each function returns
 // its own (`program_sourced`).
@@ -813,13 +825,14 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let rfl <- runtime_global("tactic::rfl");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let links = l.tables.map(λ t => q.nat_list(runtime_links(l.order, t)));
-    let srcs = RtQ::seq(srcs_ctors, insts.map(λ p => ap(uncurried, [Blank, p.fst, p.snd])));
+    let srcs <- runtime_held(RtQ::seq(srcs_ctors, insts.map(λ p => ap(uncurried, [Blank, p.fst, p.snd]))), "the program's sources");
     let at = λ (i: Nat) => Pair(insts.nth(i).unwrap_or(Pair(Blank, Blank)), runtime_at(links, i));
     let indices = List::range(insts.len()).rev();
     let codes = indices.map(λ i => ap(linked, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, (at(i)).snd]));
     let parts = indices.map(λ i => ap(part, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, srcs, (at(i)).snd,
         ap(rfl, [Blank, ap(table, [Blank, (at(i)).fst.fst, (at(i)).fst.snd])]), Hd(trivial_h), Hd(trivial_h)]));
-    pure(Linked(RtQ::seq(fn_ctors, codes), srcs, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
+    let program <- runtime_held(RtQ::seq(fn_ctors, codes), "the program");
+    pure(Linked(program, srcs, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
 }
 
 // ---------------------------------------------------------------------------
