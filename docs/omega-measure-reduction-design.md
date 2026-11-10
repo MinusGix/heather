@@ -751,3 +751,36 @@ out of a section's dictionary, as in `Converges::mul`) is not reached
 either; that is the fact reader's limit, not the split's. Probes:
 `max_*`, `le_min_bare`, `min_add_max`, `int_m*_*` and the refused controls
 `max_le_left`/`int_min_ge_left` in `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 21. Fields of a call put as reads, and applied function fields (2026-11-10)
+
+`issues/omega-field-of-record-valued-call.md`,
+`issues/omega-applied-field-atom.md`. Two gaps, both met building
+`issues/address-interval-sets.md`:
+
+- **A field of a call put as a read off a neutral** (`s.take(k).base`, with
+  `Span::take(s, k) = Span(s.base, …)`) stayed one atom. §12's
+  `field_as_put_within` read the field on when it was itself a field read,
+  and declined when that read's receiver was no call (`s`). Such a read is
+  now the result: it unfolds no further and is the atom the goal's other
+  mentions of `s.base` intern as. `projection_reduct` keeps a field put as a
+  field read or an applied one. The fallback splits search their facts
+  through the same reading (`nat_subtractions`, `int_to_nats`,
+  `max_min_reads`), so the `min` in `s.take(k).len` and the `-` in
+  `s.drop(k).len` are split as if written; before, they were found only in
+  the written form, and the read form was reflected with a `min` atom no
+  case equation named. The searches now return owned terms.
+- **A function-valued field applied** (`nb.number(a)`) had no spelling:
+  `call_parts` recognises a projection whose spine is exactly instantiation
+  and receiver, and an inline projection head is no call at all.
+  `Speller::applied_field` spells the field read, then the arguments, when
+  the spine's innermost head is a projection and each argument meets an
+  explicit arrow of the field's declared (surface) type. An implicit binder,
+  or a type the declaration names through an alias, declines, since the
+  spelling must re-elaborate to the same spine. Diagnostics show the same
+  spelling.
+
+§5's hazard: every occurrence of such a field takes the same route, goal and
+facts alike, so no atom splits; what moves is that `s.take(k).base` now
+meets `s.base`. Probes and refused controls (`call_field_false`,
+`field_call_apart`) are in `lib/_tests/std/tactic/omega_tests.hthr`.
