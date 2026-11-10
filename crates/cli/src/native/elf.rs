@@ -150,9 +150,10 @@ pub(super) fn write(args: &[String]) -> Result<(), String> {
         }
         std::sync::Arc::new(store)
     });
-    if let Some(store) = &verdicts {
-        elab.set_gate(std::sync::Arc::clone(store) as std::sync::Arc<dyn heather_elab::gate::KernelGate>);
-    }
+    // Without a directory, the verdicts of this process alone
+    // (`Cache::in_process`).
+    let gate = verdicts.clone().unwrap_or_else(|| std::sync::Arc::new(heather_cache::Cache::in_process()));
+    elab.set_gate(gate as std::sync::Arc<dyn heather_elab::gate::KernelGate>);
     let mut session = SemanticSession::new(cache).with_freshness(freshness);
     for module in &sources {
         check_file(&mut elab, &mut session, module)?;

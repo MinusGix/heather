@@ -133,6 +133,13 @@ What it refuses to let you get wrong, each because it happened:
   drifts in and out between samples and its "delta" is the cut moving. What was
   dropped, and why, is printed.
 
+`--mode` picks what each sample is: `cold` (the default, an empty cache
+directory), `warm` and `edit` (over a seeded one), or `bare`, the command with
+no cache named at all. `bare` is what a plain `heather check file` runs, and
+it is its own workload: nothing is published or hashed for a store, and
+whatever the run reuses it has to have produced itself
+(`issues/cacheless-run-rechecks-loaded-modules.md`).
+
 ### A round that changed both: `--whole-tree`
 
 When a round changes the compiler and `lib/` together, neither mode above

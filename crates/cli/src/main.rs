@@ -420,6 +420,14 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         }
         Rc::new(c)
     });
+    // A run without `--cache` still asks a gate: one with nothing behind it
+    // and nothing saved, so the only verdicts it holds are the ones this
+    // process's own kernel gave, and the bare `ok` still says that every
+    // declaration faced the kernel in this run. A module is checked once,
+    // in its own world, and then loaded into each world that imports it
+    // beside another chain; without a gate every such load checked the
+    // module again (`issues/cacheless-run-rechecks-loaded-modules.md`).
+    let own = (!opts.cache).then(|| Rc::new(Cache::in_process()));
     let mut failed = false;
     for path in files {
         // A fresh elaborator per **path**: two file paths re-elaborate a shared
@@ -445,6 +453,10 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         // After the prelude, deliberately: the prelude is elaborated inside
         // `with_prelude` and is milliseconds, so it is hashed but never
         // cached (docs/cache-v1-design.md §4).
+        if let Some(c) = &own {
+            c.begin_run();
+            elab.set_gate(Rc::clone(c) as Rc<dyn heather_elab::gate::KernelGate>);
+        }
         let before = cache.as_ref().map(|c| {
             // Each root is a fresh Ψ, so the cache's view of it restarts too;
             // the recorded entries, being content-addressed, do not.
