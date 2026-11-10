@@ -16,6 +16,8 @@ use heather_kernel::term::{GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, Term, 
 use heather_kernel::value::{Head, VTy, Val, ValueArena};
 
 use crate::readback::Readback;
+use crate::refold::refolded_fire;
+use crate::spelling;
 
 /// Steps the small-step reducer may spend on the *spelling* of a head the
 /// value machine has already found stuck. See [`SemanticOracle::whnf_type`]:
@@ -122,10 +124,10 @@ impl SemanticOracle {
                 // value (`readback.rs`), its children the syntax the machine
                 // has not evaluated — the reducer's spelling, without
                 // redoing the computation by substitution to reach it.
-                Ok(former) => match Readback::new(gamma).head(former) {
+                Ok(former) => match Readback::new(gamma).in_world(&self.world).head(former) {
                     Some(read) => {
                         #[cfg(debug_assertions)]
-                        crate::readback::verify(ty, gamma, defs, self.fuel, &read);
+                        crate::readback::verify(ty, gamma, defs, self.fuel, || Readback::new(gamma).head(former));
                         return Ok(read);
                     }
                     None => false,
@@ -168,10 +170,10 @@ impl SemanticOracle {
                 // fields the reducer would reach only by copying those
                 // transports' motives at every step
                 // (issues/elab-whnf-family-transport-cost.md).
-                Ok(canonical) => match Readback::new(gamma).term_head(canonical) {
+                Ok(canonical) => match Readback::new(gamma).in_world(&self.world).term_head(canonical) {
                     Some(read) => {
                         #[cfg(debug_assertions)]
-                        crate::readback::verify_term(term, gamma, defs, self.fuel, &read);
+                        crate::readback::verify_term(term, gamma, defs, self.fuel, || Readback::new(gamma).term_head(canonical));
                         return Ok(read);
                     }
                     None => false,
@@ -264,6 +266,7 @@ impl SemanticOracle {
             gamma,
             current: term.clone(),
             remaining: self.fuel.min(walk.steps()),
+            call: defined_call(&self.world, term).then(|| term.clone()),
         }
     }
 
@@ -451,6 +454,9 @@ pub(crate) struct TermReducts<'a> {
     gamma: &'a LocalCtx,
     current: Term,
     remaining: u64,
+    /// The last reduct whose head was a defined global: the call a later
+    /// `elim_Wf` firing may be the recursion of ([`refolded_fire`]).
+    call: Option<Term>,
 }
 
 impl Iterator for TermReducts<'_> {
@@ -461,15 +467,22 @@ impl Iterator for TermReducts<'_> {
             return None;
         }
         self.remaining -= 1;
-        let next = reduce::step_term_delta(
-            &self.current,
-            self.gamma,
-            Defs::transparent(&self.oracle.world),
-        )
-        .ok()??;
+        let refolded = self.call.as_ref().and_then(|call| refolded_fire(&self.oracle.world, self.gamma, call, &self.current));
+        let next = match refolded {
+            Some(next) => next,
+            None => reduce::step_term_delta(&self.current, self.gamma, Defs::transparent(&self.oracle.world)).ok()??,
+        };
+        if defined_call(&self.oracle.world, &next) {
+            self.call = Some(next.clone());
+        }
         self.current = next.clone();
         Some(next)
     }
+}
+
+/// Is `t` an application spine headed by a global this world unfolds?
+fn defined_call(world: &GlobalCtx, t: &Term) -> bool {
+    matches!(spelling::app_spine(t).0, Term::GlobalTm { var, .. } if Defs::transparent(world).is_defined(*var))
 }
 
 /// Best-effort semantic reading for diagnostics.

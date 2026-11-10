@@ -1739,9 +1739,10 @@ pub enum Val<'v> {
     /// copy of the recursor and no memo keyed on syntax identity ever hit
     /// twice. Applied to a canonical index over a canonical tuple it selects
     /// the child and fires `elim` on it directly, which is what the λ's body
-    /// reduces to; applied to anything else, and wherever it is inspected
-    /// rather than applied, it is first built as the λ it stands for
-    /// (`Eval::wf_ih_lam`). A strategy change with no semantic content.
+    /// reduces to; applied to anything else it evaluates that body's child
+    /// and eliminates it with the same `elim`, so the recursive call keeps
+    /// the step's closure (`Eval::wf_ih_child`). A strategy change with no
+    /// semantic content.
     WfIh {
         elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,

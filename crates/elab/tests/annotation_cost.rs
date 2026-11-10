@@ -265,3 +265,61 @@ fn size(p: Prog) -> Nat { match p { Start => 0, At(q, n, ops) => Succ(size(q)) }
     assert!(matches.iter().all(|&n| n > 0), "the literal's field types are respelled: {matches:?}");
     assert_eq!(matches[0], matches[1], "the matches grew with the literal: {matches:?}");
 }
+
+/// A lemma by cases over an `n`-former syntax, each arm a congruence applied
+/// to the recursive calls, against a motive that eliminates the scrutinee
+/// (`t.lift(k, u) = t`): the gate pays per arm, not per arm per former
+/// (issues/wide-inductive-lemma-quadratic-gate.md). Two copies of `lift`'s
+/// case tree went into every arm: the unifier's solution for the
+/// congruence's implicit read the unfolded call's hypothesis back as the
+/// whole eliminator, and the kernel applied the lemma's own hypothesis at a
+/// neutral child through a shifted copy of the step, so the two sides of the
+/// arm's conversion never shared a closure. Quadrupling the formers then
+/// multiplied the gate's steps by about thirteen; it is now about four.
+#[test]
+fn a_wide_lemma_by_cases_is_linear_in_the_formers() {
+    let arity = |i: usize| i % 4;
+    let k = |i: usize, j: usize| if i % 8 == 1 && j == 0 { "Succ(k)" } else { "k" };
+    let pat = |i: usize| match arity(i) {
+        0 => format!("C{i}"),
+        a => format!("C{i}({})", (0..a).map(|j| format!("a{j}")).collect::<Vec<_>>().join(", ")),
+    };
+    let steps: Vec<u64> = [8usize, 32].into_iter().map(|n| {
+        let ctors: Vec<String> = std::iter::once("Bv(index: Nat)".to_string())
+            .chain((0..n).map(|i| match arity(i) {
+                0 => format!("C{i}"),
+                a => format!("C{i}({})", (0..a).map(|j| format!("a{j}: Tm")).collect::<Vec<_>>().join(", ")),
+            }))
+            .collect();
+        let lift: Vec<String> = std::iter::once("Bv(i) => Bv(i)".to_string())
+            .chain((0..n).map(|i| match arity(i) {
+                0 => format!("C{i} => C{i}"),
+                a => format!("{} => C{i}({})", pat(i), (0..a).map(|j| format!("a{j}.lift({}, u)", k(i, j))).collect::<Vec<_>>().join(", ")),
+            }))
+            .collect();
+        let mut setup = format!(
+            "inductive Tm {{ {} }}\nfn Tm::lift(self t: Tm, k: Nat, u: Tm) -> Tm {{ match t {{ {} }} }}\n",
+            ctors.join(", "),
+            lift.join(", ")
+        );
+        for i in (0..n).filter(|&i| arity(i) > 0) {
+            let a = arity(i);
+            let vars = |x: &str| (0..a).map(|j| format!("{x}{j}")).collect::<Vec<_>>().join(", ");
+            let xs = (0..a).map(|j| format!("x{j}, y{j}")).collect::<Vec<_>>().join(", ");
+            let ps = (0..a).map(|j| format!("p{j}: x{j} = y{j}")).collect::<Vec<_>>().join(", ");
+            let body = (0..a).rev().fold("refl".to_string(), |b, j| format!("rewrite(p{j}, {b})"));
+            setup.push_str(&format!("theorem Tm::cong{i}({{{xs}: Tm}}, {ps}): C{i}({}) = C{i}({}) {{ {body} }}\n", vars("x"), vars("y")));
+        }
+        let arms: Vec<String> = std::iter::once("Bv(i) => λ k u => refl".to_string())
+            .chain((0..n).map(|i| match arity(i) {
+                0 => format!("C{i} => λ k u => refl"),
+                a => format!("{} => λ k u => Tm::cong{i}({})", pat(i), (0..a).map(|j| format!("a{j}.lift_id({}, u)", k(i, j))).collect::<Vec<_>>().join(", ")),
+            }))
+            .collect();
+        let source = format!("theorem Tm::lift_id(self t: Tm): (k: Nat, u: Tm) -> t.lift(k, u) = t {{ match t {{ {} }} }}", arms.join(", "));
+        let refusal = "theorem lift_wrong(u: Tm): Tm::lift(C1(Bv(0)), 0, u) = Bv(0) { refl }";
+        measure(&setup, &source, "Tm::lift_id", refusal)
+    }).collect();
+    eprintln!("lift_id at 8/32 formers, gate eval steps: {steps:?}");
+    assert!(steps[1] < 6 * steps[0], "the lemma's gate grew faster than its arms: {steps:?}");
+}
