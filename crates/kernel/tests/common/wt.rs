@@ -72,7 +72,7 @@ fn nil_ctx() -> LocalCtx {
 }
 
 fn g_ctx(i: u32) -> LocalCtx {
-    LocalCtx::ctx_var(GlobalVar(i))
+    LocalCtx::ctx_var(GlobalVar::index(i))
 }
 
 fn ext(base: &LocalCtx, ty: Type, level: Level) -> LocalCtx {
@@ -82,11 +82,11 @@ fn ext(base: &LocalCtx, ty: Type, level: Level) -> LocalCtx {
 }
 
 fn gty(var: u32, ctx: &LocalCtx) -> Type {
-    Type::GlobalTy { var: GlobalVar(var), subst: LocalSubst::id(ctx) }
+    Type::GlobalTy { var: GlobalVar::index(var), subst: LocalSubst::id(ctx) }
 }
 
 fn gtm(var: u32, ctx: &LocalCtx) -> Term {
-    Term::GlobalTm { var: GlobalVar(var), subst: LocalSubst::id(ctx) }
+    Term::GlobalTm { var: GlobalVar::index(var), subst: LocalSubst::id(ctx) }
 }
 
 // -------------------------------------------------------------------------
@@ -246,7 +246,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
         .map(|(i, _)| env.psi.bindings.len() as u32 - 1 - i as u32)
         .collect();
     let base = if !ctx_vars.is_empty() && r.below(2) == 0 {
-        CtxBase::Var(GlobalVar(ctx_vars[r.below(ctx_vars.len() as u32) as usize]))
+        CtxBase::Var(GlobalVar::index(ctx_vars[r.below(ctx_vars.len() as u32) as usize]))
     } else {
         CtxBase::Nil
     };
@@ -319,7 +319,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 let level = level.clone();
                 let ctx = ctx.shift_global(x + 1);
                 let Some(subst) = gen_wt_subst(env, r, b / 2, &ctx) else { continue };
-                return (rty(Type::GlobalTy { var: GlobalVar(x), subst }), level);
+                return (rty(Type::GlobalTy { var: GlobalVar::index(x), subst }), level);
             }
             5 if b > 0 && env.layer == Layer::Meta => {
                 let e = env.push_global(GlobalBinding::Ctx);
@@ -1046,7 +1046,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                 let Some(subst) = gen_wt_subst(env, r, b / 2, &ctx) else { continue };
                 let res = ty.apply_local(&subst);
                 return (
-                    rt(Term::GlobalTm { var: GlobalVar(x), subst }),
+                    rt(Term::GlobalTm { var: GlobalVar::index(x), subst }),
                     rty(res),
                     level,
                 );
@@ -2199,7 +2199,7 @@ pub fn identity_branches() -> Rc<Branches> {
     let gx_tmpi = ext(&g2, Type::El { level: lv(1), tm: rt(gtm(1, &g2)) }, lv(1));
     let gx_lam = ext(&g3, gty(2, &g3), lv(1));
     let gx_nat = ext(&g4, Type::Nat, Level::Zero);
-    let u_m = Type::GlobalTy { var: GlobalVar(3), subst: LocalSubst::id(&gx_nat) };
+    let u_m = Type::GlobalTy { var: GlobalVar::index(3), subst: LocalSubst::id(&gx_nat) };
     let gxy = ext(&gx_nat, u_m.clone(), lv(0));
 
     Rc::new(Branches {
@@ -2283,7 +2283,7 @@ pub fn identity_branches() -> Rc<Branches> {
                 ty: rty(gty(5, &g6)),
                 lhs: rt(gtm(4, &g6)),
                 motive: rty(Type::GlobalTy {
-                    var: GlobalVar(3),
+                    var: GlobalVar::index(3),
                     subst: LocalSubst::id(&gyp),
                 }),
                 case: rt(gtm(2, &g6)),
@@ -2333,7 +2333,7 @@ pub fn identity_branches() -> Rc<Branches> {
         // (motive), ℓ' = 0 (scrutinee); telescope g = 2, U_M = 1, u_t = 0.
         tm_elim_empty: {
             let gx_empty = ext(&g2, Type::Empty { level: lv(0) }, lv(0));
-            let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
+            let u_m_e = Type::GlobalTy { var: GlobalVar::index(1), subst: LocalSubst::id(&gx_empty) };
             rt(Term::BoxTm(rt(Term::ElimEmpty {
                 level: lv(1),
                 scrut_level: lv(0),
@@ -2448,7 +2448,7 @@ pub fn identity_branches() -> Rc<Branches> {
                 arg: rt(v(0)),
             };
             let u_m_at_fy = Type::GlobalTy {
-                var: GlobalVar(2),
+                var: GlobalVar::index(2),
                 subst: LocalSubst::id(&g5).shift_local(3).extended(rt(f_y)),
             };
             let ih_ty = Type::Pi {
@@ -2554,7 +2554,7 @@ pub fn identity_branches() -> Rc<Branches> {
                 cod_level: lv(0),
                 dom: rty(Type::Fin { len: rt(gtm(3, &gx5).shift_local(1)) }),
                 cod: rty(Type::GlobalTy {
-                    var: GlobalVar(2),
+                    var: GlobalVar::index(2),
                     subst: LocalSubst::id(&g5).shift_local(3).extended(rt(nth_at_i)),
                 }),
             };
@@ -2596,7 +2596,7 @@ pub fn identity_branches() -> Rc<Branches> {
                 level: lv(1),
                 scrut_level: lv(0),
                 motive: rty(Type::GlobalTy {
-                    var: GlobalVar(1),
+                    var: GlobalVar::index(1),
                     subst: LocalSubst::id(&gxe),
                 }),
                 scrut: rt(gtm(0, &g2)),
@@ -2629,7 +2629,7 @@ pub fn identity_branches() -> Rc<Branches> {
                 dst_level: lv(0),
                 src_ty: rty(a),
                 motive: rty(Type::GlobalTy {
-                    var: GlobalVar(2),
+                    var: GlobalVar::index(2),
                     subst: LocalSubst::id(&gz),
                 }),
                 case: rt(gtm(1, &gx)),

@@ -26,9 +26,203 @@ use crate::level::Level;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocalVar(pub u32);
 
-/// de Bruijn index into the global context Ψ. 0 is the innermost binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GlobalVar(pub u32);
+/// A reference into the global context Ψ, in one of two spellings.
+///
+/// Ψ is read as `Σ; Ψ′` (`crates/kernel/DESIGN.md`, "Constants are addressed
+/// from the start of Ψ"): a **signature** Σ, the first [`GlobalCtx::consts`]
+/// bindings, and the **variables** Ψ′ after it.
+///
+/// - A variable is a de Bruijn **index**: 0 is the innermost binding of Ψ.
+///   This is the paper's spelling, and the only one a Ψ with an empty
+///   signature has.
+/// - A constant is a **position** from the start of Ψ. It names a binding of
+///   Σ, and so reads the same in every extension of Ψ, by constants or by
+///   variables: no shift, substitution or renumbering of globals changes it.
+///
+/// Each binding has exactly one spelling in a given Ψ (the typing rules hold
+/// references to it), so `==` on two references read in the same Ψ is
+/// identity of the binding.
+///
+/// One word, like the index it was: the top bit says which spelling.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlobalVar(u32);
+
+/// [`GlobalVar`]'s two spellings, for a `match`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobalRef {
+    /// A variable of Ψ′, by de Bruijn index.
+    Var(u32),
+    /// A constant of Σ, by position from the start.
+    Const(u32),
+}
+
+impl GlobalVar {
+    const CONST: u32 = 1 << 31;
+
+    /// The variable at de Bruijn index `i` (0 is innermost).
+    #[inline]
+    pub const fn index(i: u32) -> GlobalVar {
+        assert!(i & Self::CONST == 0, "global index out of range");
+        GlobalVar(i)
+    }
+
+    /// The constant at position `p` from the start of Ψ.
+    #[inline]
+    pub const fn constant(p: u32) -> GlobalVar {
+        assert!(p & Self::CONST == 0, "global position out of range");
+        GlobalVar(p | Self::CONST)
+    }
+
+    #[inline]
+    pub const fn view(self) -> GlobalRef {
+        if self.0 & Self::CONST == 0 { GlobalRef::Var(self.0) } else { GlobalRef::Const(self.0 & !Self::CONST) }
+    }
+
+    /// The de Bruijn index, of a variable.
+    #[inline]
+    pub const fn as_index(self) -> Option<u32> {
+        match self.view() {
+            GlobalRef::Var(i) => Some(i),
+            GlobalRef::Const(_) => None,
+        }
+    }
+
+    /// The position, of a constant.
+    #[inline]
+    pub const fn as_const(self) -> Option<u32> {
+        match self.view() {
+            GlobalRef::Const(p) => Some(p),
+            GlobalRef::Var(_) => None,
+        }
+    }
+
+    #[inline]
+    pub const fn is_const(self) -> bool {
+        self.0 & Self::CONST != 0
+    }
+
+    /// The position from the start, in a Ψ of `len` bindings, of the binding
+    /// this names; `None` when it names none. Says nothing about whether
+    /// this is that binding's spelling there ([`GlobalCtx::spells`]).
+    #[inline]
+    pub fn position(self, len: usize) -> Option<usize> {
+        match self.view() {
+            GlobalRef::Var(i) => len.checked_sub(1 + i as usize),
+            GlobalRef::Const(p) => ((p as usize) < len).then_some(p as usize),
+        }
+    }
+
+    /// This reference read under `by` more variables: a variable's index
+    /// grows, a constant is what it was.
+    #[inline]
+    pub fn shifted(self, by: u32) -> GlobalVar {
+        match self.view() {
+            GlobalRef::Var(i) => GlobalVar::index(i + by),
+            GlobalRef::Const(_) => self,
+        }
+    }
+
+    /// What the stored statement and body of the binding this names are
+    /// weakened by (`shift_global`) to be read where the reference is: they
+    /// are scoped in the binding's own prefix of Ψ, so `i + 1` for the
+    /// variable at index `i`. A constant's are closed in the variables and
+    /// mention constants only by position: read as stored, 0.
+    #[inline]
+    pub const fn rescope(self) -> u32 {
+        match self.view() {
+            GlobalRef::Var(i) => i + 1,
+            GlobalRef::Const(_) => 0,
+        }
+    }
+
+    /// The index of this reference when it is one of the innermost `n`
+    /// variables: the bindings a substitution of `n` entries replaces, a
+    /// telescope of `n` globals binds.
+    #[inline]
+    pub const fn innermost(self, n: u32) -> Option<u32> {
+        match self.view() {
+            GlobalRef::Var(i) if i < n => Some(i),
+            _ => None,
+        }
+    }
+
+    /// This reference read below the innermost `n` variables, when it is
+    /// not one of them: a variable's index less `n`, a constant as it is.
+    #[inline]
+    pub const fn below(self, n: u32) -> Option<GlobalVar> {
+        match self.view() {
+            GlobalRef::Var(i) if i < n => None,
+            GlobalRef::Var(i) => Some(GlobalVar(i - n)),
+            GlobalRef::Const(_) => Some(self),
+        }
+    }
+
+    /// The reference whose [`GlobalVar::key`] is `key`.
+    #[inline]
+    pub const fn from_key(key: u32) -> GlobalVar {
+        GlobalVar(key)
+    }
+
+    /// Whether this names a binding declared after `other`'s, both read in
+    /// one Ψ: the smaller index among variables, the larger position among
+    /// constants, and any variable against any constant (Ψ′ follows Σ). A
+    /// body can mention only older bindings, which is what conversion's
+    /// choice of the side to unfold reads this for.
+    #[inline]
+    pub const fn newer_than(self, other: GlobalVar) -> bool {
+        match (self.view(), other.view()) {
+            (GlobalRef::Var(a), GlobalRef::Var(b)) => a < b,
+            (GlobalRef::Const(a), GlobalRef::Const(b)) => a > b,
+            (GlobalRef::Var(_), GlobalRef::Const(_)) => true,
+            (GlobalRef::Const(_), GlobalRef::Var(_)) => false,
+        }
+    }
+
+    /// The word itself: a key that tells the two spellings apart.
+    #[inline]
+    pub const fn key(self) -> u32 {
+        self.0
+    }
+}
+
+impl GlobalRef {
+    /// A variable's index through `f`, a constant as it is: a renumbering of
+    /// variables, as a map over references.
+    pub fn map_var(self, f: impl FnOnce(u32) -> Option<u32>) -> Option<GlobalRef> {
+        match self {
+            GlobalRef::Var(i) => f(i).map(GlobalRef::Var),
+            c @ GlobalRef::Const(_) => Some(c),
+        }
+    }
+}
+
+impl From<GlobalRef> for GlobalVar {
+    fn from(r: GlobalRef) -> GlobalVar {
+        match r {
+            GlobalRef::Var(i) => GlobalVar::index(i),
+            GlobalRef::Const(p) => GlobalVar::constant(p),
+        }
+    }
+}
+
+/// `3` for the variable at index 3, `@3` for the constant at position 3.
+impl std::fmt::Display for GlobalVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.view() {
+            GlobalRef::Var(i) => write!(f, "{i}"),
+            GlobalRef::Const(p) => write!(f, "@{p}"),
+        }
+    }
+}
+
+/// A variable prints as the tuple struct it was, so the printed forms that
+/// are hashed (`crates/elab/tests/determinism.rs`) are unchanged for a Ψ
+/// with no signature.
+impl std::fmt::Debug for GlobalVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GlobalVar({self})")
+    }
+}
 
 /// Types `S, T` (sort `Typ`).
 #[derive(Clone, Eq)]
@@ -1859,6 +2053,12 @@ pub struct GlobalCtx {
     /// [`GlobalCtx::sealed`] it is not part of any binding, so the
     /// verdict cache mixes it into its check key (`crates/cache`).
     pub withheld: Option<Rc<Withheld>>,
+    /// `|Σ|`: how many leading bindings are **constants**, named by position
+    /// ([`GlobalVar::constant`]); the rest are variables, named by index.
+    /// 0 for the paper's Ψ. Only [`GlobalCtx::commit`] grows it, and only
+    /// while there is no variable, so a constant's statement and body were
+    /// checked in Σ alone.
+    consts: usize,
 }
 
 /// Ψ prints as it did before it had a boundary when it has none, so the
@@ -1870,6 +2070,9 @@ impl std::fmt::Debug for GlobalCtx {
         s.field("bindings", &self.bindings).field("sealed", &self.sealed);
         if let Some(w) = &self.withheld {
             s.field("withheld", w);
+        }
+        if self.consts != 0 {
+            s.field("consts", &self.consts);
         }
         s.finish()
     }
@@ -2282,7 +2485,96 @@ impl GlobalBindings {
 impl GlobalCtx {
     /// Ψ from its bindings, outermost first.
     pub fn new(bindings: Vec<GlobalBinding>) -> GlobalCtx {
-        GlobalCtx { bindings: GlobalBindings::new(bindings), sealed: SealedProofs::default(), withheld: None }
+        GlobalCtx { bindings: GlobalBindings::new(bindings), sealed: SealedProofs::default(), withheld: None, consts: 0 }
+    }
+
+    /// `|Σ|`: the number of leading bindings that are constants.
+    #[inline]
+    pub fn consts(&self) -> usize {
+        self.consts
+    }
+
+    /// This Ψ with its first `consts` bindings read as the signature. For a
+    /// caller that rebuilds a Ψ binding by binding ([`GlobalCtx::new`]) and
+    /// has to say which of them were committed. The bindings get a fresh
+    /// identity: the same list under another split is another world.
+    pub fn with_consts(mut self, consts: usize) -> GlobalCtx {
+        assert!(consts <= self.bindings.len(), "a signature longer than Ψ");
+        if consts != self.consts {
+            self.consts = consts;
+            self.bindings.identity = Rc::new(());
+        }
+        self
+    }
+
+    /// Append a **constant**: `Σ, c`. Only a Ψ with no variable can commit,
+    /// which is what makes a constant's statement and body closed in the
+    /// variables and so readable, unchanged, in every later Ψ.
+    pub fn commit(&mut self, b: GlobalBinding) {
+        assert_eq!(self.consts, self.bindings.len(), "a constant committed under global variables");
+        // The formation rule of Σ is a precondition, as Ψ's well-formedness
+        // is, and the gate's reference rule is what holds a checked binding
+        // to it. Re-derived here at the level of the kernel's other slow
+        // self-checks (`checks.rs`): a constant is read as stored, so one
+        // with a variable free in it would be read wrongly, silently.
+        #[cfg(debug_assertions)]
+        if crate::checks::verify_this_skip() {
+            assert!(
+                b.reindex_global(&mut |r| matches!(r, GlobalRef::Const(_)).then_some(r)).is_some(),
+                "a constant committed with a global variable free in it"
+            );
+        }
+        self.bindings.push(b);
+        self.consts += 1;
+    }
+
+    /// [`GlobalCtx::commit`] with [`GlobalCtx::push_sealed`]'s proof.
+    pub fn commit_sealed(&mut self, b: GlobalBinding, proof: Rc<Term>) {
+        let at = self.bindings.len();
+        self.commit(b);
+        self.seal(at, proof);
+    }
+
+    /// The position from the start of the binding `v` names, if it names
+    /// one: a constant must name a binding of the signature (anything else
+    /// is not closed in the variables, and a constant is read as stored),
+    /// while an index finds whatever it reaches. Whether `v` is the spelling
+    /// this Ψ gives the binding is [`GlobalCtx::spells`], which typing
+    /// demands and the reducers, run on terms no judgement has seen, do not.
+    #[inline]
+    pub fn position(&self, v: GlobalVar) -> Option<usize> {
+        match v.view() {
+            GlobalRef::Var(i) => self.bindings.len().checked_sub(1 + i as usize),
+            GlobalRef::Const(p) => ((p as usize) < self.consts).then_some(p as usize),
+        }
+    }
+
+    /// The binding `v` names, with its position.
+    #[inline]
+    pub fn lookup(&self, v: GlobalVar) -> Option<(usize, &GlobalBinding)> {
+        let at = self.position(v)?;
+        Some((at, self.bindings.get(at)?))
+    }
+
+    /// The reference to the binding at position `at`: a constant inside the
+    /// signature, a variable past it.
+    #[inline]
+    pub fn reference(&self, at: usize) -> Option<GlobalVar> {
+        if at < self.consts {
+            Some(GlobalVar::constant(at as u32))
+        } else {
+            Some(GlobalVar::index(self.bindings.len().checked_sub(1 + at)? as u32))
+        }
+    }
+
+    /// Whether `v` is this Ψ's spelling of a binding: a constant of the
+    /// signature by position, a variable past it by index.
+    #[inline]
+    pub fn spells(&self, v: GlobalVar) -> bool {
+        match v.view() {
+            GlobalRef::Const(p) => (p as usize) < self.consts,
+            GlobalRef::Var(i) => (i as usize) < self.bindings.len() - self.consts,
+        }
     }
 
     /// This world with `withheld` as its interface boundary (`None` lifts
@@ -2355,7 +2647,12 @@ impl GlobalCtx {
 
     /// The first `n` bindings of Ψ, sharing its full chunks.
     pub fn prefix(&self, n: usize) -> GlobalCtx {
-        GlobalCtx { bindings: self.bindings.prefix(n), sealed: self.sealed.prefix(n), withheld: self.withheld.clone() }
+        GlobalCtx {
+            bindings: self.bindings.prefix(n),
+            sealed: self.sealed.prefix(n),
+            withheld: self.withheld.clone(),
+            consts: self.consts.min(n),
+        }
     }
 
     /// Share the bounded append tail for an immutable semantic image.

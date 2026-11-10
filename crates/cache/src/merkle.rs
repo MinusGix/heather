@@ -55,8 +55,9 @@
 //! and §Totality above is what that gap actually cost.
 //!
 //! *Substitution.* Global references are the one place the encoding is not a
-//! function of the tree alone. At exactly four sites a `GlobalVar` is replaced
-//! by the 32 bytes of its referent's interface hash:
+//! function of the tree alone. At exactly four sites a `GlobalVar` that names
+//! a **constant** is replaced by the 32 bytes of its referent's interface
+//! hash:
 //!
 //! | site | what it is |
 //! |---|---|
@@ -70,8 +71,22 @@
 //! pattern-matching on spellings. The replacement is fixed-width, so framing
 //! is untouched; and because it drops the *position*, a declaration hashes the
 //! same wherever in Ψ it and its referents sit — which is the property the
-//! whole scheme exists for (a Ψ index is a position, and any key that keeps
-//! one dies on the first merge that renumbers a suffix).
+//! whole scheme exists for (a Ψ position is a position, and any key that
+//! keeps one dies on the first merge that renumbers a suffix).
+//!
+//! *The world is a signature.* Everything hashed here is scoped over
+//! committed bindings alone (`crates/kernel/DESIGN.md`, "Constants are
+//! addressed from the start of Ψ"): a declaration at the gate, a binding of
+//! Ψ, a registry payload. So a free reference is a constant, and a `GlobalVar`
+//! that is a **variable** is bound inside the structure walked, by a
+//! `letbox`, a code recursor's branch or a `Λg`. It is hashed as what it is
+//! there, its index under a tag of its own, exactly as a local variable is.
+//! (Until 2026-11-10 every reference was an index and the walk resolved each
+//! against the prefix without counting the binders it had crossed, so a bound
+//! global was hashed as whichever committed binding sat that far from the
+//! end.) The callers that hold a Ψ refuse to ask about one with variables in
+//! it (`Inner::sync`), which is what makes the reading sound and not just
+//! conventional.
 //!
 //! *Fail-closed.* If a reference resolves outside the known prefix, or onto a
 //! **poisoned** entry (one whose own hash could not be computed), the walk is
@@ -81,7 +96,7 @@
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{
-    Branches, CtxBase, CtxEntry, GlobalBinding, IWfSig, MSig, LocalCtx, LocalSubst, Motives, SubstTail, Term,
+    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalRef, GlobalVar, IWfSig, MSig, LocalCtx, LocalSubst, Motives, SubstTail, Term,
     Type,
 };
 
@@ -113,12 +128,16 @@ pub type Hash = [u8; 32];
 /// tag alone, the kernel's syntax no longer recording a length or a base
 /// there. (`store::FORMAT` stays: the change is the kernel's, so every
 /// earlier verdict already sits in another kernel's section.)
-const DOMAIN_IFACE: &[u8] = b"heather/iface/5\0";
-const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/4\0";
-const DOMAIN_CHECK: &[u8] = b"heather/check/5\0";
-const DOMAIN_STATEMENT: &[u8] = b"heather/statement/4\0";
+///
+/// **Bumped again with constants** (`issues/psi-references-by-level.md`): a
+/// reference is a tagged constant's referent or a tagged bound variable's
+/// index, where it was an untagged referent either way.
+const DOMAIN_IFACE: &[u8] = b"heather/iface/6\0";
+const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/5\0";
+const DOMAIN_CHECK: &[u8] = b"heather/check/6\0";
+const DOMAIN_STATEMENT: &[u8] = b"heather/statement/5\0";
 /// The domain of a node digest's preimage (`Walk::term`, `Walk::ty`).
-const DOMAIN_NODE: &[u8] = b"heather/node/2\0";
+const DOMAIN_NODE: &[u8] = b"heather/node/3\0";
 
 /// A term or type whose encoding reaches this many bytes is written into its
 /// parent's as a node digest (`tag::DIGEST` and the SHA-256 of
@@ -292,8 +311,8 @@ struct Walk<'a> {
     /// at a time.
     buf: Vec<u8>,
     prefix: &'a Prefix,
-    /// The length of Ψ the walked structure is scoped over. A reference
-    /// `GlobalVar(k)` denotes absolute index `len − 1 − k`.
+    /// The length of Ψ the walked structure is scoped over: a constant at
+    /// or past it resolves to nothing.
     len: u32,
     /// Set when a reference failed to resolve. The result is then discarded
     /// entirely: no key is produced at all.
@@ -341,6 +360,11 @@ impl std::hash::BuildHasher for BuildAddr {
 /// Staging capacity: two SHA-256 blocks' worth of headroom over the flush
 /// threshold, so a single `put_hash` never needs a bounds dance.
 const FLUSH_AT: usize = 8192;
+
+/// The two spellings of a reference ([`Walk::global`]): a constant, then its
+/// referent's interface hash; a variable, then its index.
+const CONSTANT_REFERENCE: u8 = 0xC5;
+const VARIABLE_REFERENCE: u8 = 0xC6;
 
 impl<'a> Walk<'a> {
     fn new(domain: &[u8], prefix: &'a Prefix, len: u32) -> Walk<'a> {
@@ -453,15 +477,21 @@ impl<'a> Walk<'a> {
         self.buf.clear();
     }
 
-    /// Emit the referent's interface hash in place of the positional index —
-    /// the Merkle substitution, at all four sites (see the module docs).
-    fn global(&mut self, var: u32) {
-        match self
-            .len
-            .checked_sub(1)
-            .and_then(|l| l.checked_sub(var))
-            .and_then(|abs| self.prefix.get(abs as usize).copied().flatten())
-        {
+    /// A reference, at all four sites (see the module docs): a constant as
+    /// its referent's interface hash in place of its position, the Merkle
+    /// substitution; a variable, which the structure walked binds, as its
+    /// index.
+    fn global(&mut self, var: GlobalVar) {
+        let at = match var.view() {
+            GlobalRef::Var(i) => {
+                self.buf.push(VARIABLE_REFERENCE);
+                self.u32(i);
+                return;
+            }
+            GlobalRef::Const(p) => p,
+        };
+        self.buf.push(CONSTANT_REFERENCE);
+        match Some(at as usize).filter(|at| *at < self.len as usize).and_then(|at| self.prefix.get(at).copied().flatten()) {
             Some(h) => {
                 self.buf.extend_from_slice(&h);
                 if self.buf.len() >= FLUSH_AT {
@@ -528,7 +558,7 @@ impl<'a> Walk<'a> {
             CtxBase::Nil => self.tag(tag::BASE_NIL),
             CtxBase::Var(g) => {
                 self.tag(tag::BASE_VAR);
-                self.global(g.0);
+                self.global(g);
             }
         }
     }
@@ -554,7 +584,7 @@ impl<'a> Walk<'a> {
             SubstTail::Wk { len, ctx_var } => {
                 self.tag(tag::TAIL_WK);
                 self.u32(len);
-                self.global(ctx_var.0);
+                self.global(ctx_var);
             }
         }
         self.seq_len(terms.len());
@@ -706,7 +736,7 @@ impl<'a> Walk<'a> {
             // Reference site 2 of 5.
             Type::GlobalTy { var, subst } => {
                 self.tag(tag::T_GLOBAL);
-                self.global(var.0);
+                self.global(*var);
                 self.subst(subst);
             }
             Type::CtxPi { level, body } => {
@@ -1167,7 +1197,7 @@ impl<'a> Walk<'a> {
             // Reference site 1 of 5.
             Term::GlobalTm { var, subst } => {
                 self.tag(tag::E_GLOBAL);
-                self.global(var.0);
+                self.global(*var);
                 self.subst(subst);
             }
             Term::CtxLam { level, body } => {

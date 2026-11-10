@@ -2029,14 +2029,14 @@ inductive W : (n: Nat) -> Type {
             panic!("a reference is a global")
         };
         let len = t.el.psi.bindings.len() as u32;
-        let abs = len + t.el.global_padding() - var.0 - 1;
+        let abs = var.position((len + t.el.global_padding()) as usize).expect("in scope") as u32;
         let binding = t.el.psi.bindings[abs as usize].clone();
-        t.el.psi.push(binding);
+        t.el.psi.commit(binding);
         t.el.refresh_delta_psi();
-        // `gen_ref`'s numbering for the binding just pushed: abs = len − 1,
-        // so the variable is `goal_base` — in scope, resolvable, unregistered.
+        // `gen_ref`'s numbering for the binding just committed: the constant
+        // at `len`, in scope, resolvable, unregistered.
         let dup = Term::GlobalTm {
-            var: GlobalVar(t.el.global_padding()),
+            var: GlobalVar::constant(len),
             subst: LocalSubst {
                 tail: SubstTail::Empty,
                 terms: vec![],

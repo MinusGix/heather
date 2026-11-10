@@ -60,7 +60,7 @@ fn nil_ctx() -> LocalCtx {
 
 /// The context consisting of the context variable at index `i`.
 fn g_ctx(i: u32) -> LocalCtx {
-    LocalCtx::ctx_var(GlobalVar(i))
+    LocalCtx::ctx_var(GlobalVar::index(i))
 }
 
 /// `Δ, x : ty @ level`.
@@ -72,12 +72,12 @@ fn ext(base: &LocalCtx, ty: Type, level: Level) -> LocalCtx {
 
 /// `U^{id_Δ}`.
 fn gty(var: u32, ctx: &LocalCtx) -> Type {
-    Type::GlobalTy { var: GlobalVar(var), subst: LocalSubst::id(ctx) }
+    Type::GlobalTy { var: GlobalVar::index(var), subst: LocalSubst::id(ctx) }
 }
 
 /// `u^{id_Δ}`.
 fn gtm(var: u32, ctx: &LocalCtx) -> Term {
-    Term::GlobalTm { var: GlobalVar(var), subst: LocalSubst::id(ctx) }
+    Term::GlobalTm { var: GlobalVar::index(var), subst: LocalSubst::id(ctx) }
 }
 
 /// `λ^{0,0}(x : Nat). body`.
@@ -353,7 +353,7 @@ fn global_context_formation() {
         }]);
     assert_eq!(
         check_global_ctx(&unbound, 0, FUEL).unwrap_err(),
-        TypeError::UnboundGlobalVar(0)
+        TypeError::UnboundGlobalVar(GlobalVar::index(0))
     );
 }
 
@@ -372,7 +372,7 @@ fn global_context_extension_checks_only_the_ordered_suffix() {
     }];
     assert_eq!(
         check_global_ctx_extension(&prefix, &bad, 0, FUEL).unwrap_err(),
-        TypeError::UnboundGlobalVar(9)
+        TypeError::UnboundGlobalVar(GlobalVar::index(9))
     );
 }
 
@@ -431,7 +431,7 @@ fn local_substitutions() {
     // empty base. (The empty tail itself records nothing to get wrong:
     // DESIGN.md §Representation, "The empty substitution is `·`".)
     let bad_base = LocalSubst {
-        tail: SubstTail::Wk { len: 0, ctx_var: GlobalVar(0) },
+        tail: SubstTail::Wk { len: 0, ctx_var: GlobalVar::index(0) },
         terms: vec![rt(Term::Zero)],
     };
     assert_eq!(
@@ -519,7 +519,7 @@ fn letbox_term() {
     // letbox^{0,0} · Nat (x_t. Nat) (u. u^{·¹}) (box 0) : Nat — splice the
     // bound code back in via the global variable.
     let body = Term::GlobalTm {
-        var: GlobalVar(0),
+        var: GlobalVar::index(0),
         subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] },
     };
     let t = Term::LetBoxTm {
@@ -689,7 +689,7 @@ fn identity_branches() -> Rc<Branches> {
     let gx_lam = ext(&g3, gty(2, &g3), lv(1));
     // tm_elim_nat: (g, x : Nat @ 0) and (g, x : Nat, y : U_M^id @ ℓ)
     let gx_nat = ext(&g4, Type::Nat, Level::Zero);
-    let u_m = Type::GlobalTy { var: GlobalVar(3), subst: LocalSubst::id(&gx_nat) };
+    let u_m = Type::GlobalTy { var: GlobalVar::index(3), subst: LocalSubst::id(&gx_nat) };
     let gxy = ext(&gx_nat, u_m.clone(), lv(0));
 
     Rc::new(Branches {
@@ -792,7 +792,7 @@ fn identity_branches() -> Rc<Branches> {
                 ty: rty(gty(5, &g6)),
                 lhs: rt(gtm(4, &g6)),
                 motive: rty(Type::GlobalTy {
-                    var: GlobalVar(3),
+                    var: GlobalVar::index(3),
                     subst: LocalSubst::id(&gyp),
                 }),
                 case: rt(gtm(2, &g6)),
@@ -846,7 +846,7 @@ fn identity_branches() -> Rc<Branches> {
         // (motive), ℓ' = 0 (scrutinee); telescope g = 2, U_M = 1, u_t = 0.
         tm_elim_empty: {
             let gx_empty = ext(&g2, Type::Empty { level: lv(0) }, lv(0));
-            let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
+            let u_m_e = Type::GlobalTy { var: GlobalVar::index(1), subst: LocalSubst::id(&gx_empty) };
             rt(Term::BoxTm(rt(Term::ElimEmpty {
                 level: lv(1),
                 scrut_level: lv(0),
@@ -962,7 +962,7 @@ fn identity_branches() -> Rc<Branches> {
                 arg: rt(Term::Var(LocalVar(0))),
             };
             let u_m_at_fy = Type::GlobalTy {
-                var: GlobalVar(2),
+                var: GlobalVar::index(2),
                 subst: LocalSubst::id(&g5).shift_local(3).extended(rt(f_y)),
             };
             let ih_ty = Type::Pi {
@@ -1068,7 +1068,7 @@ fn identity_branches() -> Rc<Branches> {
                 cod_level: lv(0),
                 dom: rty(Type::Fin { len: rt(gtm(3, &gx5).shift_local(1)) }),
                 cod: rty(Type::GlobalTy {
-                    var: GlobalVar(2),
+                    var: GlobalVar::index(2),
                     subst: LocalSubst::id(&g5).shift_local(3).extended(rt(nth_at_i)),
                 }),
             };
@@ -1111,7 +1111,7 @@ fn identity_branches() -> Rc<Branches> {
                 level: lv(1),
                 scrut_level: lv(0),
                 motive: rty(Type::GlobalTy {
-                    var: GlobalVar(1),
+                    var: GlobalVar::index(1),
                     subst: LocalSubst::id(&gxe),
                 }),
                 scrut: rt(gtm(0, &g2s)),
@@ -1144,7 +1144,7 @@ fn identity_branches() -> Rc<Branches> {
                 dst_level: lv(0),
                 src_ty: rty(a),
                 motive: rty(Type::GlobalTy {
-                    var: GlobalVar(2),
+                    var: GlobalVar::index(2),
                     subst: LocalSubst::id(&gz),
                 }),
                 case: rt(gtm(1, &gx)),
@@ -1451,7 +1451,7 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
     let branches_claiming = |ty_level: Level, call_level: Level| {
         // box (elim_Empty^{ℓ,ℓ'} (x. U_M^id; u_t^id)) — the identity body.
         let gx_empty = ext(&g2, Type::Empty { level: lv(0) }, lv(0));
-        let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
+        let u_m_e = Type::GlobalTy { var: GlobalVar::index(1), subst: LocalSubst::id(&gx_empty) };
         let boxed = Term::BoxTm(rt(Term::ElimEmpty {
             level: lv(1),
             scrut_level: lv(0),
@@ -1460,7 +1460,7 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
         }));
         // The branch's own type, unchanged: □(g ⊢ U_M^{id, u_t^id/x} @ ℓ).
         let u_m_at_scrut = Type::GlobalTy {
-            var: GlobalVar(1),
+            var: GlobalVar::index(1),
             subst: LocalSubst::id(&g2).extended(rt(gtm(0, &g2))),
         };
         let branch_ty = Type::CodeTm { ctx: g2.clone(), ty: rty(u_m_at_scrut), level: lv(1) };
@@ -1576,7 +1576,7 @@ fn type_motive_branch_entries_are_usable_at_their_declared_context_and_level() {
     // □(g ⊢ U_M^{id, u_t^id/x} @ ℓ).
     let gx_empty = ext(&g2, Type::Empty { level: lv(0) }, lv(0));
     let u_m_at_scrut = Type::GlobalTy {
-        var: GlobalVar(1),
+        var: GlobalVar::index(1),
         subst: LocalSubst::id(&g2).extended(rt(gtm(0, &g2))),
     };
     let elim_empty_branch_ty =

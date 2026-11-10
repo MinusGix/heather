@@ -185,7 +185,7 @@ pub(crate) fn stored_body(world: &GlobalCtx, var: GlobalVar, payloads: usize) ->
     if Defs::transparent(world).withheld(var).is_some() {
         return None;
     }
-    let at = world.bindings.len().checked_sub(1 + var.0 as usize)?;
+    let at = var.position(world.bindings.len())?;
     match world.bindings.get(at)? {
         GlobalBinding::Tm { body: Some(body), ctx, .. } if ctx.entries.len() == payloads => Some(body),
         _ => None,
@@ -254,7 +254,7 @@ pub(crate) fn refolded_fire(world: &GlobalCtx, gamma: &LocalCtx, call: &Term, cu
     };
     let stored = stored_body(world, *var, subst.terms.len())?;
     Layout::of_body(stored)?;
-    let body = stored.shift_global(var.0 + 1).apply_local(subst);
+    let body = stored.shift_global(var.rescope()).apply_local(subst);
     let (layout, elim) = Layout::of_body(&body)?;
     let args: Vec<Rc<Term>> = args.into_iter().cloned().collect();
     let fields = WfElim { level, motive_level, shape, arity, motive, step };

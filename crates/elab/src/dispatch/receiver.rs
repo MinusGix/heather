@@ -391,7 +391,7 @@ impl Elaborator {
                 return false;
             };
             hops += 1;
-            let Some(next) = inst.checked_sub(inner.0 as usize + 1).filter(|_| hops <= 4) else {
+            let Some(next) = inner.position(inst).filter(|_| hops <= 4) else {
                 return false;
             };
             inst = next;
@@ -434,7 +434,7 @@ impl Elaborator {
             return false;
         };
         // The body is stored scoped over the Ψ prefix before its binding.
-        if inst.checked_sub(gv.0 as usize + 1) != Some(g) {
+        if gv.position(inst) != Some(g) {
             return false;
         }
         // Called the same way: `n` leading implicit type parameters, then

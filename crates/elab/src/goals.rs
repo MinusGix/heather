@@ -414,7 +414,7 @@ impl GoalArena {
             }
         };
         Ok(Term::GlobalTm {
-            var: GlobalVar(self.base - 1 - k as u32),
+            var: GlobalVar::index(self.base - 1 - k as u32),
             subst: LocalSubst::id(&cx.gamma),
         })
     }
@@ -454,7 +454,7 @@ impl GoalArena {
             }
         };
         Some(Term::GlobalTm {
-            var: GlobalVar(self.base - 1 - k as u32),
+            var: GlobalVar::index(self.base - 1 - k as u32),
             subst: LocalSubst::id(&cx.gamma),
         })
     }
@@ -521,7 +521,7 @@ impl GoalArena {
     }
 
     fn reference(&self, k: usize, gamma: &LocalCtx) -> Term {
-        Term::GlobalTm { var: GlobalVar(self.base - 1 - k as u32), subst: LocalSubst::id(gamma) }
+        Term::GlobalTm { var: GlobalVar::index(self.base - 1 - k as u32), subst: LocalSubst::id(gamma) }
     }
 
     /// Slot `k`'s binding as a definition, scoped in committed Ψ followed by
@@ -807,17 +807,11 @@ mod tests {
 
         assert!(matches!(
             first,
-            Term::GlobalTm {
-                var: GlobalVar(1),
-                ..
-            }
+            Term::GlobalTm { var, .. } if var == GlobalVar::index(1)
         ));
         assert!(matches!(
             replacement,
-            Term::GlobalTm {
-                var: GlobalVar(0),
-                ..
-            }
+            Term::GlobalTm { var, .. } if var == GlobalVar::index(0)
         ));
     }
 

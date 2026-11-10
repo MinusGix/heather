@@ -374,7 +374,7 @@ fn substitution_shares_subterms_it_cannot_change() {
 fn relocation_keeps_shared_nodes_shared() {
     heather_kernel::checks::set_skip_verification(heather_kernel::checks::SkipVerification::Full);
     // A node that has to move (it names global 0), written twice.
-    let moved = Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: LocalSubst::id(&LocalCtx::nil()) });
+    let moved = Rc::new(Term::GlobalTm { var: GlobalVar::index(0), subst: LocalSubst::id(&LocalCtx::nil()) });
     let t = Term::App {
         fun: Rc::clone(&moved),
         dom_level: Level::Zero,
@@ -383,10 +383,10 @@ fn relocation_keeps_shared_nodes_shared() {
         cod: Rc::new(Type::Nat),
         arg: Rc::clone(&moved),
     };
-    let out = t.reindex_global(&mut |i| Some(i + 3)).expect("the map refuses nothing");
+    let out = t.reindex_global(&mut |r| r.map_var(|i| Some(i + 3))).expect("the map refuses nothing");
     match out {
         Term::App { fun, arg, .. } => {
-            assert!(matches!(&*fun, Term::GlobalTm { var: GlobalVar(3), .. }), "the global did not move");
+            assert!(matches!(&*fun, Term::GlobalTm { var, .. } if *var == GlobalVar::index(3)), "the global did not move");
             assert!(Rc::ptr_eq(&fun, &arg), "relocation copied a shared node once per occurrence");
         }
         _ => panic!("relocation changed the head shape"),

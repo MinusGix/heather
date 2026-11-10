@@ -42,7 +42,7 @@ impl Elaborator {
                 };
                 doms.push((*dom).clone());
                 let meta = Rc::new(Term::GlobalTm {
-                    var: GlobalVar(slot), subst: LocalSubst::id(&cx.gamma),
+                    var: GlobalVar::index(slot), subst: LocalSubst::id(&cx.gamma),
                 });
                 ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(meta));
                 level = cod_level;

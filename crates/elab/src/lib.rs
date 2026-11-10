@@ -3358,6 +3358,7 @@ impl Elaborator {
                 // §4: a failed item's warnings are as speculative as the rest
                 // of it — it registers nothing, and it says nothing.
                 self.pass.warnings.borrow_mut().truncate(warn_mark);
+                self.slice_failed();
             } else {
                 self.mint_pending();
                 stats::timed(stats::Timer::Lint, || self.run_source_lints(item, &lint_source));
@@ -3594,12 +3595,7 @@ impl Elaborator {
     /// Fully checked — a `GlobalVar` reaching here can be anything the term it
     /// came out of contains, including one that is out of scope.
     pub(crate) fn global_abs_of(&self, var: GlobalVar) -> Option<usize> {
-        let len = self.psi.bindings.len() as u32;
-        let abs = len
-            .checked_add(self.global_padding())?
-            .checked_add(self.scope.meta_pushed.borrow().len() as u32)?
-            .checked_sub(var.0.checked_add(1)?)?;
-        Some(abs as usize)
+        var.position(self.lowering_scope() as usize)
     }
 
     /// The parameter table of the binding at absolute Ψ index `abs`, empty for
@@ -4521,15 +4517,15 @@ impl Elaborator {
         // A lifted proof has no name to register: like a key-less generated
         // definition, it travels in the module's Ψ suffix.
         for lemma in aux {
-            self.psi.push(lemma);
+            self.psi.commit(lemma);
         }
         let abs = self.psi.bindings.len() as u32;
         if let (Some(kept), Some(proof), GlobalBinding::Tm { ty, .. }) = (&mut self.pass.export_proofs, export_proof, &binding) {
             kept.insert(abs as usize, (Rc::clone(ty), proof));
         }
         match sealed {
-            Some(proof) => self.psi.push_sealed(binding, proof),
-            None => self.psi.push(binding),
+            Some(proof) => self.psi.commit_sealed(binding, proof),
+            None => self.psi.commit(binding),
         }
         self.semantic_commit_global(abs, registration, is_axiom, direct_dependencies);
         self.refresh_delta_psi();
@@ -5279,6 +5275,9 @@ impl Elaborator {
         // its atom list), and any other goal is refused, which the two
         // dummies would disagree about.
         let mut world: GlobalCtx = (*self.psi).clone();
+        // A lifted proof is committed like any declaration: the `j`th is the
+        // constant just past Ψ's.
+        let first = world.bindings.len() as u32;
         let mut aux = Vec::new();
         let mut earlier: HashMap<usize, (usize, LocalCtx)> = HashMap::new();
         for (j, slot) in lifted.into_iter().enumerate() {
@@ -5286,7 +5285,7 @@ impl Elaborator {
                 entries: (0..base as usize)
                     .map(|k| {
                         heather_kernel::subst::GlobalEntry::Tm(Rc::new(match earlier.get(&k) {
-                            Some((i, delta)) => Term::GlobalTm { var: GlobalVar((j - 1 - i) as u32), subst: LocalSubst::id(delta) },
+                            Some((i, delta)) => Term::GlobalTm { var: GlobalVar::constant(first + *i as u32), subst: LocalSubst::id(delta) },
                             None => dummy.clone(),
                         }))
                     })
@@ -5315,11 +5314,11 @@ impl Elaborator {
                 level: slot.level,
                 body: slot.transparent.then(|| Rc::new(body)),
             };
-            world.push(binding.clone());
+            world.commit(binding.clone());
             aux.push(binding);
             earlier.insert(slot.slot, (j, gamma.clone()));
             sigma.entries[slot.slot] = heather_kernel::subst::GlobalEntry::Tm(Rc::new(Term::GlobalTm {
-                var: GlobalVar(m - 1 - j as u32),
+                var: GlobalVar::constant(first + j as u32),
                 subst: LocalSubst::id(&gamma),
             }));
         }
@@ -5462,8 +5461,8 @@ impl Elaborator {
 
     /// Ψ as the goal world sees it: the committed bindings, then one `Trm`
     /// binding per goal in creation order, padded out to `goal_base`. With
-    /// `L = |Ψ| + goal_base`, `GlobalVar(v)` is `bindings[L - 1 - v]`, so goal
-    /// `k` at `GlobalVar(goal_base - 1 - k)` lands immediately after the
+    /// `L = |Ψ| + goal_base`, `GlobalVar::index(v)` is `bindings[L - 1 - v]`, so goal
+    /// `k` at `GlobalVar::index(goal_base - 1 - k)` lands immediately after the
     /// committed ones. Well-scoped precisely because goals are numbered in
     /// creation order: goal `k`'s statement can only mention goals before it.
     ///
@@ -5477,7 +5476,7 @@ impl Elaborator {
     }
 
     /// The substitution discharging the whole goal block: `entries[k]` is the
-    /// payload for goal `k` at `GlobalVar(goal_base - 1 - k)`, matching
+    /// payload for goal `k` at `GlobalVar::index(goal_base - 1 - k)`, matching
     /// `apply_global`'s convention. Reserved-but-unused slots (the pre-count
     /// is an upper bound) get a payload nothing can reach.
     fn goal_subst(&self) -> GlobalSubst {
@@ -10434,7 +10433,7 @@ impl Elaborator {
         for slot in 0..n {
             let Type::Pi { dom, cod, .. } = conclusion else { return false };
             doms.push((*dom).clone());
-            let meta = Term::GlobalTm { var: GlobalVar(slot), subst: LocalSubst::id(&cx.gamma) };
+            let meta = Term::GlobalTm { var: GlobalVar::index(slot), subst: LocalSubst::id(&cx.gamma) };
             conclusion = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(meta)));
         }
         let pat = self.unspell_deep_now(&conclusion, n).unwrap_or(conclusion);
@@ -10695,11 +10694,9 @@ impl Elaborator {
             // Unsolved, one of *this* call's metas, the same on both sides,
             // and at the identity substitution — a solution is scoped in Γ,
             // so anything else is not ours to solve.
-            (f_lhs == f_rhs
-                && var.0 < n
-                && matches!(sols[var.0 as usize], Sol::Unsolved)
-                && *subst == LocalSubst::id(&cx.gamma))
-            .then(|| (var.0 as usize, Rc::clone(s_raw), Rc::clone(t_raw)))
+            let slot = var.innermost(n)? as usize;
+            (f_lhs == f_rhs && matches!(sols[slot], Sol::Unsolved) && *subst == LocalSubst::id(&cx.gamma))
+                .then(|| (slot, Rc::clone(s_raw), Rc::clone(t_raw)))
         })();
         // The general harvest (design §5.1): the LGG's step 1 run on its own
         // whenever the flex-`Id` shape is not in play. This is the answer to
@@ -11122,26 +11119,21 @@ impl Elaborator {
             .and_then(|key| self.names.global(&key).map(|info| (key, info)));
         match resolved_global {
             Some((key, GlobalInfo { abs, .. })) => {
-                let len = self.psi.bindings.len() as u32;
-                // The goals sit innermost, so a committed binding is that much
-                // further out — and so do a `meta fn`'s Ψ-extending binders
-                // (its `Ctx` binder, each hoisted letbox global, a `match code`
-                // branch telescope). A layer-m term *may* name a layer-c
-                // global (`i' ≤ i`, typing.rs:756), which is what lets an
-                // analyzer's arms call ordinary library functions
-                // (docs/certgen-transcriber-in-language-design.md §4); the
-                // index arithmetic is the only thing that ever stopped it.
-                // The two paddings never combine: goals are refused inside a
-                // `meta fn`.
-                let meta_off = self.scope.meta_pushed.borrow().len() as u32;
-                let var = GlobalVar(len - 1 - abs + self.global_padding() + meta_off);
+                // A committed binding is a constant: the same reference
+                // under the goals, and under a `meta fn`'s Ψ-extending
+                // binders (its `Ctx` binder, each hoisted letbox global, a
+                // `match code` branch telescope), which are the variables
+                // after it. A layer-m term *may* name a layer-c global
+                // (`i' ≤ i`, typing.rs:756), which is what lets an analyzer's
+                // arms call ordinary library functions
+                // (docs/certgen-transcriber-in-language-design.md §4).
+                let var = GlobalVar::constant(*abs);
                 let GlobalBinding::Tm { ty, level, .. } = &self.psi.bindings[*abs as usize] else {
                     unreachable!("global index points at a non-Trm binding");
                 };
-                // Stored scoped in its prefix of Ψ; rescope to the full Ψ
-                // (the kernel's own lookup convention, typing.rs). This needs
-                // no goal offset of its own: `var.0` already carries it.
-                let ty = ty.shift_global(var.0 + 1);
+                // A constant's statement is read as stored (the kernel's own
+                // lookup convention, typing.rs).
+                let ty = Rc::clone(ty);
                 // The binding is closed (· ⊢), so the delayed substitution
                 // is the empty map out of the current Γ.
                 let subst = LocalSubst {

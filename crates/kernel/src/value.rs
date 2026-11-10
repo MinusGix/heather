@@ -51,7 +51,7 @@ use typed_arena::Arena;
 
 use crate::fmt::node;
 use crate::level::Level;
-use crate::term::{Branches, GlobalVar, LocalCtx, Motives, SubstTail, Term, Type};
+use crate::term::{Branches, GlobalRef, GlobalVar, LocalCtx, Motives, SubstTail, Term, Type};
 
 pub mod algebra;
 pub mod program;
@@ -89,12 +89,26 @@ use program::ContextProgram;
 /// The offset is always at **cutoff 0**: a closure whose body sits under a
 /// global binder is built with its offset materialized (design §4), so a
 /// global index read by the machine is always free in the body.
+///
+/// A **constant's** body is read at offset 0, since it mentions no global
+/// variable (`DESIGN.md`, "Constants are addressed from the start of Ψ"). So
+/// that the environment still says whose body it reads, the word that holds
+/// the offset holds the constant's position instead, tagged
+/// ([`Env::of_binding`], [`Env::binding`]). It is part of the identity like
+/// the offset is, and a hint like the offset is: nothing in the kernel reads
+/// it back.
 #[derive(Clone, Copy)]
 pub struct Env<'v> {
     node: Option<&'v EnvNode<'v>>,
     len: u32,
-    gshift: u32,
+    /// The global offset, or with [`OWNER`] set the position of the constant
+    /// whose body this environment reads (offset 0).
+    scope: u32,
 }
+
+/// The tag on [`Env::scope`] for "a constant's body": the same bit
+/// [`GlobalVar`] spells a constant with.
+const OWNER: u32 = 1 << 31;
 
 struct EnvNode<'v> {
     val: &'v TmClo<'v>,
@@ -112,24 +126,49 @@ pub enum Lookup<'v> {
 
 impl<'v> Env<'v> {
     pub fn empty() -> Env<'v> {
-        Env { node: None, len: 0, gshift: 0 }
+        Env { node: None, len: 0, scope: 0 }
     }
 
     /// The empty environment at global offset `gshift` — the scope a
     /// definition's **unshifted** body is read in (design §5).
     pub fn at(gshift: u32) -> Env<'v> {
-        Env { node: None, len: 0, gshift }
+        debug_assert!(gshift & OWNER == 0, "a global offset past 2^31");
+        Env { node: None, len: 0, scope: gshift }
+    }
+
+    /// The empty environment the stored body of the binding `var` names is
+    /// read in: a variable's at the offset past it, a constant's at none.
+    pub fn of_binding(var: GlobalVar) -> Env<'v> {
+        match var.view() {
+            GlobalRef::Var(i) => Env::at(i + 1),
+            GlobalRef::Const(p) => Env { node: None, len: 0, scope: OWNER | p },
+        }
     }
 
     /// The global-index offset of syntax read under this environment.
     pub fn gshift(&self) -> u32 {
-        self.gshift
+        if self.scope & OWNER != 0 { 0 } else { self.scope }
+    }
+
+    /// The binding whose stored body this environment was made to read
+    /// ([`Env::of_binding`]), in the ambient Ψ, if it was made for one. A
+    /// **candidate** only: an environment built at a bare offset
+    /// ([`Env::at`]) answers the variable that offset is one past, whether
+    /// or not it reads that variable's body. A reader that acts on it
+    /// checks the syntax it holds against the binding by identity.
+    pub fn binding(&self) -> Option<GlobalVar> {
+        if self.scope & OWNER != 0 {
+            Some(GlobalVar::constant(self.scope & !OWNER))
+        } else {
+            self.scope.checked_sub(1).map(GlobalVar::index)
+        }
     }
 
     /// The same entries, for syntax that is **already** ambient — what the
     /// materializing sites of design §5 pair their shifted syntax with.
     pub fn with_gshift(&self, gshift: u32) -> Env<'v> {
-        Env { gshift, ..*self }
+        debug_assert!(gshift & OWNER == 0, "a global offset past 2^31");
+        Env { scope: gshift, ..*self }
     }
 
     /// The number of concrete entries.
@@ -146,7 +185,7 @@ impl<'v> Env<'v> {
     /// with the same body and the same key denote the same value, so a
     /// verdict about one is a verdict about the other.
     pub fn ident(&self) -> (usize, u32, u32) {
-        (self.node.map_or(0, |n| n as *const EnvNode<'v> as usize), self.len, self.gshift)
+        (self.node.map_or(0, |n| n as *const EnvNode<'v> as usize), self.len, self.scope)
     }
 
     /// Object identity: the same spine (both empty, or one shared head
@@ -154,7 +193,7 @@ impl<'v> Env<'v> {
     /// so a closure body evaluated under either denotes the same value.
     pub fn ptr_eq(a: &Env<'v>, b: &Env<'v>) -> bool {
         a.len == b.len
-            && a.gshift == b.gshift
+            && a.scope == b.scope
             && match (&a.node, &b.node) {
                 (None, None) => true,
                 (Some(x), Some(y)) => std::ptr::eq(*x, *y),
@@ -208,7 +247,7 @@ impl<'v> Env<'v> {
         Env {
             node: Some(arena.envs.alloc(node)),
             len: self.len + 1,
-            gshift: self.gshift,
+            scope: self.scope,
         }
     }
 
@@ -1304,7 +1343,7 @@ impl VTail {
     /// `wk_g`'s context variable is read off the syntax and takes the offset.
     pub fn of(tail: SubstTail, gshift: u32) -> VTail {
         match tail {
-            SubstTail::Wk { ctx_var, .. } => VTail::Wk(GlobalVar(ctx_var.0 + gshift)),
+            SubstTail::Wk { ctx_var, .. } => VTail::Wk(ctx_var.shifted(gshift)),
             SubstTail::Empty => VTail::Empty,
         }
     }
@@ -2359,7 +2398,7 @@ impl fmt::Debug for Head<'_> {
         node(f, |f| match self {
             Head::Var(l) => write!(f, "x@{l}"),
             Head::BaseVar(d) => write!(f, "g#{d}"),
-            Head::Global { var, subst } => write!(f, "u{}{:?}", var.0, subst),
+            Head::Global { var, subst } => write!(f, "u{}{:?}", var, subst),
             Head::BoxedGlobalTy(t) => write!(f, "□{t:?}"),
             Head::BoxedGlobalTm(t) => write!(f, "□{t:?}"),
             Head::Stuck(v) => write!(f, "stuck({v:?})"),
@@ -2387,7 +2426,7 @@ impl fmt::Debug for VNeutral<'_> {
 impl fmt::Debug for VNeTy<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         node(f, |f| match self {
-            VNeTy::Global { var, subst } => write!(f, "U{}{:?}", var.0, subst),
+            VNeTy::Global { var, subst } => write!(f, "U{}{:?}", var, subst),
             VNeTy::El { level, tm } => write!(f, "El[{level:?}]({tm:?})"),
         })
     }

@@ -39,7 +39,7 @@ pub(crate) fn lvar(i: u32) -> Level {
 
 /// The context `g` for the context variable at de Bruijn index `i`.
 pub(crate) fn g_ctx(i: u32) -> LocalCtx {
-    LocalCtx::ctx_var(GlobalVar(i))
+    LocalCtx::ctx_var(GlobalVar::index(i))
 }
 
 /// `Δ, x : T @ l`.
@@ -51,12 +51,12 @@ pub(crate) fn ext_ctx(base: &LocalCtx, ty: Type, level: Level) -> LocalCtx {
 
 /// `U^{id_Δ}` for the global type variable `var` with index context `ctx`.
 pub(crate) fn gty(var: u32, ctx: &LocalCtx) -> Type {
-    Type::GlobalTy { var: GlobalVar(var), subst: LocalSubst::id(ctx) }
+    Type::GlobalTy { var: GlobalVar::index(var), subst: LocalSubst::id(ctx) }
 }
 
 /// `u^{id_Δ}` for the global term variable `var` with index context `ctx`.
 pub(crate) fn gtm(var: u32, ctx: &LocalCtx) -> Term {
-    Term::GlobalTm { var: GlobalVar(var), subst: LocalSubst::id(ctx) }
+    Term::GlobalTm { var: GlobalVar::index(var), subst: LocalSubst::id(ctx) }
 }
 
 /// Weaken every binding of Ψ by `by` universe variables (all bindings are
@@ -86,7 +86,10 @@ pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
                 },
             })
             .collect(),
-    );
+    )
+    // The same bindings, so the same signature: a position names what it
+    // named.
+    .with_consts(psi.consts());
     // A sealed proof shifts with its binding, as a body does — when it is
     // first needed, so a telescope does not load every lazily kept proof.
     for (i, t) in psi.sealed.iter() {
@@ -1149,7 +1152,7 @@ pub(crate) fn branch_specs(
         let gt = gt(1, 5);
         // telescope view: g = 4, U_M = 3, u_s = 2, u_s' = 1, u_t = 0
         let gx = ext_ctx(&g_ctx(4), Type::Nat, Level::Zero);
-        let motive_code = Type::GlobalTy { var: GlobalVar(3), subst: LocalSubst::id(&gx) };
+        let motive_code = Type::GlobalTy { var: GlobalVar::index(3), subst: LocalSubst::id(&gx) };
         let gxy = ext_ctx(&gx, motive_code.clone(), lvar(0));
         let x_m = inst_ty_motive(
             m_ty,
@@ -1160,7 +1163,7 @@ pub(crate) fn branch_specs(
             &gt,
         );
         let u_m_at_zero = Type::GlobalTy {
-            var: GlobalVar(3),
+            var: GlobalVar::index(3),
             subst: LocalSubst::id(&g_ctx(4)).extended(Rc::new(Term::Zero)),
         };
         let x_s = inst_tm_motive(
@@ -1173,7 +1176,7 @@ pub(crate) fn branch_specs(
             &gt,
         );
         let u_m_at_succ = Type::GlobalTy {
-            var: GlobalVar(3),
+            var: GlobalVar::index(3),
             subst: LocalSubst::id(&g_ctx(4))
                 .shift_local(2)
                 .extended(Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))))),
@@ -1209,7 +1212,7 @@ pub(crate) fn branch_specs(
             scrut: Rc::new(gtm(0, &g_ctx(4))),
         };
         let u_m_at_scrut = Type::GlobalTy {
-            var: GlobalVar(3),
+            var: GlobalVar::index(3),
             subst: LocalSubst::id(&g_ctx(4)).extended(Rc::new(gtm(0, &g_ctx(4)))),
         };
         BranchSpec {
@@ -1226,7 +1229,7 @@ pub(crate) fn branch_specs(
                         ctx: g_ctx(1),
                         layer: Layer::Code,
                         ty: Rc::new(Type::GlobalTy {
-                            var: GlobalVar(0),
+                            var: GlobalVar::index(0),
                             subst: LocalSubst::id(&g_ctx(1)).extended(Rc::new(Term::Zero)),
                         }),
                         level: lvar(0),
@@ -1236,14 +1239,14 @@ pub(crate) fn branch_specs(
                         ctx: {
                             let gx = ext_ctx(&g_ctx(2), Type::Nat, Level::Zero);
                             let y_ty = Type::GlobalTy {
-                                var: GlobalVar(1),
+                                var: GlobalVar::index(1),
                                 subst: LocalSubst::id(&gx),
                             };
                             ext_ctx(&gx, y_ty, lvar(0))
                         },
                         layer: Layer::Code,
                         ty: Rc::new(Type::GlobalTy {
-                            var: GlobalVar(1),
+                            var: GlobalVar::index(1),
                             subst: LocalSubst::id(&g_ctx(2))
                                 .shift_local(2)
                                 .extended(Rc::new(Term::Succ(Rc::new(Term::Var(
@@ -1422,7 +1425,7 @@ pub(crate) fn branch_specs(
             arg: Rc::new(gtm(0, &g_ctx(4))),
         };
         let u_t_at_arg = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g_ctx(4)).extended(Rc::new(gtm(0, &g_ctx(4)))),
         };
         BranchSpec {
@@ -1651,7 +1654,7 @@ pub(crate) fn branch_specs(
             rhs: Rc::new(Term::Var(LocalVar(0))),
         };
         let gyp = ext_ctx(&gy, p_ty, lvar(1));
-        let motive_code = Type::GlobalTy { var: GlobalVar(3), subst: LocalSubst::id(&gyp) };
+        let motive_code = Type::GlobalTy { var: GlobalVar::index(3), subst: LocalSubst::id(&gyp) };
         let x_s = inst_ty_motive(
             m_ty,
             (2, 7, 0),
@@ -1683,7 +1686,7 @@ pub(crate) fn branch_specs(
             tm: Rc::new(gtm(4, &g_ctx(6))),
         };
         let u_m_at_refl = Type::GlobalTy {
-            var: GlobalVar(3),
+            var: GlobalVar::index(3),
             subst: LocalSubst::id(&g_ctx(6))
                 .extended(Rc::new(gtm(4, &g_ctx(6))))
                 .extended(Rc::new(refl_a)),
@@ -1732,7 +1735,7 @@ pub(crate) fn branch_specs(
             proof: Rc::new(gtm(0, &g_ctx(6))),
         };
         let u_m_at_scrut = Type::GlobalTy {
-            var: GlobalVar(3),
+            var: GlobalVar::index(3),
             subst: LocalSubst::id(&g_ctx(6))
                 .extended(Rc::new(gtm(1, &g_ctx(6))))
                 .extended(Rc::new(gtm(0, &g_ctx(6)))),
@@ -1768,7 +1771,7 @@ pub(crate) fn branch_specs(
                         ctx: g_ctx(3),
                         layer: Layer::Code,
                         ty: Rc::new(Type::GlobalTy {
-                            var: GlobalVar(0),
+                            var: GlobalVar::index(0),
                             subst: LocalSubst::id(&g_ctx(3))
                                 .extended(Rc::new(gtm(1, &g_ctx(3))))
                                 .extended(Rc::new(Term::Refl {
@@ -1937,7 +1940,7 @@ pub(crate) fn branch_specs(
             &gt,
         );
         let u_t_at_ua = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g_ctx(4)).extended(Rc::new(gtm(1, &g_ctx(4)))),
         };
         let x_b = inst_tm_motive(
@@ -1985,7 +1988,7 @@ pub(crate) fn branch_specs(
                         ctx: g_ctx(3),
                         layer: Layer::Code,
                         ty: Rc::new(Type::GlobalTy {
-                            var: GlobalVar(1),
+                            var: GlobalVar::index(1),
                             subst: LocalSubst::id(&g_ctx(3))
                                 .extended(Rc::new(gtm(0, &g_ctx(3)))),
                         }),
@@ -2157,7 +2160,7 @@ pub(crate) fn branch_specs(
             pair: Rc::new(gtm(0, &g_ctx(3))),
         };
         let u_t_at_fst = Type::GlobalTy {
-            var: GlobalVar(1),
+            var: GlobalVar::index(1),
             subst: LocalSubst::id(&g_ctx(3)).extended(Rc::new(fst_code)),
         };
         let sigma_up = Type::Sigma {
@@ -2274,7 +2277,7 @@ pub(crate) fn branch_specs(
         // gains a *second* universe rather than a first.
         let empty = Type::Empty { level: lvar(0) };
         let gx = ext_ctx(&g_ctx(2), empty.clone(), lvar(0));
-        let motive_code = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx) };
+        let motive_code = Type::GlobalTy { var: GlobalVar::index(1), subst: LocalSubst::id(&gx) };
         let x_m = inst_ty_motive(
             m_ty,
             (2, 3, 0),
@@ -2302,7 +2305,7 @@ pub(crate) fn branch_specs(
             scrut: Rc::new(gtm(0, &g_ctx(2))),
         };
         let u_m_at_scrut = Type::GlobalTy {
-            var: GlobalVar(1),
+            var: GlobalVar::index(1),
             subst: LocalSubst::id(&g_ctx(2)).extended(Rc::new(gtm(0, &g_ctx(2)))),
         };
         BranchSpec {
@@ -2657,11 +2660,11 @@ pub(crate) fn branch_specs(
             val: Rc::new(Term::Var(LocalVar(0))),
         };
         let u_m_at_inl = Type::GlobalTy {
-            var: GlobalVar(3),
+            var: GlobalVar::index(3),
             subst: LocalSubst::id(&g_ctx(6)).shift_local(1).extended(Rc::new(inl_x)),
         };
         let u_m_at_inr = Type::GlobalTy {
-            var: GlobalVar(3),
+            var: GlobalVar::index(3),
             subst: LocalSubst::id(&g_ctx(6)).shift_local(1).extended(Rc::new(inr_y)),
         };
         let x_a = inst_ty_motive(
@@ -2728,7 +2731,7 @@ pub(crate) fn branch_specs(
         };
         // Result type U_M^{id, u_t^id/z}.
         let u_m_at_scrut = Type::GlobalTy {
-            var: GlobalVar(3),
+            var: GlobalVar::index(3),
             subst: LocalSubst::id(&g_ctx(6)).extended(Rc::new(gtm(0, &g_ctx(6)))),
         };
         // -- global bindings, each scoped in its own Ψ-prefix --
@@ -2749,7 +2752,7 @@ pub(crate) fn branch_specs(
             val: Rc::new(Term::Var(LocalVar(0))),
         };
         let u_m_bind_l = Type::GlobalTy {
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: LocalSubst::id(&g_ctx(3)).shift_local(1).extended(Rc::new(inl_x_l)),
         };
         // u_r's binding, prefix (g, U_A, U_B, U_M, u_l): g=4, U_A=3, U_B=2,
@@ -2762,7 +2765,7 @@ pub(crate) fn branch_specs(
             val: Rc::new(Term::Var(LocalVar(0))),
         };
         let u_m_bind_r = Type::GlobalTy {
-            var: GlobalVar(1),
+            var: GlobalVar::index(1),
             subst: LocalSubst::id(&g_ctx(4)).shift_local(1).extended(Rc::new(inr_y_r)),
         };
         // u_t's binding, prefix (g, U_A, U_B, U_M, u_l, u_r): g=5, U_A=4, U_B=3.
@@ -3005,7 +3008,7 @@ pub(crate) fn branch_specs(
             pos: Rc::new(gty(2, &gx)),
         };
         let u_t_at_ua = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g_ctx(4)).extended(Rc::new(gtm(1, &g_ctx(4)))),
         };
         let f_ty = Type::Pi {
@@ -3041,7 +3044,7 @@ pub(crate) fn branch_specs(
             pos: Rc::new(gty(1, &gx3)),
         };
         let u_t_at_ua_bind = Type::GlobalTy {
-            var: GlobalVar(1),
+            var: GlobalVar::index(1),
             subst: LocalSubst::id(&g_ctx(3)).extended(Rc::new(gtm(0, &g_ctx(3)))),
         };
         let f_ty_bind = Type::Pi {
@@ -3140,7 +3143,7 @@ pub(crate) fn branch_specs(
             arg: Rc::new(Term::Var(LocalVar(0))),
         };
         let u_m_at_fy = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g_ctx(5)).shift_local(3).extended(Rc::new(f_y)),
         };
         let ih_ty = Type::Pi {
@@ -3162,7 +3165,7 @@ pub(crate) fn branch_specs(
             children: Rc::new(Term::Var(LocalVar(0))),
         };
         let u_m_at_sup = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g_ctx(5))
                 .shift_local(3)
                 .extended(Rc::new(sup_af.shift_local(1))),
@@ -3220,7 +3223,7 @@ pub(crate) fn branch_specs(
             scrut: Rc::new(gtm(0, &g_ctx(5))),
         };
         let u_m_at_scrut = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g_ctx(5)).extended(Rc::new(gtm(0, &g_ctx(5)))),
         };
         // -- global bindings, each scoped in its own Ψ-prefix --
@@ -3256,7 +3259,7 @@ pub(crate) fn branch_specs(
             arg: Rc::new(Term::Var(LocalVar(0))),
         };
         let u_m_at_fy3 = Type::GlobalTy {
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: LocalSubst::id(&g_ctx(3)).shift_local(3).extended(Rc::new(f_y3)),
         };
         let ih_ty3 = Type::Pi {
@@ -3278,7 +3281,7 @@ pub(crate) fn branch_specs(
             children: Rc::new(Term::Var(LocalVar(0))),
         };
         let u_m_bind_s = Type::GlobalTy {
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: LocalSubst::id(&g_ctx(3))
                 .shift_local(3)
                 .extended(Rc::new(sup3.shift_local(1))),
@@ -3712,7 +3715,7 @@ pub(crate) fn branch_specs(
         };
         // u_n^{id, u_a/x} — the arity at the label.
         let arity_at = Term::GlobalTm {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g4).extended(Rc::new(gtm(1, &g4))),
         };
         let cs_ty = Type::Vec {
@@ -3772,7 +3775,7 @@ pub(crate) fn branch_specs(
             arity: Rc::new(gtm(1, &gx3)),
         };
         let arity_at3 = Term::GlobalTm {
-            var: GlobalVar(1),
+            var: GlobalVar::index(1),
             subst: LocalSubst::id(&g3).extended(Rc::new(gtm(0, &g3))),
         };
         let cs_ty_bind = Type::Vec {
@@ -3912,7 +3915,7 @@ pub(crate) fn branch_specs(
             scrut: Rc::new(gtm(0, &g5)),
         };
         let u_m_at_scrut = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g5).extended(Rc::new(gtm(0, &g5))),
         };
         // -- global bindings, each scoped in its own Ψ-prefix --
@@ -4291,7 +4294,7 @@ pub(crate) fn branch_specs(
         // U_M = 1, u_t = 0
         let sempty = Type::SEmpty { level: lvar(0) };
         let gx = ext_ctx(&g_ctx(2), sempty.clone(), lvar(0));
-        let motive_code = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx) };
+        let motive_code = Type::GlobalTy { var: GlobalVar::index(1), subst: LocalSubst::id(&gx) };
         let x_m = inst_ty_motive(
             m_ty,
             (2, 3, 0),
@@ -4317,7 +4320,7 @@ pub(crate) fn branch_specs(
             scrut: Rc::new(gtm(0, &g_ctx(2))),
         };
         let u_m_at_scrut = Type::GlobalTy {
-            var: GlobalVar(1),
+            var: GlobalVar::index(1),
             subst: LocalSubst::id(&g_ctx(2)).extended(Rc::new(gtm(0, &g_ctx(2)))),
         };
         BranchSpec {
@@ -4494,19 +4497,19 @@ pub(crate) fn branch_specs(
         let sq_a4 = Type::Squash { level: lvar(1), ty: Rc::new(a4.clone()) };
         let gz4 = ext_ctx(&g_ctx(4), sq_a4.clone(), lvar(1));
         let gx4 = ext_ctx(&g_ctx(4), a4.clone(), lvar(1));
-        let motive_code = Type::GlobalTy { var: GlobalVar(2), subst: LocalSubst::id(&gz4) };
+        let motive_code = Type::GlobalTy { var: GlobalVar::index(2), subst: LocalSubst::id(&gz4) };
         let packed_x = Term::Squash {
             level: lvar(1),
             ty: Rc::new(a4.shift_local(1)),
             tm: Rc::new(Term::Var(LocalVar(0))),
         };
         let b_at_x = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g_ctx(4)).shift_local(1).extended(Rc::new(packed_x)),
         };
         let branch_ty = Type::Squash { level: lvar(0), ty: Rc::new(b_at_x) };
         let result_inner = Type::GlobalTy {
-            var: GlobalVar(2),
+            var: GlobalVar::index(2),
             subst: LocalSubst::id(&g_ctx(4)).extended(Rc::new(gtm(0, &g_ctx(4)))),
         };
         let result_ty = Type::Squash { level: lvar(0), ty: Rc::new(result_inner) };
@@ -4565,7 +4568,7 @@ pub(crate) fn branch_specs(
             tm: Rc::new(Term::Var(LocalVar(0))),
         };
         let b_bind = Type::GlobalTy {
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: LocalSubst::id(&g_ctx(2)).shift_local(1).extended(Rc::new(packed_bind)),
         };
         let q_ty = Type::Squash { level: lvar(1), ty: Rc::new(gty(2, &g_ctx(3))) };

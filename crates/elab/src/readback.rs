@@ -35,7 +35,7 @@ use heather_kernel::level::Level;
 #[cfg(debug_assertions)]
 use heather_kernel::reduce::Defs;
 use heather_kernel::subst::{local_bound, local_bound_ty};
-use heather_kernel::term::{iwf_ih, nth, GlobalCtx, GlobalVar, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
+use heather_kernel::term::{iwf_ih, nth, GlobalCtx, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
 
 use crate::refold::{self, Layout, WfElim};
 use heather_kernel::value::program::ContextProgram;
@@ -510,11 +510,12 @@ impl<'v, 'g> Readback<'v, 'g> {
     /// [`Self::wf_ih`] as calls of the definition whose recursion `e` is
     /// ([`crate::refold`]), when this reader has the world and `e`'s step is
     /// that definition's stored node. The step closure names the definition:
-    /// the value machine reads a definition's body under the global offset
-    /// `v + 1` (`docs/lazy-global-offset-design.md`), and the call's
-    /// arguments are the closure's innermost entries, the body's λs. The
-    /// step itself is read back, and compared with the body's eliminator at
-    /// those arguments, only the first time a body is met
+    /// the value machine reads a definition's body in the environment made
+    /// for it (`Env::of_binding`: a variable's offset `v + 1`,
+    /// `docs/lazy-global-offset-design.md`, or a constant's position), and
+    /// the call's arguments are the closure's innermost entries, the body's
+    /// λs. The step itself is read back, and compared with the body's
+    /// eliminator at those arguments, only the first time a body is met
     /// ([`refold::verdict`]): it is the definition's whole case tree.
     fn refolded_ih(
         &mut self,
@@ -532,7 +533,7 @@ impl<'v, 'g> Readback<'v, 'g> {
         let TmClo::Syn { env, body: step } = step_clo else {
             return None;
         };
-        let var = GlobalVar(env.gshift().checked_sub(1)?);
+        let var = env.binding()?;
         let stored = refold::stored_body(world, var, 0)?;
         if !refold::holds_step(stored, step) {
             return None;
@@ -552,7 +553,7 @@ impl<'v, 'g> Readback<'v, 'g> {
             Some(ok) => ok,
             None => {
                 let step = self.tm(step_clo, 3)?;
-                let body = stored.shift_global(var.0 + 1).apply_local(&subst);
+                let body = stored.shift_global(var.rescope()).apply_local(&subst);
                 let (layout, elim) = Layout::of_body(&body)?;
                 let fields = WfElim { level, motive_level, shape, arity, motive, step: &step };
                 let ok = layout.matches(self.gamma, elim, &args, &fields);
@@ -799,7 +800,7 @@ mod tests {
                 // `x : Nat` is `P^{·^1}`: no payloads (an identity would
                 // supply one too many, which δ refuses to unfold).
                 fun: Rc::new(Term::GlobalTm {
-                    var: GlobalVar(0),
+                    var: GlobalVar::index(0),
                     subst: LocalSubst {
                         tail: heather_kernel::term::SubstTail::Empty,
                         terms: vec![],

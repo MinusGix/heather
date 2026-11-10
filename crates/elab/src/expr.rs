@@ -1488,10 +1488,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             term,
-            Term::GlobalTm {
-                var: GlobalVar(0),
-                ..
-            }
+            Term::GlobalTm { var, .. } if var == GlobalVar::index(0)
         ));
     }
 
@@ -1715,7 +1712,7 @@ mod tests {
         let expr = ExprElab::new(SemanticOracle::in_world(world, 0), goals.allocator(), &slot_probe);
         let expected = Type::El {
             level: Level::Zero,
-            tm: Rc::new(Term::GlobalTm { var: GlobalVar(0), subst: LocalSubst::id(&cx.gamma) }),
+            tm: Rc::new(Term::GlobalTm { var: GlobalVar::index(0), subst: LocalSubst::id(&cx.gamma) }),
         };
         let error = expr.vector_literal_type(&cx, &expected, SPAN).unwrap_err();
         let ElabError::Elab { msg, span } = error else { panic!("expected a local diagnostic") };

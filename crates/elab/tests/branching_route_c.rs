@@ -98,7 +98,7 @@ fn gv(pos: u32) -> u32 {
 
 fn global(pos: u32, depth: u32) -> Term {
     Term::GlobalTm {
-        var: GlobalVar(gv(pos)),
+        var: GlobalVar::index(gv(pos)),
         subst: LocalSubst {
             tail: SubstTail::Empty,
             terms: vec![],

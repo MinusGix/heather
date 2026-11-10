@@ -383,7 +383,7 @@ fn psi() -> GlobalCtx {
 
 fn global(var: u32, depth: u32) -> Term {
     Term::GlobalTm {
-        var: GlobalVar(var),
+        var: GlobalVar::index(var),
         subst: LocalSubst {
             tail: SubstTail::Empty,
             terms: vec![],

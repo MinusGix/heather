@@ -26,7 +26,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{Defs, whnf_term_delta, whnf_type_delta};
 use heather_kernel::subst::{local_bound, local_bound_ty};
-use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
+use heather_kernel::term::{CtxBase, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
 use heather_kernel::typing::{DEFAULT_FUEL, spell_checked_for_export, spell_checked_for_export_ty};
 use std::cell::RefCell;
 use std::sync::Arc as Rc;
@@ -509,7 +509,7 @@ impl Tr<'_> {
         }
     }
 
-    fn global(&self, var: u32, subst: &LocalSubst) -> R<Hx> {
+    fn global(&self, var: GlobalVar, subst: &LocalSubst) -> R<Hx> {
         match subst.tail {
             // `·, t̄`: a global over the context t̄ substitutes (none for a
             // closed one): exported closed over its context, so it applies
@@ -517,7 +517,7 @@ impl Tr<'_> {
             SubstTail::Empty => {}
             SubstTail::Wk { .. } => return refuse("global with a weakening substitution"),
         }
-        match self.at.checked_sub(1 + var as usize) {
+        match var.position(self.at) {
             Some(abs) => Ok(app(Hx::Global(abs), subst.terms.iter().map(|t| self.tm(t)).collect::<R<_>>()?)),
             None => refuse("global variable out of scope"),
         }
@@ -583,10 +583,10 @@ impl Tr<'_> {
     fn known_ty(&self, t: &Term) -> Option<Type> {
         match t {
             Term::GlobalTm { var, subst } if subst.terms.is_empty() => {
-                let abs = self.at.checked_sub(1 + var.0 as usize)?;
+                let abs = var.position(self.at)?;
                 match self.psi.bindings.get(abs)? {
                     // A statement is scoped over its own binding's prefix of Ψ.
-                    GlobalBinding::Tm { ctx, ty, .. } if ctx.is_empty() => Some(ty.shift_global(var.0 + 1)),
+                    GlobalBinding::Tm { ctx, ty, .. } if ctx.is_empty() => Some(ty.shift_global(var.rescope())),
                     _ => None,
                 }
             }
@@ -869,7 +869,7 @@ impl Tr<'_> {
             // ---- functions ----
             Term::Lam { dom, body, .. } => lam(self.ty(dom)?, self.under(Some(dom), || self.tm(body))?),
             Term::App { fun, arg, dom, .. } => app(self.tm(fun)?, vec![self.tm_at_ty(arg, dom)?]),
-            Term::GlobalTm { var, subst } => self.global(var.0, subst)?,
+            Term::GlobalTm { var, subst } => self.global(*var, subst)?,
             Term::ULam { .. } | Term::UApp { .. } => return refuse("universe abstraction/application"),
             Term::CtxLam { .. } | Term::CtxApp { .. } | Term::TyLam { .. } | Term::TyApp { .. } => {
                 return refuse("context/type meta-function");

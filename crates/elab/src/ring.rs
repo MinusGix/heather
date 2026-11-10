@@ -1221,7 +1221,12 @@ impl Reifier<'_> {
         // Ψ indices count down from the newest binding: `inv`'s is `div`'s
         // moved by the distance between the two.
         let (div_abs, inv_abs) = (self.elab.global_abs(div)?, self.elab.global_abs(inv)?);
-        let inv_var = heather_kernel::term::GlobalVar(u32::try_from(i64::from(var.0) + div_abs as i64 - inv_abs as i64).ok()?);
+        let inv_var = match var.view() {
+            heather_kernel::term::GlobalRef::Var(i) => {
+                heather_kernel::term::GlobalVar::index(u32::try_from(i64::from(i) + div_abs as i64 - inv_abs as i64).ok()?)
+            }
+            heather_kernel::term::GlobalRef::Const(_) => heather_kernel::term::GlobalVar::constant(inv_abs as u32),
+        };
         let mut out = Term::GlobalTm { var: inv_var, subst: subst.clone() };
         for arg in args[..*prefix].iter().chain([b, h]) {
             out = Term::AppAt { fun: Rc::new(out), arg: Rc::clone(arg) };

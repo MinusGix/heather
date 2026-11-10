@@ -535,7 +535,7 @@ mod tests {
         let base = GlobalCtx::default();
         let oracle = SemanticOracle::with_dynamic(&base, &[transparent_nat()], 32);
         let reference = Term::GlobalTm {
-            var: GlobalVar(0),
+            var: GlobalVar::index(0),
             subst: LocalSubst::id(&LocalCtx::nil()),
         };
         assert_eq!(
@@ -563,7 +563,7 @@ mod tests {
         );
     }
 
-    /// A world with one computing family at `GlobalVar(0)`:
+    /// A world with one computing family at `GlobalVar::index(0)`:
     /// `P : Π(Nat). Ty 0 := λ n. elim_Nat(n; Nat; Unit)` — a `fn … → Type`
     /// whose head is a `match`, the shape of `Le` at `Int` and at `Nat`.
     fn computing_world() -> GlobalCtx {
@@ -607,7 +607,7 @@ mod tests {
                 // `x : Nat` is `P^{·^1}`: no payloads (an identity would
                 // supply one too many, which δ refuses to unfold).
                 fun: Rc::new(Term::GlobalTm {
-                    var: GlobalVar(0),
+                    var: GlobalVar::index(0),
                     subst: LocalSubst {
                         tail: heather_kernel::term::SubstTail::Empty,
                         terms: vec![],
@@ -698,7 +698,7 @@ mod tests {
             // Innermost binding: the code pushed last.
             // Declared in the empty context: `·^1`, no payloads.
             tm: Rc::new(Term::GlobalTm {
-                var: GlobalVar(0),
+                var: GlobalVar::index(0),
                 subst: LocalSubst {
                     tail: heather_kernel::term::SubstTail::Empty,
                     terms: vec![],

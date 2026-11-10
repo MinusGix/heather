@@ -530,9 +530,9 @@ impl Walk<'_> {
                     self.app_head = match head {
                         Term::GlobalTm { var, .. } => {
                             let len = self.el.psi.bindings.len();
-                            len.checked_sub(1 + var.0 as usize)
+                            var.position(len)
                                 .and_then(|abs| self.el.global_name_at(abs))
-                                .unwrap_or_else(|| format!("u{}", var.0))
+                                .unwrap_or_else(|| format!("u{var}"))
                         }
                         other => format!("{other:?}").chars().take(60).collect(),
                     };

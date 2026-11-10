@@ -1906,9 +1906,23 @@ mod tycode {
 
     use super::*;
     use crate::gendefs::GenDef;
-    use heather_kernel::term::{CtxBase, GlobalBinding, GlobalVar, LocalSubst, SubstTail};
+    use heather_kernel::term::{CtxBase, GlobalBinding, GlobalRef, GlobalVar, LocalSubst, SubstTail};
 
     const SPAN: Span = Span { start: 0, end: 0 };
+
+    /// `ty` with every constant it mentions respelled as the binding before
+    /// it: a lowering read in a scope it was not cut in, which under index
+    /// references was what forgetting a `shift_global` produced
+    /// (`issues/codes-registered-in-a-stale-scope.md`,
+    /// `issues/type-code-fn-template-stale.md`). The negative controls below
+    /// keep the recognizers honest about *which* binding a reference names.
+    fn one_binding_over(ty: &Type) -> Type {
+        ty.reindex_global(&mut |r| match r {
+            GlobalRef::Const(p) => p.checked_sub(1).map(GlobalRef::Const),
+            var => Some(var),
+        })
+        .expect("no reference to the first binding")
+    }
 
     /// Two tier-1 declarations that are structurally identical apart from
     /// their nominal tags (the look-alike pair, `mod fingerprint`'s
@@ -2086,7 +2100,8 @@ record DepC { m: Nat, eq: m = m }
         // `GenDef`.
         let (t_ty, l) = e.lowered("T");
         let code = crate::code::code_of(&t_ty).expect("T's lowering has a code");
-        e.el.psi.push(GlobalBinding::defined_tm(
+        let at = e.el.psi.bindings.len() as u32;
+        e.el.psi.commit(GlobalBinding::defined_tm(
             LocalCtx::nil(),
             heather_kernel::layer::Layer::Code,
             Rc::new(Type::Ty(l.clone())),
@@ -2095,14 +2110,14 @@ record DepC { m: Nat, eq: m = m }
         ));
         e.el.refresh_delta_psi();
         let dup = Term::GlobalTm {
-            var: GlobalVar(e.el.global_padding()),
+            var: GlobalVar::constant(at),
             subst: LocalSubst {
                 tail: SubstTail::Empty,
                 terms: vec![],
             },
         };
         assert!(
-            e.el.gen_def_of(GlobalVar(e.el.global_padding()))
+            e.el.gen_def_of(GlobalVar::constant(at))
                 .is_none()
         );
         let forged = Type::El {
@@ -2862,7 +2877,7 @@ meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Flat {
                 panic!("`El` of a generated global")
             };
             assert_eq!(
-                e.el.gen_def_of(GlobalVar(var.0 - under - 1 + grew)),
+                e.el.gen_def_of(var.below(under + 1).expect("a committed global").shifted(grew)),
                 Some(GenDef::TyCode(e.ind("Flat").tag))
             );
         }
@@ -4148,9 +4163,10 @@ record Mimic<A> { item: A, n: Nat, ok: n = ident(n) }
                 // *rescoping* rather than a matcher that stopped looking at
                 // globals: the stale spelling itself — this lowering with its
                 // `ident` pointing one binding over — is not this
-                // instantiation and must decline.
+                // instantiation and must decline. (A constant does not move
+                // when Ψ grows, so the stale spelling is written out.)
                 assert!(
-                    e.el.respell_ty(&cx, &open.shift_global(1)).is_none(),
+                    e.el.respell_ty(&cx, &one_binding_over(&open)).is_none(),
                     "a lowering whose global points one binding over is not this instance"
                 );
             }
@@ -4209,7 +4225,7 @@ theorem slot_literal(): slot_n(slot_flat(2)) = 2 { refl }
                         };
                         assert_eq!(
                             *entry.stmt,
-                            ty.shift_global(var.0 + 1),
+                            ty.shift_global(var.rescope()),
                             "`{name}`'s entry and its Ψ binding disagree"
                         );
                         // Read at the frame it was stored in — the prefix
@@ -4612,7 +4628,7 @@ theorem da_computes(a: Flat): da(3, mkdep(3, a)) = a { refl }
             // is §13.1's measured payer and keeps the reference; a computed
             // receiver is §13.10's refusal and stays out.
             let g = || Term::GlobalTm {
-                var: GlobalVar(0),
+                var: GlobalVar::index(0),
                 subst: LocalSubst::id(&LocalCtx::nil()),
             };
             let app = |fun: Term, arg: Term| Term::App {
@@ -5543,7 +5559,7 @@ theorem late_pick_zero(l: Late): late_pick(Zero, l) = l { refl }
             assert_eq!(e.el.unspell_here(&named).as_ref(), Some(&inline), "`{name}` unspells to today's lowering");
             // The negative control: the stale spelling itself, its `twice`
             // one binding over, is not this declaration's lowering.
-            assert!(e.el.respell_ty(&e.cx, &inline.shift_global(1)).is_none(), "`{name}`: a stale lowering");
+            assert!(e.el.respell_ty(&e.cx, &one_binding_over(&inline)).is_none(), "`{name}`: a stale lowering");
             // Under a binder the lowering is the same syntax, its `twice`
             // included (an empty substitution tail records no context), and
             // so is the reference minted there, which unspells back to it.

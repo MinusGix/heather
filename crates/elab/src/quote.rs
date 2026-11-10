@@ -91,7 +91,7 @@ impl MetaEnv {
             if let MetaBinder::Ctx { name: bn } = b
                 && bn == name
             {
-                return Ok(LocalCtx::ctx_var(GlobalVar(n - 1 - pos as u32)));
+                return Ok(LocalCtx::ctx_var(GlobalVar::index(n - 1 - pos as u32)));
             }
         }
         err(format!("`{name}` is not a `Ctx` binder in scope"), span)
@@ -967,7 +967,7 @@ impl Elaborator {
                 let ty_here = (**ty).clone().shift_global(idx + 1).apply_local(&delta);
                 Ok((
                     Term::GlobalTm {
-                        var: GlobalVar(idx),
+                        var: GlobalVar::index(idx),
                         subst: delta,
                     },
                     ty_here,

@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc as Rc;
 
-use heather_kernel::term::{GlobalCtx, Term, Type, Withheld};
+use heather_kernel::term::{GlobalCtx, GlobalRef, GlobalVar, Term, Type, Withheld};
 use heather_syntax::{Block, Decl, DeclKind, Expr, ExprKind, Span, Ty, TyKind};
 
 use crate::{ElabError, Elaborator, R};
@@ -97,11 +97,11 @@ impl Elaborator {
         // syntax.
         let mut seen = std::collections::BTreeSet::new();
         let mut direct = Vec::new();
-        let mut record = |i: u32| {
-            if (i as usize) < len {
-                direct.push(len - 1 - i as usize);
+        let mut record = |r: GlobalRef| {
+            if let Some(at) = GlobalVar::from(r).position(len) {
+                direct.push(at);
             }
-            Some(i)
+            Some(r)
         };
         ty.reindex_global(&mut record);
         if let Some(body) = body {
@@ -112,11 +112,11 @@ impl Elaborator {
                 continue;
             }
             if let Some(heather_kernel::term::GlobalBinding::Tm { ty, .. }) = psi.bindings.get(at) {
-                ty.reindex_global(&mut |j: u32| {
-                    if (j as usize) < at {
-                        seen.insert(at - 1 - j as usize);
+                ty.reindex_global(&mut |r: GlobalRef| {
+                    if let Some(named) = GlobalVar::from(r).position(at) {
+                        seen.insert(named);
                     }
-                    Some(j)
+                    Some(r)
                 });
             }
         }

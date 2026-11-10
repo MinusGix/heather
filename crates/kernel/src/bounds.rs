@@ -970,6 +970,222 @@ impl Cache {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The global namespace
+// ---------------------------------------------------------------------------
+//
+// The same idea one namespace out, for `shift_global` and `apply_global`
+// (`issues/psi-references-by-level.md`). A reference to a committed binding
+// is a **constant**, which neither operation changes (DESIGN.md, "Constants
+// are addressed from the start of Ψ"), so what either can act on in a subtree
+// is its free global **variables**: goals and metavariables while a
+// declaration is elaborated, a `letbox`'s or a recursor branch's bound code
+// inside meta-level terms. A committed statement or body has none, and
+// neither does any type copied out of one, which is most of what the
+// elaborator rescopes and zonks.
+//
+// What is cached is `1 +` the largest free global variable index, `0` for
+// none: an operation at global binder depth `d` changes nothing when that
+// is `<= d`. Unlike the local summary it reads *through* boxed code and the
+// other-scope annotations, because the global operations do.
+//
+// It is a separate table from the local one on purpose. The two are asked
+// about different nodes at different times (a zonk asks about a fresh
+// elaborated term's library-typed annotations, a β-step about an
+// eliminator's step body), so one slot serving both would settle each
+// namespace's two-stage marker on the other's schedule; and the local
+// summary's arithmetic is this file's own, while this one is computed by the
+// traversal it serves (`subst::free_global_bound_*`: the generic walk with a
+// mapper that only looks), so there is no second binder table to drift.
+//
+// The soundness argument is the local one's: weak keys pin the allocation, a
+// hit describes the queried node, and every skip taken is re-verified in
+// debug builds against the real traversal (`sub_ty`/`sub_tm`).
+
+/// One direct-mapped entry of the global table: [`Slot`], with the bound in
+/// place of a [`LocalUse`].
+#[repr(align(32))]
+struct GlobalSlot<T> {
+    key: Option<Weak<T>>,
+    bound: u32,
+    /// The two-stage marker: a bare address, or 0.
+    mark: usize,
+}
+
+impl<T> GlobalSlot<T> {
+    fn empty() -> GlobalSlot<T> {
+        GlobalSlot { key: None, bound: 0, mark: 0 }
+    }
+
+    fn hit(&self, t: &Rc<T>) -> Option<u32> {
+        match &self.key {
+            Some(k) if std::ptr::eq(k.as_ptr(), Rc::as_ptr(t)) => Some(self.bound),
+            _ => None,
+        }
+    }
+}
+
+struct GlobalCache {
+    terms: Vec<GlobalSlot<Term>>,
+    types: Vec<GlobalSlot<Type>>,
+}
+
+thread_local! {
+    static GLOBAL_CACHE: RefCell<GlobalCache> = RefCell::new(GlobalCache {
+        terms: (0..1 << BITS).map(|_| GlobalSlot::empty()).collect(),
+        types: (0..1 << BITS).map(|_| GlobalSlot::empty()).collect(),
+    });
+    /// Native depth of [`global_bound_term`]'s recursion through the
+    /// traversal: past [`crate::term::SPINE_ITERATE_AT`] a node's spine is
+    /// answered from the bottom up first, as [`Cache::warm_spine`] does.
+    static GLOBAL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A term whose bound needs no table: no reference at all, or exactly one.
+fn global_leaf_term(t: &Term) -> Option<u32> {
+    match t {
+        Term::Var(_)
+        | Term::TmNat
+        | Term::TmTy(_)
+        | Term::TmUnit { .. }
+        | Term::TmEmpty { .. }
+        | Term::TmSEmpty { .. }
+        | Term::Zero
+        | Term::NatLit(_)
+        | Term::Triv { .. } => Some(0),
+        // `u^·`, what a mention of a top-level definition is.
+        Term::GlobalTm { var, subst: LocalSubst { tail: SubstTail::Empty, terms } } if terms.is_empty() => {
+            Some(var.rescope())
+        }
+        _ => None,
+    }
+}
+
+fn global_leaf_type(t: &Type) -> Option<u32> {
+    match t {
+        Type::Nat | Type::Ty(_) | Type::Unit { .. } | Type::Empty { .. } | Type::SEmpty { .. } => Some(0),
+        _ => None,
+    }
+}
+
+/// `1 +` the largest global variable free in `t`, `0` when it has none
+/// (constants are not variables). Memoized unconditionally, like
+/// [`Cache::term_use`]: this is the recursive compute, whose answers for a
+/// subtree are what make its parent's cheap.
+pub(crate) fn global_bound_term(t: &Rc<Term>) -> u32 {
+    if let Some(b) = global_leaf_term(t) {
+        return b;
+    }
+    let i = slot(Rc::as_ptr(t) as usize);
+    let hit = |t: &Rc<Term>| GLOBAL_CACHE.with(|c| c.borrow().terms[slot(Rc::as_ptr(t) as usize)].hit(t));
+    if let Some(b) = hit(t) {
+        return b;
+    }
+    let depth = GLOBAL_DEPTH.with(|d| d.get());
+    if depth >= crate::term::SPINE_ITERATE_AT {
+        // The spine below `t`, bottom up, so the walk of each node meets a
+        // stored answer one level down (docs/deep-term-walks-design.md).
+        let mut path = Vec::new();
+        let mut cur = crate::term::spine_child(t);
+        while let Some(c) = cur {
+            if global_leaf_term(c).is_some() || hit(c).is_some() {
+                break;
+            }
+            path.push(Rc::clone(c));
+            cur = crate::term::spine_child(c);
+        }
+        GLOBAL_DEPTH.with(|d| d.set(0));
+        for node in path.iter().rev() {
+            global_bound_term(node);
+        }
+        GLOBAL_DEPTH.with(|d| d.set(depth));
+        if let Some(b) = hit(t) {
+            return b;
+        }
+    }
+    GLOBAL_DEPTH.with(|d| d.set(depth + 1));
+    // No borrow of the table is held across the walk: it asks about the
+    // node's children through this same function.
+    let b = crate::subst::free_global_bound_term(t);
+    GLOBAL_DEPTH.with(|d| d.set(depth));
+    GLOBAL_CACHE.with(|c| {
+        let s = &mut c.borrow_mut().terms[i];
+        s.key = Some(Rc::downgrade(t));
+        s.bound = b;
+    });
+    b
+}
+
+/// [`global_bound_term`] for a type.
+pub(crate) fn global_bound_type(t: &Rc<Type>) -> u32 {
+    if let Some(b) = global_leaf_type(t) {
+        return b;
+    }
+    let i = slot(Rc::as_ptr(t) as usize);
+    if let Some(b) = GLOBAL_CACHE.with(|c| c.borrow().types[i].hit(t)) {
+        return b;
+    }
+    let depth = GLOBAL_DEPTH.with(|d| d.replace(d.get() + 1));
+    let b = crate::subst::free_global_bound_type(t);
+    GLOBAL_DEPTH.with(|d| d.set(depth));
+    GLOBAL_CACHE.with(|c| {
+        let s = &mut c.borrow_mut().types[i];
+        s.key = Some(Rc::downgrade(t));
+        s.bound = b;
+    });
+    b
+}
+
+/// Should a global-namespace operation at global binder depth `d` skip this
+/// subtree? Two-stage, as [`Cache::term_query`]: a node asked about once is
+/// only marked, and walked by its caller.
+pub(crate) fn skip_global_term(t: &Rc<Term>, d: u32) -> bool {
+    if let Some(b) = global_leaf_term(t) {
+        return b <= d;
+    }
+    let p = Rc::as_ptr(t) as usize;
+    let seen = GLOBAL_CACHE.with(|c| {
+        let s = &mut c.borrow_mut().terms[slot(p)];
+        match s.hit(t) {
+            Some(b) => Some(Some(b)),
+            None if s.mark == p => Some(None),
+            None => {
+                s.mark = p;
+                None
+            }
+        }
+    });
+    match seen {
+        Some(Some(b)) => b <= d,
+        Some(None) => global_bound_term(t) <= d,
+        None => false,
+    }
+}
+
+/// [`skip_global_term`] for a type.
+pub(crate) fn skip_global_type(t: &Rc<Type>, d: u32) -> bool {
+    if let Some(b) = global_leaf_type(t) {
+        return b <= d;
+    }
+    let p = Rc::as_ptr(t) as usize;
+    let seen = GLOBAL_CACHE.with(|c| {
+        let s = &mut c.borrow_mut().types[slot(p)];
+        match s.hit(t) {
+            Some(b) => Some(Some(b)),
+            None if s.mark == p => Some(None),
+            None => {
+                s.mark = p;
+                None
+            }
+        }
+    });
+    match seen {
+        Some(Some(b)) => b <= d,
+        Some(None) => global_bound_type(t) <= d,
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1139,7 +1355,7 @@ mod tests {
     #[test]
     fn only_a_weakening_tail_shows() {
         let global = |tail| {
-            rt(Term::GlobalTm { var: GlobalVar(0), subst: LocalSubst { tail, terms: vec![v(2)] } })
+            rt(Term::GlobalTm { var: GlobalVar::index(0), subst: LocalSubst { tail, terms: vec![v(2)] } })
         };
         // The empty tail records nothing: the reference is its payloads.
         assert_eq!(
@@ -1152,7 +1368,7 @@ mod tests {
         );
         // A weakening counts the binders it sits under.
         assert_eq!(
-            term_use(&global(SubstTail::Wk { len: 3, ctx_var: GlobalVar(1) })),
+            term_use(&global(SubstTail::Wk { len: 3, ctx_var: GlobalVar::index(1) })),
             LocalUse {
                 bound: 3,
                 has_wk: true,

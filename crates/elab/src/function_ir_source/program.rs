@@ -617,7 +617,7 @@ impl Body {
 }
 
 fn absolute(term: &Term, caller: usize) -> Option<usize> {
-    match term { Term::GlobalTm { var, .. } => caller.checked_sub(1 + var.0 as usize), _ => None }
+    match term { Term::GlobalTm { var, .. } => var.position(caller), _ => None }
 }
 
 /// A nullary global of type `List<Nat>`, evaluated and read back: how the
@@ -669,9 +669,9 @@ impl<'a, 'v> Reader<'a, 'v> {
     }
 
     fn global(&self, elaborator: &Elaborator, name: &str) -> Result<&'v TmClo<'v>, SourceError> {
-        let len = self.psi.bindings.len();
         let abs = elaborator.global_abs(name).ok_or_else(|| SourceError::Unsupported(format!("`{name}` is not declared")))?;
-        let head = Term::GlobalTm { var: heather_kernel::term::GlobalVar((len - 1 - abs) as u32),
+        let var = self.psi.reference(abs).ok_or_else(|| SourceError::Unsupported(format!("`{name}` is not in the world read")))?;
+        let head = Term::GlobalTm { var,
             subst: heather_kernel::term::LocalSubst::id(&heather_kernel::term::LocalCtx::nil()) };
         Ok(self.arena.tm(TmClo::syn(Env::empty(), std::sync::Arc::new(head))))
     }

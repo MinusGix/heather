@@ -459,7 +459,7 @@ mod tests {
         assert!(second.get().unwrap().is_ok());
 
         let mut changed = scoped.clone();
-        changed.gamma.base = heather_kernel::term::CtxBase::Var(heather_kernel::term::GlobalVar(0));
+        changed.gamma.base = heather_kernel::term::CtxBase::Var(heather_kernel::term::GlobalVar::index(0));
         assert!(receivers.inference(&changed, &recv).is_none());
         changed = scoped.clone();
         changed.aliases.push(Rc::new(Alias {

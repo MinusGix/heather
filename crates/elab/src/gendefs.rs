@@ -2340,7 +2340,7 @@ impl Elaborator {
         let GlobalBinding::Tm { ty, .. } = self.psi.bindings.get(abs)? else {
             return None;
         };
-        let stmt = ty.shift_global(var.0 + 1);
+        let stmt = ty.shift_global(var.rescope());
         let mut spine: Vec<Rc<Term>> = args.to_vec();
         spine.push(Rc::clone(value));
         saturate(&cx.gamma, fun, &stmt, &spine)
@@ -3060,7 +3060,7 @@ impl Elaborator {
             tag: ind.tag,
             base: match cx.gamma.base {
                 CtxBase::Nil => None,
-                CtxBase::Var(v) => Some(v.0),
+                CtxBase::Var(v) => Some(v.key()),
             },
             len: cx.gamma.entries.len(),
             d,
@@ -3788,7 +3788,7 @@ impl Elaborator {
     /// from `len_at` — [`Self::unspell_ty_deep`]'s explicit anchor, which
     /// deliberately does not go through [`Self::gen_def_of`]'s padding.
     fn code_key_at(&self, len_at: u32, var: GlobalVar) -> Option<GenDef> {
-        let abs = var.0.checked_add(1).and_then(|v| len_at.checked_sub(v))?;
+        let abs = var.position(len_at as usize)? as u32;
         self.types.gdefs().key_for_abs(&abs).copied()
     }
 
@@ -4262,7 +4262,7 @@ impl Elaborator {
             }
         }
         let abs = self.psi.bindings.len() as u32;
-        self.psi.push(GlobalBinding::defined_tm(
+        self.psi.commit(GlobalBinding::defined_tm(
             empty,
             Layer::Code,
             Rc::new(ty),
@@ -4285,21 +4285,14 @@ impl Elaborator {
     /// `u^·` for a registered definition. `None` when the definition was not
     /// registered, which is every emission site's cue to inline instead.
     ///
-    /// The definition is closed, its Ψ index is context-independent and the
-    /// empty tail records nothing, so the reference is the same in every
-    /// local context.
+    /// The definition is closed, a constant's position is the same in every
+    /// world and the empty tail records nothing, so the reference is the
+    /// same in every context, local and global.
     pub(crate) fn gen_ref(&self, key: GenDef) -> Option<Term> {
         let abs = *self.types.gdefs().abs_for(&key)?;
-        let len = self.psi.bindings.len() as u32;
-        // Goals sit innermost, exactly as in `resolve` — and so do a
-        // `meta fn`'s Ψ-extending binders (`Ctx`, `lib.rs`'s `meta_pushed`),
-        // which `resolve` has always offset by and this did not. Latent until
-        // 2026-08-12: nothing emitted a generated-definition reference from
-        // inside a meta body before the tier-1 motive respell did, and the
-        // symptom was a kernel `WrongGlobalBinding` naming the context binder
-        // (`crates/elab/tests/certgen_route1_spike.rs`'s meta walk over `Ir`).
-        // The two paddings never combine: goals are refused inside a `meta fn`.
-        let var = GlobalVar(len - 1 - abs + self.global_padding() + self.meta_offset());
+        // A constant: the same reference under the goals and under a
+        // `meta fn`'s Ψ-extending binders, exactly as in `resolve`.
+        let var = GlobalVar::constant(abs);
         Some(Term::GlobalTm {
             var,
             subst: LocalSubst {
@@ -4326,13 +4319,9 @@ impl Elaborator {
     /// recognizers' key — a reader asks "is this global *the* `D#fam`", not
     /// "does it have its shape".
     pub(crate) fn gen_def_of(&self, var: GlobalVar) -> Option<GenDef> {
-        let len = self.psi.bindings.len() as u32;
         // Fully checked: a `GlobalVar` reaching here can be anything the term
         // it came out of contains, including one that is out of scope.
-        let abs = len
-            .checked_add(self.global_padding())?
-            .checked_add(self.meta_offset())?
-            .checked_sub(var.0.checked_add(1)?)?;
+        let abs = var.position(self.lowering_scope() as usize)? as u32;
         self.types.gdefs().key_for_abs(&abs).copied()
     }
 
