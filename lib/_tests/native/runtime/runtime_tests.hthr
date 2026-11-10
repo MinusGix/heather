@@ -230,11 +230,12 @@ theorem byte_class_pair_evaluable(): program_evaluable(byte_class_pair::program)
     program_scan_evaluable(byte_class_pair::program, trivial)
 }
 
-// A program of nine functions: eight callees under one caller. The linked
-// program's sources and its code are each written once in the generator's
-// reply and referred to from every part, so the reply grows with the
-// functions and not with their square; before that this caller was refused
-// as an implausibly large reply (issues/runtime-generator-program-size.md).
+// A program of nine functions: eight callees under one caller, the widest
+// program checked here. The linked program's sources and its code are each
+// written once in the generator's reply and referred to from every part, so
+// the reply grows with the functions and not with their square; when they
+// were spelled out at each mention, a caller of eight was past what the
+// host read (issues/runtime-generator-program-size.md).
 runtime fn eighth_0(a: u64) → u64 { a.add(1) }
 runtime fn eighth_1(a: u64) → u64 { a.add(2) }
 runtime fn eighth_2(a: u64) → u64 { a.add(3) }

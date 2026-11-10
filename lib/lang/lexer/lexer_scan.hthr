@@ -37,7 +37,8 @@
 // today, and each limit it works around is an issue of its own. There are
 // no tables in compiled code yet (issues/rt-fixed-arrays-and-tables.md). A
 // function certifies up to about sixteen arms and a dozen levels of `else
-// if` (issues/function-ir-scan-id-cost.md), so the automaton is two dozen
+// if` (issues/function-ir-scan-id-cost.md,
+// issues/compile-x86-certificate-memory.md), so the automaton is two dozen
 // functions and not one. And one program of all of them is more than a
 // linked program's proof is checked for
 // (issues/runtime-generator-program-size.md), which is why `scan_step`
