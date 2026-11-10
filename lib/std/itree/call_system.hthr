@@ -1,0 +1,383 @@
+// Systems that call out: transition systems whose visible moves are calls
+// answered by an environment, read along interaction-tree traces
+// (issues/labelled-transition-systems.md, round 2).
+//
+// `labelled_transition.hthr` labels a step with any event. A process and an
+// interaction tree have more shape: a visible move is a command, the
+// environment chooses the answer, and the state resumes from it; a run may
+// also end by returning a value. `CallSystem<A, R>(E)` says, over the
+// command container `E`:
+//
+// - `silent`: a step the environment does not see;
+// - `stop`: the states visible moves happen at (a process at a syscall, a
+//   tree not at a `Tau`);
+// - `returns(a, r)`: `a` ends the run with `r`;
+// - `asks(a, c)`: `a` issues `c`;
+// - `answered(a, c, x, next)`: `a` issues `c`, the environment answers `x`,
+//   and the resumption meets `next`. This is a predicate transformer, not a
+//   relation, so the two readings of a run are two systems: a *run* picks a
+//   resumption (`CallSystem::of_resumes`, ∃), a *claim* covers every one
+//   the environment may pick (`CallSystem::claiming`, ∀).
+//
+// `CallSystem::Holds(sys, tr, a)` is what `tr` (itree_trace's `Trace`: a
+// prefix, a pending call, or a return, after answered calls) says of `a`:
+// after silent steps, a stop state that makes the trace's next move. Linux's
+// `RunsAs` is this closure at a process (`linux_x86_64_sim`), and a tree's
+// `IsTrace` is it at the tree as a system (`CallSystem::tree`,
+// `IsTrace::holds`).
+//
+// Determinacy: a claim and a run from related states whose traces agree
+// move by move (the same kind of move, answers alike) produced one trace
+// (`CallSystem::determined`), given `Meets`: silent steps keep the
+// relation, a stop state takes no silent step, and related stop states
+// return, ask and answer alike.
+
+import itree;
+import itree_trace;
+import transition;
+import logic;
+import nat;
+import list;
+
+// ---------------------------------------------------------------------------
+// Systems and what a trace says of them
+
+record CallSystem<A, R>(E: Events) {
+    silent: A → A → Type,
+    stop: A → Type,
+    returns: A → R → Type,
+    asks: A → E.Cmd → Type,
+    answered: (a: A) → (c: E.Cmd) → E.Resp(c) → (A → Type) → Type,
+}
+
+fn CallSystem::Holds<A, R>(E: Events, sys: CallSystem<A, R>(E), tr: Trace<R>(E)) → A → Type {
+    match tr {
+        TEnd => λ start => True,
+        TRet(r) => λ start => Exists<A>(λ at => Star(sys.silent, start, at) ∧ (sys.stop(at) ∧ sys.returns(at, r))),
+        TCall(c) => λ start => Exists<A>(λ at => Star(sys.silent, start, at) ∧ (sys.stop(at) ∧ sys.asks(at, c))),
+        TAns(c, x, rest) => λ start => Exists<A>(λ at => Star(sys.silent, start, at) ∧
+            (sys.stop(at) ∧ sys.answered(at, c, x, CallSystem::Holds(E, sys, rest)))),
+    }
+}
+
+// Silent steps before a trace's state are part of it.
+theorem CallSystem::after_star<A, R>(E: Events, sys: CallSystem<A, R>(E), tr: Trace<R>(E)): (before, middle: A) →
+    Star(sys.silent, before, middle) → CallSystem::Holds(E, sys, tr, middle) → CallSystem::Holds(E, sys, tr, before) {
+    match tr {
+        TEnd => λ before middle steps holds => trivial,
+        TRet(_) => λ before middle steps holds =>
+            Exists(holds.witness, ⟨Star::trans(sys.silent, before, middle, holds.witness, steps, holds.proof.left),
+                holds.proof.right⟩),
+        TCall(_) => λ before middle steps holds =>
+            Exists(holds.witness, ⟨Star::trans(sys.silent, before, middle, holds.witness, steps, holds.proof.left),
+                holds.proof.right⟩),
+        TAns(_, _, _) => λ before middle steps holds =>
+            Exists(holds.witness, ⟨Star::trans(sys.silent, before, middle, holds.witness, steps, holds.proof.left),
+                holds.proof.right⟩),
+    }
+}
+
+// The two readings of an answer, from a resumption relation: some
+// resumption meets `next` (a run), or every one does (a claim).
+fn ResumesSome<A>(resumed: A → Type, next: A → Type) → Type { Exists<A>(λ b => resumed(b) ∧ next(b)) }
+fn ResumesEvery<A>(resumed: A → Type, next: A → Type) → Type { (b: A) → resumed(b) → next(b) }
+
+fn CallSystem::of_resumes<A, R>(E: Events, silent: A → A → Type, stop: A → Type, returns: A → R → Type,
+    asks: A → E.Cmd → Type, resumes: (a: A) → (c: E.Cmd) → E.Resp(c) → A → Type) → CallSystem<A, R>(E) {
+    CallSystem(silent, stop, returns, asks, λ a c x next => asks(a, c) ∧ ResumesSome(λ b => resumes(a, c, x, b), next))
+}
+
+fn CallSystem::claiming<A, R>(E: Events, silent: A → A → Type, stop: A → Type, returns: A → R → Type,
+    asks: A → E.Cmd → Type, resumes: (a: A) → (c: E.Cmd) → E.Resp(c) → A → Type) → CallSystem<A, R>(E) {
+    CallSystem(silent, stop, returns, asks, λ a c x next => asks(a, c) ∧ ResumesEvery(λ b => resumes(a, c, x, b), next))
+}
+
+// A claim is a run when the environment can always resume.
+theorem CallSystem::claim_is_run<A, R>(E: Events, silent: A → A → Type, stop: A → Type, returns: A → R → Type,
+    asks: A → E.Cmd → Type, resumes: (a: A) → (c: E.Cmd) → E.Resp(c) → A → Type,
+    resumable: (a: A) → (c: E.Cmd) → (x: E.Resp(c)) → asks(a, c) → Exists<A>(λ b => resumes(a, c, x, b)),
+    tr: Trace<R>(E)): (a: A) →
+    CallSystem::Holds(E, CallSystem::claiming(E, silent, stop, returns, asks, resumes), tr, a) →
+    CallSystem::Holds(E, CallSystem::of_resumes(E, silent, stop, returns, asks, resumes), tr, a) {
+    match tr {
+        TEnd => λ a claim => trivial,
+        TRet(_) => λ a claim => claim,
+        TCall(_) => λ a claim => claim,
+        TAns(c, x, rest) => λ a claim => {
+            let at = claim.witness;
+            let answer = claim.proof.right.right;
+            let next = resumable(at, c, x, answer.left);
+            Exists(at, ⟨claim.proof.left, ⟨claim.proof.right.left, ⟨answer.left, Exists(next.witness, ⟨next.proof,
+                CallSystem::claim_is_run(E, silent, stop, returns, asks, resumes, resumable, rest, next.witness,
+                    answer.right(next.witness, next.proof))⟩)⟩⟩⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trees as systems
+//
+// A tree steps silently past a `Tau`, stops anywhere else, returns at a
+// `Ret`, asks at a `Vis`, and resumes at the continuation's answer: the one
+// resumption, so a run and a claim say the same.
+
+fn ITree::silent<R>(E: Events, t, u: ITree<R>(E)) → Type { t = Tau(u) }
+
+fn ITree::stopped<R>(E: Events, t: ITree<R>(E)) → Type {
+    match t { Ret(_) => True, Tau(_) => False, Vis(_, _) => True, Cut => True }
+}
+
+fn ITree::returns<R>(E: Events, t: ITree<R>(E), r: R) → Type {
+    match t { Ret(x) => x = r, Tau(_) => False, Vis(_, _) => False, Cut => False }
+}
+
+// `t` issues `c`, and its continuation at `x` meets `next`. The command is
+// the tree's own, so the answer is compared as a one-step trace, not
+// transported between response types.
+fn ITree::answers<R>(E: Events, t: ITree<R>(E), c: E.Cmd, x: E.Resp(c), next: ITree<R>(E) → Type) → Type {
+    match t {
+        Ret(_) => False,
+        Tau(_) => False,
+        Vis(d, k) => AnsweredTrace<R>(E, d, TAns(c, x, TEnd), λ y _ => next(k(y))),
+        Cut => False,
+    }
+}
+
+fn ITree::asks<R>(E: Events, t: ITree<R>(E), c: E.Cmd) → Type {
+    match t { Ret(_) => False, Tau(_) => False, Vis(d, _) => c = d, Cut => False }
+}
+
+fn CallSystem::tree<R>(E: Events) → CallSystem<ITree<R>(E), R>(E) {
+    CallSystem(λ t u => ITree::silent(E, t, u), λ t => ITree::stopped(E, t), λ t r => ITree::returns(E, t, r),
+        λ t c => ITree::asks(E, t, c), λ t c x next => ITree::answers(E, t, c, x, next))
+}
+
+// ---------------------------------------------------------------------------
+// A tree's traces are what its trace says of it as a system
+
+// The constructors as functions, so a motive can name them at any `R`.
+fn Trace::returned<R>(E: Events, r: R) → Trace<R>(E) { TRet(r) }
+fn Trace::calling<R>(E: Events, c: E.Cmd) → Trace<R>(E) { TCall(c) }
+
+// The trace with its tail replaced, past one answer.
+fn Trace::with_tail<R>(E: Events, tr: Trace<R>(E), tail: Trace<R>(E)) → Trace<R>(E) {
+    match tr { TEnd => TEnd, TRet(r) => TRet(r), TCall(c) => TCall(c), TAns(c, x, _) => TAns(c, x, tail) }
+}
+
+theorem IsTrace::holds<R>(E: Events, t: ITree<R>(E)): (tr: Trace<R>(E)) → IsTrace(E, t, tr) →
+    CallSystem::Holds(E, CallSystem::tree<R>(E), tr, t) {
+    let sys = CallSystem::tree<R>(E);
+    match t {
+        Ret(r) => λ tr w => match w {
+            Stopped(at) => j(sym(at), λ x _ => CallSystem::Holds(E, sys, x, Ret(r)), trivial),
+            Returned(at) => j(sym(at), λ x _ => CallSystem::Holds(E, sys, x, Ret(r)),
+                Exists(Ret(r), ⟨Star::refl(sys.silent, Ret(r)), ⟨trivial, refl⟩⟩)),
+        },
+        Tau(s) => λ tr w => CallSystem::after_star(E, sys, tr, Tau(s), s, Star::one(sys.silent, Tau(s), s, refl),
+            IsTrace::holds(E, s, tr, w)),
+        Vis(c, k) => λ tr w => match w {
+            Prefix(at) => j(sym(at), λ x _ => CallSystem::Holds(E, sys, x, Vis(c, k)), trivial),
+            Pending(at) => j(sym(at), λ x _ => CallSystem::Holds(E, sys, x, Vis(c, k)),
+                Exists(Vis(c, k), ⟨Star::refl(sys.silent, Vis(c, k)), ⟨trivial, refl⟩⟩)),
+            Answered(a, rest, at, sub) => j(sym(at), λ x _ => CallSystem::Holds(E, sys, x, Vis(c, k)),
+                Exists(Vis(c, k), ⟨Star::refl(sys.silent, Vis(c, k)), ⟨trivial,
+                    AnsweredTrace(a, TEnd, refl, IsTrace::holds(E, k(a), rest, sub))⟩⟩)),
+        },
+        Cut => λ tr w => match w {
+            Ended(at) => j(sym(at), λ x _ => CallSystem::Holds(E, sys, x, Cut), trivial),
+        },
+    }
+}
+
+// Every tree has the empty prefix.
+theorem IsTrace::prefix<R>(E: Events, t: ITree<R>(E)): IsTrace(E, t, TEnd) {
+    match t {
+        Ret(_) => Stopped(refl),
+        Tau(s) => IsTrace::prefix(E, s),
+        Vis(_, _) => Prefix(refl),
+        Cut => Ended(refl),
+    }
+}
+
+// A trace of where silent steps lead is one of where they start.
+theorem IsTrace::before<R>(E: Events, tr: Trace<R>(E), n: Nat): (t, u: ITree<R>(E)) →
+    StarN(λ x y => ITree::silent(E, x, y), n, t, u) → IsTrace(E, u, tr) → IsTrace(E, t, tr) {
+    match n {
+        Zero => λ t u same w => j(sym(same), λ x _ => IsTrace(E, x, tr), w),
+        Succ(_, ih) => λ t u run w =>
+            j(sym(run.proof.left), λ x _ => IsTrace(E, x, tr), ih(run.witness, u, run.proof.right, w)),
+    }
+}
+
+theorem CallSystem::tree_is_trace<R>(E: Events, tr: Trace<R>(E)): (t: ITree<R>(E)) →
+    CallSystem::Holds(E, CallSystem::tree<R>(E), tr, t) → IsTrace(E, t, tr) {
+    match tr {
+        TEnd => λ t _ => IsTrace::prefix(E, t),
+        TRet(r) => λ t holds => {
+            let at = holds.witness;
+            let here: IsTrace(E, at, TRet(r)) = (match at as λ u => ITree::returns(E, u, r) → IsTrace(E, u, TRet(r)) {
+                Ret(x) => λ (same: x = r) => j(same, λ y _ => RetTrace<R>(E, x, Trace::returned(E, y)), Returned(refl)),
+                Tau(_) => λ never => false_elim(never),
+                Vis(_, _) => λ never => false_elim(never),
+                Cut => λ never => false_elim(never),
+            })(holds.proof.right.right);
+            IsTrace::before(E, TRet(r), holds.proof.left.witness, t, at, holds.proof.left.proof, here)
+        },
+        TCall(c) => λ t holds => {
+            let at = holds.witness;
+            let here: IsTrace(E, at, TCall(c)) = (match at as λ u => ITree::asks(E, u, c) → IsTrace(E, u, TCall(c)) {
+                Ret(_) => λ never => false_elim(never),
+                Tau(_) => λ never => false_elim(never),
+                Vis(d, _) => λ (same: c = d) => Pending(cong_fn(λ (e: E.Cmd) => Trace::calling<R>(E, e), same)),
+                Cut => λ never => false_elim(never),
+            })(holds.proof.right.right);
+            IsTrace::before(E, TCall(c), holds.proof.left.witness, t, at, holds.proof.left.proof, here)
+        },
+        TAns(c, x, rest) => λ t holds => {
+            let at = holds.witness;
+            let here: IsTrace(E, at, TAns(c, x, rest)) = (match at as λ u =>
+                ITree::answers(E, u, c, x, CallSystem::Holds(E, CallSystem::tree<R>(E), rest)) → IsTrace(E, u, TAns(c, x, rest)) {
+                Ret(_) => λ never => false_elim(never),
+                Tau(_) => λ never => false_elim(never),
+                Vis(_, k) => λ answer => Answered(answer.a, rest,
+                    cong_fn(λ (u: Trace<R>(E)) => Trace::with_tail(E, u, rest), answer.at),
+                    CallSystem::tree_is_trace(E, rest, k(answer.a), answer.sub)),
+                Cut => λ never => false_elim(never),
+            })(holds.proof.right.right);
+            IsTrace::before(E, TAns(c, x, rest), holds.proof.left.witness, t, at, holds.proof.left.proof, here)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Refinement: every valid trace one system makes from `a`, another makes
+// from `b`. A machine simulating a tree is this at the tree and the
+// machine's claims (`linux_x86_64_sim`'s `sim_refines`).
+
+fn CallSystem::Refines<A, B, R>(E: Events, T: CallSystem<A, R>(E), S: CallSystem<B, R>(E), Valid: Trace<R>(E) → Type,
+    a: A, b: B) → Type {
+    (tr: Trace<R>(E)) → CallSystem::Holds(E, T, tr, a) → Valid(tr) → CallSystem::Holds(E, S, tr, b)
+}
+
+theorem CallSystem::refines_trans<A, B, C, R>(E: Events, T: CallSystem<A, R>(E), S: CallSystem<B, R>(E),
+    U: CallSystem<C, R>(E), Valid: Trace<R>(E) → Type, a: A, b: B, c: C,
+    first: CallSystem::Refines(E, T, S, Valid, a, b), second: CallSystem::Refines(E, S, U, Valid, b, c)):
+    CallSystem::Refines(E, T, U, Valid, a, c) {
+    λ tr holds valid => second(tr, first(tr, holds, valid), valid)
+}
+
+// ---------------------------------------------------------------------------
+// Determinacy: a claim and a run that got the same answers made one trace
+
+// Two traces agree move by move: the same kind of move, answers `Alike`.
+// Requests and return values are not compared; they are what is proved
+// equal.
+fn CallSystem::Agree<R>(E: Events, Alike: (c: E.Cmd) → E.Resp(c) → (d: E.Cmd) → E.Resp(d) → Type,
+    tr: Trace<R>(E)) → Trace<R>(E) → Type {
+    match tr {
+        TEnd => λ other => match other { TEnd => True, _ => False },
+        TRet(_) => λ other => match other { TRet(_) => True, _ => False },
+        TCall(_) => λ other => match other { TCall(_) => True, _ => False },
+        TAns(c, x, rest) => λ other => match other {
+            TAns(d, y, more) => Alike(c, x, d, y) ∧ CallSystem::Agree(E, Alike, rest, more),
+            _ => False,
+        },
+    }
+}
+
+// What a claim `C` and a run `D` from `Same` states must share.
+record Meets<A, R>(E: Events, C, D: CallSystem<A, R>(E), Same: A → A → Type,
+    Alike: (c: E.Cmd) → E.Resp(c) → (d: E.Cmd) → E.Resp(d) → Type) {
+    silent: (a, a2, b, b2: A) → Same(a, a2) → C.silent(a, b) → D.silent(a2, b2) → Same(b, b2),
+    stop_left: (a, a2, b2: A) → Same(a, a2) → C.stop(a) → D.silent(a2, b2) → False,
+    stop_right: (a, a2, b: A) → Same(a, a2) → C.silent(a, b) → D.stop(a2) → False,
+    returns: (a, a2: A) → (r, r2: R) → Same(a, a2) → C.stop(a) → D.stop(a2) → C.returns(a, r) → D.returns(a2, r2) →
+        r = r2,
+    asks: (a, a2: A) → (c, d: E.Cmd) → Same(a, a2) → C.stop(a) → D.stop(a2) → C.asks(a, c) → D.asks(a2, d) → c = d,
+    answered: (a, a2: A) → (c, d: E.Cmd) → (x: E.Resp(c)) → (y: E.Resp(d)) → (next, next2: A → Type) →
+        Same(a, a2) → C.stop(a) → D.stop(a2) → C.answered(a, c, x, next) → D.answered(a2, d, y, next2) →
+        Alike(c, x, d, y) → ((rest: Trace<R>(E)) → TAns(c, x, rest) = TAns(d, y, rest)) ∧
+            Exists<A>(λ b => Exists<A>(λ b2 => Same(b, b2) ∧ (next(b) ∧ next2(b2)))),
+}
+
+// Silent runs from related states to stop states meet there.
+theorem Meets::meet<A, R>(E: Events, C, D: CallSystem<A, R>(E), Same: A → A → Type,
+    Alike: (c: E.Cmd) → E.Resp(c) → (d: E.Cmd) → E.Resp(d) → Type, meets: Meets<A, R>(E, C, D, Same, Alike),
+    n: Nat): (m: Nat) → (a, a2, at, at2: A) → Same(a, a2) → StarN(C.silent, n, a, at) → StarN(D.silent, m, a2, at2) →
+    C.stop(at) → D.stop(at2) → Same(at, at2) {
+    match n {
+        Zero => λ m => match m {
+            Zero => λ a a2 at at2 same here there _ _ =>
+                j(there, λ s _ => Same(at, s), j(here, λ s _ => Same(s, a2), same)),
+            Succ(_) => λ a a2 at at2 same here there stopped _ =>
+                false_elim(meets.stop_left(a, a2, there.witness, same, j(sym(here), λ s _ => C.stop(s), stopped),
+                    there.proof.left)),
+        },
+        Succ(k) => λ m => match m {
+            Zero => λ a a2 at at2 same here there _ stopped =>
+                false_elim(meets.stop_right(a, a2, here.witness, same, here.proof.left,
+                    j(sym(there), λ s _ => D.stop(s), stopped))),
+            Succ(k2) => λ a a2 at at2 same here there left right =>
+                Meets::meet(E, C, D, Same, Alike, meets, k, k2, here.witness, there.witness, at, at2,
+                    meets.silent(a, a2, here.witness, there.witness, same, here.proof.left, there.proof.left),
+                    here.proof.right, there.proof.right, left, right),
+        },
+    }
+}
+
+theorem CallSystem::determined<A, R>(E: Events, C, D: CallSystem<A, R>(E), Same: A → A → Type,
+    Alike: (c: E.Cmd) → E.Resp(c) → (d: E.Cmd) → E.Resp(d) → Type, meets: Meets<A, R>(E, C, D, Same, Alike),
+    tr: Trace<R>(E)): (other: Trace<R>(E)) → (a, a2: A) → Same(a, a2) → CallSystem::Holds(E, C, tr, a) →
+    CallSystem::Holds(E, D, other, a2) → CallSystem::Agree(E, Alike, tr, other) → tr = other {
+    match tr {
+        TEnd => λ other => match other {
+            TEnd => λ a a2 same claim run agree => refl,
+            TRet(_) => λ a a2 same claim run never => false_elim(never),
+            TCall(_) => λ a a2 same claim run never => false_elim(never),
+            TAns(_, _, _) => λ a a2 same claim run never => false_elim(never),
+        },
+        TRet(r) => λ other => match other {
+            TRet(r2) => λ a a2 same claim run agree => {
+                let met = Meets::meet(E, C, D, Same, Alike, meets, claim.proof.left.witness, run.proof.left.witness,
+                    a, a2, claim.witness, run.witness, same, claim.proof.left.proof, run.proof.left.proof,
+                    claim.proof.right.left, run.proof.right.left);
+                cong_fn(λ (x: R) => Trace::returned<R>(E, x), meets.returns(claim.witness, run.witness, r, r2, met,
+                    claim.proof.right.left, run.proof.right.left, claim.proof.right.right, run.proof.right.right))
+            },
+            TEnd => λ a a2 same claim run never => false_elim(never),
+            TCall(_) => λ a a2 same claim run never => false_elim(never),
+            TAns(_, _, _) => λ a a2 same claim run never => false_elim(never),
+        },
+        TCall(c) => λ other => match other {
+            TCall(d) => λ a a2 same claim run agree => {
+                let met = Meets::meet(E, C, D, Same, Alike, meets, claim.proof.left.witness, run.proof.left.witness,
+                    a, a2, claim.witness, run.witness, same, claim.proof.left.proof, run.proof.left.proof,
+                    claim.proof.right.left, run.proof.right.left);
+                cong_fn(λ (e: E.Cmd) => Trace::calling<R>(E, e), meets.asks(claim.witness, run.witness, c, d, met,
+                    claim.proof.right.left, run.proof.right.left, claim.proof.right.right, run.proof.right.right))
+            },
+            TEnd => λ a a2 same claim run never => false_elim(never),
+            TRet(_) => λ a a2 same claim run never => false_elim(never),
+            TAns(_, _, _) => λ a a2 same claim run never => false_elim(never),
+        },
+        TAns(c, x, rest) => λ other => match other {
+            TAns(d, y, more) => λ a a2 same claim run agree => {
+                let met = Meets::meet(E, C, D, Same, Alike, meets, claim.proof.left.witness, run.proof.left.witness,
+                    a, a2, claim.witness, run.witness, same, claim.proof.left.proof, run.proof.left.proof,
+                    claim.proof.right.left, run.proof.right.left);
+                let answer = meets.answered(claim.witness, run.witness, c, d, x, y, CallSystem::Holds(E, C, rest),
+                    CallSystem::Holds(E, D, more), met, claim.proof.right.left, run.proof.right.left,
+                    claim.proof.right.right, run.proof.right.right, agree.left);
+                let b = answer.right.witness;
+                let b2 = answer.right.proof.witness;
+                let after = answer.right.proof.proof;
+                trans(answer.left(rest), cong_fn(λ (u: Trace<R>(E)) => TAns(d, y, u),
+                    CallSystem::determined(E, C, D, Same, Alike, meets, rest, more, b, b2, after.left,
+                        after.right.left, after.right.right, agree.right)))
+            },
+            TEnd => λ a a2 same claim run never => false_elim(never),
+            TRet(_) => λ a a2 same claim run never => false_elim(never),
+            TCall(_) => λ a a2 same claim run never => false_elim(never),
+        },
+    }
+}

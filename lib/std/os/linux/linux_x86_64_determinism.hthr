@@ -1,11 +1,15 @@
 // The run is the run (docs/fetched-step-determinism-design.md): a process
 // claim `LinuxRuns` states that a run with the claimed events exists, and
-// this module shows every run from the same state that got the same answers
-// from Linux produced those events. A step is a function of the state's
-// defined components (x86_64_step_forms), no step runs where SYSCALL is
-// fetched, so two runs meet at the same syscall with the same request; the
-// answer is Linux's, and what Linux leaves in RCX, R11 and a failed call's
-// buffer the claim already quantifies over.
+// every run from the same state that got the same answers from Linux
+// produced those events. This module holds the facts about Linux that
+// make it so: a step is a function of the state's defined components
+// (x86_64_step_forms), no step runs where SYSCALL is fetched, so two runs
+// meet at the same syscall (`linux_steps_meet`) with the same request
+// (`asks_meet`, `call_meets`); the answer is Linux's, and what Linux leaves
+// in RCX, R11 and a failed call's buffer the claim already quantifies over.
+// The theorem itself, `linux_runs_determine`, is `call_system`'s generic
+// `CallSystem::determined` at the process (`linux_x86_64_sim`'s
+// `linux_meets`).
 import linux_calls;
 import linux_x86_64_io;
 import linux_x86_64_entry;
@@ -390,13 +394,6 @@ fn RunAt<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, at: Machi
     }
 }
 
-// What the rest of the lists must satisfy: related states after the call
-// give the same remaining events.
-fn TailsAgree<M>(io: LinuxIo<M>, rest, more: List<LinuxEvent>) → Type {
-    (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
-        LinuxRuns(io, rest, left) → LinuxRun(io, more, right) → rest = more
-}
-
 // The claim at one syscall, as `LinuxRuns` states it, is `ClaimAt`.
 theorem claim_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, start: MachineState<M>,
     claimed: LinuxRuns(io, Cons(event, rest), start)): ClaimAt(io, event, rest, claimed.witness) {
@@ -405,20 +402,6 @@ theorem claim_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, s
 theorem run_at<M>(io: LinuxIo<M>, event: LinuxEvent, rest: List<LinuxEvent>, start: MachineState<M>,
     ran: LinuxRun(io, Cons(event, rest), start)): RunAt(io, event, rest, ran.witness) {
     ran.proof.right.right
-}
-
-// Linux resumes related states in related states: the claim covers whatever
-// the run was left with.
-theorem call_resume<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, a: c.Resp(), rest, more: List<LinuxEvent>,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
-    claimed: LinuxResumes(io, left, c, a, LinuxRuns(io, rest)),
-    ran: LinuxResumed(io, right, c, a, LinuxRun(io, more))): rest = more {
-    let junk = ran.witness;
-    let rcx = ran.proof.right.witness;
-    let r11 = ran.proof.right.proof.witness;
-    tails(linux_answered(io, left, c, a, junk, rcx, r11), linux_answered(io, right, c, a, junk, rcx, r11),
-        linux_answered_respects<M>(io, c, a, junk, rcx, r11)(left, right, same),
-        claimed(junk, ran.proof.left, rcx, r11), ran.proof.right.proof.proof)
 }
 
 // The call two related states ask is one call, and with the same answer one
@@ -496,71 +479,6 @@ theorem call_meets<M>(io: LinuxIo<M>, left, right: MachineState<M>, same: SameDe
     }
 }
 
-// Each kind of event: the request is read off related states, the answer is
-// shared, and the rest of the run starts from related states.
-theorem call_determines<M>(io: LinuxIo<M>, c: LinuxCmd<Nat>, a: c.Resp(), rest, more: List<LinuxEvent>,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
-    claimed: ClaimAt(io, CallEvent(c, a), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
-    SameResponse(CallEvent(c, a), other) → Cons(CallEvent(c, a), rest) = Cons(other, more) {
-    λ other => match other {
-        CallEvent(d, b) => λ ran response => {
-            let events: (CallEvent(c, a) = CallEvent(d, b)) =
-                call_meets(io, left, right, same, c, a, d, b, claimed.left.left, ran.left, response);
-            let moved: RunAt(io, CallEvent(c, a), more, right) = j(sym(events), λ e _ => RunAt(io, e, more, right), ran);
-            List::cons_eq(rest, more, CallEvent(c, a), CallEvent(d, b), events,
-                call_resume(io, c, a, rest, more, left, right, same, tails, claimed.right.right, moved.right))
-        },
-        ExitEvent(_) => λ _ never => false_elim(never),
-    }
-}
-
-theorem exit_determines<M>(io: LinuxIo<M>, status: BitVec(64), rest, more: List<LinuxEvent>,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right),
-    claimed: ClaimAt(io, ExitEvent(status), rest, left)): (other: LinuxEvent) → RunAt(io, other, more, right) →
-    SameResponse(ExitEvent(status), other) → Cons(ExitEvent(status), rest) = Cons(other, more) {
-    λ other => match other {
-        ExitEvent(status2) => λ ran _ =>
-            List::cons_eq(rest, more, ExitEvent(status), ExitEvent(status2),
-                cong_fn(λ (s: BitVec(64)) => ExitEvent(s),
-                    trans(sym(claimed.left.right), trans(register_related(Rdi, left, right, same), ran.left.right))),
-                trans(claimed.right, sym(ran.right))),
-        CallEvent(_, _) => λ _ never => false_elim(never),
-    }
-}
-
-theorem event_determines<M>(io: LinuxIo<M>, event, other: LinuxEvent, rest, more: List<LinuxEvent>,
-    left, right: MachineState<M>, same: SameDefinedState<M>(left, right), tails: TailsAgree(io, rest, more),
-    claimed: ClaimAt(io, event, rest, left), ran: RunAt(io, other, more, right), response: SameResponse(event, other)):
-    Cons(event, rest) = Cons(other, more) {
-    match event {
-        CallEvent(c, a) => call_determines(io, c, a, rest, more, left, right, same, tails, claimed, other, ran, response),
-        ExitEvent(status) => exit_determines(io, status, rest, more, left, right, same, claimed, other, ran, response),
-    }
-}
-// ---------------------------------------------------------------------------
-// The run is the run: from related states, a claimed run and any actual run
-// that got the same answers produced the same events.
-theorem linux_runs_determine<M>(io: LinuxIo<M>, claim: List<LinuxEvent>): (run: List<LinuxEvent>) →
-    (left, right: MachineState<M>) → SameDefinedState<M>(left, right) →
-    LinuxRuns(io, claim, left) → LinuxRun(io, run, right) → SameResponses(claim, run) → claim = run {
-    match claim {
-        Nil => λ run left right same never _ _ => false_elim(never),
-        Cons(event, rest) => λ run => match run {
-            Nil => λ left right same claimed ran never => false_elim(never),
-            Cons(other, more) => λ left right same claimed ran responses => {
-                let at_left = claimed.witness;
-                let at_right = ran.witness;
-                let meet = linux_steps_meet(io, claimed.proof.left.witness, ran.proof.left.witness, left, right,
-                    at_left, at_right, same, claimed.proof.left.proof, ran.proof.left.proof,
-                    claimed.proof.right.left, ran.proof.right.left);
-                event_determines(io, event, other, rest, more, at_left, at_right, meet,
-                    λ l r s c g => linux_runs_determine(io, rest, more, l, r, s, c, g, responses.right),
-                    claim_at(io, event, rest, left, claimed), run_at(io, other, more, right, ran), responses.left)
-            },
-        },
-    }
-}
-
 // A claimed run is a run: Linux may leave anything in RCX, R11 and a failed
 // call's buffer, the claim covers all of it, and zeros and an empty buffer
 // are one choice. So the runs `linux_runs_every` speaks of exist.
@@ -583,11 +501,4 @@ theorem claim_is_run<M>(io: LinuxIo<M>, events: List<LinuxEvent>): (state: Machi
             claim_is_run_at(io, event, rest, claimed.witness, claim_at(io, event, rest, state, claimed),
                 λ next_state next_claim => claim_is_run(io, rest, next_state, next_claim))⟩⟩),
     }
-}
-
-// From one state, the claim is every run with its answers.
-theorem linux_runs_every<M>(io: LinuxIo<M>, claim, run: List<LinuxEvent>, start: MachineState<M>,
-    claimed: LinuxRuns(io, claim, start), ran: LinuxRun(io, run, start), responses: SameResponses(claim, run)):
-    run = claim {
-    sym(linux_runs_determine(io, claim, run, start, start, refl, claimed, ran, responses))
 }
