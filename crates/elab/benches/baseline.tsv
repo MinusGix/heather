@@ -541,6 +541,7 @@ slope	inductive/isa-declaration	0.949
 slope	inductive/isa-constructor-use	0.985
 slope	inductive/isa-opcode-match	0.959
 slope	inductive/isa-roundtrip	1.164
+slope	inductive/wide-lemma	1.233
 slope	inductive/enum-equality	1.965
 slope	inductive/record-fields	1.534
 slope	inductive/mutual-declaration	0.986

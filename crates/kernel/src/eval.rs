@@ -2627,7 +2627,7 @@ impl<'a, 'v> Eval<'a, 'v> {
 
     /// `elim_Wf (sup_f(…; a; cs)) ⇝ s[a, cs, λ i. elim_Wf(…; nth … cs i)]`,
     /// with the ih held as [`Val::WfIh`] rather than built as that λ's
-    /// syntax. The syntax guards are [`wf_ih_lam`](Eval::wf_ih_lam)'s, kept
+    /// syntax. The syntax guards are the ones the λ's construction had, kept
     /// here so the β fires exactly when it did while the λ was eager.
     #[inline(never)]
     fn fire_elim_wf(
@@ -2652,72 +2652,6 @@ impl<'a, 'v> Eval<'a, 'v> {
             step,
             vec![label, children, self.vclo(ih)],
         )))
-    }
-
-    /// The λ a [`Val::WfIh`] stands for, built as syntax:
-    /// [`fire_elim_w`](Eval::fire_elim_w)'s construction, with the child
-    /// reached through the shared [`nth`] schema instead of an application.
-    /// Only the fallback of [`wf_ih_apply`](Eval::wf_ih_apply) and the
-    /// readers that inspect a function without applying it pay for this.
-    fn wf_ih_lam(
-        &mut self,
-        label: &'v TmClo<'v>,
-        children: &'v TmClo<'v>,
-        e: &Elim<'v>,
-    ) -> Option<&'v Val<'v>> {
-        let Elim::ElimWf { level, motive_level, shape, arity, motive, step, env } = e else {
-            return None;
-        };
-        let (_, step_body) = step.as_syn()?;
-        let (_, arity_body) = arity.as_syn()?;
-        let (_, shape_body) = shape.as_syn()?;
-        let (_, motive_body) = motive.as_syn()?;
-        let rho_acs = env.push(self.arena, label).push(self.arena, children);
-        let wf_syn = Type::Wf {
-            level: level.clone(),
-            shape: Rc::clone(shape_body),
-            arity: Rc::clone(arity_body),
-        };
-        let template = Term::ElimWf {
-            level: level.clone(),
-            motive_level: motive_level.clone(),
-            shape: Rc::clone(shape_body),
-            arity: Rc::clone(arity_body),
-            motive: Rc::clone(motive_body),
-            step: Rc::clone(step_body),
-            scrut: Rc::new(Term::Zero),
-        }
-        .shift_local(3);
-        let Term::ElimWf { shape: s3, arity: n3, motive: m3, step: st3, .. } = template else {
-            unreachable!("shifting an elim_Wf yields an elim_Wf")
-        };
-        // `nth(Wf; n[a/x]; cs; i)` in `(Γ, a, cs, i)`: `a` is slot 2, so the
-        // arity's own binder lands on it under a shift of 2.
-        let child = nth(
-            level,
-            &Rc::new(wf_syn.shift_local(3)),
-            &Rc::new(arity_body.shift_local(2)),
-            Rc::new(Term::Var(LocalVar(1))),
-            Rc::new(Term::Var(LocalVar(0))),
-        );
-        let rec = Term::ElimWf {
-            level: level.clone(),
-            motive_level: motive_level.clone(),
-            shape: s3,
-            arity: n3,
-            motive: m3,
-            step: st3,
-            scrut: Rc::new(child),
-        };
-        Some(self.arena.val(Val::Lam {
-            dom_level: Level::Zero,
-            cod_level: motive_level.clone(),
-            dom: self.arena.ty(TyClo::new(
-                rho_acs,
-                Rc::new(Type::Fin { len: Rc::new(arity_body.shift_local(1)) }),
-            )),
-            body: self.arena.tm(TmClo::syn(rho_acs, Rc::new(rec))),
-        }))
     }
 
     /// `elim_IWf(…; m; sup_i(…; a; cs)) ⇝ s[a, cs, iwfIH a cs]`, at any
@@ -2960,13 +2894,57 @@ impl<'a, 'v> Eval<'a, 'v> {
                 _ => break,
             }
         }
-        match self.wf_ih_lam(label, children, elim).as_deref() {
-            Some(Val::Lam { body, .. }) => {
+        match self.wf_ih_child(label, children, arg, elim) {
+            Some(child) => {
                 self.spend()?;
-                Ok(Work::Apply1(*body, arg))
+                self.frames.push(Frame::Elim(elim));
+                Ok(child)
             }
-            _ => Ok(Work::Val(stuck(self.arena, head, &e))),
+            None => Ok(Work::Val(stuck(self.arena, head, &e))),
         }
+    }
+
+    /// The child `ih i` recurses on when the tuple or the index is not
+    /// canonical: `nth(Wf; n[a/x]; cs; i)`, to be evaluated and then
+    /// eliminated by `elim` itself. The λ this fallback used to build had
+    /// exactly this body, but around a copy of the eliminator's syntax
+    /// shifted under its three binders; applying that copy gave the
+    /// recursive call a fresh step, so two calls on the same neutral child —
+    /// one through the hypothesis, one through the definition the step came
+    /// from — no longer shared a closure and conversion compared the whole
+    /// case tree (issues/wide-inductive-lemma-quadratic-gate.md). Only the
+    /// `nth` (the shape and the arity, both small) is spelled here; the
+    /// guards are the λ's, so the call is stuck exactly where it was.
+    fn wf_ih_child(
+        &mut self,
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        arg: &'v TmClo<'v>,
+        e: &Elim<'v>,
+    ) -> Option<Work<'v>> {
+        let Elim::ElimWf { level, shape, arity, motive, step, env, .. } = e else {
+            return None;
+        };
+        step.as_syn()?;
+        motive.as_syn()?;
+        let (_, arity_body) = arity.as_syn()?;
+        let (_, shape_body) = shape.as_syn()?;
+        let rho = env.push(self.arena, label).push(self.arena, children).push(self.arena, arg);
+        let wf_syn = Type::Wf {
+            level: level.clone(),
+            shape: Rc::clone(shape_body),
+            arity: Rc::clone(arity_body),
+        };
+        // `nth(Wf; n[a/x]; cs; i)` in `(Γ, a, cs, i)`: `a` is slot 2, so the
+        // arity's own binder lands on it under a shift of 2.
+        let child = nth(
+            level,
+            &Rc::new(wf_syn.shift_local(3)),
+            &Rc::new(arity_body.shift_local(2)),
+            Rc::new(Term::Var(LocalVar(1))),
+            Rc::new(Term::Var(LocalVar(0))),
+        );
+        Some(Work::Eval(Rc::new(child), rho))
     }
 
     /// `elim^Typ … (box code)`: the fired branch comes from the *shared*

@@ -115,6 +115,7 @@ mod layered;
 mod names;
 mod oracle;
 mod readback;
+mod refold;
 mod patterns;
 mod pool;
 mod provenance;

@@ -268,6 +268,33 @@ applied at literal indices inside the arm and never stored, compared, or
 returned. Nothing in the generated term needs it to be η-expandable, which
 is why no funext obligation appears anywhere in this scheme.
 
+**How the ih is spelled after a step fires.** The kernel's ι-rule writes the
+ih as `λ i. elim_Wf(…; step; nth(cs; i))`, so every arm the β exposes
+carries a copy of the whole step: the case tree over *all* constructors.
+Over an `n`-constructor type, a lemma whose motive mentions another
+recursion over the scrutinee (`t.lift(k, u) = t`) then paid work linear in
+`n` per arm, quadratic over the lemma
+(`issues/wide-inductive-lemma-quadratic-gate.md`). Two places now keep the
+ih as what it came from:
+
+- The elaborator *refolds* it (`crates/elab/src/refold.rs`): when a step
+  that fires is the stored body of a defined global `g` whose layout is
+  `λ x̄. elim_Wf(…; x_s) x̄_varied`, the ih is spelled `λ i. λ q̄. g(…,
+  nth(cs; i), …, q̄)`, a call, in both the small-step reducer the unifier
+  walks and the value machine's readback. The two are definitionally equal
+  (δ then β), so nothing the kernel checks changes; what changes is that
+  solved implicits and read-back types stay the size of the source.
+- The kernel's value machine applies a held ih at a neutral child by
+  evaluating only the `nth` and eliminating it with the *same* `elim`
+  (`Eval::wf_ih_child`), instead of building a λ around a shifted copy of
+  the step. Two recursive calls on one neutral child, one through the ih and
+  one through the definition, then share the step's closure, and conversion
+  answers them by identity rather than by comparing case trees.
+
+The unifier's own head walk still descends the case tree one constructor at
+a time by substitution, which is the remaining superlinear term
+(`issues/wide-inductive-unifier-case-descent.md`).
+
 ## 7. No-confusion
 
 Both halves are tier 0 §6's, with `Case`-on-the-scrutinee replaced by

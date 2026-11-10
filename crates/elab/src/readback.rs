@@ -35,7 +35,9 @@ use heather_kernel::level::Level;
 #[cfg(debug_assertions)]
 use heather_kernel::reduce::Defs;
 use heather_kernel::subst::{local_bound, local_bound_ty};
-use heather_kernel::term::{iwf_ih, nth, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
+use heather_kernel::term::{iwf_ih, nth, GlobalCtx, GlobalVar, IWfSig, MSig, LocalCtx, LocalSubst, LocalVar, Numeral, SubstTail, Term, Type};
+
+use crate::refold::{self, Layout, WfElim};
 use heather_kernel::value::program::ContextProgram;
 use heather_kernel::value::{Elim, Env, Head, TmClo, TyClo, VTail, VTy, Val};
 
@@ -46,11 +48,23 @@ pub(crate) struct Readback<'v, 'g> {
     gamma: &'g LocalCtx,
     len: u32,
     entries: HashMap<*const TmClo<'v>, Rc<Term>>,
+    /// The world the read value was computed in, when the reader may spell
+    /// an `elim_Wf` hypothesis as calls of the definition it came from
+    /// ([`Self::in_world`]).
+    world: Option<&'g GlobalCtx>,
 }
 
 impl<'v, 'g> Readback<'v, 'g> {
     pub(crate) fn new(gamma: &'g LocalCtx) -> Self {
-        Self { gamma, len: gamma.entries.len() as u32, entries: HashMap::new() }
+        Self { gamma, len: gamma.entries.len() as u32, entries: HashMap::new(), world: None }
+    }
+
+    /// This reader over `world`, the value's: an `elim_Wf` induction
+    /// hypothesis whose eliminator is a definition's structural recursion is
+    /// read back as calls of that definition ([`crate::refold`]) rather than
+    /// as the reducer spells it, a copy of the definition's whole step.
+    pub(crate) fn in_world(self, world: &'g GlobalCtx) -> Self {
+        Self { world: Some(world), ..self }
     }
 
     /// The type former at the head of `v`, its children as syntax; `None`
@@ -448,9 +462,12 @@ impl<'v, 'g> Readback<'v, 'g> {
         let shape = self.ty(shape, 0)?;
         let arity = self.tm(arity, 1)?;
         let motive = self.ty(motive, 1)?;
-        let step = self.tm(step, 3)?;
         let label = self.tm(label, 0)?;
         let children = self.tm(children, 0)?;
+        if let Some(ih) = self.refolded_ih(e, &shape, &arity, &motive, &label, &children) {
+            return Some(ih);
+        }
+        let step = self.tm(step, 3)?;
         let arity_at = arity.apply_local(&LocalSubst::id(self.gamma).extended(label));
         let wf = Type::Wf { level: level.clone(), shape: Rc::clone(&shape), arity: Rc::clone(&arity) };
         let template = Term::ElimWf {
@@ -488,6 +505,67 @@ impl<'v, 'g> Readback<'v, 'g> {
             dom: Rc::new(Type::Fin { len: Rc::new(arity_at) }),
             body: Rc::new(rec),
         })
+    }
+
+    /// [`Self::wf_ih`] as calls of the definition whose recursion `e` is
+    /// ([`crate::refold`]), when this reader has the world and `e`'s step is
+    /// that definition's stored node. The step closure names the definition:
+    /// the value machine reads a definition's body under the global offset
+    /// `v + 1` (`docs/lazy-global-offset-design.md`), and the call's
+    /// arguments are the closure's innermost entries, the body's λs. The
+    /// step itself is read back, and compared with the body's eliminator at
+    /// those arguments, only the first time a body is met
+    /// ([`refold::verdict`]): it is the definition's whole case tree.
+    fn refolded_ih(
+        &mut self,
+        e: &Elim<'v>,
+        shape: &Rc<Type>,
+        arity: &Rc<Term>,
+        motive: &Rc<Type>,
+        label: &Rc<Term>,
+        children: &Rc<Term>,
+    ) -> Option<Term> {
+        let world = self.world?;
+        let Elim::ElimWf { level, motive_level, step: step_clo, .. } = e else {
+            return None;
+        };
+        let TmClo::Syn { env, body: step } = step_clo else {
+            return None;
+        };
+        let var = GlobalVar(env.gshift().checked_sub(1)?);
+        let stored = refold::stored_body(world, var, 0)?;
+        if !refold::holds_step(stored, step) {
+            return None;
+        }
+        let (layout, _) = Layout::of_body(stored)?;
+        let entries = env.to_vec();
+        let first = entries.len().checked_sub(layout.params())?;
+        let mut args = Vec::with_capacity(layout.params());
+        for p in 0..layout.params() {
+            args.push(if layout.fixed(p) { self.entry(entries[first + p])? } else { Rc::new(Term::Zero) });
+        }
+        let subst = LocalSubst {
+            tail: SubstTail::Empty { len: self.len, base: self.gamma.base.clone() },
+            terms: vec![],
+        };
+        let ok = match refold::verdict(stored) {
+            Some(ok) => ok,
+            None => {
+                let step = self.tm(step_clo, 3)?;
+                let body = stored.shift_global(var.0 + 1).apply_local(&subst);
+                let (layout, elim) = Layout::of_body(&body)?;
+                let fields = WfElim { level, motive_level, shape, arity, motive, step: &step };
+                let ok = layout.matches(self.gamma, elim, &args, &fields);
+                refold::record_verdict(stored, ok);
+                ok
+            }
+        };
+        if !ok {
+            return None;
+        }
+        let head = Term::GlobalTm { var, subst };
+        let arity_at = arity.apply_local(&LocalSubst::id(self.gamma).extended(Rc::clone(label)));
+        layout.refolded_ih(&head, &args, level, motive_level, shape, arity_at, arity, motive, children)
     }
 
     /// `elim_IWf`'s induction hypothesis, which the machine holds as a value
@@ -612,13 +690,14 @@ fn under_tm(body: &Rc<Term>, k: u32, sigma: &LocalSubst) -> Term {
 /// anchors on spellings in places (docs/nbe-conversion-design.md §7), so a
 /// readback that respells is a defect here and fails loudly.
 #[cfg(debug_assertions)]
-pub(crate) fn verify(ty: &Type, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, read: &Type) {
+pub(crate) fn verify(ty: &Type, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, read: impl FnOnce() -> Option<Type>) {
     if !sampled() {
         return;
     }
+    let Some(read) = read() else { return };
     if let Ok(spelled) = heather_kernel::reduce::whnf_type_delta(ty, gamma, defs, fuel) {
         assert!(
-            spelled == *read,
+            spelled == read,
             "readback respelled a weak head reduct\n  reducer: {spelled:?}\n  readback: {read:?}"
         );
     }
@@ -626,13 +705,14 @@ pub(crate) fn verify(ty: &Type, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, rea
 
 /// [`verify`] for a term's constructor ([`Readback::term_head`]).
 #[cfg(debug_assertions)]
-pub(crate) fn verify_term(tm: &Term, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, read: &Term) {
+pub(crate) fn verify_term(tm: &Term, gamma: &LocalCtx, defs: Defs<'_>, fuel: u64, read: impl FnOnce() -> Option<Term>) {
     if !sampled() {
         return;
     }
+    let Some(read) = read() else { return };
     if let Ok(spelled) = heather_kernel::reduce::whnf_term_delta(tm, gamma, defs, fuel) {
         assert!(
-            spelled == *read,
+            spelled == read,
             "readback respelled a weak head reduct\n  reducer: {spelled:?}\n  readback: {read:?}"
         );
     }
