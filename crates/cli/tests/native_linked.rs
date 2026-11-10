@@ -20,26 +20,47 @@ fn linked_exports_are_what_the_compiler_emits() {
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let output = root.join(format!("target/native-linked-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&output).unwrap();
-    let mut exports = Vec::new();
-    for line in manifest.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
-        let (module, function) = line.split_once('\t')
-            .unwrap_or_else(|| panic!("EXPORTS.tsv: `{line}` is not `<module>\\t<function>`"));
+    let rows: Vec<(&str, &str)> = manifest
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .map(|line| line.split_once('\t').unwrap_or_else(|| panic!("EXPORTS.tsv: `{line}` is not `<module>\\t<function>`")))
+        .collect();
+    for (module, _) in &rows {
         assert!(root.join(module).is_file(), "EXPORTS.tsv names `{module}`, which is not a file");
-        let assembly = output.join(format!("{function}.s"));
-        let result = Command::new(env!("CARGO_BIN_EXE_heather"))
-            .current_dir(&root)
-            .args(["compile-x86", module, function, "-o"]).arg(&assembly)
-            .arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
-            .output().unwrap();
-        assert!(result.status.success(), "compile-x86 {module} {function}:\n{}", String::from_utf8_lossy(&result.stderr));
-        let emitted = std::fs::read_to_string(&assembly).unwrap();
-        let linked = std::fs::read_to_string(generated.join(format!("{function}.s")))
-            .unwrap_or_else(|_| panic!("crates/linked/generated/{function}.s is missing: run scripts/linked"));
-        assert!(emitted == linked,
-            "crates/linked/generated/{function}.s is not what `compile-x86 {module} {function}` emits: run scripts/linked\n\
-             emitted:\n{emitted}\nlinked:\n{linked}");
-        exports.push(format!("{function}.s"));
     }
+    // One compiler per export, four at a time as the library gate runs its
+    // folders (`library.rs`): an export costs a certificate, and the
+    // scanner alone is two dozen of them.
+    let queue = std::sync::Mutex::new(std::collections::VecDeque::from(rows.clone()));
+    let failures = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| loop {
+                let Some((module, function)) = queue.lock().expect("queue").pop_front() else { break };
+                let assembly = output.join(format!("{function}.s"));
+                let result = Command::new(env!("CARGO_BIN_EXE_heather"))
+                    .current_dir(&root)
+                    .args(["compile-x86", module, function, "-o"]).arg(&assembly)
+                    .arg("--cache-dir").arg(heather_cli::showcase::native_test_images())
+                    .output().unwrap();
+                if !result.status.success() {
+                    failures.lock().expect("failures").push(format!("compile-x86 {module} {function}:\n{}", String::from_utf8_lossy(&result.stderr)));
+                    continue;
+                }
+                let emitted = std::fs::read_to_string(&assembly).unwrap();
+                match std::fs::read_to_string(generated.join(format!("{function}.s"))) {
+                    Err(_) => failures.lock().expect("failures").push(format!("crates/linked/generated/{function}.s is missing: run scripts/linked")),
+                    Ok(linked) if emitted != linked => failures.lock().expect("failures").push(format!(
+                        "crates/linked/generated/{function}.s is not what `compile-x86 {module} {function}` emits: run scripts/linked\n\
+                         emitted:\n{emitted}\nlinked:\n{linked}")),
+                    Ok(_) => {}
+                }
+            });
+        }
+    });
+    let failures = failures.into_inner().expect("failures");
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    let exports: Vec<String> = rows.iter().map(|(_, function)| format!("{function}.s")).collect();
     assert!(!exports.is_empty(), "EXPORTS.tsv lists no export");
     // And nothing is linked that the manifest does not account for.
     for entry in std::fs::read_dir(&generated).unwrap() {

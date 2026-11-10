@@ -24,12 +24,21 @@ generated=crates/linked/generated
 work=$(mktemp -d "target/linked.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
+# One compiler per export, four at a time: an export costs a certificate.
+compile() {
+  local module=$1 function=$2
+  ( ulimit -v 8388608 -t 1500 -c 0
+    "$heather" compile-x86 "$module" "$function" -o "$work/$function.s" --cache-dir "$store" > "$work/$function.log" 2>&1 ) ||
+    { cat "$work/$function.log" >&2; echo "scripts/linked: compile-x86 $module $function failed" >&2; return 1; }
+}
+export -f compile
+export heather store work
+grep -v '^#' "$generated/EXPORTS.tsv" | grep -v '^[[:space:]]*$' |
+  xargs -P 4 -L 1 bash -c 'compile "$0" "$1"'
+
 stale=0
 while IFS=$'\t' read -r module function; do
   [[ -z "$module" || "$module" == \#* ]] && continue
-  ( ulimit -v 8388608 -t 1500 -c 0
-    "$heather" compile-x86 "$module" "$function" -o "$work/$function.s" --cache-dir "$store" > "$work/$function.log" 2>&1 ) ||
-    { cat "$work/$function.log" >&2; echo "scripts/linked: compile-x86 $module $function failed" >&2; exit 1; }
   if cmp -s "$work/$function.s" "$generated/$function.s"; then
     echo "$function: unchanged"
   elif $check; then

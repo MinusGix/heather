@@ -44,3 +44,7 @@ little-endian is refused by the kernel).
   here: that move.
 - **[[source-buffers-as-views]]** owns where a buffer lives.
 - **[[x86-narrow-and-rotate-forms]]** owns the 32-bit load and store forms.
+
+## Log
+
+- 2026-11-10: A second customer for constant tables: the scanner's automaton (`lib/lang/lexer/lexer_scan.hthr`) is a transition table written as about ninety chains of byte comparisons, because compiled code has no table to index. As a table it is a class per byte (256 entries) and a next state per (state, class), two loads a byte where the chains are a dozen compares and branches; it is also what [[lexical-grammar-as-data]] would generate. The family split in `scan_family` is the same table's first level, done by hand.

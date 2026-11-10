@@ -32,3 +32,4 @@ are the candidates. A tool-sized runtime program would meet this first.
   cold. A hash is tens of such functions and a scanner a table plus a loop, so
   both targets want this cost as `scripts/bench-probes` cases before their
   rounds start, to see it move.
+- 2026-11-10: The size side of this cost has its own issue now ([[runtime-generator-program-size]]): the reply's square was removed by holding the program and its sources as solved holes, and what remains (requests linear in the program, one declaration evaluating every lowering) is what the compositional linking proposed there removes.

@@ -153,6 +153,7 @@ dependencies = [
 name = "heather-linked"
 version = "0.0.1"
 dependencies = [
+ "heather-syntax",
  "sha2",
 ]
 

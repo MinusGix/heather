@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Rewrite `lib/_tests/lang/lexer/lexer_tokens_tests.hthr`: the scanner's
+# specification evaluated on the short sources of `PROBES`
+# (`crates/linked/tests/scanner.rs`), each stated to give what the linked
+# scanner gives. The test that writes the file is the one that holds it:
+# `the_evaluated_probes_are_what_the_scanner_gives`.
+#
+#   scripts/lexer-probes    # after changing PROBES, or the scanner
+set -euo pipefail
+cd "$(dirname "$0")/.."
+HEATHER_WRITE_LEXER_PROBES=1 scripts/test -p heather-linked --test scanner the_evaluated_probes_are_what_the_scanner_gives

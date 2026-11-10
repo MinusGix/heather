@@ -153,6 +153,31 @@ assumption that the lexer waits on `nh-effects`
 | L4 values in Heather | numerals that fit a word, escapes and UTF-8 validation move across | piece 2 (write half) | the same |
 | L5 grammar as data | token classes are `regex def`s, the DFA is generated and proved, the scanner is longest match over them by theorem (`lexical-grammar-as-data`) | `regex-dfa-compiler`, constant tables | the generated scanner equals L0's by theorem |
 
+**Where the stages stand** (2026-11-10, §10's second round). L0's scanner
+and L1 are built, and L3's comparison runs with the loop still in Rust:
+
+- The scanner is a deterministic automaton over bytes, not a hand-written
+  step: `lib/lang/lexer/lexer_scan.hthr`. A state is a word (its number,
+  with the kind it accepts above), a token is the longest run the automaton
+  accepts with the last accepting position remembered, and the lookahead
+  the Rust lexer does by peeking is states. Two things a textbook automaton
+  lacks and this one needs: a refusal that no earlier accept excuses
+  (`12abc`, an unterminated literal), and a start state chosen by the
+  previous token's kind (`>>` is a shift only after a gap).
+- Each family of states is a certified word function and `crates/linked`
+  links all of them; `crates/linked/src/scanner.rs` is the loop. It is held
+  to `heather_syntax::lex` on every Heather source in the repository, on
+  every edge of the automaton, on generated strings and on library lines
+  with one character changed.
+- `lib/lang/lexer/lexer_tokens.hthr` is the same loop as a function the
+  kernel evaluates, the specification the compiled loop will be proved
+  against; probes hold it to the linked scanner today.
+- Not built: the values (L0's other half), the loop compiled (L2), the
+  switch (L3). The automaton is also not one program yet: Rust picks the
+  family for each byte, because a program holding every family is past
+  what a linked program's proof is checked for
+  (`issues/runtime-generator-program-size.md`).
+
 - **A scanner plus values.** The Rust lexer's tokens hold values: numerals
   past a machine word, scaled literals, unescaped strings. A scanner that
   returns only (kind, start, end) never allocates, and a token's value is a
@@ -389,8 +414,56 @@ The first thing direct linking found was in the emitter: a program whose
 exported function comes first had its label written twice, which no test
 had assembled.
 
-Next, in order of what they unblock: fixed arrays and tables in the pure
-fragment (the whole of `compress` in Heather), the export contract over
-caller-owned memory (the state buffer; the scanner's source span), then
-SHA-256 behind a switch in `crates/cache`.
+**2026-11-10, the second round** (Minus: "pull master and continue
+iterating"). The lexer's lane, taken to where memory stops it:
+
+- **The scanner as an automaton** (L0's scanner, L1):
+  `lib/lang/lexer/lexer_scan.hthr`, about ninety states in twenty-three
+  families, with `scan_family`, `scan_accept` and `scan_begin`; every one a
+  `runtime fn` certified by `compile-x86` and linked
+  (`crates/linked/generated/`, the same table and gate as the hashes).
+- **The scanner in Rust over the linked automaton**:
+  `heather_linked::scanner::Scanner`, an iterator of kinds and spans or
+  the offset refused. Nothing in it decides what a token is.
+- **The comparison with the Rust lexer** (L3's test, ahead of its switch):
+  `crates/linked/tests/scanner.rs`. Every Heather source in the repository
+  gives the same kinds and spans; so does every edge of the automaton
+  reached from every resting state, a corpus of generated strings, and
+  library lines with one character changed. A token's value is still the
+  Rust lexer's, read from the span, and only the three refusals that are
+  about a value may differ. A perturbed edge in the model is caught (the
+  negative control that shaped the tests: random strings alone missed it).
+- **The loop as an evaluated specification**:
+  `lib/lang/lexer/lexer_tokens.hthr`, `Scanned::of`, with theorems by
+  evaluation that every state stops at the end of a source and accepts the
+  kind its word says, and probes equal to the linked scanner's output
+  (`lib/_tests/lang/lexer`, written by `scripts/lexer-probes`).
+- **Found on the way.** The Rust lexer panicked on a malformed `\u{…}`
+  followed by a multi-byte character (fixed). The runtime generator's reply
+  grew with the square of a program's function count (fixed by holding the
+  program and its sources once; eight callees were refused before).
+
+What the round could not do is as much its result. The automaton is one
+function of the state and the byte, and it is linked as twenty-three
+programs with Rust picking between them, for three reasons that are now
+issues: a function past about sixteen arms runs the certificate's scan out
+of fuel (`issues/function-ir-scan-id-cost.md`) or the compiler out of
+memory (`issues/compile-x86-certificate-memory.md`); a program's agreement
+is one declaration that evaluates every function's lowering
+(`issues/runtime-generator-program-size.md`); and compiled code has no
+table to index (`issues/rt-fixed-arrays-and-tables.md`). The loop is Rust
+because a compiled function cannot read a span it is lent, which the
+survey for this round found to be three layers and not one
+(`issues/native-library-exports-design.md`, the log of 2026-11-10): reads
+in the verified lowering, a memory law in the function compiler beside the
+frame's, and the contract. The scanner only reads, so it is the cheapest
+first customer of all three.
+
+Next, in order of what they unblock: the read half of caller-owned memory
+(a borrowed read-only span through the lowering and the function compiler,
+which compiles the scanner's loop and is the smaller half of the export
+contract); compositional linking, so a program's proof costs its largest
+function and the automaton is one export; fixed arrays and tables in the
+pure fragment (the whole of `compress` in Heather, and the automaton as a
+table); then the write half and SHA-256 behind a switch in `crates/cache`.
 

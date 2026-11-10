@@ -11,11 +11,13 @@ name = "heather_linked"
 # compiled output (`generated/`), and its Rust is the glue around it.
 [dependencies]
 
-# An oracle, as `heather-cache`'s is (`crates/cache/Cargo.toml`): the tests
-# run the linked code against an independent SHA-512. Never linked into
-# anything shipped.
+# Oracles, as `heather-cache`'s is (`crates/cache/Cargo.toml`): the tests
+# run the linked code against an independent SHA-2, and the linked scanner
+# against the Rust lexer. Never linked into anything shipped, and the
+# second never a dependency: the lexer is what the scanner replaces.
 [dev-dependencies]
 sha2 = "0.10"
+heather-syntax = { path = "../syntax" }
 
 # `deny` where the workspace says `forbid`: linking the compiled bytes is
 # `global_asm!` and naming the functions in them an `unsafe extern` block, in
