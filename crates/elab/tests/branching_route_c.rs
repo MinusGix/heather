@@ -100,7 +100,7 @@ fn global(pos: u32, depth: u32) -> Term {
     Term::GlobalTm {
         var: GlobalVar(gv(pos)),
         subst: LocalSubst {
-            tail: SubstTail::Empty { len: depth, base: CtxBase::Nil },
+            tail: SubstTail::Empty,
             terms: vec![],
         },
     }

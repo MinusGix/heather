@@ -4,7 +4,7 @@ status: open
 labels: [meta, kernel, tooling]
 area: infrastructure
 created: 2026-07-24
-updated: 2026-09-26
+updated: 2026-11-09
 ---
 
 The tree began dependency-free: `Cargo.lock` contained exactly the four
@@ -117,3 +117,4 @@ conversion cache, which is a kernel design change we would write ourselves
 - 2026-09-17: 2026-09-17: the first `unsafe` in first-party code, and the first crate to say `deny` where the workspace says `forbid`: crates/cache's SHA-256 gained the CPU's SHA-extensions path (one `#[allow(unsafe_code)]` on the intrinsic function and one on its dispatch), after the walk it feeds was measured at 318 MB/s scalar against ~2.2 GB/s with the extensions ([[merkle-walk-cold-share]]). The `sha2` route — already a dev-dependency as the test oracle — was measured first and ran at the same rate, so the crate keeps zero shipped dependencies. User position: the forbid is a strong guideline, not a wall, and SHA is hard to get wrong badly; the oracle tests check both paths against each other on any machine that has the extensions.
 - 2026-09-26: 2026-09-26: `heather-numeral` (`crates/numeral`) joins the kernel's dependency set, first-party: `Term::NatLit` now carries its `Numeral`, an arbitrary-precision natural (docs/wide-numerals-design.md). It was written here, has no dependencies and no `unsafe`, and is shared with `syntax` and `elab` so a numeral is one type at every stage — a crate of its own only so the syntax crate need not depend on the kernel. Judgment-relevant surface: `is_zero`, `pred` (borrow across limbs) and `limbs`, each unit-tested with the normalization invariant (`Big` exactly above `u64::MAX`, top limb nonzero) that makes structural equality numeric equality. Parsing and display are not judgments.
 - 2026-11-05: gardener: cites a file it shares with [[native-process-fixed-cost]] (`docs/cache-v1-design.md`); [[perf-tracking-consistent-environment]] (`docs/benchmarking.md`); [[type-value-memo-hit-rate]] (`docs/benchmarking.md`).
+- 2026-11-09: `mimalloc` adopted above the kernel as the process allocator for everything that links the elaborator ([[global-allocator]]). It enters through `heather-elab-lib`/`heather-elab-unit`, not the kernel: `heather-kernel-lib` still depends on `typed-arena` and `heather-numeral` only, and a kernel linked alone keeps the system allocator. Transitive: `libmimalloc-sys` (vendored C, built with `cc`).

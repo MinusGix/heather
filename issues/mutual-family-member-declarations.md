@@ -1,6 +1,6 @@
 ---
 title: A member declaration on a mutual family's member is refused: the owner is not found
-status: open
+status: closed
 labels: [elaboration,inductives,surface]
 area: language
 milestone: [math-metatheory]
@@ -45,3 +45,17 @@ Probes in `lib/_tests`.
 
 Related, from the same probe: [[mutual-group-type-valued-members]] and
 [[wide-inductive-lemma-quadratic-gate]].
+
+## Resolution (2026-11-09)
+
+Fixed in three places. The owner rule (`names_a_type`) accepts a mutual
+member; `carrier_of_ty` reads a family at a member's index constructor as
+that member (`member_carrier`, over `member_of_family_ty` in
+`mutual_family.rs`), so dot calls dispatch to `Tm::size`; and the structural
+group (`mutual_rec.rs`) forms over member declarations and rewrites a
+method call whose receiver the source places at a member (parameter, arm
+field, nested-match binder, `let`), and a qualified call by its declared
+name. docs/mutual-inductive-design.md §6 "Member declarations" says which
+receivers are placed. Probes: `lib/_tests/lang/mutual_member_tests.hthr`
+(unparameterised, `Tm<O>`, indexed `Even`/`Odd`, a theorem group, a mixed
+member/free group, and the refusal for an unplaced receiver).

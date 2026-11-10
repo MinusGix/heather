@@ -222,7 +222,7 @@ theorem rewrite_bound_context_open(n: Nat, g: Nat → Rat → Rat, x, y: Rat, h:
 // changes by `=` at `Nat` when no evidence names a relation there
 // (docs/equation-rewrite-design.md §11.4, §11.6): the obligation is what
 // that asks of the count.
-// expect-error: ?compatibility : PreservesRelation(Pointwise(Same), RelId, λ (z: (z: Nat) -> Rat) => size(z))
+// expect-error: ?compatibility : PreservesRelation(Pointwise(Same), RelId, λ (z: Nat -> Rat) => size(z))
 theorem rewrite_sum_leaves(n: Nat, x, y: Rat, h: x ≈ y, size: (Nat → Rat) → Nat, back: Nat → Rat, e: back(size(λ k => y)) ≈ 0):
     back(size(λ k => x)) ≈ 0
 { rewrite(h, e) }

@@ -42,6 +42,11 @@ opt-level = 3
 [profile.dev.package.heather-syntax]
 opt-level = 3
 
+# The allocator's C sources: at the dev profile's opt-level 0 every `malloc`
+# in every test binary would run unoptimized (issues/global-allocator.md).
+[profile.dev.package.libmimalloc-sys]
+opt-level = 3
+
 # The cache renders and hashes every elaborated declaration (SHA-256 over
 # `write_exact` output), which is the same order of work as the kernel gate it
 # is meant to avoid; unoptimized it would dominate its own tests.

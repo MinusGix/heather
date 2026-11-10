@@ -30,6 +30,8 @@ value-metrics = ["heather-kernel-lib/value-metrics"]
 heather-kernel-lib = { path = "../kernel-lib" }
 heather-numeral = { path = "../numeral" }
 heather-syntax = { path = "../syntax" }
+# The process allocator (`ALLOC` in crates/elab/src/lib.rs; issues/global-allocator.md).
+mimalloc = { version = "0.1.52", default-features = false }
 
 [lints]
 workspace = true

@@ -1830,8 +1830,13 @@ impl Elaborator {
         let out = if args.is_empty() { self.share_registered_lowering(ind.tag, out) } else { out };
         // Kept only when closed over the locals, so a hit is the same type at
         // any depth. Hiding the use site's binders should make every bare
-        // lowering closed; this is the backstop, paid once per miss.
-        if memo && out.0.shift_local(1) == out.0 {
+        // lowering closed; this is the backstop, paid once per miss. And only
+        // when it mentions no global: a reference counts from the end of Ψ
+        // *and* past the goal arena and a `meta fn`'s binders, which the
+        // key's Ψ length does not record. (Until 2026-11-09 the first test
+        // was also the second, by accident: an empty substitution tail
+        // recorded the depth, so a weakening changed every global reference.)
+        if memo && out.0.shift_local(1) == out.0 && out.0.shift_global(1) == out.0 {
             self.memos.named_type_memo.borrow_mut().insert(key, (ind, psi, out.clone()));
         }
         Ok(out)
@@ -3146,11 +3151,11 @@ impl Elaborator {
     /// [`Self::spine`] of a type scoped in `cx`, a named codata signature
     /// unfolded first (docs/codata-named-signature-design.md §3): the readers
     /// that take a codata equation apart (`inj`, `absurd`) arrive with one.
-    pub(crate) fn spine_in(&self, cx: &Cx, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
+    pub(crate) fn spine_in(&self, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
         if let Type::M { sig, index } = &*decoded(ty)
             && self.m_sig_tag(sig).is_some()
         {
-            let Some(inline) = self.m_sig_inline(sig, &cx.gamma) else {
+            let Some(inline) = self.m_sig_inline(sig) else {
                 return err("internal: a named codata signature did not unfold", span);
             };
             return self.spine(&inline.shape_at(index), &sig.level, n, span);
@@ -3174,7 +3179,7 @@ impl Elaborator {
             .ctors
             .first()
             .and_then(|(c, _)| self.tag_of(c))
-            .and_then(|ind| self.spine_refs_by_position(cx, ind.tag, spine));
+            .and_then(|ind| self.spine_refs_by_position(ind.tag, spine));
         let (ctor_refs, node_refs) = match by_position {
             Some((c, t)) => (c, t),
             None => (vec![None; spine.ctors.len()], vec![None; spine.nodes.len()]),
@@ -3657,7 +3662,7 @@ impl Elaborator {
                     .map(|(_, _, pair)| pair.clone());
                 Some(match known {
                     Some(pair) => pair,
-                    None => match self.wf_slot_refs(cx, shape, arity) {
+                    None => match self.wf_slot_refs(shape, arity) {
                         Some((s, a)) => (Rc::new(s), Rc::new(a)),
                         None => self
                             .emit_wf_slots(cx, shape, arity, 0)
@@ -3741,7 +3746,7 @@ impl Elaborator {
         // module, 2026-09-06; issues/emission-site-respell-audit.md).
         let (shape_e, arity_e) = match wf_slots {
             Some(pair) => pair,
-            None => match self.wf_slot_refs(cx, shape, arity) {
+            None => match self.wf_slot_refs(shape, arity) {
                 Some((s, a)) => (Rc::new(s), Rc::new(a)),
                 None => self
                     .emit_wf_slots(cx, shape, arity, 0)
@@ -6600,7 +6605,7 @@ impl Elaborator {
                 span,
             );
         };
-        let spine = self.spine_in(cx, &sty, &level, ind.ctors.len(), span)?;
+        let spine = self.spine_in(&sty, &level, ind.ctors.len(), span)?;
         let (Some(l), Some(r)) = (
             self.read_ctor(cx, &ind, &spine, &lhs, read_fields, span)?,
             self.read_ctor(cx, &ind, &spine, &rhs, read_fields, span)?,
@@ -6812,7 +6817,7 @@ impl Elaborator {
             },
             slvl.clone(),
         );
-        let spine = self.spine_in(cx, sty, slvl, ind.ctors.len(), span)?;
+        let spine = self.spine_in(sty, slvl, ind.ctors.len(), span)?;
         let index = ConstBody::Arity((0..ind.ctors.len()).map(|k| (k, None)).collect());
         let oracle = self.semantic_oracle();
         let read = |side: &Rc<Term>| -> R<Option<usize>> {
@@ -6926,7 +6931,7 @@ impl Elaborator {
             },
             slvl.clone(),
         );
-        let spine = self.spine_in(cx, &sty, &slvl, ind.ctors.len(), span)?;
+        let spine = self.spine_in(&sty, &slvl, ind.ctors.len(), span)?;
         let pred = self.const_predicate(
             &mcx,
             &ind,
@@ -7031,7 +7036,7 @@ impl Elaborator {
                 span,
             );
         }
-        let spine = self.spine_in(cx, &sty, &slvl, ind.ctors.len(), span)?;
+        let spine = self.spine_in(&sty, &slvl, ind.ctors.len(), span)?;
         // Which body the projection's case tree gets, and at what type. A
         // recursive field is a child rather than a component of the shape, so
         // its type is `⟦D⟧` itself and there is nothing for it to depend on

@@ -1,11 +1,11 @@
 ---
 title: A lemma by cases over an n-constructor recursive inductive costs about n² kernel steps
-status: open
+status: closed
 labels: [kernel,elaboration,inductives,performance]
 area: language
 milestone: [math-metatheory]
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 A lemma by structural recursion over a recursive inductive with `n`
@@ -63,3 +63,15 @@ A bench family beside `inductive/isa-roundtrip`
 Related, from the same probe: [[mutual-family-member-declarations]] and
 [[mutual-group-type-valued-members]]. Earlier rounds on this cost family:
 [[mutual-group-recursion-gate-cost]], [[wide-inductive-constructor-mention-cost]].
+
+## Log
+
+- 2026-11-10: Fixed, two layers, both "keep the ih as what it came from" (docs/inductive-tier1-wf-lowering.md §6.4).
+
+  Attribution. Each arm of `open_lc` got two copies of `open_at`'s whole step (the case tree over all n formers): (1) the unifier solved the congruence's implicits with the unfolded call's hypothesis read back as `λ i. elim_Wf(…; step; nth(cs; i))`, so the arm's elaborated term and every type read back from it carried the step; (2) the kernel applied the lemma's own ih at a neutral child through a λ built around a *shifted* copy of the step (`wf_ih_lam`), so the call through the ih and the call through `open_at`'s definition had different closures and conversion compared the two case trees structurally. The dependent motive mentioning a second recursion over the scrutinee is what makes both sides appear.
+
+  Changes. Elaborator: `crates/elab/src/refold.rs` spells the ih of a fired step that is a defined global's body as calls of that global (`λ i. λ q̄. g(…, nth(cs; i), …, q̄)`), in `TermReducts` (the small-step walk) and in `Readback::wf_ih` (the value machine's readback, with a per-step verdict cache). Kernel: `Eval::wf_ih_child` evaluates only the `nth` and pushes the same `elim` frame; `wf_ih_lam` is gone.
+
+  Counters, release, width one (`heather check --timings`), `open_lc` steps: n=10 6,862 / n=30 23,412 / n=90 79,306 / n=180 170,510 / n=360 362,465 (was 24,629 / 222,938 / 2,274,118 at 10/30/90). Gate and steps linear; elaboration about linear from 30 to 90, with one superlinear residue that dominates only past a few hundred formers: the unifier's head walk descends the case tree by substitution, filed as [[wide-inductive-unifier-case-descent]].
+
+  Bench family `inductive/wide-lemma` (fixtures/intricate.rs): `lift` and `lift_id` over n formers with one congruence per arity, slope ~1.2 over 16..128 (band 0.88–1.58); the lemma alone was about quadratic. Regression test `a_wide_lemma_by_cases_is_linear_in_the_formers` (crates/elab/tests/annotation_cost.rs): gate steps 3,217 → 13,993 at 8 → 32 formers (was 9,385 → 122,953).

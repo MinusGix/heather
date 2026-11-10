@@ -544,10 +544,7 @@ impl fmt::Debug for LocalSubst {
         node(f, |f| {
             f.write_str("{")?;
             match *tail {
-                SubstTail::Empty { len, base: CtxBase::Nil } => write!(f, "·^{len}")?,
-                SubstTail::Empty { len, base: CtxBase::Var(g) } => {
-                    write!(f, "·^{len}_g{}", g.0)?
-                }
+                SubstTail::Empty => f.write_str("·")?,
                 SubstTail::Wk { len, ctx_var } => write!(f, "wk^{len}_g{}", ctx_var.0)?,
             }
             for t in terms {

@@ -293,6 +293,7 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         ("inductive/isa-constructor-use", "four constructor values of an n-form instruction type"),
         ("inductive/isa-opcode-match", "an n-arm match from an instruction type into Nat"),
         ("inductive/isa-roundtrip", "an n-arm rebuild and its identity theorem"),
+        ("inductive/wide-lemma", "an n-former syntax and a lemma by cases with one recursive arm per former"),
         ("inductive/enum-equality", "n²-arm decidable equality on an n-constructor enum"),
         ("inductive/record-fields", "a k-field record: literal, projection, rebuild, frame"),
         ("inductive/mutual-declaration", "a group of m mutual sorts, declared"),

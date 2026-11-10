@@ -405,10 +405,7 @@ pub(crate) fn rename(gamma: &LocalCtx, positions: &[usize], i: usize) -> LocalSu
     let m = gamma.entries.len();
     let extra = i as u32;
     let tail = match gamma.base {
-        CtxBase::Nil => SubstTail::Empty {
-            len: m as u32 + extra,
-            base: CtxBase::Nil,
-        },
+        CtxBase::Nil => SubstTail::Empty,
         CtxBase::Var(g) => SubstTail::Wk {
             len: m as u32 + extra,
             ctx_var: g,

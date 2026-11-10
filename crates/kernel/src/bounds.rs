@@ -12,11 +12,15 @@
 //! - `bound` — 1 + the largest free local de Bruijn index (0 = locally
 //!   closed). A local operation applied when `at.local >= bound` renumbers
 //!   or substitutes nothing.
-//! - `has_tail` — whether a local substitution (`U^δ` / `u^δ`) is visible in
-//!   this local scope. Tails are rewritten *unconditionally* by the local
-//!   operations (`wk^k_g ∘ δ` recomputes the length even when no variable
-//!   moves), so a subtree containing one is never skippable on the bound
-//!   alone.
+//! - `has_wk` — whether a weakening tail `wk^k_g` (of a `U^δ` / `u^δ`) is
+//!   visible in this local scope. A weakening counts the binders it sits
+//!   under, so the local operations rewrite it *unconditionally* (`wk^k_g ∘
+//!   δ` recomputes the length even when no variable moves), and a subtree
+//!   containing one is never skippable on the bound alone. The empty tail
+//!   `·` is no such thing: it records nothing (`term.rs`, `LocalSubst`), no
+//!   operation changes it, and a subtree whose references to Ψ are all at
+//!   the empty substitution, which is what a mention of a top-level
+//!   definition is, is as skippable as one with no reference at all.
 //!
 //! Both components follow the same scoping rule as the traversal itself:
 //! boxed code, contextual-type components, context arguments, and the
@@ -63,14 +67,14 @@ use std::cell::RefCell;
 use std::sync::Arc as Rc;
 use std::sync::Weak;
 
-use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, Term, Type};
+use crate::term::{Branches, IWfSig, LocalSubst, MSig, Motives, SubstTail, Term, Type};
 
 /// What a subtree exposes to local-namespace operations, relative to its
 /// own root. See the module docs for the two components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LocalUse {
     pub bound: u32,
-    pub has_tail: bool,
+    pub has_wk: bool,
     /// Bit `i` set when the free index `i` occurs, for `i < 64` (larger
     /// indices are counted by `bound` alone). No substitution reads it: it
     /// answers [`ignores_innermost`], a question about cost.
@@ -80,14 +84,14 @@ pub(crate) struct LocalUse {
 impl LocalUse {
     const CLOSED: LocalUse = LocalUse {
         bound: 0,
-        has_tail: false,
+        has_wk: false,
         uses: 0,
     };
 
     fn join(self, o: LocalUse) -> LocalUse {
         LocalUse {
             bound: self.bound.max(o.bound),
-            has_tail: self.has_tail || o.has_tail,
+            has_wk: self.has_wk || o.has_wk,
             uses: self.uses | o.uses,
         }
     }
@@ -105,7 +109,7 @@ impl LocalUse {
     /// Can a local-namespace operation applied at binder depth `d` change
     /// this subtree at all?
     pub fn touched_at(self, d: u32) -> bool {
-        self.bound > d || self.has_tail
+        self.bound > d || self.has_wk
     }
 }
 
@@ -294,7 +298,7 @@ impl Cache {
             Term::Var(v) => {
                 return LocalUse {
                     bound: v.0.saturating_add(1),
-                    has_tail: false,
+                    has_wk: false,
                     uses: var_bit(v.0),
                 }
             }
@@ -425,7 +429,7 @@ thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(Cache::new());
 }
 
-/// Captures read by evaluation of a syntactic closure. Substitution tails
+/// Captures read by evaluation of a syntactic closure. Weakening tails
 /// depend on the ambient base/global shift, not on captured local values.
 pub(crate) fn term_captures(t: &Rc<Term>) -> u32 {
     CACHE.with(|c| c.borrow_mut().term_use(t).bound)
@@ -435,7 +439,7 @@ pub(crate) fn type_captures(t: &Rc<Type>) -> u32 {
     CACHE.with(|c| c.borrow_mut().type_use(t).bound)
 }
 
-/// `t`'s local footprint: its bound and whether a substitution tail shows
+/// `t`'s local footprint: its bound and whether a weakening tail shows
 /// in its local scope, for conversion's closure identity, which reads only
 /// the captures a body uses (`conv/dom/values.rs`).
 pub(crate) fn term_local_use(t: &Rc<Term>) -> LocalUse {
@@ -456,8 +460,8 @@ thread_local! {
     static SCOPE_CACHE: RefCell<Cache> = RefCell::new(Cache::new());
 }
 
-/// [`term_local_use`] for the typing memo's strengthened scope: a tail-free
-/// node of bound `k` is judged by Γ's innermost `k` entries alone.
+/// [`term_local_use`] for the typing memo's strengthened scope: a node of
+/// bound `k` with no weakening tail is judged by Γ's innermost `k` entries alone.
 pub(crate) fn scope_term_use(t: &Rc<Term>) -> LocalUse {
     SCOPE_CACHE.with(|c| c.borrow_mut().term_use(t))
 }
@@ -472,8 +476,9 @@ pub(crate) fn scope_type_ref_use(t: &Type) -> LocalUse {
     SCOPE_CACHE.with(|c| c.borrow_mut().compute_type(t))
 }
 
-/// Whether a type is locally closed: no free local variable and no local
-/// substitution tail. The one reader that is not a traversal is the
+/// Whether a type is locally closed: no free local variable and no
+/// weakening tail, so that it reads nothing of Γ and is the same syntax
+/// under any binders. The one reader that is not a traversal is the
 /// closed-type memo in `typing.rs` (`Tc::ty_check`), which judges a locally
 /// closed type once whatever Γ it occurs in — so a wrong answer here is a
 /// soundness bug there, as a wrong skip is in `subst.rs`. Always computed
@@ -481,7 +486,7 @@ pub(crate) fn scope_type_ref_use(t: &Type) -> LocalUse {
 pub(crate) fn type_locally_closed(t: &Rc<Type>) -> bool {
     CACHE.with(|c| {
         let u = c.borrow_mut().type_use(t);
-        u.bound == 0 && !u.has_tail
+        u.bound == 0 && !u.has_wk
     })
 }
 
@@ -491,7 +496,7 @@ pub(crate) fn type_locally_closed(t: &Rc<Type>) -> bool {
 pub(crate) fn type_ref_locally_closed(t: &Type) -> bool {
     CACHE.with(|c| {
         let u = c.borrow_mut().compute_type(t);
-        u.bound == 0 && !u.has_tail
+        u.bound == 0 && !u.has_wk
     })
 }
 
@@ -500,7 +505,7 @@ pub(crate) fn type_ref_locally_closed(t: &Type) -> bool {
 pub(crate) fn iwf_sig_locally_closed(sig: &IWfSig) -> bool {
     CACHE.with(|c| {
         let u = c.borrow_mut().iwf_sig_use(sig);
-        u.bound == 0 && !u.has_tail
+        u.bound == 0 && !u.has_wk
     })
 }
 
@@ -568,13 +573,13 @@ impl Cache {
             .join(self.term_use(&sig.next).under(3))
     }
 
-    /// Every `δ` has a tail, and the local operations rewrite tails
-    /// unconditionally; the payload terms live in the current scope.
+    /// A weakening tail is rewritten by every local operation, an empty
+    /// one by none; the payload terms live in the current scope.
     fn subst_use(&mut self, s: &LocalSubst) -> LocalUse {
         s.terms.iter().fold(
             LocalUse {
                 bound: 0,
-                has_tail: true,
+                has_wk: matches!(s.tail, SubstTail::Wk { .. }),
                 uses: 0,
             },
             |a, t| a.join(self.term_use(t)),
@@ -625,7 +630,7 @@ impl Cache {
         match &**t {
             Term::Var(v) => LocalUse {
                 bound: v.0.saturating_add(1),
-                has_tail: false,
+                has_wk: false,
                 uses: var_bit(v.0),
             },
             Term::TmNat
@@ -969,7 +974,6 @@ impl Cache {
 mod tests {
     use super::*;
     use crate::level::Level;
-    use crate::term::CtxBase;
     use crate::term::{GlobalVar, LocalVar, SubstTail};
 
     fn term_use(t: &Rc<Term>) -> LocalUse {
@@ -994,7 +998,7 @@ mod tests {
             term_use(&v(0)),
             LocalUse {
                 bound: 1,
-                has_tail: false,
+                has_wk: false,
                 uses: 1
             }
         );
@@ -1002,7 +1006,7 @@ mod tests {
             term_use(&v(4)),
             LocalUse {
                 bound: 5,
-                has_tail: false,
+                has_wk: false,
                 uses: 1 << 4
             }
         );
@@ -1059,7 +1063,7 @@ mod tests {
             term_use(&lam(v(1))),
             LocalUse {
                 bound: 1,
-                has_tail: false,
+                has_wk: false,
                 uses: 1
             }
         );
@@ -1079,7 +1083,7 @@ mod tests {
             term_use(&elim(v(2))),
             LocalUse {
                 bound: 1,
-                has_tail: false,
+                has_wk: false,
                 uses: 1
             }
         );
@@ -1099,7 +1103,7 @@ mod tests {
             type_use(&wf(v(1))),
             LocalUse {
                 bound: 1,
-                has_tail: false,
+                has_wk: false,
                 uses: 1
             }
         );
@@ -1133,22 +1137,25 @@ mod tests {
     }
 
     #[test]
-    fn global_vars_carry_a_tail() {
-        let g = rt(Term::GlobalTm {
-            var: GlobalVar(0),
-            subst: LocalSubst {
-                tail: SubstTail::Empty {
-                    len: 0,
-                    base: CtxBase::Nil,
-                },
-                terms: vec![v(2)],
-            },
-        });
+    fn only_a_weakening_tail_shows() {
+        let global = |tail| {
+            rt(Term::GlobalTm { var: GlobalVar(0), subst: LocalSubst { tail, terms: vec![v(2)] } })
+        };
+        // The empty tail records nothing: the reference is its payloads.
         assert_eq!(
-            term_use(&g),
+            term_use(&global(SubstTail::Empty)),
             LocalUse {
                 bound: 3,
-                has_tail: true,
+                has_wk: false,
+                uses: 1 << 2
+            }
+        );
+        // A weakening counts the binders it sits under.
+        assert_eq!(
+            term_use(&global(SubstTail::Wk { len: 3, ctx_var: GlobalVar(1) })),
+            LocalUse {
+                bound: 3,
+                has_wk: true,
                 uses: 1 << 2
             }
         );
@@ -1162,7 +1169,7 @@ mod tests {
             term_use(&t),
             LocalUse {
                 bound: 4,
-                has_tail: false,
+                has_wk: false,
                 uses: 1 << 3
             }
         );

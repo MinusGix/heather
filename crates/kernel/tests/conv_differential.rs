@@ -441,7 +441,7 @@ fn global_at(payload: Rc<Term>) -> Rc<Term> {
     Rc::new(Term::GlobalTm {
         var: GlobalVar(0),
         subst: LocalSubst {
-            tail: SubstTail::Empty { len: 1, base: CtxBase::Nil },
+            tail: SubstTail::Empty,
             terms: vec![payload],
         },
     })

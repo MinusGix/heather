@@ -110,7 +110,7 @@ fn glob(var: u32, k: u32) -> Term {
     Term::GlobalTm {
         var: GlobalVar(var),
         subst: LocalSubst {
-            tail: SubstTail::Empty { len: k, base: CtxBase::Nil },
+            tail: SubstTail::Empty,
             terms: vec![],
         },
     }
@@ -642,7 +642,7 @@ fn an_occurrence_that_does_not_fit_its_definition_is_stuck() {
     let g = nil_ctx(0);
     let at = |terms: Vec<Rc<Term>>| Term::GlobalTm {
         var: GlobalVar(0),
-        subst: LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms },
+        subst: LocalSubst { tail: SubstTail::Empty, terms },
     };
     let fits = at(vec![rt(num(7)), rt(num(8)), rt(num(9))]);
     let short = at(vec![rt(num(8)), rt(num(9))]);

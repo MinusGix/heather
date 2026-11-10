@@ -75,6 +75,27 @@ use heather_syntax::{
     OnStmt, OnTarget, ParseError, Ty, TyKind, parse_file,
 };
 
+/// The process allocator for every binary that links the elaborator: the
+/// `heather` CLI and the test and bench binaries that drive it in process.
+///
+/// Checking is allocation-bound. Kernel terms are `Arc` trees built node by
+/// node, substitution rebuilds the spine above every change, and the
+/// elaborator's own tables are maps of small boxed values, so the allocator's
+/// fast path is on every hot loop there is. glibc's `malloc` takes a lock-free
+/// but branchy path per call and returns freed chunks through per-size bins;
+/// a size-segregated thread-local allocator does the same work in a handful
+/// of instructions. Which one matters less than not being glibc's: measured
+/// by preload, mimalloc, jemalloc and tcmalloc land within noise of each
+/// other (issues/global-allocator.md has the table).
+///
+/// It is declared here and not in the kernel: the kernel's dependency list
+/// is an audited minimum (issues/dependency-policy.md), an allocator
+/// implements no judgment, and a kernel linked alone (its own tests and
+/// benches) keeps the system allocator. No `unsafe` is written for it; the
+/// attribute and the crate's safe unit type are the whole integration.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod access;
 mod application;
 pub mod arithmetic;
@@ -115,6 +136,7 @@ mod layered;
 mod names;
 mod oracle;
 mod readback;
+mod refold;
 mod patterns;
 mod pool;
 mod provenance;
@@ -10395,7 +10417,7 @@ impl Elaborator {
         let meta_off = self.scope.meta_pushed.borrow().len() as u32;
         let var = len - 1 - abs + self.global_padding() + meta_off;
         let empty = LocalSubst {
-            tail: SubstTail::Empty { len: cx.gamma.entries.len() as u32, base: cx.gamma.base },
+            tail: SubstTail::Empty,
             terms: vec![],
         };
         let ty = ty.shift_global(var + 1).apply_local(&empty);
@@ -11123,10 +11145,7 @@ impl Elaborator {
                 // The binding is closed (· ⊢), so the delayed substitution
                 // is the empty map out of the current Γ.
                 let subst = LocalSubst {
-                    tail: SubstTail::Empty {
-                        len: cx.gamma.entries.len() as u32,
-                        base: cx.gamma.base,
-                    },
+                    tail: SubstTail::Empty,
                     terms: vec![],
                 };
                 // …and the *type* travels the same way: `T[δ]`, exactly the

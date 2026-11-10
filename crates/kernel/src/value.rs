@@ -51,7 +51,7 @@ use typed_arena::Arena;
 
 use crate::fmt::node;
 use crate::level::Level;
-use crate::term::{Branches, CtxBase, GlobalVar, LocalCtx, Motives, SubstTail, Term, Type};
+use crate::term::{Branches, GlobalVar, LocalCtx, Motives, SubstTail, Term, Type};
 
 pub mod algebra;
 pub mod program;
@@ -1156,15 +1156,15 @@ impl<'v> TmClo<'v> {
     /// The identity of a syntactic closure whose body reads no capture past
     /// its `pending` binders: the body and the global offset it is read at,
     /// whatever the entries. The length stays in it when the body holds a
-    /// substitution tail, which is rewritten by the whole environment's
-    /// length (`bounds.rs`; conversion's `env_identity` reads closures the
-    /// same way). `None` for a body that reads a capture, and for anything
+    /// weakening `wk^k_g`, which counts the whole environment's length
+    /// (`bounds.rs`; conversion's `env_identity` reads closures the same
+    /// way). `None` for a body that reads a capture, and for anything
     /// that is not syntax.
     pub fn closed_ident(&self, pending: u32) -> Option<CloId> {
         let TmClo::Syn { env, body } = self else { return None };
         let used = crate::bounds::term_local_use(body);
         (used.bound <= pending).then(|| {
-            let len = if used.has_tail { env.len() } else { 0 };
+            let len = if used.has_wk { env.len() } else { 0 };
             (Rc::as_ptr(body) as usize, 0, len, env.gshift())
         })
     }
@@ -1250,7 +1250,7 @@ impl<'v> TyClo<'v> {
         if let TyClo::Syn { env, body } = self {
             let used = crate::bounds::type_local_use(body);
             if used.bound <= pending {
-                let len = if used.has_tail { env.len() } else { 0 };
+                let len = if used.has_wk { env.len() } else { 0 };
                 return (Rc::as_ptr(body) as usize, 0, len, env.gshift());
             }
         }
@@ -1270,20 +1270,20 @@ impl<'v> TyClo<'v> {
 // Neutrals
 // ---------------------------------------------------------------------------
 
-/// The tail of a local substitution inside a value: `·_{g?}` or `wk_g`.
+/// The tail of a local substitution inside a value: `·` or `wk_g`.
 ///
-/// The paper's `k` — δ̂, the *source* context's length — is deliberately
-/// **dropped**, and `·`'s base is normalized to the ambient Γ's. Both are
-/// determined by the scope the value lives in, which is common to the two
-/// sides of every comparison; and keeping them would make a value disagree
-/// with its own reduct. The rewriter renormalizes them at every
-/// `apply_local` (`wk^k_g ∘ δ = wk^δ̂_g`, `·^k ∘ δ = ·^δ̂_δ̌`, `subst.rs`),
-/// which is a thing an environment machine — having performed no
-/// substitution — has no opportunity to do.
+/// A weakening's `k` — δ̂, the *source* context's length — is deliberately
+/// **dropped**. It is determined by the scope the value lives in, which is
+/// common to the two sides of every comparison; and keeping it would make a
+/// value disagree with its own reduct. The rewriter renormalizes it at
+/// every `apply_local` (`wk^k_g ∘ δ = wk^δ̂_g`, `subst.rs`), which is a thing
+/// an environment machine — having performed no substitution — has no
+/// opportunity to do. (The syntax's own empty tail records nothing, for the
+/// same reason: `term.rs`, `LocalSubst`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VTail {
-    /// `·^k_{g?}` at the ambient base.
-    Empty(CtxBase),
+    /// `·`.
+    Empty,
     /// `wk^k_g`.
     Wk(GlobalVar),
 }
@@ -1299,15 +1299,13 @@ pub struct VSubst<'v> {
 }
 
 impl VTail {
-    /// The tail of a syntactic substitution, read in a scope whose base is
-    /// `base` and whose pending global offset is `gshift`. See [`VTail`] for
-    /// why `len` and `·`'s base are not carried — `·`'s base is the
-    /// **ambient** one and so needs no offset, while `wk_g`'s context
-    /// variable is read off the syntax and does.
-    pub fn of(tail: SubstTail, base: CtxBase, gshift: u32) -> VTail {
+    /// The tail of a syntactic substitution, read in a scope whose pending
+    /// global offset is `gshift`. See [`VTail`] for why `len` is not carried;
+    /// `wk_g`'s context variable is read off the syntax and takes the offset.
+    pub fn of(tail: SubstTail, gshift: u32) -> VTail {
         match tail {
             SubstTail::Wk { ctx_var, .. } => VTail::Wk(GlobalVar(ctx_var.0 + gshift)),
-            SubstTail::Empty { .. } => VTail::Empty(base),
+            SubstTail::Empty => VTail::Empty,
         }
     }
 }
@@ -1739,9 +1737,10 @@ pub enum Val<'v> {
     /// copy of the recursor and no memo keyed on syntax identity ever hit
     /// twice. Applied to a canonical index over a canonical tuple it selects
     /// the child and fires `elim` on it directly, which is what the λ's body
-    /// reduces to; applied to anything else, and wherever it is inspected
-    /// rather than applied, it is first built as the λ it stands for
-    /// (`Eval::wf_ih_lam`). A strategy change with no semantic content.
+    /// reduces to; applied to anything else it evaluates that body's child
+    /// and eliminates it with the same `elim`, so the recursive call keeps
+    /// the step's closure (`Eval::wf_ih_child`). A strategy change with no
+    /// semantic content.
     WfIh {
         elim: &'v Elim<'v>,
         label: &'v TmClo<'v>,

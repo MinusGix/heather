@@ -106,7 +106,10 @@ fn same_source_elaborates_identically() {
 /// Moved 2026-11-02 by canonical levels (`issues/kernel-compact-level.md`):
 /// every level prints as its normal form, so a `⊔` tree the elaborator built
 /// raw (`(0 ⊔ 0)`, a statement's quadratic join) now prints collapsed.
-const NAT_SUITE_GOLDEN: u64 = 0x35d628263c402e26;
+/// Moved 2026-11-09 by the empty substitution tail recording nothing
+/// (`issues/empty-substitution-tail-decoration.md`): every `u^{·^k}` prints
+/// as `u^{·}`.
+const NAT_SUITE_GOLDEN: u64 = 0x44ff6f5637d805b3;
 
 #[test]
 fn nat_suite_golden_hash() {

@@ -39,6 +39,7 @@ pub fn families() -> Vec<Family> {
         isa_constructor_use(),
         isa_opcode_match(),
         isa_roundtrip(),
+        wide_lemma(),
         enum_equality(),
         record_fields(),
         mutual_declaration(),
@@ -195,6 +196,90 @@ fn isa_roundtrip() -> Family {
         // issues/conv-query-identity-env-per-gamma.md). Small debt.
         expect_slope: Some((0.78, 1.48)),
         cases: sweep("inductive/isa-roundtrip", &[16, 32, 64, 128], src),
+    }
+}
+
+/// A lemma by cases over an `n`-former syntax, the shape a metatheory port
+/// is built of (`issues/wide-inductive-lemma-quadratic-gate.md`): `Tm` with
+/// a variable and `n` formers of arity 0 to 3, some binding; `lift`, a
+/// recursion with one varied and one fixed parameter, one arm per former; a
+/// congruence lemma per arity; and `lift_id`, whose arm per former is that
+/// congruence applied to the recursive calls, against the dependent motive
+/// `t.lift(k, u) = t`. Lower bound: linear in the formers — `n` arms of
+/// constant size, as `lift` itself is.
+///
+/// Recorded first (the issue, CLI at 10/30/90 formers): about quadratic in
+/// the gate, each arm's unfolded `lift` read back as a copy of its whole
+/// case tree. Since the hypothesis is spelled as calls and the kernel keeps
+/// one closure for it: about linear in the gate, with a superlinear
+/// elaboration residue (the unifier's head walk descending the case tree,
+/// `issues/wide-inductive-unifier-case-descent.md`) — slope ~1.2 on the
+/// cloud box; the lemma alone was about quadratic before.
+fn wide_lemma() -> Family {
+    let src = |n: u64| {
+        let n = n as usize;
+        let arity = |i: usize| i % 4;
+        let binds = |i: usize, j: usize| i % 8 == 1 && j == 0;
+        let pat = |i: usize| match arity(i) {
+            0 => format!("C{i}"),
+            a => format!("C{i}({})", (0..a).map(|j| format!("a{j}")).collect::<Vec<_>>().join(", ")),
+        };
+        let k = |i: usize, j: usize| if binds(i, j) { "Succ(k)" } else { "k" };
+        let mut s = String::new();
+        let ctors: Vec<String> = std::iter::once("Bv(index: Nat)".to_string())
+            .chain((0..n).map(|i| match arity(i) {
+                0 => format!("C{i}"),
+                a => format!("C{i}({})", (0..a).map(|j| format!("a{j}: Tm")).collect::<Vec<_>>().join(", ")),
+            }))
+            .collect();
+        s.push_str(&format!("inductive Tm {{ {} }}\n", ctors.join(", ")));
+        let arms: Vec<String> = std::iter::once("Bv(i) => Bv(i)".to_string())
+            .chain((0..n).map(|i| match arity(i) {
+                0 => format!("C{i} => C{i}"),
+                a => format!(
+                    "{} => C{i}({})",
+                    pat(i),
+                    (0..a).map(|j| format!("a{j}.lift({}, u)", k(i, j))).collect::<Vec<_>>().join(", ")
+                ),
+            }))
+            .collect();
+        s.push_str(&format!("fn Tm::lift(self t: Tm, k: Nat, u: Tm) -> Tm {{ match t {{ {} }} }}\n", arms.join(", ")));
+        // One congruence per arity, not one per former: a lemma per former
+        // would measure each former's own mention cost
+        // (issues/wide-inductive-constructor-mention-cost.md), n times over.
+        for a in 1..=3usize {
+            let xs = (0..a).map(|j| format!("x{j}, y{j}")).collect::<Vec<_>>().join(", ");
+            let ps = (0..a).map(|j| format!("p{j}: x{j} = y{j}")).collect::<Vec<_>>().join(", ");
+            let dom = vec!["Tm"; a].join(" → ");
+            let lhs = (0..a).map(|j| format!("x{j}")).collect::<Vec<_>>().join(", ");
+            let rhs = (0..a).map(|j| format!("y{j}")).collect::<Vec<_>>().join(", ");
+            let body = (0..a).rev().fold("refl".to_string(), |b, j| format!("rewrite(p{j}, {b})"));
+            s.push_str(&format!("theorem cong{a}({{{xs}: Tm}}, f: {dom} → Tm, {ps}): f({lhs}) = f({rhs}) {{ {body} }}\n"));
+        }
+        let arms: Vec<String> = std::iter::once("Bv(i) => λ k u => refl".to_string())
+            .chain((0..n).map(|i| match arity(i) {
+                0 => format!("C{i} => λ k u => refl"),
+                a => format!(
+                    "{} => λ k u => cong{a}(λ {} => C{i}({}), {})",
+                    pat(i),
+                    (0..a).map(|j| format!("b{j}")).collect::<Vec<_>>().join(" "),
+                    (0..a).map(|j| format!("b{j}")).collect::<Vec<_>>().join(", "),
+                    (0..a).map(|j| format!("a{j}.lift_id({}, u)", k(i, j))).collect::<Vec<_>>().join(", ")
+                ),
+            }))
+            .collect();
+        s.push_str(&format!(
+            "theorem Tm::lift_id(self t: Tm): (k: Nat, u: Tm) -> t.lift(k, u) = t {{ match t {{ {} }} }}\n",
+            arms.join(", ")
+        ));
+        s
+    };
+    Family {
+        name: "inductive/wide-lemma",
+        what: "a congruence lemma by cases over an n-former syntax, against a dependent motive",
+        unit: "formers",
+        expect_slope: Some((0.88, 1.58)),
+        cases: sweep("inductive/wide-lemma", &[16, 32, 64, 128], src),
     }
 }
 
