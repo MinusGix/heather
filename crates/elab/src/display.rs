@@ -1362,9 +1362,92 @@ impl Speller<'_> {
         }
     }
 
+    /// A function-valued record field applied, `nb.number(a)`
+    /// (issues/omega-applied-field-atom.md): the field read spelled as
+    /// [`Self::field_read`] or a projection call spells it, then its
+    /// arguments. Only when each argument meets an explicit arrow of the
+    /// field's declared type, so the spelling re-elaborates to the same
+    /// spine; an implicit binder, or a type the declaration names through an
+    /// alias, declines (the call then spells as before).
+    fn applied_field(&self, t: &Term, d: u32) -> Option<String> {
+        let (inner, _) = crate::spelling::app_spine(t);
+        let projection = match inner {
+            Term::GlobalTm { var, subst } => {
+                subst.terms.is_empty()
+                    && matches!(self.el.gen_def_of(*var), Some(crate::gendefs::GenDef::RecProj(..)))
+            }
+            _ => crate::spelling::proj_of(inner).is_some(),
+        };
+        if !projection {
+            return None;
+        }
+        let mut args: Vec<&Rc<Term>> = Vec::new();
+        let mut head = t;
+        while let Some((fun, arg)) = crate::spelling::app_of(head) {
+            args.push(arg);
+            head = fun;
+            let Some((receiver, record, idx)) = self.field_head(head) else {
+                continue;
+            };
+            let mut ty = &record.ctors[0].fields.get(idx)?.1;
+            for _ in 0..args.len() {
+                let heather_syntax::TyKind::Fn { implicit: false, cod, .. } = &ty.kind else {
+                    return None;
+                };
+                ty = cod;
+            }
+            let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
+                return None;
+            };
+            // A source spelling is re-elaborated in the consumer's context,
+            // so it takes only a receiver that is a local there
+            // (issues/applied-field-source-spelling-level-mismatch.md).
+            if self.qualified && !matches!(&**receiver, Term::Var(_)) {
+                return None;
+            }
+            let recv = self.tm(receiver, d + 1);
+            // A receiver written with type arguments (`sin<A>`) is no
+            // postfix operand, so only a bare one goes unparenthesised.
+            let bare = (matches!(&**receiver, Term::Var(_) | Term::App { .. } | Term::AppAt { .. })
+                || crate::spelling::proj_of(receiver).is_some())
+                && self.form(receiver).bare_receiver()
+                && !recv.contains('<');
+            let shown = if bare { format!("{recv}.{name}") } else { format!("({recv}).{name}") };
+            let shown_args = args.iter().rev().map(|a| self.tm(a, d + 1)).collect::<Vec<_>>();
+            return Some(format!("{shown}({})", shown_args.join(", ")));
+        }
+        None
+    }
+
+    /// The record and field number a field read `head` names: an inline
+    /// projection walk [`Elaborator::field_read_record`] types, or a
+    /// projection definition applied to its instantiation and receiver.
+    fn field_head<'t>(&self, head: &'t Term) -> Option<(&'t Rc<Term>, Rc<crate::inductive::Inductive>, usize)> {
+        if crate::spelling::proj_of(head).is_some() {
+            if self.binders() != 0 {
+                return None;
+            }
+            return self.el.field_read_record(self.cx, head);
+        }
+        let (inner, args) = crate::spelling::app_spine(head);
+        if let Term::GlobalTm { var, subst } = inner
+            && subst.terms.is_empty()
+            && let Some(crate::gendefs::GenDef::RecProj(tag, field)) = self.el.gen_def_of(*var)
+            && let Some(record) = self.el.types.by_tag(tag)
+            && record.is_record
+            && args.len() == record.params.len() + record.valparams.len() + 1
+        {
+            return Some((args.last()?, Rc::clone(record), field));
+        }
+        None
+    }
+
     fn call(&self, t: &Term, d: u32) -> String {
         if let Some(op) = self.op_form(t) {
             return self.operator(&op, d);
+        }
+        if let Some(shown) = self.applied_field(t, d) {
+            return shown;
         }
         let (head, args) = match self.call_parts(t) {
             Some(parts) => parts,
@@ -1842,6 +1925,19 @@ impl Elaborator {
     /// only a receiver whose head is a variable, a global or another field
     /// read is recognised, and only at `cx`'s own scope.
     pub(crate) fn field_read_parts<'t>(&self, cx: &Cx, t: &'t Term) -> Option<(&'t Rc<Term>, String)> {
+        let (pair, record, idx) = self.field_read_record(cx, t)?;
+        let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
+            return None;
+        };
+        Some((pair, name.clone()))
+    }
+
+    /// [`Self::field_read_parts`]'s receiver, record and field number.
+    pub(crate) fn field_read_record<'t>(
+        &self,
+        cx: &Cx,
+        t: &'t Term,
+    ) -> Option<(&'t Rc<Term>, Rc<crate::inductive::Inductive>, usize)> {
         let (true, mut pair) = crate::spelling::proj_of(t)? else {
             return None;
         };
@@ -1858,10 +1954,8 @@ impl Elaborator {
         let span = heather_syntax::Span { start: 0, end: 0 };
         let ty = self.spine_type(cx, pair, span)?;
         let record = self.record_of_at(cx, &ty, span)?;
-        let (Some(name), _) = record.ctors[0].fields.get(idx)? else {
-            return None;
-        };
-        Some((pair, name.clone()))
+        record.ctors[0].fields.get(idx)?;
+        Some((pair, record, idx))
     }
 
     /// For each of the first `count` parameters of the global at `abs`,

@@ -1,11 +1,11 @@
 ---
 title: omega can't spell an applied function field of a record (nb.number(a))
-status: open
+status: closed
 labels: [omega,proofs,ergonomics]
 area: tactics
 milestone: [none]
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 `omega` fails with "Omega could not spell a natural expression" when a
@@ -34,3 +34,22 @@ display speller does for a field read; key the atom by it.
 
 `field_call_plain` above closes by `omega`, and the four helpers are
 inlined back into `Numbering::spans_distinct`/`spans_apart`/`outside`.
+
+## Resolution (2026-11-10)
+
+`Speller::applied_field` (crates/elab/src/display.rs) spells a
+function-valued field applied as the field read, as `field_read` or a
+projection call spells it, then its arguments: `nb.number(a)`, at an inline
+projection or a projection definition (a record with parameters). It only
+does so when each argument meets an explicit arrow of the field's declared
+type, so the spelling re-elaborates to the same spine; an implicit binder or
+an aliased function type declines. A source spelling takes only a local
+receiver: wider ones reached the kernel at the wrong level
+([[applied-field-source-spelling-level-mismatch]]). Diagnostics spell every
+receiver, so four refusals the kernel used to report (a spelling gap, not a
+skipped check) are now the elaborator's mismatch notes. omega then keys the atom by that
+spelling. `field_call_plain` closes, and `Span::offsets_differ`,
+`disjoint_offsets`, `offset_has` and `offset_below` are gone, inlined into
+`Numbering::spans_distinct`/`spans_apart`/`outside`. Design §21 of
+docs/omega-measure-reduction-design.md; probes and the refused
+`field_call_apart` are in `lib/_tests/std/tactic/omega_tests.hthr`.

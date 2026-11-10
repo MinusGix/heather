@@ -659,9 +659,7 @@ record Numbering<A>(space: Space<A>, top: Nat) {
 theorem Numbering::spans_distinct<A>(space: Space<A>, top: Nat, self nb: Numbering<A>(space, top), a: A, k: Nat,
     fits: nb.number(a) + k <= top): space.Distinct(a, k) {
     λ p q order high => nb.differ(space.offset(a, q), space.offset(a, p), λ same =>
-        Span::offsets_differ(nb.number(a), p, q, nb.number(space.offset(a, q)), nb.number(space.offset(a, p)), order, same,
-            nb.offset(a, q, Span::offset_below(nb.number(a), k, q, top, high, fits)),
-            nb.offset(a, p, Span::offset_below(nb.number(a), k, p, top, Nat::lt_trans(p, q, k, order, high), fits))))
+        omega(order, same, nb.offset(a, q, omega(high, fits)), nb.offset(a, p, omega(order, high, fits))))
 }
 
 // …and two below the top whose numbers' spans are disjoint share no address.
@@ -669,10 +667,10 @@ theorem Numbering::spans_apart<A>(space: Space<A>, top: Nat, self nb: Numbering<
     disjoint: Span(nb.number(a), k).Disjoint(Span(nb.number(b), l)), fa: nb.number(a) + k <= top, fb: nb.number(b) + l <= top):
     space.Apart(a, k, b, l) {
     λ p q in_a in_b => nb.differ(space.offset(a, p), space.offset(b, q), λ same =>
-        Span::disjoint_offsets(nb.number(a), k, nb.number(b), l, disjoint, p, q, in_a, in_b,
-            nb.number(space.offset(a, p)), nb.number(space.offset(b, q)), same,
-            nb.offset(a, p, Span::offset_below(nb.number(a), k, p, top, in_a, fa)),
-            nb.offset(b, q, Span::offset_below(nb.number(b), l, q, top, in_b, fb))))
+        disjoint(nb.number(a) + p, Span(nb.number(a), k).has_intro(nb.number(a) + p, omega(), omega(in_a)),
+            Span(nb.number(b), l).has_intro(nb.number(a) + p,
+                omega(same, nb.offset(a, p, omega(in_a, fa)), nb.offset(b, q, omega(in_b, fb))),
+                omega(same, in_b, nb.offset(a, p, omega(in_a, fa)), nb.offset(b, q, omega(in_b, fb))))))
 }
 
 // An address whose number is outside a span below the top is none of its
@@ -681,8 +679,9 @@ theorem Numbering::spans_apart<A>(space: Space<A>, top: Nat, self nb: Numbering<
 theorem Numbering::outside<A>(space: Space<A>, top: Nat, self nb: Numbering<A>(space, top), a: A, k: Nat, fits: nb.number(a) + k <= top,
     x: A, out: ¬Span(nb.number(a), k).has(nb.number(x)).IsTrue()): (p: Nat) → p < k → space.same(space.offset(a, p), x) = False {
     λ p inside => nb.differ(space.offset(a, p), x, λ same =>
-        out(Span::offset_has(nb.number(a), k, p, nb.number(space.offset(a, p)), nb.number(x), inside,
-            nb.offset(a, p, Span::offset_below(nb.number(a), k, p, top, inside, fits)), same)))
+        out(Span(nb.number(a), k).has_intro(nb.number(x),
+            omega(same, nb.offset(a, p, omega(inside, fits))),
+            omega(inside, same, nb.offset(a, p, omega(inside, fits))))))
 }
 
 fn BitVec::numbering(n: Nat) → Numbering<BitVec(n)>(BitVec::space(n), Nat::pow(2, n)) {

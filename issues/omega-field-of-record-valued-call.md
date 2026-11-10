@@ -1,11 +1,11 @@
 ---
 title: omega reads f(x).field as an atom when f(x) unfolds to a constructor
-status: open
+status: closed
 labels: [omega,proofs,ergonomics]
 area: tactics
 milestone: [none]
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 `omega` reads `f(x).field` as an opaque atom when `f(x)` is a call whose
@@ -34,3 +34,18 @@ component; keep the atom when it does not.
 
 `call_field` closes, and `Span::meet_has`/`split_has` state their
 `Bool::eq_of_is_true_iff` over `has` of the built span.
+
+## Resolution (2026-11-10)
+
+`field_as_put_within` (crates/elab/src/omega_cert.rs) already unfolded the
+receiver to its pair; it gave up when the field put there was itself a read
+off a neutral (`s.take(k).base` is put as `s.base`), because that read
+unfolds no further. Such a read is now the result, and `projection_reduct`
+keeps a field put as a field read, or as an application of one, as the
+atom. The splits' searches (`nat_subtractions`, `int_to_nats`,
+`max_min_reads`) read a field of a call as put too, so `s.take(k).len` is
+`s.len.min(k)` and is split. Design §21 of
+docs/omega-measure-reduction-design.md. `call_field` closes, and
+`Span::split_has`/`meet_has` are stated over `has` of the built span.
+Probes and the refused `call_field_false` are in
+`lib/_tests/std/tactic/omega_tests.hthr`.

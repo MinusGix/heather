@@ -90,33 +90,6 @@ theorem Span::apart_complete(self s, t: Span, d: s.Disjoint(t)): s.apart(t).IsTr
     }
 }
 
-// Offsets into spans, at numbers given as equations (a numbered space's
-// addresses, lib/std/machine/memory.hthr): two offsets into one span
-// differ…
-theorem Span::offsets_differ(base, p, q, u, v: Nat, order: p < q, same: u = v, at_q: u = base + q, at_p: v = base + p): False {
-    omega(order, same, at_q, at_p)
-}
-
-// …as do offsets into two disjoint spans…
-theorem Span::disjoint_offsets(a, k, b, l: Nat, disjoint: Span(a, k).Disjoint(Span(b, l)), p, q: Nat, in_a: p < k, in_b: q < l,
-    u, v: Nat, same: u = v, at_p: u = a + p, at_q: v = b + q): False {
-    let low_a: (a <= a + p) = omega();
-    let high_a: (a + p < a + k) = omega(in_a);
-    let low_b: (b <= a + p) = omega(same, at_p, at_q);
-    let high_b: (a + p < b + l) = omega(same, at_p, at_q, in_b);
-    disjoint(a + p, Span(a, k).has_intro(a + p, low_a, high_a), Span(b, l).has_intro(a + p, low_b, high_b))
-}
-
-// …and an offset into a span is in it, at any number equal to it.
-theorem Span::offset_has(base, k, p, u, v: Nat, inside: p < k, at: u = base + p, same: u = v): Span(base, k).has(v).IsTrue() {
-    let low: (base <= v) = omega(at, same);
-    let high: (v < base + k) = omega(at, same, inside);
-    Span(base, k).has_intro(v, low, high)
-}
-
-// …and an offset into a span below a bound is below it.
-theorem Span::offset_below(base, k, p, top: Nat, inside: p < k, fits: base + k <= top): base + p < top { omega(inside, fits) }
-
 // The shapes clients hold: one span ends before the other starts.
 theorem Span::disjoint_of_before(self s, t: Span, before: s.base + s.len <= t.base): s.Disjoint(t) {
     λ x hs ht => omega(hs, ht, before)
@@ -186,8 +159,7 @@ fn Span::take(self s: Span, k: Nat) → Span { Span(s.base, s.len.min(k)) }
 fn Span::drop(self s: Span, k: Nat) → Span { Span(s.base + s.len.min(k), s.len - k) }
 
 theorem Span::split_has(self s: Span, k, x: Nat): s.has(x) = s.take(k).has(x) || s.drop(k).has(x) {
-    Bool::eq_of_is_true_iff(s.has(x), Span::covers(s.base, s.len.min(k), x) || Span::covers(s.base + s.len.min(k), s.len - k, x),
-        λ h => omega(h), λ h => omega(h))
+    Bool::eq_of_is_true_iff(s.has(x), s.take(k).has(x) || s.drop(k).has(x), λ h => omega(h), λ h => omega(h))
 }
 
 // ---------------------------------------------------------------------------
@@ -197,8 +169,7 @@ theorem Span::split_has(self s: Span, k, x: Nat): s.has(x) = s.take(k).has(x) ||
 fn Span::meet(self s, t: Span) → Span { Span(s.base.max(t.base), (s.base + s.len).min(t.base + t.len) - s.base.max(t.base)) }
 
 theorem Span::meet_has(self s, t: Span, x: Nat): s.meet(t).has(x) = s.has(x) && t.has(x) {
-    Bool::eq_of_is_true_iff(Span::covers(s.base.max(t.base), (s.base + s.len).min(t.base + t.len) - s.base.max(t.base), x), s.has(x) && t.has(x),
-        λ h => omega(h), λ h => omega(h))
+    Bool::eq_of_is_true_iff(s.meet(t).has(x), s.has(x) && t.has(x), λ h => omega(h), λ h => omega(h))
 }
 
 // The points of `s` not in `t`: what lies below `t`, then what lies above.

@@ -112,6 +112,6 @@ fn at_rat_a_law_holds_modulo_same() {
     refused(
         "rat_signs_as_identity",
         "theorem bad(x, y: Rat): -x * -y = x * y { Ring::neg_mul_neg(x, y) }",
-        Refusal::Kernel,
+        Refusal::Mismatch,
     );
 }

@@ -404,3 +404,29 @@ fn word_step_flat(w: Nat, i: Bool, b: Nat) → Nat {
 theorem word_step_flat_counts_at_most_one(w: Nat, i: Bool, b: Nat): word_step_flat(w, i, b) <= w + 1 {
     split_all; all_goals { omega }
 }
+
+// A field of a call put as a read off a neutral record is that read, and a
+// `min`/`max`/subtraction put there is split like a written one
+// (issues/omega-field-of-record-valued-call.md, design §21).
+record Sp { base: Nat, len: Nat }
+fn Sp::take(self s: Sp, k: Nat) → Sp { Sp(s.base, s.len.min(k)) }
+fn Sp::drop(self s: Sp, k: Nat) → Sp { Sp(s.base + s.len.min(k), s.len - k) }
+theorem ctor_field(a, b, x: Nat, h: x < Sp(a, b).base): x < a { omega(h) }
+theorem call_field(s: Sp, k, x: Nat, h: x < s.take(k).base): x < s.base { omega(h) }
+theorem call_field_min(s: Sp, k, x: Nat, h: x < s.take(k).len): x < s.len { omega(h) }
+theorem call_field_sub(s: Sp, k: Nat): s.take(k).len + s.drop(k).len = s.len { omega }
+theorem call_field_int(s: Sp, k: Nat, x: Int, h: x < OfNat(s.take(k).base)): x < OfNat(s.base) + OfNat(1) { omega(h) }
+// expect-error: `omega` got stuck
+theorem call_field_false(s: Sp, k, x: Nat, h: x < s.take(k).len): x < k - 1 { omega(h) }
+
+// A function-valued field applied is one atom, spelled `nb.number(a)`
+// (issues/omega-applied-field-atom.md), at a record with or without
+// parameters, at one argument or several.
+record NumC { number: Nat → Nat }
+theorem field_call_plain(nb: NumC, a, k, top: Nat, h: nb.number(a) + k <= top): nb.number(a) <= top { omega(h) }
+record NumP<A>(top: Nat) { number: A → Nat, two: Nat → Nat → Nat }
+theorem field_call_param(nb: NumP<Bool>(3), a: Bool, k, top: Nat, h: nb.number(a) + k <= top): nb.number(a) <= top { omega(h) }
+theorem field_call_two(nb: NumP<Bool>(3), a, b, top: Nat, h: nb.two(a, b) < top): nb.two(a, b) + 1 <= top { omega(h) }
+// Two arguments are two atoms.
+// expect-error: `omega` got stuck
+theorem field_call_apart(nb: NumC, a, b: Nat): nb.number(a) = nb.number(b) { omega }

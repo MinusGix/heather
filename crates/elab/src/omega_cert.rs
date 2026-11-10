@@ -1363,7 +1363,10 @@ fn projection_reduct(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> O
         // stuck eliminator put there stays behind its projection
         // (issues/omega-nested-projection-of-call.md).
         let (head, _) = app_spine(&field);
-        (matches!(head, Term::Var(_) | Term::GlobalTm { .. }) && nat_term_source(elab, cx, &field).is_ok())
+        ((matches!(head, Term::Var(_) | Term::GlobalTm { .. })
+            || is_field_read(elab, &field)
+            || crate::spelling::proj_of(head).is_some())
+            && nat_term_source(elab, cx, &field).is_ok())
             .then_some(field)
     })
 }
@@ -1425,7 +1428,11 @@ fn field_as_put_within(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) ->
     };
     let field = Rc::new(oracle.bounded(64).whnf_term_opaque(&cx.gamma, &read).ok()?);
     if is_field_read(elab, &field) {
-        return field_as_put_within(elab, cx, &field, depth.checked_sub(1)?);
+        // A field put as a read off a neutral (`s.take(k).base` is put as
+        // `s.base`) is that read: it unfolds no further, and it is the atom
+        // the goal's other mentions of it intern as
+        // (issues/omega-field-of-record-valued-call.md).
+        return field_as_put_within(elab, cx, &field, depth.checked_sub(1)?).or(Some(field));
     }
     Some(field)
 }
@@ -3243,17 +3250,25 @@ const SUB_SPLIT_LIMIT: usize = 6;
 
 /// The truncated subtractions `a - b` at `Nat` that `tm` reads through the
 /// arithmetic around them, outermost first; a binder's body is not entered.
-fn nat_subtractions<'a>(elab: &Elaborator, tm: &'a Rc<Term>, out: &mut Vec<&'a Rc<Term>>) {
+fn nat_subtractions(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<Rc<Term>>) {
     if let Term::Succ(inner) = &**tm {
-        return nat_subtractions(elab, inner, out);
+        return nat_subtractions(elab, cx, inner, out);
     }
     if named_args(elab, tm, "nat::Nat::sub").is_some_and(|args| args.len() == 2) {
-        out.push(tm);
+        out.push(Rc::clone(tm));
+    }
+    // A field of a call is read as what was put there, as reflection reads
+    // it (issues/omega-field-of-record-valued-call.md).
+    if is_field_read(elab, tm) {
+        if let Some(field) = field_as_put(elab, cx, tm) {
+            nat_subtractions(elab, cx, &field, out);
+        }
+        return;
     }
     let (head, args) = app_spine(tm);
     if matches!(head, Term::GlobalTm { .. }) {
         for arg in args {
-            nat_subtractions(elab, arg, out);
+            nat_subtractions(elab, cx, arg, out);
         }
     }
 }
@@ -3273,12 +3288,12 @@ fn split_nat_subtraction(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificat
         let mut found = Vec::new();
         if let Some((_, left, right)) = integral_sides(elab, cx, ty) {
             let mut terms = Vec::new();
-            nat_subtractions(elab, &left, &mut terms);
-            nat_subtractions(elab, &right, &mut terms);
+            nat_subtractions(elab, cx, &left, &mut terms);
+            nat_subtractions(elab, cx, &right, &mut terms);
             found.extend(terms.into_iter().filter_map(|tm| {
-                let args = named_args(elab, tm, "nat::Nat::sub")?;
+                let args = named_args(elab, &tm, "nat::Nat::sub")?;
                 Some((
-                    nat_term_source(elab, cx, tm).ok()?,
+                    nat_term_source(elab, cx, &tm).ok()?,
                     nat_term_source(elab, cx, args[0]).ok()?,
                     nat_term_source(elab, cx, args[1]).ok()?,
                 ))
@@ -3328,20 +3343,28 @@ const TO_NAT_CASE: &str = "__omega_tonat";
 /// The `x.toNat()` reads in `tm`, outermost first, through any application
 /// and an Int constructor's payload (`OfNat(x.toNat())`); a binder's body is
 /// not entered.
-fn int_to_nats<'a>(elab: &Elaborator, tm: &'a Rc<Term>, out: &mut Vec<&'a Rc<Term>>) {
+fn int_to_nats(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<Rc<Term>>) {
     if let Term::Succ(inner) = &**tm {
-        return int_to_nats(elab, inner, out);
+        return int_to_nats(elab, cx, inner, out);
     }
     if let Some((_, inner)) = int_ctor_payload(elab, tm) {
-        return int_to_nats(elab, inner, out);
+        return int_to_nats(elab, cx, inner, out);
     }
     if named_args(elab, tm, "int::Int::toNat").is_some_and(|args| args.len() == 1) {
-        out.push(tm);
+        out.push(Rc::clone(tm));
+    }
+    // A field of a call is read as what was put there, as reflection reads
+    // it (issues/omega-field-of-record-valued-call.md).
+    if is_field_read(elab, tm) {
+        if let Some(field) = field_as_put(elab, cx, tm) {
+            int_to_nats(elab, cx, &field, out);
+        }
+        return;
     }
     let (head, args) = app_spine(tm);
     if !matches!(head, Term::Lam { .. }) {
         for arg in args {
-            int_to_nats(elab, arg, out);
+            int_to_nats(elab, cx, arg, out);
         }
     }
 }
@@ -3360,11 +3383,11 @@ fn split_int_to_nat(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
         let mut found = Vec::new();
         if let Some((_, left, right)) = integral_sides(elab, cx, ty) {
             let mut terms = Vec::new();
-            int_to_nats(elab, &left, &mut terms);
-            int_to_nats(elab, &right, &mut terms);
+            int_to_nats(elab, cx, &left, &mut terms);
+            int_to_nats(elab, cx, &right, &mut terms);
             found.extend(terms.into_iter().filter_map(|tm| {
-                let args = named_args(elab, tm, "int::Int::toNat")?;
-                Some((nat_term_source(elab, cx, tm).ok()?, int_term_source(elab, cx, args[0]).ok()?))
+                let args = named_args(elab, &tm, "int::Int::toNat")?;
+                Some((nat_term_source(elab, cx, &tm).ok()?, int_term_source(elab, cx, args[0]).ok()?))
             }));
         }
         found
@@ -3419,23 +3442,32 @@ const MAX_MIN_READS: [(&str, bool, &str); 4] = [
 /// The `max`/`min` reads in `tm` (each with its `MAX_MIN_READS` row),
 /// outermost first, through any application and an Int constructor's payload;
 /// a binder's body is not entered.
-fn max_min_reads<'a>(elab: &Elaborator, tm: &'a Rc<Term>, out: &mut Vec<(&'a Rc<Term>, usize)>) {
+fn max_min_reads(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<(Rc<Term>, usize)>) {
     if let Term::Succ(inner) = &**tm {
-        return max_min_reads(elab, inner, out);
+        return max_min_reads(elab, cx, inner, out);
     }
     if let Some((_, inner)) = int_ctor_payload(elab, tm) {
-        return max_min_reads(elab, inner, out);
+        return max_min_reads(elab, cx, inner, out);
     }
     if let Some(row) = MAX_MIN_READS
         .iter()
         .position(|(name, _, _)| named_args(elab, tm, name).is_some_and(|args| args.len() == 2))
     {
-        out.push((tm, row));
+        out.push((Rc::clone(tm), row));
+    }
+    // A field of a call is reflected as what was put there (`s.take(k).len`
+    // is `s.len.min(k)`), so a read put there is split like a written one
+    // (issues/omega-field-of-record-valued-call.md).
+    if is_field_read(elab, tm) {
+        if let Some(field) = field_as_put(elab, cx, tm) {
+            max_min_reads(elab, cx, &field, out);
+        }
+        return;
     }
     let (head, args) = app_spine(tm);
     if !matches!(head, Term::Lam { .. }) {
         for arg in args {
-            max_min_reads(elab, arg, out);
+            max_min_reads(elab, cx, arg, out);
         }
     }
 }
@@ -3453,13 +3485,13 @@ fn split_max_min(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, Stri
         let mut found = Vec::new();
         if let Some((_, left, right)) = integral_sides(elab, cx, ty) {
             let mut terms = Vec::new();
-            max_min_reads(elab, &left, &mut terms);
-            max_min_reads(elab, &right, &mut terms);
+            max_min_reads(elab, cx, &left, &mut terms);
+            max_min_reads(elab, cx, &right, &mut terms);
             found.extend(terms.into_iter().filter_map(|(tm, row)| {
                 let (name, int, _) = MAX_MIN_READS[row];
-                let args = named_args(elab, tm, name)?;
+                let args = named_args(elab, &tm, name)?;
                 let spell = |tm: &Rc<Term>| if int { int_term_source(elab, cx, tm) } else { nat_term_source(elab, cx, tm) };
-                Some((spell(tm).ok()?, row, spell(args[0]).ok()?, spell(args[1]).ok()?))
+                Some((spell(&tm).ok()?, row, spell(args[0]).ok()?, spell(args[1]).ok()?))
             }));
         }
         found

@@ -239,7 +239,9 @@ fn a_law_field_does_not_prove_a_different_equation() {
         {{ RpV().Cons_abs(a0, a1, h0) }}
         "#
     ));
-    assert!(e.contains("wrong"), "{e}");
+    // Reported at the law, whose applied fields spell
+    // (issues/omega-applied-field-atom.md).
+    assert!(e.contains("is expected here") && e.contains("Cons(a0, Nil)"), "{e}");
 }
 
 // A field of the *right shape* at the wrong index is still rejected: `Nil_abs`
