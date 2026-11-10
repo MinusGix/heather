@@ -781,3 +781,48 @@ A mismatch between `Other(x)` and `Other(y)` printed `Other` twice and fell
 through to the kernel ("a type that displays the same"); it now reads "this
 has type `Other(y)`, but `Other(x)` is expected here". The arm accepts the
 same spelling on both sides only, since step 2's walk is syntactic.
+
+### 10.4 Miller patterns and a pattern-side accessor (2026-11-10)
+
+A record type's function-valued parameter is read back from its fields'
+types, where the fields apply it to their own binders: `C(a)` in
+`record R<P>(C: P → Type, …) { f: (a: P, k: C(a)) → … }` is the pattern
+`?C(a)`, the meta applied to a binder the walk entered. A neutral family
+(`C`) or a declaration applied to the binder (`Big(a)`) meets it through the
+application congruence, which takes the first-order `?C := Big`. A constant
+family does not: at `λ a => Bool` the application has reduced away and the
+subject is `Bool`, which nothing aligned with an applied meta
+(`issues/implicit-constant-family-record-parameter.md`).
+
+Such a pattern, its arguments distinct binders the walk entered and its head
+an open slot under the weakened identity, is a Miller pattern, and
+`unify_tm` now solves it by abstraction: `?C := λ ȳ. s[x̄ := ȳ]`, written
+only when `s` mentions no other entered binder (two markers in place of the
+others give the same term), the binders annotated from the slot's declared
+type (`U::slot_type`, its earlier slots zonked) and the solution held to that
+type by `admit` as every write is. It fires where the congruence would not
+align the spine: a subject that is no application, one that mentions none
+of the entered binders (a constant family's value, where the alignment
+would pair `a` with an argument of the value: `?C := List` from
+`List(Nat)`), or a spine the flex-head guard refuses (`?in(a)` against
+`x.In(a)`, whose leading `x` is a value). A spine the congruence aligns keeps
+its first-order solution, so no caller is given a different spelling than
+before. In `unify_ty`, `El(?C(x̄))` against a type former meets the former's
+code; the re-spelling arm below it could only take a former that mentions
+none of the entered binders, and would then align first-order.
+
+The second refusal the issue's library case hit was one layer over. The
+fields read `ax` only through another record's field, `(ax(a, k)).has(c)`,
+which the declaration spells as the accessor call `Opens::has<P>(ax(a, k))`
+while the argument's type arrived with the accessor unfolded,
+`fst@(RealAxiom::open(a, k))`. The δ-lazy order steps only the subject; a
+call in the pattern against a projection in the subject now unfolds the
+pattern's head constant (`U::unfold_constant`; a constant of Σ is spelled
+the same in the scratch world and the committed one, so its body needs no
+rescoping), and the β-redex it leaves meets the projection again.
+
+Probes: `lib/_tests/lang/implicit_family_tests.hthr` (a literal family, one
+whose value is an application, a type variable, a dependent former, a
+definition applied to a value first, the accessor, the neutral and declared
+families that already worked, and a family applied to a non-binder, still
+refused).

@@ -214,12 +214,12 @@ multiplication need the product locale first
 Little: the modules were written against the `Cover` family and the frame
 classes as they are. Three things were worked around and filed.
 
-- **An implicit that is a constant family is not inferred** from a record
-  type whose fields apply it (`issues/implicit-constant-family-record-parameter.md`).
-  `FormalPoint<QInterval>(…, λ a => RealAxiom, …)` has `C(a)` reduced away in
-  its field types, so `C`, and `ax` whose type mentions it, cannot be read
-  back. `FormalPoint::point` and its theorems take the presentation
-  explicitly, as `Cover::trans` does.
+- **An implicit that is a constant family was not inferred** from a record
+  type whose fields apply it (`issues/implicit-constant-family-record-parameter.md`,
+  since fixed). `FormalPoint<QInterval>(…, λ a => RealAxiom, …)` has `C(a)`
+  reduced away in its field types; the unifier now solves the Miller pattern
+  `?C(a)` by abstraction (`docs/unifier-completeness-design.md` §10.4), and
+  `FormalPoint::point` and its theorems take the presentation implicitly.
 - **`linarith` at `Rat` without `ordered_field` imported** reads the goal at
   `Int`, through numerators and denominators, and fails with that reading
   (`issues/linarith-rat-without-ordered-field-import.md`).
