@@ -2006,7 +2006,7 @@ inductive W : (n: Nat) -> Type {
         // what every consumer's `found.tag != ind.tag` check turns into a
         // rejection.
         let w_fam =
-            t.el.gen_ref(&t.cx, GenDef::Fam(t.w.tag))
+            t.el.gen_ref(GenDef::Fam(t.w.tag))
                 .expect("W has a family definition");
         let (ind, _) =
             t.el.indexed_of(&with_head(&ty, w_fam))
@@ -2023,7 +2023,7 @@ inductive W : (n: Nat) -> Type {
         // registry the way a user `fn` is: identity is the Ψ index, not the
         // body, so the copy is not `V`.
         let r =
-            t.el.gen_ref(&t.cx, GenDef::Fam(t.v.tag))
+            t.el.gen_ref(GenDef::Fam(t.v.tag))
                 .expect("V has a family definition");
         let Term::GlobalTm { var, .. } = &r else {
             panic!("a reference is a global")
@@ -2038,10 +2038,7 @@ inductive W : (n: Nat) -> Type {
         let dup = Term::GlobalTm {
             var: GlobalVar(t.el.global_padding()),
             subst: LocalSubst {
-                tail: SubstTail::Empty {
-                    len: 0,
-                    base: CtxBase::Nil,
-                },
+                tail: SubstTail::Empty,
                 terms: vec![],
             },
         };
@@ -2073,7 +2070,7 @@ inductive Pv<A> : (n: Nat) -> Type {
                 .expect("declared"),
         );
         let cx = Cx::empty();
-        assert!(el.gen_ref(&cx, GenDef::Fam(p.tag)).is_none());
+        assert!(el.gen_ref(GenDef::Fam(p.tag)).is_none());
         let (pty, _) = el
             .lower_indexed_instance(&cx, &p, &[(Type::Nat, Level::Zero)], Term::Zero, SPAN)
             .expect("the parameterized family lowers");

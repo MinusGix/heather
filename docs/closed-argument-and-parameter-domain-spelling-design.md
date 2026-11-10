@@ -153,6 +153,12 @@ Both comparisons `instance_match` performs learn it, at one node each:
   whole job is to catch a wrongly-framed copy. One walk, two uses, and the
   see-through arms the match needed are exactly the ones the proof is allowed.
 
+> **Amended 2026-11-09, §3.** The `strict` flag is gone. A closed global's
+> empty substitution records nothing, so there is no frame for a copy to be
+> wrongly in and no tail for the two readings to differ on; step 2 is the
+> same walk with no holes and nothing else
+> (`issues/empty-substitution-tail-decoration.md`).
+
 > **Amended 2026-09-15 (implementation), §3.** `see_through` is
 > `Elaborator::unspell_here_in(T, g)` and not `unspell_here(T)` — the same
 > function with the scratch anchor carried rather than assumed.

@@ -320,7 +320,7 @@ impl<'v, 'g> Readback<'v, 'g> {
                             terms.push(Rc::new(self.val(t)?));
                         }
                         let tail = match subst.tail {
-                            VTail::Empty(base) => SubstTail::Empty { len: self.len, base },
+                            VTail::Empty => SubstTail::Empty,
                             VTail::Wk(ctx_var) => SubstTail::Wk { len: self.len, ctx_var },
                         };
                         Term::GlobalTm { var: *var, subst: LocalSubst { tail, terms } }
@@ -801,7 +801,7 @@ mod tests {
                 fun: Rc::new(Term::GlobalTm {
                     var: GlobalVar(0),
                     subst: LocalSubst {
-                        tail: heather_kernel::term::SubstTail::Empty { len: 1, base: heather_kernel::term::CtxBase::Nil },
+                        tail: heather_kernel::term::SubstTail::Empty,
                         terms: vec![],
                     },
                 }),

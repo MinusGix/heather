@@ -1729,11 +1729,23 @@ impl crate::syntax_eq::SharedEq for CtxEntries {
 
 impl Eq for CtxEntries {}
 
-/// Local substitutions `δ := ·^k_{g?} | wk^k_g | δ, t/x`.
+/// Local substitutions `δ := · | wk^k_g | δ, t/x`.
 ///
 /// The tail is the paper's `·^k_{g?}` / `wk^k_g`; `terms[0]` substitutes the
-/// *outermost* entry of the target context Δ. The query operations δ̂ and δ̌
-/// (used by composition) read the tail's length and base.
+/// *outermost* entry of the target context Δ.
+///
+/// **The empty tail carries nothing** (DESIGN.md §Representation, "The
+/// empty substitution is `·`"). The paper decorates it with the length and
+/// the base of the context it is read in, `·^k_{g?}`, so that the queries δ̂
+/// and δ̌ are total. No operation reads either off an empty tail except to
+/// copy it into another empty tail, and typing pins both to the position
+/// (`Γ ⊢ ·^k_{g?} : ·` demands `k = |Γ|` and Γ's base). Only `wk^k_g` is
+/// consumed: when a global substitution replaces `g` by a concrete context,
+/// the weakening expands to that context's variables, counted from `k`; and
+/// a composition `wk_g ∘ δ` is well-scoped only when δ's own tail is `wk_g`,
+/// so δ̂ is read off a weakening whenever it is read. Leaving the decoration
+/// out makes a term that reads no local variable the same syntax in every
+/// context, at every binder depth.
 #[derive(Clone, Eq)]
 pub struct LocalSubst {
     pub tail: SubstTail,
@@ -1742,28 +1754,23 @@ pub struct LocalSubst {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubstTail {
-    /// `·^k_{g?}`: targets the empty context from a source context of length
-    /// `len` ending in `base` (δ̂ = len, δ̌ = base).
-    Empty { len: u32, base: CtxBase },
+    /// `·`: targets the empty context, from any source. The paper's
+    /// `·^k_{g?}` without its decoration: see [`LocalSubst`].
+    Empty,
     /// `wk^k_g`: targets `g` from a source of length `len` ending in `g`.
     Wk { len: u32, ctx_var: GlobalVar },
 }
 
 impl LocalSubst {
-    /// δ̂ — length of the source context recorded in the tail.
-    pub fn source_len(&self) -> u32 {
+    /// δ̂ — length of the source context, where the tail records it: a
+    /// weakening's. `None` for an empty tail.
+    pub fn wk_len(&self) -> Option<u32> {
         match self.tail {
-            SubstTail::Empty { len, .. } | SubstTail::Wk { len, .. } => len,
+            SubstTail::Empty => None,
+            SubstTail::Wk { len, .. } => Some(len),
         }
     }
 
-    /// δ̌ — base of the source context recorded in the tail.
-    pub fn source_base(&self) -> CtxBase {
-        match self.tail {
-            SubstTail::Empty { base, .. } => base,
-            SubstTail::Wk { ctx_var, .. } => CtxBase::Var(ctx_var),
-        }
-    }
 }
 
 /// Global bindings `B` making up the global context Ψ.

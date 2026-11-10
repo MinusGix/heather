@@ -670,10 +670,7 @@ fn gen_wt_type_at(env: &WtEnv, r: &mut Rng, b: u32, level: &Level) -> Option<Rc<
 /// some entry type cannot be inhabited.
 pub fn gen_wt_subst(env: &WtEnv, r: &mut Rng, b: u32, target: &LocalCtx) -> Option<LocalSubst> {
     let tail = match target.base {
-        CtxBase::Nil => SubstTail::Empty {
-            len: env.gamma.entries.len() as u32,
-            base: env.gamma.base,
-        },
+        CtxBase::Nil => SubstTail::Empty,
         CtxBase::Var(g) => {
             if env.gamma.base != CtxBase::Var(g) {
                 return None;

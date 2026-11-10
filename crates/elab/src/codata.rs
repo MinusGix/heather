@@ -334,7 +334,7 @@ impl MParts {
     }
 
     fn inline(&self, el: &Elaborator) -> Option<&Rc<MSig>> {
-        self.inline.get_or_init(|| el.m_sig_inline(&self.sig, &self.g)).as_ref()
+        self.inline.get_or_init(|| el.m_sig_inline(&self.sig)).as_ref()
     }
 
     /// `S` at `j` inline, for the spine.
@@ -995,7 +995,7 @@ impl Elaborator {
             return;
         }
         // `El(D#mshape ā i)` over `(tel, i)`.
-        let Some(s_ref) = self.m_ref_app(&cx, GenDef::MShape(ind.tag), &tel_vars, 1) else {
+        let Some(s_ref) = self.m_ref_app(GenDef::MShape(ind.tag), &tel_vars, 1) else {
             return;
         };
         let s_ty = Rc::new(Type::El { level: ls.clone(), tm: s_ref });
@@ -1024,8 +1024,8 @@ impl Elaborator {
         // `El(D#mshape ā i)` and `El(D#mpos ā i s)` over `(tel, i)` and `(tel,
         // i, s)`, both minted now.
         let (Some(s_ref), Some(p_ref)) = (
-            self.m_ref_app(&cx, GenDef::MShape(ind.tag), &tel_vars, 1),
-            self.m_ref_app(&cx, GenDef::MPos(ind.tag), &tel_vars, 2),
+            self.m_ref_app(GenDef::MShape(ind.tag), &tel_vars, 1),
+            self.m_ref_app(GenDef::MPos(ind.tag), &tel_vars, 2),
         ) else {
             return;
         };
@@ -1089,8 +1089,8 @@ impl Elaborator {
 
     /// `app(key^δ; tel, x₁, …, x_k)` `k` binders past `cx`, the binders
     /// applied in order (`tel` is scoped in `cx`).
-    pub(crate) fn m_ref_app(&self, cx: &Cx, key: GenDef, tel: &[Rc<Term>], k: u32) -> Option<Rc<Term>> {
-        let mut t = Rc::new(self.gen_ref_deeper(cx, key, k)?);
+    pub(crate) fn m_ref_app(&self, key: GenDef, tel: &[Rc<Term>], k: u32) -> Option<Rc<Term>> {
+        let mut t = Rc::new(self.gen_ref(key)?);
         for a in tel {
             t = app_at(t, Rc::new(a.shift_local(k)));
         }
@@ -1132,12 +1132,12 @@ impl Elaborator {
             return Ok(None);
         };
         let (Some(shape), Some(pos)) =
-            (self.m_ref_app(cx, shape_key, &tel, 1), self.m_ref_app(cx, GenDef::MPos(ind.tag), &tel, 2))
+            (self.m_ref_app(shape_key, &tel, 1), self.m_ref_app(GenDef::MPos(ind.tag), &tel, 2))
         else {
             return Ok(None);
         };
         let (ity, li, next) = if indexed {
-            let Some(next) = self.m_ref_app(cx, GenDef::MNext(ind.tag), &tel, 3) else {
+            let Some(next) = self.m_ref_app(GenDef::MNext(ind.tag), &tel, 3) else {
                 return Ok(None);
             };
             let (ity, li) = self.codata_index_ty(cx, ind, args, vargs, span)?;
@@ -1160,23 +1160,22 @@ impl Elaborator {
     /// itself when it is inline. `g` is the context the signature is scoped
     /// in. `None` only for a named signature whose definitions do not unfold,
     /// which no lowering writes.
-    pub(crate) fn m_sig_inline(&self, sig: &Rc<MSig>, g: &LocalCtx) -> Option<Rc<MSig>> {
+    pub(crate) fn m_sig_inline(&self, sig: &Rc<MSig>) -> Option<Rc<MSig>> {
         let Type::El { tm, .. } = &*sig.shape else {
             return Some(Rc::clone(sig));
         };
         let Some((GenDef::MShape(tag), args)) = self.gen_app_of(tm) else {
             return Some(Rc::clone(sig));
         };
-        let len = g.entries.len() as u32;
-        let shape = self.unfold_gen_app(GenDef::MShape(tag), &args, len + 1, g.base)?;
+        let shape = self.unfold_gen_app(GenDef::MShape(tag), &args)?;
         let Type::El { tm: ptm, .. } = &*sig.pos else {
             return None;
         };
         let (_, pargs) = self.gen_app_of(ptm)?;
-        let pos = self.unfold_gen_app(GenDef::MPos(tag), &pargs, len + 2, g.base)?;
+        let pos = self.unfold_gen_app(GenDef::MPos(tag), &pargs)?;
         let next = match self.gen_app_of(&sig.next) {
             Some((GenDef::MNext(t), nargs)) if t == tag => {
-                Rc::new(self.unfold_gen_app(GenDef::MNext(tag), &nargs, len + 3, g.base)?)
+                Rc::new(self.unfold_gen_app(GenDef::MNext(tag), &nargs)?)
             }
             _ => Rc::clone(&sig.next),
         };
@@ -3047,7 +3046,7 @@ impl Elaborator {
         // the case tree itself.
         let top = match self.gen_app_of(idx) {
             Some((GenDef::MNext(tag), args)) => self
-                .unfold_gen_app(GenDef::MNext(tag), &args, cx.gamma.entries.len() as u32, cx.gamma.base)
+                .unfold_gen_app(GenDef::MNext(tag), &args)
                 .map(Rc::new),
             _ => None,
         };

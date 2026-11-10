@@ -413,13 +413,13 @@ fn local_substitutions() {
     // δ = (·⁰, 0/x) : (·, x : Nat @ 0) from Γ = ·.
     let target = ext(&nil_ctx(), Type::Nat, Level::Zero);
     let delta = LocalSubst {
-        tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+        tail: SubstTail::Empty,
         terms: vec![rt(Term::Zero)],
     };
     check_local_subst(&psi, 0, Layer::Prog, &nil_ctx(), &delta, &target, FUEL).unwrap();
     // Entry count mismatch.
     let short = LocalSubst {
-        tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+        tail: SubstTail::Empty,
         terms: vec![],
     };
     assert_eq!(
@@ -427,13 +427,15 @@ fn local_substitutions() {
             .unwrap_err(),
         TypeError::SubstMismatch
     );
-    // Tail records the wrong source length.
-    let bad_len = LocalSubst {
-        tail: SubstTail::Empty { len: 3, base: CtxBase::Nil },
+    // The wrong tail for the target's base: a weakening cannot cover the
+    // empty base. (The empty tail itself records nothing to get wrong:
+    // DESIGN.md §Representation, "The empty substitution is `·`".)
+    let bad_base = LocalSubst {
+        tail: SubstTail::Wk { len: 0, ctx_var: GlobalVar(0) },
         terms: vec![rt(Term::Zero)],
     };
     assert_eq!(
-        check_local_subst(&psi, 0, Layer::Prog, &nil_ctx(), &bad_len, &target, FUEL)
+        check_local_subst(&psi, 0, Layer::Prog, &nil_ctx(), &bad_base, &target, FUEL)
             .unwrap_err(),
         TypeError::SubstMismatch
     );
@@ -446,7 +448,7 @@ fn local_substitutions() {
     );
     let gamma = ext(&nil_ctx(), Type::Nat, Level::Zero);
     let var_delta = LocalSubst {
-        tail: SubstTail::Empty { len: 1, base: CtxBase::Nil },
+        tail: SubstTail::Empty,
         terms: vec![rt(v(0))],
     };
     check_local_subst(&psi, 0, Layer::Var, &gamma, &var_delta, &target, FUEL).unwrap();
@@ -518,7 +520,7 @@ fn letbox_term() {
     // bound code back in via the global variable.
     let body = Term::GlobalTm {
         var: GlobalVar(0),
-        subst: LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms: vec![] },
+        subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] },
     };
     let t = Term::LetBoxTm {
         motive_level: Level::Zero,

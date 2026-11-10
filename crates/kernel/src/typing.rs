@@ -109,7 +109,7 @@
 //!   So `--timings` counts and `OutOfFuel` verdicts stay functions of the
 //!   input, at any worker count.
 //! - **Strengthened scopes** (issues/indexed-family-recursion-gate-cost.md).
-//!   A node that is free of substitution tails and reads only Γ's innermost
+//!   A node that holds no weakening tail `wk^k_g` and reads only Γ's innermost
 //!   `k ≤ STRENGTHEN_MAX` entries, whose own types stay inside those `k`, is
 //!   judged by those entries alone; the rules read nothing else of Γ. Its
 //!   scope then names the `k` entries (types by identity, levels by value,
@@ -130,7 +130,7 @@
 //!   so debug and release builds count alike.
 //! - **Locally closed types are kept apart from Γ** ([`TyScope`],
 //!   `issues/mutual-group-recursion-gate-cost.md`). A type with no free
-//!   local variable and no local substitution tail
+//!   local variable and no weakening tail `wk^k_g`
 //!   (`bounds::type_locally_closed`) reads nothing of Γ but its base, by
 //!   weakening and strengthening, so its level is kept under a key that
 //!   drops Γ's identity and keeps the rest of [`Scope`]. The case on a sum
@@ -147,11 +147,11 @@
 //!   signature is kept the same way ([`SigScope`]), so a locally closed
 //!   family's signature is judged once per base context however many
 //!   binders its occurrences sit under.
-//! - **So are conversions between closed sides** ([`ClosedSide`],
+//! - **So are conversions between closed sides** ([`closed_side`],
 //!   `issues/iwf-shape-spine-comb-depth.md`). A conversion whose two sides
-//!   read nothing of Γ but its base (locally closed types, global references
-//!   at the empty substitution out of Γ, sums of those) is kept under the
-//!   cross-head memo's key less Γ's identity. A type spelled by its
+//!   read nothing of Γ but its base (locally closed types, which a global
+//!   reference at the empty substitution is) is kept under the cross-head
+//!   memo's key less Γ's identity. A type spelled by its
 //!   registered code, `El(D#tycode^δ)`, against its inline lowering is the
 //!   case: a structural recursion's case tree met it once per node, each
 //!   under one more binder, and each decoded the code and walked the sum.
@@ -1089,12 +1089,12 @@ impl Env {
 
 /// Ψ-lookup: 0 is innermost; the result is scoped over its *prefix* of Ψ —
 /// callers shift by `v + 1`.
-/// Whether `delta` is the identity on its source: every entry the variable
-/// that names it (`LocalSubst::id`'s expansion), as many as the source has.
+/// Whether `delta` is the identity on a source of as many entries as it has
+/// terms: every entry the variable that names it (`LocalSubst::id`'s
+/// expansion). The caller holds the count to the source's.
 fn is_identity(delta: &LocalSubst) -> bool {
     let m = delta.terms.len();
-    m as u32 == delta.source_len()
-        && delta.terms.iter().enumerate().all(|(k, t)| matches!(&**t, Term::Var(v) if v.0 as usize == m - 1 - k))
+    delta.terms.iter().enumerate().all(|(k, t)| matches!(&**t, Term::Var(v) if v.0 as usize == m - 1 - k))
 }
 
 fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
@@ -1115,10 +1115,10 @@ struct Tc {
     /// they identify, so allocator reuse cannot create an aliasing key.
     conv_memo: RefCell<HashMap<ConvMemoBucket, Vec<ConvMemo>>>,
     conv_memo_entries: Cell<usize>,
-    /// Successful conversions of two [`ClosedSide`]s, kept apart from Γ
+    /// Successful conversions of two [`closed_side`]s, kept apart from Γ
     /// (module docs, §The typing memo): the same pair met under another
     /// binder is the same judgment.
-    closed_convs: RefCell<HashMap<ClosedConvBucket, Vec<(ClosedSide, ClosedSide, Level)>>>,
+    closed_convs: RefCell<HashMap<ClosedConvBucket, Vec<(Type, Type, Level)>>>,
     /// The typing memo (module docs, §The typing memo): per node and scope,
     /// for this gate.
     judged: RefCell<PtrMap<Scope, Judged>>,
@@ -1271,51 +1271,13 @@ struct ConvMemo {
 }
 
 /// One side of a conversion that reads nothing of Γ but its base: a locally
-/// closed type (`bounds::type_locally_closed`), a global reference at the
-/// empty substitution out of Γ, `U^δ` or `El^l(u^δ)` with `δ = ·^|Γ|`, or a
-/// sum of those. Every binder rewrites such a reference's tail, so no two
-/// occurrences under different binders share a spelling, but each denotes
-/// the same type: the weakening of the one at `·`. A sum binds nothing, so
-/// its summands are read in the same Γ. Kept by value: a closed type's `==`
-/// stops at its first shared child.
-#[derive(Clone, PartialEq)]
-enum ClosedSide {
-    Ty(Type),
-    Global(GlobalVar),
-    El(Level, GlobalVar),
-    Sum(Level, Level, Box<ClosedSide>, Box<ClosedSide>),
-}
-
-impl ClosedSide {
-    fn of(env: &Env, t: &Type) -> Option<ClosedSide> {
-        let out_of_gamma = |s: &LocalSubst| {
-            s.terms.is_empty()
-                && s.tail == SubstTail::Empty { len: env.gamma.entries.len() as u32, base: env.gamma.base }
-        };
-        match t {
-            Type::GlobalTy { var, subst } if out_of_gamma(subst) => return Some(ClosedSide::Global(*var)),
-            Type::El { level, tm } => {
-                if let Term::GlobalTm { var, subst } = &**tm
-                    && out_of_gamma(subst)
-                {
-                    return Some(ClosedSide::El(level.clone(), *var));
-                }
-            }
-            _ => {}
-        }
-        if crate::bounds::type_ref_locally_closed(t) {
-            return Some(ClosedSide::Ty(t.clone()));
-        }
-        match t {
-            Type::Sum { lhs_level, rhs_level, lhs, rhs } => Some(ClosedSide::Sum(
-                lhs_level.clone(),
-                rhs_level.clone(),
-                Box::new(ClosedSide::of(env, lhs)?),
-                Box::new(ClosedSide::of(env, rhs)?),
-            )),
-            _ => None,
-        }
-    }
+/// closed type (`bounds::type_locally_closed`). A reference to Ψ at the
+/// empty substitution is one, `U^·` or `El^l(u^·)`, and so is a sum of
+/// those: an empty tail records no length (`term.rs`, `LocalSubst`), so the
+/// occurrences under different binders are one spelling. Kept by value: a
+/// closed type's `==` stops at its first shared child.
+fn closed_side(t: &Type) -> Option<Type> {
+    crate::bounds::type_ref_locally_closed(t).then(|| t.clone())
 }
 
 /// A [`Tc::closed_convs`] bucket: [`ConvMemoBucket`]'s, less Γ's identity,
@@ -1879,7 +1841,7 @@ impl Tc {
             crate::stats::conv_memo_hits(1);
             return Ok(());
         }
-        let closed = match (ClosedSide::of(env, expected), ClosedSide::of(env, inferred)) {
+        let closed = match (closed_side(expected), closed_side(inferred)) {
             (Some(a), Some(b)) => Some((
                 ClosedConvBucket {
                     expected: expected_head,
@@ -2408,16 +2370,13 @@ impl Tc {
     /// is presupposed well-formed, so its entry types are not re-checked —
     /// only the substituted terms are.
     fn subst_ck(&self, env: &Env, delta: &LocalSubst, target: &LocalCtx) -> R {
-        // The tail covers Δ's base and must record Γ's exact shape.
-        let src_len = env.gamma.entries.len() as u32;
+        // The tail covers Δ's base: the empty tail the empty base, from any
+        // Γ, and a weakening `wk^k_g` the base `g`, from a Γ of length `k`
+        // over the same `g`.
         match (target.base, delta.tail) {
-            (CtxBase::Nil, SubstTail::Empty { len, base }) => {
-                if len != src_len || base != env.gamma.base {
-                    return Err(TypeError::SubstMismatch);
-                }
-            }
+            (CtxBase::Nil, SubstTail::Empty) => {}
             (CtxBase::Var(g), SubstTail::Wk { len, ctx_var }) => {
-                if len != src_len || ctx_var != g || env.gamma.base != CtxBase::Var(g) {
+                if len != env.gamma.entries.len() as u32 || ctx_var != g || env.gamma.base != CtxBase::Var(g) {
                     return Err(TypeError::SubstMismatch);
                 }
             }
@@ -2846,9 +2805,9 @@ impl Tc {
     }
 
     /// The scope `t` is judged in when only Γ's innermost entries can
-    /// matter (§The typing memo): `t` is free of substitution tails and its
-    /// free locals are the innermost `k`, and those `k` entries' types are
-    /// tail-free and scoped within the `k` themselves. Then every rule
+    /// matter (§The typing memo): `t` holds no weakening tail and its
+    /// free locals are the innermost `k`, and those `k` entries' types hold
+    /// none either and are scoped within the `k` themselves. Then every rule
     /// judging `t` reads those entries and nothing else of Γ, so the
     /// judgment is the same in any Γ that ends in them. The key is the
     /// entries' types by identity and their levels, interned; `None` when
@@ -2856,14 +2815,14 @@ impl Tc {
     fn strengthened(&self, env: &Env, t: &Rc<Term>) -> Option<(Scope, u32)> {
         let u = crate::bounds::scope_term_use(t);
         let k = u.bound;
-        if u.has_tail || k > STRENGTHEN_MAX || k as usize > env.gamma.entries.len() {
+        if u.has_wk || k > STRENGTHEN_MAX || k as usize > env.gamma.entries.len() {
             return None;
         }
         let mut entries: [Option<&CtxEntry>; STRENGTHEN_MAX as usize] = [None; STRENGTHEN_MAX as usize];
         for j in 0..k {
             let e = env.gamma.entries.nth_inner(j)?;
             let eu = crate::bounds::scope_type_use(&e.ty);
-            if eu.has_tail || eu.bound + j + 1 > k {
+            if eu.has_wk || eu.bound + j + 1 > k {
                 return None;
             }
             entries[j as usize] = Some(e);
@@ -2899,7 +2858,7 @@ impl Tc {
         let strong = self.strengthened(env, t).filter(|(_, k)| {
             ty.as_syn().is_some_and(|e| {
                 let u = crate::bounds::scope_type_ref_use(e);
-                !u.has_tail && u.bound <= *k
+                !u.has_wk && u.bound <= *k
             })
         });
         let scope = strong.map_or_else(|| Scope::of(env, t), |(s, _)| s);
@@ -3157,7 +3116,7 @@ impl Tc {
             Some((s, k))
                 if judged.0.as_syn().is_some_and(|ty| {
                     let u = crate::bounds::scope_type_ref_use(ty);
-                    !u.has_tail && u.bound <= k
+                    !u.has_wk && u.bound <= k
                 }) =>
             {
                 s
@@ -5123,7 +5082,7 @@ mod memo_tests {
             tm: Rc::new(Term::GlobalTm {
                 var: GlobalVar(v),
                 subst: LocalSubst {
-                    tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+                    tail: SubstTail::Empty,
                     terms: vec![],
                 },
             }),
@@ -5146,7 +5105,7 @@ mod memo_tests {
         Term::GlobalTm {
             var: GlobalVar(v),
             subst: LocalSubst {
-                tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+                tail: SubstTail::Empty,
                 terms: vec![],
             },
         }

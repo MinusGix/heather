@@ -74,7 +74,7 @@ fn fst(p: Term) -> Term {
 fn glob(var: u32, k: u32) -> Term {
     Term::GlobalTm {
         var: GlobalVar(var),
-        subst: LocalSubst { tail: SubstTail::Empty { len: k, base: CtxBase::Nil }, terms: vec![] },
+        subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] },
     }
 }
 

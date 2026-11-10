@@ -1236,7 +1236,7 @@ impl<'a, 'v> Eval<'a, 'v> {
         for t in &d.terms {
             terms.push(self.eval_tm(t, env)?);
         }
-        Ok(VSubst { tail: VTail::of(d.tail, self.base, env.gshift()), terms })
+        Ok(VSubst { tail: VTail::of(d.tail, env.gshift()), terms })
     }
 
     // -- terms --------------------------------------------------------------
@@ -1995,7 +1995,7 @@ impl<'a, 'v> Eval<'a, 'v> {
     ///
     /// That environment is δ's payload values alone: `wk^k_g` maps the
     /// abstract prefix of Δ to the abstract prefix of Γ identically, and
-    /// `·^k_{g?}` targets an empty Δ, so past the payloads the lookup falls
+    /// `·_{g?}` targets an empty Δ, so past the payloads the lookup falls
     /// through to the same [`Head::BaseVar`] numbering either way.
     /// `u^δ` alone, glued to its body when it has one: what evaluating
     /// `Term::GlobalTm` produces, for a reader that holds the head of a

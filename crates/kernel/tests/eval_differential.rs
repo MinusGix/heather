@@ -420,10 +420,10 @@ impl<'a, 'v> Agree<'a, 'v> {
 
     /// `δ ⊩ δ'` — pairwise on the step terms over identical tails.
     fn subst(&mut self, a: &VSubst<'v>, b: &LocalSubst, gamma: &LocalCtx, depth: u32) -> A {
-        // The value's tail drops δ̂ and normalizes `·`'s base, because a
-        // machine that substitutes nothing cannot renormalize them; see
-        // [`VTail`]. Everything the tail still distinguishes is compared.
-        if a.tail != VTail::of(b.tail, gamma.base, 0) || a.terms.len() != b.terms.len() {
+        // The value's tail drops a weakening's δ̂, because a machine that
+        // substitutes nothing cannot renormalize it; see [`VTail`].
+        // Everything the tail still distinguishes is compared.
+        if a.tail != VTail::of(b.tail, 0) || a.terms.len() != b.terms.len() {
             return bad("δ tail/arity");
         }
         if depth == 0 {
@@ -1470,7 +1470,7 @@ fn stream5_definitions_and_delta_payloads() {
             let u = Rc::new(Term::GlobalTm {
                 var: GlobalVar(0),
                 subst: LocalSubst {
-                    tail: SubstTail::Empty { len: 1, base: CtxBase::Nil },
+                    tail: SubstTail::Empty,
                     terms: vec![Rc::clone(payload)],
                 },
             });
@@ -1567,7 +1567,7 @@ fn a_withheld_call_at_a_lazily_stuck_closed_argument_is_glued() {
     let global = |v: u32| {
         Rc::new(Term::GlobalTm {
             var: GlobalVar(v),
-            subst: LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms: vec![] },
+            subst: LocalSubst { tail: SubstTail::Empty, terms: vec![] },
         })
     };
     // Ψ = two := 2, w := λ n. n — `w` withheld until one argument.
@@ -1638,7 +1638,7 @@ fn a_failed_thunk_is_not_poisoned() {
     let u = Rc::new(Term::GlobalTm {
         var: GlobalVar(0),
         subst: LocalSubst {
-            tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+            tail: SubstTail::Empty,
             terms: vec![Rc::new(Term::Zero)],
         },
     });
@@ -1804,7 +1804,7 @@ fn zero_fuel_reduces_nothing() {
 /// body below names its predecessor under.
 fn chain_delta_subst(arg: Rc<Term>) -> LocalSubst {
     LocalSubst {
-        tail: SubstTail::Empty { len: 1, base: CtxBase::Nil },
+        tail: SubstTail::Empty,
         terms: vec![arg],
     }
 }

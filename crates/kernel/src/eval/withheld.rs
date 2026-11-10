@@ -208,8 +208,8 @@ fn parts<'v>(v: &'v Val<'v>, work: &mut Vec<Item<'v>>) -> bool {
 fn binder<'v>(c: &'v TmClo<'v>, pending: u32, work: &mut Vec<Item<'v>>) -> bool {
     match c {
         TmClo::Syn { env, body } => {
-            // Every `u^δ` carries a substitution tail, so `has_tail` is no
-            // sign of a variable: an `·^k` tail reads none. A `wk_g` tail
+            // Every `u^δ` carries a substitution tail, so a tail is no sign
+            // of a variable: an empty tail reads none. A `wk_g` tail
             // reads a context variable's prefix, which an elaborator's Γ
             // (based at `·`) does not have.
             let used = crate::bounds::term_local_use(body);

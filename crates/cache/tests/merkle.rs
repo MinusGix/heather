@@ -36,7 +36,7 @@ fn prefix(n: usize) -> Vec<Option<Hash>> {
 }
 
 fn id_subst() -> LocalSubst {
-    LocalSubst { tail: SubstTail::Empty { len: 0, base: CtxBase::Nil }, terms: Vec::new() }
+    LocalSubst { tail: SubstTail::Empty, terms: Vec::new() }
 }
 
 fn global_tm(k: u32) -> Term {
@@ -47,7 +47,7 @@ fn global_ty(k: u32) -> Type {
     Type::GlobalTy { var: GlobalVar(k), subst: id_subst() }
 }
 
-/// The five places a `GlobalVar` occurs in `crates/kernel/src/term.rs`, each as
+/// The four places a `GlobalVar` occurs in `crates/kernel/src/term.rs`, each as
 /// a term mentioning binding `k` and nothing else global.
 ///
 /// If a sixth site is ever added to the kernel, the walker's exhaustive
@@ -76,16 +76,6 @@ fn every_reference_site(k: u32) -> Vec<(&'static str, Term)> {
             Term::GlobalTm {
                 var: GlobalVar(0),
                 subst: LocalSubst { tail: SubstTail::Wk { len: 0, ctx_var: g }, terms: Vec::new() },
-            },
-        ),
-        (
-            "SubstTail::Empty's base",
-            Term::GlobalTm {
-                var: GlobalVar(0),
-                subst: LocalSubst {
-                    tail: SubstTail::Empty { len: 0, base: CtxBase::Var(g) },
-                    terms: Vec::new(),
-                },
             },
         ),
     ]
@@ -466,7 +456,7 @@ fn distinct_structures_hash_distinctly() {
     let lv = Level::Var(UnivVar(0));
 
     let subst_with = |terms: Vec<Rc<Term>>| LocalSubst {
-        tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+        tail: SubstTail::Empty,
         terms,
     };
     let ctx_with = |entries: Vec<CtxEntry>| LocalCtx::from_vec(CtxBase::Nil, entries);
@@ -518,18 +508,8 @@ fn distinct_structures_hash_distinctly() {
             "capp (Nat, Nat)",
             Term::CtxApp { fun: zero(), ctx: ctx_with(vec![entry(nat()), entry(nat())]) },
         ),
-        // Substitution tails: three more shapes over the same numbers
-        // (`·^0` itself is `u0^{}` above).
-        (
-            "tail ·^0_g1",
-            Term::GlobalTm {
-                var: GlobalVar(0),
-                subst: LocalSubst {
-                    tail: SubstTail::Empty { len: 0, base: CtxBase::Var(GlobalVar(1)) },
-                    terms: vec![],
-                },
-            },
-        ),
+        // Substitution tails: the weakening, over the same numbers (the
+        // empty tail is `u0^{}` above, and records nothing more).
         (
             "tail wk^0_g1",
             Term::GlobalTm {
@@ -541,11 +521,11 @@ fn distinct_structures_hash_distinctly() {
             },
         ),
         (
-            "tail ·^1",
+            "tail wk^1_g1",
             Term::GlobalTm {
                 var: GlobalVar(0),
                 subst: LocalSubst {
-                    tail: SubstTail::Empty { len: 1, base: CtxBase::Nil },
+                    tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar(1) },
                     terms: vec![],
                 },
             },

@@ -1544,10 +1544,7 @@ pub(crate) fn zonked_tm(t: &Term, n: u32, sols: &[Sol]) -> Option<Term> {
 fn drop_binders(gamma: &LocalCtx, d: u32) -> LocalSubst {
     let m = gamma.entries.len() as u32;
     let tail = match gamma.base {
-        CtxBase::Nil => SubstTail::Empty {
-            len: m,
-            base: CtxBase::Nil,
-        },
+        CtxBase::Nil => SubstTail::Empty,
         CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
     };
     let terms = (0..m)
@@ -1586,10 +1583,7 @@ pub(crate) fn strengthen_tm(gamma: &LocalCtx, t: &Term, d: u32) -> Option<Term> 
 /// that held `Var(d)`, so the substituted term equals the original exactly
 /// when `d` never occurred.
 pub(crate) fn mentions_binder(t: &Type, m: u32, d: u32) -> bool {
-    let tail = SubstTail::Empty {
-        len: m,
-        base: CtxBase::Nil,
-    };
+    let tail = SubstTail::Empty;
     let terms = (0..m)
         .map(|k| {
             let idx = m - 1 - k;
@@ -1618,10 +1612,7 @@ pub(crate) fn strengthen_ty(gamma: &LocalCtx, t: &Type, d: u32) -> Option<Type> 
 pub(crate) fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
     let m = gamma.entries.len() as u32;
     let tail = match gamma.base {
-        CtxBase::Nil => SubstTail::Empty {
-            len: m + extra,
-            base: CtxBase::Nil,
-        },
+        CtxBase::Nil => SubstTail::Empty,
         CtxBase::Var(g) => SubstTail::Wk {
             len: m + extra,
             ctx_var: g,
