@@ -1844,11 +1844,14 @@ fn index_value(t: Term) -> Term {
 
 /// Whether `t` reads neither a local variable nor a global: a literal, which
 /// also spells the signature it indexes, so a motive does not abstract it.
-/// A reference to a definition is not one. (The test was `t.shift_local(1)
-/// == t` while an empty substitution tail recorded the depth, which made a
-/// weakening change every global reference.)
+/// A reference to a definition is not one, and no shift can tell: a
+/// committed definition is a constant, which no weakening moves
+/// ([`crate::gendefs::names_global`]). (The test was `t.shift_local(1) == t`
+/// while an empty substitution tail recorded the depth, then that and
+/// `t.shift_global(1) == t`, which stopped seeing a definition on
+/// 2026-11-10: `issues/literal-guards-read-constants-as-closed.md`.)
 fn literal_closed(t: &Term) -> bool {
-    t.shift_local(1) == *t && t.shift_global(1) == *t
+    t.shift_local(1) == *t && !crate::gendefs::names_global(t)
 }
 
 #[cfg(test)]

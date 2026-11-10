@@ -58,3 +58,27 @@ theorem pack_pieces_disjoint(sizes: List<Nat>, base, b, c, k, l: Nat, fb: sizes.
     Span::packed(base, sizes, b, k).Disjoint(Span::packed(base, sizes, c, l)) {
     Span::packed_disjoint(base, sizes, b, k, c, l, fb, fc, ne)
 }
+
+// Endpoint relations are found, not cited (issues/span-footprint-automation.md):
+// a premise asked for with `:= infer` is answered by the search rules
+// `Span::disjoint_by_ends`/`within_by_ends`, whose `omega` reads the
+// asker's hypotheses. A closed pair, an open pair at constructed spans, an
+// open pair at span variables, and negative controls.
+theorem needs_disjoint(s, t: Span, d: s.Disjoint(t) := infer): s.Disjoint(t) { d }
+theorem needs_within(s, t: Span, w: s.Within(t) := infer): s.Within(t) { w }
+
+theorem found_closed(): Span(0, 4).Disjoint(Span(4, 2)) { needs_disjoint(Span(0, 4), Span(4, 2)) }
+theorem found_open(a, k, b, l: Nat, below: a + k <= b): Span(a, k).Disjoint(Span(b, l)) { needs_disjoint(Span(a, k), Span(b, l)) }
+theorem found_open_after(a, k, b, l: Nat, above: b + l <= a): Span(a, k).Disjoint(Span(b, l)) { needs_disjoint(Span(a, k), Span(b, l)) }
+theorem found_empty(a, b, l: Nat): Span(a, 0).Disjoint(Span(b, l)) { needs_disjoint(Span(a, 0), Span(b, l)) }
+theorem found_variables(s, t: Span, below: s.base + s.len <= t.base): s.Disjoint(t) { needs_disjoint(s, t) }
+theorem found_within(a, k, b, l: Nat, low: b <= a, high: a + k <= b + l): Span(a, k).Within(Span(b, l)) { needs_within(Span(a, k), Span(b, l)) }
+theorem found_within_closed(): Span(5, 2).Within(Span(4, 4)) { needs_within(Span(5, 2), Span(4, 4)) }
+
+// An overlap is not found: the verdict is false and omega cannot prove it.
+// expect-error: no instance for
+theorem not_found_overlap(a, k: Nat, ne: 0 < k): Span(a, k + 1).Disjoint(Span(a + k, 1)) { needs_disjoint(Span(a, k + 1), Span(a + k, 1)) }
+
+// Without a hypothesis the order of two open spans is unknown.
+// expect-error: no instance for
+theorem not_found_unordered(a, b: Nat): Span(a, 1).Disjoint(Span(b, 1)) { needs_disjoint(Span(a, 1), Span(b, 1)) }

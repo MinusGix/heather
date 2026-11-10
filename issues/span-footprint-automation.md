@@ -1,11 +1,11 @@
 ---
 title: Decide span footprints by sets and search endpoint relations
-status: open
+status: closed
 labels: [sets,memory,tactics,native]
 area: tactics
 milestone: [hih-memory-model]
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 Address footprints are values since [[address-interval-sets]]
@@ -52,3 +52,19 @@ found without naming `apart_sound`.
   is `within_sound(…, by sets())` in
   `lib/_tests/std/tactic/set_tactic_tests.hthr` (`span_footprint_within`).
   Part 2 (endpoint relations as searched facts) stays open.
+- 2026-11-10: part 2 done; closed. Search rules (`h: … := omega`,
+  docs/facts-on-demand-design.md §3) produce the endpoint relations:
+  `Span::disjoint_by_ends`/`within_by_ends` (span_set.hthr) answer a
+  `s.Disjoint(t) := infer`/`s.Within(t) := infer` premise by the verdict and
+  `omega` over the asker's hypotheses; `BitVec::space_distinct_by_ends`,
+  `space_apart_by_ends` and `Nat::space_apart_by_ends` (memory.hthr) answer
+  `Distinct`/`Apart` in the two numbered spaces by the numbers' verdict and
+  the fits below the top, and `Nat::space_distinct_always` is a plain rule.
+  Probes (closed, open at constructed spans and at span variables, a literal
+  width, negative controls for an overlap, an unknown order and a missing
+  fit) in `lib/_tests/std/data/set/span_set_tests.hthr` and
+  `lib/_tests/std/machine/memory_tests.hthr`. Not done: a generic rule over
+  any `Numbering` (the numbering is not in the goal, so a rule cannot find
+  it); spans whose endpoints are a call's fields
+  (`layout.buffer_span(b, cap)`) still need hypotheses spelled at those
+  atoms until [[omega-field-of-record-valued-call]].
