@@ -14,7 +14,6 @@
 import bitvec; import bitvec_rotate; import bool; import list; import logic; import nat; import option;
 import sha2;
 
-
 // SHA256("abc")
 fn sha256_abc_message() → List<BitVec(8)> { [0x61, 0x62, 0x63] }
 fn sha256_abc_block() → List<BitVec(32)> {

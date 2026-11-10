@@ -5,7 +5,8 @@ use crate::support;
 // module holds the lowering and its theorem; the fixture lowers add64, sum4,
 // mix and a comparison by evaluation, instantiates the theorem for each, and
 // keeps the refusal controls (a clobbering placement, a cleared operand, a
-// shift, a narrow width).
+// narrow port, a narrow signed comparison) beside a region that computes at
+// 32 bits between 64-bit ports.
 const FUNCTION_IR_LOWER: &str = include_str!("../../../lib/native/function_ir/function_ir_lower.hthr");
 const EXAMPLES: &str = include_str!("fixtures/function_ir_lower_examples.hthr");
 
@@ -29,6 +30,9 @@ fn verified_lowering_checks_and_lowers_the_examples() {
         })
         .collect();
     modules.push(("x86_64_kept", include_str!("../../../lib/std/arch/x86_64/x86_64_kept.hthr")));
+    // What the lowering's narrow widths read.
+    modules.push(("bitvec_nat", include_str!("../../../lib/std/bitvec/bitvec_nat.hthr")));
+    modules.push(("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")));
     modules.push(("function_ir_lower", FUNCTION_IR_LOWER));
     let mut elaborator = support::semantic_test_base(&modules);
     if let Err(error) = elaborator.elab_module_source("function_ir_lower_examples", EXAMPLES) {

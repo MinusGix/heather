@@ -240,7 +240,7 @@ import sha2;
 
 
 def render():
-    parts = [HEADER]
+    parts = [HEADER.rstrip("\n")]
     parts.append(vector(SHA256, "abc", b"abc", '"abc"'))
     parts.append(vector(SHA512, "abc", b"abc", '"abc"'))
     parts.append(padding(SHA256))
