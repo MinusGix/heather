@@ -14,3 +14,4 @@ native/emit-extends	only	lib/native/native_compile_correct.hthr	Stmt::emit_exten
 x86/moves-spills	only	lib/std/arch/x86_64/x86_64_stack_runs.hthr	Site::moves_spills		the heaviest x86 machine item: omega over stack layouts
 tactic/attempt-from	only	lib/std/tactic/tactic.hthr	attempt_from		one kernel check of hundreds of thousands of conversion queries
 algebra/pos-of-mul-pos-nonneg	only	lib/std/algebra/ordered_field.hthr	OrderedField::pos_of_mul_pos_nonneg		class-carrier lemma whose cost is projection_subst in the elaborator
+lexer/scan-choose-link	only	lib/lang/lexer/lexer_scan.hthr	scan_choose		a runtime fn linking two dozen callees: the generator and the linking proof, which must follow the count of callees and not their code

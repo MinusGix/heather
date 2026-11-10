@@ -378,6 +378,15 @@ theorem Bool::is_true_and_intro(self a: Bool): (b: Bool) → a.IsTrue() → b.Is
     }
 }
 
+// A conjunction with one side weakened.
+theorem Bool::and_left_map(a, b, c: Bool, f: a.IsTrue() → c.IsTrue()): (a && b).IsTrue() → (c && b).IsTrue() {
+    λ ok => Bool::is_true_and_intro(c, b, f(Bool::is_true_and(a, b, ok).left), Bool::is_true_and(a, b, ok).right)
+}
+
+theorem Bool::and_right_map(a, b, c: Bool, f: b.IsTrue() → c.IsTrue()): (a && b).IsTrue() → (a && c).IsTrue() {
+    λ ok => Bool::is_true_and_intro(a, c, Bool::is_true_and(a, b, ok).left, f(Bool::is_true_and(a, b, ok).right))
+}
+
 theorem Bool::is_true_not(self b: Bool): b.not().IsTrue() → ¬b.IsTrue() {
     match b {
         False => λ h p => p,

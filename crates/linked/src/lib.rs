@@ -77,56 +77,11 @@ mod exports {
     linked!("sha256_t1.s");
     linked!("sha256_t2.s");
     linked!("sha256_next.s");
-    linked!("scan_family.s");
+    // The scanner's automaton is one file: `scan_step` and, inside the
+    // same certified program, every function it calls (`scanner`'s comment).
+    linked!("scan_step.s");
     linked!("scan_accept.s");
     linked!("scan_begin.s");
-
-    // The scanner's state families (`scanner`'s comment): each is one file
-    // and one function of a state and a byte, and `FAMILIES` holds them in
-    // the order written here, which is `scan_families`' in
-    // `lib/lang/lexer/lexer_scan.hthr` (the test `the_table_is_the_modules`
-    // reads that list from the source).
-    macro_rules! families {
-        ($($name:ident),* $(,)?) => {
-            $(
-                core::arch::global_asm!(
-                    ".pushsection .text",
-                    include_str!(concat!("../generated/", stringify!($name), ".s")),
-                    ".popsection",
-                    options(raw)
-                );
-            )*
-            unsafe extern "sysv64" {
-                $( pub safe fn $name(state: u64, byte: u64) -> u64; )*
-            }
-            pub static FAMILIES: &[(&str, extern "sysv64" fn(u64, u64) -> u64)] = &[ $( (stringify!($name), $name) ),* ];
-        };
-    }
-    families!(
-        step_stop,
-        step_start_space,
-        step_start_punct,
-        step_start_mid,
-        step_start_high,
-        step_trivia,
-        step_names,
-        step_arrows,
-        step_doubles,
-        step_decimal,
-        step_fraction,
-        step_octal,
-        step_binary,
-        step_hex,
-        step_hex_fraction,
-        step_hex_exponent,
-        step_string,
-        step_char,
-        step_char_escape,
-        step_two_byte,
-        step_three_byte,
-        step_symbols,
-        step_logic,
-    );
 
     // The functions are declared `safe` on the strength of their
     // certificates (the crate's comment): the unproved part is the
@@ -139,8 +94,8 @@ mod exports {
         pub safe fn sha256_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
         pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
         pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-        // The scanner's automaton around its families (`scanner`).
-        pub safe fn scan_family(state: u64, byte: u64) -> u64;
+        // The scanner's automaton (`scanner`).
+        pub safe fn scan_step(state: u64, byte: u64) -> u64;
         pub safe fn scan_accept(state: u64) -> u64;
         pub safe fn scan_begin(previous: u64) -> u64;
     }

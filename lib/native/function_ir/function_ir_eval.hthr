@@ -1101,6 +1101,39 @@ theorem Function::relabel_eval(self function: Function, call: Answers(), links: 
     function.body.relabel_eval(call, links, bound, bound, λ w id => refl, 64, function.result)
 }
 
+// Renamed calls fit wherever the renaming carries every arity over: what a
+// linked function's calls are checked by, from the check its own code had
+// against its own table, with nothing read off the code again
+// (issues/runtime-generator-program-size.md).
+theorem StructuredRegion::relabel_calls_fit(self region: StructuredRegion, links: Nat → Nat, arity, other: Nat → Option<Nat>,
+    carried: (k: Nat) → (n: Nat) → arity_fits(arity(k), n).IsTrue() → arity_fits(other(links(k)), n).IsTrue()):
+    region.calls_fit(arity).IsTrue() → region.relabel(links).calls_fit(other).IsTrue() {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(_, continuation) => λ ok => continuation.relabel_calls_fit(links, arity, other, carried, ok),
+        Compose(prefix, continuation) => λ ok => {
+            let parts = Bool::is_true_and(prefix.calls_fit(arity), continuation.calls_fit(arity), ok);
+            Bool::is_true_and_intro(prefix.relabel(links).calls_fit(other), continuation.relabel(links).calls_fit(other),
+                prefix.relabel_calls_fit(links, arity, other, carried, parts.left),
+                continuation.relabel_calls_fit(links, arity, other, carried, parts.right))
+        },
+        Conditional(_, _, _, _, when_true, when_false) => λ ok => {
+            let arms = Bool::is_true_and(when_true.calls_fit(arity), when_false.calls_fit(arity), ok);
+            Bool::is_true_and_intro(when_true.relabel(links).calls_fit(other), when_false.relabel(links).calls_fit(other),
+                when_true.relabel_calls_fit(links, arity, other, carried, arms.left),
+                when_false.relabel_calls_fit(links, arity, other, carried, arms.right))
+        },
+        Call(callee, arguments, _) => λ ok => carried(callee, arguments.len(), ok),
+        Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.relabel_calls_fit(links, arity, other, carried, ok),
+    }
+}
+
+theorem Function::relabel_calls_fit(self function: Function, links: Nat → Nat, arity, other: Nat → Option<Nat>,
+    carried: (k: Nat) → (n: Nat) → arity_fits(arity(k), n).IsTrue() → arity_fits(other(links(k)), n).IsTrue(),
+    ok: function.calls_fit(arity).IsTrue()): function.relabel(links).calls_fit(other).IsTrue() {
+    function.body.relabel_calls_fit(links, arity, other, carried, ok)
+}
+
 // ---------------------------------------------------------------------------
 // A function at a time. The compiler proves each function of a program
 // against a `sources` that answers every call with the callee's source
@@ -1159,6 +1192,55 @@ theorem program_fit_sources(functions: List<Function>, ok: program_calls_fit(fun
                 Inl(e) => λ fits => trans(last.eval_answers(sources, program_eval(earlier), program_arity(earlier), ih, parts.left, words),
                     j(sym(e), λ g _ => last.eval(sources, words) = sources(g, words),
                         sourced.left(words, sym(last.parameters.len().matches_eq(words.len(), fits))))),
+                Inr(_) => λ fits => ih(f, words, fits),
+            })
+        },
+    }
+}
+
+// The same for a program put together from functions checked one by one:
+// `arities` says how many words each function takes (the last function's
+// first, as `functions`), and each function's calls fit *that* table and
+// its agreement is at *that* count. Nothing here reads a parameter list, so
+// checking a link never forces a function's code: `program_arity` would,
+// at every callee (issues/runtime-generator-program-size.md).
+fn linked_arity(functions: List<Function>, arities: List<Nat>) → Nat → Option<Nat> {
+    match functions {
+        Nil => λ _ => None,
+        Cons(_, earlier) => λ f => match f.eq_dec(earlier.len()) {
+            Inl(_) => arities.nth(0),
+            Inr(_) => linked_arity(earlier, arities.tail(), f),
+        },
+    }
+}
+
+fn program_linked(functions: List<Function>, arities: List<Nat>, sources: Answers()) → Type {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) =>
+            (last.calls_fit(linked_arity(earlier, arities.tail())).IsTrue()
+                ∧ ((words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() →
+                    last.eval(sources, words) = sources(earlier.len(), words)))
+            ∧ program_linked(earlier, arities.tail(), sources),
+    }
+}
+
+theorem program_linked_sources(functions: List<Function>): (arities: List<Nat>) → (sources: Answers()) →
+    program_linked(functions, arities, sources) →
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue() →
+        program_eval(functions, f, words) = sources(f, words) {
+    match functions {
+        Nil => λ arities sources linked f words never => false_elim(never),
+        Cons(last, earlier) => λ arities sources linked f words => {
+            let ih = program_linked_sources(earlier, arities.tail(), sources, linked.right);
+            (match f.eq_dec(earlier.len()) as λ d =>
+                arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), f) },
+                    words.len()).IsTrue() →
+                (match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }) =
+                    sources(f, words) {
+                Inl(e) => λ fits => trans(
+                    last.eval_answers(sources, program_eval(earlier), linked_arity(earlier, arities.tail()), ih, linked.left.left, words),
+                    j(sym(e), λ g _ => last.eval(sources, words) = sources(g, words), linked.left.right(words, fits))),
                 Inr(_) => λ fits => ih(f, words, fits),
             })
         },
@@ -1231,47 +1313,39 @@ theorem program_eval_computes(functions: List<Function>, ok: program_evaluable(f
 // it), and their marks are joined after; a loop's body and a function's body start from their parameters alone. That
 // is `evaluable`'s condition read the other way round (nothing earlier
 // mentions an id written later), so `scan` accepts what `evaluable` does,
-// in one pass, each mark set or tested in time linear in its id;
-// `program_scan_evaluable` proves it implies `evaluable`, and the x86
-// certificate checks `program_scan` by evaluation and cites that theorem.
+// in one pass; `program_scan_at_evaluable` proves it implies `evaluable`, and
+// the x86 certificate checks `program_scan_at` by evaluation and cites that
+// theorem. What a mark costs is the marks' (`Marks`): one comparison under
+// a bound, or time linear in the id over the bitmap.
 
-// Ids as a bitmap: entry `k` says whether id `k` is marked.
-fn marks_has(marks: List<Bool>, id: Nat) → Bool {
-    match marks { Nil => False, Cons(here, rest) => match id { Zero => here, Succ(k) => marks_has(rest, k) } }
+// A set of ids as a bitmap: entry `k` says whether id `k` is in it.
+fn bits_has(marks: List<Bool>, id: Nat) → Bool {
+    match marks { Nil => False, Cons(here, rest) => match id { Zero => here, Succ(k) => bits_has(rest, k) } }
 }
 
-fn marks_add(marks: List<Bool>, id: Nat) → List<Bool> {
+fn bits_add(marks: List<Bool>, id: Nat) → List<Bool> {
     match id {
         Zero => match marks { Nil => [True], Cons(_, rest) => Cons(True, rest) },
-        Succ(k) => match marks { Nil => Cons(False, marks_add([], k)), Cons(here, rest) => Cons(here, marks_add(rest, k)) },
+        Succ(k) => match marks { Nil => Cons(False, bits_add([], k)), Cons(here, rest) => Cons(here, bits_add(rest, k)) },
     }
 }
 
-fn marks_add_all(marks: List<Bool>, ids: List<Nat>) → List<Bool> {
-    match ids { Nil => marks, Cons(id, rest) => marks_add_all(marks_add(marks, id), rest) }
-}
-
-fn marks_union(a, b: List<Bool>) → List<Bool> {
+fn bits_union(a, b: List<Bool>) → List<Bool> {
     match a {
         Nil => b,
-        Cons(x, ra) => match b { Nil => Cons(x, ra), Cons(y, rb) => Cons(x || y, marks_union(ra, rb)) },
+        Cons(x, ra) => match b { Nil => Cons(x, ra), Cons(y, rb) => Cons(x || y, bits_union(ra, rb)) },
     }
 }
 
-// None of `ids` is marked.
-fn marks_lack_all(marks: List<Bool>, ids: List<Nat>) → Bool {
-    match ids { Nil => True, Cons(id, rest) => marks_has(marks, id).not() && marks_lack_all(marks, rest) }
-}
-
-theorem marks_add_has(id: Nat): (marks: List<Bool>) → marks_has(marks_add(marks, id), id).IsTrue() {
+theorem bits_add_has(id: Nat): (marks: List<Bool>) → bits_has(bits_add(marks, id), id).IsTrue() {
     match id {
         Zero => λ marks => match marks { Nil => trivial, Cons(_, _) => trivial },
-        Succ(k) => λ marks => match marks { Nil => marks_add_has(k, []), Cons(_, rest) => marks_add_has(k, rest) },
+        Succ(k) => λ marks => match marks { Nil => bits_add_has(k, []), Cons(_, rest) => bits_add_has(k, rest) },
     }
 }
 
-theorem marks_add_keeps(id: Nat): (marks: List<Bool>) → (other: Nat) → marks_has(marks, other).IsTrue() →
-    marks_has(marks_add(marks, id), other).IsTrue() {
+theorem bits_add_keeps(id: Nat): (marks: List<Bool>) → (other: Nat) → bits_has(marks, other).IsTrue() →
+    bits_has(bits_add(marks, id), other).IsTrue() {
     match id {
         Zero => λ marks other => match marks {
             Nil => λ never => false_elim(never),
@@ -1279,71 +1353,164 @@ theorem marks_add_keeps(id: Nat): (marks: List<Bool>) → (other: Nat) → marks
         },
         Succ(k) => λ marks other => match marks {
             Nil => λ never => false_elim(never),
-            Cons(_, rest) => match other { Zero => λ h => h, Succ(o) => λ h => marks_add_keeps(k, rest, o, h) },
+            Cons(_, rest) => match other { Zero => λ h => h, Succ(o) => λ h => bits_add_keeps(k, rest, o, h) },
         },
     }
 }
 
-theorem marks_add_all_keeps(ids: List<Nat>): (marks: List<Bool>) → (other: Nat) → marks_has(marks, other).IsTrue() →
-    marks_has(marks_add_all(marks, ids), other).IsTrue() {
-    match ids {
-        Nil => λ marks other h => h,
-        Cons(id, rest) => λ marks other h => marks_add_all_keeps(rest, marks_add(marks, id), other, marks_add_keeps(id, marks, other, h)),
-    }
-}
-
-theorem marks_add_all_has(ids: List<Nat>): (marks: List<Bool>) → (other: Nat) → Mem(other, ids) →
-    marks_has(marks_add_all(marks, ids), other).IsTrue() {
-    match ids {
-        Nil => λ marks other never => false_elim(never),
-        Cons(id, rest) => λ marks other m => match m {
-            Inl(e) => marks_add_all_keeps(rest, marks_add(marks, id), other,
-                j(sym(e), λ x _ => marks_has(marks_add(marks, id), x).IsTrue(), marks_add_has(id, marks))),
-            Inr(later) => marks_add_all_has(rest, marks_add(marks, id), other, later),
-        },
-    }
-}
-
-theorem marks_union_l(a: List<Bool>): (b: List<Bool>) → (id: Nat) → marks_has(a, id).IsTrue() →
-    marks_has(marks_union(a, b), id).IsTrue() {
+theorem bits_union_l(a: List<Bool>): (b: List<Bool>) → (id: Nat) → bits_has(a, id).IsTrue() →
+    bits_has(bits_union(a, b), id).IsTrue() {
     match a {
         Nil => λ b id never => false_elim(never),
         Cons(x, ra) => λ b id => match b {
             Nil => λ h => h,
-            Cons(y, rb) => match id { Zero => λ h => Bool::is_true_or_l(x, y, h), Succ(k) => λ h => marks_union_l(ra, rb, k, h) },
+            Cons(y, rb) => match id { Zero => λ h => Bool::is_true_or_l(x, y, h), Succ(k) => λ h => bits_union_l(ra, rb, k, h) },
         },
     }
 }
 
-theorem marks_union_r(a: List<Bool>): (b: List<Bool>) → (id: Nat) → marks_has(b, id).IsTrue() →
-    marks_has(marks_union(a, b), id).IsTrue() {
+theorem bits_union_r(a: List<Bool>): (b: List<Bool>) → (id: Nat) → bits_has(b, id).IsTrue() →
+    bits_has(bits_union(a, b), id).IsTrue() {
     match a {
         Nil => λ b id h => h,
         Cons(x, ra) => λ b id => match b {
             Nil => λ never => false_elim(never),
-            Cons(y, rb) => match id { Zero => λ h => Bool::is_true_or_r(x, y, h), Succ(k) => λ h => marks_union_r(ra, rb, k, h) },
+            Cons(y, rb) => match id { Zero => λ h => Bool::is_true_or_r(x, y, h), Succ(k) => λ h => bits_union_r(ra, rb, k, h) },
         },
     }
 }
 
-theorem marks_lack_all_mem(marks: List<Bool>, ids: List<Nat>): marks_lack_all(marks, ids).IsTrue() → (id: Nat) → Mem(id, ids) →
-    ¬marks_has(marks, id).IsTrue() {
+// A marked entry of a bitmap is inside it.
+theorem bits_has_below(bits: List<Bool>): (id: Nat) → bits_has(bits, id).IsTrue() → Succ(id) <= bits.len() {
+    match bits {
+        Nil => λ id never => false_elim(never),
+        Cons(_, rest) => λ id => match id { Zero => λ _ => trivial, Succ(k) => λ h => bits_has_below(rest, k, h) },
+    }
+}
+
+// A scan's marks: the ids mentioned so far, kept one of two ways. `Bitmap`
+// is the set itself. `Under(top)` is every id under `top`: marking an id
+// marks all below it, so it holds more than was mentioned and a scan over
+// it refuses more; but an id costs it one comparison, where the bitmap
+// walks the id in unary (issues/function-ir-scan-id-cost.md). A function
+// whose ids rise, each write above everything mentioned before it, passes
+// under `Under`, and that is how the verified lowering names its values;
+// `Function::scan` tries it first.
+inductive Marks { Bitmap(bits: List<Bool>), Under(top: Nat) }
+
+fn Marks::has(self marks: Marks, id: Nat) → Bool {
+    match marks { Bitmap(bits) => bits_has(bits, id), Under(top) => Succ(id).leb(top) }
+}
+
+fn Marks::add(self marks: Marks, id: Nat) → Marks {
+    match marks { Bitmap(bits) => Bitmap(bits_add(bits, id)), Under(top) => Under(top.max(Succ(id))) }
+}
+
+// The same kind of marks with nothing marked.
+fn Marks::fresh(self marks: Marks) → Marks { match marks { Bitmap(_) => Bitmap([]), Under(_) => Under(0) } }
+
+// Both. A bitmap with a bound is the bound raised over the bitmap's length;
+// no scan meets it, since a conditional's arms start from the same marks.
+fn Marks::union(a, b: Marks) → Marks {
+    match a {
+        Bitmap(x) => match b { Bitmap(y) => Bitmap(bits_union(x, y)), Under(top) => Under(top.max(x.len())) },
+        Under(top) => match b { Bitmap(y) => Under(top.max(y.len())), Under(other) => Under(top.max(other)) },
+    }
+}
+
+theorem Marks::add_has(id: Nat, marks: Marks): marks.add(id).has(id).IsTrue() {
+    match marks {
+        Bitmap(bits) => bits_add_has(id, bits),
+        Under(top) => Succ(id).leb_complete(top.max(Succ(id)), top.le_max_r(Succ(id))),
+    }
+}
+
+theorem Marks::add_keeps(id: Nat, marks: Marks, other: Nat): marks.has(other).IsTrue() → marks.add(id).has(other).IsTrue() {
+    match marks {
+        Bitmap(bits) => λ h => bits_add_keeps(id, bits, other, h),
+        Under(top) => λ h => Succ(other).leb_complete(top.max(Succ(id)),
+            Succ(other).le_trans(top, top.max(Succ(id)), Succ(other).leb_sound(top, h), top.le_max_l(Succ(id)))),
+    }
+}
+
+theorem Marks::union_l(a, b: Marks, id: Nat): a.has(id).IsTrue() → Marks::union(a, b).has(id).IsTrue() {
+    match a {
+        Bitmap(x) => match b {
+            Bitmap(y) => λ h => bits_union_l(x, y, id, h),
+            Under(top) => λ h => Succ(id).leb_complete(top.max(x.len()),
+                Succ(id).le_trans(x.len(), top.max(x.len()), bits_has_below(x, id, h), top.le_max_r(x.len()))),
+        },
+        Under(top) => match b {
+            Bitmap(y) => λ h => Succ(id).leb_complete(top.max(y.len()),
+                Succ(id).le_trans(top, top.max(y.len()), Succ(id).leb_sound(top, h), top.le_max_l(y.len()))),
+            Under(other) => λ h => Succ(id).leb_complete(top.max(other),
+                Succ(id).le_trans(top, top.max(other), Succ(id).leb_sound(top, h), top.le_max_l(other))),
+        },
+    }
+}
+
+theorem Marks::union_r(a, b: Marks, id: Nat): b.has(id).IsTrue() → Marks::union(a, b).has(id).IsTrue() {
+    match a {
+        Bitmap(x) => match b {
+            Bitmap(y) => λ h => bits_union_r(x, y, id, h),
+            Under(top) => λ h => Succ(id).leb_complete(top.max(x.len()),
+                Succ(id).le_trans(top, top.max(x.len()), Succ(id).leb_sound(top, h), top.le_max_l(x.len()))),
+        },
+        Under(top) => match b {
+            Bitmap(y) => λ h => Succ(id).leb_complete(top.max(y.len()),
+                Succ(id).le_trans(y.len(), top.max(y.len()), bits_has_below(y, id, h), top.le_max_r(y.len()))),
+            Under(other) => λ h => Succ(id).leb_complete(top.max(other),
+                Succ(id).le_trans(other, top.max(other), Succ(id).leb_sound(other, h), top.le_max_r(other))),
+        },
+    }
+}
+
+fn Marks::add_all(self marks: Marks, ids: List<Nat>) → Marks {
+    match ids { Nil => marks, Cons(id, rest) => marks.add(id).add_all(rest) }
+}
+
+// None of `ids` is marked.
+fn Marks::lack_all(self marks: Marks, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(id, rest) => marks.has(id).not() && marks.lack_all(rest) }
+}
+
+theorem Marks::add_all_keeps(ids: List<Nat>): (marks: Marks) → (other: Nat) → marks.has(other).IsTrue() →
+    marks.add_all(ids).has(other).IsTrue() {
+    match ids {
+        Nil => λ marks other h => h,
+        Cons(id, rest) => λ marks other h => Marks::add_all_keeps(rest, marks.add(id), other, Marks::add_keeps(id, marks, other, h)),
+    }
+}
+
+theorem Marks::add_all_has(ids: List<Nat>): (marks: Marks) → (other: Nat) → Mem(other, ids) →
+    marks.add_all(ids).has(other).IsTrue() {
+    match ids {
+        Nil => λ marks other never => false_elim(never),
+        Cons(id, rest) => λ marks other m => match m {
+            Inl(e) => Marks::add_all_keeps(rest, marks.add(id), other, j(sym(e), λ x _ => marks.add(id).has(x).IsTrue(), Marks::add_has(id, marks))),
+            Inr(later) => Marks::add_all_has(rest, marks.add(id), other, later),
+        },
+    }
+}
+
+theorem Marks::lack_all_mem(marks: Marks, ids: List<Nat>): marks.lack_all(ids).IsTrue() → (id: Nat) → Mem(id, ids) →
+    ¬marks.has(id).IsTrue() {
     match ids {
         Nil => λ _ id never => false_elim(never),
         Cons(x, rest) => λ h id m => {
-            let parts = Bool::is_true_and(marks_has(marks, x).not(), marks_lack_all(marks, rest), h);
+            let parts = Bool::is_true_and(marks.has(x).not(), marks.lack_all(rest), h);
             match m {
-                Inl(e) => λ has => Bool::is_true_not(marks_has(marks, x), parts.left, j(e, λ y _ => marks_has(marks, y).IsTrue(), has)),
-                Inr(later) => marks_lack_all_mem(marks, rest, parts.right, id, later),
+                Inl(e) => λ has => Bool::is_true_not(marks.has(x), parts.left, j(e, λ y _ => marks.has(y).IsTrue(), has)),
+                Inr(later) => Marks::lack_all_mem(marks, rest, parts.right, id, later),
             }
         },
     }
 }
 
 // A marked id is not one the marks lack.
-theorem marks_apart(marks: List<Bool>, marked, unmarked: Nat, has: marks_has(marks, marked).IsTrue(),
-    lacks: ¬marks_has(marks, unmarked).IsTrue()): marked ≠ unmarked {
-    λ e => lacks(j(e, λ x _ => marks_has(marks, x).IsTrue(), has))
+theorem Marks::apart(marks: Marks, marked, unmarked: Nat, has: marks.has(marked).IsTrue(),
+    lacks: ¬marks.has(unmarked).IsTrue()): marked ≠ unmarked {
+    λ e => lacks(j(e, λ x _ => marks.has(x).IsTrue(), has))
 }
 
 theorem Nat::differs_of_ne(self a, b: Nat, ne: a ≠ b): a.differs(b).IsTrue() {
@@ -1416,71 +1583,92 @@ register def disjoint_set_entry: SetRelEntry = SetRelEntry(name_of(disjoint), na
 
 // Nothing `ys` mentions is written in `xs`: each of `ys` is marked and each
 // of `xs` is not.
-theorem disjoint_of_marks(marks: List<Bool>, xs, ys: List<Nat>,
-    unmarked: (x: Nat) → Mem(x, xs) → ¬marks_has(marks, x).IsTrue(),
-    marked: (y: Nat) → Mem(y, ys) → marks_has(marks, y).IsTrue()): disjoint(xs, ys).IsTrue() {
-    disjoint_of(xs, ys, λ y m => absent_of(y, xs, λ x w => marks_apart(marks, y, x, marked(y, m), unmarked(x, w))))
+theorem disjoint_of_marks(marks: Marks, xs, ys: List<Nat>,
+    unmarked: (x: Nat) → Mem(x, xs) → ¬marks.has(x).IsTrue(),
+    marked: (y: Nat) → Mem(y, ys) → marks.has(y).IsTrue()): disjoint(xs, ys).IsTrue() {
+    disjoint_of(xs, ys, λ y m => absent_of(y, xs, λ x w => Marks::apart(marks, y, x, marked(y, m), unmarked(x, w))))
+}
+
+// `absent` as a scan evaluates it: `same` compares two numbers in one step
+// of the kernel's, where `differs` walks both, and a node's ids are as
+// large as the function (issues/function-ir-scan-id-cost.md).
+fn missing(id: Nat, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(x, rest) => id.same(x).not() && missing(id, rest) }
+}
+
+theorem missing_absent(id: Nat, ids: List<Nat>): missing(id, ids).IsTrue() → absent(id, ids).IsTrue() {
+    match ids {
+        Nil => λ _ => trivial,
+        Cons(x, rest) => λ h => {
+            let parts = Bool::is_true_and(id.same(x).not(), missing(id, rest), h);
+            Bool::is_true_and_intro(id.differs(x), absent(id, rest),
+                id.differs_of_ne(x, λ e => Bool::is_true_not(id.same(x), parts.left,
+                    j(e, λ k _ => id.same(k).IsTrue(), j(sym(id.same_self()), λ d _ => d.IsTrue(), trivial)))),
+                missing_absent(id, rest, parts.right))
+        },
+    }
 }
 
 // A scan's verdict and the marks it ends with. The verdict is read only
 // through `ok`, the marks only through `marks`, each once, so a scan is
 // evaluated once however it is read.
-record Scan { ok: Bool, marks: List<Bool> }
+record Scan { ok: Bool, marks: Marks }
 
 fn Scan::guard(self scan: Scan, ok: Bool) → Scan { Scan(ok := ok && scan.ok, marks := scan.marks) }
 
-fn Scan::then(self scan: Scan, next: List<Bool> → Scan) → Scan { next(scan.marks).guard(scan.ok) }
+fn Scan::then(self scan: Scan, next: Marks → Scan) → Scan { next(scan.marks).guard(scan.ok) }
 
-fn Scan::join(yes, no: Scan) → Scan { Scan(ok := yes.ok && no.ok, marks := marks_union(yes.marks, no.marks)) }
+fn Scan::join(yes, no: Scan) → Scan { Scan(ok := yes.ok && no.ok, marks := Marks::union(yes.marks, no.marks)) }
 
-fn nodes_scan(nodes: List<Node>, marks: List<Bool>) → Scan {
+fn nodes_scan(nodes: List<Node>, marks: Marks) → Scan {
     match nodes {
         Nil => Scan(ok := True, marks := marks),
-        Cons(node, rest) => nodes_scan(rest, marks_add_all(marks, node.mentions()))
-            .guard(absent(node_output(node).id, node.reads()) && marks_has(marks, node_output(node).id).not()),
+        Cons(node, rest) => nodes_scan(rest, marks.add_all(node.mentions()))
+            .guard(missing(node_output(node).id, node.reads()) && marks.has(node_output(node).id).not()),
     }
 }
 
-theorem nodes_scan_keeps(nodes: List<Node>): (marks: List<Bool>) → (id: Nat) → marks_has(marks, id).IsTrue() →
-    marks_has(nodes_scan(nodes, marks).marks, id).IsTrue() {
+theorem nodes_scan_keeps(nodes: List<Node>): (marks: Marks) → (id: Nat) → marks.has(id).IsTrue() →
+    nodes_scan(nodes, marks).marks.has(id).IsTrue() {
     match nodes {
         Nil => λ marks id h => h,
         Cons(node, rest) => λ marks id h =>
-            nodes_scan_keeps(rest, marks_add_all(marks, node.mentions()), id, marks_add_all_keeps(node.mentions(), marks, id, h)),
+            nodes_scan_keeps(rest, marks.add_all(node.mentions()), id, Marks::add_all_keeps(node.mentions(), marks, id, h)),
     }
 }
 
-theorem nodes_scan_marks(nodes: List<Node>): (marks: List<Bool>) → (id: Nat) → Mem(id, nodes_mentions(nodes)) →
-    marks_has(nodes_scan(nodes, marks).marks, id).IsTrue() {
+theorem nodes_scan_marks(nodes: List<Node>): (marks: Marks) → (id: Nat) → Mem(id, nodes_mentions(nodes)) →
+    nodes_scan(nodes, marks).marks.has(id).IsTrue() {
     match nodes {
         Nil => λ marks id never => false_elim(never),
         Cons(node, rest) => λ marks id m => match List::mem_append(node.mentions(), nodes_mentions(rest), id, m) {
-            Inl(here) => nodes_scan_keeps(rest, marks_add_all(marks, node.mentions()), id,
-                marks_add_all_has(node.mentions(), marks, id, here)),
-            Inr(later) => nodes_scan_marks(rest, marks_add_all(marks, node.mentions()), id, later),
+            Inl(here) => nodes_scan_keeps(rest, marks.add_all(node.mentions()), id,
+                Marks::add_all_has(node.mentions(), marks, id, here)),
+            Inr(later) => nodes_scan_marks(rest, marks.add_all(node.mentions()), id, later),
         },
     }
 }
 
 // A scan that passes: the nodes are evaluable, and none writes an id
 // marked before.
-theorem nodes_scan_sound(nodes: List<Node>): (marks: List<Bool>) → nodes_scan(nodes, marks).ok.IsTrue() →
-    nodes_evaluable(nodes).IsTrue() ∧ ((id: Nat) → Mem(id, nodes_writes(nodes)) → ¬marks_has(marks, id).IsTrue()) {
+theorem nodes_scan_sound(nodes: List<Node>): (marks: Marks) → nodes_scan(nodes, marks).ok.IsTrue() →
+    nodes_evaluable(nodes).IsTrue() ∧ ((id: Nat) → Mem(id, nodes_writes(nodes)) → ¬marks.has(id).IsTrue()) {
     match nodes {
         Nil => λ marks _ => ⟨trivial, λ id never => false_elim(never)⟩,
         Cons(node, rest) => λ marks ok => {
             let output = node_output(node).id;
-            let after = marks_add_all(marks, node.mentions());
-            let parts = Bool::is_true_and(absent(output, node.reads()) && marks_has(marks, output).not(), nodes_scan(rest, after).ok, ok);
-            let here = Bool::is_true_and(absent(output, node.reads()), marks_has(marks, output).not(), parts.left);
+            let after = marks.add_all(node.mentions());
+            let parts = Bool::is_true_and(missing(output, node.reads()) && marks.has(output).not(), nodes_scan(rest, after).ok, ok);
+            let here = Bool::is_true_and(missing(output, node.reads()), marks.has(output).not(), parts.left);
             let later = nodes_scan_sound(rest, after, parts.right);
             let apart = disjoint_of_marks(after, nodes_writes(rest), node.mentions(), later.right,
-                λ y m => marks_add_all_has(node.mentions(), marks, y, m));
+                λ y m => Marks::add_all_has(node.mentions(), marks, y, m));
             ⟨Bool::is_true_and_intro(absent(output, node.reads()), disjoint(nodes_writes(rest), node.mentions()) && nodes_evaluable(rest),
-                    here.left, Bool::is_true_and_intro(disjoint(nodes_writes(rest), node.mentions()), nodes_evaluable(rest), apart, later.left)),
+                    missing_absent(output, node.reads(), here.left),
+                    Bool::is_true_and_intro(disjoint(nodes_writes(rest), node.mentions()), nodes_evaluable(rest), apart, later.left)),
                 λ id w has => match w {
-                    Inl(e) => Bool::is_true_not(marks_has(marks, output), here.right, j(e, λ x _ => marks_has(marks, x).IsTrue(), has)),
-                    Inr(written) => later.right(id, written, marks_add_all_keeps(node.mentions(), marks, id, has)),
+                    Inl(e) => Bool::is_true_not(marks.has(output), here.right, j(e, λ x _ => marks.has(x).IsTrue(), has)),
+                    Inr(written) => later.right(id, written, Marks::add_all_keeps(node.mentions(), marks, id, has)),
                 }⟩
         },
     }
@@ -1494,25 +1682,25 @@ fn loop_ports_fit(inputs: List<Nat>, bound: Nat, parameters, next, outputs: List
         && outputs.len().matches(parameters.len()))))
 }
 
-fn StructuredRegion::scan(self region: StructuredRegion, arity: Nat → Option<Nat>, marks: List<Bool>) → Scan {
+fn StructuredRegion::scan(self region: StructuredRegion, arity: Nat → Option<Nat>, marks: Marks) → Scan {
     match region {
         Dataflow(body) => nodes_scan(body.nodes, marks),
         Sequence(prefix, continuation) => nodes_scan(prefix.nodes, marks).then(λ after => continuation.scan(arity, after)),
         Compose(prefix, continuation) => prefix.scan(arity, marks).then(λ after => continuation.scan(arity, after)),
         Conditional(_, condition, _, _, when_true, when_false) =>
-            Scan::join(when_true.scan(arity, marks_add(marks, condition)), when_false.scan(arity, marks_add(marks, condition))),
+            Scan::join(when_true.scan(arity, marks.add(condition)), when_false.scan(arity, marks.add(condition))),
         Call(callee, arguments, result) => Scan(
-            ok := absent(result, arguments) && (arity_fits(arity(callee), arguments.len()) && marks_has(marks, result).not()),
-            marks := marks_add_all(marks, Cons(result, arguments))),
+            ok := missing(result, arguments) && (arity_fits(arity(callee), arguments.len()) && marks.has(result).not()),
+            marks := marks.add_all(Cons(result, arguments))),
         Loop(inputs, bound, parameters, count, body, _, next, outputs, exhausted) => Scan(
-            ok := body.scan(arity, marks_add_all([], Cons(count, parameters))).ok && (distinct(Cons(count, parameters))
-                && (loop_ports_fit(inputs, bound, parameters, next, outputs, exhausted) && marks_lack_all(marks, Cons(exhausted, outputs)))),
-            marks := marks_add_all(marks, Cons(bound, inputs) ++ Cons(exhausted, outputs))),
+            ok := body.scan(arity, marks.fresh().add_all(Cons(count, parameters))).ok && (distinct(Cons(count, parameters))
+                && (loop_ports_fit(inputs, bound, parameters, next, outputs, exhausted) && marks.lack_all(Cons(exhausted, outputs)))),
+            marks := marks.add_all(Cons(bound, inputs) ++ Cons(exhausted, outputs))),
     }
 }
 
-theorem StructuredRegion::scan_keeps(self region: StructuredRegion, arity: Nat → Option<Nat>): (marks: List<Bool>) → (id: Nat) →
-    marks_has(marks, id).IsTrue() → marks_has(region.scan(arity, marks).marks, id).IsTrue() {
+theorem StructuredRegion::scan_keeps(self region: StructuredRegion, arity: Nat → Option<Nat>): (marks: Marks) → (id: Nat) →
+    marks.has(id).IsTrue() → region.scan(arity, marks).marks.has(id).IsTrue() {
     match region {
         Dataflow(body) => λ marks id h => nodes_scan_keeps(body.nodes, marks, id, h),
         Sequence(prefix, continuation) => λ marks id h =>
@@ -1520,16 +1708,15 @@ theorem StructuredRegion::scan_keeps(self region: StructuredRegion, arity: Nat �
         Compose(prefix, continuation) => λ marks id h =>
             continuation.scan_keeps(arity, prefix.scan(arity, marks).marks, id, prefix.scan_keeps(arity, marks, id, h)),
         Conditional(_, condition, _, _, when_true, when_false) => λ marks id h =>
-            marks_union_l(when_true.scan(arity, marks_add(marks, condition)).marks, when_false.scan(arity, marks_add(marks, condition)).marks, id,
-                when_true.scan_keeps(arity, marks_add(marks, condition), id, marks_add_keeps(condition, marks, id, h))),
-        Call(_, arguments, result) => λ marks id h => marks_add_all_keeps(Cons(result, arguments), marks, id, h),
+            Marks::union_l(when_true.scan(arity, marks.add(condition)).marks, when_false.scan(arity, marks.add(condition)).marks, id, when_true.scan_keeps(arity, marks.add(condition), id, Marks::add_keeps(condition, marks, id, h))),
+        Call(_, arguments, result) => λ marks id h => Marks::add_all_keeps(Cons(result, arguments), marks, id, h),
         Loop(inputs, bound, _, _, _, _, _, outputs, exhausted) => λ marks id h =>
-            marks_add_all_keeps(Cons(bound, inputs) ++ Cons(exhausted, outputs), marks, id, h),
+            Marks::add_all_keeps(Cons(bound, inputs) ++ Cons(exhausted, outputs), marks, id, h),
     }
 }
 
-theorem StructuredRegion::scan_marks(self region: StructuredRegion, arity: Nat → Option<Nat>): (marks: List<Bool>) → (id: Nat) →
-    Mem(id, region.mentions()) → marks_has(region.scan(arity, marks).marks, id).IsTrue() {
+theorem StructuredRegion::scan_marks(self region: StructuredRegion, arity: Nat → Option<Nat>): (marks: Marks) → (id: Nat) →
+    Mem(id, region.mentions()) → region.scan(arity, marks).marks.has(id).IsTrue() {
     match region {
         Dataflow(body) => λ marks id m => nodes_scan_marks(body.nodes, marks, id, m),
         Sequence(prefix, continuation) => λ marks id m => match List::mem_append(nodes_mentions(prefix.nodes), continuation.mentions(), id, m) {
@@ -1541,28 +1728,25 @@ theorem StructuredRegion::scan_marks(self region: StructuredRegion, arity: Nat �
             Inr(later) => continuation.scan_marks(arity, prefix.scan(arity, marks).marks, id, later),
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ marks id m => {
-            let inner = marks_add(marks, condition);
+            let inner = marks.add(condition);
             match m {
-                Inl(e) => marks_union_l(when_true.scan(arity, inner).marks, when_false.scan(arity, inner).marks, id,
-                    when_true.scan_keeps(arity, inner, id, j(sym(e), λ x _ => marks_has(inner, x).IsTrue(), marks_add_has(condition, marks)))),
+                Inl(e) => Marks::union_l(when_true.scan(arity, inner).marks, when_false.scan(arity, inner).marks, id, when_true.scan_keeps(arity, inner, id, j(sym(e), λ x _ => inner.has(x).IsTrue(), Marks::add_has(condition, marks)))),
                 Inr(arms) => match List::mem_append(when_true.mentions(), when_false.mentions(), id, arms) {
-                    Inl(here) => marks_union_l(when_true.scan(arity, inner).marks, when_false.scan(arity, inner).marks, id,
-                        when_true.scan_marks(arity, inner, id, here)),
-                    Inr(there) => marks_union_r(when_true.scan(arity, inner).marks, when_false.scan(arity, inner).marks, id,
-                        when_false.scan_marks(arity, inner, id, there)),
+                    Inl(here) => Marks::union_l(when_true.scan(arity, inner).marks, when_false.scan(arity, inner).marks, id, when_true.scan_marks(arity, inner, id, here)),
+                    Inr(there) => Marks::union_r(when_true.scan(arity, inner).marks, when_false.scan(arity, inner).marks, id, when_false.scan_marks(arity, inner, id, there)),
                 },
             }
         },
-        Call(_, arguments, result) => λ marks id m => marks_add_all_has(Cons(result, arguments), marks, id, m),
+        Call(_, arguments, result) => λ marks id m => Marks::add_all_has(Cons(result, arguments), marks, id, m),
         Loop(inputs, bound, _, _, _, _, _, outputs, exhausted) => λ marks id m =>
-            marks_add_all_has(Cons(bound, inputs) ++ Cons(exhausted, outputs), marks, id, m),
+            Marks::add_all_has(Cons(bound, inputs) ++ Cons(exhausted, outputs), marks, id, m),
     }
 }
 
 // A region whose scan passes is evaluable, and writes no id marked before.
-theorem StructuredRegion::scan_sound(self region: StructuredRegion, arity: Nat → Option<Nat>): (marks: List<Bool>) →
+theorem StructuredRegion::scan_sound(self region: StructuredRegion, arity: Nat → Option<Nat>): (marks: Marks) →
     region.scan(arity, marks).ok.IsTrue() →
-    region.evaluable(arity).IsTrue() ∧ ((id: Nat) → Mem(id, region.writes()) → ¬marks_has(marks, id).IsTrue()) {
+    region.evaluable(arity).IsTrue() ∧ ((id: Nat) → Mem(id, region.writes()) → ¬marks.has(id).IsTrue()) {
     match region {
         Dataflow(body) => λ marks ok => nodes_scan_sound(body.nodes, marks, ok),
         Sequence(prefix, continuation) => λ marks ok => {
@@ -1597,104 +1781,228 @@ theorem StructuredRegion::scan_sound(self region: StructuredRegion, arity: Nat �
                 }⟩
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ marks ok => {
-            let inner = marks_add(marks, condition);
+            let inner = marks.add(condition);
             let arms = Bool::is_true_and(when_true.scan(arity, inner).ok, when_false.scan(arity, inner).ok, ok);
             let yes = when_true.scan_sound(arity, inner, arms.left);
             let no = when_false.scan_sound(arity, inner, arms.right);
-            let fresh: (x: Nat) → Mem(x, when_true.writes() ++ when_false.writes()) → ¬marks_has(inner, x).IsTrue() = λ x w =>
+            let fresh: (x: Nat) → Mem(x, when_true.writes() ++ when_false.writes()) → ¬inner.has(x).IsTrue() = λ x w =>
                 match List::mem_append(when_true.writes(), when_false.writes(), x, w) {
                     Inl(here) => yes.right(x, here),
                     Inr(there) => no.right(x, there),
                 };
             let unwritten = absent_of(condition, when_true.writes() ++ when_false.writes(),
-                λ x w => marks_apart(inner, condition, x, marks_add_has(condition, marks), fresh(x, w)));
+                λ x w => Marks::apart(inner, condition, x, Marks::add_has(condition, marks), fresh(x, w)));
             ⟨Bool::is_true_and_intro(absent(condition, when_true.writes() ++ when_false.writes()),
                     when_true.evaluable(arity) && when_false.evaluable(arity), unwritten,
                     Bool::is_true_and_intro(when_true.evaluable(arity), when_false.evaluable(arity), yes.left, no.left)),
-                λ id w has => fresh(id, w, marks_add_keeps(condition, marks, id, has))⟩
+                λ id w has => fresh(id, w, Marks::add_keeps(condition, marks, id, has))⟩
         },
         Call(callee, arguments, result) => λ marks ok => {
-            let parts = Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()) && marks_has(marks, result).not(), ok);
-            let rest = Bool::is_true_and(arity_fits(arity(callee), arguments.len()), marks_has(marks, result).not(), parts.right);
-            ⟨Bool::is_true_and_intro(absent(result, arguments), arity_fits(arity(callee), arguments.len()), parts.left, rest.left),
+            let parts = Bool::is_true_and(missing(result, arguments), arity_fits(arity(callee), arguments.len()) && marks.has(result).not(), ok);
+            let rest = Bool::is_true_and(arity_fits(arity(callee), arguments.len()), marks.has(result).not(), parts.right);
+            ⟨Bool::is_true_and_intro(absent(result, arguments), arity_fits(arity(callee), arguments.len()),
+                    missing_absent(result, arguments, parts.left), rest.left),
                 λ id w has => match w {
-                    Inl(e) => Bool::is_true_not(marks_has(marks, result), rest.right, j(e, λ x _ => marks_has(marks, x).IsTrue(), has)),
+                    Inl(e) => Bool::is_true_not(marks.has(result), rest.right, j(e, λ x _ => marks.has(x).IsTrue(), has)),
                     Inr(never) => false_elim(never),
                 }⟩
         },
         Loop(inputs, bound, parameters, count, body, _, next, outputs, exhausted) => λ marks ok => {
-            let start = marks_add_all([], Cons(count, parameters));
+            let start = marks.fresh().add_all(Cons(count, parameters));
             let ports = loop_ports_fit(inputs, bound, parameters, next, outputs, exhausted);
-            let lacks = marks_lack_all(marks, Cons(exhausted, outputs));
+            let lacks = marks.lack_all(Cons(exhausted, outputs));
             let p0 = Bool::is_true_and(body.scan(arity, start).ok, distinct(Cons(count, parameters)) && (ports && lacks), ok);
             let p1 = Bool::is_true_and(distinct(Cons(count, parameters)), ports && lacks, p0.right);
             let p2 = Bool::is_true_and(ports, lacks, p1.right);
             let inner = body.scan_sound(arity, start, p0.left);
             let apart = disjoint_of_marks(start, body.writes(), Cons(count, parameters), inner.right,
-                λ y m => marks_add_all_has(Cons(count, parameters), [], y, m));
+                λ y m => Marks::add_all_has(Cons(count, parameters), marks.fresh(), y, m));
             ⟨Bool::is_true_and_intro(body.evaluable(arity), distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters)) && ports),
                     inner.left, Bool::is_true_and_intro(distinct(Cons(count, parameters)), disjoint(body.writes(), Cons(count, parameters)) && ports,
                         p1.left, Bool::is_true_and_intro(disjoint(body.writes(), Cons(count, parameters)), ports, apart, p2.left))),
-                marks_lack_all_mem(marks, Cons(exhausted, outputs), p2.right)⟩
+                Marks::lack_all_mem(marks, Cons(exhausted, outputs), p2.right)⟩
         },
     }
 }
 
-// A function scans from its parameters, marked.
+// A function's body scanned from its parameters, marked, over marks that
+// start as `none`.
+fn Function::scan_from(self function: Function, arity: Nat → Option<Nat>, none: Marks) → Bool {
+    function.body.scan(arity, none.add_all(function.parameters)).ok
+}
+
+// A function scans under a bound first, the scan that costs an id one
+// comparison and passes when the ids rise, and over the bitmap when that
+// refuses: either is enough.
 fn Function::scan(self function: Function, arity: Nat → Option<Nat>) → Bool {
-    distinct(function.parameters) && function.body.scan(arity, marks_add_all([], function.parameters)).ok
+    distinct(function.parameters) && (function.scan_from(arity, Under(0)) || function.scan_from(arity, Bitmap([])))
+}
+
+theorem Function::scan_from_evaluable(self function: Function, arity: Nat → Option<Nat>, none: Marks,
+    apart: distinct(function.parameters).IsTrue(), ok: function.scan_from(arity, none).IsTrue()): function.evaluable(arity).IsTrue() {
+    let start = none.add_all(function.parameters);
+    let body = function.body.scan_sound(arity, start, ok);
+    let unwritten = disjoint_of_marks(start, function.body.writes(), function.parameters, body.right,
+        λ y m => Marks::add_all_has(function.parameters, none, y, m));
+    Bool::is_true_and_intro(function.body.evaluable(arity), distinct(function.parameters) && disjoint(function.body.writes(), function.parameters),
+        body.left, Bool::is_true_and_intro(distinct(function.parameters), disjoint(function.body.writes(), function.parameters), apart, unwritten))
 }
 
 theorem Function::scan_evaluable(self function: Function, arity: Nat → Option<Nat>, ok: function.scan(arity).IsTrue()):
     function.evaluable(arity).IsTrue() {
-    let start = marks_add_all([], function.parameters);
-    let parts = Bool::is_true_and(distinct(function.parameters), function.body.scan(arity, start).ok, ok);
-    let body = function.body.scan_sound(arity, start, parts.right);
-    let apart = disjoint_of_marks(start, function.body.writes(), function.parameters, body.right,
-        λ y m => marks_add_all_has(function.parameters, [], y, m));
-    Bool::is_true_and_intro(function.body.evaluable(arity), distinct(function.parameters) && disjoint(function.body.writes(), function.parameters),
-        body.left, Bool::is_true_and_intro(distinct(function.parameters), disjoint(function.body.writes(), function.parameters), parts.left, apart))
-}
-
-// `program_evaluable` in one pass per function.
-fn program_scan(functions: List<Function>) → Bool {
-    match functions {
-        Nil => True,
-        Cons(last, earlier) => last.scan(program_arity(earlier)) && program_scan(earlier),
+    let parts = Bool::is_true_and(distinct(function.parameters),
+        function.scan_from(arity, Under(0)) || function.scan_from(arity, Bitmap([])), ok);
+    match Bool::is_true_or(function.scan_from(arity, Under(0)), function.scan_from(arity, Bitmap([])), parts.right) {
+        Inl(rising) => function.scan_from_evaluable(arity, Under(0), parts.left, rising),
+        Inr(exact) => function.scan_from_evaluable(arity, Bitmap([]), parts.left, exact),
     }
 }
 
-theorem program_scan_evaluable(functions: List<Function>): program_scan(functions).IsTrue() → program_evaluable(functions).IsTrue() {
+// ---------------------------------------------------------------------------
+// `program_evaluable` in one pass per function, against a table of
+// arities. `program_evaluable` reads a callee's arity off its parameter
+// list (`program_arity`), so a scan that did the same would force the code
+// of every function a function calls: for one that calls many (a
+// dispatcher), all of them in its one declaration
+// (issues/compile-x86-certificate-memory.md). Here the arities are a list
+// of numbers beside the program (`linked_arity`), and each function's scan
+// also checks its own entry, so a function's statement forces its own code
+// alone and the table is the program's arities by the entries together
+// (`program_scan_at_arity`).
+
+// `evaluable` reads the arities only at the calls: tables that agree
+// everywhere give the same verdict.
+theorem StructuredRegion::evaluable_arity(self region: StructuredRegion, arity, other: Nat → Option<Nat>,
+    same: (k: Nat) → arity(k) = other(k)): region.evaluable(arity).IsTrue() → region.evaluable(other).IsTrue() {
+    match region {
+        Dataflow(_) => λ ok => ok,
+        Sequence(prefix, continuation) => Bool::and_right_map(nodes_evaluable(prefix.nodes),
+            disjoint(continuation.writes(), nodes_mentions(prefix.nodes)) && continuation.evaluable(arity),
+            disjoint(continuation.writes(), nodes_mentions(prefix.nodes)) && continuation.evaluable(other),
+            Bool::and_right_map(disjoint(continuation.writes(), nodes_mentions(prefix.nodes)), continuation.evaluable(arity),
+                continuation.evaluable(other), continuation.evaluable_arity(arity, other, same))),
+        Compose(prefix, continuation) => λ ok => Bool::and_left_map(prefix.evaluable(arity),
+            disjoint(continuation.writes(), prefix.mentions()) && continuation.evaluable(other), prefix.evaluable(other),
+            prefix.evaluable_arity(arity, other, same),
+            Bool::and_right_map(prefix.evaluable(arity),
+                disjoint(continuation.writes(), prefix.mentions()) && continuation.evaluable(arity),
+                disjoint(continuation.writes(), prefix.mentions()) && continuation.evaluable(other),
+                Bool::and_right_map(disjoint(continuation.writes(), prefix.mentions()), continuation.evaluable(arity),
+                    continuation.evaluable(other), continuation.evaluable_arity(arity, other, same)), ok)),
+        Conditional(_, condition, _, _, when_true, when_false) => Bool::and_right_map(absent(condition, when_true.writes() ++ when_false.writes()),
+            when_true.evaluable(arity) && when_false.evaluable(arity), when_true.evaluable(other) && when_false.evaluable(other),
+            λ arms => Bool::and_left_map(when_true.evaluable(arity), when_false.evaluable(other), when_true.evaluable(other),
+                when_true.evaluable_arity(arity, other, same),
+                Bool::and_right_map(when_true.evaluable(arity), when_false.evaluable(arity), when_false.evaluable(other),
+                    when_false.evaluable_arity(arity, other, same), arms))),
+        Call(callee, arguments, result) => Bool::and_right_map(absent(result, arguments), arity_fits(arity(callee), arguments.len()),
+            arity_fits(other(callee), arguments.len()),
+            λ fits => j(same(callee), λ a _ => arity_fits(a, arguments.len()).IsTrue(), fits)),
+        Loop(inputs, bound, parameters, count, body, _, next, outputs, exhausted) => Bool::and_left_map(body.evaluable(arity),
+            distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
+            && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
+            && (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len())
+            && outputs.len().matches(parameters.len())))))),
+            body.evaluable(other), body.evaluable_arity(arity, other, same)),
+    }
+}
+
+theorem Function::evaluable_arity(self function: Function, arity, other: Nat → Option<Nat>, same: (k: Nat) → arity(k) = other(k)):
+    function.evaluable(arity).IsTrue() → function.evaluable(other).IsTrue() {
+    Bool::and_left_map(function.body.evaluable(arity), distinct(function.parameters) && disjoint(function.body.writes(), function.parameters),
+        function.body.evaluable(other), function.body.evaluable_arity(arity, other, same))
+}
+
+// A function's scan at the table, and its own entry of it.
+fn Function::scan_at(self last: Function, earlier: List<Function>, arities: List<Nat>) → Bool {
+    last.scan(linked_arity(earlier, arities.tail())) && arity_fits(arities.nth(0), last.parameters.len())
+}
+
+fn program_scan_at(functions: List<Function>, arities: List<Nat>) → Bool {
     match functions {
-        Nil => λ _ => trivial,
-        Cons(last, earlier) => λ ok => {
-            let parts = Bool::is_true_and(last.scan(program_arity(earlier)), program_scan(earlier), ok);
+        Nil => True,
+        Cons(last, earlier) => last.scan_at(earlier, arities) && program_scan_at(earlier, arities.tail()),
+    }
+}
+
+// Where every function has its entry, the table is the program's arities.
+theorem program_scan_at_arity(functions: List<Function>): (arities: List<Nat>) → program_scan_at(functions, arities).IsTrue() →
+    (k: Nat) → linked_arity(functions, arities, k) = program_arity(functions, k) {
+    match functions {
+        Nil => λ arities ok k => refl,
+        Cons(last, earlier) => λ arities ok k => {
+            let parts = Bool::is_true_and(last.scan_at(earlier, arities), program_scan_at(earlier, arities.tail()), ok);
+            let own = Bool::is_true_and(last.scan(linked_arity(earlier, arities.tail())), arity_fits(arities.nth(0), last.parameters.len()),
+                parts.left).right;
+            let entry: (arities.nth(0) = Some(last.parameters.len())) =
+                (match arities.nth(0) as λ a => arity_fits(a, last.parameters.len()).IsTrue() → a = Some(last.parameters.len()) {
+                    None => λ never => false_elim(never),
+                    Some(n) => λ fits => cong_fn(λ (x: Nat) => Some(x), n.matches_eq(last.parameters.len(), fits)),
+                })(own);
+            match k.eq_dec(earlier.len()) as λ d =>
+                (match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), k) }) =
+                (match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, k) }) {
+                Inl(_) => entry,
+                Inr(_) => program_scan_at_arity(earlier, arities.tail(), parts.right, k),
+            }
+        },
+    }
+}
+
+theorem program_scan_at_evaluable(functions: List<Function>): (arities: List<Nat>) → program_scan_at(functions, arities).IsTrue() →
+    program_evaluable(functions).IsTrue() {
+    match functions {
+        Nil => λ _ _ => trivial,
+        Cons(last, earlier) => λ arities ok => {
+            let parts = Bool::is_true_and(last.scan_at(earlier, arities), program_scan_at(earlier, arities.tail()), ok);
+            let scanned = Bool::is_true_and(last.scan(linked_arity(earlier, arities.tail())), arity_fits(arities.nth(0), last.parameters.len()),
+                parts.left).left;
             Bool::is_true_and_intro(last.evaluable(program_arity(earlier)), program_evaluable(earlier),
-                last.scan_evaluable(program_arity(earlier), parts.left), program_scan_evaluable(earlier, parts.right))
+                last.evaluable_arity(linked_arity(earlier, arities.tail()), program_arity(earlier),
+                    program_scan_at_arity(earlier, arities.tail(), parts.right),
+                    last.scan_evaluable(linked_arity(earlier, arities.tail()), scanned)),
+                program_scan_at_evaluable(earlier, arities.tail(), parts.right))
         },
     }
 }
 
 // The scan of a program's last function alone (the first in the list).
-fn program_scan_head(functions: List<Function>) → Bool {
-    match functions { Nil => True, Cons(last, earlier) => last.scan(program_arity(earlier)) }
+fn program_scan_at_head(functions: List<Function>, arities: List<Nat>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.scan_at(earlier, arities) }
 }
 
-theorem program_scan_drop_zero(functions: List<Function>): program_scan(functions.drop(0)).IsTrue() → program_scan(functions).IsTrue() {
-    match functions { Nil => λ h => h, Cons(_, _) => λ h => h }
+theorem program_scan_at_drop_zero(functions: List<Function>, arities: List<Nat>):
+    program_scan_at(functions.drop(0), arities.drop(0)).IsTrue() → program_scan_at(functions, arities).IsTrue() {
+    match functions {
+        Nil => λ h => trivial,
+        Cons(_, _) => match arities { Nil => λ h => h, Cons(_, _) => λ h => h },
+    }
 }
 
-// `program_scan` a function at a time, each its own declaration: the
+// `program_scan_at` a function at a time, each its own declaration: the
 // kernel's fuel is per declaration, so a certificate built this way pays
 // for its largest function, not for the sum of them.
-theorem program_scan_drop(functions: List<Function>, n: Nat): program_scan_head(functions.drop(n)).IsTrue() →
-    program_scan(functions.drop(Succ(n))).IsTrue() → program_scan(functions.drop(n)).IsTrue() {
+theorem program_scan_at_drop(functions: List<Function>): (arities: List<Nat>) → (n: Nat) →
+    program_scan_at_head(functions.drop(n), arities.drop(n)).IsTrue() →
+    program_scan_at(functions.drop(Succ(n)), arities.drop(Succ(n))).IsTrue() → program_scan_at(functions.drop(n), arities.drop(n)).IsTrue() {
     match functions {
-        Nil => λ _ _ => trivial,
-        Cons(last, earlier) => match n {
-            Zero => λ head rest => Bool::is_true_and_intro(last.scan(program_arity(earlier)), program_scan(earlier), head,
-                program_scan_drop_zero(earlier, rest)),
-            Succ(k) => λ head rest => program_scan_drop(earlier, k, head, rest),
+        Nil => λ _ _ _ _ => trivial,
+        Cons(last, earlier) => λ arities n => match n as λ i =>
+            program_scan_at_head(Cons(last, earlier).drop(i), arities.drop(i)).IsTrue() →
+            program_scan_at(Cons(last, earlier).drop(Succ(i)), arities.drop(Succ(i))).IsTrue() →
+            program_scan_at(Cons(last, earlier).drop(i), arities.drop(i)).IsTrue() {
+            Zero => match arities as λ ns => program_scan_at_head(Cons(last, earlier), ns.drop(0)).IsTrue() →
+                program_scan_at(earlier.drop(0), ns.drop(1)).IsTrue() → program_scan_at(Cons(last, earlier), ns.drop(0)).IsTrue() {
+                Nil => λ head rest => Bool::is_true_and_intro(last.scan_at(earlier, Nil), program_scan_at(earlier, Nil), head,
+                    program_scan_at_drop_zero(earlier, Nil, rest)),
+                Cons(a, more) => λ head rest => Bool::is_true_and_intro(last.scan_at(earlier, Cons(a, more)), program_scan_at(earlier, more), head,
+                    program_scan_at_drop_zero(earlier, more, rest)),
+            },
+            Succ(k) => match arities as λ ns => program_scan_at_head(earlier.drop(k), ns.drop(Succ(k))).IsTrue() →
+                program_scan_at(earlier.drop(Succ(k)), ns.drop(Succ(Succ(k)))).IsTrue() → program_scan_at(earlier.drop(k), ns.drop(Succ(k))).IsTrue() {
+                Nil => λ head rest => program_scan_at_drop(earlier, Nil, k, head, rest),
+                Cons(_, more) => λ head rest => program_scan_at_drop(earlier, more, k, head, rest),
+            },
         },
     }
 }

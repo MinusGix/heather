@@ -163,11 +163,12 @@ theorem spread_runs(x: BitVec(64)): program_eval(spread::program, 0, [x]) = spre
 
 // ---------------------------------------------------------------------------
 // A fourteen-arm callee and its caller (issues/runtime-fn-caller-agreement-fuel.md):
-// a lexer's byte classifier. Linking checks only that each function's calls
-// fit (`program_calls_fit`, linear); `program_evaluable`'s disjointness is
-// quadratic in a function's size, and for `byte_class` alone it runs past
-// the kernel's per-declaration fuel, so neither function could be compiled
-// while `f::agrees` re-checked it for every function of the program.
+// a lexer's byte classifier. Linking needs only that each function's calls
+// fit, which its instance carries (`Compile`'s `fits`);
+// `program_evaluable`'s disjointness is quadratic in a function's size, and
+// for `byte_class` alone it runs past the kernel's per-declaration fuel, so
+// neither function could be compiled while `f::agrees` re-checked it for
+// every function of the program.
 
 runtime fn byte_class(b: BitVec(64)) → BitVec(64) {
     match b.eq_bit(BitVec::ofNat(10)) {
@@ -224,11 +225,21 @@ theorem byte_class_pair_runs(a, b: BitVec(64)): program_eval(byte_class_pair::pr
 }
 
 // The whole program evaluable, the disjointness the x86 certificate needs:
-// `program_scan` checks it in one pass where `program_evaluable` itself
-// runs past the fuel (issues/function-ir-evaluable-quadratic.md).
+// `program_scan_at` checks it in one pass, against the arities the program
+// publishes, where `program_evaluable` itself runs past the fuel
+// (issues/function-ir-evaluable-quadratic.md).
 theorem byte_class_pair_evaluable(): program_evaluable(byte_class_pair::program).IsTrue() {
-    program_scan_evaluable(byte_class_pair::program, trivial)
+    program_scan_at_evaluable(byte_class_pair::program, byte_class_pair::arities, trivial)
 }
+
+// The arities are the functions' parameter counts, the last function's
+// first, and a table that gets one wrong is refused: the scan holds each
+// function to its own entry, which is what lets a caller's statement read
+// the table and not its callees.
+theorem byte_class_pair_arities(): byte_class_pair::arities = [2, 1] { refl }
+theorem byte_class_pair_wrong_callee(): program_scan_at(byte_class_pair::program, [2, 2]) = False { refl }
+theorem byte_class_pair_wrong_own(): program_scan_at(byte_class_pair::program, [1, 1]) = False { refl }
+theorem byte_class_pair_short_table(): program_scan_at(byte_class_pair::program, [2]) = False { refl }
 
 // A program of nine functions: eight callees under one caller, the widest
 // program checked here. The linked program's sources and its code are each

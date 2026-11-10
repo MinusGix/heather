@@ -352,21 +352,28 @@ fn a_state_accepts_a_kind_or_nothing() {
 }
 
 #[test]
-fn the_table_is_the_modules() {
-    // `scan_families` in the module is the list `scan_step` indexes, and
-    // the table `step` indexes here is the same functions in the same order.
-    let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
-    let from = module.find("fn scan_families()").expect("scan_families");
-    let list = &module[from..];
-    let list = &list[list.find('[').expect("a list") + 1..list.find(']').expect("its end")];
-    let theirs: Vec<&str> = list.split(',').map(str::trim).collect();
-    let ours: Vec<&str> = scanner::families().collect();
-    assert_eq!(theirs, ours);
-    assert_eq!(ours.len(), 23);
-    // Each family is exported by the manifest the regeneration gate reads.
+fn the_automaton_is_one_export() {
+    // `scan_step` is linked as one program, so the manifest names it and
+    // none of the functions inside it: a family exported again beside the
+    // program would be a second copy nothing calls.
     let manifest = include_str!("../generated/EXPORTS.tsv");
-    for family in ours.iter().chain(&["scan_family", "scan_accept", "scan_begin"]) {
-        assert!(manifest.contains(&format!("lib/lang/lexer/lexer_scan.hthr\t{family}\n")), "{family} is not in EXPORTS.tsv");
+    for export in ["scan_step", "scan_accept", "scan_begin"] {
+        assert!(manifest.contains(&format!("lib/lang/lexer/lexer_scan.hthr\t{export}\n")), "{export} is not in EXPORTS.tsv");
+    }
+    assert!(!manifest.contains("\tstep_"), "a family is exported apart from the program");
+    // And every family the module writes is one `scan_choose` calls, once:
+    // a family nothing chooses would be states nothing reaches.
+    let module = include_str!("../../../lib/lang/lexer/lexer_scan.hthr");
+    let from = module.find("runtime fn scan_choose(").expect("scan_choose");
+    let choose = &module[from..from + module[from..].find("\n}\n").expect("its end")];
+    let families: Vec<&str> = module
+        .lines()
+        .filter_map(|line| line.strip_prefix("runtime fn step_"))
+        .map(|rest| &rest[..rest.find('(').expect("parameters")])
+        .collect();
+    assert_eq!(families.len(), 23);
+    for family in families {
+        assert_eq!(choose.matches(&format!("step_{family}(s, b)")).count(), 1, "step_{family} in scan_choose");
     }
 }
 

@@ -7,8 +7,8 @@
 // numeral's value and a string's characters are functions of the span,
 // computed apart. Everything here is a function of 64-bit words with no
 // memory, which is what a `runtime fn` can be today, so the whole automaton
-// compiles, a family of states at a time, and is linked into Rust
-// (`crates/linked/src/scanner.rs`). The loop that feeds it the bytes is
+// compiles: `scan_step` is one program of two dozen functions, linked into
+// Rust (`crates/linked/src/scanner.rs`). The loop that feeds it the bytes is
 // `lexer_tokens.hthr`, evaluated by the kernel, and Rust's copy of that
 // loop beside the linked code until a compiled function can be lent the
 // source (issues/native-library-exports-design.md).
@@ -32,17 +32,14 @@
 //
 // The states are numbered family by family (the names, the decimal
 // numerals, the string literals), eight numbers to a family, so
-// `scan_family` finds a state's family by a shift and the family's function
-// finds the state; no function calls another. That shape is what compiles
-// today, and each limit it works around is an issue of its own. There are
-// no tables in compiled code yet (issues/rt-fixed-arrays-and-tables.md). A
-// function certifies up to about sixteen arms and a dozen levels of `else
-// if` (issues/function-ir-scan-id-cost.md,
-// issues/compile-x86-certificate-memory.md), so the automaton is two dozen
-// functions and not one. And one program of all of them is more than a
-// linked program's proof is checked for
-// (issues/runtime-generator-program-size.md), which is why `scan_step`
-// itself is not compiled and the families are linked side by side.
+// `scan_family` finds a state's family by a shift, `scan_step` calls that
+// family's function, and the function finds the state. The families are
+// functions of their own for two reasons. There are no tables in compiled
+// code yet (issues/rt-fixed-arrays-and-tables.md), so a state is found by
+// comparisons, and a family keeps those few. And a function's machine code
+// is checked in one kernel statement, which has room for a few dozen arms
+// (issues/native-function-emission-one-statement.md); a program's size has
+// no such limit, since each function is planned, emitted and checked apart.
 //
 // # Reading the byte tests
 //
@@ -948,10 +945,10 @@ runtime fn step_logic(s, b: u64) → u64 {
 // ---------------------------------------------------------------------------
 // The automaton.
 
-// The family that takes byte `b` in state `s`, as its position in
-// `scan_families`. A family's states are numbered from eight times its
-// position among the state families, so a state's family is its number
-// shifted; the start of a token, the second of them, is four functions
+// The family that takes byte `b` in state `s`, as its position among the
+// families `scan_step` chooses from. A family's states are numbered from
+// eight times its position among the state families, so a state's family is
+// its number shifted; the start of a token, the second of them, is four functions
 // chosen by the byte, which moves every family after it three places on.
 runtime fn scan_family(s, b: u64) → u64 {
     let family = s.band(255).shift_right(3);
@@ -962,34 +959,57 @@ runtime fn scan_family(s, b: u64) → u64 {
     else { family.add(3) }
 }
 
-// The families, in the order `scan_family` numbers them.
-fn scan_families() → List<u64 → u64 → u64> {
-    [step_stop, step_start_space, step_start_punct, step_start_mid, step_start_high, step_trivia,
-        step_names, step_arrows, step_doubles, step_decimal, step_fraction, step_octal, step_binary,
-        step_hex, step_hex_fraction, step_hex_exponent, step_string, step_char, step_char_escape,
-        step_two_byte, step_three_byte, step_symbols, step_logic]
+// The family numbered `f` takes byte `b` in state `s`. The families are in
+// the order `scan_family` numbers them, found by halving, so the choice is
+// five comparisons whichever family it is. A number past the last is no
+// family: there is no way on.
+runtime fn scan_choose(f, s, b: u64) → u64 {
+    if f.unsigned_lt_bit(12) {
+        if f.unsigned_lt_bit(6) {
+            if f.unsigned_lt_bit(3) {
+                if f.unsigned_lt_bit(1) { step_stop(s, b) } else if f.unsigned_lt_bit(2) { step_start_space(s, b) } else { step_start_punct(s, b) }
+            } else {
+                if f.unsigned_lt_bit(4) { step_start_mid(s, b) } else if f.unsigned_lt_bit(5) { step_start_high(s, b) } else { step_trivia(s, b) }
+            }
+        } else {
+            if f.unsigned_lt_bit(9) {
+                if f.unsigned_lt_bit(7) { step_names(s, b) } else if f.unsigned_lt_bit(8) { step_arrows(s, b) } else { step_doubles(s, b) }
+            } else {
+                if f.unsigned_lt_bit(10) { step_decimal(s, b) } else if f.unsigned_lt_bit(11) { step_fraction(s, b) } else { step_octal(s, b) }
+            }
+        }
+    } else {
+        if f.unsigned_lt_bit(18) {
+            if f.unsigned_lt_bit(15) {
+                if f.unsigned_lt_bit(13) { step_binary(s, b) } else if f.unsigned_lt_bit(14) { step_hex(s, b) } else { step_hex_fraction(s, b) }
+            } else {
+                if f.unsigned_lt_bit(16) { step_hex_exponent(s, b) } else if f.unsigned_lt_bit(17) { step_string(s, b) } else { step_char(s, b) }
+            }
+        } else {
+            if f.unsigned_lt_bit(21) {
+                if f.unsigned_lt_bit(19) { step_char_escape(s, b) } else if f.unsigned_lt_bit(20) { step_two_byte(s, b) } else { step_three_byte(s, b) }
+            } else {
+                if f.unsigned_lt_bit(22) { step_symbols(s, b) } else if f.unsigned_lt_bit(23) { step_logic(s, b) } else { DEAD }
+            }
+        }
+    }
 }
 
 // One byte in a state: the state's family takes it. A word that is no state
 // has no family and no way on (and neither `DEAD` nor a finished token has
 // one in theirs).
 //
-// This is the automaton, and it is an ordinary function where every function
-// above is a `runtime fn`. As one compiled program it would call every
-// family, and the proof that links a program is checked in one declaration
-// that evaluates the lowering of all of it, which is past the kernel's
-// budget at a fraction of this size
-// (issues/runtime-generator-program-size.md). So the families are compiled
-// one by one, and a caller of the compiled code makes this one choice
-// itself, by the same table (`crates/linked/src/scanner.rs`). When a linked
-// program's proof is put together from its functions' own, this becomes a
-// `runtime fn` and that caller a single call.
-fn scan_step(s, b: u64) → u64 {
-    match scan_families().nth(scan_family(s, b).toNat()) {
-        Some(step) => step(s, b),
-        None => DEAD,
-    }
-}
+// This is the automaton, and it is one compiled program: `scan_step::program`
+// holds this function, `scan_family`, `scan_choose` and every family, and
+// `scan_step::agrees` says the program computes this function, put together
+// from each function's own `::compile` with no function's code read twice
+// (`runtime.hthr`, "Linking").
+//
+// The choice is a function of its own, given the family, and not a `let`
+// here: the kernel computes a `let` again at each place it is read
+// (issues/elaborated-let-sharing-lost.md) and an argument once, and the
+// kernel runs this function too (`lexer_tokens.hthr`).
+runtime fn scan_step(s, b: u64) → u64 { scan_choose(scan_family(s, b), s, b) }
 
 // The kind of the token that ends in a state, zero for none.
 runtime fn scan_accept(s: u64) → u64 { s.shift_right(8) }

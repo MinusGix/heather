@@ -41,28 +41,13 @@ pub const FAIL: u64 = 2;
 /// One byte in a state. The low eight bits of a state name it and the bits
 /// above them are the kind it accepts, zero for none.
 ///
-/// This is `scan_step` of `lexer_scan.hthr`, and the one place the linked
-/// automaton is put together in Rust: the states come in families, each
-/// family is a compiled function, and `scan_family` (compiled too) says
-/// which one takes this byte in this state. What Rust adds is the call
-/// through the table, where the Heather function reads the same table as a
-/// list. It is so because a program that held every family is more than a
-/// linked program's proof is checked for today
-/// (`issues/runtime-generator-program-size.md`); with that lifted,
-/// `scan_step` is one export and this is one call.
+/// This is `scan_step` of `lexer_scan.hthr`, one export: the states come in
+/// families, each family is a function, and the compiled program holds
+/// them all with the function that chooses among them, linked in Heather
+/// (`scan_step::agrees`) and certified as one program.
 #[inline]
 pub fn step(state: u64, byte: u64) -> u64 {
-    let family = usize::try_from(exports::scan_family(state, byte)).ok().and_then(|family| exports::FAMILIES.get(family));
-    match family {
-        Some((_, step)) => step(state, byte),
-        None => DEAD,
-    }
-}
-
-/// The families' names, in the table's order (for the test that holds the
-/// order to the module's).
-pub fn families() -> impl Iterator<Item = &'static str> {
-    exports::FAMILIES.iter().map(|(name, _)| *name)
+    exports::scan_step(state, byte)
 }
 
 /// The kind of the token that ends in this state, or zero.
