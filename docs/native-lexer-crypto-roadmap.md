@@ -132,6 +132,15 @@ pipeline beside `compile-x86`'s word functions and `write-elf`'s programs.
 This has not been checked against the proofs, so it opens with a design
 round (`issues/native-library-exports-design.md`).
 
+*Checked 2026-11-10, and the lean does not hold*
+(`docs/native-library-exports-design.md` §2, proposed): `Source`'s theorem
+is about a process and its procedures' convention is not System V, while
+`compiled_returns` already is a call contract met from outside and every
+linked export already is a `compile-x86` function. The note proposes the
+export as a function of the verified pipeline, which learns to read a span
+its caller lends, and a buffer as a value in the meaning with its address
+only in the machine theorem.
+
 **Not on the spine.** The effects surface is needed only for standalone
 tools. The heap is needed by a parser, not by a scanner or a hash. The
 ownership setup matters in one place: an in-place state update is a `Set`
@@ -535,4 +544,7 @@ which compiles the scanner's loop and is the smaller half of the export
 contract); fixed arrays and tables in the
 pure fragment (the whole of `compress` in Heather, and the automaton as a
 table); then the write half and SHA-256 behind a switch in `crates/cache`.
+The read half's design is written and waits on Minus
+(`docs/native-library-exports-design.md`, with its rounds R1 to R3 in §10
+there).
 

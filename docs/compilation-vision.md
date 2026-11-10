@@ -217,6 +217,29 @@ optimization that uses it is proved once under it as a hypothesis.
   `docs/showcase/idealized.hthr`). Which representation a program uses is an
   operational choice with a certificate, like which `Compile` instance.
 
+### 2.5 Memory a function is lent
+
+Proposed 2026-11-10 (`docs/native-library-exports-design.md`), not yet
+accepted. Principle 1 applied to memory:
+
+- **A buffer is a value in every level's meaning.** A list of bytes in
+  `rt`, a numbered entry of `Buffers()` in FunctionIR. No meaning mentions
+  an address. Where a buffer lives (a caller's span, a static slot, an
+  arena line, the frame) is a *home* the lowering is told, operational
+  like a placement.
+- **Addresses appear only in the theorem that ties a level to the
+  machine**, and there a call's effect on memory is stated as the stores
+  it may make (`Wrote`). What a caller wants kept, its frame, the code, the
+  spans it lent, follows from that one relation, so exports, calls between
+  compiled functions and `Proved` items share one footprint.
+- **What a caller promises is a premise, stated semantically** (`Lends`: no
+  store the call may make changes what the span reads). Geometry, two
+  spans sharing no address, proves the premise where addresses are
+  numbers and is decided there, never inside the compiler's proof.
+- **An access the machine may refuse is guarded by a comparison the path
+  knows**, the default that always compiles; a fact (`InBounds`) removes
+  the guard as an optimization (§2.3).
+
 ---
 
 ## 3. Sketches
@@ -391,7 +414,7 @@ decides.
 | back half (`Source`, FunctionIR, x86, ELF) | built, proved once | `docs/native-program-logic-design.md`, `docs/native-effect-source-design.md` |
 | `rt` and setups | built: the reflected language, the default setup and the `runtime fn` generator (words, loops, buffers, `i64` by its representation); issues still open for what the default setup does not take | `docs/runtime-fn-setups-design.md`, milestone `nh-front` |
 | `Compile(f)` class | built (`lib/native/runtime/runtime.hthr`); instances are linked into `f::program` | `issues/compile-typeclass-design.md` |
-| libraries and exports | proposed: a compiled function over memory its caller owns, linked into another binary | `docs/native-lexer-crypto-roadmap.md` §2, milestone `nh-library` |
+| libraries and exports | word functions built and linked (`crates/linked`); memory the caller lends designed, awaiting acceptance (§2.5) | `docs/native-library-exports-design.md`, `docs/native-lexer-crypto-roadmap.md` §2, milestone `nh-library` |
 | facts as classes, fact search | prototype landed: search rules, `Synth`, `request`, `InBounds` over checked reads, `Unique` over `rt` writes (ownership judgment, per-site check, write plan) | `docs/facts-on-demand-design.md` §7, `issues/facts-on-demand.md`; the in-place lowering's theorem is `issues/unique-fact.md` |
 | DSL languages | frontends built: `def` and prefix generators that rewrite a `def`; `regex def` parses to its term and meaning, no compiler yet | `docs/value-definitions-design.md`, `issues/regex-dfa-compiler.md` |
 | restricted dialects | constant time surveyed | `docs/constant-time-survey.md` |
