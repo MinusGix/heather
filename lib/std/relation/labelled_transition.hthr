@@ -1,0 +1,467 @@
+// Labelled transition systems: steps that may carry an event, the traces
+// their runs produce, determinacy up to a relation on states, and
+// simulation diagrams that keep traces (issues/labelled-transition-
+// systems.md; Leroy's and CompCert's `Smallstep`).
+//
+// A labelled system is a relation `R: A → Option<E> → A → Type`: a step
+// labelled `None` is silent, one labelled `Some(e)` emits `e`. Its silent
+// part `Silent(R)` is an ordinary step relation, so every closure and
+// diagram of `transition.hthr` applies to it unchanged.
+//
+// - Traces: `StarT(R, trace, a, b)` is a run from `a` to `b` whose events,
+//   in order, are `trace`: silent runs separated by one labelled step per
+//   event. Runs concatenate along `++` (`StarT::append`).
+// - Determinacy (CompCert's `determinate`), up to a relation `Same` on
+//   states and a relation `Agree` on events that two runs could both
+//   produce from related states (the same request, answered alike): silent
+//   steps keep `Same`, a silent step and an event never both leave related
+//   states, and agreeing events from related states are one event and
+//   leave related states. Two runs from related states whose traces agree
+//   event by event have one trace (`StarT::determined`). With `Same` the
+//   equality and `Agree` anything, this is a deterministic system.
+// - Receptiveness: a state that can emit an event can emit any event
+//   agreeing with it (the environment's other answers).
+// - Diagrams: as `transition.hthr`'s, where a source step's event must be
+//   the target's. A silent source step is answered as the silent diagrams
+//   answer it; an event is answered by a target run producing exactly that
+//   event (`TraceAnswer`). Runs map to runs with the same trace, and the
+//   diagrams compose at the silent composite order.
+// - Forward into a determinate target is backward, step by step: a silent
+//   target step lies ahead of the source step's answer
+//   (`TraceStarDiagram::backward_silent`), and an event the target emits is
+//   the source step's when the two agree (`backward_event`). The global
+//   forward-to-backward theorem, which needs a receptive source, is
+//   issues/labelled-forward-to-backward.md.
+
+import transition;
+import list;
+import logic;
+import nat;
+import option;
+import pair;
+import relation;
+
+// ---------------------------------------------------------------------------
+// Steps and traces
+
+// The silent steps of a labelled system.
+fn Silent<A, E>(R: A → Option<E> → A → Type) → A → A → Type {
+    λ a b => R(a, None, b)
+}
+
+// A step's events: none for a silent step, its event otherwise.
+fn Option::trace<E>(self label: Option<E>) → List<E> {
+    match label { None => Nil, Some(e) => [e] }
+}
+
+// A run producing `trace`: silent runs, separated by one step per event.
+fn StarT<A, E>(R: A → Option<E> → A → Type, trace: List<E>) → A → A → Type {
+    match trace {
+        Nil => λ start finish => Star(Silent(R), start, finish),
+        Cons(e, rest) => λ start finish => ∃ at: A, Star(Silent(R), start, at) ∧
+            (∃ next: A, R(at, Some(e), next) ∧ StarT(R, rest, next, finish)),
+    }
+}
+
+theorem StarT::refl<A, E>(R: A → Option<E> → A → Type, a: A): StarT(R, Nil, a, a) {
+    Star::refl(Silent(R), a)
+}
+
+theorem StarT::silent<A, E>(R: A → Option<E> → A → Type, a, b: A, run: Star(Silent(R), a, b)): StarT(R, Nil, a, b) {
+    run
+}
+
+theorem StarT::event<A, E>(R: A → Option<E> → A → Type, e: E, a, b: A, step: R(a, Some(e), b)): StarT(R, [e], a, b) {
+    Exists(a, ⟨Star::refl(Silent(R), a), Exists(b, ⟨step, Star::refl(Silent(R), b)⟩)⟩)
+}
+
+// One step, whatever its label, produces its events.
+theorem StarT::step<A, E>(R: A → Option<E> → A → Type, label: Option<E>): (a, b: A) → R(a, label, b) →
+    StarT(R, label.trace(), a, b) {
+    match label {
+        None => λ a b step => Star::one(Silent(R), a, b, step),
+        Some(e) => λ a b step => StarT::event(R, e, a, b, step),
+    }
+}
+
+// Silent steps before a run are part of it…
+theorem StarT::star_then<A, E>(R: A → Option<E> → A → Type, trace: List<E>): (a, b, c: A) →
+    Star(Silent(R), a, b) → StarT(R, trace, b, c) → StarT(R, trace, a, c) {
+    match trace {
+        Nil => λ a b c first second => Star::trans(Silent(R), a, b, c, first, second),
+        Cons(_, _) => λ a b c first second =>
+            Exists(second.witness, ⟨Star::trans(Silent(R), a, b, second.witness, first, second.proof.left),
+                second.proof.right⟩),
+    }
+}
+
+// …and so are silent steps after it.
+theorem StarT::then_star<A, E>(R: A → Option<E> → A → Type, trace: List<E>): (a, b, c: A) →
+    StarT(R, trace, a, b) → Star(Silent(R), b, c) → StarT(R, trace, a, c) {
+    match trace {
+        Nil => λ a b c first second => Star::trans(Silent(R), a, b, c, first, second),
+        Cons(_, rest) => λ a b c first second => {
+            let after = first.proof.right;
+            Exists(first.witness, ⟨first.proof.left, Exists(after.witness, ⟨after.proof.left,
+                StarT::then_star(R, rest, after.witness, b, c, after.proof.right, second)⟩)⟩)
+        },
+    }
+}
+
+// Runs concatenate, and so do their traces.
+theorem StarT::append<A, E>(R: A → Option<E> → A → Type, first: List<E>): (second: List<E>) → (a, b, c: A) →
+    StarT(R, first, a, b) → StarT(R, second, b, c) → StarT(R, first ++ second, a, c) {
+    match first {
+        Nil => λ second a b c one two => StarT::star_then(R, second, a, b, c, one, two),
+        Cons(_, rest) => λ second a b c one two => {
+            let after = one.proof.right;
+            Exists(one.witness, ⟨one.proof.left, Exists(after.witness, ⟨after.proof.left,
+                StarT::append(R, rest, second, after.witness, b, c, after.proof.right, two)⟩)⟩)
+        },
+    }
+}
+
+theorem StarT::cons<A, E>(R: A → Option<E> → A → Type, e: E, trace: List<E>, a, b, c: A,
+    step: R(a, Some(e), b), rest: StarT(R, trace, b, c)): StarT(R, Cons(e, trace), a, c) {
+    Exists(a, ⟨Star::refl(Silent(R), a), Exists(b, ⟨step, rest⟩)⟩)
+}
+
+theorem StarT::snoc<A, E>(R: A → Option<E> → A → Type, trace: List<E>, e: E, a, b, c: A,
+    run: StarT(R, trace, a, b), step: R(b, Some(e), c)): StarT(R, trace ++ [e], a, c) {
+    StarT::append(R, trace, [e], a, b, c, run, StarT::event(R, e, b, c, step))
+}
+
+// A step after a run, whatever its label.
+theorem StarT::then_step<A, E>(R: A → Option<E> → A → Type, trace: List<E>, label: Option<E>, a, b, c: A,
+    run: StarT(R, trace, a, b), step: R(b, label, c)): StarT(R, trace ++ label.trace(), a, c) {
+    StarT::append(R, trace, label.trace(), a, b, c, run, StarT::step(R, label, b, c, step))
+}
+
+// A silent run, as the silent closure sees it, has no events.
+theorem StarT::of_silent_n<A, E>(R: A → Option<E> → A → Type, n: Nat, a, b: A, run: StarN(Silent(R), n, a, b)):
+    StarT(R, Nil, a, b) {
+    Star::of_n(Silent(R), n, a, b, run)
+}
+
+// A larger labelled relation has every run of a smaller one.
+theorem StarT::monotone<A, E>(R, S: A → Option<E> → A → Type,
+    included: (a: A) → (label: Option<E>) → (b: A) → R(a, label, b) → S(a, label, b), trace: List<E>):
+    (a, b: A) → StarT(R, trace, a, b) → StarT(S, trace, a, b) {
+    let silent: Included(Silent(R), Silent(S)) = λ a b step => included(a, None, b, step);
+    match trace {
+        Nil => λ a b run => Star::monotone(Silent(R), Silent(S), silent, a, b, run),
+        Cons(e, rest) => λ a b run => {
+            let after = run.proof.right;
+            Exists(run.witness, ⟨Star::monotone(Silent(R), Silent(S), silent, a, run.witness, run.proof.left),
+                Exists(after.witness, ⟨included(run.witness, Some(e), after.witness, after.proof.left),
+                    StarT::monotone(R, S, included, rest, after.witness, b, after.proof.right)⟩)⟩)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Determinacy and receptiveness
+
+// Two traces agree event by event: the same length, each pair in `Agree`.
+fn AgreeAll<E>(Agree: E → E → Type, left: List<E>) → List<E> → Type {
+    match left {
+        Nil => λ right => match right { Nil => True, Cons(_, _) => False },
+        Cons(e, rest) => λ right => match right {
+            Nil => False,
+            Cons(f, more) => Agree(e, f) ∧ AgreeAll(Agree, rest, more),
+        },
+    }
+}
+
+theorem AgreeAll::refl<E>(Agree: E → E → Type, refl_agree: (e: E) → Agree(e, e), trace: List<E>):
+    AgreeAll(Agree, trace, trace) {
+    match trace {
+        Nil => trivial,
+        Cons(e, rest) => ⟨refl_agree(e), AgreeAll::refl(Agree, refl_agree, rest)⟩,
+    }
+}
+
+// CompCert's `determinate`, up to `Same` on states: what a state does next
+// is read off its class.
+record Determinate<A, E>(R: A → Option<E> → A → Type, Same: A → A → Type, Agree: E → E → Type) {
+    silent: (a, a2, b, b2: A) → Same(a, a2) → R(a, None, b) → R(a2, None, b2) → Same(b, b2),
+    silent_first: (a, a2, b, b2: A) → (e: E) → Same(a, a2) → R(a, None, b) → R(a2, Some(e), b2) → False,
+    event_first: (a, a2, b, b2: A) → (e: E) → Same(a, a2) → R(a, Some(e), b) → R(a2, None, b2) → False,
+    event: (a, a2, b, b2: A) → (e, f: E) → Same(a, a2) → R(a, Some(e), b) → R(a2, Some(f), b2) → Agree(e, f) →
+        (e = f) ∧ Same(b, b2),
+}
+
+// The environment may answer otherwise: a state that emits `e` can emit
+// any event agreeing with it.
+fn Receptive<A, E>(R: A → Option<E> → A → Type, Agree: E → E → Type) → Type {
+    (a, b: A) → (e, f: E) → R(a, Some(e), b) → Agree(e, f) → ∃ b2: A, R(a, Some(f), b2)
+}
+
+// Silent runs from related states to states about to emit meet there.
+theorem Determinate::meet<A, E>(R: A → Option<E> → A → Type, Same: A → A → Type, Agree: E → E → Type,
+    det: Determinate(R, Same, Agree), n: Nat): (m: Nat) → (a, a2, at, at2: A) → Same(a, a2) →
+    StarN(Silent(R), n, a, at) → StarN(Silent(R), m, a2, at2) → (e, f: E) → (x, y: A) →
+    R(at, Some(e), x) → R(at2, Some(f), y) → Same(at, at2) {
+    match n {
+        Zero => λ m => match m {
+            Zero => λ a a2 at at2 same here there e f x y _ _ =>
+                j(there, λ s _ => Same(at, s), j(here, λ s _ => Same(s, a2), same)),
+            Succ(_) => λ a a2 at at2 same here there e f x y emits _ =>
+                false_elim(det.event_first(a, a2, x, there.witness, e, same,
+                    j(sym(here), λ s _ => R(s, Some(e), x), emits), there.proof.left)),
+        },
+        Succ(k) => λ m => match m {
+            Zero => λ a a2 at at2 same here there e f x y _ emits =>
+                false_elim(det.silent_first(a, a2, here.witness, y, f, same, here.proof.left,
+                    j(sym(there), λ s _ => R(s, Some(f), y), emits))),
+            Succ(k2) => λ a a2 at at2 same here there e f x y left_emits right_emits =>
+                Determinate::meet(R, Same, Agree, det, k, k2, here.witness, there.witness, at, at2,
+                    det.silent(a, a2, here.witness, there.witness, same, here.proof.left, there.proof.left),
+                    here.proof.right, there.proof.right, e, f, x, y, left_emits, right_emits),
+        },
+    }
+}
+
+// Two runs from related states whose events agree produced one trace.
+theorem StarT::determined<A, E>(R: A → Option<E> → A → Type, Same: A → A → Type, Agree: E → E → Type,
+    det: Determinate(R, Same, Agree), left: List<E>): (right: List<E>) → (a, a2, b, b2: A) → Same(a, a2) →
+    StarT(R, left, a, b) → StarT(R, right, a2, b2) → AgreeAll(Agree, left, right) → left = right {
+    match left {
+        Nil => λ right => match right {
+            Nil => λ a a2 b b2 same one two agree => refl,
+            Cons(_, _) => λ a a2 b b2 same one two never => false_elim(never),
+        },
+        Cons(e, rest) => λ right => match right {
+            Nil => λ a a2 b b2 same one two never => false_elim(never),
+            Cons(f, more) => λ a a2 b b2 same one two agree => {
+                let x = one.proof.right;
+                let y = two.proof.right;
+                let met = Determinate::meet(R, Same, Agree, det, one.proof.left.witness, two.proof.left.witness,
+                    a, a2, one.witness, two.witness, same, one.proof.left.proof, two.proof.left.proof,
+                    e, f, x.witness, y.witness, x.proof.left, y.proof.left);
+                let stepped = det.event(one.witness, two.witness, x.witness, y.witness, e, f, met,
+                    x.proof.left, y.proof.left, agree.left);
+                List::cons_eq(rest, more, e, f, stepped.left,
+                    StarT::determined(R, Same, Agree, det, rest, more, x.witness, y.witness, b, b2, stepped.right,
+                        x.proof.right, y.proof.right, agree.right))
+            },
+        },
+    }
+}
+
+// Up to equality, the silent part is deterministic.
+theorem Determinate::silent_deterministic<A, E>(R: A → Option<E> → A → Type, Agree: E → E → Type,
+    det: Determinate<A, E>(R, λ a b => a = b, Agree)): Deterministic(Silent(R)) {
+    λ a b c left right => det.silent(a, a, b, c, refl, left, right)
+}
+
+// ---------------------------------------------------------------------------
+// Simulation diagrams that keep traces
+//
+// The target answers a silent source step as `transition.hthr`'s diagrams
+// do, and an event with a run producing exactly that event.
+
+fn TraceAnswer<B, E, I>(T: B → Option<E> → B → Type, lt: I → I → Type, i, j: I, label: Option<E>, b, b2: B) → Type {
+    match label {
+        None => StarAnswer(Silent(T), lt, i, j, b, b2),
+        Some(e) => StarT(T, [e], b, b2),
+    }
+}
+
+fn TraceLockstepDiagram<A, B, E>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type,
+    Match: A → B → Type) → Type {
+    (a: A) → (label: Option<E>) → (a2: A) → (b: B) → Match(a, b) → S(a, label, a2) →
+        ∃ b2: B, T(b, label, b2) ∧ Match(a2, b2)
+}
+
+fn TraceStarDiagram<A, B, E, I>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type, lt: I → I → Type,
+    Match: I → A → B → Type) → Type {
+    (i: I) → (a: A) → (label: Option<E>) → (a2: A) → (b: B) → Match(i, a, b) → S(a, label, a2) →
+        ∃ j: I, ∃ b2: B, TraceAnswer(T, lt, i, j, label, b, b2) ∧ Match(j, a2, b2)
+}
+
+// A target step with the source's label answers it at any index.
+theorem TraceAnswer::step<B, E, I>(T: B → Option<E> → B → Type, lt: I → I → Type, i: I, label: Option<E>):
+    (b, b2: B) → T(b, label, b2) → TraceAnswer(T, lt, i, i, label, b, b2) {
+    match label {
+        None => λ b b2 step => Inl(Plus::one(Silent(T), b, b2, step)),
+        Some(e) => λ b b2 step => StarT::event(T, e, b, b2, step),
+    }
+}
+
+// Whatever the answer, the target ran with the source step's events.
+theorem TraceAnswer::runs<B, E, I>(T: B → Option<E> → B → Type, lt: I → I → Type, i, j: I, label: Option<E>):
+    (b, b2: B) → TraceAnswer(T, lt, i, j, label, b, b2) → StarT(T, label.trace(), b, b2) {
+    match label {
+        None => λ b b2 answer => match answer {
+            Inl(plus) => Plus::star(Silent(T), b, b2, plus),
+            Inr(stutter) => stutter.left,
+        },
+        Some(_) => λ b b2 answer => answer,
+    }
+}
+
+// A lock-step diagram is a star diagram whose index never moves.
+theorem TraceLockstepDiagram::star<A, B, E, I>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type,
+    lt: I → I → Type, Match: A → B → Type, diagram: TraceLockstepDiagram(S, T, Match)):
+    TraceStarDiagram(S, T, lt, λ i a b => Match(a, b)) {
+    λ i a label a2 b matched step => {
+        let answer = diagram(a, label, a2, b, matched, step);
+        Exists(i, Exists(answer.witness,
+            ⟨TraceAnswer::step(T, lt, i, label, b, answer.witness, answer.proof.left), answer.proof.right⟩))
+    }
+}
+
+// Restricted to silent steps, a trace diagram is a star diagram.
+theorem TraceStarDiagram::silent<A, B, E, I>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type,
+    lt: I → I → Type, Match: I → A → B → Type, diagram: TraceStarDiagram(S, T, lt, Match)):
+    StarDiagram(Silent(S), Silent(T), lt, Match) {
+    λ i a a2 b matched step => diagram(i, a, None, a2, b, matched, step)
+}
+
+// Runs to runs with the same trace.
+theorem TraceStarDiagram::runs<A, B, E, I>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type,
+    lt: I → I → Type, Match: I → A → B → Type, diagram: TraceStarDiagram(S, T, lt, Match), trace: List<E>):
+    (i: I) → (a, a2: A) → (b: B) → Match(i, a, b) → StarT(S, trace, a, a2) →
+        ∃ j: I, ∃ b2: B, StarT(T, trace, b, b2) ∧ Match(j, a2, b2) {
+    let silent = TraceStarDiagram::silent(S, T, lt, Match, diagram);
+    match trace {
+        Nil => λ i a a2 b matched run =>
+            StarDiagram::runs(Silent(S), Silent(T), lt, Match, silent, run.witness, i, a, a2, b, matched, run.proof),
+        Cons(e, rest) => λ i a a2 b matched run => {
+            let before = StarDiagram::runs(Silent(S), Silent(T), lt, Match, silent, run.proof.left.witness,
+                i, a, run.witness, b, matched, run.proof.left.proof);
+            let b1 = before.proof.witness;
+            let after = run.proof.right;
+            let event = diagram(before.witness, run.witness, Some(e), after.witness, b1, before.proof.proof.right,
+                after.proof.left);
+            let b2 = event.proof.witness;
+            let rest_run = TraceStarDiagram::runs(S, T, lt, Match, diagram, rest, event.witness, after.witness, a2, b2,
+                event.proof.proof.right, after.proof.right);
+            Exists(rest_run.witness, Exists(rest_run.proof.witness, ⟨
+                StarT::star_then(T, Cons(e, rest), b, b1, rest_run.proof.witness, before.proof.proof.left,
+                    StarT::append(T, [e], rest, b1, b2, rest_run.proof.witness, event.proof.proof.left,
+                        rest_run.proof.proof.left)),
+                rest_run.proof.proof.right⟩))
+        },
+    }
+}
+
+theorem TraceLockstepDiagram::compose<A, B, C, E>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type,
+    U: C → Option<E> → C → Type, first_match: A → B → Type, second_match: B → C → Type,
+    first: TraceLockstepDiagram(S, T, first_match), second: TraceLockstepDiagram(T, U, second_match)):
+    TraceLockstepDiagram(S, U, Compose(first_match, second_match)) {
+    λ a label a2 c matched step => {
+        let b = matched.witness;
+        let one = first(a, label, a2, b, matched.proof.left, step);
+        let two = second(b, label, one.witness, c, matched.proof.right, one.proof.left);
+        Exists(two.witness, ⟨two.proof.left, Exists(one.witness, ⟨one.proof.right, two.proof.right⟩)⟩)
+    }
+}
+
+// Two trace diagrams compose at the silent diagrams' composite order: a
+// silent step is the silent composite's, an event runs through the second
+// diagram along the first's answer.
+theorem TraceStarDiagram::compose<A, B, C, E, I, J>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type,
+    U: C → Option<E> → C → Type, first_lt: I → I → Type, second_lt: J → J → Type,
+    first_match: I → A → B → Type, second_match: J → B → C → Type,
+    first: TraceStarDiagram(S, T, first_lt, first_match), second: TraceStarDiagram(T, U, second_lt, second_match)):
+    TraceStarDiagram<A, C, E, Pair<J, I>>(S, U, λ x y => StarComposeLt(first_lt, second_lt, x, y),
+        λ k a c => StarCompose(first_match, second_match, k, a, c)) {
+    let silent = StarDiagram::compose(Silent(S), Silent(T), Silent(U), first_lt, second_lt, first_match, second_match,
+        TraceStarDiagram::silent(S, T, first_lt, first_match, first),
+        TraceStarDiagram::silent(T, U, second_lt, second_match, second));
+    λ k a label a2 c matched => (match label as λ l => S(a, l, a2) → ∃ k2: Pair<J, I>, ∃ c2: C,
+        TraceAnswer(U, λ x y => StarComposeLt(first_lt, second_lt, x, y), k, k2, l, c, c2) ∧
+        StarCompose(first_match, second_match, k2, a2, c2) {
+        None => λ step => silent(k, a, a2, c, matched, step),
+        Some(e) => λ step => {
+            let b = matched.witness;
+            let one = first(k.snd, a, Some(e), a2, b, matched.proof.left, step);
+            let b2 = one.proof.witness;
+            let two = TraceStarDiagram::runs(T, U, second_lt, second_match, second, [e], k.fst, b, b2, c,
+                matched.proof.right, one.proof.proof.left);
+            Exists(Pair(two.witness, one.witness), Exists(two.proof.witness,
+                ⟨two.proof.proof.left, Exists(b2, ⟨one.proof.proof.right, two.proof.proof.right⟩)⟩))
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Forward into a determinate target is backward
+//
+// As `transition.hthr`'s `backward` theorems, for a target determinate up
+// to equality: each step the target takes from a matched state is on the
+// way to where the diagram sends it. A silent target step lies ahead of the
+// source step's answer, or the source stuttered.
+
+theorem TraceStarDiagram::backward_silent<A, B, E, I>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type,
+    lt: I → I → Type, Match: I → A → B → Type, diagram: TraceStarDiagram(S, T, lt, Match), Agree: E → E → Type,
+    det: Determinate<B, E>(T, λ x y => x = y, Agree), i: I, a: A, label: Option<E>): (a2: A) → (b, b2: B) →
+    Match(i, a, b) → T(b, None, b2) → S(a, label, a2) →
+        ∃ j: I, (∃ b3: B, StarT(T, label.trace(), b2, b3) ∧ Match(j, a2, b3)) ∨ (lt(j, i) ∧ Match(j, a2, b)) {
+    let silent_det = Determinate::silent_deterministic(T, Agree, det);
+    match label {
+        None => λ a2 b b2 matched target source =>
+            StarDiagram::backward(Silent(S), Silent(T), lt, Match, TraceStarDiagram::silent(S, T, lt, Match, diagram),
+                silent_det, i, a, a2, b, b2, matched, target, source),
+        Some(e) => λ a2 b b2 matched target source => {
+            let answer = diagram(i, a, Some(e), a2, b, matched, source);
+            let b3 = answer.proof.witness;
+            let run: StarT(T, [e], b, b3) = answer.proof.proof.left;
+            let at = run.witness;
+            let emits = run.proof.right;
+            // The target cannot step silently where it emits, so the event
+            // lies after its silent step.
+            let ahead: Star(Silent(T), b2, at) = match Star::cases(Silent(T), b, at, run.proof.left) {
+                Inl(same) => false_elim(det.event_first(at, b, emits.witness, b2, e, sym(same), emits.proof.left, target)),
+                Inr(plus) => Plus::determined_step(Silent(T), silent_det, b, b2, at, target, plus),
+            };
+            Exists(answer.witness, Inl(Exists(b3, ⟨Exists(at, ⟨ahead, emits⟩), answer.proof.proof.right⟩)))
+        },
+    }
+}
+
+// An event the target emits from a matched state is the source step's, if
+// they agree, or the source stuttered without the target moving.
+theorem TraceStarDiagram::backward_event<A, B, E, I>(S: A → Option<E> → A → Type, T: B → Option<E> → B → Type,
+    lt: I → I → Type, Match: I → A → B → Type, diagram: TraceStarDiagram(S, T, lt, Match), Agree: E → E → Type,
+    det: Determinate<B, E>(T, λ x y => x = y, Agree), i: I, a: A, f: E, label: Option<E>): (a2: A) → (b, b2: B) →
+    Match(i, a, b) → T(b, Some(f), b2) → S(a, label, a2) → ((e: E) → label = Some(e) → Agree(e, f)) →
+        ∃ j: I, (∃ b3: B, Star(Silent(T), b2, b3) ∧ Match(j, a2, b3) ∧ (label = Some(f))) ∨
+            (lt(j, i) ∧ Match(j, a2, b) ∧ (label = None)) {
+    let silent_det = Determinate::silent_deterministic(T, Agree, det);
+    match label {
+        None => λ a2 b b2 matched target source agree => {
+            let answer = diagram(i, a, None, a2, b, matched, source);
+            let b3 = answer.proof.witness;
+            let never: Plus(Silent(T), b, b3) → ∃ j: I, (∃ b4: B, Star(Silent(T), b2, b4) ∧ Match(j, a2, b4) ∧
+                (None<E> = Some(f))) ∨ (lt(j, i) ∧ Match(j, a2, b) ∧ (None<E> = None)) =
+                λ plus => false_elim(det.silent_first(b, b, plus.witness, b2, f, refl, plus.proof.left, target));
+            match answer.proof.proof.left {
+                Inl(plus) => never(plus),
+                Inr(stutter) => match Star::cases(Silent(T), b, b3, stutter.left) {
+                    Inl(same) => Exists(answer.witness, Inr(⟨stutter.right,
+                        ⟨j(sym(same), λ x _ => Match(answer.witness, a2, x), answer.proof.proof.right), refl⟩⟩)),
+                    Inr(plus) => never(plus),
+                },
+            }
+        },
+        Some(e) => λ a2 b b2 matched target source agree => {
+            let answer = diagram(i, a, Some(e), a2, b, matched, source);
+            let b3 = answer.proof.witness;
+            let run: StarT(T, [e], b, b3) = answer.proof.proof.left;
+            let at = run.witness;
+            let emits = run.proof.right;
+            match Star::cases(Silent(T), b, at, run.proof.left) {
+                Inl(same) => {
+                    let met = det.event(at, b, emits.witness, b2, e, f, sym(same), emits.proof.left, target,
+                        j(sym(same), λ x _ => Agree(e, f), agree(e, refl)));
+                    Exists(answer.witness, Inl(Exists(b3, ⟨j(met.right, λ x _ => Star(Silent(T), x, b3), emits.proof.right),
+                        ⟨answer.proof.proof.right, cong_fn(λ (x: E) => Some(x), met.left)⟩⟩)))
+                },
+                Inr(plus) => false_elim(det.silent_first(b, b, plus.witness, b2, f, refl, plus.proof.left, target)),
+            }
+        },
+    }
+}
