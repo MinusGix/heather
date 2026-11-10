@@ -5,7 +5,7 @@ labels: [relation,semantics,native]
 area: mathematics
 milestone: [hih-passes]
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 `lib/std/relation/transition.hthr` is about silent steps. A process's run
@@ -40,3 +40,7 @@ diagram composes like the silent ones.
 - **[[transition-systems-and-simulations]]** owns the silent closures and
   diagrams. Assumed here: `StarN`/`Star`/`Plus` and the three diagrams.
 - **[[linux-syscall-trace-model]]** owns which events a Linux run has.
+
+## Log
+
+- 2026-11-10: Round 1 (flat kit) in lib/std/relation/labelled_transition.hthr: labelled steps at `Option<E>` with `Silent(R)` as the silent part, `StarT` with concatenation along `++`, `Determinate` up to a state relation `Same` and an event agreement `Agree` (CompCert's `match_traces`) with `StarT::determined`, `Receptive`, trace-keeping lock-step and star diagrams (`TraceAnswer`: a silent step answered as the silent diagrams answer it, an event by a target run producing exactly it) with runs and composition at `StarComposeLt`, and step-level backward lemmas. Probes in lib/_tests/std/relation/labelled_transition_tests.hthr. The global forward-to-backward theorem is filed as [[labelled-forward-to-backward]]. Still open here: Linux. `LinuxRun` fits `StarT` (exit as the last event), but `LinuxRuns` is a claim quantified over every way Linux resumes, which is the shape of `RunsAs` over itree traces; the proposed next round is a call/answer layer over itree's `Events`/`Trace` with runs and claims as its two closures, Linux and `ITree` as instances (decision put to Minus 2026-11-10).
