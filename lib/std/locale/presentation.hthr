@@ -1,0 +1,157 @@
+// Maps out of a presented frame are checked on its generators
+// (docs/localic-reals-design.md §2).
+//
+// A frame presented by an axiom set (`Cover`, formal_topology.hthr) is the
+// free one on its basis subject to the axioms. Its universal property: a
+// function `g` from the basis to any frame that is monotone, sends each
+// axiom to a cover, and turns the basis's formal meets and top into the
+// frame's, extends to a frame homomorphism `u ↦ ⋁ { g(a) | a ∈ u }`. So a
+// point of the presented locale, a map into it from another locale, or a
+// model of its axioms in any frame is given by data on basic opens alone,
+// and the one induction on covers is done here (`Cover::gen_le`).
+//
+// The target frame is a dictionary value, not a section instance, so the
+// target may itself be presented (`FormalTopology::frame` builds a value).
+
+import logic;
+import relation_props;
+import order;
+import frame;
+import formal_topology;
+
+// What `g` extends to: the join of the generators' images.
+fn Cover::extend<P, B: Type<1>>(sup: (I: Type) → (I → B) → B, g: P → B, u: Opens<P>) → B {
+    sup(Exists<P>(u.has), λ e => g(e.witness))
+}
+
+// `g` sends each axiom to a cover: the image of `a` lies below the join of
+// the images of the axiom's members.
+fn Cover::Models<P, B: Type<1>>(C: P → Type, ax: (a: P) → C(a) → Opens<P>,
+        le: B → B → Type, sup: (I: Type) → (I → B) → B, g: P → B) → Type
+{
+    (a: P, k: C(a)) → le(g(a), Cover::extend(sup, g, ax(a, k)))
+}
+
+// The induction: a basic open covered by `u` has its image below `u`'s.
+fn Cover::gen_le<P, B: Type<1>>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>,
+        {le: B → B → Type}, {meet: B → B → B}, {sup: (I: Type) → (I → B) → B}, fr: Frame<B>(le, meet, sup),
+        g: P → B, mono: (a, b: P) → le_p(a, b) → le(g(a), g(b)), models: Cover::Models(C, ax, le, sup, g),
+        u: Opens<P>, a: P, c: Cover<P>(le_p, C, ax, u, a))
+    → le(g(a), Cover::extend(sup, g, u))
+{
+    match c {
+        Here(a1, h) => fr.le_sup(Exists<P>(u.has), λ e => g(e.witness), Exists(a1, h)),
+        Down(a1, b, h, c1) => fr.le_trans(g(a1), g(b), Cover::extend(sup, g, u), mono(a1, b, h),
+            Cover::gen_le(le_p, C, ax, fr, g, mono, models, u, b, c1)),
+        Axiom(a1, k, f) => fr.le_trans(g(a1), Cover::extend(sup, g, ax(a1, k)), Cover::extend(sup, g, u), models(a1, k),
+            fr.sup_le(Exists<P>((ax(a1, k)).has), λ e => g(e.witness), Cover::extend(sup, g, u),
+                λ e => Cover::gen_le(le_p, C, ax, fr, g, mono, models, u, e.witness, f(e)))),
+    }
+}
+
+// The generators' images meet inside the basis: `g(a) ⊓ g(b)` lies below
+// the images of the basic opens under both.
+fn Cover::MeetsGen<P, B: Type<1>>(le_p: P → P → Type, le: B → B → Type, meet: B → B → B,
+        sup: (I: Type) → (I → B) → B, g: P → B) → Type
+{
+    (a, b: P) → le(meet(g(a), g(b)), sup(Exists<P>(λ c => le_p(c, a) ∧ le_p(c, b)), λ e => g(e.witness)))
+}
+
+// The universal property. `g` monotone, modelling the axioms, with meets and
+// the top generated: its extension is a frame homomorphism from the
+// presented frame.
+fn Cover::hom<P, B: Type<1>>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>,
+        {le: B → B → Type}, {meet: B → B → B}, {sup: (I: Type) → (I → B) → B}, fr: Frame<B>(le, meet, sup),
+        g: P → B, mono: (a, b: P) → le_p(a, b) → le(g(a), g(b)), models: Cover::Models(C, ax, le, sup, g),
+        meets: Cover::MeetsGen(le_p, le, meet, sup, g), tops: le(fr.top, sup(P, g)))
+    → FrameHom<Opens<P>, B>(λ u => Cover::extend(sup, g, u),
+        λ u v => FormalTopology::Le(λ a w => Cover<P>(le_p, C, ax, w, a), u, v),
+        λ u v => Opens::down_meet(le_p, u, v), Opens::top<P>(), Opens::sup<P>,
+        le, meet, fr.top, sup)
+{
+    FrameHom(
+        λ u v h => fr.sup_le(Exists<P>(u.has), λ e => g(e.witness), Cover::extend(sup, g, v),
+            λ e => Cover::gen_le(le_p, C, ax, fr, g, mono, models, v, e.witness, h(e.witness, e.proof))),
+        λ u v => {
+            let uv = Opens::down_meet(le_p, u, v);
+            let gu = Cover::extend(sup, g, u);
+            let gv = Cover::extend(sup, g, v);
+            let out = Cover::extend(sup, g, uv);
+            // One pair of members: their images' meet is generated below both.
+            let pair: ((d: Exists<P>(v.has), e: Exists<P>(u.has)) → le(meet(g(d.witness), g(e.witness)), out)) = λ d e =>
+                fr.le_trans(meet(g(d.witness), g(e.witness)),
+                    sup(Exists<P>(λ c => le_p(c, d.witness) ∧ le_p(c, e.witness)), λ m => g(m.witness)), out,
+                    meets(d.witness, e.witness),
+                    fr.sup_le(Exists<P>(λ c => le_p(c, d.witness) ∧ le_p(c, e.witness)), λ m => g(m.witness), out,
+                        λ m => fr.le_sup(Exists<P>(uv.has), λ m2 => g(m2.witness),
+                            Exists(m.witness, And(Exists(e.witness, And(e.proof, m.proof.right)), Exists(d.witness, And(d.proof, m.proof.left)))))));
+            // One member of `v` against all of `u`.
+            let row: ((d: Exists<P>(v.has)) → le(meet(gu, g(d.witness)), out)) = λ d =>
+                fr.le_trans(meet(gu, g(d.witness)), meet(g(d.witness), gu), out,
+                    fr.le_meet(g(d.witness), gu, meet(gu, g(d.witness)), fr.meet_le_r(gu, g(d.witness)), fr.meet_le_l(gu, g(d.witness))),
+                    fr.le_trans(meet(g(d.witness), gu), sup(Exists<P>(u.has), λ e => meet(g(d.witness), g(e.witness))), out,
+                        fr.meet_sup_le(g(d.witness), Exists<P>(u.has), λ e => g(e.witness)),
+                        fr.sup_le(Exists<P>(u.has), λ e => meet(g(d.witness), g(e.witness)), out, λ e => pair(d, e))));
+            fr.le_trans(meet(gu, gv), sup(Exists<P>(v.has), λ d => meet(gu, g(d.witness))), out,
+                fr.meet_sup_le(gu, Exists<P>(v.has), λ d => g(d.witness)),
+                fr.sup_le(Exists<P>(v.has), λ d => meet(gu, g(d.witness)), out, row))
+        },
+        fr.le_trans(fr.top, sup(P, g), Cover::extend(sup, g, Opens::top<P>()), tops,
+            fr.sup_le(P, g, Cover::extend(sup, g, Opens::top<P>()),
+                λ a => fr.le_sup(Exists<P>((Opens::top<P>()).has), λ e => g(e.witness), Exists(a, trivial)))),
+        λ I f => fr.sup_le(Exists<P>((Opens::sup(I, f)).has), λ e => g(e.witness), sup(I, λ i => Cover::extend(sup, g, f(i))),
+            λ e => fr.le_trans(g(e.witness), Cover::extend(sup, g, f(e.proof.witness)), sup(I, λ i => Cover::extend(sup, g, f(i))),
+                fr.le_sup(Exists<P>((f(e.proof.witness)).has), λ m => g(m.witness), Exists(e.witness, e.proof.proof)),
+                fr.le_sup(I, λ i => Cover::extend(sup, g, f(i)), e.proof.witness))))
+}
+
+// ---------------------------------------------------------------------------
+// Points of a presented locale.
+
+// A point, read on the basis: the basic opens it lies in. It is closed
+// upwards, lies in some member of every axiom at a basic open it lies in,
+// lies under two basic opens only through one below both, and lies in
+// something. These are the completely prime filters of the presented frame,
+// stated without mentioning an open.
+record FormalPoint<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>, in: P → Type) {
+    up: (a, b: P) → le_p(a, b) → in(a) → in(b),
+    splits: (a: P, k: C(a)) → in(a) → Exists<P>(λ c => (ax(a, k)).has(c) ∧ in(c)),
+    meets: (a, b: P) → in(a) → in(b) → Exists<P>(λ c => (le_p(c, a) ∧ le_p(c, b)) ∧ in(c)),
+    some: Exists<P>(in),
+}
+
+// The point of the presented locale it is: `u ↦ ∃ a ∈ u, in(a)`.
+fn FormalPoint::point<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>, in: P → Type,
+        p: FormalPoint<P>(le_p, C, ax, in))
+    → Point(λ (u: Opens<P>) (v: Opens<P>) => FormalTopology::Le(λ a w => Cover<P>(le_p, C, ax, w, a), u, v),
+        λ (u: Opens<P>) (v: Opens<P>) => Opens::down_meet(le_p, u, v), Opens::top<P>(), Opens::sup<P>)
+{
+    LocaleMap(λ u => Cover::extend(Omega::sup, λ a => Omega(in(a)), u),
+        Cover::hom(le_p, C, ax, Omega::Frame(Omega::Le, Omega::meet, Omega::sup), λ a => Omega(in(a)),
+            λ a b h (ha: in(a)) => p.up(a, b, h, ha),
+            λ a k (ha: in(a)) => Exists(Exists((p.splits(a, k, ha)).witness, (p.splits(a, k, ha)).proof.left), (p.splits(a, k, ha)).proof.right),
+            λ a b (h: in(a) ∧ in(b)) => Exists(Exists((p.meets(a, b, h.left, h.right)).witness, (p.meets(a, b, h.left, h.right)).proof.left),
+                (p.meets(a, b, h.left, h.right)).proof.right),
+            λ (t: True) => p.some))
+}
+
+// A point lies in an open exactly through a basic open of it.
+theorem FormalPoint::in_open<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>, in: P → Type,
+        p: FormalPoint<P>(le_p, C, ax, in), u: Opens<P>, a: P, hu: u.has(a), ha: in(a)):
+    (FormalPoint::point(le_p, C, ax, in, p)).inv(u).holds
+{
+    Exists(Exists(a, hu), ha)
+}
+
+// A point in a covered basic open lies in a member of the cover: the
+// soundness of covers for points, the induction read at `Omega`.
+theorem FormalPoint::in_cover<P>(le_p: P → P → Type, C: P → Type, ax: (a: P) → C(a) → Opens<P>, in: P → Type,
+        p: FormalPoint<P>(le_p, C, ax, in), u: Opens<P>, a: P, c: Cover<P>(le_p, C, ax, u, a), ha: in(a)):
+    Exists<P>(λ b => u.has(b) ∧ in(b))
+{
+    let e = Cover::gen_le(le_p, C, ax, Omega::Frame(Omega::Le, Omega::meet, Omega::sup), λ b => Omega(in(b)),
+        λ b d h (hb: in(b)) => p.up(b, d, h, hb),
+        λ b k (hb: in(b)) => Exists(Exists((p.splits(b, k, hb)).witness, (p.splits(b, k, hb)).proof.left), (p.splits(b, k, hb)).proof.right),
+        u, a, c, ha);
+    Exists(e.witness.witness, And(e.witness.proof, e.proof))
+}

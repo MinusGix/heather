@@ -213,8 +213,11 @@ Sambin, Smith and Valentini, "Inductively generated formal topologies").
 - **Products, coproducts and the localic product.** Coproducts of frames are
   easy (pointwise); the product of locales is a presented frame, now
   presentable with `Cover`.
-- **The reals.** `localic-real-numbers` (rational intervals with the
-  splitting and shrinking axioms) is the first customer of `Cover`.
+- **The reals** are presented since 2026-11-10 (`docs/localic-reals-design.md`):
+  rational intervals with the shrinking and splitting axioms, Heine–Borel by
+  induction on the cover, Cauchy reals as points. That note also has the
+  universal property of a presented frame (`Cover::hom`), which is how a
+  generic argument reaches a constructed dictionary: through its fields.
 - **Generic theorems at a constructed dictionary.** A presented frame is a
   `Frame` value built by a function, not a registered instance, so the generic
   `Frame::…` theorems cannot be called at it; its fields can. This is the

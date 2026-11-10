@@ -1,0 +1,95 @@
+// Probes of the localic real line (`lib/std/locale/real_locale.hthr`,
+// `real_point.hthr`, `presentation.hthr`): covers built by hand, Heine–Borel
+// run as a program on one of them, the line's points at numerals, and the
+// refusals that keep the presentation honest. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import nat; import int; import bool; import list; import order; import relation_props;
+import rat; import creal;
+import frame; import formal_topology; import presentation; import real_locale; import real_point;
+
+// The family `{(0, 2), (1, 3)}`.
+fn two_pieces() → Opens<QInterval> {
+    Opens(λ c => c = QInterval(0, 2) ∨ c = QInterval(1, 3))
+}
+
+// It covers `(0, 3)`: one use of the split axiom, between 1 and 2.
+theorem two_pieces_cover(): RealLine::Cov(two_pieces(), QInterval(0, 3)) {
+    RealLine::glue(two_pieces(), 0, 1, 2, 3, trivial, Here(QInterval(0, 2), Inl(refl)), Here(QInterval(1, 3), Inr(refl)))
+}
+
+// Heine–Borel is a program. Run on that cover and the range `(1/2, 5/2)`
+// it returns the two pieces, in order.
+fn two_pieces_sub() → RealLine::FinSub(two_pieces(), Rat::inv_succ(1), Rat::mid(2, 3)) {
+    RealLine::compact(two_pieces(), QInterval(0, 3), two_pieces_cover(), Rat::inv_succ(1), Rat::mid(2, 3), trivial, trivial)
+}
+
+theorem two_pieces_sub_len(): two_pieces_sub().witness.len() = 2 { refl }
+
+theorem two_pieces_sub_first(): two_pieces_sub().witness = [QInterval(0, 2), QInterval(1, 3)] { refl }
+
+// A covered interval's rationals lie in members: 3/2 is in one of the pieces.
+theorem three_halves_in_piece(): Exists<QInterval>(λ b => two_pieces().has(b) ∧ b.Holds(Rat::mid(1, 2))) {
+    RealLine::cover_holds(two_pieces(), QInterval(0, 3), two_pieces_cover(), Rat::mid(1, 2), And(trivial, trivial))
+}
+
+// An empty interval is covered by nothing; a nonempty one is not.
+theorem backwards_is_empty(): RealLine::Cov(SupLattice::bot(Opens::sup<QInterval>), QInterval(1, 0)) {
+    RealLine::empty(SupLattice::bot(Opens::sup<QInterval>), QInterval(1, 0), trivial)
+}
+
+theorem unit_is_inhabited(): ¬(RealLine::Cov(SupLattice::bot(Opens::sup<QInterval>), QInterval(0, 1))) {
+    RealLine::nontrivial(QInterval(0, 1), trivial)
+}
+
+// The presentation adds no inclusions: `(0, 2)` is not inside `(1, 3)`, so
+// it is not covered by what lies inside `(1, 3)`.
+theorem no_new_inclusion(): ¬(RealLine::Cov(FormalTopology::basic(QInterval::Le, QInterval(1, 3)), QInterval(0, 2))) {
+    λ c => match (RealLine::basic_reflects(QInterval(0, 2), QInterval(1, 3), trivial, c)).left {}
+}
+
+// The frame laws read at the line: its meets are below their factors, by
+// the presented frame's own fields.
+theorem line_meet_le(u, v: Opens<QInterval>): RealLine::Le(RealLine::meet(u, v), u) { (RealLine::frame()).meet_le_l(u, v) }
+
+// A real is a point; at an open variable real the point's filter laws are
+// the generic ones (`Point::in_mono`).
+theorem real_point_mono(x: CReal, u, v: Opens<QInterval>, h: RealLine::Le(u, v), hu: (x.point()).inv(u).holds): (x.point()).inv(v).holds {
+    Point::in_mono(x.point(), u, v, h, hu)
+}
+
+// A real in `(0, 3)` is in one of the two pieces: covers are sound for
+// reals, at a neutral real.
+theorem real_in_piece(x: CReal, h: x.In(QInterval(0, 3))): Exists<QInterval>(λ b => two_pieces().has(b) ∧ x.In(b)) {
+    x.in_cover(two_pieces(), QInterval(0, 3), two_pieces_cover(), h)
+}
+
+// A point is in a join only through a term: the completely prime filter,
+// which no real needs to be located against the family for.
+theorem real_point_sup(x: CReal, I: Type, f: I → Opens<QInterval>, h: (x.point()).inv(Opens::sup(I, f)).holds):
+    Exists<I>(λ i => (x.point()).inv(f(i)).holds)
+{
+    Point::in_sup(x.point(), I, f, h)
+}
+
+// Negative control: a family that misses a point does not cover. `{(0, 1),
+// (1, 2)}` leaves 1 out of `(0, 2)`.
+fn gap_pieces() → Opens<QInterval> {
+    Opens(λ c => c = QInterval(0, 1) ∨ c = QInterval(1, 2))
+}
+
+theorem gap_does_not_cover(): ¬(RealLine::Cov(gap_pieces(), QInterval(0, 2))) {
+    λ c => match RealLine::cover_holds(gap_pieces(), QInterval(0, 2), c, 1, And(trivial, trivial)) {
+        Exists(_, hb) => match hb.left {
+            Inl(e) => { let at: (QInterval(0, 1).Holds(1)) = rewrite(sym(e), hb.right); Rat::lt_irrefl(1, at.right) },
+            Inr(e) => { let at: (QInterval(1, 2).Holds(1)) = rewrite(sym(e), hb.right); Rat::lt_irrefl(1, at.left) },
+        },
+    }
+}
+
+// The split axiom needs its ends in order: a proof of `2 < 1` is asked for.
+// expect-error: `2 < 1` is expected here
+theorem split_backwards(u: Opens<QInterval>, l: RealLine::Cov(u, QInterval(0, 1)), r: RealLine::Cov(u, QInterval(2, 3))):
+    RealLine::Cov(u, QInterval(0, 3))
+{
+    RealLine::glue(u, 0, 2, 1, 3, trivial, l, r)
+}

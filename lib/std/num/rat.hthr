@@ -2022,6 +2022,27 @@ theorem Rat::same_of_dist_above(self x, a, b: Rat, xb: x <= b, ba: b <= a, d: (a
     Rat::le_antisymm(x.le_of_sub_le_sub_r(a, b, Rat::le_respects(da, db, d)), ba)
 }
 
+// The midpoint of two rationals, strictly between them when they differ:
+// the rationals are dense, with the point given.
+fn Rat::mid(p, q: Rat) → Rat { (p + q) * Rat::inv_succ(1) }
+
+theorem Rat::mid_twice(p, q: Rat): Rat::mid(p, q) + Rat::mid(p, q) ≈ p + q {
+    let s = p + q;
+    let half: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = Rat::inv_succ_half(0);
+    Rat::same_trans(Rat::same_sym(s.mul_add_distr(Rat::inv_succ(1), Rat::inv_succ(1))),
+        Rat::same_trans(Rat::mul_respects(s.same_refl(), half), s.mul_one()))
+}
+
+theorem Rat::lt_of_twice({p, q, m: Rat}, h: p < q, e: m + m ≈ p + q): p < m ∧ m < q {
+    let lo: (p < m) = linarith(h, e);
+    let hi: (m < q) = linarith(h, e);
+    And(lo, hi)
+}
+
+theorem Rat::lt_mid({p, q: Rat}, h: p < q): p < Rat::mid(p, q) { (Rat::lt_of_twice(h, Rat::mid_twice(p, q))).left }
+
+theorem Rat::mid_lt({p, q: Rat}, h: p < q): Rat::mid(p, q) < q { (Rat::lt_of_twice(h, Rat::mid_twice(p, q))).right }
+
 // Comparing the distances from `x` to `a` and to `b` is comparing `x` with
 // their midpoint `m`.
 theorem Rat::sub_shift(self x, a, b: Rat): (x - a) + (a + x) ≈ x + x ∧ (b - x) + (a + x) ≈ a + b {
