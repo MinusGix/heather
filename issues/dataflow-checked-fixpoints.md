@@ -5,7 +5,7 @@ labels: [lattice,native,analysis]
 area: mathematics
 milestone: [hih-passes,hih-native-heather]
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 `lib/std/algebra/lattice.hthr` has semilattices but the library has no
@@ -41,3 +41,7 @@ as an instance with only its local lemmas.
 - **[[facts-on-demand]]** owns how facts are requested. Assumed here: only
   that analyses produce them.
 - **[[word-abstract-domains]]** supplies numeric domains.
+
+## Log
+
+- 2026-11-10: The general order theory (monotone maps, Galois connections, Park induction, Kleene iteration) is now owned by [[galois-connections-and-checked-fixpoints]] under `math-order-fixpoints`; this issue keeps the region framework and its liveness and `Ix::hi` instances.

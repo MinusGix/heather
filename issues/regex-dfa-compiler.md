@@ -3,7 +3,7 @@ title: The regex language's compiler: a DFA, its soundness once, and Compile(nam
 status: open
 labels: [native,compiler,dsl]
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-10
 area: heather-in-heather
 milestone: [nh-front]
 ---
@@ -28,3 +28,4 @@ The `regex` language (`lib/std/text/regex.hthr`, docs/value-definitions-design.m
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[facts-on-demand]] (`docs/compilation-vision.md`).
+- 2026-11-10: The language theory (denotation, derivatives, the derivative automaton and its language theorem) is now owned by [[regular-languages-by-derivatives]] under `math-formal-languages`; this issue keeps the compiler and `Compile(name)`.
