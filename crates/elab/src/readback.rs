@@ -545,7 +545,7 @@ impl<'v, 'g> Readback<'v, 'g> {
             args.push(if layout.fixed(p) { self.entry(entries[first + p])? } else { Rc::new(Term::Zero) });
         }
         let subst = LocalSubst {
-            tail: SubstTail::Empty { len: self.len, base: self.gamma.base.clone() },
+            tail: SubstTail::Empty,
             terms: vec![],
         };
         let ok = match refold::verdict(stored) {
