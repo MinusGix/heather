@@ -74,19 +74,95 @@ fn KnownHold(values: Valuation(), known: List<Known>) → Type {
 }
 
 // The abstract register file: what each register holds, and what is known.
-record File { at: Gpr → Option<Held>, known: List<Known> }
+//
+// The slots are data, a register's four index bits deep, and not a function
+// of the register: a lookup is four projections however many writes came
+// before it, where a function built by `write` asked every earlier write
+// whether it was the one, and a file where two arms meet evaluates a slot
+// once, where a function of the two arms' files evaluated both at every
+// lookup (issues/native-function-emission-one-statement.md). It also makes
+// a file a value that can be written down.
+record Two<A> { low: A, high: A }
 
-fn File::empty() → File { File(at := λ (register: Gpr) => None, known := []) }
+fn Slots() → Type { Two<Two<Two<Two<Option<Held>>>>> }
 
-fn File::write(self file: File, register: Gpr, held: Option<Held>) → File {
-    File(at := λ (query: Gpr) =>
-        match register.same(query) {
-            False => file.at(query),
-            True => held,
-        }, known := file.known)
+fn slots_at(slots: Slots(), register: Gpr) → Option<Held> {
+    match register {
+        Rax => slots.low.low.low.low,
+        Rcx => slots.low.low.low.high,
+        Rdx => slots.low.low.high.low,
+        Rbx => slots.low.low.high.high,
+        Rsp => slots.low.high.low.low,
+        Rbp => slots.low.high.low.high,
+        Rsi => slots.low.high.high.low,
+        Rdi => slots.low.high.high.high,
+        R8 => slots.high.low.low.low,
+        R9 => slots.high.low.low.high,
+        R10 => slots.high.low.high.low,
+        R11 => slots.high.low.high.high,
+        R12 => slots.high.high.low.low,
+        R13 => slots.high.high.low.high,
+        R14 => slots.high.high.high.low,
+        R15 => slots.high.high.high.high,
+    }
 }
 
-fn File::know(self file: File, known: Known) → File { File(at := file.at, known := Cons(known, file.known)) }
+fn slots_set(slots: Slots(), register: Gpr, held: Option<Held>) → Slots() {
+    match register {
+        Rax => Two(Two(Two(Two(held, slots.low.low.low.high), slots.low.low.high), slots.low.high), slots.high),
+        Rcx => Two(Two(Two(Two(slots.low.low.low.low, held), slots.low.low.high), slots.low.high), slots.high),
+        Rdx => Two(Two(Two(slots.low.low.low, Two(held, slots.low.low.high.high)), slots.low.high), slots.high),
+        Rbx => Two(Two(Two(slots.low.low.low, Two(slots.low.low.high.low, held)), slots.low.high), slots.high),
+        Rsp => Two(Two(slots.low.low, Two(Two(held, slots.low.high.low.high), slots.low.high.high)), slots.high),
+        Rbp => Two(Two(slots.low.low, Two(Two(slots.low.high.low.low, held), slots.low.high.high)), slots.high),
+        Rsi => Two(Two(slots.low.low, Two(slots.low.high.low, Two(held, slots.low.high.high.high))), slots.high),
+        Rdi => Two(Two(slots.low.low, Two(slots.low.high.low, Two(slots.low.high.high.low, held))), slots.high),
+        R8 => Two(slots.low, Two(Two(Two(held, slots.high.low.low.high), slots.high.low.high), slots.high.high)),
+        R9 => Two(slots.low, Two(Two(Two(slots.high.low.low.low, held), slots.high.low.high), slots.high.high)),
+        R10 => Two(slots.low, Two(Two(slots.high.low.low, Two(held, slots.high.low.high.high)), slots.high.high)),
+        R11 => Two(slots.low, Two(Two(slots.high.low.low, Two(slots.high.low.high.low, held)), slots.high.high)),
+        R12 => Two(slots.low, Two(slots.high.low, Two(Two(held, slots.high.high.low.high), slots.high.high.high))),
+        R13 => Two(slots.low, Two(slots.high.low, Two(Two(slots.high.high.low.low, held), slots.high.high.high))),
+        R14 => Two(slots.low, Two(slots.high.low, Two(slots.high.high.low, Two(held, slots.high.high.high.high)))),
+        R15 => Two(slots.low, Two(slots.high.low, Two(slots.high.high.low, Two(slots.high.high.high.low, held)))),
+    }
+}
+
+// The slots a function of the register describes.
+fn slots_of(at: Gpr → Option<Held>) → Slots() {
+    Two(Two(Two(Two(at(Rax), at(Rcx)), Two(at(Rdx), at(Rbx))), Two(Two(at(Rsp), at(Rbp)), Two(at(Rsi), at(Rdi)))), Two(Two(Two(at(R8), at(R9)), Two(at(R10), at(R11))), Two(Two(at(R12), at(R13)), Two(at(R14), at(R15)))))
+}
+
+theorem slots_at_of(at: Gpr → Option<Held>, register: Gpr): slots_at(slots_of(at), register) = at(register) {
+    match register { _ => refl }
+}
+
+// A write is read back at its register and leaves every other as it was.
+theorem slots_at_set(slots: Slots(), register: Gpr, held: Option<Held>, query: Gpr):
+    slots_at(slots_set(slots, register, held), query) = match register.same(query) { False => slots_at(slots, query), True => held } {
+    match register { _ => match query { _ => refl } }
+}
+
+record File { slots: Slots(), known: List<Known> }
+
+fn File::at(self file: File, register: Gpr) → Option<Held> { slots_at(file.slots, register) }
+
+fn File::empty() → File { File(slots_of(λ (register: Gpr) => None), []) }
+
+fn File::write(self file: File, register: Gpr, held: Option<Held>) → File {
+    File(slots_set(file.slots, register, held), file.known)
+}
+
+theorem File::empty_at(register: Gpr): File::empty().at(register) = None {
+    slots_at_of(λ (register: Gpr) => None, register)
+}
+
+theorem File::write_at(self file: File, register: Gpr, held: Option<Held>, query: Gpr):
+    file.write(register, held).at(query) = match register.same(query) { False => file.at(query), True => held } {
+    slots_at_set(file.slots, register, held, query)
+}
+
+fn File::know(self file: File, known: Known) → File { File(file.slots, Cons(known, file.known)) }
 
 fn Held::Rep(self held: Held, values: Valuation(), word: BitVec(64)) → Type {
     match held.kind {
@@ -114,7 +190,7 @@ fn File::Represents(self file: File, values: Valuation(), gprs: Gprs) → Type {
 theorem File::empty_represents(values: Valuation(), gprs: Gprs):
     File::empty().Represents(values, gprs)
 {
-    ⟨λ register => trivial, trivial⟩
+    ⟨λ register => j(sym(File::empty_at(register)), λ slot _ => SlotRep(values, slot, read_gpr(register, gprs)), trivial), trivial⟩
 }
 
 // The one lemma every write goes through: the register written holds what
@@ -126,13 +202,14 @@ theorem File::represents_write(self file: File, values: Valuation(), gprs: Gprs,
     file.write(register, slot).Represents(values,
         write_gpr(register, word, gprs))
 {
-    ⟨λ query =>
+    ⟨λ query => j(sym(file.write_at(register, slot, query)),
+        λ now _ => SlotRep(values, now, read_gpr(query, write_gpr(register, word, gprs))),
         match register.same(query) as λ b =>
             SlotRep(values, match b { False => file.at(query), True => slot },
                 match b { False => gprs.at(query), True => word }) {
             False => before.left(query),
             True => written,
-        }, before.right⟩
+        }), before.right⟩
 }
 
 theorem File::represents_know(self file: File, values: Valuation(), gprs: Gprs, known: Known,
@@ -149,12 +226,14 @@ theorem File::represents_retag(self file: File, values: Valuation(), gprs: Gprs,
     here: SlotRep(values, slot, read_gpr(register, gprs))):
     file.write(register, slot).Represents(values, gprs)
 {
-    ⟨λ query =>
-        match same: register.same(query) {
-            False => before.left(query),
-            True => j(register.same_sound(query, same),
+    ⟨λ query => j(sym(file.write_at(register, slot, query)),
+        λ now _ => SlotRep(values, now, read_gpr(query, gprs)),
+        (match register.same(query) as λ b => register.same(query) = b →
+            SlotRep(values, match b { False => file.at(query), True => slot }, read_gpr(query, gprs)) {
+            False => λ _ => before.left(query),
+            True => λ same => j(register.same_sound(query, same),
                 λ q _ => SlotRep(values, slot, read_gpr(q, gprs)), here),
-        }, before.right⟩
+        })(refl)), before.right⟩
 }
 
 // The file says `register` holds `held`.
@@ -3021,8 +3100,11 @@ fn reads_of(nodes: List<Node>, outputs: List<Nat>) → List<Nat> {
     match nodes { Nil => outputs, Cons(node, rest) => node.reads() ++ reads_of(rest, outputs) }
 }
 
-fn slot_free(slot: Option<Held>, live: List<Nat>) → Bool {
-    match slot { None => True, Some(held) => !mentions(live, held.id) }
+// Liveness is asked as a predicate on ids, so a caller answers it from
+// whatever it keeps: a list scanned (`mentions`), or a set
+// (`function_ir_lower_structured`'s counted reads).
+fn slot_free(slot: Option<Held>, live: Nat → Bool) → Bool {
+    match slot { None => True, Some(held) => !live(held.id) }
 }
 
 // The SysV caller-saved registers, the only ones the heuristic writes.
@@ -3032,7 +3114,7 @@ fn Gpr::listed(self register: Gpr, pool: List<Gpr>) → Bool {
     match pool { Nil => False, Cons(other, rest) => register.same(other) || register.listed(rest) }
 }
 
-fn File::first_free(self file: File, live: List<Nat>, pool: List<Gpr>) → Option<Gpr> {
+fn File::first_free(self file: File, live: Nat → Bool, pool: List<Gpr>) → Option<Gpr> {
     match pool {
         Nil => None,
         Cons(register, rest) => match slot_free(file.at(register), live) {
@@ -3071,10 +3153,10 @@ fn File::narrow_at(self file: File, id: Nat, registers: List<Gpr>) → Option<Gp
     }
 }
 
-fn Node::in_place(self node: Node, file: File, later: List<Nat>) → Option<Gpr> {
+fn Node::in_place(self node: Node, file: File, later: Nat → Bool) → Option<Gpr> {
     match node.reads() {
         Nil => None,
-        Cons(left, _) => match function_ir_lower::mentions(later, left) {
+        Cons(left, _) => match later(left) {
             True => None,
             False => match file.find(Held(left, Word)) {
                 None => file.narrow_at(left, search_order()),
@@ -3100,16 +3182,18 @@ fn prefers_operand(node: Node) → Bool {
 // `pool`, or is RAX and the output is not read after a later call
 // (`crossed`; a call's result lands in RAX); else the first free register
 // of `pool`.
-fn Node::choose_from(self node: Node, file: File, later: List<Nat>, entries: List<Port>,
-    registers, pool: List<Gpr>, crossed: List<Nat>) → Gpr
+//
+// `live` is what is read by the node or after it, `later` what is read
+// after it, and `crossed` what is read after a later call.
+fn Node::choose_by(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed: Nat → Bool) → Gpr
 {
-    let live = node.reads() ++ later;
     let fresh = match file.first_free(live, pool) { None => Rax, Some(r) => r };
     let reuse = match prefers_operand(node) {
         False => fresh,
         True => match node.in_place(file, later) {
             None => fresh,
-            Some(r) => match r.listed(pool) || (r.same(Rax) && !function_ir_lower::mentions(crossed, node.output_id())) {
+            Some(r) => match r.listed(pool) || (r.same(Rax) && !crossed(node.output_id())) {
                 True => r,
                 False => fresh,
             },
@@ -3119,6 +3203,15 @@ fn Node::choose_from(self node: Node, file: File, later: List<Nat>, entries: Lis
         None => reuse,
         Some(target) => match slot_free(file.at(target), live) { True => target, False => reuse },
     }
+}
+
+// `choose_by` with what is read later, and after a later call, as lists.
+fn Node::choose_from(self node: Node, file: File, later: List<Nat>, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed: List<Nat>) → Gpr
+{
+    node.choose_by(file, λ (id: Nat) => function_ir_lower::mentions(node.reads() ++ later, id),
+        λ (id: Nat) => function_ir_lower::mentions(later, id), entries, registers, pool,
+        λ (id: Nat) => function_ir_lower::mentions(crossed, id))
 }
 
 fn Node::choose(self node: Node, file: File, later: List<Nat>, entries: List<Port>,

@@ -442,6 +442,26 @@ by a definition whose reduction cost matches its meaning, or by
 reflection, never by a kernel case for that definition — and what is not
 accelerated is refused with `OutOfFuel`, never a process abort.
 
+**Numbers written a piece at a time** (2026-11-10,
+`issues/succ-chain-numbers-fold-unary.md`). `Succ(t)` evaluates to a
+successor over a thunk, and a number read off a call's result is the glued
+call until something eliminates it, so a counter threaded through a
+recursion (`next`, then `Succ(next)`) is a chain of thunks and not a run:
+a classified fold over it took a step a link, where the same number as a
+literal is one run. A `Sync` or `Affine` fold now reads such a chain *as
+far as it is already forced* as the run it spells (`Eval::forced_run`):
+through successors, through the forced tails of runs, and through the
+forced unfoldings of glued calls, down to the first thunk that is not a
+forced number. This is a representation change of the first kind above.
+Each piece's memo is replaced by a `NatRun` over the same base thunk that
+denotes the same number, so a memo stays a function of its closure. It
+forces nothing (a fold that would not have looked below a predecessor
+still does not, so no fuel is spent on a value the unary fold would have
+left alone), it charges a unit of fuel a piece and each piece is rewritten
+once, a glued call keeps its glue (it is the unfolding's memo that is
+rewritten), and reading a sealed proof's memo is noted as forcing it is.
+A first fold over a chain nothing has forced is still a step a link.
+
 **Numerals of any size** (2026-09-26, `docs/wide-numerals-design.md`).
 `Term::NatLit` is a compact spelling of `Succ^n(Zero)` whose one-step view
 is `Succ(NatLit(n - 1))`; it carries a `heather_numeral::Numeral`, an

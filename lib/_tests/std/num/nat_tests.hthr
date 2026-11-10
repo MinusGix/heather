@@ -45,3 +45,29 @@ theorem div_symbols(): 17 / 5 = 3 ∧ 17 % 5 = 2 ∧ 17 / 0 = 0 ∧ 17 % 0 = 17 
     And(refl, And(refl, And(refl, refl)))
 }
 theorem div_symbols_open(a, b: Nat): a / b = a.div(b) ∧ a % b = a.mod(b) { And(refl, refl) }
+
+// A counter written a piece at a time is compared as the number it spells
+// (`issues/succ-chain-numbers-fold-unary.md`). Each walk compares its
+// counter at every step: a comparison that read the counter a successor at
+// a time made the walk quadratic, and each of these ran out of fuel well
+// before its end. The counter is a written successor of the one before,
+// and one read off a record a call returns.
+fn climbs(steps, at: Nat) → Bool {
+    match steps { Zero => True, Succ(rest) => at.same(at) && climbs(rest, Succ(at)) }
+}
+
+record Counter { seen: Nat, next: Nat }
+
+fn Counter::step(self c: Counter) → Counter { Counter(c.next, Succ(c.next)) }
+
+fn climbs_through(steps: Nat, c: Counter) → Bool {
+    match steps { Zero => True, Succ(rest) => c.next.same(Succ(c.seen)) && climbs_through(rest, c.step()) }
+}
+
+theorem climbs_far(): climbs(4000, 0) = True { refl }
+theorem climbs_through_far(): climbs_through(4000, Counter(0, 1)) = True { refl }
+
+// The decider is `same`'s, so two long literals are decided in a step or
+// two each way, where a walk down both took a step a successor.
+theorem eq_dec_long(): (match Nat::eq_dec(1000000, 1000000) { Inl(_) => True, Inr(_) => False }) = True { refl }
+theorem eq_dec_long_differ(): (match Nat::eq_dec(1000000, 1000001) { Inl(_) => True, Inr(_) => False }) = False { refl }

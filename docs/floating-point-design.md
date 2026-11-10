@@ -734,9 +734,10 @@ rounds to `+0`; a negative value that rounds to zero gives `-0`.
 in the quotient, so literal `round_rat` tests stay on E2M1-sized values;
 `round_dyadic` and `round_h` evaluate through the kernel's accelerated
 `half`, `leb` and `le_dec`, so E5M2 and E4M3 overflow cases compute by
-`refl`. A decision that uses `Nat::eq_dec` is not accelerated and ran out of
-fuel at E5M2's magnitudes; the module tests equality as `¬(n + 1 <= m)`
-instead. A binary division for `round_rat` is
+`refl`. A decision that used `Nat::eq_dec` was not accelerated then and ran
+out of fuel at E5M2's magnitudes, so the module tests equality as
+`¬(n + 1 <= m)` (`eq_dec` decides by `same` since 2026-11-10 and would do
+now). A binary division for `round_rat` is
 [float-round-rat-division-cost](../issues/float-round-rat-division-cost.md).
 
 Observations for later rounds:

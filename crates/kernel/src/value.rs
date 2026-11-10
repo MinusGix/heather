@@ -754,6 +754,10 @@ impl<K: Copy + Eq + std::hash::Hash, V: Copy> ValueCache<K, V> {
         }
     }
 
+    fn replace(&mut self, key: K, value: V) {
+        self.values.insert(key, value);
+    }
+
     #[cfg(feature = "value-metrics")]
     fn len(&self) -> usize {
         self.values.len()
@@ -1091,6 +1095,17 @@ impl<'v> ValueArena<'v> {
             }
             #[cfg(not(feature = "value-metrics"))]
             let _ = inserted;
+        }
+    }
+
+    /// Replace what `clo` is remembered to evaluate to by `value`, which the
+    /// caller knows to denote the same number in a more compact form
+    /// (`Eval::forced_run`: a forced chain of successors as one run).
+    /// The memo stays a function of the closure: only its representation of
+    /// that value changes.
+    pub(crate) fn recache_tm(&self, clo: &'v TmClo<'v>, value: &'v Val<'v>) {
+        if !matches!(clo, TmClo::Val(_)) {
+            self.term_cache.borrow_mut().replace(clo as *const TmClo<'v>, value);
         }
     }
 

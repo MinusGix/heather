@@ -1,6 +1,6 @@
 ---
 title: A function's emission is one kernel statement, which bounds how large a compiled function may be
-status: open
+status: closed
 labels: [native,compiler,performance]
 area: heather-in-heather
 milestone: [nh-front,self-lexer]
@@ -88,3 +88,70 @@ A function of a hundred comparisons certifies under the usual cap (the
 64-leaf tree and the 40-arm chain above are the first two cases), or the
 reason it cannot is written here with the shape that does; and the read
 memory is attributed.
+
+## Log
+
+- 2026-11-10: Closed by the round that attributed it. The statement is still one
+  conversion; what changed is what a node costs inside it, and the memory.
+
+  **Attribution.** Emission was linear in the function all along (about
+  3,500 steps a node at the start of the round). The memory was not the
+  emission's read: the placement search's read grew quadratically (its
+  liveness was lists of ids, scanned and re-concatenated at every node) on
+  top of a flat 1.1 GB for the generator, and the emission's read is some
+  tens of megabytes. The superlinear steps of a chain were number
+  comparisons, not `File::meet`.
+
+  **What was costing the steps**, in the order found:
+
+  - `Nat::eq_dec` walked both numbers a successor at a time. It decides by
+    `same` now (which the kernel iterates over runs) and reads its proofs
+    off `same`'s two laws.
+  - A counter written a piece at a time (`next`, then `Succ(next)`, read
+    off a call's result) was compared a successor at a time by every
+    comparison, however the comparison's step classified, which made every
+    id lookup linear in the id and the function quadratic
+    ([[succ-chain-numbers-fold-unary]], a kernel evaluator change).
+  - The register file was a function (`Gpr → Option<Held>`): a lookup
+    walked every write since the last join, and a join re-evaluated both
+    arms' files per register. It is sixteen slots of data now (`Slots`,
+    `slots_at`, `slots_set`), with the two laws the proofs read
+    (`File::write_at`, `File::meet_at`).
+  - The placement search keeps counted sets (`Reads`, a `NatMap` of
+    counts) where it kept lists, with the same answers: the linked SHA-2
+    and scanner code is byte-identical (`scripts/linked --check`).
+
+  **Measured** (cloud box, width one, fresh salts, the usual 8 GiB cap):
+
+  | shape | before | after |
+  |---|---|---|
+  | 40-leaf tree, emission steps | 0.70M | under 0.39M |
+  | 40-leaf tree, placement read steps | 4.3M | under 1.7M |
+  | 40-leaf tree, peak | 1.9 GB | 1.1 GB |
+  | 40-arm chain | `OutOfFuel` | certifies, 8 s, 1.4 GB |
+  | 64-leaf tree | `OutOfFuel`, 3.6 GB | certifies, 8 s, 1.2 GB |
+  | 64-arm chain | `OutOfFuel` | certifies, 14 s, 2.9 GB |
+  | 100-leaf tree | `OutOfFuel` | certifies, 39 s, 2.1 GB (`emits_0` 0.83M steps, `scanned_0` 0.40M, `returns` 0.24M; placement read 3.0M) |
+
+  So the done-when holds with the statement as it is, at about four fifths
+  of the budget for the hundred-leaf tree. That margin is not a design:
+  [[native-function-emission-in-parts]] is the part of this issue's
+  directions that removes the ceiling, and it lists what a node still costs.
+  Past a hundred comparisons the first refusals are now the generator's, not
+  the emission's ([[runtime-generator-large-function-limits]]).
+
+  **Tried and taken back out.** `Nat::equation` deciding by `same` and
+  walking only when its proof is transported: it cost an open-term proof
+  (`rt_lower_tests::spread_agrees`) a quarter more steps. Deciding the
+  lowering's type-code checks by `Ty::same` (no proof kept): it removes the
+  equation's share of the emission, about a sixth, and made the smaller
+  agreement probes two to three times cheaper, but put `spread_agrees`
+  past its budget again, for a reason found this time
+  ([[runtime-shift-conversion-unfolding]], its 2026-11-10 log).
+
+  **Gotcha met on the way.** With the file as data, one proof's `match`
+  lost its synthesized motive: the goal's stuck head now takes more than
+  `STUCK_SPELLING_STEPS` to spell, and the fallback is the unabstracted
+  goal, so the error is a `trivial` mismatch far from the cause. The motive
+  is written out there (`emit_calls_emits`, the `Conditional` arm);
+  [[match-motive-stuck-spelling-budget]].

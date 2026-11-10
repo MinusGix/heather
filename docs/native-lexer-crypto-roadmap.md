@@ -132,6 +132,15 @@ pipeline beside `compile-x86`'s word functions and `write-elf`'s programs.
 This has not been checked against the proofs, so it opens with a design
 round (`issues/native-library-exports-design.md`).
 
+*Checked 2026-11-10, and the lean does not hold*
+(`docs/native-library-exports-design.md` §2, proposed): `Source`'s theorem
+is about a process and its procedures' convention is not System V, while
+`compiled_returns` already is a call contract met from outside and every
+linked export already is a `compile-x86` function. The note proposes the
+export as a function of the verified pipeline, which learns to read a span
+its caller lends, and a buffer as a value in the meaning with its address
+only in the machine theorem.
+
 **Not on the spine.** The effects surface is needed only for standalone
 tools. The heap is needed by a parser, not by a scanner or a hash. The
 ownership setup matters in one place: an in-place state update is a `Set`
@@ -495,10 +504,47 @@ What a function may be is now bounded by one statement, its emission
 (`issues/native-function-emission-one-statement.md`), where it was bounded
 by three; what a program may be is not bounded by anything measured.
 
+**2026-11-10, the fourth round** (Minus: "let's do that issue to get rid
+of that blocker, and continue"). The emission limit, attributed and then
+moved (`issues/native-function-emission-one-statement.md`, closed):
+
+- **The cost was numbers and the register file, not the statement.**
+  Emission was linear in the function; what made it dear, and the chain
+  superlinear, was every comparison of two ids reading them a successor
+  at a time. A counter threaded through a recursion is written `Succ(next)`
+  and read off a call's result, and the kernel held it as a chain of
+  thunks where the same number as a literal is one run. A fold the run
+  machinery iterates now reads an already-forced chain as the run it
+  spells and remembers it (kernel,
+  `issues/succ-chain-numbers-fold-unary.md`). `Nat::eq_dec` decides by
+  `same`.
+- **The register file is data.** It was a function from registers, so a
+  lookup walked every write since the last join and a join evaluated both
+  arms' files per register. It is sixteen slots now, with the two laws the
+  proofs read (`File::write_at`, `File::meet_at`); it is also what a
+  certificate would have to state between regions, which it could not when
+  the file was a closure.
+- **The memory was the placement search's.** Its liveness was lists of
+  ids, scanned and concatenated again at every node; it keeps counted sets
+  now, with the same answers (the linked code is byte-identical).
+- **What compiles.** A balanced tree of a hundred leaves and chains of
+  forty and sixty-four arms certify under the usual cap, each as one
+  function. Past that the first refusals are the generator's
+  (`issues/runtime-generator-large-function-limits.md`).
+
+The statement is still one conversion, so there is still a ceiling, a
+little above where the generator now stops. Emitting a region at a time is
+the design that removes it (`issues/native-function-emission-in-parts.md`),
+with `write-elf`'s parts as the precedent; it was not needed to reach the
+round's target and was not built.
+
 Next, in order of what they unblock: the read half of caller-owned memory
 (a borrowed read-only span through the lowering and the function compiler,
 which compiles the scanner's loop and is the smaller half of the export
 contract); fixed arrays and tables in the
 pure fragment (the whole of `compress` in Heather, and the automaton as a
 table); then the write half and SHA-256 behind a switch in `crates/cache`.
+The read half's design is written and waits on Minus
+(`docs/native-library-exports-design.md`, with its rounds R1 to R3 in §10
+there).
 

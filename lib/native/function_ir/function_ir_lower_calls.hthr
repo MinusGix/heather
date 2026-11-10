@@ -1764,8 +1764,23 @@ theorem StructuredRegion::emit_calls_emits<M>(self region: StructuredRegion, sit
                     continuation.emit_calls(first.prog, first.file, first.placement, first.names, bound),
                     continuation.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, first.prog, first.file, first.placement, first.names)),
             })(prefix.emit_calls_emits<M>(site, laid, stack, callees, bound, calls, values, d, s0, rsp0, room, fits, prog, file, placement, names)),
+        // The motive is written out: read off the goal it is past the
+        // budget a stuck head is spelled within, the file's slots being a
+        // reduction further down than a function's application was.
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => λ prog file placement names =>
-            match file.branch_test(condition) {
+            match file.branch_test(condition) as λ t =>
+                MayEmitIn<M>(site, stack, values, d, s0, prog, file,
+                    StructuredRegionHoldsIn(callees, values, Conditional(inputs, condition, arguments, outputs, when_true, when_false)),
+                    match t {
+                        None => None,
+                        Some(tested) => match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) {
+                            None => None,
+                            Some(yes) => match when_false.emit_calls(yes.prog.else_label(Succ(names), Succ(Succ(names))), file, yes.placement, yes.names, bound) {
+                                None => None,
+                                Some(no) => Some(Emitted(no.prog.join_label(Succ(Succ(names))), yes.file.meet(no.file, file.known), no.placement, no.names)),
+                            },
+                        },
+                    }) {
                 None => trivial,
                 Some(tested) =>
                     (match when_true.emit_calls(prog.branched(tested.test, Succ(names)), file, placement, Succ(Succ(names)), bound) as λ y =>
