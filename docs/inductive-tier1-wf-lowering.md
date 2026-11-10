@@ -291,9 +291,12 @@ ih as what it came from:
   one through the definition, then share the step's closure, and conversion
   answers them by identity rather than by comparing case trees.
 
-The unifier's own head walk still descends the case tree one constructor at
-a time by substitution, which is the remaining superlinear term
-(`issues/wide-inductive-unifier-case-descent.md`).
+The arity is a case tree too, and every node of it spells the remaining
+shape, so a term that mentions `Fin(n[?a])` is large in `n`. The unifier's
+δ-lazy step zonked such a pattern at every recursive arm although no rule
+reads a `case`; it now skips patterns headed by an eliminator without a
+congruence (`unification.rs`, `inert_pattern`;
+`issues/wide-inductive-unifier-case-descent.md`).
 
 ## 7. No-confusion
 

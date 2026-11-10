@@ -1,11 +1,11 @@
 ---
-title: The unifier's head walk descends an n-arm Wf case tree by substitution, quadratic over a wide lemma
-status: open
+title: The unifier's δ-lazy step zonks an n-node arity case tree per arm, quadratic over a wide lemma
+status: closed
 labels: [elaboration,inductives,performance]
 area: language
 milestone: [math-metatheory]
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 After [[wide-inductive-lemma-quadratic-gate]], the lemma `Tm::open_lc` over an
@@ -37,3 +37,11 @@ case descent before it is the residue.
 `scripts/bench-frontend --filter wide-lemma` at sizes past 128 formers
 holds an exponent near one, and `unify_ns` in a `--timings` run of the
 probe grows linearly.
+
+## Log
+
+- 2026-11-10: Attribution corrected, then fixed. Stack samples of `open_lc` at 360 formers put `unify_ns` in `unification::zonked_tm` under `unify_unfolded`, not in the head walk: the δ-lazy step's guard ("does the pattern still have an open slot?") applies the meta block twice as a global substitution and compares, and the pattern there was `Tm`'s *arity*, a `case` tree whose every node spells the remaining shape (`Fin(n[?a])`-shaped, against the same tree at a concrete label). That walk is superlinear in n, about once per recursive arm. The body above guessed the case descent; it was not that.
+
+  No rule of `unify_tm` reads a pattern headed by an eliminator other than `elimNat`, the projections or a β-redex's λ: such a pairing falls through to `unify_unfolded` at every unfolding of the subject and learns nothing. `inert_pattern` now returns before the zonk for those heads.
+
+  `open_lc`, release, width one: `unify_ns` 93 / 453 / 1,865 ms → 2 / 5 / 18 ms at 90 / 180 / 360 formers; item total at 360 4.5 s → 2.8 s. Every exact counter (steps, queries, misses, unify calls) is unchanged: the step only removed wasted work. `inductive/wide-lemma` slope ~1.1 over three runs (was ~1.2).
