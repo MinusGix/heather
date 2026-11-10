@@ -31,6 +31,7 @@ import list;
 import logic;
 import nat;
 import option;
+import nat_map;
 
 // ---------------------------------------------------------------------------
 // The join: what both arms' files agree on
@@ -674,6 +675,22 @@ fn Node::folded(self node: Node, folds: List<Nat>, last: Bool) → Bool {
 
 record Planned { placement: List<Place>, file: File }
 
+// The planner binds what it reads more than once with `shared`: a `let`
+// is inlined where it is read, so a plan read for its placement and again
+// for its file was computed twice at every block, and a node's place three
+// times (issues/elaborated-let-sharing-lost.md).
+
+// `place`, then the places of what follows.
+fn Planned::put(self tail: Planned, place: Place) → Planned { Planned(Cons(place, tail.placement), tail.file) }
+
+// The places of `first`, then of `rest`, which was planned from its file.
+fn Planned::joined(self first: Planned, rest: Planned) → Planned { Planned(first.placement ++ rest.placement, rest.file) }
+
+// A conditional's arms' places, and the file where they meet.
+fn Planned::met(self yes: Planned, no: Planned, known: List<Known>) → Planned {
+    Planned(yes.placement ++ no.placement, yes.file.meet(no.file, known))
+}
+
 fn List::is_empty<A>(self list: List<A>) → Bool { match list { Nil => True, Cons(_, _) => False } }
 
 // The nodes' places: folded as `folds` says, else registers from `pool`,
@@ -683,17 +700,14 @@ fn plan_block(nodes: List<Node>, file: File, after: List<Nat>, entries: List<Por
     match nodes {
         Nil => Planned([], file),
         Cons(node, rest) => {
-            let place = match node.folded(folds, rest.is_empty()) {
+            let chosen = match node.folded(folds, rest.is_empty()) {
                 True => Folded,
                 False => Into(node.choose_from(file, reads_of(rest, after), entries, registers, pool, crossed)),
             };
-            match node.lower_at(place, file) {
+            shared(chosen, λ (place: Place) => match node.lower_at(place, file) {
                 None => Planned([place], file),
-                Some(step) => {
-                    let tail = plan_block(rest, step.file, after, entries, registers, pool, folds, crossed);
-                    Planned(Cons(place, tail.placement), tail.file)
-                },
-            }
+                Some(step) => plan_block(rest, step.file, after, entries, registers, pool, folds, crossed).put(place),
+            })
         },
     }
 }
@@ -764,38 +778,41 @@ fn StructuredRegion::plan_from(self region: StructuredRegion, file: File, after:
     match region {
         Dataflow(body) => plan_block(body.nodes, file, after, entries, registers, pool, folds, crossed),
         Sequence(prefix, continuation) => {
-            let first = plan_block(prefix.nodes, file, continuation.reads() ++ after, entries, registers, pool, folds,
+            let block = plan_block(prefix.nodes, file, continuation.reads() ++ after, entries, registers, pool, folds,
                 continuation.crossing(after, crossed));
-            let rest = continuation.plan_from(first.file, after, entries, registers, pool, folds, crossed);
-            Planned(first.placement ++ rest.placement, rest.file)
+            shared(block, λ (first: Planned) =>
+                first.joined(continuation.plan_from(first.file, after, entries, registers, pool, folds, crossed)))
         },
         Compose(prefix, continuation) => {
-            let first = prefix.plan_from(file, continuation.reads() ++ after, entries, registers, pool, folds,
+            let before = prefix.plan_from(file, continuation.reads() ++ after, entries, registers, pool, folds,
                 continuation.crossing(after, crossed));
-            let rest = continuation.plan_from(first.file, after, entries, registers, pool, folds, crossed);
-            Planned(first.placement ++ rest.placement, rest.file)
+            shared(before, λ (first: Planned) =>
+                first.joined(continuation.plan_from(first.file, after, entries, registers, pool, folds, crossed)))
         },
         Conditional(_, _, _, outputs, when_true, when_false) => {
             let live = when_true.reads() ++ (when_false.reads() ++ (port_ids(outputs.entries) ++ after));
-            let targets = pick_targets(outputs.entries, file, live, entries, registers, pool);
-            let yes = when_true.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed);
-            let no = when_false.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed);
-            Planned(yes.placement ++ no.placement, yes.file.meet(no.file, file.known))
+            shared(pick_targets(outputs.entries, file, live, entries, registers, pool), λ (targets: List<Gpr>) =>
+                Planned::met(when_true.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed),
+                    when_false.plan_from(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed), file.known))
         },
         Call(_, _, result) => Planned([], file.write(Rax, Some(Held(result, Word)))),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => {
             let live = Cons(limit, inputs);
-            let state = file.loop_state(inputs, live, pool, []);
-            let counter = file.free_or_rax(live, pool, state);
-            let flag = file.free_or_rax(live, pool, Cons(counter, state));
-            let head = match input_file(word_ports(Cons(count, parameters)), Cons(counter, state)) { None => File::empty(), Some(h) => h };
             let read = Cons(count, Cons(exit, next));
-            let pass = body.plan_from(head, read, word_ports(next), state, pool, folds, body.crossing(read, crossed));
-            let out = match input_file(Cons(Port(id := exhausted, width := 1), word_ports(outputs)), Cons(flag, state)) {
-                None => File::empty(),
-                Some(o) => o,
-            };
-            Planned(into_all(state) ++ Cons(Into(counter), Cons(Into(flag), pass.placement)), out)
+            shared(file.loop_state(inputs, live, pool, []), λ (state: List<Gpr>) =>
+                shared(file.free_or_rax(live, pool, state), λ (counter: Gpr) =>
+                    shared(file.free_or_rax(live, pool, Cons(counter, state)), λ (flag: Gpr) => {
+                        let head = match input_file(word_ports(Cons(count, parameters)), Cons(counter, state)) {
+                            None => File::empty(),
+                            Some(h) => h,
+                        };
+                        let pass = body.plan_from(head, read, word_ports(next), state, pool, folds, body.crossing(read, crossed));
+                        let out = match input_file(Cons(Port(id := exhausted, width := 1), word_ports(outputs)), Cons(flag, state)) {
+                            None => File::empty(),
+                            Some(o) => o,
+                        };
+                        Planned(into_all(state) ++ Cons(Into(counter), Cons(Into(flag), pass.placement)), out)
+                    })))
         },
     }
 }

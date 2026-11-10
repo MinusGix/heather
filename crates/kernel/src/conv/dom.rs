@@ -488,6 +488,11 @@ pub(super) trait Dom<'v>: Sized {
     /// runs it inside the machine so that a spine stuck on a glued
     /// scrutinee is replayed once rather than once per unfolding.
     fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: Self::Tm) -> R<Self::Tm>;
+    /// [`Dom::delta_whnf_tm`] for a type: unfold the term a type is δ-stuck
+    /// at until [`Dom::delta_head_ty`] finds no defined head. The unfoldings
+    /// that iterating [`Dom::delta_ty`] performs; the value domain runs
+    /// them inside the machine, for the same reason.
+    fn delta_whnf_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> R<Self::Ty>;
     /// The definition at the head of a δ-stuck spine, if any.
     fn delta_head(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> Option<GlobalVar>;
     fn delta_head_ty(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> Option<GlobalVar>;
@@ -1083,6 +1088,14 @@ impl<'v> Dom<'v> for Syn {
     fn delta_whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, mut w: Rc<Term>) -> R<Rc<Term>> {
         while Self::delta_head(cv, env, &w).is_some() {
             w = Self::delta_tm(cv, env, &w)?;
+        }
+        Ok(w)
+    }
+
+    fn delta_whnf_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Type) -> R<Type> {
+        let mut w = Self::delta_ty(cv, env, w)?;
+        while Self::delta_head_ty(cv, env, &w).is_some() {
+            w = Self::delta_ty(cv, env, &w)?;
         }
         Ok(w)
     }

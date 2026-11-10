@@ -4,13 +4,23 @@
 //! The function and the functions it calls are reflected into a FunctionIR
 //! program, and the certificate is what `function_ir_compile` says about it:
 //! the program lowered by `lower_program` with the heuristic's placement,
-//! evaluable (checked by `program_scan`, one pass over the program, and
-//! `program_scan_evaluable`; issues/function-ir-evaluable-quadratic.md),
+//! evaluable (checked by `program_scan_at`, one pass over each function
+//! against a table of the functions' arities, and
+//! `program_scan_at_evaluable`; issues/function-ir-evaluable-quadratic.md),
 //! evaluating to the source function, and so returning the
 //! source's value at the function's label. Nothing in it is about this
 //! program's code beyond equations the kernel checks by evaluation. The
 //! bytes and the entry offset are evaluated here, from the same
 //! definitions, and stated in the certificate as literals.
+//!
+//! Everything is a function at a time: the placement, the emission and the
+//! scan are each read and each stated per function, and the layout and the
+//! bytes by a table of the labels (`labels.rs`), so what a certificate
+//! costs to make and to check follows the program's size and its largest
+//! function, never their product
+//! (issues/compile-x86-certificate-memory.md).
+
+use std::collections::BTreeSet;
 
 use heather_elab::{Elaborator, function_ir_source};
 
@@ -25,7 +35,7 @@ pub(super) struct Compiled {
 
 const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower", "function_ir_lower_structured",
     "function_ir_lower_calls", "function_ir_compile", "x86_64", "x86_64_block", "x86_64_fetch", "x86_64_data_read",
-    "x86_64_fetched_code", "x86_64_stack", "x86_64_asm", "x86_64_asm_runs", "x86_64_stack_runs", "bitvec", "bool", "list",
+    "x86_64_fetched_code", "x86_64_stack", "x86_64_asm", "x86_64_asm_runs", "x86_64_asm_table", "x86_64_stack_runs", "bitvec", "bool", "list",
     "logic", "nat", "option"];
 
 /// What a program and its agreement need (`heather reflect`'s module).
@@ -92,7 +102,7 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
 theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]) = {answer} {{
     {source}::agrees({list})
 }}
-", evaluable = evaluable_text(prefix, functions), f = functions - 1, list = parameters.join(", "));
+", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
         Shape { functions, root: functions - 1, arity, definitions, agreement, answer }
     }
 }
@@ -115,68 +125,136 @@ fn {prefix}_shape() → List<Nat> {{ [{source}::program.len(), {source}::rt.para
 
 pub(super) fn compile(elab: &Elaborator, prefix: &str, module: &str, program: &Shape) -> Result<Compiled, String> {
     let f = program.root;
-    let mut definitions = String::new();
-    for name in IMPORTS { definitions.push_str(&format!("import {name};\n")); }
-    definitions.push_str(&program.definitions);
+    let mut imports = String::new();
+    for name in IMPORTS { imports.push_str(&format!("import {name};\n")); }
+    let definitions = format!("{imports}{}", program.definitions);
     let m = program.functions;
     // Evaluated on a fork, which only defines: the certificate's statements
-    // are the session's to check.
+    // are the session's to check. A function at a time, each read from the
+    // literals the reads before it gave: every read is an evaluation of its
+    // own, so one that planned or emitted the whole program would hold all
+    // of it at once, and each of them again
+    // (issues/compile-x86-certificate-memory.md). The planner runs once per
+    // function; a function is emitted onto the code before it as a literal.
     let probe = format!("{module}_probe");
-    let mut steps = String::new();
+    let mut plans = String::new();
     for k in 0..m {
-        let emitted = if k == 0 {
-            format!("{prefix}_fn0().emit(Start, 0, plan_program({prefix}_program()), {m})")
-        } else {
-            format!("match {prefix}_emitted_{}() {{ None => None, Some(b) => {prefix}_fn{k}().emit(b.prog, {k}, b.placement, b.names) }}", k - 1)
-        };
-        steps.push_str(&format!("fn {prefix}_emitted_{k}() → Option<Emitted> {{ {emitted} }}
-fn {prefix}_step_{k}() → List<Nat> {{ match {prefix}_emitted_{k}() {{ None => [], Some(e) => [prog_depth(e.prog), e.placement.len(), e.names] }} }}
-"));
+        plans.push_str(&format!("fn {prefix}_plan_{k}() → List<Nat> {{ {prefix}_fn{k}().plan().map(λ (place: Place) => place.number()) }}\n"));
     }
-    let probes = format!("{definitions}{steps}
-fn {prefix}_lowered() → Option<Prog> {{
-    match {prefix}_emitted_{last}() {{ None => None, Some(e) => match e.prog.laid_out() {{ False => None, True => Some(e.prog) }} }}
+    // The last `d` items' numbers, as `Prog::numbers` writes them.
+    plans.push_str(&format!("fn {prefix}_top(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
+    match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
 }}
-fn {prefix}_placement_numbers() → List<Nat> {{ plan_program({prefix}_program()).map(λ (place: Place) => place.number()) }}
-fn {prefix}_refused() → Nat {{ match {prefix}_lowered() {{ None => 1, Some(_) => 0 }} }}
-fn {prefix}_code() → Prog {{ match {prefix}_lowered() {{ None => Start, Some(code) => code }} }}
-fn {prefix}_code_numbers() → List<Nat> {{ {prefix}_code().numbers() }}
-fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code()) }}
-fn {prefix}_byte_numbers() → List<Nat> {{ assemble(no_fills(), {prefix}_code(), []).map(λ (b: BitVec(8)) => b.toNat()) }}
-fn {prefix}_entry() → Nat {{ asm_labels({prefix}_code())({}) }}
-", f + 1, last = m - 1);
+"));
     let mut fork = elab.fork();
-    fork.elab_module_source(&probe, &probes).map_err(|e| e.render(&probes))?;
-    let name = |item: &str| format!("{probe}::{prefix}_{item}");
-    let evaluate = |item: &str| function_ir_source::evaluate_number(&fork, &name(item)).map_err(|e| format!("`{prefix}_{item}`: {e}"));
-    let numbers = |item: &str| function_ir_source::evaluate_numbers(&fork, &name(item)).map_err(|e| format!("`{prefix}_{item}`: {e}"));
-    if evaluate("refused")? != 0 {
-        return Err("the verified lowering refused this program with the planner's placement".into());
-    }
-    let items = read_items(&numbers("code_numbers")?)?;
-    let lens = numbers("lens")?;
-    let bytes = numbers("byte_numbers")?
-        .into_iter().map(|b| u8::try_from(b).map_err(|_| "a byte above 255".to_string())).collect::<Result<Vec<u8>, String>>()?;
-    let entry = usize::try_from(evaluate("entry")?).map_err(|_| "an implausible entry".to_string())?;
-    if entry >= bytes.len() { return Err("the entry is past the code".into()); }
-    if lens.len() != items.len() || lens.iter().sum::<u64>() != bytes.len() as u64 {
-        return Err("the items' lengths do not cover the code".into());
-    }
-    let placement = numbers("placement_numbers")?.into_iter().map(|n| match n {
-        16 => Ok("Folded".to_string()),
-        n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string()),
-    }).collect::<Result<Vec<String>, String>>()?;
-    // (items so far, places left, next label) after each function.
-    let mut after = Vec::new();
+    let first = format!("{definitions}{plans}");
+    fork.elab_module_source(&probe, &first).map_err(|e| e.render(&first))?;
+    let read = |fork: &Elaborator, module: &str, item: &str|
+        function_ir_source::evaluate_numbers(fork, &format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
+    let mut placement = Vec::new();
     for k in 0..m {
-        match numbers(&format!("step_{k}"))?[..] {
-            [count, left, names] if count as usize <= items.len() && left as usize <= placement.len() => after.push((count as usize, left as usize, names)),
-            _ => return Err(format!("function {k}'s emission did not read back")),
+        for n in read(&fork, &probe, &format!("plan_{k}"))? {
+            placement.push(match n {
+                16 => "Folded".to_string(),
+                n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
+            });
         }
     }
-    if after.last().map(|step| step.0) != Some(items.len()) || after.windows(2).any(|w| w[1].0 < w[0].0 || w[1].1 > w[0].1) {
-        return Err("the functions' emissions do not make the code".into());
+    let rest = |left: usize| format!("[{}]", placement[placement.len() - left..].join(", "));
+    // Function `k`'s code and what the placement has left after it, as the
+    // certificate states them and as the next function's read starts from.
+    let stated = |k: usize, items: &[(u64, String)], left: usize| {
+        let mut code = if k == 0 { "Start".to_string() } else { format!("{prefix}_code_{}()", k - 1) };
+        for (name, item) in items { code = format!("At({code},\n    {name}, {item})"); }
+        format!("
+fn {prefix}_code_{k}() → Prog {{
+    {code}
+}}
+
+fn {prefix}_rest_{k}() → List<Place> {{ {} }}
+", rest(left))
+    };
+    let mut items: Vec<(u64, String)> = Vec::new();
+    // (items so far, places left, next label) after each function.
+    let mut after: Vec<(usize, usize, u64)> = Vec::new();
+    let mut modules = vec![probe.clone()];
+    let uses = |modules: &[String]| modules.iter().map(|name| format!("import {name};\n")).collect::<String>();
+    for k in 0..m {
+        let (taken, left, names) = after.last().copied().unwrap_or((0, placement.len(), m as u64));
+        let before = if k == 0 {
+            format!("fn {prefix}_placement() → List<Place> {{ {} }}\n", rest(placement.len()))
+        } else {
+            stated(k - 1, &items[after.get(k.wrapping_sub(2)).map_or(0, |step| step.0)..taken], left)
+        };
+        let (prog, places) = if k == 0 { ("Start".to_string(), format!("{prefix}_placement()")) } else { (format!("{prefix}_code_{}()", k - 1), format!("{prefix}_rest_{}()", k - 1)) };
+        let step = format!("{probe}_{k}");
+        let text = format!("{imports}{}{before}
+fn {prefix}_read_{k}() → List<Nat> {{
+    match {prefix}_fn{k}().emit({prog}, {k}, {places}, {names}) {{
+        None => [],
+        Some(e) => Cons(prog_depth(e.prog), Cons(e.placement.len(), Cons(e.names, {prefix}_top(e.prog, prog_depth(e.prog) - {taken}, [])))),
+    }}
+}}
+", uses(&modules));
+        fork.elab_module_source(&step, &text).map_err(|e| e.render(&text))?;
+        let numbers = read(&fork, &step, &format!("read_{k}"))?;
+        match numbers[..] {
+            [] => return Err("the verified lowering refused this program with the planner's placement".into()),
+            [count, places, names, ..] if count as usize >= taken && places as usize <= left => {
+                items.extend(read_items(&numbers[3..])?);
+                if items.len() != count as usize { return Err(format!("function {k}'s emission did not read back")); }
+                after.push((count as usize, places as usize, names));
+            }
+            _ => return Err(format!("function {k}'s emission did not read back")),
+        }
+        modules.push(step);
     }
+    // The whole code as a literal, and what is read off it: each item's
+    // length, and then the bytes by a table of the labels written from the
+    // lengths, a window at a time (`asm_code_ending_onto`, as `write-elf`
+    // reads them). `Prog::laid_out` and `assemble` find a label by walking
+    // the program, quadratic in it, so neither is evaluated whole here or
+    // in the certificate (issues/native-compile-linear-layout.md).
+    let last = m - 1;
+    let closing = format!("{probe}_code");
+    let text = format!("{imports}{}{}
+fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
+", uses(&modules), stated(last, &items[after.get(last.wrapping_sub(1)).map_or(0, |step| step.0)..], after[last].1));
+    fork.elab_module_source(&closing, &text).map_err(|e| e.render(&text))?;
+    modules.push(closing.clone());
+    let lens = read(&fork, &closing, "lens")?;
+    if lens.len() != items.len() { return Err("the items' lengths do not cover the code".into()); }
+    let offsets = super::labels::offsets(&lens);
+    let length = offsets[items.len()] as usize;
+    let pieces = cut_pieces(&lens, PIECE);
+    // The literal is cut where a function ends and where a piece's window
+    // does, so each is a definition.
+    let mut cuts: BTreeSet<usize> = after.iter().map(|step| step.0).collect();
+    cuts.extend(super::labels::piece_cuts(&pieces, items.len()));
+    let table = super::labels::table(prefix, &items, &offsets);
+    let mut windows = String::new();
+    let mut earlier = 0;
+    for &cut in cuts.iter().filter(|&&cut| cut > 0) {
+        windows.push_str(&format!("fn {prefix}_bytes_{cut}() → List<Nat> {{ asm_code_ending_onto(no_fills(), {prefix}_table().labels(), asm_back({prefix}_code_{last}(), {}), {}, {}, Nil).map(λ (b: BitVec(8)) => b.toNat()) }}\n",
+            items.len() - cut, cut - earlier, offsets[cut]));
+        earlier = cut;
+    }
+    let reading = format!("{probe}_bytes");
+    let text = format!("{imports}{}{table}{windows}", uses(&modules));
+    fork.elab_module_source(&reading, &text).map_err(|e| e.render(&text))?;
+    let mut bytes = Vec::with_capacity(length);
+    for &cut in cuts.iter().filter(|&&cut| cut > 0) {
+        for b in read(&fork, &reading, &format!("bytes_{cut}"))? {
+            bytes.push(u8::try_from(b).map_err(|_| "a byte above 255".to_string())?);
+        }
+        if bytes.len() as u64 != offsets[cut] { return Err("the items' lengths do not cover the code".into()); }
+    }
+    drop(fork);
+    let entry = match items.iter().rposition(|(name, _)| *name == f as u64 + 1) {
+        Some(at) => offsets[at] as usize,
+        None => return Err("the exported function's label is not in the code".into()),
+    };
+    if entry >= bytes.len() { return Err("the entry is past the code".into()); }
 
     let agreement = &program.agreement;
     let parameters = arguments(program.arity);
@@ -188,62 +266,57 @@ fn {prefix}_entry() → Nat {{ asm_labels({prefix}_code())({}) }}
     // a time, each function's emission its own statement from the literal
     // before it: a declaration's fuel is its own, and the lowering is most
     // of what one could spend.
-    let rest = |left: usize| format!("[{}]", placement[placement.len() - left..].join(", "));
     text.push_str(&format!("
 // The placement the heuristic chose; the theorem holds for any.
 fn {prefix}_placement() → List<Place> {{ {} }}
 ", rest(placement.len())));
+    // The literal: `{prefix}_at_{c}` its first `c` items at each cut, and
+    // each function's code the cut it ends at.
+    text.push_str(&super::emission::code(prefix, &items, &cuts));
     let mut before = ("Start".to_string(), format!("{prefix}_placement()"), m as u64);
-    let mut taken = 0;
     for (k, &(count, left, names)) in after.iter().enumerate() {
-        let mut code = if k == 0 { "Start".to_string() } else { format!("{prefix}_code_{}()", k - 1) };
-        for (name, item) in &items[taken..count] { code = format!("At({code},\n    {name}, {item})"); }
-        taken = count;
+        text.push_str(&format!("
+fn {prefix}_code_{k}() → Prog {{ {prefix}_at_{count}() }}
+
+fn {prefix}_rest_{k}() → List<Place> {{ {} }}
+", rest(left)));
         let earlier = if k == 0 { "Nil".to_string() } else { format!("{prefix}_first_{}()", k - 1) };
         let started = if k == 0 { format!("emit_functions_start({prefix}_placement(), {m})") } else { format!("{prefix}_emitted_{}()", k - 1) };
         text.push_str(&format!("
-fn {prefix}_code_{k}() → Prog {{
-    {code}
-}}
-
-fn {prefix}_rest_{k}() → List<Place> {{ {rest} }}
-
 theorem {prefix}_emits_{k}(): EmitsAs({prefix}_fn{k}().emit({prog}, {k}, {places}, {labels}), {prefix}_code_{k}(), {prefix}_rest_{k}(), {names}) {{
-    ⟨refl, ⟨refl, refl⟩⟩
+    refl
 }}
 
 theorem {prefix}_emitted_{k}(): EmitsAs(emit_functions({prefix}_first_{k}(), {prefix}_placement(), {m}), {prefix}_code_{k}(), {prefix}_rest_{k}(), {names}) {{
     emit_functions_next({prefix}_fn{k}(), {earlier}, {prefix}_placement(), {m}, {prog}, {places}, {labels}, {started},
         {prefix}_code_{k}(), {prefix}_rest_{k}(), {names}, {prefix}_emits_{k}())
 }}
-", rest = rest(left), prog = before.0, places = before.1, labels = before.2));
+", prog = before.0, places = before.1, labels = before.2));
         before = (format!("{prefix}_code_{k}()"), format!("{prefix}_rest_{k}()"), names);
     }
     text.push_str(&format!("
-// The code: what `lower_program` computes with that placement.
-fn {prefix}_code() → Prog {{ {prefix}_code_{last}() }}
-
-{layout}
+// The code's layout, by a table of its labels checked a stretch at a time.
+{table}{layout}
 theorem {prefix}_holes(): {prefix}_code().no_holes().IsTrue() {{ trivial }}
 
 // Every block reads only flags it set itself (issues/x86-undefined-flags.md).
 theorem {prefix}_reads(): {prefix}_code().blocks_read_own().IsTrue() {{ trivial }}
 
 theorem {prefix}_laid(): {prefix}_code().laid_out().IsTrue() {{
-    {prefix}_code().laid_out_intro({prefix}_holes(), {prefix}_unique_0(), {prefix}_lands_0(), {prefix}_named_0(), {prefix}_reads())
+    {prefix}_table().laid_out_of({prefix}_code(), {length}, {prefix}_checked_{count}(), {prefix}_holes(), {prefix}_reads())
 }}
 
 theorem {prefix}_lowers(): lower_program({prefix}_program(), {prefix}_placement()) = Some({prefix}_code()) {{
     lower_program_emitted({prefix}_program(), {prefix}_placement(), {prefix}_code(), {prefix}_rest_{last}(), {labels}, {prefix}_emitted_{last}(),
         {prefix}_laid())
 }}
-", last = m - 1, labels = before.2, layout = layout(prefix, items.len())));
+", last = m - 1, labels = before.2, count = items.len(), layout = super::labels::layout(prefix, &offsets, &cuts)));
     text.push_str(&format!("
 {agreement}
 // The published bytes, a piece at a time from the last item: no one
 // statement evaluates more of the code than a piece.
 "));
-    text.push_str(&byte_pieces(prefix, &cut_pieces(&lens, PIECE), &bytes));
+    text.push_str(&super::labels::byte_pieces(prefix, &pieces, &bytes, items.len(), &offsets));
     text.push_str(&format!("
 theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ refl }}
 
@@ -266,23 +339,31 @@ theorem {prefix}_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last
 }
 
 /// `{prefix}_evaluable`: the program's functions evaluable, checked by
-/// `program_scan` (one pass over each function,
+/// `program_scan_at` (one pass over each function,
 /// issues/function-ir-evaluable-quadratic.md) a function per declaration,
 /// so the kernel's per-declaration fuel bounds the largest function rather
-/// than the program; `program_scan_drop` joins them, from the last
-/// function (`{prefix}_scans_{k}` covers functions `0..=k`).
-fn evaluable_text(prefix: &str, functions: usize) -> String {
-    let mut text = format!("theorem {prefix}_scans_none(): program_scan({prefix}_program().drop({functions})).IsTrue() {{ trivial }}\n");
+/// than the program; `program_scan_at_drop` joins them, from the last
+/// function (`{prefix}_scans_{k}` covers functions `0..=k`). `arities` is
+/// how many words each function takes, the last function's first: a
+/// function's statement checks its own entry and reads its callees' there,
+/// where reading them off the callees would force each callee's code
+/// (issues/compile-x86-certificate-memory.md).
+fn evaluable_text(prefix: &str, functions: usize, arities: &str) -> String {
+    let (program, table) = (format!("{prefix}_program()"), format!("{prefix}_arities()"));
+    let mut text = format!("// How many words each function takes, the last function's first.
+fn {prefix}_arities() → List<Nat> {{ {arities} }}
+
+theorem {prefix}_scans_none(): program_scan_at({program}.drop({functions}), {table}.drop({functions})).IsTrue() {{ trivial }}\n");
     for k in 0..functions {
         let below = if k == 0 { "none".to_string() } else { (k - 1).to_string() };
-        text.push_str(&format!("theorem {prefix}_scanned_{k}(): program_scan_head({prefix}_program().drop({d})).IsTrue() {{ trivial }}
-theorem {prefix}_scans_{k}(): program_scan({prefix}_program().drop({d})).IsTrue() {{
-    program_scan_drop({prefix}_program(), {d}, {prefix}_scanned_{k}(), {prefix}_scans_{below}())
+        text.push_str(&format!("theorem {prefix}_scanned_{k}(): program_scan_at_head({program}.drop({d}), {table}.drop({d})).IsTrue() {{ trivial }}
+theorem {prefix}_scans_{k}(): program_scan_at({program}.drop({d}), {table}.drop({d})).IsTrue() {{
+    program_scan_at_drop({program}, {table}, {d}, {prefix}_scanned_{k}(), {prefix}_scans_{below}())
 }}
 ", d = functions - 1 - k));
     }
-    text.push_str(&format!("theorem {prefix}_evaluable(): program_evaluable({prefix}_program()).IsTrue() {{
-    program_scan_evaluable({prefix}_program(), program_scan_drop_zero({prefix}_program(), {prefix}_scans_{last}()))
+    text.push_str(&format!("theorem {prefix}_evaluable(): program_evaluable({program}).IsTrue() {{
+    program_scan_at_evaluable({program}, {table}, program_scan_at_drop_zero({program}, {table}, {prefix}_scans_{last}()))
 }}", last = functions - 1));
     text
 }
@@ -320,7 +401,8 @@ fn {prefix}_sources() → Answers() {{
     let typed = typed(&parameters);
     let list = format!("[{}]", parameters.join(", "));
     let call = root.answer(&parameters);
-    let evaluable = evaluable_text(prefix, program.functions.len());
+    let arities: Vec<String> = program.functions.iter().rev().map(|function| function.arity.to_string()).collect();
+    let evaluable = evaluable_text(prefix, program.functions.len(), &format!("[{}]", arities.join(", ")));
     format!("{evaluable}
 
 {agreements}
@@ -395,52 +477,6 @@ theorem {name}_agrees({typed}): {name}().eval({sources}, {list}) = {answer} {{
         expansion = function.expansion)
 }
 
-/// The layout checks a stretch of items at a time, from the first: their
-/// names against the items before them, their jumps against the whole
-/// code's labels. Each check reads the whole code per item, so one
-/// statement over all of it would be quadratic in the program; a stretch
-/// is short enough that its items times the program stay under `READS`.
-pub(super) fn layout(prefix: &str, total: usize) -> String {
-    let stretch = (READS / total.max(1)).clamp(1, 16);
-    let mut text = String::new();
-    let mut back = total - total % stretch;
-    if back == total && total > 0 { back -= stretch; }
-    let mut earlier = None;
-    loop {
-        let n = (total - back).min(stretch);
-        let at = format!("asm_back({prefix}_code(), {back})");
-        let chained = |what: &str| earlier.map_or("trivial".to_string(), |e: usize| format!("{prefix}_{what}_{e}()"));
-        text.push_str(&format!("theorem {prefix}_fresh_{back}(): {at}.fresh_names({n}).IsTrue() {{ trivial }}
-
-theorem {prefix}_unique_{back}(): {at}.names_unique().IsTrue() {{
-    names_unique_back({n}, {at}, {prefix}_fresh_{back}(), {unique})
-}}
-
-theorem {prefix}_landing_{back}(): jumps_land_last(asm_labels({prefix}_code()), {at}, {n}).IsTrue() {{ trivial }}
-
-theorem {prefix}_lands_{back}(): jumps_land_in(asm_labels({prefix}_code()), {at}).IsTrue() {{
-    jumps_land_back(asm_labels({prefix}_code()), {n}, {at}, {prefix}_landing_{back}(), {lands})
-}}
-
-theorem {prefix}_naming_{back}(): targets_named_last({prefix}_code(), {at}, {n}).IsTrue() {{ trivial }}
-
-theorem {prefix}_named_{back}(): targets_named_in({prefix}_code(), {at}).IsTrue() {{
-    targets_named_back({prefix}_code(), {n}, {at}, {prefix}_naming_{back}(), {named})
-}}
-
-", unique = chained("unique"), lands = chained("lands"), named = chained("named")));
-        earlier = Some(back);
-        if back == 0 { break; }
-        back -= stretch;
-    }
-    text
-}
-
-/// Item reads a layout statement may make, its items times the program's:
-/// a jump's check reads the program to find its own offset and its
-/// target's, so this keeps a statement well inside a declaration's fuel.
-const READS: usize = 4096;
-
 /// A function's arguments as the certificate names them.
 fn arguments(arity: usize) -> Vec<String> { (0..arity).map(|i| format!("a{i}")).collect() }
 
@@ -475,43 +511,6 @@ pub(super) fn cut_pieces(lens: &[u64], size: usize) -> Vec<Piece> {
     }
     if items_in > 0 { pieces.push(Piece { back, count: items_in, start }); }
     pieces
-}
-
-/// `{prefix}_code()`'s bytes stated a piece at a time, from the last item,
-/// so no one statement evaluates more of the code than a piece; then
-/// `{prefix}_bytes`, the whole assembly as the pieces' concatenation.
-pub(super) fn byte_pieces(prefix: &str, pieces: &[Piece], bytes: &[u8]) -> String {
-    let mut text = String::new();
-    let mut end = bytes.len();
-    for (c, Piece { back, count, start }) in pieces.iter().enumerate() {
-        let literal: Vec<String> = bytes[*start..end].iter().map(|&b| super::word_literal(8, u64::from(b))).collect();
-        end = *start;
-        text.push_str(&format!("fn {prefix}_piece_{c}() → List<BitVec(8)> {{ [{}] }}\n", literal.join(", ")));
-        text.push_str(&format!("theorem {prefix}_piece_{c}_is(): asm_code_after(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back}), {count}) = {prefix}_piece_{c}() {{ refl }}\n"));
-    }
-    let m = pieces.len();
-    let back: usize = pieces.iter().map(|piece| piece.count).sum();
-    text.push_str(&format!("
-// The code up to each piece's start, from the program's.
-fn {prefix}_upto_{m}() → List<BitVec(8)> {{ [] }}
-theorem {prefix}_upto_{m}_is(): asm_code(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back})) = {prefix}_upto_{m}() {{ refl }}
-"));
-    for (c, Piece { back, count, .. }) in pieces.iter().enumerate().rev() {
-        let next = c + 1;
-        text.push_str(&format!("fn {prefix}_upto_{c}() → List<BitVec(8)> {{ {prefix}_upto_{next}() ++ {prefix}_piece_{c}() }}
-theorem {prefix}_upto_{c}_is(): asm_code(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back})) = {prefix}_upto_{c}() {{
-    trans(asm_code_back(no_fills(), asm_labels({prefix}_code()), {count}, asm_back({prefix}_code(), {back})),
-        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => x ++ asm_code_after(no_fills(), asm_labels({prefix}_code()), asm_back({prefix}_code(), {back}), {count}), {prefix}_upto_{next}_is()),
-            cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ x => {prefix}_upto_{next}() ++ x, {prefix}_piece_{c}_is())))
-}}
-"));
-    }
-    text.push_str(&format!("
-theorem {prefix}_bytes(): assemble(no_fills(), {prefix}_code(), []) = {prefix}_upto_0() {{
-    trans(List::append_nil(asm_code(no_fills(), asm_labels({prefix}_code()), {prefix}_code())), {prefix}_upto_0_is())
-}}
-"));
-    text
 }
 
 const GPRS: [&str; 16] = ["Rax", "Rcx", "Rdx", "Rbx", "Rsp", "Rbp", "Rsi", "Rdi", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15"];

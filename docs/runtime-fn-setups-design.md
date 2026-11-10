@@ -1159,6 +1159,9 @@ every runtime fn it reaches. What the round fixed:
   runtime fn named like its module cannot publish members
   (`runtime-fn-named-like-its-module`).
 
+(Since 2026-11-10 the parts are joined over a published arity list and
+nothing in a link is checked by evaluating a function's code: §16.14.)
+
 Left: `Fold` and measured recursion in the lowering, then the Rust
 reflector's deletion; `Bool`-returning helpers (a call of a non-word
 signature); `heather reflect` from instances; callees by instance search
@@ -1575,3 +1578,51 @@ division have no `rt` op (issues/runtime-signed-extend-divide.md). Probes:
   faults yet. IDIV is the next round (`x86-idiv-signed-division`): its
   fault depends on register values, which the per-block mask check cannot
   see, so it needs a value-level admission route beside `block_reads`.
+
+### 16.14 Linking by published facts (2026-11-10)
+
+§16.9's linking had the right statement and the wrong cost. A program's
+agreement was one declaration holding, for every function, two side
+conditions settled by evaluating that function's lowered code (its calls
+fit the program's arities; it takes its function's parameters), and the
+program's arities were read off the functions' parameter lists, which is
+the lowered code again. So the largest program was bounded by the sum of
+its functions, and the scanner's automaton, two dozen functions, was past
+it tenfold (`issues/runtime-generator-program-size.md`). The cost now
+follows the largest function, by three changes of who proves what:
+
+- **An instance says its calls fit.** `Compile` has a field
+  `fits: code.calls_fit(world.callee_arity()).IsTrue()`: the code's calls
+  fit its own table's arities, read from the signatures. The setup checks
+  it with the lowering (`Setup::checked`), in the function's own
+  declaration, once. Entry 0 of a table, the function itself, has no arity
+  there: a setup's code does not call itself (recursion is a `Fold`), and
+  the field says so.
+- **Renaming preserves it.** `Function::relabel_calls_fit`: where each
+  callee's arity in the table is its arity at its new name, the renamed
+  code's calls fit the new arities. The hypothesis is about the table and
+  the link list, both short lists of numbers (`Sig::links_fit`), so
+  checking it evaluates no code.
+- **The program's arities are a list.** `f::arities` is published beside
+  `f::program`, each entry `Compile::arity` of its function (the reflected
+  parameter count, a projection, not a lowering).
+  `program_linked_sources` is `program_fit_sources` over that list: each
+  function's part is stated at `linked_arity`, and the program evaluates
+  to its sources at every function and every argument list of the listed
+  length.
+
+The generator changed with it: a callee's table is read from its published
+`g::world` (a lookup and a view of its `Sig` list), where it was reflected
+again per caller, which had put the request count past the budget for a
+program of this size.
+
+`compile-x86` had the same shape of cost and took the same cure
+(`crates/cli/src/native/verified.rs`): the placement and the emission are
+read a function at a time, the layout and the bytes through the label
+table `write-elf` uses, and the evaluability scan is against the arity
+list (`program_scan_at`), so a dispatcher's statement no longer forces
+every function it calls.
+
+What a single function may be is unchanged by this section and is the
+next limit: its emission is one kernel statement
+(`issues/native-function-emission-one-statement.md`).

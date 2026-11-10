@@ -1,6 +1,6 @@
 ---
 title: A linked runtime program's proof and generator reply grow with all its functions at once
-status: open
+status: closed
 labels: [native,runtime-fn,performance]
 area: heather-in-heather
 milestone: [hih-native-heather,self-lexer]
@@ -85,3 +85,18 @@ The scanner's automaton is one program: `scan_step` is a `runtime fn`
 calling its twenty-three families, `f::agrees` checks within the ordinary
 budgets, and `crates/linked/src/scanner.rs`'s `step` is one call
 ([[self-lexer-linked]]).
+
+## Log
+
+- 2026-11-10: Done: the automaton is one program. `scan_step` is a `runtime fn` calling `scan_family` and `scan_choose`, which calls the twenty-three families; `scan_step::agrees` checks inside the ordinary budgets (10,000 requests, 2^14 reply nodes, 2^20 steps a conversion), and `crates/linked/src/scanner.rs`'s `step` is one call of one export.
+
+  The direction above is what was built (`docs/runtime-fn-setups-design.md` §16.14):
+
+  - `Compile` has a field `fits`: the code's calls fit its own world's arities, read from the signatures (`World::callee_arity`). The setup checks it with the lowering (`Setup::checked`), once, in the function's declaration.
+  - `Function::relabel_calls_fit` carries it through the renaming, from a hypothesis about the table and the link list alone (`Sig::links_fit`).
+  - The program's arities are a published list, `f::arities`, each entry a projection of its function's reflection. `program_linked_sources` is the agreement over that list, and `Compile::part` states each function's share at it.
+  - A callee's table is read from its published `g::world` and no longer reflected again per caller, which is what had put the request count past the budget.
+
+  Measured (cloud box, width one): a dispatcher over the twenty-three families links in about two seconds, 0.7 s of it the kernel, 3.7M steps across its declarations; before, a program of eight families was the most that linked. `scripts/bench-probes --filter lexer/` (`lexer/scan-choose-link`) watches it.
+
+  One thing the scanner's source still works around is not this issue's: `scan_step` passes the family to `scan_choose` as an argument instead of binding it with `let`, because the kernel, which also runs this function (`lexer_tokens.hthr`), computes a `let` at each use ([[elaborated-let-sharing-lost]]).

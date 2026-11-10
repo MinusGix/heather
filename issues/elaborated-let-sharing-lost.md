@@ -5,7 +5,7 @@ labels: [elaboration,sharing,native,metaprogramming]
 area: language
 milestone: [nh-front]
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-10
 ---
 
 Found building the `rt` reflector (`lib/native/runtime/rt_reflect.hthr`,
@@ -46,3 +46,4 @@ rather than the mechanism.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[runtime-reflect-list-match]] (`lib/native/runtime/rt_reflect.hthr`).
+- 2026-11-10: Two more places paid this, both found certifying the scanner's automaton. (1) The x86 placement planner (`plan_block`, `plan_from` in `function_ir_lower_structured.hthr`): a `let`-bound plan read at several places was replanned at each, and under nested conditionals that compounded per level; it was the memory [[compile-x86-certificate-memory]] reported, and the planner now binds with `shared` (`nat_map.hthr`). (2) `scan_step` (`lib/lang/lexer/lexer_scan.hthr`): written as `let f = scan_family(s, b);` over a decision tree on `f`, the kernel ran `scan_family` at each of five comparisons and the evaluated lexer probes ran out of fuel, so the tree is a function of its own taking the family as an argument. In both the source says "compute once" and the kernel term does not; `shared` and an extra function are the two spellings of the workaround, and a `runtime fn` cannot use `shared` (the reflector does not read it).

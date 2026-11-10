@@ -5,7 +5,7 @@ labels: [native,cli,performance]
 area: heather-in-heather
 milestone: [hih-tools]
 created: 2026-10-26
-updated: 2026-10-27
+updated: 2026-11-10
 ---
 
 Split from [[native-compile-capacity]], which made `write-elf`'s memory flat
@@ -100,3 +100,4 @@ rail, so [[native-compile-capacity]]'s test can run it.
   certificate (`verified::layout`) still uses the stretch families; it
   builds per-function programs, small so far. Closed: cat_x8 builds in
   `crates/cli/tests/native_cat.rs` (`larger_program_runs_as_cat`).
+- 2026-11-10: `compile-x86` is on the same table since the round that closed [[compile-x86-certificate-memory]]: it had kept the per-stretch `laid_out` statements and the `asm_back` byte pieces this issue removed from `write-elf`, and both were quadratic in a program of two dozen functions. `verified.rs` now states the layout by `LabelTable::laid_out_of` and the bytes by `labels::byte_pieces`, and reads the bytes a window at a time with `asm_code_ending_onto`.

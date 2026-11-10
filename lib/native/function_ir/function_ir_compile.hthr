@@ -239,15 +239,26 @@ fn List::word(self state: List<BitVec(64)>, i: Nat) → BitVec(64) {
 // next label, as literals, each from the last's, and glues the steps.
 
 // What an emission left: its code, its placement not taken, its next label.
-// Each read through `map`, so that stating it evaluates the emission and
-// reads back only what it compares.
+record Emission { prog: Prog, placement: List<Place>, names: Nat }
+
+fn Emitted::emission(self e: Emitted) → Emission { Emission(prog := e.prog, placement := e.placement, names := e.names) }
+
+// One equation, read through `map`: stating it evaluates the emission once
+// and reads back only what it compares. (An equation for each of the three
+// evaluated the emission three times: each `refl` is a conversion of its
+// own, and nothing one computes is kept for the next.)
 fn EmitsAs(out: Option<Emitted>, prog: Prog, rest: List<Place>, names: Nat) → Type {
-    (out.map(λ (e: Emitted) => e.prog) = Some(prog))
-        ∧ ((out.map(λ (e: Emitted) => e.placement) = Some(rest)) ∧ (out.map(λ (e: Emitted) => e.names) = Some(names)))
+    out.map(λ (e: Emitted) => e.emission()) = Some(Emission(prog := prog, placement := rest, names := names))
+}
+
+theorem Emitted::emits_as(self e: Emitted, prog: Prog, rest: List<Place>, names: Nat, held: EmitsAs(Some(e), prog, rest, names)):
+    (e.prog = prog) ∧ ((e.placement = rest) ∧ (e.names = names)) {
+    let same = Option::some_inj(e.emission(), Emission(prog := prog, placement := rest, names := names), held);
+    ⟨cong_fn(λ (x: Emission) => x.prog, same), ⟨cong_fn(λ (x: Emission) => x.placement, same), cong_fn(λ (x: Emission) => x.names, same)⟩⟩
 }
 
 theorem emit_functions_start(placement: List<Place>, names: Nat): EmitsAs(emit_functions([], placement, names), Start, placement, names) {
-    ⟨refl, ⟨refl, refl⟩⟩
+    refl
 }
 
 theorem emit_functions_next(last: Function, earlier: List<Function>, placement: List<Place>, names: Nat, prog: Prog, rest: List<Place>,
@@ -258,12 +269,13 @@ theorem emit_functions_next(last: Function, earlier: List<Function>, placement: 
         EmitsAs(out, prog, rest, labels) →
         EmitsAs(match out { None => None, Some(b) => last.emit(b.prog, earlier.len(), b.placement, b.names) },
             next_prog, next_rest, next_labels) {
-        None => λ held => Option::none_ne_some(prog, held.left, EmitsAs(None, next_prog, next_rest, next_labels)),
-        Some(b) => λ held => j(sym(Option::some_inj(b.prog, prog, held.left)),
+        None => λ held => Option::none_ne_some(Emission(prog := prog, placement := rest, names := labels), held,
+            EmitsAs(None, next_prog, next_rest, next_labels)),
+        Some(b) => λ held => j(sym(b.emits_as(prog, rest, labels, held).left),
             λ x _ => EmitsAs(last.emit(x, earlier.len(), b.placement, b.names), next_prog, next_rest, next_labels),
-            j(sym(Option::some_inj(b.placement, rest, held.right.left)),
+            j(sym(b.emits_as(prog, rest, labels, held).right.left),
                 λ y _ => EmitsAs(last.emit(prog, earlier.len(), y, b.names), next_prog, next_rest, next_labels),
-                j(sym(Option::some_inj(b.names, labels, held.right.right)),
+                j(sym(b.emits_as(prog, rest, labels, held).right.right),
                     λ z _ => EmitsAs(last.emit(prog, earlier.len(), rest, z), next_prog, next_rest, next_labels), emitted))),
     })(before)
 }
@@ -280,8 +292,8 @@ theorem lower_program_emitted(functions: List<Function>, placement: List<Place>,
             None => None,
             Some(o) => match o.prog.laid_out() { False => None, True => Some(o.prog) },
         }) = Some(prog) {
-        None => λ held => Option::none_ne_some(prog, held.left, None<Prog>() = Some(prog)),
-        Some(o) => λ held => j(sym(Option::some_inj(o.prog, prog, held.left)),
+        None => λ held => Option::none_ne_some(Emission(prog := prog, placement := rest, names := labels), held, None<Prog>() = Some(prog)),
+        Some(o) => λ held => j(sym(o.emits_as(prog, rest, labels, held).left),
             λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(prog), decided),
     })(emitted)
 }

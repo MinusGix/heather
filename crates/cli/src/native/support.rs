@@ -3,7 +3,7 @@
 // order (issues/function-ir-verified-lowering.md, round 4). Generated from
 // the imports: edit the roots on the marker, then run `scripts/lib-closures
 // --fix` (issues/grind-closure-cost.md).
-// lib-closure: function_ir_compile
+// lib-closure: function_ir_compile x86_64_asm_table
 pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("logic", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", include_str!("../../../../lib/std/core/bool.hthr")),
@@ -43,9 +43,11 @@ pub(super) const SUPPORT: &[(&str, &str)] = &[
     ("x86_64_stack", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack.hthr")),
     ("x86_64_asm", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
     ("x86_64_asm_runs", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
+    ("nat_map", include_str!("../../../../lib/std/data/nat_map.hthr")),
     ("function_ir_lower_structured", include_str!("../../../../lib/native/function_ir/function_ir_lower_structured.hthr")),
     ("x86_64_kept", include_str!("../../../../lib/std/arch/x86_64/x86_64_kept.hthr")),
     ("x86_64_stack_runs", include_str!("../../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
     ("function_ir_lower_calls", include_str!("../../../../lib/native/function_ir/function_ir_lower_calls.hthr")),
     ("function_ir_compile", include_str!("../../../../lib/native/function_ir/function_ir_compile.hthr")),
+    ("x86_64_asm_table", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_table.hthr")),
 ];

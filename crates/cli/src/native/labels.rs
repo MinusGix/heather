@@ -75,7 +75,7 @@ pub(super) fn piece_cuts(pieces: &[Piece], items: usize) -> impl Iterator<Item =
     pieces.iter().map(move |piece| items - piece.back)
 }
 
-/// The bytes a piece at a time, as `verified::byte_pieces` states them, each
+/// The bytes a piece at a time (`verified::cut_pieces`), each
 /// piece by the table (`LabelTable::piece_by`): the window's offsets carried
 /// down from where the pass says it ends, its jumps' targets the table's.
 /// Each window is the literal's definition where it ends, not

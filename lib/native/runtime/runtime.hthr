@@ -23,6 +23,8 @@
 //   |               | with their meanings                                      |
 //   | `f::program`  | the FunctionIR program of `f` and every runtime fn it    |
 //   |               | reaches, callees first, `f` last, each from its instance |
+//   | `f::arities`  | how many words each function of the program takes, the   |
+//   |               | last function's first                                    |
 //   | `f::agrees`   | `program_eval(f::program, last, [xs…]) = f(xs…)`          |
 //
 // Nothing in the group is a proof about `f` written for `f`. The instance's
@@ -30,8 +32,8 @@
 // read at the reflection, and it lands on `f` because the reflection's
 // meaning converts to `f` (the pin). A wrong reflection is refused by the
 // kernel as a failed conversion, never compiled to a wrong program.
-// `f::agrees` links the instances (design §16.9): `Compile::part` for each,
-// then `program_eval_sources`.
+// `f::agrees` links the instances (design §16.9, §16.14): `Compile::part`
+// for each, then `program_linked_sources`.
 //
 // A group's members cannot cite each other yet
 // (issues/generate-group-internal-references.md), so each spells the
@@ -224,6 +226,47 @@ fn Setup::code(self s: Setup, f: Fun, w: World) → Function { Setup::code_of(s.
 
 fn Setup::lowered(self s: Setup, f: Fun, w: World) → Bool { Setup::lowers(s.lower(f, w)) }
 
+// How many words a table's entry takes.
+fn Sig::arity(sigs: List<Sig>, k: Nat) → Option<Nat> {
+    match sigs { Nil => None, Cons(s, rest) => match k { Zero => Some(s.params.len()), Succ(i) => Sig::arity(rest, i) } }
+}
+
+// How many words a table's callee takes: an entry after the first, which
+// is the function itself and is never called by its index (a recursion is
+// a loop in the code).
+fn Sig::callee_arity(sigs: List<Sig>) → Nat → Option<Nat> {
+    λ k => match k { Zero => None, Succ(i) => Sig::arity(sigs, Succ(i)) }
+}
+
+fn World::callee_arity(self w: World) → Nat → Option<Nat> { Sig::callee_arity(w.sigs) }
+
+// What an instance checks of its lowering, in one evaluation of it: that it
+// produced code, and that the code's calls fit the world's table at its
+// callees (`World::callee_arity`). The second is what a program that links
+// the code cites instead of reading the code again (`Compile::part`).
+fn Setup::passes(r: Option<Function>, w: World) → Bool {
+    match r { None => False, Some(c) => c.calls_fit(w.callee_arity()) }
+}
+
+fn Setup::checked(self s: Setup, f: Fun, w: World) → Bool { Setup::passes(s.lower(f, w), w) }
+
+theorem Setup::passes_lowers(r: Option<Function>, w: World): Setup::passes(r, w).IsTrue() → Setup::lowers(r).IsTrue() {
+    match r { None => λ never => never, Some(_) => λ _ => trivial }
+}
+
+theorem Setup::passes_fits(r: Option<Function>, w: World): Setup::passes(r, w).IsTrue() →
+    Setup::code_of(r).calls_fit(w.callee_arity()).IsTrue() {
+    match r { None => λ never => false_elim(never), Some(_) => λ ok => ok }
+}
+
+theorem Setup::checked_lowered(s: Setup, f: Fun, w: World, ok: s.checked(f, w).IsTrue()): s.lowered(f, w).IsTrue() {
+    Setup::passes_lowers(s.lower(f, w), w, ok)
+}
+
+theorem Setup::checked_fits(s: Setup, f: Fun, w: World, ok: s.checked(f, w).IsTrue()): s.code(f, w).calls_fit(w.callee_arity()).IsTrue() {
+    Setup::passes_fits(s.lower(f, w), w, ok)
+}
+
 // Read at an abstract lowering (docs/proof-patterns.md §1): a lowering that
 // produced code answers with the function's meaning.
 theorem Setup::of_lowered(f: Fun, w: World, r: Option<Function>): Setup::lowers(r).IsTrue() → f.LowerHolds(w, r) →
@@ -280,6 +323,10 @@ class Compile<F>(f: F) {
     agrees: (call: Answers()) → Tm::CallsAgree(world, call) →
         Ty::Answers(world.tys, reflected.params, reflected.result,
             retype(Ty::Arrows(world.tys, reflected.params, reflected.result), typed, f), λ xs => code.eval(call, xs)),
+    // The code's calls name callees of the table at their arity: checked
+    // once, here, by evaluation, and cited by every program the code is
+    // linked into (`Compile::part`).
+    fits: code.calls_fit(world.callee_arity()).IsTrue(),
 }
 
 // `Itself(F) = Itself(F)` with `F` read off `f`: what the generator passes
@@ -294,12 +341,13 @@ fn Setup::typed_refl<F>(f: F) → Itself(F) = Itself(F) { refl }
 // body node for node, docs/runtime-fn-setups-design.md §4.3), and `ok` and
 // `plain` are evaluation.
 fn Setup::compile<F>(f: F, s: Setup, rt: Fun, w: World, typed: Itself(F) = Itself(Ty::Arrows(w.tys, rt.params, rt.result)),
-    pinned: retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f) = rt.meaning(w), ok: s.lowered(rt, w).IsTrue(),
+    pinned: retype(Ty::Arrows(w.tys, rt.params, rt.result), typed, f) = rt.meaning(w), ok: s.checked(rt, w).IsTrue(),
     plain: rt.shape() = Plain) → Compile<F>(f)
 {
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
         j(sym(pinned), λ g _ => Ty::Answers(w.tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs)),
-            Setup::code_answers(s, rt, w, ok, plain, call, agree)))
+            Setup::code_answers(s, rt, w, Setup::checked_lowered(s, rt, w, ok), plain, call, agree)),
+        Setup::checked_fits(s, rt, w, ok))
 }
 
 // A fuel recursion's instance (design §16.11): no pin (the function at an
@@ -313,13 +361,14 @@ fn Setup::compile_fuel<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, c: N
     shaped: Setup::fuel_fun(w0, wrest, res, c, zero, succ).shape() = Fuel(w0, wrest, zero, succ),
     zero_eq: Fun::FuelZero(Cons(w0, wrest), res, zero, w, retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f)),
     step_eq: (n: Nat) → Fun::FuelStep(Cons(w0, wrest), res, succ, w, retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f), n),
-    ok: s.lowered(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).IsTrue()) → Compile<F>(f)
+    ok: s.checked(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).IsTrue()) → Compile<F>(f)
 {
     let rt = Setup::fuel_fun(w0, wrest, res, c, zero, succ);
     let h = retype(Ty::Arrows(w.tys, Cons(Count, Cons(w0, wrest)), res), typed, f);
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
-        Fun::fuel_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), ok,
-            Setup::holds_at(s, rt, w, Fuel(w0, wrest, zero, succ), shaped, h, zero_eq, step_eq), call, agree))
+        Fun::fuel_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
+            Setup::holds_at(s, rt, w, Fuel(w0, wrest, zero, succ), shaped, h, zero_eq, step_eq), call, agree),
+        Setup::checked_fits(s, rt, w, ok))
 }
 
 // A measured recursion's instance: its measure `m` below `2^64` and
@@ -332,13 +381,14 @@ fn Setup::compile_measured<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, 
     shaped: Setup::measured_fun(w0, wrest, res, body).shape() = Measured(w0, wrest, body),
     m: List<BitVec(64)> → Nat, bounded: Fun::Bounded(Cons(w0, wrest), m),
     guarded: Fun::Guarded(Cons(w0, wrest), res, body, w, retype(Ty::Arrows(w.tys, Cons(w0, wrest), res), typed, f), m),
-    ok: s.lowered(Setup::measured_fun(w0, wrest, res, body), w).IsTrue()) → Compile<F>(f)
+    ok: s.checked(Setup::measured_fun(w0, wrest, res, body), w).IsTrue()) → Compile<F>(f)
 {
     let rt = Setup::measured_fun(w0, wrest, res, body);
     let h = retype(Ty::Arrows(w.tys, Cons(w0, wrest), res), typed, f);
     Compile(rt, w, typed, s.code(rt, w), λ call agree =>
-        Fun::measured_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), ok,
-            Setup::holds_at(s, rt, w, Measured(w0, wrest, body), shaped, h, m, bounded, guarded), call, agree))
+        Fun::measured_answers(Cons(w0, wrest), res, w, h, s.lower(rt, w), Setup::checked_lowered(s, rt, w, ok),
+            Setup::holds_at(s, rt, w, Measured(w0, wrest, body), shaped, h, m, bounded, guarded), call, agree),
+        Setup::checked_fits(s, rt, w, ok))
 }
 
 // What the generator cites for a measured instance, named here so that a
@@ -371,12 +421,18 @@ theorem Setup::eq_cong<A, B>(g: A → B, a, b: A, p: a = b): g(a) = g(b) { cong_
 // program's numbering (`Function::relabel`), and every call of the program
 // is answered by the uncurried meaning of the function it names, which is
 // what each function, so renamed, returns (`Compile::part`). Then
-// `program_fit_sources` makes the program's evaluation those meanings, so
-// the agreement assumes nothing. A function is answered only by functions
-// below it at their arity, which `program_calls_fit` checks by evaluation;
-// no function's proof unfolds another's code. The caller checks only that
-// the calls fit (linear in the program), never `evaluable`'s quadratic
-// disjointness (issues/runtime-fn-caller-agreement-fuel.md).
+// `program_linked_sources` makes the program's evaluation those meanings,
+// so the agreement assumes nothing. A function is answered only by
+// functions below it at their arity. That its calls fit is a fact its
+// instance carries (`fits`, checked once where the function is declared),
+// and renaming keeps it wherever the table's arities are the program's at
+// the new names (`Function::relabel_calls_fit`, `Sig::links_fit`: a check
+// of two short lists). The program's arities are a list published beside
+// it (`f::arities`). So a link evaluates no function's code, and a
+// program's agreement costs its function count, not the sum of its
+// functions (design §16.14). Only that the calls fit is needed, never
+// `evaluable`'s quadratic disjointness
+// (issues/runtime-fn-caller-agreement-fuel.md).
 
 // A function of words to a count, curried (a measure, spelled by the
 // generator as a `λ` per word), and the same on a word list.
@@ -432,6 +488,64 @@ fn link_at(links: List<Nat>) → Nat → Nat { λ k => match links.nth(k) { None
 
 fn link_both<P, Q>(p: P, q: Q) → P ∧ Q { ⟨p, q⟩ }
 
+// Each entry of a table is named, by `links`, a function `arity` gives the
+// entry's parameter count: a walk of two short lists of numbers, which is
+// all a link evaluates (issues/runtime-generator-program-size.md).
+fn Sig::links_fit(sigs: List<Sig>, links: List<Nat>, arity: Nat → Option<Nat>) → Bool {
+    match sigs {
+        Nil => True,
+        Cons(s, rest) => match links {
+            Nil => False,
+            Cons(l, ls) => arity_fits(arity(l), s.params.len()) && Sig::links_fit(rest, ls, arity),
+        },
+    }
+}
+
+theorem Sig::links_fit_at(sigs: List<Sig>, arity: Nat → Option<Nat>): (links: List<Nat>) → Sig::links_fit(sigs, links, arity).IsTrue() →
+    (k: Nat) → (n: Nat) → arity_fits(Sig::arity(sigs, k), n).IsTrue() → arity_fits(arity(link_at(links, k)), n).IsTrue() {
+    match sigs {
+        Nil => λ links ok k n never => false_elim(never),
+        Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(Cons(s, rest), ls, arity).IsTrue() →
+            (k: Nat) → (n: Nat) → arity_fits(Sig::arity(Cons(s, rest), k), n).IsTrue() → arity_fits(arity(link_at(ls, k)), n).IsTrue() {
+            Nil => λ never k n _ => false_elim(never),
+            Cons(l, ls) => λ ok k => {
+                let parts = Bool::is_true_and(arity_fits(arity(l), s.params.len()), Sig::links_fit(rest, ls, arity), ok);
+                match k as λ i => (n: Nat) → arity_fits(Sig::arity(Cons(s, rest), i), n).IsTrue() →
+                    arity_fits(arity(link_at(Cons(l, ls), i)), n).IsTrue() {
+                    Zero => λ n fits => j(s.params.len().matches_eq(n, fits), λ m _ => arity_fits(arity(l), m).IsTrue(), parts.left),
+                    Succ(i) => λ n fits => Sig::links_fit_at(rest, arity, ls, parts.right, i, n, fits),
+                }
+            },
+        },
+    }
+}
+
+// The same for a table's callees, its entries after the first.
+theorem Sig::callee_links_fit_at(arity: Nat → Option<Nat>, sigs: List<Sig>): (links: List<Nat>) →
+    Sig::links_fit(sigs.tail(), links.tail(), arity).IsTrue() →
+    (k: Nat) → (n: Nat) → arity_fits(Sig::callee_arity(sigs, k), n).IsTrue() → arity_fits(arity(link_at(links, k)), n).IsTrue() {
+    match sigs {
+        Nil => λ links ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(Nil, i), n).IsTrue() →
+            arity_fits(arity(link_at(links, i)), n).IsTrue() {
+            Zero => λ n never => false_elim(never),
+            Succ(_) => λ n never => false_elim(never),
+        },
+        Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(rest, ls.tail(), arity).IsTrue() →
+            (k: Nat) → (n: Nat) → arity_fits(Sig::callee_arity(Cons(s, rest), k), n).IsTrue() → arity_fits(arity(link_at(ls, k)), n).IsTrue() {
+            Nil => λ ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(Cons(s, rest), i), n).IsTrue() →
+                arity_fits(arity(link_at(Nil, i)), n).IsTrue() {
+                Zero => λ n never => false_elim(never),
+                Succ(i) => λ n fits => Sig::links_fit_at(rest, arity, Nil, ok, i, n, fits),
+            },
+            Cons(l, ls) => λ ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(Cons(s, rest), i), n).IsTrue() →
+                arity_fits(arity(link_at(Cons(l, ls), i)), n).IsTrue() {
+                Zero => λ n never => false_elim(never),
+                Succ(i) => λ n fits => Sig::links_fit_at(rest, arity, ls, ok, i, n, fits),
+            },
+        },
+    }
+}
+
 // A table's meanings, uncurried.
 fn Sig::uncurried(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs) → List<List<BitVec(64)> → BitVec(64)> {
     match sigs {
@@ -440,14 +554,17 @@ fn Sig::uncurried(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs
     }
 }
 
-// How many words a table's entry takes.
-fn Sig::arity(sigs: List<Sig>, k: Nat) → Option<Nat> {
-    match sigs { Nil => None, Cons(s, rest) => match k { Zero => Some(s.params.len()), Succ(i) => Sig::arity(rest, i) } }
-}
-
 fn World::uncurried(self w: World) → List<List<BitVec(64)> → BitVec(64)> { Sig::uncurried(w.tys, w.sigs, w.callees) }
 
 fn World::arity(self w: World) → Nat → Option<Nat> { λ k => Sig::arity(w.sigs, k) }
+
+theorem Sig::callee_fits(sigs: List<Sig>, k, n: Nat): arity_fits(Sig::callee_arity(sigs, k), n).IsTrue() →
+    arity_fits(Sig::arity(sigs, k), n).IsTrue() {
+    match k as λ i => arity_fits(Sig::callee_arity(sigs, i), n).IsTrue() → arity_fits(Sig::arity(sigs, i), n).IsTrue() {
+        Zero => λ never => false_elim(never),
+        Succ(_) => λ fits => fits,
+    }
+}
 
 theorem Sig::uncurried_answers(tys: Nat → RecInfo, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (f: Nat) → Sig::at(sigs, f).Words(tys) →
     Ty::Answers(tys, Sig::at(sigs, f).params, Sig::at(sigs, f).result, Sig::get(tys, sigs, cs, f), λ ws => link_sources(Sig::uncurried(tys, sigs, cs), f, ws)) {
@@ -507,26 +624,42 @@ fn Compile::linked<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { c
 // An instance's table of meanings, uncurried: what `links` must name.
 fn Compile::table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> → BitVec(64)> { c.world.uncurried() }
 
-// An instance's code, linked into a program whose calls `srcs` answers,
-// returns its function's meaning: where `links` names, for each entry of
-// its table, a function of the program answered by that entry's meaning
-// (`linked`, by conversion), its code's calls fit its table (`ok`), and it takes its function's parameters (`params`), both by
-// evaluation. This is one conjunct of `program_sourced`.
-theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>,
+// How many words an instance's function takes.
+fn Compile::arity<F>(f: F, c: Compile<F>(f)) → Nat { c.reflected.params.len() }
+
+// The arities function `k` of a program is linked against (`k` counted
+// from the last): those of the functions before it.
+fn link_arity(functions: List<Function>, arities: List<Nat>, k: Nat) → Nat → Option<Nat> {
+    linked_arity(functions.drop(k), arities.drop(k))
+}
+
+// An instance's code, linked into a program whose calls `srcs` answers and
+// whose functions take `arity` words: its calls fit the program, and it
+// returns its function's meaning. `links` names, for each entry of its
+// table, a function of the program answered by that entry's meaning
+// (`linked`, by conversion) and taking that entry's words (`named`, by
+// evaluating the two lists). That the code's calls fit its own table is
+// the instance's `fits`, so no link reads the code. This is one conjunct of
+// `program_linked`.
+theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>, arity: Nat → Option<Nat>,
     linked: links.map(λ (n: Nat) => link_source(srcs, n)) = c.world.uncurried(),
-    ok: c.code.calls_fit(c.world.arity()).IsTrue(), params: c.code.parameters.len().matches(c.reflected.params.len()).IsTrue()):
-    (words: List<BitVec(64)>) → words.len() = Compile::linked(f, c, links).parameters.len() →
-    Compile::linked(f, c, links).eval(link_sources(srcs), words) = Compile::uncurried(f, c, words) {
+    named: Sig::links_fit(c.world.sigs.tail(), links.tail(), arity).IsTrue()):
+    Compile::linked(f, c, links).calls_fit(arity).IsTrue()
+    ∧ ((words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() →
+        Compile::linked(f, c, links).eval(link_sources(srcs), words) = Compile::uncurried(f, c, words)) {
+    ⟨c.code.relabel_calls_fit(link_at(links), c.world.callee_arity(), arity,
+        Sig::callee_links_fit_at(arity, c.world.sigs, links, named), c.fits),
     λ words n => {
         let own = link_sources(c.world.uncurried());
         let meaning = retype(Ty::Arrows(c.world.tys, c.reflected.params, c.reflected.result), c.typed, f);
         let answered = Ty::answers_at(c.world.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(own, xs),
-            c.agrees(own, c.world.calls_agree_own()), words, trans(n, c.code.parameters.len().matches_eq(c.reflected.params.len(), params)));
+            c.agrees(own, c.world.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
         trans(c.code.relabel_eval(link_sources(srcs), link_at(links), words),
-            trans(c.code.eval_answers(own, Answers::relabel(link_sources(srcs), link_at(links)), c.world.arity(),
-                λ k ws fits => Sig::links_agree(c.world.tys, srcs, c.world.sigs, c.world.callees, links, linked, k, ws, fits), ok, words),
+            trans(c.code.eval_answers(own, Answers::relabel(link_sources(srcs), link_at(links)), c.world.callee_arity(),
+                λ k ws fits => Sig::links_agree(c.world.tys, srcs, c.world.sigs, c.world.callees, links, linked, k, ws,
+                    Sig::callee_fits(c.world.sigs, k, ws.len(), fits)), c.fits, words),
                 answered))
-    }
+    }⟩
 }
 
 // A table of meanings that answers every call with a default: what the
@@ -738,11 +871,36 @@ fn runtime_reflect(k: Known, g: Nat, name: String) → Tac<Pair<Fun, List<Nat>>>
     })
 }
 
-// A runtime fn's table: itself, then the runtime fns it calls, as the
-// reflector numbers them (what its own `g::world` lists).
-fn runtime_table(k: Known, g: Nat, name: String) → Tac<List<Nat>> {
-    rt_with_reprs(16, Known(k.prims, [g], k.recs, True, k.bitvec, k.boolean, k.list, k.io, k.nat, None, k.reprs),
-        λ k2 => runtime_reflect(k2, g, name)).bind(λ r => pure(r.snd.snd))
+// The globals a table of meanings lists, `Pair::of(g₀, Pair::of(g₁, … trivial))`.
+fn runtime_entries(fuel: Nat, h: Handle) → Tac<List<Nat>> {
+    match fuel {
+        Zero => runtime_fail("a table longer than the linker reads"),
+        Succ(more) => view(h).bind(λ v => {
+            let pair: List<Handle> = match v { HGlobal(_, _, args) => args, HCtor(_, _, _, fields) => fields, _ => [] };
+            match pair {
+                Cons(a, Cons(b, Nil)) => view(a).bind(λ entry => match entry {
+                    HGlobal(g, _, _) => runtime_entries(more, b).bind(λ rest => pure(Cons(g.id, rest))),
+                    _ => runtime_fail("a table entry that is not a function"),
+                }),
+                _ => pure([]),
+            }
+        }),
+    }
+}
+
+// A published runtime fn's table: itself, then the runtime fns it calls, as
+// its own generator numbered them. Read off the meanings its `g::world`
+// lists, a few requests an entry, where reflecting its body again cost as
+// many as the body has nodes (issues/runtime-generator-link-cost.md).
+fn runtime_table(name: String) → Tac<List<Nat>> {
+    let world <- lookup(name ++ "::world").or_fail("runtime: the callee `" ++ name ++ "`'s table: ");
+    let value <- body(world).or_fail("runtime: the callee `" ++ name ++ "`'s table: ");
+    let v <- view(value);
+    let parts: List<Handle> = match v { HGlobal(_, _, args) => args, HCtor(_, _, _, fields) => fields, _ => [] };
+    match parts.nth(2) {
+        Some(callees) => runtime_entries(4096, callees),
+        None => runtime_fail("the callee `" ++ name ++ "`'s `world` is not a table"),
+    }
 }
 
 fn runtime_self<A>(a: A) → a = a { refl }
@@ -772,7 +930,7 @@ fn runtime_link(fuel: Nat, k: Known, stack: List<LinkFrame>, l: Linking) → Tac
                     let later = Cons(LinkFrame(fr.g, fr.name, fr.table, cs), rest);
                     match Known::index(l.order, c, 0) {
                         Some(_) => runtime_link(more, k, later, l),
-                        None => runtime_name_of(c).bind(λ n => runtime_table(k, c, n).bind(λ t =>
+                        None => runtime_name_of(c).bind(λ n => runtime_table(n).bind(λ t =>
                             runtime_link(more, k, Cons(LinkFrame(c, n, t, t.drop(1)), later), l))),
                     }
                 },
@@ -812,7 +970,7 @@ fn runtime_held(e: Expr, what: String) → Tac<Expr> {
 // The program (the last function first, as `program_eval` reads it), the
 // word functions answering its calls, and the proof each function returns
 // its own (`program_sourced`).
-record Linked { program: Expr, srcs: Expr, sourced: Expr }
+record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr }
 
 fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>) → Tac<Linked> {
     let srcs_ctors <- runtime_ctors_at(ts.srcs);
@@ -821,6 +979,8 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let linked <- runtime_global("Compile::linked");
     let table <- runtime_global("Compile::table");
     let part <- runtime_global("Compile::part");
+    let arity_of <- runtime_global("Compile::arity");
+    let arity_at <- runtime_global("link_arity");
     let both <- runtime_global("link_both");
     let rfl <- runtime_global("tactic::rfl");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
@@ -829,10 +989,15 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let at = λ (i: Nat) => Pair(insts.nth(i).unwrap_or(Pair(Blank, Blank)), runtime_at(links, i));
     let indices = List::range(insts.len()).rev();
     let codes = indices.map(λ i => ap(linked, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, (at(i)).snd]));
-    let parts = indices.map(λ i => ap(part, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, srcs, (at(i)).snd,
-        ap(rfl, [Blank, ap(table, [Blank, (at(i)).fst.fst, (at(i)).fst.snd])]), Hd(trivial_h), Hd(trivial_h)]));
     let program <- runtime_held(RtQ::seq(fn_ctors, codes), "the program");
-    pure(Linked(program, srcs, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
+    let arities <- runtime_held(RtQ::seq(q.nats, indices.map(λ i => ap(arity_of, [Blank, (at(i)).fst.fst, (at(i)).fst.snd]))),
+        "the program's arities");
+    // Function `i` is `insts.len() - 1 - i` from the last, and is linked
+    // against the functions before it.
+    let parts = indices.map(λ i => ap(part, [Blank, (at(i)).fst.fst, (at(i)).fst.snd, srcs, (at(i)).snd,
+        ap(arity_at, [program, arities, NatLit(insts.len() - i)]),
+        ap(rfl, [Blank, ap(table, [Blank, (at(i)).fst.fst, (at(i)).fst.snd])]), Hd(trivial_h)]));
+    pure(Linked(program, srcs, arities, parts.foldr(λ p acc => ap(both, [Blank, Blank, p, acc]), Hd(trivial_h))))
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,7 +1326,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let meaning <- runtime_global("Fun::meaning");
     let code_of <- runtime_global("Setup::code");
     let program_eval <- runtime_global("program_eval");
-    let eval_sources <- runtime_global("program_fit_sources");
+    let eval_sources <- runtime_global("program_linked_sources");
     let sources <- runtime_global("link_sources");
     let count <- runtime_global("runtime_count");
     let word_list <- runtime_ctors_at(ts.words);
@@ -1207,9 +1372,13 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
         Decl(AsInstance("Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e),
         Decl(AsValue, name ++ "::program", [], Hd(ts.functions), linked.program),
+        // How many words each function of the program takes, as the
+        // program lists them: what a certificate checks each function's
+        // calls against without reading its callees' code.
+        Decl(AsValue, name ++ "::arities", [], Hd(ts.nats), linked.arities),
         Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys),
             Equation(ap(program_eval, [linked.program, root, words_e]), runtime_result(reprs, rfun.result, ap(Global(f), runtime_args(count, reprs, rfun.params, at_ys)))),
-            ap(eval_sources, [linked.program, Hd(trivial_h), ap(sources, [linked.srcs]), linked.sourced, root, words_e, Hd(trivial_h)])),
+            ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, root, words_e, Hd(trivial_h)])),
     ];
     pure(head.append(pin).append(tail))
 }

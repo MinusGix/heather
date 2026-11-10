@@ -202,6 +202,17 @@ fixture is the way):
 - `native_decimal_tests::formats_*`: 0.6 to 1.4 s of kernel each, closed
   evaluation (the cheapest per-step kernel probe in the tree).
 
+## T6. A linked runtime program (owner: `issues/runtime-generator-link-cost.md`)
+
+Added 2026-11-10 with the scanner's automaton
+(`lib/lang/lexer/lexer_scan.hthr`), the first program of two dozen
+functions. `lexer/scan-choose-link` is `scan_choose`, the function that
+calls every family: its generator run and its linking proof. The claim it
+watches is a shape: the cost follows the number of callees and never their
+code (`docs/runtime-fn-setups-design.md` §16.14), so a callee growing must
+not move its counters. No row is saved for it yet; the saved table is
+another box's.
+
 ## What was not measured
 
 The suite itself. The sentinel's per-target times (the published manifest

@@ -94,7 +94,9 @@ What the probes found, as shapes:
 - `program_scan`'s cost grows with the square of a function's size
   (`issues/function-ir-scan-id-cost.md`), and the generator's per-function
   cost is what a tool-sized program meets first
-  (`issues/runtime-generator-link-cost.md`).
+  (`issues/runtime-generator-link-cost.md`). (Both moved in the third
+  round, §10: the scan is no longer the first limit of a function, and a
+  program's cost follows its largest function.)
 
 ---
 
@@ -164,8 +166,9 @@ and L1 are built, and L3's comparison runs with the loop still in Rust:
   lacks and this one needs: a refusal that no earlier accept excuses
   (`12abc`, an unterminated literal), and a start state chosen by the
   previous token's kind (`>>` is a shift only after a gap).
-- Each family of states is a certified word function and `crates/linked`
-  links all of them; `crates/linked/src/scanner.rs` is the loop. It is held
+- The automaton is one certified program, `scan_step`, two dozen functions
+  linked in Heather, and `crates/linked` links it as one export;
+  `crates/linked/src/scanner.rs` is the loop. It is held
   to `heather_syntax::lex` on every Heather source in the repository, on
   every edge of the automaton, on generated strings and on library lines
   with one character changed.
@@ -173,10 +176,7 @@ and L1 are built, and L3's comparison runs with the loop still in Rust:
   kernel evaluates, the specification the compiled loop will be proved
   against; probes hold it to the linked scanner today.
 - Not built: the values (L0's other half), the loop compiled (L2), the
-  switch (L3). The automaton is also not one program yet: Rust picks the
-  family for each byte, because a program holding every family is past
-  what a linked program's proof is checked for
-  (`issues/runtime-generator-program-size.md`).
+  switch (L3).
 
 - **A scanner plus values.** The Rust lexer's tokens hold values: numerals
   past a machine word, scaled literals, unescaped strings. A scanner that
@@ -459,11 +459,46 @@ in the verified lowering, a memory law in the function compiler beside the
 frame's, and the contract. The scanner only reads, so it is the cheapest
 first customer of all three.
 
+**2026-11-10, the third round** (Minus: "let's target those issues to
+improve before we continue"). The three limits the second round recorded,
+each taken to its cause; the automaton is now one program.
+
+- **A closed verdict's type is compared in one run** (kernel,
+  `issues/type-conversion-one-sided-delta-steps.md`). Type conversion
+  unfolded one side a δ-step per round, replaying the pending spine each
+  time, so `b.IsTrue()` by `trivial` cost several times `b = True` by
+  `refl`. Every generated certificate states its verdicts the first way;
+  the scan statements were the ones it showed on.
+- **Linking cites what each function published**
+  (`issues/runtime-generator-program-size.md`, closed). A `Compile`
+  instance carries that its code's calls fit its world's arities
+  (`fits`), checked once in the function's own declaration; relabelling
+  preserves it by a lemma (`Function::relabel_calls_fit`); and a program's
+  agreement is `program_linked_sources` over a list of arities the program
+  publishes (`f::arities`). No link forces any function's code, and a
+  callee's table is read from its published world, not reflected again.
+- **The compiler reads a function at a time**
+  (`issues/compile-x86-certificate-memory.md`, closed). Placement and
+  emission are evaluated per function from the literals before it; the
+  layout and the bytes go through the label table `write-elf` uses; the
+  scan is against the arity table (`program_scan_at`), so a function's
+  statement forces its own code and no callee's. The memory the issue
+  found was none of its candidates: the placement planner read each
+  `let`-bound plan at several places, and the kernel computes a `let`
+  again at each (`issues/elaborated-let-sharing-lost.md`).
+- **`scan_step` is a `runtime fn` and one export.** Twenty-six functions,
+  about fifteen thousand bytes, one certificate; `scanner::step` in Rust
+  is one call, and the table of families Rust held is gone. The same
+  tests hold it to the Rust lexer.
+
+What a function may be is now bounded by one statement, its emission
+(`issues/native-function-emission-one-statement.md`), where it was bounded
+by three; what a program may be is not bounded by anything measured.
+
 Next, in order of what they unblock: the read half of caller-owned memory
 (a borrowed read-only span through the lowering and the function compiler,
 which compiles the scanner's loop and is the smaller half of the export
-contract); compositional linking, so a program's proof costs its largest
-function and the automaton is one export; fixed arrays and tables in the
+contract); fixed arrays and tables in the
 pure fragment (the whole of `compress` in Heather, and the automaton as a
 table); then the write half and SHA-256 behind a switch in `crates/cache`.
 

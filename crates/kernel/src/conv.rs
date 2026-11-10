@@ -1170,8 +1170,17 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                 }
                 match heads {
                     (None, None) => break,
-                    (Some(_), None) => *wa = D::delta_ty(self, env, wa)?,
-                    (None, Some(_)) => *wb = D::delta_ty(self, env, wb)?,
+                    // The other side has no defined head, so there is no
+                    // head to meet at and this side unfolds until it has
+                    // none either: the single steps the loop would take,
+                    // as one transparent run (`Dom::delta_whnf_ty`), the
+                    // way the term side's one-sided arms do. A closed
+                    // verdict's type against its former (`b.IsTrue()`
+                    // against `Unit`) is this arm, and a step at a time it
+                    // replayed the pending spine of `b` at every unfolding
+                    // (`issues/type-conversion-one-sided-delta-steps.md`).
+                    (Some(_), None) => *wa = D::delta_whnf_ty(self, env, wa)?,
+                    (None, Some(_)) => *wb = D::delta_whnf_ty(self, env, wb)?,
                     (Some(u1), Some(u2)) if u1.newer_than(u2) => {
                         *wa = D::delta_ty(self, env, wa)?;
                     }

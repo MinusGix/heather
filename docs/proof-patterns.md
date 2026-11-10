@@ -16,17 +16,31 @@ property of Heather.
   verdict is still reported at the `trivial` or `decide` that claimed it,
   the elaborator reducing it only after the gate refused
   ([[closed-verdict-evaluated-twice]], closed; the probes are
-  `lib/_tests/std/core/closed_verdict_tests.hthr`).
+  `lib/_tests/std/core/closed_verdict_tests.hthr`). The kernel's cost is
+  the same for all three since it compares a verdict's type in one run
+  ([[type-conversion-one-sided-delta-steps]]); before that, the `IsTrue`
+  spellings cost several times the `= True` one.
+- **One equation per computed value.** Each `refl` is a conversion of its
+  own, and nothing one computes is kept for the next: three equations about
+  the three fields of one computed record evaluate it three times. State
+  one equation about a record of the parts and project in a lemma
+  (`EmitsAs` and `Emitted::emits_as`, `function_ir_compile.hthr`).
 - **Never compare two separately computed values by `refl`.** Conversion
   unfolds both sides in lockstep, a δ-step on each side per step. Small
   lists cost about three single evaluations; an allocation's `Homes = Homes`
   ran out of memory, and whole `MachineState` equalities run out of fuel.
   Decide equality with a Bool function and state `same(a, b) = True`.
 - **A computed value is shared only by closure identity.** Two textual
-  copies are two evaluations. Name a value once: a `let`, a record field a
-  constructor computes (`Layout::of` holds the leaf pool), or
-  `Option::some_get` around a compile. In evaluated Nat code write `q * 2`,
-  not `q + q`.
+  copies are two evaluations, and so are two reads of one `let`: the
+  elaborator puts the value wherever the name is read
+  ([[elaborated-let-sharing-lost]]; a planner that read its `let`s twice
+  per level of nesting was the memory of
+  [[compile-x86-certificate-memory]]). What is computed once is an
+  argument: pass the value to a function (`shared(v, λ x => …)`,
+  `nat_map.hthr`, or a helper taking it as a parameter), hold it in a
+  record field a constructor computes (`Layout::of` holds the leaf pool),
+  or put `Option::some_get` around a compile. In evaluated Nat code write
+  `q * 2`, not `q + q`.
 - **Never run a loop at a constant fuel by conversion.** It runs out of
   fuel. Instantiate a generic lemma whose statement is syntactic instead.
 - **Prove at a neutral parameter, instantiate at the literal.** A lookup at
