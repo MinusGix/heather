@@ -41,6 +41,14 @@ property of Heather.
   record field a constructor computes (`Layout::of` holds the leaf pool),
   or put `Option::some_get` around a compile. In evaluated Nat code write
   `q * 2`, not `q + q`.
+- **Decide a number equality with `same` or `eq_dec`; `equation` is for a
+  transport that has to compute.** `Nat::equation` builds its `refl` a
+  successor at a time, at two literals too, and a checker that asks it
+  about a width pays the width at every ask (the type-code checks of
+  [[native-function-emission-in-parts]]). `eq_dec` decides by `same`,
+  which the kernel runs over both numbers at once, and reads its proof off
+  `same_sound`. Making `equation` itself decide by `same` first was tried
+  and cost a proof over open terms a quarter more steps.
 - **Never run a loop at a constant fuel by conversion.** It runs out of
   fuel. Instantiate a generic lemma whose statement is syntactic instead.
 - **Prove at a neutral parameter, instantiate at the literal.** A lookup at
@@ -177,6 +185,14 @@ property of Heather.
   recursive calls would skip it ([[recursion-branch-on-varied-parameter]]).
 - A motive-less nested match on a `Cons` tail needs a written motive
   ([[nested-match-on-list-tail-motive]]).
+- **A `match` whose arms fail with "`trivial` proves `True`, but the whole
+  goal is expected" has lost its motive.** When the scrutinee is not
+  written in the goal, the elaborator spells the goal's stuck head to find
+  it, under a small step budget, and falls back to the goal as it stands
+  without saying so. A scrutinee that reads through a few projections is
+  enough (`emit_calls_emits`'s `Conditional` arm, once the register file
+  was a record of slots). Write the motive with `as`
+  ([[match-motive-stuck-spelling-budget]]).
 - **Don't match on a large theorem call's result.** `match lemma(..) as
   .. { Exists(f, fh) => .. }`, or a match on `w.left` for `let w =
   lemma(..)`, makes the elaborator and the kernel unfold the proof (an

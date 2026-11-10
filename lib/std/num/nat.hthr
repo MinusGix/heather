@@ -862,31 +862,24 @@ theorem Nat::zero_ne_succ(self n: Nat): 0 ≠ Succ(n) {
     λ (h: 0 = Succ(n)) => n.succ_ne_zero(sym(h))
 }
 
-// The equality decider, mirroring `le_dec` exactly — same shape, same reason to
-// be a `fn` rather than a `theorem` (it has to reduce), same curried spelling
-// (both arguments descend together, so the guard refuses the uncurried one).
+// The equality decider. A `fn` and not a `theorem`: it has to reduce.
+//
+// It decides by `same` and reads its proofs off `same`'s two laws. `same`
+// is a fold the kernel iterates over runs, so at two numerals the decision
+// costs their bits; the recursion on both numbers it was before built a
+// proof at every successor on the way down, and a client that only asked
+// which side it was on (a lookup by key, a register file's search by id)
+// paid a number's whole height for it.
 //
 // Equality instances are keyed by the endpoints' inferred carrier, so this
 // registers independently of equality at Bool and every other nominal type
 // (docs/decidable-equation-carrier-design.md). The generated canonical value
 // is deliberately unwritable; ordinary uses reach it through `Decide<n = m>`.
 fn Nat::eq_dec(self n: Nat) → (m: Nat) → n = m ∨ n ≠ m {
-    match n {
-        Zero => λ m =>
-            match m {
-                Zero => Inl(refl),
-                Succ(m2) => Inr(m2.zero_ne_succ()),
-            },
-        Succ(k, ih) => λ m =>
-            match m {
-                Zero => Inr(k.succ_ne_zero()),
-                Succ(m2) =>
-                    match ih(m2) {
-                        Inl(e) => Inl(Nat::cong_succ(e)),
-                        Inr(ne) => Inr(λ (bad: Succ(k) = Succ(m2)) => ne(Nat::succ_inj(k, m2, bad))),
-                    },
-            },
-    }
+    λ m => (match n.same(m) as λ bit => n.same(m) = bit → n = m ∨ n ≠ m {
+        True => λ equal => Inl(n.same_sound(m, equal)),
+        False => λ differ => Inr(n.ne_of_same(m, differ)),
+    })(refl)
 }
 
 // The equation when `n` and `m` are equal, as data: at two numerals

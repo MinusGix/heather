@@ -2090,6 +2090,19 @@ impl<'a, 'v> Eval<'a, 'v> {
             (Val::BitFold { .. }, Elim::App { .. }) => self.bit_fold_app(&head, e),
             (Val::NatSync { .. }, Elim::App { .. }) => self.fire_nat_sync(head, e),
             (Val::NatRun { .. }, Elim::ElimNat { .. }) => self.fire_nat_run(head, e),
+            // A fold the run machinery iterates, over successors that were
+            // written one at a time and are already forced: the run they
+            // spell (`Eval::forced_run`).
+            (Val::Succ(pred), Elim::ElimNat { step, .. }) if self.forced_number(*pred) && self.class_is_cheap(*step) => {
+                let (pred, step) = (*pred, *step);
+                if !matches!(&*self.classify_step(step)?, FoldClass::Sync { .. } | FoldClass::Affine { .. }) {
+                    return self.step_fire(head, e);
+                }
+                match self.succ_chain_run(pred)? {
+                    Some(run) => self.fire_nat_run(run, e),
+                    None => self.step_fire(head, e),
+                }
+            }
             (Val::WfIh { elim, label, children }, Elim::App { .. }) => {
                 let (elim, label, children) = (*elim, *label, *children);
                 self.wf_ih_apply(&head, &elim, label, children, e)
@@ -2328,10 +2341,146 @@ impl<'a, 'v> Eval<'a, 'v> {
         }
     }
 
+    /// Is `step`'s class known, or probed once for every closure over its
+    /// body ([`TmClo::closed_ident`])? A fold over a run asks the class of
+    /// any step, a run being what the classes are for; a fold over a
+    /// written successor asks only where the answer is not a probe of its
+    /// own, since a step that reads a capture would be probed at every
+    /// fold over every successor, by folds that never had a run to iterate.
+    fn class_is_cheap(&self, step: &'v TmClo<'v>) -> bool {
+        self.arena.fold_class(step).is_some() || step.closed_ident(2).is_some()
+    }
+
+    /// Is `clo` already forced to a successor or a run
+    /// ([`Eval::forced_piece`])? The cheap question [`Eval::forced_run`] is
+    /// worth asking after.
+    fn forced_number(&self, clo: &'v TmClo<'v>) -> bool {
+        self.forced_piece(clo).is_some()
+    }
+
+    /// The successor or run `clo` is already forced to, and the thunk that
+    /// holds it: `clo` itself, or the unfolding of the glued call it is
+    /// forced to (a counter read off a call, `lowered.next`, is the call
+    /// until something eliminates it), when that unfolding has been forced
+    /// in its turn. Nothing is forced or unfolded here; a memo read is a
+    /// read all the same, and notes the sealed proof it glues as
+    /// [`Eval::step_force`]'s does.
+    fn forced_piece(&self, clo: &'v TmClo<'v>) -> Option<(&'v TmClo<'v>, &'v Val<'v>)> {
+        let mut at = clo;
+        loop {
+            let value = self.arena.memo_tm(at)?;
+            if let Some(sealed) = self.arena.sealed_glue(at) {
+                crate::unseal::note(sealed);
+            }
+            match &*value {
+                Val::Succ(_) | Val::NatRun { .. } => return Some((at, value)),
+                Val::Neutral(glued) => at = glued.unfold?,
+                _ => return None,
+            }
+        }
+    }
+
+    /// The number `at` is already forced to, as one run over the first thunk
+    /// below it that is not a forced number: `None` when `at` itself is not
+    /// forced, or is forced to neither a successor nor a run.
+    ///
+    /// A number is often spelled a piece at a time. A counter threaded
+    /// through a recursion is `next`, then `Succ(next)`: a chain of thunks,
+    /// each forced to `Val::Succ` of the one before. A counter advanced by
+    /// an addition is `next + k`: a run of `k` whose tail is the thunk of
+    /// the number before, itself such a run. A fold over either took a step
+    /// (or a round of the run machinery) per piece however its step
+    /// classified, where the same number written as a literal is one run
+    /// (`issues/succ-chain-numbers-fold-unary.md`). Nothing here forces:
+    /// the pieces are read as far as they have been forced already, so a
+    /// fold that would not have looked below a predecessor still does not.
+    ///
+    /// Every piece that had a forced piece below it is remembered as the
+    /// run *it* is ([`ValueArena::recache_tm`]; a glued call keeps its
+    /// glue, and it is its unfolding that remembers), so a later fold over
+    /// any number of the chain finds one run a step down. That is what makes
+    /// the unit of fuel per such piece an amortized charge, each having
+    /// cost at least a step when it was forced. A piece that is a value
+    /// closure has no memo to replace and is read again by the next fold
+    /// over it, which pays for it again.
+    #[inline(never)]
+    fn forced_run(&mut self, at: &'v TmClo<'v>) -> Res<Option<(Rc<ContextProgram<()>>, &'v TmClo<'v>)>> {
+        let mut pieces: Vec<(&'v TmClo<'v>, Option<Rc<ContextProgram<()>>>)> = Vec::new();
+        let mut at = at;
+        while let Some((piece, value)) = self.forced_piece(at) {
+            match &*value {
+                Val::Succ(next) => {
+                    pieces.push((piece, None));
+                    at = *next;
+                }
+                Val::NatRun { program, tail } => {
+                    pieces.push((piece, Some(Rc::clone(program))));
+                    at = *tail;
+                }
+                _ => unreachable!("a forced piece is a successor or a run"),
+            }
+        }
+        let Some((_, last)) = pieces.last() else { return Ok(None) };
+        // The last piece, when it is a run, already says all it can: it is
+        // read, never rewritten, and costs nothing.
+        let settled = usize::from(last.is_some());
+        self.spend_n((pieces.len() - settled) as u64)?;
+        let one = std::num::NonZeroU64::MIN;
+        let mut below: Option<Rc<ContextProgram<()>>> = None;
+        for (index, (piece, own)) in pieces.iter().enumerate().rev() {
+            let run = match (own, &below) {
+                (None, None) => ContextProgram::run((), one),
+                (None, Some(below)) => ContextProgram::prepend((), one, Rc::clone(below)),
+                (Some(own), None) => Rc::clone(own),
+                (Some(own), Some(below)) => Self::joined_count(own, below),
+            };
+            if index + settled < pieces.len() {
+                self.arena.recache_tm(piece, self.arena.val(Val::NatRun { program: Rc::clone(&run), tail: at }));
+            }
+            below = Some(run);
+        }
+        Ok(below.map(|program| (program, at)))
+    }
+
+    /// `outer` successors over `inner`: one run when the count fits a
+    /// `u64`, since a successor run has one context and only its length to
+    /// say. A composition of fragments is what a comparison walks.
+    fn joined_count(outer: &Rc<ContextProgram<()>>, inner: &Rc<ContextProgram<()>>) -> Rc<ContextProgram<()>> {
+        let sum = outer.len().as_u64().zip(inner.len().as_u64()).and_then(|(a, b)| a.checked_add(b));
+        match sum.and_then(std::num::NonZeroU64::new) {
+            Some(count) => ContextProgram::run((), count),
+            None => ContextProgram::append(Rc::clone(outer), Rc::clone(inner)),
+        }
+    }
+
+    /// `Succ(pred)` as a run, when `pred` is already forced to a number
+    /// ([`Eval::forced_run`]); `None` when it is not, where the one
+    /// successor is all there is to say.
+    fn succ_chain_run(&mut self, pred: &'v TmClo<'v>) -> Res<Option<&'v Val<'v>>> {
+        Ok(self.forced_run(pred)?.map(|(program, tail)| {
+            let program = ContextProgram::prepend((), std::num::NonZeroU64::MIN, program);
+            self.arena.val(Val::NatRun { program, tail })
+        }))
+    }
+
+    /// A run joined to the number its tail is already forced to
+    /// ([`Eval::forced_run`]), or the run as given.
+    fn joined_run(&mut self, head: &'v Val<'v>) -> Res<&'v Val<'v>> {
+        let Val::NatRun { program, tail } = &*head else { return Ok(head) };
+        if !self.forced_number(*tail) {
+            return Ok(head);
+        }
+        Ok(match self.forced_run(*tail)? {
+            Some((below, tail)) => self.arena.val(Val::NatRun { program: Self::joined_count(program, &below), tail }),
+            None => head,
+        })
+    }
+
     /// A Nat fold over a run: iterated by its algebra's class when it has
     /// one (`eval/runs.rs`), otherwise one successor step.
     #[inline(never)]
     fn fire_nat_run(&mut self, head: &'v Val<'v>, e: Elim<'v>) -> Res<Work<'v>> {
+        let head = self.joined_run(head)?;
         let (Val::NatRun { program, tail }, Elim::ElimNat { .. }) = (&*head, &e) else {
             unreachable!("fire_nat_run is given a Nat fold over a run")
         };
@@ -2384,6 +2533,13 @@ impl<'a, 'v> Eval<'a, 'v> {
             unreachable!("fire_nat_sync is given a synchronous fold's application")
         };
         let right = self.force(arg)?;
+        // Successors written one at a time and already forced are the run
+        // they spell, as they are on the left (`Eval::forced_run`).
+        let right = match &*right {
+            Val::Succ(pred) => self.succ_chain_run(*pred)?.unwrap_or(right),
+            Val::NatRun { .. } => self.joined_run(right)?,
+            _ => right,
+        };
         if let Val::Neutral(rn) = &*right {
             if let Some(unfold) = rn.unfold {
                 // The counter on the right is a glued definition
@@ -3164,6 +3320,32 @@ mod tests {
         })
     }
 
+    /// What a synchronous fold over `left`, applied to the equal number
+    /// `right`, spends.
+    fn sync_compare<'v>(ev: &mut Eval<'_, 'v>, arena: &'v ValueArena<'v>, left: &'v TmClo<'v>, right: &'v TmClo<'v>) -> u64 {
+        let env = Env::empty();
+        let sync = Elim::ElimNat {
+            level: Level::Zero,
+            motive: arena.ty(TyClo::new(env, Rc::new(Type::Nat))),
+            base: arena.tm(TmClo::syn(env, Rc::new(dummy_lam(Term::Zero)))),
+            step: arena.tm(TmClo::syn(env, Rc::new(synchronous_step()))),
+        };
+        let before = ev.fuel();
+        let left = ev.force(left).unwrap();
+        let folded = ev.elim(left, sync).unwrap();
+        let result = ev.elim(folded, app_elim(arena, right)).unwrap();
+        assert!(matches!(&*result, Val::Zero));
+        before - ev.fuel()
+    }
+
+    /// A literal: one run over zero.
+    fn literal_run<'v>(arena: &'v ValueArena<'v>, count: u64) -> &'v TmClo<'v> {
+        arena.tm(TmClo::val(arena.val(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(count).unwrap()),
+            tail: arena.tm(TmClo::val(arena.val(Val::Zero))),
+        })))
+    }
+
     fn app_elim<'v>(arena: &'v ValueArena<'v>, arg: &'v TmClo<'v>) -> Elim<'v> {
         let ty = arena.ty(TyClo::new(Env::empty(), Rc::new(Type::Nat)));
         Elim::App {
@@ -3370,6 +3552,93 @@ mod tests {
         let mut ev = Eval::new(8, Defs::opaque(), CtxBase::Nil, &arena);
         let folded = ev.elim(left, elim).unwrap();
         let result = ev.elim(folded, app_elim(&arena, right)).unwrap();
+        assert!(matches!(&*result, Val::Zero));
+    }
+
+    /// Successors written one at a time (`next`, then `Succ(next)`) and
+    /// already forced fold as the run they spell, and a link is read once:
+    /// the first fold pays a unit a link and leaves each link remembered as
+    /// its run, so the next fold over a number of the chain pays for none
+    /// (`Eval::succ_chain_run`).
+    #[test]
+    fn a_forced_successor_chain_folds_as_the_run_it_spells() {
+        let arena = ValueArena::new();
+        let env = Env::empty();
+        let n = 300u64;
+        let mut links = vec![arena.tm(TmClo::syn(env, Rc::new(Term::Zero)))];
+        for _ in 0..n {
+            let below = Env::empty().push(&arena, links[links.len() - 1]);
+            links.push(arena.tm(TmClo::syn(below, Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0))))))));
+        }
+        let mut ev = Eval::new(1 << 16, Defs::opaque(), CtxBase::Nil, &arena);
+        let below = |k: usize| match &*arena.memo_tm(links[k]).unwrap() {
+            Val::Succ(pred) => arena.memo_tm(*pred).is_some_and(|v| matches!(&*v, Val::NatRun { .. })),
+            _ => panic!("a link is forced to a successor"),
+        };
+
+        // The first fold over the chain is what forces it, a link at a
+        // step, as it always was.
+        let first = sync_compare(&mut ev, &arena, links[n as usize], literal_run(&arena, n));
+        assert!(first >= n, "a first reading forces every link: {first}");
+        assert!(!below(200));
+
+        // The second reads it forced: a unit a link, and no fold step.
+        let second = sync_compare(&mut ev, &arena, links[n as usize], literal_run(&arena, n));
+        assert!(second >= n - 1, "a unit a link: {second}");
+        assert!(second < n + 64, "and no fold step a link besides: {second}");
+        assert!(below(200), "a link is remembered as its run");
+
+        // The chain on the right of a literal, and a number further down it.
+        let third = sync_compare(&mut ev, &arena, literal_run(&arena, 250), links[250]);
+        assert!(third < 64, "no link is read twice: {third}");
+    }
+
+    /// A number advanced by additions is a run whose tail is the number
+    /// before, itself such a run: a fold reads the forced tails as the one
+    /// run they spell, where it took a round of the run machinery a piece.
+    #[test]
+    fn a_run_over_forced_runs_folds_as_one_run() {
+        let arena = ValueArena::new();
+        let n = 300u64;
+        let mut number = arena.tm(TmClo::val(arena.val(Val::Zero)));
+        for _ in 0..n {
+            number = arena.tm(TmClo::val(arena.val(Val::NatRun {
+                program: ContextProgram::run((), NonZeroU64::new(2).unwrap()),
+                tail: number,
+            })));
+        }
+        let literal = literal_run(&arena, 2 * n);
+        let mut ev = Eval::new(1 << 16, Defs::opaque(), CtxBase::Nil, &arena);
+        for (left, right) in [(number, literal), (literal, number)] {
+            let spent = sync_compare(&mut ev, &arena, left, right);
+            assert!(spent < n + 64, "a unit a piece and no round of the fold: {spent}");
+        }
+    }
+
+    /// A chain that has not been forced is not read: the fold takes its
+    /// ordinary step, and what it does not look at stays unevaluated.
+    #[test]
+    fn an_unforced_successor_is_folded_as_written() {
+        let arena = ValueArena::new();
+        let env = Env::empty();
+        let bottom = arena.tm(TmClo::syn(env, Rc::new(Term::Zero)));
+        let one = arena.tm(TmClo::syn(Env::empty().push(&arena, bottom), Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))))));
+        let two = arena.val(Val::Succ(one));
+        let mut ev = Eval::new(64, Defs::opaque(), CtxBase::Nil, &arena);
+        assert!(ev.succ_chain_run(one).unwrap().is_none());
+        let elim = Elim::ElimNat {
+            level: Level::Zero,
+            motive: arena.ty(TyClo::new(env, Rc::new(Type::Nat))),
+            base: arena.tm(TmClo::syn(env, Rc::new(dummy_lam(Term::Zero)))),
+            step: arena.tm(TmClo::syn(env, Rc::new(synchronous_step()))),
+        };
+        let folded = ev.elim(two, elim).unwrap();
+        assert!(arena.memo_tm(bottom).is_none(), "the fold has not been applied: nothing below is forced");
+        let two_literal = arena.tm(TmClo::val(arena.val(Val::NatRun {
+            program: ContextProgram::run((), NonZeroU64::new(2).unwrap()),
+            tail: arena.tm(TmClo::val(arena.val(Val::Zero))),
+        })));
+        let result = ev.elim(folded, app_elim(&arena, two_literal)).unwrap();
         assert!(matches!(&*result, Val::Zero));
     }
 
@@ -3764,3 +4033,4 @@ mod tests {
         step
     }
 }
+
