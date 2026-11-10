@@ -25,6 +25,7 @@ const MODULES: &[(&str, &str)] = &[
     ("linux_x86_64_determinism", include_str!("../../../lib/std/os/linux/linux_x86_64_determinism.hthr")),
     ("itree", include_str!("../../../lib/std/itree/itree.hthr")),
     ("itree_trace", include_str!("../../../lib/std/itree/itree_trace.hthr")),
+    ("call_system", include_str!("../../../lib/std/itree/call_system.hthr")),
     ("linux_trees", include_str!("../../../lib/std/os/linux/linux_trees.hthr")),
     ("itree_sim", include_str!("../../../lib/std/itree/itree_sim.hthr")),
     ("linux_trees_sim", include_str!("../../../lib/std/os/linux/linux_trees_sim.hthr")),
