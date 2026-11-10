@@ -5,7 +5,7 @@ labels: [stdlib,mathematics,constructive]
 area: mathematics
 milestone: [math-reals, ml-descent]
 created: 2026-10-21
-updated: 2026-11-01
+updated: 2026-11-10
 ---
 
 Functions on `CReal` with a modulus of continuity, Lipschitz bounds, and a
@@ -33,3 +33,4 @@ can proceed at its own pace.
 - 2026-11-01: atanh is a real function on [-1/2, 1/2] with derivative 1/(1 - t²) (`CReal::atanh_deriv`, lib/std/analysis/real_log.hthr), from two new rules in lib/std/analysis/real_fn_limit.hthr: the uniform-limit rule `DerivOn::of_approx` (a uniform limit of functions whose derivatives converge uniformly to a uniformly continuous g has derivative g), which is how a power series is differentiated inside its radius, and the reciprocal rule `DerivOn::recip` (taking the inverse as a function with v·u ≈ 1, so nothing is decided). `DerivOn::restrict` narrows a domain. Still open: tanh and sqrt as real functions, uniqueness of the derivative, and log at real arguments ([[log-exp-inverse]]).
 - 2026-11-01: log at real arguments is lib/std/analysis/real_log_law.hthr ([[log-exp-inverse]]): `CReal::log`, `exp_log`, `log_exp`, `log_mul`. log's derivative 1/x is not proved; it would follow from the inverse-function form of the chain rule, which real_fn.hthr does not have.
 - 2026-11-05: gardener: cites a file it shares with [[log-grid-gap]] (`lib/std/analysis/real_log.hthr`).
+- 2026-11-10: Customers filed from docs/continuous-time-survey.md: [[step-families-and-order]], [[riemann-integration]], [[euler-lipschitz-ode]].
