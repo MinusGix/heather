@@ -76,3 +76,7 @@ a misaligned stack), and the implementation rounds filed against it.
 - **[[native-procedure-contracts]]** owns a procedure's derived contract.
 - **[[self-lexer-linked]]** and **[[sha256-linked-into-cache]]** are the
   first two exports.
+
+## Log
+
+- 2026-11-10: The artifact and the gate exist ahead of the contract. `crates/linked` (2026-11-10): `generated/*.s` is `compile-x86`'s output, checked in, one line of `generated/EXPORTS.tsv` per export; `src/lib.rs` links each with `global_asm!` and declares it `unsafe extern "sysv64" { pub safe fn … }`, `safe` on the strength of the `_returns` theorem (the crate lifts the workspace's `unsafe_code = "forbid"` to `deny` for that one module); `crates/cli/tests/native_linked.rs` recompiles every export, compares bytes and refuses an unlisted file; `scripts/linked [--check]` rewrites. A build needs no Heather compiler. This settles the bootstrap route in practice (decision 4 of the roadmap) for functions of words. The design this issue owns is unchanged and now has a place to land: the contract for an export over caller-owned memory (what it may read and write, stated as a theorem a Rust `&[u8]`/`&mut [u32; 8]` signature can be justified by), several result words, and whether the certificate itself is checked in beside the assembly. Found by linking: `program_assembly` wrote the exported label twice when the exported function came first in the program, which the C-linked examples had never hit; fixed, with a unit test.

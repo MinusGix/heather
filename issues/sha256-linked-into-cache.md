@@ -44,3 +44,7 @@ regeneration gate holds the checked-in artifact to its source.
 - **[[sha2-compress-native]]** owns the function and its theorem.
 - **[[native-library-exports-design]]** owns the contract, the artifact and
   the gate.
+
+## Log
+
+- 2026-11-10: One of the two blockers moved: SHA-256's word functions are compiled, proved and linked ([[sha2-compress-native]]), and `heather_linked::sha256::digest` matches the `sha2` crate, the oracle `crates/cache/tests/sha256.rs` holds the compiler's hash to, on every test. It is not a candidate to switch on yet. The linked `compress` is Rust around three calls per round, so the proof covers the arithmetic and not the state handling, and it is slower than the scalar path by the call overhead. This issue waits, as written, on `compress` exported whole.

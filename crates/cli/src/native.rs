@@ -488,8 +488,11 @@ fn write_new(path: &Path, contents: &[u8]) -> Result<(), String> {
 // own frames and RETs included, the exported symbol at its function's label.
 fn program_assembly(symbol: &str, bytes: &[u8], entry: usize) -> String {
     let mut out = format!("# Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.\n.text\n.globl {symbol}\n.type {symbol}, @function\n{symbol}_program:\n");
-    for (start, chunk) in [(0, &bytes[..entry]), (entry, &bytes[entry..])] {
-        if start == entry { writeln!(out, "{symbol}:").unwrap(); }
+    // The functions before the entry, the label, then the entry and the
+    // rest. A program whose entry comes first has nothing before it, and the
+    // label is still written once: an assembler refuses a second definition.
+    for (labelled, chunk) in [(false, &bytes[..entry]), (true, &bytes[entry..])] {
+        if labelled { writeln!(out, "{symbol}:").unwrap(); }
         for line in chunk.chunks(12) {
             writeln!(out, "    .byte {}", line.iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ")).unwrap();
         }
@@ -513,6 +516,25 @@ fn program_assembly(symbol: &str, bytes: &[u8], entry: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The exported label is defined exactly once, wherever the entry
+    // function falls: at the start (a function that calls nothing; the
+    // label was written twice there until `crates/linked` assembled one)
+    // and after its callees.
+    #[test]
+    fn the_exported_label_is_defined_once() {
+        let bytes: Vec<u8> = (0..30).collect();
+        for entry in [0, 13, 24] {
+            let text = program_assembly("f", &bytes, entry);
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines.iter().filter(|line| **line == "f:").count(), 1, "entry {entry}:\n{text}");
+            let label = lines.iter().position(|line| *line == "f:").unwrap();
+            let count = |lines: &[&str]| lines.iter().filter(|line| line.trim_start().starts_with(".byte"))
+                .map(|line| line.split(',').count()).sum::<usize>();
+            assert_eq!(count(&lines[..label]), entry, "bytes before the label, entry {entry}");
+            assert_eq!(count(&lines[label..]), bytes.len() - entry, "bytes from the label, entry {entry}");
+        }
+    }
 
     #[test]
     fn the_bundled_library_checks() {

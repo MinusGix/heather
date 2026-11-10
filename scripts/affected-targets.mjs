@@ -36,7 +36,7 @@ export const GLOBAL = /^(Cargo\.toml|Cargo\.lock|\.cargo\/|rust-toolchain|script
 // A file some `.d` names is never one of these, whatever its path.
 export const NO_TEST = /^(docs\/(?!showcase\/)|issues\/|perf\/|book\/|book\.toml$|probes\/|editors\/|scripts\/|\.claude\/|\.gitignore$)|\.md$/;
 // Read at run time by tests (lib/ also at compile time, through include_str!).
-export const RUNTIME_DATA = /^(lib\/|examples\/|docs\/showcase\/|tree-sitter-heather\/)/;
+export const RUNTIME_DATA = /^(lib\/|examples\/|docs\/showcase\/|tree-sitter-heather\/|crates\/linked\/generated\/)/;
 // A binary whose own sources say this may read run-time data. File I/O and
 // process spawns, and the CLI library's entry points that read sources
 // (`loader::Module` is a value, not a read).

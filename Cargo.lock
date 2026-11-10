@@ -150,6 +150,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "heather-linked"
+version = "0.0.1"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "heather-lsp"
 version = "0.0.1"
 dependencies = [

@@ -115,6 +115,33 @@ next call's argument (`composition.hthr`), values live across calls
 link it against a C reference and compare them on boundary and pseudorandom
 inputs.
 
+## Narrow words
+
+A function's parameters and result are 64-bit words, and inside it a value
+may be any width up to 64: `a.truncate(32, 32)` is the low half of `a`, and
+`x.zero_extend(32)` brings a 32-bit result back. The compiler keeps a
+narrow value zero-extended in its 64-bit register. AND, OR, XOR, a right
+shift, an unsigned comparison and an equality read it as it is; an ADD, a
+SUB or a left shift, which can carry past the top, is followed by a shift
+left and back by 64 minus the width; narrowing is that pair of shifts and
+widening is free. `narrow_bytes.hthr` tests a byte's carry and borrow,
+`narrow_words.hthr` rotates a 32-bit word and adds a constant with its top
+bit set, and `narrow_widths.hthr` takes one value through 64, 32, 16, 27,
+32 and 64 bits. A narrow signed comparison, a narrow arithmetic shift and a
+sign extension are refused (`narrow_signed_operations_are_refused` in
+`native_program.rs`): zero extension does not keep a sign.
+
+## Linked into Rust
+
+`crates/linked` links compiled functions into a Rust crate and calls them
+directly: `generated/*.s` is `compile-x86`'s output for each line of
+`generated/EXPORTS.tsv`, checked in, and `crates/cli/tests/native_linked.rs`
+recompiles every export and compares. `scripts/linked` rewrites the files
+after a change to a linked module or to the lowering (`--check` only
+compares). The exports today are the word functions of SHA-512 and SHA-256
+(`lib/native/crypto/`), each proved to be the specification's
+(`lib/std/crypto/sha2.hthr`).
+
 ## Loops
 
 A recursion on a fuel compiles to a verified loop. The function is

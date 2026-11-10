@@ -1,0 +1,32 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// One value through five widths (issues/function-ir-narrow-arithmetic.md):
+// 64 to 32 to 16, up to 27 (a width no instruction has), up to 32 and back
+// to 64, with arithmetic that wraps at each. Narrowing clears what is above
+// the new width; widening is free, since the register already holds the
+// value zero-extended.
+runtime fn widths(a, b: BitVec(64)) → BitVec(64) {
+    let half = a.truncate(32, 32);
+    let short = half.truncate(16, 16);
+    let odd = b.truncate(27, 37);
+    let grown = short.add(BitVec::ofNat(65521)).zero_extend(11);
+    let joined = grown.add(odd).shift_left(9);
+    let back = joined.zero_extend(5).add(half);
+    back.shift_right(3).bxor(half).zero_extend(32).add(a)
+}

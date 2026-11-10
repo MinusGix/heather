@@ -1,0 +1,203 @@
+// SHA-256's word functions as compiled code (issues/sha2-compress-native.md,
+// stage C1 of docs/native-lexer-crypto-roadmap.md), at 32 bits in the
+// machine's 64-bit registers.
+//
+// The same three functions as `sha512_round`: `T1` and `T2` of a round
+// (FIPS 180-4 §6.2.2 step 3) and one word of the message schedule (step 1).
+// A caller passes and receives 64-bit words, since that is what crosses a
+// function's boundary today, and each function reads only the low half of
+// what it is given: it truncates its parameters, computes at 32 bits, and
+// zero-extends its result. The verified lowering keeps a 32-bit value
+// zero-extended in its register (issues/function-ir-narrow-arithmetic.md),
+// so the truncation and every ADD and SHL after it are followed by a shift
+// left and back by 32, and nothing else is.
+//
+// Each body is one function with no calls, where `sha512_round` calls a
+// helper per Σ and σ: a call saves and restores every live register, and at
+// this size that is most of the code. The specification is still met piece
+// by piece below, through the same function at 32 bits (`sha256_t1_narrow`
+// and its fellows), which is what the compiled body is on truncated words
+// by unfolding.
+
+import bitvec;
+import bitvec_rotate;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import sha2;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// T1 = h + Σ1(e) + Ch(e, f, g) + K + W, the complement in Ch an XOR against
+// all ones and each rotation the shift pair.
+runtime fn sha256_t1(h, e, f, g, k, w: BitVec(64)) → BitVec(64) {
+    let h32 = h.truncate(32, 32);
+    let e32 = e.truncate(32, 32);
+    let f32 = f.truncate(32, 32);
+    let g32 = g.truncate(32, 32);
+    let k32 = k.truncate(32, 32);
+    let w32 = w.truncate(32, 32);
+    let big1 = e32.shift_right(6).bor(e32.shift_left(26)).bxor(e32.shift_right(11).bor(e32.shift_left(21)))
+        .bxor(e32.shift_right(25).bor(e32.shift_left(7)));
+    let ch = e32.band(f32).bxor(e32.bxor(BitVec::ofNat(0xffffffff)).band(g32));
+    h32.add(big1).add(ch).add(k32).add(w32).zero_extend(32)
+}
+
+// T2 = Σ0(a) + Maj(a, b, c).
+runtime fn sha256_t2(a, b, c: BitVec(64)) → BitVec(64) {
+    let a32 = a.truncate(32, 32);
+    let b32 = b.truncate(32, 32);
+    let c32 = c.truncate(32, 32);
+    let big0 = a32.shift_right(2).bor(a32.shift_left(30)).bxor(a32.shift_right(13).bor(a32.shift_left(19)))
+        .bxor(a32.shift_right(22).bor(a32.shift_left(10)));
+    let maj = a32.band(b32).bxor(a32.band(c32)).bxor(b32.band(c32));
+    big0.add(maj).zero_extend(32)
+}
+
+// W(t) = σ1(W(t−2)) + W(t−7) + σ0(W(t−15)) + W(t−16).
+runtime fn sha256_next(w2, w7, w15, w16: BitVec(64)) → BitVec(64) {
+    let x = w2.truncate(32, 32);
+    let y = w15.truncate(32, 32);
+    let small1 = x.shift_right(17).bor(x.shift_left(15)).bxor(x.shift_right(19).bor(x.shift_left(13)))
+        .bxor(x.shift_right(10));
+    let small0 = y.shift_right(7).bor(y.shift_left(25)).bxor(y.shift_right(18).bor(y.shift_left(14)))
+        .bxor(y.shift_right(3));
+    small1.add(w7.truncate(32, 32)).add(small0).add(w16.truncate(32, 32)).zero_extend(32)
+}
+
+// ---------------------------------------------------------------------------
+// The same functions at 32 bits, and each compiled one as its narrow
+// function on the low halves of its arguments.
+
+fn sha256_t1_narrow(h, e, f, g, k, w: BitVec(32)) → BitVec(32) {
+    let big1 = e.shift_right(6).bor(e.shift_left(26)).bxor(e.shift_right(11).bor(e.shift_left(21)))
+        .bxor(e.shift_right(25).bor(e.shift_left(7)));
+    let ch = e.band(f).bxor(e.bxor(BitVec::ofNat(0xffffffff)).band(g));
+    h.add(big1).add(ch).add(k).add(w)
+}
+
+fn sha256_t2_narrow(a, b, c: BitVec(32)) → BitVec(32) {
+    let big0 = a.shift_right(2).bor(a.shift_left(30)).bxor(a.shift_right(13).bor(a.shift_left(19)))
+        .bxor(a.shift_right(22).bor(a.shift_left(10)));
+    let maj = a.band(b).bxor(a.band(c)).bxor(b.band(c));
+    big0.add(maj)
+}
+
+fn sha256_next_narrow(w2, w7, w15, w16: BitVec(32)) → BitVec(32) {
+    let small1 = w2.shift_right(17).bor(w2.shift_left(15)).bxor(w2.shift_right(19).bor(w2.shift_left(13)))
+        .bxor(w2.shift_right(10));
+    let small0 = w15.shift_right(7).bor(w15.shift_left(25)).bxor(w15.shift_right(18).bor(w15.shift_left(14)))
+        .bxor(w15.shift_right(3));
+    small1.add(w7).add(small0).add(w16)
+}
+
+theorem sha256_t1_low(h, e, f, g, k, w: BitVec(64)):
+    sha256_t1(h, e, f, g, k, w) =
+        sha256_t1_narrow(h.truncate(32, 32), e.truncate(32, 32), f.truncate(32, 32), g.truncate(32, 32),
+            k.truncate(32, 32), w.truncate(32, 32)).zero_extend(32)
+{ refl }
+
+theorem sha256_t2_low(a, b, c: BitVec(64)):
+    sha256_t2(a, b, c) =
+        sha256_t2_narrow(a.truncate(32, 32), b.truncate(32, 32), c.truncate(32, 32)).zero_extend(32)
+{ refl }
+
+theorem sha256_next_low(w2, w7, w15, w16: BitVec(64)):
+    sha256_next(w2, w7, w15, w16) =
+        sha256_next_narrow(w2.truncate(32, 32), w7.truncate(32, 32), w15.truncate(32, 32), w16.truncate(32, 32))
+            .zero_extend(32)
+{ refl }
+
+// ---------------------------------------------------------------------------
+// Each narrow function is the specification's.
+
+theorem sha256_ones(): BitVec::ofNat(0xffffffff, n := 32) = BitVec::all_ones() { refl }
+
+theorem sha256_t1_narrow_spec(s: Sha2State(32), k, w: BitVec(32)):
+    sha256_t1_narrow(s.h, s.e, s.f, s.g, k, w) = Sha2::sha256().t1(s, k, w)
+{
+    let complement: (s.e.bxor(BitVec::ofNat(0xffffffff)) = s.e.complement()) =
+        j(sym(sha256_ones()), λ ones _ => s.e.bxor(ones) = s.e.complement(), BitVec::bxor_all_ones(32, s.e));
+    cong_fn(λ (c: BitVec(32)) => s.h.add(Sha2::sha256().big1.big(s.e)).add(s.e.band(s.f).bxor(c.band(s.g))).add(k).add(w),
+        complement)
+}
+
+theorem sha256_t2_narrow_spec(s: Sha2State(32)): sha256_t2_narrow(s.a, s.b, s.c) = Sha2::sha256().t2(s) { refl }
+
+// ---------------------------------------------------------------------------
+// What a caller that keeps 32-bit words has: it passes each zero-extended,
+// and the low half of what comes back is the specification's word.
+
+fn sha256_wide(x: BitVec(32)) → BitVec(64) { x.zero_extend(32) }
+
+theorem sha256_wide_low(x: BitVec(32)): sha256_wide(x).truncate(32, 32) = x { BitVec::truncate_zero_extend(32, 32, x) }
+
+theorem sha256_t1_spec(s: Sha2State(32), k, w: BitVec(32)):
+    sha256_t1(sha256_wide(s.h), sha256_wide(s.e), sha256_wide(s.f), sha256_wide(s.g), sha256_wide(k), sha256_wide(w)) =
+        sha256_wide(Sha2::sha256().t1(s, k, w))
+{
+    let narrow: (sha256_t1_narrow(sha256_wide(s.h).truncate(32, 32), sha256_wide(s.e).truncate(32, 32),
+            sha256_wide(s.f).truncate(32, 32), sha256_wide(s.g).truncate(32, 32),
+            sha256_wide(k).truncate(32, 32), sha256_wide(w).truncate(32, 32)) = Sha2::sha256().t1(s, k, w)) =
+        rewrite(sha256_wide_low(s.h), sha256_wide_low(s.e), sha256_wide_low(s.f), sha256_wide_low(s.g),
+            sha256_wide_low(k), sha256_wide_low(w), sha256_t1_narrow_spec(s, k, w));
+    trans(sha256_t1_low(sha256_wide(s.h), sha256_wide(s.e), sha256_wide(s.f), sha256_wide(s.g), sha256_wide(k), sha256_wide(w)),
+        cong_fn(λ (v: BitVec(32)) => sha256_wide(v), narrow))
+}
+
+theorem sha256_t2_spec(s: Sha2State(32)):
+    sha256_t2(sha256_wide(s.a), sha256_wide(s.b), sha256_wide(s.c)) = sha256_wide(Sha2::sha256().t2(s))
+{
+    let narrow: (sha256_t2_narrow(sha256_wide(s.a).truncate(32, 32), sha256_wide(s.b).truncate(32, 32),
+            sha256_wide(s.c).truncate(32, 32)) = Sha2::sha256().t2(s)) =
+        rewrite(sha256_wide_low(s.a), sha256_wide_low(s.b), sha256_wide_low(s.c), sha256_t2_narrow_spec(s));
+    trans(sha256_t2_low(sha256_wide(s.a), sha256_wide(s.b), sha256_wide(s.c)),
+        cong_fn(λ (v: BitVec(32)) => sha256_wide(v), narrow))
+}
+
+// One round of the specification is the low halves of the two compiled
+// words and `turn`.
+theorem sha256_round_spec(s: Sha2State(32), k, w: BitVec(32)):
+    Sha2::sha256().round(s, k, w) =
+        s.turn(sha256_t1(sha256_wide(s.h), sha256_wide(s.e), sha256_wide(s.f), sha256_wide(s.g), sha256_wide(k), sha256_wide(w))
+                .truncate(32, 32),
+            sha256_t2(sha256_wide(s.a), sha256_wide(s.b), sha256_wide(s.c)).truncate(32, 32))
+{
+    let first: (sha256_t1(sha256_wide(s.h), sha256_wide(s.e), sha256_wide(s.f), sha256_wide(s.g), sha256_wide(k), sha256_wide(w))
+            .truncate(32, 32) = Sha2::sha256().t1(s, k, w)) =
+        trans(cong_fn(λ (v: BitVec(64)) => v.truncate(32, 32), sha256_t1_spec(s, k, w)),
+            sha256_wide_low(Sha2::sha256().t1(s, k, w)));
+    let second: (sha256_t2(sha256_wide(s.a), sha256_wide(s.b), sha256_wide(s.c)).truncate(32, 32) = Sha2::sha256().t2(s)) =
+        trans(cong_fn(λ (v: BitVec(64)) => v.truncate(32, 32), sha256_t2_spec(s)),
+            sha256_wide_low(Sha2::sha256().t2(s)));
+    sym(trans(cong_fn(λ (t: BitVec(32)) => s.turn(t,
+                sha256_t2(sha256_wide(s.a), sha256_wide(s.b), sha256_wide(s.c)).truncate(32, 32)), first),
+        cong_fn(λ (t: BitVec(32)) => s.turn(Sha2::sha256().t1(s, k, w), t), second)))
+}
+
+// A schedule word is the low half of the compiled word of the four the
+// window holds at those places, whatever the window holds past them.
+theorem sha256_next_spec(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15: BitVec(32),
+    rest: List<BitVec(32)>):
+    Sha2::sha256().next_word(
+        Cons(a0, Cons(a1, Cons(a2, Cons(a3, Cons(a4, Cons(a5, Cons(a6, Cons(a7,
+        Cons(a8, Cons(a9, Cons(a10, Cons(a11, Cons(a12, Cons(a13, Cons(a14, Cons(a15, rest))))))))))))))))) =
+        sha256_next(sha256_wide(a1), sha256_wide(a6), sha256_wide(a14), sha256_wide(a15)).truncate(32, 32)
+{
+    let narrow: (sha256_next_narrow(sha256_wide(a1).truncate(32, 32), sha256_wide(a6).truncate(32, 32),
+            sha256_wide(a14).truncate(32, 32), sha256_wide(a15).truncate(32, 32)) = sha256_next_narrow(a1, a6, a14, a15)) =
+        rewrite(sha256_wide_low(a1), sha256_wide_low(a6), sha256_wide_low(a14), sha256_wide_low(a15), refl);
+    sym(trans(cong_fn(λ (v: BitVec(64)) => v.truncate(32, 32),
+            trans(sha256_next_low(sha256_wide(a1), sha256_wide(a6), sha256_wide(a14), sha256_wide(a15)),
+                cong_fn(λ (v: BitVec(32)) => sha256_wide(v), narrow))),
+        sha256_wide_low(sha256_next_narrow(a1, a6, a14, a15))))
+}

@@ -1452,6 +1452,18 @@ theorem BitVec::xor_self(n: Nat): (x: BitVec(n)) → x.bxor(x) = BitVec::zero() 
     }
 }
 
+// XOR against all ones is the complement: the spelling a language with XOR
+// and no NOT has for it.
+theorem BitVec::bxor_all_ones(n: Nat): (x: BitVec(n)) → x.bxor(BitVec::all_ones()) = x.complement() {
+    match n {
+        Zero => λ x => refl,
+        Succ(k, ih) => λ x => BitVec::cons_bit_cong(k,
+            (match x.head_bit() as λ b => Bool::xor(b, True) = !b { False => refl, True => refl }),
+            ih(x.tail_bits()),
+            a := Bool::xor(x.head_bit(), True), b := !x.head_bit()),
+    }
+}
+
 theorem BitVec::get_set_same(n: Nat): (x: BitVec(n)) → (i: Fin(n)) → (b: Bool) →
                      (x.set(i, b)).get(i) = b {
     match n {

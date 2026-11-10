@@ -574,7 +574,9 @@ fn StructuredRegion::crossing(self region: StructuredRegion, after, crossed: Lis
 // What the planner folds (`Folded` placements): a constant every read of
 // which is an ADD's operand, when an immediate holds it, and a comparison
 // read once, as a branch's condition, and last in its block (its operands
-// are still in their registers at the branch). Ids are a function's own,
+// are still in their registers at the branch). Both at 64 bits only: a
+// narrow ADD has no immediate form and a narrow comparison no folded branch
+// yet (`Node::fold`). Ids are a function's own,
 // so one list over the whole body serves; the lowering refuses where it is
 // wrong, never computes wrongly.
 
@@ -626,13 +628,13 @@ fn node_folds(nodes: List<Node>, reads, conditions: List<Nat>) → List<Nat> {
                 True => Cons(output, later),
             };
             match node {
-                Const(_, output, value) => match !mentions(reads ++ conditions, output) && add_immediate(Rax, value).is_some() {
+                Const(width, output, value) => match width.same(64) && !mentions(reads ++ conditions, output) && add_immediate(Rax, value).is_some() {
                     False => later,
                     True => Cons(output, later),
                 },
-                UnsignedLessThan(_, output, _, _) => compared(output),
-                SignedLessThan(_, output, _, _) => compared(output),
-                Equal(_, output, _, _) => compared(output),
+                UnsignedLessThan(width, output, _, _) => match width.same(64) { False => later, True => compared(output) },
+                SignedLessThan(width, output, _, _) => match width.same(64) { False => later, True => compared(output) },
+                Equal(width, output, _, _) => match width.same(64) { False => later, True => compared(output) },
                 _ => later,
             }
         },

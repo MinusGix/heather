@@ -55,3 +55,7 @@ operations through their unfolding lemmas.
 - **[[lrat-certified-bitvector-decision]]** owns deciding bit-vector
   identities. Assumed here: nothing; the laws above are proved by hand or
   by induction on the width.
+
+## Log
+
+- 2026-11-10: Rotates are in, as `lib/std/bitvec/bitvec_rotate.hthr`: `BitVec::rotr` and `rotl` defined as FIPS 180-4's shift pair, with `rotr_shifts`/`rotl_shifts` (the unfolding a compiled word function's proof uses) and each in terms of the other. Beside it, `lib/std/bitvec/bitvec_resize.hthr`: `BitVec::resize(w)` (`ofNat ∘ toNat`, FunctionIR's `Resize`) with its laws against `zero_extend`, `truncate`, every bitwise and arithmetic operation, both shifts and both comparisons, and `shift_pair_resize` (left and back by `m - n` is the low `n` bits, widened). Also `BitVec::bxor_all_ones` in `bitvec.hthr`. Still owed here: a rotation linear in the width alone (`drop_low` and `concat`, and its equation with the shift pair), so that evaluating a specification does not pay the count twice; and the wide operations (64×64→128, add with carry), which [[numeral-linked]] and the field arithmetic both need.
