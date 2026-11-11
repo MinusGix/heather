@@ -103,3 +103,4 @@ cites the derivative automaton's language theorem for its soundness.
   theorem. Both need the step over character classes instead of single
   codes. Then the language laws module for
   [[kleene-algebra-with-tests]] and longest-match tokenisation.
+- 2026-11-11: Proof forms revised the same day, after Minus asked what kept them verbose: `≈` is designated at `Regex` with an `Equivalence` instance, so chains are `calc`; the `Same` lemmas take their expressions implicitly; existentials are taken apart by pattern; the catch-all cases are wildcard arms. What stayed manual is filed as [[case-split-on-a-definitions-tests]] (why `alt_at`/`seq_at` exist) and [[rel-cong-under-constructors]]. The modules moved to `lib/std/text/regex/`.

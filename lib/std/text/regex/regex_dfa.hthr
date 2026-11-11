@@ -110,31 +110,35 @@ theorem Dfa::run_either<S, T>(self a: Dfa<S>, b: Dfa<T>, w: List<Nat>): a.either
 }
 
 // ---------------------------------------------------------------------------
-// The automaton of derivatives.
+// Expressions with one language.
 
-// Two expressions with one language.
+// Two expressions with one language, written `r ≈ q`.
 fn Regex::Same(r, q: Regex) → Type { (w: List<Nat>) → (r.Denotes(w) ↔ q.Denotes(w)) }
 
-theorem Regex::same_refl(self r: Regex): Regex::Same(r, r) { λ w => iff_refl() }
+designation ≈ at Regex := Regex::Same
 
-theorem Regex::same_sym(r, q: Regex, s: Regex::Same(r, q)): Regex::Same(q, r) { λ w => iff_sym(s(w)) }
+theorem Regex::same_refl(self r: Regex): r ≈ r { λ w => iff_refl() }
 
-theorem Regex::same_trans(r, q, p: Regex, s: Regex::Same(r, q), t: Regex::Same(q, p)): Regex::Same(r, p) {
-    λ w => iff_trans(s(w), t(w))
+theorem Regex::same_sym({r, q: Regex}, s: r ≈ q): q ≈ r { λ w => iff_sym(s(w)) }
+
+theorem Regex::same_trans({r, q, p: Regex}, s: r ≈ q, t: q ≈ p): r ≈ p { λ w => iff_trans(s(w), t(w)) }
+
+instance Equivalence<Regex>(Regex::Same) {
+    rel_refl := λ r => r.same_refl(),
+    rel_sym := λ r q h => Regex::same_sym(h),
+    rel_trans := λ r q p h1 h2 => Regex::same_trans(h1, h2),
 }
 
-theorem Regex::same_seq(a, a2, b, b2: Regex, sa: Regex::Same(a, a2), sb: Regex::Same(b, b2)): Regex::Same(Seq(a, b), Seq(a2, b2)) {
+theorem Regex::same_seq({a, a2, b, b2: Regex}, sa: a ≈ a2, sb: b ≈ b2): Seq(a, b) ≈ Seq(a2, b2) {
     λ w => Iff(
-        mp := λ (d: Seq(a, b).Denotes(w)) => Exists(d.witness, Exists(d.proof.witness, And(d.proof.proof.left,
-            And(sa(d.witness).mp(d.proof.proof.right.left), sb(d.proof.witness).mp(d.proof.proof.right.right))))),
-        mpr := λ (d: Seq(a2, b2).Denotes(w)) => Exists(d.witness, Exists(d.proof.witness, And(d.proof.proof.left,
-            And(sa(d.witness).mpr(d.proof.proof.right.left), sb(d.proof.witness).mpr(d.proof.proof.right.right))))))
+        mp := λ d => match d { ⟨u, ⟨v, ⟨e, ⟨da, db⟩⟩⟩⟩ => ⟨u, ⟨v, ⟨e, ⟨sa(u).mp(da), sb(v).mp(db)⟩⟩⟩⟩ },
+        mpr := λ d => match d { ⟨u, ⟨v, ⟨e, ⟨da, db⟩⟩⟩⟩ => ⟨u, ⟨v, ⟨e, ⟨sa(u).mpr(da), sb(v).mpr(db)⟩⟩⟩⟩ })
 }
 
-theorem Regex::same_alt(a, a2, b, b2: Regex, sa: Regex::Same(a, a2), sb: Regex::Same(b, b2)): Regex::Same(Alt(a, b), Alt(a2, b2)) {
+theorem Regex::same_alt({a, a2, b, b2: Regex}, sa: a ≈ a2, sb: b ≈ b2): Alt(a, b) ≈ Alt(a2, b2) {
     λ w => Iff(
-        mp := λ (d: Alt(a, b).Denotes(w)) => match d { Inl(x) => Inl(sa(w).mp(x)), Inr(y) => Inr(sb(w).mp(y)) },
-        mpr := λ (d: Alt(a2, b2).Denotes(w)) => match d { Inl(x) => Inl(sa(w).mpr(x)), Inr(y) => Inr(sb(w).mpr(y)) })
+        mp := λ d => match d { Inl(x) => Inl(sa(w).mp(x)), Inr(y) => Inr(sb(w).mp(y)) },
+        mpr := λ d => match d { Inl(x) => Inl(sa(w).mpr(x)), Inr(y) => Inr(sb(w).mpr(y)) })
 }
 
 theorem Regex::each_mono(P, Q: List<Nat> → Type, step: (u: List<Nat>) → P(u) → Q(u), ws: List<List<Nat>>):
@@ -142,49 +146,31 @@ theorem Regex::each_mono(P, Q: List<Nat> → Type, step: (u: List<Nat>) → P(u)
 {
     match ws {
         Nil => λ e => e,
-        Cons(p, t) => λ e => And(step(p, e.left), Regex::each_mono(P, Q, step, t, e.right)),
+        Cons(p, t) => λ e => ⟨step(p, e.left), Regex::each_mono(P, Q, step, t, e.right)⟩,
     }
 }
 
-theorem Regex::same_star(s, s2: Regex, same: Regex::Same(s, s2)): Regex::Same(Star(s), Star(s2)) {
+theorem Regex::same_star({s, s2: Regex}, same: s ≈ s2): Star(s) ≈ Star(s2) {
     λ w => Iff(
-        mp := λ (d: Star(s).Denotes(w)) => Exists(d.witness, And(d.proof.left,
-            Regex::each_mono(λ u => s.Denotes(u), λ u => s2.Denotes(u), λ u x => same(u).mp(x), d.witness, d.proof.right))),
-        mpr := λ (d: Star(s2).Denotes(w)) => Exists(d.witness, And(d.proof.left,
-            Regex::each_mono(λ u => s2.Denotes(u), λ u => s.Denotes(u), λ u x => same(u).mpr(x), d.witness, d.proof.right))))
+        mp := λ d => match d { ⟨ws, ⟨e, each⟩⟩ =>
+            ⟨ws, ⟨e, Regex::each_mono(λ u => s.Denotes(u), λ u => s2.Denotes(u), λ u x => same(u).mp(x), ws, each)⟩⟩ },
+        mpr := λ d => match d { ⟨ws, ⟨e, each⟩⟩ =>
+            ⟨ws, ⟨e, Regex::each_mono(λ u => s2.Denotes(u), λ u => s.Denotes(u), λ u x => same(u).mpr(x), ws, each)⟩⟩ })
 }
 
 // ---------------------------------------------------------------------------
 // Constructors that apply the units and zeros.
 
-fn Regex::is_no_match(self r: Regex) → Bool {
-    match r { NoMatch => True, Eps => False, Range(_, _) => False, Seq(_, _) => False, Alt(_, _) => False, Star(_) => False }
-}
+fn Regex::is_no_match(self r: Regex) → Bool { match r { NoMatch => True, _ => False } }
 
-fn Regex::is_eps(self r: Regex) → Bool {
-    match r { NoMatch => False, Eps => True, Range(_, _) => False, Seq(_, _) => False, Alt(_, _) => False, Star(_) => False }
-}
+fn Regex::is_eps(self r: Regex) → Bool { match r { Eps => True, _ => False } }
 
 theorem Regex::is_no_match_empty(self r: Regex, w: List<Nat>): r.is_no_match() = True → r.Denotes(w) → False {
-    match r {
-        NoMatch => λ h d => d,
-        Eps => λ h d => absurd(h),
-        Range(_, _) => λ h d => absurd(h),
-        Seq(_, _) => λ h d => absurd(h),
-        Alt(_, _) => λ h d => absurd(h),
-        Star(_) => λ h d => absurd(h),
-    }
+    match r { NoMatch => λ h d => d, _ => λ h d => absurd(h) }
 }
 
 theorem Regex::is_eps_nil(self r: Regex, w: List<Nat>): r.is_eps() = True → (r.Denotes(w) ↔ w = Nil) {
-    match r {
-        NoMatch => λ h => absurd(h),
-        Eps => λ h => iff_refl(),
-        Range(_, _) => λ h => absurd(h),
-        Seq(_, _) => λ h => absurd(h),
-        Alt(_, _) => λ h => absurd(h),
-        Star(_) => λ h => absurd(h),
-    }
+    match r { Eps => λ h => iff_refl(), _ => λ h => absurd(h) }
 }
 
 // `Alt` without an operand that accepts nothing. The tests are parameters
@@ -199,22 +185,22 @@ fn Regex::alt_at(za, zb: Bool, a, b: Regex) → Regex {
 fn Regex::alt(a, b: Regex) → Regex { Regex::alt_at(a.is_no_match(), b.is_no_match(), a, b) }
 
 theorem Regex::alt_at_same(a, b: Regex, za: Bool): a.is_no_match() = za → (zb: Bool) → b.is_no_match() = zb →
-    Regex::Same(Regex::alt_at(za, zb, a, b), Alt(a, b))
+    Regex::alt_at(za, zb, a, b) ≈ Alt(a, b)
 {
     match za {
         True => λ ha zb hb w => Iff(
-            mp := λ (d: b.Denotes(w)) => Inr(d),
-            mpr := λ (d: Alt(a, b).Denotes(w)) => match d { Inl(x) => false_elim(a.is_no_match_empty(w, ha, x)), Inr(y) => y }),
+            mp := λ d => Inr(d),
+            mpr := λ d => match d { Inl(x) => false_elim(a.is_no_match_empty(w, ha, x)), Inr(y) => y }),
         False => λ ha zb => match zb {
             True => λ hb w => Iff(
-                mp := λ (d: a.Denotes(w)) => Inl(d),
-                mpr := λ (d: Alt(a, b).Denotes(w)) => match d { Inl(x) => x, Inr(y) => false_elim(b.is_no_match_empty(w, hb, y)) }),
+                mp := λ d => Inl(d),
+                mpr := λ d => match d { Inl(x) => x, Inr(y) => false_elim(b.is_no_match_empty(w, hb, y)) }),
             False => λ hb w => iff_refl(),
         },
     }
 }
 
-theorem Regex::alt_same(a, b: Regex): Regex::Same(Regex::alt(a, b), Alt(a, b)) {
+theorem Regex::alt_same(a, b: Regex): Regex::alt(a, b) ≈ Alt(a, b) {
     Regex::alt_at_same(a, b, a.is_no_match(), refl, b.is_no_match(), refl)
 }
 
@@ -236,32 +222,26 @@ fn Regex::seq(a, b: Regex) → Regex { Regex::seq_at(a.is_no_match(), b.is_no_ma
 
 theorem Regex::seq_at_same(a, b: Regex, za: Bool): a.is_no_match() = za → (zb: Bool) → b.is_no_match() = zb →
     (ea: Bool) → a.is_eps() = ea → (eb: Bool) → b.is_eps() = eb →
-    Regex::Same(Regex::seq_at(za, zb, ea, eb, a, b), Seq(a, b))
+    Regex::seq_at(za, zb, ea, eb, a, b) ≈ Seq(a, b)
 {
     match za {
         True => λ ha zb hb ea hea eb heb w => Iff(
-            mp := λ (d: False) => false_elim(d),
-            mpr := λ (d: Seq(a, b).Denotes(w)) => a.is_no_match_empty(d.witness, ha, d.proof.proof.right.left)),
+            mp := λ d => false_elim(d),
+            mpr := λ d => match d { ⟨u, ⟨_, ⟨_, ⟨da, _⟩⟩⟩⟩ => a.is_no_match_empty(u, ha, da) }),
         False => λ ha zb => match zb {
             True => λ hb ea hea eb heb w => Iff(
-                mp := λ (d: False) => false_elim(d),
-                mpr := λ (d: Seq(a, b).Denotes(w)) => b.is_no_match_empty(d.proof.witness, hb, d.proof.proof.right.right)),
+                mp := λ d => false_elim(d),
+                mpr := λ d => match d { ⟨_, ⟨v, ⟨_, ⟨_, db⟩⟩⟩⟩ => b.is_no_match_empty(v, hb, db) }),
             False => λ hb ea => match ea {
                 True => λ hea eb heb w => Iff(
-                    mp := λ (d: b.Denotes(w)) => Exists(Nil, Exists(w, And(refl, And(a.is_eps_nil(Nil, hea).mpr(refl), d)))),
-                    mpr := λ (d: Seq(a, b).Denotes(w)) => {
-                        let un: (d.witness = Nil) = a.is_eps_nil(d.witness, hea).mp(d.proof.proof.right.left);
-                        let e: (w = d.proof.witness) = j(un, λ x _ => (w = x ++ d.proof.witness), d.proof.proof.left);
-                        j(sym(e), λ x _ => b.Denotes(x), d.proof.proof.right.right)
-                    }),
+                    mp := λ d => ⟨Nil, ⟨w, ⟨refl, ⟨a.is_eps_nil(Nil, hea).mpr(refl), d⟩⟩⟩⟩,
+                    mpr := λ d => match d { ⟨u, ⟨v, ⟨e, ⟨da, db⟩⟩⟩⟩ =>
+                        subst(sym(trans(e, cong_fn(λ (x: List<Nat>) => x ++ v, a.is_eps_nil(u, hea).mp(da)))), db) }),
                 False => λ hea eb => match eb {
                     True => λ heb w => Iff(
-                        mp := λ (d: a.Denotes(w)) => Exists(w, Exists(Nil, And(sym(w.append_nil()), And(d, b.is_eps_nil(Nil, heb).mpr(refl))))),
-                        mpr := λ (d: Seq(a, b).Denotes(w)) => {
-                            let vn: (d.proof.witness = Nil) = b.is_eps_nil(d.proof.witness, heb).mp(d.proof.proof.right.right);
-                            let e: (w = d.witness) = trans(j(vn, λ x _ => (w = d.witness ++ x), d.proof.proof.left), d.witness.append_nil());
-                            j(sym(e), λ x _ => a.Denotes(x), d.proof.proof.right.left)
-                        }),
+                        mp := λ d => ⟨w, ⟨Nil, ⟨sym(w.append_nil()), ⟨d, b.is_eps_nil(Nil, heb).mpr(refl)⟩⟩⟩⟩,
+                        mpr := λ d => match d { ⟨u, ⟨v, ⟨e, ⟨da, db⟩⟩⟩⟩ =>
+                            subst(sym(trans(e, trans(cong_fn(λ (x: List<Nat>) => u ++ x, b.is_eps_nil(v, heb).mp(db)), u.append_nil()))), da) }),
                     False => λ heb w => iff_refl(),
                 },
             },
@@ -269,7 +249,7 @@ theorem Regex::seq_at_same(a, b: Regex, za: Bool): a.is_no_match() = za → (zb:
     }
 }
 
-theorem Regex::seq_same(a, b: Regex): Regex::Same(Regex::seq(a, b), Seq(a, b)) {
+theorem Regex::seq_same(a, b: Regex): Regex::seq(a, b) ≈ Seq(a, b) {
     Regex::seq_at_same(a, b, a.is_no_match(), refl, b.is_no_match(), refl, a.is_eps(), refl, b.is_eps(), refl)
 }
 
@@ -288,61 +268,67 @@ fn Regex::deriv_simp(self r: Regex, c: Nat) → Regex {
     }
 }
 
+// The smart `Seq` under a rewritten left operand.
+theorem Regex::seq_left({da, da2: Regex}, b: Regex, sa: da ≈ da2): Regex::seq(da, b) ≈ Seq(da2, b) {
+    calc {
+        Regex::seq(da, b)
+            ≈ Seq(da, b) := Regex::seq_same(da, b),
+            ≈ Seq(da2, b) := Regex::same_seq(sa, b.same_refl()),
+    }
+}
+
 // The `Seq` case, with the nullable test as a variable.
-theorem Regex::deriv_simp_seq(n: Bool, da, da2, b, db, db2: Regex, sa: Regex::Same(da, da2), sb: Regex::Same(db, db2)):
+theorem Regex::deriv_simp_seq({da, da2, db, db2: Regex}, n: Bool, b: Regex, sa: da ≈ da2, sb: db ≈ db2):
     Regex::Same(match n { True => Regex::alt(Regex::seq(da, b), db), False => Regex::seq(da, b) },
         match n { True => Alt(Seq(da2, b), db2), False => Seq(da2, b) })
 {
     match n {
-        True => Regex::same_trans(Regex::alt(Regex::seq(da, b), db), Alt(Regex::seq(da, b), db), Alt(Seq(da2, b), db2),
-            Regex::alt_same(Regex::seq(da, b), db),
-            Regex::same_alt(Regex::seq(da, b), Seq(da2, b), db, db2,
-                Regex::same_trans(Regex::seq(da, b), Seq(da, b), Seq(da2, b), Regex::seq_same(da, b),
-                    Regex::same_seq(da, da2, b, b, sa, b.same_refl())),
-                sb)),
-        False => Regex::same_trans(Regex::seq(da, b), Seq(da, b), Seq(da2, b), Regex::seq_same(da, b),
-            Regex::same_seq(da, da2, b, b, sa, b.same_refl())),
+        True => calc {
+            Regex::alt(Regex::seq(da, b), db)
+                ≈ Alt(Regex::seq(da, b), db) := Regex::alt_same(Regex::seq(da, b), db),
+                ≈ Alt(Seq(da2, b), db2) := Regex::same_alt(Regex::seq_left(b, sa), sb),
+        },
+        False => Regex::seq_left(b, sa),
     }
 }
 
-theorem Regex::deriv_simp_same(self r: Regex, c: Nat): Regex::Same(r.deriv_simp(c), r.deriv(c)) {
+theorem Regex::deriv_simp_same(self r: Regex, c: Nat): r.deriv_simp(c) ≈ r.deriv(c) {
     match r {
-        NoMatch => λ w => iff_refl(),
-        Eps => λ w => iff_refl(),
-        Range(_, _) => λ w => iff_refl(),
-        Seq(a, b) => Regex::deriv_simp_seq(a.nullable(), a.deriv_simp(c), a.deriv(c), b, b.deriv_simp(c), b.deriv(c),
-            a.deriv_simp_same(c), b.deriv_simp_same(c)),
-        Alt(a, b) => Regex::same_trans(Regex::alt(a.deriv_simp(c), b.deriv_simp(c)), Alt(a.deriv_simp(c), b.deriv_simp(c)), Alt(a.deriv(c), b.deriv(c)),
-            Regex::alt_same(a.deriv_simp(c), b.deriv_simp(c)),
-            Regex::same_alt(a.deriv_simp(c), a.deriv(c), b.deriv_simp(c), b.deriv(c), a.deriv_simp_same(c), b.deriv_simp_same(c))),
-        Star(s) => Regex::same_trans(Regex::seq(s.deriv_simp(c), Star(s)), Seq(s.deriv_simp(c), Star(s)), Seq(s.deriv(c), Star(s)),
-            Regex::seq_same(s.deriv_simp(c), Star(s)),
-            Regex::same_seq(s.deriv_simp(c), s.deriv(c), Star(s), Star(s), s.deriv_simp_same(c), Star(s).same_refl())),
+        Seq(a, b) => Regex::deriv_simp_seq(a.nullable(), b, a.deriv_simp_same(c), b.deriv_simp_same(c)),
+        Alt(a, b) => calc {
+            Regex::alt(a.deriv_simp(c), b.deriv_simp(c))
+                ≈ Alt(a.deriv_simp(c), b.deriv_simp(c)) := Regex::alt_same(a.deriv_simp(c), b.deriv_simp(c)),
+                ≈ Alt(a.deriv(c), b.deriv(c)) := Regex::same_alt(a.deriv_simp_same(c), b.deriv_simp_same(c)),
+        },
+        Star(s) => Regex::seq_left(Star(s), s.deriv_simp_same(c)),
+        _ => λ w => iff_refl(),
     }
 }
 
 // An expression rebuilt with those constructors, bottom up.
 fn Regex::simp(self r: Regex) → Regex {
     match r {
-        NoMatch => NoMatch,
-        Eps => Eps,
-        Range(lo, hi) => Range(lo, hi),
         Seq(a, b) => Regex::seq(a.simp(), b.simp()),
         Alt(a, b) => Regex::alt(a.simp(), b.simp()),
         Star(s) => Star(s.simp()),
+        _ => r,
     }
 }
 
-theorem Regex::simp_same(self r: Regex): Regex::Same(r.simp(), r) {
+theorem Regex::simp_same(self r: Regex): r.simp() ≈ r {
     match r {
-        NoMatch => λ w => iff_refl(),
-        Eps => λ w => iff_refl(),
-        Range(_, _) => λ w => iff_refl(),
-        Seq(a, b) => Regex::same_trans(Regex::seq(a.simp(), b.simp()), Seq(a.simp(), b.simp()), Seq(a, b),
-            Regex::seq_same(a.simp(), b.simp()), Regex::same_seq(a.simp(), a, b.simp(), b, a.simp_same(), b.simp_same())),
-        Alt(a, b) => Regex::same_trans(Regex::alt(a.simp(), b.simp()), Alt(a.simp(), b.simp()), Alt(a, b),
-            Regex::alt_same(a.simp(), b.simp()), Regex::same_alt(a.simp(), a, b.simp(), b, a.simp_same(), b.simp_same())),
-        Star(s) => Regex::same_star(s.simp(), s, s.simp_same()),
+        Seq(a, b) => calc {
+            Regex::seq(a.simp(), b.simp())
+                ≈ Seq(a.simp(), b.simp()) := Regex::seq_same(a.simp(), b.simp()),
+                ≈ Seq(a, b) := Regex::same_seq(a.simp_same(), b.simp_same()),
+        },
+        Alt(a, b) => calc {
+            Regex::alt(a.simp(), b.simp())
+                ≈ Alt(a.simp(), b.simp()) := Regex::alt_same(a.simp(), b.simp()),
+                ≈ Alt(a, b) := Regex::same_alt(a.simp_same(), b.simp_same()),
+        },
+        Star(s) => Regex::same_star(s.simp_same()),
+        _ => λ w => iff_refl(),
     }
 }
 
@@ -358,20 +344,20 @@ fn Regex::automaton_by(self r: Regex, step: Regex → Nat → Regex) → Dfa<Reg
 // With a step that lands on the derivative's language, a run from any
 // state accepts that state's language,
 theorem Regex::automaton_by_from(self r: Regex, step: Regex → Nat → Regex,
-    same: (q: Regex) → (c: Nat) → Regex::Same(step(q, c), q.deriv(c)), w: List<Nat>, s: Regex):
+    same: (q: Regex) → (c: Nat) → step(q, c) ≈ q.deriv(c), w: List<Nat>, s: Regex):
     r.automaton_by(step).run_from(s, w) = True ↔ s.Denotes(w)
 {
     r.automaton_by(step).residual(λ q u => q.Denotes(u),
-        λ q => Iff(mp := λ (h: q.nullable() = True) => q.nullable_sound(h), mpr := λ (d: q.Denotes(Nil)) => q.nullable_complete(d)),
+        λ q => Iff(mp := λ h => q.nullable_sound(h), mpr := λ d => q.nullable_complete(d)),
         λ q c u => Iff(
-            mp := λ (d: step(q, c).Denotes(u)) => q.deriv_sound(c, u, same(q, c, u).mp(d)),
-            mpr := λ (d: q.Denotes(Cons(c, u))) => same(q, c, u).mpr(q.deriv_complete(c, u, d))),
+            mp := λ d => q.deriv_sound(c, u, same(q, c, u).mp(d)),
+            mpr := λ d => same(q, c, u).mpr(q.deriv_complete(c, u, d))),
         w, s)
 }
 
 // so the automaton accepts the expression's language.
 theorem Regex::automaton_by_accepts(self r: Regex, step: Regex → Nat → Regex,
-    same: (q: Regex) → (c: Nat) → Regex::Same(step(q, c), q.deriv(c)), w: List<Nat>):
+    same: (q: Regex) → (c: Nat) → step(q, c) ≈ q.deriv(c), w: List<Nat>):
     r.automaton_by(step).run(w) = True ↔ r.Denotes(w)
 {
     r.automaton_by_from(step, same, w, r)
@@ -389,7 +375,7 @@ theorem Regex::bool_eq_of_iff(a, b: Bool, h: a = True ↔ b = True): a = b {
 
 // The automaton and the matcher agree, as Booleans.
 theorem Regex::automaton_by_matches(self r: Regex, step: Regex → Nat → Regex,
-    same: (q: Regex) → (c: Nat) → Regex::Same(step(q, c), q.deriv(c)), w: List<Nat>):
+    same: (q: Regex) → (c: Nat) → step(q, c) ≈ q.deriv(c), w: List<Nat>):
     r.automaton_by(step).run(w) = r.matches(w)
 {
     Regex::bool_eq_of_iff(r.automaton_by(step).run(w), r.matches(w), Iff(
