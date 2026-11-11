@@ -1,0 +1,313 @@
+// Folds over a multiset and over a finite type
+// (issues/finite-maps-and-multisets.md).
+//
+// A multiset is a list up to `Perm` (`perm.hthr`, where the number of
+// occurrences is its complete invariant). Over a commutative monoid the fold
+// of a list respects `Perm` (`fold_perm`), so it is a function of the
+// multiset. The fold over a finite type, `MonoidRel::over(op, f)`, is the
+// fold of `f` along the instance's enumeration, and by `fold_perm` it is the
+// fold along every duplicate-free complete list (`over_enumeration`): a sum
+// over a finite type does not depend on the order chosen. It is a sum at `+`
+// and a product at `*`, as `big_operator.hthr`'s range fold is, and over
+// `Fin(n)` it is that range fold (`over_fin`).
+
+import logic;
+import nat;
+import list;
+import pair;
+import perm;
+import relation;
+import relation_props;
+import algebra_rel;
+import semiring;
+import fin;
+import fintype;
+import fintype_card;
+import big_operator;
+
+section<A: MonoidRel(≈, op)>(op as ∙: A → A → A) {
+
+// The fold of `f` over a finite type, along the instance's enumeration.
+fn MonoidRel::over<I: Fintype>(f: I → A) → A { MonoidRel::fold(op, I.elems.map(f)) }
+
+// Termwise `≈` folds to `≈`.
+theorem MonoidRel::fold_map_cong<I>(xs: List<I>, f, g: I → A, h: (i: I) → f(i) ≈ g(i)):
+    MonoidRel::fold(op, xs.map(f)) ≈ MonoidRel::fold(op, xs.map(g))
+{
+    match xs {
+        Nil => A.rel_refl(A.unit),
+        Cons(x, t) => calc {
+            f(x) ∙ MonoidRel::fold(op, t.map(f))
+                ≈ g(x) ∙ MonoidRel::fold(op, t.map(f)) := rel_cong(h(x)),
+                ≈ g(x) ∙ MonoidRel::fold(op, t.map(g)) := rel_cong(MonoidRel::fold_map_cong(op, t, f, g, h)),
+        },
+    }
+}
+
+theorem MonoidRel::over_cong<I: Fintype>(f, g: I → A, h: (i: I) → f(i) ≈ g(i)): MonoidRel::over(op, f) ≈ MonoidRel::over(op, g) {
+    MonoidRel::fold_map_cong(op, I.elems, f, g, h)
+}
+
+// A fold of units is the unit.
+theorem MonoidRel::fold_map_unit<I>(xs: List<I>, f: I → A, h: (i: I) → f(i) ≈ A.unit): MonoidRel::fold(op, xs.map(f)) ≈ A.unit {
+    match xs {
+        Nil => A.rel_refl(A.unit),
+        Cons(x, t) => calc {
+            f(x) ∙ MonoidRel::fold(op, t.map(f))
+                ≈ A.unit ∙ MonoidRel::fold(op, t.map(f)) := rel_cong(h(x)),
+                ≈ A.unit ∙ A.unit := rel_cong(MonoidRel::fold_map_unit(op, t, f, h)),
+                ≈ A.unit := A.unit_l(A.unit),
+        },
+    }
+}
+
+theorem MonoidRel::over_unit<I: Fintype>(f: I → A, h: (i: I) → f(i) ≈ A.unit): MonoidRel::over(op, f) ≈ A.unit {
+    MonoidRel::fold_map_unit(op, I.elems, f, h)
+}
+
+}
+
+section<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A) {
+
+// An element picked out of a list comes to the front of its fold.
+theorem CommMonoidRel::fold_picks(x: A, ys: List<A>): (rest: List<A>) → Picks(x, ys, rest) →
+    MonoidRel::fold(op, ys) ≈ x ∙ MonoidRel::fold(op, rest)
+{
+    match ys {
+        Nil => λ rest h => false_elim(h),
+        Cons(y, t) => λ rest => match rest {
+            Nil => λ h => match h {
+                Inl(hd) => j(hd.left, λ w _ => w ∙ MonoidRel::fold(op, t) ≈ x ∙ A.unit,
+                    j(sym(hd.right), λ w _ => x ∙ MonoidRel::fold(op, w) ≈ x ∙ A.unit, A.rel_refl(x ∙ A.unit))),
+                Inr(no) => false_elim(no),
+            },
+            Cons(r, rs) => λ h => match h {
+                Inl(hd) => j(hd.left, λ w _ => w ∙ MonoidRel::fold(op, t) ≈ x ∙ (r ∙ MonoidRel::fold(op, rs)),
+                    j(sym(hd.right), λ w _ => x ∙ MonoidRel::fold(op, w) ≈ x ∙ (r ∙ MonoidRel::fold(op, rs)),
+                        A.rel_refl(x ∙ (r ∙ MonoidRel::fold(op, rs))))),
+                Inr(later) => j(later.left, λ w _ => y ∙ MonoidRel::fold(op, t) ≈ x ∙ (w ∙ MonoidRel::fold(op, rs)), calc {
+                    y ∙ MonoidRel::fold(op, t)
+                        ≈ y ∙ (x ∙ MonoidRel::fold(op, rs)) := rel_cong(CommMonoidRel::fold_picks(same, op, x, t, rs, later.right)),
+                        ≈ (y ∙ x) ∙ MonoidRel::fold(op, rs) := A.rel_sym((y ∙ x) ∙ MonoidRel::fold(op, rs), y ∙ (x ∙ MonoidRel::fold(op, rs)), A.assoc(y, x, MonoidRel::fold(op, rs))),
+                        ≈ (x ∙ y) ∙ MonoidRel::fold(op, rs) := rel_cong(A.comm(y, x)),
+                        ≈ x ∙ (y ∙ MonoidRel::fold(op, rs)) := A.assoc(x, y, MonoidRel::fold(op, rs)),
+                }),
+            },
+        },
+    }
+}
+
+// The fold of a list is a function of its multiset.
+theorem CommMonoidRel::fold_perm(xs: List<A>): (ys: List<A>) → Perm(xs, ys) → MonoidRel::fold(op, xs) ≈ MonoidRel::fold(op, ys) {
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => λ p => A.rel_refl(A.unit),
+            Cons(_, _) => λ p => false_elim(p),
+        },
+        Cons(x, t) => λ ys p => match p {
+            Exists(r, hr) => calc {
+                x ∙ MonoidRel::fold(op, t)
+                    ≈ x ∙ MonoidRel::fold(op, r) := rel_cong(CommMonoidRel::fold_perm(same, op, t, r, hr.right)),
+                    ≈ MonoidRel::fold(op, ys) := A.rel_sym(MonoidRel::fold(op, ys), x ∙ MonoidRel::fold(op, r),
+                        CommMonoidRel::fold_picks(same, op, x, ys, r, hr.left)),
+            },
+        },
+    }
+}
+
+theorem CommMonoidRel::fold_map_perm<I>(xs, ys: List<I>, f: I → A, p: Perm(xs, ys)):
+    MonoidRel::fold(op, xs.map(f)) ≈ MonoidRel::fold(op, ys.map(f))
+{
+    CommMonoidRel::fold_perm(same, op, xs.map(f), ys.map(f), xs.perm_map(f, ys, p))
+}
+
+// The fold over a finite type is the fold along every duplicate-free
+// complete list of it.
+theorem CommMonoidRel::over_enumeration<I: Fintype>(f: I → A, xs: List<I>, d: xs.NoDup(), all: (i: I) → Mem(i, xs)):
+    MonoidRel::fold(op, xs.map(f)) ≈ MonoidRel::over(op, f)
+{
+    CommMonoidRel::fold_map_perm(same, op, xs, I.elems, f, Fintype::enumeration_perm(xs, d, all))
+}
+
+// Termwise products split: Σ (f + g) is Σ f + Σ g.
+theorem CommMonoidRel::over_op<I: Fintype>(f, g: I → A):
+    MonoidRel::over(op, λ (i: I) => f(i) ∙ g(i)) ≈ MonoidRel::over(op, f) ∙ MonoidRel::over(op, g)
+{
+    CommMonoidRel::fold_map_op(same, op, I.elems, f, g)
+}
+
+// Reindexing along a bijection of finite types.
+theorem CommMonoidRel::over_reindex<I: Fintype, K: Fintype>(s: I → K, inj: (x, y: I) → s(x) = s(y) → x = y,
+    sur: (k: K) → Exists(λ (i: I) => s(i) = k), f: K → A):
+    MonoidRel::over(op, λ (i: I) => f(s(i))) ≈ MonoidRel::over(op, f)
+{
+    j(I.elems.map_map(s, f), λ w _ => MonoidRel::fold(op, w) ≈ MonoidRel::over(op, f),
+        CommMonoidRel::over_enumeration(same, op, f, I.elems.map(s), I.elems.nodup_map(s, inj, I.nodup),
+            λ k => match sur(k) { Exists(i, e) => j(e, λ c q => Mem(c, I.elems.map(s)), I.elems.mem_map(i, s, I.complete(i))) }))
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// The fold over each finite type the instances build, in terms of its parts.
+// None of these needs commutativity: each instance enumerates in the order
+// the right-hand side folds.
+
+section<A: MonoidRel(≈, op)>(op as ∙: A → A → A) {
+
+theorem MonoidRel::fold_of_eq(xs, ys: List<A>, e: xs = ys): MonoidRel::fold(op, xs) ≈ MonoidRel::fold(op, ys) {
+    j(e, λ w _ => MonoidRel::fold(op, xs) ≈ MonoidRel::fold(op, w), A.rel_refl(MonoidRel::fold(op, xs)))
+}
+
+// Over `Fin(n)` it is the range fold: `∑ i : Fin(n), g(i)` is `∑ k < n, g(k)`.
+theorem MonoidRel::over_fin(n: Nat): (g: Nat → A) →
+    MonoidRel::over(op, λ (i: Fin(n)) => g(Fin::to_nat(n, i))) ≈ MonoidRel::range(op, n, g)
+{
+    match n {
+        Zero => λ g => A.rel_refl(A.unit),
+        Succ(k) => λ g => {
+            let ih: (MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => g(Succ(Fin::to_nat(k, i))))) ≈ MonoidRel::range(op, k, λ m => g(Succ(m))))
+                = MonoidRel::over_fin(op, k, λ m => g(Succ(m)));
+            calc {
+            g(Zero) ∙ MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => Fin::succ(i)).map(λ (i: Fin(Succ(k))) => g(Fin::to_nat(Succ(k), i))))
+                ≈ g(Zero) ∙ MonoidRel::fold(op, Fin::all(k).map(λ (i: Fin(k)) => g(Succ(Fin::to_nat(k, i)))))
+                    := rel_cong(MonoidRel::fold_of_eq(op,
+                        Fin::all(k).map(λ (i: Fin(k)) => Fin::succ(i)).map(λ (i: Fin(Succ(k))) => g(Fin::to_nat(Succ(k), i))),
+                        Fin::all(k).map(λ (i: Fin(k)) => g(Succ(Fin::to_nat(k, i)))),
+                        Fin::all(k).map_map(λ (i: Fin(k)) => Fin::succ(i), λ (i: Fin(Succ(k))) => g(Fin::to_nat(Succ(k), i))))),
+                ≈ g(Zero) ∙ MonoidRel::range(op, k, λ m => g(Succ(m)))
+                    := rel_cong(ih),
+                ≈ MonoidRel::range(op, Succ(k), g) := A.rel_sym(MonoidRel::range(op, Succ(k), g),
+                    g(Zero) ∙ MonoidRel::range(op, k, λ m => g(Succ(m))), MonoidRel::range_succ_l(op, k, g)),
+            }
+        },
+    }
+}
+
+theorem MonoidRel::over_option<I: Fintype>(f: Option<I> → A):
+    MonoidRel::over(op, f) ≈ f(None) ∙ MonoidRel::over(op, λ (i: I) => f(Some(i)))
+{
+    calc {
+        f(None) ∙ MonoidRel::fold(op, I.elems.map(λ (a: I) => Some(a)).map(f))
+            ≈ f(None) ∙ MonoidRel::fold(op, I.elems.map(λ (i: I) => f(Some(i))))
+                := rel_cong(MonoidRel::fold_of_eq(op, I.elems.map(λ (a: I) => Some(a)).map(f), I.elems.map(λ (i: I) => f(Some(i))),
+                    I.elems.map_map(λ (a: I) => Some(a), f))),
+    }
+}
+
+theorem MonoidRel::over_or<I: Fintype, K: Fintype>(f: Or<I, K> → A):
+    MonoidRel::over(op, f) ≈ MonoidRel::over(op, λ (i: I) => f(Inl(i))) ∙ MonoidRel::over(op, λ (k: K) => f(Inr(k)))
+{
+    calc {
+        MonoidRel::fold(op, (I.elems.map(λ (a: I) => Inl<I, K>(a)) ++ K.elems.map(λ (b: K) => Inr<I, K>(b))).map(f))
+            ≈ MonoidRel::fold(op, I.elems.map(λ (a: I) => Inl<I, K>(a)).map(f) ++ K.elems.map(λ (b: K) => Inr<I, K>(b)).map(f))
+                := MonoidRel::fold_of_eq(op, (I.elems.map(λ (a: I) => Inl<I, K>(a)) ++ K.elems.map(λ (b: K) => Inr<I, K>(b))).map(f),
+                    I.elems.map(λ (a: I) => Inl<I, K>(a)).map(f) ++ K.elems.map(λ (b: K) => Inr<I, K>(b)).map(f),
+                    (I.elems.map(λ (a: I) => Inl<I, K>(a))).map_append(K.elems.map(λ (b: K) => Inr<I, K>(b)), f)),
+            ≈ MonoidRel::fold(op, I.elems.map(λ (a: I) => Inl<I, K>(a)).map(f)) ∙ MonoidRel::fold(op, K.elems.map(λ (b: K) => Inr<I, K>(b)).map(f))
+                := MonoidRel::fold_append(op, I.elems.map(λ (a: I) => Inl<I, K>(a)).map(f), K.elems.map(λ (b: K) => Inr<I, K>(b)).map(f)),
+            ≈ MonoidRel::fold(op, I.elems.map(λ (i: I) => f(Inl(i)))) ∙ MonoidRel::fold(op, K.elems.map(λ (b: K) => Inr<I, K>(b)).map(f))
+                := rel_cong(MonoidRel::fold_of_eq(op, I.elems.map(λ (a: I) => Inl<I, K>(a)).map(f), I.elems.map(λ (i: I) => f(Inl(i))),
+                    I.elems.map_map(λ (a: I) => Inl<I, K>(a), f))),
+            ≈ MonoidRel::fold(op, I.elems.map(λ (i: I) => f(Inl(i)))) ∙ MonoidRel::fold(op, K.elems.map(λ (k: K) => f(Inr(k))))
+                := rel_cong(MonoidRel::fold_of_eq(op, K.elems.map(λ (b: K) => Inr<I, K>(b)).map(f), K.elems.map(λ (k: K) => f(Inr(k))),
+                    K.elems.map_map(λ (b: K) => Inr<I, K>(b), f))),
+    }
+}
+
+// A fold along every pair is a fold of folds.
+theorem MonoidRel::fold_map_product<I, K>(xs: List<I>, ys: List<K>, f: Pair<I, K> → A):
+    MonoidRel::fold(op, xs.product(ys).map(f)) ≈ MonoidRel::fold(op, xs.map(λ (i: I) => MonoidRel::fold(op, ys.map(λ (k: K) => f(Pair(i, k))))))
+{
+    match xs {
+        Nil => A.rel_refl(A.unit),
+        Cons(h, t) => calc {
+            MonoidRel::fold(op, (ys.map(λ (b: K) => Pair(h, b)) ++ t.product(ys)).map(f))
+                ≈ MonoidRel::fold(op, ys.map(λ (b: K) => Pair(h, b)).map(f) ++ t.product(ys).map(f))
+                    := MonoidRel::fold_of_eq(op, (ys.map(λ (b: K) => Pair(h, b)) ++ t.product(ys)).map(f),
+                        ys.map(λ (b: K) => Pair(h, b)).map(f) ++ t.product(ys).map(f),
+                        (ys.map(λ (b: K) => Pair(h, b))).map_append(t.product(ys), f)),
+                ≈ MonoidRel::fold(op, ys.map(λ (b: K) => Pair(h, b)).map(f)) ∙ MonoidRel::fold(op, t.product(ys).map(f))
+                    := MonoidRel::fold_append(op, ys.map(λ (b: K) => Pair(h, b)).map(f), t.product(ys).map(f)),
+                ≈ MonoidRel::fold(op, ys.map(λ (k: K) => f(Pair(h, k)))) ∙ MonoidRel::fold(op, t.product(ys).map(f))
+                    := rel_cong(MonoidRel::fold_of_eq(op, ys.map(λ (b: K) => Pair(h, b)).map(f), ys.map(λ (k: K) => f(Pair(h, k))),
+                        ys.map_map(λ (b: K) => Pair(h, b), f))),
+                ≈ MonoidRel::fold(op, ys.map(λ (k: K) => f(Pair(h, k)))) ∙ MonoidRel::fold(op, t.map(λ (i: I) => MonoidRel::fold(op, ys.map(λ (k: K) => f(Pair(i, k))))))
+                    := rel_cong(MonoidRel::fold_map_product(op, t, ys, f)),
+        },
+    }
+}
+
+// Fubini's first half: the fold over a product type is the iterated fold.
+theorem MonoidRel::over_pair<I: Fintype, K: Fintype>(f: Pair<I, K> → A):
+    MonoidRel::over(op, f) ≈ MonoidRel::over(op, λ (i: I) => MonoidRel::over(op, λ (k: K) => f(Pair(i, k))))
+{
+    MonoidRel::fold_map_product(op, I.elems, K.elems, f)
+}
+
+}
+
+section<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A) {
+
+// Fubini: the two orders of an iterated fold agree.
+theorem CommMonoidRel::over_swap<I: Fintype, K: Fintype>(f: I → K → A):
+    MonoidRel::over(op, λ (i: I) => MonoidRel::over(op, λ (k: K) => f(i, k)))
+        ≈ MonoidRel::over(op, λ (k: K) => MonoidRel::over(op, λ (i: I) => f(i, k)))
+{
+    calc {
+        MonoidRel::over(op, λ (i: I) => MonoidRel::over(op, λ (k: K) => f(i, k)))
+            ≈ MonoidRel::over(op, λ (p: Pair<I, K>) => f(p.fst, p.snd))
+                := A.rel_sym(MonoidRel::over(op, λ (p: Pair<I, K>) => f(p.fst, p.snd)),
+                    MonoidRel::over(op, λ (i: I) => MonoidRel::over(op, λ (k: K) => f(i, k))),
+                    MonoidRel::over_pair(op, λ (p: Pair<I, K>) => f(p.fst, p.snd))),
+            ≈ MonoidRel::over(op, λ (q: Pair<K, I>) => f(q.snd, q.fst))
+                := CommMonoidRel::over_reindex(same, op, λ (p: Pair<I, K>) => p.swap(),
+                    λ x y e => cong_fn(λ (q: Pair<K, I>) => q.swap(), e),
+                    λ q => Exists(q.swap(), refl), λ (q: Pair<K, I>) => f(q.snd, q.fst)),
+            ≈ MonoidRel::over(op, λ (k: K) => MonoidRel::over(op, λ (i: I) => f(i, k)))
+                := MonoidRel::over_pair(op, λ (q: Pair<K, I>) => f(q.snd, q.fst)),
+    }
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// A semiring's factor moves through a sum over a finite type.
+
+section<A: Semiring(≈, +, *)> {
+
+theorem Semiring::mul_fold_map_l<I>(c: A, xs: List<I>, f: I → A):
+    c * MonoidRel::fold(+, xs.map(f)) ≈ MonoidRel::fold(+, xs.map(λ (i: I) => c * f(i)))
+{
+    match xs {
+        Nil => A.mul_zero(c),
+        Cons(h, t) => calc {
+            c * (f(h) + MonoidRel::fold(+, t.map(f)))
+                ≈ c * f(h) + c * MonoidRel::fold(+, t.map(f)) := A.distrib_l(c, f(h), MonoidRel::fold(+, t.map(f))),
+                ≈ c * f(h) + MonoidRel::fold(+, t.map(λ (i: I) => c * f(i))) := rel_cong(Semiring::mul_fold_map_l(c, t, f)),
+        },
+    }
+}
+
+theorem Semiring::fold_map_mul_r<I>(xs: List<I>, f: I → A, c: A):
+    MonoidRel::fold(+, xs.map(f)) * c ≈ MonoidRel::fold(+, xs.map(λ (i: I) => f(i) * c))
+{
+    match xs {
+        Nil => A.zero_mul(c),
+        Cons(h, t) => calc {
+            (f(h) + MonoidRel::fold(+, t.map(f))) * c
+                ≈ f(h) * c + MonoidRel::fold(+, t.map(f)) * c := A.distrib_r(f(h), MonoidRel::fold(+, t.map(f)), c),
+                ≈ f(h) * c + MonoidRel::fold(+, t.map(λ (i: I) => f(i) * c)) := rel_cong(Semiring::fold_map_mul_r(t, f, c)),
+        },
+    }
+}
+
+theorem Semiring::mul_over_l<I: Fintype>(c: A, f: I → A): c * MonoidRel::over(+, f) ≈ MonoidRel::over(+, λ (i: I) => c * f(i)) {
+    Semiring::mul_fold_map_l(c, I.elems, f)
+}
+
+theorem Semiring::over_mul_r<I: Fintype>(f: I → A, c: A): MonoidRel::over(+, f) * c ≈ MonoidRel::over(+, λ (i: I) => f(i) * c) {
+    Semiring::fold_map_mul_r(I.elems, f, c)
+}
+
+}

@@ -76,3 +76,13 @@ theorem pair_nodup<A: Fintype, B: Fintype>(): Fintype::enumerate<Pair<A, B>>().N
 // `Fin`'s constructors, at a neutral length.
 theorem succ_apart(n: Nat, a, b: Fin(n), e: Fin::succ(a) = Fin::succ(b)): a = b { Fin::succ_inj(a, b, e) }
 theorem zero_apart(n: Nat, a: Fin(n)): ¬(FZ = Fin::succ(a)) { Fin::zero_ne_succ(a) }
+
+// Functions out of a finite type compared at every point: double negation is
+// the identity on `Bool`, negation is not, and a wrong claim is refused.
+theorem not_not_is_id(): Fintype::Agree<Bool, Bool>(λ b => !(!b), λ b => b) { decide }
+theorem not_is_not_id(): ¬Fintype::Agree<Bool, Bool>(λ b => !b, λ b => b) { decide }
+theorem agree_bit(): Fintype::agree<Fin(3), Bool>(λ i => True, λ i => True) = True { refl }
+theorem agree_gives_points(b: Bool): !(!b) = b { Fintype::agree_sound<Bool, Bool>(λ b => !(!b), λ b => b, refl, b) }
+
+// expect-error(kernel)
+theorem not_is_id_wrong(): Fintype::Agree<Bool, Bool>(λ b => !b, λ b => b) { decide }

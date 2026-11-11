@@ -1,0 +1,101 @@
+// Probes of `lib/std/algebra/finite_fold.hthr` (issues/finite-maps-and-multisets.md):
+// the fold over a multiset and over a finite type, at closed carriers by
+// evaluation and at open commutative monoids and semirings, with a dot
+// product over `Fin(n)` that cites no local sum lemma. Tests, not library:
+// nothing outside lib/_tests imports this module (docs/test-value-audit.md
+// §4.5).
+import logic; import bool; import nat; import list; import option; import pair; import perm; import relation;
+import relation_props; import order; import algebra_rel; import semiring; import ordered_field;
+import fin; import fintype; import fintype_card; import big_operator; import finite_fold;
+
+// Sums and products over a finite type compute.
+fn weight(b: Bool) → Nat { match b { True => 3, False => 4 } }
+theorem bool_sum(): MonoidRel::over(+, λ (b: Bool) => weight(b)) = 7 { refl }
+theorem bool_prod(): MonoidRel::over(*, λ (b: Bool) => weight(b)) = 12 { refl }
+theorem fin_sum(): MonoidRel::over(+, λ (i: Fin(4)) => Fin::to_nat(4, i)) = 6 { refl }
+theorem pair_sum(): MonoidRel::over(+, λ (q: Pair<Bool, Fin(3)>) => weight(q.fst) * Fin::to_nat(3, q.snd)) = 21 { refl }
+theorem empty_sum(): MonoidRel::over(+, λ (i: Fin(0)) => 5) = 0 { refl }
+// A negative control: the sum is 6.
+theorem fin_sum_not_seven(): ¬(MonoidRel::over(+, λ (i: Fin(4)) => Fin::to_nat(4, i)) = 7) { λ h => absurd(h) }
+
+// expect-error(kernel)
+theorem fin_sum_wrong(): MonoidRel::over(+, λ (i: Fin(4)) => Fin::to_nat(4, i)) = 7 { refl }
+
+// The fold is a function of the multiset, at an open commutative monoid.
+theorem two_orders<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A, a, b, c: A):
+    MonoidRel::fold(op, [a, b, c]) ≈ MonoidRel::fold(op, [b, a, c])
+{
+    CommMonoidRel::fold_perm(same, op, [a, b, c], [b, a, c], List::perm_swap(a, b, [c]))
+}
+
+// Without commutativity the law is not available.
+// expect-error: Commutative
+theorem two_orders_any_monoid<A: MonoidRel(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A, a, b, c: A):
+    MonoidRel::fold(op, [a, b, c]) ≈ MonoidRel::fold(op, [b, a, c])
+{
+    CommMonoidRel::fold_perm(same, op, [a, b, c], [b, a, c], List::perm_swap(a, b, [c]))
+}
+
+// The order of the enumeration does not matter: `Bool` listed the other way.
+theorem bool_other_order<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A, f: Bool → A):
+    f(True) ∙ (f(False) ∙ A.unit) ≈ MonoidRel::over(op, f)
+{
+    CommMonoidRel::over_enumeration(same, op, f, [True, False],
+        And(λ m => match m { Inl(e) => absurd(e), Inr(n) => n }, And(λ m => m, trivial)),
+        λ b => match b { False => Inr(Inl(refl)), True => Inl(refl) })
+}
+
+// Reindexing along a bijection: negation of `Bool`.
+theorem negated<A: MonoidRel(same, op) + Commutative(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A, f: Bool → A):
+    MonoidRel::over(op, λ (b: Bool) => f(!b)) ≈ MonoidRel::over(op, f)
+{
+    CommMonoidRel::over_reindex(same, op, λ (b: Bool) => !b,
+        λ x y => match x { True => match y { True => λ e => refl, False => λ e => sym(e) }, False => match y { True => λ e => sym(e), False => λ e => refl } },
+        λ k => Exists(!k, match k { True => refl, False => refl }), f)
+}
+
+// Fubini at open finite types, and the sum over a sum type and an option.
+theorem fubini<A: MonoidRel(same, op) + Commutative(same, op), I: Fintype, K: Fintype>(same as ≈: A → A → Type, op as ∙: A → A → A,
+    f: I → K → A):
+    MonoidRel::over(op, λ (i: I) => MonoidRel::over(op, λ (k: K) => f(i, k)))
+        ≈ MonoidRel::over(op, λ (k: K) => MonoidRel::over(op, λ (i: I) => f(i, k)))
+{
+    CommMonoidRel::over_swap(same, op, f)
+}
+
+theorem either<A: MonoidRel(≈, op), I: Fintype, K: Fintype>(op as ∙: A → A → A, f: I → A, g: K → A):
+    MonoidRel::over(op, λ (s: Or<I, K>) => match s { Inl(i) => f(i), Inr(k) => g(k) }) ≈ MonoidRel::over(op, f) ∙ MonoidRel::over(op, g)
+{
+    MonoidRel::over_or(op, λ (s: Or<I, K>) => match s { Inl(i) => f(i), Inr(k) => g(k) })
+}
+
+// Over `Fin(n)` at an open length it is the range sum the `∑` binder spells.
+theorem fin_is_range<A: Semiring(≈, +, *)>(n: Nat, g: Nat → A): MonoidRel::over(+, λ (i: Fin(n)) => g(Fin::to_nat(n, i))) ≈ ∑ k < n, g(k) {
+    MonoidRel::over_fin(+, n, g)
+}
+
+// A dot product over `Fin(n)`: additive in its first argument and
+// homogeneous, from the finite fold's laws alone.
+fn dot<A: Semiring(≈, +, *)>(n: Nat, u, v: Fin(n) → A) → A { MonoidRel::over(+, λ (i: Fin(n)) => u(i) * v(i)) }
+
+theorem dot_add<A: Semiring(≈, +, *)>(n: Nat, u, w, v: Fin(n) → A):
+    dot(n, λ i => u(i) + w(i), v) ≈ dot(n, u, v) + dot(n, w, v)
+{
+    A.rel_trans(dot(n, λ i => u(i) + w(i), v), MonoidRel::over(+, λ (i: Fin(n)) => u(i) * v(i) + w(i) * v(i)), dot(n, u, v) + dot(n, w, v),
+        MonoidRel::over_cong(+, λ (i: Fin(n)) => (u(i) + w(i)) * v(i), λ (i: Fin(n)) => u(i) * v(i) + w(i) * v(i), λ i => A.distrib_r(u(i), w(i), v(i))),
+        CommMonoidRel::over_op(≈, +, λ (i: Fin(n)) => u(i) * v(i), λ (i: Fin(n)) => w(i) * v(i)))
+}
+
+theorem dot_scale<A: Semiring(≈, +, *)>(n: Nat, c: A, u, v: Fin(n) → A):
+    c * dot(n, u, v) ≈ dot(n, λ i => c * u(i), v)
+{
+    A.rel_trans(c * dot(n, u, v), MonoidRel::over(+, λ (i: Fin(n)) => c * (u(i) * v(i))), dot(n, λ i => c * u(i), v),
+        Semiring::mul_over_l(c, λ (i: Fin(n)) => u(i) * v(i)),
+        MonoidRel::over_cong(+, λ (i: Fin(n)) => c * (u(i) * v(i)), λ (i: Fin(n)) => (c * u(i)) * v(i),
+            λ i => A.rel_sym((c * u(i)) * v(i), c * (u(i) * v(i)), A.multiplicative.assoc(c, u(i), v(i)))))
+}
+
+// A map carries a rearrangement along.
+theorem mapped_swap<A, B>(f: A → B, a, b: A, t: List<A>): Perm(Cons(f(a), Cons(f(b), t.map(f))), Cons(f(b), Cons(f(a), t.map(f)))) {
+    Cons(a, Cons(b, t)).perm_map(f, Cons(b, Cons(a, t)), t.perm_swap(a, b))
+}

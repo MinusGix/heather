@@ -79,3 +79,18 @@ fn Fin::eq_dec(n: Nat) → (a, b: Fin(n)) → a = b ∨ ¬(a = b) {
 }
 
 instance(n: Nat) DecEq<Fin(n)> { eq_dec := Fin::eq_dec(n) }
+
+// An index as the number it is.
+fn Fin::to_nat(n: Nat) → Fin(n) → Nat {
+    match n {
+        Zero => λ i => match i {},
+        Succ(k) => λ i => match i { FZ => Zero, FS(j) => Succ(Fin::to_nat(k, j)) },
+    }
+}
+
+theorem Fin::to_nat_lt(n: Nat): (i: Fin(n)) → Fin::to_nat(n, i) < n {
+    match n {
+        Zero => λ i => match i {},
+        Succ(k) => λ i => match i { FZ => trivial, FS(j) => Fin::to_nat_lt(k, j) },
+    }
+}
