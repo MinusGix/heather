@@ -246,7 +246,7 @@ optimization that uses it is proved once under it as a hypothesis.
   file through its calls (`program_writers`). The program compiler
   proves such a call: it lends its buffers to write, and the statement
   after the call holds over the file the callee left
-  (`Target::held_left`), so a program whose functions store links:
+  (`Target::based_left`), so a program whose functions store links:
   `tr` runs with its loop a called function that rewrites the buffer
   (`raise_span`, a `runtime fn`). `rt` writes as
   a computation over the span, a layer over its pure terms as the layer
@@ -268,12 +268,15 @@ optimization that uses it is proved once under it as a hypothesis.
   type ends in `Mutated` gets a `CompileSpan` instance, a linked
   program and its run stated at every file (`f::runs_over`), with
   nothing proved for the function in particular. The third joint is
-  designed (`docs/native-procedures-are-functions-design.md`) and partly
-  built: a statement's words are in a frame of its activation, the
-  callee saves what it keeps and counts its own depth, and one function
-  emits every call (its steps 5a, 5b and the first half of 5c); still
-  to come, one contract says a callee runs as its tree, a
-  function's proved return being the tree that is a value. Calls keep
+  built but for its last step
+  (`docs/native-procedures-are-functions-design.md`, steps 5a to 5c): a
+  statement's words are in a frame of its activation, the callee saves
+  what it keeps and counts its own depth, one function emits every
+  call, and one contract says a callee runs as its tree
+  (`Target::Callable`), proved once at the call site
+  (`Target::goes_calls`). A procedure meets it with its body's tree and
+  a function with the tree that is a value, its proved return read as
+  the answer. Still to come is one lowering of byte nodes. Calls keep
   two levels in the meaning, because a region is a total function and a
   statement is a tree: what a region calls answers with a value, what a
   statement calls may ask, run out of depth or exit, and recursion

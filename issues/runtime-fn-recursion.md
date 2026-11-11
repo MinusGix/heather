@@ -39,7 +39,7 @@ and the exit with `call_depth_status` otherwise.
 
 - **[[native-one-compiler]]** owns U5. Assumed here: only that a
   procedure has a frame of its own and one contract
-  (`Target::Performs`), so a recursion costs a frame a level.
+  (`Target::Callable`), so a recursion costs a frame a level.
 - **[[rt-effectful-callees]]** owns linking procedures from `runtime fn`s
   and the file of words each needs. Assumed here: only that
   `f::program` can hold a procedure.

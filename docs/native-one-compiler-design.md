@@ -2,8 +2,8 @@
 
 Status: **direction set by Minus 2026-11-11** ("unify first and then
 export"); this note scopes it. U1 to U4 are built (§3), and U5 is designed
-in `docs/native-procedures-are-functions-design.md`, its steps 5a and 5b
-and the call sequence of 5c built. Owner:
+in `docs/native-procedures-are-functions-design.md`, its steps 5a to 5c
+built (one frame, one call, one contract). Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -106,8 +106,10 @@ is a `runtime fn`, compiled once and called.
 - *The proof.* `Site::moves_call` against the function's `Returns` is a
   straight run, which a tree claim absorbs (`LinuxIo::goes_after`). What
   the program holds between statements (`Target::Held`) is kept by a
-  word stored below its frame (`held_stack_store`), so it is kept by
-  `Wrote` (`Star::invariant`): this is where U1 is used.
+  word stored below its frame, so it is kept by `Wrote`
+  (`Star::invariant`): this is where U1 is used. Since U5's step 5c the
+  call is `Target::goes_calls` from the one contract, and a function
+  meets the contract by this proof (`Target::function_performs`).
 - *Room.* A function's own frame and its calls of other functions need
   stack below the activation that calls it, a fixed amount per function
   of the program. The theorem's stack premise grows by that: the depth of
@@ -725,7 +727,7 @@ its callees are `Writers` (`program_writers`: `program_run` of the
 source's functions over the buffers lent, the rest of the caller's file
 put back), the statement after the call starts from the file the callee
 left, and the claim between statements is rebuilt from the contract's
-post, the buffers being the layout's cells (`Target::held_left`). A
+post, the buffers being the layout's cells (`Target::based_left`). A
 program lends every buffer to write: its own statements store into them
 already, so there is no span it must keep from a callee, and which ones
 a callee does store into is the callee's program to say
@@ -1140,8 +1142,9 @@ Each is a PR and ends with something that runs.
       (`Target::Left`: the memory holds some `after` under the
       contract's post, and the caller's file is `relent` of it), the
       claim between statements is rebuilt over that file
-      (`Target::held_left`: the cells a callee stored into read the new
-      bytes, the rest are kept by `WroteIn`), and `Target::answers_of`
+      (`Target::held_left`, since U5 `Target::based_left`: the cells a
+      callee stored into read the new bytes, the rest are kept by
+      `WroteIn`), and `Target::answers_of`
       cites the function compiler's theorem under the program's own
       stores (`program_run_placeless`, `program_run_effects`).
       `Prog::links` no longer asks `program_quiet`, and the compile's
@@ -1364,7 +1367,8 @@ Each is a PR and ends with something that runs.
 - **U5. Procedures are functions** (§2.4), designed in
   `docs/native-procedures-are-functions-design.md`: 5a RSP is the frame
   (built), 5b words in the frame and the callee saves (built), 5c one
-  call (built) and one contract, 5d one byte lowering (step 4d above). *Runs:*
+  call and one contract (built: `Target::Callable`, a function and a
+  procedure each an instance), 5d one byte lowering (step 4d above). *Runs:*
   the tools with procedures (`grep -F`) rebuilt on it.
 - **E. Export.** Generated declarations, the contract's controls, the
   scanner's loop linked into Rust

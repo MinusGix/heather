@@ -1,8 +1,8 @@
 # Procedures are functions: one frame, one call, one contract
 
-Status: **proposed 2026-11-11; steps 5a and 5b and the call sequence of 5c
-built the same day** (§3), 5c's contract and 5d not. §1 describes the code
-before 5a. Round U5 of
+Status: **proposed 2026-11-11; steps 5a, 5b and 5c built the same day**
+(§3), 5d not. The contract is built as `Target::Callable` (§2.5, "As
+built"). §1 describes the code before 5a. Round U5 of
 `docs/native-one-compiler-design.md` (§2.4, §3), which asked for this note
 before the round. Owner: `issues/native-one-compiler.md`; it draws in
 `issues/native-procedure-contracts.md`,
@@ -334,6 +334,89 @@ or an exit; it is `Flow` seen from the caller, and `Procedure::enter` and
   written is at the machine level, a hand-made callee that stores above
   its entry, refused by `Target::Performs`.
 
+**As built (5c).** The contract is `Target::Callable`
+(`native_compile_perform.hthr`), and it differs from the sketch in four
+ways.
+
+```heather
+inductive Answer { Returned(results: List<BitVec(64)>, buffers: Buffers()), Gone(status: BitVec(64)) }
+
+fn Target::Callable<A>(self t: Target, label, lent: Nat, accepts: List<BitVec(64)> → Env → Type,
+    tree: List<BitVec(64)> → Env → ITree<A>(Events::linux()), answer: List<BitVec(64)> → Env → A → Answer) → Type {
+    (env: Env) → (words: List<BitVec(64)>) → accepts(words, env) → (g0: Gprs) → g0.Holding(call_registers(), t.passed_homes(lent) ++ words) →
+    (ret: BitVec(64)) → (above: List<BitVec(64)>) → t.index + 8 * above.len() <= t.stack.size →
+    (k: A → ITree<BitVec(64)>(Events::linux())) → ((x: A) → t.Ends(answer(words, env, x), env, g0, ret, above, k(x))) →
+    t.Goes(asm_labels(t.program, label), ITree::bind(Events::linux(), tree(words, env), k), λ s =>
+        t.Bare(env, t.room, t.index - 8, Cons(ret, above), s.gprs, s.memory) ∧ (s.gprs = g0))
+}
+```
+
+- **It is generic in what the callee's tree returns, with a reading of
+  that as an `Answer`.** A contract in continuation form asks its caller
+  for a continuation at every value of the tree's type. A procedure's
+  site has one: its tree returns a `Flow` and the statement after the
+  call is given at each (`Procedure::answer` reads a `Flow` as results
+  and the file, or an exit). A function's site does not. What
+  `Target::Functions` gives a region's `Call` is one tree, the rest of
+  the region over the one value the function computes, so there is no
+  continuation at any other `Answer` to hand over. A function therefore
+  meets the contract at `A = True` with the tree `Ret(trivial)`, and its
+  reading is the value: `function_answer(call, f)` is
+  `Returned([call(…).word], call(…).buffers)`. One statement, two
+  instances, and neither site is asked for what it cannot give.
+- **`lent` is in it.** The buffer homes a callee is lent come first in
+  the call registers (`Target::passed_homes(lent) ++ words`); a
+  procedure is lent none, since a procedure of a target reaches the
+  region by the layout.
+- **One state predicate each end, not `Entered` and `Returned`.** The
+  entry is `Target::Bare` at the callee's label, a word down, with the
+  return address on top of whatever the caller has above (`above`) and
+  the registers as the caller left them. The other end is
+  `Target::Ends`, by cases on the answer. At a `Returned`: the RIP is
+  the return address, `Bare` is back at the caller's offset with the
+  same `above` over the file the callee left, the registers of
+  `Homes::kept` read as they did at the entry, and the results are in
+  `result_registers()`. At a `Gone`: an exit with that status is paid.
+  That the caller's stack is as it was is `above` being the same list on
+  both sides, which is `Stack::Unchanged` with nothing to unfold.
+- **The name.** `Performs` is already the type of the meaning's callee
+  table (`native_source`), and the elaborator refuses a method spelled
+  like a name in scope; `Callee` is a record of the function compiler's
+  program logic.
+
+A call site is `Target::goes_calls` (`native_compile_function.hthr`),
+proved once for any `A`: from `Target::Callable` at a label, and the
+caller's claim after the call at each answer (`Target::Taken`, which
+`Target::ends_taken` turns into the contract's `Ends`), the code of
+`Prog::calls` runs as the callee's tree bound to the rest. A region's
+`Call` uses it at `True` (`Target::functions_run`) and a `Perform` at
+`Flow` (`Target::calls_of`).
+
+- **A function is callable** (`Target::function_performs`) from
+  `Target::Answered`, the function compiler's `CallsOver` at this
+  profile, by what `functions_run` held inline before: the lending's
+  cells are in memory at entry, the function's `Returns` is a silent run,
+  and the region is placed after with what it stored
+  (`Target::based_left`).
+- **A procedure is callable** (`Target::Procedures`, in
+  `native_compile_correct.hthr`) by induction on the room. With no room
+  the count refuses and the tree is the depth's exit
+  (`procedures_deep`); with room the body runs by `Stmt::emit_runs` at
+  the callee's target, whose own calls are the contract a level down
+  (`procedures_body`). Both start from `Target::goes_counted`, the label
+  and the count. The top theorems' statements did not move.
+- **Mutual recursion is the positive control.** `alternating` in
+  `native_compile_tests`: two procedures over the same words calling
+  each other, each keeping its parameter across its call, with a status
+  that is another number if either calls itself or loses the word. Its
+  binary runs in `procedures_run` (`crates/cli/tests/native_cat.rs`),
+  with the shallow variant refused at the depth.
+- **The machine-level negative control is not built.** A `¬
+  Target::Callable` for a hand-made callee that stores above its entry
+  needs a concrete target and an inversion of `SimPaid` at a state the
+  callee reached, which no lemma gives yet; it is what
+  `native-procedure-contracts` stays open for.
+
 ### 2.6 Depth
 
 The meaning keeps its depth and its exit, for the reason the procedures
@@ -428,8 +511,9 @@ gates passing on the new code.
     `index`, the frames from there given. A pushed word is the top of the
     lower activation's frames, and so is a return address. `goes_pushes`
     and `goes_pops` are inductions over activations; the callee's entry
-    and return are stated in the callee's own activation, and
-    `perform_call` names the four a call passes through.
+    and return are stated in the callee's own activation, and the call's
+    proof (`Target::goes_calls` since 5c) names the four a call passes
+    through.
   - *The proofs of an activation.* `Target` carries two proofs (`framed`,
     `roomy`), and a claim at an activation built with other proofs of the
     same facts is the same type only by unfolding. Statements that end in
@@ -517,11 +601,12 @@ gates passing on the new code.
     the entry changes who runs `call_enters`, not these.
 - **5c. One call, one contract.** The count moves into the entry, results
   move to RAX and on, `Perform` and `Call` emit through one function;
-  `Target::Performs` is stated, a procedure and a function each an
-  instance, and the call site proved from it once.
-  `native-procedure-contracts` closes on it. *Runs:* the same tools; the
-  machine-level control of §2.5. It lands in two halves: the call
-  sequence (built 2026-11-11), then the contract.
+  the contract is stated (`Target::Callable`, §2.5), a procedure and a
+  function each an instance, and the call site proved from it once.
+  *Runs:* the same tools, and two procedures calling each other. It
+  landed in two halves, both 2026-11-11: the call sequence, then the
+  contract. The machine-level control of §2.5 is not built, and
+  `native-procedure-contracts` stays open for it.
 
   What the call sequence settled:
   - *One function emits every call.* `Prog::calls(layout, label, lent,
@@ -551,10 +636,11 @@ gates passing on the new code.
     RBX is needed for functions anyway (`Homes::returned` reads every
     home's register back after a call from the two). A call still takes
     a return address, at most six words of registers and a frame.
-  - *One proof of the way to a callee.* `Target::goes_called`: the
-    arguments, R10 into RBX (`Target::homes_carried` at no buffers lent,
-    the function compiler's lemma), the CALL, the label and the count.
-    `Target::perform_deep` and `perform_call` are its two ends.
+  - *One proof of the way to a callee.* The arguments, R10 into RBX
+    (`Target::homes_carried`, the function compiler's lemma), the CALL,
+    then the label and the count. Since the contract this is two lemmas,
+    the caller's side in `Target::goes_calls` and the callee's in
+    `Target::goes_counted`.
   - *A gap the first several-parameter probe found.* The allocator built
     a body's interference from its statements' writes, and no statement
     writes a parameter the body only reads, so two such parameters got
@@ -568,9 +654,31 @@ gates passing on the new code.
     by `Target::Bare` at the return address with one call less of room
     and the registers as the CALL left them but RAX, R11 and RSP; at its
     RET, by `Bare` past that address with the room back, the registers it
-    keeps as they were, and the results in theirs. That pair is
-    `Target::Performs` to state, and a function's `CallsOver` to read as
-    an instance of.
+    keeps as they were, and the results in theirs. That pair is the
+    contract to state, and a function's `CallsOver` to read as an
+    instance of.
+
+  What the contract settled (§2.5, "As built", has the statement):
+  - *One call site.* `Target::goes_calls` replaces the function
+    compiler's inline proof in `functions_run` and the procedure
+    compiler's `goes_called`, `perform_deep` and `perform_call`. It is
+    the only proof that walks a `Prog::calls`.
+  - *The answer type is the instance's.* A function at `True`, a
+    procedure at `Flow`; why is in §2.5.
+  - *The procedure's induction is on the contract.* `Source::calls_at`
+    was an induction on the depth whose step proved a whole call. It is
+    now `Target::calls_of` (a `Perform` from the contract) over
+    `procedures_deep` and `procedures_body`, and the step proves only a
+    callee, entry to return.
+  - *The function side reads the region through `Based`.* The lemmas
+    that place a lending before a call and read it after
+    (`buffer_readable`, `lent_sized`, `in_memory`, `based_left`) are over
+    `Target::Based` and the frames, so they serve a callee's entry, where
+    there is no `Held`. `Layout::buffers_byte` is the buffers' half of
+    `Layout::keeps_byte` for the same reason.
+  - *What went.* `Target::held_left`, `held_stack_store`, `Gprs::args_in`
+    and `homes_back`, each a special case of a lemma the contract's
+    proofs use.
 - **5d. One byte lowering** (U4's step 4d). A leaf with byte nodes goes
   through the shared lowering, its buffers' homes loaded as immediates
   the way `Layout::homes_block` loads them for a callee, and
