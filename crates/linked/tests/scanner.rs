@@ -358,7 +358,7 @@ fn the_automaton_is_one_export() {
     // program would be a second copy nothing calls.
     let manifest = include_str!("../generated/EXPORTS.tsv");
     for export in ["scan_step", "scan_accept", "scan_begin"] {
-        assert!(manifest.contains(&format!("lib/lang/lexer/lexer_scan.hthr\t{export}\n")), "{export} is not in EXPORTS.tsv");
+        assert!(manifest.contains(&format!("lib/lang/lexer/lexer_scan.hthr\t{export}\t")), "{export} is not in EXPORTS.tsv");
     }
     assert!(!manifest.contains("\tstep_"), "a family is exported apart from the program");
     // And every family the module writes is one `scan_choose` calls, once:

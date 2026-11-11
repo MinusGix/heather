@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Rewrite the assembly `crates/linked` links: every export of
+# Rewrite what `crates/linked` links: every export of
 # `crates/linked/generated/EXPORTS.tsv`, compiled by `heather compile-x86`
-# (certificate checked, or nothing is written).
+# (certificate checked, or nothing is written), and then the Rust
+# declarations of them all, `generated/exports.rs`, from the table and the
+# signature each assembly file states (`heather linked-exports`).
 #
-#   scripts/linked            # rewrite crates/linked/generated/*.s
+#   scripts/linked            # rewrite crates/linked/generated/*.s, exports.rs
 #   scripts/linked --check    # exit 1 if a file on disk is not what is emitted
 #
-# `crates/cli/tests/native_linked.rs` is the gate that holds the files to the
-# compiler; this is how a round that changed a linked module, or the
-# lowering, brings them back. Same discipline as every direct `heather` run:
+# `crates/cli/tests/native_linked.rs` is the gate that holds the assembly to
+# the compiler, and `tests/linked_exports.rs` the declarations to their
+# generator; this is how a round that changed a linked module, the table, or
+# the lowering, brings them back. Same discipline as every direct `heather` run:
 # built first (the link reserves address space a cap would refuse), then
 # capped.
 set -euo pipefail
@@ -33,11 +36,11 @@ compile() {
 }
 export -f compile
 export heather store work
-grep -v '^#' "$generated/EXPORTS.tsv" | grep -v '^[[:space:]]*$' |
+grep -v '^#' "$generated/EXPORTS.tsv" | grep -v '^[[:space:]]*$' | cut -f1,2 |
   xargs -P 4 -L 1 bash -c 'compile "$0" "$1"'
 
 stale=0
-while IFS=$'\t' read -r module function; do
+while IFS=$'\t' read -r module function parameters; do
   [[ -z "$module" || "$module" == \#* ]] && continue
   if cmp -s "$work/$function.s" "$generated/$function.s"; then
     echo "$function: unchanged"
@@ -49,4 +52,11 @@ while IFS=$'\t' read -r module function; do
     echo "$function: rewritten"
   fi
 done < "$generated/EXPORTS.tsv"
+# The declarations follow the assembly on disk: after a rewrite, the new
+# files; under `--check`, the ones the check just compared.
+if $check; then
+  "$heather" linked-exports "$generated" --check || stale=1
+else
+  "$heather" linked-exports "$generated"
+fi
 exit $stale

@@ -21,6 +21,17 @@
 //! contract for a function of words, which is why the declarations below are
 //! `safe fn`: nothing a caller passes can make the call misbehave.
 //!
+//! An export may also read **a span of bytes its caller owns**
+//! (docs/native-library-exports-design.md): its code takes the span's
+//! address and length as two words, and its `_returns` theorem has the
+//! premises a pointer needs, that the two words are a span of readable
+//! bytes the callee's own stores cannot reach (`Stack::LentOver`, `Loan`),
+//! and then says as well that the span is left as it was. A `&[u8]` meets
+//! those premises, so the function Rust sees takes one: the declaration
+//! over a pointer is `unsafe` and private, and the wrapper that calls it
+//! with a slice's parts is generated with the premises beside the call
+//! (`generated/exports.rs`). No export stores into a span yet.
+//!
 //! What the theorem does not cover is stated where the compiler states it:
 //! the platform around the call (that `extern "sysv64"` really passes
 //! arguments so, that the stack has room, the assembler and the linker) is
@@ -46,59 +57,27 @@
 //! for the same reason the hashes' state is. Its test holds it to the Rust
 //! lexer on every Heather source in the repository; nothing shipped calls
 //! it yet (`issues/self-lexer-linked.md`).
+//!
+//! [`spans`]: the first export that reads memory its caller owns, a count
+//! of a text's newlines (`lib/native/native_tool_spans.hthr`). Its tests
+//! are the contract's process controls: a span that ends at an unmapped
+//! page, an empty slice, and both stack alignments.
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub mod scanner;
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+pub mod spans;
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub mod sha256;
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub mod sha512;
 
 // The one module the crate's `unsafe_code = "deny"` is lifted for: linking
-// the compiler's bytes (`global_asm!`) and naming the functions in them.
+// the compiler's bytes and naming the functions in them. It is generated in
+// full (`scripts/linked`, from `generated/EXPORTS.tsv` and the signature
+// each assembly file states), and `crates/cli/tests/linked_exports.rs`
+// refuses a hand edit to it.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[allow(unsafe_code)]
-mod exports {
-    // Each file is the compiler's output, verbatim (`options(raw)`: the text
-    // is assembly, not a format string). It selects `.text` itself and ends
-    // in a `.note.GNU-stack` section, so it is bracketed to leave the
-    // assembler where it was.
-    macro_rules! linked {
-        ($file:literal) => {
-            core::arch::global_asm!(
-                ".pushsection .text",
-                include_str!(concat!("../generated/", $file)),
-                ".popsection",
-                options(raw)
-            );
-        };
-    }
-    linked!("sha512_t1.s");
-    linked!("sha512_t2.s");
-    linked!("sha512_next.s");
-    linked!("sha256_t1.s");
-    linked!("sha256_t2.s");
-    linked!("sha256_next.s");
-    // The scanner's automaton is one file: `scan_step` and, inside the
-    // same certified program, every function it calls (`scanner`'s comment).
-    linked!("scan_step.s");
-    linked!("scan_accept.s");
-    linked!("scan_begin.s");
-
-    // The functions are declared `safe` on the strength of their
-    // certificates (the crate's comment): the unproved part is the
-    // platform's, not the callee's.
-    unsafe extern "sysv64" {
-        pub safe fn sha512_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-        pub safe fn sha512_t2(a: u64, b: u64, c: u64) -> u64;
-        pub safe fn sha512_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-        // 32-bit words in the low halves (`sha256`'s comment).
-        pub safe fn sha256_t1(h: u64, e: u64, f: u64, g: u64, k: u64, w: u64) -> u64;
-        pub safe fn sha256_t2(a: u64, b: u64, c: u64) -> u64;
-        pub safe fn sha256_next(w2: u64, w7: u64, w15: u64, w16: u64) -> u64;
-        // The scanner's automaton (`scanner`).
-        pub safe fn scan_step(state: u64, byte: u64) -> u64;
-        pub safe fn scan_accept(state: u64) -> u64;
-        pub safe fn scan_begin(previous: u64) -> u64;
-    }
-}
+#[path = "../generated/exports.rs"]
+mod exports;

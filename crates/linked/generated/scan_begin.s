@@ -1,4 +1,6 @@
 # Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.
+# signature: scan_begin(word) -> word
+# stack: 72 bytes below the return address
 .text
 .globl scan_begin
 .type scan_begin, @function

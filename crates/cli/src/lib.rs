@@ -18,6 +18,9 @@
 
 // `check --expectations`' reader, here so its unit tests run with the lib.
 pub mod expect;
+// The declarations of the functions `crates/linked` links, generated: here
+// so the gate reads the generator the script runs.
+pub mod linked;
 pub mod loader;
 pub mod semantic;
 // The showcase manifest is here for the same reason the loader is: four

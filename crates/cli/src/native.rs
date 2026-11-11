@@ -155,6 +155,35 @@ fn warm_closure(args: &[String]) -> Result<(), String> {
     store.save().map_err(|err| format!("cache: could not write verdicts: {err}"))
 }
 
+/// `linked-exports <dir> [--check]`: write `<dir>/exports.rs`, the Rust
+/// declarations of the exports `<dir>/EXPORTS.tsv` lists, from the table and
+/// the signature each `<dir>/<function>.s` states
+/// (`heather_cli::linked::exports_rs`). `--check` writes nothing and fails
+/// where the file on disk is not that. `scripts/linked` runs it after the
+/// assembly is rewritten.
+pub fn linked_exports(args: &[String]) -> ExitCode {
+    report((|| {
+        let (dir, check) = match args {
+            [dir] => (Path::new(dir), false),
+            [dir, flag] if flag == "--check" => (Path::new(dir), true),
+            _ => return Err("usage: heather linked-exports <generated dir> [--check]".to_string()),
+        };
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).map_err(|e| format!("{}: {e}", dir.join(name).display()));
+        let text = heather_cli::linked::exports_rs(&read("EXPORTS.tsv")?, &|function| read(&format!("{function}.s")))?;
+        let path = dir.join("exports.rs");
+        if std::fs::read_to_string(&path).is_ok_and(|on_disk| on_disk == text) {
+            println!("exports.rs: unchanged");
+            Ok(())
+        } else if check {
+            Err(format!("{} is stale: run scripts/linked", path.display()))
+        } else {
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+            println!("exports.rs: rewritten");
+            Ok(())
+        }
+    })())
+}
+
 /// `write-elf` (`native/elf.rs`).
 pub fn write_elf(args: &[String]) -> ExitCode {
     report(elf::write(args))
@@ -411,6 +440,13 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         }
         verified::Shape::reflected(&prefix, &program)
     };
+    // What the code takes, as the certificate's `_returns` states it: a span
+    // is an address and a length, the spans first; and the stack its premise
+    // asks for below the return address.
+    let spans = shape.lent.as_ref().map_or(0, |counts| counts[shape.root] as usize);
+    let mut kinds = vec![heather_cli::linked::Kind::Span; spans];
+    kinds.resize(shape.arity - spans, heather_cli::linked::Kind::Word);
+    let signature = heather_cli::linked::Signature { kinds, stack: 72 * (shape.root as u64 + 1) };
     // A program in the fragment that the lowering then refuses is a defect
     // of the lowering or its planner, never a reason to certify it another
     // way.
@@ -462,7 +498,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     checked?;
     write_new(&certificate, proof.as_bytes())?;
     std::fs::remove_file(&unchecked).map_err(|e| format!("{}: {e}", unchecked.display()))?;
-    write_new(&output, program_assembly(symbol, &compiled.bytes, compiled.entry).as_bytes())?;
+    write_new(&output, program_assembly(symbol, &signature, &compiled.bytes, compiled.entry).as_bytes())?;
     println!("{}: {} certified program bytes, `{symbol}` at offset {}, its RET included", output.display(), compiled.bytes.len(), compiled.entry);
     println!("certificate: {}", certificate.display());
     Ok(())
@@ -496,8 +532,11 @@ fn write_new(path: &Path, contents: &[u8]) -> Result<(), String> {
 
 // A whole program from the verified lowering: every function's code, its
 // own frames and RETs included, the exported symbol at its function's label.
-fn program_assembly(symbol: &str, bytes: &[u8], entry: usize) -> String {
-    let mut out = format!("# Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.\n.text\n.globl {symbol}\n.type {symbol}, @function\n{symbol}_program:\n");
+// What it takes is stated first, for whoever declares it
+// (`heather_cli::linked`).
+fn program_assembly(symbol: &str, signature: &heather_cli::linked::Signature, bytes: &[u8], entry: usize) -> String {
+    let mut out = format!("# Heather certified program (function_ir_compile); the platform ABI around it is outside the proof.\n{}.text\n.globl {symbol}\n.type {symbol}, @function\n{symbol}_program:\n",
+        heather_cli::linked::header(symbol, signature));
     // The functions before the entry, the label, then the entry and the
     // rest. A program whose entry comes first has nothing before it, and the
     // label is still written once: an assembler refuses a second definition.
@@ -535,7 +574,9 @@ mod tests {
     fn the_exported_label_is_defined_once() {
         let bytes: Vec<u8> = (0..30).collect();
         for entry in [0, 13, 24] {
-            let text = program_assembly("f", &bytes, entry);
+            let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word], stack: 72 };
+            let text = program_assembly("f", &signature, &bytes, entry);
+            assert_eq!(heather_cli::linked::Signature::read(&text, "f"), Ok(signature));
             let lines: Vec<&str> = text.lines().collect();
             assert_eq!(lines.iter().filter(|line| **line == "f:").count(), 1, "entry {entry}:\n{text}");
             let label = lines.iter().position(|line| *line == "f:").unwrap();

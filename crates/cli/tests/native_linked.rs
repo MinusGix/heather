@@ -20,11 +20,8 @@ fn linked_exports_are_what_the_compiler_emits() {
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let output = root.join(format!("target/native-linked-{}-{nonce}", std::process::id()));
     std::fs::create_dir_all(&output).unwrap();
-    let rows: Vec<(&str, &str)> = manifest
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(|line| line.split_once('\t').unwrap_or_else(|| panic!("EXPORTS.tsv: `{line}` is not `<module>\\t<function>`")))
-        .collect();
+    let listed = heather_cli::linked::exports(&manifest).unwrap_or_else(|why| panic!("{why}"));
+    let rows: Vec<(&str, &str)> = listed.iter().map(|row| (row.module.as_str(), row.function.as_str())).collect();
     for (module, _) in &rows {
         assert!(root.join(module).is_file(), "EXPORTS.tsv names `{module}`, which is not a file");
     }
@@ -65,7 +62,7 @@ fn linked_exports_are_what_the_compiler_emits() {
     // And nothing is linked that the manifest does not account for.
     for entry in std::fs::read_dir(&generated).unwrap() {
         let name = entry.unwrap().file_name().into_string().unwrap();
-        assert!(name == "EXPORTS.tsv" || exports.contains(&name),
+        assert!(name == "EXPORTS.tsv" || name == "exports.rs" || exports.contains(&name),
             "crates/linked/generated/{name} is in no row of EXPORTS.tsv");
     }
     std::fs::remove_dir_all(output).unwrap();
