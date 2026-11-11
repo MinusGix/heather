@@ -677,3 +677,160 @@ theorem loop_carried_sound(homes: List<Lent>, inputs, parameters, next: List<Nat
         True => Bool::is_true_of_eq(sound),
     }
 }
+
+// A loop whose passes keep `invariant` of their state: every pass starts
+// with it, and the final state has it.
+theorem loop_runs_keeping(pass: Valuation() → Type, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    invariant: List<BitVec(64)> → Type,
+    step: (values: Valuation()) → invariant(words_of(values, parameters)) → invariant(words_of(values, next)), remaining: Nat):
+    (state, final: List<BitVec(64)>) → (exhausted: Bool) → invariant(state) →
+    LoopRuns(pass, parameters, count, exit, next, remaining, state, final, exhausted) →
+    LoopRuns(λ (values: Valuation()) => pass(values) ∧ invariant(words_of(values, parameters)), parameters, count, exit, next, remaining,
+        state, final, exhausted) ∧ invariant(final) {
+    match remaining {
+        Zero => λ state final exhausted held ran => ⟨ran, j(sym(ran.left), λ st _ => invariant(st), held)⟩,
+        Succ(rest) => λ state final exhausted held ran => {
+            let values = ran.witness;
+            let here: invariant(words_of(values, parameters)) = j(sym(ran.proof.left), λ st _ => invariant(st), held);
+            let later = (match values(1, exit).head_bit() as λ b =>
+                (match b {
+                    False => LoopRuns(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted),
+                    True => (final = words_of(values, next)) ∧ (exhausted = False),
+                }) →
+                (match b {
+                    False => LoopRuns(λ (v: Valuation()) => pass(v) ∧ invariant(words_of(v, parameters)), parameters, count, exit, next, rest,
+                        words_of(values, next), final, exhausted),
+                    True => (final = words_of(values, next)) ∧ (exhausted = False),
+                }) ∧ invariant(final) {
+                False => λ more => loop_runs_keeping(pass, parameters, count, exit, next, invariant, step, rest, words_of(values, next), final,
+                    exhausted, step(values, here), more),
+                True => λ done => ⟨done, j(sym(done.left), λ st _ => invariant(st), step(values, here))⟩,
+            })(ran.proof.right.right.right);
+            ⟨Exists(values, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨⟨ran.proof.right.right.left, here⟩, later.left⟩⟩⟩), later.right⟩
+        },
+    }
+}
+
+// A loop entered from a scope with `homes`: every pass has the carried
+// homes, and the final state has them at their positions.
+theorem loop_carries(pass: Valuation() → Type, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), homes: List<Lent>,
+    held: HomesHold(homes, values, addresses, buffers), inputs, parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat,
+    final: List<BitVec(64)>, exhausted: Bool,
+    ran: LoopRuns(pass, parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted)):
+    LoopRuns(λ (v: Valuation()) => pass(v) ∧ HomesHold(carried_homes(loop_carried(homes, inputs, parameters, next)), v, addresses, buffers),
+        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted) ∧
+    CarriedAt(loop_carried(homes, inputs, parameters, next), final, addresses, buffers) {
+    let carried = loop_carried(homes, inputs, parameters, next);
+    let sound = loop_carried_sound(homes, inputs, parameters, next);
+    let kept = loop_runs_keeping(pass, parameters, count, exit, next, λ (state: List<BitVec(64)>) => CarriedAt(carried, state, addresses, buffers),
+        λ v at => carried_pass(v, addresses, buffers, homes, inputs, parameters, next, carried, sound, at).right, remaining,
+        words_of(values, inputs), final, exhausted,
+        carried_enter(values, addresses, buffers, homes, inputs, parameters, next, held, carried, sound), ran);
+    ⟨loop_runs_weaken(λ (v: Valuation()) => pass(v) ∧ CarriedAt(carried, words_of(v, parameters), addresses, buffers),
+        λ (v: Valuation()) => pass(v) ∧ HomesHold(carried_homes(carried), v, addresses, buffers),
+        λ v both => ⟨both.left, carried_pass(v, addresses, buffers, homes, inputs, parameters, next, carried, sound, both.right).left⟩,
+        parameters, count, exit, next, remaining, words_of(values, inputs), final, exhausted, kept.left), kept.right⟩
+}
+
+// The homes of the scope after a region: a loop leaves the ones it carried
+// under its outputs' names, before the ones it was entered with.
+fn StructuredRegion::lends(self region: StructuredRegion, homes: List<Lent>) → List<Lent> {
+    match region {
+        Dataflow(_) => homes,
+        Sequence(_, continuation) => continuation.lends(homes),
+        Compose(prefix, continuation) => continuation.lends(prefix.lends(homes)),
+        Conditional(_, _, _, _, _, _) => homes,
+        Call(_, _, _) => homes,
+        Loop(inputs, _, parameters, _, _, _, next, outputs, _) =>
+            carried_out(loop_carried(homes, inputs, parameters, next), outputs) ++ homes,
+    }
+}
+
+theorem StructuredRegion::lends_hold(self region: StructuredRegion, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(),
+    callees: Callees()): (homes: List<Lent>) → HomesHold(homes, values, addresses, buffers) →
+    StructuredRegionHoldsOver(buffers, callees, values, region) → HomesHold(region.lends(homes), values, addresses, buffers) {
+    match region {
+        Dataflow(_) => λ homes held _ => held,
+        Sequence(_, continuation) => λ homes held holds =>
+            continuation.lends_hold(values, addresses, buffers, callees, homes, held, holds.right),
+        Compose(prefix, continuation) => λ homes held holds =>
+            continuation.lends_hold(values, addresses, buffers, callees, prefix.lends(homes),
+                prefix.lends_hold(values, addresses, buffers, callees, homes, held, holds.left), holds.right),
+        Conditional(_, _, _, _, _, _) => λ homes held _ => held,
+        Call(_, _, _) => λ homes held _ => held,
+        Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => λ homes held holds =>
+            homes_hold_append(values, addresses, buffers, carried_out(loop_carried(homes, inputs, parameters, next), outputs), homes,
+                carried_leave(values, addresses, buffers, outputs, loop_carried(homes, inputs, parameters, next),
+                    loop_carries(λ (v: Valuation()) => StructuredRegionHoldsOver(buffers, callees, v, body), values, addresses, buffers, homes,
+                        held, inputs, parameters, count, exit, next, values(64, limit).toNat(), words_of(values, outputs),
+                        values(1, exhausted).head_bit(), holds).right),
+                held),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A call hands buffers on: its first arguments are their homes
+
+fn Lent::is(self home: Lent, buffer, base, length: Nat) → Bool {
+    home.buffer.same(buffer) && (home.base.same(base) && home.length.same(length))
+}
+
+fn homes_have(homes: List<Lent>, buffer, base, length: Nat) → Bool {
+    match homes { Nil => False, Cons(home, rest) => home.is(buffer, base, length) || homes_have(rest, buffer, base, length) }
+}
+
+// The arguments begin with the homes of buffers `buffer` to `buffer + count`.
+fn args_lend(homes: List<Lent>, count: Nat) → Nat → List<Nat> → Bool {
+    match count {
+        Zero => λ _ _ => True,
+        Succ(more) => λ buffer arguments => match arguments {
+            Nil => False,
+            Cons(base, after) => match after {
+                Nil => False,
+                Cons(length, rest) => homes_have(homes, buffer, base, length) && args_lend(homes, more, Succ(buffer), rest),
+            },
+        },
+    }
+}
+
+theorem homes_have_holds(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), buffer, base, length: Nat,
+    homes: List<Lent>): homes_have(homes, buffer, base, length).IsTrue() → HomesHold(homes, values, addresses, buffers) →
+    (values(64, base) = address_of(addresses, buffer)) ∧ (values(64, length) = BitVec::ofNat(buffer_bytes(buffers, buffer).len())) {
+    match homes {
+        Nil => λ no _ => false_elim(no),
+        Cons(home, rest) => λ has held =>
+            match Bool::is_true_or(home.is(buffer, base, length), homes_have(rest, buffer, base, length), has) {
+                Inl(here) => {
+                    let parts = Bool::is_true_and(home.buffer.same(buffer), home.base.same(base) && home.length.same(length), here);
+                    let ids = Bool::is_true_and(home.base.same(base), home.length.same(length), parts.right);
+                    let at_buffer = home.buffer.same_sound(buffer, eq_true_of_is_true(home.buffer.same(buffer), parts.left));
+                    let at_base = home.base.same_sound(base, eq_true_of_is_true(home.base.same(base), ids.left));
+                    let at_length = home.length.same_sound(length, eq_true_of_is_true(home.length.same(length), ids.right));
+                    j(at_buffer, λ b _ => (values(64, base) = address_of(addresses, b)) ∧
+                            (values(64, length) = BitVec::ofNat(buffer_bytes(buffers, b).len())),
+                        ⟨j(at_base, λ i _ => values(64, i) = address_of(addresses, home.buffer), held.left.left),
+                         j(at_length, λ i _ => values(64, i) = BitVec::ofNat(buffer_bytes(buffers, home.buffer).len()), held.left.right)⟩)
+                },
+                Inr(later) => homes_have_holds(values, addresses, buffers, buffer, base, length, rest, later, held.right),
+            },
+    }
+}
+
+theorem args_lend_lent(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), homes: List<Lent>,
+    held: HomesHold(homes, values, addresses, buffers), count: Nat): (buffer: Nat) → (arguments: List<Nat>) →
+    args_lend(homes, count, buffer, arguments).IsTrue() → ArgsLent(count, buffer, words_of(values, arguments), addresses, buffers) {
+    match count {
+        Zero => λ buffer arguments _ => trivial,
+        Succ(more) => λ buffer arguments => match arguments {
+            Nil => λ no => false_elim(no),
+            Cons(base, after) => match after {
+                Nil => λ no => false_elim(no),
+                Cons(length, rest) => λ lend => {
+                    let both = Bool::is_true_and(homes_have(homes, buffer, base, length), args_lend(homes, more, Succ(buffer), rest), lend);
+                    let here = homes_have_holds(values, addresses, buffers, buffer, base, length, homes, both.left, held);
+                    ⟨here.left, ⟨here.right, args_lend_lent(values, addresses, buffers, homes, held, more, Succ(buffer), rest, both.right)⟩⟩
+                },
+            },
+        },
+    }
+}
