@@ -5,7 +5,7 @@ labels: [compiler,x86,memory,proofs]
 area: heather-in-heather
 milestone: [hih-memory, nh-library]
 created: 2026-09-07
-updated: 2026-11-09
+updated: 2026-11-11
 ---
 
 ## Scope
@@ -54,3 +54,4 @@ separation logic or an allocator.
 - 2026-09-08: The private-frame customer required staged byte-address exclusions for eight-byte words. Investigate reusable region-disjointness and word-preservation interfaces so callers do not manually assemble byte-pair obligations. Include overlap, wraparound, and access-right premises; byte-level effects remain the checked foundation.
 - 2026-10-28: Bookkeeping: WritesOnly, CallMemoryPolicy and NativeIntegerCallContract, which the 2026-09-07 entries record, are no longer in lib/ or crates/. They went with the per-function call path in the B1/B2 burns and survive only under probes/ and in older docs. The live successors are [[wp-proved-memory-contracts]] (footprints for Proved items) and [[native-procedure-contracts]] (compiled procedure contracts). Found while writing docs/wp-preserving-compilation-survey.md.
 - 2026-11-09: 2026-11-09: footprints as interval sets are filed as [[address-interval-sets]].
+- 2026-11-11: The call contract of the proved function compiler now states its stores: `Stack::Wrote(i, before, after)`, stores of words below the return address at offset `i` (docs/native-one-compiler-design.md §2.1, round U1). Callee-local bytes may stay changed; the caller's words and the return address follow (`wrote_unchanged`), nested calls compose by `wrote_deeper` and `wrote_trans`. Still here: authorized writes to shared memory (U4's lent spans written) and the controls for them.

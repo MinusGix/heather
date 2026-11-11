@@ -1,7 +1,7 @@
 # One native compiler: joining `write-elf` and `compile-x86`
 
 Status: **direction set by Minus 2026-11-11** ("unify first and then
-export"); this note scopes it. Round U1 starts with it. Owner:
+export"); this note scopes it. U1 is built (§3). Owner:
 `issues/native-one-compiler.md`. It extends `docs/compilation-vision.md`
 (§2.4's levels) and re-sequences `docs/native-library-exports-design.md`,
 whose memory clause, lent spans and contract it keeps and whose rounds it
@@ -135,10 +135,12 @@ export is a function with no effects and a generated Rust declaration.
 
 Each is a PR and ends with something that runs.
 
-- **U1. `Wrote` in the function compiler.** The post states the stores;
-  `Unchanged` and code residency become its corollaries; today's
-  `compiled_returns` is kept as a corollary. *Runs:* every linked export
-  recertifies with its bytes unchanged.
+- **U1. `Wrote` in the function compiler.** *Built 2026-11-11.* The post
+  states the stores (`Stack::Wrote`, `x86_64_stack.hthr`; `CalleePost` and
+  `Framed` in `function_ir_lower_calls.hthr`); `Unchanged` and code
+  residency are its corollaries (`wrote_unchanged`, `wrote_resident`), and
+  the earlier theorem is `compiled_returns_keeps`. Nothing emitted moved:
+  every linked export recertifies with its bytes unchanged.
 - **U2. Programs call functions.** `Source`'s `Call` compiled as §2.2.
   *Runs:* a `write-elf` tool that calls a `runtime fn`, tested as the tools
   are.
@@ -179,7 +181,7 @@ of the function pipeline as the unit, is what this note generalises.
 | issue | role |
 |---|---|
 | `native-one-compiler` | new; owns this note and the order |
-| `x86-call-memory-footprints` | U1; closes with it |
+| `x86-call-memory-footprints` | U1 states the clause; its authorized shared writes are U4, and it closes there |
 | `function-ir-buffer-state-edges` | U3 and U4 in the function compiler |
 | `source-buffers-as-views` | U3: the static instance; then views |
 | `runtime-default-setup-soundness` | U3's `rt` half |

@@ -45,3 +45,7 @@ A `write-elf` program and a linked export are built by the same function
 compiler: a program's helper is a `runtime fn` called by CALL, a buffer is
 lent to a function by a program and by Rust through the same lowering
 case and the same premise, and `Source` has one kind of call.
+
+## Log
+
+- 2026-11-11: U1 built: `Stack::Own`/`Stack::Wrote` in x86_64_stack.hthr; `CalleePost` and `Framed` state the stores; `wrote_unchanged`, `wrote_resident` and `compiled_returns_keeps` are the corollaries; no emitted byte changed. Next is U2.
