@@ -200,7 +200,7 @@ enum Instantiate {
 
 /// What a value flows back into: a thunk waiting to memoize it, or an
 /// elimination waiting for its head.
-enum Frame<'v> {
+pub(crate) enum Frame<'v> {
     /// A thunk being forced: its value is memoized when it arrives
     /// (`ValueArena::cache_tm`).
     Memo(&'v TmClo<'v>),
@@ -258,6 +258,11 @@ pub struct Eval<'a, 'v> {
     /// common reduction step allocates nothing for it. Nested drives (a
     /// scrutinee evaluated before its elimination is built) use it as a
     /// stack of stacks: each records the height it entered at.
+    ///
+    /// Borrowed from the arena and handed back, emptied, when the run is
+    /// dropped ([`ValueArena::lend_frames`]): conversion makes a run per
+    /// evaluation it asks for, many a query, and each one's first frame
+    /// was otherwise an allocation of its own.
     frames: Vec<Frame<'v>>,
     /// Native frames already standing under this machine: one per live
     /// re-entry of [`Eval::drive`], plus whatever the caller reserved with
@@ -292,6 +297,7 @@ impl Drop for Eval<'_, '_> {
         crate::stats::eval_steps(self.steps);
         crate::stats::eval_delta_steps(self.delta_steps);
         crate::stats::eval_drives(self.drives);
+        self.arena.return_frames(std::mem::take(&mut self.frames));
     }
 }
 
@@ -322,7 +328,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             defs,
             base,
             arena,
-            frames: Vec::new(),
+            frames: arena.lend_frames(),
             depth: 0,
             transparent: false,
             steps: 0,

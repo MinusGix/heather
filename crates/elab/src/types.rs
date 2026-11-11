@@ -5,12 +5,12 @@
 //! fast path, and generated Ψ definitions. They are one invariant and live
 //! here rather than as parallel fields on `Elaborator`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use heather_kernel::rc::Rc;
 
 use crate::gendefs::GenDefs;
 use crate::inductive::Inductive;
-use crate::layered::{Layer, Layered, index_hash};
+use crate::layered::{Layer, Layered, NameMap, NameSet, index_hash};
 use crate::names::qkey;
 
 /// The syntax-owned prelude class's tag, reserved: [`declaration_tag`] never
@@ -48,14 +48,14 @@ pub(crate) fn declaration_tag(module: &str, name: &str) -> u32 {
 
 #[derive(Clone, Default)]
 struct TypeLayer {
-    inductives: HashMap<String, Rc<Inductive>>,
+    inductives: NameMap<String, Rc<Inductive>>,
     by_tag: HashMap<u32, Rc<Inductive>>,
     iwf_by_shape: HashMap<u32, Rc<Inductive>>,
-    constructors: HashMap<String, (Rc<Inductive>, usize)>,
+    constructors: NameMap<String, (Rc<Inductive>, usize)>,
     /// A mutual group's members (docs/mutual-inductive-design.md §2): each
     /// member's qualified name to its family and its position there.
-    members: HashMap<String, (Rc<Inductive>, usize)>,
-    record_fields: HashSet<String>,
+    members: NameMap<String, (Rc<Inductive>, usize)>,
+    record_fields: NameSet<String>,
 }
 
 /// [`TypeLayer`]'s tables, as the layer index numbers them.

@@ -60,6 +60,25 @@ const LOCAL: u8 = 1;
 const HAS_WK: u8 = 2;
 const GLOBAL: u8 = 4;
 
+/// A property of a node's value that a client of the kernel has established
+/// and wants not to establish again: one bit of the head, set by
+/// [`Rc::mark`] and read by [`Rc::marked`].
+///
+/// The kernel reads no mark, so nothing it decides depends on one. What a
+/// mark means is its client's, and the client's obligation is the head's
+/// own: the property is a function of the value under the node and of
+/// nothing else (no context, no registry, no environment), so that it is
+/// true of the node for as long as the value is the one it was computed
+/// from. A changed value has an empty head ([`Rc::make_mut`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Mark(u8);
+
+impl Mark {
+    /// The elaborator's "nothing under this type is the decoding of a code
+    /// literal" (`heather_elab::inductive::decode_deep`).
+    pub const DECODED: Mark = Mark(8);
+}
+
 impl Head {
     /// The node's local use, if it has been computed: its bound, whether a
     /// weakening tail shows, and its mask of used indices.
@@ -121,6 +140,19 @@ impl<T> Rc<T> {
     #[inline]
     pub(crate) fn head(this: &Rc<T>) -> &Head {
         &this.0.head
+    }
+
+    /// Whether `mark` has been set on this node since its value was last
+    /// changed.
+    #[inline]
+    pub fn marked(this: &Rc<T>, mark: Mark) -> bool {
+        this.0.head.state.load(Ordering::Relaxed) & mark.0 != 0
+    }
+
+    /// Record that `mark`'s property holds of this node's value.
+    #[inline]
+    pub fn mark(this: &Rc<T>, mark: Mark) {
+        this.0.head.state.fetch_or(mark.0, Ordering::Relaxed);
     }
 
     /// The value, to change. Whatever was known about the node is forgotten
@@ -283,6 +315,30 @@ mod tests {
         Rc::head(&a).set_local(0, false, 0);
         assert_eq!(Rc::head(&a).local(), Some((0, false, 0)));
         assert_eq!(Rc::head(&a).global(), Some(9));
+    }
+
+    #[test]
+    fn a_mark_stays_until_the_value_changes_and_is_no_answer() {
+        let mut a = Rc::new(3u32);
+        assert!(!Rc::marked(&a, Mark::DECODED));
+        Rc::mark(&a, Mark::DECODED);
+        assert!(Rc::marked(&a, Mark::DECODED));
+        // A mark is not one of the kernel's answers, nor they a mark.
+        assert_eq!(Rc::head(&a).local(), None);
+        assert_eq!(Rc::head(&a).global(), None);
+        Rc::head(&a).set_local(7, true, 5);
+        Rc::head(&a).set_global(2);
+        assert!(Rc::marked(&a, Mark::DECODED));
+        assert_eq!(Rc::head(&a).local(), Some((7, true, 5)));
+        let shared = Rc::clone(&a);
+        assert!(Rc::marked(&shared, Mark::DECODED));
+        *Rc::make_mut(&mut a) = 4;
+        assert!(!Rc::marked(&a, Mark::DECODED));
+        assert!(Rc::marked(&shared, Mark::DECODED));
+        let b = Rc::new(0u32);
+        Rc::head(&b).set_local(0, true, 0);
+        Rc::head(&b).set_global(0);
+        assert!(!Rc::marked(&b, Mark::DECODED));
     }
 
     /// The head is what a node costs over an `Arc`'s two counts.

@@ -312,6 +312,13 @@ impl Binders {
     pub(crate) fn renamed(&self, mut f: impl FnMut(&str) -> String) -> Binders {
         Binders(self.0.iter().map(|b| Binder { name: f(&b.name).into(), skel: b.skel.clone() }).collect())
     }
+
+    /// The same binders, every one under the one name `name`: [`Self::renamed`]
+    /// with a constant, sharing the name where that would allocate it twice
+    /// per binder.
+    pub(crate) fn all_named(&self, name: &Arc<str>) -> Binders {
+        Binders(self.0.iter().map(|b| Binder { name: Arc::clone(name), skel: b.skel.clone() }).collect())
+    }
 }
 
 impl std::ops::Index<usize> for Binders {

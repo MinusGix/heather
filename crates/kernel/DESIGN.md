@@ -877,6 +877,12 @@ paper too).
   shared values, but values point back into the arena rather than owning the
   next closure, so they no longer form the recursive destruction chain. This
   also removes the evaluator's former thread-local destruction worklist.
+  The arena is one region per kind of value, and a region is made at its
+  first allocation (`value::Region`, 2026-11-10): most queries touch two or
+  three of the ten, and a region's first chunk is an allocation. The
+  evaluator's frame stack is the arena's too, lent to each `Eval` and
+  returned empty, so a query's evaluations grow one stack
+  (`issues/value-domain-allocation-constant.md`).
   Successful thunk results are **kept for the whole query** (2026-10-22),
   and since 2026-11-10 in the closure itself: one word of a `TmClo`/`TyClo`
   (`value::Memo`), written once
@@ -1097,6 +1103,18 @@ paper too).
   hand it out, so a head describes the value beside it. The kernel has no
   `unsafe`; the head is atomics, written last-flag-first-read so a reader
   on another thread sees a whole answer or none.
+
+  **A client's mark** (`rc::Mark`, 2026-11-10,
+  `issues/emission-decode-walks-every-annotation.md`): spare bits of the
+  head's state byte are offered to the kernel's clients, one bit a
+  property, set by `Rc::mark` and read by `Rc::marked`. The kernel reads
+  none of them, so no mark is in the trusted base. The client owes what
+  the kernel's own answers owe: the property is a function of the value
+  under the node and of nothing else, no context and no registry, so the
+  two functions that empty a head keep it true. The first is the
+  elaborator's "nothing under this type decodes" (`Mark::DECODED`). A
+  property that reads a table that grows (which lowerings are registered)
+  is not one, however often it is asked.
 - **Per-node free-local-variable bounds** (2026-07-31,
   issues/subst-visits-closed-subtrees.md route B): the local-namespace
   traversals skip subtrees that provably cannot change (loose de Bruijn

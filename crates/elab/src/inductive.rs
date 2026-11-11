@@ -25,7 +25,7 @@
 //! not mis-lowered.
 
 use std::borrow::{Borrow, Cow};
-use heather_kernel::rc::Rc;
+use heather_kernel::rc::{Mark, Rc};
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -631,6 +631,10 @@ pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
                 | Term::TmSEq { .. }
         )
     }
+    // Asked of every node `decode_deep` walks, and nearly none is one.
+    if !matches!(t, Type::El { tm, .. } if is_code_former(tm)) {
+        return Cow::Borrowed(t);
+    }
     let empty = LocalCtx::nil();
     let mut cur = Cow::Borrowed(t);
     loop {
@@ -669,6 +673,16 @@ pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
 /// The property the adjacent-link argument rests on — this decode commutes
 /// with local substitution — is a kernel law, tested against `step_type`
 /// directly on random terms in `crates/kernel/tests/decode_laws.rs`.
+///
+/// **Asked once per node.** Emission asks this of every annotation it
+/// writes, the answer is nearly always `None`, and elaborated types are
+/// dags whose components earlier annotations already asked about. `None`
+/// is a function of the type alone (`decoded` steps in the empty context
+/// and reads no declaration), so a component that answered it is marked
+/// ([`Mark::DECODED`], in the node's head) and not walked again. A
+/// component that did change is not marked and is decoded again at its
+/// next emission, as before: what is saved is the walk of everything
+/// around it.
 pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
     let head = decoded(t);
     let changed_head = matches!(head, Cow::Owned(_));
@@ -683,8 +697,8 @@ pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
             dom,
             cod,
         } => {
-            let nd = decode_deep(dom);
-            let nc = decode_deep(cod);
+            let nd = decode_deep_rc(dom);
+            let nc = decode_deep_rc(cod);
             (nd.is_some() || nc.is_some()).then(|| Type::Pi {
                 dom_level: dom_level.clone(),
                 cod_level: cod_level.clone(),
@@ -698,8 +712,8 @@ pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
             fst,
             snd,
         } => {
-            let nf = decode_deep(fst);
-            let ns = decode_deep(snd);
+            let nf = decode_deep_rc(fst);
+            let ns = decode_deep_rc(snd);
             (nf.is_some() || ns.is_some()).then(|| Type::Sigma {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
@@ -713,8 +727,8 @@ pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
             lhs,
             rhs,
         } => {
-            let nl = decode_deep(lhs);
-            let nr = decode_deep(rhs);
+            let nl = decode_deep_rc(lhs);
+            let nr = decode_deep_rc(rhs);
             (nl.is_some() || nr.is_some()).then(|| Type::Sum {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
@@ -722,7 +736,7 @@ pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
                 rhs: or(rhs, nr),
             })
         }
-        Type::Vec { level, elem, len } => decode_deep(elem).map(|ne| Type::Vec {
+        Type::Vec { level, elem, len } => decode_deep_rc(elem).map(|ne| Type::Vec {
             level: level.clone(),
             elem: Rc::new(ne),
             len: Rc::clone(len),
@@ -737,7 +751,7 @@ pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
             // downstream (`respell_ty_deep`'s `Wf` arm) treats the two as one
             // spelling, so a decoded shape over literal-spelled annotations
             // would be the very mismatch that arm exists to avoid.
-            let ns = decode_deep(shape);
+            let ns = decode_deep_rc(shape);
             let na = decode_arity_deep(arity);
             (ns.is_some() || na.is_some()).then(|| Type::Wf {
                 level: level.clone(),
@@ -753,7 +767,7 @@ pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
             ty,
             lhs,
             rhs,
-        } => decode_deep(ty).map(|nt| Type::Id {
+        } => decode_deep_rc(ty).map(|nt| Type::Id {
             level: level.clone(),
             ty: Rc::new(nt),
             lhs: Rc::clone(lhs),
@@ -764,13 +778,13 @@ pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
             ty,
             lhs,
             rhs,
-        } => decode_deep(ty).map(|nt| Type::SEq {
+        } => decode_deep_rc(ty).map(|nt| Type::SEq {
             level: level.clone(),
             ty: Rc::new(nt),
             lhs: Rc::clone(lhs),
             rhs: Rc::clone(rhs),
         }),
-        Type::Squash { level, ty } => decode_deep(ty).map(|nt| Type::Squash {
+        Type::Squash { level, ty } => decode_deep_rc(ty).map(|nt| Type::Squash {
             level: level.clone(),
             ty: Rc::new(nt),
         }),
@@ -781,6 +795,19 @@ pub(crate) fn decode_deep(t: &Type) -> Option<Type> {
         (None, true) => Some(head.into_owned()),
         (None, false) => None,
     }
+}
+
+/// [`decode_deep`] of a shared component, answered from its mark when it
+/// has one.
+fn decode_deep_rc(t: &Rc<Type>) -> Option<Type> {
+    if Rc::marked(t, Mark::DECODED) {
+        return None;
+    }
+    let new = decode_deep(t);
+    if new.is_none() {
+        Rc::mark(t, Mark::DECODED);
+    }
+    new
 }
 
 /// [`decode_deep`] over the `Case` annotations of a `Wf` arity's constant
@@ -799,8 +826,8 @@ fn decode_arity_deep(t: &Term) -> Option<Term> {
             case_r,
             scrut,
         } => {
-            let nl = decode_deep(lhs);
-            let nr = decode_deep(rhs);
+            let nl = decode_deep_rc(lhs);
+            let nr = decode_deep_rc(rhs);
             let cl = decode_arity_deep(case_l);
             let cr = decode_arity_deep(case_r);
             if nl.is_none() && nr.is_none() && cl.is_none() && cr.is_none() {
@@ -2864,7 +2891,7 @@ impl Elaborator {
         // arguments are scoped, but out of reach by name: a field spelling
         // `y()` means the declaration's `y`, not a parameter `y` of whatever
         // function names the type (issues/named-type-lowering-per-mention.md).
-        fcx.names = fcx.names.renamed(|_| "#use-site".into());
+        fcx.names = fcx.names.all_named(&std::sync::Arc::from("#use-site"));
         fcx.aliases.clear();
         let depth = cx.names.len();
         fcx.tyvars = ind
@@ -7290,5 +7317,74 @@ fn receiver_is_neutral(value: &Term) -> bool {
         | Term::SndAt { pair, .. } => receiver_is_neutral(pair),
         Term::App { fun, .. } | Term::AppAt { fun, .. } => receiver_is_neutral(fun),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use super::*;
+
+    fn el(tm: Term) -> Rc<Type> {
+        Rc::new(Type::El { level: Level::Zero, tm: Rc::new(tm) })
+    }
+
+    fn sigma(fst: &Rc<Type>, snd: &Rc<Type>) -> Rc<Type> {
+        Rc::new(Type::Sigma {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst: Rc::clone(fst),
+            snd: Rc::clone(snd),
+        })
+    }
+
+    /// A component with nothing to decode says so once and is marked; one
+    /// that decodes is not, and decodes the same way at every asking,
+    /// around a marked sibling as around an unmarked one.
+    #[test]
+    fn nothing_to_decode_is_marked_and_a_decode_is_repeated() {
+        let plain = sigma(&Rc::new(Type::Nat), &Rc::new(Type::Nat));
+        let literal = el(Term::TmSigma {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst: Rc::new(Term::TmNat),
+            snd: Rc::new(Term::TmNat),
+        });
+        let both = sigma(&plain, &literal);
+        let outer = sigma(&both, &plain);
+
+        assert!(!Rc::marked(&plain, Mark::DECODED));
+        let first = decode_deep(&outer).expect("a code literal is under it");
+        assert!(Rc::marked(&plain, Mark::DECODED));
+        assert!(!Rc::marked(&literal, Mark::DECODED));
+        assert!(!Rc::marked(&both, Mark::DECODED));
+
+        // Inline everywhere: the literal is the Σ it encodes.
+        let Type::Sigma { fst, snd, .. } = &first else { panic!("a Σ stays a Σ") };
+        assert!(Rc::ptr_eq(snd, &plain), "an unchanged sibling keeps its node");
+        let Type::Sigma { fst: kept, snd: decoded_literal, .. } = &**fst else { panic!("a Σ") };
+        assert!(Rc::ptr_eq(kept, &plain));
+        assert_eq!(**decoded_literal, *plain);
+
+        // Asked again, with its unchanged components now marked.
+        assert_eq!(decode_deep(&outer), Some(first.clone()));
+        // The result has nothing left to decode, and learns it.
+        assert_eq!(decode_deep(&first), None);
+        assert_eq!(decode_deep(&plain), None);
+    }
+
+    /// A mark is of the value: a neutral `El` has nothing to decode, the
+    /// same node holding a literal after a change in place does.
+    #[test]
+    fn a_changed_node_is_asked_again() {
+        let mut code = el(Term::Var(LocalVar(0)));
+        let around = sigma(&code, &Rc::new(Type::Nat));
+        assert_eq!(decode_deep(&around), None);
+        assert!(Rc::marked(&code, Mark::DECODED));
+        drop(around);
+        *Rc::make_mut(&mut code) = Type::El { level: Level::Zero, tm: Rc::new(Term::TmNat) };
+        assert!(!Rc::marked(&code, Mark::DECODED));
+        let around = sigma(&code, &Rc::new(Type::Nat));
+        let Some(Type::Sigma { fst, .. }) = decode_deep(&around) else { panic!("the literal decodes") };
+        assert_eq!(*fst, Type::Nat);
     }
 }

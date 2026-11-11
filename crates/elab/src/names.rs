@@ -17,13 +17,13 @@
 //! decides anything. The consequence that pays for it: library growth can
 //! introduce errors, never reinterpretations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use heather_kernel::rc::Rc;
 
 use heather_syntax::Decl;
 
 use super::ParamMeta;
-use crate::layered::{Layer, Layered, index_hash};
+use crate::layered::{Layer, Layered, NameMap, NameSet, index_hash};
 
 thread_local! {
     /// While recording: the last `::` segment of every name and module this
@@ -127,19 +127,19 @@ struct NameEntry {
 /// lookup rather than a scan, and it is the only place ambiguity is visible.
 #[derive(Clone, Default)]
 struct NameIndex {
-    by_name: HashMap<String, Vec<NameEntry>>,
+    by_name: NameMap<String, Vec<NameEntry>>,
 }
 
 /// One module-sized name-registry delta. Sealed layers are immutable and
 /// shared; only the current layer is detached when a suffix commits a name.
 #[derive(Clone, Default)]
 struct NameLayer {
-    module_scopes: HashMap<String, Scope>,
+    module_scopes: NameMap<String, Scope>,
     index: NameIndex,
-    globals: HashMap<String, GlobalInfo>,
+    globals: NameMap<String, GlobalInfo>,
     by_abs: HashMap<u32, String>,
-    member_bases: HashSet<String>,
-    surface_decls: HashMap<String, Decl>,
+    member_bases: NameSet<String>,
+    surface_decls: NameMap<String, Decl>,
 }
 
 /// [`NameLayer`]'s tables, as the layer index numbers them.
@@ -235,8 +235,16 @@ pub(crate) enum NameRes {
 /// The key every name table uses: `module::name`. Deliberately the same
 /// string the surface writes for a qualified reference, so a table dump and a
 /// diagnostic read alike.
+///
+/// Built by hand, at its final size: `format!` goes through the formatting
+/// machinery and grows the string as it writes, and every keyed lookup
+/// builds one of these.
 pub(crate) fn qkey(module: &str, name: &str) -> String {
-    format!("{module}::{name}")
+    let mut key = String::with_capacity(module.len() + 2 + name.len());
+    key.push_str(module);
+    key.push_str("::");
+    key.push_str(name);
+    key
 }
 
 /// Split a written reference into its qualifier and base name. `None` for an
@@ -249,8 +257,14 @@ pub(crate) fn qkey(module: &str, name: &str) -> String {
 /// (`Elaborator::key_of_declared_kinds`). The lexer joins a chain as of
 /// 2026-08-17 (`docs/instance-resolved-key-design.md` §5); nothing here had to
 /// move for it.
+///
+/// A byte scan, not `split_once("::")`: a two-byte pattern builds a
+/// `StrSearcher` (the two-way algorithm's preprocessing) per call, which
+/// costs more than reading a name of this length does, and resolution asks
+/// this of every name it keys.
 pub(crate) fn split_qual(name: &str) -> Option<(&str, &str)> {
-    name.split_once("::")
+    let at = name.as_bytes().windows(2).position(|w| w == b"::")?;
+    Some((&name[..at], &name[at + 2..]))
 }
 
 impl NameIndex {
@@ -815,6 +829,18 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
 #[cfg(test)]
 mod layered_tests {
     use super::*;
+
+    /// `split_qual` is `split_once("::")`, written as a scan: the first `::`
+    /// splits, whatever is around it.
+    #[test]
+    fn a_name_splits_at_its_first_double_colon() {
+        for name in [
+            "", ":", "::", ":::", "a", "a:", "a:b", "a::b", "a::b::c", "::a", "a::", "a:::b",
+            "int::Le::Decide", "naïve::é", "é::naïve::x", "x#1::y", "a: :b",
+        ] {
+            assert_eq!(split_qual(name), name.split_once("::"), "{name:?}");
+        }
+    }
 
     #[test]
     fn semantic_snapshot_seals_modules_and_suffix_mutates_only_an_empty_delta() {

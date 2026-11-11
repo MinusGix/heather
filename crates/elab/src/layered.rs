@@ -39,8 +39,13 @@ use heather_kernel::rc::Rc;
 pub(crate) fn index_hash<K: Hash + ?Sized>(key: &K) -> u64 {
     let mut h = WordHasher(0);
     key.hash(&mut h);
-    // fmix64: the index maps use the hash as is.
-    let mut x = h.0;
+    // The index maps use the hash as is.
+    avalanche(h.0)
+}
+
+/// fmix64.
+#[inline]
+fn avalanche(mut x: u64) -> u64 {
     x ^= x >> 33;
     x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
     x ^= x >> 33;
@@ -48,6 +53,7 @@ pub(crate) fn index_hash<K: Hash + ?Sized>(key: &K) -> u64 {
     x ^ (x >> 33)
 }
 
+#[derive(Default)]
 struct WordHasher(u64);
 
 impl WordHasher {
@@ -91,6 +97,55 @@ impl Hasher for WordHasher {
         self.0
     }
 }
+
+/// The hasher of a layer's own name-keyed tables: [`index_hash`]'s, where
+/// the standard library's default is SipHash.
+///
+/// A lookup probes the current layer and then each layer the index names,
+/// hashing the name for each probe, and name resolution asks several tables
+/// about every name it reads. The keys are the program's own identifiers,
+/// not an adversary's, so a keyed hash buys nothing here. The avalanche is
+/// kept: the table takes its bucket from the low bits and its control byte
+/// from the high ones.
+#[derive(Default)]
+pub(crate) struct NameHasher(WordHasher);
+
+impl Hasher for NameHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.write(bytes)
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.0.write_u8(i)
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.0.write_u32(i)
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0.write_u64(i)
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.0.write_usize(i)
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        avalanche(self.0.0)
+    }
+}
+
+/// A map keyed by names, hashed by [`NameHasher`].
+pub(crate) type NameMap<K, V> = HashMap<K, V, BuildHasherDefault<NameHasher>>;
+/// A set of names, hashed by [`NameHasher`].
+pub(crate) type NameSet<K> = std::collections::HashSet<K, BuildHasherDefault<NameHasher>>;
 
 /// The index maps' hasher: their keys are already [`index_hash`]es.
 #[derive(Default)]
