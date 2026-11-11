@@ -1,11 +1,12 @@
-// Probes of `simp_only` and `simp_show` (docs/simp-design.md,
+// Probes of `simp_only`, `simp_show` and `by simp()` (docs/simp-design.md,
 // issues/simp-tactic.md): a goal normalised by a pinned list of laws along
 // `=` and along a designated relation, side conditions, what is left
-// (`then :=`, `using :=`), calls at constructors computing first, and every
-// refusal with the route it took. Tests, not library: nothing imports this
+// (`then :=`, `using :=`), calls at constructors computing first, every
+// refusal with the route it took, and the sets a goal's types bring. Tests, not library: nothing imports this
 // module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import list; import option; import pair; import char; import string; import tactic;
 import relation; import relation_props; import algebra_rel; import algebra; import regex; import regex_language; import regex_dfa;
+import simp_laws; import simp;
 
 // ---------------------------------------------------------------------------
 // Equations: both sides normalised, the goal closed where they meet.
@@ -73,8 +74,8 @@ theorem smart_constructors(a, b: Regex): Regex::alt(Regex::seq(a, b), b) ≈ Alt
     simp_only(Regex::alt_same, Regex::seq_same)
 }
 
-theorem laws_with_arguments(a, b: Regex): Regex::seq(a.simp(), b.simp()) ≈ Seq(a, b) {
-    simp_only(Regex::seq_same, Regex::simp_same)
+theorem laws_with_arguments(a, b: Regex): Regex::seq(a.simplify(), b.simplify()) ≈ Seq(a, b) {
+    simp_only(Regex::seq_same, Regex::simplify_same)
 }
 
 // A hypothesis along the relation, at two fields of constructor values.
@@ -82,7 +83,7 @@ theorem under_constructors(a, a2, b: Regex, h: a ≈ a2): Alt(Seq(a, b), a) ≈ 
 
 // A call at a constructor computes before the laws are matched, its
 // recursive calls kept as calls: no equation of `simp` is listed.
-theorem computes_first(a, b: Regex, ha: a.simp() ≈ a, hb: b.simp() ≈ b): Seq(a, Star(b)).simp() ≈ Seq(a, Star(b)) {
+theorem computes_first(a, b: Regex, ha: a.simplify() ≈ a, hb: b.simplify() ≈ b): Seq(a, Star(b)).simplify() ≈ Seq(a, Star(b)) {
     simp_only(Regex::seq_same, ha, hb)
 }
 
@@ -142,3 +143,41 @@ theorem under_a_binder<A>(xs: List<A>, f: A → List<A>): xs.map(λ x => (f(x) +
 theorem no_context(a, b: Regex, w: List<Nat>, h: Regex::Seq(a, b).Denotes(w)): Regex::seq(a, b).Denotes(w) {
     simp_only(Regex::seq_same, using := h)
 }
+
+// ---------------------------------------------------------------------------
+// `by simp()`: the default sets of the types in the goal
+// (lib/std/tactic/simp.hthr, docs/simp-design.md §3.1).
+
+// A list and a number: `List::shape` and `Nat::arith`, neither named.
+theorem by_type_defaults<A>(xs, ys: List<A>): ((xs ++ Nil) ++ ys).len() + 0 = 0 + (xs.len() + ys.len()) { by simp() }
+
+theorem defaults_nest_right<A>(xs, ys, zs: List<A>): ((xs ++ ys) ++ zs).len() = xs.len() + (ys.len() + zs.len()) { by simp() }
+
+// `Regex`'s default is along `≈`.
+theorem regex_default(a, b: Regex, c: Nat): Regex::seq(a.deriv_simp(c), b.simplify()) ≈ Seq(a.deriv(c), b) { by simp() }
+
+// The call's own laws, a hypothesis among them.
+theorem with_a_hypothesis(a, b: Nat, f: Nat → Nat, h: f(a) = b): f(0 + a) + 0 = b { by simp(extra := [h]) }
+
+// A set of the client's own, named at the call; the type defaults left out.
+register def simp_tests_commute: SimpSet = simp_set("simp_tests::commute", [name_of(Nat::add_comm)]);
+
+theorem named_set(a, b: Nat): a + b = b + a { by simp_with([simp_tests_commute], defaults := False) }
+
+// A default does not hold what the goal needs: the report is the route and
+// the sets that were used, each with the type that brought it.
+// expect-error: tried the set `Nat::arith`: the default of `Nat`, which the goal has a value of
+theorem default_falls_short(a, b: Nat): a + b = b + a { by simp() }
+
+// expect-error: `simp`: the two sides do not meet
+theorem default_report(a, b: Nat): a + b = b + a { by simp() }
+
+// No type in the goal has a default: said, not a silent empty run.
+// expect-error: no type in the goal has a default set here, and the call names none
+theorem no_default(a, b: Bool): a = b { by simp() }
+
+// A type's default is not used at a goal without a value of the type:
+// `Nat::add_left_zero` is in `Nat::arith`, which a goal about Booleans
+// does not get.
+// expect-error: tried sets: none
+theorem defaults_follow_the_goal(a: Bool): (a && True) = (True && a) { by simp() }

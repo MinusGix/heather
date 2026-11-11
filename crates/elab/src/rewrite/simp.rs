@@ -148,36 +148,73 @@ impl Simps<'_> {
         let mut rules = Vec::with_capacity(args.len());
         for (i, h) in args.iter().enumerate() {
             let (proof, ty, _) = self.elab_infer(cx, h)?;
-            // What a law concludes is read where it fires; a proof of
-            // something that is no statement at all is refused here, used
-            // or not.
-            let mut conclusion = &ty;
-            while let Type::Pi { cod, .. } = conclusion {
-                conclusion = cod;
-            }
-            if !matches!(conclusion, Type::Id { .. } | Type::El { .. } | Type::M { .. }) {
-                let shown = self.display_type(cx, &ty);
-                return Err(ElabError::Elab {
-                    msg: format!(
-                        "`{form}`: {} is not a law: a law is a proof of an equation `a = b` or \
-                         of a relation `R(a, b)`, under any hypotheses, and this is of type \
-                         `{shown}`{}",
-                        rule_name(h, i),
-                        if shown.starts_with("Iff<") {
-                            "\n  note: a law `P ↔ Q` between statements is not rewritten yet \
-                             (issues/simp-iff-laws.md); use its direction, `h.mp(…)`, in `then :=`"
-                        } else {
-                            ""
-                        }
-                    ),
-                    span: h.span,
-                });
-            }
-            rules.push(Rule { expr: h, proof, ty, name: rule_name(h, i) });
+            rules.push(self.law(cx, form, h, rule_name(h, i), proof, ty)?);
         }
+        self.run_simp(cx, form, show, &rules, discharge, then, using, goal, lvl, span)
+    }
+
+    /// The host's entry (`Req::Simp`, docs/simp-design.md §7): the goal
+    /// closed by laws that are already terms, each with the name a report
+    /// calls it by. What `simp_only(l₁, …, lₙ)` does, under the name `simp`.
+    pub(crate) fn simp_terms(&self, cx: &Cx, laws: Vec<(String, Term, Type)>, goal: &Type, lvl: &Level, span: Span) -> R<Term> {
+        let exprs: Vec<Expr> = laws.iter().map(|(name, ..)| Expr { kind: ExprKind::Var(name.clone()), span }).collect();
+        let mut rules = Vec::with_capacity(laws.len());
+        for (h, (name, proof, ty)) in exprs.iter().zip(laws) {
+            rules.push(self.law(cx, "simp", h, format!("`{name}`"), proof, ty)?);
+        }
+        // The report is `simp_only`'s, under the caller's name.
+        self.run_simp(cx, "simp", false, &rules, None, None, None, goal, lvl, span).map_err(|e| match e {
+            ElabError::Elab { msg, span } => ElabError::Elab { msg: msg.replace("`simp_only`", "`simp`"), span },
+            other => other,
+        })
+    }
+
+    /// A law of the list: what it concludes is read where it fires; a proof
+    /// of something that is no statement at all is refused here, used or
+    /// not.
+    fn law<'x>(&self, cx: &Cx, form: &str, h: &'x Expr, name: String, proof: Term, ty: Type) -> R<Rule<'x>> {
+        let mut conclusion = &ty;
+        while let Type::Pi { cod, .. } = conclusion {
+            conclusion = cod;
+        }
+        if !matches!(conclusion, Type::Id { .. } | Type::El { .. } | Type::M { .. }) {
+            let shown = self.display_type(cx, &ty);
+            return Err(ElabError::Elab {
+                msg: format!(
+                    "`{form}`: {name} is not a law: a law is a proof of an equation `a = b` or \
+                     of a relation `R(a, b)`, under any hypotheses, and this is of type \
+                     `{shown}`{}",
+                    if shown.starts_with("Iff<") {
+                        "\n  note: a law `P ↔ Q` between statements is not rewritten yet \
+                         (issues/simp-iff-laws.md); use its direction, `h.mp(…)`, in `then :=`"
+                    } else {
+                        ""
+                    }
+                ),
+                span: h.span,
+            });
+        }
+        Ok(Rule { expr: h, proof, ty, name })
+    }
+
+    /// The run and what closes it, for laws already elaborated.
+    #[allow(clippy::too_many_arguments)]
+    fn run_simp(
+        &self,
+        cx: &Cx,
+        form: &str,
+        show: bool,
+        rules: &[Rule<'_>],
+        discharge: Option<&Expr>,
+        then: Option<&Expr>,
+        using: Option<&Expr>,
+        goal: &Type,
+        lvl: &Level,
+        span: Span,
+    ) -> R<Term> {
         let relations = Relations(self.0);
         let closing = !show && then.is_none() && using.is_none();
-        let mut run = self.normalise(&relations, cx, &rules, goal, lvl, discharge, closing.then_some(span))?;
+        let mut run = self.normalise(&relations, cx, rules, goal, lvl, discharge, closing.then_some(span))?;
         if let Some(back) = run.cycle {
             let from = if back == 0 { "the goal as written".to_string() } else { format!("the statement after step {back}") };
             return Err(ElabError::Elab {
@@ -188,7 +225,7 @@ impl Simps<'_> {
                      with `rewrite` at the one place it is wanted{}",
                     run.steps.len(),
                     self.display_type(cx, &run.end),
-                    self.report(cx, &rules, &run, None)
+                    self.report(cx, rules, &run, None)
                 ),
                 span,
             });
@@ -199,7 +236,7 @@ impl Simps<'_> {
                     "`{form}`: no normal form after {BUDGET} steps\n  note: a law whose right \
                      side its own left side matches (commutativity) rewrites for ever; the \
                      route's end shows which laws repeat{}",
-                    self.report(cx, &rules, &run, None)
+                    self.report(cx, rules, &run, None)
                 ),
                 span,
             });
@@ -210,7 +247,7 @@ impl Simps<'_> {
                     "`simp_show`: the goal simplifies to\n    {}{}\n  note: `simp_show` never \
                      closes a goal; write `simp_only` once the result is what you expect",
                     self.display_type(cx, &run.end),
-                    self.report(cx, &rules, &run, None)
+                    self.report(cx, rules, &run, None)
                 ),
                 span,
             });
@@ -219,7 +256,7 @@ impl Simps<'_> {
             self.elab_check(cx, e, &run.end, lvl)?
         } else if let Some(h) = using {
             let (fact, fact_ty, fact_lvl) = self.elab_infer(cx, h)?;
-            let mut fact_run = self.normalise(&relations, cx, &rules, &fact_ty, &fact_lvl, discharge, None)?;
+            let mut fact_run = self.normalise(&relations, cx, rules, &fact_ty, &fact_lvl, discharge, None)?;
             if fact_run.exhausted || fact_run.cycle.is_some() || !self.conv_types(cx, &fact_run.end, &run.end, lvl) {
                 return Err(ElabError::Elab {
                     msg: format!(
@@ -227,8 +264,8 @@ impl Simps<'_> {
                          to the same statement\n  the goal:\n    {}\n  the fact:\n    {}{}{}",
                         self.display_type(cx, &run.end),
                         self.display_type(cx, &fact_run.end),
-                        self.report(cx, &rules, &run, Some("the goal's")),
-                        self.report(cx, &rules, &fact_run, Some("the fact's")),
+                        self.report(cx, rules, &run, Some("the goal's")),
+                        self.report(cx, rules, &fact_run, Some("the fact's")),
                     ),
                     span: h.span,
                 });
@@ -237,7 +274,7 @@ impl Simps<'_> {
         } else {
             match self.close(&relations, cx, &run.end, lvl, span)? {
                 Some(closed) => closed,
-                None => return Err(self.open(cx, &rules, &run, span)),
+                None => return Err(self.open(cx, rules, &run, span)),
             }
         };
         self.assemble(&mut run, Polarity::Backward, inner, lvl)

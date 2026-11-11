@@ -104,9 +104,13 @@ property of Heather.
   `rewrite`s: both sides are normalised by the listed laws, along `=` and
   along a designated `≈`, and the goal closes where they meet. The list is
   the whole set, so the proof does not move when a lemma is added elsewhere.
-  Induction hypotheses go in the list (`a.simp_same()`); a call at a
+  Induction hypotheses go in the list (`a.simplify_same()`); a call at a
   constructor computes first, so a definition's own equations are not
-  listed. `then := e` proves what is left, `using := h` closes from a fact
+  listed. At a goal about a common carrier, `by simp()` brings the default
+  sets of the types in it (`List::shape`, `Nat::arith`, `Regex::same`:
+  `lib/std/tactic/simp_laws.hthr`), with `extra := [h]` for the call's own
+  laws; a new carrier registers a `SimpSet` beside its lemmas. In `lib/`
+  prefer the pinned list. `then := e` proves what is left, `using := h` closes from a fact
   with the same normal form, `discharge := e` proves side conditions the
   scope does not hold. Write `simp_show(…)` to read the normal form and the
   route, then replace it: it never closes a goal. A refusal lists each step

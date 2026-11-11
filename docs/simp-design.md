@@ -382,7 +382,7 @@ are taken together.)
    round-1 and round-2 proofs name sets instead of lists.
 4. **Relations and hypotheses.** Sets along `≈` and `↔`, `locals`,
    `simp_at`. Done when `regex_dfa.hthr`'s `deriv_simp_same` and
-   `simp_same` are `by simp(Regex::laws)`.
+   `simplify_same` are `by simp(Regex::laws)`.
 5. **Procedures and wrappers.** `SimpProc`, AC sorting, literal
    arithmetic, `store_simp`, a `sets`-backed and a substitution-calculus
    instance as the mathematics milestones need them.
@@ -425,7 +425,7 @@ Round 1, with relations (2026-11-11). `simp_only(r₁, …, rₙ)` and
   hypothesis. The first law in the list with an instance fires, at every
   occurrence of that instance; then the list is tried again from its start.
 - **Computation.** Before each match, a call at a constructor computes
-  (`xs.len()` at `Cons`, `r.simp()` at `Seq(a, b)`), a structural recursion
+  (`xs.len()` at `Cons`, `r.simplify()` at `Seq(a, b)`), a structural recursion
   with its recursive calls kept as calls. A definition's own equations are
   not laws to list.
 - **Closing.** With no named argument the call closes the goal: both sides
@@ -445,11 +445,48 @@ Round 1, with relations (2026-11-11). `simp_only(r₁, …, rₙ)` and
   at its first repeat (the goal after step *n* is the goal after step *k*),
   and the 256-step budget only behind that.
 
-Not built: named sets and per-type defaults (§3), registration checks (§4),
-the `by simp(…)` policy layer in Heather (§7), unfolding by name, the
-`--json` report. Known gaps: a law between statements, `P ↔ Q`
-(`issues/simp-iff-laws.md`); an equation's instance under a binder
+Sets and defaults: §11.
+
+## 11. Sets and per-type defaults, as built
+
+Round 3's sets, without the checks (2026-11-11).
+
+- **A set** is `register def …: SimpSet = simp_default(name, name_of(T),
+  [name_of(l₁), …]);` (a type's default) or `simp_set(name, […])` (named at
+  a call), in `lib/std/tactic/simp_laws.hthr`'s record: a report name, the
+  types it is the default of, the laws. It is written beside the lemmas,
+  so each name is checked where it is in scope. `Nat::arith` and
+  `List::shape` are in `simp_laws` itself (their modules sit below
+  `string`); `Regex::same` is in `regex_dfa`.
+- **`by simp()`** (`lib/std/tactic/simp.hthr`) walks the goal's views,
+  infers each subterm's type, and takes every registered set that is the
+  default of a type met (§3.1): by the global a `name_of` key denotes
+  where the call is, or by name for a builtin. `extra := [h, …]` adds the
+  call's own laws, tried first; `defaults := False` leaves the type
+  defaults out; `by simp_with([S, …])` names sets (a defaulted parameter
+  has no positional slot, so the form that takes sets by position is its
+  own name).
+- **The run** is the host's, asked for with `Simp(laws, goal)`
+  (`docs/host-elaboration-interface-design.md` §27): the chosen sets'
+  lemmas resolved to terms, then the same driver as `simp_only`.
+- **The report** is the driver's, followed by one line per set used and
+  the type that brought it (``tried the set `Nat::arith`: the default of
+  `Nat`, which the goal has a value of``), or the statement that no type in
+  the goal has a default.
+
+Differences from §3 as proposed: sets are composed as a list at the call,
+not with `+`; `only := […]` is `simp_only`, the term form; a set has no
+order or procedures yet, because nothing checks or runs them.
+
+A free function named `simp` makes `e.simp()` ambiguous wherever both are
+in scope (the member-or-name rule), so `Regex::simp` became
+`Regex::simplify`.
+
+Not built: the registration checks of §4 (orientation, overlaps), the
+`--json` report, unfolding by name. Known gaps: a law between statements,
+`P ↔ Q` (`issues/simp-iff-laws.md`); an equation's instance under a binder
 (`issues/simp-under-binders.md`); a goal a named case split left unfolded
 past its relation, which is restated in a one-step `calc`
 (`issues/case-split-unfolds-the-goals-relation.md`). Each step is one walk
-of the goal (`issues/rewrite-every-instance.md`).
+of the goal (`issues/rewrite-every-instance.md`), and a default set is
+tried law by law at each step, so a set's size is a cost at every call.

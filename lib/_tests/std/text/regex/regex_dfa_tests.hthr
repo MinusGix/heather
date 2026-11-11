@@ -53,7 +53,7 @@ theorem alt_zero_l(r: Regex): Regex::alt(NoMatch, r) = r { refl }
 theorem seq_zero_l(r: Regex): Regex::seq(NoMatch, r) = NoMatch { refl }
 theorem seq_unit_r(): Regex::seq(Range(1, 2), Eps) = Range(1, 2) { refl }
 theorem seq_kept(): Regex::seq(Range(1, 2), Range(3, 4)) = Seq(Range(1, 2), Range(3, 4)) { refl }
-theorem simp_example(): Alt(Seq(Eps, Range(1, 2)), Seq(Range(3, 4), NoMatch)).simp() = Range(1, 2) { refl }
+theorem simp_example(): Alt(Seq(Eps, Range(1, 2)), Seq(Range(3, 4), NoMatch)).simplify() = Range(1, 2) { refl }
 
 // The automata run, and agree with the matcher at every word.
 theorem runs(): ab_star().automaton_simp().run([97, 98, 97]) = True { refl }
@@ -65,7 +65,7 @@ theorem agree(r: Regex, w: List<Nat>): r.automaton_simp().run(w) = r.automaton()
 // A run's verdict is membership in the language, and a simplified
 // expression has the language it came from.
 theorem run_member(): ab_star().Denotes([97, 98, 97]) { (ab_star().automaton_simp_accepts([97, 98, 97])).mp(refl) }
-theorem simp_member(r: Regex, w: List<Nat>, d: r.Denotes(w)): r.simp().Denotes(w) { (r.simp_same()(w)).mpr(d) }
+theorem simp_member(r: Regex, w: List<Nat>, d: r.Denotes(w)): r.simplify().Denotes(w) { (r.simplify_same()(w)).mpr(d) }
 
 // The intersection of two expressions' languages, by the product.
 theorem both_languages(r, q: Regex, w: List<Nat>, h: r.automaton().both(q.automaton()).run(w) = True): (r.matches(w) && q.matches(w)) = True {
@@ -81,11 +81,11 @@ theorem under_right(a, b, b2: Regex, h: b ≈ b2): Seq(a, b) ≈ Seq(a, b2) { re
 theorem under_nested(a, a2, b, c: Regex, h: a ≈ a2): Alt(Seq(Star(a), b), c) ≈ Alt(Seq(Star(a2), b), c) { rel_cong(h) }
 theorem under_both(a, a2: Regex, h: a ≈ a2): Seq(a, Star(a)) ≈ Seq(a2, Star(a2)) { rel_cong(h) }
 theorem under_call(a, b, c: Regex): Alt(Regex::seq(a, b), c) ≈ Alt(Seq(a, b), c) { rel_cong(Regex::seq_same(a, b)) }
-theorem simp_twice(r, q: Regex): Alt(r.simp(), q.simp()) ≈ Alt(r, q) {
+theorem simp_twice(r, q: Regex): Alt(r.simplify(), q.simplify()) ≈ Alt(r, q) {
     calc {
-        Alt(r.simp(), q.simp())
-            ≈ Alt(r, q.simp()) := rel_cong(r.simp_same()),
-            ≈ Alt(r, q) := rel_cong(q.simp_same()),
+        Alt(r.simplify(), q.simplify())
+            ≈ Alt(r, q.simplify()) := rel_cong(r.simplify_same()),
+            ≈ Alt(r, q) := rel_cong(q.simplify_same()),
     }
 }
 

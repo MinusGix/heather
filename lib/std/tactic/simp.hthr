@@ -1,0 +1,175 @@
+// `by simp()`: a goal closed by normalising both of its sides with sets of
+// laws (docs/simp-design.md, issues/simp-tactic.md).
+//
+// The walk and the proof are the host's (`Simp`, the request `simp_only`
+// is also built on); which laws a goal gets is decided here:
+//
+// - the defaults of every type a value in the goal has (`List::shape` for
+//   a goal with a list in it, `Nat::arith` for one with a number), from
+//   the sets registered where the call is (`registered(SimpSet)`);
+// - the sets the call names, `by simp_with([my_set])`;
+// - the call's own laws, `by simp(extra := [h, Nat::add_comm(a, b)])`,
+//   tried before any set's.
+//
+// `defaults := False` leaves the type defaults out, so the call's sets and
+// laws are the whole list. A refusal is the host's report (the route, the
+// laws blocked) followed by the sets that were used and why each was.
+//
+// A carrier gets `simp` by registering a set beside its lemmas
+// (lib/std/tactic/simp_laws.hthr), not by editing this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import char;
+import string;
+import tactic;
+import simp_laws;
+
+fn simp_same_name(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
+
+// A type met in the goal: its global and the name the views print.
+record SimpType { id: Nat, name: String }
+
+fn simp_has(ts: List<SimpType>, t: SimpType) → Bool {
+    match ts { Nil => False, Cons(u, rest) => match u.id.same(t.id) && simp_same_name(u.name, t.name) { True => True, False => simp_has(rest, t) } }
+}
+
+fn simp_add(ts: List<SimpType>, t: Option<SimpType>) → List<SimpType> {
+    match t { None => ts, Some(u) => match simp_has(ts, u) { True => ts, False => Cons(u, ts) } }
+}
+
+// The head of a term's type, when it is a named type: `List` for a value
+// of `List<A>`. A handle that stands for a type has none.
+fn simp_type_of(h: Handle) → Tac<Option<SimpType>> {
+    match <- infer(Hd(h)) {
+        Refused(_) => pure(None),
+        Accepted(t) => match <- view(t) { HGlobal(g, name, _) => pure(Some(SimpType(g.id, name))), _ => pure(None) },
+    }
+}
+
+fn simp_children(v: Head) → List<Handle> {
+    match v {
+        HEq(l, r) => [l, r],
+        HGlobal(_, _, args) => args,
+        HLocal(_, args) => args,
+        HField(of, _, args) => Cons(of, args),
+        HCtor(_, _, _, fields) => fields,
+        _ => [],
+    }
+}
+
+// The types of the values in a goal: every subterm the views reach, at most
+// `fuel` of them.
+fn simp_types(fuel: Nat, todo: List<Handle>, seen: List<SimpType>) → Tac<List<SimpType>> {
+    match fuel {
+        Zero => pure(seen),
+        Succ(f) => match todo {
+            Nil => pure(seen),
+            Cons(h, rest) => {
+                let ty <- simp_type_of(h);
+                let v <- view(h);
+                simp_types(f, simp_children(v) ++ rest, simp_add(seen, ty))
+            },
+        },
+    }
+}
+
+// Is the type a set names (a `name_of` key, or a builtin's own name) one of
+// those met? By the global the key denotes where the call is, and by name
+// for a builtin, which has no key.
+fn simp_met(key: String, g: Option<GlobalRef>, types: List<SimpType>) → Option<String> {
+    match types {
+        Nil => None,
+        Cons(t, rest) => match (match g { Some(r) => r.id.same(t.id), None => False }) || simp_same_name(key, t.name) {
+            True => Some(t.name),
+            False => simp_met(key, g, rest),
+        },
+    }
+}
+
+// The type among `types` a set is the default of.
+fn simp_default_at(keys: List<String>, types: List<SimpType>) → Tac<Option<String>> {
+    match keys {
+        Nil => pure(None),
+        Cons(key, rest) => {
+            let g <- lookup(key);
+            match simp_met(key, match g { Accepted(r) => Some(r), Refused(_) => None }, types) {
+                Some(name) => pure(Some(name)),
+                None => simp_default_at(rest, types),
+            }
+        },
+    }
+}
+
+// A set chosen for a goal, and why.
+record SimpChoice { set: SimpSet, why: String }
+
+fn simp_pick(entries: List<SimpSet>, types: List<SimpType>) → Tac<List<SimpChoice>> {
+    match entries {
+        Nil => pure([]),
+        Cons(S, rest) => {
+            let at <- simp_default_at(S.default_for, types);
+            let more <- simp_pick(rest, types);
+            match at {
+                Some(t) => pure(Cons(SimpChoice(S, String("the default of `".chars ++ t.chars ++ "`, which the goal has a value of".chars)), more)),
+                None => pure(more),
+            }
+        },
+    }
+}
+
+fn simp_named(sets: List<SimpSet>) → List<SimpChoice> {
+    match sets { Nil => [], Cons(S, rest) => Cons(SimpChoice(S, "named by the call"), simp_named(rest)) }
+}
+
+fn simp_resolve(set: String, laws: List<String>) → Tac<List<Expr>> {
+    match laws {
+        Nil => pure([]),
+        Cons(l, rest) => match <- resolve(l) {
+            Accepted(h) => {
+                let more <- simp_resolve(set, rest);
+                pure(Cons(Hd(h), more))
+            },
+            Refused(why) => fail(String("simp: the set `".chars ++ set.chars ++ "` names `".chars ++ l.chars ++ "`, which does not resolve here: ".chars ++ why.chars), []),
+        },
+    }
+}
+
+fn simp_laws_of(chosen: List<SimpChoice>) → Tac<List<Expr>> {
+    match chosen {
+        Nil => pure([]),
+        Cons(c, rest) => {
+            let here <- simp_resolve(c.set.name, c.set.laws);
+            let more <- simp_laws_of(rest);
+            pure(here ++ more)
+        },
+    }
+}
+
+fn simp_notes(chosen: List<SimpChoice>) → List<Note> {
+    match chosen { Nil => [], Cons(c, rest) => Cons(Tried(String("the set `".chars ++ c.set.name.chars ++ "`".chars), c.why), simp_notes(rest)) }
+}
+
+// `simp_with(sets, extra := laws, defaults := b)`: close the goal by the
+// sets named, its types' default sets and the laws given. The sets a call
+// names come first by position; `simp` is the call that names none.
+fn simp_with(sets: List<SimpSet>, extra: List<Expr> := [], defaults: Bool := True, entries: List<SimpSet> := registered(SimpSet)) → Tac<Expr> {
+    let g <- goal();
+    let types <- simp_types(256, [g.target], []);
+    let picked <- match defaults { True => simp_pick(entries, types), False => pure([]) };
+    let chosen = simp_named(sets) ++ picked;
+    let laws <- simp_laws_of(chosen);
+    match <- simp_by(extra ++ laws, g.target) {
+        Accepted(p) => pure(Hd(p)),
+        Refused(why) => fail(why, match chosen { Nil => [Tried("sets", "none: no type in the goal has a default set here, and the call names none")], Cons(_, _) => simp_notes(chosen) }),
+    }
+}
+
+// `simp()`: close the goal by the default sets of the types in it;
+// `extra := [h, …]` adds laws of the call's own.
+fn simp(extra: List<Expr> := [], defaults: Bool := True, entries: List<SimpSet> := registered(SimpSet)) → Tac<Expr> {
+    simp_with([], extra := extra, defaults := defaults, entries := entries)
+}
