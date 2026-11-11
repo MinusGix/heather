@@ -27,6 +27,17 @@
     image format, the caches or the loader (`crates/cache`,
     `crates/cli/src/semantic.rs`). Why: `docs/testing-architecture-design.md`.
     Docs-only or issue-only changes need no suite at all.
+  - **A change to what the elaborator infers re-elaborates the whole
+    library before it merges** (Minus, 2026-11-11): motive synthesis, the
+    unifier, instance choice, defaults, any tactic or rewrite the library
+    already calls. The fast and PR lanes replay unchanged library modules
+    after a compiler edit, so they cannot see a proof the change moved
+    (PR #566 merged three broken proofs that way). Run plain `scripts/test`
+    (the exact image policy), or the sweep: every `lib/**/*.hthr` through
+    `heather check --cache --expectations` with the new release binary and
+    no `--accept-stale-images`, capped per file, three at a time. Group
+    failures by the location of their first error: most are importers of
+    one broken module.
   - **`HEATHER_CACHE_DIR`** moves every suite and gate store (the semantic,
     native and CLI image stores, `decl-cache`, and `heather check --cache`'s
     default) out of `target/`, so worktrees of this repo can share them
