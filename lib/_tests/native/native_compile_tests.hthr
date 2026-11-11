@@ -328,6 +328,41 @@ theorem spreading_fits(): spread().fits(spreading().layout(low(), spreading().ho
 theorem spreading_homed(): spreading().refusal(low(), spreading().homes()) = [] { refl }
 theorem spreading_exits(): ITree::next(Events::linux(), spreading().tree([], 4)) = Exits(BitVec::ofNat(59)) { refl }
 
+// Two procedures calling each other (docs/native-procedures-are-functions-design.md
+// §2.5): `a(n) = b(n - 1) + n` and `b(n) = 2 * a(n - 1) + n`, both 0 at 0,
+// written over the same words. Each keeps its parameter across its call of
+// the other, in its own frame, and each is called through the one contract
+// with the other's as its assumption. a(5) = 23 nests six calls; with either
+// calling itself, or with a parameter lost to the callee, the status is
+// another number. Words as in `sum_body`.
+fn alternate_body(other: Nat, twice: Bool) → Stmt {
+    Then(ops([Const(64, 4, 0), Equal(64, 3, 1, 4)]),
+        Branch(3,
+            ops([Const(64, 2, 0)]),
+            Then(ops([Const(64, 4, 1), Sub(64, 5, 1, 4)]),
+                Then(Perform(other, [5], [6]), match twice {
+                    True => ops([Add(64, 2, 6, 6), Add(64, 2, 2, 1)]),
+                    False => ops([Add(64, 2, 6, 1)]),
+                }))))
+}
+fn alternating_to(n, depth: Nat) → Source {
+    Source(functions := [], buffers := [], words := 10,
+        main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))),
+        procedures := [
+            Procedure(params := [1], results := [2], body := alternate_body(1, False)),
+            Procedure(params := [1], results := [2], body := alternate_body(0, True)),
+        ], depth := depth)
+}
+fn alternating() → Source { alternating_to(5, 6) }
+fn alternating_shallow() → Source { alternating_to(5, 5) }
+theorem alternating_compiles(): refused(alternating()) = [] { refl }
+theorem alternating_allocated(): alternating().allocation_ok(alternating().homes()) = True { refl }
+theorem alternating_homed(): alternating().refusal(low(), alternating().homes()) = [] { refl }
+theorem alternating_two_bodies(): compiled_or_start(alternating()).named(1) + compiled_or_start(alternating()).named(2) = 2 { refl }
+theorem alternating_calls(): compiled_or_start(alternating()).calls_of(1) + compiled_or_start(alternating()).calls_of(2) = 3 { refl }
+theorem alternating_exits(): ITree::next(Events::linux(), alternating().tree([], 4)) = Exits(BitVec::ofNat(23)) { refl }
+theorem alternating_shallow_exits(): ITree::next(Events::linux(), alternating_shallow().tree([], 4)) = Exits(call_depth_status()) { refl }
+
 // A call of no procedure, and one with an argument too many, are refused
 // at the call; a procedure whose body reads a word not its parameter, at
 // the program.

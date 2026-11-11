@@ -17,6 +17,13 @@
 // way out it counts the depth back (`Target::goes_count_up`), closes the
 // frame, pops the registers (`Target::goes_restores`) and returns to the
 // caller's frame, whose words nothing wrote (`Target::bare_caller`).
+//
+// A callee is stated once (`Target::Callable`): entered as the one call
+// sequence enters it, it runs as a tree of its own answers, each read as
+// where it leaves the machine (`Answer`, `Target::Ends`). A function meets
+// the contract by its proved return (native_compile_function) and a
+// procedure by its body (native_compile_correct), and one call site calls
+// either (`Target::goes_calls`, native_compile_function).
 import native_source;
 import native_compile;
 import native_compile_facts;
@@ -27,6 +34,8 @@ import native_compile_steps;
 import native_compile_frames;
 import native_compile_structured;
 import function_ir_eval;
+import function_ir;
+import function_ir_lend;
 import native_alloc;
 import linux_calls;
 import linux_trees;
@@ -106,24 +115,6 @@ theorem Target::read_at(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.p
     let ends: (low + (q + 8) <= Nat::pow(2, 47)) = Nat::le_trans(low + (q + 8), low + t.r.size, Nat::pow(2, 47),
         low.add_le_mono_l(q + 8, t.r.size, fits), t.r.canonical);
     ⟨j(sym(value), λ x _ => x + 8 <= Nat::pow(2, 47), j(sym(low.add_assoc(q, 8)), λ x _ => x <= Nat::pow(2, 47), ends)), read⟩
-}
-
-// ---------------------------------------------------------------------------
-// The stack's words
-
-// So a word stored below the frame keeps the claim.
-theorem Target::held_stack_store(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    i: Nat, below: i + 8 <= t.index, word: BitVec(64)): t.Held(live, env, g, t.r.profile.store(m, t.stack.at(i), word_bytes(word))) {
-    let pp = held.proof.left.proof;
-    let v = held.proof.left.witness;
-    let fits: (i + 8 <= t.stack.size) = omega(below, t.framed);
-    let m2 = t.r.profile.store(m, t.stack.at(i), word_bytes(word));
-    let slots: t.Slots(v, m2) = λ k inside => trans(t.stack_store_apart(m, i, t.index + 8 * k, fits, t.slot_inside(k, inside), Inl(omega(below)), word),
-        pp.right.right.right.right.right.left(k, inside));
-    Exists(held.witness, ⟨Exists(v, ⟨t.stack_store_holds(v, m, pp.left, i, fits, word), ⟨pp.right.left,
-        ⟨pp.right.right.left, ⟨t.argv_stack_store(m, i, fits, word, word_in(v, t.layout().stack_offset()), pp.right.right.right.left),
-        ⟨pp.right.right.right.right.left, ⟨slots,
-         t.frames_stack_store(m, i, fits, word, t.frames, t.index + 8 * t.words, omega(below), pp.right.right.right.right.right.right)⟩⟩⟩⟩⟩⟩), held.proof.right⟩)
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,6 +1494,108 @@ theorem Target::goes_callee_return(self t: Target, after: Env, b: Prog, results:
             ((g2: Gprs) → t.Held(results, after, g2, s.memory) → after.InRegisters(g2, results, regs) → g2.KeepsOutside(s.gprs, regs) → q(g2, s.memory)),
         λ (s: MachineState<X86Memory(t.r.profile)>) => t.Held(results, after, s.gprs, s.memory), words,
         λ s held => ⟨held, λ g2 held2 passed _ => ⟨held2, passed⟩⟩)
+}
+
+// ---------------------------------------------------------------------------
+// The contract of a callee
+
+// The homes a call passes a callee lent `count` buffers: each where the
+// layout puts it, as long as its capacity.
+fn Target::passed_homes(self t: Target, count: Nat) → List<BitVec(64)> {
+    placed_homes(λ (b: Nat) => t.layout().buffer_at(b), λ (b: Nat) => t.layout().capacity(b), 0, count)
+}
+
+// What a callee's answer is to the machine: it returned, `results` in the
+// result registers and the file's buffers `buffers`, or the process exited
+// with `status`.
+inductive Answer { Returned(results: List<BitVec(64)>, buffers: Buffers()), Gone(status: BitVec(64)) }
+
+// Where an answer leaves the machine, as what the caller's tree from there
+// needs. Returned: at the return address with the code resident, the region
+// holding the buffers under the caller's room, the stack's words from the
+// caller's frame up (`above`), every register a callee keeps as it was in
+// `g0`, and the results in their registers. Gone: at the exit.
+fn Target::Ends(self t: Target, answer: Answer, env: Env, g0: Gprs, ret: BitVec(64), above: List<BitVec(64)>,
+    tree: ITree<BitVec(64)>(Events::linux())) → Type {
+    match answer {
+        Returned(results, buffers) => (u: MachineState<X86Memory(t.r.profile)>) → u.rip = ret → t.site().Resident(u.memory) →
+            t.Bare(Env(env.words, buffers, env.args), t.room, t.index, above, u.gprs, u.memory) →
+            ((x: Gpr) → Mem(x, t.homes.kept()) → read_gpr(x, u.gprs) = read_gpr(x, g0)) →
+            u.gprs.Holding(result_registers(), results) → SimPaid(t.io(), tree, u),
+        Gone(status) => (u: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), u) → LinuxExits(u, status) → SimPaid(t.io(), tree, u),
+    }
+}
+
+// The one contract of a callee (docs/native-procedures-are-functions-design.md
+// §2.4). Label `label` is a callee's: entered as the one call sequence
+// enters it (`Prog::calls`), the homes of the `lent` buffers it is lent and
+// then words it accepts in the call registers, the return address on the
+// stack below the caller's frame, it runs as its tree. The tree's answers
+// are the callee's own (`A`), each read as what the machine holds at its end
+// (`answer`): whatever tree the caller goes on with from an answer, the
+// code runs as the callee's tree and then that one, given only that each
+// end leaves the machine where its tree needs it (`Target::Ends`).
+//
+// `t` is the caller's activation: the region's count is its room when the
+// callee is entered and when it returns, and nothing at or above its frame
+// is stored to.
+fn Target::Callable<A>(self t: Target, label, lent: Nat, accepts: List<BitVec(64)> → Env → Type,
+    tree: List<BitVec(64)> → Env → ITree<A>(Events::linux()), answer: List<BitVec(64)> → Env → A → Answer) → Type {
+    (env: Env) → (words: List<BitVec(64)>) → accepts(words, env) → (g0: Gprs) → g0.Holding(call_registers(), t.passed_homes(lent) ++ words) →
+    (ret: BitVec(64)) → (above: List<BitVec(64)>) → t.index + 8 * above.len() <= t.stack.size →
+    (k: A → ITree<BitVec(64)>(Events::linux())) → ((x: A) → t.Ends(answer(words, env, x), env, g0, ret, above, k(x))) →
+    t.Goes(asm_labels(t.program, label), ITree::bind(Events::linux(), tree(words, env), k), λ (s: MachineState<X86Memory(t.r.profile)>) =>
+        t.Bare(env, t.room, t.index - 8, Cons(ret, above), s.gprs, s.memory) ∧ (s.gprs = g0))
+}
+
+// What a call site needs past its call for an answer: returned, the code
+// after the call from the claim between statements over the buffers the
+// callee left, the results in their registers; gone, the exit.
+fn Target::Taken(self t: Target, live: List<Nat>, env: Env, at: Nat, answer: Answer, tree: ITree<BitVec(64)>(Events::linux())) → Type {
+    match answer {
+        Returned(results, buffers) => t.GoesR(at, tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
+            t.Held(live, Env(env.words, buffers, env.args), g, m) ∧ g.Holding(result_registers(), results)),
+        Gone(status) => (u: MachineState<X86Memory(t.r.profile)>) → LinuxSyscallAt(t.io(), u) → LinuxExits(u, status) → SimPaid(t.io(), tree, u),
+    }
+}
+
+// An answer taken up at its call site: what the callee's end gives is what
+// the code after the CALL needs. Returned, the caller's frame is above the
+// callee's and nothing stored there, so its words are what they were
+// (`Target::bare_caller`), and so are the registers they live in: the
+// callee kept those it keeps, and R10 comes back from RBX
+// (`Homes::returned`). `s` is the machine as the CALL found it.
+theorem Target::ends_taken(self t: Target, live: List<Nat>, env: Env, called: Prog, s: MachineState<X86Memory(t.r.profile)>,
+    held: t.Held(live, env, s.gprs, s.memory), carried: read_gpr(Rbx, s.gprs) = read_gpr(R10, s.gprs),
+    within: then(called, Block([MovRR(R10, Rbx)])).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()), answer: Answer):
+    t.Taken(live, env, prog_len(then(called, Block([MovRR(R10, Rbx)]))), answer, tree) →
+    t.Ends(answer, env, write_gpr(Rsp, push_address(s.gprs), s.gprs), next_rip(t.origin, prog_len(called)),
+        t.layout().cells_from(held.proof.left.witness, 0, t.words) ++ t.frames, tree) {
+    let rets = result_registers();
+    let rest = t.layout().cells_from(held.proof.left.witness, 0, t.words) ++ t.frames;
+    match answer {
+        Returned(results, buffers) => λ taken u rip resident bare kept holding => {
+            let other = Env(env.words, buffers, env.args);
+            let back = read_gpr(Rbx, u.gprs);
+            let g2 = write_gpr(R10, back, u.gprs);
+            let bare_g: t.Bare(other, t.room, t.index, rest, g2, u.memory) = ⟨bare.left, ⟨bare.right.left,
+                trans(read_gpr_other(R10, Rsp, back, u.gprs, refl), bare.right.right)⟩⟩;
+            let held_t = t.bare_caller(live, env, s.gprs, s.memory, held, other, g2, u.memory, bare_g,
+                t.homes.returned(s.gprs, u.gprs, push_address(s.gprs), kept, carried));
+            let restored = t.goes_block(called, 0, [MovRR(R10, Rbx)], within, tree,
+                λ (v: MachineState<X86Memory(t.r.profile)>) => t.Held(live, other, v.gprs, v.memory) ∧ v.gprs.Holding(rets, results), taken);
+            restored(u, rip, resident, ⟨held_t, u.gprs.holding_write(R10, back, results, rets, trivial, holding)⟩)
+        },
+        Gone(status) => λ taken => taken,
+    }
+}
+
+// The region's claim under another environment's words: it reads the
+// buffers and the command line only.
+theorem Target::bare_file(self t: Target, env, other: Env, room, i: Nat, above: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile),
+    bare: t.Bare(other, room, i, above, g, m), args: env.args = t.args): t.Bare(Env(env.words, other.buffers, env.args), room, i, above, g, m) {
+    let based = bare.left.proof;
+    ⟨Exists(bare.left.witness, ⟨based.left, ⟨based.right.left, ⟨args, based.right.right.right⟩⟩⟩), bare.right⟩
 }
 
 // ---------------------------------------------------------------------------
