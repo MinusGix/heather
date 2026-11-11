@@ -5,7 +5,7 @@ labels: [tactics,proofs,ergonomics]
 area: tactics
 milestone: [tac-general]
 created: 2026-11-08
-updated: 2026-11-10
+updated: 2026-11-11
 ---
 
 Heather has no simplifier. The tactics that touch equations are:
@@ -79,3 +79,4 @@ the call.
 ## Log
 
 - 2026-11-10: Minus, after the foundational-mathematics ranking (`docs/roadmap.md` log, 2026-11-10): `simp` "would be great", and it should be tunable and wrappable. Software is cheap now, so a variant written to be more powerful for one case is acceptable, as is a domain tactic that wraps `simp` with its own lemma set and side-condition discharger. Design consequence: the simplifier's loop takes its lemma set, its discharger and its pre/post procedures as arguments, so `set`-, substitution- (sigma calculus, [[generic-binding-syntax]]), `ZMod`- and Kleene-algebra-specific simplifiers are instances, not forks. The five new mathematics milestones are each mostly directed equation sets and raise this issue's priority.
+- 2026-11-11: Design proposal written after Minus asked for the design in depth, with departures from the usual simplifier where they pay for AI authors (`docs/simp-design.md`, nothing built). Proposed: a non-closing call states its result and `simp` proves the two ends join (closing and stated calls are one operation; a bare residue is exploration only and prints the statement to paste); no global default set, sets are named registered values owned by a type; a set is checked at registration as a rewrite system (orientation refused, unjoined overlaps reported with the lemma that would join them); relations from the first round with sets; failure reports name the next action (blocked premises, near misses, the gap as a lemma); the walk and proof in the host over `rewrite`'s relation walk, policy in Heather. Five decisions are Minus's (§0). Rounds in §8; round 1 closes [[rewrite-every-instance]].
