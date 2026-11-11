@@ -4,7 +4,7 @@ status: open
 labels: [compiler,abi,design]
 area: heather-in-heather
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-11-11
 milestone: [nh-library]
 ---
 
@@ -43,3 +43,6 @@ not solve imports.
 - [[x86-calls-stack-frames]] owns concrete calling and frame semantics.
 - [[x86-symbolic-fragment-layout]] owns symbolic references and relocations.
 - [[x86-native-export]] owns the existing bootstrap callable export.
+- [[foreign-binary-contracts]] (speculative, 2026-11-11) would discharge an
+  import's assumed contract against the callee's machine code; its round F0 is
+  the assumed import with axiom provenance that this issue's imports need.
