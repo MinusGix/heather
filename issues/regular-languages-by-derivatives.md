@@ -11,7 +11,7 @@ updated: 2026-11-11
 Area 5 of the 2026-11-10 ranking. The mathematics under
 [[regex-dfa-compiler]], which stays the compiler client.
 
-`lib/std/text/regex.hthr` parses regex syntax. `lib/lang/lexer` holds one
+`lib/std/text/regex/regex.hthr` parses regex syntax. `lib/lang/lexer` holds one
 automaton written by hand. Nothing states what language a regex denotes.
 
 ## Scope
@@ -42,7 +42,7 @@ cites the derivative automaton's language theorem for its soundness.
 ## Log
 
 - 2026-11-11: First round, the denotation and the matcher.
-  `lib/std/text/regex_language.hthr`, over `regex.hthr`'s `Regex` (codes
+  `lib/std/text/regex/regex_language.hthr`, over `regex.hthr`'s `Regex` (codes
   as `Nat`): `Regex::Denotes(r, w)` by recursion on `r`, with the star as
   a word cut into pieces (`Regex::Starred`, `Regex::Each`);
   `nullable_sound` and `nullable_complete`; `deriv_sound` and
@@ -54,7 +54,7 @@ cites the derivative automaton's language theorem for its soundness.
   Boolean is membership (`accepts_iff`), and `deriv_word_denotes` restates
   the derivative at a word. `list.hthr` gains `append_nil_parts`; the pieces are joined by
   `algebra.hthr`'s `concat`. Probes in
-  `lib/_tests/std/text/regex_language_tests.hthr`.
+  `lib/_tests/std/text/regex/regex_language_tests.hthr`.
 
   Kept `Regex` at `Nat` codes instead of a `Regex<A>`: the generator, the
   parser and `regex def` are written against it, and ranges need an
@@ -69,7 +69,7 @@ cites the derivative automaton's language theorem for its soundness.
   tokenisation as a specification.
 
 - 2026-11-11: Second round, automata and the automaton of derivatives.
-  `lib/std/text/regex_dfa.hthr`: `Dfa<S>` (start, step, accepting test,
+  `lib/std/text/regex/regex_dfa.hthr`: `Dfa<S>` (start, step, accepting test,
   over any state type), `run_from` and `run`; `Dfa::residual` is the one
   theorem about what an automaton accepts (label every state with a
   language the accepting test and the step respect, and a run from a
@@ -84,7 +84,7 @@ cites the derivative automaton's language theorem for its soundness.
   (`automaton_simp`), the derivative built with `Regex::alt` and
   `Regex::seq`, which apply the units and zeros; `Regex::simp` rebuilds an
   expression with them (`simp_same`). Probes in
-  `lib/_tests/std/text/regex_dfa_tests.hthr` (`(a|b)*` stays on one state
+  `lib/_tests/std/text/regex/regex_dfa_tests.hthr` (`(a|b)*` stays on one state
   under `deriv_simp`).
 
   The smart constructors take their Boolean tests as parameters

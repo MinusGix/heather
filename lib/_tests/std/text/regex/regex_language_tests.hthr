@@ -1,4 +1,4 @@
-// Probes of `lib/std/text/regex_language.hthr`
+// Probes of `lib/std/text/regex/regex_language.hthr`
 // (issues/regular-languages-by-derivatives.md): membership in a regular
 // expression's language at closed words by `decide`, a `regex def`'s Boolean
 // read as membership, and laws of the language at open expressions, carried

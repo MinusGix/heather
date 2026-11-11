@@ -1,4 +1,4 @@
-// Probes of `lib/std/text/regex_dfa.hthr`
+// Probes of `lib/std/text/regex/regex_dfa.hthr`
 // (issues/regular-languages-by-derivatives.md): automata run at closed
 // words, complement and products at open automata, the simplifying
 // derivative keeping a state where the plain one grows, and the automaton's

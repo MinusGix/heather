@@ -302,7 +302,7 @@ regex def is_hex = "[0-9a-f]+";
 
 The frontend half exists (2026-11-01, `docs/value-definitions-design.md` §4):
 `def`, prefix generators that rewrite the `def` they prefix, and
-`lib/std/text/regex.hthr`, whose `regex def is_hex = "[0-9a-f]+";` publishes
+`lib/std/text/regex/regex.hthr`, whose `regex def is_hex = "[0-9a-f]+";` publishes
 `is_hex` as `Regex::accepts` of the parsed term (a Brzozowski-derivative
 meaning) and `is_hex::term`, tied by definition. Still missing: the `Compile`
 class (§9.3 of the setups note), and a DFA compiler with its soundness and a

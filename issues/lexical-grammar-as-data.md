@@ -15,7 +15,7 @@ The token grammar should be one piece of data that all three read.
 
 ## Scope
 
-- Heather's token classes as `regex def`s (`lib/std/text/regex.hthr`), with
+- Heather's token classes as `regex def`s (`lib/std/text/regex/regex.hthr`), with
   a priority order, and a `lexer def` generator that publishes the scanner
   as the meaning "longest match, first class on a tie".
 - The DFA from [[regex-dfa-compiler]] as its compiled form: a table

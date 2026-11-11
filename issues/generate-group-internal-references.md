@@ -29,4 +29,4 @@ all-or-nothing publication.
 ## Log
 
 - 2026-10-31: `tac-host-interface` is marked done in docs/roadmap.md (its "done when" is met), so this issue no longer serves it; it stays open in area `tactics` with no milestone.
-- 2026-11-01: A customer (2026-11-01): `regex def is_hex` (lib/std/text/regex.hthr) inlines its term in both `is_hex` and `is_hex::term` because `is_hex` cannot be defined as `is_hex::term.accepts` within one group ([[regex-dfa-compiler]]).
+- 2026-11-01: A customer (2026-11-01): `regex def is_hex` (lib/std/text/regex/regex.hthr) inlines its term in both `is_hex` and `is_hex::term` because `is_hex` cannot be defined as `is_hex::term.accepts` within one group ([[regex-dfa-compiler]]).
